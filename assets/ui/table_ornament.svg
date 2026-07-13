@@ -1,0 +1,17 @@
+<svg width="900" height="420" viewBox="0 0 900 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g opacity="0.22" stroke="#D9B66B">
+    <ellipse cx="450" cy="210" rx="330" ry="145" stroke-width="2"/>
+    <ellipse cx="450" cy="210" rx="285" ry="118" stroke-width="1" stroke-dasharray="8 10"/>
+    <circle cx="450" cy="210" r="78" stroke-width="2"/>
+    <circle cx="450" cy="210" r="62" stroke-width="1" stroke-dasharray="5 7"/>
+    <path d="M450 132L469 190L530 190L481 226L500 284L450 248L400 284L419 226L370 190L431 190L450 132Z" stroke-width="2"/>
+    <path d="M120 210H370M530 210H780" stroke-width="1" stroke-dasharray="6 9"/>
+    <path d="M450 65V132M450 288V355" stroke-width="1" stroke-dasharray="6 9"/>
+  </g>
+  <g opacity="0.13" fill="#D9B66B">
+    <circle cx="120" cy="210" r="5"/><circle cx="780" cy="210" r="5"/>
+    <circle cx="450" cy="65" r="5"/><circle cx="450" cy="355" r="5"/>
+    <circle cx="226" cy="106" r="4"/><circle cx="674" cy="106" r="4"/>
+    <circle cx="226" cy="314" r="4"/><circle cx="674" cy="314" r="4"/>
+  </g>
+</svg>

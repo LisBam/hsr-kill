@@ -1,0 +1,58 @@
+class_name CardInstance
+extends RefCounted
+
+## 单张实体牌的运行时结构。配置定义与实体状态分离，同名牌可拥有不同花色、点数与位置。
+
+## 下一张实体牌的递增序号；只用于本地运行时生成稳定唯一 ID。
+static var _next_uid: int = 1
+
+## 当前实体牌的唯一 ID；状态同步与操作指令必须使用此值而非数组下标。
+var uid: int = 0
+
+## 当前实体牌引用的配置 ID；效果与显示名称均通过该 ID 查询。
+var definition_id: String = ""
+
+## 当前实体牌的花色；可取 spade、heart、club、diamond。
+## 多张实体牌组成的无花色虚拟牌使用 none，避免错误继承任一材料牌颜色。
+var suit: String = "spade"
+
+## 当前实体牌的点数；范围为1至13，其中1、11、12、13对应A、J、Q、K。
+## 无点数虚拟牌使用0；规则判断不得把0视为任何实体牌点数。
+var rank: int = 1
+
+## 当前实体牌所在区域；默认在牌堆，移动逻辑会维护该字段。
+var zone: String = "draw_pile"
+
+## 当前实体牌的所属玩家 ID；公共区域使用 -1。
+var owner_id: int = -1
+
+
+## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
+func _init(card_definition_id: String = "", card_suit: String = "spade", card_rank: int = 1) -> void:
+	uid = _next_uid
+	_next_uid += 1
+	definition_id = card_definition_id
+	suit = card_suit
+	rank = card_rank
+
+
+## 返回牌的颜色；红桃与方块为红色，黑桃与梅花为黑色，无花色虚拟牌返回 none。
+func get_color() -> String:
+	if suit == "heart" or suit == "diamond":
+		return "red"
+	if suit == "spade" or suit == "club":
+		return "black"
+	return "none"
+
+
+## 序列化为网络安全字典；不包含任何对象引用或可执行回调。
+func to_dict() -> Dictionary:
+	return {
+		"uid": uid,
+		"definition_id": definition_id,
+		"suit": suit,
+		"rank": rank,
+		"color": get_color(),
+		"zone": zone,
+		"owner_id": owner_id,
+	}
