@@ -1,0 +1,434 @@
+[gd_scene format=3 uid="uid://26tti45wdkob"]
+
+[ext_resource type="Script" uid="uid://bn6eps22hk7ru" path="res://scripts/ui/match_table.gd" id="1_ui"]
+[ext_resource type="Script" uid="uid://bxfclsavijmua" path="res://scripts/core/match_controller.gd" id="2_match"]
+[ext_resource type="Script" uid="uid://cyj0ye13ftsgu" path="res://scripts/core/rule_event_bus.gd" id="3_event"]
+[ext_resource type="Script" uid="uid://c3whludjbgabl" path="res://scripts/ai/ai_coordinator.gd" id="4_ai"]
+[ext_resource type="Script" uid="uid://canm0ju3yf2as" path="res://scripts/network/network_gateway.gd" id="5_network"]
+[ext_resource type="Texture2D" uid="uid://s3n7u8l1qm45" path="res://assets/ui/table_ornament.svg" id="6_ornament"]
+[ext_resource type="Script" uid="uid://bfkt6kg0eappy" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
+[ext_resource type="Script" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
+
+[node name="Main" type="Control" unique_id=1400958767]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ui")
+
+[node name="MatchController" type="Node" parent="." unique_id=1222667046]
+script = ExtResource("2_match")
+
+[node name="RuleEventBus" type="Node" parent="MatchController" unique_id=1351689348]
+script = ExtResource("3_event")
+
+[node name="AICoordinator" type="Node" parent="MatchController" unique_id=727873650]
+script = ExtResource("4_ai")
+
+[node name="NetworkGateway" type="Node" parent="MatchController" unique_id=1069132406]
+script = ExtResource("5_network")
+
+[node name="Background" type="ColorRect" parent="." unique_id=617244583]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.035, 0.027, 0.027, 1)
+
+[node name="ReferenceBackdrop" type="TextureRect" parent="." unique_id=672231763]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("8_backdrop")
+
+[node name="BackdropShade" type="ColorRect" parent="." unique_id=1560186891]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.07, 0.045, 0.05, 0.24)
+
+[node name="TopWoodRail" type="ColorRect" parent="." unique_id=1396918168]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 14.0
+grow_horizontal = 2
+mouse_filter = 2
+color = Color(0.105, 0.06, 0.035, 0.94)
+
+[node name="BottomWoodRail" type="ColorRect" parent="." unique_id=436057139]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -166.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.09, 0.045, 0.026, 0.86)
+
+[node name="LeftWoodRail" type="ColorRect" parent="." unique_id=311169368]
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 14.0
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.09, 0.045, 0.026, 0.86)
+
+[node name="RightWoodRail" type="ColorRect" parent="." unique_id=1511430159]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -14.0
+grow_horizontal = 0
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.09, 0.045, 0.026, 0.86)
+
+[node name="TableOrnament" type="TextureRect" parent="." unique_id=308061698]
+modulate = Color(0.84, 0.77, 0.62, 0.1)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("6_ornament")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="TopInfoPanel" type="PanelContainer" parent="." unique_id=29899762]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 18.0
+offset_right = 122.0
+offset_bottom = 108.0
+
+[node name="TopInfoVBox" type="VBoxContainer" parent="TopInfoPanel" unique_id=251580000]
+layout_mode = 2
+
+[node name="PhaseLabel" type="Label" parent="TopInfoPanel/TopInfoVBox" unique_id=987240135]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
+theme_override_font_sizes/font_size = 13
+text = "等待开局"
+horizontal_alignment = 1
+
+[node name="CenterTurnLabel" type="Label" parent="TopInfoPanel/TopInfoVBox" unique_id=414947185]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
+text = "第0回合"
+horizontal_alignment = 1
+
+[node name="CenterPhaseLabel" type="Label" parent="TopInfoPanel/TopInfoVBox" unique_id=703788185]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.56, 0.84, 0.73, 1)
+text = "准备"
+horizontal_alignment = 1
+
+[node name="HiddenCounters" type="Control" parent="." unique_id=1801683930]
+visible = false
+anchors_preset = 0
+
+[node name="DrawPileCountLabel" type="Label" parent="HiddenCounters" unique_id=1741479096]
+unique_name_in_owner = true
+layout_mode = 0
+
+[node name="DiscardPileCountLabel" type="Label" parent="HiddenCounters" unique_id=394920499]
+unique_name_in_owner = true
+layout_mode = 0
+
+[node name="NameModeButton" type="Button" parent="." unique_id=986623634]
+unique_name_in_owner = true
+z_index = 20
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -214.0
+offset_top = 16.0
+offset_right = -112.0
+offset_bottom = 50.0
+grow_horizontal = 0
+text = "牌名：崩铁杀"
+
+[node name="RestartButton" type="Button" parent="." unique_id=1707669420]
+unique_name_in_owner = true
+z_index = 20
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -104.0
+offset_top = 16.0
+offset_right = -18.0
+offset_bottom = 50.0
+grow_horizontal = 0
+text = "重开"
+
+[node name="PlayerGrid" type="Control" parent="." unique_id=795623905]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="DiscardPilePanel" type="PanelContainer" parent="." unique_id=347848586]
+unique_name_in_owner = true
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 540.0
+offset_top = 250.0
+offset_right = 740.0
+offset_bottom = 400.0
+mouse_filter = 2
+
+[node name="LogPanel" type="PanelContainer" parent="." unique_id=2011995793]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 488.0
+offset_right = 126.0
+offset_bottom = 534.0
+
+[node name="LogVBox" type="VBoxContainer" parent="LogPanel" unique_id=1624197810]
+layout_mode = 2
+
+[node name="LogTitle" type="Label" parent="LogPanel/LogVBox" unique_id=2045660230]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.75, 0.45, 1)
+text = "▣ 记录"
+horizontal_alignment = 1
+
+[node name="LogView" type="RichTextLabel" parent="LogPanel/LogVBox" unique_id=1132612850]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/default_color = Color(0.82, 0.79, 0.7, 1)
+theme_override_font_sizes/normal_font_size = 12
+bbcode_enabled = true
+scroll_following = true
+
+[node name="InteractionPanel" type="PanelContainer" parent="." unique_id=2132492404]
+layout_mode = 0
+offset_left = 334.0
+offset_top = 426.0
+offset_right = 946.0
+offset_bottom = 548.0
+
+[node name="InteractionVBox" type="VBoxContainer" parent="InteractionPanel" unique_id=1579071619]
+layout_mode = 2
+
+[node name="InteractionGuideLabel" type="Label" parent="InteractionPanel/InteractionVBox" unique_id=575747625]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.97, 0.91, 0.62, 1)
+theme_override_font_sizes/font_size = 18
+text = "请选择要使用的牌"
+horizontal_alignment = 1
+
+[node name="SelectionLabel" type="Label" parent="InteractionPanel/InteractionVBox" unique_id=889651303]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.83, 0.81, 0.74, 1)
+text = "未选择卡牌"
+horizontal_alignment = 1
+text_overrun_behavior = 3
+
+[node name="ActionRow" type="HBoxContainer" parent="InteractionPanel/InteractionVBox" unique_id=83731830]
+layout_mode = 2
+theme_override_constants/separation = 6
+alignment = 1
+
+[node name="UseButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=853733028]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 36)
+layout_mode = 2
+text = "确定"
+
+[node name="CancelButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1689127389]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(66, 30)
+layout_mode = 2
+text = "取消"
+
+[node name="RecastButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1915243788]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(62, 30)
+layout_mode = 2
+text = "重铸"
+
+[node name="WoodenOxButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1479987863]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(72, 30)
+layout_mode = 2
+text = "存木牛"
+
+[node name="EndPlayButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1761560277]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 36)
+layout_mode = 2
+text = "回合结束"
+
+[node name="EquipmentPanel" type="PanelContainer" parent="." unique_id=874383388]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 18.0
+offset_top = 542.0
+offset_right = 216.0
+offset_bottom = 706.0
+
+[node name="EquipmentVBox" type="VBoxContainer" parent="EquipmentPanel" unique_id=436820528]
+layout_mode = 2
+
+[node name="EquipmentTitle" type="Label" parent="EquipmentPanel/EquipmentVBox" unique_id=410505475]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.93, 0.77, 0.43, 1)
+text = "装备区"
+horizontal_alignment = 1
+
+[node name="EquipmentLabel" type="Label" parent="EquipmentPanel/EquipmentVBox" unique_id=594619252]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/font_color = Color(0.86, 0.82, 0.73, 1)
+text = "武器　无
+防具　无
+坐骑　无
+宝物　无"
+vertical_alignment = 1
+
+[node name="HandPanel" type="PanelContainer" parent="." unique_id=469779120]
+layout_mode = 0
+offset_left = 228.0
+offset_top = 562.0
+offset_right = 970.0
+offset_bottom = 718.0
+
+[node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
+layout_mode = 2
+horizontal_scroll_mode = 2
+vertical_scroll_mode = 0
+
+[node name="HandContainer" type="HFlowContainer" parent="HandPanel/HandScroll" unique_id=176003051]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(720, 144)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 3
+
+[node name="SkillBar" type="PanelContainer" parent="." unique_id=735918897]
+layout_mode = 0
+offset_left = 960.0
+offset_top = 570.0
+offset_right = 1086.0
+offset_bottom = 706.0
+
+[node name="SkillVBox" type="VBoxContainer" parent="SkillBar" unique_id=1002488890]
+layout_mode = 2
+
+[node name="SkillButtonContainer" type="HFlowContainer" parent="SkillBar/SkillVBox" unique_id=2054243440]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/v_separation = 6
+
+[node name="SkillStatusLabel" type="Label" parent="SkillBar/SkillVBox" unique_id=1357965274]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.68, 0.65, 0.58, 1)
+theme_override_font_sizes/font_size = 10
+text = "技能"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="LocalPanel" type="PanelContainer" parent="." unique_id=1499008552]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 1098.0
+offset_top = 478.0
+offset_right = 1264.0
+offset_bottom = 706.0
+
+[node name="LocalVBox" type="VBoxContainer" parent="LocalPanel" unique_id=1486872815]
+layout_mode = 2
+
+[node name="LocalArtworkFrame" type="PanelContainer" parent="LocalPanel/LocalVBox" unique_id=418323954]
+custom_minimum_size = Vector2(158, 142)
+layout_mode = 2
+
+[node name="LocalArtwork" type="TextureRect" parent="LocalPanel/LocalVBox/LocalArtworkFrame" unique_id=1083770504]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="LocalArtworkPlaceholder" type="Label" parent="LocalPanel/LocalVBox/LocalArtworkFrame" unique_id=1474441682]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.67, 0.59, 0.48, 1)
+text = "武将插画预留"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="LocalStatusLabel" type="Label" parent="LocalPanel/LocalVBox" unique_id=1734509555]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/font_color = Color(0.94, 0.89, 0.78, 1)
+theme_override_font_sizes/font_size = 11
+text = "本地玩家"
+horizontal_alignment = 1
+text_overrun_behavior = 3
+
+[node name="SelectSelfButton" type="Button" parent="LocalPanel/LocalVBox" unique_id=419946568]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 28)
+layout_mode = 2
+text = "选择自己"
+
+[node name="ErrorLabel" type="Label" parent="." unique_id=1246375773]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 334.0
+offset_top = 548.0
+offset_right = 946.0
+offset_bottom = 565.0
+theme_override_colors/font_color = Color(0.96, 0.46, 0.42, 1)
+horizontal_alignment = 1
+
+[node name="CardUseAnimationLayer" type="Control" parent="." unique_id=1492554906]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("7_animation")
