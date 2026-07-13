@@ -1,0 +1,94 @@
+class_name ReferenceBackdrop
+extends TextureRect
+
+## 十周年风格牌桌背景组件。组件只绘制可缩放的桌面、木质包边与金色装饰，不读取对局状态，也不依赖参考扩展目录中的外部资源。
+
+## 牌桌主体相对控件边缘的留白；默认18像素用于露出外层木质框，运行时无需动态修改。
+@export_range(0.0, 80.0, 1.0) var table_inset: float = 18.0
+
+## 外层木质框宽度；默认14像素形成十周年界面的厚重桌框，运行时无需动态修改。
+@export_range(4.0, 40.0, 1.0) var rail_width: float = 14.0
+
+## 桌面圆角半径；默认30像素弱化矩形屏幕边缘，运行时无需动态修改。
+@export_range(0.0, 80.0, 1.0) var table_corner_radius: float = 30.0
+
+## 中央装饰环的半径；默认150像素用于限定视觉焦点，运行时无需动态修改。
+@export_range(60.0, 280.0, 1.0) var center_ornament_radius: float = 150.0
+
+## 装饰线透明度；默认0.16保证纹样可见但不干扰卡牌，运行时可在检查器中微调。
+@export_range(0.0, 0.5, 0.01) var ornament_opacity: float = 0.16
+
+## 背景最深层颜色；默认使用近黑暖褐色衬托桌面与金边，运行时无需动态修改。
+@export var outer_background_color: Color = Color("120d0c")
+
+## 桌面主体颜色；默认使用低明度墨青色延续《崩铁杀》的深青视觉语言，运行时无需动态修改。
+@export var table_surface_color: Color = Color("183831")
+
+## 桌面内层颜色；默认比主体更暗，用于制造皮革桌垫的纵深，运行时无需动态修改。
+@export var table_inner_color: Color = Color("102923")
+
+## 木质框主色；默认使用深胡桃木色模拟十周年 UI 的实木包边，运行时无需动态修改。
+@export var wood_color: Color = Color("4a2818")
+
+## 木质框高光色；默认使用暖棕色表现上沿受光，运行时无需动态修改。
+@export var wood_highlight_color: Color = Color("875532")
+
+## 金属装饰颜色；默认使用低饱和古金色绘制内框和中央纹样，运行时无需动态修改。
+@export var gold_color: Color = Color("c6a15f")
+
+
+## 节点进入场景树后启用重绘；背景忽略鼠标，避免阻断任何卡牌交互。
+func _ready() -> void:
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	resized.connect(queue_redraw)
+	queue_redraw()
+
+
+## 按当前控件尺寸绘制可缩放牌桌；所有图形仅承担视觉表现，不保存任何规则数据。
+func _draw() -> void:
+	# 当前背景尺寸；尺寸无效时跳过绘制，避免编辑器初始化阶段产生异常几何。
+	var backdrop_size: Vector2 = size
+	if backdrop_size.x <= 0.0 or backdrop_size.y <= 0.0:
+		return
+	draw_rect(Rect2(Vector2.ZERO, backdrop_size), outer_background_color)
+	# 外层木质框矩形；覆盖全屏并作为桌面主体的包边底色。
+	var outer_rect: Rect2 = Rect2(Vector2(table_inset - rail_width, table_inset - rail_width), backdrop_size - Vector2.ONE * (table_inset - rail_width) * 2.0)
+	draw_style_box(_make_rounded_box(wood_color, wood_highlight_color, 2, table_corner_radius + rail_width), outer_rect)
+	# 桌面主体矩形；深青皮革区域承载全部角色卡与结算动画。
+	var table_rect: Rect2 = Rect2(Vector2.ONE * table_inset, backdrop_size - Vector2.ONE * table_inset * 2.0)
+	draw_style_box(_make_rounded_box(table_surface_color, gold_color.darkened(0.35), 2, table_corner_radius), table_rect)
+	# 内层桌垫矩形；轻微缩进形成双层金边与桌面纵深。
+	var inner_rect: Rect2 = table_rect.grow(-8.0)
+	draw_style_box(_make_rounded_box(table_inner_color, gold_color.darkened(0.5), 1, table_corner_radius - 6.0), inner_rect)
+	# 桌面中心点；所有星轨和同心环围绕该点绘制。
+	var center: Vector2 = inner_rect.get_center()
+	# 低透明度古金色；用于中央装饰，避免与飞牌和指示线争夺视觉焦点。
+	var ornament_color: Color = Color(gold_color, ornament_opacity)
+	draw_arc(center, center_ornament_radius, 0.0, TAU, 96, ornament_color, 1.5, true)
+	draw_arc(center, center_ornament_radius * 0.72, 0.0, TAU, 96, ornament_color.darkened(0.15), 1.0, true)
+	# 星轨外圈分段数量；12段对应时钟式环桌节奏，仅用于装饰。
+	var segment_count: int = 12
+	for segment_index: int in range(segment_count):
+		# 当前分段角度；从顶部开始均匀分布。
+		var angle: float = -PI * 0.5 + TAU * float(segment_index) / float(segment_count)
+		# 分段线起点；位于内环外侧。
+		var line_start: Vector2 = center + Vector2.from_angle(angle) * center_ornament_radius * 0.78
+		# 分段线终点；位于外环内侧。
+		var line_end: Vector2 = center + Vector2.from_angle(angle) * center_ornament_radius * 0.96
+		draw_line(line_start, line_end, ornament_color, 1.0, true)
+	# 中央菱形半径；与圆形星轨叠加，呼应十周年界面常见的金属铭纹。
+	var diamond_radius: float = center_ornament_radius * 0.42
+	# 中央菱形顶点；闭合折线只作为背景纹样。
+	var diamond_points: PackedVector2Array = PackedVector2Array([center + Vector2(0.0, -diamond_radius), center + Vector2(diamond_radius, 0.0), center + Vector2(0.0, diamond_radius), center + Vector2(-diamond_radius, 0.0), center + Vector2(0.0, -diamond_radius)])
+	draw_polyline(diamond_points, ornament_color.darkened(0.1), 1.25, true)
+
+
+## 创建背景绘制使用的圆角样式；返回值仅在当前绘制帧使用，不会注册全局主题资源。
+func _make_rounded_box(background_color: Color, border_color: Color, border_width: int, corner_radius: float) -> StyleBoxFlat:
+	# 圆角样式；统一设置四边描边与四角半径。
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = background_color
+	style.border_color = border_color
+	style.set_border_width_all(border_width)
+	style.set_corner_radius_all(roundi(maxf(corner_radius, 0.0)))
+	return style

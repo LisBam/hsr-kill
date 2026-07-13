@@ -24,6 +24,11 @@ const LEGAL_TARGET_COLOR: Color = Color("61c7a4")
 ## 危险与错误提示色；默认使用柔和朱红色以保持深色背景可读性，运行时无需修改。
 const DANGER_COLOR: Color = Color("e96b63")
 
+## 十周年风格的深色玉石面板；默认用于交互区和技能区，运行时无需修改。
+const JADE_PANEL_COLOR: Color = Color("172b27ed")
+
+## 十周年风格的暖黑金属色；默认用于武将框、装备框与顶部信息框，运行时无需修改。
+const METAL_PANEL_COLOR: Color = Color("211b18f2")
 
 ## 创建通用圆角面板样式；调用方可覆盖背景色、描边色、描边宽度与圆角半径。
 static func make_panel(background_color: Color = PANEL_COLOR, border_color: Color = GOLD_BORDER_COLOR, border_width: int = 1, corner_radius: int = 10) -> StyleBoxFlat:
@@ -51,3 +56,29 @@ static func make_button(background_color: Color, border_color: Color, border_wid
 	style.shadow_offset = Vector2(0.0, 2.0)
 	return style
 
+
+## 创建十周年风格的内嵌面板；双层边距与窄圆角适合武将框、装备栏和操作条。
+static func make_inset_panel(background_color: Color = METAL_PANEL_COLOR, border_color: Color = GOLD_BORDER_COLOR, border_width: int = 2, corner_radius: int = 6) -> StyleBoxFlat:
+	# 内嵌面板样式；较硬的圆角、深阴影与紧凑边距强调金属框架感。
+	var style: StyleBoxFlat = make_panel(background_color, border_color, border_width, corner_radius)
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.62)
+	style.shadow_size = 10
+	style.shadow_offset = Vector2(0.0, 4.0)
+	style.content_margin_left = 9.0
+	style.content_margin_top = 7.0
+	style.content_margin_right = 9.0
+	style.content_margin_bottom = 7.0
+	return style
+
+
+## 创建十周年风格的长条操作按钮；上沿高光与窄圆角用于模拟参考扩展的金属按钮层级。
+static func make_decade_button(background_color: Color, border_color: Color, emphasized: bool = false) -> StyleBoxFlat:
+	# 按钮描边宽度；强调按钮使用2像素金边，普通按钮使用1像素边界。
+	var border_width: int = 2 if emphasized else 1
+	# 长条按钮样式；保持紧凑内边距，适合操作区并排布局。
+	var style: StyleBoxFlat = make_button(background_color, border_color, border_width, 5)
+	style.content_margin_left = 13.0
+	style.content_margin_right = 13.0
+	style.content_margin_top = 6.0
+	style.content_margin_bottom = 6.0
+	return style
