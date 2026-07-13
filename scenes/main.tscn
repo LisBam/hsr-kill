@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://canm0ju3yf2as" path="res://scripts/network/network_gateway.gd" id="5_network"]
 [ext_resource type="Texture2D" uid="uid://s3n7u8l1qm45" path="res://assets/ui/table_ornament.svg" id="6_ornament"]
 [ext_resource type="Script" uid="uid://bfkt6kg0eappy" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
-[ext_resource type="Script" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
+[ext_resource type="Script" uid="uid://be14yvmd8i1up" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
 
 [node name="Main" type="Control" unique_id=1400958767]
 layout_mode = 3
@@ -38,7 +38,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0.035, 0.027, 0.027, 1)
+color = Color(0.025, 0.018, 0.017, 1)
 
 [node name="ReferenceBackdrop" type="TextureRect" parent="." unique_id=672231763]
 layout_mode = 1
@@ -58,49 +58,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0.07, 0.045, 0.05, 0.24)
-
-[node name="TopWoodRail" type="ColorRect" parent="." unique_id=1396918168]
-layout_mode = 1
-anchors_preset = 10
-anchor_right = 1.0
-offset_bottom = 14.0
-grow_horizontal = 2
-mouse_filter = 2
-color = Color(0.105, 0.06, 0.035, 0.94)
-
-[node name="BottomWoodRail" type="ColorRect" parent="." unique_id=436057139]
-layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = -166.0
-grow_horizontal = 2
-grow_vertical = 0
-mouse_filter = 2
-color = Color(0.09, 0.045, 0.026, 0.86)
-
-[node name="LeftWoodRail" type="ColorRect" parent="." unique_id=311169368]
-layout_mode = 1
-anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 14.0
-grow_vertical = 2
-mouse_filter = 2
-color = Color(0.09, 0.045, 0.026, 0.86)
-
-[node name="RightWoodRail" type="ColorRect" parent="." unique_id=1511430159]
-layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -14.0
-grow_horizontal = 0
-grow_vertical = 2
-mouse_filter = 2
-color = Color(0.09, 0.045, 0.026, 0.86)
+color = Color(0.07, 0.045, 0.05, 0.12)
 
 [node name="TableOrnament" type="TextureRect" parent="." unique_id=308061698]
 modulate = Color(0.84, 0.77, 0.62, 0.1)
@@ -235,10 +193,10 @@ scroll_following = true
 
 [node name="InteractionPanel" type="PanelContainer" parent="." unique_id=2132492404]
 layout_mode = 0
-offset_left = 334.0
-offset_top = 426.0
-offset_right = 946.0
-offset_bottom = 548.0
+offset_left = 328.0
+offset_top = 438.0
+offset_right = 952.0
+offset_bottom = 552.0
 
 [node name="InteractionVBox" type="VBoxContainer" parent="InteractionPanel" unique_id=1579071619]
 layout_mode = 2
@@ -325,7 +283,7 @@ vertical_alignment = 1
 [node name="HandPanel" type="PanelContainer" parent="." unique_id=469779120]
 layout_mode = 0
 offset_left = 228.0
-offset_top = 562.0
+offset_top = 566.0
 offset_right = 970.0
 offset_bottom = 718.0
 

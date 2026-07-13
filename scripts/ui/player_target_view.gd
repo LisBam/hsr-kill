@@ -84,7 +84,7 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 角色卡背景；当前行动者略微提亮，帮助玩家定位回合归属。
-	var background_color: Color = Color("3b332d") if not is_current_actor else Color("4a3d2f")
+	var background_color: Color = Color("211d1af2") if not is_current_actor else Color("3a3023f5")
 	# 角色卡边框；选中金色优先，其次合法青绿，最后使用统一暗金边框。
 	var border_color: Color = BattleUIStyle.GOLD_BORDER_COLOR
 	# 角色卡描边宽度；合法或选中时使用3像素，普通状态使用1像素。
@@ -96,7 +96,8 @@ func _refresh_visual_state() -> void:
 		border_color = BattleUIStyle.LEGAL_TARGET_COLOR
 		border_width = 3
 	add_theme_color_override("font_color", Color("f3e7d0"))
-	add_theme_color_override("font_disabled_color", Color("8c8175"))
+	add_theme_color_override("font_hover_color", Color("fff0c7"))
+	add_theme_color_override("font_disabled_color", Color("80766c"))
 	add_theme_stylebox_override("normal", _make_player_style(background_color, border_color, border_width))
 	add_theme_stylebox_override("hover", _make_player_style(background_color.lightened(0.08), border_color.lightened(0.12), maxi(border_width, 2)))
 	add_theme_stylebox_override("pressed", _make_player_style(background_color.darkened(0.06), BattleUIStyle.ACCENT_COLOR, 3))
@@ -137,6 +138,9 @@ func _refresh_artwork() -> void:
 ## 创建为左侧插画预留内容边距的角色卡样式，避免状态文字覆盖武将图像。
 func _make_player_style(background_color: Color, border_color: Color, border_width: int) -> StyleBoxFlat:
 	# 角色卡样式；插画区宽66像素，加上左右间距后文字从84像素处开始。
-	var style: StyleBoxFlat = BattleUIStyle.make_button(background_color, border_color, border_width, 10)
+	var style: StyleBoxFlat = BattleUIStyle.make_inset_panel(background_color, border_color, border_width, 6)
 	style.content_margin_left = 84.0
+	style.content_margin_top = 9.0
+	style.content_margin_right = 8.0
+	style.content_margin_bottom = 7.0
 	return style

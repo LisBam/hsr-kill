@@ -151,10 +151,10 @@ func _refresh_visual_state() -> void:
 	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_card_selected else _category_color
 	# 选中描边宽度；3像素在高分辨率下仍清晰，普通状态保持1像素。
 	var border_width: int = 3 if is_card_selected else 1
-	add_theme_stylebox_override("normal", BattleUIStyle.make_button(paper_color, border_color, border_width, 10))
-	add_theme_stylebox_override("hover", BattleUIStyle.make_button(paper_color.lightened(0.08), BattleUIStyle.ACCENT_COLOR, 2, 10))
-	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(paper_color.darkened(0.05), BattleUIStyle.ACCENT_COLOR, 3, 10))
-	add_theme_stylebox_override("disabled", BattleUIStyle.make_button(paper_color.darkened(0.12), Color("655b50"), 1, 10))
+	add_theme_stylebox_override("normal", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
+	add_theme_stylebox_override("hover", BattleUIStyle.make_inset_panel(paper_color.lightened(0.08), BattleUIStyle.ACCENT_COLOR, 2, 6))
+	add_theme_stylebox_override("pressed", BattleUIStyle.make_inset_panel(paper_color.darkened(0.05), BattleUIStyle.ACCENT_COLOR, 3, 6))
+	add_theme_stylebox_override("disabled", BattleUIStyle.make_inset_panel(paper_color.darkened(0.12), Color("655b50"), 1, 6))
 	position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
 	if _accent_bar != null:
 		_accent_bar.color = _category_color
