@@ -132,20 +132,14 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_refresh_visual_state()
 
 
-## 同步布局组件分配的武将牌尺寸；紧凑多人模板会通过该入口更新全部覆盖层几何信息。
+## 保持武将牌根节点使用统一固定规格；静态子节点的位置与尺寸完全由 player_target_view.tscn 决定。
+## 该兼容入口只锁定根节点尺寸，不会重排座次、体力、名称或其他可在编辑器中调整的场景节点。
 func apply_panel_size(target_size: Vector2) -> void:
-	panel_width = target_size.x
-	panel_height = target_size.y
-	custom_minimum_size = target_size
-	size = target_size
+	if target_size != Vector2(panel_width, panel_height):
+		push_warning("PlayerTargetView 使用固定 %s 尺寸，忽略外部尺寸 %s。" % [Vector2(panel_width, panel_height), target_size])
+	custom_minimum_size = Vector2(panel_width, panel_height)
+	size = Vector2(panel_width, panel_height)
 	clip_contents = true
-	if _artwork_rect == null:
-		return
-	_artwork_rect.position = Vector2(4.0, 4.0)
-	_artwork_rect.size = Vector2(target_size.x - 8.0, maxf(target_size.y - seat_label_height - 8.0, 1.0))
-	_artwork_placeholder.position = Vector2(4.0, 4.0)
-	_artwork_placeholder.size = Vector2(target_size.x - 8.0, maxf(target_size.y - seat_label_height - 8.0, 1.0))
-	_layout_reference_overlay()
 
 
 ## 更新合法与选中状态；已选目标始终优先显示金色边框。
@@ -195,59 +189,20 @@ func _refresh_visual_state() -> void:
 		_status_label.modulate = Color(1.0, 1.0, 1.0, 0.52 if disabled else 1.0)
 
 
-## 按当前牌面尺寸复刻参考图的竖名牌、右侧体力、左下手牌数、外置座次号和装备叠层布局。
-func _layout_reference_overlay() -> void:
-	if _character_name_label == null:
-		return
-	# 牌面主体高度；底部座次号使用独立区域，不覆盖武将立绘和装备条目。
-	var card_body_height: float = maxf(panel_height - seat_label_height, 1.0)
-	# 左侧武将名竖条宽度；按统一牌宽比例计算并限制范围，保证所有座次使用同一版式。
-	var name_banner_width: float = clampf(panel_width * 0.23, 22.0, 34.0)
-	# 右侧体力圆点列宽度；保持足够触点面积，同时不明显遮挡立绘主体。
-	var health_column_width: float = clampf(panel_width * 0.16, 17.0, 24.0)
-	# 顶部势力徽记边长；圆形徽记略宽于名称竖条，形成参考图中的外凸层级。
-	var faction_badge_size: float = clampf(panel_width * 0.27, 28.0, 40.0)
-	# 左下手牌角标边长；使用接近正方形的红色角标突出公开手牌数量。
-	var hand_badge_size: float = clampf(panel_width * 0.27, 28.0, 40.0)
-	_artwork_rect.position = Vector2(4.0, 4.0)
-	_artwork_rect.size = Vector2(maxf(panel_width - 8.0, 1.0), maxf(card_body_height - 8.0, 1.0))
-	_artwork_placeholder.position = Vector2(4.0, 4.0)
-	_artwork_placeholder.size = _artwork_rect.size
-	_faction_badge_label.position = Vector2(1.0, 0.0)
-	_faction_badge_label.size = Vector2(faction_badge_size, faction_badge_size)
-	_character_name_label.position = Vector2(4.0, faction_badge_size - 3.0)
-	_character_name_label.size = Vector2(name_banner_width, maxf(card_body_height - faction_badge_size - hand_badge_size + 4.0, 32.0))
-	_identity_badge_label.position = Vector2(panel_width - 31.0, 4.0)
-	_identity_badge_label.size = Vector2(27.0, 24.0)
-	_hand_count_label.position = Vector2(2.0, card_body_height - hand_badge_size - 1.0)
-	_hand_count_label.size = Vector2(hand_badge_size, hand_badge_size)
-	_status_label.position = Vector2(name_banner_width + 9.0, 5.0)
-	_status_label.size = Vector2(maxf(panel_width - name_banner_width - 45.0, 28.0), 18.0)
-	_public_zone_label.position = Vector2(name_banner_width + 8.0, card_body_height - 22.0)
-	_public_zone_label.size = Vector2(maxf(panel_width - name_banner_width - health_column_width - 14.0, 30.0), 17.0)
-	_seat_label.position = Vector2(0.0, card_body_height)
-	_seat_label.size = Vector2(panel_width, seat_label_height)
-	_health_pip_container.position = Vector2(panel_width - health_column_width - 2.0, card_body_height * 0.24)
-	_health_pip_container.size = Vector2(health_column_width, card_body_height * 0.56)
-	_equipment_layer.position = Vector2.ZERO
-	_equipment_layer.size = Vector2(panel_width, card_body_height)
-	_character_name_label.add_theme_font_size_override("font_size", 12 if panel_width >= 116.0 else 10)
-	_seat_label.add_theme_font_size_override("font_size", 18 if panel_width >= 116.0 else 15)
-	_layout_equipment_rows(name_banner_width, health_column_width, card_body_height)
-
-
-## 根据已生成装备条目重新计算叠放位置；装备越多越向牌面中部延伸，槽位顺序保持稳定。
-func _layout_equipment_rows(name_banner_width: float, health_column_width: float, card_body_height: float) -> void:
+## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
+func _layout_equipment_rows() -> void:
 	if _equipment_rows.is_empty():
 		return
-	# 装备条目左边界；从竖名牌右侧开始，避免遮挡武将名和势力徽记。
-	var row_left: float = name_banner_width + 9.0
-	# 装备条目可用宽度；右侧为体力圆点列保留固定安全区。
-	var row_width: float = maxf(panel_width - row_left - health_column_width - 5.0, 42.0)
+	# 装备条目左边界；由场景内名称竖条右侧推导，编辑器调整名称位置后会自动随之适配。
+	var row_left: float = _character_name_label.position.x + _character_name_label.size.x + 9.0
+	# 装备条目右边界；由场景内体力列左侧推导，避免与可视体力圆点重叠。
+	var row_right: float = _health_pip_container.position.x - 5.0
+	# 装备条目可用宽度；保留最小可读宽度，避免异常场景配置产生负尺寸。
+	var row_width: float = maxf(row_right - row_left, 42.0)
 	# 全部装备条目总高度；相邻横条轻微覆盖1像素以模拟参考图的叠牌效果。
 	var rows_height: float = equipment_row_height + float(_equipment_rows.size() - 1) * (equipment_row_height - 1.0)
-	# 第一条装备的纵坐标；从牌面下部向上展开，并为底部公开区域提示预留空间。
-	var start_y: float = maxf(card_body_height - rows_height - 28.0, 35.0)
+	# 第一条装备的纵坐标；由场景内公开区域上沿推导，从牌面下部向上展开。
+	var start_y: float = maxf(_public_zone_label.position.y - rows_height - 6.0, 35.0)
 	for row_index: int in range(_equipment_rows.size()):
 		# 当前装备横条；只更新几何信息，不改变其装备数据或显示文本。
 		var equipment_row: RichTextLabel = _equipment_rows[row_index]
@@ -314,7 +269,6 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_refresh_health_pips(safe_hp, max_hp)
 	_refresh_equipment_rows()
 	_identity_badge_label.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if identity != "hidden" else Color("d8c8a8"))
-	_layout_reference_overlay()
 
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
@@ -376,6 +330,7 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.text = "[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]
 		_equipment_layer.add_child(equipment_row)
 		_equipment_rows.append(equipment_row)
+	_layout_equipment_rows()
 
 
 ## 返回一至十号座次的中文数字；超出当前模式上限时回退到阿拉伯数字保证扩展安全。
