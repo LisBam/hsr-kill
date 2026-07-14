@@ -68,9 +68,9 @@ func _run() -> void:
 		if current_rect.intersects(next_rect):
 			_fail("bottom_controls_overlap:%s:%s" % [current_rect, next_rect])
 			return
-	# 本地完整座位屏幕尺寸；紧凑客户区未应用画布拉伸时仍应保持135.7×223.8像素规格。
+	# 本地完整座位屏幕尺寸；紧凑客户区未应用画布拉伸时仍应保持148.35×223.8像素规格。
 	var local_seat_screen_rect: Rect2 = _screen_rect(local_player_seat_slot)
-	if not local_seat_screen_rect.size.is_equal_approx(Vector2(135.7, 223.8)):
+	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 223.8)):
 		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
 		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
@@ -105,7 +105,46 @@ func _run() -> void:
 	if not _menu_button_pressed:
 		_fail("menu_button_input")
 		return
-	# 菜单打开后等待面板布局稳定，再释放正式场景实例。
+	# 菜单内容面板；真实点击后必须展开，人数输入与重新开局按钮才能参与后续命中测试。
+	var menu_panel: PanelContainer = main_instance.get_node("%MenuPanel") as PanelContainer
+	if not menu_panel.visible:
+		_fail("menu_panel_not_open")
+		return
+	# 对局日志展开按钮；点击后正文面板必须显示，验证“记录”入口不再只是静态标题。
+	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
+	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
+	var log_content_panel: PanelContainer = main_instance.get_node("%LogContentPanel") as PanelContainer
+	await _click_control(log_toggle_button)
+	if not log_content_panel.visible:
+		_fail("log_panel_not_expanded")
+		return
+	# 下一局人数输入；直接写入尚未失焦提交的文本，验证重开按钮会读取玩家当前键入值。
+	var player_count_input: SpinBox = main_instance.get_node("%NextPlayerCountInput") as SpinBox
+	player_count_input.get_line_edit().text = "6"
+	# 菜单重新开局按钮；点击后控制器应创建六人对局并进入新的选将阶段。
+	var restart_button: Button = main_instance.get_node("%MenuRestartButton") as Button
+	await _click_control(restart_button)
+	for _restart_frame_index: int in range(SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	if match_controller.default_player_count != 6 or match_controller.state == null or match_controller.state.players.size() != 6:
+		# 当前悬停控件；失败信息用于判断重开按钮是否被更高层级界面遮挡。
+		var hovered_control: Control = get_viewport().gui_get_hovered_control()
+		_fail("restart_player_count:%d menu=%s button=%s input=%s/%s hovered=%s" % [match_controller.state.players.size() if match_controller.state != null else -1, menu_panel.visible, _screen_rect(restart_button), player_count_input.get_line_edit().text, player_count_input.value, hovered_control.get_path() if hovered_control != null else "none"])
+		return
+	# 选将遮罩已经打开；菜单仍必须位于其上方，允许玩家在开局阶段继续调整人数并重新开始。
+	_menu_button_pressed = false
+	await _click_control(menu_button)
+	if not _menu_button_pressed or not menu_panel.visible:
+		_fail("menu_blocked_by_character_selection")
+		return
+	player_count_input.get_line_edit().text = "4"
+	await _click_control(restart_button)
+	for _second_restart_frame_index: int in range(SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	if match_controller.default_player_count != 4 or match_controller.state == null or match_controller.state.players.size() != 4:
+		_fail("second_restart_player_count:%d" % (match_controller.state.players.size() if match_controller.state != null else -1))
+		return
+	# 菜单与重开交互完成后等待面板布局稳定，再释放正式场景实例。
 	await get_tree().process_frame
 	await get_tree().process_frame
 	remove_child(main_instance)

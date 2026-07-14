@@ -9,7 +9,7 @@ signal character_selected(character_id: String)
 ## 正式武将牌场景；五张候选牌与局内角色牌复用同一 Node2D 模型和数据渲染逻辑。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
-## 候选武将牌之间的水平间距；默认18像素，在1280×720界面中可完整容纳五张135.7像素牌。
+## 候选武将牌之间的水平间距；默认18像素，在1280×720界面中可完整容纳五张148.35像素牌。
 @export_range(0.0, 48.0, 1.0) var candidate_gap: float = 18.0
 
 ## 选将标题；根据主公先选、其他玩家同时选和等待公开三个状态显示明确说明。
@@ -97,12 +97,6 @@ func _render_candidates() -> void:
 		_confirm_button.visible = false
 		return
 	_confirm_button.visible = true
-	# 单张武将牌宽度；使用正式牌面的固定135.7像素规格，不创建选将专用尺寸。
-	var card_width: float = 135.7
-	# 全部候选占用宽度；用于在候选区域中水平居中，并支持后续调整候选数量。
-	var total_width: float = card_width * float(candidate_ids.size()) + candidate_gap * float(maxi(candidate_ids.size() - 1, 0))
-	# 首张候选横坐标；区域宽度不足时从0开始，避免产生负坐标裁切。
-	var start_x: float = maxf((_candidate_area.size.x - total_width) * 0.5, 0.0)
 	for candidate_index: int in range(candidate_ids.size()):
 		# 当前候选武将 ID；点击与确认只使用该稳定 ID。
 		var character_id: String = str(candidate_ids[candidate_index])
@@ -113,7 +107,6 @@ func _render_candidates() -> void:
 		# 正式武将牌节点；根类型为 Node2D，透明输入区域负责点击。
 		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 		_candidate_area.add_child(character_view)
-		character_view.position = Vector2(start_x + float(candidate_index) * (card_width + candidate_gap), 0.0)
 		# 候选牌快照；只包含表现所需字段，不伪造玩家规则状态或加入对局玩家数组。
 		var candidate_snapshot: Dictionary = {
 			"player_id":candidate_index,
@@ -133,6 +126,20 @@ func _render_candidates() -> void:
 		character_view.configure_snapshot(candidate_snapshot, character_definition, false, faction_definition)
 		character_view.pressed.connect(_select_candidate.bind(character_id))
 		_candidate_views[character_id] = character_view
+	# 第一张正式候选牌；其场景尺寸是全部候选布局的唯一牌宽来源，避免桌面脚本重复保存几何常量。
+	var first_character_view: PlayerTargetView = _candidate_views[str(candidate_ids[0])] as PlayerTargetView
+	# 单张武将牌宽度；直接读取正式3:4牌面，不创建选将专用尺寸或硬编码副本。
+	var card_width: float = first_character_view.card_size.x
+	# 全部候选占用宽度；用于在候选区域中水平居中，并支持后续调整候选数量。
+	var total_width: float = card_width * float(candidate_ids.size()) + candidate_gap * float(maxi(candidate_ids.size() - 1, 0))
+	# 首张候选横坐标；区域宽度不足时从0开始，避免产生负坐标裁切。
+	var start_x: float = maxf((_candidate_area.size.x - total_width) * 0.5, 0.0)
+	for candidate_index: int in range(candidate_ids.size()):
+		# 当前候选武将 ID；用于按快照顺序取回已经创建的正式武将牌视图。
+		var character_id: String = str(candidate_ids[candidate_index])
+		# 当前候选武将牌；只更新布局位置，不重复配置数据或信号。
+		var character_view: PlayerTargetView = _candidate_views[character_id] as PlayerTargetView
+		character_view.position = Vector2(start_x + float(candidate_index) * (card_width + candidate_gap), 0.0)
 
 
 ## 更新本地临时选择和候选牌边框；规则状态在确认按钮点击前保持不变。

@@ -33,14 +33,23 @@ signal restart_requested(player_count: int)
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
 func _ready() -> void:
+	# 菜单分支移动到同级节点末尾，使展开面板的输入优先于运行时创建的武将牌和选将遮罩；根节点仍忽略空白区域鼠标。
+	call_deferred("_move_to_input_front")
 	_menu_button.pressed.connect(_toggle_menu)
 	_card_name_button.pressed.connect(card_name_toggle_requested.emit)
 	_restart_button.pressed.connect(_request_restart)
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
+	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
+	_player_count_input.update_on_text_changed = true
 	_menu_panel.visible = false
 	refresh_card_name_text()
+
+
+## 在父节点完成子节点初始化后提升菜单分支顺序；绘制层级与真实 GUI 命中顺序由同一入口保持一致。
+func _move_to_input_front() -> void:
+	move_to_front()
 
 
 ## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。
@@ -50,7 +59,11 @@ func set_next_player_count(player_count: int) -> void:
 
 ## 返回菜单中设置的下一局人数；始终限制在标准身份局2至10人范围。
 func get_next_player_count() -> int:
-	return clampi(int(_player_count_input.value), minimum_player_count, maximum_player_count)
+	# 输入框当前文本；优先读取尚未因焦点切换而提交的键入内容，保证鼠标点击重开时人数准确。
+	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
+	# 有效人数；空文本或非数字文本回退到 SpinBox 已确认值，并始终限制在标准身份局范围内。
+	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
 ## 按全局名称模式刷新菜单按钮文字，不创建第二份名称状态。
@@ -67,5 +80,8 @@ func _toggle_menu() -> void:
 
 ## 发出携带下一局人数的重开请求，并关闭菜单避免遮挡新一局选将界面。
 func _request_restart() -> void:
+	# 已确认的下一局人数；先写回输入框，使界面文本、Range 数值与重开参数保持一致。
+	var player_count: int = get_next_player_count()
+	_player_count_input.value = player_count
 	_menu_panel.visible = false
-	restart_requested.emit(get_next_player_count())
+	restart_requested.emit(player_count)

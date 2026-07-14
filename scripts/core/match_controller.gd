@@ -30,6 +30,9 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
+## 首回合行动座次号；默认1表示一号位先行动，支持在检查器中为特殊模式配置1至10号位，开局后不应动态修改。
+@export_range(1, 10, 1) var first_turn_seat_number: int = 1
+
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
 var state: GameState
 
@@ -782,18 +785,20 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 	player.hp = player.max_hp
 
 
-## 完成其他玩家同时选将、统一亮将、发4张起始手牌并从主公开始首回合。
+## 完成其他玩家同时选将、统一亮将、发4张起始手牌并从配置座次开始首回合。
 func _finish_character_selection() -> void:
 	for player: PlayerState in state.players:
 		if player.player_id != character_selection.lord_player_id:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
 	for player: PlayerState in state.players:
 		draw_cards(player.player_id, 4, false)
-	# 主公状态；选将流程已经验证其存在，正式回合始终从主公座次开始。
-	var lord: PlayerState = state.get_player(character_selection.lord_player_id)
+	# 首回合座次数组索引；检查器使用1起始编号，转换后限制在当前实际玩家范围内。
+	var first_turn_index: int = clampi(first_turn_seat_number - 1, 0, state.players.size() - 1)
+	# 首回合玩家状态；默认读取一号位，特殊模式可通过导出参数选择其他有效座次。
+	var first_turn_player: PlayerState = state.players[first_turn_index]
 	add_log("所有玩家完成选将并同时亮出武将。")
 	add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌4张。" % [state.players.size(), state.draw_pile.size()])
-	_start_turn(lord.player_id)
+	_start_turn(first_turn_player.player_id)
 
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
