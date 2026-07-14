@@ -63,7 +63,7 @@ func _run() -> void:
 		if not viewport_rect.encloses(screen_rect):
 			_fail("control_outside:%s:%s viewport=%s" % [checked_control.name, screen_rect, viewport_rect])
 			return
-	# 底部区域屏幕矩形；扩大本地武将牌后仍须依次保留装备、手牌、技能和本地座位的安全间隔。
+	# 底部区域屏幕矩形；装备、手牌、技能和本地座位之间必须依次保留安全间隔。
 	var bottom_layout_rects: Array[Rect2] = [_screen_rect(equipment_panel), _screen_rect(hand_panel), _screen_rect(skill_bar), _screen_rect(local_player_seat_slot)]
 	for rect_index: int in range(bottom_layout_rects.size() - 1):
 		# 当前相邻底部区域；只检查同层功能区，允许操作提示在牌桌中心使用独立纵向层级。

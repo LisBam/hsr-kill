@@ -107,28 +107,24 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	hand_layout.free()
-	# 无名杀式座次布局组件；实例化用于校验所有座次统一使用文档约定的1.15倍固定武将牌尺寸。
-	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
-	if not is_equal_approx(DecadeBattleLayout.PLAYER_CARD_SCALE, 1.15) or DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE != Vector2(135.7, 197.8) or not is_equal_approx(DecadeBattleLayout.PLAYER_SEAT_LABEL_HEIGHT, 26.0) or DecadeBattleLayout.PLAYER_SEAT_SLOT_SIZE != Vector2(135.7, 223.8):
-		printerr("SMOKE_FAIL decade_battle_layout_defaults")
-		get_tree().quit(1)
-		return
-	battle_layout.free()
-	# 可编辑武将牌场景实例；场景默认尺寸必须与1.15倍常规对手武将牌一致，避免编辑器与对局牌面尺寸脱节。
+	# 可编辑武将牌场景实例；场景资源自身必须直接保存完整最终几何信息，脚本不得在运行时修改静态尺寸。
 	var player_card_template: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	# 入树前的静态预览体力圆点数量；场景应预置三绿一暗共4枚，正式运行后会按快照重建。
 	var static_preview_health_pip_count: int = (player_card_template.get_node("HealthPips") as VBoxContainer).get_child_count()
+	if player_card_template.custom_minimum_size != Vector2(135.7, 197.8) or player_card_template.size != Vector2(135.7, 197.8):
+		printerr("SMOKE_FAIL player_card_native_scene_size minimum=%s size=%s" % [player_card_template.custom_minimum_size, player_card_template.size])
+		get_tree().quit(1)
+		return
 	player_card_template.visible = true
 	player_card_template.mouse_filter = Control.MOUSE_FILTER_STOP
 	get_tree().root.add_child(player_card_template)
 	await get_tree().process_frame
-	if not is_equal_approx(PlayerTargetView.PANEL_SCALE, 1.15) or player_card_template.custom_minimum_size != Vector2(135.7, 197.8) or player_card_template.size != Vector2(135.7, 197.8) or not is_equal_approx(player_card_template.panel_width, 135.7) or not is_equal_approx(player_card_template.panel_height, 197.8):
-		printerr("SMOKE_FAIL player_card_template_size minimum=%s size=%s panel=(%s, %s)" % [player_card_template.custom_minimum_size, player_card_template.size, player_card_template.panel_width, player_card_template.panel_height])
+	if player_card_template.custom_minimum_size != Vector2(135.7, 197.8) or player_card_template.size != Vector2(135.7, 197.8):
+		printerr("SMOKE_FAIL player_card_runtime_size minimum=%s size=%s" % [player_card_template.custom_minimum_size, player_card_template.size])
 		get_tree().quit(1)
 		return
 	# 编辑器武将牌预览；座次不属于牌面节点树，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
-	var preview_health_pips: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
-	# 编辑器插画槽；扩大为128.7×190.8像素，提高插画在1.15倍武将牌中的视觉占比。
+	# 编辑器插画槽；原生尺寸为128.7×190.8像素，作为武将牌的主要视觉区域。
 	var preview_artwork: TextureRect = player_card_template.get_node("Artwork") as TextureRect
 	# 编辑器武将名竖条；缩小至22像素宽，避免占据过多插画区域。
 	var preview_character_name: Label = player_card_template.get_node("CharacterName") as Label
@@ -136,9 +132,9 @@ func _run() -> void:
 	var preview_faction_badge: Label = player_card_template.get_node("FactionBadge") as Label
 	# 编辑器手牌角标；缩小至24×24像素，降低对插画左下角的遮挡。
 	var preview_hand_count: Label = player_card_template.get_node("HandCount") as Label
-	# 编辑器身份徽记；进入场景树后保持23×20像素，验证牌面放大不会同步放大身份UI。
+	# 编辑器身份徽记；进入场景树后保持23×20像素，验证静态场景内的信息控件规格。
 	var preview_identity_badge: Label = player_card_template.get_node("IdentityBadge") as Label
-	# 编辑器体力列；保持16×82像素，验证牌面放大只把该固定UI重新贴到右侧。
+	# 编辑器体力列；保持16×82像素，验证静态场景内的信息控件规格。
 	var preview_health_column: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
 	if player_card_template.has_node("Seat") or static_preview_health_pip_count != 4 or preview_artwork.position != Vector2(4.0, 4.0) or preview_artwork.size != Vector2(128.7, 190.8) or preview_character_name.size != Vector2(22.0, 86.0) or preview_faction_badge.size != Vector2(26.0, 26.0) or preview_hand_count.size != Vector2(24.0, 24.0) or preview_identity_badge.size != Vector2(23.0, 20.0) or preview_health_column.size != Vector2(16.0, 82.0):
 		printerr("SMOKE_FAIL player_card_scene_preview seat=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health=%s" % [player_card_template.has_node("Seat"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_column.size])
@@ -164,8 +160,6 @@ func _run() -> void:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
 		return
-	player_card_view.apply_panel_size(Vector2(135.7, 197.8))
-	await get_tree().process_frame
 	# 武将牌固定尺寸；装备、名称和体力等内容只能在牌面内裁切，不能反向撑大角色卡。
 	if player_card_view.size != Vector2(135.7, 197.8) or player_card_view.custom_minimum_size != Vector2(135.7, 197.8) or not player_card_view.clip_contents:
 		printerr("SMOKE_FAIL player_card_fixed_size")
@@ -196,7 +190,7 @@ func _run() -> void:
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
 	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
 	var rendered_equipment_row_count: int = 0
-	# 实际装备横条是否全部保持60×15像素；默认true，发现任意放大条目后改为false。
+	# 实际装备横条是否全部保持60×15像素；默认true，发现任意尺寸不符条目后改为false。
 	var equipment_rows_keep_original_size: bool = true
 	for child: Node in player_card_view.get_children():
 		for grandchild: Node in child.get_children():
