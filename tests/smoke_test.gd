@@ -163,6 +163,11 @@ func _run() -> void:
 	# 测试势力定义；提供圆徽简称与主题颜色，验证数据驱动入口可正常传递。
 	var equipped_faction_definition: Dictionary = GameDatabase.get_faction(str(equipped_character_definition.get("faction", "")))
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 场景静态布局回归；写入战斗快照后座次仍须保留编辑器设定的完整底部居中区域。
+	if preview_seat.position != Vector2(0.0, 154.0) or preview_seat.size != Vector2(118.0, 18.0):
+		printerr("SMOKE_FAIL player_card_scene_layout_overridden")
+		get_tree().quit(1)
+		return
 	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
 	var rendered_equipment_row_count: int = 0
 	for child: Node in player_card_view.get_children():
