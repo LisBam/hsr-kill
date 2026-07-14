@@ -30,11 +30,14 @@ func _run() -> void:
 	# 正式主场景实例；作为测试根节点子节点运行完整界面初始化流程。
 	var main_instance: Control = main_scene.instantiate() as Control
 	add_child(main_instance)
-	# 正式对局控制器；测试使用非法的1人配置阻止自动开局，仅保留完整界面节点和按钮输入连接。
+	# 正式对局控制器；先使用非法的1人配置阻止规则对局和AI异步任务启动，随后直接注入只读十人界面快照。
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	match_controller.default_player_count = 1
 	for _frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
+	match_controller.state_changed.emit(_make_ten_player_snapshot())
+	await get_tree().process_frame
+	await get_tree().process_frame
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	main_instance.position = Vector2.ZERO
 	main_instance.size = COMPACT_CLIENT_SIZE
@@ -60,6 +63,48 @@ func _run() -> void:
 		if not viewport_rect.encloses(screen_rect):
 			_fail("control_outside:%s:%s viewport=%s" % [checked_control.name, screen_rect, viewport_rect])
 			return
+	# 底部区域屏幕矩形；扩大本地武将牌后仍须依次保留装备、手牌、技能和本地座位的安全间隔。
+	var bottom_layout_rects: Array[Rect2] = [_screen_rect(equipment_panel), _screen_rect(hand_panel), _screen_rect(skill_bar), _screen_rect(local_player_seat_slot)]
+	for rect_index: int in range(bottom_layout_rects.size() - 1):
+		# 当前相邻底部区域；只检查同层功能区，允许操作提示在牌桌中心使用独立纵向层级。
+		var current_rect: Rect2 = bottom_layout_rects[rect_index]
+		# 下一个相邻底部区域；排列顺序固定为从左到右，任何相交都说明安全边距未适配新牌宽。
+		var next_rect: Rect2 = bottom_layout_rects[rect_index + 1]
+		if current_rect.intersects(next_rect):
+			_fail("bottom_controls_overlap:%s:%s" % [current_rect, next_rect])
+			return
+	# 本地完整座位屏幕尺寸；紧凑客户区未应用画布拉伸时仍应保持135.7×223.8像素规格。
+	var local_seat_screen_rect: Rect2 = _screen_rect(local_player_seat_slot)
+	if not local_seat_screen_rect.size.is_equal_approx(Vector2(135.7, 223.8)):
+		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
+		return
+	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
+	var opponent_seat_slots: Array[Control] = []
+	# 全屏对手座次布局器；动态座位都是该容器的直接子节点。
+	var player_grid: Control = main_instance.get_node("%PlayerGrid") as Control
+	for player_grid_child: Node in player_grid.get_children():
+		if player_grid_child is Control and player_grid_child.has_node("PlayerTargetView") and player_grid_child.has_node("Seat"):
+			opponent_seat_slots.append(player_grid_child as Control)
+	if opponent_seat_slots.size() != 9:
+		_fail("opponent_seat_count:%d" % opponent_seat_slots.size())
+		return
+	# 已确认的对手座位屏幕矩形；逐个加入并检查相邻牌面不会重叠。
+	var occupied_opponent_rects: Array[Rect2] = []
+	for opponent_seat_slot: Control in opponent_seat_slots:
+		# 当前对手座位屏幕矩形；必须完整留在紧凑客户区内。
+		var opponent_screen_rect: Rect2 = _screen_rect(opponent_seat_slot)
+		if not viewport_rect.encloses(opponent_screen_rect):
+			_fail("opponent_outside:%s:%s" % [opponent_seat_slot.name, opponent_screen_rect])
+			return
+		for occupied_rect: Rect2 in occupied_opponent_rects:
+			if opponent_screen_rect.intersects(occupied_rect):
+				_fail("opponent_overlap:%s:%s" % [opponent_screen_rect, occupied_rect])
+				return
+		for bottom_rect: Rect2 in bottom_layout_rects:
+			if opponent_screen_rect.intersects(bottom_rect):
+				_fail("opponent_bottom_overlap:%s:%s" % [opponent_screen_rect, bottom_rect])
+				return
+		occupied_opponent_rects.append(opponent_screen_rect)
 	name_button.pressed.connect(_on_name_button_pressed)
 	restart_button.pressed.connect(_on_restart_button_pressed)
 	await _click_control(name_button)
@@ -70,6 +115,9 @@ func _run() -> void:
 	if not _restart_button_pressed:
 		_fail("restart_button_input")
 		return
+	# 重开会排队释放旧座位和手牌；等待两帧让释放队列清空，避免测试退出时残留异步CanvasItem。
+	await get_tree().process_frame
+	await get_tree().process_frame
 	remove_child(main_instance)
 	main_instance.free()
 	await get_tree().process_frame
@@ -111,6 +159,42 @@ func _click_control(control: Control) -> void:
 	release_event.pressed = false
 	get_viewport().push_input(release_event, true)
 	await get_tree().process_frame
+
+
+## 构造只包含界面公开字段的十人快照；覆盖最拥挤座次布局且不启动规则核心、AI计时器或卡牌动画。
+func _make_ten_player_snapshot() -> Dictionary:
+	# 测试玩家数组；座次0作为本地玩家，其余9名用于顶部五席与左右各两席。
+	var players: Array[Dictionary] = []
+	for player_index: int in range(10):
+		# 当前玩家快照；字段与正式裁剪快照保持一致，空区域避免引入无关卡牌交互。
+		var player_snapshot: Dictionary = {
+			"player_id":player_index,
+			"display_name":"玩家%d" % (player_index + 1),
+			"character_id":"trailblazer",
+			"identity":"lord" if player_index == 0 else "hidden",
+			"hp":4,
+			"max_hp":4,
+			"alive":true,
+			"chained":false,
+			"hand_count":4,
+			"hand":[],
+			"equipment":{},
+			"judgment_area":[],
+			"wooden_ox_storage":[],
+			"wooden_ox_storage_count":0,
+		}
+		players.append(player_snapshot)
+	# 十人界面快照；准备阶段禁用出牌控件，但保留完整本地技能栏和全部公开角色信息。
+	var snapshot: Dictionary = {
+		"players":players,
+		"current_player_id":0,
+		"current_phase":"setup",
+		"turn_number":1,
+		"draw_pile_count":121,
+		"discard_pile_count":0,
+		"game_over":false,
+	}
+	return snapshot
 
 
 ## 记录名称模式按钮收到真实鼠标点击，供异步输入流程断言。

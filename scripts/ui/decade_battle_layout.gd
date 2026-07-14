@@ -3,17 +3,24 @@ extends Control
 
 ## 无名杀十周年式环桌座次布局组件。组件只根据人数和可视尺寸摆放角色卡，不读取规则对象或提交动作。
 
-## 全部武将牌统一使用的固定尺寸；118×172与可编辑 player_target_view.tscn 的根节点尺寸完全一致。
-const UNIFIED_PLAYER_CARD_SIZE: Vector2 = Vector2(118.0, 172.0)
+## 武将牌原始设计尺寸；只用于追溯统一1.15倍放大比例，运行时布局使用放大后的固定尺寸。
+const BASE_PLAYER_CARD_SIZE: Vector2 = Vector2(118.0, 172.0)
 
-## 游戏内座次标签的固定高度；标签脱离武将牌场景并作为每个座位容器的底部独立区域。
-const PLAYER_SEAT_LABEL_HEIGHT: float = 18.0
+## 全部武将牌相对原始设计的统一放大倍数；该数值只扩大牌框与插画空间，不缩放信息控件。
+const PLAYER_CARD_SCALE: float = 1.15
 
-## 游戏内完整座位容器尺寸；宽度等于武将牌，190像素高度由172像素武将牌与18像素座次标签组成。
-const PLAYER_SEAT_SLOT_SIZE: Vector2 = Vector2(118.0, 190.0)
+## 全部武将牌统一使用的固定尺寸；135.7×197.8与可编辑 player_target_view.tscn 的根节点尺寸完全一致。
+const UNIFIED_PLAYER_CARD_SIZE: Vector2 = BASE_PLAYER_CARD_SIZE * PLAYER_CARD_SCALE
 
-## 顶部武将牌距牌桌上边缘的距离；默认14像素接近参考 CSS 的9像素视觉留白，运行时可在检查器中调整。
-@export_range(0.0, 100.0, 1.0) var top_margin: float = 14.0
+## 游戏内座次标签的固定高度；26像素是18像素字体进入场景树后的真实控件高度，保持放大前的实际UI尺寸。
+const PLAYER_SEAT_LABEL_HEIGHT: float = 26.0
+
+## 游戏内完整座位容器尺寸；宽度等于武将牌，223.8像素高度由197.8像素武将牌与26像素座次标签组成。
+const PLAYER_SEAT_SLOT_SIZE: Vector2 = Vector2(UNIFIED_PLAYER_CARD_SIZE.x, UNIFIED_PLAYER_CARD_SIZE.y + PLAYER_SEAT_LABEL_HEIGHT)
+
+## 顶部武将牌距牌桌上边缘的距离；默认2像素为紧凑窗口中的十人局错列座位保留纵向安全间隔。
+## 该参数只改变顶部座位位置，运行时通常无需动态修改，不影响牌面尺寸、座次顺序或规则数值。
+@export_range(0.0, 100.0, 1.0) var top_margin: float = 2.0
 
 ## 左右侧武将牌距牌桌边缘的距离；默认22像素对应参考布局的边缘安全区，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var side_margin: float = 22.0
@@ -24,8 +31,12 @@ const PLAYER_SEAT_SLOT_SIZE: Vector2 = Vector2(118.0, 190.0)
 ## 单侧有两名角色时第一名的纵向位置比例；默认0.18用于十人局上侧座位，运行时通常无需动态修改。
 @export_range(0.1, 0.5, 0.01) var upper_side_y_ratio: float = 0.18
 
-## 单侧有两名角色时第二名的纵向位置比例；默认0.47用于十人局下侧座位，运行时通常无需动态修改。
-@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.47
+## 单侧有两名角色时第二名的纵向位置比例；默认0.35为放大后的下侧座位预留底部界面安全区，运行时通常无需动态修改。
+@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.35
+
+## 单侧双座位的横向错列间隔；默认14像素让下侧座位向牌桌内侧移动一张牌宽，避开底部本地界面。
+## 该参数只在十人局生效，运行时通常无需动态修改，不改变座次顺序或目标规则。
+@export_range(0.0, 80.0, 1.0) var stacked_side_horizontal_gap: float = 14.0
 
 ## 当前由桌面绑定的对手角色卡数组；数组顺序与本地玩家之后的存活座次顺序一致。
 var _opponent_views: Array[Control] = []
@@ -71,13 +82,15 @@ func _layout_opponents() -> void:
 	var side_count_per_edge: int = 0 if _total_player_count <= 3 else (2 if _total_player_count >= 10 else 1)
 	# 顶部座位数量；用于生成均匀但符合参考比例的横坐标。
 	var top_count: int = maxi(valid_views.size() - side_count_per_edge * 2, 0)
-	# 当前座位容器尺寸；武将牌保持118×172，独立座次标签始终位于容器底部。
+	# 当前座位容器尺寸；武将牌保持135.7×197.8，独立座次标签始终位于容器底部。
 	var active_card_size: Vector2 = PLAYER_SEAT_SLOT_SIZE
 	# 当前视图索引；按右侧、顶部从右到左、左侧的无名杀座次顺序依次消费。
 	var view_index: int = 0
 	if side_count_per_edge > 0:
 		for right_index: int in range(side_count_per_edge):
-			_place_view(valid_views[view_index], Vector2(size.x - side_margin - active_card_size.x, _side_y(right_index, side_count_per_edge)), active_card_size)
+			# 右侧座位横坐标；十人局下侧牌向内错列，避免与右下本地武将牌占用同一列。
+			var right_x: float = size.x - side_margin - active_card_size.x - float(right_index) * (active_card_size.x + stacked_side_horizontal_gap)
+			_place_view(valid_views[view_index], Vector2(right_x, _side_y(right_index, side_count_per_edge)), active_card_size)
 			view_index += 1
 	# 顶部中心横坐标比例；数组按从右向左排列，与无名杀 data-position 递增方向一致。
 	var top_ratios: PackedFloat32Array = _top_center_ratios(top_count)
@@ -88,7 +101,11 @@ func _layout_opponents() -> void:
 		view_index += 1
 	if side_count_per_edge > 0:
 		for left_index: int in range(side_count_per_edge):
-			_place_view(valid_views[view_index], Vector2(side_margin, _side_y(side_count_per_edge - left_index - 1, side_count_per_edge)), active_card_size)
+			# 左侧座位纵向索引；座次消费顺序与视觉上下方向相反，因此先换算为实际的上、下位置。
+			var left_side_index: int = side_count_per_edge - left_index - 1
+			# 左侧座位横坐标；十人局下侧牌向内错列，避免与左下装备区占用同一列。
+			var left_x: float = side_margin + float(left_side_index) * (active_card_size.x + stacked_side_horizontal_gap)
+			_place_view(valid_views[view_index], Vector2(left_x, _side_y(left_side_index, side_count_per_edge)), active_card_size)
 			view_index += 1
 
 

@@ -8,6 +8,10 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
+## 本地座位容器距界面右边缘的安全距离；默认16像素保持牌框阴影完整可见，运行时通常无需动态修改。
+## 修改该值只移动右下本地武将牌，不改变牌面尺寸、内部信息控件或任何规则数值。
+@export_range(0.0, 64.0, 1.0) var local_player_right_margin: float = 16.0
+
 ## 对局控制器引用；只调用公开动作与查询接口。
 @onready var match_controller: MatchController = get_node(match_controller_path) as MatchController
 
@@ -151,14 +155,16 @@ func _create_local_player_card() -> void:
 	local_player_seat_slot.anchor_top = 1.0
 	local_player_seat_slot.anchor_right = 1.0
 	local_player_seat_slot.anchor_bottom = 1.0
-	local_player_seat_slot.offset_left = -134.0
-	local_player_seat_slot.offset_top = -190.0
-	local_player_seat_slot.offset_right = -16.0
+	# 本地完整座位尺寸；统一包含1.15倍武将牌与保持26像素真实控件高度的独立座次标签。
+	var local_seat_size: Vector2 = DecadeBattleLayout.PLAYER_SEAT_SLOT_SIZE
+	local_player_seat_slot.offset_left = -local_player_right_margin - local_seat_size.x
+	local_player_seat_slot.offset_top = -local_seat_size.y
+	local_player_seat_slot.offset_right = -local_player_right_margin
 	local_player_seat_slot.offset_bottom = 0.0
 	local_player_seat_slot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	local_player_seat_slot.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	local_player_card.panel_width = 118.0
-	local_player_card.panel_height = 172.0
+	local_player_card.panel_width = DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE.x
+	local_player_card.panel_height = DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE.y
 	add_child(local_player_seat_slot)
 
 
@@ -224,8 +230,8 @@ func _render_players() -> void:
 		var character_definition: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
-		player_button.panel_width = 118.0
-		player_button.panel_height = 172.0
+		player_button.panel_width = DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE.x
+		player_button.panel_height = DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE.y
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_seat_label.text = _seat_text(target_id + 1)
 		player_button.pressed.connect(_on_target_pressed.bind(target_id))
