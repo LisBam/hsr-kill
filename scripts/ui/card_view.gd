@@ -79,6 +79,8 @@ const HOVER_Z_INDEX: int = 100
 ## 初始化卡牌控件的尺寸、排版、焦点与鼠标行为。
 func _ready() -> void:
 	custom_minimum_size = Vector2(card_width, card_height)
+	size = Vector2(card_width, card_height)
+	clip_contents = true
 	text = ""
 	focus_mode = Control.FOCUS_NONE
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
