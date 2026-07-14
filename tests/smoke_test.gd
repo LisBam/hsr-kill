@@ -103,6 +103,20 @@ func _run() -> void:
 		printerr("SMOKE_FAIL identity_distribution_8")
 		get_tree().quit(1)
 		return
+	# 群体牌行动顺序状态；使用者为三号位时，其他角色应从四号位开始并环形回到一、二号位。
+	var target_order_state: GameState = GameState.new()
+	for target_order_player_id: int in range(4):
+		target_order_state.players.append(PlayerState.new(target_order_player_id, "玩家%d" % (target_order_player_id + 1)))
+	# 群体牌规则服务；只读取测试状态，不执行卡牌效果。
+	var target_order_rules: CardRuleService = CardRuleService.new(target_order_state)
+	# 测试万箭齐发实体；目标模式来自正式卡牌配置。
+	var target_order_card: CardInstance = CardInstance.new("wanjian", "heart", 1)
+	# 规范化群体目标顺序；预期从三号位使用者的下家四号位开始环形排列。
+	var normalized_target_order: Array[int] = target_order_rules.normalize_targets(2, target_order_card, [])
+	if normalized_target_order != [3, 0, 1]:
+		printerr("SMOKE_FAIL all_others_action_order=%s" % normalized_target_order)
+		get_tree().quit(1)
+		return
 	# 纯数据选将服务；验证主公先选、默认5张候选、其他玩家同时确认和完成前隐藏选择。
 	var selection_service: CharacterSelectionService = CharacterSelectionService.new()
 	# 测试选将随机源；固定种子保证候选断言可复现且不依赖系统时间。
@@ -180,9 +194,9 @@ func _run() -> void:
 	var preview_hand_count: Label = player_card_template.get_node("HandCount") as Label
 	# 编辑器身份徽记；进入场景树后保持23×20像素，验证静态场景内的信息控件规格。
 	var preview_identity_badge: Label = player_card_template.get_node("IdentityBadge") as Label
-	# 编辑器体力列；保持16×82像素，验证静态场景内的信息控件规格。
+	# 编辑器体力列；移动到右下角并扩大为26×90像素，验证静态场景内的信息控件规格。
 	var preview_health_column: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
-	if player_card_template.has_node("Seat") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 86.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or not preview_health_column.size.is_equal_approx(Vector2(16.0, 82.0)):
+	if player_card_template.has_node("Seat") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 86.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or not preview_health_column.position.is_equal_approx(Vector2(120.35, 104.0)) or not preview_health_column.size.is_equal_approx(Vector2(26.0, 90.0)) or player_card_template.health_pip_font_size != 18:
 		printerr("SMOKE_FAIL player_card_scene_preview seat=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health=%s" % [player_card_template.has_node("Seat"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_column.size])
 		get_tree().quit(1)
 		return
@@ -272,6 +286,7 @@ func _run() -> void:
 	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.08
 	animation_layer.target_line_fade_duration = 0.04
+	animation_layer.target_line_draw_duration = 0.02
 	animation_layer.queue_reflow_duration = 0.01
 	get_tree().root.add_child(animation_layer)
 	# 第一张动画牌；模拟一名其他玩家从左侧座位使用卡牌。
@@ -282,8 +297,14 @@ func _run() -> void:
 	animation_layer.add_child(second_animation_card)
 	first_animation_card.position = Vector2(80.0, 120.0)
 	second_animation_card.position = Vector2(900.0, 120.0)
-	animation_layer.play_card(first_animation_card, first_animation_card.position, Vector2(500.0, 300.0), [])
+	animation_layer.play_card(first_animation_card, first_animation_card.position, Vector2(500.0, 300.0), [Vector2(800.0, 200.0)])
 	animation_layer.play_card(second_animation_card, second_animation_card.position, Vector2(500.0, 300.0), [])
+	# 第一条目标线表现数据；必须保存来源、目标和动态延伸进度，确保不是一次性绘制静态整线。
+	var first_line_presentation: Dictionary = animation_layer._line_presentations.get(1, {}) as Dictionary
+	if first_line_presentation.get("target_positions", []) != [Vector2(800.0, 200.0)] or not first_line_presentation.has("progress"):
+		printerr("SMOKE_FAIL target_line_presentation=%s" % first_line_presentation)
+		get_tree().quit(1)
+		return
 	await get_tree().create_timer(0.04).timeout
 	if first_animation_card.rotation != 0.0 or second_animation_card.rotation != 0.0 or is_equal_approx(first_animation_card.position.x, second_animation_card.position.x):
 		printerr("SMOKE_FAIL discard_animation_queue")
@@ -340,7 +361,7 @@ func _run() -> void:
 		printerr("SMOKE_FAIL start_match")
 		get_tree().quit(1)
 		return
-	if _controller.state.current_player_id != 0 or _controller.state.turn_number != 1:
+	if _controller.state.current_player_id != 0 or _controller.state.turn_number != 1 or _controller.state.players[0].identity != "lord":
 		printerr("SMOKE_FAIL first_turn seat=%d turn=%d" % [_controller.state.current_player_id + 1, _controller.state.turn_number])
 		get_tree().quit(1)
 		return

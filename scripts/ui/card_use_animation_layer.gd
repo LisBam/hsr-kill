@@ -12,6 +12,9 @@ extends Control
 ## 目标指示线淡出时间；默认0.36秒，使指向关系在卡牌抵达后平滑消失。
 @export_range(0.1, 1.5, 0.01) var target_line_fade_duration: float = 0.36
 
+## 目标指示线从来源延伸到目标的时间；默认0.24秒形成清晰方向感，运行时可按整体节奏动态调整。
+@export_range(0.05, 1.0, 0.01) var target_line_draw_duration: float = 0.24
+
 ## 动画牌面目标缩放倍率；默认1.0保持正式111×148实体牌模型和3:4比例不变，运行时通常无需修改。
 @export_range(0.5, 1.5, 0.01) var animated_card_scale: float = 1.0
 
@@ -71,8 +74,14 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 		"start_position":start_position,
 		"target_positions":target_positions.duplicate(),
 		"alpha":line_alpha,
+		"progress":0.0,
 	}
 	queue_redraw()
+	if not target_positions.is_empty():
+		# 指示线生长补间；线条沿来源到目标逐渐延伸，完整到达后再由淡出阶段平滑消失。
+		var line_draw_tween: Tween = create_tween()
+		line_draw_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		line_draw_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
 	# 当前进入动画层的正式卡牌；每张牌独立加入队列，不会清除仍在展示的前一张牌。
 	var presented_card: CardView = card_view
 	# 原卡牌的全局变换；重新挂载到动画层后恢复该变换，保证动画从屏幕中原位置连续开始。
@@ -209,6 +218,17 @@ func _set_line_alpha(alpha: float, sequence: int) -> void:
 	queue_redraw()
 
 
+## 更新某次目标指示线的延伸进度；0表示仅在来源点，1表示完整到达全部目标。
+func _set_line_progress(progress: float, sequence: int) -> void:
+	if not _line_presentations.has(sequence):
+		return
+	# 当前目标线数据；进度限制在0至1，避免补间边界误差造成线段越过目标。
+	var presentation: Dictionary = _line_presentations[sequence] as Dictionary
+	presentation["progress"] = clampf(progress, 0.0, 1.0)
+	_line_presentations[sequence] = presentation
+	queue_redraw()
+
+
 ## 绘制带端点光晕的目标指示线；多目标牌从同一使用者位置分别指向每名目标。
 func _draw() -> void:
 	for presentation_variant: Variant in _line_presentations.values():
@@ -220,13 +240,17 @@ func _draw() -> void:
 			continue
 		# 当前指示线起点；使用者位置在出牌时已经转换为动画层局部坐标。
 		var presentation_start: Vector2 = presentation.get("start_position", Vector2.ZERO) as Vector2
+		# 当前线条延伸比例；所有目标共享同一进度，从共同来源同步向外生长。
+		var presentation_progress: float = float(presentation.get("progress", 1.0))
 		# 当前线条颜色；每次表现独立控制透明度，多目标仍共享同一视觉语义。
 		var line_color: Color = Color(target_line_color, target_line_color.a * presentation_alpha)
 		for target_position_variant: Variant in presentation.get("target_positions", []):
 			# 当前目标位置；来自桌面角色视图中心，不读取任何权威状态对象。
 			var target_position: Vector2 = target_position_variant as Vector2
-			draw_line(presentation_start, target_position, line_color, target_line_width, true)
-			draw_circle(target_position, target_line_width * 1.8, line_color)
+			# 当前动态端点；随补间从来源移动到真实目标，形成明确的来源到目标方向。
+			var animated_target_position: Vector2 = presentation_start.lerp(target_position, presentation_progress)
+			draw_line(presentation_start, animated_target_position, line_color, target_line_width, true)
+			draw_circle(animated_target_position, target_line_width * 1.8, line_color)
 
 
 ## 释放当前动画牌节点；它已离开权威手牌快照，动画完成后不应回到手牌容器。

@@ -9,6 +9,9 @@ signal pressed
 ## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
 signal card_dropped(card_uid: int, player_id: int)
 
+## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
+@export_range(10, 28, 1) var health_pip_font_size: int = 18
+
 ## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
 @export_range(12.0, 22.0, 1.0) var equipment_row_height: float = 15.0
 
@@ -266,7 +269,7 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		var health_pip: Label = Label.new()
 		health_pip.text = "●"
 		health_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		health_pip.add_theme_font_size_override("font_size", 12)
+		health_pip.add_theme_font_size_override("font_size", health_pip_font_size)
 		health_pip.add_theme_color_override("font_color", Color("44ca67") if pip_index < safe_hp else Color("26382c"))
 		health_pip.add_theme_color_override("font_shadow_color", Color("07140a"))
 		health_pip.add_theme_constant_override("shadow_offset_x", 1)
