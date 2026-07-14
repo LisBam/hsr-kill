@@ -14,8 +14,8 @@ var panel_width: float = 118.0
 ## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
 var panel_height: float = 172.0
 
-## 单条装备牌信息占用的高度；默认18像素可在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
-@export_range(14.0, 26.0, 1.0) var equipment_row_height: float = 18.0
+## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
+@export_range(12.0, 22.0, 1.0) var equipment_row_height: float = 15.0
 
 ## 牌面允许显示的装备条目上限；默认5对应武器、防具、进攻坐骑、防御坐骑和宝物五个固定槽位。
 @export_range(1, 5, 1) var maximum_equipment_rows: int = 5
@@ -239,7 +239,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_faction_badge_label.text = faction_short_name
 	_faction_badge_label.tooltip_text = faction_name
 	# 势力徽记样式；清空通用面板的大内边距，保证紧凑圆徽中的单字完整显示。
-	var faction_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(faction_color.darkened(0.28), faction_color.lightened(0.36), 2, 18)
+	var faction_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(faction_color.darkened(0.28), faction_color.lightened(0.36), 1, 14)
 	faction_badge_style.content_margin_left = 0.0
 	faction_badge_style.content_margin_top = 0.0
 	faction_badge_style.content_margin_right = 0.0
@@ -253,7 +253,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	name_banner_style.content_margin_bottom = 1.0
 	_character_name_label.add_theme_stylebox_override("normal", name_banner_style)
 	# 手牌数角标样式；朱红底与金边对应参考图左下角的高对比数字徽记。
-	var hand_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("9e3528"), Color("f0ad36"), 2, 4)
+	var hand_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("9e3528"), Color("f0ad36"), 1, 3)
 	hand_badge_style.content_margin_left = 0.0
 	hand_badge_style.content_margin_top = 0.0
 	hand_badge_style.content_margin_right = 0.0
@@ -274,7 +274,7 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		var health_pip: Label = Label.new()
 		health_pip.text = "●"
 		health_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		health_pip.add_theme_font_size_override("font_size", 14 if panel_width >= 116.0 else 12)
+		health_pip.add_theme_font_size_override("font_size", 12 if panel_width >= 116.0 else 10)
 		health_pip.add_theme_color_override("font_color", Color("44ca67") if pip_index < safe_hp else Color("26382c"))
 		health_pip.add_theme_color_override("font_shadow_color", Color("07140a"))
 		health_pip.add_theme_constant_override("shadow_offset_x", 1)
@@ -311,7 +311,7 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.fit_content = false
 		equipment_row.scroll_active = false
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		equipment_row.add_theme_font_size_override("normal_font_size", 9 if panel_width >= 116.0 else 8)
+		equipment_row.add_theme_font_size_override("normal_font_size", 8 if panel_width >= 116.0 else 7)
 		equipment_row.add_theme_color_override("default_color", Color("33281e"))
 		# 装备横条样式；缩小内容边距以在统一118像素牌宽内完整显示花色点数与短牌名。
 		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("dfd2adf2"), Color("8d7147"), 1, 3)

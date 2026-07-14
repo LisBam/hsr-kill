@@ -12,8 +12,8 @@ signal card_presentation_requested(card_data: Dictionary, actor_id: int, target_
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
 @export var default_deck_id: String = "standard_161"
 
-## 默认玩家人数；支持2至10，演示场景默认4人，运行时可在新开局前修改。
-@export_range(2, 10, 1) var default_player_count: int = 4
+## 默认玩家人数；支持2至10，直接运行演示场景时创建8人局，运行时可在新开局前修改。
+@export_range(2, 10, 1) var default_player_count: int = 8
 
 ## 人类本地玩家座次；默认0，设为 -1 可运行纯 AI 自动对局，开局后不应修改。
 @export_range(-1, 9, 1) var local_human_player_id: int = 0
