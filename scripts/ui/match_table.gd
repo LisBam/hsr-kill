@@ -33,7 +33,7 @@ extends Control
 @onready var name_mode_button: Button = %NameModeButton
 
 ## 其他玩家与本地玩家状态卡容器；每次快照整体重建以避免状态残留。
-@onready var player_grid: Control = %PlayerGrid
+@onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
 ## 本地玩家信息文本；展示身份、武将、体力与装备。
 @onready var local_status_label: Label = %LocalStatusLabel
@@ -48,7 +48,7 @@ extends Control
 @onready var local_artwork_placeholder: Label = %LocalArtworkPlaceholder
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
-@onready var hand_container: HFlowContainer = %HandContainer
+@onready var hand_container: DecadeHandContainer = %HandContainer
 
 ## 本地武将技能按钮容器；每次快照按武将配置重建，预留技能只展示说明不执行规则。
 @onready var skill_button_container: HFlowContainer = %SkillButtonContainer
@@ -117,6 +117,7 @@ func _ready() -> void:
 	wooden_ox_button.pressed.connect(_on_wooden_ox_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	%RestartButton.pressed.connect(_on_restart_pressed)
+	%LocalPanel.gui_input.connect(_on_local_panel_gui_input)
 	_refresh_name_mode_button()
 	call_deferred("_start_default_match")
 
@@ -164,6 +165,7 @@ func _render_header() -> void:
 
 ## 渲染全部玩家状态卡，并为存活角色提供按顺序选择目标的按钮。
 func _render_players() -> void:
+	player_grid.clear_opponent_views()
 	_clear_container(player_grid)
 	_player_views.clear()
 	# 本地玩家 ID；来自控制器配置，默认0。
@@ -182,9 +184,9 @@ func _render_players() -> void:
 		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
 		var character_definition: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
-		player_button.panel_width = 172.0
-		player_button.panel_height = 126.0
-		player_button.configure(target_id, _format_player_card(player), bool(player.get("alive", false)), target_id == int(_snapshot.get("current_player_id", -1)), character_definition)
+		player_button.panel_width = 118.0
+		player_button.panel_height = 172.0
+		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)))
 		player_button.pressed.connect(_on_target_pressed.bind(target_id))
 		player_button.card_dropped.connect(_on_card_dropped)
 		player_grid.add_child(player_button)
@@ -208,20 +210,9 @@ func _layout_opponent_players() -> void:
 	var opponent_views: Array[Control] = []
 	for player_view_variant: Variant in _player_views.values():
 		opponent_views.append(player_view_variant as Control)
-	# 上方可容纳的角色数量；最多四名，避免遮挡左上回合信息和右上设置按钮。
-	var top_count: int = mini(opponent_views.size(), 4)
-	for index: int in range(top_count):
-		# 上方角色卡横坐标；在250至858像素之间均匀排列。
-		var top_x: float = 250.0 + float(index) * 202.0
-		opponent_views[index].position = Vector2(top_x, 18.0)
-	for index: int in range(top_count, opponent_views.size()):
-		# 侧边角色序号；偶数放左侧，奇数放右侧，并按行向下排列。
-		var side_index: int = index - top_count
-		# 侧边角色所在行；每侧最多三行，适配十人局除本地玩家外的九个座位。
-		var side_row: int = side_index / 2
-		# 当前角色是否位于左侧；false 时固定到右侧边缘。
-		var on_left: bool = side_index % 2 == 0
-		opponent_views[index].position = Vector2(18.0 if on_left else 1090.0, 120.0 + float(side_row) * 132.0)
+	# 对局总人数；座次布局器用该数值选择与无名杀一致的二至十人位置模板。
+	var total_player_count: int = (_snapshot.get("players", []) as Array).size()
+	player_grid.bind_opponent_views(opponent_views, total_player_count)
 
 
 ## 渲染本地武将插画；与其他角色卡共用 art_path 字段和安全加载回退规则。
@@ -317,6 +308,9 @@ func _render_local_hand() -> void:
 	recast_button.disabled = not can_act
 	wooden_ox_button.disabled = not can_act
 	end_play_button.disabled = not can_act
+	%CancelButton.visible = false
+	recast_button.visible = false
+	wooden_ox_button.visible = false
 
 
 ## 返回玩家状态卡的多行文本。
@@ -379,7 +373,7 @@ func _format_local_equipment(player: Dictionary) -> String:
 	var defensive_mount_name: String = _equipment_slot_name(equipment, "defensive_mount")
 	# 宝物显示名；槽位为空时显示“无”。
 	var treasure_name: String = _equipment_slot_name(equipment, "treasure")
-	return "武器　%s\n防具　%s\n坐骑　-%s　+%s\n宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
+	return "⚔ 武器　%s\n🛡 防具　%s\n♞ 进攻　%s\n♞ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
 
 
 ## 按装备槽位返回当前名称模式下的牌名；空槽位统一返回“无”。
@@ -401,8 +395,12 @@ func _hp_pips(hp: int, max_hp: int) -> String:
 
 
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
+## 无名杀式交互以当前牌为完整选择上下文；切换或取消卡牌时会清空旧目标，避免非法目标残留高亮。
 func _on_card_pressed(card_uid: int) -> void:
-	_selected_card_uid = -1 if _selected_card_uid == card_uid else card_uid
+	# 当前点击是否取消已经选中的同一张牌；用于在写入新选择前决定最终 UID。
+	var deselecting_current_card: bool = _selected_card_uid == card_uid
+	_selected_card_uid = -1 if deselecting_current_card else card_uid
+	_selected_target_ids.clear()
 	if _selected_card_uid >= 0:
 		# 初始规则预览；自身目标与全体目标牌可据此自动整理目标选择。
 		var initial_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
@@ -444,6 +442,13 @@ func _on_self_target_pressed() -> void:
 	_on_target_pressed(match_controller.local_human_player_id)
 
 
+## 允许直接点击本地武将牌选择自己，保留单独按钮作为低分辨率和触屏设备的明确入口。
+func _on_local_panel_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		_on_self_target_pressed()
+		accept_event()
+
+
 ## 提交使用牌动作；所有规则错误由核心返回并显示。
 func _on_use_pressed() -> void:
 	if _selected_card_uid < 0:
@@ -452,6 +457,26 @@ func _on_use_pressed() -> void:
 	# 使用牌标准动作；目标数组按界面点击顺序复制。
 	var action: PlayerAction = PlayerAction.new("use_card", match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
 	match_controller.submit_action(action)
+
+
+## 处理无名杀式键盘与右键快捷操作；快捷键只调用现有标准动作，不绕过规则核心。
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
+		# 当前键盘事件；只响应确认、取消和结束出牌三个稳定桌面操作。
+		var key_event: InputEventKey = event as InputEventKey
+		if key_event.keycode == KEY_ESCAPE and _selected_card_uid >= 0:
+			_on_cancel_pressed()
+			get_viewport().set_input_as_handled()
+		elif key_event.keycode == KEY_ENTER and not use_button.disabled:
+			_on_use_pressed()
+			get_viewport().set_input_as_handled()
+		elif key_event.keycode == KEY_SPACE and _selected_card_uid < 0 and not end_play_button.disabled:
+			_on_end_play_pressed()
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+		if _selected_card_uid >= 0:
+			_on_cancel_pressed()
+			get_viewport().set_input_as_handled()
 
 
 ## 取消当前选牌与目标，不向规则核心提交任何动作。
@@ -567,8 +592,11 @@ func _refresh_selection_text() -> void:
 		target_names.append(str(player.get("display_name", "玩家%d" % target_id)))
 	if _selected_card_uid < 0:
 		selection_label.text = "未选择卡牌｜可点击牌面，或直接拖动卡牌到青色目标"
-		interaction_guide_label.text = "第 1 步：选择一张手牌"
+		interaction_guide_label.text = "请选择要使用的牌"
 		use_button.disabled = true
+		%CancelButton.visible = false
+		recast_button.visible = false
+		wooden_ox_button.visible = false
 		_refresh_component_states()
 		return
 	_card_use_preview = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
@@ -584,11 +612,43 @@ func _refresh_selection_text() -> void:
 		str(_card_use_preview.get("description", "")),
 	]
 	if bool(_card_use_preview.get("can_submit", false)):
-		interaction_guide_label.text = "第 3 步：点击“确定使用”完成出牌"
+		interaction_guide_label.text = "请确认当前操作"
 	else:
-		interaction_guide_label.text = "第 2 步：点击青色角色，或将卡牌拖到目标角色"
+		interaction_guide_label.text = "请选择目标"
 	use_button.disabled = not _can_local_player_act() or not bool(_card_use_preview.get("can_submit", false))
+	# 当前规则阶段；上下文按钮只在本地可出牌阶段显示，避免像普通面板一样长期占据操作区。
+	var can_act: bool = _can_local_player_act()
+	# 当前选中卡定义；用于判断重铸标志和木牛流马存粮资格。
+	var selected_definition_for_controls: Dictionary = GameDatabase.get_card(str(selected_card.get("definition_id", "")))
+	%CancelButton.visible = true
+	recast_button.visible = can_act and bool(selected_definition_for_controls.get("recast", false))
+	recast_button.disabled = not recast_button.visible
+	wooden_ox_button.visible = can_act and _can_store_selected_card()
+	wooden_ox_button.disabled = not wooden_ox_button.visible
 	_refresh_component_states()
+
+
+## 判断当前选中实体牌是否来自本地手牌，并且本地装备区存在木牛流马。
+func _can_store_selected_card() -> bool:
+	if _selected_card_uid < 0:
+		return false
+	# 本地玩家快照；用于检查选中实体牌区域和宝物槽，不修改任何状态。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	# 选中牌是否位于普通手牌区；木牛“粮”不能再次存入木牛流马。
+	var selected_is_hand_card: bool = false
+	for card_variant: Variant in local_player.get("hand", []):
+		# 当前手牌快照；UID 匹配时确认牌不是木牛“粮”。
+		var card: Dictionary = card_variant as Dictionary
+		if int(card.get("uid", -1)) == _selected_card_uid:
+			selected_is_hand_card = true
+			break
+	if not selected_is_hand_card:
+		return false
+	# 本地装备字典；木牛流马必须位于宝物槽才能存入“粮”。
+	var equipment: Dictionary = local_player.get("equipment", {}) as Dictionary
+	# 当前宝物槽快照；定义 ID 为 muniu 时允许显示存粮按钮。
+	var treasure: Dictionary = equipment.get("treasure", {}) as Dictionary
+	return str(treasure.get("definition_id", "")) == "muniu"
 
 
 ## 同步所有动态卡牌与角色组件的选中、合法目标和目标顺序视觉。
@@ -607,6 +667,11 @@ func _refresh_component_states() -> void:
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
 	%SelectSelfButton.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("e4d7c1")))
+	# 本地武将牌边框色；与其他角色卡共享金色选中和青绿色合法目标语义。
+	var local_border_color: Color = BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("d0a65d"))
+	# 本地武将牌边框宽度；合法或已选时加粗，普通状态保持固定金色外框。
+	var local_border_width: int = 4 if self_is_selected or self_is_legal else 3
+	%LocalPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.METAL_PANEL_COLOR, local_border_color, local_border_width, 5))
 
 
 ## 返回当前选中卡牌的本地可见快照，包含手牌与木牛流马“粮”。
@@ -666,6 +731,7 @@ func _get_player_snapshot(player_id: int) -> Dictionary:
 ## 删除容器全部子节点；节点排队释放后不再参与后续布局。
 func _clear_container(container: Node) -> void:
 	for child: Node in container.get_children():
+		container.remove_child(child)
 		child.queue_free()
 
 

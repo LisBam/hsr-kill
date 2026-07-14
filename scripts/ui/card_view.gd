@@ -72,6 +72,9 @@ var _accent_bar: ColorRect
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
 
+## 悬停卡牌临时绘制层级；固定100确保大量重叠手牌中仍显示在最上方，只影响视觉顺序。
+const HOVER_Z_INDEX: int = 100
+
 
 ## 初始化卡牌控件的尺寸、排版、焦点与鼠标行为。
 func _ready() -> void:
@@ -121,6 +124,10 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 func set_selected_state(selected: bool) -> void:
 	is_card_selected = selected
 	_refresh_visual_state()
+	# 重叠手牌容器负责统一计算纵向抬升和 z_index；状态变化后请求一次集中布局，避免各牌分别覆盖位置。
+	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
+	if hand_layout != null:
+		hand_layout.refresh_card_states()
 
 
 ## 提供 Godot 原生拖放数据；拖拽预览不会改变真实卡牌节点或权威状态。
@@ -155,7 +162,9 @@ func _refresh_visual_state() -> void:
 	add_theme_stylebox_override("hover", BattleUIStyle.make_inset_panel(paper_color.lightened(0.08), BattleUIStyle.ACCENT_COLOR, 2, 6))
 	add_theme_stylebox_override("pressed", BattleUIStyle.make_inset_panel(paper_color.darkened(0.05), BattleUIStyle.ACCENT_COLOR, 3, 6))
 	add_theme_stylebox_override("disabled", BattleUIStyle.make_inset_panel(paper_color.darkened(0.12), Color("655b50"), 1, 6))
-	position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
+	# 普通容器沿用组件自身的抬升逻辑；无名杀式手牌由 DecadeHandContainer 统一摆放，避免 Container 重排覆盖位置。
+	if not (get_parent() is DecadeHandContainer):
+		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
 	if _accent_bar != null:
 		_accent_bar.color = _category_color
 
@@ -242,13 +251,18 @@ func _refresh_card_content() -> void:
 func _on_mouse_entered() -> void:
 	if not is_interactable:
 		return
-	z_index = 20
+	z_index = HOVER_Z_INDEX
 	_start_hover_tween(Vector2.ONE * hover_scale)
 
 
 ## 鼠标离开卡牌时恢复原始缩放和绘制层级，选中抬升状态保持不变。
 func _on_mouse_exited() -> void:
-	z_index = 0
+	# 无名杀式手牌需要恢复由容器计算的顺序；其他父级继续回到默认层级。
+	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
+	if hand_layout != null:
+		hand_layout.refresh_card_states()
+	else:
+		z_index = 0
 	_start_hover_tween(Vector2.ONE)
 
 
