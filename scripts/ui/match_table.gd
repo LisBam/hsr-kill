@@ -2,6 +2,9 @@ extends Control
 
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
+## 可编辑武将牌场景；对手与本地武将牌均直接实例化该资源，编辑器调整会原样进入对局。
+const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -38,13 +41,10 @@ extends Control
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
 @onready var equipment_label: Label = %EquipmentLabel
 
-## 武将牌场景内置模板；对手与本地武将牌均复制该节点，所有牌面层级只维护于主场景。
-@onready var player_target_template: PlayerTargetView = $PlayerTargetTemplate
-
 ## 卡牌场景内置模板；手牌与木牛“粮”均复制该节点，避免外部 PackedScene 依赖。
 @onready var card_template: CardView = $CardTemplate
 
-## 本地玩家统一武将牌组件；在主场景进入树后由内置模板复制并锚定到右下角。
+## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
@@ -129,10 +129,10 @@ func _start_default_match() -> void:
 	match_controller.start_match()
 
 
-## 由主场景内置武将牌模板创建本地牌；本地与对手使用同一节点树，避免维护第二套本地 UI。
+## 从独立武将牌场景创建本地牌；本地与对手使用同一资源，避免维护第二套牌面节点。
 func _create_local_player_card() -> void:
-	# 本地武将牌实例；从隐藏模板深拷贝，随后独立锚定到主场景右下角。
-	local_player_card = player_target_template.duplicate() as PlayerTargetView
+	# 本地武将牌实例；由可编辑场景创建，随后独立锚定到主场景右下角。
+	local_player_card = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	local_player_card.name = "LocalPlayerCard"
 	local_player_card.visible = true
 	local_player_card.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -204,9 +204,7 @@ func _render_players() -> void:
 			local_player_snapshot = player
 			continue
 		# 其他玩家选择按钮；独立组件包含状态摘要、合法目标高亮与卡牌拖放入口，不承载规则逻辑。
-		var player_button: PlayerTargetView = player_target_template.duplicate() as PlayerTargetView
-		player_button.visible = true
-		player_button.mouse_filter = Control.MOUSE_FILTER_STOP
+		var player_button: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
 		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
