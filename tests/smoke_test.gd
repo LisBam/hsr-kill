@@ -73,6 +73,18 @@ func _run() -> void:
 		printerr("SMOKE_FAIL identity_distribution_8")
 		get_tree().quit(1)
 		return
+	# 无名杀式手牌布局组件；实例化用于保证全局类、导出参数和基础显示数值可被无头环境解析。
+	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
+	if hand_layout.card_size != Vector2(108.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
+		printerr("SMOKE_FAIL decade_hand_layout_defaults")
+		get_tree().quit(1)
+		return
+	# 无名杀式座次布局组件；实例化用于校验常规与紧凑武将牌尺寸保持文档约定。
+	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
+	if battle_layout.opponent_card_size != Vector2(118.0, 172.0) or battle_layout.compact_opponent_card_size != Vector2(104.0, 156.0):
+		printerr("SMOKE_FAIL decade_battle_layout_defaults")
+		get_tree().quit(1)
+		return
 
 	_controller = MatchController.new()
 	_controller.name = "MatchController"

@@ -8,6 +8,8 @@
 [ext_resource type="Texture2D" uid="uid://s3n7u8l1qm45" path="res://assets/ui/table_ornament.svg" id="6_ornament"]
 [ext_resource type="Script" uid="uid://bfkt6kg0eappy" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
 [ext_resource type="Script" uid="uid://be14yvmd8i1up" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
+[ext_resource type="Script" uid="uid://bpdcraioe8xb4" path="res://scripts/ui/decade_hand_container.gd" id="9_hand_layout"]
+[ext_resource type="Script" uid="uid://d2qfk6g5m7y1p" path="res://scripts/ui/decade_battle_layout.gd" id="10_battle_layout"]
 
 [node name="Main" type="Control" unique_id=1400958767]
 layout_mode = 3
@@ -154,6 +156,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
+script = ExtResource("10_battle_layout")
 
 [node name="DiscardPilePanel" type="PanelContainer" parent="." unique_id=347848586]
 unique_name_in_owner = true
@@ -193,10 +196,10 @@ scroll_following = true
 
 [node name="InteractionPanel" type="PanelContainer" parent="." unique_id=2132492404]
 layout_mode = 0
-offset_left = 328.0
-offset_top = 438.0
-offset_right = 952.0
-offset_bottom = 552.0
+offset_left = 318.0
+offset_top = 420.0
+offset_right = 962.0
+offset_bottom = 548.0
 
 [node name="InteractionVBox" type="VBoxContainer" parent="InteractionPanel" unique_id=1579071619]
 layout_mode = 2
@@ -224,7 +227,7 @@ alignment = 1
 
 [node name="UseButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=853733028]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 36)
+custom_minimum_size = Vector2(146, 42)
 layout_mode = 2
 text = "确定"
 
@@ -248,7 +251,7 @@ text = "存木牛"
 
 [node name="EndPlayButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1761560277]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 36)
+custom_minimum_size = Vector2(146, 42)
 layout_mode = 2
 text = "回合结束"
 
@@ -283,27 +286,27 @@ vertical_alignment = 1
 [node name="HandPanel" type="PanelContainer" parent="." unique_id=469779120]
 layout_mode = 0
 offset_left = 228.0
-offset_top = 566.0
-offset_right = 970.0
-offset_bottom = 718.0
+offset_top = 548.0
+offset_right = 1004.0
+offset_bottom = 720.0
 
 [node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
 layout_mode = 2
 horizontal_scroll_mode = 2
 vertical_scroll_mode = 0
 
-[node name="HandContainer" type="HFlowContainer" parent="HandPanel/HandScroll" unique_id=176003051]
+[node name="HandContainer" type="Container" parent="HandPanel/HandScroll" unique_id=176003051]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(720, 144)
+custom_minimum_size = Vector2(752, 172)
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/h_separation = 3
+script = ExtResource("9_hand_layout")
 
 [node name="SkillBar" type="PanelContainer" parent="." unique_id=735918897]
 layout_mode = 0
-offset_left = 960.0
-offset_top = 570.0
-offset_right = 1086.0
+offset_left = 1012.0
+offset_top = 572.0
+offset_right = 1106.0
 offset_bottom = 706.0
 
 [node name="SkillVBox" type="VBoxContainer" parent="SkillBar" unique_id=1002488890]
@@ -327,17 +330,19 @@ autowrap_mode = 2
 [node name="LocalPanel" type="PanelContainer" parent="." unique_id=1499008552]
 unique_name_in_owner = true
 layout_mode = 0
-offset_left = 1098.0
-offset_top = 478.0
+offset_left = 1114.0
+offset_top = 480.0
 offset_right = 1264.0
-offset_bottom = 706.0
+offset_bottom = 720.0
 
 [node name="LocalVBox" type="VBoxContainer" parent="LocalPanel" unique_id=1486872815]
 layout_mode = 2
+mouse_filter = 2
 
 [node name="LocalArtworkFrame" type="PanelContainer" parent="LocalPanel/LocalVBox" unique_id=418323954]
-custom_minimum_size = Vector2(158, 142)
+custom_minimum_size = Vector2(142, 154)
 layout_mode = 2
+mouse_filter = 2
 
 [node name="LocalArtwork" type="TextureRect" parent="LocalPanel/LocalVBox/LocalArtworkFrame" unique_id=1083770504]
 unique_name_in_owner = true
@@ -374,9 +379,9 @@ text = "选择自己"
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 334.0
-offset_top = 548.0
+offset_top = 402.0
 offset_right = 946.0
-offset_bottom = 565.0
+offset_bottom = 420.0
 theme_override_colors/font_color = Color(0.96, 0.46, 0.42, 1)
 horizontal_alignment = 1
 
