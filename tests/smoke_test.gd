@@ -85,6 +85,18 @@ func _run() -> void:
 		printerr("SMOKE_FAIL decade_battle_layout_defaults")
 		get_tree().quit(1)
 		return
+	# 逻辑视口宽度；保持1280像素作为全部场景坐标和布局文档的统一设计基准。
+	var viewport_width: int = int(ProjectSettings.get_setting("display/window/size/viewport_width", 0))
+	# 逻辑视口高度；保持720像素以维持十周年牌桌的16:9布局比例。
+	var viewport_height: int = int(ProjectSettings.get_setting("display/window/size/viewport_height", 0))
+	# 默认启动窗口宽度；使用1152像素为系统窗口边框预留屏幕空间，同时由画布拉伸保持完整界面。
+	var initial_window_width: int = int(ProjectSettings.get_setting("display/window/size/window_width_override", 0))
+	# 默认启动窗口高度；使用648像素避免720高屏幕上的标题栏和任务栏把底部界面推到屏幕外。
+	var initial_window_height: int = int(ProjectSettings.get_setting("display/window/size/window_height_override", 0))
+	if viewport_width != 1280 or viewport_height != 720 or initial_window_width != 1152 or initial_window_height != 648:
+		printerr("SMOKE_FAIL safe_window_size viewport=%dx%d window=%dx%d" % [viewport_width, viewport_height, initial_window_width, initial_window_height])
+		get_tree().quit(1)
+		return
 
 	_controller = MatchController.new()
 	_controller.name = "MatchController"
