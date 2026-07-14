@@ -122,7 +122,15 @@ func _run() -> void:
 		return
 	# 编辑器武将牌预览；座次不属于牌面节点树，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
 	var preview_health_pips: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
-	if player_card_template.has_node("Seat") or preview_health_pips.get_child_count() != 4:
+	# 编辑器插画槽；紧凑覆盖层下仍须占据111×165像素，以保持武将插画为牌面视觉主体。
+	var preview_artwork: TextureRect = player_card_template.get_node("Artwork") as TextureRect
+	# 编辑器武将名竖条；缩小至22像素宽，避免占据过多插画区域。
+	var preview_character_name: Label = player_card_template.get_node("CharacterName") as Label
+	# 编辑器势力徽记；缩小至26×26像素，保留识别所需的最小尺寸。
+	var preview_faction_badge: Label = player_card_template.get_node("FactionBadge") as Label
+	# 编辑器手牌角标；缩小至24×24像素，降低对插画左下角的遮挡。
+	var preview_hand_count: Label = player_card_template.get_node("HandCount") as Label
+	if player_card_template.has_node("Seat") or preview_health_pips.get_child_count() != 4 or preview_artwork.position != Vector2(4.0, 4.0) or preview_artwork.size != Vector2(111.0, 165.0) or preview_character_name.size != Vector2(22.0, 86.0) or preview_faction_badge.size != Vector2(26.0, 26.0) or preview_hand_count.size != Vector2(24.0, 24.0):
 		printerr("SMOKE_FAIL player_card_scene_preview")
 		get_tree().quit(1)
 		return
@@ -139,7 +147,7 @@ func _run() -> void:
 	player_seat_slot.free()
 	# 统一武将牌组件；直接使用场景实例，用于校验装备横条高度与五槽显示上限。
 	var player_card_view: PlayerTargetView = player_card_template
-	if not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
+	if not is_equal_approx(player_card_view.equipment_row_height, 15.0) or player_card_view.maximum_equipment_rows != 5:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
 		return
@@ -190,6 +198,12 @@ func _run() -> void:
 	player_card_view.free()
 	# 主场景预览实例；只读取内置卡牌模板，不进入场景树以避免启动正式对局。
 	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
+	# 主场景对局控制器；直接运行场景时由该节点的导出默认值决定开局人数。
+	var main_scene_match_controller: MatchController = main_scene_preview.get_node("MatchController") as MatchController
+	if main_scene_match_controller.default_player_count != 8:
+		printerr("SMOKE_FAIL default_player_count=%d" % main_scene_match_controller.default_player_count)
+		get_tree().quit(1)
+		return
 	# 内置卡牌模板；手牌与木牛“粮”均从主场景中该节点复制。
 	var card_template: CardView = main_scene_preview.get_node("CardTemplate") as CardView
 	# 卡牌组件实例；验证主场景内置模板可以复制并保留标准尺寸参数。
