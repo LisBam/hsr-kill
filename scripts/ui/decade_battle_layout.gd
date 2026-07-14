@@ -6,6 +6,12 @@ extends Control
 ## 全部武将牌统一使用的固定尺寸；118×172与可编辑 player_target_view.tscn 的根节点尺寸完全一致。
 const UNIFIED_PLAYER_CARD_SIZE: Vector2 = Vector2(118.0, 172.0)
 
+## 游戏内座次标签的固定高度；标签脱离武将牌场景并作为每个座位容器的底部独立区域。
+const PLAYER_SEAT_LABEL_HEIGHT: float = 18.0
+
+## 游戏内完整座位容器尺寸；宽度等于武将牌，190像素高度由172像素武将牌与18像素座次标签组成。
+const PLAYER_SEAT_SLOT_SIZE: Vector2 = Vector2(118.0, 190.0)
+
 ## 顶部武将牌距牌桌上边缘的距离；默认14像素接近参考 CSS 的9像素视觉留白，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var top_margin: float = 14.0
 
@@ -65,8 +71,8 @@ func _layout_opponents() -> void:
 	var side_count_per_edge: int = 0 if _total_player_count <= 3 else (2 if _total_player_count >= 10 else 1)
 	# 顶部座位数量；用于生成均匀但符合参考比例的横坐标。
 	var top_count: int = maxi(valid_views.size() - side_count_per_edge * 2, 0)
-	# 当前座位使用的武将牌尺寸；所有座次统一使用可编辑武将牌场景的118×172标准尺寸。
-	var active_card_size: Vector2 = UNIFIED_PLAYER_CARD_SIZE
+	# 当前座位容器尺寸；武将牌保持118×172，独立座次标签始终位于容器底部。
+	var active_card_size: Vector2 = PLAYER_SEAT_SLOT_SIZE
 	# 当前视图索引；按右侧、顶部从右到左、左侧的无名杀座次顺序依次消费。
 	var view_index: int = 0
 	if side_count_per_edge > 0:
@@ -113,7 +119,7 @@ func _top_center_ratios(top_count: int) -> PackedFloat32Array:
 	return ratios
 
 
-## 把角色卡放入指定矩形并同步组件尺寸参数；布局只改变 Control 几何信息。
+## 把角色座位容器放入指定矩形并同步组件尺寸参数；布局只改变容器几何信息。
 func _place_view(opponent_view: Control, target_position: Vector2, target_size: Vector2) -> void:
 	if opponent_view.has_method("apply_panel_size"):
 		opponent_view.call("apply_panel_size", target_size)

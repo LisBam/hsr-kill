@@ -2,8 +2,8 @@ extends Control
 
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
-## 可编辑武将牌场景；对手与本地武将牌均直接实例化该资源，编辑器调整会原样进入对局。
-const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
+## 游戏内座位容器场景；运行时把独立座次标签放在武将牌下方，不把标签混入武将牌编辑场景。
+const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/player_seat_slot.tscn")
 
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
@@ -46,6 +46,12 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
+
+## 本地玩家运行时座位容器；统一承载右下角武将牌和其下方独立座次标签。
+var local_player_seat_slot: Control
+
+## 本地玩家的独立座次标签；只在进入实际对局时创建并写入中文座次号。
+var local_player_seat_label: Label
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
 @onready var hand_container: DecadeHandContainer = %HandContainer
@@ -129,27 +135,31 @@ func _start_default_match() -> void:
 	match_controller.start_match()
 
 
-## 从独立武将牌场景创建本地牌；本地与对手使用同一资源，避免维护第二套牌面节点。
+## 从运行时座位容器创建本地牌；武将牌与座次标签保持独立节点，本地与对手使用同一组合结构。
 func _create_local_player_card() -> void:
-	# 本地武将牌实例；由可编辑场景创建，随后独立锚定到主场景右下角。
-	local_player_card = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-	local_player_card.name = "LocalPlayerCard"
+	# 本地座位容器实例；进入游戏后才创建，负责让独立座次标签始终位于武将牌正下方。
+	local_player_seat_slot = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
+	local_player_seat_slot.name = "LocalPlayerSeatSlot"
+	# 本地武将牌实例；由座位容器中的可编辑场景提供，不包含座次标签节点。
+	local_player_card = local_player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
+	# 本地座次标签实例；只属于游戏内座位容器，文本会在收到玩家快照后写入。
+	local_player_seat_label = local_player_seat_slot.get_node("Seat") as Label
 	local_player_card.visible = true
 	local_player_card.mouse_filter = Control.MOUSE_FILTER_STOP
-	local_player_card.z_index = 12
-	local_player_card.anchor_left = 1.0
-	local_player_card.anchor_top = 1.0
-	local_player_card.anchor_right = 1.0
-	local_player_card.anchor_bottom = 1.0
-	local_player_card.offset_left = -134.0
-	local_player_card.offset_top = -172.0
-	local_player_card.offset_right = -16.0
-	local_player_card.offset_bottom = 0.0
-	local_player_card.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	local_player_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	local_player_seat_slot.z_index = 12
+	local_player_seat_slot.anchor_left = 1.0
+	local_player_seat_slot.anchor_top = 1.0
+	local_player_seat_slot.anchor_right = 1.0
+	local_player_seat_slot.anchor_bottom = 1.0
+	local_player_seat_slot.offset_left = -134.0
+	local_player_seat_slot.offset_top = -190.0
+	local_player_seat_slot.offset_right = -16.0
+	local_player_seat_slot.offset_bottom = 0.0
+	local_player_seat_slot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	local_player_seat_slot.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	local_player_card.panel_width = 118.0
 	local_player_card.panel_height = 172.0
-	add_child(local_player_card)
+	add_child(local_player_seat_slot)
 
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
@@ -202,8 +212,12 @@ func _render_players() -> void:
 		if int(player.get("player_id", -1)) == local_player_id:
 			local_player_snapshot = player
 			continue
-		# 其他玩家选择按钮；独立组件包含状态摘要、合法目标高亮与卡牌拖放入口，不承载规则逻辑。
-		var player_button: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+		# 其他玩家运行时座位容器；武将牌与座次标签是并列节点，进入对局后才按玩家创建。
+		var player_seat_slot: Control = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
+		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与卡牌拖放入口。
+		var player_button: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
+		# 其他玩家独立座次标签；仅显示中文座次号，不属于武将牌自身节点树。
+		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
 		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
@@ -213,9 +227,10 @@ func _render_players() -> void:
 		player_button.panel_width = 118.0
 		player_button.panel_height = 172.0
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
+		player_seat_label.text = _seat_text(target_id + 1)
 		player_button.pressed.connect(_on_target_pressed.bind(target_id))
 		player_button.card_dropped.connect(_on_card_dropped)
-		player_grid.add_child(player_button)
+		player_grid.add_child(player_seat_slot)
 		_player_views[target_id] = player_button
 	_layout_opponent_players()
 	if not local_player_snapshot.is_empty():
@@ -224,16 +239,20 @@ func _render_players() -> void:
 		# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 		var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 		local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
+		local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("player_id", -1)) + 1)
 		equipment_label.text = _format_local_equipment(local_player_snapshot)
 		_render_local_skills(local_player_snapshot)
 
 
 ## 按环桌座次排列其他玩家；优先放置上方座位，超出部分依次放到左右两侧。
 func _layout_opponent_players() -> void:
-	# 已创建的角色视图数组；字典保持插入顺序，与快照中的座次顺序一致。
+	# 已创建的角色座位容器数组；字典保持插入顺序，与快照中的座次顺序一致。
 	var opponent_views: Array[Control] = []
 	for player_view_variant: Variant in _player_views.values():
-		opponent_views.append(player_view_variant as Control)
+		# 当前武将牌的父容器；容器同时承载独立座次标签，因此环桌布局移动容器而不是牌面本身。
+		var player_seat_slot: Control = (player_view_variant as Control).get_parent() as Control
+		if player_seat_slot != null:
+			opponent_views.append(player_seat_slot)
 	# 对局总人数；座次布局器用该数值选择与无名杀一致的二至十人位置模板。
 	var total_player_count: int = (_snapshot.get("players", []) as Array).size()
 	player_grid.bind_opponent_views(opponent_views, total_player_count)
@@ -706,6 +725,11 @@ func _clear_container(container: Node) -> void:
 ## 将阶段 ID 转换为中文界面文本。
 func _phase_text(phase: String) -> String:
 	return {"setup":"准备", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
+
+
+## 返回一至十号座次的中文数字；座次标签属于游戏内座位容器，超出当前模式上限时回退阿拉伯数字。
+func _seat_text(seat_number: int) -> String:
+	return {1:"一", 2:"二", 3:"三", 4:"四", 5:"五", 6:"六", 7:"七", 8:"八", 9:"九", 10:"十"}.get(seat_number, str(seat_number))
 
 
 ## 将身份 ID 转换为中文界面文本。

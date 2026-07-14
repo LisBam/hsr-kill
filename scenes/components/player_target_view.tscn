@@ -172,7 +172,7 @@ layout_mode = 0
 offset_left = 4.0
 offset_top = 4.0
 offset_right = 114.0
-offset_bottom = 150.0
+offset_bottom = 168.0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 6
@@ -183,7 +183,7 @@ layout_mode = 0
 offset_left = 4.0
 offset_top = 4.0
 offset_right = 114.0
-offset_bottom = 150.0
+offset_bottom = 168.0
 theme_override_colors/font_color = Color(0.658824, 0.592157, 0.498039, 1)
 theme_override_font_sizes/font_size = 11
 theme_override_styles/normal = SubResource("StyleArtworkPlaceholder")
@@ -302,18 +302,6 @@ text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Seat" type="Label" parent="." unique_id=110204318]
-unique_name_in_owner = true
-layout_mode = 0
-offset_top = 154.0
-offset_right = 118.0
-offset_bottom = 172.0
-theme_override_colors/font_color = Color(0.941176, 0.709804, 0.184314, 1)
-theme_override_font_sizes/font_size = 18
-text = "一"
-horizontal_alignment = 1
-vertical_alignment = 1
-
 [node name="HealthPips" type="VBoxContainer" parent="." unique_id=929087411]
 unique_name_in_owner = true
 layout_mode = 0
@@ -369,5 +357,5 @@ horizontal_alignment = 1
 unique_name_in_owner = true
 anchors_preset = 0
 offset_right = 118.0
-offset_bottom = 154.0
+offset_bottom = 172.0
 mouse_filter = 2

@@ -8,6 +8,9 @@ const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 ## 可编辑武将牌场景；测试直接实例化正式资源，确保编辑器所见尺寸与游戏实例一致。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 游戏内座位容器场景；测试验证座次标签只在运行时容器中出现并位于武将牌正下方。
+const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/player_seat_slot.tscn")
+
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
 
@@ -106,7 +109,7 @@ func _run() -> void:
 	hand_layout.free()
 	# 无名杀式座次布局组件；实例化用于校验所有座次统一使用文档约定的固定武将牌尺寸。
 	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
-	if DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE != Vector2(118.0, 172.0):
+	if DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE != Vector2(118.0, 172.0) or not is_equal_approx(DecadeBattleLayout.PLAYER_SEAT_LABEL_HEIGHT, 18.0) or DecadeBattleLayout.PLAYER_SEAT_SLOT_SIZE != Vector2(118.0, 190.0):
 		printerr("SMOKE_FAIL decade_battle_layout_defaults")
 		get_tree().quit(1)
 		return
@@ -117,16 +120,26 @@ func _run() -> void:
 		printerr("SMOKE_FAIL player_card_template_size")
 		get_tree().quit(1)
 		return
-	# 编辑器场景预览；座次必须位于牌面底部，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
-	var preview_seat: Label = player_card_template.get_node("Seat") as Label
+	# 编辑器武将牌预览；座次不属于牌面节点树，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
 	var preview_health_pips: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
-	if preview_seat.position != Vector2(0.0, 154.0) or preview_seat.size != Vector2(118.0, 18.0) or preview_health_pips.get_child_count() != 4:
+	if player_card_template.has_node("Seat") or preview_health_pips.get_child_count() != 4:
 		printerr("SMOKE_FAIL player_card_scene_preview")
 		get_tree().quit(1)
 		return
-	# 统一武将牌组件；直接使用场景实例，用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
+	# 游戏内座位容器；座次标签必须位于武将牌下方，容器总高度仅额外增加18像素。
+	var player_seat_slot: Control = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
+	# 运行时座次标签；应为座位容器的独立子节点，不能回流到武将牌场景。
+	var runtime_seat: Label = player_seat_slot.get_node("Seat") as Label
+	# 容器内复用的武将牌；尺寸必须继续保持统一的118×172像素规格。
+	var runtime_player_card: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
+	if player_seat_slot.size != Vector2(118.0, 190.0) or runtime_player_card.size != Vector2(118.0, 172.0) or runtime_seat.position != Vector2(0.0, 172.0) or runtime_seat.size != Vector2(118.0, 18.0):
+		printerr("SMOKE_FAIL player_seat_slot_layout")
+		get_tree().quit(1)
+		return
+	player_seat_slot.free()
+	# 统一武将牌组件；直接使用场景实例，用于校验装备横条高度与五槽显示上限。
 	var player_card_view: PlayerTargetView = player_card_template
-	if not is_equal_approx(player_card_view.seat_label_height, 18.0) or not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
+	if not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
 		return
@@ -163,11 +176,6 @@ func _run() -> void:
 	# 测试势力定义；提供圆徽简称与主题颜色，验证数据驱动入口可正常传递。
 	var equipped_faction_definition: Dictionary = GameDatabase.get_faction(str(equipped_character_definition.get("faction", "")))
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
-	# 场景静态布局回归；写入战斗快照后座次仍须保留编辑器设定的完整底部居中区域。
-	if preview_seat.position != Vector2(0.0, 154.0) or preview_seat.size != Vector2(118.0, 18.0):
-		printerr("SMOKE_FAIL player_card_scene_layout_overridden")
-		get_tree().quit(1)
-		return
 	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
 	var rendered_equipment_row_count: int = 0
 	for child: Node in player_card_view.get_children():
