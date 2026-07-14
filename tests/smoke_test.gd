@@ -2,11 +2,8 @@ extends Node
 
 ## 无界面烟雾测试：校验数据规模，并让四名基础 AI 通过统一动作入口运行若干帧。
 
-## 武将牌可编辑组件场景；测试通过实例化正式资源验证场景、脚本和覆盖层可共同加载。
-const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
-
-## 卡牌可编辑组件场景；测试通过实例化正式资源验证战斗手牌可安全复用该场景。
-const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+## 主战斗场景；测试从其内置模板复制武将牌与卡牌，确保项目不依赖额外组件场景。
+const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
@@ -111,13 +108,19 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	battle_layout.free()
-	# 统一武将牌组件；实例化用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
-	var player_card_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	# 主场景预览实例；只读取内置模板，不进入场景树以避免启动正式对局。
+	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
+	# 内置武将牌模板；所有动态武将牌均由该节点复制，场景中不再引用独立组件资源。
+	var player_card_template: PlayerTargetView = main_scene_preview.get_node("PlayerTargetTemplate") as PlayerTargetView
+	# 统一武将牌组件；从主场景模板复制，用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
+	var player_card_view: PlayerTargetView = player_card_template.duplicate() as PlayerTargetView
 	if not is_equal_approx(player_card_view.seat_label_height, 18.0) or not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
 		return
 	player_card_view.apply_panel_size(Vector2(118.0, 172.0))
+	player_card_view.visible = true
+	player_card_view.mouse_filter = Control.MOUSE_FILTER_STOP
 	get_tree().root.add_child(player_card_view)
 	await get_tree().process_frame
 	# 带装备的角色牌测试快照；两件公开装备分别覆盖武器与防具槽，用于验证横条实际生成数量。
@@ -155,13 +158,16 @@ func _run() -> void:
 		return
 	get_tree().root.remove_child(player_card_view)
 	player_card_view.free()
-	# 卡牌组件实例；验证正式卡牌场景可以独立载入并保留其标准尺寸参数。
-	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 内置卡牌模板；手牌与木牛“粮”均从主场景中该节点复制。
+	var card_template: CardView = main_scene_preview.get_node("CardTemplate") as CardView
+	# 卡牌组件实例；验证主场景内置模板可以复制并保留标准尺寸参数。
+	var card_view: CardView = card_template.duplicate() as CardView
 	if not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0):
-		printerr("SMOKE_FAIL card_view_scene_defaults")
+		printerr("SMOKE_FAIL card_template_defaults")
 		get_tree().quit(1)
 		return
 	card_view.free()
+	main_scene_preview.free()
 	# 逻辑视口宽度；保持1280像素作为全部场景坐标和布局文档的统一设计基准。
 	var viewport_width: int = int(ProjectSettings.get_setting("display/window/size/viewport_width", 0))
 	# 逻辑视口高度；保持720像素以维持十周年牌桌的16:9布局比例。

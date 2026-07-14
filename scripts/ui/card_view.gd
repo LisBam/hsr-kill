@@ -40,19 +40,19 @@ var _base_position_y: float = 0.0
 var _artwork_texture: Texture2D
 
 ## 牌面插画显示节点；由卡牌场景提供，固定占据卡牌中部，不参与鼠标输入。
-@onready var _artwork_rect: TextureRect = %Artwork
+@onready var _artwork_rect: TextureRect = $Artwork
 
 ## 插画缺失占位标签；由卡牌场景提供，后期配置有效 art_path 后自动隐藏。
-@onready var _artwork_placeholder: Label = %ArtworkPlaceholder
+@onready var _artwork_placeholder: Label = $ArtworkPlaceholder
 
 ## 左上角花色点数标签；独立于插画区域，保证任何图片亮度下都清晰可读。
-@onready var _corner_label: Label = %Corner
+@onready var _corner_label: Label = $Corner
 
 ## 卡牌名称标签；固定显示在插画下方，统一使用全局名称模式。
-@onready var _name_label: Label = %Name
+@onready var _name_label: Label = $Name
 
 ## 卡牌类别与木牛来源标签；固定显示在牌面底部。
-@onready var _type_label: Label = %Type
+@onready var _type_label: Label = $Type
 
 ## 待显示的花色点数字符串；configure 可能在节点进入场景树前调用，因此先保存文本。
 var _suit_rank_text: String = ""
@@ -67,7 +67,7 @@ var _card_type_text: String = ""
 var _category_color: Color = Color("765b3d")
 
 ## 牌面顶部类别色条；由卡牌场景提供，只表达视觉分类，不参与卡牌规则判断。
-@onready var _accent_bar: ColorRect = %AccentBar
+@onready var _accent_bar: ColorRect = $AccentBar
 
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
