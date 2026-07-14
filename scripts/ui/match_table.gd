@@ -8,6 +8,9 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
+@export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -528,14 +531,14 @@ func _on_log_added(message: String) -> void:
 func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, target_ids: Array[int]) -> void:
 	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
 	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
-	# 动画起点；本地玩家使用底部状态区，其他玩家使用对应角色卡中心。
-	var start_position: Vector2 = _get_player_animation_position(actor_id)
+	# 动画起点；本地玩家统一使用手牌区上方中心，其他玩家使用对应武将牌中心。
+	var start_position: Vector2 = _get_player_indicator_position(actor_id)
 	# 中央弃牌区落点；所有正常使用牌先飞向该位置展示，装备或延时锦囊的最终规则区域不受影响。
 	var discard_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	# 目标位置数组；多目标牌会同时绘制多根使用者到目标的指示线。
 	var target_positions: Array[Vector2] = []
 	for target_id: int in target_ids:
-		target_positions.append(_get_player_animation_position(target_id))
+		target_positions.append(_get_player_indicator_position(target_id))
 	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
 	var animated_card: CardView = _card_views.get(int(card_data.get("uid", -1))) as CardView
 	if animated_card == null:
@@ -546,10 +549,12 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions)
 
 
-## 返回指定玩家在牌桌上的动画锚点；本地玩家固定使用底部面板中心。
-func _get_player_animation_position(player_id: int) -> Vector2:
+## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。
+func _get_player_indicator_position(player_id: int) -> Vector2:
 	if player_id == match_controller.local_human_player_id:
-		return _global_to_animation_position(local_player_card.get_global_rect().get_center())
+		# 本地手牌区全局矩形；顶边中心能统一表达本地玩家作为卡牌来源或目标的位置。
+		var hand_rect: Rect2 = hand_container.get_global_rect()
+		return _global_to_animation_position(Vector2(hand_rect.get_center().x, hand_rect.position.y - local_hand_indicator_margin))
 	# 其他玩家角色视图；快照刷新后按稳定玩家 ID 保存。
 	var player_view: Control = _player_views.get(player_id) as Control
 	if player_view != null and is_instance_valid(player_view):

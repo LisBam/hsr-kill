@@ -30,7 +30,7 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
-## 首回合行动座次号；默认1表示一号位先行动，支持在检查器中为特殊模式配置1至10号位，开局后不应动态修改。
+## 首回合行动座次号；默认1表示一号位先行动，当前标准身份局固定使用1，保留该参数供后续特殊模式读取，开局后不应动态修改。
 @export_range(1, 10, 1) var first_turn_seat_number: int = 1
 
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
@@ -758,13 +758,19 @@ func _on_equipment_lost(player: PlayerState, card: CardInstance, trigger_loss_ef
 
 ## 创建玩家并分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
 func _create_players(player_count: int) -> void:
-	# 身份配置副本；洗牌后按座次分配，主公稍后作为首回合玩家。
+	# 身份配置副本；标准身份局固定主公为一号位，其余身份洗牌后按二号位起依次分配。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
-	_shuffle_array(identities)
+	# 非主公身份池；只随机忠臣、反贼与内奸，避免主公脱离一号位后破坏首回合与行动顺序规则。
+	var non_lord_identities: Array[String] = []
+	for identity: String in identities:
+		if identity != "lord":
+			non_lord_identities.append(identity)
+	_shuffle_array(non_lord_identities)
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		var player: PlayerState = PlayerState.new(index, "玩家%d" % (index + 1))
-		player.identity = identities[index]
+		# 当前座次身份；一号位固定为主公，其余座次读取已洗牌的非主公身份池。
+		player.identity = "lord" if index == 0 else non_lord_identities[index - 1]
 		player.identity_revealed = player.identity == "lord"
 		player.character_id = ""
 		player.character_revealed = false
@@ -792,10 +798,13 @@ func _finish_character_selection() -> void:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
 	for player: PlayerState in state.players:
 		draw_cards(player.player_id, 4, false)
-	# 首回合座次数组索引；检查器使用1起始编号，转换后限制在当前实际玩家范围内。
-	var first_turn_index: int = clampi(first_turn_seat_number - 1, 0, state.players.size() - 1)
-	# 首回合玩家状态；默认读取一号位，特殊模式可通过导出参数选择其他有效座次。
+	# 首回合座次数组索引；当前控制器只运行标准身份局，因此固定读取主公所在的一号位。
+	var first_turn_index: int = 0
+	# 首回合玩家状态；本地控制者配置不会参与该选择，后续其他模式可独立使用导出座次参数。
 	var first_turn_player: PlayerState = state.players[first_turn_index]
+	# 标准身份局座次约束；主公必须固定在一号位，因此首回合始终由主公开始。
+	if first_turn_player.identity != "lord":
+		push_error("标准身份局一号位必须为主公。")
 	add_log("所有玩家完成选将并同时亮出武将。")
 	add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌4张。" % [state.players.size(), state.draw_pile.size()])
 	_start_turn(first_turn_player.player_id)
@@ -1096,12 +1105,16 @@ func _finish_turn(player_id: int) -> void:
 func _resolve_dying(target_id: int, killer_id: int) -> void:
 	# 濒死角色状态；可能需要多张桃才能将体力回复至1。
 	var target: PlayerState = state.get_player(target_id)
+	# 当前轮救援询问起点；首次从当前回合角色开始，回复后仍未脱离濒死则从刚才的响应者重新开始。
+	var rescue_start_player_id: int = state.current_player_id
 	add_log("%s进入濒死状态，需要回复至1点体力。" % target.display_name)
 	event_bus.dispatch(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
 	while target.alive and target.hp <= 0:
 		# 本轮是否有人成功救援；若为 false 则结束循环并死亡。
 		var rescued: bool = false
-		for rescuer: PlayerState in state.players:
+		# 救援询问顺序；首次从当前回合角色开始，连续回复未脱离濒死时从上一名响应者继续按座次轮询。
+		var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
+		for rescuer: PlayerState in rescue_order:
 			if not rescuer.alive:
 				continue
 			# 救援者使用的桃；所有存活角色均可对濒死目标使用。
@@ -1109,6 +1122,7 @@ func _resolve_dying(target_id: int, killer_id: int) -> void:
 			if peach != null:
 				add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
 				recover(rescuer.player_id, target_id, 1, "tao")
+				rescue_start_player_id = rescuer.player_id
 				rescued = true
 				break
 			if rescuer.player_id == target_id:
@@ -1117,11 +1131,32 @@ func _resolve_dying(target_id: int, killer_id: int) -> void:
 				if wine != null:
 					add_log("%s在濒死时使用【酒】自救。" % target.display_name)
 					recover(target_id, target_id, 1, "jiu")
+					rescue_start_player_id = rescuer.player_id
 					rescued = true
 					break
 		if not rescued:
 			_resolve_death(target_id, killer_id)
 			return
+
+
+## 返回从指定玩家开始的存活角色行动顺序；用于濒死救援等必须按当前行动顺序处理的公共结算。
+func _get_alive_players_in_action_order(start_player_id: int) -> Array[PlayerState]:
+	# 行动顺序结果；最多包含每名存活角色一次，不会因环形座次重复加入。
+	var result: Array[PlayerState] = []
+	if state == null or state.players.is_empty():
+		return result
+	# 起始座次数组索引；无效玩家 ID 回退到一号位，保证异常状态仍可稳定完成结算。
+	var start_index: int = 0
+	for player_index: int in range(state.players.size()):
+		if state.players[player_index].player_id == start_player_id:
+			start_index = player_index
+			break
+	for seat_offset: int in range(state.players.size()):
+		# 当前环形座次索引；从指定玩家开始依次越过数组末尾回到一号位。
+		var player: PlayerState = state.players[(start_index + seat_offset) % state.players.size()]
+		if player.alive:
+			result.append(player)
+	return result
 
 
 ## 执行死亡、身份公开、区域清理、奖惩和胜负检查。

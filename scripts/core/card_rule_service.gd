@@ -138,9 +138,17 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 	var target_mode: String = str(definition.get("target_mode", ""))
 	if target_mode != "all_players" and target_mode != "all_others":
 		return requested_targets.duplicate()
-	# 展开后的目标数组；按当前座次顺序结算。
+	# 展开后的目标数组；从使用者开始按行动顺序环形展开，避免固定从一号位结算群体牌。
 	var result: Array[int] = []
-	for player: PlayerState in state.players:
+	# 使用者座次数组索引；正常出牌时必定存在，防御性回退到一号位。
+	var actor_index: int = 0
+	for player_index: int in range(state.players.size()):
+		if state.players[player_index].player_id == actor_id:
+			actor_index = player_index
+			break
+	for seat_offset: int in range(state.players.size()):
+		# 当前行动顺序玩家；使用者本人首先参与 all_players，all_others 则从其下家开始产生首个目标。
+		var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
 		if not player.alive:
 			continue
 		if target_mode == "all_others" and player.player_id == actor_id:
