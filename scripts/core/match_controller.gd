@@ -21,6 +21,9 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 人类本地玩家座次；默认0，设为 -1 可运行纯 AI 自动对局，开局后不应修改。
 @export_range(-1, 9, 1) var local_human_player_id: int = 0
 
+## 是否在每局开始时随机本地玩家座次；默认开启以避免玩家固定为一号位或主公，纯AI模式的-1配置不受影响。
+@export var randomize_local_human_seat: bool = true
+
 ## AI 每次操作之间的展示延迟秒数；默认0.35便于观察，运行时可动态调快。
 @export_range(0.0, 3.0, 0.05) var ai_action_delay_seconds: float = 0.35
 
@@ -104,6 +107,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_ai_drive_token += 1
 	_ai_actions_this_turn = 0
 	ai_coordinator._policies.clear()
+	_randomize_local_human_player_seat(actual_player_count)
 
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
@@ -121,6 +125,14 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
+
+
+## 按本局随机源选择本地玩家座次；身份仍由座次规则独立分配，因此玩家可能获得任意身份。
+func _randomize_local_human_player_seat(player_count: int) -> void:
+	if not randomize_local_human_seat or local_human_player_id < 0:
+		return
+	# 本局本地玩家座次索引；范围为0至实际人数减1，与内部玩家ID保持一致。
+	local_human_player_id = _rng.randi_range(0, player_count - 1)
 
 
 ## 提交一名玩家的选将结果；所有人类、AI与网络入口共用相同阶段和候选校验。
@@ -369,7 +381,9 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	# 需要接收传导的其他横置角色；在原目标结算前建立快照。
 	var chain_targets: Array[int] = []
 	if should_chain:
-		for player: PlayerState in state.players:
+		# 连环传导行动顺序；从当前回合角色开始按座次处理，避免固定从一号位传导。
+		var chain_action_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
+		for player: PlayerState in chain_action_order:
 			if player.alive and player.chained and player.player_id != target_id:
 				chain_targets.append(player.player_id)
 
@@ -441,7 +455,9 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) ->
 	while response_count < 100:
 		# 本轮是否有玩家响应；无人响应时响应链结束。
 		var response_played: bool = false
-		for player: PlayerState in state.players:
+		# 无懈可击响应顺序；每轮从当前回合角色开始按行动顺序询问全部存活角色。
+		var response_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
+		for player: PlayerState in response_order:
 			if not player.alive:
 				continue
 			# 玩家当前仍持有的【无懈可击】；每轮重新查询以允许同一玩家后续再次响应。

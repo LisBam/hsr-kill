@@ -226,7 +226,7 @@ offset_top = 104.0
 offset_right = 146.35
 offset_bottom = 194.0
 mouse_filter = 2
-theme_override_constants/separation = -7
+theme_override_constants/separation = -10
 alignment = 2
 
 [node name="PreviewCurrentHp1" type="Label" parent="HealthPips" unique_id=595401683]

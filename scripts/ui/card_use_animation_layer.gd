@@ -30,6 +30,9 @@ extends Control
 ## 目标指示线颜色；金色与当前牌桌选中反馈一致，仅影响视觉表现。
 @export var target_line_color: Color = Color("e4bd67")
 
+## 动画层绘制层级；默认30确保目标线与飞牌位于角色界面之上、菜单和选将遮罩之下，运行时通常无需修改。
+@export_range(0, 100, 1) var presentation_z_index: int = 30
+
 ## 当前正在执行顺序淡出的正式卡牌节点；可能来自手牌，也可能是不可见牌的完整正式视图。
 var _animated_card: CardView
 
@@ -59,6 +62,11 @@ var _presentation_sequence: int = 0
 
 ## 当前动画代次；重新开局清空表现时递增，使上一局仍在等待的异步淡出任务安全退出。
 var _presentation_generation: int = 0
+
+
+## 进入场景树时应用稳定绘制层级；避免场景缓存或外部实例化遗漏层级属性导致目标线被角色界面覆盖。
+func _ready() -> void:
+	z_index = presentation_z_index
 
 
 ## 播放一次卡牌使用表现；传入节点始终是正式 CardView，所有位置使用本组件局部坐标。
