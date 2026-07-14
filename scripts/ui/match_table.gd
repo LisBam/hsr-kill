@@ -17,12 +17,6 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 顶栏阶段文本；展示当前回合、阶段与牌堆数量。
 @onready var phase_label: Label = %PhaseLabel
 
-## 中央摸牌堆数量；与顶栏摘要同步显示，便于玩家在牌桌中央快速读取。
-@onready var draw_pile_count_label: Label = %DrawPileCountLabel
-
-## 中央弃牌堆数量；只展示公开数量，不显示弃牌堆具体牌面。
-@onready var discard_pile_count_label: Label = %DiscardPileCountLabel
-
 ## 中央弃牌结算区；其全局中心用于确定卡牌飞行动画的落点，不承载规则状态。
 @onready var discard_pile_panel: PanelContainer = %DiscardPilePanel
 
@@ -131,7 +125,7 @@ func _ready() -> void:
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
-	_refresh_name_mode_button()
+	match_menu.refresh_card_name_text()
 	call_deferred("_start_default_match")
 
 
@@ -198,8 +192,6 @@ func _render_header() -> void:
 		current_player_name,
 		_phase_text(str(_snapshot.get("current_phase", "setup"))),
 	]
-	draw_pile_count_label.text = str(int(_snapshot.get("draw_pile_count", 0)))
-	discard_pile_count_label.text = str(int(_snapshot.get("discard_pile_count", 0)))
 	center_turn_label.text = "第%d回合 · %s" % [int(_snapshot.get("turn_number", 0)), current_player_name]
 	center_phase_label.text = _phase_text(str(_snapshot.get("current_phase", "setup")))
 
@@ -505,14 +497,10 @@ func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 		_refresh_selection_text()
 
 
-## 更新菜单内名称模式文字，保证所有卡牌显示入口共用同一全局设置。
-func _refresh_name_mode_button() -> void:
-	match_menu.refresh_card_name_text()
-
-
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
 func _on_restart_requested(player_count: int) -> void:
 	log_view.clear()
+	card_use_animation_layer.clear_presentations()
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
 

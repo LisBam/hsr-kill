@@ -10,7 +10,8 @@ signal pressed
 signal card_drag_started(card_uid: int)
 
 ## 卡牌宽度；默认108像素适合1280×720牌桌，运行时无需动态修改。
-@export_range(88.0, 180.0, 1.0) var card_width: float = 108.0
+## 标准牌面使用111×148像素，对应精确3:4宽高比；宽度只增大不缩小高度，运行时通常无需动态修改。
+@export_range(88.0, 180.0, 1.0) var card_width: float = 111.0
 
 ## 卡牌高度；默认148像素保持实体牌比例，运行时无需动态修改。
 @export_range(120.0, 240.0, 1.0) var card_height: float = 148.0

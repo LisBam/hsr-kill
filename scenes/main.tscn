@@ -12,6 +12,7 @@
 [ext_resource type="Script" uid="uid://d2qfk6g5m7y1p" path="res://scripts/ui/decade_battle_layout.gd" id="10_battle_layout"]
 [ext_resource type="Script" path="res://scripts/ui/match_menu.gd" id="13_menu"]
 [ext_resource type="Script" path="res://scripts/ui/character_selection_panel.gd" id="14_character_selection"]
+[ext_resource type="Script" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -205,21 +206,9 @@ theme_override_colors/font_color = Color(0.56, 0.84, 0.73, 1)
 text = "准备"
 horizontal_alignment = 1
 
-[node name="HiddenCounters" type="Control" parent="." unique_id=1801683930]
-visible = false
-anchors_preset = 0
-
-[node name="DrawPileCountLabel" type="Label" parent="HiddenCounters" unique_id=1741479096]
-unique_name_in_owner = true
-layout_mode = 0
-
-[node name="DiscardPileCountLabel" type="Label" parent="HiddenCounters" unique_id=394920499]
-unique_name_in_owner = true
-layout_mode = 0
-
 [node name="MatchMenu" type="Control" parent="."]
 unique_name_in_owner = true
-z_index = 30
+z_index = 50
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -322,30 +311,56 @@ offset_right = 740.0
 offset_bottom = 400.0
 mouse_filter = 2
 
-[node name="LogPanel" type="PanelContainer" parent="." unique_id=2011995793]
+[node name="LogPanel" type="Control" parent="." unique_id=2011995793]
+unique_name_in_owner = true
+z_index = 20
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -232.0
-offset_right = 126.0
+offset_top = -416.0
+offset_right = 378.0
 offset_bottom = -186.0
 grow_vertical = 0
-theme_override_styles/panel = SubResource("StyleMetalPanel")
+mouse_filter = 2
+script = ExtResource("15_log_panel")
 
-[node name="LogVBox" type="VBoxContainer" parent="LogPanel" unique_id=1624197810]
-layout_mode = 2
+[node name="LogToggleButton" type="Button" parent="LogPanel"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_top = -46.0
+offset_right = 108.0
+grow_vertical = 0
+theme_override_styles/normal = SubResource("StyleButtonNormal")
+text = "记录"
 
-[node name="LogTitle" type="Label" parent="LogPanel/LogVBox" unique_id=2045660230]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.9, 0.75, 0.45, 1)
-text = "▣ 记录"
-horizontal_alignment = 1
-
-[node name="LogView" type="RichTextLabel" parent="LogPanel/LogVBox" unique_id=1132612850]
+[node name="LogContentPanel" type="PanelContainer" parent="LogPanel"]
 unique_name_in_owner = true
 visible = false
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 176.0
+grow_horizontal = 2
+theme_override_styles/panel = SubResource("StyleMetalPanel")
+
+[node name="LogVBox" type="VBoxContainer" parent="LogPanel/LogContentPanel" unique_id=1624197810]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="LogTitle" type="Label" parent="LogPanel/LogContentPanel/LogVBox" unique_id=2045660230]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.75, 0.45, 1)
+text = "对局日志"
+horizontal_alignment = 1
+
+[node name="LogView" type="RichTextLabel" parent="LogPanel/LogContentPanel/LogVBox" unique_id=1132612850]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 136)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_colors/default_color = Color(0.82, 0.79, 0.7, 1)

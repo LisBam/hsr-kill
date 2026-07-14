@@ -3,8 +3,9 @@ extends Container
 
 ## 无名杀式重叠手牌容器。组件只负责卡牌位置、层级和横向滚动宽度，不读取或修改对局状态。
 
-## 单张手牌的标准尺寸；默认108×148像素，与 CardView 的基准尺寸一致，运行时通常无需动态修改。
-@export var card_size: Vector2 = Vector2(108.0, 148.0)
+## 单张手牌的标准尺寸；默认111×148像素，与 CardView 的3:4基准尺寸一致，运行时通常无需动态修改。
+## 当前标准尺寸为111×148像素，通过增宽实现3:4比例，容器必须与 CardView 保持一致。
+@export var card_size: Vector2 = Vector2(111.0, 148.0)
 
 ## 手牌区左右安全边距；默认6像素避免首尾卡牌描边被滚动容器裁切，运行时通常无需动态修改。
 @export_range(0.0, 40.0, 1.0) var horizontal_padding: float = 6.0
@@ -13,7 +14,7 @@ extends Container
 @export_range(0.0, 20.0, 1.0) var preferred_card_gap: float = 2.0
 
 ## 手牌折叠后相邻卡牌至少露出的宽度；默认64像素保证花色点数和牌名仍可辨认，运行时可由主题调整。
-@export_range(36.0, 108.0, 1.0) var minimum_visible_width: float = 64.0
+@export_range(36.0, 111.0, 1.0) var minimum_visible_width: float = 64.0
 
 ## 选中卡牌向上抬升的距离；默认18像素接近无名杀选牌反馈，运行时可由主题调整。
 @export_range(0.0, 48.0, 1.0) var selected_lift: float = 18.0

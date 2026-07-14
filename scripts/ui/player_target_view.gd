@@ -15,8 +15,9 @@ signal card_dropped(card_uid: int, player_id: int)
 ## 牌面允许显示的装备条目上限；默认5对应武器、防具、进攻坐骑、防御坐骑和宝物五个固定槽位。
 @export_range(1, 5, 1) var maximum_equipment_rows: int = 5
 
-## 武将牌固定显示尺寸；默认135.7×197.8像素与编辑器场景一致，运行时通常无需动态修改。
-@export var card_size: Vector2 = Vector2(135.7, 197.8)
+## 武将牌固定显示尺寸；默认148.35×197.8像素与编辑器3:4场景一致，运行时通常无需动态修改。
+## 当前标准尺寸为148.35×197.8像素，通过只增宽武将插画与牌框实现精确3:4比例，信息控件尺寸保持不变。
+@export var card_size: Vector2 = Vector2(148.35, 197.8)
 
 ## 当前角色稳定玩家 ID；由 configure 写入，未配置时为 -1。
 var player_id: int = -1
@@ -48,10 +49,6 @@ var _artwork_texture: Texture2D
 
 ## 身份徽记覆盖层；公开身份显示在牌面右上角，未知身份使用问号徽记。
 @onready var _identity_badge_label: Label = $IdentityBadge
-
-## 体力覆盖层；使用实心与空心心形表达当前体力和上限。
-## 当前参考图格式保留该旧覆盖层为隐藏兼容节点，实际体力由右侧 `_health_pip_container` 圆点列显示。
-@onready var _hp_label: Label = $LegacyHp
 
 ## 手牌数量覆盖层；只显示公开数量，不暴露其他玩家的手牌内容。
 @onready var _hand_count_label: Label = $HandCount
