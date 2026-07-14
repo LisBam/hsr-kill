@@ -2,12 +2,6 @@ extends Control
 
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
-## 武将牌可编辑组件场景；所有对手武将牌均从该场景实例化，本地牌由主场景复用同一资源。
-const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
-
-## 卡牌可编辑组件场景；手牌与木牛“粮”均从该场景实例化，避免在战斗脚本内拼装牌面节点。
-const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
-
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -41,20 +35,17 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 其他玩家与本地玩家状态卡容器；每次快照整体重建以避免状态残留。
 @onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
-## 本地玩家信息文本；展示身份、武将、体力与装备。
-@onready var local_status_label: Label = %LocalStatusLabel
-
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
 @onready var equipment_label: Label = %EquipmentLabel
 
-## 本地武将插画节点；读取武将可选 art_path，未配置时显示占位标签。
-@onready var local_artwork: TextureRect = %LocalArtwork
+## 武将牌场景内置模板；对手与本地武将牌均复制该节点，所有牌面层级只维护于主场景。
+@onready var player_target_template: PlayerTargetView = $PlayerTargetTemplate
 
-## 本地武将插画占位标签；有效纹理加载后自动隐藏。
-@onready var local_artwork_placeholder: Label = %LocalArtworkPlaceholder
+## 卡牌场景内置模板；手牌与木牛“粮”均复制该节点，避免外部 PackedScene 依赖。
+@onready var card_template: CardView = $CardTemplate
 
-## 本地玩家统一武将牌组件；与其他玩家共用势力、竖名、体力圆点、手牌角标、座次号和装备叠层格式。
-@onready var local_player_card: PlayerTargetView = %LocalPlayerCard
+## 本地玩家统一武将牌组件；在主场景进入树后由内置模板复制并锚定到右下角。
+var local_player_card: PlayerTargetView
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
 @onready var hand_container: DecadeHandContainer = %HandContainer
@@ -113,7 +104,7 @@ var _card_use_preview: Dictionary = {}
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
-	_apply_visual_theme()
+	_create_local_player_card()
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
@@ -126,7 +117,6 @@ func _ready() -> void:
 	wooden_ox_button.pressed.connect(_on_wooden_ox_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	%RestartButton.pressed.connect(_on_restart_pressed)
-	%LocalPanel.gui_input.connect(_on_local_panel_gui_input)
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	_refresh_name_mode_button()
@@ -137,6 +127,30 @@ func _ready() -> void:
 func _start_default_match() -> void:
 	log_view.clear()
 	match_controller.start_match()
+
+
+## 由主场景内置武将牌模板创建本地牌；本地与对手使用同一节点树，避免维护第二套本地 UI。
+func _create_local_player_card() -> void:
+	# 本地武将牌实例；从隐藏模板深拷贝，随后独立锚定到主场景右下角。
+	local_player_card = player_target_template.duplicate() as PlayerTargetView
+	local_player_card.name = "LocalPlayerCard"
+	local_player_card.visible = true
+	local_player_card.mouse_filter = Control.MOUSE_FILTER_STOP
+	local_player_card.z_index = 12
+	local_player_card.anchor_left = 1.0
+	local_player_card.anchor_top = 1.0
+	local_player_card.anchor_right = 1.0
+	local_player_card.anchor_bottom = 1.0
+	local_player_card.offset_left = -166.0
+	local_player_card.offset_top = -240.0
+	local_player_card.offset_right = -16.0
+	local_player_card.offset_bottom = 0.0
+	local_player_card.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	local_player_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	local_player_card.panel_width = 150.0
+	local_player_card.panel_height = 240.0
+	local_player_card.seat_label_height = 20.0
+	add_child(local_player_card)
 
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
@@ -190,7 +204,9 @@ func _render_players() -> void:
 			local_player_snapshot = player
 			continue
 		# 其他玩家选择按钮；独立组件包含状态摘要、合法目标高亮与卡牌拖放入口，不承载规则逻辑。
-		var player_button: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+		var player_button: PlayerTargetView = player_target_template.duplicate() as PlayerTargetView
+		player_button.visible = true
+		player_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
 		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
@@ -211,14 +227,7 @@ func _render_players() -> void:
 		# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 		var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 		local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
-		local_status_label.text = _format_local_player_card(local_player_snapshot)
 		equipment_label.text = _format_local_equipment(local_player_snapshot)
-		_render_local_artwork(local_player_snapshot)
-		# 本地玩家自身也可作为桃、铁索连环等牌的目标。
-		local_status_label.tooltip_text = "点击“选择自己”为目标时使用下方按钮。"
-		%SelectSelfButton.disabled = not bool(local_player_snapshot.get("alive", false))
-		if not %SelectSelfButton.pressed.is_connected(_on_self_target_pressed):
-			%SelectSelfButton.pressed.connect(_on_self_target_pressed)
 		_render_local_skills(local_player_snapshot)
 
 
@@ -231,17 +240,6 @@ func _layout_opponent_players() -> void:
 	# 对局总人数；座次布局器用该数值选择与无名杀一致的二至十人位置模板。
 	var total_player_count: int = (_snapshot.get("players", []) as Array).size()
 	player_grid.bind_opponent_views(opponent_views, total_player_count)
-
-
-## 渲染本地武将插画；与其他角色卡共用 art_path 字段和安全加载回退规则。
-func _render_local_artwork(local_player: Dictionary) -> void:
-	# 本地武将定义；插画路径与武将基础数据一同配置。
-	var character_definition: Dictionary = GameDatabase.get_character(str(local_player.get("character_id", "")))
-	# 本地武将纹理；空值表示未配置插画或路径无效。
-	var texture: Texture2D = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
-	local_artwork.texture = texture
-	local_artwork.visible = texture != null
-	local_artwork_placeholder.visible = texture == null
 
 
 ## 根据本地武将配置渲染技能按钮；未接入规则的样例技能保持“预留”状态并可查看说明。
@@ -300,7 +298,9 @@ func _render_local_hand() -> void:
 		# 当前手牌定义；用于双名称与类型提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
 		# 当前手牌按钮；独立卡牌组件负责牌面、选中反馈与拖拽数据，点击只改变界面选择状态。
-		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		var card_button: CardView = card_template.duplicate() as CardView
+		card_button.visible = true
+		card_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		# 当前实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, false, can_act)
@@ -314,7 +314,9 @@ func _render_local_hand() -> void:
 		# 当前“粮”定义；用于双名称与规则提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
 		# 当前“粮”按钮；与普通手牌共用选择 UID、卡牌视觉与使用牌动作。
-		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		var card_button: CardView = card_template.duplicate() as CardView
+		card_button.visible = true
+		card_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		# 当前“粮”的实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, true, can_act)
@@ -359,21 +361,6 @@ func _format_player_card(player: Dictionary) -> String:
 		"横置" if bool(player.get("chained", false)) else "重置",
 		"、".join(equipment_names) if not equipment_names.is_empty() else "无",
 		"、".join(judgment_names) if not judgment_names.is_empty() else "无",
-	]
-
-
-## 返回右下角本地武将牌使用的紧凑状态文本；装备详情由左下装备区独立展示。
-func _format_local_player_card(player: Dictionary) -> String:
-	# 本地武将稳定 ID；统一交由数据仓库解析中文显示名，不在界面脚本硬编码角色。
-	var character_id: String = str(player.get("character_id", ""))
-	return "%s\n%s · %s\n%s %d/%d\n手牌 %d" % [
-		GameDatabase.resolve_character_name(character_id),
-		str(player.get("display_name", "玩家")),
-		_identity_text(str(player.get("identity", "hidden"))),
-		_hp_pips(int(player.get("hp", 0)), int(player.get("max_hp", 0))),
-		int(player.get("hp", 0)),
-		int(player.get("max_hp", 0)),
-		int(player.get("hand_count", 0)),
 	]
 
 
@@ -458,13 +445,6 @@ func _on_card_dropped(card_uid: int, target_id: int) -> void:
 ## 将本地玩家自身加入或移出目标列表。
 func _on_self_target_pressed() -> void:
 	_on_target_pressed(match_controller.local_human_player_id)
-
-
-## 允许直接点击本地武将牌选择自己，保留单独按钮作为低分辨率和触屏设备的明确入口。
-func _on_local_panel_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-		_on_self_target_pressed()
-		accept_event()
 
 
 ## 提交使用牌动作；所有规则错误由核心返回并显示。
@@ -685,12 +665,6 @@ func _refresh_component_states() -> void:
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
 	local_player_card.set_target_state(self_is_legal, self_is_selected)
-	%SelectSelfButton.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("e4d7c1")))
-	# 本地武将牌边框色；与其他角色卡共享金色选中和青绿色合法目标语义。
-	var local_border_color: Color = BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("d0a65d"))
-	# 本地武将牌边框宽度；合法或已选时加粗，普通状态保持固定金色外框。
-	var local_border_width: int = 4 if self_is_selected or self_is_legal else 3
-	%LocalPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.METAL_PANEL_COLOR, local_border_color, local_border_width, 5))
 
 
 ## 返回当前选中卡牌的本地可见快照，包含手牌与木牛流马“粮”。
@@ -713,28 +687,6 @@ func _get_selected_card_snapshot() -> Dictionary:
 ## 判断当前是否为本地玩家的有效出牌阶段；所有交互控件共用该条件。
 func _can_local_player_act() -> bool:
 	return int(_snapshot.get("current_player_id", -1)) == match_controller.local_human_player_id and str(_snapshot.get("current_phase", "")) == "play" and not bool(_snapshot.get("game_over", false))
-
-
-## 为静态场景节点应用统一桌面主题；样式只影响表现，不改变节点结构与规则状态。
-func _apply_visual_theme() -> void:
-	%NameModeButton.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("30261f"), BattleUIStyle.GOLD_BORDER_COLOR))
-	%RestartButton.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("30261f"), BattleUIStyle.GOLD_BORDER_COLOR))
-	use_button.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("76521f"), BattleUIStyle.ACCENT_COLOR, true))
-	use_button.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(Color("956c2a"), BattleUIStyle.ACCENT_COLOR.lightened(0.12), true))
-	use_button.add_theme_stylebox_override("disabled", BattleUIStyle.make_decade_button(Color("302d28"), Color("585149")))
-	recast_button.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("31302b"), Color("8f826d")))
-	wooden_ox_button.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("24443a"), Color("78a88f")))
-	end_play_button.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("542a25"), Color("c37568"), true))
-	%SelectSelfButton.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("302e2a"), Color("8f795c")))
-	%CancelButton.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(Color("4d342e"), Color("aa685b")))
-	$TopInfoPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.METAL_PANEL_COLOR, BattleUIStyle.GOLD_BORDER_COLOR, 2, 5))
-	$InteractionPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.JADE_PANEL_COLOR, Color("8c7448"), 2, 5))
-	$EquipmentPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.METAL_PANEL_COLOR, Color("9d7b49"), 2, 5))
-	$HandPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color("121815d1"), Color("7f6742"), 2, 5))
-	$SkillBar.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.JADE_PANEL_COLOR, Color("7f7650"), 2, 5))
-	%LocalPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.METAL_PANEL_COLOR, Color("d0a65d"), 3, 5))
-	$LocalPanel/LocalVBox/LocalArtworkFrame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color("77624255"), Color("a98b58"), 2, 3))
-	$LogPanel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color("201b18e8"), Color("806841"), 1, 5))
 
 
 ## 按玩家 ID 返回当前快照中的玩家字典。

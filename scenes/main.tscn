@@ -10,7 +10,138 @@
 [ext_resource type="Script" uid="uid://be14yvmd8i1up" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
 [ext_resource type="Script" uid="uid://bpdcraioe8xb4" path="res://scripts/ui/decade_hand_container.gd" id="9_hand_layout"]
 [ext_resource type="Script" uid="uid://d2qfk6g5m7y1p" path="res://scripts/ui/decade_battle_layout.gd" id="10_battle_layout"]
-[ext_resource type="PackedScene" path="res://scenes/components/player_target_view.tscn" id="12_target_scene"]
+[ext_resource type="Script" uid="uid://b1sh1pk8e66xu" path="res://scripts/ui/player_target_view.gd" id="12_target_script"]
+[ext_resource type="Script" uid="uid://bxcqqmk6hnwk6" path="res://scripts/ui/card_view.gd" id="13_card_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
+content_margin_left = 9.0
+content_margin_top = 7.0
+content_margin_right = 9.0
+content_margin_bottom = 7.0
+bg_color = Color(0.129412, 0.105882, 0.0941176, 0.94902)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.658824, 0.513725, 0.309804, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+
+[sub_resource type="StyleBoxFlat" id="StyleButtonNormal"]
+content_margin_left = 13.0
+content_margin_top = 6.0
+content_margin_right = 13.0
+content_margin_bottom = 6.0
+bg_color = Color(0.188235, 0.14902, 0.121569, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.658824, 0.513725, 0.309804, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 4
+shadow_offset = Vector2(0, 2)
+
+[sub_resource type="StyleBoxFlat" id="StyleOverlay"]
+content_margin_left = 2.0
+content_margin_top = 1.0
+content_margin_right = 2.0
+content_margin_bottom = 1.0
+bg_color = Color(0.0901961, 0.0705882, 0.0588235, 0.721569)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.54902, 0.454902, 0.282353, 0.533333)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleCardTemplate"]
+content_margin_left = 9.0
+content_margin_top = 7.0
+content_margin_right = 9.0
+content_margin_bottom = 7.0
+bg_color = Color(0.909804, 0.862745, 0.764706, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.462745, 0.356863, 0.239216, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+
+[sub_resource type="StyleBoxFlat" id="StyleJadePanel"]
+content_margin_left = 9.0
+content_margin_top = 7.0
+content_margin_right = 9.0
+content_margin_bottom = 7.0
+bg_color = Color(0.0901961, 0.168627, 0.152941, 0.929412)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.54902, 0.454902, 0.282353, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+
+[sub_resource type="StyleBoxFlat" id="StyleButtonPrimary"]
+content_margin_left = 13.0
+content_margin_top = 6.0
+content_margin_right = 13.0
+content_margin_bottom = 6.0
+bg_color = Color(0.462745, 0.321569, 0.121569, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.937255, 0.780392, 0.427451, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 4
+shadow_offset = Vector2(0, 2)
+
+[sub_resource type="StyleBoxFlat" id="StyleHandPanel"]
+content_margin_left = 9.0
+content_margin_top = 7.0
+content_margin_right = 9.0
+content_margin_bottom = 7.0
+bg_color = Color(0.0705882, 0.0941176, 0.0823529, 0.819608)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.498039, 0.403922, 0.258824, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
 
 [node name="Main" type="Control" unique_id=1400958767]
 layout_mode = 3
@@ -82,6 +213,7 @@ offset_left = 18.0
 offset_top = 18.0
 offset_right = 122.0
 offset_bottom = 108.0
+theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="TopInfoVBox" type="VBoxContainer" parent="TopInfoPanel" unique_id=251580000]
 layout_mode = 2
@@ -132,6 +264,7 @@ offset_top = 16.0
 offset_right = -112.0
 offset_bottom = 50.0
 grow_horizontal = 0
+theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "牌名：崩铁杀"
 
 [node name="RestartButton" type="Button" parent="." unique_id=1707669420]
@@ -146,6 +279,7 @@ offset_top = 16.0
 offset_right = -18.0
 offset_bottom = 50.0
 grow_horizontal = 0
+theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "重开"
 
 [node name="PlayerGrid" type="Control" parent="." unique_id=795623905]
@@ -158,6 +292,236 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("10_battle_layout")
+
+[node name="PlayerTargetTemplate" type="Button" parent="." unique_id=232233373]
+visible = false
+custom_minimum_size = Vector2(172, 126)
+layout_mode = 0
+focus_mode = 0
+mouse_filter = 2
+mouse_default_cursor_shape = 2
+theme_override_styles/normal = SubResource("StyleMetalPanel")
+alignment = 0
+text_overrun_behavior = 3
+autowrap_mode = 2
+script = ExtResource("12_target_script")
+
+[node name="Artwork" type="TextureRect" parent="PlayerTargetTemplate" unique_id=181086160]
+layout_mode = 0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 104.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="ArtworkPlaceholder" type="Label" parent="PlayerTargetTemplate" unique_id=121364913]
+layout_mode = 0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 104.0
+theme_override_colors/font_color = Color(0.658824, 0.592157, 0.498039, 1)
+theme_override_font_sizes/font_size = 11
+text = "◇
+武将插画预留"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CharacterName" type="Label" parent="PlayerTargetTemplate" unique_id=178007209]
+layout_mode = 0
+offset_left = 4.0
+offset_top = 37.0
+offset_right = 38.0
+offset_bottom = 69.0
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "武
+将"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="IdentityBadge" type="Label" parent="PlayerTargetTemplate" unique_id=1907880419]
+layout_mode = 0
+offset_left = 141.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 28.0
+theme_override_font_sizes/font_size = 11
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "反"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="LegacyHp" type="Label" parent="PlayerTargetTemplate" unique_id=340494972]
+visible = false
+layout_mode = 0
+
+[node name="HandCount" type="Label" parent="PlayerTargetTemplate" unique_id=434572623]
+layout_mode = 0
+offset_left = 2.0
+offset_top = 67.0
+offset_right = 42.0
+offset_bottom = 107.0
+theme_override_font_sizes/font_size = 17
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "4"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Status" type="Label" parent="PlayerTargetTemplate" unique_id=1457544541]
+layout_mode = 0
+offset_left = 43.0
+offset_top = 5.0
+offset_right = 136.0
+offset_bottom = 23.0
+theme_override_font_sizes/font_size = 9
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "行动"
+horizontal_alignment = 1
+
+[node name="PublicZone" type="Label" parent="PlayerTargetTemplate" unique_id=457820741]
+layout_mode = 0
+offset_left = 42.0
+offset_top = 86.0
+offset_right = 142.0
+offset_bottom = 103.0
+theme_override_font_sizes/font_size = 8
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "判1"
+horizontal_alignment = 1
+
+[node name="FactionBadge" type="Label" parent="PlayerTargetTemplate" unique_id=1029373694]
+layout_mode = 0
+offset_left = 1.0
+offset_right = 41.0
+offset_bottom = 40.0
+theme_override_font_sizes/font_size = 13
+text = "列"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Seat" type="Label" parent="PlayerTargetTemplate" unique_id=211541540]
+layout_mode = 0
+offset_top = 108.0
+offset_right = 172.0
+offset_bottom = 126.0
+theme_override_colors/font_color = Color(0.941176, 0.709804, 0.184314, 1)
+theme_override_font_sizes/font_size = 18
+text = "一"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HealthPips" type="VBoxContainer" parent="PlayerTargetTemplate" unique_id=1923304553]
+layout_mode = 0
+offset_left = 146.0
+offset_top = 26.0
+offset_right = 170.0
+offset_bottom = 86.0
+mouse_filter = 2
+theme_override_constants/separation = -3
+alignment = 1
+
+[node name="EquipmentLayer" type="Control" parent="PlayerTargetTemplate" unique_id=857464337]
+anchors_preset = 0
+offset_right = 172.0
+offset_bottom = 108.0
+mouse_filter = 2
+
+[node name="CardTemplate" type="Button" parent="." unique_id=26500048]
+visible = false
+custom_minimum_size = Vector2(108, 148)
+layout_mode = 0
+focus_mode = 0
+mouse_filter = 2
+mouse_default_cursor_shape = 2
+theme_override_styles/normal = SubResource("StyleCardTemplate")
+script = ExtResource("13_card_script")
+
+[node name="AccentBar" type="ColorRect" parent="CardTemplate" unique_id=67823864]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 4.0
+grow_horizontal = 2
+mouse_filter = 2
+
+[node name="Artwork" type="TextureRect" parent="CardTemplate" unique_id=178802438]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 9.0
+offset_top = 30.0
+offset_right = -9.0
+offset_bottom = -43.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="ArtworkPlaceholder" type="Label" parent="CardTemplate" unique_id=1094304324]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 9.0
+offset_top = 30.0
+offset_right = -9.0
+offset_bottom = -43.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.545098, 0.47451, 0.392157, 1)
+theme_override_font_sizes/font_size = 12
+text = "◇
+插画预留"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Corner" type="Label" parent="CardTemplate" unique_id=48045244]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 7.0
+offset_right = 98.0
+offset_bottom = 29.0
+theme_override_font_sizes/font_size = 16
+text = "♠A"
+
+[node name="Name" type="Label" parent="CardTemplate" unique_id=361586379]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = -41.0
+offset_right = -6.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 15
+text = "卡牌名称"
+horizontal_alignment = 1
+text_overrun_behavior = 3
+
+[node name="Type" type="Label" parent="CardTemplate" unique_id=115373529]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = -21.0
+offset_right = -6.0
+offset_bottom = -4.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.47451, 0.4, 0.32549, 1)
+theme_override_font_sizes/font_size = 11
+text = "基本牌"
+horizontal_alignment = 1
 
 [node name="DiscardPilePanel" type="PanelContainer" parent="." unique_id=347848586]
 unique_name_in_owner = true
@@ -179,6 +543,7 @@ offset_top = -232.0
 offset_right = 126.0
 offset_bottom = -186.0
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="LogVBox" type="VBoxContainer" parent="LogPanel" unique_id=1624197810]
 layout_mode = 2
@@ -212,6 +577,7 @@ offset_right = 322.0
 offset_bottom = -172.0
 grow_horizontal = 2
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleJadePanel")
 
 [node name="InteractionVBox" type="VBoxContainer" parent="InteractionPanel" unique_id=1579071619]
 layout_mode = 2
@@ -241,30 +607,35 @@ alignment = 1
 unique_name_in_owner = true
 custom_minimum_size = Vector2(146, 42)
 layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "确定"
 
 [node name="CancelButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1689127389]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(66, 30)
 layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "取消"
 
 [node name="RecastButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1915243788]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(62, 30)
 layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "重铸"
 
 [node name="WoodenOxButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1479987863]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(72, 30)
 layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "存木牛"
 
 [node name="EndPlayButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1761560277]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(146, 42)
 layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "回合结束"
 
 [node name="EquipmentPanel" type="PanelContainer" parent="." unique_id=874383388]
@@ -278,6 +649,7 @@ offset_top = -178.0
 offset_right = 216.0
 offset_bottom = -14.0
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="EquipmentVBox" type="VBoxContainer" parent="EquipmentPanel" unique_id=436820528]
 layout_mode = 2
@@ -310,6 +682,7 @@ offset_top = -172.0
 offset_right = -276.0
 grow_horizontal = 2
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleHandPanel")
 
 [node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
 layout_mode = 2
@@ -336,6 +709,7 @@ offset_right = -174.0
 offset_bottom = -14.0
 grow_horizontal = 0
 grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleJadePanel")
 
 [node name="SkillVBox" type="VBoxContainer" parent="SkillBar" unique_id=1002488890]
 layout_mode = 2
@@ -354,79 +728,6 @@ theme_override_font_sizes/font_size = 10
 text = "技能"
 horizontal_alignment = 1
 autowrap_mode = 2
-
-[node name="LocalPanel" type="PanelContainer" parent="." unique_id=1499008552]
-unique_name_in_owner = true
-visible = false
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -166.0
-offset_top = -240.0
-offset_right = -16.0
-grow_horizontal = 0
-grow_vertical = 0
-
-[node name="LocalVBox" type="VBoxContainer" parent="LocalPanel" unique_id=1486872815]
-layout_mode = 2
-mouse_filter = 2
-
-[node name="LocalArtworkFrame" type="PanelContainer" parent="LocalPanel/LocalVBox" unique_id=418323954]
-custom_minimum_size = Vector2(142, 154)
-layout_mode = 2
-mouse_filter = 2
-
-[node name="LocalArtwork" type="TextureRect" parent="LocalPanel/LocalVBox/LocalArtworkFrame" unique_id=1083770504]
-unique_name_in_owner = true
-layout_mode = 2
-mouse_filter = 2
-expand_mode = 1
-stretch_mode = 6
-
-[node name="LocalArtworkPlaceholder" type="Label" parent="LocalPanel/LocalVBox/LocalArtworkFrame" unique_id=1474441682]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.67, 0.59, 0.48, 1)
-text = "武将插画预留"
-horizontal_alignment = 1
-vertical_alignment = 1
-
-[node name="LocalStatusLabel" type="Label" parent="LocalPanel/LocalVBox" unique_id=1734509555]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_colors/font_color = Color(0.94, 0.89, 0.78, 1)
-theme_override_font_sizes/font_size = 11
-text = "本地玩家"
-horizontal_alignment = 1
-text_overrun_behavior = 3
-
-[node name="SelectSelfButton" type="Button" parent="LocalPanel/LocalVBox" unique_id=419946568]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 28)
-layout_mode = 2
-text = "选择自己"
-
-[node name="LocalPlayerCard" parent="." unique_id=2120260690 instance=ExtResource("12_target_scene")]
-unique_name_in_owner = true
-z_index = 12
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -166.0
-offset_top = -240.0
-offset_right = -16.0
-grow_horizontal = 0
-grow_vertical = 0
-panel_width = 150.0
-panel_height = 240.0
-seat_label_height = 20.0
 
 [node name="ErrorLabel" type="Label" parent="." unique_id=1246375773]
 unique_name_in_owner = true

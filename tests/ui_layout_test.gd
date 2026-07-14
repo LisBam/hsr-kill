@@ -53,7 +53,7 @@ func _run() -> void:
 	# 底部技能栏；右侧区域必须完整位于本地武将牌左侧并保持可见。
 	var skill_bar: Control = main_instance.get_node("SkillBar") as Control
 	# 本地武将牌；右下角区域必须使用右下锚点完整留在客户区内。
-	var local_player_card: Control = main_instance.get_node("%LocalPlayerCard") as Control
+	var local_player_card: Control = main_instance.get_node("LocalPlayerCard") as Control
 	for checked_control: Control in [name_button, restart_button, equipment_panel, hand_panel, skill_bar, local_player_card]:
 		# 当前控件的屏幕矩形；`get_screen_transform()` 已包含画布拉伸和锚点换算。
 		var screen_rect: Rect2 = _screen_rect(checked_control)

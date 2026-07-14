@@ -39,43 +39,43 @@ var is_current_actor: bool = false
 var _artwork_texture: Texture2D
 
 ## 武将插画显示节点；由武将牌场景提供，固定占据角色卡左侧区域并忽略鼠标输入。
-@onready var _artwork_rect: TextureRect = %Artwork
+@onready var _artwork_rect: TextureRect = $Artwork
 
 ## 武将插画缺失占位标签；由武将牌场景提供，有效插画加载后自动隐藏。
-@onready var _artwork_placeholder: Label = %ArtworkPlaceholder
+@onready var _artwork_placeholder: Label = $ArtworkPlaceholder
 
 ## 武将名覆盖层；参考无名杀把角色名固定在牌面底部，避免状态文本随长度改变牌面尺寸。
 ## 当前参考图格式将该覆盖层调整到牌面左侧，并把武将名按单字逐行竖排显示。
-@onready var _character_name_label: Label = %CharacterName
+@onready var _character_name_label: Label = $CharacterName
 
 ## 身份徽记覆盖层；公开身份显示在牌面右上角，未知身份使用问号徽记。
-@onready var _identity_badge_label: Label = %IdentityBadge
+@onready var _identity_badge_label: Label = $IdentityBadge
 
 ## 体力覆盖层；使用实心与空心心形表达当前体力和上限。
 ## 当前参考图格式保留该旧覆盖层为隐藏兼容节点，实际体力由右侧 `_health_pip_container` 圆点列显示。
-@onready var _hp_label: Label = %LegacyHp
+@onready var _hp_label: Label = $LegacyHp
 
 ## 手牌数量覆盖层；只显示公开数量，不暴露其他玩家的手牌内容。
-@onready var _hand_count_label: Label = %HandCount
+@onready var _hand_count_label: Label = $HandCount
 
 ## 状态覆盖层；显示行动中、横置或死亡等桌面状态。
-@onready var _status_label: Label = %Status
+@onready var _status_label: Label = $Status
 
 ## 公开区域覆盖层；显示装备、判定区和木牛“粮”的公开数量，完整名称保留在悬停说明中。
 ## 当前参考图格式只在该层显示判定区与“粮”数量，公开装备改由独立横条完整显示花色、点数和牌名。
-@onready var _public_zone_label: Label = %PublicZone
+@onready var _public_zone_label: Label = $PublicZone
 
 ## 势力圆形徽记；显示势力简称并使用数据配置的主题颜色，不参与身份或胜负判断。
-@onready var _faction_badge_label: Label = %FactionBadge
+@onready var _faction_badge_label: Label = $FactionBadge
 
 ## 座次号覆盖层；位于武将牌底边外侧并把从0开始的玩家 ID 转换为中文序号。
-@onready var _seat_label: Label = %Seat
+@onready var _seat_label: Label = $Seat
 
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
-@onready var _health_pip_container: VBoxContainer = %HealthPips
+@onready var _health_pip_container: VBoxContainer = $HealthPips
 
 ## 装备条目承载层；公开装备以参考图中的浅色横条从牌面下部向上叠放。
-@onready var _equipment_layer: Control = %EquipmentLayer
+@onready var _equipment_layer: Control = $EquipmentLayer
 
 ## 当前已创建的装备条目控件；每次快照更新时整体重建，最多包含五个固定装备槽。
 var _equipment_rows: Array[RichTextLabel] = []
