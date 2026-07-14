@@ -2,6 +2,12 @@ extends Control
 
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
+## 武将牌可编辑组件场景；所有对手武将牌均从该场景实例化，本地牌由主场景复用同一资源。
+const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
+
+## 卡牌可编辑组件场景；手牌与木牛“粮”均从该场景实例化，避免在战斗脚本内拼装牌面节点。
+const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -46,6 +52,9 @@ extends Control
 
 ## 本地武将插画占位标签；有效纹理加载后自动隐藏。
 @onready var local_artwork_placeholder: Label = %LocalArtworkPlaceholder
+
+## 本地玩家统一武将牌组件；与其他玩家共用势力、竖名、体力圆点、手牌角标、座次号和装备叠层格式。
+@onready var local_player_card: PlayerTargetView = %LocalPlayerCard
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
 @onready var hand_container: DecadeHandContainer = %HandContainer
@@ -118,6 +127,8 @@ func _ready() -> void:
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	%RestartButton.pressed.connect(_on_restart_pressed)
 	%LocalPanel.gui_input.connect(_on_local_panel_gui_input)
+	local_player_card.pressed.connect(_on_self_target_pressed)
+	local_player_card.card_dropped.connect(_on_card_dropped)
 	_refresh_name_mode_button()
 	call_deferred("_start_default_match")
 
@@ -179,20 +190,27 @@ func _render_players() -> void:
 			local_player_snapshot = player
 			continue
 		# 其他玩家选择按钮；独立组件包含状态摘要、合法目标高亮与卡牌拖放入口，不承载规则逻辑。
-		var player_button: PlayerTargetView = PlayerTargetView.new()
+		var player_button: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
 		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
 		var character_definition: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
+		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
+		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.panel_width = 118.0
 		player_button.panel_height = 172.0
-		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)))
+		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_button.pressed.connect(_on_target_pressed.bind(target_id))
 		player_button.card_dropped.connect(_on_card_dropped)
 		player_grid.add_child(player_button)
 		_player_views[target_id] = player_button
 	_layout_opponent_players()
 	if not local_player_snapshot.is_empty():
+		# 本地武将定义；统一武将牌从相同静态数据读取名称、插画和势力 ID。
+		var local_character_definition: Dictionary = GameDatabase.get_character(str(local_player_snapshot.get("character_id", "")))
+		# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
+		var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
+		local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 		local_status_label.text = _format_local_player_card(local_player_snapshot)
 		equipment_label.text = _format_local_equipment(local_player_snapshot)
 		_render_local_artwork(local_player_snapshot)
@@ -282,7 +300,7 @@ func _render_local_hand() -> void:
 		# 当前手牌定义；用于双名称与类型提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
 		# 当前手牌按钮；独立卡牌组件负责牌面、选中反馈与拖拽数据，点击只改变界面选择状态。
-		var card_button: CardView = CardView.new()
+		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		# 当前实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, false, can_act)
@@ -296,7 +314,7 @@ func _render_local_hand() -> void:
 		# 当前“粮”定义；用于双名称与规则提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
 		# 当前“粮”按钮；与普通手牌共用选择 UID、卡牌视觉与使用牌动作。
-		var card_button: CardView = CardView.new()
+		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		# 当前“粮”的实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, true, can_act)
@@ -315,8 +333,8 @@ func _render_local_hand() -> void:
 
 ## 返回玩家状态卡的多行文本。
 func _format_player_card(player: Dictionary) -> String:
-	# 武将配置；用于显示武将名与样例技能入口。
-	var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
+	# 武将稳定 ID；统一交由数据仓库解析中文显示名，避免展示层直接使用英文 ID。
+	var character_id: String = str(player.get("character_id", ""))
 	# 装备显示名称数组；装备区属于公共信息。
 	var equipment_names: Array[String] = []
 	for card_variant: Variant in (player.get("equipment", {}) as Dictionary).values():
@@ -331,7 +349,7 @@ func _format_player_card(player: Dictionary) -> String:
 		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(card.get("definition_id", "")))))
 	return "%s｜%s\n%s｜%s %d/%d\n手牌 %d｜粮 %d｜%s\n装：%s\n判：%s" % [
 		str(player.get("display_name", "玩家")),
-		str(character.get("display_name", "未选武将")),
+		GameDatabase.resolve_character_name(character_id),
 		_identity_text(str(player.get("identity", "hidden"))),
 		_hp_pips(int(player.get("hp", 0)), int(player.get("max_hp", 0))),
 		int(player.get("hp", 0)),
@@ -346,10 +364,10 @@ func _format_player_card(player: Dictionary) -> String:
 
 ## 返回右下角本地武将牌使用的紧凑状态文本；装备详情由左下装备区独立展示。
 func _format_local_player_card(player: Dictionary) -> String:
-	# 本地武将配置；用于显示武将名，不在界面脚本硬编码角色。
-	var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
+	# 本地武将稳定 ID；统一交由数据仓库解析中文显示名，不在界面脚本硬编码角色。
+	var character_id: String = str(player.get("character_id", ""))
 	return "%s\n%s · %s\n%s %d/%d\n手牌 %d" % [
-		str(character.get("display_name", "未选武将")),
+		GameDatabase.resolve_character_name(character_id),
 		str(player.get("display_name", "玩家")),
 		_identity_text(str(player.get("identity", "hidden"))),
 		_hp_pips(int(player.get("hp", 0)), int(player.get("max_hp", 0))),
@@ -563,7 +581,7 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 ## 返回指定玩家在牌桌上的动画锚点；本地玩家固定使用底部面板中心。
 func _get_player_animation_position(player_id: int) -> Vector2:
 	if player_id == match_controller.local_human_player_id:
-		return _global_to_animation_position(%LocalPanel.get_global_rect().get_center())
+		return _global_to_animation_position(local_player_card.get_global_rect().get_center())
 	# 其他玩家角色视图；快照刷新后按稳定玩家 ID 保存。
 	var player_view: Control = _player_views.get(player_id) as Control
 	if player_view != null and is_instance_valid(player_view):
@@ -666,6 +684,7 @@ func _refresh_component_states() -> void:
 	# 本地玩家目标按钮；自身目标合法或已选择时使用与角色卡一致的颜色语义。
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
+	local_player_card.set_target_state(self_is_legal, self_is_selected)
 	%SelectSelfButton.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("e4d7c1")))
 	# 本地武将牌边框色；与其他角色卡共享金色选中和青绿色合法目标语义。
 	var local_border_color: Color = BattleUIStyle.ACCENT_COLOR if self_is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if self_is_legal else Color("d0a65d"))

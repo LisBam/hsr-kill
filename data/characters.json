@@ -1,5 +1,11 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "factions": [
+    {"id":"astral_express","display_name":"星穹列车","short_name":"列","color":"3f78a8"},
+    {"id":"belobog","display_name":"贝洛伯格","short_name":"贝","color":"8a6a9b"},
+    {"id":"xianzhou","display_name":"仙舟联盟","short_name":"仙","color":"4f8b62"},
+    {"id":"stellaron_hunter","display_name":"星核猎手","short_name":"猎","color":"9a4d62"}
+  ],
   "characters": [
     {"id":"trailblazer","display_name":"开拓者","gender":"unknown","faction":"astral_express","max_hp":4,"skills":["trailblaze_sample"],"description":"通用样例武将，用于验证武将数据、体力与技能接口。"},
     {"id":"march_7th","display_name":"三月七","gender":"female","faction":"astral_express","max_hp":3,"skills":["six_phased_ice_sample"],"description":"防御型样例武将，用于验证女性与三体力数据。"},

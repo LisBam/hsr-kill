@@ -2,6 +2,12 @@ extends Node
 
 ## 无界面烟雾测试：校验数据规模，并让四名基础 AI 通过统一动作入口运行若干帧。
 
+## 武将牌可编辑组件场景；测试通过实例化正式资源验证场景、脚本和覆盖层可共同加载。
+const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
+
+## 卡牌可编辑组件场景；测试通过实例化正式资源验证战斗手牌可安全复用该场景。
+const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
 
@@ -39,6 +45,24 @@ func _run() -> void:
 	var skill_definition_count: int = GameDatabase.skills.size()
 	if skill_definition_count != 8:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
+		get_tree().quit(1)
+		return
+	# 势力展示元数据数量；当前八名样例武将共使用四个独立势力主题。
+	var faction_definition_count: int = GameDatabase.factions.size()
+	if faction_definition_count != 4:
+		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
+		get_tree().quit(1)
+		return
+	# 已登记武将的中文显示名；界面显示不得退化为内部英文 ID。
+	var trailblazer_display_name: String = GameDatabase.resolve_character_name("trailblazer")
+	if trailblazer_display_name != "开拓者":
+		printerr("SMOKE_FAIL character_display_name=%s" % trailblazer_display_name)
+		get_tree().quit(1)
+		return
+	# 未登记武将的显示回退；必须保留中文占位且不泄漏调用方传入的英文稳定 ID。
+	var unknown_character_display_name: String = GameDatabase.resolve_character_name("unknown_character")
+	if unknown_character_display_name != "未知武将":
+		printerr("SMOKE_FAIL unknown_character_display_name=%s" % unknown_character_display_name)
 		get_tree().quit(1)
 		return
 	# 【酒】正常使用目标模式；官方规则允许指定包括使用者在内的一名角色。
@@ -79,12 +103,65 @@ func _run() -> void:
 		printerr("SMOKE_FAIL decade_hand_layout_defaults")
 		get_tree().quit(1)
 		return
+	hand_layout.free()
 	# 无名杀式座次布局组件；实例化用于校验常规与紧凑武将牌尺寸保持文档约定。
 	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
 	if battle_layout.opponent_card_size != Vector2(118.0, 172.0) or battle_layout.compact_opponent_card_size != Vector2(104.0, 156.0):
 		printerr("SMOKE_FAIL decade_battle_layout_defaults")
 		get_tree().quit(1)
 		return
+	battle_layout.free()
+	# 统一武将牌组件；实例化用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
+	var player_card_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	if not is_equal_approx(player_card_view.seat_label_height, 18.0) or not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
+		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
+		get_tree().quit(1)
+		return
+	player_card_view.apply_panel_size(Vector2(118.0, 172.0))
+	get_tree().root.add_child(player_card_view)
+	await get_tree().process_frame
+	# 带装备的角色牌测试快照；两件公开装备分别覆盖武器与防具槽，用于验证横条实际生成数量。
+	var equipped_player_snapshot: Dictionary = {
+		"player_id":1,
+		"display_name":"测试玩家",
+		"character_id":"trailblazer",
+		"identity":"rebel",
+		"hp":3,
+		"max_hp":4,
+		"alive":true,
+		"chained":false,
+		"hand_count":4,
+		"equipment":{
+			"weapon":{"definition_id":"qinglong", "suit":"spade", "rank":5},
+			"armor":{"definition_id":"bagua", "suit":"spade", "rank":2},
+		},
+		"judgment_area":[],
+		"wooden_ox_storage_count":0,
+	}
+	# 测试武将定义；提供武将名和势力 ID，使统一牌面能够生成完整覆盖层。
+	var equipped_character_definition: Dictionary = GameDatabase.get_character("trailblazer")
+	# 测试势力定义；提供圆徽简称与主题颜色，验证数据驱动入口可正常传递。
+	var equipped_faction_definition: Dictionary = GameDatabase.get_faction(str(equipped_character_definition.get("faction", "")))
+	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
+	var rendered_equipment_row_count: int = 0
+	for child: Node in player_card_view.get_children():
+		for grandchild: Node in child.get_children():
+			if grandchild is RichTextLabel:
+				rendered_equipment_row_count += 1
+	if rendered_equipment_row_count != 2:
+		printerr("SMOKE_FAIL player_card_equipment_rows=%d" % rendered_equipment_row_count)
+		get_tree().quit(1)
+		return
+	get_tree().root.remove_child(player_card_view)
+	player_card_view.free()
+	# 卡牌组件实例；验证正式卡牌场景可以独立载入并保留其标准尺寸参数。
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	if not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0):
+		printerr("SMOKE_FAIL card_view_scene_defaults")
+		get_tree().quit(1)
+		return
+	card_view.free()
 	# 逻辑视口宽度；保持1280像素作为全部场景坐标和布局文档的统一设计基准。
 	var viewport_width: int = int(ProjectSettings.get_setting("display/window/size/viewport_width", 0))
 	# 逻辑视口高度；保持720像素以维持十周年牌桌的16:9布局比例。
@@ -93,8 +170,10 @@ func _run() -> void:
 	var initial_window_width: int = int(ProjectSettings.get_setting("display/window/size/window_width_override", 0))
 	# 默认启动窗口高度；使用648像素避免720高屏幕上的标题栏和任务栏把底部界面推到屏幕外。
 	var initial_window_height: int = int(ProjectSettings.get_setting("display/window/size/window_height_override", 0))
-	if viewport_width != 1280 or viewport_height != 720 or initial_window_width != 1152 or initial_window_height != 648:
-		printerr("SMOKE_FAIL safe_window_size viewport=%dx%d window=%dx%d" % [viewport_width, viewport_height, initial_window_width, initial_window_height])
+	# 画布拉伸宽高比策略；固定为keep以保证非16:9窗口完整显示逻辑视口而不是裁切底部或右侧内容。
+	var stretch_aspect: String = str(ProjectSettings.get_setting("display/window/stretch/aspect", ""))
+	if viewport_width != 1280 or viewport_height != 720 or initial_window_width != 1152 or initial_window_height != 648 or stretch_aspect != "keep":
+		printerr("SMOKE_FAIL safe_window_size viewport=%dx%d window=%dx%d aspect=%s" % [viewport_width, viewport_height, initial_window_width, initial_window_height, stretch_aspect])
 		get_tree().quit(1)
 		return
 

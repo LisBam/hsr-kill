@@ -33,7 +33,8 @@ var _total_player_count: int = 0
 
 ## 启用尺寸变化监听；窗口拉伸后会基于当前可视区域重新计算全部座位。
 func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_PASS
+	# 座次容器覆盖整个牌桌但自身不承载点击；忽略鼠标可让右上角按钮和其他同级控件直接参与命中测试，子角色牌仍保持独立交互。
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	resized.connect(_layout_opponents)
 
 
