@@ -1,18 +1,21 @@
 class_name CardView
-extends Button
+extends Node2D
 
-## 可复用的实体卡牌视图。组件只负责牌面显示、点击选择与 Godot 拖放数据，不提交任何对局动作。
+## 可复用的实体卡牌视图。根节点只代表一张卡牌，输入由独立透明组件处理，因此同一节点可在手牌、拖拽和弃牌动画之间移动。
+
+## 卡牌被点击时发出的信号；桌面据此更新临时选择，不直接提交对局动作。
+signal pressed
 
 ## 拖拽开始信号；参数为稳定卡牌 UID，桌面可据此同步当前选择。
 signal card_drag_started(card_uid: int)
 
-## 卡牌宽度；默认108像素适合1440×900桌面，运行时无需动态修改。
+## 卡牌宽度；默认108像素适合1280×720牌桌，运行时无需动态修改。
 @export_range(88.0, 180.0, 1.0) var card_width: float = 108.0
 
-## 卡牌高度；默认148像素保持接近实体牌比例，运行时无需动态修改。
+## 卡牌高度；默认148像素保持实体牌比例，运行时无需动态修改。
 @export_range(120.0, 240.0, 1.0) var card_height: float = 148.0
 
-## 选中后向上抬升的像素数；默认14像素提供明确反馈，运行时可由主题配置调整。
+## 选中后向上抬升的像素数；默认14像素提供明确反馈，普通容器可在运行时调整。
 @export_range(0.0, 36.0, 1.0) var selected_lift: float = 14.0
 
 ## 鼠标悬停时的缩放倍率；默认1.06提供轻量实体牌靠近反馈，运行时可动态调整。
@@ -30,31 +33,16 @@ var is_wooden_ox_card: bool = false
 ## 当前牌是否被桌面选中；只影响视觉状态，不代表规则合法。
 var is_card_selected: bool = false
 
-## 当前牌是否可在本地出牌阶段交互；禁用时仍展示牌面信息。
+## 当前牌是否可在本地出牌阶段交互；禁用时仍展示完整牌面信息。
 var is_interactable: bool = false
 
-## 卡牌未选中时的原始布局位置；选择抬升只通过样式与偏移表达。
+## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 
 ## 当前卡牌插画纹理；配置缺失或文件无效时为 null，并显示占位区。
 var _artwork_texture: Texture2D
 
-## 牌面插画显示节点；由卡牌场景提供，固定占据卡牌中部，不参与鼠标输入。
-@onready var _artwork_rect: TextureRect = $Artwork
-
-## 插画缺失占位标签；由卡牌场景提供，后期配置有效 art_path 后自动隐藏。
-@onready var _artwork_placeholder: Label = $ArtworkPlaceholder
-
-## 左上角花色点数标签；独立于插画区域，保证任何图片亮度下都清晰可读。
-@onready var _corner_label: Label = $Corner
-
-## 卡牌名称标签；固定显示在插画下方，统一使用全局名称模式。
-@onready var _name_label: Label = $Name
-
-## 卡牌类别与木牛来源标签；固定显示在牌面底部。
-@onready var _type_label: Label = $Type
-
-## 待显示的花色点数字符串；configure 可能在节点进入场景树前调用，因此先保存文本。
+## 待显示的花色点数字符串；configure 可在节点进入场景树前调用，因此先保存文本。
 var _suit_rank_text: String = ""
 
 ## 待显示的卡牌名称；节点准备完成后写入名称标签。
@@ -66,29 +54,61 @@ var _card_type_text: String = ""
 ## 当前卡牌类别强调色；基本牌、锦囊牌、装备牌和属性杀使用不同色条。
 var _category_color: Color = Color("765b3d")
 
-## 牌面顶部类别色条；由卡牌场景提供，只表达视觉分类，不参与卡牌规则判断。
-@onready var _accent_bar: ColorRect = $AccentBar
+## 当前是否处于鼠标悬停状态；只用于决定纸张亮度和缩放表现。
+var _is_hovered: bool = false
 
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
 
-## 悬停卡牌临时绘制层级；固定100确保大量重叠手牌中仍显示在最上方，只影响视觉顺序。
+## 卡牌纸张面板；承载完整视觉样式，不承担鼠标按钮语义。
+@onready var _card_body: Panel = $CardBody
+
+## 牌面插画显示节点；固定占据卡牌中部，不参与鼠标输入。
+@onready var _artwork_rect: TextureRect = $CardBody/Artwork
+
+## 插画缺失占位标签；后期配置有效 art_path 后自动隐藏。
+@onready var _artwork_placeholder: Label = $CardBody/ArtworkPlaceholder
+
+## 左上角花色点数标签；独立于插画区域，保证任何图片亮度下都清晰可读。
+@onready var _corner_label: Label = $CardBody/Corner
+
+## 卡牌名称标签；固定显示在插画下方，统一使用全局名称模式。
+@onready var _name_label: Label = $CardBody/Name
+
+## 卡牌类别与木牛来源标签；固定显示在牌面底部。
+@onready var _type_label: Label = $CardBody/Type
+
+## 牌面顶部类别色条；只表达视觉分类，不参与卡牌规则判断。
+@onready var _accent_bar: ColorRect = $CardBody/AccentBar
+
+## 独立输入区域；负责点击、悬停和 Godot 原生拖拽协议。
+@onready var _input_area: CardInputArea = $InputArea
+
+## 悬停卡牌临时绘制层级；固定100确保重叠手牌中仍显示在最上方。
 const HOVER_Z_INDEX: int = 100
 
 
-## 初始化卡牌控件的尺寸、排版、焦点与鼠标行为。
+## 初始化卡牌尺寸、视觉内容与独立输入信号。
 func _ready() -> void:
-	custom_minimum_size = Vector2(card_width, card_height)
-	size = Vector2(card_width, card_height)
-	clip_contents = true
-	text = ""
-	focus_mode = Control.FOCUS_NONE
-	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	pivot_offset = Vector2(card_width * 0.5, card_height * 0.5)
-	mouse_entered.connect(_on_mouse_entered)
-	mouse_exited.connect(_on_mouse_exited)
+	_card_body.size = get_card_size()
+	_input_area.size = get_card_size()
+	_input_area.activated.connect(pressed.emit)
+	_input_area.hover_started.connect(_on_mouse_entered)
+	_input_area.hover_finished.connect(_on_mouse_exited)
+	_input_area.drag_started.connect(card_drag_started.emit)
+	_input_area.configure(card_uid, is_interactable, create_drag_preview)
 	_refresh_card_content()
 	_refresh_visual_state()
+
+
+## 返回卡牌统一布局尺寸；容器和动画层通过该接口读取，不依赖 Control 根节点。
+func get_card_size() -> Vector2:
+	return Vector2(card_width, card_height)
+
+
+## 返回牌面在全局画布中的矩形；目标线和飞牌动画通过该接口取得中心点。
+func get_global_rect() -> Rect2:
+	return Rect2(global_position, get_card_size() * global_scale)
 
 
 ## 写入牌面快照和定义；该方法不保存完整对局状态，可在每次快照重建时安全调用。
@@ -102,21 +122,16 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	var rank_text: String = _rank_text(int(card.get("rank", 0)))
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
 	var display_name: String = GameSettings.resolve_card_name(definition)
-	# 卡牌类别文本；用于牌面底部帮助玩家快速区分基本牌、锦囊牌与装备牌。
+	# 卡牌类别文本；帮助玩家快速区分基本牌、锦囊牌与装备牌。
 	var type_text: String = _type_text(str(definition.get("type", "")))
 	_suit_rank_text = "%s%s" % [suit_text, rank_text]
 	_display_name_text = display_name
 	_card_type_text = "%s%s" % ["粮 · " if is_wooden_ox_card else "", type_text]
 	_category_color = _resolve_category_color(definition)
 	_artwork_texture = ArtworkLoader.load_from_definition(definition, ArtworkLoader.CARD_ART_FIELD)
-	tooltip_text = "%s\n%s" % [display_name, str(definition.get("description", ""))]
-	disabled = not is_interactable
-	add_theme_color_override("font_color", Color("553e31"))
-	add_theme_color_override("font_disabled_color", Color("806f62"))
-	add_theme_color_override("font_hover_color", Color("38271f"))
-	if str(card.get("suit", "")) == "heart" or str(card.get("suit", "")) == "diamond":
-		add_theme_color_override("font_color", Color("a63631"))
-		add_theme_color_override("font_hover_color", Color("7c211f"))
+	if is_node_ready():
+		_input_area.tooltip_text = "%s\n%s" % [display_name, str(definition.get("description", ""))]
+		_input_area.configure(card_uid, is_interactable, create_drag_preview)
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -125,54 +140,50 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 func set_selected_state(selected: bool) -> void:
 	is_card_selected = selected
 	_refresh_visual_state()
-	# 重叠手牌容器负责统一计算纵向抬升和 z_index；状态变化后请求一次集中布局，避免各牌分别覆盖位置。
+	# 重叠手牌容器负责统一计算纵向抬升和绘制层级。
 	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
 	if hand_layout != null:
 		hand_layout.refresh_card_states()
 
 
-## 提供 Godot 原生拖放数据；拖拽预览不会改变真实卡牌节点或权威状态。
-func _get_drag_data(_at_position: Vector2) -> Variant:
-	if not is_interactable or card_uid < 0:
-		return null
-	card_drag_started.emit(card_uid)
-	# 拖拽预览；使用轻量标签而非复制交互节点，避免预览参与输入。
-	var preview: Label = Label.new()
-	preview.custom_minimum_size = Vector2(card_width, card_height)
-	preview.text = "%s\n\n%s\n\n%s" % [_suit_rank_text, _display_name_text, _card_type_text]
-	preview.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	preview.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	preview.add_theme_font_size_override("font_size", 15)
-	preview.add_theme_color_override("font_color", Color("553e31"))
-	preview.add_theme_stylebox_override("normal", BattleUIStyle.make_panel(Color("f4ead5f2"), BattleUIStyle.ACCENT_COLOR, 3, 10))
-	set_drag_preview(preview)
-	return {"drag_type":"battle_card", "card_uid":card_uid}
+## 创建完整牌面的只读拖拽预览；复制的是视觉树，不包含输入区域或业务选择状态。
+func create_drag_preview() -> Control:
+	# 预览容器；尺寸与原牌一致，并忽略全部鼠标输入。
+	var preview: Control = Control.new()
+	preview.custom_minimum_size = get_card_size()
+	preview.size = get_card_size()
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 牌面视觉副本；保持插画、文字、边框和实体牌比例不变。
+	var body_preview: Panel = _card_body.duplicate() as Panel
+	body_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview.add_child(body_preview)
+	return preview
 
 
-## 根据选中、可交互与默认状态刷新牌面；所有状态共享同一尺寸以保持手牌稳定排列。
+## 根据选中、悬停与默认状态刷新同一张牌的纸张样式。
 func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
-	# 默认纸张颜色；木牛“粮”使用更偏青的纸色作为来源提示。
+	# 默认纸张颜色；木牛“粮”使用偏青纸色作为来源提示。
 	var paper_color: Color = Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4")
+	if _is_hovered and is_interactable:
+		paper_color = paper_color.lightened(0.08)
 	# 默认边框颜色；选中时改为高亮金色并增加描边宽度。
 	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_card_selected else _category_color
 	# 选中描边宽度；3像素在高分辨率下仍清晰，普通状态保持1像素。
-	var border_width: int = 3 if is_card_selected else 1
-	add_theme_stylebox_override("normal", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
-	add_theme_stylebox_override("hover", BattleUIStyle.make_inset_panel(paper_color.lightened(0.08), BattleUIStyle.ACCENT_COLOR, 2, 6))
-	add_theme_stylebox_override("pressed", BattleUIStyle.make_inset_panel(paper_color.darkened(0.05), BattleUIStyle.ACCENT_COLOR, 3, 6))
-	add_theme_stylebox_override("disabled", BattleUIStyle.make_inset_panel(paper_color.darkened(0.12), Color("655b50"), 1, 6))
-	# 普通容器沿用组件自身的抬升逻辑；无名杀式手牌由 DecadeHandContainer 统一摆放，避免 Container 重排覆盖位置。
+	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
+	if not is_interactable:
+		paper_color = paper_color.darkened(0.12)
+		border_color = Color("655b50")
+	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
 	if not (get_parent() is DecadeHandContainer):
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
-	if _accent_bar != null:
-		_accent_bar.color = _category_color
+	_accent_bar.color = _category_color
 
 
 ## 把缓存的牌面文本与插画写入子节点；可在 configure 早于 _ready 时安全重复调用。
 func _refresh_card_content() -> void:
-	if not is_node_ready() or _artwork_rect == null:
+	if not is_node_ready():
 		return
 	_artwork_rect.texture = _artwork_texture
 	_artwork_rect.visible = _artwork_texture != null
@@ -180,23 +191,27 @@ func _refresh_card_content() -> void:
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
-	# 红色花色沿用卡牌按钮的红色语义，黑色花色使用深褐色。
-	var content_color: Color = get_theme_color("font_color")
+	# 红色花色使用朱红文字，其他花色使用深褐文字。
+	var content_color: Color = Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31")
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
 
 
-## 鼠标进入可交互卡牌时播放轻量放大动画，并提高绘制层级避免被相邻手牌遮挡。
+## 鼠标进入可交互卡牌时播放轻量放大动画，并提高绘制层级。
 func _on_mouse_entered() -> void:
 	if not is_interactable:
 		return
+	_is_hovered = true
 	z_index = HOVER_Z_INDEX
+	_refresh_visual_state()
 	_start_hover_tween(Vector2.ONE * hover_scale)
 
 
-## 鼠标离开卡牌时恢复原始缩放和绘制层级，选中抬升状态保持不变。
+## 鼠标离开卡牌时恢复原始缩放和容器计算的绘制层级。
 func _on_mouse_exited() -> void:
-	# 无名杀式手牌需要恢复由容器计算的顺序；其他父级继续回到默认层级。
+	_is_hovered = false
+	_refresh_visual_state()
+	# 无名杀式手牌恢复由容器计算的顺序；其他父级回到默认层级。
 	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
 	if hand_layout != null:
 		hand_layout.refresh_card_states()
@@ -238,6 +253,6 @@ func _rank_text(rank: int) -> String:
 	return {1:"A", 11:"J", 12:"Q", 13:"K"}.get(rank, str(rank))
 
 
-## 将配置类别转换为简短中文标签，帮助玩家在小牌面上快速识别用途。
+## 将配置类别转换为简短中文标签，帮助玩家快速识别用途。
 func _type_text(card_type: String) -> String:
 	return {"basic":"基本牌", "trick":"锦囊牌", "equipment":"装备牌"}.get(card_type, "卡牌")

@@ -24,7 +24,7 @@ var processing_area: Array[CardInstance] = []
 ## 当前行动玩家 ID；无进行中的回合时为 -1。
 var current_player_id: int = -1
 
-## 当前阶段；可取 setup、start、judgment、draw、play、discard、finish、game_over。
+## 当前阶段；可取 setup、character_selection、start、judgment、draw、play、discard、finish、game_over。
 var current_phase: String = "setup"
 
 ## 已开始的回合总数；每名角色开始回合时递增，用于日志与同步序号。

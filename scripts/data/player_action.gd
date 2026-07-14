@@ -3,7 +3,7 @@ extends RefCounted
 
 ## 标准化玩家行为指令。人类 UI、内置 AI 与网络客户端必须通过同一结构向核心下发操作。
 
-## 指令类型；当前支持 use_card、recast_card、end_play、start_match。
+## 指令类型；当前支持 select_character、use_card、recast_card、store_wooden_ox 与 end_play。
 var action_type: String = ""
 
 ## 发出指令的玩家 ID；系统指令使用 -1。

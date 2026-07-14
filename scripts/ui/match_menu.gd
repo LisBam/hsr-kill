@@ -1,0 +1,71 @@
+class_name MatchMenu
+extends Control
+
+## 局内菜单组件。该组件只管理菜单显隐和下一局人数输入，通过信号请求桌面执行名称切换或重新开局。
+
+## 请求切换全局卡牌名称模式时发出的信号；实际设置仍由桌面统一调用 GameSettings。
+signal card_name_toggle_requested
+
+## 请求重新开局时发出的信号；参数为菜单中设置的下一局玩家人数。
+signal restart_requested(player_count: int)
+
+## 标准身份局最少玩家人数；默认2，与 IdentityRules 支持范围一致，运行时无需动态修改。
+@export_range(2, 10, 1) var minimum_player_count: int = 2
+
+## 标准身份局最多玩家人数；默认10，与 IdentityRules 支持范围一致，运行时无需动态修改。
+@export_range(2, 10, 1) var maximum_player_count: int = 10
+
+## 菜单打开按钮；右上角唯一常驻入口，文字固定为“菜单”。
+@onready var _menu_button: Button = %MenuButton
+
+## 菜单内容面板；默认隐藏，点击菜单按钮后切换可见性。
+@onready var _menu_panel: PanelContainer = %MenuPanel
+
+## 卡牌名称切换按钮；文字显示当前使用的名称体系。
+@onready var _card_name_button: Button = %MenuCardNameButton
+
+## 下一局人数输入框；只保存未来重开参数，不修改当前对局座次。
+@onready var _player_count_input: SpinBox = %NextPlayerCountInput
+
+## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
+@onready var _restart_button: Button = %MenuRestartButton
+
+
+## 初始化菜单信号、人数范围和默认关闭状态。
+func _ready() -> void:
+	_menu_button.pressed.connect(_toggle_menu)
+	_card_name_button.pressed.connect(card_name_toggle_requested.emit)
+	_restart_button.pressed.connect(_request_restart)
+	_player_count_input.min_value = minimum_player_count
+	_player_count_input.max_value = maximum_player_count
+	_player_count_input.step = 1.0
+	_menu_panel.visible = false
+	refresh_card_name_text()
+
+
+## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。
+func set_next_player_count(player_count: int) -> void:
+	_player_count_input.value = clampi(player_count, minimum_player_count, maximum_player_count)
+
+
+## 返回菜单中设置的下一局人数；始终限制在标准身份局2至10人范围。
+func get_next_player_count() -> int:
+	return clampi(int(_player_count_input.value), minimum_player_count, maximum_player_count)
+
+
+## 按全局名称模式刷新菜单按钮文字，不创建第二份名称状态。
+func refresh_card_name_text() -> void:
+	if not is_node_ready():
+		return
+	_card_name_button.text = "卡牌名称：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "卡牌名称：三国杀"
+
+
+## 切换菜单面板显隐；当前对局继续运行，不改变任何规则状态。
+func _toggle_menu() -> void:
+	_menu_panel.visible = not _menu_panel.visible
+
+
+## 发出携带下一局人数的重开请求，并关闭菜单避免遮挡新一局选将界面。
+func _request_restart() -> void:
+	_menu_panel.visible = false
+	restart_requested.emit(get_next_player_count())

@@ -44,11 +44,11 @@ func refresh_card_states() -> void:
 
 ## 按参考实现的 updateHand 算法排列手牌：空间足够时完整展开，不足时等距覆盖，达到最小露出宽度后允许横向滚动。
 func _layout_cards() -> void:
-	# 当前参与布局的可见卡牌；非 Control 子节点和隐藏辅助节点不会占用手牌宽度。
-	var cards: Array[Control] = []
+	# 当前参与布局的可见卡牌；卡牌根节点统一为 Node2D，不依赖按钮或 Control 布局属性。
+	var cards: Array[CardView] = []
 	for child: Node in get_children():
-		if child is Control and (child as Control).visible:
-			cards.append(child as Control)
+		if child is CardView and (child as CardView).visible:
+			cards.append(child as CardView)
 	# 父级滚动视口的可见宽度；初始化阶段无有效尺寸时至少按一张牌宽处理。
 	var parent_control: Control = get_parent() as Control
 	# 当前可用于摆放手牌的宽度；扣除两侧安全边距后计算相邻牌步长。
@@ -69,11 +69,10 @@ func _layout_cards() -> void:
 	# 卡牌基础纵坐标；底部对齐并为选中抬升预留顶部空间。
 	var base_y: float = maxf(content_height - card_size.y, selected_lift)
 	for card_index: int in range(cards.size()):
-		# 当前卡牌节点；CardView 可额外提供选中状态，其余 Control 按普通卡牌布局。
-		var card: Control = cards[card_index]
+		# 当前卡牌节点；Node2D 根只表达实体牌本身，透明输入组件跟随其整体移动。
+		var card: CardView = cards[card_index]
 		# 当前卡牌是否处于选中状态；只影响位置和绘制层级，不代表规则合法。
-		var selected: bool = card is CardView and (card as CardView).is_card_selected
-		# 当前卡牌矩形；所有卡牌保持同一尺寸，选中卡牌仅上移而不挤压相邻牌。
-		var card_rect: Rect2 = Rect2(Vector2(horizontal_padding + card_step * float(card_index), base_y - (selected_lift if selected else 0.0)), card_size)
-		fit_child_in_rect(card, card_rect)
+		var selected: bool = card.is_card_selected
+		# 当前卡牌位置；所有牌保持相同尺寸，选中牌仅上移而不挤压相邻牌。
+		card.position = Vector2(horizontal_padding + card_step * float(card_index), base_y - (selected_lift if selected else 0.0))
 		card.z_index = cards.size() + card_index if selected else card_index

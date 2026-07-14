@@ -5,6 +5,9 @@ extends Control
 ## 游戏内座位容器场景；运行时把独立座次标签放在武将牌下方，不把标签混入武将牌编辑场景。
 const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/player_seat_slot.tscn")
 
+## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
+const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -32,17 +35,17 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 中央阶段徽记；使用大号中文阶段名强化当前流程辨识。
 @onready var center_phase_label: Label = %CenterPhaseLabel
 
-## 卡牌名称模式按钮；点击后切换自定义名与原版名。
-@onready var name_mode_button: Button = %NameModeButton
+## 右上角局内菜单组件；统一管理牌名切换、重新开局与下一局人数设置。
+@onready var match_menu: MatchMenu = %MatchMenu
+
+## 选将遮罩组件；只渲染裁剪后的候选快照并发出稳定武将 ID 选择请求。
+@onready var character_selection_panel: CharacterSelectionPanel = %CharacterSelectionPanel
 
 ## 其他玩家与本地玩家状态卡容器；每次快照整体重建以避免状态残留。
 @onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
 @onready var equipment_label: Label = %EquipmentLabel
-
-## 卡牌场景内置模板；手牌与木牛“粮”均复制该节点，避免外部 PackedScene 依赖。
-@onready var card_template: CardView = $CardTemplate
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
@@ -115,14 +118,17 @@ func _ready() -> void:
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
 	match_controller.card_presentation_requested.connect(_on_card_presentation_requested)
+	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
-	name_mode_button.pressed.connect(_on_name_mode_pressed)
+	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
+	match_menu.restart_requested.connect(_on_restart_requested)
+	match_menu.set_next_player_count(match_controller.default_player_count)
+	character_selection_panel.character_selected.connect(_on_character_selected)
 	use_button.pressed.connect(_on_use_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)
 	wooden_ox_button.pressed.connect(_on_wooden_ox_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
-	%RestartButton.pressed.connect(_on_restart_pressed)
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	_refresh_name_mode_button()
@@ -145,7 +151,6 @@ func _create_local_player_card() -> void:
 	# 本地座次标签实例；只属于游戏内座位容器，文本会在收到玩家快照后写入。
 	local_player_seat_label = local_player_seat_slot.get_node("Seat") as Label
 	local_player_card.visible = true
-	local_player_card.mouse_filter = Control.MOUSE_FILTER_STOP
 	local_player_seat_slot.z_index = 12
 	local_player_seat_slot.anchor_left = 1.0
 	local_player_seat_slot.anchor_top = 1.0
@@ -165,6 +170,8 @@ func _create_local_player_card() -> void:
 ## 接收本地裁剪快照并刷新全部桌面区域。
 func _on_state_changed(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
+	if str(_snapshot.get("current_phase", "")) != "character_selection":
+		character_selection_panel.close()
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
 	error_label.text = ""
@@ -248,7 +255,9 @@ func _layout_opponent_players() -> void:
 	var opponent_views: Array[Control] = []
 	for player_view_variant: Variant in _player_views.values():
 		# 当前武将牌的父容器；容器同时承载独立座次标签，因此环桌布局移动容器而不是牌面本身。
-		var player_seat_slot: Control = (player_view_variant as Control).get_parent() as Control
+		var player_view: PlayerTargetView = player_view_variant as PlayerTargetView
+		# 当前武将牌所属座位容器；Node2D 牌面只提供表现，Control 容器继续负责响应式环桌布局。
+		var player_seat_slot: Control = player_view.get_parent() as Control
 		if player_seat_slot != null:
 			opponent_views.append(player_seat_slot)
 	# 对局总人数；座次布局器用该数值选择与无名杀一致的二至十人位置模板。
@@ -311,10 +320,9 @@ func _render_local_hand() -> void:
 		var card: Dictionary = card_variant as Dictionary
 		# 当前手牌定义；用于双名称与类型提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
-		# 当前手牌按钮；独立卡牌组件负责牌面、选中反馈与拖拽数据，点击只改变界面选择状态。
-		var card_button: CardView = card_template.duplicate() as CardView
+		# 当前手牌节点；正式卡牌场景负责牌面表现，独立输入区域只改变界面选择状态。
+		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		card_button.visible = true
-		card_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		# 当前实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, false, can_act)
@@ -327,10 +335,9 @@ func _render_local_hand() -> void:
 		var card: Dictionary = card_variant as Dictionary
 		# 当前“粮”定义；用于双名称与规则提示。
 		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
-		# 当前“粮”按钮；与普通手牌共用选择 UID、卡牌视觉与使用牌动作。
-		var card_button: CardView = card_template.duplicate() as CardView
+		# 当前“粮”卡牌节点；与普通手牌共用选择 UID、卡牌视觉与使用牌动作。
+		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		card_button.visible = true
-		card_button.mouse_filter = Control.MOUSE_FILTER_STOP
 		# 当前“粮”的实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
 		card_button.configure(card, definition, true, can_act)
@@ -345,37 +352,6 @@ func _render_local_hand() -> void:
 	%CancelButton.visible = false
 	recast_button.visible = false
 	wooden_ox_button.visible = false
-
-
-## 返回玩家状态卡的多行文本。
-func _format_player_card(player: Dictionary) -> String:
-	# 武将稳定 ID；统一交由数据仓库解析中文显示名，避免展示层直接使用英文 ID。
-	var character_id: String = str(player.get("character_id", ""))
-	# 装备显示名称数组；装备区属于公共信息。
-	var equipment_names: Array[String] = []
-	for card_variant: Variant in (player.get("equipment", {}) as Dictionary).values():
-		# 当前装备快照；通过配置 ID 解析名称。
-		var card: Dictionary = card_variant as Dictionary
-		equipment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(card.get("definition_id", "")))))
-	# 判定区显示名称数组；按结算顺序展示。
-	var judgment_names: Array[String] = []
-	for card_variant: Variant in player.get("judgment_area", []):
-		# 当前延时锦囊快照；通过配置 ID 解析名称。
-		var card: Dictionary = card_variant as Dictionary
-		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(card.get("definition_id", "")))))
-	return "%s｜%s\n%s｜%s %d/%d\n手牌 %d｜粮 %d｜%s\n装：%s\n判：%s" % [
-		str(player.get("display_name", "玩家")),
-		GameDatabase.resolve_character_name(character_id),
-		_identity_text(str(player.get("identity", "hidden"))),
-		_hp_pips(int(player.get("hp", 0)), int(player.get("max_hp", 0))),
-		int(player.get("hp", 0)),
-		int(player.get("max_hp", 0)),
-		int(player.get("hand_count", 0)),
-		int(player.get("wooden_ox_storage_count", 0)),
-		"横置" if bool(player.get("chained", false)) else "重置",
-		"、".join(equipment_names) if not equipment_names.is_empty() else "无",
-		"、".join(judgment_names) if not judgment_names.is_empty() else "无",
-	]
 
 
 ## 返回左下装备区的固定槽位文本；其他玩家装备仍直接显示在其武将牌状态中。
@@ -402,15 +378,6 @@ func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
 	var card: Dictionary = equipment.get(slot, {}) as Dictionary
 	return GameSettings.resolve_card_name(GameDatabase.get_card(str(card.get("definition_id", ""))))
-
-
-## 根据当前体力与上限生成紧凑心形体力标记；最多显示10格以匹配当前人数规则的可读空间。
-func _hp_pips(hp: int, max_hp: int) -> String:
-	# 可视化体力上限；限制为0至10，避免未来异常数据撑破角色卡布局。
-	var visible_max_hp: int = clampi(max_hp, 0, 10)
-	# 可视化当前体力；负数按0显示，超过上限时按上限显示。
-	var visible_hp: int = clampi(hp, 0, visible_max_hp)
-	return "♥".repeat(visible_hp) + "♡".repeat(visible_max_hp - visible_hp)
 
 
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
@@ -531,22 +498,36 @@ func _on_name_mode_pressed() -> void:
 
 ## 响应名称模式变化并重新渲染现有快照。
 func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
-	_refresh_name_mode_button()
+	match_menu.refresh_card_name_text()
 	if not _snapshot.is_empty():
 		_render_players()
 		_render_local_hand()
 		_refresh_selection_text()
 
 
-## 更新名称模式按钮文字，明确下一次点击的切换方向。
+## 更新菜单内名称模式文字，保证所有卡牌显示入口共用同一全局设置。
 func _refresh_name_mode_button() -> void:
-	name_mode_button.text = "牌名：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "牌名：三国杀"
+	match_menu.refresh_card_name_text()
 
 
-## 清空日志并启动一局新的默认配置对局。
-func _on_restart_pressed() -> void:
+## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
+func _on_restart_requested(player_count: int) -> void:
 	log_view.clear()
-	match_controller.start_match()
+	match_controller.default_player_count = player_count
+	match_controller.start_match(player_count)
+
+
+## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
+func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
+	character_selection_panel.bind_snapshot(selection_snapshot)
+
+
+## 把选将界面的稳定武将 ID 封装为标准动作，并交由权威控制器再次校验。
+func _on_character_selected(character_id: String) -> void:
+	# 选将动作；payload 只存放可序列化武将 ID，支持网络、回放和 AI 共用。
+	var action: PlayerAction = PlayerAction.new("select_character", match_controller.local_human_player_id)
+	action.payload = {"character_id":character_id}
+	match_controller.submit_action(action)
 
 
 ## 追加一条规则日志并自动滚动到底部。
@@ -557,10 +538,8 @@ func _on_log_added(message: String) -> void:
 
 ## 接收规则核心的只读卡牌展示请求，并把玩家视图位置转换为动画层局部坐标。
 func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, target_ids: Array[int]) -> void:
-	# 卡牌定义；只用于解析当前名称模式下的显示名，不参与效果判断。
+	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
 	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
-	# 卡牌显示名；定义缺失时保留可诊断的稳定配置 ID。
-	var card_name: String = GameSettings.resolve_card_name(definition) if not definition.is_empty() else str(card_data.get("definition_id", "未知牌"))
 	# 动画起点；本地玩家使用底部状态区，其他玩家使用对应角色卡中心。
 	var start_position: Vector2 = _get_player_animation_position(actor_id)
 	# 中央弃牌区落点；所有正常使用牌先飞向该位置展示，装备或延时锦囊的最终规则区域不受影响。
@@ -569,7 +548,14 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	var target_positions: Array[Vector2] = []
 	for target_id: int in target_ids:
 		target_positions.append(_get_player_animation_position(target_id))
-	card_use_animation_layer.play_card(card_name, str(card_data.get("suit", "none")), int(card_data.get("rank", 0)), start_position, discard_position, target_positions)
+	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
+	var animated_card: CardView = _card_views.get(int(card_data.get("uid", -1))) as CardView
+	if animated_card == null:
+		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
+		animated_card.configure(card_data, definition, false, false)
+		card_use_animation_layer.add_child(animated_card)
+		animated_card.position = start_position - animated_card.get_card_size() * 0.5
+	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions)
 
 
 ## 返回指定玩家在牌桌上的动画锚点；本地玩家固定使用底部面板中心。
@@ -722,24 +708,9 @@ func _clear_container(container: Node) -> void:
 
 ## 将阶段 ID 转换为中文界面文本。
 func _phase_text(phase: String) -> String:
-	return {"setup":"准备", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
+	return {"setup":"准备", "character_selection":"选将阶段", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
 
 
 ## 返回一至十号座次的中文数字；座次标签属于游戏内座位容器，超出当前模式上限时回退阿拉伯数字。
 func _seat_text(seat_number: int) -> String:
 	return {1:"一", 2:"二", 3:"三", 4:"四", 5:"五", 6:"六", 7:"七", 8:"八", 9:"九", 10:"十"}.get(seat_number, str(seat_number))
-
-
-## 将身份 ID 转换为中文界面文本。
-func _identity_text(identity: String) -> String:
-	return {"lord":"主公", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸", "hidden":"未知身份"}.get(identity, identity)
-
-
-## 将花色 ID 转换为牌面符号。
-func _suit_symbol(suit: String) -> String:
-	return {"spade":"♠", "heart":"♥", "club":"♣", "diamond":"♦"}.get(suit, "?")
-
-
-## 将点数转换为牌面字符。
-func _rank_text(rank: int) -> String:
-	return {1:"A", 11:"J", 12:"Q", 13:"K"}.get(rank, str(rank))

@@ -10,6 +10,8 @@ AI 不持有 `GameState` 的可变引用。每次需要行动时，控制器执�
 4. AI 策略只返回动作字典。
 5. 动作重新转换为 `PlayerAction`，进入与人类玩家相同的 `submit_action` 校验入口。
 
+选将阶段由 `MatchController` 查询 `CharacterSelectionService` 的待确认玩家。基础 AI 从自己的随机候选列表选择首项，并构造 `select_character` 动作；主公 AI 先确认并亮将，其他 AI 只在阶段推进后同时确认。AI 不直接写入玩家武将或体力，也不能读取其他玩家未公开的候选和选择。
+
 这保证 AI 即使读取全局身份、全部手牌、装备和阶段，也不能绕过次数、距离、目标或区域规则。
 
 ## 当前基础策略
@@ -32,5 +34,6 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 
 - `ai_action_delay_seconds` 默认 0.35 秒，仅控制展示节奏。
 - `max_ai_actions_per_turn` 默认 64，超过后强制结束出牌阶段。
+- `character_candidate_count` 默认 5；基础 AI 只在自己的候选列表内选将，该数量不影响出牌阶段动作上限。
 - `_ai_drive_token` 在阶段变化时递增，旧计时器不会在新阶段误操作。
 - 固定对局随机种子可用于复盘和回归测试。

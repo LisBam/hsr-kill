@@ -11,6 +11,9 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 游戏内座位容器场景；测试验证座次标签只在运行时容器中出现并位于武将牌正下方。
 const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/player_seat_slot.tscn")
 
+## 正式卡牌场景；测试验证根节点是 Node2D 且保留108×148实体牌尺寸。
+const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
 
@@ -100,6 +103,48 @@ func _run() -> void:
 		printerr("SMOKE_FAIL identity_distribution_8")
 		get_tree().quit(1)
 		return
+	# 纯数据选将服务；验证主公先选、默认5张候选、其他玩家同时确认和完成前隐藏选择。
+	var selection_service: CharacterSelectionService = CharacterSelectionService.new()
+	# 测试选将随机源；固定种子保证候选断言可复现且不依赖系统时间。
+	var selection_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	selection_rng.seed = 20260715
+	# 测试玩家状态；0号主公先选，1号和2号代表随后同时选将的其他玩家。
+	var selection_players: Array[PlayerState] = [PlayerState.new(0, "主公"), PlayerState.new(1, "玩家二"), PlayerState.new(2, "玩家三")]
+	selection_players[0].identity = "lord"
+	selection_players[1].identity = "loyalist"
+	selection_players[2].identity = "rebel"
+	# 测试武将 ID 数组；使用正式数据库全部武将，候选数量应恰好为默认5张且单列表不重复。
+	var selection_character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		selection_character_ids.append(str(character_id_variant))
+	if not selection_service.begin(selection_players, selection_character_ids, 5, selection_rng).is_empty():
+		printerr("SMOKE_FAIL character_selection_begin")
+		get_tree().quit(1)
+		return
+	var lord_candidates: Array[String] = selection_service.get_candidates(0)
+	if selection_service.phase != CharacterSelectionService.PHASE_LORD or lord_candidates.size() != 5 or selection_service.can_player_select(1):
+		printerr("SMOKE_FAIL character_selection_lord_phase")
+		get_tree().quit(1)
+		return
+	# 主公确认候选首项后立即进入其他玩家同时选将阶段，并在所有观察者快照中公开主公武将。
+	var selected_lord_character_id: String = lord_candidates[0]
+	if not selection_service.select_character(0, selected_lord_character_id).is_empty() or selection_service.phase != CharacterSelectionService.PHASE_OTHERS or str(selection_service.to_dict(2).get("lord_character_id", "")) != selected_lord_character_id:
+		printerr("SMOKE_FAIL character_selection_lord_reveal")
+		get_tree().quit(1)
+		return
+	# 玩家二确认后，玩家三只能看到完成状态而不能看到玩家二具体选择；全员完成前阶段不得结束。
+	var player_two_choice: String = selection_service.get_candidates(1)[0]
+	selection_service.select_character(1, player_two_choice)
+	var player_three_snapshot: Dictionary = selection_service.to_dict(2)
+	if selection_service.phase != CharacterSelectionService.PHASE_OTHERS or player_three_snapshot.has("selections_by_player") or str(player_three_snapshot.get("local_selected_character_id", "")) == player_two_choice:
+		printerr("SMOKE_FAIL character_selection_hidden_choices")
+		get_tree().quit(1)
+		return
+	selection_service.select_character(2, selection_service.get_candidates(2)[0])
+	if selection_service.phase != CharacterSelectionService.PHASE_COMPLETE:
+		printerr("SMOKE_FAIL character_selection_complete")
+		get_tree().quit(1)
+		return
 	# 无名杀式手牌布局组件；实例化用于保证全局类、导出参数和基础显示数值可被无头环境解析。
 	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
 	if hand_layout.card_size != Vector2(108.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
@@ -107,20 +152,21 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	hand_layout.free()
-	# 可编辑武将牌场景实例；场景资源自身必须直接保存完整最终几何信息，脚本不得在运行时修改静态尺寸。
+	# 可编辑武将牌场景实例；根节点必须是 Node2D，固定牌面尺寸由 card_size 与子视觉节点共同表达。
 	var player_card_template: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	# 入树前的静态预览体力圆点数量；场景应预置三绿一暗共4枚，正式运行后会按快照重建。
 	var static_preview_health_pip_count: int = (player_card_template.get_node("HealthPips") as VBoxContainer).get_child_count()
-	if player_card_template.custom_minimum_size != Vector2(135.7, 197.8) or player_card_template.size != Vector2(135.7, 197.8):
-		printerr("SMOKE_FAIL player_card_native_scene_size minimum=%s size=%s" % [player_card_template.custom_minimum_size, player_card_template.size])
+	if player_card_template.get_class() != "Node2D" or player_card_template.card_size != Vector2(135.7, 197.8):
+		printerr("SMOKE_FAIL player_card_node2d size=%s" % player_card_template.card_size)
 		get_tree().quit(1)
 		return
 	player_card_template.visible = true
-	player_card_template.mouse_filter = Control.MOUSE_FILTER_STOP
 	get_tree().root.add_child(player_card_template)
 	await get_tree().process_frame
-	if player_card_template.custom_minimum_size != Vector2(135.7, 197.8) or player_card_template.size != Vector2(135.7, 197.8):
-		printerr("SMOKE_FAIL player_card_runtime_size minimum=%s size=%s" % [player_card_template.custom_minimum_size, player_card_template.size])
+	# 武将牌独立输入区域；必须覆盖完整牌面，保证 Node2D 根节点不依赖按钮继承处理点击与拖放。
+	var player_card_input_area: PlayerTargetInputArea = player_card_template.get_node("InputArea") as PlayerTargetInputArea
+	if player_card_template.card_size != Vector2(135.7, 197.8) or (player_card_template.get_node("CardBody") as Panel).size != Vector2(135.7, 197.8) or player_card_input_area.size != Vector2(135.7, 197.8):
+		printerr("SMOKE_FAIL player_card_runtime_size=%s" % player_card_template.card_size)
 		get_tree().quit(1)
 		return
 	# 编辑器武将牌预览；座次不属于牌面节点树，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
@@ -148,8 +194,8 @@ func _run() -> void:
 	var runtime_seat: Label = player_seat_slot.get_node("Seat") as Label
 	# 容器内复用的武将牌；尺寸必须继续保持统一的135.7×197.8像素规格。
 	var runtime_player_card: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
-	if player_seat_slot.size != Vector2(135.7, 223.8) or runtime_player_card.size != Vector2(135.7, 197.8) or runtime_seat.position != Vector2(0.0, 197.8) or runtime_seat.size != Vector2(135.7, 26.0) or runtime_seat.get_theme_font_size("font_size") != 18:
-		printerr("SMOKE_FAIL player_seat_slot_layout slot=%s card=%s seat_position=%s seat_size=%s seat_font=%d" % [player_seat_slot.size, runtime_player_card.size, runtime_seat.position, runtime_seat.size, runtime_seat.get_theme_font_size("font_size")])
+	if player_seat_slot.size != Vector2(135.7, 223.8) or runtime_player_card.card_size != Vector2(135.7, 197.8) or runtime_seat.position != Vector2(0.0, 197.8) or runtime_seat.size != Vector2(135.7, 26.0) or runtime_seat.get_theme_font_size("font_size") != 18:
+		printerr("SMOKE_FAIL player_seat_slot_layout slot=%s card=%s seat_position=%s seat_size=%s seat_font=%d" % [player_seat_slot.size, runtime_player_card.card_size, runtime_seat.position, runtime_seat.size, runtime_seat.get_theme_font_size("font_size")])
 		get_tree().quit(1)
 		return
 	get_tree().root.remove_child(player_seat_slot)
@@ -160,8 +206,8 @@ func _run() -> void:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
 		return
-	# 武将牌固定尺寸；装备、名称和体力等内容只能在牌面内裁切，不能反向撑大角色卡。
-	if player_card_view.size != Vector2(135.7, 197.8) or player_card_view.custom_minimum_size != Vector2(135.7, 197.8) or not player_card_view.clip_contents:
+	# 武将牌固定尺寸；装备、名称和体力等内容只在正式牌面子节点中渲染，根节点保持 Node2D。
+	if player_card_view.card_size != Vector2(135.7, 197.8) or (player_card_view.get_node("CardBody") as Panel).size != Vector2(135.7, 197.8):
 		printerr("SMOKE_FAIL player_card_fixed_size")
 		get_tree().quit(1)
 		return
@@ -204,7 +250,7 @@ func _run() -> void:
 		return
 	get_tree().root.remove_child(player_card_view)
 	player_card_view.free()
-	# 主场景预览实例；只读取内置卡牌模板，不进入场景树以避免启动正式对局。
+	# 主场景预览实例；只读取菜单与控制器默认参数，不进入场景树以避免启动正式对局。
 	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
 	# 主场景对局控制器；直接运行场景时由该节点的导出默认值决定开局人数。
 	var main_scene_match_controller: MatchController = main_scene_preview.get_node("MatchController") as MatchController
@@ -212,15 +258,21 @@ func _run() -> void:
 		printerr("SMOKE_FAIL default_player_count=%d" % main_scene_match_controller.default_player_count)
 		get_tree().quit(1)
 		return
-	# 内置卡牌模板；手牌与木牛“粮”均从主场景中该节点复制。
-	var card_template: CardView = main_scene_preview.get_node("CardTemplate") as CardView
-	# 卡牌组件实例；验证主场景内置模板可以复制并保留标准尺寸参数。
-	var card_view: CardView = card_template.duplicate() as CardView
-	if not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.custom_minimum_size != Vector2(108.0, 148.0):
-		printerr("SMOKE_FAIL card_template_defaults")
+	# 正式卡牌组件实例；验证根节点为 Node2D、牌面模型尺寸为108×148且不再继承按钮。
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 卡牌独立输入区域；场景静态尺寸必须与正式牌面一致，进入任意容器后都能保持完整命中范围。
+	var card_input_area: CardInputArea = card_view.get_node("InputArea") as CardInputArea
+	if card_view.get_class() != "Node2D" or not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.get_card_size() != Vector2(108.0, 148.0) or card_input_area.size != Vector2(108.0, 148.0):
+		printerr("SMOKE_FAIL card_view_node2d_defaults")
 		get_tree().quit(1)
 		return
 	card_view.free()
+	# 右上角菜单组件；替代独立牌名和重开按钮，并默认保存8人作为下一局配置。
+	var menu_button: Button = main_scene_preview.get_node("%MenuButton") as Button
+	if menu_button.text != "菜单" or main_scene_preview.has_node("%NameModeButton") or main_scene_preview.has_node("%RestartButton"):
+		printerr("SMOKE_FAIL match_menu_structure")
+		get_tree().quit(1)
+		return
 	main_scene_preview.free()
 	# 逻辑视口宽度；保持1280像素作为全部场景坐标和布局文档的统一设计基准。
 	var viewport_width: int = int(ProjectSettings.get_setting("display/window/size/viewport_width", 0))
