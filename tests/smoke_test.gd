@@ -2,8 +2,11 @@ extends Node
 
 ## 无界面烟雾测试：校验数据规模，并让四名基础 AI 通过统一动作入口运行若干帧。
 
-## 主战斗场景；测试从其内置模板复制武将牌与卡牌，确保项目不依赖额外组件场景。
+## 主战斗场景；测试从其内置卡牌模板复制手牌，并验证桌面节点结构。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
+
+## 可编辑武将牌场景；测试直接实例化正式资源，确保编辑器所见尺寸与游戏实例一致。
+const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
@@ -108,12 +111,14 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	battle_layout.free()
-	# 主场景预览实例；只读取内置模板，不进入场景树以避免启动正式对局。
-	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
-	# 内置武将牌模板；所有动态武将牌均由该节点复制，场景中不再引用独立组件资源。
-	var player_card_template: PlayerTargetView = main_scene_preview.get_node("PlayerTargetTemplate") as PlayerTargetView
-	# 统一武将牌组件；从主场景模板复制，用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
-	var player_card_view: PlayerTargetView = player_card_template.duplicate() as PlayerTargetView
+	# 可编辑武将牌场景实例；场景默认尺寸必须与常规对手武将牌一致，避免编辑器与对局牌面尺寸脱节。
+	var player_card_template: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	if player_card_template.custom_minimum_size != Vector2(118.0, 172.0) or player_card_template.size != Vector2(118.0, 172.0) or not is_equal_approx(player_card_template.panel_width, 118.0) or not is_equal_approx(player_card_template.panel_height, 172.0):
+		printerr("SMOKE_FAIL player_card_template_size")
+		get_tree().quit(1)
+		return
+	# 统一武将牌组件；直接使用场景实例，用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
+	var player_card_view: PlayerTargetView = player_card_template
 	if not is_equal_approx(player_card_view.seat_label_height, 18.0) or not is_equal_approx(player_card_view.equipment_row_height, 18.0) or player_card_view.maximum_equipment_rows != 5:
 		printerr("SMOKE_FAIL player_card_reference_layout_defaults")
 		get_tree().quit(1)
@@ -163,6 +168,8 @@ func _run() -> void:
 		return
 	get_tree().root.remove_child(player_card_view)
 	player_card_view.free()
+	# 主场景预览实例；只读取内置卡牌模板，不进入场景树以避免启动正式对局。
+	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
 	# 内置卡牌模板；手牌与木牛“粮”均从主场景中该节点复制。
 	var card_template: CardView = main_scene_preview.get_node("CardTemplate") as CardView
 	# 卡牌组件实例；验证主场景内置模板可以复制并保留标准尺寸参数。
