@@ -123,6 +123,11 @@ func _run() -> void:
 	player_card_view.mouse_filter = Control.MOUSE_FILTER_STOP
 	get_tree().root.add_child(player_card_view)
 	await get_tree().process_frame
+	# 武将牌固定尺寸；装备、名称和体力等内容只能在牌面内裁切，不能反向撑大角色卡。
+	if player_card_view.size != Vector2(118.0, 172.0) or player_card_view.custom_minimum_size != Vector2(118.0, 172.0) or not player_card_view.clip_contents:
+		printerr("SMOKE_FAIL player_card_fixed_size")
+		get_tree().quit(1)
+		return
 	# 带装备的角色牌测试快照；两件公开装备分别覆盖武器与防具槽，用于验证横条实际生成数量。
 	var equipped_player_snapshot: Dictionary = {
 		"player_id":1,
@@ -162,7 +167,7 @@ func _run() -> void:
 	var card_template: CardView = main_scene_preview.get_node("CardTemplate") as CardView
 	# 卡牌组件实例；验证主场景内置模板可以复制并保留标准尺寸参数。
 	var card_view: CardView = card_template.duplicate() as CardView
-	if not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0):
+	if not is_equal_approx(card_view.card_width, 108.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.custom_minimum_size != Vector2(108.0, 148.0):
 		printerr("SMOKE_FAIL card_template_defaults")
 		get_tree().quit(1)
 		return

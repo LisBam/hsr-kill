@@ -93,6 +93,8 @@ var _player_snapshot: Dictionary = {}
 ## 初始化角色卡尺寸、文本布局和指针反馈。
 func _ready() -> void:
 	custom_minimum_size = Vector2(panel_width, panel_height)
+	size = Vector2(panel_width, panel_height)
+	clip_contents = true
 	focus_mode = Control.FOCUS_NONE
 	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -136,6 +138,7 @@ func apply_panel_size(target_size: Vector2) -> void:
 	panel_height = target_size.y
 	custom_minimum_size = target_size
 	size = target_size
+	clip_contents = true
 	if _artwork_rect == null:
 		return
 	_artwork_rect.position = Vector2(4.0, 4.0)
