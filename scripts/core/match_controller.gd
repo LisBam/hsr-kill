@@ -9,6 +9,9 @@ signal action_rejected(message: String)
 signal match_finished(winner: String)
 signal card_presentation_requested(card_data: Dictionary, actor_id: int, target_ids: Array[int])
 
+## 选将快照变化信号；只包含观察者可见候选、公开主公武将和全员确认状态。
+signal character_selection_changed(snapshot: Dictionary)
+
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
 @export var default_deck_id: String = "standard_161"
 
@@ -23,6 +26,9 @@ signal card_presentation_requested(card_data: Dictionary, actor_id: int, target_
 
 ## 单个 AI 出牌阶段最多执行的动作数；默认64用于防止扩展牌循环导致界面停滞。
 @export_range(1, 256, 1) var max_ai_actions_per_turn: int = 64
+
+## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
+@export_range(1, 20, 1) var character_candidate_count: int = 5
 
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
 var state: GameState
@@ -45,6 +51,9 @@ var ai_coordinator: AICoordinator
 ## 通信网关组件；离线模式回环，LAN/REMOTE 模式交给外部传输适配器。
 var network_gateway: NetworkGateway
 
+## 当前选将规则服务；负责候选、阶段与隐藏选择，不接触卡牌规则或界面节点。
+var character_selection: CharacterSelectionService
+
 ## 对局随机数生成器；牌堆、身份与武将选择统一使用，便于未来记录种子回放。
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -53,6 +62,9 @@ var _ai_actions_this_turn: int = 0
 
 ## AI 延迟任务令牌；任何阶段切换都会递增，使旧的异步回调自动失效。
 var _ai_drive_token: int = 0
+
+## 当前是否正在批量驱动 AI 选将；防止阶段推进时递归处理旧待选列表并产生重复提交。
+var _is_driving_character_selection: bool = false
 
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
@@ -85,22 +97,50 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	state.deck_id = default_deck_id
 	card_rules = CardRuleService.new(state)
 	effect_resolver = CardEffectResolver.new(self, state)
+	character_selection = CharacterSelectionService.new()
 	_ai_drive_token += 1
 	_ai_actions_this_turn = 0
 	ai_coordinator._policies.clear()
 
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
-	for player: PlayerState in state.players:
-		draw_cards(player.player_id, 4, false)
-
-	# 主公状态；标准身份局开局从主公座次开始首回合。
-	var lord: PlayerState = _find_player_by_identity("lord")
-	if lord == null:
-		action_rejected.emit("身份配置缺少主公。")
+	state.current_phase = "character_selection"
+	# 可用武将 ID；服务只持有字符串副本，不接触全局配置的可修改引用。
+	var available_character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		available_character_ids.append(str(character_id_variant))
+	# 选将初始化错误；空字符串表示主公候选已生成。
+	var selection_error: String = character_selection.begin(state.players, available_character_ids, character_candidate_count, _rng)
+	if not selection_error.is_empty():
+		action_rejected.emit(selection_error)
 		return false
-	add_log("对局开始：%d名玩家，牌堆%d张。" % [actual_player_count, state.draw_pile.size()])
-	_start_turn(lord.player_id)
+	add_log("选将开始：主公先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
+	_emit_state()
+	_drive_ai_character_selection()
+	return true
+
+
+## 提交一名玩家的选将结果；所有人类、AI与网络入口共用相同阶段和候选校验。
+func select_character(player_id: int, character_id: String) -> bool:
+	if state == null or state.game_over or state.current_phase != "character_selection" or character_selection == null:
+		return _reject("当前不在选将阶段。")
+	# 选将服务返回的校验错误；空字符串表示选择已经记录并可能推进阶段。
+	var selection_error: String = character_selection.select_character(player_id, character_id)
+	if not selection_error.is_empty():
+		return _reject(selection_error)
+	state.action_sequence += 1
+	if player_id == character_selection.lord_player_id:
+		# 主公选择立即写入并公开，其他玩家候选只会在此之后生成。
+		var lord: PlayerState = state.get_player(player_id)
+		_apply_character(lord, character_id, true)
+		add_log("主公%s亮出武将【%s】。" % [lord.display_name, GameDatabase.resolve_character_name(character_id)])
+		add_log("其他玩家开始同时选将，每人随机展示%d张候选武将牌。" % character_selection.candidate_count)
+	if character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
+		_finish_character_selection()
+	else:
+		_emit_state()
+		if not _is_driving_character_selection:
+			_drive_ai_character_selection()
 	return true
 
 
@@ -108,6 +148,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 func submit_action(action: PlayerAction) -> bool:
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
+	if action.action_type == "select_character":
+		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
 	if action.actor_id != state.current_player_id:
 		return _reject("行动者不是当前回合玩家。")
 
@@ -711,29 +753,74 @@ func _on_equipment_lost(player: PlayerState, card: CardInstance, trigger_loss_ef
 		recover(player.player_id, player.player_id, 1, "baiyin")
 
 
-## 创建玩家、分配身份与样例武将，并为非本地玩家安装基础 AI。
+## 创建玩家并分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
 func _create_players(player_count: int) -> void:
 	# 身份配置副本；洗牌后按座次分配，主公稍后作为首回合玩家。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
 	_shuffle_array(identities)
-	# 可用武将 ID；样例不足人数时允许循环使用，接口本身支持任意扩展数量。
-	var character_ids: Array = GameDatabase.characters.keys()
-	_shuffle_array(character_ids)
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		var player: PlayerState = PlayerState.new(index, "玩家%d" % (index + 1))
 		player.identity = identities[index]
 		player.identity_revealed = player.identity == "lord"
-		player.character_id = str(character_ids[index % character_ids.size()])
-		# 武将配置；决定基础体力上限与显示资料。
-		var character: Dictionary = GameDatabase.get_character(player.character_id)
-		player.max_hp = maxi(int(character.get("max_hp", 4)), 1)
-		if player.identity == "lord":
-			player.max_hp += 1
-		player.hp = player.max_hp
+		player.character_id = ""
+		player.character_revealed = false
 		state.players.append(player)
 		if index != local_human_player_id:
 			ai_coordinator.register_basic_ai(index)
+
+
+## 把已确认武将应用到玩家状态；体力上限只在该入口初始化，避免界面与选将服务重复写数值。
+func _apply_character(player: PlayerState, character_id: String, reveal_character: bool) -> void:
+	if player == null:
+		return
+	player.character_id = character_id
+	player.character_revealed = reveal_character
+	# 已选武将配置；基础体力上限取 max_hp，主公在标准身份局额外增加1点上限与当前体力。
+	var character: Dictionary = GameDatabase.get_character(character_id)
+	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + (1 if player.identity == "lord" else 0)
+	player.hp = player.max_hp
+
+
+## 完成其他玩家同时选将、统一亮将、发4张起始手牌并从主公开始首回合。
+func _finish_character_selection() -> void:
+	for player: PlayerState in state.players:
+		if player.player_id != character_selection.lord_player_id:
+			_apply_character(player, character_selection.get_selection(player.player_id), true)
+	for player: PlayerState in state.players:
+		draw_cards(player.player_id, 4, false)
+	# 主公状态；选将流程已经验证其存在，正式回合始终从主公座次开始。
+	var lord: PlayerState = state.get_player(character_selection.lord_player_id)
+	add_log("所有玩家完成选将并同时亮出武将。")
+	add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌4张。" % [state.players.size(), state.draw_pile.size()])
+	_start_turn(lord.player_id)
+
+
+## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
+func _drive_ai_character_selection() -> void:
+	if _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
+		return
+	_is_driving_character_selection = true
+	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
+		# 当前轮是否提交了至少一项 AI 选择；没有进展表示正在等待人类或网络玩家。
+		var made_progress: bool = false
+		# 当前待确认玩家副本；每轮结束后重新获取，安全覆盖主公到其他玩家的阶段切换。
+		var pending_player_ids: Array[int] = character_selection.get_pending_player_ids()
+		for player_id: int in pending_player_ids:
+			if not ai_coordinator.is_ai_controlled(player_id):
+				continue
+			# AI 候选武将；基础策略使用随机列表首项，后续可由独立选将策略替换。
+			var candidates: Array[String] = character_selection.get_candidates(player_id)
+			if candidates.is_empty():
+				continue
+			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
+			var action: PlayerAction = PlayerAction.new("select_character", player_id)
+			action.payload = {"character_id":candidates[0]}
+			submit_action(action)
+			made_progress = true
+		if not made_progress:
+			break
+	_is_driving_character_selection = false
 
 
 ## 根据牌堆配置创建实体牌、设置区域并洗牌。
@@ -1172,6 +1259,8 @@ func _emit_state() -> void:
 	# 本地界面快照；仅公开本地玩家手牌和自身身份。
 	var local_snapshot: Dictionary = state.to_dict(local_human_player_id, false)
 	state_changed.emit(local_snapshot)
+	if state.current_phase == "character_selection" and character_selection != null:
+		character_selection_changed.emit(character_selection.to_dict(local_human_player_id))
 
 
 ## 拒绝动作并返回 false，统一错误信号与调用结果。

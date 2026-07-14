@@ -1,7 +1,10 @@
 class_name PlayerTargetView
-extends Button
+extends Node2D
 
 ## 可复用的角色状态与目标选择组件。组件渲染公开信息、反馈合法性，并接收卡牌拖放，不读取规则核心。
+
+## 武将牌被点击时发出的信号；桌面据此更新目标选择，不直接提交规则动作。
+signal pressed
 
 ## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
 signal card_dropped(card_uid: int, player_id: int)
@@ -11,6 +14,9 @@ signal card_dropped(card_uid: int, player_id: int)
 
 ## 牌面允许显示的装备条目上限；默认5对应武器、防具、进攻坐骑、防御坐骑和宝物五个固定槽位。
 @export_range(1, 5, 1) var maximum_equipment_rows: int = 5
+
+## 武将牌固定显示尺寸；默认135.7×197.8像素与编辑器场景一致，运行时通常无需动态修改。
+@export var card_size: Vector2 = Vector2(135.7, 197.8)
 
 ## 当前角色稳定玩家 ID；由 configure 写入，未配置时为 -1。
 var player_id: int = -1
@@ -23,6 +29,9 @@ var is_target_selected: bool = false
 
 ## 当前角色是否正在行动；行动状态使用左侧文本标记，不影响目标合法性。
 var is_current_actor: bool = false
+
+## 当前武将牌是否允许交互；存活角色为 true，阵亡角色为 false，只影响输入与视觉状态。
+var is_interactable: bool = false
 
 ## 当前武将插画纹理；配置未填写或资源不存在时为 null。
 var _artwork_texture: Texture2D
@@ -75,27 +84,41 @@ const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount
 ## 当前角色公开快照；仅用于刷新视觉层，不保留任何可修改的规则对象引用。
 var _player_snapshot: Dictionary = {}
 
+## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
+@onready var _card_body: Panel = $CardBody
 
-## 初始化角色卡文本、插画和指针反馈；静态几何完全由场景资源定义。
+## 独立输入区域；覆盖整张武将牌并负责点击与卡牌拖放协议。
+@onready var _input_area: PlayerTargetInputArea = $InputArea
+
+
+## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
-	focus_mode = Control.FOCUS_NONE
-	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	alignment = HORIZONTAL_ALIGNMENT_LEFT
-	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	add_theme_font_size_override("font_size", 12)
+	_card_body.size = card_size
+	_input_area.size = card_size
+	_input_area.activated.connect(pressed.emit)
+	_input_area.card_dropped.connect(_on_input_card_dropped)
+	_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_decade_overlay()
 	_refresh_visual_state()
+
+
+## 返回武将牌在全局画布中的矩形；卡牌动画通过该接口取得角色中心点。
+func get_global_rect() -> Rect2:
+	return Rect2(global_position, card_size * global_scale)
 
 
 ## 写入角色公开快照与已经格式化的状态文本；组件不持有可修改的 PlayerState 引用。
 func configure(id: int, formatted_text: String, alive: bool, current_actor: bool, character_definition: Dictionary = {}) -> void:
 	player_id = id
 	is_current_actor = current_actor
-	text = ("◆ 行动中\n" if is_current_actor else "") + formatted_text
-	disabled = not alive
+	is_interactable = alive
+	# 兼容格式化文本；旧调用方仍可传入摘要，该内容只作为无障碍悬停说明，不绘制按钮正文。
+	var accessibility_summary: String = ("◆ 行动中\n" if is_current_actor else "") + formatted_text
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
+	if is_node_ready():
+		_input_area.tooltip_text = accessibility_summary
+		_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_visual_state()
 
@@ -106,10 +129,11 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_faction_definition = faction_definition.duplicate(true)
 	player_id = int(snapshot.get("player_id", -1))
 	is_current_actor = current_actor
-	disabled = not bool(snapshot.get("alive", false))
-	text = ""
+	is_interactable = bool(snapshot.get("alive", false))
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
-	tooltip_text = _format_snapshot_tooltip(snapshot, character_definition)
+	if is_node_ready():
+		_input_area.tooltip_text = _format_snapshot_tooltip(snapshot, character_definition)
+		_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
@@ -119,20 +143,14 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 func set_target_state(legal_target: bool, selected_target: bool) -> void:
 	is_legal_target = legal_target
 	is_target_selected = selected_target
+	if is_node_ready():
+		_input_area.configure(is_interactable, is_legal_target)
 	_refresh_visual_state()
 
 
-## 仅接受战斗卡牌组件提供的拖放字典；死亡角色和非法目标不会接收。
-func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return not disabled and is_legal_target and data is Dictionary and str((data as Dictionary).get("drag_type", "")) == "battle_card"
-
-
-## 将拖放转换为桌面层信号；组件不直接改变选择集合或提交动作。
-func _drop_data(_at_position: Vector2, data: Variant) -> void:
-	# 卡牌 UID；来源于 CardView 的稳定拖放数据。
-	var dropped_card_uid: int = int((data as Dictionary).get("card_uid", -1))
-	if dropped_card_uid >= 0:
-		card_dropped.emit(dropped_card_uid, player_id)
+## 转发独立输入区域的合法卡牌拖放结果，并补充当前稳定玩家 ID。
+func _on_input_card_dropped(card_uid: int) -> void:
+	card_dropped.emit(card_uid, player_id)
 
 
 ## 根据默认、合法、选中与禁用状态刷新角色卡样式。
@@ -151,15 +169,13 @@ func _refresh_visual_state() -> void:
 	elif is_legal_target:
 		border_color = BattleUIStyle.LEGAL_TARGET_COLOR
 		border_width = 3
-	add_theme_color_override("font_color", Color("f3e7d0"))
-	add_theme_color_override("font_hover_color", Color("fff0c7"))
-	add_theme_color_override("font_disabled_color", Color("80766c"))
-	add_theme_stylebox_override("normal", _make_player_style(background_color, border_color, border_width))
-	add_theme_stylebox_override("hover", _make_player_style(background_color.lightened(0.08), border_color.lightened(0.12), maxi(border_width, 2)))
-	add_theme_stylebox_override("pressed", _make_player_style(background_color.darkened(0.06), BattleUIStyle.ACCENT_COLOR, 3))
-	add_theme_stylebox_override("disabled", _make_player_style(Color("292724"), Color("544f49"), 1))
+	if not is_interactable:
+		background_color = Color("292724")
+		border_color = Color("544f49")
+		border_width = 1
+	_card_body.add_theme_stylebox_override("panel", _make_player_style(background_color, border_color, border_width))
 	if _status_label != null:
-		_status_label.modulate = Color(1.0, 1.0, 1.0, 0.52 if disabled else 1.0)
+		_status_label.modulate = Color(1.0, 1.0, 1.0, 0.52 if not is_interactable else 1.0)
 
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
@@ -208,7 +224,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_character_name_label.text = "\n".join(character_name.split(""))
 	_identity_badge_label.text = identity_text
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
-	_status_label.text = "行动" if is_current_actor else ("阵亡" if disabled else ("横置" if bool(_player_snapshot.get("chained", false)) else ""))
+	_status_label.text = "行动" if is_current_actor else ("阵亡" if not is_interactable else ("横置" if bool(_player_snapshot.get("chained", false)) else ""))
 	# 判定区公开数量；没有判定牌时不显示该摘要，避免覆盖装备横条和武将立绘。
 	var judgment_count: int = (_player_snapshot.get("judgment_area", []) as Array).size()
 	# 木牛流马“粮”公开数量；没有“粮”时不显示该摘要，完整牌面仍只对所有者可见。

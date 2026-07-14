@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://ba884ejr4ffaj"]
 
 [ext_resource type="Script" uid="uid://b1sh1pk8e66xu" path="res://scripts/ui/player_target_view.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -13,63 +14,6 @@ border_width_top = 1
 border_width_right = 1
 border_width_bottom = 1
 border_color = Color(0.658824, 0.513725, 0.309804, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
-[sub_resource type="StyleBoxFlat" id="StyleRootPressed"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.117647, 0.101961, 0.0901961, 0.94902)
-border_width_left = 3
-border_width_top = 3
-border_width_right = 3
-border_width_bottom = 3
-border_color = Color(0.937255, 0.780392, 0.427451, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
-[sub_resource type="StyleBoxFlat" id="StyleRootHover"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.198039, 0.184314, 0.168627, 0.94902)
-border_width_left = 2
-border_width_top = 2
-border_width_right = 2
-border_width_bottom = 2
-border_color = Color(0.737255, 0.615686, 0.396078, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
-[sub_resource type="StyleBoxFlat" id="StyleRootDisabled"]
-content_margin_left = 4.0
-content_margin_top = 4.0
-content_margin_right = 4.0
-content_margin_bottom = 4.0
-bg_color = Color(0.160784, 0.152941, 0.141176, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.329412, 0.309804, 0.286275, 1)
 corner_radius_top_left = 6
 corner_radius_top_right = 6
 corner_radius_bottom_right = 6
@@ -146,29 +90,17 @@ corner_radius_top_right = 14
 corner_radius_bottom_right = 14
 corner_radius_bottom_left = 14
 
-[node name="PlayerTargetView" type="Button" unique_id=987083066]
-clip_contents = true
-custom_minimum_size = Vector2(135.7, 197.8)
+[node name="PlayerTargetView" type="Node2D" unique_id=987083066]
+script = ExtResource("1_script")
+
+[node name="CardBody" type="Panel" parent="." unique_id=1827969861]
 offset_right = 135.7
 offset_bottom = 197.8
-focus_mode = 0
-mouse_default_cursor_shape = 2
-theme_override_colors/font_color = Color(0.952941, 0.905882, 0.815686, 1)
-theme_override_colors/font_hover_color = Color(1, 0.941176, 0.780392, 1)
-theme_override_colors/font_disabled_color = Color(0.501961, 0.462745, 0.423529, 1)
-theme_override_font_sizes/font_size = 12
-theme_override_styles/normal = SubResource("StyleRootNormal")
-theme_override_styles/pressed = SubResource("StyleRootPressed")
-theme_override_styles/hover = SubResource("StyleRootHover")
-theme_override_styles/disabled = SubResource("StyleRootDisabled")
-alignment = 0
-text_overrun_behavior = 3
-autowrap_mode = 2
-script = ExtResource("1_script")
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleRootNormal")
 
 [node name="Artwork" type="TextureRect" parent="." unique_id=1498803997]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 4.0
 offset_top = 4.0
 offset_right = 132.7
@@ -179,7 +111,6 @@ stretch_mode = 6
 
 [node name="ArtworkPlaceholder" type="Label" parent="." unique_id=310971988]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 4.0
 offset_top = 4.0
 offset_right = 132.7
@@ -194,7 +125,6 @@ vertical_alignment = 1
 
 [node name="CharacterName" type="Label" parent="." unique_id=673259262]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 4.0
 offset_top = 26.0
 offset_right = 26.0
@@ -212,7 +142,6 @@ vertical_alignment = 1
 
 [node name="IdentityBadge" type="Label" parent="." unique_id=915847553]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 109.7
 offset_top = 3.0
 offset_right = 132.7
@@ -230,7 +159,6 @@ vertical_alignment = 1
 [node name="LegacyHp" type="Label" parent="." unique_id=792821160]
 unique_name_in_owner = true
 visible = false
-layout_mode = 0
 offset_left = 2.0
 offset_top = 121.0
 offset_right = 34.0
@@ -238,7 +166,6 @@ offset_bottom = 153.0
 
 [node name="HandCount" type="Label" parent="." unique_id=237863011]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 2.0
 offset_top = 165.8
 offset_right = 26.0
@@ -256,7 +183,6 @@ vertical_alignment = 1
 [node name="Status" type="Label" parent="." unique_id=990005668]
 unique_name_in_owner = true
 visible = false
-layout_mode = 0
 offset_left = 28.0
 offset_top = 3.0
 offset_right = 73.0
@@ -272,7 +198,6 @@ horizontal_alignment = 1
 
 [node name="PublicZone" type="Label" parent="." unique_id=1562348071]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 36.85
 offset_top = 176.8
 offset_right = 98.85
@@ -288,7 +213,6 @@ horizontal_alignment = 1
 
 [node name="FactionBadge" type="Label" parent="." unique_id=248046321]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 1.0
 offset_top = 2.0
 offset_right = 27.0
@@ -305,7 +229,6 @@ vertical_alignment = 1
 
 [node name="HealthPips" type="VBoxContainer" parent="." unique_id=929087411]
 unique_name_in_owner = true
-layout_mode = 0
 offset_left = 117.7
 offset_top = 38.0
 offset_right = 133.7
@@ -356,7 +279,15 @@ horizontal_alignment = 1
 
 [node name="EquipmentLayer" type="Control" parent="." unique_id=237837046]
 unique_name_in_owner = true
+layout_mode = 3
 anchors_preset = 0
 offset_right = 135.7
 offset_bottom = 197.8
 mouse_filter = 2
+
+[node name="InputArea" type="Control" parent="." unique_id=590669325]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 135.7
+offset_bottom = 197.8
+script = ExtResource("2_input")

@@ -10,7 +10,6 @@ offset_bottom = 223.8
 mouse_filter = 2
 
 [node name="PlayerTargetView" parent="." instance=ExtResource("1_player_target")]
-layout_mode = 0
 
 [node name="Seat" type="Label" parent="."]
 unique_name_in_owner = true

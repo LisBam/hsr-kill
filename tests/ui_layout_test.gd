@@ -8,11 +8,8 @@ const SETTLE_FRAME_COUNT: int = 6
 ## 模拟未应用画布拉伸时的客户区尺寸；1152×648与项目默认启动窗口一致，用于复现固定1280×720坐标越界问题。
 const COMPACT_CLIENT_SIZE: Vector2 = Vector2(1152.0, 648.0)
 
-## 名称模式按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
-var _name_button_pressed: bool = false
-
-## 重开按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
-var _restart_button_pressed: bool = false
+## 菜单按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
+var _menu_button_pressed: bool = false
 
 
 ## 延迟执行正式场景检查，保证测试根节点已经进入场景树。
@@ -45,10 +42,8 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 当前模拟客户区矩形；直接使用主场景尺寸，覆盖编辑器嵌入运行未应用画布拉伸的情况。
 	var viewport_rect: Rect2 = Rect2(main_instance.position, main_instance.size)
-	# 牌名切换按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
-	var name_button: Button = main_instance.get_node("%NameModeButton") as Button
-	# 重新开局按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
-	var restart_button: Button = main_instance.get_node("%RestartButton") as Button
+	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
+	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
 	var equipment_panel: Control = main_instance.get_node("%EquipmentPanel") as Control
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
@@ -57,7 +52,7 @@ func _run() -> void:
 	var skill_bar: Control = main_instance.get_node("SkillBar") as Control
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
 	var local_player_seat_slot: Control = main_instance.get_node("LocalPlayerSeatSlot") as Control
-	for checked_control: Control in [name_button, restart_button, equipment_panel, hand_panel, skill_bar, local_player_seat_slot]:
+	for checked_control: Control in [menu_button, equipment_panel, hand_panel, skill_bar, local_player_seat_slot]:
 		# 当前控件的屏幕矩形；`get_screen_transform()` 已包含画布拉伸和锚点换算。
 		var screen_rect: Rect2 = _screen_rect(checked_control)
 		if not viewport_rect.encloses(screen_rect):
@@ -105,17 +100,12 @@ func _run() -> void:
 				_fail("opponent_bottom_overlap:%s:%s" % [opponent_screen_rect, bottom_rect])
 				return
 		occupied_opponent_rects.append(opponent_screen_rect)
-	name_button.pressed.connect(_on_name_button_pressed)
-	restart_button.pressed.connect(_on_restart_button_pressed)
-	await _click_control(name_button)
-	if not _name_button_pressed:
-		_fail("name_button_input")
+	menu_button.pressed.connect(_on_menu_button_pressed)
+	await _click_control(menu_button)
+	if not _menu_button_pressed:
+		_fail("menu_button_input")
 		return
-	await _click_control(restart_button)
-	if not _restart_button_pressed:
-		_fail("restart_button_input")
-		return
-	# 重开会排队释放旧座位和手牌；等待两帧让释放队列清空，避免测试退出时残留异步CanvasItem。
+	# 菜单打开后等待面板布局稳定，再释放正式场景实例。
 	await get_tree().process_frame
 	await get_tree().process_frame
 	remove_child(main_instance)
@@ -197,14 +187,9 @@ func _make_ten_player_snapshot() -> Dictionary:
 	return snapshot
 
 
-## 记录名称模式按钮收到真实鼠标点击，供异步输入流程断言。
-func _on_name_button_pressed() -> void:
-	_name_button_pressed = true
-
-
-## 记录重开按钮收到真实鼠标点击，供异步输入流程断言。
-func _on_restart_button_pressed() -> void:
-	_restart_button_pressed = true
+## 记录右上角菜单按钮收到真实鼠标点击，供异步输入流程断言。
+func _on_menu_button_pressed() -> void:
+	_menu_button_pressed = true
 
 
 ## 输出统一失败原因并以非零状态结束测试。

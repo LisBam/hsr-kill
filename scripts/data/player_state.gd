@@ -12,6 +12,9 @@ var display_name: String = "玩家"
 ## 当前武将配置 ID；通过数据仓库查询名称、性别、势力与技能。
 var character_id: String = ""
 
+## 当前武将是否已经向所有玩家亮出；选将阶段主公先公开，其他玩家完成后同时公开。
+var character_revealed: bool = false
+
 ## 当前身份；可取 lord、loyalist、rebel、renegade。
 var identity: String = "rebel"
 
@@ -161,7 +164,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	return {
 		"player_id": player_id,
 		"display_name": display_name,
-		"character_id": character_id,
+		"character_id": character_id if character_revealed or viewer_id == player_id or reveal_private else "",
+		"character_revealed": character_revealed,
 		"identity": identity if identity_revealed or viewer_id == player_id or reveal_private else "hidden",
 		"identity_revealed": identity_revealed,
 		"hp": hp,
