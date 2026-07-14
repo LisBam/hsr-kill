@@ -562,9 +562,9 @@ func _get_player_indicator_position(player_id: int) -> Vector2:
 	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 
 
-## 将屏幕全局坐标转换为全屏动画层局部坐标；动画层无缩放，因此只需扣除其全局原点。
+## 将屏幕全局坐标转换为全屏动画层局部坐标；使用完整逆变换兼容画布拉伸、窗口缩放与父节点变换。
 func _global_to_animation_position(global_position: Vector2) -> Vector2:
-	return global_position - card_use_animation_layer.get_global_rect().position
+	return card_use_animation_layer.get_global_transform().affine_inverse() * global_position
 
 
 ## 显示最近一次动作拒绝原因。

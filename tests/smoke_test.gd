@@ -268,8 +268,22 @@ func _run() -> void:
 	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
 	# 主场景对局控制器；直接运行场景时由该节点的导出默认值决定开局人数。
 	var main_scene_match_controller: MatchController = main_scene_preview.get_node("MatchController") as MatchController
-	if main_scene_match_controller.default_player_count != 8 or main_scene_match_controller.first_turn_seat_number != 1:
+	if main_scene_match_controller.default_player_count != 8 or main_scene_match_controller.first_turn_seat_number != 1 or not main_scene_match_controller.randomize_local_human_seat:
 		printerr("SMOKE_FAIL default_player_count=%d" % main_scene_match_controller.default_player_count)
+		get_tree().quit(1)
+		return
+	# 主场景目标指示动画层；必须位于普通角色界面与本地武将牌之上，同时低于菜单和选将遮罩。
+	var main_scene_animation_layer: CardUseAnimationLayer = main_scene_preview.get_node("%CardUseAnimationLayer") as CardUseAnimationLayer
+	if main_scene_animation_layer.presentation_z_index != 30:
+		printerr("SMOKE_FAIL animation_layer_z_index=%d" % main_scene_animation_layer.presentation_z_index)
+		get_tree().quit(1)
+		return
+	# 固定种子随机座次测试；本地玩家应被限制在有效座次内且不依赖一号位身份分配。
+	main_scene_match_controller._rng.seed = 20260715
+	main_scene_match_controller.local_human_player_id = 0
+	main_scene_match_controller._randomize_local_human_player_seat(8)
+	if main_scene_match_controller.local_human_player_id <= 0 or main_scene_match_controller.local_human_player_id >= 8:
+		printerr("SMOKE_FAIL randomized_local_seat=%d" % main_scene_match_controller.local_human_player_id)
 		get_tree().quit(1)
 		return
 	# 正式卡牌组件实例；验证根节点为 Node2D、牌面模型尺寸为111×148且不再继承按钮。
@@ -283,6 +297,7 @@ func _run() -> void:
 	card_view.free()
 	# 弃牌动画层；两张正式卡牌应同时从各自起点进入中央队列、保持水平铺开并在停留后全部淡出。
 	var animation_layer: CardUseAnimationLayer = CardUseAnimationLayer.new()
+	animation_layer.z_index = 30
 	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.08
 	animation_layer.target_line_fade_duration = 0.04
@@ -301,7 +316,7 @@ func _run() -> void:
 	animation_layer.play_card(second_animation_card, second_animation_card.position, Vector2(500.0, 300.0), [])
 	# 第一条目标线表现数据；必须保存来源、目标和动态延伸进度，确保不是一次性绘制静态整线。
 	var first_line_presentation: Dictionary = animation_layer._line_presentations.get(1, {}) as Dictionary
-	if first_line_presentation.get("target_positions", []) != [Vector2(800.0, 200.0)] or not first_line_presentation.has("progress"):
+	if animation_layer.z_index != 30 or first_line_presentation.get("target_positions", []) != [Vector2(800.0, 200.0)] or not first_line_presentation.has("progress"):
 		printerr("SMOKE_FAIL target_line_presentation=%s" % first_line_presentation)
 		get_tree().quit(1)
 		return
