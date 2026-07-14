@@ -1,4 +1,3 @@
-@tool
 class_name PlayerTargetView
 extends Button
 
@@ -7,44 +6,11 @@ extends Button
 ## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
 signal card_dropped(card_uid: int, player_id: int)
 
-## 武将牌原始设计尺寸；作为1.15倍牌面尺寸的唯一计算基准，运行时无需动态修改。
-const BASE_PANEL_SIZE: Vector2 = Vector2(118.0, 172.0)
-
-## 武将牌相对原始设计的统一放大倍数；固定1.15只扩大牌框与插画空间，不缩放内部信息控件。
-const PANEL_SCALE: float = 1.15
-
-## 放大后武将插画槽的固定矩形；默认4像素内边距与128.7×190.8像素尺寸让插画占据新增牌面空间。
-const ARTWORK_RECT: Rect2 = Rect2(4.0, 4.0, 128.7, 190.8)
-
-## 放大后身份徽记的固定位置；徽记自身尺寸保持23×20像素，只移动到新牌框右上角。
-const IDENTITY_BADGE_POSITION: Vector2 = Vector2(109.7, 3.0)
-
-## 放大后手牌数角标的固定位置；角标自身尺寸保持24×24像素，只移动到新牌框左下角。
-const HAND_COUNT_POSITION: Vector2 = Vector2(2.0, 165.8)
-
-## 放大后公开区提示的固定位置；提示自身尺寸保持62×15像素并在牌面底部水平居中。
-const PUBLIC_ZONE_POSITION: Vector2 = Vector2(36.85, 176.8)
-
-## 放大后体力列的固定位置；体力列自身尺寸保持16×82像素，只移动到新牌框右侧。
-const HEALTH_PIPS_POSITION: Vector2 = Vector2(117.7, 38.0)
-
-## 角色卡默认宽度；固定135.7像素并与可编辑武将牌场景的标准宽度一致，运行时不因座次或内容改变。
-## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
-var panel_width: float = BASE_PANEL_SIZE.x * PANEL_SCALE
-
-## 角色卡默认高度；固定197.8像素并与可编辑武将牌场景的标准高度一致，容纳放大的插画空间与原尺寸信息控件。
-## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
-var panel_height: float = BASE_PANEL_SIZE.y * PANEL_SCALE
-
 ## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
 @export_range(12.0, 22.0, 1.0) var equipment_row_height: float = 15.0
 
 ## 牌面允许显示的装备条目上限；默认5对应武器、防具、进攻坐骑、防御坐骑和宝物五个固定槽位。
 @export_range(1, 5, 1) var maximum_equipment_rows: int = 5
-
-## 单条装备信息的固定宽度；默认60像素保持放大前的控件尺寸，避免牌面扩大时装备UI同步拉伸。
-## 该参数只影响装备横条的显示宽度，运行时通常无需动态修改，不改变插画槽或任何规则数值。
-@export_range(42.0, 100.0, 1.0) var equipment_row_width: float = 60.0
 
 ## 当前角色稳定玩家 ID；由 configure 写入，未配置时为 -1。
 var player_id: int = -1
@@ -110,12 +76,8 @@ const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount
 var _player_snapshot: Dictionary = {}
 
 
-## 初始化角色卡尺寸、文本布局和指针反馈。
+## 初始化角色卡文本、插画和指针反馈；静态几何完全由场景资源定义。
 func _ready() -> void:
-	_apply_panel_geometry()
-	if Engine.is_editor_hint():
-		return
-	clip_contents = true
 	focus_mode = Control.FOCUS_NONE
 	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -125,24 +87,6 @@ func _ready() -> void:
 	_refresh_artwork()
 	_refresh_decade_overlay()
 	_refresh_visual_state()
-
-
-## 按统一1.15倍规格校正牌框、插画槽与固定信息层位置；编辑器预览和运行实例共用且不会缩放任何UI控件。
-func _apply_panel_geometry() -> void:
-	# 当前统一牌面尺寸；由原始规格与固定放大倍数计算，所有玩家共享同一结果。
-	var panel_size: Vector2 = Vector2(panel_width, panel_height)
-	custom_minimum_size = panel_size
-	size = panel_size
-	_artwork_rect.position = ARTWORK_RECT.position
-	_artwork_rect.size = ARTWORK_RECT.size
-	_artwork_placeholder.position = ARTWORK_RECT.position
-	_artwork_placeholder.size = ARTWORK_RECT.size
-	_identity_badge_label.position = IDENTITY_BADGE_POSITION
-	_hand_count_label.position = HAND_COUNT_POSITION
-	_public_zone_label.position = PUBLIC_ZONE_POSITION
-	_health_pip_container.position = HEALTH_PIPS_POSITION
-	_equipment_layer.position = Vector2.ZERO
-	_equipment_layer.size = panel_size
 
 
 ## 写入角色公开快照与已经格式化的状态文本；组件不持有可修改的 PlayerState 引用。
@@ -169,16 +113,6 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
-
-
-## 保持武将牌根节点使用统一固定规格；静态子节点的位置与尺寸完全由 player_target_view.tscn 决定。
-## 该兼容入口只锁定根节点尺寸，不会重排体力、名称或其他可在编辑器中调整的场景节点。
-func apply_panel_size(target_size: Vector2) -> void:
-	if target_size != Vector2(panel_width, panel_height):
-		push_warning("PlayerTargetView 使用固定 %s 尺寸，忽略外部尺寸 %s。" % [Vector2(panel_width, panel_height), target_size])
-	custom_minimum_size = Vector2(panel_width, panel_height)
-	size = Vector2(panel_width, panel_height)
-	clip_contents = true
 
 
 ## 更新合法与选中状态；已选目标始终优先显示金色边框。
@@ -236,8 +170,8 @@ func _layout_equipment_rows() -> void:
 	var row_left: float = _character_name_label.position.x + _character_name_label.size.x + 9.0
 	# 装备条目右边界；由场景内体力列左侧推导，避免与可视体力圆点重叠。
 	var row_right: float = _health_pip_container.position.x - 5.0
-	# 装备条目可用宽度；不超过放大前的固定宽度，使装备UI保持原尺寸并避免异常场景配置产生越界。
-	var row_width: float = minf(maxf(row_right - row_left, 42.0), equipment_row_width)
+	# 装备条目可用宽度；由场景内公开区提示宽度推导，使静态场景继续作为信息层几何的唯一来源。
+	var row_width: float = minf(maxf(row_right - row_left, 42.0), _public_zone_label.size.x - 2.0)
 	# 全部装备条目总高度；相邻横条轻微覆盖1像素以模拟参考图的叠牌效果。
 	var rows_height: float = equipment_row_height + float(_equipment_rows.size() - 1) * (equipment_row_height - 1.0)
 	# 第一条装备的纵坐标；由场景内公开区域上沿推导，从牌面下部向上展开。
@@ -319,7 +253,7 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		var health_pip: Label = Label.new()
 		health_pip.text = "●"
 		health_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		health_pip.add_theme_font_size_override("font_size", 12 if panel_width >= 116.0 else 10)
+		health_pip.add_theme_font_size_override("font_size", 12)
 		health_pip.add_theme_color_override("font_color", Color("44ca67") if pip_index < safe_hp else Color("26382c"))
 		health_pip.add_theme_color_override("font_shadow_color", Color("07140a"))
 		health_pip.add_theme_constant_override("shadow_offset_x", 1)
@@ -356,7 +290,7 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.fit_content = false
 		equipment_row.scroll_active = false
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		equipment_row.add_theme_font_size_override("normal_font_size", 8 if panel_width >= 116.0 else 7)
+		equipment_row.add_theme_font_size_override("normal_font_size", 8)
 		equipment_row.add_theme_color_override("default_color", Color("33281e"))
 		# 装备横条样式；缩小内容边距以在固定60像素条宽内完整显示花色点数与短牌名。
 		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("dfd2adf2"), Color("8d7147"), 1, 3)
