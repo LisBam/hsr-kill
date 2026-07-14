@@ -1,6 +1,150 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/player_target_view.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
+bg_color = Color(0.129412, 0.113725, 0.101961, 0.94902)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.658824, 0.513725, 0.309804, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="StyleRootHover"]
+bg_color = Color(0.198039, 0.184314, 0.168627, 0.94902)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.737255, 0.615686, 0.396078, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="StyleRootPressed"]
+bg_color = Color(0.117647, 0.101961, 0.0901961, 0.94902)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(0.937255, 0.780392, 0.427451, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="StyleRootDisabled"]
+bg_color = Color(0.160784, 0.152941, 0.141176, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.329412, 0.309804, 0.286275, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="StyleArtworkPlaceholder"]
+bg_color = Color(0.458824, 0.4, 0.301961, 0.266667)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.466667, 0.4, 0.305882, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleOverlay"]
+bg_color = Color(0.0901961, 0.0705882, 0.0588235, 0.721569)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.54902, 0.454902, 0.282353, 0.533333)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 2.0
+content_margin_top = 1.0
+content_margin_right = 2.0
+content_margin_bottom = 1.0
+
+[sub_resource type="StyleBoxFlat" id="StyleFactionPreview"]
+bg_color = Color(0.137255, 0.337255, 0.431373, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.403922, 0.611765, 0.713725, 1)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_right = 18
+corner_radius_bottom_left = 18
+
+[sub_resource type="StyleBoxFlat" id="StyleNamePreview"]
+bg_color = Color(0.113725, 0.298039, 0.352941, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.313725, 0.603922, 0.654902, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 1.0
+content_margin_top = 1.0
+content_margin_right = 1.0
+content_margin_bottom = 1.0
+
+[sub_resource type="StyleBoxFlat" id="StyleHandCount"]
+bg_color = Color(0.619608, 0.207843, 0.156863, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.941176, 0.678431, 0.211765, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [node name="PlayerTargetView" type="Button"]
 custom_minimum_size = Vector2(172, 126)
@@ -9,12 +153,24 @@ mouse_default_cursor_shape = 2
 text_overrun_behavior = 3
 autowrap_mode = 2
 alignment = 0
+theme_override_colors/font_color = Color(0.952941, 0.905882, 0.815686, 1)
+theme_override_colors/font_hover_color = Color(1, 0.941176, 0.780392, 1)
+theme_override_colors/font_disabled_color = Color(0.501961, 0.462745, 0.423529, 1)
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleRootNormal")
+theme_override_styles/hover = SubResource("StyleRootHover")
+theme_override_styles/pressed = SubResource("StyleRootPressed")
+theme_override_styles/disabled = SubResource("StyleRootDisabled")
 script = ExtResource("1_script")
 
 [node name="Artwork" type="TextureRect" parent="."]
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 104.0
 expand_mode = 1
 stretch_mode = 6
 
@@ -22,8 +178,13 @@ stretch_mode = 6
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 104.0
 theme_override_colors/font_color = Color(0.658824, 0.592157, 0.498039, 1)
 theme_override_font_sizes/font_size = 11
+theme_override_styles/normal = SubResource("StyleArtworkPlaceholder")
 text = "◇\n武将插画预留"
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -32,11 +193,17 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 4.0
+offset_top = 37.0
+offset_right = 38.0
+offset_bottom = 69.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleNamePreview")
+text = "武\n将"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -44,11 +211,17 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 141.0
+offset_top = 4.0
+offset_right = 168.0
+offset_bottom = 28.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 11
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "反"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -57,6 +230,10 @@ unique_name_in_owner = true
 visible = false
 layout_mode = 0
 mouse_filter = 2
+offset_left = 2.0
+offset_top = 67.0
+offset_right = 42.0
+offset_bottom = 107.0
 
 [node name="HandCount" type="Label" parent="."]
 unique_name_in_owner = true
@@ -67,6 +244,8 @@ theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 17
+theme_override_styles/normal = SubResource("StyleHandCount")
+text = "4"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -74,33 +253,50 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 43.0
+offset_top = 5.0
+offset_right = 136.0
+offset_bottom = 23.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 9
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "行动"
 horizontal_alignment = 1
 
 [node name="PublicZone" type="Label" parent="."]
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 42.0
+offset_top = 86.0
+offset_right = 142.0
+offset_bottom = 103.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 8
+theme_override_styles/normal = SubResource("StyleOverlay")
+text = "判1"
 horizontal_alignment = 1
 
 [node name="FactionBadge" type="Label" parent="."]
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 1.0
+offset_right = 41.0
+offset_bottom = 40.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleFactionPreview")
+text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -108,8 +304,12 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_top = 108.0
+offset_right = 172.0
+offset_bottom = 126.0
 theme_override_colors/font_color = Color(0.941176, 0.709804, 0.184314, 1)
 theme_override_font_sizes/font_size = 18
+text = "一"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -117,6 +317,10 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 mouse_filter = 2
+offset_left = 146.0
+offset_top = 26.0
+offset_right = 170.0
+offset_bottom = 86.0
 theme_override_constants/separation = -3
 alignment = 1
 
