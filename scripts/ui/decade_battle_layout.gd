@@ -3,11 +3,8 @@ extends Control
 
 ## 无名杀十周年式环桌座次布局组件。组件只根据人数和可视尺寸摆放角色卡，不读取规则对象或提交动作。
 
-## 常规对手武将牌尺寸；默认118×172像素对应参考扩展 nova 布局，运行时通常无需动态修改。
-@export var opponent_card_size: Vector2 = Vector2(118.0, 172.0)
-
-## 六张以上顶部武将牌使用的紧凑尺寸；默认104×156像素避免九至十人局发生遮挡，运行时通常无需动态修改。
-@export var compact_opponent_card_size: Vector2 = Vector2(104.0, 156.0)
+## 全部武将牌统一使用的固定尺寸；118×172与可编辑 player_target_view.tscn 的根节点尺寸完全一致。
+const UNIFIED_PLAYER_CARD_SIZE: Vector2 = Vector2(118.0, 172.0)
 
 ## 顶部武将牌距牌桌上边缘的距离；默认14像素接近参考 CSS 的9像素视觉留白，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var top_margin: float = 14.0
@@ -66,10 +63,10 @@ func _layout_opponents() -> void:
 		return
 	# 左右侧座位数量；二至三人局全部位于顶部，四至九人局每侧一名，十人局每侧两名。
 	var side_count_per_edge: int = 0 if _total_player_count <= 3 else (2 if _total_player_count >= 10 else 1)
-	# 顶部座位数量；用于决定卡牌尺寸并生成均匀但符合参考比例的横坐标。
+	# 顶部座位数量；用于生成均匀但符合参考比例的横坐标。
 	var top_count: int = maxi(valid_views.size() - side_count_per_edge * 2, 0)
-	# 当前座位使用的武将牌尺寸；顶部超过五张时切换紧凑尺寸。
-	var active_card_size: Vector2 = compact_opponent_card_size if top_count >= 6 else opponent_card_size
+	# 当前座位使用的武将牌尺寸；所有座次统一使用可编辑武将牌场景的118×172标准尺寸。
+	var active_card_size: Vector2 = UNIFIED_PLAYER_CARD_SIZE
 	# 当前视图索引；按右侧、顶部从右到左、左侧的无名杀座次顺序依次消费。
 	var view_index: int = 0
 	if side_count_per_edge > 0:

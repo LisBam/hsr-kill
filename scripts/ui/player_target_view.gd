@@ -6,13 +6,13 @@ extends Button
 ## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
 signal card_dropped(card_uid: int, player_id: int)
 
-## 角色卡默认宽度；默认118像素对应编辑器中标准对手武将牌，运行时可由座次布局改为紧凑或本地尺寸。
-## 参考图纵版布局使用118像素或104像素，本地玩家使用150像素；该默认值让主场景模板与常规对局牌面一致。
-@export_range(104.0, 360.0, 1.0) var panel_width: float = 118.0
+## 角色卡默认宽度；固定118像素并与可编辑武将牌场景的标准宽度一致，运行时不因座次或内容改变。
+## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
+var panel_width: float = 118.0
 
-## 角色卡默认高度；默认172像素对应编辑器中标准对手武将牌，容纳插画、体力、手牌、装备与判定信息。
-## 参考图纵版布局使用172像素或156像素，本地玩家使用240像素；该默认值让主场景模板与常规对局牌面一致。
-@export_range(156.0, 280.0, 1.0) var panel_height: float = 172.0
+## 角色卡默认高度；固定172像素并与可编辑武将牌场景的标准高度一致，容纳插画、体力、手牌、装备与判定信息。
+## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
+var panel_height: float = 172.0
 
 ## 牌面底部为中文座次号保留的高度；默认18像素接近参考图外置金色座次标记，运行时通常无需动态修改。
 @export_range(14.0, 30.0, 1.0) var seat_label_height: float = 18.0
@@ -201,7 +201,7 @@ func _layout_reference_overlay() -> void:
 		return
 	# 牌面主体高度；底部座次号使用独立区域，不覆盖武将立绘和装备条目。
 	var card_body_height: float = maxf(panel_height - seat_label_height, 1.0)
-	# 左侧武将名竖条宽度；按牌宽比例缩放并限制范围，兼容紧凑多人牌与本地大牌。
+	# 左侧武将名竖条宽度；按统一牌宽比例计算并限制范围，保证所有座次使用同一版式。
 	var name_banner_width: float = clampf(panel_width * 0.23, 22.0, 34.0)
 	# 右侧体力圆点列宽度；保持足够触点面积，同时不明显遮挡立绘主体。
 	var health_column_width: float = clampf(panel_width * 0.16, 17.0, 24.0)
@@ -366,7 +366,7 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		equipment_row.add_theme_font_size_override("normal_font_size", 9 if panel_width >= 116.0 else 8)
 		equipment_row.add_theme_color_override("default_color", Color("33281e"))
-		# 装备横条样式；缩小内容边距以在紧凑牌宽内完整显示花色点数与短牌名。
+		# 装备横条样式；缩小内容边距以在统一118像素牌宽内完整显示花色点数与短牌名。
 		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("dfd2adf2"), Color("8d7147"), 1, 3)
 		equipment_row_style.content_margin_left = 2.0
 		equipment_row_style.content_margin_top = 0.0

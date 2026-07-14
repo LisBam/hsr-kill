@@ -141,15 +141,14 @@ func _create_local_player_card() -> void:
 	local_player_card.anchor_top = 1.0
 	local_player_card.anchor_right = 1.0
 	local_player_card.anchor_bottom = 1.0
-	local_player_card.offset_left = -166.0
-	local_player_card.offset_top = -240.0
+	local_player_card.offset_left = -134.0
+	local_player_card.offset_top = -172.0
 	local_player_card.offset_right = -16.0
 	local_player_card.offset_bottom = 0.0
 	local_player_card.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	local_player_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	local_player_card.panel_width = 150.0
-	local_player_card.panel_height = 240.0
-	local_player_card.seat_label_height = 20.0
+	local_player_card.panel_width = 118.0
+	local_player_card.panel_height = 172.0
 	add_child(local_player_card)
 
 

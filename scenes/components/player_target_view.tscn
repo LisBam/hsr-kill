@@ -147,10 +147,10 @@ corner_radius_bottom_right = 18
 corner_radius_bottom_left = 18
 
 [node name="PlayerTargetView" type="Button" unique_id=987083066]
+clip_contents = true
 custom_minimum_size = Vector2(118, 172)
 offset_right = 118.0
 offset_bottom = 172.0
-clip_contents = true
 focus_mode = 0
 mouse_default_cursor_shape = 2
 theme_override_colors/font_color = Color(0.952941, 0.905882, 0.815686, 1)
@@ -255,6 +255,7 @@ vertical_alignment = 1
 
 [node name="Status" type="Label" parent="." unique_id=990005668]
 unique_name_in_owner = true
+visible = false
 layout_mode = 0
 offset_left = 36.0
 offset_top = 5.0
@@ -304,9 +305,10 @@ vertical_alignment = 1
 [node name="Seat" type="Label" parent="." unique_id=110204318]
 unique_name_in_owner = true
 layout_mode = 0
-offset_top = 154.0
-offset_right = 118.0
-offset_bottom = 172.0
+offset_top = 150.2
+offset_right = 146.24998
+offset_bottom = 176.2
+scale = Vector2(0.8, 0.8)
 theme_override_colors/font_color = Color(0.941176, 0.709804, 0.184314, 1)
 theme_override_font_sizes/font_size = 18
 text = "一"
@@ -323,6 +325,46 @@ offset_bottom = 123.0
 mouse_filter = 2
 theme_override_constants/separation = -3
 alignment = 1
+
+[node name="PreviewCurrentHp1" type="Label" parent="HealthPips" unique_id=595401683]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
+theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 14
+text = "●"
+horizontal_alignment = 1
+
+[node name="PreviewCurrentHp2" type="Label" parent="HealthPips" unique_id=1914037147]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
+theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 14
+text = "●"
+horizontal_alignment = 1
+
+[node name="PreviewCurrentHp3" type="Label" parent="HealthPips" unique_id=1878718363]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
+theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 14
+text = "●"
+horizontal_alignment = 1
+
+[node name="PreviewLostHp" type="Label" parent="HealthPips" unique_id=1879876878]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.14902, 0.219608, 0.172549, 1)
+theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 14
+text = "●"
+horizontal_alignment = 1
 
 [node name="EquipmentLayer" type="Control" parent="." unique_id=237837046]
 unique_name_in_owner = true
