@@ -104,9 +104,9 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	hand_layout.free()
-	# 无名杀式座次布局组件；实例化用于校验常规与紧凑武将牌尺寸保持文档约定。
+	# 无名杀式座次布局组件；实例化用于校验所有座次统一使用文档约定的固定武将牌尺寸。
 	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
-	if battle_layout.opponent_card_size != Vector2(118.0, 172.0) or battle_layout.compact_opponent_card_size != Vector2(104.0, 156.0):
+	if DecadeBattleLayout.UNIFIED_PLAYER_CARD_SIZE != Vector2(118.0, 172.0):
 		printerr("SMOKE_FAIL decade_battle_layout_defaults")
 		get_tree().quit(1)
 		return
@@ -115,6 +115,13 @@ func _run() -> void:
 	var player_card_template: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	if player_card_template.custom_minimum_size != Vector2(118.0, 172.0) or player_card_template.size != Vector2(118.0, 172.0) or not is_equal_approx(player_card_template.panel_width, 118.0) or not is_equal_approx(player_card_template.panel_height, 172.0):
 		printerr("SMOKE_FAIL player_card_template_size")
+		get_tree().quit(1)
+		return
+	# 编辑器场景预览；座次必须位于牌面底部，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
+	var preview_seat: Label = player_card_template.get_node("Seat") as Label
+	var preview_health_pips: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
+	if preview_seat.position != Vector2(0.0, 154.0) or preview_seat.size != Vector2(118.0, 18.0) or preview_health_pips.get_child_count() != 4:
+		printerr("SMOKE_FAIL player_card_scene_preview")
 		get_tree().quit(1)
 		return
 	# 统一武将牌组件；直接使用场景实例，用于校验参考图布局的座次区域、装备横条高度与五槽显示上限。
