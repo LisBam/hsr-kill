@@ -1,6 +1,7 @@
 extends Node
 
 ## 统一数据仓库。所有卡牌、牌堆、武将与技能均从配置文件载入，扩展内容无需修改对局核心。
+## 势力展示元数据与武将配置共用数据文件，并通过独立索引提供给统一武将牌组件。
 
 ## 卡牌配置文件路径；修改数据源位置时只需调整此常量。
 const CARDS_PATH: String = "res://data/cards.json"
@@ -20,6 +21,9 @@ var decks: Dictionary = {}
 ## 以武将 ID 为键的武将定义索引；用于创建玩家状态与后续选将界面。
 var characters: Dictionary = {}
 
+## 以势力 ID 为键的势力展示元数据索引；包含完整名称、牌面简称与主题颜色，不参与身份或胜负规则。
+var factions: Dictionary = {}
+
 ## 以技能 ID 为键的技能元数据索引；具体技能组件可按 ID 注册执行器。
 var skills: Dictionary = {}
 
@@ -38,6 +42,7 @@ func reload_all() -> bool:
 	cards.clear()
 	decks.clear()
 	characters.clear()
+	factions.clear()
 	skills.clear()
 
 	# 卡牌配置根对象；必须含 cards 数组。
@@ -61,13 +66,29 @@ func reload_all() -> bool:
 	decks = (decks_root.get("decks", {}) as Dictionary).duplicate(true)
 
 	# 武将配置根对象；同时建立武将与技能两套索引。
+	# 势力展示元数据与武将、技能共用该根对象，并在武将索引建立前优先载入以供引用校验。
 	var characters_root: Dictionary = _load_json_object(CHARACTERS_PATH)
+	for row_variant: Variant in characters_root.get("factions", []):
+		# 当前势力展示定义；只保存界面名称与颜色，不影响身份局阵营或规则结算。
+		var row: Dictionary = row_variant as Dictionary
+		# 当前势力唯一 ID；武将通过 faction 字段引用该稳定标识。
+		var faction_id: String = str(row.get("id", ""))
+		if faction_id.is_empty():
+			validation_errors.append("势力配置存在空 ID。")
+		elif factions.has(faction_id):
+			validation_errors.append("势力 ID 重复：%s" % faction_id)
+		else:
+			factions[faction_id] = row.duplicate(true)
 	for row_variant: Variant in characters_root.get("characters", []):
 		# 当前武将定义；复制后存入运行时只读索引。
 		var row: Dictionary = row_variant as Dictionary
 		# 当前武将唯一 ID；扩展包必须保证全项目唯一。
 		var character_id: String = str(row.get("id", ""))
-		if not character_id.is_empty():
+		if character_id.is_empty():
+			validation_errors.append("武将配置存在空 ID。")
+		elif characters.has(character_id):
+			validation_errors.append("武将 ID 重复：%s" % character_id)
+		else:
 			characters[character_id] = row.duplicate(true)
 	for row_variant: Variant in characters_root.get("skills", []):
 		# 当前技能元数据；实际触发逻辑由独立技能组件按 ID 绑定。
@@ -78,6 +99,8 @@ func reload_all() -> bool:
 			skills[skill_id] = row.duplicate(true)
 
 	_validate_decks()
+	_validate_factions()
+	_validate_characters()
 	return validation_errors.is_empty()
 
 
@@ -89,6 +112,22 @@ func get_card(card_id: String) -> Dictionary:
 ## 返回指定武将定义的深拷贝，空结果表示 ID 未登记。
 func get_character(character_id: String) -> Dictionary:
 	return (characters.get(character_id, {}) as Dictionary).duplicate(true)
+
+
+## 返回武将的本地化显示名称；界面只能使用该入口显示名称，避免稳定英文 ID 泄漏到玩家可见区域。
+func resolve_character_name(character_id: String) -> String:
+	# 当前武将定义；从静态索引读取以取得配置的中文 display_name。
+	var character_definition: Dictionary = get_character(character_id)
+	# 当前武将配置的显示名称；空值表示配置缺失或未填写本地化文本。
+	var display_name: String = str(character_definition.get("display_name", "")).strip_edges()
+	if not display_name.is_empty():
+		return display_name
+	return "未选武将" if character_id.is_empty() else "未知武将"
+
+
+## 返回指定势力的展示元数据深拷贝；空结果表示势力 ID 未登记，调用方应使用中性视觉回退。
+func get_faction(faction_id: String) -> Dictionary:
+	return (factions.get(faction_id, {}) as Dictionary).duplicate(true)
 
 
 ## 返回指定技能元数据的深拷贝，空结果表示技能 ID 未登记；具体技能执行器不由数据仓库持有。
@@ -145,3 +184,38 @@ func _validate_decks() -> void:
 			var card_id: String = str(entry[2])
 			if not cards.has(card_id):
 				validation_errors.append("牌堆 %s 引用了未知卡牌：%s" % [deck_id, card_id])
+
+
+## 校验势力展示字段，保证武将牌能够稳定生成完整名称、圆徽简称和十六进制主题颜色。
+func _validate_factions() -> void:
+	for faction_id_variant: Variant in factions.keys():
+		# 当前势力 ID；用于为展示字段错误提供可追溯的配置位置。
+		var faction_id: String = str(faction_id_variant)
+		# 当前势力定义；只读检查完整名称、简称和颜色字符串，不修改配置内容。
+		var faction: Dictionary = factions[faction_id] as Dictionary
+		if str(faction.get("display_name", "")).is_empty():
+			validation_errors.append("势力 %s 缺少 display_name。" % faction_id)
+		if str(faction.get("short_name", "")).is_empty():
+			validation_errors.append("势力 %s 缺少 short_name。" % faction_id)
+		# 势力主题颜色；当前规范要求不带井号的六位十六进制 RGB 字符串。
+		var color_value: String = str(faction.get("color", ""))
+		if color_value.length() != 6 or not color_value.is_valid_hex_number(false):
+			validation_errors.append("势力 %s 的 color 必须是六位十六进制 RGB。" % faction_id)
+
+
+## 校验武将对势力与技能元数据的引用，避免牌面渲染或技能栏在运行时出现静默缺项。
+func _validate_characters() -> void:
+	for character_id_variant: Variant in characters.keys():
+		# 当前武将 ID；用于为所有引用错误提供可追溯的配置位置。
+		var character_id: String = str(character_id_variant)
+		# 当前武将定义；从只读索引读取，不向校验流程之外暴露可修改引用。
+		var character: Dictionary = characters[character_id] as Dictionary
+		# 当前武将势力 ID；必须指向 factions 数组中的展示元数据。
+		var faction_id: String = str(character.get("faction", ""))
+		if not factions.has(faction_id):
+			validation_errors.append("武将 %s 引用了未知势力：%s" % [character_id, faction_id])
+		for skill_id_variant: Variant in character.get("skills", []):
+			# 当前武将引用的技能 ID；必须已登记，避免技能栏生成无法解析的占位项。
+			var skill_id: String = str(skill_id_variant)
+			if not skills.has(skill_id):
+				validation_errors.append("武将 %s 引用了未知技能：%s" % [character_id, skill_id])

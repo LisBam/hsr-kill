@@ -39,20 +39,20 @@ var _base_position_y: float = 0.0
 ## 当前卡牌插画纹理；配置缺失或文件无效时为 null，并显示占位区。
 var _artwork_texture: Texture2D
 
-## 牌面插画显示节点；固定占据卡牌中部，不参与鼠标输入。
-var _artwork_rect: TextureRect
+## 牌面插画显示节点；由卡牌场景提供，固定占据卡牌中部，不参与鼠标输入。
+@onready var _artwork_rect: TextureRect = %Artwork
 
-## 插画缺失占位标签；后期配置有效 art_path 后自动隐藏。
-var _artwork_placeholder: Label
+## 插画缺失占位标签；由卡牌场景提供，后期配置有效 art_path 后自动隐藏。
+@onready var _artwork_placeholder: Label = %ArtworkPlaceholder
 
 ## 左上角花色点数标签；独立于插画区域，保证任何图片亮度下都清晰可读。
-var _corner_label: Label
+@onready var _corner_label: Label = %Corner
 
 ## 卡牌名称标签；固定显示在插画下方，统一使用全局名称模式。
-var _name_label: Label
+@onready var _name_label: Label = %Name
 
 ## 卡牌类别与木牛来源标签；固定显示在牌面底部。
-var _type_label: Label
+@onready var _type_label: Label = %Type
 
 ## 待显示的花色点数字符串；configure 可能在节点进入场景树前调用，因此先保存文本。
 var _suit_rank_text: String = ""
@@ -66,8 +66,8 @@ var _card_type_text: String = ""
 ## 当前卡牌类别强调色；基本牌、锦囊牌、装备牌和属性杀使用不同色条。
 var _category_color: Color = Color("765b3d")
 
-## 牌面顶部类别色条；只表达视觉分类，不参与卡牌规则判断。
-var _accent_bar: ColorRect
+## 牌面顶部类别色条；由卡牌场景提供，只表达视觉分类，不参与卡牌规则判断。
+@onready var _accent_bar: ColorRect = %AccentBar
 
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
@@ -85,7 +85,6 @@ func _ready() -> void:
 	pivot_offset = Vector2(card_width * 0.5, card_height * 0.5)
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
-	_create_card_content()
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -167,68 +166,6 @@ func _refresh_visual_state() -> void:
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
 	if _accent_bar != null:
 		_accent_bar.color = _category_color
-
-
-## 创建牌面内部节点；所有子节点忽略鼠标，点击与拖拽始终由卡牌按钮本身处理。
-func _create_card_content() -> void:
-	_accent_bar = ColorRect.new()
-	_accent_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_accent_bar.offset_bottom = 4.0
-	_accent_bar.color = _category_color
-	_accent_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_accent_bar)
-	_artwork_rect = TextureRect.new()
-	_artwork_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_artwork_rect.offset_left = 9.0
-	_artwork_rect.offset_top = 30.0
-	_artwork_rect.offset_right = -9.0
-	_artwork_rect.offset_bottom = -43.0
-	_artwork_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_artwork_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_artwork_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_artwork_rect)
-	_artwork_placeholder = Label.new()
-	_artwork_placeholder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_artwork_placeholder.offset_left = 9.0
-	_artwork_placeholder.offset_top = 30.0
-	_artwork_placeholder.offset_right = -9.0
-	_artwork_placeholder.offset_bottom = -43.0
-	_artwork_placeholder.text = "◇\n插画预留"
-	_artwork_placeholder.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_artwork_placeholder.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_artwork_placeholder.add_theme_font_size_override("font_size", 12)
-	_artwork_placeholder.add_theme_color_override("font_color", Color("8b7964"))
-	_artwork_placeholder.add_theme_stylebox_override("normal", BattleUIStyle.make_panel(Color("b9aa8b55"), Color("9b8665"), 1, 5))
-	_artwork_placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_artwork_placeholder)
-	_corner_label = Label.new()
-	_corner_label.position = Vector2(10.0, 7.0)
-	_corner_label.size = Vector2(card_width - 20.0, 22.0)
-	_corner_label.add_theme_font_size_override("font_size", 16)
-	_corner_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_corner_label)
-	_name_label = Label.new()
-	_name_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_name_label.offset_left = 6.0
-	_name_label.offset_top = -41.0
-	_name_label.offset_right = -6.0
-	_name_label.offset_bottom = -20.0
-	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_name_label.add_theme_font_size_override("font_size", 15)
-	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_name_label)
-	_type_label = Label.new()
-	_type_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_type_label.offset_left = 6.0
-	_type_label.offset_top = -21.0
-	_type_label.offset_right = -6.0
-	_type_label.offset_bottom = -4.0
-	_type_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_type_label.add_theme_font_size_override("font_size", 11)
-	_type_label.add_theme_color_override("font_color", Color("796653"))
-	_type_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_type_label)
 
 
 ## 把缓存的牌面文本与插画写入子节点；可在 configure 早于 _ready 时安全重复调用。
