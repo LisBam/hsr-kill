@@ -14,9 +14,6 @@ var panel_width: float = 118.0
 ## 所有玩家使用同一武将牌尺寸，修改该值会同时影响场景预览与全部对局实例。
 var panel_height: float = 172.0
 
-## 牌面底部为中文座次号保留的高度；默认18像素接近参考图外置金色座次标记，运行时通常无需动态修改。
-@export_range(14.0, 30.0, 1.0) var seat_label_height: float = 18.0
-
 ## 单条装备牌信息占用的高度；默认18像素可在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
 @export_range(14.0, 26.0, 1.0) var equipment_row_height: float = 18.0
 
@@ -67,9 +64,6 @@ var _artwork_texture: Texture2D
 
 ## 势力圆形徽记；显示势力简称并使用数据配置的主题颜色，不参与身份或胜负判断。
 @onready var _faction_badge_label: Label = $FactionBadge
-
-## 座次号覆盖层；位于武将牌底边外侧并把从0开始的玩家 ID 转换为中文序号。
-@onready var _seat_label: Label = $Seat
 
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
 @onready var _health_pip_container: VBoxContainer = $HealthPips
@@ -133,7 +127,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 
 
 ## 保持武将牌根节点使用统一固定规格；静态子节点的位置与尺寸完全由 player_target_view.tscn 决定。
-## 该兼容入口只锁定根节点尺寸，不会重排座次、体力、名称或其他可在编辑器中调整的场景节点。
+## 该兼容入口只锁定根节点尺寸，不会重排体力、名称或其他可在编辑器中调整的场景节点。
 func apply_panel_size(target_size: Vector2) -> void:
 	if target_size != Vector2(panel_width, panel_height):
 		push_warning("PlayerTargetView 使用固定 %s 尺寸，忽略外部尺寸 %s。" % [Vector2(panel_width, panel_height), target_size])
@@ -265,7 +259,6 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	hand_badge_style.content_margin_right = 0.0
 	hand_badge_style.content_margin_bottom = 0.0
 	_hand_count_label.add_theme_stylebox_override("normal", hand_badge_style)
-	_seat_label.text = _seat_text(player_id + 1)
 	_refresh_health_pips(safe_hp, max_hp)
 	_refresh_equipment_rows()
 	_identity_badge_label.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if identity != "hidden" else Color("d8c8a8"))
@@ -331,11 +324,6 @@ func _refresh_equipment_rows() -> void:
 		_equipment_layer.add_child(equipment_row)
 		_equipment_rows.append(equipment_row)
 	_layout_equipment_rows()
-
-
-## 返回一至十号座次的中文数字；超出当前模式上限时回退到阿拉伯数字保证扩展安全。
-func _seat_text(seat_number: int) -> String:
-	return {1:"一", 2:"二", 3:"三", 4:"四", 5:"五", 6:"六", 7:"七", 8:"八", 9:"九", 10:"十"}.get(seat_number, str(seat_number))
 
 
 ## 将花色 ID 转换为装备横条使用的符号；无花色牌使用空心菱形保持位置稳定。
