@@ -204,16 +204,26 @@ func _render_players() -> void:
 	player_grid.clear_opponent_views()
 	_clear_container(player_grid)
 	_player_views.clear()
-	# 本地玩家 ID；来自控制器配置，默认0。
+	# 本地玩家 ID；由控制器在每局创建时随机分配座次。
 	var local_player_id: int = match_controller.local_human_player_id
+	# 玩家快照数组；保留权威状态的绝对座次顺序，之后再相对本地座次旋转。
+	var player_snapshots: Array[Dictionary] = []
+	for player_variant: Variant in _snapshot.get("players", []):
+		player_snapshots.append(player_variant as Dictionary)
 	# 本地玩家状态快照；用于独立渲染底部区域。
 	var local_player_snapshot: Dictionary = {}
-	for player_variant: Variant in _snapshot.get("players", []):
-		# 当前玩家快照；公共信息与本地私有信息已由核心裁剪。
-		var player: Dictionary = player_variant as Dictionary
-		if int(player.get("player_id", -1)) == local_player_id:
-			local_player_snapshot = player
-			continue
+	# 本地玩家在座次数组中的索引；用于让右侧首位始终是本地玩家的下家。
+	var local_player_index: int = -1
+	for player_index: int in range(player_snapshots.size()):
+		if int(player_snapshots[player_index].get("player_id", -1)) == local_player_id:
+			local_player_index = player_index
+			local_player_snapshot = player_snapshots[player_index]
+			break
+	if local_player_index < 0:
+		return
+	for seat_offset: int in range(1, player_snapshots.size()):
+		# 当前玩家快照；从本地下家开始环形读取，确保视觉方位与规则行动顺序一致。
+		var player: Dictionary = player_snapshots[(local_player_index + seat_offset) % player_snapshots.size()]
 		# 其他玩家运行时座位容器；武将牌与座次标签是并列节点，进入对局后才按玩家创建。
 		var player_seat_slot: Control = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
 		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与卡牌拖放入口。
@@ -233,15 +243,14 @@ func _render_players() -> void:
 		player_grid.add_child(player_seat_slot)
 		_player_views[target_id] = player_button
 	_layout_opponent_players()
-	if not local_player_snapshot.is_empty():
-		# 本地武将定义；统一武将牌从相同静态数据读取名称、插画和势力 ID。
-		var local_character_definition: Dictionary = GameDatabase.get_character(str(local_player_snapshot.get("character_id", "")))
-		# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
-		var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
-		local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
-		local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("player_id", -1)) + 1)
-		equipment_label.text = _format_local_equipment(local_player_snapshot)
-		_render_local_skills(local_player_snapshot)
+	# 本地武将定义；统一武将牌从相同静态数据读取名称、插画和势力 ID。
+	var local_character_definition: Dictionary = GameDatabase.get_character(str(local_player_snapshot.get("character_id", "")))
+	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
+	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
+	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
+	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("player_id", -1)) + 1)
+	equipment_label.text = _format_local_equipment(local_player_snapshot)
+	_render_local_skills(local_player_snapshot)
 
 
 ## 按环桌座次排列其他玩家；优先放置上方座位，超出部分依次放到左右两侧。
@@ -555,14 +564,14 @@ func _get_player_indicator_position(player_id: int) -> Vector2:
 		# 本地手牌区全局矩形；顶边中心能统一表达本地玩家作为卡牌来源或目标的位置。
 		var hand_rect: Rect2 = hand_container.get_global_rect()
 		return _global_to_animation_position(Vector2(hand_rect.get_center().x, hand_rect.position.y - local_hand_indicator_margin))
-	# 其他玩家角色视图；快照刷新后按稳定玩家 ID 保存。
-	var player_view: Control = _player_views.get(player_id) as Control
+	# 其他玩家角色视图；武将牌根节点是 Node2D，不能按 Control 转换。
+	var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
 	if player_view != null and is_instance_valid(player_view):
 		return _global_to_animation_position(player_view.get_global_rect().get_center())
 	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 
 
-## 将屏幕全局坐标转换为全屏动画层局部坐标；使用完整逆变换兼容画布拉伸、窗口缩放与父节点变换。
+## 将全局画布坐标转换为动画层局部坐标；使用完整逆变换以兼容父节点位移、缩放与后续视口适配。
 func _global_to_animation_position(global_position: Vector2) -> Vector2:
 	return card_use_animation_layer.get_global_transform().affine_inverse() * global_position
 

@@ -13,15 +13,15 @@ signal card_presentation_requested(card_data: Dictionary, actor_id: int, target_
 signal character_selection_changed(snapshot: Dictionary)
 
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
-@export var default_deck_id: String = "standard_161"
+@export var default_deck_id: String = "standard_162"
 
 ## 默认玩家人数；支持2至10，直接运行演示场景时创建8人局，运行时可在新开局前修改。
 @export_range(2, 10, 1) var default_player_count: int = 8
 
-## 人类本地玩家座次；默认0，设为 -1 可运行纯 AI 自动对局，开局后不应修改。
+## 人类本地玩家当前座次；默认0作为随机分配前的有效占位值，设为 -1 可运行纯 AI 自动对局。
 @export_range(-1, 9, 1) var local_human_player_id: int = 0
 
-## 是否在每局开始时随机本地玩家座次；默认开启以避免玩家固定为一号位或主公，纯AI模式的-1配置不受影响。
+## 是否在每局创建时为本地人类玩家重新随机分配座次；默认开启以保证本地玩家不固定在一号位，纯 AI 模式不受影响。
 @export var randomize_local_human_seat: bool = true
 
 ## AI 每次操作之间的展示延迟秒数；默认0.35便于观察，运行时可动态调快。
@@ -33,7 +33,7 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
-## 首回合行动座次号；默认1表示一号位先行动，当前标准身份局固定使用1，保留该参数供后续特殊模式读取，开局后不应动态修改。
+## 特殊模式预留的首回合座次号；标准身份局不读取该值而始终由随机座次的主公开始，运行时无需修改。
 @export_range(1, 10, 1) var first_turn_seat_number: int = 1
 
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
@@ -97,6 +97,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		_rng.randomize()
 	else:
 		_rng.seed = seed
+	_assign_local_human_player_seat(actual_player_count)
 	CardInstance._next_uid = 1
 	state = GameState.new()
 	state.match_id = "%d-%d" % [Time.get_unix_time_from_system(), _rng.randi()]
@@ -107,7 +108,6 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_ai_drive_token += 1
 	_ai_actions_this_turn = 0
 	ai_coordinator._policies.clear()
-	_randomize_local_human_player_seat(actual_player_count)
 
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
@@ -127,12 +127,11 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	return true
 
 
-## 按本局随机源选择本地玩家座次；身份仍由座次规则独立分配，因此玩家可能获得任意身份。
-func _randomize_local_human_player_seat(player_count: int) -> void:
-	if not randomize_local_human_seat or local_human_player_id < 0:
+## 为本局分配有效的本地人类座次；随机模式使用对局随机源，固定模式把检查器配置限制到实际人数范围。
+func _assign_local_human_player_seat(player_count: int) -> void:
+	if local_human_player_id < 0:
 		return
-	# 本局本地玩家座次索引；范围为0至实际人数减1，与内部玩家ID保持一致。
-	local_human_player_id = _rng.randi_range(0, player_count - 1)
+	local_human_player_id = _rng.randi_range(0, player_count - 1) if randomize_local_human_seat else clampi(local_human_player_id, 0, player_count - 1)
 
 
 ## 提交一名玩家的选将结果；所有人类、AI与网络入口共用相同阶段和候选校验。
@@ -194,6 +193,16 @@ func submit_action(action: PlayerAction) -> bool:
 		return _reject("未知行为类型：%s" % action.action_type)
 
 	state.action_sequence += 1
+	if action.action_type == "end_play":
+		# 正常结束出牌已在 `_finish_turn()` 中开始下一回合并安排 AI；此处只补发递增后的快照，避免为新回合重复安排第二个 AI 任务。
+		_emit_state()
+		return true
+	if not state.game_over:
+		# 当前回合角色；若其在本次行为的插入结算中死亡，应在当前事件完整结算后交给下名存活角色。
+		var current_turn_player: PlayerState = state.get_player(state.current_player_id)
+		if current_turn_player != null and not current_turn_player.alive:
+			_advance_after_current_player_death(current_turn_player.player_id)
+			return true
 	_emit_state()
 	if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id):
 		_schedule_ai_action()
@@ -313,6 +322,8 @@ func describe_card(card: CardInstance) -> String:
 
 ## 为指定玩家摸若干牌；牌堆不足时自动将弃牌堆洗回，无法继续时提前停止。
 func draw_cards(player_id: int, count: int, announce: bool = true) -> void:
+	if state == null or state.game_over:
+		return
 	# 摸牌玩家状态；不存在或死亡玩家不会获得牌。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
@@ -336,6 +347,8 @@ func draw_cards(player_id: int, count: int, announce: bool = true) -> void:
 
 ## 回复体力并限制在体力上限内；无效目标、死亡目标或非正数回复不会改变状态。
 func recover(source_id: int, target_id: int, amount: int, reason: String = "") -> void:
+	if state == null or state.game_over:
+		return
 	# 回复目标状态；死亡角色不能通过普通回复重新加入游戏。
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or amount <= 0 or target.hp >= target.max_hp:
@@ -351,6 +364,8 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "") -
 
 ## 造成伤害并执行防具修正、濒死、死亡及属性连环传导。
 func damage(source_id: int, target_id: int, amount: int, nature: String = "normal", card_id: String = "", chain_transfer: bool = false, ignore_armor: bool = false) -> void:
+	if state == null or state.game_over:
+		return
 	# 受伤目标状态；死亡或无效目标不重复结算。
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or amount <= 0:
@@ -370,7 +385,7 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	# 伤害前事件；处理器可修改 amount 或取消整次伤害。
 	var before_event: RuleEvent = RuleEvent.new("damage_before", source_id, target_id, {"amount": final_amount, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
 	event_bus.dispatch(before_event)
-	if before_event.cancelled:
+	if state.game_over or before_event.cancelled:
 		return
 	final_amount = maxi(int(before_event.data.get("amount", final_amount)), 0)
 	if final_amount == 0:
@@ -381,9 +396,9 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	# 需要接收传导的其他横置角色；在原目标结算前建立快照。
 	var chain_targets: Array[int] = []
 	if should_chain:
-		# 连环传导行动顺序；从当前回合角色开始按座次处理，避免固定从一号位传导。
-		var chain_action_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
-		for player: PlayerState in chain_action_order:
+		# 连环传导顺序；多角色结算从当前回合角色起按存活座次建立目标快照。
+		var chain_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
+		for player: PlayerState in chain_order:
 			if player.alive and player.chained and player.player_id != target_id:
 				chain_targets.append(player.player_id)
 
@@ -394,6 +409,8 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
 	var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount": final_amount, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
 	event_bus.dispatch(after_event)
+	if state.game_over:
+		return
 	if target.hp <= 0:
 		_resolve_dying(target_id, source_id)
 	if state.game_over:
@@ -412,6 +429,8 @@ func consume_response(player_id: int, response_pattern: String) -> bool:
 
 ## 消耗并返回响应实体牌或虚拟牌；返回 null 表示玩家无法响应。
 func consume_response_card(player_id: int, response_pattern: String) -> CardInstance:
+	if state == null or state.game_over:
+		return null
 	# 响应玩家状态；死亡玩家不能使用或打出牌。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
@@ -420,10 +439,13 @@ func consume_response_card(player_id: int, response_pattern: String) -> CardInst
 		# 当前手牌定义；response_pattern 允许普通与属性【杀】共享响应。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 		if str(definition.get("response_pattern", "")) == response_pattern:
+			# 是否为真实手牌；【银月枪】只能由回合外使用或打出的黑色手牌触发，木牛“粮”不算手牌。
+			var was_hand_card: bool = player.hand.has(card)
 			# 从手牌移出的响应牌；随后直接进入弃牌堆。
 			var consumed: CardInstance = player.take_playable_card(card.uid)
 			_move_to_discard(consumed)
 			add_log("%s打出了%s。" % [player.display_name, describe_card(consumed)])
+			_resolve_silver_moon_trigger(player.player_id, consumed, was_hand_card)
 			return consumed
 
 	if response_pattern == "shan" and get_equipment_id(player_id, "armor") == "bagua":
@@ -448,6 +470,8 @@ func consume_response_card(player_id: int, response_pattern: String) -> CardInst
 
 ## 处理普通锦囊的【无懈可击】响应链；同一玩家只要仍有合法牌即可在后续响应轮次再次响应。
 func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) -> bool:
+	if state == null or state.game_over:
+		return false
 	# 当前抵消状态；每使用一张【无懈可击】翻转一次，最终为 true 表示原锦囊被抵消。
 	var negated: bool = false
 	# 响应次数安全上限；默认牌堆只有7张【无懈可击】，较高上限用于兼容未来自定义牌堆。
@@ -455,7 +479,7 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) ->
 	while response_count < 100:
 		# 本轮是否有玩家响应；无人响应时响应链结束。
 		var response_played: bool = false
-		# 无懈可击响应顺序；每轮从当前回合角色开始按行动顺序询问全部存活角色。
+		# 本轮响应顺序；多角色结算必须从当前回合角色开始按行动顺序询问。
 		var response_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
 		for player: PlayerState in response_order:
 			if not player.alive:
@@ -467,8 +491,13 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) ->
 			# 基础响应策略；只在当前抵消状态符合身份收益时使用一张牌。
 			if not _should_auto_negate(player, source_id, target_id, trick_id, negated):
 				continue
+			# 是否为真实手牌；木牛“粮”可以使用但不满足【银月枪】的手牌条件。
+			var was_hand_card: bool = player.hand.has(counter_card)
 			player.take_playable_card(counter_card.uid)
 			_move_to_discard(counter_card)
+			_resolve_silver_moon_trigger(player.player_id, counter_card, was_hand_card)
+			if state.game_over:
+				return negated
 			negated = not negated
 			response_count += 1
 			response_played = true
@@ -481,6 +510,8 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) ->
 
 ## 执行一次判定并将判定牌置入弃牌堆；返回牌对象供调用方读取花色与点数。
 func perform_judgment(player_id: int, reason: String) -> CardInstance:
+	if state == null or state.game_over:
+		return null
 	if state.draw_pile.is_empty():
 		_reshuffle_discard_pile()
 	if state.draw_pile.is_empty():
@@ -772,21 +803,16 @@ func _on_equipment_lost(player: PlayerState, card: CardInstance, trigger_loss_ef
 		recover(player.player_id, player.player_id, 1, "baiyin")
 
 
-## 创建玩家并分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
+## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
 func _create_players(player_count: int) -> void:
-	# 身份配置副本；标准身份局固定主公为一号位，其余身份洗牌后按二号位起依次分配。
+	# 身份配置副本；包含主公在内全部洗牌，使主公与本地玩家都不与任何固定座次绑定。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
-	# 非主公身份池；只随机忠臣、反贼与内奸，避免主公脱离一号位后破坏首回合与行动顺序规则。
-	var non_lord_identities: Array[String] = []
-	for identity: String in identities:
-		if identity != "lord":
-			non_lord_identities.append(identity)
-	_shuffle_array(non_lord_identities)
+	_shuffle_array(identities)
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		var player: PlayerState = PlayerState.new(index, "玩家%d" % (index + 1))
-		# 当前座次身份；一号位固定为主公，其余座次读取已洗牌的非主公身份池。
-		player.identity = "lord" if index == 0 else non_lord_identities[index - 1]
+		# 当前座次身份；直接读取已完整洗牌的身份池，主公可以出现在任意座次。
+		player.identity = identities[index]
 		player.identity_revealed = player.identity == "lord"
 		player.character_id = ""
 		player.character_revealed = false
@@ -801,26 +827,26 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 		return
 	player.character_id = character_id
 	player.character_revealed = reveal_character
-	# 已选武将配置；基础体力上限取 max_hp，主公在标准身份局额外增加1点上限与当前体力。
+	# 已选武将配置；基础体力上限取 max_hp，仅不少于5人的身份局主公额外增加1点上限与当前体力。
 	var character: Dictionary = GameDatabase.get_character(character_id)
-	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + (1 if player.identity == "lord" else 0)
+	# 主公体力加值；规则集3.0规定参与玩家不少于5人时才增加1点。
+	var lord_hp_bonus: int = 1 if player.identity == "lord" and state.players.size() >= 5 else 0
+	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + lord_hp_bonus
 	player.hp = player.max_hp
 
 
-## 完成其他玩家同时选将、统一亮将、发4张起始手牌并从配置座次开始首回合。
+## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由主公开始首回合。
 func _finish_character_selection() -> void:
 	for player: PlayerState in state.players:
 		if player.player_id != character_selection.lord_player_id:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
 	for player: PlayerState in state.players:
 		draw_cards(player.player_id, 4, false)
-	# 首回合座次数组索引；当前控制器只运行标准身份局，因此固定读取主公所在的一号位。
-	var first_turn_index: int = 0
-	# 首回合玩家状态；本地控制者配置不会参与该选择，后续其他模式可独立使用导出座次参数。
-	var first_turn_player: PlayerState = state.players[first_turn_index]
-	# 标准身份局座次约束；主公必须固定在一号位，因此首回合始终由主公开始。
-	if first_turn_player.identity != "lord":
-		push_error("标准身份局一号位必须为主公。")
+	# 首回合玩家状态；主公座次由随机身份分配决定，本地控制者与座次配置不参与该规则。
+	var first_turn_player: PlayerState = _find_player_by_identity("lord")
+	if first_turn_player == null:
+		push_error("标准身份局缺少主公，无法开始首回合。")
+		return
 	add_log("所有玩家完成选将并同时亮出武将。")
 	add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌4张。" % [state.players.size(), state.draw_pile.size()])
 	_start_turn(first_turn_player.player_id)
@@ -886,6 +912,11 @@ func _start_turn(player_id: int) -> void:
 	state.current_phase = "start"
 	add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
 	event_bus.dispatch(RuleEvent.new("phase_start", player_id, player_id, {}))
+	if state.game_over:
+		return
+	if not player.alive:
+		_advance_after_current_player_death(player_id)
+		return
 	if player.face_down:
 		player.face_down = false
 		add_log("%s翻回正面并跳过本回合。" % player.display_name)
@@ -894,7 +925,10 @@ func _start_turn(player_id: int) -> void:
 
 	state.current_phase = "judgment"
 	_process_judgment_area(player_id)
-	if state.game_over or not player.alive:
+	if state.game_over:
+		return
+	if not player.alive:
+		_advance_after_current_player_death(player_id)
 		return
 	state.current_phase = "draw"
 	if not bool(player.skipped_phases.get("draw", false)):
@@ -926,6 +960,8 @@ func _process_judgment_area(player_id: int) -> void:
 		state.processing_area.append(delayed_card)
 		# 延时锦囊是否在生效前被无懈可击抵消。
 		var negated: bool = resolve_trick_negation(-1, player_id, delayed_card.definition_id)
+		if state.game_over:
+			return
 		if delayed_card.definition_id == "shandian":
 			if negated:
 				_pass_lightning(player_id, delayed_card)
@@ -1008,8 +1044,12 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
 	card_presentation_requested.emit(card.to_dict(), actor_id, target_ids.duplicate())
 	event_bus.dispatch(RuleEvent.new("card_used", actor_id, target_ids[0] if not target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":target_ids.duplicate()}))
+	if state.game_over:
+		return
 	# 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动。
 	var destination: String = effect_resolver.resolve(card, actor_id, target_ids)
+	if state.game_over:
+		return
 	if destination == "discard" and state.processing_area.has(card):
 		state.processing_area.erase(card)
 		_move_to_discard(card)
@@ -1117,6 +1157,17 @@ func _finish_turn(player_id: int) -> void:
 		_start_turn(next_player.player_id)
 
 
+## 当前回合角色在事件结算中死亡后转交回合；不触发正常结束阶段，但会清除只持续到本回合的酒加值。
+func _advance_after_current_player_death(dead_player_id: int) -> void:
+	_ai_drive_token += 1
+	for player: PlayerState in state.players:
+		player.wine_bonus = 0
+	# 下名存活玩家；死者仍保留稳定座次 ID，环形查询会自动跳过其状态。
+	var next_player: PlayerState = state.get_next_alive_player(dead_player_id)
+	if next_player != null:
+		_start_turn(next_player.player_id)
+
+
 ## 依次请求所有存活角色使用桃，濒死角色还可使用酒自救；无人救援则进入死亡结算。
 func _resolve_dying(target_id: int, killer_id: int) -> void:
 	# 濒死角色状态；可能需要多张桃才能将体力回复至1。
@@ -1182,6 +1233,10 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	victim.alive = false
 	victim.identity_revealed = true
 	add_log("%s死亡，身份为%s。" % [victim.display_name, _identity_text(victim.identity)])
+	# 亮出身份后立即检测胜负；若条件已满足，规则要求直接结束游戏，不再继续死亡弃牌与奖惩。
+	_check_game_over()
+	if state.game_over:
+		return
 	while not victim.hand.is_empty():
 		_move_to_discard(victim.hand.pop_back())
 	discard_all_equipment(victim_id, false)
@@ -1347,9 +1402,44 @@ func _consume_specific_hand_card(player: PlayerState, definition_id: String) -> 
 	var card: CardInstance = _find_hand_card_by_definition(player, definition_id)
 	if card == null:
 		return null
+	# 是否为真实手牌；濒死响应可使用木牛“粮”，但只有手牌可触发【银月枪】。
+	var was_hand_card: bool = player.hand.has(card)
 	player.take_playable_card(card.uid)
 	_move_to_discard(card)
+	_resolve_silver_moon_trigger(player.player_id, card, was_hand_card)
 	return card
+
+
+## 结算【银月枪】的回合外黑色手牌触发；基础策略优先指定攻击范围内的敌方，目标能打出【闪】则抵消。
+func _resolve_silver_moon_trigger(owner_id: int, used_card: CardInstance, was_hand_card: bool) -> void:
+	if used_card == null or not was_hand_card or used_card.get_color() != "black" or owner_id == state.current_player_id or not player_has_equipment(owner_id, "yinyue"):
+		return
+	# 装备持有者；触发时仍须存活且位于游戏内。
+	var owner: PlayerState = state.get_player(owner_id)
+	if owner == null or not owner.alive:
+		return
+	# 可选目标；从持有者下家起按行动顺序收集攻击范围内的其他存活角色。
+	var legal_targets: Array[PlayerState] = []
+	for candidate: PlayerState in _get_alive_players_in_action_order(owner_id):
+		if candidate.player_id != owner_id and card_rules.calculate_distance(owner_id, candidate.player_id) <= card_rules.get_attack_range(owner_id):
+			legal_targets.append(candidate)
+	if legal_targets.is_empty():
+		return
+	# 自动目标；优先选择身份立场为敌方的首名合法角色，无敌方时回退行动顺序首项。
+	var target: PlayerState = legal_targets[0]
+	for candidate: PlayerState in legal_targets:
+		if _identity_attitude(owner.identity, candidate.identity) < 0:
+			target = candidate
+			break
+	add_log("%s发动【银月枪】，令%s响应【闪】。" % [owner.display_name, target.display_name])
+	# 目标是否打出【闪】；响应牌自身可能触发新的银月枪并立即结束游戏，因此响应后必须先检查终局状态。
+	var dodged: bool = consume_response(target.player_id, "shan")
+	if state.game_over:
+		return
+	if dodged:
+		add_log("%s打出【闪】抵消了【银月枪】。" % target.display_name)
+	else:
+		damage(owner_id, target.player_id, 1, "normal", "yinyue")
 
 
 ## 基础无懈可击策略；根据身份关系和锦囊收益方向决定是否自动响应。

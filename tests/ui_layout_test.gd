@@ -27,9 +27,11 @@ func _run() -> void:
 	# 正式主场景实例；作为测试根节点子节点运行完整界面初始化流程。
 	var main_instance: Control = main_scene.instantiate() as Control
 	add_child(main_instance)
-	# 正式对局控制器；先使用非法的1人配置阻止规则对局和AI异步任务启动，随后直接注入只读十人界面快照。
+	# 正式对局控制器；先使用非法的1人配置阻止规则对局和AI异步任务启动，随后以五号位作为本地玩家注入只读十人界面快照。
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	match_controller.default_player_count = 1
+	match_controller.local_human_player_id = 4
+	match_controller.randomize_local_human_seat = false
 	for _frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
 	match_controller.state_changed.emit(_make_ten_player_snapshot())
@@ -73,6 +75,11 @@ func _run() -> void:
 	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 223.8)):
 		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
 		return
+	# 本地座次标签；测试把本地玩家设为五号位，底部牌面必须显示对应中文座次。
+	var local_seat_label: Label = local_player_seat_slot.get_node("Seat") as Label
+	if local_seat_label.text != "五":
+		_fail("local_random_seat_label:%s" % local_seat_label.text)
+		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
 	var opponent_seat_slots: Array[Control] = []
 	# 全屏对手座次布局器；动态座位都是该容器的直接子节点。
@@ -82,6 +89,13 @@ func _run() -> void:
 			opponent_seat_slots.append(player_grid_child as Control)
 	if opponent_seat_slots.size() != 9:
 		_fail("opponent_seat_count:%d" % opponent_seat_slots.size())
+		return
+	# 桌面脚本保存的对手视图映射；插入顺序必须从本地五号位的下家六号位开始环形排列。
+	var player_views: Dictionary = main_instance.get("_player_views") as Dictionary
+	# 期望对手顺序；六至十号位之后绕回一至四号位。
+	var expected_opponent_order: Array = [5, 6, 7, 8, 9, 0, 1, 2, 3]
+	if player_views.keys() != expected_opponent_order:
+		_fail("opponent_relative_order:%s" % [player_views.keys()])
 		return
 	# 已确认的对手座位屏幕矩形；逐个加入并检查相邻牌面不会重叠。
 	var occupied_opponent_rects: Array[Rect2] = []
@@ -99,7 +113,50 @@ func _run() -> void:
 			if opponent_screen_rect.intersects(bottom_rect):
 				_fail("opponent_bottom_overlap:%s:%s" % [opponent_screen_rect, bottom_rect])
 				return
-		occupied_opponent_rects.append(opponent_screen_rect)
+			occupied_opponent_rects.append(opponent_screen_rect)
+	# 卡牌使用动画层；必须位于对局操作和武将牌上方，但低于选将与菜单层。
+	var animation_layer: CardUseAnimationLayer = main_instance.get_node("%CardUseAnimationLayer") as CardUseAnimationLayer
+	if animation_layer.z_index != 30:
+		_fail("animation_layer_z:%d" % animation_layer.z_index)
+		return
+	animation_layer.card_flight_duration = 0.01
+	animation_layer.card_hold_duration = 0.01
+	animation_layer.target_line_draw_duration = 0.01
+	animation_layer.target_line_fade_duration = 0.01
+	# 六号位武将牌；这是 Node2D 根节点，用于验证目标指示不再错误转换为 Control。
+	var first_target_view: PlayerTargetView = player_views.get(5) as PlayerTargetView
+	# 六号位期望动画局部中心；通过动画层完整逆变换从武将牌全局中心换算。
+	var expected_first_target_position: Vector2 = animation_layer.get_global_transform().affine_inverse() * first_target_view.get_global_rect().get_center()
+	# 六号位实际指示锚点；应精确落在武将牌中心而非中央弃牌区。
+	var actual_first_target_position: Vector2 = main_instance.call("_get_player_indicator_position", 5) as Vector2
+	if not actual_first_target_position.is_equal_approx(expected_first_target_position):
+		_fail("opponent_indicator_anchor:%s expected=%s" % [actual_first_target_position, expected_first_target_position])
+		return
+	# 本地手牌容器；指示线的本地起点和终点都统一使用其顶边上方中心。
+	var hand_container: Control = main_instance.get_node("%HandContainer") as Control
+	# 本地锚点全局坐标；水平取手牌区中心，纵向位于顶边上方8像素。
+	var local_anchor_global_position: Vector2 = Vector2(hand_container.get_global_rect().get_center().x, hand_container.get_global_rect().position.y - float(main_instance.get("local_hand_indicator_margin")))
+	# 本地期望动画局部锚点；与对手锚点使用同一坐标空间。
+	var expected_local_anchor: Vector2 = animation_layer.get_global_transform().affine_inverse() * local_anchor_global_position
+	# 本地实际指示锚点；五号位无论作为使用者还是目标都应返回该值。
+	var actual_local_anchor: Vector2 = main_instance.call("_get_player_indicator_position", 4) as Vector2
+	if not actual_local_anchor.is_equal_approx(expected_local_anchor):
+		_fail("local_hand_indicator_anchor:%s expected=%s" % [actual_local_anchor, expected_local_anchor])
+		return
+	# 双目标展示牌数据；使用未占用的稳定 UID 创建正式牌面表现。
+	var presentation_card_data: Dictionary = {"uid":90001, "definition_id":"sha", "suit":"spade", "rank":7, "zone":"processing", "owner_id":-1}
+	# 双目标玩家 ID；使用强类型数组与正式展示回调的 Array[int] 协议完全一致。
+	var presentation_target_ids: Array[int] = [5, 6]
+	main_instance.call("_on_card_presentation_requested", presentation_card_data, 4, presentation_target_ids)
+	# 本次双目标指示线数据；最新表现序号必须保存共同本地起点与两个不同目标中心。
+	var multi_target_presentation: Dictionary = animation_layer._line_presentations.get(animation_layer._presentation_sequence, {}) as Dictionary
+	# 双目标终点数组；每名目标必须保留一个独立终点以同步绘制两条线。
+	var multi_target_positions: Array = multi_target_presentation.get("target_positions", []) as Array
+	if not (multi_target_presentation.get("start_position", Vector2.ZERO) as Vector2).is_equal_approx(expected_local_anchor) or multi_target_positions.size() != 2 or (multi_target_positions[0] as Vector2).is_equal_approx(multi_target_positions[1] as Vector2):
+		_fail("multi_target_indicator:%s" % multi_target_presentation)
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
 	menu_button.pressed.connect(_on_menu_button_pressed)
 	await _click_control(menu_button)
 	if not _menu_button_pressed:
@@ -190,9 +247,9 @@ func _click_control(control: Control) -> void:
 	await get_tree().process_frame
 
 
-## 构造只包含界面公开字段的十人快照；覆盖最拥挤座次布局且不启动规则核心、AI计时器或卡牌动画。
+## 构造只包含界面公开字段的十人快照；覆盖本地玩家在五号位时的最拥挤座次布局且不启动规则核心、AI计时器或卡牌动画。
 func _make_ten_player_snapshot() -> Dictionary:
-	# 测试玩家数组；座次0作为本地玩家，其余9名用于顶部五席与左右各两席。
+	# 测试玩家数组；五号位作为本地玩家，其余9名用于顶部五席与左右各两席。
 	var players: Array[Dictionary] = []
 	for player_index: int in range(10):
 		# 当前玩家快照；字段与正式裁剪快照保持一致，空区域避免引入无关卡牌交互。
