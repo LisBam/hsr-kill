@@ -180,6 +180,14 @@ func _run() -> void:
 	player_count_input.get_line_edit().text = "6"
 	# 菜单重新开局按钮；点击后控制器应创建六人对局并进入新的选将阶段。
 	var restart_button: Button = main_instance.get_node("%MenuRestartButton") as Button
+	animation_layer.card_flight_duration = 0.01
+	animation_layer.card_hold_duration = 0.01
+	animation_layer.target_line_fade_duration = 0.01
+	# 重开时仍在执行的区域转移牌面；真实菜单点击必须先清除它，再创建下一局状态。
+	var restarting_transfer_card: CardView = (load("res://scenes/components/card_view.tscn") as PackedScene).instantiate() as CardView
+	restarting_transfer_card.configure_back(93001, false)
+	animation_layer.add_child(restarting_transfer_card)
+	animation_layer.play_transfer(restarting_transfer_card, Vector2(460.0, 260.0), Vector2(680.0, 460.0), "draw:menu_restart")
 	await _click_control(restart_button)
 	for _restart_frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
@@ -187,6 +195,9 @@ func _run() -> void:
 		# 当前悬停控件；失败信息用于判断重开按钮是否被更高层级界面遮挡。
 		var hovered_control: Control = get_viewport().gui_get_hovered_control()
 		_fail("restart_player_count:%d menu=%s button=%s input=%s/%s hovered=%s" % [match_controller.state.players.size() if match_controller.state != null else -1, menu_panel.visible, _screen_rect(restart_button), player_count_input.get_line_edit().text, player_count_input.value, hovered_control.get_path() if hovered_control != null else "none"])
+		return
+	if animation_layer.get_child_count() != 0 or not animation_layer._transfer_cards.is_empty() or not animation_layer._transfer_tweens.is_empty() or not animation_layer._draw_transfer_stacks.is_empty():
+		_fail("restart_transfer_cleanup:%d/%s/%s/%s" % [animation_layer.get_child_count(), animation_layer._transfer_cards, animation_layer._transfer_tweens, animation_layer._draw_transfer_stacks])
 		return
 	# 选将遮罩已经打开；菜单仍必须位于其上方，允许玩家在开局阶段继续调整人数并重新开始。
 	_menu_button_pressed = false
