@@ -299,7 +299,17 @@ func _run() -> void:
 	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	# 卡牌独立输入区域；场景静态尺寸必须与正式牌面一致，进入任意容器后都能保持完整命中范围。
 	var card_input_area: CardInputArea = card_view.get_node("InputArea") as CardInputArea
-	if card_view.get_class() != "Node2D" or not is_equal_approx(card_view.card_width, 111.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.get_card_size() != Vector2(111.0, 148.0) or card_input_area.size != Vector2(111.0, 148.0):
+	# 场景内置纸张面板；编辑器预览必须保存与运行时默认基本牌一致的纸色、边框与阴影。
+	var card_body: Panel = card_view.get_node("CardBody") as Panel
+	# 场景内置默认样式；运行时只覆盖状态，不应依赖桌面临时创建另一套卡牌 UI。
+	var card_body_style: StyleBoxFlat = card_body.get_theme_stylebox("panel") as StyleBoxFlat
+	# 场景内置花色点数预览；用于保证直接打开场景时能看到完整牌面。
+	var preview_corner: Label = card_view.get_node("CardBody/Corner") as Label
+	# 场景内置牌名预览；默认与脚本未绑定实体牌时的显示保持一致。
+	var preview_name: Label = card_view.get_node("CardBody/Name") as Label
+	# 场景内置类别预览；手牌、弹窗和动画实例都复用该标签节点。
+	var preview_type: Label = card_view.get_node("CardBody/Type") as Label
+	if card_view.get_class() != "Node2D" or not is_equal_approx(card_view.card_width, 111.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.get_card_size() != Vector2(111.0, 148.0) or card_input_area.size != Vector2(111.0, 148.0) or card_body_style == null or not card_body_style.bg_color.is_equal_approx(Color("e8dcc3")) or preview_corner.text != "♠7" or preview_name.text != "星穹斩" or preview_type.text != "基本牌":
 		printerr("SMOKE_FAIL card_view_node2d_defaults")
 		get_tree().quit(1)
 		return
@@ -311,6 +321,7 @@ func _run() -> void:
 	animation_layer.target_line_fade_duration = 0.04
 	animation_layer.target_line_draw_duration = 0.02
 	animation_layer.queue_reflow_duration = 0.01
+	animation_layer.draw_transfer_stagger = 0.01
 	get_tree().root.add_child(animation_layer)
 	# 第一张动画牌；模拟一名其他玩家从左侧座位使用卡牌。
 	var first_animation_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
@@ -341,6 +352,37 @@ func _run() -> void:
 	await get_tree().create_timer(0.3).timeout
 	if animation_layer.get_child_count() != 0:
 		printerr("SMOKE_FAIL discard_animation_cleanup=%d" % animation_layer.get_child_count())
+		get_tree().quit(1)
+		return
+	# 三张连续摸牌动画；同一玩家摸几张就必须保留几张正式牌面，并按顺序形成可见堆叠。
+	var first_draw_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 第二张摸牌动画；使用同一堆叠键但获得第二层偏移与层级。
+	var second_draw_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 第三张摸牌动画；使用同一堆叠键并在前两张之后开始飞行。
+	var third_draw_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	first_draw_card.configure_back(91001, false)
+	second_draw_card.configure_back(91002, false)
+	third_draw_card.configure_back(91003, false)
+	animation_layer.add_child(first_draw_card)
+	animation_layer.add_child(second_draw_card)
+	animation_layer.add_child(third_draw_card)
+	# 摸牌动画起点；模拟中央牌堆位置。
+	var draw_start_position: Vector2 = Vector2(500.0, 260.0)
+	# 摸牌动画终点；模拟同一玩家的手牌锚点。
+	var draw_target_position: Vector2 = Vector2(700.0, 460.0)
+	animation_layer.play_transfer(first_draw_card, draw_start_position, draw_target_position, "draw:0")
+	animation_layer.play_transfer(second_draw_card, draw_start_position, draw_target_position, "draw:0")
+	animation_layer.play_transfer(third_draw_card, draw_start_position, draw_target_position, "draw:0")
+	await get_tree().create_timer(0.05).timeout
+	# 当前摸牌堆叠数组；三张牌必须同时存在，不能被同坐标的单张替代表现覆盖。
+	var draw_stack: Array = animation_layer._draw_transfer_stacks.get("draw:0", []) as Array
+	if draw_stack.size() != 3 or first_draw_card.position.is_equal_approx(second_draw_card.position) or second_draw_card.position.is_equal_approx(third_draw_card.position) or not (second_draw_card.position - first_draw_card.position).is_equal_approx(animation_layer.draw_stack_offset) or not (third_draw_card.position - second_draw_card.position).is_equal_approx(animation_layer.draw_stack_offset):
+		printerr("SMOKE_FAIL draw_transfer_stack size=%d positions=%s/%s/%s" % [draw_stack.size(), first_draw_card.position, second_draw_card.position, third_draw_card.position])
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.2).timeout
+	if animation_layer.get_child_count() != 0 or not animation_layer._draw_transfer_stacks.is_empty():
+		printerr("SMOKE_FAIL draw_transfer_cleanup children=%d stacks=%s" % [animation_layer.get_child_count(), animation_layer._draw_transfer_stacks])
 		get_tree().quit(1)
 		return
 	get_tree().root.remove_child(animation_layer)

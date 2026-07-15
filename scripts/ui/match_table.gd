@@ -110,6 +110,15 @@ var _player_views: Dictionary = {}
 ## 当前已选卡牌的只读规则预览；由 MatchController 查询接口生成，不包含权威对象引用。
 var _card_use_preview: Dictionary = {}
 
+## 当前在本地手牌区完成的选择请求快照；空字典表示使用普通出牌交互或独立选择窗口。
+var _inline_card_choice: Dictionary = {}
+
+## 当前内联请求中按点击顺序选择的实体牌 UID；支持弃牌阶段一次选择多张手牌。
+var _inline_selected_card_uids: Array[int] = []
+
+## 当前独立选择窗口的请求 ID；默认-1表示窗口关闭，用于防止旧提交回调关闭同步创建的新窗口。
+var _modal_choice_request_id: int = -1
+
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
@@ -176,6 +185,16 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
 	if str(_snapshot.get("current_phase", "")) != "character_selection":
 		character_selection_panel.close()
+	# 当前运行时请求；用于清理已经完成或中断的旧内联/窗口状态，同时保留同步创建的新请求。
+	var runtime_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
+	# 当前运行时请求 ID；无活动请求时为-1。
+	var runtime_request_id: int = int(runtime_choice.get("request_id", -1))
+	if not _inline_card_choice.is_empty() and int(_inline_card_choice.get("request_id", -2)) != runtime_request_id:
+		_inline_card_choice.clear()
+		_inline_selected_card_uids.clear()
+	if _modal_choice_request_id >= 0 and _modal_choice_request_id != runtime_request_id:
+		card_selection_panel.close()
+		_modal_choice_request_id = -1
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
 	error_label.text = ""
@@ -326,6 +345,12 @@ func _render_local_hand() -> void:
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 是否轮到本地玩家出牌；决定卡牌与四个动作按钮是否可用。
 	var can_act: bool = _can_local_player_act()
+	# 当前内联选择候选 UID；存在请求时只有该集合中的本人牌允许点击或拖动。
+	var inline_candidate_uids: Array[int] = _get_inline_candidate_uids()
+	# 当前是否正在本地手牌区完成选择请求；该状态与普通出牌选择互斥。
+	var has_inline_choice: bool = not _inline_card_choice.is_empty()
+	# 当前出牌请求候选 UID；普通出牌阶段只开放至少存在一种合法动作的实体牌。
+	var play_candidate_uids: Array[int] = _get_play_phase_candidate_uids()
 	for card_variant: Variant in local_player.get("hand", []):
 		# 当前手牌快照；包含 UID、配置 ID、花色与点数。
 		var card: Dictionary = card_variant as Dictionary
@@ -336,7 +361,9 @@ func _render_local_hand() -> void:
 		card_button.visible = true
 		# 当前实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
-		card_button.configure(card, definition, false, can_act)
+		# 当前手牌是否允许交互；响应与普通出牌均以权威请求候选为准，不能只按阶段整体启用。
+		var card_interactable: bool = inline_candidate_uids.has(card_uid) if has_inline_choice else can_act and play_candidate_uids.has(card_uid)
+		card_button.configure(card, definition, false, card_interactable)
 		card_button.pressed.connect(_on_card_pressed.bind(card_uid))
 		card_button.card_drag_started.connect(_on_card_drag_started)
 		hand_container.add_child(card_button)
@@ -351,7 +378,9 @@ func _render_local_hand() -> void:
 		card_button.visible = true
 		# 当前“粮”的实体牌 UID；通过 bind 传入选择回调。
 		var card_uid: int = int(card.get("uid", -1))
-		card_button.configure(card, definition, true, can_act)
+		# 当前“粮”是否允许交互；响应与普通出牌都只开放当前请求明确列入候选的实体牌。
+		var card_interactable: bool = inline_candidate_uids.has(card_uid) if has_inline_choice else can_act and play_candidate_uids.has(card_uid)
+		card_button.configure(card, definition, true, card_interactable)
 		card_button.pressed.connect(_on_card_pressed.bind(card_uid))
 		card_button.card_drag_started.connect(_on_card_drag_started)
 		hand_container.add_child(card_button)
@@ -361,6 +390,7 @@ func _render_local_hand() -> void:
 	wooden_ox_button.disabled = not can_act
 	end_play_button.disabled = not can_act
 	%CancelButton.visible = false
+	%CancelButton.disabled = false
 	recast_button.visible = false
 	wooden_ox_button.visible = false
 
@@ -394,6 +424,9 @@ func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
 ## 无名杀式交互以当前牌为完整选择上下文；切换或取消卡牌时会清空旧目标，避免非法目标残留高亮。
 func _on_card_pressed(card_uid: int) -> void:
+	if not _inline_card_choice.is_empty():
+		_toggle_inline_card_choice(card_uid)
+		return
 	# 当前点击是否取消已经选中的同一张牌；用于在写入新选择前决定最终 UID。
 	var deselecting_current_card: bool = _selected_card_uid == card_uid
 	_selected_card_uid = -1 if deselecting_current_card else card_uid
@@ -413,6 +446,8 @@ func _on_card_pressed(card_uid: int) -> void:
 
 ## 按点击顺序选择或取消一名目标；最多保留三个目标以支持方天画戟。
 func _on_target_pressed(target_id: int) -> void:
+	if not _inline_card_choice.is_empty():
+		return
 	if _selected_target_ids.has(target_id):
 		_selected_target_ids.erase(target_id)
 	elif _selected_card_uid >= 0 and (_card_use_preview.get("legal_target_ids", []) as Array).has(target_id) and _selected_target_ids.size() < 3:
@@ -428,6 +463,8 @@ func _on_card_drag_started(card_uid: int) -> void:
 
 ## 接收角色组件的卡牌拖放结果；拖放与点击共用选牌、选目标和确认提交流程。
 func _on_card_dropped(card_uid: int, target_id: int) -> void:
+	if not _inline_card_choice.is_empty():
+		return
 	if _selected_card_uid != card_uid:
 		_on_card_pressed(card_uid)
 	if not _selected_target_ids.has(target_id):
@@ -441,6 +478,9 @@ func _on_self_target_pressed() -> void:
 
 ## 提交使用牌动作；所有规则错误由核心返回并显示。
 func _on_use_pressed() -> void:
+	if not _inline_card_choice.is_empty():
+		_submit_inline_card_choice(_inline_selected_card_uids)
+		return
 	if _selected_card_uid < 0:
 		_on_action_rejected("请先选择一张手牌。")
 		return
@@ -454,9 +494,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
 		# 当前键盘事件；只响应确认、取消和结束出牌三个稳定桌面操作。
 		var key_event: InputEventKey = event as InputEventKey
-		if key_event.keycode == KEY_ESCAPE and _selected_card_uid >= 0:
-			_on_cancel_pressed()
-			get_viewport().set_input_as_handled()
+		if key_event.keycode == KEY_ESCAPE:
+			if not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
+				_on_cancel_pressed()
+				get_viewport().set_input_as_handled()
+			elif _selected_card_uid >= 0:
+				_on_cancel_pressed()
+				get_viewport().set_input_as_handled()
 		elif key_event.keycode == KEY_ENTER and not use_button.disabled:
 			_on_use_pressed()
 			get_viewport().set_input_as_handled()
@@ -464,13 +508,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			_on_end_play_pressed()
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
-		if _selected_card_uid >= 0:
+		if not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
+			_on_cancel_pressed()
+			get_viewport().set_input_as_handled()
+		elif _selected_card_uid >= 0:
 			_on_cancel_pressed()
 			get_viewport().set_input_as_handled()
 
 
 ## 取消当前选牌与目标，不向规则核心提交任何动作。
 func _on_cancel_pressed() -> void:
+	if not _inline_card_choice.is_empty():
+		if bool(_inline_card_choice.get("allow_cancel", false)):
+			# 空选择；明确表示放弃本次可取消请求，不会消费任何手牌。
+			var cancelled_uids: Array[int] = []
+			_submit_inline_card_choice(cancelled_uids)
+		return
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
 	error_label.text = ""
@@ -521,6 +574,9 @@ func _on_restart_requested(player_count: int) -> void:
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
 	card_selection_panel.close()
+	_inline_card_choice.clear()
+	_inline_selected_card_uids.clear()
+	_modal_choice_request_id = -1
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
 
@@ -530,10 +586,25 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	character_selection_panel.bind_snapshot(selection_snapshot)
 
 
-## 显示属于本地玩家的统一选牌请求；AI 和其他网络角色的请求不会暴露在本地界面。
+## 显示属于本地玩家的统一选牌请求；本人手牌候选使用桌面内联交互，其他区域继续使用独立窗口。
 func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
 		return
+	if _is_inline_hand_choice(choice_data):
+		card_selection_panel.close()
+		_modal_choice_request_id = -1
+		_inline_card_choice = choice_data.duplicate(true)
+		_inline_selected_card_uids.clear()
+		_selected_card_uid = -1
+		_selected_target_ids.clear()
+		_render_local_hand()
+		_refresh_selection_text()
+		return
+	_inline_card_choice.clear()
+	_inline_selected_card_uids.clear()
+	_modal_choice_request_id = int(choice_data.get("request_id", -1))
+	_render_local_hand()
+	_refresh_selection_text()
 	card_selection_panel.show_request(choice_data)
 
 
@@ -543,12 +614,91 @@ func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) 
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
 	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
 	if match_controller.submit_action(action):
-		card_selection_panel.close()
+		if _modal_choice_request_id == request_id:
+			card_selection_panel.close()
+			_modal_choice_request_id = -1
 
 
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
 func _on_card_choice_cancelled(request_id: int) -> void:
 	_on_card_choice_submitted(request_id, [])
+
+
+## 判断选择请求是否能完全在本地手牌区完成；空候选的可取消响应也使用内联取消按钮。
+func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
+	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
+	var chooser_id: int = int(choice_data.get("chooser_id", -1))
+	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+		# 当前候选快照；区域与所有者共同决定其是否已经显示在本地手牌容器中。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox"]:
+			return false
+	return true
+
+
+## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌灰显并仅允许取消。
+func _get_inline_candidate_uids() -> Array[int]:
+	# 候选 UID 集合；保持规则请求顺序并防御性去重。
+	var result: Array[int] = []
+	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
+		# 当前候选 UID；无效负数不会进入可交互集合。
+		var candidate_uid: int = int((candidate_variant as Dictionary).get("uid", -1))
+		if candidate_uid >= 0 and not result.has(candidate_uid):
+			result.append(candidate_uid)
+	return result
+
+
+## 返回当前本地出牌阶段可以进入使用、重铸或木牛存粮动作的实体 UID；请求缺失时不开放任何牌。
+func _get_play_phase_candidate_uids() -> Array[int]:
+	# 可用实体 UID 结果；只来源于运行时当前 chooseToUse 请求，不在界面重复实现卡牌规则。
+	var result: Array[int] = []
+	if not _can_local_player_act():
+		return result
+	# 当前运行时选择请求；出牌阶段应为 choice_type=use，其他响应请求不能误启用普通出牌交互。
+	var runtime_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
+	if int(runtime_choice.get("actor_id", -1)) != match_controller.local_human_player_id or str(runtime_choice.get("choice_type", "")) != "use":
+		return result
+	for card_uid_variant: Variant in runtime_choice.get("card_ids", []) as Array:
+		# 当前合法实体 UID；防御性去重，避免异常快照让同一牌重复进入交互集合。
+		var card_uid: int = int(card_uid_variant)
+		if card_uid >= 0 and not result.has(card_uid):
+			result.append(card_uid)
+	return result
+
+
+## 切换内联候选牌的临时选中状态，并严格限制请求声明的最大选择数量。
+func _toggle_inline_card_choice(card_uid: int) -> void:
+	if not _get_inline_candidate_uids().has(card_uid):
+		return
+	if _inline_selected_card_uids.has(card_uid):
+		_inline_selected_card_uids.erase(card_uid)
+	else:
+		# 最大选择数；单选响应点击新牌时替换旧选择，多选弃牌则按点击顺序追加。
+		var max_select: int = int(_inline_card_choice.get("max_select", 0))
+		if max_select == 1:
+			_inline_selected_card_uids.clear()
+		if _inline_selected_card_uids.size() < max_select:
+			_inline_selected_card_uids.append(card_uid)
+	error_label.text = ""
+	_refresh_selection_text()
+
+
+## 提交手牌区内联选择；只有当前请求仍与提交 ID 相同时才清理，避免覆盖同步创建的下一请求。
+func _submit_inline_card_choice(selected_card_uids: Array[int]) -> void:
+	if _inline_card_choice.is_empty():
+		return
+	# 本次提交请求 ID；控制器恢复过程中可能同步发出下一条请求，因此必须保留独立副本。
+	var request_id: int = int(_inline_card_choice.get("request_id", -1))
+	# 统一选择动作；只提交请求号与实体 UID，不直接修改手牌、处理区或阶段。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
+	if not match_controller.submit_action(action):
+		return
+	if int(_inline_card_choice.get("request_id", -2)) == request_id:
+		_inline_card_choice.clear()
+		_inline_selected_card_uids.clear()
+	_render_local_hand()
+	_refresh_selection_text()
 
 
 ## 把选将界面的稳定武将 ID 封装为标准动作，并交由权威控制器再次校验。
@@ -611,7 +761,9 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 		animated_card.configure(card_data, definition, false, false)
 	card_use_animation_layer.add_child(animated_card)
-	card_use_animation_layer.play_transfer(animated_card, start_position, target_position)
+	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
+	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
+	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
 
 
 ## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。
@@ -640,6 +792,12 @@ func _on_action_rejected(message: String) -> void:
 ## 更新当前选择摘要，目标以玩家显示名与选择顺序呈现。
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
+	if not _inline_card_choice.is_empty():
+		_refresh_inline_choice_text()
+		return
+	use_button.text = "确定"
+	end_play_button.visible = true
+	%CancelButton.disabled = false
 	# 已选目标显示名数组；按选择顺序构建。
 	var target_names: Array[String] = []
 	for target_id: int in _selected_target_ids:
@@ -684,6 +842,30 @@ func _refresh_selection_text() -> void:
 	_refresh_component_states()
 
 
+## 刷新手牌区内联选择提示与操作按钮；确认必须至少选择一张且满足请求数量范围。
+func _refresh_inline_choice_text() -> void:
+	# 已选牌数；只读取界面临时数组，不修改权威请求的 selected_card_ids。
+	var selected_count: int = _inline_selected_card_uids.size()
+	# 规则要求的最少数量；弃牌阶段可能大于1，可取消响应通常为0。
+	var min_select: int = int(_inline_card_choice.get("min_select", 0))
+	# 规则允许的最多数量；单张响应为1，弃牌阶段等于必须弃置的手牌数。
+	var max_select: int = int(_inline_card_choice.get("max_select", 0))
+	# 确认所需最少数量；可取消请求的空选择必须走“取消”，避免空确认语义不清。
+	var minimum_confirm_count: int = maxi(min_select, 1)
+	# 请求标题；用于区分响应、弃牌和火攻展示等稳定规则语义。
+	var title: String = str(_inline_card_choice.get("title", "选择卡牌"))
+	selection_label.text = "%s｜已选择%d张｜需要%d至%d张" % [title, selected_count, minimum_confirm_count, max_select]
+	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择卡牌"))
+	use_button.text = "确定"
+	use_button.disabled = selected_count < minimum_confirm_count or selected_count > max_select
+	%CancelButton.visible = true
+	%CancelButton.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
+	recast_button.visible = false
+	wooden_ox_button.visible = false
+	end_play_button.visible = false
+	_refresh_component_states()
+
+
 ## 判断当前选中实体牌是否来自本地手牌，并且本地装备区存在木牛流马。
 func _can_store_selected_card() -> bool:
 	if _selected_card_uid < 0:
@@ -712,7 +894,9 @@ func _refresh_component_states() -> void:
 	for card_uid_variant: Variant in _card_views.keys():
 		# 当前卡牌 UID；用于判断该视图是否对应已选实体牌。
 		var card_uid: int = int(card_uid_variant)
-		(_card_views[card_uid] as CardView).set_selected_state(card_uid == _selected_card_uid)
+		# 当前选中状态；内联多选使用 UID 数组，普通出牌仍使用单一实体 UID。
+		var card_selected: bool = _inline_selected_card_uids.has(card_uid) if not _inline_card_choice.is_empty() else card_uid == _selected_card_uid
+		(_card_views[card_uid] as CardView).set_selected_state(card_selected)
 	# 合法目标 ID 数组；没有选牌时为空，角色卡保持普通状态。
 	var legal_target_ids: Array = _card_use_preview.get("legal_target_ids", []) as Array
 	for player_id_variant: Variant in _player_views.keys():

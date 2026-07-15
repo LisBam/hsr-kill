@@ -33,6 +33,12 @@ extends Control
 ## 动画层绘制层级；默认30确保目标线与飞牌位于角色界面之上、菜单和选将遮罩之下，运行时通常无需修改。
 @export_range(0, 100, 1) var presentation_z_index: int = 30
 
+## 同一玩家连续摸牌时相邻牌面的堆叠偏移；默认向右18像素、向上3像素，保证每张牌均可辨认。
+@export var draw_stack_offset: Vector2 = Vector2(18.0, -3.0)
+
+## 同一批摸牌依次开始飞行的时间间隔；默认0.08秒形成明确顺序，同时保证整组牌面短暂共存。
+@export_range(0.0, 0.4, 0.01) var draw_transfer_stagger: float = 0.08
+
 ## 当前正在执行顺序淡出的正式卡牌节点；可能来自手牌，也可能是不可见牌的完整正式视图。
 var _animated_card: CardView
 
@@ -65,6 +71,9 @@ var _presentation_generation: int = 0
 
 ## 正在执行普通区域转移动画的牌面节点；摸牌、获得与响应弃牌不进入使用牌弃牌展示队列。
 var _transfer_cards: Array[CardView] = []
+
+## 摸牌堆叠键到仍在显示的正式牌面数组映射；同一目标玩家的连续摸牌按加入顺序计算偏移与层级。
+var _draw_transfer_stacks: Dictionary = {}
 
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
@@ -131,8 +140,8 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	_drain_fade_queue()
 
 
-## 播放一次牌区转移表现；摸牌、获得与弃置从来源锚点移动到目标锚点后独立淡出。
-func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2) -> void:
+## 播放一次牌区转移表现；可选堆叠键让同一批摸牌依次飞入并保留全部牌面。
+func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2, draw_stack_key: String = "") -> void:
 	if card_view == null:
 		return
 	# 转移牌面；始终由动画层持有，完成后释放而不返回任何界面容器。
@@ -143,19 +152,45 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	transfer_card.rotation = 0.0
 	transfer_card.scale = Vector2.ONE * 0.82
 	transfer_card.modulate = Color.WHITE
-	transfer_card.z_index = 80 + _transfer_cards.size()
 	_transfer_cards.append(transfer_card)
-	# 移动补间；使用与出牌一致的时长和缓出曲线，抵达后短暂停留再淡出。
+	# 当前堆叠索引；普通转移保持0，同一玩家连续摸牌按到达顺序递增。
+	var stack_index: int = 0
+	if not draw_stack_key.is_empty():
+		# 当前摸牌堆叠数组；字典值使用正式 CardView 节点，不保存任何权威卡牌对象。
+		var draw_stack: Array = _draw_transfer_stacks.get(draw_stack_key, []) as Array
+		stack_index = draw_stack.size()
+		draw_stack.append(transfer_card)
+		_draw_transfer_stacks[draw_stack_key] = draw_stack
+	transfer_card.z_index = 80 + stack_index if not draw_stack_key.is_empty() else 80 + _transfer_cards.size()
+	# 最终堆叠位置；第一张落在玩家锚点，后续牌按固定向量依次压叠显示。
+	var stacked_target_position: Vector2 = target_position - transfer_card.get_card_size() * 0.5 + draw_stack_offset * float(stack_index)
+	# 移动补间；摸牌先按序号等待固定间隔，再使用与出牌一致的时长和缓出曲线飞入。
 	var transfer_tween: Tween = create_tween()
 	transfer_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	transfer_tween.tween_property(transfer_card, "position", target_position - transfer_card.get_card_size() * 0.5, card_flight_duration)
+	if not draw_stack_key.is_empty() and stack_index > 0:
+		transfer_tween.tween_interval(draw_transfer_stagger * float(stack_index))
+	transfer_tween.tween_property(transfer_card, "position", stacked_target_position, card_flight_duration)
 	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
 	transfer_tween.tween_interval(minf(card_hold_duration, 0.24))
 	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, target_line_fade_duration)
 	await transfer_tween.finished
 	_transfer_cards.erase(transfer_card)
+	_remove_draw_transfer_card(draw_stack_key, transfer_card)
 	if is_instance_valid(transfer_card):
 		transfer_card.queue_free()
+
+
+## 从摸牌堆叠组移除已完成牌面；最后一张结束后删除空键，避免后续批次继承旧索引。
+func _remove_draw_transfer_card(draw_stack_key: String, transfer_card: CardView) -> void:
+	if draw_stack_key.is_empty() or not _draw_transfer_stacks.has(draw_stack_key):
+		return
+	# 当前摸牌堆叠数组；只移除表现节点，不修改玩家手牌或牌堆。
+	var draw_stack: Array = _draw_transfer_stacks[draw_stack_key] as Array
+	draw_stack.erase(transfer_card)
+	if draw_stack.is_empty():
+		_draw_transfer_stacks.erase(draw_stack_key)
+	else:
+		_draw_transfer_stacks[draw_stack_key] = draw_stack
 
 
 ## 返回指定实体 UID 是否已经由使用牌队列接管；区域移动层据此避免同一牌重复实例化到目标处。
@@ -182,6 +217,7 @@ func clear_presentations() -> void:
 			transfer_card.queue_free()
 	_active_cards.clear()
 	_transfer_cards.clear()
+	_draw_transfer_stacks.clear()
 	_fade_queue.clear()
 	_motion_tweens.clear()
 	_card_sequences.clear()
