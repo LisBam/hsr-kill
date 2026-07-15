@@ -37,6 +37,9 @@ var is_card_selected: bool = false
 ## 当前牌是否可在本地出牌阶段交互；禁用时仍展示完整牌面信息。
 var is_interactable: bool = false
 
+## 当前是否显示统一牌背；隐藏手牌候选和牌堆摸牌动画使用该状态，不携带任何牌面信息。
+var is_face_down: bool = false
+
 ## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 
@@ -117,6 +120,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	card_uid = int(card.get("uid", -1))
 	is_wooden_ox_card = wooden_ox_card
 	is_interactable = interactable
+	is_face_down = false
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
 	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。
@@ -132,6 +136,24 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	_artwork_texture = ArtworkLoader.load_from_definition(definition, ArtworkLoader.CARD_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = "%s\n%s" % [display_name, str(definition.get("description", ""))]
+		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+	_refresh_card_content()
+	_refresh_visual_state()
+
+
+## 把当前视图配置为不可见手牌的统一牌背；只保留稳定 UID 供选择提交，不显示任何牌面信息。
+func configure_back(entity_uid: int, interactable: bool) -> void:
+	card_uid = entity_uid
+	is_wooden_ox_card = false
+	is_interactable = interactable
+	is_face_down = true
+	_suit_rank_text = ""
+	_display_name_text = "牌背"
+	_card_type_text = "不可见手牌"
+	_category_color = Color("67594b")
+	_artwork_texture = null
+	if is_node_ready():
+		_input_area.tooltip_text = "不可见手牌"
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
 	_refresh_card_content()
 	_refresh_visual_state()
@@ -166,14 +188,14 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 默认纸张颜色；木牛“粮”使用偏青纸色作为来源提示。
-	var paper_color: Color = Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4")
+	var paper_color: Color = Color("283632") if is_face_down else (Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4"))
 	if _is_hovered and is_interactable:
 		paper_color = paper_color.lightened(0.08)
 	# 默认边框颜色；选中时改为高亮金色并增加描边宽度。
 	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_card_selected else _category_color
 	# 选中描边宽度；3像素在高分辨率下仍清晰，普通状态保持1像素。
 	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
-	if not is_interactable:
+	if not is_interactable and not is_face_down:
 		paper_color = paper_color.darkened(0.12)
 		border_color = Color("655b50")
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
@@ -189,11 +211,12 @@ func _refresh_card_content() -> void:
 	_artwork_rect.texture = _artwork_texture
 	_artwork_rect.visible = _artwork_texture != null
 	_artwork_placeholder.visible = _artwork_texture == null
+	_artwork_placeholder.text = "崩铁杀\n牌背" if is_face_down else "◇\n插画预留"
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
-	var content_color: Color = Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31")
+	var content_color: Color = Color("e7d59b") if is_face_down else (Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31"))
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
 

@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://daljlykar8dvs" path="res://scripts/ui/match_menu.gd" id="13_menu"]
 [ext_resource type="Script" uid="uid://c3kqem0y4g3g6" path="res://scripts/ui/character_selection_panel.gd" id="14_character_selection"]
 [ext_resource type="Script" uid="uid://conllkvkmtemn" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
+[ext_resource type="PackedScene" path="res://scenes/components/card_selection_panel.tscn" id="16_card_selection"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -558,6 +559,8 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("7_animation")
+
+[node name="CardSelectionPanel" parent="." instance=ExtResource("16_card_selection")]
 
 [node name="CharacterSelectionPanel" type="Control" parent="." unique_id=9681950]
 unique_name_in_owner = true

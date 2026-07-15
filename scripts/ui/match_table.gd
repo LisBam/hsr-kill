@@ -38,6 +38,9 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 选将遮罩组件；只渲染裁剪后的候选快照并发出稳定武将 ID 选择请求。
 @onready var character_selection_panel: CharacterSelectionPanel = %CharacterSelectionPanel
 
+## 通用卡牌选择组件；响应、弃牌、目标区域和展示牌选择都复用该面板。
+@onready var card_selection_panel: CardSelectionPanel = $CardSelectionPanel
+
 ## 其他玩家与本地玩家状态卡容器；每次快照整体重建以避免状态残留。
 @onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
@@ -115,12 +118,16 @@ func _ready() -> void:
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
 	match_controller.card_presentation_requested.connect(_on_card_presentation_requested)
+	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
+	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_menu.set_next_player_count(match_controller.default_player_count)
 	character_selection_panel.character_selected.connect(_on_character_selected)
+	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
+	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
 	use_button.pressed.connect(_on_use_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)
@@ -237,7 +244,7 @@ func _render_players() -> void:
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
-		player_seat_label.text = _seat_text(target_id + 1)
+		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
 		player_button.pressed.connect(_on_target_pressed.bind(target_id))
 		player_button.card_dropped.connect(_on_card_dropped)
 		player_grid.add_child(player_seat_slot)
@@ -248,7 +255,7 @@ func _render_players() -> void:
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
-	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("player_id", -1)) + 1)
+	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
 	equipment_label.text = _format_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)
 
@@ -513,6 +520,7 @@ func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 func _on_restart_requested(player_count: int) -> void:
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
+	card_selection_panel.close()
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
 
@@ -520,6 +528,27 @@ func _on_restart_requested(player_count: int) -> void:
 ## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
 func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	character_selection_panel.bind_snapshot(selection_snapshot)
+
+
+## 显示属于本地玩家的统一选牌请求；AI 和其他网络角色的请求不会暴露在本地界面。
+func _on_card_choice_requested(choice_data: Dictionary) -> void:
+	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
+		return
+	card_selection_panel.show_request(choice_data)
+
+
+## 把选择组件返回的 UID 封装为标准 choose_cards 动作并交由规则核心复核。
+func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) -> void:
+	# 统一选择动作；payload 只含请求序号与稳定实体牌 UID，可直接进入网络和回放。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
+	if match_controller.submit_action(action):
+		card_selection_panel.close()
+
+
+## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
+func _on_card_choice_cancelled(request_id: int) -> void:
+	_on_card_choice_submitted(request_id, [])
 
 
 ## 把选将界面的稳定武将 ID 封装为标准动作，并交由权威控制器再次校验。
@@ -556,6 +585,33 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
 	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions)
+
+
+## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
+func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
+	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
+	var card_uid: int = int(card_data.get("uid", -1))
+	if target_zone == "discard_pile" and card_use_animation_layer.has_active_card_uid(card_uid):
+		return
+	# 动画起点；牌堆、处理区、展示区和弃牌堆都以桌面中心为公共锚点。
+	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
+		start_position = _get_player_indicator_position(source_player_id)
+	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角使用实际手牌区锚点。
+	var target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+	if target_player_id >= 0 and target_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
+		target_position = _get_player_indicator_position(target_player_id)
+	# 牌面可见性；牌堆摸牌和其他角色不可见手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
+	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
+	# 转移牌节点；所有表现仍复用正式 CardView，不创建简化标签。
+	var animated_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	if show_card_back:
+		animated_card.configure_back(card_uid, false)
+	else:
+		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
+		animated_card.configure(card_data, definition, false, false)
+	card_use_animation_layer.add_child(animated_card)
+	card_use_animation_layer.play_transfer(animated_card, start_position, target_position)
 
 
 ## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。
@@ -710,7 +766,7 @@ func _clear_container(container: Node) -> void:
 
 ## 将阶段 ID 转换为中文界面文本。
 func _phase_text(phase: String) -> String:
-	return {"setup":"准备", "character_selection":"选将阶段", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
+	return {"setup":"准备", "character_selection":"选将阶段", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "choice":"等待选择", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
 
 
 ## 返回一至十号座次的中文数字；座次标签属于游戏内座位容器，超出当前模式上限时回退阿拉伯数字。

@@ -24,7 +24,7 @@ var processing_area: Array[CardInstance] = []
 ## 当前行动玩家 ID；无进行中的回合时为 -1。
 var current_player_id: int = -1
 
-## 当前阶段；可取 setup、character_selection、start、judgment、draw、play、discard、finish、game_over。
+## 当前阶段；可取 setup、character_selection、start、judgment、draw、play、choice、discard、finish、game_over。
 var current_phase: String = "setup"
 
 ## 已开始的回合总数；每名角色开始回合时递增，用于日志与同步序号。
@@ -82,8 +82,13 @@ func get_next_alive_player(player_id: int) -> PlayerState:
 func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 玩家快照数组；每名玩家自行处理手牌与身份的可见性。
 	var player_data: Array = []
-	for player: PlayerState in players:
-		player_data.append(player.to_dict(viewer_id, reveal_private))
+	for seat_index: int in range(players.size()):
+		# 当前座位玩家；MatchController 会在身份确定后把主公旋转到数组首位。
+		var player: PlayerState = players[seat_index]
+		# 座次快照；从1开始，供界面显示主公为一号位且不依赖稳定 player_id。
+		var serialized_player: Dictionary = player.to_dict(viewer_id, reveal_private)
+		serialized_player["seat_number"] = seat_index + 1
+		player_data.append(serialized_player)
 	return {
 		"match_id": match_id,
 		"deck_id": deck_id,
