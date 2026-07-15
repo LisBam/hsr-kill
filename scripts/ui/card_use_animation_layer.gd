@@ -66,14 +66,17 @@ var _line_presentations: Dictionary = {}
 ## 当前表现序号；每次播放递增，为卡牌与对应目标指示线建立稳定关联。
 var _presentation_sequence: int = 0
 
-## 当前动画代次；重新开局清空表现时递增，使上一局仍在等待的异步淡出任务安全退出。
+## 当前动画代次；重新开局清空表现时递增，使上一局仍在等待的飞牌、淡出和区域转移任务安全退出。
 var _presentation_generation: int = 0
 
-## 正在执行普通区域转移动画的牌面节点；摸牌、获得与响应弃牌不进入使用牌弃牌展示队列。
-var _transfer_cards: Array[CardView] = []
+## 正在执行普通区域转移动画的实例 ID 到牌面节点映射；稳定整数键保证节点释放后仍能安全清理索引。
+var _transfer_cards: Dictionary = {}
 
-## 摸牌堆叠键到仍在显示的正式牌面数组映射；同一目标玩家的连续摸牌按加入顺序计算偏移与层级。
+## 摸牌堆叠键到牌面实例 ID 数组的映射；不保存对象引用，重开释放节点后仍可安全清空与去重。
 var _draw_transfer_stacks: Dictionary = {}
+
+## 普通区域转移牌面实例 ID 到补间的映射；重新开局时清空所有权索引，旧协程依靠动画代次安全退出。
+var _transfer_tweens: Dictionary = {}
 
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
@@ -146,20 +149,24 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 		return
 	# 转移牌面；始终由动画层持有，完成后释放而不返回任何界面容器。
 	var transfer_card: CardView = card_view
+	# 转移牌面实例 ID；数组和补间索引只保存该稳定整数，不使用可能在重开时失效的对象作为删除参数。
+	var transfer_card_instance_id: int = transfer_card.get_instance_id()
+	# 本次区域转移所属动画代次；重新开局后旧协程必须在访问牌面前立即退出。
+	var transfer_generation: int = _presentation_generation
 	if transfer_card.get_parent() != self:
 		transfer_card.reparent(self)
 	transfer_card.position = start_position - transfer_card.get_card_size() * 0.5
 	transfer_card.rotation = 0.0
 	transfer_card.scale = Vector2.ONE * 0.82
 	transfer_card.modulate = Color.WHITE
-	_transfer_cards.append(transfer_card)
+	_transfer_cards[transfer_card_instance_id] = transfer_card
 	# 当前堆叠索引；普通转移保持0，同一玩家连续摸牌按到达顺序递增。
 	var stack_index: int = 0
 	if not draw_stack_key.is_empty():
-		# 当前摸牌堆叠数组；字典值使用正式 CardView 节点，不保存任何权威卡牌对象。
+		# 当前摸牌堆叠实例 ID 数组；顺序仅用于计算偏移和层级，不持有牌面节点。
 		var draw_stack: Array = _draw_transfer_stacks.get(draw_stack_key, []) as Array
 		stack_index = draw_stack.size()
-		draw_stack.append(transfer_card)
+		draw_stack.append(transfer_card_instance_id)
 		_draw_transfer_stacks[draw_stack_key] = draw_stack
 	transfer_card.z_index = 80 + stack_index if not draw_stack_key.is_empty() else 80 + _transfer_cards.size()
 	# 最终堆叠位置；第一张落在玩家锚点，后续牌按固定向量依次压叠显示。
@@ -173,20 +180,27 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
 	transfer_tween.tween_interval(minf(card_hold_duration, 0.24))
 	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, target_line_fade_duration)
+	_transfer_tweens[transfer_card_instance_id] = transfer_tween
 	await transfer_tween.finished
-	_transfer_cards.erase(transfer_card)
-	_remove_draw_transfer_card(draw_stack_key, transfer_card)
+	if transfer_generation != _presentation_generation:
+		# 旧局转移牌面；清场时已隐藏，补间正常结束后才在此释放，避免补间写入已释放节点。
+		if is_instance_valid(transfer_card):
+			transfer_card.queue_free()
+		return
+	_transfer_tweens.erase(transfer_card_instance_id)
+	_transfer_cards.erase(transfer_card_instance_id)
+	_remove_draw_transfer_card(draw_stack_key, transfer_card_instance_id)
 	if is_instance_valid(transfer_card):
 		transfer_card.queue_free()
 
 
-## 从摸牌堆叠组移除已完成牌面；最后一张结束后删除空键，避免后续批次继承旧索引。
-func _remove_draw_transfer_card(draw_stack_key: String, transfer_card: CardView) -> void:
+## 从摸牌堆叠组移除已完成牌面的实例 ID；最后一张结束后删除空键，避免后续批次继承旧索引。
+func _remove_draw_transfer_card(draw_stack_key: String, transfer_card_instance_id: int) -> void:
 	if draw_stack_key.is_empty() or not _draw_transfer_stacks.has(draw_stack_key):
 		return
-	# 当前摸牌堆叠数组；只移除表现节点，不修改玩家手牌或牌堆。
+	# 当前摸牌堆叠实例 ID 数组；只移除表现索引，不修改玩家手牌或牌堆。
 	var draw_stack: Array = _draw_transfer_stacks[draw_stack_key] as Array
-	draw_stack.erase(transfer_card)
+	draw_stack.erase(transfer_card_instance_id)
 	if draw_stack.is_empty():
 		_draw_transfer_stacks.erase(draw_stack_key)
 	else:
@@ -212,12 +226,17 @@ func clear_presentations() -> void:
 	for active_card: CardView in _active_cards:
 		if active_card != null and is_instance_valid(active_card):
 			active_card.queue_free()
-	for transfer_card: CardView in _transfer_cards:
-		if transfer_card != null and is_instance_valid(transfer_card):
-			transfer_card.queue_free()
+	for transfer_card_variant: Variant in _transfer_cards.values():
+		if not is_instance_valid(transfer_card_variant):
+			continue
+		# 当前仍存活的区域转移牌面；立即隐藏，待其旧补间完成并通过代次分支安全释放。
+		var transfer_card: CardView = transfer_card_variant as CardView
+		if transfer_card != null:
+			transfer_card.visible = false
 	_active_cards.clear()
 	_transfer_cards.clear()
 	_draw_transfer_stacks.clear()
+	_transfer_tweens.clear()
 	_fade_queue.clear()
 	_motion_tweens.clear()
 	_card_sequences.clear()

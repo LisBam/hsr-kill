@@ -385,6 +385,31 @@ func _run() -> void:
 		printerr("SMOKE_FAIL draw_transfer_cleanup children=%d stacks=%s" % [animation_layer.get_child_count(), animation_layer._draw_transfer_stacks])
 		get_tree().quit(1)
 		return
+	# 重开中断牌面；模拟摸牌转移尚未完成时玩家立即从菜单重新开局。
+	var interrupted_transfer_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	interrupted_transfer_card.configure_back(92001, false)
+	animation_layer.add_child(interrupted_transfer_card)
+	animation_layer.play_transfer(interrupted_transfer_card, draw_start_position, draw_target_position, "draw:restart")
+	if animation_layer._transfer_cards.size() != 1 or animation_layer._transfer_tweens.size() != 1 or (animation_layer._draw_transfer_stacks.get("draw:restart", []) as Array).size() != 1:
+		printerr("SMOKE_FAIL restart_transfer_not_registered")
+		get_tree().quit(1)
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.2).timeout
+	if animation_layer.get_child_count() != 0 or not animation_layer._transfer_cards.is_empty() or not animation_layer._transfer_tweens.is_empty() or not animation_layer._draw_transfer_stacks.is_empty():
+		printerr("SMOKE_FAIL restart_transfer_cleanup children=%d cards=%s tweens=%s stacks=%s" % [animation_layer.get_child_count(), animation_layer._transfer_cards, animation_layer._transfer_tweens, animation_layer._draw_transfer_stacks])
+		get_tree().quit(1)
+		return
+	# 重开后新牌面；验证清场代次不会阻止下一局的正常区域转移动画。
+	var resumed_transfer_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	resumed_transfer_card.configure_back(92002, false)
+	animation_layer.add_child(resumed_transfer_card)
+	animation_layer.play_transfer(resumed_transfer_card, draw_start_position, draw_target_position, "draw:after_restart")
+	await get_tree().create_timer(0.2).timeout
+	if animation_layer.get_child_count() != 0 or not animation_layer._transfer_cards.is_empty() or not animation_layer._transfer_tweens.is_empty() or not animation_layer._draw_transfer_stacks.is_empty():
+		printerr("SMOKE_FAIL post_restart_transfer_cleanup")
+		get_tree().quit(1)
+		return
 	get_tree().root.remove_child(animation_layer)
 	animation_layer.free()
 	# 右上角菜单组件；替代独立牌名和重开按钮，并默认保存8人作为下一局配置。
