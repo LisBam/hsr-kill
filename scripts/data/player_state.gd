@@ -30,6 +30,15 @@ var max_hp: int = 4
 ## 当前是否存活；死亡结算完成后设为 false，之后不再参与行动顺序。
 var alive: bool = true
 
+## 当前是否处于濒死流程；体力不大于0时先设为 true，救援成功或死亡确认后恢复 false。
+var dying: bool = false
+
+## 当前是否已经完成死亡确认；与 alive 分开保存，允许濒死和死亡触发在确认前插入。
+var death_confirmed: bool = false
+
+## 当前是否离开游戏但未死亡；离场角色保留稳定座次和历史，但默认不参与距离与选择。
+var out_of_game: bool = false
+
 ## 当前是否处于连环状态；属性伤害结算后会触发横置角色间的伤害传导。
 var chained: bool = false
 
@@ -62,6 +71,24 @@ var wooden_ox_storage: Array[CardInstance] = []
 
 ## 当前出牌阶段是否已发动木牛流马存粮；每个回合开始时重置为 false。
 var wooden_ox_used: bool = false
+
+## 当前临时技能与失效时机；键为技能 ID，值为 turn_end、phase_end 等稳定持续标识。
+var temporary_skills: Dictionary = {}
+
+## 玩家回合历史；每个回合保存阶段跳过、使用牌、响应、伤害和发动技能摘要。
+var turn_history: Array[Dictionary] = []
+
+## 当前回合使用牌统计；键为逻辑牌名，值为已经确认使用的次数。
+var card_use_history: Dictionary = {}
+
+## 当前回合响应记录；每项保存响应事件 ID、逻辑牌和实体材料 UID。
+var response_history: Array[Dictionary] = []
+
+## 当前回合受到或造成的伤害记录；每项保存来源、目标、数值、属性和事件 ID。
+var damage_history: Array[Dictionary] = []
+
+## 当前回合发动技能记录；每项保存技能 ID、时机、目标和事件 ID。
+var skill_history: Array[Dictionary] = []
 
 
 ## 使用稳定 ID 与显示名创建玩家状态，其他字段由开局流程填充。
@@ -171,6 +198,9 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"hp": hp,
 		"max_hp": max_hp,
 		"alive": alive,
+		"dying": dying,
+		"death_confirmed": death_confirmed,
+		"out_of_game": out_of_game,
 		"chained": chained,
 		"face_down": face_down,
 		"hand_count": hand.size(),
@@ -179,4 +209,10 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"judgment_area": judgment_data,
 		"wooden_ox_storage_count": wooden_ox_storage.size(),
 		"wooden_ox_storage": wooden_ox_data,
+		"temporary_skills": temporary_skills.duplicate(true),
+		"turn_history_count": turn_history.size(),
+		"card_use_history": card_use_history.duplicate(true),
+		"response_history_count": response_history.size(),
+		"damage_history_count": damage_history.size(),
+		"skill_history_count": skill_history.size(),
 	}

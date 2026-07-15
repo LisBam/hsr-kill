@@ -6,6 +6,9 @@ extends Node
 ## 以事件名为键的处理器数组；每项含 owner、priority 与 callback。
 var _handlers: Dictionary = {}
 
+## 事件化触发器排序组件；旧 subscribe/dispatch 保持兼容，复杂技能可通过 subscribe_ordered 注册。
+var _ordered_triggers: TriggerManager = TriggerManager.new()
+
 
 ## 注册事件处理器。owner 用于组件卸载时批量注销，priority 越大越先执行。
 func subscribe(event_name: String, owner: Object, callback: Callable, priority: int = 0) -> void:
@@ -27,6 +30,12 @@ func unsubscribe_owner(owner: Object) -> void:
 		for index: int in range(handlers.size() - 1, -1, -1):
 			if handlers[index].get("owner") == owner:
 				handlers.remove_at(index)
+	_ordered_triggers.unsubscribe_owner(owner)
+
+
+## 注册带角色座次、firstDo/lastDo 和动态条件的高级触发器；普通规则继续使用 subscribe。
+func subscribe_ordered(event_name: String, owner: Object, callback: Callable, priority: int = 0, owner_player_id: int = -1, role: String = "global", first_do: bool = false, last_do: bool = false, condition: Callable = Callable()) -> int:
+	return _ordered_triggers.subscribe(event_name, owner, callback, priority, owner_player_id, role, first_do, last_do, condition)
 
 
 ## 按当前优先级同步派发事件；已释放的所有者会被自动跳过。
@@ -43,6 +52,11 @@ func dispatch(event: RuleEvent) -> RuleEvent:
 		if is_instance_valid(owner) and callback.is_valid():
 			callback.call(event)
 	return event
+
+
+## 按座次与特殊分组派发高级触发器；旧全局优先级回调由调用方显式先执行以保持迁移期顺序可见。
+func dispatch_ordered(event: RuleEvent, start_player_id: int, seat_order: Array[int]) -> RuleEvent:
+	return _ordered_triggers.dispatch(event, start_player_id, seat_order)
 
 
 ## 处理器排序函数；优先级高的规则先获得修改或取消事件的机会。

@@ -20,6 +20,8 @@ AI 不持有 `GameState` 的可变引用。每次需要行动时，控制器执�
 
 响应类操作统一创建选择请求，包括【闪】、【杀】、【桃】、【酒】、【无懈可击】、银月枪和装备可选效果。AI 先收到与人类相同的候选牌快照，再由 `choose_card_choice()` 返回 `choose_cards` 动作；控制器会重新校验请求序号、候选 UID、选择数量和当前牌区，不能直接消耗牌。无响应牌时仍创建允许放弃的空候选请求，确保是否响应不由规则层根据是否持牌直接强制决定。
 
+运行时层把上述兼容动作转换为 `ChoiceResponse`。`AICoordinator.request_choice()` 返回与本地和网络完全相同的请求 ID、事件 ID、actor、confirmed、实体牌 UID 和 source 字段；AI 不需要知道 `GameEvent` 的 Callable 或控制器对象。超时托管只需把 source 改为 `timeout`，规则校验路径不变。
+
 弃牌阶段、火攻展示与弃牌、过河拆桥、顺手牵羊、五谷丰登和其他区域选牌也使用相同的请求协议。`CardSelectionPanel` 只负责展示正面或牌背、维护临时 UID 选择和发出提交信号，不直接修改 `GameState`。
 
 ## 替换策略
@@ -41,3 +43,4 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 - `character_candidate_count` 默认 5；基础 AI 只在自己的候选列表内选将，该数量不影响出牌阶段动作上限。
 - `_ai_drive_token` 在阶段变化时递增，旧计时器不会在新阶段误操作。
 - 固定对局随机种子可用于复盘和回归测试。
+- `GameState.random_seed`、`random_history`、事件历史和移牌历史可独立保存；AI 决策不依赖 Godot 场景节点。

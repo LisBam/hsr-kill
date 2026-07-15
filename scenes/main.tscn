@@ -560,7 +560,8 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("7_animation")
 
-[node name="CardSelectionPanel" parent="." instance=ExtResource("16_card_selection")]
+[node name="CardSelectionPanel" parent="." unique_id=2124335258 instance=ExtResource("16_card_selection")]
+layout_mode = 1
 
 [node name="CharacterSelectionPanel" type="Control" parent="." unique_id=9681950]
 unique_name_in_owner = true
