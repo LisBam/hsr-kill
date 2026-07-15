@@ -38,3 +38,20 @@ func request_card_choice(player_id: int, authoritative_snapshot: Dictionary, cho
 	if policy == null:
 		return {}
 	return policy.choose_card_choice(authoritative_snapshot, choice_request, legal_actions)
+
+
+## 把通用 ChoiceRequest 交给 AI，并把策略的兼容动作结果转换为标准 ChoiceResponse。
+func request_choice(player_id: int, authoritative_snapshot: Dictionary, request: ChoiceRequest, presentation_request: Dictionary, legal_actions: Array[Dictionary]) -> ChoiceResponse:
+	if request == null:
+		return null
+	var action_data: Dictionary = request_card_choice(player_id, authoritative_snapshot, presentation_request, legal_actions)
+	if action_data.is_empty():
+		return null
+	var payload: Dictionary = action_data.get("payload", {}) as Dictionary
+	var response: ChoiceResponse = ChoiceResponse.new(request.request_id, request.event_id, player_id, true)
+	for card_uid_variant: Variant in payload.get("selected_card_uids", []) as Array:
+		response.card_ids.append(int(card_uid_variant))
+	response.confirmed = not response.card_ids.is_empty() or request.min_count > 0
+	response.client_sequence = int(action_data.get("client_sequence", 0))
+	response.source = "ai"
+	return response

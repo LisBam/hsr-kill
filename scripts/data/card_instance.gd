@@ -26,6 +26,15 @@ var zone: String = "draw_pile"
 ## 当前实体牌的所属玩家 ID；公共区域使用 -1。
 var owner_id: int = -1
 
+## 已知该实体牌完整牌面的玩家 ID 集合；手牌移动和公开展示由移牌服务维护。
+var known_to: Array[int] = []
+
+## 是否已经发生公开展示；公开牌面不会因后续进入公共区域而重新变为未知。
+var shown: bool = false
+
+## 仅对某一持有者私密可见的玩家 ID；公开牌或公共区域使用 -1。
+var private_owner_id: int = -1
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 func _init(card_definition_id: String = "", card_suit: String = "spade", card_rank: int = 1) -> void:
@@ -55,4 +64,7 @@ func to_dict() -> Dictionary:
 		"color": get_color(),
 		"zone": zone,
 		"owner_id": owner_id,
+		"known_to": known_to.duplicate(),
+		"shown": shown,
+		"private_owner_id": private_owner_id,
 	}

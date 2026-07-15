@@ -8,6 +8,12 @@ signal snapshot_received(snapshot_data: Dictionary)
 signal packet_ready_for_transport(packet: Dictionary)
 signal connection_state_changed(connected: bool, message: String)
 
+## 权威端选择请求接收信号；远端客户端收到裁剪后的 ChoiceRequest 字典后重建选择界面。
+signal choice_request_received(request_data: Dictionary)
+
+## 选择结果接收信号；权威端必须再校验 request_id、event_id、actor_id 和候选合法性。
+signal choice_response_received(response_data: Dictionary)
+
 ## 通信模式；OFFLINE 本地回环，LAN 与 REMOTE 交由外部传输适配器发送。
 enum Mode {
 	OFFLINE,
@@ -52,6 +58,28 @@ func send_snapshot(snapshot: Dictionary) -> void:
 		packet_ready_for_transport.emit(packet)
 
 
+## 发送通用选择请求；离线模式直接回环给本地适配器，联网模式交由传输层发送。
+func send_choice_request(request: ChoiceRequest) -> void:
+	if request == null:
+		return
+	var packet: Dictionary = _build_packet("choice_request", request.to_dict())
+	if mode == Mode.OFFLINE:
+		choice_request_received.emit(packet["payload"] as Dictionary)
+	else:
+		packet_ready_for_transport.emit(packet)
+
+
+## 发送通用选择响应；所有输入来源使用 ChoiceResponse，不上传或覆盖权威 GameState。
+func send_choice_response(response: ChoiceResponse) -> void:
+	if response == null:
+		return
+	var packet: Dictionary = _build_packet("choice_response", response.to_dict())
+	if mode == Mode.OFFLINE:
+		choice_response_received.emit(packet["payload"] as Dictionary)
+	else:
+		packet_ready_for_transport.emit(packet)
+
+
 ## 接收外部传输适配器交付的封包，并按消息类型分发到统一信号。
 func receive_transport_packet(packet: Dictionary) -> void:
 	# 封包协议版本；当前仅接受版本1，未来升级可在此兼容旧协议。
@@ -66,6 +94,10 @@ func receive_transport_packet(packet: Dictionary) -> void:
 		command_received.emit(payload)
 	elif message_type == "snapshot":
 		snapshot_received.emit(payload)
+	elif message_type == "choice_request":
+		choice_request_received.emit(payload)
+	elif message_type == "choice_response":
+		choice_response_received.emit(payload)
 
 
 ## 构建带版本、模式与递增序号的通用消息封包。
