@@ -46,6 +46,12 @@ var is_interactable: bool = false
 ## 当前是否显示统一牌背；隐藏手牌候选和牌堆摸牌动画使用该状态，不携带任何牌面信息。
 var is_face_down: bool = false
 
+## 正式手牌节点的运行时入场偏移；默认零向量，获得牌动画从右侧偏移补间归零，布局刷新时会保留当前值。
+var hand_entry_offset: Vector2 = Vector2.ZERO:
+	set(value):
+		position += value - hand_entry_offset
+		hand_entry_offset = value
+
 ## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 

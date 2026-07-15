@@ -178,20 +178,40 @@ func _run() -> void:
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
-	# 本地获得牌数据；从其他玩家手牌取得后应显示正面，并从本地手牌区右侧进入。
+	# 本地获得牌数据；从其他玩家手牌取得后应成为手牌容器中的正式实体节点，并从右侧进入。
 	var gained_card_data: Dictionary = {"uid":90003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"hand", "owner_id":4}
+	# 包含获得牌的最新快照；转移信号先登记 UID，随后快照对账创建唯一正式手牌节点。
+	var gained_snapshot: Dictionary = _make_ten_player_snapshot()
+	# 本地五号位快照；新增实体牌进入 hand 数组并同步公开手牌数量。
+	var gained_local_player: Dictionary = (gained_snapshot.get("players", []) as Array)[4] as Dictionary
+	gained_local_player["hand"] = [gained_card_data]
+	gained_local_player["hand_count"] = 1
 	main_instance.call("_on_card_transfer_requested", gained_card_data, 5, "hand", 4, "hand")
-	# 当前获得牌动画节点；区域转移索引在动画完成前保存正式 CardView 实例。
-	var gained_transfer_card: CardView = animation_layer._transfer_cards.values()[0] as CardView
-	# 期望获得牌起点中心；桌面公开辅助查询与正式转移动画使用同一可视滚动区边界。
-	var expected_gain_start_center: Vector2 = main_instance.call("_get_local_hand_gain_start_position", gained_transfer_card.get_card_size()) as Vector2
-	# 期望获得牌起点左上角；动画层以牌面中心协议接收位置，再换算成 CardView 左上角。
-	var expected_gain_start_position: Vector2 = expected_gain_start_center - gained_transfer_card.get_card_size() * 0.5
-	if gained_transfer_card.is_face_down or not gained_transfer_card.position.is_equal_approx(expected_gain_start_position):
-		_fail("local_gain_entry:%s expected=%s back=%s" % [gained_transfer_card.position, expected_gain_start_position, gained_transfer_card.is_face_down])
+	main_instance.call("_on_state_changed", gained_snapshot)
+	# 正式手牌视图映射；获得牌必须直接登记在当前手牌 UID 映射中。
+	var gained_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
+	# 正在入场的正式手牌节点；整个动画与后续交互都复用该实例。
+	var gained_hand_card: CardView = gained_card_views.get(90003) as CardView
+	# 期望获得牌全局起点中心；桌面辅助查询使用当前可视滚动区右边缘计算。
+	var expected_gain_start_center: Vector2 = main_instance.call("_get_local_hand_gain_start_global_position", gained_hand_card.get_card_size()) as Vector2
+	# 期望获得牌全局左上角；CardView 的 Node2D 原点位于正式牌面左上角。
+	var expected_gain_start_position: Vector2 = expected_gain_start_center - gained_hand_card.get_card_size() * 0.5
+	# 获得牌正式实例 ID；再次刷新相同快照后必须保持不变，证明没有重建临时替代节点。
+	var gained_card_instance_id: int = gained_hand_card.get_instance_id()
+	if gained_hand_card.get_parent() != hand_container or gained_hand_card.is_face_down or not gained_hand_card.global_position.is_equal_approx(expected_gain_start_position) or not (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003) or not animation_layer._transfer_cards.is_empty():
+		_fail("local_gain_entity parent=%s position=%s expected=%s back=%s transfers=%s" % [gained_hand_card.get_parent(), gained_hand_card.global_position, expected_gain_start_position, gained_hand_card.is_face_down, animation_layer._transfer_cards])
 		return
-	animation_layer.clear_presentations()
-	await get_tree().create_timer(0.03).timeout
+	# 动画中重复收到同一快照；正式手牌节点必须继续复用，补间不能因界面刷新被销毁。
+	main_instance.call("_on_state_changed", gained_snapshot)
+	if (main_instance.get("_card_views") as Dictionary).get(90003).get_instance_id() != gained_card_instance_id:
+		_fail("local_gain_entity_recreated")
+		return
+	await get_tree().create_timer(0.6).timeout
+	# 动画完成后的正式手牌节点；仍位于手牌容器、偏移归零且不再登记入场补间。
+	gained_hand_card = (main_instance.get("_card_views") as Dictionary).get(90003) as CardView
+	if gained_hand_card.get_parent() != hand_container or not gained_hand_card.hand_entry_offset.is_zero_approx() or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003):
+		_fail("local_gain_entity_finish parent=%s offset=%s" % [gained_hand_card.get_parent(), gained_hand_card.hand_entry_offset])
+		return
 	# 同批弃置的第一张牌；信号顺序应成为中央队列从左到右的稳定顺序。
 	var first_discard_card_data: Dictionary = {"uid":90004, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"discard_pile", "owner_id":-1}
 	# 同批弃置的第二张牌；与第一张在同一帧进入弃牌堆，必须完整共存而不是逐张替换。

@@ -43,6 +43,11 @@ func refresh_card_states() -> void:
 	queue_sort()
 
 
+## 立即应用一次手牌布局；正式手牌入场动画在计算右侧起点前调用，以取得包含新实体牌的最终落点。
+func layout_cards_now() -> void:
+	_layout_cards()
+
+
 ## 按参考实现的 updateHand 算法排列手牌：空间足够时完整展开，不足时等距覆盖，达到最小露出宽度后允许横向滚动。
 func _layout_cards() -> void:
 	# 当前参与布局的可见卡牌；卡牌根节点统一为 Node2D，不依赖按钮或 Control 布局属性。
@@ -89,6 +94,6 @@ func _layout_cards() -> void:
 		# 悬停缩放额外占用的垂直尺寸；整体向上补偿，使放大后的牌底仍与普通手牌对齐。
 		var hover_height_compensation: float = card_size.y * (card.hover_scale - 1.0) if hovered else 0.0
 		# 当前卡牌位置；选中状态上移，悬停状态围绕中心放大且保持底边对齐。
-		card.position = Vector2(current_card_x - hover_width_compensation, base_y - (selected_lift if selected else 0.0) - hover_height_compensation)
+		card.position = Vector2(current_card_x - hover_width_compensation, base_y - (selected_lift if selected else 0.0) - hover_height_compensation) + card.hand_entry_offset
 		card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
 		current_card_x += card_step
