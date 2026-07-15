@@ -10,8 +10,8 @@ enum NameMode {
 	ORIGINAL,
 }
 
-## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换。
-var card_name_mode: NameMode = NameMode.CUSTOM
+## 当前卡牌名称模式；默认使用原版三国杀牌名，可在运行时安全切换为《崩铁杀》自定义牌名。
+var card_name_mode: NameMode = NameMode.ORIGINAL
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
