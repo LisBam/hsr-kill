@@ -14,6 +14,9 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 本地获得牌动画起点距离手牌区右边缘的额外间距；默认24像素让新牌从区域外清晰进入，运行时可按主题调整。
 @export_range(0.0, 96.0, 1.0) var local_hand_gain_entry_margin: float = 24.0
 
+## 本地正式获得牌从右侧进入手牌布局的持续时间；默认0.42秒与通用飞牌节奏一致，可在检查器中独立调整。
+@export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.42
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -107,8 +110,14 @@ var _selected_target_ids: Array[int] = []
 ## 当前因唯一合法候选而自动锁定的目标 ID；默认-1表示玩家仍可自行选择或取消目标。
 var _auto_locked_target_id: int = -1
 
-## 当前手牌 UID 到卡牌视图的映射；每次重绘手牌时整体重建，只用于同步选中视觉。
+## 当前手牌 UID 到正式卡牌视图的映射；快照刷新按 UID 复用节点，实体离开本人牌区后才移除。
 var _card_views: Dictionary = {}
+
+## 已收到转移信号、等待正式手牌节点进入当前快照的本地获得牌 UID 集合；键为实体 UID，值固定为 true。
+var _pending_local_hand_gain_uids: Dictionary = {}
+
+## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
+var _local_hand_gain_tweens: Dictionary = {}
 
 ## 当前技能 ID 到技能按钮视图的映射；预留给主动技能选择状态与冷却状态同步。
 var _skill_views: Dictionary = {}
@@ -347,10 +356,8 @@ func _on_skill_requested(skill_id: String) -> void:
 		error_label.text = "【%s】技能界面已预留，规则效果尚未接入。" % skill_name
 
 
-## 渲染本地玩家手牌，并根据当前名称模式生成牌面文本。
+## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
 func _render_local_hand() -> void:
-	_clear_container(hand_container)
-	_card_views.clear()
 	# 本地玩家快照；找不到时保持空字典。
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 是否轮到本地玩家出牌；决定卡牌与四个动作按钮是否可用。
@@ -361,40 +368,64 @@ func _render_local_hand() -> void:
 	var has_inline_choice: bool = not _inline_card_choice.is_empty()
 	# 当前出牌请求候选 UID；普通出牌阶段只开放至少存在一种合法动作的实体牌。
 	var play_candidate_uids: Array[int] = _get_play_phase_candidate_uids()
+	# 当前快照中的手牌条目；每项同时记录牌面快照与是否来自木牛流马，数组顺序就是正式手牌显示顺序。
+	var desired_card_entries: Array[Dictionary] = []
 	for card_variant: Variant in local_player.get("hand", []):
-		# 当前手牌快照；包含 UID、配置 ID、花色与点数。
-		var card: Dictionary = card_variant as Dictionary
-		# 当前手牌定义；用于双名称与类型提示。
-		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
-		# 当前手牌节点；正式卡牌场景负责牌面表现，独立输入区域只改变界面选择状态。
-		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-		card_button.visible = true
-		# 当前实体牌 UID；通过 bind 传入选择回调。
+		# 当前普通手牌条目；false 表示牌面不显示木牛“粮”来源标记。
+		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":false})
+	for card_variant: Variant in local_player.get("wooden_ox_storage", []):
+		# 当前木牛“粮”条目；true 让同一正式牌面显示独立来源标记。
+		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":true})
+	# 当前快照需要保留的实体 UID 集合；用于移除已经离开本人手牌与木牛区域的旧视图。
+	var desired_uid_lookup: Dictionary = {}
+	for entry: Dictionary in desired_card_entries:
+		# 当前条目的实体 UID；稳定 UID 是复用正式 CardView 的唯一身份。
+		var desired_card: Dictionary = entry.get("card", {}) as Dictionary
+		desired_uid_lookup[int(desired_card.get("uid", -1))] = true
+	# 已离开本人牌区的旧实体视图；手牌容器仍持有时由桌面释放，已被出牌动画层接管时只移除映射。
+	for existing_uid_variant: Variant in _card_views.keys():
+		# 当前旧视图实体 UID；用于查询新快照是否仍需要该节点。
+		var existing_uid: int = int(existing_uid_variant)
+		if desired_uid_lookup.has(existing_uid):
+			continue
+		_cancel_local_hand_gain_animation(existing_uid)
+		# 当前旧卡牌视图；只有仍位于手牌容器的节点才由本方法释放。
+		var existing_view: CardView = _card_views.get(existing_uid) as CardView
+		if existing_view != null and is_instance_valid(existing_view) and existing_view.get_parent() == hand_container:
+			hand_container.remove_child(existing_view)
+			existing_view.queue_free()
+	# 不在最新快照中的待入场 UID；转移结果已失效或被后续规则移动，禁止在未来快照中错误启动动画。
+	for pending_uid_variant: Variant in _pending_local_hand_gain_uids.keys():
+		if not desired_uid_lookup.has(int(pending_uid_variant)):
+			_pending_local_hand_gain_uids.erase(pending_uid_variant)
+	# 本轮对账后的 UID 到正式视图映射；只包含当前快照仍属于本人牌区的节点。
+	var next_card_views: Dictionary = {}
+	# 当前按快照顺序排列的正式手牌节点；对账完成后统一调整子节点顺序并计算最终落点。
+	var ordered_card_views: Array[CardView] = []
+	for entry: Dictionary in desired_card_entries:
+		# 当前牌面快照；包含配置 ID、花色、点数、区域和稳定 UID。
+		var card: Dictionary = entry.get("card", {}) as Dictionary
+		# 当前实体 UID；用于查找并复用已有正式牌面节点。
 		var card_uid: int = int(card.get("uid", -1))
+		# 当前牌面定义；用于双名称、类别和插画刷新。
+		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
+		# 当前牌是否来自木牛流马；只改变来源标记，不改变实体 UID 或节点身份。
+		var wooden_ox_card: bool = bool(entry.get("wooden_ox_card", false))
 		# 当前手牌是否允许交互；响应与普通出牌均以权威请求候选为准，不能只按阶段整体启用。
 		var card_interactable: bool = inline_candidate_uids.has(card_uid) if has_inline_choice else can_act and play_candidate_uids.has(card_uid)
-		card_button.configure(card, definition, false, card_interactable)
-		card_button.pressed.connect(_on_card_pressed.bind(card_uid))
-		card_button.card_drag_started.connect(_on_card_drag_started)
-		hand_container.add_child(card_button)
-		_card_views[card_uid] = card_button
-	for card_variant: Variant in local_player.get("wooden_ox_storage", []):
-		# 当前“粮”快照；所有者可像手牌一样选择并使用或打出。
-		var card: Dictionary = card_variant as Dictionary
-		# 当前“粮”定义；用于双名称与规则提示。
-		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
-		# 当前“粮”卡牌节点；与普通手牌共用选择 UID、卡牌视觉与使用牌动作。
-		var card_button: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-		card_button.visible = true
-		# 当前“粮”的实体牌 UID；通过 bind 传入选择回调。
-		var card_uid: int = int(card.get("uid", -1))
-		# 当前“粮”是否允许交互；响应与普通出牌都只开放当前请求明确列入候选的实体牌。
-		var card_interactable: bool = inline_candidate_uids.has(card_uid) if has_inline_choice else can_act and play_candidate_uids.has(card_uid)
-		card_button.configure(card, definition, true, card_interactable)
-		card_button.pressed.connect(_on_card_pressed.bind(card_uid))
-		card_button.card_drag_started.connect(_on_card_drag_started)
-		hand_container.add_child(card_button)
-		_card_views[card_uid] = card_button
+		# 当前正式手牌视图；优先复用同 UID 节点，缺失或不在手牌容器时才创建新节点。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			card_view = _create_local_hand_card_view(card_uid)
+		card_view.configure(card, definition, wooden_ox_card, card_interactable)
+		next_card_views[card_uid] = card_view
+		ordered_card_views.append(card_view)
+	_card_views = next_card_views
+	# 当前正式手牌顺序索引；把复用或新建的节点顺序与权威快照数组保持一致。
+	for card_index: int in range(ordered_card_views.size()):
+		hand_container.move_child(ordered_card_views[card_index], card_index)
+	hand_container.layout_cards_now()
+	_start_pending_local_hand_gain_animations()
 	use_button.disabled = true
 	recast_button.disabled = not can_act
 	wooden_ox_button.disabled = not can_act
@@ -403,6 +434,17 @@ func _render_local_hand() -> void:
 	%CancelButton.disabled = false
 	recast_button.visible = false
 	wooden_ox_button.visible = false
+
+
+## 创建一张会长期留在手牌容器中的正式 CardView；节点按实体 UID 绑定一次输入信号，后续快照只更新内容。
+func _create_local_hand_card_view(card_uid: int) -> CardView:
+	# 新正式手牌节点；它会一直复用到实体牌离开本人手牌或木牛区域。
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	card_view.visible = true
+	card_view.pressed.connect(_on_card_pressed.bind(card_uid))
+	card_view.card_drag_started.connect(_on_card_drag_started)
+	hand_container.add_child(card_view)
+	return card_view
 
 
 ## 返回左下装备区的固定槽位文本；其他玩家装备仍直接显示在其武将牌状态中。
@@ -623,6 +665,7 @@ func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 func _on_restart_requested(player_count: int) -> void:
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
+	_clear_local_hand_gain_animations()
 	card_selection_panel.close()
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
@@ -782,8 +825,12 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	# 手牌展示不会移动权威实体，因此展示请求必须使用正式牌面的独立表现实例。
 	# 当前请求是否只展示牌面；手牌展示不会移动权威实体，因此必须使用正式牌面的独立表现实例。
 	var presentation_only: bool = str(card_data.get("zone", "")) != "processing"
+	# 当前展示实体 UID；实际使用牌需要先停止可能尚未完成的本地获得动画，再把同一正式节点交给出牌动画层。
+	var card_uid: int = int(card_data.get("uid", -1))
+	if not presentation_only:
+		_cancel_local_hand_gain_animation(card_uid)
 	# 正式卡牌节点；实际使用的本地处理区牌接管原节点，纯展示和不可见来源实例化同款完整牌面。
-	var animated_card: CardView = null if presentation_only else _card_views.get(int(card_data.get("uid", -1))) as CardView
+	var animated_card: CardView = null if presentation_only else _card_views.get(card_uid) as CardView
 	if animated_card == null:
 		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
 		animated_card.configure(card_data, definition, false, false)
@@ -798,18 +845,21 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	var card_uid: int = int(card_data.get("uid", -1))
 	if target_zone == "discard_pile" and card_use_animation_layer.has_active_card_uid(card_uid):
 		return
+	# 本地非摸牌获得使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
+	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand" and source_zone != "draw_pile"
+	if is_local_gain:
+		_pending_local_hand_gain_uids[card_uid] = true
+		_start_pending_local_hand_gain_animations()
+		return
 	# 动画起点；牌堆、处理区、展示区和弃牌堆都以桌面中心为公共锚点。
-	# 本地非摸牌获得会在牌面创建后覆盖该默认值，改从手牌区右侧进入。
 	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
 		start_position = _get_player_indicator_position(source_player_id)
-	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角使用实际手牌区锚点。
-	# 本地获得牌在创建牌面后进一步使用手牌区最右侧的完整牌面落点。
+	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角的非摸牌获得已由正式手牌节点分支提前处理。
 	var target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if target_player_id >= 0 and target_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
 		target_position = _get_player_indicator_position(target_player_id)
 	# 牌面可见性；牌堆摸牌和其他角色不可见手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
-	# 牌已经进入本地手牌时对本地观察者可见，因此非摸牌获得动画直接显示正面。
 	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
 	# 转移牌节点；所有表现仍复用正式 CardView，不创建简化标签。
 	var animated_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
@@ -824,11 +874,6 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
 		card_use_animation_layer.play_card(animated_card, start_position, target_position, [])
 		return
-	# 当前转移是否属于本地玩家从非牌堆来源获得牌；该语义使用手牌区右侧入场动画，摸牌仍保留牌堆来源。
-	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand" and source_zone != "draw_pile"
-	if is_local_gain:
-		start_position = _get_local_hand_gain_start_position(animated_card.get_card_size())
-		target_position = _get_local_hand_gain_target_position(animated_card.get_card_size())
 	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
 	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
 	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
@@ -847,22 +892,91 @@ func _get_player_indicator_position(player_id: int) -> Vector2:
 	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 
 
-## 返回本地获得牌动画在手牌区右侧的入场中心；使用可视滚动区域而不是可能超宽的内容区域。
-func _get_local_hand_gain_start_position(card_size: Vector2) -> Vector2:
+## 返回本地正式获得牌在手牌区右侧的全局入场中心；使用可视滚动区域而不是可能超宽的内容区域。
+func _get_local_hand_gain_start_global_position(card_size: Vector2) -> Vector2:
 	# 手牌滚动区全局矩形；右边缘始终位于当前客户区内，不随隐藏内容宽度变化。
 	var hand_scroll_rect: Rect2 = hand_scroll.get_global_rect()
 	# 新牌全局中心；横向位于滚动区右侧，纵向与手牌底部对齐后的牌面中心一致。
 	var start_global_position: Vector2 = Vector2(hand_scroll_rect.end.x + card_size.x * 0.5 + local_hand_gain_entry_margin, hand_scroll_rect.end.y - card_size.y * 0.5)
-	return _global_to_animation_position(start_global_position)
+	return start_global_position
 
 
-## 返回本地获得牌动画在手牌区最右侧的落点中心；动画结束后快照中的新手牌占据同一视觉区域。
-func _get_local_hand_gain_target_position(card_size: Vector2) -> Vector2:
-	# 手牌滚动区全局矩形；落点保留容器配置的右侧安全边距，避免牌框被裁切。
-	var hand_scroll_rect: Rect2 = hand_scroll.get_global_rect()
-	# 新牌目标全局中心；按完整牌面尺寸从右下角向内收缩，使动画明确进入手牌区域。
-	var target_global_position: Vector2 = Vector2(hand_scroll_rect.end.x - hand_container.horizontal_padding - card_size.x * 0.5, hand_scroll_rect.end.y - card_size.y * 0.5)
-	return _global_to_animation_position(target_global_position)
+## 为已经进入当前快照的待处理 UID 启动正式手牌节点动画；尚未出现在快照中的 UID 保留到下一次对账。
+func _start_pending_local_hand_gain_animations() -> void:
+	for card_uid_variant: Variant in _pending_local_hand_gain_uids.keys():
+		# 当前待入场实体 UID；同一 UID 已有补间时不会重复启动。
+		var card_uid: int = int(card_uid_variant)
+		if _local_hand_gain_tweens.has(card_uid):
+			_pending_local_hand_gain_uids.erase(card_uid)
+			continue
+		# 当前正式手牌节点；只有已经由快照对账加入手牌容器后才能计算最终布局落点。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			continue
+		_pending_local_hand_gain_uids.erase(card_uid)
+		_start_local_hand_gain_animation(card_uid, card_view)
+
+
+## 让指定正式手牌节点从可视手牌区右侧移动回自身布局位置；动画结束后节点继续留在容器和 UID 映射中。
+func _start_local_hand_gain_animation(card_uid: int, card_view: CardView) -> void:
+	hand_container.layout_cards_now()
+	# 正式手牌的最终布局位置；扣除可能残留的入场偏移后作为本次补间的零点。
+	var target_position: Vector2 = card_view.position - card_view.hand_entry_offset
+	# 右侧入场中心全局坐标；固定从当前可视滚动区外侧进入，不受超宽内容区域影响。
+	var start_global_center: Vector2 = _get_local_hand_gain_start_global_position(card_view.get_card_size())
+	# 右侧入场左上角全局坐标；CardView 的 Node2D 原点位于牌面左上角。
+	var start_global_position: Vector2 = start_global_center - card_view.get_card_size() * 0.5
+	# 右侧入场左上角容器坐标；完整逆变换兼容画布缩放、滚动区位置和窗口适配。
+	var start_local_position: Vector2 = hand_container.get_global_transform().affine_inverse() * start_global_position
+	card_view.hand_entry_offset = start_local_position - target_position
+	# 正式手牌入场补间；只驱动运行时偏移归零，容器仍持续拥有并布局同一个实体 UID 节点。
+	var gain_tween: Tween = create_tween()
+	gain_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	gain_tween.tween_property(card_view, "hand_entry_offset", Vector2.ZERO, local_hand_gain_duration)
+	_local_hand_gain_tweens[card_uid] = gain_tween
+	gain_tween.finished.connect(_on_local_hand_gain_animation_finished.bind(card_uid, card_view.get_instance_id()))
+
+
+## 完成本地正式手牌入场并重新应用稳定布局；实例 ID 校验防止旧补间清理同 UID 的新局节点。
+func _on_local_hand_gain_animation_finished(card_uid: int, card_instance_id: int) -> void:
+	_local_hand_gain_tweens.erase(card_uid)
+	# 当前 UID 对应的正式手牌节点；重新开局或牌已离开时映射可能为空。
+	var card_view: CardView = _card_views.get(card_uid) as CardView
+	if card_view == null or not is_instance_valid(card_view) or card_view.get_instance_id() != card_instance_id:
+		return
+	card_view.hand_entry_offset = Vector2.ZERO
+	hand_container.layout_cards_now()
+
+
+## 取消指定实体的本地获得动画；用于牌在入场途中被使用、离开手牌或重新开局的情况。
+func _cancel_local_hand_gain_animation(card_uid: int) -> void:
+	_pending_local_hand_gain_uids.erase(card_uid)
+	# 当前实体正在运行的入场补间；停止后从索引移除，防止旧完成回调修改后续状态。
+	var gain_tween: Tween = _local_hand_gain_tweens.get(card_uid) as Tween
+	if gain_tween != null and gain_tween.is_valid():
+		gain_tween.kill()
+	_local_hand_gain_tweens.erase(card_uid)
+	# 当前正式手牌节点；仍位于手牌容器时清除剩余偏移，使后续出牌从真实布局位置开始。
+	var card_view: CardView = _card_views.get(card_uid) as CardView
+	if card_view != null and is_instance_valid(card_view) and card_view.get_parent() == hand_container:
+		card_view.hand_entry_offset = Vector2.ZERO
+		hand_container.layout_cards_now()
+
+
+## 清空全部本地正式手牌入场任务；重新开局时调用，避免旧局补间继续写入新桌面。
+func _clear_local_hand_gain_animations() -> void:
+	for gain_tween_variant: Variant in _local_hand_gain_tweens.values():
+		# 当前仍有效的入场补间；统一停止后再清空索引。
+		var gain_tween: Tween = gain_tween_variant as Tween
+		if gain_tween != null and gain_tween.is_valid():
+			gain_tween.kill()
+	for card_view_variant: Variant in _card_views.values():
+		# 当前正式手牌节点；清场前归零运行时偏移，避免复用时继承旧局位置。
+		var card_view: CardView = card_view_variant as CardView
+		if card_view != null and is_instance_valid(card_view) and card_view.get_parent() == hand_container:
+			card_view.hand_entry_offset = Vector2.ZERO
+	_pending_local_hand_gain_uids.clear()
+	_local_hand_gain_tweens.clear()
 
 
 ## 将全局画布坐标转换为动画层局部坐标；使用完整逆变换以兼容父节点位移、缩放与后续视口适配。
