@@ -25,6 +25,12 @@ signal card_drag_started(card_uid: int)
 ## 悬停缩放动画时长；默认0.12秒保证反馈迅速且不过度跳动，运行时可调整。
 @export_range(0.05, 0.4, 0.01) var hover_animation_seconds: float = 0.12
 
+## 禁用牌面纸张的压暗比例；默认0.38形成明确深灰反馈，仅影响表现，可在运行时按主题调整。
+@export_range(0.0, 0.8, 0.01) var disabled_darkening: float = 0.38
+
+## 禁用牌面内容的灰度调制色；默认保留45%亮度，使插画与文字明显弱于可选卡牌，仅影响表现。
+@export var disabled_content_modulate: Color = Color(0.45, 0.45, 0.45, 1.0)
+
 ## 当前实体牌 UID；由 configure 写入，未配置时为 -1。
 var card_uid: int = -1
 
@@ -46,17 +52,17 @@ var _base_position_y: float = 0.0
 ## 当前卡牌插画纹理；配置缺失或文件无效时为 null，并显示占位区。
 var _artwork_texture: Texture2D
 
-## 待显示的花色点数字符串；configure 可在节点进入场景树前调用，因此先保存文本。
-var _suit_rank_text: String = ""
+## 待显示的花色点数字符串；默认与场景编辑器的黑桃7预览一致，configure 会在运行时覆盖。
+var _suit_rank_text: String = "♠7"
 
-## 待显示的卡牌名称；节点准备完成后写入名称标签。
-var _display_name_text: String = ""
+## 待显示的卡牌名称；默认使用场景编辑器示例名称，绑定实体牌后按全局名称模式覆盖。
+var _display_name_text: String = "星穹斩"
 
-## 待显示的类别文本；包含可选的木牛“粮”来源标记。
-var _card_type_text: String = ""
+## 待显示的类别文本；默认与场景编辑器基本牌预览一致，运行时可附加木牛“粮”来源标记。
+var _card_type_text: String = "基本牌"
 
-## 当前卡牌类别强调色；基本牌、锦囊牌、装备牌和属性杀使用不同色条。
-var _category_color: Color = Color("765b3d")
+## 当前卡牌类别强调色；默认使用基本牌朱红色，具体实体牌会按类别或伤害属性覆盖。
+var _category_color: Color = Color("a44e43")
 
 ## 当前是否处于鼠标悬停状态；只用于决定纸张亮度和缩放表现。
 var _is_hovered: bool = false
@@ -195,13 +201,21 @@ func _refresh_visual_state() -> void:
 	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_card_selected else _category_color
 	# 选中描边宽度；3像素在高分辨率下仍清晰，普通状态保持1像素。
 	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
+	# 内容调制色；禁用牌会统一压暗插画、占位图和文字，避免只有纸张边缘发生轻微变化。
+	var content_modulate: Color = Color.WHITE
 	if not is_interactable and not is_face_down:
-		paper_color = paper_color.darkened(0.12)
+		paper_color = paper_color.darkened(disabled_darkening)
 		border_color = Color("655b50")
+		content_modulate = disabled_content_modulate
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
 	if not (get_parent() is DecadeHandContainer):
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
-	_accent_bar.color = _category_color
+	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable and not is_face_down else _category_color
+	_artwork_rect.modulate = content_modulate
+	_artwork_placeholder.modulate = content_modulate
+	_corner_label.modulate = content_modulate
+	_name_label.modulate = content_modulate
+	_type_label.modulate = content_modulate
 
 
 ## 把缓存的牌面文本与插画写入子节点；可在 configure 早于 _ready 时安全重复调用。

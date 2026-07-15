@@ -90,6 +90,9 @@ var _ai_actions_this_turn: int = 0
 ## AI 延迟任务令牌；任何阶段切换都会递增，使旧的异步回调自动失效。
 var _ai_drive_token: int = 0
 
+## 已安排但尚未执行的 AI 任务令牌；与当前令牌相同时禁止重复创建计时器，默认-1表示没有待执行任务。
+var _scheduled_ai_drive_token: int = -1
+
 ## 当前是否正在批量驱动 AI 选将；防止阶段推进时递归处理旧待选列表并产生重复提交。
 var _is_driving_character_selection: bool = false
 
@@ -108,6 +111,9 @@ var _negation_resume_results: Dictionary = {}
 
 ## 当前对局根事件 ID；所有阶段、卡牌、伤害和选择记录默认挂在该根事件下。
 var _runtime_root_event_id: int = -1
+
+## 当前回合 phase 事件 ID；阶段内选择恢复后继续使用同一父事件，默认-1表示尚未开始回合。
+var _current_turn_event_id: int = -1
 
 ## 当前出牌阶段 chooseToUse 请求 ID；每次使用牌后创建新请求，明确结束阶段后清空。
 var _play_choice_request_id: int = -1
@@ -189,10 +195,12 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	state.event_history = event_scheduler.get_event_history()
 	character_selection = CharacterSelectionService.new()
 	_ai_drive_token += 1
+	_scheduled_ai_drive_token = -1
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
 	_resolved_card_choice_uids.clear()
 	_negation_resume_results.clear()
+	_current_turn_event_id = -1
 	_play_choice_request_id = -1
 	_play_choice_event_id = -1
 	_play_choice_actor_id = -1
@@ -692,9 +700,14 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	state.action_sequence += 1
 	if bool(completed_choice.get("deferred", false)):
 		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids)
+		if not state.game_over and not has_pending_card_choice():
+			_resume_interrupted_turn_flow()
 		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 			_begin_play_choice(state.current_player_id)
 		_emit_state()
+		# AI 出牌被本地响应或选择暂停后，原异步驱动已经结束；恢复出牌阶段时必须重新安排下一动作。
+		if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
+			_schedule_ai_action()
 	return true
 
 
@@ -1027,13 +1040,14 @@ func _continue_duel_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
 
 
-## 恢复无懈可击选择；最终抵消时结束原锦囊，恢复生效时带单次缓存重新进入当前目标效果。
+## 恢复无懈可击选择；延时锦囊回到原判定步骤，普通锦囊恢复当前目标效果。
 func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	# 响应者 ID；选择的无懈可击必须仍来自其可用牌源。
 	var responder_id: int = int(context.get("responder_id", -1))
 	# 当前抵消状态；每实际打出一张无懈可击翻转一次。
 	var final_negated: bool = bool(context.get("negated", false))
 	if not selected_uids.is_empty():
+		# 实际无懈可击响应牌；请求完成后仍需复核牌源与响应模式。
 		var counter_card: CardInstance = _consume_response_card_uid(responder_id, selected_uids[0], "wuxie")
 		if counter_card != null:
 			final_negated = not final_negated
@@ -1042,8 +1056,12 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 		return
 	# 原锦囊 UID；选择等待期间必须仍位于处理区。
 	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
+	# 原锦囊实体；等待期间已经离开处理区时禁止恢复旧效果。
 	var parent_card: CardInstance = _find_processing_card(parent_card_uid)
 	if parent_card == null:
+		return
+	if bool(context.get("delayed_judgment", false)):
+		_resolve_delayed_judgment_card(int(context.get("target_id", -1)), parent_card, final_negated)
 		return
 	if final_negated:
 		_finalize_processing_card(parent_card_uid)
@@ -1058,6 +1076,7 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 	if source_id < 0:
 		_finalize_processing_card(parent_card_uid)
 		return
+	# 原锦囊恢复后的目标区域；普通结算完成时应进入弃牌堆，后续选择则保持处理区。
 	var destination: String = effect_resolver.resolve(parent_card, source_id, [target_id])
 	if destination == "discard" and state.processing_area.has(parent_card):
 		state.processing_area.erase(parent_card)
@@ -1112,8 +1131,8 @@ func _consume_response_card_automatic(player_id: int, response_pattern: String) 
 	return null
 
 
-## 处理普通锦囊的【无懈可击】响应链；同一玩家只要仍有合法牌即可在后续响应轮次再次响应。
-func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) -> bool:
+## 处理普通锦囊的【无懈可击】响应链；附加上下文用于阶段型锦囊在异步响应后回到原步骤。
+func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, continuation_context: Dictionary = {}) -> bool:
 	if state == null or state.game_over:
 		return false
 	# 当前被响应锦囊；普通锦囊和延时锦囊结算时都位于公共处理区。
@@ -1144,6 +1163,11 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String) ->
 				continue
 			# 每名角色先收到是否发动无懈可击的询问；AI 的立场判断也只能作为其统一选择策略输入。
 			var negate_context: Dictionary = {"kind":"trick_negation", "parent_card_uid":parent_card.uid if parent_card != null else -1, "responder_id":player.player_id, "source_id":source_id, "target_id":target_id, "trick_id":trick_id, "negated":negated, "ai_prefer_select":_should_auto_negate(player, source_id, target_id, trick_id, negated)}
+			for context_key_variant: Variant in continuation_context.keys():
+				# 附加上下文字段名；仅复制可序列化阶段信息，不覆盖当前无懈响应的核心归属字段。
+				var context_key: String = str(context_key_variant)
+				if not negate_context.has(context_key):
+					negate_context[context_key] = continuation_context[context_key_variant]
 			var response_card: CardInstance = request_response_card(player.player_id, "wuxie", "是否使用【无懈可击】？", negate_context)
 			if has_pending_card_choice():
 				return negated
@@ -1866,6 +1890,7 @@ func _start_turn(player_id: int) -> void:
 	if state.players.find(player) == 0:
 		state.round_number += 1
 	var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
+	_current_turn_event_id = turn_event_id
 	player.slash_count = 0
 	player.wine_used = false
 	player.wine_bonus = 0
@@ -1898,21 +1923,35 @@ func _start_turn(player_id: int) -> void:
 	state.phase_index = 1
 	_record_runtime_event("phaseJudge", "phase", {"player_id":player_id}, {}, turn_event_id)
 	_process_judgment_area(player_id)
+	if has_pending_card_choice():
+		return
+	_continue_turn_after_judgment(player_id)
+
+
+## 从判定阶段结束处继续当前回合；异步无懈与濒死选择完成后也统一回到该入口。
+func _continue_turn_after_judgment(player_id: int) -> void:
+	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id:
+		return
+	# 当前回合玩家；判定伤害可能使其死亡，必须在摸牌前重新读取存活状态。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		_advance_after_current_player_death(player_id)
+		return
+	state.current_phase = "draw"
+	state.phase_index = 2
+	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, _current_turn_event_id)
+	if not bool(player.skipped_phases.get("draw", false)):
+		draw_cards(player_id, 2)
+	else:
+		add_log("%s跳过摸牌阶段。" % player.display_name)
 	if state.game_over:
 		return
 	if not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
-	state.current_phase = "draw"
-	state.phase_index = 2
-	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, turn_event_id)
-	if not bool(player.skipped_phases.get("draw", false)):
-		draw_cards(player_id, 2)
-	else:
-		add_log("%s跳过摸牌阶段。" % player.display_name)
 	state.current_phase = "play"
 	state.phase_index = 3
-	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, turn_event_id)
+	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % player.display_name)
 		_end_play_phase(player_id)
@@ -1923,49 +1962,80 @@ func _start_turn(player_id: int) -> void:
 		_schedule_ai_action()
 
 
+## 在延迟选择完成后恢复被暂停的回合阶段；当前仅判定阶段允许在阶段主体中插入异步选择。
+func _resume_interrupted_turn_flow() -> void:
+	if state == null or state.game_over or has_pending_card_choice():
+		return
+	# 当前回合玩家；异步救援结束后若其已经死亡，必须先转交回合，不能停留在失效的出牌阶段。
+	var current_player: PlayerState = state.get_player(state.current_player_id)
+	if current_player != null and not current_player.alive:
+		_advance_after_current_player_death(current_player.player_id)
+		return
+	if state.current_phase != "judgment":
+		return
+	# 当前回合玩家 ID；所有判定区剩余牌和后续摸牌、出牌都归属于该角色。
+	var player_id: int = state.current_player_id
+	_process_judgment_area(player_id)
+	if not has_pending_card_choice():
+		_continue_turn_after_judgment(player_id)
+
+
 ## 处理玩家判定区的全部延时锦囊。
 func _process_judgment_area(player_id: int) -> void:
 	# 判定玩家状态；复制判定区以允许结算中移动原数组。
 	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return
 	# 当前待结算延时锦囊快照；按进入判定区的顺序处理。
 	var delayed_cards: Array[CardInstance] = player.judgment_area.duplicate()
 	for delayed_card: CardInstance in delayed_cards:
-		if not player.alive or state.game_over or not player.judgment_area.has(delayed_card):
+		if not player.alive or state.game_over or has_pending_card_choice():
+			return
+		if not player.judgment_area.has(delayed_card):
 			continue
 		_ensure_card_movement()
 		card_movement.move_card(delayed_card, "processing", -1, "judge", state.current_event_id)
-		# 延时锦囊是否在生效前被无懈可击抵消。
-		var negated: bool = resolve_trick_negation(-1, player_id, delayed_card.definition_id)
-		if state.game_over:
+		# 延时锦囊是否在生效前被无懈可击抵消；异步响应必须保留判定恢复标记。
+		var negated: bool = resolve_trick_negation(-1, player_id, delayed_card.definition_id, {"delayed_judgment":true})
+		if state.game_over or has_pending_card_choice():
 			return
-		if delayed_card.definition_id == "shandian":
-			if negated:
-				_pass_lightning(player_id, delayed_card)
-				continue
-			# 闪电判定牌；黑桃2至9造成3点无来源雷电伤害。
-			var lightning_judgment: CardInstance = perform_judgment(player_id, "【闪电】")
-			if lightning_judgment != null and lightning_judgment.suit == "spade" and lightning_judgment.rank >= 2 and lightning_judgment.rank <= 9:
-				state.processing_area.erase(delayed_card)
-				_move_to_discard(delayed_card)
-				damage(-1, player_id, 3, "thunder", "shandian")
-			else:
-				_pass_lightning(player_id, delayed_card)
-		elif delayed_card.definition_id == "lebu":
-			if not negated:
-				# 乐不思蜀判定牌；非红桃时记录跳过出牌阶段。
-				var lebu_judgment: CardInstance = perform_judgment(player_id, "【乐不思蜀】")
-				if lebu_judgment != null and lebu_judgment.suit != "heart":
-					player.skipped_phases["play"] = true
-			state.processing_area.erase(delayed_card)
+		_resolve_delayed_judgment_card(player_id, delayed_card, negated)
+		if state.game_over or has_pending_card_choice():
+			return
+
+
+## 结算一张已经进入处理区的延时锦囊；同步判定与异步无懈恢复共用该唯一入口。
+func _resolve_delayed_judgment_card(player_id: int, delayed_card: CardInstance, negated: bool) -> void:
+	if delayed_card == null or state == null or state.game_over or not state.processing_area.has(delayed_card):
+		return
+	# 判定玩家状态；无效或死亡角色不再应用跳过标记，原延时锦囊仍正常离开处理区。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		_move_to_discard(delayed_card)
+		return
+	if delayed_card.definition_id == "shandian":
+		if negated:
+			_pass_lightning(player_id, delayed_card)
+			return
+		# 闪电判定牌；黑桃2至9造成3点无来源雷电伤害。
+		var lightning_judgment: CardInstance = perform_judgment(player_id, "【闪电】")
+		if lightning_judgment != null and lightning_judgment.suit == "spade" and lightning_judgment.rank >= 2 and lightning_judgment.rank <= 9:
 			_move_to_discard(delayed_card)
-		elif delayed_card.definition_id == "bingliang":
-			if not negated:
-				# 兵粮寸断判定牌；非梅花时记录跳过摸牌阶段。
-				var supply_judgment: CardInstance = perform_judgment(player_id, "【兵粮寸断】")
-				if supply_judgment != null and supply_judgment.suit != "club":
-					player.skipped_phases["draw"] = true
-			state.processing_area.erase(delayed_card)
-			_move_to_discard(delayed_card)
+			damage(-1, player_id, 3, "thunder", "shandian")
+		else:
+			_pass_lightning(player_id, delayed_card)
+		return
+	if delayed_card.definition_id == "lebu" and not negated:
+		# 乐不思蜀判定牌；非红桃时记录跳过出牌阶段。
+		var lebu_judgment: CardInstance = perform_judgment(player_id, "【乐不思蜀】")
+		if lebu_judgment != null and lebu_judgment.suit != "heart":
+			player.skipped_phases["play"] = true
+	elif delayed_card.definition_id == "bingliang" and not negated:
+		# 兵粮寸断判定牌；非梅花时记录跳过摸牌阶段。
+		var supply_judgment: CardInstance = perform_judgment(player_id, "【兵粮寸断】")
+		if supply_judgment != null and supply_judgment.suit != "club":
+			player.skipped_phases["draw"] = true
+	_move_to_discard(delayed_card)
 
 
 ## 将未命中的闪电移动至下一名没有闪电的存活角色判定区；无合法角色时回到原角色。
@@ -2173,8 +2243,9 @@ func _advance_after_current_player_death(dead_player_id: int) -> void:
 		_start_turn(next_player.player_id)
 
 
-## 依次请求所有存活角色使用桃，濒死角色还可使用酒自救；无人救援则进入死亡结算。
-func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int = -1) -> void:
+## 依次请求所有存活角色使用桃，濒死角色还可使用酒自救；已询问名单保证异步取消后不会重复询问同一角色。
+func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int = -1, already_asked_rescuer_ids: Array[int] = []) -> void:
+	# 本次濒死事件 ID；救援选择记录作为其子事件写入回放历史。
 	var dying_event_id: int = _record_runtime_event("dying", "dying", {"target_id":target_id, "source_id":killer_id})
 	if not state.dying_queue.has(target_id):
 		state.dying_queue.append(target_id)
@@ -2184,6 +2255,8 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 	target.dying = true
 	# 当前轮救援询问起点；首次从当前回合角色开始，回复后仍未脱离濒死则从刚才的响应者重新开始。
 	var rescue_start_player_id: int = state.current_player_id if rescue_start_override < 0 else rescue_start_override
+	# 当前轮已经完成询问的角色 ID；异步响应恢复时沿用，成功回复后新一轮会重新清空。
+	var asked_rescuer_ids: Array[int] = already_asked_rescuer_ids.duplicate()
 	add_log("%s进入濒死状态，需要回复至1点体力。" % target.display_name)
 	_dispatch_rule_event(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
 	while target.alive and target.hp <= 0:
@@ -2192,10 +2265,12 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 		# 救援询问顺序；首次从当前回合角色开始，连续回复未脱离濒死时从上一名响应者继续按座次轮询。
 		var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
 		for rescuer: PlayerState in rescue_order:
-			if not rescuer.alive:
+			if not rescuer.alive or asked_rescuer_ids.has(rescuer.player_id):
 				continue
+			asked_rescuer_ids.append(rescuer.player_id)
 			# 救援者使用的桃；所有存活角色都先收到统一响应询问。
-			var peach_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"tao"}
+			var peach_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"tao", "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
+			# 实际提交的桃；为空表示明确取消或没有合法候选。
 			var peach: CardInstance = request_response_card(rescuer.player_id, "tao", "是否使用【桃】救援%s？" % target.display_name, peach_context)
 			if has_pending_card_choice():
 				return
@@ -2203,11 +2278,13 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 				add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
 				recover(rescuer.player_id, target_id, 1, "tao")
 				rescue_start_player_id = rescuer.player_id
+				asked_rescuer_ids.clear()
 				rescued = true
 				break
 			if rescuer.player_id == target_id:
 				# 濒死者自救使用的酒；其他角色不能用酒救援目标，仍通过相同询问入口。
-				var wine_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"jiu"}
+				var wine_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"jiu", "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
+				# 实际提交的酒；为空表示濒死者放弃本轮自救。
 				var wine: CardInstance = request_response_card(rescuer.player_id, "jiu", "是否使用【酒】自救？", wine_context)
 				if has_pending_card_choice():
 					return
@@ -2215,6 +2292,7 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 					add_log("%s在濒死时使用【酒】自救。" % target.display_name)
 					recover(target_id, target_id, 1, "jiu")
 					rescue_start_player_id = rescuer.player_id
+					asked_rescuer_ids.clear()
 					rescued = true
 					break
 		if not rescued:
@@ -2233,14 +2311,32 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	var target_id: int = int(context.get("target_id", -1))
 	# 选择的响应模式；tao 回复目标，jiu 只允许目标自救。
 	var response_pattern: String = str(context.get("response_pattern", "tao"))
+	# 当前轮已经询问的救援者 ID；恢复后只继续尚未询问的座次，防止取消按钮看似无效。
+	var asked_rescuer_ids: Array[int] = []
+	for rescuer_id_variant: Variant in context.get("asked_rescuer_ids", []) as Array:
+		# 已询问救援者 ID；防御性去重，避免异常上下文产生重复跳过项。
+		var asked_rescuer_id: int = int(rescuer_id_variant)
+		if not asked_rescuer_ids.has(asked_rescuer_id):
+			asked_rescuer_ids.append(asked_rescuer_id)
+	# 实际救援响应牌；为空表示当前桃或酒请求被取消。
 	var response_card: CardInstance
 	if not selected_uids.is_empty():
 		response_card = _consume_response_card_uid(responder_id, selected_uids[0], response_pattern)
 	if has_pending_card_choice():
 		return
+	if response_card == null and response_pattern == "tao" and responder_id == target_id:
+		# 濒死者放弃桃后仍可单独决定是否使用酒；该请求沿用本轮已询问名单。
+		var wine_context: Dictionary = context.duplicate(true)
+		wine_context["response_pattern"] = "jiu"
+		wine_context["asked_rescuer_ids"] = asked_rescuer_ids.duplicate()
+		response_card = request_response_card(responder_id, "jiu", "是否使用【酒】自救？", wine_context)
+		response_pattern = "jiu"
+		if has_pending_card_choice():
+			return
 	if response_card == null:
+		# 下一名存活救援者；本轮已经询问的角色会在恢复函数中跳过，不会再次弹出同一桃询问。
 		var next_rescuer: PlayerState = state.get_next_alive_player(responder_id)
-		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)))
+		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)), asked_rescuer_ids)
 		return
 	if response_pattern == "tao":
 		recover(responder_id, target_id, 1, "tao")
@@ -2248,11 +2344,14 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	else:
 		recover(responder_id, target_id, 1, "jiu")
 		add_log("%s在濒死时使用【酒】自救。" % state.get_player(target_id).display_name)
+	# 最新濒死目标状态；回复后依据当前体力决定继续救援或退出濒死队列。
 	var target: PlayerState = state.get_player(target_id)
 	if target != null and target.alive and target.hp <= 0:
 		_resolve_dying(target_id, int(context.get("killer_id", -1)))
 	else:
 		state.dying_queue.erase(target_id)
+		if target != null:
+			target.dying = false
 
 
 ## 请求水淹七军目标选择是否弃置全部装备；选择数量必须为0或完整装备区数量。
@@ -2475,16 +2574,21 @@ func _append_if_legal(result: Array[Dictionary], player_id: int, card: CardInsta
 
 ## 安排下一次 AI 操作；令牌保证阶段变化后旧计时器不会执行。
 func _schedule_ai_action() -> void:
-	if state == null or state.game_over or state.current_phase != "play":
+	if state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_card_choice() or not _has_active_play_choice():
+		return
+	if _scheduled_ai_drive_token == _ai_drive_token:
 		return
 	# 本次异步任务令牌；与全局令牌不一致时回调直接失效。
 	var token: int = _ai_drive_token
+	_scheduled_ai_drive_token = token
 	_run_ai_after_delay(token)
 
 
 ## 等待展示延迟后请求 AI 动作，并再次进入统一 submit_action 入口。
 func _run_ai_after_delay(token: int) -> void:
 	await get_tree().create_timer(ai_action_delay_seconds).timeout
+	if _scheduled_ai_drive_token == token:
+		_scheduled_ai_drive_token = -1
 	if token != _ai_drive_token or state == null or state.game_over or state.current_phase != "play":
 		return
 	# 当前 AI 玩家 ID；阶段等待期间可能已发生变化，因此在延迟后读取。
