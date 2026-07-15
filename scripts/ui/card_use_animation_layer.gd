@@ -63,6 +63,9 @@ var _presentation_sequence: int = 0
 ## 当前动画代次；重新开局清空表现时递增，使上一局仍在等待的异步淡出任务安全退出。
 var _presentation_generation: int = 0
 
+## 正在执行普通区域转移动画的牌面节点；摸牌、获得与响应弃牌不进入使用牌弃牌展示队列。
+var _transfer_cards: Array[CardView] = []
+
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
@@ -128,6 +131,41 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	_drain_fade_queue()
 
 
+## 播放一次牌区转移表现；摸牌、获得与弃置从来源锚点移动到目标锚点后独立淡出。
+func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2) -> void:
+	if card_view == null:
+		return
+	# 转移牌面；始终由动画层持有，完成后释放而不返回任何界面容器。
+	var transfer_card: CardView = card_view
+	if transfer_card.get_parent() != self:
+		transfer_card.reparent(self)
+	transfer_card.position = start_position - transfer_card.get_card_size() * 0.5
+	transfer_card.rotation = 0.0
+	transfer_card.scale = Vector2.ONE * 0.82
+	transfer_card.modulate = Color.WHITE
+	transfer_card.z_index = 80 + _transfer_cards.size()
+	_transfer_cards.append(transfer_card)
+	# 移动补间；使用与出牌一致的时长和缓出曲线，抵达后短暂停留再淡出。
+	var transfer_tween: Tween = create_tween()
+	transfer_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	transfer_tween.tween_property(transfer_card, "position", target_position - transfer_card.get_card_size() * 0.5, card_flight_duration)
+	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
+	transfer_tween.tween_interval(minf(card_hold_duration, 0.24))
+	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, target_line_fade_duration)
+	await transfer_tween.finished
+	_transfer_cards.erase(transfer_card)
+	if is_instance_valid(transfer_card):
+		transfer_card.queue_free()
+
+
+## 返回指定实体 UID 是否已经由使用牌队列接管；区域移动层据此避免同一牌重复实例化到目标处。
+func has_active_card_uid(card_uid: int) -> bool:
+	for active_card: CardView in _active_cards:
+		if active_card != null and is_instance_valid(active_card) and active_card.card_uid == card_uid:
+			return true
+	return false
+
+
 ## 立即清空全部飞牌、弃牌队列和目标线；重新开局时调用，避免上一局异步表现残留到新桌面。
 func clear_presentations() -> void:
 	_presentation_generation += 1
@@ -139,7 +177,11 @@ func clear_presentations() -> void:
 	for active_card: CardView in _active_cards:
 		if active_card != null and is_instance_valid(active_card):
 			active_card.queue_free()
+	for transfer_card: CardView in _transfer_cards:
+		if transfer_card != null and is_instance_valid(transfer_card):
+			transfer_card.queue_free()
 	_active_cards.clear()
+	_transfer_cards.clear()
 	_fade_queue.clear()
 	_motion_tweens.clear()
 	_card_sequences.clear()

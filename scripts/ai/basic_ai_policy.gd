@@ -31,6 +31,28 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	return best_action.duplicate(true)
 
 
+## 响应统一选择请求；基础策略只在候选动作中决策，不能直接读取或移动权威实体牌。
+func choose_card_choice(_authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
+	if legal_actions.is_empty():
+		return {}
+	# 最少选择数；大于0时必须从合法选择中提交，等于0时基础策略仍优先使用可响应的牌。
+	var minimum_selection: int = int(choice_request.get("min_select", 0))
+	# 可选的放弃动作；只有请求允许0张牌时才会出现在合法动作中。
+	var pass_action: Dictionary = {}
+	# 请求语义上下文；基础策略可据此决定是否主动放弃，但仍只能返回规则层提供的合法动作。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	for action: Dictionary in legal_actions:
+		# 当前动作选择的实体牌 UID；非空选择优先于放弃，确保【闪】等基础响应会实际打出。
+		var selected_uids: Array = (action.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array
+		if not selected_uids.is_empty() and bool(context.get("ai_prefer_select", true)):
+			return action.duplicate(true)
+		if selected_uids.is_empty():
+			pass_action = action
+	if minimum_selection == 0 and not pass_action.is_empty():
+		return pass_action.duplicate(true)
+	return legal_actions[0].duplicate(true)
+
+
 ## 依据牌型、体力与身份关系计算动作价值；后续可替换为搜索、效用网络或模型策略。
 func _score_action(snapshot: Dictionary, action: Dictionary) -> float:
 	# 当前动作使用的卡牌定义 ID；结束阶段等动作可能为空。

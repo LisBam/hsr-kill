@@ -29,3 +29,12 @@ func request_action(player_id: int, authoritative_snapshot: Dictionary, legal_ac
 	if policy == null:
 		return {"action_type": "end_play", "actor_id": player_id}
 	return policy.choose_action(authoritative_snapshot, legal_actions)
+
+
+## 把规则层选择请求交给对应 AI 策略；返回值仍是标准 PlayerAction 字典并需由控制器再次校验。
+func request_card_choice(player_id: int, authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
+	# 指定玩家策略；不存在策略表示该玩家应由本地或网络界面响应，不能替其作出选择。
+	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
+	if policy == null:
+		return {}
+	return policy.choose_card_choice(authoritative_snapshot, choice_request, legal_actions)
