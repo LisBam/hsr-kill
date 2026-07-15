@@ -98,6 +98,9 @@ var _selected_card_uid: int = -1
 ## 当前按点击顺序选择的目标 ID；借刀杀人等牌依赖该顺序。
 var _selected_target_ids: Array[int] = []
 
+## 当前因唯一合法候选而自动锁定的目标 ID；默认-1表示玩家仍可自行选择或取消目标。
+var _auto_locked_target_id: int = -1
+
 ## 当前手牌 UID 到卡牌视图的映射；每次重绘手牌时整体重建，只用于同步选中视觉。
 var _card_views: Dictionary = {}
 
@@ -197,6 +200,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		_modal_choice_request_id = -1
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
+	_auto_locked_target_id = -1
 	error_label.text = ""
 	_render_header()
 	_render_players()
@@ -431,15 +435,23 @@ func _on_card_pressed(card_uid: int) -> void:
 	var deselecting_current_card: bool = _selected_card_uid == card_uid
 	_selected_card_uid = -1 if deselecting_current_card else card_uid
 	_selected_target_ids.clear()
+	_auto_locked_target_id = -1
 	if _selected_card_uid >= 0:
-		# 初始规则预览；自身目标与全体目标牌可据此自动整理目标选择。
+		# 初始规则预览；自身、全体与唯一候选目标牌可据此自动整理目标选择。
 		var initial_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
-		# 当前目标模式；self 自动选择自己，全体目标牌由核心展开且无需保留手动目标。
+		# 当前目标模式；自身目标自动选择自己，全体目标牌由核心展开且无需保留手动目标。
 		var target_mode: String = str(initial_preview.get("target_mode", ""))
-		if target_mode == "self":
+		if target_mode == "self" or target_mode == "self_wounded":
 			_selected_target_ids.assign([match_controller.local_human_player_id])
+			_auto_locked_target_id = match_controller.local_human_player_id
 		elif target_mode == "all_players" or target_mode == "all_others":
 			_selected_target_ids.clear()
+		else:
+			# 当前合法目标；恰好一个时没有可供玩家选择的分支，因此自动锁定并仅等待明确确认。
+			var legal_target_ids: Array = initial_preview.get("legal_target_ids", []) as Array
+			if legal_target_ids.size() == 1:
+				_auto_locked_target_id = int(legal_target_ids[0])
+				_selected_target_ids.assign([_auto_locked_target_id])
 	error_label.text = ""
 	_refresh_selection_text()
 
@@ -447,6 +459,8 @@ func _on_card_pressed(card_uid: int) -> void:
 ## 按点击顺序选择或取消一名目标；最多保留三个目标以支持方天画戟。
 func _on_target_pressed(target_id: int) -> void:
 	if not _inline_card_choice.is_empty():
+		return
+	if target_id == _auto_locked_target_id:
 		return
 	if _selected_target_ids.has(target_id):
 		_selected_target_ids.erase(target_id)
@@ -526,6 +540,7 @@ func _on_cancel_pressed() -> void:
 		return
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
+	_auto_locked_target_id = -1
 	error_label.text = ""
 	_refresh_selection_text()
 
@@ -597,6 +612,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_inline_selected_card_uids.clear()
 		_selected_card_uid = -1
 		_selected_target_ids.clear()
+		_auto_locked_target_id = -1
 		_render_local_hand()
 		_refresh_selection_text()
 		return

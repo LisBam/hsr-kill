@@ -27,6 +27,12 @@ signal restart_requested(player_count: int)
 ## 下一局人数输入框；只保存未来重开参数，不修改当前对局座次。
 @onready var _player_count_input: SpinBox = %NextPlayerCountInput
 
+## AI 响应时间滑条；修改全局设置后会立即影响后续 AI 行动与选牌响应，不重开当前对局。
+@onready var _ai_response_delay_slider: HSlider = %AiResponseDelaySlider
+
+## AI 响应时间标签；同步显示当前滑条的实际秒数，避免“速度”设置缺少可预期的时间含义。
+@onready var _ai_response_delay_label: Label = %AiResponseDelayLabel
+
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
@@ -43,8 +49,15 @@ func _ready() -> void:
 	_player_count_input.step = 1.0
 	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
 	_player_count_input.update_on_text_changed = true
+	_ai_response_delay_slider.min_value = GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS
+	_ai_response_delay_slider.max_value = GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS
+	_ai_response_delay_slider.step = GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS
+	_ai_response_delay_slider.value = GameSettings.ai_response_delay_seconds
+	_ai_response_delay_slider.value_changed.connect(_on_ai_response_delay_changed)
+	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
 	_menu_panel.visible = false
 	refresh_card_name_text()
+	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
 
 
 ## 在父节点完成子节点初始化后提升菜单分支顺序；绘制层级与真实 GUI 命中顺序由同一入口保持一致。
@@ -71,6 +84,19 @@ func refresh_card_name_text() -> void:
 	if not is_node_ready():
 		return
 	_card_name_button.text = "卡牌名称：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "卡牌名称：三国杀"
+
+
+## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。
+func _refresh_ai_response_delay_text(delay_seconds: float) -> void:
+	if not is_node_ready():
+		return
+	_ai_response_delay_slider.set_value_no_signal(delay_seconds)
+	_ai_response_delay_label.text = "AI响应速度：%.2f秒" % delay_seconds
+
+
+## 将滑条值写入全局 AI 响应设置；控制器通过全局信号更新后续调度，不需要重开对局。
+func _on_ai_response_delay_changed(delay_seconds: float) -> void:
+	GameSettings.set_ai_response_delay_seconds(delay_seconds)
 
 
 ## 切换菜单面板显隐；当前对局继续运行，不改变任何规则状态。

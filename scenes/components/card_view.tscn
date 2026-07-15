@@ -60,6 +60,7 @@ corner_radius_bottom_left = 4
 
 [node name="CardView" type="Node2D" unique_id=1120706856]
 script = ExtResource("1_script")
+metadata/_edit_horizontal_guides_ = [74.0]
 
 [node name="CardBody" type="Panel" parent="." unique_id=145627197]
 offset_right = 111.0
@@ -157,22 +158,21 @@ theme_override_styles/panel = SubResource("StyleCardBackCenter")
 [node name="Title" type="Label" parent="牌背" unique_id=1454437658]
 layout_mode = 0
 offset_left = 12.0
-offset_top = 53.0
+offset_top = 63.0
 offset_right = 99.0
-offset_bottom = 76.0
-mouse_filter = 2
+offset_bottom = 86.0
 theme_override_colors/font_color = Color(0.905882, 0.803922, 0.545098, 1)
 theme_override_font_sizes/font_size = 16
 text = "崩铁杀"
 horizontal_alignment = 1
 
 [node name="Subtitle" type="Label" parent="牌背" unique_id=730647509]
+visible = false
 layout_mode = 0
 offset_left = 12.0
 offset_top = 76.0
 offset_right = 99.0
 offset_bottom = 94.0
-mouse_filter = 2
 theme_override_colors/font_color = Color(0.635294, 0.74902, 0.717647, 1)
 theme_override_font_sizes/font_size = 10
 text = "牌背"

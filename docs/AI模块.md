@@ -18,7 +18,7 @@ AI 不持有 `GameState` 的可变引用。每次需要行动时，控制器执�
 
 `BasicAIPolicy` 使用轻量启发式评分：优先补牌、治疗、装备和对敌方使用伤害/控制牌；主公与忠臣互相视为友方，反贼以主忠为敌方，内奸采用保守负态度。无正收益动作时结束出牌阶段。
 
-响应类操作统一创建选择请求，包括【闪】、【杀】、【桃】、【酒】、【无懈可击】、银月枪和装备可选效果。AI 先收到与人类相同的候选牌快照，再由 `choose_card_choice()` 返回 `choose_cards` 动作；控制器会重新校验请求序号、候选 UID、选择数量和当前牌区，不能直接消耗牌。无响应牌时仍创建允许放弃的空候选请求，确保是否响应不由规则层根据是否持牌直接强制决定。
+响应类操作统一创建选择请求，包括【闪】、【杀】、【桃】、【酒】、【无懈可击】、银月枪和装备可选效果。AI 先收到与人类相同的候选牌快照，再由 `choose_card_choice()` 返回 `choose_cards` 动作；控制器会重新校验请求序号、候选 UID、选择数量和当前牌区，不能直接消耗牌。无响应牌时仍创建允许放弃的空候选请求，确保是否响应不由规则层根据是否持牌直接强制决定。AI 的选牌响应不会同步提交：请求会保持暂停，等待全局 AI 响应时间后才构造标准动作并恢复结算。
 
 运行时层把上述兼容动作转换为 `ChoiceResponse`。`AICoordinator.request_choice()` 返回与本地和网络完全相同的请求 ID、事件 ID、actor、confirmed、实体牌 UID 和 source 字段；AI 不需要知道 `GameEvent` 的 Callable 或控制器对象。超时托管只需把 source 改为 `timeout`，规则校验路径不变。
 
@@ -38,10 +38,12 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 
 ## 调度安全
 
-- `ai_action_delay_seconds` 默认 0.35 秒，仅控制展示节奏。
+- `GameSettings.ai_response_delay_seconds` 默认 0.85 秒，局内菜单“AI响应速度”可在 0.25 至 2.00 秒之间以 0.05 秒步长调整；数值表示每次 AI 行动或选牌响应前的等待时间，数值越小响应越快。
+- `ai_action_delay_seconds` 是控制器当前使用的等待值，会订阅全局设置用于后续计时器；自动化测试可直接覆盖该字段以缩短测试等待，不改变玩家运行时设置。
 - `max_ai_actions_per_turn` 默认 64，超过后强制结束出牌阶段。
 - `character_candidate_count` 默认 5；基础 AI 只在自己的候选列表内选将，该数量不影响出牌阶段动作上限。
 - `_ai_drive_token` 在阶段变化时递增，旧计时器不会在新阶段误操作。
 - `_scheduled_ai_drive_token` 记录当前阶段已经安排但尚未执行的唯一任务；AI 出牌被本地【闪】、无懈、五谷或其他选择暂停后，响应完成会重新安排后续行动，同一阶段令牌不会生成重复计时器。
+- `_scheduled_ai_choice_request_id` 记录当前等待的 AI 选牌请求；重开、换回合、终局或请求 ID 变化后，旧计时器不会向新请求提交响应。
 - 固定对局随机种子可用于复盘和回归测试。
 - `GameState.random_seed`、`random_history`、事件历史和移牌历史可独立保存；AI 决策不依赖 Godot 场景节点。

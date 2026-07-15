@@ -116,6 +116,7 @@ corner_radius_bottom_left = 5
 
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
+metadata/_edit_horizontal_guides_ = [99.0]
 
 [node name="CardBody" type="Panel" parent="." unique_id=1827969861]
 offset_right = 148.35
@@ -149,9 +150,9 @@ vertical_alignment = 1
 
 [node name="CharacterName" type="Label" parent="." unique_id=673259262]
 unique_name_in_owner = true
-offset_left = 4.0
-offset_top = 26.0
-offset_right = 26.0
+offset_left = 3.0
+offset_top = 19.0
+offset_right = 25.0
 offset_bottom = 112.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
@@ -182,10 +183,10 @@ vertical_alignment = 1
 
 [node name="HandCount" type="Label" parent="." unique_id=237863011]
 unique_name_in_owner = true
-offset_left = 2.0
-offset_top = 165.8
-offset_right = 26.0
-offset_bottom = 189.8
+offset_left = -5.0
+offset_top = 179.8
+offset_right = 19.0
+offset_bottom = 203.8
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
@@ -321,22 +322,21 @@ theme_override_styles/panel = SubResource("StylePlayerCardBackCenter")
 [node name="Title" type="Label" parent="牌背" unique_id=1961296478]
 layout_mode = 0
 offset_left = 18.0
-offset_top = 81.0
+offset_top = 85.0
 offset_right = 130.35
-offset_bottom = 110.0
-mouse_filter = 2
+offset_bottom = 114.0
 theme_override_colors/font_color = Color(0.905882, 0.803922, 0.545098, 1)
 theme_override_font_sizes/font_size = 20
 text = "崩铁杀"
 horizontal_alignment = 1
 
 [node name="Subtitle" type="Label" parent="牌背" unique_id=1129865652]
+visible = false
 layout_mode = 0
 offset_left = 18.0
 offset_top = 110.0
 offset_right = 130.35
 offset_bottom = 130.0
-mouse_filter = 2
 theme_override_colors/font_color = Color(0.635294, 0.74902, 0.717647, 1)
 theme_override_font_sizes/font_size = 11
 text = "牌背"

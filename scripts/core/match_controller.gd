@@ -30,8 +30,8 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 是否在每局创建时为本地人类玩家重新随机分配座次；默认开启以保证本地玩家不固定在一号位，纯 AI 模式不受影响。
 @export var randomize_local_human_seat: bool = true
 
-## AI 每次操作之间的展示延迟秒数；默认0.35便于观察，运行时可动态调快。
-@export_range(0.0, 3.0, 0.05) var ai_action_delay_seconds: float = 0.35
+## AI 每次行动或选择响应前的等待秒数；默认0.85避免瞬时结算，局内菜单会在运行时同步此值，测试可直接覆盖。
+@export_range(0.0, 3.0, 0.05) var ai_action_delay_seconds: float = 0.85
 
 ## 单个 AI 出牌阶段最多执行的动作数；默认64用于防止扩展牌循环导致界面停滞。
 @export_range(1, 256, 1) var max_ai_actions_per_turn: int = 64
@@ -93,13 +93,16 @@ var _ai_drive_token: int = 0
 ## 已安排但尚未执行的 AI 任务令牌；与当前令牌相同时禁止重复创建计时器，默认-1表示没有待执行任务。
 var _scheduled_ai_drive_token: int = -1
 
+## 已安排但尚未提交的 AI 选牌请求 ID；默认-1表示没有等待中的 AI 响应，避免同一请求创建多个计时器。
+var _scheduled_ai_choice_request_id: int = -1
+
 ## 当前是否正在批量驱动 AI 选将；防止阶段推进时递归处理旧待选列表并产生重复提交。
 var _is_driving_character_selection: bool = false
 
 ## 当前等待提交的统一选牌请求；空字典表示没有响应、弃牌或区域选牌窗口。
 var _pending_card_choice: Dictionary = {}
 
-## 最近一次同步完成请求所选择的实体牌 UID；只在 AI 立即通过标准动作响应后由请求调用方读取。
+## 最近一次同步完成请求所选择的实体牌 UID；只供无交互测试与兼容回退在当前调用栈读取，正式 AI 请求始终异步恢复。
 var _resolved_card_choice_uids: Array[int] = []
 
 ## 全局选择请求序号；每次创建窗口递增，防止旧界面或网络消息误提交到新请求。
@@ -143,6 +146,9 @@ func _ready() -> void:
 	network_gateway.command_received.connect(_on_network_command_received)
 	if not network_gateway.choice_response_received.is_connected(_on_network_choice_response_received):
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
+	if not GameSettings.ai_response_delay_changed.is_connected(_on_ai_response_delay_changed):
+		GameSettings.ai_response_delay_changed.connect(_on_ai_response_delay_changed)
+	_on_ai_response_delay_changed(GameSettings.ai_response_delay_seconds)
 
 
 ## 连接事件运行时信号并把只读摘要同步到 GameState；界面和网络只读取状态快照。
@@ -196,6 +202,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	character_selection = CharacterSelectionService.new()
 	_ai_drive_token += 1
 	_scheduled_ai_drive_token = -1
+	_scheduled_ai_choice_request_id = -1
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
 	_resolved_card_choice_uids.clear()
@@ -528,6 +535,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		serialized_candidates.append(candidate.duplicate(true))
 	# 未注册 AI 的正式对局角色等待本地或网络动作；无 match_id 的纯规则测试使用标准放弃动作避免悬停。
 	var interactive_human: bool = not ai_coordinator.is_ai_controlled(chooser_id) and local_human_player_id >= 0 and not state.match_id.is_empty()
+	# 当前选择者是否由内置 AI 控制；AI 选择同样异步等待，避免响应牌和效果选牌绕过可调节的响应节奏。
+	var ai_controlled_chooser: bool = ai_coordinator.is_ai_controlled(chooser_id)
 	_pending_card_choice = {
 		"request_id":-1,
 		"chooser_id":chooser_id,
@@ -539,7 +548,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"allow_cancel":allow_cancel,
 		"resume_phase":resume_phase,
 		"context":context.duplicate(true),
-		"deferred":interactive_human,
+		"deferred":interactive_human or ai_controlled_chooser,
 	}
 	# 选择事件名称；响应、弃牌和普通选牌使用稳定名称，便于触发器与回放区分。
 	var choice_type: String = "card"
@@ -580,11 +589,14 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	card_choice_requested.emit(_pending_card_choice.duplicate(true))
 	if interactive_human:
 		return []
-	# AI 合法动作列表；策略只在这些标准动作中选择，不能直接移动候选牌。
+	if ai_controlled_chooser:
+		_schedule_ai_card_choice_response(runtime_request.request_id, chooser_id)
+		return []
+	# 非交互回退的合法动作列表；纯规则测试仍只从标准动作中选择，不能直接移动候选牌。
 	var legal_actions: Array[Dictionary] = _build_card_choice_actions(_pending_card_choice)
-	# AI 权威快照；与出牌阶段相同，只作为策略输入，不向策略暴露可变状态。
+	# 兼容策略快照；仅用于生成回退动作，不向策略暴露可变状态。
 	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
-	# AI 选择结果；仍需经 submit_action 与 request_id、UID 和数量校验。
+	# 兼容策略选择结果；仍需经 submit_action 与 request_id、UID 和数量校验。
 	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
 	var action_data: Dictionary = {}
 	if ai_response != null:
@@ -600,6 +612,51 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		}
 		submit_action(fallback_action)
 	return _resolved_card_choice_uids.duplicate()
+
+
+## 安排一条 AI 选牌响应；与普通 AI 出牌共用延迟参数，但使用请求 ID 防止旧窗口在新请求中误提交。
+func _schedule_ai_card_choice_response(request_id: int, chooser_id: int) -> void:
+	if request_id < 0 or _scheduled_ai_choice_request_id == request_id:
+		return
+	# 当前阶段令牌；重开、换回合或终局后旧响应不会继续提交到新状态。
+	var token: int = _ai_drive_token
+	_scheduled_ai_choice_request_id = request_id
+	_run_ai_card_choice_after_delay(request_id, chooser_id, token)
+
+
+## 等待设置的响应时间后提交 AI 选择；决策和最终提交仍复用与玩家完全一致的标准动作入口。
+func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: int) -> void:
+	await get_tree().create_timer(ai_action_delay_seconds).timeout
+	if _scheduled_ai_choice_request_id == request_id:
+		_scheduled_ai_choice_request_id = -1
+	if token != _ai_drive_token or state == null or state.game_over or _pending_card_choice.is_empty():
+		return
+	if int(_pending_card_choice.get("request_id", -1)) != request_id or int(_pending_card_choice.get("chooser_id", -1)) != chooser_id or not ai_coordinator.is_ai_controlled(chooser_id):
+		return
+	# 当前运行时请求；待选快照使用 chooser_id/runtime_event_id 字段，恢复时显式映射到 ChoiceRequest 的 actor_id/event_id 协议。
+	var runtime_request: ChoiceRequest = ChoiceRequest.new(int(_pending_card_choice.get("runtime_event_id", -1)), chooser_id, "card", str(_pending_card_choice.get("prompt", "")))
+	# 当前请求稳定 ID；策略生成的 ChoiceResponse 必须携带此 ID，避免迟到响应误命中新窗口。
+	runtime_request.request_id = request_id
+	# 当前请求的合法兼容动作；每项仍会在提交时复核请求序号、候选 UID 和数量。
+	var legal_actions: Array[Dictionary] = _build_card_choice_actions(_pending_card_choice)
+	# 当前 AI 权威快照；策略只读取快照，不能取得可写的对局状态引用。
+	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
+	# AI 选择结果；空结果或异常结果随后使用同一候选集中的保守回退动作。
+	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
+	var action_data: Dictionary = {}
+	if ai_response != null:
+		# AI 的标准选牌动作；事件 ID 与请求 ID 都由当前运行时请求提供，防止迟到响应进入新窗口。
+		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		ai_action.payload = {"request_id":request_id, "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate()}
+		action_data = ai_action.to_dict()
+	if not action_data.is_empty() and submit_action(PlayerAction.from_dict(action_data)):
+		return
+	# 回退选择数量；强制请求选择最少张数，可取消请求提交空选择，避免 AI 在异常策略返回时永久停滞。
+	var fallback_count: int = maxi(int(_pending_card_choice.get("min_select", 0)), 0)
+	# 回退动作；只从仍活动请求的候选 UID 构造，始终经过 submit_action 的权威校验。
+	var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	fallback_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(_pending_card_choice.get("candidates", []) as Array, fallback_count)}
+	submit_action(fallback_action)
 
 
 ## 枚举选择请求的基础合法动作；单选逐张枚举，多选为基础 AI 提供满足最少数量的稳定组合。
@@ -1590,7 +1647,11 @@ func _apply_fire_attack_shown_card(context: Dictionary, shown_card_uid: int, def
 	var shown_card: CardInstance = target.find_hand_card(shown_card_uid)
 	if shown_card == null:
 		return
+	_ensure_card_movement()
+	card_movement.reveal_card(shown_card)
 	add_log("%s展示了%s。" % [target.display_name, describe_card(shown_card)])
+	# 展示牌表现请求；牌仍留在展示者手牌区，但客户端会使用正式 CardView 从武将牌飞入中央牌桌。
+	card_presentation_requested.emit(shown_card.to_dict(), target_id, [])
 	# 火攻使用者状态；用于筛选同花色手牌候选。
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null:
@@ -2606,6 +2667,11 @@ func _run_ai_after_delay(token: int) -> void:
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
 	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
 	submit_action(PlayerAction.from_dict(action_data))
+
+
+## 接收全局 AI 响应时间设置；仅更新后续新建的计时器，已开始等待的任务保持原时长以避免补间中途跳变。
+func _on_ai_response_delay_changed(delay_seconds: float) -> void:
+	ai_action_delay_seconds = clampf(delay_seconds, GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS)
 
 
 ## 通过 Fisher-Yates 算法使用对局随机源原地洗牌，适用于任意 Array 类型。
