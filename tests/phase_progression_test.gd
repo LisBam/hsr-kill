@@ -32,7 +32,7 @@ func _run() -> void:
 	_test_face_down_turn_progression()
 	if _finished:
 		return
-	_test_dying_cancel_progression()
+	await _test_dying_cancel_progression()
 	if _finished:
 		return
 	# 失效 AI 任务令牌；让各场景已创建的短计时器自然结束后再释放控制器，避免测试退出时残留对象。
@@ -97,6 +97,7 @@ func _install_state() -> GameState:
 	_controller._play_choice_actor_id = -1
 	_controller._play_choice_match_id = ""
 	_controller._scheduled_ai_drive_token = -1
+	_controller._scheduled_ai_choice_request_id = -1
 	_controller._ai_drive_token += 1
 	_controller.state = game_state
 	_controller.card_rules = CardRuleService.new(game_state)
@@ -174,7 +175,7 @@ func _test_face_down_turn_progression() -> void:
 		_fail("face_down_resume current=%d phase=%s" % [game_state.current_player_id, game_state.current_phase])
 
 
-## 验证救援桃请求可以取消，且取消后不会重新询问同一张桃；当前角色死亡后必须转交回合。
+## 验证救援桃请求可以取消，且取消后不会重新询问同一张桃；后续 AI 救援会经过延迟响应，当前角色死亡后才转交回合。
 func _test_dying_cancel_progression() -> void:
 	# 本场状态；0号忠臣在自己的出牌阶段进入濒死，死亡后身份局仍继续。
 	var game_state: GameState = _install_state()
@@ -201,6 +202,18 @@ func _test_dying_cancel_progression() -> void:
 		_fail("dying_peach_cancel_not_advanced")
 		return
 	if not _submit_local_cancel(wine_request):
+		return
+	# 濒死取消后的 AI 救援完成标记；两个 AI 都需要经过统一响应延迟后明确放弃，不能同步跳过询问。
+	var dying_resume_completed: bool = false
+	for _wait_frame_index: int in range(20):
+		await get_tree().process_frame
+		if not game_state.players[0].alive and game_state.current_player_id == 1 and game_state.current_phase == "play":
+			dying_resume_completed = true
+			# 下一回合 AI 的普通出牌计时器；救援恢复完成后立即失效，避免干扰本用例的阶段断言。
+			_controller._ai_drive_token += 1
+			break
+	if not dying_resume_completed:
+		_fail("dying_ai_response_timeout phase=%s pending=%s" % [game_state.current_phase, _controller.has_pending_card_choice()])
 		return
 	if game_state.players[0].alive or game_state.players[0].find_hand_card(peach_card.uid) != null or game_state.current_player_id != 1 or game_state.current_phase != "play" or game_state.turn_number != 1 or _controller.has_pending_card_choice() or not _controller._has_active_play_choice() or game_state.players[1].find_hand_card(next_draw_one.uid) == null or game_state.players[1].find_hand_card(next_draw_two.uid) == null:
 		_fail("dying_cancel_resume alive=%s current=%d phase=%s" % [game_state.players[0].alive, game_state.current_player_id, game_state.current_phase])

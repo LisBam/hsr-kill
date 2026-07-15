@@ -36,10 +36,10 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 		# 使用者状态；每名玩家在自己的出牌阶段正常使用【酒】仍受每回合一次限制。
 		var actor: PlayerState = state.get_player(actor_id)
 		actor.wine_used = true
-		# 【酒】目标状态；规则允许指定包括使用者在内的一名角色获得本回合下一张【杀】加值。
+		# 【酒】目标状态；规则层限定为已受伤的使用者本人，使本回合下一张【杀】的加值不会错误授予其他角色。
 		var wine_target: PlayerState = state.get_player(target_ids[0])
 		wine_target.wine_bonus = 1
-		host.add_log("%s令%s本回合使用的下一张【杀】伤害+1。" % [actor.display_name, wine_target.display_name])
+		host.add_log("%s使用【酒】，本回合下一张【杀】伤害+1。" % actor.display_name)
 	elif effect_id == "equip":
 		host.equip_from_processing(actor_id, card)
 		return "equipment"

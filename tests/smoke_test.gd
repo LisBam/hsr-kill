@@ -81,9 +81,19 @@ func _run() -> void:
 		printerr("SMOKE_FAIL unknown_character_display_name=%s" % unknown_character_display_name)
 		get_tree().quit(1)
 		return
-	# 【酒】正常使用目标模式；官方规则允许指定包括使用者在内的一名角色。
-	if str(GameDatabase.get_card("jiu").get("target_mode", "")) != "any_player":
+	# 【酒】正常使用目标模式；出牌阶段只能指定已受伤的使用者本人。
+	if str(GameDatabase.get_card("jiu").get("target_mode", "")) != "self_wounded":
 		printerr("SMOKE_FAIL wine_target_mode")
+		get_tree().quit(1)
+		return
+	# 【桃】正常使用目标模式；只有受伤的使用者本人可以在出牌阶段成为目标。
+	if str(GameDatabase.get_card("tao").get("target_mode", "")) != "self_wounded":
+		printerr("SMOKE_FAIL peach_target_mode")
+		get_tree().quit(1)
+		return
+	# 【无中生有】正常使用目标模式；规则不允许把两张摸牌效果交给其他角色。
+	if str(GameDatabase.get_card("wuzhong").get("target_mode", "")) != "self":
+		printerr("SMOKE_FAIL ex_nihilo_target_mode")
 		get_tree().quit(1)
 		return
 	# 丈八蛇矛生成的多实体虚拟【杀】应为无色，不能错误触发仁王盾的黑色【杀】条件。
@@ -148,6 +158,51 @@ func _run() -> void:
 	target_order_state.players[2].hand.append(fire_attack_actor_hand)
 	if not target_order_rules.list_legal_targets(2, fire_attack_target_card).has(2):
 		printerr("SMOKE_FAIL fire_attack_self_target")
+		get_tree().quit(1)
+		return
+	# 受伤自身【桃】测试牌；仅用于验证复用目标模式会过滤满体力使用者。
+	var self_peach_card: CardInstance = CardInstance.new("tao", "heart", 3)
+	# 受伤自身【酒】测试牌；与【桃】共用同一目标模式，正常出牌阶段同样不能指定满体力或其他角色。
+	var self_wine_card: CardInstance = CardInstance.new("jiu", "diamond", 9)
+	# 满体力时的【桃】候选；不应产生任何合法目标。
+	var healthy_peach_targets: Array[int] = target_order_rules.list_legal_targets(2, self_peach_card)
+	if not healthy_peach_targets.is_empty():
+		printerr("SMOKE_FAIL healthy_peach_targets=%s" % healthy_peach_targets)
+		get_tree().quit(1)
+		return
+	# 满体力时的【酒】候选；不应产生任何合法目标。
+	var healthy_wine_targets: Array[int] = target_order_rules.list_legal_targets(2, self_wine_card)
+	if not healthy_wine_targets.is_empty():
+		printerr("SMOKE_FAIL healthy_wine_targets=%s" % healthy_wine_targets)
+		get_tree().quit(1)
+		return
+	# 受伤后的使用者体力；降低1点后【桃】应只允许自动锁定自己。
+	target_order_state.players[2].hp = 3
+	# 受伤自身【桃】候选；唯一目标必须为使用者本人。
+	var wounded_peach_targets: Array[int] = target_order_rules.list_legal_targets(2, self_peach_card)
+	if wounded_peach_targets != [2]:
+		printerr("SMOKE_FAIL wounded_peach_targets=%s" % wounded_peach_targets)
+		get_tree().quit(1)
+		return
+	# 受伤自身【酒】候选；唯一目标同样必须为使用者本人。
+	var wounded_wine_targets: Array[int] = target_order_rules.list_legal_targets(2, self_wine_card)
+	if wounded_wine_targets != [2]:
+		printerr("SMOKE_FAIL wounded_wine_targets=%s" % wounded_wine_targets)
+		get_tree().quit(1)
+		return
+	# 【无中生有】测试牌；用于验证其他角色不会通过手工构造目标绕过自身限制。
+	var self_draw_card: CardInstance = CardInstance.new("wuzhong", "heart", 4)
+	# 测试出牌阶段玩家；完整使用校验需要与测试使用者一致的回合和阶段状态。
+	target_order_state.current_player_id = 2
+	# 测试出牌阶段名称；完整使用校验只允许在 play 阶段执行。
+	target_order_state.current_phase = "play"
+	# 【无中生有】归属区域；使用牌必须位于使用者可用的手牌区域。
+	self_draw_card.zone = "hand"
+	# 【无中生有】归属玩家；与手牌区域共同构成实体牌来源校验。
+	self_draw_card.owner_id = 2
+	target_order_state.players[2].hand.append(self_draw_card)
+	if not target_order_rules.validate_use(2, self_draw_card, [1]).contains("只能以自己"):
+		printerr("SMOKE_FAIL ex_nihilo_other_target")
 		get_tree().quit(1)
 		return
 	# 纯数据选将服务；验证主公先选、默认5张候选、其他玩家同时确认和完成前隐藏选择。

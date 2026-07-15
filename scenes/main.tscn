@@ -243,7 +243,7 @@ anchor_right = 1.0
 offset_left = -286.0
 offset_top = 58.0
 offset_right = -18.0
-offset_bottom = 246.0
+offset_bottom = 302.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
@@ -263,6 +263,24 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "卡牌名称：崩铁杀"
+
+[node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="AiResponseDelayLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/AiResponseDelayRow" unique_id=297365554]
+unique_name_in_owner = true
+layout_mode = 2
+text = "AI响应速度：0.85秒"
+
+[node name="AiResponseDelaySlider" type="HSlider" parent="MatchMenu/MenuPanel/MenuVBox/AiResponseDelayRow" unique_id=388650724]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+min_value = 0.25
+max_value = 2.0
+step = 0.05
+value = 0.85
 
 [node name="PlayerCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1045087042]
 layout_mode = 2

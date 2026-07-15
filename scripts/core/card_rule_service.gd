@@ -111,7 +111,7 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 
 ## 返回一张手牌当前可选的合法目标 ID，供 UI 高亮与 AI 枚举候选动作。
 func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
-	# 合法目标结果；目标模式为自己时只包含行动者。
+	# 合法目标结果；自身目标模式只在当前行动者同时满足附加状态限制时返回行动者。
 	var result: Array[int] = []
 	if card == null:
 		return result
@@ -119,8 +119,11 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 目标模式；全体与特殊双目标牌由调用方进一步组合。
 	var target_mode: String = str(definition.get("target_mode", ""))
-	if target_mode == "self":
-		result.append(actor_id)
+	if target_mode == "self" or target_mode == "self_wounded":
+		# 自身目标校验结果；受伤自身目标需要在此复用完整状态校验，不能因快捷返回而允许满体力使用【桃】。
+		var self_target_error: String = _validate_target(state.get_player(actor_id), definition, actor_id, [actor_id])
+		if self_target_error.is_empty():
+			result.append(actor_id)
 		return result
 	for target: PlayerState in state.players:
 		if not target.alive:
@@ -200,7 +203,9 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 			return ""
 	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder"] and target_id == actor.player_id:
 		return "该卡牌不能以自己为目标。"
-	if target_mode == "wounded" and target.hp >= target.max_hp:
+	if target_mode in ["self", "self_wounded"] and target_id != actor.player_id:
+		return "该卡牌只能以自己为目标。"
+	if target_mode in ["wounded", "self_wounded"] and target.hp >= target.max_hp:
 		return "目标未受伤。"
 	if target_mode == "single_other_with_cards" and target.hand.is_empty() and target.equipment.is_empty() and target.judgment_area.is_empty():
 		return "目标区域内没有牌。"

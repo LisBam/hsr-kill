@@ -157,6 +157,22 @@ func _run() -> void:
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
+	# 火攻展示牌数据；展示牌没有规则目标，但动画起点必须是展示者武将牌中心。
+	var shown_hand_card_data: Dictionary = {"uid":90002, "definition_id":"shan", "suit":"heart", "rank":6, "zone":"hand", "owner_id":5}
+	# 展示牌目标 ID；空的强类型数组明确匹配正式展示回调的 Array[int] 参数协议。
+	var shown_hand_target_ids: Array[int] = []
+	main_instance.call("_on_card_presentation_requested", shown_hand_card_data, 5, shown_hand_target_ids)
+	# 最新展示牌表现；无目标展示不会绘制目标指示线，仍保留展示者的真实来源位置。
+	var shown_hand_presentation: Dictionary = animation_layer._line_presentations.get(animation_layer._presentation_sequence, {}) as Dictionary
+	# 展示者预期起点；与前面已验证的六号位武将牌中心保持同一动画坐标空间。
+	var expected_shown_hand_start: Vector2 = main_instance.call("_get_player_indicator_position", 5) as Vector2
+	# 展示动画终点数组；火攻展示不指定伤害或卡牌目标，因此必须为空。
+	var shown_hand_target_positions: Array = shown_hand_presentation.get("target_positions", []) as Array
+	if not (shown_hand_presentation.get("start_position", Vector2.ZERO) as Vector2).is_equal_approx(expected_shown_hand_start) or not shown_hand_target_positions.is_empty():
+		_fail("shown_hand_presentation:%s" % shown_hand_presentation)
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
 	menu_button.pressed.connect(_on_menu_button_pressed)
 	await _click_control(menu_button)
 	if not _menu_button_pressed:
@@ -166,6 +182,15 @@ func _run() -> void:
 	var menu_panel: PanelContainer = main_instance.get_node("%MenuPanel") as PanelContainer
 	if not menu_panel.visible:
 		_fail("menu_panel_not_open")
+		return
+	# AI 响应速度滑条；修改值后必须写入全局设置并同步给当前对局控制器，无需重开对局。
+	var ai_response_delay_slider: HSlider = main_instance.get_node("%AiResponseDelaySlider") as HSlider
+	# 本用例选择的 AI 响应等待时间；0.65秒位于0.25至2秒设置范围内且对默认值具有可见差异。
+	var requested_ai_response_delay: float = 0.65
+	ai_response_delay_slider.value = requested_ai_response_delay
+	await get_tree().process_frame
+	if not is_equal_approx(GameSettings.ai_response_delay_seconds, requested_ai_response_delay) or not is_equal_approx(match_controller.ai_action_delay_seconds, requested_ai_response_delay):
+		_fail("ai_response_delay_setting:%s/%s" % [GameSettings.ai_response_delay_seconds, match_controller.ai_action_delay_seconds])
 		return
 	# 对局日志展开按钮；点击后正文面板必须显示，验证“记录”入口不再只是静态标题。
 	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
