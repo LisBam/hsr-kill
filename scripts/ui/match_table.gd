@@ -119,6 +119,9 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 ## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
 var _local_hand_gain_tweens: Dictionary = {}
 
+## 已播放实际使用展示且最终应进入弃牌堆的实体 UID 集合；响应等待超过展示时长后仍用于阻止重复弃牌动画。
+var _presented_discard_card_uids: Dictionary = {}
+
 ## 当前技能 ID 到技能按钮视图的映射；预留给主动技能选择状态与冷却状态同步。
 var _skill_views: Dictionary = {}
 
@@ -670,6 +673,7 @@ func _on_restart_requested(player_count: int) -> void:
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
 	_modal_choice_request_id = -1
+	_presented_discard_card_uids.clear()
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
 
@@ -829,6 +833,9 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	var card_uid: int = int(card_data.get("uid", -1))
 	if not presentation_only:
 		_cancel_local_hand_gain_animation(card_uid)
+		# 普通使用牌最终会从处理区进入弃牌堆；即使中央展示已经淡出，后续移牌信号也不能再生成第二张牌。
+		if str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false)):
+			_presented_discard_card_uids[card_uid] = true
 	# 正式卡牌节点；实际使用的本地处理区牌接管原节点，纯展示和不可见来源实例化同款完整牌面。
 	var animated_card: CardView = null if presentation_only else _card_views.get(card_uid) as CardView
 	if animated_card == null:
@@ -843,10 +850,11 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
-	if target_zone == "discard_pile" and card_use_animation_layer.has_active_card_uid(card_uid):
+	if target_zone == "discard_pile" and (card_use_animation_layer.has_active_card_uid(card_uid) or _presented_discard_card_uids.has(card_uid)):
+		_presented_discard_card_uids.erase(card_uid)
 		return
-	# 本地非摸牌获得使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
-	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand" and source_zone != "draw_pile"
+	# 本地摸牌与其他获得都使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
+	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand"
 	if is_local_gain:
 		_pending_local_hand_gain_uids[card_uid] = true
 		_start_pending_local_hand_gain_animations()
@@ -1035,7 +1043,7 @@ func _refresh_selection_text() -> void:
 	# 当前选中卡定义；用于判断重铸标志和木牛流马存粮资格。
 	var selected_definition_for_controls: Dictionary = GameDatabase.get_card(str(selected_card.get("definition_id", "")))
 	%CancelButton.visible = true
-	recast_button.visible = can_act and bool(selected_definition_for_controls.get("recast", false))
+	recast_button.visible = can_act and bool(selected_definition_for_controls.get("recast", false)) and _can_recast_selected_card()
 	recast_button.disabled = not recast_button.visible
 	wooden_ox_button.visible = can_act and _can_store_selected_card()
 	wooden_ox_button.disabled = not wooden_ox_button.visible
@@ -1064,6 +1072,20 @@ func _refresh_inline_choice_text() -> void:
 	wooden_ox_button.visible = false
 	end_play_button.visible = false
 	_refresh_component_states()
+
+
+## 判断当前选中实体牌是否位于普通手牌区；木牛流马“粮”不属于可重铸来源。
+func _can_recast_selected_card() -> bool:
+	if _selected_card_uid < 0:
+		return false
+	# 本地玩家快照；重铸只允许普通手牌，木牛流马下的“粮”只能使用或打出，不能进入重铸动作。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	for card_variant: Variant in local_player.get("hand", []):
+		# 当前普通手牌；稳定 UID 匹配时确认规则动作与按钮展示保持一致。
+		var hand_card: Dictionary = card_variant as Dictionary
+		if int(hand_card.get("uid", -1)) == _selected_card_uid:
+			return true
+	return false
 
 
 ## 判断当前选中实体牌是否来自本地手牌，并且本地装备区存在木牛流马。

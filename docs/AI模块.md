@@ -38,7 +38,7 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 
 ## 调度安全
 
-- `GameSettings.ai_response_delay_seconds` 默认 0.85 秒，局内菜单“AI响应速度”可在 0.25 至 2.00 秒之间以 0.05 秒步长调整；数值表示每次 AI 行动或选牌响应前的等待时间，数值越小响应越快。
+- `GameSettings.ai_response_delay_seconds` 默认 0.30 秒，局内菜单“AI响应速度”可在 0.05 至 1.00 秒之间以 0.05 秒步长调整；数值表示每次 AI 行动或选牌响应前的等待时间，数值越小响应越快。
 - `ai_action_delay_seconds` 是控制器当前使用的等待值，会订阅全局设置用于后续计时器；自动化测试可直接覆盖该字段以缩短测试等待，不改变玩家运行时设置。
 - `max_ai_actions_per_turn` 默认 64，超过后强制结束出牌阶段。
 - `character_candidate_count` 默认 5；基础 AI 只在自己的候选列表内选将，该数量不影响出牌阶段动作上限。
