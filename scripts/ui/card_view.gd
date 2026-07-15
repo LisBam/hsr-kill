@@ -125,7 +125,7 @@ func get_global_rect() -> Rect2:
 	return Rect2(global_position, get_card_size() * global_scale)
 
 
-## 返回当前手牌是否处于鼠标悬停状态；布局容器通过该只读接口分配邻牌间距。
+## 返回当前手牌是否处于鼠标悬停状态；布局容器通过该只读接口保持放大牌底边对齐并设置顶层绘制顺序。
 func is_hovered_in_hand() -> bool:
 	return _is_hovered
 
@@ -250,7 +250,7 @@ func _on_mouse_entered() -> void:
 	_is_hovered = true
 	z_index = HOVER_Z_INDEX
 	_refresh_visual_state()
-	# 手牌容器需要同步拉开相邻间距；其他展示容器只保留原有放大反馈。
+	# 手牌容器需要同步悬停牌的位置补偿与绘制层级；其他展示容器只保留原有放大反馈。
 	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
 	if hand_layout != null:
 		hand_layout.refresh_card_states()

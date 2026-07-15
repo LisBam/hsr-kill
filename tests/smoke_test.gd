@@ -249,11 +249,11 @@ func _run() -> void:
 		return
 	# 无名杀式手牌布局组件；实例化用于保证全局类、导出参数和基础显示数值可被无头环境解析。
 	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
-	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.hover_neighbor_spread, 28.0) or not is_equal_approx(hand_layout.hover_minimum_visible_width, 44.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
+	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
 		printerr("SMOKE_FAIL decade_hand_layout_defaults")
 		get_tree().quit(1)
 		return
-	# 手牌滚动视口；400像素宽度可让5张牌压缩展示但无需滑条，用于验证悬停让位不改变内容总宽度。
+	# 手牌滚动视口；400像素宽度可让5张牌压缩展示但无需滑条，用于验证悬停不会改变其他手牌位置或内容宽度。
 	var hand_scroll: ScrollContainer = ScrollContainer.new()
 	hand_scroll.size = Vector2(400.0, 172.0)
 	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -267,19 +267,23 @@ func _run() -> void:
 		hand_layout.add_child(layout_card)
 		layout_cards.append(layout_card)
 	hand_layout.call("_layout_cards")
-	# 正常压缩间距；所有间距在悬停前应保持一致。
-	var base_compressed_gap: float = layout_cards[1].position.x - layout_cards[0].position.x
-	# 正常布局总宽度；悬停让位后不得改变该值或额外触发滑条。
+	# 正常布局位置；悬停后除当前放大牌的缩放补偿外，其余手牌必须保持原位。
+	var base_card_positions: Array[Vector2] = []
+	for layout_card: CardView in layout_cards:
+		base_card_positions.append(layout_card.position)
+	# 正常布局总宽度；悬停不得改变该值或额外触发滑条。
 	var base_hand_content_width: float = hand_layout.custom_minimum_size.x
 	layout_cards[2].set("_is_hovered", true)
 	hand_layout.refresh_card_states()
 	hand_layout.call("_layout_cards")
-	# 悬停牌左侧相邻间距；应比正常压缩间距更大，让放大牌从覆盖队列中凸显出来。
-	var hovered_neighbor_gap: float = layout_cards[2].position.x - layout_cards[1].position.x
-	# 远端间距；用于补偿悬停牌两侧让位，必须小于正常压缩间距且不低于悬停专用阈值。
-	var hovered_distant_gap: float = layout_cards[1].position.x - layout_cards[0].position.x
-	if hovered_neighbor_gap <= base_compressed_gap or hovered_distant_gap >= base_compressed_gap or layout_cards[2].z_index != CardView.HOVER_Z_INDEX or not is_equal_approx(hand_layout.custom_minimum_size.x, base_hand_content_width):
-		printerr("SMOKE_FAIL hand_hover_reflow base=%s neighbor=%s distant=%s width=%s/%s" % [base_compressed_gap, hovered_neighbor_gap, hovered_distant_gap, hand_layout.custom_minimum_size.x, base_hand_content_width])
+	# 非悬停牌位置是否保持稳定；默认true，任一其他手牌被自动让位时改为false。
+	var non_hovered_cards_stay_fixed: bool = true
+	for layout_card_index: int in range(layout_cards.size()):
+		if layout_card_index != 2 and not layout_cards[layout_card_index].position.is_equal_approx(base_card_positions[layout_card_index]):
+			non_hovered_cards_stay_fixed = false
+			break
+	if not non_hovered_cards_stay_fixed or layout_cards[2].z_index != CardView.HOVER_Z_INDEX or not is_equal_approx(hand_layout.custom_minimum_size.x, base_hand_content_width):
+		printerr("SMOKE_FAIL hand_hover_stability fixed=%s width=%s/%s" % [non_hovered_cards_stay_fixed, hand_layout.custom_minimum_size.x, base_hand_content_width])
 		get_tree().quit(1)
 		return
 	# 额外手牌；超过64像素最小露出宽度仍无法容纳时，内容宽度必须溢出并由自动滑条接管。
