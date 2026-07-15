@@ -2,6 +2,8 @@
 
 [ext_resource type="Script" uid="uid://b1sh1pk8e66xu" path="res://scripts/ui/player_target_view.gd" id="1_script"]
 [ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
+[ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
+[ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -114,6 +116,22 @@ corner_radius_top_right = 5
 corner_radius_bottom_right = 5
 corner_radius_bottom_left = 5
 
+[sub_resource type="StyleBoxFlat" id="StyleHealthFrame"]
+content_margin_left = 1.0
+content_margin_top = 1.0
+content_margin_right = 1.0
+content_margin_bottom = 1.0
+bg_color = Color(0.0352941, 0.054902, 0.0431373, 0.72)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.776471, 0.623529, 0.309804, 0.82)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
 metadata/_edit_horizontal_guides_ = [99.0]
@@ -150,6 +168,7 @@ vertical_alignment = 1
 
 [node name="CharacterName" type="Label" parent="." unique_id=673259262]
 unique_name_in_owner = true
+z_index = 4
 offset_left = 3.0
 offset_top = 19.0
 offset_right = 25.0
@@ -167,6 +186,7 @@ vertical_alignment = 1
 
 [node name="IdentityBadge" type="Label" parent="." unique_id=915847553]
 unique_name_in_owner = true
+z_index = 4
 offset_left = 122.35
 offset_top = 3.0
 offset_right = 145.35
@@ -183,6 +203,7 @@ vertical_alignment = 1
 
 [node name="HandCount" type="Label" parent="." unique_id=237863011]
 unique_name_in_owner = true
+z_index = 4
 offset_left = -5.0
 offset_top = 179.8
 offset_right = 19.0
@@ -197,39 +218,15 @@ text = "4"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Status" type="Label" parent="." unique_id=990005668]
+[node name="PublicZone" parent="." instance=ExtResource("3_judgment_zone")]
 unique_name_in_owner = true
-visible = false
-offset_left = 28.0
-offset_top = 3.0
-offset_right = 73.0
-offset_bottom = 17.0
-theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
-theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
-theme_override_constants/shadow_offset_x = 1
-theme_override_constants/shadow_offset_y = 1
-theme_override_font_sizes/font_size = 8
-theme_override_styles/normal = SubResource("StyleOverlay")
-text = "行动"
-horizontal_alignment = 1
-
-[node name="PublicZone" type="Label" parent="." unique_id=1562348071]
-unique_name_in_owner = true
-offset_left = 43.175
-offset_top = 176.8
-offset_right = 105.175
-offset_bottom = 191.8
-theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
-theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
-theme_override_constants/shadow_offset_x = 1
-theme_override_constants/shadow_offset_y = 1
-theme_override_font_sizes/font_size = 7
-theme_override_styles/normal = SubResource("StyleOverlay")
-text = "判1"
-horizontal_alignment = 1
+z_index = 7
+offset_top = 186.8
+offset_bottom = 208.8
 
 [node name="FactionBadge" type="Label" parent="." unique_id=248046321]
 unique_name_in_owner = true
+z_index = 4
 offset_left = 1.0
 offset_top = 2.0
 offset_right = 27.0
@@ -244,17 +241,24 @@ text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="HealthPips" type="VBoxContainer" parent="." unique_id=929087411]
+[node name="HealthFrame" type="PanelContainer" parent="."]
 unique_name_in_owner = true
-offset_left = 120.35
-offset_top = 104.0
-offset_right = 146.35
-offset_bottom = 194.0
+z_index = 4
+offset_left = 118.35
+offset_top = 102.0
+offset_right = 147.35
+offset_bottom = 196.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleHealthFrame")
+
+[node name="HealthPips" type="VBoxContainer" parent="HealthFrame" unique_id=929087411]
+unique_name_in_owner = true
+layout_mode = 2
 mouse_filter = 2
 theme_override_constants/separation = -10
 alignment = 2
 
-[node name="PreviewCurrentHp1" type="Label" parent="HealthPips" unique_id=595401683]
+[node name="PreviewCurrentHp1" type="Label" parent="HealthFrame/HealthPips" unique_id=595401683]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
 theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
@@ -264,7 +268,7 @@ theme_override_font_sizes/font_size = 18
 text = "●"
 horizontal_alignment = 1
 
-[node name="PreviewCurrentHp2" type="Label" parent="HealthPips" unique_id=1914037147]
+[node name="PreviewCurrentHp2" type="Label" parent="HealthFrame/HealthPips" unique_id=1914037147]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
 theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
@@ -274,7 +278,7 @@ theme_override_font_sizes/font_size = 18
 text = "●"
 horizontal_alignment = 1
 
-[node name="PreviewCurrentHp3" type="Label" parent="HealthPips" unique_id=1878718363]
+[node name="PreviewCurrentHp3" type="Label" parent="HealthFrame/HealthPips" unique_id=1878718363]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.266667, 0.792157, 0.403922, 1)
 theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
@@ -284,7 +288,7 @@ theme_override_font_sizes/font_size = 18
 text = "●"
 horizontal_alignment = 1
 
-[node name="PreviewLostHp" type="Label" parent="HealthPips" unique_id=1879876878]
+[node name="PreviewLostHp" type="Label" parent="HealthFrame/HealthPips" unique_id=1879876878]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.14902, 0.219608, 0.172549, 1)
 theme_override_colors/font_shadow_color = Color(0.027451, 0.0784314, 0.0392157, 1)
@@ -296,15 +300,21 @@ horizontal_alignment = 1
 
 [node name="EquipmentLayer" type="Control" parent="." unique_id=237837046]
 unique_name_in_owner = true
+z_index = 2
 layout_mode = 3
 anchors_preset = 0
 offset_right = 148.35
 offset_bottom = 197.8
 mouse_filter = 2
 
+[node name="StateOverlay" parent="." instance=ExtResource("4_state_overlay")]
+unique_name_in_owner = true
+z_index = 25
+
 [node name="牌背" type="Panel" parent="." unique_id=538319319]
 unique_name_in_owner = true
 visible = false
+z_index = 20
 offset_right = 148.35
 offset_bottom = 197.8
 mouse_filter = 2
@@ -343,6 +353,7 @@ text = "牌背"
 horizontal_alignment = 1
 
 [node name="InputArea" type="Control" parent="." unique_id=590669325]
+z_index = 30
 layout_mode = 3
 anchors_preset = 0
 offset_right = 148.35

@@ -249,15 +249,57 @@ func _run() -> void:
 		return
 	# 无名杀式手牌布局组件；实例化用于保证全局类、导出参数和基础显示数值可被无头环境解析。
 	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
-	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
+	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.hover_neighbor_spread, 28.0) or not is_equal_approx(hand_layout.hover_minimum_visible_width, 44.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
 		printerr("SMOKE_FAIL decade_hand_layout_defaults")
 		get_tree().quit(1)
 		return
-	hand_layout.free()
+	# 手牌滚动视口；400像素宽度可让5张牌压缩展示但无需滑条，用于验证悬停让位不改变内容总宽度。
+	var hand_scroll: ScrollContainer = ScrollContainer.new()
+	hand_scroll.size = Vector2(400.0, 172.0)
+	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hand_scroll.add_child(hand_layout)
+	# 布局测试卡牌；五张正式牌面用于形成低于完整牌宽、但高于最小露出宽度的压缩间距。
+	var layout_cards: Array[CardView] = []
+	for layout_card_index: int in range(5):
+		# 当前布局测试牌；无需绑定规则实体，只验证正式 CardView 的位置、悬停状态与层级。
+		var layout_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		hand_layout.add_child(layout_card)
+		layout_cards.append(layout_card)
+	hand_layout.call("_layout_cards")
+	# 正常压缩间距；所有间距在悬停前应保持一致。
+	var base_compressed_gap: float = layout_cards[1].position.x - layout_cards[0].position.x
+	# 正常布局总宽度；悬停让位后不得改变该值或额外触发滑条。
+	var base_hand_content_width: float = hand_layout.custom_minimum_size.x
+	layout_cards[2].set("_is_hovered", true)
+	hand_layout.refresh_card_states()
+	hand_layout.call("_layout_cards")
+	# 悬停牌左侧相邻间距；应比正常压缩间距更大，让放大牌从覆盖队列中凸显出来。
+	var hovered_neighbor_gap: float = layout_cards[2].position.x - layout_cards[1].position.x
+	# 远端间距；用于补偿悬停牌两侧让位，必须小于正常压缩间距且不低于悬停专用阈值。
+	var hovered_distant_gap: float = layout_cards[1].position.x - layout_cards[0].position.x
+	if hovered_neighbor_gap <= base_compressed_gap or hovered_distant_gap >= base_compressed_gap or layout_cards[2].z_index != CardView.HOVER_Z_INDEX or not is_equal_approx(hand_layout.custom_minimum_size.x, base_hand_content_width):
+		printerr("SMOKE_FAIL hand_hover_reflow base=%s neighbor=%s distant=%s width=%s/%s" % [base_compressed_gap, hovered_neighbor_gap, hovered_distant_gap, hand_layout.custom_minimum_size.x, base_hand_content_width])
+		get_tree().quit(1)
+		return
+	# 额外手牌；超过64像素最小露出宽度仍无法容纳时，内容宽度必须溢出并由自动滑条接管。
+	for overflow_card_index: int in range(3):
+		# 当前溢出测试牌；加入后总数为8张，400像素视口无法按最小露出宽度完整展示。
+		var overflow_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		hand_layout.add_child(overflow_card)
+		layout_cards.append(overflow_card)
+	layout_cards[2].set("_is_hovered", false)
+	hand_layout.refresh_card_states()
+	hand_layout.call("_layout_cards")
+	if hand_layout.custom_minimum_size.x <= hand_scroll.size.x:
+		printerr("SMOKE_FAIL hand_scroll_threshold content=%s viewport=%s" % [hand_layout.custom_minimum_size.x, hand_scroll.size.x])
+		get_tree().quit(1)
+		return
+	hand_scroll.free()
 	# 可编辑武将牌场景实例；根节点必须是 Node2D，固定牌面尺寸由 card_size 与子视觉节点共同表达。
 	var player_card_template: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	# 入树前的静态预览体力圆点数量；场景应预置三绿一暗共4枚，正式运行后会按快照重建。
-	var static_preview_health_pip_count: int = (player_card_template.get_node("HealthPips") as VBoxContainer).get_child_count()
+	var static_preview_health_pip_count: int = (player_card_template.get_node("HealthFrame/HealthPips") as VBoxContainer).get_child_count()
 	if player_card_template.get_class() != "Node2D" or player_card_template.card_size != Vector2(148.35, 197.8):
 		printerr("SMOKE_FAIL player_card_node2d size=%s" % player_card_template.card_size)
 		get_tree().quit(1)
@@ -283,9 +325,15 @@ func _run() -> void:
 	# 编辑器身份徽记；进入场景树后保持23×20像素，验证静态场景内的信息控件规格。
 	var preview_identity_badge: Label = player_card_template.get_node("IdentityBadge") as Label
 	# 编辑器体力列；移动到右下角并扩大为26×90像素，验证静态场景内的信息控件规格。
-	var preview_health_column: VBoxContainer = player_card_template.get_node("HealthPips") as VBoxContainer
-	if player_card_template.has_node("Seat") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 86.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or not preview_health_column.position.is_equal_approx(Vector2(120.35, 104.0)) or not preview_health_column.size.is_equal_approx(Vector2(26.0, 90.0)) or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
-		printerr("SMOKE_FAIL player_card_scene_preview seat=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health=%s" % [player_card_template.has_node("Seat"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_column.size])
+	var preview_health_column: VBoxContainer = player_card_template.get_node("HealthFrame/HealthPips") as VBoxContainer
+	# 编辑器体力边框；固定包裹右下体力圆点，提供独立边界和深色底衬。
+	var preview_health_frame: PanelContainer = player_card_template.get_node("HealthFrame") as PanelContainer
+	# 判定区组件；根节点中心线位于武将牌底边，并在运行时生成菱形标记。
+	var preview_public_zone: JudgmentZoneView = player_card_template.get_node("PublicZone") as JudgmentZoneView
+	# 角色状态覆盖组件；替代旧 Status 标签，集中处理阵亡滤镜与横置链条。
+	var preview_state_overlay: PlayerStateOverlay = player_card_template.get_node("StateOverlay") as PlayerStateOverlay
+	if player_card_template.has_node("Seat") or player_card_template.has_node("Status") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 93.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or not preview_health_frame.position.is_equal_approx(Vector2(118.35, 102.0)) or not preview_health_frame.size.is_equal_approx(Vector2(29.0, 94.0)) or not is_equal_approx(preview_public_zone.position.y + preview_public_zone.marker_size * 0.5, player_card_template.card_size.y) or preview_state_overlay.card_size != player_card_template.card_size or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
+		printerr("SMOKE_FAIL player_card_scene_preview seat=%s status=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health_frame=%s/%s public=%s" % [player_card_template.has_node("Seat"), player_card_template.has_node("Status"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_frame.position, preview_health_frame.size, preview_public_zone.position])
 		get_tree().quit(1)
 		return
 	# 游戏内座位容器；座次标签必须位于武将牌下方，容器总高度额外包含18像素字体进入场景树后产生的26像素真实控件高度。
@@ -322,14 +370,18 @@ func _run() -> void:
 		"hp":3,
 		"max_hp":4,
 		"alive":true,
-		"chained":false,
+		"chained":true,
 		"hand_count":4,
 		"equipment":{
 			"weapon":{"definition_id":"qinglong", "suit":"spade", "rank":5},
 			"armor":{"definition_id":"bagua", "suit":"spade", "rank":2},
+			"treasure":{"definition_id":"muniu", "suit":"diamond", "rank":5},
 		},
-		"judgment_area":[],
-		"wooden_ox_storage_count":0,
+		"judgment_area":[
+			{"definition_id":"lebu", "suit":"heart", "rank":6},
+			{"definition_id":"bingliang", "suit":"club", "rank":4},
+		],
+		"wooden_ox_storage_count":3,
 	}
 	# 测试武将定义；提供武将名和势力 ID，使统一牌面能够生成完整覆盖层。
 	var equipped_character_definition: Dictionary = GameDatabase.get_character("trailblazer")
@@ -339,21 +391,47 @@ func _run() -> void:
 	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
 	var rendered_equipment_row_count: int = 0
 	# 实际装备横条是否全部保持60×15像素；默认true，发现任意尺寸不符条目后改为false。
+	# 当前变量继续表示全部装备条尺寸是否正确，目标宽度已调整为武将插画的141.35像素。
 	var equipment_rows_keep_original_size: bool = true
+	# 木牛流马装备条是否显示公开存牌数量；默认false，找到对应文本后改为true。
+	var wooden_ox_count_visible: bool = false
 	for child: Node in player_card_view.get_children():
 		for grandchild: Node in child.get_children():
 			if grandchild is RichTextLabel:
 				rendered_equipment_row_count += 1
-				if (grandchild as RichTextLabel).size != Vector2(60.0, 15.0):
+				if (grandchild as RichTextLabel).size != Vector2(141.35, 15.0):
 					equipment_rows_keep_original_size = false
-	if rendered_equipment_row_count != 2 or not equipment_rows_keep_original_size:
+				if (grandchild as RichTextLabel).text.contains("木牛流马（3）"):
+					wooden_ox_count_visible = true
+	# 判定区生成节点数；每张牌包含一个旋转背景与一个水平首字标签。
+	var judgment_marker_child_count: int = preview_public_zone.get_child_count()
+	# 体力圆点数组；3/4体力时顶部第一枚应变暗、其余三枚保持绿色，表示从上往下扣血。
+	var runtime_health_pips: Array[Node] = preview_health_column.get_children()
+	# 顶部体力圆点颜色；用于验证已损失体力从列表首项开始显示。
+	var first_health_pip_color: Color = (runtime_health_pips[0] as Label).get_theme_color("font_color")
+	# 第二枚体力圆点颜色；用于验证剩余体力紧随暗色圆点向下排列。
+	var second_health_pip_color: Color = (runtime_health_pips[1] as Label).get_theme_color("font_color")
+	if rendered_equipment_row_count != 3 or not equipment_rows_keep_original_size or not wooden_ox_count_visible or judgment_marker_child_count != 4 or not first_health_pip_color.is_equal_approx(Color("26382c")) or not second_health_pip_color.is_equal_approx(Color("44ca67")) or not bool(preview_state_overlay.get("_is_chained")):
 		printerr("SMOKE_FAIL player_card_equipment_rows=%d" % rendered_equipment_row_count)
+		get_tree().quit(1)
+		return
+	# 阵亡状态快照；覆盖层应显示黑白滤镜与红色“阵亡”，并让阵亡表现优先于横置链条。
+	equipped_player_snapshot["alive"] = false
+	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	if not (preview_state_overlay.get_node("DeathBackBuffer") as BackBufferCopy).visible or not (preview_state_overlay.get_node("DeathFilter") as ColorRect).visible or not (preview_state_overlay.get_node("DeathLabel") as Label).visible or (preview_state_overlay.get_node("DeathLabel") as Label).text != "阵亡":
+		printerr("SMOKE_FAIL player_death_overlay")
 		get_tree().quit(1)
 		return
 	get_tree().root.remove_child(player_card_view)
 	player_card_view.free()
 	# 主场景预览实例；只读取菜单与控制器默认参数，不进入场景树以避免启动正式对局。
 	var main_scene_preview: Control = MAIN_SCENE.instantiate() as Control
+	# 主场景手牌滚动区；自动模式保证只有内容超过最小压缩宽度时才出现滑条。
+	var main_hand_scroll: ScrollContainer = main_scene_preview.get_node("HandPanel/HandScroll") as ScrollContainer
+	if main_hand_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_AUTO:
+		printerr("SMOKE_FAIL hand_scroll_mode=%d" % main_hand_scroll.horizontal_scroll_mode)
+		get_tree().quit(1)
+		return
 	# 主场景对局控制器；直接运行场景时由该节点的导出默认值决定开局人数。
 	var main_scene_match_controller: MatchController = main_scene_preview.get_node("MatchController") as MatchController
 	if main_scene_match_controller.default_player_count != 8 or main_scene_match_controller.first_turn_seat_number != 1 or not main_scene_match_controller.randomize_local_human_seat or main_scene_match_controller.default_deck_id != "standard_162":
@@ -517,6 +595,8 @@ func _run() -> void:
 	_controller.add_child(network_gateway)
 	get_tree().root.add_child(_controller)
 	await get_tree().process_frame
+	# 无头测试 AI 延迟；控制器入树时会读取全局菜单设置，因此在 _ready 完成后再次覆盖为0秒，保证固定帧数能推进且收尾不遗留长计时器。
+	_controller.ai_action_delay_seconds = 0.0
 	# 随机座次样本；多个固定种子应产生不同的本地座次与主公座次，且至少一局本地玩家不是主公。
 	var observed_local_seats: Dictionary = {}
 	# 随机主公座次样本；键为座次 ID，用于验证主公不固定于一号位。
@@ -741,8 +821,24 @@ func _run() -> void:
 	for frame_index: int in range(MAX_FRAMES):
 		await get_tree().process_frame
 		if _controller.state.game_over:
-			print("SMOKE_PASS game_over winner=%s actions=%d frames=%d" % [_controller.state.winner, _controller.state.action_sequence, frame_index])
-			get_tree().quit(0)
+			await _finish_success("SMOKE_PASS game_over winner=%s actions=%d frames=%d" % [_controller.state.winner, _controller.state.action_sequence, frame_index])
 			return
-	print("SMOKE_PASS running phase=%s turn=%d actions=%d" % [_controller.state.current_phase, _controller.state.turn_number, _controller.state.action_sequence])
+	await _finish_success("SMOKE_PASS running phase=%s turn=%d actions=%d" % [_controller.state.current_phase, _controller.state.turn_number, _controller.state.action_sequence])
+
+
+## 输出成功结果并释放纯 AI 测试控制器；额外等待一帧让零延迟 AI 计时器完成断连，避免测试退出时残留 SceneTreeTimer。
+func _finish_success(message: String) -> void:
+	print(message)
+	if _controller != null and is_instance_valid(_controller):
+		# 收尾令牌；递增后所有已经创建的 AI 延迟任务都会在超时回调中判定失效。
+		_controller._ai_drive_token += 1
+		# 测试 AI 策略表；清空后即使当前回调到达也不会继续为任何角色安排后续行动。
+		_controller.ai_coordinator._policies.clear()
+		# 等待中的零延迟计时器需要经过一个进程帧发出 timeout，才能释放内部引用。
+		await get_tree().process_frame
+		# 已停止异步任务的测试控制器；先脱离场景树再立即释放，避免成功退出时保留测试节点。
+		get_tree().root.remove_child(_controller)
+		_controller.free()
+		_controller = null
+	await get_tree().process_frame
 	get_tree().quit(0)

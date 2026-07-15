@@ -80,6 +80,11 @@ func _run() -> void:
 	if local_seat_label.text != "五":
 		_fail("local_random_seat_label:%s" % local_seat_label.text)
 		return
+	# 本地装备区文本；测试快照中的木牛流马存有3张牌，数量必须紧跟装备名显示。
+	var local_equipment_label: Label = main_instance.get_node("%EquipmentLabel") as Label
+	if not local_equipment_label.text.contains("木牛流马（3）"):
+		_fail("local_wooden_ox_count:%s" % local_equipment_label.text)
+		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
 	var opponent_seat_slots: Array[Control] = []
 	# 全屏对手座次布局器；动态座位都是该容器的直接子节点。
@@ -173,6 +178,50 @@ func _run() -> void:
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
+	# 本地获得牌数据；从其他玩家手牌取得后应显示正面，并从本地手牌区右侧进入。
+	var gained_card_data: Dictionary = {"uid":90003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"hand", "owner_id":4}
+	main_instance.call("_on_card_transfer_requested", gained_card_data, 5, "hand", 4, "hand")
+	# 当前获得牌动画节点；区域转移索引在动画完成前保存正式 CardView 实例。
+	var gained_transfer_card: CardView = animation_layer._transfer_cards.values()[0] as CardView
+	# 期望获得牌起点中心；桌面公开辅助查询与正式转移动画使用同一可视滚动区边界。
+	var expected_gain_start_center: Vector2 = main_instance.call("_get_local_hand_gain_start_position", gained_transfer_card.get_card_size()) as Vector2
+	# 期望获得牌起点左上角；动画层以牌面中心协议接收位置，再换算成 CardView 左上角。
+	var expected_gain_start_position: Vector2 = expected_gain_start_center - gained_transfer_card.get_card_size() * 0.5
+	if gained_transfer_card.is_face_down or not gained_transfer_card.position.is_equal_approx(expected_gain_start_position):
+		_fail("local_gain_entry:%s expected=%s back=%s" % [gained_transfer_card.position, expected_gain_start_position, gained_transfer_card.is_face_down])
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
+	# 同批弃置的第一张牌；信号顺序应成为中央队列从左到右的稳定顺序。
+	var first_discard_card_data: Dictionary = {"uid":90004, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"discard_pile", "owner_id":-1}
+	# 同批弃置的第二张牌；与第一张在同一帧进入弃牌堆，必须完整共存而不是逐张替换。
+	var second_discard_card_data: Dictionary = {"uid":90005, "definition_id":"jiu", "suit":"spade", "rank":9, "zone":"discard_pile", "owner_id":-1}
+	animation_layer.card_hold_duration = 0.06
+	main_instance.call("_on_card_transfer_requested", first_discard_card_data, 5, "hand", -1, "discard_pile")
+	main_instance.call("_on_card_transfer_requested", second_discard_card_data, 6, "hand", -1, "discard_pile")
+	await get_tree().create_timer(0.02).timeout
+	if animation_layer._active_cards.size() != 2 or animation_layer._active_cards[0].card_uid != 90004 or animation_layer._active_cards[1].card_uid != 90005 or animation_layer._active_cards[0].position.x >= animation_layer._active_cards[1].position.x:
+		_fail("discard_batch_order:%s" % [animation_layer._active_cards.map(func(card: CardView) -> int: return card.card_uid)])
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
+	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
+	var single_target_state: GameState = _make_single_target_state()
+	match_controller.state = single_target_state
+	match_controller.card_rules = CardRuleService.new(single_target_state)
+	main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))
+	# 单目标测试牌；从本地状态读取稳定 UID，避免依赖全局实体牌计数器的当前值。
+	var single_target_card: CardInstance = single_target_state.players[4].hand[0]
+	main_instance.call("_on_card_pressed", single_target_card.uid)
+	main_instance.call("_on_target_pressed", 5)
+	# 第一次目标选择结果；点击六号位后应只保留该目标。
+	var first_single_target_selection: Array = (main_instance.get("_selected_target_ids") as Array).duplicate()
+	main_instance.call("_on_target_pressed", 6)
+	# 第二次目标选择结果；无需先点六号位取消，直接点击七号位即可替换。
+	var switched_single_target_selection: Array = (main_instance.get("_selected_target_ids") as Array).duplicate()
+	if first_single_target_selection != [5] or switched_single_target_selection != [6]:
+		_fail("single_target_switch:%s/%s" % [first_single_target_selection, switched_single_target_selection])
+		return
 	menu_button.pressed.connect(_on_menu_button_pressed)
 	await _click_control(menu_button)
 	if not _menu_button_pressed:
@@ -305,6 +354,9 @@ func _make_ten_player_snapshot() -> Dictionary:
 			"wooden_ox_storage":[],
 			"wooden_ox_storage_count":0,
 		}
+		if player_index == 4:
+			player_snapshot["equipment"] = {"treasure":{"uid":94001, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":4}}
+			player_snapshot["wooden_ox_storage_count"] = 3
 		players.append(player_snapshot)
 	# 十人界面快照；准备阶段禁用出牌控件，但保留完整本地技能栏和全部公开角色信息。
 	var snapshot: Dictionary = {
@@ -317,6 +369,28 @@ func _make_ten_player_snapshot() -> Dictionary:
 		"game_over":false,
 	}
 	return snapshot
+
+
+## 构造用于单目标切换的同步规则状态；本地五号位持有【决斗】，其余九名玩家均为合法目标。
+func _make_single_target_state() -> GameState:
+	# 单目标测试状态；无 match_id 保证不会启动正式对局 AI 或网络流程。
+	var game_state: GameState = GameState.new()
+	for player_id: int in range(10):
+		# 当前测试玩家；全部存活且使用连续稳定 ID，目标规则只排除使用者本人。
+		var player: PlayerState = PlayerState.new(player_id, "玩家%d" % (player_id + 1))
+		player.identity = "lord" if player_id == 0 else "rebel"
+		player.character_id = "trailblazer"
+		player.character_revealed = true
+		game_state.players.append(player)
+	# 单目标测试牌；【决斗】无距离限制且最多选择1名其他角色。
+	var duel_card: CardInstance = CardInstance.new("juedou", "spade", 1)
+	duel_card.zone = "hand"
+	duel_card.owner_id = 4
+	game_state.players[4].hand.append(duel_card)
+	game_state.current_player_id = 4
+	game_state.current_phase = "play"
+	game_state.turn_number = 1
+	return game_state
 
 
 ## 记录右上角菜单按钮收到真实鼠标点击，供异步输入流程断言。

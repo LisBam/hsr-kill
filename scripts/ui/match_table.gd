@@ -11,6 +11,9 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
+## 本地获得牌动画起点距离手牌区右边缘的额外间距；默认24像素让新牌从区域外清晰进入，运行时可按主题调整。
+@export_range(0.0, 96.0, 1.0) var local_hand_gain_entry_margin: float = 24.0
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -58,6 +61,9 @@ var local_player_seat_label: Label
 
 ## 本地玩家手牌按钮容器；名称模式切换后会重新渲染。
 @onready var hand_container: DecadeHandContainer = %HandContainer
+
+## 本地手牌可视滚动区域；获得牌动画以其右边缘作为入场起点，不使用可能超宽的内容容器边界。
+@onready var hand_scroll: ScrollContainer = $HandPanel/HandScroll
 
 ## 本地武将技能按钮容器；每次快照按武将配置重建，预留技能只展示说明不执行规则。
 @onready var skill_button_container: HFlowContainer = %SkillButtonContainer
@@ -413,6 +419,13 @@ func _format_local_equipment(player: Dictionary) -> String:
 	var defensive_mount_name: String = _equipment_slot_name(equipment, "defensive_mount")
 	# 宝物显示名；槽位为空时显示“无”。
 	var treasure_name: String = _equipment_slot_name(equipment, "treasure")
+	if equipment.has("treasure"):
+		# 当前宝物实体快照；木牛流马需要在装备名后直接显示公开存牌数量。
+		var treasure_card: Dictionary = equipment.get("treasure", {}) as Dictionary
+		if str(treasure_card.get("definition_id", "")) == "muniu":
+			# 木牛流马公开存牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
+			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
+			treasure_name += "（%d）" % wooden_ox_count
 	return "⚔ 武器　%s\n🛡 防具　%s\n♞ 进攻　%s\n♞ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
 
 
@@ -457,6 +470,7 @@ func _on_card_pressed(card_uid: int) -> void:
 
 
 ## 按点击顺序选择或取消一名目标；最多保留三个目标以支持方天画戟。
+## 最大目标数现由规则预览动态提供；当上限为1时，点击新目标会直接替换旧目标。
 func _on_target_pressed(target_id: int) -> void:
 	if not _inline_card_choice.is_empty():
 		return
@@ -464,9 +478,30 @@ func _on_target_pressed(target_id: int) -> void:
 		return
 	if _selected_target_ids.has(target_id):
 		_selected_target_ids.erase(target_id)
-	elif _selected_card_uid >= 0 and (_card_use_preview.get("legal_target_ids", []) as Array).has(target_id) and _selected_target_ids.size() < 3:
-		_selected_target_ids.append(target_id)
+	elif _selected_card_uid >= 0:
+		# 当前可点击的合法目标；单目标牌已选择目标后仍返回全部可替换候选。
+		var selectable_target_ids: Array[int] = _get_selectable_target_ids()
+		# 当前牌允许的最大目标数；包含方天画戟等规则修正，不在界面硬编码三目标上限。
+		var maximum_target_count: int = int(_card_use_preview.get("max_targets", 0))
+		if selectable_target_ids.has(target_id):
+			if maximum_target_count == 1:
+				_selected_target_ids.clear()
+			if _selected_target_ids.size() < maximum_target_count:
+				_selected_target_ids.append(target_id)
 	_refresh_selection_text()
+
+
+## 返回当前牌面可点击的合法目标；单目标牌保留空选择时的完整候选，支持一次点击直接切换目标。
+func _get_selectable_target_ids() -> Array[int]:
+	# 当前预览给出的后续合法目标；多目标牌直接按已有选择继续追加。
+	var selectable_target_ids: Array[int] = []
+	selectable_target_ids.assign(_card_use_preview.get("legal_target_ids", []) as Array)
+	if _selected_card_uid < 0 or int(_card_use_preview.get("max_targets", 0)) != 1 or _auto_locked_target_id >= 0:
+		return selectable_target_ids
+	# 单目标牌的空选择预览；已选目标不会排除其他候选，因此角色高亮和点击都可直接切换。
+	var replacement_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, [])
+	selectable_target_ids.assign(replacement_preview.get("legal_target_ids", []) as Array)
+	return selectable_target_ids
 
 
 ## 拖动卡牌开始时同步选牌状态，使目标组件立即展示该牌的合法投放区域。
@@ -744,7 +779,11 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	for target_id: int in target_ids:
 		target_positions.append(_get_player_indicator_position(target_id))
 	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
-	var animated_card: CardView = _card_views.get(int(card_data.get("uid", -1))) as CardView
+	# 手牌展示不会移动权威实体，因此展示请求必须使用正式牌面的独立表现实例。
+	# 当前请求是否只展示牌面；手牌展示不会移动权威实体，因此必须使用正式牌面的独立表现实例。
+	var presentation_only: bool = str(card_data.get("zone", "")) != "processing"
+	# 正式卡牌节点；实际使用的本地处理区牌接管原节点，纯展示和不可见来源实例化同款完整牌面。
+	var animated_card: CardView = null if presentation_only else _card_views.get(int(card_data.get("uid", -1))) as CardView
 	if animated_card == null:
 		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
 		animated_card.configure(card_data, definition, false, false)
@@ -760,15 +799,18 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	if target_zone == "discard_pile" and card_use_animation_layer.has_active_card_uid(card_uid):
 		return
 	# 动画起点；牌堆、处理区、展示区和弃牌堆都以桌面中心为公共锚点。
+	# 本地非摸牌获得会在牌面创建后覆盖该默认值，改从手牌区右侧进入。
 	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
 		start_position = _get_player_indicator_position(source_player_id)
 	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角使用实际手牌区锚点。
+	# 本地获得牌在创建牌面后进一步使用手牌区最右侧的完整牌面落点。
 	var target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if target_player_id >= 0 and target_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
 		target_position = _get_player_indicator_position(target_player_id)
 	# 牌面可见性；牌堆摸牌和其他角色不可见手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
-	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
+	# 牌已经进入本地手牌时对本地观察者可见，因此非摸牌获得动画直接显示正面。
+	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
 	# 转移牌节点；所有表现仍复用正式 CardView，不创建简化标签。
 	var animated_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	if show_card_back:
@@ -777,6 +819,16 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 		animated_card.configure(card_data, definition, false, false)
 	card_use_animation_layer.add_child(animated_card)
+	if target_zone == "discard_pile":
+		# 弃置牌与展示手牌共用中央完整牌面队列；同一帧的多张牌按信号顺序一次性展示并成批淡出。
+		animated_card.position = start_position - animated_card.get_card_size() * 0.5
+		card_use_animation_layer.play_card(animated_card, start_position, target_position, [])
+		return
+	# 当前转移是否属于本地玩家从非牌堆来源获得牌；该语义使用手牌区右侧入场动画，摸牌仍保留牌堆来源。
+	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand" and source_zone != "draw_pile"
+	if is_local_gain:
+		start_position = _get_local_hand_gain_start_position(animated_card.get_card_size())
+		target_position = _get_local_hand_gain_target_position(animated_card.get_card_size())
 	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
 	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
 	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
@@ -793,6 +845,24 @@ func _get_player_indicator_position(player_id: int) -> Vector2:
 	if player_view != null and is_instance_valid(player_view):
 		return _global_to_animation_position(player_view.get_global_rect().get_center())
 	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+
+
+## 返回本地获得牌动画在手牌区右侧的入场中心；使用可视滚动区域而不是可能超宽的内容区域。
+func _get_local_hand_gain_start_position(card_size: Vector2) -> Vector2:
+	# 手牌滚动区全局矩形；右边缘始终位于当前客户区内，不随隐藏内容宽度变化。
+	var hand_scroll_rect: Rect2 = hand_scroll.get_global_rect()
+	# 新牌全局中心；横向位于滚动区右侧，纵向与手牌底部对齐后的牌面中心一致。
+	var start_global_position: Vector2 = Vector2(hand_scroll_rect.end.x + card_size.x * 0.5 + local_hand_gain_entry_margin, hand_scroll_rect.end.y - card_size.y * 0.5)
+	return _global_to_animation_position(start_global_position)
+
+
+## 返回本地获得牌动画在手牌区最右侧的落点中心；动画结束后快照中的新手牌占据同一视觉区域。
+func _get_local_hand_gain_target_position(card_size: Vector2) -> Vector2:
+	# 手牌滚动区全局矩形；落点保留容器配置的右侧安全边距，避免牌框被裁切。
+	var hand_scroll_rect: Rect2 = hand_scroll.get_global_rect()
+	# 新牌目标全局中心；按完整牌面尺寸从右下角向内收缩，使动画明确进入手牌区域。
+	var target_global_position: Vector2 = Vector2(hand_scroll_rect.end.x - hand_container.horizontal_padding - card_size.x * 0.5, hand_scroll_rect.end.y - card_size.y * 0.5)
+	return _global_to_animation_position(target_global_position)
 
 
 ## 将全局画布坐标转换为动画层局部坐标；使用完整逆变换以兼容父节点位移、缩放与后续视口适配。
@@ -914,7 +984,8 @@ func _refresh_component_states() -> void:
 		var card_selected: bool = _inline_selected_card_uids.has(card_uid) if not _inline_card_choice.is_empty() else card_uid == _selected_card_uid
 		(_card_views[card_uid] as CardView).set_selected_state(card_selected)
 	# 合法目标 ID 数组；没有选牌时为空，角色卡保持普通状态。
-	var legal_target_ids: Array = _card_use_preview.get("legal_target_ids", []) as Array
+	# 单目标牌已有选择时仍补充空选择预览中的候选，以支持直接切换目标。
+	var legal_target_ids: Array[int] = _get_selectable_target_ids()
 	for player_id_variant: Variant in _player_views.keys():
 		# 当前角色 ID；用于同步合法与已选状态。
 		var player_id: int = int(player_id_variant)

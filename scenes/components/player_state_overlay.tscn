@@ -1,0 +1,45 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/player_state_overlay.gd" id="1_script"]
+
+[sub_resource type="Shader" id="ShaderDeathGrayscale"]
+code = "shader_type canvas_item;\n\nuniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_nearest;\n\nvoid fragment() {\n\tvec4 sampled_color = textureLod(screen_texture, SCREEN_UV, 0.0);\n\tfloat luminance = dot(sampled_color.rgb, vec3(0.299, 0.587, 0.114));\n\tCOLOR = vec4(vec3(luminance) * 0.62, sampled_color.a);\n}\n"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterialDeathGrayscale"]
+shader = SubResource("ShaderDeathGrayscale")
+
+[node name="PlayerStateOverlay" type="Control"]
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 197.8
+mouse_filter = 2
+script = ExtResource("1_script")
+
+[node name="DeathBackBuffer" type="BackBufferCopy" parent="."]
+visible = false
+copy_mode = 2
+rect = Rect2(0, 0, 148.35, 197.8)
+
+[node name="DeathFilter" type="ColorRect" parent="."]
+visible = false
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 197.8
+mouse_filter = 2
+material = SubResource("ShaderMaterialDeathGrayscale")
+color = Color(1, 1, 1, 1)
+
+[node name="DeathLabel" type="Label" parent="."]
+visible = false
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 197.8
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.86, 0.08, 0.07, 1)
+theme_override_colors/font_shadow_color = Color(0.08, 0.01, 0.01, 1)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 28
+text = "阵亡"
+horizontal_alignment = 1
+vertical_alignment = 1

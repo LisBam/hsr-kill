@@ -420,7 +420,7 @@ func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Ar
 	result["normalized_target_ids"] = normalized_targets
 	result["target_mode"] = target_mode
 	result["min_targets"] = int(definition.get("min_targets", 0))
-	result["max_targets"] = int(definition.get("max_targets", 0))
+	result["max_targets"] = card_rules.get_maximum_target_count(player_id, card)
 	result["description"] = str(definition.get("description", ""))
 	return result
 
@@ -536,7 +536,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	# 未注册 AI 的正式对局角色等待本地或网络动作；无 match_id 的纯规则测试使用标准放弃动作避免悬停。
 	var interactive_human: bool = not ai_coordinator.is_ai_controlled(chooser_id) and local_human_player_id >= 0 and not state.match_id.is_empty()
 	# 当前选择者是否由内置 AI 控制；AI 选择同样异步等待，避免响应牌和效果选牌绕过可调节的响应节奏。
-	var ai_controlled_chooser: bool = ai_coordinator.is_ai_controlled(chooser_id)
+	# 无 match_id 的纯规则状态不属于正在运行的对局，继续同步调用策略以保持测试与服务端预演确定性。
+	var ai_controlled_chooser: bool = ai_coordinator.is_ai_controlled(chooser_id) and not state.match_id.is_empty()
 	_pending_card_choice = {
 		"request_id":-1,
 		"chooser_id":chooser_id,

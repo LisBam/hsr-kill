@@ -21,6 +21,9 @@ signal card_dropped(card_uid: int, player_id: int)
 ## 牌面允许显示的装备条目上限；默认5对应武器、防具、进攻坐骑、防御坐骑和宝物五个固定槽位。
 @export_range(1, 5, 1) var maximum_equipment_rows: int = 5
 
+## 装备横条字体尺寸；默认9像素可在铺满武将插画宽度后完整显示花色、点数、牌名与木牛数量，运行时通常无需动态修改。
+@export_range(7, 14, 1) var equipment_row_font_size: int = 9
+
 ## 武将牌固定显示尺寸；默认148.35×197.8像素与编辑器3:4场景一致，运行时通常无需动态修改。
 ## 当前标准尺寸为148.35×197.8像素，通过只增宽武将插画与牌框实现精确3:4比例，信息控件尺寸保持不变。
 @export var card_size: Vector2 = Vector2(148.35, 197.8)
@@ -62,21 +65,26 @@ var _artwork_texture: Texture2D
 ## 手牌数量覆盖层；只显示公开数量，不暴露其他玩家的手牌内容。
 @onready var _hand_count_label: Label = $HandCount
 
-## 状态覆盖层；显示行动中、横置或死亡等桌面状态。
-@onready var _status_label: Label = $Status
-
 ## 公开区域覆盖层；显示装备、判定区和木牛“粮”的公开数量，完整名称保留在悬停说明中。
 ## 当前参考图格式只在该层显示判定区与“粮”数量，公开装备改由独立横条完整显示花色、点数和牌名。
-@onready var _public_zone_label: Label = $PublicZone
+## 当前 PublicZone 已重构为判定区标记组件，木牛数量改由装备名后缀显示。
+## 判定区标记组件；在武将牌底边按顺序显示判定牌菱形和首字，不读取权威实体牌。
+@onready var _public_zone_label: JudgmentZoneView = $PublicZone
 
 ## 势力圆形徽记；显示势力简称并使用数据配置的主题颜色，不参与身份或胜负判断。
 @onready var _faction_badge_label: Label = $FactionBadge
 
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
-@onready var _health_pip_container: VBoxContainer = $HealthPips
+## 当前容器位于独立 HealthFrame 边框内，并按从上往下的方向显示已损失体力。
+@onready var _health_pip_container: VBoxContainer = $HealthFrame/HealthPips
 
 ## 装备条目承载层；公开装备以参考图中的浅色横条从牌面下部向上叠放。
 @onready var _equipment_layer: Control = $EquipmentLayer
+
+## 状态覆盖层；显示行动中、横置或死亡等桌面状态。
+## 原 Status 文本节点已经移除，当前状态由边框与独立 PlayerStateOverlay 表达。
+## 阵亡与横置状态覆盖组件；负责黑白滤镜、阵亡文字和中心链条，不参与规则判断。
+@onready var _state_overlay: PlayerStateOverlay = $StateOverlay
 
 ## 当前已创建的装备条目控件；每次快照更新时整体重建，最多包含五个固定装备槽。
 var _equipment_rows: Array[RichTextLabel] = []
@@ -188,24 +196,27 @@ func _refresh_visual_state() -> void:
 		border_width = 1
 	_card_body.add_theme_stylebox_override("panel", _make_player_style(background_color, border_color, border_width))
 	_card_back.visible = is_face_down
-	if _status_label != null:
-		_status_label.modulate = Color(1.0, 1.0, 1.0, 0.52 if not is_interactable else 1.0)
+	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
 
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
+## 当前横条几何改为直接读取静态插画槽，完整铺满武将插画宽度。
 func _layout_equipment_rows() -> void:
 	if _equipment_rows.is_empty():
 		return
 	# 装备条目左边界；由场景内名称竖条右侧推导，编辑器调整名称位置后会自动随之适配。
-	var row_left: float = _character_name_label.position.x + _character_name_label.size.x + 9.0
+	# 当前需求改为直接读取插画槽左边缘，不再以名称竖条限制横条长度。
+	var row_left: float = _artwork_rect.position.x
 	# 装备条目右边界；由场景内体力列左侧推导，避免与可视体力圆点重叠。
-	var row_right: float = _health_pip_container.position.x - 5.0
+	# 当前装备条允许位于信息覆盖层下方，因此体力列不再缩短装备条。
 	# 装备条目可用宽度；由场景内公开区提示宽度推导，使静态场景继续作为信息层几何的唯一来源。
-	var row_width: float = minf(maxf(row_right - row_left, 42.0), _public_zone_label.size.x - 2.0)
+	# 当前可用宽度严格等于武将插画宽度。
+	var row_width: float = _artwork_rect.size.x
 	# 全部装备条目总高度；相邻横条轻微覆盖1像素以模拟参考图的叠牌效果。
 	var rows_height: float = equipment_row_height + float(_equipment_rows.size() - 1) * (equipment_row_height - 1.0)
 	# 第一条装备的纵坐标；由场景内公开区域上沿推导，从牌面下部向上展开。
-	var start_y: float = maxf(_public_zone_label.position.y - rows_height - 6.0, 35.0)
+	# 当前公开区移至牌面底边之外，因此装备条改为从插画底边向上展开。
+	var start_y: float = maxf(_artwork_rect.position.y + _artwork_rect.size.y - rows_height, _artwork_rect.position.y)
 	for row_index: int in range(_equipment_rows.size()):
 		# 当前装备横条；只更新几何信息，不改变其装备数据或显示文本。
 		var equipment_row: RichTextLabel = _equipment_rows[row_index]
@@ -238,13 +249,23 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_character_name_label.text = "\n".join(character_name.split(""))
 	_identity_badge_label.text = identity_text
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
-	_status_label.text = "行动" if is_current_actor else ("阵亡" if not is_interactable else ("横置" if bool(_player_snapshot.get("chained", false)) else ""))
 	# 判定区公开数量；没有判定牌时不显示该摘要，避免覆盖装备横条和武将立绘。
+	# 当前数量由菱形标记数组的长度直接表达，不再绘制“判N”摘要文本。
 	var judgment_count: int = (_player_snapshot.get("judgment_area", []) as Array).size()
 	# 木牛流马“粮”公开数量；没有“粮”时不显示该摘要，完整牌面仍只对所有者可见。
+	# 当前数量紧跟木牛流马装备名显示；这里保留公开快照读取用于完整组件刷新。
 	var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
-	_public_zone_label.text = ("判%d" % judgment_count if judgment_count > 0 else "") + (" 粮%d" % wooden_ox_count if wooden_ox_count > 0 else "")
-	_public_zone_label.visible = not _public_zone_label.text.is_empty()
+	# 判定牌显示名数组；快照顺序决定底边菱形从左到右的公开排列顺序。
+	var judgment_names: Array[String] = []
+	for judgment_variant: Variant in _player_snapshot.get("judgment_area", []):
+		# 当前判定牌快照；只读取定义 ID 解析牌名，不把实体引用传入表现组件。
+		var judgment_card: Dictionary = judgment_variant as Dictionary
+		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
+	if judgment_count == 0:
+		judgment_names.clear()
+	# 木牛数量在装备条刷新时读取；显式访问保证公开数量字段缺失时仍使用0作为稳定回退。
+	wooden_ox_count = maxi(wooden_ox_count, 0)
+	_public_zone_label.configure(judgment_names)
 	_faction_badge_label.text = faction_short_name
 	_faction_badge_label.tooltip_text = faction_name
 	# 势力徽记样式；清空通用面板的大内边距，保证紧凑圆徽中的单字完整显示。
@@ -274,17 +295,19 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
+## 已损失圆点现在从容器顶部开始排列，使扣血方向固定为从上往下。
 func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 	for child: Node in _health_pip_container.get_children():
 		_health_pip_container.remove_child(child)
 		child.queue_free()
 	for pip_index: int in range(max_hp):
 		# 当前体力圆点；索引小于当前体力时点亮，其余保留暗色上限占位。
+		# 当前颜色判断改用顶部已损失数量，剩余圆点继续使用相同绿色与暗色。
 		var health_pip: Label = Label.new()
 		health_pip.text = "●"
 		health_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_pip.add_theme_font_size_override("font_size", health_pip_font_size)
-		health_pip.add_theme_color_override("font_color", Color("44ca67") if pip_index < safe_hp else Color("26382c"))
+		health_pip.add_theme_color_override("font_color", Color("26382c") if pip_index < max_hp - safe_hp else Color("44ca67"))
 		health_pip.add_theme_color_override("font_shadow_color", Color("07140a"))
 		health_pip.add_theme_constant_override("shadow_offset_x", 1)
 		health_pip.add_theme_constant_override("shadow_offset_y", 1)
@@ -310,6 +333,10 @@ func _refresh_equipment_rows() -> void:
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则。
 		var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+		if str(equipment_card.get("definition_id", "")) == "muniu":
+			# 木牛流马公开存牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
+			var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
+			equipment_name += "（%d）" % wooden_ox_count
 		# 当前装备花色；用于生成参考图中的左侧花色点数标记和红黑配色。
 		var suit: String = str(equipment_card.get("suit", "none"))
 		# 当前装备点数；虚拟或缺失点数使用空文本，不显示无意义的0。
@@ -320,9 +347,10 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.fit_content = false
 		equipment_row.scroll_active = false
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		equipment_row.add_theme_font_size_override("normal_font_size", 8)
+		equipment_row.add_theme_font_size_override("normal_font_size", equipment_row_font_size)
 		equipment_row.add_theme_color_override("default_color", Color("33281e"))
 		# 装备横条样式；缩小内容边距以在固定60像素条宽内完整显示花色点数与短牌名。
+		# 当前横条已扩展到完整插画宽度，并在宝物名称后容纳木牛公开数量。
 		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("dfd2adf2"), Color("8d7147"), 1, 3)
 		equipment_row_style.content_margin_left = 2.0
 		equipment_row_style.content_margin_top = 0.0
