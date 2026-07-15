@@ -100,6 +100,7 @@ var _pending_card_choice: Dictionary = {}
 var _resolved_card_choice_uids: Array[int] = []
 
 ## 全局选择请求序号；每次创建窗口递增，防止旧界面或网络消息误提交到新请求。
+## 当前实现只镜像 EventScheduler 最近一次分配的全局编号，不再维护第二套独立请求序列。
 var _card_choice_sequence: int = 0
 
 ## 无懈可击延迟提交后的单次恢复结果；键包含原牌 UID 与目标，读取一次后立即删除。
@@ -510,7 +511,6 @@ func _prevalidate_play_action(action: PlayerAction) -> String:
 func request_card_choice(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary) -> Array[int]:
 	if state == null or state.game_over or not _pending_card_choice.is_empty():
 		return []
-	_card_choice_sequence += 1
 	_resolved_card_choice_uids.clear()
 	# 请求创建前的规则阶段；选择提交后必须恢复，避免把响应窗口误当作新的回合阶段。
 	var resume_phase: String = state.current_phase
@@ -521,7 +521,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	# 未注册 AI 的正式对局角色等待本地或网络动作；无 match_id 的纯规则测试使用标准放弃动作避免悬停。
 	var interactive_human: bool = not ai_coordinator.is_ai_controlled(chooser_id) and local_human_player_id >= 0 and not state.match_id.is_empty()
 	_pending_card_choice = {
-		"request_id":_card_choice_sequence,
+		"request_id":-1,
 		"chooser_id":chooser_id,
 		"title":title,
 		"prompt":prompt,
@@ -548,7 +548,6 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	choice_event.status = GameEvent.Status.RUNNING
 	choice_event.player_id = chooser_id
 	var runtime_request: ChoiceRequest = ChoiceRequest.new(choice_event.event_id, chooser_id, choice_type, prompt)
-	runtime_request.request_id = _card_choice_sequence
 	runtime_request.min_count = maxi(min_select, 0)
 	runtime_request.max_count = maxi(max_select, min_select)
 	runtime_request.forced = not allow_cancel
@@ -557,7 +556,16 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	runtime_request.active_context = context.duplicate(true)
 	for candidate: Dictionary in serialized_candidates:
 		runtime_request.card_ids.append(int(candidate.get("uid", -1)))
-	event_scheduler.request_choice(runtime_request)
+	# 选择请求必须使用事件调度器分配的全局 ID；控制器自有序号不能与 chooseToUse 或其他请求共用命名空间。
+	var registered_request: ChoiceRequest = event_scheduler.request_choice(runtime_request)
+	if registered_request == null:
+		# 登记失败时撤销临时事件并清空待处理状态，禁止界面显示无法提交的假窗口。
+		_pending_card_choice.clear()
+		choice_event.abort("choice_registration_failed")
+		return []
+	runtime_request = registered_request
+	_card_choice_sequence = runtime_request.request_id
+	_pending_card_choice["request_id"] = runtime_request.request_id
 	_pending_card_choice["runtime_event_id"] = choice_event.event_id
 	_pending_card_choice["runtime_request_id"] = runtime_request.request_id
 	state.current_phase = "choice"
@@ -573,13 +581,13 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var action_data: Dictionary = {}
 	if ai_response != null:
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		ai_action.payload = {"request_id":ai_response.request_id, "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate()}
+		ai_action.payload = {"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)), "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate()}
 		action_data = ai_action.to_dict()
 	if action_data.is_empty() or not submit_action(PlayerAction.from_dict(action_data)):
 		# 合法动作正常非空；防御性回退按最少数量提交首批候选，保证纯 AI 对局不会停滞。
 		var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		fallback_action.payload = {
-			"request_id":_card_choice_sequence,
+			"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)),
 			"selected_card_uids":_first_candidate_uids(serialized_candidates, maxi(min_select, 0)),
 		}
 		submit_action(fallback_action)
@@ -664,9 +672,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return _reject("选择的牌数不足。")
 	if selected_uids.size() > max_select:
 		return _reject("选择的牌数超过上限。")
-	# 已完成请求上下文；清空窗口前复制，避免后续新请求覆盖当前恢复信息。
+	# 已完成请求上下文；运行时确认接收后再清空窗口，避免失败响应把仍可重试的权威请求提前丢失。
 	var completed_choice: Dictionary = _pending_card_choice.duplicate(true)
-	_pending_card_choice.clear()
 	# 通用运行时响应；AI、本地和网络使用完全相同的 ChoiceResponse 字段与权威候选校验。
 	var runtime_response: ChoiceResponse = ChoiceResponse.new(
 		int(completed_choice.get("runtime_request_id", completed_choice.get("request_id", -1))),
@@ -679,6 +686,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	runtime_response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
 	if not event_scheduler.submit_choice(runtime_response):
 		return _reject("事件运行时拒绝了已过期的选择结果。")
+	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
 	_resolved_card_choice_uids = selected_uids.duplicate()
 	state.action_sequence += 1
