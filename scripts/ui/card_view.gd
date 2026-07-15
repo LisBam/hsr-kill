@@ -73,6 +73,9 @@ var _hover_tween: Tween
 ## 卡牌纸张面板；承载完整视觉样式，不承担鼠标按钮语义。
 @onready var _card_body: Panel = $CardBody
 
+## 牌背覆盖层；默认隐藏，显示时遮挡完整牌面内容但不拦截独立输入区域。
+@onready var _card_back: Panel = get_node("牌背") as Panel
+
 ## 牌面插画显示节点；固定占据卡牌中部，不参与鼠标输入。
 @onready var _artwork_rect: TextureRect = $CardBody/Artwork
 
@@ -101,6 +104,7 @@ const HOVER_Z_INDEX: int = 100
 ## 初始化卡牌尺寸、视觉内容与独立输入信号。
 func _ready() -> void:
 	_card_body.size = get_card_size()
+	_card_back.size = get_card_size()
 	_input_area.size = get_card_size()
 	_input_area.activated.connect(pressed.emit)
 	_input_area.hover_started.connect(_on_mouse_entered)
@@ -153,15 +157,9 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	is_wooden_ox_card = false
 	is_interactable = interactable
 	is_face_down = true
-	_suit_rank_text = ""
-	_display_name_text = "牌背"
-	_card_type_text = "不可见手牌"
-	_category_color = Color("67594b")
-	_artwork_texture = null
 	if is_node_ready():
 		_input_area.tooltip_text = "不可见手牌"
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
-	_refresh_card_content()
 	_refresh_visual_state()
 
 
@@ -186,6 +184,10 @@ func create_drag_preview() -> Control:
 	var body_preview: Panel = _card_body.duplicate() as Panel
 	body_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview.add_child(body_preview)
+	# 牌背覆盖层副本；隐藏手牌拖拽时仍保持信息完全遮挡。
+	var card_back_preview: Panel = _card_back.duplicate() as Panel
+	card_back_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview.add_child(card_back_preview)
 	return preview
 
 
@@ -194,7 +196,7 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 默认纸张颜色；木牛“粮”使用偏青纸色作为来源提示。
-	var paper_color: Color = Color("283632") if is_face_down else (Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4"))
+	var paper_color: Color = Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4")
 	if _is_hovered and is_interactable:
 		paper_color = paper_color.lightened(0.08)
 	# 默认边框颜色；选中时改为高亮金色并增加描边宽度。
@@ -203,19 +205,20 @@ func _refresh_visual_state() -> void:
 	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
 	# 内容调制色；禁用牌会统一压暗插画、占位图和文字，避免只有纸张边缘发生轻微变化。
 	var content_modulate: Color = Color.WHITE
-	if not is_interactable and not is_face_down:
+	if not is_interactable:
 		paper_color = paper_color.darkened(disabled_darkening)
 		border_color = Color("655b50")
 		content_modulate = disabled_content_modulate
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
 	if not (get_parent() is DecadeHandContainer):
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
-	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable and not is_face_down else _category_color
+	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable else _category_color
 	_artwork_rect.modulate = content_modulate
 	_artwork_placeholder.modulate = content_modulate
 	_corner_label.modulate = content_modulate
 	_name_label.modulate = content_modulate
 	_type_label.modulate = content_modulate
+	_card_back.visible = is_face_down
 
 
 ## 把缓存的牌面文本与插画写入子节点；可在 configure 早于 _ready 时安全重复调用。
@@ -225,12 +228,12 @@ func _refresh_card_content() -> void:
 	_artwork_rect.texture = _artwork_texture
 	_artwork_rect.visible = _artwork_texture != null
 	_artwork_placeholder.visible = _artwork_texture == null
-	_artwork_placeholder.text = "崩铁杀\n牌背" if is_face_down else "◇\n插画预留"
+	_artwork_placeholder.text = "◇\n插画预留"
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
-	var content_color: Color = Color("e7d59b") if is_face_down else (Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31"))
+	var content_color: Color = Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31")
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
 

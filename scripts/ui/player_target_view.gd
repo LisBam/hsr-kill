@@ -40,6 +40,9 @@ var is_current_actor: bool = false
 ## 当前武将牌是否允许交互；存活角色为 true，阵亡角色为 false，只影响输入与视觉状态。
 var is_interactable: bool = false
 
+## 当前武将牌是否显示牌背；快照的 face_down 为 true 时遮挡公开信息，不改变角色规则状态。
+var is_face_down: bool = false
+
 ## 当前武将插画纹理；配置未填写或资源不存在时为 null。
 var _artwork_texture: Texture2D
 
@@ -90,6 +93,9 @@ var _player_snapshot: Dictionary = {}
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
 
+## 牌背覆盖层；默认隐藏，显示时覆盖武将插画、状态与公开区域，但保留输入区域可用。
+@onready var _card_back: Panel = get_node("牌背") as Panel
+
 ## 独立输入区域；覆盖整张武将牌并负责点击与卡牌拖放协议。
 @onready var _input_area: PlayerTargetInputArea = $InputArea
 
@@ -97,6 +103,7 @@ var _player_snapshot: Dictionary = {}
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
 	_card_body.size = card_size
+	_card_back.size = card_size
 	_input_area.size = card_size
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(pressed.emit)
@@ -117,6 +124,7 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 	player_id = id
 	is_current_actor = current_actor
 	is_interactable = alive
+	is_face_down = false
 	# 兼容格式化文本；旧调用方仍可传入摘要，该内容只作为无障碍悬停说明，不绘制按钮正文。
 	var accessibility_summary: String = ("◆ 行动中\n" if is_current_actor else "") + formatted_text
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
@@ -134,6 +142,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	player_id = int(snapshot.get("player_id", -1))
 	is_current_actor = current_actor
 	is_interactable = bool(snapshot.get("alive", false))
+	is_face_down = bool(snapshot.get("face_down", false))
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = _format_snapshot_tooltip(snapshot, character_definition)
@@ -178,6 +187,7 @@ func _refresh_visual_state() -> void:
 		border_color = Color("544f49")
 		border_width = 1
 	_card_body.add_theme_stylebox_override("panel", _make_player_style(background_color, border_color, border_width))
+	_card_back.visible = is_face_down
 	if _status_label != null:
 		_status_label.modulate = Color(1.0, 1.0, 1.0, 0.52 if not is_interactable else 1.0)
 

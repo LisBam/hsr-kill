@@ -90,6 +90,30 @@ corner_radius_top_right = 14
 corner_radius_bottom_right = 14
 corner_radius_bottom_left = 14
 
+[sub_resource type="StyleBoxFlat" id="StylePlayerCardBack"]
+bg_color = Color(0.0823529, 0.121569, 0.137255, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.776471, 0.623529, 0.309804, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StylePlayerCardBackCenter"]
+bg_color = Color(0.117647, 0.203922, 0.223529, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.776471, 0.623529, 0.309804, 0.72)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
 
@@ -276,6 +300,47 @@ anchors_preset = 0
 offset_right = 148.35
 offset_bottom = 197.8
 mouse_filter = 2
+
+[node name="牌背" type="Panel" parent="." unique_id=538319319]
+unique_name_in_owner = true
+visible = false
+offset_right = 148.35
+offset_bottom = 197.8
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StylePlayerCardBack")
+
+[node name="Center" type="Panel" parent="牌背" unique_id=738021054]
+layout_mode = 0
+offset_left = 19.0
+offset_top = 31.0
+offset_right = 129.35
+offset_bottom = 166.8
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StylePlayerCardBackCenter")
+
+[node name="Title" type="Label" parent="牌背" unique_id=1961296478]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 81.0
+offset_right = 130.35
+offset_bottom = 110.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.905882, 0.803922, 0.545098, 1)
+theme_override_font_sizes/font_size = 20
+text = "崩铁杀"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="牌背" unique_id=1129865652]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 110.0
+offset_right = 130.35
+offset_bottom = 130.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.635294, 0.74902, 0.717647, 1)
+theme_override_font_sizes/font_size = 11
+text = "牌背"
+horizontal_alignment = 1
 
 [node name="InputArea" type="Control" parent="." unique_id=590669325]
 layout_mode = 3
