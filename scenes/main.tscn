@@ -6,13 +6,13 @@
 [ext_resource type="Script" uid="uid://c3whludjbgabl" path="res://scripts/ai/ai_coordinator.gd" id="4_ai"]
 [ext_resource type="Script" uid="uid://canm0ju3yf2as" path="res://scripts/network/network_gateway.gd" id="5_network"]
 [ext_resource type="Texture2D" uid="uid://s3n7u8l1qm45" path="res://assets/ui/table_ornament.svg" id="6_ornament"]
-[ext_resource type="Script" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
+[ext_resource type="Script" uid="uid://324bj74relfv" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
 [ext_resource type="Script" uid="uid://be14yvmd8i1up" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
 [ext_resource type="Script" uid="uid://bpdcraioe8xb4" path="res://scripts/ui/decade_hand_container.gd" id="9_hand_layout"]
 [ext_resource type="Script" uid="uid://d2qfk6g5m7y1p" path="res://scripts/ui/decade_battle_layout.gd" id="10_battle_layout"]
-[ext_resource type="Script" path="res://scripts/ui/match_menu.gd" id="13_menu"]
-[ext_resource type="Script" path="res://scripts/ui/character_selection_panel.gd" id="14_character_selection"]
-[ext_resource type="Script" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
+[ext_resource type="Script" uid="uid://daljlykar8dvs" path="res://scripts/ui/match_menu.gd" id="13_menu"]
+[ext_resource type="Script" uid="uid://c3kqem0y4g3g6" path="res://scripts/ui/character_selection_panel.gd" id="14_character_selection"]
+[ext_resource type="Script" uid="uid://conllkvkmtemn" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -52,25 +52,6 @@ shadow_color = Color(0, 0, 0, 0.45)
 shadow_size = 4
 shadow_offset = Vector2(0, 2)
 
-[sub_resource type="StyleBoxFlat" id="StyleJadePanel"]
-content_margin_left = 9.0
-content_margin_top = 7.0
-content_margin_right = 9.0
-content_margin_bottom = 7.0
-bg_color = Color(0.0901961, 0.168627, 0.152941, 0.929412)
-border_width_left = 2
-border_width_top = 2
-border_width_right = 2
-border_width_bottom = 2
-border_color = Color(0.54902, 0.454902, 0.282353, 1)
-corner_radius_top_left = 5
-corner_radius_top_right = 5
-corner_radius_bottom_right = 5
-corner_radius_bottom_left = 5
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
 [sub_resource type="StyleBoxFlat" id="StyleButtonPrimary"]
 content_margin_left = 13.0
 content_margin_top = 6.0
@@ -89,6 +70,25 @@ corner_radius_bottom_left = 5
 shadow_color = Color(0, 0, 0, 0.45)
 shadow_size = 4
 shadow_offset = Vector2(0, 2)
+
+[sub_resource type="StyleBoxFlat" id="StyleJadePanel"]
+content_margin_left = 9.0
+content_margin_top = 7.0
+content_margin_right = 9.0
+content_margin_bottom = 7.0
+bg_color = Color(0.0901961, 0.168627, 0.152941, 0.929412)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.54902, 0.454902, 0.282353, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+shadow_color = Color(0, 0, 0, 0.62)
+shadow_size = 10
+shadow_offset = Vector2(0, 4)
 
 [sub_resource type="StyleBoxFlat" id="StyleHandPanel"]
 content_margin_left = 9.0
@@ -206,7 +206,7 @@ theme_override_colors/font_color = Color(0.56, 0.84, 0.73, 1)
 text = "准备"
 horizontal_alignment = 1
 
-[node name="MatchMenu" type="Control" parent="."]
+[node name="MatchMenu" type="Control" parent="." unique_id=822365686]
 unique_name_in_owner = true
 z_index = 50
 layout_mode = 1
@@ -218,7 +218,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("13_menu")
 
-[node name="MenuButton" type="Button" parent="MatchMenu"]
+[node name="MenuButton" type="Button" parent="MatchMenu" unique_id=2017700256]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 1
@@ -232,7 +232,7 @@ grow_horizontal = 0
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "菜单"
 
-[node name="MenuPanel" type="PanelContainer" parent="MatchMenu"]
+[node name="MenuPanel" type="PanelContainer" parent="MatchMenu" unique_id=457769022]
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
@@ -246,44 +246,42 @@ offset_bottom = 246.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
-[node name="MenuVBox" type="VBoxContainer" parent="MatchMenu/MenuPanel"]
+[node name="MenuVBox" type="VBoxContainer" parent="MatchMenu/MenuPanel" unique_id=731239853]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="MenuTitle" type="Label" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="MenuTitle" type="Label" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1601890631]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
 theme_override_font_sizes/font_size = 18
 text = "菜单"
 horizontal_alignment = 1
 
-[node name="MenuCardNameButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="MenuCardNameButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1005214864]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "卡牌名称：崩铁杀"
 
-[node name="PlayerCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="PlayerCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1045087042]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="PlayerCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/PlayerCountRow"]
+[node name="PlayerCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/PlayerCountRow" unique_id=1745645553]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "下一局游戏人数"
 vertical_alignment = 1
 
-[node name="NextPlayerCountInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/PlayerCountRow"]
+[node name="NextPlayerCountInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/PlayerCountRow" unique_id=2052189361]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(90, 34)
 layout_mode = 2
 min_value = 2.0
 max_value = 10.0
 value = 8.0
-allow_greater = false
-allow_lesser = false
 
-[node name="MenuRestartButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="MenuRestartButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1272565438]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
@@ -326,7 +324,7 @@ grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("15_log_panel")
 
-[node name="LogToggleButton" type="Button" parent="LogPanel"]
+[node name="LogToggleButton" type="Button" parent="LogPanel" unique_id=345927346]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 2
@@ -338,7 +336,7 @@ grow_vertical = 0
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "记录"
 
-[node name="LogContentPanel" type="PanelContainer" parent="LogPanel"]
+[node name="LogContentPanel" type="PanelContainer" parent="LogPanel" unique_id=865979048]
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
@@ -561,7 +559,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("7_animation")
 
-[node name="CharacterSelectionPanel" type="Control" parent="."]
+[node name="CharacterSelectionPanel" type="Control" parent="." unique_id=9681950]
 unique_name_in_owner = true
 visible = false
 z_index = 40
@@ -573,7 +571,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("14_character_selection")
 
-[node name="SelectionShade" type="ColorRect" parent="CharacterSelectionPanel"]
+[node name="SelectionShade" type="ColorRect" parent="CharacterSelectionPanel" unique_id=1779437543]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -583,7 +581,7 @@ grow_vertical = 2
 mouse_filter = 1
 color = Color(0.015, 0.012, 0.01, 0.86)
 
-[node name="SelectionFrame" type="Panel" parent="CharacterSelectionPanel"]
+[node name="SelectionFrame" type="Panel" parent="CharacterSelectionPanel" unique_id=274693233]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -598,7 +596,7 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
-[node name="CharacterSelectionTitle" type="Label" parent="CharacterSelectionPanel/SelectionFrame"]
+[node name="CharacterSelectionTitle" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=98725864]
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 24.0
@@ -610,7 +608,7 @@ theme_override_font_sizes/font_size = 24
 text = "主公选将"
 horizontal_alignment = 1
 
-[node name="CharacterSelectionStatus" type="Label" parent="CharacterSelectionPanel/SelectionFrame"]
+[node name="CharacterSelectionStatus" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1416584960]
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 24.0
@@ -621,15 +619,15 @@ theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
 text = "从五张候选武将牌中选择一张"
 horizontal_alignment = 1
 
-[node name="CharacterCandidateArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame"]
+[node name="CharacterCandidateArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1250766479]
 unique_name_in_owner = true
-layout_mode = 0
+anchors_preset = 0
 offset_left = 40.0
 offset_top = 106.0
 offset_right = 1000.0
 offset_bottom = 304.0
 
-[node name="ConfirmCharacterButton" type="Button" parent="CharacterSelectionPanel/SelectionFrame"]
+[node name="ConfirmCharacterButton" type="Button" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1555114007]
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 390.0

@@ -12,6 +12,9 @@ signal card_dropped(card_uid: int, player_id: int)
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
+## 相邻体力圆点的纵向间距；默认-10像素使18像素圆点紧密排列，只影响表现密度且运行时通常无需修改。
+@export_range(-16, 8, 1) var health_pip_separation: int = -10
+
 ## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
 @export_range(12.0, 22.0, 1.0) var equipment_row_height: float = 15.0
 
@@ -95,6 +98,7 @@ var _player_snapshot: Dictionary = {}
 func _ready() -> void:
 	_card_body.size = card_size
 	_input_area.size = card_size
+	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(pressed.emit)
 	_input_area.card_dropped.connect(_on_input_card_dropped)
 	_input_area.configure(is_interactable, is_legal_target)

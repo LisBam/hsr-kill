@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "decks": {
-    "standard_161": {
+    "standard_162": {
       "display_name": "标准身份局（标准+EX+完整军争）",
-      "description": "由标准与EX牌108张、无名杀完整军争配置53张组成，共161张且包含木牛流马，不包含国战专属牌。",
+      "description": "依据三国杀官方规则集3.0身份局牌表组成，共162张，包含银月枪与木牛流马，不包含国战专属牌。",
       "cards": [
         ["spade",7,"sha"],["spade",8,"sha"],["spade",8,"sha"],["spade",9,"sha"],["spade",9,"sha"],["spade",10,"sha"],["spade",10,"sha"],
         ["club",2,"sha"],["club",3,"sha"],["club",4,"sha"],["club",5,"sha"],["club",6,"sha"],["club",7,"sha"],["club",8,"sha"],["club",8,"sha"],["club",9,"sha"],["club",9,"sha"],["club",10,"sha"],["club",10,"sha"],["club",11,"sha"],["club",11,"sha"],
@@ -27,7 +27,7 @@
         ["diamond",13,"hualiu"],["club",1,"baiyin"],["spade",2,"tengjia"],["club",2,"tengjia"],["spade",1,"guding"],["diamond",1,"zhuque"],
         ["heart",2,"huogong"],["heart",3,"huogong"],["diamond",12,"huogong"],
         ["spade",11,"tiesuo"],["spade",12,"tiesuo"],["club",10,"tiesuo"],["club",11,"tiesuo"],["club",12,"tiesuo"],["club",13,"tiesuo"],
-        ["heart",1,"wuxie"],["heart",13,"wuxie"],["spade",13,"wuxie"],["spade",10,"bingliang"],["club",4,"bingliang"],["diamond",5,"muniu"]
+        ["heart",1,"wuxie"],["heart",13,"wuxie"],["spade",13,"wuxie"],["spade",10,"bingliang"],["club",4,"bingliang"],["diamond",5,"muniu"],["diamond",12,"yinyue"]
       ]
     }
   }

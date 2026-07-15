@@ -18,6 +18,8 @@ func _init(match_host: Object, game_state: GameState) -> void:
 
 ## 执行一张已经进入处理区的牌，并返回默认结束区域：discard、equipment、judgment 或 consumed。
 func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
+	if _is_resolution_stopped():
+		return "consumed"
 	# 卡牌配置定义；效果 ID、类型与属性均从统一数据表取得。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 卡牌效果 ID；多个实体牌或属性变体可共享同一个底层效果。
@@ -27,6 +29,8 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 		_resolve_slash_card(card, actor_id, target_ids)
 	elif effect_id == "peach":
 		for target_id: int in target_ids:
+			if _is_resolution_stopped():
+				break
 			host.recover(actor_id, target_id, 1, card.definition_id)
 	elif effect_id == "wine":
 		# 使用者状态；每名玩家在自己的出牌阶段正常使用【酒】仍受每回合一次限制。
@@ -47,49 +51,95 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 		return "judgment"
 	elif effect_id == "draw_two":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				host.draw_cards(target_id, 2)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			host.draw_cards(target_id, 2)
 	elif effect_id == "discard_target":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				host.discard_one_from_player(actor_id, target_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			host.discard_one_from_player(actor_id, target_id)
 	elif effect_id == "steal_target":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				host.take_one_from_player(actor_id, target_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			host.take_one_from_player(actor_id, target_id)
 	elif effect_id == "duel":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				_resolve_duel(actor_id, target_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			_resolve_duel(actor_id, target_id)
 	elif effect_id == "borrow_sword":
 		if target_ids.size() == 2 and not host.resolve_trick_negation(actor_id, target_ids[0], card.definition_id):
-			_resolve_borrow_sword(actor_id, target_ids[0], target_ids[1])
+			if not _is_resolution_stopped():
+				_resolve_borrow_sword(actor_id, target_ids[0], target_ids[1])
 	elif effect_id == "aoe_dodge":
 		_resolve_aoe(card, actor_id, target_ids, "shan")
 	elif effect_id == "aoe_slash":
 		_resolve_aoe(card, actor_id, target_ids, "sha")
 	elif effect_id == "heal_all":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				host.recover(actor_id, target_id, 1, card.definition_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			host.recover(actor_id, target_id, 1, card.definition_id)
 	elif effect_id == "harvest":
 		_resolve_harvest(card, actor_id, target_ids)
 	elif effect_id == "chain":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				# 当前目标状态；铁索连环令其横置状态在两种状态间切换。
-				var target: PlayerState = state.get_player(target_id)
-				target.chained = not target.chained
-				host.add_log("%s%s。" % [target.display_name, "进入连环状态" if target.chained else "解除连环状态"])
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			# 当前目标状态；铁索连环令其横置状态在两种状态间切换。
+			var target: PlayerState = state.get_player(target_id)
+			target.chained = not target.chained
+			host.add_log("%s%s。" % [target.display_name, "进入连环状态" if target.chained else "解除连环状态"])
 	elif effect_id == "fire_attack":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				_resolve_fire_attack(actor_id, target_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			_resolve_fire_attack(actor_id, target_id)
 	elif effect_id == "flood":
 		for target_id: int in target_ids:
-			if not host.resolve_trick_negation(actor_id, target_id, card.definition_id):
-				_resolve_flood(actor_id, target_id)
+			if _is_resolution_stopped():
+				break
+			if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
+				continue
+			if _is_resolution_stopped():
+				break
+			_resolve_flood(actor_id, target_id)
 	return "discard"
+
+
+## 返回当前结算是否必须立即停止；游戏结束后任何牌、伤害、响应或区域移动都不得继续执行。
+func _is_resolution_stopped() -> bool:
+	return state == null or state.game_over
 
 
 ## 结算【杀】，包括酒加值、武器触发、防具无效与响应【闪】。
@@ -107,11 +157,15 @@ func _resolve_slash_card(card: CardInstance, actor_id: int, target_ids: Array[in
 	# 青釭剑忽略每个目标的防具直到对应目标结算结束。
 	var ignore_armor: bool = host.player_has_equipment(actor_id, "qinggang")
 	for target_id: int in target_ids:
+		if _is_resolution_stopped():
+			break
 		_resolve_single_slash(card, actor_id, target_id, base_damage, nature, ignore_armor)
 
 
 ## 结算【杀】对一个目标的完整流程。
 func _resolve_single_slash(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool) -> void:
+	if _is_resolution_stopped():
+		return
 	# 攻击者状态；用于武器触发与日志。
 	var actor: PlayerState = state.get_player(actor_id)
 	# 目标状态；死亡目标会直接跳过后续结算。
@@ -142,6 +196,8 @@ func _resolve_single_slash(card: CardInstance, actor_id: int, target_id: int, da
 
 	# 目标是否成功响应【闪】；八卦阵与实体【闪】都通过统一响应端口处理。
 	var dodged: bool = host.consume_response(target_id, "shan")
+	if _is_resolution_stopped():
+		return
 	if dodged and host.player_has_equipment(actor_id, "guanshi") and host.get_hand_equipment_card_count(actor_id) >= 2:
 		host.discard_n_from_hand_equipment(actor_id, 2)
 		dodged = false
@@ -164,6 +220,8 @@ func _resolve_single_slash(card: CardInstance, actor_id: int, target_id: int, da
 		return
 
 	host.damage(actor_id, target_id, damage_amount, nature, card.definition_id, false, ignore_armor)
+	if _is_resolution_stopped():
+		return
 	if target.alive and host.player_has_equipment(actor_id, "qilin"):
 		host.discard_first_mount(target_id)
 
@@ -176,7 +234,7 @@ func _resolve_duel(source_id: int, target_id: int) -> void:
 	var opponent_id: int = source_id
 	# 安全轮次计数；实体牌有限，但仍设置上限防止扩展技能产生死循环。
 	var exchange_count: int = 0
-	while exchange_count < 100:
+	while exchange_count < 100 and not _is_resolution_stopped():
 		exchange_count += 1
 		if host.consume_response(responder_id, "sha"):
 			# 临时交换双方；下一次由刚才的对手响应。
@@ -192,6 +250,8 @@ func _resolve_duel(source_id: int, target_id: int) -> void:
 func _resolve_borrow_sword(source_id: int, weapon_holder_id: int, victim_id: int) -> void:
 	# 被借刀者打出的实体【杀】；为空表示拒绝或无法使用。
 	var slash: CardInstance = host.consume_response_card(weapon_holder_id, "sha")
+	if _is_resolution_stopped():
+		return
 	if slash != null:
 		# 被借刀者状态；其本回合获得的【酒】加值应作用于这张被要求使用的【杀】。
 		var weapon_holder: PlayerState = state.get_player(weapon_holder_id)
@@ -206,16 +266,20 @@ func _resolve_borrow_sword(source_id: int, weapon_holder_id: int, victim_id: int
 ## 结算群体响应锦囊；藤甲可令南蛮入侵与万箭齐发直接无效。
 func _resolve_aoe(card: CardInstance, actor_id: int, target_ids: Array[int], response_pattern: String) -> void:
 	for target_id: int in target_ids:
+		if _is_resolution_stopped():
+			break
 		# 当前目标；死亡目标或已离场目标不再结算。
 		var target: PlayerState = state.get_player(target_id)
 		if target == null or not target.alive:
 			continue
 		if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
 			continue
+		if _is_resolution_stopped():
+			break
 		if host.get_equipment_id(target_id, "armor") == "tengjia":
 			host.add_log("%s的【藤甲】令锦囊无效。" % target.display_name)
 			continue
-		if not host.consume_response(target_id, response_pattern):
+		if not host.consume_response(target_id, response_pattern) and not _is_resolution_stopped():
 			host.damage(actor_id, target_id, 1, "normal", card.definition_id)
 
 
@@ -224,19 +288,25 @@ func _resolve_harvest(card: CardInstance, actor_id: int, target_ids: Array[int])
 	# 亮出的公共牌数组；数量等于初始目标数。
 	var revealed_cards: Array[CardInstance] = host.reveal_top_cards(target_ids.size())
 	for target_id: int in target_ids:
-		if revealed_cards.is_empty():
+		if _is_resolution_stopped() or revealed_cards.is_empty():
 			break
 		if host.resolve_trick_negation(actor_id, target_id, card.definition_id):
 			continue
+		if _is_resolution_stopped():
+			break
 		# 当前目标获得的牌；基础交互先取首张，后续选择器可返回任意合法 UID。
 		var chosen_card: CardInstance = revealed_cards.pop_front()
 		host.give_revealed_card(target_id, chosen_card)
+	if _is_resolution_stopped():
+		return
 	for remaining_card: CardInstance in revealed_cards:
 		host.discard_revealed_card(remaining_card)
 
 
 ## 结算【火攻】；目标展示首张手牌，使用者自动弃置首张同花色手牌。
 func _resolve_fire_attack(actor_id: int, target_id: int) -> void:
+	if _is_resolution_stopped():
+		return
 	# 使用者状态；用于寻找同花色手牌。
 	var actor: PlayerState = state.get_player(actor_id)
 	# 目标状态；合法性层已保证其至少有一张手牌。
@@ -255,6 +325,8 @@ func _resolve_fire_attack(actor_id: int, target_id: int) -> void:
 
 ## 结算【水淹七军】；基础选择策略优先弃置装备，否则受到1点伤害。
 func _resolve_flood(actor_id: int, target_id: int) -> void:
+	if _is_resolution_stopped():
+		return
 	# 目标状态；装备区非空时按规则弃置全部装备。
 	var target: PlayerState = state.get_player(target_id)
 	if not target.equipment.is_empty():

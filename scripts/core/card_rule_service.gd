@@ -130,15 +130,17 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	return result
 
 
-## 展开 all_players 与 all_others 目标模式，其他模式保持调用方给定顺序。
+## 把目标规范为规则行动顺序；全体模式自动展开，普通多目标按座次重排，借刀杀人保留两个目标的角色语义顺序。
 func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Array[int]) -> Array[int]:
 	# 卡牌定义；用于判断是否需要自动展开全体目标。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	# 目标模式；只有两种全体模式会忽略请求数组。
+	# 目标模式；全体模式会忽略请求数组并自动取得存活角色。
 	var target_mode: String = str(definition.get("target_mode", ""))
-	if target_mode != "all_players" and target_mode != "all_others":
+	# 效果 ID；借刀杀人的第一项是持刀者、第二项是被杀者，不能按座次交换。
+	var effect_id: String = str(definition.get("effect_id", ""))
+	if effect_id == "borrow_sword" or (target_mode != "all_players" and target_mode != "all_others" and requested_targets.size() <= 1):
 		return requested_targets.duplicate()
-	# 展开后的目标数组；从使用者开始按行动顺序环形展开，避免固定从一号位结算群体牌。
+	# 规范后的目标数组；从使用者开始按行动顺序环形展开，避免固定从一号位或点击先后结算多目标牌。
 	var result: Array[int] = []
 	# 使用者座次数组索引；正常出牌时必定存在，防御性回退到一号位。
 	var actor_index: int = 0
@@ -146,14 +148,30 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 		if state.players[player_index].player_id == actor_id:
 			actor_index = player_index
 			break
+	if target_mode == "all_players" or target_mode == "all_others":
+		for seat_offset: int in range(state.players.size()):
+			# 当前行动顺序玩家；使用者本人首先参与 all_players，all_others 则从其下家开始产生首个目标。
+			var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
+			if not player.alive:
+				continue
+			if target_mode == "all_others" and player.player_id == actor_id:
+				continue
+			result.append(player.player_id)
+		return result
+	# 已追加请求标记；保留重复与无效 ID，使后续权威校验仍能返回精确错误而不会被重排静默丢弃。
+	var appended_requests: Array[bool] = []
+	appended_requests.resize(requested_targets.size())
+	appended_requests.fill(false)
 	for seat_offset: int in range(state.players.size()):
-		# 当前行动顺序玩家；使用者本人首先参与 all_players，all_others 则从其下家开始产生首个目标。
+		# 当前行动顺序玩家；所有与其 ID 匹配的请求均按原数量追加。
 		var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
-		if not player.alive:
-			continue
-		if target_mode == "all_others" and player.player_id == actor_id:
-			continue
-		result.append(player.player_id)
+		for request_index: int in range(requested_targets.size()):
+			if requested_targets[request_index] == player.player_id:
+				result.append(requested_targets[request_index])
+				appended_requests[request_index] = true
+	for request_index: int in range(requested_targets.size()):
+		if not appended_requests[request_index]:
+			result.append(requested_targets[request_index])
 	return result
 
 
@@ -180,7 +198,7 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 			if calculate_distance(weapon_holder_id, target_id) > get_attack_range(weapon_holder_id):
 				return "第二目标不在被借刀者的攻击范围内。"
 			return ""
-	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder", "single_with_hand"] and target_id == actor.player_id:
+	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder"] and target_id == actor.player_id:
 		return "该卡牌不能以自己为目标。"
 	if target_mode == "wounded" and target.hp >= target.max_hp:
 		return "目标未受伤。"

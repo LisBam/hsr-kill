@@ -9,7 +9,7 @@ extends Control
 ## 卡牌抵达弃牌区后的停留时间；默认0.48秒用于让玩家辨认牌面，可在运行时动态调整。
 @export_range(0.0, 2.0, 0.01) var card_hold_duration: float = 0.48
 
-## 目标指示线淡出时间；默认0.36秒，使指向关系在卡牌抵达后平滑消失。
+## 目标指示线淡出时间；默认0.36秒，在动态延伸完成后立即平滑消失，同时作为正式卡牌收尾淡出时长。
 @export_range(0.1, 1.5, 0.01) var target_line_fade_duration: float = 0.36
 
 ## 目标指示线从来源延伸到目标的时间；默认0.24秒形成清晰方向感，运行时可按整体节奏动态调整。
@@ -64,7 +64,7 @@ var _presentation_sequence: int = 0
 var _presentation_generation: int = 0
 
 
-## 进入场景树时应用稳定绘制层级；避免场景缓存或外部实例化遗漏层级属性导致目标线被角色界面覆盖。
+## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
 	z_index = presentation_z_index
 
@@ -86,10 +86,12 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	}
 	queue_redraw()
 	if not target_positions.is_empty():
-		# 指示线生长补间；线条沿来源到目标逐渐延伸，完整到达后再由淡出阶段平滑消失。
+		# 指示线生长与淡出补间；线条沿来源到目标逐渐延伸，完整到达后立即连续渐隐，不等待飞牌停留或弃牌队列。
 		var line_draw_tween: Tween = create_tween()
 		line_draw_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		line_draw_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
+		line_draw_tween.tween_method(_set_line_alpha.bind(sequence), line_alpha, 0.0, target_line_fade_duration)
+		line_draw_tween.tween_callback(_remove_line_presentation.bind(sequence))
 	# 当前进入动画层的正式卡牌；每张牌独立加入队列，不会清除仍在展示的前一张牌。
 	var presented_card: CardView = card_view
 	# 原卡牌的全局变换；重新挂载到动画层后恢复该变换，保证动画从屏幕中原位置连续开始。
@@ -160,11 +162,11 @@ func _drain_fade_queue() -> void:
 			continue
 		# 当前淡出卡牌的表现序号；用于把该牌对应的目标线与牌面同时淡出并清理。
 		var sequence: int = int(_card_sequences.get(_animated_card.get_instance_id(), -1))
-		# 收尾补间；正式卡牌保持水平并淡出消失，目标指示线使用相同时长同步消隐。
+		# 收尾补间；正式卡牌保持水平并淡出消失，目标指示线通常已在延伸后独立完成渐隐。
 		var fade_tween: Tween = create_tween().set_parallel(true)
 		fade_tween.tween_property(_animated_card, "modulate:a", 0.0, target_line_fade_duration)
 		if sequence >= 0 and _line_presentations.has(sequence):
-			# 当前目标线透明度；从实际值继续淡出，兼容队列等待期间的状态变化。
+			# 当前目标线透明度；防御性收尾仅处理尚未完成独立渐隐的异常或极短飞牌配置。
 			var current_line_alpha: float = float((_line_presentations[sequence] as Dictionary).get("alpha", 1.0))
 			fade_tween.tween_method(_set_line_alpha.bind(sequence), current_line_alpha, 0.0, target_line_fade_duration)
 		await fade_tween.finished
@@ -234,6 +236,12 @@ func _set_line_progress(progress: float, sequence: int) -> void:
 	var presentation: Dictionary = _line_presentations[sequence] as Dictionary
 	presentation["progress"] = clampf(progress, 0.0, 1.0)
 	_line_presentations[sequence] = presentation
+	queue_redraw()
+
+
+## 移除已完成动态延伸与渐隐的目标线；卡牌队列仍保留自己的飞行、停留与淡出生命周期。
+func _remove_line_presentation(sequence: int) -> void:
+	_line_presentations.erase(sequence)
 	queue_redraw()
 
 

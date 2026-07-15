@@ -7,7 +7,7 @@ extends RefCounted
 var match_id: String = ""
 
 ## 当前使用的牌堆配置 ID；默认采用标准、EX 与军争合并牌堆。
-var deck_id: String = "standard_161"
+var deck_id: String = "standard_162"
 
 ## 按座次排列的玩家状态；死亡玩家保留在数组中以维持距离与历史索引稳定。
 var players: Array[PlayerState] = []
