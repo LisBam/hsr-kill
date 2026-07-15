@@ -92,6 +92,8 @@ func _install_state() -> GameState:
 	_controller._pending_card_choice.clear()
 	_controller._resolved_card_choice_uids.clear()
 	_controller._negation_resume_results.clear()
+	_controller._active_card_resolutions.clear()
+	_controller._queued_silver_moon_triggers.clear()
 	_controller._play_choice_request_id = -1
 	_controller._play_choice_event_id = -1
 	_controller._play_choice_actor_id = -1
@@ -175,7 +177,7 @@ func _test_face_down_turn_progression() -> void:
 		_fail("face_down_resume current=%d phase=%s" % [game_state.current_player_id, game_state.current_phase])
 
 
-## 验证救援桃请求可以取消，且取消后不会重新询问同一张桃；后续 AI 救援会经过延迟响应，当前角色死亡后才转交回合。
+## 验证濒死者的桃酒同窗请求可以取消，且取消后直接推进下一救援者；后续 AI 救援经过延迟响应，当前角色死亡后才转交回合。
 func _test_dying_cancel_progression() -> void:
 	# 本场状态；0号忠臣在自己的出牌阶段进入濒死，死亡后身份局仍继续。
 	var game_state: GameState = _install_state()
@@ -189,21 +191,16 @@ func _test_dying_cancel_progression() -> void:
 	# 下一回合第二张摸牌；避免死亡转交后因牌堆不足结束对局。
 	var next_draw_two: CardInstance = _add_draw_card(game_state, "shan", "diamond", 7)
 	_controller._resolve_dying(0, -1)
-	# 首次桃请求；必须允许取消且包含唯一桃候选。
+	# 本地桃酒同窗请求；当前只有桃所以候选数为1，但允许模式必须在同一上下文中同时包含桃和酒。
 	var peach_request: Dictionary = _local_choice_request.duplicate(true)
-	if peach_request.is_empty() or not bool(peach_request.get("allow_cancel", false)) or (peach_request.get("candidates", []) as Array).size() != 1 or str((peach_request.get("context", {}) as Dictionary).get("response_pattern", "")) != "tao":
+	# 请求允许的响应模式；濒死者本人固定同时拥有桃与酒的选择时机。
+	var response_patterns: Array = (peach_request.get("context", {}) as Dictionary).get("response_patterns", []) as Array
+	if peach_request.is_empty() or not bool(peach_request.get("allow_cancel", false)) or (peach_request.get("candidates", []) as Array).size() != 1 or not response_patterns.has("tao") or not response_patterns.has("jiu"):
 		_fail("dying_peach_request")
 		return
 	if not _submit_local_cancel(peach_request):
 		return
-	# 桃取消后的自救酒请求；请求 ID 必须变化，证明旧桃请求已被真正关闭而非重复弹出。
-	var wine_request: Dictionary = _local_choice_request.duplicate(true)
-	if wine_request.is_empty() or int(wine_request.get("request_id", -1)) == int(peach_request.get("request_id", -1)) or str((wine_request.get("context", {}) as Dictionary).get("response_pattern", "")) != "jiu":
-		_fail("dying_peach_cancel_not_advanced")
-		return
-	if not _submit_local_cancel(wine_request):
-		return
-	# 濒死取消后的 AI 救援完成标记；两个 AI 都需要经过统一响应延迟后明确放弃，不能同步跳过询问。
+	# 桃酒同窗取消后的 AI 救援完成标记；两个 AI 都需要经过统一响应延迟后明确放弃，不能同步跳过询问。
 	var dying_resume_completed: bool = false
 	for _wait_frame_index: int in range(20):
 		await get_tree().process_frame

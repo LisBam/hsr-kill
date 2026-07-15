@@ -13,11 +13,11 @@ enum NameMode {
 	ORIGINAL,
 }
 
-## AI 响应等待时间的最小值；默认0.25秒，避免设置为0后重新出现瞬时结算。
-const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.25
+## AI 响应等待时间的最小值；默认0.05秒，在保留可见异步边界的同时支持快速对局。
+const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.05
 
-## AI 响应等待时间的最大值；默认2秒，覆盖快速对局到观察型对局的常用节奏而不造成过长停顿。
-const MAX_AI_RESPONSE_DELAY_SECONDS: float = 2.0
+## AI 响应等待时间的最大值；默认1秒，覆盖快速对局到观察型对局的常用节奏而不造成过长停顿。
+const MAX_AI_RESPONSE_DELAY_SECONDS: float = 1.0
 
 ## AI 响应等待时间的调节步长；默认0.05秒，兼顾可感知变化与菜单滑条的调节精度。
 const AI_RESPONSE_DELAY_STEP_SECONDS: float = 0.05
@@ -25,8 +25,8 @@ const AI_RESPONSE_DELAY_STEP_SECONDS: float = 0.05
 ## 当前卡牌名称模式；默认使用原版三国杀牌名，可在运行时安全切换为《崩铁杀》自定义牌名。
 var card_name_mode: NameMode = NameMode.ORIGINAL
 
-## 当前 AI 每次行动或选择响应前的等待秒数；默认0.85秒，运行时可通过局内菜单动态修改。
-var ai_response_delay_seconds: float = 0.85
+## 当前 AI 每次行动或选择响应前的等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
+var ai_response_delay_seconds: float = 0.30
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。

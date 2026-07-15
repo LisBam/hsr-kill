@@ -671,7 +671,7 @@ func _run() -> void:
 		printerr("SMOKE_FAIL chain_damage_order=%s" % chain_damage_order)
 		get_tree().quit(1)
 		return
-	# 银月枪测试状态；回合外打出黑色手牌后，无【闪】的范围内敌方应受到1点伤害。
+	# 银月枪测试状态；回合外打出黑色手牌后，基础 AI 确认发动且敌方无【闪】时应受到1点伤害。
 	var silver_moon_state: GameState = GameState.new()
 	for silver_player_id: int in range(3):
 		# 银月枪测试玩家；一号位反贼持有武器，二号位主公作为优先敌方。
@@ -691,6 +691,8 @@ func _run() -> void:
 	_controller.state = silver_moon_state
 	_controller.card_rules = CardRuleService.new(silver_moon_state)
 	_controller._resolve_silver_moon_trigger(0, silver_trigger_card, true)
+	# 推进已登记的非锁定装备触发；纯规则状态同步使用同一选择协议，由基础 AI 明确选择银月枪实体表示发动。
+	_controller._process_next_silver_moon_trigger()
 	if silver_moon_state.players[1].hp != 3:
 		printerr("SMOKE_FAIL silver_moon_damage hp=%d" % silver_moon_state.players[1].hp)
 		get_tree().quit(1)

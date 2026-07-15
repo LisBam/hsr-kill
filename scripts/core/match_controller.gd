@@ -30,8 +30,8 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 是否在每局创建时为本地人类玩家重新随机分配座次；默认开启以保证本地玩家不固定在一号位，纯 AI 模式不受影响。
 @export var randomize_local_human_seat: bool = true
 
-## AI 每次行动或选择响应前的等待秒数；默认0.85避免瞬时结算，局内菜单会在运行时同步此值，测试可直接覆盖。
-@export_range(0.0, 3.0, 0.05) var ai_action_delay_seconds: float = 0.85
+## AI 每次行动或选择响应前的等待秒数；默认0.30秒，局内菜单可在0.05至1.00秒范围内动态同步，测试可直接覆盖。
+@export_range(0.05, 1.0, 0.05) var ai_action_delay_seconds: float = 0.30
 
 ## 单个 AI 出牌阶段最多执行的动作数；默认64用于防止扩展牌循环导致界面停滞。
 @export_range(1, 256, 1) var max_ai_actions_per_turn: int = 64
@@ -111,6 +111,12 @@ var _card_choice_sequence: int = 0
 
 ## 无懈可击延迟提交后的单次恢复结果；键包含原牌 UID 与目标，读取一次后立即删除。
 var _negation_resume_results: Dictionary = {}
+
+## 当前仍在逐目标结算的卡牌上下文；键为原实体牌 UID，值保存目标游标、共享伤害参数与当前目标状态。
+var _active_card_resolutions: Dictionary = {}
+
+## 等待当前响应子事件完成后询问的银月枪触发队列；每项保存持有者和黑色实体牌 UID，不持有界面或事件对象引用。
+var _queued_silver_moon_triggers: Array[Dictionary] = []
 
 ## 当前对局根事件 ID；所有阶段、卡牌、伤害和选择记录默认挂在该根事件下。
 var _runtime_root_event_id: int = -1
@@ -207,6 +213,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_pending_card_choice.clear()
 	_resolved_card_choice_uids.clear()
 	_negation_resume_results.clear()
+	_active_card_resolutions.clear()
+	_queued_silver_moon_triggers.clear()
 	_current_turn_event_id = -1
 	_play_choice_request_id = -1
 	_play_choice_event_id = -1
@@ -347,7 +355,7 @@ func get_legal_actions(player_id: int) -> Array[Dictionary]:
 		var target_mode: String = str(definition.get("target_mode", ""))
 		if target_mode == "response_only":
 			continue
-		if bool(definition.get("recast", false)):
+		if bool(definition.get("recast", false)) and card.zone == "hand":
 			result.append({"action_type":"recast_card", "actor_id":player_id, "card_uid":card.uid, "target_ids":[], "card_definition_id":card.definition_id})
 		if str(definition.get("effect_id", "")) == "borrow_sword":
 			_append_borrow_sword_actions(result, player_id, card)
@@ -759,6 +767,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	if bool(completed_choice.get("deferred", false)):
 		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids)
 		if not state.game_over and not has_pending_card_choice():
+			_process_next_silver_moon_trigger()
+		if not state.game_over and not has_pending_card_choice():
 			_resume_interrupted_turn_flow()
 		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 			_begin_play_choice(state.current_player_id)
@@ -803,6 +813,20 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 		_continue_duel_choice(context, selected_uids)
 	elif choice_kind == "trick_negation":
 		_continue_trick_negation_choice(context, selected_uids)
+	elif choice_kind == "zhuque_trigger":
+		_continue_zhuque_trigger_choice(context, selected_uids)
+	elif choice_kind == "cixiong_trigger":
+		effect_resolver.continue_cixiong_trigger(context, not selected_uids.is_empty())
+	elif choice_kind == "cixiong_discard":
+		effect_resolver.continue_cixiong_discard(context, selected_uids)
+	elif choice_kind == "guanshi_cost":
+		effect_resolver.continue_guanshi_cost(context, selected_uids)
+	elif choice_kind == "hanbing_cards":
+		effect_resolver.continue_hanbing_cards(context, selected_uids)
+	elif choice_kind == "qilin_mount":
+		effect_resolver.continue_qilin_mount(context, selected_uids)
+	elif choice_kind == "silver_moon_trigger":
+		_continue_silver_moon_trigger_choice(context, selected_uids)
 
 
 ## 公开添加一条永久语义日志；UI、回放与调试器均可订阅同一信号。
@@ -954,26 +978,46 @@ func consume_response(player_id: int, response_pattern: String) -> bool:
 
 ## 向指定角色询问是否打出一张响应牌；玩家与 AI 共用选择请求和 choose_cards 提交入口。
 func request_response_card(player_id: int, response_pattern: String, prompt: String, context: Dictionary) -> CardInstance:
+	return request_response_card_patterns(player_id, [response_pattern], prompt, context)
+
+
+## 向指定角色同时询问多种响应牌；候选共享同一个时机和窗口，所选实体牌仍按自身响应模式校验并消耗。
+func request_response_card_patterns(player_id: int, response_patterns: Array[String], prompt: String, context: Dictionary) -> CardInstance:
 	# 响应者状态；死亡或无效角色不能创建响应窗口。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
+		return null
+	# 去重后的合法响应模式；空数组不能创建没有明确规则语义的响应请求。
+	var allowed_patterns: Array[String] = []
+	for response_pattern: String in response_patterns:
+		if not response_pattern.is_empty() and not allowed_patterns.has(response_pattern):
+			allowed_patterns.append(response_pattern)
+	if allowed_patterns.is_empty():
 		return null
 	# 可响应候选；手牌与木牛“粮”都按实际 UID 提供给本人，规则定义决定是否匹配响应模式。
 	var candidates: Array[Dictionary] = []
 	for card: CardInstance in player.get_playable_cards():
 		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-		if str(definition.get("response_pattern", "")) == response_pattern:
+		if allowed_patterns.has(str(definition.get("response_pattern", ""))):
 			candidates.append(_serialize_choice_candidate(card, player_id, card.zone, true))
+	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
+	var response_context: Dictionary = context.duplicate(true)
+	response_context["response_patterns"] = allowed_patterns.duplicate()
 	# 响应允许主动不出牌；即使候选为空也创建请求，保证 AI 与真实玩家经历相同问询。
-	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, context)
+	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
 		return null
-	return _consume_response_card_uid(player_id, selected_uids[0], response_pattern)
+	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns)
 
 
 ## 按选择请求提交的 UID 消耗响应牌；再次校验区域和响应模式后进入弃牌堆并播放动画。
 func _consume_response_card_uid(player_id: int, card_uid: int, response_pattern: String) -> CardInstance:
+	return _consume_response_card_uid_patterns(player_id, card_uid, [response_pattern])
+
+
+## 按候选响应模式集合消耗一张实体牌；用于【桃】与【酒】等共享时机但牌名不同的单一询问窗口。
+func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response_patterns: Array[String]) -> CardInstance:
 	# 响应玩家；请求等待期间其牌区可能被插入结算改变，因此必须重新查询。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null:
@@ -984,7 +1028,9 @@ func _consume_response_card_uid(player_id: int, card_uid: int, response_pattern:
 		return null
 	# 响应定义；模式不匹配时拒绝消费，防止旧请求或伪造动作改变状态。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	if str(definition.get("response_pattern", "")) != response_pattern:
+	# 实体牌实际响应模式；日志与历史必须记录牌自身模式，不能记录组合请求的展示名称。
+	var response_pattern: String = str(definition.get("response_pattern", ""))
+	if not response_patterns.has(response_pattern):
 		return null
 	# 是否为实际手牌；银月枪只由回合外使用或打出的黑色手牌触发。
 	var was_hand_card: bool = player.hand.has(card)
@@ -1015,7 +1061,7 @@ func _continue_slash_response_choice(context: Dictionary, selected_uids: Array[i
 		return
 	if state.game_over:
 		return
-	_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+	_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 	_check_game_over()
 
 
@@ -1032,7 +1078,7 @@ func _continue_silver_moon_choice(context: Dictionary, selected_uids: Array[int]
 		damage(owner_id, target_id, 1, "normal", "yinyue")
 
 
-## 恢复群体锦囊响应选择；当前目标完成后把原锦囊移出处理区，后续目标由下一次规则动作继续。
+## 恢复群体锦囊响应选择；当前目标完成后由活动目标游标继续下一名角色，全部目标结束后才移出原锦囊。
 func _continue_aoe_response_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	# 响应目标；无闪时承受群体锦囊伤害。
 	var target_id: int = int(context.get("responder_id", -1))
@@ -1045,7 +1091,7 @@ func _continue_aoe_response_choice(context: Dictionary, selected_uids: Array[int
 	else:
 		_consume_response_card_uid(target_id, selected_uids[0], str(context.get("pattern", "shan")))
 	if not state.game_over:
-		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+		_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 恢复借刀杀人响应；打出【杀】时执行目标伤害，否则交出武器。
@@ -1076,7 +1122,7 @@ func _continue_qinglong_choice(context: Dictionary, selected_uids: Array[int]) -
 	if follow_slash != null and not has_pending_card_choice():
 		effect_resolver._resolve_single_slash(follow_slash, actor_id, int(context.get("target_id", -1)), 1, str(GameDatabase.get_card(follow_slash.definition_id).get("nature", "normal")), bool(context.get("ignore_armor", false)))
 	if not state.game_over and not has_pending_card_choice():
-		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+		_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 恢复决斗中的一轮【杀】响应；成功响应后交换双方，放弃时由对手造成1点普通伤害。
@@ -1095,7 +1141,7 @@ func _continue_duel_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 	else:
 		effect_resolver._continue_duel_exchange(int(context.get("parent_card_uid", -1)), opponent_id, responder_id)
 	if not state.game_over and not has_pending_card_choice():
-		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+		_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 恢复无懈可击选择；延时锦囊回到原判定步骤，普通锦囊恢复当前目标效果。
@@ -1104,14 +1150,85 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 	var responder_id: int = int(context.get("responder_id", -1))
 	# 当前抵消状态；每实际打出一张无懈可击翻转一次。
 	var final_negated: bool = bool(context.get("negated", false))
+	# 实际打出的无懈可击；空值表示当前角色明确放弃，本轮继续询问下一名角色。
+	var counter_card: CardInstance
 	if not selected_uids.is_empty():
 		# 实际无懈可击响应牌；请求完成后仍需复核牌源与响应模式。
-		var counter_card: CardInstance = _consume_response_card_uid(responder_id, selected_uids[0], "wuxie")
+		counter_card = _consume_response_card_uid(responder_id, selected_uids[0], "wuxie")
 		if counter_card != null:
 			final_negated = not final_negated
 			add_log("%s使用【无懈可击】，当前锦囊%s。" % [state.get_player(responder_id).display_name, "被抵消" if final_negated else "恢复生效"])
 	if has_pending_card_choice() or state.game_over:
 		return
+	context["negated"] = final_negated
+	if counter_card != null:
+		# 成功响应后开启新一轮无懈询问；任何角色均可继续响应刚打出的【无懈可击】。
+		context["response_index"] = 0
+		_record_wuxie_chain_response(context, responder_id, counter_card)
+	else:
+		# 当前角色放弃响应；只推进本轮询问游标，不结束整条响应链。
+		context["response_index"] = int(context.get("response_index", 0)) + 1
+	# 后续链结果；存在下一名可响应者时会立即创建新请求，完整一轮无人响应才返回完成状态。
+	var chain_result: Dictionary = _advance_trick_negation_chain(context)
+	if bool(chain_result.get("pending", false)):
+		return
+	_finish_trick_negation_chain(context, bool(chain_result.get("negated", final_negated)))
+
+
+## 记录一张实际打出的【无懈可击】并更新可回放的奇偶状态；该状态始终绑定原锦囊的当前目标。
+func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counter_card: CardInstance) -> void:
+	# 已完成响应结果；每项只保存稳定玩家、实体牌和原锦囊信息，不持有可变对象引用。
+	var response_results: Array = (context.get("wuxie_response_results", []) as Array).duplicate(true)
+	response_results.append({"player_id":responder_id, "card_uid":counter_card.uid, "card_id":counter_card.definition_id, "respond_to":str(context.get("trick_id", ""))})
+	context["wuxie_response_results"] = response_results
+	# 当前无懈状态对象；按已有响应顺序重建，确保异步上下文与独立状态类使用同一奇偶规则。
+	var wuxie_state: WuxieChainState = WuxieChainState.new(int(context.get("root_event_id", state.current_event_id)))
+	for response_variant: Variant in response_results:
+		# 单次历史响应；重建时逐项翻转状态并保留原始可序列化字段。
+		var response_result: Dictionary = response_variant as Dictionary
+		wuxie_state.add_response(int(response_result.get("player_id", -1)), response_result)
+	_record_runtime_event("WuxieChainState", "response", {"trick_id":str(context.get("trick_id", "")), "target_id":int(context.get("target_id", -1))}, wuxie_state.to_dict())
+
+
+## 从当前游标继续询问无懈可击；返回 pending 表示等待选择，返回完成结果表示本轮所有角色均已放弃。
+func _advance_trick_negation_chain(context: Dictionary) -> Dictionary:
+	# 固定行动顺序玩家 ID；每次成功无懈会把游标归零，但不会改变本次目标的座次基准。
+	var response_order_ids: Array = context.get("response_order_ids", []) as Array
+	# 当前轮下一名待询问角色索引；成功无懈后从0重新开始，放弃后递增。
+	var response_index: int = int(context.get("response_index", 0))
+	while response_index < response_order_ids.size() and not state.game_over:
+		# 当前候选响应者；死亡或已经没有无懈可击时直接越过，不创建空窗口。
+		var responder_id: int = int(response_order_ids[response_index])
+		var responder: PlayerState = state.get_player(responder_id)
+		if responder == null or not responder.alive or _find_hand_card_by_definition(responder, "wuxie") == null:
+			response_index += 1
+			context["response_index"] = response_index
+			continue
+		context["responder_id"] = responder_id
+		context["response_index"] = response_index
+		context["ai_prefer_select"] = _should_auto_negate(responder, int(context.get("source_id", -1)), int(context.get("target_id", -1)), str(context.get("trick_id", "")), bool(context.get("negated", false)))
+		# 当前目标说明；无懈可击的使用目标是即将对这一名角色生效的锦囊效果，而不是整张多目标牌。
+		var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
+		# 当前目标显示名；延时锦囊或异常状态找不到玩家时使用通用描述。
+		var target_name: String = target.display_name if target != null else "当前目标"
+		# 当前响应实体；同步规则测试可能直接返回，正式本地、AI与网络对局会创建异步请求。
+		var response_card: CardInstance = request_response_card(responder_id, "wuxie", "是否使用【无懈可击】令锦囊对%s的效果%s？" % [target_name, "恢复生效" if bool(context.get("negated", false)) else "无效"], context)
+		if has_pending_card_choice():
+			return {"pending":true, "negated":bool(context.get("negated", false))}
+		if response_card != null:
+			context["negated"] = not bool(context.get("negated", false))
+			context["response_index"] = 0
+			_record_wuxie_chain_response(context, responder_id, response_card)
+			add_log("%s使用【无懈可击】，当前锦囊%s。" % [responder.display_name, "被抵消" if bool(context.get("negated", false)) else "恢复生效"])
+			response_index = 0
+			continue
+		response_index += 1
+		context["response_index"] = response_index
+	return {"pending":false, "negated":bool(context.get("negated", false))}
+
+
+## 完成异步无懈链并恢复原目标；被抵消时只跳过当前目标，未抵消时从同一目标的效果入口继续。
+func _finish_trick_negation_chain(context: Dictionary, final_negated: bool) -> void:
 	# 原锦囊 UID；选择等待期间必须仍位于处理区。
 	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
 	# 原锦囊实体；等待期间已经离开处理区时禁止恢复旧效果。
@@ -1121,8 +1238,11 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 	if bool(context.get("delayed_judgment", false)):
 		_resolve_delayed_judgment_card(int(context.get("target_id", -1)), parent_card, final_negated)
 		return
+	if str(context.get("continuation_kind", "")) == "harvest_negation":
+		_continue_harvest_after_negation(context, final_negated)
+		return
 	if final_negated:
-		_finalize_processing_card(parent_card_uid)
+		_complete_active_card_target(parent_card_uid)
 		return
 	# 恢复键；效果执行器重新查询无懈可击时读取 false 并直接继续当前目标。
 	var source_id: int = int(context.get("source_id", -1))
@@ -1134,11 +1254,7 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 	if source_id < 0:
 		_finalize_processing_card(parent_card_uid)
 		return
-	# 原锦囊恢复后的目标区域；普通结算完成时应进入弃牌堆，后续选择则保持处理区。
-	var destination: String = effect_resolver.resolve(parent_card, source_id, [target_id])
-	if destination == "discard" and state.processing_area.has(parent_card):
-		state.processing_area.erase(parent_card)
-		_move_to_discard(parent_card)
+	_resume_active_card_target(parent_card_uid)
 
 
 ## 消耗并返回响应实体牌或虚拟牌；返回 null 表示玩家无法响应。
@@ -1193,8 +1309,10 @@ func _consume_response_card_automatic(player_id: int, response_pattern: String) 
 func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, continuation_context: Dictionary = {}) -> bool:
 	if state == null or state.game_over:
 		return false
+	# 附加上下文指定的原锦囊 UID；五谷展示牌等处理区附属牌存在时必须优先使用稳定 UID 定位父牌。
+	var parent_card_uid_hint: int = int(continuation_context.get("parent_card_uid", -1))
 	# 当前被响应锦囊；普通锦囊和延时锦囊结算时都位于公共处理区。
-	var parent_card: CardInstance = _find_processing_card_by_definition(trick_id)
+	var parent_card: CardInstance = _find_processing_card(parent_card_uid_hint) if parent_card_uid_hint >= 0 else _find_processing_card_by_definition(trick_id)
 	# 恢复结果键；本地玩家提交后重新进入效果执行器时只读取一次，避免再次弹出同一询问。
 	var resume_key: String = _negation_resume_key(parent_card.uid if parent_card != null else -1, source_id, target_id, trick_id)
 	if _negation_resume_results.has(resume_key):
@@ -1203,46 +1321,31 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, co
 		return resumed_negated
 	# 当前抵消状态；每使用一张【无懈可击】翻转一次，最终为 true 表示原锦囊被抵消。
 	var negated: bool = false
-	# 无懈交替状态；每次成功响应翻转1/-1并保存响应者与实体牌 UID。
-	var wuxie_state: WuxieChainState = WuxieChainState.new(state.current_event_id)
-	# 响应次数安全上限；默认牌堆只有7张【无懈可击】，较高上限用于兼容未来自定义牌堆。
-	var response_count: int = 0
-	while response_count < 100:
-		# 本轮是否有玩家响应；无人响应时响应链结束。
-		var response_played: bool = false
-		# 本轮响应顺序；多角色结算必须从当前回合角色开始按行动顺序询问。
-		var response_order: Array[PlayerState] = _get_alive_players_in_action_order(state.current_player_id)
-		for player: PlayerState in response_order:
-			if not player.alive:
-				continue
-			# 玩家当前仍持有的【无懈可击】；每轮重新查询以允许同一玩家后续再次响应。
-			var counter_card: CardInstance = _find_hand_card_by_definition(player, "wuxie")
-			if counter_card == null:
-				continue
-			# 每名角色先收到是否发动无懈可击的询问；AI 的立场判断也只能作为其统一选择策略输入。
-			var negate_context: Dictionary = {"kind":"trick_negation", "parent_card_uid":parent_card.uid if parent_card != null else -1, "responder_id":player.player_id, "source_id":source_id, "target_id":target_id, "trick_id":trick_id, "negated":negated, "ai_prefer_select":_should_auto_negate(player, source_id, target_id, trick_id, negated)}
-			for context_key_variant: Variant in continuation_context.keys():
-				# 附加上下文字段名；仅复制可序列化阶段信息，不覆盖当前无懈响应的核心归属字段。
-				var context_key: String = str(context_key_variant)
-				if not negate_context.has(context_key):
-					negate_context[context_key] = continuation_context[context_key_variant]
-			var response_card: CardInstance = request_response_card(player.player_id, "wuxie", "是否使用【无懈可击】？", negate_context)
-			if has_pending_card_choice():
-				return negated
-			if response_card == null:
-				continue
-			if state.game_over:
-				return negated
-			wuxie_state.add_response(player.player_id, {"card_uid":response_card.uid, "card_id":response_card.definition_id, "respond_to":trick_id})
-			negated = wuxie_state.is_neutralized()
-			_record_runtime_event("WuxieChainState", "response", {"trick_id":trick_id, "target_id":target_id}, wuxie_state.to_dict())
-			response_count += 1
-			response_played = true
-			add_log("%s使用【无懈可击】，当前锦囊%s。" % [player.display_name, "被抵消" if negated else "恢复生效"])
-			break
-		if not response_played:
-			break
-	return negated
+	# 本次目标独立的响应顺序；无名杀在每个 useCardToBegin 目标事件上分别建立无懈链，多目标牌不会共享一次抵消结果。
+	var response_order_ids: Array[int] = []
+	for player: PlayerState in _get_alive_players_in_action_order(state.current_player_id):
+		response_order_ids.append(player.player_id)
+	# 无懈响应上下文；全部字段可序列化，异步选择后能够从准确响应者与目标继续。
+	var negate_context: Dictionary = {
+		"kind":"trick_negation",
+		"parent_card_uid":parent_card.uid if parent_card != null else -1,
+		"source_id":source_id,
+		"target_id":target_id,
+		"trick_id":trick_id,
+		"negated":negated,
+		"response_order_ids":response_order_ids,
+		"response_index":0,
+		"wuxie_response_results":[],
+		"root_event_id":state.current_event_id,
+	}
+	for context_key_variant: Variant in continuation_context.keys():
+		# 附加上下文字段名；仅复制可序列化阶段信息，不覆盖当前无懈响应的核心归属字段。
+		var context_key: String = str(context_key_variant)
+		if not negate_context.has(context_key):
+			negate_context[context_key] = continuation_context[context_key_variant]
+	# 链推进结果；正式对局通常在首个可响应角色处暂停，无人持有无懈时同步返回未抵消。
+	var chain_result: Dictionary = _advance_trick_negation_chain(negate_context)
+	return bool(chain_result.get("negated", false))
 
 
 ## 构造无懈可击恢复键；所有字段均为可序列化值，支持同名牌对不同目标分别结算。
@@ -1427,7 +1530,7 @@ func _continue_target_card_choice(context: Dictionary, selected_uids: Array[int]
 		_take_selected_player_card(source_id, target_id, selected_uids[0])
 	else:
 		_discard_selected_player_card(target_id, selected_uids[0])
-	_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+	_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 弃置指定手牌 UID；返回是否成功，供火攻与装备技能复用。
@@ -1570,6 +1673,60 @@ func player_has_equipment(player_id: int, definition_id: String) -> bool:
 	return false
 
 
+## 请求玩家决定是否发动一件仍在装备区的非锁定装备；选择装备实体表示发动，取消表示不发动且不消耗装备。
+func request_equipment_trigger(player_id: int, definition_id: String, title: String, prompt: String, context: Dictionary, ai_prefer_select: bool = true) -> bool:
+	# 当前装备实体；等待前必须存在，恢复时具体效果仍会再次校验其实体 UID。
+	var equipment_card: CardInstance = _get_equipment_card_by_definition(player_id, definition_id)
+	if equipment_card == null:
+		return false
+	# 装备候选；公开装备使用独立选择面板，选择只表达发动意愿，不会移动实体牌。
+	var candidates: Array[Dictionary] = [_serialize_choice_candidate(equipment_card, player_id, "equipment", true, str(GameDatabase.get_card(definition_id).get("slot", "")))]
+	# 完整触发上下文；稳定装备 UID 防止响应等待期间换装后误发动新装备。
+	var trigger_context: Dictionary = context.duplicate(true)
+	trigger_context["equipment_id"] = definition_id
+	trigger_context["equipment_uid"] = equipment_card.uid
+	trigger_context["ai_prefer_select"] = ai_prefer_select
+	# 发动选择；正式对局异步等待，纯规则测试没有选择策略时保守返回不发动。
+	var selected_uids: Array[int] = request_card_choice(player_id, title, prompt, candidates, 0, 1, true, trigger_context)
+	if has_pending_card_choice():
+		return false
+	return selected_uids.has(equipment_card.uid)
+
+
+## 返回一名玩家手牌区与装备区的可选实体快照；装备技能费用和目标弃牌效果使用同一稳定 UID 边界。
+func get_hand_equipment_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	return _build_player_zone_candidates(viewer_id, target_id, true, true, false)
+
+
+## 返回一名玩家普通手牌区的可选实体快照；木牛“粮”和装备牌不会混入要求弃置手牌的装备效果。
+func get_hand_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	return _build_player_zone_candidates(viewer_id, target_id, true, false, false)
+
+
+## 按稳定 UID 弃置玩家手牌区或装备区中被明确选择的牌；不存在或已移动的 UID 会安全跳过。
+func discard_selected_hand_equipment(player_id: int, selected_uids: Array[int]) -> int:
+	# 实际弃置数量；调用方据此判断装备费用是否完整支付。
+	var discarded_count: int = 0
+	for selected_uid: int in selected_uids:
+		if _discard_selected_player_card(player_id, selected_uid):
+			discarded_count += 1
+	return discarded_count
+
+
+## 返回目标装备区中可被麒麟弓弃置的坐骑候选；进攻与防御坐骑都公开展示并由发动者选择。
+func get_mount_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	# 坐骑候选结果；按进攻坐骑、防御坐骑的固定槽位顺序排列。
+	var result: Array[Dictionary] = []
+	# 目标玩家；不存在时返回空数组。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null:
+		return result
+	for slot: String in ["offensive_mount", "defensive_mount"]:
+		if target.equipment.has(slot):
+			result.append(_serialize_choice_candidate(target.equipment[slot] as CardInstance, target_id, "equipment", true, slot))
+	return result
+
+
 ## 返回玩家武将配置中的性别；未知或缺失配置返回 unknown。
 func get_player_gender(player_id: int) -> String:
 	# 指定玩家状态；用于取得武将 ID。
@@ -1682,7 +1839,7 @@ func _apply_fire_attack_shown_card(context: Dictionary, shown_card_uid: int, def
 func _continue_fire_attack_discard_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	_apply_fire_attack_discard(context, selected_uids)
 	if not state.game_over:
-		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+		_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 应用火攻同花色弃牌；只有成功弃置本次候选牌才造成固定1点火焰伤害。
@@ -1734,7 +1891,22 @@ func _process_harvest_choice_context(context: Dictionary, deferred_resolution: b
 	while target_index < target_ids.size() and not revealed_uids.is_empty() and not state.game_over:
 		# 当前获得者；每名角色在其轮次从全部剩余展示牌中自主选择。
 		var target_id: int = target_ids[target_index]
-		if resolve_trick_negation(int(context.get("actor_id", -1)), target_id, "wugu"):
+		# 当前目标无懈结果；异步恢复会写入同一目标索引，避免重新询问并重复创建展示牌。
+		var target_negated: bool = false
+		if int(context.get("negation_resolved_target_index", -1)) == target_index:
+			target_negated = bool(context.get("negation_resolved_result", false))
+			context.erase("negation_resolved_target_index")
+			context.erase("negation_resolved_result")
+		else:
+			# 五谷无懈恢复上下文；包含展示牌与目标游标，当前目标被抵消时只跳过其选牌资格。
+			var negation_context: Dictionary = context.duplicate(true)
+			negation_context["continuation_kind"] = "harvest_negation"
+			negation_context["target_index"] = target_index
+			negation_context["revealed_uids"] = revealed_uids.duplicate()
+			target_negated = resolve_trick_negation(int(context.get("actor_id", -1)), target_id, "wugu", negation_context)
+			if has_pending_card_choice():
+				return
+		if target_negated:
 			target_index += 1
 			continue
 		# 当前展示候选；牌面公开，统一归类为 processing 展示区。
@@ -1766,6 +1938,16 @@ func _process_harvest_choice_context(context: Dictionary, deferred_resolution: b
 			discard_revealed_card(remaining_card)
 	if deferred_resolution and not state.game_over:
 		_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+
+
+## 在五谷丰登当前目标的无懈链结束后恢复展示牌队列；抵消结果只写入这一名目标的游标位置。
+func _continue_harvest_after_negation(context: Dictionary, final_negated: bool) -> void:
+	# 五谷恢复上下文；移除无懈链专用字段后保留原展示牌 UID、目标数组和目标索引。
+	var harvest_context: Dictionary = context.duplicate(true)
+	harvest_context["kind"] = "harvest"
+	harvest_context["negation_resolved_target_index"] = int(context.get("target_index", 0))
+	harvest_context["negation_resolved_result"] = final_negated
+	_process_harvest_choice_context(harvest_context, true)
 
 
 ## 恢复一名角色提交的五谷展示牌选择，然后继续后续目标队列。
@@ -2028,6 +2210,15 @@ func _continue_turn_after_judgment(player_id: int) -> void:
 func _resume_interrupted_turn_flow() -> void:
 	if state == null or state.game_over or has_pending_card_choice():
 		return
+	# 当前被濒死救援等嵌套选择暂停的逐目标卡牌；嵌套流程结束后先完成原目标，再恢复后续目标而不是提前开放出牌。
+	for parent_card_uid_variant: Variant in _active_card_resolutions.keys():
+		# 原卡牌实体 UID；同一时刻只有最内层一张活动牌会等待没有父 UID 的公共救援选择。
+		var parent_card_uid: int = int(parent_card_uid_variant)
+		# 当前活动上下文；只有确实开始过目标的结算才由此兼容入口推进。
+		var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+		if int(resolution_context.get("current_target_id", -1)) >= 0:
+			_complete_active_card_target(parent_card_uid)
+			return
 	# 当前回合玩家；异步救援结束后若其已经死亡，必须先转交回合，不能停留在失效的出牌阶段。
 	var current_player: PlayerState = state.get_player(state.current_player_id)
 	if current_player != null and not current_player.alive:
@@ -2132,6 +2323,186 @@ func _pass_lightning(from_player_id: int, lightning_card: CardInstance) -> void:
 		_move_to_discard(lightning_card)
 
 
+## 判断卡牌是否使用统一逐目标游标结算；装备、延时锦囊与五谷保留各自的整牌上下文。
+func _uses_active_target_resolution(definition: Dictionary, target_ids: Array[int]) -> bool:
+	# 当前效果 ID；整牌效果需要一次读取完整目标数组，不能拆成互不关联的单目标调用。
+	var effect_id: String = str(definition.get("effect_id", ""))
+	return not target_ids.is_empty() and effect_id not in ["equip", "harvest"] and not bool(definition.get("delayed", false))
+
+
+## 建立一张牌的逐目标结算上下文；目标游标在创建任何异步请求前写入，恢复时不会重复处理上一目标。
+func _begin_active_card_resolution(card: CardInstance, actor_id: int, target_ids: Array[int]) -> void:
+	# 当前卡牌定义；【杀】需要把酒加值、属性和无视防具状态保存为整张牌共享参数。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 活动结算上下文；target_index 指向下一名未开始结算的目标，current_target_id 表示正在等待响应的目标。
+	var resolution_context: Dictionary = {
+		"parent_card_uid":card.uid,
+		"actor_id":actor_id,
+		"card_definition_id":card.definition_id,
+		"target_ids":target_ids.duplicate(),
+		"target_index":0,
+		"current_target_id":-1,
+	}
+	if str(definition.get("effect_id", "")) == "borrow_sword" and target_ids.size() == 2:
+		# 借刀杀人的无懈目标只有持刀者，但效果恢复仍需保留“持刀者、被杀者”的完整语义顺序。
+		resolution_context["target_ids"] = [target_ids[0]]
+		resolution_context["effect_target_ids"] = target_ids.duplicate()
+	if str(definition.get("effect_id", "")) == "slash":
+		# 【杀】使用者；酒加值在整张多目标【杀】声明时只消耗一次，并对全部目标使用相同伤害基数。
+		var actor: PlayerState = state.get_player(actor_id)
+		resolution_context["slash_damage_amount"] = 1 + actor.wine_bonus
+		actor.wine_bonus = 0
+		# 【杀】初始属性；普通、火焰和雷电属性由实体牌配置提供。
+		var slash_nature: String = str(definition.get("nature", "normal"))
+		resolution_context["slash_nature"] = slash_nature
+		resolution_context["slash_ignore_armor"] = player_has_equipment(actor_id, "qinggang")
+	_active_card_resolutions[card.uid] = resolution_context
+	if str(definition.get("effect_id", "")) == "slash" and str(resolution_context.get("slash_nature", "normal")) == "normal" and player_has_equipment(actor_id, "zhuque"):
+		# 朱雀羽扇实体；玩家选择该公开装备表示发动，取消表示保留普通【杀】属性。
+		var zhuque_card: CardInstance = _get_equipment_card_by_definition(actor_id, "zhuque")
+		if zhuque_card != null:
+			# 朱雀羽扇选择候选；装备牌只作为发动开关展示，不会因选择而离开装备区。
+			var candidates: Array[Dictionary] = [_serialize_choice_candidate(zhuque_card, actor_id, "equipment", true, "weapon")]
+			# 朱雀羽扇恢复上下文；只保存原【杀】UID，后续从活动结算表读取完整目标与共享参数。
+			var trigger_context: Dictionary = {"kind":"zhuque_trigger", "parent_card_uid":card.uid, "actor_id":actor_id, "equipment_uid":zhuque_card.uid, "ai_prefer_select":true}
+			# 发动选择结果；正式对局会暂停，纯规则测试未选择时默认不发动。
+			var selected_uids: Array[int] = request_card_choice(actor_id, "朱雀羽扇", "是否发动【朱雀羽扇】将此普通【杀】改为火【杀】？", candidates, 0, 1, true, trigger_context)
+			if has_pending_card_choice():
+				return
+			_apply_zhuque_trigger_choice(trigger_context, selected_uids)
+	_continue_active_card_resolution(card.uid)
+
+
+## 恢复朱雀羽扇发动选择；只有仍装备同一实体牌且玩家明确选择时才转换整张【杀】的属性。
+func _continue_zhuque_trigger_choice(context: Dictionary, selected_uids: Array[int]) -> void:
+	_apply_zhuque_trigger_choice(context, selected_uids)
+	_continue_active_card_resolution(int(context.get("parent_card_uid", -1)))
+
+
+## 应用朱雀羽扇选择结果；装备本身不作为材料消耗，转换结果保存在当前卡牌的共享结算上下文中。
+func _apply_zhuque_trigger_choice(context: Dictionary, selected_uids: Array[int]) -> void:
+	# 原【杀】实体 UID；用于取得并更新唯一活动结算上下文。
+	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
+	if not _active_card_resolutions.has(parent_card_uid) or selected_uids.is_empty():
+		return
+	# 发动者 ID；等待期间若朱雀羽扇已经离开装备区，则本次选择自动失效。
+	var actor_id: int = int(context.get("actor_id", -1))
+	# 当前仍装备的朱雀羽扇；必须与请求展示的实体 UID 一致，避免旧窗口发动后来替换的装备。
+	var zhuque_card: CardInstance = _get_equipment_card_by_definition(actor_id, "zhuque")
+	if zhuque_card == null or zhuque_card.uid != int(context.get("equipment_uid", -1)) or not selected_uids.has(zhuque_card.uid):
+		return
+	# 当前活动上下文；火属性会供此【杀】的每个目标读取。
+	var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+	resolution_context["slash_nature"] = "fire"
+	_active_card_resolutions[parent_card_uid] = resolution_context
+	add_log("%s发动【朱雀羽扇】，将普通【杀】转为火【杀】。" % state.get_player(actor_id).display_name)
+
+
+## 从当前游标连续结算目标；任一响应或效果选择出现时立即暂停，恢复回调只完成当前目标后再进入下一名。
+func _continue_active_card_resolution(parent_card_uid: int) -> void:
+	while _active_card_resolutions.has(parent_card_uid) and not state.game_over and not has_pending_card_choice():
+		# 原始处理区卡牌；离开处理区说明旧上下文已经失效，应停止而不能重新移动牌。
+		var parent_card: CardInstance = _find_processing_card(parent_card_uid)
+		if parent_card == null:
+			_active_card_resolutions.erase(parent_card_uid)
+			return
+		# 当前活动上下文；每次循环重新读取，允许嵌套恢复更新共享参数。
+		var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+		# 规范化目标数组；保持使用牌时确定的行动顺序，不因中途死亡重新排列。
+		var target_ids: Array = resolution_context.get("target_ids", []) as Array
+		# 下一目标游标；目标开始前立即递增并写回，异步恢复不会重复创建同一无懈或响应窗口。
+		var target_index: int = int(resolution_context.get("target_index", 0))
+		if target_index >= target_ids.size():
+			_active_card_resolutions.erase(parent_card_uid)
+			_finalize_processing_card(parent_card_uid)
+			return
+		# 当前目标 ID；死亡或离场目标直接视为完成，继续后续目标。
+		var target_id: int = int(target_ids[target_index])
+		resolution_context["target_index"] = target_index + 1
+		resolution_context["current_target_id"] = target_id
+		_active_card_resolutions[parent_card_uid] = resolution_context
+		var target: PlayerState = state.get_player(target_id)
+		if target == null or not target.alive:
+			_complete_active_card_target(parent_card_uid)
+			continue
+		# 当前卡牌效果；【杀】读取整张牌共享的酒加值、转换属性与青釭剑状态，其他牌调用单目标效果入口。
+		var definition: Dictionary = GameDatabase.get_card(parent_card.definition_id)
+		# 本目标结算结果；pending 表示已创建响应窗口，discard 表示当前目标同步完成但整张牌尚不能收尾。
+		var destination: String = "discard"
+		if str(definition.get("effect_id", "")) == "slash":
+			destination = effect_resolver.resolve_slash_target(parent_card, int(resolution_context.get("actor_id", -1)), target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
+		elif str(definition.get("effect_id", "")) == "borrow_sword":
+			# 借刀杀人必须使用声明时的完整双目标数组，当前目标游标只负责其第一目标的无懈与完成状态。
+			var borrow_targets: Array[int] = []
+			for borrow_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
+				borrow_targets.append(int(borrow_target_variant))
+			destination = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), borrow_targets)
+		else:
+			destination = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), [target_id])
+		if state.game_over:
+			_active_card_resolutions.erase(parent_card_uid)
+			return
+		if destination == "pending" or has_pending_card_choice():
+			return
+		_complete_active_card_target(parent_card_uid)
+
+
+## 标记活动卡牌的当前目标已经完成并继续下一目标；没有活动上下文时兼容旧单目标调用并直接收尾。
+func _complete_active_card_target(parent_card_uid: int) -> void:
+	if not _active_card_resolutions.has(parent_card_uid):
+		_finalize_processing_card(parent_card_uid)
+		return
+	# 当前活动上下文；清除目标标记后保留已经递增的下一目标游标。
+	var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+	resolution_context["current_target_id"] = -1
+	_active_card_resolutions[parent_card_uid] = resolution_context
+	_continue_active_card_resolution(parent_card_uid)
+
+
+## 从无懈可击未抵消的当前目标重新进入效果；恢复键保证本次不会再次创建相同目标的无懈询问。
+func _resume_active_card_target(parent_card_uid: int) -> void:
+	if not _active_card_resolutions.has(parent_card_uid):
+		_finalize_processing_card(parent_card_uid)
+		return
+	# 当前活动上下文；current_target_id 在目标响应完成前保持不变。
+	var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+	# 原始处理区卡牌；旧选择恢复时牌已离区则终止上下文。
+	var parent_card: CardInstance = _find_processing_card(parent_card_uid)
+	if parent_card == null:
+		_active_card_resolutions.erase(parent_card_uid)
+		return
+	# 当前目标 ID；无有效目标说明上下文已经由其他恢复路径推进。
+	var target_id: int = int(resolution_context.get("current_target_id", -1))
+	if target_id < 0:
+		_continue_active_card_resolution(parent_card_uid)
+		return
+	# 恢复后的目标数组；普通牌只包含当前目标，借刀杀人恢复其完整双目标语义。
+	var resumed_targets: Array[int] = [target_id]
+	if str(GameDatabase.get_card(parent_card.definition_id).get("effect_id", "")) == "borrow_sword":
+		resumed_targets.clear()
+		for resumed_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
+			resumed_targets.append(int(resumed_target_variant))
+	# 恢复后的单目标效果结果；再次产生效果选择时继续等待，否则当前目标完成。
+	var destination: String = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), resumed_targets)
+	if destination == "pending" or has_pending_card_choice() or state.game_over:
+		return
+	_complete_active_card_target(parent_card_uid)
+
+
+## 按配置 ID 返回玩家当前装备实体；可选装备触发使用实体 UID 防止等待期间替换装备后误发动。
+func _get_equipment_card_by_definition(player_id: int, definition_id: String) -> CardInstance:
+	# 指定玩家；不存在时没有可发动装备。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return null
+	for card_variant: Variant in player.equipment.values():
+		# 当前装备实体；定义 ID 匹配时返回原对象供只读校验和候选序列化。
+		var equipment_card: CardInstance = card_variant as CardInstance
+		if equipment_card.definition_id == definition_id:
+			return equipment_card
+	return null
+
+
 ## 执行已通过合法性校验的出牌动作。
 func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> void:
 	# 卡牌使用父事件；逻辑牌与实体材料牌分开记录，当前实体牌 UID 是唯一材料。
@@ -2160,8 +2531,12 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	_dispatch_rule_event(RuleEvent.new("card_used", actor_id, target_ids[0] if not target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":target_ids.duplicate()}))
 	if state.game_over:
 		return
-	# 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动。
-	var destination: String = effect_resolver.resolve(card, actor_id, target_ids)
+	# 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动，多目标牌由活动游标负责最终收尾。
+	var destination: String = "pending"
+	if _uses_active_target_resolution(definition, target_ids):
+		_begin_active_card_resolution(card, actor_id, target_ids)
+	else:
+		destination = effect_resolver.resolve(card, actor_id, target_ids)
 	_record_runtime_event("contentAfter", "card_content", {"actor_id":actor_id, "card_uid":card.uid}, {"destination":destination}, card_use_event_id)
 	if state.game_over:
 		return
@@ -2330,33 +2705,28 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 			if not rescuer.alive or asked_rescuer_ids.has(rescuer.player_id):
 				continue
 			asked_rescuer_ids.append(rescuer.player_id)
-			# 救援者使用的桃；所有存活角色都先收到统一响应询问。
-			var peach_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"tao", "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
-			# 实际提交的桃；为空表示明确取消或没有合法候选。
-			var peach: CardInstance = request_response_card(rescuer.player_id, "tao", "是否使用【桃】救援%s？" % target.display_name, peach_context)
+			# 当前救援者可用响应模式；其他角色只能使用桃，濒死者本人可在同一时机从桃与酒中直接选择。
+			var response_patterns: Array[String] = ["tao"]
+			if rescuer.player_id == target_id:
+				response_patterns.append("jiu")
+			# 救援响应上下文；已询问名单与允许模式共同恢复同一个窗口，不再创建先桃后酒的第二次询问。
+			var rescue_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_patterns":response_patterns.duplicate(), "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
+			# 实际提交的救援牌；为空表示明确取消或没有合法候选，实体定义决定本次使用桃还是酒。
+			var rescue_card: CardInstance = request_response_card_patterns(rescuer.player_id, response_patterns, "请选择是否使用【桃】%s。" % ("或【酒】自救" if rescuer.player_id == target_id else "救援%s" % target.display_name), rescue_context)
 			if has_pending_card_choice():
 				return
-			if peach != null:
-				add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
-				recover(rescuer.player_id, target_id, 1, "tao")
+			if rescue_card != null:
+				# 实际救援模式；桃可救援目标，酒只会出现在濒死者自己的候选中。
+				var response_pattern: String = str(GameDatabase.get_card(rescue_card.definition_id).get("response_pattern", ""))
+				if response_pattern == "tao":
+					add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
+				else:
+					add_log("%s在濒死时使用【酒】自救。" % target.display_name)
+				recover(rescuer.player_id, target_id, 1, response_pattern)
 				rescue_start_player_id = rescuer.player_id
 				asked_rescuer_ids.clear()
 				rescued = true
 				break
-			if rescuer.player_id == target_id:
-				# 濒死者自救使用的酒；其他角色不能用酒救援目标，仍通过相同询问入口。
-				var wine_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_pattern":"jiu", "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
-				# 实际提交的酒；为空表示濒死者放弃本轮自救。
-				var wine: CardInstance = request_response_card(rescuer.player_id, "jiu", "是否使用【酒】自救？", wine_context)
-				if has_pending_card_choice():
-					return
-				if wine != null:
-					add_log("%s在濒死时使用【酒】自救。" % target.display_name)
-					recover(target_id, target_id, 1, "jiu")
-					rescue_start_player_id = rescuer.player_id
-					asked_rescuer_ids.clear()
-					rescued = true
-					break
 		if not rescued:
 			state.dying_queue.erase(target_id)
 			_resolve_death(target_id, killer_id)
@@ -2371,8 +2741,13 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	var responder_id: int = int(context.get("responder_id", -1))
 	# 濒死目标；回复与后续死亡判断都针对该稳定 ID。
 	var target_id: int = int(context.get("target_id", -1))
-	# 选择的响应模式；tao 回复目标，jiu 只允许目标自救。
-	var response_pattern: String = str(context.get("response_pattern", "tao"))
+	# 本次窗口允许的响应模式；其他角色只有桃，濒死者本人同时包含桃和酒。
+	var response_patterns: Array[String] = []
+	for response_pattern_variant: Variant in context.get("response_patterns", ["tao"]) as Array:
+		# 当前允许模式；去重后交给实体牌消费入口复核。
+		var allowed_pattern: String = str(response_pattern_variant)
+		if not response_patterns.has(allowed_pattern):
+			response_patterns.append(allowed_pattern)
 	# 当前轮已经询问的救援者 ID；恢复后只继续尚未询问的座次，防止取消按钮看似无效。
 	var asked_rescuer_ids: Array[int] = []
 	for rescuer_id_variant: Variant in context.get("asked_rescuer_ids", []) as Array:
@@ -2383,27 +2758,20 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	# 实际救援响应牌；为空表示当前桃或酒请求被取消。
 	var response_card: CardInstance
 	if not selected_uids.is_empty():
-		response_card = _consume_response_card_uid(responder_id, selected_uids[0], response_pattern)
+		response_card = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns)
 	if has_pending_card_choice():
 		return
-	if response_card == null and response_pattern == "tao" and responder_id == target_id:
-		# 濒死者放弃桃后仍可单独决定是否使用酒；该请求沿用本轮已询问名单。
-		var wine_context: Dictionary = context.duplicate(true)
-		wine_context["response_pattern"] = "jiu"
-		wine_context["asked_rescuer_ids"] = asked_rescuer_ids.duplicate()
-		response_card = request_response_card(responder_id, "jiu", "是否使用【酒】自救？", wine_context)
-		response_pattern = "jiu"
-		if has_pending_card_choice():
-			return
 	if response_card == null:
 		# 下一名存活救援者；本轮已经询问的角色会在恢复函数中跳过，不会再次弹出同一桃询问。
 		var next_rescuer: PlayerState = state.get_next_alive_player(responder_id)
 		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)), asked_rescuer_ids)
 		return
+	# 实际响应模式；由已消费实体牌的定义得出，客户端不能通过上下文伪造桃或酒类型。
+	var response_pattern: String = str(GameDatabase.get_card(response_card.definition_id).get("response_pattern", ""))
 	if response_pattern == "tao":
 		recover(responder_id, target_id, 1, "tao")
 		add_log("%s对%s使用【桃】。" % [state.get_player(responder_id).display_name, state.get_player(target_id).display_name])
-	else:
+	elif response_pattern == "jiu" and responder_id == target_id:
 		recover(responder_id, target_id, 1, "jiu")
 		add_log("%s在濒死时使用【酒】自救。" % state.get_player(target_id).display_name)
 	# 最新濒死目标状态；回复后依据当前体力决定继续救援或退出濒死队列。
@@ -2436,7 +2804,7 @@ func resolve_flood_choice(parent_card_uid: int, actor_id: int, target_id: int) -
 ## 恢复水淹七军选择；选满装备区时弃置全部，否则承受1点普通伤害。
 func _continue_flood_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	_apply_flood_choice(context, selected_uids)
-	_finalize_processing_card(int(context.get("parent_card_uid", -1)))
+	_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
 
 ## 应用水淹七军选择结果；所有装备必须通过 UID 逐张移出，避免数组下标改变选择语义。
@@ -2592,6 +2960,8 @@ func _emit_card_transfer(card: CardInstance, source_player_id: int, source_zone:
 
 ## 按 UID 收尾一张仍在处理区的原始效果牌；暂停选择恢复后统一调用。
 func _finalize_processing_card(card_uid: int) -> void:
+	# 已结束卡牌的活动目标上下文；防御性清理避免旧响应在实体离开处理区后继续推进目标。
+	_active_card_resolutions.erase(card_uid)
 	for processing_card: CardInstance in state.processing_area:
 		if processing_card.uid == card_uid:
 			_move_to_discard(processing_card)
@@ -2831,13 +3201,57 @@ func _consume_specific_hand_card(player: PlayerState, definition_id: String) -> 
 	return card
 
 
-## 结算【银月枪】的回合外黑色手牌触发；基础策略优先指定攻击范围内的敌方，目标能打出【闪】则抵消。
+## 登记【银月枪】的回合外黑色手牌触发；当前响应子事件完成后再询问是否发动，避免嵌套窗口覆盖原响应上下文。
 func _resolve_silver_moon_trigger(owner_id: int, used_card: CardInstance, was_hand_card: bool) -> void:
 	if used_card == null or not was_hand_card or used_card.get_color() != "black" or owner_id == state.current_player_id or not player_has_equipment(owner_id, "yinyue"):
 		return
 	# 装备持有者；触发时仍须存活且位于游戏内。
 	var owner: PlayerState = state.get_player(owner_id)
 	if owner == null or not owner.alive:
+		return
+	# 待询问触发；实体牌已经完成自身使用或打出，队列只保存可回放标识和装备持有者。
+	_queued_silver_moon_triggers.append({"owner_id":owner_id, "used_card_uid":used_card.uid})
+
+
+## 在没有其他活动选牌请求时启动下一条银月枪发动询问；非锁定装备被明确取消时不会选择目标或造成伤害。
+func _process_next_silver_moon_trigger() -> void:
+	if state == null or state.game_over or has_pending_card_choice() or _queued_silver_moon_triggers.is_empty():
+		return
+	# 当前待处理触发；按黑色牌实际使用或打出顺序先进先出。
+	var trigger_data: Dictionary = _queued_silver_moon_triggers.pop_front() as Dictionary
+	# 银月枪持有者；等待期间死亡、进入自己回合或失去装备时本次触发失效。
+	var owner_id: int = int(trigger_data.get("owner_id", -1))
+	var owner: PlayerState = state.get_player(owner_id)
+	if owner == null or not owner.alive or owner_id == state.current_player_id or not player_has_equipment(owner_id, "yinyue"):
+		_process_next_silver_moon_trigger()
+		return
+	# 发动选择上下文；玩家确认装备实体后才进入目标与【闪】响应步骤。
+	var trigger_context: Dictionary = {"kind":"silver_moon_trigger", "owner_id":owner_id, "used_card_uid":int(trigger_data.get("used_card_uid", -1))}
+	# 是否发动银月枪；AI 与玩家共用可取消装备选择请求，规则层不能自动开启效果。
+	var activated: bool = request_equipment_trigger(owner_id, "yinyue", "银月枪", "是否发动【银月枪】？", trigger_context, true)
+	if has_pending_card_choice():
+		return
+	if activated:
+		_activate_silver_moon(owner_id)
+	if not has_pending_card_choice():
+		_process_next_silver_moon_trigger()
+
+
+## 恢复银月枪发动选择；选择装备实体才执行效果，取消后继续处理后续排队触发。
+func _continue_silver_moon_trigger_choice(context: Dictionary, selected_uids: Array[int]) -> void:
+	# 银月枪持有者；选择等待期间仍需存活并保持装备。
+	var owner_id: int = int(context.get("owner_id", -1))
+	# 当前银月枪实体；必须与选择结果一致，避免换装后发动新的装备。
+	var silver_moon: CardInstance = _get_equipment_card_by_definition(owner_id, "yinyue")
+	if silver_moon != null and selected_uids.has(silver_moon.uid):
+		_activate_silver_moon(owner_id)
+
+
+## 在玩家确认发动后结算银月枪；基础目标策略优先范围内敌方，目标能打出【闪】则抵消。
+func _activate_silver_moon(owner_id: int) -> void:
+	# 装备持有者；发动时再次校验存活与装备，避免旧选择修改无效角色状态。
+	var owner: PlayerState = state.get_player(owner_id)
+	if owner == null or not owner.alive or not player_has_equipment(owner_id, "yinyue"):
 		return
 	# 可选目标；从持有者下家起按行动顺序收集攻击范围内的其他存活角色。
 	var legal_targets: Array[PlayerState] = []

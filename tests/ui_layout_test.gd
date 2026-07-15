@@ -212,6 +212,22 @@ func _run() -> void:
 	if gained_hand_card.get_parent() != hand_container or not gained_hand_card.hand_entry_offset.is_zero_approx() or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003):
 		_fail("local_gain_entity_finish parent=%s offset=%s" % [gained_hand_card.get_parent(), gained_hand_card.hand_entry_offset])
 		return
+	# 本地摸牌实体数据；牌堆进入本地手牌也必须复用正式手牌节点从右侧入场，而不是创建临时牌背转移节点。
+	var drawn_card_data: Dictionary = {"uid":90006, "definition_id":"shan", "suit":"diamond", "rank":2, "zone":"hand", "owner_id":4}
+	# 包含原获得牌与新摸牌的快照；原节点继续复用，新 UID 创建第二张正式手牌节点。
+	var drawn_snapshot: Dictionary = gained_snapshot.duplicate(true)
+	# 本地摸牌后的玩家快照；手牌数组顺序就是正式手牌布局顺序。
+	var drawn_local_player: Dictionary = (drawn_snapshot.get("players", []) as Array)[4] as Dictionary
+	drawn_local_player["hand"] = [gained_card_data, drawn_card_data]
+	drawn_local_player["hand_count"] = 2
+	main_instance.call("_on_card_transfer_requested", drawn_card_data, -1, "draw_pile", 4, "hand")
+	main_instance.call("_on_state_changed", drawn_snapshot)
+	# 本地摸牌正式节点；应立即登记右侧入场补间，动画层不能持有额外临时转移牌。
+	var drawn_hand_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90006) as CardView
+	if drawn_hand_card == null or drawn_hand_card.get_parent() != hand_container or not (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90006) or not animation_layer._transfer_cards.is_empty():
+		_fail("local_draw_entity:%s/%s" % [drawn_hand_card, animation_layer._transfer_cards])
+		return
+	main_instance.call("_clear_local_hand_gain_animations")
 	# 同批弃置的第一张牌；信号顺序应成为中央队列从左到右的稳定顺序。
 	var first_discard_card_data: Dictionary = {"uid":90004, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"discard_pile", "owner_id":-1}
 	# 同批弃置的第二张牌；与第一张在同一帧进入弃牌堆，必须完整共存而不是逐张替换。
@@ -225,6 +241,20 @@ func _run() -> void:
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
+	# 已展示并淡出的实际使用牌；最终处理区转弃牌时不得在中央重新创建第二张表现牌。
+	var delayed_discard_card_data: Dictionary = {"uid":90007, "definition_id":"sha", "suit":"club", "rank":6, "zone":"processing", "owner_id":-1}
+	# 单目标展示目标；使用已验证的六号位武将牌中心创建一次正常使用动画。
+	var delayed_discard_target_ids: Array[int] = [5]
+	animation_layer.card_hold_duration = 0.01
+	main_instance.call("_on_card_presentation_requested", delayed_discard_card_data, 4, delayed_discard_target_ids)
+	await get_tree().create_timer(0.06).timeout
+	if not animation_layer._active_cards.is_empty() or not (main_instance.get("_presented_discard_card_uids") as Dictionary).has(90007):
+		_fail("delayed_discard_presentation_state:%s" % [animation_layer._active_cards])
+		return
+	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
+	if not animation_layer._active_cards.is_empty() or (main_instance.get("_presented_discard_card_uids") as Dictionary).has(90007):
+		_fail("delayed_discard_duplicate:%s" % [animation_layer._active_cards])
+		return
 	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
 	var single_target_state: GameState = _make_single_target_state()
 	match_controller.state = single_target_state
@@ -254,7 +284,7 @@ func _run() -> void:
 		return
 	# AI 响应速度滑条；修改值后必须写入全局设置并同步给当前对局控制器，无需重开对局。
 	var ai_response_delay_slider: HSlider = main_instance.get_node("%AiResponseDelaySlider") as HSlider
-	# 本用例选择的 AI 响应等待时间；0.65秒位于0.25至2秒设置范围内且对默认值具有可见差异。
+	# 本用例选择的 AI 响应等待时间；0.65秒位于0.05至1秒设置范围内且对默认值具有可见差异。
 	var requested_ai_response_delay: float = 0.65
 	ai_response_delay_slider.value = requested_ai_response_delay
 	await get_tree().process_frame
