@@ -47,6 +47,16 @@ func _run() -> void:
 		printerr("SMOKE_FAIL card_definitions=%d" % definition_count)
 		get_tree().quit(1)
 		return
+	# 新启动的全局牌名模式；默认必须显示原版三国杀牌名，菜单仍可在运行时切换。
+	if GameSettings.card_name_mode != GameSettings.NameMode.ORIGINAL:
+		printerr("SMOKE_FAIL default_card_name_mode=%s" % GameSettings.NameMode.keys()[GameSettings.card_name_mode])
+		get_tree().quit(1)
+		return
+	# 默认牌名解析结果；通过正式配置验证模式值会实际作用于前端显示名称。
+	if GameSettings.resolve_card_name(GameDatabase.get_card("sha")) != "杀":
+		printerr("SMOKE_FAIL default_card_name=%s" % GameSettings.resolve_card_name(GameDatabase.get_card("sha")))
+		get_tree().quit(1)
+		return
 	# 技能元数据数量；当前八名样例武将各登记一个用于技能 UI 预留的技能。
 	var skill_definition_count: int = GameDatabase.skills.size()
 	if skill_definition_count != 8:
