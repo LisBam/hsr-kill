@@ -59,6 +59,23 @@ func get_attack_range(player_id: int) -> int:
 	return maxi(int(definition.get("attack_range", 1)), 1)
 
 
+## 返回实体牌在当前状态下允许选择的最大目标数；方天画戟对最后一张手牌【杀】的加成在此统一计算。
+func get_maximum_target_count(actor_id: int, card: CardInstance) -> int:
+	if card == null:
+		return 0
+	# 当前卡牌定义；基础最大目标数由数据配置提供，缺失配置时按0处理。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 当前有效最大目标数；普通牌直接使用配置值，装备修正只通过本查询叠加。
+	var maximum_target_count: int = int(definition.get("max_targets", 0))
+	# 当前行动玩家；不存在时无法应用任何装备修正，但仍返回卡牌配置的基础值。
+	var actor: PlayerState = state.get_player(actor_id)
+	if actor == null:
+		return maximum_target_count
+	if card.definition_id in ["sha", "sha_fire", "sha_thunder"] and _has_equipment(actor, "fangtian") and card.zone == "hand" and actor.hand.size() == 1:
+		maximum_target_count += 2
+	return maximum_target_count
+
+
 ## 检查一条使用牌指令是否合法；返回空字符串表示通过，否则返回可直接显示的原因。
 func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> String:
 	# 使用者状态；死亡、越权或不存在的玩家均不能行动。
@@ -89,10 +106,8 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 		# 最少目标数；来自配置表并允许0目标的纯响应牌。
 		var min_targets: int = int(definition.get("min_targets", 0))
 		# 最多目标数；方天画戟的额外目标在专门分支中修正。
-		var max_targets: int = int(definition.get("max_targets", 0))
-		if card.definition_id == "sha" or card.definition_id == "sha_fire" or card.definition_id == "sha_thunder":
-			if _has_equipment(actor, "fangtian") and card.zone == "hand" and actor.hand.size() == 1:
-				max_targets += 2
+		# 当前专门分支封装在统一查询中，供权威校验与只读界面预览复用同一结果。
+		var max_targets: int = get_maximum_target_count(actor_id, card)
 		if target_ids.size() < min_targets or target_ids.size() > max_targets:
 			return "目标数量不符合卡牌规则。"
 

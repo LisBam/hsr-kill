@@ -51,6 +51,9 @@ var _fade_queue: Array[CardView] = []
 ## 当前是否已有顺序淡出任务运行；用于避免多次播放同时启动多个消费者。
 var _is_fade_worker_running: bool = false
 
+## 当前是否已安排下一帧启动淡出消费者；同一帧完成停留的牌会在消费者启动前组成完整批次。
+var _is_fade_worker_scheduled: bool = false
+
 ## 最近一次弃牌展示中心；新增或移除队列成员后以该坐标重新计算横向铺开位置。
 var _discard_center: Vector2 = Vector2.ZERO
 
@@ -140,7 +143,7 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	if not is_instance_valid(presented_card) or not _active_cards.has(presented_card):
 		return
 	_fade_queue.append(presented_card)
-	_drain_fade_queue()
+	_schedule_fade_drain()
 
 
 ## 播放一次牌区转移表现；可选堆叠键让同一批摸牌依次飞入并保留全部牌面。
@@ -243,35 +246,67 @@ func clear_presentations() -> void:
 	_line_presentations.clear()
 	_animated_card = null
 	_is_fade_worker_running = false
+	_is_fade_worker_scheduled = false
 	queue_redraw()
 
 
 ## 顺序淡出所有已经完成停留的卡牌；队列只运行一个消费者，保证多张牌逐个消失。
+## 当前消费者仍保持单一顺序入口，但把同一帧完成停留的牌合并为完整批次同时淡出。
+func _schedule_fade_drain() -> void:
+	if _is_fade_worker_running or _is_fade_worker_scheduled:
+		return
+	_is_fade_worker_scheduled = true
+	call_deferred("_drain_fade_queue")
+
+
+## 按批次淡出已经完成停留的卡牌；同一帧入队的牌保持顺序并同时完整显示、同时收尾。
 func _drain_fade_queue() -> void:
+	_is_fade_worker_scheduled = false
 	if _is_fade_worker_running:
+		return
+	if _fade_queue.is_empty():
 		return
 	_is_fade_worker_running = true
 	# 当前淡出任务代次；重新开局会递增全局代次，使本任务在下次等待结束后立即退出。
 	var worker_generation: int = _presentation_generation
 	while not _fade_queue.is_empty():
-		_animated_card = _fade_queue.pop_front()
-		if _animated_card == null or not is_instance_valid(_animated_card) or not _active_cards.has(_animated_card):
-			continue
+		# 当前待淡出的完整批次；消费者启动前进入队列的卡牌按原顺序一次性复制并清空等待队列。
+		var fade_batch: Array[CardView] = []
+		fade_batch.assign(_fade_queue.duplicate())
+		_fade_queue.clear()
 		# 当前淡出卡牌的表现序号；用于把该牌对应的目标线与牌面同时淡出并清理。
-		var sequence: int = int(_card_sequences.get(_animated_card.get_instance_id(), -1))
+		# 当前兼容动画牌引用；指向批次首牌，仅供现有调试与清场状态观察。
+		_animated_card = fade_batch[0] if not fade_batch.is_empty() else null
 		# 收尾补间；正式卡牌保持水平并淡出消失，目标指示线通常已在延伸后独立完成渐隐。
+		# 收尾补间；批次内所有正式牌保持水平并同时淡出，任何新入队牌留给下一轮批次。
 		var fade_tween: Tween = create_tween().set_parallel(true)
-		fade_tween.tween_property(_animated_card, "modulate:a", 0.0, target_line_fade_duration)
-		if sequence >= 0 and _line_presentations.has(sequence):
-			# 当前目标线透明度；防御性收尾仅处理尚未完成独立渐隐的异常或极短飞牌配置。
-			var current_line_alpha: float = float((_line_presentations[sequence] as Dictionary).get("alpha", 1.0))
-			fade_tween.tween_method(_set_line_alpha.bind(sequence), current_line_alpha, 0.0, target_line_fade_duration)
+		# 当前批次是否包含至少一张仍有效的动画牌；空批次无需等待无内容补间。
+		var has_valid_batch_card: bool = false
+		for fade_card: CardView in fade_batch:
+			if fade_card == null or not is_instance_valid(fade_card) or not _active_cards.has(fade_card):
+				continue
+			has_valid_batch_card = true
+			fade_tween.tween_property(fade_card, "modulate:a", 0.0, target_line_fade_duration)
+			# 当前淡出卡牌的表现序号；用于把仍未结束的目标线与牌面同时淡出并清理。
+			var sequence: int = int(_card_sequences.get(fade_card.get_instance_id(), -1))
+			if sequence >= 0 and _line_presentations.has(sequence):
+				# 当前目标线透明度；防御性收尾仅处理尚未完成独立渐隐的异常或极短飞牌配置。
+				var current_line_alpha: float = float((_line_presentations[sequence] as Dictionary).get("alpha", 1.0))
+				fade_tween.tween_method(_set_line_alpha.bind(sequence), current_line_alpha, 0.0, target_line_fade_duration)
+		if not has_valid_batch_card:
+			fade_tween.kill()
+			continue
 		await fade_tween.finished
 		if worker_generation != _presentation_generation:
 			return
-		if sequence >= 0:
-			_line_presentations.erase(sequence)
-		_remove_animated_card()
+		for fade_card: CardView in fade_batch:
+			if fade_card == null or not is_instance_valid(fade_card):
+				continue
+			# 当前完成淡出的表现序号；批量移除前先清理对应目标线索引。
+			var sequence: int = int(_card_sequences.get(fade_card.get_instance_id(), -1))
+			if sequence >= 0:
+				_line_presentations.erase(sequence)
+			_remove_presented_card(fade_card)
 		_reflow_active_cards(queue_reflow_duration)
 		queue_redraw()
 	_is_fade_worker_running = false
@@ -370,9 +405,17 @@ func _draw() -> void:
 func _remove_animated_card() -> void:
 	if _animated_card != null and is_instance_valid(_animated_card):
 		# 当前淡出卡牌实例 ID；用于同步清理移动补间与表现序号映射。
-		var card_instance_id: int = _animated_card.get_instance_id()
-		_active_cards.erase(_animated_card)
-		_motion_tweens.erase(card_instance_id)
-		_card_sequences.erase(card_instance_id)
-		_animated_card.queue_free()
+		_remove_presented_card(_animated_card)
 	_animated_card = null
+
+
+## 从中央展示队列移除指定正式牌面，并同步清理移动补间与表现序号索引。
+func _remove_presented_card(card_view: CardView) -> void:
+	if card_view == null or not is_instance_valid(card_view):
+		return
+	# 当前淡出卡牌实例 ID；作为全部动画索引的稳定清理键。
+	var card_instance_id: int = card_view.get_instance_id()
+	_active_cards.erase(card_view)
+	_motion_tweens.erase(card_instance_id)
+	_card_sequences.erase(card_instance_id)
+	card_view.queue_free()

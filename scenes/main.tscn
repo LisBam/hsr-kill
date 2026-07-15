@@ -507,7 +507,7 @@ theme_override_styles/panel = SubResource("StyleHandPanel")
 
 [node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
 layout_mode = 2
-horizontal_scroll_mode = 2
+horizontal_scroll_mode = 1
 vertical_scroll_mode = 0
 
 [node name="HandContainer" type="Container" parent="HandPanel/HandScroll" unique_id=176003051]

@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/judgment_zone_view.gd" id="1_script"]
+
+[node name="JudgmentZoneView" type="Control"]
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 22.0
+mouse_filter = 2
+script = ExtResource("1_script")
