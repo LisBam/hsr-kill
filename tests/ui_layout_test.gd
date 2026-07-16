@@ -48,6 +48,10 @@ func _run() -> void:
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
 	var equipment_panel: Control = main_instance.get_node("%EquipmentPanel") as Control
+	# 参考图装备面板固定规格；透明外层只负责提供130×147像素的五槽布局区域。
+	if not equipment_panel.size.is_equal_approx(Vector2(130.0, 147.0)):
+		_fail("equipment_panel_size:%s" % equipment_panel.size)
+		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
 	# 底部技能栏；右侧区域必须完整位于本地武将牌左侧并保持可见。
@@ -87,7 +91,11 @@ func _run() -> void:
 	var local_weapon_row: Button = local_equipment_label.get_row("weapon")
 	# 本地宝物横条；木牛流马存有3张“粮”，数量必须紧跟装备名写入牌面说明。
 	var local_treasure_row: Button = local_equipment_label.get_row("treasure")
-	if local_weapon_row == null or local_treasure_row == null or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or local_treasure_row.position.y - local_weapon_row.position.y <= local_equipment_label.equipment_row_height * 2.0:
+	# 本地空防具横条；即使没有装备也必须显示参考图中的深色槽位和类型图标。
+	var local_empty_armor_row: Button = local_equipment_label.get_row("armor")
+	# 五槽固定节距；武器到宝物应跨越4个完整的27像素槽高与3像素间距。
+	var local_equipment_row_pitch: float = local_equipment_label.equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
+	if local_weapon_row == null or local_treasure_row == null or local_empty_armor_row == null or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
 		_fail("local_equipment_stack:%s" % local_equipment_label.tooltip_text)
 		return
 	# 本地武将牌装备条；武器与宝物之间应按五个固定槽位保留三段空位，不得因中间槽位未装备而相邻显示。

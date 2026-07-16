@@ -122,9 +122,19 @@ func _run() -> void:
 	var equipment_stack: EquipmentStackView = main_instance.get_node("%EquipmentStack") as EquipmentStackView
 	# 可选武器横条；应向右移动配置距离并允许点击。
 	var weapon_row: Button = equipment_stack.get_row("weapon")
+	# 空防具横条；参考图要求空槽保留深色背景和类型图标，而不是完全留白或显示“无”。
+	var empty_armor_row: Button = equipment_stack.get_row("armor")
+	# 空进攻坐骑横条；与防具空槽使用相同固定高度和3像素间距。
+	var empty_offensive_mount_row: Button = equipment_stack.get_row("offensive_mount")
 	# 非候选防御坐骑横条；应保持基础横坐标并位于第四个固定槽位。
 	var defensive_mount_row: Button = equipment_stack.get_row("defensive_mount")
-	if selection_panel.visible or weapon_row == null or defensive_mount_row == null or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or defensive_mount_row.position.y - weapon_row.position.y <= equipment_stack.equipment_row_height * 1.8 or equipment_stack.get_row("treasure") != null or int(equipment_stack.get("_visible_slot_count")) != 4:
+	# 装备与空槽样式；已装备牌面必须明显亮于深色空槽背景。
+	var weapon_style: StyleBoxFlat = weapon_row.get_theme_stylebox("disabled") as StyleBoxFlat
+	# 空防具槽样式；用于和浅色装备牌面比较背景亮度。
+	var empty_armor_style: StyleBoxFlat = empty_armor_row.get_theme_stylebox("disabled") as StyleBoxFlat
+	# 参考图固定槽位节距；27像素槽高加3像素间距，运行时读取导出参数避免测试保存重复魔法数字。
+	var equipment_row_pitch: float = equipment_stack.equipment_row_height - equipment_stack.equipment_row_overlap + equipment_stack.equipment_row_gap
+	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or not is_equal_approx(equipment_stack.size.x, 130.0) or not is_equal_approx(equipment_stack.size.y, 147.0) or not is_equal_approx(weapon_row.size.y, 27.0) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - weapon_row.position.y, equipment_row_pitch * 3.0) or equipment_stack.is_slot_equipped("armor") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or equipment_stack.get_row("treasure") != null or int(equipment_stack.get("_visible_slot_count")) != 4:
 		_fail("equipment_inline_layout")
 		return
 	main_instance.call("_on_equipment_pressed", 7004)

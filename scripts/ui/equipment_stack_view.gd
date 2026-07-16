@@ -7,16 +7,26 @@ extends Control
 signal equipment_pressed(card_uid: int)
 
 ## 单张装备横条的显示高度；默认38像素让左下装备区在五槽布局中仍能清楚展示槽位、花色、点数和牌名，运行时通常无需动态修改。
-@export_range(24.0, 52.0, 1.0) var equipment_row_height: float = 38.0
+## 参考图紧凑布局使用27像素固定槽高，与 `equip_new.css` 的单槽规格一致。
+@export_range(22.0, 40.0, 1.0) var equipment_row_height: float = 27.0
 
 ## 相邻装备横条至少覆盖的高度；默认8像素形成与武将牌装备横条一致的叠牌层次，只影响表现且运行时通常无需动态修改。
-@export_range(0.0, 20.0, 1.0) var equipment_row_overlap: float = 8.0
+## 参考图的本地装备槽互不覆盖，因此默认值改为0；如需主题化叠牌仍可在检查器中增加该值。
+@export_range(0.0, 12.0, 1.0) var equipment_row_overlap: float = 0.0
+
+## 相邻装备槽的垂直间距；默认3像素复刻参考图的独立槽位分隔，运行时通常无需动态修改。
+@export_range(0.0, 12.0, 1.0) var equipment_row_gap: float = 3.0
 
 ## 可选装备向右移动的距离；默认12像素在左侧装备区与手牌区之间提供明确候选反馈，运行时可按界面间距调整。
-@export_range(0.0, 32.0, 1.0) var selectable_shift_distance: float = 12.0
+## 参考 CSS 的左侧布局使用10像素右移反馈，横条移动后仍与手牌区保留安全间距。
+@export_range(0.0, 24.0, 1.0) var selectable_shift_distance: float = 10.0
 
 ## 装备横条正文字体尺寸；默认14像素适合198像素宽的本地装备区，运行时通常无需动态修改。
-@export_range(10, 20, 1) var equipment_font_size: int = 14
+## 参考图紧凑横条使用13像素正文，保证130像素宽度内仍可显示花色、点数和牌名。
+@export_range(10, 18, 1) var equipment_font_size: int = 13
+
+## 槽位图标区域宽度；默认24像素让空槽和已装备槽的类型图标保持统一左对齐，运行时通常无需动态修改。
+@export_range(18.0, 36.0, 1.0) var slot_icon_width: float = 24.0
 
 ## 固定装备槽顺序；前四槽始终参与位置计算，宝物槽只在实际装备宝物时加入布局。
 const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
@@ -28,6 +38,15 @@ const EQUIPMENT_SLOT_NAMES: Dictionary = {
 	"offensive_mount":"进攻",
 	"defensive_mount":"防御",
 	"treasure":"宝物",
+}
+
+## 装备槽类型图标；使用项目字体可稳定渲染的符号表达武器、防具、进攻坐骑、防御坐骑和宝物。
+const EQUIPMENT_SLOT_ICONS: Dictionary = {
+	"weapon":"⚔",
+	"armor":"▣",
+	"offensive_mount":"♞+",
+	"defensive_mount":"♞-",
+	"treasure":"▰",
 }
 
 ## 当前本地装备快照；键为固定槽位 ID，值为裁剪后的实体牌字典。
@@ -74,11 +93,18 @@ func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Arra
 
 
 ## 返回指定槽位当前创建的装备横条；空槽返回 null，调用方可据此读取公开布局而不访问规则状态。
+## 当前可见空槽也会返回深色占位横条；只有尚未启用的宝物槽返回 null。
 func get_row(slot: String) -> Button:
 	return _rows_by_slot.get(slot) as Button
 
 
+## 返回指定槽位当前是否实际装备实体牌；空槽横条和隐藏宝物槽都返回 false。
+func is_slot_equipped(slot: String) -> bool:
+	return _equipment.has(slot)
+
+
 ## 清理旧横条并按固定槽位顺序重建现有装备；没有装备的槽位不生成占位节点。
+## 参考图布局会为全部可见槽位生成深色空态；宝物槽仍按项目规则只在实际装备宝物时创建。
 func _rebuild_rows() -> void:
 	for row_variant: Variant in _rows_by_slot.values():
 		# 旧装备横条；配置变化时立即从树中移除，避免名称模式切换期间短暂显示重复牌面。
@@ -92,8 +118,8 @@ func _rebuild_rows() -> void:
 	for slot: String in EQUIPMENT_SLOT_ORDER:
 		if slot == "treasure" and _visible_slot_count < 5:
 			continue
-		if not _equipment.has(slot):
-			continue
+		# 当前槽位是否实际装备实体牌；空槽继续创建深色背景与类型图标，但不接受选择输入。
+		var is_equipped: bool = _equipment.has(slot)
 		# 当前槽位装备快照；只读取稳定 UID、定义 ID、花色和点数生成牌面横条。
 		var equipment_card: Dictionary = _equipment.get(slot, {}) as Dictionary
 		# 当前装备实体 UID；负数数据仍可展示，但不会进入可交互候选集合。
@@ -109,7 +135,7 @@ func _rebuild_rows() -> void:
 		# 当前装备是否已被临时选中；选中状态优先使用金色边框。
 		var is_selected: bool = _selected_uids.has(card_uid)
 		# 单张装备横条按钮；按钮只承接点击，具体花色点数与牌名由子级富文本绘制。
-		var equipment_row: Button = _create_equipment_row(slot, equipment_card, card_definition, equipment_name, is_candidate, is_selected)
+		var equipment_row: Button = _create_equipment_row(slot, equipment_card, card_definition, equipment_name, is_equipped, is_candidate, is_selected)
 		equipment_row.pressed.connect(_on_equipment_row_pressed.bind(card_uid))
 		add_child(equipment_row)
 		_rows_by_slot[slot] = equipment_row
@@ -117,7 +143,7 @@ func _rebuild_rows() -> void:
 
 
 ## 创建单张叠放装备横条；样式与武将牌装备条共享浅色纸张、暗金边和花色点数表达。
-func _create_equipment_row(slot: String, equipment_card: Dictionary, card_definition: Dictionary, equipment_name: String, is_candidate: bool, is_selected: bool) -> Button:
+func _create_equipment_row(slot: String, equipment_card: Dictionary, card_definition: Dictionary, equipment_name: String, is_equipped: bool, is_candidate: bool, is_selected: bool) -> Button:
 	# 装备横条按钮；禁用状态仍使用正常纸张样式，只通过位置和描边表达候选状态。
 	var equipment_row: Button = Button.new()
 	equipment_row.focus_mode = Control.FOCUS_NONE
@@ -127,37 +153,50 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if is_candidate else Color("8d7147"))
 	# 装备横条普通描边宽度；候选或选中使用2像素，静态装备使用1像素。
 	var border_width: int = 2 if is_candidate or is_selected else 1
+	# 装备横条基础纸色；已装备槽使用参考图浅米色牌面，空槽使用深胡桃色背景。
+	var row_background_color: Color = Color("e4cfa6") if is_equipped else Color("352620e8")
+	# 装备横条基础边框；候选与选中仍优先使用状态色，普通槽位使用低亮度暗金边。
+	var row_border_color: Color = border_color if is_candidate or is_selected else (Color("5a3221") if is_equipped else Color("8d7147a6"))
 	# 装备横条普通样式；内容边距归零，富文本可完整使用按钮矩形。
-	var normal_style: StyleBoxFlat = _make_row_style(Color("dfd2adf2"), border_color, border_width)
+	var normal_style: StyleBoxFlat = _make_row_style(row_background_color, row_border_color, border_width)
 	# 装备横条悬停样式；只为可交互候选轻微提亮纸张，不改变横条尺寸。
-	var hover_style: StyleBoxFlat = _make_row_style(Color("eee1bff7"), border_color, border_width)
+	var hover_style: StyleBoxFlat = _make_row_style(Color("f0ddb5"), row_border_color, border_width)
 	equipment_row.add_theme_stylebox_override("normal", normal_style)
 	equipment_row.add_theme_stylebox_override("disabled", normal_style)
 	equipment_row.add_theme_stylebox_override("focus", normal_style)
 	equipment_row.add_theme_stylebox_override("hover", hover_style)
 	equipment_row.add_theme_stylebox_override("pressed", hover_style)
-	# 装备完整说明；悬停时同时展示槽位、当前名称和卡牌规则描述。
-	equipment_row.tooltip_text = "%s｜%s\n%s" % [str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")), equipment_name, str(card_definition.get("description", ""))]
+	# 装备完整说明；悬停时同时展示槽位、当前名称和卡牌规则描述，空槽只说明槽位名称。
+	equipment_row.tooltip_text = ("%s｜%s\n%s" % [str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")), equipment_name, str(card_definition.get("description", ""))]) if is_equipped else str(EQUIPMENT_SLOT_NAMES.get(slot, "装备"))
+	# 槽位类型图标；空槽与已装备槽共用相同左侧位置，避免牌面变化时文字横向跳动。
+	var slot_icon: Label = Label.new()
+	slot_icon.position = Vector2.ZERO
+	slot_icon.size = Vector2(slot_icon_width, equipment_row_height)
+	slot_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot_icon.text = str(EQUIPMENT_SLOT_ICONS.get(slot, "◇"))
+	slot_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	slot_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	slot_icon.add_theme_font_size_override("font_size", 13)
+	slot_icon.add_theme_color_override("font_color", Color("4a3929") if is_equipped else Color("9b8a70"))
+	equipment_row.add_child(slot_icon)
 	# 装备横条富文本；花色点数保留红黑色，槽位和牌名使用深褐色并居中显示。
 	var equipment_text: RichTextLabel = RichTextLabel.new()
+	equipment_text.position = Vector2(slot_icon_width, 0.0)
+	equipment_text.size = Vector2.ZERO
 	equipment_text.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	equipment_text.offset_left = slot_icon_width
 	equipment_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	equipment_text.bbcode_enabled = true
 	equipment_text.fit_content = false
 	equipment_text.scroll_active = false
+	equipment_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_text.add_theme_font_size_override("normal_font_size", equipment_font_size)
-	equipment_text.add_theme_color_override("default_color", Color("33281e"))
+	equipment_text.add_theme_color_override("default_color", Color("33281e") if is_equipped else Color("9b8a70"))
 	# 当前装备花色；红桃和方片使用朱红色，其余花色使用近黑色。
 	var suit: String = str(equipment_card.get("suit", "none"))
 	# 当前装备点数；A、J、Q、K使用标准牌面字符，无有效点数时保持空白。
 	var rank: int = int(equipment_card.get("rank", 0))
-	equipment_text.text = "[center][color=66543d]%s[/color]  [color=%s]%s%s[/color]  %s[/center]" % [
-		str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")),
-		_suit_color(suit).to_html(false),
-		_suit_symbol(suit),
-		_rank_text(rank),
-		equipment_name,
-	]
+	equipment_text.text = ("[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]) if is_equipped else ""
 	equipment_row.add_child(equipment_text)
 	return equipment_row
 
@@ -166,16 +205,14 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 func _layout_rows() -> void:
 	if size.x <= 0.0 or size.y <= 0.0:
 		return
-	# 当前槽位间可用纵向距离；宝物出现后会自动缩短间距以让五张横条完整留在同一区域。
-	var available_pitch: float = (size.y - equipment_row_height) / float(maxi(_visible_slot_count - 1, 1))
-	# 当前实际纵向间距；不超过配置的叠牌间距，窄区域中允许增加覆盖但不改变槽位顺序。
-	var row_pitch: float = minf(equipment_row_height - equipment_row_overlap, available_pitch)
-	# 当前整组装备占用高度；用于在没有宝物的四槽布局中保持垂直居中。
+	# 当前槽位间可用纵向距离；参考图以固定槽高、可配置覆盖量和3像素间隔组成稳定节距。
+	var row_pitch: float = equipment_row_height - equipment_row_overlap + equipment_row_gap
+	# 当前整组装备占用高度；用于在没有宝物的四槽布局中保持底部对齐。
 	var total_height: float = equipment_row_height + float(_visible_slot_count - 1) * row_pitch
-	# 第一槽纵坐标；剩余空间平均留在上下两端，宝物出现后会随五槽总高自动调整。
-	var start_y: float = maxf((size.y - total_height) * 0.5, 0.0)
-	# 装备横条基础宽度；右侧永久预留候选移动距离，移动后仍不会侵入相邻手牌区。
-	var row_width: float = maxf(size.x - selectable_shift_distance, 1.0)
+	# 第一槽纵坐标；四槽与五槽都贴齐装备栏底边，宝物出现时整组向上扩展一行。
+	var start_y: float = maxf(size.y - total_height, 0.0)
+	# 装备横条基础宽度；参考图使用装备栏完整宽度，候选位移会向右溢出但仍留在手牌安全间距内。
+	var row_width: float = maxf(size.x, 1.0)
 	for slot: String in EQUIPMENT_SLOT_ORDER:
 		if not _rows_by_slot.has(slot):
 			continue
@@ -205,7 +242,7 @@ func _on_equipment_row_pressed(card_uid: int) -> void:
 ## 创建装备横条纸张样式；统一清空内容边距，避免动态宽度变化挤压富文本。
 func _make_row_style(background_color: Color, border_color: Color, border_width: int) -> StyleBoxFlat:
 	# 装备横条样式；窄圆角与武将牌横条一致，叠放后仍保留清晰牌边。
-	var row_style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, 3)
+	var row_style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, 0)
 	row_style.content_margin_left = 0.0
 	row_style.content_margin_top = 0.0
 	row_style.content_margin_right = 0.0
