@@ -44,6 +44,15 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 当前模拟客户区矩形；直接使用主场景尺寸，覆盖编辑器嵌入运行未应用画布拉伸的情况。
 	var viewport_rect: Rect2 = Rect2(main_instance.position, main_instance.size)
+	# 左上角三行对局信息；只允许显示轮数、牌堆剩余与对局时长，不再混入行动角色或阶段。
+	var round_label: Label = main_instance.get_node("%PhaseLabel") as Label
+	# 左上角牌堆标签；只显示当前摸牌堆剩余数量。
+	var draw_pile_label: Label = main_instance.get_node("%CenterTurnLabel") as Label
+	# 左上角时长标签；按“对局时长：分:秒”格式持续刷新。
+	var match_duration_label: Label = main_instance.get_node("%CenterPhaseLabel") as Label
+	if round_label.text != "第3轮" or draw_pile_label.text != "牌堆剩余：121" or not match_duration_label.text.begins_with("对局时长：") or round_label.text.contains("玩家") or draw_pile_label.text.contains("阶段"):
+		_fail("top_info:%s/%s/%s" % [round_label.text, draw_pile_label.text, match_duration_label.text])
+		return
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
@@ -153,6 +162,17 @@ func _run() -> void:
 	var expected_opponent_order: Array = [5, 6, 7, 8, 9, 0, 1, 2, 3]
 	if player_views.keys() != expected_opponent_order:
 		_fail("opponent_relative_order:%s" % [player_views.keys()])
+		return
+	# 当前回合角色牌；0号玩家必须保留3像素亮金边框，即使当前实际等待5号玩家操作。
+	var current_turn_view: PlayerTargetView = player_views.get(0) as PlayerTargetView
+	# 当前操作角色牌；5号玩家通过选择请求 actor 高亮，并与当前回合金边语义分离。
+	var current_operator_view: PlayerTargetView = player_views.get(5) as PlayerTargetView
+	# 当前回合角色最终面板样式；用于验证亮金边框颜色与3像素宽度。
+	var current_turn_style: StyleBoxFlat = (current_turn_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
+	# 当前操作角色最终面板样式；用于验证14像素青绿色外发光。
+	var current_operator_style: StyleBoxFlat = (current_operator_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
+	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.ACCENT_COLOR or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_size != 14:
+		_fail("player_operation_highlight")
 		return
 	# 首次渲染的玩家 ID 到座位节点实例 ID；重复快照后用于确认没有整桌释放重建。
 	var opponent_instance_ids: Dictionary = {}
@@ -524,6 +544,8 @@ func _make_ten_player_snapshot() -> Dictionary:
 		"players":players,
 		"current_player_id":0,
 		"current_phase":"setup",
+		"current_choice_request":{"request_id":77, "actor_id":5},
+		"round_number":3,
 		"turn_number":1,
 		"draw_pile_count":121,
 		"discard_pile_count":0,

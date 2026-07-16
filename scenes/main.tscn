@@ -181,8 +181,8 @@ stretch_mode = 6
 layout_mode = 0
 offset_left = 18.0
 offset_top = 18.0
-offset_right = 122.0
-offset_bottom = 108.0
+offset_right = 174.0
+offset_bottom = 102.0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="TopInfoVBox" type="VBoxContainer" parent="TopInfoPanel" unique_id=251580000]
@@ -193,21 +193,21 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
 theme_override_font_sizes/font_size = 13
-text = "等待开局"
+text = "第0轮"
 horizontal_alignment = 1
 
 [node name="CenterTurnLabel" type="Label" parent="TopInfoPanel/TopInfoVBox" unique_id=414947185]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
-text = "第0回合"
+text = "牌堆剩余：0"
 horizontal_alignment = 1
 
 [node name="CenterPhaseLabel" type="Label" parent="TopInfoPanel/TopInfoVBox" unique_id=703788185]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.56, 0.84, 0.73, 1)
-text = "准备"
+text = "对局时长：00:00"
 horizontal_alignment = 1
 
 [node name="MatchMenu" type="Control" parent="." unique_id=822365686]
@@ -589,6 +589,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("14_character_selection")
+candidate_gap = 14.0
 
 [node name="SelectionShade" type="ColorRect" parent="CharacterSelectionPanel" unique_id=1779437543]
 layout_mode = 1
@@ -629,6 +630,7 @@ horizontal_alignment = 1
 
 [node name="CharacterSelectionStatus" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1416584960]
 unique_name_in_owner = true
+visible = false
 layout_mode = 0
 offset_left = 24.0
 offset_top = 58.0
@@ -638,12 +640,34 @@ theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
 text = "从五张候选武将牌中选择一张"
 horizontal_alignment = 1
 
+[node name="LordCharacterLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 40.0
+offset_top = 74.0
+offset_right = 188.35
+offset_bottom = 100.0
+theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
+theme_override_font_sizes/font_size = 16
+text = "主公"
+horizontal_alignment = 1
+
+[node name="LordCharacterArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 40.0
+offset_top = 106.0
+offset_right = 188.35
+offset_bottom = 303.8
+
 [node name="CharacterCandidateArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1250766479]
 unique_name_in_owner = true
 anchors_preset = 0
-offset_left = 40.0
+offset_left = 214.0
 offset_top = 106.0
-offset_right = 1000.0
+offset_right = 1016.0
 offset_bottom = 304.0
 
 [node name="ConfirmCharacterButton" type="Button" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1555114007]

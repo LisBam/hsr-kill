@@ -82,6 +82,10 @@ var _category_color: Color = Color("a44e43")
 ## 当前是否处于鼠标悬停状态；只用于决定纸张亮度和缩放表现。
 var _is_hovered: bool = false
 
+## 禁用输入时是否同时应用深灰视觉；默认开启，公共只读展示可关闭以保留完整牌面亮度。
+## 该值只影响表现，不会让只读牌重新接收点击、悬停或拖拽输入。
+var _dim_when_disabled: bool = true
+
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
 
@@ -152,15 +156,16 @@ func is_hovered_in_hand() -> bool:
 
 
 ## 写入牌面快照和定义；该方法不保存完整对局状态，可在每次快照重建时安全调用。
-func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool) -> void:
+func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool, dim_when_disabled: bool = true) -> void:
 	# 本次完整配置签名；包含全局名称模式，切换牌名后即使实体状态不变也会正确刷新。
-	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, GameSettings.card_name_mode])
+	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, dim_when_disabled, GameSettings.card_name_mode])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
 	card_uid = int(card.get("uid", -1))
 	is_wooden_ox_card = wooden_ox_card
 	is_interactable = interactable
+	_dim_when_disabled = dim_when_disabled
 	is_face_down = false
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
 	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
@@ -192,6 +197,7 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	card_uid = entity_uid
 	is_wooden_ox_card = false
 	is_interactable = interactable
+	_dim_when_disabled = true
 	is_face_down = true
 	if is_node_ready():
 		_input_area.tooltip_text = "不可见手牌"
@@ -257,14 +263,14 @@ func _refresh_visual_state() -> void:
 	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
 	# 内容调制色；禁用牌会统一压暗插画、占位图和文字，避免只有纸张边缘发生轻微变化。
 	var content_modulate: Color = Color.WHITE
-	if not is_interactable:
+	if not is_interactable and _dim_when_disabled:
 		paper_color = paper_color.darkened(disabled_darkening)
 		border_color = Color("655b50")
 		content_modulate = disabled_content_modulate
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
 	if not (get_parent() is DecadeHandContainer):
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
-	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable else _category_color
+	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable and _dim_when_disabled else _category_color
 	_artwork_rect.modulate = content_modulate
 	_artwork_placeholder.modulate = content_modulate
 	_corner_label.modulate = content_modulate

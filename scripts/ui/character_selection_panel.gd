@@ -21,6 +21,12 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 候选武将牌承载区域；只负责提供局部坐标，牌面根节点保持 Node2D 类型。
 @onready var _candidate_area: Control = %CharacterCandidateArea
 
+## 主公武将牌承载区域；主公确认后固定显示在选将框左侧，不参与候选点击或提交。
+@onready var _lord_character_area: Control = %LordCharacterArea
+
+## 主公武将牌标题；仅在主公已经亮将时显示，用于说明左侧只读牌面归属。
+@onready var _lord_character_label: Label = %LordCharacterLabel
+
 ## 选将确认按钮；只有已临时选中候选且规则快照允许选择时才可用。
 @onready var _confirm_button: Button = %ConfirmCharacterButton
 
@@ -33,11 +39,17 @@ var _selected_character_id: String = ""
 ## 当前候选武将 ID 到正式武将牌视图的映射；只用于同步金色选中边框。
 var _candidate_views: Dictionary = {}
 
+## 当前左侧主公武将牌视图；主公尚未确认或选将界面关闭时为 null。
+var _lord_character_view: PlayerTargetView
+
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
 	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_confirm_selection)
+	_status_label.visible = false
+	_lord_character_label.visible = false
+	_lord_character_area.visible = false
 	visible = false
 
 
@@ -49,6 +61,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	if not visible:
 		return
 	_render_header()
+	_render_lord_character()
 	_render_candidates()
 	_confirm_button.disabled = true
 
@@ -57,11 +70,13 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 func close() -> void:
 	visible = false
 	_clear_candidates()
+	_clear_lord_character()
 	_snapshot.clear()
 	_selected_character_id = ""
 
 
 ## 渲染阶段标题、公开主公武将与其他玩家完成数量。
+## 当前界面只保留阶段标题；公开主公武将由左侧正式牌面表达，确认进度文本保持隐藏。
 func _render_header() -> void:
 	# 当前选将阶段；决定本地是主公选择、其他玩家同时选择还是等待全员完成。
 	var phase: String = str(_snapshot.get("phase", ""))
@@ -69,24 +84,44 @@ func _render_header() -> void:
 	var can_select: bool = bool(_snapshot.get("can_select", false))
 	if phase == CharacterSelectionService.PHASE_LORD:
 		_title_label.text = "主公选将"
-		_status_label.text = "主公先从候选武将牌中选择，确认后立即亮出。" if can_select else "等待主公选择并亮出武将。"
 	else:
-		_title_label.text = "同时选将"
-		# 已公开主公武将 ID；空字符串只会出现在异常快照中，显示稳定占位文本。
-		var lord_character_id: String = str(_snapshot.get("lord_character_id", ""))
-		# 已完成玩家数量；只公开确认状态，不展示其他玩家选择的武将 ID。
-		var ready_count: int = 0
-		# 选将玩家总数；等于 readiness 数组长度，供进度文字完整显示。
-		var total_count: int = (_snapshot.get("readiness", []) as Array).size()
-		for readiness_variant: Variant in _snapshot.get("readiness", []):
-			if bool((readiness_variant as Dictionary).get("ready", false)):
-				ready_count += 1
-		_status_label.text = "主公已亮出【%s】｜其他玩家同时选择，完成 %d/%d%s" % [
-			GameDatabase.resolve_character_name(lord_character_id),
-			ready_count,
-			total_count,
-			"" if can_select else "｜等待全员同时亮出",
-		]
+		_title_label.text = "选择武将" if can_select else "等待其他玩家选将"
+	_status_label.text = ""
+
+
+## 在选将框左侧渲染已经公开的主公武将牌；主公阶段尚未确认时保持该区域隐藏。
+func _render_lord_character() -> void:
+	_clear_lord_character()
+	# 已公开主公武将 ID；空字符串表示主公尚未完成选择，不创建占位牌。
+	var lord_character_id: String = str(_snapshot.get("lord_character_id", ""))
+	if lord_character_id.is_empty():
+		return
+	# 主公武将定义；用于左侧正式牌面的体力、势力、名称与插画。
+	var character_definition: Dictionary = GameDatabase.get_character(lord_character_id)
+	# 主公势力定义；只提供牌面主题，不参与身份或阵营判定。
+	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
+	_lord_character_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	_lord_character_area.add_child(_lord_character_view)
+	# 主公只读牌面快照；不显示手牌数与对局装备，只表达已公开的武将选择。
+	var lord_snapshot: Dictionary = {
+		"player_id":int(_snapshot.get("lord_player_id", -1)),
+		"display_name":"主公",
+		"character_id":lord_character_id,
+		"character_revealed":true,
+		"identity":"lord",
+		"hp":int(character_definition.get("max_hp", 4)),
+		"max_hp":int(character_definition.get("max_hp", 4)),
+		"alive":true,
+		"chained":false,
+		"hand_count":0,
+		"equipment":{},
+		"judgment_area":[],
+		"wooden_ox_storage_count":0,
+	}
+	_lord_character_view.configure_snapshot(lord_snapshot, character_definition, false, faction_definition)
+	_lord_character_view.set_operation_state(false)
+	_lord_character_area.visible = true
+	_lord_character_label.visible = true
 
 
 ## 使用正式 Node2D 武将牌横向排列本地候选；候选数量由快照决定，可从默认5张继续扩展。
@@ -98,6 +133,7 @@ func _render_candidates() -> void:
 		_confirm_button.visible = false
 		return
 	_confirm_button.visible = true
+	_confirm_button.text = "请选择武将牌"
 	for candidate_index: int in range(candidate_ids.size()):
 		# 当前候选武将 ID；点击与确认只使用该稳定 ID。
 		var character_id: String = str(candidate_ids[candidate_index])
@@ -169,4 +205,14 @@ func _clear_candidates() -> void:
 	_candidate_views.clear()
 	for child: Node in _candidate_area.get_children():
 		_candidate_area.remove_child(child)
+		child.queue_free()
+
+
+## 清理左侧主公武将牌；阶段切换和重新开局时不会保留旧局节点。
+func _clear_lord_character() -> void:
+	_lord_character_view = null
+	_lord_character_area.visible = false
+	_lord_character_label.visible = false
+	for child: Node in _lord_character_area.get_children():
+		_lord_character_area.remove_child(child)
 		child.queue_free()

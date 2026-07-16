@@ -14,6 +14,15 @@ var _active_play_request_id: int = -1
 ## 测试是否已经进入终态；异步回调与失败出口共用该标记防止重复退出。
 var _finished: bool = false
 
+## 是否已经在首个五谷选择请求前收到固定公共牌位；用于验证使用后立即展示窗口。
+var _saw_initial_public_display: bool = false
+
+## 是否看到本地玩家领取后仍保留原牌位并写入领取者 ID；用于验证复制虚影所需权威数据。
+var _saw_taken_public_slot: bool = false
+
+## 是否在五谷全部结算后收到公共展示清理信号；用于防止窗口永久残留到后续阶段。
+var _saw_public_display_cleared: bool = false
+
 
 ## 延迟执行完整回归，确保自动加载数据与控制器子节点已经完成初始化。
 func _ready() -> void:
@@ -38,6 +47,7 @@ func _run() -> void:
 	_controller.add_child(network_gateway)
 	add_child(_controller)
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
+	_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
 	_controller.ai_action_delay_seconds = 0.0
@@ -76,6 +86,9 @@ func _run() -> void:
 	if _local_harvest_choice_count != 1:
 		_fail("local_choice_count=%d" % _local_harvest_choice_count)
 		return
+	if not _saw_initial_public_display or not _saw_taken_public_slot or not _saw_public_display_cleared:
+		_fail("public_display=%s/%s/%s" % [_saw_initial_public_display, _saw_taken_public_slot, _saw_public_display_cleared])
+		return
 	if _controller.state.processing_area.has(parent_card) or not _controller.state.discard_pile.has(parent_card):
 		_fail("parent_not_finalized")
 		return
@@ -94,6 +107,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if int(choice_data.get("request_id", -1)) == _active_play_request_id:
 		_fail("request_id_collision=%d" % _active_play_request_id)
 		return
+	if not _saw_initial_public_display:
+		_fail("choice_before_public_display")
+		return
 	# 当前展示候选；五谷强制单选，因此候选不能为空。
 	var candidates: Array = choice_data.get("candidates", []) as Array
 	if candidates.is_empty():
@@ -101,6 +117,31 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		return
 	_local_harvest_choice_count += 1
 	call_deferred("_submit_harvest_choice", choice_data.duplicate(true))
+
+
+## 记录五谷公共展示生命周期；牌位数量固定为2，领取后只改变归属字段，不删除原牌位。
+func _on_public_card_choice_display_changed(display_data: Dictionary) -> void:
+	if display_data.is_empty():
+		_saw_public_display_cleared = true
+		return
+	if str(display_data.get("kind", "")) != "harvest":
+		return
+	# 固定公共牌位；两人五谷从开始到结束都应保留最初亮出的2个位置。
+	var display_slots: Array = display_data.get("slots", []) as Array
+	if display_slots.size() != 2:
+		_fail("public_slot_count=%d" % display_slots.size())
+		return
+	# 当前快照已领取牌位数量；初始应为0，本地选择完成后至少出现1个归属。
+	var taken_count: int = 0
+	for slot_variant: Variant in display_slots:
+		# 当前牌位归属；初始为-1，本地领取后其中恰好一项变为0。
+		var taken_by_player_id: int = int((slot_variant as Dictionary).get("taken_by_player_id", -1))
+		if taken_by_player_id >= 0:
+			taken_count += 1
+			if taken_by_player_id == 0:
+				_saw_taken_public_slot = true
+	if taken_count == 0:
+		_saw_initial_public_display = true
 
 
 ## 把模拟点击转换为标准 choose_cards 动作；返回 false 表示窗口与权威运行时请求不一致。

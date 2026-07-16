@@ -22,7 +22,7 @@ AI 不持有 `GameState` 的可变引用。每次需要行动时，控制器执�
 
 运行时层把上述兼容动作转换为 `ChoiceResponse`。`AICoordinator.request_choice()` 返回与本地和网络完全相同的请求 ID、事件 ID、actor、confirmed、实体牌 UID 和 source 字段；AI 不需要知道 `GameEvent` 的 Callable 或控制器对象。超时托管只需把 source 改为 `timeout`，规则校验路径不变。
 
-弃牌阶段、火攻展示与弃牌、过河拆桥、顺手牵羊、五谷丰登和其他区域选牌也使用相同的请求协议。候选完全属于本人手牌或木牛“粮”时由桌面手牌区维护临时 UID 选择，其他区域由 `CardSelectionPanel` 展示正面或牌背；两者都只发出提交信号，不直接修改 `GameState`。
+弃牌阶段、火攻展示与弃牌、过河拆桥、顺手牵羊、五谷丰登和其他区域选牌也使用相同的请求协议。候选完全属于本人手牌或木牛“粮”时由桌面手牌区维护临时 UID 选择，其他区域由 `CardSelectionPanel` 展示正面或牌背；两者都只发出提交信号，不直接修改 `GameState`。五谷的 AI 仍按可调响应时间提交标准 `choose_cards` 动作，但公共窗口不会因当前选择者是 AI 而关闭；权威 `public_card_choice_display` 会持续公开固定牌位和已领取归属，AI 只能从当前请求仍允许的 UID 中选择。
 
 ## 替换策略
 

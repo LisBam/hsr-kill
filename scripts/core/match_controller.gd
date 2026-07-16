@@ -20,6 +20,9 @@ signal card_animation_ownership_reset_requested(card_uid: int)
 ## 统一选择请求信号；玩家和 AI 都必须先收到询问，再提交 choose_cards 动作。
 signal card_choice_requested(choice_data: Dictionary)
 
+## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
+signal public_card_choice_display_changed(display_data: Dictionary)
+
 ## 选将快照变化信号；只包含观察者可见候选、公开主公武将和全员确认状态。
 signal character_selection_changed(snapshot: Dictionary)
 
@@ -774,6 +777,24 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		}
 		submit_action(fallback_action)
 	return _resolved_card_choice_uids.duplicate()
+
+
+## 写入一份全体观察者可见的公共选牌展示；规则卡牌负责生成牌位与归属，界面只消费序列化副本。
+func set_public_card_choice_display(display_data: Dictionary) -> void:
+	if state == null:
+		return
+	state.public_card_choice_display = display_data.duplicate(true)
+	public_card_choice_display_changed.emit(state.public_card_choice_display.duplicate(true))
+
+
+## 清理指定类型的公共选牌展示；kind 为空时无条件清理，避免旧卡牌结算误关同步创建的新展示。
+func clear_public_card_choice_display(kind: String = "") -> void:
+	if state == null or state.public_card_choice_display.is_empty():
+		return
+	if not kind.is_empty() and str(state.public_card_choice_display.get("kind", "")) != kind:
+		return
+	state.public_card_choice_display.clear()
+	public_card_choice_display_changed.emit({})
 
 
 ## 安排一条 AI 选牌响应；与普通 AI 出牌共用延迟参数，但使用请求 ID 防止旧窗口在新请求中误提交。
@@ -3567,6 +3588,7 @@ func _check_game_over() -> void:
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
 	_pending_card_choice.clear()
+	state.public_card_choice_display.clear()
 	for player: PlayerState in state.players:
 		player.identity_revealed = true
 	_record_runtime_event("GameEndEvent", "game_end", {"reason":state.end_reason}, {"winner":winner})
@@ -3586,6 +3608,7 @@ func _end_match_as_draw(reason: String) -> void:
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
 	_pending_card_choice.clear()
+	state.public_card_choice_display.clear()
 	_record_runtime_event("GameEndEvent", "game_end", {"reason":reason}, {"winner":"draw"})
 	event_scheduler.abort_all("game_over:%s" % reason)
 	add_log("摸牌堆与弃牌堆均为空，对局以平局结束。")

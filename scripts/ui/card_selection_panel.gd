@@ -18,6 +18,18 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 选择面板最大高度；默认590像素确保1280×720视口仍保留外侧边距，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var panel_max_height: float = 590.0
 
+## 全屏背景滤镜颜色；默认沿用深色强遮罩，正式主场景可在检查器中覆盖为更浅透明度。
+@export var shade_color: Color = Color(0.01, 0.008, 0.006, 0.78)
+
+## 已领取公共牌的复制虚影调制色；默认保留48%透明度，确保原始牌面仍可辨认但不会与剩余候选混淆。
+@export var taken_card_ghost_modulate: Color = Color(0.72, 0.72, 0.72, 0.48)
+
+## 已领取牌底部武将名标签背景色；默认使用高不透明暖黑色保证浅色牌面上的文字可读。
+@export var taken_card_label_background_color: Color = Color("241c18e8")
+
+## 已领取牌底部武将名标签矩形；固定贴合111×148像素牌面的下沿，不改变牌位尺寸或换行结果。
+const TAKEN_CARD_LABEL_RECT: Rect2 = Rect2(4.0, 118.0, 103.0, 26.0)
+
 ## 当前请求只读快照；空字典表示面板已关闭。
 var _choice_request: Dictionary = {}
 
@@ -26,6 +38,12 @@ var _selected_card_uids: Array[int] = []
 
 ## 实体牌 UID 到正式卡牌视图的映射；用于同步金色选中描边。
 var _card_views: Dictionary = {}
+
+## 当前允许本地点击的实体牌 UID；公共展示中的复制虚影和旁观牌位不会进入该集合。
+var _selectable_card_uids: Array[int] = []
+
+## 当前公共选牌展示只读快照；空字典表示使用普通一次性选择窗口。
+var _public_display: Dictionary = {}
 
 ## 半透明全屏遮罩；阻止请求期间点击牌桌的其他操作。
 var _shade: ColorRect
@@ -48,6 +66,9 @@ var _confirm_button: Button
 ## 放弃按钮；只有请求允许0张牌或明确允许取消时显示。
 var _cancel_button: Button
 
+## 底部操作行；公共展示对非选择者保持隐藏，避免只读窗口出现无效按钮占位。
+var _action_row: HBoxContainer
+
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
@@ -55,7 +76,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shade = ColorRect.new()
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_shade.color = Color(0.01, 0.008, 0.006, 0.78)
+	_shade.color = shade_color
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_shade)
 	_frame = PanelContainer.new()
@@ -88,30 +109,32 @@ func _ready() -> void:
 	_zone_container.add_theme_constant_override("separation", 12)
 	scroll.add_child(_zone_container)
 	# 底部操作行；确定和放弃始终位于固定位置，不随候选数量移动。
-	var action_row: HBoxContainer = HBoxContainer.new()
-	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	action_row.add_theme_constant_override("separation", 10)
-	content.add_child(action_row)
+	_action_row = HBoxContainer.new()
+	_action_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_action_row.add_theme_constant_override("separation", 10)
+	content.add_child(_action_row)
 	_confirm_button = Button.new()
 	_confirm_button.text = "确定"
 	_confirm_button.custom_minimum_size = Vector2(132.0, 40.0)
 	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_on_confirm_pressed)
-	action_row.add_child(_confirm_button)
+	_action_row.add_child(_confirm_button)
 	_cancel_button = Button.new()
 	_cancel_button.text = "不选择"
 	_cancel_button.custom_minimum_size = Vector2(96.0, 40.0)
 	BattleUIStyle.apply_interaction_button(_cancel_button)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
-	action_row.add_child(_cancel_button)
+	_action_row.add_child(_cancel_button)
 	visible = false
 
 
 ## 显示一条规则层选择请求；重复调用会完整替换旧候选和本地临时选择。
 func show_request(choice_request: Dictionary) -> void:
 	_choice_request = choice_request.duplicate(true)
+	_public_display.clear()
 	_selected_card_uids.clear()
 	_card_views.clear()
+	_selectable_card_uids.clear()
 	_clear_container(_zone_container)
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
 	_prompt_label.text = str(_choice_request.get("prompt", "请选择卡牌"))
@@ -119,6 +142,10 @@ func show_request(choice_request: Dictionary) -> void:
 	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[]}
 	for candidate_variant: Variant in _choice_request.get("candidates", []):
 		var candidate: Dictionary = candidate_variant as Dictionary
+		# 当前候选实体 UID；有效值会加入本地可选集合并用于点击校验。
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		if candidate_uid >= 0 and not _selectable_card_uids.has(candidate_uid):
+			_selectable_card_uids.append(candidate_uid)
 		var zone: String = str(candidate.get("zone", "processing"))
 		if not candidates_by_zone.has(zone):
 			candidates_by_zone[zone] = []
@@ -126,6 +153,34 @@ func show_request(choice_request: Dictionary) -> void:
 	for zone: String in ["hand", "equipment", "judgment", "processing"]:
 		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
 	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0
+	_action_row.visible = true
+	_refresh_selection_state()
+	visible = true
+
+
+## 显示一份跨多名玩家持续存在的公共选牌快照；只有传入有效本地请求时开放牌面与确认按钮。
+func show_public_display(display_data: Dictionary, choice_request: Dictionary = {}) -> void:
+	_public_display = display_data.duplicate(true)
+	_choice_request = choice_request.duplicate(true)
+	_selected_card_uids.clear()
+	_card_views.clear()
+	_selectable_card_uids.clear()
+	_clear_container(_zone_container)
+	_title_label.text = str(_public_display.get("title", "公共选牌"))
+	_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
+	# 当前本地可选候选；只取有效 UID，公共牌位仍由完整 slots 数组决定固定顺序。
+	for candidate_variant: Variant in _choice_request.get("candidates", []) as Array:
+		# 当前规则候选；已被其他角色取得的牌不会出现在该请求中。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		# 当前规则候选实体 UID；只开放本次权威请求明确允许的固定牌位。
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		if candidate_uid >= 0 and not _selectable_card_uids.has(candidate_uid):
+			_selectable_card_uids.append(candidate_uid)
+	_add_public_card_row(_public_display.get("slots", []) as Array)
+	# 是否存在本地交互请求；旁观其他角色选择时只保留公共牌位，不显示确定或取消按钮。
+	var has_interactive_request: bool = int(_choice_request.get("request_id", -1)) >= 0
+	_action_row.visible = has_interactive_request
+	_cancel_button.visible = has_interactive_request and (bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0)
 	_refresh_selection_state()
 	visible = true
 
@@ -134,8 +189,10 @@ func show_request(choice_request: Dictionary) -> void:
 func close() -> void:
 	visible = false
 	_choice_request.clear()
+	_public_display.clear()
 	_selected_card_uids.clear()
 	_card_views.clear()
+	_selectable_card_uids.clear()
 	_clear_container(_zone_container)
 
 
@@ -160,24 +217,96 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	section.add_child(card_row)
 	for candidate_variant: Variant in candidates:
 		var candidate: Dictionary = candidate_variant as Dictionary
-		var wrapper: Control = Control.new()
-		wrapper.custom_minimum_size = Vector2(111.0, 148.0)
-		card_row.add_child(wrapper)
-		var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-		var card_uid: int = int(candidate.get("uid", -1))
-		if bool(candidate.get("visible", false)):
-			var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
-			var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
-			card_view.configure(card_data, definition, false, true)
-		else:
-			card_view.configure_back(card_uid, true)
+		_add_card_slot(card_row, candidate, _selectable_card_uids.has(int(candidate.get("uid", -1))), false, "")
+
+
+## 为公共选牌展示创建固定牌位；已领取牌继续显示复制虚影，并在牌底标明领取者武将名。
+func _add_public_card_row(display_slots: Array) -> void:
+	if display_slots.is_empty():
+		return
+	# 公共展示分区；固定只使用一组可换行牌列，牌位顺序与五谷最初亮牌顺序完全一致。
+	var section: VBoxContainer = VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+	_zone_container.add_child(section)
+	# 公共展示区标题；与普通一次性选择窗口使用相同区域命名。
+	var zone_label: Label = Label.new()
+	zone_label.text = "展示区"
+	zone_label.add_theme_color_override("font_color", Color("9ed3c3"))
+	zone_label.add_theme_font_size_override("font_size", 16)
+	section.add_child(zone_label)
+	# 固定牌位容器；窗口变窄时只换行，不会删除已领取牌或压缩后续牌位。
+	var card_row: HFlowContainer = HFlowContainer.new()
+	card_row.add_theme_constant_override("h_separation", 8)
+	card_row.add_theme_constant_override("v_separation", 8)
+	section.add_child(card_row)
+	for slot_variant: Variant in display_slots:
+		# 当前固定牌位；牌面来自最初公开快照，领取者只改变虚影和底部标签。
+		var display_slot: Dictionary = slot_variant as Dictionary
+		# 当前固定牌位实体 UID；用于匹配本地可选集合并建立视图索引。
+		var card_uid: int = int(display_slot.get("uid", -1))
+		# 当前领取者玩家 ID；-1表示仍未被取得，非负值表示显示复制虚影。
+		var taken_by_player_id: int = int(display_slot.get("taken_by_player_id", -1))
+		# 当前牌位候选表现数据；公共牌全部正面可见，但交互性由请求 UID 单独决定。
+		var candidate: Dictionary = {
+			"uid":card_uid,
+			"visible":true,
+			"card_data":display_slot.get("card_data", {}) as Dictionary,
+		}
+		_add_card_slot(card_row, candidate, _selectable_card_uids.has(card_uid) and taken_by_player_id < 0, taken_by_player_id >= 0, str(display_slot.get("taken_by_character_name", "")))
+
+
+## 创建一个正式卡牌牌位；可选牌连接输入，只读牌保留完整亮度，已领取牌叠加复制虚影与武将名。
+func _add_card_slot(card_row: HFlowContainer, candidate: Dictionary, selectable: bool, taken: bool, taken_by_character_name: String) -> void:
+	# 固定牌位包装器；尺寸始终等于正式111×148像素牌面，领取标签覆盖牌底而不改变换行计算。
+	var wrapper: Control = Control.new()
+	wrapper.custom_minimum_size = Vector2(111.0, 148.0)
+	card_row.add_child(wrapper)
+	# 正式卡牌视图；正面、牌背、公共只读牌和复制虚影都复用同一场景。
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 当前牌位实体 UID；用于连接点击信号并维护牌面映射。
+	var card_uid: int = int(candidate.get("uid", -1))
+	if bool(candidate.get("visible", false)):
+		# 当前公开牌面数据；定义只用于名称、类别与插画表现，不参与选择合法性。
+		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+		# 当前卡牌静态定义；名称模式、类别颜色与插画均从该只读配置解析。
+		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
+		card_view.configure(card_data, definition, false, selectable, taken)
+	else:
+		card_view.configure_back(card_uid, selectable)
+	if selectable:
 		card_view.pressed.connect(_on_card_pressed.bind(card_uid))
-		wrapper.add_child(card_view)
-		_card_views[card_uid] = card_view
+	if taken:
+		card_view.modulate = taken_card_ghost_modulate
+	wrapper.add_child(card_view)
+	_card_views[card_uid] = card_view
+	if not taken:
+		return
+	# 领取者武将名标签；空名称使用稳定占位，避免配置缺失时牌底完全没有归属提示。
+	var owner_label: Label = Label.new()
+	owner_label.position = TAKEN_CARD_LABEL_RECT.position
+	owner_label.size = TAKEN_CARD_LABEL_RECT.size
+	owner_label.z_index = 10
+	owner_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	owner_label.text = taken_by_character_name if not taken_by_character_name.is_empty() else "已领取"
+	owner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	owner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	owner_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	owner_label.add_theme_font_size_override("font_size", 13)
+	owner_label.add_theme_color_override("font_color", Color("f4dda2"))
+	# 标签背景样式；使用1像素亮金描边把归属信息与牌面底部文字区分开。
+	var owner_style: StyleBoxFlat = BattleUIStyle.make_panel(taken_card_label_background_color, BattleUIStyle.ACCENT_COLOR, 1, 3)
+	owner_style.content_margin_left = 2.0
+	owner_style.content_margin_top = 0.0
+	owner_style.content_margin_right = 2.0
+	owner_style.content_margin_bottom = 0.0
+	owner_label.add_theme_stylebox_override("normal", owner_style)
+	wrapper.add_child(owner_label)
 
 
 ## 切换一张候选牌的本地选择状态，并遵守请求最大选择数量。
 func _on_card_pressed(card_uid: int) -> void:
+	if not _selectable_card_uids.has(card_uid):
+		return
 	if _selected_card_uids.has(card_uid):
 		_selected_card_uids.erase(card_uid)
 	else:
