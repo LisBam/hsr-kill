@@ -98,6 +98,9 @@ const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount
 ## 当前角色公开快照；仅用于刷新视觉层，不保留任何可修改的规则对象引用。
 var _player_snapshot: Dictionary = {}
 
+## 最近一次公开快照配置签名；默认-1表示从未配置，未变化的角色不会重复加载立绘、重建体力圆点、装备横条或判定标记。
+var _configuration_signature: int = -1
+
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
 
@@ -145,6 +148,11 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 
 ## 写入公开角色快照并刷新十周年牌面覆盖层；调用方传入的是裁剪后的 Dictionary 副本。
 func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary = {}, current_actor: bool = false, faction_definition: Dictionary = {}) -> void:
+	# 本次完整配置签名；名称模式影响装备与悬停文本，因此必须参与缓存失效判断。
+	var next_configuration_signature: int = hash([snapshot, character_definition, current_actor, faction_definition, GameSettings.card_name_mode])
+	if _configuration_signature == next_configuration_signature:
+		return
+	_configuration_signature = next_configuration_signature
 	_player_snapshot = snapshot.duplicate(true)
 	_faction_definition = faction_definition.duplicate(true)
 	player_id = int(snapshot.get("player_id", -1))

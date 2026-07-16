@@ -7,7 +7,9 @@ signal state_changed(snapshot: Dictionary)
 signal log_added(message: String)
 signal action_rejected(message: String)
 signal match_finished(winner: String)
-signal card_presentation_requested(card_data: Dictionary, actor_id: int, target_ids: Array[int])
+
+## 统一牌面表现信号；使用牌、展示牌和判定牌都发送可序列化 CardPresentationEvent 快照。
+signal card_presentation_requested(presentation_data: Dictionary)
 
 ## 区域移动表现信号；所有摸牌、获得、响应和弃牌都使用同一实体牌动画入口。
 signal card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String)
@@ -115,6 +117,9 @@ var _negation_resume_results: Dictionary = {}
 ## 当前仍在逐目标结算的卡牌上下文；键为原实体牌 UID，值保存目标游标、共享伤害参数与当前目标状态。
 var _active_card_resolutions: Dictionary = {}
 
+## 当前尚未完成 contentAfter 的 CardUseEvent 上下文；键为实体 UID，值保存事件 ID、使用者和最终区域。
+var _card_use_contexts: Dictionary = {}
+
 ## 等待当前响应子事件完成后询问的银月枪触发队列；每项保存持有者和黑色实体牌 UID，不持有界面或事件对象引用。
 var _queued_silver_moon_triggers: Array[Dictionary] = []
 
@@ -135,6 +140,9 @@ var _play_choice_actor_id: int = -1
 
 ## 当前 chooseToUse 请求所属对局 ID；规则测试替换 GameState 时不会误消费上一局请求。
 var _play_choice_match_id: String = ""
+
+## 当前对局牌面表现递增序号；每次使用、展示或判定递增，重新开局时归零。
+var _card_presentation_sequence: int = 0
 
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
@@ -195,6 +203,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	card_rules = CardRuleService.new(state)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
+	_bind_card_movement_service()
 	modifier_pipeline = RuleModifierPipeline.new()
 	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
 	trigger_manager = TriggerManager.new()
@@ -214,12 +223,14 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_resolved_card_choice_uids.clear()
 	_negation_resume_results.clear()
 	_active_card_resolutions.clear()
+	_card_use_contexts.clear()
 	_queued_silver_moon_triggers.clear()
 	_current_turn_event_id = -1
 	_play_choice_request_id = -1
 	_play_choice_event_id = -1
 	_play_choice_actor_id = -1
 	_play_choice_match_id = ""
+	_card_presentation_sequence = 0
 	ai_coordinator._policies.clear()
 
 	_create_players(actual_player_count)
@@ -867,7 +878,7 @@ func draw_cards(player_id: int, count: int, announce: bool = true) -> void:
 		# 从牌堆顶抽出的实体牌；数组末尾作为牌堆顶。
 		var card: CardInstance = state.draw_pile.back()
 		# 移动前区域；摸牌动画必须从桌面中心牌堆起飞。
-		var source_zone: String = card.zone
+		# 该来源现由 CardMoveEvent 在权威移动前自动捕获，规则函数不再单独发出第二次表现信号。
 		if card_movement != null:
 			card_movement.move_card(card, "hand", player_id, "draw", state.current_event_id, "", [player_id])
 		else:
@@ -875,7 +886,6 @@ func draw_cards(player_id: int, count: int, announce: bool = true) -> void:
 			card.zone = "hand"
 			card.owner_id = player_id
 			player.hand.append(card)
-		_emit_card_transfer(card, -1, source_zone, player_id, "hand")
 		drawn_count += 1
 	if announce and drawn_count > 0:
 		add_log("%s摸了%d张牌。" % [player.display_name, drawn_count])
@@ -1362,20 +1372,30 @@ func _find_processing_card_by_definition(definition_id: String) -> CardInstance:
 
 
 ## 执行一次判定并将判定牌置入弃牌堆；返回牌对象供调用方读取花色与点数。
+## 判定牌遵循无名杀 judge -> judgeResult -> cardsDiscard 顺序，并在判定者位置公开展示后由同一表现接管弃牌动画。
 func perform_judgment(player_id: int, reason: String) -> CardInstance:
 	if state == null or state.game_over:
+		return null
+	# 判定玩家；不存在或已经离场时不能创建判定事件。
+	var judgment_player: PlayerState = state.get_player(player_id)
+	if judgment_player == null or not judgment_player.alive:
 		return null
 	if state.draw_pile.is_empty():
 		_reshuffle_discard_pile()
 	if state.draw_pile.is_empty():
 		_end_match_as_draw("deck_empty_judgment")
 		return null
+	# 判定父事件；判定牌移动、结果和后置弃牌都通过该 ID 建立可回放关联。
+	var judgment_event_id: int = _record_runtime_event("judge", "judgment", {"player_id":player_id, "reason":reason}, {}, _current_rule_parent_event_id())
 	# 牌堆顶判定牌；判定生效后直接进入弃牌堆。
+	# 牌堆顶判定牌；先进入公共处理区并公开展示，判定结果记录后再进入弃牌堆。
 	_ensure_card_movement()
 	var judgment_card: CardInstance = state.draw_pile.back()
-	card_movement.move_card(judgment_card, "processing", -1, "judge", state.current_event_id)
-	add_log("%s的%s判定牌为%s。" % [state.get_player(player_id).display_name, reason, describe_card(judgment_card)])
-	_move_to_discard(judgment_card)
+	card_movement.move_card(judgment_card, "processing", -1, "judge", judgment_event_id)
+	_request_card_presentation(judgment_card, player_id, [], "judge", judgment_event_id, true)
+	add_log("%s的%s判定牌为%s。" % [judgment_player.display_name, reason, describe_card(judgment_card)])
+	_record_runtime_event("judgeResult", "judgment_result", {"player_id":player_id, "reason":reason, "card_uid":judgment_card.uid}, {"suit":judgment_card.suit, "rank":judgment_card.rank, "color":judgment_card.get_color()}, judgment_event_id)
+	_move_to_discard(judgment_card, judgment_event_id)
 	return judgment_card
 
 
@@ -1510,10 +1530,9 @@ func _take_selected_player_card(source_id: int, target_id: int, card_uid: int) -
 	if taken_card == null:
 		return false
 	# 移动前区域；表现层据此从目标角色锚点开始飞行。
-	var source_zone: String = taken_card.zone
+	# 该来源现由 CardMovementService 在移动前写入统一事件，避免获得牌出现两次动画。
 	_ensure_card_movement()
 	card_movement.move_card(taken_card, "hand", source_id, "gain", state.current_event_id, "", [source_id])
-	_emit_card_transfer(taken_card, target_id, source_zone, source_id, "hand")
 	add_log("%s获得了%s的一张牌。" % [source.display_name, target.display_name])
 	return true
 
@@ -1641,10 +1660,9 @@ func transfer_equipment(from_id: int, to_id: int, slot: String) -> void:
 	var card: CardInstance = from_player.equipment[slot] as CardInstance
 	_on_equipment_lost(from_player, card, true)
 	# 移动前区域；借刀杀人的获得动画从原持有者武将牌飞向获得者。
-	var source_zone: String = card.zone
+	# 该来源现由 CardMovementService 在移动前写入统一事件，目标界面只消费一次移动增量。
 	_ensure_card_movement()
 	card_movement.move_card(card, "hand", to_id, "gain", state.current_event_id, "", [to_id])
-	_emit_card_transfer(card, from_id, source_zone, to_id, "hand")
 	add_log("%s将武器交给了%s。" % [from_player.display_name, to_player.display_name])
 
 
@@ -1759,10 +1777,9 @@ func give_revealed_card(player_id: int, card: CardInstance) -> void:
 	# 获得牌的玩家状态；死亡玩家不会在正常结算中调用。
 	var player: PlayerState = state.get_player(player_id)
 	# 展示牌来源区域；获得动画从桌面中央展示区移动到角色武将锚点。
-	var source_zone: String = card.zone
+	# 该来源现由 CardMovementService 在移动前写入统一事件，五谷选择完成后只生成一张获得表现牌。
 	_ensure_card_movement()
 	card_movement.move_card(card, "hand", player_id, "gain", state.current_event_id, "", [player_id])
-	_emit_card_transfer(card, -1, source_zone, player_id, "hand")
 	add_log("%s从展示牌中获得了%s。" % [player.display_name, describe_card(card)])
 
 
@@ -1809,7 +1826,8 @@ func _apply_fire_attack_shown_card(context: Dictionary, shown_card_uid: int, def
 	card_movement.reveal_card(shown_card)
 	add_log("%s展示了%s。" % [target.display_name, describe_card(shown_card)])
 	# 展示牌表现请求；牌仍留在展示者手牌区，但客户端会使用正式 CardView 从武将牌飞入中央牌桌。
-	card_presentation_requested.emit(shown_card.to_dict(), target_id, [])
+	var show_cards_event_id: int = _record_runtime_event("showCards", "card_presentation", {"player_id":target_id, "card_uids":[shown_card.uid], "reason":"fire_attack"}, {}, _current_rule_parent_event_id())
+	_request_card_presentation(shown_card, target_id, [], "showCards", show_cards_event_id, false)
 	# 火攻使用者状态；用于筛选同花色手牌候选。
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null:
@@ -2331,12 +2349,13 @@ func _uses_active_target_resolution(definition: Dictionary, target_ids: Array[in
 
 
 ## 建立一张牌的逐目标结算上下文；目标游标在创建任何异步请求前写入，恢复时不会重复处理上一目标。
-func _begin_active_card_resolution(card: CardInstance, actor_id: int, target_ids: Array[int]) -> void:
+func _begin_active_card_resolution(card: CardInstance, actor_id: int, target_ids: Array[int], card_use_event_id: int = -1) -> void:
 	# 当前卡牌定义；【杀】需要把酒加值、属性和无视防具状态保存为整张牌共享参数。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 活动结算上下文；target_index 指向下一名未开始结算的目标，current_target_id 表示正在等待响应的目标。
 	var resolution_context: Dictionary = {
 		"parent_card_uid":card.uid,
+		"card_use_event_id":card_use_event_id,
 		"actor_id":actor_id,
 		"card_definition_id":card.definition_id,
 		"target_ids":target_ids.duplicate(),
@@ -2413,7 +2432,6 @@ func _continue_active_card_resolution(parent_card_uid: int) -> void:
 		# 下一目标游标；目标开始前立即递增并写回，异步恢复不会重复创建同一无懈或响应窗口。
 		var target_index: int = int(resolution_context.get("target_index", 0))
 		if target_index >= target_ids.size():
-			_active_card_resolutions.erase(parent_card_uid)
 			_finalize_processing_card(parent_card_uid)
 			return
 		# 当前目标 ID；死亡或离场目标直接视为完成，继续后续目标。
@@ -2427,6 +2445,8 @@ func _continue_active_card_resolution(parent_card_uid: int) -> void:
 			continue
 		# 当前卡牌效果；【杀】读取整张牌共享的酒加值、转换属性与青釭剑状态，其他牌调用单目标效果入口。
 		var definition: Dictionary = GameDatabase.get_card(parent_card.definition_id)
+		# 当前目标内容事件；只在该目标真正进入效果前记录，死亡或离场目标不会伪造已执行的 content。
+		_record_runtime_event("content", "card_content", {"actor_id":int(resolution_context.get("actor_id", -1)), "target_id":target_id, "card_uid":parent_card_uid}, {}, int(resolution_context.get("card_use_event_id", -1)))
 		# 本目标结算结果；pending 表示已创建响应窗口，discard 表示当前目标同步完成但整张牌尚不能收尾。
 		var destination: String = "discard"
 		if str(definition.get("effect_id", "")) == "slash":
@@ -2507,6 +2527,8 @@ func _get_equipment_card_by_definition(player_id: int, definition_id: String) ->
 func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> void:
 	# 卡牌使用父事件；逻辑牌与实体材料牌分开记录，当前实体牌 UID 是唯一材料。
 	var card_use_event_id: int = _record_runtime_event("CardUseEvent", "card_use", {"actor_id":actor_id, "card_id":card.definition_id, "card_uid":card.uid, "target_ids":target_ids.duplicate()})
+	# 卡牌使用生命周期上下文；contentAfter 必须等待全部同步或异步目标效果完成后再写入。
+	_card_use_contexts[card.uid] = {"event_id":card_use_event_id, "actor_id":actor_id, "card_definition_id":card.definition_id}
 	# 使用牌的玩家状态；从其手牌移至处理区。
 	var actor: PlayerState = state.get_player(actor_id)
 	_ensure_card_movement()
@@ -2514,12 +2536,11 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	_record_runtime_event("lose", "card_move", {"card_uids":[card.uid], "to_zone":"processing", "reason":"use"}, {}, card_use_event_id)
 	for use_stage_name: String in ["useCard0", "useCard1", "yingbian", "useCard2", "useCard"]:
 		_record_runtime_event(use_stage_name, "trigger", {"actor_id":actor_id, "card_uid":card.uid, "target_ids":target_ids.duplicate()}, {}, card_use_event_id)
-	for target_player_id: int in target_ids:
-		for target_stage_name: String in ["useCardToPlayer", "useCardToTarget", "useCardToPlayered", "useCardToTargeted"]:
+	# 逐目标触发顺序；无名杀会先让全部目标经过同一阶段，再进入下一阶段，不能对单个目标连续跑完四个时机。
+	for target_stage_name: String in ["useCardToPlayer", "useCardToTarget", "useCardToPlayered", "useCardToTargeted"]:
+		for target_player_id: int in target_ids:
 			_record_runtime_event(target_stage_name, "trigger", {"actor_id":actor_id, "target_id":target_player_id, "card_uid":card.uid}, {}, card_use_event_id)
 	_record_runtime_event("contentBefore", "card_content", {"actor_id":actor_id, "card_uid":card.uid}, {}, card_use_event_id)
-	for target_player_id: int in target_ids:
-		_record_runtime_event("content", "card_content", {"actor_id":actor_id, "target_id":target_player_id, "card_uid":card.uid}, {}, card_use_event_id)
 	# 当前卡牌定义；用于次数计数与日志。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	if str(definition.get("effect_id", "")) == "slash":
@@ -2527,22 +2548,25 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	add_log("%s使用了%s。" % [actor.display_name, describe_card(card)])
 	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
-	card_presentation_requested.emit(card.to_dict(), actor_id, target_ids.duplicate())
+	var owns_discard_transfer: bool = str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false))
+	_request_card_presentation(card, actor_id, target_ids, "useCard", card_use_event_id, owns_discard_transfer)
 	_dispatch_rule_event(RuleEvent.new("card_used", actor_id, target_ids[0] if not target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":target_ids.duplicate()}))
 	if state.game_over:
 		return
 	# 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动，多目标牌由活动游标负责最终收尾。
 	var destination: String = "pending"
 	if _uses_active_target_resolution(definition, target_ids):
-		_begin_active_card_resolution(card, actor_id, target_ids)
+		_begin_active_card_resolution(card, actor_id, target_ids, card_use_event_id)
 	else:
+		for target_player_id: int in target_ids:
+			_record_runtime_event("content", "card_content", {"actor_id":actor_id, "target_id":target_player_id, "card_uid":card.uid}, {}, card_use_event_id)
 		destination = effect_resolver.resolve(card, actor_id, target_ids)
-	_record_runtime_event("contentAfter", "card_content", {"actor_id":actor_id, "card_uid":card.uid}, {"destination":destination}, card_use_event_id)
 	if state.game_over:
 		return
 	if destination == "discard" and state.processing_area.has(card):
-		state.processing_area.erase(card)
-		_move_to_discard(card)
+		_finalize_processing_card(card.uid)
+	elif destination != "pending":
+		_complete_card_use_context(card.uid, destination)
 	_check_game_over()
 
 
@@ -2926,45 +2950,92 @@ func _end_match_as_draw(reason: String) -> void:
 
 
 ## 将闪电移至下一角色时、装备效果与其他规则共用的弃牌移动基础操作。
-func _move_to_discard(card: CardInstance) -> void:
+## related_event_id 为-2时沿用当前规则事件；显式传入父事件可把 cardsDiscard 关联到对应结算。
+func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	if card == null:
 		return
 	_ensure_card_movement()
 	# 弃置前持有者；响应牌、主动弃牌和目标区域牌都从各自实际来源锚点起飞。
-	var source_player_id: int = card.owner_id
+	# 该来源玩家由 CardMovementService 在移动前写入 CardMoveEvent，表现层不再依赖规则调用点重复传参。
 	# 弃置前区域；表现层可区分处理区、手牌、装备、判定和展示牌。
 	var source_zone: String = card.zone
+	# 弃牌父事件；默认使用当前规则摘要，判定与直接使用牌会显式传入稳定父事件。
+	var discard_parent_event_id: int = _current_rule_parent_event_id() if related_event_id == -2 else related_event_id
+	# 弃牌事件；实体移动历史关联到该事件，等价表达 orderingDiscard 最终创建 cardsDiscard 的收尾关系。
+	var discard_event_id: int = _record_runtime_event("cardsDiscard", "card_move", {"card_uids":[card.uid], "from_zone":source_zone, "reason":"discard"}, {}, discard_parent_event_id)
 	if card_movement != null:
-		var move: CardMoveEvent = card_movement.move_card(card, "discard_pile", -1, "discard", state.current_event_id)
+		var move: CardMoveEvent = card_movement.move_card(card, "discard_pile", -1, "discard", discard_event_id)
 		if move == null:
 			return
 	else:
 		card.zone = "discard_pile"
 		card.owner_id = -1
 		state.discard_pile.append(card)
-	_emit_card_transfer(card, source_player_id, source_zone, -1, "discard_pile")
 
 
 ## 确保统一移牌服务绑定当前 GameState；规则测试替换状态对象时自动重建，避免跨状态持有牌引用。
 func _ensure_card_movement() -> void:
 	if state != null and (card_movement == null or card_movement.state != state):
 		card_movement = CardMovementService.new(state)
+	_bind_card_movement_service()
+
+
+## 绑定当前移牌服务的唯一完成通知；重复确保服务时不会重复连接同一控制器回调。
+func _bind_card_movement_service() -> void:
+	if card_movement == null:
+		return
+	if not card_movement.card_moved.is_connected(_on_card_moved):
+		card_movement.card_moved.connect(_on_card_moved)
+
+
+## 接收权威移牌增量并只转发需要逐牌表现的获得、摸牌与弃牌；处理区声明由独立 CardPresentationEvent 表达。
+func _on_card_moved(move_data: Dictionary, card_data: Dictionary) -> void:
+	# 目标区域；当前表现层只消费进入手牌或弃牌堆的真实移动，装备和判定区继续由状态视图呈现。
+	var target_zone: String = str(move_data.get("to_zone", ""))
+	if target_zone not in ["hand", "discard_pile"]:
+		return
+	_emit_card_transfer(
+		card_data,
+		int(move_data.get("source_player_id", -1)),
+		str(move_data.get("from_zone", "")),
+		int(move_data.get("target_player_id", -1)),
+		target_zone
+	)
 
 
 ## 发出一次只读区域移动表现；规则状态在信号发出前已经完成权威移动。
-func _emit_card_transfer(card: CardInstance, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
-	if card == null:
+func _emit_card_transfer(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
+	if card_data.is_empty():
 		return
-	card_transfer_requested.emit(card.to_dict(), source_player_id, source_zone, target_player_id, target_zone)
+	card_transfer_requested.emit(card_data.duplicate(true), source_player_id, source_zone, target_player_id, target_zone)
+
+
+## 在卡牌全部目标与异步选择结束后记录唯一 contentAfter；装备、判定区和弃牌目的都从同一入口完成生命周期。
+func _complete_card_use_context(card_uid: int, destination: String) -> void:
+	if not _card_use_contexts.has(card_uid):
+		return
+	# 当前卡牌生命周期上下文；只保存稳定 ID 与基础字符串，可安全跨选择暂停保留。
+	var card_use_context: Dictionary = _card_use_contexts[card_uid] as Dictionary
+	# 原 CardUseEvent ID；contentAfter 必须保持其直接子事件关系，不能挂到期间产生的响应或伤害事件下。
+	var card_use_event_id: int = int(card_use_context.get("event_id", -1))
+	_record_runtime_event("contentAfter", "card_content", {"actor_id":int(card_use_context.get("actor_id", -1)), "card_uid":card_uid}, {"destination":destination}, card_use_event_id)
+	_card_use_contexts.erase(card_uid)
 
 
 ## 按 UID 收尾一张仍在处理区的原始效果牌；暂停选择恢复后统一调用。
 func _finalize_processing_card(card_uid: int) -> void:
+	# 通用卡牌生命周期上下文；五谷等整牌异步效果只存在于该字典，不一定拥有逐目标上下文。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	# 可选逐目标上下文；普通牌、锦囊和杀在此保存原 CardUseEvent ID 与目标游标。
+	var resolution_context: Dictionary = _active_card_resolutions.get(card_uid, {}) as Dictionary
+	# 卡牌使用父事件；活动逐目标上下文存在时让最终 cardsDiscard 始终关联原 CardUseEvent。
+	var card_use_event_id: int = int(card_use_context.get("event_id", resolution_context.get("card_use_event_id", -2)))
+	_complete_card_use_context(card_uid, "discard")
 	# 已结束卡牌的活动目标上下文；防御性清理避免旧响应在实体离开处理区后继续推进目标。
 	_active_card_resolutions.erase(card_uid)
 	for processing_card: CardInstance in state.processing_area:
 		if processing_card.uid == card_uid:
-			_move_to_discard(processing_card)
+			_move_to_discard(processing_card, card_use_event_id)
 			return
 
 
@@ -3068,6 +3139,31 @@ func _on_network_choice_response_received(response_data: Dictionary) -> void:
 	action.client_sequence = response.client_sequence
 	action.payload = {"request_id":response.request_id, "event_id":response.event_id, "selected_card_uids":response.card_ids.duplicate()}
 	submit_action(action)
+
+
+## 返回当前规则调用可关联的父事件 ID；无有效摘要时回退到长期对局根事件。
+func _current_rule_parent_event_id() -> int:
+	if state != null and state.current_event_id >= 0:
+		return state.current_event_id
+	return _runtime_root_event_id
+
+
+## 创建并发送统一牌面表现事件；表现只携带序列化数据，不暂停规则或持有 CardInstance 引用。
+func _request_card_presentation(card: CardInstance, actor_id: int, target_ids: Array[int], event_name: String, event_id: int, owns_discard_transfer: bool) -> void:
+	if card == null:
+		return
+	_card_presentation_sequence += 1
+	# 表现事件；递增编号、规则父事件和弃牌所有权共同决定客户端去重与回放顺序。
+	var presentation: CardPresentationEvent = CardPresentationEvent.new(
+		_card_presentation_sequence,
+		event_id,
+		event_name,
+		card.to_dict(),
+		actor_id,
+		target_ids,
+		owns_discard_transfer
+	)
+	card_presentation_requested.emit(presentation.to_dict())
 
 
 ## 写入一条迁移期规则事件记录并同步 GameState；所有记录默认挂在当前对局根事件下。

@@ -102,6 +102,18 @@ func _run() -> void:
 	if player_views.keys() != expected_opponent_order:
 		_fail("opponent_relative_order:%s" % [player_views.keys()])
 		return
+	# 首次渲染的玩家 ID 到座位节点实例 ID；重复快照后用于确认没有整桌释放重建。
+	var opponent_instance_ids: Dictionary = {}
+	for player_id_variant: Variant in player_views.keys():
+		opponent_instance_ids[int(player_id_variant)] = (player_views[player_id_variant] as PlayerTargetView).get_instance_id()
+	main_instance.call("_on_state_changed", _make_ten_player_snapshot())
+	# 重复快照后的玩家视图索引；轻量字典允许重建，但每名玩家必须继续绑定原节点实例。
+	var repeated_player_views: Dictionary = main_instance.get("_player_views") as Dictionary
+	for player_id_variant: Variant in repeated_player_views.keys():
+		if int(opponent_instance_ids.get(int(player_id_variant), -1)) != (repeated_player_views[player_id_variant] as PlayerTargetView).get_instance_id():
+			_fail("opponent_view_recreated:%s" % player_id_variant)
+			return
+	player_views = repeated_player_views
 	# 已确认的对手座位屏幕矩形；逐个加入并检查相邻牌面不会重叠。
 	var occupied_opponent_rects: Array[Rect2] = []
 	for opponent_seat_slot: Control in opponent_seat_slots:
@@ -151,8 +163,11 @@ func _run() -> void:
 	# 双目标展示牌数据；使用未占用的稳定 UID 创建正式牌面表现。
 	var presentation_card_data: Dictionary = {"uid":90001, "definition_id":"sha", "suit":"spade", "rank":7, "zone":"processing", "owner_id":-1}
 	# 双目标玩家 ID；使用强类型数组与正式展示回调的 Array[int] 协议完全一致。
+	# 该数组现嵌入 CardPresentationEvent 字典，目标 ID 的强类型协议保持不变。
 	var presentation_target_ids: Array[int] = [5, 6]
-	main_instance.call("_on_card_presentation_requested", presentation_card_data, 4, presentation_target_ids)
+	# 使用牌表现事件；真实处理区牌接管后续弃牌移动，目标数组用于绘制两条指示线。
+	var use_presentation_data: Dictionary = {"presentation_id":1, "event_id":1, "event_name":"useCard", "card_data":presentation_card_data, "actor_id":4, "target_ids":presentation_target_ids, "source_zone":"processing", "owns_discard_transfer":true}
+	main_instance.call("_on_card_presentation_requested", use_presentation_data)
 	# 本次双目标指示线数据；最新表现序号必须保存共同本地起点与两个不同目标中心。
 	var multi_target_presentation: Dictionary = animation_layer._line_presentations.get(animation_layer._presentation_sequence, {}) as Dictionary
 	# 双目标终点数组；每名目标必须保留一个独立终点以同步绘制两条线。
@@ -165,8 +180,11 @@ func _run() -> void:
 	# 火攻展示牌数据；展示牌没有规则目标，但动画起点必须是展示者武将牌中心。
 	var shown_hand_card_data: Dictionary = {"uid":90002, "definition_id":"shan", "suit":"heart", "rank":6, "zone":"hand", "owner_id":5}
 	# 展示牌目标 ID；空的强类型数组明确匹配正式展示回调的 Array[int] 参数协议。
+	# 该数组现嵌入 CardPresentationEvent 字典，空目标语义保持不变。
 	var shown_hand_target_ids: Array[int] = []
-	main_instance.call("_on_card_presentation_requested", shown_hand_card_data, 5, shown_hand_target_ids)
+	# 火攻展示事件；实体仍留在手牌区，因此不得接管该 UID 未来真正进入弃牌堆的移动。
+	var shown_hand_presentation_data: Dictionary = {"presentation_id":2, "event_id":2, "event_name":"showCards", "card_data":shown_hand_card_data, "actor_id":5, "target_ids":shown_hand_target_ids, "source_zone":"hand", "owns_discard_transfer":false}
+	main_instance.call("_on_card_presentation_requested", shown_hand_presentation_data)
 	# 最新展示牌表现；无目标展示不会绘制目标指示线，仍保留展示者的真实来源位置。
 	var shown_hand_presentation: Dictionary = animation_layer._line_presentations.get(animation_layer._presentation_sequence, {}) as Dictionary
 	# 展示者预期起点；与前面已验证的六号位武将牌中心保持同一动画坐标空间。
@@ -175,6 +193,9 @@ func _run() -> void:
 	var shown_hand_target_positions: Array = shown_hand_presentation.get("target_positions", []) as Array
 	if not (shown_hand_presentation.get("start_position", Vector2.ZERO) as Vector2).is_equal_approx(expected_shown_hand_start) or not shown_hand_target_positions.is_empty():
 		_fail("shown_hand_presentation:%s" % shown_hand_presentation)
+		return
+	if animation_layer.consume_discard_transfer_claim(90002):
+		_fail("shown_hand_claimed_discard")
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
@@ -246,13 +267,15 @@ func _run() -> void:
 	# 单目标展示目标；使用已验证的六号位武将牌中心创建一次正常使用动画。
 	var delayed_discard_target_ids: Array[int] = [5]
 	animation_layer.card_hold_duration = 0.01
-	main_instance.call("_on_card_presentation_requested", delayed_discard_card_data, 4, delayed_discard_target_ids)
+	# 延迟弃牌使用事件；动画淡出后仍需保留 UID 所有权，直到真实 processing -> discard 移动到达。
+	var delayed_discard_presentation_data: Dictionary = {"presentation_id":3, "event_id":3, "event_name":"useCard", "card_data":delayed_discard_card_data, "actor_id":4, "target_ids":delayed_discard_target_ids, "source_zone":"processing", "owns_discard_transfer":true}
+	main_instance.call("_on_card_presentation_requested", delayed_discard_presentation_data)
 	await get_tree().create_timer(0.06).timeout
-	if not animation_layer._active_cards.is_empty() or not (main_instance.get("_presented_discard_card_uids") as Dictionary).has(90007):
+	if not animation_layer._active_cards.is_empty() or not animation_layer._discard_transfer_claims.has(90007):
 		_fail("delayed_discard_presentation_state:%s" % [animation_layer._active_cards])
 		return
 	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
-	if not animation_layer._active_cards.is_empty() or (main_instance.get("_presented_discard_card_uids") as Dictionary).has(90007):
+	if not animation_layer._active_cards.is_empty() or animation_layer._discard_transfer_claims.has(90007):
 		_fail("delayed_discard_duplicate:%s" % [animation_layer._active_cards])
 		return
 	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
