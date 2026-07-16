@@ -22,6 +22,12 @@ signal equipment_pressed(card_uid: int)
 ## 参考 CSS 的左侧布局使用10像素右移反馈，横条移动后仍与手牌区保留安全间距。
 @export_range(0.0, 24.0, 1.0) var selectable_shift_distance: float = 10.0
 
+## 已选装备在可用右移基础上继续向右移动的距离；默认再移动10像素区分“可发动”和“已选择”，运行时可按界面间距调整。
+@export_range(0.0, 24.0, 1.0) var selected_shift_distance: float = 10.0
+
+## 装备横条进入可用、选中或复原位置的动画时长；默认0.25秒提供清晰但不拖慢操作的位移反馈，运行时可由主题调整。
+@export_range(0.0, 1.0, 0.01) var shift_animation_seconds: float = 0.25
+
 ## 装备横条正文字体尺寸；默认14像素适合198像素宽的本地装备区，运行时通常无需动态修改。
 ## 参考图紧凑横条使用13像素正文，保证130像素宽度内仍可显示花色、点数和牌名。
 @export_range(10, 18, 1) var equipment_font_size: int = 13
@@ -71,6 +77,9 @@ var _visible_slot_count: int = 4
 ## 最近一次装备、候选、选中和名称模式的配置签名；默认-1表示从未配置，重复快照不会重建相同横条。
 var _configuration_signature: int = -1
 
+## 当前槽位到横向位移动画的映射；配置变化时先停止旧动画，避免重建横条后多个补间同时写入位置。
+var _row_shift_tweens: Dictionary = {}
+
 
 ## 初始化鼠标策略；空白装备区不遮挡牌桌输入，只有可选装备横条自身接收点击。
 func _ready() -> void:
@@ -107,6 +116,21 @@ func is_slot_equipped(slot: String) -> bool:
 ## 清理旧横条并按固定槽位顺序重建现有装备；没有装备的槽位不生成占位节点。
 ## 参考图布局会为全部可见槽位生成深色空态；宝物槽仍按项目规则只在实际装备宝物时创建。
 func _rebuild_rows() -> void:
+	# 重建前各槽位的实际横坐标；新横条从该位置继续动画，保证可用、选中和复原状态之间不会瞬移。
+	var previous_shift_by_slot: Dictionary = {}
+	for slot_variant: Variant in _rows_by_slot.keys():
+		# 旧槽位 ID；用于把旧横条的实时位置转交给同槽位新横条。
+		var previous_slot: String = str(slot_variant)
+		# 旧装备横条；补间进行到一半时 position.x 仍是准确的下一段动画起点。
+		var previous_row: Button = _rows_by_slot.get(previous_slot) as Button
+		if previous_row != null and is_instance_valid(previous_row):
+			previous_shift_by_slot[previous_slot] = previous_row.position.x
+	for shift_tween_variant: Variant in _row_shift_tweens.values():
+		# 旧横向位移动画；对应横条即将释放，必须先停止以避免访问失效节点。
+		var shift_tween: Tween = shift_tween_variant as Tween
+		if shift_tween != null and shift_tween.is_valid():
+			shift_tween.kill()
+	_row_shift_tweens.clear()
 	for row_variant: Variant in _rows_by_slot.values():
 		# 旧装备横条；配置变化时立即从树中移除，避免名称模式切换期间短暂显示重复牌面。
 		var old_row: Button = row_variant as Button
@@ -141,6 +165,17 @@ func _rebuild_rows() -> void:
 		add_child(equipment_row)
 		_rows_by_slot[slot] = equipment_row
 	_layout_rows()
+	for slot_variant: Variant in _rows_by_slot.keys():
+		# 新槽位 ID；与旧槽位同名时才继承上一次实时横坐标。
+		var slot: String = str(slot_variant)
+		# 新装备横条；纵向布局已经完成，本段只接管横向状态动画。
+		var equipment_row: Button = _rows_by_slot.get(slot) as Button
+		# 当前状态的目标横坐标；可用右移一段，已选择再额外右移一段，静态状态回到0。
+		var target_shift: float = equipment_row.position.x
+		# 本次动画起点；首次创建没有旧位置时直接使用目标值，不播放无来源的入场滑动。
+		var previous_shift: float = float(previous_shift_by_slot.get(slot, target_shift))
+		equipment_row.position.x = previous_shift
+		_start_row_shift_animation(slot, equipment_row, target_shift)
 
 
 ## 创建单张叠放装备横条；样式与武将牌装备条共享浅色纸张、暗金边和花色点数表达。
@@ -225,8 +260,13 @@ func _layout_rows() -> void:
 		var equipment_row: Button = _rows_by_slot.get(slot) as Button
 		# 当前固定槽位索引；宝物未装备时不会创建第五行，前四槽索引保持0至3。
 		var slot_index: int = EQUIPMENT_SLOT_ORDER.find(slot)
-		# 当前装备是否可选；可选横条向右移动配置距离，提示玩家直接在装备区点击。
-		var shift_x: float = selectable_shift_distance if _candidate_uids.has(int((_equipment.get(slot, {}) as Dictionary).get("uid", -1))) else 0.0
+		# 当前装备实体 UID；空槽使用-1，因此不会进入候选或选中集合。
+		var equipment_uid: int = int((_equipment.get(slot, {}) as Dictionary).get("uid", -1))
+		# 当前装备是否可选；可选横条向右移动第一段距离，提示玩家可直接在装备区发动。
+		var shift_x: float = selectable_shift_distance if _candidate_uids.has(equipment_uid) else 0.0
+		# 已选装备继续右移第二段距离；两级位置分别表达“可发动”和“已选中”。
+		if _selected_uids.has(equipment_uid):
+			shift_x += selected_shift_distance
 		equipment_row.position = Vector2(shift_x, start_y + float(slot_index) * row_pitch)
 		equipment_row.size = Vector2(row_width, adaptive_row_height)
 		equipment_row.z_index = slot_index
@@ -236,6 +276,27 @@ func _layout_rows() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED and is_node_ready():
 		_layout_rows()
+
+
+## 把单个装备横条平滑移动到当前交互状态的位置；时长为0或位置未变化时直接对齐目标。
+func _start_row_shift_animation(slot: String, equipment_row: Button, target_shift: float) -> void:
+	if equipment_row == null or not is_instance_valid(equipment_row):
+		return
+	if shift_animation_seconds <= 0.0 or is_equal_approx(equipment_row.position.x, target_shift):
+		equipment_row.position.x = target_shift
+		return
+	# 当前横向位移动画；二次缓出使装备接近目标位置时自然减速，持续时间由检查器参数统一控制。
+	var shift_tween: Tween = create_tween()
+	shift_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	shift_tween.tween_property(equipment_row, "position:x", target_shift, shift_animation_seconds)
+	_row_shift_tweens[slot] = shift_tween
+	shift_tween.finished.connect(_on_row_shift_animation_finished.bind(slot, shift_tween))
+
+
+## 清理已经完成的装备位移动画索引；只有映射仍指向同一补间时才删除，避免旧回调覆盖新动画。
+func _on_row_shift_animation_finished(slot: String, shift_tween: Tween) -> void:
+	if _row_shift_tweens.get(slot) == shift_tween:
+		_row_shift_tweens.erase(slot)
 
 
 ## 转发可选装备横条的稳定实体 UID；禁用横条不会触发 Button.pressed。

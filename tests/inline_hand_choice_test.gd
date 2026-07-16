@@ -68,7 +68,11 @@ func _run() -> void:
 	var disabled_style: StyleBoxFlat = disabled_slash_body.get_theme_stylebox("panel") as StyleBoxFlat
 	# 候选【闪】最终纸张样式；用于读取正常可交互亮度。
 	var enabled_style: StyleBoxFlat = enabled_dodge_body.get_theme_stylebox("panel") as StyleBoxFlat
-	if selection_panel.visible or disabled_slash_view.is_interactable or not enabled_dodge_view.is_interactable or enabled_style.bg_color.get_luminance() - disabled_style.bg_color.get_luminance() < 0.2 or not confirm_button.disabled or not cancel_button.visible or cancel_button.disabled or end_play_button.visible:
+	# 禁用确定按钮样式；不可提交时必须使用固定深灰背景，而不是沿用可交互悬停外观。
+	var disabled_confirm_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
+	# 可用确定按钮样式；作为禁用按钮亮度差的基准，不改变当前 disabled 状态。
+	var normal_confirm_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if selection_panel.visible or disabled_slash_view.is_interactable or not enabled_dodge_view.is_interactable or enabled_style.bg_color.get_luminance() - disabled_style.bg_color.get_luminance() < 0.2 or not confirm_button.disabled or normal_confirm_style.bg_color.get_luminance() - disabled_confirm_style.bg_color.get_luminance() < 0.1 or not cancel_button.visible or cancel_button.disabled or end_play_button.visible:
 		_fail("response_inline_state")
 		return
 	main_instance.call("_on_card_pressed", 7002)
@@ -122,6 +126,8 @@ func _run() -> void:
 	var equipment_stack: EquipmentStackView = main_instance.get_node("%EquipmentStack") as EquipmentStackView
 	# 可选武器横条；应向右移动配置距离并允许点击。
 	var weapon_row: Button = equipment_stack.get_row("weapon")
+	# 可用状态动画中的横坐标；首帧应仍处于0至目标值之间，证明横条没有瞬移。
+	var animated_candidate_shift: float = weapon_row.position.x
 	# 空防具横条；参考图要求空槽保留深色背景和类型图标，而不是完全留白或显示“无”。
 	var empty_armor_row: Button = equipment_stack.get_row("armor")
 	# 空进攻坐骑横条；与防具空槽使用相同固定高度和3像素间距。
@@ -137,6 +143,10 @@ func _run() -> void:
 	var adaptive_equipment_row_height: float = (equipment_stack.size.y - equipment_stack.equipment_row_gap * 3.0) / 4.0
 	# 当前四槽节距；等于37像素自适应槽高加3像素间距。
 	var equipment_row_pitch: float = adaptive_equipment_row_height - equipment_stack.equipment_row_overlap + equipment_stack.equipment_row_gap
+	if not is_equal_approx(equipment_stack.shift_animation_seconds, 0.25) or animated_candidate_shift < 0.0 or animated_candidate_shift >= equipment_stack.selectable_shift_distance:
+		_fail("equipment_candidate_animation_start:%s" % animated_candidate_shift)
+		return
+	await _wait_for_equipment_animation(equipment_stack)
 	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or not is_equal_approx(equipment_stack.size.x, 150.0) or not is_equal_approx(equipment_stack.size.y, 157.0) or not is_equal_approx(weapon_row.size.y, adaptive_equipment_row_height) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - weapon_row.position.y, equipment_row_pitch * 3.0) or equipment_stack.is_slot_equipped("armor") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or equipment_stack.get_row("treasure") != null or int(equipment_stack.get("_visible_slot_count")) != 4:
 		_fail("equipment_inline_layout")
 		return
@@ -144,13 +154,38 @@ func _run() -> void:
 	if confirm_button.disabled or not (main_instance.get("_inline_selected_card_uids") as Array).has(7004):
 		_fail("equipment_inline_selection")
 		return
+	# 已选武器横条；选中状态在可用位置基础上继续向右移动第二段距离。
+	var selected_weapon_row: Button = equipment_stack.get_row("weapon")
+	await _wait_for_equipment_animation(equipment_stack)
+	if not is_equal_approx(selected_weapon_row.position.x, equipment_stack.selectable_shift_distance + equipment_stack.selected_shift_distance):
+		_fail("equipment_selected_shift:%s" % selected_weapon_row.position.x)
+		return
+	# 空候选请求；用于验证已选装备会以相同0.25秒动画复原到基础位置。
+	var clear_equipment_request: Dictionary = {"request_id":130, "chooser_id":0, "title":"清理选择", "prompt":"无候选", "candidates":[], "min_select":0, "max_select":0, "allow_cancel":true, "context":{"kind":"test_clear"}}
+	main_instance.call("_on_card_choice_requested", clear_equipment_request)
+	await _wait_for_equipment_animation(equipment_stack)
+	if not is_zero_approx((equipment_stack.get_row("weapon") as Button).position.x):
+		_fail("equipment_restore_shift")
+		return
+	# 装备触发请求；上下文绑定公开装备 UID 后应自动选中，玩家只需确定发动或取消放弃。
+	var equipment_trigger_request: Dictionary = {"request_id":131, "chooser_id":0, "title":"青釭剑", "prompt":"是否发动装备？", "candidates":[_candidate(weapon_data)], "min_select":0, "max_select":1, "allow_cancel":true, "context":{"kind":"equipment_trigger", "equipment_uid":7004}}
+	main_instance.call("_on_card_choice_requested", equipment_trigger_request)
+	if not (main_instance.get("_inline_selected_card_uids") as Array).has(7004) or confirm_button.disabled:
+		_fail("equipment_trigger_auto_select")
+		return
+	await _wait_for_equipment_animation(equipment_stack)
+	if not is_equal_approx((equipment_stack.get_row("weapon") as Button).position.x, equipment_stack.selectable_shift_distance + equipment_stack.selected_shift_distance):
+		_fail("equipment_trigger_selected_shift")
+		return
 	# 测试宝物装备；宝物出现后组件应启用第五个槽位并重新计算整组纵向间距。
 	var treasure_data: Dictionary = {"uid":7006, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":0}
 	# 含宝物的本地装备字典；保留已有武器和防御坐骑，用于比较五槽布局位置变化。
 	var equipment_with_treasure: Dictionary = equipment_without_treasure.duplicate(true)
 	equipment_with_treasure["treasure"] = treasure_data
+	# 加入宝物前当前有效的防御坐骑横条；装备组件会在状态切换时重建节点，因此不能复用更早的旧引用。
+	var defensive_mount_row_before_treasure: Button = equipment_stack.get_row("defensive_mount")
 	# 四槽布局中的防御坐骑纵坐标；宝物出现后该坐标必须随五槽间距重新计算。
-	var defensive_mount_y_without_treasure: float = defensive_mount_row.position.y
+	var defensive_mount_y_without_treasure: float = defensive_mount_row_before_treasure.position.y
 	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 14, equipment_with_treasure))
 	await get_tree().process_frame
 	# 五槽布局中的宝物横条；只有实际装备宝物后才应创建。
@@ -222,7 +257,7 @@ func _run() -> void:
 		"context":{"kind":"aoe_response", "response_patterns":["sha"]},
 	}
 	main_instance.call("_on_card_choice_requested", zhangba_request)
-	await get_tree().process_frame
+	await _wait_for_equipment_animation(equipment_stack)
 	# 丈八武器横条；进入响应时先右移提示可点击，点击后保持选中并把普通手牌切换为材料候选。
 	var zhangba_row: Button = equipment_stack.get_row("weapon")
 	if zhangba_row == null or not is_equal_approx(zhangba_row.position.x, equipment_stack.selectable_shift_distance) or not confirm_button.disabled:
@@ -248,7 +283,7 @@ func _run() -> void:
 	wooden_ox_play_snapshot["current_phase"] = "play"
 	wooden_ox_play_snapshot["current_choice_request"] = {"request_id":18, "event_id":18, "actor_id":0, "choice_type":"use", "card_ids":[7006]}
 	match_controller.state_changed.emit(wooden_ox_play_snapshot)
-	await get_tree().process_frame
+	await _wait_for_equipment_animation(equipment_stack)
 	# 木牛宝物横条；候选应右移并允许点击，旧专用按钮始终隐藏。
 	var wooden_ox_row: Button = equipment_stack.get_row("treasure")
 	var wooden_ox_button: Button = main_instance.get_node("%WoodenOxButton") as Button
@@ -262,12 +297,21 @@ func _run() -> void:
 		return
 	# 铁索连环普通手牌；未选择目标时中央确定按钮应直接表示重铸，旧重铸按钮保持隐藏。
 	var chain_data: Dictionary = {"uid":7008, "definition_id":"tiesuo", "suit":"club", "rank":12, "zone":"hand", "owner_id":0}
-	var chain_play_snapshot: Dictionary = _make_snapshot([chain_data], 19)
+	# 木牛流马粮牌；即使晚于普通手牌写入快照，也必须固定显示在手牌容器最左侧。
+	var stored_card_data: Dictionary = {"uid":7009, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"wooden_ox", "owner_id":0}
+	var chain_play_snapshot: Dictionary = _make_snapshot([chain_data], 19, {}, [stored_card_data])
 	chain_play_snapshot["current_player_id"] = 0
 	chain_play_snapshot["current_phase"] = "play"
 	chain_play_snapshot["current_choice_request"] = {"request_id":19, "event_id":19, "actor_id":0, "choice_type":"use", "card_ids":[7008]}
 	match_controller.state_changed.emit(chain_play_snapshot)
 	await get_tree().process_frame
+	# 手最左侧正式牌面；容器子节点顺序就是最终横向布局顺序。
+	var leftmost_card_view: CardView = main_instance.get_node("%HandContainer").get_child(0) as CardView
+	# 玩家快照中的普通手牌数；木牛粮虽然共同显示，但公开手牌计数仍只包含普通手牌。
+	var rendered_local_player: Dictionary = ((main_instance.get("_snapshot") as Dictionary).get("players", []) as Array)[0] as Dictionary
+	if leftmost_card_view == null or leftmost_card_view.card_uid != 7009 or int(rendered_local_player.get("hand_count", -1)) != 1:
+		_fail("wooden_ox_leftmost_order")
+		return
 	main_instance.call("_on_card_pressed", 7008)
 	var recast_button: Button = main_instance.get_node("%RecastButton") as Button
 	var interaction_guide: Label = main_instance.get_node("%InteractionGuideLabel") as Label
@@ -296,7 +340,7 @@ func _candidate(card_data: Dictionary) -> Dictionary:
 
 
 ## 构造本地观察者快照；只包含内联选择需要的手牌、阶段和运行时请求标识。
-func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = {}) -> Dictionary:
+func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = {}, wooden_ox_cards: Array = []) -> Dictionary:
 	# 本地玩家快照；完整手牌仅对0号观察者公开。
 	var local_player: Dictionary = {
 		"player_id":0,
@@ -312,8 +356,8 @@ func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = 
 		"hand":hand_cards.duplicate(true),
 		"equipment":equipment.duplicate(true),
 		"judgment_area":[],
-		"wooden_ox_storage":[],
-		"wooden_ox_storage_count":0,
+		"wooden_ox_storage":wooden_ox_cards.duplicate(true),
+		"wooden_ox_storage_count":wooden_ox_cards.size(),
 	}
 	return {
 		"players":[local_player],
@@ -325,6 +369,11 @@ func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = 
 		"discard_pile_count":0,
 		"game_over":false,
 	}
+
+
+## 等待装备横条完成检查器配置的横向补间，并增加0.05秒调度余量保证无头测试稳定。
+func _wait_for_equipment_animation(equipment_stack: EquipmentStackView) -> void:
+	await get_tree().create_timer(equipment_stack.shift_animation_seconds + 0.05).timeout
 
 
 ## 输出稳定失败原因并以非0状态退出，便于命令行定位具体内联交互断言。

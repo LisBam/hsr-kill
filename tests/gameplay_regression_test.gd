@@ -41,6 +41,18 @@ var _zhuque_uid: int = -1
 ## 当前场景需要由玩家选择发动的银月枪实体 UID。
 var _silver_moon_uid: int = -1
 
+## 桃园结义恢复测试收到的无懈询问次数；两名目标各自询问一次，完成后必须恢复同一出牌阶段。
+var _taoyuan_negation_request_count: int = 0
+
+## 连续求桃测试中由同一救援者依次打出的桃 UID；数组顺序同时用于验证两次请求没有切换响应者。
+var _multi_peach_uids: Array[int] = []
+
+## 连续求桃测试收到的所需回复数量；目标从-1点开始时必须依次显示2和1。
+var _dying_required_recover_history: Array[int] = []
+
+## 连续求桃测试收到的响应者 ID；两次都应是首名实际出桃的同一角色。
+var _dying_responder_history: Array[int] = []
+
 ## 测试是否已经失败；失败后延迟回调不会继续提交旧请求。
 var _failed: bool = false
 
@@ -77,6 +89,12 @@ func _run() -> void:
 		return
 	if not await _test_dying_peach_and_wine_share_one_request():
 		return
+	if not await _test_dying_continuous_peaches_in_single_round():
+		return
+	if not await _test_taoyuan_restores_play_choice_after_multiple_responses():
+		return
+	if not _test_response_card_pattern_filter():
+		return
 	if not await _test_zhuque_requires_activation_choice():
 		return
 	if not await _test_silver_moon_requires_activation_choice():
@@ -87,13 +105,15 @@ func _run() -> void:
 		return
 	if not _test_wooden_ox_card_cannot_recast():
 		return
+	if not _test_wooden_ox_storage_excluded_from_hand_limit():
+		return
 	if not _test_ai_delay_range():
 		return
 	if not _test_judgment_presentation_and_event_chain():
 		return
 	if not await _test_delayed_judgment_presentation_sequence():
 		return
-	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d zhuque=%d yinyue=%d zhangba=2 judge=2" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _zhuque_request_count, _silver_moon_request_count])
+	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d taoyuan=%d zhuque=%d yinyue=%d zhangba=2 judge=2" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _taoyuan_negation_request_count, _zhuque_request_count, _silver_moon_request_count])
 	get_tree().quit(0)
 
 
@@ -355,6 +375,82 @@ func _test_dying_peach_and_wine_share_one_request() -> bool:
 	return true
 
 
+## 验证目标需要两张桃时由同一救援者连续收到2次、1次提示，成功后不会重新询问已经完成的其他角色。
+func _test_dying_continuous_peaches_in_single_round() -> bool:
+	_scenario = "dying_multiple"
+	_dying_required_recover_history.clear()
+	_dying_responder_history.clear()
+	_multi_peach_uids.clear()
+	_reset_state(3)
+	# 第一张救援桃；0号玩家在目标体力为-1时先打出，使目标回复至0。
+	var first_peach: CardInstance = _add_hand_card(0, "tao", "heart", 4)
+	# 第二张救援桃；同一玩家应在紧接着的下一次询问中打出，使目标回复至1。
+	var second_peach: CardInstance = _add_hand_card(0, "tao", "diamond", 4)
+	_multi_peach_uids.assign([first_peach.uid, second_peach.uid])
+	_controller.damage(2, 1, 5, "normal", "sha")
+	if not await _wait_until_no_card_choice():
+		return _fail("dying_multiple_timeout")
+	# 获救目标；固定从4点受到5点伤害到-1，再由两张桃回复到1。
+	var target: PlayerState = _controller.state.get_player(1)
+	if _dying_required_recover_history != [2, 1] or _dying_responder_history != [0, 0]:
+		return _fail("dying_multiple_prompts=%s:%s" % [_dying_required_recover_history, _dying_responder_history])
+	if target.hp != 1 or target.dying or not target.alive or not _controller.state.discard_pile.has(first_peach) or not _controller.state.discard_pile.has(second_peach):
+		return _fail("dying_multiple_result=%d:%s:%s" % [target.hp, target.dying, target.alive])
+	return true
+
+
+## 验证桃园结义的逐目标无懈询问全部结束后才发布新出牌请求，剩余合法手牌不会因快照被覆盖而全部灰显。
+func _test_taoyuan_restores_play_choice_after_multiple_responses() -> bool:
+	_scenario = "taoyuan_resume"
+	_taoyuan_negation_request_count = 0
+	_reset_state(2)
+	_controller.state.get_player(0).hp = 3
+	_controller.state.get_player(1).hp = 3
+	# 桃园结义实体；通过真实 chooseToUse 动作提交，覆盖玩家实际触发卡死的完整入口。
+	var taoyuan: CardInstance = _add_hand_card(0, "taoyuan", "heart", 1)
+	# 本地无懈可击；玩家对桃园的两个目标都明确取消，因此会连续产生两次异步响应窗口。
+	var wuxie: CardInstance = _add_hand_card(0, "wuxie", "spade", 11)
+	# 结算后应继续可用的杀；新的 chooseToUse 必须把该 UID 重新公开给界面。
+	var slash: CardInstance = _add_hand_card(0, "sha", "club", 7)
+	# 长期规则根事件；真实出牌请求和桃园 CardUseEvent 都必须挂在同一对局事件树下。
+	var root_event: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"scenario":"taoyuan_resume"})
+	_controller._runtime_root_event_id = root_event.event_id
+	_controller.event_scheduler.begin_root(root_event.event_id, true)
+	_controller.state.current_event_id = root_event.event_id
+	_controller._begin_play_choice(0)
+	# 桃园使用动作；全体目标由规则层自动展开，不由测试伪造目标数组。
+	var use_action: PlayerAction = PlayerAction.new("use_card", 0, taoyuan.uid)
+	if not _controller.submit_action(use_action):
+		return _fail("taoyuan_submit")
+	if not await _wait_until_card_finalized(taoyuan.uid):
+		return _fail("taoyuan_finalize_timeout")
+	# 最新出牌请求；必须是结算完成后新建的活动请求，并包含仍可使用的杀。
+	var play_request: Dictionary = _controller.state.current_choice_request
+	var play_card_ids: Array = play_request.get("card_ids", []) as Array
+	if _taoyuan_negation_request_count != 2 or not _controller._has_active_play_choice() or int(play_request.get("request_id", -1)) != _controller._play_choice_request_id or str(play_request.get("choice_type", "")) != "use" or not play_card_ids.has(slash.uid):
+		return _fail("taoyuan_play_choice=%d:%s:%s" % [_taoyuan_negation_request_count, _controller._has_active_play_choice(), play_request])
+	if _controller.state.get_player(0).hp != 4 or _controller.state.get_player(1).hp != 4 or _controller.state.get_player(0).find_hand_card(wuxie.uid) == null:
+		return _fail("taoyuan_resolution_state")
+	return true
+
+
+## 验证普通锦囊的受无懈字段不能让其作为无懈牌打出，只有 negate 牌效能提供 wuxie 响应模式。
+func _test_response_card_pattern_filter() -> bool:
+	_scenario = "response_pattern_filter"
+	_reset_state(2)
+	# 顺手牵羊实体；它可被无懈响应，但自身不能作为无懈响应牌消耗。
+	var snatch: CardInstance = _add_hand_card(0, "shunshou", "spade", 3)
+	# 真正的无懈可击实体；用于确认过滤没有误伤合法响应牌。
+	var wuxie: CardInstance = _add_hand_card(0, "wuxie", "club", 12)
+	if not _controller._get_provided_response_pattern(GameDatabase.get_card("shunshou")).is_empty() or _controller._get_provided_response_pattern(GameDatabase.get_card("wuxie")) != "wuxie":
+		return _fail("response_pattern_mapping")
+	if _controller._consume_response_card_uid(0, snatch.uid, "wuxie") != null or _controller.state.get_player(0).find_hand_card(snatch.uid) == null:
+		return _fail("snatch_consumed_as_wuxie")
+	if _controller._consume_response_card_uid(0, wuxie.uid, "wuxie") != wuxie or not _controller.state.discard_pile.has(wuxie):
+		return _fail("wuxie_response_rejected")
+	return true
+
+
 ## 验证普通【杀】装备朱雀羽扇时先创建可取消发动请求，明确发动后才转换为火焰伤害。
 func _test_zhuque_requires_activation_choice() -> bool:
 	_scenario = "zhuque"
@@ -488,6 +584,31 @@ func _test_wooden_ox_card_cannot_recast() -> bool:
 	return true
 
 
+## 验证木牛流马“粮”不参与弃牌阶段手牌上限计算，普通手牌未超当前体力时不会要求额外弃置粮牌。
+func _test_wooden_ox_storage_excluded_from_hand_limit() -> bool:
+	_scenario = "wooden_ox_hand_limit"
+	_reset_state(2)
+	# 当前回合玩家；1点体力对应1张普通手牌上限。
+	var player: PlayerState = _controller.state.get_player(0)
+	player.hp = 1
+	# 唯一普通手牌；数量正好等于手牌上限，不应进入弃牌选择。
+	var hand_card: CardInstance = _add_hand_card(0, "shan", "heart", 2)
+	# 第一张木牛粮牌；即使与普通手牌共同显示，也不计入手牌上限。
+	var first_stored_card: CardInstance = CardInstance.new("sha", "spade", 7)
+	first_stored_card.zone = "wooden_ox"
+	first_stored_card.owner_id = 0
+	player.wooden_ox_storage.append(first_stored_card)
+	# 第二张木牛粮牌；两张粮共同证明弃牌数只读取普通 hand 数组。
+	var second_stored_card: CardInstance = CardInstance.new("tao", "heart", 3)
+	second_stored_card.zone = "wooden_ox"
+	second_stored_card.owner_id = 0
+	player.wooden_ox_storage.append(second_stored_card)
+	_controller._end_play_phase(0)
+	if _controller.has_pending_card_choice() or player.find_hand_card(hand_card.uid) == null or player.wooden_ox_storage != [first_stored_card, second_stored_card] or _controller.state.discard_pile.has(first_stored_card) or _controller.state.discard_pile.has(second_stored_card):
+		return _fail("wooden_ox_hand_limit")
+	return true
+
+
 ## 验证 AI 响应滑条的全局范围、步长与默认值均与菜单契约一致。
 func _test_ai_delay_range() -> bool:
 	if not is_equal_approx(GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, 0.05):
@@ -515,9 +636,9 @@ func _test_judgment_presentation_and_event_chain() -> bool:
 	var resolved_card: CardInstance = _controller.perform_judgment(1, "八卦阵")
 	if resolved_card != judgment_card or not _controller.state.discard_pile.has(judgment_card):
 		return _fail("judgment_card_zone")
-	# 判定表现；从判定玩家锚点展示、没有使用牌目标，并明确接管随后到达的弃牌动画。
+	# 判定表现；从公共弃牌锚点直接展示、没有使用牌目标，并明确接管随后到达的弃牌动画。
 	var presented_card_data: Dictionary = _last_presentation.get("card_data", {}) as Dictionary
-	if str(_last_presentation.get("event_name", "")) != "judge" or int(_last_presentation.get("actor_id", -1)) != 1 or not (_last_presentation.get("target_ids", []) as Array).is_empty() or not bool(_last_presentation.get("owns_discard_transfer", false)) or int(presented_card_data.get("uid", -1)) != judgment_card.uid:
+	if str(_last_presentation.get("event_name", "")) != "judge" or int(_last_presentation.get("actor_id", -2)) != -1 or not (_last_presentation.get("target_ids", []) as Array).is_empty() or not bool(_last_presentation.get("owns_discard_transfer", false)) or int(presented_card_data.get("uid", -1)) != judgment_card.uid:
 		return _fail("judgment_presentation=%s" % _last_presentation)
 	# 判定移牌历史；第一条进入处理区，第二条由独立 cardsDiscard 事件移入弃牌堆。
 	if _controller.state.card_move_history.size() != 2:
@@ -632,6 +753,20 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
 		_dying_request_has_both_cards = candidate_uids.has(_peach_uid) and candidate_uids.has(_wine_uid)
 		selected_uids = [_wine_uid]
+	elif _scenario == "dying_multiple" and kind == "dying_response":
+		_dying_required_recover_history.append(int(context.get("required_recover", -1)))
+		_dying_responder_history.append(int(context.get("responder_id", -1)))
+		# 当前合法桃候选；上一张被消费后，下一次询问只会命中数组中的下一张实体。
+		var candidate_uids: Array[int] = []
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+		for peach_uid: int in _multi_peach_uids:
+			if candidate_uids.has(peach_uid):
+				selected_uids = [peach_uid]
+				break
+	elif _scenario == "taoyuan_resume" and kind == "trick_negation":
+		_taoyuan_negation_request_count += 1
+		selected_uids = []
 	elif _scenario == "zhuque" and kind == "zhuque_trigger":
 		_zhuque_request_count += 1
 		selected_uids = [_zhuque_uid]

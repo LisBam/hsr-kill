@@ -95,11 +95,13 @@ func _ready() -> void:
 	_confirm_button = Button.new()
 	_confirm_button.text = "确定"
 	_confirm_button.custom_minimum_size = Vector2(132.0, 40.0)
+	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_on_confirm_pressed)
 	action_row.add_child(_confirm_button)
 	_cancel_button = Button.new()
 	_cancel_button.text = "不选择"
 	_cancel_button.custom_minimum_size = Vector2(96.0, 40.0)
+	BattleUIStyle.apply_interaction_button(_cancel_button)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	action_row.add_child(_cancel_button)
 	visible = false

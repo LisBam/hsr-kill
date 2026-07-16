@@ -8,11 +8,23 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
-## 中央确定、取消与右侧回合结束按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
+## 中央确定与取消按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
 const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 
-## 回合结束按钮相对主场景右下锚点的固定矩形；位置留在手牌区右侧且不会进入中央 InteractionPanel。
-const END_PLAY_BUTTON_OFFSETS: Rect2 = Rect2(-505.0, -224.0, 146.0, 42.0)
+## 中央确定与取消按钮的水平间距；默认28像素避免两个相反命令视觉粘连，运行时无需修改。
+const ACTION_BUTTON_SEPARATION: int = 28
+
+## 右侧回合结束按钮的固定最小尺寸；112×36像素弱于中央确认命令但仍保持稳定命中区域，运行时无需修改。
+const END_PLAY_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(112.0, 36.0)
+
+## 回合结束按钮相对主场景右下锚点的固定矩形；位置位于取消按钮右侧、技能栏上方且不遮挡中央操作。
+const END_PLAY_BUTTON_OFFSETS: Rect2 = Rect2(-310.0, -218.0, 112.0, 36.0)
+
+## 回合结束按钮的危险操作背景色；朱红色与普通暖金确认按钮区分，运行时无需修改。
+const END_PLAY_BUTTON_COLOR: Color = Color("8f302d")
+
+## 回合结束按钮的危险操作边框色；默认使用较亮朱红保证深色牌桌上的轮廓可见，运行时无需修改。
+const END_PLAY_BUTTON_BORDER_COLOR: Color = Color("e06a61")
 
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
@@ -208,19 +220,19 @@ func _configure_interaction_controls() -> void:
 	interaction_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	interaction_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	BattleUIStyle.apply_interaction_button(use_button)
 	# 中央取消按钮；与确定按钮使用相同尺寸与主按钮样式，避免旧场景资源保留次级按钮外观。
 	var cancel_button: Button = %CancelButton
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	# 确定按钮的当前普通状态样式；共享给取消按钮以保持主题切换后的同级视觉。
-	var primary_button_style: StyleBox = use_button.get_theme_stylebox("normal")
-	if primary_button_style != null:
-		cancel_button.add_theme_stylebox_override("normal", primary_button_style)
+	BattleUIStyle.apply_interaction_button(cancel_button)
+	$InteractionPanel/InteractionVBox/ActionRow.add_theme_constant_override("separation", ACTION_BUTTON_SEPARATION)
 	recast_button.visible = false
 	wooden_ox_button.visible = false
 	if end_play_button.get_parent() != self:
 		end_play_button.reparent(self)
 	end_play_button.visible = false
-	end_play_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	end_play_button.custom_minimum_size = END_PLAY_BUTTON_MINIMUM_SIZE
+	BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
 	end_play_button.anchor_left = 1.0
 	end_play_button.anchor_top = 1.0
 	end_play_button.anchor_right = 1.0
@@ -473,12 +485,13 @@ func _render_local_hand() -> void:
 	var equipment_material_candidate_uids: Array[int] = _get_equipment_action_material_candidate_uids()
 	# 当前快照中的手牌条目；每项同时记录牌面快照与是否来自木牛流马，数组顺序就是正式手牌显示顺序。
 	var desired_card_entries: Array[Dictionary] = []
-	for card_variant: Variant in local_player.get("hand", []):
-		# 当前普通手牌条目；false 表示牌面不显示木牛“粮”来源标记。
-		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":false})
+	# 木牛流马“粮”固定先加入显示数组，使其无论何时获得或刷新都保持在手牌区最左侧。
 	for card_variant: Variant in local_player.get("wooden_ox_storage", []):
 		# 当前木牛“粮”条目；true 让同一正式牌面显示独立来源标记。
 		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":true})
+	for card_variant: Variant in local_player.get("hand", []):
+		# 当前普通手牌条目；false 表示牌面不显示木牛“粮”来源标记。
+		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":false})
 	# 当前快照需要保留的实体 UID 集合；用于移除已经离开本人手牌与木牛区域的旧视图。
 	var desired_uid_lookup: Dictionary = {}
 	for entry: Dictionary in desired_card_entries:
@@ -996,6 +1009,10 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_modal_choice_request_id = -1
 		_inline_card_choice = choice_data.duplicate(true)
 		_inline_selected_card_uids.clear()
+		# 装备触发询问的公开装备 UID；自动选中只准备本地临时选择，仍需玩家点击确定发动或点击取消放弃。
+		var auto_selected_equipment_uid: int = _get_auto_selected_equipment_trigger_uid(choice_data)
+		if auto_selected_equipment_uid >= 0:
+			_inline_selected_card_uids.append(auto_selected_equipment_uid)
 		_clear_equipment_action()
 		_selected_card_uid = -1
 		_selected_target_ids.clear()
@@ -1052,6 +1069,22 @@ func _get_inline_candidate_uids() -> Array[int]:
 		if candidate_uid >= 0 and not result.has(candidate_uid):
 			result.append(candidate_uid)
 	return result
+
+
+## 返回可自动选中的装备触发 UID；只有上下文明确绑定同一公开装备实体时生效，普通响应与目标区域选牌不自动选择。
+func _get_auto_selected_equipment_trigger_uid(choice_data: Dictionary) -> int:
+	# 触发上下文；装备规则创建询问时写入 equipment_uid，客户端不能从候选位置自行推断发动语义。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	# 请求绑定的装备实体 UID；负数表示本请求不是装备发动询问。
+	var equipment_uid: int = int(context.get("equipment_uid", -1))
+	if equipment_uid < 0:
+		return -1
+	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+		# 当前候选快照；必须属于本地选择者的装备区并与上下文实体完全一致。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("uid", -1)) == equipment_uid and int(candidate.get("owner_id", -1)) == match_controller.local_human_player_id and str(candidate.get("zone", "")) == "equipment":
+			return equipment_uid
+	return -1
 
 
 ## 返回当前 chooseToUse 请求中属于本地装备区的主动技能入口；丈八蛇矛与木牛流马以装备实体 UID 参与候选右移。
@@ -1183,6 +1216,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	if card_data.is_empty():
 		return
 	# 表现来源玩家 ID；使用牌、展示牌和判定牌都以该角色的桌面锚点作为起点。
+	# 判定牌是上述规则的公共来源例外：规则层传入-1，使其直接从中央弃牌展示锚点出现。
 	var actor_id: int = int(presentation_data.get("actor_id", -1))
 	# 使用牌目标 ID；showCards 和 judge 发送空数组，因此不会错误绘制目标线。
 	var target_ids: Array[int] = []
@@ -1191,6 +1225,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
 	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 	# 动画起点；本地玩家统一使用手牌区上方中心，其他玩家使用对应武将牌中心。
+	# 来源 ID 为-1或找不到公开玩家视图时，统一回退到中央弃牌展示锚点。
 	var start_position: Vector2 = _get_player_indicator_position(actor_id)
 	# 中央弃牌区落点；所有正常使用牌先飞向该位置展示，装备或延时锦囊的最终规则区域不受影响。
 	var discard_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())

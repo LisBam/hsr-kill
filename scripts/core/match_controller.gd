@@ -23,6 +23,15 @@ signal card_choice_requested(choice_data: Dictionary)
 ## 选将快照变化信号；只包含观察者可见候选、公开主公武将和全员确认状态。
 signal character_selection_changed(snapshot: Dictionary)
 
+## 实际牌效到“可作为何种响应牌打出”的映射；只包含真正提供响应的牌效，普通锦囊的受无懈属性不会进入该表。
+const PROVIDED_RESPONSE_PATTERN_BY_EFFECT: Dictionary = {
+	"slash":"sha",
+	"dodge":"shan",
+	"peach":"tao",
+	"wine":"jiu",
+	"negate":"wuxie",
+}
+
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
 @export var default_deck_id: String = "standard_162"
 
@@ -932,14 +941,16 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 			_process_next_silver_moon_trigger()
 		if not state.game_over and not has_pending_card_choice():
 			_resume_interrupted_turn_flow()
+	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
+	event_scheduler.drain()
+	if bool(completed_choice.get("deferred", false)):
+		# 新的 chooseToUse 必须等原 CardUseEvent 及其后续目标全部排空后再创建，避免后续响应覆盖已经提前发布的出牌请求快照。
 		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 			_begin_play_choice(state.current_player_id)
 		_emit_state()
 		# AI 出牌被本地响应或选择暂停后，原异步驱动已经结束；恢复出牌阶段时必须重新安排下一动作。
 		if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
 			_schedule_ai_action()
-	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
-	event_scheduler.drain()
 	return true
 
 
@@ -1162,7 +1173,7 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	for card: CardInstance in player.get_playable_cards():
 		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-		if allowed_patterns.has(str(definition.get("response_pattern", ""))):
+		if allowed_patterns.has(_get_provided_response_pattern(definition)):
 			candidates.append(_serialize_choice_candidate(card, player_id, card.zone, true))
 	# 丈八蛇矛响应候选；装备只作为发动入口，不会离开装备区，确认时还必须提交两张普通手牌材料。
 	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
@@ -1199,8 +1210,8 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 		return null
 	# 响应定义；模式不匹配时拒绝消费，防止旧请求或伪造动作改变状态。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	# 实体牌实际响应模式；日志与历史必须记录牌自身模式，不能记录组合请求的展示名称。
-	var response_pattern: String = str(definition.get("response_pattern", ""))
+	# 实体牌实际响应模式；日志与历史必须记录牌自身能提供的模式，不能把普通锦囊的受响应字段当作无懈牌能力。
+	var response_pattern: String = _get_provided_response_pattern(definition)
 	if not response_patterns.has(response_pattern):
 		return null
 	# 是否为实际手牌；银月枪只由回合外使用或打出的黑色手牌触发。
@@ -1213,6 +1224,13 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 	add_log("%s打出了%s。" % [player.display_name, describe_card(consumed)])
 	_resolve_silver_moon_trigger(player.player_id, consumed, was_hand_card)
 	return consumed
+
+
+## 返回一张牌实际能够提供的响应模式；映射基于牌效语义，避免所有可被无懈的普通锦囊都被误当成【无懈可击】。
+func _get_provided_response_pattern(definition: Dictionary) -> String:
+	# 卡牌效果 ID；属性杀共享 slash，桃、酒、闪和无懈各自映射到唯一响应模式。
+	var effect_id: String = str(definition.get("effect_id", ""))
+	return str(PROVIDED_RESPONSE_PATTERN_BY_EFFECT.get(effect_id, ""))
 
 
 ## 恢复延迟的【闪】选择；放弃时继续受击，选择实体牌时先完成响应弃牌动画。
@@ -1509,7 +1527,7 @@ func _consume_response_card_automatic(player_id: int, response_pattern: String) 
 	for card: CardInstance in player.get_playable_cards():
 		# 当前手牌定义；response_pattern 允许普通与属性【杀】共享响应。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-		if str(definition.get("response_pattern", "")) == response_pattern:
+		if _get_provided_response_pattern(definition) == response_pattern:
 			# 是否为真实手牌；【银月枪】只能由回合外使用或打出的黑色手牌触发，木牛“粮”不算手牌。
 			var was_hand_card: bool = player.hand.has(card)
 			# 从手牌移出的响应牌；随后直接进入弃牌堆。
@@ -1619,7 +1637,8 @@ func perform_judgment(player_id: int, reason: String) -> CardInstance:
 	_ensure_card_movement()
 	var judgment_card: CardInstance = state.draw_pile.back()
 	card_movement.move_card(judgment_card, "processing", -1, "judge", judgment_event_id)
-	_request_card_presentation(judgment_card, player_id, [], "judge", judgment_event_id, true)
+	# 判定牌属于公共牌堆而非判定角色打出的牌；来源使用-1让界面直接从中央弃牌锚点出现。
+	_request_card_presentation(judgment_card, -1, [], "judge", judgment_event_id, true)
 	add_log("%s的%s判定牌为%s。" % [judgment_player.display_name, reason, describe_card(judgment_card)])
 	_record_runtime_event("judgeResult", "judgment_result", {"player_id":player_id, "reason":reason, "card_uid":judgment_card.uid}, {"suit":judgment_card.suit, "rank":judgment_card.rank, "color":judgment_card.get_color()}, judgment_event_id)
 	_move_to_discard(judgment_card, judgment_event_id)
@@ -3477,58 +3496,66 @@ func _advance_after_current_player_death(dead_player_id: int) -> void:
 
 
 ## 依次请求所有存活角色使用桃，濒死角色还可使用酒自救；已询问名单保证异步取消后不会重复询问同一角色。
+## 救援只遍历一轮座次；同一响应者成功救援后若目标仍未达到1点体力，则立即继续询问该响应者，取消后再进入下一名。
 func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int = -1, already_asked_rescuer_ids: Array[int] = []) -> void:
-	# 本次濒死事件 ID；救援选择记录作为其子事件写入回放历史。
-	var dying_event_id: int = _record_runtime_event("dying", "dying", {"target_id":target_id, "source_id":killer_id})
-	if not state.dying_queue.has(target_id):
-		state.dying_queue.append(target_id)
-	_record_runtime_event("_save", "choice", {"target_id":target_id, "source_id":killer_id}, {}, dying_event_id)
 	# 濒死角色状态；可能需要多张桃才能将体力回复至1。
 	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive:
+		return
+	# 是否首次进入本次濒死流程；连续出桃与取消后的座次推进都复用同一流程，不重复创建回放事件。
+	var is_new_dying_flow: bool = not state.dying_queue.has(target_id)
+	if is_new_dying_flow:
+		# 本次濒死事件 ID；救援选择记录作为其子事件写入回放历史，仅在首次进入时创建。
+		var dying_event_id: int = _record_runtime_event("dying", "dying", {"target_id":target_id, "source_id":killer_id})
+		state.dying_queue.append(target_id)
+		_record_runtime_event("_save", "choice", {"target_id":target_id, "source_id":killer_id}, {}, dying_event_id)
 	target.dying = true
-	# 当前轮救援询问起点；首次从当前回合角色开始，回复后仍未脱离濒死则从刚才的响应者重新开始。
+	# 当前轮救援询问起点；首次从当前回合角色开始，连续出桃时仍从刚才的响应者继续。
 	var rescue_start_player_id: int = state.current_player_id if rescue_start_override < 0 else rescue_start_override
-	# 当前轮已经完成询问的角色 ID；异步响应恢复时沿用，成功回复后新一轮会重新清空。
+	# 当前轮已经完成询问的角色 ID；异步响应恢复时沿用，整个濒死流程不会清空全体名单开启第二轮。
 	var asked_rescuer_ids: Array[int] = already_asked_rescuer_ids.duplicate()
-	add_log("%s进入濒死状态，需要回复至1点体力。" % target.display_name)
-	_dispatch_rule_event(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
-	while target.alive and target.hp <= 0:
-		# 本轮是否有人成功救援；若为 false 则结束循环并死亡。
-		var rescued: bool = false
-		# 救援询问顺序；首次从当前回合角色开始，连续回复未脱离濒死时从上一名响应者继续按座次轮询。
-		var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
-		for rescuer: PlayerState in rescue_order:
-			if not rescuer.alive or asked_rescuer_ids.has(rescuer.player_id):
-				continue
-			asked_rescuer_ids.append(rescuer.player_id)
-			# 当前救援者可用响应模式；其他角色只能使用桃，濒死者本人可在同一时机从桃与酒中直接选择。
-			var response_patterns: Array[String] = ["tao"]
-			if rescuer.player_id == target_id:
-				response_patterns.append("jiu")
-			# 救援响应上下文；已询问名单与允许模式共同恢复同一个窗口，不再创建先桃后酒的第二次询问。
-			var rescue_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_patterns":response_patterns.duplicate(), "asked_rescuer_ids":asked_rescuer_ids.duplicate()}
-			# 实际提交的救援牌；为空表示明确取消或没有合法候选，实体定义决定本次使用桃还是酒。
-			var rescue_card: CardInstance = request_response_card_patterns(rescuer.player_id, response_patterns, "请选择是否使用【桃】%s。" % ("或【酒】自救" if rescuer.player_id == target_id else "救援%s" % target.display_name), rescue_context)
-			if has_pending_card_choice():
-				return
-			if rescue_card != null:
-				# 实际救援模式；桃可救援目标，酒只会出现在濒死者自己的候选中。
-				var response_pattern: String = str(GameDatabase.get_card(rescue_card.definition_id).get("response_pattern", ""))
-				if response_pattern == "tao":
-					add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
-				else:
-					add_log("%s在濒死时使用【酒】自救。" % target.display_name)
-				recover(rescuer.player_id, target_id, 1, response_pattern)
-				rescue_start_player_id = rescuer.player_id
-				asked_rescuer_ids.clear()
-				rescued = true
-				break
-		if not rescued:
-			state.dying_queue.erase(target_id)
-			_resolve_death(target_id, killer_id)
+	if is_new_dying_flow:
+		add_log("%s进入濒死状态，需要回复至1点体力。" % target.display_name)
+		_dispatch_rule_event(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
+	# 救援询问顺序；同一轮从指定起点按行动座次遍历，已完成询问的角色直接跳过。
+	var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
+	for rescuer: PlayerState in rescue_order:
+		if not rescuer.alive or asked_rescuer_ids.has(rescuer.player_id):
+			continue
+		asked_rescuer_ids.append(rescuer.player_id)
+		# 当前救援者可用响应模式；其他角色只能使用桃，濒死者本人可在同一时机从桃与酒中直接选择。
+		var response_patterns: Array[String] = ["tao"]
+		if rescuer.player_id == target_id:
+			response_patterns.append("jiu")
+		# 当前尚需回复的体力点数；每张桃或自救酒固定回复1点，因此数值也等于达到1点所需的牌数。
+		var required_recover: int = 1 - target.hp
+		# 救援响应上下文；已询问名单与所需回复数共同恢复同一个单轮流程，不创建全体第二轮询问。
+		var rescue_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_patterns":response_patterns.duplicate(), "asked_rescuer_ids":asked_rescuer_ids.duplicate(), "required_recover":required_recover}
+		# 救援提示；明确给出目标达到1点体力还需要的桃数，濒死者本人同时可以选择酒自救。
+		var rescue_prompt: String = "%s当前还需要%d张【桃】使体力达到1，请选择是否%s。" % [target.display_name, required_recover, "使用【桃】或【酒】自救" if rescuer.player_id == target_id else "使用【桃】救援"]
+		# 实际提交的救援牌；为空表示明确取消或没有合法候选，实体定义决定本次使用桃还是酒。
+		var rescue_card: CardInstance = request_response_card_patterns(rescuer.player_id, response_patterns, rescue_prompt, rescue_context)
+		if has_pending_card_choice():
 			return
+		if rescue_card == null:
+			continue
+		# 实际救援模式；桃可救援目标，酒只会出现在濒死者自己的候选中。
+		var response_pattern: String = _get_provided_response_pattern(GameDatabase.get_card(rescue_card.definition_id))
+		if response_pattern == "tao":
+			add_log("%s对%s使用【桃】。" % [rescuer.display_name, target.display_name])
+		else:
+			add_log("%s在濒死时使用【酒】自救。" % target.display_name)
+		recover(rescuer.player_id, target_id, 1, response_pattern)
+		if target.hp >= 1:
+			state.dying_queue.erase(target_id)
+			target.dying = false
+			return
+		# 同一响应者出牌后仍未救至1点时允许继续出牌；只移除该响应者，其他已询问角色仍保持完成状态。
+		asked_rescuer_ids.erase(rescuer.player_id)
+		_resolve_dying(target_id, killer_id, rescuer.player_id, asked_rescuer_ids)
+		return
 	state.dying_queue.erase(target_id)
-	target.dying = false
+	_resolve_death(target_id, killer_id)
 
 
 ## 恢复濒死救援响应；成功使用桃或酒后重新检查目标体力并继续同一救援轮。
@@ -3563,7 +3590,7 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)), asked_rescuer_ids)
 		return
 	# 实际响应模式；由已消费实体牌的定义得出，客户端不能通过上下文伪造桃或酒类型。
-	var response_pattern: String = str(GameDatabase.get_card(response_card.definition_id).get("response_pattern", ""))
+	var response_pattern: String = _get_provided_response_pattern(GameDatabase.get_card(response_card.definition_id))
 	if response_pattern == "tao":
 		recover(responder_id, target_id, 1, "tao")
 		add_log("%s对%s使用【桃】。" % [state.get_player(responder_id).display_name, state.get_player(target_id).display_name])
@@ -3573,7 +3600,9 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	# 最新濒死目标状态；回复后依据当前体力决定继续救援或退出濒死队列。
 	var target: PlayerState = state.get_player(target_id)
 	if target != null and target.alive and target.hp <= 0:
-		_resolve_dying(target_id, int(context.get("killer_id", -1)))
+		# 当前响应者仍可继续出桃；只从已询问集合移除本人，其他角色在本轮内不会被重复询问。
+		asked_rescuer_ids.erase(responder_id)
+		_resolve_dying(target_id, int(context.get("killer_id", -1)), responder_id, asked_rescuer_ids)
 	else:
 		state.dying_queue.erase(target_id)
 		if target != null:
