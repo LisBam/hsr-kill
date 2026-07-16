@@ -31,4 +31,10 @@ func _init() -> void:
 
 ## 执行【诸葛连弩】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 诸葛连弩只解除【杀】在出牌阶段的基础使用次数限制。
+func ignores_play_count_limit(card_definition: Dictionary) -> bool:
+	return str(card_definition.get("effect_id", "")) == "slash"

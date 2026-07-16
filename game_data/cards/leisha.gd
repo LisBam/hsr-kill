@@ -30,9 +30,19 @@ func _init() -> void:
 
 ## 执行【雷杀】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_slash(card, actor_id, target_ids)
+	return SlashCardEffect.new(resolver).resolve(card, actor_id, target_ids)
 
 
 ## 结算多目标【杀】的当前目标，并复用整张牌预先保存的酒加值、属性与无视防具状态。
 func resolve_target(resolver: Object, card: CardInstance, actor_id: int, target_id: int, resolution_context: Dictionary) -> String:
-	return resolver.resolve_slash_target(card, actor_id, target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
+	return SlashCardEffect.new(resolver).resolve_target(card, actor_id, target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
+
+
+## 恢复【杀】流程中的武器选牌；具体阶段由共享牌族组件根据 kind 识别。
+func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
+	return SlashCardEffect.new(resolver).continue_choice(context, selected_uids)
+
+
+## 恢复【闪】或青龙偃月刀追加【杀】响应；响应牌已由控制器完成合法消费。
+func continue_response(resolver: Object, context: Dictionary, response_card: CardInstance) -> bool:
+	return SlashCardEffect.new(resolver).continue_response(context, response_card)

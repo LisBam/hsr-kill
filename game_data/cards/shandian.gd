@@ -30,7 +30,10 @@ func _init() -> void:
 
 ## 执行【闪电】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_delayed(card, actor_id, target_ids)
+	if target_ids.is_empty():
+		return "discard"
+	resolver.host.place_delayed_trick(target_ids[0], card)
+	return "judgment"
 
 
 ## 结算【闪电】判定；黑桃2至9造成3点无来源雷电伤害，否则向下一名无闪电角色传递。

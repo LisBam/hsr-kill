@@ -30,4 +30,8 @@ func _init() -> void:
 
 ## 执行【桃园结义】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_heal_all(card, actor_id, target_ids)
+	for target_id: int in target_ids:
+		if resolver.should_skip_trick_target(card, actor_id, target_id):
+			continue
+		resolver.host.recover(actor_id, target_id, 1, card.definition_id)
+	return resolver.default_destination()

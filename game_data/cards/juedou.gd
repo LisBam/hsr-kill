@@ -30,4 +30,44 @@ func _init() -> void:
 
 ## 执行【决斗】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_duel(card, actor_id, target_ids)
+	for target_id: int in target_ids:
+		if resolver.should_skip_trick_target(card, actor_id, target_id):
+			continue
+		_continue_exchange(resolver, card.uid, target_id, actor_id)
+	return resolver.default_destination()
+
+
+## 从指定响应者继续【决斗】轮换；每轮都通过统一响应端口请求一张实体【杀】。
+func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: int, opponent_id: int) -> void:
+	# 安全轮次计数；实体牌有限，设置上限用于防止扩展技能制造无限响应。
+	var exchange_count: int = 0
+	while exchange_count < 100 and not resolver.is_resolution_stopped():
+		exchange_count += 1
+		# 当前轮响应上下文；成功响应后交换双方，放弃时由对手造成伤害。
+		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id}
+		# 当前轮实体【杀】；为空表示放弃或没有合法响应牌。
+		var response_card: CardInstance = resolver.host.request_response_card(responder_id, "sha", "请响应决斗并打出【杀】。", response_context)
+		if resolver.host.has_pending_card_choice():
+			return
+		if response_card == null:
+			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+			return
+		# 上一轮响应者；交换后由其对手成为下一轮响应者。
+		var previous_responder_id: int = responder_id
+		responder_id = opponent_id
+		opponent_id = previous_responder_id
+
+
+## 恢复【决斗】的一轮【杀】响应；卡牌源码直接决定继续轮换或造成1点伤害。
+func continue_response(resolver: Object, context: Dictionary, response_card: CardInstance) -> bool:
+	if str(context.get("kind", "")) != "duel_response":
+		return false
+	# 当前响应者 ID；未响应时成为伤害目标。
+	var responder_id: int = int(context.get("responder_id", -1))
+	# 当前对手 ID；未响应时成为伤害来源，成功时成为下一响应者。
+	var opponent_id: int = int(context.get("opponent_id", -1))
+	if response_card == null:
+		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+	else:
+		_continue_exchange(resolver, int(context.get("parent_card_uid", -1)), opponent_id, responder_id)
+	return true

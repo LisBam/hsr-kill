@@ -31,4 +31,12 @@ func _init() -> void:
 
 ## 执行【方天画戟】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 当【杀】是持有者最后一张手牌时，将最大目标数固定增加2。
+func modify_maximum_target_count(actor: PlayerState, card: CardInstance, current_count: int) -> int:
+	if str(GameDatabase.get_card(card.definition_id).get("effect_id", "")) == "slash" and card.zone == "hand" and actor.hand.size() == 1:
+		return current_count + 2
+	return current_count

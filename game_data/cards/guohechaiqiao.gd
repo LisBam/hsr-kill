@@ -30,4 +30,10 @@ func _init() -> void:
 
 ## 执行【过河拆桥】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_discard_target(card, actor_id, target_ids)
+	for target_id: int in target_ids:
+		if resolver.should_skip_trick_target(card, actor_id, target_id):
+			continue
+		resolver.host.discard_one_from_player(actor_id, target_id, card.uid)
+		if resolver.host.has_pending_card_choice():
+			return "pending"
+	return resolver.default_destination()

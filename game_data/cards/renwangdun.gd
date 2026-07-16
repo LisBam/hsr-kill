@@ -31,4 +31,10 @@ func _init() -> void:
 
 ## 执行【仁王盾】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 仁王盾令黑色实体【杀】无效；无颜色的虚拟【杀】不满足条件。
+func blocks_slash(card: CardInstance, nature: String) -> bool:
+	return card.get_color() == "black"

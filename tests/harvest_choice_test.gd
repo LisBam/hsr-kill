@@ -65,7 +65,8 @@ func _run() -> void:
 	parent_card.zone = "processing"
 	parent_card.owner_id = -1
 	_controller.state.processing_area.append(parent_card)
-	_controller.resolve_harvest_choices(parent_card.uid, 0, [0, 1])
+	# 通过通用卡牌源码调度入口执行【五谷丰登】；测试不再依赖控制器内的具体牌名函数。
+	_controller.effect_resolver.resolve(parent_card, 0, [0, 1])
 	await get_tree().process_frame
 	if _finished:
 		return

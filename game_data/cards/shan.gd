@@ -30,4 +30,4 @@ func _init() -> void:
 
 ## 执行【闪】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_no_effect(card, actor_id, target_ids)
+	return "discard"
