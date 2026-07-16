@@ -157,6 +157,7 @@ func _ready() -> void:
 	match_controller.action_rejected.connect(_on_action_rejected)
 	match_controller.card_presentation_requested.connect(_on_card_presentation_requested)
 	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
+	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
@@ -889,6 +890,12 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	var presentation_only: bool = str(presentation_data.get("event_name", "")) == "showCards"
 	# 当前展示实体 UID；实际使用牌需要先停止可能尚未完成的本地获得动画，再把同一正式节点交给出牌动画层。
 	var card_uid: int = int(card_data.get("uid", -1))
+	# 当前表现稳定 ID；动画层在创建或接管任何节点前原子去重，重复网络包不会生成第二张牌面。
+	var presentation_id: int = int(presentation_data.get("presentation_id", -1))
+	# 本次是否接管后续弃牌移动；只有真实使用牌和判定牌可以登记实体 UID 所有权。
+	var owns_discard_transfer: bool = bool(presentation_data.get("owns_discard_transfer", false))
+	if not card_use_animation_layer.claim_presentation(presentation_id, card_uid, owns_discard_transfer):
+		return
 	if not presentation_only:
 		_cancel_local_hand_gain_animation(card_uid)
 		# 普通使用牌最终会从处理区进入弃牌堆；即使中央展示已经淡出，后续移牌信号也不能再生成第二张牌。
@@ -900,7 +907,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 		animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
-	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, bool(presentation_data.get("owns_discard_transfer", false)))
+	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, owns_discard_transfer)
 
 
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
@@ -909,6 +916,9 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	var card_uid: int = int(card_data.get("uid", -1))
 	if target_zone == "discard_pile" and card_use_animation_layer.consume_discard_transfer_claim(card_uid):
 		return
+	if target_zone != "discard_pile":
+		# 实体已经进入新的规则区域；上一轮弃牌移动的待消费与已消费所有权到此失效，未来普通弃置或再次使用可重新播放。
+		card_use_animation_layer.release_consumed_discard_claim(card_uid)
 	# 本地摸牌与其他获得都使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
 	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand"
 	if is_local_gain:
@@ -941,6 +951,11 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
 	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
 	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
+
+
+## 接收实体进入新区域的内部所有权通知；只释放旧弃牌待消费与已消费状态，不创建牌面或修改权威区域。
+func _on_card_animation_ownership_reset_requested(card_uid: int) -> void:
+	card_use_animation_layer.release_consumed_discard_claim(card_uid)
 
 
 ## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。

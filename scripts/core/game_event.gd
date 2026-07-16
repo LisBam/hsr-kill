@@ -78,6 +78,9 @@ var body_finished: bool = false
 ## 是否已经把终态写入事件历史；仅供 EventScheduler 防止重复完成和重复复制结果。
 var finalized: bool = false
 
+## 是否由调度器保持为长期事件；开启时允许持续接收子事件，且不会把“等待下一条子事件”误建模为暂停。
+var held_open: bool = false
+
 ## 下一次步骤推进的显式目标；-1 表示按正常顺序增加，goto 会覆盖该值。
 var _next_step_override: int = -1
 
@@ -218,4 +221,5 @@ func to_dict() -> Dictionary:
 		"termination_reason": termination_reason,
 		"body_finished": body_finished,
 		"finalized": finalized,
+		"held_open": held_open,
 	}

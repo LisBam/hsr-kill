@@ -270,6 +270,11 @@ func _run() -> void:
 	# 延迟弃牌使用事件；动画淡出后仍需保留 UID 所有权，直到真实 processing -> discard 移动到达。
 	var delayed_discard_presentation_data: Dictionary = {"presentation_id":3, "event_id":3, "event_name":"useCard", "card_data":delayed_discard_card_data, "actor_id":4, "target_ids":delayed_discard_target_ids, "source_zone":"processing", "owns_discard_transfer":true}
 	main_instance.call("_on_card_presentation_requested", delayed_discard_presentation_data)
+	# 重复表现包；相同 presentation_id 在任何节点创建前被拒绝，活动队列始终只有一个实体牌面。
+	main_instance.call("_on_card_presentation_requested", delayed_discard_presentation_data)
+	if animation_layer._active_cards.size() != 1:
+		_fail("duplicate_presentation_created=%s" % [animation_layer._active_cards])
+		return
 	await get_tree().create_timer(0.06).timeout
 	if not animation_layer._active_cards.is_empty() or not animation_layer._discard_transfer_claims.has(90007):
 		_fail("delayed_discard_presentation_state:%s" % [animation_layer._active_cards])
@@ -278,6 +283,34 @@ func _run() -> void:
 	if not animation_layer._active_cards.is_empty() or animation_layer._discard_transfer_claims.has(90007):
 		_fail("delayed_discard_duplicate:%s" % [animation_layer._active_cards])
 		return
+	# 重复移动增量；认领消费后继续保留幂等 UID，第二次转发也不能在牌桌上方重新实例化同一张牌。
+	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
+	if not animation_layer._active_cards.is_empty() or not animation_layer._consumed_discard_transfer_claims.has(90007):
+		_fail("repeated_discard_transfer_created:%s" % [animation_layer._active_cards])
+		return
+	# 不同表现 ID 的迟到包；实体仍在弃牌生命周期时也必须拒绝，不能把网络重发误判为下一次真实使用。
+	var late_presentation_data: Dictionary = delayed_discard_presentation_data.duplicate(true)
+	late_presentation_data["presentation_id"] = 4
+	main_instance.call("_on_card_presentation_requested", late_presentation_data)
+	if not animation_layer._active_cards.is_empty() or not animation_layer._consumed_discard_transfer_claims.has(90007):
+		_fail("late_distinct_presentation_created:%s" % [animation_layer._active_cards])
+		return
+	# 实体进入新的非弃牌区域；权威移牌内部通知会释放旧待消费与已消费状态，使该牌未来一次合法普通弃置重新可见。
+	main_instance.call("_on_card_animation_ownership_reset_requested", 90007)
+	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
+	if animation_layer._active_cards.size() != 1 or animation_layer._active_cards[0].card_uid != 90007:
+		_fail("discard_claim_not_released:%s" % [animation_layer._active_cards])
+		return
+	animation_layer.clear_presentations()
+	# 尚未到达弃牌堆的旧认领也必须在实体进入新区域时释放，否则该 UID 下一次真实使用会被误判为重复表现。
+	if not animation_layer.claim_presentation(5, 90008, true):
+		_fail("pending_discard_claim_registration")
+		return
+	animation_layer.release_consumed_discard_claim(90008)
+	if not animation_layer.claim_presentation(6, 90008, true):
+		_fail("pending_discard_claim_not_released")
+		return
+	animation_layer.clear_presentations()
 	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
 	var single_target_state: GameState = _make_single_target_state()
 	match_controller.state = single_target_state

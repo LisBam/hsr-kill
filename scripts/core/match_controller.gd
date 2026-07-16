@@ -14,6 +14,9 @@ signal card_presentation_requested(presentation_data: Dictionary)
 ## 区域移动表现信号；所有摸牌、获得、响应和弃牌都使用同一实体牌动画入口。
 signal card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String)
 
+## 牌面弃牌幂等状态释放信号；实体进入任意非弃牌区域时发送，不代表需要播放一条可见转移动画。
+signal card_animation_ownership_reset_requested(card_uid: int)
+
 ## 统一选择请求信号；玩家和 AI 都必须先收到询问，再提交 choose_cards 动作。
 signal card_choice_requested(choice_data: Dictionary)
 
@@ -82,6 +85,9 @@ var rule_query: RuleQuery
 
 ## 实体牌唯一移动服务；新移牌记录写入 GameState.card_move_history。
 var card_movement: CardMovementService
+
+## 使用牌事件树构建组件；只声明 useCard 子事件拓扑，不读取状态或执行具体卡牌效果。
+var card_use_event_service: CardUseEventService
 
 ## 对局随机数生成器；牌堆、身份与武将选择统一使用，便于未来记录种子回放。
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -157,6 +163,7 @@ func _ready() -> void:
 		add_child(event_scheduler)
 	_connect_event_runtime()
 	identity_rules = IdentityRules.new()
+	card_use_event_service = CardUseEventService.new()
 	network_gateway.command_received.connect(_on_network_command_received)
 	if not network_gateway.choice_response_received.is_connected(_on_network_choice_response_received):
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
@@ -459,7 +466,6 @@ func _begin_play_choice(player_id: int) -> void:
 	if player == null or not player.alive:
 		return
 	var event: GameEvent = event_scheduler.create_event("chooseToUse", "choice", [], {"player_id":player_id, "phase":"play"}, _runtime_root_event_id)
-	event.status = GameEvent.Status.RUNNING
 	event.player_id = player_id
 	var request: ChoiceRequest = ChoiceRequest.new(event.event_id, player_id, "use", "请选择要使用的牌或结束出牌阶段")
 	request.min_count = 0
@@ -478,6 +484,8 @@ func _begin_play_choice(player_id: int) -> void:
 	_play_choice_event_id = event.event_id
 	_play_choice_actor_id = player_id
 	_play_choice_match_id = state.match_id
+	# 出牌选择是 phaseUse 下的真实等待事件；长期根事件保持开放时由此把请求压入调度栈。
+	event_scheduler.drain()
 
 
 ## 返回当前 chooseToUse 是否仍是本局、本回合的活动请求；旧对局请求不会阻塞规则测试或新开局。
@@ -508,6 +516,20 @@ func _submit_play_choice_response(action: PlayerAction) -> bool:
 	_play_choice_actor_id = -1
 	_play_choice_match_id = ""
 	return true
+
+
+## 关闭仍属于上一回合的 chooseToUse 请求；换回合、死亡转交和测试强制转交都不能让旧请求继续阻塞根事件栈。
+func _cancel_active_play_choice(reason: String) -> void:
+	if not _has_active_play_choice():
+		return
+	# 系统取消响应；空卡牌与 confirmed=false 等价于结束旧选择窗口，但不会执行 end_play 的弃牌和阶段逻辑。
+	var response: ChoiceResponse = ChoiceResponse.new(_play_choice_request_id, _play_choice_event_id, _play_choice_actor_id, false)
+	response.source = "system:%s" % reason
+	event_scheduler.submit_choice(response)
+	_play_choice_request_id = -1
+	_play_choice_event_id = -1
+	_play_choice_actor_id = -1
+	_play_choice_match_id = ""
 
 
 ## 在消费 chooseToUse 请求前执行无副作用预校验；失败动作不会关闭玩家当前出牌窗口。
@@ -581,8 +603,12 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		choice_type = "discard"
 		choice_event_name = "chooseToDiscard"
 	# 独立选择事件；控制器的兼容恢复分支继续执行具体效果，EventScheduler 负责请求身份和旧响应失效。
-	var choice_event: GameEvent = event_scheduler.create_event(choice_event_name, "choice", [], context, _runtime_root_event_id)
-	choice_event.status = GameEvent.Status.RUNNING
+	# 选择父事件；规则效果内创建的响应必须挂到当前 content 子事件，阶段级选择则回退到长期根事件。
+	var choice_parent_event_id: int = event_scheduler.get_current_event_id()
+	if choice_parent_event_id < 0:
+		choice_parent_event_id = _runtime_root_event_id
+	# 独立选择事件；控制器恢复分支执行具体结果，EventScheduler 负责父子阻塞、请求身份和旧响应失效。
+	var choice_event: GameEvent = event_scheduler.create_event(choice_event_name, "choice", [], context, choice_parent_event_id)
 	choice_event.player_id = chooser_id
 	var runtime_request: ChoiceRequest = ChoiceRequest.new(choice_event.event_id, chooser_id, choice_type, prompt)
 	runtime_request.min_count = maxi(min_select, 0)
@@ -607,6 +633,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	_pending_card_choice["runtime_request_id"] = runtime_request.request_id
 	state.current_phase = "choice"
 	card_choice_requested.emit(_pending_card_choice.duplicate(true))
+	# 当前调用不在调度器内容步骤内时立即把选择子事件压栈；调度中重入 drain 会安全返回并由外层循环接管。
+	event_scheduler.drain()
 	if interactive_human:
 		return []
 	if ai_controlled_chooser:
@@ -769,7 +797,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	runtime_response.card_ids = selected_uids.duplicate()
 	runtime_response.client_sequence = action.client_sequence
 	runtime_response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
-	if not event_scheduler.submit_choice(runtime_response):
+	# 先解决选择自身 token 但延迟排空事件栈；具体效果必须应用选择结果后才能继续父 content 事件。
+	if not event_scheduler.submit_choice(runtime_response, true):
 		return _reject("事件运行时拒绝了已过期的选择结果。")
 	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
@@ -787,6 +816,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		# AI 出牌被本地响应或选择暂停后，原异步驱动已经结束；恢复出牌阶段时必须重新安排下一动作。
 		if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
 			_schedule_ai_action()
+	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
+	event_scheduler.drain()
 	return true
 
 
@@ -1323,6 +1354,9 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, co
 	var parent_card_uid_hint: int = int(continuation_context.get("parent_card_uid", -1))
 	# 当前被响应锦囊；普通锦囊和延时锦囊结算时都位于公共处理区。
 	var parent_card: CardInstance = _find_processing_card(parent_card_uid_hint) if parent_card_uid_hint >= 0 else _find_processing_card_by_definition(trick_id)
+	# 直击目标不能响应本次锦囊；该查询来自当前 CardUseEvent 的 directHit 集合，不创建空无懈窗口。
+	if parent_card != null and is_card_target_direct_hit(parent_card.uid, target_id):
+		return false
 	# 恢复结果键；本地玩家提交后重新进入效果执行器时只读取一次，避免再次弹出同一询问。
 	var resume_key: String = _negation_resume_key(parent_card.uid if parent_card != null else -1, source_id, target_id, trick_id)
 	if _negation_resume_results.has(resume_key):
@@ -2141,6 +2175,8 @@ func _create_and_shuffle_deck() -> void:
 func _start_turn(player_id: int) -> void:
 	if state.game_over:
 		return
+	# 上一回合残留的出牌选择；必须先从真实事件栈移除，新的阶段与 CardUseEvent 才能进入根事件。
+	_cancel_active_play_choice("turn_changed")
 	# 新回合玩家状态；死亡玩家会由调用方提前跳过。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
@@ -2389,13 +2425,21 @@ func _begin_active_card_resolution(card: CardInstance, actor_id: int, target_ids
 			if has_pending_card_choice():
 				return
 			_apply_zhuque_trigger_choice(trigger_context, selected_uids)
-	_continue_active_card_resolution(card.uid)
+	# 真实 CardUseEvent 由父事件步骤安排逐目标 content；迁移期独立调用才继续使用栈外兼容游标。
+	var card_use_context: Dictionary = _card_use_contexts.get(card.uid, {}) as Dictionary
+	if not bool(card_use_context.get("runtime_managed", false)):
+		_continue_active_card_resolution(card.uid)
 
 
 ## 恢复朱雀羽扇发动选择；只有仍装备同一实体牌且玩家明确选择时才转换整张【杀】的属性。
 func _continue_zhuque_trigger_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	_apply_zhuque_trigger_choice(context, selected_uids)
-	_continue_active_card_resolution(int(context.get("parent_card_uid", -1)))
+	# 原【杀】UID；真实事件树等待选择子事件完成，兼容调用则继续旧逐目标游标。
+	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
+	# 真实 CardUseEvent 会在选择子事件完成后重新执行设置步骤；迁移期调用才需要主动推进旧游标。
+	var card_use_context: Dictionary = _card_use_contexts.get(parent_card_uid, {}) as Dictionary
+	if not bool(card_use_context.get("runtime_managed", false)):
+		_continue_active_card_resolution(parent_card_uid)
 
 
 ## 应用朱雀羽扇选择结果；装备本身不作为材料消耗，转换结果保存在当前卡牌的共享结算上下文中。
@@ -2476,7 +2520,10 @@ func _complete_active_card_target(parent_card_uid: int) -> void:
 	var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
 	resolution_context["current_target_id"] = -1
 	_active_card_resolutions[parent_card_uid] = resolution_context
-	_continue_active_card_resolution(parent_card_uid)
+	# 真实 content 子事件由其选择子事件自然阻塞，统一 drain 后由父 CardUseEvent 的 redo 安排下一目标。
+	var card_use_context: Dictionary = _card_use_contexts.get(parent_card_uid, {}) as Dictionary
+	if not bool(card_use_context.get("runtime_managed", false)):
+		_continue_active_card_resolution(parent_card_uid)
 
 
 ## 从无懈可击未抵消的当前目标重新进入效果；恢复键保证本次不会再次创建相同目标的无懈询问。
@@ -2494,7 +2541,10 @@ func _resume_active_card_target(parent_card_uid: int) -> void:
 	# 当前目标 ID；无有效目标说明上下文已经由其他恢复路径推进。
 	var target_id: int = int(resolution_context.get("current_target_id", -1))
 	if target_id < 0:
-		_continue_active_card_resolution(parent_card_uid)
+		# 当前使用牌生命周期；真实事件树等待父 content 自然恢复，迁移期调用继续旧游标。
+		var card_use_context: Dictionary = _card_use_contexts.get(parent_card_uid, {}) as Dictionary
+		if not bool(card_use_context.get("runtime_managed", false)):
+			_continue_active_card_resolution(parent_card_uid)
 		return
 	# 恢复后的目标数组；普通牌只包含当前目标，借刀杀人恢复其完整双目标语义。
 	var resumed_targets: Array[int] = [target_id]
@@ -2525,49 +2575,469 @@ func _get_equipment_card_by_definition(player_id: int, definition_id: String) ->
 
 ## 执行已通过合法性校验的出牌动作。
 func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> void:
-	# 卡牌使用父事件；逻辑牌与实体材料牌分开记录，当前实体牌 UID 是唯一材料。
-	var card_use_event_id: int = _record_runtime_event("CardUseEvent", "card_use", {"actor_id":actor_id, "card_id":card.definition_id, "card_uid":card.uid, "target_ids":target_ids.duplicate()})
-	# 卡牌使用生命周期上下文；contentAfter 必须等待全部同步或异步目标效果完成后再写入。
-	_card_use_contexts[card.uid] = {"event_id":card_use_event_id, "actor_id":actor_id, "card_definition_id":card.definition_id}
-	# 使用牌的玩家状态；从其手牌移至处理区。
-	var actor: PlayerState = state.get_player(actor_id)
-	_ensure_card_movement()
-	card_movement.move_card(card, "processing", -1, "use", card_use_event_id)
-	_record_runtime_event("lose", "card_move", {"card_uids":[card.uid], "to_zone":"processing", "reason":"use"}, {}, card_use_event_id)
-	for use_stage_name: String in ["useCard0", "useCard1", "yingbian", "useCard2", "useCard"]:
-		_record_runtime_event(use_stage_name, "trigger", {"actor_id":actor_id, "card_uid":card.uid, "target_ids":target_ids.duplicate()}, {}, card_use_event_id)
-	# 逐目标触发顺序；无名杀会先让全部目标经过同一阶段，再进入下一阶段，不能对单个目标连续跑完四个时机。
-	for target_stage_name: String in ["useCardToPlayer", "useCardToTarget", "useCardToPlayered", "useCardToTargeted"]:
-		for target_player_id: int in target_ids:
-			_record_runtime_event(target_stage_name, "trigger", {"actor_id":actor_id, "target_id":target_player_id, "card_uid":card.uid}, {}, card_use_event_id)
-	_record_runtime_event("contentBefore", "card_content", {"actor_id":actor_id, "card_uid":card.uid}, {}, card_use_event_id)
+	if state == null or state.game_over or card == null:
+		return
+	if card_use_event_service == null:
+		card_use_event_service = CardUseEventService.new()
 	# 当前卡牌定义；用于次数计数与日志。
+	# 当前逻辑牌；真实牌也通过 VirtualCard 描述逻辑属性，实体材料 UID 始终独立保存。
+	# 当前卡牌定义快照；提供逻辑属性、效果类型和默认自然属性，不持有运行时状态。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 本次使用的逻辑牌快照；后续视为牌与多材料牌可以复用完全相同的事件字段。
+	var virtual_card: VirtualCard = VirtualCard.new(card.definition_id, card.suit, card.rank, str(definition.get("nature", "normal")))
+	virtual_card.add_material(card.uid)
+	# 使用牌事件上下文；仅包含可序列化规则数据，不保存 CardInstance、节点或 Callable。
+	var event_context: Dictionary = {
+		"actor_id":actor_id,
+		"card_id":card.definition_id,
+		"card_uid":card.uid,
+		"target_ids":target_ids.duplicate(),
+		"virtual_card":virtual_card.to_dict(),
+		"material_card_uids":virtual_card.material_card_uids.duplicate(),
+	}
+	# CardUseEvent 的固定内容步骤；每一步只安排下一层子事件或推进一个明确规则边界。
+	var content_steps: Array[Callable] = [
+		_card_use_step_declare,
+		_card_use_step_enqueue_use_timings,
+		_card_use_step_enqueue_target_timings,
+		_card_use_step_enqueue_content_before,
+		_card_use_step_resolve_content,
+		_card_use_step_enqueue_content_after,
+		_card_use_step_prepare_after,
+	]
+	# 正式对局挂到长期根事件；独立规则测试没有根事件时让 CardUseEvent 自身成为本次调度根。
+	var parent_event_id: int = event_scheduler.root_event_id if event_scheduler.root_event_id >= 0 else -1
+	# 卡牌使用父事件；逻辑牌与实体材料牌分开记录，当前实体牌 UID 是唯一材料。
+	# 真实使用牌父事件；它会一直留在栈中等待全部选择、目标内容和 after 回收结束。
+	var use_event: GameEvent = card_use_event_service.create_use_event(event_scheduler, parent_event_id, event_context, content_steps)
+	if use_event == null:
+		return
+	use_event.card["virtual_id"] = use_event.event_id
+	# 卡牌使用生命周期上下文；contentAfter 必须等待全部同步或异步目标效果完成后再写入。
+	# 使用牌生命周期共享上下文；字典只保存稳定 ID、游标和规则标记，异步恢复不持有牌对象。
+	_card_use_contexts[card.uid] = {
+		"event_id":use_event.event_id,
+		"actor_id":actor_id,
+		"card_definition_id":card.definition_id,
+		"target_ids":target_ids.duplicate(),
+		"excluded_target_ids":[],
+		"direct_hit_target_ids":[],
+		"custom_args":{},
+		"destination":"pending",
+		"content_complete":false,
+		"runtime_managed":true,
+	}
+	if parent_event_id < 0:
+		event_scheduler.start(use_event.event_id)
+	else:
+		event_scheduler.drain()
+
+
+## CardUseEvent 第一步：创建真实 lose 子事件；材料进入处理区后才声明使用次数、日志与牌面表现。
+func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void:
+	# 当前实体材料 UID；基础牌只有一个材料，后续多材料牌仍从同一逻辑牌数组读取。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前共享生命周期；事件已失效时中止，防止旧事件移动新对局中的同 UID 牌。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty() or state == null or state.game_over:
+		event.abort("card_use_context_missing")
+		return
+	if not bool(card_use_context.get("materials_moved", false)):
+		# lose 子事件上下文；移动原因和材料 UID 可直接供回放重建处理区变化。
+		var lose_context: Dictionary = event.context.duplicate(true)
+		lose_context["to_zone"] = "processing"
+		lose_context["reason"] = "use"
+		scheduler.create_child(event.event_id, "lose", "card_move", [_execute_use_card_lose_event], lose_context)
+		card_use_context["materials_moved"] = true
+		_card_use_contexts[card_uid] = card_use_context
+		event.redo()
+		return
+	if bool(card_use_context.get("declared", false)):
+		return
+	# 处理区中的使用牌；lose 子事件失败或材料已被其他规则移动时不能继续伪造声明。
+	var card: CardInstance = _find_processing_card(card_uid)
+	# 使用者状态；死亡或不存在时取消本次牌效，但材料仍由 after 队列按规则回收。
+	# 使用牌的玩家状态；从其手牌移至处理区。
+	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	# 当前使用者状态；用于次数统计、日志和卡牌展示来源。
+	var actor: PlayerState = state.get_player(actor_id)
+	if card == null or actor == null:
+		card_use_context["cancelled"] = true
+		card_use_context["cancel_reason"] = "material_or_actor_missing"
+		_card_use_contexts[card_uid] = card_use_context
+		return
+	# 当前卡牌定义；次数统计和最终区域所有权均来自统一配置。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	if str(definition.get("effect_id", "")) == "slash":
 		actor.slash_count += 1
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	add_log("%s使用了%s。" % [actor.display_name, describe_card(card)])
-	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
+	# 只有正常规则终点为弃牌堆的牌接管后续 processing -> discard 表现，装备与延时锦囊保留未来真实离区动画。
 	var owns_discard_transfer: bool = str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false))
-	_request_card_presentation(card, actor_id, target_ids, "useCard", card_use_event_id, owns_discard_transfer)
-	_dispatch_rule_event(RuleEvent.new("card_used", actor_id, target_ids[0] if not target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":target_ids.duplicate()}))
-	if state.game_over:
+	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
+	_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer)
+	# 兼容扩展事件；现有独立技能仍可监听 card_used，新的源码级技能应优先监听真实 useCard 时机子事件。
+	_dispatch_rule_event(RuleEvent.new("card_used", actor_id, event.target_ids[0] if not event.target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":event.target_ids.duplicate()}))
+	card_use_context["declared"] = true
+	_card_use_contexts[card_uid] = card_use_context
+
+
+## 在 lose 子事件内把全部实体材料移动到 processing；移动历史直接关联真实 lose 事件 ID。
+func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 当前实体牌；基础实现按唯一材料 UID 查找使用者可用牌区，不依赖数组下标。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 材料持有者；手牌与木牛“粮”共用 find_playable_card 和 CardMovementService 区域移除逻辑。
+	var actor_id: int = int(event.context.get("actor_id", -1))
+	# 材料持有者状态；角色不存在时不能从任何可出牌区域取得实体。
+	var actor: PlayerState = state.get_player(actor_id)
+	# 待移动实体材料；默认从持有者手牌或木牛“粮”中按 UID 查找。
+	var card: CardInstance = actor.find_playable_card(card_uid) if actor != null else null
+	if card == null:
+		event.cancel("material_not_playable")
 		return
-	# 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动，多目标牌由活动游标负责最终收尾。
-	var destination: String = "pending"
-	if _uses_active_target_resolution(definition, target_ids):
-		_begin_active_card_resolution(card, actor_id, target_ids, card_use_event_id)
+	_ensure_card_movement()
+	# 实体移动结果；服务统一维护来源区域、持有者、知识与处理区数组。
+	var move: CardMoveEvent = card_movement.move_card(card, "processing", -1, "use", event.event_id)
+	if move == null:
+		event.cancel("material_move_failed")
+		return
+	event.result = {"card_uids":[card.uid], "from_zone":move.from_zone, "to_zone":"processing", "move_id":move.move_id}
+
+
+## 安排 useCard0/useCard1/yingbian/useCard2/useCard 五组真实时机子事件。
+func _card_use_step_enqueue_use_timings(event: GameEvent, scheduler: EventScheduler) -> void:
+	card_use_event_service.enqueue_use_timings(scheduler, event, _execute_card_use_timing_event)
+
+
+## 逐目标触发顺序；无名杀会先让全部目标经过同一阶段，再进入下一阶段，不能对单个目标连续跑完四个时机。
+## 在全部全局时机结束后按最新目标数组逐次安排四组时机；每个子事件结束后重新读取动态目标。
+func _card_use_step_enqueue_target_timings(event: GameEvent, scheduler: EventScheduler) -> void:
+	# 当前使用牌 UID；用于读取唯一共享生命周期上下文。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 使用牌共享上下文；全局或上一目标时机都可调整目标数组，每次 redo 必须重新读取。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	event.target_ids.clear()
+	for target_id_variant: Variant in card_use_context.get("target_ids", event.context.get("target_ids", [])) as Array:
+		event.target_ids.append(int(target_id_variant))
+	# 当前逐目标阶段索引；范围0至3，达到数组长度表示四组时机均已结束。
+	var timing_stage_index: int = int(card_use_context.get("target_timing_stage_index", 0))
+	if timing_stage_index >= CardUseEventService.TARGET_TIMING_NAMES.size():
+		card_use_context.erase("target_timing_stage_index")
+		card_use_context.erase("target_timing_processed_ids")
+		_card_use_contexts[card_uid] = card_use_context
+		return
+	# 本阶段已经创建过时机的目标 ID；数组保留重复项，使同一角色在目标数组出现多次时按出现次数分别触发。
+	var processed_target_ids: Array = card_use_context.get("target_timing_processed_ids", []) as Array
+	# 本轮目标遍历副本；普通多目标按当前行动座次重排，借刀等具有位置语义的目标继续由规则服务保留原顺序。
+	var target_iteration_ids: Array[int] = event.target_ids.duplicate()
+	# 处理区实体；动态目标排序复用与动作提交相同的卡牌规则，缺失时保持共享数组现有顺序完成防御性收口。
+	var card: CardInstance = _find_processing_card(card_uid)
+	if card != null:
+		target_iteration_ids = card_rules.normalize_targets(int(card_use_context.get("actor_id", -1)), card, event.target_ids)
+	# 下一名未处理目标；按 noname getTriggerTarget 的计数语义比较当前目标数与已触发数，动态增删和重复目标都不依赖漂移下标。
+	var next_target_id: int = -1
+	for target_id: int in target_iteration_ids:
+		if processed_target_ids.count(target_id) < event.target_ids.count(target_id):
+			next_target_id = target_id
+			break
+	if next_target_id < 0:
+		card_use_context["target_timing_stage_index"] = timing_stage_index + 1
+		card_use_context["target_timing_processed_ids"] = []
+		_card_use_contexts[card_uid] = card_use_context
+		event.redo()
+		return
+	processed_target_ids.append(next_target_id)
+	card_use_context["target_timing_processed_ids"] = processed_target_ids
+	_card_use_contexts[card_uid] = card_use_context
+	# 当前稳定时机名称；只有全部当前目标完成后才会递增到下一阶段。
+	var timing_name: String = CardUseEventService.TARGET_TIMING_NAMES[timing_stage_index]
+	card_use_event_service.enqueue_target_timing(scheduler, event, timing_name, next_target_id, _execute_card_use_timing_event)
+	event.redo()
+
+
+## 安排唯一 contentBefore 子事件；卡牌定义可在该时机准备整牌共享数据。
+func _card_use_step_enqueue_content_before(event: GameEvent, scheduler: EventScheduler) -> void:
+	card_use_event_service.enqueue_content_before(scheduler, event, _execute_card_content_before_event)
+
+
+## 执行一个真实使用牌时机并把触发器修改写回 CardUseEvent 的共享可序列化上下文。
+func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 时机稳定名称；由 CardUseEventService 按源码顺序写入。
+	var timing_name: String = str(event.context.get("timing_name", event.name))
+	# 原使用牌 UID；用于取得跨时机共享的目标排除、直击和自定义参数。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前使用牌共享上下文；全部时机只通过该字典交换可序列化规则字段。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty():
+		event.abort("card_use_context_missing")
+		return
+	# 当前目标 ID；全局使用牌时机使用-1，逐目标时机在每次执行前重新校验角色仍在场。
+	var target_id: int = int(event.context.get("target_id", -1))
+	if target_id >= 0:
+		# 当前目标状态；死亡或离场目标结束自身时机，不影响其他目标继续。
+		var target: PlayerState = state.get_player(target_id)
+		if target == null or not target.alive:
+			event.cancel("target_out_of_game")
+			return
+	# 触发器可修改的数据副本；标准键与无名杀 excluded/directHit/customArgs 保持一一对应。
+	var timing_data: Dictionary = {
+		"card_uid":card_uid,
+		"card_id":str(card_use_context.get("card_definition_id", "")),
+		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
+		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
+		"direct_hit_target_ids":(card_use_context.get("direct_hit_target_ids", []) as Array).duplicate(),
+		"custom_args":(card_use_context.get("custom_args", {}) as Dictionary).duplicate(true),
+	}
+	# 同步规则事件；处理器仍使用 RuleEvent 端口，但生命周期、父子关系和暂停位置由当前 GameEvent 承载。
+	var rule_event: RuleEvent = RuleEvent.new(timing_name, int(card_use_context.get("actor_id", -1)), target_id, timing_data)
+	rule_event.event_id = event.event_id
+	rule_event.parent_id = event.parent_id
+	event_bus.dispatch(rule_event)
+	if trigger_manager != null and not rule_event.is_terminal():
+		# 当前存活座次顺序；触发器按当前回合起点、firstDo、优先级和注册序稳定执行。
+		var seat_order: Array[int] = []
+		for player: PlayerState in state.get_alive_players():
+			seat_order.append(player.player_id)
+		# 本轮触发排序起点；优先使用当前回合角色，无有效回合时回退到使用者。
+		var start_player_id: int = state.current_player_id if state.current_player_id >= 0 else int(card_use_context.get("actor_id", -1))
+		trigger_manager.dispatch(rule_event, start_player_id, seat_order)
+	if not rule_event.is_terminal():
+		rule_event.finish()
+	# 触发器输出；目标、排除、直击与自定义参数全部写回共享上下文供下一时机重新读取。
+	card_use_context["target_ids"] = (rule_event.data.get("target_ids", card_use_context.get("target_ids", [])) as Array).duplicate()
+	card_use_context["excluded_target_ids"] = (rule_event.data.get("excluded_target_ids", card_use_context.get("excluded_target_ids", [])) as Array).duplicate()
+	card_use_context["direct_hit_target_ids"] = (rule_event.data.get("direct_hit_target_ids", card_use_context.get("direct_hit_target_ids", [])) as Array).duplicate()
+	card_use_context["custom_args"] = (rule_event.data.get("custom_args", card_use_context.get("custom_args", {})) as Dictionary).duplicate(true)
+	if rule_event.cancelled or rule_event.neutralized:
+		if target_id >= 0:
+			# 已排除目标数组；当前目标只追加一次，后续 content 据此跳过牌效。
+			var excluded_target_ids: Array = card_use_context.get("excluded_target_ids", []) as Array
+			if not excluded_target_ids.has(target_id):
+				excluded_target_ids.append(target_id)
+			card_use_context["excluded_target_ids"] = excluded_target_ids
+		else:
+			card_use_context["cancelled"] = true
+			card_use_context["cancel_reason"] = rule_event.termination_reason
+	_card_use_contexts[card_uid] = card_use_context
+	event.result = rule_event.to_dict()
+	if rule_event.cancelled:
+		event.cancel(rule_event.termination_reason)
+	elif rule_event.neutralized:
+		event.neutralize(rule_event.termination_reason)
+
+
+## 执行唯一 contentBefore 边界；整牌内容组件可通过共享 custom_args 读取前置触发器结果。
+func _execute_card_content_before_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 使用牌共享上下文；结果保留最终目标与三组可修改规则字段供回放检查。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前使用牌共享上下文；contentBefore 只导出深拷贝，不向子事件暴露可变引用。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	event.result = {
+		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
+		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
+		"direct_hit_target_ids":(card_use_context.get("direct_hit_target_ids", []) as Array).duplicate(),
+		"custom_args":(card_use_context.get("custom_args", {}) as Dictionary).duplicate(true),
+	}
+
+
+## 效果执行器返回的结束区域；装备与延时锦囊已在执行器中完成移动，多目标牌由活动游标负责最终收尾。
+## 逐次安排目标 content；每个目标效果都是可暂停子事件，父事件通过 redo 等待并继续下一目标。
+func _card_use_step_resolve_content(event: GameEvent, scheduler: EventScheduler) -> void:
+	# 当前使用牌 UID；全部异步恢复均以实体材料 UID 找回唯一生命周期。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前使用牌共享上下文；目标、终点和内容初始化标记均从这里恢复。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty():
+		event.abort("card_use_context_missing")
+		return
+	if bool(card_use_context.get("cancelled", false)):
+		card_use_context["destination"] = "discard"
+		card_use_context["content_complete"] = true
+		_card_use_contexts[card_uid] = card_use_context
+		return
+	# 处理区实体；材料提前离开表示效果已被其他规则接管，父事件只完成后置时机而不重复移动。
+	var card: CardInstance = _find_processing_card(card_uid)
+	if card == null:
+		card_use_context["destination"] = "consumed"
+		card_use_context["content_complete"] = true
+		_card_use_contexts[card_uid] = card_use_context
+		return
+	# 最新卡牌定义；目标分流只读取静态 effect_id 与 delayed 标记。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 当前最终目标数组；使用牌时机可能增删目标，因此不能继续读取动作提交时的旧副本。
+	var resolved_target_ids: Array[int] = []
+	for target_id_variant: Variant in card_use_context.get("target_ids", []) as Array:
+		resolved_target_ids.append(int(target_id_variant))
+	if _uses_active_target_resolution(definition, resolved_target_ids):
+		if not bool(card_use_context.get("effect_initialized", false)):
+			card_use_context["effect_initialized"] = true
+			_card_use_contexts[card_uid] = card_use_context
+			_begin_active_card_resolution(card, int(card_use_context.get("actor_id", -1)), resolved_target_ids, event.event_id)
+			if has_pending_card_choice():
+				event.redo()
+				return
+		# 活动逐目标上下文；不存在表示外部规则已经完整接管并结束牌效。
+		var resolution_context: Dictionary = _active_card_resolutions.get(card_uid, {}) as Dictionary
+		if resolution_context.is_empty():
+			card_use_context["destination"] = "discard"
+			card_use_context["content_complete"] = true
+			_card_use_contexts[card_uid] = card_use_context
+			return
+		# 下一目标游标；每创建一个 content 子事件前立即递增，选择恢复不会重复进入同一目标。
+		var target_index: int = int(resolution_context.get("target_index", 0))
+		# 活动目标数组；保留初始化时的稳定行动顺序和重复出现次数。
+		var target_ids: Array = resolution_context.get("target_ids", []) as Array
+		if target_index >= target_ids.size():
+			_active_card_resolutions.erase(card_uid)
+			card_use_context["destination"] = "discard"
+			card_use_context["content_complete"] = true
+			_card_use_contexts[card_uid] = card_use_context
+			return
+		# 当前准备创建 content 的目标 ID；读取后立即推进游标以保证异步幂等。
+		var target_id: int = int(target_ids[target_index])
+		resolution_context["target_index"] = target_index + 1
+		resolution_context["current_target_id"] = target_id
+		_active_card_resolutions[card_uid] = resolution_context
+		# 死亡、离场或已排除目标不创建虚假的 content 事件，直接让父事件重新检查下一目标。
+		var target: PlayerState = state.get_player(target_id)
+		if target == null or not target.alive or (card_use_context.get("excluded_target_ids", []) as Array).has(target_id):
+			resolution_context["current_target_id"] = -1
+			_active_card_resolutions[card_uid] = resolution_context
+			event.redo()
+			return
+		card_use_event_service.enqueue_target_content(scheduler, event, target_id, _execute_card_content_event)
+		event.redo()
+		return
+	if not bool(card_use_context.get("whole_content_enqueued", false)):
+		card_use_context["whole_content_enqueued"] = true
+		_card_use_contexts[card_uid] = card_use_context
+		card_use_event_service.enqueue_target_content(scheduler, event, -1, _execute_card_content_event)
+		event.redo()
+
+
+## 执行单个目标或整牌 content；出现响应/选择时仅暂停本 content 子事件，不推进父 CardUseEvent。
+func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 当前实体牌 UID；用于取得处理区对象与活动目标共享参数。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前处理区实体；离开处理区后不能重复执行原牌内容。
+	var card: CardInstance = _find_processing_card(card_uid)
+	# 当前使用牌共享上下文；整牌内容从这里读取最终目标与使用者。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card == null or card_use_context.is_empty():
+		event.cancel("processing_card_missing")
+		return
+	# 当前目标 ID；-1表示五谷、装备或延时锦囊等整牌内容。
+	var target_id: int = int(event.context.get("target_id", -1))
+	# 本次内容返回的最终区域；pending 表示子事件必须等待现有恢复入口提交结果。
+	var destination: String = "discard"
+	if target_id >= 0 and _active_card_resolutions.has(card_uid):
+		# 当前逐目标效果上下文；包含杀伤害、属性、无视防具与双目标语义。
+		var resolution_context: Dictionary = _active_card_resolutions[card_uid] as Dictionary
+		# 当前卡牌定义；效果 ID 决定调用单目标杀、借刀或普通解析入口。
+		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+		if str(definition.get("effect_id", "")) == "slash":
+			destination = effect_resolver.resolve_slash_target(card, int(resolution_context.get("actor_id", -1)), target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
+		elif str(definition.get("effect_id", "")) == "borrow_sword":
+			# 借刀杀人保留“持刀者、被杀者”的完整双目标语义，当前 content 只归属于持刀者。
+			var borrow_targets: Array[int] = []
+			for borrow_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
+				borrow_targets.append(int(borrow_target_variant))
+			destination = effect_resolver.resolve(card, int(resolution_context.get("actor_id", -1)), borrow_targets)
+		else:
+			destination = effect_resolver.resolve(card, int(resolution_context.get("actor_id", -1)), [target_id])
+		if destination == "pending" or has_pending_card_choice():
+			return
+		resolution_context["current_target_id"] = -1
+		_active_card_resolutions[card_uid] = resolution_context
+		event.result = {"target_id":target_id, "destination":destination}
+		return
+	# 整牌内容；装备、延时锦囊和五谷等效果必须一次读取完整目标数组。
+	var whole_targets: Array[int] = []
+	for target_id_variant: Variant in card_use_context.get("target_ids", []) as Array:
+		whole_targets.append(int(target_id_variant))
+	destination = effect_resolver.resolve(card, int(card_use_context.get("actor_id", -1)), whole_targets)
+	if destination == "pending" or has_pending_card_choice():
+		return
+	card_use_context["destination"] = destination
+	card_use_context["content_complete"] = true
+	_card_use_contexts[card_uid] = card_use_context
+	event.result = {"target_ids":whole_targets, "destination":destination}
+
+
+## 在全部 content 子事件完成后安排唯一 contentAfter，禁止响应恢复路径重复创建。
+func _card_use_step_enqueue_content_after(event: GameEvent, scheduler: EventScheduler) -> void:
+	# 使用牌最终区域；正常效果已在上一阶段写入，缺失时按处理区牌的默认弃置语义收口。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前使用牌共享上下文；最终区域和后置状态只从该生命周期读取。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	# 最终区域名称；pending 防御性回退为默认 discard，避免处理区实体永久滞留。
+	var destination: String = str(card_use_context.get("destination", "discard"))
+	if destination == "pending":
+		destination = "discard"
+		card_use_context["destination"] = destination
+		_card_use_contexts[card_uid] = card_use_context
+	card_use_event_service.enqueue_content_after(scheduler, event, _execute_card_content_after_event, destination)
+
+
+## 写入唯一 contentAfter 结果；该子事件到达即证明全部同步效果与选择 token 已完成。
+func _execute_card_content_after_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	event.result = {"destination":str(event.context.get("destination", "discard")), "card_uid":int(event.context.get("card_uid", -1))}
+
+
+## CardUseEvent 主体最后一步：把默认弃牌放入 after 队列，其他终点只清理共享上下文。
+func _card_use_step_prepare_after(event: GameEvent, scheduler: EventScheduler) -> void:
+	# 使用牌最终区域；只有仍在 processing 且终点为 discard 时创建 orderingDiscard。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 当前使用牌共享上下文；父事件结果在清理字典前从这里复制。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	# 最终区域名称；只有 discard 需要 after 回收，其他区域已由牌效移动完成。
+	var destination: String = str(card_use_context.get("destination", "discard"))
+	if destination == "discard" and _find_processing_card(card_uid) != null:
+		card_use_event_service.enqueue_ordering_discard(scheduler, event, _execute_ordering_discard_event)
 	else:
-		for target_player_id: int in target_ids:
-			_record_runtime_event("content", "card_content", {"actor_id":actor_id, "target_id":target_player_id, "card_uid":card.uid}, {}, card_use_event_id)
-		destination = effect_resolver.resolve(card, actor_id, target_ids)
-	if state.game_over:
-		return
-	if destination == "discard" and state.processing_area.has(card):
-		_finalize_processing_card(card.uid)
-	elif destination != "pending":
-		_complete_card_use_context(card.uid, destination)
+		_active_card_resolutions.erase(card_uid)
+		_card_use_contexts.erase(card_uid)
+	event.result = {
+		"destination":destination,
+		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
+		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
+		"direct_hit_target_ids":(card_use_context.get("direct_hit_target_ids", []) as Array).duplicate(),
+		"custom_args":(card_use_context.get("custom_args", {}) as Dictionary).duplicate(true),
+	}
+
+
+## orderingDiscard 内容：创建真实 cardsDiscard 子事件；父 CardUseEvent 保持在 after 队列直到移动完成。
+func _execute_ordering_discard_event(event: GameEvent, scheduler: EventScheduler) -> void:
+	# cardsDiscard 上下文；材料 UID 与原 CardUseEvent ID 可供移动历史和回放建立完整关联。
+	var discard_context: Dictionary = event.context.duplicate(true)
+	discard_context["from_zone"] = "processing"
+	discard_context["to_zone"] = "discard_pile"
+	discard_context["reason"] = "ordering_discard"
+	scheduler.create_child(event.event_id, "cardsDiscard", "card_move", [_execute_cards_discard_event], discard_context)
+
+
+## cardsDiscard 内容：把仍在处理区的原使用牌移动到弃牌堆，并清理该牌全部运行时游标与暂停索引。
+func _execute_cards_discard_event(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 当前实体材料 UID；基础使用牌只有一个，服务接口已经保留多材料数组供后续扩展逐项移动。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 仍处于处理区的材料实体；为空表示已被其他规则移动，不再重复弃置。
+	var card: CardInstance = _find_processing_card(card_uid)
+	if card != null:
+		_ensure_card_movement()
+		# 弃牌移动；事件 ID 直接使用真实 cardsDiscard 子事件，不再创建迁移期摘要。
+		var move: CardMoveEvent = card_movement.move_card(card, "discard_pile", -1, "ordering_discard", event.event_id)
+		if move != null:
+			event.result = {"card_uids":[card_uid], "move_id":move.move_id, "to_zone":"discard_pile"}
+	_active_card_resolutions.erase(card_uid)
+	_card_use_contexts.erase(card_uid)
 	_check_game_over()
+
+
+## 返回当前使用牌是否对指定目标具有 directHit；响应与无懈查询只读该标记，不修改事件游标。
+func is_card_target_direct_hit(card_uid: int, target_id: int) -> bool:
+	# 当前 CardUseEvent 共享上下文；不存在时表示响应牌或兼容调用没有直击语义。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	return (card_use_context.get("direct_hit_target_ids", []) as Array).has(target_id)
 
 
 ## 执行铁索连环等允许重铸的牌：弃置该牌并摸一张牌。
@@ -2992,6 +3462,9 @@ func _bind_card_movement_service() -> void:
 func _on_card_moved(move_data: Dictionary, card_data: Dictionary) -> void:
 	# 目标区域；当前表现层只消费进入手牌或弃牌堆的真实移动，装备和判定区继续由状态视图呈现。
 	var target_zone: String = str(move_data.get("to_zone", ""))
+	if target_zone != "discard_pile":
+		# 实体进入新的规则生命周期；释放上一轮弃牌增量的待消费与已消费所有权，但不为 processing/equipment/judgment 创建额外动画。
+		card_animation_ownership_reset_requested.emit(int(card_data.get("uid", -1)))
 	if target_zone not in ["hand", "discard_pile"]:
 		return
 	_emit_card_transfer(
@@ -3016,6 +3489,12 @@ func _complete_card_use_context(card_uid: int, destination: String) -> void:
 		return
 	# 当前卡牌生命周期上下文；只保存稳定 ID 与基础字符串，可安全跨选择暂停保留。
 	var card_use_context: Dictionary = _card_use_contexts[card_uid] as Dictionary
+	if bool(card_use_context.get("runtime_managed", false)):
+		# 真实 CardUseEvent 自己创建唯一 contentAfter 与 after 回收；兼容恢复入口只写结果并解决当前 content token。
+		card_use_context["destination"] = destination
+		card_use_context["content_complete"] = true
+		_card_use_contexts[card_uid] = card_use_context
+		return
 	# 原 CardUseEvent ID；contentAfter 必须保持其直接子事件关系，不能挂到期间产生的响应或伤害事件下。
 	var card_use_event_id: int = int(card_use_context.get("event_id", -1))
 	_record_runtime_event("contentAfter", "card_content", {"actor_id":int(card_use_context.get("actor_id", -1)), "card_uid":card_uid}, {"destination":destination}, card_use_event_id)
@@ -3031,6 +3510,9 @@ func _finalize_processing_card(card_uid: int) -> void:
 	# 卡牌使用父事件；活动逐目标上下文存在时让最终 cardsDiscard 始终关联原 CardUseEvent。
 	var card_use_event_id: int = int(card_use_context.get("event_id", resolution_context.get("card_use_event_id", -2)))
 	_complete_card_use_context(card_uid, "discard")
+	if bool(card_use_context.get("runtime_managed", false)):
+		# 实体移动由 CardUseEvent.after 中的 orderingDiscard -> cardsDiscard 完成，恢复路径不得提前弃置。
+		return
 	# 已结束卡牌的活动目标上下文；防御性清理避免旧响应在实体离开处理区后继续推进目标。
 	_active_card_resolutions.erase(card_uid)
 	for processing_card: CardInstance in state.processing_area:
