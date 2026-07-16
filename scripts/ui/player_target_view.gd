@@ -24,13 +24,13 @@ signal card_dropped(card_uid: int, player_id: int)
 ## 体力梯形框上下内容留白；默认8像素为顶边斜角和底边各预留空间，运行时通常无需动态修改。
 @export_range(4.0, 20.0, 1.0) var health_frame_vertical_padding: float = 8.0
 
-## 体力框顶边斜角落差；默认5像素，直接保存在武将牌场景根脚本参数中，调整场景即可修改外观。
+## 体力框旧斜角落差兼容参数；圆角矩形模式不再读取该值，保留字段避免旧场景资源丢失配置。
 @export_range(0.0, 12.0, 1.0) var health_frame_top_slope: float = 5.0
 
 ## 体力框右下圆角半径；默认6像素与武将牌右下圆角一致，调整场景参数即可同步修改融合程度。
 @export_range(0.0, 16.0, 1.0) var health_frame_bottom_right_radius: float = 6.0
 
-## 体力框右下圆角采样段数；默认4段在小尺寸下足够平滑，增加会提高曲线细腻度但不改变规则逻辑。
+## 体力框旧圆角采样段数兼容参数；当前圆角由场景内 StyleBoxFlat 直接渲染，不再读取该值。
 @export_range(2, 8, 1) var health_frame_corner_segments: int = 4
 
 ## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
@@ -99,8 +99,8 @@ var _artwork_texture: Texture2D
 ## 体力框场景容器；背景与描边节点直接位于武将牌场景内，便于在编辑器中调整颜色和层级。
 @onready var _health_frame: Control = $HealthFrame
 
-## 体力框不透明背景多边形；颜色直接由武将牌场景保存，脚本只更新动态几何点。
-@onready var _health_frame_background: Polygon2D = $HealthFrame/Background
+## 体力框不透明圆角矩形背景；颜色、描边与圆角均直接保存在武将牌场景 StyleBoxFlat 中。
+@onready var _health_frame_background: Panel = $HealthFrame/Background
 
 ## 体力框描边折线；颜色、宽度和抗锯齿直接由武将牌场景保存，脚本只更新动态几何点。
 @onready var _health_frame_border: Line2D = $HealthFrame/Border
@@ -395,33 +395,19 @@ func _layout_health_frame(uses_numeric_health: bool) -> void:
 	var frame_width: float = maxf(34.0 if uses_numeric_health else health_pip_diameter + health_frame_extra_width, content_minimum_size.x + 4.0)
 	# 体力框高度；严格使用真实内容高度并增加上下留白，确保最后一项不会越过底边。
 	var frame_height: float = content_minimum_size.y + health_frame_vertical_padding
-	# 动态梯形尺寸；整体向武将牌内部缩进2像素，并始终保持右下对齐。
+	# 动态圆角矩形尺寸；右边与底边直接对齐武将牌边缘，使两个圆角边框紧密贴合。
 	var frame_size: Vector2 = Vector2(frame_width, frame_height)
 	_health_frame.size = frame_size
-	_health_frame.position = Vector2(card_size.x - frame_size.x - 2.0, card_size.y - frame_size.y - 2.0)
+	_health_frame.position = Vector2(card_size.x - frame_size.x, card_size.y - frame_size.y)
 	_update_health_frame_geometry(frame_size)
 	_health_pip_container.position = Vector2(2.0, health_frame_vertical_padding * 0.5)
 	_health_pip_container.size = Vector2(frame_size.x - 4.0, content_minimum_size.y)
 
 
-## 更新场景内体力框背景与描边点；顶边保持反向斜边，右下圆角与武将牌圆角自然衔接。
+## 更新场景内体力框圆角矩形尺寸；StyleBoxFlat 负责连续圆角与抗锯齿，不再生成斜边多边形。
 func _update_health_frame_geometry(frame_size: Vector2) -> void:
-	# 当前斜边高度；不能超过体力框高度的一半，避免低体力上限时边线交叉。
-	var slope_height: float = minf(health_frame_top_slope, frame_size.y * 0.5)
-	# 当前右下圆角半径；同时受框宽和框高限制，保证曲线始终位于体力框内部。
-	var corner_radius: float = minf(health_frame_bottom_right_radius, minf(frame_size.x, frame_size.y) * 0.5)
-	# 体力框几何点；从左侧斜边起点顺时针构造，并在右下角插入圆弧采样点。
-	var frame_points: PackedVector2Array = PackedVector2Array([Vector2(0.0, slope_height), Vector2(frame_size.x, 0.0), Vector2(frame_size.x, frame_size.y - corner_radius)])
-	for segment_index: int in range(1, health_frame_corner_segments + 1):
-		# 当前圆弧角度；从右侧0度逐步转到底部90度，形成与武将牌一致的右下圆角。
-		var angle: float = float(segment_index) / float(health_frame_corner_segments) * PI * 0.5
-		frame_points.append(Vector2(frame_size.x - corner_radius + cos(angle) * corner_radius, frame_size.y - corner_radius + sin(angle) * corner_radius))
-	frame_points.append(Vector2(0.0, frame_size.y))
-	_health_frame_background.polygon = frame_points
-	# 描边需要显式闭合到首点；背景多边形由 Polygon2D 自动闭合。
-	var border_points: PackedVector2Array = frame_points.duplicate()
-	border_points.append(frame_points[0])
-	_health_frame_border.points = border_points
+	_health_frame_background.position = Vector2.ZERO
+	_health_frame_background.size = frame_size
 
 
 ## 按固定槽位顺序把公开装备转换为参考图中的花色点数与牌名横条。

@@ -92,6 +92,22 @@ corner_radius_top_right = 14
 corner_radius_bottom_right = 14
 corner_radius_bottom_left = 14
 
+[sub_resource type="StyleBoxFlat" id="StyleHealthFrameRounded"]
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+bg_color = Color(0.0901961, 0.145098, 0.113725, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.776471, 0.623529, 0.309804, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
 [sub_resource type="StyleBoxFlat" id="StylePlayerCardBack"]
 bg_color = Color(0.0823529, 0.121569, 0.137255, 1)
 border_width_left = 2
@@ -240,13 +256,17 @@ offset_right = 147.35
 offset_bottom = 196.0
 mouse_filter = 2
 
-[node name="Background" type="Polygon2D" parent="HealthFrame" unique_id=1967474850]
+[node name="Background" type="Panel" parent="HealthFrame" unique_id=1967474850]
 unique_name_in_owner = true
-color = Color(0.0901961, 0.145098, 0.113725, 1)
-polygon = PackedVector2Array(0, 5, 24, 0, 24, 48, 23.5, 50.3, 21.7, 52.2, 19, 54, 0, 54)
+layout_mode = 0
+offset_right = 24.0
+offset_bottom = 54.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleHealthFrameRounded")
 
 [node name="Border" type="Line2D" parent="HealthFrame" unique_id=304912383]
 unique_name_in_owner = true
+visible = false
 points = PackedVector2Array(0, 5, 24, 0, 24, 48, 23.5, 50.3, 21.7, 52.2, 19, 54, 0, 54, 0, 5)
 width = 1.5
 default_color = Color(0.776471, 0.623529, 0.309804, 1)
