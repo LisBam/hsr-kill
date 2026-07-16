@@ -153,7 +153,7 @@ func _rebuild_rows() -> void:
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前名称模式下的装备名；配置缺失时回退到稳定定义 ID，便于定位数据异常。
 		var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
-		if str(equipment_card.get("definition_id", "")) == "muniu":
+		if bool(card_definition.get("shows_attachment_count", false)):
 			equipment_name += "（%d）" % _wooden_ox_count
 		# 当前装备是否属于选择请求候选；候选向右移并接收点击，非候选保持禁用输入。
 		var is_candidate: bool = _candidate_uids.has(card_uid)

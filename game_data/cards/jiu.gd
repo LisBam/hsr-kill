@@ -18,6 +18,8 @@ func _init() -> void:
 		"max_targets": 1,
 		"distance_limit": "none",
 		"play_limit": 1,
+		"play_limit_group": "wine",
+		"play_limit_message": "本回合已经使用过【酒】。",
 		"response_pattern": "jiu",
 		"recast": false,
 		"delayed": false,
@@ -25,6 +27,8 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "jiu",
+		"ai_use_value": 2.0,
+		"ai_target_attitude": "self_boost",
 	})
 
 
@@ -42,3 +46,36 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	wine_target.wine_bonus = 1
 	resolver.host.add_log("%s使用【酒】，本回合下一张【杀】伤害+1。" % actor.display_name)
 	return resolver.default_destination()
+
+
+## 【酒】只允许濒死角色本人在救援窗口中作为自救响应。
+func get_dying_response_pattern(responder_id: int, dying_player_id: int) -> String:
+	return str(get_metadata().get("provided_response_pattern", "")) if responder_id == dying_player_id else ""
+
+
+## 应用【酒】的濒死自救效果；固定回复本人1点体力。
+func resolve_dying_response(match_host: Object, responder_id: int, dying_player_id: int, _card: CardInstance) -> bool:
+	if responder_id != dying_player_id:
+		return false
+	# 濒死角色；无效或已经死亡时不能自救。
+	var target: PlayerState = match_host.state.get_player(dying_player_id)
+	if target == null or not target.alive:
+		return false
+	match_host.recover(responder_id, dying_player_id, 1, get_id())
+	match_host.add_log("%s在濒死时使用【酒】自救。" % target.display_name)
+	return true
+
+
+## 新回合开始时重置该玩家的【酒】使用标记与未消耗伤害加值。
+func on_turn_started(match_host: Object, player_id: int) -> void:
+	# 新回合玩家；不存在时不写入任何状态。
+	var player: PlayerState = match_host.state.get_player(player_id)
+	if player != null:
+		player.wine_used = false
+		player.wine_bonus = 0
+
+
+## 任意回合结束或中断时清除全部未消耗酒加值，保持原有持续时间规则。
+func on_turn_ended(match_host: Object, _player_id: int, _interrupted: bool) -> void:
+	for player: PlayerState in match_host.state.players:
+		player.wine_bonus = 0

@@ -25,6 +25,8 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "discard",
 		"provided_response_pattern": "",
+		"ai_use_value": 5.0,
+		"ai_beneficial": true,
 	})
 
 

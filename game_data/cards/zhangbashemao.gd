@@ -26,6 +26,12 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "equipment",
 		"provided_response_pattern": "",
+		"ai_use_value": 4.0,
+		"response_material_count": 2,
+		"play_phase_interaction": "virtual_card_materials",
+		"play_phase_action_type": "use_zhangba",
+		"play_phase_material_count": 2,
+		"play_phase_action_card_source": "equipment",
 	})
 
 
@@ -33,3 +39,152 @@ func _init() -> void:
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
 	resolver.host.equip_from_processing(actor_id, card)
 	return "equipment"
+
+
+## 丈八蛇矛在需要响应【杀】且持有至少2张普通手牌时提供装备入口。
+func can_offer_equipment_response(match_host: Object, player_id: int, response_patterns: Array[String]) -> bool:
+	# 响应玩家状态；木牛“粮”不计入丈八材料数量。
+	var player: PlayerState = match_host.state.get_player(player_id)
+	return response_patterns.has("sha") and player != null and player.hand.size() >= 2
+
+
+## 丈八蛇矛响应固定消耗2张不同的普通手牌。
+func get_equipment_response_material_count() -> int:
+	return 2
+
+
+## 校验丈八响应材料；装备必须是当前实体，材料必须为两张不同普通手牌。
+func validate_equipment_response_materials(match_host: Object, player_id: int, equipment_uid: int, material_card_uids: Array[int]) -> String:
+	# 当前丈八蛇矛实体；等待期间换装时旧入口失效。
+	var equipment_card: CardInstance = match_host.get_equipment_card(player_id, "weapon")
+	if equipment_card == null or equipment_card.definition_id != get_id() or equipment_card.uid != equipment_uid:
+		return "玩家当前未装备所选择的丈八蛇矛。"
+	if material_card_uids.size() != 2 or material_card_uids[0] == material_card_uids[1]:
+		return "丈八蛇矛必须选择两张不同的手牌。"
+	# 响应玩家状态；每张材料都必须仍位于普通手牌区。
+	var player: PlayerState = match_host.state.get_player(player_id)
+	if player == null:
+		return "丈八蛇矛的发动者不存在或已经死亡。"
+	for material_card_uid: int in material_card_uids:
+		if player.find_hand_card(material_card_uid) == null:
+			return "丈八蛇矛的材料必须是当前仍在手牌区的实体牌。"
+	return ""
+
+
+## 消耗两张丈八材料并返回一张无花色、无点数、无颜色的虚拟【杀】。
+func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int]) -> CardInstance:
+	if not response_patterns.has("sha"):
+		return null
+	# 材料校验结果；等待期间任一材料移动都会拒绝消费。
+	var material_error: String = validate_equipment_response_materials(match_host, player_id, equipment_uid, material_card_uids)
+	if not material_error.is_empty():
+		return null
+	# 响应玩家状态；用于生成永久语义日志。
+	var player: PlayerState = match_host.state.get_player(player_id)
+	return match_host.consume_virtual_equipment_response(player_id, equipment_uid, material_card_uids, "sha", "sha", "%s发动【丈八蛇矛】，将两张手牌当【杀】打出。" % player.display_name)
+
+
+## 丈八蛇矛注册的出牌阶段主动动作类型。
+func get_play_phase_action_types() -> Array[String]:
+	return ["use_zhangba"]
+
+
+## 至少有2张普通手牌且存在合法【杀】目标时允许点击丈八蛇矛。
+func is_play_phase_action_available(match_host: Object, owner_id: int, equipment_card: CardInstance) -> bool:
+	# 装备持有者；木牛“粮”不计入两张材料。
+	var owner: PlayerState = match_host.state.get_player(owner_id)
+	if owner == null or owner.hand.size() < 2:
+		return false
+	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+		# 单目标数组；显式类型用于满足规则服务的 Array[int] 边界。
+		var target_ids: Array[int] = [target_id]
+		if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids).is_empty():
+			return true
+	return false
+
+
+## 为基础 AI 追加使用前两张普通手牌发动丈八蛇矛的合法动作。
+func append_play_phase_actions(match_host: Object, owner_id: int, equipment_card: CardInstance, result: Array[Dictionary]) -> void:
+	# 装备持有者；不足2张普通手牌时没有候选动作。
+	var owner: PlayerState = match_host.state.get_player(owner_id)
+	if owner == null or owner.hand.size() < 2:
+		return
+	# 基础 AI 材料；最终提交仍会重新校验实体 UID。
+	var material_card_uids: Array[int] = [owner.hand[0].uid, owner.hand[1].uid]
+	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+		# 单目标虚拟【杀】；不应用方天画戟最后手牌修正。
+		var target_ids: Array[int] = [target_id]
+		# AI 动作；card_uid 指向丈八蛇矛实体，payload 保存两张材料。
+		var action: PlayerAction = PlayerAction.new("use_zhangba", owner_id, equipment_card.uid, target_ids)
+		action.payload = {"material_card_uids":material_card_uids.duplicate()}
+		if validate_play_phase_action(match_host, action).is_empty():
+			result.append(action.to_dict())
+
+
+## 校验丈八主动使用：装备、两张材料、阶段次数、攻击范围和目标必须全部合法。
+func validate_play_phase_action(match_host: Object, action: PlayerAction) -> String:
+	if action.action_type != "use_zhangba":
+		return "丈八蛇矛不支持该动作。"
+	# 两张材料 UID；只能来自普通手牌区。
+	var material_card_uids: Array[int] = []
+	for uid_variant: Variant in action.payload.get("material_card_uids", []) as Array:
+		material_card_uids.append(int(uid_variant))
+	# 材料错误；复用响应与主动使用完全相同的装备实体校验。
+	var material_error: String = validate_equipment_response_materials(match_host, action.actor_id, action.card_uid, material_card_uids)
+	if not material_error.is_empty():
+		return material_error
+	return match_host.card_rules.validate_virtual_use(action.actor_id, "sha", action.target_ids)
+
+
+## 执行丈八虚拟【杀】；逻辑代理进入处理区，两张材料在整张牌结算后弃置。
+func execute_play_phase_action(match_host: Object, action: PlayerAction) -> bool:
+	# 权威校验结果；空字符串才允许创建虚拟牌事件。
+	var validation_error: String = validate_play_phase_action(match_host, action)
+	if not validation_error.is_empty():
+		return false
+	# 两张材料 UID；顺序与玩家选择顺序一致。
+	var material_card_uids: Array[int] = []
+	for uid_variant: Variant in action.payload.get("material_card_uids", []) as Array:
+		material_card_uids.append(int(uid_variant))
+	# 装备持有者状态；用于永久语义日志。
+	var owner: PlayerState = match_host.state.get_player(action.actor_id)
+	return match_host.execute_virtual_card_use(action.actor_id, "sha", material_card_uids, action.target_ids, "%s发动【丈八蛇矛】，将两张手牌当【杀】使用。" % owner.display_name)
+
+
+## 返回丈八主动使用预览；字段与普通卡牌目标预览保持一致。
+func get_play_phase_action_preview(match_host: Object, owner_id: int, equipment_uid: int, payload: Dictionary, selected_target_ids: Array[int]) -> Dictionary:
+	# 丈八预览结果；默认不能提交，后续按材料和目标校验更新。
+	var result: Dictionary = {
+		"card_found":false,
+		"can_submit":false,
+		"validation_error":"当前不能发动丈八蛇矛。",
+		"legal_target_ids":[],
+		"normalized_target_ids":selected_target_ids.duplicate(),
+		"target_mode":"single_other",
+		"min_targets":1,
+		"max_targets":1,
+		"description":str(get_metadata().get("description", "")),
+	}
+	# 材料 UID；预览阶段允许尚未选满，并返回明确错误。
+	var material_card_uids: Array[int] = []
+	for uid_variant: Variant in payload.get("material_card_uids", []) as Array:
+		material_card_uids.append(int(uid_variant))
+	# 材料错误；合法时继续查询目标。
+	var material_error: String = validate_equipment_response_materials(match_host, owner_id, equipment_uid, material_card_uids)
+	result["card_found"] = material_error.is_empty()
+	if not material_error.is_empty():
+		result["validation_error"] = material_error
+		return result
+	# 当前完整目标校验；空字符串表示可提交。
+	var validation_error: String = match_host.card_rules.validate_virtual_use(owner_id, "sha", selected_target_ids)
+	result["validation_error"] = validation_error
+	result["can_submit"] = validation_error.is_empty()
+	# 全部合法单目标候选；允许玩家直接切换目标。
+	var legal_target_ids: Array[int] = []
+	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+		# 单目标数组；显式类型用于满足规则服务的 Array[int] 边界。
+		var target_ids: Array[int] = [target_id]
+		if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids).is_empty():
+			legal_target_ids.append(target_id)
+	result["legal_target_ids"] = legal_target_ids
+	return result

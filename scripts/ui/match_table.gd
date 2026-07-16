@@ -110,10 +110,6 @@ var local_player_seat_label: Label
 ## 该节点仅为旧场景兼容而保留并始终隐藏；实际重铸入口是无目标选择【铁索连环】后点击中央“确定”。
 @onready var recast_button: Button = %RecastButton
 
-## 木牛流马按钮；将当前选中的普通手牌存为“粮”，首个已选目标可接收宝物。
-## 该节点仅为旧场景兼容而保留并始终隐藏；实际存粮入口是点击可发动的木牛流马装备横条。
-@onready var wooden_ox_button: Button = %WoodenOxButton
-
 ## 结束出牌按钮；仅本地玩家的出牌阶段可用。
 @onready var end_play_button: Button = %EndPlayButton
 
@@ -173,7 +169,7 @@ var _inline_selected_card_uids: Array[int] = []
 ## 当前独立选择窗口的请求 ID；默认-1表示窗口关闭，用于防止旧提交回调关闭同步创建的新窗口。
 var _modal_choice_request_id: int = -1
 
-## 当前通过点击装备进入的主动交互类型；空字符串表示普通出牌或普通内联选择，zhangba_play、zhangba_response 与 muniu_store 分别对应三条装备流程。
+## 当前通过点击装备进入的主动交互类型；空字符串表示普通出牌或普通内联选择，具体字符串来自装备定义元数据。
 var _active_equipment_action: String = ""
 
 ## 当前被点击发动的装备实体 UID；默认-1，提交时核心会再次确认同一装备仍位于原槽位。
@@ -205,7 +201,6 @@ func _ready() -> void:
 	use_button.pressed.connect(_on_use_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)
-	wooden_ox_button.pressed.connect(_on_wooden_ox_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	equipment_label.equipment_pressed.connect(_on_equipment_pressed)
 	local_player_card.pressed.connect(_on_self_target_pressed)
@@ -227,7 +222,6 @@ func _configure_interaction_controls() -> void:
 	BattleUIStyle.apply_interaction_button(cancel_button)
 	$InteractionPanel/InteractionVBox/ActionRow.add_theme_constant_override("separation", ACTION_BUTTON_SEPARATION)
 	recast_button.visible = false
-	wooden_ox_button.visible = false
 	if end_play_button.get_parent() != self:
 		end_play_button.reparent(self)
 	end_play_button.visible = false
@@ -562,12 +556,10 @@ func _render_local_hand() -> void:
 	_start_pending_local_hand_gain_animations()
 	use_button.disabled = true
 	recast_button.disabled = not can_act
-	wooden_ox_button.disabled = not can_act
 	end_play_button.disabled = not can_act
 	%CancelButton.visible = false
 	%CancelButton.disabled = false
 	recast_button.visible = false
-	wooden_ox_button.visible = false
 
 
 ## 创建一张会长期留在手牌容器中的正式 CardView；节点按实体 UID 绑定一次输入信号，后续快照只更新内容。
@@ -598,8 +590,9 @@ func _format_local_equipment(player: Dictionary) -> String:
 	if equipment.has("treasure"):
 		# 当前宝物实体快照；木牛流马需要在装备名后直接显示公开存牌数量。
 		var treasure_card: Dictionary = equipment.get("treasure", {}) as Dictionary
-		if str(treasure_card.get("definition_id", "")) == "muniu":
-			# 木牛流马公开存牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
+		var treasure_definition: Dictionary = GameDatabase.get_card(str(treasure_card.get("definition_id", "")))
+		if bool(treasure_definition.get("shows_attachment_count", false)):
+			# 装备公开附属牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
 			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
 			treasure_name += "（%d）" % wooden_ox_count
 	return "⚔ 武器　%s\n🛡 防具　%s\n♞ 进攻　%s\n♞ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
@@ -679,21 +672,21 @@ func _on_equipment_pressed(card_uid: int) -> void:
 			_refresh_selection_text()
 		return
 	if not _inline_card_choice.is_empty():
-		if _is_inline_zhangba_response_candidate(card_uid):
-			_activate_equipment_action("zhangba_response", card_uid)
+		if _is_inline_material_equipment_response_candidate(card_uid):
+			_activate_equipment_action("equipment_response", card_uid)
 			return
 		_toggle_inline_card_choice(card_uid)
 		return
 	# 出牌阶段装备候选由当前 chooseToUse 请求提供；未列入请求的静态装备不能通过点击绕过规则核心。
 	if not _get_play_phase_equipment_candidate_uids().has(card_uid):
 		return
-	# 被点击装备快照；定义 ID 决定进入丈八双材料或木牛单材料交互。
+	# 被点击装备快照；交互类别由卡牌定义元数据声明，界面不识别具体装备 ID。
 	var equipment_card: Dictionary = _get_local_equipment_snapshot(card_uid)
-	var definition_id: String = str(equipment_card.get("definition_id", ""))
-	if definition_id == "zhangba":
-		_activate_equipment_action("zhangba_play", card_uid)
-	elif definition_id == "muniu":
-		_activate_equipment_action("muniu_store", card_uid)
+	# 当前装备定义；play_phase_interaction 为空表示没有点击发动流程。
+	var definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+	var interaction_type: String = str(definition.get("play_phase_interaction", ""))
+	if not interaction_type.is_empty():
+		_activate_equipment_action(interaction_type, card_uid)
 
 
 ## 进入一条点击装备后的材料选择流程；主动装备保持右移与选中描边，普通出牌选牌和旧目标同时清空。
@@ -718,24 +711,27 @@ func _clear_equipment_action() -> void:
 	_equipment_action_material_uids.clear()
 
 
-## 选择或取消装备技能的一张普通手牌材料；丈八上限2张，木牛上限1张且单选会直接替换旧材料。
+## 选择或取消装备技能的一张普通手牌材料；材料上限由当前装备定义元数据提供。
 func _toggle_equipment_action_material(card_uid: int) -> void:
 	if not _get_equipment_action_material_candidate_uids().has(card_uid):
 		return
 	if _equipment_action_material_uids.has(card_uid):
 		_equipment_action_material_uids.erase(card_uid)
 	else:
-		# 当前材料上限；丈八固定选择两张，木牛固定选择一张。
-		var maximum_material_count: int = 1 if _active_equipment_action == "muniu_store" else 2
+		# 当前材料上限；非负整数由卡牌文件的 play_phase_material_count 或 response_material_count 提供。
+		var definition: Dictionary = _get_active_equipment_definition()
+		var maximum_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
 		if maximum_material_count == 1:
 			_equipment_action_material_uids.clear()
 		if _equipment_action_material_uids.size() < maximum_material_count:
 			_equipment_action_material_uids.append(card_uid)
 	_selected_target_ids.clear()
 	_auto_locked_target_id = -1
-	# 丈八选满材料后若恰好只有一名合法目标，则沿用普通出牌的唯一候选自动锁定语义。
-	if _active_equipment_action == "zhangba_play" and _equipment_action_material_uids.size() == 2:
-		var initial_preview: Dictionary = match_controller.get_zhangba_slash_preview(match_controller.local_human_player_id, _active_equipment_uid, _equipment_action_material_uids, [])
+	# 装备材料选满后若恰好只有一名合法目标，则沿用普通出牌的唯一候选自动锁定语义。
+	var active_definition: Dictionary = _get_active_equipment_definition()
+	var required_material_count: int = int(active_definition.get("play_phase_material_count", 0))
+	if _active_equipment_action != "equipment_response" and required_material_count > 0 and _equipment_action_material_uids.size() == required_material_count:
+		var initial_preview: Dictionary = match_controller.get_equipment_action_preview(match_controller.local_human_player_id, _active_equipment_uid, {"material_card_uids":_equipment_action_material_uids.duplicate()}, [])
 		var legal_target_ids: Array = initial_preview.get("legal_target_ids", []) as Array
 		if legal_target_ids.size() == 1:
 			_auto_locked_target_id = int(legal_target_ids[0])
@@ -746,19 +742,22 @@ func _toggle_equipment_action_material(card_uid: int) -> void:
 	_refresh_selection_text()
 
 
-## 判断内联响应候选是否为可将两张手牌当【杀】打出的丈八蛇矛；普通装备触发仍使用原单选逻辑。
-func _is_inline_zhangba_response_candidate(card_uid: int) -> bool:
-	# 响应模式数组；只有明确允许 sha 的请求才能把丈八装备解释为响应入口。
-	var response_patterns: Array = ((_inline_card_choice.get("context", {}) as Dictionary).get("response_patterns", []) as Array)
-	if not response_patterns.has("sha"):
-		return false
+## 判断内联响应候选是否为需要额外普通手牌材料的装备入口。
+func _is_inline_material_equipment_response_candidate(card_uid: int) -> bool:
 	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
-		# 当前候选；装备定义来自公开 card_data，不读取规则对象。
+		# 当前候选；装备定义元数据声明响应材料数量。
 		var candidate: Dictionary = candidate_variant as Dictionary
 		var candidate_card: Dictionary = candidate.get("card_data", {}) as Dictionary
-		if int(candidate.get("uid", -1)) == card_uid and str(candidate.get("zone", "")) == "equipment" and str(candidate_card.get("definition_id", "")) == "zhangba":
-			return true
+		if int(candidate.get("uid", -1)) == card_uid and str(candidate.get("zone", "")) == "equipment":
+			var definition: Dictionary = GameDatabase.get_card(str(candidate_card.get("definition_id", "")))
+			return int(definition.get("response_material_count", 0)) > 0
 	return false
+
+
+## 返回当前主动装备的静态定义；没有活动装备时返回空字典。
+func _get_active_equipment_definition() -> Dictionary:
+	var equipment_card: Dictionary = _get_local_equipment_snapshot(_active_equipment_uid)
+	return GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 
 
 ## 按实体 UID 返回本地装备快照；找不到时返回空字典，调用方不能据此假定装备仍可发动。
@@ -807,9 +806,7 @@ func _get_selectable_target_ids() -> Array[int]:
 	# 当前预览给出的后续合法目标；多目标牌直接按已有选择继续追加。
 	var selectable_target_ids: Array[int] = []
 	selectable_target_ids.assign(_card_use_preview.get("legal_target_ids", []) as Array)
-	if _active_equipment_action == "muniu_store":
-		return selectable_target_ids
-	if _active_equipment_action == "zhangba_play":
+	if not _active_equipment_action.is_empty():
 		return selectable_target_ids
 	if _selected_card_uid < 0 or int(_card_use_preview.get("max_targets", 0)) != 1 or _auto_locked_target_id >= 0:
 		return selectable_target_ids
@@ -830,7 +827,7 @@ func _on_card_dropped(card_uid: int, target_id: int) -> void:
 	if not _active_equipment_action.is_empty():
 		if not _equipment_action_material_uids.has(card_uid):
 			_toggle_equipment_action_material(card_uid)
-		if _active_equipment_action in ["zhangba_play", "muniu_store"] and not _selected_target_ids.has(target_id):
+		if _active_equipment_action != "equipment_response" and not _selected_target_ids.has(target_id):
 			_on_target_pressed(target_id)
 		return
 	if not _inline_card_choice.is_empty():
@@ -870,16 +867,19 @@ func _on_use_pressed() -> void:
 
 ## 提交当前点击装备后的完整动作；界面只发送装备、材料与目标 ID，核心仍会复核所有区域和规则条件。
 func _submit_equipment_action() -> void:
-	if _active_equipment_action in ["zhangba_play", "zhangba_response"] and _equipment_action_material_uids.size() != 2:
-		_on_action_rejected("请为【丈八蛇矛】选择两张手牌。")
+	# 当前装备定义；材料数量、动作类型和 card_uid 来源全部由卡牌元数据提供。
+	var definition: Dictionary = _get_active_equipment_definition()
+	# 当前装备显示名；用于生成通用材料不足提示。
+	var equipment_name: String = GameSettings.resolve_card_name(definition)
+	# 当前所需材料数量；响应与出牌阶段可分别声明。
+	var required_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
+	if _equipment_action_material_uids.size() != required_material_count:
+		_on_action_rejected("请为【%s】选择%d张手牌。" % [equipment_name, required_material_count])
 		return
-	if _active_equipment_action == "muniu_store" and _equipment_action_material_uids.size() != 1:
-		_on_action_rejected("请选择一张要存入【木牛流马】的手牌。")
-		return
-	if _active_equipment_action == "zhangba_response":
+	if _active_equipment_action == "equipment_response":
 		# 当前响应请求 ID；装备点击模式仍属于原 chooseToRespond，不能新建第二个并行选择窗口。
 		var request_id: int = int(_inline_card_choice.get("request_id", -1))
-		# 丈八响应动作；selected_card_uids 选择装备入口，material_card_uids 保存两张实际费用。
+		# 装备响应动作；selected_card_uids 选择装备入口，material_card_uids 保存实际费用。
 		var response_action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
 		response_action.payload = {"request_id":request_id, "selected_card_uids":[_active_equipment_uid], "material_card_uids":_equipment_action_material_uids.duplicate()}
 		if match_controller.submit_action(response_action):
@@ -888,18 +888,19 @@ func _submit_equipment_action() -> void:
 				_inline_selected_card_uids.clear()
 			_clear_equipment_action()
 		return
-	if _active_equipment_action == "zhangba_play":
-		# 丈八出牌动作；装备实体是 chooseToUse 候选，两张材料与单一杀目标放入可序列化负载。
-		var zhangba_action: PlayerAction = PlayerAction.new("use_zhangba", match_controller.local_human_player_id, _active_equipment_uid, _selected_target_ids)
-		zhangba_action.payload = {"material_card_uids":_equipment_action_material_uids.duplicate()}
-		match_controller.submit_action(zhangba_action)
+	# 出牌阶段装备动作类型；空值表示卡牌配置不完整。
+	var action_type: String = str(definition.get("play_phase_action_type", ""))
+	if action_type.is_empty():
+		_on_action_rejected("当前装备没有配置主动动作类型。")
 		return
-	if _active_equipment_action == "muniu_store":
-		# 木牛存粮动作；唯一材料作为 card_uid，首个可选目标接收木牛与其下全部“粮”。
-		var transfer_targets: Array[int] = []
-		if not _selected_target_ids.is_empty():
-			transfer_targets.append(_selected_target_ids[0])
-		match_controller.submit_action(PlayerAction.new("store_wooden_ox", match_controller.local_human_player_id, _equipment_action_material_uids[0], transfer_targets))
+	# 动作 card_uid 来源；虚拟牌装备使用装备 UID，存储类装备使用首张材料 UID。
+	var card_uid: int = _active_equipment_uid
+	if str(definition.get("play_phase_action_card_source", "equipment")) == "material" and not _equipment_action_material_uids.is_empty():
+		card_uid = _equipment_action_material_uids[0]
+	# 装备主动动作；材料数组统一写入 payload，未使用该字段的装备可安全忽略。
+	var equipment_action: PlayerAction = PlayerAction.new(action_type, match_controller.local_human_player_id, card_uid, _selected_target_ids)
+	equipment_action.payload = {"material_card_uids":_equipment_action_material_uids.duplicate(), "equipment_uid":_active_equipment_uid}
+	match_controller.submit_action(equipment_action)
 
 
 ## 处理无名杀式键盘与右键快捷操作；快捷键只调用现有标准动作，不绕过规则核心。
@@ -965,18 +966,6 @@ func _on_recast_pressed() -> void:
 		_on_action_rejected("请先选择一张手牌。")
 		return
 	match_controller.submit_action(PlayerAction.new("recast_card", match_controller.local_human_player_id, _selected_card_uid))
-
-
-## 提交木牛流马存粮动作；若已选择目标，则把宝物与全部“粮”一并转移给首个目标。
-func _on_wooden_ox_pressed() -> void:
-	if _selected_card_uid < 0:
-		_on_action_rejected("请先选择一张要存入木牛流马的手牌。")
-		return
-	# 木牛流马可选转移目标；只读取选择顺序中的第一名角色。
-	var transfer_targets: Array[int] = []
-	if not _selected_target_ids.is_empty():
-		transfer_targets.append(_selected_target_ids[0])
-	match_controller.submit_action(PlayerAction.new("store_wooden_ox", match_controller.local_human_player_id, _selected_card_uid, transfer_targets))
 
 
 ## 提交结束出牌阶段动作。
@@ -1122,10 +1111,11 @@ func _get_play_phase_equipment_candidate_uids() -> Array[int]:
 	# 本地装备字典；逐槽读取可以保留装备实体身份并忽略其他锁定技或触发技装备。
 	var equipment: Dictionary = (_get_player_snapshot(match_controller.local_human_player_id).get("equipment", {}) as Dictionary)
 	for equipment_variant: Variant in equipment.values():
-		# 当前装备快照；只有丈八蛇矛和木牛流马属于出牌阶段点击入口。
+		# 当前装备快照；卡牌定义声明主动交互类型时才进入出牌阶段点击入口。
 		var equipment_card: Dictionary = equipment_variant as Dictionary
 		var equipment_uid: int = int(equipment_card.get("uid", -1))
-		if runtime_card_uids.has(equipment_uid) and str(equipment_card.get("definition_id", "")) in ["zhangba", "muniu"]:
+		var equipment_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+		if runtime_card_uids.has(equipment_uid) and not str(equipment_definition.get("play_phase_interaction", "")).is_empty():
 			result.append(equipment_uid)
 	return result
 
@@ -1143,19 +1133,6 @@ func _get_equipment_action_material_candidate_uids() -> Array[int]:
 		var card_uid: int = int((card_variant as Dictionary).get("uid", -1))
 		if card_uid >= 0:
 			result.append(card_uid)
-	return result
-
-
-## 返回木牛流马存粮后可以接收装备与全部“粮”的其他存活角色；不选择目标表示木牛留在原角色装备区。
-func _get_wooden_ox_transfer_target_ids() -> Array[int]:
-	# 可转移目标；按快照座次顺序输出，界面只允许保留其中一名。
-	var result: Array[int] = []
-	for player_variant: Variant in _snapshot.get("players", []) as Array:
-		# 当前玩家快照；本人、阵亡角色和无效 ID 都不是转移目标。
-		var player: Dictionary = player_variant as Dictionary
-		var player_id: int = int(player.get("player_id", -1))
-		if player_id >= 0 and player_id != match_controller.local_human_player_id and bool(player.get("alive", false)):
-			result.append(player_id)
 	return result
 
 
@@ -1440,7 +1417,6 @@ func _on_action_rejected(message: String) -> void:
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
-	wooden_ox_button.visible = false
 	# 本地是否处于普通出牌阶段；右侧回合结束按钮只在该阶段独立显示，不属于中央交互面板。
 	var can_act: bool = _can_local_player_act()
 	end_play_button.visible = can_act and _inline_card_choice.is_empty()
@@ -1497,39 +1473,39 @@ func _refresh_selection_text() -> void:
 	_refresh_component_states()
 
 
-## 刷新点击装备后的材料、目标和中央主按钮；丈八响应不选择目标，丈八出牌与木牛转移继续复用角色高亮。
+## 刷新点击装备后的材料、目标和中央主按钮；交互规则全部读取当前装备定义元数据与核心预览。
 func _refresh_equipment_action_text() -> void:
 	interaction_panel.visible = true
 	use_button.text = "确定"
 	%CancelButton.visible = true
 	%CancelButton.disabled = false
 	recast_button.visible = false
-	wooden_ox_button.visible = false
-	end_play_button.visible = _can_local_player_act() and _active_equipment_action != "zhangba_response"
+	end_play_button.visible = _can_local_player_act() and _active_equipment_action != "equipment_response"
 	end_play_button.disabled = not end_play_button.visible
+	# 当前装备定义与显示名；界面不识别具体装备 ID。
+	var definition: Dictionary = _get_active_equipment_definition()
+	var equipment_name: String = GameSettings.resolve_card_name(definition)
+	# 当前材料上限；响应和出牌阶段分别读取自身配置。
+	var required_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
 	# 已选目标名称；装备主动流程最多保留一名目标。
 	var target_name: String = "无"
 	if not _selected_target_ids.is_empty():
 		var target: Dictionary = _get_player_snapshot(_selected_target_ids[0])
 		target_name = str(target.get("display_name", "玩家%d" % _selected_target_ids[0]))
-	if _active_equipment_action == "zhangba_response":
-		selection_label.text = "丈八蛇矛｜已选择%d/2张手牌" % _equipment_action_material_uids.size()
-		interaction_guide_label.text = "请选择两张手牌当【杀】打出"
-		use_button.disabled = _equipment_action_material_uids.size() != 2
+	if _active_equipment_action == "equipment_response":
+		selection_label.text = "%s｜已选择%d/%d张手牌" % [equipment_name, _equipment_action_material_uids.size(), required_material_count]
+		interaction_guide_label.text = "请选择装备响应所需的手牌材料"
+		use_button.disabled = _equipment_action_material_uids.size() != required_material_count
 		_refresh_component_states()
 		return
-	if _active_equipment_action == "zhangba_play":
-		_card_use_preview = match_controller.get_zhangba_slash_preview(match_controller.local_human_player_id, _active_equipment_uid, _equipment_action_material_uids, _selected_target_ids)
-		selection_label.text = "丈八蛇矛｜材料%d/2｜目标：%s" % [_equipment_action_material_uids.size(), target_name]
-		interaction_guide_label.text = "请确认当前操作" if bool(_card_use_preview.get("can_submit", false)) else ("请选择目标" if _equipment_action_material_uids.size() == 2 else "请选择两张手牌")
-		use_button.disabled = not bool(_card_use_preview.get("can_submit", false))
-		_refresh_component_states()
-		return
-	# 木牛流马目标预览；不选择目标时表示只存粮不转移，选择一名其他存活角色时转移宝物与全部“粮”。
-	_card_use_preview = {"legal_target_ids":_get_wooden_ox_transfer_target_ids(), "max_targets":1}
-	selection_label.text = "木牛流马｜材料%d/1｜转移目标：%s" % [_equipment_action_material_uids.size(), target_name]
-	interaction_guide_label.text = "请选择一张手牌存为“粮”"
-	use_button.disabled = _equipment_action_material_uids.size() != 1
+	# 出牌阶段装备预览；材料、目标和可提交状态由装备源码生成。
+	_card_use_preview = match_controller.get_equipment_action_preview(match_controller.local_human_player_id, _active_equipment_uid, {"material_card_uids":_equipment_action_material_uids.duplicate()}, _selected_target_ids)
+	if _card_use_preview.is_empty():
+		# 纯界面预览回退；没有权威对局状态的场景测试只验证材料交互，不替代正式规则校验。
+		_card_use_preview = {"can_submit":_equipment_action_material_uids.size() == required_material_count, "legal_target_ids":[], "max_targets":int(definition.get("preview_max_targets", 0))}
+	selection_label.text = "%s｜材料%d/%d｜目标：%s" % [equipment_name, _equipment_action_material_uids.size(), required_material_count, target_name]
+	interaction_guide_label.text = "请确认当前操作" if bool(_card_use_preview.get("can_submit", false)) else ("请选择目标" if _equipment_action_material_uids.size() == required_material_count else "请选择手牌材料")
+	use_button.disabled = not bool(_card_use_preview.get("can_submit", false))
 	_refresh_component_states()
 
 
@@ -1568,29 +1544,6 @@ func _can_recast_selected_card() -> bool:
 		if int(hand_card.get("uid", -1)) == _selected_card_uid:
 			return true
 	return false
-
-
-## 判断当前选中实体牌是否来自本地手牌，并且本地装备区存在木牛流马。
-func _can_store_selected_card() -> bool:
-	if _selected_card_uid < 0:
-		return false
-	# 本地玩家快照；用于检查选中实体牌区域和宝物槽，不修改任何状态。
-	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
-	# 选中牌是否位于普通手牌区；木牛“粮”不能再次存入木牛流马。
-	var selected_is_hand_card: bool = false
-	for card_variant: Variant in local_player.get("hand", []):
-		# 当前手牌快照；UID 匹配时确认牌不是木牛“粮”。
-		var card: Dictionary = card_variant as Dictionary
-		if int(card.get("uid", -1)) == _selected_card_uid:
-			selected_is_hand_card = true
-			break
-	if not selected_is_hand_card:
-		return false
-	# 本地装备字典；木牛流马必须位于宝物槽才能存入“粮”。
-	var equipment: Dictionary = local_player.get("equipment", {}) as Dictionary
-	# 当前宝物槽快照；定义 ID 为 muniu 时允许显示存粮按钮。
-	var treasure: Dictionary = equipment.get("treasure", {}) as Dictionary
-	return str(treasure.get("definition_id", "")) == "muniu"
 
 
 ## 同步所有动态卡牌与角色组件的选中、合法目标和目标顺序视觉。

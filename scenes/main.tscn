@@ -452,14 +452,6 @@ layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "重铸"
 
-[node name="WoodenOxButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1479987863]
-unique_name_in_owner = true
-visible = false
-custom_minimum_size = Vector2(72, 30)
-layout_mode = 2
-theme_override_styles/normal = SubResource("StyleButtonNormal")
-text = "存木牛"
-
 [node name="EndPlayButton" type="Button" parent="." unique_id=1761560277]
 unique_name_in_owner = true
 visible = false

@@ -1,39 +1,63 @@
 class_name SlashCardEffect
 extends RefCounted
 
-## 【杀】牌族共享效果组件。普通【杀】、火【杀】与雷【杀】只复用规则流程，属性和静态信息仍由各自卡牌文件提供。
+## 【杀】牌族共享流程组件。这里只规定目标、武器钩子、防具、【闪】和伤害的通用顺序，不包含任何具体装备 ID。
 
-## 当前卡牌效果调度器；只提供通用停止判断、结束区域与卡牌源码恢复分发。
+## 当前卡牌效果调度器；负责生命周期判断与父牌源码恢复。
 var resolver: CardEffectResolver
 
-## 对局控制器规则端口；所有摸牌、伤害、响应和区域移动都通过该端口执行。
+## 对局控制器规则端口；所有状态修改均通过该端口完成。
 var host: Object
 
-## 当前权威对局状态；只读取玩家和公共处理区，不替换状态对象。
+## 当前权威对局状态；用于只读查询玩家与实体牌区域。
 var state: GameState
 
 
-## 绑定本次效果使用的通用调度器；组件生命周期只覆盖一次同步执行或一次异步恢复。
+## 写入【杀】牌族逐目标共享的伤害、属性与防具状态；同一张多目标【杀】只消耗一次酒加值。
+static func configure_shared_resolution_context(match_host: Object, card: CardInstance, actor_id: int, resolution_context: Dictionary) -> void:
+	# 【杀】使用者；无效角色保持安全默认值，后续目标流程会直接停止。
+	var actor: PlayerState = match_host.state.get_player(actor_id)
+	if actor == null:
+		resolution_context["slash_damage_amount"] = 1
+		resolution_context["slash_nature"] = "normal"
+		resolution_context["slash_ignore_armor"] = false
+		return
+	resolution_context["slash_damage_amount"] = 1 + actor.wine_bonus
+	actor.wine_bonus = 0
+	resolution_context["slash_nature"] = str(GameDatabase.get_card(card.definition_id).get("nature", "normal"))
+	# 当前武器定义；是否忽略防具由装备源码钩子声明，不依赖任何具体装备 ID。
+	var weapon_definition: CardDefinition = match_host.get_equipment_definition(actor_id, "weapon")
+	resolution_context["slash_ignore_armor"] = weapon_definition != null and weapon_definition.slash_ignores_armor()
+
+
+## 在共享上下文登记后执行当前武器的整牌准备钩子；返回 true 表示等待装备选择。
+static func begin_shared_resolution(match_host: Object, card: CardInstance, actor_id: int, resolution_context: Dictionary) -> bool:
+	# 当前武器定义；普通武器默认不接管整张【杀】的准备阶段。
+	var weapon_definition: CardDefinition = match_host.get_equipment_definition(actor_id, "weapon")
+	return weapon_definition != null and weapon_definition.on_slash_resolution_started(match_host, card, actor_id, resolution_context)
+
+
+## 绑定一次同步结算或异步恢复所需的通用调度器。
 func _init(effect_resolver: CardEffectResolver) -> void:
 	resolver = effect_resolver
 	host = effect_resolver.host
 	state = effect_resolver.state
 
 
-## 结算整张【杀】；兼容不使用逐目标事件树的调用路径。
+## 结算整张【杀】；不使用逐目标事件树的兼容路径会直接遍历全部目标。
 func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	# 使用者状态；酒加值在声明并结算本张【杀】时一次性消耗。
+	# 使用者状态；酒加值在整张【杀】开始时只读取并消耗一次。
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null:
 		return "discard"
-	# 本张【杀】对所有目标共享的伤害基数。
+	# 本张【杀】对全部目标共享的基础伤害。
 	var base_damage: int = 1 + actor.wine_bonus
 	actor.wine_bonus = 0
-	# 当前【杀】属性；normal、fire 或 thunder。
+	# 当前实体【杀】属性；允许 normal、fire 或 thunder。
 	var nature: String = str(GameDatabase.get_card(card.definition_id).get("nature", "normal"))
-	# 当前武器定义；是否忽略防具由装备卡牌源码提供。
+	# 当前武器定义；锁定效果通过源码钩子声明是否忽略防具。
 	var weapon_definition: CardDefinition = host.get_equipment_definition(actor_id, "weapon")
-	# 本张【杀】是否忽略防具；该值对整张多目标【杀】保持一致。
+	# 整张【杀】共享的无视防具状态；多目标结算期间保持不变。
 	var ignore_armor: bool = weapon_definition != null and weapon_definition.slash_ignores_armor()
 	for target_id: int in target_ids:
 		if resolver.is_resolution_stopped():
@@ -42,274 +66,165 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 	return resolver.default_destination()
 
 
-## 使用整张【杀】预先确定的共享参数结算一个目标；异步请求出现时返回 pending。
+## 使用整张牌预先保存的共享参数结算一个目标。
 func resolve_target(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool) -> String:
 	resolve_external_target(card, actor_id, target_id, damage_amount, nature, ignore_armor)
 	return resolver.default_destination()
 
 
-## 供【借刀杀人】、青龙偃月刀等规则使用实体【杀】时复用完整单目标流程。
-func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool) -> void:
+## 供借刀杀人和武器追击复用单目标【杀】流程；可指定真正负责异步恢复的父牌 UID。
+func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool, resolution_parent_card_uid: int = -1) -> void:
 	if resolver.is_resolution_stopped():
 		return
-	# 攻击者状态；用于武器触发与日志。
+	# 攻击者状态；不存在或死亡时不能继续发动武器。
 	var actor: PlayerState = state.get_player(actor_id)
-	# 目标状态；死亡目标会直接跳过后续结算。
+	# 目标状态；死亡或离场目标直接跳过本次结算。
 	var target: PlayerState = state.get_player(target_id)
 	if actor == null or target == null or not target.alive:
 		return
-
-	# 攻击者性别；unknown 不参与雌雄双股剑的异性比较。
-	var actor_gender: String = host.get_player_gender(actor_id)
-	# 目标性别；只有双方均为明确二元性别且不同才触发。
-	var target_gender: String = host.get_player_gender(target_id)
-	if state.processing_area.has(card) and host.player_has_equipment(actor_id, "cixiong") and actor_gender in ["male", "female"] and target_gender in ["male", "female"] and actor_gender != target_gender:
-		# 雌雄双股剑触发上下文；所有字段可序列化，发动后再进入目标弃牌或来源摸牌步骤。
-		var cixiong_context: Dictionary = {
-			"kind":"cixiong_trigger",
-			"parent_card_uid":card.uid,
-			"actor_id":actor_id,
-			"target_id":target_id,
-			"damage_amount":damage_amount,
-			"nature":nature,
-			"ignore_armor":ignore_armor,
-		}
-		# 是否发动雌雄双股剑；非锁定装备必须显式选择。
-		var cixiong_activated: bool = host.request_equipment_trigger(actor_id, "cixiong", "雌雄双股剑", "是否发动【雌雄双股剑】？", cixiong_context, true)
-		if resolver.is_resolution_stopped() or host.has_pending_card_choice():
-			return
-		continue_cixiong_trigger(cixiong_context, cixiong_activated)
+	# 通用【杀】上下文；只保存可序列化字段，异步恢复时重新查询实体与装备。
+	var context: Dictionary = {
+		"parent_card_uid":card.uid if resolution_parent_card_uid < 0 else resolution_parent_card_uid,
+		"slash_card_uid":card.uid,
+		"slash_card_definition_id":card.definition_id,
+		"actor_id":actor_id,
+		"target_id":target_id,
+		"damage_amount":damage_amount,
+		"nature":nature,
+		"ignore_armor":ignore_armor,
+	}
+	# 当前武器定义；每件武器自行判断是否在“指定目标后”接管流程。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(actor_id, "weapon")
+	if state.processing_area.has(card) and weapon_definition != null and weapon_definition.on_slash_targeted(self, context):
 		return
-	_continue_slash_after_cixiong(card, actor_id, target_id, damage_amount, nature, ignore_armor)
+	continue_after_weapon_targeted(context)
 
 
-## 按选择用途恢复【杀】内部的装备触发；返回 true 表示已识别当前上下文。
-func continue_choice(context: Dictionary, selected_uids: Array[int]) -> bool:
-	# 选择用途；只接受由【杀】流程创建的稳定 kind。
-	var choice_kind: String = str(context.get("kind", ""))
-	if choice_kind == "cixiong_trigger":
-		continue_cixiong_trigger(context, not selected_uids.is_empty())
-	elif choice_kind == "cixiong_discard":
-		continue_cixiong_discard(context, selected_uids)
-	elif choice_kind == "guanshi_cost":
-		continue_guanshi_cost(context, selected_uids)
-	elif choice_kind == "hanbing_cards":
-		continue_hanbing_cards(context, selected_uids)
-	elif choice_kind == "qilin_mount":
-		continue_qilin_mount(context, selected_uids)
-	else:
-		return false
-	return true
-
-
-## 恢复【闪】或青龙偃月刀追加【杀】响应；返回 true 表示已识别当前上下文。
-func continue_response(context: Dictionary, response_card: CardInstance) -> bool:
-	# 响应用途；响应牌已由控制器验证并移入弃牌堆。
-	var response_kind: String = str(context.get("kind", ""))
-	if response_kind == "slash_response":
-		continue_slash_response(context, response_card != null)
-		return true
-	if response_kind == "qinglong_response":
-		if response_card != null and not resolver.is_resolution_stopped():
-			# 追击者 ID；青龙偃月刀响应者就是原【杀】使用者。
-			var actor_id: int = int(context.get("responder_id", -1))
-			host.add_log("%s发动【青龙偃月刀】追击。" % state.get_player(actor_id).display_name)
-			resolve_external_target(response_card, actor_id, int(context.get("target_id", -1)), 1, str(GameDatabase.get_card(response_card.definition_id).get("nature", "normal")), bool(context.get("ignore_armor", false)))
-		return true
-	return false
-
-
-## 恢复雌雄双股剑发动选择；发动后由目标选择弃一张手牌或让使用者摸一张。
-func continue_cixiong_trigger(context: Dictionary, activated: bool) -> void:
-	# 原【杀】实体；必须仍在处理区，旧选择不能恢复已经结束的攻击。
-	var card: CardInstance = resolver.find_processing_card(int(context.get("parent_card_uid", -1)))
-	if card == null:
+## 在武器“指定目标后”钩子完成后继续防具检查和【闪】响应。
+func continue_after_weapon_targeted(context: Dictionary) -> void:
+	# 当前【杀】实体；响应牌可能已经进入弃牌堆，因此按 UID 搜索全部权威区域。
+	var card: CardInstance = _find_card(int(context.get("slash_card_uid", -1)))
+	# 当前目标状态；等待期间死亡或离场时停止。
+	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
+	if card == null or target == null or not target.alive or resolver.is_resolution_stopped():
 		return
-	# 攻击者 ID；用于摸牌和继续攻击。
-	var actor_id: int = int(context.get("actor_id", -1))
-	# 目标 ID；用于弃牌与继续响应。
-	var target_id: int = int(context.get("target_id", -1))
-	# 当前目标；等待期间死亡或离场时停止本目标结算。
-	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive:
-		return
-	if activated:
-		if target.hand.is_empty():
-			host.draw(actor_id, 1)
-		else:
-			# 目标手牌候选；木牛“粮”和装备不属于此弃牌选项。
-			var candidates: Array[Dictionary] = host.get_hand_candidates(target_id, target_id)
-			# 目标选择上下文；空选择表示拒绝弃牌并让攻击者摸一张牌。
-			var discard_context: Dictionary = context.duplicate(true)
-			discard_context["kind"] = "cixiong_discard"
-			discard_context["ai_prefer_select"] = true
-			# 目标弃牌选择；允许取消，恢复时再次校验 UID 所在区域。
-			var selected_uids: Array[int] = host.request_card_choice(target_id, "雌雄双股剑", "请弃置一张手牌，否则对方摸一张牌。", candidates, 0, 1, true, discard_context)
-			if resolver.is_resolution_stopped() or host.has_pending_card_choice():
-				return
-			continue_cixiong_discard(discard_context, selected_uids)
-			return
-	_continue_slash_after_cixiong(card, actor_id, target_id, int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)))
-
-
-## 恢复雌雄双股剑目标弃牌；弃牌失败或取消时改为攻击者摸一张。
-func continue_cixiong_discard(context: Dictionary, selected_uids: Array[int]) -> void:
-	# 原【杀】实体；响应必须仍属于当前处理区结算。
-	var card: CardInstance = resolver.find_processing_card(int(context.get("parent_card_uid", -1)))
-	if card == null:
-		return
-	# 目标实际弃置数量；数量为1才视为接受弃牌选项。
-	var discarded_count: int = host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count != 1:
-		host.draw(int(context.get("actor_id", -1)), 1)
-	_continue_slash_after_cixiong(card, int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)))
-
-
-## 在雌雄双股剑步骤结束后继续防具检查与【闪】响应。
-func _continue_slash_after_cixiong(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool) -> void:
-	# 当前目标；装备选择等待期间可能已经死亡或离场。
-	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive or resolver.is_resolution_stopped():
-		return
-	if not ignore_armor:
-		# 目标防具定义；具体无效条件由防具卡牌源码判断。
-		var armor_definition: CardDefinition = host.get_equipment_definition(target_id, "armor")
-		if armor_definition != null and armor_definition.blocks_slash(card, nature):
+	if not bool(context.get("ignore_armor", false)):
+		# 目标防具定义；具体无效条件由防具文件实现。
+		var armor_definition: CardDefinition = host.get_equipment_definition(target.player_id, "armor")
+		if armor_definition != null and armor_definition.blocks_slash(card, str(context.get("nature", "normal"))):
 			host.add_log("%s的防具令此【杀】无效。" % target.display_name)
 			return
-	if host.has_method("is_card_target_direct_hit") and bool(host.is_card_target_direct_hit(card.uid, target_id)):
-		_finish_single_slash_response(card, actor_id, target_id, damage_amount, nature, ignore_armor, false)
+	if host.has_method("is_card_target_direct_hit") and bool(host.is_card_target_direct_hit(int(context.get("parent_card_uid", -1)), target.player_id)):
+		_finish_slash_response(context, false)
 		return
-	# 响应恢复上下文；所有字段可序列化并通过父牌 UID 回到本组件。
-	var response_context: Dictionary = {"kind":"slash_response", "parent_card_uid":card.uid, "card_definition_id":card.definition_id, "actor_id":actor_id, "target_id":target_id, "damage_amount":damage_amount, "nature":nature, "ignore_armor":ignore_armor}
-	# 目标打出的实体【闪】；为空可能表示放弃，也可能表示等待人类选择。
-	var response_card: CardInstance = host.request_response_card(target_id, "shan", "是否打出【闪】响应【杀】？", response_context)
+	# 【闪】响应上下文；kind 用于卡牌源码恢复，其他字段保持原通用上下文。
+	var response_context: Dictionary = context.duplicate(true)
+	response_context["kind"] = "slash_response"
+	response_context["complete_parent_target_after_response"] = true
+	# 目标实际打出的【闪】；为空可能表示放弃或正在等待玩家选择。
+	var response_card: CardInstance = host.request_response_card(target.player_id, "shan", "是否打出【闪】响应【杀】？", response_context)
 	if resolver.is_resolution_stopped() or host.has_pending_card_choice():
 		return
-	_finish_single_slash_response(card, actor_id, target_id, damage_amount, nature, ignore_armor, response_card != null)
+	_finish_slash_response(response_context, response_card != null)
 
 
-## 在【闪】询问完成后继续结算贯石斧、青龙偃月刀、寒冰剑、伤害与麒麟弓。
-func _finish_single_slash_response(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool, dodged: bool) -> void:
-	# 攻击者状态；响应等待期间可能已经由插入结算改变状态。
-	var actor: PlayerState = state.get_player(actor_id)
-	# 目标状态；若响应插入结算使其离场则停止本次【杀】。
-	var target: PlayerState = state.get_player(target_id)
+## 在【闪】结果确定后执行当前武器的“被闪抵消后”钩子。
+func _finish_slash_response(context: Dictionary, dodged: bool) -> void:
+	# 攻击者状态；响应等待期间可能已经离场。
+	var actor: PlayerState = state.get_player(int(context.get("actor_id", -1)))
+	# 目标状态；响应插入结算可能已经改变其存活状态。
+	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
 	if actor == null or target == null or not target.alive or resolver.is_resolution_stopped():
 		return
-	if dodged and state.processing_area.has(card) and host.player_has_equipment(actor_id, "guanshi") and host.get_hand_equipment_card_count(actor_id) >= 2:
-		# 贯石斧费用候选；攻击者可选择两张手牌或装备。
-		var candidates: Array[Dictionary] = host.get_hand_equipment_candidates(actor_id, actor_id)
-		# 贯石斧恢复上下文；保存【闪】后的完整攻击参数。
-		var guanshi_context: Dictionary = {"kind":"guanshi_cost", "parent_card_uid":card.uid, "actor_id":actor_id, "target_id":target_id, "damage_amount":damage_amount, "nature":nature, "ignore_armor":ignore_armor, "ai_prefer_select":true}
-		# 两张费用牌；允许取消但确认时必须正好选择2张。
-		var selected_uids: Array[int] = host.request_card_choice(actor_id, "贯石斧", "是否弃置两张牌发动【贯石斧】？", candidates, 2, 2, true, guanshi_context)
-		if resolver.is_resolution_stopped() or host.has_pending_card_choice():
-			return
-		continue_guanshi_cost(guanshi_context, selected_uids)
+	# 武器阶段上下文；dodged 可由贯石斧等装备在支付费用后改写。
+	var weapon_context: Dictionary = context.duplicate(true)
+	weapon_context["dodged"] = dodged
+	# 当前武器定义；装备文件自行决定是否暂停或替换后续流程。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(actor.player_id, "weapon")
+	if weapon_definition != null and weapon_definition.on_slash_dodged(self, weapon_context):
 		return
-	_continue_slash_after_guanshi(card, actor_id, target_id, damage_amount, nature, ignore_armor, dodged)
+	continue_after_weapon_dodged(weapon_context)
 
 
-## 恢复贯石斧费用选择；完整支付两张费用才令原【杀】继续生效。
-func continue_guanshi_cost(context: Dictionary, selected_uids: Array[int]) -> void:
-	# 原【杀】实体；旧费用请求不能操作已经结束的攻击。
-	var card: CardInstance = resolver.find_processing_card(int(context.get("parent_card_uid", -1)))
-	if card == null:
+## 在武器处理【闪】结果后继续；仍被抵消则结束，否则进入伤害前武器钩子。
+func continue_after_weapon_dodged(context: Dictionary) -> void:
+	# 目标状态；用于记录【闪】抵消日志。
+	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
+	if target == null or not target.alive or resolver.is_resolution_stopped():
 		return
-	# 实际支付数量；等待期间牌已移动会导致支付失败。
-	var discarded_count: int = host.discard_selected_hand_equipment(int(context.get("actor_id", -1)), selected_uids)
-	# 是否仍被闪抵消；完整支付两张费用时改为 false。
-	var dodged: bool = discarded_count != 2
-	if not dodged:
-		host.add_log("%s发动【贯石斧】，令【杀】继续生效。" % state.get_player(int(context.get("actor_id", -1))).display_name)
-	_continue_slash_after_guanshi(card, int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)), dodged)
-
-
-## 在贯石斧选择结束后处理青龙偃月刀或进入伤害前的寒冰剑选择。
-func _continue_slash_after_guanshi(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool, dodged: bool) -> void:
-	# 攻击者状态；用于日志和装备触发。
-	var actor: PlayerState = state.get_player(actor_id)
-	# 目标状态；用于响应结果与寒冰剑发动条件。
-	var target: PlayerState = state.get_player(target_id)
-	if actor == null or target == null or not target.alive or resolver.is_resolution_stopped():
-		return
-	if dodged:
+	if bool(context.get("dodged", false)):
 		host.add_log("%s打出【闪】抵消了【杀】。" % target.display_name)
-		if host.player_has_equipment(actor_id, "qinglong"):
-			# 青龙偃月刀追击上下文；响应后仍通过原【杀】定义恢复。
-			var qinglong_context: Dictionary = {"kind":"qinglong_response", "responder_id":actor_id, "target_id":target_id, "parent_card_uid":card.uid, "ignore_armor":ignore_armor}
-			# 青龙偃月刀追加使用的实体【杀】；为空表示放弃发动。
-			var follow_slash: CardInstance = host.request_response_card(actor_id, "sha", "是否发动【青龙偃月刀】继续打出【杀】？", qinglong_context)
-			if host.has_pending_card_choice():
-				return
-			if follow_slash != null:
-				host.add_log("%s发动【青龙偃月刀】追击。" % actor.display_name)
-				resolve_external_target(follow_slash, actor_id, target_id, 1, str(GameDatabase.get_card(follow_slash.definition_id).get("nature", "normal")), ignore_armor)
 		return
-	if state.processing_area.has(card) and host.player_has_equipment(actor_id, "hanbing") and host.get_hand_equipment_card_count(target_id) >= 1:
-		# 寒冰剑目标牌候选；发动者可选择目标一至两张手牌或装备。
-		var candidates: Array[Dictionary] = host.get_hand_equipment_candidates(actor_id, target_id)
-		# 寒冰剑恢复上下文；选择成功时防止伤害，取消时继续伤害。
-		var hanbing_context: Dictionary = {"kind":"hanbing_cards", "parent_card_uid":card.uid, "actor_id":actor_id, "target_id":target_id, "damage_amount":damage_amount, "nature":nature, "ignore_armor":ignore_armor, "ai_prefer_select":target.hp > 1}
-		# 目标弃牌选择；最多两张且允许取消。
-		var selected_uids: Array[int] = host.request_card_choice(actor_id, "寒冰剑", "是否发动【寒冰剑】并弃置目标至多两张牌？", candidates, 0, mini(2, candidates.size()), true, hanbing_context)
-		if resolver.is_resolution_stopped() or host.has_pending_card_choice():
-			return
-		continue_hanbing_cards(hanbing_context, selected_uids)
+	# 当前武器定义；寒冰剑等替代伤害效果在自身文件接管。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	if weapon_definition != null and weapon_definition.on_slash_before_damage(self, context):
 		return
-	_continue_slash_after_hanbing(card, actor_id, target_id, damage_amount, nature, ignore_armor)
+	continue_slash_damage(context)
 
 
-## 恢复寒冰剑选牌；至少成功弃置一张时防止伤害。
-func continue_hanbing_cards(context: Dictionary, selected_uids: Array[int]) -> void:
-	# 原【杀】实体；旧请求不能恢复已经结束的伤害事件。
-	var card: CardInstance = resolver.find_processing_card(int(context.get("parent_card_uid", -1)))
-	if card == null:
+## 造成【杀】伤害并在伤害完整结束后执行武器后续钩子。
+func continue_slash_damage(context: Dictionary) -> void:
+	# 当前【杀】实体；伤害记录使用实体自身定义 ID。
+	var card: CardInstance = _find_card(int(context.get("slash_card_uid", -1)))
+	if card == null or resolver.is_resolution_stopped():
 		return
-	# 实际弃置数量；最多两张，至少一张成功才视为发动。
-	var discarded_count: int = host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count > 0:
-		host.add_log("%s发动【寒冰剑】防止伤害并弃置目标至多两张牌。" % state.get_player(int(context.get("actor_id", -1))).display_name)
-		return
-	_continue_slash_after_hanbing(card, int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)))
-
-
-## 在寒冰剑步骤结束后造成伤害，并在目标存活时询问麒麟弓。
-func _continue_slash_after_hanbing(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool) -> void:
-	host.damage(actor_id, target_id, damage_amount, nature, card.definition_id, false, ignore_armor)
+	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)))
 	if resolver.is_resolution_stopped():
 		return
-	# 伤害后的最新目标状态；伤害、濒死和技能可能改变其存活或装备。
-	var target: PlayerState = state.get_player(target_id)
-	if state.processing_area.has(card) and target != null and target.alive and host.player_has_equipment(actor_id, "qilin"):
-		# 可弃置坐骑；没有坐骑时不创建空发动窗口。
-		var candidates: Array[Dictionary] = host.get_mount_candidates(actor_id, target_id)
-		if candidates.is_empty():
-			return
-		# 麒麟弓恢复上下文；选择一张坐骑表示发动。
-		var qilin_context: Dictionary = {"kind":"qilin_mount", "parent_card_uid":card.uid, "actor_id":actor_id, "target_id":target_id, "ai_prefer_select":true}
-		# 坐骑选择；允许取消且不能自动弃置第一张坐骑。
-		var selected_uids: Array[int] = host.request_card_choice(actor_id, "麒麟弓", "是否发动【麒麟弓】弃置目标一张坐骑？", candidates, 0, 1, true, qilin_context)
-		if resolver.is_resolution_stopped() or host.has_pending_card_choice():
-			return
-		continue_qilin_mount(qilin_context, selected_uids)
-
-
-## 恢复麒麟弓坐骑选择；只弃置明确选择且仍位于目标装备区的实体牌。
-func continue_qilin_mount(context: Dictionary, selected_uids: Array[int]) -> void:
-	if selected_uids.is_empty():
+	# 伤害后的目标状态；死亡目标不再执行任何伤害后装备效果。
+	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
+	if target == null or not target.alive:
 		return
-	# 实际弃置数量；候选只包含目标坐骑。
-	var discarded_count: int = host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count == 1:
-		host.add_log("%s发动【麒麟弓】弃置目标一张坐骑。" % state.get_player(int(context.get("actor_id", -1))).display_name)
+	# 当前武器定义；伤害后的选择和处理全部由装备文件拥有。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	if weapon_definition != null:
+		weapon_definition.on_slash_damage_finished(self, context)
 
 
-## 由异步【闪】选择恢复一张【杀】；父牌必须仍位于公共处理区。
-func continue_slash_response(context: Dictionary, dodged: bool) -> void:
-	# 原始【杀】实体；旧请求不能恢复已经结束的结算。
-	var slash_card: CardInstance = resolver.find_processing_card(int(context.get("parent_card_uid", -1)))
-	if slash_card == null:
-		return
-	_finish_single_slash_response(slash_card, int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)), dodged)
+## 恢复【杀】通用响应或把武器专属响应交回创建请求的装备定义。
+func continue_response(context: Dictionary, response_card: CardInstance) -> bool:
+	# 响应用途；slash_response 属于通用流程，其他 kind 由装备文件识别。
+	var response_kind: String = str(context.get("kind", ""))
+	if response_kind == "slash_response":
+		_finish_slash_response(context, response_card != null)
+		return true
+	# 创建响应的装备定义 ID；上下文缺失时不猜测当前武器。
+	var equipment_definition_id: String = str(context.get("equipment_definition_id", ""))
+	# 创建响应的装备定义；等待期间换装也能由原定义验证实体 UID 后安全拒绝。
+	var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_definition_id)
+	return equipment_definition != null and equipment_definition.continue_slash_response(self, context, response_card)
+
+
+## 恢复武器【杀】钩子创建的普通选牌；共享组件不识别任何具体选择 kind。
+func continue_choice(context: Dictionary, selected_uids: Array[int]) -> bool:
+	# 创建选择的装备定义 ID；每个装备文件只处理自己的 kind。
+	var equipment_definition_id: String = str(context.get("equipment_definition_id", ""))
+	# 创建选择的装备定义；旧请求由装备文件自行复核实体 UID 与当前状态。
+	var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_definition_id)
+	return equipment_definition != null and equipment_definition.continue_slash_choice(self, context, selected_uids)
+
+
+## 按稳定 UID 查找任意权威区域中的实体牌；异步【杀】可能已经作为响应牌进入弃牌堆。
+func _find_card(card_uid: int) -> CardInstance:
+	for processing_card: CardInstance in state.processing_area:
+		if processing_card.uid == card_uid:
+			return processing_card
+	for discarded_card: CardInstance in state.discard_pile:
+		if discarded_card.uid == card_uid:
+			return discarded_card
+	for player: PlayerState in state.players:
+		for hand_card: CardInstance in player.hand:
+			if hand_card.uid == card_uid:
+				return hand_card
+		for equipment_variant: Variant in player.equipment.values():
+			# 当前装备实体；响应恢复只按 UID 比较，不修改装备区。
+			var equipment_card: CardInstance = equipment_variant as CardInstance
+			if equipment_card.uid == card_uid:
+				return equipment_card
+		for judgment_card: CardInstance in player.judgment_area:
+			if judgment_card.uid == card_uid:
+				return judgment_card
+		for stored_card: CardInstance in player.wooden_ox_storage:
+			if stored_card.uid == card_uid:
+				return stored_card
+	return null

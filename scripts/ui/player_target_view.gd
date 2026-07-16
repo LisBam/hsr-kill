@@ -429,8 +429,8 @@ func _refresh_equipment_rows() -> void:
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则。
 		var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
-		if str(equipment_card.get("definition_id", "")) == "muniu":
-			# 木牛流马公开存牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
+		if bool(card_definition.get("shows_attachment_count", false)):
+			# 装备公开附属牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
 			var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
 			equipment_name += "（%d）" % wooden_ox_count
 		# 当前装备花色；用于生成参考图中的左侧花色点数标记和红黑配色。

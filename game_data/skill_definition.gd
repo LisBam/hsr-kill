@@ -55,3 +55,23 @@ func can_activate(_context: Dictionary = {}) -> bool:
 ## 执行主动技能；空字符串表示成功，非空字符串会作为统一动作拒绝原因返回。
 func activate(_context: Dictionary = {}) -> String:
 	return "该技能当前不可主动发动。"
+
+
+## 恢复由本技能创建的普通选牌请求；返回 true 表示选择已识别并完成或进入下一段等待。
+func continue_choice(_context: Dictionary, _selected_uids: Array[int]) -> bool:
+	return false
+
+
+## 恢复由本技能创建的响应牌请求；response_card 为 null 表示响应者明确放弃。
+func continue_response(_context: Dictionary, _response_card: CardInstance) -> bool:
+	return false
+
+
+## 向基础 AI 的出牌阶段合法动作列表追加技能动作；动作必须使用 action_type=use_skill 并携带稳定 skill_id。
+func append_play_phase_actions(_result: Array[Dictionary]) -> void:
+	pass
+
+
+## 返回主动技能的只读交互预览；不得在本函数中消耗资源、创建选择或修改对局状态。
+func get_activation_preview(_context: Dictionary = {}) -> Dictionary:
+	return {}
