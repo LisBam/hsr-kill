@@ -505,7 +505,7 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 168.0
-offset_top = -157.0
+offset_top = -175.0
 offset_right = -335.7
 grow_horizontal = 2
 grow_vertical = 0
@@ -517,7 +517,7 @@ vertical_scroll_mode = 0
 
 [node name="HandContainer" type="Container" parent="HandPanel/HandScroll" unique_id=176003051]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(752, 157)
+custom_minimum_size = Vector2(752, 175)
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("9_hand_layout")
