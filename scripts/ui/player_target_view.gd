@@ -89,6 +89,9 @@ var _artwork_texture: Texture2D
 ## 当前已创建的装备条目控件；每次快照更新时整体重建，最多包含五个固定装备槽。
 var _equipment_rows: Array[RichTextLabel] = []
 
+## 当前装备条目对应的固定槽位 ID；索引与 _equipment_rows 一一对应，用于让空槽保留纵向位置而不自动补位。
+var _equipment_row_slots: Array[String] = []
+
 ## 当前武将所属势力的展示元数据；仅保存配置深拷贝，不持有全局数据索引的可修改引用。
 var _faction_definition: Dictionary = {}
 
@@ -220,15 +223,19 @@ func _layout_equipment_rows() -> void:
 	# 装备条目可用宽度；由场景内公开区提示宽度推导，使静态场景继续作为信息层几何的唯一来源。
 	# 当前可用宽度严格等于武将插画宽度。
 	var row_width: float = _artwork_rect.size.x
-	# 全部装备条目总高度；相邻横条轻微覆盖1像素以模拟参考图的叠牌效果。
-	var rows_height: float = equipment_row_height + float(_equipment_rows.size() - 1) * (equipment_row_height - 1.0)
+	# 当前参与布局的固定槽位数；武器至防御坐骑始终保留4个位置，宝物只在实际装备后加入第五个位置。
+	var visible_slot_count: int = 5 if (_player_snapshot.get("equipment", {}) as Dictionary).has("treasure") else 4
+	# 全部固定槽位总高度；相邻横条轻微覆盖1像素，空槽不绘制横条但继续占用对应位置。
+	var rows_height: float = equipment_row_height + float(visible_slot_count - 1) * (equipment_row_height - 1.0)
 	# 第一条装备的纵坐标；由场景内公开区域上沿推导，从牌面下部向上展开。
 	# 当前公开区移至牌面底边之外，因此装备条改为从插画底边向上展开。
 	var start_y: float = maxf(_artwork_rect.position.y + _artwork_rect.size.y - rows_height, _artwork_rect.position.y)
 	for row_index: int in range(_equipment_rows.size()):
 		# 当前装备横条；只更新几何信息，不改变其装备数据或显示文本。
 		var equipment_row: RichTextLabel = _equipment_rows[row_index]
-		equipment_row.position = Vector2(row_left, start_y + float(row_index) * (equipment_row_height - 1.0))
+		# 当前装备固定槽位索引；空槽不创建节点，因此必须按对应槽位而不是数组紧凑索引定位。
+		var slot_index: int = EQUIPMENT_SLOT_ORDER.find(_equipment_row_slots[row_index])
+		equipment_row.position = Vector2(row_left, start_y + float(slot_index) * (equipment_row_height - 1.0))
 		equipment_row.size = Vector2(row_width, equipment_row_height)
 
 
@@ -330,6 +337,7 @@ func _refresh_equipment_rows() -> void:
 			_equipment_layer.remove_child(equipment_row)
 			equipment_row.queue_free()
 	_equipment_rows.clear()
+	_equipment_row_slots.clear()
 	# 当前公开装备字典；快照已包含完整实体牌数据，可安全展示花色、点数和牌名。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
 	for slot: String in EQUIPMENT_SLOT_ORDER:
@@ -368,6 +376,7 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.text = "[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]
 		_equipment_layer.add_child(equipment_row)
 		_equipment_rows.append(equipment_row)
+		_equipment_row_slots.append(slot)
 	_layout_equipment_rows()
 
 
@@ -392,9 +401,13 @@ func _suit_color(suit: String) -> Color:
 func _format_snapshot_tooltip(snapshot: Dictionary, character_definition: Dictionary) -> String:
 	# 装备区牌名摘要；公开装备按槽位顺序读取并使用当前全局牌名模式。
 	var equipment_names: Array[String] = []
-	for equipment_variant: Variant in (snapshot.get("equipment", {}) as Dictionary).values():
+	# 当前公开装备字典；悬停说明与牌面保持相同的武器至宝物固定顺序，缺少槽位时直接跳过。
+	var equipment: Dictionary = snapshot.get("equipment", {}) as Dictionary
+	for slot: String in EQUIPMENT_SLOT_ORDER:
+		if not equipment.has(slot):
+			continue
 		# 当前公开装备快照；只读取定义 ID 解析显示名。
-		var equipment_card: Dictionary = equipment_variant as Dictionary
+		var equipment_card: Dictionary = equipment.get(slot, {}) as Dictionary
 		equipment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(equipment_card.get("definition_id", "")))))
 	# 判定区牌名摘要；按快照顺序显示延时锦囊名称。
 	var judgment_names: Array[String] = []

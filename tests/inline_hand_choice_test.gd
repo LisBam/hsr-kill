@@ -1,6 +1,7 @@
 extends Node
 
 ## 本地手牌内联选择回归。验证响应与弃牌不打开独立窗口，并正确控制候选牌、按钮和多选数量。
+## 同一回归同时验证本地装备候选不打开独立窗口、候选横条右移、空槽保留位置和宝物第五行动态布局。
 
 ## 正式主场景稳定等待帧数；覆盖延迟开局失败提示与首轮界面节点初始化。
 const SETTLE_FRAME_COUNT: int = 4
@@ -95,11 +96,62 @@ func _run() -> void:
 	if confirm_button.disabled or (main_instance.get("_inline_selected_card_uids") as Array).size() != 2:
 		_fail("discard_complete_state")
 		return
+	# 测试武器装备；与手牌候选共用统一实体 UID 选择协议。
+	var weapon_data: Dictionary = {"uid":7004, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"equipment", "owner_id":0}
+	# 测试防御坐骑；不属于当前候选，用于确认非候选装备保持原位且防具与进攻坐骑空槽不会被压缩。
+	var defensive_mount_data: Dictionary = {"uid":7005, "definition_id":"jueying", "suit":"spade", "rank":5, "zone":"equipment", "owner_id":0}
+	# 不含宝物的本地装备字典；布局应只启用前四个固定槽位。
+	var equipment_without_treasure: Dictionary = {"weapon":weapon_data, "defensive_mount":defensive_mount_data}
+	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 13, equipment_without_treasure))
+	await get_tree().process_frame
+	# 本地装备单选请求；候选完全位于选择者自己的装备区，因此必须直接复用牌桌操作区。
+	var equipment_request: Dictionary = {
+		"request_id":13,
+		"chooser_id":0,
+		"title":"选择装备",
+		"prompt":"请选择一张装备牌",
+		"candidates":[_candidate(weapon_data)],
+		"min_select":1,
+		"max_select":1,
+		"allow_cancel":false,
+		"context":{"kind":"equipment_cost"},
+	}
+	main_instance.call("_on_card_choice_requested", equipment_request)
+	await get_tree().process_frame
+	# 本地装备堆叠组件；装备选择必须直接发生在该组件中，不能创建第二份卡牌窗口。
+	var equipment_stack: EquipmentStackView = main_instance.get_node("%EquipmentStack") as EquipmentStackView
+	# 可选武器横条；应向右移动配置距离并允许点击。
+	var weapon_row: Button = equipment_stack.get_row("weapon")
+	# 非候选防御坐骑横条；应保持基础横坐标并位于第四个固定槽位。
+	var defensive_mount_row: Button = equipment_stack.get_row("defensive_mount")
+	if selection_panel.visible or weapon_row == null or defensive_mount_row == null or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or defensive_mount_row.position.y - weapon_row.position.y <= equipment_stack.equipment_row_height * 1.8 or equipment_stack.get_row("treasure") != null or int(equipment_stack.get("_visible_slot_count")) != 4:
+		_fail("equipment_inline_layout")
+		return
+	main_instance.call("_on_equipment_pressed", 7004)
+	if confirm_button.disabled or not (main_instance.get("_inline_selected_card_uids") as Array).has(7004):
+		_fail("equipment_inline_selection")
+		return
+	# 测试宝物装备；宝物出现后组件应启用第五个槽位并重新计算整组纵向间距。
+	var treasure_data: Dictionary = {"uid":7006, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":0}
+	# 含宝物的本地装备字典；保留已有武器和防御坐骑，用于比较五槽布局位置变化。
+	var equipment_with_treasure: Dictionary = equipment_without_treasure.duplicate(true)
+	equipment_with_treasure["treasure"] = treasure_data
+	# 四槽布局中的防御坐骑纵坐标；宝物出现后该坐标必须随五槽间距重新计算。
+	var defensive_mount_y_without_treasure: float = defensive_mount_row.position.y
+	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 14, equipment_with_treasure))
+	await get_tree().process_frame
+	# 五槽布局中的宝物横条；只有实际装备宝物后才应创建。
+	var treasure_row: Button = equipment_stack.get_row("treasure")
+	# 五槽布局中的防御坐骑横条；应与四槽布局使用不同纵坐标但仍保持固定第四槽顺序。
+	var defensive_mount_row_with_treasure: Button = equipment_stack.get_row("defensive_mount")
+	if treasure_row == null or int(equipment_stack.get("_visible_slot_count")) != 5 or is_equal_approx(defensive_mount_row_with_treasure.position.y, defensive_mount_y_without_treasure) or treasure_row.position.y <= defensive_mount_row_with_treasure.position.y:
+		_fail("equipment_treasure_layout")
+		return
 	# 公共展示牌请求；候选不属于本人手牌，必须继续使用独立 CardSelectionPanel。
 	var harvest_card_data: Dictionary = {"uid":7003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"processing", "owner_id":-1}
 	# 五谷请求；用于验证展示区没有被内联分类误吞。
 	var harvest_request: Dictionary = {
-		"request_id":13,
+		"request_id":15,
 		"chooser_id":0,
 		"title":"五谷丰登",
 		"prompt":"请选择一张展示牌获得",
@@ -115,10 +167,10 @@ func _run() -> void:
 		_fail("harvest_modal_state")
 		return
 	# 本地普通出牌快照；权威 chooseToUse 只列出【杀】，响应专用【闪】即使轮到本人也必须保持禁用灰显。
-	var play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 14)
+	var play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 16)
 	play_snapshot["current_player_id"] = 0
 	play_snapshot["current_phase"] = "play"
-	play_snapshot["current_choice_request"] = {"request_id":14, "event_id":14, "actor_id":0, "choice_type":"use", "card_ids":[7001]}
+	play_snapshot["current_choice_request"] = {"request_id":16, "event_id":16, "actor_id":0, "choice_type":"use", "card_ids":[7001]}
 	match_controller.state_changed.emit(play_snapshot)
 	await get_tree().process_frame
 	# 出牌阶段手牌视图；可用性必须逐牌读取 chooseToUse 候选，而不是把整手牌一起启用。
@@ -147,18 +199,20 @@ func _run() -> void:
 
 ## 把卡牌快照包装成统一选择候选；可见性与所有者字段和正式控制器输出一致。
 func _candidate(card_data: Dictionary) -> Dictionary:
+	# 当前候选槽位；装备牌从静态定义读取槽位，其他区域保持空字符串。
+	var slot: String = str(GameDatabase.get_card(str(card_data.get("definition_id", ""))).get("slot", "")) if str(card_data.get("zone", "")) == "equipment" else ""
 	return {
 		"uid":int(card_data.get("uid", -1)),
 		"owner_id":int(card_data.get("owner_id", -1)),
 		"zone":str(card_data.get("zone", "")),
-		"slot":"",
+		"slot":slot,
 		"visible":true,
 		"card_data":card_data.duplicate(true),
 	}
 
 
 ## 构造本地观察者快照；只包含内联选择需要的手牌、阶段和运行时请求标识。
-func _make_snapshot(hand_cards: Array, request_id: int) -> Dictionary:
+func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = {}) -> Dictionary:
 	# 本地玩家快照；完整手牌仅对0号观察者公开。
 	var local_player: Dictionary = {
 		"player_id":0,
@@ -172,7 +226,7 @@ func _make_snapshot(hand_cards: Array, request_id: int) -> Dictionary:
 		"chained":false,
 		"hand_count":hand_cards.size(),
 		"hand":hand_cards.duplicate(true),
-		"equipment":{},
+		"equipment":equipment.duplicate(true),
 		"judgment_area":[],
 		"wooden_ox_storage":[],
 		"wooden_ox_storage_count":0,
