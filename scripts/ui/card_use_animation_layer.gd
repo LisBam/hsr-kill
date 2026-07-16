@@ -87,10 +87,32 @@ var _card_lifecycle_tweens: Dictionary = {}
 ## 已由牌面表现接管后续弃牌动画的实体 UID 集合；键为UID、值固定为true，纯展示牌不会进入该集合。
 var _discard_transfer_claims: Dictionary = {}
 
+## 已消费弃牌认领的实体 UID 集合；重复移动与迟到表现继续视为已接管，直到权威移牌确认该 UID 进入非弃牌新区域。
+var _consumed_discard_transfer_claims: Dictionary = {}
+
+## 本局已经接收的表现 ID 集合；键为单调 presentation_id，值固定为true，用于拒绝网络重发或重复信号。
+var _seen_presentation_ids: Dictionary = {}
+
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
 	z_index = presentation_z_index
+
+
+## 登记一次牌面表现并原子取得弃牌动画所有权；返回false表示相同表现或实体使用已经处理，调用方不得再次创建节点。
+func claim_presentation(presentation_id: int, card_uid: int, owns_discard_transfer: bool) -> bool:
+	if presentation_id >= 0 and _seen_presentation_ids.has(presentation_id):
+		return false
+	if presentation_id >= 0:
+		_seen_presentation_ids[presentation_id] = true
+	if not owns_discard_transfer or card_uid < 0:
+		return true
+	# 同一实体仍有待消费或已消费认领时，新的不同表现 ID 也视为迟到重复；只有权威非弃牌移牌才能开始下一生命周期。
+	if _discard_transfer_claims.has(card_uid) or _consumed_discard_transfer_claims.has(card_uid):
+		return false
+	# 新一轮真实使用；权威移牌已经清理旧生命周期，此处只登记本轮待到达的最终弃牌移动。
+	_discard_transfer_claims[card_uid] = presentation_id
+	return true
 
 
 ## 播放一次卡牌使用表现；传入节点始终是正式 CardView，所有位置使用本组件局部坐标。
@@ -98,6 +120,10 @@ func _ready() -> void:
 func play_card(card_view: CardView, start_position: Vector2, discard_position: Vector2, target_positions: Array[Vector2], owns_discard_transfer: bool = false) -> void:
 	if card_view == null:
 		return
+	if owns_discard_transfer and card_view.card_uid >= 0 and not _discard_transfer_claims.has(card_view.card_uid):
+		# 组件独立调用兼容入口；正式桌面已在节点创建前通过 claim_presentation 原子登记，此分支只补齐直接调用的所有权。
+		_consumed_discard_transfer_claims.erase(card_view.card_uid)
+		_discard_transfer_claims[card_view.card_uid] = -1
 	_presentation_sequence += 1
 	# 本次表现序号；用于关联当前卡牌、目标指示线与后续顺序淡出清理。
 	var sequence: int = _presentation_sequence
@@ -135,8 +161,6 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	# 当前表现牌实例 ID；移动、生命周期和清理映射统一使用该稳定整数。
 	var presented_card_instance_id: int = presented_card.get_instance_id()
 	_card_sequences[presented_card_instance_id] = sequence
-	if owns_discard_transfer and presented_card.card_uid >= 0:
-		_discard_transfer_claims[presented_card.card_uid] = true
 	# 飞牌补间；新牌从使用者位置进入弃牌队列，已有牌同步横向补位且全程保持水平不倾斜。
 	_start_card_motion(presented_card, _queue_card_position(_active_cards.size() - 1), card_flight_duration)
 	# 飞牌外观补间；与可被队列重排替换的位置补间分离，确保缩放和透明度不会被补位操作中断。
@@ -228,10 +252,18 @@ func has_active_card_uid(card_uid: int) -> bool:
 
 ## 消费一次由使用或判定表现接管的真实弃牌移动；返回true时调用方不得再创建第二张转移牌。
 func consume_discard_transfer_claim(card_uid: int) -> bool:
-	if not _discard_transfer_claims.has(card_uid):
-		return false
+	if _discard_transfer_claims.has(card_uid):
+		_discard_transfer_claims.erase(card_uid)
+		_consumed_discard_transfer_claims[card_uid] = true
+		return true
+	# 已消费状态保留到实体进入新区域；同一真实移动被重复转发时仍保持幂等，不重新生成中央牌面。
+	return _consumed_discard_transfer_claims.has(card_uid)
+
+
+## 释放指定 UID 的待消费与已消费所有权；实体进入新区域后，旧使用生命周期不能拦截未来合法表现或弃置。
+func release_consumed_discard_claim(card_uid: int) -> void:
 	_discard_transfer_claims.erase(card_uid)
-	return true
+	_consumed_discard_transfer_claims.erase(card_uid)
 
 
 ## 立即清空全部飞牌、弃牌队列和目标线；重新开局时调用，避免上一局异步表现残留到新桌面。
@@ -265,6 +297,8 @@ func clear_presentations() -> void:
 	_motion_tweens.clear()
 	_card_lifecycle_tweens.clear()
 	_discard_transfer_claims.clear()
+	_consumed_discard_transfer_claims.clear()
+	_seen_presentation_ids.clear()
 	_card_sequences.clear()
 	_line_presentations.clear()
 	_animated_card = null

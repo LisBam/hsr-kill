@@ -61,6 +61,8 @@ func _run() -> void:
 	_create_controller()
 	if not await _test_wuxie_per_target_and_aoe_continuation():
 		return
+	if not await _test_dynamic_targets_direct_hit_and_exclusion():
+		return
 	if not await _test_dying_peach_and_wine_share_one_request():
 		return
 	if not await _test_zhuque_requires_activation_choice():
@@ -119,6 +121,7 @@ func _reset_state(player_count: int) -> void:
 	_controller.card_rules = CardRuleService.new(_controller.state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, _controller.state)
 	_controller.card_movement = CardMovementService.new(_controller.state)
+	_controller.trigger_manager = TriggerManager.new()
 	_controller._pending_card_choice.clear()
 	_controller._resolved_card_choice_uids.clear()
 	_controller._negation_resume_results.clear()
@@ -160,13 +163,146 @@ func _test_wuxie_per_target_and_aoe_continuation() -> bool:
 	var target_stage_order: Array[String] = []
 	for history_record_variant: Variant in _controller.event_scheduler.get_event_history():
 		# 当前历史事件摘要；只筛选四个 useCardTo 阶段并保留目标 ID 形成稳定顺序断言。
-		var event_data: Dictionary = (history_record_variant as Dictionary).get("event", {}) as Dictionary
+		# 当前历史记录；真实子事件拥有 start/step/finish 三类记录，顺序断言只读取每个事件唯一的 start。
+		var history_record: Dictionary = history_record_variant as Dictionary
+		if str(history_record.get("kind", "")) != "start":
+			continue
+		# 当前事件摘要；只筛选四个 useCardTo 阶段并保留目标 ID 形成稳定顺序断言。
+		var event_data: Dictionary = history_record.get("event", {}) as Dictionary
+		# 当前事件稳定名称；仅四组逐目标时机进入顺序数组。
 		var event_name: String = str(event_data.get("name", ""))
 		if event_name in ["useCardToPlayer", "useCardToTarget", "useCardToPlayered", "useCardToTargeted"]:
 			target_stage_order.append("%s:%d" % [event_name, int((event_data.get("context", {}) as Dictionary).get("target_id", -1))])
 	var expected_target_stage_order: Array[String] = ["useCardToPlayer:1", "useCardToPlayer:2", "useCardToTarget:1", "useCardToTarget:2", "useCardToPlayered:1", "useCardToPlayered:2", "useCardToTargeted:1", "useCardToTargeted:2"]
 	if target_stage_order != expected_target_stage_order:
 		return _fail("use_card_target_stage_order=%s" % [target_stage_order])
+	if not _assert_real_card_use_event_tree():
+		return false
+	return true
+
+
+## 验证目标时机可动态追加目标、directHit 会跳过响应、取消目标只排除该目标且其他目标继续。
+func _test_dynamic_targets_direct_hit_and_exclusion() -> bool:
+	_scenario = "dynamic_targets"
+	_reset_state(3)
+	# 动态目标触发器；useCardToPlayer 为原目标追加二号目标，后续四组时机会重新读取最新数组。
+	_controller.trigger_manager.subscribe("useCardToPlayer", self, _append_dynamic_card_target, 0, -1, "global")
+	# 目标后段触发器；一号目标获得直击，二号目标被取消并进入 excluded 集合。
+	_controller.trigger_manager.subscribe("useCardToTargeted", self, _apply_dynamic_target_flags, 0, -1, "global")
+	# 测试【杀】；初始只声明一号目标，二号目标完全由真实目标时机动态加入。
+	var slash: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	_controller._execute_card_use(0, slash, [1])
+	if not await _wait_until_card_finalized(slash.uid):
+		return _fail("dynamic_targets_timeout")
+	# 一号目标因直击不能响应并受到1点伤害；二号目标被排除且保持4点体力。
+	if _controller.state.get_player(1).hp != 3 or _controller.state.get_player(2).hp != 4:
+		return _fail("dynamic_target_hp=%d:%d" % [_controller.state.get_player(1).hp, _controller.state.get_player(2).hp])
+	# 实际 content 数量；只有未排除的一号目标进入牌效，二号目标不能伪造 content 历史。
+	var content_start_count: int = 0
+	# 二号目标完整时机计数；动态加入后必须经历四组 useCardTo 时机，再由最后一组取消。
+	var added_target_timing_count: int = 0
+	for record: Dictionary in _controller.event_scheduler.get_event_history():
+		if str(record.get("kind", "")) != "start":
+			continue
+		# 当前事件摘要；只读取稳定名称和可序列化目标 ID。
+		var event_data: Dictionary = record.get("event", {}) as Dictionary
+		# 当前事件稳定名称；只统计 content 与四组目标时机。
+		var event_name: String = str(event_data.get("name", ""))
+		if event_name == "content":
+			content_start_count += 1
+		if event_name in CardUseEventService.TARGET_TIMING_NAMES and int((event_data.get("context", {}) as Dictionary).get("target_id", -1)) == 2:
+			added_target_timing_count += 1
+	if content_start_count != 1 or added_target_timing_count != 4:
+		return _fail("dynamic_target_events=%d:%d" % [content_start_count, added_target_timing_count])
+	return true
+
+
+## 在第一组逐目标时机为当前牌追加二号目标；重复执行时保持目标数组去重。
+func _append_dynamic_card_target(event: RuleEvent) -> void:
+	if event.target_id != 1:
+		return
+	# 当前目标数组；修改 RuleEvent 数据后会写回 CardUseEvent 共享上下文并供下一次 redo 读取。
+	var target_ids: Array = event.data.get("target_ids", []) as Array
+	if not target_ids.has(2):
+		target_ids.append(2)
+	event.data["target_ids"] = target_ids
+
+
+## 在 useCardToTargeted 为一号目标写入直击，并取消二号目标以验证 excluded 只影响对应 content。
+func _apply_dynamic_target_flags(event: RuleEvent) -> void:
+	if event.target_id == 1:
+		# 当前直击目标集合；加入一号目标后【杀】跳过【闪】询问但继续防具与伤害流程。
+		var direct_hit_target_ids: Array = event.data.get("direct_hit_target_ids", []) as Array
+		if not direct_hit_target_ids.has(1):
+			direct_hit_target_ids.append(1)
+		event.data["direct_hit_target_ids"] = direct_hit_target_ids
+	elif event.target_id == 2:
+		event.cancel()
+
+
+## 验证使用牌各时机、逐目标内容、响应选择和 ordering 回收都属于真实可暂停事件树，而非迁移期摘要。
+func _assert_real_card_use_event_tree() -> bool:
+	# 完整运行时历史；本场景只有一张主动使用的南蛮入侵，响应牌通过 respond 子流程记录。
+	var history: Array[Dictionary] = _controller.event_scheduler.get_event_history()
+	# 原 CardUseEvent ID；所有源码级时机和 contentAfter 必须直接关联该父事件。
+	var card_use_event_id: int = -1
+	# 实际进入效果的 content 子事件 ID；被无懈的目标和继续结算的目标各有一条。
+	var content_event_ids: Array[int] = []
+	# 唯一 contentAfter 数量；多目标与多次响应都不能重复创建。
+	var content_after_count: int = 0
+	# orderingDiscard 事件 ID；必须位于 CardUseEvent 的 after 队列并成为 cardsDiscard 的直接父事件。
+	var ordering_discard_event_id: int = -1
+	# 是否找到直接挂在目标 content 下的响应选择；证明选择暂停归属真实牌效位置。
+	var found_nested_response_choice: bool = false
+	# 响应选择启动标记；选择请求即使立即暂停，也必须拥有真实 start 历史而不是只有 choice_requested 摘要。
+	var found_started_nested_response_choice: bool = false
+	# cardsDiscard 开始历史序号；用于确认实体回收发生在 contentAfter 之后、CardUseEvent 最终化之前。
+	var cards_discard_start_sequence: int = -1
+	# contentAfter 开始历史序号；本用例必须严格早于 cardsDiscard。
+	var content_after_start_sequence: int = -1
+	# CardUseEvent 最终完成历史序号；after 子树未完成前不得写入。
+	var card_use_finish_sequence: int = -1
+	for record: Dictionary in history:
+		# 当前事件摘要；所有断言只读取可序列化历史，不访问调度器内部事件对象。
+		var event_data: Dictionary = record.get("event", {}) as Dictionary
+		# 当前历史类型；start 用于唯一事件计数，finish 用于验证 after 队列完成时机。
+		var record_kind: String = str(record.get("kind", ""))
+		# 当前事件稳定名称；与无名杀源码时机保持一致。
+		var event_name: String = str(event_data.get("name", ""))
+		if record_kind == "start" and event_name == "CardUseEvent":
+			card_use_event_id = int(event_data.get("event_id", -1))
+		if record_kind == "start" and event_name == "content":
+			content_event_ids.append(int(event_data.get("event_id", -1)))
+		if record_kind == "start" and event_name == "contentAfter":
+			content_after_count += 1
+			content_after_start_sequence = int(record.get("sequence", -1))
+		if record_kind == "start" and event_name == "orderingDiscard":
+			ordering_discard_event_id = int(event_data.get("event_id", -1))
+		if record_kind == "start" and event_name == "cardsDiscard":
+			cards_discard_start_sequence = int(record.get("sequence", -1))
+		if record_kind == "finish" and event_name == "CardUseEvent":
+			card_use_finish_sequence = int(record.get("sequence", -1))
+	if card_use_event_id < 0 or content_event_ids.size() != 2 or content_after_count != 1 or ordering_discard_event_id < 0:
+		return _fail("real_card_use_counts=%d/%s/%d/%d" % [card_use_event_id, content_event_ids, content_after_count, ordering_discard_event_id])
+	for record: Dictionary in history:
+		# 当前事件摘要；第二轮检查在父事件 ID 已知后验证全部结构关系。
+		var event_data: Dictionary = record.get("event", {}) as Dictionary
+		# 当前历史记录类型；父子关系只在事件开始或请求登记时读取。
+		var record_kind: String = str(record.get("kind", ""))
+		# 当前事件稳定名称；用于按拓扑节点类型选择断言。
+		var event_name: String = str(event_data.get("name", ""))
+		if record_kind == "start" and event_name in CardUseEventService.USE_TIMING_NAMES + CardUseEventService.TARGET_TIMING_NAMES + ["contentBefore", "content", "contentAfter", "orderingDiscard"] and int(event_data.get("parent_id", -2)) != card_use_event_id:
+			return _fail("card_use_child_parent=%s:%s" % [event_name, event_data.get("parent_id", -2)])
+		if record_kind == "choice_requested" and event_name == "chooseToRespond" and content_event_ids.has(int(event_data.get("parent_id", -1))):
+			found_nested_response_choice = true
+		if record_kind == "start" and event_name == "chooseToRespond" and content_event_ids.has(int(event_data.get("parent_id", -1))):
+			found_started_nested_response_choice = true
+		if record_kind == "start" and event_name == "cardsDiscard" and int(event_data.get("parent_id", -2)) != ordering_discard_event_id:
+			return _fail("cards_discard_parent=%s" % event_data.get("parent_id", -2))
+	if not found_nested_response_choice or not found_started_nested_response_choice:
+		return _fail("response_choice_not_nested_in_content=%s/%s" % [found_nested_response_choice, found_started_nested_response_choice])
+	if content_after_start_sequence < 0 or cards_discard_start_sequence <= content_after_start_sequence or card_use_finish_sequence <= cards_discard_start_sequence:
+		return _fail("card_use_after_order=%d/%d/%d" % [content_after_start_sequence, cards_discard_start_sequence, card_use_finish_sequence])
 	return true
 
 

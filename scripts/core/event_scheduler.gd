@@ -58,6 +58,7 @@ var _stop_requested: bool = false
 var _history_sequence: int = 0
 
 ## 根事件生命周期暂停 token；大于0时保持长生命周期 phaseLoop 根事件，直到对局结束或显式 release_root。
+## 兼容说明：长期根事件现由 GameEvent.held_open 表达且不会阻塞子事件，该字段只保留旧快照与调试读取边界。
 var _root_lifecycle_token: int = -1
 
 
@@ -112,15 +113,18 @@ func push_root(event_id: int) -> bool:
 
 
 ## 启动一个长期根事件并用独立生命周期 token 保持栈；子事件响应不会让空内容根事件提前完成。
+## 当前实现使用 held_open 保持栈；保持开放只阻止根事件自动完成，不会像暂停 token 一样阻塞其子事件。
 func begin_root(event_id: int, hold_open: bool = true) -> bool:
 	if not push_root(event_id):
 		return false
 	var event: GameEvent = _events[event_id] as GameEvent
 	event.status = GameEvent.Status.RUNNING
+	event.held_open = hold_open
 	_record_history("start", event)
 	event_started.emit(event.to_dict())
 	if hold_open:
-		_root_lifecycle_token = pause_registry.acquire("lifecycle", event_id, "root_lifecycle")
+		# 长期根事件当前没有待执行内容；等待状态仍允许 create_child 后由 drain 压入新的真实子树。
+		event.status = GameEvent.Status.WAITING_CHILDREN
 	else:
 		drain()
 	return true
@@ -128,11 +132,17 @@ func begin_root(event_id: int, hold_open: bool = true) -> bool:
 
 ## 释放长期根事件并允许它正常完成；身份模式通常只在明确终局前使用 abort_all，而不单独调用。
 func release_root(reason: String = "root_complete") -> bool:
-	if _root_lifecycle_token < 0:
+	if root_event_id < 0:
 		return false
-	var token_id: int = _root_lifecycle_token
-	_root_lifecycle_token = -1
-	return resume(token_id, reason)
+	# 当前根事件；只有尚未终止且确实保持开放的根事件可以释放。
+	var root_event: GameEvent = _events.get(root_event_id) as GameEvent
+	if root_event == null or root_event.finalized or not root_event.held_open:
+		return false
+	root_event.held_open = false
+	root_event.status = GameEvent.Status.RUNNING
+	root_event.termination_reason = reason
+	drain()
+	return true
 
 
 ## 排空事件栈直到全部结束、存在暂停 token 或遇到对局终止；内容步骤不会跨暂停推进。
@@ -149,6 +159,10 @@ func drain() -> void:
 			continue
 		if pause_registry.has_active_for_stack(_event_stack):
 			event.status = GameEvent.Status.PAUSED
+			break
+		# 长期根事件没有待执行子事件时保持在栈底等待；该状态不是暂停，因此后续新建子事件仍可正常排空。
+		if event.held_open and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size():
+			event.status = GameEvent.Status.WAITING_CHILDREN
 			break
 		_process_event(event)
 	_draining = false
@@ -262,6 +276,11 @@ func request_choice(request: ChoiceRequest) -> ChoiceRequest:
 	var event: GameEvent = _events[request.event_id] as GameEvent
 	if event == null or event.finalized or event.is_terminal():
 		return null
+	if event.status == GameEvent.Status.CREATED:
+		# 新建选择事件从请求登记时正式开始；即使随后立即被选择 token 暂停，历史仍保留完整 start -> choice_requested -> finish 链。
+		event.status = GameEvent.Status.RUNNING
+		_record_history("start", event)
+		event_started.emit(event.to_dict())
 	request.pause_token_id = pause("choice", "choice_request:%d" % request.request_id, request.event_id)
 	event.status = GameEvent.Status.PAUSED
 	_choice_requests[request.request_id] = request
@@ -271,7 +290,8 @@ func request_choice(request: ChoiceRequest) -> ChoiceRequest:
 
 
 ## 提交一个选择响应；请求、事件、玩家和候选必须全部匹配后才恢复事件。
-func submit_choice(response: ChoiceResponse) -> bool:
+## defer_drain 用于规则控制器先应用选择结果再继续父事件，默认 false 保持独立运行时调用的即时恢复语义。
+func submit_choice(response: ChoiceResponse, defer_drain: bool = false) -> bool:
 	if response == null or not _choice_requests.has(response.request_id):
 		return false
 	# 当前请求；只允许仍处于 PENDING 的对象接受响应。
@@ -292,7 +312,11 @@ func submit_choice(response: ChoiceResponse) -> bool:
 		else:
 			event.cancel("choice_cancelled")
 	_choice_requests.erase(request.request_id)
-	resume(request.pause_token_id, "choice_resolved")
+	if defer_drain:
+		# 延迟排空只解决本次选择 token；调用方完成权威效果恢复后必须显式调用 drain 或解决父事件 token。
+		pause_registry.resolve(request.pause_token_id, "choice_resolved")
+	else:
+		resume(request.pause_token_id, "choice_resolved")
 	if not scheduled_event and not event.finalized:
 		_finalize_event(event)
 	choice_resolved.emit(request.to_dict(), response.to_dict())

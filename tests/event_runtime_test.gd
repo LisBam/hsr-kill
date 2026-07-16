@@ -25,6 +25,8 @@ var _child_event: GameEvent
 func _ready() -> void:
 	if not _test_event_tree_and_pause():
 		return
+	if not _test_held_root_accepts_children():
+		return
 	if not _test_terminal_states():
 		return
 	if not _test_trigger_order():
@@ -35,6 +37,33 @@ func _ready() -> void:
 		return
 	print("EVENT_RUNTIME_PASS order=%s history=%d" % [_execution_order, _scheduler.get_event_history().size()])
 	get_tree().quit(0)
+
+
+## 验证长期根事件只保持生命周期而不暂停子树；新增子事件必须可以立即执行并回到根等待状态。
+func _test_held_root_accepts_children() -> bool:
+	# 独立调度器；避免长期根事件影响本文件其他终止态与选择用例。
+	var held_scheduler: EventScheduler = EventScheduler.new()
+	add_child(held_scheduler)
+	# 子事件执行次数；默认0，真实进入调度栈后必须严格增加到1。
+	var child_execution_count: Array[int] = [0]
+	# 长期根事件；空内容用于模拟正式对局的 RootGameEvent。
+	var held_root: GameEvent = held_scheduler.create_event("HeldRoot", "root")
+	if not held_scheduler.begin_root(held_root.event_id, true):
+		return _fail("held_root_begin")
+	# 根事件下的真实子事件；内容通过引用数组记录执行结果，不依赖事件摘要伪造完成。
+	var child: GameEvent = held_scheduler.create_child(held_root.event_id, "HeldChild", "rule", [func(_event: GameEvent, _runtime: EventScheduler) -> void: child_execution_count[0] += 1])
+	held_scheduler.drain()
+	# 子事件快照；必须完成并最终化，根事件仍保持开放且没有任何生命周期暂停 token。
+	var child_snapshot: Dictionary = held_scheduler.get_event_snapshot(child.event_id)
+	# 根事件快照；子树结束后回到 waiting_children，等待下一条阶段或卡牌事件。
+	var root_snapshot: Dictionary = held_scheduler.get_event_snapshot(held_root.event_id)
+	if child_execution_count[0] != 1 or str(child_snapshot.get("status", "")) != "finished" or not bool(child_snapshot.get("finalized", false)):
+		return _fail("held_root_child=%s/%s" % [child_execution_count, child_snapshot])
+	if str(root_snapshot.get("status", "")) != "waiting_children" or not bool(root_snapshot.get("held_open", false)) or held_scheduler.pause_registry.has_active():
+		return _fail("held_root_state=%s" % root_snapshot)
+	held_scheduler.abort_all("test_complete")
+	held_scheduler.queue_free()
+	return true
 
 
 ## 验证子事件阻塞、选择请求、旧响应拒绝、多 token 暂停、结果回传和 after 队列。

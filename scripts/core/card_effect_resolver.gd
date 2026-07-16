@@ -280,6 +280,10 @@ func _continue_slash_after_cixiong(card: CardInstance, actor_id: int, target_id:
 		if armor_id == "renwang" and card.get_color() == "black":
 			host.add_log("%s的【仁王盾】令黑色【杀】无效。" % target.display_name)
 			return
+	# 直击目标跳过【闪】响应；武器发动、防具无效与后续伤害流程仍按原顺序完整执行。
+	if host.has_method("is_card_target_direct_hit") and bool(host.is_card_target_direct_hit(card.uid, target_id)):
+		_finish_single_slash_response(card, actor_id, target_id, damage_amount, nature, ignore_armor, false)
+		return
 
 	# 响应恢复上下文；无论玩家还是 AI 都先收到同一【闪】询问，再通过标准选择动作提交。
 	var response_context: Dictionary = {

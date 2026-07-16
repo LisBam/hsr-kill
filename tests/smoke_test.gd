@@ -766,6 +766,12 @@ func _run() -> void:
 	_controller.state = terminal_aoe_state
 	_controller.card_rules = CardRuleService.new(terminal_aoe_state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, terminal_aoe_state)
+	# 终局场景使用独立事件运行时；上一场景的 game_over 会中断旧根事件，替换 GameState 时必须同步创建新根。
+	_controller.event_scheduler.reset()
+	# 群体牌终局根事件；保持开放以执行真实 CardUseEvent 及其逐目标 content 子树。
+	var terminal_aoe_root: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"match_id":"terminal_aoe"})
+	_controller._runtime_root_event_id = terminal_aoe_root.event_id
+	_controller.event_scheduler.begin_root(terminal_aoe_root.event_id, true)
 	if not _controller.submit_action(PlayerAction.new("use_card", 0, terminal_aoe_card.uid, [])) or not terminal_aoe_state.game_over or terminal_aoe_state.players[2].hp != 4 or not terminal_aoe_state.processing_area.has(terminal_aoe_card) or terminal_aoe_state.discard_pile.has(terminal_aoe_card):
 		printerr("SMOKE_FAIL terminal_aoe winner=%s later_hp=%d processing=%s discard=%s" % [terminal_aoe_state.winner, terminal_aoe_state.players[2].hp, terminal_aoe_state.processing_area.has(terminal_aoe_card), terminal_aoe_state.discard_pile.has(terminal_aoe_card)])
 		get_tree().quit(1)
