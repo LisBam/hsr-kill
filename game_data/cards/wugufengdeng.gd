@@ -36,10 +36,20 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	var revealed_cards: Array[CardInstance] = resolver.host.reveal_top_cards(target_ids.size())
 	# 展示牌 UID；异步上下文只保存可序列化稳定 ID。
 	var revealed_uids: Array[int] = []
+	# 固定公共展示牌位；完整保留最初亮出的牌面与后续领取者，牌被取得后不会从界面布局中删除。
+	var harvest_display_slots: Array[Dictionary] = []
 	for revealed_card: CardInstance in revealed_cards:
 		revealed_uids.append(revealed_card.uid)
+		harvest_display_slots.append({
+			"uid":revealed_card.uid,
+			"card_data":revealed_card.to_dict(),
+			"taken_by_player_id":-1,
+		})
 	# 五谷结算上下文；target_index 指向下一名应获得展示牌的角色。
-	var context: Dictionary = {"kind":"harvest", "parent_card_uid":card.uid, "actor_id":actor_id, "target_ids":target_ids.duplicate(), "target_index":0, "revealed_uids":revealed_uids}
+	var context: Dictionary = {"kind":"harvest", "parent_card_uid":card.uid, "actor_id":actor_id, "target_ids":target_ids.duplicate(), "target_index":0, "revealed_uids":revealed_uids, "harvest_display_slots":harvest_display_slots}
+	# 首名目标；公共选牌框在任何无懈询问前立即出现，空目标时使用-1作为无操作者占位值。
+	var first_target_id: int = int(target_ids[0]) if not target_ids.is_empty() else -1
+	_publish_harvest_display(resolver, context, first_target_id)
 	_process_choice_queue(resolver, context, false)
 	return resolver.default_destination()
 
@@ -59,6 +69,7 @@ func _process_choice_queue(resolver: Object, context: Dictionary, deferred_resol
 	while target_index < target_ids.size() and not revealed_uids.is_empty() and not resolver.state.game_over:
 		# 当前获得者 ID；每名角色从全部剩余展示牌中自主选择。
 		var target_id: int = target_ids[target_index]
+		_publish_harvest_display(resolver, context, target_id)
 		# 当前目标无懈结果；专用恢复会把结果写回相同目标索引。
 		var target_negated: bool = false
 		if int(context.get("negation_resolved_target_index", -1)) == target_index:
@@ -94,7 +105,9 @@ func _process_choice_queue(resolver: Object, context: Dictionary, deferred_resol
 			var chosen_card: CardInstance = resolver.find_processing_card(selected_uids[0])
 			if chosen_card != null:
 				resolver.host.give_revealed_card(target_id, chosen_card)
+				_mark_harvest_slot_taken(context, selected_uids[0], target_id)
 				revealed_uids.erase(selected_uids[0])
+				_publish_harvest_display(resolver, context, target_id)
 		target_index += 1
 	for remaining_uid: int in revealed_uids:
 		# 未被选择的展示牌；仍在处理区时逐张进入弃牌堆。
@@ -103,6 +116,7 @@ func _process_choice_queue(resolver: Object, context: Dictionary, deferred_resol
 			resolver.host.discard_revealed_card(remaining_card)
 	if deferred_resolution and not resolver.state.game_over:
 		resolver.host.finish_processing_card(int(context.get("parent_card_uid", -1)))
+	resolver.host.clear_public_card_choice_display("harvest")
 
 
 ## 恢复一名角色提交的展示牌选择，然后从下一目标继续队列。
@@ -121,6 +135,8 @@ func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array
 	var chosen_card: CardInstance = resolver.find_processing_card(selected_uids[0])
 	if chosen_card != null:
 		resolver.host.give_revealed_card(int(target_ids[target_index]), chosen_card)
+		_mark_harvest_slot_taken(context, selected_uids[0], int(target_ids[target_index]))
+		_publish_harvest_display(resolver, context, int(target_ids[target_index]))
 	# 剩余展示牌 UID；移除已获得实体并推进目标游标。
 	var remaining_uids: Array = (context.get("revealed_uids", []) as Array).duplicate()
 	remaining_uids.erase(selected_uids[0])
@@ -141,3 +157,31 @@ func continue_negation(resolver: Object, context: Dictionary, final_negated: boo
 	harvest_context["negation_resolved_result"] = final_negated
 	_process_choice_queue(resolver, harvest_context, true)
 	return true
+
+
+## 更新固定展示牌位的领取归属；牌面快照始终保留，只有领取者 ID 会从-1变为实际玩家 ID。
+func _mark_harvest_slot_taken(context: Dictionary, card_uid: int, player_id: int) -> void:
+	# 公共展示牌位数组；深拷贝后写回上下文，防止异步请求副本与后续规则游标共享可变子数组。
+	var display_slots: Array = (context.get("harvest_display_slots", []) as Array).duplicate(true)
+	for slot_index: int in range(display_slots.size()):
+		# 当前固定牌位；UID 匹配时只补充领取者，不移除牌位或覆盖原始牌面。
+		var display_slot: Dictionary = display_slots[slot_index] as Dictionary
+		if int(display_slot.get("uid", -1)) != card_uid:
+			continue
+		display_slot["taken_by_player_id"] = player_id
+		display_slots[slot_index] = display_slot
+		break
+	context["harvest_display_slots"] = display_slots
+
+
+## 发布全体玩家可见的五谷选牌快照；公开数据只包含固定牌位、当前选择者与领取归属。
+func _publish_harvest_display(resolver: Object, context: Dictionary, active_player_id: int) -> void:
+	# 公共展示快照；标题和提示属于长期规则语义，界面会根据玩家快照补充当前武将名。
+	var display_data: Dictionary = {
+		"kind":"harvest",
+		"title":"五谷丰登",
+		"prompt":"每名角色依次选择一张展示牌",
+		"active_player_id":active_player_id,
+		"slots":(context.get("harvest_display_slots", []) as Array).duplicate(true),
+	}
+	resolver.host.set_public_card_choice_display(display_data)

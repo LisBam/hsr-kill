@@ -197,6 +197,36 @@ func _run() -> void:
 		return
 	# 公共展示牌请求；候选不属于本人手牌，必须继续使用独立 CardSelectionPanel。
 	var harvest_card_data: Dictionary = {"uid":7003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"processing", "owner_id":-1}
+	# 已被本地武将领取的原展示牌；公共窗口必须把该牌保留为虚影并在底部显示“开拓者”。
+	var taken_harvest_card_data: Dictionary = {"uid":7010, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"processing", "owner_id":-1}
+	# 五谷公共展示；在具体选择请求到达前就应让所有观察者看到固定牌位。
+	var harvest_public_display: Dictionary = {
+		"kind":"harvest",
+		"title":"五谷丰登",
+		"prompt":"每名角色依次选择一张展示牌",
+		"active_player_id":0,
+		"slots":[
+			{"uid":7003, "card_data":harvest_card_data, "taken_by_player_id":-1},
+			{"uid":7010, "card_data":taken_harvest_card_data, "taken_by_player_id":0},
+		],
+	}
+	main_instance.call("_on_public_card_choice_display_changed", harvest_public_display)
+	await get_tree().process_frame
+	# 紧凑选择框与浅背景滤镜；场景覆盖值必须小于组件通用默认规格。
+	var selection_frame: PanelContainer = selection_panel.get("_frame") as PanelContainer
+	# 全屏选择遮罩；透明度必须使用正式场景覆盖后的0.42浅滤镜。
+	var selection_shade: ColorRect = selection_panel.get("_shade") as ColorRect
+	# 公共窗口底部操作行；旁观快照尚无本地请求时必须隐藏。
+	var public_action_row: HBoxContainer = selection_panel.get("_action_row") as HBoxContainer
+	# 公共牌位视图映射；领取牌仍以原 UID 留在固定位置。
+	var public_card_views: Dictionary = selection_panel.get("_card_views") as Dictionary
+	# 已领取展示牌视图；输入应禁用且整体透明度低于未领取牌。
+	var taken_card_view: CardView = public_card_views.get(7010) as CardView
+	# 领取者标签；固定作为牌位包装器中正式牌面之后的第二个子节点。
+	var taken_owner_label: Label = taken_card_view.get_parent().get_child(1) as Label
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(820.0, 460.0)) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5:
+		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
+		return
 	# 五谷请求；用于验证展示区没有被内联分类误吞。
 	var harvest_request: Dictionary = {
 		"request_id":15,
@@ -211,7 +241,9 @@ func _run() -> void:
 	}
 	main_instance.call("_on_card_choice_requested", harvest_request)
 	await get_tree().process_frame
-	if not selection_panel.visible or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty():
+	# 当前本地可选展示牌；固定牌位刷新后只有未领取的7003开放输入，虚影7010继续保留。
+	var interactive_public_card_views: Dictionary = selection_panel.get("_card_views") as Dictionary
+	if not selection_panel.visible or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty() or not public_action_row.visible or not (interactive_public_card_views.get(7003) as CardView).is_interactable or (interactive_public_card_views.get(7010) as CardView).is_interactable:
 		_fail("harvest_modal_state")
 		return
 	# 本地普通出牌快照；权威 chooseToUse 只列出【杀】，响应专用【闪】即使轮到本人也必须保持禁用灰显。
@@ -316,6 +348,27 @@ func _run() -> void:
 	var interaction_guide: Label = main_instance.get_node("%InteractionGuideLabel") as Label
 	if confirm_button.disabled or recast_button.visible or not interaction_guide.text.contains("重铸"):
 		_fail("chain_confirm_recast")
+		return
+	# 选将组件快照；主公已亮将后左侧必须显示正式武将牌，进度长文本保持隐藏。
+	var character_selection_panel: CharacterSelectionPanel = main_instance.get_node("%CharacterSelectionPanel") as CharacterSelectionPanel
+	character_selection_panel.bind_snapshot({
+		"phase":CharacterSelectionService.PHASE_OTHERS,
+		"lord_player_id":1,
+		"lord_character_id":"bronya",
+		"local_player_id":0,
+		"local_candidates":["trailblazer", "dan_heng", "march_7th", "himeko", "welt"],
+		"can_select":true,
+		"readiness":[],
+	})
+	await get_tree().process_frame
+	# 选将框左侧主公牌承载区；已亮将快照必须创建恰好一张正式武将牌。
+	var lord_character_area: Control = main_instance.get_node("%LordCharacterArea") as Control
+	# 已废弃进度文本标签；节点保留兼容但必须隐藏并清空文本。
+	var character_status_label: Label = main_instance.get_node("%CharacterSelectionStatus") as Label
+	# 右侧候选承载区；横坐标应为给左侧主公牌预留后的214像素。
+	var character_candidate_area: Control = main_instance.get_node("%CharacterCandidateArea") as Control
+	if not character_selection_panel.visible or not lord_character_area.visible or lord_character_area.get_child_count() != 1 or character_status_label.visible or not character_status_label.text.is_empty() or not is_equal_approx(character_candidate_area.position.x, 214.0):
+		_fail("character_selection_lord_card")
 		return
 	remove_child(main_instance)
 	main_instance.free()

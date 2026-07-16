@@ -58,6 +58,10 @@ var is_target_selected: bool = false
 ## 当前角色是否正在行动；行动状态使用左侧文本标记，不影响目标合法性。
 var is_current_actor: bool = false
 
+## 当前角色是否正在处理活动规则操作；响应、选牌和其他等待输入期间由桌面按请求 actor 单独设置。
+## 该状态只提供提亮与外发光，不替代当前回合角色的金色边框，也不改变输入合法性。
+var is_current_operator: bool = false
+
 ## 当前武将牌是否允许交互；存活角色为 true，阵亡角色为 false，只影响输入与视觉状态。
 var is_interactable: bool = false
 
@@ -219,6 +223,14 @@ func set_target_state(legal_target: bool, selected_target: bool) -> void:
 	_refresh_visual_state()
 
 
+## 更新当前操作角色高亮；同一角色同时属于当前回合时仍保留金色回合边框。
+func set_operation_state(current_operator: bool) -> void:
+	if is_current_operator == current_operator:
+		return
+	is_current_operator = current_operator
+	_refresh_visual_state()
+
+
 ## 转发独立输入区域的合法卡牌拖放结果，并补充当前稳定玩家 ID。
 func _on_input_card_dropped(card_uid: int) -> void:
 	card_dropped.emit(card_uid, player_id)
@@ -229,7 +241,9 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 角色卡背景；当前行动者略微提亮，帮助玩家定位回合归属。
-	var background_color: Color = Color("211d1af2") if not is_current_actor else Color("3a3023f5")
+	var background_color: Color = Color("211d1af2") if not is_current_actor else Color("332b20f5")
+	if is_current_operator:
+		background_color = Color("463a28f7")
 	# 角色卡边框；选中金色优先，其次合法青绿，最后使用统一暗金边框。
 	var border_color: Color = BattleUIStyle.GOLD_BORDER_COLOR
 	# 角色卡描边宽度；合法或选中时使用3像素，普通状态使用1像素。
@@ -237,14 +251,26 @@ func _refresh_visual_state() -> void:
 	if is_target_selected:
 		border_color = BattleUIStyle.ACCENT_COLOR
 		border_width = 3
+	elif is_current_actor:
+		border_color = BattleUIStyle.ACCENT_COLOR
+		border_width = 3
 	elif is_legal_target:
 		border_color = BattleUIStyle.LEGAL_TARGET_COLOR
 		border_width = 3
+	elif is_current_operator:
+		border_color = BattleUIStyle.LEGAL_TARGET_COLOR.lightened(0.12)
+		border_width = 2
 	if not is_interactable:
 		background_color = Color("292724")
 		border_color = Color("544f49")
 		border_width = 1
-	_card_body.add_theme_stylebox_override("panel", _make_player_style(background_color, border_color, border_width))
+	# 角色卡最终样式；操作角色额外使用青绿外发光，当前回合的金色边框仍由上述优先级单独表达。
+	var player_style: StyleBoxFlat = _make_player_style(background_color, border_color, border_width)
+	if is_current_operator and is_interactable:
+		player_style.shadow_color = Color("72d8b5aa")
+		player_style.shadow_size = 14
+		player_style.shadow_offset = Vector2.ZERO
+	_card_body.add_theme_stylebox_override("panel", player_style)
 	_card_back.visible = is_face_down
 	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
 

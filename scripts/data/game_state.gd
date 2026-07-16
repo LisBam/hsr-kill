@@ -39,6 +39,10 @@ var current_event_id: int = -1
 ## 当前等待的选择请求摘要；普通观察者只能看到经过裁剪的候选信息。
 var current_choice_request: Dictionary = {}
 
+## 当前全体玩家可见的公共选牌展示；用于五谷丰登等需要跨多名选择者持续保留牌位的公开界面。
+## 空字典表示没有公共展示；内容只能包含可序列化牌面快照、当前操作玩家 ID 与领取归属，不保存节点或规则对象。
+var public_card_choice_display: Dictionary = {}
+
 ## 已完成事件摘要历史；记录事件父子、步骤和终止原因，支持规则回放与无头验收。
 var event_history: Array[Dictionary] = []
 
@@ -141,6 +145,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"processing_count": processing_area.size(),
 		"current_event_id": current_event_id,
 		"current_choice_request": choice_request_data,
+		"public_card_choice_display": public_card_choice_display.duplicate(true),
 		"event_history_count": event_history.size(),
 		"card_move_history_count": card_move_history.size(),
 		"round_number": round_number,

@@ -10,3 +10,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_script")
+panel_max_width = 820.0
+panel_max_height = 460.0
+shade_color = Color(0.01, 0.008, 0.006, 0.42)

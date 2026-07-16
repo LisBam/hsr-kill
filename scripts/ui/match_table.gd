@@ -26,6 +26,12 @@ const END_PLAY_BUTTON_COLOR: Color = Color("8f302d")
 ## 回合结束按钮的危险操作边框色；默认使用较亮朱红保证深色牌桌上的轮廓可见，运行时无需修改。
 const END_PLAY_BUTTON_BORDER_COLOR: Color = Color("e06a61")
 
+## 每秒包含的毫秒数；对局时长使用单调时钟换算，不受系统时间调整影响。
+const MILLISECONDS_PER_SECOND: int = 1000
+
+## 每分钟包含的秒数；左上角时长固定格式化为“分:秒”。
+const SECONDS_PER_MINUTE: int = 60
+
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
@@ -169,6 +175,27 @@ var _inline_selected_card_uids: Array[int] = []
 ## 当前独立选择窗口的请求 ID；默认-1表示窗口关闭，用于防止旧提交回调关闭同步创建的新窗口。
 var _modal_choice_request_id: int = -1
 
+## 当前独立选择窗口的完整请求副本；公共选牌展示刷新时用于决定哪些固定牌位允许本地点击。
+var _modal_card_choice_request: Dictionary = {}
+
+## 当前全体观察者可见的公共选牌展示；五谷丰登结算期间持续保留固定牌位与领取归属。
+var _public_card_choice_display: Dictionary = {}
+
+## 当前需要作出规则操作的玩家 ID；优先读取活动选择请求，未等待选择时回退当前回合角色。
+var _current_operator_player_id: int = -1
+
+## 当前计时器绑定的对局 ID；对局 ID 变化时重置开始时间，避免重新开局继承旧时长。
+var _timed_match_id: String = ""
+
+## 当前对局开始时的单调毫秒时间；默认-1表示尚未收到有效对局快照。
+var _match_started_msec: int = -1
+
+## 当前对局结束时的单调毫秒时间；默认-1表示仍在进行，用于终局后冻结显示时长。
+var _match_finished_msec: int = -1
+
+## 最近一次写入左上角的整秒时长；默认-1强制首个有效快照立即刷新。
+var _last_rendered_duration_seconds: int = -1
+
 ## 当前通过点击装备进入的主动交互类型；空字符串表示普通出牌或普通内联选择，具体字符串来自装备定义元数据。
 var _active_equipment_action: String = ""
 
@@ -190,6 +217,7 @@ func _ready() -> void:
 	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
 	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
+	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
@@ -207,6 +235,11 @@ func _ready() -> void:
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
 	call_deferred("_start_default_match")
+
+
+## 按整秒刷新左上角对局时长；只更新文本，不驱动任何规则阶段、计时器或 AI 行为。
+func _process(_delta: float) -> void:
+	_refresh_match_duration_label()
 
 
 ## 统一操作区的运行时节点结构与视觉规格；即使旧场景缺少唯一名称或仍保留旧按钮层级，也能恢复当前交互布局。
@@ -274,6 +307,8 @@ func _create_local_player_card() -> void:
 ## 接收本地裁剪快照并刷新全部桌面区域。
 func _on_state_changed(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
+	_sync_match_clock()
+	_public_card_choice_display = (_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate(true)
 	if str(_snapshot.get("current_phase", "")) != "character_selection":
 		character_selection_panel.close()
 	# 当前运行时请求；用于清理已经完成或中断的旧内联/窗口状态，同时保留同步创建的新请求。
@@ -284,8 +319,9 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
 	if _modal_choice_request_id >= 0 and _modal_choice_request_id != runtime_request_id:
-		card_selection_panel.close()
 		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+	_current_operator_player_id = int(runtime_choice.get("actor_id", _snapshot.get("current_player_id", -1)))
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
 	_auto_locked_target_id = -1
@@ -295,27 +331,48 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	_render_players()
 	_render_local_hand()
 	_refresh_selection_text()
+	_refresh_card_selection_panel()
 
 
 ## 渲染顶栏回合与牌堆信息。
 func _render_header() -> void:
-	# 当前玩家 ID；用于从玩家数组取得显示名。
-	var current_player_id: int = int(_snapshot.get("current_player_id", -1))
-	# 当前玩家显示名；无对局时使用占位文本。
-	var current_player_name: String = "无"
-	for player_variant: Variant in _snapshot.get("players", []):
-		# 当前玩家快照；与当前 ID 匹配时更新显示名。
-		var player: Dictionary = player_variant as Dictionary
-		if int(player.get("player_id", -1)) == current_player_id:
-			current_player_name = str(player.get("display_name", "无"))
-			break
-	phase_label.text = "第%d回合｜%s｜%s" % [
-		int(_snapshot.get("turn_number", 0)),
-		current_player_name,
-		_phase_text(str(_snapshot.get("current_phase", "setup"))),
-	]
-	center_turn_label.text = "第%d回合 · %s" % [int(_snapshot.get("turn_number", 0)), current_player_name]
-	center_phase_label.text = _phase_text(str(_snapshot.get("current_phase", "setup")))
+	phase_label.text = "第%d轮" % int(_snapshot.get("round_number", 0))
+	center_turn_label.text = "牌堆剩余：%d" % int(_snapshot.get("draw_pile_count", 0))
+	_refresh_match_duration_label(true)
+
+
+## 根据最新快照维护本地对局计时边界；重新开局重置起点，终局后冻结终点。
+func _sync_match_clock() -> void:
+	# 当前快照对局 ID；测试快照允许为空，但同一空 ID 仍只在首次收到时建立一次计时起点。
+	var match_id: String = str(_snapshot.get("match_id", ""))
+	if _match_started_msec < 0 or match_id != _timed_match_id:
+		_timed_match_id = match_id
+		_match_started_msec = Time.get_ticks_msec()
+		_match_finished_msec = -1
+		_last_rendered_duration_seconds = -1
+	if bool(_snapshot.get("game_over", false)) and _match_finished_msec < 0:
+		_match_finished_msec = Time.get_ticks_msec()
+
+
+## 把单调时钟差格式化为“对局时长：分:秒”；相同整秒不会重复写入标签。
+func _refresh_match_duration_label(force_refresh: bool = false) -> void:
+	if center_phase_label == null:
+		return
+	if _match_started_msec < 0:
+		center_phase_label.text = "对局时长：00:00"
+		return
+	# 计时终点；对局进行中读取当前单调时间，终局后使用冻结时间保持结果稳定。
+	var end_msec: int = _match_finished_msec if _match_finished_msec >= 0 else Time.get_ticks_msec()
+	# 已经过的完整秒数；负值只可能来自异常时钟数据，统一裁剪为0。
+	var elapsed_seconds: int = maxi((end_msec - _match_started_msec) / MILLISECONDS_PER_SECOND, 0)
+	if not force_refresh and elapsed_seconds == _last_rendered_duration_seconds:
+		return
+	_last_rendered_duration_seconds = elapsed_seconds
+	# 完整分钟数；允许超过59分钟，不在客户端截断长局时长。
+	var elapsed_minutes: int = elapsed_seconds / SECONDS_PER_MINUTE
+	# 当前分钟内秒数；固定补足两位保持左上角宽度稳定。
+	var remaining_seconds: int = elapsed_seconds % SECONDS_PER_MINUTE
+	center_phase_label.text = "对局时长：%02d:%02d" % [elapsed_minutes, remaining_seconds]
 
 
 ## 渲染全部玩家状态卡，并为存活角色提供按顺序选择目标的按钮。
@@ -385,6 +442,7 @@ func _render_players() -> void:
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
+		player_button.set_operation_state(target_id == _current_operator_player_id)
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
 		player_grid.move_child(player_seat_slot, seat_offset - 1)
 		next_player_views[target_id] = player_button
@@ -395,6 +453,7 @@ func _render_players() -> void:
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
+	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id)
 	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
 	_render_local_equipment(local_player_snapshot)
@@ -985,6 +1044,7 @@ func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 		_render_players()
 		_render_local_hand()
 		_refresh_selection_text()
+		_refresh_card_selection_panel()
 
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
@@ -993,10 +1053,16 @@ func _on_restart_requested(player_count: int) -> void:
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()
 	card_selection_panel.close()
+	_public_card_choice_display.clear()
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
 	_clear_equipment_action()
 	_modal_choice_request_id = -1
+	_modal_card_choice_request.clear()
+	_timed_match_id = ""
+	_match_started_msec = -1
+	_match_finished_msec = -1
+	_last_rendered_duration_seconds = -1
 	_presented_discard_card_uids.clear()
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
@@ -1007,13 +1073,28 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	character_selection_panel.bind_snapshot(selection_snapshot)
 
 
+## 接收公共选牌展示快照并立即刷新所有观察者可见窗口；空字典只关闭公共层，不影响其他有效本地请求。
+func _on_public_card_choice_display_changed(display_data: Dictionary) -> void:
+	_public_card_choice_display = display_data.duplicate(true)
+	_refresh_card_selection_panel()
+
+
 ## 显示属于本地玩家的统一选牌请求；本人手牌与装备候选使用桌面内联交互，其他区域继续使用独立窗口。
 func _on_card_choice_requested(choice_data: Dictionary) -> void:
+	_current_operator_player_id = int(choice_data.get("chooser_id", -1))
+	if not _snapshot.is_empty():
+		_render_players()
+	# 新请求已经替换旧独立窗口时先清理旧副本；同步创建的新本地请求会在后续分支重新写入。
+	var incoming_request_id: int = int(choice_data.get("request_id", -1))
+	if _modal_choice_request_id >= 0 and _modal_choice_request_id != incoming_request_id:
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
 	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
+		_refresh_card_selection_panel()
 		return
 	if _is_inline_hand_choice(choice_data):
-		card_selection_panel.close()
 		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
 		_inline_card_choice = choice_data.duplicate(true)
 		_inline_selected_card_uids.clear()
 		# 装备触发询问的公开装备 UID；自动选中只准备本地临时选择，仍需玩家点击确定发动或点击取消放弃。
@@ -1027,15 +1108,17 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 		_render_local_hand()
 		_refresh_selection_text()
+		_refresh_card_selection_panel()
 		return
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
 	_clear_equipment_action()
 	_modal_choice_request_id = int(choice_data.get("request_id", -1))
+	_modal_card_choice_request = choice_data.duplicate(true)
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
 	_refresh_selection_text()
-	card_selection_panel.show_request(choice_data)
+	_refresh_card_selection_panel()
 
 
 ## 把选择组件返回的 UID 封装为标准 choose_cards 动作并交由规则核心复核。
@@ -1045,13 +1128,68 @@ func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) 
 	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
 	if match_controller.submit_action(action):
 		if _modal_choice_request_id == request_id:
-			card_selection_panel.close()
 			_modal_choice_request_id = -1
+			_modal_card_choice_request.clear()
+			_refresh_card_selection_panel()
 
 
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
 func _on_card_choice_cancelled(request_id: int) -> void:
 	_on_card_choice_submitted(request_id, [])
+
+
+## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
+func _refresh_card_selection_panel() -> void:
+	if not _public_card_choice_display.is_empty():
+		# 公共展示副本；补充武将显示名后交给纯 UI 组件，不把玩家快照或规则对象传入牌位节点。
+		var enriched_display: Dictionary = _enrich_public_card_choice_display(_public_card_choice_display)
+		# 本地交互请求；只有请求类型与当前公共展示一致时才开放点击和底部操作按钮。
+		var interactive_request: Dictionary = {}
+		if int(_modal_card_choice_request.get("chooser_id", -1)) == match_controller.local_human_player_id:
+			# 本地独立请求类型；只有与公共展示 kind 完全一致时才能开放公共牌位输入。
+			var request_kind: String = str((_modal_card_choice_request.get("context", {}) as Dictionary).get("kind", ""))
+			if request_kind == str(_public_card_choice_display.get("kind", "")):
+				interactive_request = _modal_card_choice_request.duplicate(true)
+		card_selection_panel.show_public_display(enriched_display, interactive_request)
+		return
+	if not _modal_card_choice_request.is_empty():
+		card_selection_panel.show_request(_modal_card_choice_request)
+		return
+	card_selection_panel.close()
+
+
+## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。
+func _enrich_public_card_choice_display(display_data: Dictionary) -> Dictionary:
+	# 可写公共展示副本；所有名称只属于当前客户端表现，不回写权威 GameState。
+	var result: Dictionary = display_data.duplicate(true)
+	# 当前选择者 ID；负数表示公共展示已创建但暂时没有有效选择者。
+	var active_player_id: int = int(result.get("active_player_id", -1))
+	if active_player_id >= 0:
+		# 当前选择者武将名；配置异常时回退玩家显示名，确保提示仍可定位到操作者。
+		var active_player: Dictionary = _get_player_snapshot(active_player_id)
+		# 当前选择者公开武将名；未选将或异常快照时随后回退玩家显示名。
+		var active_character_name: String = GameDatabase.resolve_character_name(str(active_player.get("character_id", "")))
+		if str(active_player.get("character_id", "")).is_empty():
+			active_character_name = str(active_player.get("display_name", "玩家"))
+		result["prompt"] = "【%s】正在选择展示牌" % active_character_name
+	# 公共固定牌位；逐项补充领取者武将名，UID、牌面与领取者 ID 保持原值。
+	var enriched_slots: Array = []
+	for slot_variant: Variant in result.get("slots", []) as Array:
+		# 当前牌位副本；只新增客户端显示字段，不删除原始领取者 ID。
+		var display_slot: Dictionary = (slot_variant as Dictionary).duplicate(true)
+		# 当前牌位领取者玩家 ID；-1表示未领取，不需要补充武将名。
+		var taken_by_player_id: int = int(display_slot.get("taken_by_player_id", -1))
+		if taken_by_player_id >= 0:
+			# 领取者公开玩家快照；武将已在正式对局开始前全部亮出，因此名称可向所有观察者显示。
+			var taken_by_player: Dictionary = _get_player_snapshot(taken_by_player_id)
+			# 领取者公开武将名；配置异常时随后回退玩家显示名或“已领取”占位。
+			var taken_by_character_name: String = GameDatabase.resolve_character_name(str(taken_by_player.get("character_id", "")))
+			if str(taken_by_player.get("character_id", "")).is_empty():
+				taken_by_character_name = str(taken_by_player.get("display_name", "已领取"))
+			display_slot["taken_by_character_name"] = taken_by_character_name
+		enriched_slots.append(display_slot)
+	result["slots"] = enriched_slots
+	return result
 
 
 ## 判断选择请求是否能完全在本地手牌区或装备区完成；空候选的可取消响应也使用内联取消按钮。
