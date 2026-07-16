@@ -47,6 +47,18 @@ func _run() -> void:
 		printerr("SMOKE_FAIL card_definitions=%d" % definition_count)
 		get_tree().quit(1)
 		return
+	# 卡牌源码定义数量；每个元数据 ID 都必须对应 game_data/cards 中唯一的独立脚本。
+	var card_source_count: int = GameDatabase.card_definitions.size()
+	if card_source_count != definition_count or GameDatabase.card_scripts.size() != definition_count or GameDatabase.create_card_runtime("yinyue") == null:
+		printerr("SMOKE_FAIL card_source_definitions=%d" % card_source_count)
+		get_tree().quit(1)
+		return
+	# 【顺手牵羊】源码路径；验证卡牌由约定拼音文件自动发现，而非继续读取集中 JSON。
+	var shunshou_definition: CardDefinition = GameDatabase.get_card_definition("shunshou")
+	if shunshou_definition == null or str(shunshou_definition.get_script().resource_path) != "res://game_data/cards/shunshouqianyang.gd":
+		printerr("SMOKE_FAIL shunshou_source_path")
+		get_tree().quit(1)
+		return
 	# 新启动的全局牌名模式；默认必须显示原版三国杀牌名，菜单仍可在运行时切换。
 	if GameSettings.card_name_mode != GameSettings.NameMode.ORIGINAL:
 		printerr("SMOKE_FAIL default_card_name_mode=%s" % GameSettings.NameMode.keys()[GameSettings.card_name_mode])
@@ -61,6 +73,11 @@ func _run() -> void:
 	var skill_definition_count: int = GameDatabase.skills.size()
 	if skill_definition_count != 8:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
+		get_tree().quit(1)
+		return
+	# 技能脚本数量；技能元数据与可创建的独立运行时代码必须一一对应。
+	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("trailblaze_sample") == null:
+		printerr("SMOKE_FAIL skill_source_definitions")
 		get_tree().quit(1)
 		return
 	# 势力展示元数据数量；当前八名样例武将共使用四个独立势力主题。
@@ -102,19 +119,17 @@ func _run() -> void:
 		printerr("SMOKE_FAIL virtual_slash_color=%s" % colorless_virtual_slash.get_color())
 		get_tree().quit(1)
 		return
-	# 当前效果执行器支持的效果 ID 集合；配置中的每种牌必须映射到其中一项。
-	var supported_effects: Array[String] = ["slash", "dodge", "peach", "wine", "discard_target", "steal_target", "duel", "borrow_sword", "draw_two", "negate", "aoe_dodge", "aoe_slash", "heal_all", "harvest", "lightning", "skip_play", "chain", "fire_attack", "skip_draw", "flood", "equip"]
 	for card_id_variant: Variant in GameDatabase.cards.keys():
-		# 当前卡牌 ID；用于生成精确的失败信息。
+		# 当前卡牌 ID；用于生成精确的源码与双名称失败信息。
 		var card_id: String = str(card_id_variant)
-		# 当前卡牌定义；双名称与效果 ID 都必须完整。
+		# 当前卡牌定义；双名称必须完整，效果函数由同 ID 的 CardDefinition 脚本提供。
 		var definition: Dictionary = GameDatabase.get_card(card_id)
 		if str(definition.get("original_name", "")).is_empty() or str(definition.get("custom_name", "")).is_empty():
 			printerr("SMOKE_FAIL missing_dual_name=%s" % card_id)
 			get_tree().quit(1)
 			return
-		if not supported_effects.has(str(definition.get("effect_id", ""))):
-			printerr("SMOKE_FAIL unsupported_effect=%s:%s" % [card_id, definition.get("effect_id", "")])
+		if GameDatabase.get_card_definition(card_id) == null:
+			printerr("SMOKE_FAIL missing_card_source=%s" % card_id)
 			get_tree().quit(1)
 			return
 	# 八人身份分配数量；用于校验标准配置仍为1主2忠4反1内。
@@ -320,6 +335,9 @@ func _run() -> void:
 	player_card_template.visible = true
 	get_tree().root.add_child(player_card_template)
 	await get_tree().process_frame
+	# 标准4/4体力预览快照；运行时几何必须与武将牌场景中保存的默认预览位置和尺寸完全一致。
+	player_card_template.configure_snapshot({"player_id":0, "alive":true, "hp":4, "max_hp":4, "hand_count":4, "display_name":"玩家1", "character_id":"", "identity":"lord", "equipment":{}, "judgment_area":[]})
+	await get_tree().process_frame
 	# 武将牌独立输入区域；必须覆盖完整牌面，保证 Node2D 根节点不依赖按钮继承处理点击与拖放。
 	var player_card_input_area: PlayerTargetInputArea = player_card_template.get_node("InputArea") as PlayerTargetInputArea
 	if player_card_template.card_size != Vector2(148.35, 197.8) or (player_card_template.get_node("CardBody") as Panel).size != Vector2(148.35, 197.8) or player_card_input_area.size != Vector2(148.35, 197.8):
@@ -349,7 +367,7 @@ func _run() -> void:
 	var preview_public_zone: JudgmentZoneView = player_card_template.get_node("PublicZone") as JudgmentZoneView
 	# 角色状态覆盖组件；替代旧 Status 标签，集中处理阵亡滤镜与横置链条。
 	var preview_state_overlay: PlayerStateOverlay = player_card_template.get_node("StateOverlay") as PlayerStateOverlay
-	if player_card_template.has_node("Seat") or player_card_template.has_node("Status") or static_preview_health_pip_count != 4 or preview_health_background == null or preview_health_border == null or preview_health_border.visible or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 93.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or preview_hand_count.visible or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or preview_identity_badge.visible or not preview_health_frame.position.is_equal_approx(Vector2(124.35, 171.8)) or not preview_health_frame.size.is_equal_approx(Vector2(24.0, 26.0)) or not is_equal_approx(preview_public_zone.position.y + preview_public_zone.marker_size * 0.5, player_card_template.card_size.y) or preview_state_overlay.card_size != player_card_template.card_size or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
+	if player_card_template.has_node("Seat") or player_card_template.has_node("Status") or static_preview_health_pip_count != 4 or preview_health_background == null or preview_health_border == null or preview_health_border.visible or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 93.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or preview_hand_count.visible or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or preview_identity_badge.visible or not preview_health_frame.position.is_equal_approx(Vector2(124.35, 115.8)) or not preview_health_frame.size.is_equal_approx(Vector2(24.0, 82.0)) or not is_equal_approx(preview_public_zone.position.y + preview_public_zone.marker_size * 0.5, player_card_template.card_size.y) or preview_state_overlay.card_size != player_card_template.card_size or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
 		printerr("SMOKE_FAIL player_card_scene_preview seat=%s status=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health_frame=%s/%s public=%s" % [player_card_template.has_node("Seat"), player_card_template.has_node("Status"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_frame.position, preview_health_frame.size, preview_public_zone.position])
 		get_tree().quit(1)
 		return
@@ -829,6 +847,18 @@ func _run() -> void:
 		printerr("SMOKE_FAIL first_turn seat=%d turn=%d" % [_controller.state.current_player_id + 1, _controller.state.turn_number])
 		get_tree().quit(1)
 		return
+	# 四人局技能实例表；选将完成后每名玩家都应安装自己武将文件直接引用的独立技能代码。
+	if _controller.skill_instances_by_player.size() != 4:
+		printerr("SMOKE_FAIL installed_skill_players=%d" % _controller.skill_instances_by_player.size())
+		get_tree().quit(1)
+		return
+	for four_player: PlayerState in _controller.state.players:
+		# 当前玩家应安装的技能数量；样例武将均直接引用1个独立技能文件。
+		var installed_skills: Dictionary = _controller.skill_instances_by_player.get(four_player.player_id, {}) as Dictionary
+		if installed_skills.size() != 1:
+			printerr("SMOKE_FAIL installed_skills player=%d count=%d" % [four_player.player_id, installed_skills.size()])
+			get_tree().quit(1)
+			return
 	# 纯 AI 五人局；规则集规定从五人起主公的体力上限才增加1点。
 	if not _controller.start_match(5, 20260715):
 		printerr("SMOKE_FAIL five_player_start")

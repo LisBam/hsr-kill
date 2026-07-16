@@ -86,6 +86,12 @@ var network_gateway: NetworkGateway
 ## 当前选将规则服务；负责候选、阶段与隐藏选择，不接触卡牌规则或界面节点。
 var character_selection: CharacterSelectionService
 
+## 当前对局按玩家 ID 分组的独立技能实例；每个技能文件自行安装事件订阅与主动发动函数，重新开局时整体卸载。
+var skill_instances_by_player: Dictionary = {}
+
+## 当前对局按实体牌 UID 索引的持续卡牌实例；装备离开区域或重新开局时会精确卸载对应事件订阅。
+var card_runtime_instances: Dictionary = {}
+
 ## 事件树运行时；统一管理根事件、子事件、after 队列、选择暂停和回放历史。
 var event_scheduler: EventScheduler
 
@@ -223,6 +229,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	if not GameDatabase.validation_errors.is_empty():
 		action_rejected.emit("数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors))
 		return false
+	_uninstall_all_character_skills()
+	_uninstall_all_card_runtimes()
 
 	if seed == 0:
 		_rng.randomize()
@@ -241,6 +249,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	modifier_pipeline = RuleModifierPipeline.new()
 	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
 	trigger_manager = TriggerManager.new()
+	skill_instances_by_player.clear()
+	card_runtime_instances.clear()
 	event_scheduler.reset()
 	# 根事件只保存规则启动元数据；后续身份、阶段和卡牌事件通过 parent_id 关联到该入口。
 	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":"identity", "match_id":state.match_id, "deck_id":state.deck_id})
@@ -328,6 +338,8 @@ func submit_action(action: PlayerAction) -> bool:
 		return _reject("当前没有可操作的进行中对局。")
 	if action.action_type == "select_character":
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
+	if action.action_type == "use_skill":
+		return activate_skill(action.actor_id, str(action.payload.get("skill_id", "")), action.payload)
 	if action.action_type == "choice_response":
 		var choice_response: ChoiceResponse = ChoiceResponse.from_dict(action.payload)
 		var choice_action: PlayerAction = PlayerAction.new("choose_cards", choice_response.actor_id)
@@ -1228,6 +1240,10 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 
 ## 返回一张牌实际能够提供的响应模式；映射基于牌效语义，避免所有可被无懈的普通锦囊都被误当成【无懈可击】。
 func _get_provided_response_pattern(definition: Dictionary) -> String:
+	# 卡牌文件显式提供的响应模式；新增响应牌只需在自身源码元数据中填写该字段。
+	var configured_pattern: String = str(definition.get("provided_response_pattern", ""))
+	if not configured_pattern.is_empty():
+		return configured_pattern
 	# 卡牌效果 ID；属性杀共享 slash，桃、酒、闪和无懈各自映射到唯一响应模式。
 	var effect_id: String = str(definition.get("effect_id", ""))
 	return str(PROVIDED_RESPONSE_PATTERN_BY_EFFECT.get(effect_id, ""))
@@ -1657,6 +1673,7 @@ func equip_from_processing(player_id: int, card: CardInstance) -> void:
 		_discard_equipment_slot(player_id, slot, true)
 	_ensure_card_movement()
 	card_movement.move_card(card, "equipment", player_id, "equip", state.current_event_id, slot)
+	_install_card_runtime(card, player_id)
 	add_log("%s装备了%s。" % [player.display_name, describe_card(card)])
 
 
@@ -2260,12 +2277,47 @@ func _discard_equipment_slot(player_id: int, slot: String, trigger_loss_effects:
 
 ## 处理装备离开后的附属状态与触发；不负责移动装备牌本身。
 func _on_equipment_lost(player: PlayerState, card: CardInstance, trigger_loss_effects: bool) -> void:
+	_uninstall_card_runtime(card.uid)
 	if card.definition_id == "muniu" and not player.wooden_ox_storage.is_empty():
 		for stored_card: CardInstance in player.wooden_ox_storage:
 			_move_to_discard(stored_card)
 		player.wooden_ox_storage.clear()
 	if trigger_loss_effects and card.definition_id == "baiyin" and player.alive and player.hp < player.max_hp:
 		recover(player.player_id, player.player_id, 1, "baiyin")
+
+
+## 为进入持续区域的实体牌创建独立源码实例；具体卡牌可在 install_runtime 中订阅规则事件或查询修正。
+func _install_card_runtime(card: CardInstance, owner_player_id: int) -> void:
+	if card == null:
+		return
+	_uninstall_card_runtime(card.uid)
+	# 当前卡牌运行时实例；数据库静态定义不保存玩家或实体状态，因此必须从脚本重新创建。
+	var runtime: CardDefinition = GameDatabase.create_card_runtime(card.definition_id)
+	if runtime == null:
+		return
+	runtime.bind_runtime(self, owner_player_id, card.uid)
+	card_runtime_instances[card.uid] = runtime
+	runtime.install_runtime()
+
+
+## 卸载指定实体牌的持续效果；换装、弃置、获得或死亡清区都通过稳定 UID 精确处理。
+func _uninstall_card_runtime(card_uid: int) -> void:
+	# 当前卡牌运行时实例；不存在表示该牌没有持续效果或已经完成卸载。
+	var runtime: CardDefinition = card_runtime_instances.get(card_uid) as CardDefinition
+	if runtime == null:
+		return
+	runtime.uninstall_runtime()
+	card_runtime_instances.erase(card_uid)
+
+
+## 卸载上一局全部持续卡牌实例；必须在替换事件总线或状态前释放订阅。
+func _uninstall_all_card_runtimes() -> void:
+	for runtime_variant: Variant in card_runtime_instances.values():
+		# 当前卡牌运行时实例；无效实例跳过，避免场景退出期间重复访问。
+		var runtime: CardDefinition = runtime_variant as CardDefinition
+		if runtime != null:
+			runtime.uninstall_runtime()
+	card_runtime_instances.clear()
 
 
 ## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
@@ -2301,11 +2353,85 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 	player.hp = player.max_hp
 
 
+## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
+func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
+	# 玩家技能实例表；键为稳定技能 ID，值为仅属于该玩家的运行时对象。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	return player_skills.get(skill_id) as SkillDefinition
+
+
+## 查询主动技能当前是否可发动；技能文件负责阶段、次数、目标和资源条件，控制器只提供统一入口。
+func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
+	# 当前技能运行时实例；未安装的技能不能通过伪造动作直接发动。
+	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
+	return skill != null and skill.can_activate(context)
+
+
+## 通过统一动作入口发动技能；技能成功后记录稳定技能 ID，失败原因直接返回给动作提交者。
+func activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
+	if state == null or state.game_over:
+		return _reject("当前没有可发动技能的进行中对局。")
+	# 当前技能运行时实例；必须由玩家所选武将直接配置并在开局时自动安装。
+	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
+	if skill == null:
+		return _reject("当前武将未配置该技能。")
+	if not skill.can_activate(context):
+		return _reject("该技能当前不满足发动条件。")
+	# 技能执行错误；空字符串表示技能已通过公开规则端口成功提交效果或选择请求。
+	var activation_error: String = skill.activate(context)
+	if not activation_error.is_empty():
+		return _reject(activation_error)
+	# 技能持有者状态；历史只保存可序列化 ID、事件号与回合号，不保存技能对象引用。
+	var player: PlayerState = state.get_player(player_id)
+	if player != null:
+		player.skill_history.append({"skill_id":skill_id, "event_id":state.current_event_id, "turn_number":state.turn_number})
+	state.action_sequence += 1
+	_dispatch_rule_event(RuleEvent.new("skill_used", player_id, -1, {"skill_id":skill_id, "context":context.duplicate(true)}))
+	_emit_state()
+	return true
+
+
+## 为全部已选武将创建并安装独立技能实例；武将脚本中的直接引用顺序决定安装与技能栏顺序。
+func _install_all_character_skills() -> void:
+	_uninstall_all_character_skills()
+	for player: PlayerState in state.players:
+		# 当前武将定义；skills 数组由 CharacterDefinition 从直接引用的技能脚本自动生成。
+		var character: Dictionary = GameDatabase.get_character(player.character_id)
+		# 当前玩家技能实例表；不同玩家即使持有同一技能也不会共享次数、标记或临时状态。
+		var player_skills: Dictionary = {}
+		for skill_id_variant: Variant in character.get("skills", []):
+			# 当前技能稳定 ID；用于从数据库脚本索引创建独立运行时实例。
+			var skill_id: String = str(skill_id_variant)
+			# 当前技能运行时实例；配置校验已保证正常开局时不会为空。
+			var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+			if skill == null:
+				push_error("无法为玩家%d创建技能：%s" % [player.player_id, skill_id])
+				continue
+			skill.bind(self, player.player_id)
+			player_skills[skill_id] = skill
+			skill.install()
+		skill_instances_by_player[player.player_id] = player_skills
+
+
+## 卸载上一局或动态移除的全部技能；事件总线订阅必须在清空实例引用前释放。
+func _uninstall_all_character_skills() -> void:
+	for player_skills_variant: Variant in skill_instances_by_player.values():
+		# 当前玩家技能实例表；遍历副本保证卸载回调可安全调整外部事件注册。
+		var player_skills: Dictionary = player_skills_variant as Dictionary
+		for skill_variant: Variant in player_skills.values():
+			# 当前待卸载技能；无效实例直接跳过，避免场景释放期间重复访问。
+			var skill: SkillDefinition = skill_variant as SkillDefinition
+			if skill != null:
+				skill.uninstall()
+	skill_instances_by_player.clear()
+
+
 ## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由主公开始首回合。
 func _finish_character_selection() -> void:
 	for player: PlayerState in state.players:
 		if player.player_id != character_selection.lord_player_id:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
+	_install_all_character_skills()
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
 	for player: PlayerState in state.players:
 		draw_cards(player.player_id, 4, false)
@@ -2575,29 +2701,30 @@ func _resolve_delayed_judgment_card(player_id: int, delayed_card: CardInstance, 
 	if player == null or not player.alive:
 		_move_to_discard(delayed_card)
 		return
-	if delayed_card.definition_id == "shandian":
-		if negated:
-			_pass_lightning(player_id, delayed_card)
-			return
-		# 闪电判定牌；黑桃2至9造成3点无来源雷电伤害。
-		var lightning_judgment: CardInstance = perform_judgment(player_id, "【闪电】")
-		if lightning_judgment != null and lightning_judgment.suit == "spade" and lightning_judgment.rank >= 2 and lightning_judgment.rank <= 9:
-			_move_to_discard(delayed_card)
-			damage(-1, player_id, 3, "thunder", "shandian")
-		else:
-			_pass_lightning(player_id, delayed_card)
+	# 当前延时锦囊源码；判定条件、伤害与传递规则全部由对应卡牌文件提供。
+	var definition: CardDefinition = GameDatabase.get_card_definition(delayed_card.definition_id)
+	if definition == null:
+		_move_to_discard(delayed_card)
 		return
-	if delayed_card.definition_id == "lebu" and not negated:
-		# 乐不思蜀判定牌；非红桃时记录跳过出牌阶段。
-		var lebu_judgment: CardInstance = perform_judgment(player_id, "【乐不思蜀】")
-		if lebu_judgment != null and lebu_judgment.suit != "heart":
-			player.skipped_phases["play"] = true
-	elif delayed_card.definition_id == "bingliang" and not negated:
-		# 兵粮寸断判定牌；非梅花时记录跳过摸牌阶段。
-		var supply_judgment: CardInstance = perform_judgment(player_id, "【兵粮寸断】")
-		if supply_judgment != null and supply_judgment.suit != "club":
-			player.skipped_phases["draw"] = true
-	_move_to_discard(delayed_card)
+	definition.resolve_delayed_judgment(self, player_id, delayed_card, negated)
+
+
+## 将完成判定且不再传递的延时锦囊移入弃牌堆；卡牌文件通过该公开端口结束自身判定流程。
+func discard_delayed_card(card: CardInstance) -> void:
+	_move_to_discard(card)
+
+
+## 将【闪电】传递给下一名合法角色；公开端口供闪电卡牌文件维护自身判定函数。
+func pass_lightning_card(from_player_id: int, lightning_card: CardInstance) -> void:
+	_pass_lightning(from_player_id, lightning_card)
+
+
+## 记录指定玩家跳过当前回合的某阶段；延时锦囊与后续技能共用该稳定规则操作。
+func mark_player_phase_skipped(player_id: int, phase_name: String) -> void:
+	# 需要跳过阶段的玩家；不存在或已经离场时不写入任何状态。
+	var player: PlayerState = state.get_player(player_id)
+	if player != null and player.alive and not phase_name.is_empty():
+		player.skipped_phases[phase_name] = true
 
 
 ## 将未命中的闪电移动至下一名没有闪电的存活角色判定区；无合法角色时回到原角色。
@@ -2634,9 +2761,9 @@ func _pass_lightning(from_player_id: int, lightning_card: CardInstance) -> void:
 
 ## 判断卡牌是否使用统一逐目标游标结算；装备、延时锦囊与五谷保留各自的整牌上下文。
 func _uses_active_target_resolution(definition: Dictionary, target_ids: Array[int]) -> bool:
-	# 当前效果 ID；整牌效果需要一次读取完整目标数组，不能拆成互不关联的单目标调用。
-	var effect_id: String = str(definition.get("effect_id", ""))
-	return not target_ids.is_empty() and effect_id not in ["equip", "harvest"] and not bool(definition.get("delayed", false))
+	# 卡牌文件声明的结算模式；per_target 逐目标创建 content，whole 一次读取完整目标数组。
+	var resolution_mode: String = str(definition.get("resolution_mode", "per_target"))
+	return not target_ids.is_empty() and resolution_mode == "per_target"
 
 
 ## 建立一张牌的逐目标结算上下文；目标游标在创建任何异步请求前写入，恢复时不会重复处理上一目标。
@@ -2742,22 +2869,10 @@ func _continue_active_card_resolution(parent_card_uid: int) -> void:
 		if target == null or not target.alive:
 			_complete_active_card_target(parent_card_uid)
 			continue
-		# 当前卡牌效果；【杀】读取整张牌共享的酒加值、转换属性与青釭剑状态，其他牌调用单目标效果入口。
-		var definition: Dictionary = GameDatabase.get_card(parent_card.definition_id)
 		# 当前目标内容事件；只在该目标真正进入效果前记录，死亡或离场目标不会伪造已执行的 content。
 		_record_runtime_event("content", "card_content", {"actor_id":int(resolution_context.get("actor_id", -1)), "target_id":target_id, "card_uid":parent_card_uid}, {}, int(resolution_context.get("card_use_event_id", -1)))
 		# 本目标结算结果；pending 表示已创建响应窗口，discard 表示当前目标同步完成但整张牌尚不能收尾。
-		var destination: String = "discard"
-		if str(definition.get("effect_id", "")) == "slash":
-			destination = effect_resolver.resolve_slash_target(parent_card, int(resolution_context.get("actor_id", -1)), target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
-		elif str(definition.get("effect_id", "")) == "borrow_sword":
-			# 借刀杀人必须使用声明时的完整双目标数组，当前目标游标只负责其第一目标的无懈与完成状态。
-			var borrow_targets: Array[int] = []
-			for borrow_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
-				borrow_targets.append(int(borrow_target_variant))
-			destination = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), borrow_targets)
-		else:
-			destination = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), [target_id])
+		var destination: String = effect_resolver.resolve_target(parent_card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
 		if state.game_over:
 			_active_card_resolutions.erase(parent_card_uid)
 			return
@@ -2801,14 +2916,8 @@ func _resume_active_card_target(parent_card_uid: int) -> void:
 		if not bool(card_use_context.get("runtime_managed", false)):
 			_continue_active_card_resolution(parent_card_uid)
 		return
-	# 恢复后的目标数组；普通牌只包含当前目标，借刀杀人恢复其完整双目标语义。
-	var resumed_targets: Array[int] = [target_id]
-	if str(GameDatabase.get_card(parent_card.definition_id).get("effect_id", "")) == "borrow_sword":
-		resumed_targets.clear()
-		for resumed_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
-			resumed_targets.append(int(resumed_target_variant))
-	# 恢复后的单目标效果结果；再次产生效果选择时继续等待，否则当前目标完成。
-	var destination: String = effect_resolver.resolve(parent_card, int(resolution_context.get("actor_id", -1)), resumed_targets)
+	# 恢复后的单目标效果结果；卡牌源码可从共享上下文恢复双目标或整张牌特有语义。
+	var destination: String = effect_resolver.resolve_target(parent_card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
 	if destination == "pending" or has_pending_card_choice() or state.game_over:
 		return
 	_complete_active_card_target(parent_card_uid)
@@ -2953,7 +3062,7 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	add_log("%s使用了%s。" % [actor.display_name, describe_card(card)])
 	# 只有正常规则终点为弃牌堆的牌接管后续 processing -> discard 表现，装备与延时锦囊保留未来真实离区动画。
-	var owns_discard_transfer: bool = str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false)) and not bool(card_use_context.get("virtual_proxy", false))
+	var owns_discard_transfer: bool = str(definition.get("final_zone", "discard")) == "discard" and not bool(card_use_context.get("virtual_proxy", false))
 	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
 	_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer)
 	# 兼容扩展事件；现有独立技能仍可监听 card_used，新的源码级技能应优先监听真实 useCard 时机子事件。
@@ -3166,7 +3275,7 @@ func _card_use_step_resolve_content(event: GameEvent, scheduler: EventScheduler)
 		card_use_context["content_complete"] = true
 		_card_use_contexts[card_uid] = card_use_context
 		return
-	# 最新卡牌定义；目标分流只读取静态 effect_id 与 delayed 标记。
+	# 最新卡牌定义；目标分流只读取卡牌源码声明的 resolution_mode。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 当前最终目标数组；使用牌时机可能增删目标，因此不能继续读取动作提交时的旧副本。
 	var resolved_target_ids: Array[int] = []
@@ -3237,18 +3346,7 @@ func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -
 	if target_id >= 0 and _active_card_resolutions.has(card_uid):
 		# 当前逐目标效果上下文；包含杀伤害、属性、无视防具与双目标语义。
 		var resolution_context: Dictionary = _active_card_resolutions[card_uid] as Dictionary
-		# 当前卡牌定义；效果 ID 决定调用单目标杀、借刀或普通解析入口。
-		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-		if str(definition.get("effect_id", "")) == "slash":
-			destination = effect_resolver.resolve_slash_target(card, int(resolution_context.get("actor_id", -1)), target_id, int(resolution_context.get("slash_damage_amount", 1)), str(resolution_context.get("slash_nature", "normal")), bool(resolution_context.get("slash_ignore_armor", false)))
-		elif str(definition.get("effect_id", "")) == "borrow_sword":
-			# 借刀杀人保留“持刀者、被杀者”的完整双目标语义，当前 content 只归属于持刀者。
-			var borrow_targets: Array[int] = []
-			for borrow_target_variant: Variant in resolution_context.get("effect_target_ids", []) as Array:
-				borrow_targets.append(int(borrow_target_variant))
-			destination = effect_resolver.resolve(card, int(resolution_context.get("actor_id", -1)), borrow_targets)
-		else:
-			destination = effect_resolver.resolve(card, int(resolution_context.get("actor_id", -1)), [target_id])
+		destination = effect_resolver.resolve_target(card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
 		if destination == "pending" or has_pending_card_choice():
 			return
 		resolution_context["current_target_id"] = -1
@@ -3416,7 +3514,9 @@ func _execute_wooden_ox_store(actor_id: int, card_uid: int, target_ids: Array[in
 		_discard_equipment_slot(target.player_id, "treasure", true)
 	# 被转移的木牛流马实体牌；转移到装备区不会触发粮弃置。
 	var wooden_ox: CardInstance = actor.equipment["treasure"] as CardInstance
+	_uninstall_card_runtime(wooden_ox.uid)
 	card_movement.move_card(wooden_ox, "equipment", target.player_id, "wooden_ox_transfer", state.current_event_id, "treasure")
+	_install_card_runtime(wooden_ox, target.player_id)
 	for stored_transfer_card: CardInstance in actor.wooden_ox_storage.duplicate():
 		card_movement.move_card(stored_transfer_card, "wooden_ox", target.player_id, "wooden_ox_transfer", state.current_event_id)
 	actor.wooden_ox_storage.clear()

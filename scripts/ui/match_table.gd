@@ -428,6 +428,14 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	# 当前本地武将 ID；技能元数据只随武将变化，体力、手牌和回合刷新不需要重建技能按钮。
 	var local_character_id: String = str(local_player.get("character_id", ""))
 	if _rendered_skill_character_id == local_character_id:
+		for skill_id_variant: Variant in _skill_views.keys():
+			# 当前已存在按钮的技能 ID；相同武将只刷新动态可发动状态，不重建节点。
+			var skill_id: String = str(skill_id_variant)
+			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
+			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
+			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id)
+			(_skill_views[skill_id] as SkillButtonView).configure(skill_definition, skill_available)
 		return
 	_rendered_skill_character_id = local_character_id
 	_clear_container(skill_button_container)
@@ -447,8 +455,8 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		if skill_definition.is_empty():
 			skill_definition = {"id":skill_id, "name":skill_id, "description":"技能元数据尚未登记。"}
-		# 技能是否已经接入可执行规则；当前 sample_only 技能全部为界面预留状态。
-		var skill_available: bool = str(skill_definition.get("trigger", "sample_only")) != "sample_only" and bool(skill_definition.get("ui_enabled", false))
+		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
+		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		skill_button.configure(skill_definition, skill_available)
@@ -457,7 +465,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		_skill_views[skill_id] = skill_button
 
 
-## 响应技能按钮请求；预留技能展示永久说明，未来主动技能可在此转交独立技能交互控制器。
+## 响应技能按钮请求；预留技能展示永久说明，可主动发动的技能通过统一 PlayerAction 进入规则核心。
 func _on_skill_requested(skill_id: String) -> void:
 	# 被请求的技能定义；用于展示名称、说明和接入状态。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
@@ -468,6 +476,14 @@ func _on_skill_requested(skill_id: String) -> void:
 	skill_status_label.text = "【%s】%s" % [skill_name, skill_description]
 	if str(skill_definition.get("trigger", "sample_only")) == "sample_only":
 		error_label.text = "【%s】技能界面已预留，规则效果尚未接入。" % skill_name
+		return
+	if not bool(skill_definition.get("ui_enabled", false)):
+		error_label.text = "【%s】不是可由按钮主动发动的技能。" % skill_name
+		return
+	# 主动技能动作；技能文件自行校验阶段、次数、目标与资源，界面不直接修改任何规则状态。
+	var action: PlayerAction = PlayerAction.new("use_skill", match_controller.local_human_player_id)
+	action.payload = {"skill_id":skill_id}
+	match_controller.submit_action(action)
 
 
 ## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
