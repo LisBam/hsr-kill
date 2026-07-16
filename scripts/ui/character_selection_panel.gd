@@ -9,26 +9,44 @@ signal character_selected(character_id: String)
 ## 正式武将牌场景；五张候选牌与局内角色牌复用同一 Node2D 模型和数据渲染逻辑。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 选将标题节点的组件内相对路径；节点位于 SelectionFrame 下，不依赖场景唯一名称所有权。
+const TITLE_LABEL_PATH: NodePath = NodePath("SelectionFrame/CharacterSelectionTitle")
+
+## 选将状态文本节点的组件内相对路径；节点保留兼容但正式界面默认隐藏。
+const STATUS_LABEL_PATH: NodePath = NodePath("SelectionFrame/CharacterSelectionStatus")
+
+## 候选武将牌承载区的组件内相对路径；所有动态候选都只添加到该容器。
+const CANDIDATE_AREA_PATH: NodePath = NodePath("SelectionFrame/CharacterCandidateArea")
+
+## 主公武将牌承载区的组件内相对路径；主公亮将后创建的只读牌面添加到该容器。
+const LORD_CHARACTER_AREA_PATH: NodePath = NodePath("SelectionFrame/LordCharacterArea")
+
+## 主公牌标题节点的组件内相对路径；仅在主公牌面可见时同步显示。
+const LORD_CHARACTER_LABEL_PATH: NodePath = NodePath("SelectionFrame/LordCharacterLabel")
+
+## 选将确认按钮的组件内相对路径；按钮只提交稳定武将 ID。
+const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterButton")
+
 ## 候选武将牌之间的水平间距；默认18像素，在1280×720界面中可完整容纳五张148.35像素牌。
 @export_range(0.0, 48.0, 1.0) var candidate_gap: float = 18.0
 
 ## 选将标题；根据主公先选、其他玩家同时选和等待公开三个状态显示明确说明。
-@onready var _title_label: Label = %CharacterSelectionTitle
+@onready var _title_label: Label = get_node_or_null(TITLE_LABEL_PATH) as Label
 
 ## 阶段说明文本；展示主公已亮武将和其他玩家确认进度，不泄漏隐藏选择内容。
-@onready var _status_label: Label = %CharacterSelectionStatus
+@onready var _status_label: Label = get_node_or_null(STATUS_LABEL_PATH) as Label
 
 ## 候选武将牌承载区域；只负责提供局部坐标，牌面根节点保持 Node2D 类型。
-@onready var _candidate_area: Control = %CharacterCandidateArea
+@onready var _candidate_area: Control = get_node_or_null(CANDIDATE_AREA_PATH) as Control
 
 ## 主公武将牌承载区域；主公确认后固定显示在选将框左侧，不参与候选点击或提交。
-@onready var _lord_character_area: Control = %LordCharacterArea
+@onready var _lord_character_area: Control = get_node_or_null(LORD_CHARACTER_AREA_PATH) as Control
 
 ## 主公武将牌标题；仅在主公已经亮将时显示，用于说明左侧只读牌面归属。
-@onready var _lord_character_label: Label = %LordCharacterLabel
+@onready var _lord_character_label: Label = get_node_or_null(LORD_CHARACTER_LABEL_PATH) as Label
 
 ## 选将确认按钮；只有已临时选中候选且规则快照允许选择时才可用。
-@onready var _confirm_button: Button = %ConfirmCharacterButton
+@onready var _confirm_button: Button = get_node_or_null(CONFIRM_BUTTON_PATH) as Button
 
 ## 最近一次选将快照；只包含本地可见候选和公开确认状态，用于重绘界面。
 var _snapshot: Dictionary = {}
@@ -42,9 +60,16 @@ var _candidate_views: Dictionary = {}
 ## 当前左侧主公武将牌视图；主公尚未确认或选将界面关闭时为 null。
 var _lord_character_view: PlayerTargetView
 
+## 必需场景节点是否已经完整绑定；为 false 时组件保持隐藏并拒绝渲染，避免产生连续空实例报错。
+var _required_nodes_ready: bool = false
+
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
+	_required_nodes_ready = _validate_required_nodes()
+	if not _required_nodes_ready:
+		visible = false
+		return
 	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_confirm_selection)
 	_status_label.visible = false
@@ -55,6 +80,8 @@ func _ready() -> void:
 
 ## 接收裁剪后的选将快照并重建候选牌；任何隐藏选择都不会进入该组件。
 func bind_snapshot(snapshot: Dictionary) -> void:
+	if not _required_nodes_ready:
+		return
 	_snapshot = snapshot.duplicate(true)
 	_selected_character_id = ""
 	visible = not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
@@ -69,6 +96,10 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 ## 在正式对局开始后隐藏选将遮罩并清理动态候选牌。
 func close() -> void:
 	visible = false
+	if not _required_nodes_ready:
+		_snapshot.clear()
+		_selected_character_id = ""
+		return
 	_clear_candidates()
 	_clear_lord_character()
 	_snapshot.clear()
@@ -216,3 +247,25 @@ func _clear_lord_character() -> void:
 	for child: Node in _lord_character_area.get_children():
 		_lord_character_area.remove_child(child)
 		child.queue_free()
+
+
+## 校验选将组件依赖的静态节点；缺失时只输出一条包含全部节点名的长期诊断信息。
+func _validate_required_nodes() -> bool:
+	# 缺失节点名称数组；完整收集后一次性输出，避免每个 visible/text 赋值分别产生空实例错误。
+	var missing_node_names: Array[String] = []
+	if _title_label == null:
+		missing_node_names.append(str(TITLE_LABEL_PATH))
+	if _status_label == null:
+		missing_node_names.append(str(STATUS_LABEL_PATH))
+	if _candidate_area == null:
+		missing_node_names.append(str(CANDIDATE_AREA_PATH))
+	if _lord_character_area == null:
+		missing_node_names.append(str(LORD_CHARACTER_AREA_PATH))
+	if _lord_character_label == null:
+		missing_node_names.append(str(LORD_CHARACTER_LABEL_PATH))
+	if _confirm_button == null:
+		missing_node_names.append(str(CONFIRM_BUTTON_PATH))
+	if missing_node_names.is_empty():
+		return true
+	push_error("选将界面缺少必需节点：%s" % "、".join(missing_node_names))
+	return false
