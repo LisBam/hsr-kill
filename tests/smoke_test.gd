@@ -249,13 +249,14 @@ func _run() -> void:
 		return
 	# 无名杀式手牌布局组件；实例化用于保证全局类、导出参数和基础显示数值可被无头环境解析。
 	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
-	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0):
+	if hand_layout.card_size != Vector2(111.0, 148.0) or not is_equal_approx(hand_layout.minimum_visible_width, 64.0) or not is_equal_approx(hand_layout.selected_lift, 18.0) or not is_equal_approx(hand_layout.content_height, 157.0):
 		printerr("SMOKE_FAIL decade_hand_layout_defaults")
 		get_tree().quit(1)
 		return
 	# 手牌滚动视口；400像素宽度可让5张牌压缩展示但无需滑条，用于验证悬停不会改变其他手牌位置或内容宽度。
 	var hand_scroll: ScrollContainer = ScrollContainer.new()
-	hand_scroll.size = Vector2(400.0, 172.0)
+	# 当前视口高度与1.06倍悬停牌面向上取整后的156.88像素一致，使用157像素避免裁切。
+	hand_scroll.size = Vector2(400.0, 157.0)
 	hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	hand_scroll.add_child(hand_layout)
@@ -282,8 +283,16 @@ func _run() -> void:
 		if layout_card_index != 2 and not layout_cards[layout_card_index].position.is_equal_approx(base_card_positions[layout_card_index]):
 			non_hovered_cards_stay_fixed = false
 			break
+	# 当前悬停牌；用于验证理论放大后顶部和底部都完整位于157像素容器内。
+	var hovered_layout_card: CardView = layout_cards[2]
+	# 悬停牌放大后的底边；位置已由布局组件补偿并限制到容器顶部以内。
+	var hovered_card_bottom: float = hovered_layout_card.position.y + hand_layout.card_size.y * hovered_layout_card.hover_scale
 	if not non_hovered_cards_stay_fixed or layout_cards[2].z_index != CardView.HOVER_Z_INDEX or not is_equal_approx(hand_layout.custom_minimum_size.x, base_hand_content_width):
 		printerr("SMOKE_FAIL hand_hover_stability fixed=%s width=%s/%s" % [non_hovered_cards_stay_fixed, hand_layout.custom_minimum_size.x, base_hand_content_width])
+		get_tree().quit(1)
+		return
+	if hovered_layout_card.position.y < 0.0 or hovered_card_bottom > hand_layout.content_height + 0.01:
+		printerr("SMOKE_FAIL hand_hover_bounds top=%s bottom=%s height=%s" % [hovered_layout_card.position.y, hovered_card_bottom, hand_layout.content_height])
 		get_tree().quit(1)
 		return
 	# 额外手牌；超过64像素最小露出宽度仍无法容纳时，内容宽度必须溢出并由自动滑条接管。

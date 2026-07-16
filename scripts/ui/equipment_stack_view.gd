@@ -8,6 +8,7 @@ signal equipment_pressed(card_uid: int)
 
 ## 单张装备横条的显示高度；默认38像素让左下装备区在五槽布局中仍能清楚展示槽位、花色、点数和牌名，运行时通常无需动态修改。
 ## 参考图紧凑布局使用27像素固定槽高，与 `equip_new.css` 的单槽规格一致。
+## 等高布局将27像素作为最小槽高，并按当前4槽或5槽数量自动放大到恰好填满装备栏。
 @export_range(22.0, 40.0, 1.0) var equipment_row_height: float = 27.0
 
 ## 相邻装备横条至少覆盖的高度；默认8像素形成与武将牌装备横条一致的叠牌层次，只影响表现且运行时通常无需动态修改。
@@ -172,6 +173,8 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	var slot_icon: Label = Label.new()
 	slot_icon.position = Vector2.ZERO
 	slot_icon.size = Vector2(slot_icon_width, equipment_row_height)
+	slot_icon.anchor_bottom = 1.0
+	slot_icon.offset_bottom = 0.0
 	slot_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slot_icon.text = str(EQUIPMENT_SLOT_ICONS.get(slot, "◇"))
 	slot_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -205,10 +208,12 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 func _layout_rows() -> void:
 	if size.x <= 0.0 or size.y <= 0.0:
 		return
+	# 当前自适应槽高；扣除所有3像素间距后平均分配剩余高度，4槽为37像素、5槽为29像素。
+	var adaptive_row_height: float = maxf(equipment_row_height, (size.y - equipment_row_gap * float(_visible_slot_count - 1)) / float(_visible_slot_count))
 	# 当前槽位间可用纵向距离；参考图以固定槽高、可配置覆盖量和3像素间隔组成稳定节距。
-	var row_pitch: float = equipment_row_height - equipment_row_overlap + equipment_row_gap
+	var row_pitch: float = adaptive_row_height - equipment_row_overlap + equipment_row_gap
 	# 当前整组装备占用高度；用于在没有宝物的四槽布局中保持底部对齐。
-	var total_height: float = equipment_row_height + float(_visible_slot_count - 1) * row_pitch
+	var total_height: float = adaptive_row_height + float(_visible_slot_count - 1) * row_pitch
 	# 第一槽纵坐标；四槽与五槽都贴齐装备栏底边，宝物出现时整组向上扩展一行。
 	var start_y: float = maxf(size.y - total_height, 0.0)
 	# 装备横条基础宽度；参考图使用装备栏完整宽度，候选位移会向右溢出但仍留在手牌安全间距内。
@@ -223,7 +228,7 @@ func _layout_rows() -> void:
 		# 当前装备是否可选；可选横条向右移动配置距离，提示玩家直接在装备区点击。
 		var shift_x: float = selectable_shift_distance if _candidate_uids.has(int((_equipment.get(slot, {}) as Dictionary).get("uid", -1))) else 0.0
 		equipment_row.position = Vector2(shift_x, start_y + float(slot_index) * row_pitch)
-		equipment_row.size = Vector2(row_width, equipment_row_height)
+		equipment_row.size = Vector2(row_width, adaptive_row_height)
 		equipment_row.z_index = slot_index
 
 
