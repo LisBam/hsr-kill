@@ -55,6 +55,21 @@ func _run() -> void:
 		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
+	# 中央交互面板；当前不是本地玩家行动时必须隐藏，且面板样式为空背景。
+	var interaction_panel: PanelContainer = main_instance.get_node("%InteractionPanel") as PanelContainer
+	# 中央确定按钮；与取消按钮使用相同主按钮规格。
+	var confirm_button: Button = main_instance.get_node("%UseButton") as Button
+	# 中央取消按钮；不再使用较小的次级按钮规格。
+	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
+	# 右侧回合结束按钮；必须脱离 InteractionPanel 成为主场景直接子节点。
+	var end_play_button: Button = main_instance.get_node("%EndPlayButton") as Button
+	# 已废弃重铸按钮；节点仅保留旧场景兼容，不得在任何状态进入可见布局。
+	var recast_button: Button = main_instance.get_node("%RecastButton") as Button
+	# 已废弃存木牛按钮；木牛流马改由装备横条点击发动。
+	var wooden_ox_button: Button = main_instance.get_node("%WoodenOxButton") as Button
+	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible or wooden_ox_button.visible:
+		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
+		return
 	# 等高手牌与装备栏边界；二者高度都必须为157像素，装备栏右边界必须精确贴合手牌栏左边界。
 	if not is_equal_approx(hand_panel.size.y, 157.0) or not is_equal_approx(equipment_panel.size.y, hand_panel.size.y) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x):
 		_fail("hand_equipment_alignment equipment=%s hand=%s" % [equipment_panel.get_rect(), hand_panel.get_rect()])

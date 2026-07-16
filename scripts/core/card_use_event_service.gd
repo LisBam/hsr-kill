@@ -88,7 +88,8 @@ func _base_child_context(use_event: GameEvent) -> Dictionary:
 		"card_use_event_id":use_event.event_id,
 		"actor_id":use_event.player_id,
 		"target_ids":use_event.target_ids.duplicate(),
-		"card_uid":int(use_event.card_uids[0]) if not use_event.card_uids.is_empty() else -1,
+		"card_uid":int(use_event.context.get("card_uid", use_event.card_uids[0] if not use_event.card_uids.is_empty() else -1)),
 		"virtual_card":use_event.card.duplicate(true),
 		"material_card_uids":use_event.card_uids.duplicate(),
+		"virtual_proxy":bool(use_event.context.get("virtual_proxy", false)),
 	}

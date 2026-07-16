@@ -65,6 +65,8 @@ func _create_controller() -> void:
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
 	_controller.ai_action_delay_seconds = 0.01
+	_controller.delayed_judgment_preview_seconds = 0.0
+	_controller.delayed_judgment_result_pause_seconds = 0.0
 	_controller.ai_coordinator.register_basic_ai(1)
 	_controller.ai_coordinator.register_basic_ai(2)
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
