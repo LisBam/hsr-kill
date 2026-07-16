@@ -44,9 +44,16 @@ func configure(definition: Dictionary, available: bool = false) -> void:
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
 	# 状态文本；已接入技能显示“可发动”，预留技能明确标注“预留”。
-	var state_text: String = "可发动" if is_skill_available else "预留"
+	# 技能触发类型；sample_only 表示仅保留数据接口，其他值代表规则代码已经接入。
+	var trigger_type: String = str(definition.get("trigger", "sample_only"))
+	# 技能是否配置主动按钮；false 的正式技能按被动技能展示，不错误标记为预留。
+	var ui_enabled: bool = bool(definition.get("ui_enabled", false))
+	# 状态文本；主动技能区分当前可发动与不可发动，被动技能和样例技能使用独立标签。
+	var state_text: String = "预留" if trigger_type == "sample_only" else (("可发动" if is_skill_available else "不可发动") if ui_enabled else "被动")
+	# 工具提示状态；完整说明当前技能属于预留、被动、可发动或暂不满足条件。
+	var tooltip_status: String = "界面已预留，规则尚未接入" if trigger_type == "sample_only" else (("当前可发动" if is_skill_available else "当前不满足发动条件") if ui_enabled else "被动技能已接入规则")
 	text = "%s  ·  %s" % [skill_name, state_text]
-	tooltip_text = "【%s】\n%s\n\n状态：%s" % [skill_name, skill_description, "已接入规则" if is_skill_available else "界面已预留，规则尚未接入"]
+	tooltip_text = "【%s】\n%s\n\n状态：%s" % [skill_name, skill_description, tooltip_status]
 	_refresh_visual_state()
 
 
@@ -77,4 +84,3 @@ func _refresh_visual_state() -> void:
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9))
 	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.ACCENT_COLOR, 3, 9))
-

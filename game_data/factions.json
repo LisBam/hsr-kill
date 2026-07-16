@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "factions": [
+    {"id":"astral_express","display_name":"星穹列车","short_name":"列","color":"3f78a8"},
+    {"id":"belobog","display_name":"贝洛伯格","short_name":"贝","color":"8a6a9b"},
+    {"id":"xianzhou","display_name":"仙舟联盟","short_name":"仙","color":"4f8b62"},
+    {"id":"stellaron_hunter","display_name":"星核猎手","short_name":"猎","color":"9a4d62"}
+  ]
+}

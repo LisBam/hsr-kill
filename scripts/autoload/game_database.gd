@@ -1,33 +1,51 @@
 extends Node
 
-## 统一数据仓库。所有卡牌、牌堆、武将与技能均从配置文件载入，扩展内容无需修改对局核心。
-## 势力展示元数据与武将配置共用数据文件，并通过独立索引提供给统一武将牌组件。
+## 统一数据仓库。卡牌、武将与技能从 game_data 对应目录自动发现，牌堆与势力继续使用纯数据文件。
+## 目录中的每个源码定义既提供静态元数据，也保留自身规则入口；新增内容不需要修改本仓库或集中注册表。
 
-## 卡牌配置文件路径；修改数据源位置时只需调整此常量。
-const CARDS_PATH: String = "res://data/cards.json"
+## 卡牌源码目录；每个 `.gd` 文件必须实例化为 CardDefinition，并提供全项目唯一 ID。
+const CARDS_DIRECTORY: String = "res://game_data/cards"
 
-## 牌堆配置文件路径；一个文件可同时登记多套可选牌堆。
+## 武将源码目录；每个 `.gd` 文件必须实例化为 CharacterDefinition，并直接引用所需技能脚本。
+const CHARACTERS_DIRECTORY: String = "res://game_data/characters"
+
+## 技能源码目录；每个 `.gd` 文件必须实例化为 SkillDefinition，运行时会为每名持有者创建独立实例。
+const SKILLS_DIRECTORY: String = "res://game_data/skills"
+
+## 牌堆配置文件路径；牌堆条目只保存花色、点数与稳定卡牌 ID，不重复保存卡牌规则。
 const DECKS_PATH: String = "res://data/decks.json"
 
-## 武将配置文件路径；武将与技能表共享同一版本号，便于批量扩展。
-const CHARACTERS_PATH: String = "res://data/characters.json"
+## 势力展示配置文件路径；势力只提供名称、简称与颜色，不承载武将或技能逻辑。
+const FACTIONS_PATH: String = "res://game_data/factions.json"
 
-## 以卡牌 ID 为键的卡牌定义索引；运行时只读，重新载入数据时整体替换。
+## 以卡牌 ID 为键的卡牌元数据索引；界面、AI、网络与规则查询只读取深拷贝。
 var cards: Dictionary = {}
+
+## 以卡牌 ID 为键的卡牌源码定义对象；效果解析器通过该索引调用对应卡牌文件的函数。
+var card_definitions: Dictionary = {}
+
+## 以卡牌 ID 为键的卡牌脚本资源索引；装备等持续区域效果会由该脚本创建独立运行时实例。
+var card_scripts: Dictionary = {}
 
 ## 以牌堆 ID 为键的牌堆配置索引；牌堆条目只引用卡牌 ID，逻辑不重复存储。
 var decks: Dictionary = {}
 
-## 以武将 ID 为键的武将定义索引；用于创建玩家状态与后续选将界面。
+## 以武将 ID 为键的武将元数据索引；技能数组由武将源码直接引用的技能脚本自动生成。
 var characters: Dictionary = {}
 
-## 以势力 ID 为键的势力展示元数据索引；包含完整名称、牌面简称与主题颜色，不参与身份或胜负规则。
+## 以武将 ID 为键的武将源码定义对象；用于校验技能脚本引用并为工具链提供源码入口。
+var character_definitions: Dictionary = {}
+
+## 以势力 ID 为键的势力展示元数据索引；不参与身份、距离、伤害或胜负规则。
 var factions: Dictionary = {}
 
-## 以技能 ID 为键的技能元数据索引；具体技能组件可按 ID 注册执行器。
+## 以技能 ID 为键的技能元数据索引；技能栏、网络与回放只读取该字典的深拷贝。
 var skills: Dictionary = {}
 
-## 最近一次载入产生的错误列表；为空表示三份数据均通过基础校验。
+## 以技能 ID 为键的技能脚本资源索引；每局会通过 create_skill 创建互不共享状态的运行时实例。
+var skill_scripts: Dictionary = {}
+
+## 最近一次载入产生的错误列表；为空表示全部源码定义、牌堆和势力引用均可安全使用。
 var validation_errors: Array[String] = []
 
 
@@ -36,68 +54,24 @@ func _ready() -> void:
 	reload_all()
 
 
-## 重新载入并校验全部配置，适合编辑器工具或热更新流程调用。
+## 重新扫描源码目录并校验全部配置；目录新增或删除文件后调用即可刷新索引。
 func reload_all() -> bool:
 	validation_errors.clear()
 	cards.clear()
+	card_definitions.clear()
+	card_scripts.clear()
 	decks.clear()
 	characters.clear()
+	character_definitions.clear()
 	factions.clear()
 	skills.clear()
+	skill_scripts.clear()
 
-	# 卡牌配置根对象；必须含 cards 数组。
-	var cards_root: Dictionary = _load_json_object(CARDS_PATH)
-	# 卡牌配置数组；每项会按唯一 ID 建立索引。
-	var card_rows: Array = cards_root.get("cards", [])
-	for row_variant: Variant in card_rows:
-		# 当前卡牌定义；非字典条目会被记录为配置错误。
-		var row: Dictionary = row_variant as Dictionary
-		# 当前卡牌唯一 ID；为空或重复都会阻止数据通过校验。
-		var card_id: String = str(row.get("id", ""))
-		if card_id.is_empty():
-			validation_errors.append("卡牌配置存在空 ID。")
-		elif cards.has(card_id):
-			validation_errors.append("卡牌 ID 重复：%s" % card_id)
-		else:
-			cards[card_id] = row.duplicate(true)
-
-	# 牌堆配置根对象；其 decks 字典可登记任意数量的牌堆。
-	var decks_root: Dictionary = _load_json_object(DECKS_PATH)
-	decks = (decks_root.get("decks", {}) as Dictionary).duplicate(true)
-
-	# 武将配置根对象；同时建立武将与技能两套索引。
-	# 势力展示元数据与武将、技能共用该根对象，并在武将索引建立前优先载入以供引用校验。
-	var characters_root: Dictionary = _load_json_object(CHARACTERS_PATH)
-	for row_variant: Variant in characters_root.get("factions", []):
-		# 当前势力展示定义；只保存界面名称与颜色，不影响身份局阵营或规则结算。
-		var row: Dictionary = row_variant as Dictionary
-		# 当前势力唯一 ID；武将通过 faction 字段引用该稳定标识。
-		var faction_id: String = str(row.get("id", ""))
-		if faction_id.is_empty():
-			validation_errors.append("势力配置存在空 ID。")
-		elif factions.has(faction_id):
-			validation_errors.append("势力 ID 重复：%s" % faction_id)
-		else:
-			factions[faction_id] = row.duplicate(true)
-	for row_variant: Variant in characters_root.get("characters", []):
-		# 当前武将定义；复制后存入运行时只读索引。
-		var row: Dictionary = row_variant as Dictionary
-		# 当前武将唯一 ID；扩展包必须保证全项目唯一。
-		var character_id: String = str(row.get("id", ""))
-		if character_id.is_empty():
-			validation_errors.append("武将配置存在空 ID。")
-		elif characters.has(character_id):
-			validation_errors.append("武将 ID 重复：%s" % character_id)
-		else:
-			characters[character_id] = row.duplicate(true)
-	for row_variant: Variant in characters_root.get("skills", []):
-		# 当前技能元数据；实际触发逻辑由独立技能组件按 ID 绑定。
-		var row: Dictionary = row_variant as Dictionary
-		# 当前技能唯一 ID；空 ID 不加入索引。
-		var skill_id: String = str(row.get("id", ""))
-		if not skill_id.is_empty():
-			skills[skill_id] = row.duplicate(true)
-
+	_load_skills()
+	_load_cards()
+	_load_characters()
+	_load_decks()
+	_load_factions()
 	_validate_decks()
 	_validate_factions()
 	_validate_characters()
@@ -107,6 +81,20 @@ func reload_all() -> bool:
 ## 返回指定卡牌定义的深拷贝，防止调用方误改全局配置。
 func get_card(card_id: String) -> Dictionary:
 	return (cards.get(card_id, {}) as Dictionary).duplicate(true)
+
+
+## 返回指定卡牌的源码定义对象；对象只保存静态数据，具体效果函数不得持有对局状态。
+func get_card_definition(card_id: String) -> CardDefinition:
+	return card_definitions.get(card_id) as CardDefinition
+
+
+## 为装备或其他持续区域效果创建独立卡牌实例；实例尚未绑定玩家、实体 UID 或事件总线。
+func create_card_runtime(card_id: String) -> CardDefinition:
+	# 卡牌脚本资源；不存在时返回 null，调用方不得复用数据库中的静态定义对象保存对局状态。
+	var card_script: Script = card_scripts.get(card_id) as Script
+	if card_script == null:
+		return null
+	return card_script.new() as CardDefinition
 
 
 ## 返回指定武将定义的深拷贝，空结果表示 ID 未登记。
@@ -130,9 +118,18 @@ func get_faction(faction_id: String) -> Dictionary:
 	return (factions.get(faction_id, {}) as Dictionary).duplicate(true)
 
 
-## 返回指定技能元数据的深拷贝，空结果表示技能 ID 未登记；具体技能执行器不由数据仓库持有。
+## 返回指定技能元数据的深拷贝，空结果表示技能 ID 未登记。
 func get_skill(skill_id: String) -> Dictionary:
 	return (skills.get(skill_id, {}) as Dictionary).duplicate(true)
+
+
+## 为一名技能持有者创建独立技能实例；实例尚未绑定玩家，也不会自动订阅规则事件。
+func create_skill(skill_id: String) -> SkillDefinition:
+	# 技能脚本资源；不存在时返回 null，让调用方以统一配置错误处理。
+	var skill_script: Script = skill_scripts.get(skill_id) as Script
+	if skill_script == null:
+		return null
+	return skill_script.new() as SkillDefinition
 
 
 ## 返回指定牌堆中的紧凑实体牌条目；每项格式为 [花色, 点数, 卡牌ID]。
@@ -140,6 +137,142 @@ func get_deck_cards(deck_id: String) -> Array:
 	# 指定牌堆定义；不存在时使用空字典保证查询安全。
 	var deck_definition: Dictionary = decks.get(deck_id, {}) as Dictionary
 	return (deck_definition.get("cards", []) as Array).duplicate(true)
+
+
+## 扫描并登记全部卡牌源码；文件名只用于维护定位，稳定逻辑 ID 始终读取脚本元数据。
+func _load_cards() -> void:
+	for script_path: String in _list_gd_scripts(CARDS_DIRECTORY):
+		# 当前卡牌脚本资源；加载失败时记录精确路径并继续检查其他文件。
+		var card_script: Script = load(script_path) as Script
+		if card_script == null:
+			validation_errors.append("卡牌脚本无法载入：%s" % script_path)
+			continue
+		# 当前卡牌定义对象；具体文件必须继承 CardDefinition 才能参与自动注册。
+		var definition: CardDefinition = card_script.new() as CardDefinition
+		if definition == null:
+			validation_errors.append("卡牌脚本未继承 CardDefinition：%s" % script_path)
+			continue
+		# 当前卡牌完整元数据；数据库只建立索引，不改写文件提供的任何字段。
+		var metadata: Dictionary = definition.get_metadata()
+		# 当前卡牌唯一 ID；空 ID 或重复 ID 会阻止开局，避免牌堆引用产生歧义。
+		var card_id: String = definition.get_id()
+		if card_id.is_empty():
+			validation_errors.append("卡牌脚本存在空 ID：%s" % script_path)
+		elif card_definitions.has(card_id):
+			validation_errors.append("卡牌 ID 重复：%s" % card_id)
+		else:
+			cards[card_id] = metadata
+			card_definitions[card_id] = definition
+			card_scripts[card_id] = card_script
+
+
+## 扫描并登记全部技能源码；技能脚本先于武将载入，以便直接引用时立即完成一致性校验。
+func _load_skills() -> void:
+	for script_path: String in _list_gd_scripts(SKILLS_DIRECTORY):
+		# 当前技能脚本资源；每名持有者会由该资源创建独立实例。
+		var skill_script: Script = load(script_path) as Script
+		if skill_script == null:
+			validation_errors.append("技能脚本无法载入：%s" % script_path)
+			continue
+		# 当前技能定义临时实例；只读取静态元数据，不绑定对局端口。
+		var definition: SkillDefinition = skill_script.new() as SkillDefinition
+		if definition == null:
+			validation_errors.append("技能脚本未继承 SkillDefinition：%s" % script_path)
+			continue
+		# 当前技能唯一 ID；空 ID 或重复 ID 会导致武将引用无法确定具体代码。
+		var skill_id: String = definition.get_id()
+		if skill_id.is_empty():
+			validation_errors.append("技能脚本存在空 ID：%s" % script_path)
+		elif skill_scripts.has(skill_id):
+			validation_errors.append("技能 ID 重复：%s" % skill_id)
+		else:
+			skills[skill_id] = definition.get_metadata()
+			skill_scripts[skill_id] = skill_script
+
+
+## 扫描并登记全部武将源码；武将文件直接 preload 技能脚本，不再维护集中字符串配置表。
+func _load_characters() -> void:
+	for script_path: String in _list_gd_scripts(CHARACTERS_DIRECTORY):
+		# 当前武将脚本资源；加载失败不会影响其他武将继续接受校验。
+		var character_script: Script = load(script_path) as Script
+		if character_script == null:
+			validation_errors.append("武将脚本无法载入：%s" % script_path)
+			continue
+		# 当前武将定义对象；必须继承 CharacterDefinition 才能提供技能脚本引用。
+		var definition: CharacterDefinition = character_script.new() as CharacterDefinition
+		if definition == null:
+			validation_errors.append("武将脚本未继承 CharacterDefinition：%s" % script_path)
+			continue
+		# 当前武将唯一 ID；选将、网络与存档始终使用该稳定值。
+		var character_id: String = definition.get_id()
+		if character_id.is_empty():
+			validation_errors.append("武将脚本存在空 ID：%s" % script_path)
+		elif character_definitions.has(character_id):
+			validation_errors.append("武将 ID 重复：%s" % character_id)
+		else:
+			characters[character_id] = definition.get_metadata()
+			character_definitions[character_id] = definition
+		for skill_script: Script in definition.get_skill_scripts():
+			if skill_script == null or not skill_script.resource_path.begins_with(SKILLS_DIRECTORY + "/"):
+				validation_errors.append("武将 %s 的技能必须直接引用 %s 内的脚本。" % [character_id, SKILLS_DIRECTORY])
+
+
+## 载入牌堆配置；牌堆仍适合使用紧凑 JSON，因为同一卡牌定义会对应多张不同花色与点数的实体牌。
+func _load_decks() -> void:
+	# 牌堆配置根对象；其 decks 字典可登记任意数量的牌堆。
+	var decks_root: Dictionary = _load_json_object(DECKS_PATH)
+	decks = (decks_root.get("decks", {}) as Dictionary).duplicate(true)
+
+
+## 载入势力展示配置；势力没有独立规则函数，因此保持集中纯数据避免重复脚本样板。
+func _load_factions() -> void:
+	# 势力配置根对象；factions 数组中的每项按唯一 ID 建立只读索引。
+	var factions_root: Dictionary = _load_json_object(FACTIONS_PATH)
+	for row_variant: Variant in factions_root.get("factions", []):
+		# 当前势力展示定义；只保存界面名称与颜色，不影响身份局阵营或规则结算。
+		var row: Dictionary = row_variant as Dictionary
+		# 当前势力唯一 ID；武将通过 faction 字段引用该稳定标识。
+		var faction_id: String = str(row.get("id", ""))
+		if faction_id.is_empty():
+			validation_errors.append("势力配置存在空 ID。")
+		elif factions.has(faction_id):
+			validation_errors.append("势力 ID 重复：%s" % faction_id)
+		else:
+			factions[faction_id] = row.duplicate(true)
+
+
+## 返回目录中按文件名稳定排序的全部 GDScript 路径；新增文件会自然进入下一次扫描。
+func _list_gd_scripts(directory_path: String) -> Array[String]:
+	# 目录访问对象；目录缺失会形成明确配置错误，而不是静默返回空内容库。
+	var directory: DirAccess = DirAccess.open(directory_path)
+	if directory == null:
+		validation_errors.append("数据源码目录不存在：%s" % directory_path)
+		return []
+	# 目录文件名数组；排序保证重复 ID 错误与加载日志在不同平台上保持一致。
+	var file_names: PackedStringArray = directory.get_files()
+	file_names.sort()
+	# 完整脚本路径结果；`.gd.uid` 与其他导入辅助文件不会进入注册流程。
+	var result: Array[String] = []
+	for file_name: String in file_names:
+		if file_name.get_extension() == "gd":
+			# 当前源码文件基础名；规范要求只使用连续小写英文字母表示中文拼音。
+			var base_name: String = file_name.get_basename()
+			if not _is_lowercase_pinyin_filename(base_name):
+				validation_errors.append("内容源码文件必须使用连续小写拼音命名：%s/%s" % [directory_path, file_name])
+			result.append("%s/%s" % [directory_path, file_name])
+	return result
+
+
+## 校验文件名是否仅由 a 至 z 的连续小写字母组成；语义拼音正确性由代码评审保证。
+func _is_lowercase_pinyin_filename(base_name: String) -> bool:
+	if base_name.is_empty():
+		return false
+	for character_index: int in range(base_name.length()):
+		# 当前 Unicode 码点；ASCII 小写字母范围为97至122，任何数字、下划线、横线或中文都会失败。
+		var codepoint: int = base_name.unicode_at(character_index)
+		if codepoint < 97 or codepoint > 122:
+			return false
+	return true
 
 
 ## 读取 JSON 文件并保证返回字典；文件或语法错误会写入统一错误列表。
@@ -167,7 +300,7 @@ func _load_json_object(path: String) -> Dictionary:
 	return parser.data as Dictionary
 
 
-## 校验牌堆引用，避免开局后才发现实体牌指向不存在的定义。
+## 校验牌堆引用，避免开局后才发现实体牌指向不存在的源码定义。
 func _validate_decks() -> void:
 	for deck_id_variant: Variant in decks.keys():
 		# 当前牌堆 ID；用于生成可追溯的校验错误。
@@ -180,7 +313,7 @@ func _validate_decks() -> void:
 			if entry.size() != 3:
 				validation_errors.append("牌堆 %s 存在非法条目。" % deck_id)
 				continue
-			# 当前实体牌引用的卡牌 ID；必须已在 cards.json 中登记。
+			# 当前实体牌引用的卡牌 ID；必须已在 game_data/cards 中自动登记。
 			var card_id: String = str(entry[2])
 			if not cards.has(card_id):
 				validation_errors.append("牌堆 %s 引用了未知卡牌：%s" % [deck_id, card_id])
@@ -203,19 +336,29 @@ func _validate_factions() -> void:
 			validation_errors.append("势力 %s 的 color 必须是六位十六进制 RGB。" % faction_id)
 
 
-## 校验武将对势力与技能元数据的引用，避免牌面渲染或技能栏在运行时出现静默缺项。
+## 校验卡牌必填信息以及武将对势力、技能源码的引用，避免运行时出现静默缺项。
 func _validate_characters() -> void:
+	for card_id_variant: Variant in cards.keys():
+		# 当前卡牌 ID；所有玩家可见名称、类别与效果说明均必须由对应文件完整提供。
+		var card_id: String = str(card_id_variant)
+		# 当前卡牌元数据；只读检查通用规则所需的核心字段。
+		var card: Dictionary = cards[card_id] as Dictionary
+		for required_field: String in ["original_name", "custom_name", "type", "subtype", "effect_id", "target_mode", "description"]:
+			if str(card.get(required_field, "")).is_empty():
+				validation_errors.append("卡牌 %s 缺少 %s。" % [card_id, required_field])
 	for character_id_variant: Variant in characters.keys():
 		# 当前武将 ID；用于为所有引用错误提供可追溯的配置位置。
 		var character_id: String = str(character_id_variant)
 		# 当前武将定义；从只读索引读取，不向校验流程之外暴露可修改引用。
 		var character: Dictionary = characters[character_id] as Dictionary
+		if str(character.get("display_name", "")).is_empty():
+			validation_errors.append("武将 %s 缺少 display_name。" % character_id)
 		# 当前武将势力 ID；必须指向 factions 数组中的展示元数据。
 		var faction_id: String = str(character.get("faction", ""))
 		if not factions.has(faction_id):
 			validation_errors.append("武将 %s 引用了未知势力：%s" % [character_id, faction_id])
 		for skill_id_variant: Variant in character.get("skills", []):
-			# 当前武将引用的技能 ID；必须已登记，避免技能栏生成无法解析的占位项。
+			# 当前武将引用的技能 ID；必须由 game_data/skills 中已登记的脚本提供。
 			var skill_id: String = str(skill_id_variant)
 			if not skills.has(skill_id):
 				validation_errors.append("武将 %s 引用了未知技能：%s" % [character_id, skill_id])
