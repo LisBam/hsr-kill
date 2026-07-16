@@ -35,8 +35,6 @@ shadow_color = Color(0, 0, 0, 0.62)
 shadow_size = 10
 shadow_offset = Vector2(0, 4)
 
-[sub_resource type="StyleBoxEmpty" id="StyleEquipmentPanel"]
-
 [sub_resource type="StyleBoxFlat" id="StyleButtonNormal"]
 content_margin_left = 13.0
 content_margin_top = 6.0
@@ -94,11 +92,13 @@ shadow_color = Color(0, 0, 0, 0.62)
 shadow_size = 10
 shadow_offset = Vector2(0, 4)
 
+[sub_resource type="StyleBoxEmpty" id="StyleEquipmentPanel"]
+
 [sub_resource type="StyleBoxFlat" id="StyleHandPanel"]
 content_margin_left = 9.0
-content_margin_top = 7.0
+content_margin_top = 0.0
 content_margin_right = 9.0
-content_margin_bottom = 7.0
+content_margin_bottom = 0.0
 bg_color = Color(0.0705882, 0.0941176, 0.0823529, 0.819608)
 border_width_left = 2
 border_width_top = 2
@@ -339,9 +339,9 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -416.0
+offset_top = -391.0
 offset_right = 378.0
-offset_bottom = -186.0
+offset_bottom = -161.0
 grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("15_log_panel")
@@ -464,14 +464,14 @@ text = "回合结束"
 
 [node name="EquipmentPanel" type="PanelContainer" parent="." unique_id=874383388]
 unique_name_in_owner = true
+z_index = 2
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -154.0
-offset_right = 148.0
-offset_bottom = -7.0
+offset_top = -157.0
+offset_right = 168.0
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleEquipmentPanel")
 
@@ -488,7 +488,7 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 168.0
-offset_top = -172.0
+offset_top = -157.0
 offset_right = -335.7
 grow_horizontal = 2
 grow_vertical = 0
@@ -496,12 +496,11 @@ theme_override_styles/panel = SubResource("StyleHandPanel")
 
 [node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
 layout_mode = 2
-horizontal_scroll_mode = 1
 vertical_scroll_mode = 0
 
 [node name="HandContainer" type="Container" parent="HandPanel/HandScroll" unique_id=176003051]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(752, 172)
+custom_minimum_size = Vector2(752, 157)
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("9_hand_layout")

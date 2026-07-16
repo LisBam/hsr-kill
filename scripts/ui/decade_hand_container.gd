@@ -20,7 +20,8 @@ extends Container
 @export_range(0.0, 48.0, 1.0) var selected_lift: float = 18.0
 
 ## 容器用于容纳卡牌、抬升和阴影的固定高度；默认172像素，运行时通常无需动态修改。
-@export_range(148.0, 240.0, 1.0) var content_height: float = 172.0
+## 当前高度取 `ceil(148 × 1.06) = 157` 像素，恰好容纳悬停放大后的完整牌面。
+@export_range(148.0, 240.0, 1.0) var content_height: float = 157.0
 
 ## 连接父级尺寸变化并请求首次布局；父级通常是只启用横向滚动的 ScrollContainer。
 func _ready() -> void:
@@ -79,7 +80,8 @@ func _layout_cards() -> void:
 			hovered_card_index = card_index
 			break
 	# 卡牌基础纵坐标；底部对齐并为选中抬升预留顶部空间。
-	var base_y: float = maxf(content_height - card_size.y, selected_lift)
+	# 紧凑手牌栏以普通牌底边对齐为基准；选中与悬停位移会在写入位置时限制到容器顶部以内。
+	var base_y: float = maxf(content_height - card_size.y, 0.0)
 	# 当前卡牌横坐标；从左侧安全边距开始，逐张累加固定的当前压缩步长，悬停不会修改任何牌间距。
 	var current_card_x: float = horizontal_padding
 	for card_index: int in range(cards.size()):
@@ -93,7 +95,9 @@ func _layout_cards() -> void:
 		var hover_width_compensation: float = card_size.x * (card.hover_scale - 1.0) * 0.5 if hovered else 0.0
 		# 悬停缩放额外占用的垂直尺寸；整体向上补偿，使放大后的牌底仍与普通手牌对齐。
 		var hover_height_compensation: float = card_size.y * (card.hover_scale - 1.0) if hovered else 0.0
+		# 当前期望纵坐标；选中与悬停仍保持原有位移意图，容器高度不足时统一限制在顶部0像素。
+		var desired_card_y: float = base_y - (selected_lift if selected else 0.0) - hover_height_compensation
 		# 当前卡牌位置；选中状态上移，悬停状态围绕中心放大且保持底边对齐。
-		card.position = Vector2(current_card_x - hover_width_compensation, base_y - (selected_lift if selected else 0.0) - hover_height_compensation) + card.hand_entry_offset
+		card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset
 		card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
 		current_card_x += card_step
