@@ -124,6 +124,59 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 	return ""
 
 
+## 检查一张无实体牌面的虚拟牌是否可以在当前出牌阶段使用；材料与装备条件由创建虚拟牌的独立规则入口负责校验。
+## 虚拟牌不会进入行动玩家的手牌或木牛牌源，因此本函数只复用阶段、次数、目标和距离规则，不执行实体来源检查或方天画戟最后手牌修正。
+func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Array[int]) -> String:
+	# 虚拟牌使用者；不存在、死亡或不处于自己的出牌阶段时不能声明视为牌。
+	var actor: PlayerState = state.get_player(actor_id)
+	if actor == null or not actor.alive:
+		return "行动玩家不存在或已经死亡。"
+	if state.current_player_id != actor_id or state.current_phase != "play":
+		return "当前不是该玩家的出牌阶段。"
+	# 虚拟牌定义；丈八蛇矛当前固定生成普通【杀】，保留通用定义参数便于其他视为牌复用。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	if definition.is_empty():
+		return "虚拟牌定义不存在。"
+	if str(definition.get("target_mode", "")) == "response_only":
+		return "该虚拟牌只能在响应窗口中使用。"
+	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and not _has_equipment(actor, "zhuge"):
+		return "本阶段使用【杀】的基础次数已用尽。"
+	# 虚拟牌目标数量；只读取牌定义的基础上限，材料不属于最后一张实体手牌，不能触发方天画戟。
+	var target_mode: String = str(definition.get("target_mode", ""))
+	if target_mode not in ["all_others", "all_players"]:
+		var minimum_target_count: int = int(definition.get("min_targets", 0))
+		var maximum_target_count: int = int(definition.get("max_targets", 0))
+		if target_ids.size() < minimum_target_count or target_ids.size() > maximum_target_count:
+			return "目标数量不符合卡牌规则。"
+	# 已出现目标集合；虚拟牌与实体牌使用相同的重复目标和单目标合法性约束。
+	var unique_targets: Dictionary = {}
+	for target_id: int in target_ids:
+		if unique_targets.has(target_id):
+			return "不能重复指定同一目标。"
+		unique_targets[target_id] = true
+		# 单个目标错误；距离、存活状态和自身限制仍由统一目标规则判断。
+		var target_error: String = _validate_target(actor, definition, target_id, target_ids)
+		if not target_error.is_empty():
+			return target_error
+	return ""
+
+
+## 返回一张虚拟牌当前可以选择的目标；列表只用于界面预览与 AI 枚举，提交后仍必须调用 validate_virtual_use 复核完整组合。
+func list_legal_virtual_targets(actor_id: int, definition_id: String) -> Array[int]:
+	# 合法目标结果；无效玩家或配置不会开放任何可点击目标。
+	var result: Array[int] = []
+	# 虚拟牌使用者；目标规则需要读取其座次、装备和距离。
+	var actor: PlayerState = state.get_player(actor_id)
+	# 虚拟牌定义；当前丈八蛇矛使用普通【杀】定义。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	if actor == null or definition.is_empty():
+		return result
+	for target: PlayerState in state.players:
+		if target.alive and _validate_target(actor, definition, target.player_id, [target.player_id]).is_empty():
+			result.append(target.player_id)
+	return result
+
+
 ## 返回一张手牌当前可选的合法目标 ID，供 UI 高亮与 AI 枚举候选动作。
 func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	# 合法目标结果；自身目标模式只在当前行动者同时满足附加状态限制时返回行动者。

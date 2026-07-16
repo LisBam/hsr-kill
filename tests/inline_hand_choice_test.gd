@@ -203,6 +203,77 @@ func _run() -> void:
 	if not playable_slash_view.is_interactable or unusable_dodge_view.is_interactable or playable_slash_style.bg_color.get_luminance() - unusable_dodge_style.bg_color.get_luminance() < 0.2:
 		_fail("play_phase_card_availability")
 		return
+	# 丈八蛇矛装备快照；响应【杀】时装备本身作为点击入口，两张普通手牌随后成为材料候选。
+	var zhangba_data: Dictionary = {"uid":7007, "definition_id":"zhangba", "suit":"spade", "rank":12, "zone":"equipment", "owner_id":0}
+	# 丈八装备字典；只保留测试武器，避免其他装备候选干扰右移断言。
+	var zhangba_equipment: Dictionary = {"weapon":zhangba_data}
+	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 17, zhangba_equipment))
+	await get_tree().process_frame
+	# 【杀】响应请求；丈八是唯一请求候选，但确认前必须先点击装备并再选择两张手牌材料。
+	var zhangba_request: Dictionary = {
+		"request_id":17,
+		"chooser_id":0,
+		"title":"响应询问",
+		"prompt":"请打出一张【杀】",
+		"candidates":[_candidate(zhangba_data)],
+		"min_select":0,
+		"max_select":1,
+		"allow_cancel":true,
+		"context":{"kind":"aoe_response", "response_patterns":["sha"]},
+	}
+	main_instance.call("_on_card_choice_requested", zhangba_request)
+	await get_tree().process_frame
+	# 丈八武器横条；进入响应时先右移提示可点击，点击后保持选中并把普通手牌切换为材料候选。
+	var zhangba_row: Button = equipment_stack.get_row("weapon")
+	if zhangba_row == null or not is_equal_approx(zhangba_row.position.x, equipment_stack.selectable_shift_distance) or not confirm_button.disabled:
+		_fail("zhangba_response_entry")
+		return
+	main_instance.call("_on_equipment_pressed", 7007)
+	# 丈八材料视图；普通【杀】和【闪】都应可选，牌名不会限制两张手牌材料。
+	var zhangba_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
+	if str(main_instance.get("_active_equipment_action")) != "zhangba_response" or not (zhangba_card_views.get(7001) as CardView).is_interactable or not (zhangba_card_views.get(7002) as CardView).is_interactable:
+		_fail("zhangba_material_mode")
+		return
+	main_instance.call("_on_card_pressed", 7001)
+	if not confirm_button.disabled:
+		_fail("zhangba_one_material_confirm")
+		return
+	main_instance.call("_on_card_pressed", 7002)
+	if confirm_button.disabled or (main_instance.get("_equipment_action_material_uids") as Array) != [7001, 7002]:
+		_fail("zhangba_two_material_confirm")
+		return
+	# 木牛流马出牌快照；chooseToUse 直接把宝物实体列为候选，不再显示“存木牛”专用按钮。
+	var wooden_ox_play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 18, {"treasure":treasure_data})
+	wooden_ox_play_snapshot["current_player_id"] = 0
+	wooden_ox_play_snapshot["current_phase"] = "play"
+	wooden_ox_play_snapshot["current_choice_request"] = {"request_id":18, "event_id":18, "actor_id":0, "choice_type":"use", "card_ids":[7006]}
+	match_controller.state_changed.emit(wooden_ox_play_snapshot)
+	await get_tree().process_frame
+	# 木牛宝物横条；候选应右移并允许点击，旧专用按钮始终隐藏。
+	var wooden_ox_row: Button = equipment_stack.get_row("treasure")
+	var wooden_ox_button: Button = main_instance.get_node("%WoodenOxButton") as Button
+	if wooden_ox_row == null or not is_equal_approx(wooden_ox_row.position.x, equipment_stack.selectable_shift_distance) or wooden_ox_button.visible:
+		_fail("wooden_ox_equipment_entry")
+		return
+	main_instance.call("_on_equipment_pressed", 7006)
+	main_instance.call("_on_card_pressed", 7001)
+	if str(main_instance.get("_active_equipment_action")) != "muniu_store" or (main_instance.get("_equipment_action_material_uids") as Array) != [7001] or confirm_button.disabled:
+		_fail("wooden_ox_material_mode")
+		return
+	# 铁索连环普通手牌；未选择目标时中央确定按钮应直接表示重铸，旧重铸按钮保持隐藏。
+	var chain_data: Dictionary = {"uid":7008, "definition_id":"tiesuo", "suit":"club", "rank":12, "zone":"hand", "owner_id":0}
+	var chain_play_snapshot: Dictionary = _make_snapshot([chain_data], 19)
+	chain_play_snapshot["current_player_id"] = 0
+	chain_play_snapshot["current_phase"] = "play"
+	chain_play_snapshot["current_choice_request"] = {"request_id":19, "event_id":19, "actor_id":0, "choice_type":"use", "card_ids":[7008]}
+	match_controller.state_changed.emit(chain_play_snapshot)
+	await get_tree().process_frame
+	main_instance.call("_on_card_pressed", 7008)
+	var recast_button: Button = main_instance.get_node("%RecastButton") as Button
+	var interaction_guide: Label = main_instance.get_node("%InteractionGuideLabel") as Label
+	if confirm_button.disabled or recast_button.visible or not interaction_guide.text.contains("重铸"):
+		_fail("chain_confirm_recast")
+		return
 	remove_child(main_instance)
 	main_instance.free()
 	await get_tree().process_frame

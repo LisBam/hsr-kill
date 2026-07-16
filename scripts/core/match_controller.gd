@@ -38,6 +38,12 @@ signal character_selection_changed(snapshot: Dictionary)
 ## AI 每次行动或选择响应前的等待秒数；默认0.30秒，局内菜单可在0.05至1.00秒范围内动态同步，测试可直接覆盖。
 @export_range(0.05, 1.0, 0.05) var ai_action_delay_seconds: float = 0.30
 
+## 延时锦囊进入中央展示后等待再开始无懈与判定的秒数；默认1.00秒保证玩家能辨认当前结算牌，运行时通常无需动态修改。
+@export_range(0.0, 3.0, 0.05) var delayed_judgment_preview_seconds: float = 1.00
+
+## 一张延时锦囊完成判定后等待再处理下一张的秒数；默认1.00秒让判定结果与下一张牌保持清晰间隔，运行时通常无需动态修改。
+@export_range(0.0, 3.0, 0.05) var delayed_judgment_result_pause_seconds: float = 1.00
+
 ## 单个 AI 出牌阶段最多执行的动作数；默认64用于防止扩展牌循环导致界面停滞。
 @export_range(1, 256, 1) var max_ai_actions_per_turn: int = 64
 
@@ -113,6 +119,9 @@ var _pending_card_choice: Dictionary = {}
 ## 最近一次同步完成请求所选择的实体牌 UID；只供无交互测试与兼容回退在当前调用栈读取，正式 AI 请求始终异步恢复。
 var _resolved_card_choice_uids: Array[int] = []
 
+## 最近一次同步选择随装备技能提交的实体材料 UID；丈八蛇矛响应会读取恰好两张手牌，其他选择保持空数组。
+var _resolved_equipment_material_uids: Array[int] = []
+
 ## 全局选择请求序号；每次创建窗口递增，防止旧界面或网络消息误提交到新请求。
 ## 当前实现只镜像 EventScheduler 最近一次分配的全局编号，不再维护第二套独立请求序列。
 var _card_choice_sequence: int = 0
@@ -149,6 +158,15 @@ var _play_choice_match_id: String = ""
 
 ## 当前对局牌面表现递增序号；每次使用、展示或判定递增，重新开局时归零。
 var _card_presentation_sequence: int = 0
+
+## 当前判定区顺序流程代次；重新开局、换回合或重新启动判定链时递增，使旧计时器无法继续修改新状态。
+var _judgment_flow_token: int = 0
+
+## 当前是否已有一条判定区顺序流程正在等待或结算；默认false，防止选择恢复重复创建并行计时器。
+var _judgment_flow_in_progress: bool = false
+
+## 判定流程从异步无懈或濒死选择恢复时是否需要先保留上一张判定结果；默认false，新回合从延时锦囊展示开始。
+var _judgment_resume_needs_result_pause: bool = false
 
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
@@ -228,6 +246,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
 	_resolved_card_choice_uids.clear()
+	_resolved_equipment_material_uids.clear()
 	_negation_resume_results.clear()
 	_active_card_resolutions.clear()
 	_card_use_contexts.clear()
@@ -238,6 +257,9 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_play_choice_actor_id = -1
 	_play_choice_match_id = ""
 	_card_presentation_sequence = 0
+	_judgment_flow_token += 1
+	_judgment_flow_in_progress = false
+	_judgment_resume_needs_result_pause = false
 	ai_coordinator._policies.clear()
 
 	_create_players(actual_player_count)
@@ -307,7 +329,7 @@ func submit_action(action: PlayerAction) -> bool:
 		return _submit_card_choice(action)
 	if action.actor_id != state.current_player_id:
 		return _reject("行动者不是当前回合玩家。")
-	if action.action_type in ["use_card", "recast_card", "store_wooden_ox", "end_play"]:
+	if action.action_type in ["use_card", "use_zhangba", "recast_card", "store_wooden_ox", "end_play"]:
 		var play_validation_error: String = _prevalidate_play_action(action)
 		if not play_validation_error.is_empty():
 			return _reject(play_validation_error)
@@ -328,6 +350,11 @@ func submit_action(action: PlayerAction) -> bool:
 		if not validation_error.is_empty():
 			return _reject(validation_error)
 		_execute_card_use(action.actor_id, card, target_ids)
+	elif action.action_type == "use_zhangba":
+		# 丈八蛇矛材料 UID；动作负载只保存玩家按顺序选择的两张普通手牌。
+		var zhangba_material_uids: Array[int] = _int_array(action.payload.get("material_card_uids", []) as Array)
+		if not _execute_zhangba_slash_use(action.actor_id, action.card_uid, zhangba_material_uids, action.target_ids):
+			return false
 	elif action.action_type == "recast_card":
 		if not _execute_recast(action.actor_id, action.card_uid):
 			return false
@@ -385,6 +412,16 @@ func get_legal_actions(player_id: int) -> Array[Dictionary]:
 		var legal_targets: Array[int] = card_rules.list_legal_targets(player_id, card)
 		for target_id: int in legal_targets:
 			_append_if_legal(result, player_id, card, [target_id])
+	# 丈八蛇矛主动动作；AI 使用固定前两张普通手牌生成候选，玩家界面仍可在点击装备后自主选择任意两张材料。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if zhangba_card != null and player.hand.size() >= 2:
+		# 基础 AI 丈八材料；动作提交后仍会逐张复核当前手牌归属。
+		var zhangba_material_uids: Array[int] = [player.hand[0].uid, player.hand[1].uid]
+		for target_id: int in card_rules.list_legal_virtual_targets(player_id, "sha"):
+			# 丈八目标组合；虚拟杀不应用方天画戟最后手牌修正，因此每项只有一名目标。
+			var zhangba_targets: Array[int] = [target_id]
+			if _validate_zhangba_slash(player_id, zhangba_card.uid, zhangba_material_uids, zhangba_targets).is_empty():
+				result.append({"action_type":"use_zhangba", "actor_id":player_id, "card_uid":zhangba_card.uid, "target_ids":zhangba_targets, "card_definition_id":"sha", "payload":{"material_card_uids":zhangba_material_uids.duplicate()}})
 	if player_has_equipment(player_id, "muniu") and not player.wooden_ox_used:
 		for card: CardInstance in player.hand:
 			result.append({"action_type":"store_wooden_ox", "actor_id":player_id, "card_uid":card.uid, "target_ids":[], "card_definition_id":"muniu_store"})
@@ -451,6 +488,65 @@ func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Ar
 	return result
 
 
+## 返回丈八蛇矛虚拟【杀】的只读交互预览；装备、两张材料和目标都会在每次刷新时重新校验。
+func get_zhangba_slash_preview(player_id: int, equipment_uid: int, material_card_uids: Array[int], selected_target_ids: Array[int] = []) -> Dictionary:
+	# 丈八预览默认结果；字段与普通出牌预览一致，使桌面目标高亮和确认按钮可以复用同一表现路径。
+	var result: Dictionary = {
+		"card_found": false,
+		"can_submit": false,
+		"validation_error": "当前不能发动丈八蛇矛。",
+		"legal_target_ids": [],
+		"normalized_target_ids": selected_target_ids.duplicate(),
+		"target_mode": "single_other",
+		"min_targets": 1,
+		"max_targets": 1,
+		"description": str(GameDatabase.get_card("zhangba").get("description", "")),
+	}
+	if state == null or state.game_over:
+		return result
+	# 材料与装备错误；即使尚未选满两张，也继续返回合法目标为空的明确预览，不开放提前提交。
+	var material_error: String = _validate_zhangba_materials(player_id, equipment_uid, material_card_uids)
+	result["card_found"] = material_error.is_empty()
+	if not material_error.is_empty():
+		result["validation_error"] = material_error
+		return result
+	# 当前完整目标组合；普通虚拟杀只有一个手动目标，不需要全体目标规范化。
+	var validation_error: String = card_rules.validate_virtual_use(player_id, "sha", selected_target_ids)
+	result["validation_error"] = validation_error
+	result["can_submit"] = validation_error.is_empty()
+	# 合法目标列表；已选择目标时仍保留其他候选，允许一次点击直接切换单目标。
+	var legal_target_ids: Array[int] = []
+	for target_id: int in card_rules.list_legal_virtual_targets(player_id, "sha"):
+		if card_rules.validate_virtual_use(player_id, "sha", [target_id]).is_empty():
+			legal_target_ids.append(target_id)
+	result["legal_target_ids"] = legal_target_ids
+	return result
+
+
+## 返回当前出牌阶段可以直接点击发动的装备实体 UID；结果只供界面候选位移和 chooseToUse 请求使用。
+func get_play_phase_equipment_action_uids(player_id: int) -> Array[int]:
+	# 可点击装备结果；装备条件不满足时保持空数组。
+	var result: Array[int] = []
+	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "play":
+		return result
+	# 当前玩家；丈八需要至少两张普通手牌，木牛需要至少一张普通手牌且本阶段尚未发动。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return result
+	# 当前丈八蛇矛；只要至少存在一个合法杀目标就允许进入材料选择模式。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if zhangba_card != null and player.hand.size() >= 2:
+		for target_id: int in card_rules.list_legal_virtual_targets(player_id, "sha"):
+			if card_rules.validate_virtual_use(player_id, "sha", [target_id]).is_empty():
+				result.append(zhangba_card.uid)
+				break
+	# 当前木牛流马；存粮每阶段限一次，并且只能选择普通手牌作为“粮”。
+	var wooden_ox_card: CardInstance = _get_equipment_card_by_definition(player_id, "muniu")
+	if wooden_ox_card != null and not player.wooden_ox_used and not player.hand.is_empty():
+		result.append(wooden_ox_card.uid)
+	return result
+
+
 ## 返回当前是否存在等待玩家或 AI 提交的选择窗口；效果执行器据此暂停后续结算。
 func has_pending_card_choice() -> bool:
 	return not _pending_card_choice.is_empty()
@@ -472,12 +568,15 @@ func _begin_play_choice(player_id: int) -> void:
 	request.max_count = 1
 	request.can_cancel = true
 	request.forced = false
-	request.base_context = {"phase":"play", "action_types":["use_card", "recast_card", "store_wooden_ox", "end_play"]}
+	request.base_context = {"phase":"play", "action_types":["use_card", "use_zhangba", "recast_card", "store_wooden_ox", "end_play"]}
 	request.active_context = request.base_context.duplicate(true)
 	for legal_action: Dictionary in get_legal_actions(player_id):
 		var candidate_uid: int = int(legal_action.get("card_uid", -1))
 		if candidate_uid >= 0 and not request.card_ids.has(candidate_uid):
 			request.card_ids.append(candidate_uid)
+	for equipment_uid: int in get_play_phase_equipment_action_uids(player_id):
+		if not request.card_ids.has(equipment_uid):
+			request.card_ids.append(equipment_uid)
 	if event_scheduler.request_choice(request) == null:
 		return
 	_play_choice_request_id = request.request_id
@@ -545,6 +644,10 @@ func _prevalidate_play_action(action: PlayerAction) -> String:
 			return "指定手牌不存在。"
 		var normalized_targets: Array[int] = card_rules.normalize_targets(action.actor_id, card, action.target_ids)
 		return card_rules.validate_use(action.actor_id, card, normalized_targets)
+	if action.action_type == "use_zhangba":
+		# 丈八材料 UID；负载必须提供两张普通手牌，不能用木牛“粮”或装备替代。
+		var material_card_uids: Array[int] = _int_array(action.payload.get("material_card_uids", []) as Array)
+		return _validate_zhangba_slash(action.actor_id, action.card_uid, material_card_uids, action.target_ids)
 	if action.action_type == "recast_card":
 		var recast_card: CardInstance = actor.find_hand_card(action.card_uid)
 		if recast_card == null or not bool(GameDatabase.get_card(recast_card.definition_id).get("recast", false)):
@@ -568,6 +671,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	if state == null or state.game_over or not _pending_card_choice.is_empty():
 		return []
 	_resolved_card_choice_uids.clear()
+	_resolved_equipment_material_uids.clear()
 	# 请求创建前的规则阶段；选择提交后必须恢复，避免把响应窗口误当作新的回合阶段。
 	var resume_phase: String = state.current_phase
 	# 候选只读副本；UI 和 AI 只能看到请求明确公开的牌面，不能取得 CardInstance 引用。
@@ -787,6 +891,23 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return _reject("选择的牌数超过上限。")
 	# 已完成请求上下文；运行时确认接收后再清空窗口，避免失败响应把仍可重试的权威请求提前丢失。
 	var completed_choice: Dictionary = _pending_card_choice.duplicate(true)
+	# 装备响应材料；普通选牌保持空数组，选择丈八蛇矛响应【杀】时必须额外提交两张普通手牌 UID。
+	var equipment_material_uids: Array[int] = []
+	if selected_uids.size() == 1 and _is_zhangba_response_selection(completed_choice, selected_uids[0]):
+		equipment_material_uids = _int_array(action.payload.get("material_card_uids", []) as Array)
+		if equipment_material_uids.is_empty() and ai_coordinator.is_ai_controlled(action.actor_id):
+			# AI 丈八材料；基础策略没有专门的二次材料界面，因此按当前手牌顺序选择前两张并继续走相同权威校验。
+			var ai_player: PlayerState = state.get_player(action.actor_id)
+			if ai_player != null and ai_player.hand.size() >= 2:
+				equipment_material_uids.assign([ai_player.hand[0].uid, ai_player.hand[1].uid])
+		# 丈八响应材料错误；请求保持活动，玩家仍可重新选择两张合法手牌后提交。
+		var material_error: String = _validate_zhangba_materials(action.actor_id, selected_uids[0], equipment_material_uids)
+		if not material_error.is_empty():
+			return _reject(material_error)
+		# 已完成请求的恢复上下文；只保存实体 UID 数组，效果恢复不会持有界面状态或卡牌对象。
+		var completed_context: Dictionary = (completed_choice.get("context", {}) as Dictionary).duplicate(true)
+		completed_context["equipment_material_uids"] = equipment_material_uids.duplicate()
+		completed_choice["context"] = completed_context
 	# 通用运行时响应；AI、本地和网络使用完全相同的 ChoiceResponse 字段与权威候选校验。
 	var runtime_response: ChoiceResponse = ChoiceResponse.new(
 		int(completed_choice.get("runtime_request_id", completed_choice.get("request_id", -1))),
@@ -803,6 +924,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
 	_resolved_card_choice_uids = selected_uids.duplicate()
+	_resolved_equipment_material_uids = equipment_material_uids.duplicate()
 	state.action_sequence += 1
 	if bool(completed_choice.get("deferred", false)):
 		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids)
@@ -1042,6 +1164,10 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 		if allowed_patterns.has(str(definition.get("response_pattern", ""))):
 			candidates.append(_serialize_choice_candidate(card, player_id, card.zone, true))
+	# 丈八蛇矛响应候选；装备只作为发动入口，不会离开装备区，确认时还必须提交两张普通手牌材料。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if allowed_patterns.has("sha") and zhangba_card != null and player.hand.size() >= 2:
+		candidates.append(_serialize_choice_candidate(zhangba_card, player_id, "equipment", true, "weapon"))
 	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
@@ -1049,7 +1175,7 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
 		return null
-	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns)
+	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns, _resolved_equipment_material_uids)
 
 
 ## 按选择请求提交的 UID 消耗响应牌；再次校验区域和响应模式后进入弃牌堆并播放动画。
@@ -1058,11 +1184,15 @@ func _consume_response_card_uid(player_id: int, card_uid: int, response_pattern:
 
 
 ## 按候选响应模式集合消耗一张实体牌；用于【桃】与【酒】等共享时机但牌名不同的单一询问窗口。
-func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response_patterns: Array[String]) -> CardInstance:
+func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response_patterns: Array[String], equipment_material_uids: Array[int] = []) -> CardInstance:
 	# 响应玩家；请求等待期间其牌区可能被插入结算改变，因此必须重新查询。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null:
 		return null
+	# 丈八蛇矛装备响应；装备 UID 只表示发动入口，实际消耗由两张经过请求校验的普通手牌承担。
+	var equipped_zhangba: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if response_patterns.has("sha") and equipped_zhangba != null and equipped_zhangba.uid == card_uid:
+		return _consume_zhangba_response(player_id, equipment_material_uids)
 	# 被选响应牌；只能来自当前仍可使用的牌源。
 	var card: CardInstance = player.find_playable_card(card_uid)
 	if card == null:
@@ -1130,7 +1260,7 @@ func _continue_aoe_response_choice(context: Dictionary, selected_uids: Array[int
 	if selected_uids.is_empty():
 		damage(actor_id, target_id, 1, "normal", card_definition_id)
 	else:
-		_consume_response_card_uid(target_id, selected_uids[0], str(context.get("pattern", "shan")))
+		_consume_response_card_uid_patterns(target_id, selected_uids[0], [str(context.get("pattern", "shan"))], _int_array(context.get("equipment_material_uids", []) as Array))
 	if not state.game_over:
 		_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 
@@ -1144,7 +1274,7 @@ func _continue_borrow_sword_choice(context: Dictionary, selected_uids: Array[int
 	var victim_id: int = int(context.get("victim_id", -1))
 	var slash: CardInstance
 	if not selected_uids.is_empty():
-		slash = _consume_response_card_uid(holder_id, selected_uids[0], "sha")
+		slash = _consume_response_card_uid_patterns(holder_id, selected_uids[0], ["sha"], _int_array(context.get("equipment_material_uids", []) as Array))
 	if slash != null:
 		var holder: PlayerState = state.get_player(holder_id)
 		effect_resolver._resolve_single_slash(slash, holder_id, victim_id, 1 + holder.wine_bonus, str(GameDatabase.get_card(slash.definition_id).get("nature", "normal")), player_has_equipment(holder_id, "qinggang"))
@@ -1159,7 +1289,7 @@ func _continue_qinglong_choice(context: Dictionary, selected_uids: Array[int]) -
 	# 实际追击【杀】；空选择表示放弃发动。
 	var follow_slash: CardInstance
 	if not selected_uids.is_empty():
-		follow_slash = _consume_response_card_uid(actor_id, selected_uids[0], "sha")
+		follow_slash = _consume_response_card_uid_patterns(actor_id, selected_uids[0], ["sha"], _int_array(context.get("equipment_material_uids", []) as Array))
 	if follow_slash != null and not has_pending_card_choice():
 		effect_resolver._resolve_single_slash(follow_slash, actor_id, int(context.get("target_id", -1)), 1, str(GameDatabase.get_card(follow_slash.definition_id).get("nature", "normal")), bool(context.get("ignore_armor", false)))
 	if not state.game_over and not has_pending_card_choice():
@@ -1174,7 +1304,7 @@ func _continue_duel_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 	# 本轮响应【杀】；空选择表示决斗失败。
 	var response_slash: CardInstance
 	if not selected_uids.is_empty():
-		response_slash = _consume_response_card_uid(responder_id, selected_uids[0], "sha")
+		response_slash = _consume_response_card_uid_patterns(responder_id, selected_uids[0], ["sha"], _int_array(context.get("equipment_material_uids", []) as Array))
 	if has_pending_card_choice():
 		return
 	if response_slash == null:
@@ -1303,6 +1433,69 @@ func consume_response_card(player_id: int, response_pattern: String) -> CardInst
 	# 所有响应牌都通过统一选择请求；该入口保留给旧规则与扩展技能复用。
 	var context: Dictionary = {"kind":"generic_response", "responder_id":player_id, "response_pattern":response_pattern}
 	return request_response_card(player_id, response_pattern, "请选择是否响应%s。" % response_pattern, context)
+
+
+## 判断一条已完成选牌是否通过丈八蛇矛响应【杀】；只有请求允许 sha 且所选 UID 仍是当前装备实体时返回 true。
+func _is_zhangba_response_selection(choice_data: Dictionary, selected_uid: int) -> bool:
+	# 选择恢复上下文；response_patterns 由规则创建请求时写入，客户端不能自行扩展允许的响应类型。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	if not (context.get("response_patterns", []) as Array).has("sha"):
+		return false
+	# 选择者当前丈八蛇矛；等待期间装备被替换时旧 UID 自动失效。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(int(choice_data.get("chooser_id", -1)), "zhangba")
+	return zhangba_card != null and zhangba_card.uid == selected_uid
+
+
+## 校验丈八蛇矛的装备与两张普通手牌材料；返回空字符串表示材料可以用于使用或打出虚拟【杀】。
+func _validate_zhangba_materials(player_id: int, equipment_uid: int, material_card_uids: Array[int]) -> String:
+	# 丈八持有者；死亡或不存在的角色不能发动装备技能。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive:
+		return "丈八蛇矛的发动者不存在或已经死亡。"
+	# 当前丈八蛇矛实体；必须与玩家点击或动作提交的装备 UID 完全一致。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if zhangba_card == null or zhangba_card.uid != equipment_uid:
+		return "玩家当前未装备所选择的丈八蛇矛。"
+	if material_card_uids.size() != 2 or material_card_uids[0] == material_card_uids[1]:
+		return "丈八蛇矛必须选择两张不同的手牌。"
+	for material_card_uid: int in material_card_uids:
+		if player.find_hand_card(material_card_uid) == null:
+			return "丈八蛇矛的材料必须是当前仍在手牌区的实体牌。"
+	return ""
+
+
+## 校验丈八蛇矛在出牌阶段使用虚拟【杀】的完整动作；材料通过后继续复用虚拟牌次数、距离和目标规则。
+func _validate_zhangba_slash(player_id: int, equipment_uid: int, material_card_uids: Array[int], target_ids: Array[int]) -> String:
+	# 装备与材料错误；先校验费用可避免用不存在的手牌查询后续目标。
+	var material_error: String = _validate_zhangba_materials(player_id, equipment_uid, material_card_uids)
+	if not material_error.is_empty():
+		return material_error
+	return card_rules.validate_virtual_use(player_id, "sha", target_ids)
+
+
+## 消耗两张普通手牌并返回无花色、无点数的虚拟【杀】响应；装备本身始终留在武器槽。
+func _consume_zhangba_response(player_id: int, material_card_uids: Array[int]) -> CardInstance:
+	# 当前丈八蛇矛；调用前已用其 UID 识别装备候选，恢复时仍需再次确认装备未离区。
+	var zhangba_card: CardInstance = _get_equipment_card_by_definition(player_id, "zhangba")
+	if zhangba_card == null:
+		return null
+	# 当前材料错误；选择等待期间手牌可能被其他插入结算移动，因此消费前必须再次复核。
+	var material_error: String = _validate_zhangba_materials(player_id, zhangba_card.uid, material_card_uids)
+	if not material_error.is_empty():
+		return null
+	_ensure_card_movement()
+	# 响应事件；两张材料的处理区与弃牌移动共享同一稳定父事件，便于回放还原材料顺序。
+	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":"sha", "equipment_uid":zhangba_card.uid, "material_card_uids":material_card_uids.duplicate()}, {"responded":true, "virtual":true})
+	for material_card_uid: int in material_card_uids:
+		# 当前丈八材料；先公开进入处理区，再作为本次虚拟响应的实际费用进入弃牌堆。
+		var material_card: CardInstance = state.get_player(player_id).find_hand_card(material_card_uid)
+		card_movement.move_card(material_card, "processing", -1, "respond", respond_event_id)
+		card_movement.move_card(material_card, "discard_pile", -1, "respond", respond_event_id)
+	# 响应历史；card_uid=-1表示没有单一实体响应牌，material_card_uids 保存全部真实费用。
+	state.get_player(player_id).response_history.append({"event_id":respond_event_id, "response_pattern":"sha", "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":zhangba_card.uid})
+	add_log("%s发动【丈八蛇矛】，将两张手牌当【杀】打出。" % state.get_player(player_id).display_name)
+	# 虚拟【杀】没有颜色；仁王盾、银月枪和其他颜色判断不能继承任一材料牌。
+	return CardInstance.new("sha", "none", 0)
 
 
 ## 旧版自动响应实现的独立内部端口；当前规则不得直接调用，保留用于兼容扩展技能调试。
@@ -2184,6 +2377,9 @@ func _start_turn(player_id: int) -> void:
 		return
 	_ai_drive_token += 1
 	_ai_actions_this_turn = 0
+	_judgment_flow_token += 1
+	_judgment_flow_in_progress = false
+	_judgment_resume_needs_result_pause = false
 	state.current_player_id = player_id
 	state.turn_number += 1
 	if state.players.find(player) == 0:
@@ -2222,9 +2418,7 @@ func _start_turn(player_id: int) -> void:
 	state.phase_index = 1
 	_record_runtime_event("phaseJudge", "phase", {"player_id":player_id}, {}, turn_event_id)
 	_process_judgment_area(player_id)
-	if has_pending_card_choice():
-		return
-	_continue_turn_after_judgment(player_id)
+	return
 
 
 ## 从判定阶段结束处继续当前回合；异步无懈与濒死选择完成后也统一回到该入口。
@@ -2283,33 +2477,72 @@ func _resume_interrupted_turn_flow() -> void:
 		return
 	# 当前回合玩家 ID；所有判定区剩余牌和后续摸牌、出牌都归属于该角色。
 	var player_id: int = state.current_player_id
+	_judgment_resume_needs_result_pause = true
 	_process_judgment_area(player_id)
-	if not has_pending_card_choice():
-		_continue_turn_after_judgment(player_id)
 
 
-## 处理玩家判定区的全部延时锦囊。
+## 处理玩家判定区的全部延时锦囊；每次只展示并结算一张，完整判定结束后才继续下一张。
 func _process_judgment_area(player_id: int) -> void:
-	# 判定玩家状态；复制判定区以允许结算中移动原数组。
-	var player: PlayerState = state.get_player(player_id)
-	if player == null:
+	if _judgment_flow_in_progress or state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "judgment":
 		return
-	# 当前待结算延时锦囊快照；按进入判定区的顺序处理。
-	var delayed_cards: Array[CardInstance] = player.judgment_area.duplicate()
-	for delayed_card: CardInstance in delayed_cards:
-		if not player.alive or state.game_over or has_pending_card_choice():
-			return
-		if not player.judgment_area.has(delayed_card):
-			continue
+	_judgment_flow_token += 1
+	# 本次判定流程令牌；换回合或重新开局会递增全局值，使已创建计时器只读退出。
+	var flow_token: int = _judgment_flow_token
+	_judgment_flow_in_progress = true
+	_run_judgment_area_sequence(player_id, flow_token)
+
+
+## 按进入判定区的顺序推进延时锦囊展示、无懈、判定与结果停留；异步选择出现时保留剩余数组等待统一阶段恢复入口继续。
+func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
+	# 从响应选择恢复时的结果停留；上一张牌已经在恢复回调中完成效果，先等待再展示下一张。
+	if _judgment_resume_needs_result_pause:
+		_judgment_resume_needs_result_pause = false
+		if delayed_judgment_result_pause_seconds > 0.0 and not state.match_id.is_empty():
+			await get_tree().create_timer(delayed_judgment_result_pause_seconds).timeout
+			if not _is_judgment_flow_valid(player_id, flow_token):
+				return
+	# 判定玩家状态；每轮重新读取判定区，确保闪电传递和插入移动不会让旧数组重复结算。
+	var player: PlayerState = state.get_player(player_id)
+	while player != null and player.alive and not state.game_over and not has_pending_card_choice() and not player.judgment_area.is_empty():
+		# 当前延时锦囊；始终取判定区数组首项，完整离区后下一项才会成为新的处理对象。
+		var delayed_card: CardInstance = player.judgment_area.front()
+		# 当前延时锦囊判定事件；展示、无懈与实际判定都关联本回合判定阶段，回放可以恢复严格顺序。
+		var delayed_event_id: int = _record_runtime_event("delayedJudge", "judgment", {"player_id":player_id, "card_uid":delayed_card.uid, "card_id":delayed_card.definition_id}, {}, _current_turn_event_id)
 		_ensure_card_movement()
-		card_movement.move_card(delayed_card, "processing", -1, "judge", state.current_event_id)
+		card_movement.move_card(delayed_card, "processing", -1, "judge", delayed_event_id)
+		# 延时锦囊展示；表现接管其可能发生的处理区到弃牌堆移动，闪电传递时由新区域移动释放所有权。
+		_request_card_presentation(delayed_card, player_id, [], "delayedJudge", delayed_event_id, true)
+		add_log("%s开始判定%s。" % [player.display_name, describe_card(delayed_card)])
+		_emit_state()
+		if delayed_judgment_preview_seconds > 0.0 and not state.match_id.is_empty():
+			await get_tree().create_timer(delayed_judgment_preview_seconds).timeout
+			if not _is_judgment_flow_valid(player_id, flow_token):
+				return
 		# 延时锦囊是否在生效前被无懈可击抵消；异步响应必须保留判定恢复标记。
 		var negated: bool = resolve_trick_negation(-1, player_id, delayed_card.definition_id, {"delayed_judgment":true})
 		if state.game_over or has_pending_card_choice():
+			_judgment_flow_in_progress = false
+			_judgment_resume_needs_result_pause = true
 			return
 		_resolve_delayed_judgment_card(player_id, delayed_card, negated)
+		_emit_state()
 		if state.game_over or has_pending_card_choice():
+			_judgment_flow_in_progress = false
+			_judgment_resume_needs_result_pause = true
 			return
+		if delayed_judgment_result_pause_seconds > 0.0 and not state.match_id.is_empty():
+			await get_tree().create_timer(delayed_judgment_result_pause_seconds).timeout
+			if not _is_judgment_flow_valid(player_id, flow_token):
+				return
+		player = state.get_player(player_id)
+	_judgment_flow_in_progress = false
+	if _is_judgment_flow_valid(player_id, flow_token):
+		_continue_turn_after_judgment(player_id)
+
+
+## 判断判定展示计时器是否仍属于当前回合；失效流程会自行退出且不能推进摸牌阶段。
+func _is_judgment_flow_valid(player_id: int, flow_token: int) -> bool:
+	return state != null and not state.game_over and flow_token == _judgment_flow_token and state.current_player_id == player_id and state.current_phase == "judgment"
 
 
 ## 结算一张已经进入处理区的延时锦囊；同步判定与异步无懈恢复共用该唯一入口。
@@ -2574,8 +2807,26 @@ func _get_equipment_card_by_definition(player_id: int, definition_id: String) ->
 	return null
 
 
+## 执行丈八蛇矛虚拟【杀】；逻辑代理承载杀的事件与装备触发，两张实体手牌作为材料进入处理区并在结算后弃置。
+func _execute_zhangba_slash_use(actor_id: int, equipment_uid: int, material_card_uids: Array[int], target_ids: Array[int]) -> bool:
+	# 完整动作错误；提交时重新校验装备、手牌、次数、距离与目标，界面预览不能替代该权威结果。
+	var validation_error: String = _validate_zhangba_slash(actor_id, equipment_uid, material_card_uids, target_ids)
+	if not validation_error.is_empty():
+		return _reject(validation_error)
+	# 无花色、无点数的逻辑代理；它只在本次 CardUseEvent 的处理区生命周期内存在，不进入任何玩家牌区或弃牌堆。
+	var virtual_slash: CardInstance = CardInstance.new("sha", "none", 0)
+	virtual_slash.zone = "void"
+	virtual_slash.owner_id = -1
+	_ensure_card_movement()
+	if card_movement.move_card(virtual_slash, "processing", -1, "virtual_card_begin", state.current_event_id) == null:
+		return _reject("丈八蛇矛的虚拟【杀】无法进入处理区。")
+	add_log("%s发动【丈八蛇矛】，将两张手牌当【杀】使用。" % state.get_player(actor_id).display_name)
+	_execute_card_use(actor_id, virtual_slash, target_ids, material_card_uids, true)
+	return true
+
+
 ## 执行已通过合法性校验的出牌动作。
-func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> void:
+func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false) -> void:
 	if state == null or state.game_over or card == null:
 		return
 	if card_use_event_service == null:
@@ -2586,7 +2837,11 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 本次使用的逻辑牌快照；后续视为牌与多材料牌可以复用完全相同的事件字段。
 	var virtual_card: VirtualCard = VirtualCard.new(card.definition_id, card.suit, card.rank, str(definition.get("nature", "normal")))
-	virtual_card.add_material(card.uid)
+	if material_card_uids.is_empty():
+		virtual_card.add_material(card.uid)
+	else:
+		for material_card_uid: int in material_card_uids:
+			virtual_card.add_material(material_card_uid)
 	# 使用牌事件上下文；仅包含可序列化规则数据，不保存 CardInstance、节点或 Callable。
 	var event_context: Dictionary = {
 		"actor_id":actor_id,
@@ -2595,6 +2850,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"target_ids":target_ids.duplicate(),
 		"virtual_card":virtual_card.to_dict(),
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
+		"virtual_proxy":virtual_proxy,
 	}
 	# CardUseEvent 的固定内容步骤；每一步只安排下一层子事件或推进一个明确规则边界。
 	var content_steps: Array[Callable] = [
@@ -2624,6 +2880,8 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"excluded_target_ids":[],
 		"direct_hit_target_ids":[],
 		"custom_args":{},
+		"material_card_uids":virtual_card.material_card_uids.duplicate(),
+		"virtual_proxy":virtual_proxy,
 		"destination":"pending",
 		"content_complete":false,
 		"runtime_managed":true,
@@ -2674,7 +2932,7 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	add_log("%s使用了%s。" % [actor.display_name, describe_card(card)])
 	# 只有正常规则终点为弃牌堆的牌接管后续 processing -> discard 表现，装备与延时锦囊保留未来真实离区动画。
-	var owns_discard_transfer: bool = str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false))
+	var owns_discard_transfer: bool = str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false)) and not bool(card_use_context.get("virtual_proxy", false))
 	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
 	_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer)
 	# 兼容扩展事件；现有独立技能仍可监听 card_used，新的源码级技能应优先监听真实 useCard 时机子事件。
@@ -2693,6 +2951,30 @@ func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) 
 	var actor: PlayerState = state.get_player(actor_id)
 	# 待移动实体材料；默认从持有者手牌或木牛“粮”中按 UID 查找。
 	var card: CardInstance = actor.find_playable_card(card_uid) if actor != null else null
+	if bool(event.context.get("virtual_proxy", false)):
+		# 虚拟牌实体材料 UID；丈八蛇矛固定包含两张普通手牌，逻辑代理牌已经在事件开始前进入处理区。
+		var material_card_uids: Array[int] = _int_array(event.context.get("material_card_uids", []) as Array)
+		# 待移动材料对象；全部存在且仍在普通手牌区后才开始逐张移动，避免过期动作只消费一部分费用。
+		var material_cards: Array[CardInstance] = []
+		for material_card_uid: int in material_card_uids:
+			# 当前丈八材料；木牛“粮”和其他区域实体不能作为两张手牌费用。
+			var material_card: CardInstance = actor.find_hand_card(material_card_uid) if actor != null else null
+			if material_card == null:
+				event.cancel("virtual_material_not_in_hand")
+				return
+			material_cards.append(material_card)
+		_ensure_card_movement()
+		# 已完成材料移动 ID；每张材料保留独立 CardMoveEvent，回放可按玩家选择顺序重建。
+		var material_move_ids: Array[int] = []
+		for material_card: CardInstance in material_cards:
+			# 材料进入处理区；在虚拟杀完整结算前不会提前进入弃牌堆。
+			var material_move: CardMoveEvent = card_movement.move_card(material_card, "processing", -1, "use", event.event_id)
+			if material_move == null:
+				event.cancel("virtual_material_move_failed")
+				return
+			material_move_ids.append(material_move.move_id)
+		event.result = {"card_uids":material_card_uids.duplicate(), "to_zone":"processing", "move_ids":material_move_ids}
+		return
 	if card == null:
 		event.cancel("material_not_playable")
 		return
@@ -3023,6 +3305,25 @@ func _execute_cards_discard_event(event: GameEvent, _scheduler: EventScheduler) 
 	var card_uid: int = int(event.context.get("card_uid", -1))
 	# 仍处于处理区的材料实体；为空表示已被其他规则移动，不再重复弃置。
 	var card: CardInstance = _find_processing_card(card_uid)
+	if bool(event.context.get("virtual_proxy", false)):
+		# 虚拟牌材料 UID；逻辑代理本身不会进入弃牌堆，只有玩家实际选择的实体材料按顺序弃置。
+		var material_card_uids: Array[int] = _int_array(event.context.get("material_card_uids", []) as Array)
+		# 已弃置材料 UID；等待期间被其他规则移走的材料不会重复移动。
+		var discarded_material_uids: Array[int] = []
+		_ensure_card_movement()
+		for material_card_uid: int in material_card_uids:
+			# 当前仍在处理区的材料；代理 UID 与材料 UID 分离，不会误删逻辑牌。
+			var material_card: CardInstance = _find_processing_card(material_card_uid)
+			if material_card != null and card_movement.move_card(material_card, "discard_pile", -1, "ordering_discard", event.event_id) != null:
+				discarded_material_uids.append(material_card_uid)
+		if card != null:
+			# 逻辑代理返回 void；它只为效果链提供稳定 UID 和无花色【杀】定义，不属于任何持久卡牌区域。
+			card_movement.move_card(card, "void", -1, "virtual_card_complete", event.event_id)
+		event.result = {"card_uids":discarded_material_uids, "to_zone":"discard_pile", "virtual_card_uid":card_uid}
+		_active_card_resolutions.erase(card_uid)
+		_card_use_contexts.erase(card_uid)
+		_check_game_over()
+		return
 	if card != null:
 		_ensure_card_movement()
 		# 弃牌移动；事件 ID 直接使用真实 cardsDiscard 子事件，不再创建迁移期摘要。
@@ -3608,6 +3909,15 @@ func _shuffle_array(array: Array) -> void:
 		var temporary: Variant = array[index]
 		array[index] = array[swap_index]
 		array[swap_index] = temporary
+
+
+## 将可序列化数组逐项转换为整数 UID 或玩家 ID；返回新数组，调用方后续修改不会影响网络动作负载。
+func _int_array(values: Array) -> Array[int]:
+	# 整数结果；保留输入顺序与重复项，具体规则入口负责判断是否允许重复。
+	var result: Array[int] = []
+	for value_variant: Variant in values:
+		result.append(int(value_variant))
+	return result
 
 
 ## 处理网络网关交付的行为字典；网络与本地动作共用完全相同的校验入口。

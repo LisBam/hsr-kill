@@ -50,6 +50,18 @@ var _last_presentation: Dictionary = {}
 ## 最近一次进入弃牌堆的真实移动表现快照；默认空字典，用于确认判定牌只产生一次 processing -> discard 增量。
 var _last_discard_transfer: Dictionary = {}
 
+## 当前场景收到的全部牌面表现快照；按信号到达顺序保存，判定链测试据此验证延时牌与判定牌严格交替。
+var _presentation_history: Array[Dictionary] = []
+
+## 丈八蛇矛测试使用的装备实体 UID；响应处理器只能选择该公开装备入口。
+var _zhangba_uid: int = -1
+
+## 丈八蛇矛测试使用的两张普通手牌材料 UID；选择动作会把该数组写入 material_card_uids 负载。
+var _zhangba_material_uids: Array[int] = []
+
+## 丈八响应请求是否同时公开了装备候选；默认false，收到正确候选后改为true。
+var _zhangba_response_has_equipment: bool = false
+
 
 ## 延迟一帧执行测试，确保自动加载卡牌数据和节点依赖已经完成初始化。
 func _ready() -> void:
@@ -69,13 +81,19 @@ func _run() -> void:
 		return
 	if not await _test_silver_moon_requires_activation_choice():
 		return
+	if not await _test_zhangba_play_uses_two_materials():
+		return
+	if not await _test_zhangba_response_uses_two_materials():
+		return
 	if not _test_wooden_ox_card_cannot_recast():
 		return
 	if not _test_ai_delay_range():
 		return
 	if not _test_judgment_presentation_and_event_chain():
 		return
-	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d zhuque=%d yinyue=%d judge=1" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _zhuque_request_count, _silver_moon_request_count])
+	if not await _test_delayed_judgment_presentation_sequence():
+		return
+	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d zhuque=%d yinyue=%d zhangba=2 judge=2" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _zhuque_request_count, _silver_moon_request_count])
 	get_tree().quit(0)
 
 
@@ -124,6 +142,7 @@ func _reset_state(player_count: int) -> void:
 	_controller.trigger_manager = TriggerManager.new()
 	_controller._pending_card_choice.clear()
 	_controller._resolved_card_choice_uids.clear()
+	_controller._resolved_equipment_material_uids.clear()
 	_controller._negation_resume_results.clear()
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
@@ -132,7 +151,11 @@ func _reset_state(player_count: int) -> void:
 	_controller._play_choice_event_id = -1
 	_controller._play_choice_actor_id = -1
 	_controller._play_choice_match_id = ""
+	_controller._judgment_flow_token += 1
+	_controller._judgment_flow_in_progress = false
+	_controller._judgment_resume_needs_result_pause = false
 	_controller.ai_coordinator._policies.clear()
+	_presentation_history.clear()
 
 
 ## 验证南蛮入侵逐目标结算：目标一被一张无懈抵消，目标二仍需响应并在未出杀时受到伤害。
@@ -386,6 +409,64 @@ func _test_silver_moon_requires_activation_choice() -> bool:
 	return true
 
 
+## 验证出牌阶段点击丈八蛇矛后可以选择两张普通手牌生成无花色虚拟【杀】，材料弃置且装备留在原槽位。
+func _test_zhangba_play_uses_two_materials() -> bool:
+	_scenario = "zhangba_play"
+	_reset_state(2)
+	# 攻击者装备的丈八蛇矛；动作 card_uid 必须引用该实体而不是任一材料。
+	var zhangba: CardInstance = CardInstance.new("zhangba", "spade", 12)
+	zhangba.zone = "equipment"
+	zhangba.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = zhangba
+	_zhangba_uid = zhangba.uid
+	# 第一张丈八材料；任意牌名均可作为普通手牌费用。
+	var first_material: CardInstance = _add_hand_card(0, "shan", "heart", 2)
+	# 第二张丈八材料；与第一张共同组成无花色、无点数的虚拟杀。
+	var second_material: CardInstance = _add_hand_card(0, "tao", "diamond", 3)
+	_zhangba_material_uids.assign([first_material.uid, second_material.uid])
+	_controller._begin_play_choice(0)
+	# 丈八装备候选；当前有两张普通手牌且存在合法杀目标，应进入 chooseToUse 的 card_ids。
+	if not _controller.get_play_phase_equipment_action_uids(0).has(zhangba.uid):
+		return _fail("zhangba_play_equipment_not_available")
+	# 丈八标准动作；材料和目标都由核心再次校验，不能依赖界面预览。
+	var action: PlayerAction = PlayerAction.new("use_zhangba", 0, zhangba.uid, [1])
+	action.payload = {"material_card_uids":_zhangba_material_uids.duplicate()}
+	if not _controller.submit_action(action):
+		return _fail("zhangba_play_submit")
+	if not await _wait_until_no_card_choice():
+		return _fail("zhangba_play_timeout")
+	# 虚拟杀结果；目标受到1点伤害，两张材料进入弃牌堆，丈八本身和处理区代理均保持正确终点。
+	var virtual_card_data: Dictionary = _last_presentation.get("card_data", {}) as Dictionary
+	if _controller.state.get_player(1).hp != 3 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(0).equipment.get("weapon") != zhangba or not _controller.state.processing_area.is_empty() or str(virtual_card_data.get("definition_id", "")) != "sha" or str(virtual_card_data.get("suit", "")) != "none" or int(virtual_card_data.get("rank", -1)) != 0:
+		return _fail("zhangba_play_result=%d/%s/%s" % [_controller.state.get_player(1).hp, _controller.state.processing_area, virtual_card_data])
+	return true
+
+
+## 验证响应【杀】的窗口会把丈八蛇矛作为可点击装备候选，并只在提交两张普通手牌材料后视为成功打出【杀】。
+func _test_zhangba_response_uses_two_materials() -> bool:
+	_scenario = "zhangba_response"
+	_zhangba_response_has_equipment = false
+	_reset_state(2)
+	# 响应者装备的丈八蛇矛；南蛮入侵要求其打出【杀】时应向右移动并允许点击。
+	var zhangba: CardInstance = CardInstance.new("zhangba", "spade", 12)
+	zhangba.zone = "equipment"
+	zhangba.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = zhangba
+	_zhangba_uid = zhangba.uid
+	# 两张响应材料；均为普通手牌且自身不具有 sha 响应模式，确保本次只能通过丈八成功响应。
+	var first_material: CardInstance = _add_hand_card(1, "shan", "club", 4)
+	var second_material: CardInstance = _add_hand_card(1, "tao", "heart", 5)
+	_zhangba_material_uids.assign([first_material.uid, second_material.uid])
+	# 南蛮入侵实体；直接进入正式 CardUseEvent，目标响应完成后仍需正常收尾。
+	var nanman: CardInstance = _add_hand_card(0, "nanman", "spade", 7)
+	_controller._execute_card_use(0, nanman, [1])
+	if not await _wait_until_card_finalized(nanman.uid):
+		return _fail("zhangba_response_timeout")
+	if not _zhangba_response_has_equipment or _controller.state.get_player(1).hp != 4 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(1).equipment.get("weapon") != zhangba:
+		return _fail("zhangba_response_result=%s/%d" % [_zhangba_response_has_equipment, _controller.state.get_player(1).hp])
+	return true
+
+
 ## 验证木牛流马下的铁索连环不会被枚举为重铸动作，普通手牌中的铁索仍可重铸。
 func _test_wooden_ox_card_cannot_recast() -> bool:
 	_scenario = "wooden_ox_recast"
@@ -463,6 +544,59 @@ func _test_judgment_presentation_and_event_chain() -> bool:
 	return true
 
 
+## 验证判定区按“延时锦囊、该牌判定结果、下一张延时锦囊、下一张判定结果”逐张展示，启动调用不会瞬间结算全部牌。
+func _test_delayed_judgment_presentation_sequence() -> bool:
+	_scenario = "delayed_judgment_sequence"
+	_reset_state(2)
+	_controller.delayed_judgment_preview_seconds = 0.02
+	_controller.delayed_judgment_result_pause_seconds = 0.02
+	_controller.state.current_phase = "judgment"
+	_controller.state.phase_index = 1
+	# 第一张延时锦囊；红桃判定成功后不跳过出牌阶段。
+	var indulgence: CardInstance = CardInstance.new("lebu", "heart", 6)
+	indulgence.zone = "judgment"
+	indulgence.owner_id = 0
+	_controller.state.get_player(0).judgment_area.append(indulgence)
+	# 第二张延时锦囊；梅花判定成功后不跳过摸牌阶段。
+	var supply_shortage: CardInstance = CardInstance.new("bingliang", "club", 4)
+	supply_shortage.zone = "judgment"
+	supply_shortage.owner_id = 0
+	_controller.state.get_player(0).judgment_area.append(supply_shortage)
+	# 摸牌阶段的第一张保留牌；位于两张判定牌下方，判定完成后正常进入手牌。
+	var draw_one: CardInstance = CardInstance.new("sha", "spade", 8)
+	draw_one.zone = "draw_pile"
+	_controller.state.draw_pile.append(draw_one)
+	# 摸牌阶段的第二张保留牌；与第一张共同保证流程最后进入出牌阶段而非牌堆耗尽。
+	var draw_two: CardInstance = CardInstance.new("shan", "diamond", 9)
+	draw_two.zone = "draw_pile"
+	_controller.state.draw_pile.append(draw_two)
+	# 第二张延时锦囊的判定牌；梅花使兵粮寸断判定成功。
+	var supply_judgment: CardInstance = CardInstance.new("tao", "club", 7)
+	supply_judgment.zone = "draw_pile"
+	_controller.state.draw_pile.append(supply_judgment)
+	# 第一张延时锦囊的判定牌；数组末尾为牌堆顶，红桃先供乐不思蜀使用。
+	var indulgence_judgment: CardInstance = CardInstance.new("tao", "heart", 6)
+	indulgence_judgment.zone = "draw_pile"
+	_controller.state.draw_pile.append(indulgence_judgment)
+	_controller._process_judgment_area(0)
+	# 启动调用只允许第一张延时锦囊进入展示；判定牌和第二张延时锦囊必须等待各自配置间隔。
+	if _presentation_history.size() != 1 or str(_presentation_history[0].get("event_name", "")) != "delayedJudge" or int((_presentation_history[0].get("card_data", {}) as Dictionary).get("uid", -1)) != indulgence.uid or not _controller.state.get_player(0).judgment_area.has(supply_shortage):
+		return _fail("delayed_judgment_immediate=%s" % [_presentation_history])
+	# 四段0.02秒节拍加调度余量；完成后应进入正常出牌阶段并保留严格交替的四次表现。
+	await get_tree().create_timer(0.12).timeout
+	var presentation_keys: Array[String] = []
+	for presentation: Dictionary in _presentation_history:
+		# 单次表现键；稳定事件名与实体 UID 共同排除同一判定牌被重复展示。
+		var card_data: Dictionary = presentation.get("card_data", {}) as Dictionary
+		presentation_keys.append("%s:%d" % [str(presentation.get("event_name", "")), int(card_data.get("uid", -1))])
+	var expected_keys: Array[String] = ["delayedJudge:%d" % indulgence.uid, "judge:%d" % indulgence_judgment.uid, "delayedJudge:%d" % supply_shortage.uid, "judge:%d" % supply_judgment.uid]
+	if presentation_keys != expected_keys or _controller.state.current_phase != "play" or not _controller.state.get_player(0).judgment_area.is_empty() or not _controller.state.discard_pile.has(indulgence) or not _controller.state.discard_pile.has(supply_shortage):
+		return _fail("delayed_judgment_sequence=%s phase=%s" % [presentation_keys, _controller.state.current_phase])
+	_controller.delayed_judgment_preview_seconds = 1.00
+	_controller.delayed_judgment_result_pause_seconds = 1.00
+	return true
+
+
 ## 向指定玩家普通手牌区加入一张测试实体，并返回对象供后续区域断言。
 func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: int) -> CardInstance:
 	# 新测试实体牌；区域与所有者字段必须和玩家手牌数组保持一致。
@@ -483,6 +617,8 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	var kind: String = str(context.get("kind", ""))
 	# 本次提交的实体 UID；空数组表示玩家明确取消或不响应。
 	var selected_uids: Array[int] = []
+	# 本次装备响应材料；普通请求保持空数组，丈八蛇矛响应固定提交两张普通手牌 UID。
+	var material_card_uids: Array[int] = []
 	if _scenario == "wuxie_aoe" and kind == "trick_negation":
 		_wuxie_request_count += 1
 		selected_uids = [_wuxie_uid]
@@ -506,15 +642,26 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		selected_uids = [_silver_moon_uid]
 	elif _scenario == "silver_moon" and kind == "silver_moon_response":
 		selected_uids = []
+	elif _scenario == "zhangba_play" and kind == "slash_response":
+		selected_uids = []
+	elif _scenario == "zhangba_response" and kind == "aoe_response":
+		# 当前响应候选 UID；丈八实体必须与普通响应牌共同使用统一候选协议。
+		var candidate_uids: Array[int] = []
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+		_zhangba_response_has_equipment = candidate_uids.has(_zhangba_uid)
+		selected_uids = [_zhangba_uid]
+		material_card_uids = _zhangba_material_uids.duplicate()
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, kind])
 		return
-	call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), selected_uids)
+	call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), selected_uids, material_card_uids)
 
 
 ## 捕获最新统一牌面表现事件；测试只读取深拷贝，不持有规则层可变对象。
 func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	_last_presentation = presentation_data.duplicate(true)
+	_presentation_history.append(presentation_data.duplicate(true))
 
 
 ## 捕获最新进入弃牌堆的真实区域移动；其他摸牌或获得动画不覆盖判定断言数据。
@@ -526,12 +673,12 @@ func _on_card_transfer_requested(card_data: Dictionary, _source_player_id: int, 
 
 
 ## 提交已捕获请求的标准选牌动作；请求 ID 与选择者均沿用只读请求快照。
-func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int]) -> void:
+func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int], material_card_uids: Array[int] = []) -> void:
 	if _failed:
 		return
 	# 标准选牌动作；规则层仍会复核请求归属、候选 UID、数量与实体当前区域。
 	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate()}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "material_card_uids":material_card_uids.duplicate()}
 	if not _controller.submit_action(action):
 		_fail("submit_choice=%s:%d" % [_scenario, request_id])
 
