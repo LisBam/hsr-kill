@@ -266,7 +266,7 @@ func _run() -> void:
 	main_instance.call("_on_equipment_pressed", 7007)
 	# 丈八材料视图；普通【杀】和【闪】都应可选，牌名不会限制两张手牌材料。
 	var zhangba_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
-	if str(main_instance.get("_active_equipment_action")) != "zhangba_response" or not (zhangba_card_views.get(7001) as CardView).is_interactable or not (zhangba_card_views.get(7002) as CardView).is_interactable:
+	if str(main_instance.get("_active_equipment_action")) != "equipment_response" or not (zhangba_card_views.get(7001) as CardView).is_interactable or not (zhangba_card_views.get(7002) as CardView).is_interactable:
 		_fail("zhangba_material_mode")
 		return
 	main_instance.call("_on_card_pressed", 7001)
@@ -284,15 +284,14 @@ func _run() -> void:
 	wooden_ox_play_snapshot["current_choice_request"] = {"request_id":18, "event_id":18, "actor_id":0, "choice_type":"use", "card_ids":[7006]}
 	match_controller.state_changed.emit(wooden_ox_play_snapshot)
 	await _wait_for_equipment_animation(equipment_stack)
-	# 木牛宝物横条；候选应右移并允许点击，旧专用按钮始终隐藏。
+	# 木牛宝物横条；候选应右移并允许点击，界面不再创建任何具体装备专用按钮。
 	var wooden_ox_row: Button = equipment_stack.get_row("treasure")
-	var wooden_ox_button: Button = main_instance.get_node("%WoodenOxButton") as Button
-	if wooden_ox_row == null or not is_equal_approx(wooden_ox_row.position.x, equipment_stack.selectable_shift_distance) or wooden_ox_button.visible:
+	if wooden_ox_row == null or not is_equal_approx(wooden_ox_row.position.x, equipment_stack.selectable_shift_distance):
 		_fail("wooden_ox_equipment_entry")
 		return
 	main_instance.call("_on_equipment_pressed", 7006)
 	main_instance.call("_on_card_pressed", 7001)
-	if str(main_instance.get("_active_equipment_action")) != "muniu_store" or (main_instance.get("_equipment_action_material_uids") as Array) != [7001] or confirm_button.disabled:
+	if str(main_instance.get("_active_equipment_action")) != "store_attachment" or (main_instance.get("_equipment_action_material_uids") as Array) != [7001] or confirm_button.disabled:
 		_fail("wooden_ox_material_mode")
 		return
 	# 铁索连环普通手牌；未选择目标时中央确定按钮应直接表示重铸，旧重铸按钮保持隐藏。

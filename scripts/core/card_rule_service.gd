@@ -95,14 +95,12 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 	if str(definition.get("target_mode", "")) == "response_only":
 		return "该卡牌只能在响应窗口中使用。"
 
-	# 【杀】的基础次数限制；诸葛连弩使限制失效。
 	# 当前武器定义；卡牌源码可声明解除特定牌的阶段使用次数限制。
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
-	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
-		return "本阶段使用【杀】的基础次数已用尽。"
-	# 【酒】每回合限一次；濒死自救由响应流程单独处理。
-	if str(definition.get("effect_id", "")) == "wine" and actor.wine_used:
-		return "本回合已经使用过【酒】。"
+	# 配置化使用次数；同一 play_limit_group 的不同实体定义共享计数，例如普通、火与雷【杀】。
+	var play_limit: int = int(definition.get("play_limit", 0))
+	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
+		return str(definition.get("play_limit_message", "本阶段使用次数已用尽。"))
 
 	# 规范化后应有的最少目标数；全体目标牌允许调用方传空数组并由核心自动展开。
 	var target_mode: String = str(definition.get("target_mode", ""))
@@ -145,8 +143,10 @@ func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Arra
 		return "该虚拟牌只能在响应窗口中使用。"
 	# 当前武器定义；虚拟牌同样复用装备源码提供的次数解除能力。
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
-	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
-		return "本阶段使用【杀】的基础次数已用尽。"
+	# 虚拟牌与实体牌读取同一配置化分组计数，避免视为牌绕过次数限制。
+	var play_limit: int = int(definition.get("play_limit", 0))
+	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
+		return str(definition.get("play_limit_message", "本阶段使用次数已用尽。"))
 	# 虚拟牌目标数量；只读取牌定义的基础上限，材料不属于最后一张实体手牌，不能触发方天画戟。
 	var target_mode: String = str(definition.get("target_mode", ""))
 	if target_mode not in ["all_others", "all_players"]:
@@ -213,9 +213,9 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 目标模式；全体模式会忽略请求数组并自动取得存活角色。
 	var target_mode: String = str(definition.get("target_mode", ""))
-	# 效果 ID；借刀杀人的第一项是持刀者、第二项是被杀者，不能按座次交换。
-	var effect_id: String = str(definition.get("effect_id", ""))
-	if effect_id == "borrow_sword" or (target_mode != "all_players" and target_mode != "all_others" and requested_targets.size() <= 1):
+	# 当前卡牌源码；拥有角色顺序语义的多目标牌可声明保留玩家提交顺序。
+	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
+	if (source_definition != null and source_definition.preserves_requested_target_order()) or (target_mode != "all_players" and target_mode != "all_others" and requested_targets.size() <= 1):
 		return requested_targets.duplicate()
 	# 规范后的目标数组；从使用者开始按行动顺序环形展开，避免固定从一号位或点击先后结算多目标牌。
 	var result: Array[int] = []
@@ -260,20 +260,13 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 		return "目标不存在或已经死亡。"
 	# 卡牌目标模式；决定身份、区域与状态限制。
 	var target_mode: String = str(definition.get("target_mode", ""))
-	# 当前效果 ID；借刀杀人需要分别解释第一与第二目标。
-	var effect_id: String = str(definition.get("effect_id", ""))
-	if effect_id == "borrow_sword" and all_target_ids.size() == 2:
-		if target_id == all_target_ids[0]:
-			if target_id == actor.player_id or target.get_weapon() == null:
-				return "借刀杀人的第一目标必须是装备武器的其他角色。"
-			return ""
-		if target_id == all_target_ids[1]:
-			# 持刀者玩家 ID；来自目标数组首项。
-			var weapon_holder_id: int = all_target_ids[0]
-			if target_id == weapon_holder_id:
-				return "被借刀者不能攻击自己。"
-			if calculate_distance(weapon_holder_id, target_id) > get_attack_range(weapon_holder_id):
-				return "第二目标不在被借刀者的攻击范围内。"
+	# 当前卡牌源码；双目标角色语义等专属组合规则由对应卡牌文件校验。
+	var source_definition: CardDefinition = GameDatabase.get_card_definition(str(definition.get("id", "")))
+	if source_definition != null:
+		var source_error: String = source_definition.validate_target_selection(self, actor, target_id, all_target_ids)
+		if not source_error.is_empty():
+			return source_error
+		if source_definition.preserves_requested_target_order() and all_target_ids.size() > 1:
 			return ""
 	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder"] and target_id == actor.player_id:
 		return "该卡牌不能以自己为目标。"
@@ -303,6 +296,22 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 
 	# 借刀杀人的第二目标必须是首目标攻击范围内的合法其他角色。
 	return ""
+
+
+## 返回当前玩家已经使用同一配置分组卡牌的总次数；未配置分组时只统计自身稳定 ID。
+func _get_grouped_play_count(actor: PlayerState, definition: Dictionary) -> int:
+	# 当前计数组；同组属性牌共享限制，空组回退当前卡牌 ID。
+	var play_limit_group: String = str(definition.get("play_limit_group", definition.get("id", "")))
+	# 已使用次数；逐项读取历史中的牌定义，新增同组牌无需修改规则服务。
+	var used_count: int = 0
+	for used_definition_id_variant: Variant in actor.card_use_history.keys():
+		# 历史卡牌定义 ID；无效旧存档条目会被安全忽略。
+		var used_definition_id: String = str(used_definition_id_variant)
+		var used_definition: Dictionary = GameDatabase.get_card(used_definition_id)
+		var used_group: String = str(used_definition.get("play_limit_group", used_definition_id))
+		if used_group == play_limit_group:
+			used_count += int(actor.card_use_history.get(used_definition_id, 0))
+	return used_count
 
 
 ## 检查玩家指定装备 ID 是否位于任意装备槽。

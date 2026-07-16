@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "",
+		"ai_target_attitude": "hostile",
 	})
 
 
@@ -44,7 +45,7 @@ func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: in
 	while exchange_count < 100 and not resolver.is_resolution_stopped():
 		exchange_count += 1
 		# 当前轮响应上下文；成功响应后交换双方，放弃时由对手造成伤害。
-		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id}
+		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "complete_parent_target_after_response":true}
 		# 当前轮实体【杀】；为空表示放弃或没有合法响应牌。
 		var response_card: CardInstance = resolver.host.request_response_card(responder_id, "sha", "请响应决斗并打出【杀】。", response_context)
 		if resolver.host.has_pending_card_choice():

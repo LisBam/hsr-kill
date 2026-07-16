@@ -59,27 +59,23 @@ func _score_action(snapshot: Dictionary, action: Dictionary) -> float:
 	var card_id: String = str(action.get("card_definition_id", ""))
 	# 当前动作目标数组；多数基础动作只有一个目标。
 	var targets: Array = action.get("target_ids", []) as Array
-	# 基础牌型价值；装备、补牌和治疗具有稳定正收益。
-	var score: float = {
-		"tao": 8.0, "jiu": 2.0, "wuzhong": 9.0, "wugu": 5.0, "taoyuan": 4.0,
-		"zhuge": 5.0, "qinggang": 5.0, "cixiong": 4.0, "guanshi": 4.0,
-		"qinglong": 4.0, "zhangba": 4.0, "fangtian": 5.0, "qilin": 4.0,
-		"hanbing": 4.0, "guding": 4.0, "zhuque": 4.0, "bagua": 5.0,
-		"renwang": 5.0, "baiyin": 5.0, "tengjia": 4.0, "jueying": 3.0,
-		"dilu": 3.0, "zhuahuang": 3.0, "hualiu": 3.0, "chitu": 3.0,
-		"dawan": 3.0, "zixin": 3.0, "muniu": 3.0, "tiesuo": 1.0,
-	}.get(card_id, 3.0)
+	# 当前卡牌元数据；基础价值和目标收益方向由独立卡牌文件声明。
+	var definition: Dictionary = GameDatabase.get_card(card_id)
+	# 基础牌型价值；未配置时使用3分中性默认值，新增卡牌无需修改 AI 白名单。
+	var score: float = float(definition.get("ai_use_value", 3.0))
 	if targets.is_empty():
 		return score
 	# 首个目标 ID；用于估算伤害、控制、治疗与身份阵营关系。
 	var target_id: int = int(targets[0])
 	# AI 对目标的阵营态度；正值代表友方，负值代表敌方。
 	var attitude: float = _get_attitude(snapshot, target_id)
-	if card_id in ["sha", "sha_fire", "sha_thunder", "juedou", "guohe", "shunshou", "huogong", "lebu", "bingliang", "shuiyanqijun"]:
+	# 目标收益方向；hostile偏向敌方、friendly偏向友方、self_boost优先自身。
+	var target_attitude_mode: String = str(definition.get("ai_target_attitude", "neutral"))
+	if target_attitude_mode == "hostile":
 		score += -attitude * 5.0
-	elif card_id in ["tao", "wuzhong"]:
+	elif target_attitude_mode == "friendly":
 		score += attitude * 6.0
-	elif card_id == "jiu":
+	elif target_attitude_mode == "self_boost":
 		# 基础 AI 优先把【酒】用于自己，避免无后续联动信息时随机强化其他角色。
 		score += 6.0 if target_id == player_id else attitude * 2.0
 	return score

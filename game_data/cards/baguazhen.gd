@@ -26,6 +26,7 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "equipment",
 		"provided_response_pattern": "",
+		"ai_use_value": 5.0,
 	})
 
 
@@ -33,3 +34,24 @@ func _init() -> void:
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
 	resolver.host.equip_from_processing(actor_id, card)
 	return "equipment"
+
+
+## 八卦阵在需要响应【闪】时提供装备发动入口，不需要额外手牌材料。
+func can_offer_equipment_response(match_host: Object, player_id: int, response_patterns: Array[String]) -> bool:
+	return response_patterns.has("shan")
+
+
+## 选择八卦阵后执行判定；红色视为打出虚拟【闪】，黑色表示响应失败。
+func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int]) -> CardInstance:
+	if not response_patterns.has("shan"):
+		return null
+	# 当前八卦阵实体；等待期间换装时旧入口失效。
+	var equipment_card: CardInstance = match_host.get_equipment_card(player_id, "armor")
+	if equipment_card == null or equipment_card.definition_id != get_id() or equipment_card.uid != equipment_uid:
+		return null
+	# 八卦阵判定牌；只有红色结果视为成功响应【闪】。
+	var judgment_card: CardInstance = match_host.perform_judgment(player_id, "八卦阵")
+	if judgment_card == null or judgment_card.get_color() != "red":
+		return null
+	match_host.add_log("%s的【八卦阵】判定为红色，视为打出【闪】。" % match_host.state.get_player(player_id).display_name)
+	return CardInstance.new("shan", judgment_card.suit, judgment_card.rank)

@@ -637,6 +637,40 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 无头测试 AI 延迟；控制器入树时会读取全局菜单设置，因此在 _ready 完成后再次覆盖为0秒，保证固定帧数能推进且收尾不遗留长计时器。
 	_controller.ai_action_delay_seconds = 0.0
+	# 借刀动作枚举状态；三名存活角色足以覆盖使用者、持刀者与被杀者的完整目标组合。
+	var borrow_sword_action_state: GameState = GameState.new()
+	# 借刀动作测试座次 ID；依次创建0至2号三名玩家，修改人数会改变可枚举的双目标组合。
+	for borrow_sword_player_id: int in range(3):
+		# 借刀动作测试玩家；默认存活且相邻座次可满足持刀者的基础攻击范围。
+		var borrow_sword_player: PlayerState = PlayerState.new(borrow_sword_player_id, "玩家%d" % (borrow_sword_player_id + 1))
+		borrow_sword_action_state.players.append(borrow_sword_player)
+	borrow_sword_action_state.current_player_id = 0
+	borrow_sword_action_state.current_phase = "play"
+	# 借刀测试实体；位于一号位使用者手牌，供统一合法动作入口执行真实枚举。
+	var borrow_sword_action_card: CardInstance = CardInstance.new("jiedao", "club", 12)
+	borrow_sword_action_card.zone = "hand"
+	borrow_sword_action_card.owner_id = 0
+	borrow_sword_action_state.players[0].hand.append(borrow_sword_action_card)
+	# 持刀者测试武器；装备后令二号位成为借刀杀人的合法第一目标。
+	var borrow_sword_test_weapon: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	borrow_sword_test_weapon.zone = "equipment"
+	borrow_sword_test_weapon.owner_id = 1
+	borrow_sword_action_state.players[1].equipment["weapon"] = borrow_sword_test_weapon
+	_controller.state = borrow_sword_action_state
+	_controller.card_rules = CardRuleService.new(borrow_sword_action_state)
+	# 借刀合法动作；调用卡牌源码的复杂目标钩子，确保动态端口接收到严格的 Array[int]。
+	var borrow_sword_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	# 是否找到“二号位持刀、三号位被杀”的标准动作；默认false，匹配目标顺序后置为true。
+	var found_borrow_sword_action: bool = false
+	# 当前借刀合法动作；逐项读取目标数组，不修改控制器返回的动作内容。
+	for borrow_sword_action: Dictionary in borrow_sword_legal_actions:
+		if borrow_sword_action.get("target_ids", []) == [1, 2]:
+			found_borrow_sword_action = true
+			break
+	if not found_borrow_sword_action:
+		printerr("SMOKE_FAIL borrow_sword_legal_actions=%s" % [borrow_sword_legal_actions])
+		get_tree().quit(1)
+		return
 	# 随机座次样本；多个固定种子应产生不同的本地座次与主公座次，且至少一局本地玩家不是主公。
 	var observed_local_seats: Dictionary = {}
 	# 随机主公座次样本；键为座次 ID，用于验证主公不固定于一号位。
@@ -726,9 +760,9 @@ func _run() -> void:
 	silver_moon_state.discard_pile.append(silver_trigger_card)
 	_controller.state = silver_moon_state
 	_controller.card_rules = CardRuleService.new(silver_moon_state)
-	_controller._resolve_silver_moon_trigger(0, silver_trigger_card, true)
+	_controller._notify_equipment_card_consumed(0, silver_trigger_card, true)
 	# 推进已登记的非锁定装备触发；纯规则状态同步使用同一选择协议，由基础 AI 明确选择银月枪实体表示发动。
-	_controller._process_next_silver_moon_trigger()
+	_controller.process_next_equipment_trigger()
 	if silver_moon_state.players[1].hp != 3:
 		printerr("SMOKE_FAIL silver_moon_damage hp=%d" % silver_moon_state.players[1].hp)
 		get_tree().quit(1)

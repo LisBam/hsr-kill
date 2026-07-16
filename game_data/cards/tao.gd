@@ -25,6 +25,8 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "tao",
+		"ai_use_value": 8.0,
+		"ai_target_attitude": "friendly",
 	})
 
 
@@ -35,3 +37,20 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 			break
 		resolver.host.recover(actor_id, target_id, 1, card.definition_id)
 	return resolver.default_destination()
+
+
+## 【桃】允许任意存活角色在濒死窗口中响应并救援当前目标。
+func get_dying_response_pattern(_responder_id: int, _dying_player_id: int) -> String:
+	return str(get_metadata().get("provided_response_pattern", ""))
+
+
+## 应用【桃】的濒死救援效果；固定回复1点体力并记录使用者与目标。
+func resolve_dying_response(match_host: Object, responder_id: int, dying_player_id: int, _card: CardInstance) -> bool:
+	# 救援者与濒死目标；任一无效时不修改状态。
+	var responder: PlayerState = match_host.state.get_player(responder_id)
+	var target: PlayerState = match_host.state.get_player(dying_player_id)
+	if responder == null or target == null or not responder.alive or not target.alive:
+		return false
+	match_host.recover(responder_id, dying_player_id, 1, get_id())
+	match_host.add_log("%s对%s使用【桃】。" % [responder.display_name, target.display_name])
+	return true

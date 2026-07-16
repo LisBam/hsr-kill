@@ -41,13 +41,15 @@ func card_respondable(actor_id: int, card: CardInstance, response_pattern: Strin
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null or not actor.alive or actor.find_playable_card(card.uid) == null:
 		return false
-	var respondable: bool = card.definition_id == response_pattern
+	# 卡牌自身提供的响应模式；属性牌和后续扩展牌不要求稳定 ID 与模式字符串相同。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	var respondable: bool = str(definition.get("provided_response_pattern", "")) == response_pattern
 	var query_context: Dictionary = context.duplicate(true)
 	query_context.merge({"actor_id":actor_id, "card_uid":card.uid, "card_id":card.definition_id, "response_pattern":response_pattern}, false)
 	return bool(modifiers.apply("card_respondable", respondable, query_context))
 
 
-## 返回当前牌在给定完整目标下是否通过次数与组合校验；不会增加 slash_count 或消耗实体牌。
+## 返回当前牌在给定完整目标下是否通过次数与组合校验；不会增加任何卡牌专属统计或消耗实体牌。
 func card_usable(actor_id: int, card: CardInstance, target_ids: Array[int], context: Dictionary = {}) -> bool:
 	if not card_enabled(actor_id, card, context):
 		return false
@@ -74,8 +76,12 @@ func target_in_range(actor_id: int, card: CardInstance, target_id: int, context:
 	if state == null or card == null or state.get_player(target_id) == null:
 		return false
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	var distance_limit: int = int(definition.get("distance_limit", -1))
-	if str(definition.get("effect_id", "")) == "slash":
+	# 距离配置语义；攻击范围、固定距离1和无限制全部直接来自卡牌文件。
+	var distance_mode: String = str(definition.get("distance_limit", "none"))
+	var distance_limit: int = -1
+	if distance_mode == "one":
+		distance_limit = 1
+	elif distance_mode == "attack_range":
 		distance_limit = card_rules.get_attack_range(actor_id)
 	var in_range: bool = distance_limit < 0 or card_rules.calculate_distance(actor_id, target_id) <= distance_limit
 	var query_context: Dictionary = context.duplicate(true)

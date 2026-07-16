@@ -166,7 +166,7 @@ func _reset_state(player_count: int) -> void:
 	_controller._negation_resume_results.clear()
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
-	_controller._queued_silver_moon_triggers.clear()
+	_controller._queued_equipment_triggers.clear()
 	_controller._play_choice_request_id = -1
 	_controller._play_choice_event_id = -1
 	_controller._play_choice_actor_id = -1
@@ -494,8 +494,8 @@ func _test_silver_moon_requires_activation_choice() -> bool:
 	var used_black_card: CardInstance = CardInstance.new("shan", "spade", 4)
 	used_black_card.zone = "discard_pile"
 	_controller.state.discard_pile.append(used_black_card)
-	_controller._resolve_silver_moon_trigger(1, used_black_card, true)
-	_controller._process_next_silver_moon_trigger()
+	_controller._notify_equipment_card_consumed(1, used_black_card, true)
+	_controller.process_next_equipment_trigger()
 	if not await _wait_until_no_card_choice():
 		return _fail("silver_moon_timeout")
 	# 当前回合0号角色是银月枪持有者的敌方目标；未打出闪后受到固定1点普通伤害。
@@ -772,10 +772,10 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		selected_uids = [_zhuque_uid]
 	elif _scenario == "zhuque" and kind == "slash_response":
 		selected_uids = []
-	elif _scenario == "silver_moon" and kind == "silver_moon_trigger":
+	elif _scenario == "silver_moon" and kind == "equipment_trigger" and str(context.get("equipment_definition_id", "")) == "yinyue":
 		_silver_moon_request_count += 1
 		selected_uids = [_silver_moon_uid]
-	elif _scenario == "silver_moon" and kind == "silver_moon_response":
+	elif _scenario == "silver_moon" and kind == "equipment_response" and str(context.get("equipment_definition_id", "")) == "yinyue":
 		selected_uids = []
 	elif _scenario == "zhangba_play" and kind == "slash_response":
 		selected_uids = []
