@@ -2331,13 +2331,15 @@ func _reorder_players_from_lord() -> void:
 		if state.players[index].identity == "lord":
 			lord_index = index
 			break
-	if lord_index <= 0:
-		return
-	# 旋转后的座次数组；主公为一号位，其原下家按顺时针依次成为后续座次。
-	var reordered_players: Array[PlayerState] = []
-	for offset: int in range(state.players.size()):
-		reordered_players.append(state.players[(lord_index + offset) % state.players.size()])
-	state.players = reordered_players
+	if lord_index > 0:
+		# 旋转后的座次数组；主公为一号位，其原下家按顺时针依次成为后续座次。
+		var reordered_players: Array[PlayerState] = []
+		for offset: int in range(state.players.size()):
+			reordered_players.append(state.players[(lord_index + offset) % state.players.size()])
+		state.players = reordered_players
+	# 玩家显示编号属于当前对局座次，不属于稳定 player_id；旋转完成后统一刷新，日志与牌面名称保持一致。
+	for seat_index: int in range(state.players.size()):
+		state.players[seat_index].display_name = "玩家%d" % (seat_index + 1)
 
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
@@ -3547,8 +3549,7 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 			add_log("%s在濒死时使用【酒】自救。" % target.display_name)
 		recover(rescuer.player_id, target_id, 1, response_pattern)
 		if target.hp >= 1:
-			state.dying_queue.erase(target_id)
-			target.dying = false
+			_finish_dying_rescue(target_id)
 			return
 		# 同一响应者出牌后仍未救至1点时允许继续出牌；只移除该响应者，其他已询问角色仍保持完成状态。
 		asked_rescuer_ids.erase(rescuer.player_id)
@@ -3604,9 +3605,20 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 		asked_rescuer_ids.erase(responder_id)
 		_resolve_dying(target_id, int(context.get("killer_id", -1)), responder_id, asked_rescuer_ids)
 	else:
-		state.dying_queue.erase(target_id)
-		if target != null:
-			target.dying = false
+		_finish_dying_rescue(target_id)
+
+
+## 在角色体力恢复至1点或以上时统一结算求桃流程；状态、事件与日志在同一入口完成，父级卡牌或阶段随后才能继续。
+func _finish_dying_rescue(target_id: int) -> void:
+	# 已脱离濒死的目标；异常丢失目标时仍清理队列，避免后续流程永久认为存在未结算濒死角色。
+	var target: PlayerState = state.get_player(target_id)
+	state.dying_queue.erase(target_id)
+	if target == null:
+		return
+	target.dying = false
+	_record_runtime_event("dyingAfter", "dying", {"target_id":target_id, "hp":target.hp, "rescued":true})
+	_dispatch_rule_event(RuleEvent.new("dying_end", target_id, target_id, {"hp":target.hp, "rescued":true}))
+	add_log("%s脱离濒死状态，求桃流程结算完成。" % target.display_name)
 
 
 ## 请求水淹七军目标选择是否弃置全部装备；选择数量必须为0或完整装备区数量。

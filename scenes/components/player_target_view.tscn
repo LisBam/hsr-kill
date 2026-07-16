@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
+[ext_resource type="Script" path="res://scripts/ui/health_frame_view.gd" id="5_health_frame"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -186,6 +187,7 @@ vertical_alignment = 1
 
 [node name="IdentityBadge" type="Label" parent="." unique_id=915847553]
 unique_name_in_owner = true
+visible = false
 z_index = 4
 offset_left = 122.35
 offset_top = 3.0
@@ -203,6 +205,7 @@ vertical_alignment = 1
 
 [node name="HandCount" type="Label" parent="." unique_id=237863011]
 unique_name_in_owner = true
+visible = false
 z_index = 4
 offset_left = -5.0
 offset_top = 179.8
@@ -243,19 +246,23 @@ text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="HealthFrame" type="PanelContainer" parent="." unique_id=23280875]
+[node name="HealthFrame" type="Control" parent="." unique_id=23280875]
 unique_name_in_owner = true
 z_index = 4
-offset_left = 118.35
-offset_top = 102.0
+offset_left = 123.35
+offset_top = 142.0
 offset_right = 147.35
 offset_bottom = 196.0
 mouse_filter = 2
-theme_override_styles/panel = SubResource("StyleHealthFrame")
+script = ExtResource("5_health_frame")
 
 [node name="HealthPips" type="VBoxContainer" parent="HealthFrame" unique_id=929087411]
 unique_name_in_owner = true
-layout_mode = 2
+layout_mode = 0
+offset_left = 3.0
+offset_top = 4.0
+offset_right = 21.0
+offset_bottom = 52.0
 mouse_filter = 2
 theme_override_constants/separation = -10
 alignment = 2

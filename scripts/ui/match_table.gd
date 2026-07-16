@@ -379,6 +379,7 @@ func _render_players() -> void:
 			player_seat_slot_was_created = true
 		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与卡牌拖放入口。
 		var player_button: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
+		player_button.set_match_overlays_visible(true)
 		if player_seat_slot_was_created:
 			player_button.pressed.connect(_on_persistent_target_pressed.bind(player_button))
 			player_button.card_dropped.connect(_on_card_dropped)
@@ -400,6 +401,7 @@ func _render_players() -> void:
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
+	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
 	_render_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)

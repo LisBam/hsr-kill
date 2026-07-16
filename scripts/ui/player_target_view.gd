@@ -15,6 +15,15 @@ signal card_dropped(card_uid: int, player_id: int)
 ## 相邻体力圆点的纵向间距；默认-10像素使18像素圆点紧密排列，只影响表现密度且运行时通常无需修改。
 @export_range(-16, 8, 1) var health_pip_separation: int = -10
 
+## 单枚体力圆点的视觉直径；默认18像素，与字体尺寸一致，用于计算梯形边框宽高，运行时通常无需动态修改。
+@export_range(12.0, 28.0, 1.0) var health_pip_diameter: float = 18.0
+
+## 体力梯形框相对圆点直径增加的宽度；默认6像素使边框仅略宽于血量圆点，运行时通常无需动态修改。
+@export_range(2.0, 16.0, 1.0) var health_frame_extra_width: float = 6.0
+
+## 体力梯形框上下内容留白；默认8像素为顶边斜角和底边各预留空间，运行时通常无需动态修改。
+@export_range(4.0, 20.0, 1.0) var health_frame_vertical_padding: float = 8.0
+
 ## 单条装备牌信息占用的高度；默认15像素降低覆盖面积并在常规武将牌上同时叠放五个装备槽，运行时通常无需动态修改。
 @export_range(12.0, 22.0, 1.0) var equipment_row_height: float = 15.0
 
@@ -77,6 +86,12 @@ var _artwork_texture: Texture2D
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
 ## 当前容器位于独立 HealthFrame 边框内，并按从上往下的方向显示已损失体力。
 @onready var _health_pip_container: VBoxContainer = $HealthFrame/HealthPips
+
+## 体力梯形边框；高度随不超过5点的体力上限动态收缩，超过5点时切换为数字显示。
+@onready var _health_frame: HealthFrameView = $HealthFrame
+
+## 是否显示仅属于正式对局的身份与手牌数标识；编辑器预览和选将候选默认关闭。
+var _match_overlays_visible: bool = false
 
 ## 装备条目承载层；公开装备以参考图中的浅色横条从牌面下部向上叠放。
 @onready var _equipment_layer: Control = $EquipmentLayer
@@ -171,6 +186,15 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_refresh_visual_state()
 
 
+## 设置身份与手牌数标识是否进入正式对局显示；选将面板不调用此接口，因此保持场景默认隐藏。
+func set_match_overlays_visible(visible_in_match: bool) -> void:
+	_match_overlays_visible = visible_in_match
+	if not is_node_ready():
+		return
+	_identity_badge_label.visible = _match_overlays_visible
+	_hand_count_label.visible = _match_overlays_visible
+
+
 ## 更新合法与选中状态；已选目标始终优先显示金色边框。
 func set_target_state(legal_target: bool, selected_target: bool) -> void:
 	is_legal_target = legal_target
@@ -257,13 +281,15 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	var identity_text: String = {"lord":"主", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"?"}.get(identity, "?")
 	# 当前体力；允许为0或负数，牌面心形显示时会安全裁剪。
 	var hp: int = int(_player_snapshot.get("hp", 0))
-	# 当前体力上限；最多绘制10枚心形，异常更高数值仍可从悬停说明读取。
-	var max_hp: int = clampi(int(_player_snapshot.get("max_hp", 0)), 0, 10)
+	# 当前体力上限；1至5使用圆点，超过5直接使用数字，因此无需裁剪规则快照中的真实数值。
+	var max_hp: int = maxi(int(_player_snapshot.get("max_hp", 0)), 0)
 	# 用于心形绘制的安全当前体力；限制在0至可视上限之间。
 	var safe_hp: int = clampi(hp, 0, max_hp)
 	_character_name_label.text = "\n".join(character_name.split(""))
 	_identity_badge_label.text = identity_text
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
+	_identity_badge_label.visible = _match_overlays_visible
+	_hand_count_label.visible = _match_overlays_visible
 	# 判定区公开数量；没有判定牌时不显示该摘要，避免覆盖装备横条和武将立绘。
 	# 当前数量由菱形标记数组的长度直接表达，不再绘制“判N”摘要文本。
 	var judgment_count: int = (_player_snapshot.get("judgment_area", []) as Array).size()
@@ -315,6 +341,29 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 	for child: Node in _health_pip_container.get_children():
 		_health_pip_container.remove_child(child)
 		child.queue_free()
+	# 数字模式标志；体力上限超过5时显示“当前/上限”，避免圆点列超出武将牌。
+	var uses_numeric_health: bool = max_hp > 5
+	# 当前显示项目数；数字模式固定为1，圆点模式与体力上限一致且至少保留1项高度。
+	var visible_item_count: int = 1 if uses_numeric_health else maxi(max_hp, 1)
+	# 圆点重叠后的内容高度；每个后续圆点按字体高度加负间距递增。
+	var pip_content_height: float = health_pip_diameter + float(visible_item_count - 1) * maxf(health_pip_diameter + float(health_pip_separation), 1.0)
+	# 动态梯形尺寸；底边与武将牌底边对齐，上限减少时只向下收缩。
+	var frame_size: Vector2 = Vector2(health_pip_diameter + health_frame_extra_width, pip_content_height + health_frame_vertical_padding)
+	_health_frame.size = frame_size
+	_health_frame.position = Vector2(card_size.x - frame_size.x - 1.0, card_size.y - frame_size.y - 1.0)
+	_health_pip_container.position = Vector2((frame_size.x - health_pip_diameter) * 0.5, health_frame_vertical_padding * 0.5)
+	_health_pip_container.size = Vector2(health_pip_diameter, pip_content_height)
+	if uses_numeric_health:
+		# 数字体力标签；高上限角色使用分数格式同时展示当前体力与体力上限。
+		var health_number: Label = Label.new()
+		health_number.text = "%d/%d" % [safe_hp, max_hp]
+		health_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		health_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		health_number.add_theme_font_size_override("font_size", 10)
+		health_number.add_theme_color_override("font_color", Color("e7d59b"))
+		health_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_health_pip_container.add_child(health_number)
+		return
 	for pip_index: int in range(max_hp):
 		# 当前体力圆点；索引小于当前体力时点亮，其余保留暗色上限占位。
 		# 当前颜色判断改用顶部已损失数量，剩余圆点继续使用相同绿色与暗色。

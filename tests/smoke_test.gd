@@ -337,15 +337,15 @@ func _run() -> void:
 	var preview_hand_count: Label = player_card_template.get_node("HandCount") as Label
 	# 编辑器身份徽记；进入场景树后保持23×20像素，验证静态场景内的信息控件规格。
 	var preview_identity_badge: Label = player_card_template.get_node("IdentityBadge") as Label
-	# 编辑器体力列；移动到右下角并扩大为26×90像素，验证静态场景内的信息控件规格。
+	# 编辑器体力列；正式快照会按体力上限重建内容并动态调整右下角梯形尺寸。
 	var preview_health_column: VBoxContainer = player_card_template.get_node("HealthFrame/HealthPips") as VBoxContainer
-	# 编辑器体力边框；固定包裹右下体力圆点，提供独立边界和深色底衬。
-	var preview_health_frame: PanelContainer = player_card_template.get_node("HealthFrame") as PanelContainer
+	# 编辑器体力边框；使用不透明梯形并按圆点数量缩放，默认空快照保持单枚圆点的最小高度。
+	var preview_health_frame: HealthFrameView = player_card_template.get_node("HealthFrame") as HealthFrameView
 	# 判定区组件；根节点中心线位于武将牌底边，并在运行时生成菱形标记。
 	var preview_public_zone: JudgmentZoneView = player_card_template.get_node("PublicZone") as JudgmentZoneView
 	# 角色状态覆盖组件；替代旧 Status 标签，集中处理阵亡滤镜与横置链条。
 	var preview_state_overlay: PlayerStateOverlay = player_card_template.get_node("StateOverlay") as PlayerStateOverlay
-	if player_card_template.has_node("Seat") or player_card_template.has_node("Status") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 93.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or not preview_health_frame.position.is_equal_approx(Vector2(118.35, 102.0)) or not preview_health_frame.size.is_equal_approx(Vector2(29.0, 94.0)) or not is_equal_approx(preview_public_zone.position.y + preview_public_zone.marker_size * 0.5, player_card_template.card_size.y) or preview_state_overlay.card_size != player_card_template.card_size or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
+	if player_card_template.has_node("Seat") or player_card_template.has_node("Status") or static_preview_health_pip_count != 4 or not preview_artwork.position.is_equal_approx(Vector2(4.0, 4.0)) or not preview_artwork.size.is_equal_approx(Vector2(141.35, 190.8)) or not preview_character_name.size.is_equal_approx(Vector2(22.0, 93.0)) or not preview_faction_badge.size.is_equal_approx(Vector2(26.0, 26.0)) or not preview_hand_count.size.is_equal_approx(Vector2(24.0, 24.0)) or preview_hand_count.visible or not preview_identity_badge.size.is_equal_approx(Vector2(23.0, 20.0)) or preview_identity_badge.visible or not preview_health_frame.position.is_equal_approx(Vector2(123.35, 170.8)) or not preview_health_frame.size.is_equal_approx(Vector2(24.0, 26.0)) or not is_equal_approx(preview_public_zone.position.y + preview_public_zone.marker_size * 0.5, player_card_template.card_size.y) or preview_state_overlay.card_size != player_card_template.card_size or player_card_template.health_pip_font_size != 18 or player_card_template.health_pip_separation != -10 or preview_health_column.get_theme_constant("separation") != -10:
 		printerr("SMOKE_FAIL player_card_scene_preview seat=%s status=%s static_pips=%d artwork_position=%s artwork=%s name=%s faction=%s hand=%s identity=%s health_frame=%s/%s public=%s" % [player_card_template.has_node("Seat"), player_card_template.has_node("Status"), static_preview_health_pip_count, preview_artwork.position, preview_artwork.size, preview_character_name.size, preview_faction_badge.size, preview_hand_count.size, preview_identity_badge.size, preview_health_frame.position, preview_health_frame.size, preview_public_zone.position])
 		get_tree().quit(1)
 		return

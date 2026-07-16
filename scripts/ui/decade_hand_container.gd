@@ -95,9 +95,9 @@ func _layout_cards() -> void:
 		var hover_width_compensation: float = card_size.x * (card.hover_scale - 1.0) * 0.5 if hovered else 0.0
 		# 悬停缩放额外占用的垂直尺寸；整体向上补偿，使放大后的牌底仍与普通手牌对齐。
 		var hover_height_compensation: float = card_size.y * (card.hover_scale - 1.0) if hovered else 0.0
-		# 当前期望纵坐标；选中与悬停仍保持原有位移意图，容器高度不足时统一限制在顶部0像素。
-		var desired_card_y: float = base_y - (selected_lift if selected else 0.0) - hover_height_compensation
-		# 当前卡牌位置；选中状态上移，悬停状态围绕中心放大且保持底边对齐。
-		card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset
+		# 当前期望纵坐标；悬停补偿由容器即时计算，选中抬升由 CardView 的0.025秒独立偏移动画负责。
+		var desired_card_y: float = base_y - hover_height_compensation
+		# 当前卡牌位置；布局位置叠加入场偏移和选中动画偏移，重排不会打断任一独立表现。
+		card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset + card.hand_selection_offset
 		card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
 		current_card_x += card_step

@@ -19,6 +19,9 @@ signal card_drag_started(card_uid: int)
 ## 选中后向上抬升的像素数；默认14像素提供明确反馈，普通容器可在运行时调整。
 @export_range(0.0, 36.0, 1.0) var selected_lift: float = 14.0
 
+## 手牌选中与取消选中时的纵向位移动画时长；默认0.025秒提供即时但可感知的抬起反馈，运行时通常无需动态修改。
+@export_range(0.0, 0.2, 0.005) var selection_animation_seconds: float = 0.025
+
 ## 鼠标悬停时的缩放倍率；默认1.06提供轻量实体牌靠近反馈，运行时可动态调整。
 @export_range(1.0, 1.2, 0.01) var hover_scale: float = 1.06
 
@@ -52,6 +55,12 @@ var hand_entry_offset: Vector2 = Vector2.ZERO:
 		position += value - hand_entry_offset
 		hand_entry_offset = value
 
+## 正式手牌的选中动画偏移；负值表示向上移动，属性写入时只应用差值以兼容容器持续重排。
+var hand_selection_offset: Vector2 = Vector2.ZERO:
+	set(value):
+		position += value - hand_selection_offset
+		hand_selection_offset = value
+
 ## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 
@@ -75,6 +84,9 @@ var _is_hovered: bool = false
 
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
+
+## 当前选中位移动画；重复点击时会从当前偏移平滑转向新目标，避免并行动画争抢节点位置。
+var _selection_tween: Tween
 
 ## 最近一次牌面配置签名；默认-1表示从未配置，相同快照、定义、交互状态和名称模式不会重复加载插画或重建样式。
 var _configuration_signature: int = -1
@@ -189,12 +201,28 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 
 ## 切换选中视觉；桌面在选择变化后调用，组件不自行维护业务选择集合。
 func set_selected_state(selected: bool) -> void:
+	if is_card_selected == selected:
+		return
 	is_card_selected = selected
 	_refresh_visual_state()
 	# 重叠手牌容器负责统一计算纵向抬升和绘制层级。
 	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
 	if hand_layout != null:
 		hand_layout.refresh_card_states()
+		_start_selection_tween(Vector2(0.0, -hand_layout.selected_lift if selected else 0.0))
+
+
+## 启动手牌选中或取消选中的位移动画；非手牌展示区域继续沿用原有即时位置逻辑。
+func _start_selection_tween(target_offset: Vector2) -> void:
+	if _selection_tween != null and _selection_tween.is_valid():
+		_selection_tween.kill()
+	if selection_animation_seconds <= 0.0:
+		hand_selection_offset = target_offset
+		return
+	_selection_tween = create_tween()
+	_selection_tween.set_trans(Tween.TRANS_QUAD)
+	_selection_tween.set_ease(Tween.EASE_OUT)
+	_selection_tween.tween_property(self, "hand_selection_offset", target_offset, selection_animation_seconds)
 
 
 ## 创建完整牌面的只读拖拽预览；复制的是视觉树，不包含输入区域或业务选择状态。
