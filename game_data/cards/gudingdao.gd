@@ -31,4 +31,10 @@ func _init() -> void:
 
 ## 执行【古锭刀】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 古锭刀使持有者以【杀】伤害无手牌目标时伤害固定增加1点。
+func modify_outgoing_damage(match_host: Object, owner: PlayerState, target: PlayerState, context: Dictionary, amount: int) -> int:
+	return amount + 1 if str(context.get("card_id", "")) in ["sha", "sha_fire", "sha_thunder"] and target.hand.is_empty() else amount

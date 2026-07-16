@@ -71,8 +71,10 @@ func get_maximum_target_count(actor_id: int, card: CardInstance) -> int:
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null:
 		return maximum_target_count
-	if card.definition_id in ["sha", "sha_fire", "sha_thunder"] and _has_equipment(actor, "fangtian") and card.zone == "hand" and actor.hand.size() == 1:
-		maximum_target_count += 2
+	# 当前武器定义；额外目标规则由装备卡牌源码自行修改基础上限。
+	var weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
+	if weapon_definition != null:
+		maximum_target_count = weapon_definition.modify_maximum_target_count(actor, card, maximum_target_count)
 	return maximum_target_count
 
 
@@ -94,7 +96,9 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 		return "该卡牌只能在响应窗口中使用。"
 
 	# 【杀】的基础次数限制；诸葛连弩使限制失效。
-	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and not _has_equipment(actor, "zhuge"):
+	# 当前武器定义；卡牌源码可声明解除特定牌的阶段使用次数限制。
+	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
+	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
 		return "本阶段使用【杀】的基础次数已用尽。"
 	# 【酒】每回合限一次；濒死自救由响应流程单独处理。
 	if str(definition.get("effect_id", "")) == "wine" and actor.wine_used:
@@ -139,7 +143,9 @@ func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Arra
 		return "虚拟牌定义不存在。"
 	if str(definition.get("target_mode", "")) == "response_only":
 		return "该虚拟牌只能在响应窗口中使用。"
-	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and not _has_equipment(actor, "zhuge"):
+	# 当前武器定义；虚拟牌同样复用装备源码提供的次数解除能力。
+	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
+	if str(definition.get("effect_id", "")) == "slash" and actor.slash_count >= 1 and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)):
 		return "本阶段使用【杀】的基础次数已用尽。"
 	# 虚拟牌目标数量；只读取牌定义的基础上限，材料不属于最后一张实体手牌，不能触发方天画戟。
 	var target_mode: String = str(definition.get("target_mode", ""))
@@ -307,3 +313,12 @@ func _has_equipment(player: PlayerState, definition_id: String) -> bool:
 		if card.definition_id == definition_id:
 			return true
 	return false
+
+
+## 返回玩家指定装备槽对应的卡牌源码定义；规则服务只读取定义钩子，不执行装备效果。
+func _get_equipment_definition(player: PlayerState, slot: String) -> CardDefinition:
+	if player == null or not player.equipment.has(slot):
+		return null
+	# 当前装备实体；自动扫描数据库按稳定定义 ID 返回源码对象。
+	var card: CardInstance = player.equipment[slot] as CardInstance
+	return GameDatabase.get_card_definition(card.definition_id)

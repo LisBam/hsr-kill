@@ -31,4 +31,20 @@ func _init() -> void:
 
 ## 执行【藤甲】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 藤甲令普通属性【杀】无效，火【杀】与雷【杀】仍进入伤害流程。
+func blocks_slash(card: CardInstance, nature: String) -> bool:
+	return nature == "normal"
+
+
+## 藤甲令【南蛮入侵】与【万箭齐发】对持有者无效。
+func blocks_aoe(card_definition_id: String) -> bool:
+	return card_definition_id in ["nanman", "wanjian"]
+
+
+## 藤甲使持有者受到的火焰伤害固定增加1点。
+func modify_incoming_damage(match_host: Object, owner: PlayerState, context: Dictionary, amount: int) -> int:
+	return amount + 1 if str(context.get("nature", "normal")) == "fire" else amount

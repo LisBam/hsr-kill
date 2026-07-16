@@ -31,4 +31,16 @@ func _init() -> void:
 
 ## 执行【白银狮子】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 白银狮子将一次大于1点的伤害固定压缩为1点。
+func modify_incoming_damage(match_host: Object, owner: PlayerState, context: Dictionary, amount: int) -> int:
+	return 1 if amount > 1 else amount
+
+
+## 白银狮子离开装备区后，若持有者已受伤且仍存活则回复1点体力。
+func on_leave_equipment(match_host: Object, owner: PlayerState, trigger_loss_effects: bool) -> void:
+	if trigger_loss_effects and owner.alive and owner.hp < owner.max_hp:
+		match_host.recover(owner.player_id, owner.player_id, 1, "baiyin")

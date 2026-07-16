@@ -31,4 +31,12 @@ func _init() -> void:
 
 ## 执行【木牛流马】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_equipment(card, actor_id, target_ids)
+	resolver.host.equip_from_processing(actor_id, card)
+	return "equipment"
+
+
+## 木牛流马离开装备区时将其全部“粮”置入弃牌堆，并清空附属存储区。
+func on_leave_equipment(match_host: Object, owner: PlayerState, trigger_loss_effects: bool) -> void:
+	for stored_card: CardInstance in owner.wooden_ox_storage:
+		match_host.discard_card_instance(stored_card)
+	owner.wooden_ox_storage.clear()

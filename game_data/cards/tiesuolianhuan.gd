@@ -30,4 +30,13 @@ func _init() -> void:
 
 ## 执行【铁索连环】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	return resolver.resolve_chain(card, actor_id, target_ids)
+	for target_id: int in target_ids:
+		if resolver.should_skip_trick_target(card, actor_id, target_id):
+			continue
+		# 当前目标状态；每次生效都在横置与重置之间切换一次。
+		var target: PlayerState = resolver.state.get_player(target_id)
+		if target == null:
+			continue
+		target.chained = not target.chained
+		resolver.host.add_log("%s%s。" % [target.display_name, "进入连环状态" if target.chained else "解除连环状态"])
+	return resolver.default_destination()
