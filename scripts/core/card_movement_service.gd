@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 实体牌唯一移动入口。它维护所有标准区域、牌面知识和 CardMoveEvent 历史，效果组件不得直接操作区域数组。
 
+## 实体牌完成权威区域移动后的只读通知；控制器可据此统一生成表现与网络增量，不允许订阅者反向修改状态。
+signal card_moved(move_data: Dictionary, card_data: Dictionary)
+
 ## 当前绑定的权威状态；每局必须创建新的服务实例，避免跨对局保留牌引用。
 var state: GameState
 
@@ -38,6 +41,7 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	move.target_slot = target_slot
 	move.visible_to = visible_to.duplicate()
 	state.card_move_history.append(move.to_dict())
+	card_moved.emit(move.to_dict(), card.to_dict())
 	return move
 
 

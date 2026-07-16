@@ -93,6 +93,7 @@ func _install_state() -> GameState:
 	_controller._resolved_card_choice_uids.clear()
 	_controller._negation_resume_results.clear()
 	_controller._active_card_resolutions.clear()
+	_controller._card_use_contexts.clear()
 	_controller._queued_silver_moon_triggers.clear()
 	_controller._play_choice_request_id = -1
 	_controller._play_choice_event_id = -1

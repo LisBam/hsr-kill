@@ -76,6 +76,9 @@ var _is_hovered: bool = false
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
 
+## 最近一次牌面配置签名；默认-1表示从未配置，相同快照、定义、交互状态和名称模式不会重复加载插画或重建样式。
+var _configuration_signature: int = -1
+
 ## 卡牌纸张面板；承载完整视觉样式，不承担鼠标按钮语义。
 @onready var _card_body: Panel = $CardBody
 
@@ -138,6 +141,11 @@ func is_hovered_in_hand() -> bool:
 
 ## 写入牌面快照和定义；该方法不保存完整对局状态，可在每次快照重建时安全调用。
 func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool) -> void:
+	# 本次完整配置签名；包含全局名称模式，切换牌名后即使实体状态不变也会正确刷新。
+	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, GameSettings.card_name_mode])
+	if _configuration_signature == next_configuration_signature:
+		return
+	_configuration_signature = next_configuration_signature
 	card_uid = int(card.get("uid", -1))
 	is_wooden_ox_card = wooden_ox_card
 	is_interactable = interactable
@@ -164,6 +172,11 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 
 ## 把当前视图配置为不可见手牌的统一牌背；只保留稳定 UID 供选择提交，不显示任何牌面信息。
 func configure_back(entity_uid: int, interactable: bool) -> void:
+	# 牌背配置签名；隐藏牌只依赖实体 UID 与交互状态，不读取或缓存任何牌面定义。
+	var next_configuration_signature: int = hash(["card_back", entity_uid, interactable])
+	if _configuration_signature == next_configuration_signature:
+		return
+	_configuration_signature = next_configuration_signature
 	card_uid = entity_uid
 	is_wooden_ox_card = false
 	is_interactable = interactable

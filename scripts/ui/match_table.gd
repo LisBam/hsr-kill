@@ -120,13 +120,21 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 var _local_hand_gain_tweens: Dictionary = {}
 
 ## 已播放实际使用展示且最终应进入弃牌堆的实体 UID 集合；响应等待超过展示时长后仍用于阻止重复弃牌动画。
+## 兼容旧调试字段；实际所有权已由 CardUseAnimationLayer 管理，本字典不再写入业务状态并始终保持为空。
 var _presented_discard_card_uids: Dictionary = {}
 
 ## 当前技能 ID 到技能按钮视图的映射；预留给主动技能选择状态与冷却状态同步。
 var _skill_views: Dictionary = {}
 
 ## 当前玩家 ID 到角色目标视图的映射；每次重绘场上角色时整体重建，只用于同步目标高亮。
+## 当前字典只重建轻量 ID 索引，实际座位节点由 _player_seat_slots 持续复用，不再随快照释放。
 var _player_views: Dictionary = {}
+
+## 当前玩家 ID 到持久座位容器的映射；默认空字典，节点只在玩家进入、离开或本地观察者座次改变时创建和释放。
+var _player_seat_slots: Dictionary = {}
+
+## 最近一次已经渲染技能栏的本地武将 ID；空字符串表示尚未绑定或当前仍处于选将阶段。
+var _rendered_skill_character_id: String = ""
 
 ## 当前已选卡牌的只读规则预览；由 MatchController 查询接口生成，不包含权威对象引用。
 var _card_use_preview: Dictionary = {}
@@ -250,8 +258,8 @@ func _render_header() -> void:
 ## 渲染全部玩家状态卡，并为存活角色提供按顺序选择目标的按钮。
 func _render_players() -> void:
 	player_grid.clear_opponent_views()
-	_clear_container(player_grid)
-	_player_views.clear()
+	# 下一帧玩家视图索引；按本地相对座次重新插入键，同时复用已有实际节点。
+	var next_player_views: Dictionary = {}
 	# 本地玩家 ID；由控制器在每局创建时随机分配座次。
 	var local_player_id: int = match_controller.local_human_player_id
 	# 玩家快照数组；保留权威状态的绝对座次顺序，之后再相对本地座次旋转。
@@ -269,27 +277,54 @@ func _render_players() -> void:
 			break
 	if local_player_index < 0:
 		return
+	# 本次快照需要保留的对手玩家 ID；本地玩家使用独立固定座位，不进入该集合。
+	var desired_opponent_ids: Array[int] = []
+	for seat_offset: int in range(1, player_snapshots.size()):
+		desired_opponent_ids.append(int(player_snapshots[(local_player_index + seat_offset) % player_snapshots.size()].get("player_id", -1)))
+	# 已经不属于对手集合的旧座位；重开随机本地座次或人数减少时才会进入该清理分支。
+	for existing_player_id_variant: Variant in _player_seat_slots.keys():
+		# 旧座位对应玩家 ID；用于和本次对手集合做稳定身份对账。
+		var existing_player_id: int = int(existing_player_id_variant)
+		if desired_opponent_ids.has(existing_player_id):
+			continue
+		# 待释放座位容器；先从布局树移除再排队释放，下一次布局不会访问旧节点。
+		var stale_seat_slot: Control = _player_seat_slots.get(existing_player_id) as Control
+		if stale_seat_slot != null and is_instance_valid(stale_seat_slot):
+			if stale_seat_slot.get_parent() == player_grid:
+				player_grid.remove_child(stale_seat_slot)
+			stale_seat_slot.queue_free()
+		_player_seat_slots.erase(existing_player_id)
 	for seat_offset: int in range(1, player_snapshots.size()):
 		# 当前玩家快照；从本地下家开始环形读取，确保视觉方位与规则行动顺序一致。
 		var player: Dictionary = player_snapshots[(local_player_index + seat_offset) % player_snapshots.size()]
+		# 当前按钮对应的稳定玩家 ID；通过持久组件自身字段读取点击目标，无需每帧重新绑定信号。
+		var target_id: int = int(player.get("player_id", -1))
 		# 其他玩家运行时座位容器；武将牌与座次标签是并列节点，进入对局后才按玩家创建。
-		var player_seat_slot: Control = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
+		var player_seat_slot: Control = _player_seat_slots.get(target_id) as Control
+		# 本次是否新建座位；只有新节点需要连接一次输入信号，持续复用时不重复构造 Callable。
+		var player_seat_slot_was_created: bool = false
+		if player_seat_slot == null or not is_instance_valid(player_seat_slot):
+			player_seat_slot = PLAYER_SEAT_SLOT_SCENE.instantiate() as Control
+			_player_seat_slots[target_id] = player_seat_slot
+			player_grid.add_child(player_seat_slot)
+			player_seat_slot_was_created = true
 		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与卡牌拖放入口。
 		var player_button: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
+		if player_seat_slot_was_created:
+			player_button.pressed.connect(_on_persistent_target_pressed.bind(player_button))
+			player_button.card_dropped.connect(_on_card_dropped)
 		# 其他玩家独立座次标签；仅显示中文座次号，不属于武将牌自身节点树。
 		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
-		var target_id: int = int(player.get("player_id", -1))
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
 		var character_definition: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
-		player_button.pressed.connect(_on_target_pressed.bind(target_id))
-		player_button.card_dropped.connect(_on_card_dropped)
-		player_grid.add_child(player_seat_slot)
-		_player_views[target_id] = player_button
+		player_grid.move_child(player_seat_slot, seat_offset - 1)
+		next_player_views[target_id] = player_button
+	_player_views = next_player_views
 	_layout_opponent_players()
 	# 本地武将定义；统一武将牌从相同静态数据读取名称、插画和势力 ID。
 	var local_character_definition: Dictionary = GameDatabase.get_character(str(local_player_snapshot.get("character_id", "")))
@@ -319,11 +354,16 @@ func _layout_opponent_players() -> void:
 
 ## 根据本地武将配置渲染技能按钮；未接入规则的样例技能保持“预留”状态并可查看说明。
 func _render_local_skills(local_player: Dictionary) -> void:
+	# 当前本地武将 ID；技能元数据只随武将变化，体力、手牌和回合刷新不需要重建技能按钮。
+	var local_character_id: String = str(local_player.get("character_id", ""))
+	if _rendered_skill_character_id == local_character_id:
+		return
+	_rendered_skill_character_id = local_character_id
 	_clear_container(skill_button_container)
 	_skill_views.clear()
 	skill_status_label.text = "点击技能查看说明"
 	# 本地武将定义；技能列表只保存稳定技能 ID。
-	var character: Dictionary = GameDatabase.get_character(str(local_player.get("character_id", "")))
+	var character: Dictionary = GameDatabase.get_character(local_character_id)
 	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
 	var skill_ids: Array = character.get("skills", []) as Array
 	if skill_ids.is_empty():
@@ -534,6 +574,13 @@ func _on_target_pressed(target_id: int) -> void:
 			if _selected_target_ids.size() < maximum_target_count:
 				_selected_target_ids.append(target_id)
 	_refresh_selection_text()
+
+
+## 接收持久对手组件的点击并读取其最新玩家 ID；节点复用后无需为每次快照重新连接带 ID 的 Callable。
+func _on_persistent_target_pressed(player_view: PlayerTargetView) -> void:
+	if player_view == null or not is_instance_valid(player_view):
+		return
+	_on_target_pressed(player_view.player_id)
 
 
 ## 返回当前牌面可点击的合法目标；单目标牌保留空选择时的完整候选，支持一次点击直接切换目标。
@@ -814,7 +861,17 @@ func _on_log_added(message: String) -> void:
 
 
 ## 接收规则核心的只读卡牌展示请求，并把玩家视图位置转换为动画层局部坐标。
-func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, target_ids: Array[int]) -> void:
+func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
+	# 被展示牌快照；来自 CardPresentationEvent，不包含可修改的规则对象引用。
+	var card_data: Dictionary = presentation_data.get("card_data", {}) as Dictionary
+	if card_data.is_empty():
+		return
+	# 表现来源玩家 ID；使用牌、展示牌和判定牌都以该角色的桌面锚点作为起点。
+	var actor_id: int = int(presentation_data.get("actor_id", -1))
+	# 使用牌目标 ID；showCards 和 judge 发送空数组，因此不会错误绘制目标线。
+	var target_ids: Array[int] = []
+	for target_id_variant: Variant in presentation_data.get("target_ids", []) as Array:
+		target_ids.append(int(target_id_variant))
 	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
 	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 	# 动画起点；本地玩家统一使用手牌区上方中心，其他玩家使用对应武将牌中心。
@@ -828,14 +885,14 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
 	# 手牌展示不会移动权威实体，因此展示请求必须使用正式牌面的独立表现实例。
 	# 当前请求是否只展示牌面；手牌展示不会移动权威实体，因此必须使用正式牌面的独立表现实例。
-	var presentation_only: bool = str(card_data.get("zone", "")) != "processing"
+	# 当前请求是否只展示牌面；showCards 不接管手牌节点，useCard 与 judge 对应真实处理区实体。
+	var presentation_only: bool = str(presentation_data.get("event_name", "")) == "showCards"
 	# 当前展示实体 UID；实际使用牌需要先停止可能尚未完成的本地获得动画，再把同一正式节点交给出牌动画层。
 	var card_uid: int = int(card_data.get("uid", -1))
 	if not presentation_only:
 		_cancel_local_hand_gain_animation(card_uid)
 		# 普通使用牌最终会从处理区进入弃牌堆；即使中央展示已经淡出，后续移牌信号也不能再生成第二张牌。
-		if str(definition.get("effect_id", "")) != "equip" and not bool(definition.get("delayed", false)):
-			_presented_discard_card_uids[card_uid] = true
+		# 该所有权由 presentation_data 明确声明并交给动画层保存，桌面不再维护第二套 UID 状态。
 	# 正式卡牌节点；实际使用的本地处理区牌接管原节点，纯展示和不可见来源实例化同款完整牌面。
 	var animated_card: CardView = null if presentation_only else _card_views.get(card_uid) as CardView
 	if animated_card == null:
@@ -843,15 +900,14 @@ func _on_card_presentation_requested(card_data: Dictionary, actor_id: int, targe
 		animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
-	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions)
+	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, bool(presentation_data.get("owns_discard_transfer", false)))
 
 
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
-	if target_zone == "discard_pile" and (card_use_animation_layer.has_active_card_uid(card_uid) or _presented_discard_card_uids.has(card_uid)):
-		_presented_discard_card_uids.erase(card_uid)
+	if target_zone == "discard_pile" and card_use_animation_layer.consume_discard_transfer_claim(card_uid):
 		return
 	# 本地摸牌与其他获得都使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
 	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand"

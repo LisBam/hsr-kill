@@ -44,6 +44,12 @@ var _silver_moon_uid: int = -1
 ## 测试是否已经失败；失败后延迟回调不会继续提交旧请求。
 var _failed: bool = false
 
+## 最近一次规则层牌面表现事件快照；默认空字典，判定测试用于验证 judge 的公开展示协议。
+var _last_presentation: Dictionary = {}
+
+## 最近一次进入弃牌堆的真实移动表现快照；默认空字典，用于确认判定牌只产生一次 processing -> discard 增量。
+var _last_discard_transfer: Dictionary = {}
+
 
 ## 延迟一帧执行测试，确保自动加载卡牌数据和节点依赖已经完成初始化。
 func _ready() -> void:
@@ -65,7 +71,9 @@ func _run() -> void:
 		return
 	if not _test_ai_delay_range():
 		return
-	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d zhuque=%d yinyue=%d" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _zhuque_request_count, _silver_moon_request_count])
+	if not _test_judgment_presentation_and_event_chain():
+		return
+	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d zhuque=%d yinyue=%d judge=1" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _zhuque_request_count, _silver_moon_request_count])
 	get_tree().quit(0)
 
 
@@ -89,6 +97,8 @@ func _create_controller() -> void:
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
+	_controller.card_presentation_requested.connect(_on_card_presentation_requested)
+	_controller.card_transfer_requested.connect(_on_card_transfer_requested)
 
 
 ## 为独立场景创建指定人数的最小权威状态，并重新绑定全部状态型服务。
@@ -113,6 +123,7 @@ func _reset_state(player_count: int) -> void:
 	_controller._resolved_card_choice_uids.clear()
 	_controller._negation_resume_results.clear()
 	_controller._active_card_resolutions.clear()
+	_controller._card_use_contexts.clear()
 	_controller._queued_silver_moon_triggers.clear()
 	_controller._play_choice_request_id = -1
 	_controller._play_choice_event_id = -1
@@ -145,6 +156,17 @@ func _test_wuxie_per_target_and_aoe_continuation() -> bool:
 		return _fail("wuxie_aoe_requests=%d:%d" % [_wuxie_request_count, _aoe_request_count])
 	if not _controller.state.discard_pile.has(wuxie) or not _controller.state.discard_pile.has(nanman):
 		return _fail("wuxie_aoe_discard")
+	# 逐目标触发历史；无名杀先让全部目标经过同名阶段，再进入下一个阶段，不能按单目标连续写完四个时机。
+	var target_stage_order: Array[String] = []
+	for history_record_variant: Variant in _controller.event_scheduler.get_event_history():
+		# 当前历史事件摘要；只筛选四个 useCardTo 阶段并保留目标 ID 形成稳定顺序断言。
+		var event_data: Dictionary = (history_record_variant as Dictionary).get("event", {}) as Dictionary
+		var event_name: String = str(event_data.get("name", ""))
+		if event_name in ["useCardToPlayer", "useCardToTarget", "useCardToPlayered", "useCardToTargeted"]:
+			target_stage_order.append("%s:%d" % [event_name, int((event_data.get("context", {}) as Dictionary).get("target_id", -1))])
+	var expected_target_stage_order: Array[String] = ["useCardToPlayer:1", "useCardToPlayer:2", "useCardToTarget:1", "useCardToTarget:2", "useCardToPlayered:1", "useCardToPlayered:2", "useCardToTargeted:1", "useCardToTargeted:2"]
+	if target_stage_order != expected_target_stage_order:
+		return _fail("use_card_target_stage_order=%s" % [target_stage_order])
 	return true
 
 
@@ -262,6 +284,49 @@ func _test_ai_delay_range() -> bool:
 	return true
 
 
+## 验证八卦阵与延时锦囊共用的判定入口会公开展示牌面，并记录 judge、judgeResult 与 cardsDiscard 父子关系。
+func _test_judgment_presentation_and_event_chain() -> bool:
+	_scenario = "judgment_presentation"
+	_reset_state(2)
+	_last_presentation.clear()
+	_last_discard_transfer.clear()
+	# 牌堆顶判定牌；数组末尾作为顶部，红桃6同时覆盖八卦阵可成功读取的红色结果。
+	var judgment_card: CardInstance = CardInstance.new("shan", "heart", 6)
+	judgment_card.zone = "draw_pile"
+	_controller.state.draw_pile.append(judgment_card)
+	# 实际判定结果；必须返回同一实体，并在函数完成后位于弃牌堆。
+	var resolved_card: CardInstance = _controller.perform_judgment(1, "八卦阵")
+	if resolved_card != judgment_card or not _controller.state.discard_pile.has(judgment_card):
+		return _fail("judgment_card_zone")
+	# 判定表现；从判定玩家锚点展示、没有使用牌目标，并明确接管随后到达的弃牌动画。
+	var presented_card_data: Dictionary = _last_presentation.get("card_data", {}) as Dictionary
+	if str(_last_presentation.get("event_name", "")) != "judge" or int(_last_presentation.get("actor_id", -1)) != 1 or not (_last_presentation.get("target_ids", []) as Array).is_empty() or not bool(_last_presentation.get("owns_discard_transfer", false)) or int(presented_card_data.get("uid", -1)) != judgment_card.uid:
+		return _fail("judgment_presentation=%s" % _last_presentation)
+	# 判定移牌历史；第一条进入处理区，第二条由独立 cardsDiscard 事件移入弃牌堆。
+	if _controller.state.card_move_history.size() != 2:
+		return _fail("judgment_move_count=%d" % _controller.state.card_move_history.size())
+	var ordering_move: Dictionary = _controller.state.card_move_history[0] as Dictionary
+	var discard_move: Dictionary = _controller.state.card_move_history[1] as Dictionary
+	if str(ordering_move.get("from_zone", "")) != "draw_pile" or str(ordering_move.get("to_zone", "")) != "processing" or str(discard_move.get("from_zone", "")) != "processing" or str(discard_move.get("to_zone", "")) != "discard_pile":
+		return _fail("judgment_move_chain=%s/%s" % [ordering_move, discard_move])
+	if int(_last_discard_transfer.get("uid", -1)) != judgment_card.uid or str(_last_discard_transfer.get("source_zone", "")) != "processing":
+		return _fail("judgment_transfer=%s" % _last_discard_transfer)
+	# 运行时事件记录；judgeResult 与 cardsDiscard 都必须直接关联同一个 judge 父事件。
+	var judgment_event_id: int = int(_last_presentation.get("event_id", -1))
+	var found_judge_result: bool = false
+	var found_cards_discard: bool = false
+	for history_record_variant: Variant in _controller.event_scheduler.get_event_history():
+		# 当前历史事件摘要；record_event 使用 kind=record 并保存完整父事件 ID。
+		var event_data: Dictionary = (history_record_variant as Dictionary).get("event", {}) as Dictionary
+		if str(event_data.get("name", "")) == "judgeResult" and int(event_data.get("parent_id", -2)) == judgment_event_id:
+			found_judge_result = true
+		if str(event_data.get("name", "")) == "cardsDiscard" and int(event_data.get("parent_id", -2)) == judgment_event_id:
+			found_cards_discard = true
+	if not found_judge_result or not found_cards_discard:
+		return _fail("judgment_event_chain=%s/%s" % [found_judge_result, found_cards_discard])
+	return true
+
+
 ## 向指定玩家普通手牌区加入一张测试实体，并返回对象供后续区域断言。
 func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: int) -> CardInstance:
 	# 新测试实体牌；区域与所有者字段必须和玩家手牌数组保持一致。
@@ -309,6 +374,19 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_fail("unexpected_choice=%s:%s" % [_scenario, kind])
 		return
 	call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), selected_uids)
+
+
+## 捕获最新统一牌面表现事件；测试只读取深拷贝，不持有规则层可变对象。
+func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
+	_last_presentation = presentation_data.duplicate(true)
+
+
+## 捕获最新进入弃牌堆的真实区域移动；其他摸牌或获得动画不覆盖判定断言数据。
+func _on_card_transfer_requested(card_data: Dictionary, _source_player_id: int, source_zone: String, _target_player_id: int, target_zone: String) -> void:
+	if target_zone != "discard_pile":
+		return
+	_last_discard_transfer = card_data.duplicate(true)
+	_last_discard_transfer["source_zone"] = source_zone
 
 
 ## 提交已捕获请求的标准选牌动作；请求 ID 与选择者均沿用只读请求快照。

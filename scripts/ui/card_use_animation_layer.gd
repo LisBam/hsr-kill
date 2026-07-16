@@ -81,6 +81,12 @@ var _draw_transfer_stacks: Dictionary = {}
 ## 普通区域转移牌面实例 ID 到补间的映射；重新开局时清空所有权索引，旧协程依靠动画代次安全退出。
 var _transfer_tweens: Dictionary = {}
 
+## 使用、展示与判定牌实例 ID 到生命周期补间的映射；单一补间替代逐牌飞行和停留计时器，重开时可统一终止。
+var _card_lifecycle_tweens: Dictionary = {}
+
+## 已由牌面表现接管后续弃牌动画的实体 UID 集合；键为UID、值固定为true，纯展示牌不会进入该集合。
+var _discard_transfer_claims: Dictionary = {}
+
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
@@ -88,7 +94,8 @@ func _ready() -> void:
 
 
 ## 播放一次卡牌使用表现；传入节点始终是正式 CardView，所有位置使用本组件局部坐标。
-func play_card(card_view: CardView, start_position: Vector2, discard_position: Vector2, target_positions: Array[Vector2]) -> void:
+## owns_discard_transfer 仅供真实处理区牌和判定牌开启，仍留在手牌区的 showCards 表现必须保持false。
+func play_card(card_view: CardView, start_position: Vector2, discard_position: Vector2, target_positions: Array[Vector2], owns_discard_transfer: bool = false) -> void:
 	if card_view == null:
 		return
 	_presentation_sequence += 1
@@ -125,7 +132,11 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	presented_card.modulate = Color(1.0, 1.0, 1.0, 0.9)
 	_discard_center = discard_position
 	_active_cards.append(presented_card)
-	_card_sequences[presented_card.get_instance_id()] = sequence
+	# 当前表现牌实例 ID；移动、生命周期和清理映射统一使用该稳定整数。
+	var presented_card_instance_id: int = presented_card.get_instance_id()
+	_card_sequences[presented_card_instance_id] = sequence
+	if owns_discard_transfer and presented_card.card_uid >= 0:
+		_discard_transfer_claims[presented_card.card_uid] = true
 	# 飞牌补间；新牌从使用者位置进入弃牌队列，已有牌同步横向补位且全程保持水平不倾斜。
 	_start_card_motion(presented_card, _queue_card_position(_active_cards.size() - 1), card_flight_duration)
 	# 飞牌外观补间；与可被队列重排替换的位置补间分离，确保缩放和透明度不会被补位操作中断。
@@ -136,14 +147,11 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	appearance_tween.tween_property(presented_card, "modulate", Color.WHITE, card_flight_duration)
 	_reflow_active_cards(card_flight_duration, presented_card)
 	# 飞行等待计时器；队列重排可能替换位置补间，独立计时可保证该牌仍会进入后续停留与淡出流程。
-	await get_tree().create_timer(card_flight_duration).timeout
-	if not is_instance_valid(presented_card) or not _active_cards.has(presented_card):
-		return
-	await get_tree().create_timer(card_hold_duration).timeout
-	if not is_instance_valid(presented_card) or not _active_cards.has(presented_card):
-		return
-	_fade_queue.append(presented_card)
-	_schedule_fade_drain()
+	# 当前改由一个生命周期补间覆盖飞行与停留，避免每张牌创建两个 SceneTreeTimer 和一个挂起协程。
+	var lifecycle_tween: Tween = create_tween()
+	lifecycle_tween.tween_interval(card_flight_duration + card_hold_duration)
+	lifecycle_tween.tween_callback(_queue_card_for_fade.bind(presented_card_instance_id, _presentation_generation))
+	_card_lifecycle_tweens[presented_card_instance_id] = lifecycle_tween
 
 
 ## 播放一次牌区转移表现；可选堆叠键让同一批摸牌依次飞入并保留全部牌面。
@@ -218,6 +226,14 @@ func has_active_card_uid(card_uid: int) -> bool:
 	return false
 
 
+## 消费一次由使用或判定表现接管的真实弃牌移动；返回true时调用方不得再创建第二张转移牌。
+func consume_discard_transfer_claim(card_uid: int) -> bool:
+	if not _discard_transfer_claims.has(card_uid):
+		return false
+	_discard_transfer_claims.erase(card_uid)
+	return true
+
+
 ## 立即清空全部飞牌、弃牌队列和目标线；重新开局时调用，避免上一局异步表现残留到新桌面。
 func clear_presentations() -> void:
 	_presentation_generation += 1
@@ -226,6 +242,11 @@ func clear_presentations() -> void:
 		var motion_tween: Tween = motion_tween_variant as Tween
 		if motion_tween != null and motion_tween.is_valid():
 			motion_tween.kill()
+	for lifecycle_tween_variant: Variant in _card_lifecycle_tweens.values():
+		# 当前仍存活的牌面生命周期补间；清场时终止，防止旧牌在新局继续进入淡出队列。
+		var lifecycle_tween: Tween = lifecycle_tween_variant as Tween
+		if lifecycle_tween != null and lifecycle_tween.is_valid():
+			lifecycle_tween.kill()
 	for active_card: CardView in _active_cards:
 		if active_card != null and is_instance_valid(active_card):
 			active_card.queue_free()
@@ -242,12 +263,27 @@ func clear_presentations() -> void:
 	_transfer_tweens.clear()
 	_fade_queue.clear()
 	_motion_tweens.clear()
+	_card_lifecycle_tweens.clear()
+	_discard_transfer_claims.clear()
 	_card_sequences.clear()
 	_line_presentations.clear()
 	_animated_card = null
 	_is_fade_worker_running = false
 	_is_fade_worker_scheduled = false
 	queue_redraw()
+
+
+## 在单一生命周期补间结束后把仍有效的牌加入淡出队列；动画代次不一致时直接丢弃旧回调。
+func _queue_card_for_fade(card_instance_id: int, presentation_generation: int) -> void:
+	_card_lifecycle_tweens.erase(card_instance_id)
+	if presentation_generation != _presentation_generation:
+		return
+	# 当前待淡出的正式牌面；实例已释放、已被清场或已提前移出活动队列时不再安排收尾。
+	var presented_card: CardView = instance_from_id(card_instance_id) as CardView
+	if presented_card == null or not is_instance_valid(presented_card) or not _active_cards.has(presented_card):
+		return
+	_fade_queue.append(presented_card)
+	_schedule_fade_drain()
 
 
 ## 顺序淡出所有已经完成停留的卡牌；队列只运行一个消费者，保证多张牌逐个消失。
@@ -415,7 +451,12 @@ func _remove_presented_card(card_view: CardView) -> void:
 		return
 	# 当前淡出卡牌实例 ID；作为全部动画索引的稳定清理键。
 	var card_instance_id: int = card_view.get_instance_id()
+	# 当前牌面生命周期补间；提前移除牌面时一并终止，防止完成回调重新把失效节点加入淡出队列。
+	var lifecycle_tween: Tween = _card_lifecycle_tweens.get(card_instance_id) as Tween
+	if lifecycle_tween != null and lifecycle_tween.is_valid():
+		lifecycle_tween.kill()
 	_active_cards.erase(card_view)
 	_motion_tweens.erase(card_instance_id)
+	_card_lifecycle_tweens.erase(card_instance_id)
 	_card_sequences.erase(card_instance_id)
 	card_view.queue_free()
