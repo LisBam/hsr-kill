@@ -67,7 +67,15 @@ func _run() -> void:
 	var recast_button: Button = main_instance.get_node("%RecastButton") as Button
 	# 已废弃存木牛按钮；木牛流马改由装备横条点击发动。
 	var wooden_ox_button: Button = main_instance.get_node("%WoodenOxButton") as Button
-	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible or wooden_ox_button.visible:
+	# 中央操作按钮行；确定与取消使用28像素间距，避免相反命令视觉粘连。
+	var action_row: HBoxContainer = main_instance.get_node("InteractionPanel/InteractionVBox/ActionRow") as HBoxContainer
+	# 回合结束普通样式；朱红背景必须与中央暖金操作按钮清晰区分。
+	var end_play_normal_style: StyleBoxFlat = end_play_button.get_theme_stylebox("normal") as StyleBoxFlat
+	# 确定按钮禁用样式；不可选择时固定为深灰，不沿用普通或悬停高亮。
+	var confirm_disabled_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
+	# 确定按钮普通样式；用于验证禁用状态具有明确亮度差。
+	var confirm_normal_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or end_play_normal_style.bg_color.r <= end_play_normal_style.bg_color.g * 1.5 or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible or wooden_ox_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
 	# 等高手牌与装备栏边界；二者高度都必须为157像素，装备栏右边界必须精确贴合手牌栏左边界。

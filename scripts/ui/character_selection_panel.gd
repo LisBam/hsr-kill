@@ -36,6 +36,7 @@ var _candidate_views: Dictionary = {}
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
+	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_confirm_selection)
 	visible = false
 

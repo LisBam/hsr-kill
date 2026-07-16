@@ -30,6 +30,18 @@ const JADE_PANEL_COLOR: Color = Color("172b27ed")
 ## 十周年风格的暖黑金属色；默认用于武将框、装备框与顶部信息框，运行时无需修改。
 const METAL_PANEL_COLOR: Color = Color("211b18f2")
 
+## 可用主操作按钮的暖金背景色；用于确定、取消和选将确认等同级命令，运行时无需修改。
+const ACTION_BUTTON_COLOR: Color = Color("76521f")
+
+## 禁用操作按钮的深灰背景色；固定低亮度让不可提交状态不再沿用可交互高亮，运行时无需修改。
+const DISABLED_BUTTON_COLOR: Color = Color("242321")
+
+## 禁用操作按钮的低对比度边框色；与深灰背景共同表达不可点击状态，运行时无需修改。
+const DISABLED_BUTTON_BORDER_COLOR: Color = Color("514c45")
+
+## 禁用操作按钮的文字颜色；默认保留足够可读性但明显弱于可用按钮，运行时无需修改。
+const DISABLED_BUTTON_FONT_COLOR: Color = Color("77736c")
+
 ## 创建通用圆角面板样式；调用方可覆盖背景色、描边色、描边宽度与圆角半径。
 static func make_panel(background_color: Color = PANEL_COLOR, border_color: Color = GOLD_BORDER_COLOR, border_width: int = 1, corner_radius: int = 10) -> StyleBoxFlat:
 	# 新建的扁平样式；返回后由控件持有并可独立修改。
@@ -82,3 +94,18 @@ static func make_decade_button(background_color: Color, border_color: Color, emp
 	style.content_margin_top = 6.0
 	style.content_margin_bottom = 6.0
 	return style
+
+
+## 为规则交互按钮配置完整状态样式；禁用态使用唯一深灰样式，鼠标经过时不会切换到悬停或按下外观。
+static func apply_interaction_button(button: Button, background_color: Color = ACTION_BUTTON_COLOR, border_color: Color = ACCENT_COLOR, emphasized: bool = true) -> void:
+	if button == null:
+		return
+	button.add_theme_stylebox_override("normal", make_decade_button(background_color, border_color, emphasized))
+	button.add_theme_stylebox_override("hover", make_decade_button(background_color.lightened(0.10), border_color.lightened(0.08), emphasized))
+	button.add_theme_stylebox_override("pressed", make_decade_button(background_color.darkened(0.12), border_color, emphasized))
+	button.add_theme_stylebox_override("focus", make_decade_button(background_color, border_color, emphasized))
+	button.add_theme_stylebox_override("disabled", make_decade_button(DISABLED_BUTTON_COLOR, DISABLED_BUTTON_BORDER_COLOR, false))
+	button.add_theme_color_override("font_color", Color("f5e5b7"))
+	button.add_theme_color_override("font_hover_color", Color("fff2c8"))
+	button.add_theme_color_override("font_pressed_color", Color("ead49d"))
+	button.add_theme_color_override("font_disabled_color", DISABLED_BUTTON_FONT_COLOR)
