@@ -56,7 +56,7 @@ func _run() -> void:
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
 	# 中央交互面板；当前不是本地玩家行动时必须隐藏，且面板样式为空背景。
-	var interaction_panel: PanelContainer = main_instance.get_node("%InteractionPanel") as PanelContainer
+	var interaction_panel: PanelContainer = main_instance.get_node("InteractionPanel") as PanelContainer
 	# 中央确定按钮；与取消按钮使用相同主按钮规格。
 	var confirm_button: Button = main_instance.get_node("%UseButton") as Button
 	# 中央取消按钮；不再使用较小的次级按钮规格。

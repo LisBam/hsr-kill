@@ -8,6 +8,12 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 中央确定、取消与右侧回合结束按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
+const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
+
+## 回合结束按钮相对主场景右下锚点的固定矩形；位置留在手牌区右侧且不会进入中央 InteractionPanel。
+const END_PLAY_BUTTON_OFFSETS: Rect2 = Rect2(-505.0, -224.0, 146.0, 42.0)
+
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
@@ -79,7 +85,8 @@ var local_player_seat_label: Label
 @onready var selection_label: Label = %SelectionLabel
 
 ## 本地行动交互区；只在当前存在需要本地玩家确认、取消或选择的操作时显示，背景保持完全透明。
-@onready var interaction_panel: PanelContainer = %InteractionPanel
+## 该节点是主场景根节点的固定直属子节点，使用直接路径避免场景唯一名称元数据缺失时返回空实例。
+@onready var interaction_panel: PanelContainer = $InteractionPanel
 
 ## 交互步骤提示；根据当前选牌、选目标与规则预览展示下一步操作。
 @onready var interaction_guide_label: Label = %InteractionGuideLabel
@@ -166,6 +173,7 @@ var _equipment_action_material_uids: Array[int] = []
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
+	_configure_interaction_controls()
 	_create_local_player_card()
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
@@ -192,6 +200,37 @@ func _ready() -> void:
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
 	call_deferred("_start_default_match")
+
+
+## 统一操作区的运行时节点结构与视觉规格；即使旧场景缺少唯一名称或仍保留旧按钮层级，也能恢复当前交互布局。
+func _configure_interaction_controls() -> void:
+	interaction_panel.visible = false
+	interaction_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	interaction_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	# 中央取消按钮；与确定按钮使用相同尺寸与主按钮样式，避免旧场景资源保留次级按钮外观。
+	var cancel_button: Button = %CancelButton
+	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	# 确定按钮的当前普通状态样式；共享给取消按钮以保持主题切换后的同级视觉。
+	var primary_button_style: StyleBox = use_button.get_theme_stylebox("normal")
+	if primary_button_style != null:
+		cancel_button.add_theme_stylebox_override("normal", primary_button_style)
+	recast_button.visible = false
+	wooden_ox_button.visible = false
+	if end_play_button.get_parent() != self:
+		end_play_button.reparent(self)
+	end_play_button.visible = false
+	end_play_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	end_play_button.anchor_left = 1.0
+	end_play_button.anchor_top = 1.0
+	end_play_button.anchor_right = 1.0
+	end_play_button.anchor_bottom = 1.0
+	end_play_button.offset_left = END_PLAY_BUTTON_OFFSETS.position.x
+	end_play_button.offset_top = END_PLAY_BUTTON_OFFSETS.position.y
+	end_play_button.offset_right = END_PLAY_BUTTON_OFFSETS.end.x
+	end_play_button.offset_bottom = END_PLAY_BUTTON_OFFSETS.end.y
+	end_play_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	end_play_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 
 ## 启动检查器配置的默认对局；延迟到首帧保证自动加载数据已完成。
