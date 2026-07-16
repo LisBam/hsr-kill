@@ -1732,6 +1732,7 @@ func request_equipment_trigger(player_id: int, definition_id: String, title: Str
 	if equipment_card == null:
 		return false
 	# 装备候选；公开装备使用独立选择面板，选择只表达发动意愿，不会移动实体牌。
+	# 本地玩家是上述表现规则的例外：桌面会把本人 equipment 候选留在左侧装备区内联选择；规则层仍只提供相同公开候选且不感知具体界面。
 	var candidates: Array[Dictionary] = [_serialize_choice_candidate(equipment_card, player_id, "equipment", true, str(GameDatabase.get_card(definition_id).get("slot", "")))]
 	# 完整触发上下文；稳定装备 UID 防止响应等待期间换装后误发动新装备。
 	var trigger_context: Dictionary = context.duplicate(true)

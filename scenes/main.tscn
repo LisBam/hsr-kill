@@ -14,6 +14,7 @@
 [ext_resource type="Script" uid="uid://c3kqem0y4g3g6" path="res://scripts/ui/character_selection_panel.gd" id="14_character_selection"]
 [ext_resource type="Script" uid="uid://conllkvkmtemn" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
 [ext_resource type="PackedScene" path="res://scenes/components/card_selection_panel.tscn" id="16_card_selection"]
+[ext_resource type="Script" uid="uid://5ckjv0sds4ni" path="res://scripts/ui/equipment_stack_view.gd" id="17_equipment_stack"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -472,25 +473,11 @@ offset_bottom = -14.0
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
-[node name="EquipmentVBox" type="VBoxContainer" parent="EquipmentPanel" unique_id=436820528]
-layout_mode = 2
-
-[node name="EquipmentTitle" type="Label" parent="EquipmentPanel/EquipmentVBox" unique_id=410505475]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.93, 0.77, 0.43, 1)
-text = "装备区"
-horizontal_alignment = 1
-
-[node name="EquipmentLabel" type="Label" parent="EquipmentPanel/EquipmentVBox" unique_id=594619252]
+[node name="EquipmentStack" type="Control" parent="EquipmentPanel" unique_id=436820528]
 unique_name_in_owner = true
 layout_mode = 2
-size_flags_vertical = 3
-theme_override_colors/font_color = Color(0.86, 0.82, 0.73, 1)
-text = "武器　无
-防具　无
-坐骑　无
-宝物　无"
-vertical_alignment = 1
+mouse_filter = 2
+script = ExtResource("17_equipment_stack")
 
 [node name="HandPanel" type="PanelContainer" parent="." unique_id=469779120]
 layout_mode = 1

@@ -81,9 +81,23 @@ func _run() -> void:
 		_fail("local_random_seat_label:%s" % local_seat_label.text)
 		return
 	# 本地装备区文本；测试快照中的木牛流马存有3张牌，数量必须紧跟装备名显示。
-	var local_equipment_label: Label = main_instance.get_node("%EquipmentLabel") as Label
-	if not local_equipment_label.text.contains("木牛流马（3）"):
-		_fail("local_wooden_ox_count:%s" % local_equipment_label.text)
+	# 当前节点已重构为装备堆叠组件；保留原测试变量名，改为检查实际宝物横条及其完整说明。
+	var local_equipment_label: EquipmentStackView = main_instance.get_node("%EquipmentStack") as EquipmentStackView
+	# 本地武器横条；与宝物同时存在时必须位于五槽布局第一行，不能和宝物自动紧凑排列。
+	var local_weapon_row: Button = local_equipment_label.get_row("weapon")
+	# 本地宝物横条；木牛流马存有3张“粮”，数量必须紧跟装备名写入牌面说明。
+	var local_treasure_row: Button = local_equipment_label.get_row("treasure")
+	if local_weapon_row == null or local_treasure_row == null or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or local_treasure_row.position.y - local_weapon_row.position.y <= local_equipment_label.equipment_row_height * 2.0:
+		_fail("local_equipment_stack:%s" % local_equipment_label.tooltip_text)
+		return
+	# 本地武将牌装备条；武器与宝物之间应按五个固定槽位保留三段空位，不得因中间槽位未装备而相邻显示。
+	var local_player_card: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
+	# 武将牌当前装备条数组；测试快照只装备武器和宝物，因此应创建正好两条。
+	var local_player_equipment_rows: Array = local_player_card.get("_equipment_rows") as Array
+	# 武将牌当前装备槽位数组；顺序必须固定为武器在前、宝物在后。
+	var local_player_equipment_slots: Array = local_player_card.get("_equipment_row_slots") as Array
+	if local_player_equipment_rows.size() != 2 or local_player_equipment_slots != ["weapon", "treasure"] or (local_player_equipment_rows[1] as Control).position.y - (local_player_equipment_rows[0] as Control).position.y <= local_player_card.equipment_row_height * 2.0:
+		_fail("local_player_equipment_slots:%s" % [local_player_equipment_slots])
 		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
 	var opponent_seat_slots: Array[Control] = []
@@ -461,7 +475,10 @@ func _make_ten_player_snapshot() -> Dictionary:
 			"wooden_ox_storage_count":0,
 		}
 		if player_index == 4:
-			player_snapshot["equipment"] = {"treasure":{"uid":94001, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":4}}
+			player_snapshot["equipment"] = {
+				"weapon":{"uid":94000, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"equipment", "owner_id":4},
+				"treasure":{"uid":94001, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":4},
+			}
 			player_snapshot["wooden_ox_storage_count"] = 3
 		players.append(player_snapshot)
 	# 十人界面快照；准备阶段禁用出牌控件，但保留完整本地技能栏和全部公开角色信息。

@@ -51,7 +51,8 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 @onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
-@onready var equipment_label: Label = %EquipmentLabel
+## 当前节点已重构为独立装备堆叠组件；保留原变量名以避免破坏桌面脚本既有引用。
+@onready var equipment_label: EquipmentStackView = %EquipmentStack
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
@@ -172,6 +173,7 @@ func _ready() -> void:
 	recast_button.pressed.connect(_on_recast_pressed)
 	wooden_ox_button.pressed.connect(_on_wooden_ox_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
+	equipment_label.equipment_pressed.connect(_on_equipment_pressed)
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
@@ -333,7 +335,7 @@ func _render_players() -> void:
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
-	equipment_label.text = _format_local_equipment(local_player_snapshot)
+	_render_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)
 
 
@@ -515,6 +517,22 @@ func _format_local_equipment(player: Dictionary) -> String:
 	return "⚔ 武器　%s\n🛡 防具　%s\n♞ 进攻　%s\n♞ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
 
 
+## 把本地公开装备快照写入独立堆叠组件；候选与选中 UID 只来自当前本地内联请求。
+func _render_local_equipment(player: Dictionary) -> void:
+	# 本地装备字典；组件按固定槽位位置显示已有实体，空槽保留位置但不绘制“无”占位。
+	var equipment: Dictionary = player.get("equipment", {}) as Dictionary
+	# 当前内联候选 UID；组件会自行过滤不属于装备区的手牌或木牛“粮”实体。
+	var candidate_uids: Array[int] = []
+	# 当前内联已选 UID；装备横条与手牌共用同一临时选择顺序和数量约束。
+	var selected_uids: Array[int] = []
+	if not _inline_card_choice.is_empty():
+		candidate_uids = _get_inline_candidate_uids()
+		selected_uids = _inline_selected_card_uids.duplicate()
+	equipment_label.configure(equipment, int(player.get("wooden_ox_storage_count", 0)), candidate_uids, selected_uids)
+	# 原固定槽位文本继续作为组件的完整无障碍摘要；可见牌面由堆叠横条负责。
+	equipment_label.tooltip_text = _format_local_equipment(player)
+
+
 ## 按装备槽位返回当前名称模式下的牌名；空槽位统一返回“无”。
 func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 	if not equipment.has(slot):
@@ -553,6 +571,13 @@ func _on_card_pressed(card_uid: int) -> void:
 				_selected_target_ids.assign([_auto_locked_target_id])
 	error_label.text = ""
 	_refresh_selection_text()
+
+
+## 选择或取消本地装备区中的候选实体；装备与手牌共用统一内联请求和确认按钮。
+func _on_equipment_pressed(card_uid: int) -> void:
+	if _inline_card_choice.is_empty():
+		return
+	_toggle_inline_card_choice(card_uid)
 
 
 ## 按点击顺序选择或取消一名目标；最多保留三个目标以支持方天画戟。
@@ -731,7 +756,7 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	character_selection_panel.bind_snapshot(selection_snapshot)
 
 
-## 显示属于本地玩家的统一选牌请求；本人手牌候选使用桌面内联交互，其他区域继续使用独立窗口。
+## 显示属于本地玩家的统一选牌请求；本人手牌与装备候选使用桌面内联交互，其他区域继续使用独立窗口。
 func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
 		return
@@ -743,12 +768,14 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_selected_card_uid = -1
 		_selected_target_ids.clear()
 		_auto_locked_target_id = -1
+		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 		_render_local_hand()
 		_refresh_selection_text()
 		return
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
 	_modal_choice_request_id = int(choice_data.get("request_id", -1))
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
 	_refresh_selection_text()
 	card_selection_panel.show_request(choice_data)
@@ -770,19 +797,19 @@ func _on_card_choice_cancelled(request_id: int) -> void:
 	_on_card_choice_submitted(request_id, [])
 
 
-## 判断选择请求是否能完全在本地手牌区完成；空候选的可取消响应也使用内联取消按钮。
+## 判断选择请求是否能完全在本地手牌区或装备区完成；空候选的可取消响应也使用内联取消按钮。
 func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))
 	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
-		# 当前候选快照；区域与所有者共同决定其是否已经显示在本地手牌容器中。
+		# 当前候选快照；区域与所有者共同决定其是否已经显示在本地手牌或装备组件中。
 		var candidate: Dictionary = candidate_variant as Dictionary
-		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox"]:
+		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox", "equipment"]:
 			return false
 	return true
 
 
-## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌灰显并仅允许取消。
+## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。
 func _get_inline_candidate_uids() -> Array[int]:
 	# 候选 UID 集合；保持规则请求顺序并防御性去重。
 	var result: Array[int] = []
@@ -843,6 +870,7 @@ func _submit_inline_card_choice(selected_card_uids: Array[int]) -> void:
 	if int(_inline_card_choice.get("request_id", -2)) == request_id:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
 	_refresh_selection_text()
 
@@ -1190,6 +1218,8 @@ func _refresh_component_states() -> void:
 		# 当前选中状态；内联多选使用 UID 数组，普通出牌仍使用单一实体 UID。
 		var card_selected: bool = _inline_selected_card_uids.has(card_uid) if not _inline_card_choice.is_empty() else card_uid == _selected_card_uid
 		(_card_views[card_uid] as CardView).set_selected_state(card_selected)
+	# 本地装备堆叠组件；与手牌同步候选位移和选中描边，不创建第二套选择状态。
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	# 合法目标 ID 数组；没有选牌时为空，角色卡保持普通状态。
 	# 单目标牌已有选择时仍补充空选择预览中的候选，以支持直接切换目标。
 	var legal_target_ids: Array[int] = _get_selectable_target_ids()
