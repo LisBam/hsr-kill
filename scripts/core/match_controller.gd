@@ -1035,7 +1035,7 @@ func describe_card(card: CardInstance) -> String:
 
 
 ## 为指定玩家摸若干牌；牌堆不足时自动将弃牌堆洗回，无法继续时提前停止。
-func draw_cards(player_id: int, count: int, announce: bool = true) -> void:
+func draw(player_id: int, count: int, announce: bool = true) -> void:
 	if state == null or state.game_over:
 		return
 	# 摸牌玩家状态；不存在或死亡玩家不会获得牌。
@@ -2434,7 +2434,7 @@ func _finish_character_selection() -> void:
 	_install_all_character_skills()
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
 	for player: PlayerState in state.players:
-		draw_cards(player.player_id, 4, false)
+		draw(player.player_id, 4, false)
 	_record_runtime_event("gameDraw", "draw", {"cards_per_player":4, "player_count":state.players.size()})
 	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.lord_player_id})
 	# 身份确认后重新旋转物理座次；主公固定为一号位，后续数组顺序就是顺时针座次。
@@ -2581,7 +2581,7 @@ func _continue_turn_after_judgment(player_id: int) -> void:
 	state.phase_index = 2
 	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, _current_turn_event_id)
 	if not bool(player.skipped_phases.get("draw", false)):
-		draw_cards(player_id, 2)
+		draw(player_id, 2)
 	else:
 		add_log("%s跳过摸牌阶段。" % player.display_name)
 	if state.game_over:
@@ -3478,7 +3478,7 @@ func _execute_recast(actor_id: int, card_uid: int) -> bool:
 	actor.take_hand_card(card.uid)
 	_move_to_discard(card)
 	add_log("%s重铸了%s。" % [actor.display_name, GameSettings.resolve_card_name(definition)])
-	draw_cards(actor_id, 1)
+	draw(actor_id, 1)
 	return true
 
 
@@ -3812,7 +3812,7 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	# 身份规则返回的奖惩类型；控制器负责实际摸牌与弃牌移动。
 	var reward: String = identity_rules.get_death_reward(killer, victim)
 	if reward == "draw_three" and killer != null and killer.alive:
-		draw_cards(killer.player_id, 3)
+		draw(killer.player_id, 3)
 	elif reward == "lord_penalty" and killer != null and killer.alive:
 		while not killer.hand.is_empty():
 			_move_to_discard(killer.hand.pop_back())

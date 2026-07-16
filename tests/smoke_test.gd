@@ -35,6 +35,11 @@ func _run() -> void:
 		printerr("SMOKE_FAIL data_validation: %s" % "；".join(validation_errors))
 		get_tree().quit(1)
 		return
+	# 内容源码文件名格式；小写字母、数字与下划线可以组合，横线和大写字母仍必须被拒绝。
+	if not GameDatabase._is_lowercase_pinyin_filename("sha_fire_2") or GameDatabase._is_lowercase_pinyin_filename("sha-fire") or GameDatabase._is_lowercase_pinyin_filename("Sha"):
+		printerr("SMOKE_FAIL content_filename_validation")
+		get_tree().quit(1)
+		return
 	# 默认完整牌堆实体牌数量；官方规则集3.0身份局牌表包含【银月枪】与【木牛流马】，合计162张。
 	var deck_count: int = GameDatabase.get_deck_cards("standard_162").size()
 	if deck_count != 162:

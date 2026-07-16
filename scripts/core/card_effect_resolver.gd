@@ -94,7 +94,7 @@ func resolve_draw_two(card: CardInstance, actor_id: int, target_ids: Array[int])
 	for target_id: int in target_ids:
 		if _should_skip_trick_target(card, actor_id, target_id):
 			continue
-		host.draw_cards(target_id, 2)
+		host.draw(target_id, 2)
 	return _default_destination()
 
 
@@ -301,7 +301,7 @@ func continue_cixiong_trigger(context: Dictionary, activated: bool) -> void:
 		return
 	if activated:
 		if target.hand.is_empty():
-			host.draw_cards(actor_id, 1)
+			host.draw(actor_id, 1)
 		else:
 			# 目标手牌候选；只能选择普通手牌，木牛“粮”和装备不属于此弃牌选项。
 			var candidates: Array[Dictionary] = host.get_hand_candidates(target_id, target_id)
@@ -327,7 +327,7 @@ func continue_cixiong_discard(context: Dictionary, selected_uids: Array[int]) ->
 	# 目标实际弃置数量；候选只有普通手牌，数量为1才视为接受弃牌选项。
 	var discarded_count: int = host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
 	if discarded_count != 1:
-		host.draw_cards(int(context.get("actor_id", -1)), 1)
+		host.draw(int(context.get("actor_id", -1)), 1)
 	_continue_slash_after_cixiong(card, int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), bool(context.get("ignore_armor", false)))
 
 

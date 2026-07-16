@@ -255,22 +255,24 @@ func _list_gd_scripts(directory_path: String) -> Array[String]:
 	var result: Array[String] = []
 	for file_name: String in file_names:
 		if file_name.get_extension() == "gd":
-			# 当前源码文件基础名；规范要求只使用连续小写英文字母表示中文拼音。
+			# 当前源码文件基础名；规范允许小写拼音、数字和下划线组合，禁止空格、横线、中文与大写字母。
 			var base_name: String = file_name.get_basename()
 			if not _is_lowercase_pinyin_filename(base_name):
-				validation_errors.append("内容源码文件必须使用连续小写拼音命名：%s/%s" % [directory_path, file_name])
+				validation_errors.append("内容源码文件只能使用小写字母、数字和下划线命名：%s/%s" % [directory_path, file_name])
 			result.append("%s/%s" % [directory_path, file_name])
 	return result
 
 
-## 校验文件名是否仅由 a 至 z 的连续小写字母组成；语义拼音正确性由代码评审保证。
+## 校验文件名是否仅由 a 至 z、0 至 9 和下划线组成；拼音语义与数字后缀用途由代码评审保证。
 func _is_lowercase_pinyin_filename(base_name: String) -> bool:
 	if base_name.is_empty():
 		return false
 	for character_index: int in range(base_name.length()):
-		# 当前 Unicode 码点；ASCII 小写字母范围为97至122，任何数字、下划线、横线或中文都会失败。
+		# 当前 Unicode 码点；ASCII 小写字母为97至122、数字为48至57、下划线为95。
 		var codepoint: int = base_name.unicode_at(character_index)
-		if codepoint < 97 or codepoint > 122:
+		# 当前字符是否合法；三种允许范围以外的空格、横线、中文和大写字母都会失败。
+		var is_allowed_character: bool = codepoint >= 97 and codepoint <= 122 or codepoint >= 48 and codepoint <= 57 or codepoint == 95
+		if not is_allowed_character:
 			return false
 	return true
 
