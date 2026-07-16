@@ -4,7 +4,6 @@
 [ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
-[ext_resource type="Script" path="res://scripts/ui/health_frame_view.gd" id="5_health_frame"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -92,22 +91,6 @@ corner_radius_top_left = 14
 corner_radius_top_right = 14
 corner_radius_bottom_right = 14
 corner_radius_bottom_left = 14
-
-[sub_resource type="StyleBoxFlat" id="StyleHealthFrame"]
-content_margin_left = 1.0
-content_margin_top = 1.0
-content_margin_right = 1.0
-content_margin_bottom = 1.0
-bg_color = Color(0.0352941, 0.054902, 0.0431373, 0.72)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.776471, 0.623529, 0.309804, 0.82)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
 
 [sub_resource type="StyleBoxFlat" id="StylePlayerCardBack"]
 bg_color = Color(0.0823529, 0.121569, 0.137255, 1)
@@ -249,12 +232,28 @@ vertical_alignment = 1
 [node name="HealthFrame" type="Control" parent="." unique_id=23280875]
 unique_name_in_owner = true
 z_index = 4
+layout_mode = 3
+anchors_preset = 0
 offset_left = 123.35
 offset_top = 142.0
 offset_right = 147.35
 offset_bottom = 196.0
 mouse_filter = 2
-script = ExtResource("5_health_frame")
+
+[node name="Background" type="Polygon2D" parent="HealthFrame" unique_id=1967474850]
+unique_name_in_owner = true
+color = Color(0.0901961, 0.145098, 0.113725, 1)
+polygon = PackedVector2Array(0, 5, 24, 0, 24, 48, 23.5, 50.3, 21.7, 52.2, 19, 54, 0, 54)
+
+[node name="Border" type="Line2D" parent="HealthFrame" unique_id=304912383]
+unique_name_in_owner = true
+points = PackedVector2Array(0, 5, 24, 0, 24, 48, 23.5, 50.3, 21.7, 52.2, 19, 54, 0, 54, 0, 5)
+width = 1.5
+default_color = Color(0.776471, 0.623529, 0.309804, 1)
+joint_mode = 1
+begin_cap_mode = 2
+end_cap_mode = 2
+antialiased = true
 
 [node name="HealthPips" type="VBoxContainer" parent="HealthFrame" unique_id=929087411]
 unique_name_in_owner = true

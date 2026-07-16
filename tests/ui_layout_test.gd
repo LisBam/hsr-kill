@@ -78,8 +78,8 @@ func _run() -> void:
 	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or end_play_normal_style.bg_color.r <= end_play_normal_style.bg_color.g * 1.5 or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible or wooden_ox_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
-	# 等高手牌与装备栏边界；二者高度都必须为157像素，装备栏右边界必须精确贴合手牌栏左边界。
-	if not is_equal_approx(hand_panel.size.y, 157.0) or not is_equal_approx(equipment_panel.size.y, hand_panel.size.y) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x):
+	# 手牌栏额外保留18像素选中抬升空间；装备栏继续保持157像素，二者右左边界精确相接。
+	if not is_equal_approx(hand_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.size.y, 157.0) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x):
 		_fail("hand_equipment_alignment equipment=%s hand=%s" % [equipment_panel.get_rect(), hand_panel.get_rect()])
 		return
 	# 底部技能栏；右侧区域必须完整位于本地武将牌左侧并保持可见。
