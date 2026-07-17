@@ -30,6 +30,27 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 已领取牌底部武将名标签矩形；固定贴合111×148像素牌面的下沿，不改变牌位尺寸或换行结果。
 const TAKEN_CARD_LABEL_RECT: Rect2 = Rect2(4.0, 118.0, 103.0, 26.0)
 
+## 五谷丰登公共展示每行固定牌数；默认4张，更多牌自动进入下一行且不改变固定牌位顺序。
+const PUBLIC_CARD_COLUMNS: int = 4
+
+## 公共展示正式牌面尺寸；与 CardView 的111×148像素规格一致，用于计算紧凑窗口宽高。
+const PUBLIC_CARD_SIZE: Vector2 = Vector2(111.0, 148.0)
+
+## 公共展示牌位的水平与垂直间距；默认8像素与普通选择牌列保持一致。
+const PUBLIC_CARD_GAP: float = 8.0
+
+## 公共展示窗口除牌阵外的标题、提示、按钮与边距预留高度；默认142像素保证三行牌仍完整可见。
+const PUBLIC_PANEL_CHROME_HEIGHT: float = 142.0
+
+## 公共展示窗口的最小宽度；默认360像素保证“五谷丰登”标题与当前选择者提示不会被过度压缩。
+const PUBLIC_PANEL_MIN_WIDTH: float = 360.0
+
+## 公共展示窗口牌阵两侧总留白；默认36像素只保留面板边距，不在右侧留下旧固定宽度的大块空白。
+const PUBLIC_PANEL_HORIZONTAL_PADDING: float = 36.0
+
+## 公共展示窗口允许的最大高度；默认620像素可完整容纳最多10人时的三行牌，运行时通常无需修改。
+@export_range(360.0, 680.0, 1.0) var public_panel_max_height: float = 620.0
+
 ## 当前请求只读快照；空字典表示面板已关闭。
 var _choice_request: Dictionary = {}
 
@@ -136,6 +157,7 @@ func show_request(choice_request: Dictionary) -> void:
 	_card_views.clear()
 	_selectable_card_uids.clear()
 	_clear_container(_zone_container)
+	_set_frame_size(Vector2(panel_max_width, panel_max_height))
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
 	_prompt_label.text = str(_choice_request.get("prompt", "请选择卡牌"))
 	# 按区域聚合候选；字典数组保持请求原始顺序，手牌牌背仍可逐张选择。
@@ -166,6 +188,17 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_card_views.clear()
 	_selectable_card_uids.clear()
 	_clear_container(_zone_container)
+	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
+	var display_slot_count: int = (_public_display.get("slots", []) as Array).size()
+	# 当前实际列数；不足4张时按真实牌数收紧，但保留最小标题宽度。
+	var column_count: int = mini(maxi(display_slot_count, 1), PUBLIC_CARD_COLUMNS)
+	# 当前实际行数；空展示保留1行最小窗口，正常五谷按4张一行向上取整。
+	var row_count: int = maxi(ceili(float(display_slot_count) / float(PUBLIC_CARD_COLUMNS)), 1)
+	# 当前公共牌阵宽度；四列时固定为468像素。
+	var public_cards_width: float = PUBLIC_CARD_SIZE.x * float(column_count) + PUBLIC_CARD_GAP * float(maxi(column_count - 1, 0))
+	# 当前公共牌阵高度；最多10名玩家时为3行共460像素。
+	var public_cards_height: float = PUBLIC_CARD_SIZE.y * float(row_count) + PUBLIC_CARD_GAP * float(maxi(row_count - 1, 0))
+	_set_frame_size(Vector2(maxf(PUBLIC_PANEL_MIN_WIDTH, public_cards_width + PUBLIC_PANEL_HORIZONTAL_PADDING), minf(public_panel_max_height, public_cards_height + PUBLIC_PANEL_CHROME_HEIGHT)))
 	_title_label.text = str(_public_display.get("title", "公共选牌"))
 	_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
 	# 当前本地可选候选；只取有效 UID，公共牌位仍由完整 slots 数组决定固定顺序。
@@ -224,21 +257,13 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 func _add_public_card_row(display_slots: Array) -> void:
 	if display_slots.is_empty():
 		return
-	# 公共展示分区；固定只使用一组可换行牌列，牌位顺序与五谷最初亮牌顺序完全一致。
-	var section: VBoxContainer = VBoxContainer.new()
-	section.add_theme_constant_override("separation", 6)
-	_zone_container.add_child(section)
-	# 公共展示区标题；与普通一次性选择窗口使用相同区域命名。
-	var zone_label: Label = Label.new()
-	zone_label.text = "展示区"
-	zone_label.add_theme_color_override("font_color", Color("9ed3c3"))
-	zone_label.add_theme_font_size_override("font_size", 16)
-	section.add_child(zone_label)
-	# 固定牌位容器；窗口变窄时只换行，不会删除已领取牌或压缩后续牌位。
-	var card_row: HFlowContainer = HFlowContainer.new()
-	card_row.add_theme_constant_override("h_separation", 8)
-	card_row.add_theme_constant_override("v_separation", 8)
-	section.add_child(card_row)
+	# 固定四列牌阵；每行严格4张，已领取牌只改变虚影与标签，不删除或补位。
+	var card_row: GridContainer = GridContainer.new()
+	card_row.columns = PUBLIC_CARD_COLUMNS
+	card_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	card_row.add_theme_constant_override("h_separation", int(PUBLIC_CARD_GAP))
+	card_row.add_theme_constant_override("v_separation", int(PUBLIC_CARD_GAP))
+	_zone_container.add_child(card_row)
 	for slot_variant: Variant in display_slots:
 		# 当前固定牌位；牌面来自最初公开快照，领取者只改变虚影和底部标签。
 		var display_slot: Dictionary = slot_variant as Dictionary
@@ -256,7 +281,7 @@ func _add_public_card_row(display_slots: Array) -> void:
 
 
 ## 创建一个正式卡牌牌位；可选牌连接输入，只读牌保留完整亮度，已领取牌叠加复制虚影与武将名。
-func _add_card_slot(card_row: HFlowContainer, candidate: Dictionary, selectable: bool, taken: bool, taken_by_character_name: String) -> void:
+func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool, taken: bool, taken_by_character_name: String) -> void:
 	# 固定牌位包装器；尺寸始终等于正式111×148像素牌面，领取标签覆盖牌底而不改变换行计算。
 	var wrapper: Control = Control.new()
 	wrapper.custom_minimum_size = Vector2(111.0, 148.0)
@@ -338,6 +363,14 @@ func _on_confirm_pressed() -> void:
 ## 发出空选择作为明确放弃；组件不自行关闭，以提交成功后的状态为准。
 func _on_cancel_pressed() -> void:
 	choice_cancelled.emit(int(_choice_request.get("request_id", -1)))
+
+
+## 调整居中选择框尺寸并同步左上位置；普通请求与公共展示共用同一节点，不重建遮罩或按钮。
+func _set_frame_size(frame_size: Vector2) -> void:
+	if _frame == null:
+		return
+	_frame.position = -frame_size * 0.5
+	_frame.size = frame_size
 
 
 ## 删除动态区域节点；重建请求时防止旧牌面和信号继续留在树中。

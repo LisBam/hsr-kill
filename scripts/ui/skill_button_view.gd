@@ -7,7 +7,8 @@ extends Button
 signal skill_requested(skill_id: String)
 
 ## 技能按钮最小宽度；默认118像素可容纳四字技能名与状态，运行时通常无需修改。
-@export_range(92.0, 220.0, 1.0) var button_width: float = 118.0
+## 当前牌桌只显示技能名前两个字，因此默认宽度收紧为62像素；该参数只改变按钮命中与排版尺寸，不影响技能规则。
+@export_range(48.0, 220.0, 1.0) var button_width: float = 62.0
 
 ## 技能按钮最小高度；默认44像素形成接近无名杀的紧凑技能控制条，运行时通常无需修改。
 @export_range(36.0, 80.0, 1.0) var button_height: float = 44.0
@@ -43,16 +44,15 @@ func configure(definition: Dictionary, available: bool = false) -> void:
 	skill_description = str(definition.get("description", "暂无技能说明。"))
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
-	# 状态文本；已接入技能显示“可发动”，预留技能明确标注“预留”。
 	# 技能触发类型；sample_only 表示仅保留数据接口，其他值代表规则代码已经接入。
 	var trigger_type: String = str(definition.get("trigger", "sample_only"))
 	# 技能是否配置主动按钮；false 的正式技能按被动技能展示，不错误标记为预留。
 	var ui_enabled: bool = bool(definition.get("ui_enabled", false))
-	# 状态文本；主动技能区分当前可发动与不可发动，被动技能和样例技能使用独立标签。
-	var state_text: String = "预留" if trigger_type == "sample_only" else (("可发动" if is_skill_available else "不可发动") if ui_enabled else "被动")
+	# 技能按钮短名称；固定截取前两个字符，完整名称继续保留在工具提示中供长期查阅。
+	var short_skill_name: String = skill_name.substr(0, mini(2, skill_name.length()))
 	# 工具提示状态；完整说明当前技能属于预留、被动、可发动或暂不满足条件。
 	var tooltip_status: String = "界面已预留，规则尚未接入" if trigger_type == "sample_only" else (("当前可发动" if is_skill_available else "当前不满足发动条件") if ui_enabled else "被动技能已接入规则")
-	text = "%s  ·  %s" % [skill_name, state_text]
+	text = short_skill_name
 	tooltip_text = "【%s】\n%s\n\n状态：%s" % [skill_name, skill_description, tooltip_status]
 	_refresh_visual_state()
 

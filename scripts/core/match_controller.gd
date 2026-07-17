@@ -2180,7 +2180,10 @@ func _create_players(player_count: int) -> void:
 	_shuffle_array(identities)
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
-		var player: PlayerState = PlayerState.new(index, "玩家%d" % (index + 1))
+		# 内置 AI 名称带有明确前缀，真实玩家保持“玩家X”；选将完成旋转座次后会按最终座次再次统一刷新。
+		var default_player_name: String = "玩家%d" % (index + 1) if index == local_human_player_id else "[AI]玩家%d" % (index + 1)
+		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
+		var player: PlayerState = PlayerState.new(index, default_player_name)
 		# 当前座次身份；直接读取已完整洗牌的身份池，主公可以出现在任意座次。
 		player.identity = identities[index]
 		player.identity_revealed = player.identity == "lord"
@@ -2327,7 +2330,9 @@ func _reorder_players_from_lord() -> void:
 		state.players = reordered_players
 	# 玩家显示编号属于当前对局座次，不属于稳定 player_id；旋转完成后统一刷新，日志与牌面名称保持一致。
 	for seat_index: int in range(state.players.size()):
-		state.players[seat_index].display_name = "玩家%d" % (seat_index + 1)
+		# 当前座次玩家；AI 控制权决定显示名前缀，网络或本地真实玩家不添加 AI 标记。
+		var seated_player: PlayerState = state.players[seat_index]
+		seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
 
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
@@ -3159,6 +3164,10 @@ func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -
 		return
 	# 当前目标 ID；-1表示五谷、装备或延时锦囊等整牌内容。
 	var target_id: int = int(event.context.get("target_id", -1))
+	if target_id < 0 and bool(card_use_context.get("content_complete", false)):
+		# 整牌异步效果已经由恢复回调完成；content 事件恢复时只读取最终区域，禁止再次执行亮牌、选择或其他一次性效果。
+		event.result = {"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(), "destination":str(card_use_context.get("destination", "discard"))}
+		return
 	# 本次内容返回的最终区域；pending 表示子事件必须等待现有恢复入口提交结果。
 	var destination: String = "discard"
 	if target_id >= 0 and _active_card_resolutions.has(card_uid):

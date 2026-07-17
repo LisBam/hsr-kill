@@ -24,11 +24,23 @@ const LORD_CHARACTER_AREA_PATH: NodePath = NodePath("SelectionFrame/LordCharacte
 ## 主公牌标题节点的组件内相对路径；仅在主公牌面可见时同步显示。
 const LORD_CHARACTER_LABEL_PATH: NodePath = NodePath("SelectionFrame/LordCharacterLabel")
 
+## 主公牌与候选牌之间竖向分隔线的组件内相对路径；没有公开主公时保持隐藏且不占候选区域。
+const LORD_DIVIDER_PATH: NodePath = NodePath("SelectionFrame/LordDivider")
+
 ## 选将确认按钮的组件内相对路径；按钮只提交稳定武将 ID。
 const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterButton")
 
 ## 候选武将牌之间的水平间距；默认18像素，在1280×720界面中可完整容纳五张148.35像素牌。
 @export_range(0.0, 48.0, 1.0) var candidate_gap: float = 18.0
+
+## 候选武将悬停时的放大倍数；默认1.08提供清晰反馈且不会明显遮挡相邻牌，运行时无需动态修改。
+@export_range(1.0, 1.25, 0.01) var candidate_hover_scale: float = 1.08
+
+## 候选武将悬停放大与恢复的过渡时长；默认0.14秒兼顾响应速度与缩放可见性，运行时无需动态修改。
+@export_range(0.0, 0.5, 0.01) var candidate_hover_transition_seconds: float = 0.14
+
+## 已公开主公武将牌的显示缩放；默认0.78使其弱于可选候选并保留分隔层级，运行时无需动态修改。
+@export_range(0.5, 1.0, 0.01) var lord_character_scale: float = 0.78
 
 ## 选将标题；根据主公先选、其他玩家同时选和等待公开三个状态显示明确说明。
 @onready var _title_label: Label = get_node_or_null(TITLE_LABEL_PATH) as Label
@@ -45,6 +57,9 @@ const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterB
 ## 主公武将牌标题；仅在主公已经亮将时显示，用于说明左侧只读牌面归属。
 @onready var _lord_character_label: Label = get_node_or_null(LORD_CHARACTER_LABEL_PATH) as Label
 
+## 主公牌与候选牌之间的竖向分隔线；只在主公武将已经公开时显示。
+@onready var _lord_divider: ColorRect = get_node_or_null(LORD_DIVIDER_PATH) as ColorRect
+
 ## 选将确认按钮；只有已临时选中候选且规则快照允许选择时才可用。
 @onready var _confirm_button: Button = get_node_or_null(CONFIRM_BUTTON_PATH) as Button
 
@@ -59,6 +74,21 @@ var _candidate_views: Dictionary = {}
 
 ## 当前左侧主公武将牌视图；主公尚未确认或选将界面关闭时为 null。
 var _lord_character_view: PlayerTargetView
+
+## 候选武将 ID 到未缩放基础位置的映射；悬停补间始终相对该位置居中放大并恢复。
+var _candidate_base_positions: Dictionary = {}
+
+## 候选武将 ID 到当前缩放补间的映射；重复进入或离开时停止旧补间，避免多个动画同时写入同一节点。
+var _candidate_hover_tweens: Dictionary = {}
+
+## 候选区域存在主公时的原始左边界；从场景保存几何读取，避免脚本重复硬编码布局坐标。
+var _candidate_area_with_lord_left: float = 0.0
+
+## 候选区域不存在主公时的左边界；与主公只读区域左边缘对齐，使候选直接占用空出的空间。
+var _candidate_area_without_lord_left: float = 0.0
+
+## 候选区域固定右边界；切换主公占位时只改变左边界，不影响确认按钮或选将框宽度。
+var _candidate_area_right: float = 0.0
 
 ## 必需场景节点是否已经完整绑定；为 false 时组件保持隐藏并拒绝渲染，避免产生连续空实例报错。
 var _required_nodes_ready: bool = false
@@ -75,6 +105,10 @@ func _ready() -> void:
 	_status_label.visible = false
 	_lord_character_label.visible = false
 	_lord_character_area.visible = false
+	_lord_divider.visible = false
+	_candidate_area_with_lord_left = _candidate_area.position.x
+	_candidate_area_without_lord_left = _lord_character_area.position.x
+	_candidate_area_right = _candidate_area.position.x + _candidate_area.size.x
 	visible = false
 
 
@@ -126,6 +160,7 @@ func _render_lord_character() -> void:
 	# 已公开主公武将 ID；空字符串表示主公尚未完成选择，不创建占位牌。
 	var lord_character_id: String = str(_snapshot.get("lord_character_id", ""))
 	if lord_character_id.is_empty():
+		_update_lord_partition(false)
 		return
 	# 主公武将定义；用于左侧正式牌面的体力、势力、名称与插画。
 	var character_definition: Dictionary = GameDatabase.get_character(lord_character_id)
@@ -151,8 +186,11 @@ func _render_lord_character() -> void:
 	}
 	_lord_character_view.configure_snapshot(lord_snapshot, character_definition, false, faction_definition)
 	_lord_character_view.set_operation_state(false)
+	_lord_character_view.scale = Vector2.ONE * lord_character_scale
+	_lord_character_view.position = (_lord_character_area.size - _lord_character_view.card_size * lord_character_scale) * 0.5
 	_lord_character_area.visible = true
 	_lord_character_label.visible = true
+	_update_lord_partition(true)
 
 
 ## 使用正式 Node2D 武将牌横向排列本地候选；候选数量由快照决定，可从默认5张继续扩展。
@@ -193,6 +231,7 @@ func _render_candidates() -> void:
 		}
 		character_view.configure_snapshot(candidate_snapshot, character_definition, false, faction_definition)
 		character_view.pressed.connect(_select_candidate.bind(character_id))
+		character_view.hover_changed.connect(_on_candidate_hover_changed.bind(character_id))
 		_candidate_views[character_id] = character_view
 	# 第一张正式候选牌；其场景尺寸是全部候选布局的唯一牌宽来源，避免桌面脚本重复保存几何常量。
 	var first_character_view: PlayerTargetView = _candidate_views[str(candidate_ids[0])] as PlayerTargetView
@@ -207,7 +246,9 @@ func _render_candidates() -> void:
 		var character_id: String = str(candidate_ids[candidate_index])
 		# 当前候选武将牌；只更新布局位置，不重复配置数据或信号。
 		var character_view: PlayerTargetView = _candidate_views[character_id] as PlayerTargetView
-		character_view.position = Vector2(start_x + float(candidate_index) * (card_width + candidate_gap), 0.0)
+		var base_position: Vector2 = Vector2(start_x + float(candidate_index) * (card_width + candidate_gap), 0.0)
+		character_view.position = base_position
+		_candidate_base_positions[character_id] = base_position
 
 
 ## 更新本地临时选择和候选牌边框；规则状态在确认按钮点击前保持不变。
@@ -218,7 +259,7 @@ func _select_candidate(character_id: String) -> void:
 		var candidate_id: String = str(candidate_id_variant)
 		# 当前候选牌视图；映射只在本次候选重绘期间有效。
 		var candidate_view: PlayerTargetView = _candidate_views[candidate_id] as PlayerTargetView
-		candidate_view.set_target_state(true, candidate_id == _selected_character_id)
+		candidate_view.set_target_state(false, candidate_id == _selected_character_id)
 	_confirm_button.disabled = _selected_character_id.is_empty()
 	_confirm_button.text = "确认选择：%s" % GameDatabase.resolve_character_name(_selected_character_id)
 
@@ -233,6 +274,13 @@ func _confirm_selection() -> void:
 
 ## 清理所有动态候选牌；每次阶段快照重建，避免保留旧输入连接或高亮状态。
 func _clear_candidates() -> void:
+	for hover_tween_variant: Variant in _candidate_hover_tweens.values():
+		# 当前候选缩放补间；候选节点释放前先停止，避免结束回调继续访问旧节点。
+		var hover_tween: Tween = hover_tween_variant as Tween
+		if hover_tween != null and hover_tween.is_valid():
+			hover_tween.kill()
+	_candidate_hover_tweens.clear()
+	_candidate_base_positions.clear()
 	_candidate_views.clear()
 	for child: Node in _candidate_area.get_children():
 		_candidate_area.remove_child(child)
@@ -244,9 +292,58 @@ func _clear_lord_character() -> void:
 	_lord_character_view = null
 	_lord_character_area.visible = false
 	_lord_character_label.visible = false
+	_lord_divider.visible = false
 	for child: Node in _lord_character_area.get_children():
 		_lord_character_area.remove_child(child)
 		child.queue_free()
+
+
+## 根据主公是否已公开调整候选区域与分隔线；没有主公时候选直接从原主公区域左边缘开始排列。
+func _update_lord_partition(has_public_lord: bool) -> void:
+	if _candidate_area == null or _lord_divider == null:
+		return
+	# 当前候选区域左边界；有主公时保留只读牌与竖线，没有主公时直接占用全部横向空间。
+	var candidate_left: float = _candidate_area_with_lord_left if has_public_lord else _candidate_area_without_lord_left
+	_candidate_area.position.x = candidate_left
+	_candidate_area.size.x = maxf(_candidate_area_right - candidate_left, 0.0)
+	_lord_divider.visible = has_public_lord
+
+
+## 播放候选武将居中缩放；鼠标移走时使用相同时长平滑恢复基础位置与1倍尺寸。
+func _on_candidate_hover_changed(hovered: bool, character_id: String) -> void:
+	# 当前候选武将牌；快照重建后旧悬停信号可能迟到，无有效节点时直接忽略。
+	var character_view: PlayerTargetView = _candidate_views.get(character_id) as PlayerTargetView
+	if character_view == null or not is_instance_valid(character_view) or not _candidate_base_positions.has(character_id):
+		return
+	# 当前候选已有补间；新的进入或离开状态应从实时变换继续，不叠加第二个写入者。
+	var previous_tween: Tween = _candidate_hover_tweens.get(character_id) as Tween
+	if previous_tween != null and previous_tween.is_valid():
+		previous_tween.kill()
+	# 当前目标缩放；离开时固定恢复1倍，进入时使用检查器配置倍数。
+	var target_scale_value: float = candidate_hover_scale if hovered else 1.0
+	# 当前基础位置；缩放时向左上补偿半个尺寸差，使武将牌围绕视觉中心放大。
+	var base_position: Vector2 = _candidate_base_positions[character_id]
+	# 当前目标位置；Node2D 默认以左上角为原点，因此需要显式中心补偿。
+	var target_position: Vector2 = base_position - character_view.card_size * (target_scale_value - 1.0) * 0.5
+	character_view.z_index = 10 if hovered else 0
+	if candidate_hover_transition_seconds <= 0.0:
+		character_view.scale = Vector2.ONE * target_scale_value
+		character_view.position = target_position
+		return
+	# 当前悬停补间；位置与缩放并行使用二次缓出，进入和恢复都保持一致节奏。
+	var hover_tween: Tween = create_tween()
+	hover_tween.set_parallel(true)
+	hover_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	hover_tween.tween_property(character_view, "scale", Vector2.ONE * target_scale_value, candidate_hover_transition_seconds)
+	hover_tween.tween_property(character_view, "position", target_position, candidate_hover_transition_seconds)
+	_candidate_hover_tweens[character_id] = hover_tween
+	hover_tween.finished.connect(_on_candidate_hover_tween_finished.bind(character_id, hover_tween))
+
+
+## 清理已经完成的候选悬停补间索引；只有映射仍指向同一补间时才删除。
+func _on_candidate_hover_tween_finished(character_id: String, hover_tween: Tween) -> void:
+	if _candidate_hover_tweens.get(character_id) == hover_tween:
+		_candidate_hover_tweens.erase(character_id)
 
 
 ## 校验选将组件依赖的静态节点；缺失时只输出一条包含全部节点名的长期诊断信息。
@@ -263,6 +360,8 @@ func _validate_required_nodes() -> bool:
 		missing_node_names.append(str(LORD_CHARACTER_AREA_PATH))
 	if _lord_character_label == null:
 		missing_node_names.append(str(LORD_CHARACTER_LABEL_PATH))
+	if _lord_divider == null:
+		missing_node_names.append(str(LORD_DIVIDER_PATH))
 	if _confirm_button == null:
 		missing_node_names.append(str(CONFIRM_BUTTON_PATH))
 	if missing_node_names.is_empty():

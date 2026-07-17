@@ -36,6 +36,7 @@ signal equipment_pressed(card_uid: int)
 @export_range(18.0, 36.0, 1.0) var slot_icon_width: float = 24.0
 
 ## 固定装备槽顺序；前四槽始终参与位置计算，宝物槽只在实际装备宝物时加入布局。
+## 第一视角装备栏常态保留全部五槽，宝物空槽与其他空槽使用相同深色类型占位。
 const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
 
 ## 装备槽中文名称；横条直接标明槽位，空槽不创建占位文字但仍保留对应纵向位置。
@@ -72,7 +73,8 @@ var _selected_uids: Array[int] = []
 var _rows_by_slot: Dictionary = {}
 
 ## 当前参与纵向位置计算的槽位数量；默认4，装备宝物后变为5并压缩整组堆叠间距。
-var _visible_slot_count: int = 4
+## 第一视角装备栏固定显示五槽，因此该值常态为5并只保留为布局计算入口。
+var _visible_slot_count: int = 5
 
 ## 最近一次装备、候选、选中和名称模式的配置签名；默认-1表示从未配置，重复快照不会重建相同横条。
 var _configuration_signature: int = -1
@@ -98,7 +100,7 @@ func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Arra
 	_wooden_ox_count = maxi(wooden_ox_count, 0)
 	_candidate_uids = candidate_uids.duplicate()
 	_selected_uids = selected_uids.duplicate()
-	_visible_slot_count = 5 if _equipment.has("treasure") else 4
+	_visible_slot_count = EQUIPMENT_SLOT_ORDER.size()
 	_rebuild_rows()
 
 
@@ -141,8 +143,6 @@ func _rebuild_rows() -> void:
 	if not is_node_ready():
 		return
 	for slot: String in EQUIPMENT_SLOT_ORDER:
-		if slot == "treasure" and _visible_slot_count < 5:
-			continue
 		# 当前槽位是否实际装备实体牌；空槽继续创建深色背景与类型图标，但不接受选择输入。
 		var is_equipped: bool = _equipment.has(slot)
 		# 当前槽位装备快照；只读取稳定 UID、定义 ID、花色和点数生成牌面横条。

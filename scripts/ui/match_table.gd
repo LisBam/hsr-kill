@@ -26,6 +26,24 @@ const END_PLAY_BUTTON_COLOR: Color = Color("8f302d")
 ## 回合结束按钮的危险操作边框色；默认使用较亮朱红保证深色牌桌上的轮廓可见，运行时无需修改。
 const END_PLAY_BUTTON_BORDER_COLOR: Color = Color("e06a61")
 
+## “不响应该锦囊”开启后的深灰背景色；只表达当前锦囊跳过无懈询问，不改变按钮尺寸或其他规则状态。
+const SUPPRESSED_TRICK_BUTTON_COLOR: Color = Color("292826")
+
+## “不响应该锦囊”开启后的低亮度边框色；与普通朱红回合结束按钮保持明确区分。
+const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
+
+## 技能区相对主场景右边缘的固定右边界；与右下本地武将牌保留27.35像素间隔。
+const LOCAL_SKILL_RIGHT_OFFSET: float = -191.7
+
+## 技能区相对主场景底边的固定下边界；与本地武将牌牌面底边对齐，不占用座次标签区域。
+const LOCAL_SKILL_BOTTOM_OFFSET: float = -26.0
+
+## 手牌区与最左侧技能按钮之间的水平间距；默认8像素保持两个交互区域相邻但不重叠。
+const HAND_SKILL_GAP: float = 8.0
+
+## 本地武将座位左边界相对主场景右边缘的偏移；无技能时手牌栏延伸到该边界左侧。
+const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
+
 ## 每秒包含的毫秒数；对局时长使用单调时钟换算，不受系统时间调整影响。
 const MILLISECONDS_PER_SECOND: int = 1000
 
@@ -93,8 +111,14 @@ var local_player_seat_label: Label
 ## 本地手牌可视滚动区域；获得牌动画以其右边缘作为入场起点，不使用可能超宽的内容容器边界。
 @onready var hand_scroll: ScrollContainer = $HandPanel/HandScroll
 
+## 本地手牌透明外层；技能数量变化时只调整右边界，不改变175像素固定高度。
+@onready var hand_panel: PanelContainer = $HandPanel
+
+## 本地技能透明外层；尺寸严格跟随当前一列或两列按钮，不绘制独立背景框。
+@onready var skill_bar: PanelContainer = $SkillBar
+
 ## 本地武将技能按钮容器；每次快照按武将配置重建，预留技能只展示说明不执行规则。
-@onready var skill_button_container: HFlowContainer = %SkillButtonContainer
+@onready var skill_button_container: SkillButtonGrid = %SkillButtonContainer
 
 ## 技能状态提示；展示技能说明、可用状态与尚未接入规则的提示。
 @onready var skill_status_label: Label = %SkillStatusLabel
@@ -205,11 +229,24 @@ var _active_equipment_uid: int = -1
 ## 当前装备主动交互中按点击顺序选择的普通手牌材料 UID；丈八固定需要2张，木牛固定需要1张。
 var _equipment_action_material_uids: Array[int] = []
 
+## 当前客户端为未知玩家身份保存的本地标注；键为稳定玩家 ID，值为忠臣、反贼或内奸身份 ID。
+var _identity_marks: Dictionary = {}
+
+## 身份标注弹出菜单当前对应的玩家 ID；默认-1表示没有等待选择的身份徽记。
+var _identity_mark_target_id: int = -1
+
+## 身份标注弹出菜单；只提供忠臣、反贼和内奸三个本地标记选项，不包含主公。
+var _identity_mark_menu: PopupMenu
+
+## 当前开启“不响应该锦囊”的群体锦囊实体 UID；默认-1表示未开启，牌离开处理区后自动清除。
+var _suppressed_group_trick_uid: int = -1
+
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
 	_configure_interaction_controls()
 	_create_local_player_card()
+	_create_identity_mark_menu()
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
@@ -272,6 +309,46 @@ func _configure_interaction_controls() -> void:
 	end_play_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 
+## 创建未知身份的本地标注菜单；菜单项只影响当前客户端武将牌徽记，不提交任何规则动作。
+func _create_identity_mark_menu() -> void:
+	_identity_mark_menu = PopupMenu.new()
+	_identity_mark_menu.name = "IdentityMarkMenu"
+	_identity_mark_menu.add_item("忠臣", 0)
+	_identity_mark_menu.add_item("反贼", 1)
+	_identity_mark_menu.add_item("内奸", 2)
+	_identity_mark_menu.id_pressed.connect(_on_identity_mark_selected)
+	add_child(_identity_mark_menu)
+
+
+## 打开指定未知玩家的身份标注菜单；真实身份已公开或目标为本地玩家时保持无操作。
+func _on_identity_badge_pressed(player_id: int) -> void:
+	if player_id == match_controller.local_human_player_id:
+		return
+	# 当前目标公开快照；只有 identity=hidden 时允许创建或修改本地推测。
+	var player: Dictionary = _get_player_snapshot(player_id)
+	if player.is_empty() or str(player.get("identity", "hidden")) != "hidden":
+		return
+	_identity_mark_target_id = player_id
+	_identity_mark_menu.position = Vector2i(get_viewport().get_mouse_position())
+	_identity_mark_menu.popup()
+
+
+## 保存身份菜单选择并立即刷新对应武将牌；菜单 ID 与身份字符串保持稳定一一映射。
+func _on_identity_mark_selected(item_id: int) -> void:
+	if _identity_mark_target_id < 0:
+		return
+	# 当前菜单项对应身份 ID；不存在的菜单项不会写入本地标注字典。
+	var identity_mark: String = {0:"loyalist", 1:"rebel", 2:"renegade"}.get(item_id, "")
+	if identity_mark.is_empty():
+		return
+	_identity_marks[_identity_mark_target_id] = identity_mark
+	# 当前目标武将牌；持久座位存在时只刷新身份徽记，不重建其他牌面节点。
+	var player_view: PlayerTargetView = _player_views.get(_identity_mark_target_id) as PlayerTargetView
+	if player_view != null and is_instance_valid(player_view):
+		player_view.set_identity_mark(identity_mark)
+	_identity_mark_target_id = -1
+
+
 ## 启动检查器配置的默认对局；延迟到首帧保证自动加载数据已完成。
 func _start_default_match() -> void:
 	log_view.clear()
@@ -288,6 +365,7 @@ func _create_local_player_card() -> void:
 	# 本地座次标签实例；只属于游戏内座位容器，文本会在收到玩家快照后写入。
 	local_player_seat_label = local_player_seat_slot.get_node("Seat") as Label
 	local_player_card.visible = true
+	local_player_card.set_public_equipment_visible(false)
 	local_player_seat_slot.z_index = 12
 	local_player_seat_slot.anchor_left = 1.0
 	local_player_seat_slot.anchor_top = 1.0
@@ -434,6 +512,7 @@ func _render_players() -> void:
 		if player_seat_slot_was_created:
 			player_button.pressed.connect(_on_persistent_target_pressed.bind(player_button))
 			player_button.card_dropped.connect(_on_card_dropped)
+			player_button.identity_pressed.connect(_on_identity_badge_pressed)
 		# 其他玩家独立座次标签；仅显示中文座次号，不属于武将牌自身节点树。
 		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
@@ -443,6 +522,11 @@ func _render_players() -> void:
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_button.set_operation_state(target_id == _current_operator_player_id)
+		# 当前公开身份；身份已经展示时清理旧本地标注，未知身份继续显示当前客户端的推测结果。
+		var public_identity: String = str(player.get("identity", "hidden"))
+		if public_identity != "hidden":
+			_identity_marks.erase(target_id)
+		player_button.set_identity_mark(str(_identity_marks.get(target_id, "")))
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
 		player_grid.move_child(player_seat_slot, seat_offset - 1)
 		next_player_views[target_id] = player_button
@@ -454,6 +538,7 @@ func _render_players() -> void:
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id)
+	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
 	_render_local_equipment(local_player_snapshot)
@@ -489,17 +574,18 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
 			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id)
 			(_skill_views[skill_id] as SkillButtonView).configure(skill_definition, skill_available)
+		_layout_local_skill_area(_skill_views.size())
 		return
 	_rendered_skill_character_id = local_character_id
 	_clear_container(skill_button_container)
 	_skill_views.clear()
-	skill_status_label.text = "点击技能查看说明"
+	skill_status_label.text = ""
 	# 本地武将定义；技能列表只保存稳定技能 ID。
 	var character: Dictionary = GameDatabase.get_character(local_character_id)
 	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
 	var skill_ids: Array = character.get("skills", []) as Array
 	if skill_ids.is_empty():
-		skill_status_label.text = "当前武将没有已配置技能"
+		_layout_local_skill_area(0)
 		return
 	for skill_id_variant: Variant in skill_ids:
 		# 当前技能 ID；用于查询元数据与绑定稳定点击回调。
@@ -516,6 +602,40 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button_container.add_child(skill_button)
 		_skill_views[skill_id] = skill_button
+	_layout_local_skill_area(skill_ids.size())
+
+
+## 按技能数量收紧透明技能区，并让手牌栏右边界延伸到第一或第二个技能按钮旁。
+func _layout_local_skill_area(skill_count: int) -> void:
+	# 当前有效技能数量；负数配置按0处理，避免生成反向尺寸。
+	var safe_skill_count: int = maxi(skill_count, 0)
+	if safe_skill_count == 0:
+		skill_bar.visible = false
+		hand_panel.offset_right = LOCAL_PLAYER_SEAT_LEFT_OFFSET - HAND_SKILL_GAP
+		return
+	# 当前首个技能按钮；动态按钮共用相同尺寸，缺失时回退组件默认62×44像素。
+	var first_skill_button: SkillButtonView
+	if not _skill_views.is_empty():
+		first_skill_button = _skill_views.values()[0] as SkillButtonView
+	# 当前单个技能按钮尺寸；直接读取组件暴露参数，使检查器调整后布局仍保持一致。
+	var button_size: Vector2 = Vector2(first_skill_button.button_width, first_skill_button.button_height) if first_skill_button != null else Vector2(62.0, 44.0)
+	# 当前实际列数；一个技能只占右侧一列，两个及以上固定占满两列。
+	var column_count: int = mini(safe_skill_count, skill_button_container.maximum_columns)
+	# 当前实际层数；第三个技能开始放到第二层并继续向上扩展。
+	var row_count: int = ceili(float(safe_skill_count) / float(maxi(skill_button_container.maximum_columns, 1)))
+	# 当前技能透明区域尺寸；只包含按钮和按钮间距，不额外保留背景内边距。
+	var skill_area_size: Vector2 = Vector2(
+		button_size.x * float(column_count) + skill_button_container.horizontal_gap * float(maxi(column_count - 1, 0)),
+		button_size.y * float(row_count) + skill_button_container.vertical_gap * float(maxi(row_count - 1, 0))
+	)
+	skill_bar.visible = true
+	skill_bar.offset_right = LOCAL_SKILL_RIGHT_OFFSET
+	skill_bar.offset_left = LOCAL_SKILL_RIGHT_OFFSET - skill_area_size.x
+	skill_bar.offset_bottom = LOCAL_SKILL_BOTTOM_OFFSET
+	skill_bar.offset_top = LOCAL_SKILL_BOTTOM_OFFSET - skill_area_size.y
+	# 手牌栏右边界紧贴当前最左技能列；一个技能时自然增长到第一按钮旁，两个及以上缩短到第二按钮旁。
+	hand_panel.offset_right = skill_bar.offset_left - HAND_SKILL_GAP
+	skill_button_container.queue_sort()
 
 
 ## 响应技能按钮请求；预留技能展示永久说明，可主动发动的技能通过统一 PlayerAction 进入规则核心。
@@ -1029,6 +1149,9 @@ func _on_recast_pressed() -> void:
 
 ## 提交结束出牌阶段动作。
 func _on_end_play_pressed() -> void:
+	if _has_group_trick_response_button_context():
+		_toggle_group_trick_suppression()
+		return
 	match_controller.submit_action(PlayerAction.new("end_play", match_controller.local_human_player_id))
 
 
@@ -1064,6 +1187,9 @@ func _on_restart_requested(player_count: int) -> void:
 	_match_finished_msec = -1
 	_last_rendered_duration_seconds = -1
 	_presented_discard_card_uids.clear()
+	_identity_marks.clear()
+	_identity_mark_target_id = -1
+	_suppressed_group_trick_uid = -1
 	match_controller.default_player_count = player_count
 	match_controller.start_match(player_count)
 
@@ -1091,6 +1217,11 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_modal_card_choice_request.clear()
 	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
 		_refresh_card_selection_panel()
+		return
+	# 当前群体锦囊已开启“不响应”时直接提交空选择；界面不创建询问栏，规则核心仍校验同一请求 ID 与可取消语义。
+	if _is_suppressed_group_trick_choice(choice_data):
+		call_deferred("_submit_suppressed_group_trick_choice", choice_data.duplicate(true))
+		_refresh_selection_text()
 		return
 	if _is_inline_hand_choice(choice_data):
 		_modal_choice_request_id = -1
@@ -1397,6 +1528,10 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
+	if card_uid == _suppressed_group_trick_uid and source_zone == "processing" and target_zone != "processing":
+		# 被抑制锦囊已经完成本次处理区生命周期；按钮恢复普通回合结束语义，下一次同名实体不会继承本地开关。
+		_suppressed_group_trick_uid = -1
+		_refresh_selection_text()
 	if target_zone == "discard_pile" and card_use_animation_layer.consume_discard_transfer_claim(card_uid):
 		return
 	if target_zone != "discard_pile":
@@ -1555,6 +1690,8 @@ func _on_action_rejected(message: String) -> void:
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
+	selection_label.visible = true
+	call_deferred("_refresh_group_trick_response_button")
 	# 本地是否处于普通出牌阶段；右侧回合结束按钮只在该阶段独立显示，不属于中央交互面板。
 	var can_act: bool = _can_local_player_act()
 	end_play_button.visible = can_act and _inline_card_choice.is_empty()
@@ -1657,9 +1794,9 @@ func _refresh_inline_choice_text() -> void:
 	var max_select: int = int(_inline_card_choice.get("max_select", 0))
 	# 确认所需最少数量；可取消请求的空选择必须走“取消”，避免空确认语义不清。
 	var minimum_confirm_count: int = maxi(min_select, 1)
-	# 请求标题；用于区分响应、弃牌和火攻展示等稳定规则语义。
-	var title: String = str(_inline_card_choice.get("title", "选择卡牌"))
-	selection_label.text = "%s｜已选择%d张｜需要%d至%d张" % [title, selected_count, minimum_confirm_count, max_select]
+	# 内联询问只保留具体规则提示与操作按钮；通用标题、已选数量和范围摘要不重复显示。
+	selection_label.text = ""
+	selection_label.visible = false
 	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择卡牌"))
 	interaction_panel.visible = true
 	use_button.text = "确定"
@@ -1668,6 +1805,77 @@ func _refresh_inline_choice_text() -> void:
 	%CancelButton.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
 	end_play_button.visible = false
 	_refresh_component_states()
+
+
+## 判断一条本地选择是否属于可切换“不响应”的群体锦囊无懈询问。
+func _is_group_trick_negation_choice(choice_data: Dictionary) -> bool:
+	# 当前请求上下文；只有控制器创建的 trick_negation 响应链具备本功能语义。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	if str(context.get("kind", "")) != "trick_negation":
+		return false
+	# 当前被响应锦囊定义；全体或全体其他角色目标模式视为群体锦囊。
+	var trick_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
+	return str(trick_definition.get("target_mode", "")) in ["all_players", "all_others"] and int(context.get("parent_card_uid", -1)) >= 0
+
+
+## 判断当前请求是否应按已开启状态自动提交空响应；实体 UID 保证同名下一张锦囊不会继承开关。
+func _is_suppressed_group_trick_choice(choice_data: Dictionary) -> bool:
+	if _suppressed_group_trick_uid < 0 or not _is_group_trick_negation_choice(choice_data):
+		return false
+	# 当前父锦囊实体 UID；必须与正在抑制的同一处理区实体完全一致。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	return int(context.get("parent_card_uid", -1)) == _suppressed_group_trick_uid
+
+
+## 返回右侧按钮当前是否承担群体锦囊响应开关；已开启期间即使暂时没有询问也保持可取消。
+func _has_group_trick_response_button_context() -> bool:
+	return _suppressed_group_trick_uid >= 0 or _is_group_trick_negation_choice(_inline_card_choice)
+
+
+## 切换本次群体锦囊的不响应状态；开启时同时放弃当前无懈询问，关闭时等待后续询问正常出现。
+func _toggle_group_trick_suppression() -> void:
+	if _suppressed_group_trick_uid >= 0:
+		_suppressed_group_trick_uid = -1
+		_refresh_selection_text()
+		return
+	if not _is_group_trick_negation_choice(_inline_card_choice):
+		return
+	# 当前无懈询问所属群体锦囊实体 UID；开关只持续到该实体离开处理区。
+	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	_suppressed_group_trick_uid = int(context.get("parent_card_uid", -1))
+	_refresh_group_trick_response_button()
+	# 开启后立即以空选择放弃当前询问；后续同一锦囊请求由自动提交入口继续跳过。
+	_submit_inline_card_choice([])
+
+
+## 为已经开启不响应的后续无懈请求提交空选择；提交前复核请求仍活动且仍属于同一锦囊。
+func _submit_suppressed_group_trick_choice(choice_data: Dictionary) -> void:
+	if not _is_suppressed_group_trick_choice(choice_data):
+		# 延迟提交执行前玩家可能已经取消开关；请求仍活动时重新进入正常渲染，避免留下不可见的待响应窗口。
+		if match_controller.has_pending_card_choice():
+			_on_card_choice_requested(choice_data)
+		return
+	# 自动放弃动作；仍经过控制器 request ID、响应者、数量和 allow_cancel 权威校验。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":int(choice_data.get("request_id", -1)), "selected_card_uids":[]}
+	match_controller.submit_action(action)
+
+
+## 根据当前群体锦囊响应状态复用右侧按钮；开启时使用深灰外观，关闭时保留朱红可切换外观。
+func _refresh_group_trick_response_button() -> void:
+	if not is_node_ready() or end_play_button == null:
+		return
+	if not _has_group_trick_response_button_context():
+		end_play_button.text = "回合结束"
+		BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
+		return
+	end_play_button.visible = true
+	end_play_button.disabled = false
+	end_play_button.text = "不响应该锦囊"
+	if _suppressed_group_trick_uid >= 0:
+		BattleUIStyle.apply_interaction_button(end_play_button, SUPPRESSED_TRICK_BUTTON_COLOR, SUPPRESSED_TRICK_BUTTON_BORDER_COLOR, false)
+	else:
+		BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
 
 
 ## 判断当前选中实体牌是否位于普通手牌区；木牛流马“粮”不属于可重铸来源。

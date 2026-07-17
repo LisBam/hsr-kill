@@ -9,6 +9,12 @@ signal pressed
 ## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
 signal card_dropped(card_uid: int, player_id: int)
 
+## 未知身份徽记被点击时发出的信号；桌面只保存本地标注，不把标注写回规则快照。
+signal identity_pressed(player_id: int)
+
+## 鼠标进入或离开武将牌时发出的信号；选将界面据此播放候选缩放，局内名称阴影由本组件自行处理。
+signal hover_changed(hovered: bool)
+
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
@@ -112,6 +118,15 @@ var _artwork_texture: Texture2D
 ## 是否显示仅属于正式对局的身份与手牌数标识；编辑器预览和选将候选默认关闭。
 var _match_overlays_visible: bool = false
 
+## 当前是否允许在武将牌中绘制公开装备横条；第一视角本地牌关闭，其他玩家与通用候选保持开启。
+var _public_equipment_visible: bool = true
+
+## 当前客户端为未知身份添加的本地标注；空字符串表示保持问号，不参与规则、AI、网络或回放。
+var _identity_mark: String = ""
+
+## 鼠标当前是否停留在武将牌输入区域；只用于控制玩家名称阴影可见性。
+var _is_hovered: bool = false
+
 ## 装备条目承载层；公开装备以参考图中的浅色横条从牌面下部向上叠放。
 @onready var _equipment_layer: Control = $EquipmentLayer
 
@@ -147,6 +162,12 @@ var _configuration_signature: int = -1
 ## 独立输入区域；覆盖整张武将牌并负责点击与卡牌拖放协议。
 @onready var _input_area: PlayerTargetInputArea = $InputArea
 
+## 武将牌上部的渐变黑色阴影；只在正式对局悬停时显示，不遮挡身份、体力或点击区域。
+@onready var _hover_name_shade: TextureRect = $HoverNameShade
+
+## 渐变阴影中的玩家显示名；名称来自公开玩家快照，不使用武将名代替。
+@onready var _hover_player_name_label: Label = $HoverNameShade/HoverPlayerName
+
 
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
@@ -154,8 +175,10 @@ func _ready() -> void:
 	_card_back.size = card_size
 	_input_area.size = card_size
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
-	_input_area.activated.connect(pressed.emit)
+	_input_area.activated.connect(_on_input_activated)
 	_input_area.card_dropped.connect(_on_input_card_dropped)
+	_input_area.mouse_entered.connect(_on_input_mouse_entered)
+	_input_area.mouse_exited.connect(_on_input_mouse_exited)
 	_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_decade_overlay()
@@ -212,6 +235,23 @@ func set_match_overlays_visible(visible_in_match: bool) -> void:
 		return
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
+	_refresh_hover_name_visibility()
+
+
+## 设置武将牌是否绘制公开装备横条；本地第一视角关闭后仍由左侧独立装备栏完整显示五个槽位。
+func set_public_equipment_visible(visible_on_card: bool) -> void:
+	if _public_equipment_visible == visible_on_card:
+		return
+	_public_equipment_visible = visible_on_card
+	if not is_node_ready():
+		return
+	_refresh_equipment_rows()
+
+
+## 写入当前客户端对未知身份的本地标注；身份公开时标注自动失效且不会覆盖真实身份。
+func set_identity_mark(identity_mark: String) -> void:
+	_identity_mark = identity_mark if identity_mark in ["loyalist", "rebel", "renegade"] else ""
+	_refresh_identity_badge()
 
 
 ## 更新合法与选中状态；已选目标始终优先显示金色边框。
@@ -229,6 +269,32 @@ func set_operation_state(current_operator: bool) -> void:
 		return
 	is_current_operator = current_operator
 	_refresh_visual_state()
+
+
+## 区分身份徽记点击与普通武将牌点击；只有正式对局中的未知身份允许打开本地标注菜单。
+func _on_input_activated(local_position: Vector2) -> void:
+	# 当前公开身份；hidden 表示该观察者尚未获得真实身份信息。
+	var identity: String = str(_player_snapshot.get("identity", "hidden"))
+	# 身份徽记局部矩形；直接读取场景节点几何，后续编辑器调整位置无需同步硬编码命中范围。
+	var identity_badge_rect: Rect2 = Rect2(_identity_badge_label.position, _identity_badge_label.size)
+	if _match_overlays_visible and identity == "hidden" and identity_badge_rect.has_point(local_position):
+		identity_pressed.emit(player_id)
+		return
+	pressed.emit()
+
+
+## 鼠标进入武将牌后显示玩家名称阴影，并把悬停状态转发给选将界面。
+func _on_input_mouse_entered() -> void:
+	_is_hovered = true
+	_refresh_hover_name_visibility()
+	hover_changed.emit(true)
+
+
+## 鼠标离开武将牌后隐藏玩家名称阴影，并通知选将界面恢复候选尺寸。
+func _on_input_mouse_exited() -> void:
+	_is_hovered = false
+	_refresh_hover_name_visibility()
+	hover_changed.emit(false)
 
 
 ## 转发独立输入区域的合法卡牌拖放结果，并补充当前稳定玩家 ID。
@@ -264,12 +330,8 @@ func _refresh_visual_state() -> void:
 		background_color = Color("292724")
 		border_color = Color("544f49")
 		border_width = 1
-	# 角色卡最终样式；操作角色额外使用青绿外发光，当前回合的金色边框仍由上述优先级单独表达。
+	# 角色卡最终样式；当前回合与操作状态只改变底色和边框，不绘制彩色外发光。
 	var player_style: StyleBoxFlat = _make_player_style(background_color, border_color, border_width)
-	if is_current_operator and is_interactable:
-		player_style.shadow_color = Color("72d8b5aa")
-		player_style.shadow_size = 14
-		player_style.shadow_offset = Vector2.ZERO
 	_card_body.add_theme_stylebox_override("panel", player_style)
 	_card_back.visible = is_face_down
 	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
@@ -328,6 +390,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	var safe_hp: int = clampi(hp, 0, max_hp)
 	_character_name_label.text = "\n".join(character_name.split(""))
 	_identity_badge_label.text = identity_text
+	_hover_player_name_label.text = str(_player_snapshot.get("display_name", "玩家"))
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
@@ -373,7 +436,8 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_hand_count_label.add_theme_stylebox_override("normal", hand_badge_style)
 	_refresh_health_pips(safe_hp, max_hp)
 	_refresh_equipment_rows()
-	_identity_badge_label.add_theme_color_override("font_color", BattleUIStyle.ACCENT_COLOR if identity != "hidden" else Color("d8c8a8"))
+	_refresh_identity_badge()
+	_refresh_hover_name_visibility()
 
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
@@ -444,6 +508,8 @@ func _refresh_equipment_rows() -> void:
 			equipment_row.queue_free()
 	_equipment_rows.clear()
 	_equipment_row_slots.clear()
+	if not _public_equipment_visible:
+		return
 	# 当前公开装备字典；快照已包含完整实体牌数据，可安全展示花色、点数和牌名。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
 	for slot: String in EQUIPMENT_SLOT_ORDER:
@@ -484,6 +550,27 @@ func _refresh_equipment_rows() -> void:
 		_equipment_rows.append(equipment_row)
 		_equipment_row_slots.append(slot)
 	_layout_equipment_rows()
+
+
+## 根据公开身份与本地标注刷新身份徽记；真实身份始终优先，本地标注只替换未知问号。
+func _refresh_identity_badge() -> void:
+	if not is_node_ready() or _identity_badge_label == null:
+		return
+	# 当前公开身份；非 hidden 时必须直接显示权威身份，禁止本地标注覆盖。
+	var identity: String = str(_player_snapshot.get("identity", "hidden"))
+	# 当前徽记文本；未知身份可使用本地忠、反、内标注，否则保持问号。
+	var identity_text: String = {"lord":"主", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(identity, {"loyalist":"忠", "rebel":"反", "renegade":"内"}.get(_identity_mark, "?"))
+	_identity_badge_label.text = identity_text
+	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
+	var identity_color: Color = BattleUIStyle.ACCENT_COLOR if identity != "hidden" else (Color("8fd6c2") if not _identity_mark.is_empty() else Color("d8c8a8"))
+	_identity_badge_label.add_theme_color_override("font_color", identity_color)
+
+
+## 同步玩家名称阴影可见性；选将候选不显示玩家名，正式对局悬停时才显示。
+func _refresh_hover_name_visibility() -> void:
+	if not is_node_ready() or _hover_name_shade == null:
+		return
+	_hover_name_shade.visible = _match_overlays_visible and _is_hovered
 
 
 ## 将花色 ID 转换为装备横条使用的符号；无花色牌使用空心菱形保持位置稳定。

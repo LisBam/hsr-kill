@@ -58,12 +58,14 @@ func _run() -> void:
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
 	var equipment_panel: Control = main_instance.get_node("%EquipmentPanel") as Control
 	# 参考图装备面板固定规格；透明外层只负责提供130×147像素的五槽布局区域。
-	# 当前装备面板与悬停手牌栏统一为157像素高，并横向延伸到手牌栏左边界。
-	if not equipment_panel.size.is_equal_approx(Vector2(150.0, 157.0)):
+	# 当前装备面板与手牌栏统一为175像素高，并横向延伸到手牌栏左边界。
+	if not equipment_panel.size.is_equal_approx(Vector2(150.0, 175.0)):
 		_fail("equipment_panel_size:%s" % equipment_panel.size)
 		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
+	# 手牌栏背景样式；当前只保留透明滚动容器，不绘制整块边框或底色。
+	var hand_panel_style: StyleBox = (hand_panel as PanelContainer).get_theme_stylebox("panel")
 	# 中央交互面板；当前不是本地玩家行动时必须隐藏，且面板样式为空背景。
 	var interaction_panel: PanelContainer = main_instance.get_node("InteractionPanel") as PanelContainer
 	# 中央确定按钮；与取消按钮使用相同主按钮规格。
@@ -86,12 +88,23 @@ func _run() -> void:
 	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or end_play_normal_style.bg_color.r <= end_play_normal_style.bg_color.g * 1.5 or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
-	# 手牌栏额外保留18像素选中抬升空间；装备栏继续保持157像素，二者右左边界精确相接。
-	if not is_equal_approx(hand_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.size.y, 157.0) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x):
+	# 手牌栏额外保留18像素选中抬升空间；装备栏与其同为175像素，二者右左边界精确相接且背景透明。
+	if not is_equal_approx(hand_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x) or not hand_panel_style is StyleBoxEmpty:
 		_fail("hand_equipment_alignment equipment=%s hand=%s" % [equipment_panel.get_rect(), hand_panel.get_rect()])
 		return
 	# 底部技能栏；右侧区域必须完整位于本地武将牌左侧并保持可见。
 	var skill_bar: Control = main_instance.get_node("SkillBar") as Control
+	# 技能状态兼容标签；正式技能区只显示按钮，因此该节点必须保持隐藏且不占布局。
+	var skill_status_label: Label = main_instance.get_node("%SkillStatusLabel") as Label
+	# 当前本地技能按钮映射；测试武将只有一个技能，手牌栏应增长到该按钮左侧。
+	var skill_views: Dictionary = main_instance.get("_skill_views") as Dictionary
+	# 当前唯一技能按钮；正文固定只显示技能名前两个字，不附加状态文字。
+	var first_skill_button: SkillButtonView
+	if not skill_views.is_empty():
+		first_skill_button = skill_views.values()[0] as SkillButtonView
+	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x):
+		_fail("skill_button_only_layout:%s/%s" % [skill_bar.get_rect(), first_skill_button.text if first_skill_button != null else "null"])
+		return
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
 	var local_player_seat_slot: Control = main_instance.get_node("LocalPlayerSeatSlot") as Control
 	for checked_control: Control in [menu_button, equipment_panel, hand_panel, skill_bar, local_player_seat_slot]:
@@ -130,20 +143,20 @@ func _run() -> void:
 	# 本地空防具横条；即使没有装备也必须显示参考图中的深色槽位和类型图标。
 	var local_empty_armor_row: Button = local_equipment_label.get_row("armor")
 	# 五槽固定节距；武器到宝物应跨越4个完整的27像素槽高与3像素间距。
-	# 当前五槽自适应高度；157像素扣除四段间距后平均分配，每槽应为29像素。
+	# 当前五槽自适应高度；175像素扣除四段间距后平均分配。
 	var local_adaptive_equipment_row_height: float = (local_equipment_label.size.y - local_equipment_label.equipment_row_gap * 4.0) / 5.0
 	# 当前五槽节距；等于29像素自适应槽高加3像素间距。
 	var local_equipment_row_pitch: float = local_adaptive_equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
 	if local_weapon_row == null or local_treasure_row == null or local_empty_armor_row == null or not is_equal_approx(local_weapon_row.size.y, local_adaptive_equipment_row_height) or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
 		_fail("local_equipment_stack:%s" % local_equipment_label.tooltip_text)
 		return
-	# 本地武将牌装备条；武器与宝物之间应按五个固定槽位保留三段空位，不得因中间槽位未装备而相邻显示。
+	# 本地武将牌装备条；第一视角只通过左侧装备栏查看装备，武将牌自身不得重复显示横条。
 	var local_player_card: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
-	# 武将牌当前装备条数组；测试快照只装备武器和宝物，因此应创建正好两条。
+	# 武将牌当前装备条数组；第一视角关闭公开装备绘制后应保持为空。
 	var local_player_equipment_rows: Array = local_player_card.get("_equipment_rows") as Array
-	# 武将牌当前装备槽位数组；顺序必须固定为武器在前、宝物在后。
+	# 武将牌当前装备槽位数组；关闭绘制后不保留任何视觉槽位索引。
 	var local_player_equipment_slots: Array = local_player_card.get("_equipment_row_slots") as Array
-	if local_player_equipment_rows.size() != 2 or local_player_equipment_slots != ["weapon", "treasure"] or (local_player_equipment_rows[1] as Control).position.y - (local_player_equipment_rows[0] as Control).position.y <= local_player_card.equipment_row_height * 2.0:
+	if not local_player_equipment_rows.is_empty() or not local_player_equipment_slots.is_empty():
 		_fail("local_player_equipment_slots:%s" % [local_player_equipment_slots])
 		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
@@ -169,10 +182,42 @@ func _run() -> void:
 	var current_operator_view: PlayerTargetView = player_views.get(5) as PlayerTargetView
 	# 当前回合角色最终面板样式；用于验证亮金边框颜色与3像素宽度。
 	var current_turn_style: StyleBoxFlat = (current_turn_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
-	# 当前操作角色最终面板样式；用于验证14像素青绿色外发光。
+	# 当前操作角色最终面板样式；用于验证只提亮底色和边框，不再绘制青绿色外发光。
 	var current_operator_style: StyleBoxFlat = (current_operator_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
-	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.ACCENT_COLOR or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_size != 14:
+	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.ACCENT_COLOR or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_color == Color("72d8b5aa"):
 		_fail("player_operation_highlight")
+		return
+	# 玩家名悬停阴影；正式对局武将牌进入悬停后应在上部显示公开玩家名，离开后立即隐藏。
+	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
+	# 玩家名标签；测试目标为六号位，因此显示名固定为“玩家6”。
+	var hover_player_name: Label = current_operator_view.get_node("HoverNameShade/HoverPlayerName") as Label
+	current_operator_view.call("_on_input_mouse_entered")
+	if not hover_name_shade.visible or hover_player_name.text != "玩家6":
+		_fail("player_name_hover:%s/%s" % [hover_name_shade.visible, hover_player_name.text])
+		return
+	current_operator_view.call("_on_input_mouse_exited")
+	if hover_name_shade.visible:
+		_fail("player_name_hover_exit")
+		return
+	# 未知身份本地标注；选择反贼后只改变当前客户端徽记，不修改快照中的 hidden 身份。
+	main_instance.call("_on_identity_badge_pressed", 5)
+	main_instance.call("_on_identity_mark_selected", 1)
+	# 已标注身份徽记；用于验证本地推测文本与标注字典同步。
+	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
+	if marked_identity_badge.text != "反" or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
+		_fail("identity_local_mark:%s" % marked_identity_badge.text)
+		return
+	# 真实身份公开优先级；即使随后写入另一项本地标注，徽记仍必须显示权威忠臣身份。
+	var revealed_player_snapshot: Dictionary = (((_make_ten_player_snapshot().get("players", []) as Array)[5]) as Dictionary).duplicate(true)
+	revealed_player_snapshot["identity"] = "loyalist"
+	# 公开身份测试武将定义；沿用快照武将 ID 获取正式牌面元数据。
+	var revealed_character_definition: Dictionary = GameDatabase.get_character(str(revealed_player_snapshot.get("character_id", "")))
+	# 公开身份测试势力定义；保持配置签名与正式渲染入口一致。
+	var revealed_faction_definition: Dictionary = GameDatabase.get_faction(str(revealed_character_definition.get("faction", "")))
+	current_operator_view.configure_snapshot(revealed_player_snapshot, revealed_character_definition, false, revealed_faction_definition)
+	current_operator_view.set_identity_mark("renegade")
+	if marked_identity_badge.text != "忠":
+		_fail("identity_reveal_priority:%s" % marked_identity_badge.text)
 		return
 	# 首次渲染的玩家 ID 到座位节点实例 ID；重复快照后用于确认没有整桌释放重建。
 	var opponent_instance_ids: Dictionary = {}
@@ -186,6 +231,58 @@ func _run() -> void:
 			_fail("opponent_view_recreated:%s" % player_id_variant)
 			return
 	player_views = repeated_player_views
+	# 正式选将组件；无主公快照时候选区域应直接占用左侧空位，不保留不可见主公占位。
+	var character_selection_panel: CharacterSelectionPanel = main_instance.get_node("%CharacterSelectionPanel") as CharacterSelectionPanel
+	# 无主公选将快照；两张候选足以验证左对齐、悬停缩放与点击高亮语义。
+	var selection_snapshot_without_lord: Dictionary = {
+		"phase":CharacterSelectionService.PHASE_OTHERS,
+		"can_select":true,
+		"local_candidates":["trailblazer", "march_7th"],
+		"lord_character_id":"",
+		"lord_player_id":0,
+	}
+	character_selection_panel.bind_snapshot(selection_snapshot_without_lord)
+	await get_tree().process_frame
+	# 候选区域与主公区域；无主公时两者左边界应完全一致，分隔线保持隐藏。
+	var candidate_area: Control = character_selection_panel.get_node("SelectionFrame/CharacterCandidateArea") as Control
+	# 主公只读区域；无主公时其左边界成为候选区新的左对齐基准。
+	var lord_area: Control = character_selection_panel.get_node("SelectionFrame/LordCharacterArea") as Control
+	# 主公竖向分隔线；无主公时隐藏，有主公时显示。
+	var lord_divider: ColorRect = character_selection_panel.get_node("SelectionFrame/LordDivider") as ColorRect
+	if not is_equal_approx(candidate_area.position.x, lord_area.position.x) or lord_divider.visible:
+		_fail("selection_without_lord_partition:%s/%s" % [candidate_area.position.x, lord_divider.visible])
+		return
+	# 当前候选视图；第一张用于悬停缩放，第二张用于确认未选牌不会获得合法目标发光。
+	var candidate_views: Dictionary = character_selection_panel.get("_candidate_views") as Dictionary
+	# 第一张候选武将牌；承担悬停缩放与点击选中断言。
+	var first_candidate: PlayerTargetView = candidate_views.get("trailblazer") as PlayerTargetView
+	# 第二张候选武将牌；承担未选状态不发光断言。
+	var second_candidate: PlayerTargetView = candidate_views.get("march_7th") as PlayerTargetView
+	character_selection_panel.call("_on_candidate_hover_changed", true, "trailblazer")
+	await get_tree().create_timer(0.18).timeout
+	if first_candidate.scale.x <= 1.0:
+		_fail("selection_hover_scale:%s" % first_candidate.scale)
+		return
+	character_selection_panel.call("_on_candidate_hover_changed", false, "trailblazer")
+	await get_tree().create_timer(0.18).timeout
+	if not first_candidate.scale.is_equal_approx(Vector2.ONE):
+		_fail("selection_hover_restore:%s" % first_candidate.scale)
+		return
+	character_selection_panel.call("_select_candidate", "trailblazer")
+	if not first_candidate.is_target_selected or first_candidate.is_legal_target or second_candidate.is_target_selected or second_candidate.is_legal_target:
+		_fail("selection_click_glow_scope")
+		return
+	# 有主公选将快照；主公牌缩小并显示竖线，候选区域恢复到分隔线右侧。
+	var selection_snapshot_with_lord: Dictionary = selection_snapshot_without_lord.duplicate(true)
+	selection_snapshot_with_lord["lord_character_id"] = "welt"
+	character_selection_panel.bind_snapshot(selection_snapshot_with_lord)
+	await get_tree().process_frame
+	# 缩小后的主公武将牌；缩放值必须读取组件公开配置并保持只读。
+	var lord_character_view: PlayerTargetView = character_selection_panel.get("_lord_character_view") as PlayerTargetView
+	if lord_character_view == null or not is_equal_approx(lord_character_view.scale.x, character_selection_panel.lord_character_scale) or not lord_divider.visible or candidate_area.position.x <= lord_area.position.x:
+		_fail("selection_lord_partition")
+		return
+	character_selection_panel.close()
 	# 已确认的对手座位屏幕矩形；逐个加入并检查相邻牌面不会重叠。
 	var occupied_opponent_rects: Array[Rect2] = []
 	for opponent_seat_slot: Control in opponent_seat_slots:

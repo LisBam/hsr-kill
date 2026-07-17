@@ -4,7 +4,8 @@ extends Control
 ## 武将牌输入区域。该组件只处理点击与卡牌拖放，不负责武将牌渲染或目标规则判断。
 
 ## 鼠标左键激活武将牌时发出的信号；武将牌根节点会携带玩家 ID 向桌面转发。
-signal activated
+## 参数为武将牌局部坐标，根组件可据此区分身份徽记与普通牌面点击。
+signal activated(local_position: Vector2)
 
 ## 合法卡牌拖放完成时发出的信号；参数为稳定实体牌 UID。
 signal card_dropped(card_uid: int)
@@ -37,7 +38,7 @@ func _gui_input(event: InputEvent) -> void:
 		# 当前鼠标按键事件；只响应左键释放，避免一次点击产生重复目标切换。
 		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and not mouse_event.pressed:
-			activated.emit()
+			activated.emit(mouse_event.position)
 			accept_event()
 
 
