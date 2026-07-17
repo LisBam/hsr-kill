@@ -34,10 +34,10 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	for target_id: int in target_ids:
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
-		# 当前目标状态；每次生效都在横置与重置之间切换一次。
+		# 当前目标状态；每次生效都通过统一连环端口在横置与重置之间切换一次。
 		var target: PlayerState = resolver.state.get_player(target_id)
 		if target == null:
 			continue
-		target.chained = not target.chained
+		resolver.host.toggle_player_linked(target_id, actor_id, card.definition_id)
 		resolver.host.add_log("%s%s。" % [target.display_name, "进入连环状态" if target.chained else "解除连环状态"])
 	return resolver.default_destination()

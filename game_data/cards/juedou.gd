@@ -34,6 +34,7 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	for target_id: int in target_ids:
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
+		resolver.host.emit_rule_timing("juedouBegin", actor_id, actor_id, target_id, {"parent_card_uid":card.uid, "card_id":card.definition_id})
 		_continue_exchange(resolver, card.uid, target_id, actor_id)
 	return resolver.default_destination()
 
@@ -44,6 +45,7 @@ func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: in
 	var exchange_count: int = 0
 	while exchange_count < 100 and not resolver.is_resolution_stopped():
 		exchange_count += 1
+		resolver.host.emit_rule_timing("juedou", responder_id, opponent_id, responder_id, {"parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "exchange_count":exchange_count})
 		# 当前轮响应上下文；成功响应后交换双方，放弃时由对手造成伤害。
 		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "complete_parent_target_after_response":true}
 		# 当前轮实体【杀】；为空表示放弃或没有合法响应牌。
@@ -52,6 +54,7 @@ func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: in
 			return
 		if response_card == null:
 			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+			resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":parent_card_uid, "loser_id":responder_id})
 			return
 		# 上一轮响应者；交换后由其对手成为下一轮响应者。
 		var previous_responder_id: int = responder_id
@@ -69,6 +72,7 @@ func continue_response(resolver: Object, context: Dictionary, response_card: Car
 	var opponent_id: int = int(context.get("opponent_id", -1))
 	if response_card == null:
 		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+		resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":int(context.get("parent_card_uid", -1)), "loser_id":responder_id})
 	else:
 		_continue_exchange(resolver, int(context.get("parent_card_uid", -1)), opponent_id, responder_id)
 	return true

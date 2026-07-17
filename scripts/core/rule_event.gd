@@ -20,6 +20,9 @@ var parent_id: int = -1
 ## 事件名称；建议采用 phase_before、card_targeted、damage_before 等稳定语义。
 var name: String = ""
 
+## 事件主要执行者或承受者玩家 ID；player 角色触发器只在持有者与该值一致时执行，无对应角色时为-1。
+var player_id: int = -1
+
 ## 事件发起者玩家 ID；无来源事件使用 -1。
 var source_id: int = -1
 
@@ -46,8 +49,9 @@ var termination_reason: String = ""
 
 
 ## 创建规则事件并复制上下文，避免外部字典在事件结束后继续影响结果。
-func _init(event_name: String = "", source: int = -1, target: int = -1, context: Dictionary = {}) -> void:
+func _init(event_name: String = "", source: int = -1, target: int = -1, context: Dictionary = {}, player: int = -1) -> void:
 	name = event_name
+	player_id = player if player >= 0 else source
 	source_id = source
 	target_id = target
 	data = context.duplicate(true)
@@ -94,6 +98,7 @@ func to_dict() -> Dictionary:
 		"event_id": event_id,
 		"parent_id": parent_id,
 		"name": name,
+		"player_id": player_id,
 		"source_id": source_id,
 		"target_id": target_id,
 		"data": data.duplicate(true),

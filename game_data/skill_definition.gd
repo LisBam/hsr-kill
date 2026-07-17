@@ -44,6 +44,41 @@ func get_owner_skill_player() -> SkillPlayer:
 	return get_skill_player(owner_player_id)
 
 
+## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
+func get_active_entries() -> Array[String]:
+	# 标准主动入口结果；只保留目录登记名称并去重，避免错误元数据进入选择协议。
+	var result: Array[String] = []
+	# 元数据中的 enable 字段；允许单个字符串或字符串数组，便于简单与复合主动技能共用。
+	var configured_entries: Variant = _metadata.get("enable", [])
+	if configured_entries is String:
+		var configured_entry: String = str(configured_entries)
+		if RuleTimingCatalog.has_active_entry(configured_entry):
+			result.append(configured_entry)
+	elif configured_entries is Array:
+		for entry_variant: Variant in configured_entries as Array:
+			# 当前主动入口；无效值直接忽略并由数据库或内容测试报告元数据问题。
+			var entry_name: String = str(entry_variant)
+			if RuleTimingCatalog.has_active_entry(entry_name) and not result.has(entry_name):
+				result.append(entry_name)
+	if result.is_empty() and bool(_metadata.get("ui_enabled", false)):
+		result.append("phaseUse")
+	return result
+
+
+## 返回技能是否允许在指定主动入口发动；被动技能和 sample_only 技能默认不支持任何入口。
+func supports_active_entry(entry_name: String) -> bool:
+	return get_active_entries().has(entry_name)
+
+
+## 以技能持有者身份注册标准时机；role 决定匹配 player、source、target 或 global，成功返回稳定注册 ID。
+func subscribe_timing(event_name: String, callback: Callable, role: String = "player", priority: int = 0, first_do: bool = false, last_do: bool = false, condition: Callable = Callable()) -> int:
+	if host == null or host.get("trigger_manager") == null or not RuleTimingCatalog.has_timing(event_name):
+		return -1
+	# 当前对局高级触发器；由技能基类统一传入 self 与 owner_player_id，具体技能无需复制解绑字段。
+	var manager: TriggerManager = host.get("trigger_manager") as TriggerManager
+	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, condition)
+
+
 ## 安装被动或触发技能；具体技能可在此订阅 host.event_bus 或 host.trigger_manager。
 func install() -> void:
 	pass

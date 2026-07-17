@@ -35,6 +35,7 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	for target_id: int in target_ids:
 		if resolver.is_resolution_stopped():
 			break
+		resolver.host.emit_rule_timing("taoBegin", actor_id, actor_id, target_id, {"card_uid":card.uid, "card_id":card.definition_id})
 		resolver.host.recover(actor_id, target_id, 1, card.definition_id)
 	return resolver.default_destination()
 
@@ -51,6 +52,7 @@ func resolve_dying_response(match_host: Object, responder_id: int, dying_player_
 	var target: PlayerState = match_host.state.get_player(dying_player_id)
 	if responder == null or target == null or not responder.alive or not target.alive:
 		return false
+	match_host.emit_rule_timing("taoBegin", responder_id, responder_id, dying_player_id, {"card_id":get_id(), "dying_response":true})
 	match_host.recover(responder_id, dying_player_id, 1, get_id())
 	match_host.add_log("%s对%s使用【桃】。" % [responder.display_name, target.display_name])
 	return true

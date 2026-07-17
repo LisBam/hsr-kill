@@ -113,6 +113,7 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 		var armor_definition: CardDefinition = host.get_equipment_definition(target.player_id, "armor")
 		if armor_definition != null and armor_definition.blocks_slash(card, str(context.get("nature", "normal"))):
 			host.add_log("%s的防具令此【杀】无效。" % target.display_name)
+			host.emit_rule_timing("shaCancelled", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
 			return
 	if host.has_method("is_card_target_direct_hit") and bool(host.is_card_target_direct_hit(int(context.get("parent_card_uid", -1)), target.player_id)):
 		_finish_slash_response(context, false)
@@ -153,8 +154,10 @@ func continue_after_weapon_dodged(context: Dictionary) -> void:
 	if target == null or not target.alive or resolver.is_resolution_stopped():
 		return
 	if bool(context.get("dodged", false)):
+		host.emit_rule_timing("shaMiss", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
 		host.add_log("%s打出【闪】抵消了【杀】。" % target.display_name)
 		return
+	host.emit_rule_timing("shaHit", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
 	# 当前武器定义；寒冰剑等替代伤害效果在自身文件接管。
 	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
 	if weapon_definition != null and weapon_definition.on_slash_before_damage(self, context):
@@ -167,6 +170,10 @@ func continue_slash_damage(context: Dictionary) -> void:
 	# 当前【杀】实体；伤害记录使用实体自身定义 ID。
 	var card: CardInstance = _find_card(int(context.get("slash_card_uid", -1)))
 	if card == null or resolver.is_resolution_stopped():
+		return
+	# 【杀】造成伤害前专属时机；取消或中立化时本次目标不进入通用伤害流程。
+	var damage_timing: RuleEvent = host.emit_rule_timing("shaDamage", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), int(context.get("target_id", -1)), context)
+	if damage_timing != null and (damage_timing.cancelled or damage_timing.neutralized):
 		return
 	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)))
 	if resolver.is_resolution_stopped():

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/rule_timing_test.gd" id="1_rule_timing"]
+
+[node name="RuleTimingTest" type="Node"]
+script = ExtResource("1_rule_timing")

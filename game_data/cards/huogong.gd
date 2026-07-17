@@ -34,6 +34,7 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	for target_id: int in target_ids:
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
+		resolver.host.emit_rule_timing("huogongBegin", actor_id, actor_id, target_id, {"parent_card_uid":card.uid, "card_id":card.definition_id})
 		_request_shown_card(resolver, card.uid, actor_id, target_id)
 		if resolver.host.has_pending_card_choice():
 			return "pending"
