@@ -234,23 +234,23 @@ layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "卡牌名称：崩铁杀"
 
-[node name="UiStyleRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="UiStyleRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=664868405]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="UiStyleLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/UiStyleRow"]
+[node name="UiStyleLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/UiStyleRow" unique_id=1697460339]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "UI风格"
 vertical_alignment = 1
 
-[node name="UiStyleOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/UiStyleRow"]
+[node name="UiStyleOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/UiStyleRow" unique_id=589273892]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 34)
 layout_mode = 2
-item_count = 2
 selected = 0
+item_count = 2
 popup/item_0/text = "崩铁风格"
 popup/item_0/id = 0
 popup/item_1/text = "暖木家园"

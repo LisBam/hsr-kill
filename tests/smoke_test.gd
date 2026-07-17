@@ -97,6 +97,26 @@ func _run() -> void:
 		printerr("SMOKE_FAIL character_display_name=%s" % trailblazer_display_name)
 		get_tree().quit(1)
 		return
+	# 武将插画统一目录与格式优先级；资源制作约定必须稳定为同名 PNG 优先、同名 JPG 其次。
+	if GameDatabase.CHARACTER_IMAGE_DIRECTORY != "res://game_data/characters/image" or GameDatabase.CHARACTER_IMAGE_EXTENSIONS != ["png", "jpg"]:
+		printerr("SMOKE_FAIL character_artwork_convention")
+		get_tree().quit(1)
+		return
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		# 当前武将稳定 ID；只用于查询数据库元数据，插画匹配仍以源码文件名为准。
+		var character_id: String = str(character_id_variant)
+		# 当前武将源码定义；测试从脚本资源路径取得真实文件名，避免把稳定 ID 误当作插画名称。
+		var character_source_definition: CharacterDefinition = GameDatabase.character_definitions.get(character_id) as CharacterDefinition
+		# 当前武将源码路径；所有已登记武将都必须保留可追溯的独立脚本资源。
+		var character_source_path: String = str(character_source_definition.get_script().resource_path) if character_source_definition != null else ""
+		# 按统一目录与格式顺序计算出的预期插画路径；无同名资源时为空字符串。
+		var expected_character_art_path: String = GameDatabase._find_character_art_path(character_source_path)
+		# 数据库实际写入的表现元数据；必须与自动发现结果完全一致，不能继续读取武将文件中的手填路径。
+		var actual_character_art_path: String = str(GameDatabase.get_character(character_id).get("art_path", ""))
+		if character_source_path.is_empty() or actual_character_art_path != expected_character_art_path:
+			printerr("SMOKE_FAIL character_artwork_auto_discovery=%s" % character_id)
+			get_tree().quit(1)
+			return
 	# 未登记武将的显示回退；必须保留中文占位且不泄漏调用方传入的英文稳定 ID。
 	var unknown_character_display_name: String = GameDatabase.resolve_character_name("unknown_character")
 	if unknown_character_display_name != "未知武将":

@@ -9,6 +9,12 @@ const CARDS_DIRECTORY: String = "res://game_data/cards"
 ## 武将源码目录；每个 `.gd` 文件必须实例化为 CharacterDefinition，并直接引用所需技能脚本。
 const CHARACTERS_DIRECTORY: String = "res://game_data/characters"
 
+## 武将插画自动发现目录；插画基础名必须与对应武将脚本文件名完全一致，运行时不需要在武将元数据中手填路径。
+const CHARACTER_IMAGE_DIRECTORY: String = CHARACTERS_DIRECTORY + "/image"
+
+## 武将插画格式检查顺序；同时存在同名文件时优先使用支持透明通道的 PNG，其次使用 JPG。
+const CHARACTER_IMAGE_EXTENSIONS: Array[String] = ["png", "jpg"]
+
 ## 技能源码目录；每个 `.gd` 文件必须实例化为 SkillDefinition，运行时会为每名持有者创建独立实例。
 const SKILLS_DIRECTORY: String = "res://game_data/skills"
 
@@ -210,11 +216,30 @@ func _load_characters() -> void:
 		elif character_definitions.has(character_id):
 			validation_errors.append("武将 ID 重复：%s" % character_id)
 		else:
-			characters[character_id] = definition.get_metadata()
+			# 当前武将对外元数据；插画路径由源码文件名自动生成，武将脚本内的旧手填字段不会绕过统一命名规则。
+			var character_metadata: Dictionary = definition.get_metadata()
+			character_metadata.erase("art_path")
+			# 当前武将自动匹配到的插画路径；空值表示 PNG 与 JPG 均不存在，界面会继续显示统一占位图。
+			var automatic_art_path: String = _find_character_art_path(script_path)
+			if not automatic_art_path.is_empty():
+				character_metadata["art_path"] = automatic_art_path
+			characters[character_id] = character_metadata
 			character_definitions[character_id] = definition
 		for skill_script: Script in definition.get_skill_scripts():
 			if skill_script == null or not skill_script.resource_path.begins_with(SKILLS_DIRECTORY + "/"):
 				validation_errors.append("武将 %s 的技能必须直接引用 %s 内的脚本。" % [character_id, SKILLS_DIRECTORY])
+
+
+## 根据武将源码文件基础名自动查找插画；只接受 image 目录中的同名小写 PNG 或 JPG 文件。
+func _find_character_art_path(character_script_path: String) -> String:
+	# 当前武将源码文件基础名；例如 buluoniya.gd 会得到 buluoniya，并且不依赖武将稳定 ID。
+	var character_file_base_name: String = character_script_path.get_file().get_basename()
+	for image_extension: String in CHARACTER_IMAGE_EXTENSIONS:
+		# 当前格式对应的候选资源路径；目录、基础名和扩展名共同组成唯一自动匹配位置。
+		var candidate_path: String = "%s/%s.%s" % [CHARACTER_IMAGE_DIRECTORY, character_file_base_name, image_extension]
+		if ResourceLoader.exists(candidate_path):
+			return candidate_path
+	return ""
 
 
 ## 载入牌堆配置；牌堆仍适合使用紧凑 JSON，因为同一卡牌定义会对应多张不同花色与点数的实体牌。
