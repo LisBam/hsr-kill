@@ -199,6 +199,12 @@ func _test_card_movement_and_virtual_card() -> bool:
 		return _fail("move_to_discard")
 	if game_state.card_move_history.size() != 3 or not game_state.discard_pile.has(card) or not card.shown or not card.known_to.has(0):
 		return _fail("move_history=%s card=%s" % [game_state.card_move_history, card.to_dict()])
+	# 重复弃牌请求的信号计数；同区域同持有者移动被拒绝后不应再通知任何表现层订阅者。
+	var redundant_move_signal_count: Array[int] = [0]
+	movement.card_moved.connect(func(_move_data: Dictionary, _card_data: Dictionary) -> void: redundant_move_signal_count[0] += 1)
+	# 重复 discard_pile -> discard_pile 请求；它不能改变历史、区域或动画增量数量。
+	if movement.move_card(card, "discard_pile", -1, "duplicate_discard", 2) != null or game_state.card_move_history.size() != 3 or redundant_move_signal_count[0] != 0:
+		return _fail("duplicate_discard_move history=%d signals=%d" % [game_state.card_move_history.size(), redundant_move_signal_count[0]])
 	var virtual_card: VirtualCard = VirtualCard.new("sha", "none", 0, "fire")
 	virtual_card.virtual_id = 1
 	virtual_card.add_material(card.uid)

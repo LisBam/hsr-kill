@@ -39,6 +39,9 @@ extends Control
 ## 同一批摸牌依次开始飞行的时间间隔；默认0.08秒形成明确顺序，同时保证整组牌面短暂共存。
 @export_range(0.0, 0.4, 0.01) var draw_transfer_stagger: float = 0.08
 
+## 每秒包含的毫秒数；用于计算卡牌从开始飞行到规则响应完成之间已经经过的真实时间。
+const MILLISECONDS_PER_SECOND: float = 1000.0
+
 ## 当前正在执行顺序淡出的正式卡牌节点；可能来自手牌，也可能是不可见牌的完整正式视图。
 var _animated_card: CardView
 
@@ -84,10 +87,17 @@ var _transfer_tweens: Dictionary = {}
 ## 使用、展示与判定牌实例 ID 到生命周期补间的映射；单一补间替代逐牌飞行和停留计时器，重开时可统一终止。
 var _card_lifecycle_tweens: Dictionary = {}
 
+## 接管弃牌移动的实体 UID 到中央牌面实例 ID 的映射；规则响应完成并发生最终移牌前不会安排该牌淡出。
+var _discard_claim_card_instance_ids: Dictionary = {}
+
+## 中央牌面实例 ID 到开始表现毫秒时间的映射；最终移牌到达时据此补足尚未完成的飞行时间和完整停留时间。
+var _card_presentation_started_msec: Dictionary = {}
+
 ## 已由牌面表现接管后续弃牌动画的实体 UID 集合；键为UID、值固定为true，纯展示牌不会进入该集合。
 var _discard_transfer_claims: Dictionary = {}
 
 ## 已消费弃牌认领的实体 UID 集合；重复移动与迟到表现继续视为已接管，直到权威移牌确认该 UID 进入非弃牌新区域。
+## 普通弃牌首次显示时也会登记到该集合，使无预先认领的重复增量沿用相同幂等生命周期。
 var _consumed_discard_transfer_claims: Dictionary = {}
 
 ## 本局已经接收的表现 ID 集合；键为单调 presentation_id，值固定为true，用于拒绝网络重发或重复信号。
@@ -161,6 +171,10 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	# 当前表现牌实例 ID；移动、生命周期和清理映射统一使用该稳定整数。
 	var presented_card_instance_id: int = presented_card.get_instance_id()
 	_card_sequences[presented_card_instance_id] = sequence
+	_card_presentation_started_msec[presented_card_instance_id] = Time.get_ticks_msec()
+	if owns_discard_transfer and presented_card.card_uid >= 0:
+		# 当前由规则响应生命周期持有的中央牌面；只有最终弃牌或进入其他权威区域后才开始停留与淡出。
+		_discard_claim_card_instance_ids[presented_card.card_uid] = presented_card_instance_id
 	# 飞牌补间；新牌从使用者位置进入弃牌队列，已有牌同步横向补位且全程保持水平不倾斜。
 	_start_card_motion(presented_card, _queue_card_position(_active_cards.size() - 1), card_flight_duration)
 	# 飞牌外观补间；与可被队列重排替换的位置补间分离，确保缩放和透明度不会被补位操作中断。
@@ -172,10 +186,9 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	_reflow_active_cards(card_flight_duration, presented_card)
 	# 飞行等待计时器；队列重排可能替换位置补间，独立计时可保证该牌仍会进入后续停留与淡出流程。
 	# 当前改由一个生命周期补间覆盖飞行与停留，避免每张牌创建两个 SceneTreeTimer 和一个挂起协程。
-	var lifecycle_tween: Tween = create_tween()
-	lifecycle_tween.tween_interval(card_flight_duration + card_hold_duration)
-	lifecycle_tween.tween_callback(_queue_card_for_fade.bind(presented_card_instance_id, _presentation_generation))
-	_card_lifecycle_tweens[presented_card_instance_id] = lifecycle_tween
+	# 接管最终弃牌移动的牌由规则完成信号启动收尾，纯展示与普通弃牌继续使用固定飞行加停留时长。
+	if not owns_discard_transfer or presented_card.card_uid < 0:
+		_schedule_card_fade(presented_card_instance_id, card_flight_duration + card_hold_duration)
 
 
 ## 播放一次牌区转移表现；可选堆叠键让同一批摸牌依次飞入并保留全部牌面。
@@ -255,15 +268,37 @@ func consume_discard_transfer_claim(card_uid: int) -> bool:
 	if _discard_transfer_claims.has(card_uid):
 		_discard_transfer_claims.erase(card_uid)
 		_consumed_discard_transfer_claims[card_uid] = true
+		_finish_claimed_card_presentation(card_uid)
 		return true
 	# 已消费状态保留到实体进入新区域；同一真实移动被重复转发时仍保持幂等，不重新生成中央牌面。
 	return _consumed_discard_transfer_claims.has(card_uid)
 
 
+## 登记一次没有预先表现认领的普通弃牌增量；返回true表示该 UID 已经有中央表现，调用方不得再次创建牌面。
+## 首次普通弃牌会记录 UID 但返回false，允许调用方创建唯一动画；实体进入非弃牌区域后由 release_consumed_discard_claim 清理记录。
+func register_discard_transfer(card_uid: int) -> bool:
+	if card_uid < 0:
+		return false
+	if consume_discard_transfer_claim(card_uid):
+		return true
+	_consumed_discard_transfer_claims[card_uid] = true
+	return false
+
+
 ## 释放指定 UID 的待消费与已消费所有权；实体进入新区域后，旧使用生命周期不能拦截未来合法表现或弃置。
+## 若该 UID 仍有等待规则完成的中央牌面，本入口会先启动正常停留与淡出，再清理普通弃牌幂等记录。
 func release_consumed_discard_claim(card_uid: int) -> void:
+	_finish_claimed_card_presentation(card_uid)
 	_discard_transfer_claims.erase(card_uid)
 	_consumed_discard_transfer_claims.erase(card_uid)
+
+
+## 对局结束或规则中断时结束全部仍等待最终区域的中央牌面；只启动表现收尾，不伪造实体移牌或消费所有权。
+func finish_pending_claimed_presentations() -> void:
+	# 当前仍等待规则完成的实体 UID 副本；遍历副本允许收尾函数安全删除原映射。
+	var pending_card_uids: Array = _discard_claim_card_instance_ids.keys().duplicate()
+	for card_uid_variant: Variant in pending_card_uids:
+		_finish_claimed_card_presentation(int(card_uid_variant))
 
 
 ## 立即清空全部飞牌、弃牌队列和目标线；重新开局时调用，避免上一局异步表现残留到新桌面。
@@ -296,6 +331,8 @@ func clear_presentations() -> void:
 	_fade_queue.clear()
 	_motion_tweens.clear()
 	_card_lifecycle_tweens.clear()
+	_discard_claim_card_instance_ids.clear()
+	_card_presentation_started_msec.clear()
 	_discard_transfer_claims.clear()
 	_consumed_discard_transfer_claims.clear()
 	_seen_presentation_ids.clear()
@@ -305,6 +342,37 @@ func clear_presentations() -> void:
 	_is_fade_worker_running = false
 	_is_fade_worker_scheduled = false
 	queue_redraw()
+
+
+## 为指定中央牌面安排延迟淡出；旧生命周期存在时先终止，保证每张牌始终只有一个收尾计时入口。
+func _schedule_card_fade(card_instance_id: int, delay_seconds: float) -> void:
+	# 当前牌面已有的生命周期补间；重复完成通知不得并行创建多个淡出回调。
+	var previous_lifecycle_tween: Tween = _card_lifecycle_tweens.get(card_instance_id) as Tween
+	if previous_lifecycle_tween != null and previous_lifecycle_tween.is_valid():
+		previous_lifecycle_tween.kill()
+	# 当前牌面新的生命周期补间；延迟时间包含尚未完成的飞行和规则完成后的完整停留时间。
+	var lifecycle_tween: Tween = create_tween()
+	lifecycle_tween.tween_interval(maxf(delay_seconds, 0.0))
+	lifecycle_tween.tween_callback(_queue_card_for_fade.bind(card_instance_id, _presentation_generation))
+	_card_lifecycle_tweens[card_instance_id] = lifecycle_tween
+
+
+## 结束一张由最终区域移动接管的中央牌面；响应期间持续保留，响应结束后补足飞行并完整停留再淡出。
+func _finish_claimed_card_presentation(card_uid: int) -> void:
+	if not _discard_claim_card_instance_ids.has(card_uid):
+		return
+	# 当前实体对应的中央牌面实例 ID；映射先删除，重复移动或中断通知不会重新安排生命周期。
+	var card_instance_id: int = int(_discard_claim_card_instance_ids.get(card_uid, -1))
+	_discard_claim_card_instance_ids.erase(card_uid)
+	if card_instance_id < 0:
+		return
+	# 当前牌面开始表现的毫秒时间；缺失时按刚刚开始处理，仍保证完整飞行与停留时长。
+	var started_msec: int = int(_card_presentation_started_msec.get(card_instance_id, Time.get_ticks_msec()))
+	# 当前牌面已经显示的秒数；响应等待时间会自然计入，不会在规则完成后重复等待已经完成的飞行部分。
+	var elapsed_seconds: float = maxf(float(Time.get_ticks_msec() - started_msec) / MILLISECONDS_PER_SECOND, 0.0)
+	# 当前仍需等待的时间；未完成飞行的部分加上规则完成后的完整停留时间，之后才进入统一批次淡出。
+	var remaining_seconds: float = maxf(card_flight_duration - elapsed_seconds, 0.0) + card_hold_duration
+	_schedule_card_fade(card_instance_id, remaining_seconds)
 
 
 ## 在单一生命周期补间结束后把仍有效的牌加入淡出队列；动画代次不一致时直接丢弃旧回调。
@@ -492,5 +560,7 @@ func _remove_presented_card(card_view: CardView) -> void:
 	_active_cards.erase(card_view)
 	_motion_tweens.erase(card_instance_id)
 	_card_lifecycle_tweens.erase(card_instance_id)
+	_card_presentation_started_msec.erase(card_instance_id)
+	_discard_claim_card_instance_ids.erase(card_view.card_uid)
 	_card_sequences.erase(card_instance_id)
 	card_view.queue_free()

@@ -28,6 +28,10 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	var source_owner: int = card.owner_id
 	if source_zone.is_empty():
 		return null
+	# 同一实体在同一公开区域且持有者未改变时没有可记录的区域变化；拒绝这类重复请求，避免重复发出 card_moved 增量。
+	# 例如重复处理 discard_pile -> discard_pile 会被表现层误认为新的弃牌，从而在中央动画落点凭空创建牌面。
+	if source_zone == to_zone and source_owner == target_player_id:
+		return null
 	_remove_from_zone(card, source_zone, source_owner)
 	_add_to_zone(card, to_zone, target_player_id, target_slot)
 	card.zone = to_zone
