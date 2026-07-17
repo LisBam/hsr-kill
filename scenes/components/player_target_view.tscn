@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
-[ext_resource type="Script" path="res://scripts/ui/damage_shake_feedback.gd" id="5_damage_feedback"]
+[ext_resource type="Script" uid="uid://c457efv3cv7c2" path="res://scripts/ui/damage_shake_feedback.gd" id="5_damage_feedback"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -109,6 +109,16 @@ corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
+[sub_resource type="Gradient" id="GradientHoverNameShade"]
+colors = PackedColorArray(0, 0, 0, 0.82, 0, 0, 0, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTextureHoverNameShade"]
+gradient = SubResource("GradientHoverNameShade")
+width = 1
+height = 32
+fill_from = Vector2(0.5, 0)
+fill_to = Vector2(0.5, 1)
+
 [sub_resource type="StyleBoxFlat" id="StylePlayerCardBack"]
 bg_color = Color(0.0823529, 0.121569, 0.137255, 1)
 border_width_left = 2
@@ -133,22 +143,11 @@ corner_radius_top_right = 5
 corner_radius_bottom_right = 5
 corner_radius_bottom_left = 5
 
-[sub_resource type="Gradient" id="GradientHoverNameShade"]
-offsets = PackedFloat32Array(0, 1)
-colors = PackedColorArray(0, 0, 0, 0.82, 0, 0, 0, 0)
-
-[sub_resource type="GradientTexture2D" id="GradientTextureHoverNameShade"]
-gradient = SubResource("GradientHoverNameShade")
-width = 1
-height = 32
-fill_from = Vector2(0.5, 0)
-fill_to = Vector2(0.5, 1)
-
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
 metadata/_edit_horizontal_guides_ = [99.0]
 
-[node name="DamageShakeFeedback" type="Node" parent="."]
+[node name="DamageShakeFeedback" type="Node" parent="." unique_id=939165274]
 script = ExtResource("5_damage_feedback")
 
 [node name="CardBody" type="Panel" parent="." unique_id=1827969861]
@@ -184,10 +183,10 @@ vertical_alignment = 1
 [node name="CharacterName" type="Label" parent="." unique_id=673259262]
 unique_name_in_owner = true
 z_index = 4
-offset_left = 3.0
-offset_top = 19.0
-offset_right = 25.0
-offset_bottom = 112.0
+offset_left = 2.0
+offset_top = 17.0
+offset_right = 24.0
+offset_bottom = 110.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
@@ -201,7 +200,6 @@ vertical_alignment = 1
 
 [node name="IdentityBadge" type="Label" parent="." unique_id=915847553]
 unique_name_in_owner = true
-visible = false
 z_index = 4
 offset_left = 122.35
 offset_top = 3.0
@@ -246,10 +244,8 @@ offset_bottom = 208.8
 [node name="FactionBadge" type="Label" parent="." unique_id=248046321]
 unique_name_in_owner = true
 z_index = 4
-offset_left = 1.0
-offset_top = 2.0
-offset_right = 27.0
-offset_bottom = 28.0
+offset_right = 26.0
+offset_bottom = 26.0
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.88)
 theme_override_constants/shadow_offset_x = 1
@@ -350,7 +346,7 @@ offset_right = 148.35
 offset_bottom = 197.8
 mouse_filter = 2
 
-[node name="HoverNameShade" type="TextureRect" parent="."]
+[node name="HoverNameShade" type="TextureRect" parent="." unique_id=343208506]
 visible = false
 z_index = 28
 offset_right = 148.35
@@ -359,7 +355,7 @@ mouse_filter = 2
 texture = SubResource("GradientTextureHoverNameShade")
 expand_mode = 1
 
-[node name="HoverPlayerName" type="Label" parent="HoverNameShade"]
+[node name="HoverPlayerName" type="Label" parent="HoverNameShade" unique_id=1057367277]
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
@@ -368,7 +364,6 @@ offset_top = 2.0
 offset_right = -8.0
 offset_bottom = 20.0
 grow_horizontal = 2
-mouse_filter = 2
 theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
 theme_override_constants/shadow_offset_x = 1
