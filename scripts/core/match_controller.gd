@@ -89,6 +89,9 @@ var card_runtime_instances: Dictionary = {}
 ## 事件树运行时；统一管理根事件、子事件、after 队列、选择暂停和回放历史。
 var event_scheduler: EventScheduler
 
+## 对局级令牌暂停服务；界面和调试入口只通过公开申请/释放接口控制暂停，不直接改写场景树。
+var gameplay_pause_service: GameplayPauseService
+
 ## 触发器排序组件；保留与同步 RuleEventBus 的兼容边界，逐步承载技能时机排序。
 var trigger_manager: TriggerManager
 
@@ -183,12 +186,20 @@ var _judgment_flow_in_progress: bool = false
 ## 判定流程从异步无懈或濒死选择恢复时是否需要先保留上一张判定结果；默认false，新回合从延时锦囊展示开始。
 var _judgment_resume_needs_result_pause: bool = false
 
+## 对局级暂停在事件运行时持有的全局 token；-1表示当前没有同步阻塞事件栈。
+var _gameplay_event_pause_token: int = -1
+
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
 func _ready() -> void:
 	event_bus = get_node("RuleEventBus") as RuleEventBus
 	ai_coordinator = get_node("AICoordinator") as AICoordinator
 	network_gateway = get_node("NetworkGateway") as NetworkGateway
+	gameplay_pause_service = get_node_or_null("GameplayPauseService") as GameplayPauseService
+	if gameplay_pause_service == null:
+		gameplay_pause_service = GameplayPauseService.new()
+		gameplay_pause_service.name = "GameplayPauseService"
+		add_child(gameplay_pause_service)
 	event_scheduler = get_node_or_null("EventScheduler") as EventScheduler
 	if event_scheduler == null:
 		event_scheduler = EventScheduler.new()
@@ -202,6 +213,8 @@ func _ready() -> void:
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
 	if not GameSettings.ai_response_delay_changed.is_connected(_on_ai_response_delay_changed):
 		GameSettings.ai_response_delay_changed.connect(_on_ai_response_delay_changed)
+	if not gameplay_pause_service.pause_state_changed.is_connected(_on_gameplay_pause_state_changed):
+		gameplay_pause_service.pause_state_changed.connect(_on_gameplay_pause_state_changed)
 	_on_ai_response_delay_changed(GameSettings.ai_response_delay_seconds)
 
 
@@ -217,6 +230,55 @@ func _connect_event_runtime() -> void:
 		event_scheduler.choice_requested.connect(_on_runtime_choice_requested)
 	if not event_scheduler.choice_resolved.is_connected(_on_runtime_choice_resolved):
 		event_scheduler.choice_resolved.connect(_on_runtime_choice_resolved)
+
+
+## 申请一个对局级暂停令牌；调用方必须保存返回值，并只释放自己持有的令牌。
+func acquire_gameplay_pause(reason: String) -> int:
+	return gameplay_pause_service.acquire_pause(reason) if gameplay_pause_service != null else -1
+
+
+## 释放指定对局级暂停令牌；其他调用方仍持有令牌时不会恢复对局或 AI。
+func release_gameplay_pause(token_id: int) -> bool:
+	return gameplay_pause_service.release_pause(token_id) if gameplay_pause_service != null else false
+
+
+## 返回对局是否正被任一接口令牌暂停；AI 调度、测试和调试器共用该只读入口。
+func is_gameplay_paused() -> bool:
+	return gameplay_pause_service != null and gameplay_pause_service.is_paused()
+
+
+## 把对局级暂停状态同步到事件运行时；全局 token 保证任何直接 drain 调用也不能跨暂停推进规则。
+func _on_gameplay_pause_state_changed(paused: bool, _active_reasons: Array[String]) -> void:
+	if event_scheduler == null:
+		return
+	if paused:
+		if _gameplay_event_pause_token < 0:
+			_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
+		return
+	if _gameplay_event_pause_token >= 0:
+		# 当前事件运行时暂停 token；先清空字段再恢复，避免 drain 期间重入重复释放同一 token。
+		var runtime_pause_token: int = _gameplay_event_pause_token
+		_gameplay_event_pause_token = -1
+		event_scheduler.resume(runtime_pause_token, "gameplay_resumed")
+	call_deferred("_resume_ai_after_gameplay_pause")
+
+
+## 对局恢复后补齐暂停前尚未安排的 AI 入口；已经存在的暂停感知计时器会自行继续，不会重复创建。
+func _resume_ai_after_gameplay_pause() -> void:
+	if is_gameplay_paused() or state == null or state.game_over:
+		return
+	if state.current_phase == "character_selection":
+		_drive_ai_character_selection()
+		return
+	if not _pending_card_choice.is_empty():
+		# 当前普通选择请求；同时无懈拥有独立并行计时器，不使用单请求调度字段。
+		var request_id: int = int(_pending_card_choice.get("request_id", -1))
+		var chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+		if ai_coordinator.is_ai_controlled(chooser_id):
+			_schedule_ai_card_choice_response(request_id, chooser_id)
+		return
+	if state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id):
+		_schedule_ai_action()
 
 
 ## 创建并开始一局标准身份局；seed 为0时使用系统随机种子。
@@ -252,10 +314,13 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	event_scheduler.reset()
+	_gameplay_event_pause_token = -1
 	# 根事件只保存规则启动元数据；后续身份、阶段和卡牌事件通过 parent_id 关联到该入口。
 	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":"identity", "match_id":state.match_id, "deck_id":state.deck_id})
 	_runtime_root_event_id = root_event.event_id
 	event_scheduler.begin_root(_runtime_root_event_id, true)
+	if is_gameplay_paused():
+		_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
 	state.current_event_id = _runtime_root_event_id
 	state.event_history = event_scheduler.get_event_history()
 	character_selection = CharacterSelectionService.new()
@@ -338,6 +403,8 @@ func select_character(player_id: int, character_id: String) -> bool:
 func submit_action(action: PlayerAction) -> bool:
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
+	if action != null and is_gameplay_paused() and ai_coordinator != null and ai_coordinator.is_ai_controlled(action.actor_id):
+		return false
 	if action.action_type == "select_character":
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
 	if action.action_type == "use_skill":
@@ -811,7 +878,7 @@ func clear_public_card_choice_display(kind: String = "") -> void:
 
 ## 安排一条 AI 选牌响应；与普通 AI 出牌共用延迟参数，但使用请求 ID 防止旧窗口在新请求中误提交。
 func _schedule_ai_card_choice_response(request_id: int, chooser_id: int) -> void:
-	if request_id < 0 or _scheduled_ai_choice_request_id == request_id:
+	if is_gameplay_paused() or request_id < 0 or _scheduled_ai_choice_request_id == request_id:
 		return
 	# 当前阶段令牌；重开、换回合或终局后旧响应不会继续提交到新状态。
 	var token: int = _ai_drive_token
@@ -821,10 +888,11 @@ func _schedule_ai_card_choice_response(request_id: int, chooser_id: int) -> void
 
 ## 等待设置的响应时间后提交 AI 选择；决策和最终提交仍复用与玩家完全一致的标准动作入口。
 func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: int) -> void:
-	await get_tree().create_timer(ai_action_delay_seconds).timeout
+	# AI 计时器不在场景树暂停期间推进；恢复后从剩余等待时间继续，而不是立即补交动作。
+	await get_tree().create_timer(ai_action_delay_seconds, false).timeout
 	if _scheduled_ai_choice_request_id == request_id:
 		_scheduled_ai_choice_request_id = -1
-	if token != _ai_drive_token or state == null or state.game_over or _pending_card_choice.is_empty():
+	if is_gameplay_paused() or token != _ai_drive_token or state == null or state.game_over or _pending_card_choice.is_empty():
 		return
 	if int(_pending_card_choice.get("request_id", -1)) != request_id or int(_pending_card_choice.get("chooser_id", -1)) != chooser_id or not ai_coordinator.is_ai_controlled(chooser_id):
 		return
@@ -1551,8 +1619,9 @@ func _register_simultaneous_negation_choice(responder_id: int, round_context: Di
 
 ## 等待统一 AI 响应延迟后提交本轮决定；所有 AI 计时器并行启动，先到达的合法无懈立即获胜。
 func _run_simultaneous_negation_ai_after_delay(request_id: int, responder_id: int, round_id: int) -> void:
-	await get_tree().create_timer(ai_action_delay_seconds).timeout
-	if state == null or state.game_over or round_id != _negation_round_sequence or not _pending_negation_choices.has(request_id):
+	# 并行无懈计时器同样服从对局暂停；暂停不会改变恢复后的先到先结算语义。
+	await get_tree().create_timer(ai_action_delay_seconds, false).timeout
+	if is_gameplay_paused() or state == null or state.game_over or round_id != _negation_round_sequence or not _pending_negation_choices.has(request_id):
 		return
 	# 当前 AI 私有请求；只读副本用于生成合法动作，不允许策略修改权威候选。
 	var choice_data: Dictionary = (_pending_negation_choices.get(request_id, {}) as Dictionary).duplicate(true)
@@ -2659,7 +2728,7 @@ func _reorder_players_from_lord() -> void:
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
 func _drive_ai_character_selection() -> void:
-	if _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
+	if is_gameplay_paused() or _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
 		return
 	_is_driving_character_selection = true
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
@@ -2831,7 +2900,7 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 	if _judgment_resume_needs_result_pause:
 		_judgment_resume_needs_result_pause = false
 		if delayed_judgment_result_pause_seconds > 0.0 and not state.match_id.is_empty():
-			await get_tree().create_timer(delayed_judgment_result_pause_seconds).timeout
+			await get_tree().create_timer(delayed_judgment_result_pause_seconds, false).timeout
 			if not _is_judgment_flow_valid(player_id, flow_token):
 				return
 	# 判定玩家状态；每轮重新读取判定区，确保闪电传递和插入移动不会让旧数组重复结算。
@@ -2848,7 +2917,7 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 		add_log("%s开始判定%s。" % [player.display_name, describe_card(delayed_card)])
 		_emit_state()
 		if delayed_judgment_preview_seconds > 0.0 and not state.match_id.is_empty():
-			await get_tree().create_timer(delayed_judgment_preview_seconds).timeout
+			await get_tree().create_timer(delayed_judgment_preview_seconds, false).timeout
 			if not _is_judgment_flow_valid(player_id, flow_token):
 				return
 		# 延时锦囊是否在生效前被无懈可击抵消；异步响应必须保留判定恢复标记。
@@ -2864,7 +2933,7 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 			_judgment_resume_needs_result_pause = true
 			return
 		if delayed_judgment_result_pause_seconds > 0.0 and not state.match_id.is_empty():
-			await get_tree().create_timer(delayed_judgment_result_pause_seconds).timeout
+			await get_tree().create_timer(delayed_judgment_result_pause_seconds, false).timeout
 			if not _is_judgment_flow_valid(player_id, flow_token):
 				return
 		player = state.get_player(player_id)
@@ -4085,7 +4154,7 @@ func append_card_action_if_legal(result: Array[Dictionary], player_id: int, card
 
 ## 安排下一次 AI 操作；令牌保证阶段变化后旧计时器不会执行。
 func _schedule_ai_action() -> void:
-	if state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_card_choice() or not _has_active_play_choice():
+	if is_gameplay_paused() or state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_card_choice() or not _has_active_play_choice():
 		return
 	if _scheduled_ai_drive_token == _ai_drive_token:
 		return
@@ -4097,10 +4166,11 @@ func _schedule_ai_action() -> void:
 
 ## 等待展示延迟后请求 AI 动作，并再次进入统一 submit_action 入口。
 func _run_ai_after_delay(token: int) -> void:
-	await get_tree().create_timer(ai_action_delay_seconds).timeout
+	# 普通 AI 行动计时器只在对局运行时累计；日志暂停期间不会到期或提交动作。
+	await get_tree().create_timer(ai_action_delay_seconds, false).timeout
 	if _scheduled_ai_drive_token == token:
 		_scheduled_ai_drive_token = -1
-	if token != _ai_drive_token or state == null or state.game_over or state.current_phase != "play":
+	if is_gameplay_paused() or token != _ai_drive_token or state == null or state.game_over or state.current_phase != "play":
 		return
 	# 当前 AI 玩家 ID；阶段等待期间可能已发生变化，因此在延迟后读取。
 	var player_id: int = state.current_player_id

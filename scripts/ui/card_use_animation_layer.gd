@@ -166,6 +166,8 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	presented_card.z_index = _active_cards.size() + 1
 	presented_card.rotation = 0.0
 	presented_card.modulate = Color(1.0, 1.0, 1.0, 0.9)
+	# 新实例在完成父级、坐标和外观初始化后才显示，避免场景树插入瞬间以默认原点闪现一帧。
+	presented_card.visible = true
 	_discard_center = discard_position
 	_active_cards.append(presented_card)
 	# 当前表现牌实例 ID；移动、生命周期和清理映射统一使用该稳定整数。
@@ -207,6 +209,8 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	transfer_card.rotation = 0.0
 	transfer_card.scale = Vector2.ONE * 0.82
 	transfer_card.modulate = Color.WHITE
+	# 转移牌同样在最终起点写入后才显示，不能以新节点默认坐标参与任何一帧绘制。
+	transfer_card.visible = true
 	_transfer_cards[transfer_card_instance_id] = transfer_card
 	# 当前堆叠索引；普通转移保持0，同一玩家连续摸牌按到达顺序递增。
 	var stack_index: int = 0
@@ -299,6 +303,17 @@ func finish_pending_claimed_presentations() -> void:
 	var pending_card_uids: Array = _discard_claim_card_instance_ids.keys().duplicate()
 	for card_uid_variant: Variant in pending_card_uids:
 		_finish_claimed_card_presentation(int(card_uid_variant))
+
+
+## 使用权威处理区 UID 快照核对中央牌面；已不在处理区却缺少最终移牌通知的认领牌会立即进入正常收尾。
+func reconcile_processing_card_uids(processing_card_uids: Array[int]) -> void:
+	# 当前仍由处理区生命周期持有的实体 UID 副本；收尾函数会修改原映射，因此不能直接遍历键视图。
+	var claimed_card_uids: Array = _discard_claim_card_instance_ids.keys().duplicate()
+	for card_uid_variant: Variant in claimed_card_uids:
+		# 当前认领实体 UID；只有权威快照已经确认离开处理区时才执行防御性收尾。
+		var card_uid: int = int(card_uid_variant)
+		if not processing_card_uids.has(card_uid):
+			_finish_claimed_card_presentation(card_uid)
 
 
 ## 立即清空全部飞牌、弃牌队列和目标线；重新开局时调用，避免上一局异步表现残留到新桌面。
