@@ -1205,6 +1205,62 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "") -
 	_dispatch_rule_event(event)
 
 
+## 使指定角色获得护盾；护盾没有上限且只会在受到伤害时优先扣减，普通失去体力不会消耗护盾。
+func shield(target_id: int, amount: int, source_id: int = -1, reason: String = "") -> int:
+	if state == null or state.game_over:
+		return 0
+	# 护盾目标状态；死亡角色不能获得护盾，避免无效公开状态继续累积。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive or amount <= 0:
+		return 0
+	# 实际增加的护盾值；当前规则没有护盾上限，因此等于经过非正数校验后的请求值。
+	var gained_amount: int = amount
+	target.shield = maxi(target.shield, 0) + gained_amount
+	# 护盾事件记录；保存来源、技能或卡牌原因、实际增加量和结算后的总护盾值。
+	var shield_event_id: int = _record_runtime_event("ShieldEvent", "shield", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":gained_amount, "shield":target.shield})
+	add_log("%s获得%d点护盾（护盾%d）。" % [target.display_name, gained_amount, target.shield])
+	# 获得护盾后事件；技能可以读取来源、目标、实际增加量、当前护盾与效果原因。
+	var event: RuleEvent = RuleEvent.new("shield_after", source_id, target_id, {"amount":gained_amount, "shield":target.shield, "reason":reason, "event_id":shield_event_id})
+	_dispatch_rule_event(event)
+	return gained_amount
+
+
+## 使指定角色失去体力；该流程绕过护盾、装备修正、伤害事件、伤害历史与属性连环。
+func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "") -> int:
+	if state == null or state.game_over:
+		return 0
+	# 失去体力目标状态；死亡角色与非正数请求不会重复修改公开体力。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive or amount <= 0:
+		return 0
+	# 失去体力前事件；只允许失去体力类技能修改或取消，不会触发 damage_before。
+	var before_event: RuleEvent = RuleEvent.new("lose_hp_before", source_id, target_id, {"amount":amount, "reason":reason})
+	_dispatch_rule_event(before_event)
+	if state.game_over or before_event.cancelled:
+		return 0
+	# 最终失去体力值；事件处理器可把数值调整为0以阻止本次体力减少。
+	var final_amount: int = maxi(int(before_event.data.get("amount", amount)), 0)
+	if final_amount == 0:
+		return 0
+	target.hp -= final_amount
+	# 失去体力父事件；与伤害事件使用不同类型，回放和技能触发不会混淆两种体力减少来源。
+	var lose_hp_event_id: int = _record_runtime_event("LoseHpEvent", "lose_hp", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":final_amount, "hp":target.hp})
+	add_log("%s失去%d点体力（%d/%d，护盾%d）。" % [target.display_name, final_amount, target.hp, target.max_hp, target.shield])
+	# 失去体力后事件；与 damage_after 完全独立，受到伤害和造成伤害技能不会收到本事件。
+	var after_event: RuleEvent = RuleEvent.new("lose_hp_after", source_id, target_id, {"amount":final_amount, "hp":target.hp, "shield":target.shield, "reason":reason, "event_id":lose_hp_event_id})
+	_dispatch_rule_event(after_event)
+	if state.game_over:
+		return final_amount
+	# 通用体力减少事件；失去体力与实际扣减体力的伤害都通过本事件提供统一观察入口。
+	_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":final_amount, "hp":target.hp, "reduction_type":"lose_hp", "reason":reason, "event_id":lose_hp_event_id}))
+	if state.game_over:
+		return final_amount
+	if target.hp <= 0:
+		# 失去体力不属于伤害，来源角色不会被登记为击杀者，也不会获得伤害击杀奖惩。
+		_resolve_dying(target_id, -1)
+	return final_amount
+
+
 ## 造成伤害并执行防具修正、濒死、死亡及属性连环传导。
 func damage(source_id: int, target_id: int, amount: int, nature: String = "normal", card_id: String = "", chain_transfer: bool = false, ignore_armor: bool = false) -> void:
 	if state == null or state.game_over:
@@ -1254,18 +1310,33 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 			if player.alive and player.chained and player.player_id != target_id:
 				chain_targets.append(player.player_id)
 
-	target.hp -= final_amount
-	_record_runtime_event("damage", "damage", {"source_id":source_id, "target_id":target_id, "nature":nature}, {"amount":final_amount, "hp":target.hp}, damage_event_id)
-	target.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature})
+	# 伤害发生前护盾值；只用于计算本次优先吸收量，不改变最终伤害事件本身的数值。
+	var shield_before_damage: int = maxi(target.shield, 0)
+	# 本次由护盾吸收的伤害值；最多吸收到最终伤害值，护盾不会变成负数。
+	var shield_absorbed: int = mini(shield_before_damage, final_amount)
+	# 本次实际扣减的体力值；伤害剩余量为0时仍属于一次有效伤害并触发 damage_after。
+	var hp_lost: int = final_amount - shield_absorbed
+	target.shield = shield_before_damage - shield_absorbed
+	target.hp -= hp_lost
+	_record_runtime_event("damage", "damage", {"source_id":source_id, "target_id":target_id, "nature":nature}, {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp}, damage_event_id)
+	target.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	var source_player: PlayerState = state.get_player(source_id)
 	if source_player != null and source_player != target:
-		source_player.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature})
+		source_player.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	if target.chained and nature != "normal":
 		target.chained = false
-	add_log("%s受到%d点%s伤害（%d/%d）。" % [target.display_name, final_amount, _nature_text(nature), target.hp, target.max_hp])
+	if shield_absorbed > 0:
+		add_log("%s受到%d点%s伤害，护盾抵消%d点（%d/%d，护盾%d）。" % [target.display_name, final_amount, _nature_text(nature), shield_absorbed, target.hp, target.max_hp, target.shield])
+	else:
+		add_log("%s受到%d点%s伤害（%d/%d）。" % [target.display_name, final_amount, _nature_text(nature), target.hp, target.max_hp])
 	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
-	var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount": final_amount, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
+	var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount": final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
 	_dispatch_rule_event(after_event)
+	if state.game_over:
+		return
+	if hp_lost > 0:
+		# 通用体力减少事件；只在伤害穿透护盾并实际扣减体力时派发，便于技能统一观察两类体力变化。
+		_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":hp_lost, "hp":target.hp, "reduction_type":"damage", "damage_amount":final_amount, "shield_absorbed":shield_absorbed, "nature":nature, "card_id":card_id, "event_id":damage_event_id}))
 	if state.game_over:
 		return
 	if target.hp <= 0:
@@ -2598,6 +2669,8 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 	var lord_hp_bonus: int = 1 if player.identity == "lord" and state.players.size() >= 5 else 0
 	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + lord_hp_bonus
 	player.hp = player.max_hp
+	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
+	player.shield = 0
 
 
 ## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。

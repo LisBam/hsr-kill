@@ -415,6 +415,8 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	var hp: int = int(_player_snapshot.get("hp", 0))
 	# 当前体力上限；1至5使用圆点，超过5直接使用数字，因此无需裁剪规则快照中的真实数值。
 	var max_hp: int = maxi(int(_player_snapshot.get("max_hp", 0)), 0)
+	# 当前公开护盾值；护盾没有上限，异常负数快照在表现层按0处理但不回写规则状态。
+	var shield: int = maxi(int(_player_snapshot.get("shield", 0)), 0)
 	# 用于心形绘制的安全当前体力；限制在0至可视上限之间。
 	var safe_hp: int = clampi(hp, 0, max_hp)
 	_character_name_label.text = "\n".join(character_name.split(""))
@@ -474,7 +476,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	health_frame_style.content_margin_right = 2.0
 	health_frame_style.content_margin_bottom = 2.0
 	_health_frame_background.add_theme_stylebox_override("panel", health_frame_style)
-	_refresh_health_pips(safe_hp, max_hp)
+	_refresh_health_pips(safe_hp, max_hp, shield)
 	_refresh_equipment_rows()
 	_refresh_identity_badge()
 	_refresh_hover_name_visibility()
@@ -482,13 +484,25 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
 ## 已损失圆点现在从容器顶部开始排列，使扣血方向固定为从上往下。
-func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
+## 护盾在圆点模式下使用灰色圆点置于体力上方，体力进入数字模式后护盾同步显示为灰色数字。
+func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 	for child: Node in _health_pip_container.get_children():
 		_health_pip_container.remove_child(child)
 		child.queue_free()
 	# 数字模式标志；体力上限超过5时显示“当前/上限”，避免圆点列超出武将牌。
 	var uses_numeric_health: bool = max_hp > 5
+	_health_pip_container.add_theme_constant_override("separation", 0 if uses_numeric_health else health_pip_separation)
 	if uses_numeric_health:
+		if shield > 0:
+			# 数字护盾标签；与数字体力上下排列，并固定使用灰色语义色区分真实体力。
+			var shield_number: Label = Label.new()
+			shield_number.text = "盾%d" % shield
+			shield_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			shield_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			shield_number.add_theme_font_size_override("font_size", 10)
+			shield_number.add_theme_color_override("font_color", BattleUIStyle.get_color("health_shield"))
+			shield_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_health_pip_container.add_child(shield_number)
 		# 数字体力标签；高上限角色使用分数格式同时展示当前体力与体力上限。
 		var health_number: Label = Label.new()
 		health_number.text = "%d/%d" % [safe_hp, max_hp]
@@ -500,6 +514,19 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		_health_pip_container.add_child(health_number)
 		_layout_health_frame(true)
 		return
+	# 护盾圆点索引；每点护盾生成一枚相同灰色圆点，索引本身不表达独立来源。
+	for _shield_index: int in range(shield):
+		# 当前护盾圆点；全部使用灰色语义色并排列在体力圆点上方，伤害结算会从该区域优先扣减。
+		var shield_pip: Label = Label.new()
+		shield_pip.text = "●"
+		shield_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		shield_pip.add_theme_font_size_override("font_size", health_pip_font_size)
+		shield_pip.add_theme_color_override("font_color", BattleUIStyle.get_color("health_shield"))
+		shield_pip.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("health_shadow"))
+		shield_pip.add_theme_constant_override("shadow_offset_x", 1)
+		shield_pip.add_theme_constant_override("shadow_offset_y", 1)
+		shield_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_health_pip_container.add_child(shield_pip)
 	for pip_index: int in range(max_hp):
 		# 当前体力圆点；索引小于当前体力时点亮，其余保留暗色上限占位。
 		# 当前颜色判断改用顶部已损失数量，剩余圆点继续使用相同绿色与暗色。
@@ -681,12 +708,13 @@ func _format_snapshot_tooltip(snapshot: Dictionary, character_definition: Dictio
 		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
 	# 当前武将势力名称；悬停说明使用完整名称，牌面圆形徽记只显示简称。
 	var faction_name: String = str(_faction_definition.get("display_name", character_definition.get("faction", "未知势力")))
-	return "%s｜%s｜%s\n体力 %d/%d｜手牌 %d｜粮 %d\n装备：%s\n判定：%s" % [
+	return "%s｜%s｜%s\n体力 %d/%d｜护盾 %d｜手牌 %d｜粮 %d\n装备：%s\n判定：%s" % [
 		str(snapshot.get("display_name", "玩家")),
 		GameDatabase.resolve_character_name(str(snapshot.get("character_id", ""))),
 		faction_name,
 		int(snapshot.get("hp", 0)),
 		int(snapshot.get("max_hp", 0)),
+		int(snapshot.get("shield", 0)),
 		int(snapshot.get("hand_count", 0)),
 		int(snapshot.get("wooden_ox_storage_count", 0)),
 		"、".join(equipment_names) if not equipment_names.is_empty() else "无",

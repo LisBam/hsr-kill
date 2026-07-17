@@ -34,6 +34,16 @@ func bind(match_host: Object, player_id: int) -> void:
 	owner_player_id = player_id
 
 
+## 返回指定玩家的技能角色操作对象；护盾、失去体力和造成伤害语法均通过该对象进入权威控制器。
+func get_skill_player(player_id: int) -> SkillPlayer:
+	return SkillPlayer.new(host, player_id, get_id())
+
+
+## 返回技能持有者的角色操作对象；适合把持有者作为护盾来源、体力流失来源或伤害来源。
+func get_owner_skill_player() -> SkillPlayer:
+	return get_skill_player(owner_player_id)
+
+
 ## 安装被动或触发技能；具体技能可在此订阅 host.event_bus 或 host.trigger_manager。
 func install() -> void:
 	pass
