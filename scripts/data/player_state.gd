@@ -27,6 +27,9 @@ var hp: int = 4
 ## 当前体力上限；默认4，样例武将配置可覆盖为3或其他正整数。
 var max_hp: int = 4
 
+## 当前护盾值；默认0且没有上限，受到伤害时优先扣减，失去体力与回复不会修改该值。
+var shield: int = 0
+
 ## 当前是否存活；死亡结算完成后设为 false，之后不再参与行动顺序。
 var alive: bool = true
 
@@ -197,6 +200,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"identity_revealed": identity_revealed,
 		"hp": hp,
 		"max_hp": max_hp,
+		"shield": shield,
 		"alive": alive,
 		"dying": dying,
 		"death_confirmed": death_confirmed,
