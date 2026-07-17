@@ -80,6 +80,30 @@ var _zhangba_material_uids: Array[int] = []
 ## 丈八响应请求是否同时公开了装备候选；默认false，收到正确候选后改为true。
 var _zhangba_response_has_equipment: bool = false
 
+## 八卦阵失败回归收到的【闪】响应请求数量；首次包含八卦阵，黑色判定后第二次只保留其他合法候选。
+var _bagua_response_request_count: int = 0
+
+## 八卦阵失败回归使用的防具实体 UID；第二次请求必须排除该 UID，避免同一响应时机重复判定。
+var _bagua_uid: int = -1
+
+## 八卦阵失败回归使用的手牌【闪】实体 UID；黑色判定后必须继续出现在第二次响应请求中。
+var _bagua_hand_shan_uid: int = -1
+
+## 八卦阵失败后的第二次请求是否保留手牌【闪】；默认false，收到符合候选协议的请求后改为true。
+var _bagua_retry_has_hand_shan: bool = false
+
+## 八卦阵失败后的第二次请求是否排除已判定防具；默认false，用于防止重复发动形成无限响应循环。
+var _bagua_retry_excludes_bagua: bool = false
+
+## 麒麟弓回归收到的坐骑选择请求数量；标准流程只应创建一次公开装备选择。
+var _qilin_request_count: int = 0
+
+## 麒麟弓回归目标坐骑实体 UID；强类型槽位查询必须把该实体加入候选并允许弃置。
+var _qilin_mount_uid: int = -1
+
+## 麒麟弓回归是否在选择请求中找到目标坐骑；默认false，收到正确候选后改为true。
+var _qilin_candidate_present: bool = false
+
 
 ## 延迟一帧执行测试，确保自动加载卡牌数据和节点依赖已经完成初始化。
 func _ready() -> void:
@@ -112,6 +136,10 @@ func _run() -> void:
 	if not await _test_zhangba_play_uses_two_materials():
 		return
 	if not await _test_zhangba_response_uses_two_materials():
+		return
+	if not await _test_bagua_failure_allows_hand_shan():
+		return
+	if not await _test_qilin_mount_candidate_slots():
 		return
 	if not _test_wooden_ox_card_cannot_recast():
 		return
@@ -190,6 +218,14 @@ func _reset_state(player_count: int) -> void:
 	_presentation_history.clear()
 	_simultaneous_negation_requests.clear()
 	_simultaneous_protected_uid = -1
+	_bagua_response_request_count = 0
+	_bagua_uid = -1
+	_bagua_hand_shan_uid = -1
+	_bagua_retry_has_hand_shan = false
+	_bagua_retry_excludes_bagua = false
+	_qilin_request_count = 0
+	_qilin_mount_uid = -1
+	_qilin_candidate_present = false
 
 
 ## 验证无懈可击同时询问全部存活玩家、公共高亮不泄露候选，并由最先提交合法牌的玩家取得结算权。
@@ -717,6 +753,70 @@ func _test_ai_delay_range() -> bool:
 	return true
 
 
+## 验证八卦阵黑色判定只令本次装备响应失败，原【闪】响应继续开放并允许玩家改用手牌【闪】。
+func _test_bagua_failure_allows_hand_shan() -> bool:
+	_scenario = "bagua_retry"
+	_reset_state(2)
+	# 攻击者实体【杀】；通过正式使用流程建立处理区父牌与目标响应上下文。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	# 防守者手牌【闪】；八卦阵失败后的第二次请求必须保留并最终消费该实体。
+	var hand_shan: CardInstance = _add_hand_card(1, "shan", "heart", 2)
+	_bagua_hand_shan_uid = hand_shan.uid
+	# 防守者八卦阵；装备只作为响应入口，黑色判定后仍留在防具槽。
+	var bagua_card: CardInstance = CardInstance.new("bagua", "club", 2)
+	bagua_card.zone = "equipment"
+	bagua_card.owner_id = 1
+	_controller.state.get_player(1).equipment["armor"] = bagua_card
+	_bagua_uid = bagua_card.uid
+	# 八卦阵判定牌；数组末尾为牌堆顶，黑桃结果令虚拟【闪】生成失败。
+	var black_judgment_card: CardInstance = CardInstance.new("tao", "spade", 9)
+	black_judgment_card.zone = "draw_pile"
+	_controller.state.draw_pile.append(black_judgment_card)
+	_controller._execute_card_use(0, slash_card, [1])
+	if not await _wait_until_card_finalized(slash_card.uid):
+		return _fail("bagua_retry_timeout")
+	# 防守结果；两次请求后手牌【闪】与黑色判定牌都进入弃牌堆，目标不受伤且八卦阵仍在装备区。
+	var defender: PlayerState = _controller.state.get_player(1)
+	if _bagua_response_request_count != 2 or not _bagua_retry_has_hand_shan or not _bagua_retry_excludes_bagua or defender.hp != defender.max_hp or defender.find_hand_card(hand_shan.uid) != null or defender.equipment.get("armor") != bagua_card or not _controller.state.discard_pile.has(hand_shan) or not _controller.state.discard_pile.has(black_judgment_card):
+		return _fail("bagua_retry requests=%d hand=%s excluded=%s hp=%d discard=%s" % [_bagua_response_request_count, _bagua_retry_has_hand_shan, _bagua_retry_excludes_bagua, defender.hp, _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid)])
+	return true
+
+
+## 验证麒麟弓使用强类型双坐骑槽查询，并可通过正式选择请求弃置目标坐骑。
+func _test_qilin_mount_candidate_slots() -> bool:
+	_scenario = "qilin_mount"
+	_reset_state(2)
+	# 攻击者麒麟弓；伤害后钩子会复核当前仍装备同一武器定义。
+	var qilin_card: CardInstance = CardInstance.new("qilin", "heart", 5)
+	qilin_card.zone = "equipment"
+	qilin_card.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = qilin_card
+	# 目标进攻坐骑；双槽查询必须返回该公开实体并交给标准选择协议。
+	var mount_card: CardInstance = CardInstance.new("chitu", "heart", 5)
+	mount_card.zone = "equipment"
+	mount_card.owner_id = 1
+	_controller.state.get_player(1).equipment["offensive_mount"] = mount_card
+	_qilin_mount_uid = mount_card.uid
+	# 仍在处理区的父【杀】；选择恢复会按该 UID 回到【杀】源码，再由通用组件交还麒麟弓。
+	var parent_slash: CardInstance = CardInstance.new("sha", "spade", 7)
+	parent_slash.zone = "processing"
+	parent_slash.owner_id = -1
+	_controller.state.processing_area.append(parent_slash)
+	# 【杀】伤害后上下文；麒麟弓只读取攻击者和目标稳定 ID，不依赖界面节点。
+	var damage_context: Dictionary = {"actor_id":0, "target_id":1, "parent_card_uid":parent_slash.uid}
+	# 通用【杀】流程组件；用于向装备源码提供与正式结算相同的规则端口和状态引用。
+	var slash_effect: SlashCardEffect = SlashCardEffect.new(_controller.effect_resolver)
+	# 麒麟弓定义；直接调用伤害后公开钩子，覆盖原 get_equipment_candidates 第三个参数的运行时类型路径。
+	var qilin_definition: CardDefinition = GameDatabase.get_card_definition("qilin")
+	if qilin_definition == null or not qilin_definition.on_slash_damage_finished(slash_effect, damage_context):
+		return _fail("qilin_choice_not_started")
+	if not await _wait_until_no_card_choice():
+		return _fail("qilin_choice_timeout")
+	if _qilin_request_count != 1 or not _qilin_candidate_present or _controller.state.get_player(1).equipment.has("offensive_mount") or not _controller.state.discard_pile.has(mount_card):
+		return _fail("qilin_choice request=%d candidate=%s equipment=%s" % [_qilin_request_count, _qilin_candidate_present, _controller.state.get_player(1).equipment])
+	return true
+
+
 ## 验证八卦阵与延时锦囊共用的判定入口会公开展示牌面，并记录 judge、judgeResult 与 cardsDiscard 父子关系。
 func _test_judgment_presentation_and_event_chain() -> bool:
 	_scenario = "judgment_presentation"
@@ -887,6 +987,26 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_zhangba_response_has_equipment = candidate_uids.has(_zhangba_uid)
 		selected_uids = [_zhangba_uid]
 		material_card_uids = _zhangba_material_uids.duplicate()
+	elif _scenario == "bagua_retry" and kind == "slash_response":
+		_bagua_response_request_count += 1
+		# 当前八卦响应候选；首次主动选择防具，第二次验证防具被排除且手牌【闪】仍可使用。
+		var candidate_uids: Array[int] = []
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+		if _bagua_response_request_count == 1:
+			selected_uids = [_bagua_uid]
+		else:
+			_bagua_retry_has_hand_shan = candidate_uids.has(_bagua_hand_shan_uid)
+			_bagua_retry_excludes_bagua = not candidate_uids.has(_bagua_uid)
+			selected_uids = [_bagua_hand_shan_uid]
+	elif _scenario == "qilin_mount" and kind == "qilin_mount":
+		_qilin_request_count += 1
+		# 当前麒麟弓候选；目标进攻坐骑必须通过强类型槽位过滤进入请求。
+		var candidate_uids: Array[int] = []
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+		_qilin_candidate_present = candidate_uids.has(_qilin_mount_uid)
+		selected_uids = [_qilin_mount_uid]
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, kind])
 		return

@@ -46,8 +46,10 @@ func on_slash_damage_finished(slash_effect: Object, context: Dictionary) -> bool
 	var equipment_card: CardInstance = slash_effect.host.get_equipment_card(actor_id, "weapon")
 	if equipment_card == null or equipment_card.definition_id != get_id():
 		return false
+	# 麒麟弓允许选择的标准坐骑槽；强类型数组与控制器公开查询签名保持一致，避免未定型字面量触发运行时参数错误。
+	var mount_slots: Array[String] = ["offensive_mount", "defensive_mount"]
 	# 可弃置坐骑候选；槽位列表由麒麟弓源码声明，通用控制器只负责序列化公开装备。
-	var candidates: Array[Dictionary] = slash_effect.host.get_equipment_candidates(actor_id, target_id, ["offensive_mount", "defensive_mount"])
+	var candidates: Array[Dictionary] = slash_effect.host.get_equipment_candidates(actor_id, target_id, mount_slots)
 	if candidates.is_empty():
 		return false
 	# 坐骑选择上下文；装备定义 ID 与 UID 用于异步恢复和换装复核。
