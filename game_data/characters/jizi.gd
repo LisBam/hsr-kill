@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "himeko",
 		"display_name": "姬子",
 		"gender": "female",
-		"faction": "astral_express",
+		"faction": "xingqionglieche",
 		"max_hp": 4,
 		"description": "群体效果样例武将，仅提供扩展结构。",
 	}, [GUIDAODAJI_SKILL])

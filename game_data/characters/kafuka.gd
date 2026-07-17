@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "kafka",
 		"display_name": "卡芙卡",
 		"gender": "female",
-		"faction": "stellaron_hunter",
+		"faction": "xinghelieshou",
 		"max_hp": 3,
 		"description": "响应效果样例武将，仅提供扩展结构。",
 	}, [YANLING_SKILL])

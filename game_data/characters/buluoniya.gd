@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "bronya",
 		"display_name": "布洛妮娅",
 		"gender": "female",
-		"faction": "belobog",
+		"faction": "beiluoboge",
 		"max_hp": 3,
 		"description": "辅助效果样例武将，仅提供扩展结构。",
 	}, [ZUOZHANZAIBUSHU_SKILL])

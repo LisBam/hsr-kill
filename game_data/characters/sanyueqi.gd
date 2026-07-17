@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "march_7th",
 		"display_name": "三月七",
 		"gender": "female",
-		"faction": "astral_express",
+		"faction": "xingqionglieche",
 		"max_hp": 3,
 		"description": "防御型样例武将，用于验证女性与三体力数据。",
 	}, [LIUXIANGBING_SKILL])

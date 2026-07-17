@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "dan_heng",
 		"display_name": "丹恒",
 		"gender": "male",
-		"faction": "astral_express",
+		"faction": "xingqionglieche",
 		"max_hp": 4,
 		"description": "攻击型样例武将，用于验证男性与四体力数据。",
 	}, [JIYUN_SKILL])

@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "trailblazer",
 		"display_name": "开拓者",
 		"gender": "unknown",
-		"faction": "astral_express",
+		"faction": "xingqionglieche",
 		"max_hp": 4,
 		"description": "通用样例武将，用于验证武将数据、体力与技能接口。",
 	}, [KAITUO_SKILL])
