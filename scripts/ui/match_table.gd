@@ -44,6 +44,9 @@ const HAND_SKILL_GAP: float = 8.0
 ## 本地武将座位左边界相对主场景右边缘的偏移；无技能时手牌栏延伸到该边界左侧。
 const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
 
+## 本地装备区与手牌区的统一高度；175像素覆盖148像素牌面、18像素选中抬升及悬停缩放余量。
+const LOCAL_CARD_AREA_HEIGHT: float = 175.0
+
 ## 每秒包含的毫秒数；对局时长使用单调时钟换算，不受系统时间调整影响。
 const MILLISECONDS_PER_SECOND: int = 1000
 
@@ -117,8 +120,8 @@ var local_player_seat_label: Label
 ## 本地技能透明外层；尺寸严格跟随当前一列或两列按钮，不绘制独立背景框。
 @onready var skill_bar: PanelContainer = $SkillBar
 
-## 本地武将技能按钮容器；每次快照按武将配置重建，预留技能只展示说明不执行规则。
-@onready var skill_button_container: SkillButtonGrid = %SkillButtonContainer
+## 本地武将技能按钮容器；使用基础容器类型接收旧场景缓存，进入_ready后统一升级为SkillButtonGrid。
+@onready var skill_button_container: Container = %SkillButtonContainer
 
 ## 技能状态提示；展示技能说明、可用状态与尚未接入规则的提示。
 @onready var skill_status_label: Label = %SkillStatusLabel
@@ -244,6 +247,8 @@ var _suppressed_group_trick_uid: int = -1
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
+	_ensure_skill_button_grid()
+	_configure_local_card_areas()
 	_configure_interaction_controls()
 	_create_local_player_card()
 	_create_identity_mark_menu()
@@ -272,6 +277,42 @@ func _ready() -> void:
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
 	call_deferred("_start_default_match")
+
+
+## 把旧主场景中的HFlowContainer替换为专用技能网格；迁移只处理布局组件，不读取或修改武将技能规则。
+func _ensure_skill_button_grid() -> void:
+	if skill_button_container is SkillButtonGrid:
+		return
+	# 旧技能容器父节点；缺失时无法保持原场景层级，因此保留现有节点并输出单条诊断。
+	var legacy_parent: Node = skill_button_container.get_parent() if skill_button_container != null else null
+	if legacy_parent == null:
+		push_error("本地技能栏缺少可迁移的 SkillButtonContainer 父节点。")
+		return
+	# 旧技能容器在父节点中的顺序；替换后保持原有绘制与布局顺序。
+	var legacy_index: int = skill_button_container.get_index()
+	# 旧节点名称；继续保留唯一名称查询契约，避免其他桌面组件取得不同节点。
+	var legacy_name: StringName = skill_button_container.name
+	skill_button_container.free()
+	# 专用技能网格；只接管按钮方向与间距，按钮内容仍由技能视图组件负责。
+	var replacement_grid: SkillButtonGrid = SkillButtonGrid.new()
+	replacement_grid.name = legacy_name
+	replacement_grid.unique_name_in_owner = true
+	legacy_parent.add_child(replacement_grid)
+	legacy_parent.move_child(replacement_grid, mini(legacy_index, legacy_parent.get_child_count() - 1))
+	replacement_grid.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	skill_button_container = replacement_grid
+
+
+## 统一底部装备、手牌与技能区的透明样式和高度；旧场景缓存进入树后也会恢复当前布局规格。
+func _configure_local_card_areas() -> void:
+	# 本地装备外层；装备栏与手牌栏固定同为175像素高，底边继续锚定客户区底部。
+	var equipment_panel: PanelContainer = $EquipmentPanel
+	equipment_panel.offset_top = -LOCAL_CARD_AREA_HEIGHT
+	equipment_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	hand_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	skill_bar.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	skill_status_label.visible = false
+	skill_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 ## 按整秒刷新左上角对局时长；只更新文本，不驱动任何规则阶段、计时器或 AI 行为。
@@ -619,14 +660,19 @@ func _layout_local_skill_area(skill_count: int) -> void:
 		first_skill_button = _skill_views.values()[0] as SkillButtonView
 	# 当前单个技能按钮尺寸；直接读取组件暴露参数，使检查器调整后布局仍保持一致。
 	var button_size: Vector2 = Vector2(first_skill_button.button_width, first_skill_button.button_height) if first_skill_button != null else Vector2(62.0, 44.0)
+	# 专用技能网格；_ready阶段已把旧容器迁移为该组件，空值仅表示场景结构已被外部破坏。
+	var skill_grid: SkillButtonGrid = skill_button_container as SkillButtonGrid
+	if skill_grid == null:
+		push_error("本地技能栏未能初始化 SkillButtonGrid。")
+		return
 	# 当前实际列数；一个技能只占右侧一列，两个及以上固定占满两列。
-	var column_count: int = mini(safe_skill_count, skill_button_container.maximum_columns)
+	var column_count: int = mini(safe_skill_count, skill_grid.maximum_columns)
 	# 当前实际层数；第三个技能开始放到第二层并继续向上扩展。
-	var row_count: int = ceili(float(safe_skill_count) / float(maxi(skill_button_container.maximum_columns, 1)))
+	var row_count: int = ceili(float(safe_skill_count) / float(maxi(skill_grid.maximum_columns, 1)))
 	# 当前技能透明区域尺寸；只包含按钮和按钮间距，不额外保留背景内边距。
 	var skill_area_size: Vector2 = Vector2(
-		button_size.x * float(column_count) + skill_button_container.horizontal_gap * float(maxi(column_count - 1, 0)),
-		button_size.y * float(row_count) + skill_button_container.vertical_gap * float(maxi(row_count - 1, 0))
+		button_size.x * float(column_count) + skill_grid.horizontal_gap * float(maxi(column_count - 1, 0)),
+		button_size.y * float(row_count) + skill_grid.vertical_gap * float(maxi(row_count - 1, 0))
 	)
 	skill_bar.visible = true
 	skill_bar.offset_right = LOCAL_SKILL_RIGHT_OFFSET
@@ -635,7 +681,7 @@ func _layout_local_skill_area(skill_count: int) -> void:
 	skill_bar.offset_top = LOCAL_SKILL_BOTTOM_OFFSET - skill_area_size.y
 	# 手牌栏右边界紧贴当前最左技能列；一个技能时自然增长到第一按钮旁，两个及以上缩短到第二按钮旁。
 	hand_panel.offset_right = skill_bar.offset_left - HAND_SKILL_GAP
-	skill_button_container.queue_sort()
+	skill_grid.queue_sort()
 
 
 ## 响应技能按钮请求；预留技能展示永久说明，可主动发动的技能通过统一 PlayerAction 进入规则核心。

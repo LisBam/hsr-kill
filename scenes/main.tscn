@@ -15,6 +15,7 @@
 [ext_resource type="Script" uid="uid://conllkvkmtemn" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
 [ext_resource type="PackedScene" path="res://scenes/components/card_selection_panel.tscn" id="16_card_selection"]
 [ext_resource type="Script" uid="uid://5ckjv0sds4ni" path="res://scripts/ui/equipment_stack_view.gd" id="17_equipment_stack"]
+[ext_resource type="Script" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -479,7 +480,7 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -157.0
+offset_top = -175.0
 offset_right = 168.0
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleEquipmentPanel")
@@ -501,7 +502,7 @@ offset_top = -175.0
 offset_right = -335.7
 grow_horizontal = 2
 grow_vertical = 0
-theme_override_styles/panel = SubResource("StyleHandPanel")
+theme_override_styles/panel = SubResource("StyleEquipmentPanel")
 
 [node name="HandScroll" type="ScrollContainer" parent="HandPanel" unique_id=429512698]
 layout_mode = 2
@@ -521,25 +522,30 @@ anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -327.7
-offset_top = -148.0
+offset_left = -321.7
+offset_top = -70.0
 offset_right = -191.7
-offset_bottom = -14.0
+offset_bottom = -26.0
 grow_horizontal = 0
 grow_vertical = 0
-theme_override_styles/panel = SubResource("StyleJadePanel")
+theme_override_styles/panel = SubResource("StyleEquipmentPanel")
 
-[node name="SkillVBox" type="VBoxContainer" parent="SkillBar" unique_id=1002488890]
+[node name="SkillVBox" type="Control" parent="SkillBar" unique_id=1002488890]
 layout_mode = 2
 
-[node name="SkillButtonContainer" type="HFlowContainer" parent="SkillBar/SkillVBox" unique_id=2054243440]
+[node name="SkillButtonContainer" type="Container" parent="SkillBar/SkillVBox" unique_id=2054243440]
 unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/v_separation = 6
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("18_skill_grid")
 
 [node name="SkillStatusLabel" type="Label" parent="SkillBar/SkillVBox" unique_id=1357965274]
 unique_name_in_owner = true
+visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.68, 0.65, 0.58, 1)
 theme_override_font_sizes/font_size = 10
@@ -661,6 +667,16 @@ offset_left = 40.0
 offset_top = 106.0
 offset_right = 188.35
 offset_bottom = 303.8
+
+[node name="LordDivider" type="ColorRect" parent="CharacterSelectionPanel/SelectionFrame"]
+visible = false
+layout_mode = 0
+offset_left = 200.0
+offset_top = 82.0
+offset_right = 202.0
+offset_bottom = 324.0
+mouse_filter = 2
+color = Color(0.78, 0.63, 0.34, 0.72)
 
 [node name="CharacterCandidateArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1250766479]
 unique_name_in_owner = true

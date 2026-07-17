@@ -27,6 +27,12 @@ const LORD_CHARACTER_LABEL_PATH: NodePath = NodePath("SelectionFrame/LordCharact
 ## 主公牌与候选牌之间竖向分隔线的组件内相对路径；没有公开主公时保持隐藏且不占候选区域。
 const LORD_DIVIDER_PATH: NodePath = NodePath("SelectionFrame/LordDivider")
 
+## 旧场景缺少主公分隔线时使用的默认矩形；2像素宽竖线位于主公牌区与候选区之间。
+const LORD_DIVIDER_RECT: Rect2 = Rect2(200.0, 82.0, 2.0, 242.0)
+
+## 旧场景缺少主公分隔线时使用的暗金颜色；透明度0.72保证分隔可见但不抢占武将牌视觉层级。
+const LORD_DIVIDER_COLOR: Color = Color(0.78, 0.63, 0.34, 0.72)
+
 ## 选将确认按钮的组件内相对路径；按钮只提交稳定武将 ID。
 const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterButton")
 
@@ -96,6 +102,7 @@ var _required_nodes_ready: bool = false
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
+	_ensure_lord_divider()
 	_required_nodes_ready = _validate_required_nodes()
 	if not _required_nodes_ready:
 		visible = false
@@ -110,6 +117,26 @@ func _ready() -> void:
 	_candidate_area_without_lord_left = _lord_character_area.position.x
 	_candidate_area_right = _candidate_area.position.x + _candidate_area.size.x
 	visible = false
+
+
+## 为仍在编辑器内存中的旧主场景补建主公分隔线；新节点继续使用稳定相对路径参与统一校验和显隐。
+func _ensure_lord_divider() -> void:
+	if _lord_divider != null:
+		return
+	# 选将主框；旧场景只有在该稳定父节点存在时才能安全补建分隔线。
+	var selection_frame: Control = get_node_or_null("SelectionFrame") as Control
+	if selection_frame == null:
+		return
+	# 运行时主公分隔线；几何和颜色与正式场景资源保持一致，编辑器重新载入场景后不会产生视觉差异。
+	var runtime_lord_divider: ColorRect = ColorRect.new()
+	runtime_lord_divider.name = StringName(LORD_DIVIDER_PATH.get_name(LORD_DIVIDER_PATH.get_name_count() - 1))
+	runtime_lord_divider.position = LORD_DIVIDER_RECT.position
+	runtime_lord_divider.size = LORD_DIVIDER_RECT.size
+	runtime_lord_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	runtime_lord_divider.color = LORD_DIVIDER_COLOR
+	runtime_lord_divider.visible = false
+	selection_frame.add_child(runtime_lord_divider)
+	_lord_divider = runtime_lord_divider
 
 
 ## 接收裁剪后的选将快照并重建候选牌；任何隐藏选择都不会进入该组件。
