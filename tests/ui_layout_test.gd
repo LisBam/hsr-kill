@@ -103,7 +103,7 @@ func _run() -> void:
 	var first_skill_button: SkillButtonView
 	if not skill_views.is_empty():
 		first_skill_button = skill_views.values()[0] as SkillButtonView
-	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x):
+	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x) or not is_equal_approx(skill_bar.position.x + skill_bar.size.x + 12.0, (main_instance.get_node("LocalPlayerSeatSlot") as Control).position.x):
 		_fail("skill_button_only_layout:%s/%s" % [skill_bar.get_rect(), first_skill_button.text if first_skill_button != null else "null"])
 		return
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
@@ -148,7 +148,24 @@ func _run() -> void:
 	var local_adaptive_equipment_row_height: float = (local_equipment_label.size.y - local_equipment_label.equipment_row_gap * 4.0) / 5.0
 	# 当前五槽节距；等于29像素自适应槽高加3像素间距。
 	var local_equipment_row_pitch: float = local_adaptive_equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
-	if local_weapon_row == null or local_treasure_row == null or local_empty_armor_row == null or not is_equal_approx(local_weapon_row.size.y, local_adaptive_equipment_row_height) or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
+	# 本地空进攻坐骑横条；五槽常驻布局中必须保留第三个等高槽位。
+	var local_offensive_mount_row: Button = local_equipment_label.get_row("offensive_mount")
+	# 本地空防御坐骑横条；五槽常驻布局中必须保留第四个等高槽位。
+	var local_defensive_mount_row: Button = local_equipment_label.get_row("defensive_mount")
+	if local_weapon_row == null or local_treasure_row == null or local_empty_armor_row == null or local_offensive_mount_row == null or local_defensive_mount_row == null:
+		_fail("local_equipment_rows_missing")
+		return
+	# 当前五个固定装备槽；数组顺序用于逐段验证相邻空隙完全一致。
+	var local_equipment_rows: Array[Button] = [local_weapon_row, local_empty_armor_row, local_offensive_mount_row, local_defensive_mount_row, local_treasure_row]
+	# 当前相邻装备槽的实际空隙；全部四段都必须等于组件统一配置值。
+	var local_equipment_gaps_are_equal: bool = true
+	for equipment_row_index: int in range(local_equipment_rows.size() - 1):
+		# 当前相邻装备槽实际间距；由下一槽顶边减去当前槽底边得到，不受槽高变化影响。
+		var actual_equipment_gap: float = local_equipment_rows[equipment_row_index + 1].position.y - (local_equipment_rows[equipment_row_index].position.y + local_equipment_rows[equipment_row_index].size.y)
+		if not is_equal_approx(actual_equipment_gap, local_equipment_label.equipment_row_gap):
+			local_equipment_gaps_are_equal = false
+			break
+	if not is_equal_approx(local_weapon_row.size.y, local_adaptive_equipment_row_height) or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or not is_equal_approx(local_weapon_row.position.y, 0.0) or not is_equal_approx(local_treasure_row.position.y + local_treasure_row.size.y, local_equipment_label.size.y) or not local_equipment_gaps_are_equal or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
 		_fail("local_equipment_stack:%s" % local_equipment_label.tooltip_text)
 		return
 	# 本地武将牌装备条；第一视角只通过左侧装备栏查看装备，武将牌自身不得重复显示横条。
@@ -216,6 +233,15 @@ func _run() -> void:
 		return
 	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
+	# 身份标注菜单；未知、忠臣、反贼和内奸都只显示单字简写。
+	var identity_mark_menu: PopupMenu = main_instance.get("_identity_mark_menu") as PopupMenu
+	# 身份标注菜单文本；顺序固定为清除推测、忠臣、反贼和内奸。
+	var identity_mark_menu_texts: Array[String] = []
+	for identity_mark_menu_index: int in range(identity_mark_menu.item_count):
+		identity_mark_menu_texts.append(identity_mark_menu.get_item_text(identity_mark_menu_index))
+	if identity_mark_menu_texts != ["？", "忠", "反", "内"]:
+		_fail("identity_mark_menu_texts:%s" % [identity_mark_menu_texts])
+		return
 	# 未知身份本地标注；选择反贼后只改变当前客户端徽记，不修改快照中的 hidden 身份。
 	main_instance.call("_on_identity_badge_pressed", 5)
 	main_instance.call("_on_identity_mark_selected", 1)
@@ -223,6 +249,12 @@ func _run() -> void:
 	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
 	if marked_identity_badge.text != "反" or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
 		_fail("identity_local_mark:%s" % marked_identity_badge.text)
+		return
+	# 清除身份本地标注；重新选择问号后删除字典记录并恢复未知徽记。
+	main_instance.call("_on_identity_badge_pressed", 5)
+	main_instance.call("_on_identity_mark_selected", 3)
+	if marked_identity_badge.text != "？" or (main_instance.get("_identity_marks") as Dictionary).has(5):
+		_fail("identity_mark_reset:%s" % marked_identity_badge.text)
 		return
 	# 真实身份公开优先级；即使随后写入另一项本地标注，徽记仍必须显示权威忠臣身份。
 	var revealed_player_snapshot: Dictionary = (((_make_ten_player_snapshot().get("players", []) as Array)[5]) as Dictionary).duplicate(true)
@@ -448,11 +480,27 @@ func _run() -> void:
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
+	# 同区域重复移动数据；弃牌堆到弃牌堆不应在中央原地创建一张无来源牌面。
+	var redundant_discard_card_data: Dictionary = {"uid":90009, "definition_id":"shan", "suit":"heart", "rank":10, "zone":"discard_pile", "owner_id":-1}
+	main_instance.call("_on_card_transfer_requested", redundant_discard_card_data, -1, "discard_pile", -1, "discard_pile")
+	if not animation_layer._active_cards.is_empty():
+		_fail("same_zone_discard_created=%s" % [animation_layer._active_cards])
+		return
+	# 普通弃牌重复增量；首次请求只创建一张牌，迟到的同一 UID 请求必须被动画层幂等过滤。
+	var duplicate_discard_card_data: Dictionary = {"uid":90010, "definition_id":"jiu", "suit":"club", "rank":4, "zone":"discard_pile", "owner_id":-1}
+	main_instance.call("_on_card_transfer_requested", duplicate_discard_card_data, 5, "hand", -1, "discard_pile")
+	main_instance.call("_on_card_transfer_requested", duplicate_discard_card_data, 5, "hand", -1, "discard_pile")
+	if animation_layer._active_cards.size() != 1 or animation_layer._active_cards[0].card_uid != 90010:
+		_fail("duplicate_discard_created=%s" % [animation_layer._active_cards])
+		return
+	animation_layer.clear_presentations()
 	# 已展示并淡出的实际使用牌；最终处理区转弃牌时不得在中央重新创建第二张表现牌。
 	var delayed_discard_card_data: Dictionary = {"uid":90007, "definition_id":"sha", "suit":"club", "rank":6, "zone":"processing", "owner_id":-1}
 	# 单目标展示目标；使用已验证的六号位武将牌中心创建一次正常使用动画。
 	var delayed_discard_target_ids: Array[int] = [5]
+	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.01
+	animation_layer.target_line_fade_duration = 0.01
 	# 延迟弃牌使用事件；动画淡出后仍需保留 UID 所有权，直到真实 processing -> discard 移动到达。
 	var delayed_discard_presentation_data: Dictionary = {"presentation_id":3, "event_id":3, "event_name":"useCard", "card_data":delayed_discard_card_data, "actor_id":4, "target_ids":delayed_discard_target_ids, "source_zone":"processing", "owns_discard_transfer":true}
 	main_instance.call("_on_card_presentation_requested", delayed_discard_presentation_data)
@@ -462,24 +510,28 @@ func _run() -> void:
 		_fail("duplicate_presentation_created=%s" % [animation_layer._active_cards])
 		return
 	await get_tree().create_timer(0.06).timeout
-	if not animation_layer._active_cards.is_empty() or not animation_layer._discard_transfer_claims.has(90007):
+	if animation_layer._active_cards.size() != 1 or not animation_layer._discard_transfer_claims.has(90007) or not animation_layer._discard_claim_card_instance_ids.has(90007):
 		_fail("delayed_discard_presentation_state:%s" % [animation_layer._active_cards])
 		return
 	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
-	if not animation_layer._active_cards.is_empty() or animation_layer._discard_transfer_claims.has(90007):
+	if animation_layer._active_cards.size() != 1 or animation_layer._discard_transfer_claims.has(90007) or animation_layer._discard_claim_card_instance_ids.has(90007):
 		_fail("delayed_discard_duplicate:%s" % [animation_layer._active_cards])
 		return
 	# 重复移动增量；认领消费后继续保留幂等 UID，第二次转发也不能在牌桌上方重新实例化同一张牌。
 	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
-	if not animation_layer._active_cards.is_empty() or not animation_layer._consumed_discard_transfer_claims.has(90007):
+	if animation_layer._active_cards.size() != 1 or not animation_layer._consumed_discard_transfer_claims.has(90007):
 		_fail("repeated_discard_transfer_created:%s" % [animation_layer._active_cards])
 		return
 	# 不同表现 ID 的迟到包；实体仍在弃牌生命周期时也必须拒绝，不能把网络重发误判为下一次真实使用。
 	var late_presentation_data: Dictionary = delayed_discard_presentation_data.duplicate(true)
 	late_presentation_data["presentation_id"] = 4
 	main_instance.call("_on_card_presentation_requested", late_presentation_data)
-	if not animation_layer._active_cards.is_empty() or not animation_layer._consumed_discard_transfer_claims.has(90007):
+	if animation_layer._active_cards.size() != 1 or not animation_layer._consumed_discard_transfer_claims.has(90007):
 		_fail("late_distinct_presentation_created:%s" % [animation_layer._active_cards])
+		return
+	await get_tree().create_timer(0.05).timeout
+	if not animation_layer._active_cards.is_empty():
+		_fail("resolved_presentation_not_faded:%s" % [animation_layer._active_cards])
 		return
 	# 实体进入新的非弃牌区域；权威移牌内部通知会释放旧待消费与已消费状态，使该牌未来一次合法普通弃置重新可见。
 	main_instance.call("_on_card_animation_ownership_reset_requested", 90007)

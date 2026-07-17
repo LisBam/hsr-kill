@@ -104,7 +104,8 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	# 【酒】正常使用目标模式；出牌阶段只能指定已受伤的使用者本人。
-	if str(GameDatabase.get_card("jiu").get("target_mode", "")) != "self_wounded":
+	# 当前规则允许满体力使用【酒】获得下一张【杀】加伤，因此目标模式固定为不检查伤势的自己。
+	if str(GameDatabase.get_card("jiu").get("target_mode", "")) != "self":
 		printerr("SMOKE_FAIL wine_target_mode")
 		get_tree().quit(1)
 		return
@@ -191,8 +192,9 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	# 满体力时的【酒】候选；不应产生任何合法目标。
+	# 当前规则修正后满体力仍可使用【酒】，唯一合法目标必须是使用者本人。
 	var healthy_wine_targets: Array[int] = target_order_rules.list_legal_targets(2, self_wine_card)
-	if not healthy_wine_targets.is_empty():
+	if healthy_wine_targets != [2]:
 		printerr("SMOKE_FAIL healthy_wine_targets=%s" % healthy_wine_targets)
 		get_tree().quit(1)
 		return

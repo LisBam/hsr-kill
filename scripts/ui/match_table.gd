@@ -33,7 +33,8 @@ const SUPPRESSED_TRICK_BUTTON_COLOR: Color = Color("292826")
 const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
 
 ## 技能区相对主场景右边缘的固定右边界；与右下本地武将牌保留27.35像素间隔。
-const LOCAL_SKILL_RIGHT_OFFSET: float = -191.7
+## 当前布局将安全间隔收紧为12像素，使技能按钮靠近本地武将牌，同时由手牌右边界计算继续保留8像素隔离。
+const LOCAL_SKILL_RIGHT_OFFSET: float = -176.35
 
 ## 技能区相对主场景底边的固定下边界；与本地武将牌牌面底边对齐，不占用座次标签区域。
 const LOCAL_SKILL_BOTTOM_OFFSET: float = -26.0
@@ -46,6 +47,12 @@ const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
 
 ## 本地装备区与手牌区的统一高度；175像素覆盖148像素牌面、18像素选中抬升及悬停缩放余量。
 const LOCAL_CARD_AREA_HEIGHT: float = 175.0
+
+## 本地五个装备槽之间的统一纵向间距；默认3像素，与装备组件和界面文档保持一致。
+const LOCAL_EQUIPMENT_ROW_GAP: float = 3.0
+
+## 本地装备槽的统一覆盖量；默认0表示五槽互不覆盖，全部间距都由同一个间距参数控制。
+const LOCAL_EQUIPMENT_ROW_OVERLAP: float = 0.0
 
 ## 每秒包含的毫秒数；对局时长使用单调时钟换算，不受系统时间调整影响。
 const MILLISECONDS_PER_SECOND: int = 1000
@@ -242,6 +249,7 @@ var _identity_marks: Dictionary = {}
 var _identity_mark_target_id: int = -1
 
 ## 身份标注弹出菜单；只提供忠臣、反贼和内奸三个本地标记选项，不包含主公。
+## 菜单额外提供“？”作为清除本地推测的入口，四项均只显示单字简写。
 var _identity_mark_menu: PopupMenu
 
 ## 当前开启“不响应该锦囊”的群体锦囊实体 UID；默认-1表示未开启，牌离开处理区后自动清除。
@@ -311,6 +319,12 @@ func _configure_local_card_areas() -> void:
 	# 本地装备外层；装备栏与手牌栏固定同为175像素高，底边继续锚定客户区底部。
 	var equipment_panel: PanelContainer = $EquipmentPanel
 	equipment_panel.offset_top = -LOCAL_CARD_AREA_HEIGHT
+	equipment_panel.offset_bottom = 0.0
+	# 本地手牌外层；与装备栏共用相同顶边和底边，保证两块区域在任何客户区高度下严格等高。
+	hand_panel.offset_top = -LOCAL_CARD_AREA_HEIGHT
+	hand_panel.offset_bottom = 0.0
+	equipment_label.equipment_row_gap = LOCAL_EQUIPMENT_ROW_GAP
+	equipment_label.equipment_row_overlap = LOCAL_EQUIPMENT_ROW_OVERLAP
 	equipment_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	hand_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	skill_bar.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
@@ -357,9 +371,10 @@ func _configure_interaction_controls() -> void:
 func _create_identity_mark_menu() -> void:
 	_identity_mark_menu = PopupMenu.new()
 	_identity_mark_menu.name = "IdentityMarkMenu"
-	_identity_mark_menu.add_item("忠臣", 0)
-	_identity_mark_menu.add_item("反贼", 1)
-	_identity_mark_menu.add_item("内奸", 2)
+	_identity_mark_menu.add_item("？", 3)
+	_identity_mark_menu.add_item("忠", 0)
+	_identity_mark_menu.add_item("反", 1)
+	_identity_mark_menu.add_item("内", 2)
 	_identity_mark_menu.id_pressed.connect(_on_identity_mark_selected)
 	add_child(_identity_mark_menu)
 
@@ -382,10 +397,14 @@ func _on_identity_mark_selected(item_id: int) -> void:
 	if _identity_mark_target_id < 0:
 		return
 	# 当前菜单项对应身份 ID；不存在的菜单项不会写入本地标注字典。
+	# 问号使用空字符串表示移除本地推测，不修改任何权威身份数据。
 	var identity_mark: String = {0:"loyalist", 1:"rebel", 2:"renegade"}.get(item_id, "")
-	if identity_mark.is_empty():
+	if identity_mark.is_empty() and item_id != 3:
 		return
-	_identity_marks[_identity_mark_target_id] = identity_mark
+	if identity_mark.is_empty():
+		_identity_marks.erase(_identity_mark_target_id)
+	else:
+		_identity_marks[_identity_mark_target_id] = identity_mark
 	# 当前目标武将牌；持久座位存在时只刷新身份徽记，不重建其他牌面节点。
 	var player_view: PlayerTargetView = _player_views.get(_identity_mark_target_id) as PlayerTargetView
 	if player_view != null and is_instance_valid(player_view):
@@ -430,6 +449,9 @@ func _create_local_player_card() -> void:
 func _on_state_changed(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
 	_sync_match_clock()
+	if bool(_snapshot.get("game_over", false)):
+		# 对局结束会中断尚未产生最终移牌的响应树；中央牌面改为正常停留淡出，避免终局后永久残留。
+		card_use_animation_layer.finish_pending_claimed_presentations()
 	_public_card_choice_display = (_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate(true)
 	if str(_snapshot.get("current_phase", "")) != "character_selection":
 		character_selection_panel.close()
@@ -1597,12 +1619,20 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
+	# 同区域重复增量不代表实体发生了新的区域变化；直接丢弃，避免从中央锚点原地生成一张无来源牌面。
+	if source_zone == target_zone and source_player_id == target_player_id:
+		return
 	if card_uid == _suppressed_group_trick_uid and source_zone == "processing" and target_zone != "processing":
 		# 被抑制锦囊已经完成本次处理区生命周期；按钮恢复普通回合结束语义，下一次同名实体不会继承本地开关。
 		_suppressed_group_trick_uid = -1
 		_refresh_selection_text()
-	if target_zone == "discard_pile" and card_use_animation_layer.consume_discard_transfer_claim(card_uid):
-		return
+	if target_zone == "discard_pile":
+		# 真实使用/判定牌先消费表现层认领；普通弃牌首次登记 UID，重复增量和迟到包都不再创建第二张牌。
+		if card_use_animation_layer.register_discard_transfer(card_uid):
+			return
+		# 已有同 UID 牌面仍在中央队列时，纯展示或旧转移增量不能再并排创建重复节点。
+		if card_use_animation_layer.has_active_card_uid(card_uid):
+			return
 	if target_zone != "discard_pile":
 		# 实体已经进入新的规则区域；上一轮弃牌移动的待消费与已消费所有权到此失效，未来普通弃置或再次使用可重新播放。
 		card_use_animation_layer.release_consumed_discard_claim(card_uid)

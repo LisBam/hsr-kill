@@ -103,6 +103,8 @@ func _run() -> void:
 		return
 	if not _test_response_card_pattern_filter():
 		return
+	if not await _test_full_health_wine_use():
+		return
 	if not await _test_zhuque_requires_activation_choice():
 		return
 	if not await _test_silver_moon_requires_activation_choice():
@@ -521,6 +523,26 @@ func _test_response_card_pattern_filter() -> bool:
 		return _fail("snatch_consumed_as_wuxie")
 	if _controller._consume_response_card_uid(0, wuxie.uid, "wuxie") != wuxie or not _controller.state.discard_pile.has(wuxie):
 		return _fail("wuxie_response_rejected")
+	return true
+
+
+## 验证满体力角色仍可在出牌阶段对自己使用【酒】，并获得本回合下一张【杀】固定+1伤害加值。
+func _test_full_health_wine_use() -> bool:
+	_scenario = "full_health_wine"
+	_reset_state(2)
+	# 满体力使用者的【酒】实体；初始4/4体力不得阻止正常增益用途。
+	var wine: CardInstance = _add_hand_card(0, "jiu", "diamond", 9)
+	# 满体力【酒】使用校验结果；空字符串表示规则层接受唯一自身目标。
+	var validation_error: String = _controller.card_rules.validate_use(0, wine, [0])
+	if not validation_error.is_empty():
+		return _fail("full_health_wine_validation=%s" % validation_error)
+	_controller._execute_card_use(0, wine, [0])
+	if not await _wait_until_card_finalized(wine.uid):
+		return _fail("full_health_wine_timeout")
+	# 满体力使用者最终状态；体力保持4，酒次数与下一杀加值都已写入，实体进入弃牌堆。
+	var player: PlayerState = _controller.state.get_player(0)
+	if player.hp != 4 or not player.wine_used or player.wine_bonus != 1 or not _controller.state.discard_pile.has(wine):
+		return _fail("full_health_wine_result=%d:%s:%d" % [player.hp, player.wine_used, player.wine_bonus])
 	return true
 
 
