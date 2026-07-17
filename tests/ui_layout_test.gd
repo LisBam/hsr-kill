@@ -172,6 +172,10 @@ func _run() -> void:
 	var local_player_card: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
 	# 本地武将牌受伤反馈次数；首次快照只建立体力基线，不应在进入牌桌时抖动。
 	var initial_damage_feedback_count: int = local_player_card.get_damage_feedback_playback_count()
+	# 本地武将牌受伤前原始位置；单次冲击完成后必须精确恢复，不能留下布局偏移。
+	var local_player_rest_position: Vector2 = local_player_card.position
+	# 独立受伤反馈组件；当前配置必须固定为1次冲击位移，禁止恢复旧的多段往返抖动。
+	var damage_feedback: DamageShakeFeedback = local_player_card.get_node("DamageShakeFeedback") as DamageShakeFeedback
 	# 体力下降快照；只修改本地五号位1点体力，验证新牌面渲染后恰好触发一次独立反馈组件。
 	var damaged_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
 	# 当前待修改玩家快照；只匹配稳定本地玩家 ID，不依赖座次数组下标。
@@ -183,8 +187,12 @@ func _run() -> void:
 			break
 	match_controller.state_changed.emit(damaged_snapshot)
 	await get_tree().process_frame
-	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 1:
+	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 1 or damage_feedback.shake_step_count != 1:
 		_fail("local_damage_feedback:%d/%d" % [initial_damage_feedback_count, local_player_card.get_damage_feedback_playback_count()])
+		return
+	await get_tree().create_timer(damage_feedback.shake_duration + 0.05).timeout
+	if not local_player_card.position.is_equal_approx(local_player_rest_position):
+		_fail("damage_feedback_position_not_restored:%s/%s" % [local_player_rest_position, local_player_card.position])
 		return
 	# 恢复原体力快照只属于测试对账，不应把体力上升误判为第二次受伤。
 	match_controller.state_changed.emit(ten_player_snapshot)
@@ -423,6 +431,21 @@ func _run() -> void:
 	var multi_target_positions: Array = multi_target_presentation.get("target_positions", []) as Array
 	if not (multi_target_presentation.get("start_position", Vector2.ZERO) as Vector2).is_equal_approx(expected_local_anchor) or multi_target_positions.size() != 2 or (multi_target_positions[0] as Vector2).is_equal_approx(multi_target_positions[1] as Vector2):
 		_fail("multi_target_indicator:%s" % multi_target_presentation)
+		return
+	# 当前真实使用牌节点；响应等待期间会继续留在中央队列，鼠标离开不得把其纵坐标重置到窗口顶部。
+	var presented_use_card: CardView = animation_layer._active_cards[0] as CardView
+	await get_tree().create_timer(0.03).timeout
+	# 当前中央队列目标位置；飞行结束后牌面必须精确停在该位置，而不是来源玩家座位。
+	var expected_presented_card_position: Vector2 = animation_layer.call("_queue_card_position", 0) as Vector2
+	if not presented_use_card.position.is_equal_approx(expected_presented_card_position):
+		_fail("presented_card_not_at_center:%s/%s" % [presented_use_card.position, expected_presented_card_position])
+		return
+	# 鼠标离开前位置；直接复现动画牌透明输入区发出 hover_finished 的真实异常路径。
+	var position_before_mouse_exit: Vector2 = presented_use_card.position
+	presented_use_card.call("_on_mouse_exited")
+	await get_tree().process_frame
+	if not presented_use_card.position.is_equal_approx(position_before_mouse_exit):
+		_fail("animated_card_mouse_exit_position_reset:%s/%s" % [position_before_mouse_exit, presented_use_card.position])
 		return
 	animation_layer.clear_presentations()
 	await get_tree().create_timer(0.03).timeout
