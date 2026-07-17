@@ -107,6 +107,13 @@ func continue_choice(_context: Dictionary, _selected_uids: Array[int]) -> bool:
 	return false
 
 
+## 恢复由本技能创建的通用选择请求；默认兼容旧 continue_choice，需同时读取目标的技能可覆盖本函数。
+func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
+	if response == null:
+		return false
+	return continue_choice(context, response.card_ids)
+
+
 ## 恢复由本技能创建的响应牌请求；response_card 为 null 表示响应者明确放弃。
 func continue_response(_context: Dictionary, _response_card: CardInstance) -> bool:
 	return false
@@ -120,3 +127,39 @@ func append_play_phase_actions(_result: Array[Dictionary]) -> void:
 ## 返回主动技能的只读交互预览；不得在本函数中消耗资源、创建选择或修改对局状态。
 func get_activation_preview(_context: Dictionary = {}) -> Dictionary:
 	return {}
+
+
+## 为技能持有者创建统一选牌请求；候选必须是可序列化牌面快照，恢复上下文会自动绑定技能 ID 与持有者。
+func request_card_selection(title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary = {}) -> Array[int]:
+	if host == null or not host.has_method("request_card_choice"):
+		return []
+	# 技能恢复上下文；稳定技能 ID 与持有者 ID 由基类统一写入，具体技能只保存自身步骤参数。
+	var skill_context: Dictionary = _build_selection_context(context)
+	return host.call("request_card_choice", owner_player_id, title, prompt, candidates, min_select, max_select, allow_cancel, skill_context) as Array[int]
+
+
+## 为技能持有者创建统一选目标请求；目标 ID 只来自权威规则查询，UI、AI 与网络提交同一种 ChoiceResponse。
+func request_target_selection(prompt: String, target_ids: Array[int], min_select: int = 1, max_select: int = 1, allow_cancel: bool = true, context: Dictionary = {}) -> Array[int]:
+	if host == null or not host.has_method("request_target_choice"):
+		return []
+	# 技能恢复上下文；选择种类仍由控制器写入请求，不要求技能脚本直接构造运行时对象。
+	var skill_context: Dictionary = _build_selection_context(context)
+	return host.call("request_target_choice", owner_player_id, prompt, target_ids, min_select, max_select, allow_cancel, skill_context) as Array[int]
+
+
+## 为技能持有者创建同时选牌和选目标的请求；牌与目标数量分别配置，适合“弃一张牌并选择一名角色”等技能。
+func request_card_target_selection(title: String, prompt: String, candidates: Array[Dictionary], target_ids: Array[int], min_cards: int, max_cards: int, min_targets: int, max_targets: int, allow_cancel: bool, context: Dictionary = {}) -> Dictionary:
+	if host == null or not host.has_method("request_card_target_choice"):
+		return {}
+	# 技能恢复上下文；可在 context.target_ids_by_card_id 中提供实体牌到合法目标的组合映射。
+	var skill_context: Dictionary = _build_selection_context(context)
+	return host.call("request_card_target_choice", owner_player_id, title, prompt, candidates, target_ids, min_cards, max_cards, min_targets, max_targets, allow_cancel, skill_context) as Dictionary
+
+
+## 构建技能选择恢复上下文；调用方同名字段不能覆盖稳定技能归属，避免响应被错误技能消费。
+func _build_selection_context(context: Dictionary) -> Dictionary:
+	# 可写上下文副本；仅保存可序列化值，不传递技能对象或 Callable。
+	var result: Dictionary = context.duplicate(true)
+	result["skill_id"] = get_id()
+	result["skill_owner_id"] = owner_player_id
+	return result

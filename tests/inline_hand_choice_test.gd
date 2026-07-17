@@ -247,8 +247,10 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 紧凑选择框与浅背景滤镜；场景覆盖值必须小于组件通用默认规格。
 	var selection_frame: PanelContainer = selection_panel.get("_frame") as PanelContainer
-	# 全屏选择遮罩；透明度必须使用正式场景覆盖后的0.42浅滤镜。
+	# 全屏选择遮罩；透明度必须使用当前 UI 风格注册的统一 shade 颜色。
 	var selection_shade: ColorRect = selection_panel.get("_shade") as ColorRect
+	# 当前风格遮罩透明度；测试不再硬编码已经废弃的0.42旧主题值。
+	var expected_selection_shade_alpha: float = BattleUIStyle.get_color("shade").a
 	# 公共窗口底部操作行；旁观快照尚无本地请求时必须隐藏。
 	var public_action_row: HBoxContainer = selection_panel.get("_action_row") as HBoxContainer
 	# 公共牌位视图映射；领取牌仍以原 UID 留在固定位置。
@@ -261,7 +263,7 @@ func _run() -> void:
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
 	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
 	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。

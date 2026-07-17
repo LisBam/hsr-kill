@@ -17,7 +17,7 @@ signal card_transfer_requested(card_data: Dictionary, source_player_id: int, sou
 ## 牌面弃牌幂等状态释放信号；实体进入任意非弃牌区域时发送，不代表需要播放一条可见转移动画。
 signal card_animation_ownership_reset_requested(card_uid: int)
 
-## 统一选择请求信号；玩家和 AI 都必须先收到询问，再提交 choose_cards 动作。
+## 统一选择请求信号；选牌、选目标与组合选择都先发送可序列化询问，再提交兼容 choose_cards 动作。
 signal card_choice_requested(choice_data: Dictionary)
 
 ## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
@@ -128,7 +128,7 @@ var _scheduled_ai_choice_request_id: int = -1
 ## 当前是否正在批量驱动 AI 选将；防止阶段推进时递归处理旧待选列表并产生重复提交。
 var _is_driving_character_selection: bool = false
 
-## 当前等待提交的统一选牌请求；空字典表示没有响应、弃牌或区域选牌窗口。
+## 当前等待提交的统一选择请求；空字典表示没有响应、弃牌、区域选牌、技能目标或组合选择窗口。
 var _pending_card_choice: Dictionary = {}
 
 ## 当前同时等待的无懈可击请求；键为请求 ID，值为该玩家的私有候选与可序列化恢复上下文。
@@ -139,6 +139,9 @@ var _negation_round_sequence: int = 0
 
 ## 最近一次同步完成请求所选择的实体牌 UID；只供无交互测试与兼容回退在当前调用栈读取，正式 AI 请求始终异步恢复。
 var _resolved_card_choice_uids: Array[int] = []
+
+## 最近一次同步完成请求所选择的目标玩家 ID；只供技能测试与无交互回退读取，正式交互通过 continue_selection 恢复。
+var _resolved_target_choice_ids: Array[int] = []
 
 ## 最近一次同步选择随装备技能提交的实体材料 UID；丈八蛇矛响应会读取恰好两张手牌，其他选择保持空数组。
 var _resolved_equipment_material_uids: Array[int] = []
@@ -426,12 +429,34 @@ func submit_action(action: PlayerAction) -> bool:
 	if action.action_type == "select_character":
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
 	if action.action_type == "use_skill":
+		# 出牌阶段主动技能必须先完成当前 chooseToUse，技能内部后续选牌或选目标才会成为其子选择上下文。
+		if action.actor_id == state.current_player_id and state.current_phase == "play":
+			# 本次提交的稳定技能 ID；必须属于行动玩家当前安装的技能实例。
+			var skill_id: String = str(action.payload.get("skill_id", ""))
+			if not can_activate_skill(action.actor_id, skill_id, action.payload):
+				return _reject("该技能当前不满足发动条件。")
+			if not _submit_play_choice_response(action):
+				return false
+			# 技能发动结果；失败时仍会恢复新的出牌请求供玩家继续操作。
+			var activated: bool = activate_skill(action.actor_id, skill_id, action.payload)
+			# 技能被规则取消或执行入口返回错误时也必须恢复出牌请求，避免已关闭的 chooseToUse 令玩家失去后续操作。
+			if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+				_begin_play_choice(state.current_player_id)
+			return activated
 		return activate_skill(action.actor_id, str(action.payload.get("skill_id", "")), action.payload)
 	if action.action_type == "choice_response":
 		var choice_response: ChoiceResponse = ChoiceResponse.from_dict(action.payload)
 		var choice_action: PlayerAction = PlayerAction.new("choose_cards", choice_response.actor_id)
 		choice_action.client_sequence = choice_response.client_sequence
-		choice_action.payload = {"request_id":choice_response.request_id, "event_id":choice_response.event_id, "selected_card_uids":choice_response.card_ids.duplicate()}
+		choice_action.payload = {
+			"request_id":choice_response.request_id,
+			"event_id":choice_response.event_id,
+			"selected_card_uids":choice_response.card_ids.duplicate(),
+			"selected_target_ids":choice_response.target_ids.duplicate(),
+			"selected_button_ids":choice_response.button_ids.duplicate(),
+			"selected_control_id":choice_response.control_id,
+			"confirmed":choice_response.confirmed,
+		}
 		if _pending_negation_choices.has(choice_response.request_id):
 			return _submit_simultaneous_negation_choice(choice_action)
 		return _submit_card_choice(choice_action)
@@ -659,7 +684,7 @@ func _get_play_phase_equipment_action_definition(player_id: int, action_type: St
 	return null
 
 
-## 返回当前是否存在等待玩家或 AI 提交的选择窗口；效果执行器据此暂停后续结算。
+## 返回当前是否存在等待玩家或 AI 提交的选择窗口；牌、目标和组合请求都会暂停后续结算。
 func has_pending_card_choice() -> bool:
 	return not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty()
 
@@ -708,10 +733,15 @@ func _begin_play_choice(player_id: int) -> void:
 			active_skill_ids.append(choose_to_use_skill_id)
 	request.base_context = {"phase":"play", "action_types":action_types, "active_entries":["phaseUse", "chooseToUse"], "active_skill_ids":active_skill_ids}
 	request.active_context = request.base_context.duplicate(true)
+	request.button_ids = active_skill_ids.duplicate()
 	for legal_action: Dictionary in legal_actions:
 		var candidate_uid: int = int(legal_action.get("card_uid", -1))
 		if candidate_uid >= 0 and not request.card_ids.has(candidate_uid):
 			request.card_ids.append(candidate_uid)
+	# 出牌请求允许提交的目标玩家；具体牌的数量、距离与组合语义仍由动作预校验和 CardRuleService 权威复核。
+	for target_player: PlayerState in state.players:
+		if target_player.alive:
+			request.target_ids.append(target_player.player_id)
 	for equipment_uid: int in get_play_phase_equipment_action_uids(player_id):
 		if not request.card_ids.has(equipment_uid):
 			request.card_ids.append(equipment_uid)
@@ -741,7 +771,9 @@ func _submit_play_choice_response(action: PlayerAction) -> bool:
 		# 无 match_id 的纯规则测试直接调用控制器公开接口时，不强制依赖场景级出牌请求。
 		return state.match_id.is_empty()
 	var response: ChoiceResponse = ChoiceResponse.new(_play_choice_request_id, _play_choice_event_id, action.actor_id, action.action_type != "end_play")
-	if action.action_type != "end_play":
+	if action.action_type == "use_skill":
+		response.button_ids = [str(action.payload.get("skill_id", ""))]
+	elif action.action_type != "end_play":
 		response.card_ids = [action.card_uid]
 	response.target_ids = action.target_ids.duplicate()
 	response.client_sequence = action.client_sequence
@@ -795,22 +827,37 @@ func _prevalidate_play_action(action: PlayerAction) -> String:
 	return "未知行为类型：%s" % action.action_type
 
 
-## 创建统一选牌请求；AI 与本地玩家收到完全相同的候选快照，并通过 choose_cards 动作提交结果。
+## 创建统一选择请求；默认用于选牌，包装接口可通过上下文切换为选目标或牌目标组合。
 func request_card_choice(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary) -> Array[int]:
 	if state == null or state.game_over or not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty():
 		return []
 	_resolved_card_choice_uids.clear()
+	_resolved_target_choice_ids.clear()
 	_resolved_equipment_material_uids.clear()
 	# 选择事件名称；响应、弃牌和普通选牌使用稳定名称，调用方可通过 choice_event_name 指定其他已实现选择类型。
-	var choice_type: String = "card"
-	var choice_event_name: String = str(context.get("choice_event_name", "chooseCard"))
+	var choice_type: String = str(context.get("choice_type_override", "card"))
+	# 默认选择事件名称；目标与组合选择使用各自标准名称，普通请求使用 chooseCard。
+	var default_choice_event_name: String = "chooseTarget" if choice_type == "target" else ("chooseCardTarget" if choice_type == "card_target" else "chooseCard")
+	# 最终选择事件名称；内容可显式覆盖为目录中已经实现的其他选择事件。
+	var choice_event_name: String = str(context.get("choice_event_name", default_choice_event_name))
+	# 选择用途稳定标识；用于恢复具体卡牌、装备、阶段或技能步骤。
 	var choice_kind: String = str(context.get("kind", ""))
-	if not (context.get("response_patterns", []) as Array).is_empty() or choice_kind == "trick_negation":
+	if choice_type == "card" and (not (context.get("response_patterns", []) as Array).is_empty() or choice_kind == "trick_negation"):
 		choice_type = "respond"
 		choice_event_name = "chooseToRespond"
-	elif choice_kind == "discard_phase":
+	elif choice_type == "card" and choice_kind == "discard_phase":
 		choice_type = "discard"
 		choice_event_name = "chooseToDiscard"
+	# 目标候选；target 与 card_target 请求只传递稳定玩家 ID，不向客户端暴露 PlayerState 引用。
+	var choice_target_ids: Array[int] = _int_array(context.get("choice_target_ids", []) as Array)
+	# 卡牌维度范围；普通选牌沿用函数参数，组合选择可通过上下文独立配置。
+	var minimum_card_count: int = int(context.get("min_card_select", 0 if choice_type == "target" else min_select))
+	# 卡牌维度上限；始终不小于下限，避免异常技能参数创建无法完成的请求。
+	var maximum_card_count: int = maxi(int(context.get("max_card_select", 0 if choice_type == "target" else max_select)), minimum_card_count)
+	# 目标维度范围；纯选目标默认沿用函数参数，组合选择默认要求0名目标并由包装接口显式填写。
+	var minimum_target_count: int = int(context.get("min_target_select", min_select if choice_type == "target" else 0))
+	# 目标维度上限；始终不小于下限。
+	var maximum_target_count: int = maxi(int(context.get("max_target_select", max_select if choice_type == "target" else minimum_target_count)), minimum_target_count)
 	# 选择前时机只在目录确实存在对应 Before 名称时派发；普通 chooseCard 当前只有 Begin 时机。
 	var choice_before_name: String = "%sBefore" % choice_event_name
 	if RuleTimingCatalog.has_timing(choice_before_name):
@@ -840,8 +887,14 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"title":title,
 		"prompt":prompt,
 		"candidates":serialized_candidates,
+		"choice_type":choice_type,
+		"target_ids":choice_target_ids.duplicate(),
 		"min_select":maxi(min_select, 0),
 		"max_select":maxi(max_select, min_select),
+		"min_card_select":maxi(minimum_card_count, 0),
+		"max_card_select":maxi(maximum_card_count, minimum_card_count),
+		"min_target_select":maxi(minimum_target_count, 0),
+		"max_target_select":maxi(maximum_target_count, minimum_target_count),
 		"allow_cancel":allow_cancel,
 		"resume_phase":resume_phase,
 		"context":context.duplicate(true),
@@ -859,6 +912,10 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var runtime_request: ChoiceRequest = ChoiceRequest.new(choice_event.event_id, chooser_id, choice_type, prompt)
 	runtime_request.min_count = maxi(min_select, 0)
 	runtime_request.max_count = maxi(max_select, min_select)
+	runtime_request.min_card_count = maxi(minimum_card_count, 0)
+	runtime_request.max_card_count = maxi(maximum_card_count, minimum_card_count)
+	runtime_request.min_target_count = maxi(minimum_target_count, 0)
+	runtime_request.max_target_count = maxi(maximum_target_count, minimum_target_count)
 	runtime_request.forced = not allow_cancel
 	runtime_request.can_cancel = allow_cancel
 	runtime_request.base_context = context.duplicate(true)
@@ -870,6 +927,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	runtime_request.active_context = runtime_request.base_context.duplicate(true)
 	for candidate: Dictionary in serialized_candidates:
 		runtime_request.card_ids.append(int(candidate.get("uid", -1)))
+	runtime_request.target_ids = choice_target_ids.duplicate()
 	# 选择请求必须使用事件调度器分配的全局 ID；控制器自有序号不能与 chooseToUse 或其他请求共用命名空间。
 	var registered_request: ChoiceRequest = event_scheduler.request_choice(runtime_request)
 	if registered_request == null:
@@ -900,17 +958,49 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var action_data: Dictionary = {}
 	if ai_response != null:
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		ai_action.payload = {"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)), "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate()}
+		ai_action.payload = {"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)), "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate(), "selected_target_ids":ai_response.target_ids.duplicate(), "confirmed":ai_response.confirmed}
 		action_data = ai_action.to_dict()
 	if action_data.is_empty() or not submit_action(PlayerAction.from_dict(action_data)):
 		# 合法动作正常非空；防御性回退按最少数量提交首批候选，保证纯 AI 对局不会停滞。
 		var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		fallback_action.payload = {
 			"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)),
-			"selected_card_uids":_first_candidate_uids(serialized_candidates, maxi(min_select, 0)),
+			"selected_card_uids":_first_candidate_uids(serialized_candidates, maxi(minimum_card_count, 0)),
+			"selected_target_ids":_first_target_ids(choice_target_ids, maxi(minimum_target_count, 0)),
+			"confirmed":minimum_card_count > 0 or minimum_target_count > 0,
 		}
 		submit_action(fallback_action)
 	return _resolved_card_choice_uids.duplicate()
+
+
+## 创建统一选目标请求；该接口复用同一事件、暂停、AI、网络与恢复协议，不生成只供技能使用的旁路状态机。
+func request_target_choice(chooser_id: int, prompt: String, target_ids: Array[int], min_select: int = 1, max_select: int = 1, allow_cancel: bool = true, context: Dictionary = {}) -> Array[int]:
+	# 选目标上下文；包装接口只补充选择维度与候选，具体 kind 和技能步骤由调用方保留。
+	var target_context: Dictionary = context.duplicate(true)
+	target_context["choice_type_override"] = "target"
+	target_context["choice_event_name"] = str(target_context.get("choice_event_name", "chooseTarget"))
+	target_context["choice_target_ids"] = target_ids.duplicate()
+	target_context["min_card_select"] = 0
+	target_context["max_card_select"] = 0
+	target_context["min_target_select"] = min_select
+	target_context["max_target_select"] = max_select
+	request_card_choice(chooser_id, "选择目标", prompt, [], min_select, max_select, allow_cancel, target_context)
+	return _resolved_target_choice_ids.duplicate()
+
+
+## 创建统一选牌并选目标请求；返回同步测试结果，正式本地、AI或网络流程通过技能 continue_selection 异步恢复。
+func request_card_target_choice(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], target_ids: Array[int], min_cards: int, max_cards: int, min_targets: int, max_targets: int, allow_cancel: bool, context: Dictionary = {}) -> Dictionary:
+	# 组合选择上下文；牌与目标使用独立数量范围，避免复用单一 min_count 产生歧义。
+	var combined_context: Dictionary = context.duplicate(true)
+	combined_context["choice_type_override"] = "card_target"
+	combined_context["choice_event_name"] = str(combined_context.get("choice_event_name", "chooseCardTarget"))
+	combined_context["choice_target_ids"] = target_ids.duplicate()
+	combined_context["min_card_select"] = min_cards
+	combined_context["max_card_select"] = max_cards
+	combined_context["min_target_select"] = min_targets
+	combined_context["max_target_select"] = max_targets
+	request_card_choice(chooser_id, title, prompt, candidates, min_cards, max_cards, allow_cancel, combined_context)
+	return {"card_ids":_resolved_card_choice_uids.duplicate(), "target_ids":_resolved_target_choice_ids.duplicate()}
 
 
 ## 写入一份全体观察者可见的公共选牌展示；规则卡牌负责生成牌位与归属，界面只消费序列化副本。
@@ -952,9 +1042,18 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	if int(_pending_card_choice.get("request_id", -1)) != request_id or int(_pending_card_choice.get("chooser_id", -1)) != chooser_id or not ai_coordinator.is_ai_controlled(chooser_id):
 		return
 	# 当前运行时请求；待选快照使用 chooser_id/runtime_event_id 字段，恢复时显式映射到 ChoiceRequest 的 actor_id/event_id 协议。
-	var runtime_request: ChoiceRequest = ChoiceRequest.new(int(_pending_card_choice.get("runtime_event_id", -1)), chooser_id, "card", str(_pending_card_choice.get("prompt", "")))
+	var runtime_request: ChoiceRequest = ChoiceRequest.new(int(_pending_card_choice.get("runtime_event_id", -1)), chooser_id, str(_pending_card_choice.get("choice_type", "card")), str(_pending_card_choice.get("prompt", "")))
 	# 当前请求稳定 ID；策略生成的 ChoiceResponse 必须携带此 ID，避免迟到响应误命中新窗口。
 	runtime_request.request_id = request_id
+	runtime_request.min_count = int(_pending_card_choice.get("min_select", 0))
+	runtime_request.max_count = int(_pending_card_choice.get("max_select", 1))
+	runtime_request.min_card_count = int(_pending_card_choice.get("min_card_select", runtime_request.min_count))
+	runtime_request.max_card_count = int(_pending_card_choice.get("max_card_select", runtime_request.max_count))
+	runtime_request.min_target_count = int(_pending_card_choice.get("min_target_select", -1))
+	runtime_request.max_target_count = int(_pending_card_choice.get("max_target_select", -1))
+	for candidate_variant: Variant in _pending_card_choice.get("candidates", []) as Array:
+		runtime_request.card_ids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+	runtime_request.target_ids = _int_array(_pending_card_choice.get("target_ids", []) as Array)
 	# 当前请求的合法兼容动作；每项仍会在提交时复核请求序号、候选 UID 和数量。
 	var legal_actions: Array[Dictionary] = _build_card_choice_actions(_pending_card_choice)
 	# 当前 AI 权威快照；策略只读取快照，不能取得可写的对局状态引用。
@@ -965,15 +1064,17 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	if ai_response != null:
 		# AI 的标准选牌动作；事件 ID 与请求 ID 都由当前运行时请求提供，防止迟到响应进入新窗口。
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		ai_action.payload = {"request_id":request_id, "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate()}
+		ai_action.payload = {"request_id":request_id, "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate(), "selected_target_ids":ai_response.target_ids.duplicate(), "confirmed":ai_response.confirmed}
 		action_data = ai_action.to_dict()
 	if not action_data.is_empty() and submit_action(PlayerAction.from_dict(action_data)):
 		return
 	# 回退选择数量；强制请求选择最少张数，可取消请求提交空选择，避免 AI 在异常策略返回时永久停滞。
-	var fallback_count: int = maxi(int(_pending_card_choice.get("min_select", 0)), 0)
+	var fallback_count: int = maxi(int(_pending_card_choice.get("min_card_select", _pending_card_choice.get("min_select", 0))), 0)
+	# 回退目标数量；纯选目标和组合选择必须同时满足自身维度下限。
+	var fallback_target_count: int = maxi(int(_pending_card_choice.get("min_target_select", 0)), 0)
 	# 回退动作；只从仍活动请求的候选 UID 构造，始终经过 submit_action 的权威校验。
 	var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-	fallback_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(_pending_card_choice.get("candidates", []) as Array, fallback_count)}
+	fallback_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(_pending_card_choice.get("candidates", []) as Array, fallback_count), "selected_target_ids":_first_target_ids(_pending_card_choice.get("target_ids", []) as Array, fallback_target_count), "confirmed":fallback_count > 0 or fallback_target_count > 0}
 	submit_action(fallback_action)
 
 
@@ -982,34 +1083,61 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 	# 合法动作结果；所有动作共享当前请求 ID 以防跨窗口提交。
 	var result: Array[Dictionary] = []
 	# 请求最少选择数；为0时允许显式放弃。
-	var min_select: int = int(choice_request.get("min_select", 0))
+	var min_select: int = int(choice_request.get("min_card_select", choice_request.get("min_select", 0)))
 	# 请求最多选择数；单选请求会为每张候选生成一个动作。
-	var max_select: int = int(choice_request.get("max_select", 0))
+	var max_select: int = int(choice_request.get("max_card_select", choice_request.get("max_select", 0)))
+	# 目标选择范围；普通选牌默认为0，纯选目标和组合选择由请求显式提供。
+	var min_target_select: int = int(choice_request.get("min_target_select", 0))
+	# 目标选择上限；用于单目标逐项枚举或组合请求生成稳定基础动作。
+	var max_target_select: int = int(choice_request.get("max_target_select", 0))
 	# 请求序号；提交时由控制器再次核对。
 	var request_id: int = int(choice_request.get("request_id", -1))
 	# 选择者 ID；动作必须由被询问角色发出。
 	var chooser_id: int = int(choice_request.get("chooser_id", -1))
 	# 序列化候选；只读取稳定 UID。
 	var candidates: Array = choice_request.get("candidates", []) as Array
-	if min_select == 0:
+	# 当前目标候选；只包含稳定玩家 ID。
+	var target_ids: Array = choice_request.get("target_ids", []) as Array
+	if min_select == 0 and min_target_select == 0:
 		var pass_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		pass_action.payload = {"request_id":request_id, "selected_card_uids":[]}
+		pass_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
 		result.append(pass_action.to_dict())
-	if max_select == 1:
+	if max_select == 0 and max_target_select == 1:
+		for target_id_variant: Variant in target_ids:
+			# 单目标动作；基础 AI 只能从权威候选中选一名角色。
+			var target_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+			target_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[int(target_id_variant)], "confirmed":true}
+			result.append(target_action.to_dict())
+	elif max_select == 1 and max_target_select == 1:
+		# 可选牌到目标映射；技能可用该字段表达选择一张牌后目标集合动态变化的组合规则。
+		var targets_by_card_id: Dictionary = (choice_request.get("context", {}) as Dictionary).get("target_ids_by_card_id", {}) as Dictionary
+		for candidate_variant: Variant in candidates:
+			# 当前卡牌 UID；组合动作会为每个合法目标生成一项，最终仍由 ChoiceRequest 复核牌到目标映射。
+			var candidate: Dictionary = candidate_variant as Dictionary
+			# 当前牌允许的目标；未提供映射时沿用请求的全部目标候选。
+			var candidate_uid: int = int(candidate.get("uid", -1))
+			var candidate_target_ids: Array = targets_by_card_id.get(str(candidate_uid), targets_by_card_id.get(candidate_uid, target_ids)) as Array
+			for target_id_variant: Variant in target_ids:
+				if not candidate_target_ids.has(int(target_id_variant)):
+					continue
+				var combined_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+				combined_action.payload = {"request_id":request_id, "selected_card_uids":[candidate_uid], "selected_target_ids":[int(target_id_variant)], "confirmed":true}
+				result.append(combined_action.to_dict())
+	elif max_select == 1:
 		for candidate_variant: Variant in candidates:
 			# 当前候选牌；每张牌对应一个可校验的单选动作。
 			var candidate: Dictionary = candidate_variant as Dictionary
 			var select_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-			select_action.payload = {"request_id":request_id, "selected_card_uids":[int(candidate.get("uid", -1))]}
+			select_action.payload = {"request_id":request_id, "selected_card_uids":[int(candidate.get("uid", -1))], "selected_target_ids":[], "confirmed":true}
 			result.append(select_action.to_dict())
 	elif min_select > 0 and candidates.size() >= min_select:
 		var required_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		required_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(candidates, min_select)}
+		required_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(candidates, min_select), "selected_target_ids":_first_target_ids(target_ids, min_target_select), "confirmed":true}
 		result.append(required_action.to_dict())
 	elif min_select == 0 and max_select > 1 and bool((choice_request.get("context", {}) as Dictionary).get("ai_prefer_select", false)) and candidates.size() == max_select:
 		# 可选整组动作；水淹七军等规则只有完整选择才算执行弃置分支。
 		var all_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		all_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(candidates, max_select)}
+		all_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(candidates, max_select), "selected_target_ids":_first_target_ids(target_ids, min_target_select), "confirmed":true}
 		result.append(all_action.to_dict())
 	return result
 
@@ -1023,7 +1151,16 @@ func _first_candidate_uids(candidates: Array, count: int) -> Array[int]:
 	return result
 
 
-## 校验并接受统一选牌动作；同步 AI 返回给调用栈，人类和网络提交则恢复暂停的规则上下文。
+## 返回目标候选数组前指定数量的玩家 ID；只用于生成仍需权威校验的基础 AI 回退动作。
+func _first_target_ids(target_ids: Array, count: int) -> Array[int]:
+	# 目标结果；数量不会超过候选总数，并保持请求声明的稳定顺序。
+	var result: Array[int] = []
+	for index: int in range(mini(maxi(count, 0), target_ids.size())):
+		result.append(int(target_ids[index]))
+	return result
+
+
+## 校验并接受统一选择动作；同步 AI 返回给调用栈，人类和网络提交则恢复牌与目标对应的规则上下文。
 func _submit_card_choice(action: PlayerAction) -> bool:
 	if _pending_card_choice.is_empty():
 		return _reject("当前没有等待处理的选牌请求。")
@@ -1047,14 +1184,39 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	for selected_uid: int in selected_uids:
 		if not candidate_uids.has(selected_uid):
 			return _reject("选择中包含不属于当前请求的牌。")
-	# 最少与最多数量；取消只等价于提交0张且必须由请求明确允许。
-	var min_select: int = int(_pending_card_choice.get("min_select", 0))
-	var max_select: int = int(_pending_card_choice.get("max_select", 0))
+	# 提交的目标 ID；按操作顺序保留并禁止重复选择同一角色。
+	var selected_target_ids: Array[int] = _int_array(action.payload.get("selected_target_ids", []) as Array)
+	if selected_target_ids.size() != (action.payload.get("selected_target_ids", []) as Array).size():
+		return _reject("目标选择数据格式无效。")
+	# 允许选择的目标集合；来源仅为本次权威请求快照。
+	var candidate_target_ids: Array[int] = _int_array(_pending_card_choice.get("target_ids", []) as Array)
+	# 已见目标集合；重复目标不能通过组合请求提交。
+	var seen_target_ids: Dictionary = {}
+	for selected_target_id: int in selected_target_ids:
+		if seen_target_ids.has(selected_target_id):
+			return _reject("不能重复选择同一目标。")
+		if not candidate_target_ids.has(selected_target_id):
+			return _reject("选择中包含不属于当前请求的目标。")
+		seen_target_ids[selected_target_id] = true
+	# 卡牌与目标的独立数量范围；普通选牌的兼容字段继续映射到卡牌维度。
+	var min_select: int = int(_pending_card_choice.get("min_card_select", _pending_card_choice.get("min_select", 0)))
+	var max_select: int = int(_pending_card_choice.get("max_card_select", _pending_card_choice.get("max_select", 0)))
+	# 目标选择数量；普通选牌保持0至0，纯目标与组合选择使用请求显式范围。
+	var min_target_select: int = int(_pending_card_choice.get("min_target_select", 0))
+	var max_target_select: int = int(_pending_card_choice.get("max_target_select", 0))
 	var allow_cancel: bool = bool(_pending_card_choice.get("allow_cancel", false))
-	if selected_uids.size() < min_select and not (selected_uids.is_empty() and allow_cancel):
+	# 是否确认当前选择；旧 choose_cards 动作未携带 confirmed 时按是否存在选择或强制数量推断。
+	var confirmed: bool = bool(action.payload.get("confirmed", not selected_uids.is_empty() or not selected_target_ids.is_empty() or min_select > 0 or min_target_select > 0))
+	if not confirmed and not allow_cancel:
+		return _reject("当前选择不能取消。")
+	if confirmed and selected_uids.size() < min_select:
 		return _reject("选择的牌数不足。")
 	if selected_uids.size() > max_select:
 		return _reject("选择的牌数超过上限。")
+	if confirmed and selected_target_ids.size() < min_target_select:
+		return _reject("选择的目标数不足。")
+	if selected_target_ids.size() > max_target_select:
+		return _reject("选择的目标数超过上限。")
 	# 已完成请求上下文；运行时确认接收后再清空窗口，避免失败响应把仍可重试的权威请求提前丢失。
 	var completed_choice: Dictionary = _pending_card_choice.duplicate(true)
 	# 装备响应材料；普通选牌保持空数组，具体装备声明所需普通手牌数量与校验规则。
@@ -1089,9 +1251,10 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		int(completed_choice.get("runtime_request_id", completed_choice.get("request_id", -1))),
 		int(completed_choice.get("runtime_event_id", -1)),
 		action.actor_id,
-		not selected_uids.is_empty() or min_select > 0
+		confirmed
 	)
 	runtime_response.card_ids = selected_uids.duplicate()
+	runtime_response.target_ids = selected_target_ids.duplicate()
 	runtime_response.client_sequence = action.client_sequence
 	runtime_response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
 	# 先解决选择自身 token 但延迟排空事件栈；具体效果必须应用选择结果后才能继续父 content 事件。
@@ -1100,14 +1263,15 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	# 选择完成时机；当前目录仅对 chooseToUse、chooseToRespond 和拼点等流程声明 After，普通选牌不会伪造不存在的事件。
 	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
 	if RuleTimingCatalog.has_timing(choice_after_name):
-		_emit_rule_timing(choice_after_name, action.actor_id, action.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":selected_uids.duplicate(), "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1)))
+		_emit_rule_timing(choice_after_name, action.actor_id, action.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1)))
 	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
 	_resolved_card_choice_uids = selected_uids.duplicate()
+	_resolved_target_choice_ids = selected_target_ids.duplicate()
 	_resolved_equipment_material_uids = equipment_material_uids.duplicate()
 	state.action_sequence += 1
 	if bool(completed_choice.get("deferred", false)):
-		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids)
+		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids, selected_target_ids, runtime_response.confirmed)
 		if not state.game_over and not has_pending_card_choice():
 			process_next_equipment_trigger()
 		if not state.game_over and not has_pending_card_choice():
@@ -1126,7 +1290,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 
 
 ## 根据暂停上下文恢复具体效果；各分支只调用公开规则操作，不读取任何 UI 节点。
-func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> void:
+func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selected_target_ids: Array[int] = [], confirmed: bool = true) -> void:
 	# 选择用途；由创建请求的规则函数写入稳定字符串。
 	var choice_kind: String = str(context.get("kind", ""))
 	# 技能自有选择恢复；技能 ID 与持有者 ID 由创建请求的技能源码写入上下文。
@@ -1145,8 +1309,13 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 					return
 				if skill.continue_response(context, skill_response_card):
 					return
-			elif skill.continue_choice(context, selected_uids):
-				return
+			else:
+				# 技能通用选择结果；牌与目标保留玩家提交顺序，具体组合语义由技能文件继续复核。
+				var skill_response: ChoiceResponse = ChoiceResponse.new(-1, -1, skill_owner_id, confirmed)
+				skill_response.card_ids = selected_uids.duplicate()
+				skill_response.target_ids = selected_target_ids.duplicate()
+				if skill.continue_selection(context, skill_response):
+					return
 	# 卡牌自有选择恢复；父牌源码优先识别其创建的 kind，控制器只保留阶段与全局系统选择。
 	if effect_resolver.continue_choice(context, selected_uids):
 		return
@@ -2732,6 +2901,18 @@ func get_hand_equipment_candidates(viewer_id: int, target_id: int) -> Array[Dict
 ## 返回一名玩家普通手牌区的可选实体快照；木牛“粮”和装备牌不会混入要求弃置手牌的装备效果。
 func get_hand_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
 	return _build_player_zone_candidates(viewer_id, target_id, true, false, false)
+
+
+## 返回除指定角色外的全部其他存活玩家 ID；顺序沿用当前状态座次数组，技能可直接作为目标选择候选。
+func get_other_alive_player_ids(excluded_player_id: int) -> Array[int]:
+	# 目标结果；只包含仍存活且不等于排除角色的稳定玩家 ID。
+	var result: Array[int] = []
+	if state == null:
+		return result
+	for player: PlayerState in state.players:
+		if player.alive and player.player_id != excluded_player_id:
+			result.append(player.player_id)
+	return result
 
 
 ## 返回一名玩家装备区的公开候选快照；可选槽位列表为空时按标准顺序返回全部装备。
@@ -5071,9 +5252,9 @@ func _on_network_command_received(command_data: Dictionary) -> void:
 ## 把网络 ChoiceResponse 转换为兼容动作入口；事件运行时仍会再次校验事件、玩家、数量和候选。
 func _on_network_choice_response_received(response_data: Dictionary) -> void:
 	var response: ChoiceResponse = ChoiceResponse.from_dict(response_data)
-	var action: PlayerAction = PlayerAction.new("choose_cards", response.actor_id)
+	var action: PlayerAction = PlayerAction.new("choice_response", response.actor_id)
 	action.client_sequence = response.client_sequence
-	action.payload = {"request_id":response.request_id, "event_id":response.event_id, "selected_card_uids":response.card_ids.duplicate()}
+	action.payload = response.to_dict()
 	submit_action(action)
 
 

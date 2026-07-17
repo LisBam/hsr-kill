@@ -1151,6 +1151,24 @@ func _get_local_equipment_snapshot(card_uid: int) -> Dictionary:
 ## 最大目标数现由规则预览动态提供；当上限为1时，点击新目标会直接替换旧目标。
 func _on_target_pressed(target_id: int) -> void:
 	if not _inline_card_choice.is_empty():
+		# 内联技能选目标；只有 target 与 card_target 请求允许武将牌写入临时目标集合。
+		var inline_choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
+		if inline_choice_type not in ["target", "card_target"]:
+			return
+		# 当前请求目标候选；界面只更新临时集合，确认时仍由权威 ChoiceRequest 复核。
+		var inline_target_ids: Array[int] = _get_selectable_target_ids()
+		if not inline_target_ids.has(target_id):
+			return
+		# 目标上限；上限为1时点击新目标直接替换旧目标，与普通单目标牌保持一致操作语义。
+		var inline_maximum_target_count: int = int(_inline_card_choice.get("max_target_select", _inline_card_choice.get("max_select", 1)))
+		if _selected_target_ids.has(target_id):
+			_selected_target_ids.erase(target_id)
+		else:
+			if inline_maximum_target_count == 1:
+				_selected_target_ids.clear()
+			if _selected_target_ids.size() < inline_maximum_target_count:
+				_selected_target_ids.append(target_id)
+		_refresh_selection_text()
 		return
 	if _uses_rule_expanded_targets():
 		return
@@ -1180,6 +1198,24 @@ func _on_persistent_target_pressed(player_view: PlayerTargetView) -> void:
 
 ## 返回当前牌面可点击的合法目标；单目标牌保留空选择时的完整候选，支持一次点击直接切换目标。
 func _get_selectable_target_ids() -> Array[int]:
+	if not _inline_card_choice.is_empty():
+		# 内联技能目标候选；选牌/响应请求没有目标维度时返回空数组。
+		var inline_choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
+		if inline_choice_type not in ["target", "card_target"]:
+			return []
+		var inline_target_ids: Array[int] = []
+		inline_target_ids.assign(_inline_card_choice.get("target_ids", []) as Array)
+		# 牌到目标组合映射；选中一张材料牌后只高亮该牌当前允许的目标。
+		if inline_choice_type == "card_target" and _inline_selected_card_uids.size() == 1:
+			# 当前请求恢复上下文；组合映射只读取可序列化字典。
+			var inline_context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+			# 实体牌 UID 到合法目标 ID 数组的映射；空字典表示全部请求目标均可用。
+			var targets_by_card_id: Dictionary = inline_context.get("target_ids_by_card_id", {}) as Dictionary
+			if not targets_by_card_id.is_empty():
+				# 当前唯一选中的材料牌 UID；用于取得该牌自己的合法目标集合。
+				var selected_card_uid: int = _inline_selected_card_uids[0]
+				inline_target_ids.assign(targets_by_card_id.get(str(selected_card_uid), targets_by_card_id.get(selected_card_uid, [])) as Array)
+		return inline_target_ids
 	if _uses_rule_expanded_targets():
 		return []
 	# 当前预览给出的后续合法目标；多目标牌直接按已有选择继续追加。
@@ -1339,7 +1375,7 @@ func _on_cancel_pressed() -> void:
 		if bool(_inline_card_choice.get("allow_cancel", false)):
 			# 空选择；明确表示放弃本次可取消请求，不会消费任何手牌。
 			var cancelled_uids: Array[int] = []
-			_submit_inline_card_choice(cancelled_uids)
+			_submit_inline_card_choice(cancelled_uids, false)
 		return
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
@@ -1493,6 +1529,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_modal_card_choice_request.clear()
 		_inline_card_choice = choice_data.duplicate(true)
 		_inline_selected_card_uids.clear()
+		_selected_target_ids.clear()
 		# 装备触发询问的公开装备 UID；自动选中只准备本地临时选择，仍需玩家点击确定发动或点击取消放弃。
 		var auto_selected_equipment_uid: int = _get_auto_selected_equipment_trigger_uid(choice_data)
 		if auto_selected_equipment_uid >= 0:
@@ -1704,29 +1741,37 @@ func _toggle_inline_card_choice(card_uid: int) -> void:
 		_inline_selected_card_uids.erase(card_uid)
 	else:
 		# 最大选择数；单选响应点击新牌时替换旧选择，多选弃牌则按点击顺序追加。
-		var max_select: int = int(_inline_card_choice.get("max_select", 0))
+		var max_select: int = int(_inline_card_choice.get("max_card_select", _inline_card_choice.get("max_select", 0)))
 		if max_select == 1:
 			_inline_selected_card_uids.clear()
 		if _inline_selected_card_uids.size() < max_select:
 			_inline_selected_card_uids.append(card_uid)
+	# 组合技能切换材料牌后重新校验目标；旧目标不在新映射中时立即清除临时选择。
+	if str(_inline_card_choice.get("choice_type", "card")) == "card_target":
+		# 当前材料牌对应的合法目标；切换材料后用于清理已经失效的旧目标。
+		var legal_target_ids: Array[int] = _get_selectable_target_ids()
+		for selected_target_id: int in _selected_target_ids.duplicate():
+			if not legal_target_ids.has(selected_target_id):
+				_selected_target_ids.erase(selected_target_id)
 	error_label.text = ""
 	_refresh_selection_text()
 
 
 ## 提交手牌区内联选择；只有当前请求仍与提交 ID 相同时才清理，避免覆盖同步创建的下一请求。
-func _submit_inline_card_choice(selected_card_uids: Array[int]) -> void:
+func _submit_inline_card_choice(selected_card_uids: Array[int], confirmed: bool = true) -> void:
 	if _inline_card_choice.is_empty():
 		return
 	# 本次提交请求 ID；控制器恢复过程中可能同步发出下一条请求，因此必须保留独立副本。
 	var request_id: int = int(_inline_card_choice.get("request_id", -1))
 	# 统一选择动作；只提交请求号与实体 UID，不直接修改手牌、处理区或阶段。
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":_selected_target_ids.duplicate() if confirmed else [], "confirmed":confirmed}
 	if not match_controller.submit_action(action):
 		return
 	if int(_inline_card_choice.get("request_id", -2)) == request_id:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
+		_selected_target_ids.clear()
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
 	_refresh_selection_text()
@@ -2103,15 +2148,29 @@ func _refresh_inline_choice_text() -> void:
 	var min_select: int = int(_inline_card_choice.get("min_select", 0))
 	# 规则允许的最多数量；单张响应为1，弃牌阶段等于必须弃置的手牌数。
 	var max_select: int = int(_inline_card_choice.get("max_select", 0))
-	# 确认所需最少数量；可取消请求的空选择必须走“取消”，避免空确认语义不清。
-	var minimum_confirm_count: int = maxi(min_select, 1)
+	# 当前选择类型；组合选择会分别读取卡牌和目标数量范围。
+	var choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
+	# 卡牌维度范围；纯选目标固定为0，普通选牌继续使用兼容字段。
+	var minimum_card_count: int = int(_inline_card_choice.get("min_card_select", 0 if choice_type == "target" else min_select))
+	# 卡牌维度上限；用于组合选择确认状态。
+	var maximum_card_count: int = int(_inline_card_choice.get("max_card_select", 0 if choice_type == "target" else max_select))
+	# 目标维度范围；普通选牌固定为0，纯目标与组合选择读取请求字段。
+	var minimum_target_count: int = int(_inline_card_choice.get("min_target_select", min_select if choice_type == "target" else 0))
+	# 目标维度上限；用于阻止超过技能规则数量时确认。
+	var maximum_target_count: int = int(_inline_card_choice.get("max_target_select", max_select if choice_type == "target" else 0))
+	# 当前目标选择数量；只属于界面临时状态，不修改权威请求快照。
+	var selected_target_count: int = _selected_target_ids.size()
+	# 确认按钮的卡牌下限；可取消的普通选牌仍要求至少选1张，空结果必须通过“取消”表达。
+	var confirm_minimum_card_count: int = maxi(minimum_card_count, 1) if choice_type in ["card", "respond", "discard"] and maximum_card_count > 0 else minimum_card_count
+	# 确认按钮的目标下限；可取消的纯选目标同样要求至少选1名，避免空确认与取消语义混淆。
+	var confirm_minimum_target_count: int = maxi(minimum_target_count, 1) if choice_type == "target" and maximum_target_count > 0 else minimum_target_count
 	# 内联询问只保留具体规则提示与操作按钮；通用标题、已选数量和范围摘要不重复显示。
 	selection_label.text = ""
 	selection_label.visible = false
 	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择卡牌"))
 	interaction_panel.visible = true
 	use_button.text = "确定"
-	use_button.disabled = selected_count < minimum_confirm_count or selected_count > max_select
+	use_button.disabled = selected_count < confirm_minimum_card_count or selected_count > maximum_card_count or selected_target_count < confirm_minimum_target_count or selected_target_count > maximum_target_count
 	%CancelButton.visible = true
 	%CancelButton.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
 	end_play_button.visible = false
@@ -2156,7 +2215,7 @@ func _toggle_group_trick_suppression() -> void:
 	_suppressed_group_trick_uid = int(context.get("parent_card_uid", -1))
 	_refresh_group_trick_response_button()
 	# 开启后立即以空选择放弃当前询问；后续同一锦囊请求由自动提交入口继续跳过。
-	_submit_inline_card_choice([])
+	_submit_inline_card_choice([], false)
 
 
 ## 为已经开启不响应的后续无懈请求提交空选择；提交前复核请求仍活动且仍属于同一锦囊。
