@@ -25,6 +25,8 @@ var _child_event: GameEvent
 func _ready() -> void:
 	if not _test_event_tree_and_pause():
 		return
+	if not _test_composite_choice_request():
+		return
 	if not _test_held_root_accepts_children():
 		return
 	if not _test_terminal_states():
@@ -37,6 +39,45 @@ func _ready() -> void:
 		return
 	print("EVENT_RUNTIME_PASS order=%s history=%d" % [_execution_order, _scheduler.get_event_history().size()])
 	get_tree().quit(0)
+
+
+## 验证选牌与选目标可以写入同一 ChoiceResponse，并支持组合映射、备份恢复与序列化重建。
+func _test_composite_choice_request() -> bool:
+	# 组合选择请求；模拟“选择一张牌并选择该牌允许的一名目标”的主动技能。
+	var request: ChoiceRequest = ChoiceRequest.new(90, 0, "card_target", "请选择一张牌和一名目标")
+	request.request_id = 12
+	request.card_ids = [101, 102]
+	request.target_ids = [1, 2]
+	request.min_card_count = 1
+	request.max_card_count = 1
+	request.min_target_count = 1
+	request.max_target_count = 1
+	request.base_context = {"kind":"skill_choice", "target_ids_by_card_id":{"101":[2], "102":[1, 2]}}
+	request.active_context = request.base_context.duplicate(true)
+	# 合法组合；卡牌101只能指定目标2。
+	var valid_response: ChoiceResponse = ChoiceResponse.new(12, 90, 0, true)
+	valid_response.card_ids = [101]
+	valid_response.target_ids = [2]
+	if not request.validate_response(valid_response).is_empty():
+		return _fail("composite_valid_rejected")
+	# 非法组合；卡牌与目标分别属于候选，但组合映射不允许101指定目标1。
+	var invalid_response: ChoiceResponse = ChoiceResponse.new(12, 90, 0, true)
+	invalid_response.card_ids = [101]
+	invalid_response.target_ids = [1]
+	if request.validate_response(invalid_response).is_empty():
+		return _fail("composite_invalid_accepted")
+	# 技能备份上下文；临时切换映射后恢复基础选择，已选牌和目标必须同时清空。
+	request.selected_card_ids = [101]
+	request.selected_target_ids = [2]
+	request.backup_context("test_backup", {"definition_id":"sha"}, {"target_ids_by_card_id":{"101":[1]}}, {"cards":[1, 1], "targets":[1, 1]})
+	request.restore_context()
+	if request.active_context != request.base_context or not request.selected_card_ids.is_empty() or not request.selected_target_ids.is_empty():
+		return _fail("composite_restore=%s" % request.to_dict())
+	# 网络重建；四个独立数量范围和目标候选必须完整保留。
+	var restored_request: ChoiceRequest = ChoiceRequest.from_dict(request.to_dict())
+	if restored_request.choice_type != "card_target" or restored_request.card_ids != [101, 102] or restored_request.target_ids != [1, 2] or restored_request.min_card_count != 1 or restored_request.max_target_count != 1:
+		return _fail("composite_roundtrip=%s" % restored_request.to_dict())
+	return true
 
 
 ## 验证长期根事件只保持生命周期而不暂停子树；新增子事件必须可以立即执行并回到根等待状态。

@@ -43,10 +43,14 @@ func choose_card_choice(_authoritative_snapshot: Dictionary, choice_request: Dic
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
 	for action: Dictionary in legal_actions:
 		# 当前动作选择的实体牌 UID；非空选择优先于放弃，确保【闪】等基础响应会实际打出。
-		var selected_uids: Array = (action.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array
-		if not selected_uids.is_empty() and bool(context.get("ai_prefer_select", true)):
+		var action_payload: Dictionary = action.get("payload", {}) as Dictionary
+		# 当前动作选择的实体牌 UID；组合技能会同时携带目标数组。
+		var selected_uids: Array = action_payload.get("selected_card_uids", []) as Array
+		# 当前动作选择的目标玩家 ID；纯选目标请求同样属于有效确认而不是放弃动作。
+		var selected_target_ids: Array = action_payload.get("selected_target_ids", []) as Array
+		if (not selected_uids.is_empty() or not selected_target_ids.is_empty()) and bool(context.get("ai_prefer_select", true)):
 			return action.duplicate(true)
-		if selected_uids.is_empty():
+		if selected_uids.is_empty() and selected_target_ids.is_empty():
 			pass_action = action
 	if minimum_selection == 0 and not pass_action.is_empty():
 		return pass_action.duplicate(true)

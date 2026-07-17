@@ -45,6 +45,18 @@ var min_count: int = 0
 ## 最多选择数量；默认 1，必须不小于 min_count。
 var max_count: int = 1
 
+## 组合选择中的最少卡牌数；默认 -1 表示继续使用 min_count，只有 card_target 等多维请求需要单独配置。
+var min_card_count: int = -1
+
+## 组合选择中的最多卡牌数；默认 -1 表示继续使用 max_count，修改后会独立约束响应中的 card_ids。
+var max_card_count: int = -1
+
+## 组合选择中的最少目标数；默认 -1 表示 target 请求继续使用 min_count，card_target 请求应显式配置。
+var min_target_count: int = -1
+
+## 组合选择中的最多目标数；默认 -1 表示 target 请求继续使用 max_count，修改后会独立约束响应中的 target_ids。
+var max_target_count: int = -1
+
 ## 是否属于规则强制请求；强制请求不能通过 confirmed=false 取消。
 var forced: bool = false
 
@@ -111,6 +123,10 @@ static func from_dict(data: Dictionary) -> ChoiceRequest:
 		request.control_ids.append(str(control_id_variant))
 	request.min_count = int(data.get("min_count", 0))
 	request.max_count = int(data.get("max_count", 1))
+	request.min_card_count = int(data.get("min_card_count", -1))
+	request.max_card_count = int(data.get("max_card_count", -1))
+	request.min_target_count = int(data.get("min_target_count", -1))
+	request.max_target_count = int(data.get("max_target_count", -1))
 	request.forced = bool(data.get("forced", false))
 	request.can_cancel = bool(data.get("can_cancel", true))
 	request.deadline_msec = int(data.get("deadline_msec", data.get("deadline", 0)))
@@ -170,20 +186,46 @@ func validate_response(response: ChoiceResponse) -> String:
 		if forced or not can_cancel:
 			return "当前选择不能取消。"
 		return ""
-	# 当前响应的主选择数组；choice_type 决定数量区间应用到哪一种候选。
-	var selected_values: Array = _get_selected_values(response)
-	if selected_values.size() < min_count or selected_values.size() > max_count:
-		return "选择数量不符合要求。"
-	# 当前请求允许的候选数组；选择结果必须全部存在且不能重复。
-	var allowed_values: Array = _get_allowed_values()
-	# 已见候选集合；使用 Dictionary 同时兼容整数和字符串稳定 ID。
-	var seen_values: Dictionary = {}
-	for selected_value: Variant in selected_values:
-		if not allowed_values.has(selected_value):
-			return "选择结果包含无效候选。"
-		if seen_values.has(selected_value):
-			return "选择结果不能包含重复候选。"
-		seen_values[selected_value] = true
+	# 卡牌选择范围；普通选牌沿用 min_count/max_count，组合选择使用独立范围。
+	var card_range: Vector2i = _get_card_count_range()
+	# 目标选择范围；普通选目标沿用 min_count/max_count，组合选择使用独立范围。
+	var target_range: Vector2i = _get_target_count_range()
+	# 按请求维度校验数量；未启用的维度返回 -1 范围并跳过数量限制。
+	if card_range.x >= 0 and (response.card_ids.size() < card_range.x or response.card_ids.size() > card_range.y):
+		return "选择的卡牌数量不符合要求。"
+	if target_range.x >= 0 and (response.target_ids.size() < target_range.x or response.target_ids.size() > target_range.y):
+		return "选择的目标数量不符合要求。"
+	if choice_type == "button" and (response.button_ids.size() < min_count or response.button_ids.size() > max_count):
+		return "选择的按钮数量不符合要求。"
+	if choice_type in ["control", "bool"]:
+		# 控制项选择数量；空字符串为0项，非空稳定 ID 为1项。
+		var control_count: int = 0 if response.control_id.is_empty() else 1
+		if control_count < min_count or control_count > max_count:
+			return "选择的控制项数量不符合要求。"
+	# 所有实际提交的维度均校验候选与重复项，避免 card_target 请求只校验卡牌而放过伪造目标。
+	var candidate_error: String = _validate_selected_candidates(response.card_ids, card_ids)
+	if not candidate_error.is_empty():
+		return candidate_error
+	candidate_error = _validate_selected_candidates(response.target_ids, target_ids)
+	if not candidate_error.is_empty():
+		return candidate_error
+	candidate_error = _validate_selected_candidates(response.button_ids, button_ids)
+	if not candidate_error.is_empty():
+		return candidate_error
+	if not response.control_id.is_empty() and not control_ids.has(response.control_id):
+		return "选择结果包含无效候选。"
+	# 可选的牌到目标映射；键使用实体 UID 字符串，值为该牌当前允许的目标 ID 数组。
+	var targets_by_card_id: Dictionary = active_context.get("target_ids_by_card_id", {}) as Dictionary
+	if targets_by_card_id.is_empty():
+		# backup 上下文可把动态过滤器收纳在 filters 中；网络仍只传递其中的可序列化映射。
+		targets_by_card_id = (active_context.get("filters", {}) as Dictionary).get("target_ids_by_card_id", {}) as Dictionary
+	if not targets_by_card_id.is_empty() and not response.card_ids.is_empty():
+		for selected_card_id: int in response.card_ids:
+			# 当前所选卡牌允许的目标 ID；缺少映射时该卡牌不能与任何目标组合提交。
+			var allowed_target_ids: Array = targets_by_card_id.get(str(selected_card_id), targets_by_card_id.get(selected_card_id, [])) as Array
+			for selected_target_id: int in response.target_ids:
+				if not allowed_target_ids.has(selected_target_id):
+					return "所选卡牌与目标的组合不合法。"
 	return ""
 
 
@@ -231,6 +273,37 @@ func _get_allowed_values() -> Array:
 	return card_ids
 
 
+## 返回卡牌维度的数量范围；Vector2i(-1, -1) 表示当前请求不以卡牌作为选择维度。
+func _get_card_count_range() -> Vector2i:
+	if choice_type in ["use", "respond", "card", "discard"]:
+		return Vector2i(min_count, max_count)
+	if choice_type == "card_target":
+		return Vector2i(maxi(min_card_count, 0), maxi(max_card_count, maxi(min_card_count, 0)))
+	return Vector2i(-1, -1)
+
+
+## 返回目标维度的数量范围；Vector2i(-1, -1) 表示当前请求不以目标作为选择维度。
+func _get_target_count_range() -> Vector2i:
+	if choice_type == "target":
+		return Vector2i(min_count, max_count)
+	if choice_type == "card_target":
+		return Vector2i(maxi(min_target_count, 0), maxi(max_target_count, maxi(min_target_count, 0)))
+	return Vector2i(-1, -1)
+
+
+## 校验一个响应数组是否全部来自请求候选且没有重复值；空数组始终合法，数量由独立范围函数判断。
+func _validate_selected_candidates(selected_values: Array, allowed_values: Array) -> String:
+	# 已见候选集合；Dictionary 同时支持整数与字符串稳定 ID。
+	var seen_values: Dictionary = {}
+	for selected_value: Variant in selected_values:
+		if not allowed_values.has(selected_value):
+			return "选择结果包含无效候选。"
+		if seen_values.has(selected_value):
+			return "选择结果不能包含重复候选。"
+		seen_values[selected_value] = true
+	return ""
+
+
 ## 生成完整可序列化请求快照；不包含脚本 Callable 或权威状态对象引用。
 func to_dict() -> Dictionary:
 	return {
@@ -245,6 +318,10 @@ func to_dict() -> Dictionary:
 		"control_ids": control_ids.duplicate(),
 		"min_count": min_count,
 		"max_count": max_count,
+		"min_card_count": min_card_count,
+		"max_card_count": max_card_count,
+		"min_target_count": min_target_count,
+		"max_target_count": max_target_count,
 		"forced": forced,
 		"can_cancel": can_cancel,
 		"deadline_msec": deadline_msec,
