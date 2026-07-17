@@ -101,9 +101,7 @@ func _ready() -> void:
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_shade)
 	_frame = PanelContainer.new()
-	_frame.set_anchors_preset(Control.PRESET_CENTER)
-	_frame.position = -Vector2(panel_max_width, panel_max_height) * 0.5
-	_frame.size = Vector2(panel_max_width, panel_max_height)
+	_set_frame_size(Vector2(panel_max_width, panel_max_height))
 	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color("201b18"), Color("c5a05a"), 2, 6))
 	add_child(_frame)
 	# 选择框主列；标题、提示、滚动分区和操作按钮从上到下排列。
@@ -369,8 +367,15 @@ func _on_cancel_pressed() -> void:
 func _set_frame_size(frame_size: Vector2) -> void:
 	if _frame == null:
 		return
-	_frame.position = -frame_size * 0.5
-	_frame.size = frame_size
+	# 居中锚点与四边偏移同时写入，避免动态改尺寸后沿用左上角局部坐标而移出视口。
+	_frame.anchor_left = 0.5
+	_frame.anchor_top = 0.5
+	_frame.anchor_right = 0.5
+	_frame.anchor_bottom = 0.5
+	_frame.offset_left = -frame_size.x * 0.5
+	_frame.offset_top = -frame_size.y * 0.5
+	_frame.offset_right = frame_size.x * 0.5
+	_frame.offset_bottom = frame_size.y * 0.5
 
 
 ## 删除动态区域节点；重建请求时防止旧牌面和信号继续留在树中。

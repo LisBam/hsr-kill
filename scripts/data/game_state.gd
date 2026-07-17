@@ -43,6 +43,9 @@ var current_choice_request: Dictionary = {}
 ## 空字典表示没有公共展示；内容只能包含可序列化牌面快照、当前操作玩家 ID 与领取归属，不保存节点或规则对象。
 var public_card_choice_display: Dictionary = {}
 
+## 当前同时响应展示；保存本轮所有被询问玩家 ID 与锦囊目标，不包含任何玩家是否持有响应牌的私有信息。
+var simultaneous_response_display: Dictionary = {}
+
 ## 已完成事件摘要历史；记录事件父子、步骤和终止原因，支持规则回放与无头验收。
 var event_history: Array[Dictionary] = []
 
@@ -146,6 +149,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"current_event_id": current_event_id,
 		"current_choice_request": choice_request_data,
 		"public_card_choice_display": public_card_choice_display.duplicate(true),
+		"simultaneous_response_display": simultaneous_response_display.duplicate(true),
 		"event_history_count": event_history.size(),
 		"card_move_history_count": card_move_history.size(),
 		"round_number": round_number,

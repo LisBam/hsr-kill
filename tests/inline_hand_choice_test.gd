@@ -259,8 +259,27 @@ func _run() -> void:
 	var taken_owner_label: Label = taken_card_view.get_parent().get_child(1) as Label
 	# 公共牌阵；固定使用4列网格且不创建“展示区”标题标签。
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
+	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
+	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
+		return
+	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。
+	var harvest_negation_request: Dictionary = {
+		"request_id":14,
+		"chooser_id":0,
+		"title":"响应询问",
+		"prompt":"是否使用【无懈可击】？",
+		"candidates":[_candidate(dodge_data)],
+		"min_select":0,
+		"max_select":1,
+		"allow_cancel":true,
+		"context":{"kind":"trick_negation", "trick_id":"wugu", "parent_card_uid":9901},
+	}
+	main_instance.call("_on_card_choice_requested", harvest_negation_request)
+	await get_tree().process_frame
+	if selection_panel.visible or int((main_instance.get("_inline_card_choice") as Dictionary).get("request_id", -1)) != 14 or (main_instance.get("_public_card_choice_display") as Dictionary).is_empty():
+		_fail("harvest_negation_interaction_conflict")
 		return
 	# 五谷请求；用于验证展示区没有被内联分类误吞。
 	var harvest_request: Dictionary = {

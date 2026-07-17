@@ -34,7 +34,8 @@ func _run() -> void:
 	match_controller.randomize_local_human_seat = false
 	for _frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
-	match_controller.state_changed.emit(_make_ten_player_snapshot())
+	var ten_player_snapshot: Dictionary = _make_ten_player_snapshot()
+	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -192,13 +193,29 @@ func _run() -> void:
 	# 玩家名标签；测试目标为六号位，因此显示名固定为“玩家6”。
 	var hover_player_name: Label = current_operator_view.get_node("HoverNameShade/HoverPlayerName") as Label
 	current_operator_view.call("_on_input_mouse_entered")
-	if not hover_name_shade.visible or hover_player_name.text != "玩家6":
+	if not hover_name_shade.visible or hover_player_name.text != "玩家6" or not hover_name_shade.size.is_equal_approx(Vector2(116.35, 42.0)) or hover_player_name.get_theme_font_size("font_size") != 12:
 		_fail("player_name_hover:%s/%s" % [hover_name_shade.visible, hover_player_name.text])
 		return
 	current_operator_view.call("_on_input_mouse_exited")
 	if hover_name_shade.visible:
 		_fail("player_name_hover_exit")
 		return
+	# 同时无懈公共高亮；全部十名玩家都进入操作状态，不能只高亮实际持有无懈候选的角色。
+	var simultaneous_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	simultaneous_snapshot["simultaneous_response_display"] = {"kind":"trick_negation", "round_id":1, "responder_ids":[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "target_id":0, "trick_id":"wugu"}
+	match_controller.state_changed.emit(simultaneous_snapshot)
+	await get_tree().process_frame
+	for simultaneous_view_variant: Variant in (main_instance.get("_player_views") as Dictionary).values():
+		# 当前对手武将牌；无论私有候选数量如何都必须显示统一操作高亮。
+		var simultaneous_view: PlayerTargetView = simultaneous_view_variant as PlayerTargetView
+		if not simultaneous_view.is_current_operator:
+			_fail("simultaneous_operator_highlight:%d" % simultaneous_view.player_id)
+			return
+	if not (main_instance.get("local_player_card") as PlayerTargetView).is_current_operator:
+		_fail("simultaneous_local_highlight")
+		return
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
 	# 未知身份本地标注；选择反贼后只改变当前客户端徽记，不修改快照中的 hidden 身份。
 	main_instance.call("_on_identity_badge_pressed", 5)
 	main_instance.call("_on_identity_mark_selected", 1)
