@@ -18,6 +18,12 @@ extends TextureRect
 ## 装饰线透明度；默认0.16保证纹样可见但不干扰卡牌，运行时可在检查器中微调。
 @export_range(0.0, 0.5, 0.01) var ornament_opacity: float = 0.16
 
+## 太空风格网格间距；默认64像素形成低密度导航网格，仅在风格注册表启用时绘制，运行时无需动态修改。
+@export_range(24.0, 160.0, 1.0) var space_grid_spacing: float = 64.0
+
+## 太空风格网格线宽；默认1像素保持辅助层次，不遮挡角色、卡牌或中央动画。
+@export_range(0.5, 3.0, 0.5) var space_grid_line_width: float = 1.0
+
 ## 背景最深层颜色；默认使用近黑暖褐色衬托桌面与金边，运行时无需动态修改。
 ## 当前默认风格改为黑白太空，进入场景后会由统一主题语义覆盖该字段。
 @export var outer_background_color: Color = Color("020306")
@@ -49,6 +55,12 @@ extends TextureRect
 ## 远景建筑剪影颜色；默认接近纯黑，避免与中央牌面动画争夺对比度。
 @export var building_color: Color = Color("04060a")
 
+## 太空导航网格颜色；透明度包含在颜色本身中，由主题注册表统一覆盖。
+@export var space_grid_color: Color = Color("6ccfe033")
+
+## 当前主题是否启用太空导航网格；只影响背景装饰，不改变牌桌几何或输入。
+var _uses_space_grid: bool = false
+
 ## 天幕地平线比例；默认把远景压在牌桌中央下方，保留无名杀式的宽阔中空区域。
 const SKYLINE_RATIO: float = 0.64
 
@@ -76,6 +88,8 @@ func apply_ui_style(style_id: String) -> void:
 	star_color = UIStyleRegistry.get_color(style_id, "star", star_color)
 	mountain_color = UIStyleRegistry.get_color(style_id, "mountain", mountain_color)
 	building_color = UIStyleRegistry.get_color(style_id, "building", building_color)
+	space_grid_color = UIStyleRegistry.get_color(style_id, "space_grid", space_grid_color)
+	_uses_space_grid = bool(UIStyleRegistry.get_value(style_id, "uses_space_grid", false))
 	queue_redraw()
 
 
@@ -101,6 +115,17 @@ func _draw() -> void:
 	# 天幕矩形；只覆盖内层桌垫的上方区域，底部仍由桌垫颜色承托手牌。
 	var sky_rect: Rect2 = Rect2(inner_rect.position, Vector2(inner_rect.size.x, skyline_y - inner_rect.position.y))
 	draw_rect(sky_rect, sky_color)
+	if _uses_space_grid:
+		# 第一条纵向网格线横坐标；从内层桌垫左边开始按统一间距铺满可视区域。
+		var grid_x: float = inner_rect.position.x
+		while grid_x <= inner_rect.end.x:
+			draw_line(Vector2(grid_x, inner_rect.position.y), Vector2(grid_x, inner_rect.end.y), space_grid_color, space_grid_line_width, true)
+			grid_x += space_grid_spacing
+		# 第一条横向网格线纵坐标；与纵向网格共同形成独立于旧木桌纹样的太空导航层。
+		var grid_y: float = inner_rect.position.y
+		while grid_y <= inner_rect.end.y:
+			draw_line(Vector2(inner_rect.position.x, grid_y), Vector2(inner_rect.end.x, grid_y), space_grid_color, space_grid_line_width, true)
+			grid_y += space_grid_spacing
 	# 远景星点；固定伪随机位置避免引入全局随机数或影响规则回放。
 	for star_index: int in range(STAR_COUNT):
 		# 当前星点横坐标；使用确定性取模实现可缩放的均匀分布。

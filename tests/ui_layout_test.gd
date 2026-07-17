@@ -59,15 +59,28 @@ func _run() -> void:
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# UI 风格选项；默认必须选中黑白太空，同时保留暖木十周年作为可切换项。
+	# 暖木风格的设置显示名现为“暖木家园”，稳定 ID 继续沿用原值以兼容已有设置。
 	var ui_style_option: OptionButton = main_instance.get_node("%UiStyleOption") as OptionButton
 	# 左上信息面板；切换风格后边框颜色必须立即跟随注册表更新，不需要重新开局。
 	var top_info_panel: PanelContainer = main_instance.get_node("TopInfoPanel") as PanelContainer
-	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")):
+	# 黑白太空背景遮罩；重新设计后不再用近黑覆盖层模拟滤镜，透明度必须为0。
+	var backdrop_shade: ColorRect = main_instance.get_node("BackdropShade") as ColorRect
+	# 程序化背景组件；黑白太空风格不再绘制导航网格，只保留星点、轨道和远景剪影。
+	var reference_backdrop: ReferenceBackdrop = main_instance.get_node("ReferenceBackdrop") as ReferenceBackdrop
+	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or ui_style_option.get_item_text(1) != "暖木家园" or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")):
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
+	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。
+	var monochrome_primary_keys: Array[String] = ["outer_background", "table_surface", "table_inner", "rail", "border", "accent", "legal_target", "action_button"]
+	for primary_key: String in monochrome_primary_keys:
+		# 当前主要界面颜色；RGB 三通道相等表示没有额外蓝、青或暖色色偏。
+		var primary_color: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, primary_key)
+		if not is_equal_approx(primary_color.r, primary_color.g) or not is_equal_approx(primary_color.g, primary_color.b):
+			_fail("space_style_not_monochrome:%s/%s" % [primary_key, primary_color])
+			return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
-	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")):
 		_fail("ui_style_switch_to_wood")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
@@ -141,14 +154,16 @@ func _run() -> void:
 			_fail("bottom_controls_overlap:%s:%s" % [current_rect, next_rect])
 			return
 	# 本地完整座位屏幕尺寸；紧凑客户区未应用画布拉伸时仍应保持148.35×223.8像素规格。
+	# 主视角移除座次标签后，容器只保留148.35×197.8像素武将牌本体。
 	var local_seat_screen_rect: Rect2 = _screen_rect(local_player_seat_slot)
-	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 223.8)):
+	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 197.8)):
 		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
 		return
 	# 本地座次标签；测试把本地玩家设为五号位，底部牌面必须显示对应中文座次。
+	# 主视角不再显示座次号，标签节点仅作为通用座位场景兼容结构保留并保持隐藏。
 	var local_seat_label: Label = local_player_seat_slot.get_node("Seat") as Label
-	if local_seat_label.text != "五":
-		_fail("local_random_seat_label:%s" % local_seat_label.text)
+	if local_seat_label.visible or not local_seat_label.text.is_empty():
+		_fail("local_seat_label_visible:%s/%s" % [local_seat_label.visible, local_seat_label.text])
 		return
 	# 本地装备区文本；测试快照中的木牛流马存有3张牌，数量必须紧跟装备名显示。
 	# 当前节点已重构为装备堆叠组件；保留原测试变量名，改为检查实际宝物横条及其完整说明。
