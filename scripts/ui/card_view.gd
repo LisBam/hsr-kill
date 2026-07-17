@@ -64,6 +64,9 @@ var hand_selection_offset: Vector2 = Vector2.ZERO:
 ## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 
+## 是否启用旧版非手牌绝对纵坐标恢复；默认关闭，动画层与外部容器必须始终拥有牌面位置的唯一写入权。
+var _uses_legacy_non_hand_selection_position: bool = false
+
 ## 当前卡牌插画纹理；配置缺失或文件无效时为 null，并显示占位区。
 var _artwork_texture: Texture2D
 
@@ -268,7 +271,8 @@ func _refresh_visual_state() -> void:
 		border_color = Color("655b50")
 		content_modulate = disabled_content_modulate
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
-	if not (get_parent() is DecadeHandContainer):
+	# 动画牌、选择窗口牌和其他外部布局牌不能在悬停结束或样式刷新时把纵坐标重置为0；旧行为仅保留显式兼容开关。
+	if _uses_legacy_non_hand_selection_position and not (get_parent() is DecadeHandContainer):
 		position.y = _base_position_y - selected_lift if is_card_selected else _base_position_y
 	_accent_bar.color = _category_color.darkened(disabled_darkening) if not is_interactable and _dim_when_disabled else _category_color
 	_artwork_rect.modulate = content_modulate

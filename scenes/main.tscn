@@ -15,8 +15,8 @@
 [ext_resource type="Script" uid="uid://conllkvkmtemn" path="res://scripts/ui/match_log_panel.gd" id="15_log_panel"]
 [ext_resource type="PackedScene" path="res://scenes/components/card_selection_panel.tscn" id="16_card_selection"]
 [ext_resource type="Script" uid="uid://5ckjv0sds4ni" path="res://scripts/ui/equipment_stack_view.gd" id="17_equipment_stack"]
-[ext_resource type="Script" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
-[ext_resource type="Script" path="res://scripts/core/gameplay_pause_service.gd" id="19_pause_service"]
+[ext_resource type="Script" uid="uid://dn0465a3xhtvw" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
+[ext_resource type="Script" uid="uid://b5v6wgyjxk6fw" path="res://scripts/core/gameplay_pause_service.gd" id="19_pause_service"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -77,44 +77,6 @@ shadow_offset = Vector2(0, 2)
 
 [sub_resource type="StyleBoxEmpty" id="StyleEquipmentPanel"]
 
-[sub_resource type="StyleBoxFlat" id="StyleHandPanel"]
-content_margin_left = 9.0
-content_margin_top = 0.0
-content_margin_right = 9.0
-content_margin_bottom = 0.0
-bg_color = Color(0.0705882, 0.0941176, 0.0823529, 0.819608)
-border_width_left = 2
-border_width_top = 2
-border_width_right = 2
-border_width_bottom = 2
-border_color = Color(0.498039, 0.403922, 0.258824, 1)
-corner_radius_top_left = 5
-corner_radius_top_right = 5
-corner_radius_bottom_right = 5
-corner_radius_bottom_left = 5
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
-[sub_resource type="StyleBoxFlat" id="StyleJadePanel"]
-content_margin_left = 9.0
-content_margin_top = 7.0
-content_margin_right = 9.0
-content_margin_bottom = 7.0
-bg_color = Color(0.0901961, 0.168627, 0.152941, 0.929412)
-border_width_left = 2
-border_width_top = 2
-border_width_right = 2
-border_width_bottom = 2
-border_color = Color(0.54902, 0.454902, 0.282353, 1)
-corner_radius_top_left = 5
-corner_radius_top_right = 5
-corner_radius_bottom_right = 5
-corner_radius_bottom_left = 5
-shadow_color = Color(0, 0, 0, 0.62)
-shadow_size = 10
-shadow_offset = Vector2(0, 4)
-
 [node name="Main" type="Control" unique_id=1400958767]
 layout_mode = 3
 anchors_preset = 15
@@ -127,7 +89,7 @@ script = ExtResource("1_ui")
 [node name="MatchController" type="Node" parent="." unique_id=1222667046]
 script = ExtResource("2_match")
 
-[node name="GameplayPauseService" type="Node" parent="MatchController"]
+[node name="GameplayPauseService" type="Node" parent="MatchController" unique_id=2076753312]
 script = ExtResource("19_pause_service")
 
 [node name="RuleEventBus" type="Node" parent="MatchController" unique_id=1351689348]
@@ -344,9 +306,9 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -391.0
+offset_top = -383.0
 offset_right = 378.0
-offset_bottom = -161.0
+offset_bottom = -153.0
 grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("15_log_panel")
@@ -550,7 +512,7 @@ script = ExtResource("18_skill_grid")
 [node name="SkillStatusLabel" type="Label" parent="SkillBar/SkillVBox" unique_id=1357965274]
 unique_name_in_owner = true
 visible = false
-layout_mode = 2
+layout_mode = 0
 theme_override_colors/font_color = Color(0.68, 0.65, 0.58, 1)
 theme_override_font_sizes/font_size = 10
 text = "技能"
@@ -672,7 +634,7 @@ offset_top = 106.0
 offset_right = 188.35
 offset_bottom = 303.8
 
-[node name="LordDivider" type="ColorRect" parent="CharacterSelectionPanel/SelectionFrame"]
+[node name="LordDivider" type="ColorRect" parent="CharacterSelectionPanel/SelectionFrame" unique_id=209302906]
 visible = false
 layout_mode = 0
 offset_left = 200.0

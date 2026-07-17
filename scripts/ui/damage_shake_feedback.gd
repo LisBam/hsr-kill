@@ -10,7 +10,8 @@ extends Node
 @export_range(0.05, 1.0, 0.01) var shake_duration: float = 0.24
 
 ## 抖动过程中的左右位移段数；默认6段形成三次往返，数值越高频率越密但总时长不变。
-@export_range(2, 12, 1) var shake_step_count: int = 6
+## 当前受伤反馈固定只执行1次冲击位移后回正，不再进行左右往返抖动。
+@export_range(1, 1, 1) var shake_step_count: int = 1
 
 ## 当前正在播放的位置补间；重复受伤时先停止旧补间，避免多个动画争用同一牌面位置。
 var _shake_tween: Tween
