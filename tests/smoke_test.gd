@@ -74,15 +74,26 @@ func _run() -> void:
 		printerr("SMOKE_FAIL default_card_name=%s" % GameSettings.resolve_card_name(GameDatabase.get_card("sha")))
 		get_tree().quit(1)
 		return
-	# 技能元数据数量；当前八名样例武将各登记一个用于技能 UI 预留的技能。
+	# 技能元数据数量；现有武将共登记十二个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 8:
+	if skill_definition_count != 12:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
 	# 技能脚本数量；技能元数据与可创建的独立运行时代码必须一一对应。
 	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("trailblaze_sample") == null:
 		printerr("SMOKE_FAIL skill_source_definitions")
+		get_tree().quit(1)
+		return
+	# 新增正式武将与技能；基础体力、势力和玩家可见技能原文必须由源码自动索引且保持稳定。
+	var xier_definition: Dictionary = GameDatabase.get_character("xier")
+	var jizi_definition: Dictionary = GameDatabase.get_character("himeko")
+	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3:
+		printerr("SMOKE_FAIL new_character_stats")
+		get_tree().quit(1)
+		return
+	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。":
+		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
 	# 势力展示元数据数量；当前八名样例武将共使用四个独立势力主题。

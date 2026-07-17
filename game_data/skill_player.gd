@@ -50,3 +50,17 @@ func damage(count: int, target: SkillPlayer, nature: String = "normal") -> void:
 	if _host == null or target == null or not _host.has_method("damage"):
 		return
 	_host.call("damage", player_id, target.player_id, count, nature, _reason)
+
+
+## 使当前角色获得一个额外的完整回合；额外回合按加入队列的顺序执行，结束后恢复原本的行动顺序。
+func addPhase() -> bool:
+	if _host == null or not _host.has_method("add_phase"):
+		return false
+	return bool(_host.call("add_phase", player_id, _reason))
+
+
+## 使当前角色在本次出牌阶段结束后获得一个额外的出牌阶段；该接口不包含其他标准回合阶段。
+func addPlayPhase() -> bool:
+	if _host == null or not _host.has_method("add_play_phase"):
+		return false
+	return bool(_host.call("add_play_phase", player_id, _reason))

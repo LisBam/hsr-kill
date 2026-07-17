@@ -1,9 +1,12 @@
 extends CharacterDefinition
 
-## 【布洛妮娅】武将源码。武将通过脚本资源直接配置【作战再部署】。
+## 【布洛妮娅】武将源码。武将通过独立技能组件配置【行军】与【军势】。
 
-## 【作战再部署】技能脚本；主动技能入口与规则逻辑均由对应文件提供。
-const ZUOZHANZAIBUSHU_SKILL: Script = preload("res://game_data/skills/zuozhanzaibushu.gd")
+## 【行军】技能脚本；负责跳过出牌阶段并在回合结束时安排额外回合。
+const XINGJUN_SKILL: Script = preload("res://game_data/skills/xingjun.gd")
+
+## 【军势】技能脚本；负责每个出牌阶段首次【杀】指定目标后的可选摸牌。
+const JUNSHI_SKILL: Script = preload("res://game_data/skills/junshi.gd")
 
 
 ## 写入武将静态信息与技能代码引用。
@@ -14,5 +17,5 @@ func _init() -> void:
 		"gender": "female",
 		"faction": "beiluoboge",
 		"max_hp": 3,
-		"description": "辅助效果样例武将，仅提供扩展结构。",
-	}, [ZUOZHANZAIBUSHU_SKILL])
+		"description": "以阶段调度与协同进攻支援其他角色。",
+	}, [XINGJUN_SKILL, JUNSHI_SKILL])
