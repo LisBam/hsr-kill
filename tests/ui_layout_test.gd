@@ -193,7 +193,7 @@ func _run() -> void:
 	# 玩家名标签；测试目标为六号位，因此显示名固定为“玩家6”。
 	var hover_player_name: Label = current_operator_view.get_node("HoverNameShade/HoverPlayerName") as Label
 	current_operator_view.call("_on_input_mouse_entered")
-	if not hover_name_shade.visible or hover_player_name.text != "玩家6" or not hover_name_shade.size.is_equal_approx(Vector2(116.35, 42.0)) or hover_player_name.get_theme_font_size("font_size") != 12:
+	if not hover_name_shade.visible or hover_player_name.text != "玩家6" or not hover_name_shade.size.is_equal_approx(Vector2(148.35, 32.0)) or hover_player_name.get_theme_font_size("font_size") != 10:
 		_fail("player_name_hover:%s/%s" % [hover_name_shade.visible, hover_player_name.text])
 		return
 	current_operator_view.call("_on_input_mouse_exited")
