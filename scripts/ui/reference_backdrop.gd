@@ -4,6 +4,7 @@ extends TextureRect
 ## 十周年风格牌桌背景组件。组件只绘制可缩放的桌面、木质包边与金色装饰，不读取对局状态，也不依赖参考扩展目录中的外部资源。
 
 ## 牌桌主体相对控件边缘的留白；默认18像素用于露出外层木质框，运行时无需动态修改。
+## 活动主题可通过同名语义覆盖该几何值；崩铁风格使用34像素形成20像素中性深色外沿，暖木家园保持18像素。
 @export_range(0.0, 80.0, 1.0) var table_inset: float = 18.0
 
 ## 外层木质框宽度；默认14像素形成十周年界面的厚重桌框，运行时无需动态修改。
@@ -27,6 +28,9 @@ extends TextureRect
 ## 背景最深层颜色；默认使用近黑暖褐色衬托桌面与金边，运行时无需动态修改。
 ## 当前默认风格改为黑白太空，进入场景后会由统一主题语义覆盖该字段。
 @export var outer_background_color: Color = Color("020306")
+
+## 外层背景渐变终点颜色；与起点一致时按纯色绘制，只有后续明确需要独立背景渐变的主题才设置不同颜色。
+@export var outer_background_secondary_color: Color = Color("020306")
 
 ## 桌面主体颜色；默认使用低明度墨青色延续《崩铁杀》的深青视觉语言，运行时无需动态修改。
 @export var table_surface_color: Color = Color("0b0f16")
@@ -61,11 +65,20 @@ extends TextureRect
 ## 当前主题是否启用太空导航网格；只影响背景装饰，不改变牌桌几何或输入。
 var _uses_space_grid: bool = false
 
+## 当前主题是否绘制固定星点；崩铁风格关闭星点以保持参考图的干净渐变，暖木家园继续保留远景层次。
+var _uses_starfield: bool = true
+
+## 当前主题是否绘制山脊与建筑剪影；崩铁风格关闭旧远景，暖木家园继续使用原有夜景装饰。
+var _uses_scenery: bool = true
+
 ## 天幕地平线比例；默认把远景压在牌桌中央下方，保留无名杀式的宽阔中空区域。
 const SKYLINE_RATIO: float = 0.64
 
 ## 远景星点数量；固定数量保证每帧绘制成本稳定，修改后只改变背景表现。
 const STAR_COUNT: int = 26
+
+## 外层背景纵向渐变分段数；固定32段在低绘制成本下保持平滑过渡，修改后只影响视觉精细度。
+const BACKGROUND_GRADIENT_STEP_COUNT: int = 32
 
 
 ## 节点进入场景树后启用重绘；背景忽略鼠标，避免阻断任何卡牌交互。
@@ -78,7 +91,10 @@ func _ready() -> void:
 
 ## 应用指定 UI 风格的背景语义色；组件只读取注册表，不保存菜单控件或全局设置引用。
 func apply_ui_style(style_id: String) -> void:
+	table_inset = clampf(float(UIStyleRegistry.get_value(style_id, "table_inset", table_inset)), 0.0, 80.0)
+	rail_width = clampf(float(UIStyleRegistry.get_value(style_id, "rail_width", rail_width)), 4.0, 40.0)
 	outer_background_color = UIStyleRegistry.get_color(style_id, "outer_background", outer_background_color)
+	outer_background_secondary_color = UIStyleRegistry.get_color(style_id, "outer_background_secondary", outer_background_color)
 	table_surface_color = UIStyleRegistry.get_color(style_id, "table_surface", table_surface_color)
 	table_inner_color = UIStyleRegistry.get_color(style_id, "table_inner", table_inner_color)
 	wood_color = UIStyleRegistry.get_color(style_id, "rail", wood_color)
@@ -90,6 +106,8 @@ func apply_ui_style(style_id: String) -> void:
 	building_color = UIStyleRegistry.get_color(style_id, "building", building_color)
 	space_grid_color = UIStyleRegistry.get_color(style_id, "space_grid", space_grid_color)
 	_uses_space_grid = bool(UIStyleRegistry.get_value(style_id, "uses_space_grid", false))
+	_uses_starfield = bool(UIStyleRegistry.get_value(style_id, "uses_starfield", true))
+	_uses_scenery = bool(UIStyleRegistry.get_value(style_id, "uses_scenery", true))
 	queue_redraw()
 
 
@@ -99,7 +117,7 @@ func _draw() -> void:
 	var backdrop_size: Vector2 = size
 	if backdrop_size.x <= 0.0 or backdrop_size.y <= 0.0:
 		return
-	draw_rect(Rect2(Vector2.ZERO, backdrop_size), outer_background_color)
+	_draw_vertical_background_gradient(backdrop_size)
 	# 外层木质框矩形；覆盖全屏并作为桌面主体的包边底色。
 	var outer_rect: Rect2 = Rect2(Vector2(table_inset - rail_width, table_inset - rail_width), backdrop_size - Vector2.ONE * (table_inset - rail_width) * 2.0)
 	draw_style_box(_make_rounded_box(wood_color, wood_highlight_color, 2, table_corner_radius + rail_width), outer_rect)
@@ -126,41 +144,43 @@ func _draw() -> void:
 		while grid_y <= inner_rect.end.y:
 			draw_line(Vector2(inner_rect.position.x, grid_y), Vector2(inner_rect.end.x, grid_y), space_grid_color, space_grid_line_width, true)
 			grid_y += space_grid_spacing
-	# 远景星点；固定伪随机位置避免引入全局随机数或影响规则回放。
-	for star_index: int in range(STAR_COUNT):
-		# 当前星点横坐标；使用确定性取模实现可缩放的均匀分布。
-		var star_x: float = inner_rect.position.x + fmod(float(star_index * 137), maxf(inner_rect.size.x, 1.0))
-		# 当前星点纵坐标；限制在天幕矩形内，避免落入手牌操作区。
-		var star_y: float = inner_rect.position.y + fmod(float(star_index * 71), maxf(sky_rect.size.y, 1.0))
-		draw_circle(Vector2(star_x, star_y), 1.0 if star_index % 3 else 1.5, Color(star_color, 0.34))
-	# 山脊剪影；半透明层叠制造参考界面的远景纵深，避免遮挡中央动画落点。
-	var mountain_points: PackedVector2Array = PackedVector2Array([
-		Vector2(inner_rect.position.x, skyline_y + 36.0),
-		Vector2(inner_rect.position.x + inner_rect.size.x * 0.18, skyline_y - 18.0),
-		Vector2(inner_rect.position.x + inner_rect.size.x * 0.34, skyline_y + 22.0),
-		Vector2(inner_rect.position.x + inner_rect.size.x * 0.52, skyline_y - 30.0),
-		Vector2(inner_rect.position.x + inner_rect.size.x * 0.72, skyline_y + 14.0),
-		Vector2(inner_rect.end.x, skyline_y - 12.0),
-		Vector2(inner_rect.end.x, inner_rect.end.y),
-		Vector2(inner_rect.position.x, inner_rect.end.y),
-	])
-	draw_colored_polygon(mountain_points, Color(mountain_color, 0.72))
-	# 建筑剪影；低矮矩形与屋檐折线只承担氛围表现，不覆盖玩家牌和手牌区。
-	# 建筑基准线；把建筑底部固定在远景下方，窗口拉伸时保持相对高度。
-	var building_base_y: float = inner_rect.position.y + inner_rect.size.y * 0.76
-	for building_index: int in range(5):
-		# 当前建筑横坐标；按固定比例排列五组远景剪影。
-		var building_x: float = inner_rect.position.x + inner_rect.size.x * (0.24 + float(building_index) * 0.13)
-		# 当前建筑高度；使用三档确定性高度形成自然错落。
-		var building_height: float = 24.0 + float((building_index + 2) % 3) * 12.0
-		# 当前建筑矩形；只绘制低透明度暗色剪影，不包含交互信息。
-		var building_rect: Rect2 = Rect2(building_x, building_base_y - building_height, 46.0, building_height)
-		draw_rect(building_rect, Color(building_color, 0.74))
-		draw_colored_polygon(PackedVector2Array([
-			Vector2(building_rect.position.x - 8.0, building_rect.position.y),
-			Vector2(building_rect.end.x + 8.0, building_rect.position.y),
-			Vector2(building_rect.position.x + building_rect.size.x * 0.5, building_rect.position.y - 10.0),
-		]), Color(building_color, 0.74))
+	if _uses_starfield:
+		# 远景星点；固定伪随机位置避免引入全局随机数或影响规则回放。
+		for star_index: int in range(STAR_COUNT):
+			# 当前星点横坐标；使用确定性取模实现可缩放的均匀分布。
+			var star_x: float = inner_rect.position.x + fmod(float(star_index * 137), maxf(inner_rect.size.x, 1.0))
+			# 当前星点纵坐标；限制在天幕矩形内，避免落入手牌操作区。
+			var star_y: float = inner_rect.position.y + fmod(float(star_index * 71), maxf(sky_rect.size.y, 1.0))
+			draw_circle(Vector2(star_x, star_y), 1.0 if star_index % 3 else 1.5, Color(star_color, 0.34))
+	if _uses_scenery:
+		# 山脊剪影；半透明层叠制造参考界面的远景纵深，避免遮挡中央动画落点。
+		var mountain_points: PackedVector2Array = PackedVector2Array([
+			Vector2(inner_rect.position.x, skyline_y + 36.0),
+			Vector2(inner_rect.position.x + inner_rect.size.x * 0.18, skyline_y - 18.0),
+			Vector2(inner_rect.position.x + inner_rect.size.x * 0.34, skyline_y + 22.0),
+			Vector2(inner_rect.position.x + inner_rect.size.x * 0.52, skyline_y - 30.0),
+			Vector2(inner_rect.position.x + inner_rect.size.x * 0.72, skyline_y + 14.0),
+			Vector2(inner_rect.end.x, skyline_y - 12.0),
+			Vector2(inner_rect.end.x, inner_rect.end.y),
+			Vector2(inner_rect.position.x, inner_rect.end.y),
+		])
+		draw_colored_polygon(mountain_points, Color(mountain_color, 0.72))
+		# 建筑剪影；低矮矩形与屋檐折线只承担氛围表现，不覆盖玩家牌和手牌区。
+		# 建筑基准线；把建筑底部固定在远景下方，窗口拉伸时保持相对高度。
+		var building_base_y: float = inner_rect.position.y + inner_rect.size.y * 0.76
+		for building_index: int in range(5):
+			# 当前建筑横坐标；按固定比例排列五组远景剪影。
+			var building_x: float = inner_rect.position.x + inner_rect.size.x * (0.24 + float(building_index) * 0.13)
+			# 当前建筑高度；使用三档确定性高度形成自然错落。
+			var building_height: float = 24.0 + float((building_index + 2) % 3) * 12.0
+			# 当前建筑矩形；只绘制低透明度暗色剪影，不包含交互信息。
+			var building_rect: Rect2 = Rect2(building_x, building_base_y - building_height, 46.0, building_height)
+			draw_rect(building_rect, Color(building_color, 0.74))
+			draw_colored_polygon(PackedVector2Array([
+				Vector2(building_rect.position.x - 8.0, building_rect.position.y),
+				Vector2(building_rect.end.x + 8.0, building_rect.position.y),
+				Vector2(building_rect.position.x + building_rect.size.x * 0.5, building_rect.position.y - 10.0),
+			]), Color(building_color, 0.74))
 	# 桌面中心点；所有星轨和同心环围绕该点绘制。
 	var center: Vector2 = inner_rect.get_center()
 	# 低透明度古金色；用于中央装饰，避免与飞牌和指示线争夺视觉焦点。
@@ -182,6 +202,23 @@ func _draw() -> void:
 	# 中央菱形顶点；闭合折线只作为背景纹样。
 	var diamond_points: PackedVector2Array = PackedVector2Array([center + Vector2(0.0, -diamond_radius), center + Vector2(diamond_radius, 0.0), center + Vector2(0.0, diamond_radius), center + Vector2(-diamond_radius, 0.0), center + Vector2(0.0, -diamond_radius)])
 	draw_polyline(diamond_points, ornament_color.darkened(0.1), 1.25, true)
+
+
+## 使用固定分段绘制外层纵向渐变；该方法只负责主题背景，不读取或修改任何对局数据。
+func _draw_vertical_background_gradient(backdrop_size: Vector2) -> void:
+	if outer_background_color.is_equal_approx(outer_background_secondary_color):
+		draw_rect(Rect2(Vector2.ZERO, backdrop_size), outer_background_color)
+		return
+	# 单段渐变高度；按控件当前高度均分，窗口缩放时始终覆盖完整可视区域。
+	var gradient_step_height: float = backdrop_size.y / float(BACKGROUND_GRADIENT_STEP_COUNT)
+	for gradient_step_index: int in range(BACKGROUND_GRADIENT_STEP_COUNT):
+		# 当前分段插值比例；取分段中点避免第一段或最后一段出现明显纯色断层。
+		var gradient_weight: float = (float(gradient_step_index) + 0.5) / float(BACKGROUND_GRADIENT_STEP_COUNT)
+		# 当前分段颜色；仅供显式配置不同起止色的后续主题使用，当前内置主题都会走纯色快速路径。
+		var gradient_color: Color = outer_background_color.lerp(outer_background_secondary_color, gradient_weight)
+		# 当前分段矩形；额外增加1像素高度覆盖浮点舍入可能产生的细缝。
+		var gradient_rect: Rect2 = Rect2(0.0, float(gradient_step_index) * gradient_step_height, backdrop_size.x, gradient_step_height + 1.0)
+		draw_rect(gradient_rect, gradient_color)
 
 
 ## 创建背景绘制使用的圆角样式；返回值仅在当前绘制帧使用，不会注册全局主题资源。

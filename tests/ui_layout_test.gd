@@ -8,6 +8,9 @@ const SETTLE_FRAME_COUNT: int = 6
 ## 模拟未应用画布拉伸时的客户区尺寸；1152×648与项目默认启动窗口一致，用于复现固定1280×720坐标越界问题。
 const COMPACT_CLIENT_SIZE: Vector2 = Vector2(1152.0, 648.0)
 
+## 极短补间的回归等待时长；默认0.08秒覆盖无头模式下补间从下一帧开始处理的调度差异，不改变正式动画参数。
+const SHORT_TWEEN_SETTLE_SECONDS: float = 0.08
+
 ## 菜单按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
 var _menu_button_pressed: bool = false
 
@@ -59,28 +62,40 @@ func _run() -> void:
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# UI 风格选项；默认必须选中黑白太空，同时保留暖木十周年作为可切换项。
+	# 当前默认显示名为“崩铁风格”，稳定 ID 仍为 `space_mono`，旧设置应直接映射到新版主题。
 	# 暖木风格的设置显示名现为“暖木家园”，稳定 ID 继续沿用原值以兼容已有设置。
 	var ui_style_option: OptionButton = main_instance.get_node("%UiStyleOption") as OptionButton
 	# 左上信息面板；切换风格后边框颜色必须立即跟随注册表更新，不需要重新开局。
 	var top_info_panel: PanelContainer = main_instance.get_node("TopInfoPanel") as PanelContainer
 	# 黑白太空背景遮罩；重新设计后不再用近黑覆盖层模拟滤镜，透明度必须为0。
+	# 崩铁风格继续保持遮罩透明，参考图中的紫蓝毛玻璃地图不作为主题背景叠加到牌桌。
 	var backdrop_shade: ColorRect = main_instance.get_node("BackdropShade") as ColorRect
 	# 程序化背景组件；黑白太空风格不再绘制导航网格，只保留星点、轨道和远景剪影。
+	# 崩铁风格关闭旧星点、山脊和建筑剪影，仅保留暖白桌面上的低透明度金色轨道纹样。
 	var reference_backdrop: ReferenceBackdrop = main_instance.get_node("ReferenceBackdrop") as ReferenceBackdrop
-	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or ui_style_option.get_item_text(1) != "暖木家园" or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")):
+	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or ui_style_option.get_item_text(0) != "崩铁风格" or ui_style_option.get_item_text(1) != "暖木家园" or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 34.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
 	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。
-	var monochrome_primary_keys: Array[String] = ["outer_background", "table_surface", "table_inner", "rail", "border", "accent", "legal_target", "action_button"]
-	for primary_key: String in monochrome_primary_keys:
-		# 当前主要界面颜色；RGB 三通道相等表示没有额外蓝、青或暖色色偏。
+	# 旧版纯黑白断言已由崩铁风格的分层配色断言替代；主题必须同时具备中性深色外底、暖白内容面、黑框与金色强调。
+	# 崩铁风格核心颜色期望；固定值用于阻止主题被误改回单色滤镜或失去参考图的视觉层级。
+	var expected_style_colors: Dictionary = {
+		"outer_background": Color("111214"),
+		"outer_background_secondary": Color("111214"),
+		"table_inner": Color("f1efe9"),
+		"rail": Color("1d1d1d"),
+		"border": Color("bfa86c"),
+		"accent": Color("d4b55f"),
+	}
+	for primary_key: String in expected_style_colors:
+		# 当前主要界面颜色；必须与参考图抽象出的主题语义色一致。
 		var primary_color: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, primary_key)
-		if not is_equal_approx(primary_color.r, primary_color.g) or not is_equal_approx(primary_color.g, primary_color.b):
-			_fail("space_style_not_monochrome:%s/%s" % [primary_key, primary_color])
+		if not primary_color.is_equal_approx(expected_style_colors[primary_key] as Color):
+			_fail("space_style_palette:%s/%s" % [primary_key, primary_color])
 			return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
-	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")):
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or not is_equal_approx(reference_backdrop.table_inset, 18.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
 		_fail("ui_style_switch_to_wood")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
@@ -158,6 +173,11 @@ func _run() -> void:
 	var local_seat_screen_rect: Rect2 = _screen_rect(local_player_seat_slot)
 	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 197.8)):
 		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
+		return
+	# 本地武将牌屏幕底部留白；默认26像素只抬升牌面，不恢复已隐藏的主视角座次标签。
+	var local_seat_bottom_margin: float = viewport_rect.end.y - local_seat_screen_rect.end.y
+	if not is_equal_approx(local_seat_bottom_margin, 26.0) or not is_equal_approx(float(main_instance.get("local_player_card_bottom_margin")), 26.0):
+		_fail("local_seat_bottom_margin:%s" % local_seat_bottom_margin)
 		return
 	# 本地座次标签；测试把本地玩家设为五号位，底部牌面必须显示对应中文座次。
 	# 主视角不再显示座次号，标签节点仅作为通用座位场景兼容结构保留并保持隐藏。
@@ -478,7 +498,7 @@ func _run() -> void:
 		return
 	# 当前真实使用牌节点；响应等待期间会继续留在中央队列，鼠标离开不得把其纵坐标重置到窗口顶部。
 	var presented_use_card: CardView = animation_layer._active_cards[0] as CardView
-	await get_tree().create_timer(0.03).timeout
+	await get_tree().create_timer(SHORT_TWEEN_SETTLE_SECONDS).timeout
 	# 当前中央队列目标位置；飞行结束后牌面必须精确停在该位置，而不是来源玩家座位。
 	var expected_presented_card_position: Vector2 = animation_layer.call("_queue_card_position", 0) as Vector2
 	if not presented_use_card.position.is_equal_approx(expected_presented_card_position):
