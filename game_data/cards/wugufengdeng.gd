@@ -109,6 +109,8 @@ func _process_choice_queue(resolver: Object, context: Dictionary, deferred_resol
 				revealed_uids.erase(selected_uids[0])
 				_publish_harvest_display(resolver, context, target_id)
 		target_index += 1
+	if not revealed_uids.is_empty():
+		resolver.host.emit_rule_timing("wuguRemained", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), -1, {"parent_card_uid":int(context.get("parent_card_uid", -1)), "remaining_card_uids":revealed_uids.duplicate()})
 	for remaining_uid: int in revealed_uids:
 		# 未被选择的展示牌；仍在处理区时逐张进入弃牌堆。
 		var remaining_card: CardInstance = resolver.find_processing_card(remaining_uid)

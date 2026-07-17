@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 事件化触发器管理器。它只收集、排序和执行触发器，不负责创建卡牌、修改体力或移动实体牌。
 
+## 高级触发器允许的角色关系；无效字符串会在注册阶段被拒绝，避免静默变成全局触发。
+const VALID_ROLES: Array[String] = ["player", "source", "target", "global"]
+
 ## 触发器注册序号；同优先级、同座次时按注册顺序稳定执行。
 var _next_registration_id: int = 1
 
@@ -12,7 +15,7 @@ var _handlers: Dictionary = {}
 
 ## 注册一个触发器。role 可取 player、source、target、global；first_do/last_do 控制分组顺序。
 func subscribe(event_name: String, owner: Object, callback: Callable, priority: int = 0, owner_player_id: int = -1, role: String = "global", first_do: bool = false, last_do: bool = false, condition: Callable = Callable()) -> int:
-	if event_name.is_empty() or not callback.is_valid():
+	if event_name.is_empty() or not callback.is_valid() or not VALID_ROLES.has(role):
 		return -1
 	# 当前触发器记录；不保存事件或控制器引用，只保存可解绑 owner 和行为回调。
 	var entry: Dictionary = {
@@ -59,6 +62,8 @@ func arrange(event_name: String, start_player_id: int, seat_order: Array[int], e
 		var owner: Object = entry.get("owner") as Object
 		if owner != null and not is_instance_valid(owner):
 			continue
+		if event != null and not _matches_role(entry, event):
+			continue
 		var condition: Callable = entry.get("condition", Callable()) as Callable
 		if condition.is_valid() and event != null and not bool(condition.call(event)):
 			continue
@@ -102,3 +107,22 @@ func _seat_distance(start_player_id: int, player_id: int, seat_order: Array[int]
 	if start_index < 0 or target_index < 0:
 		return seat_order.size() + 1
 	return posmod(target_index - start_index, seat_order.size())
+
+
+## 判断一条触发器记录是否符合当前事件的 player/source/target/global 关系；非全局触发必须绑定有效玩家 ID。
+func _matches_role(entry: Dictionary, event: RuleEvent) -> bool:
+	# 当前注册角色；注册入口已校验，异常历史数据按不匹配处理。
+	var role: String = str(entry.get("role", ""))
+	if role == "global":
+		return true
+	# 技能或装备所属玩家 ID；非全局角色没有有效持有者时不能触发。
+	var owner_player_id: int = int(entry.get("owner_player_id", -1))
+	if owner_player_id < 0:
+		return false
+	if role == "player":
+		return owner_player_id == event.player_id
+	if role == "source":
+		return owner_player_id == event.source_id
+	if role == "target":
+		return owner_player_id == event.target_id
+	return false

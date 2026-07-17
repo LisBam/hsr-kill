@@ -95,6 +95,9 @@ var gameplay_pause_service: GameplayPauseService
 ## 触发器排序组件；保留与同步 RuleEventBus 的兼容边界，逐步承载技能时机排序。
 var trigger_manager: TriggerManager
 
+## 统一规则时机派发服务；负责普通订阅、四角色过滤、优先级与座次排序，不执行具体玩法效果。
+var timing_service: RuleTimingService
+
 ## 纯查询修正管线；技能与装备只通过该管线修改合法性查询，不直接改写控制器状态。
 var modifier_pipeline: RuleModifierPipeline
 
@@ -153,6 +156,12 @@ var _active_card_resolutions: Dictionary = {}
 ## 当前尚未完成 contentAfter 的 CardUseEvent 上下文；键为实体 UID，值保存事件 ID、使用者和最终区域。
 var _card_use_contexts: Dictionary = {}
 
+## 等待濒死流程完成后收尾的伤害上下文；键为受伤玩家 ID，值只保存伤害来源、数值、连环目标和事件 ID。
+var _pending_damage_finalizations: Dictionary = {}
+
+## 已成功进入 Begin 的阶段生命周期集合；键为“玩家ID:阶段名”，防止跳过或取消阶段伪造 End 与 After。
+var _started_phase_lifecycles: Dictionary = {}
+
 ## 等待当前响应子事件完成后询问的银月枪触发队列；每项保存持有者和黑色实体牌 UID，不持有界面或事件对象引用。
 var _queued_equipment_triggers: Array[Dictionary] = []
 
@@ -208,6 +217,9 @@ func _ready() -> void:
 	_connect_event_runtime()
 	identity_rules = IdentityRules.new()
 	card_use_event_service = CardUseEventService.new()
+	if trigger_manager == null:
+		trigger_manager = TriggerManager.new()
+	timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
 	network_gateway.command_received.connect(_on_network_command_received)
 	if not network_gateway.choice_response_received.is_connected(_on_network_choice_response_received):
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
@@ -311,6 +323,10 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	modifier_pipeline = RuleModifierPipeline.new()
 	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
 	trigger_manager = TriggerManager.new()
+	if timing_service == null:
+		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
+	else:
+		timing_service.configure(event_bus, trigger_manager, state)
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	event_scheduler.reset()
@@ -336,6 +352,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_negation_resume_results.clear()
 	_active_card_resolutions.clear()
 	_card_use_contexts.clear()
+	_pending_damage_finalizations.clear()
+	_started_phase_lifecycles.clear()
 	_queued_equipment_triggers.clear()
 	_current_turn_event_id = -1
 	_play_choice_request_id = -1
@@ -655,8 +673,21 @@ func _begin_play_choice(player_id: int) -> void:
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
 		return
+	# 出牌选择时机数据；主动入口同时包含阶段主动和用牌询问，技能命中任意一个即可加入候选。
+	var timing_data: Dictionary = {"phase":"play", "active_entries":["phaseUse", "chooseToUse"]}
+	# 使用牌选择前事件；取消表示本次不再建立选择窗口并直接结束当前出牌阶段。
+	var before_event: RuleEvent = _emit_rule_timing("chooseToUseBefore", player_id, player_id, -1, timing_data)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		_end_play_phase(player_id)
+		return
 	var event: GameEvent = event_scheduler.create_event("chooseToUse", "choice", [], {"player_id":player_id, "phase":"play"}, _runtime_root_event_id)
 	event.player_id = player_id
+	# 使用牌选择开始事件；在 ChoiceRequest 登记前派发，触发器可阻止本次窗口但不能伪造候选。
+	var begin_event: RuleEvent = _emit_rule_timing("chooseToUseBegin", player_id, player_id, -1, timing_data, event.event_id)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		event.cancel("choose_to_use_cancelled")
+		_end_play_phase(player_id)
+		return
 	var request: ChoiceRequest = ChoiceRequest.new(event.event_id, player_id, "use", "请选择要使用的牌或结束出牌阶段")
 	request.min_count = 0
 	request.max_count = 1
@@ -670,7 +701,12 @@ func _begin_play_choice(player_id: int) -> void:
 		var action_type: String = str(legal_action.get("action_type", ""))
 		if not action_type.is_empty() and not action_types.has(action_type):
 			action_types.append(action_type)
-	request.base_context = {"phase":"play", "action_types":action_types}
+	# 当前两个主动入口的合法技能；请求只公开 ID，实际发动仍由 can_activate_skill 与 activate_skill 复核。
+	var active_skill_ids: Array[String] = get_active_skill_ids(player_id, "phaseUse", timing_data)
+	for choose_to_use_skill_id: String in get_active_skill_ids(player_id, "chooseToUse", timing_data):
+		if not active_skill_ids.has(choose_to_use_skill_id):
+			active_skill_ids.append(choose_to_use_skill_id)
+	request.base_context = {"phase":"play", "action_types":action_types, "active_entries":["phaseUse", "chooseToUse"], "active_skill_ids":active_skill_ids}
 	request.active_context = request.base_context.duplicate(true)
 	for legal_action: Dictionary in legal_actions:
 		var candidate_uid: int = int(legal_action.get("card_uid", -1))
@@ -712,6 +748,7 @@ func _submit_play_choice_response(action: PlayerAction) -> bool:
 	response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
 	if not event_scheduler.submit_choice(response):
 		return _reject("当前出牌选择已经失效或所选卡牌不合法。")
+	_emit_rule_timing("chooseToUseAfter", action.actor_id, action.actor_id, -1, {"confirmed":response.confirmed, "action_type":action.action_type, "card_ids":response.card_ids.duplicate(), "target_ids":response.target_ids.duplicate()}, _play_choice_event_id)
 	_play_choice_request_id = -1
 	_play_choice_event_id = -1
 	_play_choice_actor_id = -1
@@ -764,6 +801,28 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		return []
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
+	# 选择事件名称；响应、弃牌和普通选牌使用稳定名称，调用方可通过 choice_event_name 指定其他已实现选择类型。
+	var choice_type: String = "card"
+	var choice_event_name: String = str(context.get("choice_event_name", "chooseCard"))
+	var choice_kind: String = str(context.get("kind", ""))
+	if not (context.get("response_patterns", []) as Array).is_empty() or choice_kind == "trick_negation":
+		choice_type = "respond"
+		choice_event_name = "chooseToRespond"
+	elif choice_kind == "discard_phase":
+		choice_type = "discard"
+		choice_event_name = "chooseToDiscard"
+	# 选择前时机只在目录确实存在对应 Before 名称时派发；普通 chooseCard 当前只有 Begin 时机。
+	var choice_before_name: String = "%sBefore" % choice_event_name
+	if RuleTimingCatalog.has_timing(choice_before_name):
+		var choice_before_event: RuleEvent = _emit_rule_timing(choice_before_name, chooser_id, chooser_id, -1, {"choice_type":choice_type, "kind":choice_kind, "min_count":min_select, "max_count":max_select})
+		if choice_before_event != null and (choice_before_event.cancelled or choice_before_event.neutralized):
+			return []
+	# 所有已登记选择类型的 Begin 时机在创建权威请求前触发；取消时不会产生无法提交的界面窗口。
+	var choice_begin_name: String = "%sBegin" % choice_event_name
+	if RuleTimingCatalog.has_timing(choice_begin_name):
+		var choice_begin_event: RuleEvent = _emit_rule_timing(choice_begin_name, chooser_id, chooser_id, -1, {"choice_type":choice_type, "kind":choice_kind, "min_count":min_select, "max_count":max_select})
+		if choice_begin_event != null and (choice_begin_event.cancelled or choice_begin_event.neutralized):
+			return []
 	# 请求创建前的规则阶段；选择提交后必须恢复，避免把响应窗口误当作新的回合阶段。
 	var resume_phase: String = state.current_phase
 	# 候选只读副本；UI 和 AI 只能看到请求明确公开的牌面，不能取得 CardInstance 引用。
@@ -786,18 +845,9 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"allow_cancel":allow_cancel,
 		"resume_phase":resume_phase,
 		"context":context.duplicate(true),
+		"choice_event_name":choice_event_name,
 		"deferred":interactive_human or ai_controlled_chooser,
 	}
-	# 选择事件名称；响应、弃牌和普通选牌使用稳定名称，便于触发器与回放区分。
-	var choice_type: String = "card"
-	var choice_event_name: String = "chooseCard"
-	var choice_kind: String = str(context.get("kind", ""))
-	if not (context.get("response_patterns", []) as Array).is_empty() or choice_kind == "trick_negation":
-		choice_type = "respond"
-		choice_event_name = "chooseToRespond"
-	elif choice_kind == "discard_phase":
-		choice_type = "discard"
-		choice_event_name = "chooseToDiscard"
 	# 独立选择事件；控制器的兼容恢复分支继续执行具体效果，EventScheduler 负责请求身份和旧响应失效。
 	# 选择父事件；规则效果内创建的响应必须挂到当前 content 子事件，阶段级选择则回退到长期根事件。
 	var choice_parent_event_id: int = event_scheduler.get_current_event_id()
@@ -813,6 +863,11 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	runtime_request.can_cancel = allow_cancel
 	runtime_request.base_context = context.duplicate(true)
 	runtime_request.active_context = context.duplicate(true)
+	# 当前选择可发动的主动技能；响应入口与普通选牌入口分别查询，结果只进入请求上下文不改变牌候选。
+	var active_entry: String = "chooseToRespond" if choice_event_name == "chooseToRespond" else "chooseCard"
+	runtime_request.base_context["active_entry"] = active_entry
+	runtime_request.base_context["active_skill_ids"] = get_active_skill_ids(chooser_id, active_entry, context)
+	runtime_request.active_context = runtime_request.base_context.duplicate(true)
 	for candidate: Dictionary in serialized_candidates:
 		runtime_request.card_ids.append(int(candidate.get("uid", -1)))
 	# 选择请求必须使用事件调度器分配的全局 ID；控制器自有序号不能与 chooseToUse 或其他请求共用命名空间。
@@ -1042,6 +1097,10 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	# 先解决选择自身 token 但延迟排空事件栈；具体效果必须应用选择结果后才能继续父 content 事件。
 	if not event_scheduler.submit_choice(runtime_response, true):
 		return _reject("事件运行时拒绝了已过期的选择结果。")
+	# 选择完成时机；当前目录仅对 chooseToUse、chooseToRespond 和拼点等流程声明 After，普通选牌不会伪造不存在的事件。
+	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
+	if RuleTimingCatalog.has_timing(choice_after_name):
+		_emit_rule_timing(choice_after_name, action.actor_id, action.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":selected_uids.duplicate(), "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1)))
 	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
 	_resolved_card_choice_uids = selected_uids.duplicate()
@@ -1162,10 +1221,24 @@ func draw(player_id: int, count: int, announce: bool = true) -> void:
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
 		return
+	# 摸牌生命周期数据；触发器可在 Before 与 Begin 中修改 count，但不能直接取得牌堆实体引用。
+	var timing_data: Dictionary = {"count":maxi(count, 0), "reason":"draw"}
+	var before_event: RuleEvent = _emit_rule_timing("drawBefore", player_id, -1, player_id, timing_data)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		_emit_rule_timing("drawCancelled", player_id, -1, player_id, before_event.data)
+		return
+	var begin_event: RuleEvent = _emit_rule_timing("drawBegin", player_id, -1, player_id, before_event.data if before_event != null else timing_data)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		_emit_rule_timing("drawCancelled", player_id, -1, player_id, begin_event.data)
+		return
+	# 最终请求摸牌数；负数统一收敛为0，避免触发器制造反向移动。
+	var final_count: int = maxi(int(begin_event.data.get("count", count)) if begin_event != null else count, 0)
 	_ensure_card_movement()
 	# 实际摸牌数量；可能因牌堆与弃牌堆同时为空而少于请求值。
 	var drawn_count: int = 0
-	for _index: int in range(maxi(count, 0)):
+	# 实际摸到的实体 UID；后置时机只公开稳定 ID，不暴露 CardInstance。
+	var drawn_card_uids: Array[int] = []
+	for _index: int in range(final_count):
 		if state.draw_pile.is_empty():
 			_reshuffle_discard_pile()
 		if state.draw_pile.is_empty():
@@ -1176,13 +1249,17 @@ func draw(player_id: int, count: int, announce: bool = true) -> void:
 		# 移动前区域；摸牌动画必须从桌面中心牌堆起飞。
 		# 该来源现由 CardMoveEvent 在权威移动前自动捕获，规则函数不再单独发出第二次表现信号。
 		if card_movement != null:
-			card_movement.move_card(card, "hand", player_id, "draw", state.current_event_id, "", [player_id])
+			_move_card_with_timings(card, "hand", player_id, "draw", state.current_event_id, "", [player_id])
 		else:
 			state.draw_pile.pop_back()
 			card.zone = "hand"
 			card.owner_id = player_id
 			player.hand.append(card)
 		drawn_count += 1
+		drawn_card_uids.append(card.uid)
+	var result_data: Dictionary = {"count":drawn_count, "requested_count":final_count, "card_uids":drawn_card_uids, "reason":"draw"}
+	_emit_rule_timing("drawEnd", player_id, -1, player_id, result_data)
+	_emit_rule_timing("drawAfter", player_id, -1, player_id, result_data)
 	if announce and drawn_count > 0:
 		add_log("%s摸了%d张牌。" % [player.display_name, drawn_count])
 
@@ -1195,11 +1272,28 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "") -
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or amount <= 0 or target.hp >= target.max_hp:
 		return
+	# 回复前时机；允许技能修改 amount 或取消本次回复，player 角色固定为回复目标。
+	var timing_data: Dictionary = {"amount":amount, "reason":reason, "hp":target.hp, "max_hp":target.max_hp}
+	var before_event: RuleEvent = _emit_rule_timing("recoverBefore", target_id, source_id, target_id, timing_data)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return
+	var begin_event: RuleEvent = _emit_rule_timing("recoverBegin", target_id, source_id, target_id, before_event.data if before_event != null else timing_data)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		return
+	# 最终回复请求值；非正数表示触发器已经把本次回复降为无效果。
+	var final_amount: int = maxi(int(begin_event.data.get("amount", amount)) if begin_event != null else amount, 0)
+	if final_amount <= 0:
+		return
 	# 回复前体力；用于计算实际回复量并记录准确数值。
 	var previous_hp: int = target.hp
-	target.hp = mini(target.max_hp, target.hp + amount)
-	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":target.hp - previous_hp, "hp":target.hp})
+	target.hp = mini(target.max_hp, target.hp + final_amount)
+	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":final_amount, "reason":reason}, {"amount":target.hp - previous_hp, "hp":target.hp})
 	add_log("%s回复%d点体力（%d/%d）。" % [target.display_name, target.hp - previous_hp, target.hp, target.max_hp])
+	# 体力值实际变化时机；回复、伤害与失去体力共用 changeHp，并通过 change_type 区分来源。
+	var result_data: Dictionary = {"amount":target.hp - previous_hp, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"recover"}
+	_emit_rule_timing("changeHp", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("recoverEnd", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("recoverAfter", target_id, source_id, target_id, result_data)
 	# 回复后事件；技能可读取来源、目标、实际回复值与原因牌。
 	var event: RuleEvent = RuleEvent.new("recover_after", source_id, target_id, {"amount": target.hp - previous_hp, "reason": reason})
 	_dispatch_rule_event(event)
@@ -1213,8 +1307,14 @@ func shield(target_id: int, amount: int, source_id: int = -1, reason: String = "
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or amount <= 0:
 		return 0
+	# 护甲变化前时机；当前项目护盾值承载无名杀 hùjia 语义，触发器可修改本次增加量或取消。
+	var before_event: RuleEvent = _emit_rule_timing("changeHujiaBefore", target_id, source_id, target_id, {"amount":amount, "old_hujia":target.shield, "reason":reason, "change_type":"gain"})
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return 0
 	# 实际增加的护盾值；当前规则没有护盾上限，因此等于经过非正数校验后的请求值。
-	var gained_amount: int = amount
+	var gained_amount: int = maxi(int(before_event.data.get("amount", amount)) if before_event != null else amount, 0)
+	if gained_amount <= 0:
+		return 0
 	target.shield = maxi(target.shield, 0) + gained_amount
 	# 护盾事件记录；保存来源、技能或卡牌原因、实际增加量和结算后的总护盾值。
 	var shield_event_id: int = _record_runtime_event("ShieldEvent", "shield", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":gained_amount, "shield":target.shield})
@@ -1222,7 +1322,114 @@ func shield(target_id: int, amount: int, source_id: int = -1, reason: String = "
 	# 获得护盾后事件；技能可以读取来源、目标、实际增加量、当前护盾与效果原因。
 	var event: RuleEvent = RuleEvent.new("shield_after", source_id, target_id, {"amount":gained_amount, "shield":target.shield, "reason":reason, "event_id":shield_event_id})
 	_dispatch_rule_event(event)
+	_emit_rule_timing("changeHujiaAfter", target_id, source_id, target_id, {"amount":gained_amount, "hujia":target.shield, "reason":reason, "change_type":"gain", "event_id":shield_event_id})
 	return gained_amount
+
+
+## 调整角色护甲值；正数复用 shield 获得流程，负数直接扣减且最低为0，返回实际带符号变化量。
+func change_hujia(target_id: int, delta: int, source_id: int = -1, reason: String = "") -> int:
+	if delta > 0:
+		return shield(target_id, delta, source_id, reason)
+	if state == null or state.game_over or delta == 0:
+		return 0
+	# 护甲目标状态；死亡角色不再接受普通规则调整。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive or target.shield <= 0:
+		return 0
+	# 请求扣减量；对外 delta 为负数，时机中的 amount 始终使用正数便于技能修改。
+	var requested_loss: int = mini(-delta, target.shield)
+	var before_event: RuleEvent = _emit_rule_timing("changeHujiaBefore", target_id, source_id, target_id, {"amount":requested_loss, "old_hujia":target.shield, "reason":reason, "change_type":"lose"})
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return 0
+	# 实际扣减量；触发器可减少但不能令护甲变为负数。
+	var actual_loss: int = clampi(int(before_event.data.get("amount", requested_loss)) if before_event != null else requested_loss, 0, target.shield)
+	target.shield -= actual_loss
+	_emit_rule_timing("changeHujiaAfter", target_id, source_id, target_id, {"amount":actual_loss, "hujia":target.shield, "reason":reason, "change_type":"lose"})
+	return -actual_loss
+
+
+## 增加或减少角色体力上限；正数使用 gainMaxHp，负数使用 loseMaxHp，返回实际带符号变化量。
+func change_max_hp(target_id: int, delta: int, source_id: int = -1, reason: String = "") -> int:
+	if state == null or state.game_over or delta == 0:
+		return 0
+	# 体力上限目标；死亡角色不通过普通内容端口改变上限。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive:
+		return 0
+	# 生命周期基础名称；增加和减少分别使用独立的四段时机。
+	var base_name: String = "gainMaxHp" if delta > 0 else "loseMaxHp"
+	# 请求变化量；事件内使用正数，最终返回值再恢复正负号。
+	var requested_amount: int = absi(delta)
+	var before_event: RuleEvent = _emit_rule_timing("%sBefore" % base_name, target_id, source_id, target_id, {"amount":requested_amount, "max_hp":target.max_hp, "reason":reason})
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return 0
+	var begin_event: RuleEvent = _emit_rule_timing("%sBegin" % base_name, target_id, source_id, target_id, before_event.data if before_event != null else {"amount":requested_amount, "max_hp":target.max_hp, "reason":reason})
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		return 0
+	# 最终变化量；减少体力上限时至少保留1点上限。
+	var actual_amount: int = maxi(int(begin_event.data.get("amount", requested_amount)) if begin_event != null else requested_amount, 0)
+	if delta < 0:
+		actual_amount = mini(actual_amount, maxi(target.max_hp - 1, 0))
+	# 变化前体力；减少上限可能同步压低当前体力并产生 changeHp。
+	var previous_hp: int = target.hp
+	target.max_hp += actual_amount if delta > 0 else -actual_amount
+	target.hp = mini(target.hp, target.max_hp)
+	var result_data: Dictionary = {"amount":actual_amount, "max_hp":target.max_hp, "hp":target.hp, "reason":reason}
+	_emit_rule_timing("%sEnd" % base_name, target_id, source_id, target_id, result_data)
+	_emit_rule_timing("%sAfter" % base_name, target_id, source_id, target_id, result_data)
+	if target.hp != previous_hp:
+		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":previous_hp - target.hp, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"max_hp_clamp"})
+		if target.hp <= 0:
+			_resolve_dying(target_id, -1)
+	return actual_amount if delta > 0 else -actual_amount
+
+
+## 设置角色连环状态；状态确实变化时依次派发 linkBefore、linkBegin、linkEnd 和 linkAfter。
+func set_player_linked(target_id: int, linked: bool, source_id: int = -1, reason: String = "") -> bool:
+	if state == null or state.game_over:
+		return false
+	# 连环目标状态；死亡角色和无需变化的请求不会重复触发。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive or target.chained == linked:
+		return false
+	var timing_data: Dictionary = {"old_linked":target.chained, "linked":linked, "reason":reason}
+	var before_event: RuleEvent = _emit_rule_timing("linkBefore", target_id, source_id, target_id, timing_data)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return false
+	var begin_event: RuleEvent = _emit_rule_timing("linkBegin", target_id, source_id, target_id, before_event.data if before_event != null else timing_data)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		return false
+	target.chained = linked
+	var result_data: Dictionary = {"old_linked":not linked, "linked":linked, "reason":reason}
+	_emit_rule_timing("linkEnd", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("linkAfter", target_id, source_id, target_id, result_data)
+	return true
+
+
+## 切换角色连环状态；具体设置与时机顺序统一委托给 set_player_linked。
+func toggle_player_linked(target_id: int, source_id: int = -1, reason: String = "") -> bool:
+	# 当前目标；不存在时不能推导反向状态。
+	var target: PlayerState = state.get_player(target_id) if state != null else null
+	return target != null and set_player_linked(target_id, not target.chained, source_id, reason)
+
+
+## 翻转角色武将牌正反面；依次派发 turnOverBefore、turnOverEnd 和 turnOverAfter，返回状态是否改变。
+func turn_over_player(target_id: int, source_id: int = -1, reason: String = "") -> bool:
+	if state == null or state.game_over:
+		return false
+	# 翻面目标状态；死亡角色不再改变公开武将牌方向。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null or not target.alive:
+		return false
+	var timing_data: Dictionary = {"old_face_down":target.face_down, "face_down":not target.face_down, "reason":reason}
+	var before_event: RuleEvent = _emit_rule_timing("turnOverBefore", target_id, source_id, target_id, timing_data)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return false
+	target.face_down = not target.face_down
+	var result_data: Dictionary = {"old_face_down":not target.face_down, "face_down":target.face_down, "reason":reason}
+	_emit_rule_timing("turnOverEnd", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("turnOverAfter", target_id, source_id, target_id, result_data)
+	return true
 
 
 ## 使指定角色失去体力；该流程绕过护盾、装备修正、伤害事件、伤害历史与属性连环。
@@ -1233,13 +1440,23 @@ func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "") -
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or amount <= 0:
 		return 0
+	# 无名杀式失去体力前时机；与旧 lose_hp_before 并行保留，标准技能应优先订阅驼峰事件名。
+	var standard_before_event: RuleEvent = _emit_rule_timing("loseHpBefore", target_id, source_id, target_id, {"amount":amount, "reason":reason, "hp":target.hp})
+	if standard_before_event != null and (standard_before_event.cancelled or standard_before_event.neutralized):
+		return 0
 	# 失去体力前事件；只允许失去体力类技能修改或取消，不会触发 damage_before。
-	var before_event: RuleEvent = RuleEvent.new("lose_hp_before", source_id, target_id, {"amount":amount, "reason":reason})
+	var before_event: RuleEvent = RuleEvent.new("lose_hp_before", source_id, target_id, {"amount":int(standard_before_event.data.get("amount", amount)) if standard_before_event != null else amount, "reason":reason})
 	_dispatch_rule_event(before_event)
 	if state.game_over or before_event.cancelled:
 		return 0
 	# 最终失去体力值；事件处理器可把数值调整为0以阻止本次体力减少。
 	var final_amount: int = maxi(int(before_event.data.get("amount", amount)), 0)
+	if final_amount == 0:
+		return 0
+	var begin_event: RuleEvent = _emit_rule_timing("loseHpBegin", target_id, source_id, target_id, {"amount":final_amount, "reason":reason, "hp":target.hp})
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		return 0
+	final_amount = maxi(int(begin_event.data.get("amount", final_amount)) if begin_event != null else final_amount, 0)
 	if final_amount == 0:
 		return 0
 	target.hp -= final_amount
@@ -1249,6 +1466,11 @@ func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "") -
 	# 失去体力后事件；与 damage_after 完全独立，受到伤害和造成伤害技能不会收到本事件。
 	var after_event: RuleEvent = RuleEvent.new("lose_hp_after", source_id, target_id, {"amount":final_amount, "hp":target.hp, "shield":target.shield, "reason":reason, "event_id":lose_hp_event_id})
 	_dispatch_rule_event(after_event)
+	# 标准失去体力结束与完成时机；二者都发生在实际扣减后、进入濒死前。
+	var result_data: Dictionary = {"amount":final_amount, "hp":target.hp, "shield":target.shield, "reason":reason, "event_id":lose_hp_event_id, "change_type":"lose_hp"}
+	_emit_rule_timing("changeHp", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("loseHpEnd", target_id, source_id, target_id, result_data)
+	_emit_rule_timing("loseHpAfter", target_id, source_id, target_id, result_data)
 	if state.game_over:
 		return final_amount
 	# 通用体力减少事件；失去体力与实际扣减体力的伤害都通过本事件提供统一观察入口。
@@ -1273,8 +1495,21 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	var final_amount: int = amount
 	# 伤害父事件；多级 Begin、扣血、濒死和来源事件均通过该 ID 建立可回放关系。
 	var damage_event_id: int = _record_runtime_event("DamageEvent", "damage", {"source_id":source_id, "target_id":target_id, "amount":amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer})
-	for damage_begin_index: int in range(1, 5):
-		_record_runtime_event("damageBegin%d" % damage_begin_index, "trigger", {"source_id":source_id, "target_id":target_id, "amount":final_amount}, {}, damage_event_id)
+	# 伤害生命周期共享数据；四个修改窗口逐次读取上一时机写回的 amount，保证数值修改链可预测。
+	var timing_data: Dictionary = {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
+	var damage_before_event: RuleEvent = _emit_rule_timing("damageBefore", target_id, source_id, target_id, timing_data, damage_event_id)
+	if damage_before_event != null and (damage_before_event.cancelled or damage_before_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_before_event.data, damage_event_id)
+		return
+	var damage_begin_event: RuleEvent = _emit_rule_timing("damageBegin", target_id, source_id, target_id, damage_before_event.data if damage_before_event != null else timing_data, damage_event_id)
+	if damage_begin_event != null and (damage_begin_event.cancelled or damage_begin_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_event.data, damage_event_id)
+		return
+	var damage_begin_one_event: RuleEvent = _emit_rule_timing("damageBegin1", target_id, source_id, target_id, damage_begin_event.data if damage_begin_event != null else timing_data, damage_event_id)
+	if damage_begin_one_event != null and (damage_begin_one_event.cancelled or damage_begin_one_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_one_event.data, damage_event_id)
+		return
+	final_amount = maxi(int(damage_begin_one_event.data.get("amount", final_amount)) if damage_begin_one_event != null else final_amount, 0)
 	# 伤害修正上下文；装备源码只读取稳定规则字段，不依赖控制器内部局部变量。
 	var equipment_damage_context: Dictionary = {"source_id":source_id, "target_id":target_id, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer}
 	# 伤害来源状态；其武器可覆盖造成伤害修正钩子。
@@ -1284,19 +1519,41 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		var source_weapon_definition: CardDefinition = get_equipment_definition(source_id, "weapon")
 		if source_weapon_definition != null:
 			final_amount = source_weapon_definition.modify_outgoing_damage(self, equipment_damage_source, target, equipment_damage_context, final_amount)
+	# 第二伤害修改窗口；发生在来源装备修正后、目标防具修正前。
+	var damage_begin_two_event: RuleEvent = _emit_rule_timing("damageBegin2", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}, damage_event_id)
+	if damage_begin_two_event != null and (damage_begin_two_event.cancelled or damage_begin_two_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_two_event.data, damage_event_id)
+		return
+	final_amount = maxi(int(damage_begin_two_event.data.get("amount", final_amount)) if damage_begin_two_event != null else final_amount, 0)
+	# 第三伤害修改窗口；通常供受伤角色和防御技能在防具结算前修改。
+	var damage_begin_three_event: RuleEvent = _emit_rule_timing("damageBegin3", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}, damage_event_id)
+	if damage_begin_three_event != null and (damage_begin_three_event.cancelled or damage_begin_three_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_three_event.data, damage_event_id)
+		return
+	final_amount = maxi(int(damage_begin_three_event.data.get("amount", final_amount)) if damage_begin_three_event != null else final_amount, 0)
 	if not ignore_armor:
 		# 目标防具定义；具体伤害压缩或属性增伤由防具卡牌源码提供。
 		var target_armor_definition: CardDefinition = get_equipment_definition(target_id, "armor")
 		if target_armor_definition != null:
 			final_amount = target_armor_definition.modify_incoming_damage(self, target, equipment_damage_context, final_amount)
+	# 第四及最终伤害修改窗口；其结果直接进入旧 damage_before 兼容事件和实际扣减。
+	var damage_begin_four_event: RuleEvent = _emit_rule_timing("damageBegin4", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}, damage_event_id)
+	if damage_begin_four_event != null and (damage_begin_four_event.cancelled or damage_begin_four_event.neutralized):
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_four_event.data, damage_event_id)
+		return
+	final_amount = maxi(int(damage_begin_four_event.data.get("amount", final_amount)) if damage_begin_four_event != null else final_amount, 0)
 
 	# 伤害前事件；处理器可修改 amount 或取消整次伤害。
 	var before_event: RuleEvent = RuleEvent.new("damage_before", source_id, target_id, {"amount": final_amount, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
 	_dispatch_rule_event(before_event)
 	if state.game_over or before_event.cancelled:
+		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, before_event.data, damage_event_id)
 		return
 	final_amount = maxi(int(before_event.data.get("amount", final_amount)), 0)
 	if final_amount == 0:
+		var zero_data: Dictionary = {"amount":0, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":0, "hp_lost":0, "hp":target.hp, "shield":target.shield}
+		_emit_rule_timing("damageZero", target_id, source_id, target_id, zero_data, damage_event_id)
+		_finish_damage_timing({"source_id":source_id, "target_id":target_id, "amount":0, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":0, "hp_lost":0, "chain_targets":[]})
 		return
 
 	# 伤害发生前是否处于连环状态；属性伤害需要基于该状态决定传导。
@@ -1314,10 +1571,19 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	var shield_before_damage: int = maxi(target.shield, 0)
 	# 本次由护盾吸收的伤害值；最多吸收到最终伤害值，护盾不会变成负数。
 	var shield_absorbed: int = mini(shield_before_damage, final_amount)
+	if shield_absorbed > 0:
+		# 护甲减少前时机；amount 表示本次将扣除的护甲值，取消后伤害全部穿透到体力。
+		var hujia_before_event: RuleEvent = _emit_rule_timing("changeHujiaBefore", target_id, source_id, target_id, {"amount":shield_absorbed, "old_hujia":shield_before_damage, "reason":"damage", "damage_event_id":damage_event_id, "change_type":"lose"}, damage_event_id)
+		if hujia_before_event != null and (hujia_before_event.cancelled or hujia_before_event.neutralized):
+			shield_absorbed = 0
+		else:
+			shield_absorbed = clampi(int(hujia_before_event.data.get("amount", shield_absorbed)) if hujia_before_event != null else shield_absorbed, 0, mini(shield_before_damage, final_amount))
 	# 本次实际扣减的体力值；伤害剩余量为0时仍属于一次有效伤害并触发 damage_after。
 	var hp_lost: int = final_amount - shield_absorbed
 	target.shield = shield_before_damage - shield_absorbed
 	target.hp -= hp_lost
+	if shield_absorbed > 0:
+		_emit_rule_timing("changeHujiaAfter", target_id, source_id, target_id, {"amount":shield_absorbed, "hujia":target.shield, "reason":"damage", "damage_event_id":damage_event_id, "change_type":"lose"}, damage_event_id)
 	_record_runtime_event("damage", "damage", {"source_id":source_id, "target_id":target_id, "nature":nature}, {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp}, damage_event_id)
 	target.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	var source_player: PlayerState = state.get_player(source_id)
@@ -1329,6 +1595,11 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		add_log("%s受到%d点%s伤害，护盾抵消%d点（%d/%d，护盾%d）。" % [target.display_name, final_amount, _nature_text(nature), shield_absorbed, target.hp, target.max_hp, target.shield])
 	else:
 		add_log("%s受到%d点%s伤害（%d/%d）。" % [target.display_name, final_amount, _nature_text(nature), target.hp, target.max_hp])
+	# 伤害实际成立时机；发生在护甲和体力扣减后、旧 damage_after 与濒死流程前。
+	var damage_result_data: Dictionary = {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
+	if hp_lost > 0:
+		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":hp_lost, "hp":target.hp, "max_hp":target.max_hp, "reason":card_id, "change_type":"damage", "damage_event_id":damage_event_id}, damage_event_id)
+	_emit_rule_timing("damage", target_id, source_id, target_id, damage_result_data, damage_event_id)
 	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
 	var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount": final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
 	_dispatch_rule_event(after_event)
@@ -1339,16 +1610,54 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":hp_lost, "hp":target.hp, "reduction_type":"damage", "damage_amount":final_amount, "shield_absorbed":shield_absorbed, "nature":nature, "card_id":card_id, "event_id":damage_event_id}))
 	if state.game_over:
 		return
+	# 伤害尾部上下文；濒死可能暂停，因此 damageSource、End、After 和连环必须保存到救援结束后执行。
+	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "chain_targets":chain_targets.duplicate()}
 	if target.hp <= 0:
+		_pending_damage_finalizations[target_id] = finalization_context
 		_resolve_dying(target_id, source_id)
-	_record_runtime_event("damageSource", "trigger", {"source_id":source_id, "target_id":target_id, "amount":final_amount}, {}, damage_event_id)
-	if state.game_over:
+		if _pending_damage_finalizations.has(target_id) and not has_pending_card_choice():
+			_finish_pending_damage(target_id)
 		return
-	for chained_target_id: int in chain_targets:
+	_finish_damage_timing(finalization_context)
+
+
+## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；严格派发 damageSource、damageEnd、damageAfter 后再传导属性伤害。
+func _finish_damage_timing(context: Dictionary) -> void:
+	# 伤害来源、目标和父事件 ID；全部从保存上下文恢复，异步期间不会引用旧 PlayerState 对象。
+	var source_id: int = int(context.get("source_id", -1))
+	var target_id: int = int(context.get("target_id", -1))
+	var damage_event_id: int = int(context.get("damage_event_id", -1))
+	# 统一尾部数据；来源触发与受伤者触发读取同一最终伤害、护甲吸收和体力减少值。
+	var timing_data: Dictionary = {
+		"amount":int(context.get("amount", 0)),
+		"shield_absorbed":int(context.get("shield_absorbed", 0)),
+		"hp_lost":int(context.get("hp_lost", 0)),
+		"nature":str(context.get("nature", "normal")),
+		"card_id":str(context.get("card_id", "")),
+		"chain_transfer":bool(context.get("chain_transfer", false)),
+		"damage_event_id":damage_event_id,
+	}
+	_emit_rule_timing("damageSource", target_id, source_id, target_id, timing_data, damage_event_id)
+	_emit_rule_timing("damageEnd", target_id, source_id, target_id, timing_data, damage_event_id)
+	_emit_rule_timing("damageAfter", target_id, source_id, target_id, timing_data, damage_event_id)
+	if state == null or state.game_over:
+		return
+	for chained_target_id_variant: Variant in context.get("chain_targets", []) as Array:
 		# 传导前再次检查角色仍存活且横置，避免前序死亡结算改变有效目标。
+		var chained_target_id: int = int(chained_target_id_variant)
 		var chained_target: PlayerState = state.get_player(chained_target_id)
 		if chained_target != null and chained_target.alive and chained_target.chained:
-			damage(source_id, chained_target_id, final_amount, nature, card_id, true, false)
+			damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false)
+
+
+## 读取并移除指定濒死目标等待中的伤害尾部；重复调用安全返回且不会重复派发来源或连环事件。
+func _finish_pending_damage(target_id: int) -> void:
+	if not _pending_damage_finalizations.has(target_id):
+		return
+	# 保存的伤害尾部；先移除再派发，防止尾部技能重入同一目标时重复读取旧上下文。
+	var context: Dictionary = _pending_damage_finalizations[target_id] as Dictionary
+	_pending_damage_finalizations.erase(target_id)
+	_finish_damage_timing(context)
 
 
 ## 消耗一张符合响应模式的牌；八卦阵与丈八蛇矛的转化也通过该入口处理。
@@ -1475,15 +1784,27 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 	var response_pattern: String = _get_provided_response_pattern(definition)
 	if not response_patterns.has(response_pattern):
 		return null
+	# 响应牌生命周期数据；player 与 source 都是响应者，父级牌或选择用途保留在 response_pattern 中。
+	var timing_data: Dictionary = {"card_uid":card.uid, "card_id":card.definition_id, "response_pattern":response_pattern}
+	var respond_before_event: RuleEvent = _emit_rule_timing("respondBefore", player_id, player_id, -1, timing_data)
+	if respond_before_event != null and (respond_before_event.cancelled or respond_before_event.neutralized):
+		return null
+	var respond_begin_event: RuleEvent = _emit_rule_timing("respondBegin", player_id, player_id, -1, respond_before_event.data if respond_before_event != null else timing_data)
+	if respond_begin_event != null and (respond_begin_event.cancelled or respond_begin_event.neutralized):
+		return null
 	# 是否为实际手牌；银月枪只由回合外使用或打出的黑色手牌触发。
 	var was_hand_card: bool = player.hand.has(card)
 	# 实际消耗牌；take_playable_card 同时支持普通手牌与木牛“粮”。
 	var consumed: CardInstance = player.take_playable_card(card.uid)
 	_move_to_discard(consumed)
 	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "card_uid":consumed.uid}, {"responded":true})
+	timing_data["respond_event_id"] = respond_event_id
+	_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":consumed.uid})
 	add_log("%s打出了%s。" % [player.display_name, describe_card(consumed)])
 	_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
+	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
+	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
 	return consumed
 
 
@@ -1850,6 +2171,8 @@ func _finish_trick_negation_chain(context: Dictionary, final_negated: bool) -> v
 	var parent_card: CardInstance = _find_processing_card(parent_card_uid)
 	if parent_card == null:
 		return
+	if final_negated:
+		_emit_rule_timing("eventNeutralized", int(context.get("target_id", -1)), int(context.get("source_id", -1)), int(context.get("target_id", -1)), {"card_uid":parent_card_uid, "card_id":parent_card.definition_id, "negated":true})
 	if bool(context.get("delayed_judgment", false)):
 		_resolve_delayed_judgment_card(int(context.get("target_id", -1)), parent_card, final_negated)
 		return
@@ -1914,8 +2237,8 @@ func consume_virtual_equipment_response(player_id: int, equipment_uid: int, mate
 	for material_card_uid: int in material_card_uids:
 		# 当前材料；装备源码已验证来自普通手牌，移动前仍需重新查询防止旧选择。
 		var material_card: CardInstance = player.find_hand_card(material_card_uid)
-		card_movement.move_card(material_card, "processing", -1, "respond", respond_event_id)
-		card_movement.move_card(material_card, "discard_pile", -1, "respond", respond_event_id)
+		_move_card_with_timings(material_card, "processing", -1, "respond", respond_event_id)
+		_move_card_with_timings(material_card, "discard_pile", -1, "respond", respond_event_id)
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":equipment_uid})
 	if not log_message.is_empty():
 		add_log(log_message)
@@ -2032,6 +2355,13 @@ func perform_judgment(player_id: int, reason: String) -> CardInstance:
 	var judgment_player: PlayerState = state.get_player(player_id)
 	if judgment_player == null or not judgment_player.alive:
 		return null
+	# 判定前与开始时机；取消后不从牌堆取牌，也不创建中央判定展示。
+	var judge_before_event: RuleEvent = _emit_rule_timing("judgeBefore", player_id, player_id, player_id, {"reason":reason})
+	if judge_before_event != null and (judge_before_event.cancelled or judge_before_event.neutralized):
+		return null
+	var judge_begin_event: RuleEvent = _emit_rule_timing("judgeBegin", player_id, player_id, player_id, judge_before_event.data if judge_before_event != null else {"reason":reason})
+	if judge_begin_event != null and (judge_begin_event.cancelled or judge_begin_event.neutralized):
+		return null
 	if state.draw_pile.is_empty():
 		_reshuffle_discard_pile()
 	if state.draw_pile.is_empty():
@@ -2043,12 +2373,18 @@ func perform_judgment(player_id: int, reason: String) -> CardInstance:
 	# 牌堆顶判定牌；先进入公共处理区并公开展示，判定结果记录后再进入弃牌堆。
 	_ensure_card_movement()
 	var judgment_card: CardInstance = state.draw_pile.back()
-	card_movement.move_card(judgment_card, "processing", -1, "judge", judgment_event_id)
+	_move_card_with_timings(judgment_card, "processing", -1, "judge", judgment_event_id)
+	# 判定牌产生时机；技能可读取牌面稳定字段并在 judgeFixing 前记录修改结果。
+	var judge_data: Dictionary = {"player_id":player_id, "reason":reason, "card_uid":judgment_card.uid, "card_id":judgment_card.definition_id, "suit":judgment_card.suit, "rank":judgment_card.rank, "color":judgment_card.get_color()}
+	_emit_rule_timing("judge", player_id, player_id, player_id, judge_data, judgment_event_id)
 	# 判定牌属于公共牌堆而非判定角色打出的牌；来源使用-1让界面直接从中央弃牌锚点出现。
 	_request_card_presentation(judgment_card, -1, [], "judge", judgment_event_id, true)
 	add_log("%s的%s判定牌为%s。" % [judgment_player.display_name, reason, describe_card(judgment_card)])
+	_emit_rule_timing("judgeFixing", player_id, player_id, player_id, judge_data, judgment_event_id)
 	_record_runtime_event("judgeResult", "judgment_result", {"player_id":player_id, "reason":reason, "card_uid":judgment_card.uid}, {"suit":judgment_card.suit, "rank":judgment_card.rank, "color":judgment_card.get_color()}, judgment_event_id)
 	_move_to_discard(judgment_card, judgment_event_id)
+	_emit_rule_timing("judgeEnd", player_id, player_id, player_id, judge_data, judgment_event_id)
+	_emit_rule_timing("judgeAfter", player_id, player_id, player_id, judge_data, judgment_event_id)
 	return judgment_card
 
 
@@ -2063,7 +2399,7 @@ func equip_from_processing(player_id: int, card: CardInstance) -> void:
 	if player.equipment.has(slot):
 		_discard_equipment_slot(player_id, slot, true)
 	_ensure_card_movement()
-	card_movement.move_card(card, "equipment", player_id, "equip", state.current_event_id, slot)
+	_move_card_with_timings(card, "equipment", player_id, "equip", state.current_event_id, slot)
 	_install_card_runtime(card, player_id)
 	add_log("%s装备了%s。" % [player.display_name, describe_card(card)])
 
@@ -2073,7 +2409,7 @@ func place_delayed_trick(target_id: int, card: CardInstance) -> void:
 	# 延时锦囊目标；合法性层已保证其存活且判定区无同名牌。
 	var target: PlayerState = state.get_player(target_id)
 	_ensure_card_movement()
-	card_movement.move_card(card, "judgment", target_id, "add_judge", state.current_event_id)
+	_move_card_with_timings(card, "judgment", target_id, "add_judge", state.current_event_id)
 	add_log("%s的判定区加入了%s。" % [target.display_name, describe_card(card)])
 
 
@@ -2186,7 +2522,7 @@ func _take_selected_player_card(source_id: int, target_id: int, card_uid: int) -
 	# 移动前区域；表现层据此从目标角色锚点开始飞行。
 	# 该来源现由 CardMovementService 在移动前写入统一事件，避免获得牌出现两次动画。
 	_ensure_card_movement()
-	card_movement.move_card(taken_card, "hand", source_id, "gain", state.current_event_id, "", [source_id])
+	_move_card_with_timings(taken_card, "hand", source_id, "gain", state.current_event_id, "", [source_id])
 	add_log("%s获得了%s的一张牌。" % [source.display_name, target.display_name])
 	return true
 
@@ -2306,7 +2642,7 @@ func transfer_equipment(from_id: int, to_id: int, slot: String) -> void:
 	# 移动前区域；借刀杀人的获得动画从原持有者武将牌飞向获得者。
 	# 该来源现由 CardMovementService 在移动前写入统一事件，目标界面只消费一次移动增量。
 	_ensure_card_movement()
-	card_movement.move_card(card, "hand", to_id, "gain", state.current_event_id, "", [to_id])
+	_move_card_with_timings(card, "hand", to_id, "gain", state.current_event_id, "", [to_id])
 	add_log("%s将武器交给了%s。" % [from_player.display_name, to_player.display_name])
 
 
@@ -2508,7 +2844,7 @@ func reveal_top_cards(count: int) -> Array[CardInstance]:
 		# 当前亮出的牌；公共处理区不属于任何玩家。
 		_ensure_card_movement()
 		var card: CardInstance = state.draw_pile.back()
-		card_movement.move_card(card, "processing", -1, "reveal", state.current_event_id)
+		_move_card_with_timings(card, "processing", -1, "reveal", state.current_event_id)
 		result.append(card)
 	return result
 
@@ -2520,7 +2856,7 @@ func give_revealed_card(player_id: int, card: CardInstance) -> void:
 	# 展示牌来源区域；获得动画从桌面中央展示区移动到角色武将锚点。
 	# 该来源现由 CardMovementService 在移动前写入统一事件，五谷选择完成后只生成一张获得表现牌。
 	_ensure_card_movement()
-	card_movement.move_card(card, "hand", player_id, "gain", state.current_event_id, "", [player_id])
+	_move_card_with_timings(card, "hand", player_id, "gain", state.current_event_id, "", [player_id])
 	add_log("%s从展示牌中获得了%s。" % [player.display_name, describe_card(card)])
 
 
@@ -2546,7 +2882,7 @@ func move_hand_card_to_equipment_attachment(owner_id: int, card_uid: int, attach
 	if card == null:
 		return null
 	_ensure_card_movement()
-	if card_movement.move_card(card, attachment_zone, owner_id, "equipment_attachment_store", state.current_event_id) == null:
+	if _move_card_with_timings(card, attachment_zone, owner_id, "equipment_attachment_store", state.current_event_id) == null:
 		return null
 	return card
 
@@ -2564,10 +2900,10 @@ func transfer_equipment_with_attachments(from_id: int, to_id: int, slot: String,
 	var equipment_card: CardInstance = from_player.equipment[slot] as CardInstance
 	_uninstall_card_runtime(equipment_card.uid)
 	_ensure_card_movement()
-	card_movement.move_card(equipment_card, "equipment", to_id, "equipment_transfer", state.current_event_id, slot)
+	_move_card_with_timings(equipment_card, "equipment", to_id, "equipment_transfer", state.current_event_id, slot)
 	_install_card_runtime(equipment_card, to_id)
 	for attachment_card: CardInstance in attachment_cards.duplicate():
-		card_movement.move_card(attachment_card, attachment_zone, to_id, "equipment_attachment_transfer", state.current_event_id)
+		_move_card_with_timings(attachment_card, attachment_zone, to_id, "equipment_attachment_transfer", state.current_event_id)
 	return true
 
 
@@ -2684,7 +3020,40 @@ func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
 func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
 	# 当前技能运行时实例；未安装的技能不能通过伪造动作直接发动。
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
-	return skill != null and skill.can_activate(context)
+	if skill == null:
+		return false
+	# 当前允许的主动入口；技能只需命中其中一个入口，复合 chooseToUse 与 phaseUse 请求不会要求重复声明。
+	var active_entries: Array[String] = _resolve_active_entries(player_id, context)
+	if not active_entries.is_empty():
+		var supports_entry: bool = false
+		for active_entry: String in active_entries:
+			if skill.supports_active_entry(active_entry):
+				supports_entry = true
+				break
+		if not supports_entry:
+			return false
+	return skill.can_activate(context)
+
+
+## 返回指定玩家在当前主动入口可以发动的技能 ID；结果只包含已安装、入口匹配且 can_activate 通过的实例。
+func get_active_skill_ids(player_id: int, active_entry: String, context: Dictionary = {}) -> Array[String]:
+	# 可发动技能结果；按武将技能安装顺序遍历，界面和 AI 得到稳定按钮顺序。
+	var result: Array[String] = []
+	if not RuleTimingCatalog.has_active_entry(active_entry):
+		return result
+	# 当前玩家技能表；未选将或技能尚未安装时为空字典。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；主动入口与自身规则条件必须同时满足。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null or not skill.supports_active_entry(active_entry):
+			continue
+		# 技能查询上下文；补充主动入口但不覆盖调用方其他可序列化参数。
+		var activation_context: Dictionary = context.duplicate(true)
+		activation_context["active_entry"] = active_entry
+		if skill.can_activate(activation_context):
+			result.append(skill.get_id())
+	return result
 
 
 ## 返回主动技能的只读交互预览；界面与 AI 可查询，但所有提交仍由技能 can_activate 与 activate 权威复核。
@@ -2704,8 +3073,20 @@ func activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) 
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
 	if skill == null:
 		return _reject("当前武将未配置该技能。")
-	if not skill.can_activate(context):
+	if not can_activate_skill(player_id, skill_id, context):
 		return _reject("该技能当前不满足发动条件。")
+	# 技能时机共享数据；全部字段均可序列化，触发器可读取但不得写入节点或运行时对象。
+	var timing_data: Dictionary = {"skill_id":skill_id, "context":context.duplicate(true)}
+	_emit_rule_timing("logSkillBegin", player_id, player_id, -1, timing_data)
+	_emit_rule_timing("logSkill", player_id, player_id, -1, timing_data)
+	# 技能执行开始时机；被取消或中立化时不调用技能效果入口。
+	var begin_event: RuleEvent = _emit_rule_timing("useSkillBegin", player_id, player_id, -1, timing_data)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		return _reject("该技能的发动已被规则取消。")
+	# 技能主要使用时机；允许高优先级规则在实际消耗或效果前阻止本次主动技能。
+	var use_event: RuleEvent = _emit_rule_timing("useSkill", player_id, player_id, -1, timing_data)
+	if use_event != null and (use_event.cancelled or use_event.neutralized):
+		return _reject("该技能的执行已被规则取消。")
 	# 技能执行错误；空字符串表示技能已通过公开规则端口成功提交效果或选择请求。
 	var activation_error: String = skill.activate(context)
 	if not activation_error.is_empty():
@@ -2715,9 +3096,29 @@ func activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) 
 	if player != null:
 		player.skill_history.append({"skill_id":skill_id, "event_id":state.current_event_id, "turn_number":state.turn_number})
 	state.action_sequence += 1
+	_emit_rule_timing("useSkillAfter", player_id, player_id, -1, timing_data)
+	_emit_rule_timing("skillAfter", player_id, player_id, -1, timing_data)
 	_dispatch_rule_event(RuleEvent.new("skill_used", player_id, -1, {"skill_id":skill_id, "context":context.duplicate(true)}))
 	_emit_state()
 	return true
+
+
+## 推导一次主动技能提交所属入口；显式 active_entries 优先，其次 active_entry，最后依据当前阶段回退 phaseUse。
+func _resolve_active_entries(player_id: int, context: Dictionary) -> Array[String]:
+	# 主动入口结果；去重后供技能元数据匹配，数组为空表示调用方未处于标准主动窗口。
+	var result: Array[String] = []
+	for entry_variant: Variant in context.get("active_entries", []) as Array:
+		# 当前入口名称；只接受目录中的四种稳定值。
+		var entry_name: String = str(entry_variant)
+		if RuleTimingCatalog.has_active_entry(entry_name) and not result.has(entry_name):
+			result.append(entry_name)
+	# 单入口兼容字段；技能按钮和响应扩展可只传一个字符串。
+	var single_entry: String = str(context.get("active_entry", ""))
+	if RuleTimingCatalog.has_active_entry(single_entry) and not result.has(single_entry):
+		result.append(single_entry)
+	if result.is_empty() and state != null and state.current_player_id == player_id and state.current_phase == "play":
+		result.append("phaseUse")
+	return result
 
 
 ## 为全部已选武将创建并安装独立技能实例；武将脚本中的直接引用顺序决定安装与技能栏顺序。
@@ -2762,9 +3163,29 @@ func _finish_character_selection() -> void:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
 	_install_all_character_skills()
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
-	for player: PlayerState in state.players:
-		draw(player.player_id, 4, false)
-	_record_runtime_event("gameDraw", "draw", {"cards_per_player":4, "player_count":state.players.size()})
+	_emit_rule_timing("gameStart", -1, -1, -1, {"player_count":state.players.size()})
+	for entered_player: PlayerState in state.players:
+		_emit_rule_timing("enterGame", entered_player.player_id, entered_player.player_id, entered_player.player_id, {"character_id":entered_player.character_id})
+	var game_draw_data: Dictionary = {"cards_per_player":4, "player_count":state.players.size()}
+	# 最终起始手牌数；默认4，允许 gameDrawBefore 与 gameDrawBegin 在不直接访问牌堆的情况下修改。
+	var starting_hand_count: int = 4
+	# 是否执行起始手牌分发；取消 gameDrawBefore 或 gameDrawBegin 只跳过发牌，不能令选将完成后的对局永久停住。
+	var should_deal_starting_cards: bool = true
+	var game_draw_before_event: RuleEvent = _emit_rule_timing("gameDrawBefore", -1, -1, -1, game_draw_data)
+	if game_draw_before_event != null and (game_draw_before_event.cancelled or game_draw_before_event.neutralized):
+		should_deal_starting_cards = false
+	if should_deal_starting_cards:
+		var game_draw_begin_event: RuleEvent = _emit_rule_timing("gameDrawBegin", -1, -1, -1, game_draw_before_event.data if game_draw_before_event != null else game_draw_data)
+		if game_draw_begin_event != null and (game_draw_begin_event.cancelled or game_draw_begin_event.neutralized):
+			should_deal_starting_cards = false
+		else:
+			starting_hand_count = maxi(int(game_draw_begin_event.data.get("cards_per_player", starting_hand_count)) if game_draw_begin_event != null else starting_hand_count, 0)
+	if should_deal_starting_cards:
+		for player: PlayerState in state.players:
+			draw(player.player_id, starting_hand_count, false)
+		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size()}
+		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
+		_emit_rule_timing("gameDrawAfter", -1, -1, -1, game_draw_result_data)
 	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.lord_player_id})
 	# 身份确认后重新旋转物理座次；主公固定为一号位，后续数组顺序就是顺时针座次。
 	_reorder_players_from_lord()
@@ -2774,7 +3195,10 @@ func _finish_character_selection() -> void:
 		push_error("标准身份局缺少主公，无法开始首回合。")
 		return
 	add_log("所有玩家完成选将并同时亮出武将。")
-	add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌4张。" % [state.players.size(), state.draw_pile.size()])
+	if should_deal_starting_cards:
+		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), starting_hand_count])
+	else:
+		add_log("对局开始：%d名玩家，起始手牌分发被规则取消。" % state.players.size())
 	_start_turn(first_turn_player.player_id)
 
 
@@ -2849,6 +3273,7 @@ func _start_turn(player_id: int) -> void:
 		return
 	# 上一回合残留的出牌选择；必须先从真实事件栈移除，新的阶段与 CardUseEvent 才能进入根事件。
 	_cancel_active_play_choice("turn_changed")
+	_started_phase_lifecycles.clear()
 	# 新回合玩家状态；死亡玩家会由调用方提前跳过。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
@@ -2862,6 +3287,7 @@ func _start_turn(player_id: int) -> void:
 	state.turn_number += 1
 	if state.players.find(player) == 0:
 		state.round_number += 1
+		_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
 	var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
 	_current_turn_event_id = turn_event_id
 	player.skipped_phases.clear()
@@ -2874,55 +3300,95 @@ func _start_turn(player_id: int) -> void:
 	state.current_phase = "start"
 	state.phase_index = 0
 	_record_runtime_event("phaseBefore", "phase", {"player_id":player_id}, {}, turn_event_id)
+	var phase_before_event: RuleEvent = _emit_rule_timing("phaseBefore", player_id, player_id, player_id, {"turn_number":state.turn_number, "round_number":state.round_number}, turn_event_id)
+	if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized):
+		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"phaseBefore", "turn_number":state.turn_number}, turn_event_id)
+		_finish_turn(player_id)
+		return
+	_emit_rule_timing("phaseBeforeStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+	_emit_rule_timing("phaseBeforeEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+	_emit_rule_timing("phaseBeginStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
 	_record_runtime_event("phaseBegin", "phase", {"player_id":player_id}, {}, turn_event_id)
+	_emit_rule_timing("phaseBegin", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
 	_record_runtime_event("phaseZhunbei", "phase", {"player_id":player_id}, {}, turn_event_id)
+	if not _begin_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id):
+		_emit_rule_timing("phaseZhunbeiCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
 	add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
 	_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
+	_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id)
 	if state.game_over:
 		return
 	if not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
 	if player.face_down:
-		player.face_down = false
+		turn_over_player(player_id, player_id, "turn_start_skip")
 		add_log("%s翻回正面并跳过本回合。" % player.display_name)
+		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
+		_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
 		_finish_turn(player_id)
 		return
 
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"start", "to_phase":"judgment"}, turn_event_id)
 	state.current_phase = "judgment"
 	state.phase_index = 1
-	_record_runtime_event("phaseJudge", "phase", {"player_id":player_id}, {}, turn_event_id)
+	_record_runtime_event("phaseJudgeStage", "phase", {"player_id":player_id}, {}, turn_event_id)
+	if bool(player.skipped_phases.get("judgment", false)):
+		_emit_rule_timing("phaseJudgeSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+		_continue_turn_after_judgment(player_id)
+		return
+	if not _begin_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, turn_event_id):
+		_emit_rule_timing("phaseJudgeCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+		_continue_turn_after_judgment(player_id)
+		return
 	_process_judgment_area(player_id)
 	return
 
 
 ## 从判定阶段结束处继续当前回合；异步无懈与濒死选择完成后也统一回到该入口。
 func _continue_turn_after_judgment(player_id: int) -> void:
-	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id:
+	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id or state.current_phase != "judgment":
 		return
 	# 当前回合玩家；判定伤害可能使其死亡，必须在摸牌前重新读取存活状态。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
+	_finish_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"judgment", "to_phase":"draw"}, _current_turn_event_id)
 	state.current_phase = "draw"
 	state.phase_index = 2
 	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, _current_turn_event_id)
-	if not bool(player.skipped_phases.get("draw", false)):
-		draw(player_id, 2)
-	else:
+	if bool(player.skipped_phases.get("draw", false)):
 		add_log("%s跳过摸牌阶段。" % player.display_name)
+		_emit_rule_timing("phaseDrawSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	elif _begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":2, "turn_number":state.turn_number}, _current_turn_event_id):
+		# 两个摸牌数量修改窗口严格按序执行；第二窗口结果作为实际基础摸牌数传入通用 draw 生命周期。
+		var draw_one_event: RuleEvent = _emit_rule_timing("phaseDrawBegin1", player_id, player_id, player_id, {"draw_count":2, "turn_number":state.turn_number}, _current_turn_event_id)
+		var draw_count: int = maxi(int(draw_one_event.data.get("draw_count", 2)) if draw_one_event != null else 2, 0)
+		var draw_two_event: RuleEvent = _emit_rule_timing("phaseDrawBegin2", player_id, player_id, player_id, {"draw_count":draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
+		draw_count = maxi(int(draw_two_event.data.get("draw_count", draw_count)) if draw_two_event != null else draw_count, 0)
+		draw(player_id, draw_count)
+		_finish_phase_lifecycle("phaseDraw", player_id, {"draw_count":draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
+	else:
+		_emit_rule_timing("phaseDrawCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	if state.game_over:
 		return
 	if not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"draw", "to_phase":"play"}, _current_turn_event_id)
 	state.current_phase = "play"
 	state.phase_index = 3
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % player.display_name)
-		_end_play_phase(player_id)
+		_emit_rule_timing("phaseUseSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		_end_play_phase(player_id, false)
+		return
+	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
+		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		_end_play_phase(player_id, false)
 		return
 	_begin_play_choice(player_id)
 	_emit_state()
@@ -2956,6 +3422,44 @@ func _resume_interrupted_turn_flow() -> void:
 	_process_judgment_area(player_id)
 
 
+## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
+func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int) -> bool:
+	# 阶段生命周期键；同一玩家同名阶段在一个回合内只会存在一条活动记录。
+	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
+	# 当前阶段数据；Before 的修改会传给 Begin，但不会反向污染调用方原字典。
+	var current_event_data: Dictionary = event_data.duplicate(true)
+	_started_phase_lifecycles.erase(lifecycle_key)
+	var before_name: String = "%sBefore" % base_name
+	if RuleTimingCatalog.has_timing(before_name):
+		var before_event: RuleEvent = _emit_rule_timing(before_name, player_id, player_id, player_id, current_event_data, parent_event_id)
+		if before_event != null and (before_event.cancelled or before_event.neutralized):
+			return false
+		if before_event != null:
+			current_event_data = before_event.data.duplicate(true)
+	var begin_name: String = "%sBegin" % base_name
+	if RuleTimingCatalog.has_timing(begin_name):
+		var begin_event: RuleEvent = _emit_rule_timing(begin_name, player_id, player_id, player_id, current_event_data, parent_event_id)
+		if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+			return false
+	_started_phase_lifecycles[lifecycle_key] = true
+	return true
+
+
+## 派发一个标准阶段的 End 与 After；目录没有对应后缀时自动跳过，不为引擎未定义的时机造名。
+func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int) -> void:
+	# 阶段生命周期键；未成功进入 Begin 的跳过或取消阶段不产生 End 与 After。
+	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
+	if not _started_phase_lifecycles.has(lifecycle_key):
+		return
+	_started_phase_lifecycles.erase(lifecycle_key)
+	var end_name: String = "%sEnd" % base_name
+	if RuleTimingCatalog.has_timing(end_name):
+		_emit_rule_timing(end_name, player_id, player_id, player_id, event_data, parent_event_id)
+	var after_name: String = "%sAfter" % base_name
+	if RuleTimingCatalog.has_timing(after_name):
+		_emit_rule_timing(after_name, player_id, player_id, player_id, event_data, parent_event_id)
+
+
 ## 处理玩家判定区的全部延时锦囊；每次只展示并结算一张，完整判定结束后才继续下一张。
 func _process_judgment_area(player_id: int) -> void:
 	if _judgment_flow_in_progress or state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "judgment":
@@ -2983,8 +3487,9 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 		var delayed_card: CardInstance = player.judgment_area.front()
 		# 当前延时锦囊判定事件；展示、无懈与实际判定都关联本回合判定阶段，回放可以恢复严格顺序。
 		var delayed_event_id: int = _record_runtime_event("delayedJudge", "judgment", {"player_id":player_id, "card_uid":delayed_card.uid, "card_id":delayed_card.definition_id}, {}, _current_turn_event_id)
+		_emit_rule_timing("phaseJudge", player_id, player_id, player_id, {"card_uid":delayed_card.uid, "card_id":delayed_card.definition_id}, delayed_event_id)
 		_ensure_card_movement()
-		card_movement.move_card(delayed_card, "processing", -1, "judge", delayed_event_id)
+		_move_card_with_timings(delayed_card, "processing", -1, "judge", delayed_event_id)
 		# 延时锦囊展示；表现接管其可能发生的处理区到弃牌堆移动，闪电传递时由新区域移动释放所有权。
 		_request_card_presentation(delayed_card, player_id, [], "delayedJudge", delayed_event_id, true)
 		add_log("%s开始判定%s。" % [player.display_name, describe_card(delayed_card)])
@@ -3078,7 +3583,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 				break
 		if not has_same_delayed_card:
 			_ensure_card_movement()
-			card_movement.move_card(delayed_card, "judgment", candidate.player_id, "add_judge", state.current_event_id)
+			_move_card_with_timings(delayed_card, "judgment", candidate.player_id, "add_judge", state.current_event_id)
 			add_log("【%s】移动至%s的判定区。" % [delayed_name, candidate.display_name])
 			return
 		candidate = state.get_next_alive_player(candidate.player_id)
@@ -3087,7 +3592,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 	var original_player: PlayerState = state.get_player(from_player_id)
 	if original_player != null and original_player.alive:
 		_ensure_card_movement()
-		card_movement.move_card(delayed_card, "judgment", original_player.player_id, "add_judge", state.current_event_id)
+		_move_card_with_timings(delayed_card, "judgment", original_player.player_id, "add_judge", state.current_event_id)
 		add_log("没有其他合法目标，【%s】回到%s的判定区。" % [delayed_name, original_player.display_name])
 	else:
 		_move_to_discard(delayed_card)
@@ -3174,12 +3679,86 @@ func _complete_active_card_target(parent_card_uid: int) -> void:
 		return
 	# 当前活动上下文；清除目标标记后保留已经递增的下一目标游标。
 	var resolution_context: Dictionary = _active_card_resolutions[parent_card_uid] as Dictionary
+	# 当前目标 ID；异步响应或选择结束时在清除标记前补齐 useCardToEnd、After 与【杀】尾部。
+	var completed_target_id: int = int(resolution_context.get("current_target_id", -1))
+	if completed_target_id >= 0:
+		_finish_card_target_lifecycle(parent_card_uid, completed_target_id, int(resolution_context.get("card_use_event_id", -1)))
 	resolution_context["current_target_id"] = -1
 	_active_card_resolutions[parent_card_uid] = resolution_context
 	# 真实 content 子事件由其选择子事件自然阻塞，统一 drain 后由父 CardUseEvent 的 redo 安排下一目标。
 	var card_use_context: Dictionary = _card_use_contexts.get(parent_card_uid, {}) as Dictionary
 	if not bool(card_use_context.get("runtime_managed", false)):
 		_continue_active_card_resolution(parent_card_uid)
+
+
+## 构造使用牌与逐目标时机共享的标准数据；数组和字典均深复制，触发器修改后必须由专用执行函数显式写回。
+func _build_card_use_timing_data(card_uid: int, target_id: int = -1) -> Dictionary:
+	# 当前使用牌上下文；缺失时返回最小 UID 数据供取消或异常收尾记录。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	return {
+		"card_uid":card_uid,
+		"card_id":str(card_use_context.get("card_definition_id", "")),
+		"target_id":target_id,
+		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
+		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
+		"direct_hit_target_ids":(card_use_context.get("direct_hit_target_ids", []) as Array).duplicate(),
+		"custom_args":(card_use_context.get("custom_args", {}) as Dictionary).duplicate(true),
+	}
+
+
+## 开始一名目标的牌效生命周期；同时为【杀】派发 shaBefore 与 shaBegin，任一取消都会产生对应取消时机。
+func _begin_card_target_lifecycle(card_uid: int, target_id: int, parent_event_id: int) -> bool:
+	# 当前逐目标共享上下文；同一目标异步恢复时不会重复派发 Before 与 Begin。
+	var resolution_context: Dictionary = _active_card_resolutions.get(card_uid, {}) as Dictionary
+	if bool(resolution_context.get("target_lifecycle_started", false)) and not bool(resolution_context.get("target_lifecycle_finished", false)) and int(resolution_context.get("current_target_id", -1)) == target_id:
+		return true
+	# 当前使用牌上下文与使用者；player 角色对应使用者，target 角色对应当前生效目标。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	var timing_data: Dictionary = _build_card_use_timing_data(card_uid, target_id)
+	var before_event: RuleEvent = _emit_rule_timing("useCardToBefore", actor_id, actor_id, target_id, timing_data, parent_event_id)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		_emit_rule_timing("useCardToCancelled", actor_id, actor_id, target_id, before_event.data, parent_event_id)
+		return false
+	var begin_event: RuleEvent = _emit_rule_timing("useCardToBegin", actor_id, actor_id, target_id, before_event.data if before_event != null else timing_data, parent_event_id)
+	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+		_emit_rule_timing("useCardToCancelled", actor_id, actor_id, target_id, begin_event.data, parent_event_id)
+		return false
+	# 当前牌定义；effect_id=slash 的三种【杀】共享专属时机。
+	var definition: Dictionary = GameDatabase.get_card(str(card_use_context.get("card_definition_id", "")))
+	if str(definition.get("effect_id", "")) == "slash":
+		var sha_before_event: RuleEvent = _emit_rule_timing("shaBefore", actor_id, actor_id, target_id, timing_data, parent_event_id)
+		if sha_before_event != null and (sha_before_event.cancelled or sha_before_event.neutralized):
+			_emit_rule_timing("shaCancelled", actor_id, actor_id, target_id, sha_before_event.data, parent_event_id)
+			return false
+		var sha_begin_event: RuleEvent = _emit_rule_timing("shaBegin", actor_id, actor_id, target_id, sha_before_event.data if sha_before_event != null else timing_data, parent_event_id)
+		if sha_begin_event != null and (sha_begin_event.cancelled or sha_begin_event.neutralized):
+			_emit_rule_timing("shaCancelled", actor_id, actor_id, target_id, sha_begin_event.data, parent_event_id)
+			return false
+	resolution_context["target_lifecycle_started"] = true
+	resolution_context["target_lifecycle_finished"] = false
+	_active_card_resolutions[card_uid] = resolution_context
+	return true
+
+
+## 完成一名目标的牌效生命周期；异步和同步路径共用标记，确保 useCardToEnd、After 与 shaEnd、After 只派发一次。
+func _finish_card_target_lifecycle(card_uid: int, target_id: int, parent_event_id: int) -> void:
+	# 当前逐目标共享上下文；未开始或已经完成时不补造事件。
+	var resolution_context: Dictionary = _active_card_resolutions.get(card_uid, {}) as Dictionary
+	if not bool(resolution_context.get("target_lifecycle_started", false)) or bool(resolution_context.get("target_lifecycle_finished", false)):
+		return
+	# 当前使用牌上下文与使用者；用于角色关系匹配和牌族判断。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	var timing_data: Dictionary = _build_card_use_timing_data(card_uid, target_id)
+	var definition: Dictionary = GameDatabase.get_card(str(card_use_context.get("card_definition_id", "")))
+	if str(definition.get("effect_id", "")) == "slash":
+		_emit_rule_timing("shaEnd", actor_id, actor_id, target_id, timing_data, parent_event_id)
+		_emit_rule_timing("shaAfter", actor_id, actor_id, target_id, timing_data, parent_event_id)
+	_emit_rule_timing("useCardToEnd", actor_id, actor_id, target_id, timing_data, parent_event_id)
+	_emit_rule_timing("useCardToAfter", actor_id, actor_id, target_id, timing_data, parent_event_id)
+	resolution_context["target_lifecycle_finished"] = true
+	_active_card_resolutions[card_uid] = resolution_context
 
 
 ## 从无懈可击未抵消的当前目标重新进入效果；恢复键保证本次不会再次创建相同目标的无懈询问。
@@ -3232,7 +3811,7 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
 	_ensure_card_movement()
-	if card_movement.move_card(virtual_card, "processing", -1, "virtual_card_begin", state.current_event_id) == null:
+	if _move_card_with_timings(virtual_card, "processing", -1, "virtual_card_begin", state.current_event_id) == null:
 		return false
 	if not log_message.is_empty():
 		add_log(log_message)
@@ -3270,11 +3849,13 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	# CardUseEvent 的固定内容步骤；每一步只安排下一层子事件或推进一个明确规则边界。
 	var content_steps: Array[Callable] = [
 		_card_use_step_declare,
+		_card_use_step_begin_lifecycle,
 		_card_use_step_enqueue_use_timings,
 		_card_use_step_enqueue_target_timings,
 		_card_use_step_enqueue_content_before,
 		_card_use_step_resolve_content,
 		_card_use_step_enqueue_content_after,
+		_card_use_step_finish_lifecycle,
 		_card_use_step_prepare_after,
 	]
 	# 正式对局挂到长期根事件；独立规则测试没有根事件时让 CardUseEvent 自身成为本次调度根。
@@ -3385,7 +3966,7 @@ func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) 
 		var material_move_ids: Array[int] = []
 		for material_card: CardInstance in material_cards:
 			# 材料进入处理区；在虚拟杀完整结算前不会提前进入弃牌堆。
-			var material_move: CardMoveEvent = card_movement.move_card(material_card, "processing", -1, "use", event.event_id)
+			var material_move: CardMoveEvent = _move_card_with_timings(material_card, "processing", -1, "use", event.event_id)
 			if material_move == null:
 				event.cancel("virtual_material_move_failed")
 				return
@@ -3397,11 +3978,34 @@ func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) 
 		return
 	_ensure_card_movement()
 	# 实体移动结果；服务统一维护来源区域、持有者、知识与处理区数组。
-	var move: CardMoveEvent = card_movement.move_card(card, "processing", -1, "use", event.event_id)
+	var move: CardMoveEvent = _move_card_with_timings(card, "processing", -1, "use", event.event_id)
 	if move == null:
 		event.cancel("material_move_failed")
 		return
 	event.result = {"card_uids":[card.uid], "from_zone":move.from_zone, "to_zone":"processing", "move_id":move.move_id}
+
+
+## 在牌进入处理区并完成声明后派发 useCardBefore 与 useCardBegin；取消会保留材料收尾但跳过后续牌效。
+func _card_use_step_begin_lifecycle(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 当前使用牌 UID；用于取得跨全部目标共享的生命周期上下文。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 使用牌共享上下文；声明失败时仍按取消路径收尾处理区材料。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty() or bool(card_use_context.get("lifecycle_started", false)):
+		return
+	# 使用牌时机数据；与后续 useCard0 至 useCard 保持相同标准字段。
+	var timing_data: Dictionary = _build_card_use_timing_data(card_uid)
+	var before_event: RuleEvent = _emit_rule_timing("useCardBefore", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
+	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		card_use_context["cancelled"] = true
+		card_use_context["cancel_reason"] = before_event.termination_reason
+	else:
+		var begin_event: RuleEvent = _emit_rule_timing("useCardBegin", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, before_event.data if before_event != null else timing_data, event.event_id)
+		if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+			card_use_context["cancelled"] = true
+			card_use_context["cancel_reason"] = begin_event.termination_reason
+	card_use_context["lifecycle_started"] = true
+	_card_use_contexts[card_uid] = card_use_context
 
 
 ## 安排 useCard0/useCard1/yingbian/useCard2/useCard 五组真实时机子事件。
@@ -3489,20 +4093,11 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 		"custom_args":(card_use_context.get("custom_args", {}) as Dictionary).duplicate(true),
 	}
 	# 同步规则事件；处理器仍使用 RuleEvent 端口，但生命周期、父子关系和暂停位置由当前 GameEvent 承载。
-	var rule_event: RuleEvent = RuleEvent.new(timing_name, int(card_use_context.get("actor_id", -1)), target_id, timing_data)
+	var rule_event: RuleEvent = RuleEvent.new(timing_name, int(card_use_context.get("actor_id", -1)), target_id, timing_data, int(card_use_context.get("actor_id", -1)))
 	rule_event.event_id = event.event_id
 	rule_event.parent_id = event.parent_id
-	event_bus.dispatch(rule_event)
-	if trigger_manager != null and not rule_event.is_terminal():
-		# 当前存活座次顺序；触发器按当前回合起点、firstDo、优先级和注册序稳定执行。
-		var seat_order: Array[int] = []
-		for player: PlayerState in state.get_alive_players():
-			seat_order.append(player.player_id)
-		# 本轮触发排序起点；优先使用当前回合角色，无有效回合时回退到使用者。
-		var start_player_id: int = state.current_player_id if state.current_player_id >= 0 else int(card_use_context.get("actor_id", -1))
-		trigger_manager.dispatch(rule_event, start_player_id, seat_order)
-	if not rule_event.is_terminal():
-		rule_event.finish()
+	_ensure_timing_service()
+	timing_service.dispatch(rule_event)
 	# 触发器输出；目标、排除、直击与自定义参数全部写回共享上下文供下一时机重新读取。
 	card_use_context["target_ids"] = (rule_event.data.get("target_ids", card_use_context.get("target_ids", [])) as Array).duplicate()
 	card_use_context["excluded_target_ids"] = (rule_event.data.get("excluded_target_ids", card_use_context.get("excluded_target_ids", [])) as Array).duplicate()
@@ -3598,9 +4193,28 @@ func _card_use_step_resolve_content(event: GameEvent, scheduler: EventScheduler)
 		resolution_context["target_index"] = target_index + 1
 		resolution_context["current_target_id"] = target_id
 		_active_card_resolutions[card_uid] = resolution_context
-		# 死亡、离场或已排除目标不创建虚假的 content 事件，直接让父事件重新检查下一目标。
+		# 死亡、离场目标不创建虚假的 content 事件，并派发 Omitted 表示主体未执行。
 		var target: PlayerState = state.get_player(target_id)
-		if target == null or not target.alive or (card_use_context.get("excluded_target_ids", []) as Array).has(target_id):
+		if target == null or not target.alive:
+			_emit_rule_timing("useCardToOmitted", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), target_id, _build_card_use_timing_data(card_uid, target_id), event.event_id)
+			resolution_context["current_target_id"] = -1
+			_active_card_resolutions[card_uid] = resolution_context
+			event.redo()
+			return
+		# 已排除目标；Excluded 与 Omitted 分开记录，便于技能判断是规则排除还是角色离场。
+		if (card_use_context.get("excluded_target_ids", []) as Array).has(target_id):
+			_emit_rule_timing("useCardToExcluded", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), target_id, _build_card_use_timing_data(card_uid, target_id), event.event_id)
+			resolution_context["current_target_id"] = -1
+			_active_card_resolutions[card_uid] = resolution_context
+			event.redo()
+			return
+		# 单目标牌效生命周期；Before 或 Begin 被取消时将当前目标排除并继续其他目标。
+		if not _begin_card_target_lifecycle(card_uid, target_id, event.event_id):
+			var excluded_target_ids: Array = card_use_context.get("excluded_target_ids", []) as Array
+			if not excluded_target_ids.has(target_id):
+				excluded_target_ids.append(target_id)
+			card_use_context["excluded_target_ids"] = excluded_target_ids
+			_card_use_contexts[card_uid] = card_use_context
 			resolution_context["current_target_id"] = -1
 			_active_card_resolutions[card_uid] = resolution_context
 			event.redo()
@@ -3640,6 +4254,7 @@ func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -
 		destination = effect_resolver.resolve_target(card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
 		if destination == "pending" or has_pending_card_choice():
 			return
+		_finish_card_target_lifecycle(card_uid, target_id, event.event_id)
 		resolution_context["current_target_id"] = -1
 		_active_card_resolutions[card_uid] = resolution_context
 		event.result = {"target_id":target_id, "destination":destination}
@@ -3675,6 +4290,25 @@ func _card_use_step_enqueue_content_after(event: GameEvent, scheduler: EventSche
 ## 写入唯一 contentAfter 结果；该子事件到达即证明全部同步效果与选择 token 已完成。
 func _execute_card_content_after_event(event: GameEvent, _scheduler: EventScheduler) -> void:
 	event.result = {"destination":str(event.context.get("destination", "discard")), "card_uid":int(event.context.get("card_uid", -1))}
+
+
+## 在全部目标内容和 contentAfter 完成后派发 useCardEnd 与 useCardAfter；被取消的整牌改派 useCardCancelled。
+func _card_use_step_finish_lifecycle(event: GameEvent, _scheduler: EventScheduler) -> void:
+	# 当前使用牌 UID；生命周期尾部只允许执行一次。
+	var card_uid: int = int(event.context.get("card_uid", -1))
+	# 使用牌共享上下文；后置弃牌尚未执行，因此材料仍可通过 UID 关联处理区记录。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty() or bool(card_use_context.get("lifecycle_finished", false)):
+		return
+	var timing_data: Dictionary = _build_card_use_timing_data(card_uid)
+	if bool(card_use_context.get("cancelled", false)):
+		timing_data["reason"] = str(card_use_context.get("cancel_reason", "cancelled"))
+		_emit_rule_timing("useCardCancelled", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
+	else:
+		_emit_rule_timing("useCardEnd", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
+		_emit_rule_timing("useCardAfter", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
+	card_use_context["lifecycle_finished"] = true
+	_card_use_contexts[card_uid] = card_use_context
 
 
 ## CardUseEvent 主体最后一步：把默认弃牌放入 after 队列，其他终点只清理共享上下文。
@@ -3724,11 +4358,11 @@ func _execute_cards_discard_event(event: GameEvent, _scheduler: EventScheduler) 
 		for material_card_uid: int in material_card_uids:
 			# 当前仍在处理区的材料；代理 UID 与材料 UID 分离，不会误删逻辑牌。
 			var material_card: CardInstance = _find_processing_card(material_card_uid)
-			if material_card != null and card_movement.move_card(material_card, "discard_pile", -1, "ordering_discard", event.event_id) != null:
+			if material_card != null and _move_card_with_timings(material_card, "discard_pile", -1, "ordering_discard", event.event_id) != null:
 				discarded_material_uids.append(material_card_uid)
 		if card != null:
 			# 逻辑代理返回 void；它只为效果链提供稳定 UID 和无花色【杀】定义，不属于任何持久卡牌区域。
-			card_movement.move_card(card, "void", -1, "virtual_card_complete", event.event_id)
+			_move_card_with_timings(card, "void", -1, "virtual_card_complete", event.event_id)
 		event.result = {"card_uids":discarded_material_uids, "to_zone":"discard_pile", "virtual_card_uid":card_uid}
 		_active_card_resolutions.erase(card_uid)
 		_card_use_contexts.erase(card_uid)
@@ -3737,7 +4371,7 @@ func _execute_cards_discard_event(event: GameEvent, _scheduler: EventScheduler) 
 	if card != null:
 		_ensure_card_movement()
 		# 弃牌移动；事件 ID 直接使用真实 cardsDiscard 子事件，不再创建迁移期摘要。
-		var move: CardMoveEvent = card_movement.move_card(card, "discard_pile", -1, "ordering_discard", event.event_id)
+		var move: CardMoveEvent = _move_card_with_timings(card, "discard_pile", -1, "ordering_discard", event.event_id)
 		if move != null:
 			event.result = {"card_uids":[card_uid], "move_id":move.move_id, "to_zone":"discard_pile"}
 	_active_card_resolutions.erase(card_uid)
@@ -3774,14 +4408,21 @@ func _execute_recast(actor_id: int, card_uid: int) -> bool:
 
 
 ## 结束出牌阶段；超过手牌上限时由当前角色自主选择足量手牌弃置。
-func _end_play_phase(player_id: int) -> void:
+func _end_play_phase(player_id: int, complete_use_phase: bool = true) -> void:
 	if state.current_player_id != player_id or state.current_phase != "play":
 		_reject("当前不能结束出牌阶段。")
 		return
 	_ai_drive_token += 1
+	if complete_use_phase:
+		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"play", "to_phase":"discard"}, _current_turn_event_id)
 	state.current_phase = "discard"
 	state.phase_index = 4
 	_record_runtime_event("phaseDiscard", "phase", {"player_id":player_id})
+	if not _begin_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
+		_emit_rule_timing("phaseDiscardCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		_finish_turn(player_id)
+		return
 	# 当前玩家状态；弃牌候选只来自其手牌区。
 	var player: PlayerState = state.get_player(player_id)
 	# 需要弃置的手牌数；体力为负时手牌上限按0处理。
@@ -3817,14 +4458,26 @@ func _continue_discard_phase_choice(context: Dictionary, selected_uids: Array[in
 
 ## 完成回合结束事件并转交给下一名存活玩家。
 func _finish_turn(player_id: int) -> void:
+	# 进入函数前的阶段；只有实际进入过弃牌阶段才派发其 End 与 After，翻面跳回合不会伪造弃牌结束。
+	var previous_phase: String = state.current_phase
+	if previous_phase == "discard":
+		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"finish"}, _current_turn_event_id)
 	state.current_phase = "finish"
 	state.phase_index = 5
 	_record_runtime_event("phaseJieshu", "phase", {"player_id":player_id})
+	if _begin_phase_lifecycle("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
+		_emit_rule_timing("phaseJieshu", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		_finish_phase_lifecycle("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	else:
+		_emit_rule_timing("phaseJieshuCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	_record_runtime_event("phaseEnd", "phase", {"player_id":player_id})
+	_emit_rule_timing("phaseEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	_dispatch_rule_event(RuleEvent.new("phase_finish", player_id, player_id, {}))
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
+	_emit_rule_timing("phaseAfter", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	_check_game_over()
 	if state.game_over:
 		return
@@ -3837,6 +4490,7 @@ func _finish_turn(player_id: int) -> void:
 ## 当前回合角色在事件结算中死亡后转交回合；不触发正常结束阶段，但会清除只持续到本回合的酒加值。
 func _advance_after_current_player_death(dead_player_id: int) -> void:
 	_ai_drive_token += 1
+	_emit_rule_timing("phaseOver", dead_player_id, dead_player_id, dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number}, _current_turn_event_id)
 	_notify_card_definitions_turn_ended(dead_player_id, true)
 	# 下名存活玩家；死者仍保留稳定座次 ID，环形查询会自动跳过其状态。
 	var next_player: PlayerState = state.get_next_alive_player(dead_player_id)
@@ -3854,10 +4508,20 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 	# 是否首次进入本次濒死流程；连续出桃与取消后的座次推进都复用同一流程，不重复创建回放事件。
 	var is_new_dying_flow: bool = not state.dying_queue.has(target_id)
 	if is_new_dying_flow:
+		# 濒死前与开始时机；被规则取消时不创建救援请求，伤害尾部仍正常完成。
+		var dying_before_event: RuleEvent = _emit_rule_timing("dyingBefore", target_id, killer_id, target_id, {"hp":target.hp, "required_recover":1 - target.hp})
+		if dying_before_event != null and (dying_before_event.cancelled or dying_before_event.neutralized):
+			_finish_pending_damage(target_id)
+			return
+		var dying_begin_event: RuleEvent = _emit_rule_timing("dyingBegin", target_id, killer_id, target_id, dying_before_event.data if dying_before_event != null else {"hp":target.hp, "required_recover":1 - target.hp})
+		if dying_begin_event != null and (dying_begin_event.cancelled or dying_begin_event.neutralized):
+			_finish_pending_damage(target_id)
+			return
 		# 本次濒死事件 ID；救援选择记录作为其子事件写入回放历史，仅在首次进入时创建。
 		var dying_event_id: int = _record_runtime_event("dying", "dying", {"target_id":target_id, "source_id":killer_id})
 		state.dying_queue.append(target_id)
 		_record_runtime_event("_save", "choice", {"target_id":target_id, "source_id":killer_id}, {}, dying_event_id)
+		_emit_rule_timing("dying", target_id, killer_id, target_id, {"hp":target.hp, "required_recover":1 - target.hp, "dying_event_id":dying_event_id}, dying_event_id)
 	target.dying = true
 	# 当前轮救援询问起点；首次从当前回合角色开始，连续出桃时仍从刚才的响应者继续。
 	var rescue_start_player_id: int = state.current_player_id if rescue_start_override < 0 else rescue_start_override
@@ -3987,8 +4651,10 @@ func _finish_dying_rescue(target_id: int) -> void:
 		return
 	target.dying = false
 	_record_runtime_event("dyingAfter", "dying", {"target_id":target_id, "hp":target.hp, "rescued":true})
+	_emit_rule_timing("dyingAfter", target_id, target_id, target_id, {"hp":target.hp, "rescued":true})
 	_dispatch_rule_event(RuleEvent.new("dying_end", target_id, target_id, {"hp":target.hp, "rescued":true}))
 	add_log("%s脱离濒死状态，求桃流程结算完成。" % target.display_name)
+	_finish_pending_damage(target_id)
 
 
 ## 返回从指定玩家开始的存活角色行动顺序；用于濒死救援等必须按当前行动顺序处理的公共结算。
@@ -4013,19 +4679,39 @@ func _get_alive_players_in_action_order(start_player_id: int) -> Array[PlayerSta
 
 ## 执行死亡、身份公开、区域清理、奖惩和胜负检查。
 func _resolve_death(victim_id: int, killer_id: int) -> void:
-	var death_event_id: int = _record_runtime_event("die", "death", {"victim_id":victim_id, "killer_id":killer_id})
-	state.dying_queue.erase(victim_id)
 	# 死亡角色状态；先标记死亡，避免清理白银狮子时错误回复。
 	var victim: PlayerState = state.get_player(victim_id)
+	if victim == null or not victim.alive:
+		_finish_pending_damage(victim_id)
+		return
+	# 死亡前与开始时机；取消死亡要求对应技能自行修正体力或状态，控制器只停止本次死亡流程。
+	var die_before_event: RuleEvent = _emit_rule_timing("dieBefore", victim_id, killer_id, victim_id, {"hp":victim.hp})
+	if die_before_event != null and (die_before_event.cancelled or die_before_event.neutralized):
+		victim.dying = false
+		state.dying_queue.erase(victim_id)
+		_finish_pending_damage(victim_id)
+		return
+	var die_begin_event: RuleEvent = _emit_rule_timing("dieBegin", victim_id, killer_id, victim_id, die_before_event.data if die_before_event != null else {"hp":victim.hp})
+	if die_begin_event != null and (die_begin_event.cancelled or die_begin_event.neutralized):
+		victim.dying = false
+		state.dying_queue.erase(victim_id)
+		_finish_pending_damage(victim_id)
+		return
+	var death_event_id: int = _record_runtime_event("die", "death", {"victim_id":victim_id, "killer_id":killer_id})
+	state.dying_queue.erase(victim_id)
 	victim.alive = false
 	victim.dying = false
 	victim.death_confirmed = true
 	victim.identity_revealed = true
+	_emit_rule_timing("die", victim_id, killer_id, victim_id, {"hp":victim.hp, "death_event_id":death_event_id}, death_event_id)
 	add_log("%s死亡，身份为%s。" % [victim.display_name, _identity_text(victim.identity)])
 	# 亮出身份后立即检测胜负；若条件已满足，规则要求直接结束游戏，不再继续死亡弃牌与奖惩。
 	_check_game_over()
 	if state.game_over:
 		_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":true}, {}, death_event_id)
+		_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
+		_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
+		_finish_pending_damage(victim_id)
 		return
 	while not victim.hand.is_empty():
 		_move_to_discard(victim.hand.pop_back())
@@ -4045,6 +4731,9 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 		add_log("主公杀死忠臣，弃置全部手牌和装备。")
 	_check_game_over()
 	_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":state.game_over}, {}, death_event_id)
+	_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
+	_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
+	_finish_pending_damage(victim_id)
 
 
 ## 检查身份胜负条件并结束对局。
@@ -4108,13 +4797,88 @@ func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	# 弃牌事件；实体移动历史关联到该事件，等价表达 orderingDiscard 最终创建 cardsDiscard 的收尾关系。
 	var discard_event_id: int = _record_runtime_event("cardsDiscard", "card_move", {"card_uids":[card.uid], "from_zone":source_zone, "reason":"discard"}, {}, discard_parent_event_id)
 	if card_movement != null:
-		var move: CardMoveEvent = card_movement.move_card(card, "discard_pile", -1, "discard", discard_event_id)
+		var move: CardMoveEvent = _move_card_with_timings(card, "discard_pile", -1, "discard", discard_event_id)
 		if move == null:
 			return
 	else:
 		card.zone = "discard_pile"
 		card.owner_id = -1
 		state.discard_pile.append(card)
+
+
+## 通过唯一移动服务执行实体区域变化，并在移动前后派发 lose、gain、discard、equip、addJudge 与处理区标准时机。
+func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_id: int = -1, reason: String = "move", event_id: int = -1, target_slot: String = "", visible_to: Array[int] = []) -> CardMoveEvent:
+	if card == null:
+		return null
+	_ensure_card_movement()
+	if card_movement == null:
+		return null
+	# 移动前区域与持有者；即使调用方已从区域数组取出实体，CardInstance 仍保存本次移动的权威来源字段。
+	var source_zone: String = card.zone
+	# 移动前持有者；公共区域固定为-1，玩家区域保留稳定玩家 ID。
+	var source_player_id: int = card.owner_id
+	# 标准移动上下文；所有时机共享同一牌 UID、区域、持有者、原因和装备槽信息。
+	var timing_data: Dictionary = {
+		"card_uids":[card.uid],
+		"from_zone":source_zone,
+		"to_zone":to_zone,
+		"source_player_id":source_player_id,
+		"target_player_id":target_player_id,
+		"reason":reason,
+		"target_slot":target_slot,
+	}
+	# 本次移动涉及的生命周期名称；同一移动可能同时属于失去牌、获得牌和弃置牌。
+	var lifecycle_names: Array[String] = []
+	if source_player_id >= 0 and source_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
+		lifecycle_names.append("lose")
+	if to_zone == "hand" and target_player_id >= 0:
+		lifecycle_names.append("gain")
+	if to_zone == "discard_pile":
+		lifecycle_names.append("discard")
+	if to_zone == "equipment" and target_player_id >= 0:
+		lifecycle_names.append("equip")
+	if to_zone == "judgment" and target_player_id >= 0:
+		lifecycle_names.append("addJudge")
+	for lifecycle_name: String in lifecycle_names:
+		# 生命周期主要角色；获得、装备和判定区添加使用目标持有者，其余移动使用原持有者。
+		var lifecycle_player_id: int = target_player_id if lifecycle_name in ["gain", "equip", "addJudge"] else source_player_id
+		# 生命周期开始前时机；只有目录存在对应名称时才派发，避免为 cardsDiscard 等仅有后置窗口的事件造名。
+		var before_name: String = "%sBefore" % lifecycle_name
+		if RuleTimingCatalog.has_timing(before_name):
+			var before_event: RuleEvent = _emit_rule_timing(before_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
+			if before_event != null and (before_event.cancelled or before_event.neutralized):
+				return null
+	for lifecycle_name: String in lifecycle_names:
+		# 生命周期主要角色；与 Before 保持一致，确保 player 角色订阅不会在同一移动中漂移。
+		var lifecycle_player_id: int = target_player_id if lifecycle_name in ["gain", "equip", "addJudge"] else source_player_id
+		var begin_name: String = "%sBegin" % lifecycle_name
+		if RuleTimingCatalog.has_timing(begin_name):
+			var begin_event: RuleEvent = _emit_rule_timing(begin_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
+			if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+				return null
+	# 实际区域移动；所有前置时机均通过后才修改权威状态和知识集合。
+	var move: CardMoveEvent = card_movement.move_card(card, to_zone, target_player_id, reason, event_id, target_slot, visible_to)
+	if move == null:
+		return null
+	# 完成后的移动上下文；补充稳定 move_id，后置技能可直接关联网络和回放增量。
+	timing_data["move_id"] = move.move_id
+	for lifecycle_name: String in lifecycle_names:
+		var lifecycle_player_id: int = target_player_id if lifecycle_name in ["gain", "equip", "addJudge"] else source_player_id
+		var end_name: String = "%sEnd" % lifecycle_name
+		if RuleTimingCatalog.has_timing(end_name):
+			_emit_rule_timing(end_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
+	if to_zone == "discard_pile":
+		_emit_rule_timing("cardsDiscardEnd", source_player_id, source_player_id, target_player_id, timing_data, event_id)
+	for lifecycle_name: String in lifecycle_names:
+		var lifecycle_player_id: int = target_player_id if lifecycle_name in ["gain", "equip", "addJudge"] else source_player_id
+		var after_name: String = "%sAfter" % lifecycle_name
+		if RuleTimingCatalog.has_timing(after_name):
+			_emit_rule_timing(after_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
+	if to_zone == "discard_pile":
+		_emit_rule_timing("cardsDiscardAfter", source_player_id, source_player_id, target_player_id, timing_data, event_id)
+		if source_player_id >= 0:
+			_emit_rule_timing("loseToDiscardpileAfter", source_player_id, source_player_id, source_player_id, timing_data, event_id)
+	return move
 
 
 ## 确保统一移牌服务绑定当前 GameState；规则测试替换状态对象时自动重建，避免跨状态持有牌引用。
@@ -4351,23 +5115,40 @@ func _record_runtime_event(event_name: String, event_type: String, context: Dict
 	return event_id
 
 
-## 统一派发同步规则事件；兼容旧总线后再按 firstDo、优先级和座次执行新触发器，最终写入事件历史。
-func _dispatch_rule_event(event: RuleEvent) -> RuleEvent:
+## 创建并派发一条标准规则时机；player/source/target 分别用于四角色触发关系，数据只允许基础可序列化值。
+func emit_rule_timing(event_name: String, player_id: int = -1, source_id: int = -1, target_id: int = -1, event_data: Dictionary = {}, parent_id: int = -2) -> RuleEvent:
+	return _emit_rule_timing(event_name, player_id, source_id, target_id, event_data, parent_id)
+
+
+## 控制器内部标准时机入口；公共内容端口与核心流程共用同一派发、排序和历史记录实现。
+func _emit_rule_timing(event_name: String, player_id: int = -1, source_id: int = -1, target_id: int = -1, event_data: Dictionary = {}, parent_id: int = -2) -> RuleEvent:
+	# 当前规则事件；构造函数深复制上下文，避免触发完成后仍被调用方修改。
+	var event: RuleEvent = RuleEvent.new(event_name, source_id, target_id, event_data, player_id)
+	return _dispatch_rule_event(event, parent_id)
+
+
+## 统一派发同步规则事件；普通总线后按四角色、firstDo、优先级和座次执行新触发器，最终写入事件历史。
+func _dispatch_rule_event(event: RuleEvent, parent_id: int = -2) -> RuleEvent:
 	if event == null:
 		return null
+	_ensure_timing_service()
+	# 实际父事件；-2沿用当前事件栈，显式-1允许创建独立迁移记录。
+	var resolved_parent_id: int = _current_rule_parent_event_id() if parent_id == -2 else parent_id
 	event.event_id = state.current_event_id if state != null else -1
-	event.parent_id = _runtime_root_event_id
-	event_bus.dispatch(event)
-	if trigger_manager != null and not event.is_terminal():
-		var seat_order: Array[int] = []
-		for player: PlayerState in state.get_alive_players():
-			seat_order.append(player.player_id)
-		var start_player_id: int = state.current_player_id if state.current_player_id >= 0 else (event.source_id if event.source_id >= 0 else event.target_id)
-		trigger_manager.dispatch(event, start_player_id, seat_order)
-	if not event.is_terminal():
-		event.finish()
-	_record_runtime_event(event.name, "trigger", {"source_id":event.source_id, "target_id":event.target_id, "data":event.data.duplicate(true)}, event.to_dict())
+	event.parent_id = resolved_parent_id
+	timing_service.dispatch(event)
+	_record_runtime_event(event.name, "trigger", {"player_id":event.player_id, "source_id":event.source_id, "target_id":event.target_id, "data":event.data.duplicate(true)}, event.to_dict(), resolved_parent_id)
 	return event
+
+
+## 确保时机服务始终绑定当前状态、总线和重新开局后新建的 TriggerManager；测试替换 GameState 时也无需手工重建。
+func _ensure_timing_service() -> void:
+	if trigger_manager == null:
+		trigger_manager = TriggerManager.new()
+	if timing_service == null:
+		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
+	else:
+		timing_service.configure(event_bus, trigger_manager, state)
 
 
 ## 把一条运行时历史增量追加到 GameState；相同 sequence 已存在时不会重复写入。
