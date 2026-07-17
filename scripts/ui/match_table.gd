@@ -76,6 +76,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 本地正式获得牌从右侧进入手牌布局的持续时间；默认0.42秒与通用飞牌节奏一致，可在检查器中独立调整。
 @export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.42
 
+## 主视角武将牌与客户区底边之间的垂直留白；默认26像素使牌面向上抬升且不恢复已移除的座次标签，运行时通常无需动态修改。
+@export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 26.0
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -498,9 +501,9 @@ func _create_local_player_card() -> void:
 	local_player_seat_slot.custom_minimum_size = local_seat_size
 	local_player_seat_slot.size = local_seat_size
 	local_player_seat_slot.offset_left = -16.0 - local_seat_size.x
-	local_player_seat_slot.offset_top = -local_seat_size.y
+	local_player_seat_slot.offset_top = -local_player_card_bottom_margin - local_seat_size.y
 	local_player_seat_slot.offset_right = -16.0
-	local_player_seat_slot.offset_bottom = 0.0
+	local_player_seat_slot.offset_bottom = -local_player_card_bottom_margin
 	local_player_seat_slot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	local_player_seat_slot.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(local_player_seat_slot)
