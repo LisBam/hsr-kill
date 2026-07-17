@@ -12,7 +12,7 @@ func _init() -> void:
 		"id": "welt",
 		"display_name": "瓦尔特",
 		"gender": "male",
-		"faction": "astral_express",
+		"faction": "xingqionglieche",
 		"max_hp": 4,
 		"description": "控制效果样例武将，仅提供扩展结构。",
 	}, [ZHONGLIYAZHI_SKILL])
