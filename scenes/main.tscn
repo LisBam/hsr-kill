@@ -16,6 +16,7 @@
 [ext_resource type="PackedScene" path="res://scenes/components/card_selection_panel.tscn" id="16_card_selection"]
 [ext_resource type="Script" uid="uid://5ckjv0sds4ni" path="res://scripts/ui/equipment_stack_view.gd" id="17_equipment_stack"]
 [ext_resource type="Script" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
+[ext_resource type="Script" path="res://scripts/core/gameplay_pause_service.gd" id="19_pause_service"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -125,6 +126,9 @@ script = ExtResource("1_ui")
 
 [node name="MatchController" type="Node" parent="." unique_id=1222667046]
 script = ExtResource("2_match")
+
+[node name="GameplayPauseService" type="Node" parent="MatchController"]
+script = ExtResource("19_pause_service")
 
 [node name="RuleEventBus" type="Node" parent="MatchController" unique_id=1351689348]
 script = ExtResource("3_event")
@@ -480,7 +484,7 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 18.0
-offset_top = -175.0
+offset_top = -148.0
 offset_right = 168.0
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleEquipmentPanel")

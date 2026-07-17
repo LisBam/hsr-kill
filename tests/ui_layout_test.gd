@@ -60,9 +60,8 @@ func _run() -> void:
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
 	var equipment_panel: Control = main_instance.get_node("%EquipmentPanel") as Control
-	# 参考图装备面板固定规格；透明外层只负责提供130×147像素的五槽布局区域。
-	# 当前装备面板与手牌栏统一为175像素高，并横向延伸到手牌栏左边界。
-	if not equipment_panel.size.is_equal_approx(Vector2(150.0, 175.0)):
+	# 当前装备面板固定为150×148像素，严格等于玩家手牌牌面高度，不包含175像素手牌栏的抬升留白。
+	if not equipment_panel.size.is_equal_approx(Vector2(150.0, 148.0)):
 		_fail("equipment_panel_size:%s" % equipment_panel.size)
 		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
@@ -91,8 +90,8 @@ func _run() -> void:
 	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or end_play_normal_style.bg_color.r <= end_play_normal_style.bg_color.g * 1.5 or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
-	# 手牌栏额外保留18像素选中抬升空间；装备栏与其同为175像素，二者右左边界精确相接且背景透明。
-	if not is_equal_approx(hand_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x) or not hand_panel_style is StyleBoxEmpty:
+	# 手牌栏继续保留175像素抬升空间；装备栏只等于148像素牌面高度，二者底边对齐且横向边界精确相接。
+	if not is_equal_approx(hand_panel.size.y, 175.0) or not is_equal_approx(equipment_panel.size.y, 148.0) or not is_equal_approx(equipment_panel.position.y + equipment_panel.size.y, hand_panel.position.y + hand_panel.size.y) or not is_equal_approx(equipment_panel.position.x + equipment_panel.size.x, hand_panel.position.x) or not hand_panel_style is StyleBoxEmpty:
 		_fail("hand_equipment_alignment equipment=%s hand=%s" % [equipment_panel.get_rect(), hand_panel.get_rect()])
 		return
 	# 底部技能栏；右侧区域必须完整位于本地武将牌左侧并保持可见。
@@ -145,11 +144,9 @@ func _run() -> void:
 	var local_treasure_row: Button = local_equipment_label.get_row("treasure")
 	# 本地空防具横条；即使没有装备也必须显示参考图中的深色槽位和类型图标。
 	var local_empty_armor_row: Button = local_equipment_label.get_row("armor")
-	# 五槽固定节距；武器到宝物应跨越4个完整的27像素槽高与3像素间距。
-	# 当前五槽自适应高度；175像素扣除四段间距后平均分配。
-	# 当前五槽固定使用组件声明的27像素槽高，四段10像素间距共同填满175像素高度。
-	var local_adaptive_equipment_row_height: float = local_equipment_label.equipment_row_height
-	# 当前五槽节距；等于29像素自适应槽高加3像素间距。
+	# 当前五槽自适应高度；148像素按五槽均分为29.6像素，相邻槽不留任何距离。
+	var local_adaptive_equipment_row_height: float = local_equipment_label.size.y / 5.0
+	# 当前五槽节距；无覆盖且无间距时严格等于单槽高度。
 	var local_equipment_row_pitch: float = local_adaptive_equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
 	# 本地空进攻坐骑横条；五槽常驻布局中必须保留第三个等高槽位。
 	var local_offensive_mount_row: Button = local_equipment_label.get_row("offensive_mount")
@@ -173,6 +170,28 @@ func _run() -> void:
 		return
 	# 本地武将牌装备条；第一视角只通过左侧装备栏查看装备，武将牌自身不得重复显示横条。
 	var local_player_card: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
+	# 本地武将牌受伤反馈次数；首次快照只建立体力基线，不应在进入牌桌时抖动。
+	var initial_damage_feedback_count: int = local_player_card.get_damage_feedback_playback_count()
+	# 体力下降快照；只修改本地五号位1点体力，验证新牌面渲染后恰好触发一次独立反馈组件。
+	var damaged_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	# 当前待修改玩家快照；只匹配稳定本地玩家 ID，不依赖座次数组下标。
+	for damaged_player_variant: Variant in damaged_snapshot.get("players", []) as Array:
+		# 当前玩家字典；命中本地玩家后只降低公开体力字段1点。
+		var damaged_player: Dictionary = damaged_player_variant as Dictionary
+		if int(damaged_player.get("player_id", -1)) == 4:
+			damaged_player["hp"] = int(damaged_player.get("hp", 4)) - 1
+			break
+	match_controller.state_changed.emit(damaged_snapshot)
+	await get_tree().process_frame
+	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 1:
+		_fail("local_damage_feedback:%d/%d" % [initial_damage_feedback_count, local_player_card.get_damage_feedback_playback_count()])
+		return
+	# 恢复原体力快照只属于测试对账，不应把体力上升误判为第二次受伤。
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
+	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 1:
+		_fail("damage_feedback_recover_repeat")
+		return
 	# 武将牌当前装备条数组；第一视角关闭公开装备绘制后应保持为空。
 	var local_player_equipment_rows: Array = local_player_card.get("_equipment_rows") as Array
 	# 武将牌当前装备槽位数组；关闭绘制后不保留任何视觉槽位索引。
@@ -354,6 +373,15 @@ func _run() -> void:
 			occupied_opponent_rects.append(opponent_screen_rect)
 	# 卡牌使用动画层；必须位于对局操作和武将牌上方，但低于选将与菜单层。
 	var animation_layer: CardUseAnimationLayer = main_instance.get_node("%CardUseAnimationLayer") as CardUseAnimationLayer
+	# 缺失座位的玩家转移；表现层不得把未知玩家锚点回退到中央窗口中上部。
+	var missing_anchor_card_data: Dictionary = {"uid":90990, "definition_id":"sha", "suit":"spade", "rank":9, "zone":"draw_pile", "owner_id":-1}
+	main_instance.call("_on_card_transfer_requested", missing_anchor_card_data, -1, "draw_pile", 999, "hand")
+	# 缺失来源座位的使用牌表现；必须在取得 UID 所有权前被拒绝，避免留下无法收尾的中央牌面。
+	var missing_anchor_presentation: Dictionary = {"presentation_id":90, "event_id":90, "event_name":"useCard", "card_data":missing_anchor_card_data, "actor_id":999, "target_ids":[], "source_zone":"processing", "owns_discard_transfer":true}
+	main_instance.call("_on_card_presentation_requested", missing_anchor_presentation)
+	if not animation_layer._active_cards.is_empty() or not animation_layer._transfer_cards.is_empty() or animation_layer._discard_transfer_claims.has(90990):
+		_fail("missing_anchor_created_central_card")
+		return
 	if animation_layer.z_index != 30:
 		_fail("animation_layer_z:%d" % animation_layer.z_index)
 		return
@@ -553,6 +581,20 @@ func _run() -> void:
 		_fail("pending_discard_claim_not_released")
 		return
 	animation_layer.clear_presentations()
+	# 漏失最终移牌通知的认领牌；权威处理区 UID 对账确认实体已离开后必须自动进入收尾，不能永久停在窗口中上部。
+	var reconciled_card_data: Dictionary = {"uid":90009, "definition_id":"sha", "suit":"diamond", "rank":10, "zone":"processing", "owner_id":-1}
+	# 防御性对账表现事件；使用有效本地来源锚点创建一张正常认领牌，但故意不发送 processing -> discard 增量。
+	var reconciled_presentation_data: Dictionary = {"presentation_id":7, "event_id":7, "event_name":"useCard", "card_data":reconciled_card_data, "actor_id":4, "target_ids":[], "source_zone":"processing", "owns_discard_transfer":true}
+	main_instance.call("_on_card_presentation_requested", reconciled_presentation_data)
+	if animation_layer._active_cards.size() != 1 or not animation_layer._discard_claim_card_instance_ids.has(90009):
+		_fail("reconcile_setup:%s" % [animation_layer._active_cards])
+		return
+	animation_layer.reconcile_processing_card_uids([])
+	await get_tree().create_timer(0.08).timeout
+	if not animation_layer._active_cards.is_empty() or animation_layer._discard_claim_card_instance_ids.has(90009):
+		_fail("reconcile_missing_final_move:%s" % [animation_layer._active_cards])
+		return
+	animation_layer.clear_presentations()
 	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
 	var single_target_state: GameState = _make_single_target_state()
 	match_controller.state = single_target_state
@@ -594,18 +636,18 @@ func _run() -> void:
 	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
 	var log_content_panel: PanelContainer = main_instance.get_node("%LogContentPanel") as PanelContainer
 	await _click_control(log_toggle_button)
-	if not log_content_panel.visible or not get_tree().paused or not bool(main_instance.get("_owns_log_pause")):
-		_fail("offline_log_pause expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
+	if not log_content_panel.visible or not get_tree().paused or not bool(main_instance.get("_owns_log_pause")) or not match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) < 0 or not match_controller.event_scheduler.pause_registry.has_active():
+		_fail("offline_log_pause expanded=%s paused=%s owner=%s interface=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause"), match_controller.is_gameplay_paused()])
 		return
 	# 暂停后日志按钮仍需接收真实输入；收起正文时只释放由牌桌持有的离线暂停。
 	await _click_control(log_toggle_button)
-	if log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")):
+	if log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")) or match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) >= 0 or match_controller.event_scheduler.pause_registry.has_active():
 		_fail("offline_log_resume expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
 		return
 	# 远程通信模式；本地展开日志只能改变可见性，不得暂停仍由权威端推进的联网对局。
 	match_controller.network_gateway.mode = NetworkGateway.Mode.REMOTE
 	await _click_control(log_toggle_button)
-	if not log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")):
+	if not log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")) or match_controller.is_gameplay_paused():
 		_fail("remote_log_must_continue expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
 		return
 	await _click_control(log_toggle_button)

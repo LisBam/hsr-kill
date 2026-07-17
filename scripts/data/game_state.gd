@@ -136,6 +136,11 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		choice_request_data["selected_card_ids"] = []
 		choice_request_data["base_context"] = {}
 		choice_request_data["active_context"] = {}
+	# 当前公共处理区实体 UID；界面只用该集合核对中央牌面生命周期，不获得可变实体引用或额外私有牌面。
+	var processing_card_uids: Array[int] = []
+	# 当前处理区实体；只序列化稳定 UID，不附加新的牌面可见信息。
+	for processing_card: CardInstance in processing_area:
+		processing_card_uids.append(processing_card.uid)
 	return {
 		"match_id": match_id,
 		"rules_snapshot": rules_snapshot,
@@ -146,6 +151,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"draw_pile_count": draw_pile.size(),
 		"discard_pile_count": discard_pile.size(),
 		"processing_count": processing_area.size(),
+		"processing_card_uids": processing_card_uids,
 		"current_event_id": current_event_id,
 		"current_choice_request": choice_request_data,
 		"public_card_choice_display": public_card_choice_display.duplicate(true),

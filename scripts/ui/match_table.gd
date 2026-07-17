@@ -49,9 +49,13 @@ const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
 ## 本地装备区与手牌区的统一高度；175像素覆盖148像素牌面、18像素选中抬升及悬停缩放余量。
 const LOCAL_CARD_AREA_HEIGHT: float = 175.0
 
+## 本地装备栏的独立高度；148像素严格等于单张玩家手牌牌面高度，不包含手牌栏的选中抬升预留空间。
+const LOCAL_EQUIPMENT_AREA_HEIGHT: float = 148.0
+
 ## 本地五个装备槽之间的统一纵向间距；默认3像素，与装备组件和界面文档保持一致。
 ## 当前第一视角固定使用10像素间距，配合五个27像素槽位恰好填满175像素装备栏高度。
-const LOCAL_EQUIPMENT_ROW_GAP: float = 10.0
+## 当前五个装备槽连续排列，不在相邻槽位之间保留任何空隙。
+const LOCAL_EQUIPMENT_ROW_GAP: float = 0.0
 
 ## 本地装备槽的统一覆盖量；默认0表示五槽互不覆盖，全部间距都由同一个间距参数控制。
 const LOCAL_EQUIPMENT_ROW_OVERLAP: float = 0.0
@@ -167,6 +171,15 @@ var local_player_seat_label: Label
 ## 最近一次本地可见状态快照；界面刷新与选择校验均以此为准。
 var _snapshot: Dictionary = {}
 
+## 最近一次快照中每名玩家的公开体力；键为稳定玩家 ID，用于检测本次快照是否发生真实体力下降。
+var _player_hp_by_id: Dictionary = {}
+
+## 当前体力对账所属对局 ID；重新开局时先建立新基线，不能把新局初始体力误判为受伤。
+var _hp_snapshot_match_id: String = ""
+
+## 是否已经建立过至少一份体力基线；允许测试快照使用空对局 ID 时仍区分首次绑定与后续更新。
+var _has_hp_snapshot: bool = false
+
 ## 当前选中的手牌 UID；未选择时为 -1。
 var _selected_card_uid: int = -1
 
@@ -263,6 +276,9 @@ var _suppressed_group_trick_uid: int = -1
 ## 当前场景树暂停是否由离线日志展开触发；只有持有该所有权时，收起日志或退出牌桌才恢复运行。
 var _owns_log_pause: bool = false
 
+## 当前日志展开持有的对局暂停令牌；-1表示日志没有通过统一接口暂停对局。
+var _log_pause_token: int = -1
+
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
@@ -301,27 +317,25 @@ func _ready() -> void:
 
 ## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
 func _exit_tree() -> void:
-	if _owns_log_pause and get_tree() != null:
-		get_tree().paused = false
+	if _owns_log_pause and match_controller != null and is_instance_valid(match_controller):
+		match_controller.release_gameplay_pause(_log_pause_token)
 	_owns_log_pause = false
+	_log_pause_token = -1
 
 
 ## 在离线模式展开日志时暂停整局；联网模式继续运行，收起时只恢复由本组件拥有的暂停。
 func _on_match_log_expanded_changed(expanded: bool) -> void:
-	# 当前场景树；节点退出期间没有有效树时不修改暂停状态。
-	var scene_tree: SceneTree = get_tree()
-	if scene_tree == null:
-		return
 	if not expanded:
 		if _owns_log_pause:
-			scene_tree.paused = false
+			match_controller.release_gameplay_pause(_log_pause_token)
 			_owns_log_pause = false
+			_log_pause_token = -1
 		return
 	# 当前是否为离线单机模式；LAN 与远程模式不能因本地查看日志暂停权威对局。
 	var is_offline_match: bool = match_controller != null and match_controller.network_gateway != null and match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE
-	if is_offline_match and not scene_tree.paused:
-		scene_tree.paused = true
-		_owns_log_pause = true
+	if is_offline_match and not _owns_log_pause:
+		_log_pause_token = match_controller.acquire_gameplay_pause("offline_match_log")
+		_owns_log_pause = _log_pause_token >= 0
 
 
 ## 把旧主场景中的HFlowContainer替换为专用技能网格；迁移只处理布局组件，不读取或修改武将技能规则。
@@ -350,11 +364,11 @@ func _ensure_skill_button_grid() -> void:
 
 ## 统一底部装备、手牌与技能区的透明样式和高度；旧场景缓存进入树后也会恢复当前布局规格。
 func _configure_local_card_areas() -> void:
-	# 本地装备外层；装备栏与手牌栏固定同为175像素高，底边继续锚定客户区底部。
+	# 本地装备外层；148像素高度严格等于玩家手牌牌面本身，底边继续锚定客户区底部。
 	var equipment_panel: PanelContainer = $EquipmentPanel
-	equipment_panel.offset_top = -LOCAL_CARD_AREA_HEIGHT
+	equipment_panel.offset_top = -LOCAL_EQUIPMENT_AREA_HEIGHT
 	equipment_panel.offset_bottom = 0.0
-	# 本地手牌外层；与装备栏共用相同顶边和底边，保证两块区域在任何客户区高度下严格等高。
+	# 本地手牌外层；175像素继续保留选中抬升与悬停空间，不再作为装备栏高度基准。
 	hand_panel.offset_top = -LOCAL_CARD_AREA_HEIGHT
 	hand_panel.offset_bottom = 0.0
 	equipment_label.equipment_row_gap = LOCAL_EQUIPMENT_ROW_GAP
@@ -481,8 +495,16 @@ func _create_local_player_card() -> void:
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
 func _on_state_changed(snapshot: Dictionary) -> void:
+	# 本次体力下降玩家 ID；必须在覆盖旧快照前完成对账，渲染新体力后再播放反馈。
+	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	_snapshot = snapshot.duplicate(true)
 	_sync_match_clock()
+	if _snapshot.has("processing_card_uids"):
+		# 当前公开处理区实体 UID；动画层据此收尾因丢包或中断而未收到最终移牌通知的中央牌面。
+		var processing_card_uids: Array[int] = []
+		for card_uid_variant: Variant in _snapshot.get("processing_card_uids", []) as Array:
+			processing_card_uids.append(int(card_uid_variant))
+		card_use_animation_layer.reconcile_processing_card_uids(processing_card_uids)
 	if bool(_snapshot.get("game_over", false)):
 		# 对局结束会中断尚未产生最终移牌的响应树；中央牌面改为正常停留淡出，避免终局后永久残留。
 		card_use_animation_layer.finish_pending_claimed_presentations()
@@ -515,9 +537,54 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	error_label.text = ""
 	_render_header()
 	_render_players()
+	_play_damage_feedback(damaged_player_ids)
 	_render_local_hand()
 	_refresh_selection_text()
 	_refresh_card_selection_panel()
+
+
+## 对账新旧公开体力并返回本次真正下降的玩家 ID；首次快照与新对局只建立基线，不播放受伤反馈。
+func _update_player_hp_snapshot(snapshot: Dictionary) -> Array[int]:
+	# 当前快照对局 ID；空字符串仍是测试和预览允许的稳定对局标识。
+	var match_id: String = str(snapshot.get("match_id", ""))
+	# 当前是否属于新对局；新对局玩家 ID 可复用，因此必须整体清空旧体力记录。
+	var is_new_match: bool = not _has_hp_snapshot or match_id != _hp_snapshot_match_id
+	if is_new_match:
+		_player_hp_by_id.clear()
+		_hp_snapshot_match_id = match_id
+		_has_hp_snapshot = true
+	# 本次发生体力下降的玩家 ID；同一快照每名玩家最多记录一次。
+	var damaged_player_ids: Array[int] = []
+	# 下一份体力基线；只保留当前快照仍存在的玩家，人数减少后不会残留旧座次数据。
+	var next_player_hp_by_id: Dictionary = {}
+	for player_variant: Variant in snapshot.get("players", []) as Array:
+		# 当前公开玩家快照；体力属于公开信息，可用于纯表现反馈。
+		var player: Dictionary = player_variant as Dictionary
+		# 当前稳定玩家 ID；负数异常数据不进入反馈索引。
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id < 0:
+			continue
+		# 当前公开体力；允许濒死状态低于0，比较时不进行裁剪。
+		var current_hp: int = int(player.get("hp", 0))
+		if not is_new_match and _player_hp_by_id.has(player_id) and current_hp < int(_player_hp_by_id.get(player_id, current_hp)):
+			damaged_player_ids.append(player_id)
+		next_player_hp_by_id[player_id] = current_hp
+	_player_hp_by_id = next_player_hp_by_id
+	return damaged_player_ids
+
+
+## 对已经完成新快照渲染的对应武将牌播放受伤反馈；缺失座位安全跳过，不创建临时替代节点。
+func _play_damage_feedback(damaged_player_ids: Array[int]) -> void:
+	# 当前发生体力下降的稳定玩家 ID；每名玩家在同一快照中最多出现一次。
+	for player_id: int in damaged_player_ids:
+		if player_id == match_controller.local_human_player_id:
+			if local_player_card != null and is_instance_valid(local_player_card):
+				local_player_card.play_damage_feedback()
+			continue
+		# 当前其他玩家武将牌；持久座位索引在本次渲染后已经完成创建或复用。
+		var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
+		if player_view != null and is_instance_valid(player_view):
+			player_view.play_damage_feedback()
 
 
 ## 渲染顶栏回合与牌堆信息。
@@ -1613,15 +1680,23 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 		target_ids.append(int(target_id_variant))
 	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
 	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
-	# 动画起点；本地玩家统一使用手牌区上方中心，其他玩家使用对应武将牌中心。
-	# 来源 ID 为-1或找不到公开玩家视图时，统一回退到中央弃牌展示锚点。
-	var start_position: Vector2 = _get_player_indicator_position(actor_id)
+	# 动画起点；公共判定牌使用中央锚点，玩家来源必须存在真实武将牌或本地手牌锚点，不能回退到中央伪造来源。
+	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+	if actor_id >= 0:
+		# 当前玩家来源锚点查询；座位尚未建立时丢弃本次纯表现，避免牌面错误出现在窗口中上部。
+		var source_anchor_result: Dictionary = _try_get_player_indicator_position(actor_id)
+		if not bool(source_anchor_result.get("valid", false)):
+			return
+		start_position = source_anchor_result.get("position", start_position) as Vector2
 	# 中央弃牌区落点；所有正常使用牌先飞向该位置展示，装备或延时锦囊的最终规则区域不受影响。
 	var discard_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	# 目标位置数组；多目标牌会同时绘制多根使用者到目标的指示线。
 	var target_positions: Array[Vector2] = []
 	for target_id: int in target_ids:
-		target_positions.append(_get_player_indicator_position(target_id))
+		# 当前目标锚点查询；缺失目标只省略对应指示线，不改变牌面本身的合法使用表现。
+		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_id)
+		if bool(target_anchor_result.get("valid", false)):
+			target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
 	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
 	# 手牌展示不会移动权威实体，因此展示请求必须使用正式牌面的独立表现实例。
 	# 当前请求是否只展示牌面；手牌展示不会移动权威实体，因此必须使用正式牌面的独立表现实例。
@@ -1643,6 +1718,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	var animated_card: CardView = null if presentation_only else _card_views.get(card_uid) as CardView
 	if animated_card == null:
 		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
+		animated_card.visible = false
 		animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
@@ -1682,15 +1758,24 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	# 动画起点；牌堆、处理区、展示区和弃牌堆都以桌面中心为公共锚点。
 	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
-		start_position = _get_player_indicator_position(source_player_id)
+		# 当前来源玩家锚点；座位不存在时不把牌错误地放到中央公共锚点。
+		var source_anchor_result: Dictionary = _try_get_player_indicator_position(source_player_id)
+		if not bool(source_anchor_result.get("valid", false)):
+			return
+		start_position = source_anchor_result.get("position", start_position) as Vector2
 	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角的非摸牌获得已由正式手牌节点分支提前处理。
 	var target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if target_player_id >= 0 and target_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
-		target_position = _get_player_indicator_position(target_player_id)
+		# 当前目标玩家锚点；快照重建期间缺失时宁可跳过短时动画，也不能在窗口中上部留下伪造落点。
+		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_player_id)
+		if not bool(target_anchor_result.get("valid", false)):
+			return
+		target_position = target_anchor_result.get("position", target_position) as Vector2
 	# 牌面可见性；牌堆摸牌和其他角色不可见手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
 	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
 	# 转移牌节点；所有表现仍复用正式 CardView，不创建简化标签。
 	var animated_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	animated_card.visible = false
 	if show_card_back:
 		animated_card.configure_back(card_uid, false)
 	else:
@@ -1714,15 +1799,24 @@ func _on_card_animation_ownership_reset_requested(card_uid: int) -> void:
 
 ## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。
 func _get_player_indicator_position(player_id: int) -> Vector2:
+	# 指定玩家锚点查询；兼容调用方只读取位置，未知玩家仍回退中央，但动画创建入口会先使用可用性接口拒绝错误落点。
+	var anchor_result: Dictionary = _try_get_player_indicator_position(player_id)
+	if bool(anchor_result.get("valid", false)):
+		return anchor_result.get("position", Vector2.ZERO) as Vector2
+	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+
+
+## 查询指定玩家是否存在可用动画锚点；返回字典避免用 Vector2.ZERO 同时表达合法坐标与查询失败。
+func _try_get_player_indicator_position(player_id: int) -> Dictionary:
 	if player_id == match_controller.local_human_player_id:
 		# 本地手牌区全局矩形；顶边中心能统一表达本地玩家作为卡牌来源或目标的位置。
 		var hand_rect: Rect2 = hand_container.get_global_rect()
-		return _global_to_animation_position(Vector2(hand_rect.get_center().x, hand_rect.position.y - local_hand_indicator_margin))
+		return {"valid":true, "position":_global_to_animation_position(Vector2(hand_rect.get_center().x, hand_rect.position.y - local_hand_indicator_margin))}
 	# 其他玩家角色视图；武将牌根节点是 Node2D，不能按 Control 转换。
 	var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
 	if player_view != null and is_instance_valid(player_view):
-		return _global_to_animation_position(player_view.get_global_rect().get_center())
-	return _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+		return {"valid":true, "position":_global_to_animation_position(player_view.get_global_rect().get_center())}
+	return {"valid":false, "position":Vector2.ZERO}
 
 
 ## 返回本地正式获得牌在手牌区右侧的全局入场中心；使用可视滚动区域而不是可能超宽的内容区域。

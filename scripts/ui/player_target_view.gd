@@ -168,6 +168,9 @@ var _configuration_signature: int = -1
 ## 渐变阴影中的玩家显示名；名称来自公开玩家快照，不使用武将名代替。
 @onready var _hover_player_name_label: Label = $HoverNameShade/HoverPlayerName
 
+## 武将牌受伤抖动组件；只接收表现调用并恢复牌面原位，不读取当前体力或伤害来源。
+@onready var _damage_shake_feedback: DamageShakeFeedback = $DamageShakeFeedback
+
 
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
@@ -188,6 +191,17 @@ func _ready() -> void:
 ## 返回武将牌在全局画布中的矩形；卡牌动画通过该接口取得角色中心点。
 func get_global_rect() -> Rect2:
 	return Rect2(global_position, card_size * global_scale)
+
+
+## 播放一次武将牌受伤反馈；桌面在确认公开快照体力下降后调用，同一组件可被本地与其他玩家复用。
+func play_damage_feedback() -> void:
+	if _damage_shake_feedback != null:
+		_damage_shake_feedback.play(self)
+
+
+## 返回受伤反馈累计播放次数；只供界面回归与调试验证，不参与规则状态。
+func get_damage_feedback_playback_count() -> int:
+	return _damage_shake_feedback.get_playback_count() if _damage_shake_feedback != null else 0
 
 
 ## 写入角色公开快照与已经格式化的状态文本；组件不持有可修改的 PlayerState 引用。

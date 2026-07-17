@@ -245,12 +245,13 @@ func _layout_rows() -> void:
 		return
 	# 当前自适应槽高；扣除所有3像素间距后平均分配剩余高度，4槽为37像素、5槽为29像素。
 	# 第一视角五槽布局使用固定27像素槽高；剩余高度由统一10像素间距填满，避免不同牌面状态改变单槽高度。
-	var adaptive_row_height: float = equipment_row_height
+	# 当前布局按装备栏实际高度均分全部常驻槽位；148像素五等分为29.6像素，不依赖手牌栏额外留白。
+	var adaptive_row_height: float = (size.y + equipment_row_overlap * float(_visible_slot_count - 1) - equipment_row_gap * float(_visible_slot_count - 1)) / float(maxi(_visible_slot_count, 1))
 	# 当前槽位间可用纵向距离；参考图以固定槽高、可配置覆盖量和3像素间隔组成稳定节距。
 	var row_pitch: float = adaptive_row_height - equipment_row_overlap + equipment_row_gap
 	# 当前整组装备占用高度；用于在没有宝物的四槽布局中保持底部对齐。
 	var total_height: float = adaptive_row_height + float(_visible_slot_count - 1) * row_pitch
-	# 第一槽纵坐标；四槽与五槽都贴齐装备栏底边，宝物出现时整组向上扩展一行。
+	# 第一槽纵坐标；五槽常驻布局恰好填满装备栏，因此首槽贴顶、末槽贴底且中间没有空隙。
 	var start_y: float = maxf(size.y - total_height, 0.0)
 	# 装备横条基础宽度；参考图使用装备栏完整宽度，候选位移会向右溢出但仍留在手牌安全间距内。
 	var row_width: float = maxf(size.x, 1.0)

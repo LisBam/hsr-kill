@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://kr7juvj53s26" path="res://scripts/ui/player_target_input_area.gd" id="2_input"]
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
+[ext_resource type="Script" path="res://scripts/ui/damage_shake_feedback.gd" id="5_damage_feedback"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -146,6 +147,9 @@ fill_to = Vector2(0.5, 1)
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
 metadata/_edit_horizontal_guides_ = [99.0]
+
+[node name="DamageShakeFeedback" type="Node" parent="."]
+script = ExtResource("5_damage_feedback")
 
 [node name="CardBody" type="Panel" parent="." unique_id=1827969861]
 offset_right = 148.35

@@ -38,6 +38,9 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 
 ## 调度安全
 
+- `GameplayPauseService` 提供令牌式对局暂停接口。界面只能通过 `MatchController.acquire_gameplay_pause()` 与 `release_gameplay_pause()` 申请、释放自己的暂停原因，不能直接改写 `SceneTree.paused`。
+- 首个对局暂停令牌会同步创建事件运行时全局暂停 token；最后一个令牌释放后才恢复事件栈。AI 普通行动、单人选牌、同时无懈、选将驱动和直接 `submit_action()` 入口都会检查该状态。
+- AI 与延时判定等待使用 `SceneTree.create_timer(..., process_always=false)`；暂停期间不累计等待时间，恢复后从剩余时长继续，不会在收起日志的瞬间批量补交动作。
 - `GameSettings.ai_response_delay_seconds` 默认 0.30 秒，局内菜单“AI响应速度”可在 0.05 至 1.00 秒之间以 0.05 秒步长调整；数值表示每次 AI 行动或选牌响应前的等待时间，数值越小响应越快。
 - `ai_action_delay_seconds` 是控制器当前使用的等待值，会订阅全局设置用于后续计时器；自动化测试可直接覆盖该字段以缩短测试等待，不改变玩家运行时设置。
 - `max_ai_actions_per_turn` 默认 64，超过后强制结束出牌阶段。
