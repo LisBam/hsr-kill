@@ -171,7 +171,8 @@ func _run() -> void:
 	# 空防具槽样式；用于和浅色装备牌面比较背景亮度。
 	var empty_armor_style: StyleBoxFlat = empty_armor_row.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 常驻五槽自适应高度；175像素扣除四段间距后平均分配全部高度。
-	var adaptive_equipment_row_height: float = (equipment_stack.size.y - equipment_stack.equipment_row_gap * 4.0) / 5.0
+	# 当前第一视角五槽固定使用27像素槽高，四段10像素等距空隙共同填满175像素区域。
+	var adaptive_equipment_row_height: float = equipment_stack.equipment_row_height
 	# 当前五槽节距；等于自适应槽高加3像素间距。
 	var equipment_row_pitch: float = adaptive_equipment_row_height - equipment_stack.equipment_row_overlap + equipment_stack.equipment_row_gap
 	# 常驻空宝物槽；未装备时也必须显示深色占位且禁用输入。

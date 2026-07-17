@@ -244,7 +244,8 @@ func _layout_rows() -> void:
 	if size.x <= 0.0 or size.y <= 0.0:
 		return
 	# 当前自适应槽高；扣除所有3像素间距后平均分配剩余高度，4槽为37像素、5槽为29像素。
-	var adaptive_row_height: float = maxf(equipment_row_height, (size.y - equipment_row_gap * float(_visible_slot_count - 1)) / float(_visible_slot_count))
+	# 第一视角五槽布局使用固定27像素槽高；剩余高度由统一10像素间距填满，避免不同牌面状态改变单槽高度。
+	var adaptive_row_height: float = equipment_row_height
 	# 当前槽位间可用纵向距离；参考图以固定槽高、可配置覆盖量和3像素间隔组成稳定节距。
 	var row_pitch: float = adaptive_row_height - equipment_row_overlap + equipment_row_gap
 	# 当前整组装备占用高度；用于在没有宝物的四槽布局中保持底部对齐。

@@ -940,23 +940,26 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	var response_equipment_definition: CardDefinition
 	if selected_uids.size() == 1:
 		response_equipment_definition = _get_equipment_response_definition(completed_choice, selected_uids[0])
-	if response_equipment_definition != null and response_equipment_definition.get_equipment_response_material_count() > 0:
-		# 需要的材料数量；当前丈八蛇矛为2，后续装备可声明其他非负数量。
-		var required_material_count: int = response_equipment_definition.get_equipment_response_material_count()
-		equipment_material_uids = _int_array(action.payload.get("material_card_uids", []) as Array)
-		if equipment_material_uids.is_empty() and ai_coordinator.is_ai_controlled(action.actor_id):
-			# AI 装备响应材料；基础策略按当前手牌顺序选择声明数量并继续走装备源码校验。
-			var ai_player: PlayerState = state.get_player(action.actor_id)
-			if ai_player != null and ai_player.hand.size() >= required_material_count:
-				for material_index: int in range(required_material_count):
-					equipment_material_uids.append(ai_player.hand[material_index].uid)
-		# 装备响应材料错误；请求保持活动，玩家仍可重新选择合法材料后提交。
-		var material_error: String = response_equipment_definition.validate_equipment_response_materials(self, action.actor_id, selected_uids[0], equipment_material_uids)
-		if not material_error.is_empty():
-			return _reject(material_error)
+	if response_equipment_definition != null:
 		# 已完成请求的恢复上下文；只保存实体 UID 数组，效果恢复不会持有界面状态或卡牌对象。
+		# 已完成请求的恢复上下文；记录所选装备入口，使无结果的判定型装备可以回到同一手牌响应时机。
 		var completed_context: Dictionary = (completed_choice.get("context", {}) as Dictionary).duplicate(true)
-		completed_context["equipment_material_uids"] = equipment_material_uids.duplicate()
+		completed_context["selected_response_equipment_uid"] = selected_uids[0]
+		if response_equipment_definition.get_equipment_response_material_count() > 0:
+			# 需要的材料数量；当前丈八蛇矛为2，后续装备可声明其他非负数量。
+			var required_material_count: int = response_equipment_definition.get_equipment_response_material_count()
+			equipment_material_uids = _int_array(action.payload.get("material_card_uids", []) as Array)
+			if equipment_material_uids.is_empty() and ai_coordinator.is_ai_controlled(action.actor_id):
+				# AI 装备响应材料；基础策略按当前手牌顺序选择声明数量并继续走装备源码校验。
+				var ai_player: PlayerState = state.get_player(action.actor_id)
+				if ai_player != null and ai_player.hand.size() >= required_material_count:
+					for material_index: int in range(required_material_count):
+						equipment_material_uids.append(ai_player.hand[material_index].uid)
+			# 装备响应材料错误；请求保持活动，玩家仍可重新选择合法材料后提交。
+			var material_error: String = response_equipment_definition.validate_equipment_response_materials(self, action.actor_id, selected_uids[0], equipment_material_uids)
+			if not material_error.is_empty():
+				return _reject(material_error)
+			completed_context["equipment_material_uids"] = equipment_material_uids.duplicate()
 		completed_choice["context"] = completed_context
 	# 通用运行时响应；AI、本地和网络使用完全相同的 ChoiceResponse 字段与权威候选校验。
 	var runtime_response: ChoiceResponse = ChoiceResponse.new(
@@ -1010,9 +1013,9 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 			var skill_response_patterns: Array[String] = _string_array(context.get("response_patterns", []) as Array)
 			if not skill_response_patterns.is_empty():
 				var skill_responder_id: int = int(context.get("responder_id", skill_owner_id))
-				var skill_response_card: CardInstance
-				if not selected_uids.is_empty():
-					skill_response_card = _consume_response_card_uid_patterns(skill_responder_id, selected_uids[0], skill_response_patterns, _int_array(context.get("equipment_material_uids", []) as Array))
+				var skill_response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, skill_responder_id, skill_response_patterns)
+				if has_pending_card_choice():
+					return
 				if skill.continue_response(context, skill_response_card):
 					return
 			elif skill.continue_choice(context, selected_uids):
@@ -1033,9 +1036,9 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 		# 响应者 ID；多数牌使用 responder_id，【杀】通用上下文使用 target_id。
 		var responder_id: int = int(context.get("responder_id", context.get("target_id", -1)))
 		# 实际响应实体；空选择表示玩家明确放弃。
-		var response_card: CardInstance
-		if not selected_uids.is_empty():
-			response_card = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns, _int_array(context.get("equipment_material_uids", []) as Array))
+		var response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, responder_id, response_patterns)
+		if has_pending_card_choice():
+			return
 		effect_resolver.continue_response(context, response_card)
 		if bool(context.get("complete_parent_target_after_response", false)) and not state.game_over and not has_pending_card_choice():
 			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
@@ -1050,9 +1053,9 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int]) -> vo
 				# 响应者 ID；装备效果响应上下文统一使用 responder_id。
 				var responder_id: int = int(context.get("responder_id", -1))
 				# 实际响应牌；空选择表示明确放弃。
-				var response_card: CardInstance
-				if not selected_uids.is_empty():
-					response_card = _consume_response_card_uid_patterns(responder_id, selected_uids[0], _string_array(context.get("response_patterns", []) as Array), _int_array(context.get("equipment_material_uids", []) as Array))
+				var response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, responder_id, _string_array(context.get("response_patterns", []) as Array))
+				if has_pending_card_choice():
+					return
 				if equipment_definition.continue_equipment_response(self, context, response_card):
 					return
 			elif equipment_definition.continue_equipment_choice(self, context, selected_uids):
@@ -1234,11 +1237,14 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 			allowed_patterns.append(response_pattern)
 	if allowed_patterns.is_empty():
 		return null
+	# 同一响应时机已经失败的装备入口；判定型装备失败后不会在重开窗口中再次出现，其他手牌与装备仍正常保留。
+	var excluded_response_candidate_uids: Array[int] = _int_array(context.get("excluded_response_candidate_uids", []) as Array)
 	# 可响应候选；手牌与木牛“粮”都按实际 UID 提供给本人，规则定义决定是否匹配响应模式。
-	var candidates: Array[Dictionary] = _build_response_choice_candidates(player, allowed_patterns)
+	var candidates: Array[Dictionary] = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids)
 	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
+	response_context["response_prompt"] = prompt
 	# 响应允许主动不出牌；即使候选为空也创建请求，保证 AI 与真实玩家经历相同问询。
 	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
@@ -1247,12 +1253,14 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 
 
 ## 构造指定玩家在同一响应模式集合下的私有候选；普通逐人响应与无懈同时响应共用此入口。
-func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Array[String]) -> Array[Dictionary]:
+func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int] = []) -> Array[Dictionary]:
 	# 可序列化候选结果；只包含响应者本人可见的实体牌与公开装备入口。
 	var candidates: Array[Dictionary] = []
 	if player == null or not player.alive:
 		return candidates
 	for card: CardInstance in player.get_playable_cards():
+		if excluded_card_uids.has(card.uid):
+			continue
 		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 		if allowed_patterns.has(_get_provided_response_pattern(definition)):
@@ -1261,11 +1269,39 @@ func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Ar
 	for equipment_variant: Variant in player.equipment.values():
 		# 当前装备实体；候选只作为发动入口，不会离开装备区。
 		var equipment_card: CardInstance = equipment_variant as CardInstance
+		if excluded_card_uids.has(equipment_card.uid):
+			continue
 		# 当前装备定义；定义钩子返回 true 时加入同一响应窗口。
 		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
 		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player.player_id, allowed_patterns):
 			candidates.append(_serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, str(GameDatabase.get_card(equipment_card.definition_id).get("slot", ""))))
 	return candidates
+
+
+## 消费响应选择；判定型装备未生成响应牌时，在同一上下文中排除该装备并重新开放其余合法候选。
+func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Array[int], responder_id: int, response_patterns: Array[String]) -> CardInstance:
+	if selected_uids.is_empty():
+		return null
+	# 当前响应结果；普通实体牌与成功的虚拟装备响应会直接返回，不创建第二次询问。
+	var response_card: CardInstance = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns, _int_array(context.get("equipment_material_uids", []) as Array))
+	if response_card != null:
+		return response_card
+	# 本次失败的装备入口 UID；只有权威提交阶段明确识别为装备候选时才允许重开响应。
+	var failed_equipment_uid: int = int(context.get("selected_response_equipment_uid", -1))
+	if failed_equipment_uid < 0 or failed_equipment_uid != selected_uids[0]:
+		return null
+	# 重试上下文；移除上一次选择标记，并把失败装备加入本响应时机的排除集合。
+	var retry_context: Dictionary = context.duplicate(true)
+	retry_context.erase("selected_response_equipment_uid")
+	retry_context.erase("equipment_material_uids")
+	# 已排除装备 UID；数组会跨多次判定型装备失败累积，但只作用于当前响应上下文。
+	var excluded_response_candidate_uids: Array[int] = _int_array(retry_context.get("excluded_response_candidate_uids", []) as Array)
+	if not excluded_response_candidate_uids.has(failed_equipment_uid):
+		excluded_response_candidate_uids.append(failed_equipment_uid)
+	retry_context["excluded_response_candidate_uids"] = excluded_response_candidate_uids
+	# 原响应提示；上下文缺失时使用稳定通用文本，不把具体牌名硬编码进控制器。
+	var response_prompt: String = str(context.get("response_prompt", "请选择是否响应。"))
+	return request_response_card_patterns(responder_id, response_patterns, response_prompt, retry_context)
 
 
 ## 按选择请求提交的 UID 消耗响应牌；再次校验区域和响应模式后进入弃牌堆并播放动画。

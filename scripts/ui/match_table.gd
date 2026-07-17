@@ -34,7 +34,8 @@ const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
 
 ## 技能区相对主场景右边缘的固定右边界；与右下本地武将牌保留27.35像素间隔。
 ## 当前布局将安全间隔收紧为12像素，使技能按钮靠近本地武将牌，同时由手牌右边界计算继续保留8像素隔离。
-const LOCAL_SKILL_RIGHT_OFFSET: float = -176.35
+## 当前最终间隔进一步收紧为6像素，仍由独立手牌边界保留8像素安全区，技能按钮不会覆盖手牌信息。
+const LOCAL_SKILL_RIGHT_OFFSET: float = -170.35
 
 ## 技能区相对主场景底边的固定下边界；与本地武将牌牌面底边对齐，不占用座次标签区域。
 const LOCAL_SKILL_BOTTOM_OFFSET: float = -26.0
@@ -49,7 +50,8 @@ const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
 const LOCAL_CARD_AREA_HEIGHT: float = 175.0
 
 ## 本地五个装备槽之间的统一纵向间距；默认3像素，与装备组件和界面文档保持一致。
-const LOCAL_EQUIPMENT_ROW_GAP: float = 3.0
+## 当前第一视角固定使用10像素间距，配合五个27像素槽位恰好填满175像素装备栏高度。
+const LOCAL_EQUIPMENT_ROW_GAP: float = 10.0
 
 ## 本地装备槽的统一覆盖量；默认0表示五槽互不覆盖，全部间距都由同一个间距参数控制。
 const LOCAL_EQUIPMENT_ROW_OVERLAP: float = 0.0
@@ -156,6 +158,9 @@ var local_player_seat_label: Label
 ## 对局日志文本框；只追加规则核心发出的永久语义日志。
 @onready var log_view: RichTextLabel = %LogView
 
+## 可折叠对局日志组件；只读取其展开信号，离线暂停所有权由牌桌统一维护。
+@onready var match_log_panel: MatchLogPanel = $LogPanel
+
 ## 错误提示文本；显示最近一次被规则核心拒绝的原因。
 @onready var error_label: Label = %ErrorLabel
 
@@ -255,6 +260,9 @@ var _identity_mark_menu: PopupMenu
 ## 当前开启“不响应该锦囊”的群体锦囊实体 UID；默认-1表示未开启，牌离开处理区后自动清除。
 var _suppressed_group_trick_uid: int = -1
 
+## 当前场景树暂停是否由离线日志展开触发；只有持有该所有权时，收起日志或退出牌桌才恢复运行。
+var _owns_log_pause: bool = false
+
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
@@ -275,6 +283,7 @@ func _ready() -> void:
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
+	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_menu.set_next_player_count(match_controller.default_player_count)
 	character_selection_panel.character_selected.connect(_on_character_selected)
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
@@ -288,6 +297,31 @@ func _ready() -> void:
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
 	call_deferred("_start_default_match")
+
+
+## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
+func _exit_tree() -> void:
+	if _owns_log_pause and get_tree() != null:
+		get_tree().paused = false
+	_owns_log_pause = false
+
+
+## 在离线模式展开日志时暂停整局；联网模式继续运行，收起时只恢复由本组件拥有的暂停。
+func _on_match_log_expanded_changed(expanded: bool) -> void:
+	# 当前场景树；节点退出期间没有有效树时不修改暂停状态。
+	var scene_tree: SceneTree = get_tree()
+	if scene_tree == null:
+		return
+	if not expanded:
+		if _owns_log_pause:
+			scene_tree.paused = false
+			_owns_log_pause = false
+		return
+	# 当前是否为离线单机模式；LAN 与远程模式不能因本地查看日志暂停权威对局。
+	var is_offline_match: bool = match_controller != null and match_controller.network_gateway != null and match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE
+	if is_offline_match and not scene_tree.paused:
+		scene_tree.paused = true
+		_owns_log_pause = true
 
 
 ## 把旧主场景中的HFlowContainer替换为专用技能网格；迁移只处理布局组件，不读取或修改武将技能规则。
@@ -1632,6 +1666,9 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 			return
 		# 已有同 UID 牌面仍在中央队列时，纯展示或旧转移增量不能再并排创建重复节点。
 		if card_use_animation_layer.has_active_card_uid(card_uid):
+			return
+		# 处理区牌必须由 useCard、delayedJudge 或 judge 表现明确认领；未认领增量多为虚拟材料收尾，不能在中央锚点凭空合成牌面。
+		if source_zone == "processing":
 			return
 	if target_zone != "discard_pile":
 		# 实体已经进入新的规则区域；上一轮弃牌移动的待消费与已消费所有权到此失效，未来普通弃置或再次使用可重新播放。

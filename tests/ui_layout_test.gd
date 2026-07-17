@@ -14,6 +14,8 @@ var _menu_button_pressed: bool = false
 
 ## 延迟执行正式场景检查，保证测试根节点已经进入场景树。
 func _ready() -> void:
+	# 日志暂停用例期间测试驱动仍需继续发送输入与执行断言，始终处理模式只作用于测试根节点。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	call_deferred("_run")
 
 
@@ -103,7 +105,7 @@ func _run() -> void:
 	var first_skill_button: SkillButtonView
 	if not skill_views.is_empty():
 		first_skill_button = skill_views.values()[0] as SkillButtonView
-	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x) or not is_equal_approx(skill_bar.position.x + skill_bar.size.x + 12.0, (main_instance.get_node("LocalPlayerSeatSlot") as Control).position.x):
+	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x) or not is_equal_approx(skill_bar.position.x + skill_bar.size.x + 6.0, (main_instance.get_node("LocalPlayerSeatSlot") as Control).position.x):
 		_fail("skill_button_only_layout:%s/%s" % [skill_bar.get_rect(), first_skill_button.text if first_skill_button != null else "null"])
 		return
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
@@ -145,7 +147,8 @@ func _run() -> void:
 	var local_empty_armor_row: Button = local_equipment_label.get_row("armor")
 	# 五槽固定节距；武器到宝物应跨越4个完整的27像素槽高与3像素间距。
 	# 当前五槽自适应高度；175像素扣除四段间距后平均分配。
-	var local_adaptive_equipment_row_height: float = (local_equipment_label.size.y - local_equipment_label.equipment_row_gap * 4.0) / 5.0
+	# 当前五槽固定使用组件声明的27像素槽高，四段10像素间距共同填满175像素高度。
+	var local_adaptive_equipment_row_height: float = local_equipment_label.equipment_row_height
 	# 当前五槽节距；等于29像素自适应槽高加3像素间距。
 	var local_equipment_row_pitch: float = local_adaptive_equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
 	# 本地空进攻坐骑横条；五槽常驻布局中必须保留第三个等高槽位。
@@ -536,8 +539,9 @@ func _run() -> void:
 	# 实体进入新的非弃牌区域；权威移牌内部通知会释放旧待消费与已消费状态，使该牌未来一次合法普通弃置重新可见。
 	main_instance.call("_on_card_animation_ownership_reset_requested", 90007)
 	main_instance.call("_on_card_transfer_requested", delayed_discard_card_data, -1, "processing", -1, "discard_pile")
-	if animation_layer._active_cards.size() != 1 or animation_layer._active_cards[0].card_uid != 90007:
-		_fail("discard_claim_not_released:%s" % [animation_layer._active_cards])
+	# 未附带新表现事件的处理区收尾不应在中央锚点重新合成牌面，即使旧 UID 所有权已经释放。
+	if not animation_layer._active_cards.is_empty():
+		_fail("unclaimed_processing_discard_created:%s" % [animation_layer._active_cards])
 		return
 	animation_layer.clear_presentations()
 	# 尚未到达弃牌堆的旧认领也必须在实体进入新区域时释放，否则该 UID 下一次真实使用会被误判为重复表现。
@@ -590,9 +594,22 @@ func _run() -> void:
 	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
 	var log_content_panel: PanelContainer = main_instance.get_node("%LogContentPanel") as PanelContainer
 	await _click_control(log_toggle_button)
-	if not log_content_panel.visible:
-		_fail("log_panel_not_expanded")
+	if not log_content_panel.visible or not get_tree().paused or not bool(main_instance.get("_owns_log_pause")):
+		_fail("offline_log_pause expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
 		return
+	# 暂停后日志按钮仍需接收真实输入；收起正文时只释放由牌桌持有的离线暂停。
+	await _click_control(log_toggle_button)
+	if log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")):
+		_fail("offline_log_resume expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
+		return
+	# 远程通信模式；本地展开日志只能改变可见性，不得暂停仍由权威端推进的联网对局。
+	match_controller.network_gateway.mode = NetworkGateway.Mode.REMOTE
+	await _click_control(log_toggle_button)
+	if not log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")):
+		_fail("remote_log_must_continue expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
+		return
+	await _click_control(log_toggle_button)
+	match_controller.network_gateway.mode = NetworkGateway.Mode.OFFLINE
 	# 下一局人数输入；直接写入尚未失焦提交的文本，验证重开按钮会读取玩家当前键入值。
 	var player_count_input: SpinBox = main_instance.get_node("%NextPlayerCountInput") as SpinBox
 	player_count_input.get_line_edit().text = "6"
