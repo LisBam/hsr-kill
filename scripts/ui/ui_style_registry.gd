@@ -12,7 +12,7 @@ const STYLE_SPACE_MONO: String = "space_mono"
 const STYLE_DECADE_WOOD: String = "decade_wood"
 
 ## 新安装与未识别设置使用的默认风格；黑白太空风格强调近黑背景、银白边框与星空层次。
-## 当前默认视觉只提取参考界面的黑色厚框、暖白内容面与低饱和金色装饰；参考图中的紫蓝区域属于地图毛玻璃背景，不纳入主题配色。
+## 当前默认视觉提取参考界面的黑色厚框、雾面深灰内容区与低饱和金色装饰；浅色只保留给卡牌和装备信息面，避免大面积亮底抢夺焦点。
 const DEFAULT_STYLE_ID: String = STYLE_SPACE_MONO
 
 ## 设置菜单中的固定风格顺序；默认风格置于首项，后续新增风格只需在注册表追加标识与配色。
@@ -31,14 +31,14 @@ const STYLE_PALETTES: Dictionary = {
 		"rail_width": 14.0,
 		"outer_background": Color("111214"),
 		"outer_background_secondary": Color("111214"),
-		"table_surface": Color("d8d9dc"),
-		"table_inner": Color("f1efe9"),
+		"table_surface": Color("24262b"),
+		"table_inner": Color("30333a"),
 		"rail": Color("1d1d1d"),
 		"rail_highlight": Color("3b3936"),
-		"sky": Color("f1efe9"),
+		"sky": Color("30333a"),
 		"star": Color("c9ae6b"),
-		"mountain": Color("f1efe9"),
-		"building": Color("f1efe9"),
+		"mountain": Color("30333a"),
+		"building": Color("30333a"),
 		"ornament": Color("bda66b"),
 		"space_grid": Color("00000000"),
 		"backdrop_shade": Color("00000000"),
