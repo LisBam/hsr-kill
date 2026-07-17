@@ -31,12 +31,21 @@ var _card_names: Array[String] = []
 ## 初始化透明输入和编辑器预览；组件不会遮断武将牌底部的目标点击。
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	refresh_ui_style()
 	_refresh_markers()
 
 
 ## 写入按结算顺序排列的判定牌显示名，并重建全部菱形标记。
 func configure(card_names: Array[String]) -> void:
 	_card_names = card_names.duplicate()
+	_refresh_markers()
+
+
+## 按当前活动 UI 风格刷新判定菱形配色；牌名数组与公开顺序保持不变。
+func refresh_ui_style() -> void:
+	marker_background_color = BattleUIStyle.get_color("panel", marker_background_color)
+	marker_border_color = BattleUIStyle.get_color("accent", marker_border_color)
+	marker_text_color = BattleUIStyle.get_color("text_primary", marker_text_color)
 	_refresh_markers()
 
 
@@ -77,7 +86,7 @@ func _refresh_markers() -> void:
 		initial_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		initial_label.add_theme_font_size_override("font_size", marker_font_size)
 		initial_label.add_theme_color_override("font_color", marker_text_color)
-		initial_label.add_theme_color_override("font_shadow_color", Color("120e0b"))
+		initial_label.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("health_shadow"))
 		initial_label.add_theme_constant_override("shadow_offset_x", 1)
 		initial_label.add_theme_constant_override("shadow_offset_y", 1)
 		add_child(initial_label)

@@ -19,22 +19,35 @@ extends TextureRect
 @export_range(0.0, 0.5, 0.01) var ornament_opacity: float = 0.16
 
 ## 背景最深层颜色；默认使用近黑暖褐色衬托桌面与金边，运行时无需动态修改。
-@export var outer_background_color: Color = Color("120d0c")
+## 当前默认风格改为黑白太空，进入场景后会由统一主题语义覆盖该字段。
+@export var outer_background_color: Color = Color("020306")
 
 ## 桌面主体颜色；默认使用低明度墨青色延续《崩铁杀》的深青视觉语言，运行时无需动态修改。
-@export var table_surface_color: Color = Color("20202d")
+@export var table_surface_color: Color = Color("0b0f16")
 
 ## 桌面内层颜色；默认比主体更暗，用于制造皮革桌垫的纵深，运行时无需动态修改。
-@export var table_inner_color: Color = Color("151725")
+@export var table_inner_color: Color = Color("05070c")
 
 ## 木质框主色；默认使用深胡桃木色模拟十周年 UI 的实木包边，运行时无需动态修改。
-@export var wood_color: Color = Color("4a2818")
+@export var wood_color: Color = Color("11151d")
 
 ## 木质框高光色；默认使用暖棕色表现上沿受光，运行时无需动态修改。
-@export var wood_highlight_color: Color = Color("875532")
+@export var wood_highlight_color: Color = Color("586170")
 
 ## 金属装饰颜色；默认使用低饱和古金色绘制内框和中央纹样，运行时无需动态修改。
-@export var gold_color: Color = Color("c6a15f")
+@export var gold_color: Color = Color("c9d1dc")
+
+## 远景天幕颜色；默认使用近黑蓝灰色，运行时由当前 UI 风格统一刷新。
+@export var sky_color: Color = Color("0c111b")
+
+## 远景星点颜色；默认使用银白色，透明度在绘制时单独控制。
+@export var star_color: Color = Color("eef3ff")
+
+## 远景山脊颜色；默认使用比桌面更深的黑灰色，仅承担空间层次。
+@export var mountain_color: Color = Color("090c12")
+
+## 远景建筑剪影颜色；默认接近纯黑，避免与中央牌面动画争夺对比度。
+@export var building_color: Color = Color("04060a")
 
 ## 天幕地平线比例；默认把远景压在牌桌中央下方，保留无名杀式的宽阔中空区域。
 const SKYLINE_RATIO: float = 0.64
@@ -47,6 +60,22 @@ const STAR_COUNT: int = 26
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	resized.connect(queue_redraw)
+	apply_ui_style(BattleUIStyle.get_active_style_id())
+	queue_redraw()
+
+
+## 应用指定 UI 风格的背景语义色；组件只读取注册表，不保存菜单控件或全局设置引用。
+func apply_ui_style(style_id: String) -> void:
+	outer_background_color = UIStyleRegistry.get_color(style_id, "outer_background", outer_background_color)
+	table_surface_color = UIStyleRegistry.get_color(style_id, "table_surface", table_surface_color)
+	table_inner_color = UIStyleRegistry.get_color(style_id, "table_inner", table_inner_color)
+	wood_color = UIStyleRegistry.get_color(style_id, "rail", wood_color)
+	wood_highlight_color = UIStyleRegistry.get_color(style_id, "rail_highlight", wood_highlight_color)
+	gold_color = UIStyleRegistry.get_color(style_id, "ornament", gold_color)
+	sky_color = UIStyleRegistry.get_color(style_id, "sky", sky_color)
+	star_color = UIStyleRegistry.get_color(style_id, "star", star_color)
+	mountain_color = UIStyleRegistry.get_color(style_id, "mountain", mountain_color)
+	building_color = UIStyleRegistry.get_color(style_id, "building", building_color)
 	queue_redraw()
 
 
@@ -71,14 +100,14 @@ func _draw() -> void:
 	var skyline_y: float = inner_rect.position.y + inner_rect.size.y * SKYLINE_RATIO
 	# 天幕矩形；只覆盖内层桌垫的上方区域，底部仍由桌垫颜色承托手牌。
 	var sky_rect: Rect2 = Rect2(inner_rect.position, Vector2(inner_rect.size.x, skyline_y - inner_rect.position.y))
-	draw_rect(sky_rect, Color("222336"))
+	draw_rect(sky_rect, sky_color)
 	# 远景星点；固定伪随机位置避免引入全局随机数或影响规则回放。
 	for star_index: int in range(STAR_COUNT):
 		# 当前星点横坐标；使用确定性取模实现可缩放的均匀分布。
 		var star_x: float = inner_rect.position.x + fmod(float(star_index * 137), maxf(inner_rect.size.x, 1.0))
 		# 当前星点纵坐标；限制在天幕矩形内，避免落入手牌操作区。
 		var star_y: float = inner_rect.position.y + fmod(float(star_index * 71), maxf(sky_rect.size.y, 1.0))
-		draw_circle(Vector2(star_x, star_y), 1.0 if star_index % 3 else 1.5, Color("d8d1c2", 0.34))
+		draw_circle(Vector2(star_x, star_y), 1.0 if star_index % 3 else 1.5, Color(star_color, 0.34))
 	# 山脊剪影；半透明层叠制造参考界面的远景纵深，避免遮挡中央动画落点。
 	var mountain_points: PackedVector2Array = PackedVector2Array([
 		Vector2(inner_rect.position.x, skyline_y + 36.0),
@@ -90,7 +119,7 @@ func _draw() -> void:
 		Vector2(inner_rect.end.x, inner_rect.end.y),
 		Vector2(inner_rect.position.x, inner_rect.end.y),
 	])
-	draw_colored_polygon(mountain_points, Color("151725", 0.72))
+	draw_colored_polygon(mountain_points, Color(mountain_color, 0.72))
 	# 建筑剪影；低矮矩形与屋檐折线只承担氛围表现，不覆盖玩家牌和手牌区。
 	# 建筑基准线；把建筑底部固定在远景下方，窗口拉伸时保持相对高度。
 	var building_base_y: float = inner_rect.position.y + inner_rect.size.y * 0.76
@@ -101,12 +130,12 @@ func _draw() -> void:
 		var building_height: float = 24.0 + float((building_index + 2) % 3) * 12.0
 		# 当前建筑矩形；只绘制低透明度暗色剪影，不包含交互信息。
 		var building_rect: Rect2 = Rect2(building_x, building_base_y - building_height, 46.0, building_height)
-		draw_rect(building_rect, Color("10131f", 0.74))
+		draw_rect(building_rect, Color(building_color, 0.74))
 		draw_colored_polygon(PackedVector2Array([
 			Vector2(building_rect.position.x - 8.0, building_rect.position.y),
 			Vector2(building_rect.end.x + 8.0, building_rect.position.y),
 			Vector2(building_rect.position.x + building_rect.size.x * 0.5, building_rect.position.y - 10.0),
-		]), Color("10131f", 0.74))
+		]), Color(building_color, 0.74))
 	# 桌面中心点；所有星轨和同心环围绕该点绘制。
 	var center: Vector2 = inner_rect.get_center()
 	# 低透明度古金色；用于中央装饰，避免与飞牌和指示线争夺视觉焦点。

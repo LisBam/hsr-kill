@@ -92,7 +92,7 @@ func _ready() -> void:
 ## 接收本地装备快照和当前桌面选择状态；输入均为值副本，组件不会持有可修改的权威对象引用。
 func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Array[int] = [], selected_uids: Array[int] = []) -> void:
 	# 本次完整配置签名；全局牌名模式参与缓存判断，切换名称后会强制刷新全部装备横条。
-	var next_configuration_signature: int = hash([equipment, wooden_ox_count, candidate_uids, selected_uids, GameSettings.card_name_mode])
+	var next_configuration_signature: int = hash([equipment, wooden_ox_count, candidate_uids, selected_uids, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -101,6 +101,12 @@ func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Arra
 	_candidate_uids = candidate_uids.duplicate()
 	_selected_uids = selected_uids.duplicate()
 	_visible_slot_count = EQUIPMENT_SLOT_ORDER.size()
+	_rebuild_rows()
+
+
+## 按当前活动 UI 风格重建装备横条；装备快照、候选 UID、选中 UID 与位移动画语义保持不变。
+func refresh_ui_style() -> void:
+	_configuration_signature = -1
 	_rebuild_rows()
 
 
@@ -186,17 +192,17 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	equipment_row.disabled = not is_candidate
 	equipment_row.mouse_filter = Control.MOUSE_FILTER_STOP if is_candidate else Control.MOUSE_FILTER_IGNORE
 	# 装备横条普通边框；选中金色优先，其次候选青绿，最后使用武将牌装备条的暗金色。
-	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if is_candidate else Color("8d7147"))
+	var border_color: Color = BattleUIStyle.get_color("accent") if is_selected else (BattleUIStyle.get_color("legal_target") if is_candidate else BattleUIStyle.get_color("equipment_border"))
 	# 装备横条普通描边宽度；候选或选中使用2像素，静态装备使用1像素。
 	var border_width: int = 2 if is_candidate or is_selected else 1
 	# 装备横条基础纸色；已装备槽使用参考图浅米色牌面，空槽使用深胡桃色背景。
-	var row_background_color: Color = Color("e4cfa6") if is_equipped else Color("352620e8")
+	var row_background_color: Color = BattleUIStyle.get_color("equipment_background") if is_equipped else BattleUIStyle.get_color("equipment_empty_background")
 	# 装备横条基础边框；候选与选中仍优先使用状态色，普通槽位使用低亮度暗金边。
-	var row_border_color: Color = border_color if is_candidate or is_selected else (Color("5a3221") if is_equipped else Color("8d7147a6"))
+	var row_border_color: Color = border_color if is_candidate or is_selected else (BattleUIStyle.get_color("equipment_border") if is_equipped else BattleUIStyle.get_color("equipment_empty_border"))
 	# 装备横条普通样式；内容边距归零，富文本可完整使用按钮矩形。
 	var normal_style: StyleBoxFlat = _make_row_style(row_background_color, row_border_color, border_width)
 	# 装备横条悬停样式；只为可交互候选轻微提亮纸张，不改变横条尺寸。
-	var hover_style: StyleBoxFlat = _make_row_style(Color("f0ddb5"), row_border_color, border_width)
+	var hover_style: StyleBoxFlat = _make_row_style(BattleUIStyle.get_color("equipment_hover_background"), row_border_color, border_width)
 	equipment_row.add_theme_stylebox_override("normal", normal_style)
 	equipment_row.add_theme_stylebox_override("disabled", normal_style)
 	equipment_row.add_theme_stylebox_override("focus", normal_style)
@@ -215,7 +221,7 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	slot_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	slot_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	slot_icon.add_theme_font_size_override("font_size", 13)
-	slot_icon.add_theme_color_override("font_color", Color("4a3929") if is_equipped else Color("9b8a70"))
+	slot_icon.add_theme_color_override("font_color", BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text"))
 	equipment_row.add_child(slot_icon)
 	# 装备横条富文本；花色点数保留红黑色，槽位和牌名使用深褐色并居中显示。
 	var equipment_text: RichTextLabel = RichTextLabel.new()
@@ -229,7 +235,7 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	equipment_text.scroll_active = false
 	equipment_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_text.add_theme_font_size_override("normal_font_size", equipment_font_size)
-	equipment_text.add_theme_color_override("default_color", Color("33281e") if is_equipped else Color("9b8a70"))
+	equipment_text.add_theme_color_override("default_color", BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text"))
 	# 当前装备花色；红桃和方片使用朱红色，其余花色使用近黑色。
 	var suit: String = str(equipment_card.get("suit", "none"))
 	# 当前装备点数；A、J、Q、K使用标准牌面字符，无有效点数时保持空白。

@@ -223,7 +223,7 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 ## 写入公开角色快照并刷新十周年牌面覆盖层；调用方传入的是裁剪后的 Dictionary 副本。
 func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary = {}, current_actor: bool = false, faction_definition: Dictionary = {}) -> void:
 	# 本次完整配置签名；名称模式影响装备与悬停文本，因此必须参与缓存失效判断。
-	var next_configuration_signature: int = hash([snapshot, character_definition, current_actor, faction_definition, GameSettings.card_name_mode])
+	var next_configuration_signature: int = hash([snapshot, character_definition, current_actor, faction_definition, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -285,6 +285,18 @@ func set_operation_state(current_operator: bool) -> void:
 	_refresh_visual_state()
 
 
+## 按当前活动 UI 风格重绘武将牌；公开快照与规则交互状态保持不变。
+func refresh_ui_style() -> void:
+	if not is_node_ready():
+		return
+	_configuration_signature = -1
+	# 当前武将定义；从稳定角色 ID 重新取得只读配置，避免组件为主题刷新长期保存额外对象引用。
+	var character_definition: Dictionary = GameDatabase.get_character(str(_player_snapshot.get("character_id", "")))
+	_public_zone_label.refresh_ui_style()
+	_refresh_decade_overlay(character_definition)
+	_refresh_visual_state()
+
+
 ## 区分身份徽记点击与普通武将牌点击；只有正式对局中的未知身份允许打开本地标注菜单。
 func _on_input_activated(local_position: Vector2) -> void:
 	# 当前公开身份；hidden 表示该观察者尚未获得真实身份信息。
@@ -321,32 +333,33 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 角色卡背景；当前行动者略微提亮，帮助玩家定位回合归属。
-	var background_color: Color = Color("211d1af2") if not is_current_actor else Color("332b20f5")
+	var background_color: Color = BattleUIStyle.get_color("player_background") if not is_current_actor else BattleUIStyle.get_color("player_current_background")
 	if is_current_operator:
-		background_color = Color("463a28f7")
+		background_color = BattleUIStyle.get_color("player_operator_background")
 	# 角色卡边框；选中金色优先，其次合法青绿，最后使用统一暗金边框。
-	var border_color: Color = BattleUIStyle.GOLD_BORDER_COLOR
+	var border_color: Color = BattleUIStyle.get_color("border")
 	# 角色卡描边宽度；合法或选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 1
 	if is_target_selected:
-		border_color = BattleUIStyle.ACCENT_COLOR
+		border_color = BattleUIStyle.get_color("accent")
 		border_width = 3
 	elif is_current_actor:
-		border_color = BattleUIStyle.ACCENT_COLOR
+		border_color = BattleUIStyle.get_color("accent")
 		border_width = 3
 	elif is_legal_target:
-		border_color = BattleUIStyle.LEGAL_TARGET_COLOR
+		border_color = BattleUIStyle.get_color("legal_target")
 		border_width = 3
 	elif is_current_operator:
-		border_color = BattleUIStyle.LEGAL_TARGET_COLOR.lightened(0.12)
+		border_color = BattleUIStyle.get_color("legal_target").lightened(0.12)
 		border_width = 2
 	if not is_interactable:
-		background_color = Color("292724")
-		border_color = Color("544f49")
+		background_color = BattleUIStyle.get_color("player_disabled_background")
+		border_color = BattleUIStyle.get_color("player_disabled_border")
 		border_width = 1
 	# 角色卡最终样式；当前回合与操作状态只改变底色和边框，不绘制彩色外发光。
 	var player_style: StyleBoxFlat = _make_player_style(background_color, border_color, border_width)
 	_card_body.add_theme_stylebox_override("panel", player_style)
+	_refresh_card_back_style()
 	_card_back.visible = is_face_down
 	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
 
@@ -392,6 +405,8 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	var faction_short_name: String = str(_faction_definition.get("short_name", "?"))
 	# 势力主题颜色；配置无效时使用中性青灰色，避免数据错误中断牌面渲染。
 	var faction_color: Color = Color.from_string(str(_faction_definition.get("color", "526b70")), Color("526b70"))
+	if BattleUIStyle.is_monochrome():
+		faction_color = BattleUIStyle.get_color("faction_neutral")
 	# 公开身份 ID；其他玩家身份尚未公开时为 hidden。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 身份徽记单字；用于在窄牌面右上角保持可读。
@@ -403,9 +418,12 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 用于心形绘制的安全当前体力；限制在0至可视上限之间。
 	var safe_hp: int = clampi(hp, 0, max_hp)
 	_character_name_label.text = "\n".join(character_name.split(""))
+	_character_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_identity_badge_label.text = identity_text
 	_hover_player_name_label.text = str(_player_snapshot.get("display_name", "玩家"))
+	_hover_player_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
+	_hand_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
 	# 判定区公开数量；没有判定牌时不显示该摘要，避免覆盖装备横条和武将立绘。
@@ -426,6 +444,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	wooden_ox_count = maxi(wooden_ox_count, 0)
 	_public_zone_label.configure(judgment_names)
 	_faction_badge_label.text = faction_short_name
+	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_faction_badge_label.tooltip_text = faction_name
 	# 势力徽记样式；清空通用面板的大内边距，保证紧凑圆徽中的单字完整显示。
 	var faction_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(faction_color.darkened(0.28), faction_color.lightened(0.36), 1, 14)
@@ -442,12 +461,19 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	name_banner_style.content_margin_bottom = 1.0
 	_character_name_label.add_theme_stylebox_override("normal", name_banner_style)
 	# 手牌数角标样式；朱红底与金边对应参考图左下角的高对比数字徽记。
-	var hand_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("9e3528"), Color("f0ad36"), 1, 3)
+	var hand_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("hand_badge_background"), BattleUIStyle.get_color("hand_badge_border"), 1, 3)
 	hand_badge_style.content_margin_left = 0.0
 	hand_badge_style.content_margin_top = 0.0
 	hand_badge_style.content_margin_right = 0.0
 	hand_badge_style.content_margin_bottom = 0.0
 	_hand_count_label.add_theme_stylebox_override("normal", hand_badge_style)
+	# 体力框样式；背景与描边跟随主题，红黄绿体力圆点继续表达玩法语义。
+	var health_frame_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("health_frame_background"), BattleUIStyle.get_color("health_frame_border"), 1, roundi(health_frame_bottom_right_radius))
+	health_frame_style.content_margin_left = 2.0
+	health_frame_style.content_margin_top = 2.0
+	health_frame_style.content_margin_right = 2.0
+	health_frame_style.content_margin_bottom = 2.0
+	_health_frame_background.add_theme_stylebox_override("panel", health_frame_style)
 	_refresh_health_pips(safe_hp, max_hp)
 	_refresh_equipment_rows()
 	_refresh_identity_badge()
@@ -469,7 +495,7 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		health_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		health_number.add_theme_font_size_override("font_size", 10)
-		health_number.add_theme_color_override("font_color", Color("e7d59b"))
+		health_number.add_theme_color_override("font_color", _resolve_current_health_color(safe_hp, max_hp, BattleUIStyle.get_color("health_number")))
 		health_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_health_pip_container.add_child(health_number)
 		_layout_health_frame(true)
@@ -481,13 +507,26 @@ func _refresh_health_pips(safe_hp: int, max_hp: int) -> void:
 		health_pip.text = "●"
 		health_pip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_pip.add_theme_font_size_override("font_size", health_pip_font_size)
-		health_pip.add_theme_color_override("font_color", Color("26382c") if pip_index < max_hp - safe_hp else Color("44ca67"))
-		health_pip.add_theme_color_override("font_shadow_color", Color("07140a"))
+		health_pip.add_theme_color_override("font_color", BattleUIStyle.get_color("health_lost") if pip_index < max_hp - safe_hp else _resolve_current_health_color(safe_hp, max_hp))
+		health_pip.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("health_shadow"))
 		health_pip.add_theme_constant_override("shadow_offset_x", 1)
 		health_pip.add_theme_constant_override("shadow_offset_y", 1)
 		health_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_health_pip_container.add_child(health_pip)
 	_layout_health_frame(false)
+
+
+## 返回当前剩余体力使用的语义颜色；上限1或2永久保持绿色，其他角色在2点和1点时分别转为黄色与红色。
+func _resolve_current_health_color(safe_hp: int, max_hp: int, fallback_color: Color = Color.WHITE) -> Color:
+	if max_hp <= 0:
+		return fallback_color
+	if max_hp <= 2:
+		return BattleUIStyle.get_color("health_full")
+	if safe_hp <= 1:
+		return BattleUIStyle.get_color("health_danger")
+	if safe_hp == 2:
+		return BattleUIStyle.get_color("health_warning")
+	return BattleUIStyle.get_color("health_full")
 
 
 ## 按体力内容的真实字体排版尺寸调整梯形；不能只用字体字号估算，否则 VBoxContainer 的行高会从底边溢出。
@@ -550,10 +589,10 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.scroll_active = false
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		equipment_row.add_theme_font_size_override("normal_font_size", equipment_row_font_size)
-		equipment_row.add_theme_color_override("default_color", Color("33281e"))
+		equipment_row.add_theme_color_override("default_color", BattleUIStyle.get_color("equipment_text"))
 		# 装备横条样式；缩小内容边距以在固定60像素条宽内完整显示花色点数与短牌名。
 		# 当前横条已扩展到完整插画宽度，并在宝物名称后容纳木牛公开数量。
-		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(Color("dfd2adf2"), Color("8d7147"), 1, 3)
+		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("equipment_background"), BattleUIStyle.get_color("equipment_border"), 1, 3)
 		equipment_row_style.content_margin_left = 2.0
 		equipment_row_style.content_margin_top = 0.0
 		equipment_row_style.content_margin_right = 2.0
@@ -576,7 +615,7 @@ func _refresh_identity_badge() -> void:
 	var identity_text: String = {"lord":"主", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(identity, {"loyalist":"忠", "rebel":"反", "renegade":"内"}.get(_identity_mark, "？"))
 	_identity_badge_label.text = identity_text
 	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
-	var identity_color: Color = BattleUIStyle.ACCENT_COLOR if identity != "hidden" else (Color("8fd6c2") if not _identity_mark.is_empty() else Color("d8c8a8"))
+	var identity_color: Color = BattleUIStyle.get_color("accent") if identity != "hidden" else (BattleUIStyle.get_color("legal_target") if not _identity_mark.is_empty() else BattleUIStyle.get_color("text_secondary"))
 	_identity_badge_label.add_theme_color_override("font_color", identity_color)
 
 
@@ -585,6 +624,24 @@ func _refresh_hover_name_visibility() -> void:
 	if not is_node_ready() or _hover_name_shade == null:
 		return
 	_hover_name_shade.visible = _match_overlays_visible and _is_hovered
+
+
+## 刷新武将牌统一牌背配色；翻面状态只改变信息遮挡，不改变角色交互权限或规则状态。
+func _refresh_card_back_style() -> void:
+	if not is_node_ready() or _card_back == null:
+		return
+	# 武将牌背外框；与实体卡牌牌背共享主题语义但保持武将牌自身尺寸。
+	var card_back_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("card_back_background"), BattleUIStyle.get_color("border"), 2, 6)
+	_card_back.add_theme_stylebox_override("panel", card_back_style)
+	# 武将牌背中心面板；通过第二层近黑灰色维持太空舷窗式层次。
+	var card_back_center: Panel = _card_back.get_node("Center") as Panel
+	card_back_center.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("card_back_center"), BattleUIStyle.get_color("border"), 1, 5))
+	# 武将牌背主标题；保持高对比度但不显示任何角色信息。
+	var card_back_title: Label = _card_back.get_node("Title") as Label
+	card_back_title.add_theme_color_override("font_color", BattleUIStyle.get_color("card_back_title"))
+	# 武将牌背副标题；使用次级色维持主次关系。
+	var card_back_subtitle: Label = _card_back.get_node("Subtitle") as Label
+	card_back_subtitle.add_theme_color_override("font_color", BattleUIStyle.get_color("card_back_subtitle"))
 
 
 ## 将花色 ID 转换为装备横条使用的符号；无花色牌使用空心菱形保持位置稳定。

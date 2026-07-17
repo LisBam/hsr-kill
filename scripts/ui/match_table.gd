@@ -90,6 +90,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 卡牌使用动画层；独立绘制飞牌和目标指示线，不修改快照或提交动作。
 @onready var card_use_animation_layer: CardUseAnimationLayer = %CardUseAnimationLayer
 
+## 程序化牌桌背景组件；主题切换时只接收风格标识并重绘，不读取设置菜单或对局状态。
+@onready var reference_backdrop: ReferenceBackdrop = $ReferenceBackdrop
+
 ## 中央回合文本；显示回合编号与当前行动角色。
 @onready var center_turn_label: Label = %CenterTurnLabel
 
@@ -282,6 +285,7 @@ var _log_pause_token: int = -1
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
+	BattleUIStyle.set_active_style(GameSettings.ui_style_id)
 	_ensure_skill_button_grid()
 	_configure_local_card_areas()
 	_configure_interaction_controls()
@@ -297,6 +301,7 @@ func _ready() -> void:
 	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
+	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
@@ -312,6 +317,7 @@ func _ready() -> void:
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
 	match_menu.refresh_card_name_text()
+	_apply_ui_style()
 	call_deferred("_start_default_match")
 
 
@@ -402,7 +408,7 @@ func _configure_interaction_controls() -> void:
 		end_play_button.reparent(self)
 	end_play_button.visible = false
 	end_play_button.custom_minimum_size = END_PLAY_BUTTON_MINIMUM_SIZE
-	BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
+	BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 	end_play_button.anchor_left = 1.0
 	end_play_button.anchor_top = 1.0
 	end_play_button.anchor_right = 1.0
@@ -1136,6 +1142,8 @@ func _get_local_equipment_snapshot(card_uid: int) -> Dictionary:
 func _on_target_pressed(target_id: int) -> void:
 	if not _inline_card_choice.is_empty():
 		return
+	if _uses_rule_expanded_targets():
+		return
 	if target_id == _auto_locked_target_id:
 		return
 	if _selected_target_ids.has(target_id):
@@ -1162,6 +1170,8 @@ func _on_persistent_target_pressed(player_view: PlayerTargetView) -> void:
 
 ## 返回当前牌面可点击的合法目标；单目标牌保留空选择时的完整候选，支持一次点击直接切换目标。
 func _get_selectable_target_ids() -> Array[int]:
+	if _uses_rule_expanded_targets():
+		return []
 	# 当前预览给出的后续合法目标；多目标牌直接按已有选择继续追加。
 	var selectable_target_ids: Array[int] = []
 	selectable_target_ids.assign(_card_use_preview.get("legal_target_ids", []) as Array)
@@ -1173,6 +1183,13 @@ func _get_selectable_target_ids() -> Array[int]:
 	var replacement_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, [])
 	selectable_target_ids.assign(replacement_preview.get("legal_target_ids", []) as Array)
 	return selectable_target_ids
+
+
+## 返回当前卡牌是否由规则层自动展开全体目标；此类牌不开放武将牌点击、拖放或手动高亮入口。
+func _uses_rule_expanded_targets() -> bool:
+	if _selected_card_uid < 0 or not _active_equipment_action.is_empty():
+		return false
+	return str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"]
 
 
 ## 拖动卡牌开始时同步选牌状态，使目标组件立即展示该牌的合法投放区域。
@@ -1193,6 +1210,8 @@ func _on_card_dropped(card_uid: int, target_id: int) -> void:
 		return
 	if _selected_card_uid != card_uid:
 		_on_card_pressed(card_uid)
+	if _uses_rule_expanded_targets():
+		return
 	if not _selected_target_ids.has(target_id):
 		_on_target_pressed(target_id)
 
@@ -1348,6 +1367,58 @@ func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 		_render_local_hand()
 		_refresh_selection_text()
 		_refresh_card_selection_panel()
+
+
+## 响应全局 UI 风格变化；设置层只发送稳定标识，桌面负责通知各独立表现组件重绘。
+func _on_ui_style_changed(style_id: String) -> void:
+	BattleUIStyle.set_active_style(style_id)
+	_apply_ui_style()
+
+
+## 把当前活动风格应用到桌面静态控件与可复用动态组件；不重建对局、不提交动作也不修改规则快照。
+func _apply_ui_style() -> void:
+	if not is_node_ready():
+		return
+	reference_backdrop.apply_ui_style(BattleUIStyle.get_active_style_id())
+	($Background as ColorRect).color = BattleUIStyle.get_color("outer_background")
+	($BackdropShade as ColorRect).color = Color(BattleUIStyle.get_color("outer_background"), 0.10)
+	($TableOrnament as TextureRect).modulate = Color(BattleUIStyle.get_color("ornament"), 0.12)
+	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	match_menu.refresh_ui_style()
+	BattleUIStyle.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	($LogPanel/LogContentPanel/LogVBox/LogTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	log_view.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
+	interaction_guide_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+	selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	error_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
+	BattleUIStyle.apply_interaction_button(use_button)
+	BattleUIStyle.apply_interaction_button(%CancelButton)
+	_refresh_group_trick_response_button()
+	card_selection_panel.refresh_ui_style()
+	character_selection_panel.refresh_ui_style()
+	card_use_animation_layer.target_line_color = BattleUIStyle.get_color("target_line")
+	equipment_label.refresh_ui_style()
+	for card_view_variant: Variant in _card_views.values():
+		# 当前正式手牌视图；主题刷新不能改变实体 UID、输入权限或选中状态。
+		var card_view: CardView = card_view_variant as CardView
+		if card_view != null and is_instance_valid(card_view):
+			card_view.refresh_ui_style()
+	for player_view_variant: Variant in _player_views.values():
+		# 当前对手武将牌；主题刷新保留目标合法性、选中状态和受伤反馈基线。
+		var player_view: PlayerTargetView = player_view_variant as PlayerTargetView
+		if player_view != null and is_instance_valid(player_view):
+			player_view.refresh_ui_style()
+	if local_player_card != null and is_instance_valid(local_player_card):
+		local_player_card.refresh_ui_style()
+	for skill_view_variant: Variant in _skill_views.values():
+		# 当前技能按钮；只更新颜色，不重新判断规则可用性。
+		var skill_view: SkillButtonView = skill_view_variant as SkillButtonView
+		if skill_view != null and is_instance_valid(skill_view):
+			skill_view.refresh_ui_style()
 
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
@@ -2097,15 +2168,15 @@ func _refresh_group_trick_response_button() -> void:
 		return
 	if not _has_group_trick_response_button_context():
 		end_play_button.text = "回合结束"
-		BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
+		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 		return
 	end_play_button.visible = true
 	end_play_button.disabled = false
 	end_play_button.text = "不响应该锦囊"
 	if _suppressed_group_trick_uid >= 0:
-		BattleUIStyle.apply_interaction_button(end_play_button, SUPPRESSED_TRICK_BUTTON_COLOR, SUPPRESSED_TRICK_BUTTON_BORDER_COLOR, false)
+		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("suppressed_button", SUPPRESSED_TRICK_BUTTON_COLOR), BattleUIStyle.get_color("suppressed_border", SUPPRESSED_TRICK_BUTTON_BORDER_COLOR), false)
 	else:
-		BattleUIStyle.apply_interaction_button(end_play_button, END_PLAY_BUTTON_COLOR, END_PLAY_BUTTON_BORDER_COLOR, true)
+		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 
 
 ## 判断当前选中实体牌是否位于普通手牌区；木牛流马“粮”不属于可重铸来源。

@@ -19,13 +19,13 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 @export_range(360.0, 680.0, 1.0) var panel_max_height: float = 590.0
 
 ## 全屏背景滤镜颜色；默认沿用深色强遮罩，正式主场景可在检查器中覆盖为更浅透明度。
-@export var shade_color: Color = Color(0.01, 0.008, 0.006, 0.78)
+@export var shade_color: Color = Color("010205dc")
 
 ## 已领取公共牌的复制虚影调制色；默认保留48%透明度，确保原始牌面仍可辨认但不会与剩余候选混淆。
 @export var taken_card_ghost_modulate: Color = Color(0.72, 0.72, 0.72, 0.48)
 
 ## 已领取牌底部武将名标签背景色；默认使用高不透明暖黑色保证浅色牌面上的文字可读。
-@export var taken_card_label_background_color: Color = Color("241c18e8")
+@export var taken_card_label_background_color: Color = Color("11151de8")
 
 ## 已领取牌底部武将名标签矩形；固定贴合111×148像素牌面的下沿，不改变牌位尺寸或换行结果。
 const TAKEN_CARD_LABEL_RECT: Rect2 = Rect2(4.0, 118.0, 103.0, 26.0)
@@ -90,6 +90,12 @@ var _cancel_button: Button
 ## 底部操作行；公共展示对非选择者保持隐藏，避免只读窗口出现无效按钮占位。
 var _action_row: HBoxContainer
 
+## 当前动态区域标题标签；主题切换时只重绘颜色，不重建候选牌或清空玩家选择。
+var _section_labels: Array[Label] = []
+
+## 当前公共牌领取者标签；主题切换时同步文字与背景描边，固定牌位和归属数据保持不变。
+var _owner_labels: Array[Label] = []
+
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
@@ -97,12 +103,12 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shade = ColorRect.new()
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_shade.color = shade_color
+	_shade.color = BattleUIStyle.get_color("shade", shade_color)
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_shade)
 	_frame = PanelContainer.new()
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color("201b18"), Color("c5a05a"), 2, 6))
+	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	add_child(_frame)
 	# 选择框主列；标题、提示、滚动分区和操作按钮从上到下排列。
 	var content: VBoxContainer = VBoxContainer.new()
@@ -110,11 +116,11 @@ func _ready() -> void:
 	_frame.add_child(content)
 	_title_label = Label.new()
 	_title_label.add_theme_font_size_override("font_size", 22)
-	_title_label.add_theme_color_override("font_color", Color("efd07c"))
+	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(_title_label)
 	_prompt_label = Label.new()
-	_prompt_label.add_theme_color_override("font_color", Color("d7d0c2"))
+	_prompt_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(_prompt_label)
@@ -147,6 +153,31 @@ func _ready() -> void:
 	visible = false
 
 
+## 按当前活动 UI 风格重绘选择窗口；请求、候选、固定牌位和临时选中顺序保持不变。
+func refresh_ui_style() -> void:
+	if not is_node_ready():
+		return
+	shade_color = BattleUIStyle.get_color("shade", shade_color)
+	taken_card_label_background_color = BattleUIStyle.get_color("taken_label_background", taken_card_label_background_color)
+	_shade.color = shade_color
+	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_prompt_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	BattleUIStyle.apply_interaction_button(_confirm_button)
+	BattleUIStyle.apply_interaction_button(_cancel_button)
+	for section_label: Label in _section_labels:
+		if section_label != null and is_instance_valid(section_label):
+			section_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
+	for owner_label: Label in _owner_labels:
+		if owner_label != null and is_instance_valid(owner_label):
+			_apply_owner_label_style(owner_label)
+	for card_view_variant: Variant in _card_views.values():
+		# 当前候选牌面；只刷新主题色，不改变是否可选或复制虚影状态。
+		var card_view: CardView = card_view_variant as CardView
+		if card_view != null and is_instance_valid(card_view):
+			card_view.refresh_ui_style()
+
+
 ## 显示一条规则层选择请求；重复调用会完整替换旧候选和本地临时选择。
 func show_request(choice_request: Dictionary) -> void:
 	_choice_request = choice_request.duplicate(true)
@@ -154,6 +185,8 @@ func show_request(choice_request: Dictionary) -> void:
 	_selected_card_uids.clear()
 	_card_views.clear()
 	_selectable_card_uids.clear()
+	_section_labels.clear()
+	_owner_labels.clear()
 	_clear_container(_zone_container)
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
@@ -185,6 +218,8 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_selected_card_uids.clear()
 	_card_views.clear()
 	_selectable_card_uids.clear()
+	_section_labels.clear()
+	_owner_labels.clear()
 	_clear_container(_zone_container)
 	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
 	var display_slot_count: int = (_public_display.get("slots", []) as Array).size()
@@ -238,9 +273,10 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	# 区域标题；使用规则区名称而不是技术字符串。
 	var zone_label: Label = Label.new()
 	zone_label.text = {"hand":"手牌区", "equipment":"装备区", "judgment":"判定区", "processing":"展示区"}.get(zone, zone)
-	zone_label.add_theme_color_override("font_color", Color("9ed3c3"))
+	zone_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
 	zone_label.add_theme_font_size_override("font_size", 16)
 	section.add_child(zone_label)
+	_section_labels.append(zone_label)
 	# 横向牌列；每张 Node2D 牌面由固定尺寸 Control 包装，避免动态内容改变布局。
 	var card_row: HFlowContainer = HFlowContainer.new()
 	card_row.add_theme_constant_override("h_separation", 8)
@@ -315,15 +351,21 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	owner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	owner_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	owner_label.add_theme_font_size_override("font_size", 13)
-	owner_label.add_theme_color_override("font_color", Color("f4dda2"))
-	# 标签背景样式；使用1像素亮金描边把归属信息与牌面底部文字区分开。
-	var owner_style: StyleBoxFlat = BattleUIStyle.make_panel(taken_card_label_background_color, BattleUIStyle.ACCENT_COLOR, 1, 3)
+	_apply_owner_label_style(owner_label)
+	wrapper.add_child(owner_label)
+	_owner_labels.append(owner_label)
+
+
+## 为公共牌领取者标签应用当前主题；该入口只处理配色与边距，不读取领取者数据。
+func _apply_owner_label_style(owner_label: Label) -> void:
+	owner_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	# 标签背景样式；使用1像素主题强调描边把归属信息与牌面底部文字区分开。
+	var owner_style: StyleBoxFlat = BattleUIStyle.make_panel(taken_card_label_background_color, BattleUIStyle.get_color("accent"), 1, 3)
 	owner_style.content_margin_left = 2.0
 	owner_style.content_margin_top = 0.0
 	owner_style.content_margin_right = 2.0
 	owner_style.content_margin_bottom = 0.0
 	owner_label.add_theme_stylebox_override("normal", owner_style)
-	wrapper.add_child(owner_label)
 
 
 ## 切换一张候选牌的本地选择状态，并遵守请求最大选择数量。

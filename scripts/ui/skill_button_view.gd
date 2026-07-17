@@ -74,13 +74,18 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 技能背景色；可发动技能使用青绿色，预留技能使用低饱和木褐色。
-	var background_color: Color = Color("315d51") if is_skill_available else Color("413931")
+	var background_color: Color = BattleUIStyle.get_color("skill_available_background") if is_skill_available else BattleUIStyle.get_color("skill_idle_background")
 	# 技能边框色；选中状态优先使用金色，否则按可用状态区分。
-	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_skill_selected else (BattleUIStyle.LEGAL_TARGET_COLOR if is_skill_available else Color("81715d"))
+	var border_color: Color = BattleUIStyle.get_color("accent") if is_skill_selected else (BattleUIStyle.get_color("legal_target") if is_skill_available else BattleUIStyle.get_color("skill_idle_border"))
 	# 技能描边宽度；选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 3 if is_skill_selected else 1
-	add_theme_color_override("font_color", Color("f0e5d1") if is_skill_available else Color("c2b5a3"))
-	add_theme_color_override("font_hover_color", Color("fff2d2"))
+	add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if is_skill_available else BattleUIStyle.get_color("text_secondary"))
+	add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9))
-	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.ACCENT_COLOR, 3, 9))
+	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.get_color("accent"), 3, 9))
+
+
+## 按当前活动 UI 风格重绘技能按钮；技能定义、可发动状态与选中状态保持不变。
+func refresh_ui_style() -> void:
+	_refresh_visual_state()

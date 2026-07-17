@@ -33,6 +33,9 @@ signal restart_requested(player_count: int)
 ## AI 响应时间标签；同步显示当前滑条的实际秒数，避免“速度”设置缺少可预期的时间含义。
 @onready var _ai_response_delay_label: Label = %AiResponseDelayLabel
 
+## UI 风格下拉框；选项来自统一注册表，元数据保存稳定风格标识而不是显示文字。
+@onready var _ui_style_option: OptionButton = %UiStyleOption
+
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
@@ -55,9 +58,14 @@ func _ready() -> void:
 	_ai_response_delay_slider.value = GameSettings.ai_response_delay_seconds
 	_ai_response_delay_slider.value_changed.connect(_on_ai_response_delay_changed)
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
+	_populate_ui_style_options()
+	_ui_style_option.item_selected.connect(_on_ui_style_selected)
+	GameSettings.ui_style_changed.connect(_refresh_ui_style_selection)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
+	_refresh_ui_style_selection(GameSettings.ui_style_id)
+	refresh_ui_style()
 
 
 ## 在父节点完成子节点初始化后提升菜单分支顺序；绘制层级与真实 GUI 命中顺序由同一入口保持一致。
@@ -84,6 +92,51 @@ func refresh_card_name_text() -> void:
 	if not is_node_ready():
 		return
 	_card_name_button.text = "卡牌名称：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "卡牌名称：三国杀"
+
+
+## 使用当前活动主题刷新菜单面板、按钮与文字；该组件不保存任何颜色副本。
+func refresh_ui_style() -> void:
+	if not is_node_ready():
+		return
+	_menu_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	BattleUIStyle.apply_interaction_button(_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_card_name_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_restart_button)
+	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_ui_style_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+
+
+## 从注册表构建 UI 风格选项；菜单显示名称可以调整，选中行为始终依赖稳定风格标识。
+func _populate_ui_style_options() -> void:
+	_ui_style_option.clear()
+	for style_id: String in UIStyleRegistry.get_style_ids():
+		# 新选项索引；写入元数据后无需通过中文名称反向解析风格。
+		var option_index: int = _ui_style_option.item_count
+		_ui_style_option.add_item(UIStyleRegistry.get_display_name(style_id))
+		_ui_style_option.set_item_metadata(option_index, style_id)
+
+
+## 按全局设置同步下拉框选中项；使用无信号选择避免主题刷新再次写入相同设置。
+func _refresh_ui_style_selection(style_id: String) -> void:
+	if not is_node_ready():
+		return
+	# 已规范化风格标识；未知旧设置会稳定显示默认项。
+	var normalized_style_id: String = UIStyleRegistry.normalize_style_id(style_id)
+	for option_index: int in range(_ui_style_option.item_count):
+		if str(_ui_style_option.get_item_metadata(option_index)) == normalized_style_id:
+			_ui_style_option.select(option_index)
+			return
+
+
+## 把玩家选择的稳定风格标识写入全局设置；桌面订阅变化信号后统一刷新全部组件。
+func _on_ui_style_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _ui_style_option.item_count:
+		return
+	GameSettings.set_ui_style(str(_ui_style_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。
