@@ -201,6 +201,21 @@ var _judgment_resume_needs_result_pause: bool = false
 ## 对局级暂停在事件运行时持有的全局 token；-1表示当前没有同步阻塞事件栈。
 var _gameplay_event_pause_token: int = -1
 
+## 等待执行的额外完整回合角色队列；角色 ID 按技能结算顺序追加，死亡角色在执行前安全跳过。
+var _extra_turn_queue: Array[int] = []
+
+## 额外回合结束后需要恢复的原行动角色栈；最外层记录原当前角色的正常下家。
+var _extra_turn_resume_player_ids: Array[int] = []
+
+## 当前回合是否属于额外回合；用于阻止额外回合结束时错误按该角色座次推进正常轮转。
+var _current_turn_is_extra: bool = false
+
+## 每名角色等待执行的额外出牌阶段数量；键为玩家 ID，值为尚未消费的正整数次数。
+var _extra_play_phase_counts: Dictionary = {}
+
+## 因结束阶段技能选择而暂停收尾的当前角色 ID；选择全部完成后从唯一尾部入口继续正常或额外回合轮转。
+var _pending_finish_turn_player_id: int = -1
+
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
 func _ready() -> void:
@@ -308,6 +323,11 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		return false
 	_uninstall_all_character_skills()
 	_uninstall_all_card_runtimes()
+	_extra_turn_queue.clear()
+	_extra_turn_resume_player_ids.clear()
+	_current_turn_is_extra = false
+	_extra_play_phase_counts.clear()
+	_pending_finish_turn_player_id = -1
 
 	if seed == 0:
 		_rng.randomize()
@@ -1278,6 +1298,12 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 			_resume_interrupted_turn_flow()
 	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
 	event_scheduler.drain()
+	# 结束阶段技能可能通过统一选择请求暂停回合收尾；最后一个选择完成后再清理回合状态并推进队列。
+	if _pending_finish_turn_player_id >= 0 and not has_pending_card_choice():
+		var finishing_player_id: int = _pending_finish_turn_player_id
+		_pending_finish_turn_player_id = -1
+		_complete_finish_turn(finishing_player_id)
+		return true
 	if bool(completed_choice.get("deferred", false)):
 		# 新的 chooseToUse 必须等原 CardUseEvent 及其后续目标全部排空后再创建，避免后续响应覆盖已经提前发布的出牌请求快照。
 		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
@@ -2913,6 +2939,37 @@ func get_other_alive_player_ids(excluded_player_id: int) -> Array[int]:
 		if player.alive and player.player_id != excluded_player_id:
 			result.append(player.player_id)
 	return result
+
+
+## 将指定存活角色加入额外完整回合队列；技能侧应通过 `who.addPhase()` 调用本端口。
+func add_phase(player_id: int, reason: String = "") -> bool:
+	# 获得额外回合的角色；失效、阵亡或离场角色不能进入后续行动队列。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game or state.game_over:
+		return false
+	_extra_turn_queue.append(player_id)
+	add_log("%s获得了一个额外的回合%s。" % [player.display_name, "（%s）" % reason if not reason.is_empty() else ""])
+	return true
+
+
+## 为指定角色排队一个额外出牌阶段；仅允许当前回合角色为自己追加，避免跨回合阶段状态互相覆盖。
+func add_play_phase(player_id: int, reason: String = "") -> bool:
+	# 获得额外出牌阶段的角色；必须仍处于自己的出牌阶段，追加阶段会在当前阶段结束后立即执行。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or state.game_over or state.current_player_id != player_id or state.current_phase != "play":
+		return false
+	_extra_play_phase_counts[player_id] = int(_extra_play_phase_counts.get(player_id, 0)) + 1
+	add_log("%s获得了一个额外的出牌阶段%s。" % [player.display_name, "（%s）" % reason if not reason.is_empty() else ""])
+	return true
+
+
+## 结束当前出牌阶段；武将技能通过该公开端口实现“跳过出牌阶段”，不直接调用控制器私有流程。
+func end_current_play_phase(player_id: int) -> bool:
+	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "play":
+		return false
+	_cancel_active_play_choice("skill_ended_play_phase")
+	_end_play_phase(player_id)
+	return true
 
 
 ## 返回一名玩家装备区的公开候选快照；可选槽位列表为空时按标准顺序返回全部装备。
@@ -4596,6 +4653,15 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true) -> void:
 	_ai_drive_token += 1
 	if complete_use_phase:
 		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	# 等待中的额外出牌阶段；当前阶段必须先完整结束，再重新建立独立的 phaseUse 生命周期与出牌请求。
+	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
+	if pending_extra_play_phases > 0:
+		if pending_extra_play_phases == 1:
+			_extra_play_phase_counts.erase(player_id)
+		else:
+			_extra_play_phase_counts[player_id] = pending_extra_play_phases - 1
+		_start_extra_play_phase(player_id)
+		return
 	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"play", "to_phase":"discard"}, _current_turn_event_id)
 	state.current_phase = "discard"
 	state.phase_index = 4
@@ -4621,6 +4687,30 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true) -> void:
 			discard_card_from_hand(player_id, selected_uid)
 		add_log("%s在弃牌阶段弃置了%d张手牌。" % [player.display_name, selected_uids.size()])
 	_finish_turn(player_id)
+
+
+## 为当前回合角色开始一个独立的额外出牌阶段；阶段次数、【杀】次数与技能阶段计数都从新阶段重新计算。
+func _start_extra_play_phase(player_id: int) -> void:
+	# 额外阶段角色；角色在阶段交界死亡时不再继续行动，统一交给死亡后的回合转交入口。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		_advance_after_current_player_death(player_id)
+		return
+	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"play", "to_phase":"play", "extra_phase":true}, _current_turn_event_id)
+	state.current_phase = "play"
+	state.phase_index = 3
+	# 【杀】的基础限制按出牌阶段计算；额外出牌阶段必须恢复为0，不能沿用本回合前一阶段的次数。
+	player.slash_count = 0
+	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true}, {}, _current_turn_event_id)
+	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id):
+		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id)
+		_end_play_phase(player_id, false)
+		return
+	add_log("%s开始执行额外的出牌阶段。" % player.display_name)
+	_begin_play_choice(player_id)
+	_emit_state()
+	if ai_coordinator.is_ai_controlled(player_id):
+		_schedule_ai_action()
 
 
 ## 恢复玩家提交的弃牌阶段选择；全部 UID 校验成功后结束当前回合。
@@ -4655,6 +4745,14 @@ func _finish_turn(player_id: int) -> void:
 	_record_runtime_event("phaseEnd", "phase", {"player_id":player_id})
 	_emit_rule_timing("phaseEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	_dispatch_rule_event(RuleEvent.new("phase_finish", player_id, player_id, {}))
+	if has_pending_card_choice():
+		_pending_finish_turn_player_id = player_id
+		return
+	_complete_finish_turn(player_id)
+
+
+## 完成已经派发过 phaseEnd 的回合尾部；结束阶段异步技能恢复时只进入本函数，避免重复触发结束时机。
+func _complete_finish_turn(player_id: int) -> void:
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
@@ -4662,21 +4760,46 @@ func _finish_turn(player_id: int) -> void:
 	_check_game_over()
 	if state.game_over:
 		return
-	# 下一名存活玩家；身份局至少有两人存活时继续正常轮转。
-	var next_player: PlayerState = state.get_next_alive_player(player_id)
-	if next_player != null:
-		_start_turn(next_player.player_id)
+	_start_queued_or_normal_turn(player_id)
+
+
+## 在回合结束后优先执行额外回合，并在全部额外回合完成后恢复原本的正常下家。
+func _start_queued_or_normal_turn(finished_player_id: int) -> void:
+	# 当前正常轮转的下家；只有从普通回合第一次进入额外回合链时才压入恢复栈。
+	var normal_next_player: PlayerState = state.get_next_alive_player(finished_player_id)
+	while not _extra_turn_queue.is_empty():
+		# 队首额外回合角色；等待期间死亡或离场时直接跳过，不影响后续队列与正常下家。
+		var extra_player_id: int = _extra_turn_queue.pop_front()
+		var extra_player: PlayerState = state.get_player(extra_player_id)
+		if extra_player == null or not extra_player.alive or extra_player.out_of_game:
+			continue
+		if not _current_turn_is_extra:
+			_extra_turn_resume_player_ids.append(normal_next_player.player_id if normal_next_player != null else -1)
+		_current_turn_is_extra = true
+		_start_turn(extra_player_id)
+		return
+	if _current_turn_is_extra:
+		# 额外回合链的恢复角色；栈为空时防御性回退到当前角色的正常下家。
+		var resume_player_id: int = _extra_turn_resume_player_ids.pop_back() if not _extra_turn_resume_player_ids.is_empty() else -1
+		_current_turn_is_extra = not _extra_turn_resume_player_ids.is_empty()
+		var resume_player: PlayerState = state.get_player(resume_player_id) if resume_player_id >= 0 else null
+		if resume_player == null or not resume_player.alive or resume_player.out_of_game:
+			resume_player = state.get_next_alive_player(resume_player_id if resume_player_id >= 0 else finished_player_id)
+		if resume_player != null:
+			_start_turn(resume_player.player_id)
+		return
+	if normal_next_player != null:
+		_start_turn(normal_next_player.player_id)
 
 
 ## 当前回合角色在事件结算中死亡后转交回合；不触发正常结束阶段，但会清除只持续到本回合的酒加值。
 func _advance_after_current_player_death(dead_player_id: int) -> void:
 	_ai_drive_token += 1
+	_extra_play_phase_counts.erase(dead_player_id)
 	_emit_rule_timing("phaseOver", dead_player_id, dead_player_id, dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number}, _current_turn_event_id)
 	_notify_card_definitions_turn_ended(dead_player_id, true)
-	# 下名存活玩家；死者仍保留稳定座次 ID，环形查询会自动跳过其状态。
-	var next_player: PlayerState = state.get_next_alive_player(dead_player_id)
-	if next_player != null:
-		_start_turn(next_player.player_id)
+	# 死亡回合仍需遵守已经排队的额外回合与额外回合链恢复顺序。
+	_start_queued_or_normal_turn(dead_player_id)
 
 
 ## 依次请求所有存活角色使用卡牌源码声明的濒死救援牌；已询问名单保证异步取消后不会重复询问同一角色。
