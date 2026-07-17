@@ -125,6 +125,12 @@ var _is_driving_character_selection: bool = false
 ## 当前等待提交的统一选牌请求；空字典表示没有响应、弃牌或区域选牌窗口。
 var _pending_card_choice: Dictionary = {}
 
+## 当前同时等待的无懈可击请求；键为请求 ID，值为该玩家的私有候选与可序列化恢复上下文。
+var _pending_negation_choices: Dictionary = {}
+
+## 当前无懈可击同时响应轮次序号；每创建一轮递增，用于让迟到 AI 任务安全失效。
+var _negation_round_sequence: int = 0
+
 ## 最近一次同步完成请求所选择的实体牌 UID；只供无交互测试与兼容回退在当前调用栈读取，正式 AI 请求始终异步恢复。
 var _resolved_card_choice_uids: Array[int] = []
 
@@ -258,6 +264,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_scheduled_ai_choice_request_id = -1
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
+	_pending_negation_choices.clear()
+	_negation_round_sequence = 0
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
 	_negation_resume_results.clear()
@@ -339,8 +347,12 @@ func submit_action(action: PlayerAction) -> bool:
 		var choice_action: PlayerAction = PlayerAction.new("choose_cards", choice_response.actor_id)
 		choice_action.client_sequence = choice_response.client_sequence
 		choice_action.payload = {"request_id":choice_response.request_id, "event_id":choice_response.event_id, "selected_card_uids":choice_response.card_ids.duplicate()}
+		if _pending_negation_choices.has(choice_response.request_id):
+			return _submit_simultaneous_negation_choice(choice_action)
 		return _submit_card_choice(choice_action)
 	if action.action_type == "choose_cards":
+		if _pending_negation_choices.has(int(action.payload.get("request_id", -1))):
+			return _submit_simultaneous_negation_choice(action)
 		return _submit_card_choice(action)
 	if action.actor_id != state.current_player_id:
 		return _reject("行动者不是当前回合玩家。")
@@ -564,7 +576,7 @@ func _get_play_phase_equipment_action_definition(player_id: int, action_type: St
 
 ## 返回当前是否存在等待玩家或 AI 提交的选择窗口；效果执行器据此暂停后续结算。
 func has_pending_card_choice() -> bool:
-	return not _pending_card_choice.is_empty()
+	return not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty()
 
 
 ## 为当前角色创建可持续的 chooseToUse 请求；候选只包含当前仍可使用或重铸的实体牌 UID。
@@ -681,7 +693,7 @@ func _prevalidate_play_action(action: PlayerAction) -> String:
 
 ## 创建统一选牌请求；AI 与本地玩家收到完全相同的候选快照，并通过 choose_cards 动作提交结果。
 func request_card_choice(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary) -> Array[int]:
-	if state == null or state.game_over or not _pending_card_choice.is_empty():
+	if state == null or state.game_over or not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty():
 		return []
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
@@ -1223,20 +1235,7 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	if allowed_patterns.is_empty():
 		return null
 	# 可响应候选；手牌与木牛“粮”都按实际 UID 提供给本人，规则定义决定是否匹配响应模式。
-	var candidates: Array[Dictionary] = []
-	for card: CardInstance in player.get_playable_cards():
-		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
-		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-		if allowed_patterns.has(_get_provided_response_pattern(definition)):
-			candidates.append(_serialize_choice_candidate(card, player_id, card.zone, true))
-	# 装备响应候选；每件装备源码自行判断响应模式和材料条件。
-	for equipment_variant: Variant in player.equipment.values():
-		# 当前装备实体；候选只作为发动入口，不会离开装备区。
-		var equipment_card: CardInstance = equipment_variant as CardInstance
-		# 当前装备定义；定义钩子返回 true 时加入同一响应窗口。
-		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
-		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player_id, allowed_patterns):
-			candidates.append(_serialize_choice_candidate(equipment_card, player_id, "equipment", true, str(GameDatabase.get_card(equipment_card.definition_id).get("slot", ""))))
+	var candidates: Array[Dictionary] = _build_response_choice_candidates(player, allowed_patterns)
 	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
@@ -1245,6 +1244,28 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	if has_pending_card_choice() or selected_uids.is_empty():
 		return null
 	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns, _resolved_equipment_material_uids)
+
+
+## 构造指定玩家在同一响应模式集合下的私有候选；普通逐人响应与无懈同时响应共用此入口。
+func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Array[String]) -> Array[Dictionary]:
+	# 可序列化候选结果；只包含响应者本人可见的实体牌与公开装备入口。
+	var candidates: Array[Dictionary] = []
+	if player == null or not player.alive:
+		return candidates
+	for card: CardInstance in player.get_playable_cards():
+		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
+		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+		if allowed_patterns.has(_get_provided_response_pattern(definition)):
+			candidates.append(_serialize_choice_candidate(card, player.player_id, card.zone, true))
+	# 装备响应候选；每件装备源码自行判断响应模式和材料条件。
+	for equipment_variant: Variant in player.equipment.values():
+		# 当前装备实体；候选只作为发动入口，不会离开装备区。
+		var equipment_card: CardInstance = equipment_variant as CardInstance
+		# 当前装备定义；定义钩子返回 true 时加入同一响应窗口。
+		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
+		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player.player_id, allowed_patterns):
+			candidates.append(_serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, str(GameDatabase.get_card(equipment_card.definition_id).get("slot", ""))))
+	return candidates
 
 
 ## 按选择请求提交的 UID 消耗响应牌；再次校验区域和响应模式后进入弃牌堆并播放动画。
@@ -1344,40 +1365,305 @@ func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counte
 
 
 ## 从当前游标继续询问无懈可击；返回 pending 表示等待选择，返回完成结果表示本轮所有角色均已放弃。
+## 并行响应补充：正式对局会在同一轮为全部存活玩家登记请求，最先提交合法无懈的玩家取得本轮结算权。
 func _advance_trick_negation_chain(context: Dictionary) -> Dictionary:
-	# 固定行动顺序玩家 ID；每次成功无懈会把游标归零，但不会改变本次目标的座次基准。
+	if state == null or state.game_over:
+		return {"pending":false, "negated":bool(context.get("negated", false))}
+	if not _pending_negation_choices.is_empty():
+		return {"pending":true, "negated":bool(context.get("negated", false))}
+	# 无正式对局 ID 的规则测试无法等待真实输入；使用行动顺序作为同帧响应的稳定裁决顺序。
+	if state.match_id.is_empty():
+		return _resolve_simultaneous_negation_synchronously(context)
+	_begin_simultaneous_negation_round(context)
+	return {"pending":not _pending_negation_choices.is_empty(), "negated":bool(context.get("negated", false))}
+
+
+## 在无交互规则测试中同步完成无懈链；每轮仍检查全部存活角色，但同帧并列响应按固定行动顺序裁决。
+func _resolve_simultaneous_negation_synchronously(context: Dictionary) -> Dictionary:
+	# 固定行动顺序玩家 ID；仅作为同步环境无法表达网络到达时间时的稳定平局规则。
 	var response_order_ids: Array = context.get("response_order_ids", []) as Array
-	# 当前轮下一名待询问角色索引；成功无懈后从0重新开始，放弃后递增。
-	var response_index: int = int(context.get("response_index", 0))
-	while response_index < response_order_ids.size() and not state.game_over:
-		# 当前候选响应者；死亡或已经没有无懈可击时直接越过，不创建空窗口。
-		var responder_id: int = int(response_order_ids[response_index])
-		var responder: PlayerState = state.get_player(responder_id)
-		if responder == null or not responder.alive or not _player_has_response_pattern(responder, "wuxie"):
-			response_index += 1
-			context["response_index"] = response_index
-			continue
-		context["responder_id"] = responder_id
-		context["response_index"] = response_index
-		context["ai_prefer_select"] = _should_auto_negate(responder, int(context.get("source_id", -1)), int(context.get("target_id", -1)), str(context.get("trick_id", "")), bool(context.get("negated", false)))
-		# 当前目标说明；无懈可击的使用目标是即将对这一名角色生效的锦囊效果，而不是整张多目标牌。
-		var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
-		# 当前目标显示名；延时锦囊或异常状态找不到玩家时使用通用描述。
-		var target_name: String = target.display_name if target != null else "当前目标"
-		# 当前响应实体；同步规则测试可能直接返回，正式本地、AI与网络对局会创建异步请求。
-		var response_card: CardInstance = request_response_card(responder_id, "wuxie", "是否使用【无懈可击】令锦囊对%s的效果%s？" % [target_name, "恢复生效" if bool(context.get("negated", false)) else "无效"], context)
-		if has_pending_card_choice():
-			return {"pending":true, "negated":bool(context.get("negated", false))}
-		if response_card != null:
+	while not state.game_over:
+		# 当前轮是否已经有玩家实际使用无懈；成功后立即进入下一轮反无懈。
+		var round_responded: bool = false
+		for responder_id_variant: Variant in response_order_ids:
+			# 当前同时被询问玩家；死亡角色不会进入候选构造或响应消费。
+			var responder_id: int = int(responder_id_variant)
+			# 当前响应者状态；同步规则测试仍使用与正式对局一致的 AI 收益判断。
+			var responder: PlayerState = state.get_player(responder_id)
+			if responder == null or not responder.alive or not _should_auto_negate(responder, int(context.get("source_id", -1)), int(context.get("target_id", -1)), str(context.get("trick_id", "")), bool(context.get("negated", false))):
+				continue
+			# 当前响应者私有候选；只消费规则声明为 wuxie 的首张合法实体。
+			var candidates: Array[Dictionary] = _build_response_choice_candidates(responder, ["wuxie"])
+			if candidates.is_empty():
+				continue
+			# 当前实际响应牌；等待期间区域不变化的同步环境仍通过统一消费入口复核。
+			var counter_card: CardInstance = _consume_response_card_uid(responder_id, int(candidates[0].get("uid", -1)), "wuxie")
+			if counter_card == null:
+				continue
 			context["negated"] = not bool(context.get("negated", false))
-			context["response_index"] = 0
-			_record_wuxie_chain_response(context, responder_id, response_card)
+			_record_wuxie_chain_response(context, responder_id, counter_card)
 			add_log("%s使用【无懈可击】，当前锦囊%s。" % [responder.display_name, "被抵消" if bool(context.get("negated", false)) else "恢复生效"])
-			response_index = 0
-			continue
-		response_index += 1
-		context["response_index"] = response_index
+			round_responded = true
+			break
+		if not round_responded:
+			break
 	return {"pending":false, "negated":bool(context.get("negated", false))}
+
+
+## 为一轮无懈可击同时登记全部存活玩家；候选按玩家分别保存，公共状态只公开统一高亮名单。
+func _begin_simultaneous_negation_round(context: Dictionary) -> void:
+	if state == null or state.game_over or not _pending_negation_choices.is_empty():
+		return
+	_negation_round_sequence += 1
+	# 当前轮可序列化上下文；每个玩家请求取得独立副本，任何客户端都不能修改其他玩家候选。
+	var round_context: Dictionary = context.duplicate(true)
+	round_context["negation_round_id"] = _negation_round_sequence
+	if not round_context.has("negation_parent_event_id"):
+		round_context["negation_parent_event_id"] = event_scheduler.get_current_event_id()
+	if not round_context.has("resume_phase"):
+		round_context["resume_phase"] = state.current_phase
+	# 本轮全部存活响应者；无论是否持有无懈都进入公共名单，避免高亮泄露私有手牌。
+	var responder_ids: Array[int] = []
+	for responder_id_variant: Variant in round_context.get("response_order_ids", []) as Array:
+		# 当前响应者 ID；公共名单防御性去重并跳过死亡或离场角色。
+		var responder_id: int = int(responder_id_variant)
+		# 当前响应者状态；不存在或死亡时不创建已经无效的网络请求。
+		var responder: PlayerState = state.get_player(responder_id)
+		if responder != null and responder.alive and not responder_ids.has(responder_id):
+			responder_ids.append(responder_id)
+	state.current_phase = "choice"
+	state.simultaneous_response_display = {
+		"kind":"trick_negation",
+		"round_id":_negation_round_sequence,
+		"responder_ids":responder_ids.duplicate(),
+		"target_id":int(round_context.get("target_id", -1)),
+		"trick_id":str(round_context.get("trick_id", "")),
+	}
+	# 公共高亮先于私有请求发布，界面不会在首个请求到达时短暂暴露单一行动者。
+	_emit_state()
+	for responder_id: int in responder_ids:
+		_register_simultaneous_negation_choice(responder_id, round_context)
+	if _pending_negation_choices.is_empty():
+		# 本轮无人拥有合法无懈候选时直接结束询问；公共名单仍已统一发布，不会逐座位暴露跳过过程。
+		state.simultaneous_response_display.clear()
+		state.current_phase = str(round_context.get("resume_phase", "play"))
+	_refresh_simultaneous_choice_snapshot()
+	_emit_state()
+
+
+## 为一名玩家登记本轮私有无懈请求；候选为空时只保留公共高亮，不创建阻塞窗口。
+func _register_simultaneous_negation_choice(responder_id: int, round_context: Dictionary) -> void:
+	# 当前响应者状态；登记前再次复核存活，避免创建无法提交的请求。
+	var responder: PlayerState = state.get_player(responder_id)
+	if responder == null or not responder.alive:
+		return
+	# 当前响应者私有候选；其他观察者只能通过裁剪快照看到空候选。
+	var candidates: Array[Dictionary] = _build_response_choice_candidates(responder, ["wuxie"])
+	if candidates.is_empty():
+		# 无候选玩家已经包含在公共高亮名单中，但不创建只能放弃的私有阻塞窗口。
+		return
+	# 当前玩家独立上下文；响应者、AI选择倾向与响应模式均由权威端写入。
+	var response_context: Dictionary = round_context.duplicate(true)
+	response_context["responder_id"] = responder_id
+	response_context["response_patterns"] = ["wuxie"]
+	response_context["ai_prefer_select"] = _should_auto_negate(responder, int(round_context.get("source_id", -1)), int(round_context.get("target_id", -1)), str(round_context.get("trick_id", "")), bool(round_context.get("negated", false)))
+	# 当前目标角色；询问文字使用武将名，不把玩家昵称或 AI 前缀混入卡牌规则提示。
+	var target: PlayerState = state.get_player(int(round_context.get("target_id", -1)))
+	# 当前目标武将名；异常状态下使用稳定通用描述。
+	var target_name: String = _player_character_name(target) if target != null else "当前目标"
+	# 当前询问文字；抵消状态决定本轮无懈将令原锦囊恢复还是无效。
+	var prompt: String = "是否使用【无懈可击】令锦囊对%s的效果%s？" % [target_name, "恢复生效" if bool(round_context.get("negated", false)) else "无效"]
+	# 当前选择事件；所有并行请求都挂在原锦囊 content 事件下，不形成按座次串行父子链。
+	var choice_event: GameEvent = event_scheduler.create_event("chooseToRespond", "choice", [], response_context, int(round_context.get("negation_parent_event_id", _runtime_root_event_id)))
+	choice_event.player_id = responder_id
+	# 当前运行时请求；0至1张且允许取消，候选已经在登记前确认非空。
+	var runtime_request: ChoiceRequest = ChoiceRequest.new(choice_event.event_id, responder_id, "respond", prompt)
+	runtime_request.min_count = 0
+	runtime_request.max_count = 1
+	runtime_request.forced = false
+	runtime_request.can_cancel = true
+	runtime_request.base_context = response_context.duplicate(true)
+	runtime_request.active_context = response_context.duplicate(true)
+	for candidate: Dictionary in candidates:
+		runtime_request.card_ids.append(int(candidate.get("uid", -1)))
+	# 已登记请求；失败时终止临时事件，其他玩家请求仍可独立继续。
+	var registered_request: ChoiceRequest = event_scheduler.request_choice(runtime_request)
+	if registered_request == null:
+		choice_event.abort("negation_choice_registration_failed")
+		return
+	# 桌面兼容请求快照；保留 chooser_id 字段供现有卡牌选择组件直接复用。
+	var choice_data: Dictionary = {
+		"request_id":registered_request.request_id,
+		"chooser_id":responder_id,
+		"title":"响应询问",
+		"prompt":prompt,
+		"candidates":candidates.duplicate(true),
+		"min_select":0,
+		"max_select":1,
+		"allow_cancel":true,
+		"resume_phase":str(round_context.get("resume_phase", "play")),
+		"context":response_context.duplicate(true),
+		"deferred":true,
+		"runtime_event_id":choice_event.event_id,
+		"runtime_request_id":registered_request.request_id,
+	}
+	_pending_negation_choices[registered_request.request_id] = choice_data
+	card_choice_requested.emit(choice_data.duplicate(true))
+	if ai_coordinator.is_ai_controlled(responder_id):
+		_run_simultaneous_negation_ai_after_delay(registered_request.request_id, responder_id, _negation_round_sequence)
+
+
+## 等待统一 AI 响应延迟后提交本轮决定；所有 AI 计时器并行启动，先到达的合法无懈立即获胜。
+func _run_simultaneous_negation_ai_after_delay(request_id: int, responder_id: int, round_id: int) -> void:
+	await get_tree().create_timer(ai_action_delay_seconds).timeout
+	if state == null or state.game_over or round_id != _negation_round_sequence or not _pending_negation_choices.has(request_id):
+		return
+	# 当前 AI 私有请求；只读副本用于生成合法动作，不允许策略修改权威候选。
+	var choice_data: Dictionary = (_pending_negation_choices.get(request_id, {}) as Dictionary).duplicate(true)
+	if int(choice_data.get("chooser_id", -1)) != responder_id or not ai_coordinator.is_ai_controlled(responder_id):
+		return
+	# 当前运行时请求；字段与登记时的稳定 ID 完全一致，迟到结果无法命中新轮。
+	var runtime_request: ChoiceRequest = ChoiceRequest.new(int(choice_data.get("runtime_event_id", -1)), responder_id, "respond", str(choice_data.get("prompt", "")))
+	runtime_request.request_id = request_id
+	runtime_request.min_count = 0
+	runtime_request.max_count = 1
+	runtime_request.can_cancel = true
+	# 当前合法动作；空选择与每张候选分别通过相同权威提交入口。
+	var legal_actions: Array[Dictionary] = _build_card_choice_actions(choice_data)
+	# 当前 AI 完整快照；策略只读并按上下文中的收益倾向决定是否响应。
+	var full_snapshot: Dictionary = state.to_dict(responder_id, true)
+	# 当前 AI 响应；空返回使用明确放弃作为保守结果。
+	var ai_response: ChoiceResponse = ai_coordinator.request_choice(responder_id, full_snapshot, runtime_request, choice_data, legal_actions)
+	# 当前标准动作；即使放弃也携带同一请求 ID 进入权威校验。
+	var action: PlayerAction = PlayerAction.new("choose_cards", responder_id)
+	action.payload = {"request_id":request_id, "event_id":int(choice_data.get("runtime_event_id", -1)), "selected_card_uids":ai_response.card_ids.duplicate() if ai_response != null else []}
+	submit_action(action)
+
+
+## 校验并提交一名玩家在同时无懈轮次中的响应；成功出牌后原子关闭同轮其他请求。
+func _submit_simultaneous_negation_choice(action: PlayerAction) -> bool:
+	# 当前请求 ID；必须仍属于正在等待的同一无懈轮次。
+	var request_id: int = int(action.payload.get("request_id", -1))
+	if not _pending_negation_choices.has(request_id):
+		return _reject("无懈可击响应请求已经失效。")
+	# 当前私有请求；提交者、候选和事件 ID 都从权威副本复核。
+	var choice_data: Dictionary = (_pending_negation_choices.get(request_id, {}) as Dictionary).duplicate(true)
+	if action.actor_id != int(choice_data.get("chooser_id", -1)):
+		return _reject("该无懈可击请求不属于当前玩家。")
+	if action.payload.has("event_id") and int(action.payload.get("event_id", -1)) != int(choice_data.get("runtime_event_id", -2)):
+		return _reject("无懈可击响应所属事件已经失效。")
+	# 本次选择 UID；无懈请求最多选择一张，空数组表示明确放弃。
+	var selected_uids: Array[int] = _int_array(action.payload.get("selected_card_uids", []) as Array)
+	if selected_uids.size() > 1:
+		return _reject("无懈可击响应最多选择一张牌。")
+	# 当前合法候选 UID；只来源于该响应者收到的私有请求。
+	var candidate_uids: Array[int] = []
+	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+		candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+	if not selected_uids.is_empty() and not candidate_uids.has(selected_uids[0]):
+		return _reject("选择中包含不属于本次无懈询问的牌。")
+	# 当前运行时响应；先解决本请求 token，具体链状态更新完成后再统一排空事件树。
+	var runtime_response: ChoiceResponse = ChoiceResponse.new(request_id, int(choice_data.get("runtime_event_id", -1)), action.actor_id, not selected_uids.is_empty())
+	runtime_response.card_ids = selected_uids.duplicate()
+	runtime_response.client_sequence = action.client_sequence
+	runtime_response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
+	if not event_scheduler.submit_choice(runtime_response, true):
+		return _reject("事件运行时拒绝了已过期的无懈响应。")
+	_pending_negation_choices.erase(request_id)
+	state.action_sequence += 1
+	# 当前轮共享上下文；所有请求都持有相同初始链状态，首个合法响应成为唯一写入者。
+	var context: Dictionary = (choice_data.get("context", {}) as Dictionary).duplicate(true)
+	# 当前实际无懈牌；提交后再次复核实体仍位于合法牌源，失效选择按放弃处理。
+	var counter_card: CardInstance
+	if not selected_uids.is_empty():
+		counter_card = _consume_response_card_uid_patterns(action.actor_id, selected_uids[0], ["wuxie"], _int_array(action.payload.get("material_card_uids", []) as Array))
+	if counter_card != null:
+		context["negated"] = not bool(context.get("negated", false))
+		_record_wuxie_chain_response(context, action.actor_id, counter_card)
+		add_log("%s使用【无懈可击】，当前锦囊%s。" % [state.get_player(action.actor_id).display_name, "被抵消" if bool(context.get("negated", false)) else "恢复生效"])
+		_close_remaining_simultaneous_negation_choices()
+		state.simultaneous_response_display.clear()
+		state.current_choice_request.clear()
+		# 成功响应立即开启下一轮，允许任意玩家继续反无懈；新请求登记后再恢复调度栈。
+		var chain_result: Dictionary = _advance_trick_negation_chain(context)
+		if not bool(chain_result.get("pending", false)):
+			_finish_simultaneous_negation_submission(context)
+			return true
+		event_scheduler.drain()
+		_emit_state()
+		return true
+	if not _pending_negation_choices.is_empty():
+		_refresh_simultaneous_choice_snapshot()
+		event_scheduler.drain()
+		_emit_state()
+		return true
+	_finish_simultaneous_negation_submission(context)
+	return true
+
+
+## 完成一条不再等待下一轮的同时无懈链，并恢复原卡牌、判定或出牌阶段的唯一后续流程。
+func _finish_simultaneous_negation_submission(context: Dictionary) -> void:
+	state.simultaneous_response_display.clear()
+	state.current_choice_request.clear()
+	state.current_phase = str(context.get("resume_phase", "play"))
+	_finish_trick_negation_chain(context, bool(context.get("negated", false)))
+	if not state.game_over and not has_pending_card_choice():
+		process_next_equipment_trigger()
+	if not state.game_over and not has_pending_card_choice():
+		_resume_interrupted_turn_flow()
+	event_scheduler.drain()
+	# 无懈链可能是出牌阶段最后一个异步窗口；原卡牌事件排空后重新建立唯一 chooseToUse 请求。
+	if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+		_begin_play_choice(state.current_player_id)
+	_emit_state()
+	if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
+		_schedule_ai_action()
+
+
+## 以系统放弃响应关闭本轮剩余请求；请求历史保留取消结果，但不会再次进入链恢复分支。
+func _close_remaining_simultaneous_negation_choices() -> void:
+	# 待关闭请求 ID 副本；提交运行时响应会修改原字典，因此不能直接遍历键视图。
+	var remaining_request_ids: Array = _pending_negation_choices.keys().duplicate()
+	for request_id_variant: Variant in remaining_request_ids:
+		# 当前剩余请求 ID；可能已被更早的同步回调移除，提交前再次复核。
+		var request_id: int = int(request_id_variant)
+		if not _pending_negation_choices.has(request_id):
+			continue
+		# 当前剩余请求；系统只提交空选择并释放 token，不消费任何实体牌。
+		var choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
+		# 当前系统响应；actor 与 event 必须保持原请求归属才能通过运行时校验。
+		var response: ChoiceResponse = ChoiceResponse.new(request_id, int(choice_data.get("runtime_event_id", -1)), int(choice_data.get("chooser_id", -1)), false)
+		response.source = "system"
+		event_scheduler.submit_choice(response, true)
+		_pending_negation_choices.erase(request_id)
+
+
+## 把本地玩家仍活动的并行请求写入单请求兼容快照；其他玩家候选继续只通过各自网络请求传递。
+func _refresh_simultaneous_choice_snapshot() -> void:
+	if state == null:
+		return
+	state.current_choice_request.clear()
+	for choice_variant: Variant in _pending_negation_choices.values():
+		# 当前私有请求；桌面兼容快照只选择本地玩家本人，避免最后登记的 AI 请求覆盖本地手牌交互。
+		var choice_data: Dictionary = choice_variant as Dictionary
+		if int(choice_data.get("chooser_id", -1)) != local_human_player_id:
+			continue
+		# 当前候选 UID；快照继续使用 ChoiceRequest 的 card_ids 字段，不复制完整牌面对象。
+		var card_ids: Array[int] = []
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			card_ids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+		state.current_choice_request = {
+			"request_id":int(choice_data.get("request_id", -1)),
+			"event_id":int(choice_data.get("runtime_event_id", -1)),
+			"actor_id":local_human_player_id,
+			"choice_type":"respond",
+			"prompt":str(choice_data.get("prompt", "")),
+			"card_ids":card_ids,
+			"selected_card_ids":[],
+			"base_context":choice_data.get("context", {}) as Dictionary,
+			"active_context":choice_data.get("context", {}) as Dictionary,
+		}
+		return
 
 
 ## 完成异步无懈链并恢复原目标；被抵消时只跳过当前目标，未抵消时从同一目标的效果入口继续。
@@ -3422,7 +3708,7 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 		# 救援响应上下文；已询问名单与所需回复数共同恢复同一个单轮流程，不创建全体第二轮询问。
 		var rescue_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_patterns":response_patterns.duplicate(), "asked_rescuer_ids":asked_rescuer_ids.duplicate(), "required_recover":required_recover}
 		# 救援提示；明确给出目标达到1点体力还需要的回复量和当前源码允许的牌名。
-		var rescue_prompt: String = "%s当前还需要回复%d点体力至1点，请选择是否使用%s。" % [target.display_name, required_recover, "、".join(response_names) if not response_names.is_empty() else "救援牌"]
+		var rescue_prompt: String = "%s当前还需要回复%d点体力至1点，请选择是否使用%s。" % [_player_character_name(target), required_recover, "、".join(response_names) if not response_names.is_empty() else "救援牌"]
 		# 实际提交的救援牌；为空表示明确取消或当前没有合法候选。
 		var rescue_card: CardInstance = request_response_card_patterns(rescuer.player_id, response_patterns, rescue_prompt, rescue_context)
 		if has_pending_card_choice():
@@ -3597,7 +3883,9 @@ func _check_game_over() -> void:
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
 	_pending_card_choice.clear()
+	_pending_negation_choices.clear()
 	state.public_card_choice_display.clear()
+	state.simultaneous_response_display.clear()
 	for player: PlayerState in state.players:
 		player.identity_revealed = true
 	_record_runtime_event("GameEndEvent", "game_end", {"reason":state.end_reason}, {"winner":winner})
@@ -3617,7 +3905,9 @@ func _end_match_as_draw(reason: String) -> void:
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
 	_pending_card_choice.clear()
+	_pending_negation_choices.clear()
 	state.public_card_choice_display.clear()
+	state.simultaneous_response_display.clear()
 	_record_runtime_event("GameEndEvent", "game_end", {"reason":reason}, {"winner":"draw"})
 	event_scheduler.abort_all("game_over:%s" % reason)
 	add_log("摸牌堆与弃牌堆均为空，对局以平局结束。")
@@ -4087,6 +4377,19 @@ func _identity_attitude(from_identity: String, to_identity: String) -> int:
 	if from_identity in ["lord", "loyalist"] and to_identity in ["lord", "loyalist"]:
 		return 1
 	return -1
+
+
+## 返回卡牌规则提示使用的武将名；武将尚未公开或配置缺失时才回退玩家显示名。
+func _player_character_name(player: PlayerState) -> String:
+	if player == null:
+		return "未知武将"
+	# 当前稳定武将 ID；空值表示尚未完成选将，不能显示“未知武将”覆盖仍有意义的玩家名。
+	var character_id: String = player.character_id
+	if character_id.is_empty():
+		return player.display_name
+	# 当前配置武将名；数据仓库统一保证中文显示名，异常配置仍使用玩家名保持提示可定位。
+	var character_name: String = GameDatabase.resolve_character_name(character_id)
+	return character_name if not character_name.is_empty() else player.display_name
 
 
 ## 将伤害属性 ID 转换为日志文本。

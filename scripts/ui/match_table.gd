@@ -211,6 +211,9 @@ var _public_card_choice_display: Dictionary = {}
 ## 当前需要作出规则操作的玩家 ID；优先读取活动选择请求，未等待选择时回退当前回合角色。
 var _current_operator_player_id: int = -1
 
+## 当前同时处理规则操作的玩家 ID；无懈可击询问使用全体存活名单，不能根据候选牌数量裁剪。
+var _simultaneous_operator_player_ids: Array[int] = []
+
 ## 当前计时器绑定的对局 ID；对局 ID 变化时重置开始时间，避免重新开局继承旧时长。
 var _timed_match_id: String = ""
 
@@ -441,6 +444,14 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
 	_current_operator_player_id = int(runtime_choice.get("actor_id", _snapshot.get("current_player_id", -1)))
+	_simultaneous_operator_player_ids.clear()
+	# 当前同时响应公共状态；只读取规则层公开的玩家 ID，不从本地候选或手牌亮度反推响应能力。
+	var simultaneous_response_display: Dictionary = _snapshot.get("simultaneous_response_display", {}) as Dictionary
+	for responder_id_variant: Variant in simultaneous_response_display.get("responder_ids", []) as Array:
+		# 当前被同时询问玩家 ID；防御性去重避免异常快照重复刷新同一武将牌。
+		var responder_id: int = int(responder_id_variant)
+		if responder_id >= 0 and not _simultaneous_operator_player_ids.has(responder_id):
+			_simultaneous_operator_player_ids.append(responder_id)
 	_selected_card_uid = -1
 	_selected_target_ids.clear()
 	_auto_locked_target_id = -1
@@ -562,7 +573,7 @@ func _render_players() -> void:
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
-		player_button.set_operation_state(target_id == _current_operator_player_id)
+		player_button.set_operation_state(target_id == _current_operator_player_id or _simultaneous_operator_player_ids.has(target_id))
 		# 当前公开身份；身份已经展示时清理旧本地标注，未知身份继续显示当前客户端的推测结果。
 		var public_identity: String = str(player.get("identity", "hidden"))
 		if public_identity != "hidden":
@@ -578,7 +589,7 @@ func _render_players() -> void:
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
-	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id)
+	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
@@ -1253,17 +1264,21 @@ func _on_public_card_choice_display_changed(display_data: Dictionary) -> void:
 
 ## 显示属于本地玩家的统一选牌请求；本人手牌与装备候选使用桌面内联交互，其他区域继续使用独立窗口。
 func _on_card_choice_requested(choice_data: Dictionary) -> void:
-	_current_operator_player_id = int(choice_data.get("chooser_id", -1))
+	# 当前请求选择者；并行无懈期间公共名单优先，普通单人请求继续使用该玩家作为唯一操作高亮。
+	var chooser_id: int = int(choice_data.get("chooser_id", -1))
+	if _simultaneous_operator_player_ids.is_empty():
+		_current_operator_player_id = chooser_id
 	if not _snapshot.is_empty():
 		_render_players()
+	# 非本地并行请求只更新公共高亮，不能关闭或替换本地玩家已经显示的询问界面。
+	if chooser_id != match_controller.local_human_player_id:
+		_refresh_card_selection_panel()
+		return
 	# 新请求已经替换旧独立窗口时先清理旧副本；同步创建的新本地请求会在后续分支重新写入。
 	var incoming_request_id: int = int(choice_data.get("request_id", -1))
 	if _modal_choice_request_id >= 0 and _modal_choice_request_id != incoming_request_id:
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
-	if int(choice_data.get("chooser_id", -1)) != match_controller.local_human_player_id:
-		_refresh_card_selection_panel()
-		return
 	# 当前群体锦囊已开启“不响应”时直接提交空选择；界面不创建询问栏，规则核心仍校验同一请求 ID 与可取消语义。
 	if _is_suppressed_group_trick_choice(choice_data):
 		call_deferred("_submit_suppressed_group_trick_choice", choice_data.duplicate(true))
@@ -1318,6 +1333,14 @@ func _on_card_choice_cancelled(request_id: int) -> void:
 ## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
 func _refresh_card_selection_panel() -> void:
 	if not _public_card_choice_display.is_empty():
+		# 本地存在与公共展示不同类型的内联询问时，公共窗口暂时让出手牌与按钮输入，询问结束后会从保留快照自动恢复。
+		if not _inline_card_choice.is_empty() and str((_inline_card_choice.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
+			card_selection_panel.close()
+			return
+		# 本地存在与公共展示不同类型的独立请求时优先显示该请求，公共牌位数据仍保留在桌面快照中。
+		if not _modal_card_choice_request.is_empty() and str((_modal_card_choice_request.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
+			card_selection_panel.show_request(_modal_card_choice_request)
+			return
 		# 公共展示副本；补充武将显示名后交给纯 UI 组件，不把玩家快照或规则对象传入牌位节点。
 		var enriched_display: Dictionary = _enrich_public_card_choice_display(_public_card_choice_display)
 		# 本地交互请求；只有请求类型与当前公共展示一致时才开放点击和底部操作按钮。
@@ -1761,7 +1784,7 @@ func _refresh_selection_text() -> void:
 	for target_id: int in _selected_target_ids:
 		# 目标玩家快照；用于从稳定 ID 解析显示名。
 		var player: Dictionary = _get_player_snapshot(target_id)
-		target_names.append(str(player.get("display_name", "玩家%d" % target_id)))
+		target_names.append(_snapshot_character_name(player, "玩家%d" % target_id))
 	if _selected_card_uid < 0:
 		selection_label.text = "未选择卡牌｜可点击牌面，或直接拖动卡牌到青色目标"
 		interaction_guide_label.text = "请选择要使用的牌"
@@ -1812,7 +1835,7 @@ func _refresh_equipment_action_text() -> void:
 	var target_name: String = "无"
 	if not _selected_target_ids.is_empty():
 		var target: Dictionary = _get_player_snapshot(_selected_target_ids[0])
-		target_name = str(target.get("display_name", "玩家%d" % _selected_target_ids[0]))
+		target_name = _snapshot_character_name(target, "玩家%d" % _selected_target_ids[0])
 	if _active_equipment_action == "equipment_response":
 		selection_label.text = "%s｜已选择%d/%d张手牌" % [equipment_name, _equipment_action_material_uids.size(), required_material_count]
 		interaction_guide_label.text = "请选择装备响应所需的手牌材料"
@@ -1991,6 +2014,17 @@ func _get_player_snapshot(player_id: int) -> Dictionary:
 		if int(player.get("player_id", -1)) == player_id:
 			return player.duplicate(true)
 	return {}
+
+
+## 返回卡牌交互文本使用的武将名；武将信息尚未公开时才使用调用方提供的玩家名占位。
+func _snapshot_character_name(player_snapshot: Dictionary, fallback_name: String) -> String:
+	# 当前公开武将 ID；空值表示选将尚未完成或该观察者暂时不可见。
+	var character_id: String = str(player_snapshot.get("character_id", ""))
+	if character_id.is_empty():
+		return fallback_name
+	# 当前武将显示名；统一通过数据仓库解析，避免卡牌询问暴露“[AI]玩家X”等控制权标签。
+	var character_name: String = GameDatabase.resolve_character_name(character_id)
+	return character_name if not character_name.is_empty() else fallback_name
 
 
 ## 删除容器全部子节点；节点排队释放后不再参与后续布局。

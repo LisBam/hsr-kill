@@ -29,6 +29,12 @@ var _silver_moon_request_count: int = 0
 ## 当前场景需要由选择处理器打出的【无懈可击】实体 UID。
 var _wuxie_uid: int = -1
 
+## 同时无懈测试收到的私有请求快照；用于主动让后提交登记的玩家先响应并验证先到先结算。
+var _simultaneous_negation_requests: Array[Dictionary] = []
+
+## 同时无懈偶数链恢复后需要由过河拆桥选择的目标手牌 UID。
+var _simultaneous_protected_uid: int = -1
+
 ## 当前场景需要由濒死者选择的【桃】实体 UID。
 var _peach_uid: int = -1
 
@@ -83,6 +89,8 @@ func _ready() -> void:
 ## 依次运行独立场景；任一断言失败会立即以非0状态结束。
 func _run() -> void:
 	_create_controller()
+	if not await _test_simultaneous_wuxie_first_response_wins():
+		return
 	if not await _test_wuxie_per_target_and_aoe_continuation():
 		return
 	if not await _test_dynamic_targets_direct_hit_and_exclusion():
@@ -161,6 +169,8 @@ func _reset_state(player_count: int) -> void:
 	_controller.card_movement = CardMovementService.new(_controller.state)
 	_controller.trigger_manager = TriggerManager.new()
 	_controller._pending_card_choice.clear()
+	_controller._pending_negation_choices.clear()
+	_controller._negation_round_sequence = 0
 	_controller._resolved_card_choice_uids.clear()
 	_controller._resolved_equipment_material_uids.clear()
 	_controller._negation_resume_results.clear()
@@ -176,6 +186,69 @@ func _reset_state(player_count: int) -> void:
 	_controller._judgment_resume_needs_result_pause = false
 	_controller.ai_coordinator._policies.clear()
 	_presentation_history.clear()
+	_simultaneous_negation_requests.clear()
+	_simultaneous_protected_uid = -1
+
+
+## 验证无懈可击同时询问全部存活玩家、公共高亮不泄露候选，并由最先提交合法牌的玩家取得结算权。
+func _test_simultaneous_wuxie_first_response_wins() -> bool:
+	_scenario = "simultaneous_wuxie"
+	_reset_state(3)
+	# 目标武将 ID；询问文本必须显示“丹恒”，不能显示测试玩家名或 AI 控制权前缀。
+	_controller.state.get_player(1).character_id = "dan_heng"
+	# 一号玩家无懈；虽然请求更早登记，但本测试故意让三号玩家先提交。
+	var earlier_counter: CardInstance = _add_hand_card(0, "wuxie", "spade", 11)
+	# 三号玩家无懈；其提交先到达后应立即关闭同轮其他请求并成为唯一响应者。
+	var winning_counter: CardInstance = _add_hand_card(2, "wuxie", "club", 12)
+	# 目标手牌；若原过河拆桥被成功抵消，该实体必须继续留在目标手中。
+	var protected_card: CardInstance = _add_hand_card(1, "shan", "heart", 2)
+	_simultaneous_protected_uid = protected_card.uid
+	# 原锦囊实体；通过真实 CardUseEvent 建立逐目标无懈链。
+	var trick_card: CardInstance = _add_hand_card(0, "guohe", "spade", 3)
+	_controller._execute_card_use(0, trick_card, [1])
+	# 本轮公共高亮名单；没有无懈的二号玩家也必须与两名持牌玩家一起高亮。
+	var public_responder_ids: Array = (_controller.state.simultaneous_response_display.get("responder_ids", []) as Array).duplicate()
+	if public_responder_ids != [0, 1, 2] or _controller._pending_negation_choices.size() != 2 or _simultaneous_negation_requests.size() != 2:
+		return _fail("simultaneous_wuxie_open=%s:%d:%d" % [public_responder_ids, _controller._pending_negation_choices.size(), _simultaneous_negation_requests.size()])
+	# 三号玩家当前请求；按 chooser_id 定位，不能依赖请求登记顺序作为结算优先级。
+	var winning_request: Dictionary = {}
+	# 一号玩家旧请求 ID；成功响应后该请求必须立即失效。
+	var earlier_request_id: int = -1
+	for request_data: Dictionary in _simultaneous_negation_requests:
+		if str(request_data.get("prompt", "")).contains("测试玩家2") or not str(request_data.get("prompt", "")).contains("丹恒"):
+			return _fail("simultaneous_wuxie_prompt=%s" % request_data.get("prompt", ""))
+		if int(request_data.get("chooser_id", -1)) == 2:
+			winning_request = request_data
+		elif int(request_data.get("chooser_id", -1)) == 0:
+			earlier_request_id = int(request_data.get("request_id", -1))
+	if winning_request.is_empty() or earlier_request_id < 0:
+		return _fail("simultaneous_wuxie_requests=%s" % [_simultaneous_negation_requests])
+	# 先提交三号玩家的合法无懈；同轮一号玩家即使更早收到请求也不能再覆盖本次结果。
+	var winning_action: PlayerAction = PlayerAction.new("choose_cards", 2)
+	winning_action.payload = {"request_id":int(winning_request.get("request_id", -1)), "selected_card_uids":[winning_counter.uid]}
+	if not _controller.submit_action(winning_action) or _controller._pending_negation_choices.has(earlier_request_id):
+		return _fail("simultaneous_wuxie_first_submit")
+	if _controller.state.get_player(2).find_hand_card(winning_counter.uid) != null or _controller.state.get_player(0).find_hand_card(earlier_counter.uid) == null:
+		return _fail("simultaneous_wuxie_consumption")
+	# 下一轮只有仍持有无懈的一号玩家需要私有请求；其再次响应形成偶数链并恢复原锦囊。
+	var counter_round_request: Dictionary = {}
+	for request_variant: Variant in _controller._pending_negation_choices.values():
+		var request_data: Dictionary = request_variant as Dictionary
+		if int(request_data.get("chooser_id", -1)) == 0:
+			counter_round_request = request_data
+			break
+	if counter_round_request.is_empty():
+		return _fail("simultaneous_wuxie_counter_round")
+	# 第二张无懈动作；成功后下一轮已无候选，控制器必须立即完成链并恢复过河拆桥选牌。
+	var counter_action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	counter_action.payload = {"request_id":int(counter_round_request.get("request_id", -1)), "selected_card_uids":[earlier_counter.uid]}
+	if not _controller.submit_action(counter_action):
+		return _fail("simultaneous_wuxie_counter_submit")
+	if not await _wait_until_card_finalized(trick_card.uid):
+		return _fail("simultaneous_wuxie_finalize")
+	if _controller.state.get_player(1).find_hand_card(protected_card.uid) != null or not _controller.state.discard_pile.has(earlier_counter) or not _controller.state.discard_pile.has(winning_counter) or not _controller.state.discard_pile.has(protected_card) or not _controller.state.discard_pile.has(trick_card):
+		return _fail("simultaneous_wuxie_result")
+	return true
 
 
 ## 验证南蛮入侵逐目标结算：目标一被一张无懈抵消，目标二仍需响应并在未出杀时受到伤害。
@@ -740,7 +813,12 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	var selected_uids: Array[int] = []
 	# 本次装备响应材料；普通请求保持空数组，丈八蛇矛响应固定提交两张普通手牌 UID。
 	var material_card_uids: Array[int] = []
-	if _scenario == "wuxie_aoe" and kind == "trick_negation":
+	if _scenario == "simultaneous_wuxie" and kind == "trick_negation":
+		_simultaneous_negation_requests.append(choice_data.duplicate(true))
+		return
+	elif _scenario == "simultaneous_wuxie" and kind == "discard_target":
+		selected_uids = [_simultaneous_protected_uid]
+	elif _scenario == "wuxie_aoe" and kind == "trick_negation":
 		_wuxie_request_count += 1
 		selected_uids = [_wuxie_uid]
 	elif _scenario == "wuxie_aoe" and kind == "aoe_response":
