@@ -38,7 +38,8 @@ const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
 const LOCAL_SKILL_RIGHT_OFFSET: float = -170.35
 
 ## 技能区相对主场景底边的固定下边界；与本地武将牌牌面底边对齐，不占用座次标签区域。
-const LOCAL_SKILL_BOTTOM_OFFSET: float = -26.0
+## 主视角不再显示座次标签，因此技能区与武将牌共同直接贴合客户区底边。
+const LOCAL_SKILL_BOTTOM_OFFSET: float = 0.0
 
 ## 手牌区与最左侧技能按钮之间的水平间距；默认8像素保持两个交互区域相邻但不重叠。
 const HAND_SKILL_GAP: float = 8.0
@@ -481,6 +482,9 @@ func _create_local_player_card() -> void:
 	local_player_card = local_player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
 	# 本地座次标签实例；只属于游戏内座位容器，文本会在收到玩家快照后写入。
 	local_player_seat_label = local_player_seat_slot.get_node("Seat") as Label
+	# 主视角座次已经由玩家自身位置明确表达；隐藏标签并清空文本，其他玩家座位仍继续显示公开中文座次号。
+	local_player_seat_label.visible = false
+	local_player_seat_label.text = ""
 	local_player_card.visible = true
 	local_player_card.set_public_equipment_visible(false)
 	local_player_seat_slot.z_index = 12
@@ -489,7 +493,10 @@ func _create_local_player_card() -> void:
 	local_player_seat_slot.anchor_right = 1.0
 	local_player_seat_slot.anchor_bottom = 1.0
 	# 本地完整座位尺寸；直接读取组合场景的原生尺寸，桌面不改写武将牌或座次标签几何信息。
-	var local_seat_size: Vector2 = local_player_seat_slot.size
+	# 主视角不再保留26像素座次区域，容器尺寸只覆盖148.35×197.8像素武将牌本身。
+	var local_seat_size: Vector2 = local_player_card.card_size
+	local_player_seat_slot.custom_minimum_size = local_seat_size
+	local_player_seat_slot.size = local_seat_size
 	local_player_seat_slot.offset_left = -16.0 - local_seat_size.x
 	local_player_seat_slot.offset_top = -local_seat_size.y
 	local_player_seat_slot.offset_right = -16.0
@@ -721,7 +728,7 @@ func _render_players() -> void:
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_match_overlays_visible(true)
-	local_player_seat_label.text = _seat_text(int(local_player_snapshot.get("seat_number", int(local_player_snapshot.get("player_id", -1)) + 1)))
+	local_player_seat_label.text = ""
 	_render_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)
 
@@ -1381,8 +1388,8 @@ func _apply_ui_style() -> void:
 		return
 	reference_backdrop.apply_ui_style(BattleUIStyle.get_active_style_id())
 	($Background as ColorRect).color = BattleUIStyle.get_color("outer_background")
-	($BackdropShade as ColorRect).color = Color(BattleUIStyle.get_color("outer_background"), 0.10)
-	($TableOrnament as TextureRect).modulate = Color(BattleUIStyle.get_color("ornament"), 0.12)
+	($BackdropShade as ColorRect).color = BattleUIStyle.get_color("backdrop_shade", Color.TRANSPARENT)
+	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
 	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))

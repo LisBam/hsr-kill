@@ -430,6 +430,14 @@ func _run() -> void:
 	# 测试势力定义；提供圆徽简称与主题颜色，验证数据驱动入口可正常传递。
 	var equipped_faction_definition: Dictionary = GameDatabase.get_faction(str(equipped_character_definition.get("faction", "")))
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 黑白太空主题中的势力徽记；主题不得把武将原势力色强制改成中性灰。
+	var configured_faction_color: Color = Color.from_string(str(equipped_faction_definition.get("color", "526b70")), Color("526b70"))
+	# 运行时势力徽记样式；背景应继续由原势力色压暗生成，而不是使用主题中性占位色。
+	var configured_faction_style: StyleBoxFlat = (player_card_view.get_node("FactionBadge") as Label).get_theme_stylebox("normal") as StyleBoxFlat
+	if not configured_faction_style.bg_color.is_equal_approx(configured_faction_color.darkened(0.28)):
+		printerr("SMOKE_FAIL space_style_faction_color=%s/%s" % [configured_faction_style.bg_color, configured_faction_color])
+		get_tree().quit(1)
+		return
 	# 实际装备横条数量；装备承载层是角色牌的直接子节点，其富文本子节点一一对应公开装备。
 	var rendered_equipment_row_count: int = 0
 	# 实际装备横条是否全部保持60×15像素；默认true，发现任意尺寸不符条目后改为false。
@@ -529,6 +537,17 @@ func _run() -> void:
 		printerr("SMOKE_FAIL card_view_node2d_defaults")
 		get_tree().quit(1)
 		return
+	get_tree().root.add_child(card_view)
+	# 黑白太空主题的基本牌快照；主题只调整纸张与框架，顶部类别条必须保留基本牌类别色。
+	var themed_basic_card: Dictionary = {"uid":70001, "definition_id":"sha", "suit":"spade", "rank":7}
+	card_view.configure(themed_basic_card, GameDatabase.get_card("sha"), false, true)
+	# 主题化类别条；颜色必须来自 `card_basic` 语义而不是统一灰色或全屏滤镜。
+	var themed_accent_bar: ColorRect = card_view.get_node("CardBody/AccentBar") as ColorRect
+	if not themed_accent_bar.color.is_equal_approx(BattleUIStyle.get_color("card_basic")):
+		printerr("SMOKE_FAIL space_style_card_category=%s" % themed_accent_bar.color)
+		get_tree().quit(1)
+		return
+	get_tree().root.remove_child(card_view)
 	card_view.free()
 	# 弃牌动画层；两张正式卡牌应同时从各自起点进入中央队列、保持水平铺开并在停留后全部淡出。
 	var animation_layer: CardUseAnimationLayer = CardUseAnimationLayer.new()
