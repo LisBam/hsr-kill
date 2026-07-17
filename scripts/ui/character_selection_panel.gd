@@ -116,7 +116,34 @@ func _ready() -> void:
 	_candidate_area_with_lord_left = _candidate_area.position.x
 	_candidate_area_without_lord_left = _lord_character_area.position.x
 	_candidate_area_right = _candidate_area.position.x + _candidate_area.size.x
+	refresh_ui_style()
 	visible = false
+
+
+## 按当前活动 UI 风格重绘选将框与候选武将牌；候选集合、临时选择和悬停补间保持不变。
+func refresh_ui_style() -> void:
+	if not _required_nodes_ready or not is_node_ready():
+		return
+	# 选将背景遮罩；保持阻断牌桌输入的行为，只更新主题透明色。
+	var selection_shade: ColorRect = get_node_or_null("SelectionShade") as ColorRect
+	if selection_shade != null:
+		selection_shade.color = BattleUIStyle.get_color("shade")
+	# 选将主框；统一使用主题选择面板与边框语义。
+	var selection_frame: Panel = get_node_or_null("SelectionFrame") as Panel
+	if selection_frame != null:
+		selection_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_lord_character_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_lord_divider.color = Color(BattleUIStyle.get_color("border"), 0.72)
+	BattleUIStyle.apply_interaction_button(_confirm_button)
+	if _lord_character_view != null and is_instance_valid(_lord_character_view):
+		_lord_character_view.refresh_ui_style()
+	for candidate_view_variant: Variant in _candidate_views.values():
+		# 当前候选武将牌；只更新配色，不改变选中状态或基础位置。
+		var candidate_view: PlayerTargetView = candidate_view_variant as PlayerTargetView
+		if candidate_view != null and is_instance_valid(candidate_view):
+			candidate_view.refresh_ui_style()
 
 
 ## 为仍在编辑器内存中的旧主场景补建主公分隔线；新节点继续使用稳定相对路径参与统一校验和显隐。

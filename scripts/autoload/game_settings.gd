@@ -4,6 +4,9 @@ extends Node
 
 signal card_name_mode_changed(mode: NameMode)
 
+## UI 风格变化信号；界面组件收到稳定风格标识后从统一注册表刷新自身配色。
+signal ui_style_changed(style_id: String)
+
 ## AI 响应等待时长变化信号；对局控制器订阅后同步下一次 AI 行动与选牌响应的等待时间。
 signal ai_response_delay_changed(delay_seconds: float)
 
@@ -27,6 +30,9 @@ var card_name_mode: NameMode = NameMode.ORIGINAL
 
 ## 当前 AI 每次行动或选择响应前的等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
 var ai_response_delay_seconds: float = 0.30
+
+## 当前 UI 风格标识；默认使用黑白太空风格，运行时可在局内设置中即时切换且不修改对局规则。
+var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
@@ -53,6 +59,16 @@ func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 		return
 	ai_response_delay_seconds = clamped_delay_seconds
 	ai_response_delay_changed.emit(ai_response_delay_seconds)
+
+
+## 设置全局 UI 风格；未知标识自动回退默认风格，并通知已连接的界面组件即时重绘。
+func set_ui_style(style_id: String) -> void:
+	# 已注册的风格标识；设置层只保存稳定 ID，不持有任何颜色字典或场景节点引用。
+	var normalized_style_id: String = UIStyleRegistry.normalize_style_id(style_id)
+	if ui_style_id == normalized_style_id:
+		return
+	ui_style_id = normalized_style_id
+	ui_style_changed.emit(ui_style_id)
 
 
 ## 根据当前全局模式，从卡牌配置中返回唯一的前端显示名称。

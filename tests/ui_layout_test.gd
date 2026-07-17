@@ -58,6 +58,20 @@ func _run() -> void:
 		return
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
+	# UI 风格选项；默认必须选中黑白太空，同时保留暖木十周年作为可切换项。
+	var ui_style_option: OptionButton = main_instance.get_node("%UiStyleOption") as OptionButton
+	# 左上信息面板；切换风格后边框颜色必须立即跟随注册表更新，不需要重新开局。
+	var top_info_panel: PanelContainer = main_instance.get_node("TopInfoPanel") as PanelContainer
+	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")):
+		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
+		return
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
+	await get_tree().process_frame
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
+		_fail("ui_style_switch_to_wood")
+		return
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
+	await get_tree().process_frame
 	# 底部装备面板；左下区域必须完整位于窗口客户区内。
 	var equipment_panel: Control = main_instance.get_node("%EquipmentPanel") as Control
 	# 当前装备面板固定为150×148像素，严格等于玩家手牌牌面高度，不包含175像素手牌栏的抬升留白。
@@ -82,12 +96,13 @@ func _run() -> void:
 	# 中央操作按钮行；确定与取消使用28像素间距，避免相反命令视觉粘连。
 	var action_row: HBoxContainer = main_instance.get_node("InteractionPanel/InteractionVBox/ActionRow") as HBoxContainer
 	# 回合结束普通样式；朱红背景必须与中央暖金操作按钮清晰区分。
+	# 当前测试改为验证注册表中的活动主题色，组件尺寸与交互语义保持原有要求。
 	var end_play_normal_style: StyleBoxFlat = end_play_button.get_theme_stylebox("normal") as StyleBoxFlat
 	# 确定按钮禁用样式；不可选择时固定为深灰，不沿用普通或悬停高亮。
 	var confirm_disabled_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 确定按钮普通样式；用于验证禁用状态具有明确亮度差。
 	var confirm_normal_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
-	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or end_play_normal_style.bg_color.r <= end_play_normal_style.bg_color.g * 1.5 or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
+	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or not end_play_normal_style.bg_color.is_equal_approx(BattleUIStyle.get_color("end_play_button")) or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
 	# 手牌栏继续保留175像素抬升空间；装备栏只等于148像素牌面高度，二者底边对齐且横向边界精确相接。
@@ -232,9 +247,23 @@ func _run() -> void:
 	var current_turn_style: StyleBoxFlat = (current_turn_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
 	# 当前操作角色最终面板样式；用于验证只提亮底色和边框，不再绘制青绿色外发光。
 	var current_operator_style: StyleBoxFlat = (current_operator_view.get_node("CardBody") as Panel).get_theme_stylebox("panel") as StyleBoxFlat
-	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.ACCENT_COLOR or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_color == Color("72d8b5aa"):
+	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.get_color("accent") or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_color == Color("72d8b5aa"):
 		_fail("player_operation_highlight")
 		return
+	# 全体目标牌交互状态；规则自动展开目标时角色牌不得进入合法或选中配色，点击也不能写入手动目标数组。
+	main_instance.set("_selected_card_uid", 999999)
+	main_instance.set("_selected_target_ids", [])
+	main_instance.set("_card_use_preview", {"target_mode":"all_others", "legal_target_ids":[0, 5], "max_targets":99})
+	main_instance.call("_refresh_component_states")
+	main_instance.call("_on_target_pressed", 5)
+	# 自动目标点击后的临时目标数组；必须保持为空并由规则层在提交时自行展开。
+	var automatic_target_selection: Array = main_instance.get("_selected_target_ids") as Array
+	if not automatic_target_selection.is_empty() or current_operator_view.is_legal_target or current_operator_view.is_target_selected:
+		_fail("automatic_target_manual_selection:%s" % [automatic_target_selection])
+		return
+	main_instance.set("_selected_card_uid", -1)
+	main_instance.set("_card_use_preview", {})
+	main_instance.call("_refresh_component_states")
 	# 玩家名悬停阴影；正式对局武将牌进入悬停后应在上部显示公开玩家名，离开后立即隐藏。
 	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
 	# 玩家名标签；测试目标为六号位，因此显示名固定为“玩家6”。

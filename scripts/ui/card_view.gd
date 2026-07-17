@@ -80,7 +80,10 @@ var _display_name_text: String = "星穹斩"
 var _card_type_text: String = "基本牌"
 
 ## 当前卡牌类别强调色；默认使用基本牌朱红色，具体实体牌会按类别或伤害属性覆盖。
-var _category_color: Color = Color("a44e43")
+var _category_color: Color = Color("737b86")
+
+## 当前卡牌静态定义副本；仅用于主题切换时重新解析类别色，不包含实体区域或规则状态。
+var _card_definition: Dictionary = {}
 
 ## 当前是否处于鼠标悬停状态；只用于决定纸张亮度和缩放表现。
 var _is_hovered: bool = false
@@ -161,7 +164,7 @@ func is_hovered_in_hand() -> bool:
 ## 写入牌面快照和定义；该方法不保存完整对局状态，可在每次快照重建时安全调用。
 func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool, dim_when_disabled: bool = true) -> void:
 	# 本次完整配置签名；包含全局名称模式，切换牌名后即使实体状态不变也会正确刷新。
-	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, dim_when_disabled, GameSettings.card_name_mode])
+	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, dim_when_disabled, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -170,6 +173,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	is_interactable = interactable
 	_dim_when_disabled = dim_when_disabled
 	is_face_down = false
+	_card_definition = definition.duplicate(true)
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
 	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。
@@ -193,7 +197,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 ## 把当前视图配置为不可见手牌的统一牌背；只保留稳定 UID 供选择提交，不显示任何牌面信息。
 func configure_back(entity_uid: int, interactable: bool) -> void:
 	# 牌背配置签名；隐藏牌只依赖实体 UID 与交互状态，不读取或缓存任何牌面定义。
-	var next_configuration_signature: int = hash(["card_back", entity_uid, interactable])
+	var next_configuration_signature: int = hash(["card_back", entity_uid, interactable, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -202,9 +206,18 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	is_interactable = interactable
 	_dim_when_disabled = true
 	is_face_down = true
+	_card_definition.clear()
 	if is_node_ready():
 		_input_area.tooltip_text = "不可见手牌"
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+	_refresh_visual_state()
+
+
+## 按当前活动 UI 风格重绘卡牌纸张、类别条与状态边框；实体 UID、选中状态和输入权限保持不变。
+func refresh_ui_style() -> void:
+	if not _card_definition.is_empty():
+		_category_color = _resolve_category_color(_card_definition)
+	_refresh_card_content()
 	_refresh_visual_state()
 
 
@@ -257,18 +270,18 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 默认纸张颜色；木牛“粮”使用偏青纸色作为来源提示。
-	var paper_color: Color = Color("e8dcc3") if not is_wooden_ox_card else Color("d8e4d4")
+	var paper_color: Color = BattleUIStyle.get_color("card_paper") if not is_wooden_ox_card else BattleUIStyle.get_color("card_wooden_ox_paper")
 	if _is_hovered and is_interactable:
 		paper_color = paper_color.lightened(0.08)
 	# 默认边框颜色；选中时改为高亮金色并增加描边宽度。
-	var border_color: Color = BattleUIStyle.ACCENT_COLOR if is_card_selected else _category_color
+	var border_color: Color = BattleUIStyle.get_color("accent") if is_card_selected else _category_color
 	# 选中描边宽度；3像素在高分辨率下仍清晰，普通状态保持1像素。
 	var border_width: int = 3 if is_card_selected else (2 if _is_hovered and is_interactable else 1)
 	# 内容调制色；禁用牌会统一压暗插画、占位图和文字，避免只有纸张边缘发生轻微变化。
 	var content_modulate: Color = Color.WHITE
 	if not is_interactable and _dim_when_disabled:
 		paper_color = paper_color.darkened(disabled_darkening)
-		border_color = Color("655b50")
+		border_color = BattleUIStyle.get_color("card_disabled_border")
 		content_modulate = disabled_content_modulate
 	_card_body.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(paper_color, border_color, border_width, 6))
 	# 动画牌、选择窗口牌和其他外部布局牌不能在悬停结束或样式刷新时把纵坐标重置为0；旧行为仅保留显式兼容开关。
@@ -280,6 +293,7 @@ func _refresh_visual_state() -> void:
 	_corner_label.modulate = content_modulate
 	_name_label.modulate = content_modulate
 	_type_label.modulate = content_modulate
+	_refresh_card_back_style()
 	_card_back.visible = is_face_down
 
 
@@ -295,9 +309,29 @@ func _refresh_card_content() -> void:
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
-	var content_color: Color = Color("a63631") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else Color("553e31")
+	var content_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
+	_type_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
+	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+
+
+## 刷新统一牌背配色；正面牌与牌背共用同一主题入口，隐藏信息状态不会暴露实体内容。
+func _refresh_card_back_style() -> void:
+	if not is_node_ready() or _card_back == null:
+		return
+	# 牌背外框样式；使用主题近黑背景与统一边框保持黑白太空层次。
+	var card_back_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("card_back_background"), BattleUIStyle.get_color("border"), 2, 6)
+	_card_back.add_theme_stylebox_override("panel", card_back_style)
+	# 牌背中心面板；使用较亮一层背景形成可辨识的同心结构。
+	var card_back_center: Panel = _card_back.get_node("Center") as Panel
+	card_back_center.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("card_back_center"), BattleUIStyle.get_color("border"), 1, 5))
+	# 牌背标题；主副标题只承担视觉识别，不包含任何实体牌信息。
+	var card_back_title: Label = _card_back.get_node("Title") as Label
+	card_back_title.add_theme_color_override("font_color", BattleUIStyle.get_color("card_back_title"))
+	# 牌背副标题；降低对比度避免与主标题争夺视觉层级。
+	var card_back_subtitle: Label = _card_back.get_node("Subtitle") as Label
+	card_back_subtitle.add_theme_color_override("font_color", BattleUIStyle.get_color("card_back_subtitle"))
 
 
 ## 鼠标进入可交互卡牌时播放轻量放大动画，并提高绘制层级。
@@ -342,12 +376,16 @@ func _resolve_category_color(definition: Dictionary) -> Color:
 	# 卡牌伤害属性；火焰与雷电优先覆盖普通类型配色。
 	var nature: String = str(definition.get("nature", "normal"))
 	if nature == "fire":
-		return Color("c65f3f")
+		return BattleUIStyle.get_color("card_fire")
 	if nature == "thunder":
-		return Color("547fc4")
+		return BattleUIStyle.get_color("card_thunder")
 	# 卡牌类型；基本牌使用朱红、锦囊牌使用靛青、装备牌使用青铜色。
 	var card_type: String = str(definition.get("type", ""))
-	return {"basic":Color("a44e43"), "trick":Color("4f718f"), "equipment":Color("8a7548")}.get(card_type, Color("765b3d"))
+	return {
+		"basic":BattleUIStyle.get_color("card_basic"),
+		"trick":BattleUIStyle.get_color("card_trick"),
+		"equipment":BattleUIStyle.get_color("card_equipment"),
+	}.get(card_type, BattleUIStyle.get_color("border"))
 
 
 ## 将花色 ID 转换为牌面符号。

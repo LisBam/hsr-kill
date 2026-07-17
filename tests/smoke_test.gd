@@ -453,10 +453,41 @@ func _run() -> void:
 	var first_health_pip_color: Color = (runtime_health_pips[0] as Label).get_theme_color("font_color")
 	# 第二枚体力圆点颜色；用于验证剩余体力紧随暗色圆点向下排列。
 	var second_health_pip_color: Color = (runtime_health_pips[1] as Label).get_theme_color("font_color")
-	if rendered_equipment_row_count != 3 or not equipment_rows_keep_original_size or not wooden_ox_count_visible or judgment_marker_child_count != 4 or not first_health_pip_color.is_equal_approx(Color("26382c")) or not second_health_pip_color.is_equal_approx(Color("44ca67")) or not bool(preview_state_overlay.get("_is_chained")):
+	if rendered_equipment_row_count != 3 or not equipment_rows_keep_original_size or not wooden_ox_count_visible or judgment_marker_child_count != 4 or not first_health_pip_color.is_equal_approx(BattleUIStyle.get_color("health_lost")) or not second_health_pip_color.is_equal_approx(BattleUIStyle.get_color("health_full")) or not bool(preview_state_overlay.get("_is_chained")):
 		printerr("SMOKE_FAIL player_card_equipment_rows=%d" % rendered_equipment_row_count)
 		get_tree().quit(1)
 		return
+	# 两点体力警告快照；4点上限角色剩余2点时，所有仍点亮的体力圆点必须变为黄色。
+	var warning_health_snapshot: Dictionary = equipped_player_snapshot.duplicate(true)
+	warning_health_snapshot["hp"] = 2
+	player_card_view.configure_snapshot(warning_health_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 两点体力时首枚仍点亮圆点；顶部两枚为已损失占位，因此索引2应使用黄色警告色。
+	var warning_health_color: Color = ((preview_health_column.get_child(2)) as Label).get_theme_color("font_color")
+	# 一点体力危险快照；4点上限角色剩余1点时，最后一枚仍点亮圆点必须变为红色。
+	var danger_health_snapshot: Dictionary = equipped_player_snapshot.duplicate(true)
+	danger_health_snapshot["hp"] = 1
+	player_card_view.configure_snapshot(danger_health_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 一点体力时唯一仍点亮圆点；索引3对应底部剩余体力。
+	var danger_health_color: Color = ((preview_health_column.get_child(3)) as Label).get_theme_color("font_color")
+	# 低上限角色快照；2点上限角色即使只剩1点体力也必须保持绿色，避免天然低上限被长期标为危险状态。
+	var low_maximum_health_snapshot: Dictionary = equipped_player_snapshot.duplicate(true)
+	low_maximum_health_snapshot["hp"] = 1
+	low_maximum_health_snapshot["max_hp"] = 2
+	player_card_view.configure_snapshot(low_maximum_health_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 2点上限角色的剩余体力圆点；索引1是唯一点亮圆点，颜色必须保持绿色。
+	var low_maximum_health_color: Color = ((preview_health_column.get_child(1)) as Label).get_theme_color("font_color")
+	# 1点上限角色快照；满体力时唯一圆点同样必须保持绿色。
+	var single_maximum_health_snapshot: Dictionary = equipped_player_snapshot.duplicate(true)
+	single_maximum_health_snapshot["hp"] = 1
+	single_maximum_health_snapshot["max_hp"] = 1
+	player_card_view.configure_snapshot(single_maximum_health_snapshot, equipped_character_definition, false, equipped_faction_definition)
+	# 1点上限角色的唯一体力圆点颜色；不得因当前体力等于1而套用普通角色的红色危险语义。
+	var single_maximum_health_color: Color = ((preview_health_column.get_child(0)) as Label).get_theme_color("font_color")
+	if not warning_health_color.is_equal_approx(BattleUIStyle.get_color("health_warning")) or not danger_health_color.is_equal_approx(BattleUIStyle.get_color("health_danger")) or not low_maximum_health_color.is_equal_approx(BattleUIStyle.get_color("health_full")) or not single_maximum_health_color.is_equal_approx(BattleUIStyle.get_color("health_full")):
+		printerr("SMOKE_FAIL health_threshold_colors=%s/%s/%s/%s" % [warning_health_color, danger_health_color, low_maximum_health_color, single_maximum_health_color])
+		get_tree().quit(1)
+		return
+	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
 	# 阵亡状态快照；覆盖层应显示黑白滤镜与红色“阵亡”，并让阵亡表现优先于横置链条。
 	equipped_player_snapshot["alive"] = false
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)
