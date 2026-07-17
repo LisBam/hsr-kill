@@ -77,12 +77,13 @@ func _run() -> void:
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
 	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。
-	# 旧版纯黑白断言已由崩铁风格的分层配色断言替代；主题必须同时具备中性深色外底、暖白内容面、黑框与金色强调。
+	# 旧版纯黑白断言已由崩铁风格的分层配色断言替代；主题必须同时具备中性深色外底、雾面深灰内容区、黑框与金色强调。
 	# 崩铁风格核心颜色期望；固定值用于阻止主题被误改回单色滤镜或失去参考图的视觉层级。
 	var expected_style_colors: Dictionary = {
 		"outer_background": Color("111214"),
 		"outer_background_secondary": Color("111214"),
-		"table_inner": Color("f1efe9"),
+		"table_surface": Color("24262b"),
+		"table_inner": Color("30333a"),
 		"rail": Color("1d1d1d"),
 		"border": Color("bfa86c"),
 		"accent": Color("d4b55f"),
