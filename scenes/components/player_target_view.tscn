@@ -132,6 +132,17 @@ corner_radius_top_right = 5
 corner_radius_bottom_right = 5
 corner_radius_bottom_left = 5
 
+[sub_resource type="Gradient" id="GradientHoverNameShade"]
+offsets = PackedFloat32Array(0, 1)
+colors = PackedColorArray(0, 0, 0, 0.82, 0, 0, 0, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTextureHoverNameShade"]
+gradient = SubResource("GradientHoverNameShade")
+width = 1
+height = 64
+fill_from = Vector2(0.5, 0)
+fill_to = Vector2(0.5, 1)
+
 [node name="PlayerTargetView" type="Node2D" unique_id=987083066]
 script = ExtResource("1_script")
 metadata/_edit_horizontal_guides_ = [99.0]
@@ -334,6 +345,35 @@ anchors_preset = 0
 offset_right = 148.35
 offset_bottom = 197.8
 mouse_filter = 2
+
+[node name="HoverNameShade" type="TextureRect" parent="."]
+visible = false
+z_index = 28
+offset_right = 148.35
+offset_bottom = 64.0
+mouse_filter = 2
+texture = SubResource("GradientTextureHoverNameShade")
+expand_mode = 1
+
+[node name="HoverPlayerName" type="Label" parent="HoverNameShade"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 8.0
+offset_top = 7.0
+offset_right = -8.0
+offset_bottom = 33.0
+grow_horizontal = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 0.945098, 0.784314, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 15
+text = "玩家1"
+horizontal_alignment = 1
+vertical_alignment = 1
+text_overrun_behavior = 3
 
 [node name="StateOverlay" parent="." unique_id=1188985270 instance=ExtResource("4_state_overlay")]
 unique_name_in_owner = true

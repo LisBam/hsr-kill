@@ -1,10 +1,13 @@
 extends Node
 
 ## 本地手牌内联选择回归。验证响应与弃牌不打开独立窗口，并正确控制候选牌、按钮和多选数量。
-## 同一回归同时验证本地装备候选不打开独立窗口、候选横条右移、空槽保留位置和宝物第五行动态布局。
+## 同一回归同时验证本地装备候选不打开独立窗口、候选横条右移、五个空槽常驻和宝物牌面原位覆盖。
 
 ## 正式主场景稳定等待帧数；覆盖延迟开局失败提示与首轮界面节点初始化。
 const SETTLE_FRAME_COUNT: int = 4
+
+## 开启“不响应该锦囊”后按钮背景允许的最大亮度；0.20确保其明显暗于普通朱红按钮。
+const END_PLAY_BUTTON_TEST_LUMINANCE: float = 0.20
 
 
 ## 延迟执行界面回归，确保测试节点已经进入场景树。
@@ -54,6 +57,8 @@ func _run() -> void:
 	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
 	# 回合结束按钮；内联请求期间只保留确定与取消，不应继续显示普通出牌操作。
 	var end_play_button: Button = main_instance.get_node("%EndPlayButton") as Button
+	# 通用选择摘要；内联询问不再显示“响应询问｜已选择｜需要”这类重复状态文本。
+	var selection_label: Label = main_instance.get_node("%SelectionLabel") as Label
 	# 当前手牌视图映射；用于验证候选交互和非候选灰显状态。
 	var response_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
 	# 非候选【杀】视图；必须禁用输入并使用更低亮度纸张。
@@ -72,12 +77,39 @@ func _run() -> void:
 	var disabled_confirm_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 可用确定按钮样式；作为禁用按钮亮度差的基准，不改变当前 disabled 状态。
 	var normal_confirm_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
-	if selection_panel.visible or disabled_slash_view.is_interactable or not enabled_dodge_view.is_interactable or enabled_style.bg_color.get_luminance() - disabled_style.bg_color.get_luminance() < 0.2 or not confirm_button.disabled or normal_confirm_style.bg_color.get_luminance() - disabled_confirm_style.bg_color.get_luminance() < 0.1 or not cancel_button.visible or cancel_button.disabled or end_play_button.visible:
+	if selection_panel.visible or disabled_slash_view.is_interactable or not enabled_dodge_view.is_interactable or enabled_style.bg_color.get_luminance() - disabled_style.bg_color.get_luminance() < 0.2 or not confirm_button.disabled or normal_confirm_style.bg_color.get_luminance() - disabled_confirm_style.bg_color.get_luminance() < 0.1 or not cancel_button.visible or cancel_button.disabled or end_play_button.visible or selection_label.visible or not selection_label.text.is_empty():
 		_fail("response_inline_state")
 		return
 	main_instance.call("_on_card_pressed", 7002)
 	if confirm_button.disabled or not enabled_dodge_view.is_card_selected:
 		_fail("response_confirm_state")
+		return
+	# 群体锦囊无懈询问；右侧按钮应替换为本次锦囊的不响应开关。
+	var group_trick_request: Dictionary = {
+		"request_id":111,
+		"chooser_id":0,
+		"title":"响应询问",
+		"prompt":"是否使用【无懈可击】？",
+		"candidates":[_candidate(dodge_data)],
+		"min_select":0,
+		"max_select":1,
+		"allow_cancel":true,
+		"context":{"kind":"trick_negation", "trick_id":"wugu", "parent_card_uid":9900},
+	}
+	main_instance.call("_on_card_choice_requested", group_trick_request)
+	await get_tree().process_frame
+	if not end_play_button.visible or end_play_button.text != "不响应该锦囊" or int(main_instance.get("_suppressed_group_trick_uid")) >= 0:
+		_fail("group_trick_toggle_available")
+		return
+	main_instance.call("_on_end_play_pressed")
+	# 开启状态样式；背景必须比普通朱红按钮更暗，且同一父锦囊的后续请求会被识别为自动跳过。
+	var suppressed_button_style: StyleBoxFlat = end_play_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if int(main_instance.get("_suppressed_group_trick_uid")) != 9900 or suppressed_button_style.bg_color.get_luminance() >= END_PLAY_BUTTON_TEST_LUMINANCE or not bool(main_instance.call("_is_suppressed_group_trick_choice", group_trick_request)):
+		_fail("group_trick_toggle_enabled")
+		return
+	main_instance.call("_on_end_play_pressed")
+	if int(main_instance.get("_suppressed_group_trick_uid")) >= 0:
+		_fail("group_trick_toggle_cancelled")
 		return
 	# 强制弃牌请求；两张手牌都可选择，必须选满2张后确认才启用，取消按钮保持可见但禁用。
 	var discard_request: Dictionary = {
@@ -104,7 +136,7 @@ func _run() -> void:
 	var weapon_data: Dictionary = {"uid":7004, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"equipment", "owner_id":0}
 	# 测试防御坐骑；不属于当前候选，用于确认非候选装备保持原位且防具与进攻坐骑空槽不会被压缩。
 	var defensive_mount_data: Dictionary = {"uid":7005, "definition_id":"jueying", "suit":"spade", "rank":5, "zone":"equipment", "owner_id":0}
-	# 不含宝物的本地装备字典；布局应只启用前四个固定槽位。
+	# 不含宝物的本地装备字典；布局仍应常态显示五个固定槽位。
 	var equipment_without_treasure: Dictionary = {"weapon":weapon_data, "defensive_mount":defensive_mount_data}
 	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 13, equipment_without_treasure))
 	await get_tree().process_frame
@@ -138,16 +170,17 @@ func _run() -> void:
 	var weapon_style: StyleBoxFlat = weapon_row.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 空防具槽样式；用于和浅色装备牌面比较背景亮度。
 	var empty_armor_style: StyleBoxFlat = empty_armor_row.get_theme_stylebox("disabled") as StyleBoxFlat
-	# 参考图固定槽位节距；27像素槽高加3像素间距，运行时读取导出参数避免测试保存重复魔法数字。
-	# 当前四槽自适应高度；157像素扣除三段间距后平均分配，每槽应为37像素。
-	var adaptive_equipment_row_height: float = (equipment_stack.size.y - equipment_stack.equipment_row_gap * 3.0) / 4.0
-	# 当前四槽节距；等于37像素自适应槽高加3像素间距。
+	# 常驻五槽自适应高度；175像素扣除四段间距后平均分配全部高度。
+	var adaptive_equipment_row_height: float = (equipment_stack.size.y - equipment_stack.equipment_row_gap * 4.0) / 5.0
+	# 当前五槽节距；等于自适应槽高加3像素间距。
 	var equipment_row_pitch: float = adaptive_equipment_row_height - equipment_stack.equipment_row_overlap + equipment_stack.equipment_row_gap
+	# 常驻空宝物槽；未装备时也必须显示深色占位且禁用输入。
+	var empty_treasure_row: Button = equipment_stack.get_row("treasure")
 	if not is_equal_approx(equipment_stack.shift_animation_seconds, 0.25) or animated_candidate_shift < 0.0 or animated_candidate_shift >= equipment_stack.selectable_shift_distance:
 		_fail("equipment_candidate_animation_start:%s" % animated_candidate_shift)
 		return
 	await _wait_for_equipment_animation(equipment_stack)
-	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or not is_equal_approx(equipment_stack.size.x, 150.0) or not is_equal_approx(equipment_stack.size.y, 157.0) or not is_equal_approx(weapon_row.size.y, adaptive_equipment_row_height) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - weapon_row.position.y, equipment_row_pitch * 3.0) or equipment_stack.is_slot_equipped("armor") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or equipment_stack.get_row("treasure") != null or int(equipment_stack.get("_visible_slot_count")) != 4:
+	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or empty_treasure_row == null or not is_equal_approx(equipment_stack.size.x, 150.0) or not is_equal_approx(equipment_stack.size.y, 175.0) or not is_equal_approx(weapon_row.size.y, adaptive_equipment_row_height) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - weapon_row.position.y, equipment_row_pitch * 3.0) or not is_equal_approx(empty_treasure_row.position.y - weapon_row.position.y, equipment_row_pitch * 4.0) or equipment_stack.is_slot_equipped("armor") or equipment_stack.is_slot_equipped("treasure") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or not empty_treasure_row.disabled or int(equipment_stack.get("_visible_slot_count")) != 5:
 		_fail("equipment_inline_layout")
 		return
 	main_instance.call("_on_equipment_pressed", 7004)
@@ -177,22 +210,22 @@ func _run() -> void:
 	if not is_equal_approx((equipment_stack.get_row("weapon") as Button).position.x, equipment_stack.selectable_shift_distance + equipment_stack.selected_shift_distance):
 		_fail("equipment_trigger_selected_shift")
 		return
-	# 测试宝物装备；宝物出现后组件应启用第五个槽位并重新计算整组纵向间距。
+	# 测试宝物装备；宝物出现后应在常驻第五槽原位覆盖牌面，不改变其他槽位纵向间距。
 	var treasure_data: Dictionary = {"uid":7006, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":0}
 	# 含宝物的本地装备字典；保留已有武器和防御坐骑，用于比较五槽布局位置变化。
 	var equipment_with_treasure: Dictionary = equipment_without_treasure.duplicate(true)
 	equipment_with_treasure["treasure"] = treasure_data
 	# 加入宝物前当前有效的防御坐骑横条；装备组件会在状态切换时重建节点，因此不能复用更早的旧引用。
 	var defensive_mount_row_before_treasure: Button = equipment_stack.get_row("defensive_mount")
-	# 四槽布局中的防御坐骑纵坐标；宝物出现后该坐标必须随五槽间距重新计算。
+	# 常驻五槽布局中的防御坐骑纵坐标；宝物出现后该坐标必须保持不变。
 	var defensive_mount_y_without_treasure: float = defensive_mount_row_before_treasure.position.y
 	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data], 14, equipment_with_treasure))
 	await get_tree().process_frame
-	# 五槽布局中的宝物横条；只有实际装备宝物后才应创建。
+	# 五槽布局中的宝物横条；实际装备后由深色空槽变为浅色牌面。
 	var treasure_row: Button = equipment_stack.get_row("treasure")
-	# 五槽布局中的防御坐骑横条；应与四槽布局使用不同纵坐标但仍保持固定第四槽顺序。
+	# 五槽布局中的防御坐骑横条；宝物牌面变化不能影响固定第四槽位置。
 	var defensive_mount_row_with_treasure: Button = equipment_stack.get_row("defensive_mount")
-	if treasure_row == null or int(equipment_stack.get("_visible_slot_count")) != 5 or is_equal_approx(defensive_mount_row_with_treasure.position.y, defensive_mount_y_without_treasure) or treasure_row.position.y <= defensive_mount_row_with_treasure.position.y:
+	if treasure_row == null or int(equipment_stack.get("_visible_slot_count")) != 5 or not is_equal_approx(defensive_mount_row_with_treasure.position.y, defensive_mount_y_without_treasure) or treasure_row.position.y <= defensive_mount_row_with_treasure.position.y or not equipment_stack.is_slot_equipped("treasure"):
 		_fail("equipment_treasure_layout")
 		return
 	# 公共展示牌请求；候选不属于本人手牌，必须继续使用独立 CardSelectionPanel。
@@ -224,7 +257,9 @@ func _run() -> void:
 	var taken_card_view: CardView = public_card_views.get(7010) as CardView
 	# 领取者标签；固定作为牌位包装器中正式牌面之后的第二个子节点。
 	var taken_owner_label: Label = taken_card_view.get_parent().get_child(1) as Label
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(820.0, 460.0)) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5:
+	# 公共牌阵；固定使用4列网格且不创建“展示区”标题标签。
+	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not is_equal_approx(selection_shade.color.a, 0.42) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
 	# 五谷请求；用于验证展示区没有被内联分类误吞。

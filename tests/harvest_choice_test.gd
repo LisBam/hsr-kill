@@ -63,21 +63,37 @@ func _run() -> void:
 	if _controller.state.current_phase != "play":
 		_fail("play_phase=%s" % _controller.state.current_phase)
 		return
+	# 最终座次玩家名；本地真实玩家不带前缀，内置 AI 使用“[AI]玩家X”且X读取旋转后的当前座次。
+	for seat_index: int in range(_controller.state.players.size()):
+		# 当前座次玩家；稳定 player_id 只用于判断控制权，显示编号必须使用seat_index+1。
+		var seated_player: PlayerState = _controller.state.players[seat_index]
+		# 当前座次预期显示名；真实玩家无前缀，AI 玩家添加固定前缀。
+		var expected_name: String = "玩家%d" % (seat_index + 1) if seated_player.player_id == _controller.local_human_player_id else "[AI]玩家%d" % (seat_index + 1)
+		if seated_player.display_name != expected_name:
+			_fail("player_name=%s/%s" % [seated_player.display_name, expected_name])
+			return
+	# 本地玩家状态；清空随机起始手牌，避免无懈可击插入另一种选择窗口干扰本用例。
+	var local_player: PlayerState = _controller.state.get_player(0)
+	local_player.hand.clear()
+	# 原五谷实体牌；通过真实使用牌事件进入处理区，恢复结束后必须只执行一次并进入弃牌堆。
+	var parent_card: CardInstance = CardInstance.new("wugu", "heart", 2)
+	parent_card.zone = "hand"
+	parent_card.owner_id = 0
+	local_player.hand.append(parent_card)
+	# 起始出牌请求在测试改写手牌前已经生成；先关闭并重建，使权威候选包含新加入的五谷实体。
+	_controller._cancel_active_play_choice("harvest_test_refresh")
+	_controller._begin_play_choice(0)
 	_active_play_request_id = _controller._play_choice_request_id
 	if _active_play_request_id < 0:
 		_fail("missing_play_request")
 		return
-	# 本地玩家状态；清空随机起始手牌，避免无懈可击插入另一种选择窗口干扰本用例。
-	var local_player: PlayerState = _controller.state.get_player(0)
-	local_player.hand.clear()
-	# 原五谷实体牌；模拟已经进入处理区的出牌状态，恢复结束后必须进入弃牌堆。
-	var parent_card: CardInstance = CardInstance.new("wugu", "heart", 2)
-	parent_card.zone = "processing"
-	parent_card.owner_id = -1
-	_controller.state.processing_area.append(parent_card)
-	# 通过通用卡牌源码调度入口执行【五谷丰登】；测试不再依赖控制器内的具体牌名函数。
-	_controller.effect_resolver.resolve(parent_card, 0, [0, 1])
-	await get_tree().process_frame
+	# 标准使用牌动作；全体目标由规则层自动展开，不能直接调用卡牌 resolve 绕过真实 content 恢复链。
+	var use_action: PlayerAction = PlayerAction.new("use_card", 0, parent_card.uid)
+	if not _controller.submit_action(use_action):
+		_fail("submit_wugu")
+		return
+	if not await _wait_until_harvest_finished(parent_card.uid):
+		return
 	if _finished:
 		return
 	if _controller.has_pending_card_choice():
@@ -98,6 +114,26 @@ func _run() -> void:
 	print("HARVEST_CHOICE_PASS request_count=%d phase=%s" % [_local_harvest_choice_count, _controller.state.current_phase])
 	_finished = true
 	get_tree().quit(0)
+
+
+## 等待真实五谷事件完成；超时通常表示整牌 content 恢复后重复执行或选择链未能继续。
+func _wait_until_harvest_finished(parent_card_uid: int) -> bool:
+	# 最多等待帧数；零延迟 AI 仍需要若干进程帧提交第二名角色的展示牌选择。
+	var maximum_wait_frames: int = 180
+	for _frame_index: int in range(maximum_wait_frames):
+		await get_tree().process_frame
+		if _finished:
+			return false
+		# 父牌已经离开处理区且没有待选请求时，真实 CardUseEvent 已完成内容与弃牌收尾。
+		var parent_still_processing: bool = false
+		for processing_card: CardInstance in _controller.state.processing_area:
+			if processing_card.uid == parent_card_uid:
+				parent_still_processing = true
+				break
+		if not parent_still_processing and not _controller.has_pending_card_choice():
+			return true
+	_fail("harvest_timeout")
+	return false
 
 
 ## 接收本地五谷窗口并在下一空闲帧提交第一张展示牌，模拟真实 UI 点击发生在信号调用栈结束之后。
