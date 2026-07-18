@@ -94,7 +94,8 @@ const SECONDS_PER_MINUTE: int = 60
 @export_range(0.0, 96.0, 1.0) var local_hand_gain_entry_margin: float = 24.0
 
 ## 本地正式获得牌从右侧进入手牌布局的持续时间；默认0.42秒与通用飞牌节奏一致，可在检查器中独立调整。
-@export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.42
+## 当前默认0.24秒以匹配加快后的摸牌节奏；同一正式手牌入场逻辑也服务于其他获得牌，从而保持本地手牌反馈一致。
+@export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.24
 
 ## 主视角武将牌与客户区底边之间的垂直留白；默认26像素使牌面向上抬升且不恢复已移除的座次标签，运行时通常无需动态修改。
 @export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 26.0
@@ -200,6 +201,9 @@ var local_player_seat_label: Label
 
 ## 错误提示文本；显示最近一次被规则核心拒绝的原因。
 @onready var error_label: Label = %ErrorLabel
+
+## 最近一次控制器拒绝信息；同步重开失败时用于把同一原因交还主菜单，不从标签文本反向推导业务反馈。
+var _last_action_rejection_message: String = ""
 
 ## 最近一次本地可见状态快照；界面刷新与选择校验均以此为准。
 var _snapshot: Dictionary = {}
@@ -341,6 +345,7 @@ var _character_details_pause_token: int = -1
 
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
+## 当前主菜单流程会等待玩家确认后再创建对局；初始化阶段只连接组件、创建表现节点并保持控制器状态为空。
 func _ready() -> void:
 	BattleUIStyle.set_active_style(GameSettings.ui_style_id)
 	_ensure_skill_button_grid()
@@ -583,9 +588,11 @@ func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String)
 
 
 ## 接收主菜单的身份局开局请求；主菜单关闭后才清理旧表现并创建新的权威对局状态。
+## 当前失败安全流程先同步尝试创建权威对局，只有返回成功时才通知主菜单关闭；拒绝时入口保持可见并允许重试。
 func _on_main_menu_start_requested(player_count: int) -> void:
 	match_menu.set_next_player_count(player_count)
-	_on_restart_requested(player_count)
+	if _on_restart_requested(player_count):
+		main_menu.confirm_game_started()
 
 
 ## 创建牌桌唯一的统一信息框组件；组件只消费视图请求，不直接访问控制器、网络模式或规则状态。
@@ -1672,7 +1679,17 @@ func _apply_ui_style() -> void:
 
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
-func _on_restart_requested(player_count: int) -> void:
+## 返回 true 表示权威对局已创建并可关闭主菜单；返回 false 时根据旧状态是否仍有效恢复局内菜单或主菜单。
+func _on_restart_requested(player_count: int) -> bool:
+	match_controller.default_player_count = player_count
+	_last_action_rejection_message = ""
+	# 开局前置校验错误；必须在清除旧日志、动画与选择表现前读取，拒绝时原对局可继续安全运行。
+	var validation_error: String = match_controller.get_match_start_validation_error(player_count)
+	if not validation_error.is_empty():
+		match_controller.start_match(player_count)
+		if not main_menu.visible:
+			match_menu.restore_after_restart_failure()
+		return false
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
 	log_view.clear()
@@ -1693,8 +1710,16 @@ func _on_restart_requested(player_count: int) -> void:
 	_identity_marks.clear()
 	_identity_mark_target_id = -1
 	_suppressed_group_trick_uid = -1
-	match_controller.default_player_count = player_count
-	match_controller.start_match(player_count)
+	# 当前开局结果；控制器同步返回后才能决定保留主菜单、恢复主菜单或进入新一局选将。
+	var match_started: bool = match_controller.start_match(player_count)
+	if not match_started and match_controller.state != null and not main_menu.visible:
+		match_menu.restore_after_restart_failure()
+	elif not match_started and not main_menu.visible:
+		# 当前重开失败原因；控制器正常会先发出 action_rejected，空值仅作为未知扩展失败的稳定兜底。
+		var failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法重新开始游戏，请检查数据配置后重试。"
+		main_menu.set_next_player_count(player_count)
+		main_menu.restore_after_failed_restart(failure_message)
+	return match_started
 
 
 ## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
@@ -2365,7 +2390,10 @@ func _global_to_animation_position(global_position: Vector2) -> Vector2:
 
 ## 显示最近一次动作拒绝原因。
 func _on_action_rejected(message: String) -> void:
+	_last_action_rejection_message = message
 	error_label.text = message
+	if main_menu != null and is_instance_valid(main_menu) and main_menu.visible:
+		main_menu.show_start_error(message)
 
 
 ## 更新当前选择摘要，目标以玩家显示名与选择顺序呈现。

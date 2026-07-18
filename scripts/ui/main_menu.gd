@@ -15,6 +15,22 @@ signal start_game_requested(player_count: int)
 ## 预览背景叠加当前主题面板色的透明度；默认0.18保证文字清晰且保留身份模式原图主体，运行时只影响视觉明暗。
 @export_range(0.0, 1.0, 0.01) var preview_shade_opacity: float = 0.18
 
+## 预览标题信息板的不透明度；默认0.82可在明亮原画上稳定承托文字，运行时只影响主菜单视觉层级。
+@export_range(0.0, 1.0, 0.01) var preview_summary_opacity: float = 0.82
+
+## 预览底部操作栏的不透明度；默认0.88用于隔离原画高亮区域与按钮，运行时不影响任何开局参数。
+@export_range(0.0, 1.0, 0.01) var preview_action_opacity: float = 0.88
+
+## 设置模态遮罩的不透明度；默认0.86确保设置面板成为唯一视觉焦点，运行时仅阻断主菜单底层输入。
+@export_range(0.0, 1.0, 0.01) var settings_backdrop_opacity: float = 0.86
+
+## 身份模式正常待机时显示的状态文字；集中定义可避免按钮区与错误提示使用不同默认文案。
+## 待机状态保留空文本，以便底部操作栏只在开局反馈或错误发生时显示状态信息。
+const MODE_READY_STATUS_TEXT: String = ""
+
+## 开局请求同步处理期间显示的状态文字；若控制器拒绝请求，会被具体错误原因立即替换。
+const STARTING_STATUS_TEXT: String = "正在创建身份局……"
+
 ## 顶部模式导航栏；目前只承载唯一的“身份模式”选项，后续新增模式仍可复用同一容器与主题样式。
 @onready var _top_navigation: PanelContainer = %MainMenuTopNavigation
 
@@ -30,8 +46,26 @@ signal start_game_requested(player_count: int)
 ## 主菜单全屏底色；使用主题外底色遮住尚未开始的牌桌静态节点，避免启动阶段呈现局内信息。
 @onready var _menu_background: ColorRect = %MainMenuBackground
 
+## 主菜单背景内容面；在最外层底色上提供主题桌面色层次，不绘制参考图中的毛玻璃游戏背景。
+@onready var _menu_surface: ColorRect = %MainMenuBackgroundSurface
+
 ## 身份模式预览遮罩；只改善前景文本可读性，不负责复刻参考图中的游戏毛玻璃背景。
 @onready var _preview_shade: ColorRect = %MainMenuPreviewShade
+
+## 顶部身份模式选项的选中指示线；始终读取当前主题强调色，不保存独立模式状态。
+@onready var _top_mode_indicator: ColorRect = %TopIdentityModeIndicator
+
+## 左侧身份模式卡片的选中指示线；与按钮按下状态共同表达当前唯一可用模式。
+@onready var _mode_card_indicator: ColorRect = %IdentityModeIndicator
+
+## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
+@onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
+
+## 预览左上角模式标签；遮盖覆盖裁剪后可能残留的原图品牌碎片，并以当前主题标明标准身份局。
+@onready var _preview_mode_badge: PanelContainer = %MainMenuPreviewModeBadge
+
+## 预览底部操作栏；承载当前模式状态、设置与开始游戏按钮，并隔离原画高亮区域。
+@onready var _action_panel: PanelContainer = %MainMenuActionPanel
 
 ## 顶部身份模式选项；当前唯一的游戏模式入口，按下后仅重新确认身份模式为选中状态。
 @onready var _top_identity_mode_button: Button = %TopIdentityModeButton
@@ -46,6 +80,7 @@ signal start_game_requested(player_count: int)
 @onready var _mode_description: Label = %MainMenuModeDescription
 
 ## 开始游戏按钮；点击后关闭主菜单并把人数请求交给牌桌的统一开局入口。
+## 实际关闭时机由牌桌在权威对局创建成功后确认；请求失败时该按钮与主菜单继续保持可用。
 @onready var _start_game_button: Button = %StartGameButton
 
 ## 设置按钮；位于开始游戏按钮左侧，替代参考布局中的商店入口。
@@ -53,6 +88,9 @@ signal start_game_requested(player_count: int)
 
 ## 设置浮层；默认隐藏，打开后允许修改全局显示与下一局人数配置。
 @onready var _settings_panel: PanelContainer = %MainMenuSettingsPanel
+
+## 设置浮层的全屏模态遮罩；打开设置时阻止模式与开局按钮接收误触，点击空白处可返回主菜单。
+@onready var _settings_backdrop: ColorRect = %MainMenuSettingsBackdrop
 
 ## 设置关闭按钮；仅关闭设置浮层并返回主菜单，不改变已选择的游戏模式或未开始的对局状态。
 @onready var _settings_close_button: Button = %MainMenuSettingsCloseButton
@@ -81,15 +119,32 @@ signal start_game_requested(player_count: int)
 ## 下一局人数输入框；开始游戏时读取该控件，限制为标准身份局支持的2至10人范围。
 @onready var _player_count_input: SpinBox = %MainMenuPlayerCountInput
 
+## 底部操作栏状态文字；正常显示模式选择，开局失败时在原位展示控制器返回的具体原因。
+@onready var _menu_status_label: Label = %MainMenuStatusLabel
+
+## 设置标题下的即时生效提示；颜色由当前主题的次级文字语义统一提供。
+@onready var _settings_hint_label: Label = %MainMenuSettingsHint
+
+## 当前状态文字是否表示错误；主题切换时据此保留危险色，而不是把错误重绘成普通提示。
+var _status_is_error: bool = false
+
+## 设置模态打开前的主菜单底层控件焦点模式；键为控件实例、值为原始 FocusMode，关闭设置后原样恢复，运行时不保存业务状态。
+var _background_focus_modes: Dictionary = {}
+
+## 主菜单覆盖前的局内控件焦点模式；主菜单可见期间阻止键盘与手柄导航进入隐藏牌桌，进入对局后原样恢复。
+var _covered_interface_focus_modes: Dictionary = {}
+
 
 ## 初始化主菜单交互与全局设置同步；主菜单进入场景后始终覆盖尚未开局的牌桌。
 func _ready() -> void:
 	# 当前菜单绘制与输入层；提升到同级节点最前方，确保选将遮罩和局内菜单不会遮挡启动入口。
 	call_deferred("_move_to_input_front")
+	visibility_changed.connect(_on_visibility_changed)
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
 	_settings_button.pressed.connect(_open_settings)
 	_settings_close_button.pressed.connect(_close_settings)
+	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	_start_game_button.pressed.connect(_request_start_game)
 	_card_name_button.pressed.connect(GameSettings.toggle_card_name_mode)
 	_player_count_input.min_value = minimum_player_count
@@ -116,18 +171,34 @@ func _ready() -> void:
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
 	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
-	_settings_panel.visible = false
+	_suspend_covered_interface_focus()
+	_set_settings_visible(false)
 	_select_identity_mode()
 	_refresh_card_name_text()
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	refresh_ui_style()
+	call_deferred("_focus_start_game_button")
 
 
 ## 在父节点完成初始化后提升主菜单分支；保证启动页面的绘制顺序与真实 GUI 命中顺序一致。
 func _move_to_input_front() -> void:
 	move_to_front()
+	if visible:
+		_suspend_covered_interface_focus()
+
+
+## 响应主菜单自身显隐变化；无论由正式开局入口、测试场景或后续场景路由切换，都同步维护牌桌焦点边界。
+func _on_visibility_changed() -> void:
+	if not is_node_ready():
+		return
+	if visible:
+		_suspend_covered_interface_focus()
+		call_deferred("_focus_start_game_button")
+	else:
+		_set_settings_visible(false)
+		_restore_covered_interface_focus()
 
 
 ## 将牌桌提供的下一局人数写入主菜单设置；人数保持限制在标准身份局的有效范围。
@@ -149,49 +220,75 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_menu_background.color = BattleUIStyle.get_color("outer_background")
-	_top_navigation.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
-	_main_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
-	_mode_list.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 1, 6))
-	_preview_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_menu_surface.color = BattleUIStyle.get_color("table_surface")
+	_top_navigation.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_main_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_preview_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
+	_preview_mode_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
+	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_summary_opacity), BattleUIStyle.get_color("border")))
+	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_action_opacity), BattleUIStyle.get_color("accent"), 1, 0))
 	_settings_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	_preview_shade.color = Color(BattleUIStyle.get_color("panel"), preview_shade_opacity)
+	_settings_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
+	_top_mode_indicator.color = BattleUIStyle.get_color("accent")
+	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
+	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	BattleUIStyle.apply_interaction_button(_top_identity_mode_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_card_name_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_mode_description.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	(%MainMenuTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%MainMenuBrandSubtitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	(%MainMenuModeListTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(_mode_list.get_node("ModeListVBox/ModeListHint") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	(%IdentityModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	_menu_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if _status_is_error else BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuSettingsTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_settings_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	(%MainMenuUiStyleLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_ui_style_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	_auto_identity_marking_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_apply_slider_style(_ai_response_delay_slider)
+	_apply_slider_style(_game_speed_slider)
+	_apply_spin_box_style(_player_count_input)
+	_apply_option_popup_style(_ui_style_option)
 
 
 ## 重新确认身份模式为当前唯一选择；未来接入其他模式时只需在此处更新预览绑定而不改变开局信号。
 func _select_identity_mode() -> void:
 	_mode_title.text = "身份模式"
-	_mode_description.text = "标准身份局"
+	_mode_description.text = "标准身份局 · %d—%d人" % [minimum_player_count, maximum_player_count]
 	_top_identity_mode_button.button_pressed = true
 	_identity_mode_button.button_pressed = true
+	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
 func _open_settings() -> void:
-	_settings_panel.visible = true
+	_set_settings_visible(true)
+	_settings_close_button.grab_focus()
 
 
 ## 关闭设置浮层；已经写入 GameSettings 的配置立即保留，不需要额外确认按钮。
 func _close_settings() -> void:
-	_settings_panel.visible = false
+	_set_settings_visible(false)
+	_settings_button.grab_focus()
 
 
 ## 读取有效人数并请求开始身份局；成功后的实际开局、状态清理与选将流程由牌桌统一处理。
@@ -199,14 +296,197 @@ func _request_start_game() -> void:
 	# 已确认的下一局人数；写回控件使文本、Range 数值和发出的开局请求保持一致。
 	var player_count: int = get_next_player_count()
 	_player_count_input.value = player_count
-	_settings_panel.visible = false
-	visible = false
+	_set_settings_visible(false)
+	_start_game_button.disabled = true
+	_show_status(STARTING_STATUS_TEXT, false)
 	start_game_requested.emit(player_count)
+	if visible:
+		_start_game_button.disabled = false
+		if _menu_status_label.text == STARTING_STATUS_TEXT:
+			show_start_error("无法开始游戏，请检查数据配置后重试。")
+
+
+## 在牌桌确认权威对局创建成功后关闭主菜单；失败请求不会调用该入口，因此玩家始终可以修改设置并重试。
+func confirm_game_started() -> void:
+	_set_settings_visible(false)
+	_start_game_button.disabled = false
+	visible = false
+	_restore_covered_interface_focus()
+
+
+## 在主菜单底部显示开局拒绝原因；错误只属于入口反馈，不写入规则状态或全局设置。
+func show_start_error(message: String) -> void:
+	_show_status(message, true)
+	_start_game_button.disabled = false
+
+
+## 局内重新开局失败后恢复主菜单入口；统一重置模态、错误提示和主要操作焦点，避免玩家停留在无权威状态的旧牌桌。
+func restore_after_failed_restart(message: String) -> void:
+	visible = true
+	_suspend_covered_interface_focus()
+	_set_settings_visible(false)
+	_start_game_button.disabled = false
+	_show_status(message, true)
+	move_to_front()
+	call_deferred("_focus_start_game_button")
+
+
+## 让设置面板与全屏遮罩保持同一可见状态；该入口避免出现只有面板或只有遮罩残留的输入异常。
+func _set_settings_visible(settings_visible: bool) -> void:
+	_settings_backdrop.visible = settings_visible
+	_settings_panel.visible = settings_visible
+	if settings_visible:
+		_suspend_background_focus()
+	else:
+		_restore_background_focus()
+
+
+## 暂停主菜单内设置面板之外全部可聚焦控件；保证 Tab、Shift+Tab 与手柄导航始终留在当前模态内容中。
+func _suspend_background_focus() -> void:
+	# 主菜单下的全部控件；设置浮层只需冻结同一组件内的模式和开局入口，局内焦点由主菜单覆盖边界独立管理。
+	var menu_controls: Array[Node] = find_children("*", "Control", true, false)
+	# 主菜单控件遍历项；逐个保留原始焦点模式，后续追加的模式按钮无需在组件中硬编码节点名。
+	for control_node: Node in menu_controls:
+		# 当前可聚焦控件；设置面板及其后代保留原焦点模式，供模态内部正常循环导航。
+		var control: Control = control_node as Control
+		if control == null or control == _settings_panel or _settings_panel.is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _background_focus_modes.has(control):
+			continue
+		_background_focus_modes[control] = control.focus_mode
+		control.focus_mode = Control.FOCUS_NONE
+
+
+## 恢复设置打开前的底层焦点配置；失效节点会被跳过，避免场景退出期间访问已释放控件。
+func _restore_background_focus() -> void:
+	# 已缓存控件键；遍历快照后统一清空字典，恢复过程中不会修改当前迭代集合。
+	for control_variant: Variant in _background_focus_modes.keys():
+		if not is_instance_valid(control_variant):
+			continue
+		# 先前被暂停的底层控件；静态主菜单通常始终有效，实例校验为后续动态模式扩展提供安全边界。
+		var control: Control = control_variant as Control
+		if control == null:
+			continue
+		control.focus_mode = int(_background_focus_modes.get(control_variant, Control.FOCUS_ALL))
+	_background_focus_modes.clear()
+
+
+## 暂停当前视口内主菜单之外全部可聚焦控件；全屏底色负责鼠标，焦点边界负责键盘与手柄输入。
+func _suspend_covered_interface_focus() -> void:
+	# 当前视口下的全部控件；牌桌、日志和局内菜单均与主菜单共享焦点域，主菜单可见时必须统一隔离。
+	var viewport_controls: Array[Node] = get_viewport().find_children("*", "Control", true, false)
+	# 视口控件遍历项；主菜单自身及全部后代保留原焦点模式，其他可聚焦节点保存后设为不可聚焦。
+	for control_node: Node in viewport_controls:
+		# 当前视口控件；动态创建的牌桌控件也会在延迟置顶阶段补充进入缓存，不依赖固定节点路径。
+		var control: Control = control_node as Control
+		if control == null or control == self or is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _covered_interface_focus_modes.has(control):
+			continue
+		_covered_interface_focus_modes[control] = control.focus_mode
+		control.focus_mode = Control.FOCUS_NONE
+
+
+## 恢复主菜单覆盖前的局内焦点配置；只在成功进入对局或组件退出场景树时调用。
+func _restore_covered_interface_focus() -> void:
+	# 已缓存局内控件键；使用快照遍历并在结尾统一清空，避免恢复过程中修改当前迭代集合。
+	for control_variant: Variant in _covered_interface_focus_modes.keys():
+		if not is_instance_valid(control_variant):
+			continue
+		# 被主菜单覆盖的局内控件；动态节点已经释放时安全跳过，其余节点恢复各自原始焦点模式。
+		var control: Control = control_variant as Control
+		if control == null:
+			continue
+		control.focus_mode = int(_covered_interface_focus_modes.get(control_variant, Control.FOCUS_ALL))
+	_covered_interface_focus_modes.clear()
+
+
+## 组件离开场景树时归还全部焦点模式；支持主菜单被独立卸载而不污染仍保留的牌桌控件。
+func _exit_tree() -> void:
+	_restore_background_focus()
+	_restore_covered_interface_focus()
+
+
+## 在底部操作栏更新状态文本与语义色；主题变化后仍通过错误标记恢复正确颜色。
+func _show_status(message: String, is_error: bool) -> void:
+	_status_is_error = is_error
+	_menu_status_label.visible = not message.is_empty()
+	_menu_status_label.text = message
+	_menu_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if is_error else BattleUIStyle.get_color("text_secondary"))
+
+
+## 点击设置面板外的模态遮罩时返回主菜单；仅处理鼠标左键按下，避免滚轮和右键误关闭。
+func _on_settings_backdrop_gui_input(event: InputEvent) -> void:
+	if event is not InputEventMouseButton:
+		return
+	# 当前鼠标事件；显式检查按键与按下阶段，保证一次点击只关闭一次浮层。
+	var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+	if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
+		_close_settings()
+		accept_event()
+
+
+## 设置浮层打开时允许使用 Esc 返回；主菜单本身不拦截对局阶段或其他组件的取消输入。
+func _unhandled_input(event: InputEvent) -> void:
+	if not visible or not _settings_panel.visible:
+		return
+	if event.is_action_pressed("ui_cancel"):
+		_close_settings()
+		get_viewport().set_input_as_handled()
+
+
+## 主菜单完成布局后把键盘焦点放到主要操作；玩家可直接按确认键开始当前唯一模式。
+func _focus_start_game_button() -> void:
+	if visible and not _settings_panel.visible:
+		_start_game_button.grab_focus()
+
+
+## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。
+func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
+	# 内层面板样式；复用主题工厂的边距与圆角后移除阴影，避免多层金框产生视觉噪声。
+	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
+	return style
+
+
+## 为主菜单设置滑条应用主题轨道与已选区域；数值范围和步长仍由 GameSettings 决定。
+func _apply_slider_style(slider: HSlider) -> void:
+	# 未选择区域轨道；低对比度细边保持滑条在两套深色主题中都清晰可见。
+	var track_style: StyleBoxFlat = _make_flat_inner_panel(BattleUIStyle.get_color("disabled_button"), BattleUIStyle.get_color("disabled_button_border"), 1, 4)
+	track_style.content_margin_top = 3.0
+	track_style.content_margin_bottom = 3.0
+	# 已选择区域轨道；主题强调色半透明填充用于表达当前数值，不引入固定配色。
+	var filled_style: StyleBoxFlat = _make_flat_inner_panel(Color(BattleUIStyle.get_color("accent"), 0.72), BattleUIStyle.get_color("accent"), 1, 4)
+	filled_style.content_margin_top = 3.0
+	filled_style.content_margin_bottom = 3.0
+	slider.add_theme_stylebox_override("slider", track_style)
+	slider.add_theme_stylebox_override("grabber_area", filled_style)
+	slider.add_theme_stylebox_override("grabber_area_highlight", filled_style)
+
+
+## 为人数 SpinBox 的文本输入区应用主题样式；上下箭头仍由 Godot 提供标准键盘与鼠标行为。
+func _apply_spin_box_style(spin_box: SpinBox) -> void:
+	# SpinBox 内部文本框；只负责显示和编辑人数，不另存人数配置。
+	var line_edit: LineEdit = spin_box.get_line_edit()
+	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
+	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
+
+
+## 为主题下拉菜单的弹出列表补齐面板、悬停与文字配色；选项内容仍来自 UIStyleRegistry。
+func _apply_option_popup_style(option_button: OptionButton) -> void:
+	# OptionButton 自带的弹出菜单；该节点由 Godot 管理，主菜单只覆盖视觉主题。
+	var popup: PopupMenu = option_button.get_popup()
+	popup.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	popup.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
+	popup.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	popup.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	popup.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
 
 
 ## 从注册表构建 UI 风格选项；稳定标识写入元数据，显示名称调整不会影响保存的设置值。
 func _populate_ui_style_options() -> void:
 	_ui_style_option.clear()
+	# 注册表风格标识；按注册顺序生成显示选项，稳定 ID 只写入元数据而不暴露为按钮文字。
 	for style_id: String in UIStyleRegistry.get_style_ids():
 		# 当前选项索引；元数据保存稳定标识，后续无需通过中文名称反向匹配主题。
 		var option_index: int = _ui_style_option.item_count
@@ -220,6 +500,7 @@ func _refresh_ui_style_selection(style_id: String) -> void:
 		return
 	# 已规范化的风格标识；配置缺失时稳定回退默认主题，保证下拉框存在有效选择。
 	var normalized_style_id: String = UIStyleRegistry.normalize_style_id(style_id)
+	# 下拉选项索引；只用于比较元数据和同步选中项，不作为主题的持久标识。
 	for option_index: int in range(_ui_style_option.item_count):
 		if str(_ui_style_option.get_item_metadata(option_index)) == normalized_style_id:
 			_ui_style_option.select(option_index)

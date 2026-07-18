@@ -106,6 +106,12 @@ func get_next_player_count() -> int:
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
+## 局内重新开局在破坏旧局前被拒绝时重新展开菜单；原对局保持运行，玩家可修正设置后再次提交。
+func restore_after_restart_failure() -> void:
+	_menu_panel.visible = true
+	_restart_button.grab_focus()
+
+
 ## 按全局名称模式刷新菜单按钮文字，不创建第二份名称状态。
 func refresh_card_name_text() -> void:
 	if not is_node_ready():
