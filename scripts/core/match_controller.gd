@@ -4194,9 +4194,30 @@ func _start_turn(player_id: int) -> void:
 	_record_runtime_event("phaseZhunbei", "phase", {"player_id":player_id}, {}, turn_event_id)
 	if not _begin_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id):
 		_emit_rule_timing("phaseZhunbeiCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
-	_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
-	_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id)
+	# 准备阶段Begin中的技能可创建异步选择；等待提交时不能继续安排以start为前提的旧阶段切换。
+	if has_pending_card_choice():
+		return
+	_continue_turn_after_preparation_phase(player_id)
+
+
+## 完成准备阶段主体并安排判定阶段；选择窗口恢复后可再次调用，已完成主体不会重复派发开始事件。
+func _continue_turn_after_preparation_phase(player_id: int) -> void:
+	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id or state.current_phase != "start":
+		return
+	# 当前准备阶段生命周期键；仍存在时说明本次调用需要执行阶段主体，已被结束时机移除时只续接后续阶段。
+	var lifecycle_key: String = "%d:%s" % [player_id, "phaseZhunbei"]
+	# 当前回合玩家；准备阶段选择等待期间可能已经死亡或离场，继续前必须重新读取状态。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		_advance_after_current_player_death(player_id)
+		return
+	if _started_phase_lifecycles.has(lifecycle_key):
+		add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
+		_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
+		_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		# 准备阶段End或After也可创建选择；此时生命周期已经完成，恢复后只安排判定阶段。
+		if has_pending_card_choice():
+			return
 	if state.game_over:
 		return
 	if not player.alive:
@@ -4205,11 +4226,10 @@ func _start_turn(player_id: int) -> void:
 	if player.face_down:
 		turn_over_player(player_id, player_id, "turn_start_skip")
 		add_log("%s翻回正面并跳过本回合。" % player.display_name)
-		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
-		_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
+		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
+		_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
 		_finish_turn(player_id)
 		return
-
 	_schedule_phase_transition(player_id, "start", Callable(self, "_enter_judgment_phase").bind(player_id))
 
 
@@ -4334,6 +4354,12 @@ func _resume_interrupted_turn_flow() -> void:
 	var current_player: PlayerState = state.get_player(state.current_player_id)
 	if current_player != null and not current_player.alive:
 		_advance_after_current_player_death(current_player.player_id)
+		return
+	if state.current_phase == "start":
+		_continue_turn_after_preparation_phase(state.current_player_id)
+		return
+	if state.current_phase == "discard":
+		_continue_turn_after_discard_phase_begin(state.current_player_id)
 		return
 	if state.current_phase != "judgment":
 		return
@@ -5426,8 +5452,26 @@ func _enter_discard_phase(player_id: int) -> void:
 		_emit_rule_timing("phaseDiscardCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		_finish_turn(player_id)
 		return
+	# 弃牌阶段Begin中的技能可创建异步选择；选择完成后由统一恢复入口重新进入阶段主体。
+	if has_pending_card_choice():
+		return
+	_continue_turn_after_discard_phase_begin(player_id)
+
+
+## 完成弃牌阶段主体；Begin选择或阶段结束时机恢复后均从此入口安全续接，不会重复创建强制弃牌请求。
+func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
+	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id or state.current_phase != "discard":
+		return
+	# 当前弃牌阶段生命周期键；只有仍处于Begin之后的活动生命周期才执行手牌上限计算。
+	var lifecycle_key: String = "%d:%s" % [player_id, "phaseDiscard"]
+	if not _started_phase_lifecycles.has(lifecycle_key):
+		_finish_turn(player_id)
+		return
 	# 当前玩家状态；弃牌候选只来自其手牌区。
 	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		_advance_after_current_player_death(player_id)
+		return
 	# 需要弃置的手牌数；体力为负时手牌上限按0处理。
 	var discard_count: int = maxi(player.hand.size() - player.get_hand_limit(), 0)
 	if discard_count > 0:
@@ -5495,6 +5539,9 @@ func _finish_turn(player_id: int) -> void:
 	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
 	if state.current_phase == "discard" and pending_extra_play_phases > 0:
 		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		# 弃牌阶段End或After可能再打开选择窗口；保留额外阶段次数，等待恢复后再安排阶段切换。
+		if has_pending_card_choice():
+			return
 		if pending_extra_play_phases == 1:
 			_extra_play_phase_counts.erase(player_id)
 		else:

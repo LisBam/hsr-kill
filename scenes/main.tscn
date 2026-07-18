@@ -91,6 +91,18 @@ script = ExtResource("1_ui")
 
 [node name="MatchController" type="Node" parent="." unique_id=1222667046]
 script = ExtResource("2_match")
+default_deck_id = null
+default_player_count = null
+local_human_player_id = null
+randomize_local_human_seat = null
+ai_action_delay_seconds = null
+game_flow_interval_seconds = null
+delayed_judgment_preview_seconds = null
+delayed_judgment_result_pause_seconds = null
+max_ai_actions_per_turn = null
+max_ai_choice_combinations = null
+character_candidate_count = null
+first_turn_seat_number = null
 
 [node name="GameplayPauseService" type="Node" parent="MatchController" unique_id=2076753312]
 script = ExtResource("19_pause_service")
