@@ -169,9 +169,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；现有武将共登记十四个独立技能源码定义，其中包含两项领袖技。
+	# 技能元数据数量；现有武将共登记十七个独立技能源码定义，其中包含两项领袖技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 14:
+	if skill_definition_count != 17:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -183,15 +183,21 @@ func _run() -> void:
 	# 新增正式武将与技能；基础体力、势力和玩家可见技能原文必须由源码自动索引且保持稳定。
 	var xier_definition: Dictionary = GameDatabase.get_character("xier")
 	var jizi_definition: Dictionary = GameDatabase.get_character("himeko")
-	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3:
+	# 三月七、杰帕德与丹恒的武将定义；用于验证新体力、势力与技能引用已替换旧占位内容。
+	var march_definition: Dictionary = GameDatabase.get_character("march_7th")
+	# 杰帕德武将定义；用于校验贝洛伯格势力与4点基础体力。
+	var gepard_definition: Dictionary = GameDatabase.get_character("gepard")
+	# 丹恒武将定义；用于校验星穹列车势力与4点基础体力。
+	var dan_heng_definition: Dictionary = GameDatabase.get_character("dan_heng")
+	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4:
 		printerr("SMOKE_FAIL new_character_stats")
 		get_tree().quit(1)
 		return
-	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。" or str(GameDatabase.get_skill("zhenqi").get("description", "")) != "领袖技，“贝洛伯格”势力的角色的回合开始时，其可弃置一张手牌/失去1点体力，然后你令另一名“贝洛伯格”势力的角色摸一张牌/回复1点体力。" or str(GameDatabase.get_skill("linghang").get("description", "")) != "领袖技，“星穹列车”势力的角色使一名角色横置时，你可对其发动此技能，然后其可重铸一张手牌。每回合限一次。":
+	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。" or str(GameDatabase.get_skill("zhenqi").get("description", "")) != "领袖技，“贝洛伯格”势力的角色的回合开始时，其可弃置一张手牌/失去1点体力，然后你令另一名“贝洛伯格”势力的角色摸一张牌/回复1点体力。" or str(GameDatabase.get_skill("linghang").get("description", "")) != "领袖技，“星穹列车”势力的角色使一名角色横置时，你可对其发动此技能，然后其可重铸一张手牌。每回合限一次。" or str(GameDatabase.get_skill("jiahu").get("description", "")) != "准备阶段，你可以横置一名武将牌竖置且没有护盾的角色，并令其获得1点护盾。" or str(GameDatabase.get_skill("bingfeng").get("description", "")) != "当你使用牌指定唯一目标时，你可选择一项：1.将目标的武将牌调整为竖直；2.弃置目标一张手牌。然后若该角色不为你，你令此牌无效。每回合每名角色限一次。" or str(GameDatabase.get_skill("yongyi").get("description", "")) != "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，若你有护盾，你可以失去1点护盾并进行一个额外的出牌阶段。" or str(GameDatabase.get_skill("gangfeng").get("description", "")) != "你可将黑色牌当雷【杀】使用或打出。" or str(GameDatabase.get_skill("jiyu").get("description", "")) != "当你使用雷【杀】指定目标时，你可横置目标角色，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。":
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前八名样例武将共使用四个独立势力主题。
+	# 势力展示元数据数量；当前十名武将共使用四个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 4:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)

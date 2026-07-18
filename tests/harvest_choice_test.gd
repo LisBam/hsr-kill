@@ -58,7 +58,15 @@ func _run() -> void:
 		return
 	# 领袖候选；固定种子下本地0号玩家为当前唯一待确认的人类角色。
 	var leader_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if leader_candidates.is_empty() or not _controller.select_character(0, leader_candidates[0]):
+	# 本专项使用的领袖武将；避开会在准备阶段或出牌阶段Begin创建询问的三月七与布洛妮娅。
+	var selected_leader_character_id: String = ""
+	for candidate_id: String in leader_candidates:
+		if candidate_id not in ["march_7th", "bronya"]:
+			selected_leader_character_id = candidate_id
+			break
+	if selected_leader_character_id.is_empty() and not leader_candidates.is_empty():
+		selected_leader_character_id = leader_candidates[0]
+	if leader_candidates.is_empty() or not _controller.select_character(0, selected_leader_character_id):
 		_fail("select_leader")
 		return
 	await get_tree().process_frame

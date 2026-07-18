@@ -195,9 +195,17 @@ var _hovered_equipment_slot: String = ""
 ## 武将牌受伤抖动组件；只接收表现调用并恢复牌面原位，不读取当前体力或伤害来源。
 @onready var _damage_shake_feedback: DamageShakeFeedback = $DamageShakeFeedback
 
+## 武将牌竖置时的父容器锚点；初始化时记录，横置时用于绕牌面中心旋转并保持中心位置不变。
+var _upright_anchor_position: Vector2 = Vector2.ZERO
+
+## 是否已记录竖置锚点；false表示节点尚未进入场景树，避免配置阶段提前改写位置。
+var _orientation_initialized: bool = false
+
 
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
+	_upright_anchor_position = position
+	_orientation_initialized = true
 	_card_body.size = card_size
 	_card_back.size = card_size
 	_input_area.size = card_size
@@ -216,7 +224,16 @@ func _ready() -> void:
 
 ## 返回武将牌在全局画布中的矩形；卡牌动画通过该接口取得角色中心点。
 func get_global_rect() -> Rect2:
-	return Rect2(global_position, card_size * global_scale)
+	# 牌面四角的全局坐标；横置时必须经过global_transform，不能继续假设宽高方向不变。
+	var global_corners: Array[Vector2] = [global_transform * Vector2.ZERO, global_transform * Vector2(card_size.x, 0.0), global_transform * card_size, global_transform * Vector2(0.0, card_size.y)]
+	# 全局包围矩形左上角；逐角取最小值可同时兼容旋转与缩放。
+	var minimum_point: Vector2 = global_corners[0]
+	# 全局包围矩形右下角；逐角取最大值供动画和信息框获取真实横置边界。
+	var maximum_point: Vector2 = global_corners[0]
+	for corner: Vector2 in global_corners:
+		minimum_point = minimum_point.min(corner)
+		maximum_point = maximum_point.max(corner)
+	return Rect2(minimum_point, maximum_point - minimum_point)
 
 
 ## 播放一次武将牌受伤反馈；桌面在确认公开快照体力下降后调用，同一组件可被本地与其他玩家复用。
@@ -479,6 +496,21 @@ func _refresh_visual_state() -> void:
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
 	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
+	_refresh_card_orientation()
+
+
+## 根据规则快照切换武将牌竖置与横置角度；连环状态变化一次就反转一次显示方向。
+func _refresh_card_orientation() -> void:
+	if not _orientation_initialized:
+		return
+	# 当前是否横置；规则层chained是唯一权威状态，表现层不另存翻转开关。
+	var should_be_horizontal: bool = bool(_player_snapshot.get("chained", false))
+	rotation = PI * 0.5 if should_be_horizontal else 0.0
+	# 牌面局部中心；横置时绕该点旋转，避免左上角锚定导致整张牌跳位。
+	var card_center: Vector2 = card_size * 0.5
+	# 中心旋转后的锚点补偿；竖置时为零，横置时保持视觉中心与原座次完全一致。
+	var orientation_offset: Vector2 = card_center - card_center.rotated(rotation)
+	position = _upright_anchor_position + orientation_offset
 
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
