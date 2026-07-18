@@ -2,6 +2,9 @@ extends SkillDefinition
 
 ## 【行军】技能源码。技能在 phaseUseBegin 内直接询问持有者，确认后立即结束该阶段。
 
+## 【行军】对额外回合角色的身份观察牌效；正1表示给予额外回合是一次公开帮助行为。
+const IDENTITY_TARGET_RESULT: float = 1.0
+
 ## 当前出牌阶段是否仍处于可发动窗口；每次 phaseUseBegin 恢复，使用牌或其他技能后关闭。
 var _phase_window_open: bool = false
 
@@ -92,7 +95,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	if choice_kind == "xingjun_extra_turn":
 		if response.confirmed and response.target_ids.size() == 1:
-			get_skill_player(response.target_ids[0]).addPhase()
+			if get_skill_player(response.target_ids[0]).addPhase():
+				observe_identity_behavior([response.target_ids[0]], {"target_result":IDENTITY_TARGET_RESULT})
 		return true
 	return false
 

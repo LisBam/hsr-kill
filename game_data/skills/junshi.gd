@@ -2,6 +2,9 @@ extends SkillDefinition
 
 ## 【军势】技能源码。任意角色在一个出牌阶段内首次以【杀】指定目标时，持有者可令其摸一张牌。
 
+## 【军势】对摸牌角色的身份观察牌效；正1表示成功发动是一次公开帮助行为，不改变实际摸牌数。
+const IDENTITY_TARGET_RESULT: float = 1.0
+
 ## 当前出牌阶段是否已经发动；每次 phaseUseBegin 重置，确认发动后设为 true。
 var _used_this_play_phase: bool = false
 
@@ -47,6 +50,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		# 使用【杀】的角色 ID；等待期间若角色已死亡，摸牌端口会安全忽略。
 		var slash_user_id: int = int(context.get("slash_user_id", -1))
 		_used_this_play_phase = true
+		observe_identity_behavior([slash_user_id], {"target_result":IDENTITY_TARGET_RESULT})
 		host.call("draw", slash_user_id, 1)
 	return true
 

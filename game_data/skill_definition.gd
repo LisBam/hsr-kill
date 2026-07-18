@@ -49,6 +49,17 @@ func get_owner_skill_player() -> SkillPlayer:
 	return get_skill_player(owner_player_id)
 
 
+## 上报一次已经确认成功的公开技能目标行为；ai_profile 使用卡牌 AI 的 target_result/expose 语义且不改变任何规则状态。
+func observe_identity_behavior(target_ids: Array[int], ai_profile: Dictionary) -> void:
+	if host == null or not host.has_method("observe_skill_identity_behavior"):
+		return
+	# 稳定目标副本；技能运行时不得在上报后继续修改身份模型收到的目标集合。
+	var stable_target_ids: Array[int] = target_ids.duplicate()
+	# 身份行为配置副本；目标收益与显式暴露值由当前技能源码负责声明。
+	var stable_ai_profile: Dictionary = ai_profile.duplicate(true)
+	host.call("observe_skill_identity_behavior", owner_player_id, stable_target_ids, stable_ai_profile)
+
+
 ## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
 func get_active_entries() -> Array[String]:
 	# 标准主动入口结果；只保留目录登记名称并去重，避免错误元数据进入选择协议。

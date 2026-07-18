@@ -69,7 +69,7 @@ func request_choice(player_id: int, authoritative_snapshot: Dictionary, request:
 
 
 ## 向全部基础 AI 广播一次公开使用牌行为；只更新身份观察数据，不改变任何规则状态。
-func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int]) -> void:
+func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int], observer_id: int = -1) -> void:
 	# 行为前身份标记；观察完成后只在推断实际改变时通知表现层。
 	var previous_identity_mark: String = _identity_model.get_identity_mark(actor_id)
 	# 已通知策略对象；共享身份模型只需由任意一个基础策略更新一次，避免多名 AI 重复累计暴露度。
@@ -78,16 +78,34 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 		# 当前基础策略；未来自定义策略没有观察接口时安全跳过。
 		var policy: BasicAIPolicy = policy_variant as BasicAIPolicy
 		if policy != null:
-			policy.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids)
+			policy.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids, observer_id)
 			notified = true
 			break
 	if not notified:
 		# 没有内置 AI 的联机对局仍需记录公开行为，供本地自动身份标记使用；观察模型不会替玩家执行动作。
-		_identity_model.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids)
+		_identity_model.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids, observer_id)
 	# 行为后身份标记；只允许无名杀式模型产生的忠反临时标记进入通知。
 	var current_identity_mark: String = _identity_model.get_identity_mark(actor_id)
 	if current_identity_mark != previous_identity_mark:
 		identity_mark_changed.emit(actor_id, current_identity_mark)
+
+
+## 记录一次已经成功消费的公开响应牌；响应上下文由规则层提供，身份模型只读取无懈来源、目标和奇偶方向。
+func observe_card_response(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, response_subject_definition: Dictionary, response_context: Dictionary, observer_id: int = -1) -> void:
+	# 行为前身份标记；响应观察与主动用牌共用同一变化通知语义。
+	var previous_identity_mark: String = _identity_model.get_identity_mark(actor_id)
+	_identity_model.observe_card_response(authoritative_snapshot, actor_id, card_definition, response_subject_definition, response_context, observer_id)
+	# 行为后身份标记；无效响应或身份证据不足时不会产生多余界面刷新。
+	var current_identity_mark: String = _identity_model.get_identity_mark(actor_id)
+	if current_identity_mark != previous_identity_mark:
+		identity_mark_changed.emit(actor_id, current_identity_mark)
+
+
+## 记录卡牌之外的公开目标行为；技能文件提供与卡牌 ai 相同的 target_result/expose 数据，协调器不识别具体技能 ID。
+func observe_public_behavior(authoritative_snapshot: Dictionary, actor_id: int, ai_profile: Dictionary, target_ids: Array[int], observer_id: int = -1) -> void:
+	# 兼容身份模型的行为定义；只包含只读 AI 配置，不伪造实体牌或进入任何卡牌规则流程。
+	var behavior_definition: Dictionary = {"ai":ai_profile.duplicate(true)}
+	observe_card_use(authoritative_snapshot, actor_id, behavior_definition, target_ids, observer_id)
 
 
 ## 返回指定玩家当前由公开行为形成的忠反标记；空字符串表示线索不足，不公开真实隐藏身份。
