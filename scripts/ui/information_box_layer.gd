@@ -39,6 +39,9 @@ signal character_details_visibility_changed(visible: bool)
 ## 武将详情左侧牌面区域宽度；默认180像素让缩小牌面居中且不挤压技能说明，运行时通常无需动态修改。
 @export_range(140.0, 260.0, 1.0) var character_card_area_width: float = 180.0
 
+## 武将详情右侧技能区到面板右边框的额外留白；默认24像素使滚动条与文字不贴近边缘，运行时可通过检查器调整。
+@export_range(0.0, 64.0, 1.0) var character_skill_right_margin: float = 24.0
+
 ## 武将详情标题栏固定高度；默认42像素容纳标题与关闭按钮，运行时通常无需动态修改。
 @export_range(34.0, 64.0, 1.0) var character_header_height: float = 42.0
 
@@ -117,6 +120,9 @@ var _character_card_area: Control
 ## 武将详情右侧技能滚动框；鼠标滚轮与右侧拖条共用该标准滚动入口。
 var _character_skill_scroll: ScrollContainer
 
+## 武将详情右侧技能区外层边距容器；只负责保留可配置的右侧内边距，不参与滚动内容或技能数据。
+var _character_skill_margin: MarginContainer
+
 ## 武将详情技能条目容器；每项按技能名一行、技能描述一段的顺序纵向排列。
 var _character_skill_list: VBoxContainer
 
@@ -156,7 +162,7 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 		return
 	if source_id == _hover_source_id and _hover_information == information_copy and _hover_panel.visible:
 		# 公开快照刷新会重复发送相同武将资料；完成首帧布局后只校正位置，测量期间则保持透明等待原布局收尾。
-		if _hover_panel.self_modulate.a > 0.0:
+		if _hover_panel.modulate.a > 0.0:
 			_place_hover_panel(anchor_rect, source_id, _hover_layout_generation)
 		return
 	_cancel_pending_hover_information()
@@ -166,7 +172,7 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 		_hover_source_id = -1
 		_hover_information.clear()
 		_hover_panel.visible = false
-		_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
+		_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_pending_hover_source_id = source_id
 	_pending_hover_information = information_copy
 	_pending_hover_anchor_rect = anchor_rect
@@ -187,7 +193,7 @@ func hide_hover_information(source_id: int) -> void:
 	_hover_information.clear()
 	_hover_layout_generation += 1
 	_hover_panel.visible = false
-	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
 
 ## 在桌面中心显示指定角色的武将详情；左侧复用正式牌面，右侧只读取武将静态技能元数据。
@@ -230,7 +236,7 @@ func close_character_details() -> void:
 
 ## 返回目标旁信息框当前是否可见；供界面回归与调试验证统一悬停接口。
 func is_hover_information_visible() -> bool:
-	return _hover_panel != null and _hover_panel.visible and _hover_panel.self_modulate.a > 0.0
+	return _hover_panel != null and _hover_panel.visible and _hover_panel.modulate.a > 0.0
 
 
 ## 返回目标旁信息框当前标题；供界面回归确认显示内容来自实际悬停目标。
@@ -313,6 +319,7 @@ func refresh_ui_style() -> void:
 	_character_close_button.add_theme_stylebox_override("hover", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
 	_character_close_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), 1, 4))
 	_apply_scroll_bar_style(_character_skill_scroll.get_v_scroll_bar())
+	_apply_character_skill_right_margin()
 	if _character_card_view != null and is_instance_valid(_character_card_view):
 		_character_card_view.refresh_ui_style()
 	_refresh_skill_entry_styles()
@@ -359,7 +366,7 @@ func _show_pending_hover_information() -> void:
 	_render_hover_description()
 	_refresh_hover_text_styles()
 	# 面板需要进入布局树才能取得自动换行后的真实尺寸；测量完成前保持透明，防止默认位置或旧尺寸闪现一帧。
-	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_hover_panel.visible = true
 	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
 	_hover_panel.size = Vector2(hover_panel_width, 0.0)
@@ -381,7 +388,8 @@ func _build_hover_panel() -> void:
 	_hover_panel.visible = false
 	_hover_panel.z_index = 100
 	_hover_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
+	# 使用可继承的 modulate 统一隐藏背景与全部文字子节点；self_modulate 不会作用于子节点，会造成文字在布局前闪现。
+	_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
 	add_child(_hover_panel)
 	# 悬浮信息纵向内容；固定顺序为标题、副标题和完整说明。
@@ -486,13 +494,19 @@ func _build_character_panel() -> void:
 	_character_card_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_character_card_area.resized.connect(_center_character_card)
 	character_body.add_child(_character_card_area)
+	_character_skill_margin = MarginContainer.new()
+	_character_skill_margin.name = "SkillRightMargin"
+	_character_skill_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_skill_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_skill_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	character_body.add_child(_character_skill_margin)
 	_character_skill_scroll = ScrollContainer.new()
 	_character_skill_scroll.name = "SkillScroll"
 	_character_skill_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_character_skill_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_character_skill_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_character_skill_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	character_body.add_child(_character_skill_scroll)
+	_character_skill_margin.add_child(_character_skill_scroll)
 	_character_skill_list = VBoxContainer.new()
 	_character_skill_list.name = "SkillList"
 	_character_skill_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -532,7 +546,7 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: i
 	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
 	_hover_panel.position = target_position
 	# 位置与最终尺寸都稳定后再显示；这一步也是当前布局代次唯一允许恢复不透明度的入口。
-	_hover_panel.self_modulate = Color.WHITE
+	_hover_panel.modulate = Color.WHITE
 
 
 ## 在指定宽度下测量悬停说明所需的最小内容高度；每次测量都重置旧比例产生的高度，保证下一份信息不会继承前一份的空白。
@@ -776,6 +790,13 @@ func _refresh_character_skill_vertical_layout() -> void:
 	if _character_skill_list == null or _character_skill_scroll == null:
 		return
 	_character_skill_list.custom_minimum_size.y = _character_skill_scroll.size.y
+
+
+## 将检查器配置的额外右边距应用到详情技能区；滚动条、技能文字与面板右边框会整体保持该距离。
+func _apply_character_skill_right_margin() -> void:
+	if _character_skill_margin == null:
+		return
+	_character_skill_margin.add_theme_constant_override("margin_right", character_skill_right_margin)
 
 
 ## 在技能列表末尾追加与顶部标题区域等高的留白；VBox整体居中后可保证首个技能名与最后一行文字到面板边框的距离相等。
