@@ -6,6 +6,12 @@ extends Control
 ## 玩家点击可选装备横条时发出的信号；桌面协调器负责维护临时选择并提交统一选牌动作。
 signal equipment_pressed(card_uid: int)
 
+## 鼠标进入已装备横条时发出的统一信息请求；空槽不会产生卡牌信息。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开装备横条或装备区重建时发出的统一信息关闭请求。
+signal information_dismissed
+
 ## 单张装备横条的显示高度；默认38像素让左下装备区在五槽布局中仍能清楚展示槽位、花色、点数和牌名，运行时通常无需动态修改。
 ## 参考图紧凑布局使用27像素固定槽高，与 `equip_new.css` 的单槽规格一致。
 ## 等高布局将27像素作为最小槽高，并按当前4槽或5槽数量自动放大到恰好填满装备栏。
@@ -124,6 +130,7 @@ func is_slot_equipped(slot: String) -> bool:
 ## 清理旧横条并按固定槽位顺序重建现有装备；没有装备的槽位不生成占位节点。
 ## 参考图布局会为全部可见槽位生成深色空态；宝物槽仍按项目规则只在实际装备宝物时创建。
 func _rebuild_rows() -> void:
+	information_dismissed.emit()
 	# 重建前各槽位的实际横坐标；新横条从该位置继续动画，保证可用、选中和复原状态之间不会瞬移。
 	var previous_shift_by_slot: Dictionary = {}
 	for slot_variant: Variant in _rows_by_slot.keys():
@@ -168,6 +175,9 @@ func _rebuild_rows() -> void:
 		# 单张装备横条按钮；按钮只承接点击，具体花色点数与牌名由子级富文本绘制。
 		var equipment_row: Button = _create_equipment_row(slot, equipment_card, card_definition, equipment_name, is_equipped, is_candidate, is_selected)
 		equipment_row.pressed.connect(_on_equipment_row_pressed.bind(card_uid))
+		if is_equipped:
+			equipment_row.mouse_entered.connect(_on_equipment_information_entered.bind(slot, equipment_card, card_definition, equipment_name, equipment_row))
+			equipment_row.mouse_exited.connect(_on_equipment_information_exited)
 		add_child(equipment_row)
 		_rows_by_slot[slot] = equipment_row
 	_layout_rows()
@@ -190,7 +200,7 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	var equipment_row: Button = Button.new()
 	equipment_row.focus_mode = Control.FOCUS_NONE
 	equipment_row.disabled = not is_candidate
-	equipment_row.mouse_filter = Control.MOUSE_FILTER_STOP if is_candidate else Control.MOUSE_FILTER_IGNORE
+	equipment_row.mouse_filter = Control.MOUSE_FILTER_STOP if is_equipped else Control.MOUSE_FILTER_IGNORE
 	# 装备横条普通边框；选中金色优先，其次候选青绿，最后使用武将牌装备条的暗金色。
 	var border_color: Color = BattleUIStyle.get_color("accent") if is_selected else (BattleUIStyle.get_color("legal_target") if is_candidate else BattleUIStyle.get_color("equipment_border"))
 	# 装备横条普通描边宽度；候选或选中使用2像素，静态装备使用1像素。
@@ -209,7 +219,8 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	equipment_row.add_theme_stylebox_override("hover", hover_style)
 	equipment_row.add_theme_stylebox_override("pressed", hover_style)
 	# 装备完整说明；悬停时同时展示槽位、当前名称和卡牌规则描述，空槽只说明槽位名称。
-	equipment_row.tooltip_text = ("%s｜%s\n%s" % [str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")), equipment_name, str(card_definition.get("description", ""))]) if is_equipped else str(EQUIPMENT_SLOT_NAMES.get(slot, "装备"))
+	# 原生工具提示保持关闭；上述完整说明改由统一信息请求显示，空槽不创建卡牌信息内容。
+	equipment_row.tooltip_text = ""
 	# 槽位类型图标；空槽与已装备槽共用相同左侧位置，避免牌面变化时文字横向跳动。
 	var slot_icon: Label = Label.new()
 	slot_icon.position = Vector2.ZERO
@@ -243,6 +254,31 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	equipment_text.text = ("[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]) if is_equipped else ""
 	equipment_row.add_child(equipment_text)
 	return equipment_row
+
+
+## 在当前装备横条附近请求统一卡牌信息；内容只来自公开装备快照和静态卡牌定义。
+func _on_equipment_information_entered(slot: String, equipment_card: Dictionary, card_definition: Dictionary, equipment_name: String, equipment_row: Button) -> void:
+	if equipment_row == null or not is_instance_valid(equipment_row):
+		return
+	# 当前装备花色点数；与横条牌面保持一致并作为信息框副标题的一部分。
+	var suit_rank_text: String = "%s%s" % [_suit_symbol(str(equipment_card.get("suit", "none"))), _rank_text(int(equipment_card.get("rank", 0)))]
+	# 统一装备信息；槽位、花色点数、当前名称模式和规则说明共同描述实际目标牌。
+	var information: Dictionary = {
+		"title":"【%s】" % equipment_name,
+		"subtitle":"%s｜%s" % [str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")), suit_rank_text],
+		"description":str(card_definition.get("description", "暂无卡牌说明。")),
+	}
+	information_requested.emit(information, equipment_row.get_global_rect())
+
+
+## 鼠标离开已装备横条后关闭由本地装备区拥有的信息框。
+func _on_equipment_information_exited() -> void:
+	information_dismissed.emit()
+
+
+## 装备区退出场景树时关闭活动信息，避免切换场景后残留悬浮节点。
+func _exit_tree() -> void:
+	information_dismissed.emit()
 
 
 ## 按固定槽位索引排列装备横条；空槽保留位置，宝物出现时从四槽布局切换为五槽布局。

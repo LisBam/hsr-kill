@@ -34,6 +34,8 @@ func _run() -> void:
 	add_child(main_instance)
 	# 正式对局控制器；先使用非法的1人配置阻止规则对局和AI异步任务启动，随后以五号位作为本地玩家注入只读十人界面快照。
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
+	# 牌桌统一信息框；本地装备、手牌、技能和双方武将牌都通过该单一组件显示说明。
+	var information_box: InformationBoxLayer = main_instance.get("information_box") as InformationBoxLayer
 	match_controller.default_player_count = 1
 	match_controller.local_human_player_id = 4
 	match_controller.randomize_local_human_seat = false
@@ -160,6 +162,13 @@ func _run() -> void:
 	if not first_skill_button.disabled or not skill_normal_style.bg_color.is_equal_approx(skill_hover_style.bg_color) or not skill_normal_style.border_color.is_equal_approx(skill_hover_style.border_color) or not skill_normal_style.bg_color.is_equal_approx(skill_disabled_style.bg_color):
 		_fail("skill_disabled_visual disabled=%s normal=%s hover=%s" % [first_skill_button.disabled, skill_normal_style.bg_color, skill_hover_style.bg_color])
 		return
+	first_skill_button.mouse_entered.emit()
+	await get_tree().process_frame
+	if information_box == null or not first_skill_button.tooltip_text.is_empty() or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains(first_skill_button.text):
+		_fail("skill_information:%s/%s" % [first_skill_button.tooltip_text, information_box.get_hover_title_text() if information_box != null else "missing"])
+		return
+	first_skill_button.mouse_exited.emit()
+	await get_tree().process_frame
 	# 技能点击错误区；直接调用处理入口模拟过期点击，不可发动技能必须保持静默。
 	var error_label: Label = main_instance.get_node("%ErrorLabel") as Label
 	error_label.text = ""
@@ -244,8 +253,20 @@ func _run() -> void:
 		if not is_equal_approx(actual_equipment_gap, local_equipment_label.equipment_row_gap):
 			local_equipment_gaps_are_equal = false
 			break
-	if not is_equal_approx(local_weapon_row.size.y, local_adaptive_equipment_row_height) or not local_treasure_row.tooltip_text.contains("木牛流马（3）") or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or not is_equal_approx(local_weapon_row.position.y, 0.0) or not is_equal_approx(local_treasure_row.position.y + local_treasure_row.size.y, local_equipment_label.size.y) or not local_equipment_gaps_are_equal or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
+	if not is_equal_approx(local_weapon_row.size.y, local_adaptive_equipment_row_height) or not local_treasure_row.tooltip_text.is_empty() or not is_equal_approx(local_treasure_row.position.y - local_weapon_row.position.y, local_equipment_row_pitch * 4.0) or not is_equal_approx(local_weapon_row.position.y, 0.0) or not is_equal_approx(local_treasure_row.position.y + local_treasure_row.size.y, local_equipment_label.size.y) or not local_equipment_gaps_are_equal or local_equipment_label.is_slot_equipped("armor") or not local_empty_armor_row.disabled:
 		_fail("local_equipment_stack:%s" % local_equipment_label.tooltip_text)
+		return
+	local_treasure_row.mouse_entered.emit()
+	await get_tree().process_frame
+	# 目标旁信息面板；固定340像素宽并始终限制在当前客户区内。
+	var hover_information_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
+	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("木牛流马（3）") or not is_equal_approx(hover_information_panel.size.x, 340.0) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
+		_fail("local_equipment_information:%s" % (information_box.get_hover_title_text() if information_box != null else "missing"))
+		return
+	local_treasure_row.mouse_exited.emit()
+	await get_tree().process_frame
+	if information_box.is_hover_information_visible():
+		_fail("local_equipment_information_exit")
 		return
 	# 本地武将牌装备条；第一视角只通过左侧装备栏查看装备，武将牌自身不得重复显示横条。
 	var local_player_card: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
@@ -328,18 +349,41 @@ func _run() -> void:
 	main_instance.set("_selected_card_uid", -1)
 	main_instance.set("_card_use_preview", {})
 	main_instance.call("_refresh_component_states")
-	# 玩家名悬停阴影；正式对局武将牌进入悬停后应在上部显示公开玩家名，离开后立即隐藏。
+	# 玩家名悬停阴影；正式对局已移除武将牌悬停姓名与原生工具提示，只保留选将候选缩放信号。
 	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
-	# 玩家名标签；测试目标为六号位，因此显示名固定为“玩家6”。
-	var hover_player_name: Label = current_operator_view.get_node("HoverNameShade/HoverPlayerName") as Label
 	current_operator_view.call("_on_input_mouse_entered")
-	if not hover_name_shade.visible or hover_player_name.text != "玩家6" or not hover_name_shade.size.is_equal_approx(Vector2(148.35, 32.0)) or hover_player_name.get_theme_font_size("font_size") != 10:
-		_fail("player_name_hover:%s/%s" % [hover_name_shade.visible, hover_player_name.text])
+	if hover_name_shade.visible or not (current_operator_view.get_node("InputArea") as Control).tooltip_text.is_empty():
+		_fail("player_hover_removed:%s" % hover_name_shade.visible)
+		return
+	# 其他玩家公开装备横条；透明武将牌输入层按局部坐标识别装备，并把目标牌说明交给统一信息框。
+	var opponent_equipment_rows: Array = current_operator_view.get("_equipment_rows") as Array
+	if opponent_equipment_rows.is_empty():
+		_fail("opponent_equipment_information_missing_row")
+		return
+	# 当前对手武器横条；测试快照只为该玩家配置一张武器，因此首项就是目标牌。
+	var opponent_weapon_row: RichTextLabel = opponent_equipment_rows[0] as RichTextLabel
+	current_operator_view.call("_on_input_pointer_moved", opponent_weapon_row.position + opponent_weapon_row.size * 0.5)
+	await get_tree().process_frame
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("青釭剑"):
+		_fail("opponent_equipment_information:%s" % information_box.get_hover_title_text())
 		return
 	current_operator_view.call("_on_input_mouse_exited")
-	if hover_name_shade.visible:
-		_fail("player_name_hover_exit")
+	if hover_name_shade.visible or information_box.is_hover_information_visible():
+		_fail("player_hover_exit")
 		return
+	# 武将牌右键事件；保留一个临时选牌 UID，用于确认武将输入组件消费按下与释放后不会触发牌桌右键取消。
+	main_instance.set("_selected_card_uid", 999999)
+	await _right_click_control(current_operator_view.get_node("InputArea") as Control)
+	# 居中详情面板；其中心必须与当前紧凑客户区中心一致，不得沿固定1280×720坐标偏移。
+	var character_details_panel: PanelContainer = information_box.get_node("CharacterDetailsPanel") as PanelContainer
+	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not character_details_panel.size.is_equal_approx(Vector2(760.0, 440.0)) or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
+		_fail("character_details_open:%s/%s/%d/%s" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused])
+		return
+	await _click_control(information_box.get_character_close_button())
+	if information_box.is_character_details_visible() or get_tree().paused or bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) >= 0:
+		_fail("character_details_close:%s/%s close=%s visible=%s filter=%s disabled=%s process=%s hovered=%s" % [information_box.is_character_details_visible(), get_tree().paused, _screen_rect(information_box.get_character_close_button()), information_box.get_character_close_button().is_visible_in_tree(), information_box.get_character_close_button().mouse_filter, information_box.get_character_close_button().disabled, information_box.get_character_close_button().process_mode, get_viewport().gui_get_hovered_control()])
+		return
+	main_instance.set("_selected_card_uid", -1)
 	# 同时无懈公共高亮；全部十名玩家都进入操作状态，不能只高亮实际持有无懈候选的角色。
 	var simultaneous_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
 	simultaneous_snapshot["simultaneous_response_display"] = {"kind":"trick_negation", "round_id":1, "responder_ids":[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "target_id":0, "trick_id":"wugu"}
@@ -631,6 +675,13 @@ func _run() -> void:
 	if gained_hand_card.get_parent() != hand_container or not gained_hand_card.hand_entry_offset.is_zero_approx() or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003):
 		_fail("local_gain_entity_finish parent=%s offset=%s" % [gained_hand_card.get_parent(), gained_hand_card.hand_entry_offset])
 		return
+	gained_hand_card.call("_on_mouse_entered")
+	await get_tree().process_frame
+	if not (gained_hand_card.get_node("InputArea") as Control).tooltip_text.is_empty() or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃"):
+		_fail("hand_card_information:%s" % information_box.get_hover_title_text())
+		return
+	gained_hand_card.call("_on_mouse_exited")
+	await get_tree().process_frame
 	# 本地摸牌实体数据；牌堆进入本地手牌也必须复用正式手牌节点从右侧入场，而不是创建临时牌背转移节点。
 	var drawn_card_data: Dictionary = {"uid":90006, "definition_id":"shan", "suit":"diamond", "rank":2, "zone":"hand", "owner_id":4}
 	# 包含原获得牌与新摸牌的快照；原节点继续复用，新 UID 创建第二张正式手牌节点。
@@ -893,6 +944,31 @@ func _click_control(control: Control) -> void:
 	await get_tree().process_frame
 
 
+## 向控件中心发送右键移动、按下和释放事件，验证武将详情与牌桌右键取消的真实输入优先级。
+func _right_click_control(control: Control) -> void:
+	# 当前控件屏幕中心；输入事件与正常鼠标命中使用相同画布变换结果。
+	var click_position: Vector2 = _screen_rect(control).get_center()
+	# 鼠标移动事件；先建立正式悬停目标，保证按键进入武将牌透明输入组件。
+	var motion_event: InputEventMouseMotion = InputEventMouseMotion.new()
+	motion_event.position = click_position
+	get_viewport().push_input(motion_event, true)
+	await get_tree().process_frame
+	# 右键按下事件；武将牌输入组件必须消费该阶段，不能让牌桌提前取消当前选择。
+	var press_event: InputEventMouseButton = InputEventMouseButton.new()
+	press_event.position = click_position
+	press_event.button_index = MOUSE_BUTTON_RIGHT
+	press_event.pressed = true
+	get_viewport().push_input(press_event, true)
+	await get_tree().process_frame
+	# 右键释放事件；透明输入组件只在该阶段发出一次武将详情请求。
+	var release_event: InputEventMouseButton = InputEventMouseButton.new()
+	release_event.position = click_position
+	release_event.button_index = MOUSE_BUTTON_RIGHT
+	release_event.pressed = false
+	get_viewport().push_input(release_event, true)
+	await get_tree().process_frame
+
+
 ## 构造只包含界面公开字段的十人快照；覆盖本地玩家在五号位时的最拥挤座次布局且不启动规则核心、AI计时器或卡牌动画。
 func _make_ten_player_snapshot() -> Dictionary:
 	# 测试玩家数组；五号位作为本地玩家，其余9名用于顶部五席与左右各两席。
@@ -921,6 +997,11 @@ func _make_ten_player_snapshot() -> Dictionary:
 				"treasure":{"uid":94001, "definition_id":"muniu", "suit":"diamond", "rank":5, "zone":"equipment", "owner_id":4},
 			}
 			player_snapshot["wooden_ox_storage_count"] = 3
+		elif player_index == 5:
+			# 六号位公开武器；用于验证其他玩家武将牌上的装备横条也进入统一悬浮信息接口。
+			player_snapshot["equipment"] = {
+				"weapon":{"uid":95000, "definition_id":"qinggang", "suit":"club", "rank":7, "zone":"equipment", "owner_id":5},
+			}
 		players.append(player_snapshot)
 	# 十人界面快照；准备阶段禁用出牌控件，但保留完整本地技能栏和全部公开角色信息。
 	var snapshot: Dictionary = {
