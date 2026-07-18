@@ -382,6 +382,8 @@ func _request_character_information() -> void:
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
 	# 当前武将全部技能文本；严格保持武将定义顺序，每项分为技能名与技能描述两行。
 	var skill_information_lines: Array[String] = []
+	# 当前武将结构化技能分段；统一信息框据此把技能名绘制为与右键详情一致的金色，同时保持说明文字颜色不变。
+	var skill_description_sections: Array[Dictionary] = []
 	for skill_id_variant: Variant in _character_definition.get("skills", []) as Array:
 		# 当前技能稳定 ID；用于查询静态技能名称与说明，不读取运行时技能实例。
 		var skill_id: String = str(skill_id_variant)
@@ -392,13 +394,19 @@ func _request_character_information() -> void:
 		# 当前技能完整描述；卡牌书名号按全局名称模式解析，其他原文保持不变。
 		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
 		skill_information_lines.append("【%s】\n%s" % [skill_name, skill_description])
+		skill_description_sections.append({
+			"title":"【%s】" % skill_name,
+			"description":skill_description,
+		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
 	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"
 	# 统一武将悬停信息；标题、基础资料和全部技能沿用卡牌悬停接口的固定三个字段。
 	var information: Dictionary = {
 		"title":character_name,
+		"title_emphasis":true,
 		"subtitle":"势力：%s｜性别：%s｜体力上限：%d" % [faction_name, gender_text, maximum_health],
 		"description":skills_text,
+		"description_sections":skill_description_sections,
 	}
 	information_requested.emit(information, get_global_rect())
 
