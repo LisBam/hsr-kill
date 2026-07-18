@@ -433,6 +433,22 @@ func _run() -> void:
 	if hover_name_shade.visible or information_box.is_hover_information_visible():
 		_fail("player_hover_exit")
 		return
+	# 悬停框首帧闪现回归：整体透明度必须继承到标题和技能文字，禁止子节点在默认位置短暂绘制。
+	var original_hover_delay_seconds: float = information_box.hover_display_delay_seconds
+	information_box.hover_display_delay_seconds = 0.0
+	information_box.show_hover_information({"title":"首帧位置回归", "description":"布局前不应显示。"}, Rect2(Vector2(42.0, 42.0), Vector2(80.0, 80.0)), current_operator_view.get_instance_id())
+	# 当前悬停面板及标题标签；面板必须使用会继承给文字子节点的 modulate 属性，而非 self_modulate。
+	var pre_layout_hover_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
+	var pre_layout_hover_title: Label = information_box.get("_hover_title_label") as Label
+	if pre_layout_hover_panel == null or pre_layout_hover_title == null or not pre_layout_hover_panel.visible or not is_zero_approx(pre_layout_hover_panel.modulate.a):
+		_fail("player_hover_pre_layout_flash:%s/%s" % [pre_layout_hover_panel.visible if pre_layout_hover_panel != null else false, pre_layout_hover_panel.modulate.a if pre_layout_hover_panel != null else -1.0])
+		return
+	await get_tree().process_frame
+	if not information_box.is_hover_information_visible() or not is_equal_approx(pre_layout_hover_panel.modulate.a, 1.0):
+		_fail("player_hover_post_layout_visibility:%s/%s" % [information_box.is_hover_information_visible(), pre_layout_hover_panel.modulate.a])
+		return
+	information_box.hide_hover_information(current_operator_view.get_instance_id())
+	information_box.hover_display_delay_seconds = original_hover_delay_seconds
 	# 武将牌右键事件；保留一个临时选牌 UID，用于确认武将输入组件消费按下与释放后不会触发牌桌右键取消。
 	main_instance.set("_selected_card_uid", 999999)
 	await _right_click_control(current_operator_view.get_node("InputArea") as Control)
@@ -446,6 +462,8 @@ func _run() -> void:
 	var character_card_area: Control = character_details_panel.find_child("CharacterCardArea", true, false) as Control
 	# 详情左侧正式武将牌；只读复用的牌面位置由 InformationBoxLayer 在区域尺寸变化时重新居中。
 	var detail_character_card: PlayerTargetView = information_box.get("_character_card_view") as PlayerTargetView
+	# 技能区右侧边距容器；滚动条应与详情面板右边框保持检查器配置的额外留白。
+	var character_skill_right_margin: MarginContainer = information_box.get("_character_skill_margin") as MarginContainer
 	# 单技能详情牌面缩放后的尺寸；与区域实际尺寸共同计算期望的上下居中位置。
 	var detail_character_card_size: Vector2 = detail_character_card.card_size * information_box.character_card_scale if detail_character_card != null else Vector2.ZERO
 	# 单技能详情牌面期望位置；公式与运行时组件一致，便于验证高度变动后的纵向居中不依赖固定偏移。
@@ -456,6 +474,9 @@ func _run() -> void:
 	var single_skill_top_gap: float = single_skill_entry.get_global_rect().position.y - character_details_panel.get_global_rect().position.y
 	# 最后一行文字所在条目到面板下边框的距离；底部对称留白应使其与上方距离一致。
 	var single_skill_bottom_gap: float = character_details_panel.get_global_rect().end.y - single_skill_entry.get_global_rect().end.y
+	if character_skill_right_margin == null or not is_equal_approx(float(character_skill_right_margin.get_theme_constant("margin_right")), information_box.character_skill_right_margin):
+		_fail("character_details_right_margin:%s/%s" % [character_skill_right_margin.get_theme_constant("margin_right") if character_skill_right_margin != null else -1, information_box.character_skill_right_margin])
+		return
 	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not is_equal_approx(character_details_panel.size.x, 760.0) or character_details_panel.size.y >= 440.0 or character_details_panel.size.y < information_box.character_panel_minimum_height or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or not is_equal_approx(single_skill_top_gap, single_skill_bottom_gap) or character_card_area == null or detail_character_card == null or not detail_character_card.position.is_equal_approx(expected_detail_character_position) or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
 		_fail("character_details_open:%s/%s/%d/%s size=%s min=%s center=%s/%s title=%s/%s scale=%s separators=%d entry_y=%s gaps=%s/%s scrollbar=%s/%s selected=%d pause=%s/%s token=%d" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused, character_details_panel.size, information_box.character_panel_minimum_height, character_details_panel.get_global_rect().get_center(), main_instance.get_global_rect().get_center(), character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x, information_box.get_character_card_scale(), information_box.get_character_skill_separator_count(), single_skill_entry.position.y, single_skill_top_gap, single_skill_bottom_gap, information_box.get_character_skill_scroll_bar(), information_box.get_character_skill_scroll_bar().custom_minimum_size.x if information_box.get_character_skill_scroll_bar() != null else -1.0, int(main_instance.get("_selected_card_uid")), bool(main_instance.get("_owns_character_details_pause")), int(main_instance.get("_character_details_pause_token")) >= 0, int(main_instance.get("_character_details_pause_token"))])
 		return
