@@ -12,11 +12,17 @@ signal character_details_visibility_changed(visible: bool)
 ## 目标旁信息框与悬停目标之间的间距；默认10像素避免浮层遮挡当前目标，运行时通常无需动态修改。
 @export_range(4.0, 32.0, 1.0) var hover_target_gap: float = 10.0
 
+## 鼠标持续悬停后显示统一信息框前的等待时长；默认0.5秒可避免手牌、装备、技能与武将牌快速掠过时产生干扰，运行时通常无需动态修改。
+@export_range(0.0, 3.0, 0.05) var hover_display_delay_seconds: float = 0.5
+
 ## 信息框与视口边缘之间的安全距离；默认12像素保证描边与阴影不会被窗口裁切，运行时通常无需动态修改。
 @export_range(4.0, 48.0, 1.0) var viewport_margin: float = 12.0
 
-## 居中武将详情面板尺寸；默认760×440像素为左侧缩小武将牌和右侧技能滚动区提供稳定空间，运行时通常无需动态修改。
+## 居中武将详情面板的最大尺寸；默认760×440像素，宽度固定而高度会按技能内容收紧，超出440像素时保持滚动查看，运行时通常无需动态修改。
 @export var character_panel_size: Vector2 = Vector2(760.0, 440.0)
+
+## 居中武将详情面板的最小高度；默认226像素可容纳标题和0.78倍武将牌，短技能内容不会保留旧440像素大面积空白，运行时通常无需动态修改。
+@export_range(180.0, 440.0, 1.0) var character_panel_minimum_height: float = 226.0
 
 ## 武将详情左侧牌面的缩放倍率；默认0.78与选将界面公开领袖武将牌一致，运行时通常无需动态修改。
 @export_range(0.5, 1.0, 0.01) var character_card_scale: float = 0.78
@@ -38,6 +44,18 @@ var _hover_source_id: int = -1
 
 ## 当前目标旁信息框内容副本；主题切换时保留文字并只重绘样式，不重新查询业务数据。
 var _hover_information: Dictionary = {}
+
+## 正在等待显示的统一信息框来源节点实例 ID；-1表示当前没有延迟中的悬停请求。
+var _pending_hover_source_id: int = -1
+
+## 正在等待显示的统一信息框内容副本；延迟结束前不写入可见面板，避免快速掠过目标时闪现旧信息。
+var _pending_hover_information: Dictionary = {}
+
+## 正在等待显示的统一信息框锚点矩形；延迟结束后仍按原目标位置计算翻转与视口边界。
+var _pending_hover_anchor_rect: Rect2 = Rect2()
+
+## 统一信息框的单次延迟计时器；所有悬停来源共用该计时器，新的目标会替换尚未显示的旧请求。
+var _hover_delay_timer: Timer
 
 ## 当前武将详情使用的公开玩家快照副本；只用于重绘详情牌面，不持有可修改的规则对象。
 var _character_snapshot: Dictionary = {}
@@ -81,6 +99,9 @@ var _character_skill_scroll: ScrollContainer
 ## 武将详情技能条目容器；每项按技能名一行、技能描述一段的顺序纵向排列。
 var _character_skill_list: VBoxContainer
 
+## 武将详情整体纵向内容容器；自动高度计算读取其标题与主体之间的实际主题间距。
+var _character_content: VBoxContainer
+
 ## 当前详情左侧复用的正式武将牌；关闭或切换目标时释放并重新按快照构建。
 var _character_card_view: PlayerTargetView
 
@@ -94,28 +115,35 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build_hover_panel()
+	_build_hover_delay_timer()
 	_build_character_panel()
 	refresh_ui_style()
 
 
-## 在目标附近显示统一悬浮信息；来源 ID 用于防止旧节点的离开信号关闭新目标信息。
+## 在目标附近延迟显示统一悬浮信息；来源 ID 用于防止旧节点的离开信号关闭新目标信息。
 func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_id: int) -> void:
 	if information.is_empty() or source_id < 0 or _character_shade.visible:
 		return
-	_hover_source_id = source_id
-	_hover_information = information.duplicate(true)
-	_hover_title_label.text = str(_hover_information.get("title", "信息"))
-	_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
-	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
-	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
-	_hover_panel.visible = true
-	_hover_panel.size = Vector2(hover_panel_width, 0.0)
-	_hover_panel.reset_size()
-	call_deferred("_place_hover_panel", anchor_rect, source_id)
+	_cancel_pending_hover_information()
+	# 已显示的旧目标信息必须立即退场；新的目标会在完整0.5秒悬停后再显示，避免内容跨目标残留。
+	if _hover_panel.visible:
+		_hover_source_id = -1
+		_hover_information.clear()
+		_hover_panel.visible = false
+	_pending_hover_source_id = source_id
+	_pending_hover_information = information.duplicate(true)
+	_pending_hover_anchor_rect = anchor_rect
+	if hover_display_delay_seconds <= 0.0:
+		_show_pending_hover_information()
+		return
+	_hover_delay_timer.wait_time = hover_display_delay_seconds
+	_hover_delay_timer.start()
 
 
 ## 关闭指定来源拥有的目标旁信息框；来源不匹配时保持当前新目标信息不变。
 func hide_hover_information(source_id: int) -> void:
+	if source_id == _pending_hover_source_id:
+		_cancel_pending_hover_information()
 	if source_id != _hover_source_id:
 		return
 	_hover_source_id = -1
@@ -132,6 +160,7 @@ func show_character_details(snapshot: Dictionary, character_definition: Dictiona
 	_character_snapshot = snapshot.duplicate(true)
 	_character_definition = character_definition.duplicate(true)
 	_faction_definition = faction_definition.duplicate(true)
+	_cancel_pending_hover_information()
 	_hover_source_id = -1
 	_hover_information.clear()
 	_hover_panel.visible = false
@@ -141,6 +170,7 @@ func show_character_details(snapshot: Dictionary, character_definition: Dictiona
 	_render_character_skills()
 	_character_skill_scroll.scroll_vertical = 0
 	_character_close_button.grab_focus()
+	call_deferred("_resize_character_panel_to_content")
 	if not was_visible:
 		character_details_visibility_changed.emit(true)
 
@@ -249,7 +279,55 @@ func refresh_ui_style() -> void:
 	if _character_card_view != null and is_instance_valid(_character_card_view):
 		_character_card_view.refresh_ui_style()
 	_refresh_skill_entry_styles()
-	call_deferred("_refresh_character_skill_vertical_layout")
+	call_deferred("_resize_character_panel_to_content")
+
+
+## 构建统一信息框的单次延迟计时器；计时器始终处理，离线暂停时仍能按真实悬停时长显示或取消信息。
+func _build_hover_delay_timer() -> void:
+	_hover_delay_timer = Timer.new()
+	_hover_delay_timer.name = "HoverInformationDelayTimer"
+	_hover_delay_timer.one_shot = true
+	_hover_delay_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_hover_delay_timer.timeout.connect(_show_pending_hover_information)
+	add_child(_hover_delay_timer)
+
+
+## 取消尚未显示的悬停请求；来源离开、切换到新目标或打开武将详情时都会调用，避免旧计时器晚到后显示错误内容。
+func _cancel_pending_hover_information() -> void:
+	if _hover_delay_timer != null and is_instance_valid(_hover_delay_timer):
+		_hover_delay_timer.stop()
+	_pending_hover_source_id = -1
+	_pending_hover_information.clear()
+	_pending_hover_anchor_rect = Rect2()
+
+
+## 把已完成等待的悬停请求写入可见面板；计时器只保存最后一次请求，因此此处不会显示已经离开的旧目标。
+func _show_pending_hover_information() -> void:
+	if _pending_hover_source_id < 0 or _pending_hover_information.is_empty() or _character_shade.visible:
+		_cancel_pending_hover_information()
+		return
+	# 当前延迟请求的来源、内容与锚点；先复制再清空挂起状态，允许显示后的离开事件正常匹配活动来源。
+	var source_id: int = _pending_hover_source_id
+	var information: Dictionary = _pending_hover_information.duplicate(true)
+	var anchor_rect: Rect2 = _pending_hover_anchor_rect
+	_cancel_pending_hover_information()
+	_hover_source_id = source_id
+	_hover_information = information
+	_hover_title_label.text = str(_hover_information.get("title", "信息"))
+	_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
+	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
+	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
+	_hover_panel.visible = true
+	_hover_panel.size = Vector2(hover_panel_width, 0.0)
+	_hover_panel.reset_size()
+	# 首次自动换行必须等待一个完整界面布局帧；此时 Label 已取得固定面板宽度，再测量高度不会把每个字符误当作独立行。
+	_place_hover_panel_after_layout(anchor_rect, source_id)
+
+
+## 等待自动换行标签取得固定宽度后再测量并放置信息框；来源已经离开时由后续来源校验安全忽略。
+func _place_hover_panel_after_layout(anchor_rect: Rect2, source_id: int) -> void:
+	await get_tree().process_frame
+	_place_hover_panel(anchor_rect, source_id)
 
 
 ## 构建目标旁悬浮信息节点；所有输入保持穿透，浮层不会抢走原目标的鼠标离开判定。
@@ -298,22 +376,24 @@ func _build_character_panel() -> void:
 	_character_panel.visible = false
 	_character_panel.z_index = 111
 	_character_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_character_panel.custom_minimum_size = character_panel_size
+	# 详情框初始使用最小高度；打开后会根据实际技能条目自动收紧或增长到最大高度，避免首帧保留固定大空白。
+	var initial_character_panel_size: Vector2 = Vector2(character_panel_size.x, minf(character_panel_minimum_height, character_panel_size.y))
+	_character_panel.custom_minimum_size = initial_character_panel_size
 	_character_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_character_panel.position = -character_panel_size * 0.5
-	_character_panel.size = character_panel_size
+	_character_panel.position = -initial_character_panel_size * 0.5
+	_character_panel.size = initial_character_panel_size
 	add_child(_character_panel)
 	# 武将详情整体纵向内容；标题栏固定在上方，牌面与技能滚动区占据剩余高度。
-	var character_content: VBoxContainer = VBoxContainer.new()
-	character_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	character_content.add_theme_constant_override("separation", 8)
-	_character_panel.add_child(character_content)
+	_character_content = VBoxContainer.new()
+	_character_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_content.add_theme_constant_override("separation", 8)
+	_character_panel.add_child(_character_content)
 	# 武将详情标题行；标题扩展占据左侧空间，关闭按钮固定在最右侧。
 	var character_header: HBoxContainer = HBoxContainer.new()
 	character_header.name = "CharacterHeader"
 	character_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character_header.custom_minimum_size.y = character_header_height
-	character_content.add_child(character_header)
+	_character_content.add_child(character_header)
 	# 标题栏左侧对称占位；宽度与右侧关闭按钮一致，保证标题中心与整个详情面板中心重合。
 	var character_header_spacer: Control = Control.new()
 	character_header_spacer.name = "LeadingSpacer"
@@ -344,10 +424,11 @@ func _build_character_panel() -> void:
 	character_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	character_body.add_theme_constant_override("separation", 14)
-	character_content.add_child(character_body)
+	_character_content.add_child(character_body)
 	_character_card_area = Control.new()
 	_character_card_area.name = "CharacterCardArea"
-	_character_card_area.custom_minimum_size = Vector2(character_card_area_width, character_panel_size.y - character_header_height - 30.0)
+	# 左侧区域高度稍后按缩放后的正式武将牌计算；不能继续使用固定440像素主体高度，否则短技能详情会留下大量空白。
+	_character_card_area.custom_minimum_size = Vector2(character_card_area_width, 0.0)
 	_character_card_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character_body.add_child(_character_card_area)
 	_character_skill_scroll = ScrollContainer.new()
@@ -371,6 +452,9 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
 	if source_id != _hover_source_id or not _hover_panel.visible:
 		return
 	_hover_panel.custom_minimum_size.x = hover_panel_width
+	_hover_panel.size.x = hover_panel_width
+	# 首次写入自动换行文本时，Label 可能在当前帧仍按零宽度计算最小高度；延迟到布局完成后重新按固定宽度测量，避免手牌说明被错误撑成大量空行。
+	_hover_panel.reset_size()
 	_hover_panel.size.x = hover_panel_width
 	# 当前信息框实际尺寸；容器完成自动换行后使用该值进行视口边界计算。
 	var panel_size: Vector2 = _hover_panel.size
@@ -398,6 +482,8 @@ func _render_character_card() -> void:
 	_character_card_view.set_public_equipment_visible(false)
 	_character_card_view.set_operation_state(false)
 	_character_card_view.scale = Vector2.ONE * character_card_scale
+	# 左侧牌面高度是详情框主体的最低可用高度；短技能内容可围绕它收紧，但不能裁切正式武将牌。
+	_character_card_area.custom_minimum_size.y = _character_card_view.card_size.y * character_card_scale
 	call_deferred("_center_character_card")
 
 
@@ -470,6 +556,7 @@ func _clear_character_card() -> void:
 	_character_card_area.remove_child(_character_card_view)
 	_character_card_view.queue_free()
 	_character_card_view = null
+	_character_card_area.custom_minimum_size.y = 0.0
 
 
 ## 清理详情右侧技能条目并重置条目计数；滚动容器本身持续复用。
@@ -502,6 +589,43 @@ func _refresh_skill_entry_styles() -> void:
 			_apply_skill_separator_style(entry_node as HSeparator)
 		elif entry_node is Label:
 			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+
+
+## 依据左侧牌面和右侧技能内容收紧武将详情高度；短内容不再保留固定440像素空白，长内容仍被440像素最大高度和滚动框限制。
+func _resize_character_panel_to_content() -> void:
+	if _character_panel == null or _character_content == null or _character_skill_list == null or _character_card_area == null:
+		return
+	# 技能列表先解除上一次的视口填充高度，才能取得本次武将真实技能内容高度。
+	_character_skill_list.custom_minimum_size.y = 0.0
+	# 左侧正式武将牌的缩放后高度；详情卡牌尚未创建时回退为零，保证本方法对销毁阶段安全。
+	var card_height: float = _character_card_view.card_size.y * character_card_scale if _character_card_view != null and is_instance_valid(_character_card_view) else 0.0
+	_character_card_area.custom_minimum_size.y = card_height
+	# 右侧全部技能条目的自然最小高度；ScrollContainer 只在最终高度超过上限时提供滚动，不参与规则状态。
+	var skill_height: float = _character_skill_list.get_combined_minimum_size().y
+	# 主体区域必须同时完整容纳缩小武将牌或短技能内容中较高的一方。
+	var body_height: float = maxf(card_height, skill_height)
+	# 标题与主体之间的实际容器间距；直接读取主题常量，避免把8像素重复硬编码到高度计算。
+	var content_separation: float = float(_character_content.get_theme_constant("separation"))
+	# 面板内边距；主题样式缺失时回退为零，默认样式由 BattleUIStyle 提供上下各7像素。
+	var panel_vertical_margin: float = 0.0
+	var panel_style: StyleBoxFlat = _character_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	if panel_style != null:
+		panel_vertical_margin = panel_style.content_margin_top + panel_style.content_margin_bottom
+	# 配置的高度下限与上限；非法检查器组合自动夹紧，不允许最小高度反向撑开超过最大高度的详情框。
+	var maximum_height: float = maxf(character_panel_size.y, 1.0)
+	var minimum_height: float = minf(maxf(character_panel_minimum_height, 1.0), maximum_height)
+	# 最终详情高度；标题、内容间隔、主体和主题内边距共同决定，短技能保持紧凑，长技能最多到固定上限。
+	var desired_height: float = clampf(character_header_height + content_separation + body_height + panel_vertical_margin, minimum_height, maximum_height)
+	var desired_size: Vector2 = Vector2(character_panel_size.x, desired_height)
+	_character_panel.custom_minimum_size = desired_size
+	# 重申中心锚点并直接更新四边偏移；PanelContainer 的最小尺寸刷新不能把详情框退回父节点原点。
+	_character_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_character_panel.offset_left = -desired_size.x * 0.5
+	_character_panel.offset_top = -desired_size.y * 0.5
+	_character_panel.offset_right = desired_size.x * 0.5
+	_character_panel.offset_bottom = desired_size.y * 0.5
+	call_deferred("_center_character_card")
+	call_deferred("_refresh_character_skill_vertical_layout")
 
 
 ## 让技能列表至少占满滚动视口；内容不足时 VBox 的居中对齐会整体上下居中，超出时仍按真实高度滚动。

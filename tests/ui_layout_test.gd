@@ -11,6 +11,9 @@ const COMPACT_CLIENT_SIZE: Vector2 = Vector2(1152.0, 648.0)
 ## 极短补间的回归等待时长；默认0.08秒覆盖无头模式下补间从下一帧开始处理的调度差异，不改变正式动画参数。
 const SHORT_TWEEN_SETTLE_SECONDS: float = 0.08
 
+## 统一悬停信息框延迟的回归等待时长；默认0.55秒覆盖正式0.5秒配置与无头计时器调度余量。
+const HOVER_INFORMATION_DELAY_SETTLE_SECONDS: float = 0.55
+
 ## 菜单按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
 var _menu_button_pressed: bool = false
 
@@ -164,7 +167,11 @@ func _run() -> void:
 		return
 	first_skill_button.mouse_entered.emit()
 	await get_tree().process_frame
-	if information_box == null or not first_skill_button.tooltip_text.is_empty() or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains(first_skill_button.text):
+	if information_box == null or not first_skill_button.tooltip_text.is_empty() or information_box.is_hover_information_visible():
+		_fail("skill_information_shown_too_early:%s" % (information_box.get_hover_title_text() if information_box != null else "missing"))
+		return
+	await _wait_for_hover_information_delay()
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains(first_skill_button.text):
 		_fail("skill_information:%s/%s" % [first_skill_button.tooltip_text, information_box.get_hover_title_text() if information_box != null else "missing"])
 		return
 	first_skill_button.mouse_exited.emit()
@@ -258,6 +265,10 @@ func _run() -> void:
 		return
 	local_treasure_row.mouse_entered.emit()
 	await get_tree().process_frame
+	if information_box == null or information_box.is_hover_information_visible():
+		_fail("local_equipment_information_shown_too_early:%s" % (information_box.get_hover_title_text() if information_box != null else "missing"))
+		return
+	await _wait_for_hover_information_delay()
 	# 目标旁信息面板；固定340像素宽并始终限制在当前客户区内。
 	var hover_information_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
 	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("木牛流马（3）") or not is_equal_approx(hover_information_panel.size.x, 340.0) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
@@ -307,6 +318,20 @@ func _run() -> void:
 	if not local_player_equipment_rows.is_empty() or not local_player_equipment_slots.is_empty():
 		_fail("local_player_equipment_slots:%s" % [local_player_equipment_slots])
 		return
+	# 本地武将牌悬停资料；第一视角同样必须在0.5秒后显示武将完整技能，不能只允许其他玩家牌面使用该入口。
+	local_player_card.call("_on_input_mouse_entered")
+	await get_tree().process_frame
+	if information_box.is_hover_information_visible():
+		_fail("local_player_information_shown_too_early:%s" % information_box.get_hover_title_text())
+		return
+	await _wait_for_hover_information_delay()
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(GameDatabase.get_skill("trailblaze_sample").get("description", ""))) or not local_player_card.scale.is_equal_approx(Vector2.ONE):
+		_fail("local_player_information:%s/%s" % [information_box.get_hover_description_text(), local_player_card.scale])
+		return
+	local_player_card.call("_on_input_mouse_exited")
+	if information_box.is_hover_information_visible():
+		_fail("local_player_information_exit")
+		return
 	# 对手座位容器；十人局应创建9个对手座位，用于覆盖顶部五席和左右各两席的最拥挤布局。
 	var opponent_seat_slots: Array[Control] = []
 	# 全屏对手座次布局器；动态座位都是该容器的直接子节点。
@@ -349,7 +374,7 @@ func _run() -> void:
 	main_instance.set("_selected_card_uid", -1)
 	main_instance.set("_card_use_preview", {})
 	main_instance.call("_refresh_component_states")
-	# 玩家名悬停阴影；正式对局已移除武将牌悬停姓名与原生工具提示，只保留选将候选缩放信号。
+	# 其他玩家武将牌悬停资料；正式对局不显示玩家名阴影或原生工具提示，但会在0.5秒后通过统一信息框显示完整技能。
 	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
 	current_operator_view.call("_on_input_mouse_entered")
 	# 当前悬停武将定义；用于逐项验证武将名、势力、性别、体力上限和全部技能均来自静态内容数据。
@@ -357,7 +382,11 @@ func _run() -> void:
 	# 当前悬停武将首个技能定义；测试武将只有一个技能，可同时验证技能名与完整描述。
 	var hovered_character_skill: Dictionary = GameDatabase.get_skill(str((hovered_character_definition.get("skills", []) as Array)[0]))
 	if hover_name_shade.visible or not (current_operator_view.get_node("InputArea") as Control).tooltip_text.is_empty() or information_box.is_hover_information_visible():
-		_fail("player_hover_removed:%s" % hover_name_shade.visible)
+		_fail("player_hover_shown_too_early:%s" % hover_name_shade.visible)
+		return
+	await _wait_for_hover_information_delay()
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+		_fail("player_hover_information:%s" % information_box.get_hover_description_text())
 		return
 	# 其他玩家公开装备横条；透明武将牌输入层按局部坐标识别装备，并把目标牌说明交给统一信息框。
 	var opponent_equipment_rows: Array = current_operator_view.get("_equipment_rows") as Array
@@ -368,15 +397,22 @@ func _run() -> void:
 	var opponent_weapon_row: RichTextLabel = opponent_equipment_rows[0] as RichTextLabel
 	current_operator_view.call("_on_input_pointer_moved", opponent_weapon_row.position + opponent_weapon_row.size * 0.5)
 	await get_tree().process_frame
+	if information_box.is_hover_information_visible():
+		_fail("opponent_equipment_information_shown_too_early:%s" % information_box.get_hover_title_text())
+		return
+	await _wait_for_hover_information_delay()
 	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("青釭剑"):
 		_fail("opponent_equipment_information:%s" % information_box.get_hover_title_text())
 		return
-	# 指针移出公开装备横条但仍停留在武将牌内时，统一信息框必须恢复武将资料而不是直接关闭。
-	# 正式对局已按右键详情契约停用武将悬停资料，因此此处只验证装备信息关闭且不恢复武将内容。
+	# 指针移出公开装备横条但仍停留在武将牌内时，统一信息框先隐藏装备，完整等待后恢复该武将资料。
 	current_operator_view.call("_on_input_pointer_moved", Vector2(70.0, 50.0))
 	await get_tree().process_frame
 	if information_box.is_hover_information_visible():
-		_fail("player_information_restore:%s" % information_box.get_hover_title_text())
+		_fail("player_information_restore_shown_too_early:%s" % information_box.get_hover_title_text())
+		return
+	await _wait_for_hover_information_delay()
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+		_fail("player_information_restore:%s" % information_box.get_hover_description_text())
 		return
 	current_operator_view.call("_on_input_mouse_exited")
 	if hover_name_shade.visible or information_box.is_hover_information_visible():
@@ -385,14 +421,16 @@ func _run() -> void:
 	# 武将牌右键事件；保留一个临时选牌 UID，用于确认武将输入组件消费按下与释放后不会触发牌桌右键取消。
 	main_instance.set("_selected_card_uid", 999999)
 	await _right_click_control(current_operator_view.get_node("InputArea") as Control)
-	# 居中详情面板；其中心必须与当前紧凑客户区中心一致，不得沿固定1280×720坐标偏移。
+	# 居中详情面板；其中心必须与当前紧凑客户区中心一致，短技能内容会自动收紧高度而不沿固定1280×720坐标偏移。
 	var character_details_panel: PanelContainer = information_box.get_node("CharacterDetailsPanel") as PanelContainer
 	# 武将详情标题标签；左右对称占位后，其全局中心必须与整个详情面板中心一致。
 	var character_details_title: Label = information_box.get_character_title_label()
 	# 单技能详情条目；短内容必须位于滚动视口中部，不能继续贴住右侧区域顶边。
 	var single_skill_entry: Control = information_box.get_character_skill_list().get_child(0) as Control
-	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not character_details_panel.size.is_equal_approx(Vector2(760.0, 440.0)) or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
-		_fail("character_details_open:%s/%s/%d/%s" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused])
+	# 单技能详情当前自动计算出的紧凑高度；多技能详情必须在后续断言中随内容增加而扩展。
+	var single_skill_details_height: float = character_details_panel.size.y
+	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not is_equal_approx(character_details_panel.size.x, 760.0) or character_details_panel.size.y >= 440.0 or character_details_panel.size.y < information_box.character_panel_minimum_height or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
+		_fail("character_details_open:%s/%s/%d/%s size=%s min=%s center=%s/%s title=%s/%s scale=%s separators=%d entry_y=%s scrollbar=%s/%s selected=%d pause=%s/%s token=%d" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused, character_details_panel.size, information_box.character_panel_minimum_height, character_details_panel.get_global_rect().get_center(), main_instance.get_global_rect().get_center(), character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x, information_box.get_character_card_scale(), information_box.get_character_skill_separator_count(), single_skill_entry.position.y, information_box.get_character_skill_scroll_bar(), information_box.get_character_skill_scroll_bar().custom_minimum_size.x if information_box.get_character_skill_scroll_bar() != null else -1.0, int(main_instance.get("_selected_card_uid")), bool(main_instance.get("_owns_character_details_pause")), int(main_instance.get("_character_details_pause_token")) >= 0, int(main_instance.get("_character_details_pause_token"))])
 		return
 	# 多技能武将定义；布洛妮娅拥有3个静态技能，应在相邻技能之间创建正好2条主题横线。
 	var bronya_definition: Dictionary = GameDatabase.get_character("bronya")
@@ -404,8 +442,8 @@ func _run() -> void:
 	information_box.show_character_details(bronya_snapshot, bronya_definition, GameDatabase.get_faction(str(bronya_definition.get("faction", ""))))
 	await get_tree().process_frame
 	await get_tree().process_frame
-	if information_box.get_character_skill_entry_count() != 3 or information_box.get_character_skill_separator_count() != 2:
-		_fail("character_details_separators:%d/%d" % [information_box.get_character_skill_entry_count(), information_box.get_character_skill_separator_count()])
+	if information_box.get_character_skill_entry_count() != 3 or information_box.get_character_skill_separator_count() != 2 or character_details_panel.size.y <= single_skill_details_height or character_details_panel.size.y > information_box.character_panel_size.y:
+		_fail("character_details_separators:%d/%d/%s" % [information_box.get_character_skill_entry_count(), information_box.get_character_skill_separator_count(), character_details_panel.size.y])
 		return
 	await _click_control(information_box.get_character_close_button())
 	if information_box.is_character_details_visible() or get_tree().paused or bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) >= 0:
@@ -537,8 +575,12 @@ func _run() -> void:
 	var second_candidate: PlayerTargetView = candidate_views.get("march_7th") as PlayerTargetView
 	first_candidate.call("_on_input_mouse_entered")
 	await get_tree().create_timer(0.18).timeout
-	if first_candidate.scale.x <= 1.0 or not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+	if first_candidate.scale.x <= 1.0 or information_box.is_hover_information_visible():
 		_fail("selection_hover_scale:%s" % first_candidate.scale)
+		return
+	await _wait_for_hover_information_delay()
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+		_fail("selection_hover_information:%s" % information_box.get_hover_title_text())
 		return
 	first_candidate.call("_on_input_mouse_exited")
 	await get_tree().create_timer(0.18).timeout
@@ -561,6 +603,10 @@ func _run() -> void:
 		return
 	leader_character_view.call("_on_input_mouse_entered")
 	await get_tree().process_frame
+	if information_box.is_hover_information_visible():
+		_fail("selection_leader_information_shown_too_early:%s" % information_box.get_hover_title_text())
+		return
+	await _wait_for_hover_information_delay()
 	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "瓦尔特":
 		_fail("selection_leader_information:%s" % information_box.get_hover_title_text())
 		return
@@ -711,8 +757,14 @@ func _run() -> void:
 		return
 	gained_hand_card.call("_on_mouse_entered")
 	await get_tree().process_frame
-	if not (gained_hand_card.get_node("InputArea") as Control).tooltip_text.is_empty() or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃"):
-		_fail("hand_card_information:%s" % information_box.get_hover_title_text())
+	if not (gained_hand_card.get_node("InputArea") as Control).tooltip_text.is_empty() or information_box.is_hover_information_visible():
+		_fail("hand_card_information_shown_too_early:%s" % information_box.get_hover_title_text())
+		return
+	await _wait_for_hover_information_delay()
+	# 首次手牌说明的面板高度；【桃】说明在340像素固定宽度下应只占紧凑正文高度，不能因自动换行初始宽度错误而被撑成大量空白。
+	var hand_information_panel_height: float = hover_information_panel.size.y
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃") or hand_information_panel_height > 160.0:
+		_fail("hand_card_information:%s/%s" % [information_box.get_hover_title_text(), hand_information_panel_height])
 		return
 	gained_hand_card.call("_on_mouse_exited")
 	await get_tree().process_frame
@@ -940,6 +992,11 @@ func _run() -> void:
 	await get_tree().process_frame
 	print("UI_LAYOUT_PASS viewport=%s" % viewport_rect.size)
 	get_tree().quit(0)
+
+
+## 等待统一信息框完成正式0.5秒悬停延迟；集中保留无头测试调度余量，避免各个手牌、装备、技能和武将牌断言使用不同等待值。
+func _wait_for_hover_information_delay() -> void:
+	await get_tree().create_timer(HOVER_INFORMATION_DELAY_SETTLE_SECONDS).timeout
 
 
 ## 把控件本地矩形转换为实际视口屏幕坐标，包含画布缩放与窗口拉伸。
