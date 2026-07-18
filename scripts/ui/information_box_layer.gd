@@ -87,6 +87,18 @@ var _hover_subtitle_label: Label
 ## 目标旁信息框说明；自动换行展示完整规则文本。
 var _hover_description_label: Label
 
+## 目标旁信息框说明容器；普通说明使用单个标签，武将资料可按技能拆分为强调名称与普通描述。
+var _hover_description_container: VBoxContainer
+
+## 当前武将悬停资料创建的技能名称标签；统一使用与右键详情技能名相同的主题强调色。
+var _hover_skill_name_labels: Array[Label] = []
+
+## 当前武将悬停资料创建的技能描述标签；主题切换时与普通说明共同刷新为次级文字色。
+var _hover_skill_description_labels: Array[Label] = []
+
+## 当前悬停内容异步布局的代次；每次替换或关闭内容都会递增，旧布局协程不得显示新请求或旧位置。
+var _hover_layout_generation: int = 0
+
 ## 武将详情全屏遮罩；拦截详情框之外的输入，并允许点击空白区域关闭详情。
 var _character_shade: ColorRect
 
@@ -107,6 +119,9 @@ var _character_skill_scroll: ScrollContainer
 
 ## 武将详情技能条目容器；每项按技能名一行、技能描述一段的顺序纵向排列。
 var _character_skill_list: VBoxContainer
+
+## 武将详情技能列表底部对称留白；高度由标题栏、主体间距和面板上下边距动态推导，不写入玩法数据。
+var _character_skill_bottom_spacer: Control
 
 ## 武将详情整体纵向内容容器；自动高度计算读取其标题与主体之间的实际主题间距。
 var _character_content: VBoxContainer
@@ -133,14 +148,27 @@ func _ready() -> void:
 func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_id: int) -> void:
 	if information.is_empty() or source_id < 0 or _character_shade.visible:
 		return
+	# 当前请求内容副本；后续幂等比较和延迟显示都只使用副本，避免来源在等待期间修改原字典。
+	var information_copy: Dictionary = information.duplicate(true)
+	if source_id == _pending_hover_source_id and _pending_hover_information == information_copy:
+		# 同一来源在等待期间重复发送相同资料时只更新锚点，不重启0.5秒计时器。
+		_pending_hover_anchor_rect = anchor_rect
+		return
+	if source_id == _hover_source_id and _hover_information == information_copy and _hover_panel.visible:
+		# 公开快照刷新会重复发送相同武将资料；完成首帧布局后只校正位置，测量期间则保持透明等待原布局收尾。
+		if _hover_panel.self_modulate.a > 0.0:
+			_place_hover_panel(anchor_rect, source_id, _hover_layout_generation)
+		return
 	_cancel_pending_hover_information()
 	# 已显示的旧目标信息必须立即退场；新的目标会在完整0.5秒悬停后再显示，避免内容跨目标残留。
 	if _hover_panel.visible:
+		_hover_layout_generation += 1
 		_hover_source_id = -1
 		_hover_information.clear()
 		_hover_panel.visible = false
+		_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_pending_hover_source_id = source_id
-	_pending_hover_information = information.duplicate(true)
+	_pending_hover_information = information_copy
 	_pending_hover_anchor_rect = anchor_rect
 	if hover_display_delay_seconds <= 0.0:
 		_show_pending_hover_information()
@@ -157,7 +185,9 @@ func hide_hover_information(source_id: int) -> void:
 		return
 	_hover_source_id = -1
 	_hover_information.clear()
+	_hover_layout_generation += 1
 	_hover_panel.visible = false
+	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
 
 
 ## 在桌面中心显示指定角色的武将详情；左侧复用正式牌面，右侧只读取武将静态技能元数据。
@@ -200,7 +230,7 @@ func close_character_details() -> void:
 
 ## 返回目标旁信息框当前是否可见；供界面回归与调试验证统一悬停接口。
 func is_hover_information_visible() -> bool:
-	return _hover_panel != null and _hover_panel.visible
+	return _hover_panel != null and _hover_panel.visible and _hover_panel.self_modulate.a > 0.0
 
 
 ## 返回目标旁信息框当前标题；供界面回归确认显示内容来自实际悬停目标。
@@ -275,9 +305,7 @@ func refresh_ui_style() -> void:
 	_character_shade.color = BattleUIStyle.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
 	_hover_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_character_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
-	_hover_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_hover_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
-	_hover_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_refresh_hover_text_styles()
 	_character_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
@@ -320,24 +348,30 @@ func _show_pending_hover_information() -> void:
 	var information: Dictionary = _pending_hover_information.duplicate(true)
 	var anchor_rect: Rect2 = _pending_hover_anchor_rect
 	_cancel_pending_hover_information()
+	_hover_layout_generation += 1
+	# 当前布局代次；异步等待一帧期间如果来源关闭或内容被替换，旧代次不得让面板重新显形。
+	var layout_generation: int = _hover_layout_generation
 	_hover_source_id = source_id
 	_hover_information = information
 	_hover_title_label.text = str(_hover_information.get("title", "信息"))
 	_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
 	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
-	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
+	_render_hover_description()
+	_refresh_hover_text_styles()
+	# 面板需要进入布局树才能取得自动换行后的真实尺寸；测量完成前保持透明，防止默认位置或旧尺寸闪现一帧。
+	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_hover_panel.visible = true
 	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
 	_hover_panel.size = Vector2(hover_panel_width, 0.0)
 	_hover_panel.reset_size()
 	# 首次自动换行必须等待一个完整界面布局帧；此时 Label 已取得固定面板宽度，再测量高度不会把每个字符误当作独立行。
-	_place_hover_panel_after_layout(anchor_rect, source_id)
+	_place_hover_panel_after_layout(anchor_rect, source_id, layout_generation)
 
 
 ## 等待自动换行标签取得固定宽度后再测量并放置信息框；来源已经离开时由后续来源校验安全忽略。
-func _place_hover_panel_after_layout(anchor_rect: Rect2, source_id: int) -> void:
+func _place_hover_panel_after_layout(anchor_rect: Rect2, source_id: int, layout_generation: int) -> void:
 	await get_tree().process_frame
-	_place_hover_panel(anchor_rect, source_id)
+	_place_hover_panel(anchor_rect, source_id, layout_generation)
 
 
 ## 构建目标旁悬浮信息节点；所有输入保持穿透，浮层不会抢走原目标的鼠标离开判定。
@@ -347,6 +381,7 @@ func _build_hover_panel() -> void:
 	_hover_panel.visible = false
 	_hover_panel.z_index = 100
 	_hover_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_panel.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
 	add_child(_hover_panel)
 	# 悬浮信息纵向内容；固定顺序为标题、副标题和完整说明。
@@ -365,11 +400,17 @@ func _build_hover_panel() -> void:
 	_hover_subtitle_label.add_theme_font_size_override("font_size", 12)
 	_hover_subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hover_content.add_child(_hover_subtitle_label)
+	_hover_description_container = VBoxContainer.new()
+	_hover_description_container.name = "DescriptionContainer"
+	_hover_description_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_description_container.add_theme_constant_override("separation", 9)
+	hover_content.add_child(_hover_description_container)
 	_hover_description_label = Label.new()
+	_hover_description_label.name = "Description"
 	_hover_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hover_description_label.add_theme_font_size_override("font_size", 14)
 	_hover_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hover_content.add_child(_hover_description_label)
+	_hover_description_container.add_child(_hover_description_label)
 
 
 ## 构建全屏武将详情节点；遮罩、面板与滚动框都使用始终处理模式支持离线暂停。
@@ -462,8 +503,8 @@ func _build_character_panel() -> void:
 
 
 ## 根据来源矩形把悬浮信息放到目标右侧；右侧空间不足时翻转到左侧并限制在视口安全区内。
-func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
-	if source_id != _hover_source_id or not _hover_panel.visible:
+func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: int) -> void:
+	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
 		return
 	# 当前组件可用视口矩形；根控件与牌桌共享逻辑画布坐标。
 	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), size - Vector2.ONE * viewport_margin * 2.0)
@@ -490,6 +531,8 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
 	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
 	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
 	_hover_panel.position = target_position
+	# 位置与最终尺寸都稳定后再显示；这一步也是当前布局代次唯一允许恢复不透明度的入口。
+	_hover_panel.self_modulate = Color.WHITE
 
 
 ## 在指定宽度下测量悬停说明所需的最小内容高度；每次测量都重置旧比例产生的高度，保证下一份信息不会继承前一份的空白。
@@ -498,6 +541,71 @@ func _measure_hover_panel_content_height(panel_width: float) -> float:
 	_hover_panel.size = Vector2(panel_width, 0.0)
 	_hover_panel.reset_size()
 	return _hover_panel.size.y
+
+
+## 按当前信息结构重建悬停说明；武将资料将每个技能拆分为金色技能名和普通说明，其他来源继续使用单段正文。
+func _render_hover_description() -> void:
+	_clear_hover_description_sections()
+	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
+	# 当前结构化说明分段；没有该可选字段时保持卡牌、装备与普通技能原有单标签展示。
+	var description_sections: Array = _hover_information.get("description_sections", []) as Array
+	_hover_description_label.visible = description_sections.is_empty()
+	for section_index: int in range(description_sections.size()):
+		# 当前说明分段；无效值回退为空字典，避免单项内容错误破坏整个信息框。
+		var section: Dictionary = description_sections[section_index] as Dictionary
+		# 当前技能说明条目；名称与描述分别建标签，颜色和换行职责互不耦合。
+		var section_container: VBoxContainer = VBoxContainer.new()
+		section_container.name = "DescriptionSection%d" % section_index
+		section_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		section_container.add_theme_constant_override("separation", 4)
+		_hover_description_container.add_child(section_container)
+		# 当前技能名称标签；完整名称保留武将定义原文并使用右键详情同款主题强调色。
+		var section_title_label: Label = Label.new()
+		section_title_label.name = "Title"
+		section_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		section_title_label.text = str(section.get("title", ""))
+		section_title_label.add_theme_font_size_override("font_size", 17)
+		section_container.add_child(section_title_label)
+		_hover_skill_name_labels.append(section_title_label)
+		# 当前技能描述标签；完整规则文本自然换行，颜色保持与右键详情说明一致。
+		var section_description_label: Label = Label.new()
+		section_description_label.name = "Description"
+		section_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		section_description_label.text = str(section.get("description", "暂无说明。"))
+		section_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		section_description_label.add_theme_font_size_override("font_size", 14)
+		section_container.add_child(section_description_label)
+		_hover_skill_description_labels.append(section_description_label)
+
+
+## 清理武将悬停资料创建的结构化技能标签；普通说明标签始终保留并在下一份内容中复用。
+func _clear_hover_description_sections() -> void:
+	if _hover_description_container == null:
+		_hover_skill_name_labels.clear()
+		_hover_skill_description_labels.clear()
+		return
+	for child: Node in _hover_description_container.get_children():
+		if child == _hover_description_label:
+			continue
+		_hover_description_container.remove_child(child)
+		child.queue_free()
+	_hover_skill_name_labels.clear()
+	_hover_skill_description_labels.clear()
+
+
+## 按当前主题刷新悬停标题、技能名和说明颜色；只有武将资料明确声明强调标题时才使用金色。
+func _refresh_hover_text_styles() -> void:
+	if _hover_title_label == null:
+		return
+	# 当前标题颜色；武将名使用与右键技能名一致的强调色，其他信息标题保持主文字色。
+	var title_color: Color = BattleUIStyle.get_color("accent") if bool(_hover_information.get("title_emphasis", false)) else BattleUIStyle.get_color("text_primary")
+	_hover_title_label.add_theme_color_override("font_color", title_color)
+	_hover_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	_hover_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	for skill_name_label: Label in _hover_skill_name_labels:
+		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	for skill_description_label: Label in _hover_skill_description_labels:
+		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 
 
 ## 复用正式武将牌场景渲染详情左侧牌面；隐藏对局角标和公开装备以匹配选将领袖牌表现。
@@ -539,6 +647,7 @@ func _render_character_skills() -> void:
 		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 		_character_skill_list.add_child(empty_label)
+		_append_character_skill_bottom_spacer()
 		call_deferred("_refresh_character_skill_vertical_layout")
 		return
 	for skill_id_variant: Variant in skill_ids:
@@ -576,6 +685,7 @@ func _render_character_skills() -> void:
 		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 		skill_entry.add_child(skill_description_label)
 		_character_skill_entry_count += 1
+	_append_character_skill_bottom_spacer()
 	call_deferred("_refresh_character_skill_vertical_layout")
 
 
@@ -599,6 +709,7 @@ func _clear_skill_entries() -> void:
 		_character_skill_list.remove_child(child)
 		child.queue_free()
 	_character_skill_list.custom_minimum_size.y = 0.0
+	_character_skill_bottom_spacer = null
 	_character_skill_entry_count = 0
 
 
@@ -628,6 +739,7 @@ func _resize_character_panel_to_content() -> void:
 		return
 	# 技能列表先解除上一次的视口填充高度，才能取得本次武将真实技能内容高度。
 	_character_skill_list.custom_minimum_size.y = 0.0
+	_update_character_skill_bottom_spacer()
 	# 左侧正式武将牌的缩放后高度；详情卡牌尚未创建时回退为零，保证本方法对销毁阶段安全。
 	var card_height: float = _character_card_view.card_size.y * character_card_scale if _character_card_view != null and is_instance_valid(_character_card_view) else 0.0
 	_character_card_area.custom_minimum_size.y = card_height
@@ -664,6 +776,36 @@ func _refresh_character_skill_vertical_layout() -> void:
 	if _character_skill_list == null or _character_skill_scroll == null:
 		return
 	_character_skill_list.custom_minimum_size.y = _character_skill_scroll.size.y
+
+
+## 在技能列表末尾追加与顶部标题区域等高的留白；VBox整体居中后可保证首个技能名与最后一行文字到面板边框的距离相等。
+func _append_character_skill_bottom_spacer() -> void:
+	_character_skill_bottom_spacer = Control.new()
+	_character_skill_bottom_spacer.name = "BottomSymmetrySpacer"
+	_character_skill_bottom_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_skill_bottom_spacer.set_meta("information_box_skill_bottom_spacer", true)
+	_character_skill_list.add_child(_character_skill_bottom_spacer)
+	_update_character_skill_bottom_spacer()
+
+
+## 依据标题栏、主体间距和主题面板边距计算底部留白；主题切换后仍保持文字区域上下视觉对称。
+func _update_character_skill_bottom_spacer() -> void:
+	if _character_skill_bottom_spacer == null or not is_instance_valid(_character_skill_bottom_spacer):
+		return
+	# 标题与主体之间的实际间距；与面板高度计算读取同一主题常量，避免布局规则分叉。
+	var content_separation: float = float(_character_content.get_theme_constant("separation"))
+	# 当前面板上下内容边距；上下不一致的自定义主题也会被纳入对称距离计算。
+	var panel_margin_top: float = 0.0
+	var panel_margin_bottom: float = 0.0
+	var panel_style: StyleBoxFlat = _character_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	if panel_style != null:
+		panel_margin_top = panel_style.content_margin_top
+		panel_margin_bottom = panel_style.content_margin_bottom
+	# 最后一项与留白控件之间由VBox自动加入的间距；从目标距离中扣除后不会重复增加底部空白。
+	var list_separation: float = float(_character_skill_list.get_theme_constant("separation"))
+	# 底部目标距离；与上边框到主体首行之间的标题栏、容器间距及主题边距差完全对应。
+	var target_bottom_gap: float = maxf(character_header_height + content_separation + panel_margin_top - panel_margin_bottom, 0.0)
+	_character_skill_bottom_spacer.custom_minimum_size.y = maxf(target_bottom_gap - list_separation, 0.0)
 
 
 ## 为技能间横线应用当前主题边框色；横线只承担内容分组，不创建额外卡片背景。
