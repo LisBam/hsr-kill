@@ -3,6 +3,9 @@ extends Node
 
 ## AI 调度层。它管理玩家到策略的映射，但不掌握回合推进、规则校验或卡牌结算。
 
+## 公开行为导致忠反推断变化时发出的只读通知；界面可刷新本地徽记，但不能据此写入权威身份。
+signal identity_mark_changed(player_id: int, identity_mark: String)
+
 ## 以玩家 ID 为键的 AI 策略实例；未登记的玩家由人类或网络客户端控制。
 var _policies: Dictionary = {}
 
@@ -67,6 +70,8 @@ func request_choice(player_id: int, authoritative_snapshot: Dictionary, request:
 
 ## 向全部基础 AI 广播一次公开使用牌行为；只更新身份观察数据，不改变任何规则状态。
 func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int]) -> void:
+	# 行为前身份标记；观察完成后只在推断实际改变时通知表现层。
+	var previous_identity_mark: String = _identity_model.get_identity_mark(actor_id)
 	# 已通知策略对象；共享身份模型只需由任意一个基础策略更新一次，避免多名 AI 重复累计暴露度。
 	var notified: bool = false
 	for policy_variant: Variant in _policies.values():
@@ -77,7 +82,19 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 			notified = true
 			break
 	if not notified:
-		_identity_model.synchronize(authoritative_snapshot)
+		# 没有内置 AI 的联机对局仍需记录公开行为，供本地自动身份标记使用；观察模型不会替玩家执行动作。
+		_identity_model.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids)
+	# 行为后身份标记；只允许无名杀式模型产生的忠反临时标记进入通知。
+	var current_identity_mark: String = _identity_model.get_identity_mark(actor_id)
+	if current_identity_mark != previous_identity_mark:
+		identity_mark_changed.emit(actor_id, current_identity_mark)
+
+
+## 返回指定玩家当前由公开行为形成的忠反标记；空字符串表示线索不足，不公开真实隐藏身份。
+func get_identity_mark(player_id: int) -> String:
+	# 当前共享身份标记；协调器只暴露临时推断，不返回身份模型或可变观察字典。
+	var identity_mark: String = _identity_model.get_identity_mark(player_id)
+	return identity_mark if identity_mark in ["loyalist", "rebel"] else ""
 
 
 ## 返回指定 AI 是否愿意在当前奇偶状态使用【无懈可击】；未登记玩家保持保守不响应。

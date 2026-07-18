@@ -365,11 +365,41 @@ func _run() -> void:
 	if identity_mark_menu_texts != ["？", "忠", "反", "内"]:
 		_fail("identity_mark_menu_texts:%s" % [identity_mark_menu_texts])
 		return
+	# 自动身份标记设置；默认开启并使用复选框呈现，二元配置不通过普通文字按钮模拟。
+	var auto_identity_marking_checkbox: CheckBox = main_instance.get_node("%AutoIdentityMarkingCheckBox") as CheckBox
+	if not auto_identity_marking_checkbox.button_pressed or not GameSettings.auto_identity_marking_enabled:
+		_fail("auto_identity_mark_default")
+		return
+	# 自动标记使用的权威观察快照；真实身份只交给共享身份模型，牌桌当前公开快照仍保持hidden。
+	var identity_observation_snapshot: Dictionary = _make_ten_player_snapshot()
+	identity_observation_snapshot["match_id"] = "ui-auto-identity-mark"
+	for observed_player_variant: Variant in identity_observation_snapshot.get("players", []) as Array:
+		# 当前权威观察角色；本循环只修改深复制测试快照，不接触牌桌公开快照。
+		var observed_player: Dictionary = observed_player_variant as Dictionary
+		# 当前观察角色稳定 ID；0号为公开主公，5号为隐藏反贼，其余身份只用于补全标准身份态度关系。
+		var observed_player_id: int = int(observed_player.get("player_id", -1))
+		observed_player["identity"] = "lord" if observed_player_id == 0 else ("rebel" if observed_player_id == 5 else "loyalist")
+		observed_player["identity_revealed"] = observed_player_id == 0
+		observed_player["out_of_game"] = false
+	# 5号隐藏角色公开对主公使用【杀】；单目标-0.2忠反信号应立即形成反贼倾向标记。
+	match_controller.ai_coordinator.observe_card_use(identity_observation_snapshot, 5, GameDatabase.get_card("sha"), [0])
+	# 自动身份徽记；推断只存在共享模型中，不得写入手动标注字典或公开身份快照。
+	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
+	# 自动标记目标的公开玩家快照；其身份必须继续保持hidden，证明模型没有覆盖界面状态。
+	var observed_public_player: Dictionary = (ten_player_snapshot.get("players", []) as Array)[5] as Dictionary
+	if marked_identity_badge.text != "反" or (main_instance.get("_identity_marks") as Dictionary).has(5) or str(observed_public_player.get("identity", "")) != "hidden":
+		_fail("automatic_identity_mark:%s" % marked_identity_badge.text)
+		return
+	# 关闭自动标记后立即恢复未知徽记；模型观察结果继续保留，重新开启时无需重算历史行为。
+	auto_identity_marking_checkbox.button_pressed = false
+	await get_tree().process_frame
+	if GameSettings.auto_identity_marking_enabled or marked_identity_badge.text != "？":
+		_fail("automatic_identity_mark_disabled:%s" % marked_identity_badge.text)
+		return
 	# 未知身份本地标注；选择反贼后只改变当前客户端徽记，不修改快照中的 hidden 身份。
 	main_instance.call("_on_identity_badge_pressed", 5)
 	main_instance.call("_on_identity_mark_selected", 1)
 	# 已标注身份徽记；用于验证本地推测文本与标注字典同步。
-	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
 	if marked_identity_badge.text != "反" or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
 		_fail("identity_local_mark:%s" % marked_identity_badge.text)
 		return
@@ -391,6 +421,9 @@ func _run() -> void:
 	if marked_identity_badge.text != "忠":
 		_fail("identity_reveal_priority:%s" % marked_identity_badge.text)
 		return
+	# 恢复默认自动标记设置，避免本用例后续菜单和重复渲染检查继承关闭状态。
+	auto_identity_marking_checkbox.button_pressed = true
+	await get_tree().process_frame
 	# 首次渲染的玩家 ID 到座位节点实例 ID；重复快照后用于确认没有整桌释放重建。
 	var opponent_instance_ids: Dictionary = {}
 	for player_id_variant: Variant in player_views.keys():

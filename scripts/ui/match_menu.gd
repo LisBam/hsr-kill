@@ -42,6 +42,9 @@ signal restart_requested(player_count: int)
 ## UI 风格下拉框；选项来自统一注册表，元数据保存稳定风格标识而不是显示文字。
 @onready var _ui_style_option: OptionButton = %UiStyleOption
 
+## 自动身份标记复选框；勾选状态直接映射全局设置，只影响其他角色的本地推测徽记。
+@onready var _auto_identity_marking_checkbox: CheckBox = %AutoIdentityMarkingCheckBox
+
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
@@ -73,6 +76,9 @@ func _ready() -> void:
 	_populate_ui_style_options()
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	GameSettings.ui_style_changed.connect(_refresh_ui_style_selection)
+	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
+	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
+	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
@@ -118,6 +124,7 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -151,6 +158,18 @@ func _on_ui_style_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _ui_style_option.item_count:
 		return
 	GameSettings.set_ui_style(str(_ui_style_option.get_item_metadata(option_index)))
+
+
+## 将复选框状态写入全局自动身份标记设置；身份观察记录继续保留，重新开启后可立即恢复当前推断。
+func _on_auto_identity_marking_toggled(enabled: bool) -> void:
+	GameSettings.set_auto_identity_marking_enabled(enabled)
+
+
+## 按全局设置同步复选框；无信号写入避免外部设置变化触发重复回调。
+func _refresh_auto_identity_marking_state(enabled: bool) -> void:
+	if not is_node_ready():
+		return
+	_auto_identity_marking_checkbox.set_pressed_no_signal(enabled)
 
 
 ## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。

@@ -104,6 +104,9 @@ var _qilin_mount_uid: int = -1
 ## 麒麟弓回归是否在选择请求中找到目标坐骑；默认false，收到正确候选后改为true。
 var _qilin_candidate_present: bool = false
 
+## 濒死前时机被测试触发器取消的次数；用于验证取消标志不能留下非正体力的存活角色。
+var _cancelled_dying_before_count: int = 0
+
 
 ## 延迟一帧执行测试，确保自动加载卡牌数据和节点依赖已经完成初始化。
 func _ready() -> void:
@@ -118,6 +121,8 @@ func _run() -> void:
 	if not await _test_wuxie_per_target_and_aoe_continuation():
 		return
 	if not await _test_dynamic_targets_direct_hit_and_exclusion():
+		return
+	if not await _test_cancelled_dying_timing_keeps_health_invariant():
 		return
 	if not await _test_dying_peach_and_wine_share_one_request():
 		return
@@ -460,6 +465,29 @@ func _assert_real_card_use_event_tree() -> bool:
 	if content_after_start_sequence < 0 or cards_discard_start_sequence <= content_after_start_sequence or card_use_finish_sequence <= cards_discard_start_sequence:
 		return _fail("card_use_after_order=%d/%d/%d" % [content_after_start_sequence, cards_discard_start_sequence, card_use_finish_sequence])
 	return true
+
+
+## 验证濒死前时机仅设置取消但没有恢复体力时，控制器仍继续濒死与死亡确认，不会留下0体力存活角色。
+func _test_cancelled_dying_timing_keeps_health_invariant() -> bool:
+	_scenario = "dying_cancel_invariant"
+	_cancelled_dying_before_count = 0
+	_reset_state(3)
+	_controller.trigger_manager.subscribe("dyingBefore", self, _cancel_dying_before_without_recovery, 0, -1, "global")
+	# 测试目标从4点受到4点伤害降至0；场上没有救援牌，因此正确流程会完成死亡确认。
+	_controller.damage(0, 1, 4, "normal", "sha")
+	if not await _wait_until_no_card_choice():
+		return _fail("dying_cancel_invariant_timeout")
+	# 受伤目标状态；取消事件没有修正体力时仍必须经过濒死队列并最终死亡。
+	var target: PlayerState = _controller.state.get_player(1)
+	if _cancelled_dying_before_count != 1 or target.alive or target.dying or not target.death_confirmed or target.hp != 0:
+		return _fail("dying_cancel_invariant=%d:%s:%s:%s:%d" % [_cancelled_dying_before_count, target.alive, target.dying, target.death_confirmed, target.hp])
+	return true
+
+
+## 模拟只取消濒死前事件但未提供存活修正的扩展内容；基础规则必须忽略这种无效终止。
+func _cancel_dying_before_without_recovery(event: RuleEvent) -> void:
+	_cancelled_dying_before_count += 1
+	event.cancel()
 
 
 ## 验证濒死者在一个请求中同时选择桃或酒；选择酒后桃保留且角色回复至1点。
@@ -966,6 +994,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 			if candidate_uids.has(peach_uid):
 				selected_uids = [peach_uid]
 				break
+	elif _scenario == "dying_cancel_invariant" and kind == "dying_response":
+		# 三名测试角色都没有救援牌；逐个提交取消以走完正式单轮求桃协议。
+		selected_uids = []
 	elif _scenario == "taoyuan_resume" and kind == "trick_negation":
 		_taoyuan_negation_request_count += 1
 		selected_uids = []

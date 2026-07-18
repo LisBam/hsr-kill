@@ -317,6 +317,8 @@ func _ready() -> void:
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
+	GameSettings.auto_identity_marking_changed.connect(_on_auto_identity_marking_changed)
+	match_controller.ai_coordinator.identity_mark_changed.connect(_on_automatic_identity_mark_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
@@ -477,8 +479,37 @@ func _on_identity_mark_selected(item_id: int) -> void:
 	# 当前目标武将牌；持久座位存在时只刷新身份徽记，不重建其他牌面节点。
 	var player_view: PlayerTargetView = _player_views.get(_identity_mark_target_id) as PlayerTargetView
 	if player_view != null and is_instance_valid(player_view):
-		player_view.set_identity_mark(identity_mark)
+		player_view.set_identity_mark(_resolve_display_identity_mark(_identity_mark_target_id))
 	_identity_mark_target_id = -1
+
+
+## 返回指定其他角色当前应显示的本地身份推测；手动标注优先，自动模式只接收共享模型的忠反结果。
+func _resolve_display_identity_mark(player_id: int) -> String:
+	if _identity_marks.has(player_id):
+		return str(_identity_marks.get(player_id, ""))
+	if not GameSettings.auto_identity_marking_enabled or match_controller.ai_coordinator == null:
+		return ""
+	return match_controller.ai_coordinator.get_identity_mark(player_id)
+
+
+## 响应自动标记开关变化；重新渲染当前持久座位即可切换推测徽记，不改变任何快照数据。
+func _on_auto_identity_marking_changed(_enabled: bool) -> void:
+	if not _snapshot.is_empty():
+		_render_players()
+
+
+## 接收公开行为产生的单名角色推断变化；仅刷新未知身份、非本地且没有手动覆盖的现有武将牌。
+func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String) -> void:
+	if not GameSettings.auto_identity_marking_enabled or _identity_marks.has(player_id) or player_id == match_controller.local_human_player_id:
+		return
+	# 当前目标公开快照；真实身份已经公开时由权威徽记接管，不再应用本地推断。
+	var player: Dictionary = _get_player_snapshot(player_id)
+	if player.is_empty() or str(player.get("identity", "hidden")) != "hidden":
+		return
+	# 当前持久角色牌；只更新身份文本与颜色，不重建牌面、座次或装备节点。
+	var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
+	if player_view != null and is_instance_valid(player_view):
+		player_view.set_identity_mark(_resolve_display_identity_mark(player_id))
 
 
 ## 启动检查器配置的默认对局；延迟到首帧保证自动加载数据已完成。
@@ -734,7 +765,7 @@ func _render_players() -> void:
 		var public_identity: String = str(player.get("identity", "hidden"))
 		if public_identity != "hidden":
 			_identity_marks.erase(target_id)
-		player_button.set_identity_mark(str(_identity_marks.get(target_id, "")))
+		player_button.set_identity_mark(_resolve_display_identity_mark(target_id))
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
 		player_grid.move_child(player_seat_slot, seat_offset - 1)
 		next_player_views[target_id] = player_button

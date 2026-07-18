@@ -5002,16 +5002,24 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive:
 		return
+	# 已经恢复正体力的角色不再建立救援请求；若旧流程仍在队列中则统一完成脱离濒死结算。
+	if target.hp > 0:
+		if target.dying or state.dying_queue.has(target_id):
+			_finish_dying_rescue(target_id)
+		else:
+			_finish_pending_damage(target_id)
+		return
 	# 是否首次进入本次濒死流程；连续出桃与取消后的座次推进都复用同一流程，不重复创建回放事件。
 	var is_new_dying_flow: bool = not state.dying_queue.has(target_id)
 	if is_new_dying_flow:
-		# 濒死前与开始时机；被规则取消时不创建救援请求，伤害尾部仍正常完成。
+		# 濒死前时机；只有处理器已经恢复正体力或令角色离场时才允许终止，避免留下非正体力的存活角色。
 		var dying_before_event: RuleEvent = _emit_rule_timing("dyingBefore", target_id, killer_id, target_id, {"hp":target.hp, "required_recover":1 - target.hp})
-		if dying_before_event != null and (dying_before_event.cancelled or dying_before_event.neutralized):
+		if not target.alive or target.hp > 0:
 			_finish_pending_damage(target_id)
 			return
+		# 濒死开始时机；取消标志不能单独绕过体力不大于0必然进入濒死的基础规则。
 		var dying_begin_event: RuleEvent = _emit_rule_timing("dyingBegin", target_id, killer_id, target_id, dying_before_event.data if dying_before_event != null else {"hp":target.hp, "required_recover":1 - target.hp})
-		if dying_begin_event != null and (dying_begin_event.cancelled or dying_begin_event.neutralized):
+		if not target.alive or target.hp > 0:
 			_finish_pending_damage(target_id)
 			return
 		# 本次濒死事件 ID；救援选择记录作为其子事件写入回放历史，仅在首次进入时创建。
