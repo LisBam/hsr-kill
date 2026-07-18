@@ -15,6 +15,15 @@ signal identity_pressed(player_id: int)
 ## 鼠标进入或离开武将牌时发出的信号；选将界面据此播放候选缩放，局内名称阴影由本组件自行处理。
 signal hover_changed(hovered: bool)
 
+## 正式对局武将牌被鼠标右键释放时发出的详情请求；内容只包含公开快照和静态展示定义副本。
+signal details_requested(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary)
+
+## 鼠标进入其他玩家公开装备横条时发出的统一信息请求。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开公开装备横条或武将牌时发出的统一信息关闭请求。
+signal information_dismissed
+
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
@@ -144,14 +153,29 @@ var _equipment_row_slots: Array[String] = []
 ## 当前武将所属势力的展示元数据；仅保存配置深拷贝，不持有全局数据索引的可修改引用。
 var _faction_definition: Dictionary = {}
 
+## 当前武将静态定义副本；只供右键详情与主题刷新读取技能列表、名称和插画路径。
+var _character_definition: Dictionary = {}
+
 ## 装备槽的固定显示顺序；保证武器、防具、进攻坐骑、防御坐骑和宝物在所有客户端一致排列。
 const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
+
+## 装备槽中文名称；统一信息框使用该映射说明当前悬停装备所属区域。
+const EQUIPMENT_SLOT_NAMES: Dictionary = {
+	"weapon":"武器",
+	"armor":"防具",
+	"offensive_mount":"进攻坐骑",
+	"defensive_mount":"防御坐骑",
+	"treasure":"宝物",
+}
 
 ## 当前角色公开快照；仅用于刷新视觉层，不保留任何可修改的规则对象引用。
 var _player_snapshot: Dictionary = {}
 
 ## 最近一次公开快照配置签名；默认-1表示从未配置，未变化的角色不会重复加载立绘、重建体力圆点、装备横条或判定标记。
 var _configuration_signature: int = -1
+
+## 当前鼠标命中的公开装备槽位；空字符串表示鼠标不在装备横条上或该牌不显示公开装备。
+var _hovered_equipment_slot: String = ""
 
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
@@ -179,6 +203,8 @@ func _ready() -> void:
 	_input_area.size = card_size
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(_on_input_activated)
+	_input_area.details_requested.connect(_on_input_details_requested)
+	_input_area.pointer_moved.connect(_on_input_pointer_moved)
 	_input_area.card_dropped.connect(_on_input_card_dropped)
 	_input_area.mouse_entered.connect(_on_input_mouse_entered)
 	_input_area.mouse_exited.connect(_on_input_mouse_exited)
@@ -210,11 +236,12 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 	is_current_actor = current_actor
 	is_interactable = alive
 	is_face_down = false
+	_character_definition = character_definition.duplicate(true)
 	# 兼容格式化文本；旧调用方仍可传入摘要，该内容只作为无障碍悬停说明，不绘制按钮正文。
 	var accessibility_summary: String = ("◆ 行动中\n" if is_current_actor else "") + formatted_text
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
-		_input_area.tooltip_text = accessibility_summary
+		_input_area.tooltip_text = ""
 		_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_visual_state()
@@ -228,6 +255,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 		return
 	_configuration_signature = next_configuration_signature
 	_player_snapshot = snapshot.duplicate(true)
+	_character_definition = character_definition.duplicate(true)
 	_faction_definition = faction_definition.duplicate(true)
 	player_id = int(snapshot.get("player_id", -1))
 	is_current_actor = current_actor
@@ -235,7 +263,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	is_face_down = bool(snapshot.get("face_down", false))
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
-		_input_area.tooltip_text = _format_snapshot_tooltip(snapshot, character_definition)
+		_input_area.tooltip_text = ""
 		_input_area.configure(is_interactable, is_legal_target)
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
@@ -267,6 +295,8 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 ## 设置身份与手牌数标识是否进入正式对局显示；选将面板不调用此接口，因此保持场景默认隐藏。
 func set_match_overlays_visible(visible_in_match: bool) -> void:
 	_match_overlays_visible = visible_in_match
+	if not _match_overlays_visible:
+		_dismiss_public_equipment_information()
 	if not is_node_ready():
 		return
 	_identity_badge_label.visible = _match_overlays_visible
@@ -331,17 +361,31 @@ func _on_input_activated(local_position: Vector2) -> void:
 	pressed.emit()
 
 
+## 把正式对局武将牌的右键请求转换为只读详情数据；选将候选不显示对局角标，因此不会发送详情请求。
+func _on_input_details_requested() -> void:
+	if not _match_overlays_visible or _player_snapshot.is_empty() or _character_definition.is_empty():
+		return
+	details_requested.emit(_player_snapshot.duplicate(true), _character_definition.duplicate(true), _faction_definition.duplicate(true))
+
+
+## 根据鼠标局部坐标识别其他玩家牌面上的公开装备横条，并请求统一卡牌信息。
+func _on_input_pointer_moved(local_position: Vector2) -> void:
+	_update_public_equipment_information(local_position)
+
+
 ## 鼠标进入武将牌后显示玩家名称阴影，并把悬停状态转发给选将界面。
 func _on_input_mouse_entered() -> void:
 	_is_hovered = true
 	_refresh_hover_name_visibility()
 	hover_changed.emit(true)
+	_update_public_equipment_information(_input_area.get_local_mouse_position())
 
 
 ## 鼠标离开武将牌后隐藏玩家名称阴影，并通知选将界面恢复候选尺寸。
 func _on_input_mouse_exited() -> void:
 	_is_hovered = false
 	_refresh_hover_name_visibility()
+	_dismiss_public_equipment_information()
 	hover_changed.emit(false)
 
 
@@ -469,7 +513,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_public_zone_label.configure(judgment_names)
 	_faction_badge_label.text = faction_short_name
 	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_faction_badge_label.tooltip_text = faction_name
+	_faction_badge_label.tooltip_text = ""
 	# 势力徽记样式；清空通用面板的大内边距，保证紧凑圆徽中的单字完整显示。
 	var faction_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(faction_color.darkened(0.28), faction_color.lightened(0.36), 1, 14)
 	faction_badge_style.content_margin_left = 0.0
@@ -617,6 +661,7 @@ func _update_health_frame_geometry(frame_size: Vector2) -> void:
 
 ## 按固定槽位顺序把公开装备转换为参考图中的花色点数与牌名横条。
 func _refresh_equipment_rows() -> void:
+	_dismiss_public_equipment_information()
 	for equipment_row: RichTextLabel in _equipment_rows:
 		if equipment_row != null and is_instance_valid(equipment_row):
 			_equipment_layer.remove_child(equipment_row)
@@ -665,6 +710,8 @@ func _refresh_equipment_rows() -> void:
 		_equipment_rows.append(equipment_row)
 		_equipment_row_slots.append(slot)
 	_layout_equipment_rows()
+	if _is_hovered:
+		call_deferred("_update_public_equipment_information", _input_area.get_local_mouse_position())
 
 
 ## 根据公开身份与本地标注刷新身份徽记；真实身份始终优先，本地标注只替换未知问号。
@@ -685,7 +732,67 @@ func _refresh_identity_badge() -> void:
 func _refresh_hover_name_visibility() -> void:
 	if not is_node_ready() or _hover_name_shade == null:
 		return
-	_hover_name_shade.visible = _match_overlays_visible and _is_hovered
+	# 正式对局的悬停姓名阴影已经停用；选将界面继续只消费 hover_changed 播放候选缩放。
+	_hover_name_shade.visible = false
+
+
+## 更新其他玩家公开装备信息命中；装备横条本身忽略鼠标，由最上层透明输入区域统一转发坐标。
+func _update_public_equipment_information(local_position: Vector2) -> void:
+	if not _match_overlays_visible or not _public_equipment_visible or not _is_hovered or is_face_down:
+		_dismiss_public_equipment_information()
+		return
+	# 当前命中的固定装备槽位；空字符串表示鼠标不在任何已绘制装备横条内。
+	var hovered_slot: String = ""
+	# 当前命中的装备横条；用于提供统一信息框的全局锚点矩形。
+	var hovered_row: RichTextLabel
+	for row_index: int in range(_equipment_rows.size()):
+		# 当前公开装备横条；其局部位置与透明输入区域共享同一武将牌坐标空间。
+		var equipment_row: RichTextLabel = _equipment_rows[row_index]
+		if Rect2(equipment_row.position, equipment_row.size).has_point(local_position):
+			hovered_slot = _equipment_row_slots[row_index]
+			hovered_row = equipment_row
+			break
+	if hovered_slot.is_empty() or hovered_row == null:
+		_dismiss_public_equipment_information()
+		return
+	if hovered_slot == _hovered_equipment_slot:
+		return
+	_dismiss_public_equipment_information()
+	# 当前玩家公开装备字典；快照只包含对所有观察者可见的装备实体数据。
+	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
+	# 当前命中装备实体快照；槽位在横条创建后仍可能因快照刷新失效，缺失时直接停止显示。
+	var equipment_card: Dictionary = equipment.get(hovered_slot, {}) as Dictionary
+	if equipment_card.is_empty():
+		return
+	# 当前装备静态定义；名称和说明统一从数据库深拷贝读取。
+	var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+	# 当前装备显示名；跟随全局牌名模式，木牛流马额外显示全部观察者可见的“粮”数量。
+	var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+	if bool(card_definition.get("shows_attachment_count", false)):
+		equipment_name += "（%d）" % int(_player_snapshot.get("wooden_ox_storage_count", 0))
+	# 当前装备花色点数；与牌面横条内容一致，用于信息框副标题。
+	var suit_rank_text: String = "%s%s" % [_suit_symbol(str(equipment_card.get("suit", "none"))), _rank_text(int(equipment_card.get("rank", 0)))]
+	# 统一公开装备信息；只描述目标牌本身，不附带其他玩家私有手牌或权威状态。
+	var information: Dictionary = {
+		"title":"【%s】" % equipment_name,
+		"subtitle":"%s｜%s" % [str(EQUIPMENT_SLOT_NAMES.get(hovered_slot, "装备")), suit_rank_text],
+		"description":str(card_definition.get("description", "暂无卡牌说明。")),
+	}
+	_hovered_equipment_slot = hovered_slot
+	information_requested.emit(information, hovered_row.get_global_rect())
+
+
+## 关闭当前公开装备横条拥有的信息框；重复调用保持幂等且不会影响其他来源。
+func _dismiss_public_equipment_information() -> void:
+	if _hovered_equipment_slot.is_empty():
+		return
+	_hovered_equipment_slot = ""
+	information_dismissed.emit()
+
+
+## 武将牌退出场景树时关闭公开装备信息，避免座位移除后残留旧浮层。
+func _exit_tree() -> void:
+	_dismiss_public_equipment_information()
 
 
 ## 刷新武将牌统一牌背配色；翻面状态只改变信息遮挡，不改变角色交互权限或规则状态。

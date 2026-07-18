@@ -6,6 +6,12 @@ extends Button
 ## 技能按钮点击信号；参数为全项目稳定技能 ID。
 signal skill_requested(skill_id: String)
 
+## 鼠标进入技能按钮时发出的统一信息请求；内容字典与按钮全局矩形由牌桌信息框组件消费。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开技能按钮或节点退出场景树时发出的统一信息关闭请求。
+signal information_dismissed
+
 ## 技能按钮最小宽度；默认118像素可容纳四字技能名与状态，运行时通常无需修改。
 ## 当前牌桌只显示技能名前两个字，因此默认宽度收紧为62像素；该参数只改变按钮命中与排版尺寸，不影响技能规则。
 @export_range(48.0, 220.0, 1.0) var button_width: float = 62.0
@@ -25,6 +31,12 @@ var is_skill_selected: bool = false
 ## 当前技能说明文本；用于工具提示和桌面状态提示。
 var skill_description: String = ""
 
+## 当前技能完整显示名副本；按钮正文只显示前两个字，统一信息框使用该字段显示完整名称。
+var _skill_display_name: String = ""
+
+## 当前技能状态说明副本；用于统一信息框区分预留、锁定、被动、可发动与暂不可发动状态。
+var _skill_tooltip_status: String = ""
+
 
 ## 初始化按钮尺寸、焦点、字体和点击信号。
 func _ready() -> void:
@@ -34,6 +46,8 @@ func _ready() -> void:
 	text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	add_theme_font_size_override("font_size", 14)
 	pressed.connect(_on_pressed)
+	mouse_entered.connect(_on_information_mouse_entered)
+	mouse_exited.connect(_on_information_mouse_exited)
 	_refresh_visual_state()
 
 
@@ -54,8 +68,10 @@ func configure(definition: Dictionary, available: bool = false) -> void:
 	var short_skill_name: String = skill_name.substr(0, mini(2, skill_name.length()))
 	# 工具提示状态；完整说明当前技能属于预留、被动、可发动或暂不满足条件。
 	var tooltip_status: String = "界面已预留，规则尚未接入" if trigger_type == "sample_only" else ("锁定技已接入规则" if lock else (("当前可发动" if is_skill_available else "当前不满足发动条件") if ui_enabled else "被动技能已接入规则"))
+	_skill_display_name = skill_name
+	_skill_tooltip_status = tooltip_status
 	text = short_skill_name
-	tooltip_text = "【%s】\n%s\n\n状态：%s" % [skill_name, skill_description, tooltip_status]
+	tooltip_text = ""
 	disabled = not is_skill_available
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if is_skill_available else Control.CURSOR_ARROW
 	_refresh_visual_state()
@@ -71,6 +87,29 @@ func set_selected_state(selected: bool) -> void:
 func _on_pressed() -> void:
 	if is_skill_available and not skill_id.is_empty():
 		skill_requested.emit(skill_id)
+
+
+## 请求在技能按钮附近显示完整名称、说明和运行时状态；禁用按钮仍允许查看信息。
+func _on_information_mouse_entered() -> void:
+	if skill_id.is_empty():
+		return
+	# 统一技能信息；状态放入副标题，说明保持卡牌名称模式解析后的完整文本。
+	var information: Dictionary = {
+		"title":"【%s】" % _skill_display_name,
+		"subtitle":"状态：%s" % _skill_tooltip_status,
+		"description":skill_description,
+	}
+	information_requested.emit(information, get_global_rect())
+
+
+## 鼠标离开技能按钮后关闭由该按钮拥有的信息框。
+func _on_information_mouse_exited() -> void:
+	information_dismissed.emit()
+
+
+## 技能栏重建并释放按钮时关闭旧信息，避免节点未收到鼠标离开事件后保留过期说明。
+func _exit_tree() -> void:
+	information_dismissed.emit()
 
 
 ## 根据可用、禁用与选中状态刷新按钮颜色；不可发动按钮保持静态灰显且不响应点击。

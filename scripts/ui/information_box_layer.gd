@@ -1,0 +1,488 @@
+class_name InformationBoxLayer
+extends Control
+
+## 牌桌统一信息框组件。组件集中管理目标旁悬浮信息与居中武将详情，不读取或修改任何权威对局状态。
+
+## 居中武将详情显示状态变化信号；牌桌据此在离线模式申请或释放独立暂停令牌。
+signal character_details_visibility_changed(visible: bool)
+
+## 目标旁信息框固定宽度；默认340像素可完整容纳常见卡牌和技能说明，运行时通常无需动态修改。
+@export_range(240.0, 520.0, 1.0) var hover_panel_width: float = 340.0
+
+## 目标旁信息框与悬停目标之间的间距；默认10像素避免浮层遮挡当前目标，运行时通常无需动态修改。
+@export_range(4.0, 32.0, 1.0) var hover_target_gap: float = 10.0
+
+## 信息框与视口边缘之间的安全距离；默认12像素保证描边与阴影不会被窗口裁切，运行时通常无需动态修改。
+@export_range(4.0, 48.0, 1.0) var viewport_margin: float = 12.0
+
+## 居中武将详情面板尺寸；默认760×440像素为左侧缩小武将牌和右侧技能滚动区提供稳定空间，运行时通常无需动态修改。
+@export var character_panel_size: Vector2 = Vector2(760.0, 440.0)
+
+## 武将详情左侧牌面的缩放倍率；默认0.78与选将界面公开领袖武将牌一致，运行时通常无需动态修改。
+@export_range(0.5, 1.0, 0.01) var character_card_scale: float = 0.78
+
+## 武将详情左侧牌面区域宽度；默认180像素让缩小牌面居中且不挤压技能说明，运行时通常无需动态修改。
+@export_range(140.0, 260.0, 1.0) var character_card_area_width: float = 180.0
+
+## 武将详情标题栏固定高度；默认42像素容纳标题与关闭按钮，运行时通常无需动态修改。
+@export_range(34.0, 64.0, 1.0) var character_header_height: float = 42.0
+
+## 武将详情技能条目之间的垂直间距；默认12像素明确分隔技能名与下一项技能，运行时通常无需动态修改。
+@export_range(4, 28, 1) var skill_entry_separation: int = 12
+
+## 武将牌正式场景；详情框复用与牌桌和选将界面相同的牌面结构，避免维护第二套武将牌 UI。
+const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
+
+## 当前目标旁信息框对应的来源节点实例 ID；-1表示没有活动来源，旧来源离开时不能关闭新来源的信息。
+var _hover_source_id: int = -1
+
+## 当前目标旁信息框内容副本；主题切换时保留文字并只重绘样式，不重新查询业务数据。
+var _hover_information: Dictionary = {}
+
+## 当前武将详情使用的公开玩家快照副本；只用于重绘详情牌面，不持有可修改的规则对象。
+var _character_snapshot: Dictionary = {}
+
+## 当前武将详情使用的静态武将定义副本；技能列表和插画路径都从该只读副本解析。
+var _character_definition: Dictionary = {}
+
+## 当前武将详情使用的势力定义副本；只提供牌面简称、完整名称与颜色。
+var _faction_definition: Dictionary = {}
+
+## 目标旁信息框面板；只显示当前悬停卡牌、装备或技能的名称与说明。
+var _hover_panel: PanelContainer
+
+## 目标旁信息框标题；显示当前目标名称并使用主题主文字色。
+var _hover_title_label: Label
+
+## 目标旁信息框副标题；显示花色点数、牌型、装备槽位或技能状态。
+var _hover_subtitle_label: Label
+
+## 目标旁信息框说明；自动换行展示完整规则文本。
+var _hover_description_label: Label
+
+## 武将详情全屏遮罩；拦截详情框之外的输入，并允许点击空白区域关闭详情。
+var _character_shade: ColorRect
+
+## 武将详情居中面板；固定承载标题栏、缩小武将牌和技能滚动区。
+var _character_panel: PanelContainer
+
+## 武将详情固定标题；显示“武将详情”且不随具体武将变化。
+var _character_title_label: Label
+
+## 武将详情关闭按钮；使用熟悉的叉号命令并在暂停状态下继续接收输入。
+var _character_close_button: Button
+
+## 武将详情左侧牌面区域；实际武将牌按0.78默认倍率在该区域居中。
+var _character_card_area: Control
+
+## 武将详情右侧技能滚动框；鼠标滚轮与右侧拖条共用该标准滚动入口。
+var _character_skill_scroll: ScrollContainer
+
+## 武将详情技能条目容器；每项按技能名一行、技能描述一段的顺序纵向排列。
+var _character_skill_list: VBoxContainer
+
+## 当前详情左侧复用的正式武将牌；关闭或切换目标时释放并重新按快照构建。
+var _character_card_view: PlayerTargetView
+
+## 当前详情右侧已经创建的技能条目数量；只供界面回归与调试读取，不参与技能规则。
+var _character_skill_entry_count: int = 0
+
+
+## 初始化两类信息框节点；组件始终处理输入，确保离线暂停后仍能滚动和关闭详情。
+func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_build_hover_panel()
+	_build_character_panel()
+	refresh_ui_style()
+
+
+## 在目标附近显示统一悬浮信息；来源 ID 用于防止旧节点的离开信号关闭新目标信息。
+func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_id: int) -> void:
+	if information.is_empty() or source_id < 0 or _character_shade.visible:
+		return
+	_hover_source_id = source_id
+	_hover_information = information.duplicate(true)
+	_hover_title_label.text = str(_hover_information.get("title", "信息"))
+	_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
+	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
+	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
+	_hover_panel.visible = true
+	_hover_panel.size = Vector2(hover_panel_width, 0.0)
+	_hover_panel.reset_size()
+	call_deferred("_place_hover_panel", anchor_rect, source_id)
+
+
+## 关闭指定来源拥有的目标旁信息框；来源不匹配时保持当前新目标信息不变。
+func hide_hover_information(source_id: int) -> void:
+	if source_id != _hover_source_id:
+		return
+	_hover_source_id = -1
+	_hover_information.clear()
+	_hover_panel.visible = false
+
+
+## 在桌面中心显示指定角色的武将详情；左侧复用正式牌面，右侧只读取武将静态技能元数据。
+func show_character_details(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary = {}) -> void:
+	if snapshot.is_empty() or character_definition.is_empty():
+		return
+	# 详情框打开前的可见状态；重复右键切换目标时不能重复申请离线暂停令牌。
+	var was_visible: bool = _character_shade.visible
+	_character_snapshot = snapshot.duplicate(true)
+	_character_definition = character_definition.duplicate(true)
+	_faction_definition = faction_definition.duplicate(true)
+	_hover_source_id = -1
+	_hover_information.clear()
+	_hover_panel.visible = false
+	_character_shade.visible = true
+	_character_panel.visible = true
+	_render_character_card()
+	_render_character_skills()
+	_character_skill_scroll.scroll_vertical = 0
+	_character_close_button.grab_focus()
+	if not was_visible:
+		character_details_visibility_changed.emit(true)
+
+
+## 关闭居中武将详情并释放其只读内容副本；牌桌收到状态信号后只释放详情框自己的暂停令牌。
+func close_character_details() -> void:
+	if not _character_shade.visible:
+		return
+	_character_shade.visible = false
+	_character_panel.visible = false
+	_character_snapshot.clear()
+	_character_definition.clear()
+	_faction_definition.clear()
+	_clear_character_card()
+	_clear_skill_entries()
+	character_details_visibility_changed.emit(false)
+
+
+## 返回目标旁信息框当前是否可见；供界面回归与调试验证统一悬停接口。
+func is_hover_information_visible() -> bool:
+	return _hover_panel != null and _hover_panel.visible
+
+
+## 返回目标旁信息框当前标题；供界面回归确认显示内容来自实际悬停目标。
+func get_hover_title_text() -> String:
+	return _hover_title_label.text if _hover_title_label != null else ""
+
+
+## 返回居中武将详情当前是否可见；牌桌不应通过该查询推断暂停所有权。
+func is_character_details_visible() -> bool:
+	return _character_shade != null and _character_shade.visible
+
+
+## 返回武将详情标题文本；固定值用于确认界面没有把玩家名或武将名误作窗口标题。
+func get_character_title_text() -> String:
+	return _character_title_label.text if _character_title_label != null else ""
+
+
+## 返回武将详情实际创建的技能条目数量；数量仅对应静态武将技能列表。
+func get_character_skill_entry_count() -> int:
+	return _character_skill_entry_count
+
+
+## 返回详情左侧武将牌当前缩放；没有活动详情时返回零向量，便于诊断牌面是否正确创建。
+func get_character_card_scale() -> Vector2:
+	return _character_card_view.scale if _character_card_view != null and is_instance_valid(_character_card_view) else Vector2.ZERO
+
+
+## 返回武将技能滚动条；调用方可验证滚轮与可拖动条都由同一标准 ScrollContainer 提供。
+func get_character_skill_scroll_bar() -> VScrollBar:
+	return _character_skill_scroll.get_v_scroll_bar() if _character_skill_scroll != null else null
+
+
+## 返回武将详情关闭按钮；供界面回归验证离线暂停时仍能通过真实 GUI 输入关闭详情。
+func get_character_close_button() -> Button:
+	return _character_close_button
+
+
+## 按当前活动 UI 风格重绘信息框、文字、关闭按钮与滚动条；可见内容和滚动位置保持不变。
+func refresh_ui_style() -> void:
+	if not is_node_ready():
+		return
+	_character_shade.color = BattleUIStyle.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
+	_hover_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_character_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_hover_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_hover_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	_hover_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_character_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
+	_character_close_button.add_theme_stylebox_override("normal", BattleUIStyle.make_button(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("hover", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), 1, 4))
+	_apply_scroll_bar_style(_character_skill_scroll.get_v_scroll_bar())
+	if _character_card_view != null and is_instance_valid(_character_card_view):
+		_character_card_view.refresh_ui_style()
+	_refresh_skill_entry_styles()
+
+
+## 构建目标旁悬浮信息节点；所有输入保持穿透，浮层不会抢走原目标的鼠标离开判定。
+func _build_hover_panel() -> void:
+	_hover_panel = PanelContainer.new()
+	_hover_panel.name = "HoverInformationPanel"
+	_hover_panel.visible = false
+	_hover_panel.z_index = 100
+	_hover_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
+	add_child(_hover_panel)
+	# 悬浮信息纵向内容；固定顺序为标题、副标题和完整说明。
+	var hover_content: VBoxContainer = VBoxContainer.new()
+	hover_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hover_content.add_theme_constant_override("separation", 5)
+	_hover_panel.add_child(hover_content)
+	_hover_title_label = Label.new()
+	_hover_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_title_label.add_theme_font_size_override("font_size", 17)
+	_hover_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hover_content.add_child(_hover_title_label)
+	_hover_subtitle_label = Label.new()
+	_hover_subtitle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_subtitle_label.add_theme_font_size_override("font_size", 12)
+	_hover_subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hover_content.add_child(_hover_subtitle_label)
+	_hover_description_label = Label.new()
+	_hover_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_description_label.add_theme_font_size_override("font_size", 14)
+	_hover_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hover_content.add_child(_hover_description_label)
+
+
+## 构建全屏武将详情节点；遮罩、面板与滚动框都使用始终处理模式支持离线暂停。
+func _build_character_panel() -> void:
+	_character_shade = ColorRect.new()
+	_character_shade.name = "CharacterDetailsShade"
+	_character_shade.visible = false
+	_character_shade.z_index = 110
+	_character_shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	_character_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_character_shade.gui_input.connect(_on_character_shade_gui_input)
+	add_child(_character_shade)
+	_character_panel = PanelContainer.new()
+	_character_panel.name = "CharacterDetailsPanel"
+	_character_panel.visible = false
+	_character_panel.z_index = 111
+	_character_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_panel.custom_minimum_size = character_panel_size
+	_character_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_character_panel.position = -character_panel_size * 0.5
+	_character_panel.size = character_panel_size
+	add_child(_character_panel)
+	# 武将详情整体纵向内容；标题栏固定在上方，牌面与技能滚动区占据剩余高度。
+	var character_content: VBoxContainer = VBoxContainer.new()
+	character_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	character_content.add_theme_constant_override("separation", 8)
+	_character_panel.add_child(character_content)
+	# 武将详情标题行；标题扩展占据左侧空间，关闭按钮固定在最右侧。
+	var character_header: HBoxContainer = HBoxContainer.new()
+	character_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	character_header.custom_minimum_size.y = character_header_height
+	character_content.add_child(character_header)
+	_character_title_label = Label.new()
+	_character_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_title_label.text = "武将详情"
+	_character_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_character_title_label.add_theme_font_size_override("font_size", 22)
+	character_header.add_child(_character_title_label)
+	_character_close_button = Button.new()
+	_character_close_button.text = "X"
+	_character_close_button.tooltip_text = ""
+	_character_close_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_character_close_button.process_mode = Node.PROCESS_MODE_ALWAYS
+	_character_close_button.focus_mode = Control.FOCUS_ALL
+	_character_close_button.custom_minimum_size = Vector2(character_header_height, character_header_height)
+	_character_close_button.pressed.connect(close_character_details)
+	character_header.add_child(_character_close_button)
+	# 武将详情主体横向内容；左侧只读牌面与右侧滚动技能区互不嵌套业务逻辑。
+	var character_body: HBoxContainer = HBoxContainer.new()
+	character_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	character_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	character_body.add_theme_constant_override("separation", 14)
+	character_content.add_child(character_body)
+	_character_card_area = Control.new()
+	_character_card_area.name = "CharacterCardArea"
+	_character_card_area.custom_minimum_size = Vector2(character_card_area_width, character_panel_size.y - character_header_height - 30.0)
+	_character_card_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	character_body.add_child(_character_card_area)
+	_character_skill_scroll = ScrollContainer.new()
+	_character_skill_scroll.name = "SkillScroll"
+	_character_skill_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_skill_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_character_skill_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_character_skill_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	character_body.add_child(_character_skill_scroll)
+	_character_skill_list = VBoxContainer.new()
+	_character_skill_list.name = "SkillList"
+	_character_skill_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_skill_list.add_theme_constant_override("separation", skill_entry_separation)
+	_character_skill_scroll.add_child(_character_skill_list)
+
+
+## 根据来源矩形把悬浮信息放到目标右侧；右侧空间不足时翻转到左侧并限制在视口安全区内。
+func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
+	if source_id != _hover_source_id or not _hover_panel.visible:
+		return
+	_hover_panel.custom_minimum_size.x = hover_panel_width
+	_hover_panel.size.x = hover_panel_width
+	# 当前信息框实际尺寸；容器完成自动换行后使用该值进行视口边界计算。
+	var panel_size: Vector2 = _hover_panel.size
+	# 当前组件可用视口矩形；根控件与牌桌共享逻辑画布坐标。
+	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), size - Vector2.ONE * viewport_margin * 2.0)
+	# 默认信息框位置；优先显示在目标右侧并与目标顶边对齐。
+	var target_position: Vector2 = Vector2(anchor_rect.end.x + hover_target_gap, anchor_rect.position.y)
+	if target_position.x + panel_size.x > available_rect.end.x:
+		target_position.x = anchor_rect.position.x - panel_size.x - hover_target_gap
+	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
+	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
+	_hover_panel.position = target_position
+
+
+## 复用正式武将牌场景渲染详情左侧牌面；隐藏对局角标和公开装备以匹配选将领袖牌表现。
+func _render_character_card() -> void:
+	_clear_character_card()
+	_character_card_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	_character_card_area.add_child(_character_card_view)
+	# 详情牌面快照；翻面只影响牌桌状态表现，详情必须继续显示已经公开的武将插画与名称。
+	var details_snapshot: Dictionary = _character_snapshot.duplicate(true)
+	details_snapshot["face_down"] = false
+	_character_card_view.configure_snapshot(details_snapshot, _character_definition, false, _faction_definition)
+	_character_card_view.set_match_overlays_visible(false)
+	_character_card_view.set_public_equipment_visible(false)
+	_character_card_view.set_operation_state(false)
+	_character_card_view.scale = Vector2.ONE * character_card_scale
+	call_deferred("_center_character_card")
+
+
+## 在左侧固定区域内居中缩小武将牌；使用实际区域尺寸适配不同窗口和检查器参数。
+func _center_character_card() -> void:
+	if _character_card_view == null or not is_instance_valid(_character_card_view):
+		return
+	# 缩放后的武将牌尺寸；与选将界面一样只缩放正式牌面，不创建第二套几何参数。
+	var scaled_card_size: Vector2 = _character_card_view.card_size * character_card_scale
+	_character_card_view.position = (_character_card_area.size - scaled_card_size) * 0.5
+
+
+## 按武将定义顺序重建右侧技能条目；每项固定先显示技能名，再显示完整技能描述。
+func _render_character_skills() -> void:
+	_clear_skill_entries()
+	# 武将静态技能 ID 数组；空数组表示该武将没有可显示技能。
+	var skill_ids: Array = _character_definition.get("skills", []) as Array
+	if skill_ids.is_empty():
+		# 无技能占位说明；只表达静态内容为空，不推断运行时技能状态。
+		var empty_label: Label = Label.new()
+		empty_label.text = "该武将没有可显示的技能。"
+		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+		_character_skill_list.add_child(empty_label)
+		return
+	for skill_id_variant: Variant in skill_ids:
+		# 当前技能稳定 ID；用于从数据库取得只读名称与原始说明。
+		var skill_id: String = str(skill_id_variant)
+		# 当前技能定义；缺失时显示可诊断占位内容，不让技能列表静默缺项。
+		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		# 当前技能显示名；数据库缺失时回退稳定 ID，便于内容维护者定位问题。
+		var skill_name: String = str(skill_definition.get("name", skill_id))
+		# 当前技能显示说明；只替换完整书名号中的卡牌名称，其他原文保持不变。
+		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		# 单个技能条目；使用无边框纵向布局，避免在详情面板内嵌套装饰卡片。
+		var skill_entry: VBoxContainer = VBoxContainer.new()
+		skill_entry.add_theme_constant_override("separation", 4)
+		skill_entry.set_meta("information_box_skill_entry", true)
+		_character_skill_list.add_child(skill_entry)
+		# 技能名称行；完整名称独占一行并使用主题强调色。
+		var skill_name_label: Label = Label.new()
+		skill_name_label.text = "【%s】" % skill_name
+		skill_name_label.add_theme_font_size_override("font_size", 17)
+		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+		skill_entry.add_child(skill_name_label)
+		# 技能描述行；长文本允许自然换行，滚动框负责查看超出面板高度的全部内容。
+		var skill_description_label: Label = Label.new()
+		skill_description_label.text = skill_description
+		skill_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		skill_description_label.add_theme_font_size_override("font_size", 14)
+		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		skill_entry.add_child(skill_description_label)
+		_character_skill_entry_count += 1
+
+
+## 清理详情左侧武将牌；节点离树后不保留鼠标信号、快照或主题状态。
+func _clear_character_card() -> void:
+	if _character_card_view == null or not is_instance_valid(_character_card_view):
+		_character_card_view = null
+		return
+	_character_card_area.remove_child(_character_card_view)
+	_character_card_view.queue_free()
+	_character_card_view = null
+
+
+## 清理详情右侧技能条目并重置条目计数；滚动容器本身持续复用。
+func _clear_skill_entries() -> void:
+	if _character_skill_list == null:
+		_character_skill_entry_count = 0
+		return
+	for child: Node in _character_skill_list.get_children():
+		_character_skill_list.remove_child(child)
+		child.queue_free()
+	_character_skill_entry_count = 0
+
+
+## 刷新已经显示的技能条目颜色；节点元数据只标识布局用途，不包含任何技能业务状态。
+func _refresh_skill_entry_styles() -> void:
+	if _character_skill_list == null:
+		return
+	for entry_variant: Variant in _character_skill_list.get_children():
+		# 当前技能条目或空技能标签；两种结构分别应用主题强调色和次级文字色。
+		var entry_node: Node = entry_variant as Node
+		if entry_node is VBoxContainer and entry_node.has_meta("information_box_skill_entry"):
+			# 当前技能名称标签；条目创建顺序保证索引0始终为名称。
+			var skill_name_label: Label = entry_node.get_child(0) as Label
+			# 当前技能说明标签；条目创建顺序保证索引1始终为说明。
+			var skill_description_label: Label = entry_node.get_child(1) as Label
+			skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		elif entry_node is Label:
+			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+
+
+## 为技能滚动条应用当前主题语义色；拖条、悬停和按下状态均保持可辨识对比度。
+func _apply_scroll_bar_style(scroll_bar: VScrollBar) -> void:
+	if scroll_bar == null:
+		return
+	scroll_bar.custom_minimum_size.x = 12.0
+	scroll_bar.add_theme_stylebox_override("scroll", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
+
+
+## 点击武将详情遮罩空白区域时关闭详情；面板自身位于更高层级并会截断内部输入。
+func _on_character_shade_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		# 当前鼠标按键事件；左键或右键释放都关闭详情，滚轮事件继续交给技能滚动框。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if not mouse_event.pressed and mouse_event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+			close_character_details()
+			accept_event()
+
+
+## 处理详情框关闭快捷键；始终处理模式保证离线暂停后 Esc 与右键仍可恢复对局。
+func _unhandled_input(event: InputEvent) -> void:
+	if not is_character_details_visible():
+		return
+	if event is InputEventKey:
+		# 当前键盘事件；只在首次按下 Esc 时关闭，忽略按键重复。
+		var key_event: InputEventKey = event as InputEventKey
+		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_ESCAPE:
+			close_character_details()
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		# 当前未被详情面板消费的鼠标事件；右键释放等价于点击关闭按钮。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if not mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			close_character_details()
+			get_viewport().set_input_as_handled()

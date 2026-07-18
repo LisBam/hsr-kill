@@ -9,6 +9,12 @@ signal pressed
 ## 拖拽开始信号；参数为稳定卡牌 UID，桌面可据此同步当前选择。
 signal card_drag_started(card_uid: int)
 
+## 鼠标进入可见牌面时发出的统一信息请求；内容字典和全局目标矩形由牌桌信息框组件直接消费。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开牌面或节点退出场景树时发出的统一信息关闭请求。
+signal information_dismissed
+
 ## 卡牌宽度；默认108像素适合1280×720牌桌，运行时无需动态修改。
 ## 标准牌面使用111×148像素，对应精确3:4宽高比；宽度只增大不缩小高度，运行时通常无需动态修改。
 @export_range(88.0, 180.0, 1.0) var card_width: float = 111.0
@@ -188,7 +194,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	_category_color = _resolve_category_color(definition)
 	_artwork_texture = ArtworkLoader.load_from_definition(definition, ArtworkLoader.CARD_ART_FIELD)
 	if is_node_ready():
-		_input_area.tooltip_text = "%s\n%s" % [display_name, str(definition.get("description", ""))]
+		_input_area.tooltip_text = ""
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
 	_refresh_card_content()
 	_refresh_visual_state()
@@ -208,7 +214,7 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	is_face_down = true
 	_card_definition.clear()
 	if is_node_ready():
-		_input_area.tooltip_text = "不可见手牌"
+		_input_area.tooltip_text = ""
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
 	_refresh_visual_state()
 
@@ -335,7 +341,18 @@ func _refresh_card_back_style() -> void:
 
 
 ## 鼠标进入可交互卡牌时播放轻量放大动画，并提高绘制层级。
+## 可见卡牌会先请求统一信息框；不可交互状态只跳过原有放大反馈，不阻止查看说明。
 func _on_mouse_entered() -> void:
+	if not is_face_down and not _card_definition.is_empty():
+		# 卡牌信息副标题；花色点数、木牛来源和细分类别保持与当前牌面显示一致。
+		var information_subtitle: String = "%s｜%s" % [_suit_rank_text, _card_type_text]
+		# 统一卡牌信息；标题和说明直接来自当前名称模式与静态定义，不读取权威对局对象。
+		var information: Dictionary = {
+			"title":"【%s】" % _display_name_text,
+			"subtitle":information_subtitle,
+			"description":str(_card_definition.get("description", "暂无卡牌说明。")),
+		}
+		information_requested.emit(information, get_global_rect())
 	if not is_interactable:
 		return
 	_is_hovered = true
@@ -350,6 +367,7 @@ func _on_mouse_entered() -> void:
 
 ## 鼠标离开卡牌时恢复原始缩放和容器计算的绘制层级。
 func _on_mouse_exited() -> void:
+	information_dismissed.emit()
 	_is_hovered = false
 	_refresh_visual_state()
 	# 无名杀式手牌恢复由容器计算的顺序；其他父级回到默认层级。
@@ -359,6 +377,11 @@ func _on_mouse_exited() -> void:
 	else:
 		z_index = 0
 	_start_hover_tween(Vector2.ONE)
+
+
+## 节点被手牌对账或动画层释放时关闭其信息框，避免鼠标离开信号缺失后残留旧内容。
+func _exit_tree() -> void:
+	information_dismissed.emit()
 
 
 ## 启动悬停缩放动画；使用并行动画保证横纵缩放同步完成。

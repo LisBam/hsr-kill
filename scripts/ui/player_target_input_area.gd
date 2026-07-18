@@ -7,6 +7,12 @@ extends Control
 ## 参数为武将牌局部坐标，根组件可据此区分身份徽记与普通牌面点击。
 signal activated(local_position: Vector2)
 
+## 鼠标右键释放武将牌时发出的详情请求信号；该入口不受角色存活或目标可选状态限制。
+signal details_requested
+
+## 鼠标在武将牌内移动时发出的局部坐标信号；武将牌组件据此识别公开装备横条悬停目标。
+signal pointer_moved(local_position: Vector2)
+
 ## 合法卡牌拖放完成时发出的信号；参数为稳定实体牌 UID。
 signal card_dropped(card_uid: int)
 
@@ -31,12 +37,24 @@ func configure(interactable: bool, accepts_drop: bool) -> void:
 
 
 ## 把左键释放转换为武将牌激活信号。
+## 右键按下与释放会被本组件消费，并在释放时转换为不依赖存活状态的详情请求。
 func _gui_input(event: InputEvent) -> void:
-	if not is_interactable:
+	if event is InputEventMouseMotion:
+		# 当前鼠标移动事件；局部坐标只供武将牌表现组件识别公开装备横条，不进入规则状态。
+		var motion_event: InputEventMouseMotion = event as InputEventMouseMotion
+		pointer_moved.emit(motion_event.position)
 		return
 	if event is InputEventMouseButton:
 		# 当前鼠标按键事件；只响应左键释放，避免一次点击产生重复目标切换。
+		# 右键详情优先处理并在释放时只触发一次，随后不再进入左键目标选择分支。
 		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			if not mouse_event.pressed:
+				details_requested.emit()
+			accept_event()
+			return
+		if not is_interactable:
+			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and not mouse_event.pressed:
 			activated.emit(mouse_event.position)
 			accept_event()

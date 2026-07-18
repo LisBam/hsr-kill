@@ -8,6 +8,9 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
+const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/components/information_box_layer.tscn")
+
 ## 中央确定与取消按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
 const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 
@@ -117,6 +120,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
 ## 当前节点已重构为独立装备堆叠组件；保留原变量名以避免破坏桌面脚本既有引用。
 @onready var equipment_label: EquipmentStackView = %EquipmentStack
+
+## 牌桌统一信息框组件；运行时实例化后集中处理目标旁说明和居中武将详情。
+var information_box: InformationBoxLayer
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
@@ -300,6 +306,12 @@ var _owns_log_pause: bool = false
 ## 当前日志展开持有的对局暂停令牌；-1表示日志没有通过统一接口暂停对局。
 var _log_pause_token: int = -1
 
+## 当前场景树暂停是否由离线武将详情触发；只在持有该所有权时释放对应令牌。
+var _owns_character_details_pause: bool = false
+
+## 当前武将详情持有的对局暂停令牌；-1表示详情框没有暂停离线对局。
+var _character_details_pause_token: int = -1
+
 
 ## 连接控制器与全局设置，并在首帧启动默认演示对局。
 func _ready() -> void:
@@ -307,6 +319,7 @@ func _ready() -> void:
 	_ensure_skill_button_grid()
 	_configure_local_card_areas()
 	_configure_interaction_controls()
+	_create_information_box()
 	_create_local_player_card()
 	_create_identity_mark_menu()
 	match_controller.state_changed.connect(_on_state_changed)
@@ -335,19 +348,29 @@ func _ready() -> void:
 	recast_button.pressed.connect(_on_recast_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
 	equipment_label.equipment_pressed.connect(_on_equipment_pressed)
+	equipment_label.information_requested.connect(_on_information_requested.bind(equipment_label))
+	equipment_label.information_dismissed.connect(_on_information_dismissed.bind(equipment_label))
 	local_player_card.pressed.connect(_on_self_target_pressed)
 	local_player_card.card_dropped.connect(_on_card_dropped)
+	local_player_card.details_requested.connect(_on_character_details_requested)
+	local_player_card.information_requested.connect(_on_information_requested.bind(local_player_card))
+	local_player_card.information_dismissed.connect(_on_information_dismissed.bind(local_player_card))
 	match_menu.refresh_card_name_text()
 	_apply_ui_style()
 	call_deferred("_start_default_match")
 
 
 ## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
+## 武将详情使用另一枚独立令牌，退出牌桌时按相同所有权规则单独释放。
 func _exit_tree() -> void:
 	if _owns_log_pause and match_controller != null and is_instance_valid(match_controller):
 		match_controller.release_gameplay_pause(_log_pause_token)
 	_owns_log_pause = false
 	_log_pause_token = -1
+	if _owns_character_details_pause and match_controller != null and is_instance_valid(match_controller):
+		match_controller.release_gameplay_pause(_character_details_pause_token)
+	_owns_character_details_pause = false
+	_character_details_pause_token = -1
 
 
 ## 在离线模式展开日志时暂停整局；联网模式继续运行，收起时只恢复由本组件拥有的暂停。
@@ -520,6 +543,52 @@ func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String)
 func _start_default_match() -> void:
 	log_view.clear()
 	match_controller.start_match()
+
+
+## 创建牌桌唯一的统一信息框组件；组件只消费视图请求，不直接访问控制器、网络模式或规则状态。
+func _create_information_box() -> void:
+	information_box = INFORMATION_BOX_LAYER_SCENE.instantiate() as InformationBoxLayer
+	information_box.name = "InformationBoxLayer"
+	information_box.z_index = 100
+	add_child(information_box)
+	information_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	information_box.character_details_visibility_changed.connect(_on_character_details_visibility_changed)
+
+
+## 把任意视图的统一信息请求交给牌桌唯一信息框；来源实例 ID 防止旧离开信号关闭新内容。
+func _on_information_requested(information: Dictionary, anchor_rect: Rect2, source: Node) -> void:
+	if information_box == null or source == null or not is_instance_valid(source):
+		return
+	information_box.show_hover_information(information, anchor_rect, source.get_instance_id())
+
+
+## 关闭指定视图拥有的目标旁信息；来源不匹配时信息框会保持当前新目标内容。
+func _on_information_dismissed(source: Node) -> void:
+	if information_box == null or source == null:
+		return
+	information_box.hide_hover_information(source.get_instance_id())
+
+
+## 打开武将详情；详情组件负责牌面与技能渲染，牌桌只提供公开快照和静态定义。
+func _on_character_details_requested(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary) -> void:
+	if information_box == null:
+		return
+	information_box.show_character_details(snapshot, character_definition, faction_definition)
+
+
+## 根据武将详情可见状态管理独立离线暂停令牌；LAN 与远程对局始终继续运行。
+func _on_character_details_visibility_changed(visible: bool) -> void:
+	if not visible:
+		if _owns_character_details_pause:
+			match_controller.release_gameplay_pause(_character_details_pause_token)
+			_owns_character_details_pause = false
+			_character_details_pause_token = -1
+		return
+	# 当前是否为离线单机模式；联网客户端不能通过本地详情框暂停权威对局。
+	var is_offline_match: bool = match_controller != null and match_controller.network_gateway != null and match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE
+	if is_offline_match and not _owns_character_details_pause:
+		_character_details_pause_token = match_controller.acquire_gameplay_pause("offline_character_details")
+		_owns_character_details_pause = _character_details_pause_token >= 0
 
 
 ## 从运行时座位容器创建本地牌；武将牌与座次标签保持独立节点，本地与对手使用同一组合结构。
@@ -756,6 +825,9 @@ func _render_players() -> void:
 			player_button.pressed.connect(_on_persistent_target_pressed.bind(player_button))
 			player_button.card_dropped.connect(_on_card_dropped)
 			player_button.identity_pressed.connect(_on_identity_badge_pressed)
+			player_button.details_requested.connect(_on_character_details_requested)
+			player_button.information_requested.connect(_on_information_requested.bind(player_button))
+			player_button.information_dismissed.connect(_on_information_dismissed.bind(player_button))
 		# 其他玩家独立座次标签；仅显示中文座次号，不属于武将牌自身节点树。
 		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
@@ -846,6 +918,8 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		skill_button.configure(skill_definition, skill_available)
 		skill_button.skill_requested.connect(_on_skill_requested)
+		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
+		skill_button.information_dismissed.connect(_on_information_dismissed.bind(skill_button))
 		skill_button_container.add_child(skill_button)
 		_skill_views[skill_id] = skill_button
 	_layout_local_skill_area(skill_ids.size())
@@ -1007,6 +1081,8 @@ func _create_local_hand_card_view(card_uid: int) -> CardView:
 	card_view.visible = true
 	card_view.pressed.connect(_on_card_pressed.bind(card_uid))
 	card_view.card_drag_started.connect(_on_card_drag_started)
+	card_view.information_requested.connect(_on_information_requested.bind(card_view))
+	card_view.information_dismissed.connect(_on_information_dismissed.bind(card_view))
 	hand_container.add_child(card_view)
 	return card_view
 
@@ -1054,7 +1130,7 @@ func _render_local_equipment(player: Dictionary) -> void:
 		candidate_uids = _get_play_phase_equipment_candidate_uids()
 	equipment_label.configure(equipment, int(player.get("wooden_ox_storage_count", 0)), candidate_uids, selected_uids)
 	# 原固定槽位文本继续作为组件的完整无障碍摘要；可见牌面由堆叠横条负责。
-	equipment_label.tooltip_text = _format_local_equipment(player)
+	equipment_label.tooltip_text = ""
 
 
 ## 按装备槽位返回当前名称模式下的牌名；空槽位统一返回“无”。
@@ -1512,6 +1588,8 @@ func _apply_ui_style() -> void:
 	character_selection_panel.refresh_ui_style()
 	card_use_animation_layer.target_line_color = BattleUIStyle.get_color("target_line")
 	equipment_label.refresh_ui_style()
+	if information_box != null and is_instance_valid(information_box):
+		information_box.refresh_ui_style()
 	for card_view_variant: Variant in _card_views.values():
 		# 当前正式手牌视图；主题刷新不能改变实体 UID、输入权限或选中状态。
 		var card_view: CardView = card_view_variant as CardView
@@ -1533,6 +1611,8 @@ func _apply_ui_style() -> void:
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
 func _on_restart_requested(player_count: int) -> void:
+	if information_box != null and is_instance_valid(information_box):
+		information_box.close_character_details()
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()

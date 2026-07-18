@@ -77,7 +77,7 @@ func _on_any_turn_begin(event: RuleEvent) -> void:
 	if not turn_player.hand.is_empty():
 		options.append({"id":DISCARD_OPTION_ID, "label":"弃置一张手牌，然后令目标摸一张牌"})
 	options.append({"id":LOSE_HP_OPTION_ID, "label":"失去1点体力，然后令目标回复1点体力"})
-	request_control_selection_for_player(turn_player_id, "振旗", "请选择【振旗】的费用；斜杠前后选项按位置对应", options, true, {"kind":"zhenqi_cost_option", "turn_player_id":turn_player_id})
+	request_control_selection_for_player(turn_player_id, "振旗", "是否发动【振旗】", options, true, {"kind":"zhenqi_cost_option", "turn_player_id":turn_player_id})
 
 
 ## 恢复费用选项、弃置手牌和领袖目标选择；只有费用与目标同时仍合法时才按同位分支结算。
