@@ -36,6 +36,16 @@ func shield(count: int, source: SkillPlayer) -> int:
 	return int(_host.call("shield", player_id, count, source_id, _reason))
 
 
+## 使当前角色失去指定点数护盾；该操作只改变护盾，不触发失去体力、受到伤害或体力减少事件。
+func loseShield(count: int, source: SkillPlayer) -> int:
+	if _host == null or not _host.has_method("change_hujia") or count <= 0:
+		return 0
+	# 护盾变化来源玩家 ID；没有有效来源对象时按无来源效果记录为-1。
+	var source_id: int = source.player_id if source != null else -1
+	# 控制器返回带符号变化量；技能语法对外返回实际失去的非负护盾点数。
+	return -int(_host.call("change_hujia", player_id, -count, source_id, _reason))
+
+
 ## 使当前角色失去指定点数体力；该操作绕过护盾且不触发造成伤害或受到伤害事件。
 func loseHp(count: int, source: SkillPlayer) -> int:
 	if _host == null or not _host.has_method("lose_hp"):
@@ -60,6 +70,7 @@ func addPhase() -> bool:
 
 
 ## 使当前角色在本次出牌阶段结束后获得一个额外的出牌阶段；该接口不包含其他标准回合阶段。
+## 在弃牌阶段调用时，额外出牌阶段改在当前弃牌阶段完整结束后执行，随后直接进入结束阶段且不重复弃牌。
 func addPlayPhase() -> bool:
 	if _host == null or not _host.has_method("add_play_phase"):
 		return false

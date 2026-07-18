@@ -7,6 +7,7 @@ extends CardDefinition
 func _init() -> void:
 	super({
 		"id": "sha_thunder",
+		"rule_name": "杀",
 		"original_name": "雷杀",
 		"custom_name": "雷杀",
 		"type": "basic",

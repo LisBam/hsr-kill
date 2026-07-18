@@ -14,6 +14,9 @@ const PAUSE_OBSERVATION_SECONDS: float = 0.65
 ## 恢复后最长等待时长；正常 AI 会在剩余延迟结束后通过标准动作入口推进序号。
 const RESUME_TIMEOUT_SECONDS: float = 1.20
 
+## 纯AI完成选将、准备阶段技能询问并进入出牌阶段的最长等待毫秒数；新增触发技能后使用6秒覆盖完整合法选择链。
+const SETUP_TIMEOUT_MILLISECONDS: int = 6000
+
 
 ## 延迟开始测试，保证测试根节点已经进入场景树；根节点始终处理以便在对局暂停期间继续执行断言。
 func _ready() -> void:
@@ -37,8 +40,12 @@ func _run() -> void:
 	match_controller.local_human_player_id = -1
 	match_controller.randomize_local_human_seat = false
 	match_controller.ai_action_delay_seconds = TEST_AI_DELAY_SECONDS
+	# 主菜单启动边界不会自动创建对局；测试通过公开入口显式开始两人纯AI身份局。
+	if not match_controller.start_match(2, 19):
+		_fail("start_ai_match")
+		return
 	# 等待纯 AI 完成选将并进入首个出牌阶段；上限只防御场景初始化异常，不依赖真实对局时长。
-	var setup_deadline_msec: int = Time.get_ticks_msec() + 2000
+	var setup_deadline_msec: int = Time.get_ticks_msec() + SETUP_TIMEOUT_MILLISECONDS
 	while Time.get_ticks_msec() < setup_deadline_msec and (match_controller.state == null or match_controller.state.current_phase != "play"):
 		await get_tree().process_frame
 	if match_controller.state == null or match_controller.state.current_phase != "play":

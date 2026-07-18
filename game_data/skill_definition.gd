@@ -158,6 +158,21 @@ func continue_response(_context: Dictionary, _response_card: CardInstance) -> bo
 	return false
 
 
+## 判断一张当前由持有者拥有的实体牌能否通过本技能转化为指定响应模式；默认不提供转化能力。
+func can_convert_response_card(_card: CardInstance, _response_patterns: Array[String]) -> bool:
+	return false
+
+
+## 返回响应转化后使用的虚拟卡牌定义 ID；空字符串表示等待期间条件失效，控制器不会消耗材料牌。
+func get_converted_response_definition_id(_card: CardInstance, _response_patterns: Array[String]) -> String:
+	return ""
+
+
+## 恢复由控制器完整执行的额外阶段；上下文只包含稳定玩家、技能与阶段来源数据，不持有运行时对象。
+func continue_extra_phase(_context: Dictionary) -> bool:
+	return false
+
+
 ## 向基础 AI 的出牌阶段合法动作列表追加技能动作；动作必须使用 action_type=use_skill 并携带稳定 skill_id。
 func append_play_phase_actions(_result: Array[Dictionary]) -> void:
 	pass

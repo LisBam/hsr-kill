@@ -222,5 +222,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),
 		"response_history_count": response_history.size(),
 		"damage_history_count": damage_history.size(),
+		# 技能发动历史是公开事实；AI用稳定回合号与目标上下文判断“每回合每名角色限一次”。
+		"skill_history": skill_history.duplicate(true),
 		"skill_history_count": skill_history.size(),
 	}

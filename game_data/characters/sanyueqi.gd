@@ -1,9 +1,12 @@
 extends CharacterDefinition
 
-## 【三月七】武将源码。武将通过脚本资源直接配置【六相冰】。
+## 【三月七】武将源码。武将通过独立技能组件配置【加护】与【冰封】。
 
-## 【六相冰】技能脚本；技能规则与元数据均由对应文件独立维护。
-const LIUXIANGBING_SKILL: Script = preload("res://game_data/skills/liuxiangbing.gd")
+## 【加护】技能脚本；负责准备阶段的横置与护盾支援。
+const JIAHU_SKILL: Script = preload("res://game_data/skills/jiahu.gd")
+
+## 【冰封】技能脚本；负责唯一目标牌的竖置、弃牌、无效与每目标限次。
+const BINGFENG_SKILL: Script = preload("res://game_data/skills/bingfeng.gd")
 
 
 ## 写入武将静态信息与技能代码引用。
@@ -14,5 +17,5 @@ func _init() -> void:
 		"gender": "female",
 		"faction": "xingqionglieche",
 		"max_hp": 3,
-		"description": "防御型样例武将，用于验证女性与三体力数据。",
-	}, [LIUXIANGBING_SKILL])
+		"description": "以横置状态与护盾保护队友，并将唯一目标牌转化为控制效果。",
+	}, [JIAHU_SKILL, BINGFENG_SKILL])

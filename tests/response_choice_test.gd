@@ -52,13 +52,23 @@ func _run() -> void:
 		return
 	# 领袖候选；固定种子保证本地0号玩家完成唯一的人类选将，其他角色由 AI 同步完成。
 	var leader_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if leader_candidates.is_empty() or not _controller.select_character(0, leader_candidates[0]):
+	# 本专项选用的领袖武将；避开会在初始准备或出牌Begin创建主动询问的三月七与布洛妮娅，保持本用例只聚焦【闪】响应恢复。
+	var selected_leader_character_id: String = ""
+	for candidate_id: String in leader_candidates:
+		if candidate_id not in ["march_7th", "bronya"]:
+			selected_leader_character_id = candidate_id
+			break
+	if selected_leader_character_id.is_empty() and not leader_candidates.is_empty():
+		selected_leader_character_id = leader_candidates[0]
+	if leader_candidates.is_empty() or not _controller.select_character(0, selected_leader_character_id):
 		_fail("select_leader")
 		return
 	await get_tree().process_frame
 	if _controller.state.current_phase != "play":
 		_fail("initial_phase=%s" % _controller.state.current_phase)
 		return
+	# 本专项不测试武将技能；卸载随机攻击者可能拥有的【疾雨】等指定目标询问，确保【杀】后第一个暂停窗口始终是【闪】。
+	_controller._uninstall_all_character_skills()
 	# 本地目标状态；只保留测试【闪】，排除无懈可击和其他响应牌插入额外请求。
 	var local_player: PlayerState = _controller.state.get_player(0)
 	local_player.hand.clear()
