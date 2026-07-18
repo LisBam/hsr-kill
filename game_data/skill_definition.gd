@@ -12,10 +12,15 @@ var owner_player_id: int = -1
 ## 当前技能绑定的对局控制器端口；技能只能通过该端口请求规则操作，不直接修改界面节点。
 var host: Object
 
+## 当前技能是否为锁定技；true 表示效果满足条件时强制执行且不创建发动选择，默认 false 表示非锁定技。
+var lock: bool = false
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
 	_metadata = metadata.duplicate(true)
+	lock = bool(_metadata.get("lock", false))
+	_metadata["lock"] = lock
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -122,6 +127,21 @@ func continue_response(_context: Dictionary, _response_card: CardInstance) -> bo
 ## 向基础 AI 的出牌阶段合法动作列表追加技能动作；动作必须使用 action_type=use_skill 并携带稳定 skill_id。
 func append_play_phase_actions(_result: Array[Dictionary]) -> void:
 	pass
+
+
+## 计算基础 AI 对本技能主动动作的额外评分；具体技能只能读取快照、动作与评估器公开查询。
+func score_ai_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
+	return 0.0
+
+
+## 计算基础 AI 对本技能创建的选择动作评分；确认、费用、选牌与选目标逻辑应写在对应技能文件中。
+func score_ai_choice(_authoritative_snapshot: Dictionary, _choice_request: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
+	return 0.0
+
+
+## 修正持有者使用卡牌动作的 AI 评分；锁定技与被动联动可在自身技能文件内表达牌效增减。
+func modify_ai_card_action_score(_authoritative_snapshot: Dictionary, _action: Dictionary, current_score: float, _evaluator: Object) -> float:
+	return current_score
 
 
 ## 返回主动技能的只读交互预览；不得在本函数中消耗资源、创建选择或修改对局状态。

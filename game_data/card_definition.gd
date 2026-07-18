@@ -31,6 +31,26 @@ func get_id() -> String:
 	return str(_metadata.get("id", ""))
 
 
+## 返回卡牌文件声明的 AI 配置副本；通用策略可读取但不能修改数据库中的静态元数据。
+func get_ai_profile() -> Dictionary:
+	return (_metadata.get("ai", {}) as Dictionary).duplicate(true)
+
+
+## 计算本卡牌创建的统一选择动作额外评分；复杂牌效可在对应卡牌文件中覆盖本入口。
+func score_ai_choice(_authoritative_snapshot: Dictionary, _choice_request: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
+	return 0.0
+
+
+## 修正基础 AI 对本卡牌出牌动作的评分；特殊目标切换、判定牌和复杂组合牌可在自身文件覆盖。
+func modify_ai_action_score(_authoritative_snapshot: Dictionary, _action: Dictionary, current_score: float, _evaluator: Object) -> float:
+	return current_score
+
+
+## 计算装备或卡牌注册的自定义出牌动作评分；动作需携带 ai_card_definition_id 以定位对应内容文件。
+func score_ai_play_phase_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
+	return 0.0
+
+
 ## 绑定需要持续存在于装备区等区域的卡牌实例；普通一次性卡牌无需调用本函数。
 func bind_runtime(match_host: Object, owner_player_id: int, card_uid: int) -> void:
 	runtime_host = match_host
@@ -115,6 +135,13 @@ func resolve_dying_response(_match_host: Object, _responder_id: int, _dying_play
 ## 恢复由当前卡牌效果创建的普通选牌请求；返回 true 表示该选择已由卡牌源码识别并处理。
 func continue_choice(_resolver: Object, _context: Dictionary, _selected_uids: Array[int]) -> bool:
 	return false
+
+
+## 恢复由当前卡牌效果创建的通用选择请求；默认兼容旧选牌入口，需要读取目标或确认状态的卡牌可覆盖本函数。
+func continue_selection(resolver: Object, context: Dictionary, response: ChoiceResponse) -> bool:
+	if response == null:
+		return false
+	return continue_choice(resolver, context, response.card_ids)
 
 
 ## 恢复由当前卡牌效果创建的响应牌请求；响应实体已由控制器完成合法性校验和区域移动。

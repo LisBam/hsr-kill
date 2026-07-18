@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "wuxie",
+		"ai": {"value":[6.0, 4.0, 3.0], "player_result":1.0, "expose":0.2, "response":true},
 	})
 
 

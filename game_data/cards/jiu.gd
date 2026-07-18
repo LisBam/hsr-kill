@@ -19,6 +19,7 @@ func _init() -> void:
 		"distance_limit": "none",
 		"play_limit": 1,
 		"play_limit_group": "wine",
+		"play_limit_scope": "turn",
 		"play_limit_message": "本回合已经使用过【酒】。",
 		"response_pattern": "jiu",
 		"recast": false,
@@ -27,6 +28,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "jiu",
+		"ai": {"order":3.1, "value":[5.0, 1.0], "player_result":1.0, "save":true, "self_boost":true},
 		"ai_use_value": 2.0,
 		"ai_target_attitude": "self_boost",
 	})

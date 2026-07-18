@@ -26,6 +26,7 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "equipment",
 		"provided_response_pattern": "",
+		"ai": {"order":7.0, "value":7.0, "equip_value":7.0},
 		"play_phase_interaction": "store_attachment",
 		"play_phase_action_type": "store_wooden_ox",
 		"play_phase_material_count": 1,
@@ -74,7 +75,22 @@ func append_play_phase_actions(match_host: Object, owner_id: int, equipment_card
 	if owner == null or owner.wooden_ox_used:
 		return
 	for hand_card: CardInstance in owner.hand:
-		result.append({"action_type":"store_wooden_ox", "actor_id":owner_id, "card_uid":hand_card.uid, "target_ids":[], "card_definition_id":"muniu_store"})
+		result.append({"action_type":"store_wooden_ox", "actor_id":owner_id, "card_uid":hand_card.uid, "target_ids":[], "card_definition_id":"muniu_store", "ai_card_definition_id":get_id()})
+
+
+## 评估木牛流马存粮动作；手牌超上限时收益显著提高，并优先扣置保留价值最低的手牌。
+func score_ai_play_phase_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 发动者 ID；用于读取手牌、体力与材料价值。
+	var actor_id: int = int(action.get("actor_id", -1))
+	# 发动者状态；不存在时不发动。
+	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, actor_id)
+	if actor.is_empty():
+		return 0.0
+	# 手牌溢出量；存粮不计入弃牌阶段手牌上限，因此每张溢出牌提供明显收益。
+	var overflow_count: int = maxi(int(actor.get("hand_count", 0)) - maxi(int(actor.get("hp", 0)), 0), 0)
+	# 被扣置材料价值；木牛“粮”仍可使用，只施加轻微可见性与宝物丢失风险成本。
+	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, actor_id, int(action.get("card_uid", -1)))
+	return 0.8 + float(overflow_count) * 1.5 - material_value * 0.08
 
 
 ## 校验木牛存粮动作；材料必须为普通手牌，转移目标至多1名其他存活角色。

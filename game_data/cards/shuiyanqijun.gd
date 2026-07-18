@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "",
+		"ai": {"order":6.0, "value":5.0, "target_result":-1.5, "damage":true, "lose_card":true},
 		"ai_target_attitude": "hostile",
 	})
 
@@ -52,7 +53,7 @@ func _request_equipment_choice(resolver: Object, parent_card_uid: int, actor_id:
 	# 装备区公开候选；必须整组选满才视为选择弃置全部装备。
 	var candidates: Array[Dictionary] = resolver.host.get_equipment_candidates(target_id, target_id)
 	# 选择恢复上下文；equipment_count 保存创建请求时的完整装备数量供界面校验。
-	var context: Dictionary = {"kind":"flood_equipment", "parent_card_uid":parent_card_uid, "actor_id":actor_id, "target_id":target_id, "equipment_count":candidates.size(), "ai_prefer_select":true}
+	var context: Dictionary = {"kind":"flood_equipment", "parent_card_uid":parent_card_uid, "actor_id":actor_id, "target_id":target_id, "equipment_count":candidates.size(), "ai_prefer_select":true, "ai_full_selection_only":true}
 	# 目标选择结果；允许选择0张或完整装备区数量。
 	var selected_uids: Array[int] = resolver.host.request_card_choice(target_id, "水淹七军", "请选择是否弃置全部装备", candidates, 0, candidates.size(), true, context)
 	if resolver.host.has_pending_card_choice():

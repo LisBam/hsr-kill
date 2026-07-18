@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "tao",
+		"ai": {"order":2.0, "value":9.0, "target_result":2.0, "recover":true, "save":true, "beneficial":true},
 		"ai_use_value": 8.0,
 		"ai_target_attitude": "friendly",
 	})

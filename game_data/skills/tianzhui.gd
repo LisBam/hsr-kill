@@ -73,7 +73,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 ## 向 AI 合法动作列表追加标准技能动作；实际牌与目标由技能选择请求统一决定。
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if can_activate():
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[]})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[], "payload":{"skill_id":get_id()}})
 
 
 ## 每个新的自身出牌阶段恢复一次发动额度，包括【再现】等效果产生的额外出牌阶段。
@@ -103,3 +103,47 @@ func _get_linked_target_ids() -> Array[int]:
 		if player.alive and player.chained:
 			result.append(player.player_id)
 	return result
+
+
+## 评估主动发动价值；存在敌方横置目标时优先发动，自身横置可免除弃牌费用并获得额外收益。
+func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
+	# 技能持有者状态；静态 AI 实例只能从快照读取连环与手牌信息。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	if owner.is_empty():
+		return 0.0
+	# 最佳横置目标伤害收益；火焰伤害会在选择步骤进一步计算具体目标。
+	var best_target_score: float = 0.0
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前目标快照；仅横置存活角色可成为【天坠】目标。
+		var target: Dictionary = player_variant as Dictionary
+		if not bool(target.get("alive", false)) or not bool(target.get("chained", false)):
+			continue
+		# 当前目标 ID；敌方态度为负，因此负态度取反后形成伤害收益。
+		var target_id: int = int(target.get("player_id", -1))
+		best_target_score = maxf(best_target_score, -evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) / 2.0)
+	# 费用修正；自身横置时通过重置支付费用，不消耗手牌并获得0.8分状态恢复收益。
+	var cost_adjustment: float = 0.8 if bool(owner.get("chained", false)) else -1.0
+	return best_target_score + cost_adjustment
+
+
+## 评估【天坠】费用与目标组合；优先免牌费用、最低价值锦囊和敌方横置目标。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 请求上下文；只处理天坠的牌目标组合步骤。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	if str(context.get("kind", "")) != "tianzhui_cost_target":
+		return 0.0
+	# 标准动作负载；必须包含一名目标，牌费用可为0或1张。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 已选目标；无目标动作不构成有效发动。
+	var selected_targets: Array = payload.get("selected_target_ids", []) as Array
+	if selected_targets.size() != 1:
+		return -10.0
+	# 目标伤害收益；对敌方为正，对友方为负。
+	var target_id: int = int(selected_targets[0])
+	var score: float = -evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	# 已选费用牌；选择最低价值锦囊，零牌费用额外奖励自身重置价值。
+	var selected_cards: Array = payload.get("selected_card_uids", []) as Array
+	if selected_cards.is_empty():
+		var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+		return score + (4.0 if bool(owner.get("chained", false)) else -20.0)
+	return score - evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id)

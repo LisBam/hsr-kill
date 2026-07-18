@@ -56,7 +56,7 @@ func _on_owner_phase_end(_event: RuleEvent) -> void:
 	_counting_owner_turn = false
 	if _slash_count <= 0:
 		return
-	request_card_selection("蝶影", "是否发动【蝶影】摸%d张牌并弃置等量的牌？" % _slash_count, [], 0, 0, true, {"kind":"dieying_confirm", "draw_count":_slash_count})
+	request_card_selection("蝶影", "是否发动【蝶影】摸%d张牌并弃置等量的牌？" % _slash_count, [], 0, 0, true, {"kind":"dieying_confirm", "draw_count":_slash_count, "ai_allow_confirm":true})
 
 
 ## 恢复发动确认或后续弃牌选择；确认后先摸X张，再强制弃置等量的手牌或装备牌。
@@ -88,3 +88,24 @@ func _find_discard_card(card_uid: int) -> CardInstance:
 		if card.uid == card_uid:
 			return card
 	return null
+
+
+## 为【蝶影】确认与弃牌步骤评分；换牌数量越多越值得发动，强制弃牌仍优先选择最低价值组合。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 请求上下文；确认和弃牌使用不同 kind。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	# 当前选择步骤；未知步骤不修改通用评分。
+	var choice_kind: String = str(context.get("kind", ""))
+	# 标准选择负载；confirmed 区分发动与取消。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	if choice_kind == "dieying_confirm":
+		# 固定换牌数；每张新牌按约0.8分信息与手牌质量提升估值。
+		var draw_count: int = clampi(int(context.get("draw_count", 0)), 0, MAX_SLASH_COUNT)
+		return float(draw_count) * 0.8 if bool(payload.get("confirmed", false)) else 0.0
+	if choice_kind == "dieying_discard":
+		# 弃置总价值；返回负值后与通用强制弃牌评分共同保证选择最低价值牌组。
+		var discarded_value: float = 0.0
+		for card_uid_variant: Variant in payload.get("selected_card_uids", []) as Array:
+			discarded_value += evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(card_uid_variant), owner_player_id)
+		return -discarded_value
+	return 0.0

@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "judgment",
 		"provided_response_pattern": "",
+		"ai": {"order":1.0, "value":0.0, "target_result":-1.0, "damage":true, "thunder_damage":true, "nature_damage":true},
 	})
 
 
@@ -34,6 +35,27 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 		return "discard"
 	resolver.host.place_delayed_trick(target_ids[0], card)
 	return "judgment"
+
+
+## 依据身份局势修正【闪电】的使用价值；优势方通常不愿引入随机伤害，劣势方与内奸更愿意制造变量。
+func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
+	# 使用者 ID；闪电只能置入自己的判定区。
+	var actor_id: int = int(action.get("actor_id", -1))
+	# 使用者状态；身份决定局势方向偏好。
+	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, actor_id)
+	if actor.is_empty():
+		return current_score
+	# 主忠方局势；正值主忠优势，负值反贼优势。
+	var situation: int = evaluator.get_situation(authoritative_snapshot)
+	# 使用者身份；内奸始终偏好适度随机性，其他阵营仅在自身阵营明显劣势时使用。
+	var identity: String = str(actor.get("identity", ""))
+	if identity == "renegade":
+		return 1.0
+	if identity == "rebel":
+		return 1.0 if situation > 1 else -1.0
+	if identity in ["lord", "loyalist"]:
+		return 1.0 if situation < -1 else -1.0
+	return current_score
 
 
 ## 结算【闪电】判定；黑桃2至9造成3点无来源雷电伤害，否则向下一名无闪电角色传递。

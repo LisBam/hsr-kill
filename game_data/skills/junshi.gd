@@ -36,7 +36,7 @@ func _on_slash_targeted(event: RuleEvent) -> void:
 	var card_definition: Dictionary = GameDatabase.get_card(str(event.data.get("card_id", "")))
 	if str(card_definition.get("effect_id", "")) != "slash":
 		return
-	request_card_selection("军势", "是否发动【军势】令使用【杀】的角色摸一张牌？", [], 0, 0, true, {"kind":"junshi_confirm", "slash_user_id":event.source_id})
+	request_card_selection("军势", "是否发动【军势】令使用【杀】的角色摸一张牌？", [], 0, 0, true, {"kind":"junshi_confirm", "slash_user_id":event.source_id, "ai_allow_confirm":true})
 
 
 ## 恢复发动确认；只有明确确认才消耗本阶段次数并令【杀】使用者摸一张牌。
@@ -49,3 +49,18 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		_used_this_play_phase = true
 		host.call("draw", slash_user_id, 1)
 	return true
+
+
+## 根据技能持有者对【杀】使用者的态度决定是否发动；友方摸牌为正收益，敌方摸牌为负收益。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 请求上下文；只处理军势确认步骤。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	if str(context.get("kind", "")) != "junshi_confirm":
+		return 0.0
+	# 当前动作负载；取消动作不产生摸牌效果。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	if not bool(payload.get("confirmed", false)):
+		return 0.0
+	# 【杀】使用者 ID；技能令该角色固定摸1张牌。
+	var slash_user_id: int = int(context.get("slash_user_id", -1))
+	return evaluator.get_attitude(authoritative_snapshot, owner_player_id, slash_user_id) / 2.0

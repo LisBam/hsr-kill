@@ -52,7 +52,7 @@ func _on_owner_slash_targeted(event: RuleEvent) -> void:
 	var candidates: Array[Dictionary] = host.call("get_hand_equipment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
 	if candidates.is_empty():
 		return
-	request_card_selection("再现", "你可以弃置一张牌发动【再现】", candidates, 0, 1, true, {"kind":"zaixian_discard", "slash_uid":int(event.data.get("card_uid", -1)), "slash_card_id":str(event.data.get("card_id", ""))})
+	request_card_selection("再现", "你可以弃置一张牌发动【再现】", candidates, 0, 1, true, {"kind":"zaixian_discard", "slash_uid":int(event.data.get("card_uid", -1)), "slash_card_id":str(event.data.get("card_id", "")), "slash_target_id":event.target_id})
 
 
 ## 恢复弃牌选择；支付成功后开始跟踪本张【杀】是否造成伤害。
@@ -93,3 +93,32 @@ func _clear_tracked_slash() -> void:
 	_tracked_slash_uid = -1
 	_tracked_slash_card_id = ""
 	_tracked_slash_dealt_damage = false
+
+
+## 评估弃置一张牌强化当前【杀】的收益；敌方低体力目标更值得投入，费用优先选择最低价值牌。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 请求上下文；只处理再现弃牌步骤。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	if str(context.get("kind", "")) != "zaixian_discard":
+		return 0.0
+	# 动作负载；取消不支付费用也不获得后续收益。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 已选费用牌；再现确认时必须恰好一张。
+	var selected_cards: Array = payload.get("selected_card_uids", []) as Array
+	if selected_cards.size() != 1:
+		return 0.0
+	# 当前【杀】目标 ID；用于估算命中价值与额外阶段收益是否值得投资。
+	var target_id: int = int(context.get("slash_target_id", -1))
+	# 目标状态；低体力和少手牌提高【杀】造成伤害的概率。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	if target.is_empty():
+		return -10.0
+	# 命中收益；对敌方目标取正，目标体力越低额外奖励越高。
+	var hit_value: float = -evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	if int(target.get("hp", 0)) <= 2:
+		hit_value += 2.0
+	if int(target.get("hand_count", 0)) == 0:
+		hit_value += 2.0
+	# 弃牌费用；低价值牌更适合作为再现成本。
+	var cost_value: float = evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id)
+	return hit_value + 3.0 - cost_value
