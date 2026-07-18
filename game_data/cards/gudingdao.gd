@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "guding",
 		"original_name": "古锭刀",
-		"custom_name": "虚数古刃",
+		"custom_name": "高周波电锯",
 		"type": "equipment",
 		"subtype": "weapon",
 		"effect_id": "equip",

@@ -6,7 +6,7 @@ extends Node
 ## 测试使用的共享身份模型；多项断言复用同一观察状态。
 var _identity_model: IdentityAIModel = IdentityAIModel.new()
 
-## 测试使用的主公基础策略；稳定玩家 ID 为0。
+## 测试使用的领袖基础策略；稳定玩家 ID 为0。
 var _policy: BasicAIPolicy
 
 
@@ -35,7 +35,7 @@ func _ready() -> void:
 		return
 	if not _test_identity_rescue_strategy():
 		return
-	if not _test_renegade_lord_survival():
+	if not _test_renegade_leader_survival():
 		return
 	if not _test_renegade_balance_strategy():
 		return
@@ -70,17 +70,17 @@ func _test_all_cards_have_ai_profiles() -> bool:
 ## 验证隐藏反贼在未行动时接近中立，公开使用目标牌后身份态度按暴露度转为敌对。
 func _test_identity_exposure() -> bool:
 	_identity_model.reset()
-	# 隐藏身份快照；主公身份公开，反贼真实身份仅权威 AI 可见。
+	# 隐藏身份快照；领袖身份公开，反贼真实身份仅权威 AI 可见。
 	var snapshot: Dictionary = _build_snapshot(false)
 	# 行动前态度；目标暴露度为0时应接近中立。
 	var before_attitude: float = _identity_model.get_attitude(snapshot, 0, 1)
-	# 反贼公开对主公使用【杀】；单目标行为提高其身份暴露度。
+	# 反贼公开对领袖使用【杀】；单目标行为提高其身份暴露度。
 	_identity_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [0])
-	# 行动后态度；主公对真实反贼的负态度应按新增暴露度显现。
+	# 行动后态度；领袖对真实反贼的负态度应按新增暴露度显现。
 	var after_attitude: float = _identity_model.get_attitude(snapshot, 0, 1)
 	if not is_zero_approx(before_attitude) or after_attitude >= -0.5 or _identity_model.get_identity_mark(1) != "rebel" or _identity_model.get_exposure(1) <= 0.0:
 		return _fail("identity_exposure before=%.2f after=%.2f" % [before_attitude, after_attitude])
-	# 隐藏忠臣公开帮助主公；正面目标行为应形成 loyalist 标记。
+	# 隐藏忠臣公开帮助领袖；正面目标行为应形成 loyalist 标记。
 	_identity_model.observe_card_use(snapshot, 2, GameDatabase.get_card("tao"), [0])
 	if _identity_model.get_identity_mark(2) != "loyalist" or _identity_model.get_exposure(2) <= 0.0:
 		return _fail("identity_loyalist_mark mark=%s exposure=%.2f" % [_identity_model.get_identity_mark(2), _identity_model.get_exposure(2)])
@@ -133,7 +133,7 @@ func _test_dynamic_card_identity_observation() -> bool:
 	unchain_model.observe_card_use(snapshot, 1, {"ai":unchain_profile}, [2])
 	if not is_zero_approx(unchain_model.get_exposure(1)) or not unchain_model.get_identity_mark(1).is_empty():
 		return _fail("chain_remove_mark=%s exposure=%.2f" % [unchain_model.get_identity_mark(1), unchain_model.get_exposure(1)])
-	# 满体力回复配置；【桃园结义】对满体力主公的动态结果必须为0，不凭无实际效果的回复标记忠臣。
+	# 满体力回复配置；【桃园结义】对满体力领袖的动态结果必须为0，不凭无实际效果的回复标记忠臣。
 	(snapshot.get("players", []) as Array)[2]["identity_revealed"] = false
 	var recovery_definition: CardDefinition = GameDatabase.get_card_definition("taoyuan")
 	var recovery_profile: Dictionary = recovery_definition.get_identity_observation_ai_profile(snapshot, 2, [0])
@@ -148,19 +148,19 @@ func _test_dynamic_card_identity_observation() -> bool:
 func _test_identity_role_consistency() -> bool:
 	# 忠臣误操作使用的独立身份模型；避免后续正确行为受其他测试状态影响。
 	var loyalist_model: IdentityAIModel = IdentityAIModel.new()
-	# 三人隐藏身份快照；主公公开，可作为完整阵营证据目标。
+	# 三人隐藏身份快照；领袖公开，可作为完整阵营证据目标。
 	var snapshot: Dictionary = _build_snapshot(false)
-	# 忠臣攻击主公；该行为不符合忠臣真实收益，因此不能被错误标记为反贼。
+	# 忠臣攻击领袖；该行为不符合忠臣真实收益，因此不能被错误标记为反贼。
 	loyalist_model.observe_card_use(snapshot, 2, GameDatabase.get_card("sha"), [0])
 	if not is_zero_approx(loyalist_model.get_exposure(2)) or not loyalist_model.get_identity_mark(2).is_empty():
 		return _fail("loyalist_mistake_marked mark=%s exposure=%.2f" % [loyalist_model.get_identity_mark(2), loyalist_model.get_exposure(2)])
-	# 反贼伪装使用的独立身份模型；确保帮助主公不会直接贴成忠臣。
+	# 反贼伪装使用的独立身份模型；确保帮助领袖不会直接贴成忠臣。
 	var rebel_model: IdentityAIModel = IdentityAIModel.new()
-	# 反贼帮助主公；行为不符合反贼真实收益，不应产生正暴露或忠臣标记。
+	# 反贼帮助领袖；行为不符合反贼真实收益，不应产生正暴露或忠臣标记。
 	rebel_model.observe_card_use(snapshot, 1, GameDatabase.get_card("tao"), [0])
 	if not is_zero_approx(rebel_model.get_exposure(1)) or not rebel_model.get_identity_mark(1).is_empty():
 		return _fail("rebel_camouflage_marked mark=%s exposure=%.2f" % [rebel_model.get_identity_mark(1), rebel_model.get_exposure(1)])
-	# 本地观察者模型；玩家1攻击主公会产生暴露，但不应给观察者本人生成自动徽记。
+	# 本地观察者模型；玩家1攻击领袖会产生暴露，但不应给观察者本人生成自动徽记。
 	var local_observer_model: IdentityAIModel = IdentityAIModel.new()
 	local_observer_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [0], 1)
 	if local_observer_model.get_exposure(1) <= 0.0 or not local_observer_model.get_identity_mark(1).is_empty():
@@ -179,15 +179,15 @@ func _test_renegade_identity_mark_finalization() -> bool:
 	var identity_model: IdentityAIModel = IdentityAIModel.new()
 	# 五人隐藏身份快照；玩家3为内奸，场上仍有两名存活反贼。
 	var snapshot: Dictionary = _build_strategy_snapshot(false)
-	# 内奸帮助主公；从主公阵营视角为正收益，形成暂时忠臣倾向。
+	# 内奸帮助领袖；从领袖阵营视角为正收益，形成暂时忠臣倾向。
 	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("tao"), [0])
 	if identity_model.get_identity_mark(3) != "loyalist":
 		return _fail("renegade_loyal_mark=%s" % identity_model.get_identity_mark(3))
-	# 内奸随后攻击主公；与既有忠臣倾向相反，应清空标记并进入 finished 状态。
+	# 内奸随后攻击领袖；与既有忠臣倾向相反，应清空标记并进入 finished 状态。
 	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("sha"), [0])
 	if not identity_model.get_identity_mark(3).is_empty():
 		return _fail("renegade_contradiction_not_cleared=%s" % identity_model.get_identity_mark(3))
-	# 终结后再次帮助主公；不得重新在忠反之间来回翻转。
+	# 终结后再次帮助领袖；不得重新在忠反之间来回翻转。
 	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("tao"), [0])
 	if not identity_model.get_identity_mark(3).is_empty():
 		return _fail("renegade_finished_reopened=%s" % identity_model.get_identity_mark(3))
@@ -196,9 +196,9 @@ func _test_renegade_identity_mark_finalization() -> bool:
 
 ## 验证成功打出的无懈可击进入身份观察，同时过滤原使用者未暴露与目标本人自保两类弱证据。
 func _test_wuxie_identity_observation() -> bool:
-	# 独立身份模型；用于验证主公公开来源下的无懈响应暴露。
+	# 独立身份模型；用于验证领袖公开来源下的无懈响应暴露。
 	var identity_model: IdentityAIModel = IdentityAIModel.new()
-	# 三人隐藏身份快照；主公0公开，反贼1响应，忠臣2为原锦囊目标。
+	# 三人隐藏身份快照；领袖0公开，反贼1响应，忠臣2为原锦囊目标。
 	var snapshot: Dictionary = _build_snapshot(false)
 	# 无懈响应上下文；negated=true 表示本张无懈刚刚阻止了原正面锦囊效果。
 	var response_context: Dictionary = {"source_id":0, "target_id":2, "trick_id":"wuzhong", "negated":true}
@@ -223,7 +223,7 @@ func _test_wuxie_identity_observation() -> bool:
 func _test_dying_rescue_identity_observation() -> bool:
 	# 无内置策略的协调器；对应控制器在救援卡牌效果成功后使用的公开行为入口。
 	var coordinator: AICoordinator = AICoordinator.new()
-	# 三人隐藏身份快照；忠臣2救援公开主公0，应形成稳定忠臣标记。
+	# 三人隐藏身份快照；忠臣2救援公开领袖0，应形成稳定忠臣标记。
 	var snapshot: Dictionary = _build_snapshot(false)
 	# 【桃】AI 配置；正向 target_result=2.0由卡牌源码声明，不在控制器硬编码救援牌名。
 	var peach_ai_profile: Dictionary = GameDatabase.get_card_definition("tao").get_ai_profile()
@@ -244,13 +244,13 @@ func _test_dying_rescue_identity_observation() -> bool:
 func _test_public_skill_identity_observation() -> bool:
 	# 无内置策略的协调器；自动标记仍应直接使用共享身份模型记录技能行为。
 	var coordinator: AICoordinator = AICoordinator.new()
-	# 三人隐藏身份快照；主公公开，可作为伤害或帮助技能的完整阵营参照。
+	# 三人隐藏身份快照；领袖公开，可作为伤害或帮助技能的完整阵营参照。
 	var snapshot: Dictionary = _build_snapshot(false)
-	# 反贼对主公造成负面技能效果；通用 target_result 数据应形成反贼标记。
+	# 反贼对领袖造成负面技能效果；通用 target_result 数据应形成反贼标记。
 	coordinator.observe_public_behavior(snapshot, 1, {"target_result":-1.0}, [0])
 	if coordinator.get_identity_mark(1) != "rebel":
 		return _fail("public_skill_rebel_mark=%s" % coordinator.get_identity_mark(1))
-	# 忠臣对主公提供正面技能效果；同一入口应形成忠臣标记。
+	# 忠臣对领袖提供正面技能效果；同一入口应形成忠臣标记。
 	coordinator.observe_public_behavior(snapshot, 2, {"target_result":1.0}, [0])
 	if coordinator.get_identity_mark(2) != "loyalist":
 		return _fail("public_skill_loyalist_mark=%s" % coordinator.get_identity_mark(2))
@@ -266,13 +266,13 @@ func _test_hidden_identity_strategy_visibility() -> bool:
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(identity_model)
 	# 隐藏身份快照；反贼1尚未产生任何可观察阵营行为。
 	var snapshot: Dictionary = _build_snapshot(false)
-	# 主公对隐藏目标使用【杀】的动作；标记出现前不应获得敌方战略奖励。
+	# 领袖对隐藏目标使用【杀】的动作；标记出现前不应获得敌方战略奖励。
 	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
 	# 行为暴露前评分；仅包含卡牌顺序与资源成本，目标牌效态度接近中立。
 	var score_before_mark: float = evaluator.score_action(snapshot, slash_action, 0)
 	if identity_model.get_perceived_identity(snapshot, 1) != "unknown":
 		return _fail("hidden_identity_visible_before_behavior")
-	# 隐藏反贼攻击主公；该公开行为形成 rebel 标记。
+	# 隐藏反贼攻击领袖；该公开行为形成 rebel 标记。
 	identity_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [0])
 	# 行为暴露后评分；敌对态度与反贼威胁集火修正均可正常生效。
 	var score_after_mark: float = evaluator.score_action(snapshot, slash_action, 0)
@@ -281,17 +281,17 @@ func _test_hidden_identity_strategy_visibility() -> bool:
 	return true
 
 
-## 验证标准身份救援：忠臣救主、反贼不救主、多人局内奸保主且角色积极自救。
+## 验证标准身份救援：忠臣救领袖、反贼不救领袖、多人局内奸保护领袖且角色积极自救。
 func _test_identity_rescue_strategy() -> bool:
 	# 全身份公开的五人快照；公开状态用于单独验证救援阵营规则。
 	var snapshot: Dictionary = _build_strategy_snapshot(true)
 	# 身份战略评估器；救援测试直接读取其标准救援分数。
 	var strategy: IdentityStrategyEvaluator = IdentityStrategyEvaluator.new(IdentityAIModel.new())
-	# 忠臣救主评分；应显著高于零并愿意消耗一张9分【桃】。
+	# 忠臣救领袖评分；应显著高于零并愿意消耗一张9分【桃】。
 	var loyalist_score: float = strategy.score_rescue(snapshot, 2, 0, 1, 9.0)
-	# 反贼救主评分；应为负数并选择取消响应。
+	# 反贼救领袖评分；应为负数并选择取消响应。
 	var rebel_score: float = strategy.score_rescue(snapshot, 1, 0, 1, 9.0)
-	# 多人局内奸救主评分；主公提前死亡会破坏内奸胜利路径，因此应为正数。
+	# 多人局内奸救领袖评分；领袖提前死亡会破坏内奸胜利路径，因此应为正数。
 	var renegade_score: float = strategy.score_rescue(snapshot, 3, 0, 1, 9.0)
 	# 角色自救评分；死亡风险下应积极使用自己的救援牌。
 	var self_rescue_score: float = strategy.score_rescue(snapshot, 1, 1, 1, 9.0)
@@ -300,34 +300,34 @@ func _test_identity_rescue_strategy() -> bool:
 	return true
 
 
-## 验证内奸在多人局不会对1点体力主公执行预期致命伤害。
-func _test_renegade_lord_survival() -> bool:
-	# 五人公开身份快照；主公被调整为1点体力以触发提前弑主惩罚。
+## 验证内奸在多人局不会对1点体力领袖执行预期致命伤害。
+func _test_renegade_leader_survival() -> bool:
+	# 五人公开身份快照；领袖被调整为1点体力以触发提前杀死领袖惩罚。
 	var snapshot: Dictionary = _build_strategy_snapshot(true)
 	(snapshot.get("players", []) as Array)[0]["hp"] = 1
 	# 内奸效用评估器；玩家3为内奸。
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
-	# 内奸对主公使用【杀】的动作；多人局中该动作应被评为负收益。
-	var lethal_lord_action: Dictionary = {"action_type":"use_card", "actor_id":3, "card_uid":601, "card_definition_id":"sha", "target_ids":[0], "payload":{}}
-	# 提前弑主动作评分；负数会令基础策略结束出牌或选择其他控场目标。
-	var lethal_lord_score: float = evaluator.score_action(snapshot, lethal_lord_action, 3)
-	if lethal_lord_score >= 0.0:
-		return _fail("renegade_early_lord_kill=%.2f" % lethal_lord_score)
+	# 内奸对领袖使用【杀】的动作；多人局中该动作应被评为负收益。
+	var lethal_leader_action: Dictionary = {"action_type":"use_card", "actor_id":3, "card_uid":601, "card_definition_id":"sha", "target_ids":[0], "payload":{}}
+	# 提前杀死领袖动作评分；负数会令基础策略结束出牌或选择其他控场目标。
+	var lethal_leader_score: float = evaluator.score_action(snapshot, lethal_leader_action, 3)
+	if lethal_leader_score >= 0.0:
+		return _fail("renegade_early_leader_kill=%.2f" % lethal_leader_score)
 	return true
 
 
-## 验证内奸根据主忠或反贼优势切换压制目标，保持身份局继续进入可获胜残局。
+## 验证内奸根据领忠或反贼优势切换压制目标，保持身份局继续进入可获胜残局。
 func _test_renegade_balance_strategy() -> bool:
 	# 当前【杀】AI 配置；负面目标牌效用于比较内奸控场附加分。
 	var slash_ai: Dictionary = GameDatabase.get_card("sha").get("ai", {}) as Dictionary
-	# 主忠明显优势快照；主公与忠臣资源充足，反贼状态较弱。
+	# 领忠明显优势快照；领袖与忠臣资源充足，反贼状态较弱。
 	var loyal_advantage_snapshot: Dictionary = _build_strategy_snapshot(true)
 	_set_camp_strength(loyal_advantage_snapshot, true)
-	# 主忠优势时攻击忠臣的控场分；应高于继续压制弱势反贼。
+	# 领忠优势时攻击忠臣的控场分；应高于继续压制弱势反贼。
 	var loyal_target_score: float = IdentityStrategyEvaluator.new(IdentityAIModel.new()).score_target_strategy(loyal_advantage_snapshot, 3, 2, slash_ai)
-	# 主忠优势时攻击反贼的控场分；帮助优势方会受到惩罚。
+	# 领忠优势时攻击反贼的控场分；帮助优势方会受到惩罚。
 	var rebel_target_when_loyal_strong: float = IdentityStrategyEvaluator.new(IdentityAIModel.new()).score_target_strategy(loyal_advantage_snapshot, 3, 1, slash_ai)
-	# 反贼明显优势快照；反贼资源充足，主忠方进入低体力少手牌状态。
+	# 反贼明显优势快照；反贼资源充足，领忠方进入低体力少手牌状态。
 	var rebel_advantage_snapshot: Dictionary = _build_strategy_snapshot(true)
 	_set_camp_strength(rebel_advantage_snapshot, false)
 	# 反贼优势时攻击反贼的控场分；应高于继续压制弱势忠臣。
@@ -343,12 +343,12 @@ func _test_renegade_balance_strategy() -> bool:
 func _test_response_and_threat_strategy() -> bool:
 	# 全身份公开快照；目标1与目标4均为反贼，便于隔离响应牌和威胁差异。
 	var snapshot: Dictionary = _build_strategy_snapshot(true)
-	# 主公效用评估器；所有比较共享同一身份关系模型。
+	# 领袖效用评估器；所有比较共享同一身份关系模型。
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
 	# 目标没有【闪】时的等量单手牌；使用【无懈可击】保持手牌数量相同。
 	(snapshot.get("players", []) as Array)[1]["hand"] = [_card(701, "wuxie", 1)]
 	(snapshot.get("players", []) as Array)[1]["hand_count"] = 1
-	# 主公对反贼1使用【杀】的标准动作。
+	# 领袖对反贼1使用【杀】的标准动作。
 	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
 	# 目标没有已知【闪】时的伤害评分。
 	var score_without_dodge: float = evaluator.score_action(snapshot, slash_action, 0)
@@ -393,7 +393,7 @@ func _test_hostile_card_target() -> bool:
 
 ## 验证无懈可击奇偶逻辑：保护友方免受负面锦囊，且不替敌方抵消同一负面锦囊。
 func _test_wuxie_decision() -> bool:
-	# 全身份公开快照；主公0、反贼1、忠臣2。
+	# 全身份公开快照；领袖0、反贼1、忠臣2。
 	var snapshot: Dictionary = _build_snapshot(true)
 	# 无懈候选实体；响应者本人可见。
 	var wuxie_candidate: Dictionary = _candidate(201, "wuxie", 0)
@@ -401,13 +401,13 @@ func _test_wuxie_decision() -> bool:
 	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
 	# 使用无懈动作；实体 UID 来自本次候选。
 	var use_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[201], "selected_target_ids":[], "confirmed":true}}
-	# 友方受到乐不思蜀；主公应使用无懈保护忠臣。
+	# 友方受到乐不思蜀；领袖应使用无懈保护忠臣。
 	var friend_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"lebu", "target_id":2, "negated":false}}
 	# 友方无懈选择结果；应确认使用候选牌。
 	var friend_choice: Dictionary = _policy.choose_card_choice(snapshot, friend_request, [pass_action, use_action])
 	if not bool((friend_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_friend=%s" % [friend_choice])
-	# 敌方受到乐不思蜀；主公应保留无懈并放弃响应。
+	# 敌方受到乐不思蜀；领袖应保留无懈并放弃响应。
 	var enemy_request: Dictionary = friend_request.duplicate(true)
 	(enemy_request.get("context", {}) as Dictionary)["target_id"] = 1
 	# 敌方无懈选择结果；应取消响应并保留手牌。
@@ -443,7 +443,7 @@ func _test_skill_confirmation() -> bool:
 
 ## 验证 AI 选择主动技能后会把稳定 skill_id 写入 PlayerAction.payload，统一提交入口能够识别。
 func _test_active_skill_payload() -> bool:
-	# 行军收益快照；主公无手牌，忠臣状态良好，跳过当前阶段具有正收益。
+	# 行军收益快照；领袖无手牌，忠臣状态良好，跳过当前阶段具有正收益。
 	var snapshot: Dictionary = _build_snapshot(true)
 	(snapshot.get("players", []) as Array)[0]["hand_count"] = 0
 	(snapshot.get("players", []) as Array)[0]["hand"] = []
@@ -479,24 +479,24 @@ func _test_low_value_discard() -> bool:
 
 ## 构建三人身份局快照；reveal_all 控制反贼与忠臣身份是否公开。
 func _build_snapshot(reveal_all: bool) -> Dictionary:
-	# 主公手牌；提供一张【杀】用于动作价值与重复牌数量计算。
-	var lord_hand: Array = [_card(101, "sha", 0), _card(201, "wuxie", 0)]
+	# 领袖手牌；提供一张【杀】用于动作价值与重复牌数量计算。
+	var leader_hand: Array = [_card(101, "sha", 0), _card(201, "wuxie", 0)]
 	return {
 		"match_id":"ai_policy_test",
 		"players":[
-			{"player_id":0, "identity":"lord", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":lord_hand.size(), "hand":lord_hand, "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":leader_hand.size(), "hand":leader_hand, "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
 			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":2, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"trailblazer"},
 			{"player_id":2, "identity":"loyalist", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(401, "shan", 2), _card(402, "sha", 2)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"himeko"},
 		],
 	}
 
 
-## 构建五人标准身份局快照；包含主公、反贼、忠臣、内奸和第二名反贼。
+## 构建五人标准身份局快照；包含领袖、反贼、忠臣、内奸和第二名反贼。
 func _build_strategy_snapshot(reveal_all: bool) -> Dictionary:
 	return {
 		"match_id":"ai_identity_strategy_test",
 		"players":[
-			{"player_id":0, "identity":"lord", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(501, "sha", 0), _card(502, "tao", 0)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(501, "sha", 0), _card(502, "tao", 0)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
 			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":1, "hand":[_card(511, "sha", 1)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"trailblazer"},
 			{"player_id":2, "identity":"loyalist", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(521, "shan", 2), _card(522, "tao", 2)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"himeko"},
 			{"player_id":3, "identity":"renegade", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":2, "hand":[_card(531, "sha", 3), _card(532, "tao", 3)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"bronya"},
@@ -505,7 +505,7 @@ func _build_strategy_snapshot(reveal_all: bool) -> Dictionary:
 	}
 
 
-## 调整五人快照的阵营强度；loyal_side_strong 为 true 时主忠占优，否则反贼占优。
+## 调整五人快照的阵营强度；loyal_side_strong 为 true 时领忠占优，否则反贼占优。
 func _set_camp_strength(snapshot: Dictionary, loyal_side_strong: bool) -> void:
 	# 快照玩家数组；固定测试构造保证座次0至4分别对应既定身份。
 	var players: Array = snapshot.get("players", []) as Array
@@ -518,10 +518,10 @@ func _set_camp_strength(snapshot: Dictionary, loyal_side_strong: bool) -> void:
 	# 弱势方手牌数；0张表示缺乏防御与行动资源。
 	var weak_hand_count: int = 0
 	for index: int in range(players.size()):
-		# 当前测试玩家；身份字段决定其属于主忠方、反贼方或中立内奸。
+		# 当前测试玩家；身份字段决定其属于领忠方、反贼方或中立内奸。
 		var player: Dictionary = players[index] as Dictionary
-		# 当前玩家是否属于主忠阵营；主公与忠臣共同取相同强弱状态。
-		var is_loyal_side: bool = str(player.get("identity", "")) in ["lord", "loyalist"]
+		# 当前玩家是否属于领忠阵营；领袖与忠臣共同取相同强弱状态。
+		var is_loyal_side: bool = str(player.get("identity", "")) in ["leader", "loyalist"]
 		# 当前玩家是否属于反贼阵营；两名反贼共同取相同强弱状态。
 		var is_rebel_side: bool = str(player.get("identity", "")) == "rebel"
 		if is_loyal_side:

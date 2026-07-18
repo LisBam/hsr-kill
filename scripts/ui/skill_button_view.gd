@@ -41,7 +41,7 @@ func _ready() -> void:
 func configure(definition: Dictionary, available: bool = false) -> void:
 	skill_id = str(definition.get("id", ""))
 	is_skill_available = available
-	skill_description = str(definition.get("description", "暂无技能说明。"))
+	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
 	# 技能触发类型；sample_only 表示仅保留数据接口，其他值代表规则代码已经接入。

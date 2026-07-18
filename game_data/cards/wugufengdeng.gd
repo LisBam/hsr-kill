@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "wugu",
 		"original_name": "五谷丰登",
-		"custom_name": "星海赐福",
+		"custom_name": "普世同谐",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "harvest",

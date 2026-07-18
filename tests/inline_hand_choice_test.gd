@@ -405,26 +405,26 @@ func _run() -> void:
 	if confirm_button.disabled or recast_button.visible or not interaction_guide.text.contains("重铸"):
 		_fail("chain_confirm_recast")
 		return
-	# 选将组件快照；主公已亮将后左侧必须显示正式武将牌，进度长文本保持隐藏。
+	# 选将组件快照；领袖已亮将后左侧必须显示正式武将牌，进度长文本保持隐藏。
 	var character_selection_panel: CharacterSelectionPanel = main_instance.get_node("%CharacterSelectionPanel") as CharacterSelectionPanel
 	character_selection_panel.bind_snapshot({
 		"phase":CharacterSelectionService.PHASE_OTHERS,
-		"lord_player_id":1,
-		"lord_character_id":"bronya",
+		"leader_player_id":1,
+		"leader_character_id":"bronya",
 		"local_player_id":0,
 		"local_candidates":["trailblazer", "dan_heng", "march_7th", "himeko", "welt"],
 		"can_select":true,
 		"readiness":[],
 	})
 	await get_tree().process_frame
-	# 选将框左侧主公牌承载区；已亮将快照必须创建恰好一张正式武将牌。
-	var lord_character_area: Control = main_instance.get_node("%LordCharacterArea") as Control
+	# 选将框左侧领袖牌承载区；已亮将快照必须创建恰好一张正式武将牌。
+	var leader_character_area: Control = main_instance.get_node("%LeaderCharacterArea") as Control
 	# 已废弃进度文本标签；节点保留兼容但必须隐藏并清空文本。
 	var character_status_label: Label = main_instance.get_node("%CharacterSelectionStatus") as Label
-	# 右侧候选承载区；横坐标应为给左侧主公牌预留后的214像素。
+	# 右侧候选承载区；横坐标应为给左侧领袖牌预留后的214像素。
 	var character_candidate_area: Control = main_instance.get_node("%CharacterCandidateArea") as Control
-	if not character_selection_panel.visible or not lord_character_area.visible or lord_character_area.get_child_count() != 1 or character_status_label.visible or not character_status_label.text.is_empty() or not is_equal_approx(character_candidate_area.position.x, 214.0):
-		_fail("character_selection_lord_card")
+	if not character_selection_panel.visible or not leader_character_area.visible or leader_character_area.get_child_count() != 1 or character_status_label.visible or not character_status_label.text.is_empty() or not is_equal_approx(character_candidate_area.position.x, 214.0):
+		_fail("character_selection_leader_card")
 		return
 	remove_child(main_instance)
 	main_instance.free()
@@ -455,7 +455,7 @@ func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = 
 		"seat_number":1,
 		"display_name":"本地玩家",
 		"character_id":"trailblazer",
-		"identity":"lord",
+		"identity":"leader",
 		"hp":4,
 		"max_hp":4,
 		"alive":true,

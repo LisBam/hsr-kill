@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "nanman",
 		"original_name": "南蛮入侵",
-		"custom_name": "裂界侵袭",
+		"custom_name": "寰宇蝗灾",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "aoe_slash",

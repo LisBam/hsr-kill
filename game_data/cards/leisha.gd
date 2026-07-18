@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "sha_thunder",
 		"original_name": "雷杀",
-		"custom_name": "霆击斩",
+		"custom_name": "雷杀",
 		"type": "basic",
 		"subtype": "attack",
 		"effect_id": "slash",

@@ -129,6 +129,28 @@ func get_skill(skill_id: String) -> Dictionary:
 	return (skills.get(skill_id, {}) as Dictionary).duplicate(true)
 
 
+## 按当前卡牌名称模式替换文本中的【原版牌名】引用；技能说明可复用本入口保持静态原文与动态展示解耦。
+## 只替换完整书名号包裹的已登记名称，普通叙述文字、稳定 ID 与规则数值均保持不变。
+func resolve_card_names_in_text(source_text: String) -> String:
+	# 当前解析结果；从调用方原文副本开始，仅在命中完整卡牌名称引用时更新。
+	var resolved_text: String = source_text
+	for card_variant: Variant in cards.values():
+		# 当前卡牌定义；名称解析始终读取数据库已校验的双名称元数据。
+		var card_definition: Dictionary = card_variant as Dictionary
+		# 当前卡牌原版名称；技能源码统一以该名称书写，空名称不会参与替换。
+		var original_name: String = str(card_definition.get("original_name", "")).strip_edges()
+		if original_name.is_empty():
+			continue
+		# 原版名称引用标记；完整匹配可避免短牌名误改普通语句或其他牌名的一部分。
+		var original_reference: String = "【%s】" % original_name
+		if not resolved_text.contains(original_reference):
+			continue
+		# 当前模式名称引用；统一复用 GameSettings，保证卡牌牌面与技能说明显示一致。
+		var resolved_reference: String = "【%s】" % GameSettings.resolve_card_name(card_definition)
+		resolved_text = resolved_text.replace(original_reference, resolved_reference)
+	return resolved_text
+
+
 ## 为一名技能持有者创建独立技能实例；实例尚未绑定玩家，也不会自动订阅规则事件。
 func create_skill(skill_id: String) -> SkillDefinition:
 	# 技能脚本资源；不存在时返回 null，让调用方以统一配置错误处理。

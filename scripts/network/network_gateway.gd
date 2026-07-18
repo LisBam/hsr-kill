@@ -21,6 +21,9 @@ enum Mode {
 	REMOTE,
 }
 
+## 当前封包协议版本；版本2使用 leader 身份值与 leader_player_id/leader_character_id 选将字段，不兼容旧 lord 字段。
+const PROTOCOL_VERSION: int = 2
+
 ## 当前通信模式；默认离线，切换模式不会自动建立网络连接。
 var mode: Mode = Mode.OFFLINE
 
@@ -82,9 +85,9 @@ func send_choice_response(response: ChoiceResponse) -> void:
 
 ## 接收外部传输适配器交付的封包，并按消息类型分发到统一信号。
 func receive_transport_packet(packet: Dictionary) -> void:
-	# 封包协议版本；当前仅接受版本1，未来升级可在此兼容旧协议。
+	# 封包协议版本；只接收当前完整字段结构，旧版本必须由外部适配器显式迁移后再提交。
 	var protocol_version: int = int(packet.get("protocol_version", 0))
-	if protocol_version != 1:
+	if protocol_version != PROTOCOL_VERSION:
 		return
 	# 封包消息类型；决定 payload 的解析入口。
 	var message_type: String = str(packet.get("message_type", ""))
@@ -104,7 +107,7 @@ func receive_transport_packet(packet: Dictionary) -> void:
 func _build_packet(message_type: String, payload: Dictionary) -> Dictionary:
 	outgoing_sequence += 1
 	return {
-		"protocol_version": 1,
+		"protocol_version":PROTOCOL_VERSION,
 		"message_type": message_type,
 		"transport_mode": Mode.keys()[mode].to_lower(),
 		"sequence": outgoing_sequence,

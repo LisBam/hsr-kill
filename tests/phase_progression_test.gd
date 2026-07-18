@@ -74,7 +74,7 @@ func _create_controller() -> void:
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
 
 
-## 安装一份三人权威状态并重置运行时；主公、忠臣、反贼并存可避免单次死亡立即结束对局。
+## 安装一份三人权威状态并重置运行时；领袖、忠臣、反贼并存可避免单次死亡立即结束对局。
 func _install_state() -> GameState:
 	_state_sequence += 1
 	# 新权威状态；非空 match_id 令0号玩家的选择走真实延迟提交路径。
@@ -83,7 +83,7 @@ func _install_state() -> GameState:
 	for player_id: int in range(3):
 		# 当前测试玩家；身份顺序保证0号忠臣死亡后对局仍继续。
 		var player: PlayerState = PlayerState.new(player_id, "测试玩家%d" % (player_id + 1))
-		player.identity = ["loyalist", "lord", "rebel"][player_id]
+		player.identity = ["loyalist", "leader", "rebel"][player_id]
 		player.character_id = "trailblazer"
 		player.character_revealed = true
 		game_state.players.append(player)

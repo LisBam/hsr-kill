@@ -75,7 +75,7 @@ const SKILL_TIMINGS: Array[String] = [
 	"logSkillBegin", "logSkill", "useSkillBegin", "useSkill", "useSkillAfter", "skillAfter", "triggerInvisible", "triggerAfter",
 ]
 
-## 武将技能变化、移除武将牌、明置手牌、主公状态和洗牌时机；没有对应规则时不会凭空派发。
+## 武将技能变化、移除武将牌、明置手牌、领袖状态和洗牌时机；没有对应规则时不会凭空派发。
 const MODE_TIMINGS: Array[String] = [
 	"changeSkillsAfter", "removeCharacterBefore", "removeCharacterEnd", "hideShownCardsAfter", "zhuUpdate", "washCard",
 ]

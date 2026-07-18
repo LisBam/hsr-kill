@@ -70,7 +70,7 @@ var _match_id: String = ""
 ## 各玩家的身份行为暴露度；键为稳定玩家 ID，值范围为-0.5至1.0。
 var _exposure_by_player: Dictionary = {}
 
-## 各玩家相对主公阵营的行为信号；正值偏忠、负值偏反，范围限制为-1.0至1.0。
+## 各玩家相对领袖阵营的行为信号；正值偏忠、负值偏反，范围限制为-1.0至1.0。
 var _camp_signal_by_player: Dictionary = {}
 
 ## 各隐藏玩家的临时身份标记；值为空、loyalist或rebel，对应无名杀 identity_mark 的忠反推断。
@@ -106,7 +106,7 @@ func synchronize(authoritative_snapshot: Dictionary) -> void:
 		var player_id: int = int(player.get("player_id", -1))
 		if player_id < 0:
 			continue
-		if bool(player.get("identity_revealed", false)) or str(player.get("identity", "")) == "lord":
+		if bool(player.get("identity_revealed", false)) or str(player.get("identity", "")) == "leader":
 			_exposure_by_player[player_id] = REVEALED_EXPOSURE
 			_identity_mark_by_player[player_id] = ""
 			_identity_mark_finished_by_player[player_id] = true
@@ -125,7 +125,7 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 	synchronize(authoritative_snapshot)
 	# 行动者快照；公开身份不需要继续累计暴露度。
 	var actor: Dictionary = get_player(authoritative_snapshot, actor_id)
-	if actor.is_empty() or bool(actor.get("identity_revealed", false)) or str(actor.get("identity", "")) == "lord":
+	if actor.is_empty() or bool(actor.get("identity_revealed", false)) or str(actor.get("identity", "")) == "leader":
 		return
 	# 卡牌 AI 配置；`expose` 对应无名杀卡牌主动声明的额外身份暴露量。
 	var ai_profile: Dictionary = card_definition.get("ai", {}) as Dictionary
@@ -139,10 +139,10 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 	var target_results_by_player: Dictionary = ai_profile.get("target_results_by_player", {}) as Dictionary
 	# 行动者自身视角的总行为收益；只用真实身份关系判断该行动是否符合其阵营目标。
 	var actor_effect: float = 0.0
-	# 主公阵营视角的总行为收益；用于生成隐藏身份的忠反标记。
-	var lord_camp_effect: float = 0.0
-	# 主公玩家 ID；不存在主公时不生成忠反信号。
-	var lord_id: int = find_identity_player_id(authoritative_snapshot, "lord")
+	# 领袖阵营视角的总行为收益；用于生成隐藏身份的忠反标记。
+	var leader_camp_effect: float = 0.0
+	# 领袖玩家 ID；不存在领袖时不生成忠反信号。
+	var leader_id: int = find_identity_player_id(authoritative_snapshot, "leader")
 	# 是否为唯一目标指向行动者自己的行为；无名杀不会用这种自用行为推断忠反身份。
 	var self_target_only: bool = target_ids.size() == 1 and target_ids[0] == actor_id
 	for target_id: int in target_ids:
@@ -161,10 +161,10 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 		# 行动者对当前目标的真实态度；不受隐藏暴露衰减，用于判断行动是否符合自身阵营利益。
 		var actor_target_attitude: float = get_real_attitude(authoritative_snapshot, actor_id, target_id)
 		actor_effect += current_target_result * actor_target_attitude * target_evidence_weight
-		if lord_id >= 0:
-			# 主公阵营对当前目标的真实态度；正面帮助友方或负面打击敌方均产生正忠向信号。
-			var lord_target_attitude: float = get_real_attitude(authoritative_snapshot, lord_id, target_id)
-			lord_camp_effect += current_target_result * lord_target_attitude * target_evidence_weight
+		if leader_id >= 0:
+			# 领袖阵营对当前目标的真实态度；正面帮助友方或负面打击敌方均产生正忠向信号。
+			var leader_target_attitude: float = get_real_attitude(authoritative_snapshot, leader_id, target_id)
+			leader_camp_effect += current_target_result * leader_target_attitude * target_evidence_weight
 	# 目标行为暴露量；只有该行为符合行动者自身收益时才增加，内奸反向伪装行为可减少。
 	var target_exposure: float = 0.0
 	if not self_target_only and not is_zero_approx(actor_effect):
@@ -182,13 +182,13 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 	if observer_id >= 0 and actor_id != observer_id:
 		updated_exposure *= REMOTE_ACTOR_EXPOSURE_MULTIPLIER
 	_exposure_by_player[actor_id] = clampf(updated_exposure, MIN_EXPOSURE, MAX_EXPOSURE)
-	if not is_zero_approx(lord_camp_effect):
+	if not is_zero_approx(leader_camp_effect):
 		# 忠反信号步长；单目标行为比群体行为更明确，并按实际牌效强弱限制到一次0.2。
 		var signal_step: float = SINGLE_TARGET_EXPOSURE_GAIN if target_ids.size() == 1 else MULTI_TARGET_EXPOSURE_GAIN
-		# 当前忠反信号；正值代表行为有利主忠，负值代表行为有利反贼。
+		# 当前忠反信号；正值代表行为有利领忠，负值代表行为有利反贼。
 		var current_signal: float = float(_camp_signal_by_player.get(actor_id, 0.0))
-		_camp_signal_by_player[actor_id] = clampf(current_signal + signf(lord_camp_effect) * signal_step, -CAMP_SIGNAL_LIMIT, CAMP_SIGNAL_LIMIT)
-	_update_identity_mark(authoritative_snapshot, actor_id, lord_camp_effect, observer_id, self_target_only)
+		_camp_signal_by_player[actor_id] = clampf(current_signal + signf(leader_camp_effect) * signal_step, -CAMP_SIGNAL_LIMIT, CAMP_SIGNAL_LIMIT)
+	_update_identity_mark(authoritative_snapshot, actor_id, leader_camp_effect, observer_id, self_target_only)
 
 
 ## 记录一次公开打出的响应牌；当前只处理【无懈可击】可确定原锦囊来源、目标与奇偶方向的身份线索。
@@ -232,17 +232,17 @@ func get_attitude(authoritative_snapshot: Dictionary, from_player_id: int, to_pl
 		return 0.0
 	# 目标身份标记；内奸或其他隐藏身份可暂时按公开行为被推断为忠臣或反贼。
 	# 已公开身份始终覆盖旧的临时标记，避免角色死亡公开后仍按忠反猜测计算真实态度。
-	var identity_mark: String = "" if bool(to_player.get("identity_revealed", false)) or str(to_player.get("identity", "")) == "lord" else str(_identity_mark_by_player.get(to_player_id, ""))
+	var identity_mark: String = "" if bool(to_player.get("identity_revealed", false)) or str(to_player.get("identity", "")) == "leader" else str(_identity_mark_by_player.get(to_player_id, ""))
 	# 真实或推断身份态度；身份标记存在时先按标记身份计算，对齐无名杀 identity_mark 的临时替代关系。
 	var real_attitude: float = get_real_attitude(authoritative_snapshot, from_player_id, to_player_id, identity_mark)
-	if from_player_id == to_player_id or bool(to_player.get("identity_revealed", false)) or str(to_player.get("identity", "")) == "lord":
+	if from_player_id == to_player_id or bool(to_player.get("identity_revealed", false)) or str(to_player.get("identity", "")) == "leader":
 		return real_attitude
 	# 目标当前身份暴露度；0表示行为尚不足以支持明确阵营判断。
 	var exposure: float = float(_exposure_by_player.get(to_player_id, 0.0))
 	if identity_mark in ["loyalist", "rebel"]:
 		exposure = maxf(exposure, IDENTITY_MARK_MINIMUM_CONFIDENCE)
-	# 未暴露角色的弱推断；当场上反贼均已有明确行为时，其余隐藏非主公角色获得0.3的最低判断权重。
-	if is_zero_approx(exposure) and str(to_player.get("identity", "")) not in ["lord", "rebel"] and _all_rebels_exposed(authoritative_snapshot, from_player_id):
+	# 未暴露角色的弱推断；当场上反贼均已有明确行为时，其余隐藏非领袖角色获得0.3的最低判断权重。
+	if is_zero_approx(exposure) and str(to_player.get("identity", "")) not in ["leader", "rebel"] and _all_rebels_exposed(authoritative_snapshot, from_player_id):
 		exposure = NON_REBEL_MINIMUM_CONFIDENCE
 	return real_attitude * exposure
 
@@ -260,19 +260,19 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 	# 观察者身份；项目稳定名称映射无名杀 zhu、zhong、fan、nei。
 	var from_identity: String = str(from_player.get("identity", "renegade"))
 	# 目标身份；未知值按内奸处理，避免把异常配置误判为固定友方。
-	var to_identity: String = assumed_target_identity if assumed_target_identity in ["lord", "loyalist", "rebel", "renegade"] else str(to_player.get("identity", "renegade"))
-	# 当前主忠方相对局势；正值代表主忠优势，负值代表反贼优势。
+	var to_identity: String = assumed_target_identity if assumed_target_identity in ["leader", "loyalist", "rebel", "renegade"] else str(to_player.get("identity", "renegade"))
+	# 当前领忠方相对局势；正值代表领忠优势，负值代表反贼优势。
 	var situation: int = get_situation(authoritative_snapshot)
-	# 存活反贼数量；用于残局中的主公、反贼与内奸关系调整。
+	# 存活反贼数量；用于残局中的领袖、反贼与内奸关系调整。
 	var rebel_count: int = get_population(authoritative_snapshot, "rebel")
 	# 存活忠臣数量；用于判断反贼是否应继续容忍内奸。
 	var loyalist_count: int = get_population(authoritative_snapshot, "loyalist")
-	# 存活内奸数量；主公在三人残局中需要平衡反贼与内奸威胁。
+	# 存活内奸数量；领袖在三人残局中需要平衡反贼与内奸威胁。
 	var renegade_count: int = get_population(authoritative_snapshot, "renegade")
 	# 当前存活人数；二人和三人残局采用无名杀的特殊关系分支。
 	var alive_count: int = get_alive_player_count(authoritative_snapshot)
-	if from_identity == "lord":
-		if to_identity == "lord":
+	if from_identity == "leader":
+		if to_identity == "leader":
 			return 10.0
 		if to_identity == "loyalist":
 			return 6.0
@@ -289,7 +289,7 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 				return 0.0
 			return float(mini(3, rebel_count))
 	if from_identity == "loyalist":
-		if to_identity == "lord":
+		if to_identity == "leader":
 			return 10.0
 		if to_identity == "loyalist":
 			return 4.0
@@ -298,7 +298,7 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 		if to_identity == "renegade":
 			return -2.0 if rebel_count == 0 else float(mini(3, -situation))
 	if from_identity == "rebel":
-		if to_identity == "lord":
+		if to_identity == "leader":
 			return -5.0 if renegade_count > 0 and situation > 0 else -8.0
 		if to_identity == "loyalist":
 			return -7.0
@@ -311,11 +311,11 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 				return -2.0
 			return 3.0
 	if from_identity == "renegade":
-		if to_identity == "lord" and alive_count == 2:
+		if to_identity == "leader" and alive_count == 2:
 			return -10.0
-		if to_identity != "lord" and alive_count == 3:
+		if to_identity != "leader" and alive_count == 3:
 			return -8.0
-		if to_identity == "lord":
+		if to_identity == "leader":
 			if rebel_count == 0:
 				return -5.0
 			if situation > 1:
@@ -338,15 +338,15 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 	return -1.0
 
 
-## 计算无名杀身份 AI 使用的主忠方局势值；正数代表主忠优势，负数代表反贼优势。
+## 计算无名杀身份 AI 使用的领忠方局势值；正数代表领忠优势，负数代表反贼优势。
 func get_situation(authoritative_snapshot: Dictionary) -> int:
-	# 主忠方净强度；主公、忠臣和反贼使用不同权重累计。
+	# 领忠方净强度；领袖、忠臣和反贼使用不同权重累计。
 	var loyal_side_strength: float = 0.0
 	# 全部参与比较的总强度；用于把结果归一化到约-10至10。
 	var total_strength: float = 0.0
-	# 主公基础强度；极端劣势时用于追加无名杀的主公危险修正。
-	var lord_strength: float = 0.0
-	# 反贼总强度；与主公强度共同判断主公濒危局面。
+	# 领袖基础强度；极端劣势时用于追加无名杀的领袖危险修正。
+	var leader_strength: float = 0.0
+	# 反贼总强度；与领袖强度共同判断领袖濒危局面。
 	var rebel_strength: float = 0.0
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前存活玩家；死亡或离场角色不再参与局势强度。
@@ -363,8 +363,8 @@ func get_situation(authoritative_snapshot: Dictionary) -> int:
 		var player_strength: float = hand_count + equipment_count * 1.5 + hp_value * 2.0
 		# 当前玩家身份；只对标准四身份计入阵营净值。
 		var identity: String = str(player.get("identity", ""))
-		if identity == "lord":
-			lord_strength = player_strength
+		if identity == "leader":
+			leader_strength = player_strength
 			loyal_side_strength += player_strength * 1.2 + 5.0
 			total_strength += player_strength * 1.2 + 5.0
 		elif identity == "loyalist":
@@ -380,11 +380,11 @@ func get_situation(authoritative_snapshot: Dictionary) -> int:
 	var result: int = int(10.0 * absf(loyal_side_strength / total_strength))
 	if loyal_side_strength < 0.0:
 		result = -result
-	if lord_strength < 12.0 and rebel_strength > 30.0:
+	if leader_strength < 12.0 and rebel_strength > 30.0:
 		result -= 1
-	if lord_strength < 6.0 and rebel_strength > 15.0:
+	if leader_strength < 6.0 and rebel_strength > 15.0:
 		result -= 1
-	if lord_strength < 4.0:
+	if leader_strength < 4.0:
 		result -= 1
 	return result
 
@@ -444,7 +444,7 @@ func get_alive_player_count(authoritative_snapshot: Dictionary) -> int:
 	return result
 
 
-## 返回指定身份的首名存活玩家 ID；标准身份局主公唯一，其他身份只用于通用查询。
+## 返回指定身份的首名存活玩家 ID；标准身份局领袖唯一，其他身份只用于通用查询。
 func find_identity_player_id(authoritative_snapshot: Dictionary, identity: String) -> int:
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前玩家快照；只返回仍存活且未离场的指定身份。
@@ -470,11 +470,11 @@ func get_perceived_identity(authoritative_snapshot: Dictionary, player_id: int) 
 	var player: Dictionary = get_player(authoritative_snapshot, player_id)
 	if player.is_empty():
 		return "unknown"
-	# 目标真实身份；仅在主公或身份已公开时可直接用于战略层。
+	# 目标真实身份；仅在领袖或身份已公开时可直接用于战略层。
 	var identity: String = str(player.get("identity", ""))
-	if identity == "lord" or bool(player.get("identity_revealed", false)):
+	if identity == "leader" or bool(player.get("identity_revealed", false)):
 		return identity
-	# 目标行为身份标记；隐藏角色只能依据忠反信号暂时归入主忠方或反贼方。
+	# 目标行为身份标记；隐藏角色只能依据忠反信号暂时归入领忠方或反贼方。
 	var identity_mark: String = get_identity_mark(player_id)
 	return identity_mark if identity_mark in ["loyalist", "rebel"] else "unknown"
 
@@ -498,15 +498,15 @@ func _get_target_evidence_weight(authoritative_snapshot: Dictionary, target_id: 
 
 ## 根据信号更新忠反标记；达到正负0.2即形成初步判断，回到中间区间则清除。
 ## 当前标记状态机进一步对齐无名杀：忠反角色按真实身份在正暴露后定型，内奸相反行为会清空并永久终结猜测。
-func _update_identity_mark(authoritative_snapshot: Dictionary, player_id: int, lord_camp_effect: float, observer_id: int, self_target_only: bool) -> void:
+func _update_identity_mark(authoritative_snapshot: Dictionary, player_id: int, leader_camp_effect: float, observer_id: int, self_target_only: bool) -> void:
 	# 当前忠反行为信号；正值偏忠，负值偏反。
 	var camp_signal: float = float(_camp_signal_by_player.get(player_id, 0.0))
 	# 信号边界完整性检查；正常入口始终先限制到正负1，异常值不应生成不可信标记。
 	if absf(camp_signal) > CAMP_SIGNAL_LIMIT:
 		return
-	# 行动者快照；身份公开、主公、本地观察者本人和纯自用行为都不生成自动猜测。
+	# 行动者快照；身份公开、领袖、本地观察者本人和纯自用行为都不生成自动猜测。
 	var actor: Dictionary = get_player(authoritative_snapshot, player_id)
-	if actor.is_empty() or bool(actor.get("identity_revealed", false)) or str(actor.get("identity", "")) == "lord" or player_id == observer_id or self_target_only:
+	if actor.is_empty() or bool(actor.get("identity_revealed", false)) or str(actor.get("identity", "")) == "leader" or player_id == observer_id or self_target_only:
 		return
 	if bool(_identity_mark_finished_by_player.get(player_id, false)):
 		return
@@ -515,13 +515,13 @@ func _update_identity_mark(authoritative_snapshot: Dictionary, player_id: int, l
 	# 当前临时身份标记；内奸需要用它判断本次行为是否与既有伪装方向相反。
 	var current_identity_mark: String = str(_identity_mark_by_player.get(player_id, ""))
 	if actor_identity == "renegade":
-		if lord_camp_effect > 0.0:
+		if leader_camp_effect > 0.0:
 			if current_identity_mark == "rebel":
 				_identity_mark_by_player[player_id] = ""
 				_identity_mark_finished_by_player[player_id] = true
 			else:
 				_identity_mark_by_player[player_id] = "loyalist"
-		elif lord_camp_effect < 0.0 and get_population(authoritative_snapshot, "rebel") > 0:
+		elif leader_camp_effect < 0.0 and get_population(authoritative_snapshot, "rebel") > 0:
 			if current_identity_mark == "loyalist":
 				_identity_mark_by_player[player_id] = ""
 				_identity_mark_finished_by_player[player_id] = true

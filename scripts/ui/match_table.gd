@@ -284,7 +284,7 @@ var _identity_marks: Dictionary = {}
 ## 身份标注弹出菜单当前对应的玩家 ID；默认-1表示没有等待选择的身份徽记。
 var _identity_mark_target_id: int = -1
 
-## 身份标注弹出菜单；只提供忠臣、反贼和内奸三个本地标记选项，不包含主公。
+## 身份标注弹出菜单；只提供忠臣、反贼和内奸三个本地标记选项，不包含领袖。
 ## 菜单额外提供“？”作为清除本地推测的入口，四项均只显示单字简写。
 var _identity_mark_menu: PopupMenu
 
@@ -1447,11 +1447,12 @@ func _on_name_mode_pressed() -> void:
 	GameSettings.toggle_card_name_mode()
 
 
-## 响应名称模式变化并重新渲染现有快照。
+## 响应名称模式变化并重新渲染现有快照；技能说明中的卡牌引用与牌面使用同一名称模式。
 func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 	match_menu.refresh_card_name_text()
 	if not _snapshot.is_empty():
 		_render_players()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
 		_render_local_hand()
 		_refresh_selection_text()
 		_refresh_card_selection_panel()

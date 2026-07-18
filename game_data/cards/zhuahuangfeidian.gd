@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "zhuahuang",
 		"original_name": "爪黄飞电",
-		"custom_name": "雷驰机兽",
+		"custom_name": "爪黄飞电",
 		"type": "equipment",
 		"subtype": "defensive_mount",
 		"effect_id": "equip",

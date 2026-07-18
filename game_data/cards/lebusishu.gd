@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "lebu",
 		"original_name": "乐不思蜀",
-		"custom_name": "沉迷幻梦",
+		"custom_name": "美梦沉眠",
 		"type": "trick",
 		"subtype": "delayed",
 		"effect_id": "skip_play",

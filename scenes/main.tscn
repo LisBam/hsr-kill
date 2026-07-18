@@ -647,7 +647,7 @@ offset_right = 1016.0
 offset_bottom = 52.0
 theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
 theme_override_font_sizes/font_size = 24
-text = "主公选将"
+text = "领袖选将"
 horizontal_alignment = 1
 
 [node name="CharacterSelectionStatus" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1416584960]
@@ -662,7 +662,7 @@ theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
 text = "从五张候选武将牌中选择一张"
 horizontal_alignment = 1
 
-[node name="LordCharacterLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1459193555]
+[node name="LeaderCharacterLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1459193555]
 unique_name_in_owner = true
 visible = false
 layout_mode = 0
@@ -672,10 +672,10 @@ offset_right = 188.35
 offset_bottom = 100.0
 theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
 theme_override_font_sizes/font_size = 16
-text = "主公"
+text = "领袖"
 horizontal_alignment = 1
 
-[node name="LordCharacterArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1540706043]
+[node name="LeaderCharacterArea" type="Control" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1540706043]
 unique_name_in_owner = true
 visible = false
 anchors_preset = 0
@@ -684,7 +684,7 @@ offset_top = 106.0
 offset_right = 188.35
 offset_bottom = 303.8
 
-[node name="LordDivider" type="ColorRect" parent="CharacterSelectionPanel/SelectionFrame" unique_id=209302906]
+[node name="LeaderDivider" type="ColorRect" parent="CharacterSelectionPanel/SelectionFrame" unique_id=209302906]
 visible = false
 layout_mode = 0
 offset_left = 200.0

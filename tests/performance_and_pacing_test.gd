@@ -172,7 +172,7 @@ func _test_player_visual_signature() -> bool:
 	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 	# 基础公开快照；额外历史字段模拟每次出牌都会增长但不改变武将牌画面。
 	var snapshot: Dictionary = {
-		"player_id":0, "display_name":"性能测试玩家", "character_id":"trailblazer", "identity":"lord",
+		"player_id":0, "display_name":"性能测试玩家", "character_id":"trailblazer", "identity":"leader",
 		"hp":4, "max_hp":4, "shield":0, "alive":true, "chained":false, "face_down":false,
 		"hand_count":4, "equipment":{}, "judgment_area":[], "wooden_ox_storage_count":0,
 		"card_use_history":[], "play_phase_card_use_history":[], "response_history_count":0,

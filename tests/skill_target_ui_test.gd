@@ -102,7 +102,7 @@ func _run() -> void:
 ## 构造本地观察者快照；只包含技能目标选择需要的公开玩家与本地手牌。
 func _make_snapshot(material_card: Dictionary, request_id: int) -> Dictionary:
 	# 本地玩家；手牌完整可见。
-	var local_player: Dictionary = {"player_id":0, "seat_number":1, "display_name":"本地玩家", "character_id":"trailblazer", "identity":"lord", "hp":4, "max_hp":4, "alive":true, "chained":false, "hand_count":1, "hand":[material_card.duplicate(true)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "wooden_ox_storage_count":0}
+	var local_player: Dictionary = {"player_id":0, "seat_number":1, "display_name":"本地玩家", "character_id":"trailblazer", "identity":"leader", "hp":4, "max_hp":4, "alive":true, "chained":false, "hand_count":1, "hand":[material_card.duplicate(true)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "wooden_ox_storage_count":0}
 	# 目标玩家；只需要公开武将状态。
 	var target_player: Dictionary = {"player_id":1, "seat_number":2, "display_name":"目标玩家", "character_id":"march7th", "identity":"rebel", "hp":4, "max_hp":4, "alive":true, "chained":false, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "wooden_ox_storage_count":0}
 	return {"players":[local_player, target_player], "current_player_id":0, "current_phase":"choice", "current_choice_request":{"request_id":request_id, "actor_id":0}, "turn_number":1, "draw_pile_count":100, "discard_pile_count":0, "game_over":false}

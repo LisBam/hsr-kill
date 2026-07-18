@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "tao",
 		"original_name": "桃",
-		"custom_name": "丰饶露",
+		"custom_name": "药",
 		"type": "basic",
 		"subtype": "recover",
 		"effect_id": "peach",

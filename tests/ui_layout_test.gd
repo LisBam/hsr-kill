@@ -376,12 +376,12 @@ func _run() -> void:
 	for observed_player_variant: Variant in identity_observation_snapshot.get("players", []) as Array:
 		# 当前权威观察角色；本循环只修改深复制测试快照，不接触牌桌公开快照。
 		var observed_player: Dictionary = observed_player_variant as Dictionary
-		# 当前观察角色稳定 ID；0号为公开主公，5号为隐藏反贼，其余身份只用于补全标准身份态度关系。
+		# 当前观察角色稳定 ID；0号为公开领袖，5号为隐藏反贼，其余身份只用于补全标准身份态度关系。
 		var observed_player_id: int = int(observed_player.get("player_id", -1))
-		observed_player["identity"] = "lord" if observed_player_id == 0 else ("rebel" if observed_player_id == 5 else "loyalist")
+		observed_player["identity"] = "leader" if observed_player_id == 0 else ("rebel" if observed_player_id == 5 else "loyalist")
 		observed_player["identity_revealed"] = observed_player_id == 0
 		observed_player["out_of_game"] = false
-	# 5号隐藏角色公开对主公使用【杀】；单目标-0.2忠反信号应立即形成反贼倾向标记。
+	# 5号隐藏角色公开对领袖使用【杀】；单目标-0.2忠反信号应立即形成反贼倾向标记。
 	match_controller.ai_coordinator.observe_card_use(identity_observation_snapshot, 5, GameDatabase.get_card("sha"), [0])
 	# 自动身份徽记；推断只存在共享模型中，不得写入手动标注字典或公开身份快照。
 	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
@@ -436,26 +436,26 @@ func _run() -> void:
 			_fail("opponent_view_recreated:%s" % player_id_variant)
 			return
 	player_views = repeated_player_views
-	# 正式选将组件；无主公快照时候选区域应直接占用左侧空位，不保留不可见主公占位。
+	# 正式选将组件；无领袖快照时候选区域应直接占用左侧空位，不保留不可见领袖占位。
 	var character_selection_panel: CharacterSelectionPanel = main_instance.get_node("%CharacterSelectionPanel") as CharacterSelectionPanel
-	# 无主公选将快照；两张候选足以验证左对齐、悬停缩放与点击高亮语义。
-	var selection_snapshot_without_lord: Dictionary = {
+	# 无领袖选将快照；两张候选足以验证左对齐、悬停缩放与点击高亮语义。
+	var selection_snapshot_without_leader: Dictionary = {
 		"phase":CharacterSelectionService.PHASE_OTHERS,
 		"can_select":true,
 		"local_candidates":["trailblazer", "march_7th"],
-		"lord_character_id":"",
-		"lord_player_id":0,
+		"leader_character_id":"",
+		"leader_player_id":0,
 	}
-	character_selection_panel.bind_snapshot(selection_snapshot_without_lord)
+	character_selection_panel.bind_snapshot(selection_snapshot_without_leader)
 	await get_tree().process_frame
-	# 候选区域与主公区域；无主公时两者左边界应完全一致，分隔线保持隐藏。
+	# 候选区域与领袖区域；无领袖时两者左边界应完全一致，分隔线保持隐藏。
 	var candidate_area: Control = character_selection_panel.get_node("SelectionFrame/CharacterCandidateArea") as Control
-	# 主公只读区域；无主公时其左边界成为候选区新的左对齐基准。
-	var lord_area: Control = character_selection_panel.get_node("SelectionFrame/LordCharacterArea") as Control
-	# 主公竖向分隔线；无主公时隐藏，有主公时显示。
-	var lord_divider: ColorRect = character_selection_panel.get_node("SelectionFrame/LordDivider") as ColorRect
-	if not is_equal_approx(candidate_area.position.x, lord_area.position.x) or lord_divider.visible:
-		_fail("selection_without_lord_partition:%s/%s" % [candidate_area.position.x, lord_divider.visible])
+	# 领袖只读区域；无领袖时其左边界成为候选区新的左对齐基准。
+	var leader_area: Control = character_selection_panel.get_node("SelectionFrame/LeaderCharacterArea") as Control
+	# 领袖竖向分隔线；无领袖时隐藏，有领袖时显示。
+	var leader_divider: ColorRect = character_selection_panel.get_node("SelectionFrame/LeaderDivider") as ColorRect
+	if not is_equal_approx(candidate_area.position.x, leader_area.position.x) or leader_divider.visible:
+		_fail("selection_without_leader_partition:%s/%s" % [candidate_area.position.x, leader_divider.visible])
 		return
 	# 当前候选视图；第一张用于悬停缩放，第二张用于确认未选牌不会获得合法目标发光。
 	var candidate_views: Dictionary = character_selection_panel.get("_candidate_views") as Dictionary
@@ -477,15 +477,15 @@ func _run() -> void:
 	if not first_candidate.is_target_selected or first_candidate.is_legal_target or second_candidate.is_target_selected or second_candidate.is_legal_target:
 		_fail("selection_click_glow_scope")
 		return
-	# 有主公选将快照；主公牌缩小并显示竖线，候选区域恢复到分隔线右侧。
-	var selection_snapshot_with_lord: Dictionary = selection_snapshot_without_lord.duplicate(true)
-	selection_snapshot_with_lord["lord_character_id"] = "welt"
-	character_selection_panel.bind_snapshot(selection_snapshot_with_lord)
+	# 有领袖选将快照；领袖牌缩小并显示竖线，候选区域恢复到分隔线右侧。
+	var selection_snapshot_with_leader: Dictionary = selection_snapshot_without_leader.duplicate(true)
+	selection_snapshot_with_leader["leader_character_id"] = "welt"
+	character_selection_panel.bind_snapshot(selection_snapshot_with_leader)
 	await get_tree().process_frame
-	# 缩小后的主公武将牌；缩放值必须读取组件公开配置并保持只读。
-	var lord_character_view: PlayerTargetView = character_selection_panel.get("_lord_character_view") as PlayerTargetView
-	if lord_character_view == null or not is_equal_approx(lord_character_view.scale.x, character_selection_panel.lord_character_scale) or not lord_divider.visible or candidate_area.position.x <= lord_area.position.x:
-		_fail("selection_lord_partition")
+	# 缩小后的领袖武将牌；缩放值必须读取组件公开配置并保持只读。
+	var leader_character_view: PlayerTargetView = character_selection_panel.get("_leader_character_view") as PlayerTargetView
+	if leader_character_view == null or not is_equal_approx(leader_character_view.scale.x, character_selection_panel.leader_character_scale) or not leader_divider.visible or candidate_area.position.x <= leader_area.position.x:
+		_fail("selection_leader_partition")
 		return
 	character_selection_panel.close()
 	# 已确认的对手座位屏幕矩形；逐个加入并检查相邻牌面不会重叠。
@@ -903,7 +903,7 @@ func _make_ten_player_snapshot() -> Dictionary:
 			"player_id":player_index,
 			"display_name":"玩家%d" % (player_index + 1),
 			"character_id":"trailblazer",
-			"identity":"lord" if player_index == 0 else "hidden",
+			"identity":"leader" if player_index == 0 else "hidden",
 			"hp":4,
 			"max_hp":4,
 			"alive":true,
@@ -944,7 +944,7 @@ func _make_single_target_state() -> GameState:
 	for player_id: int in range(10):
 		# 当前测试玩家；全部存活且使用连续稳定 ID，目标规则只排除使用者本人。
 		var player: PlayerState = PlayerState.new(player_id, "玩家%d" % (player_id + 1))
-		player.identity = "lord" if player_id == 0 else "rebel"
+		player.identity = "leader" if player_id == 0 else "rebel"
 		player.character_id = "trailblazer"
 		player.character_revealed = true
 		game_state.players.append(player)

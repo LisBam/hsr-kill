@@ -14,6 +14,56 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌场景；测试验证根节点是 Node2D 且保留111×148的3:4实体牌尺寸。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 全部卡牌稳定 ID 对应的《崩铁杀》显示名称；名称调整必须保持46项完整映射且不改变逻辑 ID。
+const EXPECTED_CUSTOM_CARD_NAMES: Dictionary = {
+	"bagua":"穷观阵",
+	"baiyin":"白银狮子",
+	"bingliang":"兵粮寸断",
+	"chitu":"赤兔",
+	"cixiong":"干将莫邪",
+	"dawan":"大宛",
+	"dilu":"的卢",
+	"fangtian":"动能激发剑",
+	"guanshi":"侵晨",
+	"guding":"高周波电锯",
+	"guohe":"万物归虚",
+	"hanbing":"支离",
+	"hualiu":"骅骝",
+	"huogong":"焚烧",
+	"sha_fire":"火杀",
+	"jiedao":"借刀杀人",
+	"jiu":"酒",
+	"juedou":"决斗",
+	"jueying":"大地兽",
+	"lebu":"美梦沉眠",
+	"sha_thunder":"雷杀",
+	"muniu":"货运星槎",
+	"nanman":"寰宇蝗灾",
+	"qilin":"曲弓",
+	"qinggang":"碎星斩舰刀",
+	"qinglong":"石火梦身",
+	"renwang":"仁王盾",
+	"sha":"杀",
+	"shan":"闪",
+	"shandian":"天谴",
+	"shuiyanqijun":"水淹七军",
+	"shunshou":"万宇入腹",
+	"tao":"药",
+	"taoyuan":"丰饶馈赠",
+	"tengjia":"建木藤甲",
+	"tiesuo":"命运连结",
+	"wanjian":"天弓垂眸",
+	"wugu":"普世同谐",
+	"wuxie":"运演否证",
+	"wuzhong":"无中生有",
+	"yinyue":"击云",
+	"zhangba":"银河球棒",
+	"zhuahuang":"爪黄飞电",
+	"zhuge":"火力风暴潮",
+	"zhuque":"普罗米修斯",
+	"zixin":"紫骍",
+}
+
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
 
@@ -74,6 +124,52 @@ func _run() -> void:
 		printerr("SMOKE_FAIL default_card_name=%s" % GameSettings.resolve_card_name(GameDatabase.get_card("sha")))
 		get_tree().quit(1)
 		return
+	# 《崩铁杀》名称完整映射；逐项校验全部46种定义，防止单张卡牌仍保留旧名或误改稳定 ID。
+	if EXPECTED_CUSTOM_CARD_NAMES.size() != definition_count:
+		printerr("SMOKE_FAIL custom_card_name_count=%d" % EXPECTED_CUSTOM_CARD_NAMES.size())
+		get_tree().quit(1)
+		return
+	for custom_card_id_variant: Variant in EXPECTED_CUSTOM_CARD_NAMES.keys():
+		# 当前待校验卡牌 ID；保持为内部稳定键，不随两套显示名称变化。
+		var custom_card_id: String = str(custom_card_id_variant)
+		# 当前期望自定义名称；来源为公开卡牌名称规则表。
+		var expected_custom_name: String = str(EXPECTED_CUSTOM_CARD_NAMES[custom_card_id])
+		# 当前实际自定义名称；直接读取数据库索引以覆盖源码自动发现路径。
+		var actual_custom_name: String = str(GameDatabase.get_card(custom_card_id).get("custom_name", ""))
+		if actual_custom_name != expected_custom_name:
+			printerr("SMOKE_FAIL custom_card_name=%s/%s/%s" % [custom_card_id, actual_custom_name, expected_custom_name])
+			get_tree().quit(1)
+			return
+	# 技能说明卡牌引用；切到《崩铁杀》名称后，多个完整【原版牌名】必须同步映射且不改变普通文本。
+	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
+	# 自定义模式技能说明；同时覆盖基本牌、锦囊牌与装备牌名称替换。
+	var custom_skill_description: String = GameDatabase.resolve_card_names_in_text("可使用【桃】、【无懈可击】或【银月枪】。")
+	if custom_skill_description != "可使用【药】、【运演否证】或【击云】。":
+		printerr("SMOKE_FAIL custom_skill_description=%s" % custom_skill_description)
+		get_tree().quit(1)
+		return
+	# 技能按钮测试定义；组件必须自行解析静态原版说明，调用方无需预先改写元数据。
+	var skill_button_definition: Dictionary = {"id":"card_name_reference_test", "name":"名称测试", "description":"可使用【桃】或【银月枪】。"}
+	# 技能按钮测试实例；无需加入场景树即可校验 configure 写入的当前模式说明文本。
+	var skill_button_view: SkillButtonView = SkillButtonView.new()
+	skill_button_view.configure(skill_button_definition)
+	if skill_button_view.skill_description != "可使用【药】或【击云】。":
+		printerr("SMOKE_FAIL custom_skill_button_description=%s" % skill_button_view.skill_description)
+		get_tree().quit(1)
+		return
+	GameSettings.set_card_name_mode(GameSettings.NameMode.ORIGINAL)
+	# 原版模式技能说明；切回后必须重新得到静态原版牌名，不能残留上一次解析结果。
+	var original_skill_description: String = GameDatabase.resolve_card_names_in_text("可使用【桃】、【无懈可击】或【银月枪】。")
+	if original_skill_description != "可使用【桃】、【无懈可击】或【银月枪】。":
+		printerr("SMOKE_FAIL original_skill_description=%s" % original_skill_description)
+		get_tree().quit(1)
+		return
+	skill_button_view.configure(skill_button_definition)
+	if skill_button_view.skill_description != "可使用【桃】或【银月枪】。":
+		printerr("SMOKE_FAIL original_skill_button_description=%s" % skill_button_view.skill_description)
+		get_tree().quit(1)
+		return
+	skill_button_view.free()
 	# 技能元数据数量；现有武将共登记十二个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
 	if skill_definition_count != 12:
@@ -171,7 +267,7 @@ func _run() -> void:
 			return
 	# 八人身份分配数量；用于校验标准配置仍为1主2忠4反1内。
 	var eight_player_identities: Array[String] = IdentityRules.new().get_distribution(8)
-	if eight_player_identities.count("lord") != 1 or eight_player_identities.count("loyalist") != 2 or eight_player_identities.count("rebel") != 4 or eight_player_identities.count("renegade") != 1:
+	if eight_player_identities.count("leader") != 1 or eight_player_identities.count("loyalist") != 2 or eight_player_identities.count("rebel") != 4 or eight_player_identities.count("renegade") != 1:
 		printerr("SMOKE_FAIL identity_distribution_8")
 		get_tree().quit(1)
 		return
@@ -258,14 +354,14 @@ func _run() -> void:
 		printerr("SMOKE_FAIL ex_nihilo_other_target")
 		get_tree().quit(1)
 		return
-	# 纯数据选将服务；验证主公先选、默认5张候选、其他玩家同时确认和完成前隐藏选择。
+	# 纯数据选将服务；验证领袖先选、默认5张候选、其他玩家同时确认和完成前隐藏选择。
 	var selection_service: CharacterSelectionService = CharacterSelectionService.new()
 	# 测试选将随机源；固定种子保证候选断言可复现且不依赖系统时间。
 	var selection_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	selection_rng.seed = 20260715
-	# 测试玩家状态；0号主公先选，1号和2号代表随后同时选将的其他玩家。
-	var selection_players: Array[PlayerState] = [PlayerState.new(0, "主公"), PlayerState.new(1, "玩家二"), PlayerState.new(2, "玩家三")]
-	selection_players[0].identity = "lord"
+	# 测试玩家状态；0号领袖先选，1号和2号代表随后同时选将的其他玩家。
+	var selection_players: Array[PlayerState] = [PlayerState.new(0, "领袖"), PlayerState.new(1, "玩家二"), PlayerState.new(2, "玩家三")]
+	selection_players[0].identity = "leader"
 	selection_players[1].identity = "loyalist"
 	selection_players[2].identity = "rebel"
 	# 测试武将 ID 数组；使用正式数据库全部武将，候选数量应恰好为默认5张且单列表不重复。
@@ -276,15 +372,15 @@ func _run() -> void:
 		printerr("SMOKE_FAIL character_selection_begin")
 		get_tree().quit(1)
 		return
-	var lord_candidates: Array[String] = selection_service.get_candidates(0)
-	if selection_service.phase != CharacterSelectionService.PHASE_LORD or lord_candidates.size() != 5 or selection_service.can_player_select(1):
-		printerr("SMOKE_FAIL character_selection_lord_phase")
+	var leader_candidates: Array[String] = selection_service.get_candidates(0)
+	if selection_service.phase != CharacterSelectionService.PHASE_LEADER or leader_candidates.size() != 5 or selection_service.can_player_select(1):
+		printerr("SMOKE_FAIL character_selection_leader_phase")
 		get_tree().quit(1)
 		return
-	# 主公确认候选首项后立即进入其他玩家同时选将阶段，并在所有观察者快照中公开主公武将。
-	var selected_lord_character_id: String = lord_candidates[0]
-	if not selection_service.select_character(0, selected_lord_character_id).is_empty() or selection_service.phase != CharacterSelectionService.PHASE_OTHERS or str(selection_service.to_dict(2).get("lord_character_id", "")) != selected_lord_character_id:
-		printerr("SMOKE_FAIL character_selection_lord_reveal")
+	# 领袖确认候选首项后立即进入其他玩家同时选将阶段，并在所有观察者快照中公开领袖武将。
+	var selected_leader_character_id: String = leader_candidates[0]
+	if not selection_service.select_character(0, selected_leader_character_id).is_empty() or selection_service.phase != CharacterSelectionService.PHASE_OTHERS or str(selection_service.to_dict(2).get("leader_character_id", "")) != selected_leader_character_id:
+		printerr("SMOKE_FAIL character_selection_leader_reveal")
 		get_tree().quit(1)
 		return
 	# 玩家二确认后，玩家三只能看到完成状态而不能看到玩家二具体选择；全员完成前阶段不得结束。
@@ -374,7 +470,7 @@ func _run() -> void:
 	get_tree().root.add_child(player_card_template)
 	await get_tree().process_frame
 	# 标准4/4体力预览快照；运行时几何必须与武将牌场景中保存的默认预览位置和尺寸完全一致。
-	player_card_template.configure_snapshot({"player_id":0, "alive":true, "hp":4, "max_hp":4, "hand_count":4, "display_name":"玩家1", "character_id":"", "identity":"lord", "equipment":{}, "judgment_area":[]})
+	player_card_template.configure_snapshot({"player_id":0, "alive":true, "hp":4, "max_hp":4, "hand_count":4, "display_name":"玩家1", "character_id":"", "identity":"leader", "equipment":{}, "judgment_area":[]})
 	await get_tree().process_frame
 	# 武将牌独立输入区域；必须覆盖完整牌面，保证 Node2D 根节点不依赖按钮继承处理点击与拖放。
 	var player_card_input_area: PlayerTargetInputArea = player_card_template.get_node("InputArea") as PlayerTargetInputArea
@@ -564,7 +660,7 @@ func _run() -> void:
 	var preview_name: Label = card_view.get_node("CardBody/Name") as Label
 	# 场景内置类别预览；手牌、弹窗和动画实例都复用该标签节点。
 	var preview_type: Label = card_view.get_node("CardBody/Type") as Label
-	if card_view.get_class() != "Node2D" or not is_equal_approx(card_view.card_width, 111.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.get_card_size() != Vector2(111.0, 148.0) or card_input_area.size != Vector2(111.0, 148.0) or card_body_style == null or not card_body_style.bg_color.is_equal_approx(Color("e8dcc3")) or preview_corner.text != "♠7" or preview_name.text != "星穹斩" or preview_type.text != "基本牌":
+	if card_view.get_class() != "Node2D" or not is_equal_approx(card_view.card_width, 111.0) or not is_equal_approx(card_view.card_height, 148.0) or card_view.get_card_size() != Vector2(111.0, 148.0) or card_input_area.size != Vector2(111.0, 148.0) or card_body_style == null or not card_body_style.bg_color.is_equal_approx(Color("e8dcc3")) or preview_corner.text != "♠7" or preview_name.text != "杀" or preview_type.text != "基本牌":
 		printerr("SMOKE_FAIL card_view_node2d_defaults")
 		get_tree().quit(1)
 		return
@@ -731,6 +827,10 @@ func _run() -> void:
 	_controller.add_child(ai_coordinator)
 	# 测试通信网关；保持离线模式，不接入外部网络。
 	var network_gateway: NetworkGateway = NetworkGateway.new()
+	if NetworkGateway.PROTOCOL_VERSION != 2:
+		printerr("SMOKE_FAIL protocol_version=%d" % NetworkGateway.PROTOCOL_VERSION)
+		get_tree().quit(1)
+		return
 	network_gateway.name = "NetworkGateway"
 	_controller.add_child(network_gateway)
 	get_tree().root.add_child(_controller)
@@ -773,12 +873,12 @@ func _run() -> void:
 		printerr("SMOKE_FAIL borrow_sword_legal_actions=%s" % [borrow_sword_legal_actions])
 		get_tree().quit(1)
 		return
-	# 随机座次样本；多个固定种子应产生不同的本地座次与主公座次，且至少一局本地玩家不是主公。
+	# 随机座次样本；多个固定种子应产生不同的本地座次与领袖座次，且至少一局本地玩家不是领袖。
 	var observed_local_seats: Dictionary = {}
-	# 随机主公座次样本；键为座次 ID，用于验证主公不固定于一号位。
-	var observed_lord_seats: Dictionary = {}
-	# 是否观察到本地玩家不为主公；默认 false，样本中出现后置为 true。
-	var observed_non_lord_local_player: bool = false
+	# 随机领袖座次样本；键为座次 ID，用于验证领袖不固定于一号位。
+	var observed_leader_seats: Dictionary = {}
+	# 是否观察到本地玩家不为领袖；默认 false，样本中出现后置为 true。
+	var observed_non_leader_local_player: bool = false
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = true
 	for random_seed: int in range(20260701, 20260717):
@@ -788,22 +888,22 @@ func _run() -> void:
 			return
 		# 当前种子分配的本地座次；每局可以不同，但固定种子的结果可复现。
 		var randomized_local_seat: int = _controller.local_human_player_id
-		# 当前种子分配的主公；身份池整体洗牌后可位于任意座次。
-		var randomized_lord: PlayerState = _controller._find_player_by_identity("lord")
+		# 当前种子分配的领袖；身份池整体洗牌后可位于任意座次。
+		var randomized_leader: PlayerState = _controller._find_player_by_identity("leader")
 		observed_local_seats[randomized_local_seat] = true
-		observed_lord_seats[randomized_lord.player_id] = true
-		if randomized_lord.player_id != randomized_local_seat:
-			observed_non_lord_local_player = true
-	if observed_local_seats.size() <= 1 or observed_lord_seats.size() <= 1 or observed_lord_seats.has(0) and observed_lord_seats.size() == 1 or not observed_non_lord_local_player:
-		printerr("SMOKE_FAIL randomized_seats local=%s lord=%s non_lord_local=%s" % [observed_local_seats.keys(), observed_lord_seats.keys(), observed_non_lord_local_player])
+		observed_leader_seats[randomized_leader.player_id] = true
+		if randomized_leader.player_id != randomized_local_seat:
+			observed_non_leader_local_player = true
+	if observed_local_seats.size() <= 1 or observed_leader_seats.size() <= 1 or observed_leader_seats.has(0) and observed_leader_seats.size() == 1 or not observed_non_leader_local_player:
+		printerr("SMOKE_FAIL randomized_seats local=%s leader=%s non_leader_local=%s" % [observed_local_seats.keys(), observed_leader_seats.keys(), observed_non_leader_local_player])
 		get_tree().quit(1)
 		return
 	# 无懈可击响应状态；三号位是当前回合角色，应比一号位更早响应同一有害锦囊。
 	var negation_state: GameState = GameState.new()
 	for negation_player_id: int in range(4):
-		# 无懈响应测试玩家；目标与两名响应者同属主忠阵营。
+		# 无懈响应测试玩家；目标与两名响应者同属领忠阵营。
 		var negation_player: PlayerState = PlayerState.new(negation_player_id, "玩家%d" % (negation_player_id + 1))
-		negation_player.identity = "lord" if negation_player_id == 1 else ("rebel" if negation_player_id == 3 else "loyalist")
+		negation_player.identity = "leader" if negation_player_id == 1 else ("rebel" if negation_player_id == 3 else "loyalist")
 		negation_state.players.append(negation_player)
 	negation_state.current_player_id = 2
 	# 一号位无懈可击；若仍从数组首项询问就会被错误消耗。
@@ -846,9 +946,9 @@ func _run() -> void:
 	# 银月枪测试状态；回合外打出黑色手牌后，基础 AI 确认发动且敌方无【闪】时应受到1点伤害。
 	var silver_moon_state: GameState = GameState.new()
 	for silver_player_id: int in range(3):
-		# 银月枪测试玩家；一号位反贼持有武器，二号位主公作为优先敌方。
+		# 银月枪测试玩家；一号位反贼持有武器，二号位领袖作为优先敌方。
 		var silver_player: PlayerState = PlayerState.new(silver_player_id, "玩家%d" % (silver_player_id + 1))
-		silver_player.identity = "rebel" if silver_player_id != 1 else "lord"
+		silver_player.identity = "rebel" if silver_player_id != 1 else "leader"
 		silver_moon_state.players.append(silver_player)
 	silver_moon_state.current_player_id = 2
 	# 银月枪实体牌；位于一号位武器槽并提供3点攻击范围。
@@ -872,9 +972,9 @@ func _run() -> void:
 	# 当前回合死亡状态；二号位反贼在自己回合对自己使用【火攻】死亡，仍有另一名反贼使对局继续。
 	var current_death_state: GameState = GameState.new()
 	for death_player_id: int in range(4):
-		# 当前回合死亡测试玩家；身份依次为主公、反贼、反贼与忠臣。
+		# 当前回合死亡测试玩家；身份依次为领袖、反贼、反贼与忠臣。
 		var death_player: PlayerState = PlayerState.new(death_player_id, "玩家%d" % (death_player_id + 1))
-		death_player.identity = ["lord", "rebel", "rebel", "loyalist"][death_player_id]
+		death_player.identity = ["leader", "rebel", "rebel", "loyalist"][death_player_id]
 		current_death_state.players.append(death_player)
 	current_death_state.current_player_id = 1
 	current_death_state.current_phase = "play"
@@ -897,12 +997,12 @@ func _run() -> void:
 		printerr("SMOKE_FAIL current_player_death alive=%s current=%d phase=%s turn=%d" % [current_death_state.players[1].alive, current_death_state.current_player_id, current_death_state.current_phase, current_death_state.turn_number])
 		get_tree().quit(1)
 		return
-	# 胜负结束死亡状态；最后一名反贼亮出身份后立即满足主忠胜利条件。
+	# 胜负结束死亡状态；最后一名反贼亮出身份后立即满足领忠胜利条件。
 	var terminal_death_state: GameState = GameState.new()
-	# 终局主公；保持存活以使最后反贼死亡后判定主忠胜利。
-	var terminal_lord: PlayerState = PlayerState.new(0, "主公")
-	terminal_lord.identity = "lord"
-	terminal_death_state.players.append(terminal_lord)
+	# 终局领袖；保持存活以使最后反贼死亡后判定领忠胜利。
+	var terminal_leader: PlayerState = PlayerState.new(0, "领袖")
+	terminal_leader.identity = "leader"
+	terminal_death_state.players.append(terminal_leader)
 	# 终局反贼；携带1张手牌，用于确认胜负条件在死亡弃牌之前立即终止结算。
 	var terminal_rebel: PlayerState = PlayerState.new(1, "反贼")
 	terminal_rebel.identity = "rebel"
@@ -916,16 +1016,16 @@ func _run() -> void:
 	_controller.state = terminal_death_state
 	_controller.card_rules = CardRuleService.new(terminal_death_state)
 	_controller._resolve_death(1, 0)
-	if not terminal_death_state.game_over or terminal_death_state.winner != "lord_and_loyalists" or terminal_rebel.hand.size() != 1:
+	if not terminal_death_state.game_over or terminal_death_state.winner != "leader_and_loyalists" or terminal_rebel.hand.size() != 1:
 		printerr("SMOKE_FAIL terminal_death winner=%s hand=%d" % [terminal_death_state.winner, terminal_rebel.hand.size()])
 		get_tree().quit(1)
 		return
 	# 群体牌终局状态；首名目标死亡满足胜负条件后，必须终止后续目标与使用牌区域移动。
 	var terminal_aoe_state: GameState = GameState.new()
 	for terminal_aoe_player_id: int in range(3):
-		# 群体牌终局玩家；身份依次为主公、最后一名反贼与忠臣。
+		# 群体牌终局玩家；身份依次为领袖、最后一名反贼与忠臣。
 		var terminal_aoe_player: PlayerState = PlayerState.new(terminal_aoe_player_id, "玩家%d" % (terminal_aoe_player_id + 1))
-		terminal_aoe_player.identity = ["lord", "rebel", "loyalist"][terminal_aoe_player_id]
+		terminal_aoe_player.identity = ["leader", "rebel", "loyalist"][terminal_aoe_player_id]
 		terminal_aoe_state.players.append(terminal_aoe_player)
 	terminal_aoe_state.current_player_id = 0
 	terminal_aoe_state.current_phase = "play"
@@ -951,9 +1051,9 @@ func _run() -> void:
 	# 判定阶段死亡状态；当前角色被闪电击杀但仍有同阵营角色存活，对局应转交给其下名存活角色。
 	var judgment_death_state: GameState = GameState.new()
 	for judgment_death_player_id: int in range(4):
-		# 判定死亡测试玩家；身份依次为主公、当前反贼、另一名反贼与忠臣。
+		# 判定死亡测试玩家；身份依次为领袖、当前反贼、另一名反贼与忠臣。
 		var judgment_death_player: PlayerState = PlayerState.new(judgment_death_player_id, "玩家%d" % (judgment_death_player_id + 1))
-		judgment_death_player.identity = ["lord", "rebel", "rebel", "loyalist"][judgment_death_player_id]
+		judgment_death_player.identity = ["leader", "rebel", "rebel", "loyalist"][judgment_death_player_id]
 		judgment_death_state.players.append(judgment_death_player)
 	judgment_death_state.players[1].hp = 1
 	# 待结算闪电；进入二号位判定区，命中后造成3点无来源雷电伤害。
@@ -974,17 +1074,17 @@ func _run() -> void:
 		printerr("SMOKE_FAIL judgment_turn_transfer game_over=%s alive=%s current=%d phase=%s turn=%d" % [judgment_death_state.game_over, judgment_death_state.players[1].alive, judgment_death_state.current_player_id, judgment_death_state.current_phase, judgment_death_state.turn_number])
 		get_tree().quit(1)
 		return
-	# 纯 AI 四人局；主公座次随机，完成选将后应立即成为首回合角色且不获得小于5人局的体力加值。
+	# 纯 AI 四人局；领袖座次随机，完成选将后应立即成为首回合角色且不获得小于5人局的体力加值。
 	_controller.local_human_player_id = -1
 	if not _controller.start_match(4, 20260714):
 		printerr("SMOKE_FAIL start_match")
 		get_tree().quit(1)
 		return
-	# 四人局主公；用于同时校验随机座次首回合和小人数体力上限。
-	var four_player_lord: PlayerState = _controller._find_player_by_identity("lord")
-	# 四人局主公武将基础体力；应与实际上限完全一致。
-	var four_player_lord_base_hp: int = int(GameDatabase.get_character(four_player_lord.character_id).get("max_hp", 4))
-	if _controller.state.current_player_id != four_player_lord.player_id or _controller.state.turn_number != 1 or four_player_lord.max_hp != four_player_lord_base_hp:
+	# 四人局领袖；用于同时校验随机座次首回合和小人数体力上限。
+	var four_player_leader: PlayerState = _controller._find_player_by_identity("leader")
+	# 四人局领袖武将基础体力；应与实际上限完全一致。
+	var four_player_leader_base_hp: int = int(GameDatabase.get_character(four_player_leader.character_id).get("max_hp", 4))
+	if _controller.state.current_player_id != four_player_leader.player_id or _controller.state.turn_number != 1 or four_player_leader.max_hp != four_player_leader_base_hp:
 		printerr("SMOKE_FAIL first_turn seat=%d turn=%d" % [_controller.state.current_player_id + 1, _controller.state.turn_number])
 		get_tree().quit(1)
 		return
@@ -1000,17 +1100,17 @@ func _run() -> void:
 			printerr("SMOKE_FAIL installed_skills player=%d count=%d" % [four_player.player_id, installed_skills.size()])
 			get_tree().quit(1)
 			return
-	# 纯 AI 五人局；规则集规定从五人起主公的体力上限才增加1点。
+	# 纯 AI 五人局；规则集规定从五人起领袖的体力上限才增加1点。
 	if not _controller.start_match(5, 20260715):
 		printerr("SMOKE_FAIL five_player_start")
 		get_tree().quit(1)
 		return
-	# 五人局主公；用于校验不少于5人时的唯一体力加值。
-	var five_player_lord: PlayerState = _controller._find_player_by_identity("lord")
-	# 五人局主公武将基础体力；实际上限应比该值高1点。
-	var five_player_lord_base_hp: int = int(GameDatabase.get_character(five_player_lord.character_id).get("max_hp", 4))
-	if _controller.state.current_player_id != five_player_lord.player_id or five_player_lord.max_hp != five_player_lord_base_hp + 1:
-		printerr("SMOKE_FAIL lord_hp_bonus seat=%d hp=%d base=%d" % [five_player_lord.player_id + 1, five_player_lord.max_hp, five_player_lord_base_hp])
+	# 五人局领袖；用于校验不少于5人时的唯一体力加值。
+	var five_player_leader: PlayerState = _controller._find_player_by_identity("leader")
+	# 五人局领袖武将基础体力；实际上限应比该值高1点。
+	var five_player_leader_base_hp: int = int(GameDatabase.get_character(five_player_leader.character_id).get("max_hp", 4))
+	if _controller.state.current_player_id != five_player_leader.player_id or five_player_leader.max_hp != five_player_leader_base_hp + 1:
+		printerr("SMOKE_FAIL leader_hp_bonus seat=%d hp=%d base=%d" % [five_player_leader.player_id + 1, five_player_leader.max_hp, five_player_leader_base_hp])
 		get_tree().quit(1)
 		return
 

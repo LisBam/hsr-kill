@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "wuxie",
 		"original_name": "无懈可击",
-		"custom_name": "反制协议",
+		"custom_name": "运演否证",
 		"type": "trick",
 		"subtype": "counter",
 		"effect_id": "negate",

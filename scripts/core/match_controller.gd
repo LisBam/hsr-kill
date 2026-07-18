@@ -23,7 +23,7 @@ signal card_choice_requested(choice_data: Dictionary)
 ## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
 signal public_card_choice_display_changed(display_data: Dictionary)
 
-## 选将快照变化信号；只包含观察者可见候选、公开主公武将和全员确认状态。
+## 选将快照变化信号；只包含观察者可见候选、公开领袖武将和全员确认状态。
 signal character_selection_changed(snapshot: Dictionary)
 
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
@@ -59,7 +59,7 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
-## 特殊模式预留的首回合座次号；标准身份局不读取该值而始终由随机座次的主公开始，运行时无需修改。
+## 特殊模式预留的首回合座次号；标准身份局不读取该值而始终由随机座次的领袖开始，运行时无需修改。
 @export_range(1, 10, 1) var first_turn_seat_number: int = 1
 
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
@@ -417,12 +417,12 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	var available_character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		available_character_ids.append(str(character_id_variant))
-	# 选将初始化错误；空字符串表示主公候选已生成。
+	# 选将初始化错误；空字符串表示领袖候选已生成。
 	var selection_error: String = character_selection.begin(state.players, available_character_ids, character_candidate_count, _rng)
 	if not selection_error.is_empty():
 		action_rejected.emit(selection_error)
 		return false
-	add_log("选将开始：主公先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
+	add_log("选将开始：领袖先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
@@ -445,11 +445,11 @@ func select_character(player_id: int, character_id: String) -> bool:
 		return _reject(selection_error)
 	state.action_sequence += 1
 	state.random_history.append({"kind":"character_selection", "player_id":player_id, "character_id":character_id, "candidates":character_selection.get_candidates(player_id)})
-	if player_id == character_selection.lord_player_id:
-		# 主公选择立即写入并公开，其他玩家候选只会在此之后生成。
-		var lord: PlayerState = state.get_player(player_id)
-		_apply_character(lord, character_id, true)
-		add_log("主公%s亮出武将【%s】。" % [lord.display_name, GameDatabase.resolve_character_name(character_id)])
+	if player_id == character_selection.leader_player_id:
+		# 领袖选择立即写入并公开，其他玩家候选只会在此之后生成。
+		var leader: PlayerState = state.get_player(player_id)
+		_apply_character(leader, character_id, true)
+		add_log("领袖%s亮出武将【%s】。" % [leader.display_name, GameDatabase.resolve_character_name(character_id)])
 		add_log("其他玩家开始同时选将，每人随机展示%d张候选武将牌。" % character_selection.candidate_count)
 	if character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
 		_finish_character_selection()
@@ -2943,7 +2943,7 @@ func discard_n_from_hand_equipment(player_id: int, count: int) -> void:
 			return
 
 
-## 弃置目标全部装备；水淹七军、死亡与主公惩罚可复用此操作。
+## 弃置目标全部装备；水淹七军、死亡与领袖惩罚可复用此操作。
 func discard_all_equipment(target_id: int, trigger_loss_effects: bool = true) -> void:
 	# 目标状态；复制键数组以允许循环中安全删除装备。
 	var target: PlayerState = state.get_player(target_id)
@@ -3348,7 +3348,7 @@ func _uninstall_all_card_runtimes() -> void:
 
 ## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
 func _create_players(player_count: int) -> void:
-	# 身份配置副本；包含主公在内全部洗牌，使主公与本地玩家都不与任何固定座次绑定。
+	# 身份配置副本；包含领袖在内全部洗牌，使领袖与本地玩家都不与任何固定座次绑定。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
 	_shuffle_array(identities)
 	for index: int in range(player_count):
@@ -3357,9 +3357,9 @@ func _create_players(player_count: int) -> void:
 		var default_player_name: String = "玩家%d" % (index + 1) if index == local_human_player_id else "[AI]玩家%d" % (index + 1)
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
 		var player: PlayerState = PlayerState.new(index, default_player_name)
-		# 当前座次身份；直接读取已完整洗牌的身份池，主公可以出现在任意座次。
+		# 当前座次身份；直接读取已完整洗牌的身份池，领袖可以出现在任意座次。
 		player.identity = identities[index]
-		player.identity_revealed = player.identity == "lord"
+		player.identity_revealed = player.identity == "leader"
 		player.character_id = ""
 		player.character_revealed = false
 		state.players.append(player)
@@ -3374,11 +3374,11 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 		return
 	player.character_id = character_id
 	player.character_revealed = reveal_character
-	# 已选武将配置；基础体力上限取 max_hp，仅不少于5人的身份局主公额外增加1点上限与当前体力。
+	# 已选武将配置；基础体力上限取 max_hp，仅不少于5人的身份局领袖额外增加1点上限与当前体力。
 	var character: Dictionary = GameDatabase.get_character(character_id)
-	# 主公体力加值；规则集3.0规定参与玩家不少于5人时才增加1点。
-	var lord_hp_bonus: int = 1 if player.identity == "lord" and state.players.size() >= 5 else 0
-	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + lord_hp_bonus
+	# 领袖体力加值；规则集3.0规定参与玩家不少于5人时才增加1点。
+	var leader_hp_bonus: int = 1 if player.identity == "leader" and state.players.size() >= 5 else 0
+	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + leader_hp_bonus
 	player.hp = player.max_hp
 	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
 	player.shield = 0
@@ -3531,10 +3531,10 @@ func _uninstall_all_character_skills() -> void:
 	skill_instances_by_player.clear()
 
 
-## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由主公开始首回合。
+## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由领袖开始首回合。
 func _finish_character_selection() -> void:
 	for player: PlayerState in state.players:
-		if player.player_id != character_selection.lord_player_id:
+		if player.player_id != character_selection.leader_player_id:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
 	_install_all_character_skills()
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
@@ -3561,13 +3561,13 @@ func _finish_character_selection() -> void:
 		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size()}
 		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
 		_emit_rule_timing("gameDrawAfter", -1, -1, -1, game_draw_result_data)
-	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.lord_player_id})
-	# 身份确认后重新旋转物理座次；主公固定为一号位，后续数组顺序就是顺时针座次。
-	_reorder_players_from_lord()
-	# 首回合玩家状态；主公固定为一号位且不受本地玩家稳定 ID 影响。
-	var first_turn_player: PlayerState = _find_player_by_identity("lord")
+	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
+	# 身份确认后重新旋转物理座次；领袖固定为一号位，后续数组顺序就是顺时针座次。
+	_reorder_players_from_leader()
+	# 首回合玩家状态；领袖固定为一号位且不受本地玩家稳定 ID 影响。
+	var first_turn_player: PlayerState = _find_player_by_identity("leader")
 	if first_turn_player == null:
-		push_error("标准身份局缺少主公，无法开始首回合。")
+		push_error("标准身份局缺少领袖，无法开始首回合。")
 		return
 	add_log("所有玩家完成选将并同时亮出武将。")
 	if should_deal_starting_cards:
@@ -3577,19 +3577,19 @@ func _finish_character_selection() -> void:
 	_start_turn(first_turn_player.player_id)
 
 
-## 以主公为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
-func _reorder_players_from_lord() -> void:
-	# 主公在当前随机身份数组中的索引；身份分配完成前不调用此函数。
-	var lord_index: int = -1
+## 以领袖为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
+func _reorder_players_from_leader() -> void:
+	# 领袖在当前随机身份数组中的索引；身份分配完成前不调用此函数。
+	var leader_index: int = -1
 	for index: int in range(state.players.size()):
-		if state.players[index].identity == "lord":
-			lord_index = index
+		if state.players[index].identity == "leader":
+			leader_index = index
 			break
-	if lord_index > 0:
-		# 旋转后的座次数组；主公为一号位，其原下家按顺时针依次成为后续座次。
+	if leader_index > 0:
+		# 旋转后的座次数组；领袖为一号位，其原下家按顺时针依次成为后续座次。
 		var reordered_players: Array[PlayerState] = []
 		for offset: int in range(state.players.size()):
-			reordered_players.append(state.players[(lord_index + offset) % state.players.size()])
+			reordered_players.append(state.players[(leader_index + offset) % state.players.size()])
 		state.players = reordered_players
 	# 玩家显示编号属于当前对局座次，不属于稳定 player_id；旋转完成后统一刷新，日志与牌面名称保持一致。
 	for seat_index: int in range(state.players.size()):
@@ -3606,7 +3606,7 @@ func _drive_ai_character_selection() -> void:
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
 		# 当前轮是否提交了至少一项 AI 选择；没有进展表示正在等待人类或网络玩家。
 		var made_progress: bool = false
-		# 当前待确认玩家副本；每轮结束后重新获取，安全覆盖主公到其他玩家的阶段切换。
+		# 当前待确认玩家副本；每轮结束后重新获取，安全覆盖领袖到其他玩家的阶段切换。
 		var pending_player_ids: Array[int] = character_selection.get_pending_player_ids()
 		for player_id: int in pending_player_ids:
 			if not ai_coordinator.is_ai_controlled(player_id):
@@ -5250,11 +5250,11 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	var reward: String = identity_rules.get_death_reward(killer, victim)
 	if reward == "draw_three" and killer != null and killer.alive:
 		draw(killer.player_id, 3)
-	elif reward == "lord_penalty" and killer != null and killer.alive:
+	elif reward == "leader_penalty" and killer != null and killer.alive:
 		while not killer.hand.is_empty():
 			_move_to_discard(killer.hand.pop_back())
 		discard_all_equipment(killer.player_id, true)
-		add_log("主公杀死忠臣，弃置全部手牌和装备。")
+		add_log("领袖杀死忠臣，弃置全部手牌和装备。")
 	_check_game_over()
 	_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":state.game_over}, {}, death_event_id)
 	_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
@@ -5757,7 +5757,7 @@ func _reject(message: String) -> bool:
 	return false
 
 
-## 查找指定身份玩家；标准身份局中主公查询只会返回一人。
+## 查找指定身份玩家；标准身份局中领袖查询只会返回一人。
 func _find_player_by_identity(identity: String) -> PlayerState:
 	for player: PlayerState in state.players:
 		if player.identity == identity:
@@ -5875,7 +5875,7 @@ func _identity_attitude(from_identity: String, to_identity: String) -> int:
 		return -1
 	if from_identity == to_identity:
 		return 1
-	if from_identity in ["lord", "loyalist"] and to_identity in ["lord", "loyalist"]:
+	if from_identity in ["leader", "loyalist"] and to_identity in ["leader", "loyalist"]:
 		return 1
 	return -1
 
@@ -5900,9 +5900,9 @@ func _nature_text(nature: String) -> String:
 
 ## 将身份 ID 转换为界面与日志文本。
 func _identity_text(identity: String) -> String:
-	return {"lord":"主公", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸"}.get(identity, identity)
+	return {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸"}.get(identity, identity)
 
 
 ## 将获胜方 ID 转换为界面与日志文本。
 func _winner_text(winner: String) -> String:
-	return {"lord_and_loyalists":"主公与忠臣", "rebels":"反贼", "renegade":"内奸"}.get(winner, winner)
+	return {"leader_and_loyalists":"领袖与忠臣", "rebels":"反贼", "renegade":"内奸"}.get(winner, winner)

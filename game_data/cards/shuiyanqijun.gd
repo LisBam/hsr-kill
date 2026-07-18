@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "shuiyanqijun",
 		"original_name": "水淹七军",
-		"custom_name": "洪潮压境",
+		"custom_name": "水淹七军",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "flood",
