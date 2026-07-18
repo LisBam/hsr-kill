@@ -710,6 +710,9 @@ func _run() -> void:
 	animation_layer.card_hold_duration = 0.01
 	animation_layer.target_line_draw_duration = 0.01
 	animation_layer.target_line_fade_duration = 0.01
+	animation_layer.draw_flight_duration = 0.01
+	animation_layer.draw_hold_duration = 0.01
+	animation_layer.draw_fade_duration = 0.01
 	# 六号位武将牌；这是 Node2D 根节点，用于验证目标指示不再错误转换为 Control。
 	var first_target_view: PlayerTargetView = player_views.get(5) as PlayerTargetView
 	# 六号位期望动画局部中心；通过动画层完整逆变换从武将牌全局中心换算。
