@@ -292,7 +292,7 @@ func _test_simultaneous_wuxie_first_response_wins() -> bool:
 	if not await _wait_until_card_finalized(trick_card.uid):
 		return _fail("simultaneous_wuxie_finalize")
 	if _controller.state.get_player(1).find_hand_card(protected_card.uid) != null or not _controller.state.discard_pile.has(earlier_counter) or not _controller.state.discard_pile.has(winning_counter) or not _controller.state.discard_pile.has(protected_card) or not _controller.state.discard_pile.has(trick_card):
-		return _fail("simultaneous_wuxie_result")
+		return _fail("simultaneous_wuxie_result protected_in_hand=%s earlier=%s winning=%s protected=%s trick=%s discard_uids=%s" % [_controller.state.get_player(1).find_hand_card(protected_card.uid) != null, earlier_counter.to_dict(), winning_counter.to_dict(), protected_card.to_dict(), trick_card.to_dict(), _card_uids(_controller.state.discard_pile)])
 	return true
 
 
@@ -951,6 +951,15 @@ func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: i
 	card.owner_id = player_id
 	_controller.state.get_player(player_id).hand.append(card)
 	return card
+
+
+## 返回实体牌数组中的稳定 UID；失败信息使用该快照定位牌区所有权错误，不依赖对象默认字符串格式。
+func _card_uids(cards: Array[CardInstance]) -> Array[int]:
+	# UID 快照；保持权威牌区顺序，便于判断移动是否漏记或重复追加。
+	var result: Array[int] = []
+	for card: CardInstance in cards:
+		result.append(card.uid)
+	return result
 
 
 ## 捕获统一选牌请求并在下一空闲帧提交对应标准动作，模拟玩家查看窗口后作出决定。

@@ -412,7 +412,7 @@ func _run() -> void:
 		"leader_player_id":1,
 		"leader_character_id":"bronya",
 		"local_player_id":0,
-		"local_candidates":["trailblazer", "dan_heng", "march_7th", "himeko", "welt"],
+		"local_candidates":["trailblazer", "dan_heng", "march_7th", "himeko", "natasha"],
 		"can_select":true,
 		"readiness":[],
 	})

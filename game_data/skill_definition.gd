@@ -173,6 +173,18 @@ func continue_extra_phase(_context: Dictionary) -> bool:
 	return false
 
 
+## 恢复因嵌套触发选择而暂停的技能后续结算；上下文只允许基础可序列化值，返回true表示已识别该步骤。
+func continue_settlement(_context: Dictionary) -> bool:
+	return false
+
+
+## 将本技能的一段后续效果登记到控制器结算队列；当前嵌套选择全部结束后会回调continue_settlement。
+func defer_settlement(context: Dictionary) -> bool:
+	if host == null or not host.has_method("defer_skill_settlement"):
+		return false
+	return bool(host.call("defer_skill_settlement", owner_player_id, get_id(), context))
+
+
 ## 向基础 AI 的出牌阶段合法动作列表追加技能动作；动作必须使用 action_type=use_skill 并携带稳定 skill_id。
 func append_play_phase_actions(_result: Array[Dictionary]) -> void:
 	pass

@@ -169,9 +169,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；现有武将共登记十七个独立技能源码定义，其中包含两项领袖技。
+	# 技能元数据数量；当前十名正式武将共登记二十个独立技能源码定义，其中包含两项领袖技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 17:
+	if skill_definition_count != 20:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -1146,9 +1146,18 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	for four_player: PlayerState in _controller.state.players:
-		# 当前玩家应安装的技能数量；样例武将均直接引用1个独立技能文件。
+		# 当前玩家实际安装的技能；数量必须等于武将技能列表剔除不满足身份的领袖技后的结果。
 		var installed_skills: Dictionary = _controller.skill_instances_by_player.get(four_player.player_id, {}) as Dictionary
-		if installed_skills.size() != 1:
+		# 当前玩家武将定义；运行时安装器以该技能列表为唯一来源。
+		var installed_character: Dictionary = GameDatabase.get_character(four_player.character_id)
+		# 当前玩家期望技能数量；非领袖身份不会安装领袖技，但普通技能必须全部存在。
+		var expected_installed_skill_count: int = 0
+		for installed_skill_id_variant: Variant in installed_character.get("skills", []) as Array:
+			# 当前技能元数据；用于读取稳定的领袖技身份约束。
+			var installed_skill_definition: Dictionary = GameDatabase.get_skill(str(installed_skill_id_variant))
+			if not bool(installed_skill_definition.get("leader_skill", false)) or four_player.identity == "leader":
+				expected_installed_skill_count += 1
+		if installed_skills.size() != expected_installed_skill_count:
 			printerr("SMOKE_FAIL installed_skills player=%d count=%d" % [four_player.player_id, installed_skills.size()])
 			get_tree().quit(1)
 			return
