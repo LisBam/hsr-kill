@@ -143,7 +143,8 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
 		# 当前技能静态实例；占位技能保持基类空实现，不影响评分。
 		var skill: SkillDefinition = GameDatabase.create_skill(str(skill_id_variant))
-		if skill != null:
+		# 领袖技只在使用者身份确为领袖时参与牌效联动估值；非领袖不会借用武将静态列表中的领袖能力。
+		if skill != null and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
 			skill.bind(null, player_id)
 			score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
 	return score

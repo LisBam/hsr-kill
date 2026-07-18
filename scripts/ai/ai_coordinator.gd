@@ -62,7 +62,8 @@ func request_choice(player_id: int, authoritative_snapshot: Dictionary, request:
 		response.card_ids.append(int(card_uid_variant))
 	for target_id_variant: Variant in payload.get("selected_target_ids", []) as Array:
 		response.target_ids.append(int(target_id_variant))
-	response.confirmed = bool(payload.get("confirmed", not response.card_ids.is_empty() or not response.target_ids.is_empty() or request.min_count > 0))
+	response.control_id = str(payload.get("selected_control_id", ""))
+	response.confirmed = bool(payload.get("confirmed", not response.card_ids.is_empty() or not response.target_ids.is_empty() or not response.control_id.is_empty() or request.min_count > 0))
 	response.client_sequence = int(action_data.get("client_sequence", 0))
 	response.source = "ai"
 	return response

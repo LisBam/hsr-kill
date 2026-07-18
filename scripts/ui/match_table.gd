@@ -233,6 +233,9 @@ var _player_seat_slots: Dictionary = {}
 ## 最近一次已经渲染技能栏的本地武将 ID；空字符串表示尚未绑定或当前仍处于选将阶段。
 var _rendered_skill_character_id: String = ""
 
+## 最近一次已经渲染技能栏的本地身份；与武将 ID 共同决定领袖技是否需要创建按钮。
+var _rendered_skill_identity: String = ""
+
 ## 当前已选卡牌的只读规则预览；由 MatchController 查询接口生成，不包含权威对象引用。
 var _card_use_preview: Dictionary = {}
 
@@ -313,6 +316,7 @@ func _ready() -> void:
 	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
 	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
+	card_selection_panel.control_submitted.connect(_on_control_choice_submitted)
 	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
@@ -804,7 +808,9 @@ func _layout_opponent_players() -> void:
 func _render_local_skills(local_player: Dictionary) -> void:
 	# 当前本地武将 ID；技能元数据只随武将变化，体力、手牌和回合刷新不需要重建技能按钮。
 	var local_character_id: String = str(local_player.get("character_id", ""))
-	if _rendered_skill_character_id == local_character_id:
+	# 当前本地身份；本人快照始终可见真实身份，领袖技只在该值为 leader 时进入技能栏。
+	var local_identity: String = str(local_player.get("identity", ""))
+	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity:
 		for skill_id_variant: Variant in _skill_views.keys():
 			# 当前已存在按钮的技能 ID；相同武将只刷新动态可发动状态，不重建节点。
 			var skill_id: String = str(skill_id_variant)
@@ -816,13 +822,14 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		_layout_local_skill_area(_skill_views.size())
 		return
 	_rendered_skill_character_id = local_character_id
+	_rendered_skill_identity = local_identity
 	_clear_container(skill_button_container)
 	_skill_views.clear()
 	skill_status_label.text = ""
 	# 本地武将定义；技能列表只保存稳定技能 ID。
 	var character: Dictionary = _get_cached_character_definition(local_character_id)
 	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
-	var skill_ids: Array = character.get("skills", []) as Array
+	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity)
 	if skill_ids.is_empty():
 		_layout_local_skill_area(0)
 		return
@@ -842,6 +849,20 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		skill_button_container.add_child(skill_button)
 		_skill_views[skill_id] = skill_button
 	_layout_local_skill_area(skill_ids.size())
+
+
+## 返回指定身份实际拥有并可显示的武将技能；领袖技元数据只允许 leader 身份通过，其余技能保持武将定义顺序。
+func _get_visible_skill_ids(character: Dictionary, identity: String) -> Array[String]:
+	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
+	var result: Array[String] = []
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前技能 ID 与元数据；缺失定义仍保留占位按钮，便于发现普通技能配置错误。
+		var skill_id: String = str(skill_id_variant)
+		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		if bool(skill_definition.get("leader_skill", false)) and identity != "leader":
+			continue
+		result.append(skill_id)
+	return result
 
 
 ## 按技能数量收紧透明技能区，并让手牌栏右边界延伸到第一或第二个技能按钮旁。
@@ -1601,7 +1622,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) -> void:
 	# 统一选择动作；payload 只含请求序号与稳定实体牌 UID，可直接进入网络和回放。
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate()}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "confirmed":true}
 	if match_controller.submit_action(action):
 		if _modal_choice_request_id == request_id:
 			_modal_choice_request_id = -1
@@ -1611,7 +1632,24 @@ func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) 
 
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
 func _on_card_choice_cancelled(request_id: int) -> void:
-	_on_card_choice_submitted(request_id, [])
+	# 明确取消响应；confirmed=false 与空卡牌数组共同表达放弃，不会被强制选择的最小数量误推断为确认。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_control_id":"", "confirmed":false}
+	if match_controller.submit_action(action) and _modal_choice_request_id == request_id:
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_refresh_card_selection_panel()
+
+
+## 把文字选项按钮提交转换为标准选择动作；具体费用与后续效果只由创建请求的技能恢复逻辑解释。
+func _on_control_choice_submitted(request_id: int, control_id: String) -> void:
+	# 统一文字选择动作；不携带牌或目标，避免选项协议与其他选择维度产生歧义。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":control_id, "confirmed":true}
+	if match_controller.submit_action(action) and _modal_choice_request_id == request_id:
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_refresh_card_selection_panel()
 
 
 ## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
@@ -1678,6 +1716,9 @@ func _enrich_public_card_choice_display(display_data: Dictionary) -> Dictionary:
 
 ## 判断选择请求是否能完全在本地手牌区或装备区完成；空候选的可取消响应也使用内联取消按钮。
 func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
+	# 文字控制项需要显示独立选项按钮，空候选不能误判为可在手牌区完成。
+	if str(choice_data.get("choice_type", "card")) in ["control", "bool"]:
+		return false
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))
 	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:

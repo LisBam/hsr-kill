@@ -15,12 +15,17 @@ var host: Object
 ## 当前技能是否为锁定技；true 表示效果满足条件时强制执行且不创建发动选择，默认 false 表示非锁定技。
 var lock: bool = false
 
+## 当前技能是否为领袖技；true 表示只有身份为 leader 的角色实际拥有并显示该技能，默认 false 表示不限制身份。
+var leader_skill: bool = false
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
 	_metadata = metadata.duplicate(true)
 	lock = bool(_metadata.get("lock", false))
 	_metadata["lock"] = lock
+	leader_skill = bool(_metadata.get("leader_skill", false))
+	_metadata["leader_skill"] = leader_skill
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -162,11 +167,32 @@ func get_activation_preview(_context: Dictionary = {}) -> Dictionary:
 
 ## 为技能持有者创建统一选牌请求；候选必须是可序列化牌面快照，恢复上下文会自动绑定技能 ID 与持有者。
 func request_card_selection(title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary = {}) -> Array[int]:
+	return request_card_selection_for_player(owner_player_id, title, prompt, candidates, min_select, max_select, allow_cancel, context)
+
+
+## 为指定角色创建统一选牌请求；适用于技能持有者令事件来源角色弃牌、重铸或支付其自身手牌费用。
+func request_card_selection_for_player(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary = {}) -> Array[int]:
 	if host == null or not host.has_method("request_card_choice"):
 		return []
 	# 技能恢复上下文；稳定技能 ID 与持有者 ID 由基类统一写入，具体技能只保存自身步骤参数。
 	var skill_context: Dictionary = _build_selection_context(context)
-	return host.call("request_card_choice", owner_player_id, title, prompt, candidates, min_select, max_select, allow_cancel, skill_context) as Array[int]
+	skill_context["choice_chooser_id"] = chooser_id
+	return host.call("request_card_choice", chooser_id, title, prompt, candidates, min_select, max_select, allow_cancel, skill_context) as Array[int]
+
+
+## 为技能持有者创建单项文字选项请求；每个选项使用稳定 id 与玩家可见 label，取消表示不发动本次可选效果。
+func request_control_selection(title: String, prompt: String, options: Array[Dictionary], allow_cancel: bool, context: Dictionary = {}) -> String:
+	return request_control_selection_for_player(owner_player_id, title, prompt, options, allow_cancel, context)
+
+
+## 为指定角色创建单项文字选项请求；响应通过 ChoiceResponse.control_id 恢复，不借用取消或空选牌表达第二选项。
+func request_control_selection_for_player(chooser_id: int, title: String, prompt: String, options: Array[Dictionary], allow_cancel: bool, context: Dictionary = {}) -> String:
+	if host == null or not host.has_method("request_control_choice"):
+		return ""
+	# 技能恢复上下文；跨角色选择仍绑定真实技能持有者，防止响应被选择者的同名技能实例误消费。
+	var skill_context: Dictionary = _build_selection_context(context)
+	skill_context["choice_chooser_id"] = chooser_id
+	return str(host.call("request_control_choice", chooser_id, title, prompt, options, allow_cancel, skill_context))
 
 
 ## 为技能持有者创建统一选目标请求；目标 ID 只来自权威规则查询，UI、AI 与网络提交同一种 ChoiceResponse。

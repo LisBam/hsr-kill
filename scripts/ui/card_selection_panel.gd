@@ -9,6 +9,9 @@ signal choice_submitted(request_id: int, selected_card_uids: Array[int])
 ## 用户在允许放弃的请求中取消选择时发出；桌面会转换为空 UID 的 choose_cards 动作。
 signal choice_cancelled(request_id: int)
 
+## 用户选择文字控制项时发出请求序号与稳定选项 ID；组件不解释该选项对应的技能效果。
+signal control_submitted(request_id: int, control_id: String)
+
 ## 正式卡牌视图场景；正面候选和牌背候选都复用同一111×148像素组件。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -96,6 +99,9 @@ var _section_labels: Array[Label] = []
 ## 当前公共牌领取者标签；主题切换时同步文字与背景描边，固定牌位和归属数据保持不变。
 var _owner_labels: Array[Label] = []
 
+## 当前文字选项按钮集合；只用于主题刷新，请求切换或关闭时随动态内容一并清空。
+var _control_option_buttons: Array[Button] = []
+
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
@@ -171,6 +177,9 @@ func refresh_ui_style() -> void:
 	for owner_label: Label in _owner_labels:
 		if owner_label != null and is_instance_valid(owner_label):
 			_apply_owner_label_style(owner_label)
+	for option_button: Button in _control_option_buttons:
+		if option_button != null and is_instance_valid(option_button):
+			BattleUIStyle.apply_interaction_button(option_button)
 	for card_view_variant: Variant in _card_views.values():
 		# 当前候选牌面；只刷新主题色，不改变是否可选或复制虚影状态。
 		var card_view: CardView = card_view_variant as CardView
@@ -187,10 +196,20 @@ func show_request(choice_request: Dictionary) -> void:
 	_selectable_card_uids.clear()
 	_section_labels.clear()
 	_owner_labels.clear()
+	_control_option_buttons.clear()
 	_clear_container(_zone_container)
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
 	_prompt_label.text = str(_choice_request.get("prompt", "请选择卡牌"))
+	# 文字控制项请求；每个选项直接以独立按钮提交，底部确定按钮不重复制造二次确认。
+	if str(_choice_request.get("choice_type", "card")) in ["control", "bool"]:
+		_add_control_options(_choice_request.get("control_options", []) as Array)
+		_confirm_button.visible = false
+		_cancel_button.visible = bool(_choice_request.get("allow_cancel", false))
+		_action_row.visible = _cancel_button.visible
+		visible = true
+		return
+	_confirm_button.visible = true
 	# 按区域聚合候选；字典数组保持请求原始顺序，手牌牌背仍可逐张选择。
 	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[]}
 	for candidate_variant: Variant in _choice_request.get("candidates", []):
@@ -220,6 +239,7 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_selectable_card_uids.clear()
 	_section_labels.clear()
 	_owner_labels.clear()
+	_control_option_buttons.clear()
 	_clear_container(_zone_container)
 	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
 	var display_slot_count: int = (_public_display.get("slots", []) as Array).size()
@@ -246,6 +266,7 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	# 是否存在本地交互请求；旁观其他角色选择时只保留公共牌位，不显示确定或取消按钮。
 	var has_interactive_request: bool = int(_choice_request.get("request_id", -1)) >= 0
 	_action_row.visible = has_interactive_request
+	_confirm_button.visible = true
 	_cancel_button.visible = has_interactive_request and (bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0)
 	_refresh_selection_state()
 	visible = true
@@ -259,7 +280,9 @@ func close() -> void:
 	_selected_card_uids.clear()
 	_card_views.clear()
 	_selectable_card_uids.clear()
+	_control_option_buttons.clear()
 	_clear_container(_zone_container)
+	_confirm_button.visible = true
 
 
 ## 为一个非空区域创建标题与横向牌列；空区域不占用布局空间。
@@ -285,6 +308,32 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	for candidate_variant: Variant in candidates:
 		var candidate: Dictionary = candidate_variant as Dictionary
 		_add_card_slot(card_row, candidate, _selectable_card_uids.has(int(candidate.get("uid", -1))), false, "")
+
+
+## 创建文字控制项按钮列；选项标签由规则请求提供，稳定 ID 只随按钮信号返回而不显示技术字段。
+func _add_control_options(options: Array) -> void:
+	# 选项按钮列；固定宽度与间距避免不同文本长度改变窗口或相邻按钮位置。
+	var option_column: VBoxContainer = VBoxContainer.new()
+	option_column.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	option_column.add_theme_constant_override("separation", 10)
+	_zone_container.add_child(option_column)
+	for option_variant: Variant in options:
+		# 当前文字选项；缺失稳定 ID 或标签的异常数据不生成不可提交按钮。
+		var option: Dictionary = option_variant as Dictionary
+		var option_id: String = str(option.get("id", ""))
+		var option_label: String = str(option.get("label", ""))
+		if option_id.is_empty() or option_label.is_empty():
+			continue
+		# 当前选项按钮；固定280×44像素，长文本按控件宽度截断并保留完整工具提示。
+		var option_button: Button = Button.new()
+		option_button.text = option_label
+		option_button.tooltip_text = option_label
+		option_button.custom_minimum_size = Vector2(280.0, 44.0)
+		option_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		BattleUIStyle.apply_interaction_button(option_button)
+		option_button.pressed.connect(_on_control_option_pressed.bind(option_id))
+		option_column.add_child(option_button)
+		_control_option_buttons.append(option_button)
 
 
 ## 为公共选牌展示创建固定牌位；已领取牌继续显示复制虚影，并在牌底标明领取者武将名。
@@ -398,6 +447,11 @@ func _refresh_selection_state() -> void:
 ## 发出当前选择结果；实际 UID 和请求序号仍会由 MatchController 权威校验。
 func _on_confirm_pressed() -> void:
 	choice_submitted.emit(int(_choice_request.get("request_id", -1)), _selected_card_uids.duplicate())
+
+
+## 提交一个文字控制项；请求 ID 与稳定选项 ID 会继续经过 MatchController 和 ChoiceRequest 双重校验。
+func _on_control_option_pressed(control_id: String) -> void:
+	control_submitted.emit(int(_choice_request.get("request_id", -1)), control_id)
 
 
 ## 发出空选择作为明确放弃；组件不自行关闭，以提交成功后的状态为准。

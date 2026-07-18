@@ -47,6 +47,8 @@ func _ready() -> void:
 		return
 	if not _test_skill_confirmation():
 		return
+	if not _test_leader_skill_confirmation():
+		return
 	if not _test_active_skill_payload():
 		return
 	if not _test_low_value_discard():
@@ -438,6 +440,39 @@ func _test_skill_confirmation() -> bool:
 	var enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_request, [pass_action, confirm_action])
 	if bool((enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("junshi_enemy=%s" % [enemy_choice])
+	return true
+
+
+## 验证两项领袖技的 AI 会选择帮助可感知友方，并拒绝为敌方支付费用或提供重铸机会。
+func _test_leader_skill_confirmation() -> bool:
+	# 全身份公开快照；把领袖武将设为布洛妮娅，并让忠臣2成为另一名贝洛伯格角色。
+	var snapshot: Dictionary = _build_snapshot(true)
+	(snapshot.get("players", []) as Array)[0]["character_id"] = "bronya"
+	(snapshot.get("players", []) as Array)[2]["character_id"] = "xier"
+	# 文字选项请求动作；取消、弃牌和失去体力分别使用独立控制项 ID。
+	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":4, "selected_control_id":"", "confirmed":false}}
+	var discard_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":4, "selected_control_id":"discard_hand", "confirmed":true}}
+	var lose_hp_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":4, "selected_control_id":"lose_hp", "confirmed":true}}
+	# 振旗友方费用请求；弃牌费用低于失去体力，且另一名贝洛伯格忠臣形成正收益。
+	var zhenqi_request: Dictionary = {"choice_type":"control", "allow_cancel":true, "min_select":1, "max_select":1, "min_card_select":0, "max_card_select":0, "control_options":[{"id":"discard_hand", "label":"弃牌"}, {"id":"lose_hp", "label":"失去体力"}], "context":{"kind":"zhenqi_cost_option", "skill_id":"zhenqi", "skill_owner_id":0, "turn_player_id":0}}
+	var zhenqi_friend_choice: Dictionary = _policy.choose_card_choice(snapshot, zhenqi_request, [pass_action, discard_action, lose_hp_action])
+	if str((zhenqi_friend_choice.get("payload", {}) as Dictionary).get("selected_control_id", "")) != "discard_hand":
+		return _fail("zhenqi_friend=%s" % [zhenqi_friend_choice])
+	# 移除另一名贝洛伯格角色；没有正收益受益者时应取消，而不是无条件支付任一费用。
+	(snapshot.get("players", []) as Array)[2]["character_id"] = "himeko"
+	var zhenqi_no_friend_choice: Dictionary = _policy.choose_card_choice(snapshot, zhenqi_request, [pass_action, discard_action, lose_hp_action])
+	if bool((zhenqi_no_friend_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("zhenqi_no_friend=%s" % [zhenqi_no_friend_choice])
+	# 领航零材料确认请求；对忠臣来源角色确认，对反贼来源角色取消。
+	var confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":5, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
+	var linghang_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"linghang_confirm", "skill_id":"linghang", "skill_owner_id":0, "source_player_id":2, "ai_allow_confirm":true}}
+	var linghang_friend_choice: Dictionary = _policy.choose_card_choice(snapshot, linghang_request, [pass_action, confirm_action])
+	if not bool((linghang_friend_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("linghang_friend=%s" % [linghang_friend_choice])
+	(linghang_request.get("context", {}) as Dictionary)["source_player_id"] = 1
+	var linghang_enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, linghang_request, [pass_action, confirm_action])
+	if bool((linghang_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("linghang_enemy=%s" % [linghang_enemy_choice])
 	return true
 
 
