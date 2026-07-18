@@ -126,6 +126,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 右上角局内菜单组件；统一管理牌名切换、重新开局与下一局人数设置。
 @onready var match_menu: MatchMenu = %MatchMenu
 
+## 启动主菜单组件；负责在对局创建前选择身份模式、调整设置并发出统一开局请求。
+@onready var main_menu: MainMenu = %MainMenu
+
 ## 选将遮罩组件；只渲染裁剪后的候选快照并发出稳定武将 ID 选择请求。
 @onready var character_selection_panel: CharacterSelectionPanel = %CharacterSelectionPanel
 
@@ -365,8 +368,10 @@ func _ready() -> void:
 	match_controller.ai_coordinator.identity_mark_changed.connect(_on_automatic_identity_mark_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
+	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_menu.set_next_player_count(match_controller.default_player_count)
+	main_menu.set_next_player_count(match_controller.default_player_count)
 	character_selection_panel.character_selected.connect(_on_character_selected)
 	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))
 	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
@@ -386,7 +391,6 @@ func _ready() -> void:
 	local_player_card.information_dismissed.connect(_on_information_dismissed.bind(local_player_card))
 	match_menu.refresh_card_name_text()
 	_apply_ui_style()
-	call_deferred("_start_default_match")
 
 
 ## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
@@ -578,10 +582,10 @@ func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String)
 		player_view.set_identity_mark(_resolve_display_identity_mark(player_id))
 
 
-## 启动检查器配置的默认对局；延迟到首帧保证自动加载数据已完成。
-func _start_default_match() -> void:
-	log_view.clear()
-	match_controller.start_match()
+## 接收主菜单的身份局开局请求；主菜单关闭后才清理旧表现并创建新的权威对局状态。
+func _on_main_menu_start_requested(player_count: int) -> void:
+	match_menu.set_next_player_count(player_count)
+	_on_restart_requested(player_count)
 
 
 ## 创建牌桌唯一的统一信息框组件；组件只消费视图请求，不直接访问控制器、网络模式或规则状态。
@@ -1631,6 +1635,7 @@ func _apply_ui_style() -> void:
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	match_menu.refresh_ui_style()
+	main_menu.refresh_ui_style()
 	BattleUIStyle.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	($LogPanel/LogContentPanel/LogVBox/LogTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
