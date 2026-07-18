@@ -401,6 +401,11 @@ func get_event_history() -> Array[Dictionary]:
 	return _event_history.duplicate(true)
 
 
+## 返回当前事件历史条目数；状态广播用它做常量时间一致性检查，避免反复深拷贝完整回放记录。
+func get_event_history_count() -> int:
+	return _event_history.size()
+
+
 ## 返回最新一条事件历史深拷贝；状态层可增量同步，避免每个触发时机重复复制完整日志。
 func get_latest_history_record() -> Dictionary:
 	return {} if _event_history.is_empty() else (_event_history.back() as Dictionary).duplicate(true)

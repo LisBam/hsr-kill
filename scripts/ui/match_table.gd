@@ -37,8 +37,7 @@ const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
 ## 当前最终间隔进一步收紧为6像素，仍由独立手牌边界保留8像素安全区，技能按钮不会覆盖手牌信息。
 const LOCAL_SKILL_RIGHT_OFFSET: float = -170.35
 
-## 技能区相对主场景底边的固定下边界；与本地武将牌牌面底边对齐，不占用座次标签区域。
-## 主视角不再显示座次标签，因此技能区与武将牌共同直接贴合客户区底边。
+## 技能区相对本地武将牌底边的附加偏移；默认0表示两者底边平行，实际客户区偏移还会减去武将牌底部留白。
 const LOCAL_SKILL_BOTTOM_OFFSET: float = 0.0
 
 ## 手牌区与最左侧技能按钮之间的水平间距；默认8像素保持两个交互区域相邻但不重叠。
@@ -177,6 +176,18 @@ var local_player_seat_label: Label
 
 ## 最近一次本地可见状态快照；界面刷新与选择校验均以此为准。
 var _snapshot: Dictionary = {}
+
+## 当前快照按稳定玩家 ID 建立的只读索引；每次状态广播重建一次，避免同一帧多处线性扫描玩家数组。
+var _player_snapshots_by_id: Dictionary = {}
+
+## 已读取的卡牌静态定义缓存；值只供界面读取，任何调用方都不得修改返回字典。
+var _card_definition_cache: Dictionary = {}
+
+## 已读取的武将静态定义缓存；值只供界面读取，避免每次状态刷新重复深拷贝同一配置。
+var _character_definition_cache: Dictionary = {}
+
+## 已读取的势力静态定义缓存；值只供界面读取，主题切换不会改变配置本身。
+var _faction_definition_cache: Dictionary = {}
 
 ## 最近一次快照中每名玩家的公开体力；键为稳定玩家 ID，用于检测本次快照是否发生真实体力下降。
 var _player_hp_by_id: Dictionary = {}
@@ -513,7 +524,13 @@ func _create_local_player_card() -> void:
 func _on_state_changed(snapshot: Dictionary) -> void:
 	# 本次体力下降玩家 ID；必须在覆盖旧快照前完成对账，渲染新体力后再播放反馈。
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
-	_snapshot = snapshot.duplicate(true)
+	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
+	_snapshot = snapshot
+	_player_snapshots_by_id.clear()
+	for player_variant: Variant in _snapshot.get("players", []) as Array:
+		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
+		var indexed_player: Dictionary = player_variant as Dictionary
+		_player_snapshots_by_id[int(indexed_player.get("player_id", -1))] = indexed_player
 	_sync_match_clock()
 	if _snapshot.has("processing_card_uids"):
 		# 当前公开处理区实体 UID；动画层据此收尾因丢包或中断而未收到最终移牌通知的中央牌面。
@@ -708,9 +725,9 @@ func _render_players() -> void:
 		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
 		# 当前武将定义；角色组件只读取可选插画路径，不持有全局配置引用。
-		var character_definition: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
+		var character_definition: Dictionary = _get_cached_character_definition(str(player.get("character_id", "")))
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
-		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
+		var faction_definition: Dictionary = _get_cached_faction_definition(str(character_definition.get("faction", "")))
 		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_button.set_operation_state(target_id == _current_operator_player_id or _simultaneous_operator_player_ids.has(target_id))
 		# 当前公开身份；身份已经展示时清理旧本地标注，未知身份继续显示当前客户端的推测结果。
@@ -724,9 +741,9 @@ func _render_players() -> void:
 	_player_views = next_player_views
 	_layout_opponent_players()
 	# 本地武将定义；统一武将牌从相同静态数据读取名称、插画和势力 ID。
-	var local_character_definition: Dictionary = GameDatabase.get_character(str(local_player_snapshot.get("character_id", "")))
+	var local_character_definition: Dictionary = _get_cached_character_definition(str(local_player_snapshot.get("character_id", "")))
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
-	var local_faction_definition: Dictionary = GameDatabase.get_faction(str(local_character_definition.get("faction", "")))
+	var local_faction_definition: Dictionary = _get_cached_faction_definition(str(local_character_definition.get("faction", "")))
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
@@ -772,7 +789,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	_skill_views.clear()
 	skill_status_label.text = ""
 	# 本地武将定义；技能列表只保存稳定技能 ID。
-	var character: Dictionary = GameDatabase.get_character(local_character_id)
+	var character: Dictionary = _get_cached_character_definition(local_character_id)
 	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
 	var skill_ids: Array = character.get("skills", []) as Array
 	if skill_ids.is_empty():
@@ -827,27 +844,21 @@ func _layout_local_skill_area(skill_count: int) -> void:
 	skill_bar.visible = true
 	skill_bar.offset_right = LOCAL_SKILL_RIGHT_OFFSET
 	skill_bar.offset_left = LOCAL_SKILL_RIGHT_OFFSET - skill_area_size.x
-	skill_bar.offset_bottom = LOCAL_SKILL_BOTTOM_OFFSET
-	skill_bar.offset_top = LOCAL_SKILL_BOTTOM_OFFSET - skill_area_size.y
+	# 技能区底边；动态读取本地武将牌留白，检查器调整牌面高度时仍保持两条底边平行。
+	var skill_bottom_offset: float = -local_player_card_bottom_margin + LOCAL_SKILL_BOTTOM_OFFSET
+	skill_bar.offset_bottom = skill_bottom_offset
+	skill_bar.offset_top = skill_bottom_offset - skill_area_size.y
 	# 手牌栏右边界紧贴当前最左技能列；一个技能时自然增长到第一按钮旁，两个及以上缩短到第二按钮旁。
 	hand_panel.offset_right = skill_bar.offset_left - HAND_SKILL_GAP
 	skill_grid.queue_sort()
 
 
-## 响应技能按钮请求；预留技能展示永久说明，可主动发动的技能通过统一 PlayerAction 进入规则核心。
+## 响应技能按钮请求；不可发动技能静默忽略，可主动发动技能通过统一 PlayerAction 进入规则核心。
 func _on_skill_requested(skill_id: String) -> void:
 	# 被请求的技能定义；用于展示名称、说明和接入状态。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-	# 技能显示名称；元数据缺失时回退到稳定 ID。
-	var skill_name: String = str(skill_definition.get("name", skill_id))
-	# 技能说明；预留按钮点击后始终向玩家解释当前行为。
-	var skill_description: String = str(skill_definition.get("description", "技能元数据尚未登记。"))
-	skill_status_label.text = "【%s】%s" % [skill_name, skill_description]
-	if str(skill_definition.get("trigger", "sample_only")) == "sample_only":
-		error_label.text = "【%s】技能界面已预留，规则效果尚未接入。" % skill_name
-		return
-	if not bool(skill_definition.get("ui_enabled", false)):
-		error_label.text = "【%s】不是可由按钮主动发动的技能。" % skill_name
+	# 不可主动发动、条件不满足或锁定技按钮保持静默；说明只由工具提示承担，不写入错误提示区。
+	if not bool(skill_definition.get("ui_enabled", false)) or not match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id):
 		return
 	# 主动技能动作；技能文件自行校验阶段、次数、目标与资源，界面不直接修改任何规则状态。
 	var action: PlayerAction = PlayerAction.new("use_skill", match_controller.local_human_player_id)
@@ -911,7 +922,7 @@ func _render_local_hand() -> void:
 		# 当前实体 UID；用于查找并复用已有正式牌面节点。
 		var card_uid: int = int(card.get("uid", -1))
 		# 当前牌面定义；用于双名称、类别和插画刷新。
-		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
+		var definition: Dictionary = _get_cached_card_definition(str(card.get("definition_id", "")))
 		# 当前牌是否来自木牛流马；只改变来源标记，不改变实体 UID 或节点身份。
 		var wooden_ox_card: bool = bool(entry.get("wooden_ox_card", false))
 		# 当前手牌是否允许交互；响应与普通出牌均以权威请求候选为准，不能只按阶段整体启用。
@@ -965,7 +976,7 @@ func _format_local_equipment(player: Dictionary) -> String:
 	if equipment.has("treasure"):
 		# 当前宝物实体快照；木牛流马需要在装备名后直接显示公开存牌数量。
 		var treasure_card: Dictionary = equipment.get("treasure", {}) as Dictionary
-		var treasure_definition: Dictionary = GameDatabase.get_card(str(treasure_card.get("definition_id", "")))
+		var treasure_definition: Dictionary = _get_cached_card_definition(str(treasure_card.get("definition_id", "")))
 		if bool(treasure_definition.get("shows_attachment_count", false)):
 			# 装备公开附属牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
 			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
@@ -1000,7 +1011,7 @@ func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 		return "无"
 	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
 	var card: Dictionary = equipment.get(slot, {}) as Dictionary
-	return GameSettings.resolve_card_name(GameDatabase.get_card(str(card.get("definition_id", ""))))
+	return GameSettings.resolve_card_name(_get_cached_card_definition(str(card.get("definition_id", ""))))
 
 
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
@@ -1058,7 +1069,7 @@ func _on_equipment_pressed(card_uid: int) -> void:
 	# 被点击装备快照；交互类别由卡牌定义元数据声明，界面不识别具体装备 ID。
 	var equipment_card: Dictionary = _get_local_equipment_snapshot(card_uid)
 	# 当前装备定义；play_phase_interaction 为空表示没有点击发动流程。
-	var definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+	var definition: Dictionary = _get_cached_card_definition(str(equipment_card.get("definition_id", "")))
 	var interaction_type: String = str(definition.get("play_phase_interaction", ""))
 	if not interaction_type.is_empty():
 		_activate_equipment_action(interaction_type, card_uid)
@@ -1124,7 +1135,7 @@ func _is_inline_material_equipment_response_candidate(card_uid: int) -> bool:
 		var candidate: Dictionary = candidate_variant as Dictionary
 		var candidate_card: Dictionary = candidate.get("card_data", {}) as Dictionary
 		if int(candidate.get("uid", -1)) == card_uid and str(candidate.get("zone", "")) == "equipment":
-			var definition: Dictionary = GameDatabase.get_card(str(candidate_card.get("definition_id", "")))
+			var definition: Dictionary = _get_cached_card_definition(str(candidate_card.get("definition_id", "")))
 			return int(definition.get("response_material_count", 0)) > 0
 	return false
 
@@ -1132,7 +1143,7 @@ func _is_inline_material_equipment_response_candidate(card_uid: int) -> bool:
 ## 返回当前主动装备的静态定义；没有活动装备时返回空字典。
 func _get_active_equipment_definition() -> Dictionary:
 	var equipment_card: Dictionary = _get_local_equipment_snapshot(_active_equipment_uid)
-	return GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+	return _get_cached_card_definition(str(equipment_card.get("definition_id", "")))
 
 
 ## 按实体 UID 返回本地装备快照；找不到时返回空字典，调用方不能据此假定装备仍可发动。
@@ -1280,7 +1291,7 @@ func _on_use_pressed() -> void:
 		return
 	# 无目标铁索连环；确定按钮直接提交重铸并摸1张牌，不再依赖独立“重铸”按钮。
 	var selected_card: Dictionary = _get_selected_card_snapshot()
-	var selected_definition: Dictionary = GameDatabase.get_card(str(selected_card.get("definition_id", "")))
+	var selected_definition: Dictionary = _get_cached_card_definition(str(selected_card.get("definition_id", "")))
 	if _selected_target_ids.is_empty() and bool(selected_definition.get("recast", false)) and _can_recast_selected_card():
 		match_controller.submit_action(PlayerAction.new("recast_card", match_controller.local_human_player_id, _selected_card_uid))
 		return
@@ -1693,7 +1704,7 @@ func _get_play_phase_equipment_candidate_uids() -> Array[int]:
 		# 当前装备快照；卡牌定义声明主动交互类型时才进入出牌阶段点击入口。
 		var equipment_card: Dictionary = equipment_variant as Dictionary
 		var equipment_uid: int = int(equipment_card.get("uid", -1))
-		var equipment_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
+		var equipment_definition: Dictionary = _get_cached_card_definition(str(equipment_card.get("definition_id", "")))
 		if runtime_card_uids.has(equipment_uid) and not str(equipment_definition.get("play_phase_interaction", "")).is_empty():
 			result.append(equipment_uid)
 	return result
@@ -1805,7 +1816,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	for target_id_variant: Variant in presentation_data.get("target_ids", []) as Array:
 		target_ids.append(int(target_id_variant))
 	# 卡牌定义；用于配置正式卡牌视图，不参与效果判断。
-	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
+	var definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
 	# 动画起点；公共判定牌使用中央锚点，玩家来源必须存在真实武将牌或本地手牌锚点，不能回退到中央伪造来源。
 	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if actor_id >= 0:
@@ -1905,7 +1916,7 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	if show_card_back:
 		animated_card.configure_back(card_uid, false)
 	else:
-		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
+		var definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
 		animated_card.configure(card_data, definition, false, false)
 	card_use_animation_layer.add_child(animated_card)
 	if target_zone == "discard_pile":
@@ -2083,7 +2094,7 @@ func _refresh_selection_text() -> void:
 	# 已选卡牌快照；用于展示名称而不是暴露技术 UID。
 	var selected_card: Dictionary = _get_selected_card_snapshot()
 	# 已选卡牌定义；用于统一名称模式与说明文本。
-	var selected_definition: Dictionary = GameDatabase.get_card(str(selected_card.get("definition_id", "")))
+	var selected_definition: Dictionary = _get_cached_card_definition(str(selected_card.get("definition_id", "")))
 	# 已选卡牌显示名；找不到定义时回退到实体 UID，便于诊断异常数据。
 	var selected_card_name: String = GameSettings.resolve_card_name(selected_definition) if not selected_definition.is_empty() else "卡牌 %d" % _selected_card_uid
 	selection_label.text = "%s｜目标：%s｜%s" % [
@@ -2184,7 +2195,7 @@ func _is_group_trick_negation_choice(choice_data: Dictionary) -> bool:
 	if str(context.get("kind", "")) != "trick_negation":
 		return false
 	# 当前被响应锦囊定义；全体或全体其他角色目标模式视为群体锦囊。
-	var trick_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
+	var trick_definition: Dictionary = _get_cached_card_definition(str(context.get("trick_id", "")))
 	return str(trick_definition.get("target_mode", "")) in ["all_players", "all_others"] and int(context.get("parent_card_uid", -1)) >= 0
 
 
@@ -2304,17 +2315,41 @@ func _get_selected_card_snapshot() -> Dictionary:
 
 ## 判断当前是否为本地玩家的有效出牌阶段；所有交互控件共用该条件。
 func _can_local_player_act() -> bool:
-	return int(_snapshot.get("current_player_id", -1)) == match_controller.local_human_player_id and str(_snapshot.get("current_phase", "")) == "play" and not bool(_snapshot.get("game_over", false))
+	# 当前运行时选择；阶段间隔内仍保留上一阶段名称，但活动 chooseToUse 已关闭，此时任何出牌控件都必须禁用。
+	var current_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
+	return int(_snapshot.get("current_player_id", -1)) == match_controller.local_human_player_id and str(_snapshot.get("current_phase", "")) == "play" and not bool(_snapshot.get("game_over", false)) and str(current_choice.get("choice_type", "")) == "use" and int(current_choice.get("actor_id", -1)) == match_controller.local_human_player_id
 
 
-## 按玩家 ID 返回当前快照中的玩家字典。
+## 按玩家 ID 返回当前快照中的只读玩家字典；调用方不得修改返回值或其嵌套数组。
 func _get_player_snapshot(player_id: int) -> Dictionary:
-	for player_variant: Variant in _snapshot.get("players", []):
-		# 当前玩家快照；ID 匹配时返回其深拷贝以避免界面误改原快照。
-		var player: Dictionary = player_variant as Dictionary
-		if int(player.get("player_id", -1)) == player_id:
-			return player.duplicate(true)
-	return {}
+	return _player_snapshots_by_id.get(player_id, {}) as Dictionary
+
+
+## 返回缓存的卡牌静态定义；配置只在 GameDatabase 初始化时加载，界面运行期间不得修改返回字典。
+func _get_cached_card_definition(definition_id: String) -> Dictionary:
+	if definition_id.is_empty():
+		return {}
+	if not _card_definition_cache.has(definition_id):
+		_card_definition_cache[definition_id] = GameDatabase.get_card(definition_id)
+	return _card_definition_cache.get(definition_id, {}) as Dictionary
+
+
+## 返回缓存的武将静态定义；缓存消除每个状态快照为全桌角色重复创建配置副本的开销。
+func _get_cached_character_definition(character_id: String) -> Dictionary:
+	if character_id.is_empty():
+		return {}
+	if not _character_definition_cache.has(character_id):
+		_character_definition_cache[character_id] = GameDatabase.get_character(character_id)
+	return _character_definition_cache.get(character_id, {}) as Dictionary
+
+
+## 返回缓存的势力静态定义；空势力 ID 返回空字典并由牌面组件使用稳定默认表现。
+func _get_cached_faction_definition(faction_id: String) -> Dictionary:
+	if faction_id.is_empty():
+		return {}
+	if not _faction_definition_cache.has(faction_id):
+		_faction_definition_cache[faction_id] = GameDatabase.get_faction(faction_id)
+	return _faction_definition_cache.get(faction_id, {}) as Dictionary
 
 
 ## 返回卡牌交互文本使用的武将名；武将信息尚未公开时才使用调用方提供的玩家名占位。

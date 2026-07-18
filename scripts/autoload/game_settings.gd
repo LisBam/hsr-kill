@@ -10,6 +10,9 @@ signal ui_style_changed(style_id: String)
 ## AI 响应等待时长变化信号；对局控制器订阅后同步下一次 AI 行动与选牌响应的等待时间。
 signal ai_response_delay_changed(delay_seconds: float)
 
+## 游戏流程间隔变化信号；对局控制器订阅后同步后续阶段切换与自动响应的最小等待时间。
+signal game_speed_changed(interval_seconds: float)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -25,11 +28,23 @@ const MAX_AI_RESPONSE_DELAY_SECONDS: float = 1.0
 ## AI 响应等待时间的调节步长；默认0.05秒，兼顾可感知变化与菜单滑条的调节精度。
 const AI_RESPONSE_DELAY_STEP_SECONDS: float = 0.05
 
+## 游戏流程间隔的最小值；默认0.1秒，保证连续阶段与响应之间保留可观察的画面更新边界。
+const MIN_GAME_SPEED_INTERVAL_SECONDS: float = 0.1
+
+## 游戏流程间隔的最大值；默认1秒，允许观察结算过程且避免自动流程等待过久。
+const MAX_GAME_SPEED_INTERVAL_SECONDS: float = 1.0
+
+## 游戏流程间隔的调节步长；默认0.1秒，与菜单滑条显示精度保持一致。
+const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.1
+
 ## 当前卡牌名称模式；默认使用原版三国杀牌名，可在运行时安全切换为《崩铁杀》自定义牌名。
 var card_name_mode: NameMode = NameMode.ORIGINAL
 
 ## 当前 AI 每次行动或选择响应前的等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
 var ai_response_delay_seconds: float = 0.30
+
+## 当前相邻阶段与自动响应之间的最小等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
+var game_speed_interval_seconds: float = 0.30
 
 ## 当前 UI 风格标识；默认使用黑白太空风格，运行时可在局内设置中即时切换且不修改对局规则。
 var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
@@ -59,6 +74,16 @@ func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 		return
 	ai_response_delay_seconds = clamped_delay_seconds
 	ai_response_delay_changed.emit(ai_response_delay_seconds)
+
+
+## 设置相邻阶段和自动响应之间的最小等待时间；范围外输入按菜单允许值限制并对齐到固定步长。
+func set_game_speed_interval_seconds(interval_seconds: float) -> void:
+	# 限制后的流程间隔；统一按滑条步长取整，保证标签显示值与实际调度值一致。
+	var clamped_interval_seconds: float = snappedf(clampf(interval_seconds, MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS), GAME_SPEED_INTERVAL_STEP_SECONDS)
+	if is_equal_approx(game_speed_interval_seconds, clamped_interval_seconds):
+		return
+	game_speed_interval_seconds = clamped_interval_seconds
+	game_speed_changed.emit(game_speed_interval_seconds)
 
 
 ## 设置全局 UI 风格；未知标识自动回退默认风格，并通知已连接的界面组件即时重绘。

@@ -174,6 +174,8 @@ func _create_controller() -> void:
 	add_child(_controller)
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
+	# 本测试逐项验证规则结算顺序，关闭阶段间表现等待以让每项场景在固定帧数内完成。
+	_controller.game_flow_interval_seconds = 0.0
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
 	_controller.card_presentation_requested.connect(_on_card_presentation_requested)
 	_controller.card_transfer_requested.connect(_on_card_transfer_requested)

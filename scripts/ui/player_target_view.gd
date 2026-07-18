@@ -222,8 +222,8 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 
 ## 写入公开角色快照并刷新十周年牌面覆盖层；调用方传入的是裁剪后的 Dictionary 副本。
 func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary = {}, current_actor: bool = false, faction_definition: Dictionary = {}) -> void:
-	# 本次完整配置签名；名称模式影响装备与悬停文本，因此必须参与缓存失效判断。
-	var next_configuration_signature: int = hash([snapshot, character_definition, current_actor, faction_definition, GameSettings.card_name_mode, GameSettings.ui_style_id])
+	# 本次视觉配置签名；排除用牌、响应和技能历史等非视觉字段，避免每次动作都重建体力点与装备节点。
+	var next_configuration_signature: int = hash([_get_visual_snapshot_data(snapshot), character_definition, current_actor, faction_definition, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -240,6 +240,28 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
+
+
+## 提取武将牌真正消费的公开字段；返回值只用于哈希，不会作为新的状态副本长期保存。
+func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
+	# 视觉字段数组；固定顺序保证相同画面得到稳定签名，嵌套装备与判定区仍按内容参与变更检测。
+	var visual_data: Array = [
+		snapshot.get("player_id", -1),
+		snapshot.get("display_name", ""),
+		snapshot.get("character_id", ""),
+		snapshot.get("identity", "hidden"),
+		snapshot.get("hp", 0),
+		snapshot.get("max_hp", 0),
+		snapshot.get("shield", 0),
+		snapshot.get("alive", false),
+		snapshot.get("chained", false),
+		snapshot.get("face_down", false),
+		snapshot.get("hand_count", 0),
+		snapshot.get("equipment", {}),
+		snapshot.get("judgment_area", []),
+		snapshot.get("wooden_ox_storage_count", 0),
+	]
+	return visual_data
 
 
 ## 设置身份与手牌数标识是否进入正式对局显示；选将面板不调用此接口，因此保持场景默认隐藏。
@@ -462,6 +484,19 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	name_banner_style.content_margin_right = 1.0
 	name_banner_style.content_margin_bottom = 1.0
 	_character_name_label.add_theme_stylebox_override("normal", name_banner_style)
+	# 身份徽记背景色；从活动主题面板色取得后强制完全不透明，旧场景中的半透明资源不能覆盖运行时规范。
+	var identity_badge_background: Color = BattleUIStyle.get_color("panel")
+	identity_badge_background.a = 1.0
+	# 身份徽记边框色；与活动主题边框保持一致并强制Alpha为1，确保所有身份始终清晰可读。
+	var identity_badge_border: Color = BattleUIStyle.get_color("border")
+	identity_badge_border.a = 1.0
+	# 身份徽记样式；紧凑尺寸不保留内容边距，主题切换和快照刷新都会重新应用同一不透明契约。
+	var identity_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(identity_badge_background, identity_badge_border, 1, 3)
+	identity_badge_style.content_margin_left = 0.0
+	identity_badge_style.content_margin_top = 0.0
+	identity_badge_style.content_margin_right = 0.0
+	identity_badge_style.content_margin_bottom = 0.0
+	_identity_badge_label.add_theme_stylebox_override("normal", identity_badge_style)
 	# 手牌数角标样式；朱红底与金边对应参考图左下角的高对比数字徽记。
 	var hand_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("hand_badge_background"), BattleUIStyle.get_color("hand_badge_border"), 1, 3)
 	hand_badge_style.content_margin_left = 0.0
