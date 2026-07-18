@@ -42,6 +42,7 @@ signal character_selection_changed(snapshot: Dictionary)
 @export var default_deck_id: String = "standard_162"
 
 ## 默认玩家人数；支持2至10，直接运行演示场景时创建8人局，运行时可在新开局前修改。
+## 当前正式主场景会先显示主菜单，默认8人只在玩家确认开始或局内重新开局时用于创建身份局。
 @export_range(2, 10, 1) var default_player_count: int = 8
 
 ## 人类本地玩家当前座次；默认0作为随机分配前的有效占位值，设为 -1 可运行纯 AI 自动对局。
@@ -356,15 +357,25 @@ func _resume_ai_after_gameplay_pause() -> void:
 		_schedule_ai_action()
 
 
+## 返回标准身份局开局请求的前置校验错误；空字符串表示可以安全进入会替换旧局的初始化阶段。
+func get_match_start_validation_error(player_count: int = -1) -> String:
+	# 实际玩家人数；未指定时使用检查器默认值，并限制在支持范围内。
+	var actual_player_count: int = default_player_count if player_count < 0 else player_count
+	if actual_player_count < 2 or actual_player_count > 10:
+		return "标准身份局仅支持2至10名玩家。"
+	if not GameDatabase.validation_errors.is_empty():
+		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
+	return ""
+
+
 ## 创建并开始一局标准身份局；seed 为0时使用系统随机种子。
 func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	# 实际玩家人数；未指定时使用检查器默认值，并限制在支持范围内。
 	var actual_player_count: int = default_player_count if player_count < 0 else player_count
-	if actual_player_count < 2 or actual_player_count > 10:
-		action_rejected.emit("标准身份局仅支持2至10名玩家。")
-		return false
-	if not GameDatabase.validation_errors.is_empty():
-		action_rejected.emit("数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors))
+	# 开局前置校验错误；任何错误都在破坏旧对局状态和表现之前同步拒绝，调用方可以安全保留原局。
+	var validation_error: String = get_match_start_validation_error(actual_player_count)
+	if not validation_error.is_empty():
+		action_rejected.emit(validation_error)
 		return false
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
@@ -451,12 +462,42 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	# 选将初始化错误；空字符串表示领袖候选已生成。
 	var selection_error: String = character_selection.begin(state.players, available_character_ids, character_candidate_count, _rng)
 	if not selection_error.is_empty():
+		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
 		return false
 	add_log("选将开始：领袖先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
+
+
+## 丢弃已进入初始化阶段但未能建立选将流程的半成品对局；失败后控制器恢复与首次进入主菜单相同的空状态。
+func _discard_failed_match_start() -> void:
+	if game_flow_pacer != null:
+		game_flow_pacer.cancel_all()
+	_uninstall_all_character_skills()
+	_uninstall_all_card_runtimes()
+	if event_scheduler != null:
+		event_scheduler.reset()
+	ai_coordinator._policies.clear()
+	skill_instances_by_player.clear()
+	card_runtime_instances.clear()
+	character_selection = null
+	card_rules = null
+	effect_resolver = null
+	card_movement = null
+	modifier_pipeline = null
+	rule_query = null
+	trigger_manager = null
+	timing_service = null
+	_runtime_root_event_id = -1
+	_current_turn_event_id = -1
+	_gameplay_event_pause_token = -1
+	_ai_drive_token += 1
+	_scheduled_ai_drive_token = -1
+	_scheduled_ai_choice_request_id = -1
+	_is_driving_character_selection = false
+	state = null
 
 
 ## 为本局分配有效的本地人类座次；随机模式使用对局随机源，固定模式把检查器配置限制到实际人数范围。
