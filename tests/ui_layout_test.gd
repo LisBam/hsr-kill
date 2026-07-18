@@ -269,10 +269,11 @@ func _run() -> void:
 		_fail("local_equipment_information_shown_too_early:%s" % (information_box.get_hover_title_text() if information_box != null else "missing"))
 		return
 	await _wait_for_hover_information_delay()
-	# 目标旁信息面板；固定340像素宽并始终限制在当前客户区内。
+	# 目标旁信息面板；按内容在240至520像素宽度内动态调整，并优先保持4:3比例且始终限制在当前客户区内。
 	var hover_information_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
-	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("木牛流马（3）") or not is_equal_approx(hover_information_panel.size.x, 340.0) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
-		_fail("local_equipment_information:%s" % (information_box.get_hover_title_text() if information_box != null else "missing"))
+	var hover_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hover_information_panel.size.y, 1.0)
+	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("木牛流马（3）") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hover_information_aspect_ratio, information_box.hover_panel_aspect_ratio) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
+		_fail("local_equipment_information:%s/%s" % [information_box.get_hover_title_text() if information_box != null else "missing", hover_information_panel.size if hover_information_panel != null else Vector2.ZERO])
 		return
 	local_treasure_row.mouse_exited.emit()
 	await get_tree().process_frame
@@ -427,9 +428,17 @@ func _run() -> void:
 	var character_details_title: Label = information_box.get_character_title_label()
 	# 单技能详情条目；短内容必须位于滚动视口中部，不能继续贴住右侧区域顶边。
 	var single_skill_entry: Control = information_box.get_character_skill_list().get_child(0) as Control
+	# 详情左侧武将牌区域；区域高度改变时正式牌面必须按自身缩放后尺寸持续上下居中。
+	var character_card_area: Control = character_details_panel.find_child("CharacterCardArea", true, false) as Control
+	# 详情左侧正式武将牌；只读复用的牌面位置由 InformationBoxLayer 在区域尺寸变化时重新居中。
+	var detail_character_card: PlayerTargetView = information_box.get("_character_card_view") as PlayerTargetView
+	# 单技能详情牌面缩放后的尺寸；与区域实际尺寸共同计算期望的上下居中位置。
+	var detail_character_card_size: Vector2 = detail_character_card.card_size * information_box.character_card_scale if detail_character_card != null else Vector2.ZERO
+	# 单技能详情牌面期望位置；公式与运行时组件一致，便于验证高度变动后的纵向居中不依赖固定偏移。
+	var expected_detail_character_position: Vector2 = (character_card_area.size - detail_character_card_size) * 0.5 if character_card_area != null else Vector2.ZERO
 	# 单技能详情当前自动计算出的紧凑高度；多技能详情必须在后续断言中随内容增加而扩展。
 	var single_skill_details_height: float = character_details_panel.size.y
-	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not is_equal_approx(character_details_panel.size.x, 760.0) or character_details_panel.size.y >= 440.0 or character_details_panel.size.y < information_box.character_panel_minimum_height or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
+	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not is_equal_approx(character_details_panel.size.x, 760.0) or character_details_panel.size.y >= 440.0 or character_details_panel.size.y < information_box.character_panel_minimum_height or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or character_card_area == null or detail_character_card == null or not detail_character_card.position.is_equal_approx(expected_detail_character_position) or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
 		_fail("character_details_open:%s/%s/%d/%s size=%s min=%s center=%s/%s title=%s/%s scale=%s separators=%d entry_y=%s scrollbar=%s/%s selected=%d pause=%s/%s token=%d" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused, character_details_panel.size, information_box.character_panel_minimum_height, character_details_panel.get_global_rect().get_center(), main_instance.get_global_rect().get_center(), character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x, information_box.get_character_card_scale(), information_box.get_character_skill_separator_count(), single_skill_entry.position.y, information_box.get_character_skill_scroll_bar(), information_box.get_character_skill_scroll_bar().custom_minimum_size.x if information_box.get_character_skill_scroll_bar() != null else -1.0, int(main_instance.get("_selected_card_uid")), bool(main_instance.get("_owns_character_details_pause")), int(main_instance.get("_character_details_pause_token")) >= 0, int(main_instance.get("_character_details_pause_token"))])
 		return
 	# 多技能武将定义；布洛妮娅拥有3个静态技能，应在相邻技能之间创建正好2条主题横线。
@@ -442,7 +451,11 @@ func _run() -> void:
 	information_box.show_character_details(bronya_snapshot, bronya_definition, GameDatabase.get_faction(str(bronya_definition.get("faction", ""))))
 	await get_tree().process_frame
 	await get_tree().process_frame
-	if information_box.get_character_skill_entry_count() != 3 or information_box.get_character_skill_separator_count() != 2 or character_details_panel.size.y <= single_skill_details_height or character_details_panel.size.y > information_box.character_panel_size.y:
+	# 多技能详情最新牌面；面板增加高度后仍必须在左侧可用区域上下居中。
+	detail_character_card = information_box.get("_character_card_view") as PlayerTargetView
+	detail_character_card_size = detail_character_card.card_size * information_box.character_card_scale if detail_character_card != null else Vector2.ZERO
+	expected_detail_character_position = (character_card_area.size - detail_character_card_size) * 0.5 if character_card_area != null else Vector2.ZERO
+	if information_box.get_character_skill_entry_count() != 3 or information_box.get_character_skill_separator_count() != 2 or character_details_panel.size.y <= single_skill_details_height or character_details_panel.size.y > information_box.character_panel_size.y or character_card_area == null or character_card_area.size.y <= detail_character_card_size.y or detail_character_card == null or not detail_character_card.position.is_equal_approx(expected_detail_character_position):
 		_fail("character_details_separators:%d/%d/%s" % [information_box.get_character_skill_entry_count(), information_box.get_character_skill_separator_count(), character_details_panel.size.y])
 		return
 	await _click_control(information_box.get_character_close_button())
@@ -761,10 +774,11 @@ func _run() -> void:
 		_fail("hand_card_information_shown_too_early:%s" % information_box.get_hover_title_text())
 		return
 	await _wait_for_hover_information_delay()
-	# 首次手牌说明的面板高度；【桃】说明在340像素固定宽度下应只占紧凑正文高度，不能因自动换行初始宽度错误而被撑成大量空白。
+	# 首次手牌说明的面板比例；【桃】说明应在动态宽度下保持4:3，不能因自动换行初始宽度错误而被撑成大量空白。
 	var hand_information_panel_height: float = hover_information_panel.size.y
-	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃") or hand_information_panel_height > 160.0:
-		_fail("hand_card_information:%s/%s" % [information_box.get_hover_title_text(), hand_information_panel_height])
+	var hand_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hand_information_panel_height, 1.0)
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hand_information_aspect_ratio, information_box.hover_panel_aspect_ratio):
+		_fail("hand_card_information:%s/%s" % [information_box.get_hover_title_text(), hover_information_panel.size])
 		return
 	gained_hand_card.call("_on_mouse_exited")
 	await get_tree().process_frame

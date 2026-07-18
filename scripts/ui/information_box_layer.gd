@@ -6,8 +6,17 @@ extends Control
 ## 居中武将详情显示状态变化信号；牌桌据此在离线模式申请或释放独立暂停令牌。
 signal character_details_visibility_changed(visible: bool)
 
-## 目标旁信息框固定宽度；默认340像素可完整容纳常见卡牌和技能说明，运行时通常无需动态修改。
+## 目标旁信息框的内容测量基准宽度；默认340像素用于估算文字换行后的所需高度，最终宽度会按4:3目标比例自动收缩或扩展，运行时通常无需动态修改。
 @export_range(240.0, 520.0, 1.0) var hover_panel_width: float = 340.0
+
+## 目标旁信息框的最小宽度；默认240像素让短说明保持紧凑，同时给标题、副标题和正文保留可读换行宽度，运行时通常无需动态修改。
+@export_range(160.0, 420.0, 1.0) var hover_panel_minimum_width: float = 240.0
+
+## 目标旁信息框的最大宽度；默认520像素限制长技能说明横向扩张，超出时优先增加高度以保留完整文字，运行时通常无需动态修改。
+@export_range(280.0, 720.0, 1.0) var hover_panel_maximum_width: float = 520.0
+
+## 目标旁信息框优先保持的宽高比例；默认4:3使短中等长度说明呈稳定长方形，正文超过比例高度时以完整显示内容为优先，运行时通常无需动态修改。
+@export_range(1.0, 3.0, 0.01) var hover_panel_aspect_ratio: float = 4.0 / 3.0
 
 ## 目标旁信息框与悬停目标之间的间距；默认10像素避免浮层遮挡当前目标，运行时通常无需动态修改。
 @export_range(4.0, 32.0, 1.0) var hover_target_gap: float = 10.0
@@ -318,6 +327,7 @@ func _show_pending_hover_information() -> void:
 	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
 	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
 	_hover_panel.visible = true
+	_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
 	_hover_panel.size = Vector2(hover_panel_width, 0.0)
 	_hover_panel.reset_size()
 	# 首次自动换行必须等待一个完整界面布局帧；此时 Label 已取得固定面板宽度，再测量高度不会把每个字符误当作独立行。
@@ -342,6 +352,7 @@ func _build_hover_panel() -> void:
 	# 悬浮信息纵向内容；固定顺序为标题、副标题和完整说明。
 	var hover_content: VBoxContainer = VBoxContainer.new()
 	hover_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hover_content.alignment = BoxContainer.ALIGNMENT_BEGIN
 	hover_content.add_theme_constant_override("separation", 5)
 	_hover_panel.add_child(hover_content)
 	_hover_title_label = Label.new()
@@ -429,7 +440,10 @@ func _build_character_panel() -> void:
 	_character_card_area.name = "CharacterCardArea"
 	# 左侧区域高度稍后按缩放后的正式武将牌计算；不能继续使用固定440像素主体高度，否则短技能详情会留下大量空白。
 	_character_card_area.custom_minimum_size = Vector2(character_card_area_width, 0.0)
+	# 左侧牌面区域随右侧技能区或详情窗口高度填充；_center_character_card 会据此把缩放后的武将牌始终放在可用区域正中。
+	_character_card_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_character_card_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_character_card_area.resized.connect(_center_character_card)
 	character_body.add_child(_character_card_area)
 	_character_skill_scroll = ScrollContainer.new()
 	_character_skill_scroll.name = "SkillScroll"
@@ -451,15 +465,24 @@ func _build_character_panel() -> void:
 func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
 	if source_id != _hover_source_id or not _hover_panel.visible:
 		return
-	_hover_panel.custom_minimum_size.x = hover_panel_width
-	_hover_panel.size.x = hover_panel_width
-	# 首次写入自动换行文本时，Label 可能在当前帧仍按零宽度计算最小高度；延迟到布局完成后重新按固定宽度测量，避免手牌说明被错误撑成大量空行。
-	_hover_panel.reset_size()
-	_hover_panel.size.x = hover_panel_width
-	# 当前信息框实际尺寸；容器完成自动换行后使用该值进行视口边界计算。
-	var panel_size: Vector2 = _hover_panel.size
 	# 当前组件可用视口矩形；根控件与牌桌共享逻辑画布坐标。
 	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), size - Vector2.ONE * viewport_margin * 2.0)
+	# 可用宽度范围；检查器配置与当前视口都可能收紧上限，最小值始终不会超过实际可显示宽度。
+	var available_width: float = maxf(available_rect.size.x, 1.0)
+	var minimum_width: float = minf(maxf(hover_panel_minimum_width, 1.0), available_width)
+	var maximum_width: float = clampf(hover_panel_maximum_width, minimum_width, available_width)
+	# 先以基准宽度测量正文；此时自动换行已经在上一帧取得有效宽度，不会再把字符误算成单独行。
+	var measuring_width: float = clampf(hover_panel_width, minimum_width, maximum_width)
+	var measuring_height: float = _measure_hover_panel_content_height(measuring_width)
+	# 按目标4:3比例反推适合当前内容的宽度；短内容取最小宽度，长内容扩展到最大宽度后再自然增高。
+	var desired_width: float = clampf(measuring_height * hover_panel_aspect_ratio, minimum_width, maximum_width)
+	var content_height: float = _measure_hover_panel_content_height(desired_width)
+	# 最终高度同时满足完整文字与4:3目标比例；正文特别长时允许高于比例，避免裁切技能或卡牌说明。
+	var desired_height: float = maxf(content_height, desired_width / hover_panel_aspect_ratio)
+	_hover_panel.custom_minimum_size = Vector2(desired_width, desired_height)
+	_hover_panel.size = Vector2(desired_width, desired_height)
+	# 当前信息框实际尺寸；完成内容与比例测量后使用该值进行视口边界计算。
+	var panel_size: Vector2 = _hover_panel.size
 	# 默认信息框位置；优先显示在目标右侧并与目标顶边对齐。
 	var target_position: Vector2 = Vector2(anchor_rect.end.x + hover_target_gap, anchor_rect.position.y)
 	if target_position.x + panel_size.x > available_rect.end.x:
@@ -467,6 +490,14 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int) -> void:
 	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
 	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
 	_hover_panel.position = target_position
+
+
+## 在指定宽度下测量悬停说明所需的最小内容高度；每次测量都重置旧比例产生的高度，保证下一份信息不会继承前一份的空白。
+func _measure_hover_panel_content_height(panel_width: float) -> float:
+	_hover_panel.custom_minimum_size = Vector2(panel_width, 0.0)
+	_hover_panel.size = Vector2(panel_width, 0.0)
+	_hover_panel.reset_size()
+	return _hover_panel.size.y
 
 
 ## 复用正式武将牌场景渲染详情左侧牌面；隐藏对局角标和公开装备以匹配选将领袖牌表现。
