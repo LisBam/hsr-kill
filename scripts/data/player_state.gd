@@ -12,13 +12,13 @@ var display_name: String = "玩家"
 ## 当前武将配置 ID；通过数据仓库查询名称、性别、势力与技能。
 var character_id: String = ""
 
-## 当前武将是否已经向所有玩家亮出；选将阶段主公先公开，其他玩家完成后同时公开。
+## 当前武将是否已经向所有玩家亮出；选将阶段领袖先公开，其他玩家完成后同时公开。
 var character_revealed: bool = false
 
-## 当前身份；可取 lord、loyalist、rebel、renegade。
+## 当前身份；可取 leader、loyalist、rebel、renegade。
 var identity: String = "rebel"
 
-## 身份是否对公共信息可见；主公开局明置，其他身份通常在死亡时公开。
+## 身份是否对公共信息可见；领袖开局明置，其他身份通常在死亡时公开。
 var identity_revealed: bool = false
 
 ## 当前体力值；可降至0以下以完整表达濒死所需回复量。

@@ -199,7 +199,7 @@ func _reset_state(player_count: int) -> void:
 		var player: PlayerState = PlayerState.new(player_id, "测试玩家%d" % (player_id + 1))
 		player.max_hp = 4
 		player.hp = 4
-		player.identity = "rebel" if player_id > 0 else "lord"
+		player.identity = "rebel" if player_id > 0 else "leader"
 		_controller.state.players.append(player)
 	_controller.card_rules = CardRuleService.new(_controller.state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, _controller.state)

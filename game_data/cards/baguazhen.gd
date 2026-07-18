@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "bagua",
 		"original_name": "八卦阵",
-		"custom_name": "卜算阵列",
+		"custom_name": "穷观阵",
 		"type": "equipment",
 		"subtype": "armor",
 		"effect_id": "equip",

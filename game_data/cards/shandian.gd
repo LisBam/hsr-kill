@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "shandian",
 		"original_name": "闪电",
-		"custom_name": "雷暴奇点",
+		"custom_name": "天谴",
 		"type": "trick",
 		"subtype": "delayed",
 		"effect_id": "lightning",
@@ -45,7 +45,7 @@ func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictiona
 	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, actor_id)
 	if actor.is_empty():
 		return current_score
-	# 主忠方局势；正值主忠优势，负值反贼优势。
+	# 领忠方局势；正值领忠优势，负值反贼优势。
 	var situation: int = evaluator.get_situation(authoritative_snapshot)
 	# 使用者身份；内奸始终偏好适度随机性，其他阵营仅在自身阵营明显劣势时使用。
 	var identity: String = str(actor.get("identity", ""))
@@ -53,7 +53,7 @@ func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictiona
 		return 1.0
 	if identity == "rebel":
 		return 1.0 if situation > 1 else -1.0
-	if identity in ["lord", "loyalist"]:
+	if identity in ["leader", "loyalist"]:
 		return 1.0 if situation < -1 else -1.0
 	return current_score
 

@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "jiedao",
 		"original_name": "借刀杀人",
-		"custom_name": "借刃执行",
+		"custom_name": "借刀杀人",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "borrow_sword",

@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "guohe",
 		"original_name": "过河拆桥",
-		"custom_name": "净除协议",
+		"custom_name": "万物归虚",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "discard_target",

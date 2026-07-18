@@ -70,9 +70,9 @@ func _reset_state(player_count: int) -> void:
 	_controller.state.current_phase = "play"
 	_controller.state.phase_index = 3
 	for player_id: int in range(player_count):
-		# 当前测试玩家；一号位为公开主公，其余角色为公开反贼，便于 AI 形成确定态度。
+		# 当前测试玩家；一号位为公开领袖，其余角色为公开反贼，便于 AI 形成确定态度。
 		var player: PlayerState = PlayerState.new(player_id, "专项玩家%d" % (player_id + 1))
-		player.identity = "lord" if player_id == 0 else "rebel"
+		player.identity = "leader" if player_id == 0 else "rebel"
 		player.identity_revealed = true
 		player.max_hp = 4
 		player.hp = 4
@@ -169,7 +169,7 @@ func _test_chain_targets_and_ai() -> bool:
 			double_target_action_count += 1
 	if double_target_action_count == 0:
 		return _fail("chain_double_actions=%s" % [legal_actions])
-	# 基础 AI 策略；公开身份保证一号主公明确敌视二、三号反贼。
+	# 基础 AI 策略；公开身份保证一号领袖明确敌视二、三号反贼。
 	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
 	# 最终动作；两个未横置敌方同时产生正收益时应使用一张铁索指定两名目标。
 	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), legal_actions)

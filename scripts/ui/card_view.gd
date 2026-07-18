@@ -74,7 +74,7 @@ var _artwork_texture: Texture2D
 var _suit_rank_text: String = "♠7"
 
 ## 待显示的卡牌名称；默认使用场景编辑器示例名称，绑定实体牌后按全局名称模式覆盖。
-var _display_name_text: String = "星穹斩"
+var _display_name_text: String = "杀"
 
 ## 待显示的类别文本；默认与场景编辑器基本牌预览一致，运行时可附加木牛“粮”来源标记。
 var _card_type_text: String = "基本牌"

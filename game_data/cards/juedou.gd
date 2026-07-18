@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "juedou",
 		"original_name": "决斗",
-		"custom_name": "模拟对决",
+		"custom_name": "决斗",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "duel",

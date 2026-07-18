@@ -56,10 +56,10 @@ func _run() -> void:
 	if not _controller.start_match(2, 7):
 		_fail("start_match")
 		return
-	# 主公候选；固定种子下本地0号玩家为当前唯一待确认的人类角色。
-	var lord_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if lord_candidates.is_empty() or not _controller.select_character(0, lord_candidates[0]):
-		_fail("select_lord")
+	# 领袖候选；固定种子下本地0号玩家为当前唯一待确认的人类角色。
+	var leader_candidates: Array[String] = _controller.character_selection.get_candidates(0)
+	if leader_candidates.is_empty() or not _controller.select_character(0, leader_candidates[0]):
+		_fail("select_leader")
 		return
 	await get_tree().process_frame
 	if _controller.state.current_phase != "play":

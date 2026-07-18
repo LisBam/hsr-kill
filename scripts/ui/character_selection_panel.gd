@@ -18,20 +18,20 @@ const STATUS_LABEL_PATH: NodePath = NodePath("SelectionFrame/CharacterSelectionS
 ## 候选武将牌承载区的组件内相对路径；所有动态候选都只添加到该容器。
 const CANDIDATE_AREA_PATH: NodePath = NodePath("SelectionFrame/CharacterCandidateArea")
 
-## 主公武将牌承载区的组件内相对路径；主公亮将后创建的只读牌面添加到该容器。
-const LORD_CHARACTER_AREA_PATH: NodePath = NodePath("SelectionFrame/LordCharacterArea")
+## 领袖武将牌承载区的组件内相对路径；领袖亮将后创建的只读牌面添加到该容器。
+const LEADER_CHARACTER_AREA_PATH: NodePath = NodePath("SelectionFrame/LeaderCharacterArea")
 
-## 主公牌标题节点的组件内相对路径；仅在主公牌面可见时同步显示。
-const LORD_CHARACTER_LABEL_PATH: NodePath = NodePath("SelectionFrame/LordCharacterLabel")
+## 领袖牌标题节点的组件内相对路径；仅在领袖牌面可见时同步显示。
+const LEADER_CHARACTER_LABEL_PATH: NodePath = NodePath("SelectionFrame/LeaderCharacterLabel")
 
-## 主公牌与候选牌之间竖向分隔线的组件内相对路径；没有公开主公时保持隐藏且不占候选区域。
-const LORD_DIVIDER_PATH: NodePath = NodePath("SelectionFrame/LordDivider")
+## 领袖牌与候选牌之间竖向分隔线的组件内相对路径；没有公开领袖时保持隐藏且不占候选区域。
+const LEADER_DIVIDER_PATH: NodePath = NodePath("SelectionFrame/LeaderDivider")
 
-## 旧场景缺少主公分隔线时使用的默认矩形；2像素宽竖线位于主公牌区与候选区之间。
-const LORD_DIVIDER_RECT: Rect2 = Rect2(200.0, 82.0, 2.0, 242.0)
+## 旧场景缺少领袖分隔线时使用的默认矩形；2像素宽竖线位于领袖牌区与候选区之间。
+const LEADER_DIVIDER_RECT: Rect2 = Rect2(200.0, 82.0, 2.0, 242.0)
 
-## 旧场景缺少主公分隔线时使用的暗金颜色；透明度0.72保证分隔可见但不抢占武将牌视觉层级。
-const LORD_DIVIDER_COLOR: Color = Color(0.78, 0.63, 0.34, 0.72)
+## 旧场景缺少领袖分隔线时使用的暗金颜色；透明度0.72保证分隔可见但不抢占武将牌视觉层级。
+const LEADER_DIVIDER_COLOR: Color = Color(0.78, 0.63, 0.34, 0.72)
 
 ## 选将确认按钮的组件内相对路径；按钮只提交稳定武将 ID。
 const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterButton")
@@ -45,26 +45,26 @@ const CONFIRM_BUTTON_PATH: NodePath = NodePath("SelectionFrame/ConfirmCharacterB
 ## 候选武将悬停放大与恢复的过渡时长；默认0.14秒兼顾响应速度与缩放可见性，运行时无需动态修改。
 @export_range(0.0, 0.5, 0.01) var candidate_hover_transition_seconds: float = 0.14
 
-## 已公开主公武将牌的显示缩放；默认0.78使其弱于可选候选并保留分隔层级，运行时无需动态修改。
-@export_range(0.5, 1.0, 0.01) var lord_character_scale: float = 0.78
+## 已公开领袖武将牌的显示缩放；默认0.78使其弱于可选候选并保留分隔层级，运行时无需动态修改。
+@export_range(0.5, 1.0, 0.01) var leader_character_scale: float = 0.78
 
-## 选将标题；根据主公先选、其他玩家同时选和等待公开三个状态显示明确说明。
+## 选将标题；根据领袖先选、其他玩家同时选和等待公开三个状态显示明确说明。
 @onready var _title_label: Label = get_node_or_null(TITLE_LABEL_PATH) as Label
 
-## 阶段说明文本；展示主公已亮武将和其他玩家确认进度，不泄漏隐藏选择内容。
+## 阶段说明文本；展示领袖已亮武将和其他玩家确认进度，不泄漏隐藏选择内容。
 @onready var _status_label: Label = get_node_or_null(STATUS_LABEL_PATH) as Label
 
 ## 候选武将牌承载区域；只负责提供局部坐标，牌面根节点保持 Node2D 类型。
 @onready var _candidate_area: Control = get_node_or_null(CANDIDATE_AREA_PATH) as Control
 
-## 主公武将牌承载区域；主公确认后固定显示在选将框左侧，不参与候选点击或提交。
-@onready var _lord_character_area: Control = get_node_or_null(LORD_CHARACTER_AREA_PATH) as Control
+## 领袖武将牌承载区域；领袖确认后固定显示在选将框左侧，不参与候选点击或提交。
+@onready var _leader_character_area: Control = get_node_or_null(LEADER_CHARACTER_AREA_PATH) as Control
 
-## 主公武将牌标题；仅在主公已经亮将时显示，用于说明左侧只读牌面归属。
-@onready var _lord_character_label: Label = get_node_or_null(LORD_CHARACTER_LABEL_PATH) as Label
+## 领袖武将牌标题；仅在领袖已经亮将时显示，用于说明左侧只读牌面归属。
+@onready var _leader_character_label: Label = get_node_or_null(LEADER_CHARACTER_LABEL_PATH) as Label
 
-## 主公牌与候选牌之间的竖向分隔线；只在主公武将已经公开时显示。
-@onready var _lord_divider: ColorRect = get_node_or_null(LORD_DIVIDER_PATH) as ColorRect
+## 领袖牌与候选牌之间的竖向分隔线；只在领袖武将已经公开时显示。
+@onready var _leader_divider: ColorRect = get_node_or_null(LEADER_DIVIDER_PATH) as ColorRect
 
 ## 选将确认按钮；只有已临时选中候选且规则快照允许选择时才可用。
 @onready var _confirm_button: Button = get_node_or_null(CONFIRM_BUTTON_PATH) as Button
@@ -78,8 +78,8 @@ var _selected_character_id: String = ""
 ## 当前候选武将 ID 到正式武将牌视图的映射；只用于同步金色选中边框。
 var _candidate_views: Dictionary = {}
 
-## 当前左侧主公武将牌视图；主公尚未确认或选将界面关闭时为 null。
-var _lord_character_view: PlayerTargetView
+## 当前左侧领袖武将牌视图；领袖尚未确认或选将界面关闭时为 null。
+var _leader_character_view: PlayerTargetView
 
 ## 候选武将 ID 到未缩放基础位置的映射；悬停补间始终相对该位置居中放大并恢复。
 var _candidate_base_positions: Dictionary = {}
@@ -87,13 +87,13 @@ var _candidate_base_positions: Dictionary = {}
 ## 候选武将 ID 到当前缩放补间的映射；重复进入或离开时停止旧补间，避免多个动画同时写入同一节点。
 var _candidate_hover_tweens: Dictionary = {}
 
-## 候选区域存在主公时的原始左边界；从场景保存几何读取，避免脚本重复硬编码布局坐标。
-var _candidate_area_with_lord_left: float = 0.0
+## 候选区域存在领袖时的原始左边界；从场景保存几何读取，避免脚本重复硬编码布局坐标。
+var _candidate_area_with_leader_left: float = 0.0
 
-## 候选区域不存在主公时的左边界；与主公只读区域左边缘对齐，使候选直接占用空出的空间。
-var _candidate_area_without_lord_left: float = 0.0
+## 候选区域不存在领袖时的左边界；与领袖只读区域左边缘对齐，使候选直接占用空出的空间。
+var _candidate_area_without_leader_left: float = 0.0
 
-## 候选区域固定右边界；切换主公占位时只改变左边界，不影响确认按钮或选将框宽度。
+## 候选区域固定右边界；切换领袖占位时只改变左边界，不影响确认按钮或选将框宽度。
 var _candidate_area_right: float = 0.0
 
 ## 必需场景节点是否已经完整绑定；为 false 时组件保持隐藏并拒绝渲染，避免产生连续空实例报错。
@@ -102,7 +102,7 @@ var _required_nodes_ready: bool = false
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
-	_ensure_lord_divider()
+	_ensure_leader_divider()
 	_required_nodes_ready = _validate_required_nodes()
 	if not _required_nodes_ready:
 		visible = false
@@ -110,11 +110,11 @@ func _ready() -> void:
 	BattleUIStyle.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_confirm_selection)
 	_status_label.visible = false
-	_lord_character_label.visible = false
-	_lord_character_area.visible = false
-	_lord_divider.visible = false
-	_candidate_area_with_lord_left = _candidate_area.position.x
-	_candidate_area_without_lord_left = _lord_character_area.position.x
+	_leader_character_label.visible = false
+	_leader_character_area.visible = false
+	_leader_divider.visible = false
+	_candidate_area_with_leader_left = _candidate_area.position.x
+	_candidate_area_without_leader_left = _leader_character_area.position.x
 	_candidate_area_right = _candidate_area.position.x + _candidate_area.size.x
 	refresh_ui_style()
 	visible = false
@@ -134,11 +134,11 @@ func refresh_ui_style() -> void:
 		selection_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_lord_character_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_lord_divider.color = Color(BattleUIStyle.get_color("border"), 0.72)
+	_leader_character_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_leader_divider.color = Color(BattleUIStyle.get_color("border"), 0.72)
 	BattleUIStyle.apply_interaction_button(_confirm_button)
-	if _lord_character_view != null and is_instance_valid(_lord_character_view):
-		_lord_character_view.refresh_ui_style()
+	if _leader_character_view != null and is_instance_valid(_leader_character_view):
+		_leader_character_view.refresh_ui_style()
 	for candidate_view_variant: Variant in _candidate_views.values():
 		# 当前候选武将牌；只更新配色，不改变选中状态或基础位置。
 		var candidate_view: PlayerTargetView = candidate_view_variant as PlayerTargetView
@@ -146,24 +146,24 @@ func refresh_ui_style() -> void:
 			candidate_view.refresh_ui_style()
 
 
-## 为仍在编辑器内存中的旧主场景补建主公分隔线；新节点继续使用稳定相对路径参与统一校验和显隐。
-func _ensure_lord_divider() -> void:
-	if _lord_divider != null:
+## 为仍在编辑器内存中的旧主场景补建领袖分隔线；新节点继续使用稳定相对路径参与统一校验和显隐。
+func _ensure_leader_divider() -> void:
+	if _leader_divider != null:
 		return
 	# 选将主框；旧场景只有在该稳定父节点存在时才能安全补建分隔线。
 	var selection_frame: Control = get_node_or_null("SelectionFrame") as Control
 	if selection_frame == null:
 		return
-	# 运行时主公分隔线；几何和颜色与正式场景资源保持一致，编辑器重新载入场景后不会产生视觉差异。
-	var runtime_lord_divider: ColorRect = ColorRect.new()
-	runtime_lord_divider.name = StringName(LORD_DIVIDER_PATH.get_name(LORD_DIVIDER_PATH.get_name_count() - 1))
-	runtime_lord_divider.position = LORD_DIVIDER_RECT.position
-	runtime_lord_divider.size = LORD_DIVIDER_RECT.size
-	runtime_lord_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	runtime_lord_divider.color = LORD_DIVIDER_COLOR
-	runtime_lord_divider.visible = false
-	selection_frame.add_child(runtime_lord_divider)
-	_lord_divider = runtime_lord_divider
+	# 运行时领袖分隔线；几何和颜色与正式场景资源保持一致，编辑器重新载入场景后不会产生视觉差异。
+	var runtime_leader_divider: ColorRect = ColorRect.new()
+	runtime_leader_divider.name = StringName(LEADER_DIVIDER_PATH.get_name(LEADER_DIVIDER_PATH.get_name_count() - 1))
+	runtime_leader_divider.position = LEADER_DIVIDER_RECT.position
+	runtime_leader_divider.size = LEADER_DIVIDER_RECT.size
+	runtime_leader_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	runtime_leader_divider.color = LEADER_DIVIDER_COLOR
+	runtime_leader_divider.visible = false
+	selection_frame.add_child(runtime_leader_divider)
+	_leader_divider = runtime_leader_divider
 
 
 ## 接收裁剪后的选将快照并重建候选牌；任何隐藏选择都不会进入该组件。
@@ -176,7 +176,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	if not visible:
 		return
 	_render_header()
-	_render_lord_character()
+	_render_leader_character()
 	_render_candidates()
 	_confirm_button.disabled = true
 
@@ -189,46 +189,46 @@ func close() -> void:
 		_selected_character_id = ""
 		return
 	_clear_candidates()
-	_clear_lord_character()
+	_clear_leader_character()
 	_snapshot.clear()
 	_selected_character_id = ""
 
 
-## 渲染阶段标题、公开主公武将与其他玩家完成数量。
-## 当前界面只保留阶段标题；公开主公武将由左侧正式牌面表达，确认进度文本保持隐藏。
+## 渲染阶段标题、公开领袖武将与其他玩家完成数量。
+## 当前界面只保留阶段标题；公开领袖武将由左侧正式牌面表达，确认进度文本保持隐藏。
 func _render_header() -> void:
-	# 当前选将阶段；决定本地是主公选择、其他玩家同时选择还是等待全员完成。
+	# 当前选将阶段；决定本地是领袖选择、其他玩家同时选择还是等待全员完成。
 	var phase: String = str(_snapshot.get("phase", ""))
 	# 本地是否可以选择；已经确认的玩家只看到等待提示，不再显示候选内容。
 	var can_select: bool = bool(_snapshot.get("can_select", false))
-	if phase == CharacterSelectionService.PHASE_LORD:
-		_title_label.text = "主公选将"
+	if phase == CharacterSelectionService.PHASE_LEADER:
+		_title_label.text = "领袖选将"
 	else:
 		_title_label.text = "选择武将" if can_select else "等待其他玩家选将"
 	_status_label.text = ""
 
 
-## 在选将框左侧渲染已经公开的主公武将牌；主公阶段尚未确认时保持该区域隐藏。
-func _render_lord_character() -> void:
-	_clear_lord_character()
-	# 已公开主公武将 ID；空字符串表示主公尚未完成选择，不创建占位牌。
-	var lord_character_id: String = str(_snapshot.get("lord_character_id", ""))
-	if lord_character_id.is_empty():
-		_update_lord_partition(false)
+## 在选将框左侧渲染已经公开的领袖武将牌；领袖阶段尚未确认时保持该区域隐藏。
+func _render_leader_character() -> void:
+	_clear_leader_character()
+	# 已公开领袖武将 ID；空字符串表示领袖尚未完成选择，不创建占位牌。
+	var leader_character_id: String = str(_snapshot.get("leader_character_id", ""))
+	if leader_character_id.is_empty():
+		_update_leader_partition(false)
 		return
-	# 主公武将定义；用于左侧正式牌面的体力、势力、名称与插画。
-	var character_definition: Dictionary = GameDatabase.get_character(lord_character_id)
-	# 主公势力定义；只提供牌面主题，不参与身份或阵营判定。
+	# 领袖武将定义；用于左侧正式牌面的体力、势力、名称与插画。
+	var character_definition: Dictionary = GameDatabase.get_character(leader_character_id)
+	# 领袖势力定义；只提供牌面主题，不参与身份或阵营判定。
 	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
-	_lord_character_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-	_lord_character_area.add_child(_lord_character_view)
-	# 主公只读牌面快照；不显示手牌数与对局装备，只表达已公开的武将选择。
-	var lord_snapshot: Dictionary = {
-		"player_id":int(_snapshot.get("lord_player_id", -1)),
-		"display_name":"主公",
-		"character_id":lord_character_id,
+	_leader_character_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	_leader_character_area.add_child(_leader_character_view)
+	# 领袖只读牌面快照；不显示手牌数与对局装备，只表达已公开的武将选择。
+	var leader_snapshot: Dictionary = {
+		"player_id":int(_snapshot.get("leader_player_id", -1)),
+		"display_name":"领袖",
+		"character_id":leader_character_id,
 		"character_revealed":true,
-		"identity":"lord",
+		"identity":"leader",
 		"hp":int(character_definition.get("max_hp", 4)),
 		"max_hp":int(character_definition.get("max_hp", 4)),
 		"alive":true,
@@ -238,13 +238,13 @@ func _render_lord_character() -> void:
 		"judgment_area":[],
 		"wooden_ox_storage_count":0,
 	}
-	_lord_character_view.configure_snapshot(lord_snapshot, character_definition, false, faction_definition)
-	_lord_character_view.set_operation_state(false)
-	_lord_character_view.scale = Vector2.ONE * lord_character_scale
-	_lord_character_view.position = (_lord_character_area.size - _lord_character_view.card_size * lord_character_scale) * 0.5
-	_lord_character_area.visible = true
-	_lord_character_label.visible = true
-	_update_lord_partition(true)
+	_leader_character_view.configure_snapshot(leader_snapshot, character_definition, false, faction_definition)
+	_leader_character_view.set_operation_state(false)
+	_leader_character_view.scale = Vector2.ONE * leader_character_scale
+	_leader_character_view.position = (_leader_character_area.size - _leader_character_view.card_size * leader_character_scale) * 0.5
+	_leader_character_area.visible = true
+	_leader_character_label.visible = true
+	_update_leader_partition(true)
 
 
 ## 使用正式 Node2D 武将牌横向排列本地候选；候选数量由快照决定，可从默认5张继续扩展。
@@ -341,26 +341,26 @@ func _clear_candidates() -> void:
 		child.queue_free()
 
 
-## 清理左侧主公武将牌；阶段切换和重新开局时不会保留旧局节点。
-func _clear_lord_character() -> void:
-	_lord_character_view = null
-	_lord_character_area.visible = false
-	_lord_character_label.visible = false
-	_lord_divider.visible = false
-	for child: Node in _lord_character_area.get_children():
-		_lord_character_area.remove_child(child)
+## 清理左侧领袖武将牌；阶段切换和重新开局时不会保留旧局节点。
+func _clear_leader_character() -> void:
+	_leader_character_view = null
+	_leader_character_area.visible = false
+	_leader_character_label.visible = false
+	_leader_divider.visible = false
+	for child: Node in _leader_character_area.get_children():
+		_leader_character_area.remove_child(child)
 		child.queue_free()
 
 
-## 根据主公是否已公开调整候选区域与分隔线；没有主公时候选直接从原主公区域左边缘开始排列。
-func _update_lord_partition(has_public_lord: bool) -> void:
-	if _candidate_area == null or _lord_divider == null:
+## 根据领袖是否已公开调整候选区域与分隔线；没有领袖时候选直接从原领袖区域左边缘开始排列。
+func _update_leader_partition(has_public_leader: bool) -> void:
+	if _candidate_area == null or _leader_divider == null:
 		return
-	# 当前候选区域左边界；有主公时保留只读牌与竖线，没有主公时直接占用全部横向空间。
-	var candidate_left: float = _candidate_area_with_lord_left if has_public_lord else _candidate_area_without_lord_left
+	# 当前候选区域左边界；有领袖时保留只读牌与竖线，没有领袖时直接占用全部横向空间。
+	var candidate_left: float = _candidate_area_with_leader_left if has_public_leader else _candidate_area_without_leader_left
 	_candidate_area.position.x = candidate_left
 	_candidate_area.size.x = maxf(_candidate_area_right - candidate_left, 0.0)
-	_lord_divider.visible = has_public_lord
+	_leader_divider.visible = has_public_leader
 
 
 ## 播放候选武将居中缩放；鼠标移走时使用相同时长平滑恢复基础位置与1倍尺寸。
@@ -410,12 +410,12 @@ func _validate_required_nodes() -> bool:
 		missing_node_names.append(str(STATUS_LABEL_PATH))
 	if _candidate_area == null:
 		missing_node_names.append(str(CANDIDATE_AREA_PATH))
-	if _lord_character_area == null:
-		missing_node_names.append(str(LORD_CHARACTER_AREA_PATH))
-	if _lord_character_label == null:
-		missing_node_names.append(str(LORD_CHARACTER_LABEL_PATH))
-	if _lord_divider == null:
-		missing_node_names.append(str(LORD_DIVIDER_PATH))
+	if _leader_character_area == null:
+		missing_node_names.append(str(LEADER_CHARACTER_AREA_PATH))
+	if _leader_character_label == null:
+		missing_node_names.append(str(LEADER_CHARACTER_LABEL_PATH))
+	if _leader_divider == null:
+		missing_node_names.append(str(LEADER_DIVIDER_PATH))
 	if _confirm_button == null:
 		missing_node_names.append(str(CONFIRM_BUTTON_PATH))
 	if missing_node_names.is_empty():

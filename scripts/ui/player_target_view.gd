@@ -432,7 +432,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 公开身份 ID；其他玩家身份尚未公开时为 hidden。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 身份徽记单字；用于在窄牌面右上角保持可读。
-	var identity_text: String = {"lord":"主", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"？"}.get(identity, "？")
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"？"}.get(identity, "？")
 	# 当前体力；允许为0或负数，牌面心形显示时会安全裁剪。
 	var hp: int = int(_player_snapshot.get("hp", 0))
 	# 当前体力上限；1至5使用圆点，超过5直接使用数字，因此无需裁剪规则快照中的真实数值。
@@ -674,7 +674,7 @@ func _refresh_identity_badge() -> void:
 	# 当前公开身份；非 hidden 时必须直接显示权威身份，禁止本地标注覆盖。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 当前徽记文本；未知身份可使用本地忠、反、内标注，否则保持问号。
-	var identity_text: String = {"lord":"主", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(identity, {"loyalist":"忠", "rebel":"反", "renegade":"内"}.get(_identity_mark, "？"))
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(identity, {"loyalist":"忠", "rebel":"反", "renegade":"内"}.get(_identity_mark, "？"))
 	_identity_badge_label.text = identity_text
 	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
 	var identity_color: Color = BattleUIStyle.get_color("accent") if identity != "hidden" else (BattleUIStyle.get_color("legal_target") if not _identity_mark.is_empty() else BattleUIStyle.get_color("text_secondary"))

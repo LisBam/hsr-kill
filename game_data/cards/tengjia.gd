@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "tengjia",
 		"original_name": "藤甲",
-		"custom_name": "丰饶藤甲",
+		"custom_name": "建木藤甲",
 		"type": "equipment",
 		"subtype": "armor",
 		"effect_id": "equip",

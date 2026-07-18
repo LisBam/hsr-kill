@@ -122,7 +122,7 @@ offset_right = 105.0
 offset_bottom = 128.0
 theme_override_colors/font_color = Color(0.333333, 0.243137, 0.192157, 1)
 theme_override_font_sizes/font_size = 15
-text = "星穹斩"
+text = "杀"
 horizontal_alignment = 1
 text_overrun_behavior = 3
 

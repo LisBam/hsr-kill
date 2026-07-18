@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "wanjian",
 		"original_name": "万箭齐发",
-		"custom_name": "群星齐射",
+		"custom_name": "天弓垂眸",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "aoe_dodge",

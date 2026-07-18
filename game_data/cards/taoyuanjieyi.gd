@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "taoyuan",
 		"original_name": "桃园结义",
-		"custom_name": "丰饶共鸣",
+		"custom_name": "丰饶馈赠",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "heal_all",

@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "wuzhong",
 		"original_name": "无中生有",
-		"custom_name": "奇物补给",
+		"custom_name": "无中生有",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "draw_two",

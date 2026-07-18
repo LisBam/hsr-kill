@@ -123,9 +123,9 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 玩家快照数组；每名玩家自行处理手牌与身份的可见性。
 	var player_data: Array = []
 	for seat_index: int in range(players.size()):
-		# 当前座位玩家；MatchController 会在身份确定后把主公旋转到数组首位。
+		# 当前座位玩家；MatchController 会在身份确定后把领袖旋转到数组首位。
 		var player: PlayerState = players[seat_index]
-		# 座次快照；从1开始，供界面显示主公为一号位且不依赖稳定 player_id。
+		# 座次快照；从1开始，供界面显示领袖为一号位且不依赖稳定 player_id。
 		var serialized_player: Dictionary = player.to_dict(viewer_id, reveal_private)
 		serialized_player["seat_number"] = seat_index + 1
 		player_data.append(serialized_player)

@@ -30,7 +30,7 @@ const SURVIVAL_CARD_DAMAGE_MULTIPLIER: float = 0.7
 ## 当前评估器使用的身份关系模型；由协调器共享，保证所有 AI 观察到一致的身份暴露度。
 var identity_model: IdentityAIModel
 
-## 当前评估器使用的身份战略层；负责主公危险、威胁集火、内奸控场和濒死救援。
+## 当前评估器使用的身份战略层；负责领袖危险、威胁集火、内奸控场和濒死救援。
 var identity_strategy: IdentityStrategyEvaluator
 
 
@@ -120,7 +120,7 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			status_multiplier *= SURVIVAL_CARD_DAMAGE_MULTIPLIER
 	# 当前目标直接效用；牌效结果乘观察者态度后，敌方负面效果会转为正收益。
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
-	# 身份局战略附加分；主公保护、反贼集火和内奸控场不改变实际牌效数值。
+	# 身份局战略附加分；领袖保护、反贼集火和内奸控场不改变实际牌效数值。
 	result += identity_strategy.score_target_strategy(authoritative_snapshot, actor_id, target_id, ai_profile)
 	# 属性伤害连环传播；目标已横置时把同值伤害继续计入其他横置角色。
 	if bool(ai_profile.get("nature_damage", false)) and bool(target.get("chained", false)):
@@ -190,7 +190,7 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 		if response_patterns.has("wuxie"):
 			return 1.0 if should_negate(authoritative_snapshot, actor_id, context) else -1.0
 		if response_patterns.has("tao") or response_patterns.has("jiu"):
-			# 濒死救援必须结合身份关系、主公存亡、内奸控场、自救和救援牌成本。
+			# 濒死救援必须结合身份关系、领袖存亡、内奸控场、自救和救援牌成本。
 			var dying_target_id: int = int(context.get("target_id", actor_id))
 			return identity_strategy.score_rescue(authoritative_snapshot, actor_id, dying_target_id, int(context.get("required_recover", 1)), selected_value)
 		if choice_kind == "borrow_sword_response":
@@ -298,7 +298,7 @@ func get_condition(authoritative_snapshot: Dictionary, player_id: int) -> float:
 	return identity_model.get_condition(authoritative_snapshot, player_id)
 
 
-## 返回当前主忠方局势值；正值代表主忠优势，负值代表反贼优势。
+## 返回当前领忠方局势值；正值代表领忠优势，负值代表反贼优势。
 func get_situation(authoritative_snapshot: Dictionary) -> int:
 	return identity_model.get_situation(authoritative_snapshot)
 
@@ -308,9 +308,9 @@ func get_threat(authoritative_snapshot: Dictionary, viewer_id: int, target_id: i
 	return identity_strategy.get_threat(authoritative_snapshot, viewer_id, target_id)
 
 
-## 返回当前主公危险度；技能 AI 可在救援、保护或集火逻辑中复用。
-func get_lord_danger(authoritative_snapshot: Dictionary) -> float:
-	return identity_strategy.get_lord_danger(authoritative_snapshot)
+## 返回当前领袖危险度；技能 AI 可在救援、保护或集火逻辑中复用。
+func get_leader_danger(authoritative_snapshot: Dictionary) -> float:
+	return identity_strategy.get_leader_danger(authoritative_snapshot)
 
 
 ## 返回卡牌文件声明的标准 AI 配置；兼容旧字段并保证调用方始终取得独立字典。

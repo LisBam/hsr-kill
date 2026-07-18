@@ -65,8 +65,8 @@ func _install_state() -> void:
 	# 本测试权威状态；空对局 ID 令规则保持同步且不创建网络等待。
 	var game_state: GameState = GameState.new()
 	game_state.match_id = ""
-	# 三名测试玩家；身份同时包含主公、忠臣和反贼，普通1点伤害不会满足终局条件。
-	var identities: Array[String] = ["lord", "loyalist", "rebel"]
+	# 三名测试玩家；身份同时包含领袖、忠臣和反贼，普通1点伤害不会满足终局条件。
+	var identities: Array[String] = ["leader", "loyalist", "rebel"]
 	for player_id: int in range(3):
 		# 当前测试玩家；基础体力固定4，所有角色保持正面、存活和已亮将状态。
 		var player: PlayerState = PlayerState.new(player_id, "时机测试玩家%d" % (player_id + 1))

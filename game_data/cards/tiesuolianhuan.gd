@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "tiesuo",
 		"original_name": "铁索连环",
-		"custom_name": "命途连结",
+		"custom_name": "命运连结",
 		"type": "trick",
 		"subtype": "normal",
 		"effect_id": "chain",

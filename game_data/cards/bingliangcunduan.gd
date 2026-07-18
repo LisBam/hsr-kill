@@ -8,7 +8,7 @@ func _init() -> void:
 	super({
 		"id": "bingliang",
 		"original_name": "兵粮寸断",
-		"custom_name": "补给封锁",
+		"custom_name": "兵粮寸断",
 		"type": "trick",
 		"subtype": "delayed",
 		"effect_id": "skip_draw",
