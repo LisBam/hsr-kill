@@ -18,10 +18,10 @@ signal hover_changed(hovered: bool)
 ## 正式对局武将牌被鼠标右键释放时发出的详情请求；内容只包含公开快照和静态展示定义副本。
 signal details_requested(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary)
 
-## 鼠标进入其他玩家公开装备横条时发出的统一信息请求。
+## 鼠标进入武将牌静态资料或其他玩家公开装备横条时发出的统一信息请求。
 signal information_requested(information: Dictionary, anchor_rect: Rect2)
 
-## 鼠标离开公开装备横条或武将牌时发出的统一信息关闭请求。
+## 鼠标离开武将牌静态资料、公开装备横条或武将牌时发出的统一信息关闭请求。
 signal information_dismissed
 
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
@@ -368,9 +368,9 @@ func _on_input_details_requested() -> void:
 	details_requested.emit(_player_snapshot.duplicate(true), _character_definition.duplicate(true), _faction_definition.duplicate(true))
 
 
-## 请求通过统一目标旁信息框显示武将静态资料；选将候选与正式对局武将牌共用相同内容结构。
+## 请求通过统一目标旁信息框显示武将静态资料；本地、其他玩家与选将候选共用相同内容结构。
 func _request_character_information() -> void:
-	if _match_overlays_visible or _player_snapshot.is_empty() or _character_definition.is_empty():
+	if _player_snapshot.is_empty() or _character_definition.is_empty():
 		return
 	# 当前武将显示名；只读取武将静态定义，缺失时使用数据库统一中文回退文本。
 	var character_name: String = str(_character_definition.get("display_name", GameDatabase.resolve_character_name(str(_player_snapshot.get("character_id", "")))))
@@ -408,16 +408,18 @@ func _on_input_pointer_moved(local_position: Vector2) -> void:
 	_update_public_equipment_information(local_position)
 
 
-## 鼠标进入武将牌后显示玩家名称阴影，并把悬停状态转发给选将界面。
+## 鼠标进入武将牌后请求静态资料；只有选将候选会转发悬停状态以播放缩放反馈。
 func _on_input_mouse_entered() -> void:
 	_is_hovered = true
 	_refresh_hover_name_visibility()
 	_request_character_information()
-	hover_changed.emit(true)
+	# 正式对局武将牌不播放选将候选的缩放反馈；只在选将等非对局展示中转发该信号。
+	if not _match_overlays_visible:
+		hover_changed.emit(true)
 	_update_public_equipment_information(_input_area.get_local_mouse_position())
 
 
-## 鼠标离开武将牌后隐藏玩家名称阴影，并通知选将界面恢复候选尺寸。
+## 鼠标离开武将牌后关闭所属资料；只有选将候选会收到恢复基础尺寸的悬停状态。
 func _on_input_mouse_exited() -> void:
 	_is_hovered = false
 	_refresh_hover_name_visibility()
@@ -425,7 +427,9 @@ func _on_input_mouse_exited() -> void:
 		information_dismissed.emit()
 	else:
 		_dismiss_public_equipment_information()
-	hover_changed.emit(false)
+	# 与鼠标进入保持对称；正式对局不触发候选牌缩放恢复，避免任何外部监听器改写武将牌尺寸。
+	if not _match_overlays_visible:
+		hover_changed.emit(false)
 
 
 ## 转发独立输入区域的合法卡牌拖放结果，并补充当前稳定玩家 ID。
@@ -796,10 +800,8 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 	if hovered_slot.is_empty() or hovered_row == null:
 		if not _hovered_equipment_slot.is_empty():
 			_hovered_equipment_slot = ""
-			if _match_overlays_visible:
-				information_dismissed.emit()
-			else:
-				_request_character_information()
+			# 鼠标仍停留在其他玩家武将牌内时，离开装备横条后恢复该武将全部技能资料，而非直接留下空白。
+			_request_character_information()
 		return
 	if hovered_slot == _hovered_equipment_slot:
 		return
