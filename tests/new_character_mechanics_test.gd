@@ -1,8 +1,8 @@
 extends Node
 
-## 新武将机制专项回归。覆盖规则牌名、武将引用、横置旋转、护盾语义、五个新技能的核心结算与指定AI分支。
+## 新武将机制专项回归。覆盖规则牌名、武将引用、横置灰白线状态、护盾语义、五个新技能的核心结算与指定AI分支。
 
-## 武将牌可复用场景；用真实场景结构验证横置角度与全局包围矩形。
+## 武将牌可复用场景；用真实场景结构验证横置灰白线状态不会改变牌面变换或全局包围矩形。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
 ## 每个机制场景共用的权威对局控制器；所有状态变化仍通过正式公开端口执行。
@@ -22,7 +22,7 @@ func _run() -> void:
 	_create_controller()
 	if not _test_metadata_and_rule_names():
 		return
-	if not await _test_character_card_orientation():
+	if not await _test_character_card_link_overlay():
 		return
 	if not _test_jiahu_and_bingfeng():
 		return
@@ -116,32 +116,36 @@ func _test_metadata_and_rule_names() -> bool:
 	return true
 
 
-## 验证武将牌从竖置切换为横置后实际旋转90度，再次切换时恢复竖直与原锚点。
-func _test_character_card_orientation() -> bool:
-	# 真实武将牌视图；加入场景树后才会记录竖置锚点。
+## 验证横置只显示灰白横线状态，不旋转或移动武将牌；竖置时灰白横线状态必须取消。
+func _test_character_card_link_overlay() -> bool:
+	# 真实武将牌视图；加入场景树后验证规则状态与表现状态的分离。
 	var player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	add_child(player_view)
 	await get_tree().process_frame
 	# 竖置公开快照；包含武将牌视觉必需的最小字段。
 	var snapshot: Dictionary = {"player_id":1, "display_name":"横置测试", "character_id":"march_7th", "identity":"rebel", "hp":3, "max_hp":3, "shield":0, "alive":true, "chained":false, "face_down":false, "hand_count":0, "equipment":{}, "judgment_area":[], "wooden_ox_storage_count":0}
 	player_view.configure_snapshot(snapshot, GameDatabase.get_character("march_7th"))
-	# 竖置锚点；恢复方向后必须精确回到该位置。
+	# 竖置初始位置；横置状态变化后必须保持该布局位置。
 	var upright_position: Vector2 = player_view.position
+	# 竖置全局矩形；横置状态变化后尺寸与位置都必须保持不变。
+	var upright_rect: Rect2 = player_view.get_global_rect()
+	# 灰白横线覆盖层；只消费横置布尔值，不改变武将牌节点的旋转或位置。
+	var state_overlay: PlayerStateOverlay = player_view.get_node("StateOverlay") as PlayerStateOverlay
 	if not is_zero_approx(player_view.rotation):
 		player_view.queue_free()
 		return _fail("upright_rotation=%s" % player_view.rotation)
 	snapshot["chained"] = true
 	player_view.configure_snapshot(snapshot, GameDatabase.get_character("march_7th"))
-	# 横置全局矩形；90度旋转后宽高应与竖置卡尺寸交换。
-	var horizontal_rect: Rect2 = player_view.get_global_rect()
-	if not is_equal_approx(player_view.rotation, PI * 0.5) or not is_equal_approx(horizontal_rect.size.x, player_view.card_size.y) or not is_equal_approx(horizontal_rect.size.y, player_view.card_size.x):
+	# 横置全局矩形；横置只切换覆盖层，中间线以外的牌面几何保持竖直不变。
+	var chained_rect: Rect2 = player_view.get_global_rect()
+	if not is_zero_approx(player_view.rotation) or not player_view.position.is_equal_approx(upright_position) or not chained_rect.is_equal_approx(upright_rect) or state_overlay == null or not bool(state_overlay.get("_is_chained")):
 		player_view.queue_free()
-		return _fail("horizontal_orientation rotation=%s rect=%s" % [player_view.rotation, horizontal_rect])
+		return _fail("chained_overlay_transform rotation=%s position=%s/%s rect=%s/%s chained=%s" % [player_view.rotation, player_view.position, upright_position, chained_rect, upright_rect, bool(state_overlay.get("_is_chained")) if state_overlay != null else false])
 	snapshot["chained"] = false
 	player_view.configure_snapshot(snapshot, GameDatabase.get_character("march_7th"))
-	if not is_zero_approx(player_view.rotation) or not player_view.position.is_equal_approx(upright_position):
+	if not is_zero_approx(player_view.rotation) or not player_view.position.is_equal_approx(upright_position) or bool(state_overlay.get("_is_chained")):
 		player_view.queue_free()
-		return _fail("orientation_restore rotation=%s position=%s/%s" % [player_view.rotation, player_view.position, upright_position])
+		return _fail("upright_overlay_restore rotation=%s position=%s/%s chained=%s" % [player_view.rotation, player_view.position, upright_position, bool(state_overlay.get("_is_chained"))])
 	player_view.queue_free()
 	return true
 

@@ -650,9 +650,13 @@ func _run() -> void:
 	if not first_candidate.scale.is_equal_approx(Vector2.ONE) or information_box.is_hover_information_visible():
 		_fail("selection_hover_restore:%s" % first_candidate.scale)
 		return
+	# 第一张候选的布局位置；点击高亮只能修改边框，不能重置动态候选的坐标。
+	var first_candidate_position_before_selection: Vector2 = first_candidate.position
+	# 第二张候选的布局位置；用于防止其他候选在点击首张后被意外移动到原点。
+	var second_candidate_position_before_selection: Vector2 = second_candidate.position
 	character_selection_panel.call("_select_candidate", "trailblazer")
-	if not first_candidate.is_target_selected or first_candidate.is_legal_target or second_candidate.is_target_selected or second_candidate.is_legal_target:
-		_fail("selection_click_glow_scope")
+	if not first_candidate.is_target_selected or first_candidate.is_legal_target or second_candidate.is_target_selected or second_candidate.is_legal_target or not first_candidate.position.is_equal_approx(first_candidate_position_before_selection) or not second_candidate.position.is_equal_approx(second_candidate_position_before_selection):
+		_fail("selection_click_glow_or_position_scope:%s/%s expected=%s/%s" % [first_candidate.position, second_candidate.position, first_candidate_position_before_selection, second_candidate_position_before_selection])
 		return
 	# 有领袖选将快照；领袖牌缩小并显示竖线，候选区域恢复到分隔线右侧。
 	var selection_snapshot_with_leader: Dictionary = selection_snapshot_without_leader.duplicate(true)
