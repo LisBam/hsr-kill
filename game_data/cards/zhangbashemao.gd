@@ -26,6 +26,7 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "equipment",
 		"provided_response_pattern": "",
+		"ai": {"order":3.0, "value":3.5, "equip_value":3.5, "view_as_sha":true},
 		"ai_use_value": 4.0,
 		"response_material_count": 2,
 		"play_phase_interaction": "virtual_card_materials",
@@ -109,16 +110,35 @@ func append_play_phase_actions(match_host: Object, owner_id: int, equipment_card
 	var owner: PlayerState = match_host.state.get_player(owner_id)
 	if owner == null or owner.hand.size() < 2:
 		return
-	# 基础 AI 材料；最终提交仍会重新校验实体 UID。
-	var material_card_uids: Array[int] = [owner.hand[0].uid, owner.hand[1].uid]
-	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
-		# 单目标虚拟【杀】；不应用方天画戟最后手牌修正。
-		var target_ids: Array[int] = [target_id]
-		# AI 动作；card_uid 指向丈八蛇矛实体，payload 保存两张材料。
-		var action: PlayerAction = PlayerAction.new("use_zhangba", owner_id, equipment_card.uid, target_ids)
-		action.payload = {"material_card_uids":material_card_uids.duplicate()}
-		if validate_play_phase_action(match_host, action).is_empty():
-			result.append(action.to_dict())
+	for first_index: int in range(owner.hand.size() - 1):
+		for second_index: int in range(first_index + 1, owner.hand.size()):
+			# 当前两张材料 UID；枚举全部不同组合，使 AI 能保留桃、闪等高价值牌。
+			var material_card_uids: Array[int] = [owner.hand[first_index].uid, owner.hand[second_index].uid]
+			for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+				# 单目标虚拟【杀】；不应用方天画戟最后手牌修正。
+				var target_ids: Array[int] = [target_id]
+				# AI 动作；card_uid 指向丈八蛇矛实体，payload 保存两张材料。
+				var action: PlayerAction = PlayerAction.new("use_zhangba", owner_id, equipment_card.uid, target_ids)
+				action.payload = {"material_card_uids":material_card_uids.duplicate()}
+				if validate_play_phase_action(match_host, action).is_empty():
+					var action_data: Dictionary = action.to_dict()
+					action_data["ai_card_definition_id"] = get_id()
+					result.append(action_data)
+
+
+## 评估丈八蛇矛虚拟【杀】；复用【杀】目标效用并扣除两张材料牌的保留价值。
+func score_ai_play_phase_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 发动者 ID；用于身份态度和材料估值。
+	var actor_id: int = int(action.get("actor_id", -1))
+	# 虚拟【杀】动作；只向评估器提供合法目标与【杀】定义，不伪造实体 UID。
+	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":actor_id, "card_definition_id":"sha", "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+	# 虚拟【杀】基础收益；包含目标体力、手牌与身份态度。
+	var score: float = evaluator.score_action(authoritative_snapshot, slash_action, actor_id)
+	for material_uid_variant: Variant in (action.get("payload", {}) as Dictionary).get("material_card_uids", []) as Array:
+		# 当前材料牌价值；两张材料都会在结算后进入弃牌堆。
+		var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, actor_id, int(material_uid_variant))
+		score -= material_value * 0.45
+	return score
 
 
 ## 校验丈八主动使用：装备、两张材料、阶段次数、攻击范围和目标必须全部合法。

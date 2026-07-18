@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "shan",
+		"ai": {"order":3.0, "value":[7.0, 5.1, 2.0], "player_result":1.0, "response":true},
 	})
 
 

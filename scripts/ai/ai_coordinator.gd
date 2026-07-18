@@ -6,10 +6,13 @@ extends Node
 ## 以玩家 ID 为键的 AI 策略实例；未登记的玩家由人类或网络客户端控制。
 var _policies: Dictionary = {}
 
+## 全部基础 AI 共享的身份关系模型；同一公开行为对不同 AI 产生一致的身份暴露信息。
+var _identity_model: IdentityAIModel = IdentityAIModel.new()
+
 
 ## 为指定玩家安装基础策略；后续可传入实现相同 choose_action 接口的自定义策略。
 func register_basic_ai(player_id: int) -> void:
-	_policies[player_id] = BasicAIPolicy.new(player_id)
+	_policies[player_id] = BasicAIPolicy.new(player_id, _identity_model)
 
 
 ## 移除指定玩家的 AI 控制权，通常在玩家接管或断线重连时调用。
@@ -44,10 +47,13 @@ func request_card_choice(player_id: int, authoritative_snapshot: Dictionary, cho
 func request_choice(player_id: int, authoritative_snapshot: Dictionary, request: ChoiceRequest, presentation_request: Dictionary, legal_actions: Array[Dictionary]) -> ChoiceResponse:
 	if request == null:
 		return null
+	# AI 返回的标准动作数据；空字典表示该玩家没有可用策略或合法确认结果。
 	var action_data: Dictionary = request_card_choice(player_id, authoritative_snapshot, presentation_request, legal_actions)
 	if action_data.is_empty():
 		return null
+	# 动作负载；选择的实体牌、目标和确认状态均从统一 payload 恢复。
 	var payload: Dictionary = action_data.get("payload", {}) as Dictionary
+	# 标准选择响应；事件与请求 ID 保持原值，便于核心验证响应归属。
 	var response: ChoiceResponse = ChoiceResponse.new(request.request_id, request.event_id, player_id, true)
 	for card_uid_variant: Variant in payload.get("selected_card_uids", []) as Array:
 		response.card_ids.append(int(card_uid_variant))
@@ -57,3 +63,37 @@ func request_choice(player_id: int, authoritative_snapshot: Dictionary, request:
 	response.client_sequence = int(action_data.get("client_sequence", 0))
 	response.source = "ai"
 	return response
+
+
+## 向全部基础 AI 广播一次公开使用牌行为；只更新身份观察数据，不改变任何规则状态。
+func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int]) -> void:
+	# 已通知策略对象；共享身份模型只需由任意一个基础策略更新一次，避免多名 AI 重复累计暴露度。
+	var notified: bool = false
+	for policy_variant: Variant in _policies.values():
+		# 当前基础策略；未来自定义策略没有观察接口时安全跳过。
+		var policy: BasicAIPolicy = policy_variant as BasicAIPolicy
+		if policy != null:
+			policy.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids)
+			notified = true
+			break
+	if not notified:
+		_identity_model.synchronize(authoritative_snapshot)
+
+
+## 返回指定 AI 是否愿意在当前奇偶状态使用【无懈可击】；未登记玩家保持保守不响应。
+func should_negate(player_id: int, authoritative_snapshot: Dictionary, context: Dictionary) -> bool:
+	# 指定玩家策略；人类和网络玩家必须自行提交选择，协调器不能替其决策。
+	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
+	return policy.should_negate(authoritative_snapshot, context) if policy != null else false
+
+
+## 为装备虚拟响应选择最低保留价值材料；返回值仍需由对应装备文件复核实体与数量。
+func choose_low_value_card_uids(player_id: int, authoritative_snapshot: Dictionary, candidate_uids: Array[int], required_count: int) -> Array[int]:
+	# 指定玩家策略；未登记 AI 时不替人类或网络玩家选择材料。
+	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
+	return policy.choose_low_value_card_uids(authoritative_snapshot, candidate_uids, required_count) if policy != null else []
+
+
+## 清空身份观察数据；开始新对局时可显式调用，快照 match_id 变化也会自动触发清理。
+func reset_identity_observations() -> void:
+	_identity_model.reset()

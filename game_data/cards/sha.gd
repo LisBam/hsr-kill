@@ -19,6 +19,7 @@ func _init() -> void:
 		"distance_limit": "attack_range",
 		"play_limit": 1,
 		"play_limit_group": "slash",
+		"play_limit_scope": "phase",
 		"play_limit_message": "本阶段使用【杀】的基础次数已用尽。",
 		"response_pattern": "sha",
 		"recast": false,
@@ -27,6 +28,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "sha",
+		"ai": {"order":3.2, "value":[5.0, 3.0, 1.0], "target_result":-1.5, "damage":true, "respond_shan":true},
 		"ai_target_attitude": "hostile",
 	})
 

@@ -25,6 +25,7 @@ func _init() -> void:
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "",
+		"ai": {"order":7.5, "value":9.0, "player_result":1.0, "target_result":-1.5, "lose_card":true, "gain":true},
 		"ai_target_attitude": "hostile",
 	})
 

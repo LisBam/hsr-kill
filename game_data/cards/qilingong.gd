@@ -26,6 +26,7 @@ func _init() -> void:
 		"resolution_mode": "whole",
 		"final_zone": "equipment",
 		"provided_response_pattern": "",
+		"ai": {"order":3.0, "value":3.0, "equip_value":3.0},
 		"ai_use_value": 4.0,
 	})
 
