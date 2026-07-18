@@ -50,6 +50,17 @@ func continue_choice(context: Dictionary, selected_uids: Array[int]) -> bool:
 	return definition != null and definition.continue_choice(self, context, selected_uids)
 
 
+## 按父牌 UID 将通用选择结果交回对应卡牌源码；目标选择与布尔确认不会被压缩成实体牌 UID。
+func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
+	# 原效果牌；异步恢复只允许操作仍位于公共处理区的父牌。
+	var card: CardInstance = find_processing_card(int(context.get("parent_card_uid", -1)))
+	if card == null:
+		return false
+	# 原效果牌定义；具体卡牌负责识别选择用途并复核目标数量与当前合法性。
+	var definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
+	return definition != null and definition.continue_selection(self, context, response)
+
+
 ## 按父牌 UID 将已消费的响应牌交回对应卡牌源码；null 表示响应者明确放弃。
 func continue_response(context: Dictionary, response_card: CardInstance) -> bool:
 	# 原效果牌；响应等待期间离开处理区时旧请求自动失效。

@@ -252,7 +252,7 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 	return result
 
 
-## 检查单个目标是否合法；双目标联动规则只验证可在当前信息下确定的部分。
+## 检查单个目标是否合法；卡牌专属组合规则只验证可在当前信息下确定的部分。
 func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int, all_target_ids: Array[int]) -> String:
 	# 目标玩家状态；不存在或死亡的角色不是合法目标。
 	var target: PlayerState = state.get_player(target_id)
@@ -260,7 +260,7 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 		return "目标不存在或已经死亡。"
 	# 卡牌目标模式；决定身份、区域与状态限制。
 	var target_mode: String = str(definition.get("target_mode", ""))
-	# 当前卡牌源码；双目标角色语义等专属组合规则由对应卡牌文件校验。
+	# 当前卡牌源码；目标组合与效果前置条件等专属规则由对应卡牌文件校验。
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(str(definition.get("id", "")))
 	if source_definition != null:
 		var source_error: String = source_definition.validate_target_selection(self, actor, target_id, all_target_ids)
@@ -294,23 +294,27 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 			if delayed_card.definition_id == str(definition.get("id", "")):
 				return "目标判定区已有同名延时锦囊。"
 
-	# 借刀杀人的第二目标必须是首目标攻击范围内的合法其他角色。
+	# 卡牌专属目标条件由定义文件的 validate_target_selection() 统一补充校验。
 	return ""
 
 
-## 返回当前玩家已经使用同一配置分组卡牌的总次数；未配置分组时只统计自身稳定 ID。
+## 返回当前玩家已经使用同一配置分组卡牌的总次数；阶段限制读取独立出牌阶段历史，其他限制继续读取本回合历史。
 func _get_grouped_play_count(actor: PlayerState, definition: Dictionary) -> int:
 	# 当前计数组；同组属性牌共享限制，空组回退当前卡牌 ID。
 	var play_limit_group: String = str(definition.get("play_limit_group", definition.get("id", "")))
+	# 当前限制作用域；phase 表示每个出牌阶段独立计算，默认 turn 保持现有每回合限制语义。
+	var play_limit_scope: String = str(definition.get("play_limit_scope", "turn"))
+	# 当前作用域对应的使用历史；独立历史避免额外出牌阶段清空【杀】次数时破坏回合级统计。
+	var use_history: Dictionary = actor.play_phase_card_use_history if play_limit_scope == "phase" else actor.card_use_history
 	# 已使用次数；逐项读取历史中的牌定义，新增同组牌无需修改规则服务。
 	var used_count: int = 0
-	for used_definition_id_variant: Variant in actor.card_use_history.keys():
+	for used_definition_id_variant: Variant in use_history.keys():
 		# 历史卡牌定义 ID；无效旧存档条目会被安全忽略。
 		var used_definition_id: String = str(used_definition_id_variant)
 		var used_definition: Dictionary = GameDatabase.get_card(used_definition_id)
 		var used_group: String = str(used_definition.get("play_limit_group", used_definition_id))
 		if used_group == play_limit_group:
-			used_count += int(actor.card_use_history.get(used_definition_id, 0))
+			used_count += int(use_history.get(used_definition_id, 0))
 	return used_count
 
 

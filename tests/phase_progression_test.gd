@@ -64,6 +64,8 @@ func _create_controller() -> void:
 	add_child(_controller)
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
+	# 本测试只验证阶段规则与异步选择恢复，关闭相邻阶段的表现等待以保留同步断言边界。
+	_controller.game_flow_interval_seconds = 0.0
 	_controller.ai_action_delay_seconds = 0.01
 	_controller.delayed_judgment_preview_seconds = 0.0
 	_controller.delayed_judgment_result_pause_seconds = 0.0

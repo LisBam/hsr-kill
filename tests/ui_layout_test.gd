@@ -151,6 +151,22 @@ func _run() -> void:
 	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x) or not is_equal_approx(skill_bar.position.x + skill_bar.size.x + 6.0, (main_instance.get_node("LocalPlayerSeatSlot") as Control).position.x):
 		_fail("skill_button_only_layout:%s/%s" % [skill_bar.get_rect(), first_skill_button.text if first_skill_button != null else "null"])
 		return
+	# 不可发动技能普通样式；测试武将为样例技能，因此按钮必须使用中性灰禁用外观。
+	var skill_normal_style: StyleBoxFlat = first_skill_button.get_theme_stylebox("normal") as StyleBoxFlat
+	# 不可发动技能悬停样式；颜色和边框必须与普通样式完全一致，不产生悬停反馈。
+	var skill_hover_style: StyleBoxFlat = first_skill_button.get_theme_stylebox("hover") as StyleBoxFlat
+	# 不可发动技能禁用样式；Button 实际绘制该状态，必须与普通灰显样式保持一致。
+	var skill_disabled_style: StyleBoxFlat = first_skill_button.get_theme_stylebox("disabled") as StyleBoxFlat
+	if not first_skill_button.disabled or not skill_normal_style.bg_color.is_equal_approx(skill_hover_style.bg_color) or not skill_normal_style.border_color.is_equal_approx(skill_hover_style.border_color) or not skill_normal_style.bg_color.is_equal_approx(skill_disabled_style.bg_color):
+		_fail("skill_disabled_visual disabled=%s normal=%s hover=%s" % [first_skill_button.disabled, skill_normal_style.bg_color, skill_hover_style.bg_color])
+		return
+	# 技能点击错误区；直接调用处理入口模拟过期点击，不可发动技能必须保持静默。
+	var error_label: Label = main_instance.get_node("%ErrorLabel") as Label
+	error_label.text = ""
+	main_instance.call("_on_skill_requested", first_skill_button.skill_id)
+	if not error_label.text.is_empty():
+		_fail("skill_unavailable_popup=%s" % error_label.text)
+		return
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
 	var local_player_seat_slot: Control = main_instance.get_node("LocalPlayerSeatSlot") as Control
 	for checked_control: Control in [menu_button, equipment_panel, hand_panel, skill_bar, local_player_seat_slot]:
@@ -174,6 +190,18 @@ func _run() -> void:
 	var local_seat_screen_rect: Rect2 = _screen_rect(local_player_seat_slot)
 	if not local_seat_screen_rect.size.is_equal_approx(Vector2(148.35, 197.8)):
 		_fail("local_seat_size:%s" % local_seat_screen_rect.size)
+		return
+	# 技能栏屏幕矩形；按钮区底边必须与本地武将牌底边严格平行。
+	var skill_bar_screen_rect: Rect2 = _screen_rect(skill_bar)
+	if not is_equal_approx(skill_bar_screen_rect.end.y, local_seat_screen_rect.end.y):
+		_fail("skill_card_bottom_alignment:%s/%s" % [skill_bar_screen_rect.end.y, local_seat_screen_rect.end.y])
+		return
+	# 本地身份徽记；身份 UI 背景与边框必须为完全不透明，不保留半透明叠色。
+	var identity_badge: Label = (main_instance.get("local_player_card") as PlayerTargetView).get_node("IdentityBadge") as Label
+	# 身份徽记样式；StyleBoxFlat 的背景与边框 alpha 均应为1.0。
+	var identity_style: StyleBoxFlat = identity_badge.get_theme_stylebox("normal") as StyleBoxFlat
+	if not is_equal_approx(identity_style.bg_color.a, 1.0) or not is_equal_approx(identity_style.border_color.a, 1.0):
+		_fail("identity_opacity:%s/%s" % [identity_style.bg_color.a, identity_style.border_color.a])
 		return
 	# 本地武将牌屏幕底部留白；默认26像素只抬升牌面，不恢复已隐藏的主视角座次标签。
 	var local_seat_bottom_margin: float = viewport_rect.end.y - local_seat_screen_rect.end.y
@@ -719,6 +747,15 @@ func _run() -> void:
 	if not is_equal_approx(GameSettings.ai_response_delay_seconds, requested_ai_response_delay) or not is_equal_approx(match_controller.ai_action_delay_seconds, requested_ai_response_delay):
 		_fail("ai_response_delay_setting:%s/%s" % [GameSettings.ai_response_delay_seconds, match_controller.ai_action_delay_seconds])
 		return
+	# 游戏速度滑条；范围固定为0.1至1.0秒，修改后立即同步后续阶段与自动响应的全局最小间隔。
+	var game_speed_slider: HSlider = main_instance.get_node("%GameSpeedSlider") as HSlider
+	# 本用例游戏流程间隔；0.8秒与AI独立设置不同，用于验证两个设置没有错误共用同一变量。
+	var requested_game_speed_interval: float = 0.8
+	game_speed_slider.value = requested_game_speed_interval
+	await get_tree().process_frame
+	if not is_equal_approx(game_speed_slider.min_value, 0.1) or not is_equal_approx(game_speed_slider.max_value, 1.0) or not is_equal_approx(game_speed_slider.step, 0.1) or not is_equal_approx(GameSettings.game_speed_interval_seconds, requested_game_speed_interval) or not is_equal_approx(match_controller.game_flow_interval_seconds, requested_game_speed_interval):
+		_fail("game_speed_setting:%s/%s" % [GameSettings.game_speed_interval_seconds, match_controller.game_flow_interval_seconds])
+		return
 	# 对局日志展开按钮；点击后正文面板必须显示，验证“记录”入口不再只是静态标题。
 	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
 	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
@@ -886,6 +923,8 @@ func _make_single_target_state() -> GameState:
 	game_state.current_player_id = 4
 	game_state.current_phase = "play"
 	game_state.turn_number = 1
+	# 活动出牌请求摘要；正式界面只有在阶段与 chooseToUse 同时有效时才允许编辑卡牌目标。
+	game_state.current_choice_request = {"request_id":98001, "event_id":98002, "actor_id":4, "choice_type":"use"}
 	return game_state
 
 

@@ -197,9 +197,9 @@ func _run() -> void:
 		printerr("SMOKE_FAIL manual_multi_target_order=%s" % normalized_manual_target_order)
 		get_tree().quit(1)
 		return
-	# 测试借刀杀人实体；其两个 ID 分别表示持刀者与被杀者，必须保留提交语义顺序。
+	# 测试借刀杀人实体；卡牌目标只包含持刀者，被杀者不进入本牌目标规范化流程。
 	var borrow_sword_order_card: CardInstance = CardInstance.new("jiedao", "club", 12)
-	if target_order_rules.normalize_targets(2, borrow_sword_order_card, [1, 3]) != [1, 3]:
+	if target_order_rules.normalize_targets(2, borrow_sword_order_card, [1]) != [1]:
 		printerr("SMOKE_FAIL borrow_sword_target_semantics")
 		get_tree().quit(1)
 		return
@@ -720,9 +720,11 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 无头测试 AI 延迟；控制器入树时会读取全局菜单设置，因此在 _ready 完成后再次覆盖为0秒，保证固定帧数能推进且收尾不遗留长计时器。
 	_controller.ai_action_delay_seconds = 0.0
-	# 借刀动作枚举状态；三名存活角色足以覆盖使用者、持刀者与被杀者的完整目标组合。
+	# 总烟雾测试包含大量同步阶段与死亡转交断言，关闭表现节奏并由专项测试单独验证正式间隔。
+	_controller.game_flow_interval_seconds = 0.0
+	# 借刀动作枚举状态；三名存活角色足以覆盖使用者、唯一持刀者与后续被杀者的牌效条件。
 	var borrow_sword_action_state: GameState = GameState.new()
-	# 借刀动作测试座次 ID；依次创建0至2号三名玩家，修改人数会改变可枚举的双目标组合。
+	# 借刀动作测试座次 ID；依次创建0至2号三名玩家，修改人数会改变持刀者是否存在合法攻击对象。
 	for borrow_sword_player_id: int in range(3):
 		# 借刀动作测试玩家；默认存活且相邻座次可满足持刀者的基础攻击范围。
 		var borrow_sword_player: PlayerState = PlayerState.new(borrow_sword_player_id, "玩家%d" % (borrow_sword_player_id + 1))
@@ -743,11 +745,11 @@ func _run() -> void:
 	_controller.card_rules = CardRuleService.new(borrow_sword_action_state)
 	# 借刀合法动作；调用卡牌源码的复杂目标钩子，确保动态端口接收到严格的 Array[int]。
 	var borrow_sword_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
-	# 是否找到“二号位持刀、三号位被杀”的标准动作；默认false，匹配目标顺序后置为true。
+	# 是否找到只指定二号位持刀者的标准动作；默认false，匹配唯一牌目标后置为true。
 	var found_borrow_sword_action: bool = false
 	# 当前借刀合法动作；逐项读取目标数组，不修改控制器返回的动作内容。
 	for borrow_sword_action: Dictionary in borrow_sword_legal_actions:
-		if borrow_sword_action.get("target_ids", []) == [1, 2]:
+		if borrow_sword_action.get("target_ids", []) == [1]:
 			found_borrow_sword_action = true
 			break
 	if not found_borrow_sword_action:

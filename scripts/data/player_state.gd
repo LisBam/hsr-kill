@@ -84,6 +84,9 @@ var turn_history: Array[Dictionary] = []
 ## 当前回合使用牌统计；键为逻辑牌名，值为已经确认使用的次数。
 var card_use_history: Dictionary = {}
 
+## 当前出牌阶段使用牌统计；键为逻辑牌名，值为本阶段已经确认使用的次数，进入每个普通或额外出牌阶段时清空。
+var play_phase_card_use_history: Dictionary = {}
+
 ## 当前回合响应记录；每项保存响应事件 ID、逻辑牌和实体材料 UID。
 var response_history: Array[Dictionary] = []
 
@@ -216,6 +219,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"temporary_skills": temporary_skills.duplicate(true),
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),
+		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),
 		"response_history_count": response_history.size(),
 		"damage_history_count": damage_history.size(),
 		"skill_history_count": skill_history.size(),

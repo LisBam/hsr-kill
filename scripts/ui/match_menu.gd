@@ -33,6 +33,12 @@ signal restart_requested(player_count: int)
 ## AI 响应时间标签；同步显示当前滑条的实际秒数，避免“速度”设置缺少可预期的时间含义。
 @onready var _ai_response_delay_label: Label = %AiResponseDelayLabel
 
+## 游戏速度滑条；修改后立即影响后续阶段切换与自动响应的最小等待时间，不重开当前对局。
+@onready var _game_speed_slider: HSlider = %GameSpeedSlider
+
+## 游戏速度标签；显示实际流程间隔秒数，明确数值越小则对局推进越快。
+@onready var _game_speed_label: Label = %GameSpeedLabel
+
 ## UI 风格下拉框；选项来自统一注册表，元数据保存稳定风格标识而不是显示文字。
 @onready var _ui_style_option: OptionButton = %UiStyleOption
 
@@ -58,12 +64,19 @@ func _ready() -> void:
 	_ai_response_delay_slider.value = GameSettings.ai_response_delay_seconds
 	_ai_response_delay_slider.value_changed.connect(_on_ai_response_delay_changed)
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
+	_game_speed_slider.min_value = GameSettings.MIN_GAME_SPEED_INTERVAL_SECONDS
+	_game_speed_slider.max_value = GameSettings.MAX_GAME_SPEED_INTERVAL_SECONDS
+	_game_speed_slider.step = GameSettings.GAME_SPEED_INTERVAL_STEP_SECONDS
+	_game_speed_slider.value = GameSettings.game_speed_interval_seconds
+	_game_speed_slider.value_changed.connect(_on_game_speed_changed)
+	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
 	_populate_ui_style_options()
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	GameSettings.ui_style_changed.connect(_refresh_ui_style_selection)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
+	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
 	refresh_ui_style()
 
@@ -104,6 +117,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_restart_button)
 	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -150,6 +164,19 @@ func _refresh_ai_response_delay_text(delay_seconds: float) -> void:
 ## 将滑条值写入全局 AI 响应设置；控制器通过全局信号更新后续调度，不需要重开对局。
 func _on_ai_response_delay_changed(delay_seconds: float) -> void:
 	GameSettings.set_ai_response_delay_seconds(delay_seconds)
+
+
+## 更新游戏速度显示；数值表示阶段切换与自动响应至少等待的秒数，数值越小推进越快。
+func _refresh_game_speed_text(interval_seconds: float) -> void:
+	if not is_node_ready():
+		return
+	_game_speed_slider.set_value_no_signal(interval_seconds)
+	_game_speed_label.text = "游戏速度：%.1f秒间隔" % interval_seconds
+
+
+## 将滑条值写入全局游戏速度设置；控制器只对之后创建的调度任务使用新间隔。
+func _on_game_speed_changed(interval_seconds: float) -> void:
+	GameSettings.set_game_speed_interval_seconds(interval_seconds)
 
 
 ## 切换菜单面板显隐；当前对局继续运行，不改变任何规则状态。

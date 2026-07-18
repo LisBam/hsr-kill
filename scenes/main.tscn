@@ -17,6 +17,7 @@
 [ext_resource type="Script" uid="uid://5ckjv0sds4ni" path="res://scripts/ui/equipment_stack_view.gd" id="17_equipment_stack"]
 [ext_resource type="Script" uid="uid://dn0465a3xhtvw" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
 [ext_resource type="Script" uid="uid://b5v6wgyjxk6fw" path="res://scripts/core/gameplay_pause_service.gd" id="19_pause_service"]
+[ext_resource type="Script" path="res://scripts/core/game_flow_pacer.gd" id="20_flow_pacer"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -91,6 +92,9 @@ script = ExtResource("2_match")
 
 [node name="GameplayPauseService" type="Node" parent="MatchController" unique_id=2076753312]
 script = ExtResource("19_pause_service")
+
+[node name="GameFlowPacer" type="Node" parent="MatchController"]
+script = ExtResource("20_flow_pacer")
 
 [node name="RuleEventBus" type="Node" parent="MatchController" unique_id=1351689348]
 script = ExtResource("3_event")
@@ -213,7 +217,7 @@ anchor_right = 1.0
 offset_left = -286.0
 offset_top = 58.0
 offset_right = -18.0
-offset_bottom = 354.0
+offset_bottom = 412.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
@@ -272,6 +276,23 @@ layout_mode = 2
 min_value = 0.05
 max_value = 1.0
 step = 0.05
+value = 0.3
+
+[node name="GameSpeedRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+layout_mode = 2
+
+[node name="GameSpeedLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/GameSpeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "游戏速度：0.3秒间隔"
+
+[node name="GameSpeedSlider" type="HSlider" parent="MatchMenu/MenuPanel/MenuVBox/GameSpeedRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+min_value = 0.1
+max_value = 1.0
+step = 0.1
 value = 0.3
 
 [node name="PlayerCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1045087042]

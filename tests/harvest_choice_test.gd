@@ -50,6 +50,8 @@ func _run() -> void:
 	_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
+	# 请求序号专项只验证规则恢复，关闭阶段间表现等待以同步进入首个出牌阶段。
+	_controller.game_flow_interval_seconds = 0.0
 	_controller.ai_action_delay_seconds = 0.0
 	if not _controller.start_match(2, 7):
 		_fail("start_match")

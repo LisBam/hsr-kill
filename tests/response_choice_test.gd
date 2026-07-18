@@ -42,6 +42,8 @@ func _run() -> void:
 	add_child(_controller)
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
+	# 响应恢复专项只验证请求与出牌阶段衔接，关闭阶段间表现等待以保持固定帧断言。
+	_controller.game_flow_interval_seconds = 0.0
 	# AI 延迟；留出两帧完成本地响应，并在结束前等待失效计时器自然回收。
 	_controller.ai_action_delay_seconds = 0.05
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
