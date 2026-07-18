@@ -26,6 +26,8 @@ func _run() -> void:
 		return
 	if not _test_jiahu_and_bingfeng():
 		return
+	if not await _test_deferred_phase_choice_resumption():
+		return
 	if not _test_gangfeng_response():
 		return
 	if not _test_jiyu_branches():
@@ -187,6 +189,56 @@ func _test_jiahu_and_bingfeng() -> bool:
 	return true
 
 
+## 验证准备与弃牌阶段的技能选择提交后会续接唯一阶段流程，覆盖加护自选自身和永屹额外出牌阶段两种卡死场景。
+func _test_deferred_phase_choice_resumption() -> bool:
+	_reset_state(2)
+	# 阶段节奏；保留极短延时以断言恢复后确实登记了下一阶段，而不是让空牌堆直接推进到终局。
+	_controller.game_flow_interval_seconds = 0.05
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "start"
+	_controller.state.phase_index = 0
+	# 加护运行时技能；安装真实准备阶段订阅，确保测试经过与对局一致的Begin选择路径。
+	var jiahu: SkillDefinition = _install_single_skill(0, "jiahu")
+	# 准备阶段生命周期；加护应创建本地目标选择并把阶段临时标记为choice。
+	var preparation_started: bool = _controller._begin_phase_lifecycle("phaseZhunbei", 0, {"turn_number":_controller.state.turn_number}, -1)
+	if jiahu == null or not preparation_started or not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
+		return _fail("jiahu_begin_choice skill=%s started=%s pending=%s phase=%s" % [jiahu, preparation_started, _controller.has_pending_card_choice(), _controller.state.current_phase])
+	# 自选自身响应；这是此前会让准备阶段无法继续、游戏卡死的路径。
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	# 加护结果与后续阶段计时器；护盾、横置和已登记的判定阶段切换证明没有停留在start或choice死状态。
+	var march: PlayerState = _controller.state.get_player(0)
+	if march == null or not march.chained or march.shield != 1 or _controller.state.current_phase != "start" or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending("phase_transition"):
+		return _fail("jiahu_resume chained=%s shield=%d phase=%s transition=%s" % [march.chained if march != null else false, march.shield if march != null else -1, _controller.state.current_phase, _controller.game_flow_pacer.has_pending("phase_transition") if _controller.game_flow_pacer != null else false])
+
+	# 上一场景仍未到期的准备阶段切换；取消后再重置，防止它干扰永屹的独立弃牌阶段断言。
+	_controller.game_flow_pacer.cancel_all()
+	_reset_state(2)
+	# 阶段节奏；使用极短延时后等待一次，直接验证额外出牌阶段实际已开始。
+	_controller.game_flow_interval_seconds = 0.05
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "discard"
+	_controller.state.phase_index = 4
+	# 永屹持有者状态；1点护盾正好满足支付额外出牌阶段费用。
+	var gepard: PlayerState = _controller.state.get_player(0)
+	gepard.shield = 1
+	# 永屹运行时技能；安装真实弃牌阶段Begin订阅，确保确认响应经过统一恢复入口。
+	var yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
+	# 弃牌阶段生命周期；永屹应在Begin创建确认选择并暂停当前弃牌阶段。
+	var discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
+	if yongyi == null or not discard_started or not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
+		return _fail("yongyi_begin_choice skill=%s started=%s pending=%s phase=%s" % [yongyi, discard_started, _controller.has_pending_card_choice(), _controller.state.current_phase])
+	# 确认支付护盾；这是此前额外出牌阶段无法被安排、游戏卡死的路径。
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 阶段转换等待；额外出牌阶段不经过摸牌阶段，因此短暂等待后应稳定进入新的出牌请求。
+	await get_tree().create_timer(0.10, false).timeout
+	# 永屹结果与额外出牌阶段；护盾已支付、额外阶段回到结束阶段标记存在，且已打开新的正式出牌请求。
+	if gepard.shield != 0 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
+		return _fail("yongyi_resume shield=%d return_finish=%s phase=%s play_choice=%s" % [gepard.shield, _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
+	return true
+
+
 ## 验证罡风可在响应窗口将黑色实体牌转化为保留花色点数的雷【杀】，材料最终进入弃牌堆。
 func _test_gangfeng_response() -> bool:
 	_reset_state(2)
@@ -320,6 +372,32 @@ func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: i
 	card.owner_id = player_id
 	_controller.state.get_player(player_id).hand.append(card)
 	return card
+
+
+## 为指定玩家安装一个运行时技能实例；测试需要通过真实时机订阅复现阶段选择与恢复流程。
+func _install_single_skill(player_id: int, skill_id: String) -> SkillDefinition:
+	# 新技能实例；技能目录缺失时返回null并交由调用方报告具体测试场景。
+	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+	if skill == null:
+		return null
+	skill.bind(_controller, player_id)
+	_controller.skill_instances_by_player[player_id] = {skill_id:skill}
+	skill.install()
+	return skill
+
+
+## 为当前统一选择请求提交目标或确认结果；测试通过正式PlayerAction入口覆盖事件运行时与阶段恢复链。
+func _submit_pending_choice(actor_id: int, selected_card_uids: Array[int], selected_target_ids: Array[int], confirmed: bool) -> bool:
+	if _controller._pending_card_choice.is_empty():
+		return _fail("missing_pending_choice actor=%d" % actor_id)
+	# 当前请求序号；提交前读取稳定ID，避免同步恢复创建下一请求后误用新窗口编号。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	# 标准选择动作；卡牌、目标和确认状态均显式填写，保持与真实界面提交协议一致。
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "confirmed":confirmed}
+	if not _controller.submit_action(action):
+		return _fail("choice_rejected actor=%d request=%d" % [actor_id, request_id])
+	return true
 
 
 ## 记录首个失败原因并以1结束测试进程；返回false便于调用方立即退出。
