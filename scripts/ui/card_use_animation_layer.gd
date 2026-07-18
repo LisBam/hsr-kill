@@ -33,11 +33,11 @@ extends Control
 ## 动画层绘制层级；默认30确保目标线与飞牌位于角色界面之上、菜单和选将遮罩之下，运行时通常无需修改。
 @export_range(0, 100, 1) var presentation_z_index: int = 30
 
-## 同一玩家连续摸牌时相邻牌面的堆叠偏移；默认向右18像素、向上3像素，保证每张牌均可辨认。
+## 兼容未归入批次的区域转移时相邻牌面的堆叠偏移；默认向右18像素、向上3像素，避免同一锚点的多个临时牌面完全重合。
 @export var draw_stack_offset: Vector2 = Vector2(18.0, -3.0)
 
-## 同一批摸牌依次开始飞行的时间间隔；默认0.08秒形成明确顺序，同时保证整组牌面短暂共存。
-@export_range(0.0, 0.4, 0.01) var draw_transfer_stagger: float = 0.08
+## 同一次摸牌中相邻牌面中心的水平间距；默认42像素让整组可辨认且以目标锚点为中心，运行时可按主题调整。
+@export_range(20.0, 100.0, 1.0) var draw_batch_card_spacing: float = 42.0
 
 ## 每秒包含的毫秒数；用于计算卡牌从开始飞行到规则响应完成之间已经经过的真实时间。
 const MILLISECONDS_PER_SECOND: float = 1000.0
@@ -83,6 +83,12 @@ var _draw_transfer_stacks: Dictionary = {}
 
 ## 普通区域转移牌面实例 ID 到补间的映射；重新开局时清空所有权索引，旧协程依靠动画代次安全退出。
 var _transfer_tweens: Dictionary = {}
+
+## 摸牌表现批次递增序号；每次 draw() 都取得独立 ID，使多个玩家或同一玩家的连续摸牌可立即并行播放。
+var _draw_transfer_batch_sequence: int = 0
+
+## 当前摸牌批次 ID 到正在执行补间的映射；重开时统一终止全部批次，避免旧局协程继续访问新桌面节点。
+var _draw_transfer_batch_tweens: Dictionary = {}
 
 ## 使用、展示与判定牌实例 ID 到生命周期补间的映射；单一补间替代逐牌飞行和停留计时器，重开时可统一终止。
 var _card_lifecycle_tweens: Dictionary = {}
@@ -193,7 +199,7 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 		_schedule_card_fade(presented_card_instance_id, card_flight_duration + card_hold_duration)
 
 
-## 播放一次牌区转移表现；可选堆叠键让同一批摸牌依次飞入并保留全部牌面。
+## 播放一次牌区转移表现；可选堆叠键只调整临时牌面落点，所有调用均立即开始飞行。
 func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2, draw_stack_key: String = "") -> void:
 	if card_view == null:
 		return
@@ -223,11 +229,9 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	transfer_card.z_index = 80 + stack_index if not draw_stack_key.is_empty() else 80 + _transfer_cards.size()
 	# 最终堆叠位置；第一张落在玩家锚点，后续牌按固定向量依次压叠显示。
 	var stacked_target_position: Vector2 = target_position - transfer_card.get_card_size() * 0.5 + draw_stack_offset * float(stack_index)
-	# 移动补间；摸牌先按序号等待固定间隔，再使用与出牌一致的时长和缓出曲线飞入。
+	# 移动补间；无论是否存在同组转移牌都立即开始，避免没有批次信号的摸牌退化为逐张等待。
 	var transfer_tween: Tween = create_tween()
 	transfer_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	if not draw_stack_key.is_empty() and stack_index > 0:
-		transfer_tween.tween_interval(draw_transfer_stagger * float(stack_index))
 	transfer_tween.tween_property(transfer_card, "position", stacked_target_position, card_flight_duration)
 	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
 	transfer_tween.tween_interval(minf(card_hold_duration, 0.24))
@@ -244,6 +248,74 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	_remove_draw_transfer_card(draw_stack_key, transfer_card_instance_id)
 	if is_instance_valid(transfer_card):
 		transfer_card.queue_free()
+
+
+## 立即播放一次完整摸牌批次；同批牌从同一牌堆起点同时飞向以目标锚点为中心的横向组合，不等待其他玩家或其他 draw() 调用的批次结束。
+func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vector2, target_position: Vector2) -> void:
+	# 当前可播放的正式牌面；空、已释放节点不创建无内容动画任务。
+	var valid_card_views: Array[CardView] = []
+	for card_view: CardView in card_views:
+		if card_view == null or not is_instance_valid(card_view):
+			continue
+		if card_view.get_parent() != self:
+			add_child(card_view)
+		# 批次启动前保持隐藏；下面的独立批次协程会在本帧同步完成起点写入后显示全部成员。
+		card_view.visible = false
+		_transfer_cards[card_view.get_instance_id()] = card_view
+		valid_card_views.append(card_view)
+	if valid_card_views.is_empty():
+		return
+	# 当前批次 ID；仅用于表现补间管理，绝不写入权威实体、快照或回放。
+	_draw_transfer_batch_sequence += 1
+	_play_draw_transfer_batch(_draw_transfer_batch_sequence, valid_card_views, start_position, target_position)
+
+
+## 播放一个独立摸牌批次；本方法可被多个调用并行执行，每个批次只管理自己的卡牌与补间。
+func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch_start_position: Vector2, batch_target_position: Vector2) -> void:
+	# 当前动画代次；重开清场后旧协程不再访问或启动新局的任何表现任务。
+	var batch_generation: int = _presentation_generation
+	# 同批飞行补间；所有牌的位置与缩放并行开始，绝不使用逐张延时。
+	var flight_tween: Tween = create_tween().set_parallel(true)
+	_draw_transfer_batch_tweens[batch_id] = flight_tween
+	for card_index: int in range(draw_cards.size()):
+		# 当前正式牌面；每张维持牌背、水平旋转与独立层级，避免同位置遮挡导致只看到一张。
+		var draw_card: CardView = draw_cards[card_index]
+		var draw_card_size: Vector2 = draw_card.get_card_size()
+		# 当前牌相对整组中心的横向偏移；首尾绝对值相等，保证二张及以上时整体仍严格居中。
+		var centered_offset_x: float = (float(card_index) - float(draw_cards.size() - 1) * 0.5) * draw_batch_card_spacing
+		draw_card.position = batch_start_position - draw_card_size * 0.5
+		draw_card.rotation = 0.0
+		draw_card.scale = Vector2.ONE * 0.82
+		draw_card.modulate = Color.WHITE
+		draw_card.z_index = 90 + card_index
+		draw_card.visible = true
+		flight_tween.tween_property(draw_card, "position", batch_target_position + Vector2(centered_offset_x, 0.0) - draw_card_size * 0.5, card_flight_duration)
+		flight_tween.tween_property(draw_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
+	await flight_tween.finished
+	if batch_generation != _presentation_generation:
+		return
+	# 同批停留补间；整组同时停留，确保玩家能辨认这是一次多张摸牌而不是多次独立摸牌。
+	var hold_tween: Tween = create_tween()
+	_draw_transfer_batch_tweens[batch_id] = hold_tween
+	hold_tween.tween_interval(minf(card_hold_duration, 0.24))
+	await hold_tween.finished
+	if batch_generation != _presentation_generation:
+		return
+	# 同批淡出补间；其他批次可以同时飞行、停留或淡出，不因本批仍在展示而延迟。
+	var fade_tween: Tween = create_tween().set_parallel(true)
+	_draw_transfer_batch_tweens[batch_id] = fade_tween
+	for draw_card: CardView in draw_cards:
+		if draw_card != null and is_instance_valid(draw_card):
+			fade_tween.tween_property(draw_card, "modulate:a", 0.0, target_line_fade_duration)
+	await fade_tween.finished
+	if batch_generation != _presentation_generation:
+		return
+	for draw_card: CardView in draw_cards:
+		if draw_card == null or not is_instance_valid(draw_card):
+			continue
+		_transfer_cards.erase(draw_card.get_instance_id())
+		draw_card.queue_free()
+	_draw_transfer_batch_tweens.erase(batch_id)
 
 
 ## 从摸牌堆叠组移除已完成牌面的实例 ID；最后一张结束后删除空键，避免后续批次继承旧索引。
@@ -329,6 +401,12 @@ func clear_presentations() -> void:
 		var lifecycle_tween: Tween = lifecycle_tween_variant as Tween
 		if lifecycle_tween != null and lifecycle_tween.is_valid():
 			lifecycle_tween.kill()
+	# 当前全部并行摸牌批次补间；停止后旧局各批次均不会再访问或改写新桌面节点。
+	for draw_batch_tween_variant: Variant in _draw_transfer_batch_tweens.values():
+		# 当前批次补间；飞行、停留或淡出阶段都必须被主动终止。
+		var draw_batch_tween: Tween = draw_batch_tween_variant as Tween
+		if draw_batch_tween != null and draw_batch_tween.is_valid():
+			draw_batch_tween.kill()
 	for active_card: CardView in _active_cards:
 		if active_card != null and is_instance_valid(active_card):
 			active_card.queue_free()
@@ -343,6 +421,8 @@ func clear_presentations() -> void:
 	_transfer_cards.clear()
 	_draw_transfer_stacks.clear()
 	_transfer_tweens.clear()
+	_draw_transfer_batch_tweens.clear()
+	_draw_transfer_batch_sequence = 0
 	_fade_queue.clear()
 	_motion_tweens.clear()
 	_card_lifecycle_tweens.clear()

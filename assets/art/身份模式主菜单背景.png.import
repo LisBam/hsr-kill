@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://hctrdnqsdn7i"
-path="res://.godot/imported/xier.png-ee64203d406708c222a616e9ab335ccd.ctex"
+uid="uid://dlfv5vj23jqbp"
+path="res://.godot/imported/身份模式主菜单背景.png-b2da5a0840d8367d332c8c089eebb317.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://game_data/characters/full_image/xier.png"
-dest_files=["res://.godot/imported/xier.png-ee64203d406708c222a616e9ab335ccd.ctex"]
+source_file="res://assets/art/身份模式主菜单背景.png"
+dest_files=["res://.godot/imported/身份模式主菜单背景.png-b2da5a0840d8367d332c8c089eebb317.ctex"]
 
 [params]
 

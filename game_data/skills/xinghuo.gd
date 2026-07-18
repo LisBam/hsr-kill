@@ -34,6 +34,7 @@ func _on_owner_card_targeted(event: RuleEvent) -> void:
 		return
 	# 唯一目标 ID；逐目标时机的 target_id 与最终数组成员应一致，仍以事件字段作为权威目标。
 	var target_id: int = int(event.data.get("target_id", event.target_id))
+	announce_activation({"target_id":target_id, "card_uid":int(event.data.get("card_uid", -1))})
 	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
 	if target_id == owner_player_id:
 		host.call("draw", owner_player_id, 1)

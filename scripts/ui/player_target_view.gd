@@ -733,7 +733,7 @@ func _refresh_equipment_rows() -> void:
 		# 当前装备定义；用于按全局名称模式解析牌名，配置缺失时回退到稳定定义 ID。
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则。
-		var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+		var equipment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
 		if bool(card_definition.get("shows_attachment_count", false)):
 			# 装备公开附属牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
 			var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
@@ -822,7 +822,7 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 	# 当前装备静态定义；名称和说明统一从数据库深拷贝读取。
 	var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 	# 当前装备显示名；跟随全局牌名模式，木牛流马额外显示全部观察者可见的“粮”数量。
-	var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+	var equipment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
 	if bool(card_definition.get("shows_attachment_count", false)):
 		equipment_name += "（%d）" % int(_player_snapshot.get("wooden_ox_storage_count", 0))
 	# 当前装备花色点数；与牌面横条内容一致，用于信息框副标题。

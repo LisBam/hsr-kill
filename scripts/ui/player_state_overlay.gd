@@ -21,6 +21,9 @@ extends Control
 ## 链环描边宽度；默认2.5像素保证缩放后仍清晰，仅影响表现。
 @export_range(1.0, 6.0, 0.5) var chain_line_width: float = 2.5
 
+## 横置中空横线的高度；默认10像素形成清晰的灰色空心长条，运行时只改变牌面状态表现。
+@export_range(4.0, 24.0, 1.0) var chained_hollow_line_height: float = 10.0
+
 ## 链条颜色；默认中性灰色区别于金色目标和红色阵亡提示，仅影响表现。
 @export var chain_color: Color = Color("aaa9a6e8")
 
@@ -67,26 +70,15 @@ func _refresh_state() -> void:
 	queue_redraw()
 
 
-## 在存活横置角色的武将牌中心绘制连续交错的灰色链环。
+## 在存活横置角色的武将牌中心绘制贯穿牌面的灰色中空横线。
 func _draw() -> void:
 	if _is_dead or not _is_chained:
 		return
-	# 链条可用水平长度；扣除左右留白后至少保留一个链环宽度。
-	var available_width: float = maxf(card_size.x - chain_horizontal_margin * 2.0, chain_link_width)
-	# 链环数量；向下取整后补一环，保证链条覆盖完整可用宽度。
-	var link_count: int = maxi(int(floor((available_width - chain_link_width) / chain_link_step)) + 1, 1)
-	# 实际链条总宽度；用于把全部链环整体居中到武将牌正中心。
-	var chain_width: float = chain_link_width + chain_link_step * float(link_count - 1)
-	# 第一枚链环的中心横坐标；后续链环按固定步长向右排列。
-	var first_center_x: float = (card_size.x - chain_width) * 0.5 + chain_link_width * 0.5
-	for link_index: int in range(link_count):
-		# 当前链环中心；纵坐标严格使用牌面高度的一半，让链条穿过武将牌正中心。
-		var link_center: Vector2 = Vector2(first_center_x + chain_link_step * float(link_index), card_size.y * 0.5)
-		# 当前链环倾斜角；相邻链环交替倾斜以形成彼此扣合的链条结构。
-		var link_rotation: float = -0.38 if link_index % 2 == 0 else 0.38
-		# 当前链环椭圆折线；首尾闭合并使用抗锯齿描边绘制。
-		var link_points: PackedVector2Array = _make_ellipse_points(link_center, Vector2(chain_link_width * 0.5, chain_link_height * 0.5), link_rotation)
-		draw_polyline(link_points, chain_color, chain_line_width, true)
+	# 中空横线可用宽度；扣除左右留白后始终贯穿武将牌主体且不会越过边框。
+	var hollow_line_width: float = maxf(card_size.x - chain_horizontal_margin * 2.0, 1.0)
+	# 中空横线矩形；严格以武将牌垂直中心定位，形成“铁索”贯穿牌面的明确状态提示。
+	var hollow_line_rect: Rect2 = Rect2(chain_horizontal_margin, card_size.y * 0.5 - chained_hollow_line_height * 0.5, hollow_line_width, chained_hollow_line_height)
+	draw_rect(hollow_line_rect, chain_color, false, chain_line_width, true)
 
 
 ## 构建一个闭合旋转椭圆的采样点；返回值供横置链环描边使用。

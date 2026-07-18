@@ -35,6 +35,18 @@ const AI_LOSE_HP_COST: float = 2.0
 ## AI 将身份态度换算为可选发动收益的除数；数值越小，AI 越愿意为友方支付费用。
 const AI_ATTITUDE_DIVISOR: float = 2.0
 
+## AI 支付弃牌费用后仍应保留的最少手牌数；默认1避免角色为单次支援清空全部防御资源。
+const AI_MIN_HAND_AFTER_DISCARD: int = 1
+
+## AI 可接受失去体力费用的安全体力阈值；默认3保证不会为回复队友而轻率进入濒死风险。
+const AI_SAFE_HP_FOR_LOSE_HP: int = 3
+
+## AI 对手牌短缺受益者的基础需求值；默认3张作为普通角色的资源舒适线，仅影响发动和目标优先级。
+const AI_DRAW_NEED_HAND_TARGET: int = 3
+
+## AI 对受伤受益者每点已损失体力的回复需求倍率；默认2使濒危队友优先获得失去体力分支的回复。
+const AI_RECOVER_NEED_PER_MISSING_HP: float = 2.0
+
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。
 func _init() -> void:
@@ -75,8 +87,8 @@ func _on_any_turn_begin(event: RuleEvent) -> void:
 	# 当前合法费用选项；没有手牌时不显示无法支付的弃置分支，失去1点体力仍保持可选。
 	var options: Array[Dictionary] = []
 	if not turn_player.hand.is_empty():
-		options.append({"id":DISCARD_OPTION_ID, "label":"弃置一张手牌，然后令目标摸一张牌"})
-	options.append({"id":LOSE_HP_OPTION_ID, "label":"失去1点体力，然后令目标回复1点体力"})
+		options.append({"id":DISCARD_OPTION_ID, "label":"弃置手牌"})
+	options.append({"id":LOSE_HP_OPTION_ID, "label":"失去体力"})
 	request_control_selection_for_player(turn_player_id, "振旗", "是否发动【振旗】", options, true, {"kind":"zhenqi_cost_option", "turn_player_id":turn_player_id})
 
 
@@ -167,6 +179,7 @@ func _continue_recipient(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	if host.state.game_over:
 		return true
+	announce_activation_for_player(turn_player_id, {"cost_option_id":cost_option_id, "recipient_id":recipient_id})
 	observe_identity_behavior([recipient_id], {"target_result":IDENTITY_TARGET_RESULT})
 	if effect_id == DRAW_EFFECT_ID:
 		host.call("draw", recipient_id, EFFECT_AMOUNT)
@@ -201,29 +214,35 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == "zhenqi_cost_option":
-		# 费用支付者；其只在存在对自己有利的潜在同势力受益者时主动发动。
+		# 费用支付者；其根据自身手牌、体力与对应支援对象的实际需求决定是否发动。
 		var turn_player_id: int = int(context.get("turn_player_id", -1))
-		var best_recipient_attitude: float = _get_best_snapshot_recipient_attitude(authoritative_snapshot, turn_player_id, evaluator)
+		var turn_player: Dictionary = evaluator.get_player(authoritative_snapshot, turn_player_id)
 		var option_id: String = str(payload.get("selected_control_id", ""))
 		if option_id == DISCARD_OPTION_ID:
-			return best_recipient_attitude / AI_ATTITUDE_DIVISOR - AI_DISCARD_COST
+			if int(turn_player.get("hand_count", 0)) <= AI_MIN_HAND_AFTER_DISCARD:
+				return -100.0
+			return _get_best_snapshot_recipient_effect_score(authoritative_snapshot, turn_player_id, DRAW_EFFECT_ID, evaluator) / AI_ATTITUDE_DIVISOR - AI_DISCARD_COST
 		if option_id == LOSE_HP_OPTION_ID:
-			return best_recipient_attitude / AI_ATTITUDE_DIVISOR - AI_LOSE_HP_COST
+			if int(turn_player.get("hp", 0)) < AI_SAFE_HP_FOR_LOSE_HP:
+				return -100.0
+			return _get_best_snapshot_recipient_effect_score(authoritative_snapshot, turn_player_id, RECOVER_EFFECT_ID, evaluator) / AI_ATTITUDE_DIVISOR - AI_LOSE_HP_COST
 		return 0.0
 	if choice_kind == "zhenqi_discard_card":
 		# 强制弃置费用；返回负保留价值，使 AI 在合法候选中选择价值最低的一张。
 		var selected_cards: Array = payload.get("selected_card_uids", []) as Array
 		return -evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), int(context.get("turn_player_id", -1))) if selected_cards.size() == 1 else -100.0
 	if choice_kind == "zhenqi_recipient":
-		# 领袖选择受益者；强制目标中优先选择当前身份态度最高的角色。
+		# 领袖选择受益者；弃牌分支优先缺手牌友方，失去体力分支优先受伤友方。
 		var selected_targets: Array = payload.get("selected_target_ids", []) as Array
-		return evaluator.get_attitude(authoritative_snapshot, owner_player_id, int(selected_targets[0])) if selected_targets.size() == 1 else -100.0
+		var cost_option_id: String = str(context.get("cost_option_id", ""))
+		var effect_id: String = DRAW_EFFECT_ID if cost_option_id == DISCARD_OPTION_ID else RECOVER_EFFECT_ID
+		return _get_snapshot_recipient_effect_score(authoritative_snapshot, owner_player_id, int(selected_targets[0]), effect_id, evaluator) if selected_targets.size() == 1 else -100.0
 	return 0.0
 
 
 ## 返回费用支付者对其他贝洛伯格角色的最高可感知态度；没有合法受益者时保持0分并取消发动。
-func _get_best_snapshot_recipient_attitude(authoritative_snapshot: Dictionary, turn_player_id: int, evaluator: Object) -> float:
-	# 最佳态度结果；负态度不会抬高可选技能的发动收益。
+func _get_best_snapshot_recipient_effect_score(authoritative_snapshot: Dictionary, turn_player_id: int, effect_id: String, evaluator: Object) -> float:
+	# 最佳受益评分；负态度与不需要对应效果的同势力角色不会驱动 AI 支付费用。
 	var result: float = 0.0
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前公开玩家快照；只使用角色、存活、离场和稳定 ID 字段，不读取隐藏身份分支。
@@ -233,5 +252,24 @@ func _get_best_snapshot_recipient_attitude(authoritative_snapshot: Dictionary, t
 			continue
 		var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
 		if str(character.get("faction", "")) == FACTION_ID:
-			result = maxf(result, evaluator.get_attitude(authoritative_snapshot, turn_player_id, player_id))
+			result = maxf(result, _get_snapshot_recipient_effect_score(authoritative_snapshot, turn_player_id, player_id, effect_id, evaluator))
 	return result
+
+
+## 评估指定同势力角色获得摸牌或回复的实际价值；优先帮助态度为正且手牌不足或已受伤的队友。
+func _get_snapshot_recipient_effect_score(authoritative_snapshot: Dictionary, chooser_id: int, recipient_id: int, effect_id: String, evaluator: Object) -> float:
+	# 当前受益者公开快照；缺失玩家不构成合法支援目标。
+	var recipient: Dictionary = evaluator.get_player(authoritative_snapshot, recipient_id)
+	if recipient.is_empty() or not bool(recipient.get("alive", false)) or bool(recipient.get("out_of_game", false)):
+		return -100.0
+	# 当前角色关系；非友方不会因同势力展示标签而成为 AI 的支援对象。
+	var attitude: float = evaluator.get_attitude(authoritative_snapshot, chooser_id, recipient_id)
+	if attitude <= 0.0:
+		return attitude
+	# 对应效果需求；摸牌看当前手牌短缺，回复看已损失体力，满状态角色不会无意义优先。
+	var need_score: float = 0.0
+	if effect_id == DRAW_EFFECT_ID:
+		need_score = float(maxi(AI_DRAW_NEED_HAND_TARGET - int(recipient.get("hand_count", 0)), 0))
+	else:
+		need_score = float(maxi(int(recipient.get("max_hp", 0)) - int(recipient.get("hp", 0)), 0)) * AI_RECOVER_NEED_PER_MISSING_HP
+	return attitude + need_score

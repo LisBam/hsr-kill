@@ -43,6 +43,8 @@ func _ready() -> void:
 		return
 	if not _test_hostile_card_target():
 		return
+	if not _test_renwang_shield_black_slash():
+		return
 	if not _test_wuxie_decision():
 		return
 	if not _test_skill_confirmation():
@@ -390,6 +392,26 @@ func _test_hostile_card_target() -> bool:
 	var chosen: Dictionary = _policy.choose_action(snapshot, [friend_action, enemy_action])
 	if (chosen.get("target_ids", []) as Array) != [1]:
 		return _fail("hostile_target=%s" % [chosen])
+	return true
+
+
+## 验证 AI 不会对装备【仁王盾】的目标使用黑色【杀】，但持有无视防具武器时仍保留该合法攻击动作。
+func _test_renwang_shield_black_slash() -> bool:
+	# 全身份公开快照；一号反贼是唯一敌方目标，黑色【杀】实体来自领袖完整手牌。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 敌方防具；公开装备信息足以让 AI 预判黑色【杀】完全无效。
+	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(801, "renwang", 1)}
+	# 黑色【杀】动作；基础策略若接受该动作即表示没有正确读取仁王盾的防具拦截钩子。
+	var black_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	# 未装备无视防具武器时的选择；唯一行动完全无效，因此 AI 必须结束出牌而不是消耗【杀】。
+	var blocked_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
+	if str(blocked_choice.get("action_type", "")) != "end_play":
+		return _fail("renwang_black_slash=%s" % [blocked_choice])
+	# 无视防具武器；青釭剑的公开装备声明使同一黑色【杀】重新成为有效攻击选择。
+	(snapshot.get("players", []) as Array)[0]["equipment"] = {"weapon":_card(802, "qinggang", 0)}
+	var ignored_armor_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
+	if str(ignored_armor_choice.get("action_type", "")) != "use_card" or int(ignored_armor_choice.get("card_uid", -1)) != 101:
+		return _fail("renwang_ignored_by_qinggang=%s" % [ignored_armor_choice])
 	return true
 
 

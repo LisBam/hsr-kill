@@ -58,8 +58,8 @@ const EQUIPMENT_SLOT_NAMES: Dictionary = {
 const EQUIPMENT_SLOT_ICONS: Dictionary = {
 	"weapon":"⚔",
 	"armor":"▣",
-	"offensive_mount":"♞+",
-	"defensive_mount":"♞-",
+	"offensive_mount":"+",
+	"defensive_mount":"-",
 	"treasure":"▰",
 }
 
@@ -165,7 +165,7 @@ func _rebuild_rows() -> void:
 		# 当前装备定义；用于统一解析卡牌名称和悬停说明。
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前名称模式下的装备名；配置缺失时回退到稳定定义 ID，便于定位数据异常。
-		var equipment_name: String = GameSettings.resolve_card_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+		var equipment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
 		if bool(card_definition.get("shows_attachment_count", false)):
 			equipment_name += "（%d）" % _wooden_ox_count
 		# 当前装备是否属于选择请求候选；候选向右移并接收点击，非候选保持禁用输入。

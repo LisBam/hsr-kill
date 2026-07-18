@@ -92,6 +92,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			_skipped_play_phase_this_turn = true
 			if not bool(host.call("end_current_play_phase", owner_player_id)):
 				_skipped_play_phase_this_turn = false
+			else:
+				announce_activation()
 		return true
 	if choice_kind == "xingjun_extra_turn":
 		if response.confirmed and response.target_ids.size() == 1:

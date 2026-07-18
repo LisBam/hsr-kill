@@ -12,6 +12,9 @@ var trigger_manager: TriggerManager
 ## 当前权威对局状态；用于读取存活座次和当前回合起点，不直接修改玩家或卡牌数据。
 var state: GameState
 
+## 当前触发器是否因刚创建的选择请求而必须暂停；由控制器注入，空 Callable 时保持同步派发兼容行为。
+var trigger_pause_condition: Callable = Callable()
+
 
 ## 创建服务并绑定可替换依赖；测试和重新开局可继续调用 configure 更新状态与触发器实例。
 func _init(rule_event_bus: RuleEventBus = null, ordered_trigger_manager: TriggerManager = null, game_state: GameState = null) -> void:
@@ -23,6 +26,11 @@ func configure(rule_event_bus: RuleEventBus, ordered_trigger_manager: TriggerMan
 	event_bus = rule_event_bus
 	trigger_manager = ordered_trigger_manager
 	state = game_state
+
+
+## 设置同一时机可选技能的暂停判定；条件只应在本次派发中新建选择请求时返回 true。
+func set_trigger_pause_condition(pause_condition: Callable) -> void:
+	trigger_pause_condition = pause_condition
 
 
 ## 创建并派发一条带 player/source/target/global 角色语义的规则时机；返回对象保留处理器修改和终止结果。
@@ -43,10 +51,17 @@ func dispatch(event: RuleEvent) -> RuleEvent:
 		var seat_order: Array[int] = _get_alive_seat_order()
 		# 当前排序起点；优先使用当前回合角色，无有效回合时依次回退 player、source 和 target。
 		var start_player_id: int = _resolve_start_player_id(event)
-		trigger_manager.dispatch(event, start_player_id, seat_order)
-	if not event.is_terminal():
+		trigger_manager.dispatch(event, start_player_id, seat_order, trigger_pause_condition)
+	if not event.is_terminal() and (trigger_manager == null or not trigger_manager.is_dispatch_deferred(event)):
 		event.finish()
 	return event
+
+
+## 在当前选择结算完成后恢复同一时机尚未询问的技能；返回 true 表示恢复过程中又创建了选择请求。
+func resume_deferred_dispatches() -> bool:
+	if trigger_manager == null:
+		return false
+	return trigger_manager.resume_deferred(trigger_pause_condition)
 
 
 ## 返回当前存活角色的稳定玩家 ID 座次；状态为空时返回空数组并保持注册顺序。

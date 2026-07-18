@@ -17,6 +17,24 @@ const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 ## 中央确定与取消按钮的水平间距；默认28像素避免两个相反命令视觉粘连，运行时无需修改。
 const ACTION_BUTTON_SEPARATION: int = 28
 
+## 【振旗】三项内联选择按钮的最小尺寸；默认104×42像素，保证三个按钮能在原操作区中并列显示。
+const ZHENQI_ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(104.0, 42.0)
+
+## 技能发动名称的字体尺寸；默认28像素使短技能名能在武将牌插画中心清晰辨认，运行时无需动态修改。
+const SKILL_ACTIVATION_FONT_SIZE: int = 28
+
+## 技能发动名称的黑色描边宽度；默认6像素保证文字不会与任意明暗插画混淆，运行时无需动态修改。
+const SKILL_ACTIVATION_OUTLINE_SIZE: int = 6
+
+## 技能发动名称保持完全可见的时长；默认0.48秒让玩家确认发动来源，运行时无需动态修改。
+const SKILL_ACTIVATION_HOLD_SECONDS: float = 0.48
+
+## 技能发动名称淡出的时长；默认0.32秒使提示自然收尾且不遮挡后续操作，运行时无需动态修改。
+const SKILL_ACTIVATION_FADE_SECONDS: float = 0.32
+
+## 技能发动名称的绘制层级；默认31，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
+const SKILL_ACTIVATION_Z_INDEX: int = 31
+
 ## 右侧回合结束按钮的固定最小尺寸；112×36像素弱于中央确认命令但仍保持稳定命中区域，运行时无需修改。
 const END_PLAY_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(112.0, 36.0)
 
@@ -222,6 +240,9 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 ## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
 var _local_hand_gain_tweens: Dictionary = {}
 
+## 当前等待批次完成的摸牌表现数据；键为控制器分配的稳定批次 ID，值保存目标玩家和按牌堆顺序到达的瞬时牌面副本。
+var _draw_presentation_batches: Dictionary = {}
+
 ## 已播放实际使用展示且最终应进入弃牌堆的实体 UID 集合；响应等待超过展示时长后仍用于阻止重复弃牌动画。
 ## 兼容旧调试字段；实际所有权已由 CardUseAnimationLayer 管理，本字典不再写入业务状态并始终保持为空。
 var _presented_discard_card_uids: Dictionary = {}
@@ -250,6 +271,9 @@ var _inline_card_choice: Dictionary = {}
 
 ## 当前内联请求中按点击顺序选择的实体牌 UID；支持弃牌阶段一次选择多张手牌。
 var _inline_selected_card_uids: Array[int] = []
+
+## 【振旗】内联取消按钮；仅在费用选择时显示，与原确定/取消按钮共同组成三项直接选择。
+var _zhenqi_cancel_button: Button
 
 ## 当前独立选择窗口的请求 ID；默认-1表示窗口关闭，用于防止旧提交回调关闭同步创建的新窗口。
 var _modal_choice_request_id: int = -1
@@ -327,7 +351,10 @@ func _ready() -> void:
 	match_controller.action_rejected.connect(_on_action_rejected)
 	match_controller.card_presentation_requested.connect(_on_card_presentation_requested)
 	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
+	match_controller.draw_presentation_batch_started.connect(_on_draw_presentation_batch_started)
+	match_controller.draw_presentation_batch_finished.connect(_on_draw_presentation_batch_finished)
 	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
+	match_controller.skill_activated.connect(_on_skill_activated)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	card_selection_panel.control_submitted.connect(_on_control_choice_submitted)
 	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
@@ -448,7 +475,17 @@ func _configure_interaction_controls() -> void:
 	var cancel_button: Button = %CancelButton
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	BattleUIStyle.apply_interaction_button(cancel_button)
-	$InteractionPanel/InteractionVBox/ActionRow.add_theme_constant_override("separation", ACTION_BUTTON_SEPARATION)
+	# 【振旗】第三个取消按钮；常态隐藏，费用询问时与原两个位置并列，不创建遮罩窗口。
+	_zhenqi_cancel_button = Button.new()
+	_zhenqi_cancel_button.name = "ZhenqiCancelButton"
+	_zhenqi_cancel_button.visible = false
+	_zhenqi_cancel_button.custom_minimum_size = ZHENQI_ACTION_BUTTON_MINIMUM_SIZE
+	_zhenqi_cancel_button.text = "取消"
+	_zhenqi_cancel_button.pressed.connect(_on_zhenqi_cancel_pressed)
+	BattleUIStyle.apply_interaction_button(_zhenqi_cancel_button)
+	var action_row: HBoxContainer = $InteractionPanel/InteractionVBox/ActionRow
+	action_row.add_child(_zhenqi_cancel_button)
+	action_row.add_theme_constant_override("separation", ACTION_BUTTON_SEPARATION)
 	recast_button.visible = false
 	if end_play_button.get_parent() != self:
 		end_play_button.reparent(self)
@@ -1111,7 +1148,7 @@ func _format_local_equipment(player: Dictionary) -> String:
 			# 装备公开附属牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
 			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
 			treasure_name += "（%d）" % wooden_ox_count
-	return "⚔ 武器　%s\n🛡 防具　%s\n♞ 进攻　%s\n♞ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
+	return "⚔ 武器　%s\n🛡 防具　%s\n+ 进攻　%s\n- 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
 
 
 ## 把本地公开装备快照写入独立堆叠组件；候选与选中 UID 只来自当前本地内联请求。
@@ -1141,7 +1178,7 @@ func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 		return "无"
 	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
 	var card: Dictionary = equipment.get(slot, {}) as Dictionary
-	return GameSettings.resolve_card_name(_get_cached_card_definition(str(card.get("definition_id", ""))))
+	return GameSettings.resolve_card_display_name(_get_cached_card_definition(str(card.get("definition_id", ""))))
 
 
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
@@ -1414,6 +1451,9 @@ func _on_use_pressed() -> void:
 		_submit_equipment_action()
 		return
 	if not _inline_card_choice.is_empty():
+		if _is_inline_zhenqi_cost_choice(_inline_card_choice):
+			_submit_inline_control_choice("discard_hand")
+			return
 		_submit_inline_card_choice(_inline_selected_card_uids)
 		return
 	if _selected_card_uid < 0:
@@ -1477,6 +1517,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if not _active_equipment_action.is_empty():
 				_on_cancel_pressed()
 				get_viewport().set_input_as_handled()
+			elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
+				_on_zhenqi_cancel_pressed()
+				get_viewport().set_input_as_handled()
 			elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
 				_on_cancel_pressed()
 				get_viewport().set_input_as_handled()
@@ -1492,6 +1535,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
 		if not _active_equipment_action.is_empty():
 			_on_cancel_pressed()
+			get_viewport().set_input_as_handled()
+		elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
+			_on_zhenqi_cancel_pressed()
 			get_viewport().set_input_as_handled()
 		elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
 			_on_cancel_pressed()
@@ -1513,6 +1559,9 @@ func _on_cancel_pressed() -> void:
 		_refresh_selection_text()
 		return
 	if not _inline_card_choice.is_empty():
+		if _is_inline_zhenqi_cost_choice(_inline_card_choice):
+			_submit_inline_control_choice("lose_hp")
+			return
 		if bool(_inline_card_choice.get("allow_cancel", false)):
 			# 空选择；明确表示放弃本次可取消请求，不会消费任何手牌。
 			var cancelled_uids: Array[int] = []
@@ -1523,6 +1572,12 @@ func _on_cancel_pressed() -> void:
 	_auto_locked_target_id = -1
 	error_label.text = ""
 	_refresh_selection_text()
+
+
+## 取消【振旗】费用选择；第三个按钮提交明确的 confirmed=false，保持与普通可取消请求完全一致的权威语义。
+func _on_zhenqi_cancel_pressed() -> void:
+	if _is_inline_zhenqi_cost_choice(_inline_card_choice):
+		_submit_inline_control_choice("", false)
 
 
 ## 提交重铸动作；不允许重铸的牌会由核心拒绝。
@@ -1670,7 +1725,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		call_deferred("_submit_suppressed_group_trick_choice", choice_data.duplicate(true))
 		_refresh_selection_text()
 		return
-	if _is_inline_hand_choice(choice_data):
+	if _is_inline_hand_choice(choice_data) or _is_inline_zhenqi_cost_choice(choice_data):
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
 		_inline_card_choice = choice_data.duplicate(true)
@@ -1809,6 +1864,15 @@ func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox", "equipment"]:
 			return false
 	return true
+
+
+## 判断请求是否为【振旗】的费用选择；该控制项需要直接复用桌面原有操作按钮区，而不是打开独立遮罩窗口。
+func _is_inline_zhenqi_cost_choice(choice_data: Dictionary) -> bool:
+	if str(choice_data.get("choice_type", "card")) not in ["control", "bool"]:
+		return false
+	# 技能上下文；稳定 kind 由【振旗】源码写入，避免界面按标题中文或选项数量猜测规则。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	return str(context.get("kind", "")) == "zhenqi_cost_option"
 
 
 ## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。
@@ -1957,6 +2021,48 @@ func _on_log_added(message: String) -> void:
 	log_view.scroll_to_line(maxi(log_view.get_line_count() - 1, 0))
 
 
+## 在实际发动者的武将牌中心短暂显示技能名；提示只订阅控制器信号，不持有技能对象或改写对局状态。
+func _on_skill_activated(player_id: int, skill_name: String) -> void:
+	# 当前发动者武将牌全局矩形；本地与其他玩家使用各自持久组件，未知或刚离场角色不创建错误的中央提示。
+	var player_card_rect: Rect2 = Rect2()
+	if player_id == match_controller.local_human_player_id:
+		if local_player_card == null or not is_instance_valid(local_player_card):
+			return
+		player_card_rect = local_player_card.get_global_rect()
+	else:
+		# 当前对手武将牌；只从本次桌面已渲染的稳定玩家索引读取，避免等待快照时访问已释放节点。
+		var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
+		if player_view == null or not is_instance_valid(player_view):
+			return
+		player_card_rect = player_view.get_global_rect()
+	# 牌桌根节点局部坐标；完整逆变换兼容画布缩放与后续窗口适配，不假设全局坐标恒等于场景坐标。
+	var root_inverse_transform: Transform2D = get_global_transform().affine_inverse()
+	# 武将牌左上角的本地坐标；文本标签作为牌桌根节点子项，必须先转换坐标系。
+	var label_top_left: Vector2 = root_inverse_transform * player_card_rect.position
+	# 武将牌右下角的本地坐标；和左上角相减后得到随缩放保持正确的提示尺寸。
+	var label_bottom_right: Vector2 = root_inverse_transform * player_card_rect.end
+	# 实际技能提示文本节点；独立节点可让多个角色连续发动时各自淡出，而不会互相覆盖或取消。
+	var activation_label: Label = Label.new()
+	activation_label.name = "SkillActivation_%d" % player_id
+	activation_label.position = label_top_left
+	activation_label.size = label_bottom_right - label_top_left
+	activation_label.z_index = SKILL_ACTIVATION_Z_INDEX
+	activation_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	activation_label.text = "【%s】" % skill_name
+	activation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	activation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	activation_label.add_theme_font_size_override("font_size", SKILL_ACTIVATION_FONT_SIZE)
+	activation_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	activation_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	activation_label.add_theme_constant_override("outline_size", SKILL_ACTIVATION_OUTLINE_SIZE)
+	add_child(activation_label)
+	# 当前提示淡出补间；只操作本次新建节点，完成后立即释放以免在长局中积累不可见标签。
+	var activation_tween: Tween = create_tween()
+	activation_tween.tween_interval(SKILL_ACTIVATION_HOLD_SECONDS)
+	activation_tween.tween_property(activation_label, "modulate:a", 0.0, SKILL_ACTIVATION_FADE_SECONDS)
+	activation_tween.tween_callback(activation_label.queue_free)
+
+
 ## 接收规则核心的只读卡牌展示请求，并把玩家视图位置转换为动画层局部坐标。
 func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	# 被展示牌快照；来自 CardPresentationEvent，不包含可修改的规则对象引用。
@@ -2017,10 +2123,59 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, owns_discard_transfer)
 
 
+## 登记一次权威摸牌调用的表现批次；批次内卡牌先由普通转移信号逐张填充，完成信号到达后才一起交给动画层。
+func _on_draw_presentation_batch_started(batch_id: int, player_id: int) -> void:
+	if batch_id < 0:
+		return
+	# 当前批次初始数据；卡牌数组按 CardMovementService 信号顺序追加，顺序就是牌堆实际摸取顺序。
+	_draw_presentation_batches[batch_id] = {"player_id":player_id, "cards":[]}
+
+
+## 将已收齐的同一次摸牌交给动画层；动画层负责同批居中、并行飞行，多个玩家或连续摸牌批次均立即开始，桌面不自行等待计时器。
+func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void:
+	# 当前批次数据；信号可能在重开清理后迟到，缺失批次安全忽略且不回退到逐张动画。
+	var draw_batch: Dictionary = _draw_presentation_batches.get(batch_id, {}) as Dictionary
+	_draw_presentation_batches.erase(batch_id)
+	if draw_batch.is_empty() or int(draw_batch.get("player_id", -1)) != player_id:
+		return
+	# 当前批次牌面数据；牌堆耗尽时允许空批次正常结束，不创建无内容动画任务。
+	var drawn_card_data: Array = draw_batch.get("cards", []) as Array
+	if drawn_card_data.is_empty():
+		return
+	# 手牌目标锚点；本地玩家使用手牌区顶边中心，其他玩家使用武将牌中心，缺失座位不伪造动画落点。
+	var target_anchor_result: Dictionary = _try_get_player_indicator_position(player_id)
+	if not bool(target_anchor_result.get("valid", false)):
+		return
+	# 牌堆起点；与普通摸牌一致使用中央公共锚点，所有同批牌面从同一位置同时开始飞行。
+	var draw_start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+	# 本批整体中心；动画层以此中心对称铺开多张牌，单张时保持原有的目标锚点。
+	var draw_target_position: Vector2 = target_anchor_result.get("position", Vector2.ZERO) as Vector2
+	# 当前批次的正式牌背节点；摸牌信息默认不公开，所有观察者均只看到同款背面并由权威快照决定实际手牌显示。
+	var draw_card_views: Array[CardView] = []
+	for card_data_variant: Variant in drawn_card_data:
+		# 当前摸到实体的瞬时牌面副本；只读取 UID 配置牌背，不把私有牌面正面泄露给其他观察者。
+		var card_data: Dictionary = card_data_variant as Dictionary
+		var draw_card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		draw_card_view.visible = false
+		draw_card_view.configure_back(int(card_data.get("uid", -1)), false)
+		draw_card_views.append(draw_card_view)
+	card_use_animation_layer.play_draw_transfer_batch(draw_card_views, draw_start_position, draw_target_position)
+
+
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
+	# 当前摸牌表现批次；批次开始信号已先建立容器，只有带此标记的牌堆到手牌移动会延后到完成信号统一播放。
+	var draw_batch_id: int = int(card_data.get(MatchController.DRAW_PRESENTATION_BATCH_ID_KEY, -1))
+	if draw_batch_id >= 0 and _draw_presentation_batches.has(draw_batch_id):
+		# 当前批次可写副本；仅保存瞬时序列化牌面，规则状态、手牌节点与区域所有权仍由正常快照处理。
+		var draw_batch: Dictionary = _draw_presentation_batches.get(draw_batch_id, {}) as Dictionary
+		var drawn_cards: Array = draw_batch.get("cards", []) as Array
+		drawn_cards.append(card_data.duplicate(true))
+		draw_batch["cards"] = drawn_cards
+		_draw_presentation_batches[draw_batch_id] = draw_batch
+		return
 	# 同区域重复增量不代表实体发生了新的区域变化；直接丢弃，避免从中央锚点原地生成一张无来源牌面。
 	if source_zone == target_zone and source_player_id == target_player_id:
 		return
@@ -2212,6 +2367,12 @@ func _on_action_rejected(message: String) -> void:
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
+	if _zhenqi_cancel_button != null and is_instance_valid(_zhenqi_cancel_button):
+		_zhenqi_cancel_button.visible = false
+	use_button.visible = true
+	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	%CancelButton.text = "取消"
+	%CancelButton.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	selection_label.visible = true
 	call_deferred("_refresh_group_trick_response_button")
 	# 本地是否处于普通出牌阶段；右侧回合结束按钮只在该阶段独立显示，不属于中央交互面板。
@@ -2251,7 +2412,7 @@ func _refresh_selection_text() -> void:
 	# 已选卡牌定义；用于统一名称模式与说明文本。
 	var selected_definition: Dictionary = _get_cached_card_definition(str(selected_card.get("definition_id", "")))
 	# 已选卡牌显示名；找不到定义时回退到实体 UID，便于诊断异常数据。
-	var selected_card_name: String = GameSettings.resolve_card_name(selected_definition) if not selected_definition.is_empty() else "卡牌 %d" % _selected_card_uid
+	var selected_card_name: String = GameSettings.resolve_card_display_name(selected_definition) if not selected_definition.is_empty() else "卡牌 %d" % _selected_card_uid
 	selection_label.text = "%s｜目标：%s｜%s" % [
 		selected_card_name,
 		"由规则自动展开" if str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"] else ("无" if target_names.is_empty() else " → ".join(target_names)),
@@ -2281,7 +2442,7 @@ func _refresh_equipment_action_text() -> void:
 	end_play_button.disabled = not end_play_button.visible
 	# 当前装备定义与显示名；界面不识别具体装备 ID。
 	var definition: Dictionary = _get_active_equipment_definition()
-	var equipment_name: String = GameSettings.resolve_card_name(definition)
+	var equipment_name: String = GameSettings.resolve_card_display_name(definition)
 	# 当前材料上限；响应和出牌阶段分别读取自身配置。
 	var required_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
 	# 已选目标名称；装备主动流程最多保留一名目标。
@@ -2308,6 +2469,9 @@ func _refresh_equipment_action_text() -> void:
 
 ## 刷新手牌区内联选择提示与操作按钮；确认必须至少选择一张且满足请求数量范围。
 func _refresh_inline_choice_text() -> void:
+	if _is_inline_zhenqi_cost_choice(_inline_card_choice):
+		_refresh_inline_zhenqi_cost_choice_text()
+		return
 	# 已选牌数；只读取界面临时数组，不修改权威请求的 selected_card_ids。
 	var selected_count: int = _inline_selected_card_uids.size()
 	# 规则要求的最少数量；弃牌阶段可能大于1，可取消响应通常为0。
@@ -2341,6 +2505,52 @@ func _refresh_inline_choice_text() -> void:
 	%CancelButton.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
 	end_play_button.visible = false
 	_refresh_component_states()
+
+
+## 将【振旗】费用选择显示为原操作区中的“弃置手牌 / 失去体力 / 取消”三个按钮；不可支付的弃牌分支保持可见但禁用。
+func _refresh_inline_zhenqi_cost_choice_text() -> void:
+	# 当前选项 ID 集合；规则层没有提供的费用不能由界面伪造提交。
+	var option_ids: Array[String] = []
+	for option_variant: Variant in _inline_card_choice.get("control_options", []) as Array:
+		# 当前文字选项；只读取稳定 ID，不依赖显示文本来判断费用语义。
+		var option: Dictionary = option_variant as Dictionary
+		option_ids.append(str(option.get("id", "")))
+	selection_label.text = ""
+	selection_label.visible = false
+	interaction_guide_label.text = "是否发动【振旗】？"
+	interaction_panel.visible = true
+	use_button.visible = true
+	use_button.text = "弃置手牌"
+	use_button.custom_minimum_size = ZHENQI_ACTION_BUTTON_MINIMUM_SIZE
+	use_button.disabled = not option_ids.has("discard_hand")
+	var cancel_button: Button = %CancelButton
+	cancel_button.visible = true
+	cancel_button.text = "失去体力"
+	cancel_button.custom_minimum_size = ZHENQI_ACTION_BUTTON_MINIMUM_SIZE
+	cancel_button.disabled = not option_ids.has("lose_hp")
+	if _zhenqi_cancel_button != null and is_instance_valid(_zhenqi_cancel_button):
+		_zhenqi_cancel_button.visible = true
+		_zhenqi_cancel_button.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
+	end_play_button.visible = false
+	_refresh_component_states()
+
+
+## 将内联文字选项提交为标准选择动作；费用 ID 仍由权威 ChoiceRequest 复核，界面不解释技能效果。
+func _submit_inline_control_choice(control_id: String, confirmed: bool = true) -> void:
+	if _inline_card_choice.is_empty():
+		return
+	# 当前请求 ID；同步恢复可能建立下一条请求，提交后只清理仍属于该 ID 的本地副本。
+	var request_id: int = int(_inline_card_choice.get("request_id", -1))
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":control_id, "confirmed":confirmed}
+	if not match_controller.submit_action(action):
+		return
+	if int(_inline_card_choice.get("request_id", -2)) == request_id:
+		_inline_card_choice.clear()
+		_inline_selected_card_uids.clear()
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+	_render_local_hand()
+	_refresh_selection_text()
 
 
 ## 判断一条本地选择是否属于可切换“不响应”的群体锦囊无懈询问。

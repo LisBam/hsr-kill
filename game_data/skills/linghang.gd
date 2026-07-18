@@ -59,6 +59,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			return true
 		# 一旦姬子确认发动便立即记录本回合次数，后续没有手牌或直接取消重铸都不会返还。
 		_used_turn_number = host.state.turn_number
+		announce_activation({"source_player_id":int(context.get("source_player_id", -1))})
 		var source_player_id: int = int(context.get("source_player_id", -1))
 		var source_player: PlayerState = host.state.get_player(source_player_id) as PlayerState
 		if source_player == null or not source_player.alive or source_player.out_of_game or not _is_faction_player(source_player, FACTION_ID):

@@ -67,6 +67,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if response != null and response.confirmed:
 			# 本次固定换牌数；范围在创建请求时已经限制为1至5。
 			var draw_count: int = clampi(int(context.get("draw_count", 0)), 0, MAX_SLASH_COUNT)
+			announce_activation({"draw_count":draw_count})
 			host.call("draw", owner_player_id, draw_count)
 			if host.state.game_over:
 				return true

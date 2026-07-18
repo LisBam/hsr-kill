@@ -50,6 +50,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		# 使用【杀】的角色 ID；等待期间若角色已死亡，摸牌端口会安全忽略。
 		var slash_user_id: int = int(context.get("slash_user_id", -1))
 		_used_this_play_phase = true
+		announce_activation({"slash_user_id":slash_user_id})
 		observe_identity_behavior([slash_user_id], {"target_result":IDENTITY_TARGET_RESULT})
 		host.call("draw", slash_user_id, 1)
 	return true

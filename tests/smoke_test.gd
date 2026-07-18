@@ -114,12 +114,12 @@ func _run() -> void:
 		printerr("SMOKE_FAIL shunshou_source_path")
 		get_tree().quit(1)
 		return
-	# 新启动的全局牌名模式；默认必须显示原版三国杀牌名，菜单仍可在运行时切换。
-	if GameSettings.card_name_mode != GameSettings.NameMode.ORIGINAL:
+	# 新启动的全局牌名模式；默认必须显示《崩铁杀》牌名，菜单仍可在运行时切换回原版三国杀牌名。
+	if GameSettings.card_name_mode != GameSettings.NameMode.CUSTOM:
 		printerr("SMOKE_FAIL default_card_name_mode=%s" % GameSettings.NameMode.keys()[GameSettings.card_name_mode])
 		get_tree().quit(1)
 		return
-	# 默认牌名解析结果；通过正式配置验证模式值会实际作用于前端显示名称。
+	# 默认牌名解析结果；通过正式配置验证默认模式会实际作用于前端显示名称。
 	if GameSettings.resolve_card_name(GameDatabase.get_card("sha")) != "杀":
 		printerr("SMOKE_FAIL default_card_name=%s" % GameSettings.resolve_card_name(GameDatabase.get_card("sha")))
 		get_tree().quit(1)
@@ -140,9 +140,7 @@ func _run() -> void:
 			printerr("SMOKE_FAIL custom_card_name=%s/%s/%s" % [custom_card_id, actual_custom_name, expected_custom_name])
 			get_tree().quit(1)
 			return
-	# 技能说明卡牌引用；切到《崩铁杀》名称后，多个完整【原版牌名】必须同步映射且不改变普通文本。
-	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
-	# 自定义模式技能说明；同时覆盖基本牌、锦囊牌与装备牌名称替换。
+	# 默认《崩铁杀》模式技能说明；多个完整【原版牌名】必须同步映射且不改变普通文本。
 	var custom_skill_description: String = GameDatabase.resolve_card_names_in_text("可使用【桃】、【无懈可击】或【银月枪】。")
 	if custom_skill_description != "可使用【药】、【运演否证】或【击云】。":
 		printerr("SMOKE_FAIL custom_skill_description=%s" % custom_skill_description)
@@ -169,6 +167,7 @@ func _run() -> void:
 		printerr("SMOKE_FAIL original_skill_button_description=%s" % skill_button_view.skill_description)
 		get_tree().quit(1)
 		return
+	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
 	# 技能元数据数量；现有武将共登记十四个独立技能源码定义，其中包含两项领袖技。
 	var skill_definition_count: int = GameDatabase.skills.size()
@@ -293,9 +292,9 @@ func _run() -> void:
 		printerr("SMOKE_FAIL manual_multi_target_order=%s" % normalized_manual_target_order)
 		get_tree().quit(1)
 		return
-	# 测试借刀杀人实体；卡牌目标只包含持刀者，被杀者不进入本牌目标规范化流程。
+	# 测试借刀杀人实体；使用时按“持刀者、被【杀】者”保留完整声明顺序，实际目标时机由卡牌源码另行剥离第二名角色。
 	var borrow_sword_order_card: CardInstance = CardInstance.new("jiedao", "club", 12)
-	if target_order_rules.normalize_targets(2, borrow_sword_order_card, [1]) != [1]:
+	if target_order_rules.normalize_targets(2, borrow_sword_order_card, [1, 3]) != [1, 3]:
 		printerr("SMOKE_FAIL borrow_sword_target_semantics")
 		get_tree().quit(1)
 		return
@@ -570,7 +569,7 @@ func _run() -> void:
 	# 实际装备横条是否全部保持60×15像素；默认true，发现任意尺寸不符条目后改为false。
 	# 当前变量继续表示全部装备条尺寸是否正确，目标宽度已调整为武将插画的141.35像素。
 	var equipment_rows_keep_original_size: bool = true
-	# 木牛流马装备条是否显示公开存牌数量；默认false，找到对应文本后改为true。
+	# 货运星槎装备条是否显示公开存牌数量；默认false，找到对应文本后改为true。
 	var wooden_ox_count_visible: bool = false
 	for child: Node in player_card_view.get_children():
 		for grandchild: Node in child.get_children():
@@ -578,7 +577,7 @@ func _run() -> void:
 				rendered_equipment_row_count += 1
 				if (grandchild as RichTextLabel).size != Vector2(141.35, 15.0):
 					equipment_rows_keep_original_size = false
-				if (grandchild as RichTextLabel).text.contains("木牛流马（3）"):
+				if (grandchild as RichTextLabel).text.contains("货运星槎（3）"):
 					wooden_ox_count_visible = true
 	# 判定区生成节点数；每张牌包含一个旋转背景与一个水平首字标签。
 	var judgment_marker_child_count: int = preview_public_zone.get_child_count()
@@ -700,7 +699,6 @@ func _run() -> void:
 	animation_layer.target_line_fade_duration = 0.04
 	animation_layer.target_line_draw_duration = 0.02
 	animation_layer.queue_reflow_duration = 0.01
-	animation_layer.draw_transfer_stagger = 0.01
 	get_tree().root.add_child(animation_layer)
 	# 第一张动画牌；模拟一名其他玩家从左侧座位使用卡牌。
 	var first_animation_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
@@ -762,6 +760,43 @@ func _run() -> void:
 	await get_tree().create_timer(0.2).timeout
 	if animation_layer.get_child_count() != 0 or not animation_layer._draw_transfer_stacks.is_empty():
 		printerr("SMOKE_FAIL draw_transfer_cleanup children=%d stacks=%s" % [animation_layer.get_child_count(), animation_layer._draw_transfer_stacks])
+		get_tree().quit(1)
+		return
+	# 两次独立摸牌批次；首批两张必须同时居中飞行，另一名玩家的第二批也必须立即并行开始。
+	animation_layer.card_flight_duration = 0.04
+	animation_layer.card_hold_duration = 0.04
+	animation_layer.target_line_fade_duration = 0.04
+	# 首批左侧牌背；与右侧牌背共同验证两张牌的整体居中与同步飞行。
+	var first_batch_left_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 首批右侧牌背；与左侧牌背保持固定的对称间距。
+	var first_batch_right_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 第二批牌背；用于验证不同玩家的摸牌批次不会被首批阻塞。
+	var second_batch_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	first_batch_left_card.configure_back(91101, false)
+	first_batch_right_card.configure_back(91102, false)
+	second_batch_card.configure_back(91103, false)
+	animation_layer.play_draw_transfer_batch([first_batch_left_card, first_batch_right_card], draw_start_position, draw_target_position)
+	# 第二批目标锚点；模拟另一名玩家，使并行批次的独立整体居中可被直接验证。
+	var second_draw_target_position: Vector2 = Vector2(900.0, 360.0)
+	animation_layer.play_draw_transfer_batch([second_batch_card], draw_start_position, second_draw_target_position)
+	# 两个批次均必须在提交当帧开始；不得因首批飞行、停留或淡出而隐藏第二批。
+	if animation_layer._draw_transfer_batch_tweens.size() != 2 or not first_batch_left_card.visible or not first_batch_right_card.visible or not second_batch_card.visible:
+		printerr("SMOKE_FAIL draw_batch_parallel initial=%s/%s/%s" % [animation_layer._draw_transfer_batch_tweens, first_batch_right_card.visible, second_batch_card.visible])
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.05).timeout
+	# 首批抵达后两张牌的整体中心必须等于目标锚点，且两张之间保持固定对称间距。
+	# 首批牌面整体中心；以两张牌各自中心的平均值计算，不读取动画层的内部定位公式。
+	var first_batch_center: Vector2 = (first_batch_left_card.position + first_batch_left_card.get_card_size() * 0.5 + first_batch_right_card.position + first_batch_right_card.get_card_size() * 0.5) * 0.5
+	# 第二批单张中心；单张也必须立即抵达自己的目标锚点，不能继承首批玩家的位置。
+	var second_batch_center: Vector2 = second_batch_card.position + second_batch_card.get_card_size() * 0.5
+	if not first_batch_center.is_equal_approx(draw_target_position) or not is_equal_approx(first_batch_right_card.position.x - first_batch_left_card.position.x, animation_layer.draw_batch_card_spacing) or not second_batch_center.is_equal_approx(second_draw_target_position):
+		printerr("SMOKE_FAIL draw_batch_parallel_center=%s/%s spacing=%s" % [first_batch_center, second_batch_center, first_batch_right_card.position.x - first_batch_left_card.position.x])
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.16).timeout
+	if animation_layer.get_child_count() != 0 or not animation_layer._transfer_cards.is_empty() or not animation_layer._draw_transfer_batch_tweens.is_empty():
+		printerr("SMOKE_FAIL draw_batch_cleanup children=%d cards=%s batches=%s" % [animation_layer.get_child_count(), animation_layer._transfer_cards, animation_layer._draw_transfer_batch_tweens])
 		get_tree().quit(1)
 		return
 	# 重开中断牌面；模拟摸牌转移尚未完成时玩家立即从菜单重新开局。
@@ -862,11 +897,11 @@ func _run() -> void:
 	_controller.card_rules = CardRuleService.new(borrow_sword_action_state)
 	# 借刀合法动作；调用卡牌源码的复杂目标钩子，确保动态端口接收到严格的 Array[int]。
 	var borrow_sword_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
-	# 是否找到只指定二号位持刀者的标准动作；默认false，匹配唯一牌目标后置为true。
+	# 是否找到同时指定二号位持刀者与三号位被【杀】者的标准动作；默认false，匹配完整两目标声明后置为true。
 	var found_borrow_sword_action: bool = false
 	# 当前借刀合法动作；逐项读取目标数组，不修改控制器返回的动作内容。
 	for borrow_sword_action: Dictionary in borrow_sword_legal_actions:
-		if borrow_sword_action.get("target_ids", []) == [1]:
+		if borrow_sword_action.get("target_ids", []) == [1, 2]:
 			found_borrow_sword_action = true
 			break
 	if not found_borrow_sword_action:

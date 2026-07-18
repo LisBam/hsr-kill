@@ -185,7 +185,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	# 点数文本；A、J、Q、K使用标准牌面字符。
 	var rank_text: String = _rank_text(int(card.get("rank", 0)))
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
-	var display_name: String = GameSettings.resolve_card_name(definition)
+	var display_name: String = GameSettings.resolve_card_display_name(definition)
 	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。
 	var type_text: String = _type_text(str(definition.get("type", "")), str(definition.get("subtype", "")))
 	_suit_rank_text = "%s%s" % [suit_text, rank_text]

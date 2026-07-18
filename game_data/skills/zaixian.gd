@@ -64,6 +64,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		var discarded_count: int = int(host.call("discard_selected_hand_equipment", owner_player_id, response.card_ids))
 		if discarded_count == 1:
 			_used_this_play_phase = true
+			announce_activation({"slash_uid":int(context.get("slash_uid", -1))})
 			_tracked_slash_uid = int(context.get("slash_uid", -1))
 			_tracked_slash_card_id = str(context.get("slash_card_id", ""))
 			_tracked_slash_dealt_damage = false

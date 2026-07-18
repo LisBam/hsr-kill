@@ -14,8 +14,8 @@ func _init() -> void:
 		"effect_id": "borrow_sword",
 		"nature": "normal",
 		"target_mode": "weapon_holder",
-		"min_targets": 1,
-		"max_targets": 1,
+		"min_targets": 2,
+		"max_targets": 2,
 		"distance_limit": "special",
 		"play_limit": 0,
 		"response_pattern": "wuxie",
@@ -31,20 +31,46 @@ func _init() -> void:
 
 ## 执行【借刀杀人】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	if target_ids.size() == 1 and not resolver.host.resolve_trick_negation(actor_id, target_ids[0], card.definition_id):
+	# 旧的整牌结算入口仅兼容已完整声明的两个目标；常规 per_target 流程由 resolve_target() 读取结算上下文，绝不能在此补开第二次选目标。
+	if target_ids.size() >= 1 and not resolver.host.resolve_trick_negation(actor_id, target_ids[0], card.definition_id):
 		if not resolver.is_resolution_stopped():
-			_request_borrow_sword_target(resolver, card.uid, actor_id, target_ids[0])
+			# 第一名声明角色；其为实际进入本牌目标时机的持刀者。
+			var weapon_holder_id: int = target_ids[0]
+			# 第二名声明角色；仅供持刀者响应【杀】使用，不属于本牌目标。
+			var victim_id: int = target_ids[1] if target_ids.size() >= 2 else -1
+			if _get_legal_slash_target_ids(resolver.host.card_rules, weapon_holder_id).has(victim_id):
+				_resolve_borrow_sword(resolver, card.uid, actor_id, weapon_holder_id, victim_id)
+			else:
+				resolver.host.transfer_equipment(weapon_holder_id, actor_id, "weapon")
 	return resolver.default_destination()
 
 
-## 结算【借刀杀人】唯一的持刀者目标；被要求使用【杀】的目标属于后续牌效选择，不进入本牌目标数组。
-func resolve_target(resolver: Object, card: CardInstance, actor_id: int, target_id: int, _resolution_context: Dictionary) -> String:
-	return resolve(resolver, card, actor_id, [target_id])
+## 结算【借刀杀人】唯一的持刀者目标；被【杀】者已在使用牌时指定并保存在共享上下文，不再创建第二次目标选择。
+func resolve_target(resolver: Object, card: CardInstance, actor_id: int, target_id: int, resolution_context: Dictionary) -> String:
+	if not resolver.host.resolve_trick_negation(actor_id, target_id, card.definition_id) and not resolver.is_resolution_stopped():
+		# 使用时已指定的被【杀】者；上下文缺失时安全转入交出武器，避免旧存档或无效动作卡死。
+		var victim_id: int = int(resolution_context.get("borrow_sword_victim_id", -1))
+		if _get_legal_slash_target_ids(resolver.host.card_rules, target_id).has(victim_id):
+			_resolve_borrow_sword(resolver, card.uid, actor_id, target_id, victim_id)
+		else:
+			resolver.host.transfer_equipment(target_id, actor_id, "weapon")
+	return resolver.default_destination()
 
 
-## 【借刀杀人】只有一个牌目标，不再要求规则服务保留旧版双目标顺序。
+## 【借刀杀人】保留“持刀者、被【杀】者”的玩家点击顺序；实际用牌时机与目标数组只保留首名持刀者。
 func preserves_requested_target_order() -> bool:
-	return false
+	return true
+
+
+## 返回真正进入【借刀杀人】目标时机的唯一持刀者；第二名角色只作为强制【杀】的已声明对象保存。
+func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
+	return [requested_target_ids[0]] if requested_target_ids.size() >= 1 else []
+
+
+## 将第二名已声明角色写入共享上下文；后续牌效直接要求持刀者对其使用【杀】，不再弹出二次选目标窗口。
+func configure_requested_target_context(_match_host: Object, _card: CardInstance, _actor_id: int, requested_target_ids: Array[int], resolution_context: Dictionary) -> void:
+	if requested_target_ids.size() == 2:
+		resolution_context["borrow_sword_victim_id"] = requested_target_ids[1]
 
 
 ## 本牌不再改写共享目标上下文；CardUseEvent 的全部目标时机只处理唯一持刀者。
@@ -52,42 +78,33 @@ func configure_resolution_context(_match_host: Object, _card: CardInstance, _act
 	pass
 
 
-## 校验唯一持刀者目标，并保证其至少存在一名可由后续牌效选择的【杀】目标。
+## 校验已声明的持刀者与被【杀】者；第一名必须持武器，第二名必须是其攻击范围内的其他存活角色。
 func validate_target_selection(rule_service: Object, actor: PlayerState, target_id: int, all_target_ids: Array[int]) -> String:
-	if all_target_ids.size() != 1:
+	if all_target_ids.is_empty():
 		return ""
-	# 持刀者状态；必须是装备武器的其他存活角色。
-	var weapon_holder: PlayerState = rule_service.state.get_player(target_id)
-	if weapon_holder == null or target_id == actor.player_id or weapon_holder.get_weapon() == null:
+	# 持刀者状态；第一名必须是装备武器的其他存活角色。
+	var weapon_holder_id: int = int(all_target_ids[0])
+	var weapon_holder: PlayerState = rule_service.state.get_player(weapon_holder_id)
+	if weapon_holder == null or weapon_holder_id == actor.player_id or weapon_holder.get_weapon() == null:
 		return "借刀杀人的目标必须是装备武器的其他角色。"
-	if _get_legal_slash_target_ids(rule_service, target_id).is_empty():
+	if _get_legal_slash_target_ids(rule_service, weapon_holder_id).is_empty():
 		return "借刀杀人的目标当前没有可使用【杀】的合法角色。"
+	if all_target_ids.size() >= 2:
+		# 被【杀】者；第二名必须由第一名持刀者合法攻击，不能用锦囊使用者的距离替代。
+		var victim_id: int = int(all_target_ids[1])
+		if victim_id == weapon_holder_id or not _get_legal_slash_target_ids(rule_service, weapon_holder_id).has(victim_id):
+			return "借刀杀人的第二个目标必须在持刀者的攻击范围内。"
 	return ""
 
 
-## 为基础 AI 枚举全部合法持刀者；被【杀】者在牌效目标选择中另行评分和提交。
+## 为基础 AI 枚举“持刀者、被【杀】者”的完整合法组合；使用时已同时声明两个目标，不再等待牌效内二次选择。
 func append_play_phase_card_actions(match_host: Object, actor_id: int, card: CardInstance, result: Array[Dictionary]) -> bool:
 	for holder: PlayerState in match_host.state.players:
-		# 借刀动作目标；只声明唯一持刀者，权威校验会同时确认存在后续【杀】目标。
-		var requested_target_ids: Array[int] = [holder.player_id]
-		match_host.append_card_action_if_legal(result, actor_id, card, requested_target_ids)
+		# 当前持刀者可攻击角色；每名合法受害者都与持刀者组成一条完整标准出牌动作。
+		for victim_id: int in _get_legal_slash_target_ids(match_host.card_rules, holder.player_id):
+			var requested_target_ids: Array[int] = [holder.player_id, victim_id]
+			match_host.append_card_action_if_legal(result, actor_id, card, requested_target_ids)
 	return true
-
-
-## 请求锦囊使用者指定被【杀】者；该角色只属于牌效选择，不触发【借刀杀人】的目标时机。
-func _request_borrow_sword_target(resolver: Object, parent_card_uid: int, source_id: int, weapon_holder_id: int) -> void:
-	# 当前可被持刀者使用【杀】的目标；按权威座次顺序生成，等待期间仍会在恢复入口重新复核。
-	var target_ids: Array[int] = _get_legal_slash_target_ids(resolver.host.card_rules, weapon_holder_id)
-	if target_ids.is_empty():
-		resolver.host.transfer_equipment(weapon_holder_id, source_id, "weapon")
-		return
-	# 牌效目标选择上下文；card_definition_id 使基础 AI 使用本牌源码评分，而 parent_card_uid 用于恢复原 content。
-	var context: Dictionary = {"kind":"borrow_sword_target", "parent_card_uid":parent_card_uid, "actor_id":source_id, "source_id":source_id, "weapon_holder_id":weapon_holder_id, "card_definition_id":get_id()}
-	# 被【杀】者选择结果；规则要求且只允许选择一名合法角色，不允许取消造成无目标结算。
-	var selected_target_ids: Array[int] = resolver.host.request_target_choice(source_id, "【借刀杀人】请选择被【杀】的角色", target_ids, 1, 1, false, context)
-	if resolver.host.has_pending_card_choice() or selected_target_ids.size() != 1:
-		return
-	_resolve_borrow_sword(resolver, parent_card_uid, source_id, weapon_holder_id, selected_target_ids[0])
 
 
 ## 返回持刀者攻击范围内的全部其他存活角色；自身永远不是其【杀】的合法目标。
@@ -132,22 +149,6 @@ func _apply_borrow_sword_response(resolver: Object, context: Dictionary, slash: 
 	SlashCardEffect.new(resolver).resolve_external_target(slash, weapon_holder_id, int(context.get("victim_id", -1)), damage_amount, str(GameDatabase.get_card(slash.definition_id).get("nature", "normal")), weapon_definition != null and weapon_definition.slash_ignores_armor(), int(context.get("parent_card_uid", -1)))
 
 
-## 恢复锦囊使用者对被【杀】者的独立目标选择；完成后继续持刀者响应，或在无响应等待时收尾原目标。
-func continue_selection(resolver: Object, context: Dictionary, response: ChoiceResponse) -> bool:
-	if str(context.get("kind", "")) != "borrow_sword_target" or response == null:
-		return super.continue_selection(resolver, context, response)
-	# 持刀者与当前合法目标；等待期间状态变化时不信任旧请求快照。
-	var weapon_holder_id: int = int(context.get("weapon_holder_id", -1))
-	var legal_target_ids: Array[int] = _get_legal_slash_target_ids(resolver.host.card_rules, weapon_holder_id)
-	if response.confirmed and response.target_ids.size() == 1 and legal_target_ids.has(response.target_ids[0]):
-		_resolve_borrow_sword(resolver, int(context.get("parent_card_uid", -1)), int(context.get("source_id", -1)), weapon_holder_id, response.target_ids[0])
-	else:
-		resolver.host.transfer_equipment(weapon_holder_id, int(context.get("source_id", -1)), "weapon")
-	if not resolver.host.has_pending_card_choice():
-		resolver.host.complete_card_target(int(context.get("parent_card_uid", -1)))
-	return true
-
-
 ## 恢复持刀者的【杀】响应；响应牌已由控制器完成消费和模式校验。
 func continue_response(resolver: Object, context: Dictionary, response_card: CardInstance) -> bool:
 	# 响应用途；借刀初始出杀由本文件处理，随后产生的【闪】和武器响应委托【杀】牌族组件。
@@ -161,20 +162,3 @@ func continue_response(resolver: Object, context: Dictionary, response_card: Car
 ## 恢复借刀【杀】内部武器创建的普通选牌请求。
 func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
 	return SlashCardEffect.new(resolver).continue_choice(context, selected_uids)
-
-
-## 评估被【杀】者选择；优先令持刀者攻击锦囊使用者的敌方，并兼顾低体力目标的收益。
-func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 请求上下文；只处理本牌创建的被【杀】者目标选择。
-	var context: Dictionary = choice_request.get("context", {}) as Dictionary
-	if str(context.get("kind", "")) != "borrow_sword_target":
-		return 0.0
-	# 已选牌效目标；强制请求正常只有一名角色。
-	var selected_target_ids: Array = (action.get("payload", {}) as Dictionary).get("selected_target_ids", []) as Array
-	if selected_target_ids.size() != 1:
-		return -10.0
-	# 锦囊使用者与被【杀】者；负态度目标优先，低体力进一步提高预期伤害价值。
-	var source_id: int = int(context.get("source_id", -1))
-	var victim_id: int = int(selected_target_ids[0])
-	var victim: Dictionary = evaluator.get_player(authoritative_snapshot, victim_id)
-	return -evaluator.get_attitude(authoritative_snapshot, source_id, victim_id) + maxf(3.0 - float(victim.get("hp", 3)), 0.0)
