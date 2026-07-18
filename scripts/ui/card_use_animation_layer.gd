@@ -12,6 +12,15 @@ extends Control
 ## 目标指示线淡出时间；默认0.36秒，在动态延伸完成后立即平滑消失，同时作为正式卡牌收尾淡出时长。
 @export_range(0.1, 1.5, 0.01) var target_line_fade_duration: float = 0.36
 
+## 摸牌飞行动画持续时间；默认0.24秒使牌堆至手牌的反馈更利落，只影响带摸牌堆叠键或批次接口的区域转移，运行前可在检查器中调整。
+@export_range(0.05, 1.5, 0.01) var draw_flight_duration: float = 0.24
+
+## 摸牌抵达手牌锚点后的停留时间；默认0.10秒保留一次摸到多张牌的辨识感，只影响摸牌临时牌面，运行前可在检查器中调整。
+@export_range(0.0, 1.0, 0.01) var draw_hold_duration: float = 0.10
+
+## 摸牌临时牌面淡出时间；默认0.18秒让表现及时让位给正式手牌布局，只影响摸牌临时牌面，运行前可在检查器中调整。
+@export_range(0.05, 1.0, 0.01) var draw_fade_duration: float = 0.18
+
 ## 目标指示线从来源延伸到目标的时间；默认0.24秒形成清晰方向感，运行时可按整体节奏动态调整。
 @export_range(0.05, 1.0, 0.01) var target_line_draw_duration: float = 0.24
 
@@ -209,6 +218,14 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	var transfer_card_instance_id: int = transfer_card.get_instance_id()
 	# 本次区域转移所属动画代次；重新开局后旧协程必须在访问牌面前立即退出。
 	var transfer_generation: int = _presentation_generation
+	# 当前区域转移是否为未进入批次接口的摸牌；非空堆叠键只由摸牌调用传入，用于应用独立的加速节奏。
+	var is_draw_transfer: bool = not draw_stack_key.is_empty()
+	# 本次牌面飞行持续时间；摸牌使用专属速度，其他牌区转移继续沿用通用飞牌配置。
+	var transfer_flight_duration: float = draw_flight_duration if is_draw_transfer else card_flight_duration
+	# 本次牌面抵达后的停留时间；摸牌使用专属短停留，其他牌区转移保留原有的最大0.24秒限制。
+	var transfer_hold_duration: float = draw_hold_duration if is_draw_transfer else minf(card_hold_duration, 0.24)
+	# 本次牌面淡出持续时间；摸牌使用专属短淡出，其他牌区转移继续沿用目标线淡出配置。
+	var transfer_fade_duration: float = draw_fade_duration if is_draw_transfer else target_line_fade_duration
 	if transfer_card.get_parent() != self:
 		transfer_card.reparent(self)
 	transfer_card.position = start_position - transfer_card.get_card_size() * 0.5
@@ -232,10 +249,10 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	# 移动补间；无论是否存在同组转移牌都立即开始，避免没有批次信号的摸牌退化为逐张等待。
 	var transfer_tween: Tween = create_tween()
 	transfer_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	transfer_tween.tween_property(transfer_card, "position", stacked_target_position, card_flight_duration)
-	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
-	transfer_tween.tween_interval(minf(card_hold_duration, 0.24))
-	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, target_line_fade_duration)
+	transfer_tween.tween_property(transfer_card, "position", stacked_target_position, transfer_flight_duration)
+	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, transfer_flight_duration)
+	transfer_tween.tween_interval(transfer_hold_duration)
+	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, transfer_fade_duration)
 	_transfer_tweens[transfer_card_instance_id] = transfer_tween
 	await transfer_tween.finished
 	if transfer_generation != _presentation_generation:
@@ -289,15 +306,15 @@ func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch
 		draw_card.modulate = Color.WHITE
 		draw_card.z_index = 90 + card_index
 		draw_card.visible = true
-		flight_tween.tween_property(draw_card, "position", batch_target_position + Vector2(centered_offset_x, 0.0) - draw_card_size * 0.5, card_flight_duration)
-		flight_tween.tween_property(draw_card, "scale", Vector2.ONE * animated_card_scale, card_flight_duration)
+		flight_tween.tween_property(draw_card, "position", batch_target_position + Vector2(centered_offset_x, 0.0) - draw_card_size * 0.5, draw_flight_duration)
+		flight_tween.tween_property(draw_card, "scale", Vector2.ONE * animated_card_scale, draw_flight_duration)
 	await flight_tween.finished
 	if batch_generation != _presentation_generation:
 		return
 	# 同批停留补间；整组同时停留，确保玩家能辨认这是一次多张摸牌而不是多次独立摸牌。
 	var hold_tween: Tween = create_tween()
 	_draw_transfer_batch_tweens[batch_id] = hold_tween
-	hold_tween.tween_interval(minf(card_hold_duration, 0.24))
+	hold_tween.tween_interval(draw_hold_duration)
 	await hold_tween.finished
 	if batch_generation != _presentation_generation:
 		return
@@ -306,7 +323,7 @@ func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch
 	_draw_transfer_batch_tweens[batch_id] = fade_tween
 	for draw_card: CardView in draw_cards:
 		if draw_card != null and is_instance_valid(draw_card):
-			fade_tween.tween_property(draw_card, "modulate:a", 0.0, target_line_fade_duration)
+			fade_tween.tween_property(draw_card, "modulate:a", 0.0, draw_fade_duration)
 	await fade_tween.finished
 	if batch_generation != _presentation_generation:
 		return

@@ -694,9 +694,17 @@ func _run() -> void:
 	card_view.free()
 	# 弃牌动画层；两张正式卡牌应同时从各自起点进入中央队列、保持水平铺开并在停留后全部淡出。
 	var animation_layer: CardUseAnimationLayer = CardUseAnimationLayer.new()
+	# 摸牌默认节奏；飞行、停留与淡出分别保持短时长，避免未来调整后重新出现拖慢摸牌的问题。
+	if not is_equal_approx(animation_layer.draw_flight_duration, 0.24) or not is_equal_approx(animation_layer.draw_hold_duration, 0.10) or not is_equal_approx(animation_layer.draw_fade_duration, 0.18):
+		printerr("SMOKE_FAIL draw_animation_defaults=%s/%s/%s" % [animation_layer.draw_flight_duration, animation_layer.draw_hold_duration, animation_layer.draw_fade_duration])
+		get_tree().quit(1)
+		return
 	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.08
 	animation_layer.target_line_fade_duration = 0.04
+	animation_layer.draw_flight_duration = 0.01
+	animation_layer.draw_hold_duration = 0.01
+	animation_layer.draw_fade_duration = 0.04
 	animation_layer.target_line_draw_duration = 0.02
 	animation_layer.queue_reflow_duration = 0.01
 	get_tree().root.add_child(animation_layer)
@@ -766,6 +774,9 @@ func _run() -> void:
 	animation_layer.card_flight_duration = 0.04
 	animation_layer.card_hold_duration = 0.04
 	animation_layer.target_line_fade_duration = 0.04
+	animation_layer.draw_flight_duration = 0.04
+	animation_layer.draw_hold_duration = 0.04
+	animation_layer.draw_fade_duration = 0.04
 	# 首批左侧牌背；与右侧牌背共同验证两张牌的整体居中与同步飞行。
 	var first_batch_left_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	# 首批右侧牌背；与左侧牌背保持固定的对称间距。
