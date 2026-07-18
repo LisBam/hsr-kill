@@ -1,6 +1,7 @@
 extends Node
 
 ## 无名杀式 AI 无头回归。验证身份暴露、牌目标、无懈、技能钩子、主动技能负载与低价值弃牌选择。
+## 自动身份标记同时覆盖目标证据权重、忠反误操作、内奸终结状态与公开响应牌观察。
 
 ## 测试使用的共享身份模型；多项断言复用同一观察状态。
 var _identity_model: IdentityAIModel = IdentityAIModel.new()
@@ -15,6 +16,20 @@ func _ready() -> void:
 	if not _test_all_cards_have_ai_profiles():
 		return
 	if not _test_identity_exposure():
+		return
+	if not _test_identity_target_evidence():
+		return
+	if not _test_dynamic_card_identity_observation():
+		return
+	if not _test_identity_role_consistency():
+		return
+	if not _test_renegade_identity_mark_finalization():
+		return
+	if not _test_wuxie_identity_observation():
+		return
+	if not _test_dying_rescue_identity_observation():
+		return
+	if not _test_public_skill_identity_observation():
 		return
 	if not _test_hidden_identity_strategy_visibility():
 		return
@@ -69,6 +84,177 @@ func _test_identity_exposure() -> bool:
 	_identity_model.observe_card_use(snapshot, 2, GameDatabase.get_card("tao"), [0])
 	if _identity_model.get_identity_mark(2) != "loyalist" or _identity_model.get_exposure(2) <= 0.0:
 		return _fail("identity_loyalist_mark mark=%s exposure=%.2f" % [_identity_model.get_identity_mark(2), _identity_model.get_exposure(2)])
+	return true
+
+
+## 验证尚未暴露的隐藏目标不能充当阵营锚点，目标公开后相同行为才形成可靠身份线索。
+func _test_identity_target_evidence() -> bool:
+	# 独立身份模型；该测试需要从全部隐藏身份的零暴露状态开始。
+	var identity_model: IdentityAIModel = IdentityAIModel.new()
+	# 五人隐藏身份快照；反贼1与忠臣2均尚未通过公开行为暴露。
+	var snapshot: Dictionary = _build_strategy_snapshot(false)
+	# 反贼攻击未暴露忠臣；观察者不能偷看目标真实身份并据此给行动者贴反贼标签。
+	identity_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [2])
+	if not is_zero_approx(identity_model.get_exposure(1)) or not identity_model.get_identity_mark(1).is_empty():
+		return _fail("hidden_target_leaked mark=%s exposure=%.2f" % [identity_model.get_identity_mark(1), identity_model.get_exposure(1)])
+	# 公开忠臣身份；同步后该目标具备完整1.0证据权重。
+	(snapshot.get("players", []) as Array)[2]["identity_revealed"] = true
+	# 反贼再次攻击已公开忠臣；相同行为现在应形成反贼标记。
+	identity_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [2])
+	if identity_model.get_identity_mark(1) != "rebel" or identity_model.get_exposure(1) <= 0.0:
+		return _fail("revealed_target_not_used mark=%s exposure=%.2f" % [identity_model.get_identity_mark(1), identity_model.get_exposure(1)])
+	# 忠臣弱暴露模型；官方逻辑会对其作用于完全未知目标的行为提供固定0.1补偿，但不读取目标身份。
+	var loyalist_unknown_model: IdentityAIModel = IdentityAIModel.new()
+	# 重新隐藏目标身份；该行为只验证忠臣自身的弱暴露特例。
+	(snapshot.get("players", []) as Array)[2]["identity_revealed"] = false
+	loyalist_unknown_model.observe_card_use(snapshot, 2, GameDatabase.get_card("sha"), [1])
+	if loyalist_unknown_model.get_identity_mark(2) != "loyalist" or not is_equal_approx(loyalist_unknown_model.get_exposure(2), 0.1):
+		return _fail("loyalist_unknown_compensation mark=%s exposure=%.2f" % [loyalist_unknown_model.get_identity_mark(2), loyalist_unknown_model.get_exposure(2)])
+	return true
+
+
+## 验证卡牌源码可按目标当前状态提供动态身份牌效，避免【铁索连环】横置与重置被识别为同一方向。
+func _test_dynamic_card_identity_observation() -> bool:
+	# 五人隐藏身份快照；目标忠臣2公开后可作为完整阵营证据。
+	var snapshot: Dictionary = _build_strategy_snapshot(false)
+	(snapshot.get("players", []) as Array)[2]["identity_revealed"] = true
+	# 【铁索连环】源码；动态身份观察配置由内容文件生成，不在 AI 模型识别卡牌 ID。
+	var chain_definition: CardDefinition = GameDatabase.get_card_definition("tiesuo")
+	# 未横置目标配置；反贼1施加横置为负面行为，应形成反贼标记。
+	var chain_profile: Dictionary = chain_definition.get_identity_observation_ai_profile(snapshot, 1, [2])
+	var chain_model: IdentityAIModel = IdentityAIModel.new()
+	chain_model.observe_card_use(snapshot, 1, {"ai":chain_profile}, [2])
+	if chain_model.get_identity_mark(1) != "rebel":
+		return _fail("chain_apply_mark=%s" % chain_model.get_identity_mark(1))
+	# 已横置目标配置；相同反贼解除忠臣横置属于帮助行为，不应产生正暴露或错误反贼标记。
+	(snapshot.get("players", []) as Array)[2]["chained"] = true
+	var unchain_profile: Dictionary = chain_definition.get_identity_observation_ai_profile(snapshot, 1, [2])
+	var unchain_model: IdentityAIModel = IdentityAIModel.new()
+	unchain_model.observe_card_use(snapshot, 1, {"ai":unchain_profile}, [2])
+	if not is_zero_approx(unchain_model.get_exposure(1)) or not unchain_model.get_identity_mark(1).is_empty():
+		return _fail("chain_remove_mark=%s exposure=%.2f" % [unchain_model.get_identity_mark(1), unchain_model.get_exposure(1)])
+	# 满体力回复配置；【桃园结义】对满体力主公的动态结果必须为0，不凭无实际效果的回复标记忠臣。
+	(snapshot.get("players", []) as Array)[2]["identity_revealed"] = false
+	var recovery_definition: CardDefinition = GameDatabase.get_card_definition("taoyuan")
+	var recovery_profile: Dictionary = recovery_definition.get_identity_observation_ai_profile(snapshot, 2, [0])
+	var recovery_model: IdentityAIModel = IdentityAIModel.new()
+	recovery_model.observe_card_use(snapshot, 2, {"ai":recovery_profile}, [0])
+	if not is_zero_approx(recovery_model.get_exposure(2)) or not recovery_model.get_identity_mark(2).is_empty():
+		return _fail("full_health_recovery_mark=%s exposure=%.2f" % [recovery_model.get_identity_mark(2), recovery_model.get_exposure(2)])
+	return true
+
+
+## 验证忠臣或反贼违背自身阵营利益的误操作不会被直接贴成相反身份，本地玩家本人也不会自动显示猜测。
+func _test_identity_role_consistency() -> bool:
+	# 忠臣误操作使用的独立身份模型；避免后续正确行为受其他测试状态影响。
+	var loyalist_model: IdentityAIModel = IdentityAIModel.new()
+	# 三人隐藏身份快照；主公公开，可作为完整阵营证据目标。
+	var snapshot: Dictionary = _build_snapshot(false)
+	# 忠臣攻击主公；该行为不符合忠臣真实收益，因此不能被错误标记为反贼。
+	loyalist_model.observe_card_use(snapshot, 2, GameDatabase.get_card("sha"), [0])
+	if not is_zero_approx(loyalist_model.get_exposure(2)) or not loyalist_model.get_identity_mark(2).is_empty():
+		return _fail("loyalist_mistake_marked mark=%s exposure=%.2f" % [loyalist_model.get_identity_mark(2), loyalist_model.get_exposure(2)])
+	# 反贼伪装使用的独立身份模型；确保帮助主公不会直接贴成忠臣。
+	var rebel_model: IdentityAIModel = IdentityAIModel.new()
+	# 反贼帮助主公；行为不符合反贼真实收益，不应产生正暴露或忠臣标记。
+	rebel_model.observe_card_use(snapshot, 1, GameDatabase.get_card("tao"), [0])
+	if not is_zero_approx(rebel_model.get_exposure(1)) or not rebel_model.get_identity_mark(1).is_empty():
+		return _fail("rebel_camouflage_marked mark=%s exposure=%.2f" % [rebel_model.get_identity_mark(1), rebel_model.get_exposure(1)])
+	# 本地观察者模型；玩家1攻击主公会产生暴露，但不应给观察者本人生成自动徽记。
+	var local_observer_model: IdentityAIModel = IdentityAIModel.new()
+	local_observer_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [0], 1)
+	if local_observer_model.get_exposure(1) <= 0.0 or not local_observer_model.get_identity_mark(1).is_empty():
+		return _fail("local_actor_auto_marked mark=%s exposure=%.2f" % [local_observer_model.get_identity_mark(1), local_observer_model.get_exposure(1)])
+	# 其他角色观察模型；玩家0观察玩家1时，单目标0.2暴露应按官方规则整体乘2成为0.4。
+	var remote_actor_model: IdentityAIModel = IdentityAIModel.new()
+	remote_actor_model.observe_card_use(snapshot, 1, GameDatabase.get_card("sha"), [0], 0)
+	if remote_actor_model.get_identity_mark(1) != "rebel" or not is_equal_approx(remote_actor_model.get_exposure(1), 0.4):
+		return _fail("remote_actor_multiplier mark=%s exposure=%.2f" % [remote_actor_model.get_identity_mark(1), remote_actor_model.get_exposure(1)])
+	return true
+
+
+## 验证内奸可暂时显示忠反倾向，但出现一次相反行为后会清除并永久终结自动猜测。
+func _test_renegade_identity_mark_finalization() -> bool:
+	# 独立身份模型；内奸终结状态必须从空标记开始验证。
+	var identity_model: IdentityAIModel = IdentityAIModel.new()
+	# 五人隐藏身份快照；玩家3为内奸，场上仍有两名存活反贼。
+	var snapshot: Dictionary = _build_strategy_snapshot(false)
+	# 内奸帮助主公；从主公阵营视角为正收益，形成暂时忠臣倾向。
+	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("tao"), [0])
+	if identity_model.get_identity_mark(3) != "loyalist":
+		return _fail("renegade_loyal_mark=%s" % identity_model.get_identity_mark(3))
+	# 内奸随后攻击主公；与既有忠臣倾向相反，应清空标记并进入 finished 状态。
+	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("sha"), [0])
+	if not identity_model.get_identity_mark(3).is_empty():
+		return _fail("renegade_contradiction_not_cleared=%s" % identity_model.get_identity_mark(3))
+	# 终结后再次帮助主公；不得重新在忠反之间来回翻转。
+	identity_model.observe_card_use(snapshot, 3, GameDatabase.get_card("tao"), [0])
+	if not identity_model.get_identity_mark(3).is_empty():
+		return _fail("renegade_finished_reopened=%s" % identity_model.get_identity_mark(3))
+	return true
+
+
+## 验证成功打出的无懈可击进入身份观察，同时过滤原使用者未暴露与目标本人自保两类弱证据。
+func _test_wuxie_identity_observation() -> bool:
+	# 独立身份模型；用于验证主公公开来源下的无懈响应暴露。
+	var identity_model: IdentityAIModel = IdentityAIModel.new()
+	# 三人隐藏身份快照；主公0公开，反贼1响应，忠臣2为原锦囊目标。
+	var snapshot: Dictionary = _build_snapshot(false)
+	# 无懈响应上下文；negated=true 表示本张无懈刚刚阻止了原正面锦囊效果。
+	var response_context: Dictionary = {"source_id":0, "target_id":2, "trick_id":"wuzhong", "negated":true}
+	identity_model.observe_card_response(snapshot, 1, GameDatabase.get_card("wuxie"), GameDatabase.get_card("wuzhong"), response_context)
+	if identity_model.get_identity_mark(1) != "rebel" or identity_model.get_exposure(1) < 0.2:
+		return _fail("wuxie_response_not_observed mark=%s exposure=%.2f" % [identity_model.get_identity_mark(1), identity_model.get_exposure(1)])
+	# 目标本人自保使用无懈的独立模型；这种行为不应作为忠反身份线索。
+	var self_response_model: IdentityAIModel = IdentityAIModel.new()
+	self_response_model.observe_card_response(snapshot, 2, GameDatabase.get_card("wuxie"), GameDatabase.get_card("wuzhong"), response_context)
+	if not is_zero_approx(self_response_model.get_exposure(2)) or not self_response_model.get_identity_mark(2).is_empty():
+		return _fail("self_wuxie_marked mark=%s exposure=%.2f" % [self_response_model.get_identity_mark(2), self_response_model.get_exposure(2)])
+	# 未暴露来源响应上下文；玩家1尚无公开证据，忠臣2的无懈不应借真实身份生成标记。
+	var hidden_source_context: Dictionary = {"source_id":1, "target_id":0, "trick_id":"lebu", "negated":true}
+	var hidden_source_model: IdentityAIModel = IdentityAIModel.new()
+	hidden_source_model.observe_card_response(snapshot, 2, GameDatabase.get_card("wuxie"), GameDatabase.get_card("lebu"), hidden_source_context)
+	if not is_zero_approx(hidden_source_model.get_exposure(2)) or not hidden_source_model.get_identity_mark(2).is_empty():
+		return _fail("hidden_source_wuxie_marked mark=%s exposure=%.2f" % [hidden_source_model.get_identity_mark(2), hidden_source_model.get_exposure(2)])
+	return true
+
+
+## 验证成功救援其他角色的【桃】按实际濒死目标形成身份线索，而【酒】式本人自救不会自动标记。
+func _test_dying_rescue_identity_observation() -> bool:
+	# 无内置策略的协调器；对应控制器在救援卡牌效果成功后使用的公开行为入口。
+	var coordinator: AICoordinator = AICoordinator.new()
+	# 三人隐藏身份快照；忠臣2救援公开主公0，应形成稳定忠臣标记。
+	var snapshot: Dictionary = _build_snapshot(false)
+	# 【桃】AI 配置；正向 target_result=2.0由卡牌源码声明，不在控制器硬编码救援牌名。
+	var peach_ai_profile: Dictionary = GameDatabase.get_card_definition("tao").get_ai_profile()
+	coordinator.observe_public_behavior(snapshot, 2, peach_ai_profile, [0])
+	if coordinator.get_identity_mark(2) != "loyalist":
+		return _fail("dying_peach_mark=%s" % coordinator.get_identity_mark(2))
+	# 本人自救模型；唯一目标为行动者本人，即使效果为正也不得生成自动身份猜测。
+	var self_rescue_coordinator: AICoordinator = AICoordinator.new()
+	self_rescue_coordinator.observe_public_behavior(snapshot, 1, peach_ai_profile, [1])
+	if not self_rescue_coordinator.get_identity_mark(1).is_empty():
+		return _fail("dying_self_rescue_mark=%s" % self_rescue_coordinator.get_identity_mark(1))
+	coordinator.free()
+	self_rescue_coordinator.free()
+	return true
+
+
+## 验证卡牌之外的公开技能行为通过协调器进入同一身份模型，且不依赖具体技能 ID 白名单。
+func _test_public_skill_identity_observation() -> bool:
+	# 无内置策略的协调器；自动标记仍应直接使用共享身份模型记录技能行为。
+	var coordinator: AICoordinator = AICoordinator.new()
+	# 三人隐藏身份快照；主公公开，可作为伤害或帮助技能的完整阵营参照。
+	var snapshot: Dictionary = _build_snapshot(false)
+	# 反贼对主公造成负面技能效果；通用 target_result 数据应形成反贼标记。
+	coordinator.observe_public_behavior(snapshot, 1, {"target_result":-1.0}, [0])
+	if coordinator.get_identity_mark(1) != "rebel":
+		return _fail("public_skill_rebel_mark=%s" % coordinator.get_identity_mark(1))
+	# 忠臣对主公提供正面技能效果；同一入口应形成忠臣标记。
+	coordinator.observe_public_behavior(snapshot, 2, {"target_result":1.0}, [0])
+	if coordinator.get_identity_mark(2) != "loyalist":
+		return _fail("public_skill_loyalist_mark=%s" % coordinator.get_identity_mark(2))
+	coordinator.free()
 	return true
 
 

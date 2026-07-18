@@ -2,6 +2,9 @@ extends SkillDefinition
 
 ## 【天坠】技能源码。出牌阶段可弃置一张锦囊牌，或在自身横置时重置自身，然后造成1点火属性伤害。
 
+## 【天坠】对目标的身份观察牌效；负1表示成功发动是一次明确伤害行为，不改变实际伤害数值。
+const IDENTITY_TARGET_RESULT: float = -1.0
+
 ## 当前出牌阶段是否已经发动；每次 phaseUseBegin 重置，费用完整支付后设为 true。
 var _used_this_play_phase: bool = false
 
@@ -66,6 +69,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if owner_state == null or not owner_state.chained or not bool(host.call("set_player_linked", owner_player_id, false, owner_player_id, get_id())):
 			return true
 	_used_this_play_phase = true
+	observe_identity_behavior([target.player_id], {"target_result":IDENTITY_TARGET_RESULT})
 	get_owner_skill_player().damage(1, get_skill_player(target.player_id), "fire")
 	return true
 

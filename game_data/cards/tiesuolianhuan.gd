@@ -45,6 +45,18 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	return resolver.default_destination()
 
 
+## 返回【铁索连环】当前目标的动态身份观察牌效；施加横置为负，解除横置为等量正收益。
+func get_identity_observation_target_result(authoritative_snapshot: Dictionary, _actor_id: int, target_id: int, current_result: float) -> float:
+	# 基础牌效绝对值；静态配置为-0.5，取绝对值后可按目标当前状态反转方向。
+	var result_magnitude: float = absf(current_result)
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前目标快照；已横置表示本次效果将解除连环，因此由负面转为正面。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) == target_id:
+			return result_magnitude if bool(player.get("chained", false)) else -result_magnitude
+	return current_result
+
+
 ## 为基础 AI 枚举一目标与二目标的全部合法组合；玩家与 AI 共用同一权威目标校验。
 func append_play_phase_card_actions(match_host: Object, actor_id: int, card: CardInstance, result: Array[Dictionary]) -> bool:
 	# 当前全部合法单目标；包含使用者本人，因为【铁索连环】允许选择自己。

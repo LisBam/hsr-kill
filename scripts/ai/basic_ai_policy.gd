@@ -81,8 +81,8 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 
 
 ## 记录一张公开使用牌带来的身份暴露；只更新 AI 内部观察数据，不修改对局状态。
-func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int]) -> void:
-	identity_model.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids)
+func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_definition: Dictionary, target_ids: Array[int], observer_id: int = -1) -> void:
+	identity_model.observe_card_use(authoritative_snapshot, actor_id, card_definition, target_ids, observer_id)
 
 
 ## 判断一轮无懈可击是否应响应；协调器与正式并行响应流程可复用同一效用判断。

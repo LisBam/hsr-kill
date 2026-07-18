@@ -36,6 +36,33 @@ func get_ai_profile() -> Dictionary:
 	return (_metadata.get("ai", {}) as Dictionary).duplicate(true)
 
 
+## 构造本次公开用牌的身份观察配置；逐目标结果允许内容文件表达切换状态等动态正负牌效。
+func get_identity_observation_ai_profile(authoritative_snapshot: Dictionary, actor_id: int, target_ids: Array[int]) -> Dictionary:
+	# 卡牌基础 AI 配置；身份观察副本不会修改数据库静态元数据。
+	var result: Dictionary = get_ai_profile()
+	# 静态目标结果；没有目标牌效的装备或纯自身牌保持0。
+	var base_target_result: float = float(result.get("target_result", 0.0))
+	# 各稳定目标的动态结果；身份模型按目标 ID 读取，不要求所有目标共享同一方向。
+	var target_results_by_player: Dictionary = {}
+	for target_id: int in target_ids:
+		target_results_by_player[target_id] = get_identity_observation_target_result(authoritative_snapshot, actor_id, target_id, base_target_result)
+	if not target_results_by_player.is_empty():
+		result["target_results_by_player"] = target_results_by_player
+	return result
+
+
+## 返回本牌对单名目标的身份观察结果；回复牌对满体力目标为0，复杂切换牌可在自身源码覆盖。
+func get_identity_observation_target_result(authoritative_snapshot: Dictionary, _actor_id: int, target_id: int, current_result: float) -> float:
+	if not bool((_metadata.get("ai", {}) as Dictionary).get("recover", false)):
+		return current_result
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前目标快照；回复牌对满体力角色没有实际收益，不应生成帮助身份线索。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) == target_id and int(player.get("hp", 0)) >= int(player.get("max_hp", 0)):
+			return 0.0
+	return current_result
+
+
 ## 计算本卡牌创建的统一选择动作额外评分；复杂牌效可在对应卡牌文件中覆盖本入口。
 func score_ai_choice(_authoritative_snapshot: Dictionary, _choice_request: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
 	return 0.0

@@ -528,8 +528,13 @@ func submit_action(action: PlayerAction) -> bool:
 		var validation_error: String = card_rules.validate_use(action.actor_id, card, target_ids)
 		if not validation_error.is_empty():
 			return _reject(validation_error)
-		# 公开使用牌行为；身份 AI 只观察牌与最终目标，不持有或修改权威 GameState。
-		ai_coordinator.observe_card_use(state.to_dict(-1, true), action.actor_id, GameDatabase.get_card(card.definition_id), target_ids)
+		# 身份观察快照；公开行为按权威最终目标与当前目标状态计算，不持有或修改 GameState。
+		var identity_observation_snapshot: Dictionary = state.to_dict(-1, true)
+		# 卡牌源码定义；复杂牌可按每名目标当前状态覆盖静态 target_result，不在控制器维护牌名白名单。
+		var card_source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
+		# 本次身份观察配置；定义缺失时回退到卡牌元数据中的静态 AI 配置。
+		var identity_ai_profile: Dictionary = card_source_definition.get_identity_observation_ai_profile(identity_observation_snapshot, action.actor_id, target_ids) if card_source_definition != null else (GameDatabase.get_card(card.definition_id).get("ai", {}) as Dictionary)
+		ai_coordinator.observe_public_behavior(identity_observation_snapshot, action.actor_id, identity_ai_profile, target_ids, local_human_player_id)
 		_execute_card_use(action.actor_id, card, target_ids)
 	elif action.action_type == "recast_card":
 		if not _execute_recast(action.actor_id, action.card_uid):
@@ -2165,6 +2170,10 @@ func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counte
 	var response_results: Array = (context.get("wuxie_response_results", []) as Array).duplicate(true)
 	response_results.append({"player_id":responder_id, "card_uid":counter_card.uid, "card_id":counter_card.definition_id, "respond_to":str(context.get("trick_id", ""))})
 	context["wuxie_response_results"] = response_results
+	# 原锦囊定义；无懈身份观察通过其目标收益与当前奇偶结果判断本次响应的忠反方向。
+	var response_subject_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
+	# 成功打出的无懈可击公开行为；仅在原使用者已有暴露且响应者不是目标本人时形成身份线索。
+	ai_coordinator.observe_card_response(state.to_dict(-1, true), responder_id, GameDatabase.get_card(counter_card.definition_id), response_subject_definition, context, local_human_player_id)
 	# 当前无懈状态对象；按已有响应顺序重建，确保异步上下文与独立状态类使用同一奇偶规则。
 	var wuxie_state: WuxieChainState = WuxieChainState.new(int(context.get("root_event_id", state.current_event_id)))
 	for response_variant: Variant in response_results:
@@ -3017,6 +3026,13 @@ func get_alive_players_in_action_order(start_player_id: int) -> Array[PlayerStat
 ## 返回两个身份的基础 AI 阵营态度；装备源码可复用该只读目标策略。
 func get_identity_attitude(from_identity: String, to_identity: String) -> int:
 	return _identity_attitude(from_identity, to_identity)
+
+
+## 转发技能文件已经成功执行的公开目标行为；身份观察只读权威快照，不参与技能效果、费用或合法性判断。
+func observe_skill_identity_behavior(actor_id: int, target_ids: Array[int], ai_profile: Dictionary) -> void:
+	if state == null or ai_coordinator == null or state.get_player(actor_id) == null or ai_profile.is_empty():
+		return
+	ai_coordinator.observe_public_behavior(state.to_dict(-1, true), actor_id, ai_profile, target_ids, local_human_player_id)
 
 
 ## 请求玩家决定是否发动一件仍在装备区的非锁定装备；选择装备实体表示发动，取消表示不发动且不消耗装备。
@@ -5144,7 +5160,12 @@ func _apply_dying_response_card(responder_id: int, dying_player_id: int, card: C
 		return false
 	# 救援牌源码；不存在或拒绝当前角色关系时不修改体力。
 	var definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
-	return definition != null and definition.resolve_dying_response(self, responder_id, dying_player_id, card)
+	# 救援效果是否成功；只有实际回复已经由卡牌源码确认后才生成公开身份行为。
+	var response_applied: bool = definition != null and definition.resolve_dying_response(self, responder_id, dying_player_id, card)
+	if response_applied:
+		# 救援目标行为；【桃】沿用自身正向 target_result，【酒】因目标为本人会被身份模型自动忽略。
+		ai_coordinator.observe_public_behavior(state.to_dict(-1, true), responder_id, definition.get_ai_profile(), [dying_player_id], local_human_player_id)
+	return response_applied
 
 
 ## 在角色体力恢复至1点或以上时统一结算求桃流程；状态、事件与日志在同一入口完成，父级卡牌或阶段随后才能继续。
