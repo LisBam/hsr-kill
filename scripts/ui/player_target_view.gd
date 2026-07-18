@@ -368,6 +368,41 @@ func _on_input_details_requested() -> void:
 	details_requested.emit(_player_snapshot.duplicate(true), _character_definition.duplicate(true), _faction_definition.duplicate(true))
 
 
+## 请求通过统一目标旁信息框显示武将静态资料；选将候选与正式对局武将牌共用相同内容结构。
+func _request_character_information() -> void:
+	if _match_overlays_visible or _player_snapshot.is_empty() or _character_definition.is_empty():
+		return
+	# 当前武将显示名；只读取武将静态定义，缺失时使用数据库统一中文回退文本。
+	var character_name: String = str(_character_definition.get("display_name", GameDatabase.resolve_character_name(str(_player_snapshot.get("character_id", "")))))
+	# 当前势力完整名称；选将与局内牌面都复用势力定义的公开显示名。
+	var faction_name: String = str(_faction_definition.get("display_name", _character_definition.get("faction", "未知势力")))
+	# 当前武将性别文本；未知或未登记值统一显示“未知”，不参与任何规则判断。
+	var gender_text: String = str({"male":"男", "female":"女", "unknown":"未知"}.get(str(_character_definition.get("gender", "unknown")), "未知"))
+	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
+	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
+	# 当前武将全部技能文本；严格保持武将定义顺序，每项分为技能名与技能描述两行。
+	var skill_information_lines: Array[String] = []
+	for skill_id_variant: Variant in _character_definition.get("skills", []) as Array:
+		# 当前技能稳定 ID；用于查询静态技能名称与说明，不读取运行时技能实例。
+		var skill_id: String = str(skill_id_variant)
+		# 当前技能静态定义；缺失时保留稳定 ID 与明确占位说明，避免整项静默消失。
+		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		# 当前技能完整名称；信息框不截取技能按钮使用的前两个字。
+		var skill_name: String = str(skill_definition.get("name", skill_id))
+		# 当前技能完整描述；卡牌书名号按全局名称模式解析，其他原文保持不变。
+		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		skill_information_lines.append("【%s】\n%s" % [skill_name, skill_description])
+	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
+	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"
+	# 统一武将悬停信息；标题、基础资料和全部技能沿用卡牌悬停接口的固定三个字段。
+	var information: Dictionary = {
+		"title":character_name,
+		"subtitle":"势力：%s｜性别：%s｜体力上限：%d" % [faction_name, gender_text, maximum_health],
+		"description":skills_text,
+	}
+	information_requested.emit(information, get_global_rect())
+
+
 ## 根据鼠标局部坐标识别其他玩家牌面上的公开装备横条，并请求统一卡牌信息。
 func _on_input_pointer_moved(local_position: Vector2) -> void:
 	_update_public_equipment_information(local_position)
@@ -377,6 +412,7 @@ func _on_input_pointer_moved(local_position: Vector2) -> void:
 func _on_input_mouse_entered() -> void:
 	_is_hovered = true
 	_refresh_hover_name_visibility()
+	_request_character_information()
 	hover_changed.emit(true)
 	_update_public_equipment_information(_input_area.get_local_mouse_position())
 
@@ -385,7 +421,10 @@ func _on_input_mouse_entered() -> void:
 func _on_input_mouse_exited() -> void:
 	_is_hovered = false
 	_refresh_hover_name_visibility()
-	_dismiss_public_equipment_information()
+	if _hovered_equipment_slot.is_empty():
+		information_dismissed.emit()
+	else:
+		_dismiss_public_equipment_information()
 	hover_changed.emit(false)
 
 
@@ -669,6 +708,8 @@ func _refresh_equipment_rows() -> void:
 	_equipment_rows.clear()
 	_equipment_row_slots.clear()
 	if not _public_equipment_visible:
+		if _is_hovered:
+			_request_character_information()
 		return
 	# 当前公开装备字典；快照已包含完整实体牌数据，可安全展示花色、点数和牌名。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
@@ -711,6 +752,7 @@ func _refresh_equipment_rows() -> void:
 		_equipment_row_slots.append(slot)
 	_layout_equipment_rows()
 	if _is_hovered:
+		_request_character_information()
 		call_deferred("_update_public_equipment_information", _input_area.get_local_mouse_position())
 
 
@@ -739,7 +781,6 @@ func _refresh_hover_name_visibility() -> void:
 ## 更新其他玩家公开装备信息命中；装备横条本身忽略鼠标，由最上层透明输入区域统一转发坐标。
 func _update_public_equipment_information(local_position: Vector2) -> void:
 	if not _match_overlays_visible or not _public_equipment_visible or not _is_hovered or is_face_down:
-		_dismiss_public_equipment_information()
 		return
 	# 当前命中的固定装备槽位；空字符串表示鼠标不在任何已绘制装备横条内。
 	var hovered_slot: String = ""
@@ -753,11 +794,15 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 			hovered_row = equipment_row
 			break
 	if hovered_slot.is_empty() or hovered_row == null:
-		_dismiss_public_equipment_information()
+		if not _hovered_equipment_slot.is_empty():
+			_hovered_equipment_slot = ""
+			if _match_overlays_visible:
+				information_dismissed.emit()
+			else:
+				_request_character_information()
 		return
 	if hovered_slot == _hovered_equipment_slot:
 		return
-	_dismiss_public_equipment_information()
 	# 当前玩家公开装备字典；快照只包含对所有观察者可见的装备实体数据。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
 	# 当前命中装备实体快照；槽位在横条创建后仍可能因快照刷新失效，缺失时直接停止显示。

@@ -341,6 +341,8 @@ func _ready() -> void:
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_menu.set_next_player_count(match_controller.default_player_count)
 	character_selection_panel.character_selected.connect(_on_character_selected)
+	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))
+	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
 	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
 	use_button.pressed.connect(_on_use_pressed)

@@ -6,6 +6,12 @@ extends Control
 ## 玩家确认武将时发出的信号；参数为稳定武将配置 ID，不携带节点或配置引用。
 signal character_selected(character_id: String)
 
+## 选将候选或公开领袖武将牌请求显示统一悬停信息时发出的转发信号。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 选将武将牌结束悬停或节点释放时发出的统一信息关闭转发信号。
+signal information_dismissed
+
 ## 正式武将牌场景；五张候选牌与局内角色牌复用同一 Node2D 模型和数据渲染逻辑。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
@@ -222,6 +228,8 @@ func _render_leader_character() -> void:
 	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 	_leader_character_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	_leader_character_area.add_child(_leader_character_view)
+	_leader_character_view.information_requested.connect(information_requested.emit)
+	_leader_character_view.information_dismissed.connect(information_dismissed.emit)
 	# 领袖只读牌面快照；不显示手牌数与对局装备，只表达已公开的武将选择。
 	var leader_snapshot: Dictionary = {
 		"player_id":int(_snapshot.get("leader_player_id", -1)),
@@ -267,6 +275,8 @@ func _render_candidates() -> void:
 		# 正式武将牌节点；根类型为 Node2D，透明输入区域负责点击。
 		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 		_candidate_area.add_child(character_view)
+		character_view.information_requested.connect(information_requested.emit)
+		character_view.information_dismissed.connect(information_dismissed.emit)
 		# 候选牌快照；只包含表现所需字段，不伪造玩家规则状态或加入对局玩家数组。
 		var candidate_snapshot: Dictionary = {
 			"player_id":candidate_index,

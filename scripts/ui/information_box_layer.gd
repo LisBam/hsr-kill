@@ -169,6 +169,16 @@ func get_hover_title_text() -> String:
 	return _hover_title_label.text if _hover_title_label != null else ""
 
 
+## 返回目标旁信息框当前副标题；供界面回归验证武将势力、性别与体力上限完整显示。
+func get_hover_subtitle_text() -> String:
+	return _hover_subtitle_label.text if _hover_subtitle_label != null else ""
+
+
+## 返回目标旁信息框当前说明正文；供界面回归验证武将全部技能名称与描述。
+func get_hover_description_text() -> String:
+	return _hover_description_label.text if _hover_description_label != null else ""
+
+
 ## 返回居中武将详情当前是否可见；牌桌不应通过该查询推断暂停所有权。
 func is_character_details_visible() -> bool:
 	return _character_shade != null and _character_shade.visible
@@ -179,9 +189,29 @@ func get_character_title_text() -> String:
 	return _character_title_label.text if _character_title_label != null else ""
 
 
+## 返回武将详情标题标签；供界面回归验证标题文字相对整个详情面板严格居中。
+func get_character_title_label() -> Label:
+	return _character_title_label
+
+
 ## 返回武将详情实际创建的技能条目数量；数量仅对应静态武将技能列表。
 func get_character_skill_entry_count() -> int:
 	return _character_skill_entry_count
+
+
+## 返回武将详情技能分隔线数量；正常数量应等于技能条目数减一。
+func get_character_skill_separator_count() -> int:
+	# 当前分隔线数量；只统计带稳定元数据标识的横线，不把技能条目或空状态文本计入。
+	var separator_count: int = 0
+	for child: Node in _character_skill_list.get_children():
+		if child is HSeparator and child.has_meta("information_box_skill_separator"):
+			separator_count += 1
+	return separator_count
+
+
+## 返回武将详情技能列表容器；供界面回归验证短内容的整体垂直居中位置。
+func get_character_skill_list() -> VBoxContainer:
+	return _character_skill_list
 
 
 ## 返回详情左侧武将牌当前缩放；没有活动详情时返回零向量，便于诊断牌面是否正确创建。
@@ -219,6 +249,7 @@ func refresh_ui_style() -> void:
 	if _character_card_view != null and is_instance_valid(_character_card_view):
 		_character_card_view.refresh_ui_style()
 	_refresh_skill_entry_styles()
+	call_deferred("_refresh_character_skill_vertical_layout")
 
 
 ## 构建目标旁悬浮信息节点；所有输入保持穿透，浮层不会抢走原目标的鼠标离开判定。
@@ -279,17 +310,27 @@ func _build_character_panel() -> void:
 	_character_panel.add_child(character_content)
 	# 武将详情标题行；标题扩展占据左侧空间，关闭按钮固定在最右侧。
 	var character_header: HBoxContainer = HBoxContainer.new()
+	character_header.name = "CharacterHeader"
 	character_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character_header.custom_minimum_size.y = character_header_height
 	character_content.add_child(character_header)
+	# 标题栏左侧对称占位；宽度与右侧关闭按钮一致，保证标题中心与整个详情面板中心重合。
+	var character_header_spacer: Control = Control.new()
+	character_header_spacer.name = "LeadingSpacer"
+	character_header_spacer.custom_minimum_size = Vector2(character_header_height, character_header_height)
+	character_header_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	character_header.add_child(character_header_spacer)
 	_character_title_label = Label.new()
+	_character_title_label.name = "Title"
 	_character_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_character_title_label.text = "武将详情"
 	_character_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_character_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_character_title_label.add_theme_font_size_override("font_size", 22)
 	character_header.add_child(_character_title_label)
 	_character_close_button = Button.new()
+	_character_close_button.name = "CloseButton"
 	_character_close_button.text = "X"
 	_character_close_button.tooltip_text = ""
 	_character_close_button.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -319,6 +360,8 @@ func _build_character_panel() -> void:
 	_character_skill_list = VBoxContainer.new()
 	_character_skill_list.name = "SkillList"
 	_character_skill_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_character_skill_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_character_skill_list.alignment = BoxContainer.ALIGNMENT_CENTER
 	_character_skill_list.add_theme_constant_override("separation", skill_entry_separation)
 	_character_skill_scroll.add_child(_character_skill_list)
 
@@ -379,6 +422,7 @@ func _render_character_skills() -> void:
 		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 		_character_skill_list.add_child(empty_label)
+		call_deferred("_refresh_character_skill_vertical_layout")
 		return
 	for skill_id_variant: Variant in skill_ids:
 		# 当前技能稳定 ID；用于从数据库取得只读名称与原始说明。
@@ -389,6 +433,13 @@ func _render_character_skills() -> void:
 		var skill_name: String = str(skill_definition.get("name", skill_id))
 		# 当前技能显示说明；只替换完整书名号中的卡牌名称，其他原文保持不变。
 		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		if _character_skill_entry_count > 0:
+			# 技能间横向分隔线；只出现在相邻技能之间，不在列表首尾绘制多余边界。
+			var skill_separator: HSeparator = HSeparator.new()
+			skill_separator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			skill_separator.set_meta("information_box_skill_separator", true)
+			_apply_skill_separator_style(skill_separator)
+			_character_skill_list.add_child(skill_separator)
 		# 单个技能条目；使用无边框纵向布局，避免在详情面板内嵌套装饰卡片。
 		var skill_entry: VBoxContainer = VBoxContainer.new()
 		skill_entry.add_theme_constant_override("separation", 4)
@@ -408,6 +459,7 @@ func _render_character_skills() -> void:
 		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 		skill_entry.add_child(skill_description_label)
 		_character_skill_entry_count += 1
+	call_deferred("_refresh_character_skill_vertical_layout")
 
 
 ## 清理详情左侧武将牌；节点离树后不保留鼠标信号、快照或主题状态。
@@ -428,6 +480,7 @@ func _clear_skill_entries() -> void:
 	for child: Node in _character_skill_list.get_children():
 		_character_skill_list.remove_child(child)
 		child.queue_free()
+	_character_skill_list.custom_minimum_size.y = 0.0
 	_character_skill_entry_count = 0
 
 
@@ -445,8 +498,29 @@ func _refresh_skill_entry_styles() -> void:
 			var skill_description_label: Label = entry_node.get_child(1) as Label
 			skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		elif entry_node is HSeparator and entry_node.has_meta("information_box_skill_separator"):
+			_apply_skill_separator_style(entry_node as HSeparator)
 		elif entry_node is Label:
 			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+
+
+## 让技能列表至少占满滚动视口；内容不足时 VBox 的居中对齐会整体上下居中，超出时仍按真实高度滚动。
+func _refresh_character_skill_vertical_layout() -> void:
+	if _character_skill_list == null or _character_skill_scroll == null:
+		return
+	_character_skill_list.custom_minimum_size.y = _character_skill_scroll.size.y
+
+
+## 为技能间横线应用当前主题边框色；横线只承担内容分组，不创建额外卡片背景。
+func _apply_skill_separator_style(separator: HSeparator) -> void:
+	if separator == null:
+		return
+	# 当前主题横线样式；1像素线条保持清晰，同时不抢夺技能名称的强调层级。
+	var separator_style: StyleBoxLine = StyleBoxLine.new()
+	separator_style.color = BattleUIStyle.get_color("border")
+	separator_style.thickness = 1
+	separator_style.vertical = false
+	separator.add_theme_stylebox_override("separator", separator_style)
 
 
 ## 为技能滚动条应用当前主题语义色；拖条、悬停和按下状态均保持可辨识对比度。
