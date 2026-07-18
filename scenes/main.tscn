@@ -18,6 +18,8 @@
 [ext_resource type="Script" uid="uid://dn0465a3xhtvw" path="res://scripts/ui/skill_button_grid.gd" id="18_skill_grid"]
 [ext_resource type="Script" uid="uid://b5v6wgyjxk6fw" path="res://scripts/core/gameplay_pause_service.gd" id="19_pause_service"]
 [ext_resource type="Script" uid="uid://djseqc054thh0" path="res://scripts/core/game_flow_pacer.gd" id="20_flow_pacer"]
+[ext_resource type="Script" path="res://scripts/ui/main_menu.gd" id="21_main_menu"]
+[ext_resource type="Texture2D" path="res://assets/art/身份模式主菜单背景.png" id="22_identity_menu_background"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -711,3 +713,315 @@ offset_right = 650.0
 offset_bottom = 522.0
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "请选择武将牌"
+
+[node name="MainMenu" type="Control" parent="." unique_id=1827689801]
+unique_name_in_owner = true
+z_index = 60
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("21_main_menu")
+
+[node name="MainMenuBackground" type="ColorRect" parent="MainMenu" unique_id=901746320]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+color = Color(0.0666667, 0.0705882, 0.0784314, 1)
+
+[node name="MainMenuTopNavigation" type="PanelContainer" parent="MainMenu" unique_id=490045390]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 54.0
+offset_top = 22.0
+offset_right = -54.0
+offset_bottom = 86.0
+grow_horizontal = 2
+
+[node name="TopNavigationContent" type="Control" parent="MainMenu/MainMenuTopNavigation" unique_id=147039208]
+layout_mode = 2
+
+[node name="MainMenuTitle" type="Label" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=251785243]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "崩铁杀"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="TopIdentityModeButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=849120694]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(176, 42)
+layout_mode = 0
+offset_left = 60.0
+offset_top = 11.0
+offset_right = 236.0
+offset_bottom = 53.0
+toggle_mode = true
+button_pressed = true
+text = "身份模式"
+
+[node name="MainMenuFrame" type="PanelContainer" parent="MainMenu" unique_id=171462018]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -556.0
+offset_top = -252.0
+offset_right = 556.0
+offset_bottom = 270.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MainMenuContent" type="HBoxContainer" parent="MainMenu/MainMenuFrame" unique_id=873369471]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MainMenuModeList" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent" unique_id=138292666]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(262, 0)
+layout_mode = 2
+
+[node name="ModeListVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList" unique_id=228920184]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MainMenuModeListTitle" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=573889024]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "游戏模式"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="IdentityModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=129181071]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 78)
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+theme_override_font_sizes/font_size = 23
+text = "身份模式"
+
+[node name="ModeListHint" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=134739719]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 15
+text = "更多模式敬请期待"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MainMenuPreviewPanel" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent" unique_id=119656469]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MainMenuPreviewContent" type="Control" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel" unique_id=786946542]
+layout_mode = 2
+
+[node name="MainMenuModeBackground" type="TextureRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=158579660]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("22_identity_menu_background")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="MainMenuPreviewShade" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=100783673]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.11, 0.1, 0.09, 0.18)
+
+[node name="MainMenuModeTitle" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=631701119]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -342.0
+offset_top = 58.0
+offset_right = -42.0
+offset_bottom = 108.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 38
+text = "身份模式"
+horizontal_alignment = 2
+
+[node name="MainMenuModeDescription" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=176024840]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -342.0
+offset_top = 114.0
+offset_right = -42.0
+offset_bottom = 144.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 20
+text = "标准身份局"
+horizontal_alignment = 2
+
+[node name="MainMenuActionRow" type="HBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=171002689]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -458.0
+offset_top = -86.0
+offset_right = -34.0
+offset_bottom = -28.0
+grow_horizontal = 0
+grow_vertical = 0
+theme_override_constants/separation = 14
+alignment = 2
+
+[node name="MainMenuSettingsButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionRow" unique_id=279014034]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "设置"
+
+[node name="StartGameButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionRow" unique_id=194863559]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(278, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "开始游戏"
+
+[node name="MainMenuSettingsPanel" type="PanelContainer" parent="MainMenu" unique_id=834594201]
+unique_name_in_owner = true
+visible = false
+z_index = 2
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -238.0
+offset_top = -242.0
+offset_right = 238.0
+offset_bottom = 242.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SettingsVBox" type="VBoxContainer" parent="MainMenu/MainMenuSettingsPanel" unique_id=236641704]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="MainMenuSettingsTitle" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=168713084]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "设置"
+horizontal_alignment = 1
+
+[node name="MainMenuCardNameButton" type="Button" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=192563745]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+text = "卡牌名称：崩铁杀"
+
+[node name="MainMenuUiStyleRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=204379471]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuUiStyleLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuUiStyleRow" unique_id=148923598]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "UI风格"
+vertical_alignment = 1
+
+[node name="MainMenuUiStyleOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuUiStyleRow" unique_id=164376350]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(156, 34)
+layout_mode = 2
+
+[node name="MainMenuAutoIdentityMarkingCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=170835435]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+button_pressed = true
+text = "自动标记身份"
+
+[node name="MainMenuAiResponseDelayLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=489346337]
+unique_name_in_owner = true
+layout_mode = 2
+text = "AI响应速度：0.30秒"
+
+[node name="MainMenuAiResponseDelaySlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=555902079]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+min_value = 0.05
+max_value = 1.0
+step = 0.05
+value = 0.3
+
+[node name="MainMenuGameSpeedLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=508850181]
+unique_name_in_owner = true
+layout_mode = 2
+text = "游戏速度：0.3秒"
+
+[node name="MainMenuGameSpeedSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=685925191]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+min_value = 0.1
+max_value = 1.0
+step = 0.1
+value = 0.3
+
+[node name="MainMenuPlayerCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=180229364]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuPlayerCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuPlayerCountRow" unique_id=783761082]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "游戏人数"
+vertical_alignment = 1
+
+[node name="MainMenuPlayerCountInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuPlayerCountRow" unique_id=132302109]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(108, 34)
+layout_mode = 2
+min_value = 2.0
+max_value = 10.0
+value = 8.0
+
+[node name="MainMenuSettingsCloseButton" type="Button" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=155077055]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+text = "返回"

@@ -64,7 +64,11 @@ func preserves_requested_target_order() -> bool:
 
 ## 返回真正进入【借刀杀人】目标时机的唯一持刀者；第二名角色只作为强制【杀】的已声明对象保存。
 func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
-	return [requested_target_ids[0]] if requested_target_ids.size() >= 1 else []
+	# 实际结算目标；显式构造强类型数组，避免条件表达式推断为无类型 Array 后违反返回值契约。
+	var result: Array[int] = []
+	if requested_target_ids.size() >= 1:
+		result.append(requested_target_ids[0])
+	return result
 
 
 ## 将第二名已声明角色写入共享上下文；后续牌效直接要求持刀者对其使用【杀】，不再弹出二次选目标窗口。

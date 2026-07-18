@@ -2,7 +2,7 @@ extends Node
 
 ## 局内界面布局与鼠标命中回归测试。测试使用正式主场景，验证边缘按钮和底部区域在默认窗口内完整可见。
 
-## 主场景完成自动开局和动态节点构建前等待的帧数；默认6帧覆盖延迟开局、快照渲染与容器排序。
+## 主场景完成主菜单和动态节点构建前等待的帧数；默认6帧覆盖控件初始化、主题刷新与容器排序。
 const SETTLE_FRAME_COUNT: int = 6
 
 ## 模拟未应用画布拉伸时的客户区尺寸；1152×648与项目默认启动窗口一致，用于复现固定1280×720坐标越界问题。
@@ -44,6 +44,17 @@ func _run() -> void:
 	match_controller.randomize_local_human_seat = false
 	for _frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
+	# 启动主菜单；新进入场景时必须先显示身份模式预览，不允许在未确认前自动创建对局。
+	var startup_main_menu: MainMenu = main_instance.get_node("%MainMenu") as MainMenu
+	# 主菜单开始按钮；文字与可见性共同验证“前往挑战”已改为“开始游戏”。
+	var startup_start_button: Button = main_instance.get_node("%StartGameButton") as Button
+	# 主菜单设置按钮；位于开始按钮左侧，替代参考布局中的商店入口。
+	var startup_settings_button: Button = main_instance.get_node("%MainMenuSettingsButton") as Button
+	if startup_main_menu == null or not startup_main_menu.visible or startup_start_button.text != "开始游戏" or startup_settings_button.text != "设置" or match_controller.state != null:
+		_fail("startup_main_menu")
+		return
+	# 本回归用例后续需要注入稳定快照并验证局内输入；隐藏启动覆盖层不触发开局，避免与人为快照混入真实选将流程。
+	startup_main_menu.visible = false
 	var ten_player_snapshot: Dictionary = _make_ten_player_snapshot()
 	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
