@@ -35,6 +35,12 @@ var shown: bool = false
 ## 仅对某一持有者私密可见的玩家 ID；公开牌或公共区域使用 -1。
 var private_owner_id: int = -1
 
+## 当前手牌视为效果生效前的原始卡牌定义ID；空字符串表示实体没有临时手牌牌名，离开手牌区时恢复该定义。
+var hand_view_as_original_definition_id: String = ""
+
+## 赋予当前手牌视为效果的技能ID；只用于规则追踪与清理，不改变技能归属或实体所有者。
+var hand_view_as_source_skill_id: String = ""
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 func _init(card_definition_id: String = "", card_suit: String = "spade", card_rank: int = 1) -> void:
@@ -52,6 +58,33 @@ func get_color() -> String:
 	if suit == "spade" or suit == "club":
 		return "black"
 	return "none"
+
+
+## 将当前手牌临时视为指定逻辑牌；重复赋予时始终保留最初的实体定义，避免连续转移覆盖真实牌名。
+func set_hand_view_as(view_as_definition_id: String, source_skill_id: String) -> bool:
+	if zone != "hand" or view_as_definition_id.is_empty() or definition_id == view_as_definition_id:
+		return false
+	if hand_view_as_original_definition_id.is_empty():
+		hand_view_as_original_definition_id = definition_id
+	definition_id = view_as_definition_id
+	hand_view_as_source_skill_id = source_skill_id
+	return true
+
+
+## 清除当前实体的手牌视为效果并恢复原始定义；返回清除前实际使用的逻辑牌ID。
+func clear_hand_view_as() -> String:
+	# 清除前逻辑牌ID；响应与虚拟使用流程可据此继续结算已经声明的牌效。
+	var previous_view_as_definition_id: String = definition_id
+	if not hand_view_as_original_definition_id.is_empty():
+		definition_id = hand_view_as_original_definition_id
+	hand_view_as_original_definition_id = ""
+	hand_view_as_source_skill_id = ""
+	return previous_view_as_definition_id
+
+
+## 返回当前实体是否拥有尚未清理的手牌视为效果；区域移动组件只通过本查询决定是否恢复真实牌名。
+func has_hand_view_as() -> bool:
+	return not hand_view_as_original_definition_id.is_empty()
 
 
 ## 序列化为网络安全字典；不包含任何对象引用或可执行回调。

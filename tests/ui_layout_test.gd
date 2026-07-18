@@ -660,7 +660,7 @@ func _run() -> void:
 		return
 	# 有领袖选将快照；领袖牌缩小并显示竖线，候选区域恢复到分隔线右侧。
 	var selection_snapshot_with_leader: Dictionary = selection_snapshot_without_leader.duplicate(true)
-	selection_snapshot_with_leader["leader_character_id"] = "welt"
+	selection_snapshot_with_leader["leader_character_id"] = "natasha"
 	character_selection_panel.bind_snapshot(selection_snapshot_with_leader)
 	await get_tree().process_frame
 	# 缩小后的领袖武将牌；缩放值必须读取组件公开配置并保持只读。
@@ -674,7 +674,7 @@ func _run() -> void:
 		_fail("selection_leader_information_shown_too_early:%s" % information_box.get_hover_title_text())
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "瓦尔特":
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "娜塔莎":
 		_fail("selection_leader_information:%s" % information_box.get_hover_title_text())
 		return
 	leader_character_view.call("_on_input_mouse_exited")

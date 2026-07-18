@@ -1,6 +1,6 @@
 extends Node
 
-## 新武将机制专项回归。覆盖规则牌名、武将引用、横置灰白线状态、护盾语义、五个新技能的核心结算与指定AI分支。
+## 新武将机制专项回归。覆盖规则牌名、武将引用、额外阶段恢复、临时牌名、嵌套技能结算及新技能的核心AI分支。
 
 ## 武将牌可复用场景；用真实场景结构验证横置灰白线状态不会改变牌面变换或全局包围矩形。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
@@ -21,6 +21,16 @@ func _ready() -> void:
 func _run() -> void:
 	_create_controller()
 	if not _test_metadata_and_rule_names():
+		return
+	if not _test_expanded_character_metadata():
+		return
+	if not _test_named_card_gain_and_hand_view_as():
+		return
+	if not _test_lushi_mingchen_deferred_settlement():
+		return
+	if not _test_huanyang_and_sefu():
+		return
+	if not _test_huanfa_extra_play_phase_completion():
 		return
 	if not await _test_character_card_link_overlay():
 		return
@@ -90,7 +100,12 @@ func _reset_state(player_count: int) -> void:
 	_controller._active_extra_discard_phase.clear()
 	_controller._extra_play_phase_counts.clear()
 	_controller._extra_play_phase_returns_to_finish.clear()
+	_controller._extra_play_phase_return_points.clear()
+	_controller._active_extra_play_phase_context.clear()
+	_controller._deferred_skill_settlements.clear()
+	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
+	_controller._pending_finish_turn_player_id = -1
 
 
 ## 验证属性【杀】的规则名与显示名分离，并核对三名武将的体力、势力和技能引用。
@@ -115,6 +130,186 @@ func _test_metadata_and_rule_names() -> bool:
 		return _fail("dan_heng_metadata=%s" % dan_heng)
 	if not GameDatabase.get_skill("six_phased_ice_sample").is_empty() or not GameDatabase.get_skill("cloud_piercer_sample").is_empty():
 		return _fail("placeholder_skills_still_registered")
+	return true
+
+
+## 核对娜塔莎、寒鸦、雪衣的稳定资料与技能原文，并确认三个旧占位武将已经退出自动索引。
+func _test_expanded_character_metadata() -> bool:
+	# 娜塔莎定义；贝洛伯格女性、3点体力与双技能顺序必须保持稳定。
+	var natasha: Dictionary = GameDatabase.get_character("natasha")
+	# 寒鸦定义；仙舟联盟女性、3点体力与双技能顺序必须保持稳定。
+	var hanya: Dictionary = GameDatabase.get_character("hanya")
+	# 雪衣定义；内部ID按设计固定为xveyi，基础体力为4。
+	var xveyi: Dictionary = GameDatabase.get_character("xveyi")
+	if str(natasha.get("gender", "")) != "female" or str(natasha.get("faction", "")) != "beiluoboge" or int(natasha.get("max_hp", 0)) != 3 or (natasha.get("skills", []) as Array) != ["yaoli", "huanfa"]:
+		return _fail("natasha_metadata=%s" % natasha)
+	if str(hanya.get("gender", "")) != "female" or str(hanya.get("faction", "")) != "xianzhou" or int(hanya.get("max_hp", 0)) != 3 or (hanya.get("skills", []) as Array) != ["mingchen", "lushi"]:
+		return _fail("hanya_metadata=%s" % hanya)
+	if str(xveyi.get("display_name", "")) != "雪衣" or str(xveyi.get("gender", "")) != "female" or str(xveyi.get("faction", "")) != "xianzhou" or int(xveyi.get("max_hp", 0)) != 4 or (xveyi.get("skills", []) as Array) != ["huanyang", "sefu"]:
+		return _fail("xveyi_metadata=%s" % xveyi)
+	# 六项技能说明；玩家可见文本必须逐字保持机制设计原文。
+	var expected_descriptions: Dictionary = {
+		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
+		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
+		"mingchen":"锁定技，当你失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害。",
+		"lushi":"出牌阶段，你可弃置两张牌名字字数相同的牌，然后摸一张牌。",
+		"huanyang":"锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
+		"sefu":"锁定技，当你于回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前技能ID；用于自动索引中读取对应说明。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("expanded_skill_description=%s" % skill_id)
+	if not GameDatabase.get_character("jingyuan").is_empty() or not GameDatabase.get_character("kafka").is_empty() or not GameDatabase.get_character("welt").is_empty():
+		return _fail("removed_placeholder_character_registered")
+	return true
+
+
+## 验证指定牌先检索牌堆、缺失后检索弃牌堆的顶部匹配顺序，并验证【药】在离开手牌区时恢复原牌名。
+func _test_named_card_gain_and_hand_view_as() -> bool:
+	_reset_state(2)
+	# 牌堆中的【无中生有】；即使其上方有其他牌，也应优先于弃牌堆中的同名牌被获得。
+	var draw_wuzhong: CardInstance = _add_draw_pile_card("wuzhong", "heart", 7)
+	# 牌堆顶非匹配牌；检索指定牌时保持在原位。
+	var draw_top_other: CardInstance = _add_draw_pile_card("shan", "club", 8)
+	# 弃牌堆较低的匹配牌；仅用于证明倒序检索会选择更靠近弃牌堆顶的实体。
+	var discard_lower_wuzhong: CardInstance = _add_discard_pile_card("wuzhong", "diamond", 9)
+	# 弃牌堆中的间隔牌；不会因指定牌检索改变相对顺序。
+	var discard_middle_other: CardInstance = _add_discard_pile_card("sha", "spade", 10)
+	# 弃牌堆最顶层匹配牌；牌堆已无指定牌时应成为第二次获得结果。
+	var discard_top_wuzhong: CardInstance = _add_discard_pile_card("wuzhong", "club", 11)
+	# 第一次获得结果；来源必须是牌堆中的唯一匹配牌。
+	var first_gain: CardInstance = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
+	# 第二次获得结果；牌堆无匹配牌后必须回退到弃牌堆最顶层匹配牌。
+	var second_gain: CardInstance = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
+	if first_gain != draw_wuzhong or second_gain != discard_top_wuzhong or not _controller.state.draw_pile.has(draw_top_other) or not _controller.state.discard_pile.has(discard_lower_wuzhong) or not _controller.state.discard_pile.has(discard_middle_other):
+		return _fail("named_gain_order first=%s second=%s" % [first_gain.uid if first_gain != null else -1, second_gain.uid if second_gain != null else -1])
+	# 交给其他角色的红色实体；进入目标手牌后临时视为【桃/药】。
+	var gifted_card: CardInstance = _add_hand_card(0, "sha", "heart", 5)
+	if not _controller.transfer_hand_card_as(0, 1, gifted_card.uid, "tao", "yaoli") or gifted_card.definition_id != "tao" or gifted_card.hand_view_as_original_definition_id != "sha" or _controller.state.get_player(1).find_hand_card(gifted_card.uid) == null:
+		return _fail("hand_view_as_gift=%s" % gifted_card.to_dict())
+	if not _controller.discard_card_from_hand(1, gifted_card.uid) or gifted_card.definition_id != "sha" or gifted_card.has_hand_view_as() or not _controller.state.discard_pile.has(gifted_card):
+		return _fail("hand_view_as_leave_restore=%s" % gifted_card.to_dict())
+	# 交给自己的红色实体；同区域操作不产生无效移动，但仍建立相同临时牌名。
+	var self_gifted_card: CardInstance = _add_hand_card(0, "shan", "diamond", 6)
+	if not _controller.transfer_hand_card_as(0, 0, self_gifted_card.uid, "tao", "yaoli") or self_gifted_card.definition_id != "tao":
+		return _fail("hand_view_as_self=%s" % self_gifted_card.to_dict())
+	# 药的使用者受伤状态；使用视为【药】后应固定回复1点体力。
+	var medicine_user: PlayerState = _controller.state.get_player(0)
+	medicine_user.hp = 3
+	# 标准出牌请求；正式对局必须先建立 chooseToUse 窗口，测试也通过同一调度入口提交动作。
+	_controller._begin_play_choice(0)
+	# 视为【药】的标准使用动作；逻辑牌按桃结算，持久实体离开手牌时恢复为原【闪】。
+	var medicine_action: PlayerAction = PlayerAction.new("use_card", 0, self_gifted_card.uid, [0])
+	if not _controller.submit_action(medicine_action) or medicine_user.hp != 4 or self_gifted_card.definition_id != "shan" or self_gifted_card.has_hand_view_as() or not _controller.state.discard_pile.has(self_gifted_card):
+		return _fail("hand_view_as_use hp=%d card=%s" % [medicine_user.hp, self_gifted_card.to_dict()])
+	return true
+
+
+## 验证录事弃空手牌触发冥谶时先完成目标选择，再恢复录事摸牌，整个嵌套结算不会停滞或丢失后续步骤。
+func _test_lushi_mingchen_deferred_settlement() -> bool:
+	_reset_state(2)
+	_controller.state.get_player(0).character_id = "hanya"
+	# 寒鸦的冥谶实例；负责失去最后手牌后的强制目标选择。
+	var mingchen: SkillDefinition = GameDatabase.create_skill("mingchen")
+	# 寒鸦的录事实例；负责同字数双牌费用与延迟摸牌步骤。
+	var lushi: SkillDefinition = GameDatabase.create_skill("lushi")
+	mingchen.bind(_controller, 0)
+	lushi.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"mingchen":mingchen, "lushi":lushi}}
+	mingchen.install()
+	lushi.install()
+	# 活动出牌阶段生命周期；选择恢复后必须返回原出牌请求，而不是误判为阶段已经结束。
+	_controller._started_phase_lifecycles["0:phaseUse"] = {"status":"body", "event_data":{"turn_number":1}, "parent_event_id":-1}
+	# 第一张一字手牌；与【闪】共同构成录事合法组合。
+	var first_cost: CardInstance = _add_hand_card(0, "sha", "club", 3)
+	# 第二张一字手牌；弃置后寒鸦失去最后手牌并触发冥谶。
+	var second_cost: CardInstance = _add_hand_card(0, "shan", "spade", 4)
+	# 录事后续摸到的牌；位于【无中生有】下方，冥谶先取走顶牌后才会被摸取。
+	var lushi_draw_card: CardInstance = _add_draw_pile_card("tao", "heart", 2)
+	# 冥谶指定获得牌；位于当前牌堆顶。
+	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 12)
+	# 主动技能错误信息；空字符串表示两张费用已经成功弃置并进入嵌套选择。
+	var activation_error: String = lushi.activate({"card_uids":[first_cost.uid, second_cost.uid]})
+	if not activation_error.is_empty() or not _controller.has_pending_card_choice() or _controller._deferred_skill_settlements.size() != 1:
+		return _fail("lushi_nested_start error=%s pending=%s deferred=%s" % [activation_error, _controller.has_pending_card_choice(), _controller._deferred_skill_settlements])
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	# 结算完成后的寒鸦手牌；应同时包含冥谶取得的【无中生有】与录事最后摸到的【桃】。
+	var hanya_hand: Array[CardInstance] = _controller.state.get_player(0).hand
+	if not hanya_hand.has(mingchen_gain_card) or not hanya_hand.has(lushi_draw_card) or not _controller._deferred_skill_settlements.is_empty() or _controller.has_pending_card_choice():
+		return _fail("lushi_nested_complete hand=%d deferred=%s pending=%s" % [hanya_hand.size(), _controller._deferred_skill_settlements, _controller.has_pending_card_choice()])
+	return true
+
+
+## 验证还阳按当前距离回复，以及摄伏按伤害牌名字数获牌并在选择原伤害目标时弃置其装备。
+func _test_huanyang_and_sefu() -> bool:
+	_reset_state(2)
+	_controller.state.get_player(0).character_id = "xveyi"
+	# 还阳实例；直接消费标准damageSource事件。
+	var huanyang: SkillDefinition = GameDatabase.create_skill("huanyang")
+	# 摄伏实例；维护本回合首次伤害额度并创建两段选择。
+	var sefu: SkillDefinition = GameDatabase.create_skill("sefu")
+	huanyang.bind(_controller, 0)
+	sefu.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"huanyang":huanyang, "sefu":sefu}}
+	# 雪衣受伤状态；满足还阳时应从3点回复至4点。
+	var xveyi_player: PlayerState = _controller.state.get_player(0)
+	xveyi_player.hp = 3
+	# 标准伤害来源事件；【杀】原版名字数为1，目标是距离1的二号角色。
+	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha"})
+	huanyang.call("_on_owner_damage_source", damage_source_event)
+	if xveyi_player.hp != 4:
+		return _fail("huanyang_recover=%d" % xveyi_player.hp)
+	# 二号角色测试装备；摄伏选择原伤害目标后必须建立装备弃置步骤。
+	var target_equipment: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	target_equipment.zone = "equipment"
+	target_equipment.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = target_equipment
+	# 牌堆顶一字牌；摄伏按【杀】的一字原版牌名使目标获得该牌。
+	var gained_same_length_card: CardInstance = _add_draw_pile_card("shan", "heart", 8)
+	sefu.call("_on_owner_damage_source", damage_source_event)
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [1], true):
+		return _fail("sefu_gain_choice")
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [target_equipment.uid], [], true):
+		return _fail("sefu_equipment_choice")
+	if not _controller.state.get_player(1).hand.has(gained_same_length_card) or _controller.state.get_player(1).equipment.has("weapon") or not _controller.state.discard_pile.has(target_equipment):
+		return _fail("sefu_result hand=%d equipment=%s" % [_controller.state.get_player(1).hand.size(), _controller.state.get_player(1).equipment])
+	return true
+
+
+## 验证焕发在phaseEnd选择中登记额外出牌阶段，并在该阶段结束后只完成一次回合尾部而不重复弃牌或卡死。
+func _test_huanfa_extra_play_phase_completion() -> bool:
+	_reset_state(2)
+	_controller.state.get_player(0).character_id = "natasha"
+	_controller.state.current_phase = "finish"
+	_controller.state.phase_index = 5
+	# 焕发运行时实例；通过真实统一选择确认每轮一次的额外阶段。
+	var huanfa: SkillDefinition = _install_single_skill(0, "huanfa")
+	# 本回合用牌事实；逻辑定义ID为tao，无论原实体是否由药理转化都满足焕发。
+	_controller._cards_used_this_turn_by_player[0] = {"tao":true}
+	# 下一角色摸牌一；保证额外阶段结束后正常回合可以完整进入出牌阶段。
+	var next_draw_one: CardInstance = _add_draw_pile_card("sha", "club", 7)
+	# 下一角色摸牌二；与前一张共同避免空牌堆提前结束对局。
+	var next_draw_two: CardInstance = _add_draw_pile_card("shan", "diamond", 7)
+	# 回合结束触发事件；焕发只读取当前回合角色与本回合用牌事实。
+	var phase_end_event: RuleEvent = RuleEvent.new("phaseEnd", 0, 0, {"turn_number":1})
+	huanfa.call("_on_any_phase_end", phase_end_event)
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [], true):
+		return _fail("huanfa_confirm_choice")
+	# 回合结束插入阶段的后继队列；唯一合法去向是turn_complete，不能回到弃牌阶段。
+	var queued_return_points: Array = _controller._extra_play_phase_return_points.get(0, []) as Array
+	if int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or queued_return_points != ["turn_complete"]:
+		return _fail("huanfa_queue count=%s returns=%s" % [_controller._extra_play_phase_counts, queued_return_points])
+	# 本用例关闭表现层阶段停顿；只验证规则后继，不等待真实动画节奏。
+	_controller.game_flow_interval_seconds = 0.0
+	_controller._continue_after_finish_phase_triggers(0)
+	if _controller.state.current_phase != "play" or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "turn_complete" or not _controller._has_active_play_choice():
+		return _fail("huanfa_extra_phase_start phase=%s context=%s" % [_controller.state.current_phase, _controller._active_extra_play_phase_context])
+	_controller._end_play_phase(0)
+	if _controller.state.current_player_id != 1 or _controller.state.current_phase != "play" or _controller.state.turn_number != 2 or not _controller.state.get_player(1).hand.has(next_draw_one) or not _controller.state.get_player(1).hand.has(next_draw_two):
+		return _fail("huanfa_extra_phase_finish current=%d phase=%s turn=%d" % [_controller.state.current_player_id, _controller.state.current_phase, _controller.state.turn_number])
 	return true
 
 
@@ -234,7 +429,7 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 阶段转换等待；额外出牌阶段不经过摸牌阶段，因此短暂等待后应稳定进入新的出牌请求。
 	await get_tree().create_timer(0.10, false).timeout
 	# 永屹结果与额外出牌阶段；护盾已支付、额外阶段回到结束阶段标记存在，且已打开新的正式出牌请求。
-	if gepard.shield != 0 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
+	if gepard.shield != 0 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
 		return _fail("yongyi_resume shield=%d return_finish=%s phase=%s play_choice=%s" % [gepard.shield, _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
 	return true
 
@@ -316,7 +511,7 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	# 永屹弃牌阶段确认响应；支付1点护盾后应排队1个额外出牌阶段并标记其结束后直接进入结束阶段。
 	var extra_play_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
 	yongyi.continue_selection({"kind":"yongyi_play_phase_confirm"}, extra_play_response)
-	if gepard.shield != 0 or int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
+	if gepard.shield != 0 or int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or (_controller._extra_play_phase_return_points.get(0, []) as Array) != ["finish"]:
 		return _fail("yongyi_extra_play shield=%d count=%d return_finish=%s" % [gepard.shield, int(_controller._extra_play_phase_counts.get(0, 0)), _controller._extra_play_phase_returns_to_finish])
 	return true
 
@@ -371,6 +566,26 @@ func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: i
 	card.zone = "hand"
 	card.owner_id = player_id
 	_controller.state.get_player(player_id).hand.append(card)
+	return card
+
+
+## 向当前测试牌堆顶部加入一张实体；数组末尾固定表示最顶层。
+func _add_draw_pile_card(definition_id: String, suit: String, rank: int) -> CardInstance:
+	# 新牌堆实体；公共牌堆没有所属玩家。
+	var card: CardInstance = CardInstance.new(definition_id, suit, rank)
+	card.zone = "draw_pile"
+	card.owner_id = -1
+	_controller.state.draw_pile.append(card)
+	return card
+
+
+## 向当前测试弃牌堆顶部加入一张实体；数组末尾固定表示最顶层。
+func _add_discard_pile_card(definition_id: String, suit: String, rank: int) -> CardInstance:
+	# 新弃牌实体；弃牌堆没有所属玩家。
+	var card: CardInstance = CardInstance.new(definition_id, suit, rank)
+	card.zone = "discard_pile"
+	card.owner_id = -1
+	_controller.state.discard_pile.append(card)
 	return card
 
 

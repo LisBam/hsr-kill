@@ -253,11 +253,23 @@ var _extra_play_phase_counts: Dictionary = {}
 ## 从弃牌阶段获得且完成后应直接进入结束阶段的额外出牌阶段标记；键为玩家 ID，值为是否存在该返回语义。
 var _extra_play_phase_returns_to_finish: Dictionary = {}
 
+## 每名角色等待执行的额外出牌阶段后继队列；每项保存阶段结束后应进入 discard、finish 或 turn_complete，避免选择窗口覆盖原阶段后丢失插入语义。
+var _extra_play_phase_return_points: Dictionary = {}
+
+## 当前正在执行的额外出牌阶段上下文；空字典表示当前出牌阶段属于标准回合流程。
+var _active_extra_play_phase_context: Dictionary = {}
+
 ## 当前由技能插入的独立额外弃牌阶段上下文；空字典表示没有等待阶段触发、弃牌选择或完成回调。
 var _active_extra_discard_phase: Dictionary = {}
 
 ## 因结束阶段技能选择而暂停收尾的当前角色 ID；选择全部完成后从唯一尾部入口继续正常或额外回合轮转。
 var _pending_finish_turn_player_id: int = -1
+
+## 等待嵌套规则选择结束后继续的技能结算队列；仅保存技能 ID、持有者 ID 与可序列化上下文，不持有 Callable 或技能对象。
+var _deferred_skill_settlements: Array[Dictionary] = []
+
+## 当前全局回合内各角色已经“使用”过的逻辑牌定义；响应牌仅在规则明确视为使用时由对应流程登记。
+var _cards_used_this_turn_by_player: Dictionary = {}
 
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
@@ -392,8 +404,12 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_current_turn_is_extra = false
 	_extra_play_phase_counts.clear()
 	_extra_play_phase_returns_to_finish.clear()
+	_extra_play_phase_return_points.clear()
+	_active_extra_play_phase_context.clear()
 	_active_extra_discard_phase.clear()
 	_pending_finish_turn_player_id = -1
+	_deferred_skill_settlements.clear()
+	_cards_used_this_turn_by_player.clear()
 
 	if seed == 0:
 		_rng.randomize()
@@ -437,6 +453,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
+	_deferred_skill_settlements.clear()
 	_negation_round_sequence = 0
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
@@ -617,7 +634,14 @@ func submit_action(action: PlayerAction) -> bool:
 		# 本次身份观察配置；定义缺失时回退到卡牌元数据中的静态 AI 配置。
 		var identity_ai_profile: Dictionary = card_source_definition.get_identity_observation_ai_profile(identity_observation_snapshot, action.actor_id, resolution_target_ids) if card_source_definition != null else (GameDatabase.get_card(card.definition_id).get("ai", {}) as Dictionary)
 		ai_coordinator.observe_public_behavior(identity_observation_snapshot, action.actor_id, identity_ai_profile, resolution_target_ids, local_human_player_id)
-		_execute_card_use(action.actor_id, card, resolution_target_ids, [], false, target_ids)
+		# 手牌视为牌通过统一虚拟牌协议结算：实体离开手牌后恢复原名，已经声明的逻辑牌继续完成完整牌效与次数统计。
+		if card.has_hand_view_as() and card.zone == "hand":
+			# 单材料数组；稳定UID同时用于失去牌、回放和最终弃牌区恢复原始实体。
+			var view_as_material_uids: Array[int] = [card.uid]
+			if not execute_virtual_card_use(action.actor_id, card.definition_id, view_as_material_uids, resolution_target_ids, ""):
+				return _reject("手牌视为效果当前无法完成使用。")
+		else:
+			_execute_card_use(action.actor_id, card, resolution_target_ids, [], false, target_ids)
 	elif action.action_type == "recast_card":
 		if not _execute_recast(action.actor_id, action.card_uid):
 			return false
@@ -1366,6 +1390,8 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 		var card_combinations: Array = []
 		_collect_card_uid_combinations(candidates, min_select, 0, [], card_combinations)
 		for selected_uids: Array in card_combinations:
+			if not _is_allowed_card_combination(choice_request.get("context", {}) as Dictionary, _int_array(selected_uids)):
+				continue
 			var required_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 			required_action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":_first_target_ids(target_ids, min_target_select), "confirmed":true}
 			result.append(required_action.to_dict())
@@ -1506,6 +1532,9 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return _reject("选择的牌数不足。")
 	if selected_uids.size() > max_select:
 		return _reject("选择的牌数超过上限。")
+	# 请求声明的合法牌组；用于“选择两张牌名字数相同”等跨候选组合约束，客户端不能只凭数量绕过。
+	if confirmed and not _is_allowed_card_combination(_pending_card_choice.get("context", {}) as Dictionary, selected_uids):
+		return _reject("所选卡牌组合不符合当前技能要求。")
 	if confirmed and selected_target_ids.size() < min_target_select:
 		return _reject("选择的目标数不足。")
 	if selected_target_ids.size() > max_target_select:
@@ -1574,6 +1603,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		if not state.game_over and not has_pending_card_choice():
 			_resume_deferred_rule_timing_dispatches()
 		if not state.game_over and not has_pending_card_choice():
+			_resume_deferred_skill_settlements()
+		if not state.game_over and not has_pending_card_choice():
 			process_next_equipment_trigger()
 		if not state.game_over and not has_pending_card_choice():
 			_resume_interrupted_turn_flow()
@@ -1583,7 +1614,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	if _pending_finish_turn_player_id >= 0 and not has_pending_card_choice():
 		var finishing_player_id: int = _pending_finish_turn_player_id
 		_pending_finish_turn_player_id = -1
-		_complete_finish_turn(finishing_player_id)
+		_continue_after_finish_phase_triggers(finishing_player_id)
 		return true
 	if bool(completed_choice.get("deferred", false)):
 		# 新的 chooseToUse 必须等原 CardUseEvent 及其后续目标全部排空后再创建，避免后续响应覆盖已经提前发布的出牌请求快照。
@@ -1594,6 +1625,22 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
 			_schedule_ai_action()
 	return true
+
+
+## 校验请求上下文声明的固定合法牌组；未声明valid_card_combinations时保持全部数量合法组合可用。
+func _is_allowed_card_combination(context: Dictionary, selected_uids: Array[int]) -> bool:
+	if not context.has("valid_card_combinations"):
+		return true
+	# 提交牌组排序副本；牌组合法性不依赖玩家点击顺序，但仍禁止上层已经拦截的重复UID。
+	var normalized_selected_uids: Array[int] = selected_uids.duplicate()
+	normalized_selected_uids.sort()
+	for combination_variant: Variant in context.get("valid_card_combinations", []) as Array:
+		# 当前权威合法组合；转换整数并排序后与提交集合精确比较。
+		var normalized_combination: Array[int] = _int_array(combination_variant as Array)
+		normalized_combination.sort()
+		if normalized_combination == normalized_selected_uids:
+			return true
+	return false
 
 
 ## 根据暂停上下文恢复具体效果；各分支只调用公开规则操作，不读取任何 UI 节点。
@@ -2288,6 +2335,10 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 		return null
 	# 是否为实际手牌；银月枪只由回合外使用或打出的黑色手牌触发。
 	var was_hand_card: bool = player.hand.has(card)
+	# 响应时声明的逻辑牌ID；手牌视为效果会在实体离开手牌区时恢复原名，因此必须在移动前保存牌效身份。
+	var logical_definition_id: String = card.definition_id
+	# 当前实体是否由手牌视为效果提供响应；用于移动后构造不进入权威区域的逻辑响应代理。
+	var was_hand_view_as: bool = card.has_hand_view_as()
 	# 实际消耗牌；take_playable_card 同时支持普通手牌与木牛“粮”。
 	var consumed: CardInstance = player.take_playable_card(card.uid)
 	_move_to_discard(consumed)
@@ -2295,11 +2346,18 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 	timing_data["respond_event_id"] = respond_event_id
 	_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":consumed.uid})
-	add_log("%s打出了%s。" % [player.display_name, describe_card(consumed)])
+	# 响应结果对象；普通牌直接沿用实体，手牌视为牌使用逻辑代理以继续正确执行【桃】等后续效果。
+	var resolved_response_card: CardInstance = consumed
+	if was_hand_view_as:
+		resolved_response_card = CardInstance.new(logical_definition_id, consumed.suit, consumed.rank)
+		resolved_response_card.uid = consumed.uid
+		resolved_response_card.zone = consumed.zone
+	# 响应日志显示已经声明的逻辑牌名，弃牌堆中的实体快照仍展示恢复后的原始牌名。
+	add_log("%s打出了%s。" % [player.display_name, describe_card(resolved_response_card)])
 	_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
 	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
 	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
-	return consumed
+	return resolved_response_card
 
 
 ## 返回一张牌实际能够提供的响应模式；映射基于牌效语义，避免所有可被无懈的普通锦囊都被误当成【无懈可击】。
@@ -3189,6 +3247,92 @@ func discard_n_from_hand_equipment(player_id: int, count: int) -> void:
 			return
 
 
+## 把一张普通手牌交给指定存活角色，并在进入其手牌区后赋予临时视为牌名；目标可以与来源相同。
+func transfer_hand_card_as(from_id: int, to_id: int, card_uid: int, view_as_definition_id: String, source_skill_id: String) -> bool:
+	# 交牌来源；必须仍存活、在场并实际持有所选普通手牌。
+	var source: PlayerState = state.get_player(from_id) if state != null else null
+	# 交牌目标；“一名角色”允许来源本人，但死亡或离场角色不能获得手牌。
+	var target: PlayerState = state.get_player(to_id) if state != null else null
+	if source == null or target == null or not source.alive or source.out_of_game or not target.alive or target.out_of_game:
+		return false
+	# 被交出的实体牌；等待期间离开来源手牌区时本次效果失效且不消费技能次数。
+	var card: CardInstance = source.find_hand_card(card_uid)
+	if card == null or GameDatabase.get_card(view_as_definition_id).is_empty():
+		return false
+	# 交给自己不产生无效的同区域移动事件，只在原手牌上建立临时牌名；实体UID、顺序与牌面知识保持不变。
+	if from_id == to_id:
+		if card.definition_id != view_as_definition_id and not card.set_hand_view_as(view_as_definition_id, source_skill_id):
+			return false
+		add_log("%s将一张手牌交给了自己。" % source.display_name)
+		return true
+	_ensure_card_movement()
+	if _move_card_with_timings(card, "hand", to_id, "give", state.current_event_id, "", [to_id]) == null:
+		return false
+	# 临时牌名只在实体已属于目标手牌时建立；后续离手由统一移动边界自动恢复原始定义。
+	if card.definition_id != view_as_definition_id and not card.set_hand_view_as(view_as_definition_id, source_skill_id):
+		return false
+	add_log("%s交给了%s一张手牌。" % [source.display_name, target.display_name])
+	return true
+
+
+## 令指定角色从摸牌堆或弃牌堆获得最顶上的指定牌；先完整检索摸牌堆，缺失时才检索弃牌堆。
+func gain_top_named_card_from_draw_or_discard(player_id: int, definition_id: String, reason: String = "gain_named_card") -> CardInstance:
+	# 获得者；死亡、离场或终局后不再改变牌区。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game or state.game_over or definition_id.is_empty():
+		return null
+	# 指定实体；数组末尾是牌堆顶与弃牌堆顶，倒序扫描保证取得最顶上的匹配牌而不改变其他牌相对顺序。
+	var matched_card: CardInstance
+	for draw_index: int in range(state.draw_pile.size() - 1, -1, -1):
+		# 当前摸牌堆候选；只比较稳定定义ID，不移动未命中的牌。
+		var draw_card: CardInstance = state.draw_pile[draw_index]
+		if draw_card.definition_id == definition_id:
+			matched_card = draw_card
+			break
+	if matched_card == null:
+		for discard_index: int in range(state.discard_pile.size() - 1, -1, -1):
+			# 当前弃牌堆候选；从顶部向下遇到首张匹配牌后立即停止。
+			var discard_card: CardInstance = state.discard_pile[discard_index]
+			if discard_card.definition_id == definition_id:
+				matched_card = discard_card
+				break
+	if matched_card == null:
+		return null
+	_ensure_card_movement()
+	if _move_card_with_timings(matched_card, "hand", player_id, reason, state.current_event_id, "", [player_id]) == null:
+		return null
+	add_log("%s获得了%s。" % [player.display_name, describe_card(matched_card)])
+	return matched_card
+
+
+## 令指定角色从摸牌堆获得最顶上的固定牌名字数卡牌；名字统一按卡牌原版规则名计算，不受显示模式影响。
+func gain_top_draw_card_by_name_length(player_id: int, name_length: int, reason: String = "gain_name_length_card") -> CardInstance:
+	# 获得者；无效角色和非正名字数不会查询或移动牌堆。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game or state.game_over or name_length <= 0:
+		return null
+	# 指定实体；倒序扫描摸牌堆取得最顶上的匹配卡牌，弃牌堆不参与本接口。
+	var matched_card: CardInstance
+	for draw_index: int in range(state.draw_pile.size() - 1, -1, -1):
+		# 当前摸牌堆候选；原版名字数匹配时即为最顶上的合法实体。
+		var draw_card: CardInstance = state.draw_pile[draw_index]
+		if get_card_original_name_length(draw_card.definition_id) == name_length:
+			matched_card = draw_card
+			break
+	if matched_card == null:
+		return null
+	_ensure_card_movement()
+	if _move_card_with_timings(matched_card, "hand", player_id, reason, state.current_event_id, "", [player_id]) == null:
+		return null
+	add_log("%s从牌堆获得了%s。" % [player.display_name, describe_card(matched_card)])
+	return matched_card
+
+
+## 返回卡牌原版规则名的Unicode字符数；稳定规则名不会随玩家切换《崩铁杀》显示名称而改变结算。
+func get_card_original_name_length(definition_id: String) -> int:
+	return str(GameDatabase.get_card(definition_id).get("original_name", "")).length()
+
+
 ## 弃置目标全部装备；水淹七军、死亡与领袖惩罚可复用此操作。
 func discard_all_equipment(target_id: int, trigger_loss_effects: bool = true) -> void:
 	# 目标状态；复制键数组以允许循环中安全删除装备。
@@ -3380,7 +3524,7 @@ func can_add_play_phase(player_id: int) -> bool:
 	if player == null or not player.alive or player.out_of_game or state.game_over or state.current_player_id != player_id:
 		return false
 	# 当前回合在结束阶段前均可登记后续出牌阶段；实际执行点由现有阶段流程统一消费。
-	return state.current_phase in ["start", "judgment", "draw", "play", "discard", "choice"]
+	return _get_effective_rule_phase() in ["start", "judgment", "draw", "play", "discard", "finish"]
 
 
 ## 为指定角色排队一个额外出牌阶段；当前角色可在出牌阶段或弃牌阶段触发点登记。
@@ -3390,10 +3534,66 @@ func add_play_phase(player_id: int, reason: String = "") -> bool:
 	if not can_add_play_phase(player_id):
 		return false
 	_extra_play_phase_counts[player_id] = int(_extra_play_phase_counts.get(player_id, 0)) + 1
+	# 当前规则阶段；普通选择会把公开阶段临时写为choice，因此必须读取选择保存的resume_phase才能保留真实插入点。
+	var source_phase: String = _get_effective_rule_phase()
+	# 本次额外出牌阶段的明确后继；额外阶段内再次获得阶段时继承当前阶段原本的最终去向。
+	var return_point: String = _resolve_extra_play_phase_return_point(source_phase)
+	# 当前角色的后继队列；与次数队列保持一一对应，多个额外阶段可以拥有不同的最终去向。
+	var return_points: Array = (_extra_play_phase_return_points.get(player_id, []) as Array).duplicate()
+	return_points.append(return_point)
+	_extra_play_phase_return_points[player_id] = return_points
 	# 弃牌阶段获得的额外出牌阶段完成后直接进入结束阶段，不能再次执行一个普通弃牌阶段。
-	if state.current_phase == "discard":
+	if return_point == "finish":
 		_extra_play_phase_returns_to_finish[player_id] = true
 	add_log("%s获得了一个额外的出牌阶段%s。" % [player.display_name, "（%s）" % reason if not reason.is_empty() else ""])
+	return true
+
+
+## 返回选择窗口背后的真实规则阶段；没有普通选择时直接返回当前阶段，避免业务代码依赖临时choice展示状态。
+func _get_effective_rule_phase() -> String:
+	if state == null:
+		return ""
+	if state.current_phase == "choice" and not _pending_card_choice.is_empty():
+		return str(_pending_card_choice.get("resume_phase", ""))
+	return state.current_phase
+
+
+## 根据额外阶段的插入位置确定结束后继；额外出牌阶段内继续插入时继承当前活动阶段的既定后继。
+func _resolve_extra_play_phase_return_point(source_phase: String) -> String:
+	if source_phase == "play" and not _active_extra_play_phase_context.is_empty():
+		return str(_active_extra_play_phase_context.get("return_point", "discard"))
+	if source_phase == "discard":
+		return "finish"
+	if source_phase == "finish":
+		return "turn_complete"
+	return "discard"
+
+
+## 消费指定角色队首的一个额外出牌阶段，并把其稳定后继写入当前活动上下文。
+func _consume_extra_play_phase(player_id: int) -> bool:
+	# 当前等待次数；次数与后继队列同时递减，任一缺失时使用标准弃牌后继完成防御性收口。
+	var pending_count: int = int(_extra_play_phase_counts.get(player_id, 0))
+	if pending_count <= 0:
+		return false
+	if pending_count == 1:
+		_extra_play_phase_counts.erase(player_id)
+	else:
+		_extra_play_phase_counts[player_id] = pending_count - 1
+	# 当前角色后继队列；队首对应本次即将开始的额外出牌阶段。
+	var return_points: Array = (_extra_play_phase_return_points.get(player_id, []) as Array).duplicate()
+	# 本次阶段结束后的稳定去向；异常旧状态默认进入弃牌阶段，保持原有行为。
+	var return_point: String = str(return_points.pop_front()) if not return_points.is_empty() else "discard"
+	if return_points.is_empty():
+		_extra_play_phase_return_points.erase(player_id)
+	else:
+		_extra_play_phase_return_points[player_id] = return_points
+	# 兼容标记只反映尚未消费的弃牌阶段插入项；真实调度始终读取当前活动上下文与后继队列。
+	var has_finish_return: bool = return_point == "finish" or return_points.has("finish")
+	if has_finish_return:
+		_extra_play_phase_returns_to_finish[player_id] = true
+	else:
+		_extra_play_phase_returns_to_finish.erase(player_id)
+	_active_extra_play_phase_context = {"player_id":player_id, "return_point":return_point}
 	return true
 
 
@@ -4166,6 +4366,8 @@ func _start_turn(player_id: int) -> void:
 	_judgment_resume_needs_result_pause = false
 	state.current_player_id = player_id
 	state.turn_number += 1
+	# 全局回合用牌事实；每个新回合清空全部角色记录，供“本回合内其使用过某牌”的跨角色技能精确查询。
+	_cards_used_this_turn_by_player.clear()
 	if state.players.find(player) == 0:
 		state.round_number += 1
 		_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
@@ -4211,9 +4413,10 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 	if player == null or not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
-	if _started_phase_lifecycles.has(lifecycle_key):
+	if _is_phase_lifecycle_body_active("phaseZhunbei", player_id):
 		add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
 		_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
+	if _started_phase_lifecycles.has(lifecycle_key):
 		_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		# 准备阶段End或After也可创建选择；此时生命周期已经完成，恢复后只安排判定阶段。
 		if has_pending_card_choice():
@@ -4265,6 +4468,8 @@ func _continue_turn_after_judgment(player_id: int) -> void:
 		_advance_after_current_player_death(player_id)
 		return
 	_finish_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	if has_pending_card_choice():
+		return
 	_schedule_phase_transition(player_id, "judgment", Callable(self, "_enter_draw_phase").bind(player_id))
 
 
@@ -4322,6 +4527,9 @@ func _enter_play_phase(player_id: int) -> void:
 		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		_end_play_phase(player_id, false)
 		return
+	# phaseUseBegin中的技能选择必须先完整恢复；普通chooseToUse只能在Begin触发链完全结束后创建。
+	if has_pending_card_choice():
+		return
 	_begin_play_choice(player_id)
 	_emit_state()
 	if ai_coordinator.is_ai_controlled(player_id):
@@ -4358,6 +4566,12 @@ func _resume_interrupted_turn_flow() -> void:
 	if state.current_phase == "start":
 		_continue_turn_after_preparation_phase(state.current_player_id)
 		return
+	if state.current_phase == "play":
+		# phaseUseEnd或After选择恢复时继续阶段结束游标；未登记生命周期的独立规则结算按仍在出牌阶段处理，不能误推进整回合。
+		if _started_phase_lifecycles.has("%d:phaseUse" % state.current_player_id) and not _is_phase_lifecycle_body_active("phaseUse", state.current_player_id):
+			_end_play_phase(state.current_player_id)
+		# phaseUseBegin或阶段主体内的选择由提交入口在父事件排空后重建chooseToUse；此处提前登记会把未发布请求留在运行时栈内。
+		return
 	if state.current_phase == "discard":
 		_continue_turn_after_discard_phase_begin(state.current_player_id)
 		return
@@ -4367,6 +4581,27 @@ func _resume_interrupted_turn_flow() -> void:
 	var player_id: int = state.current_player_id
 	_judgment_resume_needs_result_pause = true
 	_process_judgment_area(player_id)
+
+
+## 登记一段需要等待当前嵌套选择与触发续列结束后继续的技能结算；重复上下文按队列顺序分别执行。
+func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dictionary) -> bool:
+	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty() or get_skill_instance(skill_owner_id, skill_id) == null:
+		return false
+	_deferred_skill_settlements.append({"skill_owner_id":skill_owner_id, "skill_id":skill_id, "context":context.duplicate(true)})
+	return true
+
+
+## 在没有活动选择时依次恢复技能结算；恢复函数再次创建选择时立即停下，下一次提交后继续同一队列。
+func _resume_deferred_skill_settlements() -> void:
+	while state != null and not state.game_over and not has_pending_card_choice() and not _deferred_skill_settlements.is_empty():
+		# 当前结算项；先移出队列，技能需要再次等待时会显式登记新的后续上下文。
+		var settlement: Dictionary = _deferred_skill_settlements.pop_front() as Dictionary
+		# 技能持有者与稳定ID；等待期间失去技能时安全跳过旧结算，不调用失效对象。
+		var skill_owner_id: int = int(settlement.get("skill_owner_id", -1))
+		# 当前技能实例；每局每名角色唯一，重新开局已清空整个结算队列。
+		var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(settlement.get("skill_id", "")))
+		if skill != null:
+			skill.continue_settlement((settlement.get("context", {}) as Dictionary).duplicate(true))
 
 
 ## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
@@ -4388,7 +4623,8 @@ func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dicti
 		var begin_event: RuleEvent = _emit_rule_timing(begin_name, player_id, player_id, player_id, current_event_data, parent_event_id)
 		if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
 			return false
-	_started_phase_lifecycles[lifecycle_key] = true
+	# 活动生命周期上下文；status=body表示Before与Begin已经完成，阶段主体尚可执行，后续End/After会原地推进状态。
+	_started_phase_lifecycles[lifecycle_key] = {"status":"body", "event_data":current_event_data.duplicate(true), "parent_event_id":parent_event_id}
 	return true
 
 
@@ -4398,13 +4634,48 @@ func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dict
 	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
 	if not _started_phase_lifecycles.has(lifecycle_key):
 		return
-	_started_phase_lifecycles.erase(lifecycle_key)
+	# 阶段恢复上下文；兼容旧测试直接写入true的状态，并以本次调用数据补齐永久可序列化字段。
+	var lifecycle_variant: Variant = _started_phase_lifecycles.get(lifecycle_key, {})
+	# 当前生命周期字典；旧布尔状态不参与强制类型转换，避免迁移期规则测试产生空对象访问。
+	var lifecycle_context: Dictionary = lifecycle_variant as Dictionary if lifecycle_variant is Dictionary else {}
+	if lifecycle_context.is_empty():
+		lifecycle_context = {"status":"body", "event_data":event_data.duplicate(true), "parent_event_id":parent_event_id}
+	# 完成时机数据；首次结束时保存，选择恢复后的后续调用继续使用同一份稳定数据。
+	var completion_data: Dictionary = (lifecycle_context.get("event_data", event_data) as Dictionary).duplicate(true)
+	# 完成时机父事件；恢复期间当前事件摘要可能变化，因此沿用首次保存的父事件。
+	var completion_parent_event_id: int = int(lifecycle_context.get("parent_event_id", parent_event_id))
+	# 当前完成游标；body尚未派发End，end_emitted等待After，after_emitted只需移除生命周期。
+	var status: String = str(lifecycle_context.get("status", "body"))
 	var end_name: String = "%sEnd" % base_name
-	if RuleTimingCatalog.has_timing(end_name):
-		_emit_rule_timing(end_name, player_id, player_id, player_id, event_data, parent_event_id)
+	if status == "body":
+		lifecycle_context["status"] = "end_emitted"
+		_started_phase_lifecycles[lifecycle_key] = lifecycle_context
+		if RuleTimingCatalog.has_timing(end_name):
+			_emit_rule_timing(end_name, player_id, player_id, player_id, completion_data, completion_parent_event_id)
+		if has_pending_card_choice():
+			return
 	var after_name: String = "%sAfter" % base_name
-	if RuleTimingCatalog.has_timing(after_name):
-		_emit_rule_timing(after_name, player_id, player_id, player_id, event_data, parent_event_id)
+	if str((_started_phase_lifecycles.get(lifecycle_key, lifecycle_context) as Dictionary).get("status", "")) == "end_emitted":
+		lifecycle_context["status"] = "after_emitted"
+		_started_phase_lifecycles[lifecycle_key] = lifecycle_context
+		if RuleTimingCatalog.has_timing(after_name):
+			_emit_rule_timing(after_name, player_id, player_id, player_id, completion_data, completion_parent_event_id)
+		if has_pending_card_choice():
+			return
+	_started_phase_lifecycles.erase(lifecycle_key)
+
+
+## 返回指定阶段生命周期是否仍等待主体执行；End或After选择恢复时返回false，防止重复摸牌、弃牌或写入阶段日志。
+func _is_phase_lifecycle_body_active(base_name: String, player_id: int) -> bool:
+	# 阶段生命周期键；不存在表示阶段未成功开始或已经完整结束。
+	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
+	if not _started_phase_lifecycles.has(lifecycle_key):
+		return false
+	# 当前生命周期上下文；旧布尔状态按body处理，保证规则测试与迁移期状态兼容。
+	var lifecycle_variant: Variant = _started_phase_lifecycles.get(lifecycle_key)
+	if lifecycle_variant is Dictionary:
+		return str((lifecycle_variant as Dictionary).get("status", "body")) == "body"
+	return true
 
 
 ## 处理玩家判定区的全部延时锦囊；每次只展示并结算一张，完整判定结束后才继续下一张。
@@ -4907,6 +5178,7 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	# 当前卡牌定义；次数统计和最终区域所有权均来自统一配置。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
+	_record_card_used_this_turn(actor_id, card.definition_id)
 	# 当前出牌阶段使用历史；只服务 phase 作用域限次查询，不替代完整回合使用记录。
 	actor.play_phase_card_use_history[card.definition_id] = int(actor.play_phase_card_use_history.get(card.definition_id, 0)) + 1
 	# 当前卡牌源码；牌族兼容统计与声明时触发由对应文件维护。
@@ -5420,6 +5692,9 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true, hide_contr
 	_ai_drive_token += 1
 	if complete_use_phase:
 		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		# phaseUseEnd或phaseUseAfter中的技能选择会暂停结束流程；恢复后由统一阶段续接入口再次进入本函数。
+		if has_pending_card_choice():
+			return
 	# 跳过阶段不应在流程延时内继续以 play 快照呈现，否则本地手牌与结束回合按钮会短暂闪现。
 	var transition_phase: String = "play"
 	if hide_controls_during_transition:
@@ -5428,16 +5703,20 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true, hide_contr
 	# 等待中的额外出牌阶段；当前阶段必须先完整结束，再重新建立独立的 phaseUse 生命周期与出牌请求。
 	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
 	if pending_extra_play_phases > 0:
-		if pending_extra_play_phases == 1:
-			_extra_play_phase_counts.erase(player_id)
-		else:
-			_extra_play_phase_counts[player_id] = pending_extra_play_phases - 1
+		_consume_extra_play_phase(player_id)
 		_schedule_phase_transition(player_id, transition_phase, Callable(self, "_start_extra_play_phase").bind(player_id))
 		return
+	# 当前额外出牌阶段的稳定后继；不同插入位置不再共享模糊布尔标记。
+	var return_point: String = str(_active_extra_play_phase_context.get("return_point", "")) if int(_active_extra_play_phase_context.get("player_id", -1)) == player_id else ""
+	_active_extra_play_phase_context.clear()
+	_extra_play_phase_returns_to_finish.erase(player_id)
 	# 弃牌阶段内获得的额外出牌阶段执行完毕后直接进入结束阶段，不重复弃牌。
-	if bool(_extra_play_phase_returns_to_finish.get(player_id, false)):
-		_extra_play_phase_returns_to_finish.erase(player_id)
+	if return_point == "finish":
 		_schedule_phase_transition(player_id, transition_phase, Callable(self, "_enter_finish_phase").bind(player_id))
+		return
+	# 回合结束时插入的额外出牌阶段完成后直接完成已经派发过phaseEnd的回合尾部，不重复结束阶段时机。
+	if return_point == "turn_complete":
+		_schedule_phase_transition(player_id, transition_phase, Callable(self, "_complete_finish_turn").bind(player_id))
 		return
 	_schedule_phase_transition(player_id, transition_phase, Callable(self, "_enter_discard_phase").bind(player_id))
 
@@ -5465,6 +5744,10 @@ func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
 	# 当前弃牌阶段生命周期键；只有仍处于Begin之后的活动生命周期才执行手牌上限计算。
 	var lifecycle_key: String = "%d:%s" % [player_id, "phaseDiscard"]
 	if not _started_phase_lifecycles.has(lifecycle_key):
+		_finish_turn(player_id)
+		return
+	# End或After选择恢复时阶段主体已经完成，只需让_finish_turn继续生命周期游标并安排后继。
+	if not _is_phase_lifecycle_body_active("phaseDiscard", player_id):
 		_finish_turn(player_id)
 		return
 	# 当前玩家状态；弃牌候选只来自其手牌区。
@@ -5511,6 +5794,9 @@ func _start_extra_play_phase(player_id: int) -> void:
 		_end_play_phase(player_id, false)
 		return
 	add_log("%s开始执行额外的出牌阶段。" % player.display_name)
+	# 额外阶段Begin中的技能选择与普通阶段使用相同暂停边界，不能并行创建chooseToUse请求。
+	if has_pending_card_choice():
+		return
 	_begin_play_choice(player_id)
 	_emit_state()
 	if ai_coordinator.is_ai_controlled(player_id):
@@ -5535,18 +5821,15 @@ func _continue_discard_phase_choice(context: Dictionary, selected_uids: Array[in
 func _finish_turn(player_id: int) -> void:
 	if state == null or state.game_over or state.current_player_id != player_id:
 		return
-	# 弃牌阶段内已排队的额外出牌阶段先完成本阶段生命周期，再依次进入额外阶段。
-	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
-	if state.current_phase == "discard" and pending_extra_play_phases > 0:
+	# 弃牌阶段先完整完成End与After；任一完成时机产生选择时保留生命周期游标等待恢复。
+	if state.current_phase == "discard":
 		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		# 弃牌阶段End或After可能再打开选择窗口；保留额外阶段次数，等待恢复后再安排阶段切换。
 		if has_pending_card_choice():
 			return
-		if pending_extra_play_phases == 1:
-			_extra_play_phase_counts.erase(player_id)
-		else:
-			_extra_play_phase_counts[player_id] = pending_extra_play_phases - 1
-		_extra_play_phase_returns_to_finish[player_id] = true
+	# 弃牌阶段内已排队的额外出牌阶段在生命周期完整结束后依次执行。
+	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
+	if state.current_phase == "discard" and pending_extra_play_phases > 0:
+		_consume_extra_play_phase(player_id)
 		_schedule_phase_transition(player_id, state.current_phase, Callable(self, "_start_extra_play_phase").bind(player_id))
 		return
 	_schedule_phase_transition(player_id, state.current_phase, Callable(self, "_enter_finish_phase").bind(player_id))
@@ -5558,6 +5841,9 @@ func _enter_finish_phase(player_id: int) -> void:
 	var previous_phase: String = state.current_phase
 	if previous_phase == "discard":
 		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+		# 弃牌阶段End或After技能必须先结算；恢复后_finish_turn会重新进入本入口且不会重复阶段主体。
+		if has_pending_card_choice():
+			return
 	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"finish"}, _current_turn_event_id)
 	state.current_phase = "finish"
 	state.phase_index = 5
@@ -5573,11 +5859,26 @@ func _enter_finish_phase(player_id: int) -> void:
 	if has_pending_card_choice():
 		_pending_finish_turn_player_id = player_id
 		return
+	_continue_after_finish_phase_triggers(player_id)
+
+
+## 在phaseEnd技能全部恢复后选择额外出牌阶段或正常回合尾部；phaseEnd只派发一次。
+func _continue_after_finish_phase_triggers(player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != player_id or has_pending_card_choice():
+		return
+	# 回合结束时登记的额外出牌阶段先执行；其活动上下文会在结束后直接调用_complete_finish_turn。
+	if int(_extra_play_phase_counts.get(player_id, 0)) > 0:
+		_consume_extra_play_phase(player_id)
+		_schedule_phase_transition(player_id, state.current_phase, Callable(self, "_start_extra_play_phase").bind(player_id))
+		return
 	_complete_finish_turn(player_id)
 
 
 ## 完成已经派发过 phaseEnd 的回合尾部；结束阶段异步技能恢复时只进入本函数，避免重复触发结束时机。
 func _complete_finish_turn(player_id: int) -> void:
+	# 回合尾部可能从额外出牌阶段返回；恢复结束阶段展示语义，后续节奏守卫才能稳定进入下一回合。
+	state.current_phase = "finish"
+	state.phase_index = 5
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
@@ -5621,6 +5922,10 @@ func _start_queued_or_normal_turn(finished_player_id: int) -> void:
 func _advance_after_current_player_death(dead_player_id: int) -> void:
 	_ai_drive_token += 1
 	_extra_play_phase_counts.erase(dead_player_id)
+	_extra_play_phase_return_points.erase(dead_player_id)
+	_extra_play_phase_returns_to_finish.erase(dead_player_id)
+	if int(_active_extra_play_phase_context.get("player_id", -1)) == dead_player_id:
+		_active_extra_play_phase_context.clear()
 	_emit_rule_timing("phaseOver", dead_player_id, dead_player_id, dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number}, _current_turn_event_id)
 	_notify_card_definitions_turn_ended(dead_player_id, true)
 	# 死亡回合仍需遵守已经排队的额外回合与额外回合链恢复顺序。
@@ -5779,9 +6084,26 @@ func _apply_dying_response_card(responder_id: int, dying_player_id: int, card: C
 	# 救援效果是否成功；只有实际回复已经由卡牌源码确认后才生成公开身份行为。
 	var response_applied: bool = definition != null and definition.resolve_dying_response(self, responder_id, dying_player_id, card)
 	if response_applied:
+		# 濒死窗口中的【桃】属于“使用”而非普通打出，必须进入本回合用牌事实供回合结束技能查询。
+		_record_card_used_this_turn(responder_id, card.definition_id)
 		# 救援目标行为；【桃】沿用自身正向 target_result，【酒】因目标为本人会被身份模型自动忽略。
 		ai_coordinator.observe_public_behavior(state.to_dict(-1, true), responder_id, definition.get_ai_profile(), [dying_player_id], local_human_player_id)
 	return response_applied
+
+
+## 记录一名角色在当前全局回合中使用过一张逻辑牌；同名牌重复使用只保留一次存在性事实。
+func _record_card_used_this_turn(player_id: int, definition_id: String) -> void:
+	if player_id < 0 or definition_id.is_empty():
+		return
+	# 当前角色用牌集合；字典键保存逻辑定义ID，值只表达本回合已经发生过该事实。
+	var used_cards: Dictionary = (_cards_used_this_turn_by_player.get(player_id, {}) as Dictionary).duplicate(true)
+	used_cards[definition_id] = true
+	_cards_used_this_turn_by_player[player_id] = used_cards
+
+
+## 返回指定角色在当前全局回合中是否使用过某逻辑牌；供回合结束触发技能只读查询。
+func has_used_card_this_turn(player_id: int, definition_id: String) -> bool:
+	return bool((_cards_used_this_turn_by_player.get(player_id, {}) as Dictionary).get(definition_id, false))
 
 
 ## 在角色体力恢复至1点或以上时统一结算求桃流程；状态、事件与日志在同一入口完成，父级卡牌或阶段随后才能继续。
@@ -5893,6 +6215,7 @@ func _check_game_over() -> void:
 	_ai_drive_token += 1
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
+	_deferred_skill_settlements.clear()
 	state.public_card_choice_display.clear()
 	state.simultaneous_response_display.clear()
 	for player: PlayerState in state.players:
@@ -5955,6 +6278,9 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 	_ensure_card_movement()
 	if card_movement == null:
 		return null
+	# 手牌视为效果的清理边界；实体离开当前持有者手牌区前立即恢复原名，已经创建的虚拟使用牌或响应代理继续保存本次逻辑牌效。
+	if card.has_hand_view_as() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id):
+		card.clear_hand_view_as()
 	# 移动前区域与持有者；即使调用方已从区域数组取出实体，CardInstance 仍保存本次移动的权威来源字段。
 	var source_zone: String = card.zone
 	# 移动前持有者；公共区域固定为-1，玩家区域保留稳定玩家 ID。
