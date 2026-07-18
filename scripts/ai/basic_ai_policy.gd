@@ -136,6 +136,9 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
 	if card_definition != null:
 		score = card_definition.modify_ai_action_score(authoritative_snapshot, action, score, evaluator)
+	# 防具会让本次【杀】对全部已选目标无效时，AI 不消耗黑色实体【杀】；无视防具武器仍保留正常攻击评分。
+	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
+		return -INF
 	# 使用者武将技能；锁定技和被动牌效联动可在各自技能文件中修正当前卡牌评分。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
 	# 使用者武将定义；技能 ID 数组由 CharacterDefinition 自动生成。
@@ -148,6 +151,50 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 			skill.bind(null, player_id)
 			score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
 	return score
+
+
+## 判断一项【杀】动作是否会被所有已选目标的防具完全拦截；只读取公开装备和自身完整手牌快照，不修改实体牌或规则状态。
+func _is_slash_fully_blocked_by_armor(authoritative_snapshot: Dictionary, action: Dictionary) -> bool:
+	# 当前逻辑牌定义；只有共享 slash 牌族才需要检查防具的【杀】拦截钩子。
+	var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
+	if str(definition.get("effect_id", "")) != "slash":
+		return false
+	# 当前使用实体 UID；虚拟或丢失实体没有稳定花色，不能错误套用黑色【杀】防具规则。
+	var card_uid: int = int(action.get("card_uid", -1))
+	var used_card: Dictionary = _find_owned_card(authoritative_snapshot, player_id, card_uid)
+	if str(used_card.get("color", "")) != "black":
+		return false
+	# 当前使用者公开武器；声明无视防具时不应把合法攻击误判为无效。
+	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
+	var weapon: Dictionary = (actor.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary
+	var weapon_definition: CardDefinition = GameDatabase.get_card_definition(str(weapon.get("definition_id", "")))
+	if weapon_definition != null and weapon_definition.slash_ignores_armor():
+		return false
+	# 当前实际目标；标准合法动作始终已写入完整数组，多目标【杀】只有全部被拦截时才放弃动作。
+	var target_ids: Array = action.get("target_ids", []) as Array
+	if target_ids.is_empty():
+		return false
+	for target_id_variant: Variant in target_ids:
+		# 当前目标公开防具；无防具或不拦截本颜色【杀】时，本动作仍有可结算目标。
+		var target: Dictionary = evaluator.get_player(authoritative_snapshot, int(target_id_variant))
+		var armor: Dictionary = (target.get("equipment", {}) as Dictionary).get("armor", {}) as Dictionary
+		var armor_definition: CardDefinition = GameDatabase.get_card_definition(str(armor.get("definition_id", "")))
+		if armor_definition == null or not armor_definition.blocks_slash_by_color("black", str(definition.get("nature", "normal"))):
+			return false
+	return true
+
+
+## 从 AI 权威快照中按 UID 返回持有者的手牌或木牛“粮”；找不到时返回空字典，调用方不得猜测其花色。
+func _find_owned_card(authoritative_snapshot: Dictionary, owner_id: int, card_uid: int) -> Dictionary:
+	# 当前持有者快照；AI 决策快照包含自身完整私有牌面，异常缺失时安全返回空字典。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_id)
+	for zone_name: String in ["hand", "wooden_ox_storage"]:
+		for card_variant: Variant in owner.get(zone_name, []) as Array:
+			# 当前实体牌快照；稳定 UID 命中后返回深拷贝，避免策略改写原快照对象。
+			var card: Dictionary = card_variant as Dictionary
+			if int(card.get("uid", -1)) == card_uid:
+				return card.duplicate(true)
+	return {}
 
 
 ## 计算统一选择动作价值；先应用通用规则，再叠加对应技能或卡牌文件的专属 AI。

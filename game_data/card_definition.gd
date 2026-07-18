@@ -139,6 +139,16 @@ func preserves_requested_target_order() -> bool:
 	return false
 
 
+## 返回真正进入本牌目标时机与逐目标结算的目标数组；默认与玩家声明完全一致，角色语义辅助目标可在卡牌文件中剥离。
+func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
+	return requested_target_ids.duplicate()
+
+
+## 把玩家声明目标中的卡牌专属位置语义写入逐目标共享上下文；默认不写入任何额外字段且不得创建选择或修改状态。
+func configure_requested_target_context(_match_host: Object, _card: CardInstance, _actor_id: int, _requested_target_ids: Array[int], _resolution_context: Dictionary) -> void:
+	pass
+
+
 ## 校验当前目标在完整目标组合中的卡牌专属角色语义；空字符串表示继续执行通用目标规则。
 func validate_target_selection(_rule_service: Object, _actor: PlayerState, _target_id: int, _all_target_ids: Array[int]) -> String:
 	return ""
@@ -206,6 +216,11 @@ func on_slash_resolution_started(_match_host: Object, _card: CardInstance, _acto
 
 ## 判断防具是否令当前【杀】直接无效；默认不阻止伤害流程。
 func blocks_slash(_card: CardInstance, _nature: String) -> bool:
+	return false
+
+
+## 按只读牌面颜色判断防具是否令当前【杀】无效；AI 使用本入口预判，实际结算仍必须调用 blocks_slash() 复核实体牌。
+func blocks_slash_by_color(_card_color: String, _nature: String) -> bool:
 	return false
 
 

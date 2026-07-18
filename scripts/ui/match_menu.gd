@@ -190,7 +190,7 @@ func _refresh_game_speed_text(interval_seconds: float) -> void:
 	if not is_node_ready():
 		return
 	_game_speed_slider.set_value_no_signal(interval_seconds)
-	_game_speed_label.text = "游戏速度：%.1f秒间隔" % interval_seconds
+	_game_speed_label.text = "游戏速度：%.1f秒" % interval_seconds
 
 
 ## 将滑条值写入全局游戏速度设置；控制器只对之后创建的调度任务使用新间隔。

@@ -14,8 +14,20 @@ signal card_presentation_requested(presentation_data: Dictionary)
 ## 区域移动表现信号；所有摸牌、获得、响应和弃牌都使用同一实体牌动画入口。
 signal card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String)
 
+## 摸牌表现批次开始信号；同一次 draw() 的实体移动归入一个批次，界面据此把多张牌整体居中并同时起飞。
+signal draw_presentation_batch_started(batch_id: int, player_id: int)
+
+## 摸牌表现批次完成信号；界面收到后将本批全部已移动实体交给动画队列，下一次 draw() 的批次必须等待本批动画收尾。
+signal draw_presentation_batch_finished(batch_id: int, player_id: int)
+
 ## 牌面弃牌幂等状态释放信号；实体进入任意非弃牌区域时发送，不代表需要播放一条可见转移动画。
 signal card_animation_ownership_reset_requested(card_uid: int)
+
+## 技能实际发动表现信号；桌面只根据玩家 ID 与技能名显示短暂提示，不读取或修改技能运行时。
+signal skill_activated(player_id: int, skill_name: String)
+
+## 牌区转移数据中标识摸牌表现批次的私有键；只存在于瞬时信号副本，绝不写入 CardInstance、存档或回放状态。
+const DRAW_PRESENTATION_BATCH_ID_KEY: String = "_draw_presentation_batch_id"
 
 ## 统一选择请求信号；选牌、选目标与组合选择都先发送可序列化询问，再提交兼容 choose_cards 动作。
 signal card_choice_requested(choice_data: Dictionary)
@@ -143,6 +155,18 @@ var _pending_card_choice: Dictionary = {}
 ## 当前同时等待的无懈可击请求；键为请求 ID，值为该玩家的私有候选与可序列化恢复上下文。
 var _pending_negation_choices: Dictionary = {}
 
+## 当前规则时机派发开始前已有的普通选择请求 ID；-1表示无请求，用于只暂停本时机中新建的技能询问。
+var _rule_timing_initial_choice_request_id: int = -1
+
+## 当前规则时机派发是否正在执行；true 时选择创建可通知 TriggerManager 暂停并按座次续问。
+var _is_dispatching_rule_timing: bool = false
+
+## 摸牌表现批次递增序号；每次 draw() 调用获得唯一值，使多张同步摸牌与连续多次摸牌都能独立居中播放。
+var _draw_presentation_batch_sequence: int = 0
+
+## 当前正在发出移牌信号的摸牌表现批次；空字典表示普通移牌，不向界面附加批次信息。
+var _active_draw_presentation_batch: Dictionary = {}
+
 ## 当前无懈可击同时响应轮次序号；每创建一轮递增，用于让迟到 AI 任务安全失效。
 var _negation_round_sequence: int = 0
 
@@ -255,6 +279,7 @@ func _ready() -> void:
 	if trigger_manager == null:
 		trigger_manager = TriggerManager.new()
 	timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
+	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
 	network_gateway.command_received.connect(_on_network_command_received)
 	if not network_gateway.choice_response_received.is_connected(_on_network_choice_response_received):
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
@@ -373,6 +398,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
 	else:
 		timing_service.configure(event_bus, trigger_manager, state)
+	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	event_scheduler.reset()
@@ -407,6 +433,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_play_choice_actor_id = -1
 	_play_choice_match_id = ""
 	_card_presentation_sequence = 0
+	_draw_presentation_batch_sequence = 0
+	_active_draw_presentation_batch.clear()
 	_judgment_flow_token += 1
 	_judgment_flow_in_progress = false
 	_judgment_resume_needs_result_pause = false
@@ -531,14 +559,16 @@ func submit_action(action: PlayerAction) -> bool:
 		var validation_error: String = card_rules.validate_use(action.actor_id, card, target_ids)
 		if not validation_error.is_empty():
 			return _reject(validation_error)
-		# 身份观察快照；公开行为按权威最终目标与当前目标状态计算，不持有或修改 GameState。
-		var identity_observation_snapshot: Dictionary = state.to_dict(-1, true)
-		# 卡牌源码定义；复杂牌可按每名目标当前状态覆盖静态 target_result，不在控制器维护牌名白名单。
+		# 当前卡牌源码；角色语义辅助目标可在此从实际目标时机中剥离，但完整声明顺序仍保留在使用牌上下文。
 		var card_source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
+		# 实际结算目标；【借刀杀人】等牌会将第二声明目标保存为效果参数，目标时机与本牌实际目标只保留首名持刀者。
+		var resolution_target_ids: Array[int] = card_source_definition.get_resolution_target_ids(target_ids) if card_source_definition != null else target_ids.duplicate()
+		# 身份观察快照；公开行为按权威实际目标与当前目标状态计算，不持有或修改 GameState。
+		var identity_observation_snapshot: Dictionary = state.to_dict(-1, true)
 		# 本次身份观察配置；定义缺失时回退到卡牌元数据中的静态 AI 配置。
-		var identity_ai_profile: Dictionary = card_source_definition.get_identity_observation_ai_profile(identity_observation_snapshot, action.actor_id, target_ids) if card_source_definition != null else (GameDatabase.get_card(card.definition_id).get("ai", {}) as Dictionary)
-		ai_coordinator.observe_public_behavior(identity_observation_snapshot, action.actor_id, identity_ai_profile, target_ids, local_human_player_id)
-		_execute_card_use(action.actor_id, card, target_ids)
+		var identity_ai_profile: Dictionary = card_source_definition.get_identity_observation_ai_profile(identity_observation_snapshot, action.actor_id, resolution_target_ids) if card_source_definition != null else (GameDatabase.get_card(card.definition_id).get("ai", {}) as Dictionary)
+		ai_coordinator.observe_public_behavior(identity_observation_snapshot, action.actor_id, identity_ai_profile, resolution_target_ids, local_human_player_id)
+		_execute_card_use(action.actor_id, card, resolution_target_ids, [], false, target_ids)
 	elif action.action_type == "recast_card":
 		if not _execute_recast(action.actor_id, action.card_uid):
 			return false
@@ -1491,6 +1521,9 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	state.action_sequence += 1
 	if bool(completed_choice.get("deferred", false)):
 		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids, selected_target_ids, runtime_response.confirmed, selected_control_id)
+		# 同一时机的后续可选技能必须等当前技能效果与其可能创建的后续选择完成后再按座次询问。
+		if not state.game_over and not has_pending_card_choice():
+			_resume_deferred_rule_timing_dispatches()
 		if not state.game_over and not has_pending_card_choice():
 			process_next_equipment_trigger()
 		if not state.game_over and not has_pending_card_choice():
@@ -1633,6 +1666,14 @@ func draw(player_id: int, count: int, announce: bool = true) -> void:
 	# 最终请求摸牌数；负数统一收敛为0，避免触发器制造反向移动。
 	var final_count: int = maxi(int(begin_event.data.get("count", count)) if begin_event != null else count, 0)
 	_ensure_card_movement()
+	# 上一层摸牌表现批次；嵌套摸牌结束后必须恢复它，保证外层剩余实体仍归入原批次。
+	var previous_draw_presentation_batch: Dictionary = _active_draw_presentation_batch
+	# 本次稳定表现批次序号；每次 draw() 独占一个编号，多张牌与多次摸牌不会被界面误合并。
+	_draw_presentation_batch_sequence += 1
+	# 当前批次公开元数据；只保留稳定编号与目标玩家，移牌信号会复制编号而不泄漏 CardInstance。
+	var draw_presentation_batch: Dictionary = {"batch_id":_draw_presentation_batch_sequence, "player_id":player_id}
+	_active_draw_presentation_batch = draw_presentation_batch
+	draw_presentation_batch_started.emit(int(draw_presentation_batch.get("batch_id", -1)), player_id)
 	# 实际摸牌数量；可能因牌堆与弃牌堆同时为空而少于请求值。
 	var drawn_count: int = 0
 	# 实际摸到的实体 UID；后置时机只公开稳定 ID，不暴露 CardInstance。
@@ -1656,6 +1697,9 @@ func draw(player_id: int, count: int, announce: bool = true) -> void:
 			player.hand.append(card)
 		drawn_count += 1
 		drawn_card_uids.append(card.uid)
+	# 当前批次已经收集完毕；先通知界面排队播放，再恢复外层批次，drawEnd 中触发的新摸牌会自然进入下一批。
+	draw_presentation_batch_finished.emit(int(draw_presentation_batch.get("batch_id", -1)), player_id)
+	_active_draw_presentation_batch = previous_draw_presentation_batch
 	var result_data: Dictionary = {"count":drawn_count, "requested_count":final_count, "card_uids":drawn_card_uids, "reason":"draw"}
 	_emit_rule_timing("drawEnd", player_id, -1, player_id, result_data)
 	_emit_rule_timing("drawAfter", player_id, -1, player_id, result_data)
@@ -3546,16 +3590,29 @@ func activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) 
 	var activation_error: String = skill.activate(context)
 	if not activation_error.is_empty():
 		return _reject(activation_error)
-	# 技能持有者状态；历史只保存可序列化 ID、事件号与回合号，不保存技能对象引用。
-	var player: PlayerState = state.get_player(player_id)
-	if player != null:
-		player.skill_history.append({"skill_id":skill_id, "event_id":state.current_event_id, "turn_number":state.turn_number})
 	state.action_sequence += 1
 	_emit_rule_timing("useSkillAfter", player_id, player_id, -1, timing_data)
 	_emit_rule_timing("skillAfter", player_id, player_id, -1, timing_data)
 	_dispatch_rule_event(RuleEvent.new("skill_used", player_id, -1, {"skill_id":skill_id, "context":context.duplicate(true)}))
 	_emit_state()
 	return true
+
+
+## 写入一条实际成立的技能发动记录，并通知对局日志与桌面表现；内容技能只能通过本公开端口调用，不能直接改写历史数组。
+func record_skill_activation(player_id: int, skill_id: String, context: Dictionary = {}) -> void:
+	if state == null or state.game_over:
+		return
+	# 发动者状态；未知、死亡或离场角色不能留下新的有效技能发动记录。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return
+	# 技能元数据；名称缺失时回退稳定 ID，保证日志与动画仍能定位来源。
+	var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+	var skill_name: String = str(skill_metadata.get("name", skill_id))
+	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
+	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
+	add_log("%s发动了【%s】。" % [player.display_name, skill_name])
+	skill_activated.emit(player_id, skill_name)
 
 
 ## 推导一次主动技能提交所属入口；显式 active_entries 优先，其次 active_entry，最后依据当前阶段回退 phaseUse。
@@ -3898,7 +3955,7 @@ func _enter_play_phase(player_id: int) -> void:
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % player.display_name)
 		_emit_rule_timing("phaseUseSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_end_play_phase(player_id, false)
+		_end_play_phase(player_id, false, true)
 		return
 	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
 		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
@@ -4139,6 +4196,9 @@ func _begin_active_card_resolution(card: CardInstance, actor_id: int, target_ids
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if source_definition != null:
 		source_definition.configure_resolution_context(self, card, actor_id, resolution_context)
+		# 完整声明目标；角色语义辅助目标只在此写入共享上下文，后续目标时机继续只遍历实际结算目标。
+		var requested_targets_context: Dictionary = _card_use_contexts.get(card.uid, {}) as Dictionary
+		source_definition.configure_requested_target_context(self, card, actor_id, requested_targets_context.get("requested_target_ids", target_ids) as Array[int], resolution_context)
 	_active_card_resolutions[card.uid] = resolution_context
 	if source_definition != null and source_definition.on_resolution_started(self, card, actor_id, resolution_context):
 		return
@@ -4334,7 +4394,7 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 
 
 ## 执行已通过合法性校验的出牌动作。
-func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false) -> void:
+func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false, requested_target_ids: Array[int] = []) -> void:
 	if state == null or state.game_over or card == null:
 		return
 	if card_use_event_service == null:
@@ -4343,6 +4403,8 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	# 当前逻辑牌；真实牌也通过 VirtualCard 描述逻辑属性，实体材料 UID 始终独立保存。
 	# 当前卡牌定义快照；提供逻辑属性、效果类型和默认自然属性，不持有运行时状态。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 完整声明目标；未提供辅助目标时与实际目标完全一致，确保普通牌不维护第二套数组。
+	var declared_target_ids: Array[int] = requested_target_ids.duplicate() if not requested_target_ids.is_empty() else target_ids.duplicate()
 	# 本次使用的逻辑牌快照；后续视为牌与多材料牌可以复用完全相同的事件字段。
 	var virtual_card: VirtualCard = VirtualCard.new(card.definition_id, card.suit, card.rank, str(definition.get("nature", "normal")))
 	if material_card_uids.is_empty():
@@ -4356,6 +4418,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"card_id":card.definition_id,
 		"card_uid":card.uid,
 		"target_ids":target_ids.duplicate(),
+		"requested_target_ids":declared_target_ids.duplicate(),
 		"virtual_card":virtual_card.to_dict(),
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_proxy":virtual_proxy,
@@ -4387,6 +4450,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"actor_id":actor_id,
 		"card_definition_id":card.definition_id,
 		"target_ids":target_ids.duplicate(),
+		"requested_target_ids":declared_target_ids.duplicate(),
 		"excluded_target_ids":[],
 		"direct_hit_target_ids":[],
 		"custom_args":{},
@@ -4612,8 +4676,7 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 	var rule_event: RuleEvent = RuleEvent.new(timing_name, int(card_use_context.get("actor_id", -1)), target_id, timing_data, int(card_use_context.get("actor_id", -1)))
 	rule_event.event_id = event.event_id
 	rule_event.parent_id = event.parent_id
-	_ensure_timing_service()
-	timing_service.dispatch(rule_event)
+	_dispatch_timing_service_event(rule_event)
 	# 触发器输出；目标、排除、直击与自定义参数全部写回共享上下文供下一时机重新读取。
 	card_use_context["target_ids"] = (rule_event.data.get("target_ids", card_use_context.get("target_ids", [])) as Array).duplicate()
 	card_use_context["excluded_target_ids"] = (rule_event.data.get("excluded_target_ids", card_use_context.get("excluded_target_ids", [])) as Array).duplicate()
@@ -4941,13 +5004,18 @@ func recast_hand_card(player_id: int, card_uid: int) -> bool:
 
 
 ## 结束出牌阶段；超过手牌上限时由当前角色自主选择足量手牌弃置。
-func _end_play_phase(player_id: int, complete_use_phase: bool = true) -> void:
+func _end_play_phase(player_id: int, complete_use_phase: bool = true, hide_controls_during_transition: bool = false) -> void:
 	if state.current_player_id != player_id or state.current_phase != "play":
 		_reject("当前不能结束出牌阶段。")
 		return
 	_ai_drive_token += 1
 	if complete_use_phase:
 		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	# 跳过阶段不应在流程延时内继续以 play 快照呈现，否则本地手牌与结束回合按钮会短暂闪现。
+	var transition_phase: String = "play"
+	if hide_controls_during_transition:
+		state.current_phase = "play_skipped"
+		transition_phase = "play_skipped"
 	# 等待中的额外出牌阶段；当前阶段必须先完整结束，再重新建立独立的 phaseUse 生命周期与出牌请求。
 	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
 	if pending_extra_play_phases > 0:
@@ -4955,9 +5023,9 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true) -> void:
 			_extra_play_phase_counts.erase(player_id)
 		else:
 			_extra_play_phase_counts[player_id] = pending_extra_play_phases - 1
-		_schedule_phase_transition(player_id, "play", Callable(self, "_start_extra_play_phase").bind(player_id))
+		_schedule_phase_transition(player_id, transition_phase, Callable(self, "_start_extra_play_phase").bind(player_id))
 		return
-	_schedule_phase_transition(player_id, "play", Callable(self, "_enter_discard_phase").bind(player_id))
+	_schedule_phase_transition(player_id, transition_phase, Callable(self, "_enter_discard_phase").bind(player_id))
 
 
 ## 进入弃牌阶段并在需要时创建强制选牌请求；无需弃牌时仍保留一个阶段间隔再进入结束阶段。
@@ -5544,7 +5612,11 @@ func _on_card_moved(move_data: Dictionary, card_data: Dictionary) -> void:
 func _emit_card_transfer(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
 	if card_data.is_empty():
 		return
-	card_transfer_requested.emit(card_data.duplicate(true), source_player_id, source_zone, target_player_id, target_zone)
+	# 瞬时表现牌面副本；批次编号只附加给真正从牌堆进入本次 draw() 目标手牌的实体，不改变权威实体或卡牌历史。
+	var presentation_card_data: Dictionary = card_data.duplicate(true)
+	if not _active_draw_presentation_batch.is_empty() and source_zone == "draw_pile" and target_zone == "hand" and target_player_id == int(_active_draw_presentation_batch.get("player_id", -1)):
+		presentation_card_data[DRAW_PRESENTATION_BATCH_ID_KEY] = int(_active_draw_presentation_batch.get("batch_id", -1))
+	card_transfer_requested.emit(presentation_card_data, source_player_id, source_zone, target_player_id, target_zone)
 
 
 ## 在卡牌全部目标与异步选择结束后记录唯一 contentAfter；装备、判定区和弃牌目的都从同一入口完成生命周期。
@@ -5767,14 +5839,29 @@ func _emit_rule_timing(event_name: String, player_id: int = -1, source_id: int =
 func _dispatch_rule_event(event: RuleEvent, parent_id: int = -2) -> RuleEvent:
 	if event == null:
 		return null
-	_ensure_timing_service()
 	# 实际父事件；-2沿用当前事件栈，显式-1允许创建独立迁移记录。
 	var resolved_parent_id: int = _current_rule_parent_event_id() if parent_id == -2 else parent_id
 	event.event_id = state.current_event_id if state != null else -1
 	event.parent_id = resolved_parent_id
-	timing_service.dispatch(event)
+	_dispatch_timing_service_event(event)
 	_record_runtime_event(event.name, "trigger", {"player_id":event.player_id, "source_id":event.source_id, "target_id":event.target_id, "data":event.data.duplicate(true)}, event.to_dict(), resolved_parent_id)
 	return event
+
+
+## 以可暂停模式派发一条规则时机；所有入口包括 CardUseEvent 子事件都共用此封装，确保同一时机的技能按座次依次询问。
+func _dispatch_timing_service_event(event: RuleEvent) -> void:
+	if event == null:
+		return
+	_ensure_timing_service()
+	# 派发前已有的请求 ID；只有回调新建的选择才会暂停当前触发续列，嵌套时机结束后恢复外层快照。
+	var previous_initial_choice_request_id: int = _rule_timing_initial_choice_request_id
+	# 外层派发状态；嵌套时机返回后必须恢复，避免把后续非时机选择误识别为等待触发的技能。
+	var previous_dispatching_state: bool = _is_dispatching_rule_timing
+	_rule_timing_initial_choice_request_id = int(_pending_card_choice.get("request_id", -1))
+	_is_dispatching_rule_timing = true
+	timing_service.dispatch(event)
+	_is_dispatching_rule_timing = previous_dispatching_state
+	_rule_timing_initial_choice_request_id = previous_initial_choice_request_id
 
 
 ## 确保时机服务始终绑定当前状态、总线和重新开局后新建的 TriggerManager；测试替换 GameState 时也无需手工重建。
@@ -5785,6 +5872,28 @@ func _ensure_timing_service() -> void:
 		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
 	else:
 		timing_service.configure(event_bus, trigger_manager, state)
+	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
+
+
+## 判断当前有序触发是否应在本技能询问后暂停；派发前已存在的响应或选牌不会被误识别为新询问。
+func _should_pause_rule_timing_dispatch() -> bool:
+	if not _is_dispatching_rule_timing or _pending_card_choice.is_empty():
+		return false
+	return int(_pending_card_choice.get("request_id", -1)) != _rule_timing_initial_choice_request_id
+
+
+## 在一个选择完整恢复且没有后续选择时继续询问同一时机的剩余技能；续列可再次创建选择并保持原座次顺序。
+func _resume_deferred_rule_timing_dispatches() -> void:
+	if timing_service == null or has_pending_card_choice() or state == null or state.game_over:
+		return
+	# 续列回调同样可能新建下一条技能询问；复用派发标记以让 TriggerManager 再次安全暂停。
+	var previous_initial_choice_request_id: int = _rule_timing_initial_choice_request_id
+	var previous_dispatching_state: bool = _is_dispatching_rule_timing
+	_rule_timing_initial_choice_request_id = -1
+	_is_dispatching_rule_timing = true
+	timing_service.resume_deferred_dispatches()
+	_is_dispatching_rule_timing = previous_dispatching_state
+	_rule_timing_initial_choice_request_id = previous_initial_choice_request_id
 
 
 ## 把一条运行时历史增量追加到 GameState；相同 sequence 已存在时不会重复写入。

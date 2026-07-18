@@ -40,8 +40,8 @@ const MAX_GAME_SPEED_INTERVAL_SECONDS: float = 1.0
 ## 游戏流程间隔的调节步长；默认0.1秒，与菜单滑条显示精度保持一致。
 const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.1
 
-## 当前卡牌名称模式；默认使用原版三国杀牌名，可在运行时安全切换为《崩铁杀》自定义牌名。
-var card_name_mode: NameMode = NameMode.ORIGINAL
+## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
+var card_name_mode: NameMode = NameMode.CUSTOM
 
 ## 当前 AI 每次行动或选择响应前的等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
 var ai_response_delay_seconds: float = 0.30
@@ -115,3 +115,14 @@ func resolve_card_name(card_definition: Dictionary) -> String:
 	if card_name_mode == NameMode.ORIGINAL:
 		return str(card_definition.get("original_name", card_definition.get("id", "未知牌")))
 	return str(card_definition.get("custom_name", card_definition.get("original_name", "未知牌")))
+
+
+## 返回用于牌面与装备栏的显示名称；武器会在名称后附加固定攻击范围，其他牌保持基础名称不变。
+func resolve_card_display_name(card_definition: Dictionary) -> String:
+	# 基础显示名；名称模式仍由唯一 resolve_card_name() 入口决定。
+	var display_name: String = resolve_card_name(card_definition)
+	if str(card_definition.get("type", "")) != "equipment" or str(card_definition.get("subtype", "")) != "weapon":
+		return display_name
+	# 武器攻击范围；非正或缺失配置使用基础范围1，避免界面出现无意义的0。
+	var attack_range: int = maxi(int(card_definition.get("attack_range", 1)), 1)
+	return "%s %d" % [display_name, attack_range]

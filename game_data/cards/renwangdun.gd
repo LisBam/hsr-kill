@@ -40,3 +40,8 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 ## 仁王盾令黑色实体【杀】无效；无颜色的虚拟【杀】不满足条件。
 func blocks_slash(card: CardInstance, nature: String) -> bool:
 	return card.get_color() == "black"
+
+
+## 让只读 AI 牌面预判与实体结算使用相同的黑色【杀】无效规则；属性不改变仁王盾的拦截条件。
+func blocks_slash_by_color(card_color: String, _nature: String) -> bool:
+	return card_color == "black"

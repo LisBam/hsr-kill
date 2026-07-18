@@ -65,6 +65,24 @@ func observe_identity_behavior(target_ids: Array[int], ai_profile: Dictionary) -
 	host.call("observe_skill_identity_behavior", owner_player_id, stable_target_ids, stable_ai_profile)
 
 
+## 记录一次已经实际成立的技能发动；技能应在确认支付费用、执行锁定效果或完成主动目标选择后调用，避免取消询问写入日志。
+func announce_activation(context: Dictionary = {}) -> void:
+	if host == null or not host.has_method("record_skill_activation"):
+		return
+	# 永久记录上下文副本；只允许基础可序列化值，不能把技能对象或界面节点交给日志、回放或表现层。
+	var activation_context: Dictionary = context.duplicate(true)
+	host.call("record_skill_activation", owner_player_id, get_id(), activation_context)
+
+
+## 记录一次由指定角色实际支付费用或执行效果的技能发动；领袖技可用此入口将提示与日志归属到本回合发动者。
+func announce_activation_for_player(activator_player_id: int, context: Dictionary = {}) -> void:
+	if host == null or not host.has_method("record_skill_activation"):
+		return
+	# 永久记录上下文副本；指定发动者仍须由控制器复核为存活在场角色，避免技能实例直接写入无效日志。
+	var activation_context: Dictionary = context.duplicate(true)
+	host.call("record_skill_activation", activator_player_id, get_id(), activation_context)
+
+
 ## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
 func get_active_entries() -> Array[String]:
 	# 标准主动入口结果；只保留目录登记名称并去重，避免错误元数据进入选择协议。

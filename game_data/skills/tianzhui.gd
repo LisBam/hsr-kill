@@ -69,6 +69,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if owner_state == null or not owner_state.chained or not bool(host.call("set_player_linked", owner_player_id, false, owner_player_id, get_id())):
 			return true
 	_used_this_play_phase = true
+	announce_activation({"target_id":target.player_id})
 	observe_identity_behavior([target.player_id], {"target_result":IDENTITY_TARGET_RESULT})
 	get_owner_skill_player().damage(1, get_skill_player(target.player_id), "fire")
 	return true

@@ -14,6 +14,9 @@ var _borrow_slash_uid: int = -1
 ## 是否在 phaseUseBegin 同步调用栈中收到【行军】发动询问；默认 false。
 var _xingjun_begin_request_seen: bool = false
 
+## 同一使用牌时机实际收到的可选技能询问顺序；用于验证从当前回合角色起按座次依次询问。
+var _same_timing_choice_kinds: Array[String] = []
+
 ## 测试是否已经失败；失败后延迟选择回调不得继续提交旧请求。
 var _failed: bool = false
 
@@ -31,6 +34,8 @@ func _run() -> void:
 	if not _test_play_phase_limit_scope():
 		return
 	if not _test_chain_targets_and_ai():
+		return
+	if not await _test_same_timing_skill_prompt_order():
 		return
 	if not await _test_borrow_sword_target_semantics():
 		return
@@ -97,6 +102,7 @@ func _reset_state(player_count: int) -> void:
 	_controller.ai_coordinator._policies.clear()
 	_borrow_slash_uid = -1
 	_xingjun_begin_request_seen = false
+	_same_timing_choice_kinds.clear()
 
 
 ## 验证所有技能元数据都拥有 bool 类型 lock，且现有锁定技【星火】明确标记为 true。
@@ -189,7 +195,34 @@ func _test_chain_targets_and_ai() -> bool:
 	return true
 
 
-## 验证借刀只有持刀者属于牌目标，被【杀】者通过独立牌效目标选择完成。
+## 验证希儿使用【杀】指定目标后，先询问当前回合角色的【再现】，其完成或取消后再询问下一座次布洛妮娅的【军势】。
+func _test_same_timing_skill_prompt_order() -> bool:
+	_scenario = "same_timing_prompt_order"
+	_reset_state(3)
+	# 两名技能持有者；当前回合角色为一号希儿，布洛妮娅位于下一座次，正好覆盖用户报告的同一时机顺序。
+	_controller.state.get_player(0).character_id = "xier"
+	_controller.state.get_player(1).character_id = "bronya"
+	# 希儿的【杀】与可选弃置费用；存在费用牌才能保证【再现】确实创建第一条询问。
+	var slash: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	_add_hand_card(0, "shan", "heart", 2)
+	# 两个运行时技能实例；直接安装可保持测试最小化，同时仍使用正式 TriggerManager、ChoiceRequest 和续列恢复入口。
+	var zaixian: SkillDefinition = GameDatabase.create_skill("zaixian")
+	var junshi: SkillDefinition = GameDatabase.create_skill("junshi")
+	zaixian.bind(_controller, 0)
+	junshi.bind(_controller, 1)
+	zaixian.install()
+	junshi.install()
+	_controller.skill_instances_by_player = {0:{zaixian.get_id():zaixian}, 1:{junshi.get_id():junshi}}
+	# 真实使用牌流程；测试选择处理器会依次取消两次询问，第二条只有第一条完整恢复后才允许出现。
+	_controller._execute_card_use(0, slash, [2])
+	if not await _wait_until_card_finalized(slash.uid):
+		return _fail("same_timing_prompt_timeout kinds=%s" % [_same_timing_choice_kinds])
+	if _same_timing_choice_kinds != ["zaixian_discard", "junshi_confirm"]:
+		return _fail("same_timing_prompt_order=%s" % [_same_timing_choice_kinds])
+	return true
+
+
+## 验证【借刀杀人】使用时必须按“持刀者、被【杀】者”声明两个目标，而实际本牌目标时机只保留持刀者。
 func _test_borrow_sword_target_semantics() -> bool:
 	_scenario = "borrow_sword"
 	_reset_state(3)
@@ -198,14 +231,15 @@ func _test_borrow_sword_target_semantics() -> bool:
 	weapon.zone = "equipment"
 	weapon.owner_id = 1
 	_controller.state.get_player(1).equipment["weapon"] = weapon
-	# 持刀者响应牌；选择处理器会令其对三号玩家使用该【杀】。
+	# 持刀者响应牌；已声明的三号玩家会直接成为其强制【杀】目标，不再创建二次选目标请求。
 	var slash: CardInstance = _add_hand_card(1, "sha", "spade", 7)
 	_borrow_slash_uid = slash.uid
-	# 借刀杀人实体；权威使用声明只接受一名持刀者目标。
+	# 借刀杀人实体；使用时必须同时声明持刀者与其需要使用【杀】的对象。
 	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
-	if not _controller.card_rules.validate_use(0, borrow_sword, [1]).is_empty() or _controller.card_rules.validate_use(0, borrow_sword, [1, 2]).is_empty():
+	if _controller.card_rules.validate_use(0, borrow_sword, [1]).is_empty() or not _controller.card_rules.validate_use(0, borrow_sword, [1, 2]).is_empty():
 		return _fail("borrow_target_count one=%s two=%s" % [_controller.card_rules.validate_use(0, borrow_sword, [1]), _controller.card_rules.validate_use(0, borrow_sword, [1, 2])])
-	_controller._execute_card_use(0, borrow_sword, [1])
+	# 真实结算目标与完整声明目标；直接调用内部入口时必须显式传入两套数组，正式 submit_action 会自动完成此分流。
+	_controller._execute_card_use(0, borrow_sword, [1], [], false, [1, 2])
 	if not await _wait_until_card_finalized(borrow_sword.uid):
 		return _fail("borrow_sword_timeout")
 	# 被【杀】者体力；拒绝【闪】后固定受到1点普通伤害。
@@ -274,13 +308,15 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	var selected_target_ids: Array[int] = []
 	# 本次是否确认；借刀的强制目标和响应【杀】为 true，拒绝【闪】与行军取消为 false。
 	var confirmed: bool = false
-	if _scenario == "borrow_sword" and choice_kind == "borrow_sword_target":
-		selected_target_ids = [2]
-		confirmed = true
-	elif _scenario == "borrow_sword" and choice_kind == "borrow_sword_response":
+	if _scenario == "borrow_sword" and choice_kind == "borrow_sword_response":
 		selected_uids = [_borrow_slash_uid]
 		confirmed = true
 	elif _scenario == "borrow_sword" and choice_kind == "slash_response":
+		confirmed = false
+	elif _scenario == "same_timing_prompt_order" and choice_kind in ["zaixian_discard", "junshi_confirm"]:
+		_same_timing_choice_kinds.append(choice_kind)
+		confirmed = false
+	elif _scenario == "same_timing_prompt_order" and choice_kind == "slash_response":
 		confirmed = false
 	elif _scenario == "xingjun_begin" and choice_kind == "xingjun_phase_use_begin":
 		_xingjun_begin_request_seen = true

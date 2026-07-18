@@ -272,7 +272,7 @@ func _run() -> void:
 	# 目标旁信息面板；按内容在240至520像素宽度内动态调整，并优先保持4:3比例且始终限制在当前客户区内。
 	var hover_information_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
 	var hover_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hover_information_panel.size.y, 1.0)
-	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("木牛流马（3）") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hover_information_aspect_ratio, information_box.hover_panel_aspect_ratio) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
+	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("货运星槎（3）") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hover_information_aspect_ratio, information_box.hover_panel_aspect_ratio) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
 		_fail("local_equipment_information:%s/%s" % [information_box.get_hover_title_text() if information_box != null else "missing", hover_information_panel.size if hover_information_panel != null else Vector2.ZERO])
 		return
 	local_treasure_row.mouse_exited.emit()
@@ -416,7 +416,7 @@ func _run() -> void:
 		_fail("opponent_equipment_information_shown_too_early:%s" % information_box.get_hover_title_text())
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("青釭剑"):
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("碎星斩舰刀 2"):
 		_fail("opponent_equipment_information:%s" % information_box.get_hover_title_text())
 		return
 	# 指针移出公开装备横条但仍停留在武将牌内时，统一信息框先隐藏装备，完整等待后恢复该武将资料。
@@ -816,7 +816,7 @@ func _run() -> void:
 	# 首次手牌说明的面板比例；【桃】说明应在动态宽度下保持4:3，不能因自动换行初始宽度错误而被撑成大量空白。
 	var hand_information_panel_height: float = hover_information_panel.size.y
 	var hand_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hand_information_panel_height, 1.0)
-	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("桃") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hand_information_aspect_ratio, information_box.hover_panel_aspect_ratio):
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("药") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hand_information_aspect_ratio, information_box.hover_panel_aspect_ratio):
 		_fail("hand_card_information:%s/%s" % [information_box.get_hover_title_text(), hover_information_panel.size])
 		return
 	gained_hand_card.call("_on_mouse_exited")
