@@ -13,6 +13,9 @@ signal ai_response_delay_changed(delay_seconds: float)
 ## 游戏流程间隔变化信号；对局控制器订阅后同步后续阶段切换与自动响应的最小等待时间。
 signal game_speed_changed(interval_seconds: float)
 
+## 自动身份标记开关变化信号；牌桌只据此刷新本地推测徽记，不修改任何权威身份数据。
+signal auto_identity_marking_changed(enabled: bool)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -48,6 +51,9 @@ var game_speed_interval_seconds: float = 0.30
 
 ## 当前 UI 风格标识；默认使用黑白太空风格，运行时可在局内设置中即时切换且不修改对局规则。
 var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
+
+## 是否根据公开用牌行为自动标记其他角色身份；默认开启，可在战斗菜单即时关闭且不需要重新开局。
+var auto_identity_marking_enabled: bool = true
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
@@ -94,6 +100,14 @@ func set_ui_style(style_id: String) -> void:
 		return
 	ui_style_id = normalized_style_id
 	ui_style_changed.emit(ui_style_id)
+
+
+## 设置自动身份标记开关；变化只通知本地界面重新读取共享身份模型，不改变模型观察记录或规则状态。
+func set_auto_identity_marking_enabled(enabled: bool) -> void:
+	if auto_identity_marking_enabled == enabled:
+		return
+	auto_identity_marking_enabled = enabled
+	auto_identity_marking_changed.emit(auto_identity_marking_enabled)
 
 
 ## 根据当前全局模式，从卡牌配置中返回唯一的前端显示名称。

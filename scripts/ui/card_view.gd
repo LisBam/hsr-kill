@@ -180,8 +180,8 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	var rank_text: String = _rank_text(int(card.get("rank", 0)))
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
 	var display_name: String = GameSettings.resolve_card_name(definition)
-	# 卡牌类别文本；帮助玩家快速区分基本牌、锦囊牌与装备牌。
-	var type_text: String = _type_text(str(definition.get("type", "")))
+	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。
+	var type_text: String = _type_text(str(definition.get("type", "")), str(definition.get("subtype", "")))
 	_suit_rank_text = "%s%s" % [suit_text, rank_text]
 	_display_name_text = display_name
 	_card_type_text = "%s%s" % ["粮 · " if is_wooden_ox_card else "", type_text]
@@ -398,6 +398,14 @@ func _rank_text(rank: int) -> String:
 	return {1:"A", 11:"J", 12:"Q", 13:"K"}.get(rank, str(rank))
 
 
-## 将配置类别转换为简短中文标签，帮助玩家快速识别用途。
-func _type_text(card_type: String) -> String:
-	return {"basic":"基本牌", "trick":"锦囊牌", "equipment":"装备牌"}.get(card_type, "卡牌")
+## 将配置类别与装备子类型转换为中文标签；装备牌直接显示实际槽位类别，避免牌面底部重复显示笼统父类型。
+func _type_text(card_type: String, card_subtype: String = "") -> String:
+	if card_type == "equipment":
+		return {
+			"weapon":"武器牌",
+			"armor":"防具牌",
+			"offensive_mount":"进攻坐骑牌",
+			"defensive_mount":"防御坐骑牌",
+			"treasure":"宝物牌",
+		}.get(card_subtype, "装备牌")
+	return {"basic":"基本牌", "trick":"锦囊牌"}.get(card_type, "卡牌")

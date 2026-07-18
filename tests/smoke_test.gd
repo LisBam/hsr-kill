@@ -578,6 +578,23 @@ func _run() -> void:
 		printerr("SMOKE_FAIL space_style_card_category=%s" % themed_accent_bar.color)
 		get_tree().quit(1)
 		return
+	# 五种装备子类型的牌面类别文本；底部必须直接显示实际装备槽位，不再统一显示“装备牌”。
+	var equipment_type_expectations: Dictionary = {
+		"qinggang":"武器牌",
+		"bagua":"防具牌",
+		"chitu":"进攻坐骑牌",
+		"dilu":"防御坐骑牌",
+		"muniu":"宝物牌",
+	}
+	# 装备测试实体 UID；每次递增保证正式配置签名变化并刷新同一类别标签节点。
+	var equipment_type_card_uid: int = 71000
+	for equipment_definition_id: String in equipment_type_expectations:
+		card_view.configure({"uid":equipment_type_card_uid, "definition_id":equipment_definition_id, "suit":"spade", "rank":1}, GameDatabase.get_card(equipment_definition_id), false, true)
+		if preview_type.text != str(equipment_type_expectations[equipment_definition_id]):
+			printerr("SMOKE_FAIL equipment_type_text=%s:%s" % [equipment_definition_id, preview_type.text])
+			get_tree().quit(1)
+			return
+		equipment_type_card_uid += 1
 	get_tree().root.remove_child(card_view)
 	card_view.free()
 	# 弃牌动画层；两张正式卡牌应同时从各自起点进入中央队列、保持水平铺开并在停留后全部淡出。

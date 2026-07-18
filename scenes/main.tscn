@@ -217,7 +217,7 @@ anchor_right = 1.0
 offset_left = -286.0
 offset_top = 58.0
 offset_right = -18.0
-offset_bottom = 412.0
+offset_bottom = 450.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
@@ -259,6 +259,13 @@ popup/item_0/text = "崩铁风格"
 popup/item_0/id = 0
 popup/item_1/text = "暖木家园"
 popup/item_1/id = 1
+
+[node name="AutoIdentityMarkingCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+button_pressed = true
+text = "自动标记身份"
 
 [node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
 layout_mode = 2
