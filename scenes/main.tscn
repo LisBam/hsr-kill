@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://bxfclsavijmua" path="res://scripts/core/match_controller.gd" id="2_match"]
 [ext_resource type="Script" uid="uid://cyj0ye13ftsgu" path="res://scripts/core/rule_event_bus.gd" id="3_event"]
 [ext_resource type="Script" uid="uid://c3whludjbgabl" path="res://scripts/ai/ai_coordinator.gd" id="4_ai"]
-[ext_resource type="Script" path="res://scripts/network/network_gateway.gd" id="5_network"]
+[ext_resource type="Script" uid="uid://canm0ju3yf2as" path="res://scripts/network/network_gateway.gd" id="5_network"]
 [ext_resource type="Texture2D" uid="uid://s3n7u8l1qm45" path="res://assets/ui/table_ornament.svg" id="6_ornament"]
 [ext_resource type="Script" uid="uid://324bj74relfv" path="res://scripts/ui/card_use_animation_layer.gd" id="7_animation"]
 [ext_resource type="Script" uid="uid://be14yvmd8i1up" path="res://scripts/ui/reference_backdrop.gd" id="8_backdrop"]
@@ -20,7 +20,7 @@
 [ext_resource type="Script" uid="uid://djseqc054thh0" path="res://scripts/core/game_flow_pacer.gd" id="20_flow_pacer"]
 [ext_resource type="Script" uid="uid://di1ne8eh8fhcd" path="res://scripts/ui/main_menu.gd" id="21_main_menu"]
 [ext_resource type="Texture2D" uid="uid://dlfv5vj23jqbp" path="res://assets/art/身份模式主菜单背景.png" id="22_identity_menu_background"]
-[ext_resource type="Script" path="res://scripts/ui/identity_marking_indicator.gd" id="23_identity_indicator"]
+[ext_resource type="Script" uid="uid://dmnbo3f7fmbd2" path="res://scripts/ui/identity_marking_indicator.gd" id="23_identity_indicator"]
 [ext_resource type="PackedScene" path="res://scenes/components/lan_lobby_panel.tscn" id="24_lan_lobby"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_settings_panel.tscn" id="25_online_settings"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_lobby_panel.tscn" id="26_online_lobby"]
@@ -250,11 +250,11 @@ theme_override_font_sizes/font_size = 18
 text = "菜单"
 horizontal_alignment = 1
 
-[node name="CardNameRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="CardNameRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=741267067]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="CardNameLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CardNameRow"]
+[node name="CardNameLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CardNameRow" unique_id=1580925356]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "卡牌名称"
@@ -294,8 +294,8 @@ layout_mode = 2
 button_pressed = true
 text = "自动标记身份"
 
-[node name="IdentityMarkingIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AutoIdentityMarkingCheckBox"]
-layout_mode = 0
+[node name="IdentityMarkingIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AutoIdentityMarkingCheckBox" unique_id=443707993]
+anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
 offset_right = 22.0
@@ -854,7 +854,7 @@ grow_vertical = 0
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
-[node name="MainMenuOnlineSettingsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent"]
+[node name="MainMenuOnlineSettingsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=749061043]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(192, 0)
 layout_mode = 2
@@ -1074,7 +1074,7 @@ mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 20
 text = "设置"
 
-[node name="MainMenuLanButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel/MainMenuActionRow"]
+[node name="MainMenuLanButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel/MainMenuActionRow" unique_id=786532070]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(154, 56)
 layout_mode = 2
@@ -1144,7 +1144,7 @@ layout_mode = 2
 mouse_filter = 2
 color = Color(0.75, 0.66, 0.42, 0.65)
 
-[node name="MainMenuCardNameRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="MainMenuCardNameRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1838510944]
 layout_mode = 2
 theme_override_constants/separation = 12
 
@@ -1186,8 +1186,8 @@ mouse_default_cursor_shape = 2
 button_pressed = true
 text = "自动标记身份"
 
-[node name="IdentityMarkingIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAutoIdentityMarkingCheckBox"]
-layout_mode = 0
+[node name="IdentityMarkingIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAutoIdentityMarkingCheckBox" unique_id=947762808]
+anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
 offset_right = 22.0
@@ -1252,8 +1252,8 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "返回"
 
-[node name="LanLobbyPanel" parent="MainMenu" instance=ExtResource("24_lan_lobby")]
+[node name="LanLobbyPanel" parent="MainMenu" unique_id=188323044 instance=ExtResource("24_lan_lobby")]
 
-[node name="OnlineSettingsPanel" parent="MainMenu" instance=ExtResource("25_online_settings")]
+[node name="OnlineSettingsPanel" parent="MainMenu" unique_id=1986582550 instance=ExtResource("25_online_settings")]
 
-[node name="OnlineLobbyPanel" parent="MainMenu" instance=ExtResource("26_online_lobby")]
+[node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]

@@ -18,6 +18,24 @@ signal kick_requested(peer_id: int)
 ## 玩家名称与插画之间的垂直间距；默认4像素保持两者分离且不浪费大厅纵向空间。
 @export_range(0.0, 16.0, 1.0) var name_gap: float = 4.0
 
+## 踢出按钮左右内缩；默认34像素使管理入口比旧版更紧凑，运行时通常无需修改。
+@export_range(0.0, 72.0, 1.0) var kick_button_horizontal_inset: float = 34.0
+
+## 踢出按钮高度；默认31像素，缩小后仍保留鼠标与触屏可点击的最小操作区域。
+@export_range(24.0, 48.0, 1.0) var kick_button_height: float = 31.0
+
+## 踢出按钮距插画底边的间距；默认10像素让深红按钮位于边框内部而不压住圆角描边。
+@export_range(0.0, 24.0, 1.0) var kick_button_bottom_inset: float = 10.0
+
+## 踢出按钮相对主题危险色的加深比例；默认0.32使管理操作保持明显但不过度抢占插画视觉。
+@export_range(0.0, 0.8, 0.01) var kick_button_darken_amount: float = 0.32
+
+## 踢出按钮文字大小；默认13像素与31像素紧凑高度匹配，运行时通常无需修改。
+@export_range(10, 18, 1) var kick_button_font_size: int = 13
+
+## 踢出按钮上下内容边距；默认2像素避免通用操作按钮边距把紧凑高度撑大。
+@export_range(0.0, 8.0, 1.0) var kick_button_vertical_content_margin: float = 2.0
+
 ## 玩家名称标签；始终位于联机形象上方，空位置显示对应位置编号。
 @onready var _name_label: Label = %OnlineLobbyAvatarName
 
@@ -67,8 +85,11 @@ func _ready() -> void:
 	_avatar_frame.size = avatar_size
 	_empty_slot_button.position = _artwork_rect.position
 	_empty_slot_button.size = avatar_size
-	_kick_button.position = _artwork_rect.position + Vector2(22.0, avatar_size.y - 48.0)
-	_kick_button.size = Vector2(avatar_size.x - 44.0, 38.0)
+	# 当前踢出按钮宽度；内缩过大时保留24像素宽度，避免检查器配置导致按钮反向或不可点击。
+	var kick_button_width: float = maxf(avatar_size.x - kick_button_horizontal_inset * 2.0, 24.0)
+	_kick_button.position = _artwork_rect.position + Vector2(kick_button_horizontal_inset, avatar_size.y - kick_button_bottom_inset - kick_button_height)
+	_kick_button.custom_minimum_size = Vector2(kick_button_width, kick_button_height)
+	_kick_button.size = Vector2(kick_button_width, kick_button_height)
 	_empty_slot_button.pressed.connect(_on_empty_slot_pressed)
 	_kick_button.pressed.connect(_on_kick_pressed)
 	_kick_button.mouse_entered.connect(_on_kick_button_mouse_entered)
@@ -120,8 +141,21 @@ func refresh_ui_style() -> void:
 	_empty_slot_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	_empty_slot_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_avatar_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(Color.TRANSPARENT, Color(BattleUIStyle.get_color("border"), 0.55), 1, 6))
-	BattleUIStyle.apply_interaction_button(_kick_button, BattleUIStyle.get_color("danger"), BattleUIStyle.get_color("text_primary"), true)
+	# 当前玩家形象纯边框；通用面板默认阴影会覆盖插画边缘，因此这里明确关闭填充与阴影，只保留空位同规格的圆角描边。
+	var avatar_frame_style: StyleBoxFlat = BattleUIStyle.make_panel(Color.TRANSPARENT, Color(BattleUIStyle.get_color("border"), 0.55), 1, 6)
+	avatar_frame_style.draw_center = false
+	avatar_frame_style.shadow_size = 0
+	_avatar_frame.add_theme_stylebox_override("panel", avatar_frame_style)
+	# 当前踢出按钮背景；在主题危险色基础上加深，避免与普通错误提示和高亮操作混淆。
+	var kick_button_color: Color = BattleUIStyle.get_color("danger").darkened(kick_button_darken_amount)
+	BattleUIStyle.apply_interaction_button(_kick_button, kick_button_color, BattleUIStyle.get_color("danger"), true)
+	_kick_button.add_theme_font_size_override("font_size", kick_button_font_size)
+	for state_name: StringName in [&"normal", &"hover", &"pressed", &"focus", &"disabled"]:
+		# 当前踢出按钮状态样式；压缩上下边距后，所有交互状态都保持同一31像素固定高度。
+		var kick_button_state_style: StyleBoxFlat = _kick_button.get_theme_stylebox(state_name) as StyleBoxFlat
+		if kick_button_state_style != null:
+			kick_button_state_style.content_margin_top = kick_button_vertical_content_margin
+			kick_button_state_style.content_margin_bottom = kick_button_vertical_content_margin
 	_update_kick_visibility()
 
 
