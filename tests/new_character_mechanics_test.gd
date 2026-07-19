@@ -157,8 +157,8 @@ func _test_metadata_and_rule_names() -> bool:
 		return _fail("gepard_metadata=%s" % gepard)
 	if int(dan_heng.get("max_hp", 0)) != 4 or str(dan_heng.get("faction", "")) != "xingqionglieche" or (dan_heng.get("skills", []) as Array) != ["gangfeng", "jiyu"]:
 		return _fail("dan_heng_metadata=%s" % dan_heng)
-	if not GameDatabase.get_skill("six_phased_ice_sample").is_empty() or not GameDatabase.get_skill("cloud_piercer_sample").is_empty():
-		return _fail("placeholder_skills_still_registered")
+	if not GameDatabase.get_skill("six_phased_ice_sample").is_empty() or not GameDatabase.get_skill("cloud_piercer_sample").is_empty() or not GameDatabase.get_skill("trailblaze_sample").is_empty() or not GameDatabase.get_character("trailblazer").is_empty():
+		return _fail("placeholder_content_still_registered")
 	return true
 
 

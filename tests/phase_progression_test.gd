@@ -84,7 +84,7 @@ func _install_state() -> GameState:
 		# 当前测试玩家；身份顺序保证0号忠臣死亡后对局仍继续。
 		var player: PlayerState = PlayerState.new(player_id, "测试玩家%d" % (player_id + 1))
 		player.identity = ["loyalist", "leader", "rebel"][player_id]
-		player.character_id = "trailblazer"
+		player.character_id = "gepard"
 		player.character_revealed = true
 		game_state.players.append(player)
 	_controller.event_scheduler.reset()
