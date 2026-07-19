@@ -24,6 +24,7 @@
 [ext_resource type="PackedScene" path="res://scenes/components/lan_lobby_panel.tscn" id="24_lan_lobby"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_settings_panel.tscn" id="25_online_settings"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_lobby_panel.tscn" id="26_online_lobby"]
+[ext_resource type="PackedScene" path="res://scenes/components/player_auto_managed_hand_overlay.tscn" id="27_auto_managed_overlay"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -417,6 +418,19 @@ grow_vertical = 0
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "记录"
 
+[node name="AutoManageButton" type="Button" parent="LogPanel"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 116.0
+offset_top = -46.0
+offset_right = 224.0
+grow_vertical = 0
+theme_override_styles/normal = SubResource("StyleButtonNormal")
+text = "托管"
+
 [node name="LogContentPanel" type="PanelContainer" parent="LogPanel" unique_id=865979048]
 unique_name_in_owner = true
 visible = false
@@ -572,6 +586,10 @@ custom_minimum_size = Vector2(752, 175)
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("9_hand_layout")
+
+[node name="AutoManagedHandOverlay" parent="HandPanel" instance=ExtResource("27_auto_managed_overlay")]
+unique_name_in_owner = true
+layout_mode = 2
 
 [node name="SkillBar" type="PanelContainer" parent="." unique_id=735918897]
 layout_mode = 1

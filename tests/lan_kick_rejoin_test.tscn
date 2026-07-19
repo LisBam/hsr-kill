@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/lan_kick_rejoin_test.gd" id="1_test"]
+[ext_resource type="Script" path="res://scripts/network/network_gateway.gd" id="2_gateway"]
+
+[node name="LanKickRejoinTest" type="Node"]
+script = ExtResource("1_test")
+
+[node name="NetworkGateway" type="Node" parent="."]
+script = ExtResource("2_gateway")

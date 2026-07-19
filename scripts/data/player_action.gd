@@ -3,7 +3,7 @@ extends RefCounted
 
 ## 标准化玩家行为指令。人类 UI、内置 AI 与网络客户端必须通过同一结构向核心下发操作。
 
-## 指令类型；支持选将、出牌、技能、重铸、装备动作、结束阶段和统一 choose_cards 牌/目标选择响应。
+## 指令类型；支持选将、出牌、技能、重铸、装备动作、结束阶段、set_auto_managed 托管开关和统一 choose_cards 牌/目标选择响应。
 var action_type: String = ""
 
 ## 发出指令的玩家 ID；系统指令使用 -1。

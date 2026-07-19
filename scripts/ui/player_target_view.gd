@@ -141,6 +141,9 @@ var _is_hovered: bool = false
 ## 阵亡与横置状态覆盖组件；负责黑白滤镜、阵亡文字和中心链条，不参与规则判断。
 @onready var _state_overlay: PlayerStateOverlay = $StateOverlay
 
+## 托管状态文字；读取公开快照在武将牌底部显示手动托管或离线托管，不参与目标点击与规则计算。
+@onready var _auto_managed_label: Label = $AutoManagedLabel
+
 ## 当前已创建的装备条目控件；每次快照更新时整体重建，最多包含五个固定装备槽。
 var _equipment_rows: Array[RichTextLabel] = []
 
@@ -289,6 +292,8 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("alive", false),
 		snapshot.get("chained", false),
 		snapshot.get("face_down", false),
+		snapshot.get("auto_managed", false),
+		snapshot.get("auto_managed_offline", false),
 		snapshot.get("hand_count", 0),
 		snapshot.get("equipment", {}),
 		snapshot.get("judgment_area", []),
@@ -306,6 +311,7 @@ func set_match_overlays_visible(visible_in_match: bool) -> void:
 		return
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
+	_refresh_auto_managed_label()
 	_refresh_hover_name_visibility()
 
 
@@ -545,6 +551,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_hand_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
+	_refresh_auto_managed_label()
 	# 判定区公开数量；没有判定牌时不显示该摘要，避免覆盖装备横条和武将立绘。
 	# 当前数量由菱形标记数组的长度直接表达，不再绘制“判N”摘要文本。
 	var judgment_count: int = (_player_snapshot.get("judgment_area", []) as Array).size()
@@ -610,6 +617,20 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_refresh_equipment_rows()
 	_refresh_identity_badge()
 	_refresh_hover_name_visibility()
+
+
+## 根据公开托管字段更新底部状态文字；手动托管与掉线托管共用描边样式，仅文案不同。
+func _refresh_auto_managed_label() -> void:
+	if _auto_managed_label == null:
+		return
+	# 当前是否正在托管；状态只来自权威快照，避免本地网络延迟或 UI 点击自行推断。
+	var auto_managed: bool = bool(_player_snapshot.get("auto_managed", false))
+	# 当前是否为掉线触发的托管；true 时额外提示其他观察者该玩家已不在线。
+	var offline_managed: bool = bool(_player_snapshot.get("auto_managed_offline", false))
+	_auto_managed_label.text = "已离线，托管中" if offline_managed else "托管中"
+	_auto_managed_label.visible = _match_overlays_visible and auto_managed
+	_auto_managed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_auto_managed_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。

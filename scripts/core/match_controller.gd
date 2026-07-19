@@ -292,6 +292,9 @@ var _cards_used_this_turn_by_player: Dictionary = {}
 ## 局域网客户端最近一次收到的观察者裁剪快照；只供远端 UI 预览与渲染，不重建或替代权威 GameState。
 var _remote_snapshot: Dictionary = {}
 
+## 当前由控制器内部 AI 调度提交动作的玩家嵌套计数；仅此上下文可执行托管玩家动作，网络封包无法伪造该权限。
+var _ai_submission_depth_by_player: Dictionary = {}
+
 ## 最近一次权威动作拒绝原因；网络命令入口在同步提交失败后读取并只返回给原发送者。
 var _last_action_rejection_message: String = ""
 
@@ -528,6 +531,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_judgment_flow_in_progress = false
 	_judgment_resume_needs_result_pause = false
 	ai_coordinator._policies.clear()
+	_ai_submission_depth_by_player.clear()
 
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
@@ -558,6 +562,7 @@ func _discard_failed_match_start() -> void:
 	if event_scheduler != null:
 		event_scheduler.reset()
 	ai_coordinator._policies.clear()
+	_ai_submission_depth_by_player.clear()
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	character_selection = null
@@ -634,6 +639,11 @@ func submit_action(action: PlayerAction) -> bool:
 		return true
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
+	if action.action_type == "set_auto_managed":
+		return _submit_auto_management_change(action)
+	# 托管玩家仍由 AI 通过同一动作入口执行；真人、本地脚本或远端封包不能在托管期间抢占操作。
+	if _is_player_auto_managed(action.actor_id) and not _is_internal_ai_submission(action.actor_id):
+		return _reject("当前玩家正在托管中，暂时不能进行操作。")
 	if is_gameplay_paused() and ai_coordinator != null and ai_coordinator.is_ai_controlled(action.actor_id):
 		return false
 	if action.action_type == "select_character":
@@ -744,6 +754,130 @@ func submit_action(action: PlayerAction) -> bool:
 	_emit_state()
 	_ensure_ai_progress_after_resolution()
 	return true
+
+
+## 返回指定玩家是否已进入托管；该查询只读取权威状态，供动作权限与测试使用。
+func is_player_auto_managed(player_id: int) -> bool:
+	return _is_player_auto_managed(player_id)
+
+
+## 处理真人发起的托管开关；操作人只能修改自己的真人角色，掉线托管只能由网络断线流程写入。
+func _submit_auto_management_change(action: PlayerAction) -> bool:
+	# 当前请求的玩家状态；不存在的稳定 ID 不能创建虚假的托管记录。
+	var player: PlayerState = state.get_player(action.actor_id)
+	if player == null:
+		return _reject("托管目标不存在。")
+	if not _is_auto_management_change_authorized(action.actor_id):
+		return _reject("只能调整自己的托管状态。")
+	# 当前目标状态；缺失 enabled 字段时回退为切换，保证按钮与未来通用操作入口都可复用。
+	var enabled: bool = bool(action.payload.get("enabled", not player.auto_managed))
+	if not enabled and player.auto_managed_offline:
+		return _reject("该玩家已离线，无法取消托管。")
+	if player.auto_managed == enabled and not player.auto_managed_offline:
+		return true
+	_set_player_auto_management(action.actor_id, enabled, false)
+	add_log("%s%s托管。" % [player.display_name, "开启" if enabled else "取消"])
+	return true
+
+
+## 应用玩家托管状态并接入已有基础 AI；该函数只由已验证的手动开关或 LAN 掉线回调调用。
+func _set_player_auto_management(player_id: int, enabled: bool, offline: bool) -> void:
+	# 当前托管目标；断线回调和手动开关都必须先确认该稳定玩家仍属于本局。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return
+	if enabled:
+		player.auto_managed = true
+		player.auto_managed_offline = offline
+		ai_coordinator.register_basic_ai(player_id)
+	else:
+		player.auto_managed = false
+		player.auto_managed_offline = false
+		ai_coordinator.unregister_ai(player_id)
+	# 托管状态是可回放的有效玩家操作；断线接管同样递增序号，使远端快照可稳定覆盖旧界面。
+	state.action_sequence += 1
+	_emit_state()
+	if enabled:
+		_continue_auto_managed_player(player_id)
+	else:
+		_republish_manual_player_choice(player_id)
+
+
+## 让刚进入托管的玩家从当前选将、选择或出牌入口继续；不重建角色状态，也不直接修改事件栈。
+func _continue_auto_managed_player(player_id: int) -> void:
+	if state == null or state.game_over:
+		return
+	if state.current_phase == "character_selection":
+		_drive_ai_character_selection()
+		return
+	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
+		_schedule_ai_card_choice_response(int(_pending_card_choice.get("request_id", -1)), player_id)
+		return
+	# 同时无懈响应可能为多名玩家并行存在；只恢复当前托管玩家自己的请求。
+	for request_id_variant: Variant in _pending_negation_choices.keys():
+		# 当前待处理的无懈请求 ID；用于精确恢复该玩家的异步响应任务。
+		var request_id: int = int(request_id_variant)
+		# 当前无懈请求数据；缺失时为空字典，不会错误匹配有效玩家。
+		var choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
+		if int(choice_data.get("chooser_id", -1)) == player_id:
+			# 当前无懈回合上下文；轮次 ID 会使旧协程在新一轮开始后自动失效。
+			var response_context: Dictionary = choice_data.get("context", {}) as Dictionary
+			_run_simultaneous_negation_ai_after_delay(request_id, player_id, int(response_context.get("negation_round_id", -1)))
+	_ensure_ai_progress_after_resolution()
+
+
+## 把仍在等待该玩家的选择重新交给真人界面；取消手动托管后不需要重新创建规则请求。
+func _republish_manual_player_choice(player_id: int) -> void:
+	if state == null or state.game_over:
+		return
+	if state.current_phase == "character_selection" and character_selection != null:
+		character_selection_changed.emit(character_selection.to_dict(local_human_player_id))
+	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
+		# 当前兼容选择副本；本地 UI 与远端私有请求都只接收可序列化数据。
+		var choice_data: Dictionary = _pending_card_choice.duplicate(true)
+		card_choice_requested.emit(choice_data)
+		_replicate_choice_request_to_remote_player(choice_data)
+
+
+## 返回操作人是否被允许修改其托管状态；LAN 房主用真实发送 peer 复核，离线模式只允许本地座次。
+func _is_auto_management_change_authorized(player_id: int) -> bool:
+	if network_gateway != null and network_gateway.is_lan_host():
+		# 当前远端发送 peer；0 表示房主本机直接提交，正数远端 peer 已由网关校验 actor 映射。
+		var incoming_peer_id: int = network_gateway.get_current_incoming_peer_id()
+		if incoming_peer_id > NetworkGateway.SERVER_PEER_ID:
+			return network_gateway.get_peer_id_for_player(player_id) == incoming_peer_id
+		return player_id == local_human_player_id
+	return player_id == local_human_player_id
+
+
+## 返回玩家当前是否为托管状态；内部入口统一处理空状态与不存在玩家，避免调用点直接持有 PlayerState。
+func _is_player_auto_managed(player_id: int) -> bool:
+	if state == null:
+		return false
+	# 当前玩家状态；缺失稳定 ID 时按非托管处理，后续规则入口会给出自己的错误。
+	var player: PlayerState = state.get_player(player_id)
+	return player != null and player.auto_managed
+
+
+## 返回当前动作是否由控制器内部 AI 调度提交；该标记存于控制器内存而不写入网络 payload。
+func _is_internal_ai_submission(player_id: int) -> bool:
+	return int(_ai_submission_depth_by_player.get(player_id, 0)) > 0
+
+
+## 让 AI 通过标准动作入口提交，并在调用栈内短暂登记来源；托管权限不会暴露给 UI 或网络封包。
+func _submit_ai_action(action: PlayerAction) -> bool:
+	if action == null:
+		return false
+	# 当前玩家已有的 AI 提交嵌套深度；同一动作结算中再次触发 AI 时仍保持正确来源。
+	var previous_depth: int = int(_ai_submission_depth_by_player.get(action.actor_id, 0))
+	_ai_submission_depth_by_player[action.actor_id] = previous_depth + 1
+	# 当前标准动作结果；所有阶段、实体与选择校验仍由 submit_action 完成。
+	var accepted: bool = submit_action(action)
+	if previous_depth <= 0:
+		_ai_submission_depth_by_player.erase(action.actor_id)
+	else:
+		_ai_submission_depth_by_player[action.actor_id] = previous_depth
+	return accepted
 
 
 ## 返回当前玩家可执行的全部基础动作，供 AI 决策与 UI 辅助使用。
@@ -1233,11 +1367,11 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		ai_action.payload = {"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)), "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate(), "selected_target_ids":ai_response.target_ids.duplicate(), "selected_control_id":ai_response.control_id, "confirmed":ai_response.confirmed}
 		action_data = ai_action.to_dict()
-	if action_data.is_empty() or not submit_action(PlayerAction.from_dict(action_data)):
+	if action_data.is_empty() or not _submit_ai_action(PlayerAction.from_dict(action_data)):
 		# 同步规则测试也复用标准合法动作回退，固定牌组和响应转换字段不能退化为“前N项候选”。
 		var fallback_action_data: Dictionary = _build_ai_choice_fallback_action(_pending_card_choice)
 		if not fallback_action_data.is_empty():
-			submit_action(PlayerAction.from_dict(fallback_action_data))
+			_submit_ai_action(PlayerAction.from_dict(fallback_action_data))
 	return _resolved_card_choice_uids.duplicate()
 
 
@@ -1386,11 +1520,11 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		ai_action.payload = {"request_id":request_id, "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate(), "selected_target_ids":ai_response.target_ids.duplicate(), "selected_control_id":ai_response.control_id, "confirmed":ai_response.confirmed}
 		action_data = ai_action.to_dict()
-	if not action_data.is_empty() and submit_action(PlayerAction.from_dict(action_data)):
+	if not action_data.is_empty() and _submit_ai_action(PlayerAction.from_dict(action_data)):
 		return
 	# 规则回退动作；直接复用合法动作枚举，保证固定牌组、转化技能ID和多维数量约束不会在回退路径丢失。
 	var fallback_action_data: Dictionary = _build_ai_choice_fallback_action(_pending_card_choice)
-	if not fallback_action_data.is_empty() and submit_action(PlayerAction.from_dict(fallback_action_data)):
+	if not fallback_action_data.is_empty() and _submit_ai_action(PlayerAction.from_dict(fallback_action_data)):
 		return
 	_handle_failed_ai_choice_submission(request_id, chooser_id)
 
@@ -3049,7 +3183,7 @@ func _run_simultaneous_negation_ai_after_delay(request_id: int, responder_id: in
 	# 当前标准动作；即使放弃也携带同一请求 ID 进入权威校验。
 	var action: PlayerAction = PlayerAction.new("choose_cards", responder_id)
 	action.payload = {"request_id":request_id, "event_id":int(choice_data.get("runtime_event_id", -1)), "selected_card_uids":ai_response.card_ids.duplicate() if ai_response != null else []}
-	submit_action(action)
+	_submit_ai_action(action)
 
 
 ## 校验并提交一名玩家在同时无懈轮次中的响应；成功出牌后原子关闭同轮其他请求。
@@ -4803,7 +4937,7 @@ func _drive_ai_character_selection() -> void:
 			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
 			var action: PlayerAction = PlayerAction.new("select_character", player_id)
 			action.payload = {"character_id":candidates[0]}
-			submit_action(action)
+			_submit_ai_action(action)
 			made_progress = true
 		if not made_progress:
 			break
@@ -7267,7 +7401,7 @@ func _run_ai_after_delay(token: int) -> void:
 		return
 	_ai_actions_this_turn += 1
 	if _ai_actions_this_turn > max_ai_actions_per_turn:
-		submit_action(PlayerAction.new("end_play", player_id))
+		_submit_ai_action(PlayerAction.new("end_play", player_id))
 		return
 	# AI 可读取的权威完整快照；包含所有身份与手牌，但策略只能返回标准动作字典。
 	var full_snapshot: Dictionary = state.to_dict(player_id, true)
@@ -7276,7 +7410,7 @@ func _run_ai_after_delay(token: int) -> void:
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
 	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
 	# AI动作可能因延迟期间的状态变化被权威入口拒绝；失败后仍须回到统一续接出口，最终受每阶段动作上限约束。
-	if not submit_action(PlayerAction.from_dict(action_data)):
+	if not _submit_ai_action(PlayerAction.from_dict(action_data)):
 		_ensure_ai_progress_after_resolution()
 
 
@@ -7432,31 +7566,18 @@ func _replicate_choice_request_to_remote_player(choice_data: Dictionary) -> void
 		network_gateway.send_choice_request_to_peer(choice_data, peer_id)
 
 
-## 对局中远端玩家掉线后注册基础 AI 托管；当前选将、选择窗口或出牌阶段均从现有统一调度入口继续。
+## 对局中远端玩家掉线后标记离线托管并注册基础 AI；当前选将、选择窗口或出牌阶段均从现有统一调度入口继续。
 func _on_lan_match_peer_disconnected(player_id: int, display_name: String) -> void:
 	if network_gateway == null or not network_gateway.is_lan_host() or state == null or state.game_over or player_id < 0:
 		return
-	if ai_coordinator.is_ai_controlled(player_id):
+	# 当前断线玩家状态；已手动托管的玩家也必须切换为离线文案，并禁止后续取消托管。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
 		return
-	ai_coordinator.register_basic_ai(player_id)
+	if player.auto_managed and player.auto_managed_offline:
+		return
+	_set_player_auto_management(player_id, true, true)
 	add_log("%s已断开连接，由 AI 接管后续操作。" % display_name)
-	if state.current_phase == "character_selection":
-		_drive_ai_character_selection()
-	elif not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
-		_schedule_ai_card_choice_response(int(_pending_card_choice.get("request_id", -1)), player_id)
-	else:
-		# 同时无懈请求；只为掉线玩家自己的私有请求启动 AI 响应任务，其他真人继续并行等待。
-		for request_id_variant: Variant in _pending_negation_choices.keys():
-			# 当前待处理无懈请求 ID；用于精确恢复掉线玩家对应的并行响应协程。
-			var request_id: int = int(request_id_variant)
-			# 当前无懈选择数据；缺失时为空字典，不会误匹配任何有效玩家。
-			var choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
-			if int(choice_data.get("chooser_id", -1)) == player_id:
-				# 当前无懈响应上下文；提供轮次 ID，防止旧托管任务影响后续新轮次。
-				var response_context: Dictionary = choice_data.get("context", {}) as Dictionary
-				_run_simultaneous_negation_ai_after_delay(request_id, player_id, int(response_context.get("negation_round_id", -1)))
-		_ensure_ai_progress_after_resolution()
-	_emit_state()
 
 
 ## 客户端根据房主下发的完整合法动作集合生成普通卡牌预览；该结果只控制 UI，不能替代房主最终校验。
