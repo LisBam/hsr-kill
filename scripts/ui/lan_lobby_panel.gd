@@ -103,6 +103,7 @@ func open_panel(default_player_count: int, default_port: int) -> void:
 ## 在协调器确认房主或客户端进入大厅后隐藏连接入口；正式成员、座位与设置改由 OnlineLobbyPanel 渲染。
 func bind_lobby(lobby_snapshot: Dictionary, host_addresses: Array[String] = []) -> void:
 	_session_active = true
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	visible = false
 
 
@@ -122,12 +123,14 @@ func show_error(message: String) -> void:
 
 ## 对局正式开始后隐藏大厅；ENet 会话保持连接，后续退出由牌桌统一处理。
 func confirm_match_started() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	visible = false
 
 
 ## 会话结束后恢复连接入口；保留最后错误或断开原因，方便玩家修正地址后重试。
 func return_to_entry(message: String = "") -> void:
 	_session_active = false
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	visible = true
 	_show_entry_state()
 	if not message.is_empty():
@@ -216,6 +219,9 @@ func show_status(message: String, is_error: bool) -> void:
 ## 把键盘焦点放到连接入口主要操作；建房是默认动作，键盘仍可通过 Tab 访问加入与返回。
 func _focus_primary_control() -> void:
 	if not visible:
+		return
+	if OS.get_name() == "Android":
+		MobileKeyboardGuard.focus_non_text(_host_button)
 		return
 	_host_button.grab_focus()
 

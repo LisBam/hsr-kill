@@ -213,11 +213,13 @@ func _update_avatar_selection() -> void:
 func _save_and_close() -> void:
 	GameSettings.set_online_player_name(_player_name_input.text)
 	GameSettings.set_online_avatar_character_id(_selected_character_id)
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	close_requested.emit()
 
 
 ## 放弃本次临时编辑并返回主菜单；全局名称与形象配置保持打开面板前的值。
 func _cancel_and_close() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	close_requested.emit()
 
 
@@ -243,7 +245,7 @@ func _focus_primary_control() -> void:
 	if not visible:
 		return
 	if OS.get_name() == "Android":
-		_save_button.grab_focus()
+		MobileKeyboardGuard.focus_non_text(_save_button)
 		return
 	_player_name_input.grab_focus()
 
