@@ -125,6 +125,8 @@ func _run() -> void:
 		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
+	# 本地托管覆盖层；必须直属主场景，才能从手牌横向延伸到本地武将牌左侧。
+	var auto_managed_hand_overlay: PlayerAutoManagedHandOverlay = main_instance.get_node("%AutoManagedHandOverlay") as PlayerAutoManagedHandOverlay
 	# 手牌栏背景样式；当前只保留透明滚动容器，不绘制整块边框或底色。
 	var hand_panel_style: StyleBox = (hand_panel as PanelContainer).get_theme_stylebox("panel")
 	# 中央交互面板；当前不是本地玩家行动时必须隐藏，且面板样式为空背景。
@@ -196,6 +198,11 @@ func _run() -> void:
 		return
 	# 本地玩家座位容器；右下角区域必须使用右下锚点完整留在客户区内，并承载牌面下方的独立座次标签。
 	var local_player_seat_slot: Control = main_instance.get_node("LocalPlayerSeatSlot") as Control
+	# 托管覆盖层期望宽度；从手牌左侧开始，到本地武将牌左侧保留8像素安全间距。
+	var expected_auto_managed_overlay_width: float = local_player_seat_slot.position.x - hand_panel.position.x - 8.0
+	if auto_managed_hand_overlay == null or auto_managed_hand_overlay.get_parent() != main_instance or not is_equal_approx(auto_managed_hand_overlay.position.x, hand_panel.position.x) or not is_equal_approx(auto_managed_hand_overlay.position.y, hand_panel.position.y) or not is_equal_approx(auto_managed_hand_overlay.size.x, expected_auto_managed_overlay_width) or not is_equal_approx(auto_managed_hand_overlay.size.y, hand_panel.size.y) or auto_managed_hand_overlay.z_index >= skill_bar.z_index:
+		_fail("auto_managed_overlay_layout=%s/%s/%d/%d" % [auto_managed_hand_overlay.get_rect() if auto_managed_hand_overlay != null else Rect2(), hand_panel.get_rect(), auto_managed_hand_overlay.z_index if auto_managed_hand_overlay != null else -1, skill_bar.z_index])
+		return
 	for checked_control: Control in [menu_button, equipment_panel, hand_panel, skill_bar, local_player_seat_slot]:
 		# 当前控件的屏幕矩形；`get_screen_transform()` 已包含画布拉伸和锚点换算。
 		var screen_rect: Rect2 = _screen_rect(checked_control)

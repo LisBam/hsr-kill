@@ -8,6 +8,9 @@ const DOT_ANIMATION_WAIT_SECONDS: float = 0.52
 ## 测试使用的权威对局控制器；子节点结构与正式场景一致，避免绕过网络和 AI 依赖。
 var _controller: MatchController
 
+## 覆盖层本次测试收到的取消托管意图数量；默认0，用于验证文字区域只在左键按下时转发一次信号。
+var _overlay_cancel_request_count: int = 0
+
 
 ## 延迟执行断言，确保自动加载数据库和组件场景已完成初始化。
 func _ready() -> void:
@@ -83,7 +86,7 @@ func _test_authoritative_auto_management() -> bool:
 	return true
 
 
-## 验证手牌滤镜会拦截输入并循环省略号，且武将牌底部状态同时显示“已离线，托管中”。
+## 验证手牌滤镜会拦截输入、循环省略号并转发文字点击取消意图，且武将牌底部状态同时显示“已离线，托管中”。
 func _test_auto_management_ui_components() -> bool:
 	# 手牌托管覆盖场景；组件不依赖 MatchController，可作为手牌栏子节点独立复用。
 	var overlay_scene: PackedScene = load("res://scenes/components/player_auto_managed_hand_overlay.tscn") as PackedScene
@@ -93,10 +96,21 @@ func _test_auto_management_ui_components() -> bool:
 	var overlay: PlayerAutoManagedHandOverlay = overlay_scene.instantiate() as PlayerAutoManagedHandOverlay
 	add_child(overlay)
 	await get_tree().process_frame
+	_overlay_cancel_request_count = 0
+	overlay.cancel_requested.connect(_on_overlay_cancel_requested)
 	overlay.configure(true)
+	# 托管文字标签；使用独立输入节点接收取消意图，滤镜其余区域仍只负责阻断输入。
+	var status_label: Label = overlay.get_node("StatusLabel") as Label
 	var first_status: String = (overlay.get_node("StatusLabel") as Label).text
-	if not overlay.visible or overlay.mouse_filter != Control.MOUSE_FILTER_STOP or first_status != "托管中.":
+	if not overlay.visible or overlay.mouse_filter != Control.MOUSE_FILTER_STOP or status_label.mouse_filter != Control.MOUSE_FILTER_STOP or first_status != "托管中.":
 		return _fail("overlay_enable visible=%s filter=%d text=%s" % [overlay.visible, overlay.mouse_filter, first_status])
+	# 托管文字左键事件；实际 GUI 输入会先被标签消费，再由组件发出取消意图。
+	var cancel_event: InputEventMouseButton = InputEventMouseButton.new()
+	cancel_event.button_index = MOUSE_BUTTON_LEFT
+	cancel_event.pressed = true
+	status_label.gui_input.emit(cancel_event)
+	if _overlay_cancel_request_count != 1:
+		return _fail("overlay_cancel_request=%d" % _overlay_cancel_request_count)
 	await get_tree().create_timer(DOT_ANIMATION_WAIT_SECONDS).timeout
 	var animated_status: String = (overlay.get_node("StatusLabel") as Label).text
 	if animated_status == first_status or not animated_status.begins_with("托管中"):
@@ -137,6 +151,11 @@ func _test_auto_management_ui_components() -> bool:
 	overlay.queue_free()
 	player_view.queue_free()
 	return true
+
+
+## 记录覆盖层发出的取消托管意图；权威动作是否接受由桌面和控制器在正式流程中复核。
+func _on_overlay_cancel_requested() -> void:
+	_overlay_cancel_request_count += 1
 
 
 ## 输出稳定失败标识并立即结束测试；失败后不继续执行后续异步断言。

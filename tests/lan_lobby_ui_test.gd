@@ -99,13 +99,15 @@ func _ready() -> void:
 	var host_artwork: TextureRect = host_avatar.get_node("%OnlineLobbyAvatarArtwork") as TextureRect
 	# 插画圆角遮罩材质；边框本身不会裁切纹理四角，必须由该材质写入透明 Alpha。
 	var host_artwork_material: ShaderMaterial = host_artwork.material as ShaderMaterial
+	# 插画圆角遮罩源码；遮罩只能裁切 Alpha，不能乘 CanvasItem 颜色输入把角色形象调制为黑色。
+	var host_artwork_shader_code: String = host_artwork_material.shader.code if host_artwork_material != null and host_artwork_material.shader != null else ""
 	# 房主形象边框；占用位置必须复用空位的圆角边框规格包裹插画，而不是裸露纹理。
 	var host_avatar_frame: Panel = host_avatar.get_node("%OnlineLobbyAvatarFrame") as Panel
 	# 形象边框样式；只允许绘制透明中心与描边，黑色阴影会遮罩联机形象插画。
 	var host_avatar_frame_style: StyleBoxFlat = host_avatar_frame.get_theme_stylebox("panel") as StyleBoxFlat
 	# 房主插画矩形；尺寸与武将牌一致，纵坐标必须大于名称标签底边。
 	var host_avatar_rect: Rect2 = host_avatar.get_avatar_rect()
-	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_artwork_material == null or host_artwork_material.shader == null or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
+	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_artwork_material == null or host_artwork_material.shader == null or host_artwork_shader_code.contains("texture(TEXTURE, UV) * COLOR") or not host_artwork_shader_code.contains("texture_color.a * mask_alpha") or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
 		_fail("host_avatar_geometry rect=%s name_rect=%s" % [host_avatar_rect, host_name_label.get_rect()])
 		return
 	# 超长房主地址；模拟多网卡地址列表，地址标签必须在大厅内容面内自动向左调整且不覆盖标题真实文字宽度。

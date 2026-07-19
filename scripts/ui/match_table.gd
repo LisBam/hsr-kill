@@ -41,6 +41,12 @@ const SKILL_ACTIVATION_Z_INDEX: int = 31
 ## 五谷丰登公开选牌期间本地手牌的绘制层级；默认46，比五谷选择面板的45层高1，保证悬停放大的手牌不会被牌位遮挡。
 const HARVEST_HAND_LAYER_Z_INDEX: int = 46
 
+## 托管手牌覆盖层的默认绘制层级；默认5保证滤镜位于普通手牌之上，并保留本地技能按钮与武将牌的更高层级。
+const AUTO_MANAGED_HAND_OVERLAY_Z_INDEX: int = 5
+
+## 本地技能栏相对托管覆盖层的最小绘制层级；默认6让托管滤镜横向延伸后仍不会挡住任何技能按钮。
+const LOCAL_SKILL_BAR_Z_INDEX: int = 6
+
 ## 右侧回合结束按钮的固定最小尺寸；112×36像素弱于中央确认命令但仍保持稳定命中区域，运行时无需修改。
 const END_PLAY_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(112.0, 36.0)
 
@@ -399,6 +405,9 @@ func _ready() -> void:
 	_create_information_box()
 	_create_local_player_card()
 	_create_identity_mark_menu()
+	resized.connect(_queue_auto_managed_hand_overlay_layout)
+	hand_panel.resized.connect(_queue_auto_managed_hand_overlay_layout)
+	local_player_seat_slot.item_rect_changed.connect(_queue_auto_managed_hand_overlay_layout)
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
@@ -436,6 +445,7 @@ func _ready() -> void:
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	auto_manage_button.pressed.connect(_on_auto_manage_pressed)
+	auto_managed_hand_overlay.cancel_requested.connect(_on_auto_manage_pressed)
 	# 已保存的下一局人数；主菜单与局内菜单共用同一全局配置，首次进入场景时同步覆盖检查器默认值。
 	var saved_next_match_player_count: int = GameSettings.next_match_player_count
 	match_controller.default_player_count = saved_next_match_player_count
@@ -460,6 +470,7 @@ func _ready() -> void:
 	local_player_card.information_dismissed.connect(_on_information_dismissed.bind(local_player_card))
 	match_menu.refresh_card_name_text()
 	_apply_ui_style()
+	_layout_auto_managed_hand_overlay()
 
 
 ## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
@@ -1209,6 +1220,7 @@ func _layout_local_skill_area(skill_count: int) -> void:
 	if safe_skill_count == 0:
 		skill_bar.visible = false
 		hand_panel.offset_right = LOCAL_PLAYER_SEAT_LEFT_OFFSET - HAND_SKILL_GAP
+		_layout_auto_managed_hand_overlay()
 		return
 	# 当前首个技能按钮；动态按钮共用相同尺寸，缺失时回退组件默认62×44像素。
 	var first_skill_button: SkillButtonView
@@ -1240,6 +1252,32 @@ func _layout_local_skill_area(skill_count: int) -> void:
 	# 手牌栏右边界紧贴当前最左技能列；一个技能时自然增长到第一按钮旁，两个及以上缩短到第二按钮旁。
 	hand_panel.offset_right = skill_bar.offset_left - HAND_SKILL_GAP
 	skill_grid.queue_sort()
+	_layout_auto_managed_hand_overlay()
+
+
+## 延迟到当前控件布局完成后重新计算托管滤镜；窗口缩放和本地座位锚点变化会在同一帧触发，不能读取旧坐标。
+func _queue_auto_managed_hand_overlay_layout() -> void:
+	call_deferred("_layout_auto_managed_hand_overlay")
+
+
+## 让托管滤镜从手牌左边界延伸到本地武将牌左侧，并始终把技能栏置于滤镜上方。
+func _layout_auto_managed_hand_overlay() -> void:
+	if auto_managed_hand_overlay == null or not is_instance_valid(auto_managed_hand_overlay) or hand_panel == null or not is_instance_valid(hand_panel) or local_player_seat_slot == null or not is_instance_valid(local_player_seat_slot):
+		return
+	# 覆盖层采用主场景局部坐标；手牌和本地座位均为主场景直属节点，因此无需在全局与局部坐标之间转换。
+	var overlay_position: Vector2 = hand_panel.position
+	# 覆盖层右边界；与本地武将牌之间保留8像素空隙，技能按钮在覆盖层上方继续可见且可操作。
+	var overlay_right_edge: float = local_player_seat_slot.position.x - HAND_SKILL_GAP
+	# 覆盖层宽度；最小为0以防场景尚未完成首帧锚点布局时生成负尺寸。
+	var overlay_width: float = maxf(overlay_right_edge - overlay_position.x, 0.0)
+	# 覆盖层层级；五谷公开展示抬高手牌后同步越过手牌，默认仍维持5层。
+	var overlay_z_index: int = maxi(hand_panel.z_index + 1, AUTO_MANAGED_HAND_OVERLAY_Z_INDEX)
+	auto_managed_hand_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	auto_managed_hand_overlay.position = overlay_position
+	auto_managed_hand_overlay.size = Vector2(overlay_width, hand_panel.size.y)
+	auto_managed_hand_overlay.z_index = overlay_z_index
+	# 技能栏层级；始终高于托管滤镜，点击技能按钮不会被横向延伸的遮罩截获。
+	skill_bar.z_index = maxi(overlay_z_index + 1, LOCAL_SKILL_BAR_Z_INDEX)
 
 
 ## 响应技能按钮请求；不可发动技能静默忽略，可主动发动技能通过统一 PlayerAction 进入规则核心。
@@ -2310,6 +2348,7 @@ func _refresh_hand_layer_for_public_display() -> void:
 	# 当前公共展示类型；只有五谷丰登需要让悬停放大的手牌越过公开牌位。
 	var public_choice_kind: String = str(_public_card_choice_display.get("kind", ""))
 	hand_panel.z_index = HARVEST_HAND_LAYER_Z_INDEX if public_choice_kind == "harvest" else 0
+	_layout_auto_managed_hand_overlay()
 
 
 ## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。
