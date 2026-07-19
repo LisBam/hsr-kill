@@ -40,8 +40,14 @@ func _validate_project_settings() -> bool:
 		return _fail("stretch_mode")
 	if str(ProjectSettings.get_setting("display/window/stretch/aspect", "")) != "keep":
 		return _fail("stretch_aspect")
-	if int(ProjectSettings.get_setting("display/window/handheld/orientation", -1)) != 4:
+	if int(ProjectSettings.get_setting("display/window/handheld/orientation", -1)) != 0:
 		return _fail("handheld_orientation")
+	if int(ProjectSettings.get_setting("display/window/vsync/vsync_mode", -1)) != 1:
+		return _fail("vsync_mode")
+	if str(ProjectSettings.get_setting("rendering/renderer/rendering_method.mobile", "")) != "mobile":
+		return _fail("mobile_renderer")
+	if str(ProjectSettings.get_setting("rendering/rendering_device/driver.android", "")) != "vulkan":
+		return _fail("android_rendering_driver")
 	if bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", true)):
 		return _fail("native_touch_path")
 	if bool(ProjectSettings.get_setting("application/config/quit_on_go_back", true)):
@@ -82,9 +88,11 @@ func _validate_main_scene() -> bool:
 	await get_tree().process_frame
 	# 安卓返回键组件；必须独立挂载并保持默认标准取消动作。
 	var android_back_adapter: AndroidBackAdapter = main_instance.get_node("%AndroidBackAdapter") as AndroidBackAdapter
-	if android_back_adapter == null or android_back_adapter.cancel_action_name != &"ui_cancel":
+	# 安卓显示稳定组件；默认60帧与垂直同步用于避免高刷新率设备交换链节奏抖动。
+	var android_display_stability: AndroidDisplayStability = main_instance.get_node("%AndroidDisplayStability") as AndroidDisplayStability
+	if android_back_adapter == null or android_back_adapter.cancel_action_name != &"ui_cancel" or android_display_stability == null or android_display_stability.target_fps != 60 or not android_display_stability.force_vsync:
 		main_instance.queue_free()
-		return _fail("android_back_adapter")
+		return _fail("android_platform_components")
 	main_instance.queue_free()
 	await get_tree().process_frame
 	return true

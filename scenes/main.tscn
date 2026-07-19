@@ -25,7 +25,8 @@
 [ext_resource type="PackedScene" path="res://scenes/components/online_settings_panel.tscn" id="25_online_settings"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_lobby_panel.tscn" id="26_online_lobby"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_auto_managed_hand_overlay.tscn" id="27_auto_managed_overlay"]
-[ext_resource type="Script" path="res://scripts/platform/android_back_adapter.gd" id="28_android_back"]
+[ext_resource type="Script" uid="uid://dmfb5tfoschl5" path="res://scripts/platform/android_back_adapter.gd" id="28_android_back"]
+[ext_resource type="Script" uid="uid://cnyink6clckec" path="res://scripts/platform/android_display_stability.gd" id="29_android_display"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -98,6 +99,10 @@ script = ExtResource("1_ui")
 [node name="AndroidBackAdapter" type="Node" parent="." unique_id=1095651785]
 unique_name_in_owner = true
 script = ExtResource("28_android_back")
+
+[node name="AndroidDisplayStability" type="Node" parent="." unique_id=562005727]
+unique_name_in_owner = true
+script = ExtResource("29_android_display")
 
 [node name="MatchController" type="Node" parent="." unique_id=1222667046]
 script = ExtResource("2_match")
