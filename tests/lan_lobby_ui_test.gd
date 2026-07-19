@@ -99,9 +99,11 @@ func _ready() -> void:
 	var host_artwork: TextureRect = host_avatar.get_node("%OnlineLobbyAvatarArtwork") as TextureRect
 	# 房主形象边框；占用位置必须复用空位的圆角边框规格包裹插画，而不是裸露纹理。
 	var host_avatar_frame: Panel = host_avatar.get_node("%OnlineLobbyAvatarFrame") as Panel
+	# 形象边框样式；只允许绘制透明中心与描边，黑色阴影会遮罩联机形象插画。
+	var host_avatar_frame_style: StyleBoxFlat = host_avatar_frame.get_theme_stylebox("panel") as StyleBoxFlat
 	# 房主插画矩形；尺寸与武将牌一致，纵坐标必须大于名称标签底边。
 	var host_avatar_rect: Rect2 = host_avatar.get_avatar_rect()
-	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_avatar_frame == null or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
+	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
 		_fail("host_avatar_geometry rect=%s name_rect=%s" % [host_avatar_rect, host_name_label.get_rect()])
 		return
 	# 三位置单行中心；第一个与最后一个位置围绕座位区域中心对称，三者纵坐标相同。
@@ -165,6 +167,13 @@ func _ready() -> void:
 	var remote_avatar: OnlineLobbyAvatar = _get_seat_views(online_lobby_panel)[1]
 	# 踢出按钮；房主本人、空位和普通客户端不应看到该按钮。
 	var kick_button: Button = remote_avatar.get_node("%OnlineLobbyKickButton") as Button
+	# 踢出按钮常态样式；背景必须比主题危险色更深，避免缩小后的管理入口缺少危险语义。
+	var kick_button_style: StyleBoxFlat = kick_button.get_theme_stylebox("normal") as StyleBoxFlat
+	# 期望踢出按钮宽度；由形象宽度和组件导出的左右内缩共同决定。
+	var expected_kick_button_width: float = maxf(remote_avatar.avatar_size.x - remote_avatar.kick_button_horizontal_inset * 2.0, 24.0)
+	if kick_button_style == null or not kick_button.size.is_equal_approx(Vector2(expected_kick_button_width, remote_avatar.kick_button_height)) or not kick_button_style.bg_color.is_equal_approx(BattleUIStyle.get_color("danger").darkened(remote_avatar.kick_button_darken_amount)):
+		_fail("kick_button_style")
+		return
 	remote_avatar.mouse_entered.emit()
 	if not kick_button.visible or kick_button.text != "踢出":
 		_fail("kick_hover_show")
@@ -201,6 +210,10 @@ func _ready() -> void:
 	# 关闭房间后立即使用同一端口再次建房；旧 ENet peer 必须已经从 SceneMultiplayer 和底层套接字完全释放。
 	lan_button.pressed.emit()
 	await get_tree().process_frame
+	# 重新打开后的创建按钮；离开流程必须清除旧会话标记并解除上次建房期间设置的禁用状态。
+	if host_button.disabled:
+		_fail("recreate_room_host_button_disabled")
+		return
 	port_input.value = test_port
 	port_input.get_line_edit().text = str(test_port)
 	host_button.pressed.emit()

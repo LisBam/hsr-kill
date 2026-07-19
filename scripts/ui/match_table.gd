@@ -733,6 +733,8 @@ func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count:
 func _on_lan_leave_requested() -> void:
 	match_controller.network_gateway.leave_lan("")
 	match_controller.clear_remote_network_state()
+	# 连接入口会话状态；先复位已禁用的建房/加入按钮，再由主菜单隐藏入口，确保下次打开可以立即重新创建房间。
+	lan_lobby_panel.return_to_entry()
 	main_menu.close_lan_panel()
 
 
