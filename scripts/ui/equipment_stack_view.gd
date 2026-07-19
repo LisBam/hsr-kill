@@ -58,8 +58,8 @@ const EQUIPMENT_SLOT_NAMES: Dictionary = {
 const EQUIPMENT_SLOT_ICONS: Dictionary = {
 	"weapon":"⚔",
 	"armor":"▣",
-	"offensive_mount":"+",
-	"defensive_mount":"-",
+	"offensive_mount":"-",
+	"defensive_mount":"+",
 	"treasure":"▰",
 }
 

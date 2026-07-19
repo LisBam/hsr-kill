@@ -116,6 +116,7 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 		# 目标防具定义；具体无效条件由防具文件实现。
 		var armor_definition: CardDefinition = host.get_equipment_definition(target.player_id, "armor")
 		if armor_definition != null and armor_definition.blocks_slash(card, str(context.get("nature", "normal"))):
+			host.record_equipment_activation(target.player_id, armor_definition.get_id())
 			host.add_log("%s的防具令此【杀】无效。" % target.display_name)
 			host.emit_rule_timing("shaCancelled", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
 			return

@@ -309,6 +309,10 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	var trick_ai: Dictionary = get_card_ai_profile(trick_definition)
 	# 锦囊对目标的基础结果；正值有利，负值有害。
 	var target_result: float = float(trick_ai.get("target_result", 1.0 if bool(trick_definition.get("ai_beneficial", false)) else -1.0))
+	# 当前锦囊源码；允许状态型锦囊按目标的实时状态反转收益方向，避免无懈策略只读取静态配置。
+	var trick_definition_instance: CardDefinition = GameDatabase.get_card_definition(trick_id)
+	if trick_definition_instance != null:
+		target_result = trick_definition_instance.get_identity_observation_target_result(authoritative_snapshot, int(context.get("source_id", -1)), target_id, target_result)
 	# 响应者对目标的态度；隐藏身份使用同一身份模型而不是直接按真实阵营二分。
 	var attitude: float = get_attitude(authoritative_snapshot, responder_id, target_id)
 	# 当前是否已被奇数张无懈抵消；下一张无懈会翻转该状态。

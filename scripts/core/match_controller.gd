@@ -26,6 +26,9 @@ signal card_animation_ownership_reset_requested(card_uid: int)
 ## 技能实际发动表现信号；桌面根据玩家、技能名和已确认的可序列化上下文显示提示与目标线，不读取或修改技能运行时。
 signal skill_activated(player_id: int, skill_name: String, context: Dictionary)
 
+## 防具实际生效表现信号；桌面复用武将牌中央提示显示防具名，不读取或修改装备实体与规则状态。
+signal equipment_activated(player_id: int, equipment_name: String, context: Dictionary)
+
 ## 牌区转移数据中标识摸牌表现批次的私有键；只存在于瞬时信号副本，绝不写入 CardInstance、存档或回放状态。
 const DRAW_PRESENTATION_BATCH_ID_KEY: String = "_draw_presentation_batch_id"
 
@@ -2159,7 +2162,11 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		# 目标防具定义；具体伤害压缩或属性增伤由防具卡牌源码提供。
 		var target_armor_definition: CardDefinition = get_equipment_definition(target_id, "armor")
 		if target_armor_definition != null:
+			# 防具修正前的伤害；仅数值确实变化时才表现为本次防具生效，避免普通伤害重复提示。
+			var amount_before_armor: int = final_amount
 			final_amount = target_armor_definition.modify_incoming_damage(self, target, equipment_damage_context, final_amount)
+			if final_amount != amount_before_armor:
+				record_equipment_activation(target_id, target_armor_definition.get_id())
 	# 第四及最终伤害修改窗口；其结果直接进入旧 damage_before 兼容事件和实际扣减。
 	var damage_begin_four_event: RuleEvent = _emit_rule_timing("damageBegin4", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}, damage_event_id)
 	if damage_begin_four_event != null and (damage_begin_four_event.cancelled or damage_begin_four_event.neutralized):
@@ -4518,6 +4525,25 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	# 技能表现上下文副本；目标线等客户端表现只读取已经确认的稳定目标字段，不能持有或改写规则历史原字典。
 	var presentation_context: Dictionary = context.duplicate(true)
 	skill_activated.emit(player_id, skill_name, presentation_context)
+
+
+## 记录一件防具已经实际生效的表现事件；该入口只负责武将牌名称提示，不写入技能历史、不增加日志或修改装备状态。
+func record_equipment_activation(player_id: int, equipment_definition_id: String, context: Dictionary = {}) -> void:
+	if state == null or state.game_over or equipment_definition_id.is_empty():
+		return
+	# 防具持有者；死亡、离场或不存在的角色不产生过期界面提示。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return
+	# 防具静态定义；仅防具槽类型允许进入本表现入口，避免其他装备误用同一提示。
+	var equipment_metadata: Dictionary = GameDatabase.get_card(equipment_definition_id)
+	if str(equipment_metadata.get("subtype", "")) != "armor":
+		return
+	# 当前名称模式下的防具名；缺失配置时回退稳定 ID，保证界面不会因内容异常空白。
+	var equipment_name: String = GameSettings.resolve_card_name(equipment_metadata) if not equipment_metadata.is_empty() else equipment_definition_id
+	# 只读表现上下文；调用者可补充判定或伤害来源信息，但不可借此改写权威装备或历史。
+	var presentation_context: Dictionary = context.duplicate(true)
+	equipment_activated.emit(player_id, equipment_name, presentation_context)
 
 
 ## 推导一次主动技能提交所属入口；显式 active_entries 优先，其次 active_entry，最后依据当前阶段回退 phaseUse。

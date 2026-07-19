@@ -1,13 +1,10 @@
 class_name PlayerTargetView
 extends Node2D
 
-## 可复用的角色状态与目标选择组件。组件渲染公开信息、反馈合法性，并接收卡牌拖放，不读取规则核心。
+## 可复用的角色状态与目标选择组件。组件渲染公开信息、反馈合法性并转发点击，不读取规则核心。
 
 ## 武将牌被点击时发出的信号；桌面据此更新目标选择，不直接提交规则动作。
 signal pressed
-
-## 卡牌拖放到角色后的请求信号；桌面统一更新选牌与目标顺序。
-signal card_dropped(card_uid: int, player_id: int)
 
 ## 未知身份徽记被点击时发出的信号；桌面只保存本地标注，不把标注写回规则快照。
 signal identity_pressed(player_id: int)
@@ -183,7 +180,7 @@ var _hovered_equipment_slot: String = ""
 ## 牌背覆盖层；默认隐藏，显示时覆盖武将插画、状态与公开区域，但保留输入区域可用。
 @onready var _card_back: Panel = get_node("牌背") as Panel
 
-## 独立输入区域；覆盖整张武将牌并负责点击与卡牌拖放协议。
+## 独立输入区域；覆盖整张武将牌并负责点击、详情与悬停协议。
 @onready var _input_area: PlayerTargetInputArea = $InputArea
 
 ## 武将牌上部的渐变黑色阴影；只在正式对局悬停时显示，不遮挡身份、体力或点击区域。
@@ -205,10 +202,9 @@ func _ready() -> void:
 	_input_area.activated.connect(_on_input_activated)
 	_input_area.details_requested.connect(_on_input_details_requested)
 	_input_area.pointer_moved.connect(_on_input_pointer_moved)
-	_input_area.card_dropped.connect(_on_input_card_dropped)
 	_input_area.mouse_entered.connect(_on_input_mouse_entered)
 	_input_area.mouse_exited.connect(_on_input_mouse_exited)
-	_input_area.configure(is_interactable, is_legal_target)
+	_input_area.configure(is_interactable)
 	_refresh_artwork()
 	_refresh_decade_overlay()
 	_refresh_visual_state()
@@ -251,7 +247,7 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(is_interactable, is_legal_target)
+		_input_area.configure(is_interactable)
 	_refresh_artwork()
 	_refresh_visual_state()
 
@@ -273,7 +269,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(is_interactable, is_legal_target)
+		_input_area.configure(is_interactable)
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
@@ -334,7 +330,7 @@ func set_target_state(legal_target: bool, selected_target: bool) -> void:
 	is_legal_target = legal_target
 	is_target_selected = selected_target
 	if is_node_ready():
-		_input_area.configure(is_interactable, is_legal_target)
+		_input_area.configure(is_interactable)
 	_refresh_visual_state()
 
 
@@ -447,11 +443,6 @@ func _on_input_mouse_exited() -> void:
 	# 与鼠标进入保持对称；正式对局不触发候选牌缩放恢复，避免任何外部监听器改写武将牌尺寸。
 	if not _match_overlays_visible:
 		hover_changed.emit(false)
-
-
-## 转发独立输入区域的合法卡牌拖放结果，并补充当前稳定玩家 ID。
-func _on_input_card_dropped(card_uid: int) -> void:
-	card_dropped.emit(card_uid, player_id)
 
 
 ## 根据默认、合法、选中与禁用状态刷新角色卡样式。

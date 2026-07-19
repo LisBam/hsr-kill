@@ -50,6 +50,7 @@ func consume_equipment_response(match_host: Object, player_id: int, equipment_ui
 	var equipment_card: CardInstance = match_host.get_equipment_card(player_id, "armor")
 	if equipment_card == null or equipment_card.definition_id != get_id() or equipment_card.uid != equipment_uid:
 		return null
+	match_host.record_equipment_activation(player_id, get_id())
 	# 八卦阵判定牌；只有红色结果视为成功响应【闪】。
 	var judgment_card: CardInstance = match_host.perform_judgment(player_id, "八卦阵")
 	if judgment_card == null or judgment_card.get_color() != "red":

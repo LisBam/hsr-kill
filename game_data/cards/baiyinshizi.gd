@@ -45,4 +45,5 @@ func modify_incoming_damage(match_host: Object, owner: PlayerState, context: Dic
 ## 白银狮子离开装备区后，若持有者已受伤且仍存活则回复1点体力。
 func on_leave_equipment(match_host: Object, owner: PlayerState, trigger_loss_effects: bool) -> void:
 	if trigger_loss_effects and owner.alive and owner.hp < owner.max_hp:
+		match_host.record_equipment_activation(owner.player_id, get_id())
 		match_host.recover(owner.player_id, owner.player_id, 1, "baiyin")
