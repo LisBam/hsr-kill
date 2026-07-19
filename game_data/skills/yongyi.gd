@@ -8,8 +8,14 @@ const SHIELD_GAIN_AMOUNT: int = 1
 ## 获得额外出牌阶段需要失去的护盾数；默认1点，不会触发失去体力或受到伤害。
 const SHIELD_PLAY_PHASE_COST: int = 1
 
+## 第二段确认支付护盾后固定摸取的牌数；默认1张，摸牌须在登记额外出牌阶段前完成。
+const EXTRA_PLAY_DRAW_COUNT: int = 1
+
 ## AI对1点护盾的防御资源估值；两个发动分支都以此作为收益或机会成本基准。
 const AI_SHIELD_VALUE: float = 2.5
+
+## AI对第二段固定摸取1张未知牌的预期收益；只用于确认决策，不改变实际摸牌数量。
+const AI_EXTRA_PLAY_DRAW_VALUE: float = 2.0
 
 ## AI对弃牌阶段弃置牌面价值的折算权重；不修改实际弃牌数量。
 const AI_DISCARD_COST_WEIGHT: float = 0.55
@@ -28,7 +34,7 @@ func _init() -> void:
 		"name": "永屹",
 		"trigger": "damageAfter/phaseDiscardBegin",
 		"ui_enabled": false,
-		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，若你有护盾，你可以失去1点护盾并进行一个额外的出牌阶段。",
+		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，若你有护盾，你可以失去1点护盾并摸一张牌，然后进行一个额外的出牌阶段。",
 	})
 
 
@@ -57,9 +63,7 @@ func _on_discard_phase_begin(_event: RuleEvent) -> void:
 		return
 	# AI快照所需的实时可用牌估计；这些字段只影响确认决策，提交后仍由权威阶段端口复核。
 	var play_estimate: Dictionary = _estimate_extra_play_phase()
-	if int(play_estimate.get("usable_card_count", 0)) <= 0:
-		return
-	request_card_selection("永屹", "是否失去1点护盾并进行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"yongyi_play_phase_confirm", "usable_card_count":int(play_estimate.get("usable_card_count", 0)), "enemy_slash_available":bool(play_estimate.get("enemy_slash_available", false)), "ai_allow_confirm":true})
+	request_card_selection("永屹", "是否失去1点护盾，摸1张牌并进行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"yongyi_play_phase_confirm", "usable_card_count":int(play_estimate.get("usable_card_count", 0)), "enemy_slash_available":bool(play_estimate.get("enemy_slash_available", false)), "ai_allow_confirm":true})
 
 
 ## 恢复永屹的伤害后确认或弃牌阶段支付确认；取消不产生任何资源变化。
@@ -79,14 +83,12 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if choice_kind == "yongyi_play_phase_confirm":
 		if not response.confirmed or not bool(host.call("can_add_play_phase", owner_player_id)):
 			return true
-		# 确认期间手牌可能因其他时机离开；支付护盾前重新确认额外出牌阶段仍至少有一张可用牌。
-		var play_estimate: Dictionary = _estimate_extra_play_phase()
-		if int(play_estimate.get("usable_card_count", 0)) <= 0:
-			return true
 		if get_owner_skill_player().loseShield(SHIELD_PLAY_PHASE_COST, get_owner_skill_player()) < SHIELD_PLAY_PHASE_COST:
 			return true
+		# 第二段固定资源收益；护盾支付成功后立即摸牌，使新增手牌可用于随后登记的额外出牌阶段。
+		host.draw(owner_player_id, EXTRA_PLAY_DRAW_COUNT)
 		if get_owner_skill_player().addPlayPhase():
-			announce_activation({"branch":"extra_play"})
+			announce_activation({"branch":"extra_play", "draw_count":EXTRA_PLAY_DRAW_COUNT})
 		return true
 	return false
 
@@ -159,8 +161,8 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 			discard_cost += hand_values[index] * AI_DISCARD_COST_WEIGHT
 		return AI_SHIELD_VALUE - discard_cost
 	if choice_kind == "yongyi_play_phase_confirm":
-		# 额外出牌阶段收益；可命中敌方的【杀】使用显式攻击分，其余可用牌按数量提供资源分。
-		var play_value: float = float(int(context.get("usable_card_count", 0))) * AI_USABLE_CARD_VALUE
+		# 额外出牌阶段收益；固定摸1张未知牌提供基础收益，可命中敌方的【杀】使用显式攻击分，其余可用牌按数量提供资源分。
+		var play_value: float = AI_EXTRA_PLAY_DRAW_VALUE + float(int(context.get("usable_card_count", 0))) * AI_USABLE_CARD_VALUE
 		if bool(context.get("enemy_slash_available", false)):
 			play_value += AI_ENEMY_SLASH_VALUE
 		return play_value - AI_SHIELD_VALUE
