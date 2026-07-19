@@ -429,8 +429,11 @@ func _ready() -> void:
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
-	match_menu.set_next_player_count(match_controller.default_player_count)
-	main_menu.set_next_player_count(match_controller.default_player_count)
+	# 已保存的下一局人数；主菜单与局内菜单共用同一全局配置，首次进入场景时同步覆盖检查器默认值。
+	var saved_next_match_player_count: int = GameSettings.next_match_player_count
+	match_controller.default_player_count = saved_next_match_player_count
+	match_menu.set_next_player_count(saved_next_match_player_count)
+	main_menu.set_next_player_count(saved_next_match_player_count)
 	main_menu.set_lan_default_port(match_controller.network_gateway.default_lan_port)
 	character_selection_panel.character_selected.connect(_on_character_selected)
 	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))

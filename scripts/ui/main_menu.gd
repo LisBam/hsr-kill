@@ -170,8 +170,10 @@ func _ready() -> void:
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
+	_player_count_input.value = GameSettings.next_match_player_count
 	# 当前人数输入提交策略；键入数值后立即同步 Range，防止按下开始游戏时读取焦点尚未提交的旧值。
 	_player_count_input.update_on_text_changed = true
+	_player_count_input.value_changed.connect(_on_next_player_count_changed)
 	_ai_response_delay_slider.min_value = GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.max_value = GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.step = GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS
@@ -193,6 +195,7 @@ func _ready() -> void:
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
 	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
 	_select_identity_mode()
@@ -227,7 +230,10 @@ func _on_visibility_changed() -> void:
 
 ## 将牌桌提供的下一局人数写入主菜单设置；人数保持限制在标准身份局的有效范围。
 func set_next_player_count(player_count: int) -> void:
-	_player_count_input.value = clampi(player_count, minimum_player_count, maximum_player_count)
+	# 当前菜单允许的人数；范围以组件导出的身份局限制为准，避免未来调整检查器范围时写入无效存档。
+	var clamped_player_count: int = clampi(player_count, minimum_player_count, maximum_player_count)
+	_player_count_input.value = clamped_player_count
+	GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回设置面板当前指定的人数；优先读取仍在编辑中的文本，避免输入框失焦前的数据丢失。
@@ -360,6 +366,7 @@ func _request_start_game() -> void:
 	# 已确认的下一局人数；写回控件使文本、Range 数值和发出的开局请求保持一致。
 	var player_count: int = get_next_player_count()
 	_player_count_input.value = player_count
+	GameSettings.set_next_match_player_count(player_count)
 	_set_settings_visible(false)
 	_start_game_button.disabled = true
 	_show_status(STARTING_STATUS_TEXT, false)
@@ -694,6 +701,11 @@ func _refresh_game_speed_text(interval_seconds: float) -> void:
 ## 将游戏速度滑条值写入全局设置；已开始的计时任务保持原时长以避免中途跳变。
 func _on_game_speed_changed(interval_seconds: float) -> void:
 	GameSettings.set_game_speed_interval_seconds(interval_seconds)
+
+
+## 下一局人数输入变化时写入全局持久化设置；已开始对局不会读取该值改变当前身份与座次。
+func _on_next_player_count_changed(player_count: float) -> void:
+	GameSettings.set_next_match_player_count(int(player_count))
 
 
 ## 将自动身份标记开关写入全局设置；该设置只影响客户端推测徽记显示。
