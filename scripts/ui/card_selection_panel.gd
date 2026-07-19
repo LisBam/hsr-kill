@@ -617,7 +617,7 @@ func _refresh_selection_state() -> void:
 	_confirm_button.disabled = _selected_card_uids.size() < min_select or _selected_card_uids.size() > max_select
 
 
-## 返回当前选择前缀下仍能组成至少一条权威合法组合的候选UID；已选牌始终保留交互以允许取消。
+## 返回当前选择前缀下仍能组成至少一条权威合法组合的候选UID；单选请求保留全部候选以支持点击另一张牌直接替换选择。
 func _get_dynamic_selectable_card_uids() -> Array[int]:
 	# 动态可选结果；没有组合约束时与规则请求的基础候选完全一致。
 	var result: Array[int] = []
@@ -625,23 +625,23 @@ func _get_dynamic_selectable_card_uids() -> Array[int]:
 	var context: Dictionary = _choice_request.get("context", {}) as Dictionary
 	# 完整合法组合数组；空数组表示该请求没有组合级约束。
 	var valid_card_combinations: Array = context.get("valid_card_combinations", []) as Array
-	# 最大选择数；达到上限后仅已选牌保持可点击以支持取消。
+	# 最大选择数；单选请求例外地允许点击另一候选替换当前选择，多选请求达到上限后只保留已选牌可点击。
 	var max_select: int = int(_choice_request.get("max_select", 0))
 	for candidate_uid: int in _selectable_card_uids:
 		if _selected_card_uids.has(candidate_uid):
 			result.append(candidate_uid)
 			continue
-		if _selected_card_uids.size() >= max_select:
+		if _selected_card_uids.size() >= max_select and max_select != 1:
 			continue
-		if valid_card_combinations.is_empty() or _has_compatible_card_combination(candidate_uid, valid_card_combinations):
+		if valid_card_combinations.is_empty() or _has_compatible_card_combination(candidate_uid, valid_card_combinations, max_select == 1):
 			result.append(candidate_uid)
 	return result
 
 
-## 判断把一张候选追加到当前选择后，是否仍是某条完整合法组合的子集。
-func _has_compatible_card_combination(candidate_uid: int, valid_card_combinations: Array) -> bool:
-	# 待验证选择前缀；保持点击顺序但组合匹配只检查成员集合。
-	var tentative_selection: Array[int] = _selected_card_uids.duplicate()
+## 判断把一张候选加入当前选择后，是否仍是某条完整合法组合的子集；单选替换时忽略旧选择。
+func _has_compatible_card_combination(candidate_uid: int, valid_card_combinations: Array, replace_single_selection: bool = false) -> bool:
+	# 待验证选择前缀；单选替换从空选择开始，多选保持点击顺序但组合匹配只检查成员集合。
+	var tentative_selection: Array[int] = [] if replace_single_selection else _selected_card_uids.duplicate()
 	tentative_selection.append(candidate_uid)
 	for combination_variant: Variant in valid_card_combinations:
 		# 当前完整合法组合；元素统一转换为整数UID。

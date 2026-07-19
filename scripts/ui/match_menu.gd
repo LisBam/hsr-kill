@@ -3,11 +3,14 @@ extends Control
 
 ## 局内菜单组件。该组件只管理菜单显隐和下一局人数输入，通过信号请求桌面执行名称切换或重新开局。
 
-## 请求切换全局卡牌名称模式时发出的信号；实际设置仍由桌面统一调用 GameSettings。
-signal card_name_toggle_requested
+## 请求设置全局卡牌名称模式时发出的信号；实际设置仍由桌面统一调用 GameSettings。
+signal card_name_toggle_requested(mode: int)
 
 ## 请求重新开局时发出的信号；参数为菜单中设置的下一局玩家人数。
 signal restart_requested(player_count: int)
+
+## 请求退出当前对局并回到主菜单时发出的信号；桌面负责清理运行时状态并恢复主菜单焦点。
+signal main_menu_requested
 
 ## 标准身份局最少玩家人数；默认2，与 IdentityRules 支持范围一致，运行时无需动态修改。
 @export_range(2, 10, 1) var minimum_player_count: int = 2
@@ -21,8 +24,8 @@ signal restart_requested(player_count: int)
 ## 菜单内容面板；默认隐藏，点击菜单按钮后切换可见性。
 @onready var _menu_panel: PanelContainer = %MenuPanel
 
-## 卡牌名称切换按钮；文字显示当前使用的名称体系。
-@onready var _card_name_button: Button = %MenuCardNameButton
+## 卡牌名称下拉框；选项元数据保存全局名称模式枚举，界面只显示玩家可见名称。
+@onready var _card_name_option: OptionButton = %MenuCardNameOption
 
 ## 下一局人数输入框；只保存未来重开参数，不修改当前对局座次。
 @onready var _player_count_input: SpinBox = %NextPlayerCountInput
@@ -48,14 +51,17 @@ signal restart_requested(player_count: int)
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
+## 返回主菜单按钮；退出当前对局后恢复启动入口，不保留正在进行的权威状态。
+@onready var _main_menu_button: Button = %MenuReturnToMainButton
+
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
 func _ready() -> void:
 	# 菜单分支移动到同级节点末尾，使展开面板的输入优先于运行时创建的武将牌和选将遮罩；根节点仍忽略空白区域鼠标。
 	call_deferred("_move_to_input_front")
 	_menu_button.pressed.connect(_toggle_menu)
-	_card_name_button.pressed.connect(card_name_toggle_requested.emit)
 	_restart_button.pressed.connect(_request_restart)
+	_main_menu_button.pressed.connect(_request_main_menu)
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
@@ -73,6 +79,9 @@ func _ready() -> void:
 	_game_speed_slider.value = GameSettings.game_speed_interval_seconds
 	_game_speed_slider.value_changed.connect(_on_game_speed_changed)
 	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
+	_populate_card_name_options()
+	_card_name_option.item_selected.connect(_on_card_name_selected)
+	GameSettings.card_name_mode_changed.connect(_refresh_card_name_selection)
 	_populate_ui_style_options()
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	GameSettings.ui_style_changed.connect(_refresh_ui_style_selection)
@@ -112,11 +121,9 @@ func restore_after_restart_failure() -> void:
 	_restart_button.grab_focus()
 
 
-## 按全局名称模式刷新菜单按钮文字，不创建第二份名称状态。
+## 按全局名称模式刷新菜单下拉选择，不创建第二份名称状态。
 func refresh_card_name_text() -> void:
-	if not is_node_ready():
-		return
-	_card_name_button.text = "卡牌名称：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "卡牌名称：三国杀"
+	_refresh_card_name_selection(GameSettings.card_name_mode)
 
 
 ## 使用当前活动主题刷新菜单面板、按钮与文字；该组件不保存任何颜色副本。
@@ -125,14 +132,17 @@ func refresh_ui_style() -> void:
 		return
 	_menu_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	BattleUIStyle.apply_interaction_button(_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_card_name_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_restart_button)
+	BattleUIStyle.apply_interaction_button(_main_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/CardNameRow/CardNameLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_card_name_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_card_name_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
 	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ui_style_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
 
@@ -145,6 +155,35 @@ func _populate_ui_style_options() -> void:
 		var option_index: int = _ui_style_option.item_count
 		_ui_style_option.add_item(UIStyleRegistry.get_display_name(style_id))
 		_ui_style_option.set_item_metadata(option_index, style_id)
+
+
+## 从固定名称模式配置构建下拉选项；枚举元数据避免依赖显示文字反向判断当前模式。
+func _populate_card_name_options() -> void:
+	_card_name_option.clear()
+	for mode_option: Dictionary in GameSettings.CARD_NAME_MODE_OPTIONS:
+		# 下拉项索引；稳定模式枚举写入元数据，文本只用于界面显示。
+		var option_index: int = _card_name_option.item_count
+		_card_name_option.add_item(str(mode_option.get("label", "")))
+		_card_name_option.set_item_metadata(option_index, mode_option.get("mode", GameSettings.NameMode.CUSTOM))
+
+
+## 依据全局名称模式同步下拉框选中项；无信号更新避免界面刷新重复提交同一个设置。
+func _refresh_card_name_selection(mode: GameSettings.NameMode) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_card_name_option.item_count):
+		if int(_card_name_option.get_item_metadata(option_index)) == int(mode):
+			_card_name_option.select(option_index)
+			return
+
+
+## 将玩家选择的名称模式交给桌面；桌面写入 GameSettings 并统一刷新所有已显示牌面。
+func _on_card_name_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _card_name_option.item_count:
+		return
+	# 当前稳定名称模式；元数据缺失时回退默认自定义名称模式。
+	var selected_mode: int = int(_card_name_option.get_item_metadata(option_index))
+	card_name_toggle_requested.emit(selected_mode)
 
 
 ## 按全局设置同步下拉框选中项；使用无信号选择避免主题刷新再次写入相同设置。
@@ -216,3 +255,9 @@ func _request_restart() -> void:
 	_player_count_input.value = player_count
 	_menu_panel.visible = false
 	restart_requested.emit(player_count)
+
+
+## 请求退出当前对局；先收起局内菜单，避免主菜单出现后仍保留局内浮层输入。
+func _request_main_menu() -> void:
+	_menu_panel.visible = false
+	main_menu_requested.emit()

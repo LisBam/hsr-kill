@@ -95,8 +95,8 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 设置关闭按钮；仅关闭设置浮层并返回主菜单，不改变已选择的游戏模式或未开始的对局状态。
 @onready var _settings_close_button: Button = %MainMenuSettingsCloseButton
 
-## 卡牌名称切换按钮；文字显示当前使用的名称体系，实际设置保存于 GameSettings。
-@onready var _card_name_button: Button = %MainMenuCardNameButton
+## 卡牌名称下拉框；选项元数据保存全局名称模式枚举，界面只显示玩家可见名称。
+@onready var _card_name_option: OptionButton = %MainMenuCardNameOption
 
 ## UI 风格下拉框；选项元数据保存稳定风格标识，界面只显示注册表提供的名称。
 @onready var _ui_style_option: OptionButton = %MainMenuUiStyleOption
@@ -146,7 +146,6 @@ func _ready() -> void:
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	_start_game_button.pressed.connect(_request_start_game)
-	_card_name_button.pressed.connect(GameSettings.toggle_card_name_mode)
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
@@ -162,6 +161,8 @@ func _ready() -> void:
 	_game_speed_slider.step = GameSettings.GAME_SPEED_INTERVAL_STEP_SECONDS
 	_game_speed_slider.value = GameSettings.game_speed_interval_seconds
 	_game_speed_slider.value_changed.connect(_on_game_speed_changed)
+	_populate_card_name_options()
+	_card_name_option.item_selected.connect(_on_card_name_selected)
 	_populate_ui_style_options()
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
@@ -240,7 +241,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_card_name_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
@@ -257,6 +258,7 @@ func refresh_ui_style() -> void:
 	_menu_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if _status_is_error else BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuSettingsTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_settings_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	(%MainMenuCardNameLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuUiStyleLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -268,6 +270,7 @@ func refresh_ui_style() -> void:
 	_apply_slider_style(_game_speed_slider)
 	_apply_spin_box_style(_player_count_input)
 	_apply_option_popup_style(_ui_style_option)
+	_apply_option_popup_style(_card_name_option)
 
 
 ## 重新确认身份模式为当前唯一选择；未来接入其他模式时只需在此处更新预览绑定而不改变开局信号。
@@ -327,6 +330,17 @@ func restore_after_failed_restart(message: String) -> void:
 	_set_settings_visible(false)
 	_start_game_button.disabled = false
 	_show_status(message, true)
+	move_to_front()
+	call_deferred("_focus_start_game_button")
+
+
+## 退出一局进行中或已结束的对局后恢复主菜单；该入口不显示错误，并保留玩家此前配置的下一局人数。
+func return_to_main_menu() -> void:
+	visible = true
+	_suspend_covered_interface_focus()
+	_set_settings_visible(false)
+	_start_game_button.disabled = false
+	_show_status(MODE_READY_STATUS_TEXT, false)
 	move_to_front()
 	call_deferred("_focus_start_game_button")
 
@@ -494,6 +508,16 @@ func _populate_ui_style_options() -> void:
 		_ui_style_option.set_item_metadata(option_index, style_id)
 
 
+## 从固定名称模式配置构建下拉选项；枚举元数据让显示文字变更不会影响保存的设置值。
+func _populate_card_name_options() -> void:
+	_card_name_option.clear()
+	for mode_option: Dictionary in GameSettings.CARD_NAME_MODE_OPTIONS:
+		# 下拉项索引；模式枚举写入元数据，文本只参与玩家可见的设置界面。
+		var option_index: int = _card_name_option.item_count
+		_card_name_option.add_item(str(mode_option.get("label", "")))
+		_card_name_option.set_item_metadata(option_index, mode_option.get("mode", GameSettings.NameMode.CUSTOM))
+
+
 ## 按全局风格同步下拉框与主菜单颜色；无信号选择避免界面刷新产生重复设置回调。
 func _refresh_ui_style_selection(style_id: String) -> void:
 	if not is_node_ready():
@@ -515,11 +539,25 @@ func _on_ui_style_selected(option_index: int) -> void:
 	GameSettings.set_ui_style(str(_ui_style_option.get_item_metadata(option_index)))
 
 
-## 根据全局名称模式刷新切换按钮文本；名称模式只改变前端显示，不影响任何卡牌 ID 或规则。
-func _refresh_card_name_text(_mode: GameSettings.NameMode = GameSettings.NameMode.CUSTOM) -> void:
+## 根据全局名称模式刷新下拉选择；名称模式只改变前端显示，不影响任何卡牌 ID 或规则。
+func _refresh_card_name_text(mode: GameSettings.NameMode = GameSettings.NameMode.CUSTOM) -> void:
 	if not is_node_ready():
 		return
-	_card_name_button.text = "卡牌名称：崩铁杀" if GameSettings.card_name_mode == GameSettings.NameMode.CUSTOM else "卡牌名称：三国杀"
+	for option_index: int in range(_card_name_option.item_count):
+		if int(_card_name_option.get_item_metadata(option_index)) == int(mode):
+			_card_name_option.select(option_index)
+			return
+
+
+## 将玩家选择的名称模式写入全局设置；所有已订阅的牌面、技能说明与菜单会即时同步。
+func _on_card_name_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _card_name_option.item_count:
+		return
+	# 当前稳定名称模式；元数据缺失时不提交，避免意外把配置重置为默认值。
+	var selected_mode: Variant = _card_name_option.get_item_metadata(option_index)
+	if selected_mode == null:
+		return
+	GameSettings.set_card_name_mode(int(selected_mode))
 
 
 ## 更新 AI 响应速度显示；数值越小代表 AI 行动与选牌等待越短。

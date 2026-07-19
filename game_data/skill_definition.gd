@@ -221,6 +221,13 @@ func request_card_selection_for_player(chooser_id: int, title: String, prompt: S
 		return []
 	# 技能恢复上下文；稳定技能 ID 与持有者 ID 由基类统一写入，具体技能只保存自身步骤参数。
 	var skill_context: Dictionary = _build_selection_context(context)
+	# 上一段文字选择会在运行时上下文中写入 control 的协议字段；后续实体选牌必须清除这些字段，避免继承为同一文字询问。
+	skill_context.erase("choice_type_override")
+	skill_context.erase("control_options")
+	skill_context.erase("min_card_select")
+	skill_context.erase("max_card_select")
+	skill_context.erase("min_target_select")
+	skill_context.erase("max_target_select")
 	skill_context["choice_chooser_id"] = chooser_id
 	return host.call("request_card_choice", chooser_id, title, prompt, candidates, min_select, max_select, allow_cancel, skill_context) as Array[int]
 
