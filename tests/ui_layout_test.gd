@@ -983,6 +983,40 @@ func _run() -> void:
 	if first_single_target_selection != [5] or switched_single_target_selection != [6]:
 		_fail("single_target_switch:%s/%s" % [first_single_target_selection, switched_single_target_selection])
 		return
+	# 唯一候选状态；除本地五号位和六号位外全部标记死亡，验证普通单目标牌不再自动写入唯一目标。
+	for player_id: int in range(single_target_state.players.size()):
+		if player_id != 4 and player_id != 5:
+			single_target_state.players[player_id].alive = false
+	main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))
+	main_instance.call("_on_card_pressed", single_target_card.uid)
+	# 唯一合法目标；界面必须保持空选择并等待玩家真实点击六号位。
+	var automatic_unique_target_selection: Array = (main_instance.get("_selected_target_ids") as Array).duplicate()
+	if not automatic_unique_target_selection.is_empty() or int(main_instance.get("_auto_locked_target_id")) >= 0:
+		_fail("single_target_unique_auto_selected:%s" % automatic_unique_target_selection)
+		return
+	main_instance.call("_on_target_pressed", 5)
+	if (main_instance.get("_selected_target_ids") as Array) != [5]:
+		_fail("single_target_unique_manual_select:%s" % main_instance.get("_selected_target_ids"))
+		return
+	# 常规选牌说明；只显示静态效果，禁止重新拼接“卡牌名｜目标：角色｜”等状态文本。
+	single_target_card.definition_id = "jiedao"
+	main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))
+	main_instance.call("_on_card_pressed", single_target_card.uid)
+	var selection_effect_label: Label = main_instance.get_node("%SelectionLabel") as Label
+	var jiedao_description: String = str(GameDatabase.get_card("jiedao").get("description", ""))
+	if selection_effect_label.text != jiedao_description or selection_effect_label.text.contains("目标：") or selection_effect_label.text.contains("借刀杀人｜"):
+		_fail("selection_effect_only:%s" % selection_effect_label.text)
+		return
+	# 三张例外自身牌；【桃】【酒】【无中生有】仍在选中后自动锁定本地玩家本人。
+	for self_target_definition_id: String in ["tao", "jiu", "wuzhong"]:
+		single_target_card.definition_id = self_target_definition_id
+		single_target_state.players[4].hp = 3 if self_target_definition_id == "tao" else 4
+		main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))
+		main_instance.call("_on_card_pressed", single_target_card.uid)
+		var expected_self_target: Array[int] = [4]
+		if (main_instance.get("_selected_target_ids") as Array) != expected_self_target or int(main_instance.get("_auto_locked_target_id")) != 4:
+			_fail("self_target_auto_selected:%s/%s" % [self_target_definition_id, main_instance.get("_selected_target_ids")])
+			return
 	menu_button.pressed.connect(_on_menu_button_pressed)
 	await _click_control(menu_button)
 	if not _menu_button_pressed:

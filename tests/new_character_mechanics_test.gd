@@ -210,6 +210,10 @@ func _test_named_card_gain_and_hand_view_as() -> bool:
 	var gifted_card: CardInstance = _add_hand_card(0, "sha", "heart", 5)
 	if not _controller.transfer_hand_card_as(0, 1, gifted_card.uid, "tao", "yaoli") or gifted_card.definition_id != "tao" or gifted_card.hand_view_as_original_definition_id != "sha" or _controller.state.get_player(1).find_hand_card(gifted_card.uid) == null:
 		return _fail("hand_view_as_gift=%s" % gifted_card.to_dict())
+	# 视为牌快照；表现层必须得到原牌定义 ID，才能在不改变逻辑牌结算的前提下保留实体牌面名称。
+	var gifted_snapshot: Dictionary = gifted_card.to_dict()
+	if str(gifted_snapshot.get("original_definition_id", "")) != "sha":
+		return _fail("hand_view_as_snapshot=%s" % gifted_snapshot)
 	if not _controller.discard_card_from_hand(1, gifted_card.uid) or gifted_card.definition_id != "sha" or gifted_card.has_hand_view_as() or not _controller.state.discard_pile.has(gifted_card):
 		return _fail("hand_view_as_leave_restore=%s" % gifted_card.to_dict())
 	# 交给自己的红色实体；同区域操作不产生无效移动，但仍建立相同临时牌名。

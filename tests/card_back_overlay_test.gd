@@ -46,6 +46,23 @@ func _run() -> void:
 	if card_back.get_index() >= card_input_area.get_index():
 		_fail("card_back_input_order")
 		return
+	# 视为牌快照；原实体【闪】保留原牌面名称，逻辑定义【桃】只显示在贯穿插画的独立横条中。
+	var view_as_card_data: Dictionary = {"uid":99002, "definition_id":"tao", "original_definition_id":"shan", "suit":"heart", "rank":8}
+	card_view.configure(view_as_card_data, GameDatabase.get_card("tao"), false, true)
+	# 原牌名称标签；当前名称模式下必须继续显示实体【闪】而不是逻辑【桃】。
+	var original_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card("shan"))
+	# 视为横条；节点必须显示逻辑【桃】且位于牌面中部，不替代原名称标签。
+	var view_as_banner: Panel = card_view.get_node("CardBody/ViewAsBanner") as Panel
+	var view_as_name: Label = card_view.get_node("CardBody/ViewAsBanner/Name") as Label
+	var viewed_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card("tao"))
+	if card_name_label.text != original_name or view_as_banner == null or not view_as_banner.visible or view_as_name == null or view_as_name.text != viewed_name or not is_equal_approx(view_as_banner.position.y + view_as_banner.size.y * 0.5, card_view.card_height * 0.5):
+		_fail("card_view_as_banner:%s/%s/%s" % [card_name_label.text, view_as_name.text if view_as_name != null else "", view_as_banner.get_rect() if view_as_banner != null else Rect2()])
+		return
+	# 普通牌重新配置后横条必须隐藏，避免旧实体复用时残留视为状态。
+	card_view.configure(card_data, card_definition, false, true)
+	if view_as_banner.visible:
+		_fail("card_view_as_banner_clear")
+		return
 
 	# 正式武将牌实例；直接消费裁剪快照验证 face_down 到覆盖层的映射。
 	var player_target_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView

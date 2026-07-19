@@ -40,6 +40,15 @@ signal information_dismissed
 ## 禁用牌面内容的灰度调制色；默认保留45%亮度，使插画与文字明显弱于可选卡牌，仅影响表现。
 @export var disabled_content_modulate: Color = Color(0.45, 0.45, 0.45, 1.0)
 
+## 视为名称横条的固定高度；默认30像素覆盖插画中央但不遮挡底部实体牌名，运行时可按牌面比例调整。
+@export_range(18.0, 48.0, 1.0) var view_as_banner_height: float = 30.0
+
+## 视为名称横条的文字尺寸；默认22像素匹配参考牌面的大号名称，运行时可按主题可读性调整。
+@export_range(12, 36, 1) var view_as_banner_font_size: int = 22
+
+## 视为名称横条的深色底板不透明度；默认0.84保证文字清晰且仍可辨认底层插画，运行时可调整。
+@export_range(0.0, 1.0, 0.01) var view_as_banner_opacity: float = 0.84
+
 ## 当前实体牌 UID；由 configure 写入，未配置时为 -1。
 var card_uid: int = -1
 
@@ -82,14 +91,20 @@ var _suit_rank_text: String = "♠7"
 ## 待显示的卡牌名称；默认使用场景编辑器示例名称，绑定实体牌后按全局名称模式覆盖。
 var _display_name_text: String = "杀"
 
+## 待显示的视为牌名称；空字符串表示实体牌没有临时视为效果，横条保持隐藏。
+var _view_as_display_name_text: String = ""
+
 ## 待显示的类别文本；默认与场景编辑器基本牌预览一致，运行时可附加木牛“粮”来源标记。
 var _card_type_text: String = "基本牌"
 
 ## 当前卡牌类别强调色；默认使用基本牌朱红色，具体实体牌会按类别或伤害属性覆盖。
 var _category_color: Color = Color("737b86")
 
-## 当前卡牌静态定义副本；仅用于主题切换时重新解析类别色，不包含实体区域或规则状态。
+## 当前实体牌静态定义副本；用于主题切换时重绘原牌插画、类别与名称，不包含实体区域或规则状态。
 var _card_definition: Dictionary = {}
+
+## 当前视为牌静态定义副本；只用于悬停说明展示实际可用牌效，不替换实体牌的视觉定义。
+var _view_as_card_definition: Dictionary = {}
 
 ## 当前是否处于鼠标悬停状态；只用于决定纸张亮度和缩放表现。
 var _is_hovered: bool = false
@@ -131,6 +146,12 @@ var _configuration_signature: int = -1
 ## 牌面顶部类别色条；只表达视觉分类，不参与卡牌规则判断。
 @onready var _accent_bar: ColorRect = $CardBody/AccentBar
 
+## 视为名称横条；仅在实体牌临时视为另一张牌时覆盖插画中心，不阻断原有输入区域。
+@onready var _view_as_banner: Panel = $CardBody/ViewAsBanner
+
+## 视为名称横条内的名称标签；文本始终使用视为后的逻辑牌名。
+@onready var _view_as_name_label: Label = $CardBody/ViewAsBanner/Name
+
 ## 独立输入区域；负责点击、悬停和 Godot 原生拖拽协议。
 @onready var _input_area: CardInputArea = $InputArea
 
@@ -143,6 +164,7 @@ func _ready() -> void:
 	_card_body.size = get_card_size()
 	_card_back.size = get_card_size()
 	_input_area.size = get_card_size()
+	_configure_view_as_banner_geometry()
 	_input_area.activated.connect(pressed.emit)
 	_input_area.hover_started.connect(_on_mouse_entered)
 	_input_area.hover_finished.connect(_on_mouse_exited)
@@ -179,20 +201,33 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	is_interactable = interactable
 	_dim_when_disabled = dim_when_disabled
 	is_face_down = false
-	_card_definition = definition.duplicate(true)
+	# 当前实体牌的原始定义 ID；视为状态中 definition 仍是逻辑牌定义，原始 ID 仅由快照明确传入。
+	var original_definition_id: String = str(card.get("original_definition_id", ""))
+	# 当前实体牌的视觉定义；视为状态必须保留原牌插画、类别和底部名称，不把原实体牌改画成逻辑牌。
+	var visual_definition: Dictionary = definition.duplicate(true)
+	# 当前视为名称；空字符串表示普通实体牌无需额外覆盖层。
+	_view_as_display_name_text = ""
+	if not original_definition_id.is_empty():
+		# 原实体牌定义；快照异常或扩展缺失时安全回退到逻辑牌定义，避免空白牌面。
+		var original_definition: Dictionary = GameDatabase.get_card(original_definition_id)
+		if not original_definition.is_empty():
+			visual_definition = original_definition
+			_view_as_display_name_text = GameSettings.resolve_card_display_name(definition)
+	_card_definition = visual_definition
+	_view_as_card_definition = definition.duplicate(true)
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
 	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。
 	var rank_text: String = _rank_text(int(card.get("rank", 0)))
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
-	var display_name: String = GameSettings.resolve_card_display_name(definition)
+	var display_name: String = GameSettings.resolve_card_display_name(visual_definition)
 	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。
-	var type_text: String = _type_text(str(definition.get("type", "")), str(definition.get("subtype", "")))
+	var type_text: String = _type_text(str(visual_definition.get("type", "")), str(visual_definition.get("subtype", "")))
 	_suit_rank_text = "%s%s" % [suit_text, rank_text]
 	_display_name_text = display_name
 	_card_type_text = "%s%s" % ["粮 · " if is_wooden_ox_card else "", type_text]
-	_category_color = _resolve_category_color(definition)
-	_artwork_texture = ArtworkLoader.load_from_definition(definition, ArtworkLoader.CARD_ART_FIELD)
+	_category_color = _resolve_category_color(visual_definition)
+	_artwork_texture = ArtworkLoader.load_from_definition(visual_definition, ArtworkLoader.CARD_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
@@ -213,6 +248,8 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	_dim_when_disabled = true
 	is_face_down = true
 	_card_definition.clear()
+	_view_as_card_definition.clear()
+	_view_as_display_name_text = ""
 	if is_node_ready():
 		_input_area.tooltip_text = ""
 		_input_area.configure(card_uid, is_interactable, create_drag_preview)
@@ -309,6 +346,8 @@ func _refresh_visual_state() -> void:
 	_corner_label.modulate = content_modulate
 	_name_label.modulate = content_modulate
 	_type_label.modulate = content_modulate
+	_view_as_banner.modulate = content_modulate
+	_refresh_view_as_banner_style()
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
 
@@ -324,12 +363,41 @@ func _refresh_card_content() -> void:
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
+	_view_as_banner.visible = not is_face_down and not _view_as_display_name_text.is_empty()
+	_view_as_name_label.text = _view_as_display_name_text
+	_view_as_name_label.add_theme_font_size_override("font_size", view_as_banner_font_size)
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
 	var content_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
 	_type_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
 	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+
+
+## 按当前牌面尺寸把视为名称横条固定在插画中央；横条贯穿整张牌但不覆盖底部原牌名称。
+func _configure_view_as_banner_geometry() -> void:
+	if not is_node_ready():
+		return
+	# 横条尺寸；宽度始终等于牌面宽度，高度读取检查器参数以适配不同牌面缩放。
+	_view_as_banner.size = Vector2(card_width, view_as_banner_height)
+	# 横条纵坐标；以牌面中心为基准上下对称，默认111×148时为59像素。
+	_view_as_banner.position = Vector2(0.0, (card_height - view_as_banner_height) * 0.5)
+
+
+## 刷新视为名称横条的主题样式；深色半透明底板和细金边复刻参考图的贯穿式牌名提示。
+func _refresh_view_as_banner_style() -> void:
+	if not is_node_ready():
+		return
+	# 横条底色；从当前金属面板派生深色，以避免在两套主题中写死单一色值。
+	var banner_background: Color = BattleUIStyle.get_color("metal_panel").darkened(0.34)
+	banner_background.a = view_as_banner_opacity
+	# 横条边框；复用主题强调色，保持与选中牌和菜单控件一致的视觉语义。
+	var banner_border: Color = BattleUIStyle.get_color("accent")
+	banner_border.a = 0.92
+	_view_as_banner.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 0))
+	_view_as_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_paper"))
+	_view_as_name_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	_view_as_name_label.add_theme_constant_override("outline_size", 2)
 
 
 ## 刷新统一牌背配色；正面牌与牌背共用同一主题入口，隐藏信息状态不会暴露实体内容。
@@ -356,11 +424,16 @@ func _on_mouse_entered() -> void:
 	if not is_face_down and not _card_definition.is_empty():
 		# 卡牌信息副标题；花色点数、木牛来源和细分类别保持与当前牌面显示一致。
 		var information_subtitle: String = "%s｜%s" % [_suit_rank_text, _card_type_text]
+		# 视为状态提示；原牌名保留在标题，额外标明当前实际按哪张逻辑牌结算。
+		if not _view_as_display_name_text.is_empty():
+			information_subtitle += "｜视为【%s】" % _view_as_display_name_text
+		# 说明使用的逻辑定义；视为效果需要让玩家查看当前可实际使用或响应的牌效。
+		var information_definition: Dictionary = _view_as_card_definition if not _view_as_card_definition.is_empty() else _card_definition
 		# 统一卡牌信息；标题和说明直接来自当前名称模式与静态定义，不读取权威对局对象。
 		var information: Dictionary = {
 			"title":"【%s】" % _display_name_text,
 			"subtitle":information_subtitle,
-			"description":str(_card_definition.get("description", "暂无卡牌说明。")),
+			"description":str(information_definition.get("description", "暂无卡牌说明。")),
 		}
 		information_requested.emit(information, get_global_rect())
 	if not is_interactable:
