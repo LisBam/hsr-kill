@@ -54,6 +54,18 @@ signal main_menu_requested
 ## 返回主菜单按钮；退出当前对局后恢复启动入口，不保留正在进行的权威状态。
 @onready var _main_menu_button: Button = %MenuReturnToMainButton
 
+## AI响应速度整行容器；仅离线玩家与权威房主可见，客户端本地修改不会影响房主结算。
+@onready var _ai_response_delay_row: Control = _ai_response_delay_slider.get_parent() as Control
+
+## 游戏速度整行容器；仅离线玩家与权威房主可见，客户端不能调整房主阶段节奏。
+@onready var _game_speed_row: Control = _game_speed_slider.get_parent() as Control
+
+## 下一局人数整行容器；仅实际拥有重新开局权限的离线玩家与房主可见。
+@onready var _player_count_row: Control = _player_count_input.get_parent() as Control
+
+## 当前权威控件是否允许显示；默认true兼容离线对局，局域网客户端由牌桌协调器关闭。
+var _authority_controls_visible: bool = true
+
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
 func _ready() -> void:
@@ -130,9 +142,27 @@ func is_menu_open() -> bool:
 func set_menu_open(open: bool) -> void:
 	_menu_panel.visible = open
 	if open:
-		_restart_button.grab_focus()
+		if _authority_controls_visible:
+			_restart_button.grab_focus()
+		else:
+			_main_menu_button.grab_focus()
 	else:
 		_menu_button.grab_focus()
+
+
+## 统一控制所有依赖房主权威的局内设置；后续新增同类功能必须加入本入口，避免非房主看到无法生效的控件。
+func set_authority_controls_visible(controls_visible: bool) -> void:
+	_authority_controls_visible = controls_visible
+	if not is_node_ready():
+		return
+	_ai_response_delay_row.visible = controls_visible
+	_game_speed_row.visible = controls_visible
+	_player_count_row.visible = controls_visible
+	_restart_button.visible = controls_visible
+	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
+	var focus_owner: Control = get_viewport().gui_get_focus_owner()
+	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner)):
+		_main_menu_button.grab_focus()
 
 
 ## 局内重新开局在破坏旧局前被拒绝时重新展开菜单；原对局保持运行，玩家可修正设置后再次提交。
@@ -270,6 +300,8 @@ func _toggle_menu() -> void:
 
 ## 发出携带下一局人数的重开请求，并关闭菜单避免遮挡新一局选将界面。
 func _request_restart() -> void:
+	if not _authority_controls_visible:
+		return
 	# 已确认的下一局人数；先写回输入框，使界面文本、Range 数值与重开参数保持一致。
 	var player_count: int = get_next_player_count()
 	_player_count_input.value = player_count

@@ -296,7 +296,9 @@ func _run() -> void:
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
 	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(385.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
+	# 本地手牌面板；公共模态窗口必须位于其上方，手牌悬停放大也不能遮住五谷牌位。
+	var local_hand_panel: PanelContainer = main_instance.get_node("HandPanel") as PanelContainer
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(385.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4 or local_hand_panel.z_index >= selection_panel.z_index or selection_panel.z_index <= CardView.HOVER_Z_INDEX + 1:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
 	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。
@@ -465,6 +467,28 @@ func _run() -> void:
 	var character_candidate_area: Control = main_instance.get_node("%CharacterCandidateArea") as Control
 	if not character_selection_panel.visible or not leader_character_area.visible or leader_character_area.get_child_count() != 1 or character_status_label.visible or not character_status_label.text.is_empty() or not is_equal_approx(character_candidate_area.position.x, 214.0):
 		_fail("character_selection_leader_card")
+		return
+	# 局域网非房主权限；AI速度、游戏速度、下一局人数与重新开局不能影响房主权威状态，客户端界面必须统一隐藏。
+	match_controller.network_gateway.mode = NetworkGateway.Mode.LAN
+	match_controller.network_gateway.lan_role = NetworkGateway.LanRole.CLIENT
+	main_instance.call("_refresh_match_menu_authority_controls")
+	# AI响应速度整行；父容器显隐可以同时移除标签与滑条，不留下无效说明文字。
+	var ai_response_delay_row: Control = main_instance.get_node("%AiResponseDelaySlider").get_parent() as Control
+	# 游戏速度整行；与AI响应速度使用同一权威权限入口。
+	var game_speed_row: Control = main_instance.get_node("%GameSpeedSlider").get_parent() as Control
+	# 下一局人数整行；非房主不显示未来对局人数编辑入口。
+	var player_count_row: Control = main_instance.get_node("%NextPlayerCountInput").get_parent() as Control
+	# 重新开局按钮；客户端不可见且内部请求函数仍有权限保护。
+	var restart_button: Button = main_instance.get_node("%MenuRestartButton") as Button
+	if ai_response_delay_row.visible or game_speed_row.visible or player_count_row.visible or restart_button.visible:
+		_fail("client_authority_controls")
+		return
+	# 恢复离线模式；组件必须重新显示全部本地权威设置，避免退出联机后菜单永久缺项。
+	match_controller.network_gateway.mode = NetworkGateway.Mode.OFFLINE
+	match_controller.network_gateway.lan_role = NetworkGateway.LanRole.NONE
+	main_instance.call("_refresh_match_menu_authority_controls")
+	if not ai_response_delay_row.visible or not game_speed_row.visible or not player_count_row.visible or not restart_button.visible:
+		_fail("offline_authority_controls_not_restored")
 		return
 	remove_child(main_instance)
 	main_instance.free()
