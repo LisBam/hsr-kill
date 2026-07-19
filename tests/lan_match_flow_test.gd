@@ -50,6 +50,7 @@ func _ready() -> void:
 	_gateway.game_event_received.connect(_on_game_event_received)
 	_gateway.lan_session_closed.connect(_on_session_closed)
 	_controller.character_selection_changed.connect(_on_character_selection_changed)
+	_controller.card_choice_requested.connect(_on_card_choice_requested)
 	_controller.state_changed.connect(_on_state_changed)
 	_install_timeout_guard()
 	if _is_client_process:
@@ -71,7 +72,7 @@ func _parse_user_arguments() -> void:
 func _start_host() -> void:
 	_port = 29000 + (OS.get_process_id() % 9000)
 	# ENet 建房结果；失败时不启动客户端，避免后续超时掩盖实际端口错误。
-	var host_error: Error = _gateway.host_lan("权威房主", _port)
+	var host_error: Error = _gateway.host_lan("权威房主", _port, "xier", "", TEST_PLAYER_COUNT)
 	if host_error != OK:
 		_fail("host_create_error=%d" % host_error)
 		return
@@ -105,7 +106,7 @@ func _start_client() -> void:
 		_fail("client_missing_port")
 		return
 	# 发起客户端连接结果；OK 后继续等待异步大厅与开局信号。
-	var join_error: Error = _gateway.join_lan("127.0.0.1", "远端真人", _port)
+	var join_error: Error = _gateway.join_lan("127.0.0.1", "远端真人", _port, "himeko")
 	if join_error != OK:
 		_fail("client_join_error=%d" % join_error)
 
@@ -114,7 +115,7 @@ func _start_client() -> void:
 func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	if _is_client_process or _host_match_started or int(lobby_snapshot.get("member_count", 0)) < 2:
 		return
-	# 真人座次准备错误；测试要求2名真人可以进入4人局并由 AI 补齐空位。
+	# 真人座次准备错误；测试要求2名真人按大厅位置进入4人局并由 AI 补齐空位。
 	var assignment_error: String = _gateway.prepare_lan_match_assignments(TEST_PLAYER_COUNT)
 	if not assignment_error.is_empty():
 		_fail("assignment_error=%s" % assignment_error)
@@ -127,7 +128,7 @@ func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	_controller.replicate_current_state()
 
 
-## 客户端绑定房主随机分配的稳定玩家 ID；远端控制器随后会把全部 UI 动作上行而不访问本地 state。
+## 客户端绑定房主按大厅位置分配的稳定玩家 ID；远端控制器随后会把全部 UI 动作上行而不访问本地 state。
 func _on_match_started(local_player_id: int, player_count: int) -> void:
 	if player_count != TEST_PLAYER_COUNT or local_player_id < 0 or local_player_id >= TEST_PLAYER_COUNT:
 		_fail("invalid_assignment player_id=%d count=%d" % [local_player_id, player_count])
@@ -151,6 +152,30 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	var action: PlayerAction = PlayerAction.new("select_character", int(selection_snapshot.get("local_player_id", _controller.local_human_player_id)))
 	action.payload = {"character_id":str(local_candidates[0])}
 	_controller.submit_action(action)
+
+
+## 自动取消测试中由随机武将触发的可选技能询问；该流程测试只验证联网状态，不测试具体技能收益选择。
+func _on_card_choice_requested(choice_data: Dictionary) -> void:
+	# 当前选择者；房主和客户端只处理属于各自本地真人的请求，其他真人请求由对应网络进程处理。
+	var chooser_id: int = int(choice_data.get("chooser_id", choice_data.get("actor_id", -1)))
+	if chooser_id != _controller.local_human_player_id or not bool(choice_data.get("allow_cancel", choice_data.get("can_cancel", false))):
+		return
+	# 取消选择动作；空候选与 confirmed=false 表示不发动当前可选技能，不改变测试的网络关注点。
+	var cancel_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	cancel_action.payload = {
+		"request_id":int(choice_data.get("request_id", -1)),
+		"selected_card_uids":[],
+		"selected_target_ids":[],
+		"selected_button_ids":[],
+		"selected_control_id":"",
+		"confirmed":false,
+	}
+	_submit_optional_choice_cancel.call_deferred(cancel_action)
+
+
+## 在选择信号分发结束后提交取消动作；避免同一规则回调栈内重入当前选择请求。
+func _submit_optional_choice_cancel(cancel_action: PlayerAction) -> void:
+	_controller.submit_action(cancel_action)
 
 
 ## 客户端在选将完成后的状态快照中验证私有手牌、他人隐藏手牌和随机种子裁剪，然后发送确认动作。
@@ -182,6 +207,12 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	# 快照确认动作；属于测试专用未知动作，权威规则会拒绝，但网关应先验证 actor 并让测试观察者收到同一上行包。
 	var acknowledgement: PlayerAction = PlayerAction.new("lan_snapshot_ack", _local_player_id)
 	acknowledgement.payload = {"hand_count":private_hand_count}
+	# 延迟到状态快照 RPC 回调结束后上行，避免嵌套 RPC 在同一调用栈中被 SceneMultiplayer 丢弃。
+	_submit_snapshot_acknowledgement.call_deferred(acknowledgement)
+
+
+## 在客户端完成本帧状态信号分发后提交快照确认动作；真实 UI 输入同样发生在后续输入帧。
+func _submit_snapshot_acknowledgement(acknowledgement: PlayerAction) -> void:
 	_controller.submit_action(acknowledgement)
 
 

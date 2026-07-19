@@ -23,6 +23,7 @@
 [ext_resource type="Script" path="res://scripts/ui/identity_marking_indicator.gd" id="23_identity_indicator"]
 [ext_resource type="PackedScene" path="res://scenes/components/lan_lobby_panel.tscn" id="24_lan_lobby"]
 [ext_resource type="PackedScene" path="res://scenes/components/online_settings_panel.tscn" id="25_online_settings"]
+[ext_resource type="PackedScene" path="res://scenes/components/online_lobby_panel.tscn" id="26_online_lobby"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -1254,3 +1255,5 @@ text = "返回"
 [node name="LanLobbyPanel" parent="MainMenu" instance=ExtResource("24_lan_lobby")]
 
 [node name="OnlineSettingsPanel" parent="MainMenu" instance=ExtResource("25_online_settings")]
+
+[node name="OnlineLobbyPanel" parent="MainMenu" instance=ExtResource("26_online_lobby")]

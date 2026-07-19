@@ -43,8 +43,8 @@ enum LanRole {
 	CLIENT,
 }
 
-## 当前封包协议版本；版本2使用 leader 身份值与 leader_player_id/leader_character_id 选将字段，不兼容旧 lord 字段。
-const PROTOCOL_VERSION: int = 2
+## 当前封包协议版本；版本3在版本2身份字段基础上新增大厅密码、形象、座位、聊天、踢出与房间设置消息。
+const PROTOCOL_VERSION: int = 3
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -54,6 +54,23 @@ const MAX_MATCH_PLAYER_COUNT: int = 10
 
 ## 玩家显示名允许的最大 Unicode 字符数；默认20可保持大厅成员列表紧凑，运行时不应动态修改。
 const MAX_DISPLAY_NAME_LENGTH: int = 20
+
+## 房间密码允许的最大 Unicode 字符数；默认32兼顾输入自由与大厅设置面板宽度，运行时不应动态修改。
+const MAX_LOBBY_PASSWORD_LENGTH: int = 32
+
+## 单条大厅聊天允许的最大 Unicode 字符数；默认200避免超长消息占满聊天区域或产生过大封包。
+const MAX_LOBBY_CHAT_LENGTH: int = 200
+
+## 大厅聊天历史保留上限；默认100条让后来加入者获得近期上下文，同时限制公共快照体积。
+const MAX_LOBBY_CHAT_HISTORY: int = 100
+
+## 当前可启动的默认游戏模式稳定 ID；大厅设置与开局协调只使用稳定 ID，不依赖中文显示名。
+const DEFAULT_LOBBY_GAME_MODE_ID: String = "identity"
+
+## 当前已实现的大厅游戏模式配置；后续新增真实规则模式时可追加稳定 ID 与玩家可见名称。
+const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
+	{"id":DEFAULT_LOBBY_GAME_MODE_ID, "display_name":"身份模式"},
+]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
 @export_range(1024, 65535, 1) var default_lan_port: int = 7000
@@ -79,8 +96,35 @@ var _enet_peer: ENetMultiplayerPeer
 ## 本地大厅显示名；创建或加入房间时完成裁剪和空值回退，不写入全局账号数据。
 var _local_display_name: String = "玩家"
 
-## 当前大厅成员映射；键为 ENet peer_id，值为只含显示名、主机标记和加入序号的可序列化字典。
+## 本地大厅联机形象的稳定武将 ID；创建或加入时完成数据库校验，只用于大厅插画展示。
+var _local_avatar_character_id: String = ""
+
+## 客户端本次加入房间提交的密码；握手后随登记包发送，完成登记或离开会话后清空。
+var _pending_lobby_password: String = ""
+
+## 当前大厅成员映射；键为 ENet peer_id，值为显示名、形象、房主标记、加入序号与大厅位置组成的可序列化字典。
 var _lobby_members: Dictionary = {}
+
+## 当前房间密码；只保存在房主本机内存，不进入发送给客户端的公共大厅快照。
+var _lobby_password: String = ""
+
+## 当前大厅快照是否标记房间存在密码；客户端只保存布尔值，不能取得房主明文密码。
+var _lobby_password_enabled: bool = false
+
+## 当前大厅配置的游戏总人数；范围2至10，空座位在正式开局时由基础 AI 补齐。
+var _lobby_player_count: int = 2
+
+## 当前大厅配置的游戏模式稳定 ID；未知值统一回退身份模式，当前仅该模式可以实际开局。
+var _lobby_game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID
+
+## 当前大厅公共聊天历史；每项只含递增序号、玩家名、消息与显示时间，最多保留100条。
+var _lobby_chat_history: Array[Dictionary] = []
+
+## 当前大厅聊天消息递增序号；房主每接受一条非空消息增加1，用于跨客户端稳定排序。
+var _lobby_chat_sequence: int = 0
+
+## 已由房主主动拒绝且等待底层断开的 peer ID；断开回调据此跳过重复离开广播与通用提示。
+var _rejected_lobby_peer_ids: Array[int] = []
 
 ## 已登记成员的加入序号；每接受一名客户端递增，确保成员列表不依赖字典遍历顺序。
 var _join_sequence: int = 0
@@ -119,8 +163,8 @@ func set_mode(new_mode: Mode) -> void:
 	connection_state_changed.emit(connected, "离线模式已就绪" if connected else "等待传输适配器连接")
 
 
-## 创建局域网 ENet 房间；成功后本机成为大厅房主，返回值使用 Godot Error 枚举供 UI 显示稳定错误。
-func host_lan(display_name: String, port: int = -1) -> Error:
+## 创建局域网 ENet 房间；成功后本机成为大厅房主，并应用联机形象、密码、人数与模式初始配置。
+func host_lan(display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "", player_count: int = 2, game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID) -> Error:
 	leave_lan("")
 	_bind_multiplayer_signals()
 	# 实际监听端口；无效输入回退检查器默认值，避免 ENet 接收越界端口。
@@ -140,14 +184,19 @@ func host_lan(display_name: String, port: int = -1) -> Error:
 	connected = true
 	outgoing_sequence = 0
 	_local_display_name = _sanitize_display_name(display_name)
-	_lobby_members[SERVER_PEER_ID] = _make_lobby_member(SERVER_PEER_ID, _local_display_name, true, 0)
+	_local_avatar_character_id = _sanitize_avatar_character_id(avatar_character_id)
+	_lobby_password = _sanitize_lobby_password(room_password)
+	_lobby_password_enabled = not _lobby_password.is_empty()
+	_lobby_player_count = clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
+	_lobby_game_mode_id = _normalize_lobby_game_mode_id(game_mode_id)
+	_lobby_members[SERVER_PEER_ID] = _make_lobby_member(SERVER_PEER_ID, _local_display_name, _local_avatar_character_id, true, 0, 0)
 	connection_state_changed.emit(true, "局域网房间已创建，等待其他玩家加入。")
 	_emit_lobby_state()
 	return OK
 
 
-## 加入指定局域网地址；连接过程异步完成，成功或失败通过 connection_state_changed 与 lan_session_closed 返回。
-func join_lan(address: String, display_name: String, port: int = -1) -> Error:
+## 加入指定局域网地址；联机形象与密码在握手成功后随大厅登记包提交给房主校验。
+func join_lan(address: String, display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "") -> Error:
 	leave_lan("")
 	_bind_multiplayer_signals()
 	# 实际服务器地址；空值回退本机，便于同一设备启动两个实例进行开发测试。
@@ -171,6 +220,8 @@ func join_lan(address: String, display_name: String, port: int = -1) -> Error:
 	connected = false
 	outgoing_sequence = 0
 	_local_display_name = _sanitize_display_name(display_name)
+	_local_avatar_character_id = _sanitize_avatar_character_id(avatar_character_id)
+	_pending_lobby_password = _sanitize_lobby_password(room_password)
 	connection_state_changed.emit(false, "正在连接局域网房主……")
 	return OK
 
@@ -210,8 +261,8 @@ func get_current_incoming_peer_id() -> int:
 	return _current_incoming_peer_id
 
 
-## 返回当前大厅只读快照；成员按加入顺序排列，UI 不得修改返回数组或成员字典。
-func get_lan_lobby_snapshot() -> Dictionary:
+## 返回当前大厅只读快照；公共结果不含明文密码，房主本地可按参数额外取得密码用于设置面板。
+func get_lan_lobby_snapshot(include_host_private_settings: bool = false) -> Dictionary:
 	# 成员 peer_id 列表；先按网络 ID 排序，再由稳定加入序号二次排序。
 	var peer_ids: Array[int] = []
 	for peer_id_variant: Variant in _lobby_members.keys():
@@ -227,13 +278,74 @@ func get_lan_lobby_snapshot() -> Dictionary:
 	var members: Array[Dictionary] = []
 	for peer_id: int in peer_ids:
 		members.append((_lobby_members.get(peer_id, {}) as Dictionary).duplicate(true))
-	return {
+	# 当前本机网络 peer ID；只帮助大厅界面区分本人、房主与可踢成员，不参与规则玩家 ID 分配。
+	var local_peer_id: int = multiplayer.get_unique_id() if multiplayer != null else SERVER_PEER_ID
+	# 当前可序列化大厅快照；聊天、座位和房间设置均为公开大厅信息，明文密码默认排除。
+	var snapshot: Dictionary = {
 		"role":LanRole.keys()[lan_role].to_lower(),
+		"local_peer_id":local_peer_id,
 		"members":members,
 		"member_count":members.size(),
 		"match_active":_lan_match_active,
-		"player_count":_lan_match_player_count,
+		"player_count":_lan_match_player_count if _lan_match_active else _lobby_player_count,
+		"game_mode_id":_lobby_game_mode_id,
+		"has_password":_lobby_password_enabled,
+		"chat_history":_lobby_chat_history.duplicate(true),
 	}
+	if include_host_private_settings and lan_role == LanRole.HOST:
+		snapshot["room_password"] = _lobby_password
+	return snapshot
+
+
+## 房主更新大厅游戏模式、总人数与密码；人数不得少于当前真人数，成功后立即广播全员。
+func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String) -> String:
+	if not is_lan_host() or _lan_match_active:
+		return "当前不是可修改设置的局域网房主。"
+	# 规范化后的游戏模式 ID；当前未知模式回退身份模式，保证开始按钮不会请求不存在的规则。
+	var normalized_game_mode_id: String = _normalize_lobby_game_mode_id(game_mode_id)
+	# 限制后的总人数；房间至少2人且不能超过项目身份局10人上限。
+	var normalized_player_count: int = clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
+	if normalized_player_count < _lobby_members.size():
+		return "游戏总人数不能少于当前真人数量。"
+	_lobby_game_mode_id = normalized_game_mode_id
+	_lobby_player_count = normalized_player_count
+	_lobby_password = _sanitize_lobby_password(room_password)
+	_lobby_password_enabled = not _lobby_password.is_empty()
+	_normalize_lobby_member_seats()
+	_emit_lobby_state()
+	return ""
+
+
+## 请求把本地大厅成员移动到指定空位；房主直接校验，客户端向房主发送稳定座位索引。
+func request_lan_lobby_seat_change(seat_index: int) -> void:
+	if mode != Mode.LAN or _lan_match_active:
+		return
+	if lan_role == LanRole.HOST:
+		_apply_lobby_seat_change(SERVER_PEER_ID, seat_index)
+	elif lan_role == LanRole.CLIENT and connected:
+		_send_packet_to_peer(_build_packet("lobby_seat", {"seat_index":seat_index}), SERVER_PEER_ID)
+
+
+## 发送一条大厅聊天消息；房主直接写入公共历史，客户端可靠上行后由房主署名并广播。
+func send_lan_lobby_chat_message(message: String) -> void:
+	# 标准化后的聊天正文；空白消息不创建历史记录或网络封包。
+	var sanitized_message: String = _sanitize_lobby_chat_message(message)
+	if sanitized_message.is_empty() or mode != Mode.LAN or _lan_match_active:
+		return
+	if lan_role == LanRole.HOST:
+		_append_lobby_chat_message(SERVER_PEER_ID, sanitized_message)
+	elif lan_role == LanRole.CLIENT and connected:
+		_send_packet_to_peer(_build_packet("lobby_chat", {"message":sanitized_message}), SERVER_PEER_ID)
+
+
+## 房主踢出指定远端大厅成员；房主本人、未知成员和已开始对局中的成员均不能通过该入口移除。
+func kick_lan_lobby_member(peer_id: int) -> String:
+	if not is_lan_host() or _lan_match_active:
+		return "当前不是可管理成员的局域网房主。"
+	if peer_id <= SERVER_PEER_ID or not _lobby_members.has(peer_id):
+		return "无法移除该大厅成员。"
+	_reject_lobby_peer(peer_id, "你已被房主移出房间。")
+	return ""
 
 
 ## 返回本机可用于局域网直连的 IPv4 地址；过滤回环、IPv6 与链路本地地址，空结果时回退127.0.0.1。
@@ -252,7 +364,7 @@ func get_lan_ipv4_addresses() -> Array[String]:
 	return result
 
 
-## 房主在权威开局前随机绑定真人成员与稳定玩家 ID；空余 ID 由 MatchController 注册为 AI。
+## 房主在权威开局前按大厅位置顺序绑定真人成员与稳定玩家 ID；空余 ID 由 MatchController 注册为 AI。
 func prepare_lan_match_assignments(player_count: int) -> String:
 	if not is_lan_host() or _lan_match_active:
 		return "当前不是可开始对局的局域网房主。"
@@ -262,33 +374,33 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 		return "至少需要2名真人玩家才能开始局域网对局。"
 	if player_count < human_count or player_count > MAX_MATCH_PLAYER_COUNT:
 		return "游戏总人数必须介于当前真人数量与10人之间。"
+	if player_count != _lobby_player_count:
+		return "开局人数必须与大厅当前对局设置一致。"
+	if _lobby_game_mode_id != DEFAULT_LOBBY_GAME_MODE_ID:
+		return "当前游戏模式尚未实现。"
 	_peer_to_player_id.clear()
 	_player_to_peer_id.clear()
 	_player_display_names.clear()
-	# 可分配稳定玩家 ID；使用独立随机源打乱，避免真人总是占据前几个稳定 ID。
+	# 可分配稳定玩家 ID；大厅真人座位按玩家主动选择的0起始位置映射，空余 ID 由 AI 使用。
 	var available_player_ids: Array[int] = []
 	for player_id: int in range(player_count):
 		available_player_ids.append(player_id)
-	# 座次随机源；只决定真人与稳定 ID 的绑定，身份、牌堆与选将仍由权威对局随机源独立记录。
-	var assignment_rng: RandomNumberGenerator = RandomNumberGenerator.new()
-	assignment_rng.randomize()
-	for index: int in range(available_player_ids.size() - 1, 0, -1):
-		# 当前交换位置；Fisher-Yates 保证每个稳定玩家 ID 等概率分配给真人成员。
-		var swap_index: int = assignment_rng.randi_range(0, index)
-		# 当前索引原玩家 ID；交换期间暂存，修改仅影响本次随机座次结果。
-		var temporary_player_id: int = available_player_ids[index]
-		available_player_ids[index] = available_player_ids[swap_index]
-		available_player_ids[swap_index] = temporary_player_id
-	# 大厅成员顺序；房主与客户端均按稳定加入顺序消费随机后的玩家 ID，不依赖哈希顺序。
+	# 大厅成员顺序；快照先提供稳定成员副本，再按玩家主动选择的位置排序，不依赖哈希顺序。
 	var lobby_snapshot: Dictionary = get_lan_lobby_snapshot()
 	# 大厅成员数组；成员顺序已经由快照固定，数量应与当前真人数量一致。
 	var members: Array = lobby_snapshot.get("members", []) as Array
+	members.sort_custom(func(first_member_variant: Variant, second_member_variant: Variant) -> bool:
+		# 两名大厅成员；换位只影响这里的初始真人映射顺序，不改变身份洗牌或领袖座次旋转。
+		var first_member: Dictionary = first_member_variant as Dictionary
+		var second_member: Dictionary = second_member_variant as Dictionary
+		return int(first_member.get("seat_index", 0)) < int(second_member.get("seat_index", 0))
+	)
 	for member_index: int in range(members.size()):
 		# 当前大厅成员；显示名只用于权威玩家状态和日志，不参与网络权限判断。
 		var member: Dictionary = members[member_index] as Dictionary
 		# 当前成员网络连接 ID；用于建立连接到稳定玩家 ID 的权威映射。
 		var peer_id: int = int(member.get("peer_id", 0))
-		# 当前成员随机获得的稳定玩家 ID；对局期间不会因座次显示或掉线而改变。
+		# 当前成员稳定玩家 ID；按大厅位置从前到后映射到真人 ID，2人房的第三个视觉位置不会越过规则人数范围。
 		var player_id: int = available_player_ids[member_index]
 		_peer_to_player_id[peer_id] = player_id
 		_player_to_peer_id[player_id] = peer_id
@@ -488,6 +600,10 @@ func _on_peer_connected(peer_id: int) -> void:
 func _on_peer_disconnected(peer_id: int) -> void:
 	if lan_role != LanRole.HOST:
 		return
+	if _rejected_lobby_peer_ids.has(peer_id):
+		_rejected_lobby_peer_ids.erase(peer_id)
+		_last_incoming_sequence_by_peer.erase(peer_id)
+		return
 	# 断开成员快照；先保存显示名和玩家 ID，再清理所有会话映射。
 	var member: Dictionary = _lobby_members.get(peer_id, {}) as Dictionary
 	# 断开成员显示名；成员资料缺失时使用通用名称，保证托管日志仍可读。
@@ -512,7 +628,7 @@ func _on_connected_to_server() -> void:
 		return
 	connected = true
 	connection_state_changed.emit(true, "已连接房主，正在进入大厅……")
-	_send_packet_to_peer(_build_packet("lobby_join", {"display_name":_local_display_name}), SERVER_PEER_ID)
+	_send_packet_to_peer(_build_packet("lobby_join", {"display_name":_local_display_name, "avatar_character_id":_local_avatar_character_id, "room_password":_pending_lobby_password}), SERVER_PEER_ID)
 
 
 ## 客户端连接失败回调；释放 ENet 资源并返回可重试的离线状态。
@@ -562,7 +678,17 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 	var payload: Dictionary = (packet.get("payload", {}) as Dictionary).duplicate(true)
 	if lan_role == LanRole.HOST:
 		if message_type == "lobby_join":
-			_register_lobby_member(sender_peer_id, str(payload.get("display_name", "玩家")))
+			_register_lobby_member(sender_peer_id, str(payload.get("display_name", "玩家")), str(payload.get("avatar_character_id", "")), str(payload.get("room_password", "")))
+			return
+		if not _lobby_members.has(sender_peer_id):
+			return
+		if message_type == "lobby_seat":
+			if not _lan_match_active:
+				_apply_lobby_seat_change(sender_peer_id, int(payload.get("seat_index", -1)))
+			return
+		if message_type == "lobby_chat":
+			if not _lan_match_active:
+				_append_lobby_chat_message(sender_peer_id, str(payload.get("message", "")))
 			return
 		if not _lan_match_active or not _peer_to_player_id.has(sender_peer_id):
 			return
@@ -584,6 +710,8 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 			return
 		if message_type == "lobby_state":
 			_apply_remote_lobby_state(payload)
+		elif message_type == "lobby_rejected":
+			_apply_lobby_rejection(str(payload.get("message", "无法进入局域网房间。")))
 		elif message_type == "match_start":
 			_apply_remote_match_start(payload)
 		elif message_type == "snapshot" and _lan_match_active:
@@ -623,18 +751,26 @@ func _send_packet_to_peer(packet: Dictionary, peer_id: int) -> void:
 	rpc_id(peer_id, "_receive_packet_rpc", packet.duplicate(true))
 
 
-## 登记客户端大厅显示名并广播最新成员表；重复登记只更新显示名，不改变稳定加入顺序。
-func _register_lobby_member(peer_id: int, display_name: String) -> void:
+## 登记客户端大厅资料并广播最新成员表；密码错误时定向拒绝，重复登记保留原加入顺序与座位。
+func _register_lobby_member(peer_id: int, display_name: String, avatar_character_id: String, room_password: String) -> void:
 	if lan_role != LanRole.HOST or _lan_match_active or peer_id <= SERVER_PEER_ID:
+		return
+	if _sanitize_lobby_password(room_password) != _lobby_password:
+		_reject_lobby_peer(peer_id, "房间密码错误。")
 		return
 	# 已有成员；同一连接重复发送 hello 时保留原加入顺序，避免列表位置闪动。
 	var existing_member: Dictionary = _lobby_members.get(peer_id, {}) as Dictionary
+	if existing_member.is_empty() and _lobby_members.size() >= _lobby_player_count:
+		_reject_lobby_peer(peer_id, "房间当前没有空余位置。")
+		return
 	# 已有加入序号；-1表示首次登记，需要分配新的单调递增序号。
 	var join_order: int = int(existing_member.get("join_order", -1))
 	if join_order < 0:
 		_join_sequence += 1
 		join_order = _join_sequence
-	_lobby_members[peer_id] = _make_lobby_member(peer_id, _sanitize_display_name(display_name), false, join_order)
+	# 当前大厅座位；重复登记保留旧座位，首次加入分配从0开始的最小空位。
+	var seat_index: int = int(existing_member.get("seat_index", _find_first_available_lobby_seat()))
+	_lobby_members[peer_id] = _make_lobby_member(peer_id, _sanitize_display_name(display_name), _sanitize_avatar_character_id(avatar_character_id), false, join_order, seat_index)
 	connection_state_changed.emit(true, "%s已加入房间。" % str((_lobby_members[peer_id] as Dictionary).get("display_name", "玩家")))
 	_emit_lobby_state()
 
@@ -662,15 +798,22 @@ func _apply_remote_lobby_state(snapshot: Dictionary) -> void:
 		var member: Dictionary = (member_variant as Dictionary).duplicate(true)
 		_lobby_members[int(member.get("peer_id", 0))] = member
 	_lan_match_player_count = int(snapshot.get("player_count", 0))
+	_lobby_player_count = clampi(int(snapshot.get("player_count", 2)), 2, MAX_MATCH_PLAYER_COUNT)
+	_lobby_game_mode_id = _normalize_lobby_game_mode_id(str(snapshot.get("game_mode_id", DEFAULT_LOBBY_GAME_MODE_ID)))
+	_lobby_password_enabled = bool(snapshot.get("has_password", false))
+	_lobby_chat_history.clear()
+	for chat_variant: Variant in snapshot.get("chat_history", []) as Array:
+		_lobby_chat_history.append((chat_variant as Dictionary).duplicate(true))
 	_lan_match_active = bool(snapshot.get("match_active", false))
 	connected = true
+	_pending_lobby_password = ""
 	lan_lobby_changed.emit(get_lan_lobby_snapshot())
 	connection_state_changed.emit(true, "已进入局域网房间。")
 
 
-## 客户端应用房主开局通知；只保存自身玩家映射，不接收其他玩家与 peer 的对应关系。
+## 客户端应用房主开局通知；只保存自身按大厅位置分配的玩家映射，不接收其他玩家与 peer 的对应关系。
 func _apply_remote_match_start(payload: Dictionary) -> void:
-	# 本地稳定玩家 ID；房主已随机分配，客户端后续所有动作必须使用该值。
+	# 本地稳定玩家 ID；房主已按大厅位置顺序分配，客户端后续所有动作必须使用该值。
 	var local_player_id: int = int(payload.get("local_player_id", -1))
 	# 对局总人数；用于场景布局与基础合法范围检查，不代表大厅真人数量。
 	var player_count: int = clampi(int(payload.get("player_count", 0)), 2, MAX_MATCH_PLAYER_COUNT)
@@ -688,14 +831,120 @@ func _apply_remote_match_start(payload: Dictionary) -> void:
 	lan_match_started.emit(local_player_id, player_count)
 
 
-## 创建单个可序列化大厅成员；显示名已经由调用方标准化，加入序号只影响公共列表顺序。
-func _make_lobby_member(peer_id: int, display_name: String, is_host: bool, join_order: int) -> Dictionary:
+## 创建单个可序列化大厅成员；名称、形象与座位均已标准化，加入序号只用于成员列表稳定排序。
+func _make_lobby_member(peer_id: int, display_name: String, avatar_character_id: String, is_host: bool, join_order: int, seat_index: int) -> Dictionary:
 	return {
 		"peer_id":peer_id,
 		"display_name":display_name,
+		"avatar_character_id":avatar_character_id,
 		"is_host":is_host,
 		"join_order":join_order,
+		"seat_index":seat_index,
 	}
+
+
+## 应用大厅成员换位请求；只接受当前人数范围内未被占用的位置，成功后广播完整公共快照。
+func _apply_lobby_seat_change(peer_id: int, seat_index: int) -> void:
+	if lan_role != LanRole.HOST or _lan_match_active or not _lobby_members.has(peer_id):
+		return
+	if seat_index < 0 or seat_index >= _get_lobby_display_slot_count():
+		return
+	for member_variant: Variant in _lobby_members.values():
+		# 当前大厅成员；目标位置已被任何玩家占用时拒绝，不执行两人交换。
+		var member: Dictionary = member_variant as Dictionary
+		if int(member.get("seat_index", -1)) == seat_index:
+			return
+	# 待移动成员；复制后写回，避免把字典引用变更传播到正在生成的旧快照。
+	var moved_member: Dictionary = (_lobby_members.get(peer_id, {}) as Dictionary).duplicate(true)
+	moved_member["seat_index"] = seat_index
+	_lobby_members[peer_id] = moved_member
+	_emit_lobby_state()
+
+
+## 把聊天正文登记为房主权威公共历史；发送者名称由成员表解析，客户端不能伪造署名。
+func _append_lobby_chat_message(peer_id: int, message: String) -> void:
+	if lan_role != LanRole.HOST or _lan_match_active or not _lobby_members.has(peer_id):
+		return
+	# 标准化后的消息；空字符串不会进入历史或触发大厅重绘。
+	var sanitized_message: String = _sanitize_lobby_chat_message(message)
+	if sanitized_message.is_empty():
+		return
+	# 发送者大厅资料；只读取房主已经校验的显示名，不相信上行 payload 自报身份。
+	var member: Dictionary = _lobby_members.get(peer_id, {}) as Dictionary
+	_lobby_chat_sequence += 1
+	_lobby_chat_history.append({
+		"sequence":_lobby_chat_sequence,
+		"display_name":str(member.get("display_name", "玩家")),
+		"message":sanitized_message,
+		"time_text":Time.get_time_string_from_system(),
+	})
+	while _lobby_chat_history.size() > MAX_LOBBY_CHAT_HISTORY:
+		_lobby_chat_history.pop_front()
+	_emit_lobby_state()
+
+
+## 计算从0开始的最小空大厅座位；全部位置占满时返回当前人数上限作为无效标记。
+func _find_first_available_lobby_seat() -> int:
+	for seat_index: int in range(_get_lobby_display_slot_count()):
+		# 当前座位是否已被成员占用；仅大厅公共 seat_index 参与判断。
+		var is_occupied: bool = false
+		for member_variant: Variant in _lobby_members.values():
+			if int((member_variant as Dictionary).get("seat_index", -1)) == seat_index:
+				is_occupied = true
+				break
+		if not is_occupied:
+			return seat_index
+	return _get_lobby_display_slot_count()
+
+
+## 在房间人数缩小时重新规范化成员座位；保留仍合法且不重复的位置，其余成员依次填入空位。
+func _normalize_lobby_member_seats() -> void:
+	# 已占用座位；按稳定加入顺序处理成员，优先保留房主与先加入玩家的合法位置。
+	var occupied_seats: Array[int] = []
+	var snapshot: Dictionary = get_lan_lobby_snapshot()
+	for member_variant: Variant in snapshot.get("members", []) as Array:
+		# 当前大厅成员副本；非法或重复位置会在下面分配首个空位。
+		var member: Dictionary = (member_variant as Dictionary).duplicate(true)
+		# 当前候选座位；必须位于新人数范围内且没有被先前成员占用。
+		var seat_index: int = int(member.get("seat_index", -1))
+		if seat_index < 0 or seat_index >= _get_lobby_display_slot_count() or occupied_seats.has(seat_index):
+			seat_index = 0
+			while occupied_seats.has(seat_index) and seat_index < _get_lobby_display_slot_count():
+				seat_index += 1
+		member["seat_index"] = seat_index
+		occupied_seats.append(seat_index)
+		_lobby_members[int(member.get("peer_id", 0))] = member
+
+
+## 定向拒绝或踢出大厅客户端；可靠原因包先发送，再延迟断开底层 peer 以提高提示到达概率。
+func _reject_lobby_peer(peer_id: int, message: String) -> void:
+	if lan_role != LanRole.HOST or peer_id <= SERVER_PEER_ID:
+		return
+	_send_packet_to_peer(_build_packet("lobby_rejected", {"message":message}), peer_id)
+	_lobby_members.erase(peer_id)
+	if not _rejected_lobby_peer_ids.has(peer_id):
+		_rejected_lobby_peer_ids.append(peer_id)
+	_emit_lobby_state()
+	# 短暂延迟断开；可靠拒绝包先获得一个网络刷新窗口，客户端才能显示准确密码或踢出原因。
+	get_tree().create_timer(0.15).timeout.connect(_disconnect_rejected_lobby_peer.bind(peer_id))
+
+
+## 执行已经发送拒绝原因的底层断开；peer 可能已主动离开，因此调用前再次检查 ENet 实例。
+func _disconnect_rejected_lobby_peer(peer_id: int) -> void:
+	if _enet_peer != null:
+		_enet_peer.disconnect_peer(peer_id)
+
+
+## 客户端处理房主的大厅拒绝原因；立即释放本地 ENet 并返回可重试的离线入口。
+func _apply_lobby_rejection(message: String) -> void:
+	if lan_role != LanRole.CLIENT:
+		return
+	if _enet_peer != null:
+		_enet_peer.close()
+	_enet_peer = null
+	_set_offline_state()
+	connection_state_changed.emit(false, message)
+	lan_session_closed.emit(message)
 
 
 ## 标准化玩家显示名；移除首尾空白、限制长度，并为空值提供稳定“玩家”回退。
@@ -709,6 +958,43 @@ func _sanitize_display_name(display_name: String) -> String:
 	return sanitized_name
 
 
+## 标准化联机形象武将 ID；只接受数据库已登记武将，缺失或过期配置回退首个稳定 ID。
+func _sanitize_avatar_character_id(character_id: String) -> String:
+	# 去除首尾空白后的稳定武将 ID；大厅只传字符串，不传纹理或节点。
+	var sanitized_character_id: String = character_id.strip_edges()
+	if GameDatabase.characters.has(sanitized_character_id):
+		return sanitized_character_id
+	# 可用武将 ID；排序后回退首项，保证不同机器相同内容库得到同一默认形象。
+	var character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		character_ids.append(str(character_id_variant))
+	character_ids.sort()
+	return character_ids[0] if not character_ids.is_empty() else ""
+
+
+## 标准化房间密码；保留内部空格，移除首尾空白并限制为32个 Unicode 字符。
+func _sanitize_lobby_password(room_password: String) -> String:
+	return room_password.strip_edges().left(MAX_LOBBY_PASSWORD_LENGTH)
+
+
+## 标准化大厅聊天正文；移除首尾空白并限制长度，内部换行替换为空格保持单条消息紧凑。
+func _sanitize_lobby_chat_message(message: String) -> String:
+	return message.replace("\r", " ").replace("\n", " ").strip_edges().left(MAX_LOBBY_CHAT_LENGTH)
+
+
+## 规范化大厅游戏模式稳定 ID；只有已登记选项允许保存，未知值统一回退身份模式。
+func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
+	for mode_option: Dictionary in LOBBY_GAME_MODE_OPTIONS:
+		if str(mode_option.get("id", "")) == game_mode_id:
+			return game_mode_id
+	return DEFAULT_LOBBY_GAME_MODE_ID
+
+
+## 返回大厅需要绘制的视觉位置数；2人局与3人局都使用3个居中位置，其余人数与设置人数一致。
+func _get_lobby_display_slot_count() -> int:
+	return 3 if _lobby_player_count <= 3 else _lobby_player_count
+
+
 ## 清理全部 LAN 会话状态并恢复离线回环；该函数不发信号，由具体生命周期入口决定用户提示。
 func _set_offline_state() -> void:
 	mode = Mode.OFFLINE
@@ -716,6 +1002,15 @@ func _set_offline_state() -> void:
 	connected = true
 	outgoing_sequence = 0
 	_lobby_members.clear()
+	_lobby_password = ""
+	_lobby_password_enabled = false
+	_lobby_player_count = 2
+	_lobby_game_mode_id = DEFAULT_LOBBY_GAME_MODE_ID
+	_lobby_chat_history.clear()
+	_lobby_chat_sequence = 0
+	_rejected_lobby_peer_ids.clear()
+	_local_avatar_character_id = ""
+	_pending_lobby_password = ""
 	_join_sequence = 0
 	_peer_to_player_id.clear()
 	_player_to_peer_id.clear()

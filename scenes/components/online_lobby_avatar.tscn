@@ -1,0 +1,55 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/online_lobby_avatar.gd" id="1_avatar"]
+
+[node name="OnlineLobbyAvatar" type="Control"]
+custom_minimum_size = Vector2(148.35, 227.8)
+layout_mode = 3
+anchors_preset = 0
+mouse_filter = 1
+script = ExtResource("1_avatar")
+
+[node name="OnlineLobbyAvatarName" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 26.0
+mouse_filter = 2
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 15
+text = "玩家"
+horizontal_alignment = 1
+vertical_alignment = 1
+text_overrun_behavior = 3
+
+[node name="OnlineLobbyAvatarArtwork" type="TextureRect" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_top = 30.0
+offset_right = 148.35
+offset_bottom = 227.8
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="OnlineLobbyEmptySlotButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+offset_top = 30.0
+offset_right = 148.35
+offset_bottom = 227.8
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 18
+text = "空位"
+
+[node name="OnlineLobbyKickButton" type="Button" parent="."]
+unique_name_in_owner = true
+visible = false
+z_index = 2
+layout_mode = 0
+offset_left = 22.0
+offset_top = 179.8
+offset_right = 126.35
+offset_bottom = 217.8
+mouse_default_cursor_shape = 2
+text = "踢出"

@@ -19,7 +19,7 @@ signal auto_identity_marking_changed(enabled: bool)
 ## 联机玩家名称变化信号；大厅等只读显示组件据此刷新名称，不直接访问资料设置界面的输入节点。
 signal online_player_name_changed(player_name: String)
 
-## 联机形象变化信号；参数为稳定武将 ID，当前只保存未来联机大厅可消费的展示选择。
+## 联机形象变化信号；参数为稳定武将 ID，联机大厅据此提交并显示玩家选择的武将插画。
 signal online_avatar_character_changed(character_id: String)
 
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
@@ -76,7 +76,7 @@ var auto_identity_marking_enabled: bool = true
 ## 当前联机玩家名称；默认“玩家”，在创建或加入局域网房间时作为不可编辑显示名提交。
 var online_player_name: String = DEFAULT_ONLINE_PLAYER_NAME
 
-## 当前联机形象对应的稳定武将 ID；空值表示尚未选择，资料面板打开后会回退到首个可用武将。
+## 当前联机形象对应的稳定武将 ID；空值表示尚未选择，资料面板或网络网关会回退到首个可用武将。
 var online_avatar_character_id: String = ""
 
 
