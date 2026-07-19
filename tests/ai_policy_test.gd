@@ -414,7 +414,7 @@ func _test_hostile_card_target() -> bool:
 	return true
 
 
-## 验证 AI 不会对装备【仁王盾】的目标使用黑色【杀】，但持有无视防具武器时仍保留该合法攻击动作。
+## 验证 AI 会跳过防具完全免疫的攻击，但【星火】等仍能产生正向技能收益时保留该合法动作。
 func _test_renwang_shield_black_slash() -> bool:
 	# 全身份公开快照；一号反贼是唯一敌方目标，黑色【杀】实体来自领袖完整手牌。
 	var snapshot: Dictionary = _build_snapshot(true)
@@ -431,7 +431,7 @@ func _test_renwang_shield_black_slash() -> bool:
 	var ignored_armor_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
 	if str(ignored_armor_choice.get("action_type", "")) != "use_card" or int(ignored_armor_choice.get("card_uid", -1)) != 101:
 		return _fail("renwang_ignored_by_qinggang=%s" % [ignored_armor_choice])
-	# 藤甲目标；普通【杀】与南蛮入侵均应判定为完全无效。
+	# 藤甲目标；普通【杀】、南蛮入侵与万箭齐发均应判定为完全无效。
 	(snapshot.get("players", []) as Array)[0]["equipment"] = {}
 	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(803, "tengjia", 1)}
 	var tengjia_normal_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
@@ -444,7 +444,20 @@ func _test_renwang_shield_black_slash() -> bool:
 	var tengjia_nanman_choice: Dictionary = _policy.choose_action(snapshot, [nanman_action])
 	if str(tengjia_nanman_choice.get("action_type", "")) != "end_play":
 		return _fail("tengjia_nanman=%s" % [tengjia_nanman_choice])
+	# 万箭齐发群体动作；与南蛮入侵相同，唯一实际目标被藤甲免疫时不得只因高出牌顺序消耗实体牌。
+	var wanjian_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":805, "card_definition_id":"wanjian", "target_ids":[], "payload":{}}
+	var tengjia_wanjian_choice: Dictionary = _policy.choose_action(snapshot, [wanjian_action])
+	if str(tengjia_wanjian_choice.get("action_type", "")) != "end_play":
+		return _fail("tengjia_wanjian=%s" % [tengjia_wanjian_choice])
+	# 姬子【星火】会在指定唯一目标后横置敌方，即使黑色【杀】被仁王盾拦截仍有独立正收益。
+	(snapshot.get("players", []) as Array)[0]["character_id"] = "himeko"
+	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(804, "renwang", 1)}
+	var xinghuo_blocked_slash_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
+	if str(xinghuo_blocked_slash_choice.get("action_type", "")) != "use_card" or int(xinghuo_blocked_slash_choice.get("card_uid", -1)) != 101:
+		return _fail("xinghuo_blocked_slash=%s" % [xinghuo_blocked_slash_choice])
 	# 火【杀】动作；藤甲不会拦截且火焰伤害加1应提高目标伤害收益。
+	(snapshot.get("players", []) as Array)[0]["character_id"] = "xier"
+	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(803, "tengjia", 1)}
 	var fire_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":805, "card_definition_id":"sha_fire", "target_ids":[1], "payload":{}}
 	# AI评估器；直接比较有无藤甲时相同火【杀】目标收益。
 	var fire_evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
