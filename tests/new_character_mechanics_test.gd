@@ -985,6 +985,24 @@ func _test_new_skill_ai_rules() -> bool:
 	var draw_only_play_request: Dictionary = {"context":{"kind":"yongyi_play_phase_confirm", "usable_card_count":0, "enemy_slash_available":false}}
 	if yongyi.score_ai_choice(snapshot, draw_only_play_request, confirm_action, evaluator) >= 0.0:
 		return _fail("yongyi_ai_draw_only")
+	# 焕发静态AI；娜塔莎只有黑色【闪】时没有可用手牌，也不满足药理的红色材料条件。
+	_reset_state(3)
+	_controller.state.get_player(0).character_id = "natasha"
+	_add_hand_card(0, "shan", "spade", 2)
+	var huanfa: SkillDefinition = GameDatabase.create_skill("huanfa")
+	huanfa.bind(null, 0)
+	var huanfa_confirm_request: Dictionary = {"context":{"kind":"huanfa_confirm", "target_id":0}}
+	var no_opportunity_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) >= 0.0:
+		return _fail("huanfa_ai_self_without_usable_card")
+	# 忠臣空手时不应凭空获得额外阶段收益；加入一张可使用【杀】后才恢复正向发动价值。
+	huanfa_confirm_request["context"] = {"kind":"huanfa_confirm", "target_id":2}
+	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) > 0.0:
+		return _fail("huanfa_ai_empty_friend")
+	_add_hand_card(2, "sha", "spade", 7)
+	var friend_with_playable_card_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	if huanfa.score_ai_choice(friend_with_playable_card_snapshot, huanfa_confirm_request, confirm_action, evaluator) <= 0.0:
+		return _fail("huanfa_ai_friend_with_playable_card")
 	return true
 
 

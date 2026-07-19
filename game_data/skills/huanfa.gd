@@ -5,6 +5,18 @@ extends SkillDefinition
 ## 当前轮是否已经成功发动；roundStart重置，确认但阶段登记失败时不消耗次数。
 var _used_this_round: bool = false
 
+## 额外出牌阶段的基础行动价值；默认1分只在目标存在可用手牌时加入，避免空手阶段凭空获得收益。
+const BASE_EXTRA_PLAY_PHASE_VALUE: float = 1.0
+
+## 每张可用手牌提供的额外阶段价值；默认0.7分反映更多牌带来更多可选行动。
+const HAND_CARD_EXTRA_PLAY_PHASE_VALUE: float = 0.7
+
+## 手牌行动空间的最大附加值；默认3.5分避免高数量手牌无限抬高单次额外阶段收益。
+const MAX_HAND_CARD_EXTRA_PLAY_PHASE_VALUE: float = 3.5
+
+## 自身没有任何可用手牌或满足条件的主动技能时的确认评分；固定-20分确保可取消询问选择放弃。
+const SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE: float = -20.0
+
 
 ## 写入技能静态信息；技能描述严格保持设计原文。
 func _init() -> void:
@@ -61,8 +73,13 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		return 0.0
 	# 当前回合角色；额外阶段价值乘娜塔莎对其的当前可感知态度。
 	var target_id: int = int(context.get("target_id", -1))
+	# 当前目标的实际额外阶段机会；空手、仅响应牌或技能材料不满足时会返回0。
+	var extra_play_phase_value: float = _estimate_extra_play_phase_value(authoritative_snapshot, target_id)
+	# 娜塔莎自身没有可用行动时不能为消耗次数而发动；药理必须持有红色普通手牌才算可用机会。
+	if target_id == owner_player_id and is_zero_approx(extra_play_phase_value):
+		return SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE
 	# 当前发动收益；正值表示立即使用本轮额度比取消更有利。
-	var current_value: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) / 5.0 * _estimate_extra_play_phase_value(authoritative_snapshot, target_id)
+	var current_value: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) / 5.0 * extra_play_phase_value
 	# 后续保留价值；只考虑本轮尚未行动、手中明确拥有【药】且对娜塔莎友好的角色。
 	var future_value: float = _best_future_candidate_value(authoritative_snapshot, target_id, evaluator)
 	return current_value - future_value
@@ -104,19 +121,102 @@ func _snapshot_has_medicine(player: Dictionary) -> bool:
 	return false
 
 
-## 估算指定角色执行额外出牌阶段的收益；通用手牌行动空间叠加技能声明的阶段价值。
+## 估算指定角色执行额外出牌阶段的收益；只计算实际可用手牌和满足材料条件的主动技能，不把空阶段视为固定收益。
 func _estimate_extra_play_phase_value(authoritative_snapshot: Dictionary, target_id: int) -> float:
 	# 目标角色快照；空字典表示目标不存在，额外阶段没有收益。
 	var target: Dictionary = _snapshot_player(authoritative_snapshot, target_id)
 	if target.is_empty():
 		return 0.0
-	# 基础可用牌收益；至少保留1分，使空手但拥有无材料主动技能的角色仍可被合理评估。
-	var result: float = 1.0 + minf(float(target.get("hand_count", 0)) * 0.7, 3.5)
+	# 额外阶段收益；可用手牌和可发动技能分别累计，空手且技能材料不满足时保持0分。
+	var result: float = 0.0
+	if _snapshot_has_playable_hand_card(authoritative_snapshot, target):
+		# 可用手牌数量；使用公开计数避免权威快照对非自身角色未附完整手牌时低估行动空间。
+		var hand_count: int = maxi(int(target.get("hand_count", 0)), 0)
+		result += BASE_EXTRA_PLAY_PHASE_VALUE + minf(float(hand_count) * HAND_CARD_EXTRA_PLAY_PHASE_VALUE, MAX_HAND_CARD_EXTRA_PLAY_PHASE_VALUE)
 	# 目标武将定义；技能可通过通用元数据声明额外出牌阶段价值。
 	var character: Dictionary = GameDatabase.get_character(str(target.get("character_id", "")))
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		result += float(GameDatabase.get_skill(str(skill_id_variant)).get("ai_extra_play_phase_value", 0.0))
+		# 当前技能定义；数值与材料条件均由技能自身元数据声明，焕发不维护技能 ID 白名单。
+		var skill_definition: Dictionary = GameDatabase.get_skill(str(skill_id_variant))
+		# 当前技能额外阶段价值；没有正值声明的技能不会被凭空视为主动机会。
+		var skill_value: float = float(skill_definition.get("ai_extra_play_phase_value", 0.0))
+		# 当前技能材料条件；为空表示该技能自行声明无需手牌材料。
+		var requirements: Dictionary = skill_definition.get("ai_extra_play_phase_requirements", {}) as Dictionary
+		if skill_value > 0.0 and _are_extra_play_phase_requirements_satisfied(target, requirements):
+			result += skill_value
 	return result
+
+
+## 判断快照中的手牌是否存在可在额外出牌阶段使用的机会；响应专用牌、满体力【桃】等不把空阶段误判为可行动。
+func _snapshot_has_playable_hand_card(authoritative_snapshot: Dictionary, target: Dictionary) -> bool:
+	# 已序列化的完整手牌；AI自身通常可见，其他角色缺失完整数据时按公开手牌数保守保留机会。
+	var hand_cards: Array = target.get("hand", []) as Array
+	if hand_cards.is_empty():
+		return int(target.get("hand_count", 0)) > 0
+	for card_variant: Variant in hand_cards:
+		# 当前手牌快照；临时视为牌已将 definition_id 改为当前逻辑定义。
+		var card: Dictionary = card_variant as Dictionary
+		# 当前卡牌定义；数据缺失时不声称该牌可以在出牌阶段使用。
+		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
+		if _is_snapshot_card_playable(authoritative_snapshot, target, definition):
+			return true
+	return false
+
+
+## 判断一张已知手牌是否具有基础出牌阶段机会；只按通用目标模式与公开存活状态过滤，不替代规则层最终校验。
+func _is_snapshot_card_playable(authoritative_snapshot: Dictionary, target: Dictionary, definition: Dictionary) -> bool:
+	if definition.is_empty():
+		return false
+	# 卡牌目标模式；response_only 只可在响应窗口打出，不能构成额外出牌阶段行动。
+	var target_mode: String = str(definition.get("target_mode", ""))
+	if target_mode == "response_only":
+		return false
+	if target_mode == "self_wounded":
+		return int(target.get("hp", 0)) < int(target.get("max_hp", 0))
+	if target_mode in ["self", "all_players"]:
+		return true
+	if target_mode == "single_with_hand":
+		return _has_snapshot_alive_player_with_hand(authoritative_snapshot)
+	return _has_snapshot_other_alive_player(authoritative_snapshot, int(target.get("player_id", -1)))
+
+
+## 判断目标是否满足技能声明的额外阶段材料条件；当前支持最少手牌数与指定手牌颜色，新增条件由数据字段扩展。
+func _are_extra_play_phase_requirements_satisfied(target: Dictionary, requirements: Dictionary) -> bool:
+	# 所需最少手牌数；默认0表示技能不要求普通手牌数量。
+	var minimum_hand_count: int = maxi(int(requirements.get("minimum_hand_count", 0)), 0)
+	if int(target.get("hand_count", 0)) < minimum_hand_count:
+		return false
+	# 所需手牌颜色；空字符串表示没有颜色限制。
+	var required_hand_color: String = str(requirements.get("required_hand_color", ""))
+	if required_hand_color.is_empty():
+		return true
+	# 已序列化手牌；颜色材料必须真实可见，不能依据其他角色的未知手牌数量猜测。
+	for card_variant: Variant in target.get("hand", []) as Array:
+		# 当前候选手牌；花色转换或临时视为不会改变实体的颜色字段。
+		var card: Dictionary = card_variant as Dictionary
+		if str(card.get("color", "none")) == required_hand_color:
+			return true
+	return false
+
+
+## 判断快照中是否存在目标以外的存活角色；单目标他人牌与群体对他人牌至少需要该条件才有行动机会。
+func _has_snapshot_other_alive_player(authoritative_snapshot: Dictionary, target_id: int) -> bool:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前候选角色；死亡或离场者不能成为出牌阶段目标。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) != target_id and bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)):
+			return true
+	return false
+
+
+## 判断快照中是否存在手牌非空的存活角色；火攻等要求目标有手牌的通用目标模式使用该条件。
+func _has_snapshot_alive_player_with_hand(authoritative_snapshot: Dictionary) -> bool:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前候选角色；必须在场且公开手牌数量大于0才能满足目标模式。
+		var player: Dictionary = player_variant as Dictionary
+		if bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)) and int(player.get("hand_count", 0)) > 0:
+			return true
+	return false
 
 
 ## 从权威快照读取指定玩家；不存在时返回空字典。
