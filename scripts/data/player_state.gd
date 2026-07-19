@@ -93,8 +93,14 @@ var response_history: Array[Dictionary] = []
 ## 当前回合受到或造成的伤害记录；每项保存来源、目标、数值、属性和事件 ID。
 var damage_history: Array[Dictionary] = []
 
+## 本局累计受到有效伤害的次数；正数伤害即使被护盾完全吸收也会增加，用于客户端播放不依赖体力变化的受伤反馈。
+var damage_taken_count: int = 0
+
 ## 当前回合发动技能记录；每项保存技能 ID、时机、目标和事件 ID。
 var skill_history: Array[Dictionary] = []
+
+## 当前回合内未能对指定目标产生预期效果的牌；键为卡牌定义ID，值为目标ID数组，供AI避免重复无效尝试。
+var ai_failed_card_target_ids: Dictionary = {}
 
 
 ## 使用稳定 ID 与显示名创建玩家状态，其他字段由开局流程填充。
@@ -222,6 +228,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),
 		"response_history_count": response_history.size(),
 		"damage_history_count": damage_history.size(),
+		"damage_taken_count": damage_taken_count,
+		"ai_failed_card_target_ids": ai_failed_card_target_ids.duplicate(true),
 		# 技能发动历史是公开事实；AI用稳定回合号与目标上下文判断“每回合每名角色限一次”。
 		"skill_history": skill_history.duplicate(true),
 		"skill_history_count": skill_history.size(),

@@ -1,6 +1,7 @@
 extends SkillDefinition
 
 ## 【录事】技能源码。持有者可反复弃置两张原版牌名字数相同的手牌或装备牌并摸一张牌。
+## 名字数按卡牌规则名计算；属性【杀】的牌面属性前缀不参与字数，函数与旧注释中的“原版”称呼为兼容既有内容保留。
 
 ## 录事每次成功结算摸牌数；固定1张。
 const DRAW_COUNT: int = 1
@@ -99,6 +100,7 @@ func _get_valid_pairs() -> Array:
 		# 第一张牌公开数据；包含当前定义ID与稳定UID。
 		var first_data: Dictionary = first_candidate.get("card_data", {}) as Dictionary
 		# 第一张牌原版名字数；0表示定义缺失并禁止组成费用。
+		# 实际查询优先读取规则名；火【杀】与雷【杀】都按一个汉字的【杀】计算。
 		var first_length: int = int(host.call("get_card_original_name_length", str(first_data.get("definition_id", ""))))
 		for second_index: int in range(first_index + 1, candidates.size()):
 			# 第二张候选；索引严格大于第一张避免实体重复。
@@ -106,6 +108,7 @@ func _get_valid_pairs() -> Array:
 			# 第二张牌公开数据；用于读取定义ID。
 			var second_data: Dictionary = second_candidate.get("card_data", {}) as Dictionary
 			# 第二张牌原版名字数；必须为正且等于第一张。
+			# 第二张同样使用规则名，确保属性前缀不会制造错误的两字组合。
 			var second_length: int = int(host.call("get_card_original_name_length", str(second_data.get("definition_id", ""))))
 			if first_length > 0 and first_length == second_length:
 				result.append([int(first_candidate.get("uid", -1)), int(second_candidate.get("uid", -1))])

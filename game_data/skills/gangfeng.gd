@@ -18,7 +18,7 @@ func _init() -> void:
 		"id": "gangfeng",
 		"name": "罡风",
 		"trigger": "active",
-		"enable": "phaseUse",
+		"enable": ["phaseUse", "chooseToRespond"],
 		"ui_enabled": true,
 		"description": "你可将黑色牌当雷【杀】使用或打出。",
 	})
@@ -28,7 +28,12 @@ func _init() -> void:
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场或非本人出牌阶段时不能主动转化。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	if owner == null or not owner.alive or owner.out_of_game or host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
+	if owner == null or not owner.alive or owner.out_of_game:
+		return false
+	# 响应入口；只有明确需要打出【杀】且存在黑色材料时技能按钮亮起，材料不会自动视为【杀】。
+	if str(_context.get("active_entry", "")) == "chooseToRespond":
+		return (_context.get("response_patterns", []) as Array).has("sha") and not _get_black_material_candidates().is_empty()
+	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
 	if _get_black_material_candidates().is_empty():
 		return false

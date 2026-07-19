@@ -586,7 +586,7 @@ func _apply_owner_label_style(owner_label: Label) -> void:
 
 ## 切换一张候选牌的本地选择状态，并遵守请求最大选择数量。
 func _on_card_pressed(card_uid: int) -> void:
-	if not _selectable_card_uids.has(card_uid):
+	if not _get_dynamic_selectable_card_uids().has(card_uid):
 		return
 	if _selected_card_uids.has(card_uid):
 		_selected_card_uids.erase(card_uid)
@@ -602,13 +602,61 @@ func _on_card_pressed(card_uid: int) -> void:
 
 ## 同步牌面描边与确认按钮；只有数量位于请求范围内才能提交。
 func _refresh_selection_state() -> void:
+	# 当前选择前缀下仍可组成合法完整组合的候选；不兼容牌立即压暗且停止接收输入。
+	var dynamic_selectable_card_uids: Array[int] = _get_dynamic_selectable_card_uids()
 	for card_uid_variant: Variant in _card_views.keys():
+		# 当前牌面稳定UID；用于同时刷新选中描边与动态交互权限。
 		var card_uid: int = int(card_uid_variant)
-		(_card_views[card_uid] as CardView).set_selected_state(_selected_card_uids.has(card_uid))
+		# 当前正式牌面；公共只读虚影不在基础可选集合中，始终保持不可交互。
+		var card_view: CardView = _card_views[card_uid] as CardView
+		card_view.set_selected_state(_selected_card_uids.has(card_uid))
+		card_view.set_interactable_state(dynamic_selectable_card_uids.has(card_uid))
 	# 数量约束；允许取消不代表空选择可以通过“确定”按钮提交。
 	var min_select: int = int(_choice_request.get("min_select", 0))
 	var max_select: int = int(_choice_request.get("max_select", 0))
 	_confirm_button.disabled = _selected_card_uids.size() < min_select or _selected_card_uids.size() > max_select
+
+
+## 返回当前选择前缀下仍能组成至少一条权威合法组合的候选UID；已选牌始终保留交互以允许取消。
+func _get_dynamic_selectable_card_uids() -> Array[int]:
+	# 动态可选结果；没有组合约束时与规则请求的基础候选完全一致。
+	var result: Array[int] = []
+	# 选择上下文；valid_card_combinations由技能规则预先枚举完整合法组合。
+	var context: Dictionary = _choice_request.get("context", {}) as Dictionary
+	# 完整合法组合数组；空数组表示该请求没有组合级约束。
+	var valid_card_combinations: Array = context.get("valid_card_combinations", []) as Array
+	# 最大选择数；达到上限后仅已选牌保持可点击以支持取消。
+	var max_select: int = int(_choice_request.get("max_select", 0))
+	for candidate_uid: int in _selectable_card_uids:
+		if _selected_card_uids.has(candidate_uid):
+			result.append(candidate_uid)
+			continue
+		if _selected_card_uids.size() >= max_select:
+			continue
+		if valid_card_combinations.is_empty() or _has_compatible_card_combination(candidate_uid, valid_card_combinations):
+			result.append(candidate_uid)
+	return result
+
+
+## 判断把一张候选追加到当前选择后，是否仍是某条完整合法组合的子集。
+func _has_compatible_card_combination(candidate_uid: int, valid_card_combinations: Array) -> bool:
+	# 待验证选择前缀；保持点击顺序但组合匹配只检查成员集合。
+	var tentative_selection: Array[int] = _selected_card_uids.duplicate()
+	tentative_selection.append(candidate_uid)
+	for combination_variant: Variant in valid_card_combinations:
+		# 当前完整合法组合；元素统一转换为整数UID。
+		var combination: Array[int] = []
+		for card_uid_variant: Variant in combination_variant as Array:
+			combination.append(int(card_uid_variant))
+		# 当前选择前缀是否全部包含于该完整组合；任一匹配即可继续选择。
+		var contains_all_selected: bool = true
+		for selected_uid: int in tentative_selection:
+			if not combination.has(selected_uid):
+				contains_all_selected = false
+				break
+		if contains_all_selected:
+			return true
+	return false
 
 
 ## 发出当前选择结果；实际 UID 和请求序号仍会由 MatchController 权威校验。

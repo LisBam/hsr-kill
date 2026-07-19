@@ -93,6 +93,21 @@ const LOYALIST_RESCUE_BONUS: float = 3.0
 ## 救援者仅剩1点体力时保留救援牌的惩罚；救领袖时不应用该惩罚。
 const LOW_HP_RESCUE_RESERVE_PENALTY: float = 3.0
 
+## 濒死友方没有手牌时的救援降权；缺少可立即转化为行动的资源时降低【桃】的长期收益。
+const EMPTY_HAND_RESCUE_PENALTY: float = 2.5
+
+## 濒死友方距离其下个回合每多等待一名角色的降权；从第二个等待座次开始累计。
+const RESCUE_TURN_DISTANCE_PENALTY: float = 0.75
+
+## 回合距离对救援价值的最大降权；避免长桌座次完全压过领袖保护与明确阵营目标。
+const MAX_RESCUE_TURN_DISTANCE_PENALTY: float = 3.0
+
+## 濒死友方判定区存在【乐不思蜀】时的降权；其下个出牌阶段可能被跳过。
+const LEBU_RESCUE_PENALTY: float = 2.5
+
+## 濒死友方判定区存在【兵粮寸断】时的降权；其下个摸牌阶段可能被跳过。
+const BINGLIANG_RESCUE_PENALTY: float = 1.5
+
 ## 每张已知伤害牌增加的威胁值；用于区分同等体力与手牌数下的进攻能力。
 const DAMAGE_CARD_THREAT: float = 0.6
 
@@ -199,6 +214,22 @@ func score_rescue(authoritative_snapshot: Dictionary, responder_id: int, dying_p
 	var attitude: float = identity_model.get_attitude(authoritative_snapshot, responder_id, dying_player_id)
 	# 基础救援收益；达到1点还需回复越多，单张救援对最终存活的边际价值略降低。
 	var score: float = attitude + BASE_RESCUE_VALUE - float(maxi(required_recover - 1, 0)) * EXTRA_RECOVER_PENALTY
+	# 明确友方的行动转化能力；敌对与未知角色不借此重复降权，领袖等战略奖励仍在后续独立计算。
+	if attitude > 0.0:
+		if int(dying_player.get("hand_count", 0)) <= 0:
+			score -= EMPTY_HAND_RESCUE_PENALTY
+		# 距离目标下回合的等待座次；紧邻行动不惩罚，从第二名等待角色开始逐步降低价值。
+		var turn_distance: int = _get_turn_distance(authoritative_snapshot, dying_player_id)
+		score -= minf(float(maxi(turn_distance - 1, 0)) * RESCUE_TURN_DISTANCE_PENALTY, MAX_RESCUE_TURN_DISTANCE_PENALTY)
+		for judgment_variant: Variant in dying_player.get("judgment_area", []) as Array:
+			# 判定区牌快照；固定定义ID用于区分跳过出牌与跳过摸牌风险。
+			var judgment_card: Dictionary = judgment_variant as Dictionary
+			# 判定区牌定义ID；同类延时锦囊不会重复放置，但循环仍保持通用。
+			var judgment_id: String = str(judgment_card.get("definition_id", ""))
+			if judgment_id == "lebu":
+				score -= LEBU_RESCUE_PENALTY
+			elif judgment_id == "bingliang":
+				score -= BINGLIANG_RESCUE_PENALTY
 	if dying_identity == "leader":
 		if responder_identity == "loyalist":
 			score += LOYALIST_LEADER_RESCUE_BONUS
@@ -222,6 +253,24 @@ func score_rescue(authoritative_snapshot: Dictionary, responder_id: int, dying_p
 	if int(responder.get("hp", 0)) <= 1 and dying_identity != "leader":
 		score -= LOW_HP_RESCUE_RESERVE_PENALTY
 	return score
+
+
+## 返回从当前行动者到目标下个回合需要经过的存活座次数；当前行动者就是目标时返回0。
+func _get_turn_distance(authoritative_snapshot: Dictionary, target_id: int) -> int:
+	# 存活玩家ID；死亡或离场角色不占用后续回合距离。
+	var alive_player_ids: Array[int] = []
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；保持权威座次顺序。
+		var player: Dictionary = player_variant as Dictionary
+		if bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)):
+			alive_player_ids.append(int(player.get("player_id", -1)))
+	# 当前行动者座次；不存在时无法可靠估算，按不降权处理。
+	var current_index: int = alive_player_ids.find(int(authoritative_snapshot.get("current_player_id", -1)))
+	# 目标座次；不存在时同样按不降权处理。
+	var target_index: int = alive_player_ids.find(target_id)
+	if current_index < 0 or target_index < 0 or alive_player_ids.is_empty():
+		return 0
+	return posmod(target_index - current_index, alive_player_ids.size())
 
 
 ## 返回目标对观察者阵营的综合威胁；状态、伤害牌、武器和目标身份共同参与。

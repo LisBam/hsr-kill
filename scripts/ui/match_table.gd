@@ -223,6 +223,9 @@ var _faction_definition_cache: Dictionary = {}
 ## 最近一次快照中每名玩家的公开体力；键为稳定玩家 ID，用于检测本次快照是否发生真实体力下降。
 var _player_hp_by_id: Dictionary = {}
 
+## 最近一次快照中每名玩家的累计受伤次数；键为稳定玩家ID，用于识别被护盾完全吸收但仍实际成立的伤害。
+var _player_damage_taken_count_by_id: Dictionary = {}
+
 ## 当前体力对账所属对局 ID；重新开局时先建立新基线，不能把新局初始体力误判为受伤。
 var _hp_snapshot_match_id: String = ""
 
@@ -278,6 +281,9 @@ var _inline_card_choice: Dictionary = {}
 
 ## 当前内联请求中按点击顺序选择的实体牌 UID；支持弃牌阶段一次选择多张手牌。
 var _inline_selected_card_uids: Array[int] = []
+
+## 当前内联响应中由玩家明确点击的转化技能ID；空字符串表示只开放可直接响应的实体牌。
+var _active_response_skill_id: String = ""
 
 ## 【振旗】内联取消按钮；仅在费用选择时显示，与原确定/取消按钮共同组成三项直接选择。
 var _zhenqi_cancel_button: Button
@@ -705,6 +711,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	if not _inline_card_choice.is_empty() and int(_inline_card_choice.get("request_id", -2)) != runtime_request_id:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
+		_active_response_skill_id = ""
 	if _modal_choice_request_id >= 0 and _modal_choice_request_id != runtime_request_id:
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
@@ -738,12 +745,15 @@ func _update_player_hp_snapshot(snapshot: Dictionary) -> Array[int]:
 	var is_new_match: bool = not _has_hp_snapshot or match_id != _hp_snapshot_match_id
 	if is_new_match:
 		_player_hp_by_id.clear()
+		_player_damage_taken_count_by_id.clear()
 		_hp_snapshot_match_id = match_id
 		_has_hp_snapshot = true
 	# 本次发生体力下降的玩家 ID；同一快照每名玩家最多记录一次。
 	var damaged_player_ids: Array[int] = []
 	# 下一份体力基线；只保留当前快照仍存在的玩家，人数减少后不会残留旧座次数据。
 	var next_player_hp_by_id: Dictionary = {}
+	# 下一份累计受伤次数基线；与体力索引一同按当前玩家集合重建。
+	var next_player_damage_taken_count_by_id: Dictionary = {}
 	for player_variant: Variant in snapshot.get("players", []) as Array:
 		# 当前公开玩家快照；体力属于公开信息，可用于纯表现反馈。
 		var player: Dictionary = player_variant as Dictionary
@@ -753,10 +763,18 @@ func _update_player_hp_snapshot(snapshot: Dictionary) -> Array[int]:
 			continue
 		# 当前公开体力；允许濒死状态低于0，比较时不进行裁剪。
 		var current_hp: int = int(player.get("hp", 0))
-		if not is_new_match and _player_hp_by_id.has(player_id) and current_hp < int(_player_hp_by_id.get(player_id, current_hp)):
+		# 当前累计受伤次数；旧快照没有该字段时回退到体力下降检测，保持存档与组件测试兼容。
+		var current_damage_taken_count: int = int(player.get("damage_taken_count", _player_damage_taken_count_by_id.get(player_id, 0)))
+		# 是否出现新的有效伤害；累计计数优先，体力下降作为旧快照兼容条件。
+		var received_new_damage: bool = not is_new_match and _player_damage_taken_count_by_id.has(player_id) and current_damage_taken_count > int(_player_damage_taken_count_by_id.get(player_id, current_damage_taken_count))
+		if not received_new_damage and not is_new_match and not player.has("damage_taken_count") and _player_hp_by_id.has(player_id):
+			received_new_damage = current_hp < int(_player_hp_by_id.get(player_id, current_hp))
+		if received_new_damage:
 			damaged_player_ids.append(player_id)
 		next_player_hp_by_id[player_id] = current_hp
+		next_player_damage_taken_count_by_id[player_id] = current_damage_taken_count
 	_player_hp_by_id = next_player_hp_by_id
+	_player_damage_taken_count_by_id = next_player_damage_taken_count_by_id
 	return damaged_player_ids
 
 
@@ -939,7 +957,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
 			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
-			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id)
+			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context())
 			(_skill_views[skill_id] as SkillButtonView).configure(skill_definition, skill_available)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -963,7 +981,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		if skill_definition.is_empty():
 			skill_definition = {"id":skill_id, "name":skill_id, "description":"技能元数据尚未登记。"}
 		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
-		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id)
+		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context())
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		skill_button.configure(skill_definition, skill_available)
@@ -1034,12 +1052,48 @@ func _on_skill_requested(skill_id: String) -> void:
 	# 被请求的技能定义；用于展示名称、说明和接入状态。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 	# 不可主动发动、条件不满足或锁定技按钮保持静默；说明只由工具提示承担，不写入错误提示区。
-	if not bool(skill_definition.get("ui_enabled", false)) or not match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id):
+	# 当前主动入口上下文；响应阶段包含所需牌型与可发动技能列表，出牌阶段为空字典。
+	var activation_context: Dictionary = _get_local_skill_activation_context()
+	if not bool(skill_definition.get("ui_enabled", false)) or not match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, activation_context):
+		return
+	if _is_inline_response_skill_available(skill_id):
+		_active_response_skill_id = skill_id
+		_inline_selected_card_uids.clear()
+		error_label.text = ""
+		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+		_render_local_hand()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
+		_refresh_selection_text()
 		return
 	# 主动技能动作；技能文件自行校验阶段、次数、目标与资源，界面不直接修改任何规则状态。
 	var action: PlayerAction = PlayerAction.new("use_skill", match_controller.local_human_player_id)
 	action.payload = {"skill_id":skill_id}
 	match_controller.submit_action(action)
+
+
+## 返回本地技能按钮当前使用的主动入口上下文；响应请求之外保持空字典并沿用普通出牌阶段判断。
+func _get_local_skill_activation_context() -> Dictionary:
+	if _inline_card_choice.is_empty():
+		return {}
+	# 内联请求上下文；规则核心已写入active_entry、active_skill_ids与响应牌型。
+	var context: Dictionary = (_inline_card_choice.get("context", {}) as Dictionary).duplicate(true)
+	return context
+
+
+## 判断指定技能是否是当前响应请求公开的显式材料转化入口。
+func _is_inline_response_skill_available(skill_id: String) -> bool:
+	if _inline_card_choice.is_empty() or str(_inline_card_choice.get("choice_type", "")) != "respond":
+		return false
+	# 响应上下文；active_skill_ids由权威技能查询生成，客户端不能自行点亮未安装技能。
+	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	if not (context.get("active_skill_ids", []) as Array).has(skill_id):
+		return false
+	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
+		# 当前响应候选；至少一张材料要求该技能时按钮才承担筛选入口。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if str(candidate.get("required_response_skill_id", "")) == skill_id:
+			return true
+	return false
 
 
 ## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
@@ -1567,6 +1621,7 @@ func _on_cancel_pressed() -> void:
 		error_label.text = ""
 		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 		_render_local_hand()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
 		_refresh_selection_text()
 		return
 	if not _inline_card_choice.is_empty():
@@ -1760,6 +1815,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_modal_card_choice_request.clear()
 		_inline_card_choice = choice_data.duplicate(true)
 		_inline_selected_card_uids.clear()
+		_active_response_skill_id = ""
 		_selected_target_ids.clear()
 		# 装备触发询问的公开装备 UID；自动选中只准备本地临时选择，仍需玩家点击确定发动或点击取消放弃。
 		var auto_selected_equipment_uid: int = _get_auto_selected_equipment_trigger_uid(choice_data)
@@ -1771,11 +1827,13 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		_auto_locked_target_id = -1
 		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 		_render_local_hand()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
 		_refresh_selection_text()
 		_refresh_card_selection_panel()
 		return
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
+	_active_response_skill_id = ""
 	_clear_equipment_action()
 	_modal_choice_request_id = int(choice_data.get("request_id", -1))
 	_modal_card_choice_request = choice_data.duplicate(true)
@@ -1911,10 +1969,46 @@ func _get_inline_candidate_uids() -> Array[int]:
 	var result: Array[int] = []
 	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
 		# 当前候选 UID；无效负数不会进入可交互集合。
-		var candidate_uid: int = int((candidate_variant as Dictionary).get("uid", -1))
-		if candidate_uid >= 0 and not result.has(candidate_uid):
+		var candidate: Dictionary = candidate_variant as Dictionary
+		# 当前候选 UID；稳定实体标识用于牌面交互和权威提交。
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		# 候选要求的响应技能；未点击该技能时保持暗置，普通实体响应牌始终开放。
+		var required_response_skill_id: String = str(candidate.get("required_response_skill_id", ""))
+		var response_skill_ready: bool = required_response_skill_id.is_empty() or required_response_skill_id == _active_response_skill_id
+		if candidate_uid >= 0 and response_skill_ready and not result.has(candidate_uid) and (_inline_selected_card_uids.has(candidate_uid) or _is_inline_candidate_compatible(candidate_uid)):
 			result.append(candidate_uid)
 	return result
+
+
+## 判断一张内联候选追加到当前选择后是否仍能组成权威声明的合法完整组合。
+func _is_inline_candidate_compatible(candidate_uid: int) -> bool:
+	# 最大选择数；达到上限后未选候选全部不可继续选择。
+	var max_select: int = int(_inline_card_choice.get("max_card_select", _inline_card_choice.get("max_select", 0)))
+	if _inline_selected_card_uids.size() >= max_select:
+		return false
+	# 选择上下文；组合约束由技能源码预先计算，界面只判断选择前缀。
+	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	# 完整合法组合；空数组表示所有基础候选可自由组合。
+	var valid_card_combinations: Array = context.get("valid_card_combinations", []) as Array
+	if valid_card_combinations.is_empty():
+		return true
+	# 待验证选择前缀；新候选只在至少一条完整组合中与全部已选牌共同出现时可用。
+	var tentative_selection: Array[int] = _inline_selected_card_uids.duplicate()
+	tentative_selection.append(candidate_uid)
+	for combination_variant: Variant in valid_card_combinations:
+		# 当前完整合法组合；元素转换为整数UID后进行成员匹配。
+		var combination: Array[int] = []
+		for card_uid_variant: Variant in combination_variant as Array:
+			combination.append(int(card_uid_variant))
+		# 当前组合是否包含全部选择前缀；成员顺序不影响寒鸦等组合规则。
+		var contains_all_selected: bool = true
+		for selected_uid: int in tentative_selection:
+			if not combination.has(selected_uid):
+				contains_all_selected = false
+				break
+		if contains_all_selected:
+			return true
+	return false
 
 
 ## 返回可自动选中的装备触发 UID；只有上下文明确绑定同一公开装备实体时生效，普通响应与目标区域选牌不自动选择。
@@ -2014,6 +2108,8 @@ func _toggle_inline_card_choice(card_uid: int) -> void:
 			if not legal_target_ids.has(selected_target_id):
 				_selected_target_ids.erase(selected_target_id)
 	error_label.text = ""
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+	_render_local_hand()
 	_refresh_selection_text()
 
 
@@ -2026,11 +2122,19 @@ func _submit_inline_card_choice(selected_card_uids: Array[int], confirmed: bool 
 	# 统一选择动作；只提交请求号与实体 UID，不直接修改手牌、处理区或阶段。
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
 	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":_selected_target_ids.duplicate() if confirmed else [], "confirmed":confirmed}
+	if confirmed and selected_card_uids.size() == 1 and not _active_response_skill_id.is_empty():
+		for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
+			# 当前已选候选；只有其明确要求当前技能时才提交转化技能ID，普通实体【杀】仍按自身响应。
+			var candidate: Dictionary = candidate_variant as Dictionary
+			if int(candidate.get("uid", -1)) == selected_card_uids[0] and str(candidate.get("required_response_skill_id", "")) == _active_response_skill_id:
+				action.payload["response_skill_id"] = _active_response_skill_id
+				break
 	if not match_controller.submit_action(action):
 		return
 	if int(_inline_card_choice.get("request_id", -2)) == request_id:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
+		_active_response_skill_id = ""
 		_selected_target_ids.clear()
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
@@ -2125,6 +2229,24 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_id)
 		if bool(target_anchor_result.get("valid", false)):
 			target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
+	# 分阶段目标线局部坐标；借刀杀人等牌按规则给出的来源与目标顺序逐段解析。
+	var indicator_stages: Array[Dictionary] = []
+	for indicator_stage_variant: Variant in presentation_data.get("indicator_stages", []) as Array:
+		# 当前规则阶段；只包含稳定玩家ID，不包含界面节点引用。
+		var indicator_stage: Dictionary = indicator_stage_variant as Dictionary
+		# 当前阶段来源锚点；缺失来源时整段省略，不能从中央伪造玩家位置。
+		var stage_source_result: Dictionary = _try_get_player_indicator_position(int(indicator_stage.get("actor_id", -1)))
+		if not bool(stage_source_result.get("valid", false)):
+			continue
+		# 当前阶段目标锚点数组；个别离场目标只省略自身线段。
+		var stage_target_positions: Array[Vector2] = []
+		for stage_target_variant: Variant in indicator_stage.get("target_ids", []) as Array:
+			# 当前阶段目标锚点；使用稳定玩家ID查询最新桌面位置。
+			var stage_target_result: Dictionary = _try_get_player_indicator_position(int(stage_target_variant))
+			if bool(stage_target_result.get("valid", false)):
+				stage_target_positions.append(stage_target_result.get("position", Vector2.ZERO) as Vector2)
+		if not stage_target_positions.is_empty():
+			indicator_stages.append({"start_position":stage_source_result.get("position", Vector2.ZERO) as Vector2, "target_positions":stage_target_positions})
 	# 正式卡牌节点；本地牌存在时直接接管同一节点，其他玩家隐藏手牌则实例化同款完整牌面。
 	# 手牌展示不会移动权威实体，因此展示请求必须使用正式牌面的独立表现实例。
 	# 当前请求是否只展示牌面；手牌展示不会移动权威实体，因此必须使用正式牌面的独立表现实例。
@@ -2150,7 +2272,7 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 		animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
-	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, owns_discard_transfer)
+	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, owns_discard_transfer, indicator_stages)
 
 
 ## 登记一次权威摸牌调用的表现批次；批次内卡牌先由普通转移信号逐张填充，完成信号到达后才一起交给动画层。

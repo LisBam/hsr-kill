@@ -45,6 +45,8 @@ func _ready() -> void:
 		return
 	if not _test_renwang_shield_black_slash():
 		return
+	if not _test_fire_attack_failed_target_memory():
+		return
 	if not _test_wuxie_decision():
 		return
 	if not _test_skill_confirmation():
@@ -301,6 +303,23 @@ func _test_identity_rescue_strategy() -> bool:
 	var self_rescue_score: float = strategy.score_rescue(snapshot, 1, 1, 1, 9.0)
 	if loyalist_score <= 0.0 or rebel_score >= 0.0 or renegade_score <= 0.0 or self_rescue_score <= 0.0:
 		return _fail("identity_rescue loyal=%.2f rebel=%.2f renegade=%.2f self=%.2f" % [loyalist_score, rebel_score, renegade_score, self_rescue_score])
+	# 普通友方基准救援；目标有手牌、即将行动且判定区为空。
+	var ally_snapshot: Dictionary = _build_strategy_snapshot(true)
+	ally_snapshot["current_player_id"] = 1
+	# 领袖救忠臣的基准分；只用于比较资源转化条件，不要求固定绝对值。
+	var ready_ally_score: float = strategy.score_rescue(ally_snapshot, 0, 2, 1, 5.0)
+	# 低价值救援场景；目标空手、距离下个回合较久且同时受乐不思蜀与兵粮寸断威胁。
+	var delayed_ally_snapshot: Dictionary = ally_snapshot.duplicate(true)
+	delayed_ally_snapshot["current_player_id"] = 3
+	# 目标忠臣快照；公开判定区使用最小定义ID数据即可参与通用救援估值。
+	var delayed_ally: Dictionary = (delayed_ally_snapshot.get("players", []) as Array)[2] as Dictionary
+	delayed_ally["hand_count"] = 0
+	delayed_ally["hand"] = []
+	delayed_ally["judgment_area"] = [{"definition_id":"lebu"}, {"definition_id":"bingliang"}]
+	# 条件不利时的救援分；必须严格低于资源充足且即将行动的队友。
+	var delayed_ally_score: float = strategy.score_rescue(delayed_ally_snapshot, 0, 2, 1, 5.0)
+	if delayed_ally_score >= ready_ally_score:
+		return _fail("rescue_readiness ready=%.2f delayed=%.2f" % [ready_ally_score, delayed_ally_score])
 	return true
 
 
@@ -412,6 +431,49 @@ func _test_renwang_shield_black_slash() -> bool:
 	var ignored_armor_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
 	if str(ignored_armor_choice.get("action_type", "")) != "use_card" or int(ignored_armor_choice.get("card_uid", -1)) != 101:
 		return _fail("renwang_ignored_by_qinggang=%s" % [ignored_armor_choice])
+	# 藤甲目标；普通【杀】与南蛮入侵均应判定为完全无效。
+	(snapshot.get("players", []) as Array)[0]["equipment"] = {}
+	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(803, "tengjia", 1)}
+	var tengjia_normal_choice: Dictionary = _policy.choose_action(snapshot, [black_slash_action])
+	if str(tengjia_normal_choice.get("action_type", "")) != "end_play":
+		return _fail("tengjia_normal_slash=%s" % [tengjia_normal_choice])
+	# 南蛮入侵群体动作；空目标数组会由AI按全体其他角色展开，并识别唯一敌方目标的藤甲免疫。
+	var nanman_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":804, "card_definition_id":"nanman", "target_ids":[], "payload":{}}
+	# 只保留敌方目标存活；忠臣暂时离场使本动作的全部实际目标都由藤甲拦截。
+	(snapshot.get("players", []) as Array)[2]["alive"] = false
+	var tengjia_nanman_choice: Dictionary = _policy.choose_action(snapshot, [nanman_action])
+	if str(tengjia_nanman_choice.get("action_type", "")) != "end_play":
+		return _fail("tengjia_nanman=%s" % [tengjia_nanman_choice])
+	# 火【杀】动作；藤甲不会拦截且火焰伤害加1应提高目标伤害收益。
+	var fire_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":805, "card_definition_id":"sha_fire", "target_ids":[1], "payload":{}}
+	# AI评估器；直接比较有无藤甲时相同火【杀】目标收益。
+	var fire_evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	var fire_score_with_tengjia: float = fire_evaluator.score_action(snapshot, fire_slash_action, 0)
+	# 无防具对照快照；其余体力、手牌和身份保持不变。
+	var no_armor_snapshot: Dictionary = snapshot.duplicate(true)
+	(no_armor_snapshot.get("players", []) as Array)[1]["equipment"] = {}
+	var fire_score_without_tengjia: float = fire_evaluator.score_action(no_armor_snapshot, fire_slash_action, 0)
+	if fire_score_with_tengjia <= fire_score_without_tengjia:
+		return _fail("tengjia_fire_value with=%.2f without=%.2f" % [fire_score_with_tengjia, fire_score_without_tengjia])
+	return true
+
+
+## 验证AI在同一回合记住未造成伤害的火攻目标，避免再次对该角色重复消耗【火攻】。
+func _test_fire_attack_failed_target_memory() -> bool:
+	# 全身份公开快照；一号反贼是领袖使用火攻的明确敌方目标。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 火攻动作；目标手牌非空时原本具有正向敌对牌收益。
+	var fire_attack_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":806, "card_definition_id":"huogong", "target_ids":[1], "payload":{}}
+	# 未记录失败时的选择；用于证明本动作本身具有足够收益而不是天然结束出牌。
+	var first_choice: Dictionary = _policy.choose_action(snapshot, [fire_attack_action])
+	if str(first_choice.get("action_type", "")) != "use_card":
+		return _fail("fire_attack_initial_choice=%s" % [first_choice])
+	# 行动者失败目标记忆；键为稳定牌定义ID，值为本回合已无效的目标ID。
+	(snapshot.get("players", []) as Array)[0]["ai_failed_card_target_ids"] = {"huogong":[1]}
+	# 记忆生效后的选择；唯一火攻目标被排除后应结束出牌而非连续火攻同一角色。
+	var repeated_choice: Dictionary = _policy.choose_action(snapshot, [fire_attack_action])
+	if str(repeated_choice.get("action_type", "")) != "end_play":
+		return _fail("fire_attack_repeated_choice=%s" % [repeated_choice])
 	return true
 
 

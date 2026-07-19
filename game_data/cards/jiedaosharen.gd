@@ -82,6 +82,17 @@ func configure_resolution_context(_match_host: Object, _card: CardInstance, _act
 	pass
 
 
+## 返回借刀杀人的两段顺序指示线；先由使用者指向持刀者，再由持刀者指向被要求出【杀】者。
+func get_presentation_indicator_stages(actor_id: int, requested_target_ids: Array[int], _resolution_target_ids: Array[int]) -> Array[Dictionary]:
+	# 分阶段指示结果；目标不足两个时回退通用单段表现，避免旧存档伪造第二段。
+	var result: Array[Dictionary] = []
+	if requested_target_ids.size() != 2:
+		return result
+	result.append({"actor_id":actor_id, "target_ids":[requested_target_ids[0]]})
+	result.append({"actor_id":requested_target_ids[0], "target_ids":[requested_target_ids[1]]})
+	return result
+
+
 ## 校验已声明的持刀者与被【杀】者；第一名必须持武器，第二名必须是其攻击范围内的其他存活角色。
 func validate_target_selection(rule_service: Object, actor: PlayerState, target_id: int, all_target_ids: Array[int]) -> String:
 	if all_target_ids.is_empty():

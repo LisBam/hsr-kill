@@ -11,7 +11,7 @@ func _init() -> void:
 	super({
 		"id": "huanyang",
 		"name": "还阳",
-		"trigger": "damageSource",
+		"trigger": "damage",
 		"ui_enabled": false,
 		"lock": true,
 		"description": "锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
@@ -19,8 +19,9 @@ func _init() -> void:
 
 
 ## 订阅持有者造成伤害后的来源时机；技能伤害、卡牌伤害与连环传导使用相同距离判断。
+## 实际订阅标准damage时机，使效果与“造成伤害时”的规则文字严格一致。
 func install() -> void:
-	subscribe_timing("damageSource", _on_owner_damage_source, "source")
+	subscribe_timing("damage", _on_owner_damage_source, "source")
 
 
 ## 对距离1以内目标造成正数伤害后回复体力；满体力时回复端口安全返回且不伪造发动记录。
@@ -59,7 +60,7 @@ func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dic
 	for target_variant: Variant in action.get("target_ids", []) as Array:
 		# 当前伤害目标稳定ID；用于距离与自身目标判断。
 		var target_id: int = int(target_variant)
-		if host.card_rules.calculate_distance(owner_player_id, target_id) <= 1:
+		if _evaluator.get_distance(authoritative_snapshot, owner_player_id, target_id) <= 1:
 			result += 3.0
 		# 1点体力时禁止AI用伤害牌攻击自己，避免在还阳触发前先进入无法救援的濒死流程。
 		if target_id == owner_player_id:

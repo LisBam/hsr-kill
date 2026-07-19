@@ -108,6 +108,10 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
 	if card == null or target == null or not target.alive or resolver.is_resolution_stopped():
 		return
+	# 当前攻击者武器；目标结算开始时再次读取，确保借刀【杀】与异步恢复都能正确应用青釭剑的无视防具能力。
+	var current_weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	if current_weapon_definition != null and current_weapon_definition.slash_ignores_armor():
+		context["ignore_armor"] = true
 	if not bool(context.get("ignore_armor", false)):
 		# 目标防具定义；具体无效条件由防具文件实现。
 		var armor_definition: CardDefinition = host.get_equipment_definition(target.player_id, "armor")
@@ -175,7 +179,7 @@ func continue_slash_damage(context: Dictionary) -> void:
 	var damage_timing: RuleEvent = host.emit_rule_timing("shaDamage", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), int(context.get("target_id", -1)), context)
 	if damage_timing != null and (damage_timing.cancelled or damage_timing.neutralized):
 		return
-	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)))
+	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), context)
 	if resolver.is_resolution_stopped():
 		return
 	# 伤害后的目标状态；死亡目标不再执行任何伤害后装备效果。
@@ -184,7 +188,7 @@ func continue_slash_damage(context: Dictionary) -> void:
 		return
 	# 当前武器定义；伤害后的选择和处理全部由装备文件拥有。
 	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
-	if weapon_definition != null:
+	if weapon_definition != null and not weapon_definition.uses_damage_timing_trigger():
 		weapon_definition.on_slash_damage_finished(self, context)
 
 

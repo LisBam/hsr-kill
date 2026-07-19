@@ -144,6 +144,10 @@ func _run() -> void:
 		return
 	if not await _test_bagua_failure_allows_hand_shan():
 		return
+	if not await _test_qinggang_ignores_tengjia():
+		return
+	if not await _test_qilin_damage_timing_runtime():
+		return
 	if not await _test_qilin_mount_candidate_slots():
 		return
 	if not _test_wooden_ox_card_cannot_recast():
@@ -812,6 +816,59 @@ func _test_bagua_failure_allows_hand_shan() -> bool:
 	return true
 
 
+## 验证青釭剑在真实【杀】流程中无视藤甲，普通属性【杀】不会被防具提前终止。
+func _test_qinggang_ignores_tengjia() -> bool:
+	_scenario = "qinggang_armor"
+	_reset_state(2)
+	# 攻击者青釭剑；无视防具能力由武器源码钩子声明，不在【杀】组件中硬编码装备ID。
+	var qinggang_card: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	qinggang_card.zone = "equipment"
+	qinggang_card.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = qinggang_card
+	# 目标藤甲；若青釭剑失效，普通【杀】会在进入【闪】询问前被完全拦截。
+	var tengjia_card: CardInstance = CardInstance.new("tengjia", "club", 2)
+	tengjia_card.zone = "equipment"
+	tengjia_card.owner_id = 1
+	_controller.state.get_player(1).equipment["armor"] = tengjia_card
+	# 普通【杀】实体；测试响应处理器拒绝【闪】，命中后应造成固定1点伤害。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	_controller._execute_card_use(0, slash_card, [1])
+	if not await _wait_until_card_finalized(slash_card.uid):
+		return _fail("qinggang_armor_timeout")
+	if _controller.state.get_player(1).hp != 3:
+		return _fail("qinggang_armor_hp=%d" % _controller.state.get_player(1).hp)
+	return true
+
+
+## 验证麒麟弓通过装备运行时订阅真实damage时机，并在【杀】目标收尾前弃置坐骑。
+func _test_qilin_damage_timing_runtime() -> bool:
+	_scenario = "qilin_damage"
+	_reset_state(2)
+	# 攻击者麒麟弓；安装独立卡牌运行时后订阅来源角色的标准damage时机。
+	var qilin_card: CardInstance = CardInstance.new("qilin", "heart", 5)
+	qilin_card.zone = "equipment"
+	qilin_card.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = qilin_card
+	_controller._install_card_runtime(qilin_card, 0)
+	# 目标进攻坐骑；麒麟弓选择确认后必须从装备区移动到弃牌堆。
+	var mount_card: CardInstance = CardInstance.new("chitu", "heart", 5)
+	mount_card.zone = "equipment"
+	mount_card.owner_id = 1
+	_controller.state.get_player(1).equipment["offensive_mount"] = mount_card
+	_qilin_mount_uid = mount_card.uid
+	# 造成伤害的普通【杀】；响应处理器拒绝【闪】并确认damage时机中的麒麟弓候选。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	_controller._execute_card_use(0, slash_card, [1])
+	if not await _wait_until_card_finalized(slash_card.uid):
+		return _fail("qilin_damage_timeout")
+	# 麒麟弓运行时定义；公开能力声明阻止共享【杀】流程再调用旧伤害结束钩子。
+	var qilin_definition: CardDefinition = _controller.card_runtime_instances.get(qilin_card.uid) as CardDefinition
+	if qilin_definition == null or not qilin_definition.uses_damage_timing_trigger() or _qilin_request_count != 1 or not _qilin_candidate_present or _controller.state.get_player(1).hp != 3 or _controller.state.get_player(1).equipment.has("offensive_mount") or not _controller.state.discard_pile.has(mount_card):
+		return _fail("qilin_damage request=%d candidate=%s hp=%d equipment=%s" % [_qilin_request_count, _qilin_candidate_present, _controller.state.get_player(1).hp, _controller.state.get_player(1).equipment])
+	_controller._uninstall_card_runtime(qilin_card.uid)
+	return true
+
+
 ## 验证麒麟弓使用强类型双坐骑槽查询，并可通过正式选择请求弃置目标坐骑。
 func _test_qilin_mount_candidate_slots() -> bool:
 	_scenario = "qilin_mount"
@@ -1041,7 +1098,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 			_bagua_retry_has_hand_shan = candidate_uids.has(_bagua_hand_shan_uid)
 			_bagua_retry_excludes_bagua = not candidate_uids.has(_bagua_uid)
 			selected_uids = [_bagua_hand_shan_uid]
-	elif _scenario == "qilin_mount" and kind == "qilin_mount":
+	elif _scenario in ["qinggang_armor", "qilin_damage"] and kind == "slash_response":
+		selected_uids = []
+	elif _scenario in ["qilin_mount", "qilin_damage"] and kind in ["qilin_mount", "qilin_damage"]:
 		_qilin_request_count += 1
 		# 当前麒麟弓候选；目标进攻坐骑必须通过强类型槽位过滤进入请求。
 		var candidate_uids: Array[int] = []
