@@ -86,14 +86,13 @@ layout_mode = 2
 text = "玩家名称"
 vertical_alignment = 1
 
-[node name="LanDisplayNameInput" type="LineEdit" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/DisplayNameRow"]
+[node name="LanDisplayNameValue" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/DisplayNameRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 38)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "玩家"
-placeholder_text = "本局显示名称"
-max_length = 20
+vertical_alignment = 1
 
 [node name="AddressRow" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
 layout_mode = 2

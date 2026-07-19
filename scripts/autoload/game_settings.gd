@@ -16,6 +16,12 @@ signal game_speed_changed(interval_seconds: float)
 ## 自动身份标记开关变化信号；牌桌只据此刷新本地推测徽记，不修改任何权威身份数据。
 signal auto_identity_marking_changed(enabled: bool)
 
+## 联机玩家名称变化信号；大厅等只读显示组件据此刷新名称，不直接访问资料设置界面的输入节点。
+signal online_player_name_changed(player_name: String)
+
+## 联机形象变化信号；参数为稳定武将 ID，当前只保存未来联机大厅可消费的展示选择。
+signal online_avatar_character_changed(character_id: String)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -46,6 +52,12 @@ const MAX_GAME_SPEED_INTERVAL_SECONDS: float = 1.0
 ## 游戏流程间隔的调节步长；默认0.1秒，与菜单滑条显示精度保持一致。
 const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.1
 
+## 联机玩家名称允许的最大 Unicode 字符数；20与局域网成员协议上限一致，运行时无需动态修改。
+const MAX_ONLINE_PLAYER_NAME_LENGTH: int = 20
+
+## 联机玩家名称为空时使用的默认文本；稳定回退可防止大厅成员列表出现空白行。
+const DEFAULT_ONLINE_PLAYER_NAME: String = "玩家"
+
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
 
@@ -60,6 +72,12 @@ var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
 
 ## 是否根据公开用牌行为自动标记其他角色身份；默认开启，可在战斗菜单即时关闭且不需要重新开局。
 var auto_identity_marking_enabled: bool = true
+
+## 当前联机玩家名称；默认“玩家”，在创建或加入局域网房间时作为不可编辑显示名提交。
+var online_player_name: String = DEFAULT_ONLINE_PLAYER_NAME
+
+## 当前联机形象对应的稳定武将 ID；空值表示尚未选择，资料面板打开后会回退到首个可用武将。
+var online_avatar_character_id: String = ""
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
@@ -114,6 +132,37 @@ func set_auto_identity_marking_enabled(enabled: bool) -> void:
 		return
 	auto_identity_marking_enabled = enabled
 	auto_identity_marking_changed.emit(auto_identity_marking_enabled)
+
+
+## 设置联机玩家名称；首尾空白会被移除，空值回退默认名称，超长文本限制为协议允许的20个字符。
+func set_online_player_name(player_name: String) -> void:
+	# 标准化后的玩家名称；统一入口保证资料面板与局域网提交使用完全相同的文本。
+	var normalized_player_name: String = normalize_online_player_name(player_name)
+	if online_player_name == normalized_player_name:
+		return
+	online_player_name = normalized_player_name
+	online_player_name_changed.emit(online_player_name)
+
+
+## 设置联机形象的稳定武将 ID；空值允许表示尚未完成选择，合法性由消费武将数据库的资料面板校验。
+func set_online_avatar_character_id(character_id: String) -> void:
+	# 去除首尾空白后的武将 ID；稳定 ID 本身不应包含空格，清理可避免配置比较出现伪差异。
+	var normalized_character_id: String = character_id.strip_edges()
+	if online_avatar_character_id == normalized_character_id:
+		return
+	online_avatar_character_id = normalized_character_id
+	online_avatar_character_changed.emit(online_avatar_character_id)
+
+
+## 返回符合联机协议的玩家名称；该纯函数可供设置界面预览与未来资料持久化复用。
+func normalize_online_player_name(player_name: String) -> String:
+	# 去除首尾空白后的名称；内部空格保留，允许玩家使用自然昵称。
+	var normalized_player_name: String = player_name.strip_edges()
+	if normalized_player_name.is_empty():
+		normalized_player_name = DEFAULT_ONLINE_PLAYER_NAME
+	if normalized_player_name.length() > MAX_ONLINE_PLAYER_NAME_LENGTH:
+		normalized_player_name = normalized_player_name.left(MAX_ONLINE_PLAYER_NAME_LENGTH)
+	return normalized_player_name
 
 
 ## 根据当前全局模式，从卡牌配置中返回唯一的前端显示名称。

@@ -39,8 +39,8 @@ const MAXIMUM_PLAYER_COUNT: int = 10
 ## 当前连接状态文本；普通进度、成功提示和错误均在同一位置显示，避免弹窗阻断连接回调。
 @onready var _status_label: Label = %LanLobbyStatus
 
-## 玩家显示名输入框；该名称只在当前房间与对局日志中使用，不保存为账号资料。
-@onready var _display_name_input: LineEdit = %LanDisplayNameInput
+## 玩家显示名只读文本；名称由主菜单联机设置统一提供，大厅入口只展示且不能修改。
+@onready var _display_name_value: Label = %LanDisplayNameValue
 
 ## 房主 IPv4 地址输入框；创建房间时禁用语义，加入房间时读取点分十进制地址或 localhost。
 @onready var _address_input: LineEdit = %LanAddressInput
@@ -101,13 +101,13 @@ func _ready() -> void:
 	_player_count_input.min_value = MINIMUM_PLAYER_COUNT
 	_player_count_input.max_value = MAXIMUM_PLAYER_COUNT
 	_player_count_input.step = 1.0
-	_display_name_input.text_submitted.connect(_on_display_name_submitted)
 	_address_input.text_submitted.connect(_on_address_submitted)
 	_host_button.pressed.connect(_request_host)
 	_join_button.pressed.connect(_request_join)
 	_start_button.pressed.connect(_request_start_match)
 	_leave_button.pressed.connect(_request_leave)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
+	GameSettings.online_player_name_changed.connect(_on_online_player_name_changed)
 	_show_entry_state()
 	refresh_ui_style()
 
@@ -119,6 +119,7 @@ func open_panel(default_player_count: int, default_port: int) -> void:
 	if not _session_active:
 		_player_count_input.value = clampi(default_player_count, MINIMUM_PLAYER_COUNT, MAXIMUM_PLAYER_COUNT)
 		_port_input.value = clampi(default_port, MINIMUM_PORT, MAXIMUM_PORT)
+		_display_name_value.text = GameSettings.online_player_name
 		_show_entry_state()
 	call_deferred("_focus_primary_control")
 
@@ -220,7 +221,7 @@ func refresh_ui_style() -> void:
 	_address_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	_member_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_member_list.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
-	_apply_line_edit_style(_display_name_input)
+	_display_name_value.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_apply_line_edit_style(_address_input)
 	_apply_spin_box_style(_port_input)
 	_apply_spin_box_style(_player_count_input)
@@ -240,14 +241,14 @@ func _show_entry_state() -> void:
 func _request_host() -> void:
 	_set_connection_buttons_enabled(false)
 	show_status("正在创建局域网房间……", false)
-	host_requested.emit(_display_name_input.text, get_port())
+	host_requested.emit(GameSettings.online_player_name, get_port())
 
 
 ## 提交加入房间请求；空地址由网关回退127.0.0.1，适合本机双实例测试。
 func _request_join() -> void:
 	_set_connection_buttons_enabled(false)
 	show_status("正在连接局域网房主……", false)
-	join_requested.emit(_display_name_input.text, _address_input.text, get_port())
+	join_requested.emit(GameSettings.online_player_name, _address_input.text, get_port())
 
 
 ## 房主提交开始对局请求；按钮随后保持禁用，直到协调器确认开局或返回错误。
@@ -260,12 +261,6 @@ func _request_start_match() -> void:
 ## 提交离开请求；协调器负责区分未连接关闭、客户端断开与房主关闭整个房间。
 func _request_leave() -> void:
 	leave_requested.emit()
-
-
-## 昵称输入按回车时默认创建房间；该行为只在连接入口可见且按钮可用时触发。
-func _on_display_name_submitted(_text: String) -> void:
-	if _connection_form.visible and not _host_button.disabled:
-		_request_host()
 
 
 ## 地址输入按回车时默认加入房间；便于键盘完成完整直连流程。
@@ -287,12 +282,12 @@ func show_status(message: String, is_error: bool) -> void:
 	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if is_error else BattleUIStyle.get_color("text_secondary"))
 
 
-## 把键盘焦点放到当前状态的主要操作；入口优先昵称，大厅房主优先开始，客户端优先离开。
+## 把键盘焦点放到当前状态的主要操作；入口优先创建房间，大厅房主优先开始，客户端优先离开。
 func _focus_primary_control() -> void:
 	if not visible:
 		return
 	if _connection_form.visible:
-		_display_name_input.grab_focus()
+		_host_button.grab_focus()
 	elif _role == "host" and _start_button.visible and not _start_button.disabled:
 		_start_button.grab_focus()
 	else:
@@ -316,6 +311,11 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 ## 响应全局 UI 风格切换；只重绘现有节点，不重置连接表单或成员列表。
 func _on_ui_style_changed(_style_id: String) -> void:
 	refresh_ui_style()
+
+
+## 同步联机设置中的玩家名称；仅入口表单显示该值，已连接大厅成员名称继续以公共快照为准。
+func _on_online_player_name_changed(player_name: String) -> void:
+	_display_name_value.text = player_name
 
 
 ## 大厅打开时允许 Esc 执行与底部离开按钮相同的安全退出请求。
