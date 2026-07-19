@@ -7,9 +7,9 @@ extends Control
 ## 该参数只改变顶部座位位置，运行时通常无需动态修改，不影响牌面尺寸、座次顺序或规则数值。
 @export_range(0.0, 100.0, 1.0) var top_margin: float = 2.0
 
-## 十人局其他玩家座位的统一缩放比例；默认0.88让左右双座位在保留牌桌中心空白时仍能上下平行。
+## 十人局其他玩家座位的统一缩放比例；默认0.82让左右双座位同列排布时仍避开本地右下座位。
 ## 该参数只在10人局生效，运行时通常无需动态修改，不改变武将牌资源、点击区域或规则座次。
-@export_range(0.75, 1.0, 0.01) var ten_player_card_scale: float = 0.88
+@export_range(0.75, 1.0, 0.01) var ten_player_card_scale: float = 0.82
 
 ## 左右侧武将牌距牌桌边缘的距离；默认22像素对应参考布局的边缘安全区，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var side_margin: float = 22.0
@@ -18,15 +18,11 @@ extends Control
 ## 3:4武将牌增宽后使用0.35，使四至九人局侧边座位避开顶部牌列并保留底部界面安全区。
 @export_range(0.1, 0.6, 0.01) var single_side_y_ratio: float = 0.35
 
-## 单侧有两名角色时第一名的纵向位置比例；默认0.09上移十人局上侧座位，为下侧座位留出平行空间。
-@export_range(0.05, 0.5, 0.01) var upper_side_y_ratio: float = 0.09
+## 单侧有两名角色时第一名的纵向位置比例；默认0.05上移十人局上侧座位，为下侧座位留出平行空间。
+@export_range(0.05, 0.5, 0.01) var upper_side_y_ratio: float = 0.05
 
-## 单侧有两名角色时第二名的纵向位置比例；默认0.42使十人局下侧座位与上方牌列形成清晰平行关系。
-@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.42
-
-## 单侧双座位的横向错列间隔；默认14像素让下侧座位向牌桌内侧移动一张牌宽，避开底部本地界面。
-## 该参数只在十人局生效，运行时通常无需动态修改，不改变座次顺序或目标规则。
-@export_range(0.0, 80.0, 1.0) var stacked_side_horizontal_gap: float = 14.0
+## 单侧有两名角色时第二名的纵向位置比例；默认0.35使十人局下侧座位与上方牌列形成清晰平行关系。
+@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.35
 
 ## 当前由桌面绑定的对手角色卡数组；数组顺序与本地玩家之后的存活座次顺序一致。
 var _opponent_views: Array[Control] = []
@@ -82,9 +78,11 @@ func _layout_opponents() -> void:
 	var view_index: int = 0
 	if side_count_per_edge > 0:
 		for right_index: int in range(side_count_per_edge):
-			# 右侧座位横坐标；十人局下侧牌向内错列，避免与右下本地武将牌占用同一列。
-			var right_x: float = size.x - side_margin - active_card_size.x - float(right_index) * (active_card_size.x + stacked_side_horizontal_gap)
-			_place_view(valid_views[view_index], Vector2(right_x, _side_y(right_index, side_count_per_edge)))
+			# 右侧座位纵向索引；环形顺序先消费下家六号位，再消费七号位，双座位时分别放到下、上位置。
+			var right_side_index: int = side_count_per_edge - right_index - 1
+			# 右侧座位横坐标；同侧上下座位必须保持同一列，避免视觉上出现左右错位。
+			var right_x: float = size.x - side_margin - active_card_size.x
+			_place_view(valid_views[view_index], Vector2(right_x, _side_y(right_side_index, side_count_per_edge)))
 			view_index += 1
 	# 顶部中心横坐标比例；数组按从右向左排列，与无名杀 data-position 递增方向一致。
 	var top_ratios: PackedFloat32Array = _top_center_ratios(top_count)
@@ -95,10 +93,10 @@ func _layout_opponents() -> void:
 		view_index += 1
 	if side_count_per_edge > 0:
 		for left_index: int in range(side_count_per_edge):
-			# 左侧座位纵向索引；座次消费顺序与视觉上下方向相反，因此先换算为实际的上、下位置。
-			var left_side_index: int = side_count_per_edge - left_index - 1
-			# 左侧座位横坐标；十人局下侧牌向内错列，避免与左下装备区占用同一列。
-			var left_x: float = side_margin + float(left_side_index) * (active_card_size.x + stacked_side_horizontal_gap)
+			# 左侧座位纵向索引；环形顺序已从本地上家向外消费，双座位时三号位在上、四号位在下。
+			var left_side_index: int = left_index
+			# 左侧座位横坐标；同侧上下座位必须保持同一列，避免视觉上出现左右错位。
+			var left_x: float = side_margin
 			_place_view(valid_views[view_index], Vector2(left_x, _side_y(left_side_index, side_count_per_edge)))
 			view_index += 1
 
