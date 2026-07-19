@@ -56,7 +56,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return true
 
 
-## 根据技能持有者对【杀】使用者的态度决定是否发动；友方摸牌为正收益，敌方摸牌为负收益。
+## 根据统一资源换算评估【杀】使用者摸1张牌；友方摸牌为正收益，敌方摸牌为负收益。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 请求上下文；只处理军势确认步骤。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -68,4 +68,4 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		return 0.0
 	# 【杀】使用者 ID；技能令该角色固定摸1张牌。
 	var slash_user_id: int = int(context.get("slash_user_id", -1))
-	return evaluator.get_attitude(authoritative_snapshot, owner_player_id, slash_user_id) / 2.0
+	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, slash_user_id, 1, 0)

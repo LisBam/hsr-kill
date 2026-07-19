@@ -11,6 +11,9 @@ const REQUIRED_COLOR: String = "black"
 ## AI对消耗材料牌保留价值的扣分权重；数值越高越保留高价值黑色牌。
 const AI_MATERIAL_COST_WEIGHT: float = 0.45
 
+## 技能元数据中的雷【杀】联动优先分字段；罡风读取所有已拥有技能的数据，不硬编码疾雨ID。
+const AI_THUNDER_PRIORITY_METADATA_KEY: String = "ai_thunder_slash_priority_bonus"
+
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。
 func _init() -> void:
@@ -157,6 +160,21 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
 	# 雷【杀】基础收益；包含出牌顺序、目标效用和属性伤害。
 	var score: float = evaluator.score_action(authoritative_snapshot, slash_action, owner_player_id)
+	# 雷【杀】联动技能优先分；疾雨等技能可在自身元数据声明，普通黑色【杀】因此会优先通过罡风转化。
+	score += _get_thunder_slash_priority_bonus(authoritative_snapshot, evaluator)
 	# 材料牌保留价值；高价值【桃】、【闪】或关键装备不会被低收益攻击轻易消耗。
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
 	return score - material_value * AI_MATERIAL_COST_WEIGHT
+
+
+## 汇总持有者技能声明的雷【杀】联动优先分；内容扩展可复用同一元数据字段而无需修改罡风源码。
+func _get_thunder_slash_priority_bonus(authoritative_snapshot: Dictionary, evaluator: Object) -> float:
+	# 技能持有者快照；武将定义决定实际静态技能列表，缺失角色时保持0分。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	# 技能持有者武将定义；领袖技等未声明该字段的技能自然贡献0分。
+	var character: Dictionary = GameDatabase.get_character(str(owner.get("character_id", "")))
+	# 汇总优先分；多个独立雷【杀】联动可以叠加，全部数值只影响AI选择。
+	var result: float = 0.0
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		result += float(GameDatabase.get_skill(str(skill_id_variant)).get(AI_THUNDER_PRIORITY_METADATA_KEY, 0.0))
+	return result

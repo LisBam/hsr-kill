@@ -27,10 +27,10 @@ const EFFECT_AMOUNT: int = 1
 const IDENTITY_TARGET_RESULT: float = 1.0
 
 ## AI 估算弃置一张未知手牌的基础费用；仅影响是否选择该分支，不修改真实卡牌数量。
-const AI_DISCARD_COST: float = 1.0
+const AI_DISCARD_COST: float = NonameAIEvaluator.CARD_RESOURCE_VALUE
 
-## AI 估算失去1点体力的基础费用；仅影响是否选择该分支，不修改真实体力变化。
-const AI_LOSE_HP_COST: float = 2.0
+## AI 估算失去1点体力的基础费用；固定等于2张牌，仅影响是否选择该分支，不修改真实体力变化。
+const AI_LOSE_HP_COST: float = NonameAIEvaluator.HP_RESOURCE_VALUE
 
 ## AI 将身份态度换算为可选发动收益的除数；数值越小，AI 越愿意为友方支付费用。
 const AI_ATTITUDE_DIVISOR: float = 2.0
@@ -45,7 +45,7 @@ const AI_SAFE_HP_FOR_LOSE_HP: int = 3
 const AI_DRAW_NEED_HAND_TARGET: int = 3
 
 ## AI 对受伤受益者每点已损失体力的回复需求倍率；默认2使濒危队友优先获得失去体力分支的回复。
-const AI_RECOVER_NEED_PER_MISSING_HP: float = 2.0
+const AI_RECOVER_NEED_PER_MISSING_HP: float = NonameAIEvaluator.HP_RESOURCE_VALUE
 
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。

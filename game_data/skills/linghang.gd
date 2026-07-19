@@ -5,8 +5,8 @@ extends SkillDefinition
 ## 星穹列车势力稳定 ID；修改后会改变可触发本技能的事件来源角色范围。
 const FACTION_ID: String = "xingqionglieche"
 
-## AI 估算重铸后获得一张未知牌的资源价值；只影响是否选择重铸，不修改真实摸牌数量。
-const AI_UNKNOWN_DRAW_VALUE: float = 2.0
+## AI 估算重铸后获得一张未知牌的平均保留价值；复用通用重铸尺度，只影响是否选择重铸，不修改真实摸牌数量。
+const AI_UNKNOWN_DRAW_VALUE: float = NonameAIEvaluator.RECAST_DRAW_VALUE
 
 ## AI 将技能持有者对触发角色的身份态度换算为发动收益的除数；越小越倾向帮助友方重铸。
 const AI_ATTITUDE_DIVISOR: float = 2.0

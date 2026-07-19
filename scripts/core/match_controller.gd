@@ -69,6 +69,9 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 单次多选请求最多枚举的 AI 牌组组合数；默认256兼顾弃牌质量与大手牌组合爆炸风险，运行时通常无需修改。
 @export_range(16, 1024, 16) var max_ai_choice_combinations: int = 256
 
+## AI选择的策略动作与规则回退动作都提交失败后允许重新决策的次数；默认2次，耗尽后中断单个失效请求以保护整局流程。
+@export_range(0, 5, 1) var max_ai_choice_submit_retries: int = 2
+
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
@@ -146,6 +149,9 @@ var _scheduled_ai_drive_token: int = -1
 
 ## 已安排但尚未提交的 AI 选牌请求 ID；默认-1表示没有等待中的 AI 响应，避免同一请求创建多个计时器。
 var _scheduled_ai_choice_request_id: int = -1
+
+## 每个AI选择请求已经连续提交失败的次数；请求成功、被中断或对局重置时立即清除，键为全局请求ID。
+var _ai_choice_submit_failures: Dictionary = {}
 
 ## 当前是否正在批量驱动 AI 选将；防止阶段推进时递归处理旧待选列表并产生重复提交。
 var _is_driving_character_selection: bool = false
@@ -367,15 +373,7 @@ func _resume_ai_after_gameplay_pause() -> void:
 	if state.current_phase == "character_selection":
 		_drive_ai_character_selection()
 		return
-	if not _pending_card_choice.is_empty():
-		# 当前普通选择请求；同时无懈拥有独立并行计时器，不使用单请求调度字段。
-		var request_id: int = int(_pending_card_choice.get("request_id", -1))
-		var chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
-		if ai_coordinator.is_ai_controlled(chooser_id):
-			_schedule_ai_card_choice_response(request_id, chooser_id)
-		return
-	if state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id):
-		_schedule_ai_action()
+	_ensure_ai_progress_after_resolution()
 
 
 ## 返回标准身份局开局请求的前置校验错误；空字符串表示可以安全进入会替换旧局的初始化阶段。
@@ -453,6 +451,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_ai_drive_token += 1
 	_scheduled_ai_drive_token = -1
 	_scheduled_ai_choice_request_id = -1
+	_ai_choice_submit_failures.clear()
 	_ai_actions_this_turn = 0
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
@@ -525,6 +524,7 @@ func _discard_failed_match_start() -> void:
 	_ai_drive_token += 1
 	_scheduled_ai_drive_token = -1
 	_scheduled_ai_choice_request_id = -1
+	_ai_choice_submit_failures.clear()
 	_is_driving_character_selection = false
 	state = null
 
@@ -583,6 +583,8 @@ func submit_action(action: PlayerAction) -> bool:
 			# 技能被规则取消或执行入口返回错误时也必须恢复出牌请求，避免已关闭的 chooseToUse 令玩家失去后续操作。
 			if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 				_begin_play_choice(state.current_player_id)
+			# 主动技能分支会在通用动作尾部之前返回；统一续接入口负责调度同步技能后的下一次AI行动或技能子选择。
+			_ensure_ai_progress_after_resolution()
 			return activated
 		return activate_skill(action.actor_id, str(action.payload.get("skill_id", "")), action.payload)
 	if action.action_type == "choice_response":
@@ -671,8 +673,7 @@ func submit_action(action: PlayerAction) -> bool:
 	if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 		_begin_play_choice(state.current_player_id)
 	_emit_state()
-	if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id):
-		_schedule_ai_action()
+	_ensure_ai_progress_after_resolution()
 	return true
 
 
@@ -1077,6 +1078,12 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"choice_event_name":choice_event_name,
 		"deferred":interactive_human or ai_controlled_chooser,
 	}
+	# 请求结构自检；没有任何标准合法动作的请求无法由玩家、AI或网络完成，必须在注册暂停令牌前安全拒绝。
+	if _build_card_choice_actions(_pending_card_choice).is_empty():
+		var invalid_choice_kind: String = str((_pending_card_choice.get("context", {}) as Dictionary).get("kind", "unknown"))
+		_pending_card_choice.clear()
+		_reject("选择请求没有合法结果，已跳过以避免流程停滞：%s。" % invalid_choice_kind)
+		return []
 	# 独立选择事件；控制器的兼容恢复分支继续执行具体效果，EventScheduler 负责请求身份和旧响应失效。
 	# 选择父事件；规则效果内创建的响应必须挂到当前 content 子事件，阶段级选择则回退到长期根事件。
 	var choice_parent_event_id: int = event_scheduler.get_current_event_id()
@@ -1116,6 +1123,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		return []
 	runtime_request = registered_request
 	_card_choice_sequence = runtime_request.request_id
+	_ai_choice_submit_failures.erase(runtime_request.request_id)
 	_pending_card_choice["request_id"] = runtime_request.request_id
 	_pending_card_choice["runtime_event_id"] = choice_event.event_id
 	_pending_card_choice["runtime_request_id"] = runtime_request.request_id
@@ -1142,16 +1150,10 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		ai_action.payload = {"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)), "event_id":ai_response.event_id, "selected_card_uids":ai_response.card_ids.duplicate(), "selected_target_ids":ai_response.target_ids.duplicate(), "selected_control_id":ai_response.control_id, "confirmed":ai_response.confirmed}
 		action_data = ai_action.to_dict()
 	if action_data.is_empty() or not submit_action(PlayerAction.from_dict(action_data)):
-		# 合法动作正常非空；防御性回退按最少数量提交首批候选，保证纯 AI 对局不会停滞。
-		var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		fallback_action.payload = {
-			"request_id":int(_pending_card_choice.get("request_id", runtime_request.request_id)),
-			"selected_card_uids":_first_candidate_uids(serialized_candidates, maxi(minimum_card_count, 0)),
-			"selected_target_ids":_first_target_ids(choice_target_ids, maxi(minimum_target_count, 0)),
-			"selected_control_id":str(serialized_control_options[0].get("id", "")) if choice_type in ["control", "bool"] and not allow_cancel and not serialized_control_options.is_empty() else "",
-			"confirmed":minimum_card_count > 0 or minimum_target_count > 0 or (choice_type in ["control", "bool"] and not allow_cancel and not serialized_control_options.is_empty()),
-		}
-		submit_action(fallback_action)
+		# 同步规则测试也复用标准合法动作回退，固定牌组和响应转换字段不能退化为“前N项候选”。
+		var fallback_action_data: Dictionary = _build_ai_choice_fallback_action(_pending_card_choice)
+		if not fallback_action_data.is_empty():
+			submit_action(PlayerAction.from_dict(fallback_action_data))
 	return _resolved_card_choice_uids.duplicate()
 
 
@@ -1299,19 +1301,67 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 		action_data = ai_action.to_dict()
 	if not action_data.is_empty() and submit_action(PlayerAction.from_dict(action_data)):
 		return
-	# 回退选择数量；强制请求选择最少张数，可取消请求提交空选择，避免 AI 在异常策略返回时永久停滞。
-	var fallback_count: int = maxi(int(_pending_card_choice.get("min_card_select", _pending_card_choice.get("min_select", 0))), 0)
-	# 回退目标数量；纯选目标和组合选择必须同时满足自身维度下限。
-	var fallback_target_count: int = maxi(int(_pending_card_choice.get("min_target_select", 0)), 0)
-	# 回退控制项；强制文字选项使用首个权威候选，可取消请求保持空字符串并明确取消。
-	var fallback_control_id: String = ""
-	var fallback_control_options: Array = _pending_card_choice.get("control_options", []) as Array
-	if str(_pending_card_choice.get("choice_type", "")) in ["control", "bool"] and not bool(_pending_card_choice.get("allow_cancel", false)) and not fallback_control_options.is_empty():
-		fallback_control_id = str((fallback_control_options[0] as Dictionary).get("id", ""))
-	# 回退动作；只从仍活动请求的候选 UID 构造，始终经过 submit_action 的权威校验。
-	var fallback_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-	fallback_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_uids(_pending_card_choice.get("candidates", []) as Array, fallback_count), "selected_target_ids":_first_target_ids(_pending_card_choice.get("target_ids", []) as Array, fallback_target_count), "selected_control_id":fallback_control_id, "confirmed":fallback_count > 0 or fallback_target_count > 0 or not fallback_control_id.is_empty()}
-	submit_action(fallback_action)
+	# 规则回退动作；直接复用合法动作枚举，保证固定牌组、转化技能ID和多维数量约束不会在回退路径丢失。
+	var fallback_action_data: Dictionary = _build_ai_choice_fallback_action(_pending_card_choice)
+	if not fallback_action_data.is_empty() and submit_action(PlayerAction.from_dict(fallback_action_data)):
+		return
+	_handle_failed_ai_choice_submission(request_id, chooser_id)
+
+
+## 从规则层生成的合法选择中构建保守回退动作；可取消请求优先取消，强制请求选择稳定枚举中的首个确认结果。
+func _build_ai_choice_fallback_action(choice_request: Dictionary) -> Dictionary:
+	# 当前全部标准合法动作；其中已经包含固定组合、响应转换技能和文字选项所需字段。
+	var legal_actions: Array[Dictionary] = _build_card_choice_actions(choice_request)
+	if legal_actions.is_empty():
+		return {}
+	if bool(choice_request.get("allow_cancel", false)):
+		for action: Dictionary in legal_actions:
+			# 可取消请求的取消动作；异常策略不应在回退路径额外消耗资源。
+			var payload: Dictionary = action.get("payload", {}) as Dictionary
+			if not bool(payload.get("confirmed", false)):
+				return action.duplicate(true)
+	return legal_actions[0].duplicate(true)
+
+
+## 处理AI策略与规则回退均提交失败的请求；有限重试耗尽后只中断该请求，防止永久占用选择暂停令牌。
+func _handle_failed_ai_choice_submission(request_id: int, chooser_id: int) -> void:
+	if _pending_card_choice.is_empty() or int(_pending_card_choice.get("request_id", -1)) != request_id:
+		return
+	# 当前请求连续失败次数；初次双重提交失败计为1，后续每次重新决策继续累加。
+	var failure_count: int = int(_ai_choice_submit_failures.get(request_id, 0)) + 1
+	_ai_choice_submit_failures[request_id] = failure_count
+	if failure_count <= max_ai_choice_submit_retries:
+		_schedule_ai_card_choice_response(request_id, chooser_id)
+		return
+	_abort_unresolvable_ai_choice(request_id, "ai_choice_submit_retries_exhausted")
+
+
+## 中断一条已经无法通过权威入口提交的AI选择并恢复其父流程；正常技能取消与规则失败不得调用本入口。
+func _abort_unresolvable_ai_choice(request_id: int, reason: String) -> void:
+	if _pending_card_choice.is_empty() or int(_pending_card_choice.get("request_id", -1)) != request_id:
+		return
+	# 失效请求快照；清理前保存原阶段与业务类型，便于恢复阶段并输出长期诊断信息。
+	var failed_choice: Dictionary = _pending_card_choice.duplicate(true)
+	var failed_kind: String = str((failed_choice.get("context", {}) as Dictionary).get("kind", "unknown"))
+	_pending_card_choice.clear()
+	_scheduled_ai_choice_request_id = -1
+	_ai_choice_submit_failures.erase(request_id)
+	state.current_phase = str(failed_choice.get("resume_phase", state.current_phase))
+	# 事件调度器只释放本请求的选择令牌；同一父事件中的其他暂停来源仍保持有效。
+	event_scheduler.abort_choice(request_id, reason)
+	_reject("AI选择连续提交失败，已中断失效请求并恢复流程：%s。" % failed_kind)
+	# 被失效选择阻塞的通用续列；各组件只处理自身队列，不在本保护函数内识别具体技能ID。
+	if not state.game_over and not has_pending_card_choice():
+		_resume_deferred_rule_timing_dispatches()
+	if not state.game_over and not has_pending_card_choice():
+		_resume_deferred_skill_settlements()
+	if not state.game_over and not has_pending_card_choice():
+		process_next_equipment_trigger()
+	if not state.game_over and not has_pending_card_choice():
+		_resume_interrupted_turn_flow()
+	event_scheduler.drain()
+	_emit_state()
+	_ensure_ai_progress_after_resolution()
 
 
 ## 枚举选择请求的基础合法动作；单选逐张枚举，多选为基础 AI 提供满足最少数量的稳定组合。
@@ -1613,6 +1663,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	# 先解决选择自身 token 但延迟排空事件栈；具体效果必须应用选择结果后才能继续父 content 事件。
 	if not event_scheduler.submit_choice(runtime_response, true):
 		return _reject("事件运行时拒绝了已过期的选择结果。")
+	# 当前请求已经被事件运行时接受；清除此前的AI提交失败计数，后续新请求使用独立请求ID重新统计。
+	_ai_choice_submit_failures.erase(int(completed_choice.get("request_id", -1)))
 	# 选择完成时机；当前目录仅对 chooseToUse、chooseToRespond 和拼点等流程声明 After，普通选牌不会伪造不存在的事件。
 	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
 	if RuleTimingCatalog.has_timing(choice_after_name):
@@ -1649,9 +1701,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
 			_begin_play_choice(state.current_player_id)
 		_emit_state()
-		# AI 出牌被本地响应或选择暂停后，原异步驱动已经结束；恢复出牌阶段时必须重新安排下一动作。
-		if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
-			_schedule_ai_action()
+		# AI 出牌被响应或技能选择暂停后，原异步驱动已经结束；统一续接入口负责下一动作或新子选择。
+		_ensure_ai_progress_after_resolution()
 	return true
 
 
@@ -6309,6 +6360,7 @@ func _check_game_over() -> void:
 	state.game_over = true
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
+	_ai_choice_submit_failures.clear()
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
@@ -6332,6 +6384,7 @@ func _end_match_as_draw(reason: String) -> void:
 	state.game_over = true
 	state.current_phase = "game_over"
 	_ai_drive_token += 1
+	_ai_choice_submit_failures.clear()
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	state.public_card_choice_display.clear()
@@ -6559,6 +6612,30 @@ func append_card_action_if_legal(result: Array[Dictionary], player_id: int, card
 	_append_if_legal(result, player_id, card, requested_targets)
 
 
+## 在任意动作、技能或选择结算出口统一恢复AI流程；普通行动与子选择只能由本函数分流到各自调度器。
+## 调用方必须位于规则效果已经应用完成的安全点；本函数不执行技能、牌效或阶段推进，只补齐缺失的异步驱动任务。
+func _ensure_ai_progress_after_resolution() -> void:
+	if is_gameplay_paused() or state == null or state.game_over or ai_coordinator == null:
+		return
+	if not _pending_card_choice.is_empty():
+		# 当前普通选择请求；只有请求所属角色由AI控制时才补调度，人类与网络请求保持等待输入。
+		var request_id: int = int(_pending_card_choice.get("request_id", -1))
+		var chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+		if ai_coordinator.is_ai_controlled(chooser_id):
+			_schedule_ai_card_choice_response(request_id, chooser_id)
+		return
+	# 同时无懈请求拥有各自的独立计时器；普通AI驱动不能在公共响应轮尚未结束时插入新动作。
+	if not _pending_negation_choices.is_empty():
+		return
+	if state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id):
+		return
+	# 同步主动技能可能已经完成旧chooseToUse但未创建下一请求；统一在安全出口补齐唯一正式出牌窗口。
+	if not _has_active_play_choice():
+		_begin_play_choice(state.current_player_id)
+	if _has_active_play_choice() and not has_pending_card_choice():
+		_schedule_ai_action()
+
+
 ## 安排下一次 AI 操作；令牌保证阶段变化后旧计时器不会执行。
 func _schedule_ai_action() -> void:
 	if is_gameplay_paused() or state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_card_choice() or not _has_active_play_choice():
@@ -6593,7 +6670,9 @@ func _run_ai_after_delay(token: int) -> void:
 	var legal_actions: Array[Dictionary] = get_legal_actions(player_id)
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
 	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
-	submit_action(PlayerAction.from_dict(action_data))
+	# AI动作可能因延迟期间的状态变化被权威入口拒绝；失败后仍须回到统一续接出口，最终受每阶段动作上限约束。
+	if not submit_action(PlayerAction.from_dict(action_data)):
+		_ensure_ai_progress_after_resolution()
 
 
 ## 接收全局 AI 响应时间设置；仅更新后续新建的计时器，已开始等待的任务保持原时长以避免补间中途跳变。

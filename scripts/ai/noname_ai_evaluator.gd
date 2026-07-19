@@ -12,6 +12,12 @@ const ORDER_WEIGHT: float = 0.12
 ## 卡牌保留价值在主动使用评分中的权重；避免高价值救命牌被低收益动作轻易消耗。
 const CARD_COST_WEIGHT: float = 0.08
 
+## 获得或失去1张牌的统一基础收益单位；所有直接牌差收益必须从该常量换算，不能在技能内另设比例。
+const CARD_RESOURCE_VALUE: float = 1.0
+
+## 回复或失去1点体力的统一基础收益单位；固定等于2张牌，保证全局AI遵循“1点体力=2张牌”。
+const HP_RESOURCE_VALUE: float = CARD_RESOURCE_VALUE * 2.0
+
 ## 重铸获得一张未知牌的基础收益；与无名杀把低价值可重铸牌视为换牌机会的思路一致。
 const RECAST_DRAW_VALUE: float = 4.5
 
@@ -38,6 +44,16 @@ var identity_strategy: IdentityStrategyEvaluator
 func _init(model: IdentityAIModel = null) -> void:
 	identity_model = model if model != null else IdentityAIModel.new()
 	identity_strategy = IdentityStrategyEvaluator.new(identity_model)
+
+
+## 计算指定角色获得牌与改变体力的统一资源收益；正数表示获得，负数表示失去，结果会按观察者态度转换为敌我收益。
+## 牌面保留价值、濒死奖励和技能机会成本不属于基础牌差，调用方应在本结果之外单独叠加。
+func score_resource_change(authoritative_snapshot: Dictionary, observer_id: int, target_id: int, card_count_change: int, hp_change: int) -> float:
+	# 资源变化基础值；1点体力严格折算为2张牌，正负方向由数量符号直接表达。
+	var resource_value: float = float(card_count_change) * CARD_RESOURCE_VALUE + float(hp_change) * HP_RESOURCE_VALUE
+	# 观察者对资源变化目标的态度；友方获得和敌方失去都会形成正收益。
+	var attitude: float = get_attitude(authoritative_snapshot, observer_id, target_id)
+	return resource_value * attitude / ATTITUDE_SCALE
 
 
 ## 计算一项出牌阶段动作的基础效用；具体技能可在自身文件中继续修正。
