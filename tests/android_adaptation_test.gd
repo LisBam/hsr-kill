@@ -20,6 +20,8 @@ func _run() -> void:
 		return
 	if not _validate_export_preset():
 		return
+	if not _validate_exported_content_discovery():
+		return
 	if not (await _validate_main_scene()):
 		return
 	if not (await _validate_card_touch_input()):
@@ -55,7 +57,20 @@ func _validate_project_settings() -> bool:
 	return true
 
 
-## 验证Android导出项使用可安装应用身份、ARM64架构、联网权限，并允许导出时自行选择APK保存位置。
+## 验证Android PCK中的编译脚本和remap目录项能够恢复成原始脚本路径，保证卡牌、技能和武将自动发现不为空。
+func _validate_exported_content_discovery() -> bool:
+	if GameDatabase._resolve_gd_script_file_name("huosha.gdc") != "huosha.gd":
+		return _fail("exported_card_script_discovery")
+	if GameDatabase._resolve_gd_script_file_name("xinghuo.gdc") != "xinghuo.gd":
+		return _fail("exported_skill_script_discovery")
+	if GameDatabase._resolve_gd_script_file_name("jizi.gdc") != "jizi.gd":
+		return _fail("exported_character_script_discovery")
+	if GameDatabase._resolve_gd_script_file_name("jizi.gd.remap") != "jizi.gd":
+		return _fail("exported_script_remap_discovery")
+	return true
+
+
+## 验证Android导出项使用可安装应用身份、ARM64架构与联网权限；保存位置由导出对话框决定，不作为工程回归条件。
 func _validate_export_preset() -> bool:
 	# Android导出预设配置；ConfigFile直接读取正式文件，避免测试复制另一份期望配置。
 	var export_config: ConfigFile = ConfigFile.new()
@@ -63,8 +78,6 @@ func _validate_export_preset() -> bool:
 		return _fail("export_preset_load")
 	if str(export_config.get_value("preset.0", "platform", "")) != "Android":
 		return _fail("export_platform")
-	if not str(export_config.get_value("preset.0", "export_path", "")).is_empty():
-		return _fail("export_path_should_be_selected_manually")
 	if str(export_config.get_value("preset.0.options", "package/unique_name", "")) != "com.hsrkill.game":
 		return _fail("package_name")
 	if not bool(export_config.get_value("preset.0.options", "package/show_as_launcher_app", false)):

@@ -171,7 +171,7 @@ func get_deck_cards(deck_id: String) -> Array:
 func _load_cards() -> void:
 	for script_path: String in _list_gd_scripts(CARDS_DIRECTORY):
 		# 当前卡牌脚本资源；加载失败时记录精确路径并继续检查其他文件。
-		var card_script: Script = load(script_path) as Script
+		var card_script: Script = _load_content_script(script_path)
 		if card_script == null:
 			validation_errors.append("卡牌脚本无法载入：%s" % script_path)
 			continue
@@ -198,7 +198,7 @@ func _load_cards() -> void:
 func _load_skills() -> void:
 	for script_path: String in _list_gd_scripts(SKILLS_DIRECTORY):
 		# 当前技能脚本资源；每名持有者会由该资源创建独立实例。
-		var skill_script: Script = load(script_path) as Script
+		var skill_script: Script = _load_content_script(script_path)
 		if skill_script == null:
 			validation_errors.append("技能脚本无法载入：%s" % script_path)
 			continue
@@ -222,7 +222,7 @@ func _load_skills() -> void:
 func _load_characters() -> void:
 	for script_path: String in _list_gd_scripts(CHARACTERS_DIRECTORY):
 		# 当前武将脚本资源；加载失败不会影响其他武将继续接受校验。
-		var character_script: Script = load(script_path) as Script
+		var character_script: Script = _load_content_script(script_path)
 		if character_script == null:
 			validation_errors.append("武将脚本无法载入：%s" % script_path)
 			continue
@@ -300,14 +300,47 @@ func _list_gd_scripts(directory_path: String) -> Array[String]:
 	file_names.sort()
 	# 完整脚本路径结果；`.gd.uid` 与其他导入辅助文件不会进入注册流程。
 	var result: Array[String] = []
+	# 已登记的规范脚本文件名；导出包同时暴露源码名与remap名时用于避免重复加载同一资源。
+	var registered_script_file_names: Dictionary = {}
 	for file_name: String in file_names:
-		if file_name.get_extension() == "gd":
-			# 当前源码文件基础名；规范允许小写拼音、数字和下划线组合，禁止空格、横线、中文与大写字母。
-			var base_name: String = file_name.get_basename()
-			if not _is_lowercase_pinyin_filename(base_name):
-				validation_errors.append("内容源码文件只能使用小写字母、数字和下划线命名：%s/%s" % [directory_path, file_name])
-			result.append("%s/%s" % [directory_path, file_name])
+		# 当前目录项对应的原始GDScript文件名；导出PCK中的remap、编译或加密形式会恢复为规范`.gd`路径。
+		var script_file_name: String = _resolve_gd_script_file_name(file_name)
+		if script_file_name.is_empty() or registered_script_file_names.has(script_file_name):
+			continue
+		registered_script_file_names[script_file_name] = true
+		# 当前源码文件基础名；规范允许小写拼音、数字和下划线组合，禁止空格、横线、中文与大写字母。
+		var base_name: String = script_file_name.get_basename()
+		if not _is_lowercase_pinyin_filename(base_name):
+			validation_errors.append("内容源码文件只能使用小写字母、数字和下划线命名：%s/%s" % [directory_path, script_file_name])
+		result.append("%s/%s" % [directory_path, script_file_name])
 	return result
+
+
+## 把编辑器源码、remap、编译脚本或加密脚本目录项规范化为原始`.gd`文件名；其他文件返回空字符串。
+func _resolve_gd_script_file_name(file_name: String) -> String:
+	if file_name.get_extension() == "gd":
+		return file_name
+	if file_name.ends_with(".gd.remap"):
+		return file_name.trim_suffix(".remap")
+	if file_name.get_extension() in ["gdc", "gde"]:
+		return "%s.gd" % file_name.get_basename()
+	return ""
+
+
+## 按原始路径、编译路径和加密路径依次加载内容脚本；用于兼容不同导出脚本模式与平台资源映射行为。
+func _load_content_script(script_path: String) -> Script:
+	# 原始脚本基础路径；规范输入以`.gd`结尾，用于构造导出后的`.gdc`与`.gde`候选。
+	var script_base_path: String = script_path.trim_suffix(".gd")
+	# 按优先级排列的资源候选；编辑器命中原始路径，导出包可在资源重映射失效时直接命中编译或加密脚本。
+	var candidate_paths: Array[String] = [script_path, "%s.gdc" % script_base_path, "%s.gde" % script_base_path]
+	for candidate_path: String in candidate_paths:
+		if not ResourceLoader.exists(candidate_path):
+			continue
+		# 当前候选加载结果；只有Script资源可作为内容定义实例化，其他资源类型继续尝试后续候选。
+		var script_resource: Script = load(candidate_path) as Script
+		if script_resource != null:
+			return script_resource
+	return null
 
 
 ## 校验文件名是否仅由 a 至 z、0 至 9 和下划线组成；拼音语义与数字后缀用途由代码评审保证。

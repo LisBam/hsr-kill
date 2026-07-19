@@ -67,6 +67,9 @@ const SETTINGS_FILE_PATH: String = "user://game_settings.cfg"
 ## 设置文件格式版本；未来字段结构变化时可据此添加兼容迁移，当前版本从1开始。
 const SETTINGS_SCHEMA_VERSION: int = 1
 
+## 连续设置变化合并写盘的等待秒数；默认0.25秒可合并移动端滑条产生的密集事件，同时保持设置快速持久化。
+const SETTINGS_SAVE_DEBOUNCE_SECONDS: float = 0.25
+
 ## 设置文件元数据分组名；该分组只保存格式版本，不承载具体游戏或联机选项。
 const SETTINGS_METADATA_SECTION: String = "metadata"
 
@@ -112,10 +115,43 @@ var next_match_player_count: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
 ## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
 var _settings_file_path: String = SETTINGS_FILE_PATH
 
+## 设置合并保存计时器；进入场景树后创建，单次触发并忽略场景树暂停，保证菜单调整期间能够正常落盘。
+var _settings_save_timer: Timer
+
+## 当前是否存在尚未写入磁盘的设置变化；应用进入后台或节点退出时会强制刷新。
+var _has_pending_settings_save: bool = false
+
+## 最近一次设置文件保存结果；OK表示写入成功，失败值仅供诊断，不阻止内存设置继续生效。
+var last_save_error: Error = OK
+
+## 卡牌名称变化是否已排入空闲帧；用于合并同一帧内的重复选择并避免在GUI输入回调中同步重建牌面。
+var _card_name_mode_signal_pending: bool = false
+
+## UI风格变化是否已排入空闲帧；用于避免在下拉框输入回调中同步重建全部主题样式资源。
+var _ui_style_signal_pending: bool = false
+
 
 ## 自动加载节点进入场景树时恢复已保存配置；恢复阶段不发变更信号，后续界面会直接读取最终值完成首次绘制。
 func _ready() -> void:
 	_load_saved_settings()
+	_settings_save_timer = Timer.new()
+	_settings_save_timer.name = "SettingsSaveTimer"
+	_settings_save_timer.one_shot = true
+	_settings_save_timer.wait_time = SETTINGS_SAVE_DEBOUNCE_SECONDS
+	_settings_save_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_settings_save_timer.timeout.connect(flush_pending_settings)
+	add_child(_settings_save_timer)
+
+
+## 应用进入后台时立即保存待处理设置；移动系统可能随后终止进程，不能继续等待合并计时器。
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_PAUSED:
+		flush_pending_settings()
+
+
+## 节点退出前立即保存待处理设置；测试实例释放与正常关闭都复用同一安全出口。
+func _exit_tree() -> void:
+	flush_pending_settings()
 
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
@@ -125,8 +161,8 @@ func set_card_name_mode(mode: NameMode) -> void:
 	if card_name_mode == normalized_mode:
 		return
 	card_name_mode = normalized_mode
-	_save_settings()
-	card_name_mode_changed.emit(card_name_mode)
+	_queue_settings_save()
+	_queue_card_name_mode_changed_signal()
 
 
 ## 在两套卡牌名称之间切换，适合直接绑定设置按钮。
@@ -144,7 +180,7 @@ func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 	if is_equal_approx(ai_response_delay_seconds, clamped_delay_seconds):
 		return
 	ai_response_delay_seconds = clamped_delay_seconds
-	_save_settings()
+	_queue_settings_save()
 	ai_response_delay_changed.emit(ai_response_delay_seconds)
 
 
@@ -155,7 +191,7 @@ func set_game_speed_interval_seconds(interval_seconds: float) -> void:
 	if is_equal_approx(game_speed_interval_seconds, clamped_interval_seconds):
 		return
 	game_speed_interval_seconds = clamped_interval_seconds
-	_save_settings()
+	_queue_settings_save()
 	game_speed_changed.emit(game_speed_interval_seconds)
 
 
@@ -166,8 +202,8 @@ func set_ui_style(style_id: String) -> void:
 	if ui_style_id == normalized_style_id:
 		return
 	ui_style_id = normalized_style_id
-	_save_settings()
-	ui_style_changed.emit(ui_style_id)
+	_queue_settings_save()
+	_queue_ui_style_changed_signal()
 
 
 ## 设置自动身份标记开关；变化只通知本地界面重新读取共享身份模型，不改变模型观察记录或规则状态。
@@ -175,7 +211,7 @@ func set_auto_identity_marking_enabled(enabled: bool) -> void:
 	if auto_identity_marking_enabled == enabled:
 		return
 	auto_identity_marking_enabled = enabled
-	_save_settings()
+	_queue_settings_save()
 	auto_identity_marking_changed.emit(auto_identity_marking_enabled)
 
 
@@ -186,7 +222,7 @@ func set_online_player_name(player_name: String) -> void:
 	if online_player_name == normalized_player_name:
 		return
 	online_player_name = normalized_player_name
-	_save_settings()
+	_queue_settings_save()
 	online_player_name_changed.emit(online_player_name)
 
 
@@ -197,7 +233,7 @@ func set_online_avatar_character_id(character_id: String) -> void:
 	if online_avatar_character_id == normalized_character_id:
 		return
 	online_avatar_character_id = normalized_character_id
-	_save_settings()
+	_queue_settings_save()
 	online_avatar_character_changed.emit(online_avatar_character_id)
 
 
@@ -208,7 +244,7 @@ func set_next_match_player_count(player_count: int) -> void:
 	if next_match_player_count == normalized_player_count:
 		return
 	next_match_player_count = normalized_player_count
-	_save_settings()
+	_queue_settings_save()
 	next_match_player_count_changed.emit(next_match_player_count)
 
 
@@ -250,6 +286,53 @@ func _load_saved_settings() -> void:
 	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
 
 
+## 登记一次待保存变化并重启短计时器；连续滑条事件只会在停止操作后执行一次实际文件写入。
+func _queue_settings_save() -> void:
+	_has_pending_settings_save = true
+	if _settings_save_timer == null or not is_instance_valid(_settings_save_timer):
+		flush_pending_settings()
+		return
+	_settings_save_timer.start(SETTINGS_SAVE_DEBOUNCE_SECONDS)
+
+
+## 立即把全部待处理设置写入磁盘；公开入口供应用生命周期和持久化测试安全强制落盘。
+func flush_pending_settings() -> void:
+	if not _has_pending_settings_save:
+		return
+	_has_pending_settings_save = false
+	if _settings_save_timer != null and is_instance_valid(_settings_save_timer):
+		_settings_save_timer.stop()
+	_save_settings()
+
+
+## 把卡牌名称变化安排到当前GUI输入结束后的空闲帧；重复请求只保留一次最终状态广播。
+func _queue_card_name_mode_changed_signal() -> void:
+	if _card_name_mode_signal_pending:
+		return
+	_card_name_mode_signal_pending = true
+	call_deferred("_emit_card_name_mode_changed_signal")
+
+
+## 广播最终卡牌名称模式；界面可安全重绘牌面，不会继续占用原下拉框输入调用栈。
+func _emit_card_name_mode_changed_signal() -> void:
+	_card_name_mode_signal_pending = false
+	card_name_mode_changed.emit(card_name_mode)
+
+
+## 把UI风格变化安排到当前GUI输入结束后的空闲帧；同一帧重复选择只重建一次主题资源。
+func _queue_ui_style_changed_signal() -> void:
+	if _ui_style_signal_pending:
+		return
+	_ui_style_signal_pending = true
+	call_deferred("_emit_ui_style_changed_signal")
+
+
+## 广播最终UI风格；所有组件的样式对象重建在空闲帧执行，避免移动端输入事件表现为卡死。
+func _emit_ui_style_changed_signal() -> void:
+	_ui_style_signal_pending = false
+	ui_style_changed.emit(ui_style_id)
+
+
 ## 将当前客户端偏好写入本地配置文件；写入失败不影响已生效的内存设置或当前网络与对局状态。
 func _save_settings() -> void:
 	# 当前设置文件写入器；每次完整写入全部字段，避免增量更新产生缺失字段或跨版本半成品。
@@ -263,7 +346,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
-	settings_file.save(_settings_file_path)
+	last_save_error = settings_file.save(_settings_file_path)
 
 
 ## 将任意存档或调用方提供的名称模式限制到两个已支持的稳定枚举值。
