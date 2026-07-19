@@ -42,9 +42,19 @@ func blocks_slash(card: CardInstance, nature: String) -> bool:
 	return nature == "normal"
 
 
+## 按只读伤害属性预判【杀】是否被藤甲拦截；藤甲不依赖实体牌颜色，供AI在无CardInstance时复用。
+func blocks_slash_by_color(_card_color: String, nature: String) -> bool:
+	return nature == "normal"
+
+
 ## 藤甲令【南蛮入侵】与【万箭齐发】对持有者无效。
 func blocks_aoe(card_definition_id: String) -> bool:
 	return card_definition_id in ["nanman", "wanjian"]
+
+
+## 藤甲令火焰伤害的AI预期值按2倍估算；常规1点火焰伤害实际会增加为2点。
+func get_ai_incoming_damage_multiplier(nature: String) -> float:
+	return 2.0 if nature == "fire" else 1.0
 
 
 ## 藤甲使持有者受到的火焰伤害固定增加1点。

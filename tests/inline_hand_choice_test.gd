@@ -132,6 +132,36 @@ func _run() -> void:
 	if confirm_button.disabled or (main_instance.get("_inline_selected_card_uids") as Array).size() != 2:
 		_fail("discard_complete_state")
 		return
+	# 同名字数选择测试【决斗】；其二字牌名与一字的【杀】【闪】不兼容。
+	var duel_data: Dictionary = {"uid":7003, "definition_id":"juedou", "suit":"spade", "rank":1, "zone":"hand", "owner_id":0}
+	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data, duel_data], 120))
+	await get_tree().process_frame
+	# 录事式固定合法组合请求；选中【杀】后只能继续选择同为一字牌名的【闪】。
+	var matching_name_request: Dictionary = {
+		"request_id":120,
+		"chooser_id":0,
+		"title":"选择同名字数牌",
+		"prompt":"请选择两张牌名字数相同的牌",
+		"candidates":[_candidate(slash_data), _candidate(dodge_data), _candidate(duel_data)],
+		"min_select":2,
+		"max_select":2,
+		"allow_cancel":true,
+		"context":{"kind":"lushi_cards", "valid_card_combinations":[[7001, 7002]]},
+	}
+	main_instance.call("_on_card_choice_requested", matching_name_request)
+	main_instance.call("_on_card_pressed", 7001)
+	await get_tree().process_frame
+	# 动态更新后的手牌视图；兼容牌保持可选，不可能完成合法组合的牌必须立即暗置。
+	var matching_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
+	# 已选【杀】视图；已选候选必须继续保留交互，允许玩家撤销选择。
+	var selected_slash_view: CardView = matching_card_views.get(7001) as CardView
+	# 兼容【闪】视图；与已选【杀】构成唯一合法组合，应保持明亮可选。
+	var compatible_dodge_view: CardView = matching_card_views.get(7002) as CardView
+	# 不兼容【决斗】视图；当前选择下无法构成合法组合，应动态暗置且禁止点击。
+	var incompatible_duel_view: CardView = matching_card_views.get(7003) as CardView
+	if selected_slash_view == null or compatible_dodge_view == null or incompatible_duel_view == null or not selected_slash_view.is_interactable or not compatible_dodge_view.is_interactable or incompatible_duel_view.is_interactable:
+		_fail("dynamic_valid_card_combination")
+		return
 	# 测试武器装备；与手牌候选共用统一实体 UID 选择协议。
 	var weapon_data: Dictionary = {"uid":7004, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"equipment", "owner_id":0}
 	# 测试防御坐骑；不属于当前候选，用于确认非候选装备保持原位且防具与进攻坐骑空槽不会被压缩。

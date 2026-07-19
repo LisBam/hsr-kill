@@ -154,24 +154,37 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 
 
 ## 判断一项【杀】动作是否会被所有已选目标的防具完全拦截；只读取公开装备和自身完整手牌快照，不修改实体牌或规则状态。
+## 同一查询也覆盖防具明确声明完全拦截的伤害类群体锦囊。
 func _is_slash_fully_blocked_by_armor(authoritative_snapshot: Dictionary, action: Dictionary) -> bool:
 	# 当前逻辑牌定义；只有共享 slash 牌族才需要检查防具的【杀】拦截钩子。
+	# 防具声明拦截的伤害类群体锦囊也复用本入口，具体牌名由防具源码判断。
 	var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
-	if str(definition.get("effect_id", "")) != "slash":
+	# 当前是否为共享【杀】牌族；决定颜色、属性与无视防具武器的检查方式。
+	var is_slash: bool = str(definition.get("effect_id", "")) == "slash"
+	# 当前卡牌定义ID；群体锦囊防具钩子按该稳定值判断。
+	var card_definition_id: String = str(definition.get("id", ""))
+	if not is_slash and not bool((definition.get("ai", {}) as Dictionary).get("damage", false)):
 		return false
 	# 当前使用实体 UID；虚拟或丢失实体没有稳定花色，不能错误套用黑色【杀】防具规则。
+	# 只按伤害属性判断的防具仍可在颜色未知时完成预判。
 	var card_uid: int = int(action.get("card_uid", -1))
+	# 当前使用实体快照；仅【杀】的颜色型防具需要读取该字段。
 	var used_card: Dictionary = _find_owned_card(authoritative_snapshot, player_id, card_uid)
-	if str(used_card.get("color", "")) != "black":
-		return false
+	# 当前实体颜色；空值表示虚拟牌或无法确认颜色，防具钩子必须自行决定是否仍可拦截。
+	var card_color: String = str(used_card.get("color", ""))
 	# 当前使用者公开武器；声明无视防具时不应把合法攻击误判为无效。
 	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
+	# 当前武器快照；只在【杀】动作中参与防具忽略判断。
 	var weapon: Dictionary = (actor.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary
+	# 当前武器源码；由装备自身声明规则能力。
 	var weapon_definition: CardDefinition = GameDatabase.get_card_definition(str(weapon.get("definition_id", "")))
-	if weapon_definition != null and weapon_definition.slash_ignores_armor():
+	if is_slash and weapon_definition != null and weapon_definition.slash_ignores_armor():
 		return false
 	# 当前实际目标；标准合法动作始终已写入完整数组，多目标【杀】只有全部被拦截时才放弃动作。
 	var target_ids: Array = action.get("target_ids", []) as Array
+	if target_ids.is_empty() and not is_slash:
+		# 群体牌合法动作通常不携带目标数组；按定义目标模式从快照展开实际存活目标。
+		target_ids = evaluator.get_effective_target_ids(authoritative_snapshot, player_id, definition, target_ids)
 	if target_ids.is_empty():
 		return false
 	for target_id_variant: Variant in target_ids:
@@ -179,7 +192,11 @@ func _is_slash_fully_blocked_by_armor(authoritative_snapshot: Dictionary, action
 		var target: Dictionary = evaluator.get_player(authoritative_snapshot, int(target_id_variant))
 		var armor: Dictionary = (target.get("equipment", {}) as Dictionary).get("armor", {}) as Dictionary
 		var armor_definition: CardDefinition = GameDatabase.get_card_definition(str(armor.get("definition_id", "")))
-		if armor_definition == null or not armor_definition.blocks_slash_by_color("black", str(definition.get("nature", "normal"))):
+		if armor_definition == null:
+			return false
+		if is_slash and not armor_definition.blocks_slash_by_color(card_color, str(definition.get("nature", "normal"))):
+			return false
+		if not is_slash and not armor_definition.blocks_aoe(card_definition_id):
 			return false
 	return true
 

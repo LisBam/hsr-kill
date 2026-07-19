@@ -21,6 +21,9 @@ var actor_id: int = -1
 ## 本次使用牌指定的目标玩家 ID 数组；纯展示与判定通常为空数组。
 var target_ids: Array[int] = []
 
+## 需要按顺序播放的目标指示阶段；每项包含来源actor_id与该阶段target_ids，空数组使用普通单段表现。
+var indicator_stages: Array[Dictionary] = []
+
 ## 表现开始时的权威来源区域；用于区分真实处理区牌与仍留在手牌区的纯展示副本。
 var source_zone: String = ""
 
@@ -29,13 +32,14 @@ var owns_discard_transfer: bool = false
 
 
 ## 创建一条牌面表现数据；所有集合均复制，调用方后续修改目标或牌快照不会污染已发出的事件。
-func _init(presentation_sequence: int = -1, related_event_id: int = -1, related_event_name: String = "", serialized_card: Dictionary = {}, source_actor_id: int = -1, related_target_ids: Array[int] = [], discard_transfer_owned: bool = false) -> void:
+func _init(presentation_sequence: int = -1, related_event_id: int = -1, related_event_name: String = "", serialized_card: Dictionary = {}, source_actor_id: int = -1, related_target_ids: Array[int] = [], discard_transfer_owned: bool = false, related_indicator_stages: Array[Dictionary] = []) -> void:
 	presentation_id = presentation_sequence
 	event_id = related_event_id
 	event_name = related_event_name
 	card_data = serialized_card.duplicate(true)
 	actor_id = source_actor_id
 	target_ids = related_target_ids.duplicate()
+	indicator_stages = related_indicator_stages.duplicate(true)
 	source_zone = str(card_data.get("zone", ""))
 	owns_discard_transfer = discard_transfer_owned
 
@@ -49,6 +53,7 @@ func to_dict() -> Dictionary:
 		"card_data":card_data.duplicate(true),
 		"actor_id":actor_id,
 		"target_ids":target_ids.duplicate(),
+		"indicator_stages":indicator_stages.duplicate(true),
 		"source_zone":source_zone,
 		"owns_discard_transfer":owns_discard_transfer,
 	}

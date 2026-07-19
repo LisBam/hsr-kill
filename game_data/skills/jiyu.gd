@@ -166,6 +166,23 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 				break
 		if only_owner_allies:
 			return AI_PREFERRED_OPTION_SCORE if option_id == REDIRECT_LINK_OPTION_ID else 0.0
+		# 范围内敌对角色是否至少存在一名；空集合不能被“全部横置”的逻辑误判为成立。
+		var has_hostile_redirect_target: bool = false
+		# 范围内敌对角色是否全部处于横置状态；成立时优先选择横置分支，避免担心把未横置敌人新增为连环目标。
+		var all_hostile_redirect_targets_chained: bool = true
+		for redirect_target_variant: Variant in redirect_target_ids:
+			# 当前范围候选ID；用于读取态度与横置状态。
+			var redirect_target_id: int = int(redirect_target_variant)
+			if evaluator.get_attitude(authoritative_snapshot, owner_player_id, redirect_target_id) >= 0.0:
+				continue
+			has_hostile_redirect_target = true
+			# 当前敌对候选快照；任一敌对角色未横置就不满足统一优先条件。
+			var redirect_target: Dictionary = evaluator.get_player(authoritative_snapshot, redirect_target_id)
+			if not bool(redirect_target.get("chained", false)):
+				all_hostile_redirect_targets_chained = false
+				break
+		if has_hostile_redirect_target and all_hostile_redirect_targets_chained:
+			return AI_PREFERRED_OPTION_SCORE if option_id == REDIRECT_LINK_OPTION_ID else 0.0
 		# 目标已知【闪】数量；无【闪】选第1项，有【闪】选第2项。
 		var known_shan_count: int = evaluator.get_known_response_count(authoritative_snapshot, target_id, "shan")
 		if known_shan_count <= 0:

@@ -87,11 +87,24 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 	var target: Dictionary = get_player(authoritative_snapshot, target_id)
 	if target.is_empty():
 		return 0.0
+	# 目标公开防具定义；防具无效化和伤害放大在目标状态倍率之前统一应用。
+	var armor_definition: CardDefinition = _get_effective_armor_definition(authoritative_snapshot, actor_id, target, definition)
+	if armor_definition != null:
+		# 当前牌定义ID；群体锦囊使用稳定ID判断藤甲等防具的完全无效规则。
+		var card_definition_id: String = str(definition.get("id", ""))
+		# 当前伤害属性；普通【杀】会被藤甲拦截，火焰伤害则提高预期收益。
+		var nature: String = str(definition.get("nature", "normal"))
+		if str(definition.get("effect_id", "")) == "slash" and armor_definition.blocks_slash_by_color("", nature):
+			return 0.0
+		if armor_definition.blocks_aoe(card_definition_id):
+			return 0.0
 	# 目标状态倍率；复制无名杀 get.effect 对低体力、少手牌目标的威胁放大思想。
 	var status_multiplier: float = 1.0
 	if bool(ai_profile.get("recover", false)) and int(target.get("hp", 0)) >= int(target.get("max_hp", 0)):
 		return 0.0
 	if bool(ai_profile.get("damage", false)):
+		if armor_definition != null:
+			status_multiplier *= armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
 		# 目标体力；1点体力时伤害价值显著上升，2点体力时次级上升。
 		var target_hp: int = int(target.get("hp", 0))
 		if target_hp <= 1:
@@ -133,6 +146,22 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 				continue
 			result += target_result * get_attitude(authoritative_snapshot, actor_id, chained_id) / ATTITUDE_SCALE
 	return result
+
+
+## 返回当前牌效应应用的目标防具；青釭剑等无视防具武器只在【杀】结算中返回空值。
+func _get_effective_armor_definition(authoritative_snapshot: Dictionary, actor_id: int, target: Dictionary, definition: Dictionary) -> CardDefinition:
+	if str(definition.get("effect_id", "")) == "slash":
+		# 使用者公开武器；武器源码统一声明是否无视防具，AI不硬编码装备ID。
+		var actor: Dictionary = get_player(authoritative_snapshot, actor_id)
+		# 当前武器快照；空槽返回空字典并自然跳过。
+		var weapon: Dictionary = (actor.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary
+		# 当前武器源码；青釭剑等声明无视防具时不再读取目标防具能力。
+		var weapon_definition: CardDefinition = GameDatabase.get_card_definition(str(weapon.get("definition_id", "")))
+		if weapon_definition != null and weapon_definition.slash_ignores_armor():
+			return null
+	# 目标防具快照；不存在公开防具时没有任何修正。
+	var armor: Dictionary = (target.get("equipment", {}) as Dictionary).get("armor", {}) as Dictionary
+	return GameDatabase.get_card_definition(str(armor.get("definition_id", "")))
 
 
 ## 计算统一选择请求中的默认动作评分；卡牌与技能文件可在此结果上实现专属判断。
@@ -291,6 +320,43 @@ func get_attitude(authoritative_snapshot: Dictionary, from_player_id: int, to_pl
 ## 返回指定玩家状态快照；技能 AI 只读体力、连环、手牌数与公开装备等序列化字段。
 func get_player(authoritative_snapshot: Dictionary, player_id: int) -> Dictionary:
 	return identity_model.get_player(authoritative_snapshot, player_id)
+
+
+## 返回两名存活角色之间的最终距离；AI仅依据权威快照的座次与公开坐骑计算，不依赖运行时CardRuleService。
+func get_distance(authoritative_snapshot: Dictionary, source_id: int, target_id: int) -> int:
+	if source_id == target_id:
+		return 0
+	# 存活且未离场玩家；数组顺序保持权威座次顺序，死亡角色不计入距离。
+	var alive_players: Array[Dictionary] = []
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；只有实际在场角色参与环形距离。
+		var player: Dictionary = player_variant as Dictionary
+		if bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)):
+			alive_players.append(player)
+	# 来源与目标座次索引；任一不存在时返回规则层使用的不可达距离999。
+	var source_index: int = -1
+	# 目标座次索引；与来源索引分开保存以计算双向最短距离。
+	var target_index: int = -1
+	for index: int in range(alive_players.size()):
+		if int(alive_players[index].get("player_id", -1)) == source_id:
+			source_index = index
+		if int(alive_players[index].get("player_id", -1)) == target_id:
+			target_index = index
+	if source_index < 0 or target_index < 0:
+		return 999
+	# 顺时针座次差；环形桌面与逆时针方向取较小值。
+	var clockwise: int = absi(target_index - source_index)
+	# 基础距离；进攻与防御坐骑修正后仍至少为1。
+	var distance: int = mini(clockwise, alive_players.size() - clockwise)
+	# 来源玩家快照；进攻坐骑令其到其他角色距离减1。
+	var source: Dictionary = alive_players[source_index]
+	# 目标玩家快照；防御坐骑令其他角色到其距离加1。
+	var target: Dictionary = alive_players[target_index]
+	if (source.get("equipment", {}) as Dictionary).has("offensive_mount"):
+		distance -= 1
+	if (target.get("equipment", {}) as Dictionary).has("defensive_mount"):
+		distance += 1
+	return maxi(distance, 1)
 
 
 ## 返回角色综合强度；额外回合、威胁与目标优先级可直接复用无名杀 condition 公式。

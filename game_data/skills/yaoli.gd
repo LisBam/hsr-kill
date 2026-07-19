@@ -153,12 +153,27 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	if _owner_has_skill(authoritative_snapshot, "huanfa"):
 		score += _estimate_extra_play_phase_value(authoritative_snapshot, target_id) * 0.7
 	# 自己红色手牌很少且未受伤时保留给队友；自身受伤时【药】的即时回复价值覆盖该保留倾向。
-	var red_hand_count: int = _get_red_hand_candidates().size()
+	# AI静态技能实例没有运行时host，因此该数量必须只读取权威快照。
+	var red_hand_count: int = _snapshot_red_hand_count(authoritative_snapshot)
 	if target_id == owner_player_id and red_hand_count <= 1 and missing_hp <= 0:
 		score -= 3.0
 	# 交出材料的机会成本；优先选择低保留价值红牌，向友方转移只折算部分资源成本。
 	score -= evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("card_uid", -1))) * 0.3
 	return score
+
+
+## 从权威快照统计技能持有者的红色普通手牌；本入口专供无运行时host的AI静态评分实例使用。
+func _snapshot_red_hand_count(authoritative_snapshot: Dictionary) -> int:
+	# 技能持有者快照；AI权威视角包含自身完整手牌牌面。
+	var owner: Dictionary = _snapshot_player(authoritative_snapshot, owner_player_id)
+	# 红色手牌数量；木牛“粮”和装备不属于技能原文要求的手牌，不参与统计。
+	var result: int = 0
+	for card_variant: Variant in owner.get("hand", []) as Array:
+		# 当前手牌快照；颜色由CardInstance序列化统一提供。
+		var card: Dictionary = card_variant as Dictionary
+		if str(card.get("color", "none")) == "red":
+			result += 1
+	return result
 
 
 ## 返回指定玩家在快照玩家数组中的座次索引；无效ID返回-1。

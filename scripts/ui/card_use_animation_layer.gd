@@ -142,7 +142,7 @@ func claim_presentation(presentation_id: int, card_uid: int, owns_discard_transf
 
 ## 播放一次卡牌使用表现；传入节点始终是正式 CardView，所有位置使用本组件局部坐标。
 ## owns_discard_transfer 仅供真实处理区牌和判定牌开启，仍留在手牌区的 showCards 表现必须保持false。
-func play_card(card_view: CardView, start_position: Vector2, discard_position: Vector2, target_positions: Array[Vector2], owns_discard_transfer: bool = false) -> void:
+func play_card(card_view: CardView, start_position: Vector2, discard_position: Vector2, target_positions: Array[Vector2], owns_discard_transfer: bool = false, indicator_stages: Array[Dictionary] = []) -> void:
 	if card_view == null:
 		return
 	if owns_discard_transfer and card_view.card_uid >= 0 and not _discard_transfer_claims.has(card_view.card_uid):
@@ -152,21 +152,29 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	_presentation_sequence += 1
 	# 本次表现序号；用于关联当前卡牌、目标指示线与后续顺序淡出清理。
 	var sequence: int = _presentation_sequence
+	# 实际指示阶段；普通牌把原来源与全部目标包装为唯一阶段，多段牌保留调用方顺序。
+	var resolved_indicator_stages: Array[Dictionary] = indicator_stages.duplicate(true)
+	if resolved_indicator_stages.is_empty() and not target_positions.is_empty():
+		resolved_indicator_stages.append({"start_position":start_position, "target_positions":target_positions.duplicate()})
+	# 首阶段数据；空阶段使用普通起点和空目标，保持统一表现结构。
+	var first_indicator_stage: Dictionary = resolved_indicator_stages[0] as Dictionary if not resolved_indicator_stages.is_empty() else {"start_position":start_position, "target_positions":[]}
 	# 本次目标指示线初始透明度；无目标卡牌不创建可见线条，但仍保留统一表现数据结构。
-	var line_alpha: float = 1.0 if not target_positions.is_empty() else 0.0
+	var line_alpha: float = 1.0 if not (first_indicator_stage.get("target_positions", []) as Array).is_empty() else 0.0
 	_line_presentations[sequence] = {
-		"start_position":start_position,
-		"target_positions":target_positions.duplicate(),
+		"start_position":first_indicator_stage.get("start_position", start_position) as Vector2,
+		"target_positions":(first_indicator_stage.get("target_positions", []) as Array).duplicate(),
 		"alpha":line_alpha,
 		"progress":0.0,
 	}
 	queue_redraw()
-	if not target_positions.is_empty():
-		# 指示线生长与淡出补间；线条沿来源到目标逐渐延伸，完整到达后立即连续渐隐，不等待飞牌停留或弃牌队列。
+	if not resolved_indicator_stages.is_empty():
+		# 指示线阶段补间；每一段完整生长并淡出后才切换下一段，保证角色语义顺序清晰。
 		var line_draw_tween: Tween = create_tween()
 		line_draw_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		line_draw_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
-		line_draw_tween.tween_method(_set_line_alpha.bind(sequence), line_alpha, 0.0, target_line_fade_duration)
+		for indicator_stage: Dictionary in resolved_indicator_stages:
+			line_draw_tween.tween_callback(_set_line_stage.bind(sequence, indicator_stage))
+			line_draw_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
+			line_draw_tween.tween_method(_set_line_alpha.bind(sequence), 1.0, 0.0, target_line_fade_duration)
 		line_draw_tween.tween_callback(_remove_line_presentation.bind(sequence))
 	# 当前进入动画层的正式卡牌；每张牌独立加入队列，不会清除仍在展示的前一张牌。
 	var presented_card: CardView = card_view
@@ -617,6 +625,20 @@ func _set_line_progress(progress: float, sequence: int) -> void:
 	# 当前目标线数据；进度限制在0至1，避免补间边界误差造成线段越过目标。
 	var presentation: Dictionary = _line_presentations[sequence] as Dictionary
 	presentation["progress"] = clampf(progress, 0.0, 1.0)
+	_line_presentations[sequence] = presentation
+	queue_redraw()
+
+
+## 切换同一次出牌表现当前绘制的来源与目标；每个阶段开始时重置进度和透明度。
+func _set_line_stage(sequence: int, indicator_stage: Dictionary) -> void:
+	if not _line_presentations.has(sequence):
+		return
+	# 当前目标线数据；只替换几何与阶段状态，表现序号保持不变。
+	var presentation: Dictionary = _line_presentations[sequence] as Dictionary
+	presentation["start_position"] = indicator_stage.get("start_position", presentation.get("start_position", Vector2.ZERO)) as Vector2
+	presentation["target_positions"] = (indicator_stage.get("target_positions", []) as Array).duplicate()
+	presentation["progress"] = 0.0
+	presentation["alpha"] = 1.0
 	_line_presentations[sequence] = presentation
 	queue_redraw()
 

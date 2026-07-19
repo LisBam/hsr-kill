@@ -64,6 +64,7 @@ func _apply_shown_card(resolver: Object, context: Dictionary, shown_card_uid: in
 	# 被展示手牌；展示端口只公开牌面，不移动实体。
 	var shown_card: CardInstance = resolver.host.reveal_hand_card(target_id, shown_card_uid, "fire_attack")
 	if shown_card == null:
+		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
 	# 火攻使用者状态；用于筛选同花色普通手牌。
 	var actor: PlayerState = resolver.state.get_player(actor_id)
@@ -87,16 +88,30 @@ func _apply_shown_card(resolver: Object, context: Dictionary, shown_card_uid: in
 
 ## 应用同花色弃牌；只有费用仍合法且成功弃置时造成1点火焰伤害。
 func _apply_discard(resolver: Object, context: Dictionary, selected_uids: Array[int]) -> void:
+	# 火攻使用者ID；失败目标记忆与费用复核共用该稳定来源。
+	var actor_id: int = int(context.get("actor_id", -1))
+	# 火攻目标ID；本回合后续AI动作会据此避开重复无效火攻。
+	var target_id: int = int(context.get("target_id", -1))
 	if selected_uids.is_empty():
+		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
 	# 火攻使用者 ID；所选费用必须仍位于其普通手牌区。
-	var actor_id: int = int(context.get("actor_id", -1))
+	# 使用者ID已在失败目标记录前读取；此处继续用于查询实体费用牌。
 	# 当前所选手牌；等待期间移动或花色不符时支付失败。
 	var selected_card: CardInstance = resolver.state.get_player(actor_id).find_hand_card(selected_uids[0]) if resolver.state.get_player(actor_id) != null else null
 	if selected_card == null or selected_card.suit != str(context.get("suit", "")):
+		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
 	if resolver.host.discard_card_from_hand(actor_id, selected_card.uid):
-		resolver.host.damage(actor_id, int(context.get("target_id", -1)), 1, "fire", "huogong")
+		# 伤害前目标状态；累计受伤次数可区分正常命中与被技能取消、减为0等未造成伤害结果。
+		var target: PlayerState = resolver.state.get_player(target_id)
+		# 伤害前累计受伤次数；目标不存在时使用-1并在结算后记录本次失败。
+		var previous_damage_taken_count: int = target.damage_taken_count if target != null else -1
+		resolver.host.damage(actor_id, target_id, 1, "fire", "huogong")
+		if target == null or target.damage_taken_count <= previous_damage_taken_count:
+			resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
+	else:
+		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 
 
 ## 恢复火攻展示或弃牌选择；异步链结束后推进当前逐目标结算。
@@ -114,3 +129,20 @@ func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array
 		resolver.host.complete_card_target(int(context.get("parent_card_uid", -1)))
 		return true
 	return false
+
+
+## 火攻被无懈抵消时记住本回合失败目标，防止AI立即再次对同一角色使用火攻。
+func records_failed_ai_target_when_negated() -> bool:
+	return true
+
+
+## 修正火攻AI目标；本回合已经火攻但未造成伤害的角色不再成为候选。
+func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
+	# 火攻使用者快照；失败目标记忆属于自身当前回合公开行为摘要。
+	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, int(action.get("actor_id", -1)))
+	# 已失败目标数组；异常旧快照缺失时保持空数组。
+	var failed_target_ids: Array = (actor.get("ai_failed_card_target_ids", {}) as Dictionary).get(get_id(), []) as Array
+	for target_variant: Variant in action.get("target_ids", []) as Array:
+		if failed_target_ids.has(int(target_variant)):
+			return -INF
+	return current_score

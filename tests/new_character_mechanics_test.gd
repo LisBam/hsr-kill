@@ -116,6 +116,9 @@ func _test_metadata_and_rule_names() -> bool:
 	var thunder_slash: Dictionary = GameDatabase.get_card("sha_thunder")
 	if str(fire_slash.get("rule_name", "")) != "杀" or str(thunder_slash.get("rule_name", "")) != "杀" or str(fire_slash.get("original_name", "")) != "火杀" or str(thunder_slash.get("custom_name", "")) != "雷杀":
 		return _fail("attribute_slash_names fire=%s thunder=%s" % [fire_slash, thunder_slash])
+	# 寒鸦牌名字数规则；属性【杀】虽然牌面显示两个字，实际规则牌名仍只有一个字。
+	if _controller.get_card_original_name_length("sha_fire") != 1 or _controller.get_card_original_name_length("sha_thunder") != 1:
+		return _fail("attribute_slash_rule_length")
 	# 三名新武将定义；技能数组顺序就是面板与运行时安装顺序。
 	var march: Dictionary = GameDatabase.get_character("march_7th")
 	# 杰帕德武将定义；验证势力、性别、体力与【永屹】引用。
@@ -169,6 +172,9 @@ func _test_expanded_character_metadata() -> bool:
 ## 验证指定牌先检索牌堆、缺失后检索弃牌堆的顶部匹配顺序，并验证【药】在离开手牌区时恢复原牌名。
 func _test_named_card_gain_and_hand_view_as() -> bool:
 	_reset_state(2)
+	# 本项测试捕获的公开日志；仅用于确认定向获得牌时不会泄露具体牌名。
+	var emitted_logs: Array[String] = []
+	_controller.log_added.connect(func(message: String) -> void: emitted_logs.append(message))
 	# 牌堆中的【无中生有】；即使其上方有其他牌，也应优先于弃牌堆中的同名牌被获得。
 	var draw_wuzhong: CardInstance = _add_draw_pile_card("wuzhong", "heart", 7)
 	# 牌堆顶非匹配牌；检索指定牌时保持在原位。
@@ -185,6 +191,9 @@ func _test_named_card_gain_and_hand_view_as() -> bool:
 	var second_gain: CardInstance = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
 	if first_gain != draw_wuzhong or second_gain != discard_top_wuzhong or not _controller.state.draw_pile.has(draw_top_other) or not _controller.state.discard_pile.has(discard_lower_wuzhong) or not _controller.state.discard_pile.has(discard_middle_other):
 		return _fail("named_gain_order first=%s second=%s" % [first_gain.uid if first_gain != null else -1, second_gain.uid if second_gain != null else -1])
+	# 定向获得后的隐藏信息；弃牌堆公开知识也必须重置为仅获得者知晓，日志不得包含具体牌名。
+	if first_gain.shown or second_gain.shown or first_gain.known_to != [0] or second_gain.known_to != [0] or emitted_logs.any(func(log_line: String) -> bool: return log_line.contains("无中生有")):
+		return _fail("named_gain_visibility first=%s second=%s logs=%s" % [first_gain.to_dict(), second_gain.to_dict(), emitted_logs])
 	# 交给其他角色的红色实体；进入目标手牌后临时视为【桃/药】。
 	var gifted_card: CardInstance = _add_hand_card(0, "sha", "heart", 5)
 	if not _controller.transfer_hand_card_as(0, 1, gifted_card.uid, "tao", "yaoli") or gifted_card.definition_id != "tao" or gifted_card.hand_view_as_original_definition_id != "sha" or _controller.state.get_player(1).find_hand_card(gifted_card.uid) == null:
@@ -257,7 +266,13 @@ func _test_huanyang_and_sefu() -> bool:
 	# 雪衣受伤状态；满足还阳时应从3点回复至4点。
 	var xveyi_player: PlayerState = _controller.state.get_player(0)
 	xveyi_player.hp = 3
-	# 标准伤害来源事件；【杀】原版名字数为1，目标是距离1的二号角色。
+	# 还阳正式运行时订阅；通过真实伤害流程验证标准damage时机，而非只直接调用回调函数。
+	huanyang.install()
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if xveyi_player.hp != 4 or str(huanyang.get_metadata().get("trigger", "")) != "damage":
+		return _fail("huanyang_damage_timing hp=%d trigger=%s" % [xveyi_player.hp, huanyang.get_metadata().get("trigger", "")])
+	# 标准伤害来源事件；【杀】规则名字数为1，目标是距离1的二号角色。
+	# 兼容测试变量仍沿用原有名称；还阳的正式订阅已经由上方真实damage流程覆盖。
 	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha"})
 	huanyang.call("_on_owner_damage_source", damage_source_event)
 	if xveyi_player.hp != 4:
@@ -417,6 +432,8 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 永屹持有者状态；1点护盾正好满足支付额外出牌阶段费用。
 	var gepard: PlayerState = _controller.state.get_player(0)
 	gepard.shield = 1
+	# 可用于额外出牌阶段的实体【杀】；没有可用牌时永屹按规则不应创建确认请求。
+	_add_hand_card(0, "sha", "spade", 7)
 	# 永屹运行时技能；安装真实弃牌阶段Begin订阅，确保确认响应经过统一恢复入口。
 	var yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
 	# 弃牌阶段生命周期；永屹应在Begin创建确认选择并暂停当前弃牌阶段。
@@ -443,8 +460,12 @@ func _test_gangfeng_response() -> bool:
 	_controller.skill_instances_by_player = {0:{"gangfeng":gangfeng}}
 	# 黑色响应材料；使用梅花Q验证虚拟雷【杀】继承花色与点数。
 	var material: CardInstance = _add_hand_card(0, "shan", "club", 12)
+	# 未明确点击罡风的响应消费；黑色材料不能自动视为【杀】且必须继续留在手牌区。
+	var implicit_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, material.uid, ["sha"])
+	if implicit_response_card != null or _controller.state.get_player(0).find_hand_card(material.uid) == null:
+		return _fail("gangfeng_implicit_response")
 	# 转化后响应牌；定义ID必须为sha_thunder，但实体UID不替代真实材料记录。
-	var response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, material.uid, ["sha"])
+	var response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, material.uid, ["sha"], [], "gangfeng")
 	if response_card == null or response_card.definition_id != "sha_thunder" or response_card.suit != "club" or response_card.rank != 12 or _controller.state.get_player(0).find_hand_card(material.uid) != null or not _controller.state.discard_pile.has(material):
 		return _fail("gangfeng_response card=%s discard=%s" % [response_card.to_dict() if response_card != null else {}, _controller.state.discard_pile.has(material)])
 	# 黑色装备材料；白银狮子离区应卸载装备运行时、回复1点体力并把材料送入弃牌堆。
@@ -457,7 +478,7 @@ func _test_gangfeng_response() -> bool:
 	response_owner.equipment["armor"] = armor_material
 	_controller._install_card_runtime(armor_material, 0)
 	# 装备材料转化后的响应牌；成功后装备槽、运行时索引与离区回复必须同时完成。
-	var equipment_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, armor_material.uid, ["sha"])
+	var equipment_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, armor_material.uid, ["sha"], [], "gangfeng")
 	if equipment_response_card == null or equipment_response_card.definition_id != "sha_thunder" or response_owner.equipment.has("armor") or _controller.card_runtime_instances.has(armor_material.uid) or response_owner.hp != 4 or not _controller.state.discard_pile.has(armor_material):
 		return _fail("gangfeng_equipment_response hp=%d equipment=%s runtime=%s discard=%s" % [response_owner.hp, response_owner.equipment, _controller.card_runtime_instances.has(armor_material.uid), _controller.state.discard_pile.has(armor_material)])
 	return true
@@ -508,6 +529,8 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	if not _controller.request_extra_discard_phase(0, 1, "yongyi", completion_context) or gepard.shield != 1 or not _controller._active_extra_discard_phase.is_empty():
 		return _fail("yongyi_extra_discard shield=%d active=%s" % [gepard.shield, _controller._active_extra_discard_phase])
 	_controller.state.current_phase = "discard"
+	# 额外出牌阶段可用实体牌；确认恢复会在扣除护盾前重新估算，避免无牌时白白支付。
+	_add_hand_card(0, "sha", "club", 6)
 	# 永屹弃牌阶段确认响应；支付1点护盾后应排队1个额外出牌阶段并标记其结束后直接进入结束阶段。
 	var extra_play_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
 	yongyi.continue_selection({"kind":"yongyi_play_phase_confirm"}, extra_play_response)
@@ -547,6 +570,14 @@ func _test_new_skill_ai_rules() -> bool:
 	var redirect_action: Dictionary = {"payload":{"confirmed":true, "selected_control_id":"link_other"}}
 	if jiyu.score_ai_choice(snapshot, option_request, redirect_action, evaluator) <= jiyu.score_ai_choice(snapshot, option_request, direct_action, evaluator):
 		return _fail("jiyu_ai_only_ally")
+	# 范围内唯一敌对角色已经横置；疾雨应优先选择横置分支，不再担心新增未横置敌方连环目标。
+	_controller.state.get_player(1).chained = true
+	# 更新后的权威快照；横置状态必须在评分前重新序列化。
+	var chained_enemy_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	# 全敌对候选横置请求；使用反贼作为唯一范围候选。
+	var chained_enemy_request: Dictionary = {"context":{"kind":"jiyu_target_option", "target_id":2, "redirect_target_ids":[1]}}
+	if jiyu.score_ai_choice(chained_enemy_snapshot, chained_enemy_request, redirect_action, evaluator) <= jiyu.score_ai_choice(chained_enemy_snapshot, chained_enemy_request, direct_action, evaluator):
+		return _fail("jiyu_ai_all_hostiles_chained")
 	# 永屹静态AI技能；可命中敌方的【杀】应使额外出牌收益高于1点护盾。
 	var yongyi: SkillDefinition = GameDatabase.create_skill("yongyi")
 	yongyi.bind(null, 0)

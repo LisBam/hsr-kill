@@ -240,6 +240,16 @@ func set_selected_state(selected: bool) -> void:
 		_start_selection_tween(Vector2(0.0, -hand_layout.selected_lift if selected else 0.0))
 
 
+## 动态切换牌面的本地交互权限；条件组合选牌可在不重建节点的情况下压暗并禁用不兼容候选。
+func set_interactable_state(interactable: bool) -> void:
+	if is_interactable == interactable:
+		return
+	is_interactable = interactable
+	if is_node_ready():
+		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+	_refresh_visual_state()
+
+
 ## 启动手牌选中或取消选中的位移动画；非手牌展示区域继续沿用原有即时位置逻辑。
 func _start_selection_tween(target_offset: Vector2) -> void:
 	if _selection_tween != null and _selection_tween.is_valid():

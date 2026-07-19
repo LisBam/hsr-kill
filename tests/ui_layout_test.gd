@@ -323,6 +323,20 @@ func _run() -> void:
 	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 1:
 		_fail("damage_feedback_recover_repeat")
 		return
+	# 护盾吸收伤害快照；体力保持不变，但累计受伤次数递增时仍应播放一次受伤抖动。
+	var shield_damage_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	for shield_damage_player_variant: Variant in shield_damage_snapshot.get("players", []) as Array:
+		# 当前护盾受伤玩家快照；仅为本地玩家补充正式状态中的累计受伤次数字段。
+		var shield_damage_player: Dictionary = shield_damage_player_variant as Dictionary
+		if int(shield_damage_player.get("player_id", -1)) == 4:
+			shield_damage_player["damage_taken_count"] = 1
+			shield_damage_player["shield"] = 0
+			break
+	match_controller.state_changed.emit(shield_damage_snapshot)
+	await get_tree().process_frame
+	if local_player_card.get_damage_feedback_playback_count() != initial_damage_feedback_count + 2:
+		_fail("shield_damage_feedback:%d" % local_player_card.get_damage_feedback_playback_count())
+		return
 	# 武将牌当前装备条数组；第一视角关闭公开装备绘制后应保持为空。
 	var local_player_equipment_rows: Array = local_player_card.get("_equipment_rows") as Array
 	# 武将牌当前装备槽位数组；关闭绘制后不保留任何视觉槽位索引。

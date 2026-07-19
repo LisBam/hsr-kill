@@ -57,6 +57,8 @@ func _on_discard_phase_begin(_event: RuleEvent) -> void:
 		return
 	# AI快照所需的实时可用牌估计；这些字段只影响确认决策，提交后仍由权威阶段端口复核。
 	var play_estimate: Dictionary = _estimate_extra_play_phase()
+	if int(play_estimate.get("usable_card_count", 0)) <= 0:
+		return
 	request_card_selection("永屹", "是否失去1点护盾并进行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"yongyi_play_phase_confirm", "usable_card_count":int(play_estimate.get("usable_card_count", 0)), "enemy_slash_available":bool(play_estimate.get("enemy_slash_available", false)), "ai_allow_confirm":true})
 
 
@@ -76,6 +78,10 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	if choice_kind == "yongyi_play_phase_confirm":
 		if not response.confirmed or not bool(host.call("can_add_play_phase", owner_player_id)):
+			return true
+		# 确认期间手牌可能因其他时机离开；支付护盾前重新确认额外出牌阶段仍至少有一张可用牌。
+		var play_estimate: Dictionary = _estimate_extra_play_phase()
+		if int(play_estimate.get("usable_card_count", 0)) <= 0:
 			return true
 		if get_owner_skill_player().loseShield(SHIELD_PLAY_PHASE_COST, get_owner_skill_player()) < SHIELD_PLAY_PHASE_COST:
 			return true

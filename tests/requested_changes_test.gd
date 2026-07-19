@@ -39,6 +39,8 @@ func _run() -> void:
 		return
 	if not await _test_borrow_sword_target_semantics():
 		return
+	if not await _test_borrow_sword_weapon_transfer():
+		return
 	if not await _test_phase_use_begin_prompt():
 		return
 	print("REQUESTED_CHANGES_PASS")
@@ -258,6 +260,31 @@ func _test_borrow_sword_target_semantics() -> bool:
 			break
 	if victim_was_card_target:
 		return _fail("borrow_victim_entered_card_targets")
+	# 借刀表现分段；第一段从使用者指向持刀者，第二段从持刀者指向被要求出【杀】者。
+	var indicator_stages: Array[Dictionary] = GameDatabase.get_card_definition("jiedao").get_presentation_indicator_stages(0, [1, 2], [1])
+	if indicator_stages != [{"actor_id":0, "target_ids":[1]}, {"actor_id":1, "target_ids":[2]}]:
+		return _fail("borrow_indicator_stages=%s" % [indicator_stages])
+	return true
+
+
+## 验证借刀目标没有【杀】可打出时完整结算，并把原武器从装备区交给锦囊使用者手牌。
+func _test_borrow_sword_weapon_transfer() -> bool:
+	_scenario = "borrow_sword_transfer"
+	_reset_state(3)
+	# 持刀者武器；其手牌保持为空，测试响应处理器会明确取消本次【杀】要求。
+	var weapon: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	weapon.zone = "equipment"
+	weapon.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = weapon
+	# 借刀杀人实体；完整声明持刀者与被要求出【杀】者，牌效只对持刀者进入目标时机。
+	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	_controller._execute_card_use(0, borrow_sword, [1], [], false, [1, 2])
+	if not await _wait_until_card_finalized(borrow_sword.uid):
+		return _fail("borrow_sword_transfer_timeout")
+	# 锦囊使用者状态；接收的武器必须成为隐藏手牌而非直接进入自身装备区。
+	var source: PlayerState = _controller.state.get_player(0)
+	if _controller.state.get_player(1).equipment.has("weapon") or not source.hand.has(weapon) or weapon.zone != "hand" or weapon.owner_id != 0 or not _controller.state.discard_pile.has(borrow_sword):
+		return _fail("borrow_sword_transfer source_hand=%s holder_equipment=%s weapon=%s" % [source.hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.get_player(1).equipment, weapon.to_dict()])
 	return true
 
 
@@ -311,6 +338,8 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if _scenario == "borrow_sword" and choice_kind == "borrow_sword_response":
 		selected_uids = [_borrow_slash_uid]
 		confirmed = true
+	elif _scenario == "borrow_sword_transfer" and choice_kind == "borrow_sword_response":
+		confirmed = false
 	elif _scenario == "borrow_sword" and choice_kind == "slash_response":
 		confirmed = false
 	elif _scenario == "same_timing_prompt_order" and choice_kind in ["zaixian_discard", "junshi_confirm"]:

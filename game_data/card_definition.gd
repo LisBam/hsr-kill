@@ -229,6 +229,26 @@ func blocks_aoe(_card_definition_id: String) -> bool:
 	return false
 
 
+## 返回防具对指定属性伤害的AI预期倍率；只影响决策估值，实际伤害仍由modify_incoming_damage权威结算。
+func get_ai_incoming_damage_multiplier(_nature: String) -> float:
+	return 1.0
+
+
+## 返回锦囊被【无懈可击】抵消时是否应记录本回合AI失败目标；默认不保存牌目标记忆。
+func records_failed_ai_target_when_negated() -> bool:
+	return false
+
+
+## 返回武器是否已通过标准damage时机处理【杀】造成伤害效果；true时跳过旧的伤害完成后兼容钩子。
+func uses_damage_timing_trigger() -> bool:
+	return false
+
+
+## 返回使用牌表现的分阶段目标指示语义；空数组表示使用者到全部实际目标的一段普通指示线。
+func get_presentation_indicator_stages(_actor_id: int, _requested_target_ids: Array[int], _resolution_target_ids: Array[int]) -> Array[Dictionary]:
+	return []
+
+
 ## 修正装备持有者造成的伤害；上下文包含目标、属性与来源牌 ID。
 func modify_outgoing_damage(_match_host: Object, _owner: PlayerState, _target: PlayerState, _context: Dictionary, amount: int) -> int:
 	return amount
