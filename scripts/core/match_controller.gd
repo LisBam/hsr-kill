@@ -475,7 +475,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	ai_coordinator.reset_identity_observations()
 	state.random_seed = _rng.seed
 	state.deck_id = default_deck_id
-	card_rules = CardRuleService.new(state)
+	card_rules = CardRuleService.new(state, self)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
 	_bind_card_movement_service()
@@ -2924,6 +2924,7 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 		timing_data["respond_event_id"] = respond_event_id
 		_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
 		player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[material_card.uid], "skill_id":skill.get_id(), "virtual_card_id":virtual_definition_id})
+		skill.on_converted_response_consumed(material_card, response_pattern, virtual_definition_id)
 		skill.announce_activation({"material_card_uid":material_card.uid, "response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
 		add_log("%s将一张牌当%s打出。" % [player.display_name, GameSettings.resolve_card_name(virtual_definition)])
 		_notify_equipment_card_consumed(player_id, material_card, was_hand_card)
@@ -4649,6 +4650,115 @@ func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
 	return player_skills.get(skill_id) as SkillDefinition
 
 
+## 汇总指定玩家全部已安装技能的次数解除钩子；技能只读取卡牌定义，不修改使用历史。
+func skill_ignores_play_count_limit(player_id: int, card_definition: Dictionary) -> bool:
+	# 当前玩家技能实例表；临时技能与武将固有技能共用同一容器，因此会自然参与查询。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；任一技能明确解除限制即可通过，不要求其他技能重复确认。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.ignores_play_count_limit(card_definition):
+			return true
+	return false
+
+
+## 汇总指定玩家全部已安装技能的目标附加限制；首个非空错误会阻止目标进入使用指令。
+func validate_skill_card_target_selection(player_id: int, card_definition: Dictionary, target_id: int, all_target_ids: Array[int]) -> String:
+	# 当前玩家技能实例表；技能顺序与武将技能栏及临时技能安装顺序一致，保证拒绝原因稳定。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；目标校验必须保持纯查询，不能在此消费技能次数或牌。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null:
+			continue
+		var validation_error: String = skill.validate_card_target_selection(card_definition, target_id, all_target_ids)
+		if not validation_error.is_empty():
+			return validation_error
+	return ""
+
+
+## 汇总目标角色全部已安装技能的来牌目标限制；用于黑色【杀】免疫等无需触发选择的规则。
+func validate_incoming_skill_card_target_selection(target_id: int, actor_id: int, card_definition: Dictionary, card_color: String) -> String:
+	# 目标角色技能实例表；临时授予的【琥珀】与固有技能使用相同查询路径。
+	var target_skills: Dictionary = skill_instances_by_player.get(target_id, {}) as Dictionary
+	for skill_variant: Variant in target_skills.values():
+		# 当前目标技能；来牌校验只读取稳定定义、颜色和角色ID。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null:
+			continue
+		var validation_error: String = skill.validate_incoming_card_target_selection(actor_id, card_definition, card_color)
+		if not validation_error.is_empty():
+			return validation_error
+	return ""
+
+
+## 动态授予一项数据库技能并立即安装；相同技能不会重复创建，失效信息记录在玩家公开运行时状态中。
+func grant_temporary_skill(player_id: int, skill_id: String, expires_at_round: int) -> bool:
+	# 技能获得者；死亡、离场或无效角色不能取得临时技能。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game or skill_id.is_empty():
+		return false
+	# 当前技能实例表；已经拥有同名固有或临时技能时只延长临时记录，不重复订阅事件。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	if not player_skills.has(skill_id):
+		# 新技能运行时实例；数据库工厂保证每名角色拥有独立状态。
+		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		if skill == null or skill.leader_skill:
+			return false
+		skill.bind(self, player_id)
+		player_skills[skill_id] = skill
+		skill_instances_by_player[player_id] = player_skills
+		skill.install()
+	player.temporary_skills[skill_id] = {"expires_at_round":maxi(expires_at_round, state.round_number + 1)}
+	return true
+
+
+## 移除一项确由临时系统授予的技能；武将固有技能即使存在同名临时记录也始终保留。
+func remove_temporary_skill(player_id: int, skill_id: String) -> bool:
+	# 技能获得者；不存在临时记录时不改变任何技能实例。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.temporary_skills.has(skill_id):
+		return false
+	player.temporary_skills.erase(skill_id)
+	# 武将固有技能ID；同名固有技能不能因临时期限结束而卸载。
+	var native_skill_ids: Array = GameDatabase.get_character(player.character_id).get("skills", []) as Array
+	if native_skill_ids.has(skill_id):
+		return true
+	# 当前技能实例；卸载会同步清理时机订阅与纯查询修正器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	var skill: SkillDefinition = player_skills.get(skill_id) as SkillDefinition
+	if skill != null:
+		skill.uninstall()
+	player_skills.erase(skill_id)
+	skill_instances_by_player[player_id] = player_skills
+	return true
+
+
+## 在新轮的roundStart触发前移除到期临时技能，确保“直到本轮结束”不延续到下一轮任何触发窗口。
+func _expire_temporary_skills_for_round(round_number: int) -> void:
+	for player: PlayerState in state.players:
+		# 待移除技能ID副本；遍历期间会修改temporary_skills，不能直接遍历原字典键视图。
+		var expired_skill_ids: Array[String] = []
+		for skill_id_variant: Variant in player.temporary_skills.keys():
+			# 当前临时技能失效配置；旧格式或无效数据默认在当前轮移除，避免永久残留。
+			var expiry_data: Dictionary = player.temporary_skills.get(skill_id_variant, {}) as Dictionary
+			if int(expiry_data.get("expires_at_round", round_number)) <= round_number:
+				expired_skill_ids.append(str(skill_id_variant))
+		for skill_id: String in expired_skill_ids:
+			remove_temporary_skill(player.player_id, skill_id)
+
+
+## 查询处理区中的当前使用牌是否为黑色【杀】；供目标触发技能复用，不暴露实体对象写权限。
+func is_processing_black_slash(card_uid: int) -> bool:
+	# 当前处理区实体；虚拟牌同样拥有本次代理花色，可按材料继承结果判断颜色。
+	var card: CardInstance = _find_processing_card(card_uid)
+	if card == null:
+		return false
+	# 当前逻辑牌定义；普通、火与雷【杀】统一以effect_id=slash识别。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	return str(definition.get("effect_id", "")) == "slash" and card.get_color() == "black"
+
+
 ## 查询主动技能当前是否可发动；技能文件负责阶段、次数、目标和资源条件，控制器只提供统一入口。
 func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
 	if network_gateway != null and network_gateway.is_lan_client():
@@ -5027,6 +5137,7 @@ func _continue_turn_start(context: Dictionary) -> void:
 		if stage == "round_start":
 			context["stage"] = "initialize"
 			if bool(context.get("starts_new_round", false)):
+				_expire_temporary_skills_for_round(state.round_number)
 				_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
 				if _has_nested_settlement_barrier():
 					_defer_rule_continuation("turn_start", context)

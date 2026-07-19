@@ -129,6 +129,8 @@ func uninstall() -> void:
 		host.event_bus.unsubscribe_owner(self)
 	if host != null and host.get("trigger_manager") != null:
 		host.trigger_manager.unsubscribe_owner(self)
+	if host != null and host.get("modifier_pipeline") != null:
+		host.modifier_pipeline.unregister_owner(self)
 
 
 ## 判断主动技能当前是否可发动；context 只允许包含可序列化动作参数与只读选择结果。
@@ -168,6 +170,11 @@ func get_converted_response_definition_id(_card: CardInstance, _response_pattern
 	return ""
 
 
+## 通知技能其转化响应已经实际消费材料并成功打出；可在此记录每回合次数，不能再次移动材料牌。
+func on_converted_response_consumed(_card: CardInstance, _response_pattern: String, _virtual_definition_id: String) -> void:
+	pass
+
+
 ## 恢复由控制器完整执行的额外阶段；上下文只包含稳定玩家、技能与阶段来源数据，不持有运行时对象。
 func continue_extra_phase(_context: Dictionary) -> bool:
 	return false
@@ -203,6 +210,21 @@ func score_ai_choice(_authoritative_snapshot: Dictionary, _choice_request: Dicti
 ## 修正持有者使用卡牌动作的 AI 评分；锁定技与被动联动可在自身技能文件内表达牌效增减。
 func modify_ai_card_action_score(_authoritative_snapshot: Dictionary, _action: Dictionary, current_score: float, _evaluator: Object) -> float:
 	return current_score
+
+
+## 判断持有者是否因本技能解除指定卡牌的配置化使用次数限制；默认不修改任何卡牌次数。
+func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
+	return false
+
+
+## 校验持有者使用牌时的技能附加目标限制；空字符串表示合法，非空文本会作为统一拒绝原因。
+func validate_card_target_selection(_card_definition: Dictionary, _target_id: int, _all_target_ids: Array[int]) -> String:
+	return ""
+
+
+## 校验其他角色的牌能否指定本技能持有者；用于免疫类技能，必须保持纯查询且不得创建发动日志。
+func validate_incoming_card_target_selection(_actor_id: int, _card_definition: Dictionary, _card_color: String) -> String:
+	return ""
 
 
 ## 返回主动技能的只读交互预览；不得在本函数中消耗资源、创建选择或修改对局状态。

@@ -391,11 +391,18 @@ func _request_character_information() -> void:
 	var gender_text: String = str({"male":"男", "female":"女", "unknown":"未知"}.get(str(_character_definition.get("gender", "unknown")), "未知"))
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
-	# 当前武将全部技能文本；严格保持武将定义顺序，每项分为技能名与技能描述两行。
+	# 当前武将全部可见技能ID；先保留固有技能顺序，再追加当前运行时临时技能且不重复。
+	var visible_skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
+	for temporary_skill_id_variant: Variant in (_player_snapshot.get("temporary_skills", {}) as Dictionary).keys():
+		# 当前临时技能ID；已是固有技能时不重复显示。
+		var temporary_skill_id: String = str(temporary_skill_id_variant)
+		if not visible_skill_ids.has(temporary_skill_id):
+			visible_skill_ids.append(temporary_skill_id)
+	# 当前武将全部技能文本；严格保持固有技能顺序，临时技能按运行时授予顺序追加。
 	var skill_information_lines: Array[String] = []
 	# 当前武将结构化技能分段；统一信息框据此把技能名绘制为与右键详情一致的金色，同时保持说明文字颜色不变。
 	var skill_description_sections: Array[Dictionary] = []
-	for skill_id_variant: Variant in _character_definition.get("skills", []) as Array:
+	for skill_id_variant: Variant in visible_skill_ids:
 		# 当前技能稳定 ID；用于查询静态技能名称与说明，不读取运行时技能实例。
 		var skill_id: String = str(skill_id_variant)
 		# 当前技能静态定义；缺失时保留稳定 ID 与明确占位说明，避免整项静默消失。
