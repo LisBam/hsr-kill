@@ -344,6 +344,13 @@ func _run() -> void:
 	if not local_player_equipment_rows.is_empty() or not local_player_equipment_slots.is_empty():
 		_fail("local_player_equipment_slots:%s" % [local_player_equipment_slots])
 		return
+	# 本地武将牌横置覆盖层；横置框应向两侧越出牌面，而覆盖层中间宽度仍以原武将牌尺寸为基准。
+	var local_state_overlay: PlayerStateOverlay = local_player_card.get_node("StateOverlay") as PlayerStateOverlay
+	local_state_overlay.configure(true, true)
+	if local_state_overlay.position.x >= 0.0 or local_state_overlay.size.x <= local_player_card.card_size.x or not is_equal_approx(local_state_overlay.size.y, local_player_card.card_size.y):
+		_fail("chained_overlay_geometry:%s/%s/%s" % [local_state_overlay.position, local_state_overlay.size, local_player_card.card_size])
+		return
+	local_state_overlay.configure(true, false)
 	# 本地武将牌悬停资料；第一视角同样必须在0.5秒后显示武将完整技能，不能只允许其他玩家牌面使用该入口。
 	local_player_card.call("_on_input_mouse_entered")
 	await get_tree().process_frame
@@ -400,14 +407,14 @@ func _run() -> void:
 	main_instance.set("_selected_card_uid", -1)
 	main_instance.set("_card_use_preview", {})
 	main_instance.call("_refresh_component_states")
-	# 其他玩家武将牌悬停资料；正式对局不显示玩家名阴影或原生工具提示，但会在0.5秒后通过统一信息框显示完整技能。
+	# 其他玩家武将牌悬停资料；正式对局立即显示玩家名阴影，不显示原生工具提示，并在0.5秒后通过统一信息框显示完整技能。
 	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
 	current_operator_view.call("_on_input_mouse_entered")
 	# 当前悬停武将定义；用于逐项验证武将名、势力、性别、体力上限和全部技能均来自静态内容数据。
 	var hovered_character_definition: Dictionary = GameDatabase.get_character("gepard")
 	# 当前悬停武将首个技能定义；测试武将只有一个技能，可同时验证技能名与完整描述。
 	var hovered_character_skill: Dictionary = GameDatabase.get_skill(str((hovered_character_definition.get("skills", []) as Array)[0]))
-	if hover_name_shade.visible or not (current_operator_view.get_node("InputArea") as Control).tooltip_text.is_empty() or information_box.is_hover_information_visible():
+	if not hover_name_shade.visible or not (current_operator_view.get_node("InputArea") as Control).tooltip_text.is_empty() or information_box.is_hover_information_visible():
 		_fail("player_hover_shown_too_early:%s" % hover_name_shade.visible)
 		return
 	await _wait_for_hover_information_delay()

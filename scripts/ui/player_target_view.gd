@@ -200,6 +200,7 @@ func _ready() -> void:
 	_card_body.size = card_size
 	_card_back.size = card_size
 	_input_area.size = card_size
+	_state_overlay.configure_card_size(card_size)
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(_on_input_activated)
 	_input_area.details_requested.connect(_on_input_details_requested)
@@ -795,7 +796,8 @@ func _refresh_hover_name_visibility() -> void:
 	if not is_node_ready() or _hover_name_shade == null:
 		return
 	# 正式对局的悬停姓名阴影已经停用；选将界面继续只消费 hover_changed 播放候选缩放。
-	_hover_name_shade.visible = false
+	# 正式对局只在鼠标停留于可见武将牌时显示名称；遮罩节点层级高于插画且忽略鼠标，不会阻断输入区域。
+	_hover_name_shade.visible = _match_overlays_visible and _is_hovered and not is_face_down
 
 
 ## 更新其他玩家公开装备信息命中；装备横条本身忽略鼠标，由最上层透明输入区域统一转发坐标。
