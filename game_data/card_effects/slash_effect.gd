@@ -169,6 +169,17 @@ func continue_after_weapon_dodged(context: Dictionary) -> void:
 	continue_slash_damage(context)
 
 
+## 在武器费用或效果引发嵌套选择后恢复指定【杀】阶段；没有屏障时立即继续，存在屏障时只登记可序列化步骤。
+func continue_or_defer_after_weapon(resume_stage: String, context: Dictionary) -> void:
+	if host.has_pending_card_choice():
+		host.defer_slash_continuation(resume_stage, context)
+		return
+	if resume_stage == "after_weapon_targeted":
+		continue_after_weapon_targeted(context)
+	elif resume_stage == "after_weapon_dodged":
+		continue_after_weapon_dodged(context)
+
+
 ## 造成【杀】伤害并在伤害完整结束后执行武器后续钩子。
 func continue_slash_damage(context: Dictionary) -> void:
 	# 当前【杀】实体；伤害记录使用实体自身定义 ID。

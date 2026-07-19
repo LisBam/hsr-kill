@@ -218,6 +218,9 @@ func _reset_state(player_count: int) -> void:
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
 	_controller._queued_equipment_triggers.clear()
+	_controller._deferred_skill_settlements.clear()
+	_controller._rule_continuations.reset()
+	_controller._pending_damage_finalizations.clear()
 	_controller._play_choice_request_id = -1
 	_controller._play_choice_event_id = -1
 	_controller._play_choice_actor_id = -1
