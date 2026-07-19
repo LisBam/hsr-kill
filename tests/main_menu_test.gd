@@ -32,6 +32,8 @@ func _run() -> void:
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	# 设置按钮；替代参考布局中的商店入口，点击后展示配置浮层。
 	var settings_button: Button = main_instance.get_node("%MainMenuSettingsButton") as Button
+	# 顶部联机设置按钮；必须位于模式选择右侧并打开独立玩家资料模态层。
+	var online_settings_button: Button = main_instance.get_node("%MainMenuOnlineSettingsButton") as Button
 	# 开始按钮；文字固定为“开始游戏”，点击后关闭主菜单并开始身份局。
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
 	# 局内菜单入口；成功开局后用于验证重新开局失败能显式返回主菜单，而不是停留在旧牌桌。
@@ -46,6 +48,14 @@ func _run() -> void:
 	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
 	# 设置浮层；默认隐藏，按下设置按钮后可修改下一局人数。
 	var settings_panel: PanelContainer = main_instance.get_node("%MainMenuSettingsPanel") as PanelContainer
+	# 联机资料设置组件；名称与武将形象只写入全局资料，不创建局域网会话。
+	var online_settings_panel: OnlineSettingsPanel = main_instance.get_node("%OnlineSettingsPanel") as OnlineSettingsPanel
+	# 联机玩家名称输入；保存时必须去除首尾空白并遵守20字符上限。
+	var online_player_name_input: LineEdit = online_settings_panel.get_node("%OnlinePlayerNameInput") as LineEdit
+	# 联机武将形象承载区；动态候选数量必须覆盖数据库中的全部现有武将牌。
+	var online_avatar_content: Control = online_settings_panel.get_node("%OnlineAvatarContent") as Control
+	# 联机资料保存按钮；提交当前名称与稳定武将 ID 后关闭模态层。
+	var online_settings_save_button: Button = online_settings_panel.get_node("%OnlineSettingsSaveButton") as Button
 	# 游戏人数输入框；2至10范围内的值会作为主菜单开局请求参数。
 	var player_count_input: SpinBox = main_instance.get_node("%MainMenuPlayerCountInput") as SpinBox
 	# 顶部模式栏；主题切换后其边框必须从统一注册表即时更新。
@@ -88,7 +98,7 @@ func _run() -> void:
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
-	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or start_game_button.text != "开始游戏" or settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
@@ -109,11 +119,35 @@ func _run() -> void:
 	if mode_background.texture == null or mode_background.texture.resource_path != "res://assets/art/身份模式主菜单背景.png" or mode_background.stretch_mode != TextureRect.STRETCH_KEEP_ASPECT_COVERED:
 		_fail("mode_preview")
 		return
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation.find_children("*", "Button", true, false).size() != 1 or mode_list.find_children("*", "Button", true, false).size() != 1:
-		_fail("single_identity_mode")
+	# 顶部按钮顺序；“联机设置”必须紧跟在“模式选择”右侧，左侧游戏模式列表仍只有身份模式一项。
+	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list.find_children("*", "Button", true, false).size() != 1:
+		_fail("top_navigation_entries")
 		return
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
+		return
+	await _click_control(online_settings_button)
+	await get_tree().process_frame
+	# 动态联机形象牌；每个数据库武将都必须对应一张正式 PlayerTargetView 候选。
+	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
+	if not online_settings_panel.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE:
+		_fail("online_settings_open")
+		return
+	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
+	var selected_avatar_view: PlayerTargetView = online_avatar_views[online_avatar_views.size() - 1] as PlayerTargetView
+	# 测试武将快照；资料面板不会创建真实玩家，因此这里只消费 character_id 展示字段。
+	var selected_avatar_snapshot: Dictionary = selected_avatar_view.get("_player_snapshot") as Dictionary
+	# 测试目标武将 ID；保存后必须原样写入全局联机形象配置。
+	var selected_avatar_character_id: String = str(selected_avatar_snapshot.get("character_id", ""))
+	# 测试武将牌输入区域；使用真实鼠标事件验证滚动内容中的正式牌面可以被点击选择。
+	var selected_avatar_input_area: Control = selected_avatar_view.get_node("InputArea") as Control
+	online_player_name_input.text = "  联机测试玩家  "
+	await _click_control(selected_avatar_input_area)
+	await _click_control(online_settings_save_button)
+	await get_tree().process_frame
+	if online_settings_panel.visible or GameSettings.online_player_name != "联机测试玩家" or GameSettings.online_avatar_character_id != selected_avatar_character_id or online_settings_button.focus_mode == Control.FOCUS_NONE:
+		_fail("online_settings_save")
 		return
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	main_instance.position = Vector2.ZERO
@@ -167,7 +201,7 @@ func _run() -> void:
 	if not settings_panel.visible or not settings_backdrop.visible or settings_backdrop.z_index <= main_frame.z_index or not settings_backdrop.get_global_rect().has_point(start_game_button.get_global_rect().get_center()):
 		_fail("settings_open")
 		return
-	if start_game_button.focus_mode != Control.FOCUS_NONE or settings_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE or identity_mode_button.focus_mode != Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if start_game_button.focus_mode != Control.FOCUS_NONE or settings_button.focus_mode != Control.FOCUS_NONE or online_settings_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE or identity_mode_button.focus_mode != Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("settings_background_focus_suspension")
 		return
 	# 正向焦点循环索引；12次导航覆盖设置面板当前全部控件并再次跨越首尾边界，默认值不影响业务配置。
@@ -190,7 +224,7 @@ func _run() -> void:
 	if settings_panel.visible or settings_backdrop.visible or match_controller.state != null or not main_menu.visible:
 		_fail("settings_modal_input")
 		return
-	if start_game_button.focus_mode == Control.FOCUS_NONE or settings_button.focus_mode == Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or identity_mode_button.focus_mode == Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if start_game_button.focus_mode == Control.FOCUS_NONE or settings_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or identity_mode_button.focus_mode == Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("settings_background_focus_restore")
 		return
 	await _click_control(settings_button)

@@ -1,0 +1,147 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/online_settings_panel.gd" id="1_online_settings"]
+
+[node name="OnlineSettingsPanel" type="Control"]
+unique_name_in_owner = true
+visible = false
+z_index = 13
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_online_settings")
+
+[node name="OnlineSettingsBackdrop" type="ColorRect" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.86)
+
+[node name="OnlineSettingsFrame" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(1040, 620)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -520.0
+offset_top = -310.0
+offset_right = 520.0
+offset_bottom = 310.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="OnlineSettingsMargin" type="MarginContainer" parent="OnlineSettingsFrame"]
+layout_mode = 2
+theme_override_constants/margin_left = 26
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 26
+theme_override_constants/margin_bottom = 20
+
+[node name="OnlineSettingsVBox" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="OnlineSettingsTitle" type="Label" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 27
+text = "联机设置"
+horizontal_alignment = 1
+
+[node name="OnlineSettingsHint" type="Label" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "玩家名称用于局域网房间；联机形象将在未来联机大厅中使用。"
+horizontal_alignment = 1
+
+[node name="OnlineSettingsDivider" type="ColorRect" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+color = Color(0.75, 0.66, 0.42, 0.65)
+
+[node name="OnlinePlayerNameRow" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="OnlinePlayerNameLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlinePlayerNameRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+text = "玩家名称"
+vertical_alignment = 1
+
+[node name="OnlinePlayerNameInput" type="LineEdit" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlinePlayerNameRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "玩家"
+placeholder_text = "请输入联机显示名称"
+max_length = 20
+
+[node name="OnlineAvatarHeader" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="OnlineAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineAvatarHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "联机形象（从现有武将牌中选择）"
+
+[node name="OnlineSelectedAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineAvatarHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "当前形象：未选择"
+horizontal_alignment = 2
+
+[node name="OnlineAvatarScroll" type="ScrollContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 390)
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
+
+[node name="OnlineAvatarCenter" type="CenterContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineAvatarScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="OnlineAvatarContent" type="Control" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineAvatarScroll/OnlineAvatarCenter"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="OnlineSettingsButtons" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+alignment = 2
+
+[node name="OnlineSettingsCancelButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineSettingsButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 46)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "取消"
+
+[node name="OnlineSettingsSaveButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsMargin/OnlineSettingsVBox/OnlineSettingsButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(210, 46)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "保存并返回"

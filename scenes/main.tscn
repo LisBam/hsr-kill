@@ -22,6 +22,7 @@
 [ext_resource type="Texture2D" uid="uid://dlfv5vj23jqbp" path="res://assets/art/身份模式主菜单背景.png" id="22_identity_menu_background"]
 [ext_resource type="Script" path="res://scripts/ui/identity_marking_indicator.gd" id="23_identity_indicator"]
 [ext_resource type="PackedScene" path="res://scenes/components/lan_lobby_panel.tscn" id="24_lan_lobby"]
+[ext_resource type="PackedScene" path="res://scenes/components/online_settings_panel.tscn" id="25_online_settings"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -852,6 +853,14 @@ grow_vertical = 0
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
+[node name="MainMenuOnlineSettingsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(192, 0)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 18
+text = "联机设置"
+
 [node name="TopNavigationSpacer" type="Control" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=1238528856]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -1243,3 +1252,5 @@ mouse_default_cursor_shape = 2
 text = "返回"
 
 [node name="LanLobbyPanel" parent="MainMenu" instance=ExtResource("24_lan_lobby")]
+
+[node name="OnlineSettingsPanel" parent="MainMenu" instance=ExtResource("25_online_settings")]
