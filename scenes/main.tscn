@@ -418,7 +418,7 @@ grow_vertical = 0
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "记录"
 
-[node name="AutoManageButton" type="Button" parent="LogPanel"]
+[node name="AutoManageButton" type="Button" parent="LogPanel" unique_id=2097907502]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 2
@@ -587,9 +587,14 @@ layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("9_hand_layout")
 
-[node name="AutoManagedHandOverlay" parent="." instance=ExtResource("27_auto_managed_overlay")]
+[node name="AutoManagedHandOverlay" parent="." unique_id=1186517915 instance=ExtResource("27_auto_managed_overlay")]
 unique_name_in_owner = true
 layout_mode = 0
+anchors_preset = 0
+anchor_right = 0.0
+anchor_bottom = 0.0
+grow_horizontal = 1
+grow_vertical = 1
 
 [node name="SkillBar" type="PanelContainer" parent="." unique_id=735918897]
 layout_mode = 1
