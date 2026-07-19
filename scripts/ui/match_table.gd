@@ -139,6 +139,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 右上角局内菜单组件；统一管理牌名切换、重新开局与下一局人数设置。
 @onready var match_menu: MatchMenu = %MatchMenu
 
+## 安卓系统返回键适配组件；只在标准取消动作无人处理时向牌桌请求页面级回退。
+@onready var android_back_adapter: AndroidBackAdapter = %AndroidBackAdapter
+
 ## 启动主菜单组件；负责在对局创建前选择身份模式、调整设置并发出统一开局请求。
 @onready var main_menu: MainMenu = %MainMenu
 
@@ -429,6 +432,7 @@ func _ready() -> void:
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_menu.main_menu_requested.connect(_on_main_menu_requested)
+	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
 	lan_lobby_panel.host_requested.connect(_on_lan_host_requested)
 	lan_lobby_panel.join_requested.connect(_on_lan_join_requested)
@@ -2005,6 +2009,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif _selected_card_uid >= 0:
 			_on_cancel_pressed()
 			get_viewport().set_input_as_handled()
+
+
+## 处理没有被模态界面、详情框或选牌流程消费的安卓返回键；主页退出应用，对局中切换局内菜单。
+func _on_unhandled_android_back_requested() -> void:
+	if main_menu.visible:
+		get_tree().quit()
+		return
+	match_menu.set_menu_open(not match_menu.is_menu_open())
 
 
 ## 取消当前选牌与目标；本地阵亡或终局时复用同一位置返回主菜单。

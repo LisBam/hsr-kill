@@ -121,6 +121,20 @@ func get_next_player_count() -> int:
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
+## 返回局内菜单面板当前是否展开；平台适配层通过该只读接口决定返回键是打开还是关闭菜单。
+func is_menu_open() -> bool:
+	return _menu_panel.visible
+
+
+## 设置局内菜单面板显隐；统一复用按钮切换后的焦点规则，避免平台层直接访问内部节点。
+func set_menu_open(open: bool) -> void:
+	_menu_panel.visible = open
+	if open:
+		_restart_button.grab_focus()
+	else:
+		_menu_button.grab_focus()
+
+
 ## 局内重新开局在破坏旧局前被拒绝时重新展开菜单；原对局保持运行，玩家可修正设置后再次提交。
 func restore_after_restart_failure() -> void:
 	_menu_panel.visible = true
