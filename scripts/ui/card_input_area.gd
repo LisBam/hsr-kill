@@ -27,6 +27,12 @@ signal hand_drag_finished(source_card_uid: int, pointer_global_position: Vector2
 ## 鼠标按下后移动超过该距离才开始排序拖动；默认8像素避免普通点击被误判为拖动，运行时通常无需修改。
 const HAND_DRAG_START_DISTANCE: float = 8.0
 
+## 触屏长按多久后显示卡牌说明；默认0.45秒兼顾快速选牌与主动查阅，运行时通常无需动态修改。
+@export_range(0.25, 1.0, 0.05) var touch_information_hold_seconds: float = 0.45
+
+## 触屏按住期间允许的最大抖动距离；默认18像素适应手机手指轻微移动，超过后会转入拖牌或普通滑动判定，运行时通常无需动态修改。
+@export_range(4.0, 48.0, 1.0) var touch_hold_movement_tolerance: float = 18.0
+
 ## 当前实体牌 UID；由牌面配置写入，未配置时为 -1，运行时随卡牌复用而更新。
 var card_uid: int = -1
 
@@ -44,6 +50,21 @@ var _pointer_press_global_position: Vector2 = Vector2.ZERO
 
 ## 当前是否已进入实体手牌直接拖动；进入后释放鼠标只提交排序，不再触发牌面选中。
 var _is_hand_dragging: bool = false
+
+## 当前由本组件追踪的触点索引；默认-1表示没有触摸，组件只处理首个落下的单指以避免多指误操作。
+var _active_touch_index: int = -1
+
+## 当前触点按下时的全局画布坐标；用于判断长按抖动与手牌拖动阈值。
+var _touch_press_global_position: Vector2 = Vector2.ZERO
+
+## 当前触点最近一次全局画布坐标；长按异步检查通过该值确认手指没有明显移动。
+var _touch_current_global_position: Vector2 = Vector2.ZERO
+
+## 当前触摸是否已经触发卡牌说明；为true时松手只关闭说明，不再额外选中卡牌。
+var _touch_information_active: bool = false
+
+## 当前触摸序列编号；每次按下或结束都会递增，使旧的异步长按计时安全失效。
+var _touch_sequence_id: int = 0
 
 
 ## 初始化透明输入区域的鼠标语义并连接悬停信号。
@@ -72,10 +93,62 @@ func _gui_input(event: InputEvent) -> void:
 			_is_hand_dragging = false
 			_pointer_press_global_position = get_global_mouse_position()
 			accept_event()
+	elif event is InputEventScreenTouch:
+		# 当前触屏按下事件；只接管尚未被本组件追踪的首个触点，多指不会重复选择同一张牌。
+		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
+		if touch_event.pressed and _active_touch_index < 0:
+			_active_touch_index = touch_event.index
+			_touch_press_global_position = touch_event.position
+			_touch_current_global_position = touch_event.position
+			_touch_information_active = false
+			_is_hand_dragging = false
+			_touch_sequence_id += 1
+			_start_touch_information_timer(_touch_sequence_id, touch_event.index)
+			accept_event()
 
 
 ## 处理按下后的全局鼠标事件；直接移动原牌节点，不创建拖拽预览或临时卡牌实体。
 func _input(event: InputEvent) -> void:
+	if event is InputEventScreenDrag:
+		# 当前触屏拖动事件；仅匹配本组件记录的触点，防止第二根手指改变选牌或排序状态。
+		var touch_drag_event: InputEventScreenDrag = event as InputEventScreenDrag
+		if touch_drag_event.index != _active_touch_index:
+			return
+		_touch_current_global_position = touch_drag_event.position
+		# 当前触点相对按下位置的移动距离；同时用于取消长按说明和启动手牌排序。
+		var touch_drag_distance: float = _touch_current_global_position.distance_to(_touch_press_global_position)
+		if _touch_information_active and touch_drag_distance > touch_hold_movement_tolerance:
+			_touch_information_active = false
+			hover_finished.emit()
+		if not _is_hand_dragging and not hand_reorder_zone.is_empty() and card_uid >= 0 and touch_drag_distance >= HAND_DRAG_START_DISTANCE:
+			_is_hand_dragging = true
+			hand_drag_started.emit(card_uid, _touch_current_global_position)
+		if _is_hand_dragging:
+			hand_drag_moved.emit(card_uid, _touch_current_global_position)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventScreenTouch:
+		# 当前触屏释放事件；即使手指离开原牌区域，也由全局输入统一结束本次点击、长按或拖动。
+		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
+		if touch_event.index != _active_touch_index or touch_event.pressed:
+			return
+		_touch_current_global_position = touch_event.position
+		# 本次触摸是否完成了实体手牌拖动；保存后立即清理状态，避免回调刷新牌面时读到陈旧输入。
+		var completed_touch_drag: bool = _is_hand_dragging
+		# 本次触摸是否已经展示过说明；长按释放只关闭说明，不能同时触发一次选牌。
+		var completed_touch_information: bool = _touch_information_active
+		_active_touch_index = -1
+		_is_hand_dragging = false
+		_touch_information_active = false
+		_touch_sequence_id += 1
+		if completed_touch_information:
+			hover_finished.emit()
+		if completed_touch_drag:
+			hand_drag_finished.emit(card_uid, _touch_current_global_position)
+		elif not completed_touch_information and is_interactable:
+			activated.emit()
+		get_viewport().set_input_as_handled()
+		return
 	if not _pointer_pressed:
 		return
 	if event is InputEventMouseMotion:
@@ -101,3 +174,14 @@ func _input(event: InputEvent) -> void:
 		elif is_interactable:
 			activated.emit()
 		get_viewport().set_input_as_handled()
+
+
+## 等待触屏长按阈值后请求卡牌说明；序列号、触点和移动距离共同防止旧计时器误触发。
+func _start_touch_information_timer(sequence_id: int, touch_index: int) -> void:
+	await get_tree().create_timer(touch_information_hold_seconds).timeout
+	if not is_inside_tree() or sequence_id != _touch_sequence_id or touch_index != _active_touch_index:
+		return
+	if _is_hand_dragging or _touch_current_global_position.distance_to(_touch_press_global_position) > touch_hold_movement_tolerance:
+		return
+	_touch_information_active = true
+	hover_started.emit()
