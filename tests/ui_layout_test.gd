@@ -230,9 +230,9 @@ func _run() -> void:
 	if not is_equal_approx(identity_style.bg_color.a, 1.0) or not is_equal_approx(identity_style.border_color.a, 1.0):
 		_fail("identity_opacity:%s/%s" % [identity_style.bg_color.a, identity_style.border_color.a])
 		return
-	# 本地武将牌屏幕底部留白；默认26像素只抬升牌面，不恢复已隐藏的主视角座次标签。
+	# 本地武将牌屏幕底部留白；默认0像素让十人局右侧下方座位保留完整安全区，不恢复已隐藏的主视角座次标签。
 	var local_seat_bottom_margin: float = viewport_rect.end.y - local_seat_screen_rect.end.y
-	if not is_equal_approx(local_seat_bottom_margin, 26.0) or not is_equal_approx(float(main_instance.get("local_player_card_bottom_margin")), 26.0):
+	if not is_equal_approx(local_seat_bottom_margin, 0.0) or not is_equal_approx(float(main_instance.get("local_player_card_bottom_margin")), 0.0):
 		_fail("local_seat_bottom_margin:%s" % local_seat_bottom_margin)
 		return
 	# 本地座次标签；测试把本地玩家设为五号位，底部牌面必须显示对应中文座次。
@@ -403,8 +403,12 @@ func _run() -> void:
 	var seat_six_label: Label = seat_six_slot.get_node("Seat") as Label
 	# 右上座位公开标签；应保留七号位文字而不是沿用相邻下方座位。
 	var seat_seven_label: Label = seat_seven_slot.get_node("Seat") as Label
-	if seat_three_label == null or seat_four_label == null or seat_six_label == null or seat_seven_label == null or seat_three_label.text != "三" or seat_four_label.text != "四" or seat_six_label.text != "六" or seat_seven_label.text != "七" or not is_equal_approx(seat_three_slot.position.x, seat_four_slot.position.x) or not is_equal_approx(seat_six_slot.position.x, seat_seven_slot.position.x) or seat_three_slot.position.y >= seat_four_slot.position.y or seat_seven_slot.position.y >= seat_six_slot.position.y:
-		_fail("ten_player_side_seats:3=%s/4=%s/6=%s/7=%s positions=%s/%s/%s/%s" % [seat_three_label.text if seat_three_label != null else "", seat_four_label.text if seat_four_label != null else "", seat_six_label.text if seat_six_label != null else "", seat_seven_label.text if seat_seven_label != null else "", seat_three_slot.position, seat_four_slot.position, seat_six_slot.position, seat_seven_slot.position])
+	# 左侧上下完整座位的实际间隔；使用缩放后的完整座位高度，确保牌面与座次标签都不发生重叠。
+	var left_stacked_seat_gap: float = seat_four_slot.position.y - seat_three_slot.position.y - seat_three_slot.size.y * player_grid.ten_player_card_scale
+	# 右侧上下完整座位的实际间隔；右侧也必须使用与左侧相同的紧凑间隔。
+	var right_stacked_seat_gap: float = seat_six_slot.position.y - seat_seven_slot.position.y - seat_seven_slot.size.y * player_grid.ten_player_card_scale
+	if seat_three_label == null or seat_four_label == null or seat_six_label == null or seat_seven_label == null or not is_equal_approx(player_grid.ten_player_card_scale, 0.9) or seat_three_label.text != "三" or seat_four_label.text != "四" or seat_six_label.text != "六" or seat_seven_label.text != "七" or not is_equal_approx(seat_three_slot.position.x, seat_four_slot.position.x) or not is_equal_approx(seat_six_slot.position.x, seat_seven_slot.position.x) or seat_three_slot.position.y >= seat_four_slot.position.y or seat_seven_slot.position.y >= seat_six_slot.position.y or not is_equal_approx(left_stacked_seat_gap, player_grid.ten_player_stacked_vertical_gap) or not is_equal_approx(right_stacked_seat_gap, player_grid.ten_player_stacked_vertical_gap):
+		_fail("ten_player_side_seats:3=%s/4=%s/6=%s/7=%s positions=%s/%s/%s/%s scale=%s gaps=%s/%s" % [seat_three_label.text if seat_three_label != null else "", seat_four_label.text if seat_four_label != null else "", seat_six_label.text if seat_six_label != null else "", seat_seven_label.text if seat_seven_label != null else "", seat_three_slot.position, seat_four_slot.position, seat_six_slot.position, seat_seven_slot.position, player_grid.ten_player_card_scale, left_stacked_seat_gap, right_stacked_seat_gap])
 		return
 	# 当前回合角色牌；0号玩家必须保留3像素亮金边框，即使当前实际等待5号玩家操作。
 	var current_turn_view: PlayerTargetView = player_views.get(0) as PlayerTargetView
@@ -1085,6 +1089,15 @@ func _run() -> void:
 		return
 	# 对局日志展开按钮；点击后正文面板必须显示，验证“记录”入口不再只是静态标题。
 	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
+	# 左下四号位座次标签的屏幕矩形；其底边应紧贴记录按钮上边缘，以压缩十人局侧边纵向空白。
+	var lower_left_seat_label_rect: Rect2 = _screen_rect(seat_four_label)
+	# 记录按钮的屏幕矩形；按钮顶部是十人局下侧座位布局的稳定视觉锚点。
+	var log_toggle_button_rect: Rect2 = _screen_rect(log_toggle_button)
+	# 座次标签到记录按钮的垂直间隔；默认2像素既保持贴合又避免交叠和鼠标命中竞争。
+	var lower_left_seat_to_log_gap: float = log_toggle_button_rect.position.y - lower_left_seat_label_rect.end.y
+	if not is_equal_approx(lower_left_seat_to_log_gap, 2.0):
+		_fail("ten_player_record_gap:%s labels=%s button=%s" % [lower_left_seat_to_log_gap, lower_left_seat_label_rect, log_toggle_button_rect])
+		return
 	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
 	var log_content_panel: PanelContainer = main_instance.get_node("%LogContentPanel") as PanelContainer
 	await _click_control(log_toggle_button)

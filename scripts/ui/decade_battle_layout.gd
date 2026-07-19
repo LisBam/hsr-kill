@@ -7,9 +7,9 @@ extends Control
 ## 该参数只改变顶部座位位置，运行时通常无需动态修改，不影响牌面尺寸、座次顺序或规则数值。
 @export_range(0.0, 100.0, 1.0) var top_margin: float = 2.0
 
-## 十人局其他玩家座位的统一缩放比例；默认0.82让左右双座位同列排布时仍避开本地右下座位。
+## 十人局其他玩家座位的统一缩放比例；默认0.90提升十人局角色信息的可读性，同时保持左右双座位紧凑排布。
 ## 该参数只在10人局生效，运行时通常无需动态修改，不改变武将牌资源、点击区域或规则座次。
-@export_range(0.75, 1.0, 0.01) var ten_player_card_scale: float = 0.82
+@export_range(0.75, 1.0, 0.01) var ten_player_card_scale: float = 0.9
 
 ## 左右侧武将牌距牌桌边缘的距离；默认22像素对应参考布局的边缘安全区，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var side_margin: float = 22.0
@@ -18,11 +18,13 @@ extends Control
 ## 3:4武将牌增宽后使用0.35，使四至九人局侧边座位避开顶部牌列并保留底部界面安全区。
 @export_range(0.1, 0.6, 0.01) var single_side_y_ratio: float = 0.35
 
-## 单侧有两名角色时第一名的纵向位置比例；默认0.05上移十人局上侧座位，为下侧座位留出平行空间。
-@export_range(0.05, 0.5, 0.01) var upper_side_y_ratio: float = 0.05
+## 十人局下侧完整座位距客户区底边的安全距离；默认201像素令座次号与“记录”按钮保持2像素间距，运行时通常无需动态修改。
+## 该参数包含下侧武将牌和座次标签的完整高度，不改变座次顺序、角色牌资源或任何规则数值。
+@export_range(120.0, 360.0, 1.0) var ten_player_lower_side_bottom_margin: float = 201.0
 
-## 单侧有两名角色时第二名的纵向位置比例；默认0.35使十人局下侧座位与上方牌列形成清晰平行关系。
-@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.35
+## 十人局同侧上下完整座位的纵向间隔；默认6像素使牌面和座次标签紧凑相邻且不重叠，运行时通常无需动态修改。
+## 该参数只作用于十人局双座位，不改变四至九人局的单侧座位位置或规则座次。
+@export_range(0.0, 80.0, 1.0) var ten_player_stacked_vertical_gap: float = 6.0
 
 ## 当前由桌面绑定的对手角色卡数组；数组顺序与本地玩家之后的存活座次顺序一致。
 var _opponent_views: Array[Control] = []
@@ -82,7 +84,7 @@ func _layout_opponents() -> void:
 			var right_side_index: int = side_count_per_edge - right_index - 1
 			# 右侧座位横坐标；同侧上下座位必须保持同一列，避免视觉上出现左右错位。
 			var right_x: float = size.x - side_margin - active_card_size.x
-			_place_view(valid_views[view_index], Vector2(right_x, _side_y(right_side_index, side_count_per_edge)))
+			_place_view(valid_views[view_index], Vector2(right_x, _side_y(right_side_index, side_count_per_edge, active_card_size.y)))
 			view_index += 1
 	# 顶部中心横坐标比例；数组按从右向左排列，与无名杀 data-position 递增方向一致。
 	var top_ratios: PackedFloat32Array = _top_center_ratios(top_count)
@@ -97,15 +99,21 @@ func _layout_opponents() -> void:
 			var left_side_index: int = left_index
 			# 左侧座位横坐标；同侧上下座位必须保持同一列，避免视觉上出现左右错位。
 			var left_x: float = side_margin
-			_place_view(valid_views[view_index], Vector2(left_x, _side_y(left_side_index, side_count_per_edge)))
+			_place_view(valid_views[view_index], Vector2(left_x, _side_y(left_side_index, side_count_per_edge, active_card_size.y)))
 			view_index += 1
 
 
-## 返回侧边座位纵坐标；单座位使用统一上半区位置，双座位分别使用上、下两个比例。
-func _side_y(side_index: int, side_count: int) -> float:
+## 返回侧边座位纵坐标；单座位使用统一上半区位置，十人局双座位从底部安全距离反推，保证座次号贴近记录入口。
+func _side_y(side_index: int, side_count: int, stacked_seat_height: float) -> float:
 	if side_count <= 1:
 		return size.y * single_side_y_ratio
-	return size.y * (upper_side_y_ratio if side_index == 0 else lower_side_y_ratio)
+	# 下侧完整座位的顶部坐标；以客户区底边为基准，窗口高度变化后仍保留与“记录”按钮一致的安全距离。
+	var lower_side_y: float = size.y - stacked_seat_height - ten_player_lower_side_bottom_margin
+	if side_index == 0:
+		# 上侧完整座位的顶部坐标；上侧座位放在下侧座位上方，并只保留配置的紧凑间隔。
+		var upper_side_y: float = lower_side_y - stacked_seat_height - ten_player_stacked_vertical_gap
+		return upper_side_y
+	return lower_side_y
 
 
 ## 返回顶部座位中心比例；二至八人局使用参考 CSS 数值，更多人数使用相同边界内的均匀扩展。

@@ -103,8 +103,8 @@ const SECONDS_PER_MINUTE: int = 60
 ## 当前默认0.24秒以匹配加快后的摸牌节奏；同一正式手牌入场逻辑也服务于其他获得牌，从而保持本地手牌反馈一致。
 @export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.24
 
-## 主视角武将牌与客户区底边之间的垂直留白；默认26像素使牌面向上抬升且不恢复已移除的座次标签，运行时通常无需动态修改。
-@export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 26.0
+## 主视角武将牌与客户区底边之间的垂直留白；默认0像素为十人局右侧下方座位腾出完整的垂直安全区，运行时通常无需动态修改。
+@export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 0.0
 
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
