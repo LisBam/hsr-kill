@@ -230,11 +230,7 @@ func join_lan(address: String, display_name: String, port: int = -1, avatar_char
 func leave_lan(message: String = "已离开局域网房间。") -> void:
 	# 离开前角色；用于判断是否需要向本地界面报告一个真实会话关闭事件。
 	var previous_role: LanRole = lan_role
-	if _enet_peer != null:
-		_enet_peer.close()
-	_enet_peer = null
-	if multiplayer != null:
-		multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	_release_lan_peer()
 	_set_offline_state()
 	if previous_role != LanRole.NONE and not message.is_empty():
 		connection_state_changed.emit(true, message)
@@ -635,7 +631,7 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	if lan_role != LanRole.CLIENT:
 		return
-	_enet_peer = null
+	_release_lan_peer()
 	_set_offline_state()
 	connection_state_changed.emit(false, "连接局域网房主失败，请检查 IP、端口和防火墙。")
 	lan_session_closed.emit("连接局域网房主失败，请检查 IP、端口和防火墙。")
@@ -645,7 +641,7 @@ func _on_connection_failed() -> void:
 func _on_server_disconnected() -> void:
 	if lan_role != LanRole.CLIENT:
 		return
-	_enet_peer = null
+	_release_lan_peer()
 	_set_offline_state()
 	connection_state_changed.emit(false, "与局域网房主的连接已断开。")
 	lan_session_closed.emit("与局域网房主的连接已断开。")
@@ -939,9 +935,7 @@ func _disconnect_rejected_lobby_peer(peer_id: int) -> void:
 func _apply_lobby_rejection(message: String) -> void:
 	if lan_role != LanRole.CLIENT:
 		return
-	if _enet_peer != null:
-		_enet_peer.close()
-	_enet_peer = null
+	_release_lan_peer()
 	_set_offline_state()
 	connection_state_changed.emit(false, message)
 	lan_session_closed.emit(message)
@@ -993,6 +987,18 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 ## 返回大厅需要绘制的视觉位置数；2人局与3人局都使用3个居中位置，其余人数与设置人数一致。
 func _get_lobby_display_slot_count() -> int:
 	return 3 if _lobby_player_count <= 3 else _lobby_player_count
+
+
+## 从 SceneMultiplayer 解除当前 ENet peer 后关闭底层套接字；先替换框架持有的 peer，才能保证同一端口可立即重新建房。
+func _release_lan_peer() -> void:
+	# 待释放的底层 peer；先保存局部引用，避免重置成员状态后丢失需要关闭的监听套接字。
+	var peer_to_release: ENetMultiplayerPeer = _enet_peer
+	_enet_peer = null
+	if multiplayer != null:
+		# 先移除 SceneMultiplayer 的旧引用；旧 peer 的断开事件不能继续作用于随后新建的局域网会话。
+		multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	if peer_to_release != null:
+		peer_to_release.close()
 
 
 ## 清理全部 LAN 会话状态并恢复离线回环；该函数不发信号，由具体生命周期入口决定用户提示。

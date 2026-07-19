@@ -65,8 +65,10 @@ func _ready() -> void:
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
+	_player_count_input.value = GameSettings.next_match_player_count
 	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
 	_player_count_input.update_on_text_changed = true
+	_player_count_input.value_changed.connect(_on_next_player_count_changed)
 	_ai_response_delay_slider.min_value = GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.max_value = GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.step = GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS
@@ -88,6 +90,7 @@ func _ready() -> void:
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
@@ -103,7 +106,10 @@ func _move_to_input_front() -> void:
 
 ## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。
 func set_next_player_count(player_count: int) -> void:
-	_player_count_input.value = clampi(player_count, minimum_player_count, maximum_player_count)
+	# 当前菜单允许的人数；范围以组件导出的身份局限制为准，避免未来调整检查器范围时写入无效存档。
+	var clamped_player_count: int = clampi(player_count, minimum_player_count, maximum_player_count)
+	_player_count_input.value = clamped_player_count
+	GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回菜单中设置的下一局人数；始终限制在标准身份局2至10人范围。
@@ -253,8 +259,14 @@ func _request_restart() -> void:
 	# 已确认的下一局人数；先写回输入框，使界面文本、Range 数值与重开参数保持一致。
 	var player_count: int = get_next_player_count()
 	_player_count_input.value = player_count
+	GameSettings.set_next_match_player_count(player_count)
 	_menu_panel.visible = false
 	restart_requested.emit(player_count)
+
+
+## 下一局人数输入变化时写入全局持久化设置；该值仅用于之后的重开请求，不会改写当前对局。
+func _on_next_player_count_changed(player_count: float) -> void:
+	GameSettings.set_next_match_player_count(int(player_count))
 
 
 ## 请求退出当前对局；先收起局内菜单，避免主菜单出现后仍保留局内浮层输入。

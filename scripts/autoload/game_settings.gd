@@ -22,6 +22,9 @@ signal online_player_name_changed(player_name: String)
 ## 联机形象变化信号；参数为稳定武将 ID，联机大厅据此提交并显示玩家选择的武将插画。
 signal online_avatar_character_changed(character_id: String)
 
+## 下一局人数变化信号；主菜单与局内菜单收到后同步各自输入框，不修改正在进行的对局人数。
+signal next_match_player_count_changed(player_count: int)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -58,6 +61,30 @@ const MAX_ONLINE_PLAYER_NAME_LENGTH: int = 20
 ## 联机玩家名称为空时使用的默认文本；稳定回退可防止大厅成员列表出现空白行。
 const DEFAULT_ONLINE_PLAYER_NAME: String = "玩家"
 
+## 本地设置文件路径；仅保存跨启动保留的客户端偏好，不保存房间密码、ENet 会话或任何权威对局状态。
+const SETTINGS_FILE_PATH: String = "user://game_settings.cfg"
+
+## 设置文件格式版本；未来字段结构变化时可据此添加兼容迁移，当前版本从1开始。
+const SETTINGS_SCHEMA_VERSION: int = 1
+
+## 设置文件元数据分组名；该分组只保存格式版本，不承载具体游戏或联机选项。
+const SETTINGS_METADATA_SECTION: String = "metadata"
+
+## 游戏设置分组名；保存名称模式、界面风格、节奏、身份标记与下一局人数。
+const GAMEPLAY_SETTINGS_SECTION: String = "gameplay"
+
+## 联机资料分组名；只保存玩家主动选择的显示名和稳定武将形象 ID。
+const ONLINE_SETTINGS_SECTION: String = "online"
+
+## 下一局人数的最小值；与标准身份局和大厅允许的最小人数一致，运行时不应修改。
+const MIN_NEXT_MATCH_PLAYER_COUNT: int = 2
+
+## 下一局人数的最大值；与标准身份局和大厅允许的最大人数一致，运行时不应修改。
+const MAX_NEXT_MATCH_PLAYER_COUNT: int = 10
+
+## 下一局人数的默认值；与 MatchController 默认8人身份局保持一致，首次启动或无效存档时使用。
+const DEFAULT_NEXT_MATCH_PLAYER_COUNT: int = 8
+
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
 
@@ -79,12 +106,26 @@ var online_player_name: String = DEFAULT_ONLINE_PLAYER_NAME
 ## 当前联机形象对应的稳定武将 ID；空值表示尚未选择，资料面板或网络网关会回退到首个可用武将。
 var online_avatar_character_id: String = ""
 
+## 当前下一局人数；默认8人，仅影响之后创建或重开的身份局，不修改正在运行的规则状态。
+var next_match_player_count: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
+
+## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
+var _settings_file_path: String = SETTINGS_FILE_PATH
+
+
+## 自动加载节点进入场景树时恢复已保存配置；恢复阶段不发变更信号，后续界面会直接读取最终值完成首次绘制。
+func _ready() -> void:
+	_load_saved_settings()
+
 
 ## 设置全局卡牌名称模式，并通知所有已连接的界面刷新显示文本。
 func set_card_name_mode(mode: NameMode) -> void:
-	if card_name_mode == mode:
+	# 规范化后的名称模式；存档可能来自旧版本或手工编辑，未知值统一回退自定义名称。
+	var normalized_mode: NameMode = _normalize_card_name_mode(mode)
+	if card_name_mode == normalized_mode:
 		return
-	card_name_mode = mode
+	card_name_mode = normalized_mode
+	_save_settings()
 	card_name_mode_changed.emit(card_name_mode)
 
 
@@ -103,6 +144,7 @@ func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 	if is_equal_approx(ai_response_delay_seconds, clamped_delay_seconds):
 		return
 	ai_response_delay_seconds = clamped_delay_seconds
+	_save_settings()
 	ai_response_delay_changed.emit(ai_response_delay_seconds)
 
 
@@ -113,6 +155,7 @@ func set_game_speed_interval_seconds(interval_seconds: float) -> void:
 	if is_equal_approx(game_speed_interval_seconds, clamped_interval_seconds):
 		return
 	game_speed_interval_seconds = clamped_interval_seconds
+	_save_settings()
 	game_speed_changed.emit(game_speed_interval_seconds)
 
 
@@ -123,6 +166,7 @@ func set_ui_style(style_id: String) -> void:
 	if ui_style_id == normalized_style_id:
 		return
 	ui_style_id = normalized_style_id
+	_save_settings()
 	ui_style_changed.emit(ui_style_id)
 
 
@@ -131,6 +175,7 @@ func set_auto_identity_marking_enabled(enabled: bool) -> void:
 	if auto_identity_marking_enabled == enabled:
 		return
 	auto_identity_marking_enabled = enabled
+	_save_settings()
 	auto_identity_marking_changed.emit(auto_identity_marking_enabled)
 
 
@@ -141,6 +186,7 @@ func set_online_player_name(player_name: String) -> void:
 	if online_player_name == normalized_player_name:
 		return
 	online_player_name = normalized_player_name
+	_save_settings()
 	online_player_name_changed.emit(online_player_name)
 
 
@@ -151,7 +197,19 @@ func set_online_avatar_character_id(character_id: String) -> void:
 	if online_avatar_character_id == normalized_character_id:
 		return
 	online_avatar_character_id = normalized_character_id
+	_save_settings()
 	online_avatar_character_changed.emit(online_avatar_character_id)
+
+
+## 设置下一局人数并同步所有菜单；范围外输入自动限制为标准身份局支持的2至10人。
+func set_next_match_player_count(player_count: int) -> void:
+	# 限制后的人数；只保存下一局配置，当前对局已经创建时不改变其玩家、身份或座次。
+	var normalized_player_count: int = clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+	if next_match_player_count == normalized_player_count:
+		return
+	next_match_player_count = normalized_player_count
+	_save_settings()
+	next_match_player_count_changed.emit(next_match_player_count)
 
 
 ## 返回符合联机协议的玩家名称；该纯函数可供设置界面预览与未来资料持久化复用。
@@ -163,6 +221,54 @@ func normalize_online_player_name(player_name: String) -> String:
 	if normalized_player_name.length() > MAX_ONLINE_PLAYER_NAME_LENGTH:
 		normalized_player_name = normalized_player_name.left(MAX_ONLINE_PLAYER_NAME_LENGTH)
 	return normalized_player_name
+
+
+## 返回当前设置文件路径；诊断与独立持久化测试可读取该路径，但普通界面不需要接触文件系统。
+func get_settings_file_path() -> String:
+	return _settings_file_path
+
+
+## 从本地配置文件恢复所有客户端偏好；缺失、损坏或字段缺失时保留脚本内默认值并允许后续保存覆盖。
+func _load_saved_settings() -> void:
+	# 当前设置文件读取器；只在内存中解析，不会在读取失败时创建空文件或修改玩家数据。
+	var settings_file: ConfigFile = ConfigFile.new()
+	# 配置文件读取结果；首次启动的文件不存在属于正常情况，继续使用脚本默认值。
+	var load_error: Error = settings_file.load(_settings_file_path)
+	if load_error != OK:
+		return
+	# 已保存的格式版本；当前版本字段兼容时直接读取，未来版本可在此处按版本执行迁移。
+	var stored_schema_version: int = int(settings_file.get_value(SETTINGS_METADATA_SECTION, "schema_version", SETTINGS_SCHEMA_VERSION))
+	if stored_schema_version < 1:
+		return
+	card_name_mode = _normalize_card_name_mode(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "card_name_mode", card_name_mode))
+	ai_response_delay_seconds = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_response_delay_seconds", ai_response_delay_seconds)), MIN_AI_RESPONSE_DELAY_SECONDS, MAX_AI_RESPONSE_DELAY_SECONDS), AI_RESPONSE_DELAY_STEP_SECONDS)
+	game_speed_interval_seconds = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "game_speed_interval_seconds", game_speed_interval_seconds)), MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS), GAME_SPEED_INTERVAL_STEP_SECONDS)
+	ui_style_id = UIStyleRegistry.normalize_style_id(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)))
+	auto_identity_marking_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled))
+	next_match_player_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)), MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
+	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
+
+
+## 将当前客户端偏好写入本地配置文件；写入失败不影响已生效的内存设置或当前网络与对局状态。
+func _save_settings() -> void:
+	# 当前设置文件写入器；每次完整写入全部字段，避免增量更新产生缺失字段或跨版本半成品。
+	var settings_file: ConfigFile = ConfigFile.new()
+	settings_file.set_value(SETTINGS_METADATA_SECTION, "schema_version", SETTINGS_SCHEMA_VERSION)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "card_name_mode", int(card_name_mode))
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_response_delay_seconds", ai_response_delay_seconds)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "game_speed_interval_seconds", game_speed_interval_seconds)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
+	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
+	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
+	settings_file.save(_settings_file_path)
+
+
+## 将任意存档或调用方提供的名称模式限制到两个已支持的稳定枚举值。
+func _normalize_card_name_mode(mode: Variant) -> NameMode:
+	return NameMode.ORIGINAL if int(mode) == int(NameMode.ORIGINAL) else NameMode.CUSTOM
 
 
 ## 根据当前全局模式，从卡牌配置中返回唯一的前端显示名称。

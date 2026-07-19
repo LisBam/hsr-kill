@@ -24,6 +24,9 @@ signal kick_requested(peer_id: int)
 ## 联机形象插画节点；只显示武将元数据中的插画纹理，不绘制牌框、势力、体力或技能 UI。
 @onready var _artwork_rect: TextureRect = %OnlineLobbyAvatarArtwork
 
+## 联机形象边框节点；占用位置使用与空位相同的圆角边框包裹插画，节点忽略鼠标以保持管理按钮悬停稳定。
+@onready var _avatar_frame: Panel = %OnlineLobbyAvatarFrame
+
 ## 空位置按钮；覆盖与武将牌一致的插画区域，点击后请求本地玩家换位。
 @onready var _empty_slot_button: Button = %OnlineLobbyEmptySlotButton
 
@@ -48,6 +51,9 @@ var _is_local_member: bool = false
 ## 鼠标是否停留在整个形象组件范围内；主题刷新时据此恢复踢出按钮可见性。
 var _hovered: bool = false
 
+## 鼠标是否停留在踢出按钮范围内；父组件因子控件命中而收到离开事件时，该状态会保持管理按钮可见。
+var _kick_button_hovered: bool = false
+
 
 ## 初始化输入信号并应用固定几何；玩家与空位置共用同一组件尺寸。
 func _ready() -> void:
@@ -57,12 +63,16 @@ func _ready() -> void:
 	_name_label.size = Vector2(avatar_size.x, name_height)
 	_artwork_rect.position = Vector2(0.0, name_height + name_gap)
 	_artwork_rect.size = avatar_size
+	_avatar_frame.position = _artwork_rect.position
+	_avatar_frame.size = avatar_size
 	_empty_slot_button.position = _artwork_rect.position
 	_empty_slot_button.size = avatar_size
 	_kick_button.position = _artwork_rect.position + Vector2(22.0, avatar_size.y - 48.0)
 	_kick_button.size = Vector2(avatar_size.x - 44.0, 38.0)
 	_empty_slot_button.pressed.connect(_on_empty_slot_pressed)
 	_kick_button.pressed.connect(_on_kick_pressed)
+	_kick_button.mouse_entered.connect(_on_kick_button_mouse_entered)
+	_kick_button.mouse_exited.connect(_on_kick_button_mouse_exited)
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
 	refresh_ui_style()
@@ -75,10 +85,13 @@ func configure(seat_index: int, member: Dictionary, local_is_host: bool, local_p
 	_occupied = not member.is_empty()
 	_peer_id = int(member.get("peer_id", 0)) if _occupied else 0
 	_is_local_member = _occupied and _peer_id == local_peer_id
+	_hovered = false
+	_kick_button_hovered = false
 	if not _occupied:
 		_name_label.text = "位置%d" % (seat_index + 1)
 		_artwork_rect.texture = null
 		_artwork_rect.visible = false
+		_avatar_frame.visible = false
 		_empty_slot_button.visible = true
 		_kick_button.visible = false
 		refresh_ui_style()
@@ -90,6 +103,7 @@ func configure(seat_index: int, member: Dictionary, local_is_host: bool, local_p
 	var character_definition: Dictionary = GameDatabase.get_character(str(member.get("avatar_character_id", "")))
 	_artwork_rect.texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	_artwork_rect.visible = true
+	_avatar_frame.visible = true
 	_empty_slot_button.visible = false
 	_update_kick_visibility()
 	refresh_ui_style()
@@ -106,6 +120,7 @@ func refresh_ui_style() -> void:
 	_empty_slot_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	_empty_slot_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_avatar_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(Color.TRANSPARENT, Color(BattleUIStyle.get_color("border"), 0.55), 1, 6))
 	BattleUIStyle.apply_interaction_button(_kick_button, BattleUIStyle.get_color("danger"), BattleUIStyle.get_color("text_primary"), true)
 	_update_kick_visibility()
 
@@ -141,11 +156,24 @@ func _on_mouse_entered() -> void:
 ## 鼠标离开组件时隐藏房主管理按钮，避免按钮在其他玩家形象上残留。
 func _on_mouse_exited() -> void:
 	_hovered = false
+	# 延迟到当前输入事件结束；进入踢出按钮时父组件可能先收到离开事件，子按钮会在同一事件周期写入自身悬停状态。
+	call_deferred("_update_kick_visibility")
+
+
+## 鼠标进入踢出按钮时保留管理入口；按钮属于形象组件可视范围，不能被父组件离开事件错误隐藏。
+func _on_kick_button_mouse_entered() -> void:
+	_kick_button_hovered = true
 	_update_kick_visibility()
+
+
+## 鼠标离开踢出按钮时延迟复核父组件悬停状态；回到插画区域时父组件会在同一输入周期重新进入。
+func _on_kick_button_mouse_exited() -> void:
+	_kick_button_hovered = false
+	call_deferred("_update_kick_visibility")
 
 
 ## 根据权限、占用状态与悬停状态统一决定踢出按钮可见性。
 func _update_kick_visibility() -> void:
 	if not is_node_ready():
 		return
-	_kick_button.visible = _occupied and _local_is_host and not _is_local_member and _peer_id > NetworkGateway.SERVER_PEER_ID and _hovered
+	_kick_button.visible = _occupied and _local_is_host and not _is_local_member and _peer_id > NetworkGateway.SERVER_PEER_ID and (_hovered or _kick_button_hovered)

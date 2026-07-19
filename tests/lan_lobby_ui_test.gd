@@ -97,9 +97,11 @@ func _ready() -> void:
 	var host_name_label: Label = host_avatar.get_node("%OnlineLobbyAvatarName") as Label
 	# 房主原始插画；只显示 TextureRect，不存在武将牌 UI 子树。
 	var host_artwork: TextureRect = host_avatar.get_node("%OnlineLobbyAvatarArtwork") as TextureRect
+	# 房主形象边框；占用位置必须复用空位的圆角边框规格包裹插画，而不是裸露纹理。
+	var host_avatar_frame: Panel = host_avatar.get_node("%OnlineLobbyAvatarFrame") as Panel
 	# 房主插画矩形；尺寸与武将牌一致，纵坐标必须大于名称标签底边。
 	var host_avatar_rect: Rect2 = host_avatar.get_avatar_rect()
-	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
+	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_avatar_frame == null or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
 		_fail("host_avatar_geometry rect=%s name_rect=%s" % [host_avatar_rect, host_name_label.get_rect()])
 		return
 	# 三位置单行中心；第一个与最后一个位置围绕座位区域中心对称，三者纵坐标相同。
@@ -167,7 +169,17 @@ func _ready() -> void:
 	if not kick_button.visible or kick_button.text != "踢出":
 		_fail("kick_hover_show")
 		return
+	# 鼠标从形象移动到踢出按钮；父组件离开与子按钮进入在同一输入周期发生，按钮不得被短暂隐藏。
 	remote_avatar.mouse_exited.emit()
+	kick_button.mouse_entered.emit()
+	await get_tree().process_frame
+	if not kick_button.visible:
+		_fail("kick_hover_flicker")
+		return
+	# 鼠标离开按钮和形象范围后才隐藏管理入口。
+	kick_button.mouse_exited.emit()
+	remote_avatar.mouse_exited.emit()
+	await get_tree().process_frame
 	if kick_button.visible:
 		_fail("kick_hover_hide")
 		return
@@ -186,6 +198,18 @@ func _ready() -> void:
 	if online_lobby_panel.visible or connection_panel.visible or gateway.mode != NetworkGateway.Mode.OFFLINE or not main_menu.visible or lan_button.focus_mode == Control.FOCUS_NONE:
 		_fail("leave_recovery")
 		return
+	# 关闭房间后立即使用同一端口再次建房；旧 ENet peer 必须已经从 SceneMultiplayer 和底层套接字完全释放。
+	lan_button.pressed.emit()
+	await get_tree().process_frame
+	port_input.value = test_port
+	port_input.get_line_edit().text = str(test_port)
+	host_button.pressed.emit()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not gateway.is_lan_host():
+		_fail("recreate_room_after_close")
+		return
+	gateway.leave_lan("")
 	print("LAN_LOBBY_UI_PASS port=%d" % test_port)
 	_reset_global_settings()
 	_main_instance.queue_free()
