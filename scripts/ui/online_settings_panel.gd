@@ -63,6 +63,7 @@ func _ready() -> void:
 	visible = false
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
+	_player_name_input.select_all_on_focus = false
 	_save_button.pressed.connect(_save_and_close)
 	_cancel_button.pressed.connect(_cancel_and_close)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
@@ -74,6 +75,7 @@ func open_panel() -> void:
 	visible = true
 	move_to_front()
 	_player_name_input.text = GameSettings.online_player_name
+	_player_name_input.caret_column = _player_name_input.text.length()
 	_rebuild_avatar_options()
 	call_deferred("_focus_primary_control")
 
@@ -236,10 +238,14 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
 
 
-## 把键盘焦点放到玩家名称输入框；武将形象继续支持鼠标直接点击选择。
+## 把初始焦点放到当前平台的安全控件；Android等待玩家主动点击名称框，避免打开面板时自动弹出输入法。
 func _focus_primary_control() -> void:
-	if visible:
-		_player_name_input.grab_focus()
+	if not visible:
+		return
+	if OS.get_name() == "Android":
+		_save_button.grab_focus()
+		return
+	_player_name_input.grab_focus()
 
 
 ## 响应全局 UI 风格切换；只重绘当前面板与已有武将牌，不重置未保存编辑。

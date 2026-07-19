@@ -37,6 +37,18 @@ var _touch_details_requested: bool = false
 ## 当前触摸序列编号；每次按下或结束都会递增，使旧的异步长按计时自动失效。
 var _touch_sequence_id: int = 0
 
+## 当前左键或模拟触摸是否仍处于按下状态；用于在标准GUI指针路径中识别长按详情。
+var _pointer_pressed: bool = false
+
+## 当前左键按下时的全局画布坐标；用于过滤鼠标或模拟触摸移动造成的误长按。
+var _pointer_press_global_position: Vector2 = Vector2.ZERO
+
+## 当前左键手势是否已经打开武将详情；为true时释放不会再选择目标。
+var _pointer_details_requested: bool = false
+
+## 当前左键手势序列编号；每次按下或释放递增，使旧的异步长按计时自动失效。
+var _pointer_sequence_id: int = 0
+
 
 ## 初始化覆盖整张武将牌的透明输入区域。
 func _ready() -> void:
@@ -67,13 +79,28 @@ func _gui_input(event: InputEvent) -> void:
 				details_requested.emit()
 			accept_event()
 			return
-		if not is_interactable:
+		if mouse_event.button_index != MOUSE_BUTTON_LEFT:
 			return
-		if mouse_event.button_index == MOUSE_BUTTON_LEFT and not mouse_event.pressed:
-			activated.emit(mouse_event.position)
+		if mouse_event.pressed:
+			_pointer_pressed = true
+			_pointer_press_global_position = get_global_mouse_position()
+			_pointer_details_requested = false
+			_pointer_sequence_id += 1
+			_start_pointer_details_timer(_pointer_sequence_id)
 			accept_event()
+			return
+		# 本次左键手势是否已经打开详情；长按释放只结束手势，不再追加目标选择。
+		var completed_pointer_details: bool = _pointer_details_requested
+		_pointer_pressed = false
+		_pointer_details_requested = false
+		_pointer_sequence_id += 1
+		if not completed_pointer_details and is_interactable:
+			activated.emit(mouse_event.position)
+		accept_event()
 		return
 	if event is InputEventScreenTouch:
+		if _uses_touch_mouse_emulation():
+			return
 		# 当前触屏按下事件；释放统一由全局输入处理，保证手指移出武将牌后仍能安全结束手势。
 		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
 		if touch_event.pressed and _active_touch_index < 0:
@@ -88,7 +115,25 @@ func _gui_input(event: InputEvent) -> void:
 
 ## 跟踪武将牌上的触屏拖动与释放；桌面鼠标路径保持由_gui_input独立处理。
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		# 当前全局左键释放事件；手指或鼠标移出武将牌后仍会安全结束长按，且不会遗留持续按下状态。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if not _pointer_pressed or mouse_event.button_index != MOUSE_BUTTON_LEFT or mouse_event.pressed:
+			return
+		# 本次全局释放前是否已打开详情；详情手势结束时不会追加目标选择。
+		var completed_pointer_details: bool = _pointer_details_requested
+		# 当前全局释放位置是否仍在武将牌内；普通目标点击只有按下与释放都位于牌面时才成立。
+		var released_inside: bool = get_global_rect().has_point(mouse_event.position)
+		_pointer_pressed = false
+		_pointer_details_requested = false
+		_pointer_sequence_id += 1
+		if not completed_pointer_details and released_inside and is_interactable:
+			activated.emit(_global_canvas_to_local(mouse_event.position))
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventScreenDrag:
+		if _uses_touch_mouse_emulation():
+			return
 		# 当前触屏拖动事件；只响应本组件记录的触点，并把位置转换为武将牌局部坐标供装备横条识别。
 		var touch_drag_event: InputEventScreenDrag = event as InputEventScreenDrag
 		if touch_drag_event.index != _active_touch_index:
@@ -98,6 +143,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event is not InputEventScreenTouch:
+		return
+	if _uses_touch_mouse_emulation():
 		return
 	# 当前触屏释放事件；只有匹配的活动触点会结束手势，第二根手指不会干扰目标选择。
 	var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
@@ -125,6 +172,22 @@ func _start_touch_details_timer(sequence_id: int, touch_index: int) -> void:
 		return
 	_touch_details_requested = true
 	details_requested.emit()
+
+
+## 等待标准左键路径的长按阈值后打开武将详情；同时支持桌面鼠标与Android模拟鼠标触摸。
+func _start_pointer_details_timer(sequence_id: int) -> void:
+	await get_tree().create_timer(touch_details_hold_seconds).timeout
+	if not is_inside_tree() or sequence_id != _pointer_sequence_id or not _pointer_pressed:
+		return
+	if get_global_mouse_position().distance_to(_pointer_press_global_position) > touch_hold_movement_tolerance:
+		return
+	_pointer_details_requested = true
+	details_requested.emit()
+
+
+## 返回项目是否已把触点转换为鼠标事件；开启时组件只处理模拟鼠标，避免同一次触摸重复选择目标。
+func _uses_touch_mouse_emulation() -> bool:
+	return bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false))
 
 
 ## 把视口触点坐标转换为武将牌局部坐标；画布缩放和安卓等比留边都由节点变换统一消化。
