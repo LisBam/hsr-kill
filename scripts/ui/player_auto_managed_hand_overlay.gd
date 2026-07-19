@@ -3,6 +3,9 @@ extends Control
 
 ## 本地玩家托管时覆盖手牌栏的独立表现组件。它只管理黑色滤镜、动态文字与鼠标拦截，不读取规则或网络状态。
 
+## 玩家点击“托管中...”文字时发出结束手动托管意图；父级桌面负责按最新权威快照决定是否允许提交关闭动作。
+signal cancel_requested
+
 ## 托管动态省略号的切换间隔秒数；默认0.45秒使“.”、“..”、“...”保持可辨识的循环节奏，运行时可在检查器调整。
 @export_range(0.1, 2.0, 0.05) var dot_cycle_interval_seconds: float = 0.45
 
@@ -29,6 +32,8 @@ var _dot_count: int = 1
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_shade.color = Color(0.0, 0.0, 0.0, shade_alpha)
+	_status_label.mouse_filter = Control.MOUSE_FILTER_STOP
+	_status_label.gui_input.connect(_on_status_label_gui_input)
 	configure(false)
 
 
@@ -60,3 +65,12 @@ func _update_status_text() -> void:
 	if _status_label == null:
 		return
 	_status_label.text = "托管中" + ".".repeat(_dot_count)
+
+
+## 接收“托管中...”文字区域的鼠标输入；只在左键按下时发出一次取消意图，其他遮罩区域继续单纯阻断输入。
+func _on_status_label_gui_input(event: InputEvent) -> void:
+	if not _auto_managed:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		accept_event()
+		cancel_requested.emit()

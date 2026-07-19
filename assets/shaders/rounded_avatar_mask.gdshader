@@ -8,8 +8,8 @@ uniform float artwork_aspect_ratio = 0.75;
 
 
 void fragment() {
-	// 原始插画颜色：保留 TextureRect 已有颜色调制，只在最后乘圆角透明度。
-	vec4 artwork_color = texture(TEXTURE, UV) * COLOR;
+	// 原始插画颜色：只读取纹理自身颜色，避免 CanvasItem 的外部颜色输入把大厅角色插画调制为黑色。
+	vec4 texture_color = texture(TEXTURE, UV);
 	// 归一化插画半尺寸：横轴先乘宽高比，避免圆角在竖图中被拉伸成椭圆。
 	vec2 half_size = vec2(artwork_aspect_ratio * 0.5, 0.5);
 	// 当前片元相对中心的等比例坐标：坐标原点位于插画正中心。
@@ -20,6 +20,5 @@ void fragment() {
 	float signed_distance = min(max(rounded_point.x, rounded_point.y), 0.0) + length(max(rounded_point, 0.0)) - corner_radius;
 	// 最终 Alpha 蒙版：0.002的平滑带消除像素边缘锯齿，不影响边框尺寸。
 	float mask_alpha = 1.0 - smoothstep(0.0, 0.002, signed_distance);
-	artwork_color.a *= mask_alpha;
-	COLOR = artwork_color;
+	COLOR = vec4(texture_color.rgb, texture_color.a * mask_alpha);
 }
