@@ -2796,6 +2796,44 @@ func _refresh_component_states() -> void:
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
 	local_player_card.set_target_state(self_is_legal, self_is_selected)
+	_refresh_skill_target_preview_indicator()
+
+
+## 同步技能选目标预览线；来源与目标锚点直接复用正式卡牌出牌指示线的坐标和绘制组件。
+func _refresh_skill_target_preview_indicator() -> void:
+	if card_use_animation_layer == null:
+		return
+	if _inline_card_choice.is_empty():
+		card_use_animation_layer.clear_target_preview_indicator()
+		return
+	# 当前内联选择类型；只有需要在武将牌上选择目标的请求才允许显示预览线。
+	var choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
+	if choice_type not in ["target", "card_target"]:
+		card_use_animation_layer.clear_target_preview_indicator()
+		return
+	# 当前规则上下文；技能定义写入稳定 skill_id，普通内联选牌即使有目标也不应伪装为技能目标线。
+	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	if str(context.get("skill_id", "")).is_empty():
+		card_use_animation_layer.clear_target_preview_indicator()
+		return
+	# 技能拥有者；规则可能要求本地为其他角色完成选择，因此优先读取上下文而非固定本地玩家。
+	var skill_owner_id: int = int(context.get("skill_owner_id", match_controller.local_human_player_id))
+	# 技能来源锚点；来源座位尚未建立时不绘制，避免从中央弃牌区伪造指示线。
+	var source_anchor_result: Dictionary = _try_get_player_indicator_position(skill_owner_id)
+	if not bool(source_anchor_result.get("valid", false)):
+		card_use_animation_layer.clear_target_preview_indicator()
+		return
+	# 已选目标的动画层坐标；候选高亮但未选中时不绘制，避免把技能误导为已经指定全部候选。
+	var target_positions: Array[Vector2] = []
+	for target_id: int in _selected_target_ids:
+		# 当前目标锚点；离场或尚未创建的视图只跳过自身，不影响其他有效目标。
+		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_id)
+		if bool(target_anchor_result.get("valid", false)):
+			target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
+	if target_positions.is_empty():
+		card_use_animation_layer.clear_target_preview_indicator()
+		return
+	card_use_animation_layer.set_target_preview_indicator(source_anchor_result.get("position", Vector2.ZERO) as Vector2, target_positions)
 
 
 ## 返回当前选中卡牌的本地可见快照，包含手牌与木牛流马“粮”。

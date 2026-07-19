@@ -46,7 +46,7 @@ func _run() -> void:
 		"min_target_select":1,
 		"max_target_select":1,
 		"allow_cancel":true,
-		"context":{"kind":"ui_target_test"},
+		"context":{"kind":"ui_target_test", "skill_id":"ui_target_test", "skill_owner_id":0},
 	}
 	main_instance.call("_on_card_choice_requested", target_request)
 	await get_tree().process_frame
@@ -58,11 +58,15 @@ func _run() -> void:
 	var player_views: Dictionary = main_instance.get("_player_views") as Dictionary
 	# 1号目标玩家视图；用于验证合法目标和已选目标描边状态。
 	var target_view: PlayerTargetView = player_views.get(1) as PlayerTargetView
-	if selection_panel.visible or confirm_button.disabled == false or target_view == null or not target_view.is_legal_target or target_view.is_target_selected:
+	# 牌桌目标指示线层；技能尚未选中目标时不能提前出现指示线。
+	var animation_layer: CardUseAnimationLayer = main_instance.get_node("%CardUseAnimationLayer") as CardUseAnimationLayer
+	if selection_panel.visible or confirm_button.disabled == false or target_view == null or animation_layer == null or not target_view.is_legal_target or target_view.is_target_selected or animation_layer._line_presentations.has(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY):
 		_fail("target_initial")
 		return
 	main_instance.call("_on_target_pressed", 1)
-	if confirm_button.disabled or not target_view.is_target_selected:
+	# 当前技能预览线数据；必须使用和卡牌目标线相同的固定绘制映射，并记录唯一已选目标。
+	var skill_target_presentation: Dictionary = animation_layer._line_presentations.get(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY, {}) as Dictionary
+	if confirm_button.disabled or not target_view.is_target_selected or (skill_target_presentation.get("target_positions", []) as Array).size() != 1:
 		_fail("target_selected")
 		return
 	# 牌目标组合请求；选择材料后目标仍由同一武将牌交互，并满足两个维度后才允许确认。
@@ -88,7 +92,7 @@ func _run() -> void:
 	}
 	main_instance.call("_on_card_choice_requested", combined_request)
 	main_instance.call("_on_card_pressed", 801)
-	if not confirm_button.disabled or not target_view.is_legal_target:
+	if not confirm_button.disabled or not target_view.is_legal_target or animation_layer._line_presentations.has(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY):
 		_fail("combined_card_only")
 		return
 	main_instance.call("_on_target_pressed", 1)

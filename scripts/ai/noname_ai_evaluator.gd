@@ -33,6 +33,15 @@ const BAGUA_DAMAGE_MULTIPLIER: float = 0.65
 ## 1点体力目标拥有已知救命牌时的预期击杀倍率；仍保留压低救援资源的收益。
 const SURVIVAL_CARD_DAMAGE_MULTIPLIER: float = 0.7
 
+## 横置角色受到传导伤害时的自身风险倍率；默认1.5使行动者已横置时主动使用属性伤害明显降权但不一概禁止技能联动。
+const CHAINED_SELF_DAMAGE_RISK_MULTIPLIER: float = 1.5
+
+## 横置角色仅剩1点体力时的传导伤害倍率；固定2.5与直接伤害的濒危权重一致，优先避免误杀队友或自己。
+const CHAINED_CRITICAL_HP_MULTIPLIER: float = 2.5
+
+## 行动者被横置传导伤害且仅剩1点体力时的额外生存惩罚；防止技能微小收益掩盖自身立即濒死风险。
+const CHAINED_SELF_LETHAL_PENALTY: float = 12.0
+
 ## 当前评估器使用的身份关系模型；由协调器共享，保证所有 AI 观察到一致的身份暴露度。
 var identity_model: IdentityAIModel
 
@@ -154,6 +163,9 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
 	# 身份局战略附加分；领袖保护、反贼集火和内奸控场不改变实际牌效数值。
 	result += identity_strategy.score_target_strategy(authoritative_snapshot, actor_id, target_id, ai_profile)
+	if bool(ai_profile.get("damage", false)) and int(target.get("hp", 0)) <= 1:
+		# 预计1点伤害即可击杀时纳入身份死亡奖惩；群体牌逐目标调用本方法，因此天然覆盖全部可能受害队友。
+		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, target_id)
 	# 属性伤害连环传播；目标已横置时把同值伤害继续计入其他横置角色。
 	if bool(ai_profile.get("nature_damage", false)) and bool(target.get("chained", false)):
 		for chained_variant: Variant in authoritative_snapshot.get("players", []) as Array:
@@ -163,7 +175,33 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			var chained_id: int = int(chained_player.get("player_id", -1))
 			if chained_id == target_id or not bool(chained_player.get("alive", false)) or not bool(chained_player.get("chained", false)):
 				continue
-			result += target_result * get_attitude(authoritative_snapshot, actor_id, chained_id) / ATTITUDE_SCALE
+			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, ai_profile, target_result)
+	return result
+
+
+## 评估属性伤害经铁索传导到另一名横置角色的收益；统一纳入自身风险、濒危队友与预计击杀的身份奖惩。
+func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, ai_profile: Dictionary, target_result: float) -> float:
+	# 传导受击者快照；不存在或已离场的玩家不会参与当前属性伤害结算。
+	var chained_player: Dictionary = get_player(authoritative_snapshot, chained_id)
+	if chained_player.is_empty() or not bool(chained_player.get("alive", false)):
+		return 0.0
+	# 行动者对传导受击者的态度；友方受伤为负收益，敌方受伤为正收益。
+	var attitude: float = get_attitude(authoritative_snapshot, actor_id, chained_id)
+	# 传导伤害状态倍率；低体力目标更接近死亡，必须放大其对友军风险和敌军收益的影响。
+	var status_multiplier: float = 1.0
+	if int(chained_player.get("hp", 0)) <= 1:
+		status_multiplier *= CHAINED_CRITICAL_HP_MULTIPLIER
+	# 行动者自身被传导时额外放大损失，确保“自己横置”会显著降低向横置目标施放属性伤害的评分。
+	if chained_id == actor_id:
+		status_multiplier *= CHAINED_SELF_DAMAGE_RISK_MULTIPLIER
+	# 当前传导伤害基础收益；仍沿用卡牌或技能声明的 target_result，避免为属性伤害另建硬编码评分表。
+	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
+	# 传导到濒危角色时的身份死亡后果；可同时处理友军误杀、击杀反贼摸牌与主公误杀忠臣的资源惩罚。
+	if int(chained_player.get("hp", 0)) <= 1:
+		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, chained_id)
+		if chained_id == actor_id:
+			# 自己横置且1血会在传导后立即濒死；死亡奖惩接口刻意跳过自身，因此在此补充纯生存风险。
+			result -= CHAINED_SELF_LETHAL_PENALTY
 	return result
 
 

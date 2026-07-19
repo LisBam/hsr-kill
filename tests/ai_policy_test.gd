@@ -45,6 +45,8 @@ func _ready() -> void:
 		return
 	if not _test_renwang_shield_black_slash():
 		return
+	if not _test_chained_damage_team_risk():
+		return
 	if not _test_fire_attack_failed_target_memory():
 		return
 	if not _test_wuxie_decision():
@@ -468,6 +470,61 @@ func _test_renwang_shield_black_slash() -> bool:
 	var fire_score_without_tengjia: float = fire_evaluator.score_action(no_armor_snapshot, fire_slash_action, 0)
 	if fire_score_with_tengjia <= fire_score_without_tengjia:
 		return _fail("tengjia_fire_value with=%.2f without=%.2f" % [fire_score_with_tengjia, fire_score_without_tengjia])
+	return true
+
+
+## 验证属性伤害会计入自身与友方横置传导风险，群体牌会避开1血队友，并按身份局死亡奖惩估值。
+func _test_chained_damage_team_risk() -> bool:
+	# 全身份公开快照；领袖0攻击横置反贼1，忠臣2用于验证友军连环与群体伤害风险。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 反贼成为火【杀】直接目标；横置后会把属性伤害传导给全部其他横置角色。
+	(snapshot.get("players", []) as Array)[1]["chained"] = true
+	# 火【杀】动作；使用真实属性伤害卡牌定义，避免测试人为构造未声明nature_damage的配置。
+	var fire_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha_fire", "target_ids":[1], "payload":{}}
+	# 独立评估器；本测试不复用前序身份观察，确保分差只来自快照横置状态。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 行动者未横置时的属性伤害收益；作为连环自伤风险的对照值。
+	var score_without_self_chain: float = evaluator.score_action(snapshot, fire_slash_action, 0)
+	# 行动者横置后同样会承受传导伤害，主动攻击横置敌人的收益必须降低。
+	(snapshot.get("players", []) as Array)[0]["chained"] = true
+	var score_with_self_chain: float = evaluator.score_action(snapshot, fire_slash_action, 0)
+	if score_with_self_chain >= score_without_self_chain:
+		return _fail("chained_self_damage_risk plain=%.2f chained=%.2f" % [score_without_self_chain, score_with_self_chain])
+	# 忠臣横置且体力安全时的分数；先取消行动者横置，隔离同阵营濒危角色的传导风险。
+	(snapshot.get("players", []) as Array)[0]["chained"] = false
+	(snapshot.get("players", []) as Array)[2]["chained"] = true
+	(snapshot.get("players", []) as Array)[2]["hp"] = 4
+	var score_with_safe_chained_ally: float = evaluator.score_action(snapshot, fire_slash_action, 0)
+	# 忠臣降至1血后，火【杀】会传导并可能误杀队友，收益必须明显降低。
+	(snapshot.get("players", []) as Array)[2]["hp"] = 1
+	var score_with_critical_chained_ally: float = evaluator.score_action(snapshot, fire_slash_action, 0)
+	if score_with_critical_chained_ally >= score_with_safe_chained_ally:
+		return _fail("chained_ally_critical_risk safe=%.2f critical=%.2f" % [score_with_safe_chained_ally, score_with_critical_chained_ally])
+	# 群体伤害动作；【南蛮入侵】会直接命中所有其他存活角色，必须也把1血忠臣的误杀风险纳入总分。
+	var nanman_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":901, "card_definition_id":"nanman", "target_ids":[], "payload":{}}
+	# 忠臣安全体力时的群体牌分数；移除横置只验证群体牌自身的友军濒危逻辑。
+	(snapshot.get("players", []) as Array)[2]["chained"] = false
+	(snapshot.get("players", []) as Array)[2]["hp"] = 4
+	var aoe_score_with_safe_ally: float = evaluator.score_action(snapshot, nanman_action, 0)
+	# 忠臣1血时的群体牌分数；预计击杀的主公误杀后果应令分数下降。
+	(snapshot.get("players", []) as Array)[2]["hp"] = 1
+	var aoe_score_with_critical_ally: float = evaluator.score_action(snapshot, nanman_action, 0)
+	if aoe_score_with_critical_ally >= aoe_score_with_safe_ally:
+		return _fail("aoe_ally_critical_risk safe=%.2f critical=%.2f" % [aoe_score_with_safe_ally, aoe_score_with_critical_ally])
+	# 主公误杀忠臣后果；4张手牌和1件装备会全部弃置，结果应包含固定阵营惩罚与5项资源惩罚。
+	(snapshot.get("players", []) as Array)[0]["hand_count"] = 4
+	(snapshot.get("players", []) as Array)[0]["equipment"] = {"weapon":_card(902, "qinggang", 0)}
+	var leader_kill_loyalist_score: float = evaluator.identity_strategy.score_lethal_damage_consequence(snapshot, 0, 2)
+	var expected_leader_kill_loyalist_score: float = -IdentityStrategyEvaluator.ALLY_LETHAL_DAMAGE_PENALTY - IdentityStrategyEvaluator.LEADER_KILL_LOYALIST_BASE_PENALTY - 5.0 * IdentityStrategyEvaluator.LEADER_KILL_LOYALIST_RESOURCE_PENALTY
+	if not is_equal_approx(leader_kill_loyalist_score, expected_leader_kill_loyalist_score):
+		return _fail("leader_kill_loyalist_penalty actual=%.2f expected=%.2f" % [leader_kill_loyalist_score, expected_leader_kill_loyalist_score])
+	# 第二名公开反贼；用于验证反贼击杀反贼时仍会计算规则规定的摸三张牌收益。
+	var rebel_ally: Dictionary = {"player_id":3, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":1, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"march7th"}
+	(snapshot.get("players", []) as Array).append(rebel_ally)
+	var rebel_kill_rebel_score: float = evaluator.identity_strategy.score_lethal_damage_consequence(snapshot, 1, 3)
+	var expected_rebel_kill_rebel_score: float = IdentityStrategyEvaluator.REBEL_DEFEAT_DRAW_REWARD - IdentityStrategyEvaluator.ALLY_LETHAL_DAMAGE_PENALTY
+	if not is_equal_approx(rebel_kill_rebel_score, expected_rebel_kill_rebel_score):
+		return _fail("rebel_kill_rebel_reward actual=%.2f expected=%.2f" % [rebel_kill_rebel_score, expected_rebel_kill_rebel_score])
 	return true
 
 

@@ -39,6 +39,18 @@ const REBEL_LOYALIST_DANGER_PENALTY: float = 1.5
 ## 内奸压制优势方或扶助弱势方的固定收益；用于形成稳定控场倾向。
 const RENEGADE_BALANCE_BONUS: float = 3.0
 
+## 击杀已确认同阵营角色的基础惩罚；固定8分代表失去一名可协作角色的长期风险，不含任何规则死亡奖惩。
+const ALLY_LETHAL_DAMAGE_PENALTY: float = 8.0
+
+## 击杀反贼后摸三张牌的收益；规则奖励固定为3张牌，按统一每张牌1分直接换算。
+const REBEL_DEFEAT_DRAW_REWARD: float = 3.0
+
+## 主公击杀忠臣时的固定战略惩罚；除弃置资源外还计入阵营减员和身份局局势恶化。
+const LEADER_KILL_LOYALIST_BASE_PENALTY: float = 12.0
+
+## 主公误杀忠臣时每张手牌或每件装备的额外惩罚；对应规则要求主公弃置全部手牌和装备。
+const LEADER_KILL_LOYALIST_RESOURCE_PENALTY: float = 2.0
+
 ## 内奸帮助优势方或攻击弱势方的固定惩罚；避免局势过早一边倒。
 const RENEGADE_WRONG_CAMP_PENALTY: float = 2.0
 
@@ -191,6 +203,64 @@ func score_target_strategy(authoritative_snapshot: Dictionary, actor_id: int, ta
 		elif actor_identity == "renegade":
 			score += _score_renegade_positive_effect(target_identity, situation, leader_danger)
 	return score
+
+
+## 评估一次预计会击杀目标的身份局后果；只读取公开或已推断身份，供伤害牌、群体牌和连环传导共用。
+func score_lethal_damage_consequence(authoritative_snapshot: Dictionary, actor_id: int, target_id: int) -> float:
+	# 自身不可能通过常规目标选择成为自己的死亡奖励来源；连环自伤由效用层单独计算生存风险。
+	if actor_id == target_id:
+		return 0.0
+	# 行动者快照；不存在的来源不能可靠承接死亡奖惩。
+	var actor: Dictionary = identity_model.get_player(authoritative_snapshot, actor_id)
+	# 受击者快照；离场角色不会再次承受伤害或触发死亡奖励。
+	var target: Dictionary = identity_model.get_player(authoritative_snapshot, target_id)
+	if actor.is_empty() or target.is_empty() or not bool(target.get("alive", false)):
+		return 0.0
+	# 行动者真实身份；AI 始终知道自身阵营，因此可据此评估主公专属误杀代价。
+	var actor_identity: String = str(actor.get("identity", ""))
+	# 受击者感知身份；未公开身份不能用真实身份推断死亡奖惩，避免 AI 窥视隐藏信息。
+	var target_identity: String = identity_model.get_perceived_identity(authoritative_snapshot, target_id)
+	# 累积死亡后果；正数为可预期的规则收益，负数为己方阵营或资源损失。
+	var score: float = 0.0
+	if target_identity == "rebel":
+		# 身份局规则：击杀反贼的角色摸三张牌，即使行动者同为反贼也必须纳入收益估值。
+		score += REBEL_DEFEAT_DRAW_REWARD
+	if _is_confirmed_ally(actor_identity, target_identity):
+		# 已确认同阵营角色死亡会削弱后续协作；反贼误杀反贼可由上述摸三牌奖励部分抵消。
+		score -= ALLY_LETHAL_DAMAGE_PENALTY
+	if actor_identity == "leader" and target_identity == "loyalist":
+		# 主公手牌数量；快照公开计数与自身完整手牌一致，确保惩罚随当前可弃资源增长。
+		var hand_count: int = maxi(int(actor.get("hand_count", 0)), 0)
+		# 主公装备数量；只统计非空固定槽位，避免空字典被误算为会弃置的装备。
+		var equipment_count: int = _get_equipment_count(actor)
+		# 全部可弃资源数量；每项都将在误杀忠臣后离开主公。
+		var discarded_resource_count: int = hand_count + equipment_count
+		# 主公误杀忠臣除固定阵营损失外，还按实际会弃置的全部手牌与装备追加高额惩罚。
+		score -= LEADER_KILL_LOYALIST_BASE_PENALTY + float(discarded_resource_count) * LEADER_KILL_LOYALIST_RESOURCE_PENALTY
+	return score
+
+
+## 判断两个已确认身份是否属于同一阵营；主公与忠臣共享阵营，反贼只与反贼共享阵营，内奸不视为彼此队友。
+func _is_confirmed_ally(actor_identity: String, target_identity: String) -> bool:
+	if actor_identity in ["leader", "loyalist"]:
+		return target_identity in ["leader", "loyalist"]
+	if actor_identity == "rebel":
+		return target_identity == "rebel"
+	return false
+
+
+## 统计玩家当前实际装备件数；装备快照的固定槽位为空字典时不计入主公误杀忠臣后的弃置代价。
+func _get_equipment_count(player: Dictionary) -> int:
+	# 玩家装备槽位快照；缺失时按空字典处理，保证测试裁剪快照也能安全使用。
+	var equipment: Dictionary = player.get("equipment", {}) as Dictionary
+	# 已装备件数；遍历固定槽位值而非字典长度，避免空槽占位字典被误计入。
+	var equipment_count: int = 0
+	for equipment_variant: Variant in equipment.values():
+		# 当前槽位装备；非空字典才代表一件会被规则弃置的装备。
+		var equipment_card: Dictionary = equipment_variant as Dictionary
+		if not equipment_card.is_empty():
+			equipment_count += 1
+	return equipment_count
 
 
 ## 评估濒死救援选择；身份目标、领袖存亡、内奸残局和自身资源共同参与。

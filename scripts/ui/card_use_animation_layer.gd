@@ -51,6 +51,9 @@ extends Control
 ## 每秒包含的毫秒数；用于计算卡牌从开始飞行到规则响应完成之间已经经过的真实时间。
 const MILLISECONDS_PER_SECOND: float = 1000.0
 
+## 技能选择预览使用的固定指示线键；负数不会与从1开始递增的正式出牌表现序号冲突。
+const TARGET_PREVIEW_PRESENTATION_KEY: int = -1
+
 ## 当前正在执行顺序淡出的正式卡牌节点；可能来自手牌，也可能是不可见牌的完整正式视图。
 var _animated_card: CardView
 
@@ -122,6 +125,29 @@ var _seen_presentation_ids: Dictionary = {}
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
 	z_index = presentation_z_index
+
+
+## 显示技能选目标期间的即时目标指示线；复用正式出牌的绘制数据结构，不创建第二套线条样式或动画节点。
+func set_target_preview_indicator(start_position: Vector2, target_positions: Array[Vector2]) -> void:
+	if target_positions.is_empty():
+		clear_target_preview_indicator()
+		return
+	# 预览目标坐标副本；调用者的临时选择数组后续变化不能改写本次绘制数据。
+	var preview_target_positions: Array[Vector2] = target_positions.duplicate()
+	_line_presentations[TARGET_PREVIEW_PRESENTATION_KEY] = {
+		"start_position":start_position,
+		"target_positions":preview_target_positions,
+		"alpha":1.0,
+		"progress":1.0,
+	}
+	queue_redraw()
+
+
+## 清除技能选目标预览线；正式卡牌使用表现仍保留各自递增序号和生命周期。
+func clear_target_preview_indicator() -> void:
+	if not _line_presentations.erase(TARGET_PREVIEW_PRESENTATION_KEY):
+		return
+	queue_redraw()
 
 
 ## 登记一次牌面表现并原子取得弃牌动画所有权；返回false表示相同表现或实体使用已经处理，调用方不得再次创建节点。
