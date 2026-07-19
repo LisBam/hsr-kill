@@ -432,8 +432,12 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 永屹持有者状态；1点护盾正好满足支付额外出牌阶段费用。
 	var gepard: PlayerState = _controller.state.get_player(0)
 	gepard.shield = 1
-	# 可用于额外出牌阶段的实体【杀】；没有可用牌时永屹按规则不应创建确认请求。
+	# 可用于额外出牌阶段的实体【杀】；本段验证有牌时的阶段恢复，空手牌仍会创建确认请求并在后续独立断言。
 	_add_hand_card(0, "sha", "spade", 7)
+	# 永屹第二段的固定摸牌来源；避免空牌堆提前结束对局而掩盖额外出牌阶段的恢复结果。
+	_add_draw_pile_card("shan", "heart", 9)
+	# 确认前手牌数；确认后应因第二段固定摸1张牌而增加1。
+	var hand_count_before_yongyi_draw: int = gepard.hand.size()
 	# 永屹运行时技能；安装真实弃牌阶段Begin订阅，确保确认响应经过统一恢复入口。
 	var yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
 	# 弃牌阶段生命周期；永屹应在Begin创建确认选择并暂停当前弃牌阶段。
@@ -446,8 +450,8 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 阶段转换等待；额外出牌阶段不经过摸牌阶段，因此短暂等待后应稳定进入新的出牌请求。
 	await get_tree().create_timer(0.10, false).timeout
 	# 永屹结果与额外出牌阶段；护盾已支付、额外阶段回到结束阶段标记存在，且已打开新的正式出牌请求。
-	if gepard.shield != 0 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
-		return _fail("yongyi_resume shield=%d return_finish=%s phase=%s play_choice=%s" % [gepard.shield, _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
+	if gepard.shield != 0 or gepard.hand.size() != hand_count_before_yongyi_draw + 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
+		return _fail("yongyi_resume shield=%d hand=%d return_finish=%s phase=%s play_choice=%s" % [gepard.shield, gepard.hand.size(), _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
 	return true
 
 
@@ -529,13 +533,39 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	if not _controller.request_extra_discard_phase(0, 1, "yongyi", completion_context) or gepard.shield != 1 or not _controller._active_extra_discard_phase.is_empty():
 		return _fail("yongyi_extra_discard shield=%d active=%s" % [gepard.shield, _controller._active_extra_discard_phase])
 	_controller.state.current_phase = "discard"
-	# 额外出牌阶段可用实体牌；确认恢复会在扣除护盾前重新估算，避免无牌时白白支付。
+	# 额外出牌阶段可用实体牌；用于验证固定摸牌后仍会正常登记额外出牌阶段。
 	_add_hand_card(0, "sha", "club", 6)
+	# 永屹固定摸牌来源；数组末尾为牌堆顶，确认后应移入杰帕德手牌。
+	var extra_play_draw_card: CardInstance = _add_draw_pile_card("shan", "diamond", 8)
+	# 确认前手牌数；用于断言第二段准确摸取1张牌。
+	var hand_count_before_extra_play_draw: int = gepard.hand.size()
 	# 永屹弃牌阶段确认响应；支付1点护盾后应排队1个额外出牌阶段并标记其结束后直接进入结束阶段。
 	var extra_play_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
 	yongyi.continue_selection({"kind":"yongyi_play_phase_confirm"}, extra_play_response)
-	if gepard.shield != 0 or int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or (_controller._extra_play_phase_return_points.get(0, []) as Array) != ["finish"]:
-		return _fail("yongyi_extra_play shield=%d count=%d return_finish=%s" % [gepard.shield, int(_controller._extra_play_phase_counts.get(0, 0)), _controller._extra_play_phase_returns_to_finish])
+	if gepard.shield != 0 or gepard.hand.size() != hand_count_before_extra_play_draw + 1 or gepard.find_hand_card(extra_play_draw_card.uid) == null or int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or (_controller._extra_play_phase_return_points.get(0, []) as Array) != ["finish"]:
+		return _fail("yongyi_extra_play shield=%d hand=%d count=%d return_finish=%s" % [gepard.shield, gepard.hand.size(), int(_controller._extra_play_phase_counts.get(0, 0)), _controller._extra_play_phase_returns_to_finish])
+	# 无手牌场景；【永屹】的原始技能逻辑仍须向玩家提供支付护盾的确认窗口，只有AI评分会倾向取消。
+	_reset_state(2)
+	# 空手牌杰帕德；护盾与弃牌阶段条件都满足，但不额外加入可使用牌。
+	var empty_hand_gepard: PlayerState = _controller.state.get_player(0)
+	empty_hand_gepard.shield = 1
+	# 空手牌场景的固定摸牌来源；确认后必须由永屹将该实体移入手牌。
+	var empty_hand_draw_card: CardInstance = _add_draw_pile_card("tao", "heart", 5)
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "discard"
+	_controller.state.phase_index = 4
+	# 真实运行时永屹技能；订阅弃牌阶段时机并生成标准确认请求。
+	var empty_hand_yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
+	# 空手牌弃牌阶段生命周期；原文条件满足时仍要暂停并等待玩家确认。
+	var empty_hand_discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
+	if empty_hand_yongyi == null or not empty_hand_discard_started or not _controller.has_pending_card_choice():
+		return _fail("yongyi_empty_hand_choice skill=%s started=%s pending=%s" % [empty_hand_yongyi, empty_hand_discard_started, _controller.has_pending_card_choice()])
+	# 玩家明确确认；无可用牌不应阻止原技能失去护盾、摸1张牌并排队额外出牌阶段。
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 空手牌额外出牌阶段可能同步完成并消耗队列计数；护盾支付、摸到指定实体与返回结束阶段标记共同证明确认按原规则成功登记。
+	if empty_hand_gepard.shield != 0 or empty_hand_gepard.hand.size() != 1 or empty_hand_gepard.find_hand_card(empty_hand_draw_card.uid) == null or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
+		return _fail("yongyi_empty_hand_confirm shield=%d hand=%d return_finish=%s" % [empty_hand_gepard.shield, empty_hand_gepard.hand.size(), _controller._extra_play_phase_returns_to_finish])
 	return true
 
 
@@ -587,6 +617,10 @@ func _test_new_skill_ai_rules() -> bool:
 	var confirm_action: Dictionary = {"payload":{"confirmed":true}}
 	if yongyi.score_ai_choice(snapshot, play_request, confirm_action, evaluator) <= 0.0:
 		return _fail("yongyi_ai_extra_play")
+	# 永屹固定摸牌收益不足以覆盖1点护盾；AI 应保持取消，但该评分不影响玩家确认后实际摸1张牌。
+	var draw_only_play_request: Dictionary = {"context":{"kind":"yongyi_play_phase_confirm", "usable_card_count":0, "enemy_slash_available":false}}
+	if yongyi.score_ai_choice(snapshot, draw_only_play_request, confirm_action, evaluator) >= 0.0:
+		return _fail("yongyi_ai_draw_only")
 	return true
 
 
