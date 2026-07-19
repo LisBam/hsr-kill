@@ -351,7 +351,7 @@ func _run() -> void:
 		_fail("local_player_information_shown_too_early:%s" % information_box.get_hover_title_text())
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(GameDatabase.get_skill("trailblaze_sample").get("description", ""))) or not local_player_card.scale.is_equal_approx(Vector2.ONE):
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "杰帕德" or not information_box.get_hover_description_text().contains(str(GameDatabase.get_skill("yongyi").get("description", ""))) or not local_player_card.scale.is_equal_approx(Vector2.ONE):
 		_fail("local_player_information:%s/%s" % [information_box.get_hover_description_text(), local_player_card.scale])
 		return
 	local_player_card.call("_on_input_mouse_exited")
@@ -404,14 +404,14 @@ func _run() -> void:
 	var hover_name_shade: TextureRect = current_operator_view.get_node("HoverNameShade") as TextureRect
 	current_operator_view.call("_on_input_mouse_entered")
 	# 当前悬停武将定义；用于逐项验证武将名、势力、性别、体力上限和全部技能均来自静态内容数据。
-	var hovered_character_definition: Dictionary = GameDatabase.get_character("trailblazer")
+	var hovered_character_definition: Dictionary = GameDatabase.get_character("gepard")
 	# 当前悬停武将首个技能定义；测试武将只有一个技能，可同时验证技能名与完整描述。
 	var hovered_character_skill: Dictionary = GameDatabase.get_skill(str((hovered_character_definition.get("skills", []) as Array)[0]))
 	if hover_name_shade.visible or not (current_operator_view.get_node("InputArea") as Control).tooltip_text.is_empty() or information_box.is_hover_information_visible():
 		_fail("player_hover_shown_too_early:%s" % hover_name_shade.visible)
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "杰帕德" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
 		_fail("player_hover_information:%s" % information_box.get_hover_description_text())
 		return
 	# 武将悬停标题标签；武将名必须使用与右键详情技能名一致的主题金色，而普通卡牌标题仍可保持主文字色。
@@ -451,7 +451,7 @@ func _run() -> void:
 		_fail("player_information_restore_shown_too_early:%s" % information_box.get_hover_title_text())
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "杰帕德" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
 		_fail("player_information_restore:%s" % information_box.get_hover_description_text())
 		return
 	current_operator_view.call("_on_input_mouse_exited")
@@ -629,7 +629,7 @@ func _run() -> void:
 	var selection_snapshot_without_leader: Dictionary = {
 		"phase":CharacterSelectionService.PHASE_OTHERS,
 		"can_select":true,
-		"local_candidates":["trailblazer", "march_7th"],
+		"local_candidates":["gepard", "march_7th"],
 		"leader_character_id":"",
 		"leader_player_id":0,
 	}
@@ -647,7 +647,7 @@ func _run() -> void:
 	# 当前候选视图；第一张用于悬停缩放，第二张用于确认未选牌不会获得合法目标发光。
 	var candidate_views: Dictionary = character_selection_panel.get("_candidate_views") as Dictionary
 	# 第一张候选武将牌；承担悬停缩放与点击选中断言。
-	var first_candidate: PlayerTargetView = candidate_views.get("trailblazer") as PlayerTargetView
+	var first_candidate: PlayerTargetView = candidate_views.get("gepard") as PlayerTargetView
 	# 第二张候选武将牌；承担未选状态不发光断言。
 	var second_candidate: PlayerTargetView = candidate_views.get("march_7th") as PlayerTargetView
 	first_candidate.call("_on_input_mouse_entered")
@@ -656,7 +656,7 @@ func _run() -> void:
 		_fail("selection_hover_scale:%s" % first_candidate.scale)
 		return
 	await _wait_for_hover_information_delay()
-	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "开拓者" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
+	if not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "杰帕德" or not information_box.get_hover_description_text().contains(str(hovered_character_skill.get("description", ""))):
 		_fail("selection_hover_information:%s" % information_box.get_hover_title_text())
 		return
 	first_candidate.call("_on_input_mouse_exited")
@@ -668,7 +668,7 @@ func _run() -> void:
 	var first_candidate_position_before_selection: Vector2 = first_candidate.position
 	# 第二张候选的布局位置；用于防止其他候选在点击首张后被意外移动到原点。
 	var second_candidate_position_before_selection: Vector2 = second_candidate.position
-	character_selection_panel.call("_select_candidate", "trailblazer")
+	character_selection_panel.call("_select_candidate", "gepard")
 	if not first_candidate.is_target_selected or first_candidate.is_legal_target or second_candidate.is_target_selected or second_candidate.is_legal_target or not first_candidate.position.is_equal_approx(first_candidate_position_before_selection) or not second_candidate.position.is_equal_approx(second_candidate_position_before_selection):
 		_fail("selection_click_glow_or_position_scope:%s/%s expected=%s/%s" % [first_candidate.position, second_candidate.position, first_candidate_position_before_selection, second_candidate_position_before_selection])
 		return
@@ -1188,7 +1188,7 @@ func _make_ten_player_snapshot() -> Dictionary:
 		var player_snapshot: Dictionary = {
 			"player_id":player_index,
 			"display_name":"玩家%d" % (player_index + 1),
-			"character_id":"trailblazer",
+			"character_id":"gepard",
 			"identity":"leader" if player_index == 0 else "hidden",
 			"hp":4,
 			"max_hp":4,
@@ -1236,7 +1236,7 @@ func _make_single_target_state() -> GameState:
 		# 当前测试玩家；全部存活且使用连续稳定 ID，目标规则只排除使用者本人。
 		var player: PlayerState = PlayerState.new(player_id, "玩家%d" % (player_id + 1))
 		player.identity = "leader" if player_id == 0 else "rebel"
-		player.character_id = "trailblazer"
+		player.character_id = "gepard"
 		player.character_revealed = true
 		game_state.players.append(player)
 	# 单目标测试牌；【决斗】无距离限制且最多选择1名其他角色。

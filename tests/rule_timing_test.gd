@@ -71,7 +71,7 @@ func _install_state() -> void:
 		# 当前测试玩家；基础体力固定4，所有角色保持正面、存活和已亮将状态。
 		var player: PlayerState = PlayerState.new(player_id, "时机测试玩家%d" % (player_id + 1))
 		player.identity = identities[player_id]
-		player.character_id = "trailblazer"
+		player.character_id = "gepard"
 		player.character_revealed = true
 		player.max_hp = 4
 		player.hp = 4

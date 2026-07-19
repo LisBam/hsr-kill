@@ -169,14 +169,14 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；当前十名正式武将共登记二十个独立技能源码定义，其中包含两项领袖技。
+	# 技能元数据数量；当前九名正式武将共登记十九个独立技能源码定义，其中包含两项领袖技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 20:
+	if skill_definition_count != 19:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
 	# 技能脚本数量；技能元数据与可创建的独立运行时代码必须一一对应。
-	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("trailblaze_sample") == null:
+	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("yongyi") == null or not GameDatabase.get_skill("trailblaze_sample").is_empty():
 		printerr("SMOKE_FAIL skill_source_definitions")
 		get_tree().quit(1)
 		return
@@ -197,7 +197,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前十名武将共使用四个独立势力主题。
+	# 正式武将数量；删除占位开拓者后只保留九名可参与选将与对局的角色。
+	var character_definition_count: int = GameDatabase.characters.size()
+	if character_definition_count != 9:
+		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
+		get_tree().quit(1)
+		return
+	# 势力展示元数据数量；当前九名武将共使用四个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 4:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
@@ -208,10 +214,9 @@ func _run() -> void:
 		printerr("SMOKE_FAIL faction_colors=%s/%s" % [GameDatabase.get_faction("xingqionglieche"), GameDatabase.get_faction("beiluoboge")])
 		get_tree().quit(1)
 		return
-	# 已登记武将的中文显示名；界面显示不得退化为内部英文 ID。
-	var trailblazer_display_name: String = GameDatabase.resolve_character_name("trailblazer")
-	if trailblazer_display_name != "开拓者":
-		printerr("SMOKE_FAIL character_display_name=%s" % trailblazer_display_name)
+	# 已移除占位武将；目录扫描不得再登记旧稳定 ID，避免选将候选或存档回退到无规则角色。
+	if not GameDatabase.get_character("trailblazer").is_empty():
+		printerr("SMOKE_FAIL removed_trailblazer_still_registered")
 		get_tree().quit(1)
 		return
 	# 武将插画统一目录与格式优先级；资源制作约定必须稳定为同名 PNG 优先、同名 JPG 其次。
@@ -544,7 +549,7 @@ func _run() -> void:
 	var equipped_player_snapshot: Dictionary = {
 		"player_id":1,
 		"display_name":"测试玩家",
-		"character_id":"trailblazer",
+		"character_id":"gepard",
 		"identity":"rebel",
 		"hp":3,
 		"max_hp":4,
@@ -563,7 +568,7 @@ func _run() -> void:
 		"wooden_ox_storage_count":3,
 	}
 	# 测试武将定义；提供武将名和势力 ID，使统一牌面能够生成完整覆盖层。
-	var equipped_character_definition: Dictionary = GameDatabase.get_character("trailblazer")
+	var equipped_character_definition: Dictionary = GameDatabase.get_character("gepard")
 	# 测试势力定义；提供圆徽简称与主题颜色，验证数据驱动入口可正常传递。
 	var equipped_faction_definition: Dictionary = GameDatabase.get_faction(str(equipped_character_definition.get("faction", "")))
 	player_card_view.configure_snapshot(equipped_player_snapshot, equipped_character_definition, false, equipped_faction_definition)

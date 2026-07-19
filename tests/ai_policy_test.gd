@@ -604,7 +604,7 @@ func _build_snapshot(reveal_all: bool) -> Dictionary:
 		"match_id":"ai_policy_test",
 		"players":[
 			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":leader_hand.size(), "hand":leader_hand, "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
-			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":2, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"trailblazer"},
+			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":2, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
 			{"player_id":2, "identity":"loyalist", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(401, "shan", 2), _card(402, "sha", 2)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"himeko"},
 		],
 	}
@@ -616,7 +616,7 @@ func _build_strategy_snapshot(reveal_all: bool) -> Dictionary:
 		"match_id":"ai_identity_strategy_test",
 		"players":[
 			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(501, "sha", 0), _card(502, "tao", 0)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"xier"},
-			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":1, "hand":[_card(511, "sha", 1)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"trailblazer"},
+			{"player_id":1, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":1, "hand":[_card(511, "sha", 1)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
 			{"player_id":2, "identity":"loyalist", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":4, "max_hp":4, "hand_count":2, "hand":[_card(521, "shan", 2), _card(522, "tao", 2)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"himeko"},
 			{"player_id":3, "identity":"renegade", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":2, "hand":[_card(531, "sha", 3), _card(532, "tao", 3)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"bronya"},
 			{"player_id":4, "identity":"rebel", "identity_revealed":reveal_all, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":1, "hand":[_card(541, "sha", 4)], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"danheng"},

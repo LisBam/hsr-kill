@@ -260,7 +260,7 @@ func _run() -> void:
 		return
 	# 公共展示牌请求；候选不属于本人手牌，必须继续使用独立 CardSelectionPanel。
 	var harvest_card_data: Dictionary = {"uid":7003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"processing", "owner_id":-1}
-	# 已被本地武将领取的原展示牌；公共窗口必须把该牌保留为虚影并在底部显示“开拓者”。
+	# 已被本地武将领取的原展示牌；公共窗口必须把该牌保留为虚影并在底部显示“杰帕德”。
 	var taken_harvest_card_data: Dictionary = {"uid":7010, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"processing", "owner_id":-1}
 	# 五谷公共展示；在具体选择请求到达前就应让所有观察者看到固定牌位。
 	var harvest_public_display: Dictionary = {
@@ -293,7 +293,7 @@ func _run() -> void:
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
 	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "开拓者" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
 	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。
@@ -442,7 +442,7 @@ func _run() -> void:
 		"leader_player_id":1,
 		"leader_character_id":"bronya",
 		"local_player_id":0,
-		"local_candidates":["trailblazer", "dan_heng", "march_7th", "himeko", "natasha"],
+		"local_candidates":["gepard", "dan_heng", "march_7th", "himeko", "natasha"],
 		"can_select":true,
 		"readiness":[],
 	})
@@ -484,7 +484,7 @@ func _make_snapshot(hand_cards: Array, request_id: int, equipment: Dictionary = 
 		"player_id":0,
 		"seat_number":1,
 		"display_name":"本地玩家",
-		"character_id":"trailblazer",
+		"character_id":"gepard",
 		"identity":"leader",
 		"hp":4,
 		"max_hp":4,

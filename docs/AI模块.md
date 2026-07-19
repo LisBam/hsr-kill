@@ -10,7 +10,7 @@
 - `card/standard.js`、`card/extra.js`：卡牌 `ai.basic/order/result/tag/equipValue/expose` 数据和复杂卡牌判断。
 - 各武将包技能源码：技能定义内的 `ai.check/order/result/effect/threaten`，即技能效果与配套 AI 同文件维护。
 
-Godot 版本复刻上述分层思想，不执行 JavaScript，也不让 AI 直接调用规则效果。当前范围是标准身份局、项目已登记46种卡牌与19个已完成武将技能；【开拓】1个样例占位技能不参与 AI 结算。
+Godot 版本复刻上述分层思想，不执行 JavaScript，也不让 AI 直接调用规则效果。当前范围是标准身份局、项目已登记46种卡牌与19个正式武将技能。
 
 ## 二、运行架构
 
