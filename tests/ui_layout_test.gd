@@ -347,7 +347,7 @@ func _run() -> void:
 	# 本地武将牌横置覆盖层；横置框应向两侧越出牌面，而覆盖层中间宽度仍以原武将牌尺寸为基准。
 	var local_state_overlay: PlayerStateOverlay = local_player_card.get_node("StateOverlay") as PlayerStateOverlay
 	local_state_overlay.configure(true, true)
-	if local_state_overlay.position.x >= 0.0 or local_state_overlay.size.x <= local_player_card.card_size.x or not is_equal_approx(local_state_overlay.size.y, local_player_card.card_size.y):
+	if local_state_overlay.position.x >= 0.0 or local_state_overlay.size.x <= local_player_card.card_size.x or not is_equal_approx(local_state_overlay.size.y, local_player_card.card_size.y) or not is_equal_approx(local_state_overlay.chained_outer_extension, 6.0) or not is_equal_approx(local_state_overlay.chained_outer_frame_height, 8.0) or not is_equal_approx(local_state_overlay.chained_inner_frame_inset, 1.0) or not is_equal_approx(local_state_overlay.chained_outer_border_width, 1.0) or not is_equal_approx(local_state_overlay.chained_inner_border_width, 1.0):
 		_fail("chained_overlay_geometry:%s/%s/%s" % [local_state_overlay.position, local_state_overlay.size, local_player_card.card_size])
 		return
 	local_state_overlay.configure(true, false)

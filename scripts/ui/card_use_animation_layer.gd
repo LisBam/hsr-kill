@@ -150,6 +150,31 @@ func clear_target_preview_indicator() -> void:
 	queue_redraw()
 
 
+## 播放一次技能实际发动后的动态目标指示线；不依赖卡牌节点，仍复用正式出牌的延伸、渐隐与绘制参数。
+func play_skill_target_indicator(start_position: Vector2, target_positions: Array[Vector2]) -> void:
+	if target_positions.is_empty():
+		return
+	# 技能目标坐标副本；技能发动记录和桌面座位会在后续快照中变化，当前表现必须固定使用确认瞬间的位置。
+	var activation_target_positions: Array[Vector2] = target_positions.duplicate()
+	# 独立表现序号；与卡牌使用共用递增空间，确保并发技能与卡牌目标线不会覆盖彼此。
+	_presentation_sequence += 1
+	var sequence: int = _presentation_sequence
+	# 统一线条数据；初始仅显示来源点，补间会驱动 progress 从0延伸到全部已确认目标。
+	_line_presentations[sequence] = {
+		"start_position":start_position,
+		"target_positions":activation_target_positions,
+		"alpha":1.0,
+		"progress":0.0,
+	}
+	queue_redraw()
+	# 技能线生命周期；与正式出牌目标线使用同一缓动、延伸时间和淡出时间，结束后自动移除而不干预技能规则。
+	var activation_line_tween: Tween = create_tween()
+	activation_line_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	activation_line_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
+	activation_line_tween.tween_method(_set_line_alpha.bind(sequence), 1.0, 0.0, target_line_fade_duration)
+	activation_line_tween.tween_callback(_remove_line_presentation.bind(sequence))
+
+
 ## 登记一次牌面表现并原子取得弃牌动画所有权；返回false表示相同表现或实体使用已经处理，调用方不得再次创建节点。
 func claim_presentation(presentation_id: int, card_uid: int, owns_discard_transfer: bool) -> bool:
 	if presentation_id >= 0 and _seen_presentation_ids.has(presentation_id):
