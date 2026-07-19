@@ -87,6 +87,8 @@ func _layout_cards() -> void:
 	for card_index: int in range(cards.size()):
 		# 当前卡牌节点；Node2D 根只表达实体牌本身，透明输入组件跟随其整体移动。
 		var card: CardView = cards[card_index]
+		# 当前实体牌是否正由鼠标直接拖动；拖动期间保留原节点位置与最高层级，其他牌仍按常规顺序即时布局。
+		var hand_dragging: bool = card.is_hand_dragging()
 		# 当前卡牌是否处于选中状态；只影响位置和绘制层级，不代表规则合法。
 		var selected: bool = card.is_card_selected
 		# 当前卡牌是否悬停；悬停牌只补偿缩放后的宽高并提高层级，不移动任何其他手牌。
@@ -98,6 +100,7 @@ func _layout_cards() -> void:
 		# 当前期望纵坐标；悬停补偿由容器即时计算，选中抬升由 CardView 的0.025秒独立偏移动画负责。
 		var desired_card_y: float = base_y - hover_height_compensation
 		# 当前卡牌位置；布局位置叠加入场偏移和选中动画偏移，重排不会打断任一独立表现。
-		card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset + card.hand_selection_offset
-		card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
+		if not hand_dragging:
+			card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset + card.hand_selection_offset
+			card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
 		current_card_x += card_step

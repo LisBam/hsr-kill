@@ -45,6 +45,8 @@ func _ready() -> void:
 		return
 	if not _test_renwang_shield_black_slash():
 		return
+	if not _test_friendly_chain_damage_response():
+		return
 	if not _test_chained_damage_team_risk():
 		return
 	if not _test_fire_attack_failed_target_memory():
@@ -472,6 +474,37 @@ func _test_renwang_shield_black_slash() -> bool:
 	var fire_score_without_tengjia: float = fire_evaluator.score_action(no_armor_snapshot, fire_slash_action, 0)
 	if fire_score_with_tengjia <= fire_score_without_tengjia:
 		return _fail("tengjia_fire_value with=%.2f without=%.2f" % [fire_score_with_tengjia, fire_score_without_tengjia])
+	return true
+
+
+## 验证横置友方受到友方属性【杀】时，全部敌人同样横置会保留【闪】以让伤害传导；敌人未全横置则正常响应。
+func _test_friendly_chain_damage_response() -> bool:
+	# 公开三人快照；领袖0对忠臣2使用雷【杀】，反贼1是属性伤害的唯一其他可传导敌方。
+	var snapshot: Dictionary = _build_snapshot(true)
+	(snapshot.get("players", []) as Array)[1]["chained"] = true
+	(snapshot.get("players", []) as Array)[2]["chained"] = true
+	# 忠臣响应策略；独立身份模型避免前序测试的暴露历史影响本次友敌判断。
+	var loyalist_policy: BasicAIPolicy = BasicAIPolicy.new(2, IdentityAIModel.new())
+	# 可取消的【闪】响应请求；上下文保留实际伤害来源、属性、目标与伤害值，字段与【杀】响应流程一致。
+	var response_request: Dictionary = {
+		"allow_cancel":true,
+		"min_card_select":0,
+		"max_card_select":1,
+		"candidates":[_candidate(801, "shan", 2)],
+		"context":{"kind":"slash_response", "response_patterns":["shan"], "actor_id":0, "target_id":2, "nature":"thunder", "damage_amount":1, "slash_card_definition_id":"sha_thunder"},
+	}
+	# 两种标准选择动作；确认会消耗【闪】，取消会让友方雷伤命中并经连环传导。
+	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":801, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var dodge_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":801, "selected_card_uids":[801], "selected_target_ids":[], "confirmed":true}}
+	# 敌人全部横置；忠臣应放弃【闪】，让领袖的雷属性伤害同时传导至反贼。
+	var chained_enemy_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
+	if bool((chained_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("friendly_chain_damage_should_pass=%s" % chained_enemy_choice)
+	# 敌人解除横置后不再具备完整传导收益；忠臣应恢复普通生存逻辑并打出【闪】。
+	(snapshot.get("players", []) as Array)[1]["chained"] = false
+	var unchained_enemy_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
+	if not bool((unchained_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("friendly_chain_damage_should_dodge=%s" % unchained_enemy_choice)
 	return true
 
 

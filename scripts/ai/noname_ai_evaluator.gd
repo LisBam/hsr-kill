@@ -24,6 +24,9 @@ const RECAST_DRAW_VALUE: float = 4.5
 ## 必须响应伤害时的基础收益；确保【闪】、【杀】等防止常规1点伤害时通常值得打出。
 const RESPONSE_SURVIVAL_VALUE: float = 6.0
 
+## 友方属性伤害可传导至全部横置敌人时放弃【闪】的响应修正；固定8.0分，足以使AI保留响应牌并让连环伤害结算。
+const FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE: float = 8.0
+
 ## 目标已知拥有所需响应牌时的预期命中倍率；保留少量消耗响应资源的收益。
 const KNOWN_RESPONSE_DAMAGE_MULTIPLIER: float = 0.35
 
@@ -283,6 +286,9 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 			# 借刀持刀者同时考虑保住武器和【杀】命中受害者的阵营收益。
 			var victim_id: int = int(context.get("victim_id", -1))
 			return RESPONSE_SURVIVAL_VALUE - get_attitude(authoritative_snapshot, actor_id, victim_id) - selected_value * CARD_COST_WEIGHT
+		if _should_decline_response_for_friendly_chain_damage(authoritative_snapshot, actor_id, context, response_patterns):
+			# 友方属性伤害会经本人传导到全部横置敌人；此时使用【闪】会阻断更高总收益，故把确认响应压到取消动作以下。
+			return RESPONSE_SURVIVAL_VALUE - FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE - selected_value * CARD_COST_WEIGHT
 		return RESPONSE_SURVIVAL_VALUE - selected_value * CARD_COST_WEIGHT
 	# 普通选目标默认按友方收益排序；专属技能通常会覆盖该分数。
 	if not selected_target_ids.is_empty():
@@ -293,6 +299,46 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	if not selected_card_uids.is_empty() and bool(context.get("ai_prefer_select", false)):
 		return 1.0 - selected_value * CARD_COST_WEIGHT
 	return 0.1
+
+
+## 判断是否应让友方属性伤害命中自己以传导至全部横置敌人；只影响需要【闪】的可取消响应，不改变伤害或连环规则。
+func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary, response_patterns: Array) -> bool:
+	# 当前响应模式；只有【闪】能直接阻断即将命中的【杀】等伤害，其他响应不套用本策略。
+	if not response_patterns.has("shan"):
+		return false
+	# 当前响应者状态；必须自身横置且仍存活，才能成为属性连环的起点。
+	var responder: Dictionary = get_player(authoritative_snapshot, responder_id)
+	if responder.is_empty() or not bool(responder.get("alive", false)) or not bool(responder.get("chained", false)):
+		return false
+	# 伤害来源；【杀】使用actor_id，部分同类卡牌使用source_id，二者都不应由客户端猜测。
+	var source_id: int = int(context.get("actor_id", context.get("source_id", -1)))
+	if source_id < 0 or get_attitude(authoritative_snapshot, responder_id, source_id) <= 0.0:
+		return false
+	# 伤害属性；优先使用响应上下文保存的真实nature，缺失时才回退当前逻辑牌定义。
+	var nature: String = str(context.get("nature", ""))
+	if nature.is_empty():
+		var card_definition_id: String = str(context.get("slash_card_definition_id", context.get("card_definition_id", "")))
+		nature = str(GameDatabase.get_card(card_definition_id).get("nature", "normal"))
+	if nature == "normal" or nature.is_empty():
+		return false
+	# 本次预期伤害；自身会先受到这段伤害，濒死或必死时不能为了传导盲目放弃响应。
+	var expected_damage: int = maxi(int(context.get("damage_amount", context.get("amount", 1))), 1)
+	if int(responder.get("hp", 0)) <= expected_damage:
+		return false
+	# 敌方横置状态；至少有一名敌人，且所有仍在场敌人都横置时，属性伤害必定同时传导给整组敌人。
+	var has_enemy: bool = false
+	var all_enemies_chained: bool = true
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前场上角色；死亡、离场、响应者自身与友方来源均不属于本次“其他敌人”集合。
+		var player: Dictionary = player_variant as Dictionary
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id == responder_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)) or get_attitude(authoritative_snapshot, responder_id, player_id) >= 0.0:
+			continue
+		has_enemy = true
+		if not bool(player.get("chained", false)):
+			all_enemies_chained = false
+			break
+	return has_enemy and all_enemies_chained
 
 
 ## 判断当前无懈可击是否值得响应；按奇偶状态恢复或抵消对友方/敌方的牌效。

@@ -259,6 +259,9 @@ var _local_wooden_ox_display_order: Array[int] = []
 ## 当前本地手牌排序所属的对局 ID；切换对局时清空旧排序，避免不同实体 UID 的新局继承旧布局。
 var _hand_order_match_id: String = ""
 
+## 当前正在直接拖动的本地手牌实体 UID；默认-1表示没有原牌节点处于鼠标跟随状态。
+var _active_hand_drag_card_uid: int = -1
+
 ## 已收到转移信号、等待正式手牌节点进入当前快照的本地获得牌 UID 集合；键为实体 UID，值固定为 true。
 var _pending_local_hand_gain_uids: Dictionary = {}
 
@@ -1108,9 +1111,12 @@ func _get_local_skill_activation_context() -> Dictionary:
 func _is_inline_response_skill_available(skill_id: String) -> bool:
 	if _inline_card_choice.is_empty() or str(_inline_card_choice.get("choice_type", "")) != "respond":
 		return false
-	# 响应上下文；active_skill_ids由权威技能查询生成，客户端不能自行点亮未安装技能。
+	# 响应上下文；候选转化技能由服务端在本次响应请求中显式汇总，不能由客户端自行推断。
 	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
-	if not (context.get("active_skill_ids", []) as Array).has(skill_id):
+	# 当前请求声明的转化技能集合；兼容旧请求缺失该字段时继续读取通用主动技能列表。
+	var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", []) as Array
+	var active_skill_ids: Array = context.get("active_skill_ids", []) as Array
+	if not response_conversion_skill_ids.has(skill_id) and not active_skill_ids.has(skill_id):
 		return false
 	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
 		# 当前响应候选；至少一张材料要求该技能时按钮才承担筛选入口。
@@ -1125,6 +1131,7 @@ func _render_local_hand() -> void:
 	# 当前快照所属对局 ID；新对局必须放弃上一局仅在客户端保存的手牌排列。
 	var current_match_id: String = str(_snapshot.get("match_id", ""))
 	if current_match_id != _hand_order_match_id:
+		_cancel_active_hand_drag()
 		_hand_order_match_id = current_match_id
 		_local_hand_display_order.clear()
 		_local_wooden_ox_display_order.clear()
@@ -1219,6 +1226,9 @@ func _create_local_hand_card_view(card_uid: int) -> CardView:
 	card_view.visible = true
 	card_view.pressed.connect(_on_card_pressed.bind(card_uid))
 	card_view.hand_reorder_requested.connect(_on_hand_card_reorder_requested)
+	card_view.hand_drag_started.connect(_on_hand_drag_started)
+	card_view.hand_drag_moved.connect(_on_hand_drag_moved)
+	card_view.hand_drag_finished.connect(_on_hand_drag_finished)
 	card_view.information_requested.connect(_on_information_requested.bind(card_view))
 	card_view.information_dismissed.connect(_on_information_dismissed.bind(card_view))
 	hand_container.add_child(card_view)
@@ -1295,6 +1305,96 @@ func _on_hand_card_reorder_requested(source_card_uid: int, target_card_uid: int,
 	var insertion_index: int = target_index + (1 if insert_after_target else 0)
 	display_order.insert(insertion_index, source_card_uid)
 	_render_local_hand()
+
+
+## 开始直接拖动一张本地实体手牌；只允许当前快照仍存在且位于正式手牌分区的同一节点进入鼠标跟随状态。
+func _on_hand_drag_started(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	if _active_hand_drag_card_uid >= 0 or _get_local_hand_reorder_zone(source_card_uid).is_empty():
+		return
+	# 当前正式牌面节点；只有仍由手牌容器拥有的原始实体视图可以被直接拖动。
+	var source_view: CardView = _card_views.get(source_card_uid) as CardView
+	if source_view == null or not is_instance_valid(source_view) or source_view.get_parent() != hand_container:
+		return
+	_active_hand_drag_card_uid = source_card_uid
+	source_view.begin_hand_drag(pointer_global_position)
+
+
+## 更新正在直接拖动的原实体手牌位置；区域变化或视图失效时立即终止，防止旧输入继续移动新局节点。
+func _on_hand_drag_moved(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	if source_card_uid != _active_hand_drag_card_uid or _get_local_hand_reorder_zone(source_card_uid).is_empty():
+		_cancel_active_hand_drag()
+		return
+	# 当前直接拖动的正式牌面；坐标转换封装在CardView，桌面不向节点写入任何规则数据。
+	var source_view: CardView = _card_views.get(source_card_uid) as CardView
+	if source_view == null or not is_instance_valid(source_view) or source_view.get_parent() != hand_container:
+		_cancel_active_hand_drag()
+		return
+	source_view.move_hand_drag(pointer_global_position)
+
+
+## 结束实体手牌直接拖动；释放点命中同分区另一张牌时按其左右半区排序，否则恢复原有规范布局。
+func _on_hand_drag_finished(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	if source_card_uid != _active_hand_drag_card_uid:
+		return
+	# 拖动来源分区；木牛“粮”和普通手牌绝不允许互相成为落点。
+	var source_zone: String = _get_local_hand_reorder_zone(source_card_uid)
+	# 命中的目标实体 UID；在结束原节点跟随前查询，避免容器立即重排后丢失真实释放位置。
+	var target_card_uid: int = _find_hand_drag_target_at_position(source_card_uid, source_zone, pointer_global_position)
+	# 原实体牌面；必须先退出跟随状态，后续重排才会重新接管其位置和层级。
+	var source_view: CardView = _card_views.get(source_card_uid) as CardView
+	_active_hand_drag_card_uid = -1
+	if source_view != null and is_instance_valid(source_view):
+		source_view.end_hand_drag()
+	if target_card_uid < 0:
+		hand_container.layout_cards_now()
+		return
+	# 目标原牌面；左右半区以其全局矩形为基准，滚动手牌与画布缩放下仍保持正确语义。
+	var target_view: CardView = _card_views.get(target_card_uid) as CardView
+	if target_view == null or not is_instance_valid(target_view):
+		hand_container.layout_cards_now()
+		return
+	var insert_after_target: bool = pointer_global_position.x >= target_view.get_global_rect().get_center().x
+	_on_hand_card_reorder_requested(source_card_uid, target_card_uid, insert_after_target)
+
+
+## 在释放点寻找同分区的真实目标牌；重叠手牌优先选择当前最上层可见实体，保证结果与玩家看到的牌面一致。
+func _find_hand_drag_target_at_position(source_card_uid: int, source_zone: String, pointer_global_position: Vector2) -> int:
+	if source_zone.is_empty():
+		return -1
+	# 当前最佳目标UID；默认-1表示释放点没有落在任何同分区实体牌上。
+	var result: int = -1
+	# 当前最佳绘制层级；同层级时使用后加入的节点，符合重叠手牌的可见顺序。
+	var best_z_index: int = -2147483648
+	# 当前最佳同层级子节点索引；默认-1保证任意有效候选都可替换。
+	var best_child_index: int = -1
+	for card_uid_variant: Variant in _card_views.keys():
+		# 当前候选实体UID；来源自身被排除，避免拖动中的原牌遮住实际落点。
+		var candidate_card_uid: int = int(card_uid_variant)
+		if candidate_card_uid == source_card_uid or _get_local_hand_reorder_zone(candidate_card_uid) != source_zone:
+			continue
+		# 当前候选正式牌面；离开手牌容器或释放中的旧节点不能接收排序。
+		var candidate_view: CardView = _card_views.get(candidate_card_uid) as CardView
+		if candidate_view == null or not is_instance_valid(candidate_view) or candidate_view.get_parent() != hand_container or not candidate_view.get_global_rect().has_point(pointer_global_position):
+			continue
+		# 当前候选在手牌容器内的绘制顺序；同层级取后者以匹配后绘制的上层实体。
+		var candidate_child_index: int = candidate_view.get_index()
+		if candidate_view.z_index > best_z_index or (candidate_view.z_index == best_z_index and candidate_child_index > best_child_index):
+			result = candidate_card_uid
+			best_z_index = candidate_view.z_index
+			best_child_index = candidate_child_index
+	return result
+
+
+## 取消当前直接拖动并恢复原实体牌到手牌容器布局；换局、区域变化与过期输入都复用此安全收口。
+func _cancel_active_hand_drag() -> void:
+	if _active_hand_drag_card_uid < 0:
+		return
+	# 当前原实体牌面；若已释放或离开容器，只清理UID标记，绝不访问失效节点。
+	var source_view: CardView = _card_views.get(_active_hand_drag_card_uid) as CardView
+	_active_hand_drag_card_uid = -1
+	if source_view != null and is_instance_valid(source_view):
+		source_view.end_hand_drag()
+	hand_container.layout_cards_now()
 
 
 ## 返回左下装备区的固定槽位文本；其他玩家装备仍直接显示在其武将牌状态中。
@@ -2741,8 +2841,10 @@ func _refresh_selection_text() -> void:
 	use_button.text = "确定"
 	%CancelButton.disabled = false
 	if _selected_card_uid < 0:
-		selection_label.text = "未选择卡牌｜点击牌面选牌，拖动手牌可调整同分区顺序"
-		interaction_guide_label.text = "请选择要使用的牌"
+		# 未选牌时不显示废弃的通用文字框；手牌、目标高亮与确定按钮禁用状态已完整表达当前交互状态。
+		selection_label.text = ""
+		selection_label.visible = false
+		interaction_guide_label.text = ""
 		use_button.disabled = true
 		%CancelButton.visible = false
 		_refresh_component_states()

@@ -28,6 +28,8 @@ func _run() -> void:
 		return
 	if not _test_lushi_mingchen_deferred_settlement():
 		return
+	if not _test_mingchen_turn_window_and_lockout():
+		return
 	if not _test_mingchen_dying_peach_continuation():
 		return
 	if not _test_mingchen_last_hand_response_continuation():
@@ -180,7 +182,7 @@ func _test_expanded_character_metadata() -> bool:
 	var expected_descriptions: Dictionary = {
 		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
 		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
-		"mingchen":"锁定技，当你失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害。",
+		"mingchen":"锁定技，当你于回合内失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害，并令此技能失效直到回合结束。",
 		"lushi":"出牌阶段，你可弃置两张牌名字字数相同的牌，然后摸一张牌。",
 		"huanyang":"锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
 		"sefu":"锁定技，当你于回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
@@ -282,6 +284,41 @@ func _test_lushi_mingchen_deferred_settlement() -> bool:
 	return true
 
 
+## 验证冥谶只在持有者自己的回合内触发，选择其他角色后本回合失效，并会在回合结束后恢复触发资格。
+func _test_mingchen_turn_window_and_lockout() -> bool:
+	_reset_state(2)
+	# 冥谶持有者；通过真实失去普通手牌事件验证回合归属与临时失效，而非直接改写技能内部标记。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	var mingchen: SkillDefinition = _install_single_skill(0, "mingchen")
+	# 回合外最后手牌；当前行动者为另一名角色时不得建立冥谶目标选择。
+	_controller.state.current_player_id = 1
+	var out_of_turn_card: CardInstance = _add_hand_card(0, "shan", "spade", 2)
+	if mingchen == null or not _controller.discard_card_from_hand(0, out_of_turn_card.uid) or _controller.has_pending_card_choice():
+		return _fail("mingchen_out_of_turn_trigger skill=%s pending=%s" % [mingchen, _controller._pending_card_choice])
+	# 回到寒鸦自己的回合；失去最后手牌后必须创建强制目标选择。
+	_controller.state.current_player_id = 0
+	var in_turn_card: CardInstance = _add_hand_card(0, "tao", "heart", 3)
+	_add_draw_pile_card("wuzhong", "diamond", 12)
+	if not _controller.discard_card_from_hand(0, in_turn_card.uid) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
+		return _fail("mingchen_in_turn_trigger pending=%s" % [_controller._pending_card_choice])
+	# 选择其他角色；该角色获得无中生有并对自身造成1点雷属性伤害，冥谶立即失效至回合结束。
+	if not _submit_pending_choice(0, [], [1], true) or _controller.state.get_player(1).hp != 3 or not bool(mingchen.get("_invalid_until_turn_end")):
+		return _fail("mingchen_other_target_lockout hp=%d invalid=%s" % [_controller.state.get_player(1).hp, mingchen.get("_invalid_until_turn_end")])
+	# 同一回合再次失去最后手牌；临时失效期间不能重复创建目标选择。
+	var locked_out_card: CardInstance = _add_hand_card(0, "shan", "club", 4)
+	if not _controller.discard_card_from_hand(0, locked_out_card.uid) or _controller.has_pending_card_choice():
+		return _fail("mingchen_lockout_retrigger pending=%s" % [_controller._pending_card_choice])
+	# 持有者回合完整结束后临时失效清除；再次失去最后手牌应重新建立同一锁定技选择。
+	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	var next_turn_card: CardInstance = _add_hand_card(0, "shan", "club", 5)
+	if bool(mingchen.get("_invalid_until_turn_end")) or not _controller.discard_card_from_hand(0, next_turn_card.uid) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
+		return _fail("mingchen_lockout_reset invalid=%s pending=%s" % [mingchen.get("_invalid_until_turn_end"), _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	return true
+
+
 ## 验证救援者用最后一张【桃】触发冥谶时先完成技能选择，再从已消费响应准确恢复桃与濒死结算。
 func _test_mingchen_dying_peach_continuation() -> bool:
 	_reset_state(3)
@@ -323,7 +360,7 @@ func _test_mingchen_dying_peach_continuation() -> bool:
 ## 验证目标打出最后一张【闪】触发冥谶时，杀响应结果在技能完成后继续且不会错误受到伤害。
 func _test_mingchen_last_hand_response_continuation() -> bool:
 	_reset_state(3)
-	_controller.state.current_player_id = 1
+	_controller.state.current_player_id = 0
 	# 冥谶持有者与【杀】目标；等待期间保持4点体力用于判断闪是否真正生效。
 	var hanya: PlayerState = _controller.state.get_player(0)
 	hanya.character_id = "hanya"
@@ -732,6 +769,22 @@ func _test_gangfeng_response() -> bool:
 	_controller.skill_instances_by_player = {0:{"gangfeng":gangfeng}}
 	# 黑色响应材料；使用梅花Q验证虚拟雷【杀】继承花色与点数。
 	var material: CardInstance = _add_hand_card(0, "shan", "club", 12)
+	# 借刀杀人要求打出【杀】的响应窗口；候选必须公开罡风材料、所需技能ID和可点击技能入口，不能只在普通决斗等场景生效。
+	_controller.request_response_card(0, "sha", "请响应借刀杀人并打出【杀】。", {"kind":"borrow_sword_response", "parent_card_uid":-1, "responder_id":0, "source_id":1, "victim_id":1})
+	var borrow_sword_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var borrow_sword_context: Dictionary = borrow_sword_choice.get("context", {}) as Dictionary
+	var has_gangfeng_material: bool = false
+	for candidate_variant: Variant in borrow_sword_choice.get("candidates", []) as Array:
+		# 当前借刀响应候选；黑色材料必须明确绑定罡风，而非被静默视为普通【杀】。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("uid", -1)) == material.uid and str(candidate.get("required_response_skill_id", "")) == "gangfeng":
+			has_gangfeng_material = true
+			break
+	if str(borrow_sword_context.get("kind", "")) != "borrow_sword_response" or not has_gangfeng_material or not (borrow_sword_context.get("active_skill_ids", []) as Array).has("gangfeng") or not (borrow_sword_context.get("response_conversion_skill_ids", []) as Array).has("gangfeng"):
+		return _fail("gangfeng_borrow_sword_response choice=%s" % borrow_sword_choice)
+	# 本段只验证借刀响应候选与技能入口协议，明确取消后继续验证实际材料消费语义。
+	if not _submit_pending_choice(0, [], [], false):
+		return false
 	# 未明确点击罡风的响应消费；黑色材料不能自动视为【杀】且必须继续留在手牌区。
 	var implicit_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, material.uid, ["sha"])
 	if implicit_response_card != null or _controller.state.get_player(0).find_hand_card(material.uid) == null:
@@ -1025,6 +1078,16 @@ func _test_new_skill_ai_rules() -> bool:
 	var friend_with_playable_card_snapshot: Dictionary = _controller.state.to_dict(0, true)
 	if huanfa.score_ai_choice(friend_with_playable_card_snapshot, huanfa_confirm_request, confirm_action, evaluator) <= 0.0:
 		return _fail("huanfa_ai_friend_with_playable_card")
+	# 冥谶静态AI；选择自身会保留同回合再次失去最后手牌后的发动空间，选择敌方会使技能失效至回合结束。
+	_reset_state(3)
+	var mingchen: SkillDefinition = GameDatabase.create_skill("mingchen")
+	mingchen.bind(null, 0)
+	var mingchen_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var mingchen_request: Dictionary = {"context":{"kind":"mingchen_target"}}
+	var mingchen_self_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[0]}}
+	var mingchen_enemy_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[1]}}
+	if mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator) <= mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator):
+		return _fail("mingchen_ai_preserve_retrigger self=%.2f enemy=%.2f" % [mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator), mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator)])
 	return true
 
 

@@ -1126,7 +1126,14 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	# 当前选择可发动的主动技能；响应入口与普通选牌入口分别查询，结果只进入请求上下文不改变牌候选。
 	var active_entry: String = "chooseToRespond" if choice_event_name == "chooseToRespond" else "chooseCard"
 	runtime_request.base_context["active_entry"] = active_entry
-	runtime_request.base_context["active_skill_ids"] = get_active_skill_ids(chooser_id, active_entry, context)
+	# 标准可发动技能；响应转换材料会在候选生成时额外声明对应技能，不能因其未实现普通主动入口而从本次响应按钮中遗漏。
+	var active_skill_ids: Array[String] = get_active_skill_ids(chooser_id, active_entry, context)
+	for response_skill_id_variant: Variant in context.get("response_conversion_skill_ids", []) as Array:
+		# 候选已由权威转化查询生成；只补充非空且未重复的稳定技能ID。
+		var response_skill_id: String = str(response_skill_id_variant)
+		if not response_skill_id.is_empty() and not active_skill_ids.has(response_skill_id):
+			active_skill_ids.append(response_skill_id)
+	runtime_request.base_context["active_skill_ids"] = active_skill_ids
 	runtime_request.active_context = runtime_request.base_context.duplicate(true)
 	_pending_card_choice["context"] = runtime_request.base_context.duplicate(true)
 	for candidate: Dictionary in serialized_candidates:
@@ -2430,6 +2437,14 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
 	response_context["response_prompt"] = prompt
+	# 当前候选需要显式点击的转化技能；该列表由实体候选反向汇总，确保任何合法视为牌在本次响应窗口都有可用技能入口。
+	var response_conversion_skill_ids: Array[String] = []
+	for candidate: Dictionary in candidates:
+		# 候选声明的转化技能；普通实体响应牌保持空字符串，不会额外点亮技能按钮。
+		var response_skill_id: String = str(candidate.get("required_response_skill_id", ""))
+		if not response_skill_id.is_empty() and not response_conversion_skill_ids.has(response_skill_id):
+			response_conversion_skill_ids.append(response_skill_id)
+	response_context["response_conversion_skill_ids"] = response_conversion_skill_ids
 	# 响应允许主动不出牌；即使候选为空也创建请求，保证 AI 与真实玩家经历相同问询。
 	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
@@ -4440,6 +4455,11 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
 	if skill == null:
 		return false
+	# 当前响应候选声明的转化技能；候选已逐张通过can_convert_response_card权威校验，因此允许它在本次chooseToRespond中作为材料筛选入口出现。
+	# 此分支不直接消费牌，提交阶段仍要求材料UID、response_skill_id和当前响应模式全部再次匹配。
+	var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", []) as Array
+	if str(context.get("active_entry", "")) == "chooseToRespond" and response_conversion_skill_ids.has(skill_id):
+		return true
 	# 当前允许的主动入口；技能只需命中其中一个入口，复合 chooseToUse 与 phaseUse 请求不会要求重复声明。
 	var active_entries: Array[String] = _resolve_active_entries(player_id, context)
 	if not active_entries.is_empty():

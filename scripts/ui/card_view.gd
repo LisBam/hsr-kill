@@ -9,6 +9,15 @@ signal pressed
 ## 本地手牌排序请求；参数由输入组件提供，桌面只调整客户端显示顺序，不提交目标选择或规则动作。
 signal hand_reorder_requested(source_card_uid: int, target_card_uid: int, insert_after_target: bool)
 
+## 本地手牌开始直接拖动的通知；桌面只移动当前实体牌节点，不创建任何预览牌或规则实体。
+signal hand_drag_started(source_card_uid: int, pointer_global_position: Vector2)
+
+## 本地手牌直接拖动中的坐标更新；桌面依据稳定UID复核所属分区后驱动原节点跟随。
+signal hand_drag_moved(source_card_uid: int, pointer_global_position: Vector2)
+
+## 本地手牌结束直接拖动的通知；桌面根据释放位置决定同分区内的最终排序。
+signal hand_drag_finished(source_card_uid: int, pointer_global_position: Vector2)
+
 ## 鼠标进入可见牌面时发出的统一信息请求；内容字典和全局目标矩形由牌桌信息框组件直接消费。
 signal information_requested(information: Dictionary, anchor_rect: Rect2)
 
@@ -40,14 +49,14 @@ signal information_dismissed
 ## 禁用牌面内容的灰度调制色；默认保留45%亮度，使插画与文字明显弱于可选卡牌，仅影响表现。
 @export var disabled_content_modulate: Color = Color(0.45, 0.45, 0.45, 1.0)
 
-## 视为名称横条的固定高度；默认30像素覆盖插画中央但不遮挡底部实体牌名，运行时可按牌面比例调整。
-@export_range(18.0, 48.0, 1.0) var view_as_banner_height: float = 30.0
+## 视为名称横条的固定高度；默认22像素形成贴合牌面类别色的细条，不遮挡底部实体牌名，运行时可按牌面比例调整。
+@export_range(16.0, 36.0, 1.0) var view_as_banner_height: float = 22.0
 
-## 视为名称横条的文字尺寸；默认22像素匹配参考牌面的大号名称，运行时可按主题可读性调整。
-@export_range(12, 36, 1) var view_as_banner_font_size: int = 22
+## 视为名称横条的文字尺寸；默认16像素低于实体牌名层级，运行时可按主题可读性调整。
+@export_range(10, 26, 1) var view_as_banner_font_size: int = 16
 
-## 视为名称横条的深色底板不透明度；默认0.84保证文字清晰且仍可辨认底层插画，运行时可调整。
-@export_range(0.0, 1.0, 0.01) var view_as_banner_opacity: float = 0.84
+## 视为名称横条的类别色底板不透明度；默认0.90保证小号文字清晰且仍与原牌插画融合，运行时可调整。
+@export_range(0.0, 1.0, 0.01) var view_as_banner_opacity: float = 0.90
 
 ## 当前实体牌 UID；由 configure 写入，未配置时为 -1。
 var card_uid: int = -1
@@ -119,6 +128,12 @@ var _hover_tween: Tween
 ## 当前选中位移动画；重复点击时会从当前偏移平滑转向新目标，避免并行动画争抢节点位置。
 var _selection_tween: Tween
 
+## 当前实体手牌是否正被直接拖动；为true时手牌容器保留原节点的鼠标跟随位置，不回写常规布局坐标。
+var _is_hand_dragging: bool = false
+
+## 直接拖动开始时鼠标相对牌面左上角的全局偏移；保持原实体牌在拖动中不发生指针跳位。
+var _hand_drag_pointer_offset: Vector2 = Vector2.ZERO
+
 ## 最近一次牌面配置签名；默认-1表示从未配置，相同快照、定义、交互状态和名称模式不会重复加载插画或重建样式。
 var _configuration_signature: int = -1
 
@@ -169,7 +184,10 @@ func _ready() -> void:
 	_input_area.hover_started.connect(_on_mouse_entered)
 	_input_area.hover_finished.connect(_on_mouse_exited)
 	_input_area.hand_reorder_requested.connect(hand_reorder_requested.emit)
-	_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
+	_input_area.hand_drag_started.connect(_on_hand_drag_started)
+	_input_area.hand_drag_moved.connect(_on_hand_drag_moved)
+	_input_area.hand_drag_finished.connect(_on_hand_drag_finished)
+	_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -230,7 +248,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	_artwork_texture = ArtworkLoader.load_from_definition(visual_definition, ArtworkLoader.CARD_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
+		_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -252,7 +270,7 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	_view_as_display_name_text = ""
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
+		_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
 	_refresh_visual_state()
 
 
@@ -283,7 +301,7 @@ func set_interactable_state(interactable: bool) -> void:
 		return
 	is_interactable = interactable
 	if is_node_ready():
-		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
+		_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
 	_refresh_visual_state()
 
 
@@ -292,6 +310,38 @@ func _get_hand_reorder_zone() -> String:
 	if not (get_parent() is DecadeHandContainer):
 		return ""
 	return "wooden_ox" if is_wooden_ox_card else "hand"
+
+
+## 返回当前原实体手牌是否正在直接拖动；手牌容器据此保留其鼠标跟随位置并继续布局其他卡牌。
+func is_hand_dragging() -> bool:
+	return _is_hand_dragging
+
+
+## 开始直接移动当前实体手牌；只记录鼠标相对偏移并提升绘制层级，不复制牌面或变更权威实体。
+func begin_hand_drag(pointer_global_position: Vector2) -> void:
+	if _get_hand_reorder_zone().is_empty():
+		return
+	_is_hand_dragging = true
+	_hand_drag_pointer_offset = pointer_global_position - global_position
+	z_index = HOVER_Z_INDEX + 1
+
+
+## 让当前实体手牌按鼠标位置直接跟随；全局坐标写入会自动适配手牌容器、滚动视口与画布变换。
+func move_hand_drag(pointer_global_position: Vector2) -> void:
+	if not _is_hand_dragging:
+		return
+	global_position = pointer_global_position - _hand_drag_pointer_offset
+
+
+## 结束当前实体手牌直接拖动；桌面随后会重排同分区视图，故本方法不自行推断最终插入位置。
+func end_hand_drag() -> void:
+	if not _is_hand_dragging:
+		return
+	_is_hand_dragging = false
+	_hand_drag_pointer_offset = Vector2.ZERO
+	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
+	if hand_layout != null:
+		hand_layout.refresh_card_states()
 
 
 ## 启动手牌选中或取消选中的位移动画；非手牌展示区域继续沿用原有即时位置逻辑。
@@ -305,24 +355,6 @@ func _start_selection_tween(target_offset: Vector2) -> void:
 	_selection_tween.set_trans(Tween.TRANS_QUAD)
 	_selection_tween.set_ease(Tween.EASE_OUT)
 	_selection_tween.tween_property(self, "hand_selection_offset", target_offset, selection_animation_seconds)
-
-
-## 创建完整牌面的只读拖拽预览；复制的是视觉树，不包含输入区域或业务选择状态。
-func create_drag_preview() -> Control:
-	# 预览容器；尺寸与原牌一致，并忽略全部鼠标输入。
-	var preview: Control = Control.new()
-	preview.custom_minimum_size = get_card_size()
-	preview.size = get_card_size()
-	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# 牌面视觉副本；保持插画、文字、边框和实体牌比例不变。
-	var body_preview: Panel = _card_body.duplicate() as Panel
-	body_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview.add_child(body_preview)
-	# 牌背覆盖层副本；隐藏手牌拖拽时仍保持信息完全遮挡。
-	var card_back_preview: Panel = _card_back.duplicate() as Panel
-	card_back_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview.add_child(card_back_preview)
-	return preview
 
 
 ## 根据选中、悬停与默认状态刷新同一张牌的纸张样式。
@@ -381,7 +413,7 @@ func _refresh_card_content() -> void:
 	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 
 
-## 按当前牌面尺寸把视为名称横条固定在插画中央；横条贯穿整张牌但不覆盖底部原牌名称。
+## 按当前牌面尺寸把视为名称横条固定在插画中央；细条贴合牌面类别色且不覆盖底部原牌名称。
 func _configure_view_as_banner_geometry() -> void:
 	if not is_node_ready():
 		return
@@ -391,20 +423,35 @@ func _configure_view_as_banner_geometry() -> void:
 	_view_as_banner.position = Vector2(0.0, (card_height - view_as_banner_height) * 0.5)
 
 
-## 刷新视为名称横条的主题样式；深色半透明底板和细金边复刻参考图的贯穿式牌名提示。
+## 刷新视为名称横条的主题样式；底板跟随当前实体牌的类别色，避免使用与牌面脱节的通用金属面板色。
 func _refresh_view_as_banner_style() -> void:
 	if not is_node_ready():
 		return
-	# 横条底色；从当前金属面板派生深色，以避免在两套主题中写死单一色值。
-	var banner_background: Color = BattleUIStyle.get_color("metal_panel").darkened(0.34)
+	# 横条底色；由当前牌面的类别色加深得到，属性【杀】和各类实体牌都会自然匹配。
+	var banner_background: Color = _category_color.darkened(0.28)
 	banner_background.a = view_as_banner_opacity
-	# 横条边框；复用主题强调色，保持与选中牌和菜单控件一致的视觉语义。
-	var banner_border: Color = BattleUIStyle.get_color("accent")
-	banner_border.a = 0.92
-	_view_as_banner.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 0))
-	_view_as_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_paper"))
-	_view_as_name_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
-	_view_as_name_label.add_theme_constant_override("outline_size", 2)
+	# 横条边框；轻微提亮同一类别色，形成紧凑边界且不与选中金边竞争视觉层级。
+	var banner_border: Color = _category_color.lightened(0.20)
+	banner_border.a = 0.96
+	_view_as_banner.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 2))
+	_view_as_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_paper").lightened(0.08))
+	_view_as_name_label.add_theme_color_override("font_outline_color", banner_background.darkened(0.55))
+	_view_as_name_label.add_theme_constant_override("outline_size", 1)
+
+
+## 将输入组件的开始拖动通知向桌面转发；实际位置与排序决策始终由持有全部手牌视图的桌面协调器负责。
+func _on_hand_drag_started(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	hand_drag_started.emit(source_card_uid, pointer_global_position)
+
+
+## 将输入组件的拖动坐标通知向桌面转发；不在卡牌组件内查询目标卡或修改显示顺序。
+func _on_hand_drag_moved(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	hand_drag_moved.emit(source_card_uid, pointer_global_position)
+
+
+## 将输入组件的结束拖动通知向桌面转发；桌面会恢复原实体牌到规范化后的分区布局。
+func _on_hand_drag_finished(source_card_uid: int, pointer_global_position: Vector2) -> void:
+	hand_drag_finished.emit(source_card_uid, pointer_global_position)
 
 
 ## 刷新统一牌背配色；正面牌与牌背共用同一主题入口，隐藏信息状态不会暴露实体内容。
