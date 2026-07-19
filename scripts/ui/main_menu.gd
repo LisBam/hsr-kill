@@ -323,6 +323,7 @@ func _select_identity_mode() -> void:
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
 func _open_settings() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_close_online_settings(false)
 	_online_lobby_panel.visible = false
 	_set_settings_visible(true)
@@ -331,6 +332,7 @@ func _open_settings() -> void:
 
 ## 打开独立联机资料设置；名称与形象由组件从 GameSettings 读取，主菜单只维护模态焦点边界。
 func _open_online_settings() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
 	_online_lobby_panel.visible = false
@@ -340,6 +342,7 @@ func _open_online_settings() -> void:
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
 func _open_lan_panel() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_close_online_settings(false)
 	_online_lobby_panel.visible = false
@@ -349,12 +352,14 @@ func _open_lan_panel() -> void:
 
 ## 关闭设置浮层；已经写入 GameSettings 的配置立即保留，不需要额外确认按钮。
 func _close_settings() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_settings_button.grab_focus()
 
 
 ## 关闭联机资料设置并恢复主菜单焦点；可选参数用于切换到其他模态时避免抢占新入口焦点。
 func _close_online_settings(restore_focus: bool = true) -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_online_settings_panel.visible = false
 	_restore_background_focus()
 	if restore_focus:

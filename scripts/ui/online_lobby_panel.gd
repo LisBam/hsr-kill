@@ -170,6 +170,7 @@ func bind_lobby(lobby_snapshot: Dictionary, host_addresses: Array[String] = [], 
 ## 对局正式开始后隐藏大厅与设置模态；ENet 会话保持连接供正式牌桌继续使用。
 func confirm_match_started() -> void:
 	_close_settings()
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	visible = false
 
 
@@ -332,7 +333,10 @@ func _close_settings() -> void:
 	_settings_panel.visible = false
 	_restore_settings_background_focus()
 	if visible and _local_is_host:
-		_settings_button.grab_focus()
+		if OS.get_name() == "Android":
+			MobileKeyboardGuard.focus_non_text(_settings_button)
+		else:
+			_settings_button.grab_focus()
 
 
 ## 保存房间设置请求；稳定模式 ID 从选项元数据读取，人数与密码仍由房主网关最终校验。
@@ -511,10 +515,14 @@ func _apply_option_button_style(option_button: OptionButton) -> void:
 	popup.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 
 
-## 把焦点放到聊天输入；房主仍可通过 Tab 导航到设置与开始按钮。
+## 设置大厅首次进入焦点；Android使用非文本离开按钮避免自动弹出输入法，桌面端继续聚焦聊天输入。
 func _focus_primary_control() -> void:
-	if visible and not _settings_panel.visible:
-		_chat_input.grab_focus()
+	if not visible or _settings_panel.visible:
+		return
+	if OS.get_name() == "Android":
+		MobileKeyboardGuard.focus_non_text(_leave_button)
+		return
+	_chat_input.grab_focus()
 
 
 ## 响应全局 UI 风格切换；大厅快照、玩家位置和聊天内容保持不变。
