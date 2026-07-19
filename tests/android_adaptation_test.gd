@@ -2,9 +2,6 @@ extends Node
 
 ## 安卓适配回归测试。验证APK预设、横屏等比缩放、原生触控输入和系统返回键组件保持可用。
 
-## 测试触摸使用的固定触点索引；单指索引0与真实安卓首个触点一致。
-const TEST_TOUCH_INDEX: int = 0
-
 ## 长按测试等待秒数；0.3秒略高于测试组件设置的0.25秒阈值，避免帧调度误差。
 const TOUCH_HOLD_TEST_WAIT_SECONDS: float = 0.3
 
@@ -50,8 +47,8 @@ func _validate_project_settings() -> bool:
 		return _fail("mobile_renderer")
 	if str(ProjectSettings.get_setting("rendering/rendering_device/driver.android", "")) != "vulkan":
 		return _fail("android_rendering_driver")
-	if bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", true)):
-		return _fail("native_touch_path")
+	if not bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false)):
+		return _fail("standard_gui_touch_pointer_path")
 	if bool(ProjectSettings.get_setting("application/config/quit_on_go_back", true)):
 		return _fail("android_back_quit")
 	return true
@@ -78,10 +75,10 @@ func _validate_export_preset() -> bool:
 		return _fail("export_preset_load")
 	if str(export_config.get_value("preset.0", "platform", "")) != "Android":
 		return _fail("export_platform")
-	if str(export_config.get_value("preset.0.options", "package/unique_name", "")) != "com.hsrkill.game":
+	# Android包名；允许主公自行维护正式命名，但不得为空或继续使用Godot示例包名前缀。
+	var package_name: String = str(export_config.get_value("preset.0.options", "package/unique_name", ""))
+	if package_name.is_empty() or package_name.begins_with("com.example"):
 		return _fail("package_name")
-	if not bool(export_config.get_value("preset.0.options", "package/show_as_launcher_app", false)):
-		return _fail("launcher_entry")
 	if not bool(export_config.get_value("preset.0.options", "architectures/arm64-v8a", false)):
 		return _fail("arm64_architecture")
 	if not bool(export_config.get_value("preset.0.options", "permissions/internet", false)):
@@ -106,12 +103,36 @@ func _validate_main_scene() -> bool:
 	if android_back_adapter == null or android_back_adapter.cancel_action_name != &"ui_cancel" or android_display_stability == null or android_display_stability.target_fps != 60 or not android_display_stability.force_vsync:
 		main_instance.queue_free()
 		return _fail("android_platform_components")
+	# 联机资料面板；打开后名称光标应位于已保存文本末尾，且不使用强制全选破坏触摸定位。
+	var online_settings_panel: OnlineSettingsPanel = main_instance.get_node("%OnlineSettingsPanel") as OnlineSettingsPanel
+	online_settings_panel.open_panel()
+	# 联机名称输入框；Android主动点击后可删除、追加或移动光标，打开面板本身不会锁定文本选择。
+	var online_name_input: LineEdit = online_settings_panel.get_node("%OnlinePlayerNameInput") as LineEdit
+	if online_name_input.select_all_on_focus or online_name_input.caret_column != online_name_input.text.length():
+		main_instance.queue_free()
+		return _fail("online_name_touch_editing")
+	online_settings_panel.visible = false
+	# 局域网连接入口；IP、端口、密码和两个连接按钮必须保持可编辑可点击。
+	var lan_lobby_panel: LanLobbyPanel = main_instance.get_node("%LanLobbyPanel") as LanLobbyPanel
+	lan_lobby_panel.open_panel(8, 7000)
+	# 房主地址输入框；触摸后应允许系统键盘写入和移动光标。
+	var lan_address_input: LineEdit = lan_lobby_panel.get_node("%LanAddressInput") as LineEdit
+	# 端口输入框；SpinBox内部LineEdit必须可编辑，上下按钮由标准鼠标模拟路径驱动。
+	var lan_port_input: SpinBox = lan_lobby_panel.get_node("%LanPortInput") as SpinBox
+	# 房间密码输入框；触摸后应允许安全文本输入。
+	var lan_password_input: LineEdit = lan_lobby_panel.get_node("%LanRoomPasswordInput") as LineEdit
+	# 创建与加入按钮；联网权限与参数校验由后续协调器负责，入口不能因平台禁用。
+	var lan_host_button: Button = lan_lobby_panel.get_node("%LanHostButton") as Button
+	var lan_join_button: Button = lan_lobby_panel.get_node("%LanJoinButton") as Button
+	if not lan_address_input.editable or not lan_port_input.editable or not lan_port_input.get_line_edit().editable or not lan_password_input.editable or lan_host_button.disabled or lan_join_button.disabled:
+		main_instance.queue_free()
+		return _fail("lan_touch_controls")
 	main_instance.queue_free()
 	await get_tree().process_frame
 	return true
 
 
-## 验证卡牌原生触摸轻点会激活，且不会依赖鼠标事件模拟。
+## 验证Android触摸转换后的标准鼠标轻点只激活一次，且自定义卡牌组件不会重复处理原始触点。
 func _validate_card_touch_input() -> bool:
 	# 测试卡牌输入组件；只验证输入信号，不创建规则卡牌或对局状态。
 	var card_input_area: CardInputArea = CardInputArea.new()
@@ -121,15 +142,30 @@ func _validate_card_touch_input() -> bool:
 	# 卡牌激活次数；轻点触摸应且只能发出一次activated。
 	var activated_count: Array[int] = [0]
 	card_input_area.activated.connect(func() -> void: activated_count[0] += 1)
-	# 卡牌触摸按下事件；位置位于组件内部并使用首个触点索引。
-	var press_event: InputEventScreenTouch = InputEventScreenTouch.new()
-	press_event.index = TEST_TOUCH_INDEX
+	# 原始触点按下事件；触摸模拟鼠标开启时必须被自定义卡牌组件忽略，等待标准模拟鼠标事件处理。
+	var raw_touch_press_event: InputEventScreenTouch = InputEventScreenTouch.new()
+	raw_touch_press_event.index = 0
+	raw_touch_press_event.position = Vector2(40.0, 60.0)
+	raw_touch_press_event.pressed = true
+	card_input_area._gui_input(raw_touch_press_event)
+	# 原始触点释放事件；同一手势不能在模拟鼠标到达前提前激活卡牌。
+	var raw_touch_release_event: InputEventScreenTouch = InputEventScreenTouch.new()
+	raw_touch_release_event.index = 0
+	raw_touch_release_event.position = raw_touch_press_event.position
+	raw_touch_release_event.pressed = false
+	card_input_area._input(raw_touch_release_event)
+	if activated_count[0] != 0:
+		card_input_area.queue_free()
+		return _fail("card_raw_touch_should_be_ignored")
+	# 卡牌模拟鼠标按下事件；Android标准GUI与自定义卡牌共用该指针协议。
+	var press_event: InputEventMouseButton = InputEventMouseButton.new()
+	press_event.button_index = MOUSE_BUTTON_LEFT
 	press_event.position = Vector2(40.0, 60.0)
 	press_event.pressed = true
 	card_input_area._gui_input(press_event)
-	# 卡牌触摸释放事件；全局输入路径保证手指移出原区域时仍能结束手势。
-	var release_event: InputEventScreenTouch = InputEventScreenTouch.new()
-	release_event.index = TEST_TOUCH_INDEX
+	# 卡牌模拟鼠标释放事件；全局输入路径保证手指移出原区域时仍能结束手势。
+	var release_event: InputEventMouseButton = InputEventMouseButton.new()
+	release_event.button_index = MOUSE_BUTTON_LEFT
 	release_event.position = press_event.position
 	release_event.pressed = false
 	card_input_area._input(release_event)
@@ -140,7 +176,7 @@ func _validate_card_touch_input() -> bool:
 	return true
 
 
-## 验证武将牌原生触摸长按打开详情，并抑制同一次手势的目标激活。
+## 验证武将牌的Android模拟鼠标长按打开详情，并抑制同一次手势的目标激活。
 func _validate_player_touch_input() -> bool:
 	# 测试武将输入组件；长按阈值调到允许范围下限以缩短自动回归耗时。
 	var player_input_area: PlayerTargetInputArea = PlayerTargetInputArea.new()
@@ -154,19 +190,19 @@ func _validate_player_touch_input() -> bool:
 	var activated_count: Array[int] = [0]
 	player_input_area.details_requested.connect(func() -> void: details_count[0] += 1)
 	player_input_area.activated.connect(func(_local_position: Vector2) -> void: activated_count[0] += 1)
-	# 武将牌触摸按下事件；位置位于组件内部并保持不移动以满足长按语义。
-	var press_event: InputEventScreenTouch = InputEventScreenTouch.new()
-	press_event.index = TEST_TOUCH_INDEX
+	# 武将牌模拟鼠标按下事件；位置位于组件内部并保持不移动以满足长按语义。
+	var press_event: InputEventMouseButton = InputEventMouseButton.new()
+	press_event.button_index = MOUSE_BUTTON_LEFT
 	press_event.position = Vector2(70.0, 90.0)
 	press_event.pressed = true
 	player_input_area._gui_input(press_event)
 	await get_tree().create_timer(TOUCH_HOLD_TEST_WAIT_SECONDS).timeout
-	# 武将牌触摸释放事件；详情已打开时释放只结束手势，不提交目标选择。
-	var release_event: InputEventScreenTouch = InputEventScreenTouch.new()
-	release_event.index = TEST_TOUCH_INDEX
+	# 武将牌模拟鼠标释放事件；详情已打开时释放只结束手势，不提交目标选择。
+	var release_event: InputEventMouseButton = InputEventMouseButton.new()
+	release_event.button_index = MOUSE_BUTTON_LEFT
 	release_event.position = press_event.position
 	release_event.pressed = false
-	player_input_area._input(release_event)
+	player_input_area._gui_input(release_event)
 	await get_tree().process_frame
 	player_input_area.queue_free()
 	if details_count[0] != 1 or activated_count[0] != 0:

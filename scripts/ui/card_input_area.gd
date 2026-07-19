@@ -94,6 +94,8 @@ func _gui_input(event: InputEvent) -> void:
 			_pointer_press_global_position = get_global_mouse_position()
 			accept_event()
 	elif event is InputEventScreenTouch:
+		if _uses_touch_mouse_emulation():
+			return
 		# 当前触屏按下事件；只接管尚未被本组件追踪的首个触点，多指不会重复选择同一张牌。
 		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
 		if touch_event.pressed and _active_touch_index < 0:
@@ -110,6 +112,8 @@ func _gui_input(event: InputEvent) -> void:
 ## 处理按下后的全局鼠标事件；直接移动原牌节点，不创建拖拽预览或临时卡牌实体。
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenDrag:
+		if _uses_touch_mouse_emulation():
+			return
 		# 当前触屏拖动事件；仅匹配本组件记录的触点，防止第二根手指改变选牌或排序状态。
 		var touch_drag_event: InputEventScreenDrag = event as InputEventScreenDrag
 		if touch_drag_event.index != _active_touch_index:
@@ -128,6 +132,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventScreenTouch:
+		if _uses_touch_mouse_emulation():
+			return
 		# 当前触屏释放事件；即使手指离开原牌区域，也由全局输入统一结束本次点击、长按或拖动。
 		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
 		if touch_event.index != _active_touch_index or touch_event.pressed:
@@ -185,3 +191,8 @@ func _start_touch_information_timer(sequence_id: int, touch_index: int) -> void:
 		return
 	_touch_information_active = true
 	hover_started.emit()
+
+
+## 返回项目是否已把触点转换为鼠标事件；开启时自定义组件只处理模拟鼠标，避免同一次触摸重复激活。
+func _uses_touch_mouse_emulation() -> bool:
+	return bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false))
