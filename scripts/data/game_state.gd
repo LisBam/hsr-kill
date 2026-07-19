@@ -133,7 +133,12 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	var choice_request_data: Dictionary = current_choice_request.duplicate(true)
 	if not reveal_private and int(choice_request_data.get("actor_id", -1)) != viewer_id:
 		choice_request_data["card_ids"] = []
+		choice_request_data["target_ids"] = []
+		choice_request_data["button_ids"] = []
+		choice_request_data["control_ids"] = []
 		choice_request_data["selected_card_ids"] = []
+		choice_request_data["selected_target_ids"] = []
+		choice_request_data["selected_button_ids"] = []
 		choice_request_data["base_context"] = {}
 		choice_request_data["active_context"] = {}
 	# 当前公共处理区实体 UID；界面只用该集合核对中央牌面生命周期，不获得可变实体引用或额外私有牌面。

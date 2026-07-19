@@ -1,0 +1,30 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://tests/lan_match_flow_test.gd" id="1_test"]
+[ext_resource type="Script" path="res://scripts/core/match_controller.gd" id="2_match"]
+[ext_resource type="Script" path="res://scripts/core/rule_event_bus.gd" id="3_event"]
+[ext_resource type="Script" path="res://scripts/ai/ai_coordinator.gd" id="4_ai"]
+[ext_resource type="Script" path="res://scripts/network/network_gateway.gd" id="5_network"]
+[ext_resource type="Script" path="res://scripts/core/gameplay_pause_service.gd" id="6_pause"]
+
+[node name="LanMatchFlowTest" type="Node"]
+script = ExtResource("1_test")
+
+[node name="MatchController" type="Node" parent="."]
+script = ExtResource("2_match")
+default_player_count = 4
+randomize_local_human_seat = false
+ai_action_delay_seconds = 0.0
+game_flow_interval_seconds = 0.0
+
+[node name="GameplayPauseService" type="Node" parent="MatchController"]
+script = ExtResource("6_pause")
+
+[node name="RuleEventBus" type="Node" parent="MatchController"]
+script = ExtResource("3_event")
+
+[node name="AICoordinator" type="Node" parent="MatchController"]
+script = ExtResource("4_ai")
+
+[node name="NetworkGateway" type="Node" parent="MatchController"]
+script = ExtResource("5_network")
