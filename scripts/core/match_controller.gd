@@ -289,6 +289,12 @@ var _rule_continuations: RuleContinuationQueue = RuleContinuationQueue.new()
 ## 当前全局回合内各角色已经“使用”过的逻辑牌定义；响应牌仅在规则明确视为使用时由对应流程登记。
 var _cards_used_this_turn_by_player: Dictionary = {}
 
+## 局域网客户端最近一次收到的观察者裁剪快照；只供远端 UI 预览与渲染，不重建或替代权威 GameState。
+var _remote_snapshot: Dictionary = {}
+
+## 最近一次权威动作拒绝原因；网络命令入口在同步提交失败后读取并只返回给原发送者。
+var _last_action_rejection_message: String = ""
+
 
 ## 绑定场景中的解耦组件并初始化身份规则服务。
 func _ready() -> void:
@@ -320,6 +326,34 @@ func _ready() -> void:
 	network_gateway.command_received.connect(_on_network_command_received)
 	if not network_gateway.choice_response_received.is_connected(_on_network_choice_response_received):
 		network_gateway.choice_response_received.connect(_on_network_choice_response_received)
+	if not network_gateway.snapshot_received.is_connected(_on_network_snapshot_received):
+		network_gateway.snapshot_received.connect(_on_network_snapshot_received)
+	if not network_gateway.choice_request_received.is_connected(_on_network_choice_request_received):
+		network_gateway.choice_request_received.connect(_on_network_choice_request_received)
+	if not network_gateway.game_event_received.is_connected(_on_network_game_event_received):
+		network_gateway.game_event_received.connect(_on_network_game_event_received)
+	if not network_gateway.lan_match_peer_disconnected.is_connected(_on_lan_match_peer_disconnected):
+		network_gateway.lan_match_peer_disconnected.connect(_on_lan_match_peer_disconnected)
+	if not log_added.is_connected(_replicate_log_event):
+		log_added.connect(_replicate_log_event)
+	if not card_presentation_requested.is_connected(_replicate_card_presentation_event):
+		card_presentation_requested.connect(_replicate_card_presentation_event)
+	if not card_transfer_requested.is_connected(_replicate_card_transfer_event):
+		card_transfer_requested.connect(_replicate_card_transfer_event)
+	if not draw_presentation_batch_started.is_connected(_replicate_draw_batch_started_event):
+		draw_presentation_batch_started.connect(_replicate_draw_batch_started_event)
+	if not draw_presentation_batch_finished.is_connected(_replicate_draw_batch_finished_event):
+		draw_presentation_batch_finished.connect(_replicate_draw_batch_finished_event)
+	if not card_animation_ownership_reset_requested.is_connected(_replicate_card_animation_reset_event):
+		card_animation_ownership_reset_requested.connect(_replicate_card_animation_reset_event)
+	if not skill_activated.is_connected(_replicate_skill_activated_event):
+		skill_activated.connect(_replicate_skill_activated_event)
+	if not equipment_activated.is_connected(_replicate_equipment_activated_event):
+		equipment_activated.connect(_replicate_equipment_activated_event)
+	if not public_card_choice_display_changed.is_connected(_replicate_public_card_choice_display_event):
+		public_card_choice_display_changed.connect(_replicate_public_card_choice_display_event)
+	if not match_finished.is_connected(_replicate_match_finished_event):
+		match_finished.connect(_replicate_match_finished_event)
 	if not GameSettings.ai_response_delay_changed.is_connected(_on_ai_response_delay_changed):
 		GameSettings.ai_response_delay_changed.connect(_on_ai_response_delay_changed)
 	if not GameSettings.game_speed_changed.is_connected(_on_game_speed_changed):
@@ -426,7 +460,12 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		_rng.randomize()
 	else:
 		_rng.seed = seed
-	_assign_local_human_player_seat(actual_player_count)
+	# 局域网房主的本地玩家 ID 已由大厅随机成员映射确定；离线对局继续使用原有本地座次随机逻辑。
+	var lan_local_player_id: int = network_gateway.get_local_lan_player_id() if network_gateway != null and network_gateway.is_lan_host() else -1
+	if lan_local_player_id >= 0:
+		local_human_player_id = lan_local_player_id
+	else:
+		_assign_local_human_player_seat(actual_player_count)
 	CardInstance._next_uid = 1
 	state = GameState.new()
 	state.match_id = "%d-%d" % [Time.get_unix_time_from_system(), _rng.randi()]
@@ -583,9 +622,19 @@ func select_character(player_id: int, character_id: String) -> bool:
 
 ## 接受来自人类、AI 或网络的统一行为指令；返回是否通过规则校验并执行。
 func submit_action(action: PlayerAction) -> bool:
+	if action == null:
+		return _reject("提交的玩家操作为空。")
+	# 局域网客户端不持有权威状态；所有本地 UI 操作只上行给房主，并由房主使用同一函数再次完整校验。
+	if network_gateway != null and network_gateway.is_lan_client():
+		if not network_gateway.is_lan_match_active():
+			return _reject("局域网对局尚未开始。")
+		if action.actor_id != local_human_player_id:
+			return _reject("客户端只能提交当前连接所绑定玩家的操作。")
+		network_gateway.send_command(action)
+		return true
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
-	if action != null and is_gameplay_paused() and ai_coordinator != null and ai_coordinator.is_ai_controlled(action.actor_id):
+	if is_gameplay_paused() and ai_coordinator != null and ai_coordinator.is_ai_controlled(action.actor_id):
 		return false
 	if action.action_type == "select_character":
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
@@ -744,6 +793,8 @@ func get_legal_actions(player_id: int) -> Array[Dictionary]:
 
 ## 返回指定卡牌与当前目标顺序的只读交互预览，供 UI 展示合法目标、步骤提示与确认状态。
 func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Array[int] = []) -> Dictionary:
+	if network_gateway != null and network_gateway.is_lan_client():
+		return _get_remote_card_use_preview(player_id, card_uid, selected_target_ids)
 	# 预览默认结果；任何不可操作状态都会返回明确原因且不暴露权威对象引用。
 	var result: Dictionary = {
 		"card_found": false,
@@ -804,6 +855,8 @@ func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Ar
 
 ## 返回任意出牌阶段主动装备的只读交互预览；具体字段由对应装备文件生成。
 func get_equipment_action_preview(player_id: int, equipment_uid: int, payload: Dictionary, selected_target_ids: Array[int] = []) -> Dictionary:
+	if network_gateway != null and network_gateway.is_lan_client():
+		return _get_remote_equipment_action_preview(player_id, equipment_uid, payload, selected_target_ids)
 	if state == null:
 		return {}
 	# 当前武器实体；兼容 UI 入口只负责按 UID 定位装备源码。
@@ -864,6 +917,10 @@ func _get_play_phase_equipment_action_definition(player_id: int, action_type: St
 
 ## 返回当前是否存在等待玩家或 AI 提交的选择窗口；牌、目标和组合请求都会暂停后续结算。
 func has_pending_card_choice() -> bool:
+	if network_gateway != null and network_gateway.is_lan_client():
+		# 远端当前选择请求；出牌阶段 use 请求属于常驻动作入口，不视为效果结算中的临时选择窗口。
+		var remote_choice: Dictionary = _remote_snapshot.get("current_choice_request", {}) as Dictionary
+		return not remote_choice.is_empty() and int(remote_choice.get("actor_id", -1)) == local_human_player_id and str(remote_choice.get("choice_type", "")) != "use"
 	return not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty()
 
 
@@ -1204,6 +1261,7 @@ func _publish_card_choice_request(choice_data: Dictionary, paced_response: bool)
 	var request_id: int = int(choice_data.get("request_id", -1))
 	if not paced_response or game_flow_pacer == null or game_flow_interval_seconds <= 0.0 or request_id < 0:
 		card_choice_requested.emit(choice_data.duplicate(true))
+		_replicate_choice_request_to_remote_player(choice_data)
 		return
 	# 延时提示回调；到期后会重新读取权威待处理请求，不长期持有候选牌副本。
 	var publish_callback: Callable = Callable(self, "_emit_paced_card_choice_request").bind(request_id)
@@ -1214,6 +1272,7 @@ func _publish_card_choice_request(choice_data: Dictionary, paced_response: bool)
 func _emit_paced_card_choice_request(request_id: int) -> void:
 	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("request_id", -1)) == request_id:
 		card_choice_requested.emit(_pending_card_choice.duplicate(true))
+		_replicate_choice_request_to_remote_player(_pending_card_choice)
 		# 当前普通响应选择者；AI 从提示已经公开的时刻开始计算自身响应等待，人类则继续等待标准动作提交。
 		var chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
 		if chooser_id >= 0 and ai_coordinator.is_ai_controlled(chooser_id):
@@ -1223,6 +1282,7 @@ func _emit_paced_card_choice_request(request_id: int) -> void:
 		# 当前同时无懈请求；每名响应者拥有独立私有候选，提示只发送对应请求的只读副本。
 		var negation_choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
 		card_choice_requested.emit(negation_choice_data.duplicate(true))
+		_replicate_choice_request_to_remote_player(negation_choice_data)
 		# 当前无懈响应者；与普通响应一致，从提示发布后再开始独立 AI 等待。
 		var responder_id: int = int(negation_choice_data.get("chooser_id", -1))
 		# 当前无懈轮次；迟到任务仍由轮次 ID 和请求 ID 双重校验。
@@ -4409,10 +4469,16 @@ func _create_players(player_count: int) -> void:
 	# 身份配置副本；包含领袖在内全部洗牌，使领袖与本地玩家都不与任何固定座次绑定。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
 	_shuffle_array(identities)
+	# 局域网真人玩家 ID；房主大厅已随机绑定成员，离线模式保持只有 local_human_player_id 一名真人。
+	var lan_human_player_ids: Array[int] = []
+	if network_gateway != null and network_gateway.is_lan_host():
+		lan_human_player_ids = network_gateway.get_lan_human_player_ids()
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		# 内置 AI 名称带有明确前缀，真实玩家保持“玩家X”；选将完成旋转座次后会按最终座次再次统一刷新。
-		var default_player_name: String = "玩家%d" % (index + 1) if index == local_human_player_id else "[AI]玩家%d" % (index + 1)
+		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else index == local_human_player_id
+		# 当前玩家显示名；局域网真人沿用大厅昵称，离线真人与 AI 继续使用原有稳定座次名称。
+		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
 		var player: PlayerState = PlayerState.new(index, default_player_name)
 		# 当前座次身份；直接读取已完整洗牌的身份池，领袖可以出现在任意座次。
@@ -4421,9 +4487,9 @@ func _create_players(player_count: int) -> void:
 		player.character_id = ""
 		player.character_revealed = false
 		state.players.append(player)
-		if index != local_human_player_id:
+		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
-	state.random_history.append({"kind":"identity_distribution", "identities":identities.duplicate(), "local_human_player_id":local_human_player_id})
+	state.random_history.append({"kind":"identity_distribution", "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id]})
 
 
 ## 把已确认武将应用到玩家状态；体力上限只在该入口初始化，避免界面与选将服务重复写数值。
@@ -4451,6 +4517,22 @@ func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
 
 ## 查询主动技能当前是否可发动；技能文件负责阶段、次数、目标和资源条件，控制器只提供统一入口。
 func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
+	if network_gateway != null and network_gateway.is_lan_client():
+		if player_id != local_human_player_id or skill_id.is_empty():
+			return false
+		# 当前远端请求；房主已经完成技能入口、次数、资源和阶段校验，客户端只据其私有白名单控制按钮亮起。
+		var remote_choice: Dictionary = _remote_snapshot.get("current_choice_request", {}) as Dictionary
+		if int(remote_choice.get("actor_id", -1)) != player_id:
+			return false
+		# 活动上下文；优先读取技能 backup 后上下文，缺失时回退基础上下文。
+		var active_context: Dictionary = remote_choice.get("active_context", remote_choice.get("base_context", {})) as Dictionary
+		# 当前请求允许直接发动的主动技能 ID；仅用于客户端按钮提示，房主仍执行完整校验。
+		var active_skill_ids: Array = active_context.get("active_skill_ids", []) as Array
+		if active_skill_ids.has(skill_id):
+			return true
+		# 响应转换技能；请求上下文会明确列出已逐材料校验通过的稳定技能 ID。
+		var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", active_context.get("response_conversion_skill_ids", [])) as Array
+		return response_conversion_skill_ids.has(skill_id)
 	# 当前技能运行时实例；未安装的技能不能通过伪造动作直接发动。
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
 	if skill == null:
@@ -4695,7 +4777,10 @@ func _reorder_players_from_leader() -> void:
 	for seat_index: int in range(state.players.size()):
 		# 当前座次玩家；AI 控制权决定显示名前缀，网络或本地真实玩家不添加 AI 标记。
 		var seated_player: PlayerState = state.players[seat_index]
-		seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
+		if network_gateway != null and network_gateway.is_lan_host() and network_gateway.get_lan_human_player_ids().has(seated_player.player_id):
+			seated_player.display_name = network_gateway.get_lan_player_display_name(seated_player.player_id)
+		else:
+			seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
 
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
@@ -7244,16 +7329,417 @@ func _string_array(values: Array) -> Array[String]:
 
 ## 处理网络网关交付的行为字典；网络与本地动作共用完全相同的校验入口。
 func _on_network_command_received(command_data: Dictionary) -> void:
-	submit_action(PlayerAction.from_dict(command_data))
+	if network_gateway != null and network_gateway.is_lan_client():
+		return
+	# 当前远端发送者；仅 LAN 内置传输提供正数 peer_id，REMOTE 外部适配器可保持0并自行返回错误。
+	var sender_peer_id: int = network_gateway.get_current_incoming_peer_id() if network_gateway != null else 0
+	_last_action_rejection_message = ""
+	if not submit_action(PlayerAction.from_dict(command_data)) and sender_peer_id > NetworkGateway.SERVER_PEER_ID:
+		# 当前拒绝原因；规则入口通常已经写入明确文本，空值只用于异常扩展的稳定兜底。
+		var rejection_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "房主拒绝了当前网络操作。"
+		network_gateway.send_game_event_to_peer("action_rejected", {"message":rejection_message}, sender_peer_id)
 
 
 ## 把网络 ChoiceResponse 转换为兼容动作入口；事件运行时仍会再次校验事件、玩家、数量和候选。
 func _on_network_choice_response_received(response_data: Dictionary) -> void:
+	if network_gateway != null and network_gateway.is_lan_client():
+		return
 	var response: ChoiceResponse = ChoiceResponse.from_dict(response_data)
 	var action: PlayerAction = PlayerAction.new("choice_response", response.actor_id)
 	action.client_sequence = response.client_sequence
 	action.payload = response.to_dict()
 	submit_action(action)
+
+
+## 局域网客户端接收房主定向快照；快照只驱动表现和无状态预览，不创建本地规则服务或随机源。
+func _on_network_snapshot_received(snapshot_data: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_client():
+		return
+	_remote_snapshot = snapshot_data.duplicate(true)
+	# 选将私有快照；房主把它嵌入同一可靠状态包，避免候选与公共 GameState 分两次到达造成界面闪烁。
+	var selection_snapshot: Dictionary = (_remote_snapshot.get("character_selection", {}) as Dictionary).duplicate(true)
+	_remote_snapshot.erase("character_selection")
+	state_changed.emit(_remote_snapshot.duplicate(true))
+	public_card_choice_display_changed.emit((_remote_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate(true))
+	if not selection_snapshot.is_empty():
+		character_selection_changed.emit(selection_snapshot)
+
+
+## 局域网客户端接收只属于自己的兼容 UI 选择请求；其他玩家请求不会由网关定向到本连接。
+func _on_network_choice_request_received(request_data: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_client():
+		return
+	# 请求选择者；兼容 UI 请求使用 chooser_id，通用 ChoiceRequest 使用 actor_id，二者均必须等于本地绑定玩家。
+	var chooser_id: int = int(request_data.get("chooser_id", request_data.get("actor_id", -1)))
+	if chooser_id != local_human_player_id:
+		return
+	card_choice_requested.emit(request_data.duplicate(true))
+
+
+## 局域网客户端分发房主发送的只读表现事件；事件白名单确保网络数据只能触发既有 UI 信号。
+func _on_network_game_event_received(event_type: String, event_payload: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_client():
+		return
+	if event_type == "log_added":
+		log_added.emit(str(event_payload.get("message", "")))
+	elif event_type == "action_rejected":
+		action_rejected.emit(str(event_payload.get("message", "房主拒绝了当前操作。")))
+	elif event_type == "card_presentation":
+		card_presentation_requested.emit((event_payload.get("presentation", {}) as Dictionary).duplicate(true))
+	elif event_type == "card_transfer":
+		card_transfer_requested.emit(
+			(event_payload.get("card", {}) as Dictionary).duplicate(true),
+			int(event_payload.get("source_player_id", -1)),
+			str(event_payload.get("source_zone", "")),
+			int(event_payload.get("target_player_id", -1)),
+			str(event_payload.get("target_zone", ""))
+		)
+	elif event_type == "draw_batch_started":
+		draw_presentation_batch_started.emit(int(event_payload.get("batch_id", -1)), int(event_payload.get("player_id", -1)))
+	elif event_type == "draw_batch_finished":
+		draw_presentation_batch_finished.emit(int(event_payload.get("batch_id", -1)), int(event_payload.get("player_id", -1)))
+	elif event_type == "card_animation_reset":
+		card_animation_ownership_reset_requested.emit(int(event_payload.get("card_uid", -1)))
+	elif event_type == "skill_activated":
+		skill_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("skill_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
+	elif event_type == "equipment_activated":
+		equipment_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("equipment_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
+	elif event_type == "public_card_choice_display":
+		public_card_choice_display_changed.emit((event_payload.get("display", {}) as Dictionary).duplicate(true))
+	elif event_type == "match_finished":
+		match_finished.emit(str(event_payload.get("winner", "")))
+
+
+## 清理客户端远端快照；离开房间或房主断开时调用，避免返回主菜单后仍用旧对局数据判断交互。
+func clear_remote_network_state() -> void:
+	_remote_snapshot.clear()
+
+
+## 房主在正式开局广播或重连补发时主动重发当前状态；不推进阶段、不增加动作序号。
+func replicate_current_state() -> void:
+	_emit_state()
+
+
+## 房主把兼容选择请求只发送给对应远端真人；本地房主和 AI 继续消费原有信号或调度器。
+func _replicate_choice_request_to_remote_player(choice_data: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	# 请求选择者稳定 ID；不存在或已掉线时不发送，断线托管由独立回调接管。
+	var chooser_id: int = int(choice_data.get("chooser_id", -1))
+	# 对应远端 peer；房主自身固定为1，AI与掉线玩家返回0。
+	var peer_id: int = network_gateway.get_peer_id_for_player(chooser_id)
+	if peer_id > NetworkGateway.SERVER_PEER_ID:
+		network_gateway.send_choice_request_to_peer(choice_data, peer_id)
+
+
+## 对局中远端玩家掉线后注册基础 AI 托管；当前选将、选择窗口或出牌阶段均从现有统一调度入口继续。
+func _on_lan_match_peer_disconnected(player_id: int, display_name: String) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or state == null or state.game_over or player_id < 0:
+		return
+	if ai_coordinator.is_ai_controlled(player_id):
+		return
+	ai_coordinator.register_basic_ai(player_id)
+	add_log("%s已断开连接，由 AI 接管后续操作。" % display_name)
+	if state.current_phase == "character_selection":
+		_drive_ai_character_selection()
+	elif not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
+		_schedule_ai_card_choice_response(int(_pending_card_choice.get("request_id", -1)), player_id)
+	else:
+		# 同时无懈请求；只为掉线玩家自己的私有请求启动 AI 响应任务，其他真人继续并行等待。
+		for request_id_variant: Variant in _pending_negation_choices.keys():
+			# 当前待处理无懈请求 ID；用于精确恢复掉线玩家对应的并行响应协程。
+			var request_id: int = int(request_id_variant)
+			# 当前无懈选择数据；缺失时为空字典，不会误匹配任何有效玩家。
+			var choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
+			if int(choice_data.get("chooser_id", -1)) == player_id:
+				# 当前无懈响应上下文；提供轮次 ID，防止旧托管任务影响后续新轮次。
+				var response_context: Dictionary = choice_data.get("context", {}) as Dictionary
+				_run_simultaneous_negation_ai_after_delay(request_id, player_id, int(response_context.get("negation_round_id", -1)))
+		_ensure_ai_progress_after_resolution()
+	_emit_state()
+
+
+## 客户端根据房主下发的完整合法动作集合生成普通卡牌预览；该结果只控制 UI，不能替代房主最终校验。
+func _get_remote_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Array[int]) -> Dictionary:
+	# 默认预览；没有匹配动作时仍提供稳定字段，界面可安全禁用确定按钮。
+	var result: Dictionary = {
+		"card_found":false,
+		"can_submit":false,
+		"validation_error":"当前卡牌不可用。",
+		"legal_target_ids":[],
+		"normalized_target_ids":selected_target_ids.duplicate(),
+		"target_mode":"",
+		"min_targets":0,
+		"max_targets":0,
+		"description":"",
+	}
+	if player_id != local_human_player_id or _remote_snapshot.is_empty() or bool(_remote_snapshot.get("game_over", false)):
+		return result
+	# 当前私有实体快照；只在本地手牌或木牛“粮”中查找，不读取其他玩家隐藏卡牌。
+	var card_snapshot: Dictionary = _find_remote_owned_card_snapshot(player_id, card_uid, false)
+	if card_snapshot.is_empty():
+		return result
+	# 当前静态卡牌定义；目标数量与说明属于公开内容数据，可在客户端本地数据库解析。
+	var definition: Dictionary = GameDatabase.get_card(str(card_snapshot.get("definition_id", "")))
+	result["card_found"] = true
+	result["target_mode"] = str(definition.get("target_mode", ""))
+	result["min_targets"] = int(definition.get("min_targets", 0))
+	result["max_targets"] = int(definition.get("max_targets", 0))
+	result["description"] = str(definition.get("description", ""))
+	# 下一步合法目标集合；动作数组已经由房主按当前技能、装备、距离和次数修正完整枚举。
+	var legal_target_ids: Array[int] = []
+	# 权威动作中的最小目标数；技能或装备修正可以改变静态卡牌定义，因此从实际合法组合重新统计。
+	var authoritative_minimum_target_count: int = -1
+	# 权威动作中的最大目标数；用于客户端目标选择上限，避免静态 max_targets 忽略临时规则修正。
+	var authoritative_maximum_target_count: int = -1
+	for action_variant: Variant in _remote_snapshot.get("local_legal_actions", []) as Array:
+		# 当前候选动作；只匹配同一实体的标准 use_card，不把重铸或装备动作混入目标预览。
+		var action: Dictionary = action_variant as Dictionary
+		if str(action.get("action_type", "")) != "use_card" or int(action.get("card_uid", -1)) != card_uid:
+			continue
+		# 当前动作目标；保留借刀杀人等顺序语义，前缀匹配决定下一次可点目标。
+		var action_target_ids: Array[int] = _int_array(action.get("target_ids", []) as Array)
+		authoritative_minimum_target_count = action_target_ids.size() if authoritative_minimum_target_count < 0 else mini(authoritative_minimum_target_count, action_target_ids.size())
+		authoritative_maximum_target_count = maxi(authoritative_maximum_target_count, action_target_ids.size())
+		if _int_arrays_equal(action_target_ids, selected_target_ids):
+			result["can_submit"] = true
+			result["validation_error"] = ""
+		if _is_int_array_prefix(selected_target_ids, action_target_ids) and action_target_ids.size() > selected_target_ids.size():
+			# 当前合法动作中紧随已选前缀的目标；加入去重集合供界面继续高亮。
+			var next_target_id: int = action_target_ids[selected_target_ids.size()]
+			if not legal_target_ids.has(next_target_id):
+				legal_target_ids.append(next_target_id)
+	result["legal_target_ids"] = legal_target_ids
+	if authoritative_minimum_target_count >= 0:
+		result["min_targets"] = authoritative_minimum_target_count
+		result["max_targets"] = authoritative_maximum_target_count
+	return result
+
+
+## 客户端根据房主合法动作集合生成装备主动预览；当前实现通用支持“材料为动作牌”和“装备为动作牌”两类元数据。
+func _get_remote_equipment_action_preview(player_id: int, equipment_uid: int, payload: Dictionary, selected_target_ids: Array[int]) -> Dictionary:
+	if player_id != local_human_player_id or _remote_snapshot.is_empty():
+		return {}
+	# 当前装备快照；只从本地玩家公开装备区按实体 UID 查找。
+	var equipment_snapshot: Dictionary = _find_remote_owned_card_snapshot(player_id, equipment_uid, true)
+	if equipment_snapshot.is_empty():
+		return {}
+	# 当前装备定义；主动动作类型、材料数量和动作牌来源均由卡牌源码元数据前置声明。
+	var definition: Dictionary = GameDatabase.get_card(str(equipment_snapshot.get("definition_id", "")))
+	# 装备声明的出牌阶段动作类型；空值表示该装备没有可从此入口发动的主动动作。
+	var action_type: String = str(definition.get("play_phase_action_type", ""))
+	# 装备动作要求的材料数量；客户端据此判断是否具备形成完整合法动作的可能。
+	var required_material_count: int = int(definition.get("play_phase_material_count", 0))
+	# 动作牌来源模式；material 表示材料本身作为动作牌，其余模式使用装备实体作为动作牌。
+	var action_card_source: String = str(definition.get("play_phase_action_card_source", "equipment"))
+	# 当前客户端已选材料；顺序只用于提交表现，合法动作匹配按成员集合处理。
+	var material_card_uids: Array[int] = _int_array(payload.get("material_card_uids", []) as Array)
+	# 匹配当前材料的权威合法动作；只有完整材料组合才会产生候选。
+	var matching_actions: Array[Dictionary] = []
+	for action_variant: Variant in _remote_snapshot.get("local_legal_actions", []) as Array:
+		# 当前权威合法动作；必须同时匹配动作类型、装备实体与已选材料。
+		var action: Dictionary = action_variant as Dictionary
+		if str(action.get("action_type", "")) != action_type:
+			continue
+		if action_card_source == "material":
+			if material_card_uids.size() == 1 and int(action.get("card_uid", -1)) == material_card_uids[0]:
+				matching_actions.append(action)
+		else:
+			# 动作 payload 中的材料；丈八蛇矛等装备以装备 UID 作为 card_uid，并单独保存材料数组。
+			var action_material_uids: Array[int] = _int_array(((action.get("payload", {}) as Dictionary).get("material_card_uids", []) as Array))
+			if int(action.get("card_uid", -1)) == equipment_uid and _int_arrays_have_same_members(action_material_uids, material_card_uids):
+				matching_actions.append(action)
+	# 装备预览默认值；说明来自本地静态定义，目标字段由匹配动作补齐。
+	var result: Dictionary = {
+		"card_found":material_card_uids.size() == required_material_count and not matching_actions.is_empty(),
+		"can_submit":false,
+		"validation_error":"请选择符合要求的手牌材料。",
+		"legal_target_ids":[],
+		"normalized_target_ids":selected_target_ids.duplicate(),
+		"target_mode":"single_other",
+		"min_targets":1,
+		"max_targets":1,
+		"description":str(definition.get("description", "")),
+	}
+	# 木牛流马的可选转移目标不会加入 AI 合法动作枚举；客户端可从公开存活快照生成提示，房主仍会最终校验。
+	if action_type == "store_wooden_ox" and not matching_actions.is_empty():
+		# 可选转移目标列表；只包含本地玩家以外仍存活的公开角色。
+		var optional_target_ids: Array[int] = []
+		for player_variant: Variant in _remote_snapshot.get("players", []) as Array:
+			# 当前公开玩家快照；只读取稳定 ID 与存活状态，不访问任何隐藏牌面。
+			var player_snapshot: Dictionary = player_variant as Dictionary
+			# 当前候选玩家稳定 ID；无效值 -1 不会通过其他玩家及存活条件。
+			var target_id: int = int(player_snapshot.get("player_id", -1))
+			if target_id != player_id and bool(player_snapshot.get("alive", true)):
+				optional_target_ids.append(target_id)
+		result["card_found"] = material_card_uids.size() == required_material_count
+		result["can_submit"] = selected_target_ids.is_empty() or (selected_target_ids.size() == 1 and optional_target_ids.has(selected_target_ids[0]))
+		result["validation_error"] = "" if bool(result["can_submit"]) else "木牛流马的转移目标不合法。"
+		result["legal_target_ids"] = optional_target_ids
+		result["target_mode"] = "optional_single_other"
+		result["min_targets"] = 0
+		return result
+	# 普通装备动作；使用完整合法动作目标数组执行前缀与精确匹配。
+	var legal_target_ids: Array[int] = []
+	for action: Dictionary in matching_actions:
+		# 当前装备动作的有序目标数组；顺序影响多目标装备动作的后续选择提示。
+		var action_target_ids: Array[int] = _int_array(action.get("target_ids", []) as Array)
+		if _int_arrays_equal(action_target_ids, selected_target_ids):
+			result["can_submit"] = true
+			result["validation_error"] = ""
+		if _is_int_array_prefix(selected_target_ids, action_target_ids) and action_target_ids.size() > selected_target_ids.size():
+			# 当前匹配动作的下一合法目标；重复目标只保留一次高亮记录。
+			var next_target_id: int = action_target_ids[selected_target_ids.size()]
+			if not legal_target_ids.has(next_target_id):
+				legal_target_ids.append(next_target_id)
+	result["legal_target_ids"] = legal_target_ids
+	return result
+
+
+## 在远端裁剪快照中按 UID 查找本地玩家拥有的牌；equipment_only 决定搜索装备区或手牌与木牛区。
+func _find_remote_owned_card_snapshot(player_id: int, card_uid: int, equipment_only: bool) -> Dictionary:
+	for player_variant: Variant in _remote_snapshot.get("players", []) as Array:
+		# 当前玩家快照；只处理与本地稳定玩家 ID 匹配的私有对象。
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		if int(player_snapshot.get("player_id", -1)) != player_id:
+			continue
+		if equipment_only:
+			for equipment_variant: Variant in (player_snapshot.get("equipment", {}) as Dictionary).values():
+				# 当前公开装备实体；装备区牌面公开，可直接按 UID 返回完整副本。
+				var equipment: Dictionary = equipment_variant as Dictionary
+				if int(equipment.get("uid", -1)) == card_uid:
+					return equipment.duplicate(true)
+			return {}
+		for card_variant: Variant in player_snapshot.get("hand", []) as Array:
+			# 当前本地手牌实体；裁剪快照只会为观察者本人提供完整牌面。
+			var hand_card: Dictionary = card_variant as Dictionary
+			if int(hand_card.get("uid", -1)) == card_uid:
+				return hand_card.duplicate(true)
+		for card_variant: Variant in player_snapshot.get("wooden_ox_storage", []) as Array:
+			# 当前木牛私有存牌实体；与手牌采用相同 UID 查找和副本返回规则。
+			var stored_card: Dictionary = card_variant as Dictionary
+			if int(stored_card.get("uid", -1)) == card_uid:
+				return stored_card.duplicate(true)
+		return {}
+	return {}
+
+
+## 判断两个整数数组是否逐项相等；目标选择顺序具有规则语义，不能使用无序集合比较。
+func _int_arrays_equal(first_values: Array[int], second_values: Array[int]) -> bool:
+	if first_values.size() != second_values.size():
+		return false
+	for index: int in range(first_values.size()):
+		if first_values[index] != second_values[index]:
+			return false
+	return true
+
+
+## 判断已选目标是否为某条完整合法动作目标的顺序前缀；用于借刀杀人等分步多目标高亮。
+func _is_int_array_prefix(prefix_values: Array[int], complete_values: Array[int]) -> bool:
+	if prefix_values.size() > complete_values.size():
+		return false
+	for index: int in range(prefix_values.size()):
+		if prefix_values[index] != complete_values[index]:
+			return false
+	return true
+
+
+## 判断两个材料 UID 数组是否包含相同成员；装备材料顺序不改变规则结果，但重复 UID 仍会因计数不等被拒绝。
+func _int_arrays_have_same_members(first_values: Array[int], second_values: Array[int]) -> bool:
+	if first_values.size() != second_values.size():
+		return false
+	for value: int in first_values:
+		if not second_values.has(value):
+			return false
+	return true
+
+
+## 将一条规则日志广播给全部局域网客户端；日志文本属于公开语义，不包含节点或可执行对象。
+func _replicate_log_event(message: String) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("log_added", {"message":message})
+
+
+## 广播公开牌面表现；发送前移除“哪些玩家曾私下知晓此牌”等不影响画面的内部可见性元数据。
+func _replicate_card_presentation_event(presentation_data: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	# 可发送表现副本；卡牌已经进入使用、展示或判定公共事件，牌面本身可公开。
+	var safe_presentation: Dictionary = presentation_data.duplicate(true)
+	# 可发送牌面副本；移除仅供权威端追踪隐藏知识的内部字段后再广播。
+	var safe_card: Dictionary = (safe_presentation.get("card_data", {}) as Dictionary).duplicate(true)
+	safe_card.erase("known_to")
+	safe_card.erase("private_owner_id")
+	safe_presentation["card_data"] = safe_card
+	network_gateway.broadcast_game_event("card_presentation", {"presentation":safe_presentation})
+
+
+## 按观察者裁剪牌区移动表现；非当事人看到摸牌或私有手牌转移时只收到 UID 和统一牌背语义。
+func _replicate_card_transfer_event(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	for peer_id_variant: Variant in network_gateway.get_remote_player_assignments().keys():
+		# 当前远端网络 peer；每个观察者需要独立裁剪同一次移动表现。
+		var peer_id: int = int(peer_id_variant)
+		# 当前 peer 对应的稳定玩家 ID；决定该观察者是否为私有牌转移当事人。
+		var viewer_id: int = int(network_gateway.get_remote_player_assignments().get(peer_id, -1))
+		# 当前观察者能否看到完整牌面；公共来源、公开弃牌和转移当事人均可见。
+		var reveal_card: bool = target_zone == "discard_pile" or source_player_id == viewer_id or target_player_id == viewer_id or source_zone not in ["draw_pile", "hand", "wooden_ox"]
+		# 观察者牌面副本；未知牌只保留动画去重 UID 与可选摸牌批次编号。
+		var viewer_card: Dictionary = card_data.duplicate(true) if reveal_card else {"uid":int(card_data.get("uid", -1))}
+		if card_data.has(DRAW_PRESENTATION_BATCH_ID_KEY):
+			viewer_card[DRAW_PRESENTATION_BATCH_ID_KEY] = int(card_data.get(DRAW_PRESENTATION_BATCH_ID_KEY, -1))
+		viewer_card.erase("known_to")
+		viewer_card.erase("private_owner_id")
+		network_gateway.send_game_event_to_peer("card_transfer", {
+			"card":viewer_card,
+			"source_player_id":source_player_id,
+			"source_zone":source_zone,
+			"target_player_id":target_player_id,
+			"target_zone":target_zone,
+		}, peer_id)
+
+
+## 广播摸牌表现批次开始；该事件只包含批次与目标玩家 ID，不包含牌面。
+func _replicate_draw_batch_started_event(batch_id: int, player_id: int) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("draw_batch_started", {"batch_id":batch_id, "player_id":player_id})
+
+
+## 广播摸牌表现批次完成；客户端据此统一播放已经按观察者裁剪的批次卡牌。
+func _replicate_draw_batch_finished_event(batch_id: int, player_id: int) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("draw_batch_finished", {"batch_id":batch_id, "player_id":player_id})
+
+
+## 广播牌面动画所有权重置信号；只含公开稳定 UID，不携带规则状态。
+func _replicate_card_animation_reset_event(card_uid: int) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("card_animation_reset", {"card_uid":card_uid})
+
+
+## 广播已经实际发动的技能提示；上下文必须保持可序列化，只供目标线与中央提示消费。
+func _replicate_skill_activated_event(player_id: int, skill_name: String, context: Dictionary) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("skill_activated", {"player_id":player_id, "skill_name":skill_name, "context":context.duplicate(true)})
+
+
+## 广播已经实际生效的装备提示；不发送装备运行时实例或触发订阅。
+func _replicate_equipment_activated_event(player_id: int, equipment_name: String, context: Dictionary) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("equipment_activated", {"player_id":player_id, "equipment_name":equipment_name, "context":context.duplicate(true)})
+
+
+## 广播公共选牌展示变化；五谷丰登等固定牌位对全部观察者可见，私有候选仍走定向选择请求。
+func _replicate_public_card_choice_display_event(display_data: Dictionary) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("public_card_choice_display", {"display":display_data.duplicate(true)})
+
+
+## 广播终局结果；客户端只更新表现和后续按钮，不在本地重复执行奖惩或胜负判定。
+func _replicate_match_finished_event(winner: String) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("match_finished", {"winner":winner})
 
 
 ## 返回当前规则调用可关联的父事件 ID；无有效摘要时回退到长期对局根事件。
@@ -7403,7 +7889,7 @@ func _on_runtime_choice_requested(request_data: Dictionary) -> void:
 	state.current_choice_request = request_data.duplicate(true)
 	state.current_event_id = int(request_data.get("event_id", state.current_event_id))
 	_append_runtime_history_record(event_scheduler.get_latest_history_record())
-	if network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+	if network_gateway != null and network_gateway.mode == NetworkGateway.Mode.REMOTE:
 		# 联网请求对象；从运行时快照恢复基础字段后交给网关发送，传输端不获得 Callable。
 		var request: ChoiceRequest = ChoiceRequest.from_dict(request_data)
 		network_gateway.send_choice_request(request)
@@ -7430,10 +7916,27 @@ func _emit_state() -> void:
 	state_changed.emit(local_snapshot)
 	if state.current_phase == "character_selection" and character_selection != null:
 		character_selection_changed.emit(character_selection.to_dict(local_human_player_id))
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		for peer_id_variant: Variant in network_gateway.get_remote_player_assignments().keys():
+			# 当前远端 peer 与其稳定玩家 ID；每人单独生成私有快照，禁止广播同一观察者数据。
+			var peer_id: int = int(peer_id_variant)
+			# 当前远端观察者稳定玩家 ID；无效映射不生成快照，避免错误公开私有数据。
+			var viewer_id: int = int(network_gateway.get_remote_player_assignments().get(peer_id, -1))
+			if viewer_id < 0:
+				continue
+			# 观察者裁剪快照；随机种子属于权威端私有信息，联网下不发送给任何客户端。
+			var remote_snapshot: Dictionary = state.to_dict(viewer_id, false)
+			remote_snapshot.erase("random_seed")
+			# 本地合法动作；只发送给实际行动玩家，用于客户端无状态预览，最终提交仍由房主重新校验。
+			remote_snapshot["local_legal_actions"] = get_legal_actions(viewer_id) if state.current_phase == "play" and state.current_player_id == viewer_id else []
+			# 选将私有快照；候选仅进入对应观察者的定向状态包，其他玩家只能看到公开确认状态。
+			remote_snapshot["character_selection"] = character_selection.to_dict(viewer_id) if state.current_phase == "character_selection" and character_selection != null else {}
+			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
 
 
 ## 拒绝动作并返回 false，统一错误信号与调用结果。
 func _reject(message: String) -> bool:
+	_last_action_rejection_message = message
 	action_rejected.emit(message)
 	return false
 

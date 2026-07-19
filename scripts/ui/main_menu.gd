@@ -86,6 +86,12 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 设置按钮；位于开始游戏按钮左侧，替代参考布局中的商店入口。
 @onready var _settings_button: Button = %MainMenuSettingsButton
 
+## 局域网联机按钮；打开独立大厅组件，不直接创建 ENet、玩家状态或权威对局。
+@onready var _lan_button: Button = %MainMenuLanButton
+
+## 局域网大厅组件；只负责连接表单与成员快照展示，实际网络动作由牌桌协调器接收其信号。
+@onready var _lan_lobby_panel: LanLobbyPanel = %LanLobbyPanel
+
 ## 设置浮层；默认隐藏，打开后允许修改全局显示与下一局人数配置。
 @onready var _settings_panel: PanelContainer = %MainMenuSettingsPanel
 
@@ -128,6 +134,9 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 当前状态文字是否表示错误；主题切换时据此保留危险色，而不是把错误重绘成普通提示。
 var _status_is_error: bool = false
 
+## 局域网大厅入口使用的默认端口；由牌桌从 NetworkGateway 检查器配置同步，默认7000仅作为独立组件测试回退。
+var _lan_default_port: int = 7000
+
 ## 设置模态打开前的主菜单底层控件焦点模式；键为控件实例、值为原始 FocusMode，关闭设置后原样恢复，运行时不保存业务状态。
 var _background_focus_modes: Dictionary = {}
 
@@ -143,6 +152,7 @@ func _ready() -> void:
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
 	_settings_button.pressed.connect(_open_settings)
+	_lan_button.pressed.connect(_open_lan_panel)
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	_start_game_button.pressed.connect(_request_start_game)
@@ -216,6 +226,11 @@ func get_next_player_count() -> int:
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
+## 同步局域网网关默认端口；主菜单只保存显示入口参数，不创建或持有 ENet 对等体。
+func set_lan_default_port(port: int) -> void:
+	_lan_default_port = clampi(port, 1024, 65535)
+
+
 ## 按当前活动主题刷新主菜单全部静态控件；不保存主题颜色副本，也不修改任何玩法配置。
 func refresh_ui_style() -> void:
 	if not is_node_ready():
@@ -239,6 +254,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_top_identity_mode_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
@@ -288,6 +304,13 @@ func _open_settings() -> void:
 	_settings_close_button.grab_focus()
 
 
+## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
+func _open_lan_panel() -> void:
+	_set_settings_visible(false)
+	_lan_lobby_panel.open_panel(get_next_player_count(), _lan_default_port)
+	_suspend_background_focus(_lan_lobby_panel)
+
+
 ## 关闭设置浮层；已经写入 GameSettings 的配置立即保留，不需要额外确认按钮。
 func _close_settings() -> void:
 	_set_settings_visible(false)
@@ -312,6 +335,8 @@ func _request_start_game() -> void:
 ## 在牌桌确认权威对局创建成功后关闭主菜单；失败请求不会调用该入口，因此玩家始终可以修改设置并重试。
 func confirm_game_started() -> void:
 	_set_settings_visible(false)
+	_lan_lobby_panel.confirm_match_started()
+	_restore_background_focus()
 	_start_game_button.disabled = false
 	visible = false
 	_restore_covered_interface_focus()
@@ -334,6 +359,23 @@ func restore_after_failed_restart(message: String) -> void:
 	call_deferred("_focus_start_game_button")
 
 
+## 关闭尚未开局的局域网面板并恢复普通主菜单焦点；实际断开操作由牌桌在调用前完成。
+func close_lan_panel() -> void:
+	_lan_lobby_panel.visible = false
+	_restore_background_focus()
+	call_deferred("_focus_lan_button")
+
+
+## 在房主断开或连接失败后恢复主菜单和局域网入口，并保留具体错误供玩家修正后重试。
+func show_lan_session_error(message: String) -> void:
+	visible = true
+	_suspend_covered_interface_focus()
+	_set_settings_visible(false)
+	_lan_lobby_panel.return_to_entry(message)
+	_suspend_background_focus(_lan_lobby_panel)
+	move_to_front()
+
+
 ## 退出一局进行中或已结束的对局后恢复主菜单；该入口不显示错误，并保留玩家此前配置的下一局人数。
 func return_to_main_menu() -> void:
 	visible = true
@@ -350,20 +392,22 @@ func _set_settings_visible(settings_visible: bool) -> void:
 	_settings_backdrop.visible = settings_visible
 	_settings_panel.visible = settings_visible
 	if settings_visible:
-		_suspend_background_focus()
+		_suspend_background_focus(_settings_panel)
 	else:
 		_restore_background_focus()
 
 
-## 暂停主菜单内设置面板之外全部可聚焦控件；保证 Tab、Shift+Tab 与手柄导航始终留在当前模态内容中。
-func _suspend_background_focus() -> void:
+## 暂停主菜单内指定模态面板之外全部可聚焦控件；保证 Tab、Shift+Tab 与手柄导航始终留在当前模态内容中。
+func _suspend_background_focus(active_modal: Control = null) -> void:
+	# 实际活动模态；未显式传入时继续使用设置面板，保持旧调用入口语义不变。
+	var modal: Control = _settings_panel if active_modal == null else active_modal
 	# 主菜单下的全部控件；设置浮层只需冻结同一组件内的模式和开局入口，局内焦点由主菜单覆盖边界独立管理。
 	var menu_controls: Array[Node] = find_children("*", "Control", true, false)
 	# 主菜单控件遍历项；逐个保留原始焦点模式，后续追加的模式按钮无需在组件中硬编码节点名。
 	for control_node: Node in menu_controls:
 		# 当前可聚焦控件；设置面板及其后代保留原焦点模式，供模态内部正常循环导航。
 		var control: Control = control_node as Control
-		if control == null or control == _settings_panel or _settings_panel.is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _background_focus_modes.has(control):
+		if control == null or control == modal or modal.is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _background_focus_modes.has(control):
 			continue
 		_background_focus_modes[control] = control.focus_mode
 		control.focus_mode = Control.FOCUS_NONE
@@ -447,8 +491,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## 主菜单完成布局后把键盘焦点放到主要操作；玩家可直接按确认键开始当前唯一模式。
 func _focus_start_game_button() -> void:
-	if visible and not _settings_panel.visible:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible:
 		_start_game_button.grab_focus()
+
+
+## 局域网面板关闭后把焦点归还联机入口；若主菜单或按钮不可用则安全跳过。
+func _focus_lan_button() -> void:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _lan_button.disabled:
+		_lan_button.grab_focus()
 
 
 ## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。
