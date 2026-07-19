@@ -33,6 +33,11 @@ func _ready() -> void:
 	saving_settings.call("set_next_match_player_count", TEST_NEXT_MATCH_PLAYER_COUNT)
 	saving_settings.call("set_online_player_name", TEST_PLAYER_NAME)
 	saving_settings.call("set_online_avatar_character_id", TEST_AVATAR_CHARACTER_ID)
+	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
+		_fail("save_should_be_deferred")
+		return
+	# 合并保存刷新；设置层公开入口确保测试不依赖真实时间等待，并验证最终一次写盘包含全部字段。
+	saving_settings.call("flush_pending_settings")
 	# 已写入的配置读取器；直接核对磁盘字段，确保测试没有只验证同一内存节点。
 	var saved_file: ConfigFile = ConfigFile.new()
 	if saved_file.load(TEST_SETTINGS_FILE_PATH) != OK:

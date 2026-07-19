@@ -90,6 +90,11 @@ func _run() -> void:
 		printerr("SMOKE_FAIL content_filename_validation")
 		get_tree().quit(1)
 		return
+	# 导出包脚本目录项规范化；Android PCK中的remap、编译或加密脚本必须恢复成原`.gd`资源路径，辅助文件不能误入内容注册。
+	if GameDatabase._resolve_gd_script_file_name("sha.gd") != "sha.gd" or GameDatabase._resolve_gd_script_file_name("sha.gd.remap") != "sha.gd" or GameDatabase._resolve_gd_script_file_name("sha.gdc") != "sha.gd" or GameDatabase._resolve_gd_script_file_name("sha.gde") != "sha.gd" or not GameDatabase._resolve_gd_script_file_name("sha.gd.uid").is_empty():
+		printerr("SMOKE_FAIL exported_script_remap_resolution")
+		get_tree().quit(1)
+		return
 	# 默认完整牌堆实体牌数量；官方规则集3.0身份局牌表包含【银月枪】与【木牛流马】，合计162张。
 	var deck_count: int = GameDatabase.get_deck_cards("standard_162").size()
 	if deck_count != 162:
