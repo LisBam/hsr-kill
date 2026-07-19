@@ -541,6 +541,14 @@ func _discard_failed_match_start() -> void:
 	state = null
 
 
+## 主动放弃当前对局并回到空闲入口；主菜单使用该接口退出进行中或已结束的本地权威状态。
+## 该操作不结算胜负、不写入回放，也不改变跨局显示设置，仅释放本局运行时服务和延迟任务。
+func abandon_match() -> void:
+	if state == null:
+		return
+	_discard_failed_match_start()
+
+
 ## 为本局分配有效的本地人类座次；随机模式使用对局随机源，固定模式把检查器配置限制到实际人数范围。
 func _assign_local_human_player_seat(player_count: int) -> void:
 	if local_human_player_id < 0:
@@ -1594,7 +1602,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		var maximum_control_count: int = int(_pending_card_choice.get("max_select", 1))
 		if selected_control_count < minimum_control_count or selected_control_count > maximum_control_count:
 			return _reject("选择的文字选项数量不符合要求。")
-	if confirmed and selected_uids.size() < min_select:
+	# 文字控制项的数量已在上方按 control_id 校验；不能再把其空实体牌数组误判为“选择的牌数不足”。
+	if confirmed and choice_type not in ["control", "bool"] and selected_uids.size() < min_select:
 		return _reject("选择的牌数不足。")
 	if selected_uids.size() > max_select:
 		return _reject("选择的牌数超过上限。")

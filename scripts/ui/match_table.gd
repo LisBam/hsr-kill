@@ -404,6 +404,7 @@ func _ready() -> void:
 	match_controller.ai_coordinator.identity_mark_changed.connect(_on_automatic_identity_mark_changed)
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
+	match_menu.main_menu_requested.connect(_on_main_menu_requested)
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_menu.set_next_player_count(match_controller.default_player_count)
@@ -1585,8 +1586,11 @@ func _on_self_target_pressed() -> void:
 	_on_target_pressed(match_controller.local_human_player_id)
 
 
-## 提交使用牌动作；所有规则错误由核心返回并显示。
+## 提交使用牌动作；本地阵亡或终局时复用同一位置按当前设置重新开局，其他情况继续提交标准动作。
 func _on_use_pressed() -> void:
+	if _should_show_post_match_actions():
+		_on_restart_requested(match_menu.get_next_player_count())
+		return
 	if not _active_equipment_action.is_empty():
 		_submit_equipment_action()
 		return
@@ -1697,8 +1701,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
-## 取消当前选牌与目标，不向规则核心提交任何动作。
+## 取消当前选牌与目标；本地阵亡或终局时复用同一位置返回主菜单。
 func _on_cancel_pressed() -> void:
+	if _should_show_post_match_actions():
+		_on_main_menu_requested()
+		return
 	if not _active_equipment_action.is_empty():
 		_clear_equipment_action()
 		_selected_target_ids.clear()
@@ -1753,9 +1760,9 @@ func _on_end_play_pressed() -> void:
 	match_controller.submit_action(PlayerAction.new("end_play", match_controller.local_human_player_id))
 
 
-## 切换全局卡牌名称模式；所有牌面与装备名称随后统一刷新。
-func _on_name_mode_pressed() -> void:
-	GameSettings.toggle_card_name_mode()
+## 设置全局卡牌名称模式；所有牌面与装备名称随后统一刷新。
+func _on_name_mode_pressed(mode: int) -> void:
+	GameSettings.set_card_name_mode(mode)
 
 
 ## 响应名称模式变化并重新渲染现有快照；技能说明中的卡牌引用与牌面使用同一名称模式。
@@ -1869,6 +1876,21 @@ func _on_restart_requested(player_count: int) -> bool:
 		main_menu.set_next_player_count(player_count)
 		main_menu.restore_after_failed_restart(failure_message)
 	return match_started
+
+
+## 退出当前权威对局并恢复主菜单；局内表现保留在主菜单下方但不再获得焦点或规则更新。
+func _on_main_menu_requested() -> void:
+	if information_box != null and is_instance_valid(information_box):
+		information_box.close_character_details()
+	match_controller.abandon_match()
+	card_selection_panel.close()
+	_inline_card_choice.clear()
+	_inline_selected_card_uids.clear()
+	_modal_choice_request_id = -1
+	_modal_card_choice_request.clear()
+	_suppressed_group_trick_uid = -1
+	main_menu.set_next_player_count(match_menu.get_next_player_count())
+	main_menu.return_to_main_menu()
 
 
 ## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
@@ -2682,7 +2704,7 @@ func _on_action_rejected(message: String) -> void:
 		main_menu.show_start_error(message)
 
 
-## 更新当前选择摘要，目标以玩家显示名与选择顺序呈现。
+## 更新当前选择摘要，目标以玩家显示名与选择顺序呈现；本地阵亡或终局时改为显示重开与返回主菜单操作。
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
@@ -2697,6 +2719,9 @@ func _refresh_selection_text() -> void:
 	%CancelButton.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	selection_label.visible = true
 	call_deferred("_refresh_group_trick_response_button")
+	if _should_show_post_match_actions():
+		_refresh_post_match_actions()
+		return
 	# 本地是否处于普通出牌阶段；右侧回合结束按钮只在该阶段独立显示，不属于中央交互面板。
 	var can_act: bool = _can_local_player_act()
 	end_play_button.visible = can_act and _inline_card_choice.is_empty()
@@ -2739,6 +2764,38 @@ func _refresh_selection_text() -> void:
 		interaction_guide_label.text = "请选择目标"
 	use_button.disabled = not can_act or (not bool(_card_use_preview.get("can_submit", false)) and not can_confirm_recast)
 	%CancelButton.visible = true
+	_refresh_component_states()
+
+
+## 判断是否应在本地手牌区上方显示终局操作；整局结束或本地角色阵亡都允许立即开始下一局或退出。
+func _should_show_post_match_actions() -> bool:
+	if _snapshot.is_empty():
+		return false
+	if bool(_snapshot.get("game_over", false)):
+		return true
+	# 本地玩家快照；只读取公开存活状态，不推断身份或修改权威对局。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	return not local_player.is_empty() and not bool(local_player.get("alive", true))
+
+
+## 把原确定与取消位置复用于终局操作；固定尺寸、主题和手牌区上方锚点继续沿用统一操作区规格。
+func _refresh_post_match_actions() -> void:
+	interaction_panel.visible = true
+	selection_label.text = ""
+	selection_label.visible = false
+	interaction_guide_label.text = ""
+	use_button.visible = true
+	use_button.text = "重新开始"
+	use_button.disabled = false
+	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	# 原取消按钮；终局时承担退出当前对局的明确命令，不向规则核心提交取消选择。
+	var cancel_button: Button = %CancelButton
+	cancel_button.visible = true
+	cancel_button.text = "返回主菜单"
+	cancel_button.disabled = false
+	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	end_play_button.visible = false
+	end_play_button.disabled = true
 	_refresh_component_states()
 
 

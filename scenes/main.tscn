@@ -20,6 +20,7 @@
 [ext_resource type="Script" uid="uid://djseqc054thh0" path="res://scripts/core/game_flow_pacer.gd" id="20_flow_pacer"]
 [ext_resource type="Script" uid="uid://di1ne8eh8fhcd" path="res://scripts/ui/main_menu.gd" id="21_main_menu"]
 [ext_resource type="Texture2D" uid="uid://dlfv5vj23jqbp" path="res://assets/art/身份模式主菜单背景.png" id="22_identity_menu_background"]
+[ext_resource type="Script" path="res://scripts/ui/identity_marking_indicator.gd" id="23_identity_indicator"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -231,7 +232,7 @@ anchor_right = 1.0
 offset_left = -286.0
 offset_top = 58.0
 offset_right = -18.0
-offset_bottom = 450.0
+offset_bottom = 500.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
@@ -246,11 +247,20 @@ theme_override_font_sizes/font_size = 18
 text = "菜单"
 horizontal_alignment = 1
 
-[node name="MenuCardNameButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1005214864]
-unique_name_in_owner = true
+[node name="CardNameRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
 layout_mode = 2
-theme_override_styles/normal = SubResource("StyleButtonNormal")
-text = "卡牌名称：崩铁杀"
+theme_override_constants/separation = 10
+
+[node name="CardNameLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CardNameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "卡牌名称"
+vertical_alignment = 1
+
+[node name="MenuCardNameOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CardNameRow" unique_id=1005214864]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 34)
+layout_mode = 2
 
 [node name="UiStyleRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=664868405]
 layout_mode = 2
@@ -280,6 +290,15 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 button_pressed = true
 text = "自动标记身份"
+
+[node name="IdentityMarkingIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AutoIdentityMarkingCheckBox"]
+layout_mode = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
 layout_mode = 2
@@ -340,6 +359,12 @@ custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "按设置重新开局"
+
+[node name="MenuReturnToMainButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1771219610]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "返回主菜单"
 
 [node name="PlayerGrid" type="Control" parent="." unique_id=795623905]
 unique_name_in_owner = true
@@ -1100,12 +1125,22 @@ layout_mode = 2
 mouse_filter = 2
 color = Color(0.75, 0.66, 0.42, 0.65)
 
-[node name="MainMenuCardNameButton" type="Button" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=192563745]
+[node name="MainMenuCardNameRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuCardNameLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCardNameRow" unique_id=192563745]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "卡牌名称"
+vertical_alignment = 1
+
+[node name="MainMenuCardNameOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCardNameRow" unique_id=1127143970]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(156, 34)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-text = "卡牌名称：崩铁杀"
 
 [node name="MainMenuUiStyleRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=204379471]
 layout_mode = 2
@@ -1131,6 +1166,15 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 button_pressed = true
 text = "自动标记身份"
+
+[node name="IdentityMarkingIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAutoIdentityMarkingCheckBox"]
+layout_mode = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuAiResponseDelayLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=489346337]
 unique_name_in_owner = true

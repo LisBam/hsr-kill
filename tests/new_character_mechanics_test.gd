@@ -642,6 +642,28 @@ func _test_jiahu_and_bingfeng() -> bool:
 	var second_card_context: Dictionary = _controller._card_use_contexts[9002] as Dictionary
 	if not protected_target.chained or not (second_card_context.get("excluded_target_ids", []) as Array).is_empty():
 		return _fail("bingfeng_target_limit chained=%s context=%s" % [protected_target.chained, second_card_context])
+	# 弃置分支使用独立最小场景；避免同一回合目标限次掩盖第二段选牌请求。
+	_reset_state(2)
+	var discard_bingfeng: SkillDefinition = GameDatabase.create_skill("bingfeng")
+	discard_bingfeng.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"bingfeng":discard_bingfeng}}
+	# 目标手牌；用于验证选择“弃置目标手牌”后立刻出现实体弃置选择，而不是重新询问文字分支。
+	var target_hand_card: CardInstance = _add_hand_card(1, "shan", "heart", 8)
+	_controller._card_use_contexts[9003] = {"target_ids":[1], "excluded_target_ids":[], "direct_hit_target_ids":[]}
+	# 冰封第一段文字询问；通过正式统一请求接口写入技能归属和稳定上下文。
+	discard_bingfeng.request_control_selection("冰封", "是否对唯一目标发动【冰封】？", [{"id":"discard_target_hand", "label":"弃置目标手牌"}], true, {"kind":"bingfeng_option", "target_id":1, "card_uid":9003, "card_id":"sha"})
+	if not _submit_pending_choice(0, [], [], true, "discard_target_hand"):
+		return false
+	# 第二段请求；必须保留同一技能上下文并直接列出目标手牌实体。
+	var discard_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((discard_choice.get("context", {}) as Dictionary).get("kind", "")) != "bingfeng_discard_card" or str(discard_choice.get("title", "")) != "冰封" or (discard_choice.get("candidates", []) as Array).is_empty():
+		return _fail("bingfeng_discard_request=%s" % [discard_choice])
+	if not _submit_pending_choice(0, [target_hand_card.uid], [], true):
+		return false
+	# 选择完成后；目标手牌进入弃牌堆，原牌对目标无效，且不留下重复的冰封文字询问。
+	var discard_card_context: Dictionary = _controller._card_use_contexts[9003] as Dictionary
+	if _controller.state.get_player(1).find_hand_card(target_hand_card.uid) != null or not _controller.state.discard_pile.has(target_hand_card) or not (discard_card_context.get("excluded_target_ids", []) as Array).has(1) or _controller.has_pending_card_choice():
+		return _fail("bingfeng_discard_result hand=%s discard=%s context=%s pending=%s" % [_controller.state.get_player(1).hand, _controller.state.discard_pile.has(target_hand_card), discard_card_context, _controller.has_pending_card_choice()])
 	return true
 
 
@@ -1048,17 +1070,17 @@ func _install_single_skill(player_id: int, skill_id: String) -> SkillDefinition:
 	return skill
 
 
-## 为当前统一选择请求提交目标或确认结果；测试通过正式PlayerAction入口覆盖事件运行时与阶段恢复链。
-func _submit_pending_choice(actor_id: int, selected_card_uids: Array[int], selected_target_ids: Array[int], confirmed: bool) -> bool:
+## 为当前统一选择请求提交牌、目标、文字选项或确认结果；测试通过正式PlayerAction入口覆盖事件运行时与阶段恢复链。
+func _submit_pending_choice(actor_id: int, selected_card_uids: Array[int], selected_target_ids: Array[int], confirmed: bool, selected_control_id: String = "") -> bool:
 	if _controller._pending_card_choice.is_empty():
 		return _fail("missing_pending_choice actor=%d" % actor_id)
 	# 当前请求序号；提交前读取稳定ID，避免同步恢复创建下一请求后误用新窗口编号。
 	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
 	# 标准选择动作；卡牌、目标和确认状态均显式填写，保持与真实界面提交协议一致。
 	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "confirmed":confirmed}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "selected_control_id":selected_control_id, "confirmed":confirmed}
 	if not _controller.submit_action(action):
-		return _fail("choice_rejected actor=%d request=%d" % [actor_id, request_id])
+		return _fail("choice_rejected actor=%d request=%d payload=%s pending=%s" % [actor_id, request_id, action.payload, _controller._pending_card_choice])
 	return true
 
 

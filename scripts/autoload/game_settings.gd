@@ -22,6 +22,12 @@ enum NameMode {
 	ORIGINAL,
 }
 
+## 卡牌名称模式的设置选项；稳定枚举值用于菜单元数据，显示文字仅用于前端下拉框。
+const CARD_NAME_MODE_OPTIONS: Array[Dictionary] = [
+	{"mode":NameMode.CUSTOM, "label":"崩铁杀"},
+	{"mode":NameMode.ORIGINAL, "label":"三国杀"},
+]
+
 ## AI 响应等待时间的最小值；默认0.05秒，在保留可见异步边界的同时支持快速对局。
 const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.05
 

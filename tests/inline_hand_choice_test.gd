@@ -260,6 +260,8 @@ func _run() -> void:
 		return
 	# 公共展示牌请求；候选不属于本人手牌，必须继续使用独立 CardSelectionPanel。
 	var harvest_card_data: Dictionary = {"uid":7003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"processing", "owner_id":-1}
+	# 可替换选择的第二张展示牌；用于验证单选状态下点击另一张牌会替换旧选择而非禁用该候选。
+	var replacement_harvest_card_data: Dictionary = {"uid":7004, "definition_id":"shan", "suit":"club", "rank":6, "zone":"processing", "owner_id":-1}
 	# 已被本地武将领取的原展示牌；公共窗口必须把该牌保留为虚影并在底部显示“杰帕德”。
 	var taken_harvest_card_data: Dictionary = {"uid":7010, "definition_id":"shan", "suit":"diamond", "rank":8, "zone":"processing", "owner_id":-1}
 	# 五谷公共展示；在具体选择请求到达前就应让所有观察者看到固定牌位。
@@ -270,6 +272,7 @@ func _run() -> void:
 		"active_player_id":0,
 		"slots":[
 			{"uid":7003, "card_data":harvest_card_data, "taken_by_player_id":-1},
+			{"uid":7004, "card_data":replacement_harvest_card_data, "taken_by_player_id":-1},
 			{"uid":7010, "card_data":taken_harvest_card_data, "taken_by_player_id":0},
 		],
 	}
@@ -293,7 +296,7 @@ func _run() -> void:
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
 	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 2 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(385.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
 	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。
@@ -319,7 +322,7 @@ func _run() -> void:
 		"chooser_id":0,
 		"title":"五谷丰登",
 		"prompt":"请选择一张展示牌获得",
-		"candidates":[_candidate(harvest_card_data)],
+		"candidates":[_candidate(harvest_card_data), _candidate(replacement_harvest_card_data)],
 		"min_select":1,
 		"max_select":1,
 		"allow_cancel":false,
@@ -327,10 +330,17 @@ func _run() -> void:
 	}
 	main_instance.call("_on_card_choice_requested", harvest_request)
 	await get_tree().process_frame
-	# 当前本地可选展示牌；固定牌位刷新后只有未领取的7003开放输入，虚影7010继续保留。
+	# 当前本地可选展示牌；固定牌位刷新后两个未领取牌都开放输入，虚影7010继续保留。
 	var interactive_public_card_views: Dictionary = selection_panel.get("_card_views") as Dictionary
-	if not selection_panel.visible or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty() or not public_action_row.visible or not (interactive_public_card_views.get(7003) as CardView).is_interactable or (interactive_public_card_views.get(7010) as CardView).is_interactable:
+	if not selection_panel.visible or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty() or not public_action_row.visible or not (interactive_public_card_views.get(7003) as CardView).is_interactable or not (interactive_public_card_views.get(7004) as CardView).is_interactable or (interactive_public_card_views.get(7010) as CardView).is_interactable:
 		_fail("harvest_modal_state")
+		return
+	# 先选择第一张、再选择第二张展示牌；单选上限不能令第二张失去点击权限，最终只保留替换后的稳定UID。
+	selection_panel.call("_on_card_pressed", 7003)
+	selection_panel.call("_on_card_pressed", 7004)
+	var harvest_selected_uids: Array[int] = selection_panel.get("_selected_card_uids") as Array[int]
+	if harvest_selected_uids != [7004] or not (interactive_public_card_views.get(7004) as CardView).is_card_selected or (interactive_public_card_views.get(7003) as CardView).is_card_selected:
+		_fail("harvest_single_select_replacement selected=%s first=%s second=%s" % [harvest_selected_uids, (interactive_public_card_views.get(7003) as CardView).is_card_selected, (interactive_public_card_views.get(7004) as CardView).is_card_selected])
 		return
 	# 本地普通出牌快照；权威 chooseToUse 只列出【杀】，响应专用【闪】即使轮到本人也必须保持禁用灰显。
 	var play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 16)

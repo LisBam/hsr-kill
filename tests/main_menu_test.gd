@@ -80,8 +80,31 @@ func _run() -> void:
 	var ai_response_slider: HSlider = main_instance.get_node("%MainMenuAiResponseDelaySlider") as HSlider
 	# 游戏人数文本框；用于验证 SpinBox 编辑区的焦点与常态边框来自当前主题。
 	var player_count_line_edit: LineEdit = player_count_input.get_line_edit()
+	# 主菜单卡牌名称下拉框；必须与UI风格保持标签加下拉框的统一设置格式。
+	var main_menu_card_name_option: OptionButton = main_instance.get_node("%MainMenuCardNameOption") as OptionButton
+	# 局内卡牌名称下拉框；应使用与主菜单相同的两项稳定名称模式配置。
+	var match_menu_card_name_option: OptionButton = main_instance.get_node("%MenuCardNameOption") as OptionButton
+	# 手牌区上方原确定按钮；终局时复用为“重新开始”。
+	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
+	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
+	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
 	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or start_game_button.text != "开始游戏" or settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
+		return
+	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
+		_fail("card_name_option_layout")
+		return
+	# 主菜单名称模式选择；通过实际下拉信号写入全局设置并同步到局内同构下拉框。
+	main_menu_card_name_option.item_selected.emit(1)
+	await get_tree().process_frame
+	if GameSettings.card_name_mode != GameSettings.NameMode.ORIGINAL or match_menu_card_name_option.selected != 1:
+		_fail("main_menu_card_name_selection")
+		return
+	# 局内名称模式选择；恢复默认自定义名称，避免后续测试依赖错误的牌面名称模式。
+	match_menu_card_name_option.item_selected.emit(0)
+	await get_tree().process_frame
+	if GameSettings.card_name_mode != GameSettings.NameMode.CUSTOM or main_menu_card_name_option.selected != 0:
+		_fail("match_menu_card_name_selection")
 		return
 	if mode_background.texture == null or mode_background.texture.resource_path != "res://assets/art/身份模式主菜单背景.png" or mode_background.stretch_mode != TextureRect.STRETCH_KEEP_ASPECT_COVERED:
 		_fail("mode_preview")
@@ -231,7 +254,23 @@ func _run() -> void:
 	if main_menu.visible or match_controller.state == null or match_controller.state.players.size() != 6 or match_menu_button.focus_mode == Control.FOCUS_NONE or log_toggle_button.focus_mode == Control.FOCUS_NONE:
 		_fail("in_match_restart_retry")
 		return
-	print("MAIN_MENU_PASS players=%d" % match_controller.state.players.size())
+	# 终局快照；只改客户端快照终局标记，验证操作区按钮无需等待额外阶段或真实胜负动画。
+	var terminal_snapshot: Dictionary = match_controller.state.to_dict(match_controller.local_human_player_id, true)
+	terminal_snapshot["game_over"] = true
+	terminal_snapshot["current_phase"] = "end"
+	match_controller.state_changed.emit(terminal_snapshot)
+	await get_tree().process_frame
+	if interaction_use_button.text != "重新开始" or interaction_cancel_button.text != "返回主菜单" or interaction_use_button.disabled or interaction_cancel_button.disabled:
+		_fail("post_match_actions")
+		return
+	# 点击终局返回按钮；必须释放当前权威状态并恢复主菜单，而不是保留一个不可继续的旧对局。
+	await _click_control(interaction_cancel_button)
+	for _return_frame_index: int in range(SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	if not main_menu.visible or match_controller.state != null:
+		_fail("post_match_return_main_menu visible=%s state=%s use=%s cancel=%s" % [main_menu.visible, match_controller.state, interaction_use_button.text, interaction_cancel_button.text])
+		return
+	print("MAIN_MENU_PASS post_match_return=true")
 	main_instance.queue_free()
 	get_tree().quit()
 

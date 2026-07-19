@@ -7,6 +7,10 @@ extends Control
 ## 该参数只改变顶部座位位置，运行时通常无需动态修改，不影响牌面尺寸、座次顺序或规则数值。
 @export_range(0.0, 100.0, 1.0) var top_margin: float = 2.0
 
+## 十人局其他玩家座位的统一缩放比例；默认0.88让左右双座位在保留牌桌中心空白时仍能上下平行。
+## 该参数只在10人局生效，运行时通常无需动态修改，不改变武将牌资源、点击区域或规则座次。
+@export_range(0.75, 1.0, 0.01) var ten_player_card_scale: float = 0.88
+
 ## 左右侧武将牌距牌桌边缘的距离；默认22像素对应参考布局的边缘安全区，运行时可在检查器中调整。
 @export_range(0.0, 100.0, 1.0) var side_margin: float = 22.0
 
@@ -14,11 +18,11 @@ extends Control
 ## 3:4武将牌增宽后使用0.35，使四至九人局侧边座位避开顶部牌列并保留底部界面安全区。
 @export_range(0.1, 0.6, 0.01) var single_side_y_ratio: float = 0.35
 
-## 单侧有两名角色时第一名的纵向位置比例；默认0.18用于十人局上侧座位，运行时通常无需动态修改。
-@export_range(0.1, 0.5, 0.01) var upper_side_y_ratio: float = 0.18
+## 单侧有两名角色时第一名的纵向位置比例；默认0.09上移十人局上侧座位，为下侧座位留出平行空间。
+@export_range(0.05, 0.5, 0.01) var upper_side_y_ratio: float = 0.09
 
-## 单侧有两名角色时第二名的纵向位置比例；默认0.35为下侧座位预留底部界面安全区，运行时通常无需动态修改。
-@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.35
+## 单侧有两名角色时第二名的纵向位置比例；默认0.42使十人局下侧座位与上方牌列形成清晰平行关系。
+@export_range(0.25, 0.7, 0.01) var lower_side_y_ratio: float = 0.42
 
 ## 单侧双座位的横向错列间隔；默认14像素让下侧座位向牌桌内侧移动一张牌宽，避开底部本地界面。
 ## 该参数只在十人局生效，运行时通常无需动态修改，不改变座次顺序或目标规则。
@@ -68,8 +72,12 @@ func _layout_opponents() -> void:
 	var side_count_per_edge: int = 0 if _total_player_count <= 3 else (2 if _total_player_count >= 10 else 1)
 	# 顶部座位数量；用于生成均匀但符合参考比例的横坐标。
 	var top_count: int = maxi(valid_views.size() - side_count_per_edge * 2, 0)
-	# 当前座位容器尺寸；直接读取组合场景的原生尺寸，布局器不修改武将牌或座次标签几何信息。
-	var active_card_size: Vector2 = valid_views[0].size
+	# 当前座位容器尺寸；十人局统一缩放以同时保留左右两层座位、顶部五牌和中央结算空白。
+	var active_card_size: Vector2 = valid_views[0].size * (ten_player_card_scale if _total_player_count >= 10 else 1.0)
+	# 十人局统一缩放值；只作用于当前布局器持有的座位容器，其他人数恢复场景原始比例。
+	var active_card_scale: float = ten_player_card_scale if _total_player_count >= 10 else 1.0
+	for valid_view: Control in valid_views:
+		valid_view.scale = Vector2.ONE * active_card_scale
 	# 当前视图索引；按右侧、顶部从右到左、左侧的无名杀座次顺序依次消费。
 	var view_index: int = 0
 	if side_count_per_edge > 0:
