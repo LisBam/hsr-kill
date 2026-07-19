@@ -652,8 +652,13 @@ func _center_character_card() -> void:
 ## 按武将定义顺序重建右侧技能条目；每项固定先显示技能名，再显示完整技能描述。
 func _render_character_skills() -> void:
 	_clear_skill_entries()
-	# 武将静态技能 ID 数组；空数组表示该武将没有可显示技能。
-	var skill_ids: Array = _character_definition.get("skills", []) as Array
+	# 武将可见技能ID数组；固有技能保持定义顺序，运行时临时技能随后追加且不重复。
+	var skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
+	for temporary_skill_id_variant: Variant in (_character_snapshot.get("temporary_skills", {}) as Dictionary).keys():
+		# 当前临时技能ID；与固有技能同名时只显示一次。
+		var temporary_skill_id: String = str(temporary_skill_id_variant)
+		if not skill_ids.has(temporary_skill_id):
+			skill_ids.append(temporary_skill_id)
 	if skill_ids.is_empty():
 		# 无技能占位说明；只表达静态内容为空，不推断运行时技能状态。
 		var empty_label: Label = Label.new()
