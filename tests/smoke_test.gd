@@ -17,11 +17,11 @@ const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.
 ## 全部卡牌稳定 ID 对应的《崩铁杀》显示名称；名称调整必须保持46项完整映射且不改变逻辑 ID。
 const EXPECTED_CUSTOM_CARD_NAMES: Dictionary = {
 	"bagua":"穷观阵",
-	"baiyin":"白银狮子",
+	"baiyin":"光能盾牌",
 	"bingliang":"兵粮寸断",
-	"chitu":"赤兔",
+	"chitu":"斯科特",
 	"cixiong":"干将莫邪",
-	"dawan":"大宛",
+	"dawan":"泡泡",
 	"dilu":"的卢",
 	"fangtian":"动能激发剑",
 	"guanshi":"侵晨",
@@ -201,6 +201,11 @@ func _run() -> void:
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 4:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
+		get_tree().quit(1)
+		return
+	# 势力展示配色；列车与贝洛伯格分别固定为列车灰、寒冰蓝，颜色仅影响武将牌与徽记表现。
+	if str(GameDatabase.get_faction("xingqionglieche").get("color", "")) != "8a919c" or str(GameDatabase.get_faction("beiluoboge").get("color", "")) != "58b8e8":
+		printerr("SMOKE_FAIL faction_colors=%s/%s" % [GameDatabase.get_faction("xingqionglieche"), GameDatabase.get_faction("beiluoboge")])
 		get_tree().quit(1)
 		return
 	# 已登记武将的中文显示名；界面显示不得退化为内部英文 ID。
