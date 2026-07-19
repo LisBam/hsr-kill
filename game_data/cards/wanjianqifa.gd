@@ -46,6 +46,7 @@ func _resolve_aoe(resolver: Object, card: CardInstance, actor_id: int, target_id
 		# 目标防具定义；是否免疫当前群体锦囊由防具卡牌源码判断。
 		var armor_definition: CardDefinition = resolver.host.get_equipment_definition(target_id, "armor")
 		if armor_definition != null and armor_definition.blocks_aoe(card.definition_id):
+			resolver.host.record_equipment_activation(target_id, armor_definition.get_id())
 			resolver.host.add_log("%s的防具令锦囊无效。" % target.display_name)
 			continue
 		# 群体响应上下文；异步选择通过父牌 UID 回到本卡牌源码。

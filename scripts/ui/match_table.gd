@@ -38,6 +38,9 @@ const SKILL_ACTIVATION_FADE_SECONDS: float = 0.32
 ## 技能发动名称的绘制层级；默认31，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
 const SKILL_ACTIVATION_Z_INDEX: int = 31
 
+## 五谷丰登公开选牌期间本地手牌的绘制层级；默认46，比五谷选择面板的45层高1，保证悬停放大的手牌不会被牌位遮挡。
+const HARVEST_HAND_LAYER_Z_INDEX: int = 46
+
 ## 右侧回合结束按钮的固定最小尺寸；112×36像素弱于中央确认命令但仍保持稳定命中区域，运行时无需修改。
 const END_PLAY_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(112.0, 36.0)
 
@@ -247,6 +250,15 @@ var _auto_locked_target_id: int = -1
 ## 当前手牌 UID 到正式卡牌视图的映射；快照刷新按 UID 复用节点，实体离开本人牌区后才移除。
 var _card_views: Dictionary = {}
 
+## 当前普通手牌的本地显示顺序；只影响本客户端手牌布局，新获得的牌会按权威快照追加到末尾。
+var _local_hand_display_order: Array[int] = []
+
+## 当前木牛流马“粮”的本地显示顺序；只允许在木牛分区内调整，永远位于普通手牌左侧。
+var _local_wooden_ox_display_order: Array[int] = []
+
+## 当前本地手牌排序所属的对局 ID；切换对局时清空旧排序，避免不同实体 UID 的新局继承旧布局。
+var _hand_order_match_id: String = ""
+
 ## 已收到转移信号、等待正式手牌节点进入当前快照的本地获得牌 UID 集合；键为实体 UID，值固定为 true。
 var _pending_local_hand_gain_uids: Dictionary = {}
 
@@ -381,6 +393,7 @@ func _ready() -> void:
 	match_controller.draw_presentation_batch_finished.connect(_on_draw_presentation_batch_finished)
 	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
 	match_controller.skill_activated.connect(_on_skill_activated)
+	match_controller.equipment_activated.connect(_on_equipment_activated)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	card_selection_panel.control_submitted.connect(_on_control_choice_submitted)
 	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
@@ -408,7 +421,6 @@ func _ready() -> void:
 	equipment_label.information_requested.connect(_on_information_requested.bind(equipment_label))
 	equipment_label.information_dismissed.connect(_on_information_dismissed.bind(equipment_label))
 	local_player_card.pressed.connect(_on_self_target_pressed)
-	local_player_card.card_dropped.connect(_on_card_dropped)
 	local_player_card.details_requested.connect(_on_character_details_requested)
 	local_player_card.information_requested.connect(_on_information_requested.bind(local_player_card))
 	local_player_card.information_dismissed.connect(_on_information_dismissed.bind(local_player_card))
@@ -898,12 +910,11 @@ func _render_players() -> void:
 			_player_seat_slots[target_id] = player_seat_slot
 			player_grid.add_child(player_seat_slot)
 			player_seat_slot_was_created = true
-		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与卡牌拖放入口。
+		# 其他玩家选择按钮；来自座位容器内的可编辑武将牌场景，包含状态摘要、目标高亮与点击入口。
 		var player_button: PlayerTargetView = player_seat_slot.get_node("PlayerTargetView") as PlayerTargetView
 		player_button.set_match_overlays_visible(true)
 		if player_seat_slot_was_created:
 			player_button.pressed.connect(_on_persistent_target_pressed.bind(player_button))
-			player_button.card_dropped.connect(_on_card_dropped)
 			player_button.identity_pressed.connect(_on_identity_badge_pressed)
 			player_button.details_requested.connect(_on_character_details_requested)
 			player_button.information_requested.connect(_on_information_requested.bind(player_button))
@@ -1110,12 +1121,18 @@ func _is_inline_response_skill_available(skill_id: String) -> bool:
 
 ## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
 func _render_local_hand() -> void:
+	# 当前快照所属对局 ID；新对局必须放弃上一局仅在客户端保存的手牌排列。
+	var current_match_id: String = str(_snapshot.get("match_id", ""))
+	if current_match_id != _hand_order_match_id:
+		_hand_order_match_id = current_match_id
+		_local_hand_display_order.clear()
+		_local_wooden_ox_display_order.clear()
 	# 本地玩家快照；找不到时保持空字典。
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 是否轮到本地玩家出牌；决定卡牌与四个动作按钮是否可用。
 	# 重铸与存木牛兼容节点始终隐藏，因此当前可见操作只由中央确定/取消和右侧回合结束承担。
 	var can_act: bool = _can_local_player_act()
-	# 当前内联选择候选 UID；存在请求时只有该集合中的本人牌允许点击或拖动。
+	# 当前内联选择候选 UID；存在请求时只有该集合中的本人牌允许点击选中，排序拖拽仍独立对全部正式手牌开放。
 	var inline_candidate_uids: Array[int] = _get_inline_candidate_uids()
 	# 当前是否正在本地手牌区完成选择请求；该状态与普通出牌选择互斥。
 	var has_inline_choice: bool = not _inline_card_choice.is_empty()
@@ -1123,15 +1140,19 @@ func _render_local_hand() -> void:
 	var play_candidate_uids: Array[int] = _get_play_phase_candidate_uids()
 	# 当前装备技能材料候选；主动模式只开放普通手牌，木牛“粮”不会被当作丈八材料或再次存入木牛。
 	var equipment_material_candidate_uids: Array[int] = _get_equipment_action_material_candidate_uids()
+	# 当前快照中的木牛“粮”；先按独立本地排序规范化，保证该分区始终固定在普通手牌左侧。
+	var ordered_wooden_ox_cards: Array[Dictionary] = _apply_local_hand_display_order(local_player.get("wooden_ox_storage", []) as Array, _local_wooden_ox_display_order)
+	# 当前快照中的普通手牌；按独立本地排序规范化，新进入分区的实体会追加到末尾。
+	var ordered_hand_cards: Array[Dictionary] = _apply_local_hand_display_order(local_player.get("hand", []) as Array, _local_hand_display_order)
 	# 当前快照中的手牌条目；每项同时记录牌面快照与是否来自木牛流马，数组顺序就是正式手牌显示顺序。
 	var desired_card_entries: Array[Dictionary] = []
 	# 木牛流马“粮”固定先加入显示数组，使其无论何时获得或刷新都保持在手牌区最左侧。
-	for card_variant: Variant in local_player.get("wooden_ox_storage", []):
+	for card: Dictionary in ordered_wooden_ox_cards:
 		# 当前木牛“粮”条目；true 让同一正式牌面显示独立来源标记。
-		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":true})
-	for card_variant: Variant in local_player.get("hand", []):
+		desired_card_entries.append({"card":card, "wooden_ox_card":true})
+	for card: Dictionary in ordered_hand_cards:
 		# 当前普通手牌条目；false 表示牌面不显示木牛“粮”来源标记。
-		desired_card_entries.append({"card":(card_variant as Dictionary), "wooden_ox_card":false})
+		desired_card_entries.append({"card":card, "wooden_ox_card":false})
 	# 当前快照需要保留的实体 UID 集合；用于移除已经离开本人手牌与木牛区域的旧视图。
 	var desired_uid_lookup: Dictionary = {}
 	for entry: Dictionary in desired_card_entries:
@@ -1177,7 +1198,7 @@ func _render_local_hand() -> void:
 		next_card_views[card_uid] = card_view
 		ordered_card_views.append(card_view)
 	_card_views = next_card_views
-	# 当前正式手牌顺序索引；把复用或新建的节点顺序与权威快照数组保持一致。
+	# 当前正式手牌顺序索引；把复用或新建的节点顺序与两个分区各自的本地排列保持一致。
 	for card_index: int in range(ordered_card_views.size()):
 		hand_container.move_child(ordered_card_views[card_index], card_index)
 	hand_container.layout_cards_now()
@@ -1196,11 +1217,83 @@ func _create_local_hand_card_view(card_uid: int) -> CardView:
 	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	card_view.visible = true
 	card_view.pressed.connect(_on_card_pressed.bind(card_uid))
-	card_view.card_drag_started.connect(_on_card_drag_started)
+	card_view.hand_reorder_requested.connect(_on_hand_card_reorder_requested)
 	card_view.information_requested.connect(_on_information_requested.bind(card_view))
 	card_view.information_dismissed.connect(_on_information_dismissed.bind(card_view))
 	hand_container.add_child(card_view)
 	return card_view
+
+
+## 按本地保存的 UID 顺序整理同一手牌分区；离开分区的旧 UID 会移除，新进入的实体按权威快照追加。
+func _apply_local_hand_display_order(cards: Array, display_order: Array[int]) -> Array[Dictionary]:
+	# 当前实体 UID 到牌面快照的映射；只在本次刷新中读取，不向规则状态写入本地排序。
+	var cards_by_uid: Dictionary = {}
+	# 当前快照给出的 UID 顺序；用于给没有本地排序记录的新实体提供稳定追加顺序。
+	var snapshot_uids: Array[int] = []
+	for card_variant: Variant in cards:
+		# 当前分区牌面快照；必须复制引用以避免把界面临时状态写入权威快照。
+		var card: Dictionary = card_variant as Dictionary
+		# 当前实体稳定 UID；同一实体在不同快照中保持不变，是本地排列的唯一键。
+		var card_uid: int = int(card.get("uid", -1))
+		cards_by_uid[card_uid] = card.duplicate(true)
+		snapshot_uids.append(card_uid)
+	# 规范化后的本地 UID 顺序；先保留仍在分区的旧排列，再追加新实体。
+	var normalized_order: Array[int] = []
+	for stored_uid: int in display_order:
+		if cards_by_uid.has(stored_uid) and not normalized_order.has(stored_uid):
+			normalized_order.append(stored_uid)
+	for snapshot_uid: int in snapshot_uids:
+		if not normalized_order.has(snapshot_uid):
+			normalized_order.append(snapshot_uid)
+	display_order.clear()
+	display_order.append_array(normalized_order)
+	# 按规范化 UID 顺序输出的牌面数组；调用方据此重排正式 CardView 子节点。
+	var ordered_cards: Array[Dictionary] = []
+	for ordered_uid: int in normalized_order:
+		ordered_cards.append(cards_by_uid.get(ordered_uid, {}) as Dictionary)
+	return ordered_cards
+
+
+## 返回实体牌当前所属的可排序分区；木牛“粮”和普通手牌永远是两个互不连通的分区。
+func _get_local_hand_reorder_zone(card_uid: int) -> String:
+	# 本地玩家公开快照；只有仍在本人可见手牌区的实体可以参与排序。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	for card_variant: Variant in local_player.get("wooden_ox_storage", []) as Array:
+		# 当前木牛“粮”快照；UID 一致时返回木牛专属分区。
+		var wooden_ox_card: Dictionary = card_variant as Dictionary
+		if int(wooden_ox_card.get("uid", -1)) == card_uid:
+			return "wooden_ox"
+	for card_variant: Variant in local_player.get("hand", []) as Array:
+		# 当前普通手牌快照；UID 一致时返回普通手牌分区。
+		var hand_card: Dictionary = card_variant as Dictionary
+		if int(hand_card.get("uid", -1)) == card_uid:
+			return "hand"
+	return ""
+
+
+## 在同一分区内移动一个实体 UID；目标牌左半边插入前方，右半边插入后方的判断由 CardInputArea 完成。
+func _on_hand_card_reorder_requested(source_card_uid: int, target_card_uid: int, insert_after_target: bool) -> void:
+	# 被拖拽牌所属分区；空字符串表示实体已离开本地手牌，拒绝使用过期拖放数据。
+	var source_zone: String = _get_local_hand_reorder_zone(source_card_uid)
+	# 接收牌所属分区；只有与来源完全一致时才允许调整，禁止跨越木牛与普通手牌边界。
+	var target_zone: String = _get_local_hand_reorder_zone(target_card_uid)
+	if source_zone.is_empty() or source_zone != target_zone:
+		return
+	# 当前分区持久化的显示顺序；两个分区使用不同数组，保证木牛始终在最左侧。
+	var display_order: Array[int] = _local_wooden_ox_display_order if source_zone == "wooden_ox" else _local_hand_display_order
+	# 来源牌在当前分区内的位置；不存在表示界面尚未按当前快照完成首次对账。
+	var source_index: int = display_order.find(source_card_uid)
+	# 目标牌在当前分区内的位置；不存在时拒绝本次过期拖放，避免错误插入到末尾。
+	var target_index: int = display_order.find(target_card_uid)
+	if source_index < 0 or target_index < 0 or source_card_uid == target_card_uid:
+		return
+	display_order.remove_at(source_index)
+	# 移除来源后目标牌可能左移一格，因此重新查询最终插入索引。
+	target_index = display_order.find(target_card_uid)
+	# 最终插入位置；true 放在目标右侧，false 放在目标左侧。
+	var insertion_index: int = target_index + (1 if insert_after_target else 0)
+	display_order.insert(insertion_index, source_card_uid)
+	_render_local_hand()
 
 
 ## 返回左下装备区的固定槽位文本；其他玩家装备仍直接显示在其武将牌状态中。
@@ -1225,7 +1318,7 @@ func _format_local_equipment(player: Dictionary) -> String:
 			# 装备公开附属牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
 			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
 			treasure_name += "（%d）" % wooden_ox_count
-	return "⚔ 武器　%s\n🛡 防具　%s\n+ 进攻　%s\n- 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
+	return "⚔ 武器　%s\n🛡 防具　%s\n- 进攻　%s\n+ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
 
 
 ## 把本地公开装备快照写入独立堆叠组件；候选与选中 UID 只来自当前本地内联请求。
@@ -1480,35 +1573,11 @@ func _get_selectable_target_ids() -> Array[int]:
 	return selectable_target_ids
 
 
-## 返回当前卡牌是否由规则层自动展开全体目标；此类牌不开放武将牌点击、拖放或手动高亮入口。
+## 返回当前卡牌是否由规则层自动展开全体目标；此类牌不开放武将牌点击或手动高亮入口。
 func _uses_rule_expanded_targets() -> bool:
 	if _selected_card_uid < 0 or not _active_equipment_action.is_empty():
 		return false
 	return str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"]
-
-
-## 拖动卡牌开始时同步选牌状态，使目标组件立即展示该牌的合法投放区域。
-func _on_card_drag_started(card_uid: int) -> void:
-	if _selected_card_uid != card_uid:
-		_on_card_pressed(card_uid)
-
-
-## 接收角色组件的卡牌拖放结果；拖放与点击共用选牌、选目标和确认提交流程。
-func _on_card_dropped(card_uid: int, target_id: int) -> void:
-	if not _active_equipment_action.is_empty():
-		if not _equipment_action_material_uids.has(card_uid):
-			_toggle_equipment_action_material(card_uid)
-		if _active_equipment_action != "equipment_response" and not _selected_target_ids.has(target_id):
-			_on_target_pressed(target_id)
-		return
-	if not _inline_card_choice.is_empty():
-		return
-	if _selected_card_uid != card_uid:
-		_on_card_pressed(card_uid)
-	if _uses_rule_expanded_targets():
-		return
-	if not _selected_target_ids.has(target_id):
-		_on_target_pressed(target_id)
 
 
 ## 将本地玩家自身加入或移出目标列表。
@@ -1772,6 +1841,9 @@ func _on_restart_requested(player_count: int) -> bool:
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()
+	_local_hand_display_order.clear()
+	_local_wooden_ox_display_order.clear()
+	_hand_order_match_id = ""
 	card_selection_panel.close()
 	_public_card_choice_display.clear()
 	_inline_card_choice.clear()
@@ -1901,6 +1973,7 @@ func _on_control_choice_submitted(request_id: int, control_id: String) -> void:
 
 ## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
 func _refresh_card_selection_panel() -> void:
+	_refresh_hand_layer_for_public_display()
 	if not _public_card_choice_display.is_empty():
 		# 本地存在与公共展示不同类型的内联询问时，公共窗口暂时让出手牌与按钮输入，询问结束后会从保留快照自动恢复。
 		if not _inline_card_choice.is_empty() and str((_inline_card_choice.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
@@ -1925,6 +1998,15 @@ func _refresh_card_selection_panel() -> void:
 		card_selection_panel.show_request(_modal_card_choice_request)
 		return
 	card_selection_panel.close()
+
+
+## 仅在五谷丰登公开牌位显示期间提高本地手牌层级；其他选择窗口仍沿用场景默认层级与输入关系。
+func _refresh_hand_layer_for_public_display() -> void:
+	if hand_panel == null or not is_instance_valid(hand_panel):
+		return
+	# 当前公共展示类型；只有五谷丰登需要让悬停放大的手牌越过公开牌位。
+	var public_choice_kind: String = str(_public_card_choice_display.get("kind", ""))
+	hand_panel.z_index = HARVEST_HAND_LAYER_Z_INDEX if public_choice_kind == "harvest" else 0
 
 
 ## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。
@@ -2186,6 +2268,16 @@ func _on_log_added(message: String) -> void:
 
 ## 在实际发动者的武将牌中心短暂显示技能名；提示与目标线只订阅控制器信号，不持有技能对象或改写对局状态。
 func _on_skill_activated(player_id: int, skill_name: String, context: Dictionary) -> void:
+	_show_character_card_activation(player_id, skill_name, context)
+
+
+## 在防具实际生效时复用武将牌中央提示显示防具名；防具没有目标线，且不会被写入技能发动历史。
+func _on_equipment_activated(player_id: int, equipment_name: String, context: Dictionary) -> void:
+	_show_character_card_activation(player_id, equipment_name, context)
+
+
+## 在指定角色的武将牌中心短暂显示一条已确认的技能或防具名称；调用方只提供表现数据，不允许通过本函数修改规则状态。
+func _show_character_card_activation(player_id: int, activation_name: String, context: Dictionary) -> void:
 	# 当前发动者武将牌全局矩形；本地与其他玩家使用各自持久组件，未知或刚离场角色不创建错误的中央提示。
 	var player_card_rect: Rect2 = Rect2()
 	if player_id == match_controller.local_human_player_id:
@@ -2212,7 +2304,7 @@ func _on_skill_activated(player_id: int, skill_name: String, context: Dictionary
 	activation_label.size = label_bottom_right - label_top_left
 	activation_label.z_index = SKILL_ACTIVATION_Z_INDEX
 	activation_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	activation_label.text = "【%s】" % skill_name
+	activation_label.text = "【%s】" % activation_name
 	activation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	activation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	activation_label.add_theme_font_size_override("font_size", SKILL_ACTIVATION_FONT_SIZE)
@@ -2624,7 +2716,7 @@ func _refresh_selection_text() -> void:
 	use_button.text = "确定"
 	%CancelButton.disabled = false
 	if _selected_card_uid < 0:
-		selection_label.text = "未选择卡牌｜可点击牌面，或直接拖动卡牌到青色目标"
+		selection_label.text = "未选择卡牌｜点击牌面选牌，拖动手牌可调整同分区顺序"
 		interaction_guide_label.text = "请选择要使用的牌"
 		use_button.disabled = true
 		%CancelButton.visible = false

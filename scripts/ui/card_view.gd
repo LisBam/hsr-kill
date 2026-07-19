@@ -6,8 +6,8 @@ extends Node2D
 ## 卡牌被点击时发出的信号；桌面据此更新临时选择，不直接提交对局动作。
 signal pressed
 
-## 拖拽开始信号；参数为稳定卡牌 UID，桌面可据此同步当前选择。
-signal card_drag_started(card_uid: int)
+## 本地手牌排序请求；参数由输入组件提供，桌面只调整客户端显示顺序，不提交目标选择或规则动作。
+signal hand_reorder_requested(source_card_uid: int, target_card_uid: int, insert_after_target: bool)
 
 ## 鼠标进入可见牌面时发出的统一信息请求；内容字典和全局目标矩形由牌桌信息框组件直接消费。
 signal information_requested(information: Dictionary, anchor_rect: Rect2)
@@ -168,8 +168,8 @@ func _ready() -> void:
 	_input_area.activated.connect(pressed.emit)
 	_input_area.hover_started.connect(_on_mouse_entered)
 	_input_area.hover_finished.connect(_on_mouse_exited)
-	_input_area.drag_started.connect(card_drag_started.emit)
-	_input_area.configure(card_uid, is_interactable, create_drag_preview)
+	_input_area.hand_reorder_requested.connect(hand_reorder_requested.emit)
+	_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -230,7 +230,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	_artwork_texture = ArtworkLoader.load_from_definition(visual_definition, ArtworkLoader.CARD_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
 	_refresh_card_content()
 	_refresh_visual_state()
 
@@ -252,7 +252,7 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	_view_as_display_name_text = ""
 	if is_node_ready():
 		_input_area.tooltip_text = ""
-		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
 	_refresh_visual_state()
 
 
@@ -283,8 +283,15 @@ func set_interactable_state(interactable: bool) -> void:
 		return
 	is_interactable = interactable
 	if is_node_ready():
-		_input_area.configure(card_uid, is_interactable, create_drag_preview)
+		_input_area.configure(card_uid, is_interactable, create_drag_preview, _get_hand_reorder_zone())
 	_refresh_visual_state()
+
+
+## 返回当前正式手牌所属的可排序分区；木牛“粮”与普通手牌严格分离，其他区域卡牌不参与任何拖拽排序。
+func _get_hand_reorder_zone() -> String:
+	if not (get_parent() is DecadeHandContainer):
+		return ""
+	return "wooden_ox" if is_wooden_ox_card else "hand"
 
 
 ## 启动手牌选中或取消选中的位移动画；非手牌展示区域继续沿用原有即时位置逻辑。

@@ -55,6 +55,8 @@ func _ready() -> void:
 		return
 	if not _test_leader_skill_confirmation():
 		return
+	if not _test_linghang_recast_choice():
+		return
 	if not _test_active_skill_payload():
 		return
 	if not _test_low_value_discard():
@@ -570,6 +572,12 @@ func _test_wuxie_decision() -> bool:
 	var enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_request, [pass_action, use_action])
 	if bool((enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_enemy=%s" % [enemy_choice])
+	# 友方已横置时的【铁索连环】会解除连环，动态逐目标结果为正收益，不能再错误地使用无懈抵消。
+	(snapshot.get("players", []) as Array)[2]["chained"] = true
+	var chained_tiesuo_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"tiesuo", "source_id":1, "target_id":2, "negated":false}}
+	var chained_tiesuo_choice: Dictionary = _policy.choose_card_choice(snapshot, chained_tiesuo_request, [pass_action, use_action])
+	if bool((chained_tiesuo_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_chained_tiesuo=%s" % [chained_tiesuo_choice])
 	return true
 
 
@@ -627,6 +635,34 @@ func _test_leader_skill_confirmation() -> bool:
 	var linghang_enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, linghang_request, [pass_action, confirm_action])
 	if bool((linghang_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("linghang_enemy=%s" % [linghang_enemy_choice])
+	return true
+
+
+## 验证【领航】来源角色会重铸保留价值最低的普通手牌，并在所有候选价值不低于未知摸牌价值时取消。
+func _test_linghang_recast_choice() -> bool:
+	# 全身份公开快照；玩家2作为领航来源角色，独立策略只负责其自身的重铸选择。
+	var snapshot: Dictionary = _build_snapshot(true)
+	(snapshot.get("players", []) as Array)[2]["hand"] = [_card(701, "tiesuo", 2), _card(702, "tao", 2)]
+	(snapshot.get("players", []) as Array)[2]["hand_count"] = 2
+	# 来源角色策略；技能持有者仍为领袖0，二者必须通过上下文字段解耦。
+	var source_policy: BasicAIPolicy = BasicAIPolicy.new(2, IdentityAIModel.new())
+	# 取消与两张候选牌的合法动作；正式控制器会从同一请求生成等价枚举。
+	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":6, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var recast_tiesuo_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":6, "selected_card_uids":[701], "selected_target_ids":[], "confirmed":true}}
+	var recast_tao_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":6, "selected_card_uids":[702], "selected_target_ids":[], "confirmed":true}}
+	# 低价值【铁索连环】与高价值【桃】候选；未知摸牌价值4.5应只接受价值4.0的前者。
+	var recast_request: Dictionary = {"allow_cancel":true, "min_card_select":1, "max_card_select":1, "candidates":[_candidate(701, "tiesuo", 2), _candidate(702, "tao", 2)], "context":{"kind":"linghang_recast", "skill_id":"linghang", "skill_owner_id":0, "source_player_id":2}}
+	var low_value_choice: Dictionary = source_policy.choose_card_choice(snapshot, recast_request, [pass_action, recast_tiesuo_action, recast_tao_action])
+	if (low_value_choice.get("payload", {}) as Dictionary).get("selected_card_uids", []) != [701]:
+		return _fail("linghang_recast_lowest=%s" % [low_value_choice])
+	# 只保留价值9.0的【桃】时，4.5减9.0不为正，AI应提交取消而不是滞留请求。
+	(snapshot.get("players", []) as Array)[2]["hand"] = [_card(702, "tao", 2)]
+	(snapshot.get("players", []) as Array)[2]["hand_count"] = 1
+	var expensive_request: Dictionary = recast_request.duplicate(true)
+	expensive_request["candidates"] = [_candidate(702, "tao", 2)]
+	var expensive_choice: Dictionary = source_policy.choose_card_choice(snapshot, expensive_request, [pass_action, recast_tao_action])
+	if bool((expensive_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("linghang_recast_cancel=%s" % [expensive_choice])
 	return true
 
 

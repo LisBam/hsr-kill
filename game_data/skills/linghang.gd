@@ -96,9 +96,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	if choice_kind == "linghang_confirm":
 		if not bool(payload.get("confirmed", false)):
 			return 0.0
-		return evaluator.get_attitude(authoritative_snapshot, owner_player_id, int(context.get("source_player_id", -1))) / AI_ATTITUDE_DIVISOR
+		# 通用零牌确认会给出0.1分的默认值；在此抵消后，领航只按领袖对来源角色的真实态度决定是否发动。
+		return evaluator.get_attitude(authoritative_snapshot, owner_player_id, int(context.get("source_player_id", -1))) / AI_ATTITUDE_DIVISOR - 0.1
 	if choice_kind == "linghang_recast":
-		# 已选手牌；只有预期摸牌价值严格高于保留价值时，AI 才确认重铸而不是直接取消。
+		# 已选手牌；通用强制选牌评分已经扣除了该牌一次保留价值，本钩子只补入未知新牌价值，使最终收益严格等于“4.5减所选牌保留价值”。
 		var selected_cards: Array = payload.get("selected_card_uids", []) as Array
-		return AI_UNKNOWN_DRAW_VALUE - evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), int(context.get("source_player_id", -1))) if selected_cards.size() == 1 else 0.0
+		return AI_UNKNOWN_DRAW_VALUE if selected_cards.size() == 1 else 0.0
 	return 0.0

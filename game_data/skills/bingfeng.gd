@@ -51,9 +51,9 @@ func _on_owner_card_targeted(event: RuleEvent) -> void:
 	# 可执行文字选项；按玩家指定顺序稳定排列，不显示当前必然无效的分支。
 	var options: Array[Dictionary] = []
 	if target.chained:
-		options.append({"id":STRAIGHTEN_OPTION_ID, "label":"1.竖直目标武将牌"})
+		options.append({"id":STRAIGHTEN_OPTION_ID, "label":"竖直目标武将牌"})
 	if not target.hand.is_empty():
-		options.append({"id":DISCARD_OPTION_ID, "label":"2.弃置目标手牌"})
+		options.append({"id":DISCARD_OPTION_ID, "label":"弃置目标手牌"})
 	if options.is_empty():
 		return
 	request_control_selection("冰封", "是否对唯一目标发动【冰封】？", options, true, {"kind":"bingfeng_option", "target_id":target_id, "card_uid":int(event.data.get("card_uid", -1)), "card_id":str(event.data.get("card_id", ""))})
