@@ -89,9 +89,12 @@ func has_hand_view_as() -> bool:
 
 ## 序列化为网络安全字典；不包含任何对象引用或可执行回调。
 func to_dict() -> Dictionary:
+	# 原始定义 ID；手牌处于视为状态时供表现层保留实体牌面名称，空字符串表示当前没有临时视为效果。
+	var original_definition_id: String = hand_view_as_original_definition_id
 	return {
 		"uid": uid,
 		"definition_id": definition_id,
+		"original_definition_id": original_definition_id,
 		"suit": suit,
 		"rank": rank,
 		"color": get_color(),

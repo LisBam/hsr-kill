@@ -8,6 +8,9 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 可自动锁定自身目标的牌定义 ID；仅【桃】【酒】【无中生有】保留选牌后自动选择本人，其他牌必须由玩家点击目标。
+const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wuzhong"]
+
 ## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
 const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/components/information_box_layer.tscn")
 
@@ -238,7 +241,7 @@ var _selected_card_uid: int = -1
 ## 当前按点击顺序选择的目标 ID；借刀杀人等牌依赖该顺序。
 var _selected_target_ids: Array[int] = []
 
-## 当前因唯一合法候选而自动锁定的目标 ID；默认-1表示玩家仍可自行选择或取消目标。
+## 当前因【桃】【酒】或【无中生有】自身目标而自动锁定的目标 ID；默认-1表示玩家必须自行选择目标。
 var _auto_locked_target_id: int = -1
 
 ## 当前手牌 UID 到正式卡牌视图的映射；快照刷新按 UID 复用节点，实体离开本人牌区后才移除。
@@ -1261,21 +1264,19 @@ func _on_card_pressed(card_uid: int) -> void:
 	_selected_target_ids.clear()
 	_auto_locked_target_id = -1
 	if _selected_card_uid >= 0:
-		# 初始规则预览；自身、全体与唯一候选目标牌可据此自动整理目标选择。
+		# 初始规则预览；全体目标牌由规则层展开，只有明确列出的三张自身牌保留自动选择本人。
 		var initial_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
-		# 当前目标模式；自身目标自动选择自己，全体目标牌由核心展开且无需保留手动目标。
+		# 当前目标模式；普通单目标牌即使只有一名候选也必须等待玩家点击，不再静默锁定。
 		var target_mode: String = str(initial_preview.get("target_mode", ""))
-		if target_mode == "self" or target_mode == "self_wounded":
+		# 当前实体快照；视为牌继续读取逻辑定义 ID，因此按【桃】视为的手牌也遵循【桃】的自动自身目标语义。
+		var selected_card: Dictionary = _get_selected_card_snapshot()
+		# 当前逻辑牌定义 ID；只有白名单中的三张自身牌允许自动锁定本地玩家。
+		var selected_definition_id: String = str(selected_card.get("definition_id", ""))
+		if (target_mode == "self" or target_mode == "self_wounded") and AUTO_SELECTED_SELF_CARD_DEFINITION_IDS.has(selected_definition_id):
 			_selected_target_ids.assign([match_controller.local_human_player_id])
 			_auto_locked_target_id = match_controller.local_human_player_id
 		elif target_mode == "all_players" or target_mode == "all_others":
 			_selected_target_ids.clear()
-		else:
-			# 当前合法目标；恰好一个时没有可供玩家选择的分支，因此自动锁定并仅等待明确确认。
-			var legal_target_ids: Array = initial_preview.get("legal_target_ids", []) as Array
-			if legal_target_ids.size() == 1:
-				_auto_locked_target_id = int(legal_target_ids[0])
-				_selected_target_ids.assign([_auto_locked_target_id])
 	error_label.text = ""
 	_refresh_selection_text()
 
@@ -1345,15 +1346,7 @@ func _toggle_equipment_action_material(card_uid: int) -> void:
 			_equipment_action_material_uids.append(card_uid)
 	_selected_target_ids.clear()
 	_auto_locked_target_id = -1
-	# 装备材料选满后若恰好只有一名合法目标，则沿用普通出牌的唯一候选自动锁定语义。
-	var active_definition: Dictionary = _get_active_equipment_definition()
-	var required_material_count: int = int(active_definition.get("play_phase_material_count", 0))
-	if _active_equipment_action != "equipment_response" and required_material_count > 0 and _equipment_action_material_uids.size() == required_material_count:
-		var initial_preview: Dictionary = match_controller.get_equipment_action_preview(match_controller.local_human_player_id, _active_equipment_uid, {"material_card_uids":_equipment_action_material_uids.duplicate()}, [])
-		var legal_target_ids: Array = initial_preview.get("legal_target_ids", []) as Array
-		if legal_target_ids.size() == 1:
-			_auto_locked_target_id = int(legal_target_ids[0])
-			_selected_target_ids.assign([_auto_locked_target_id])
+	# 装备材料选满后仍由玩家手动点击目标；唯一候选不再自动写入临时目标数组。
 	error_label.text = ""
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
@@ -2548,12 +2541,6 @@ func _refresh_selection_text() -> void:
 		return
 	use_button.text = "确定"
 	%CancelButton.disabled = false
-	# 已选目标显示名数组；按选择顺序构建。
-	var target_names: Array[String] = []
-	for target_id: int in _selected_target_ids:
-		# 目标玩家快照；用于从稳定 ID 解析显示名。
-		var player: Dictionary = _get_player_snapshot(target_id)
-		target_names.append(_snapshot_character_name(player, "玩家%d" % target_id))
 	if _selected_card_uid < 0:
 		selection_label.text = "未选择卡牌｜可点击牌面，或直接拖动卡牌到青色目标"
 		interaction_guide_label.text = "请选择要使用的牌"
@@ -2562,17 +2549,12 @@ func _refresh_selection_text() -> void:
 		_refresh_component_states()
 		return
 	_card_use_preview = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, _selected_target_ids)
-	# 已选卡牌快照；用于展示名称而不是暴露技术 UID。
-	var selected_card: Dictionary = _get_selected_card_snapshot()
 	# 已选卡牌定义；用于统一名称模式与说明文本。
+	var selected_card: Dictionary = _get_selected_card_snapshot()
 	var selected_definition: Dictionary = _get_cached_card_definition(str(selected_card.get("definition_id", "")))
-	# 已选卡牌显示名；找不到定义时回退到实体 UID，便于诊断异常数据。
-	var selected_card_name: String = GameSettings.resolve_card_display_name(selected_definition) if not selected_definition.is_empty() else "卡牌 %d" % _selected_card_uid
-	selection_label.text = "%s｜目标：%s｜%s" % [
-		selected_card_name,
-		"由规则自动展开" if str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"] else ("无" if target_names.is_empty() else " → ".join(target_names)),
-		str(_card_use_preview.get("description", "")),
-	]
+	# 选牌说明只显示卡牌静态效果；牌名与当前目标已经分别由牌面和高亮状态表达，不再重复拼接。
+	selection_label.visible = true
+	selection_label.text = str(_card_use_preview.get("description", ""))
 	# 当前是否可用“确定”执行重铸；允许重铸的普通手牌在没有选择目标时直接走重铸动作。
 	var can_confirm_recast: bool = _selected_target_ids.is_empty() and bool(selected_definition.get("recast", false)) and _can_recast_selected_card()
 	if can_confirm_recast:
