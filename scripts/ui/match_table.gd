@@ -38,9 +38,6 @@ const SKILL_ACTIVATION_FADE_SECONDS: float = 0.32
 ## 技能发动名称的绘制层级；默认31，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
 const SKILL_ACTIVATION_Z_INDEX: int = 31
 
-## 五谷丰登公开选牌期间本地手牌的绘制层级；默认46，比五谷选择面板的45层高1，保证悬停放大的手牌不会被牌位遮挡。
-const HARVEST_HAND_LAYER_Z_INDEX: int = 46
-
 ## 托管手牌覆盖层的默认绘制层级；默认5保证滤镜位于普通手牌之上，并保留本地技能按钮与武将牌的更高层级。
 const AUTO_MANAGED_HAND_OVERLAY_Z_INDEX: int = 5
 
@@ -454,6 +451,7 @@ func _ready() -> void:
 	var saved_next_match_player_count: int = GameSettings.next_match_player_count
 	match_controller.default_player_count = saved_next_match_player_count
 	match_menu.set_next_player_count(saved_next_match_player_count)
+	_refresh_match_menu_authority_controls()
 	main_menu.set_next_player_count(saved_next_match_player_count)
 	main_menu.set_lan_default_port(match_controller.network_gateway.default_lan_port)
 	character_selection_panel.character_selected.connect(_on_character_selected)
@@ -792,6 +790,7 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 		_modal_card_choice_request.clear()
 	match_controller.default_player_count = player_count
 	match_menu.set_next_player_count(player_count)
+	_refresh_match_menu_authority_controls()
 	main_menu.set_next_player_count(player_count)
 	lan_lobby_panel.confirm_match_started()
 	online_lobby_panel.confirm_match_started()
@@ -801,6 +800,7 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 ## 处理意外局域网会话结束；局域网不迁移房主，清空远端表现并以具体原因恢复联机入口。
 func _on_lan_session_closed(message: String) -> void:
 	match_controller.clear_remote_network_state()
+	_refresh_match_menu_authority_controls()
 	if match_controller.state != null:
 		match_controller.abandon_match()
 	card_selection_panel.close()
@@ -896,6 +896,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
 	_snapshot = snapshot
+	_refresh_match_menu_authority_controls()
 	_player_snapshots_by_id.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
@@ -2353,14 +2354,19 @@ func _refresh_card_selection_panel() -> void:
 	card_selection_panel.close()
 
 
-## 仅在五谷丰登公开牌位显示期间提高本地手牌层级；其他选择窗口仍沿用场景默认层级与输入关系。
+## 保持本地手牌处于牌桌基础层级；五谷丰登等模态选择窗口必须完整覆盖手牌和悬停放大牌面。
 func _refresh_hand_layer_for_public_display() -> void:
 	if hand_panel == null or not is_instance_valid(hand_panel):
 		return
-	# 当前公共展示类型；只有五谷丰登需要让悬停放大的手牌越过公开牌位。
-	var public_choice_kind: String = str(_public_card_choice_display.get("kind", ""))
-	hand_panel.z_index = HARVEST_HAND_LAYER_Z_INDEX if public_choice_kind == "harvest" else 0
+	hand_panel.z_index = 0
 	_layout_auto_managed_hand_overlay()
+
+
+## 按当前网络权威身份刷新局内菜单；离线玩家与房主保留权威设置，局域网客户端只显示本地可生效选项。
+func _refresh_match_menu_authority_controls() -> void:
+	if match_menu == null or not is_instance_valid(match_menu) or match_controller == null or match_controller.network_gateway == null:
+		return
+	match_menu.set_authority_controls_visible(not match_controller.network_gateway.is_lan_client())
 
 
 ## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。

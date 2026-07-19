@@ -106,16 +106,13 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)) and not _skill_ignores_play_count_limit(actor.player_id, definition):
 		return str(definition.get("play_limit_message", "本阶段使用次数已用尽。"))
 
-	# 规范化后应有的最少目标数；全体目标牌允许调用方传空数组并由核心自动展开。
-	var target_mode: String = str(definition.get("target_mode", ""))
-	if target_mode != "all_others" and target_mode != "all_players":
-		# 最少目标数；来自配置表并允许0目标的纯响应牌。
-		var min_targets: int = int(definition.get("min_targets", 0))
-		# 最多目标数；方天画戟的额外目标在专门分支中修正。
-		# 当前专门分支封装在统一查询中，供权威校验与只读界面预览复用同一结果。
-		var max_targets: int = get_maximum_target_count(actor_id, card)
-		if target_ids.size() < min_targets or target_ids.size() > max_targets:
-			return "目标数量不符合卡牌规则。"
+	# 规范化后应有的目标数；全体目标牌允许调用方传空数组，但自动展开后仍必须至少保留配置要求的合法目标。
+	# 最少目标数；来自配置表并允许0目标的纯响应牌。
+	var min_targets: int = int(definition.get("min_targets", 0))
+	# 最多目标数；方天画戟的额外目标在专门分支中修正，全体牌通常保留配置的高上限。
+	var max_targets: int = get_maximum_target_count(actor_id, card)
+	if target_ids.size() < min_targets or target_ids.size() > max_targets:
+		return "目标数量不符合卡牌规则。"
 
 	# 已出现的目标 ID；禁止重复指定同一目标。
 	var unique_targets: Dictionary = {}
@@ -231,12 +228,18 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 			actor_index = player_index
 			break
 	if target_mode == "all_players" or target_mode == "all_others":
+		# 使用者状态；全体目标同样经过单目标规则与技能附加限制筛选，缺失使用者时返回空数组交由最终校验拒绝。
+		var actor: PlayerState = state.get_player(actor_id)
 		for seat_offset: int in range(state.players.size()):
 			# 当前行动顺序玩家；使用者本人首先参与 all_players，all_others 则从其下家开始产生首个目标。
 			var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
 			if not player.alive:
 				continue
 			if target_mode == "all_others" and player.player_id == actor_id:
+				continue
+			# 当前目标合法性；使用单目标数组检查独立资格，使【破风】等限制只移除不允许的角色，而不让一个非法角色否决整张群体锦囊。
+			var target_error: String = _validate_target(actor, definition, player.player_id, [player.player_id], {"card_color":card.get_color()}) if actor != null else "行动玩家不存在。"
+			if not target_error.is_empty():
 				continue
 			result.append(player.player_id)
 		return result

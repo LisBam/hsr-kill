@@ -364,7 +364,16 @@ func _submit_chat_message() -> void:
 		return
 	chat_requested.emit(_chat_input.text)
 	_chat_input.clear()
+	# 鼠标点击发送按钮时，按钮会在pressed信号结束后完成自身焦点结算；延后一帧恢复输入框可保证桌面端连续输入无需再次点击。
+	call_deferred("_restore_chat_input_focus_after_submit")
+
+
+## 聊天提交完成后恢复输入焦点；大厅关闭或房主设置打开时不抢占其他界面的有效焦点。
+func _restore_chat_input_focus_after_submit() -> void:
+	if not visible or _settings_panel.visible:
+		return
 	_chat_input.grab_focus()
+	_chat_input.caret_column = _chat_input.text.length()
 
 
 ## 聊天输入按回车时复用发送按钮行为，保证键盘与鼠标得到相同消息处理。

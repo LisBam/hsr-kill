@@ -4962,6 +4962,9 @@ func _finish_character_selection() -> void:
 	for player: PlayerState in state.players:
 		if player.player_id != character_selection.leader_player_id:
 			_apply_character(player, character_selection.get_selection(player.player_id), true)
+	# 选将完成后的过渡阶段；先离开character_selection并同步全部亮将结果，避免开局时机创建的技能询问被选将遮罩拦截。
+	state.current_phase = "game_start"
+	_emit_state()
 	_install_all_character_skills()
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
 	_emit_rule_timing("gameStart", -1, -1, -1, {"player_count":state.players.size()})
@@ -5000,6 +5003,8 @@ func _finish_character_selection() -> void:
 		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), starting_hand_count])
 	else:
 		add_log("对局开始：%d名玩家，起始手牌分发被规则取消。" % state.players.size())
+	# 首回合可能在roundStart立即创建技能询问；开始回合前必须先同步最终座次与起始手牌，保证本地内联候选已经存在于牌桌快照中。
+	_emit_state()
 	_start_turn(first_turn_player.player_id)
 
 

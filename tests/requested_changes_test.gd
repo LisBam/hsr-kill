@@ -17,6 +17,12 @@ var _xingjun_begin_request_seen: bool = false
 ## 同一使用牌时机实际收到的可选技能询问顺序；用于验证从当前回合角色起按座次依次询问。
 var _same_timing_choice_kinds: Array[String] = []
 
+## 最近一次控制器状态快照；用于验证选将结束后会在首轮技能询问前同步起始手牌与过渡阶段。
+var _latest_state_snapshot: Dictionary = {}
+
+## 隐藏手牌保护场景实际收到的技能询问类型；【铁壁】与【坚垒】均应在没有【闪】时出现。
+var _hidden_hand_prompt_kinds: Array[String] = []
+
 ## 测试是否已经失败；失败后延迟选择回调不得继续提交旧请求。
 var _failed: bool = false
 
@@ -34,6 +40,10 @@ func _run() -> void:
 	if not _test_play_phase_limit_scope():
 		return
 	if not _test_chain_targets_and_ai():
+		return
+	if not await _test_opening_skill_prompt_and_hidden_hand_privacy():
+		return
+	if not _test_restricted_group_trick_targets():
 		return
 	if not await _test_same_timing_skill_prompt_order():
 		return
@@ -66,6 +76,7 @@ func _create_controller() -> void:
 	add_child(_controller)
 	_controller.local_human_player_id = 0
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
+	_controller.state_changed.connect(_on_state_changed)
 
 
 ## 为单项测试创建指定人数的最小权威状态，并重新绑定全部状态型服务。
@@ -105,6 +116,7 @@ func _reset_state(player_count: int) -> void:
 	_borrow_slash_uid = -1
 	_xingjun_begin_request_seen = false
 	_same_timing_choice_kinds.clear()
+	_latest_state_snapshot.clear()
 
 
 ## 验证所有技能元数据都拥有 bool 类型 lock，且现有锁定技【星火】明确标记为 true。
@@ -194,6 +206,82 @@ func _test_chain_targets_and_ai() -> bool:
 	xinghuo.call("_on_owner_card_targeted", targeted_event)
 	if _controller.state.get_player(1).chained:
 		return _fail("second_relink_not_vertical")
+	return true
+
+
+## 验证选将结束先同步亮将与4张起始手牌，并验证【铁壁】【坚垒】不会因没有【闪】而跳过可取消询问。
+func _test_opening_skill_prompt_and_hidden_hand_privacy() -> bool:
+	_scenario = "opening_tiebi_privacy"
+	_hidden_hand_prompt_kinds.clear()
+	_reset_state(2)
+	_controller.state.current_phase = "character_selection"
+	# 开局牌堆全部使用非【闪】实体；【铁壁】仍必须创建可取消请求，同时牌桌快照应已经包含每人4张起始手牌。
+	for card_index: int in range(8):
+		_add_draw_pile_card("sha", "heart", card_index % 13 + 1)
+	# 选将服务完成结果；领袖选择星存护，另一名角色选择希儿，随后直接进入正式统一收尾入口。
+	var selection_service: CharacterSelectionService = CharacterSelectionService.new()
+	var selection_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	selection_rng.seed = 20260720
+	if not selection_service.begin(_controller.state.players, ["xing_cunhu", "xier"], 2, selection_rng).is_empty():
+		return _fail("opening_selection_begin")
+	if not selection_service.select_character(0, "xing_cunhu").is_empty() or not selection_service.select_character(1, "xier").is_empty():
+		return _fail("opening_selection_submit")
+	_controller.character_selection = selection_service
+	_controller.call("_apply_character", _controller.state.get_player(0), "xing_cunhu", true)
+	_controller.call("_finish_character_selection")
+	# 当前请求；没有【闪】时只能取消，但请求本身必须存在且选将遮罩对应阶段已经结束。
+	var opening_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var opening_context: Dictionary = opening_choice.get("context", {}) as Dictionary
+	var snapshot_players: Array = _latest_state_snapshot.get("players", []) as Array
+	if str(opening_context.get("kind", "")) != "tiebi_cost_target" or not (opening_choice.get("candidates", []) as Array).is_empty() or str(_latest_state_snapshot.get("current_phase", "")) == "character_selection" or snapshot_players.size() != 2 or int((snapshot_players[0] as Dictionary).get("hand_count", -1)) != 4 or int((snapshot_players[1] as Dictionary).get("hand_count", -1)) != 4:
+		return _fail("opening_tiebi choice=%s snapshot=%s" % [opening_choice, _latest_state_snapshot])
+	if not await _wait_until_no_card_choice():
+		return _fail("opening_tiebi_cancel_timeout")
+	# 【坚垒】无【闪】场景；黑色【杀】已在处理区，距离1的其他角色成为目标时仍应出现只能取消的请求。
+	_scenario = "jianlei_privacy"
+	_reset_state(2)
+	var jianlei: SkillDefinition = GameDatabase.create_skill("jianlei")
+	jianlei.bind(_controller, 0)
+	var black_slash: CardInstance = CardInstance.new("sha", "spade", 7)
+	black_slash.zone = "processing"
+	black_slash.owner_id = 1
+	_controller.state.processing_area.append(black_slash)
+	jianlei.call("_on_any_targeted", RuleEvent.new("useCardToPlayer", 1, 1, {"card_uid":black_slash.uid}, 1))
+	var jianlei_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((jianlei_choice.get("context", {}) as Dictionary).get("kind", "")) != "jianlei_cost" or not (jianlei_choice.get("candidates", []) as Array).is_empty():
+		return _fail("jianlei_empty_shan_prompt=%s" % [jianlei_choice])
+	if not await _wait_until_no_card_choice():
+		return _fail("jianlei_cancel_timeout")
+	if _hidden_hand_prompt_kinds != ["tiebi_cost_target", "jianlei_cost"]:
+		return _fail("hidden_hand_prompt_kinds=%s" % [_hidden_hand_prompt_kinds])
+	return true
+
+
+## 验证【破风】只允许一名其他角色时，全体目标锦囊会收敛到该合法角色而不是因目标不足整张牌不可用。
+func _test_restricted_group_trick_targets() -> bool:
+	_scenario = "restricted_group_trick"
+	_reset_state(3)
+	# 破风运行时实例；活动限制只允许二号玩家，使用者本人和三号玩家都应从全体目标中被过滤。
+	var pofeng: SkillDefinition = GameDatabase.create_skill("pofeng")
+	pofeng.bind(_controller, 0)
+	pofeng.set("_active_restricted_target_ids", {1:true})
+	_controller.skill_instances_by_player = {0:{"pofeng":pofeng}}
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 两张全体目标锦囊；五谷与桃园都应自动得到唯一合法目标，并继续进入合法动作列表。
+	var harvest: CardInstance = _add_hand_card(0, "wugu", "heart", 3)
+	var peach_garden: CardInstance = _add_hand_card(0, "taoyuan", "heart", 1)
+	var harvest_targets: Array[int] = _controller.card_rules.normalize_targets(0, harvest, [])
+	var peach_garden_targets: Array[int] = _controller.card_rules.normalize_targets(0, peach_garden, [])
+	if harvest_targets != [1] or peach_garden_targets != [1] or not _controller.card_rules.validate_use(0, harvest, harvest_targets).is_empty() or not _controller.card_rules.validate_use(0, peach_garden, peach_garden_targets).is_empty():
+		return _fail("restricted_group_targets harvest=%s peach=%s" % [harvest_targets, peach_garden_targets])
+	# 合法动作中的目标声明保持空数组；真正使用时仍由规则层按当前限制自动展开唯一目标。
+	var legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	var legal_group_card_uids: Array[int] = []
+	for action: Dictionary in legal_actions:
+		if str(action.get("action_type", "")) == "use_card" and int(action.get("card_uid", -1)) in [harvest.uid, peach_garden.uid]:
+			legal_group_card_uids.append(int(action.get("card_uid", -1)))
+	if not legal_group_card_uids.has(harvest.uid) or not legal_group_card_uids.has(peach_garden.uid):
+		return _fail("restricted_group_actions=%s" % [legal_actions])
 	return true
 
 
@@ -350,6 +438,12 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	elif _scenario == "xingjun_begin" and choice_kind == "xingjun_phase_use_begin":
 		_xingjun_begin_request_seen = true
 		confirmed = false
+	elif _scenario == "opening_tiebi_privacy" and choice_kind == "tiebi_cost_target":
+		_hidden_hand_prompt_kinds.append(choice_kind)
+		confirmed = false
+	elif _scenario == "jianlei_privacy" and choice_kind == "jianlei_cost":
+		_hidden_hand_prompt_kinds.append(choice_kind)
+		confirmed = false
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, choice_kind])
 		return
@@ -365,6 +459,21 @@ func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int],
 	action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "confirmed":confirmed}
 	if not _controller.submit_action(action):
 		_fail("submit_choice=%s:%d" % [_scenario, request_id])
+
+
+## 保存控制器最近一次公开状态；测试只读取序列化副本，不持有或修改权威PlayerState。
+func _on_state_changed(snapshot: Dictionary) -> void:
+	_latest_state_snapshot = snapshot.duplicate(true)
+
+
+## 向当前测试牌堆顶部加入一张实体；数组末尾是正式摸牌顺序中的牌堆顶。
+func _add_draw_pile_card(definition_id: String, suit: String, rank: int) -> CardInstance:
+	# 新牌堆实体；牌堆卡没有所属玩家，发牌时由移动服务写入最终所有者与区域。
+	var card: CardInstance = CardInstance.new(definition_id, suit, rank)
+	card.zone = "draw_pile"
+	card.owner_id = -1
+	_controller.state.draw_pile.append(card)
+	return card
 
 
 ## 等待指定卡牌离开处理区且普通选择全部完成；超时返回 false 防止测试永久停滞。

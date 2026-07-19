@@ -19,7 +19,7 @@ func install() -> void:
 	subscribe_timing("useCardToPlayer", _on_any_targeted, "global", 50)
 
 
-## 检查其他距离1角色、黑色【杀】和【闪】费用，满足时询问技能持有者。
+## 检查其他距离1角色与黑色【杀】后询问技能持有者；即使没有【闪】也保留可取消询问，防止旁观者反推隐藏手牌。
 func _on_any_targeted(event: RuleEvent) -> void:
 	# 当前目标ID；持有者自己不满足“一名其他角色”。
 	var target_id: int = event.target_id
@@ -29,11 +29,9 @@ func _on_any_targeted(event: RuleEvent) -> void:
 	var card_uid: int = int(event.data.get("card_uid", -1))
 	if not bool(host.call("is_processing_black_slash", card_uid)):
 		return
-	# 普通手牌区【闪】候选；没有费用时不创建只能取消的窗口。
+	# 普通手牌区【闪】候选；空候选仍会创建只能取消的隐私保护询问。
 	var shan_candidates: Array[Dictionary] = _get_hand_shan_candidates()
-	if shan_candidates.is_empty():
-		return
-	request_card_selection("坚垒", "是否弃置一张【闪】保护该角色？", shan_candidates, 0, 1, true, {"kind":"jianlei_cost", "target_id":target_id, "card_uid":card_uid})
+	request_card_selection("坚垒", "是否弃置一张【闪】保护该角色？", shan_candidates, 1, 1, true, {"kind":"jianlei_cost", "target_id":target_id, "card_uid":card_uid})
 
 
 ## 恢复坚垒费用选择；等待期间距离、目标、牌色或费用失效时不执行任何效果。

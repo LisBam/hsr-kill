@@ -22,13 +22,13 @@ func install() -> void:
 	subscribe_timing("roundStart", _on_round_start, "global")
 
 
-## 同时存在【闪】费用和未横置其他角色时创建牌与目标组合选择。
+## 存在未横置其他角色时创建牌与目标组合选择；即使没有【闪】也保留可取消询问，防止旁观者从请求是否出现反推隐藏手牌。
 func _on_round_start(_event: RuleEvent) -> void:
 	# 普通手牌区【闪】候选；木牛“粮”不属于手牌弃置费用。
 	var shan_candidates: Array[Dictionary] = _get_hand_shan_candidates()
 	# 可横置目标；排除持有者、死亡离场角色与已经横置者。
 	var target_ids: Array[int] = _get_unchained_other_target_ids()
-	if shan_candidates.is_empty() or target_ids.is_empty():
+	if target_ids.is_empty():
 		return
 	request_card_target_selection("铁壁", "请选择一张【闪】和一名其他角色", shan_candidates, target_ids, 1, 1, 1, 1, true, {"kind":"tiebi_cost_target"})
 

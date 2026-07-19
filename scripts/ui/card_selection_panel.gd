@@ -15,6 +15,9 @@ signal control_submitted(request_id: int, control_id: String)
 ## 正式卡牌视图场景；正面候选和牌背候选都复用同一111×148像素组件。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 通用模态选择层级；固定150高于手牌悬停100与拖拽101，保证五谷等窗口不会被底部牌面遮挡。
+const MODAL_Z_INDEX: int = 150
+
 ## 选择面板最大宽度；默认920像素可同时容纳多个牌面，运行时通常无需修改。
 @export_range(520.0, 1180.0, 1.0) var panel_max_width: float = 920.0
 
@@ -150,7 +153,7 @@ var _control_option_buttons: Array[Button] = []
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
-	z_index = 45
+	z_index = MODAL_Z_INDEX
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shade = ColorRect.new()
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
