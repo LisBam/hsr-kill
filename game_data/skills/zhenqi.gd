@@ -179,7 +179,8 @@ func _continue_recipient(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	if host.state.game_over:
 		return true
-	announce_activation_for_player(turn_player_id, {"cost_option_id":cost_option_id, "recipient_id":recipient_id})
+	# 发动表现目标；保留原受益者字段供结算历史读取，同时写入通用target_id让桌面动态指示线稳定指向受益角色。
+	announce_activation_for_player(turn_player_id, {"cost_option_id":cost_option_id, "recipient_id":recipient_id, "target_id":recipient_id})
 	observe_identity_behavior([recipient_id], {"target_result":IDENTITY_TARGET_RESULT})
 	if effect_id == DRAW_EFFECT_ID:
 		host.call("draw", recipient_id, EFFECT_AMOUNT)

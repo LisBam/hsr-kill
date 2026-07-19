@@ -22,31 +22,38 @@ extends Control
 @export_range(1.0, 6.0, 0.5) var chain_line_width: float = 2.5
 
 ## 横置中空横线的高度；默认10像素形成清晰的灰色空心长条，运行时只改变牌面状态表现。
-@export_range(4.0, 24.0, 1.0) var chained_hollow_line_height: float = 10.0
+## 当前默认值收缩为6像素，只保留轻量灰色轮廓，避免状态框遮盖武将插画。
+@export_range(4.0, 16.0, 1.0) var chained_hollow_line_height: float = 6.0
 
 ## 链条颜色；默认中性灰色区别于金色目标和红色阵亡提示，仅影响表现。
 @export var chain_color: Color = Color("aaa9a6e8")
 
 ## 横置外框延伸到武将牌两侧的长度；默认10像素让实体端点明确位于牌外，而中部透明区域仍与牌面等长。
-@export_range(0.0, 32.0, 1.0) var chained_outer_extension: float = 10.0
+## 当前默认值收缩为6像素，让实体端点略微位于牌外，而中部透明区域仍与牌面等长。
+@export_range(0.0, 20.0, 1.0) var chained_outer_extension: float = 6.0
 
 ## 横置外框高度；默认18像素为深灰实体端点和双层描边预留清晰层次，只影响视觉表现。
-@export_range(8.0, 36.0, 1.0) var chained_outer_frame_height: float = 18.0
+## 当前默认值收缩为8像素，仅作状态凸显，双层深灰描边不会大面积覆盖武将插画。
+@export_range(6.0, 20.0, 1.0) var chained_outer_frame_height: float = 8.0
 
 ## 横置内框相对外框的垂直缩进；默认4像素形成稳定的深浅双层边框，不能大于外框高度的一半。
-@export_range(1.0, 12.0, 1.0) var chained_inner_frame_inset: float = 4.0
+## 当前默认值收缩为1像素，形成紧凑双层深灰边框，不能大于外框高度的一半。
+@export_range(1.0, 8.0, 1.0) var chained_inner_frame_inset: float = 1.0
 
 ## 横置深灰外边框宽度；默认3像素强调牌外实体部分，仅影响绘制表现。
-@export_range(1.0, 8.0, 0.5) var chained_outer_border_width: float = 3.0
+## 当前默认值收缩为1像素，仅用于凸显轮廓，避免边框喧宾夺主。
+@export_range(0.5, 4.0, 0.5) var chained_outer_border_width: float = 1.0
 
 ## 横置浅灰内边框宽度；默认1.5像素与深灰外框形成可辨识的双层轮廓，仅影响绘制表现。
-@export_range(0.5, 6.0, 0.5) var chained_inner_border_width: float = 1.5
+## 当前默认值改为1像素深灰内边框，与外框形成轻量双层轮廓。
+@export_range(0.5, 4.0, 0.5) var chained_inner_border_width: float = 1.0
 
 ## 横置外框与牌外实体端点颜色；默认深灰色保证浅色和深色插画上都能辨认横置状态。
 @export var chained_outer_color: Color = Color("414141f2")
 
 ## 横置内边框颜色；默认使用中灰色，在透明中段明确标出与武将牌等长的横置区域。
-@export var chained_inner_color: Color = Color("a9a9a9e8")
+## 当前默认使用较浅的深灰色，在透明中段轻量标出与武将牌等长的横置区域。
+@export var chained_inner_color: Color = Color("686868d9")
 
 ## 当前角色是否阵亡；为 true 时显示黑白滤镜与红色阵亡文字并停止绘制链条。
 var _is_dead: bool = false

@@ -23,8 +23,8 @@ signal draw_presentation_batch_finished(batch_id: int, player_id: int)
 ## 牌面弃牌幂等状态释放信号；实体进入任意非弃牌区域时发送，不代表需要播放一条可见转移动画。
 signal card_animation_ownership_reset_requested(card_uid: int)
 
-## 技能实际发动表现信号；桌面只根据玩家 ID 与技能名显示短暂提示，不读取或修改技能运行时。
-signal skill_activated(player_id: int, skill_name: String)
+## 技能实际发动表现信号；桌面根据玩家、技能名和已确认的可序列化上下文显示提示与目标线，不读取或修改技能运行时。
+signal skill_activated(player_id: int, skill_name: String, context: Dictionary)
 
 ## 牌区转移数据中标识摸牌表现批次的私有键；只存在于瞬时信号副本，绝不写入 CardInstance、存档或回放状态。
 const DRAW_PRESENTATION_BATCH_ID_KEY: String = "_draw_presentation_batch_id"
@@ -4515,7 +4515,9 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
 	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
 	add_log("%s发动了【%s】。" % [player.display_name, skill_name])
-	skill_activated.emit(player_id, skill_name)
+	# 技能表现上下文副本；目标线等客户端表现只读取已经确认的稳定目标字段，不能持有或改写规则历史原字典。
+	var presentation_context: Dictionary = context.duplicate(true)
+	skill_activated.emit(player_id, skill_name, presentation_context)
 
 
 ## 推导一次主动技能提交所属入口；显式 active_entries 优先，其次 active_entry，最后依据当前阶段回退 phaseUse。

@@ -54,6 +54,8 @@ func _run() -> void:
 	var selection_panel: CardSelectionPanel = main_instance.get_node("CardSelectionPanel") as CardSelectionPanel
 	# 中央确认按钮；选择目标前禁用，选择完成后启用。
 	var confirm_button: Button = main_instance.get_node("%UseButton") as Button
+	# 原取消按钮；文字选项询问会直接复用该位置展示第二个实际选项。
+	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
 	# 当前全部玩家视图；按稳定玩家 ID 定位目标组件。
 	var player_views: Dictionary = main_instance.get("_player_views") as Dictionary
 	# 1号目标玩家视图；用于验证合法目标和已选目标描边状态。
@@ -64,10 +66,23 @@ func _run() -> void:
 		_fail("target_initial")
 		return
 	main_instance.call("_on_target_pressed", 1)
-	# 当前技能预览线数据；必须使用和卡牌目标线相同的固定绘制映射，并记录唯一已选目标。
-	var skill_target_presentation: Dictionary = animation_layer._line_presentations.get(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY, {}) as Dictionary
-	if confirm_button.disabled or not target_view.is_target_selected or (skill_target_presentation.get("target_positions", []) as Array).size() != 1:
+	# 技能选择期间只保留目标描边，不能再显示尚未确认发动的静态预览线。
+	if confirm_button.disabled or not target_view.is_target_selected or animation_layer._line_presentations.has(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY):
 		_fail("target_selected")
+		return
+	# 技能实际发动后才生成与卡牌相同的动态指示线；技能上下文的确认目标决定唯一线段终点。
+	match_controller.skill_activated.emit(0, "选择测试", {"target_id":1})
+	await get_tree().process_frame
+	var has_activation_target_indicator: bool = false
+	for presentation_key_variant: Variant in animation_layer._line_presentations.keys():
+		# 当前表现键；负数预览键不属于实际发动表现，正式动态线使用正数递增序号。
+		var presentation_key: int = int(presentation_key_variant)
+		var presentation: Dictionary = animation_layer._line_presentations[presentation_key] as Dictionary
+		if presentation_key >= 0 and (presentation.get("target_positions", []) as Array).size() == 1:
+			has_activation_target_indicator = true
+			break
+	if not has_activation_target_indicator:
+		_fail("target_activation_indicator")
 		return
 	# 牌目标组合请求；选择材料后目标仍由同一武将牌交互，并满足两个维度后才允许确认。
 	# 本地材料候选；保持与正式 card_choice_requested 快照结构一致。
@@ -98,6 +113,26 @@ func _run() -> void:
 	main_instance.call("_on_target_pressed", 1)
 	if confirm_button.disabled or not target_view.is_target_selected:
 		_fail("combined_complete")
+		return
+	# 冰封文字选项；必须直接使用手牌上方操作区，前两项占用原确定与取消位置，真正放弃使用同一行追加按钮。
+	var bingfeng_control_request: Dictionary = {
+		"request_id":23,
+		"chooser_id":0,
+		"choice_type":"control",
+		"title":"冰封",
+		"prompt":"是否对唯一目标发动【冰封】？",
+		"candidates":[],
+		"control_options":[{"id":"straighten_target", "label":"1.竖直目标武将牌"}, {"id":"discard_hand", "label":"2.弃置目标手牌"}],
+		"allow_cancel":true,
+		"context":{"kind":"bingfeng_option", "skill_id":"bingfeng", "skill_owner_id":0, "target_id":1},
+	}
+	main_instance.call("_on_card_choice_requested", bingfeng_control_request)
+	await get_tree().process_frame
+	# 同一操作行中的追加取消按钮；control询问不得重新打开中央 CardSelectionPanel。
+	var inline_cancel_button: Button = main_instance.get_node_or_null("InteractionPanel/InteractionVBox/ActionRow/InlineControlCancelButton") as Button
+	var interaction_panel: Control = main_instance.get_node("InteractionPanel") as Control
+	if selection_panel.visible or not interaction_panel.visible or confirm_button.text != "1.竖直目标武将牌" or cancel_button.text != "2.弃置目标手牌" or inline_cancel_button == null or not inline_cancel_button.visible:
+		_fail("bingfeng_inline_control")
 		return
 	print("SKILL_TARGET_UI_PASS")
 	get_tree().quit(0)

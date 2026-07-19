@@ -291,6 +291,15 @@ var _active_response_skill_id: String = ""
 ## 【振旗】内联取消按钮；仅在费用选择时显示，与原确定/取消按钮共同组成三项直接选择。
 var _zhenqi_cancel_button: Button
 
+## 当前内联文字选项映射到原“确定”按钮的稳定选项 ID；空字符串表示该按钮应执行普通确认或当前没有文字选项请求。
+var _inline_control_primary_option_id: String = ""
+
+## 当前内联文字选项映射到原“取消”按钮的稳定选项 ID；空字符串时该按钮保留为真正的放弃操作。
+var _inline_control_secondary_option_id: String = ""
+
+## 超出原确定/取消两枚按钮容量的内联文字选项按钮；每次请求刷新时重建，仅保存客户端表现节点。
+var _inline_control_extra_option_buttons: Array[Button] = []
+
 ## 当前独立选择窗口的请求 ID；默认-1表示窗口关闭，用于防止旧提交回调关闭同步创建的新窗口。
 var _modal_choice_request_id: int = -1
 
@@ -1516,6 +1525,10 @@ func _on_use_pressed() -> void:
 		if _is_inline_zhenqi_cost_choice(_inline_card_choice):
 			_submit_inline_control_choice("discard_hand")
 			return
+		if _is_inline_control_choice(_inline_card_choice):
+			if not _inline_control_primary_option_id.is_empty():
+				_submit_inline_control_choice(_inline_control_primary_option_id)
+			return
 		_submit_inline_card_choice(_inline_selected_card_uids)
 		return
 	if _selected_card_uid < 0:
@@ -1582,6 +1595,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
 				_on_zhenqi_cancel_pressed()
 				get_viewport().set_input_as_handled()
+			elif _is_inline_control_choice(_inline_card_choice) and bool(_inline_card_choice.get("allow_cancel", false)):
+				_submit_inline_control_choice("", false)
+				get_viewport().set_input_as_handled()
 			elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
 				_on_cancel_pressed()
 				get_viewport().set_input_as_handled()
@@ -1600,6 +1616,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
 			_on_zhenqi_cancel_pressed()
+			get_viewport().set_input_as_handled()
+		elif _is_inline_control_choice(_inline_card_choice) and bool(_inline_card_choice.get("allow_cancel", false)):
+			_submit_inline_control_choice("", false)
 			get_viewport().set_input_as_handled()
 		elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
 			_on_cancel_pressed()
@@ -1624,6 +1643,12 @@ func _on_cancel_pressed() -> void:
 	if not _inline_card_choice.is_empty():
 		if _is_inline_zhenqi_cost_choice(_inline_card_choice):
 			_submit_inline_control_choice("lose_hp")
+			return
+		if _is_inline_control_choice(_inline_card_choice):
+			if not _inline_control_secondary_option_id.is_empty():
+				_submit_inline_control_choice(_inline_control_secondary_option_id)
+			elif bool(_inline_card_choice.get("allow_cancel", false)):
+				_submit_inline_control_choice("", false)
 			return
 		if bool(_inline_card_choice.get("allow_cancel", false)):
 			# 空选择；明确表示放弃本次可取消请求，不会消费任何手牌。
@@ -1807,7 +1832,7 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		call_deferred("_submit_suppressed_group_trick_choice", choice_data.duplicate(true))
 		_refresh_selection_text()
 		return
-	if _is_inline_hand_choice(choice_data) or _is_inline_zhenqi_cost_choice(choice_data):
+	if _is_inline_hand_choice(choice_data) or _is_inline_control_choice(choice_data):
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
 		_inline_card_choice = choice_data.duplicate(true)
@@ -1958,6 +1983,13 @@ func _is_inline_zhenqi_cost_choice(choice_data: Dictionary) -> bool:
 	# 技能上下文；稳定 kind 由【振旗】源码写入，避免界面按标题中文或选项数量猜测规则。
 	var context: Dictionary = choice_data.get("context", {}) as Dictionary
 	return str(context.get("kind", "")) == "zhenqi_cost_option"
+
+
+## 判断文字互斥选项是否应复用手牌上方操作区；所有技能控制询问统一使用此入口，不再创建额外遮罩窗口。
+func _is_inline_control_choice(choice_data: Dictionary) -> bool:
+	# 当前选择类型；control 与 bool 都由稳定选项数组表达，其他选择仍按牌区或独立窗口规则处理。
+	var choice_type: String = str(choice_data.get("choice_type", "card"))
+	return choice_type in ["control", "bool"]
 
 
 ## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。
@@ -2152,8 +2184,8 @@ func _on_log_added(message: String) -> void:
 	log_view.scroll_to_line(maxi(log_view.get_line_count() - 1, 0))
 
 
-## 在实际发动者的武将牌中心短暂显示技能名；提示只订阅控制器信号，不持有技能对象或改写对局状态。
-func _on_skill_activated(player_id: int, skill_name: String) -> void:
+## 在实际发动者的武将牌中心短暂显示技能名；提示与目标线只订阅控制器信号，不持有技能对象或改写对局状态。
+func _on_skill_activated(player_id: int, skill_name: String, context: Dictionary) -> void:
 	# 当前发动者武将牌全局矩形；本地与其他玩家使用各自持久组件，未知或刚离场角色不创建错误的中央提示。
 	var player_card_rect: Rect2 = Rect2()
 	if player_id == match_controller.local_human_player_id:
@@ -2166,6 +2198,7 @@ func _on_skill_activated(player_id: int, skill_name: String) -> void:
 		if player_view == null or not is_instance_valid(player_view):
 			return
 		player_card_rect = player_view.get_global_rect()
+	_play_skill_activation_target_indicator(player_id, context)
 	# 牌桌根节点局部坐标；完整逆变换兼容画布缩放与后续窗口适配，不假设全局坐标恒等于场景坐标。
 	var root_inverse_transform: Transform2D = get_global_transform().affine_inverse()
 	# 武将牌左上角的本地坐标；文本标签作为牌桌根节点子项，必须先转换坐标系。
@@ -2192,6 +2225,48 @@ func _on_skill_activated(player_id: int, skill_name: String) -> void:
 	activation_tween.tween_interval(SKILL_ACTIVATION_HOLD_SECONDS)
 	activation_tween.tween_property(activation_label, "modulate:a", 0.0, SKILL_ACTIVATION_FADE_SECONDS)
 	activation_tween.tween_callback(activation_label.queue_free)
+
+
+## 在技能实际发动时播放已确认目标的动态指示线；选择阶段只保留目标描边，避免把尚未确认的候选误表现为已发动。
+func _play_skill_activation_target_indicator(activator_player_id: int, context: Dictionary) -> void:
+	if card_use_animation_layer == null:
+		return
+	# 发动者锚点；缺失座位时不回退到桌面中央，避免为技能伪造来源方向。
+	var source_anchor_result: Dictionary = _try_get_player_indicator_position(activator_player_id)
+	if not bool(source_anchor_result.get("valid", false)):
+		return
+	# 已确认技能目标；只读取发动记录上下文，不能从当前候选或仍可点击的武将牌反推。
+	var target_ids: Array[int] = _get_skill_activation_target_ids(context)
+	var target_positions: Array[Vector2] = []
+	for target_id: int in target_ids:
+		# 当前目标锚点；目标刚离场或座位尚未建立时跳过对应线段，其他合法目标仍正常显示。
+		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_id)
+		if bool(target_anchor_result.get("valid", false)):
+			target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
+	if not target_positions.is_empty():
+		card_use_animation_layer.play_skill_target_indicator(source_anchor_result.get("position", Vector2.ZERO) as Vector2, target_positions)
+
+
+## 从技能实际发动上下文提取稳定目标 ID；优先使用通用target_id/target_ids，并兼容现有支援技能的受益者字段。
+func _get_skill_activation_target_ids(context: Dictionary) -> Array[int]:
+	# 已确认目标结果；按技能声明顺序去重，保持多目标指示线的确定绘制顺序。
+	var result: Array[int] = []
+	for target_id_variant: Variant in context.get("target_ids", []) as Array:
+		# 当前多目标成员；负数和重复ID不构成可绘制角色目标。
+		var target_id: int = int(target_id_variant)
+		if target_id >= 0 and not result.has(target_id):
+			result.append(target_id)
+	# 常规单目标字段；绝大多数单目标技能在announce_activation时写入该键。
+	var single_target_id: int = int(context.get("target_id", -1))
+	if single_target_id >= 0 and not result.has(single_target_id):
+		result.append(single_target_id)
+	# 已有跨角色支援技能的受益者字段；无通用目标字段时仍可复用同一动态线，而不要求重写既有结算上下文。
+	if result.is_empty():
+		for fallback_key: String in ["recipient_id", "slash_user_id"]:
+			var fallback_target_id: int = int(context.get(fallback_key, -1))
+			if fallback_target_id >= 0 and not result.has(fallback_target_id):
+				result.append(fallback_target_id)
+	return result
 
 
 ## 接收规则核心的只读卡牌展示请求，并把玩家视图位置转换为动画层局部坐标。
@@ -2519,6 +2594,9 @@ func _on_action_rejected(message: String) -> void:
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
+	_clear_inline_control_extra_option_buttons()
+	_inline_control_primary_option_id = ""
+	_inline_control_secondary_option_id = ""
 	if _zhenqi_cancel_button != null and is_instance_valid(_zhenqi_cancel_button):
 		_zhenqi_cancel_button.visible = false
 	use_button.visible = true
@@ -2613,6 +2691,9 @@ func _refresh_inline_choice_text() -> void:
 	if _is_inline_zhenqi_cost_choice(_inline_card_choice):
 		_refresh_inline_zhenqi_cost_choice_text()
 		return
+	if _is_inline_control_choice(_inline_card_choice):
+		_refresh_inline_control_choice_text()
+		return
 	# 已选牌数；只读取界面临时数组，不修改权威请求的 selected_card_ids。
 	var selected_count: int = _inline_selected_card_uids.size()
 	# 规则要求的最少数量；弃牌阶段可能大于1，可取消响应通常为0。
@@ -2674,6 +2755,106 @@ func _refresh_inline_zhenqi_cost_choice_text() -> void:
 		_zhenqi_cancel_button.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
 	end_play_button.visible = false
 	_refresh_component_states()
+
+
+## 将任意技能的文字选项映射到手牌上方原有操作区；前两项复用确定与取消位置，其余项按需追加同规格按钮。
+func _refresh_inline_control_choice_text() -> void:
+	# 已过滤后的文字选项；空ID不能提交给权威选择请求，空标签回退为稳定ID以避免出现不可辨认按钮。
+	var control_options: Array[Dictionary] = []
+	for option_variant: Variant in _inline_card_choice.get("control_options", []) as Array:
+		# 当前规则声明的单个选项；只保留具备稳定ID的条目，标签由规则层提供给玩家阅读。
+		var option: Dictionary = option_variant as Dictionary
+		var option_id: String = str(option.get("id", ""))
+		if option_id.is_empty():
+			continue
+		control_options.append({"id":option_id, "label":str(option.get("label", option_id))})
+	# 当前是否允许放弃；取消必须提交 confirmed=false，不能伪造成任一实际技能分支。
+	var allow_cancel: bool = bool(_inline_card_choice.get("allow_cancel", false))
+	selection_label.text = ""
+	selection_label.visible = false
+	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择一项"))
+	interaction_panel.visible = true
+	end_play_button.visible = false
+	# 原确定按钮；始终承担第一项文字选项，保持所有常见二选一询问的固定视觉位置。
+	use_button.visible = not control_options.is_empty()
+	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	use_button.disabled = control_options.is_empty()
+	if not control_options.is_empty():
+		_inline_control_primary_option_id = str((control_options[0] as Dictionary).get("id", ""))
+		use_button.text = str((control_options[0] as Dictionary).get("label", _inline_control_primary_option_id))
+	# 原取消按钮；存在第二项时承担第二项，否则保留为真正取消入口。
+	var cancel_button: Button = %CancelButton
+	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	if control_options.size() >= 2:
+		_inline_control_secondary_option_id = str((control_options[1] as Dictionary).get("id", ""))
+		cancel_button.visible = true
+		cancel_button.text = str((control_options[1] as Dictionary).get("label", _inline_control_secondary_option_id))
+		cancel_button.disabled = _inline_control_secondary_option_id.is_empty()
+	elif allow_cancel:
+		cancel_button.visible = true
+		cancel_button.text = "取消"
+		cancel_button.disabled = false
+	else:
+		cancel_button.visible = false
+	# 超出两项的实际选项；按钮仍位于同一操作行，按声明顺序提交对应稳定ID。
+	for option_index: int in range(2, control_options.size()):
+		var extra_option: Dictionary = control_options[option_index] as Dictionary
+		_append_inline_control_option_button(str(extra_option.get("id", "")), str(extra_option.get("label", "")))
+	# 两项及以上选项且允许放弃时，额外追加真正取消按钮，避免原第二位置既承担选项又丢失放弃语义。
+	if allow_cancel and control_options.size() >= 2:
+		_append_inline_control_cancel_button()
+	_refresh_component_states()
+
+
+## 在当前操作行追加一个实际文字选项按钮；回调只提交稳定ID，不解析技能效果或修改权威请求。
+func _append_inline_control_option_button(option_id: String, option_label: String) -> void:
+	if option_id.is_empty():
+		return
+	# 动态选项按钮；尺寸和主题完全复用原确定/取消按钮，避免不同技能产生独立弹窗样式。
+	var option_button: Button = Button.new()
+	option_button.name = "InlineControlOptionButton_%d" % _inline_control_extra_option_buttons.size()
+	option_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	option_button.text = option_label if not option_label.is_empty() else option_id
+	option_button.pressed.connect(_on_inline_control_extra_option_pressed.bind(option_id))
+	BattleUIStyle.apply_interaction_button(option_button)
+	$InteractionPanel/InteractionVBox/ActionRow.add_child(option_button)
+	_inline_control_extra_option_buttons.append(option_button)
+
+
+## 在当前操作行追加真正的放弃按钮；用于已有两个以上实际选项的可取消文字询问。
+func _append_inline_control_cancel_button() -> void:
+	# 动态取消按钮；名称稳定便于界面回归测试和未来主题脚本定位，不参与规则选择ID集合。
+	var cancel_button: Button = Button.new()
+	cancel_button.name = "InlineControlCancelButton"
+	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	cancel_button.text = "取消"
+	cancel_button.pressed.connect(_on_inline_control_cancel_pressed)
+	BattleUIStyle.apply_interaction_button(cancel_button)
+	$InteractionPanel/InteractionVBox/ActionRow.add_child(cancel_button)
+	_inline_control_extra_option_buttons.append(cancel_button)
+
+
+## 清理上一次文字选项请求创建的附加按钮；原确定、取消与振旗兼容按钮始终保留在场景中复用。
+func _clear_inline_control_extra_option_buttons() -> void:
+	for option_button: Button in _inline_control_extra_option_buttons:
+		# 当前动态按钮；节点可能已经随场景退出释放，仍需先验证实例有效性。
+		if option_button != null and is_instance_valid(option_button):
+			if option_button.get_parent() != null:
+				option_button.get_parent().remove_child(option_button)
+			option_button.queue_free()
+	_inline_control_extra_option_buttons.clear()
+
+
+## 提交动态追加的文字选项；提交前仍确认当前请求属于通用内联控制询问，防止旧按钮迟到触发新请求。
+func _on_inline_control_extra_option_pressed(option_id: String) -> void:
+	if _is_inline_control_choice(_inline_card_choice):
+		_submit_inline_control_choice(option_id)
+
+
+## 提交通用内联文字询问的明确放弃；与右键和Esc保持完全相同的confirmed=false语义。
+func _on_inline_control_cancel_pressed() -> void:
+	if _is_inline_control_choice(_inline_card_choice) and bool(_inline_card_choice.get("allow_cancel", false)):
+		_submit_inline_control_choice("", false)
 
 
 ## 将内联文字选项提交为标准选择动作；费用 ID 仍由权威 ChoiceRequest 复核，界面不解释技能效果。
@@ -2800,7 +2981,9 @@ func _refresh_component_states() -> void:
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
 	local_player_card.set_target_state(self_is_legal, self_is_selected)
-	_refresh_skill_target_preview_indicator()
+	# 技能目标只在实际发动后播放动态线；选择中的候选与临时目标仅用武将牌描边表达。
+	if card_use_animation_layer != null:
+		card_use_animation_layer.clear_target_preview_indicator()
 
 
 ## 同步技能选目标预览线；来源与目标锚点直接复用正式卡牌出牌指示线的坐标和绘制组件。
