@@ -18,6 +18,7 @@ func _init() -> void:
 		"enable": "phaseUse",
 		"ui_enabled": true,
 		"ai_extra_play_phase_value": 1.5,
+		"ai_extra_play_phase_requirements": {"minimum_hand_count":1, "required_hand_color":"red"},
 		"description": "出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
 	})
 

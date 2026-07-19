@@ -1024,6 +1024,13 @@ func _run() -> void:
 		if (main_instance.get("_selected_target_ids") as Array) != expected_self_target or int(main_instance.get("_auto_locked_target_id")) != 4:
 			_fail("self_target_auto_selected:%s/%s" % [self_target_definition_id, main_instance.get("_selected_target_ids")])
 			return
+	# 自身限定装备牌；不依赖装备ID白名单，所有 target_mode=self 的装备都应与【桃】等自身牌自动锁定本地玩家。
+	single_target_card.definition_id = "tengjia"
+	main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))
+	main_instance.call("_on_card_pressed", single_target_card.uid)
+	if (main_instance.get("_selected_target_ids") as Array) != [4] or int(main_instance.get("_auto_locked_target_id")) != 4:
+		_fail("self_only_equipment_auto_selected:%s/%s" % [main_instance.get("_selected_target_ids"), main_instance.get("_auto_locked_target_id")])
+		return
 	menu_button.pressed.connect(_on_menu_button_pressed)
 	await _click_control(menu_button)
 	if not _menu_button_pressed:

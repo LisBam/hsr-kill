@@ -8,7 +8,7 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌视图场景；手牌、木牛“粮”、拖拽预览与不可见牌动画均复用同一完整牌面模型。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
-## 可自动锁定自身目标的牌定义 ID；仅【桃】【酒】【无中生有】保留选牌后自动选择本人，其他牌必须由玩家点击目标。
+## 可自动锁定自身目标的牌定义 ID；【桃】【酒】与【无中生有】按自身牌规则自动选择本人，自身限定装备另由目标模式通用判断。
 const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wuzhong"]
 
 ## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
@@ -1272,7 +1272,11 @@ func _on_card_pressed(card_uid: int) -> void:
 		var selected_card: Dictionary = _get_selected_card_snapshot()
 		# 当前逻辑牌定义 ID；只有白名单中的三张自身牌允许自动锁定本地玩家。
 		var selected_definition_id: String = str(selected_card.get("definition_id", ""))
-		if (target_mode == "self" or target_mode == "self_wounded") and AUTO_SELECTED_SELF_CARD_DEFINITION_IDS.has(selected_definition_id):
+		# 当前逻辑牌定义；装备是否仅能装备给自身由通用类型与目标模式声明，不维护装备 ID 白名单。
+		var selected_definition: Dictionary = _get_cached_card_definition(selected_definition_id)
+		# 自身限定装备；所有 type=equipment 且 target_mode=self 的装备都与自身牌使用同一自动锁定流程。
+		var is_self_only_equipment: bool = str(selected_definition.get("type", "")) == "equipment" and target_mode == "self"
+		if ((target_mode == "self" or target_mode == "self_wounded") and AUTO_SELECTED_SELF_CARD_DEFINITION_IDS.has(selected_definition_id)) or is_self_only_equipment:
 			_selected_target_ids.assign([match_controller.local_human_player_id])
 			_auto_locked_target_id = match_controller.local_human_player_id
 		elif target_mode == "all_players" or target_mode == "all_others":
