@@ -382,6 +382,30 @@ func _run() -> void:
 	if player_views.keys() != expected_opponent_order:
 		_fail("opponent_relative_order:%s" % [player_views.keys()])
 		return
+	# 持久座位容器映射；键为稳定玩家 ID，可直接验证五号位视角下四张侧边牌的座次与几何位置。
+	var player_seat_slots: Dictionary = main_instance.get("_player_seat_slots") as Dictionary
+	# 左上三号位座位；五号位视角的环形顺序末段第一名应进入左侧上方。
+	var seat_three_slot: Control = player_seat_slots.get(2) as Control
+	# 左下四号位座位；五号位视角的环形顺序末段第二名应进入左侧下方。
+	var seat_four_slot: Control = player_seat_slots.get(3) as Control
+	# 右下六号位座位；五号位视角的下家应进入右侧下方。
+	var seat_six_slot: Control = player_seat_slots.get(5) as Control
+	# 右上七号位座位；五号位视角的下家下一位应进入右侧上方。
+	var seat_seven_slot: Control = player_seat_slots.get(6) as Control
+	if seat_three_slot == null or seat_four_slot == null or seat_six_slot == null or seat_seven_slot == null:
+		_fail("ten_player_side_slot_missing:%s" % [player_seat_slots.keys()])
+		return
+	# 四张侧边牌的公开座次标签；验证稳定玩家 ID 与最终绝对座次没有在布局阶段发生交换。
+	var seat_three_label: Label = seat_three_slot.get_node("Seat") as Label
+	# 左下座位公开标签；应保留四号位文字而不是沿用相邻上方座位。
+	var seat_four_label: Label = seat_four_slot.get_node("Seat") as Label
+	# 右下座位公开标签；应保留六号位文字而不是沿用相邻上方座位。
+	var seat_six_label: Label = seat_six_slot.get_node("Seat") as Label
+	# 右上座位公开标签；应保留七号位文字而不是沿用相邻下方座位。
+	var seat_seven_label: Label = seat_seven_slot.get_node("Seat") as Label
+	if seat_three_label == null or seat_four_label == null or seat_six_label == null or seat_seven_label == null or seat_three_label.text != "三" or seat_four_label.text != "四" or seat_six_label.text != "六" or seat_seven_label.text != "七" or not is_equal_approx(seat_three_slot.position.x, seat_four_slot.position.x) or not is_equal_approx(seat_six_slot.position.x, seat_seven_slot.position.x) or seat_three_slot.position.y >= seat_four_slot.position.y or seat_seven_slot.position.y >= seat_six_slot.position.y:
+		_fail("ten_player_side_seats:3=%s/4=%s/6=%s/7=%s positions=%s/%s/%s/%s" % [seat_three_label.text if seat_three_label != null else "", seat_four_label.text if seat_four_label != null else "", seat_six_label.text if seat_six_label != null else "", seat_seven_label.text if seat_seven_label != null else "", seat_three_slot.position, seat_four_slot.position, seat_six_slot.position, seat_seven_slot.position])
+		return
 	# 当前回合角色牌；0号玩家必须保留3像素亮金边框，即使当前实际等待5号玩家操作。
 	var current_turn_view: PlayerTargetView = player_views.get(0) as PlayerTargetView
 	# 当前操作角色牌；5号玩家通过选择请求 actor 高亮，并与当前回合金边语义分离。
