@@ -8,6 +8,9 @@ const DRAW_TRICK_DEFINITION_ID: String = "wuzhong"
 ## 非本人目标对自己造成的雷属性伤害值；固定1点。
 const SELF_THUNDER_DAMAGE_AMOUNT: int = 1
 
+## 冥谶取得的【无中生有】实际提供牌数；AI用该牌差与1点体力统一换算，不修改真实卡牌效果。
+const DRAW_TRICK_CARD_GAIN_COUNT: int = 2
+
 
 ## 写入技能静态信息；锁定技元数据阻止界面与AI把效果当作可取消行为。
 func _init() -> void:
@@ -60,7 +63,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return true
 
 
-## 评估冥谶目标；通常优先自己获得资源，能够令敌方进入濒死时显著提高非本人目标收益。
+## 评估冥谶目标；两张牌与1点体力按统一比例抵消，通常优先自己获牌，敌方濒死与连环风险再单独修正。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 选择请求上下文；仅处理冥谶创建的强制目标请求。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -70,16 +73,16 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var targets: Array = (action.get("payload", {}) as Dictionary).get("selected_target_ids", []) as Array
 	if targets.size() != 1:
 		return -20.0
-	# 唯一目标稳定ID；选择自己时使用固定优先分。
+	# 唯一目标稳定ID；选择自己时只获得两张牌，不承担后续自伤。
 	var target_id: int = int(targets[0])
 	if target_id == owner_player_id:
-		return 6.0
-	# 给牌收益与自伤收益方向相反；目标越敌对、体力越低，自伤越有价值。
+		return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, DRAW_TRICK_CARD_GAIN_COUNT, 0)
+	# 给牌收益与自伤收益方向相反；两张牌与1点体力的基础值严格相等。
 	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 	# 目标公开快照；体力与横置状态用于濒死和连环修正。
 	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
-	# 综合目标评分；给牌按0.45态度、伤害按反向0.65态度计算。
-	var score: float = attitude * 0.45 - attitude * 0.65
+	# 综合目标评分；获得两张牌与失去1点体力通过通用入口计算，基础净值为0。
+	var score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, DRAW_TRICK_CARD_GAIN_COUNT, -SELF_THUNDER_DAMAGE_AMOUNT)
 	if int(target.get("hp", 0)) <= SELF_THUNDER_DAMAGE_AMOUNT and attitude < 0.0:
 		score += 8.0
 	# 横置目标的雷伤会计入连环风险；敌方连环结构提高进攻价值，友方连环结构降低选择价值。

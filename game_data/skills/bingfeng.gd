@@ -11,8 +11,8 @@ const DISCARD_OPTION_ID: String = "discard_target_hand"
 ## AI对将一名横置角色调整为竖置的基础状态估值；只影响决策，不改变规则。
 const AI_STRAIGHTEN_VALUE: float = 1.5
 
-## AI对弃置一张未知手牌的基础控制估值；选定实体后会再按牌面价值排序。
-const AI_DISCARD_VALUE: float = 2.0
+## AI对弃置一张未知手牌的基础控制估值；复用统一单牌资源值，选定实体后会再按牌面价值排序。
+const AI_DISCARD_VALUE: float = NonameAIEvaluator.CARD_RESOURCE_VALUE
 
 ## 本技能已对各目标发动的回合号；键为稳定玩家ID，值为最近发动的state.turn_number。
 var _used_turn_by_target: Dictionary = {}

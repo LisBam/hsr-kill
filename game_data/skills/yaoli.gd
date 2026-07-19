@@ -137,8 +137,8 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
 	# 目标已损失体力；最低为0，每点提供固定救援倾向。
 	var missing_hp: int = maxi(int(target.get("max_hp", 0)) - int(target.get("hp", 0)), 0)
-	# 当前动作综合评分；由态度、体力与手牌安全性构成基础值。
-	var score: float = attitude / 2.5 + float(missing_hp) * 2.2 + minf(float(target.get("hand_count", 0)) * 0.25, 1.5)
+	# 当前动作综合评分；目标获得1张牌使用统一资源值，再叠加体力与手牌安全性修正。
+	var score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 1, 0) + float(missing_hp) * 2.2 + minf(float(target.get("hand_count", 0)) * 0.25, 1.5)
 	# 行动顺序奖励；同一轮中越早行动的残血友方越可能及时使用【药】并避免被敌方干扰。
 	var current_index: int = _snapshot_player_index(authoritative_snapshot, int(authoritative_snapshot.get("current_player_id", -1)))
 	# 目标座次索引；无效时不加入行动顺序修正。

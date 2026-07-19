@@ -42,6 +42,12 @@ func _run() -> void:
 		return
 	if not _test_jiyu_branches():
 		return
+	if not _test_gangfeng_jiyu_play_priority():
+		return
+	if not _test_ai_active_skill_progress_recovery():
+		return
+	if not _test_ai_choice_fallback_integrity():
+		return
 	if not _test_yongyi_and_shield_semantics():
 		return
 	if not _test_new_skill_ai_rules():
@@ -106,6 +112,12 @@ func _reset_state(player_count: int) -> void:
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
 	_controller._pending_finish_turn_player_id = -1
+	# 旧场景的AI策略与异步令牌；每个专项场景从无控制者、无待执行任务状态开始，避免前一断言的计时器进入新状态。
+	_controller.ai_coordinator._policies.clear()
+	_controller._ai_drive_token += 1
+	_controller._scheduled_ai_drive_token = -1
+	_controller._scheduled_ai_choice_request_id = -1
+	_controller._ai_choice_submit_failures.clear()
 
 
 ## 验证属性【杀】的规则名与显示名分离，并核对三名武将的体力、势力和技能引用。
@@ -512,6 +524,119 @@ func _test_jiyu_branches() -> bool:
 	return true
 
 
+## 验证丹恒拥有疾雨时先使用实体雷【杀】，没有实体雷【杀】时把普通黑色【杀】通过罡风转为雷【杀】。
+func _test_gangfeng_jiyu_play_priority() -> bool:
+	_reset_state(2)
+	# 丹恒武将快照；基础策略会从武将静态技能元数据读取疾雨的雷【杀】联动分。
+	var dan_heng: PlayerState = _controller.state.get_player(0)
+	dan_heng.character_id = "dan_heng"
+	# 罡风与疾雨运行时实例；合法动作仍由控制器从真实技能实例生成。
+	var gangfeng: SkillDefinition = GameDatabase.create_skill("gangfeng")
+	var jiyu: SkillDefinition = GameDatabase.create_skill("jiyu")
+	gangfeng.bind(_controller, 0)
+	jiyu.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"gangfeng":gangfeng, "jiyu":jiyu}}
+	# 实体雷【杀】；存在时应优先直接使用，避免为相同逻辑牌额外支付罡风材料成本。
+	var thunder_slash: CardInstance = _add_hand_card(0, "sha_thunder", "spade", 7)
+	# 普通黑色【杀】；实体雷【杀】离开后应成为罡风转换材料，而不是按普通【杀】使用。
+	var black_slash: CardInstance = _add_hand_card(0, "sha", "club", 8)
+	# 丹恒基础策略；公开领袖对公开反贼的态度保证两张攻击牌都具备正收益。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
+	if str(chosen_action.get("action_type", "")) != "use_card" or int(chosen_action.get("card_uid", -1)) != thunder_slash.uid:
+		return _fail("jiyu_thunder_first action=%s" % [chosen_action])
+	# 移除实体雷【杀】后重新决策；普通黑色【杀】必须进入罡风主动技能动作并保留准确材料UID。
+	dan_heng.take_hand_card(thunder_slash.uid)
+	chosen_action = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
+	var chosen_payload: Dictionary = chosen_action.get("payload", {}) as Dictionary
+	if str(chosen_action.get("action_type", "")) != "use_skill" or str(chosen_payload.get("skill_id", "")) != "gangfeng" or int(chosen_payload.get("material_card_uid", -1)) != black_slash.uid:
+		return _fail("jiyu_black_slash_conversion action=%s" % [chosen_action])
+	return true
+
+
+## 验证AI同步发动录事后会重新安排下一动作；该场景不触发冥谶，专门覆盖主动技能早退导致的停滞缺口。
+func _test_ai_active_skill_progress_recovery() -> bool:
+	_reset_state(2)
+	# 寒鸦武将状态；三张同名【杀】允许录事弃置其中两张，同时保留1张手牌避免触发冥谶子选择。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	# 寒鸦技能实例；冥谶仍真实安装，用剩余手牌证明本次同步技能不会依赖子选择恢复AI。
+	var mingchen: SkillDefinition = GameDatabase.create_skill("mingchen")
+	var lushi: SkillDefinition = GameDatabase.create_skill("lushi")
+	mingchen.bind(_controller, 0)
+	lushi.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"mingchen":mingchen, "lushi":lushi}}
+	mingchen.install()
+	lushi.install()
+	# 三张规则名相同的普通手牌；录事支付前两张后仍保留最后一张，不创建冥谶请求。
+	var first_cost: CardInstance = _add_hand_card(0, "sha", "spade", 2)
+	var second_cost: CardInstance = _add_hand_card(0, "sha", "club", 3)
+	_add_hand_card(0, "sha", "spade", 4)
+	# 录事固定摸牌来源；同步效果完成后手牌恢复为2张。
+	_add_draw_pile_card("shan", "heart", 6)
+	# 当前玩家交由内置AI控制；等待设置调高到1秒，使断言可在下一动作真正执行前检查调度状态。
+	_controller.ai_coordinator.register_basic_ai(0)
+	_controller.ai_action_delay_seconds = 1.0
+	_controller._begin_play_choice(0)
+	# 标准主动技能动作；提交会先完成旧chooseToUse，再同步弃牌摸牌并建立新的chooseToUse。
+	var skill_action: PlayerAction = PlayerAction.new("use_skill", 0)
+	skill_action.payload = {"skill_id":"lushi", "card_uids":[first_cost.uid, second_cost.uid]}
+	if not _controller.submit_action(skill_action):
+		return _fail("hanya_ai_skill_submit")
+	if _controller.has_pending_card_choice() or not _controller._has_active_play_choice() or _controller._scheduled_ai_drive_token != _controller._ai_drive_token or hanya.hand.size() != 2:
+		return _fail("hanya_ai_skill_resume pending=%s active=%s scheduled=%d token=%d hand=%d" % [_controller.has_pending_card_choice(), _controller._has_active_play_choice(), _controller._scheduled_ai_drive_token, _controller._ai_drive_token, hanya.hand.size()])
+	# 使本测试创建的延时任务失效；后续专项状态不能接收本场旧AI动作。
+	_controller._ai_drive_token += 1
+	_controller._scheduled_ai_drive_token = -1
+	return true
+
+
+## 验证AI异常回退直接复用完整合法动作，固定组合与响应转化技能ID都不会被“前N张候选”逻辑破坏。
+func _test_ai_choice_fallback_integrity() -> bool:
+	_reset_state(2)
+	# 固定双牌组合请求；只有UID 12与13的组合合法，候选前两张11与12必须被过滤。
+	var combination_request: Dictionary = {
+		"request_id":701,
+		"chooser_id":0,
+		"choice_type":"card",
+		"allow_cancel":false,
+		"min_select":2,
+		"max_select":2,
+		"min_card_select":2,
+		"max_card_select":2,
+		"candidates":[{"uid":11}, {"uid":12}, {"uid":13}],
+		"target_ids":[],
+		"context":{"valid_card_combinations":[[12, 13]]},
+	}
+	# 固定组合回退动作；必须保存规则枚举确认过的完整双牌组。
+	var combination_fallback: Dictionary = _controller._build_ai_choice_fallback_action(combination_request)
+	# 固定组合负载；最终提交字段与普通AI策略动作使用同一结构。
+	var combination_payload: Dictionary = combination_fallback.get("payload", {}) as Dictionary
+	if combination_payload.get("selected_card_uids", []) != [12, 13] or not bool(combination_payload.get("confirmed", false)):
+		return _fail("ai_fallback_combination action=%s" % [combination_fallback])
+	# 响应技能材料请求；候选声明必须显式携带罡风技能ID，不能把黑色材料误当成原生响应牌。
+	var response_request: Dictionary = {
+		"request_id":702,
+		"chooser_id":0,
+		"choice_type":"respond",
+		"allow_cancel":false,
+		"min_select":1,
+		"max_select":1,
+		"min_card_select":1,
+		"max_card_select":1,
+		"candidates":[{"uid":21, "required_response_skill_id":"gangfeng"}],
+		"target_ids":[],
+		"context":{},
+	}
+	# 响应技能回退动作；response_skill_id是消费材料前权威复核转换技能的必要字段。
+	var response_fallback: Dictionary = _controller._build_ai_choice_fallback_action(response_request)
+	# 响应回退负载；除材料UID外还必须保留准确的技能ID。
+	var response_payload: Dictionary = response_fallback.get("payload", {}) as Dictionary
+	if response_payload.get("selected_card_uids", []) != [21] or str(response_payload.get("response_skill_id", "")) != "gangfeng":
+		return _fail("ai_fallback_response_skill action=%s" % [response_fallback])
+	return true
+
+
 ## 验证失去护盾不影响体力也不写入伤害历史，并验证永屹额外弃牌阶段完成后才获得1点护盾。
 func _test_yongyi_and_shield_semantics() -> bool:
 	_reset_state(2)
@@ -569,7 +694,7 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	return true
 
 
-## 验证冰封会主动把对横置队友的负收益牌转化为正收益，且疾雨在候选只有丹恒队友时无条件选第2项。
+## 验证统一体力牌差比例、冰封联动、疾雨选项与永屹收益判断。
 func _test_new_skill_ai_rules() -> bool:
 	_reset_state(3)
 	_controller.state.get_player(0).character_id = "march_7th"
@@ -578,6 +703,11 @@ func _test_new_skill_ai_rules() -> bool:
 	var snapshot: Dictionary = _controller.state.to_dict(0, true)
 	# 无名杀式AI评估器；使用公开身份得到稳定忠反态度。
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	# 自身获得1张牌与回复1点体力的统一收益；后者必须严格等于前者的2倍。
+	var one_card_value: float = evaluator.score_resource_change(snapshot, 0, 0, 1, 0)
+	var one_hp_value: float = evaluator.score_resource_change(snapshot, 0, 0, 0, 1)
+	if not is_equal_approx(one_hp_value, one_card_value * 2.0):
+		return _fail("ai_resource_ratio card=%.2f hp=%.2f" % [one_card_value, one_hp_value])
 	# 对横置队友使用【杀】的负收益动作；冰封应移除原效果并加入竖置收益。
 	var harmful_ally_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_definition_id":"sha", "target_ids":[2]}
 	# 原【杀】基础分；对公开忠臣造成伤害应为负。

@@ -100,8 +100,8 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
 		# 雪衣对获牌目标的可感知态度；正值表示友方。
 		var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
-		# 获得未知牌的基础收益；友方低手牌时更需要补牌。
-		var score: float = attitude / 2.5 + maxf(3.0 - float(target.get("hand_count", 0)), 0.0) * maxf(attitude, 0.0) * 0.25
+		# 获得未知牌的基础收益；统一按1张牌换算，友方低手牌时再提高补牌需求。
+		var score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 1, 0) + maxf(3.0 - float(target.get("hand_count", 0)), 0.0) * maxf(attitude, 0.0) * 0.25
 		# 伤害牌原版名字数；1和4分别应用防御牌与锦囊牌倾向。
 		# AI与权威检索共用规则名字数，避免牌面属性前缀造成评分和结算分歧。
 		var name_length: int = int(context.get("name_length", 0))

@@ -60,6 +60,6 @@ func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dic
 	var target_attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 	# 连环切换评分；当前横置时重置方向与施加横置严格相反。
 	var link_score: float = target_attitude * 0.25 if bool(target.get("chained", false)) else -target_attitude * 0.25
-	# 自身目标摸牌收益；固定按2分加入，代表一张未知牌的直接资源收益。
-	var self_draw_score: float = 2.0 if target_id == owner_player_id else 0.0
+	# 自身目标摸牌收益；统一入口按1张牌计算，避免技能文件维护另一套资源比例。
+	var self_draw_score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 1, 0) if target_id == owner_player_id else 0.0
 	return current_score + link_score + self_draw_score

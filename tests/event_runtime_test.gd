@@ -25,6 +25,8 @@ var _child_event: GameEvent
 func _ready() -> void:
 	if not _test_event_tree_and_pause():
 		return
+	if not _test_abort_choice_scope():
+		return
 	if not _test_composite_choice_request():
 		return
 	if not _test_held_root_accepts_children():
@@ -140,6 +142,60 @@ func _test_event_tree_and_pause() -> bool:
 	# 同一请求已经从活动索引移除，迟到结果不能再次恢复或覆盖父事件结果。
 	if _scheduler.submit_choice(response):
 		return _fail("stale_response_accepted")
+	return true
+
+
+## 验证无解选择的中断只终止所属子事件、释放自己的暂停令牌，并允许父事件继续完成。
+func _test_abort_choice_scope() -> bool:
+	# 独立调度器；该用例会主动中断选择，不与正常响应测试共享历史或事件栈。
+	var abort_scheduler: EventScheduler = EventScheduler.new()
+	add_child(abort_scheduler)
+	# 执行顺序记录；中断后子事件第二步不得执行，父事件第二步必须继续。
+	var execution_order: Array[String] = []
+	# 选择请求引用容器；子事件创建请求后供测试主体读取真实全局请求ID。
+	var request_holder: Array = [null]
+	# 子事件引用容器；中断完成后用于确认其终态严格为aborted。
+	var child_holder: Array = [null]
+	# 测试根事件；第一步创建选择子事件，第二步证明父流程没有被扩大中断。
+	var root_event: GameEvent = abort_scheduler.create_event("AbortRoot", "root", [
+		func(event: GameEvent, runtime: EventScheduler) -> void:
+			execution_order.append("root0")
+			child_holder[0] = runtime.create_child(event.event_id, "AbortChoiceChild", "choice", [
+				func(child_event: GameEvent, child_runtime: EventScheduler) -> void:
+					execution_order.append("child0")
+					# 强制单牌请求；保持等待直到测试主体调用abort_choice最终保护入口。
+					var request: ChoiceRequest = ChoiceRequest.new(child_event.event_id, 0, "card", "请选择一张测试牌")
+					request.card_ids = [201]
+					request.min_count = 1
+					request.max_count = 1
+					request.forced = true
+					request.can_cancel = false
+					request_holder[0] = child_runtime.request_choice(request),
+				func(_child_event: GameEvent, _child_runtime: EventScheduler) -> void:
+					execution_order.append("child1"),
+			]),
+		func(event: GameEvent, _runtime: EventScheduler) -> void:
+			execution_order.append("root1")
+			event.finish(),
+	])
+	if not abort_scheduler.start(root_event.event_id) or execution_order != ["root0", "child0"]:
+		return _fail("abort_choice_start order=%s" % [execution_order])
+	# 当前真实请求；必须已经登记并持有唯一choice暂停令牌。
+	var pending_request: ChoiceRequest = request_holder[0] as ChoiceRequest
+	if pending_request == null or abort_scheduler.pause_registry.get_active_tokens().size() != 1:
+		return _fail("abort_choice_pending")
+	if not abort_scheduler.abort_choice(pending_request.request_id, "test_unresolvable"):
+		return _fail("abort_choice_rejected")
+	# 已中断子事件；父根应继续第二步并正常完成，调度器不再保留任何请求或暂停。
+	var aborted_child: GameEvent = child_holder[0] as GameEvent
+	if execution_order != ["root0", "child0", "root1"] or aborted_child == null or aborted_child.status != GameEvent.Status.ABORTED or root_event.status != GameEvent.Status.FINISHED or not root_event.finalized or abort_scheduler.pause_registry.has_active() or not abort_scheduler.get_pending_choice_requests().is_empty():
+		return _fail("abort_choice_scope order=%s child=%s root=%s" % [execution_order, aborted_child.to_dict() if aborted_child != null else {}, root_event.to_dict()])
+	# 迟到响应；请求索引已清除，不能恢复中断事件或再次推进父流程。
+	var stale_response: ChoiceResponse = ChoiceResponse.new(pending_request.request_id, pending_request.event_id, 0, true)
+	stale_response.card_ids = [201]
+	if abort_scheduler.submit_choice(stale_response):
+		return _fail("abort_choice_stale_response")
+	abort_scheduler.queue_free()
 	return true
 
 

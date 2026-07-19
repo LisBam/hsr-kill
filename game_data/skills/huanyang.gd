@@ -39,8 +39,8 @@ func _on_owner_damage_source(event: RuleEvent) -> void:
 		announce_activation({"damage_target_id":event.target_id, "recover":RECOVER_AMOUNT})
 
 
-## 修正伤害牌AI：受伤时优先攻击距离1以内目标，并允许在安全体力下利用属性连环对自己造成可回复伤害。
-func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, _evaluator: Object) -> float:
+## 修正伤害牌AI：受伤时按统一1点体力收益优先攻击距离1以内目标，并允许在安全体力下利用属性连环对自己造成可回复伤害。
+func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
 	if str(action.get("action_type", "")) != "use_card":
 		return current_score
 	# 当前牌定义；只有实际伤害牌能触发还阳。
@@ -60,8 +60,8 @@ func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dic
 	for target_variant: Variant in action.get("target_ids", []) as Array:
 		# 当前伤害目标稳定ID；用于距离与自身目标判断。
 		var target_id: int = int(target_variant)
-		if _evaluator.get_distance(authoritative_snapshot, owner_player_id, target_id) <= 1:
-			result += 3.0
+		if evaluator.get_distance(authoritative_snapshot, owner_player_id, target_id) <= 1:
+			result += evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, RECOVER_AMOUNT)
 		# 1点体力时禁止AI用伤害牌攻击自己，避免在还阳触发前先进入无法救援的濒死流程。
 		if target_id == owner_player_id:
 			if int(owner.get("hp", 0)) <= 1:

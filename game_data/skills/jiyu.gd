@@ -14,6 +14,9 @@ const AI_LINK_VALUE: float = 1.5
 ## AI在目标没有已知【闪】时选择不可响应的优先分；高于通用取消与普通选项分。
 const AI_PREFERRED_OPTION_SCORE: float = 6.0
 
+## AI使用雷【杀】触发疾雨的主动优先分；同时提供给罡风等雷【杀】转换技能读取，不改变卡牌实际收益。
+const AI_THUNDER_SLASH_PRIORITY_BONUS: float = 4.0
+
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。
 func _init() -> void:
@@ -22,6 +25,7 @@ func _init() -> void:
 		"name": "疾雨",
 		"trigger": "useCardToTargeted",
 		"ui_enabled": false,
+		"ai_thunder_slash_priority_bonus": AI_THUNDER_SLASH_PRIORITY_BONUS,
 		"description": "当你使用雷【杀】指定目标时，你可横置目标角色，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。",
 	})
 
@@ -131,6 +135,17 @@ func _continue_link_other_target(context: Dictionary, response: ChoiceResponse) 
 	if legal_target_ids.has(selected_target_id):
 		host.call("toggle_player_linked", selected_target_id, owner_player_id, get_id())
 	return true
+
+
+## 提高雷【杀】主动动作的评分，使AI优先触发疾雨；普通【杀】与火【杀】保持原有通用估值。
+func modify_ai_card_action_score(_authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, _evaluator: Object) -> float:
+	if str(action.get("action_type", "")) != "use_card":
+		return current_score
+	# 当前逻辑牌定义；雷【杀】通过共享slash牌族与thunder属性共同识别，不绑定实体牌UID。
+	var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
+	if str(definition.get("effect_id", "")) != "slash" or str(definition.get("nature", "normal")) != "thunder":
+		return current_score
+	return current_score + AI_THUNDER_SLASH_PRIORITY_BONUS
 
 
 ## 评估疾雨的发动确认、目标分支与丹恒的横置目标；完整实现指定的【闪】判断与队友优先规则。

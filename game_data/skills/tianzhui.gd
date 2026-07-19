@@ -5,6 +5,9 @@ extends SkillDefinition
 ## 【天坠】对目标的身份观察牌效；负1表示成功发动是一次明确伤害行为，不改变实际伤害数值。
 const IDENTITY_TARGET_RESULT: float = -1.0
 
+## 【天坠】成功结算时造成的火属性伤害值；默认1点，修改后必须同步技能描述与玩法数值文档。
+const DAMAGE_AMOUNT: int = 1
+
 ## 当前出牌阶段是否已经发动；每次 phaseUseBegin 重置，费用完整支付后设为 true。
 var _used_this_play_phase: bool = false
 
@@ -71,7 +74,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	_used_this_play_phase = true
 	announce_activation({"target_id":target.player_id})
 	observe_identity_behavior([target.player_id], {"target_result":IDENTITY_TARGET_RESULT})
-	get_owner_skill_player().damage(1, get_skill_player(target.player_id), "fire")
+	get_owner_skill_player().damage(DAMAGE_AMOUNT, get_skill_player(target.player_id), "fire")
 	return true
 
 
@@ -125,7 +128,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, ev
 			continue
 		# 当前目标 ID；敌方态度为负，因此负态度取反后形成伤害收益。
 		var target_id: int = int(target.get("player_id", -1))
-		best_target_score = maxf(best_target_score, -evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) / 2.0)
+		best_target_score = maxf(best_target_score, evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -DAMAGE_AMOUNT))
 	# 费用修正；自身横置时通过重置支付费用，不消耗手牌并获得0.8分状态恢复收益。
 	var cost_adjustment: float = 0.8 if bool(owner.get("chained", false)) else -1.0
 	return best_target_score + cost_adjustment
@@ -145,7 +148,7 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		return -10.0
 	# 目标伤害收益；对敌方为正，对友方为负。
 	var target_id: int = int(selected_targets[0])
-	var score: float = -evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	var score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -DAMAGE_AMOUNT)
 	# 已选费用牌；选择最低价值锦囊，零牌费用额外奖励自身重置价值。
 	var selected_cards: Array = payload.get("selected_card_uids", []) as Array
 	if selected_cards.is_empty():

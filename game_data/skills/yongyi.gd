@@ -14,8 +14,8 @@ const EXTRA_PLAY_DRAW_COUNT: int = 1
 ## AI对1点护盾的防御资源估值；两个发动分支都以此作为收益或机会成本基准。
 const AI_SHIELD_VALUE: float = 2.5
 
-## AI对第二段固定摸取1张未知牌的预期收益；只用于确认决策，不改变实际摸牌数量。
-const AI_EXTRA_PLAY_DRAW_VALUE: float = 2.0
+## AI对第二段固定摸取1张未知牌的自身收益；由统一牌差基础值与自身态度倍率换算，只用于确认决策。
+const AI_EXTRA_PLAY_DRAW_VALUE: float = NonameAIEvaluator.CARD_RESOURCE_VALUE * 2.0
 
 ## AI对弃牌阶段弃置牌面价值的折算权重；不修改实际弃牌数量。
 const AI_DISCARD_COST_WEIGHT: float = 0.55

@@ -352,6 +352,28 @@ func timeout_choice(request_id: int, response: ChoiceResponse) -> bool:
 	return true
 
 
+## 中断一条无法继续提交的选择请求；只释放该请求持有的暂停令牌，不影响其他事件或并行响应。
+## 本入口用于权威控制器检测到请求与事件状态已经不可恢复时的最终保护，正常取消仍必须提交标准ChoiceResponse。
+func abort_choice(request_id: int, reason: String = "choice_unresolvable") -> bool:
+	if not _choice_requests.has(request_id):
+		return false
+	# 当前请求；先标记ABORTED再移出索引，使任何迟到响应都无法恢复旧事件。
+	var request: ChoiceRequest = _choice_requests[request_id] as ChoiceRequest
+	request.abort(reason)
+	_choice_requests.erase(request_id)
+	# 请求所属事件；无法恢复的选择子事件必须中断，父事件才能在暂停令牌释放后继续收尾。
+	var event: GameEvent = _events.get(request.event_id) as GameEvent
+	if event != null and not event.finalized:
+		event.abort(reason)
+		event.result = {"choice_request":request.to_dict(), "abort_reason":reason}
+		_record_history("abort", event, {"choice_request":request.to_dict()})
+	# 请求自己的暂停令牌；其他玩法、网络或动画暂停仍会继续阻止事件栈推进。
+	resume(request.pause_token_id, reason)
+	if event != null and not event.finalized and not _event_stack.has(event.event_id):
+		_finalize_event(event)
+	return true
+
+
 ## 中断全部事件、选择和暂停 token；对局结束后旧响应永远不能恢复已经失效的事件。
 func abort_all(reason: String = "game_over") -> void:
 	_stop_requested = true

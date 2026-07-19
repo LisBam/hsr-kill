@@ -6,6 +6,9 @@ extends SkillDefinition
 ## 录事每次成功结算摸牌数；固定1张。
 const DRAW_COUNT: int = 1
 
+## AI估算录事摸到一张未知牌的平均保留价值；复用通用重铸尺度，避免技能维护独立换牌常量。
+const AI_UNKNOWN_DRAW_VALUE: float = NonameAIEvaluator.RECAST_DRAW_VALUE
+
 
 ## 写入技能静态信息；技能没有阶段次数限制，每次发动都会净减少一张区域牌。
 func _init() -> void:
@@ -151,12 +154,12 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var selected_uids: Array = payload.get("card_uids", []) as Array
 	if selected_uids.size() != 2:
 		return -20.0
-	# 两张费用牌保留价值；摸一张未知牌使用4.5分基础价值，弃牌净损失按完整价值计算。
+	# 两张费用牌保留价值；摸一张未知牌使用通用平均保留价值，弃牌净损失按完整价值计算。
 	var cost: float = 0.0
 	for uid_variant: Variant in selected_uids:
 		cost += evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(uid_variant))
-	# 录事净评分；固定未知摸牌价值4.5减去完整费用保留价值。
-	var score: float = 4.5 - cost
+	# 录事净评分；通用未知牌平均保留价值减去完整费用保留价值。
+	var score: float = AI_UNKNOWN_DRAW_VALUE - cost
 	# 冥谶联动；只有所选UID覆盖当前全部普通手牌时增加奖励，装备不计入“最后的手牌”。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
 	if _owner_has_mingchen(authoritative_snapshot) and _selection_discards_all_hand(owner, selected_uids):
