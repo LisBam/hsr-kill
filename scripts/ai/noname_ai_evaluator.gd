@@ -85,18 +85,21 @@ func score_action(authoritative_snapshot: Dictionary, action: Dictionary, actor_
 		return _score_equipment_action(authoritative_snapshot, actor_id, definition, ai_profile, order)
 	# 动作最终目标；全体牌动作在合法列表中目标为空，需要按目标模式从快照展开。
 	var target_ids: Array[int] = get_effective_target_ids(authoritative_snapshot, actor_id, definition, action.get("target_ids", []) as Array)
+	# 当前实体牌颜色；仁王盾等颜色型防具必须读取实际使用牌，虚拟且未声明颜色的牌保持未知。
+	var action_card_color: String = _get_action_card_color(authoritative_snapshot, actor_id, action)
 	# 目标结果基础值；负值代表伤害、弃牌或跳阶段，正值代表回复和摸牌。
 	var target_result: float = float(ai_profile.get("target_result", 0.0))
 	for target_id: int in target_ids:
-		score += score_target_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result)
+		score += score_target_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, action_card_color)
 	# 可重铸牌只有实际使用收益高于换牌收益时才使用；否则重铸动作会在合法列表中胜出。
 	if bool(definition.get("recast", false)):
 		score -= maxf(0.0, RECAST_DRAW_VALUE - card_value) * 0.5
 	return score
 
 
-## 计算一名目标承受当前牌效的观察者收益；包含身份态度、濒危状态、手牌数与属性连环传播。
-func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float) -> float:
+## 计算一名目标承受当前牌效的观察者收益；包含身份态度、濒危状态、手牌数、防具与属性连环传播。
+## card_color 仅由主动使用实体提供；空字符串表示未知颜色，不能臆测颜色型防具必定生效。
+func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, card_color: String = "") -> float:
 	# AI 对目标的当前态度；正值为友方，负值为敌方，隐藏身份会按暴露度衰减。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
 	# 目标状态；体力和手牌会放大伤害、控制与救援效果。
@@ -110,7 +113,7 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		var card_definition_id: String = str(definition.get("id", ""))
 		# 当前伤害属性；普通【杀】会被藤甲拦截，火焰伤害则提高预期收益。
 		var nature: String = str(definition.get("nature", "normal"))
-		if str(definition.get("effect_id", "")) == "slash" and armor_definition.blocks_slash_by_color("", nature):
+		if str(definition.get("effect_id", "")) == "slash" and armor_definition.blocks_slash_by_color(card_color, nature):
 			return 0.0
 		if armor_definition.blocks_aoe(card_definition_id):
 			return 0.0
@@ -326,6 +329,29 @@ func get_owned_card_value_by_uid(authoritative_snapshot: Dictionary, owner_id: i
 			if int(card.get("uid", -1)) == card_uid:
 				return get_card_value_by_id(str(card.get("definition_id", "")), authoritative_snapshot, owner_id)
 	return 2.0
+
+
+## 返回本次主动使用实体的公开颜色；手牌与木牛“粮”均可能作为合法使用区，找不到时保持未知。
+func _get_action_card_color(authoritative_snapshot: Dictionary, actor_id: int, action: Dictionary) -> String:
+	# 动作负载；虚拟牌可由规则层显式写入颜色，实体牌仍优先按UID读取真实花色。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 显式颜色；用于已由规则转换且仍保留材料颜色的虚拟牌，空值再回退实体查询。
+	var declared_color: String = str(action.get("card_color", payload.get("card_color", "")))
+	if not declared_color.is_empty():
+		return declared_color
+	# 当前使用实体UID；不存在实体时无法为仁王盾等颜色型防具提供确定预判。
+	var card_uid: int = int(action.get("card_uid", -1))
+	if card_uid < 0:
+		return ""
+	# 使用者完整私有快照；AI只读取自己可见的手牌与木牛“粮”。
+	var actor: Dictionary = get_player(authoritative_snapshot, actor_id)
+	for zone_name: String in ["hand", "wooden_ox_storage"]:
+		for card_variant: Variant in actor.get(zone_name, []) as Array:
+			# 当前实体快照；UID命中后直接返回其稳定颜色字段。
+			var card: Dictionary = card_variant as Dictionary
+			if int(card.get("uid", -1)) == card_uid:
+				return str(card.get("color", ""))
+	return ""
 
 
 ## 返回身份模型计算的当前态度；技能文件通过该公开只读接口复用身份判断。

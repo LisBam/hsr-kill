@@ -136,9 +136,6 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
 	if card_definition != null:
 		score = card_definition.modify_ai_action_score(authoritative_snapshot, action, score, evaluator)
-	# 防具会让本次【杀】对全部已选目标无效时，AI 不消耗黑色实体【杀】；无视防具武器仍保留正常攻击评分。
-	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
-		return -INF
 	# 使用者武将技能；锁定技和被动牌效联动可在各自技能文件中修正当前卡牌评分。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
 	# 使用者武将定义；技能 ID 数组由 CharacterDefinition 自动生成。
@@ -150,6 +147,16 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 		if skill != null and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
 			skill.bind(null, player_id)
 			score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
+	# 防具完全拦截所有目标时，先保留已计算的卡牌与技能联动收益，再排除纯出牌顺序带来的伪正分。
+	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
+		# 当前逻辑牌定义；未知牌没有顺序偏好，按0处理以避免异常动作获得豁免。
+		var action_definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
+		# 当前牌AI配置；order只用于收益接近时排序，不能单独构成消耗无效牌的理由。
+		var action_ai_profile: Dictionary = evaluator.get_card_ai_profile(action_definition)
+		# 纯顺序分；移除后剩余分数才表示防具拦截之外的真实卡牌或技能收益。
+		var action_order_score: float = float(action_ai_profile.get("order", 0.0)) * NonameAIEvaluator.ORDER_WEIGHT
+		if score - action_order_score <= ACTION_ACCEPTANCE_THRESHOLD:
+			return -INF
 	return score
 
 
