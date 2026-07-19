@@ -64,6 +64,9 @@ const MAX_LOBBY_CHAT_LENGTH: int = 200
 ## 大厅聊天历史保留上限；默认100条让后来加入者获得近期上下文，同时限制公共快照体积。
 const MAX_LOBBY_CHAT_HISTORY: int = 100
 
+## 房主踢出成员后的同一远端地址重新加入冷却毫秒数；默认5000即5秒，只限制踢出流程，不影响密码错误和满员拒绝。
+const KICK_REJOIN_COOLDOWN_MSEC: int = 5000
+
 ## 当前可启动的默认游戏模式稳定 ID；大厅设置与开局协调只使用稳定 ID，不依赖中文显示名。
 const DEFAULT_LOBBY_GAME_MODE_ID: String = "identity"
 
@@ -125,6 +128,9 @@ var _lobby_chat_sequence: int = 0
 
 ## 已由房主主动拒绝且等待底层断开的 peer ID；断开回调据此跳过重复离开广播与通用提示。
 var _rejected_lobby_peer_ids: Array[int] = []
+
+## 被房主踢出的远端地址到冷却结束单调毫秒数映射；连接 peer ID 会在重连时变化，因此不能作为限制键。
+var _kick_rejoin_expiry_msec_by_address: Dictionary = {}
 
 ## 已登记成员的加入序号；每接受一名客户端递增，确保成员列表不依赖字典遍历顺序。
 var _join_sequence: int = 0
@@ -340,7 +346,7 @@ func kick_lan_lobby_member(peer_id: int) -> String:
 		return "当前不是可管理成员的局域网房主。"
 	if peer_id <= SERVER_PEER_ID or not _lobby_members.has(peer_id):
 		return "无法移除该大厅成员。"
-	_reject_lobby_peer(peer_id, "你已被房主移出房间。")
+	_reject_lobby_peer(peer_id, "你已被房主移出房间。", true)
 	return ""
 
 
@@ -751,6 +757,13 @@ func _send_packet_to_peer(packet: Dictionary, peer_id: int) -> void:
 func _register_lobby_member(peer_id: int, display_name: String, avatar_character_id: String, room_password: String) -> void:
 	if lan_role != LanRole.HOST or _lan_match_active or peer_id <= SERVER_PEER_ID:
 		return
+	# 当前加入者的剩余冷却；只有被房主踢出的远端地址会命中，密码或人数拒绝不会建立此记录。
+	var cooldown_remaining_msec: int = _get_kick_rejoin_cooldown_remaining_msec(peer_id)
+	if cooldown_remaining_msec > 0:
+		# 当前剩余等待整秒；向上取整保证提示的5秒不会在边界提前显示为0秒。
+		var cooldown_remaining_seconds: int = ceili(float(cooldown_remaining_msec) / 1000.0)
+		_reject_lobby_peer(peer_id, "你刚被房主移出房间，请在%d秒后再加入。" % cooldown_remaining_seconds)
+		return
 	if _sanitize_lobby_password(room_password) != _lobby_password:
 		_reject_lobby_peer(peer_id, "房间密码错误。")
 		return
@@ -913,9 +926,15 @@ func _normalize_lobby_member_seats() -> void:
 
 
 ## 定向拒绝或踢出大厅客户端；可靠原因包先发送，再延迟断开底层 peer 以提高提示到达概率。
-func _reject_lobby_peer(peer_id: int, message: String) -> void:
+## starts_kick_rejoin_cooldown 为 true 时只在房主主动踢出路径记录远端地址，其他拒绝不会阻止玩家再次尝试。
+func _reject_lobby_peer(peer_id: int, message: String, starts_kick_rejoin_cooldown: bool = false) -> void:
 	if lan_role != LanRole.HOST or peer_id <= SERVER_PEER_ID:
 		return
+	if starts_kick_rejoin_cooldown:
+		# 当前被踢连接的远端地址；ENet 重连会更换 peer ID，地址才是5秒限制的稳定网络标识。
+		var remote_address: String = _get_remote_address_for_peer(peer_id)
+		if not remote_address.is_empty():
+			_kick_rejoin_expiry_msec_by_address[remote_address] = Time.get_ticks_msec() + KICK_REJOIN_COOLDOWN_MSEC
 	_send_packet_to_peer(_build_packet("lobby_rejected", {"message":message}), peer_id)
 	_lobby_members.erase(peer_id)
 	if not _rejected_lobby_peer_ids.has(peer_id):
@@ -925,10 +944,39 @@ func _reject_lobby_peer(peer_id: int, message: String) -> void:
 	get_tree().create_timer(0.15).timeout.connect(_disconnect_rejected_lobby_peer.bind(peer_id))
 
 
+## 返回指定连接仍需等待的踢出冷却毫秒数；过期条目在读取时清理，避免长期开房积累旧地址。
+func _get_kick_rejoin_cooldown_remaining_msec(peer_id: int) -> int:
+	# 当前连接远端地址；无法获取时不对未知地址做限制，避免误伤合法玩家。
+	var remote_address: String = _get_remote_address_for_peer(peer_id)
+	if remote_address.is_empty():
+		return 0
+	# 当前地址冷却结束时间；不存在时返回0表示可正常登记。
+	var expiry_msec: int = int(_kick_rejoin_expiry_msec_by_address.get(remote_address, 0))
+	# 当前单调时间；不受系统日期修改影响，适合短暂会话冷却。
+	var current_msec: int = Time.get_ticks_msec()
+	if expiry_msec <= current_msec:
+		_kick_rejoin_expiry_msec_by_address.erase(remote_address)
+		return 0
+	return expiry_msec - current_msec
+
+
+## 返回 ENet peer 的远端网络地址；仅房主在对端仍连接时调用，失败时返回空字符串而不建立冷却。
+func _get_remote_address_for_peer(peer_id: int) -> String:
+	if _enet_peer == null or peer_id <= SERVER_PEER_ID:
+		return ""
+	# 当前底层 ENet 对端；peer 已关闭或不存在时返回 null，不能继续读取地址。
+	var enet_packet_peer: ENetPacketPeer = _enet_peer.get_peer(peer_id)
+	if enet_packet_peer == null:
+		return ""
+	return enet_packet_peer.get_remote_address().strip_edges()
+
+
 ## 执行已经发送拒绝原因的底层断开；peer 可能已主动离开，因此调用前再次检查 ENet 实例。
 func _disconnect_rejected_lobby_peer(peer_id: int) -> void:
-	if _enet_peer != null:
-		_enet_peer.disconnect_peer(peer_id)
+	if _enet_peer == null or not _rejected_lobby_peer_ids.has(peer_id):
+		return
+	# 当前 peer 仍在拒绝列表中，说明断开回调尚未移除它；若客户端已主动关闭，_on_peer_disconnected 会先清理该标记并使此延迟任务静默返回。
+	_enet_peer.disconnect_peer(peer_id)
 
 
 ## 客户端处理房主的大厅拒绝原因；立即释放本地 ENet 并返回可重试的离线入口。

@@ -48,6 +48,12 @@ var chained: bool = false
 ## 当前是否处于翻面状态；为后续武将技能与完整回合规则预留。
 var face_down: bool = false
 
+## 当前是否由基础 AI 代替真人执行操作；默认 false，仅在真人主动托管或联机掉线后由权威控制器写入，并会同步到所有观察者。
+var auto_managed: bool = false
+
+## 当前托管是否由联机掉线触发；默认 false，true 时界面显示“已离线，托管中”且不允许远端玩家自行关闭。
+var auto_managed_offline: bool = false
+
 ## 当前手牌数组；仅本人和权威对局核心可读取完整实体牌信息。
 var hand: Array[CardInstance] = []
 
@@ -216,6 +222,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"out_of_game": out_of_game,
 		"chained": chained,
 		"face_down": face_down,
+		"auto_managed": auto_managed,
+		"auto_managed_offline": auto_managed_offline,
 		"hand_count": hand.size(),
 		"hand": hand_data,
 		"equipment": equipment_data,

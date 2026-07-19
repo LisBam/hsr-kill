@@ -211,6 +211,12 @@ var local_player_seat_label: Label
 ## 可折叠对局日志组件；只读取其展开信号，离线暂停所有权由牌桌统一维护。
 @onready var match_log_panel: MatchLogPanel = $LogPanel
 
+## 本地玩家托管开关；位于“记录”按钮旁，只提交标准托管动作，不直接注册或移除 AI。
+@onready var auto_manage_button: Button = %AutoManageButton
+
+## 本地手牌托管覆盖组件；根据权威快照遮挡手牌并拦截指针输入，动态文字由组件自身驱动。
+@onready var auto_managed_hand_overlay: PlayerAutoManagedHandOverlay = %AutoManagedHandOverlay
+
 ## 错误提示文本；显示最近一次被规则核心拒绝的原因。
 @onready var error_label: Label = %ErrorLabel
 
@@ -429,6 +435,7 @@ func _ready() -> void:
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
+	auto_manage_button.pressed.connect(_on_auto_manage_pressed)
 	# 已保存的下一局人数；主菜单与局内菜单共用同一全局配置，首次进入场景时同步覆盖检查器默认值。
 	var saved_next_match_player_count: int = GameSettings.next_match_player_count
 	match_controller.default_player_count = saved_next_match_player_count
@@ -879,6 +886,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
 		var indexed_player: Dictionary = player_variant as Dictionary
 		_player_snapshots_by_id[int(indexed_player.get("player_id", -1))] = indexed_player
+	_refresh_auto_management_controls()
 	_sync_match_clock()
 	if _snapshot.has("processing_card_uids"):
 		# 当前公开处理区实体 UID；动画层据此收尾因丢包或中断而未收到最终移牌通知的中央牌面。
@@ -2057,6 +2065,7 @@ func _apply_ui_style() -> void:
 	match_menu.refresh_ui_style()
 	main_menu.refresh_ui_style()
 	BattleUIStyle.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(auto_manage_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	($LogPanel/LogContentPanel/LogVBox/LogTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	log_view.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
@@ -2994,6 +3003,15 @@ func _refresh_selection_text() -> void:
 	if _should_show_post_match_actions():
 		_refresh_post_match_actions()
 		return
+	# 本地玩家托管时不显示任何牌、技能、响应或结束阶段操作；手牌遮罩仍保留“取消托管”按钮以外的所有输入隔离。
+	if bool(_get_player_snapshot(match_controller.local_human_player_id).get("auto_managed", false)):
+		interaction_panel.visible = false
+		use_button.disabled = true
+		%CancelButton.visible = false
+		end_play_button.visible = false
+		end_play_button.disabled = true
+		_refresh_component_states()
+		return
 	# 本地是否处于普通出牌阶段；右侧回合结束按钮只在该阶段独立显示，不属于中央交互面板。
 	var can_act: bool = _can_local_player_act()
 	end_play_button.visible = can_act and _inline_card_choice.is_empty()
@@ -3463,8 +3481,52 @@ func _get_selected_card_snapshot() -> Dictionary:
 	return {}
 
 
+## 根据本地玩家公开快照刷新托管按钮与手牌覆盖层；界面只读取状态，真正的 AI 接管由控制器处理。
+func _refresh_auto_management_controls() -> void:
+	# 当前本地玩家公开快照；未进入对局或快照尚未包含本地座次时保持按钮禁用。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	# 当前是否已托管；离线托管仍显示覆盖层，但按钮禁用以表达该连接已经不能自行恢复。
+	var auto_managed: bool = bool(local_player.get("auto_managed", false))
+	# 当前托管是否因掉线产生；只有联机房主写入 true，客户端本机不应尝试取消。
+	var offline_managed: bool = bool(local_player.get("auto_managed_offline", false))
+	if auto_managed_hand_overlay != null:
+		auto_managed_hand_overlay.configure(auto_managed)
+	if auto_manage_button == null:
+		return
+	auto_manage_button.text = "取消托管" if auto_managed else "托管"
+	auto_manage_button.disabled = local_player.is_empty() or bool(_snapshot.get("game_over", false)) or not bool(local_player.get("alive", false)) or offline_managed
+	if auto_managed:
+		# 进入托管后清除仅属于本地 UI 的未提交选择，避免遮罩关闭前残留可点击的牌或目标高亮。
+		_selected_card_uid = -1
+		_selected_target_ids.clear()
+		_inline_card_choice.clear()
+		_inline_selected_card_uids.clear()
+		_active_response_skill_id = ""
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_clear_equipment_action()
+		card_selection_panel.close()
+
+
+## 切换本地玩家的手动托管状态；动作会在 LAN 客户端上行到房主，在离线或房主端由同一权威入口执行。
+func _on_auto_manage_pressed() -> void:
+	# 当前本地玩家快照；无有效玩家或离线托管时按钮理论上已禁用，此处仍防御性拒绝。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	if local_player.is_empty() or bool(local_player.get("auto_managed_offline", false)):
+		return
+	# 当前开关目标；由最新权威快照反转，避免本地快速连点维护第二份状态。
+	var enabled: bool = not bool(local_player.get("auto_managed", false))
+	var action: PlayerAction = PlayerAction.new("set_auto_managed", match_controller.local_human_player_id)
+	action.payload = {"enabled":enabled}
+	match_controller.submit_action(action)
+
+
 ## 判断当前是否为本地玩家的有效出牌阶段；所有交互控件共用该条件。
 func _can_local_player_act() -> bool:
+	# 当前本地玩家快照；手动或离线托管均必须在表现层禁用一切常规操作，控制器仍会再次权威拒绝。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	if bool(local_player.get("auto_managed", false)):
+		return false
 	# 当前运行时选择；阶段间隔内仍保留上一阶段名称，但活动 chooseToUse 已关闭，此时任何出牌控件都必须禁用。
 	var current_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
 	return int(_snapshot.get("current_player_id", -1)) == match_controller.local_human_player_id and str(_snapshot.get("current_phase", "")) == "play" and not bool(_snapshot.get("game_over", false)) and str(current_choice.get("choice_type", "")) == "use" and int(current_choice.get("actor_id", -1)) == match_controller.local_human_player_id

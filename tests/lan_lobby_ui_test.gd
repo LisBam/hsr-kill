@@ -97,15 +97,33 @@ func _ready() -> void:
 	var host_name_label: Label = host_avatar.get_node("%OnlineLobbyAvatarName") as Label
 	# 房主原始插画；只显示 TextureRect，不存在武将牌 UI 子树。
 	var host_artwork: TextureRect = host_avatar.get_node("%OnlineLobbyAvatarArtwork") as TextureRect
+	# 插画圆角遮罩材质；边框本身不会裁切纹理四角，必须由该材质写入透明 Alpha。
+	var host_artwork_material: ShaderMaterial = host_artwork.material as ShaderMaterial
 	# 房主形象边框；占用位置必须复用空位的圆角边框规格包裹插画，而不是裸露纹理。
 	var host_avatar_frame: Panel = host_avatar.get_node("%OnlineLobbyAvatarFrame") as Panel
 	# 形象边框样式；只允许绘制透明中心与描边，黑色阴影会遮罩联机形象插画。
 	var host_avatar_frame_style: StyleBoxFlat = host_avatar_frame.get_theme_stylebox("panel") as StyleBoxFlat
 	# 房主插画矩形；尺寸与武将牌一致，纵坐标必须大于名称标签底边。
 	var host_avatar_rect: Rect2 = host_avatar.get_avatar_rect()
-	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
+	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_artwork_material == null or host_artwork_material.shader == null or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
 		_fail("host_avatar_geometry rect=%s name_rect=%s" % [host_avatar_rect, host_name_label.get_rect()])
 		return
+	# 超长房主地址；模拟多网卡地址列表，地址标签必须在大厅内容面内自动向左调整且不覆盖标题真实文字宽度。
+	var long_host_addresses: Array[String] = ["192.168.100.120", "10.234.56.78", "172.31.255.254", "192.168.200.201"]
+	online_lobby_panel.bind_lobby(private_snapshot, long_host_addresses, test_port)
+	await get_tree().process_frame
+	# 大厅内容面；地址标签几何以其局部坐标为准，不能越过四周圆角边界。
+	var lobby_surface: Panel = online_lobby_panel.get_node("%OnlineLobbySurface") as Panel
+	# 大厅标题；用实际文字宽度验证地址起点，而不是使用标题静态预留宽度。
+	var lobby_title: Label = online_lobby_panel.get_node("%OnlineLobbyTitle") as Label
+	# 标题字体；缺失主题字体视为布局异常，无法可靠验证文字不相交。
+	var title_font: Font = lobby_title.get_theme_font("font")
+	var title_text_width: float = title_font.get_string_size(lobby_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, lobby_title.get_theme_font_size("font_size")).x if title_font != null else -1.0
+	if address_label.position.x < lobby_title.position.x + title_text_width + online_lobby_panel.host_address_title_gap - POSITION_EPSILON or address_label.position.x + address_label.size.x > lobby_surface.size.x - online_lobby_panel.host_address_right_margin + POSITION_EPSILON or address_label.size.x < 0.0:
+		_fail("host_address_layout address=%s title_width=%f surface=%s" % [address_label.get_rect(), title_text_width, lobby_surface.size])
+		return
+	# 长地址绑定会按正式逻辑重建动态座位；后续座位断言必须重新取得新实例，不能继续引用已释放节点。
+	two_player_seats = _get_seat_views(online_lobby_panel)
 	# 三位置单行中心；第一个与最后一个位置围绕座位区域中心对称，三者纵坐标相同。
 	var seat_area: Control = online_lobby_panel.get_node("%OnlineLobbySeatArea") as Control
 	if not is_equal_approx(two_player_seats[0].position.y, two_player_seats[1].position.y) or not is_equal_approx(two_player_seats[1].position.y, two_player_seats[2].position.y) or absf(_row_center_x(two_player_seats) - seat_area.size.x * 0.5) > POSITION_EPSILON:

@@ -36,6 +36,15 @@ const AVATAR_COMPONENT_SIZE: Vector2 = Vector2(148.35, 227.8)
 ## 两行大厅位置垂直间距；默认18像素使上下玩家名称与插画之间保持清晰分层。
 @export_range(0.0, 64.0, 1.0) var vertical_slot_gap: float = 18.0
 
+## 房主地址距大厅内容面右边缘的最小留白；默认26像素与标题左边距对称，窗口或地址变长时仍保持完整可见区域。
+@export_range(8.0, 96.0, 1.0) var host_address_right_margin: float = 26.0
+
+## 大厅标题与房主地址之间的最小间距；默认18像素避免两个文本区域在小窗口中相互覆盖。
+@export_range(4.0, 96.0, 1.0) var host_address_title_gap: float = 18.0
+
+## 房主地址允许自动缩小到的最小字体大小；默认12像素优先保留完整地址，仍无法容纳时由标签裁切而不越出窗口。
+@export_range(8, 20, 1) var host_address_min_font_size: int = 12
+
 ## 大厅全屏背景；读取当前主题桌面色，确保崩铁风格与暖木家园都具有完整底色。
 @onready var _background: ColorRect = %OnlineLobbyBackground
 
@@ -131,6 +140,7 @@ func _ready() -> void:
 	_settings_cancel_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	_seat_area.resized.connect(_on_seat_area_resized)
+	_surface.resized.connect(_on_surface_resized)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	_populate_game_mode_options()
 	refresh_ui_style()
@@ -147,6 +157,8 @@ func bind_lobby(lobby_snapshot: Dictionary, host_addresses: Array[String] = [], 
 	move_to_front()
 	_address_label.visible = _local_is_host
 	_address_label.text = "房主地址：%s  ｜  端口：%d" % [" / ".join(host_addresses), host_port] if _local_is_host else ""
+	_layout_host_address_label()
+	call_deferred("_layout_host_address_label")
 	_render_room_summary()
 	_render_seats()
 	_render_chat_history()
@@ -205,6 +217,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_leave_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("danger"), false)
 	BattleUIStyle.apply_interaction_button(_settings_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_layout_host_address_label()
 	for seat_view: OnlineLobbyAvatar in _seat_views:
 		if seat_view != null and is_instance_valid(seat_view):
 			seat_view.refresh_ui_style()
@@ -377,6 +390,47 @@ func _clear_seats() -> void:
 func _on_seat_area_resized() -> void:
 	if visible and not _snapshot.is_empty():
 		_render_seats()
+
+
+## 大厅内容面尺寸变化时重新测量房主地址；窗口缩放、嵌入预览和长地址都不会保留旧的固定右侧坐标。
+func _on_surface_resized() -> void:
+	_layout_host_address_label()
+
+
+## 根据房主地址实际文字宽度重算右对齐矩形；地址从右向左移动并在极窄空间内降低字号，绝不超出大厅内容面。
+func _layout_host_address_label() -> void:
+	if not is_node_ready() or not _local_is_host or _address_label.text.is_empty():
+		return
+	# 地址标签字体；主题默认字体缺失时不强制布局，Godot 后续主题刷新会再次调用本函数。
+	var address_font: Font = _address_label.get_theme_font("font")
+	if address_font == null:
+		return
+	# 标题字体；用于计算文字而非静态节点宽度，避免短标题时仍浪费过多地址空间。
+	var title_font: Font = _title_label.get_theme_font("font")
+	if title_font == null:
+		return
+	# 当前可用右边界；必须保留导出边距，防止地址文本贴住大厅圆角边框。
+	var right_limit: float = maxf(_surface.size.x - host_address_right_margin, 0.0)
+	# 标题实际占用宽度；仅文本宽度参与计算，静态标题节点的预留空白不应压缩地址区域。
+	var title_width: float = title_font.get_string_size(_title_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _title_label.get_theme_font_size("font_size")).x
+	# 地址允许开始的最小横坐标；标题末端加间距，同时不小于标题节点自身左侧位置。
+	var left_limit: float = maxf(_title_label.position.x + title_width + host_address_title_gap, _title_label.position.x)
+	# 地址可用宽度；小于0时保持0并让标签安全裁切，不能写入反向尺寸。
+	var available_width: float = maxf(right_limit - left_limit, 0.0)
+	# 当前地址的基础字号；场景或主题未覆盖时 Godot 返回默认字号，最小值保证循环总能终止。
+	var font_size: int = maxi(_address_label.get_theme_font_size("font_size"), host_address_min_font_size)
+	# 当前字号下的地址宽度；从基础字号递减直到文本可容纳或到达最小字号。
+	var address_width: float = address_font.get_string_size(_address_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	while font_size > host_address_min_font_size and address_width > available_width:
+		font_size -= 1
+		address_width = address_font.get_string_size(_address_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	# 地址实际左侧；长度变长时向左扩展，最远停在标题后方，不会越过大厅表面。
+	var address_left: float = maxf(left_limit, right_limit - address_width)
+	# 标签最终宽度；最大不超过右边界，过长文本由原有 text_overrun 行为裁切。
+	var label_width: float = maxf(right_limit - address_left, 0.0)
+	_address_label.add_theme_font_size_override("font_size", font_size)
+	_address_label.position = Vector2(address_left, _address_label.position.y)
+	_address_label.size = Vector2(label_width, _address_label.size.y)
 
 
 ## 设置打开时冻结设置面板外的大厅焦点；动态玩家形象中的空位和踢出按钮也会自动进入隔离范围。
