@@ -72,6 +72,9 @@ signal character_selection_changed(snapshot: Dictionary)
 ## AI选择的策略动作与规则回退动作都提交失败后允许重新决策的次数；默认2次，耗尽后中断单个失效请求以保护整局流程。
 @export_range(0, 5, 1) var max_ai_choice_submit_retries: int = 2
 
+## 单帧统一结算管线最多恢复的后续步骤数；默认256防止异常扩展形成同步死循环，达到上限后会延后一帧继续且不会越过未完成事件。
+@export_range(16, 4096, 16) var max_settlement_steps_per_pass: int = 256
+
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
 
@@ -277,6 +280,9 @@ var _pending_finish_turn_player_id: int = -1
 ## 等待嵌套规则选择结束后继续的技能结算队列；仅保存技能 ID、持有者 ID 与可序列化上下文，不持有 Callable 或技能对象。
 var _deferred_skill_settlements: Array[Dictionary] = []
 
+## 被嵌套选择中断的通用规则续接栈；响应、救援、重铸和父牌收尾只保存稳定类型与可序列化上下文。
+var _rule_continuations: RuleContinuationQueue = RuleContinuationQueue.new()
+
 ## 当前全局回合内各角色已经“使用”过的逻辑牌定义；响应牌仅在规则明确视为使用时由对应流程登记。
 var _cards_used_this_turn_by_player: Dictionary = {}
 
@@ -410,6 +416,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_active_extra_discard_phase.clear()
 	_pending_finish_turn_player_id = -1
 	_deferred_skill_settlements.clear()
+	_rule_continuations.reset()
 	_cards_used_this_turn_by_player.clear()
 
 	if seed == 0:
@@ -456,6 +463,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
+	_rule_continuations.reset()
 	_negation_round_sequence = 0
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
@@ -526,6 +534,7 @@ func _discard_failed_match_start() -> void:
 	_scheduled_ai_choice_request_id = -1
 	_ai_choice_submit_failures.clear()
 	_is_driving_character_selection = false
+	_rule_continuations.reset()
 	state = null
 
 
@@ -1351,14 +1360,8 @@ func _abort_unresolvable_ai_choice(request_id: int, reason: String) -> void:
 	event_scheduler.abort_choice(request_id, reason)
 	_reject("AI选择连续提交失败，已中断失效请求并恢复流程：%s。" % failed_kind)
 	# 被失效选择阻塞的通用续列；各组件只处理自身队列，不在本保护函数内识别具体技能ID。
-	if not state.game_over and not has_pending_card_choice():
-		_resume_deferred_rule_timing_dispatches()
-	if not state.game_over and not has_pending_card_choice():
-		_resume_deferred_skill_settlements()
-	if not state.game_over and not has_pending_card_choice():
-		process_next_equipment_trigger()
-	if not state.game_over and not has_pending_card_choice():
-		_resume_interrupted_turn_flow()
+	# 被失效选择阻塞的所有后续步骤仍经过同一优先级管线，单个请求中断不会改变父事件顺序。
+	_resume_settlement_pipeline()
 	event_scheduler.drain()
 	_emit_state()
 	_ensure_ai_progress_after_resolution()
@@ -1680,14 +1683,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	if bool(completed_choice.get("deferred", false)):
 		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids, selected_target_ids, runtime_response.confirmed, selected_control_id)
 		# 同一时机的后续可选技能必须等当前技能效果与其可能创建的后续选择完成后再按座次询问。
-		if not state.game_over and not has_pending_card_choice():
-			_resume_deferred_rule_timing_dispatches()
-		if not state.game_over and not has_pending_card_choice():
-			_resume_deferred_skill_settlements()
-		if not state.game_over and not has_pending_card_choice():
-			process_next_equipment_trigger()
-		if not state.game_over and not has_pending_card_choice():
-			_resume_interrupted_turn_flow()
+		# 所有被选择插入打断的触发、装备、规则后半段、技能与阶段统一从同一优先级管线恢复。
+		_resume_settlement_pipeline()
 	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
 	event_scheduler.drain()
 	# 结束阶段技能可能通过统一选择请求暂停回合收尾；最后一个选择完成后再清理回合状态并推进队列。
@@ -1738,7 +1735,10 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 			if not skill_response_patterns.is_empty():
 				var skill_responder_id: int = int(context.get("responder_id", skill_owner_id))
 				var skill_response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, skill_responder_id, skill_response_patterns)
-				if has_pending_card_choice():
+				if _is_pending_response_retry(context):
+					return
+				if _has_nested_settlement_barrier():
+					_defer_rule_continuation("skill_response", {"skill_owner_id":skill_owner_id, "skill_id":skill_id, "rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(skill_response_card)})
 					return
 				if skill.continue_response(context, skill_response_card):
 					return
@@ -1771,11 +1771,12 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 		var responder_id: int = int(context.get("responder_id", context.get("target_id", -1)))
 		# 实际响应实体；空选择表示玩家明确放弃。
 		var response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, responder_id, response_patterns)
-		if has_pending_card_choice():
+		if _is_pending_response_retry(context):
 			return
-		effect_resolver.continue_response(context, response_card)
-		if bool(context.get("complete_parent_target_after_response", false)) and not state.game_over and not has_pending_card_choice():
-			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
+		if _has_nested_settlement_barrier():
+			_defer_rule_continuation("card_response", {"rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(response_card)})
+			return
+		_continue_consumed_card_response(context, response_card)
 		return
 	# 无处理区父牌的装备恢复；装备定义 ID 由创建请求的卡牌源码写入上下文。
 	var equipment_definition_id: String = str(context.get("equipment_definition_id", ""))
@@ -1788,7 +1789,10 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 				var responder_id: int = int(context.get("responder_id", -1))
 				# 实际响应牌；空选择表示明确放弃。
 				var response_card: CardInstance = _consume_response_choice_with_retry(context, selected_uids, responder_id, _string_array(context.get("response_patterns", []) as Array))
-				if has_pending_card_choice():
+				if _is_pending_response_retry(context):
+					return
+				if _has_nested_settlement_barrier():
+					_defer_rule_continuation("equipment_response", {"equipment_definition_id":equipment_definition_id, "rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(response_card)})
 					return
 				if equipment_definition.continue_equipment_response(self, context, response_card):
 					return
@@ -2226,18 +2230,56 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	if hp_lost > 0:
 		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":hp_lost, "hp":target.hp, "max_hp":target.max_hp, "reason":card_id, "change_type":"damage", "damage_event_id":damage_event_id}, damage_event_id)
 	_emit_rule_timing("damage", target_id, source_id, target_id, damage_result_data, damage_event_id)
-	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
-	var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount": final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature": nature, "card_id": card_id, "chain_transfer": chain_transfer})
-	_dispatch_rule_event(after_event)
-	if state.game_over:
+	# 伤害实际成立后的可序列化上下文；标准damage时机可能产生装备或技能选择，后续旧事件、濒死与尾部必须原地恢复。
+	var post_result_context: Dictionary = {"post_result_stage":"damage_after", "source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "hp":target.hp, "shield":target.shield, "chain_targets":chain_targets.duplicate()}
+	# damage时机内的选择必须先完成全部同一时机处理器；不能提前发布damage_after、濒死或整条伤害尾部。
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("damage_after_result", post_result_context)
 		return
-	if hp_lost > 0:
+	_continue_damage_after_result(post_result_context)
+
+
+## 在标准damage时机及其嵌套选择完成后，按旧兼容事件、体力减少、濒死和伤害尾部的固定顺序继续。
+func _continue_damage_after_result(context: Dictionary) -> void:
+	# 伤害来源稳定 ID；等待期间只用编号重新定位角色，不能保留旧 PlayerState 对象。
+	var source_id: int = int(context.get("source_id", -1))
+	# 伤害目标稳定 ID；用于恢复兼容事件、体力减少、濒死与伤害尾部的同一目标。
+	var target_id: int = int(context.get("target_id", -1))
+	# 当前伤害后阶段；异步恢复只从尚未执行的步骤继续，避免重复发布兼容事件或体力减少事件。
+	var post_result_stage: String = str(context.get("post_result_stage", "damage_after"))
+	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
+	if post_result_stage == "damage_after":
+		# 旧兼容伤害后事件；字段保持伤害实际成立时的快照，不受等待期间其他回复或护盾变化反向改写。
+		var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount":int(context.get("amount", 0)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "shield":int(context.get("shield", 0)), "hp":int(context.get("hp", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "chain_transfer":bool(context.get("chain_transfer", false))})
+		_dispatch_rule_event(after_event)
+		post_result_stage = "hp_reduced"
+		if state == null or state.game_over:
+			return
+		# 兼容事件中的选择同样属于当前伤害子流程，完成后才发布通用体力减少事件。
+		if _has_nested_settlement_barrier():
+			var after_event_resume_context: Dictionary = context.duplicate(true)
+			after_event_resume_context["post_result_stage"] = post_result_stage
+			_defer_rule_continuation("damage_after_result", after_event_resume_context)
+			return
+	if post_result_stage == "hp_reduced" and int(context.get("hp_lost", 0)) > 0:
 		# 通用体力减少事件；只在伤害穿透护盾并实际扣减体力时派发，便于技能统一观察两类体力变化。
-		_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":hp_lost, "hp":target.hp, "reduction_type":"damage", "damage_amount":final_amount, "shield_absorbed":shield_absorbed, "nature":nature, "card_id":card_id, "event_id":damage_event_id}))
-	if state.game_over:
+		_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":int(context.get("hp_lost", 0)), "hp":int(context.get("hp", 0)), "reduction_type":"damage", "damage_amount":int(context.get("amount", 0)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "event_id":int(context.get("damage_event_id", -1))}))
+	post_result_stage = "dying"
+	if state == null or state.game_over:
+		return
+	# 通用体力减少事件产生的技能选择必须先完成；濒死询问不能与其共享同一个活动选择槽。
+	if _has_nested_settlement_barrier():
+		var hp_reduced_resume_context: Dictionary = context.duplicate(true)
+		hp_reduced_resume_context["post_result_stage"] = post_result_stage
+		_defer_rule_continuation("damage_after_result", hp_reduced_resume_context)
 		return
 	# 伤害尾部上下文；濒死可能暂停，因此 damageSource、End、After 和连环必须保存到救援结束后执行。
-	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "chain_targets":chain_targets.duplicate()}
+	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "amount":int(context.get("amount", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "chain_transfer":bool(context.get("chain_transfer", false)), "damage_event_id":int(context.get("damage_event_id", -1)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "chain_targets":(context.get("chain_targets", []) as Array).duplicate()}
+	# 最新伤害目标；damage或兼容事件等待期间可能已被其他嵌套效果回复、杀死或移出游戏。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null:
+		_finish_damage_timing(finalization_context)
+		return
 	if target.hp <= 0:
 		_pending_damage_finalizations[target_id] = finalization_context
 		_resolve_dying(target_id, source_id)
@@ -2250,9 +2292,14 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 ## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；严格派发 damageSource、damageEnd、damageAfter 后再传导属性伤害。
 func _finish_damage_timing(context: Dictionary) -> void:
 	# 伤害来源、目标和父事件 ID；全部从保存上下文恢复，异步期间不会引用旧 PlayerState 对象。
+	# 伤害来源稳定 ID；来源时机与连环传导继续沿用原始伤害来源。
 	var source_id: int = int(context.get("source_id", -1))
+	# 伤害目标稳定 ID；来源、结束与受伤后时机都围绕同一名已受伤角色发布。
 	var target_id: int = int(context.get("target_id", -1))
+	# 父伤害事件稳定 ID；三个标准尾部时机共享该编号以维持同一事件链追踪。
 	var damage_event_id: int = int(context.get("damage_event_id", -1))
+	# 当前伤害尾部阶段；默认从来源时机开始，异步恢复时只执行尚未完成的后续阶段。
+	var finalization_stage: String = str(context.get("finalization_stage", "damageSource"))
 	# 统一尾部数据；来源触发与受伤者触发读取同一最终伤害、护甲吸收和体力减少值。
 	var timing_data: Dictionary = {
 		"amount":int(context.get("amount", 0)),
@@ -2263,17 +2310,65 @@ func _finish_damage_timing(context: Dictionary) -> void:
 		"chain_transfer":bool(context.get("chain_transfer", false)),
 		"damage_event_id":damage_event_id,
 	}
-	_emit_rule_timing("damageSource", target_id, source_id, target_id, timing_data, damage_event_id)
-	_emit_rule_timing("damageEnd", target_id, source_id, target_id, timing_data, damage_event_id)
-	_emit_rule_timing("damageAfter", target_id, source_id, target_id, timing_data, damage_event_id)
+	if finalization_stage == "damageSource":
+		_emit_rule_timing("damageSource", target_id, source_id, target_id, timing_data, damage_event_id)
+		finalization_stage = "damageEnd"
+		if state == null or state.game_over:
+			return
+		# 伤害来源时机产生的技能选择必须先完整结束；伤害End与After不能越过该时机并抢占选择窗口。
+		if _has_nested_settlement_barrier():
+			var source_resume_context: Dictionary = context.duplicate(true)
+			source_resume_context["finalization_stage"] = finalization_stage
+			_defer_rule_continuation("damage_finalization", source_resume_context)
+			return
+	if finalization_stage == "damageEnd":
+		_emit_rule_timing("damageEnd", target_id, source_id, target_id, timing_data, damage_event_id)
+		finalization_stage = "damageAfter"
+		if state == null or state.game_over:
+			return
+		# 伤害结束时机的嵌套操作与来源时机遵循相同屏障，完成后才进入最终伤害后时机。
+		if _has_nested_settlement_barrier():
+			var end_resume_context: Dictionary = context.duplicate(true)
+			end_resume_context["finalization_stage"] = finalization_stage
+			_defer_rule_continuation("damage_finalization", end_resume_context)
+			return
+	if finalization_stage == "damageAfter":
+		_emit_rule_timing("damageAfter", target_id, source_id, target_id, timing_data, damage_event_id)
+		finalization_stage = "chain"
+		if state == null or state.game_over:
+			return
+		# 伤害后技能完成前不能开始属性连环的下一名目标，避免新伤害选择覆盖当前伤害选择。
+		if _has_nested_settlement_barrier():
+			var after_resume_context: Dictionary = context.duplicate(true)
+			after_resume_context["finalization_stage"] = finalization_stage
+			_defer_rule_continuation("damage_finalization", after_resume_context)
+			return
 	if state == null or state.game_over:
 		return
-	for chained_target_id_variant: Variant in context.get("chain_targets", []) as Array:
+	# 已完成连环目标数量；每个子伤害前预登记父续接，异步时按栈顺序先完成子伤害再回来处理下一名目标。
+	var chain_target_index: int = int(context.get("chain_target_index", 0))
+	# 连环目标快照；保持原伤害建立时的座次顺序，等待期间只重新校验存活与横置状态。
+	var chain_targets: Array = context.get("chain_targets", []) as Array
+	while chain_target_index < chain_targets.size():
 		# 传导前再次检查角色仍存活且横置，避免前序死亡结算改变有效目标。
-		var chained_target_id: int = int(chained_target_id_variant)
+		var chained_target_id: int = int(chain_targets[chain_target_index])
+		# 当前连环目标状态；每轮重新按稳定 ID 读取，防止嵌套伤害后继续使用过期对象。
 		var chained_target: PlayerState = state.get_player(chained_target_id)
-		if chained_target != null and chained_target.alive and chained_target.chained:
-			damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false)
+		chain_target_index += 1
+		if chained_target == null or not chained_target.alive or not chained_target.chained:
+			continue
+		# 父伤害剩余连环上下文；先压栈可保证子伤害产生的后续步骤位于其上方，子流程同步完成时再精确撤销。
+		var chain_resume_context: Dictionary = context.duplicate(true)
+		chain_resume_context["finalization_stage"] = "chain"
+		chain_resume_context["chain_target_index"] = chain_target_index
+		# 父伤害保险续接编号；异步子伤害保留该记录，同步完成则立即移除并继续本循环。
+		var chain_continuation_id: int = _defer_rule_continuation("damage_finalization", chain_resume_context)
+		damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false)
+		if state == null or state.game_over:
+			return
+		if _has_nested_settlement_barrier():
+			return
+		_rule_continuations.remove(chain_continuation_id)
 
 
 ## 读取并移除指定濒死目标等待中的伤害尾部；重复调用安全返回且不会重复派发来源或连环事件。
@@ -2392,6 +2487,77 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	# 原响应提示；上下文缺失时使用稳定通用文本，不把具体牌名硬编码进控制器。
 	var response_prompt: String = str(context.get("response_prompt", "请选择是否响应。"))
 	return request_response_card_patterns(responder_id, response_patterns, response_prompt, retry_context)
+
+
+## 判断消费失败后创建的当前请求是否属于同一装备响应重试；重试会自行重新进入原恢复分支，不能登记空响应续接。
+func _is_pending_response_retry(original_context: Dictionary) -> bool:
+	if _pending_card_choice.is_empty():
+		return false
+	# 当前等待请求的恢复上下文；只有携带已排除装备集合的同一响应语义才视为重试。
+	var pending_context: Dictionary = _pending_card_choice.get("context", {}) as Dictionary
+	if (pending_context.get("excluded_response_candidate_uids", []) as Array).is_empty():
+		return false
+	return str(pending_context.get("kind", "")) == str(original_context.get("kind", "")) \
+		and int(pending_context.get("responder_id", -1)) == int(original_context.get("responder_id", -1)) \
+		and int(pending_context.get("parent_card_uid", -1)) == int(original_context.get("parent_card_uid", -1))
+
+
+## 把可空响应牌转换为续接安全快照；空字典稳定表示本次明确放弃或响应失效。
+func _serialize_optional_response_card(response_card: CardInstance) -> Dictionary:
+	return response_card.to_dict() if response_card != null else {}
+
+
+## 从续接上下文恢复可空响应牌；既有 UID 不会消耗新的实体编号。
+func _deserialize_optional_response_card(response_card_data: Dictionary) -> CardInstance:
+	return CardInstance.from_dict(response_card_data) if not response_card_data.is_empty() else null
+
+
+## 在嵌套触发和装备事件完成后恢复技能响应；技能等待期间失去时安全跳过旧回调。
+func _continue_skill_response_after_barrier(continuation_context: Dictionary) -> void:
+	# 创建响应的技能实例；稳定持有者与技能 ID 防止同名技能或新对局错误接管旧结果。
+	var skill: SkillDefinition = get_skill_instance(int(continuation_context.get("skill_owner_id", -1)), str(continuation_context.get("skill_id", "")))
+	if skill == null:
+		return
+	# 原响应规则上下文；牌效、响应者和父事件信息保持选择创建时的可序列化快照。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已经完成消费的响应牌代理；恢复只应用结果，绝不再次移动同一实体。
+	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	skill.continue_response(rule_context, response_card)
+
+
+## 在嵌套触发和装备事件完成后恢复卡牌响应，并从唯一入口判断是否完成父目标。
+func _continue_card_response_after_barrier(continuation_context: Dictionary) -> void:
+	# 原卡牌响应上下文；父牌 UID 与恢复 kind 决定 CardEffectResolver 分派目标。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已经消费的实体或虚拟响应代理；空值表示响应者放弃。
+	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	_continue_consumed_card_response(rule_context, response_card)
+
+
+## 应用一张已经完成移动的父牌响应结果；后续又产生选择时只续接目标完成，不重复执行牌效回调。
+func _continue_consumed_card_response(rule_context: Dictionary, response_card: CardInstance) -> void:
+	effect_resolver.continue_response(rule_context, response_card)
+	if not bool(rule_context.get("complete_parent_target_after_response", false)) or state.game_over:
+		return
+	# 待完成父牌实体 UID；响应效果期间产生的新触发必须先结算，之后只执行一次目标完成步骤。
+	var parent_card_uid: int = int(rule_context.get("parent_card_uid", -1))
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("target_card_completion", {"parent_card_uid":parent_card_uid})
+		return
+	_complete_active_card_target(parent_card_uid)
+
+
+## 在嵌套触发和装备事件完成后恢复无处理区父牌的装备响应结果。
+func _continue_equipment_response_after_barrier(continuation_context: Dictionary) -> void:
+	# 创建请求的装备定义；只用稳定定义 ID 找回源码，不依赖等待前的对象引用。
+	var equipment_definition: CardDefinition = GameDatabase.get_card_definition(str(continuation_context.get("equipment_definition_id", "")))
+	if equipment_definition == null:
+		return
+	# 原装备响应上下文；实体 UID 仍由装备源码在恢复时重新校验。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已经消费的响应牌代理；空值表示装备判定失败或玩家放弃。
+	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	equipment_definition.continue_equipment_response(self, rule_context, response_card)
 
 
 ## 按选择请求提交的 UID 消耗响应牌；再次校验区域和响应模式后进入弃牌堆并播放动画。
@@ -2554,11 +2720,30 @@ func _continue_trick_negation_choice(context: Dictionary, selected_uids: Array[i
 	if not selected_uids.is_empty():
 		# 实际无懈可击响应牌；请求完成后仍需复核牌源与响应模式。
 		counter_card = _consume_response_card_uid(responder_id, selected_uids[0], "wuxie")
-		if counter_card != null:
-			final_negated = not final_negated
-			add_log("%s使用【无懈可击】，当前锦囊%s。" % [state.get_player(responder_id).display_name, "被抵消" if final_negated else "恢复生效"])
-	if has_pending_card_choice() or state.game_over:
+	if state.game_over:
 		return
+	if counter_card != null and _has_nested_settlement_barrier():
+		_defer_rule_continuation("trick_negation_response", {"responder_id":responder_id, "final_negated":final_negated, "rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(counter_card)})
+		return
+	_continue_consumed_trick_negation(context, responder_id, final_negated, counter_card)
+
+
+## 在失牌触发与装备事件完成后恢复传统逐人无懈响应链。
+func _continue_trick_negation_after_barrier(continuation_context: Dictionary) -> void:
+	# 原无懈链上下文；响应游标、锦囊目标与奇偶状态保持中断前快照。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已消费的无懈响应牌；恢复时只记录链结果，不再次移动实体。
+	var counter_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	_continue_consumed_trick_negation(rule_context, int(continuation_context.get("responder_id", -1)), bool(continuation_context.get("final_negated", false)), counter_card)
+
+
+## 把一张已经消费的无懈写入奇偶链并继续下一轮；空响应只推进当前询问游标。
+func _continue_consumed_trick_negation(context: Dictionary, responder_id: int, final_negated: bool, counter_card: CardInstance) -> void:
+	if counter_card != null:
+		final_negated = not final_negated
+		# 当前响应玩家；等待期间失效时仍保留回放事实，但日志安全回退到玩家编号。
+		var responder: PlayerState = state.get_player(responder_id)
+		add_log("%s使用【无懈可击】，当前锦囊%s。" % [responder.display_name if responder != null else "玩家%d" % responder_id, "被抵消" if final_negated else "恢复生效"])
 	context["negated"] = final_negated
 	if counter_card != null:
 		# 成功响应后开启新一轮无懈询问；任何角色均可继续响应刚打出的【无懈可击】。
@@ -2812,29 +2997,62 @@ func _submit_simultaneous_negation_choice(action: PlayerAction) -> bool:
 	# 当前实际无懈牌；提交后再次复核实体仍位于合法牌源，失效选择按放弃处理。
 	var counter_card: CardInstance
 	if not selected_uids.is_empty():
-		counter_card = _consume_response_card_uid_patterns(action.actor_id, selected_uids[0], ["wuxie"], _int_array(action.payload.get("material_card_uids", []) as Array))
-	if counter_card != null:
-		context["negated"] = not bool(context.get("negated", false))
-		_record_wuxie_chain_response(context, action.actor_id, counter_card)
-		add_log("%s使用【无懈可击】，当前锦囊%s。" % [state.get_player(action.actor_id).display_name, "被抵消" if bool(context.get("negated", false)) else "恢复生效"])
+		# 已提交实体在权威候选中通过复核后立即关闭同轮其他请求，使失去该牌产生的普通技能选择可以安全插入。
 		_close_remaining_simultaneous_negation_choices()
 		state.simultaneous_response_display.clear()
 		state.current_choice_request.clear()
-		# 成功响应立即开启下一轮，允许任意玩家继续反无懈；新请求登记后再恢复调度栈。
-		var chain_result: Dictionary = _advance_trick_negation_chain(context)
-		if not bool(chain_result.get("pending", false)):
-			_finish_simultaneous_negation_submission(context)
+		counter_card = _consume_response_card_uid_patterns(action.actor_id, selected_uids[0], ["wuxie"], _int_array(action.payload.get("material_card_uids", []) as Array))
+	if counter_card != null:
+		if _has_nested_settlement_barrier():
+			_defer_rule_continuation("simultaneous_negation_response", {"responder_id":action.actor_id, "rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(counter_card)})
+			event_scheduler.drain()
+			_emit_state()
 			return true
-		event_scheduler.drain()
-		_emit_state()
+		_continue_consumed_simultaneous_negation(context, action.actor_id, counter_card)
 		return true
 	if not _pending_negation_choices.is_empty():
 		_refresh_simultaneous_choice_snapshot()
 		event_scheduler.drain()
 		_emit_state()
 		return true
-	_finish_simultaneous_negation_submission(context)
+	# 本轮最后一名响应者明确放弃；此时没有失效实体需要重试，应直接以当前奇偶结果结束无懈链。
+	if selected_uids.is_empty():
+		_finish_simultaneous_negation_submission(context)
+		return true
+	# 已选择实体在消费时失效；同轮请求已经关闭时重新建立完整一轮，避免一次失败提交错误结束无懈链。
+	var retry_chain_result: Dictionary = _advance_trick_negation_chain(context)
+	if not bool(retry_chain_result.get("pending", false)):
+		_finish_simultaneous_negation_submission(context)
+	else:
+		event_scheduler.drain()
+		_emit_state()
 	return true
+
+
+## 在失牌触发与装备事件完成后恢复同时无懈的获胜响应。
+func _continue_simultaneous_negation_after_barrier(continuation_context: Dictionary) -> void:
+	# 原无懈共享上下文；当前锦囊、目标与奇偶结果保持获胜响应提交时的快照。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已消费的无懈实体或虚拟牌；恢复时不会重新参与同轮竞争。
+	var counter_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	if counter_card != null:
+		_continue_consumed_simultaneous_negation(rule_context, int(continuation_context.get("responder_id", -1)), counter_card)
+
+
+## 写入一张已经取得本轮结算权的无懈并开启下一轮；完整一轮无人响应时才恢复原锦囊。
+func _continue_consumed_simultaneous_negation(context: Dictionary, responder_id: int, counter_card: CardInstance) -> void:
+	context["negated"] = not bool(context.get("negated", false))
+	_record_wuxie_chain_response(context, responder_id, counter_card)
+	# 获胜响应者；等待期间离场时仍保留已经成立的响应事实，日志使用稳定玩家编号回退。
+	var responder: PlayerState = state.get_player(responder_id)
+	add_log("%s使用【无懈可击】，当前锦囊%s。" % [responder.display_name if responder != null else "玩家%d" % responder_id, "被抵消" if bool(context.get("negated", false)) else "恢复生效"])
+	# 成功响应立即开启下一轮，允许任意玩家继续反无懈；新请求登记后再恢复调度栈。
+	var chain_result: Dictionary = _advance_trick_negation_chain(context)
+	if not bool(chain_result.get("pending", false)):
+		_finish_simultaneous_negation_submission(context)
+		return
+	event_scheduler.drain()
+	_emit_state()
 
 
 ## 完成一条不再等待下一轮的同时无懈链，并恢复原卡牌、判定或出牌阶段的唯一后续流程。
@@ -2843,10 +3061,7 @@ func _finish_simultaneous_negation_submission(context: Dictionary) -> void:
 	state.current_choice_request.clear()
 	state.current_phase = str(context.get("resume_phase", "play"))
 	_finish_trick_negation_chain(context, bool(context.get("negated", false)))
-	if not state.game_over and not has_pending_card_choice():
-		process_next_equipment_trigger()
-	if not state.game_over and not has_pending_card_choice():
-		_resume_interrupted_turn_flow()
+	_resume_settlement_pipeline()
 	event_scheduler.drain()
 	# 无懈链可能是出牌阶段最后一个异步窗口；原卡牌事件排空后重新建立唯一 chooseToUse 请求。
 	if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
@@ -3282,7 +3497,12 @@ func _continue_target_card_choice(context: Dictionary, selected_uids: Array[int]
 		_take_selected_player_card(source_id, target_id, selected_uids[0])
 	else:
 		_discard_selected_player_card(target_id, selected_uids[0])
-	_complete_active_card_target(int(context.get("parent_card_uid", -1)))
+	# 区域移动触发的技能与装备事件必须先结算；父锦囊目标完成步骤只登记一次稳定续接点。
+	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("target_card_completion", {"parent_card_uid":parent_card_uid})
+		return
+	_complete_active_card_target(parent_card_uid)
 
 
 ## 弃置指定手牌 UID；返回是否成功，供火攻与装备技能复用。
@@ -4508,41 +4728,128 @@ func _start_turn(player_id: int) -> void:
 	_judgment_resume_needs_result_pause = false
 	state.current_player_id = player_id
 	state.turn_number += 1
-	# 全局回合用牌事实；每个新回合清空全部角色记录，供“本回合内其使用过某牌”的跨角色技能精确查询。
-	_cards_used_this_turn_by_player.clear()
-	if state.players.find(player) == 0:
+	# 本回合是否开启新轮；保存为基础布尔值后交给分段续接，等待选择期间不再依赖可能变化的数组位置。
+	var starts_new_round: bool = state.players.find(player) == 0
+	if starts_new_round:
 		state.round_number += 1
-		_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
-	var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
-	_current_turn_event_id = turn_event_id
-	player.skipped_phases.clear()
-	player.card_use_history.clear()
-	player.response_history.clear()
-	player.damage_history.clear()
-	player.skill_history.clear()
-	player.ai_failed_card_target_ids.clear()
-	_notify_card_definitions_turn_started(player_id)
-	player.turn_history.append({"turn_number":state.turn_number, "round_number":state.round_number, "event_id":turn_event_id, "skipped_phases":[]})
-	state.current_phase = "start"
-	state.phase_index = 0
-	_record_runtime_event("phaseBefore", "phase", {"player_id":player_id}, {}, turn_event_id)
-	var phase_before_event: RuleEvent = _emit_rule_timing("phaseBefore", player_id, player_id, player_id, {"turn_number":state.turn_number, "round_number":state.round_number}, turn_event_id)
-	if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized):
-		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"phaseBefore", "turn_number":state.turn_number}, turn_event_id)
-		_finish_turn(player_id)
+	_continue_turn_start({"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round})
+
+
+## 按稳定阶段游标发布回合开始与准备阶段时机；任一时机插入选择后先保存直接后续，恢复时不会越过或重复发布其他时机。
+func _continue_turn_start(context: Dictionary) -> void:
+	if state == null or state.game_over:
 		return
-	_emit_rule_timing("phaseBeforeStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	_emit_rule_timing("phaseBeforeEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	_emit_rule_timing("phaseBeginStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	_record_runtime_event("phaseBegin", "phase", {"player_id":player_id}, {}, turn_event_id)
-	_emit_rule_timing("phaseBegin", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	_record_runtime_event("phaseZhunbei", "phase", {"player_id":player_id}, {}, turn_event_id)
-	if not _begin_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id):
-		_emit_rule_timing("phaseZhunbeiCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-	# 准备阶段Begin中的技能可创建异步选择；等待提交时不能继续安排以start为前提的旧阶段切换。
-	if has_pending_card_choice():
+	# 新回合玩家稳定 ID；等待期间角色可能死亡或离场，每个步骤开始前都按编号重新校验。
+	var player_id: int = int(context.get("player_id", -1))
+	# 新回合玩家状态；无效或死亡角色不会继续获得准备阶段及后续行动窗口。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or state.current_player_id != player_id:
 		return
-	_continue_turn_after_preparation_phase(player_id)
+	# 当前回合开始游标；每次发布时机前先读取，发布后立即写入下一步以保证恢复幂等。
+	var stage: String = str(context.get("stage", "round_start"))
+	while state != null and not state.game_over:
+		if stage == "round_start":
+			context["stage"] = "initialize"
+			if bool(context.get("starts_new_round", false)):
+				_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
+				if _has_nested_settlement_barrier():
+					_defer_rule_continuation("turn_start", context)
+					return
+			stage = "initialize"
+			continue
+		if stage == "initialize":
+			# 当前回合运行时事件 ID；只在轮开始触发全部完成后创建一次，后续所有阶段时机共享该父事件。
+			var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
+			context["turn_event_id"] = turn_event_id
+			_current_turn_event_id = turn_event_id
+			# 全局回合用牌事实；每个新回合清空全部角色记录，供“本回合内其使用过某牌”的跨角色技能精确查询。
+			_cards_used_this_turn_by_player.clear()
+			player.skipped_phases.clear()
+			player.card_use_history.clear()
+			player.response_history.clear()
+			player.damage_history.clear()
+			player.skill_history.clear()
+			player.ai_failed_card_target_ids.clear()
+			_notify_card_definitions_turn_started(player_id)
+			player.turn_history.append({"turn_number":state.turn_number, "round_number":state.round_number, "event_id":turn_event_id, "skipped_phases":[]})
+			state.current_phase = "start"
+			state.phase_index = 0
+			context["stage"] = "phase_before"
+			stage = "phase_before"
+			continue
+		# 当前回合父事件 ID；initialize 之后固定存在，异常旧上下文回退到控制器当前记录。
+		var turn_event_id: int = int(context.get("turn_event_id", _current_turn_event_id))
+		if stage == "phase_before":
+			_record_runtime_event("phaseBefore", "phase", {"player_id":player_id}, {}, turn_event_id)
+			# 回合前事件结果；取消或中立化时只进入取消分支，不再发布本回合后续开始时机。
+			var phase_before_event: RuleEvent = _emit_rule_timing("phaseBefore", player_id, player_id, player_id, {"turn_number":state.turn_number, "round_number":state.round_number}, turn_event_id)
+			context["stage"] = "phase_cancelled" if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized) else "phase_before_start"
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = str(context["stage"])
+			continue
+		if stage == "phase_cancelled":
+			context["stage"] = "finish_cancelled"
+			_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"phaseBefore", "turn_number":state.turn_number}, turn_event_id)
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "finish_cancelled"
+			continue
+		if stage == "finish_cancelled":
+			_finish_turn(player_id)
+			return
+		if stage == "phase_before_start":
+			context["stage"] = "phase_before_end"
+			_emit_rule_timing("phaseBeforeStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "phase_before_end"
+			continue
+		if stage == "phase_before_end":
+			context["stage"] = "phase_begin_start"
+			_emit_rule_timing("phaseBeforeEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "phase_begin_start"
+			continue
+		if stage == "phase_begin_start":
+			context["stage"] = "phase_begin"
+			_emit_rule_timing("phaseBeginStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "phase_begin"
+			continue
+		if stage == "phase_begin":
+			_record_runtime_event("phaseBegin", "phase", {"player_id":player_id}, {}, turn_event_id)
+			context["stage"] = "preparation_begin"
+			_emit_rule_timing("phaseBegin", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "preparation_begin"
+			continue
+		if stage == "preparation_begin":
+			_record_runtime_event("phaseZhunbei", "phase", {"player_id":player_id}, {}, turn_event_id)
+			# 准备阶段是否成功进入；取消时机仍会发布公开取消事件，随后统一进入准备阶段收尾入口。
+			var preparation_started: bool = _begin_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id)
+			if not preparation_started:
+				_emit_rule_timing("phaseZhunbeiCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
+			context["stage"] = "preparation_complete"
+			# 准备阶段Begin中的技能可创建异步选择；等待提交时不能继续安排以start为前提的旧阶段切换。
+			if _has_nested_settlement_barrier():
+				_defer_rule_continuation("turn_start", context)
+				return
+			stage = "preparation_complete"
+			continue
+		if stage == "preparation_complete":
+			_continue_turn_after_preparation_phase(player_id)
+			return
+		return
 
 
 ## 完成准备阶段主体并安排判定阶段；选择窗口恢复后可再次调用，已完成主体不会重复派发开始事件。
@@ -4735,16 +5042,124 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 
 
 ## 在没有活动选择时依次恢复技能结算；恢复函数再次创建选择时立即停下，下一次提交后继续同一队列。
+## 每次只恢复一项并保留原登记顺序；统一结算管线会在两项之间重新处理新触发、装备事件与规则续接。
 func _resume_deferred_skill_settlements() -> void:
-	while state != null and not state.game_over and not has_pending_card_choice() and not _deferred_skill_settlements.is_empty():
-		# 当前结算项；先移出队列，技能需要再次等待时会显式登记新的后续上下文。
-		var settlement: Dictionary = _deferred_skill_settlements.pop_front() as Dictionary
-		# 技能持有者与稳定ID；等待期间失去技能时安全跳过旧结算，不调用失效对象。
-		var skill_owner_id: int = int(settlement.get("skill_owner_id", -1))
-		# 当前技能实例；每局每名角色唯一，重新开局已清空整个结算队列。
-		var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(settlement.get("skill_id", "")))
-		if skill != null:
-			skill.continue_settlement((settlement.get("context", {}) as Dictionary).duplicate(true))
+	if state == null or state.game_over or has_pending_card_choice() or _deferred_skill_settlements.is_empty():
+		return
+	# 当前结算项；先移出队列，技能需要再次等待时会显式登记新的后续上下文。
+	# 当前最早登记的技能后续；同层技能的“然后”效果保持原有先到先结算规则。
+	var settlement: Dictionary = _deferred_skill_settlements.pop_front() as Dictionary
+	# 技能持有者与稳定ID；等待期间失去技能时安全跳过旧结算，不调用失效对象。
+	var skill_owner_id: int = int(settlement.get("skill_owner_id", -1))
+	# 当前技能实例；每局每名角色唯一，重新开局已清空整个结算队列。
+	var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(settlement.get("skill_id", "")))
+	if skill != null:
+		skill.continue_settlement((settlement.get("context", {}) as Dictionary).duplicate(true))
+
+
+## 登记被嵌套选择中断的通用规则后半段；上下文必须只包含基础值、数组和字典。
+func _defer_rule_continuation(continuation_type: String, context: Dictionary) -> int:
+	return _rule_continuations.push(continuation_type, context)
+
+
+## 供【杀】共享组件登记武器效果后的稳定恢复阶段；具体装备只声明阶段，不直接访问通用续接栈。
+func defer_slash_continuation(resume_stage: String, context: Dictionary) -> bool:
+	if resume_stage not in ["after_weapon_targeted", "after_weapon_dodged"]:
+		return false
+	return _defer_rule_continuation("slash_flow", {"resume_stage":resume_stage, "rule_context":context.duplicate(true)}) >= 0
+
+
+## 在嵌套技能与移动触发结束后恢复【杀】武器阶段；装备定义不保留共享组件对象引用。
+func _continue_slash_flow_after_barrier(continuation_context: Dictionary) -> void:
+	# 【杀】共享流程组件；使用当前效果调度器与状态重新构造，避免续接栈保存运行时对象。
+	var slash_effect: SlashCardEffect = SlashCardEffect.new(effect_resolver)
+	# 原武器阶段规则上下文；稳定UID与目标信息由共享组件恢复时重新校验。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 待恢复阶段；只接受公开登记入口允许的两个武器后续步骤。
+	var resume_stage: String = str(continuation_context.get("resume_stage", ""))
+	if resume_stage == "after_weapon_targeted":
+		slash_effect.continue_after_weapon_targeted(rule_context)
+	elif resume_stage == "after_weapon_dodged":
+		slash_effect.continue_after_weapon_dodged(rule_context)
+
+
+## 返回当前结算是否存在必须优先完成的选择或装备触发；父响应读取结果前必须等待该屏障清空。
+func _has_nested_settlement_barrier() -> bool:
+	return has_pending_card_choice() or not _queued_equipment_triggers.is_empty()
+
+
+## 恢复一条最内层通用规则后半段；每次只执行一项，让统一管线重新检查期间产生的新触发。
+func _resume_next_rule_continuation() -> void:
+	if state == null or state.game_over or has_pending_card_choice() or not _rule_continuations.has_pending():
+		return
+	# 当前最内层续接记录；记录已经从栈中移除，若再次中断会由对应处理函数登记新的后续步骤。
+	var continuation: Dictionary = _rule_continuations.pop()
+	# 续接稳定类型；控制器只识别通用规则阶段，不按具体卡牌或技能名称分支。
+	var continuation_type: String = str(continuation.get("continuation_type", ""))
+	# 续接可序列化上下文；处理函数获得深拷贝，不能修改栈内历史记录。
+	var context: Dictionary = (continuation.get("context", {}) as Dictionary).duplicate(true)
+	match continuation_type:
+		"skill_response":
+			_continue_skill_response_after_barrier(context)
+		"card_response":
+			_continue_card_response_after_barrier(context)
+		"equipment_response":
+			_continue_equipment_response_after_barrier(context)
+		"dying_response":
+			_continue_dying_response_after_barrier(context)
+		"dying_after_response":
+			_continue_dying_after_applied_response(context)
+		"trick_negation_response":
+			_continue_trick_negation_after_barrier(context)
+		"simultaneous_negation_response":
+			_continue_simultaneous_negation_after_barrier(context)
+		"damage_finalization":
+			_finish_damage_timing(context)
+		"damage_after_result":
+			_continue_damage_after_result(context)
+		"turn_start":
+			_continue_turn_start(context)
+		"slash_flow":
+			_continue_slash_flow_after_barrier(context)
+		"recast_draw":
+			draw(int(context.get("player_id", -1)), 1)
+		"target_card_completion":
+			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
+
+
+## 按触发、装备、规则后半段、技能后续的固定优先级排空当前结算，最后才恢复阶段或父牌游标。
+func _resume_settlement_pipeline() -> void:
+	if state == null or state.game_over or has_pending_card_choice():
+		return
+	# 单次恢复保护计数；正常每轮都会移除至少一条队列记录，达到检查器上限时延后一帧继续而不推进父流程。
+	var settlement_step_count: int = 0
+	while state != null and not state.game_over and not has_pending_card_choice() and settlement_step_count < max_settlement_steps_per_pass:
+		settlement_step_count += 1
+		# 同一规则时机尚未询问的技能必须先完成，不能让原操作的后半段越过触发顺序。
+		_resume_deferred_rule_timing_dispatches()
+		if has_pending_card_choice() or state.game_over:
+			return
+		# 响应完成后登记的装备触发属于响应子事件，优先于读取响应结果的父卡牌或濒死流程。
+		if not _queued_equipment_triggers.is_empty():
+			process_next_equipment_trigger()
+			if has_pending_card_choice() or state.game_over:
+				return
+			continue
+		# 通用规则续接使用统一后进先出栈，确保最内层被中断操作先恢复。
+		if _rule_continuations.has_pending():
+			_resume_next_rule_continuation()
+			continue
+		# 技能自行声明的“然后”步骤保持登记顺序，每项之后重新检查触发、装备与通用规则续接。
+		if not _deferred_skill_settlements.is_empty():
+			_resume_deferred_skill_settlements()
+			continue
+		break
+	# 达到单帧保护上限时仍有明确队列，下一帧只继续同一管线；未完成后续绝不交给阶段游标或父牌兼容入口。
+	if settlement_step_count >= max_settlement_steps_per_pass and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
+		call_deferred("_resume_settlement_pipeline")
+		return
+	if state != null and not state.game_over and not has_pending_card_choice():
+		_resume_interrupted_turn_flow()
 
 
 ## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
@@ -5827,6 +6242,10 @@ func recast_hand_card(player_id: int, card_uid: int) -> bool:
 	player.take_hand_card(card.uid)
 	_move_to_discard(card)
 	add_log("%s重铸了%s。" % [player.display_name, GameSettings.resolve_card_name(definition)])
+	# 重铸牌离开最后手牌时产生的技能或装备触发必须先完整结算，随后再执行固定摸1张牌。
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("recast_draw", {"player_id":player_id})
+		return true
 	draw(player_id, 1)
 	return true
 
@@ -5916,6 +6335,9 @@ func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
 		for selected_uid: int in selected_uids:
 			discard_card_from_hand(player_id, selected_uid)
 		add_log("%s在弃牌阶段弃置了%d张手牌。" % [player.display_name, selected_uids.size()])
+		# 最后一张手牌产生的嵌套技能必须先结算；恢复入口会重新计算为无需弃牌，再安全进入阶段End与After。
+		if _has_nested_settlement_barrier():
+			return
 	_finish_turn(player_id)
 
 
@@ -5961,6 +6383,9 @@ func _continue_discard_phase_choice(context: Dictionary, selected_uids: Array[in
 	for selected_uid: int in selected_uids:
 		discard_card_from_hand(player_id, selected_uid)
 	add_log("%s在弃牌阶段弃置了%d张手牌。" % [player.display_name, selected_uids.size()])
+	# 弃牌移动触发选择时保持阶段主体游标；选择完成后由统一阶段恢复入口继续，而不是提前发布阶段结束时机。
+	if _has_nested_settlement_barrier():
+		return
 	_finish_turn(player_id)
 
 
@@ -6182,22 +6607,57 @@ func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> v
 	var response_card: CardInstance
 	if not selected_uids.is_empty():
 		response_card = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns)
-	if has_pending_card_choice():
-		return
 	if response_card == null:
 		# 下一名存活救援者；本轮已经询问的角色会在恢复函数中跳过，不会再次弹出同一桃询问。
 		var next_rescuer: PlayerState = state.get_next_alive_player(responder_id)
 		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)), asked_rescuer_ids)
 		return
+	# 响应牌失去时插入的技能与装备触发必须先完整结算；续接快照保证已消费的救援牌不会被再次移动。
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("dying_response", {"rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(response_card)})
+		return
+	_continue_consumed_dying_response(context, response_card)
+
+
+## 在失牌触发与装备事件完成后恢复已经消费的濒死救援牌。
+func _continue_dying_response_after_barrier(continuation_context: Dictionary) -> void:
+	# 原濒死响应上下文；包含响应者、目标、击杀来源、座次起点与已询问名单。
+	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
+	# 已完成消费的救援响应牌；只恢复逻辑牌数据，不再次从弃牌堆取出实体。
+	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
+	if response_card != null:
+		_continue_consumed_dying_response(rule_context, response_card)
+
+
+## 应用一张已经消费的救援牌；回复后的触发仍可再次暂停，后续只检查濒死状态而不重复回复。
+func _continue_consumed_dying_response(context: Dictionary, response_card: CardInstance) -> void:
+	# 当前响应者；卡牌源码会再次复核其与濒死目标的救援关系。
+	var responder_id: int = int(context.get("responder_id", -1))
+	# 当前濒死目标；回复、继续询问和脱离濒死都使用同一稳定 ID。
+	var target_id: int = int(context.get("target_id", -1))
 	# 实际救援效果；由已消费实体牌的源码复核角色关系并应用回复。
 	_apply_dying_response_card(responder_id, target_id, response_card)
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("dying_after_response", context.duplicate(true))
+		return
+	_continue_dying_after_applied_response(context)
+
+
+## 在救援牌回复后的全部插入事件结束后重新读取体力，并继续同一求桃轮或完成脱离濒死。
+func _continue_dying_after_applied_response(context: Dictionary) -> void:
+	# 当前响应者；目标仍未达到1点时允许其继续使用下一张合法救援牌。
+	var responder_id: int = int(context.get("responder_id", -1))
+	# 当前濒死目标；等待期间可能已被其他触发救起、杀死或移出游戏。
+	var target_id: int = int(context.get("target_id", -1))
+	# 当前轮已询问角色；继续由同一响应者救援时只移除本人，其他角色保持已经问过。
+	var asked_rescuer_ids: Array[int] = _int_array(context.get("asked_rescuer_ids", []) as Array)
 	# 最新濒死目标状态；回复后依据当前体力决定继续救援或退出濒死队列。
 	var target: PlayerState = state.get_player(target_id)
 	if target != null and target.alive and target.hp <= 0:
 		# 当前响应者仍可继续出桃；只从已询问集合移除本人，其他角色在本轮内不会被重复询问。
 		asked_rescuer_ids.erase(responder_id)
 		_resolve_dying(target_id, int(context.get("killer_id", -1)), responder_id, asked_rescuer_ids)
-	else:
+	elif target != null and target.alive:
 		_finish_dying_rescue(target_id)
 
 
@@ -6364,6 +6824,7 @@ func _check_game_over() -> void:
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
+	_rule_continuations.reset()
 	state.public_card_choice_display.clear()
 	state.simultaneous_response_display.clear()
 	for player: PlayerState in state.players:
@@ -6387,6 +6848,8 @@ func _end_match_as_draw(reason: String) -> void:
 	_ai_choice_submit_failures.clear()
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
+	_deferred_skill_settlements.clear()
+	_rule_continuations.reset()
 	state.public_card_choice_display.clear()
 	state.simultaneous_response_display.clear()
 	_record_runtime_event("GameEndEvent", "game_end", {"reason":reason}, {"winner":"draw"})

@@ -13,6 +13,7 @@ var _next_registration_id: int = 1
 var _handlers: Dictionary = {}
 
 ## 因可选技能询问而暂停的有序触发续列；每项保存原事件、已排序处理器和下一项索引，确保同一时机按座次逐项询问。
+## 数组尾部是最内层时机，确保嵌套触发完成后再恢复外层座次询问。
 var _deferred_dispatches: Array[Dictionary] = []
 
 
@@ -106,21 +107,30 @@ func _dispatch_arranged(event: RuleEvent, arranged: Array[Dictionary], start_ind
 			continue
 		# 当前实际回调；只有有效回调会获得本次时机的可写 RuleEvent。
 		var callback: Callable = entry.get("callback", Callable()) as Callable
+		# 回调前已有续列数量；若回调内部创建了更深层暂停时机，当前外层续列必须插在这些内层记录下方。
+		var deferred_count_before_callback: int = _deferred_dispatches.size()
 		if callback.is_valid():
 			callback.call(event)
 		# 选择请求必须先由当前技能完整恢复，再询问下一个同一时机技能。
 		if not event.is_terminal() and pause_condition.is_valid() and bool(pause_condition.call()):
 			event.data["_trigger_dispatch_deferred"] = true
-			_deferred_dispatches.append({"event":event, "entries":arranged, "next_index":entry_index + 1})
+			# 当前外层续列记录；数组尾部为栈顶，回调内新增的内层记录必须保持在本项之后。
+			var deferred_entry: Dictionary = {"event":event, "entries":arranged, "next_index":entry_index + 1}
+			if _deferred_dispatches.size() > deferred_count_before_callback:
+				_deferred_dispatches.insert(deferred_count_before_callback, deferred_entry)
+			else:
+				_deferred_dispatches.append(deferred_entry)
 			return true
 	return false
 
 
 ## 恢复最早暂停的有序触发续列；返回 true 表示恢复过程中又创建了新的选择请求，调用方应等待下一次响应。
+## 嵌套时机中的“最早”按直接父子关系解释为最内层未完成续列；同一时机内部仍保持初次确定的座次顺序。
 func resume_deferred(pause_condition: Callable = Callable()) -> bool:
 	while not _deferred_dispatches.is_empty():
 		# 当前续列；先进先出保证嵌套时机也遵循原始触发先后。
-		var deferred_dispatch: Dictionary = _deferred_dispatches.pop_front() as Dictionary
+		# 跨嵌套层级按后进先出恢复直接子时机；同一时机内部处理器仍按原始触发先后执行。
+		var deferred_dispatch: Dictionary = _deferred_dispatches.pop_back() as Dictionary
 		# 原规则事件；事件可能已因终局或规则取消终止，此时不再执行任何后续技能。
 		var event: RuleEvent = deferred_dispatch.get("event") as RuleEvent
 		if event == null or event.is_terminal():
@@ -133,7 +143,7 @@ func resume_deferred(pause_condition: Callable = Callable()) -> bool:
 		var next_index: int = int(deferred_dispatch.get("next_index", 0))
 		# 已有新的选择等待时保持原续列顺序，不调用任何后续技能。
 		if pause_condition.is_valid() and bool(pause_condition.call()):
-			_deferred_dispatches.push_front(deferred_dispatch)
+			_deferred_dispatches.append(deferred_dispatch)
 			return true
 		if _dispatch_arranged(event, arranged, next_index, pause_condition):
 			return true
@@ -141,6 +151,11 @@ func resume_deferred(pause_condition: Callable = Callable()) -> bool:
 		if not event.is_terminal():
 			event.finish()
 	return false
+
+
+## 返回是否存在尚未完成的有序触发续列；流程诊断只读取布尔值，不取得事件或回调引用。
+func has_deferred_dispatches() -> bool:
+	return not _deferred_dispatches.is_empty()
 
 
 ## 返回指定规则事件是否仍等待同一时机后续技能；RuleTimingService 据此延后终结事件状态。

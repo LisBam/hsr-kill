@@ -28,6 +28,18 @@ func _run() -> void:
 		return
 	if not _test_lushi_mingchen_deferred_settlement():
 		return
+	if not _test_mingchen_dying_peach_continuation():
+		return
+	if not _test_mingchen_last_hand_response_continuation():
+		return
+	if not _test_mingchen_guanshi_cost_continuation():
+		return
+	if not _test_mingchen_recast_continuation():
+		return
+	if not _test_damage_timing_choice_continuation():
+		return
+	if not _test_turn_start_nested_skill_continuation():
+		return
 	if not _test_huanyang_and_sefu():
 		return
 	if not _test_huanfa_extra_play_phase_completion():
@@ -109,6 +121,8 @@ func _reset_state(player_count: int) -> void:
 	_controller._extra_play_phase_return_points.clear()
 	_controller._active_extra_play_phase_context.clear()
 	_controller._deferred_skill_settlements.clear()
+	_controller._rule_continuations.reset()
+	_controller._pending_damage_finalizations.clear()
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
 	_controller._pending_finish_turn_player_id = -1
@@ -265,6 +279,222 @@ func _test_lushi_mingchen_deferred_settlement() -> bool:
 	var hanya_hand: Array[CardInstance] = _controller.state.get_player(0).hand
 	if not hanya_hand.has(mingchen_gain_card) or not hanya_hand.has(lushi_draw_card) or not _controller._deferred_skill_settlements.is_empty() or _controller.has_pending_card_choice():
 		return _fail("lushi_nested_complete hand=%d deferred=%s pending=%s" % [hanya_hand.size(), _controller._deferred_skill_settlements, _controller.has_pending_card_choice()])
+	return true
+
+
+## 验证救援者用最后一张【桃】触发冥谶时先完成技能选择，再从已消费响应准确恢复桃与濒死结算。
+func _test_mingchen_dying_peach_continuation() -> bool:
+	_reset_state(3)
+	# 冥谶持有者；当前回合从0号开始询问，使其成为首名实际救援者。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	# 待救目标；0点体力且仍存活，进入求桃流程后必须保持濒死直至桃真正恢复。
+	var dying_target: PlayerState = _controller.state.get_player(1)
+	dying_target.hp = 0
+	# 冥谶异己目标；技能选择完成时先获得牌并对自己造成固定1点雷属性伤害，再允许外层桃继续救援。
+	var mingchen_target: PlayerState = _controller.state.get_player(2)
+	# 冥谶实例；通过真实loseAfter时机复现最后手牌响应产生的嵌套目标选择。
+	var mingchen: SkillDefinition = _install_single_skill(0, "mingchen")
+	# 唯一救援手牌；消费后普通手牌归零并触发冥谶。
+	var peach: CardInstance = _add_hand_card(0, "tao", "heart", 3)
+	# 冥谶取得的指定牌；位于牌堆顶，技能目标选择完成后先于桃后续结算进入手牌。
+	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 12)
+	if mingchen == null:
+		return _fail("mingchen_dying_skill_missing")
+	_controller._resolve_dying(1, -1)
+	# 初始救援请求；必须属于0号玩家并包含唯一桃实体。
+	var dying_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((dying_choice.get("context", {}) as Dictionary).get("kind", "")) != "dying_response" or int(dying_choice.get("chooser_id", -1)) != 0:
+		return _fail("mingchen_dying_initial_choice=%s" % dying_choice)
+	if not _submit_pending_choice(0, [peach.uid], [], true):
+		return false
+	# 桃实体已经消费，但回复必须等待冥谶完成；续接栈精确保留一次救援后半段。
+	var mingchen_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((mingchen_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or dying_target.hp != 0 or not dying_target.dying or _controller._rule_continuations.size() != 1 or not _controller.state.discard_pile.has(peach):
+		return _fail("mingchen_dying_interrupted hp=%d dying=%s continuations=%s" % [dying_target.hp, dying_target.dying, _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(0, [], [2], true):
+		return false
+	# 冥谶先让异己获得无中生有并受到1点自伤，随后原桃只应用一次并令目标脱离濒死；所有普通续接必须完全排空。
+	if dying_target.hp != 1 or dying_target.dying or _controller.state.dying_queue.has(1) or mingchen_target.hp != 3 or not mingchen_target.hand.has(mingchen_gain_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+		return _fail("mingchen_dying_complete hp=%d dying=%s mingchen_target_hp=%d hand=%d continuations=%s" % [dying_target.hp, dying_target.dying, mingchen_target.hp, mingchen_target.hand.size(), _controller._rule_continuations.to_array()])
+	return true
+
+
+## 验证目标打出最后一张【闪】触发冥谶时，杀响应结果在技能完成后继续且不会错误受到伤害。
+func _test_mingchen_last_hand_response_continuation() -> bool:
+	_reset_state(3)
+	_controller.state.current_player_id = 1
+	# 冥谶持有者与【杀】目标；等待期间保持4点体力用于判断闪是否真正生效。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	# 真实冥谶实例；由最后一张闪离开手牌区时创建强制目标选择。
+	var mingchen: SkillDefinition = _install_single_skill(0, "mingchen")
+	# 唯一响应手牌；提交后实体进入弃牌堆，但父杀必须等待冥谶选择再读取成功结果。
+	var dodge_card: CardInstance = _add_hand_card(0, "shan", "diamond", 2)
+	# 攻击者使用的普通杀；通过完整CardUseEvent创建标准slash_response请求。
+	var slash_card: CardInstance = _add_hand_card(1, "sha", "spade", 7)
+	# 冥谶取得的无中生有；响应插入完成后进入技能持有者手牌。
+	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "club", 6)
+	if mingchen == null:
+		return _fail("mingchen_response_skill_missing")
+	_controller._execute_card_use(1, slash_card, [0])
+	# 初始闪响应；必须属于0号目标且使用标准杀响应kind。
+	var response_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((response_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response" or int(response_choice.get("chooser_id", -1)) != 0:
+		return _fail("mingchen_response_initial_choice=%s" % response_choice)
+	if not _submit_pending_choice(0, [dodge_card.uid], [], true):
+		return false
+	# 闪已移动但父杀尚未读取结果；冥谶选择和一条卡牌响应续接必须同时存在。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or hanya.hp != 4 or _controller._rule_continuations.size() != 1:
+		return _fail("mingchen_response_interrupted hp=%d continuations=%s" % [hanya.hp, _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	# 冥谶完成后闪结果只恢复一次，杀进入弃牌堆且目标不受伤；全部续接与普通请求均已排空。
+	if hanya.hp != 4 or not hanya.hand.has(mingchen_gain_card) or not _controller.state.discard_pile.has(dodge_card) or not _controller.state.discard_pile.has(slash_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+		return _fail("mingchen_response_complete hp=%d hand=%d continuations=%s" % [hanya.hp, hanya.hand.size(), _controller._rule_continuations.to_array()])
+	return true
+
+
+## 验证贯石斧弃置最后两张手牌触发冥谶时，武器费用完成后仍能恢复原【闪】结果并继续造成伤害。
+func _test_mingchen_guanshi_cost_continuation() -> bool:
+	_reset_state(3)
+	# 贯石斧持有者与冥谶持有者；支付两张费用后普通手牌归零。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	# 目标角色；先打出闪保持4点体力，贯石斧续接完成后应受到固定1点普通伤害。
+	var target: PlayerState = _controller.state.get_player(1)
+	# 冥谶实例；由贯石斧第二张费用离开手牌区时创建目标选择。
+	var mingchen: SkillDefinition = _install_single_skill(0, "mingchen")
+	# 贯石斧实体；装备区本身不属于两张手牌费用，不会因发动而离区。
+	var guanshi_card: CardInstance = CardInstance.new("guanshi", "diamond", 5)
+	guanshi_card.zone = "equipment"
+	guanshi_card.owner_id = 0
+	hanya.equipment["weapon"] = guanshi_card
+	# 贯石斧第一张费用；两张费用都来自普通手牌并在同一选择中提交。
+	var first_cost: CardInstance = _add_hand_card(0, "tao", "heart", 4)
+	# 贯石斧第二张费用；消费后触发失去最后手牌时机。
+	var second_cost: CardInstance = _add_hand_card(0, "wuxie", "spade", 11)
+	# 目标实际打出的闪；先令原杀进入被闪抵消后的贯石斧费用步骤。
+	var dodge_card: CardInstance = _add_hand_card(1, "shan", "diamond", 2)
+	# 攻击者使用的杀；离开手牌后只剩上方两张费用牌。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "club", 7)
+	# 冥谶取得的无中生有；技能选择完成后再恢复贯石斧伤害。
+	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "heart", 12)
+	if mingchen == null:
+		return _fail("mingchen_guanshi_skill_missing")
+	_controller._execute_card_use(0, slash_card, [1])
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response" or not _submit_pending_choice(1, [dodge_card.uid], [], true):
+		return _fail("mingchen_guanshi_dodge")
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "guanshi_cost" or not _submit_pending_choice(0, [first_cost.uid, second_cost.uid], [], true):
+		return _fail("mingchen_guanshi_cost")
+	# 两张费用已弃置但伤害仍等待冥谶；栈内同时保留武器阶段与父目标收尾且目标体力尚未改变。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or target.hp != 4 or _controller._rule_continuations.size() != 2:
+		return _fail("mingchen_guanshi_interrupted hp=%d continuations=%s" % [target.hp, _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	# 冥谶结束后先恢复贯石斧令杀命中，再完成父目标；费用、闪和杀都只移动一次。
+	if target.hp != 3 or not hanya.hand.has(mingchen_gain_card) or not _controller.state.discard_pile.has(first_cost) or not _controller.state.discard_pile.has(second_cost) or not _controller.state.discard_pile.has(dodge_card) or not _controller.state.discard_pile.has(slash_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+		return _fail("mingchen_guanshi_complete hp=%d continuations=%s" % [target.hp, _controller._rule_continuations.to_array()])
+	return true
+
+
+## 验证重铸最后手牌触发冥谶时，固定摸1张牌会在技能完整结算后继续且不会越过牌堆顶顺序。
+func _test_mingchen_recast_continuation() -> bool:
+	_reset_state(2)
+	# 冥谶持有者；只有一张可重铸手牌，离区后必然满足最后手牌条件。
+	var hanya: PlayerState = _controller.state.get_player(0)
+	hanya.character_id = "hanya"
+	# 真实冥谶实例；重铸使用公开通用端口，不依赖录事的专用延后逻辑。
+	var mingchen: SkillDefinition = _install_single_skill(0, "mingchen")
+	# 被重铸的铁索连环；重铸规则本身仍保持弃1摸1。
+	var recast_card: CardInstance = _add_hand_card(0, "tiesuo", "club", 12)
+	# 重铸后续摸牌；先放入牌堆，使其位于冥谶目标牌下方。
+	var recast_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 6)
+	# 冥谶优先取得的无中生有；当前位于牌堆最顶层。
+	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 9)
+	if mingchen == null or not _controller.recast_hand_card(0, recast_card.uid):
+		return _fail("mingchen_recast_start")
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or not hanya.hand.is_empty() or _controller._rule_continuations.size() != 1:
+		return _fail("mingchen_recast_interrupted hand=%d continuations=%s" % [hanya.hand.size(), _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(0, [], [0], true):
+		return false
+	# 技能先取得牌堆顶无中生有，重铸续接随后摸到下一张闪；重铸实体保持在弃牌堆。
+	if not hanya.hand.has(mingchen_gain_card) or not hanya.hand.has(recast_draw_card) or not _controller.state.discard_pile.has(recast_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+		return _fail("mingchen_recast_complete hand=%d continuations=%s" % [hanya.hand.size(), _controller._rule_continuations.to_array()])
+	return true
+
+
+## 验证damageSource中的摄伏多步选择完成后才进入damageAfter中的永屹选择，两个时机不会互相覆盖。
+func _test_damage_timing_choice_continuation() -> bool:
+	_reset_state(3)
+	# 伤害来源的摄伏实例；首次使用牌造成伤害后创建强制获牌目标选择。
+	var sefu: SkillDefinition = GameDatabase.create_skill("sefu")
+	# 伤害目标的永屹实例；体力实际减少后在damageAfter创建可取消确认选择。
+	var yongyi: SkillDefinition = GameDatabase.create_skill("yongyi")
+	if sefu == null or yongyi == null:
+		return _fail("damage_timing_skills_missing")
+	sefu.bind(_controller, 0)
+	yongyi.bind(_controller, 1)
+	_controller.skill_instances_by_player = {0:{"sefu":sefu}, 1:{"yongyi":yongyi}}
+	sefu.install()
+	yongyi.install()
+	# 摄伏按一字【杀】取得的牌；选择安全的三号角色可避免额外装备弃置步骤干扰时机顺序断言。
+	var sefu_gain_card: CardInstance = _add_draw_pile_card("shan", "heart", 8)
+	_controller.damage(0, 1, 1, "normal", "sha")
+	# 第一窗口必须仍是来源时机的摄伏；永屹尚未发布，伤害尾部只保留一条从damageEnd开始的续接。
+	var source_timing_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((source_timing_choice.get("context", {}) as Dictionary).get("kind", "")) != "sefu_gain_target" or _controller.state.get_player(1).hp != 3 or _controller._rule_continuations.size() != 1:
+		return _fail("damage_source_timing=%s continuations=%s" % [source_timing_choice, _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(0, [], [2], true):
+		return false
+	# 摄伏完成并恢复damageEnd后才允许damageAfter发布永屹确认；来源选择不能使目标技能静默丢失。
+	var after_timing_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((after_timing_choice.get("context", {}) as Dictionary).get("kind", "")) != "yongyi_damage_confirm" or not _controller.state.get_player(2).hand.has(sefu_gain_card) or _controller._rule_continuations.size() != 1:
+		return _fail("damage_after_timing=%s continuations=%s" % [after_timing_choice, _controller._rule_continuations.to_array()])
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 取消永屹只结束该技能，伤害尾部与全部触发续列仍必须正常排空。
+	if _controller.has_pending_card_choice() or _controller._rule_continuations.has_pending() or _controller.trigger_manager.has_deferred_dispatches():
+		return _fail("damage_timing_not_drained continuations=%s" % [_controller._rule_continuations.to_array()])
+	return true
+
+
+## 验证回合前【振旗】与准备阶段【加护】严格依次询问，前一选择不会被后一阶段覆盖或使阶段提前推进。
+func _test_turn_start_nested_skill_continuation() -> bool:
+	_reset_state(3)
+	# 阶段节奏；选择全部完成后只登记判定阶段转换，测试结束前不会真的进入后续阶段。
+	_controller.game_flow_interval_seconds = 0.05
+	# 领袖技持有者；设置为贝洛伯格角色，使其也能成为【振旗】的合法受益者。
+	var leader: PlayerState = _controller.state.get_player(0)
+	leader.character_id = "natasha"
+	# 新回合角色；贝洛伯格势力满足【振旗】触发条件，同时持有准备阶段技能【加护】。
+	var turn_player: PlayerState = _controller.state.get_player(1)
+	turn_player.character_id = "gepard"
+	# 另一名贝洛伯格角色；作为【振旗】与【加护】都可选择的稳定目标。
+	var support_target: PlayerState = _controller.state.get_player(2)
+	support_target.character_id = "natasha"
+	# 真实【振旗】实例；由领袖全局监听新回合角色的phaseBefore时机。
+	var zhenqi: SkillDefinition = _install_single_skill(0, "zhenqi")
+	# 真实【加护】实例；只有回合前选择完成并进入phaseZhunbeiBegin后才允许创建其请求。
+	var jiahu: SkillDefinition = _install_single_skill(1, "jiahu")
+	_controller._start_turn(1)
+	# 第一层请求上下文；必须仍是【振旗】费用选择，证明准备阶段尚未越过回合前屏障。
+	var zhenqi_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if zhenqi == null or jiahu == null or str(zhenqi_choice_context.get("kind", "")) != "zhenqi_cost_option" or _controller._rule_continuations.size() != 1:
+		return _fail("turn_start_zhenqi_first context=%s continuations=%s" % [zhenqi_choice_context, _controller._rule_continuations.to_array()])
+	# 明确取消【振旗】；规则续接应继续发布剩余回合开始时机，并在准备阶段打开【加护】。
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 第二层请求上下文；只有【振旗】请求已经完整关闭后才能成为当前唯一选择。
+	var jiahu_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or _controller._rule_continuations.size() != 1:
+		return _fail("turn_start_jiahu_second context=%s continuations=%s" % [jiahu_choice_context, _controller._rule_continuations.to_array()])
+	# 选择第三名角色接受【加护】；技能结果完成后才允许准备阶段收尾并安排判定阶段。
+	if not _submit_pending_choice(1, [], [2], true):
+		return false
+	if not support_target.chained or support_target.shield != 1 or _controller.has_pending_card_choice() or _controller._rule_continuations.has_pending() or _controller.state.current_phase != "start" or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending("phase_transition"):
+		return _fail("turn_start_complete chained=%s shield=%d pending=%s phase=%s transition=%s" % [support_target.chained, support_target.shield, _controller.has_pending_card_choice(), _controller.state.current_phase, _controller.game_flow_pacer.has_pending("phase_transition") if _controller.game_flow_pacer != null else false])
+	_controller.game_flow_pacer.cancel_all()
 	return true
 
 

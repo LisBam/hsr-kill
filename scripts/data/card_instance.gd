@@ -43,12 +43,37 @@ var hand_view_as_source_skill_id: String = ""
 
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
-func _init(card_definition_id: String = "", card_suit: String = "spade", card_rank: int = 1) -> void:
-	uid = _next_uid
-	_next_uid += 1
+## existing_uid 仅供网络快照、回放与规则续接恢复既有实体；默认-1会生成全新递增编号，运行时通常不动态指定。
+func _init(card_definition_id: String = "", card_suit: String = "spade", card_rank: int = 1, existing_uid: int = -1) -> void:
+	if existing_uid >= 0:
+		uid = existing_uid
+		# 后续新实体的安全起点；恢复较大 UID 时只推进游标防止碰撞，不把恢复动作计作一次新编号分配。
+		_next_uid = maxi(_next_uid, existing_uid + 1)
+	else:
+		uid = _next_uid
+		_next_uid += 1
 	definition_id = card_definition_id
 	suit = card_suit
 	rank = card_rank
+
+
+## 从网络安全快照恢复一张既有实体或逻辑响应代理；不会消耗新的 UID，区域与可见性字段按基础类型重建。
+static func from_dict(data: Dictionary) -> CardInstance:
+	# 恢复后的实体牌；稳定 UID 防止异步规则续接把同一响应误记为另一张新牌。
+	var card: CardInstance = CardInstance.new(str(data.get("definition_id", "")), str(data.get("suit", "spade")), int(data.get("rank", 1)), int(data.get("uid", -1)))
+	card.zone = str(data.get("zone", "draw_pile"))
+	card.owner_id = int(data.get("owner_id", -1))
+	card.known_to.clear()
+	for player_id_variant: Variant in data.get("known_to", []) as Array:
+		# 已知者稳定玩家 ID；异常类型统一转换为整数，重复项不会改变可见性语义。
+		var player_id: int = int(player_id_variant)
+		if not card.known_to.has(player_id):
+			card.known_to.append(player_id)
+	card.shown = bool(data.get("shown", false))
+	card.private_owner_id = int(data.get("private_owner_id", -1))
+	card.hand_view_as_original_definition_id = str(data.get("original_definition_id", ""))
+	card.hand_view_as_source_skill_id = str(data.get("hand_view_as_source_skill_id", ""))
+	return card
 
 
 ## 返回牌的颜色；红桃与方块为红色，黑桃与梅花为黑色，无花色虚拟牌返回 none。

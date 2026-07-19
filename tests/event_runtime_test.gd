@@ -35,6 +35,10 @@ func _ready() -> void:
 		return
 	if not _test_trigger_order():
 		return
+	if not _test_nested_trigger_resume_order():
+		return
+	if not _test_rule_continuation_stack():
+		return
 	if not _test_modifier_pipeline():
 		return
 	if not _test_card_movement_and_virtual_card():
@@ -267,6 +271,58 @@ func _test_trigger_order() -> bool:
 	manager.dispatch(RuleEvent.new("damage"), 1, [0, 1, 2])
 	if order != ["first", "normal-seat1", "normal-seat0", "last"]:
 		return _fail("trigger_order=%s" % [order])
+	return true
+
+
+## 验证回调内部暂停的嵌套时机会先恢复内层剩余触发，再回到外层后续处理器。
+func _test_nested_trigger_resume_order() -> bool:
+	# 独立触发器管理器；同一实例同时保存外层与内层暂停续列。
+	var manager: TriggerManager = TriggerManager.new()
+	# 订阅所有者；全部回调使用同一生命周期对象，避免测试结束前被自动清理。
+	var owner: RefCounted = RefCounted.new()
+	# 实际执行顺序；内层后半段必须严格位于外层后半段之前。
+	var order: Array[String] = []
+	# 模拟选择暂停状态；数组引用允许匿名回调与测试主体共享可变布尔值。
+	var paused: Array[bool] = [false]
+	manager.subscribe("inner", owner, func(_event: RuleEvent) -> void:
+		order.append("inner0")
+		paused[0] = true
+	)
+	manager.subscribe("inner", owner, func(_event: RuleEvent) -> void: order.append("inner1"))
+	manager.subscribe("outer", owner, func(_event: RuleEvent) -> void:
+		order.append("outer0")
+		manager.dispatch(RuleEvent.new("inner"), -1, [], func() -> bool: return paused[0])
+	)
+	manager.subscribe("outer", owner, func(_event: RuleEvent) -> void: order.append("outer1"))
+	manager.dispatch(RuleEvent.new("outer"), -1, [], func() -> bool: return paused[0])
+	if order != ["outer0", "inner0"] or not manager.has_deferred_dispatches():
+		return _fail("nested_trigger_pause=%s" % [order])
+	paused[0] = false
+	manager.resume_deferred(func() -> bool: return paused[0])
+	if order != ["outer0", "inner0", "inner1", "outer1"] or manager.has_deferred_dispatches():
+		return _fail("nested_trigger_resume=%s" % [order])
+	return true
+
+
+## 验证通用规则续接按最内层优先恢复，且登记与读取都不会泄露可修改的上下文引用。
+func _test_rule_continuation_stack() -> bool:
+	# 独立续接栈；本用例只验证纯数据组件，不依赖控制器或场景树生命周期。
+	var continuation_queue: RuleContinuationQueue = RuleContinuationQueue.new()
+	# 外层登记上下文；压栈后修改原字典不能污染队列快照。
+	var outer_context: Dictionary = {"step":"outer", "values":[1]}
+	if continuation_queue.push("outer", outer_context) < 0:
+		return _fail("continuation_push_outer")
+	outer_context["step"] = "mutated"
+	if continuation_queue.push("inner", {"step":"inner"}) < 0 or continuation_queue.size() != 2:
+		return _fail("continuation_push_inner=%s" % [continuation_queue.to_array()])
+	# 最内层续接；必须先弹出inner，证明嵌套响应不会被外层阶段越过。
+	var inner_continuation: Dictionary = continuation_queue.pop()
+	# 外层续接；登记快照必须仍保留outer，而不是调用方后续写入的mutated。
+	var outer_continuation: Dictionary = continuation_queue.pop()
+	if str(inner_continuation.get("continuation_type", "")) != "inner" or str((inner_continuation.get("context", {}) as Dictionary).get("step", "")) != "inner":
+		return _fail("continuation_inner=%s" % [inner_continuation])
+	if str(outer_continuation.get("continuation_type", "")) != "outer" or str((outer_continuation.get("context", {}) as Dictionary).get("step", "")) != "outer" or continuation_queue.has_pending():
+		return _fail("continuation_outer=%s" % [outer_continuation])
 	return true
 
 

@@ -102,12 +102,11 @@ func uses_damage_timing_trigger() -> bool:
 
 
 ## 恢复damage时机创建的麒麟弓坐骑选择，并继续父【杀】当前目标。
+## 父【杀】当前目标由统一伤害续接管线在damageSource、damageEnd与damageAfter结束后推进，本装备只应用自己的坐骑弃置结果。
 func continue_equipment_choice(match_host: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
 	if str(context.get("kind", "")) != "qilin_damage":
 		return false
 	_apply_runtime_choice(match_host, context, selected_uids)
-	if int(context.get("parent_card_uid", -1)) >= 0 and not match_host.has_pending_card_choice():
-		match_host.complete_card_target(int(context.get("parent_card_uid", -1)))
 	return true
 
 

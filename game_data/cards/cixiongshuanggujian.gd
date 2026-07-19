@@ -75,7 +75,7 @@ func _apply_trigger(slash_effect: Object, context: Dictionary, resume_after: boo
 	if target.hand.is_empty():
 		slash_effect.host.draw(actor_id, 1)
 		if resume_after:
-			slash_effect.continue_after_weapon_targeted(context)
+			slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", context)
 		return false
 	# 目标普通手牌候选；木牛“粮”和装备不属于该费用。
 	var candidates: Array[Dictionary] = slash_effect.host.get_hand_candidates(target_id, target_id)
@@ -90,7 +90,7 @@ func _apply_trigger(slash_effect: Object, context: Dictionary, resume_after: boo
 		return true
 	_apply_discard(slash_effect, discard_context, selected_uids)
 	if resume_after:
-		slash_effect.continue_after_weapon_targeted(discard_context)
+		slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", discard_context)
 	return false
 
 
@@ -108,12 +108,13 @@ func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_u
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == "cixiong_trigger":
 		if selected_uids.is_empty():
-			slash_effect.continue_after_weapon_targeted(context)
+			slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", context)
 		else:
 			_apply_trigger(slash_effect, context, true)
 		return true
 	if choice_kind == "cixiong_discard":
 		_apply_discard(slash_effect, context, selected_uids)
-		slash_effect.continue_after_weapon_targeted(context)
+		# 目标弃置最后手牌时先恢复其嵌套技能，再进入防具与【闪】步骤。
+		slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", context)
 		return true
 	return false

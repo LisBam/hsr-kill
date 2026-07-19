@@ -86,5 +86,6 @@ func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_u
 	if str(context.get("kind", "")) != "guanshi_cost":
 		return false
 	_apply_cost(slash_effect, context, selected_uids)
-	slash_effect.continue_after_weapon_dodged(context)
+	# 最后手牌费用产生的嵌套技能必须先结算；共享组件会在屏障结束后继续最终【闪】结果。
+	slash_effect.continue_or_defer_after_weapon("after_weapon_dodged", context)
 	return true
