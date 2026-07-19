@@ -1,0 +1,309 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/online_lobby_panel.gd" id="1_lobby"]
+
+[node name="OnlineLobbyPanel" type="Control"]
+unique_name_in_owner = true
+visible = false
+z_index = 14
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_lobby")
+
+[node name="OnlineLobbyBackground" type="ColorRect" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0.0666667, 0.0705882, 0.0784314, 1)
+
+[node name="OnlineLobbySurface" type="Panel" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = 18.0
+offset_right = -24.0
+offset_bottom = -18.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="OnlineLobbyTitle" type="Label" parent="OnlineLobbySurface"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 26.0
+offset_top = 14.0
+offset_right = 620.0
+offset_bottom = 52.0
+theme_override_font_sizes/font_size = 27
+text = "联机大厅 · 身份模式"
+vertical_alignment = 1
+
+[node name="OnlineLobbyAddress" type="Label" parent="OnlineLobbySurface"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 620.0
+offset_top = 18.0
+offset_right = 1206.0
+offset_bottom = 48.0
+text = "房主地址"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="OnlineLobbySeatArea" type="Control" parent="OnlineLobbySurface"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 24.0
+offset_top = 54.0
+offset_right = 1208.0
+offset_bottom = 528.0
+mouse_filter = 2
+
+[node name="OnlineLobbyChatPanel" type="PanelContainer" parent="OnlineLobbySurface"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 24.0
+offset_top = 532.0
+offset_right = 790.0
+offset_bottom = 674.0
+
+[node name="ChatMargin" type="MarginContainer" parent="OnlineLobbySurface/OnlineLobbyChatPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 6
+
+[node name="ChatVBox" type="VBoxContainer" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="OnlineLobbyChatTitle" type="Label" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin/ChatVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "大厅聊天"
+
+[node name="OnlineLobbyChatHistory" type="RichTextLabel" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin/ChatVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_vertical = 3
+scroll_active = true
+scroll_following = true
+
+[node name="ChatInputRow" type="HBoxContainer" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin/ChatVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="OnlineLobbyChatInput" type="LineEdit" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin/ChatVBox/ChatInputRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "输入聊天内容"
+max_length = 200
+
+[node name="OnlineLobbyChatSendButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyChatPanel/ChatMargin/ChatVBox/ChatInputRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(92, 36)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "发送"
+
+[node name="OnlineLobbyControlPanel" type="PanelContainer" parent="OnlineLobbySurface"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 804.0
+offset_top = 532.0
+offset_right = 1208.0
+offset_bottom = 674.0
+
+[node name="ControlMargin" type="MarginContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 6
+
+[node name="ControlVBox" type="VBoxContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="OnlineLobbyRoomSummary" type="Label" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "真人：1  ｜  对局人数：2  ｜  房间密码：未设置"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="OnlineLobbyErrorLabel" type="Label" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="ControlButtons" type="HBoxContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="OnlineLobbySettingsButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox/ControlButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "对局设置"
+
+[node name="OnlineLobbyStartButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox/ControlButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "开始游戏"
+
+[node name="OnlineLobbyLeaveButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "离开房间"
+
+[node name="OnlineLobbySettingsBackdrop" type="ColorRect" parent="."]
+unique_name_in_owner = true
+visible = false
+z_index = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.9)
+
+[node name="OnlineLobbySettingsPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+z_index = 3
+custom_minimum_size = Vector2(520, 360)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = -180.0
+offset_right = 260.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SettingsMargin" type="MarginContainer" parent="OnlineLobbySettingsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 20
+
+[node name="SettingsVBox" type="VBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="OnlineLobbySettingsTitle" type="Label" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "对局设置"
+horizontal_alignment = 1
+
+[node name="GameModeRow" type="HBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="OnlineLobbyGameModeLabel" type="Label" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/GameModeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "游戏模式"
+vertical_alignment = 1
+
+[node name="OnlineLobbyGameModeOption" type="OptionButton" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/GameModeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+
+[node name="PlayerCountRow" type="HBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="OnlineLobbyPlayerCountLabel" type="Label" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/PlayerCountRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "对局人数"
+vertical_alignment = 1
+
+[node name="OnlineLobbyPlayerCountInput" type="SpinBox" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/PlayerCountRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 38)
+layout_mode = 2
+min_value = 2.0
+max_value = 10.0
+value = 2.0
+update_on_text_changed = true
+
+[node name="PasswordRow" type="HBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="OnlineLobbyPasswordLabel" type="Label" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/PasswordRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "房间密码"
+vertical_alignment = 1
+
+[node name="OnlineLobbyPasswordInput" type="LineEdit" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/PasswordRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 38)
+layout_mode = 2
+secret = true
+placeholder_text = "留空表示无密码"
+max_length = 32
+
+[node name="SettingsSpacer" type="Control" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SettingsButtons" type="HBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 2
+
+[node name="OnlineLobbySettingsCancelButton" type="Button" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/SettingsButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 44)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "取消"
+
+[node name="OnlineLobbySettingsSaveButton" type="Button" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/SettingsButtons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 44)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "保存设置"

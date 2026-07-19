@@ -132,6 +132,25 @@ max_value = 65535.0
 value = 7000.0
 update_on_text_changed = true
 
+[node name="PasswordRow" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="PasswordLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/PasswordRow"]
+custom_minimum_size = Vector2(130, 38)
+layout_mode = 2
+text = "房间密码"
+vertical_alignment = 1
+
+[node name="LanRoomPasswordInput" type="LineEdit" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/PasswordRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+size_flags_horizontal = 3
+secret = true
+placeholder_text = "创建时设置，加入时填写；可留空"
+max_length = 32
+
 [node name="ConnectionButtons" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
 layout_mode = 2
 theme_override_constants/separation = 12
@@ -151,60 +170,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 mouse_default_cursor_shape = 2
 text = "加入房间"
-
-[node name="LanConnectedView" type="VBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 9
-
-[node name="LanAddressHint" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "房主地址"
-horizontal_alignment = 1
-autowrap_mode = 2
-
-[node name="LanMemberCount" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
-text = "真人玩家：1 人"
-
-[node name="LanMemberList" type="RichTextLabel" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 150)
-layout_mode = 2
-size_flags_vertical = 3
-fit_content = false
-scroll_active = true
-
-[node name="PlayerCountRow" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView"]
-layout_mode = 2
-theme_override_constants/separation = 12
-
-[node name="PlayerCountLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView/PlayerCountRow"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "游戏总人数（空位由 AI 补齐）"
-vertical_alignment = 1
-
-[node name="LanPlayerCountInput" type="SpinBox" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView/PlayerCountRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(112, 38)
-layout_mode = 2
-min_value = 2.0
-max_value = 10.0
-value = 2.0
-update_on_text_changed = true
-
-[node name="LanStartMatchButton" type="Button" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectedView"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 48)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-text = "开始局域网对局"
 
 [node name="LanLeaveButton" type="Button" parent="LanLobbyFrame/LobbyMargin/LobbyVBox"]
 unique_name_in_owner = true

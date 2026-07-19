@@ -98,6 +98,9 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 联机资料设置组件；只编辑全局玩家名称与武将形象，主菜单负责模态焦点和关闭后的入口恢复。
 @onready var _online_settings_panel: OnlineSettingsPanel = %OnlineSettingsPanel
 
+## 联机大厅组件；连接成功后接管全屏座位、聊天与房间控制，主菜单只维护焦点和场景覆盖边界。
+@onready var _online_lobby_panel: OnlineLobbyPanel = %OnlineLobbyPanel
+
 ## 设置浮层；默认隐藏，打开后允许修改全局显示与下一局人数配置。
 @onready var _settings_panel: PanelContainer = %MainMenuSettingsPanel
 
@@ -218,6 +221,7 @@ func _on_visibility_changed() -> void:
 	else:
 		_set_settings_visible(false)
 		_close_online_settings(false)
+		_online_lobby_panel.visible = false
 		_restore_covered_interface_focus()
 
 
@@ -297,6 +301,9 @@ func refresh_ui_style() -> void:
 	_apply_spin_box_style(_player_count_input)
 	_apply_option_popup_style(_ui_style_option)
 	_apply_option_popup_style(_card_name_option)
+	_lan_lobby_panel.refresh_ui_style()
+	_online_settings_panel.refresh_ui_style()
+	_online_lobby_panel.refresh_ui_style()
 
 
 ## 重新确认身份模式为当前唯一选择；未来接入其他模式时只需在此处更新预览绑定而不改变开局信号。
@@ -311,6 +318,7 @@ func _select_identity_mode() -> void:
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
 func _open_settings() -> void:
 	_close_online_settings(false)
+	_online_lobby_panel.visible = false
 	_set_settings_visible(true)
 	_settings_close_button.grab_focus()
 
@@ -319,6 +327,7 @@ func _open_settings() -> void:
 func _open_online_settings() -> void:
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
+	_online_lobby_panel.visible = false
 	_online_settings_panel.open_panel()
 	_suspend_background_focus(_online_settings_panel)
 
@@ -327,6 +336,7 @@ func _open_online_settings() -> void:
 func _open_lan_panel() -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_online_lobby_panel.visible = false
 	_lan_lobby_panel.open_panel(get_next_player_count(), _lan_default_port)
 	_suspend_background_focus(_lan_lobby_panel)
 
@@ -365,6 +375,7 @@ func confirm_game_started() -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
 	_lan_lobby_panel.confirm_match_started()
+	_online_lobby_panel.confirm_match_started()
 	_restore_background_focus()
 	_start_game_button.disabled = false
 	visible = false
@@ -392,6 +403,7 @@ func restore_after_failed_restart(message: String) -> void:
 ## 关闭尚未开局的局域网面板并恢复普通主菜单焦点；实际断开操作由牌桌在调用前完成。
 func close_lan_panel() -> void:
 	_lan_lobby_panel.visible = false
+	_online_lobby_panel.visible = false
 	_restore_background_focus()
 	call_deferred("_focus_lan_button")
 
@@ -403,6 +415,7 @@ func show_lan_session_error(message: String) -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
 	_lan_lobby_panel.return_to_entry(message)
+	_online_lobby_panel.visible = false
 	_suspend_background_focus(_lan_lobby_panel)
 	move_to_front()
 
@@ -413,6 +426,7 @@ func return_to_main_menu() -> void:
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_online_lobby_panel.visible = false
 	_start_game_button.disabled = false
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	move_to_front()
@@ -523,20 +537,28 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## 主菜单完成布局后把键盘焦点放到主要操作；玩家可直接按确认键开始当前唯一模式。
 func _focus_start_game_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible:
 		_start_game_button.grab_focus()
 
 
 ## 局域网面板关闭后把焦点归还联机入口；若主菜单或按钮不可用则安全跳过。
 func _focus_lan_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _lan_button.disabled:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible and not _lan_button.disabled:
 		_lan_button.grab_focus()
 
 
 ## 联机资料面板关闭后把焦点归还顶部入口；其他模态仍可见时安全跳过。
 func _focus_online_settings_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_settings_button.disabled:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible and not _online_settings_button.disabled:
 		_online_settings_button.grab_focus()
+
+
+## 打开连接成功后的联机大厅并建立模态焦点边界；快照由牌桌协调器直接绑定到大厅组件。
+func show_online_lobby() -> void:
+	_set_settings_visible(false)
+	_close_online_settings(false)
+	_lan_lobby_panel.visible = false
+	_suspend_background_focus(_online_lobby_panel)
 
 
 ## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。

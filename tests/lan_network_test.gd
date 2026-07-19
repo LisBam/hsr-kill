@@ -1,12 +1,27 @@
 extends Node
 
-## 局域网 ENet 集成测试。默认进程创建房间并派生一个客户端进程，覆盖大厅、随机玩家绑定、私有快照与 actor 防伪校验。
+## 局域网 ENet 集成测试。默认进程创建密码房并派生一个客户端进程，覆盖形象、座位、聊天、隐私、座次映射、私有快照与 actor 防伪校验。
 
 ## 测试等待上限秒数；默认12秒兼顾首次脚本加载与本机 ENet 握手，超时视为联机闭环失败。
 const TEST_TIMEOUT_SECONDS: float = 12.0
 
 ## 测试对局总人数；4人包含2名真人与2名 AI 空位，验证大厅真人数与对局总人数可以不同。
 const TEST_PLAYER_COUNT: int = 4
+
+## 测试房间密码；客户端使用相同凭据登记，公共大厅快照只能暴露 has_password。
+const TEST_ROOM_PASSWORD: String = "网络测试密码"
+
+## 房主联机形象稳定 ID；房主与客户端使用不同武将，便于验证资料没有串位。
+const HOST_AVATAR_CHARACTER_ID: String = "xier"
+
+## 客户端联机形象稳定 ID；该 ID 在正式武将数据库中存在并具有插画资源。
+const CLIENT_AVATAR_CHARACTER_ID: String = "himeko"
+
+## 客户端测试换位目标；四人房初始位置0和1被占用，位置3是合法空位。
+const CLIENT_TARGET_SEAT_INDEX: int = 3
+
+## 客户端测试聊天正文；房主必须以已登记成员名称署名，客户端不能通过 payload 伪造显示名。
+const CLIENT_CHAT_MESSAGE: String = "客户端大厅聊天"
 
 ## 测试通信网关；主进程与派生客户端使用完全相同的节点路径，满足 Godot RPC 路径约束。
 @onready var _gateway: NetworkGateway = $NetworkGateway
@@ -25,6 +40,9 @@ var _host_match_started: bool = false
 
 ## 客户端是否已经发送合法动作；伪造 actor 被拒绝后只允许补发一次正确操作。
 var _client_sent_valid_command: bool = false
+
+## 客户端是否已经发送大厅聊天与换位请求；大厅每次广播都会回调，必须保证测试动作只提交一次。
+var _client_sent_lobby_actions: bool = false
 
 ## 房主是否自动派生客户端进程；默认开启，调试时可用 `--lan-no-spawn` 改为由外部命令启动客户端。
 var _spawn_client_process: bool = true
@@ -69,7 +87,7 @@ func _start_host() -> void:
 	if _port == 0:
 		_port = 18000 + (OS.get_process_id() % 10000)
 	# 房主建房结果；端口冲突或 ENet 初始化错误均不继续派生客户端。
-	var host_error: Error = _gateway.host_lan("房主测试", _port)
+	var host_error: Error = _gateway.host_lan("房主测试", _port, HOST_AVATAR_CHARACTER_ID, TEST_ROOM_PASSWORD, TEST_PLAYER_COUNT)
 	if host_error != OK:
 		_fail("host_create_error=%d" % host_error)
 		return
@@ -107,18 +125,23 @@ func _start_client() -> void:
 		_fail("client_missing_port")
 		return
 	# 客户端发起连接结果；最终成功仍需等待大厅快照与开局绑定。
-	var join_error: Error = _gateway.join_lan("127.0.0.1", "客户端测试", _port)
+	var join_error: Error = _gateway.join_lan("127.0.0.1", "客户端测试", _port, CLIENT_AVATAR_CHARACTER_ID, TEST_ROOM_PASSWORD)
 	print("LAN_NETWORK_CLIENT_CONNECT port=%d error=%d" % [_port, join_error])
 	if join_error != OK:
 		_fail("client_join_error=%d" % join_error)
 
 
-## 房主收到2名真人大厅快照后准备4人映射并开始测试对局，然后向客户端发送定向私有快照。
+## 客户端登记后发送聊天与换位；房主确认两项权威结果、资料与密码隐私后才开始测试对局。
 func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	print("LAN_NETWORK_LOBBY role=%s count=%d active=%s" % ["client" if _is_client_process else "host", int(lobby_snapshot.get("member_count", -1)), bool(lobby_snapshot.get("match_active", false))])
-	if _is_client_process or _host_match_started or int(lobby_snapshot.get("member_count", 0)) < 2:
+	if int(lobby_snapshot.get("member_count", 0)) < 2:
 		return
-	# 随机真人玩家映射错误；测试要求2名真人可以进入4人总座位并留下2个 AI 空位。
+	if _is_client_process:
+		_validate_client_lobby_and_send_actions(lobby_snapshot)
+		return
+	if _host_match_started or not _host_lobby_features_are_ready(lobby_snapshot):
+		return
+	# 真人玩家映射错误；测试要求2名真人按大厅位置进入4人总座位并留下2个 AI 空位。
 	var assignment_error: String = _gateway.prepare_lan_match_assignments(TEST_PLAYER_COUNT)
 	if not assignment_error.is_empty():
 		_fail("assignment_error=%s" % assignment_error)
@@ -135,6 +158,61 @@ func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	# 客户端稳定玩家 ID；写入快照供客户端核对观察者裁剪是否与开局绑定一致。
 	var client_player_id: int = int(remote_assignments.get(client_peer_id, -1))
 	_gateway.send_snapshot_to_peer({"viewer_id":client_player_id, "private_marker":"client_only"}, client_peer_id)
+
+
+## 客户端校验公共大厅没有密码明文泄漏，确认双方形象后发送一次聊天与换位请求。
+func _validate_client_lobby_and_send_actions(lobby_snapshot: Dictionary) -> void:
+	if _client_sent_lobby_actions:
+		return
+	if str(lobby_snapshot.get("role", "")) != "client" or lobby_snapshot.has("room_password") or not bool(lobby_snapshot.get("has_password", false)) or int(lobby_snapshot.get("player_count", 0)) != TEST_PLAYER_COUNT:
+		_fail("client_lobby_privacy=%s" % lobby_snapshot)
+		return
+	# 客户端收到的成员资料；公开字段应包含双方稳定形象 ID 与唯一大厅位置。
+	var members: Array = lobby_snapshot.get("members", []) as Array
+	# 按显示名索引的成员资料；测试不依赖 ENet 为客户端分配的动态 peer ID。
+	var members_by_name: Dictionary = {}
+	for member_variant: Variant in members:
+		# 当前大厅成员；只读取协议公开资料，不保存字典引用到后续异步阶段。
+		var member: Dictionary = member_variant as Dictionary
+		members_by_name[str(member.get("display_name", ""))] = member.duplicate(true)
+	if str((members_by_name.get("房主测试", {}) as Dictionary).get("avatar_character_id", "")) != HOST_AVATAR_CHARACTER_ID or str((members_by_name.get("客户端测试", {}) as Dictionary).get("avatar_character_id", "")) != CLIENT_AVATAR_CHARACTER_ID:
+		_fail("client_avatar_snapshot=%s" % members)
+		return
+	_client_sent_lobby_actions = true
+	_gateway.send_lan_lobby_chat_message(CLIENT_CHAT_MESSAGE)
+	_gateway.request_lan_lobby_seat_change(CLIENT_TARGET_SEAT_INDEX)
+
+
+## 房主确认密码私有值、客户端聊天署名和换位结果全部到达；未完成时继续等待下一份大厅快照。
+func _host_lobby_features_are_ready(lobby_snapshot: Dictionary) -> bool:
+	if lobby_snapshot.has("room_password") or not bool(lobby_snapshot.get("has_password", false)) or int(lobby_snapshot.get("player_count", 0)) != TEST_PLAYER_COUNT:
+		_fail("host_public_lobby_privacy=%s" % lobby_snapshot)
+		return false
+	# 房主私有快照；只有显式请求且本机为房主时才允许包含密码明文。
+	var private_snapshot: Dictionary = _gateway.get_lan_lobby_snapshot(true)
+	if str(private_snapshot.get("room_password", "")) != TEST_ROOM_PASSWORD:
+		_fail("host_private_password=%s" % private_snapshot)
+		return false
+	# 客户端成员；通过显示名查找，验证稳定形象 ID 与权威换位目标。
+	var client_member: Dictionary = {}
+	for member_variant: Variant in lobby_snapshot.get("members", []) as Array:
+		# 当前成员资料；房主快照必须包含双方形象与唯一座位。
+		var member: Dictionary = member_variant as Dictionary
+		if str(member.get("display_name", "")) == "客户端测试":
+			client_member = member
+			break
+	if client_member.is_empty() or str(client_member.get("avatar_character_id", "")) != CLIENT_AVATAR_CHARACTER_ID:
+		_fail("host_client_avatar=%s" % lobby_snapshot.get("members", []))
+		return false
+	# 客户端聊天是否已经由房主权威署名；未到达时继续等待，不提前开局关闭大厅协议。
+	var chat_received: bool = false
+	for chat_variant: Variant in lobby_snapshot.get("chat_history", []) as Array:
+		# 当前聊天记录；显示名来自成员表，正文已经由网关裁剪与换行清理。
+		var chat_entry: Dictionary = chat_variant as Dictionary
+		if str(chat_entry.get("display_name", "")) == "客户端测试" and str(chat_entry.get("message", "")) == CLIENT_CHAT_MESSAGE:
+			chat_received = true
+			break
+	return chat_received and int(client_member.get("seat_index", -1)) == CLIENT_TARGET_SEAT_INDEX
 
 
 ## 客户端接收开局绑定；先保存稳定玩家 ID，等待后续私有快照验证后再发送测试动作。
@@ -156,6 +234,12 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 		return
 	# 伪造玩家动作；选择一个与本地绑定不同但仍在4人范围内的 actor_id，验证网关在控制器前拦截。
 	var spoofed_player_id: int = (_local_player_id + 1) % TEST_PLAYER_COUNT
+	# 延迟一帧发送伪造动作；避免在 RPC 回调内部立即嵌套回传时被 SceneMultiplayer 丢弃。
+	_send_spoofed_command.call_deferred(spoofed_player_id)
+
+
+## 在当前快照 RPC 完成后发送伪造 actor 动作；房主必须拒绝并返回 action_rejected。
+func _send_spoofed_command(spoofed_player_id: int) -> void:
 	_gateway.send_command(PlayerAction.new("lan_test", spoofed_player_id))
 
 
@@ -181,7 +265,8 @@ func _on_game_event_received(event_type: String, event_payload: Dictionary) -> v
 		return
 	if event_type == "action_rejected" and not _client_sent_valid_command:
 		_client_sent_valid_command = true
-		_gateway.send_command(PlayerAction.new("lan_test", _local_player_id))
+		# 合法动作同样延迟到拒绝事件 RPC 结束后上行，保持测试与真实输入事件一致的异步边界。
+		_send_valid_command.call_deferred()
 		return
 	if event_type == "test_complete":
 		if int(event_payload.get("actor_id", -1)) != _local_player_id or not _client_sent_valid_command:
@@ -189,6 +274,11 @@ func _on_game_event_received(event_type: String, event_payload: Dictionary) -> v
 			return
 		print("LAN_NETWORK_CLIENT_PASS actor=%d" % _local_player_id)
 		_finish_client_after_delay()
+
+
+## 在拒绝事件 RPC 返回后发送与当前连接绑定一致的合法 actor 动作。
+func _send_valid_command() -> void:
+	_gateway.send_command(PlayerAction.new("lan_test", _local_player_id))
 
 
 ## 任一测试进程意外失去会话时立即失败；正常结束由显式完成事件控制，不会触发该入口。
@@ -203,7 +293,7 @@ func _on_connection_state_changed(is_connected: bool, message: String) -> void:
 
 ## 监控底层 MultiplayerPeer 连接状态变化；只打印枚举值，不主动改变会话生命周期。
 func _process(_delta: float) -> void:
-	if multiplayer.multiplayer_peer == null:
+	if multiplayer.multiplayer_peer == null or multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
 		return
 	# 当前底层连接状态；DISCONNECTED、CONNECTING 与 CONNECTED 分别对应0、1、2。
 	var connection_status: int = int(multiplayer.multiplayer_peer.get_connection_status())

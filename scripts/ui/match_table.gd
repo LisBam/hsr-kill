@@ -139,6 +139,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 局域网大厅组件；只渲染连接参数与公共成员快照，所有网络调用由牌桌协调器统一处理。
 @onready var lan_lobby_panel: LanLobbyPanel = %LanLobbyPanel
 
+## 连接成功后的联机大厅组件；渲染纯插画玩家位置、聊天和房间控制，网络动作仍由牌桌协调。
+@onready var online_lobby_panel: OnlineLobbyPanel = %OnlineLobbyPanel
+
 ## 选将遮罩组件；只渲染裁剪后的候选快照并发出稳定武将 ID 选择请求。
 @onready var character_selection_panel: CharacterSelectionPanel = %CharacterSelectionPanel
 
@@ -414,8 +417,13 @@ func _ready() -> void:
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
 	lan_lobby_panel.host_requested.connect(_on_lan_host_requested)
 	lan_lobby_panel.join_requested.connect(_on_lan_join_requested)
-	lan_lobby_panel.start_match_requested.connect(_on_lan_start_match_requested)
 	lan_lobby_panel.leave_requested.connect(_on_lan_leave_requested)
+	online_lobby_panel.chat_requested.connect(_on_lan_lobby_chat_requested)
+	online_lobby_panel.seat_change_requested.connect(_on_lan_lobby_seat_change_requested)
+	online_lobby_panel.kick_requested.connect(_on_lan_lobby_kick_requested)
+	online_lobby_panel.settings_update_requested.connect(_on_lan_lobby_settings_update_requested)
+	online_lobby_panel.start_match_requested.connect(_on_lan_start_match_requested)
+	online_lobby_panel.leave_requested.connect(_on_lan_leave_requested)
 	match_controller.network_gateway.lan_lobby_changed.connect(_on_lan_lobby_changed)
 	match_controller.network_gateway.connection_state_changed.connect(_on_lan_connection_state_changed)
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
@@ -641,46 +649,81 @@ func _on_main_menu_start_requested(player_count: int) -> void:
 		main_menu.confirm_game_started()
 
 
-## 接收大厅创建房间意图；NetworkGateway 独立建立 ENet 服务端，失败时保持主菜单与表单可重试。
-func _on_lan_host_requested(display_name: String, port: int) -> void:
+## 接收连接入口创建房间意图；网关保存形象、密码、人数与模式初始配置，成功后进入独立联机大厅。
+func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int) -> void:
 	# 建房结果；Godot Error 只用于程序判断，玩家可见文本由网关统一返回。
-	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port)
+	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID)
 	if host_error != OK:
 		lan_lobby_panel.show_error("创建局域网房间失败，请检查端口是否被占用。")
 
 
-## 接收大厅加入房间意图；ENet 握手异步完成，后续状态通过网关连接信号刷新同一面板。
-func _on_lan_join_requested(display_name: String, address: String, port: int) -> void:
+## 接收连接入口加入房间意图；联机形象与密码随握手登记包提交，房主负责最终校验。
+func _on_lan_join_requested(display_name: String, avatar_character_id: String, room_password: String, address: String, port: int) -> void:
 	# 发起连接结果；OK 只表示客户端已开始连接，不代表房主已经接受大厅登记。
-	var join_error: Error = match_controller.network_gateway.join_lan(address, display_name, port)
+	var join_error: Error = match_controller.network_gateway.join_lan(address, display_name, port, avatar_character_id, room_password)
 	if join_error != OK:
 		lan_lobby_panel.show_error("无法发起局域网连接，请检查 IP 与端口。")
 
 
-## 房主从大厅请求开始对局；先建立随机真人映射，再创建权威状态，成功后才广播客户端开局。
-func _on_lan_start_match_requested(player_count: int) -> void:
+## 房主从联机大厅请求开始对局；读取权威房间设置建立真人映射，成功后才广播客户端开局。
+func _on_lan_start_match_requested() -> void:
 	if not match_controller.network_gateway.is_lan_host():
-		lan_lobby_panel.show_error("只有局域网房主可以开始对局。")
+		online_lobby_panel.show_error("只有局域网房主可以开始对局。")
 		return
+	# 当前权威大厅设置；房主本地读取总人数与稳定模式 ID，不相信界面临时输入。
+	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot(true)
+	# 当前游戏模式；当前只有身份模式拥有实际规则控制器。
+	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
+	if game_mode_id != NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID:
+		online_lobby_panel.show_error("当前游戏模式尚未实现。")
+		return
+	# 当前大厅总人数；用于前置校验、真人映射与权威对局创建。
+	var player_count: int = int(lobby_snapshot.get("player_count", 2))
 	# 数据配置前置错误；必须在生成成员座次与清理旧表现前返回，房间可原地重试。
 	var validation_error: String = match_controller.get_match_start_validation_error(player_count)
 	if not validation_error.is_empty():
-		lan_lobby_panel.show_error(validation_error)
+		online_lobby_panel.show_error(validation_error)
 		return
-	# 真人到稳定玩家 ID 的随机映射错误；通常由真人不足2名或总人数小于成员数引起。
+	# 真人到稳定玩家 ID 的大厅位置映射错误；通常由真人不足2名或总人数小于成员数引起。
 	var assignment_error: String = match_controller.network_gateway.prepare_lan_match_assignments(player_count)
 	if not assignment_error.is_empty():
-		lan_lobby_panel.show_error(assignment_error)
+		online_lobby_panel.show_error(assignment_error)
 		return
 	match_menu.set_next_player_count(player_count)
 	if not _on_restart_requested(player_count):
 		match_controller.network_gateway.cancel_prepared_lan_match()
 		# 最近控制器拒绝原因；为空时使用稳定兜底，不把半成品对局广播给客户端。
 		var failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法创建局域网对局，请检查数据配置后重试。"
-		lan_lobby_panel.show_error(failure_message)
+		online_lobby_panel.show_error(failure_message)
 		return
 	match_controller.network_gateway.begin_prepared_lan_match()
 	match_controller.replicate_current_state()
+
+
+## 转发本地大厅聊天意图；房主网关统一署名、裁剪长度并广播公共聊天历史。
+func _on_lan_lobby_chat_requested(message: String) -> void:
+	match_controller.network_gateway.send_lan_lobby_chat_message(message)
+
+
+## 转发本地点击空位的换位意图；房主权威复核目标仍为空后广播新座位。
+func _on_lan_lobby_seat_change_requested(seat_index: int) -> void:
+	match_controller.network_gateway.request_lan_lobby_seat_change(seat_index)
+
+
+## 房主请求踢出远端大厅成员；失败原因在联机大厅右下控制区显示。
+func _on_lan_lobby_kick_requested(peer_id: int) -> void:
+	var kick_error: String = match_controller.network_gateway.kick_lan_lobby_member(peer_id)
+	if not kick_error.is_empty():
+		online_lobby_panel.show_error(kick_error)
+
+
+## 房主保存模式、人数与密码设置；网关校验真人下限并广播完整公共快照。
+func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count: int, room_password: String) -> void:
+	var settings_error: String = match_controller.network_gateway.update_lan_lobby_settings(game_mode_id, player_count, room_password)
+	if not settings_error.is_empty():
+		online_lobby_panel.show_error(settings_error)
+		return
+	online_lobby_panel.confirm_settings_updated()
 
 
 ## 大厅离开按钮协调入口；未开局时关闭 ENet 会话并恢复普通主菜单，不触碰任何规则状态。
@@ -697,6 +740,10 @@ func _on_lan_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	if match_controller.network_gateway.is_lan_host():
 		host_addresses = match_controller.network_gateway.get_lan_ipv4_addresses()
 	lan_lobby_panel.bind_lobby(lobby_snapshot, host_addresses)
+	# 房主私有大厅设置；只在房主本机补充明文密码，远端公共快照始终只有 has_password 布尔值。
+	var display_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot(true) if match_controller.network_gateway.is_lan_host() else lobby_snapshot.duplicate(true)
+	online_lobby_panel.bind_lobby(display_snapshot, host_addresses, lan_lobby_panel.get_port())
+	main_menu.show_online_lobby()
 
 
 ## 把网关连接状态转交大厅状态栏；该回调不据文本推断角色或对局阶段。
@@ -720,6 +767,7 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 	match_menu.set_next_player_count(player_count)
 	main_menu.set_next_player_count(player_count)
 	lan_lobby_panel.confirm_match_started()
+	online_lobby_panel.confirm_match_started()
 	main_menu.confirm_game_started()
 
 

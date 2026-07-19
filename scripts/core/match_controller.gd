@@ -460,7 +460,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		_rng.randomize()
 	else:
 		_rng.seed = seed
-	# 局域网房主的本地玩家 ID 已由大厅随机成员映射确定；离线对局继续使用原有本地座次随机逻辑。
+	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；离线对局继续使用原有本地座次随机逻辑。
 	var lan_local_player_id: int = network_gateway.get_local_lan_player_id() if network_gateway != null and network_gateway.is_lan_host() else -1
 	if lan_local_player_id >= 0:
 		local_human_player_id = lan_local_player_id
@@ -4469,7 +4469,7 @@ func _create_players(player_count: int) -> void:
 	# 身份配置副本；包含领袖在内全部洗牌，使领袖与本地玩家都不与任何固定座次绑定。
 	var identities: Array[String] = identity_rules.get_distribution(player_count)
 	_shuffle_array(identities)
-	# 局域网真人玩家 ID；房主大厅已随机绑定成员，离线模式保持只有 local_human_player_id 一名真人。
+	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
 	if network_gateway != null and network_gateway.is_lan_host():
 		lan_human_player_ids = network_gateway.get_lan_human_player_ids()
