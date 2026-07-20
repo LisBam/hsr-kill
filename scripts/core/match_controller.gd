@@ -5145,31 +5145,7 @@ func _finish_character_selection() -> void:
 	_continue_game_start_after_character_adjustment()
 
 
-## 兼容性地应用自选模式已确认的身份、座次与武将；正常流程在每次确认时已即时完成，结束阶段不得再调用此函数重置牌面。
-func _apply_custom_character_assignments() -> void:
-	# 按目标座次索引保存玩家；数组长度固定为参与人数，服务已保证座次唯一且完整。
-	var reordered_players: Array[PlayerState] = []
-	reordered_players.resize(state.players.size())
-	for player: PlayerState in state.players:
-		# 当前玩家确认身份；领袖唯一且与一号位绑定。
-		var selected_identity: String = character_selection.get_selected_identity(player.player_id)
-		# 当前玩家确认座次；从1开始，转换为数组索引时减1。
-		var selected_seat_number: int = character_selection.get_selected_seat_number(player.player_id)
-		player.identity = selected_identity
-		player.identity_revealed = selected_identity == "leader"
-		_apply_character(player, character_selection.get_selection(player.player_id), true)
-		if selected_seat_number >= 1 and selected_seat_number <= reordered_players.size():
-			reordered_players[selected_seat_number - 1] = player
-	# 完整座次数组；服务只有全员确认后才进入本函数，因此每个位置都应存在有效玩家。
-	for seat_index: int in range(reordered_players.size()):
-		if reordered_players[seat_index] == null:
-			push_error("自选座次结果缺少第%d号位玩家。" % (seat_index + 1))
-			return
-	state.players = reordered_players
-	_refresh_player_display_names_for_current_seats()
-
-
-## 将未确认的自选座次身份即时投射到开局前牌桌；最终确认仍由 _apply_custom_character_assignments 以服务结果为准。
+## 将未确认的自选座次身份即时投射到开局前牌桌；每名玩家最终确认时也复用本函数投射座次身份，只应用本次确认的武将。
 func _apply_custom_assignment_preview() -> void:
 	if state == null or character_selection == null:
 		return
@@ -5595,6 +5571,12 @@ func _drive_ai_character_selection() -> void:
 		var made_progress: bool = false
 		# 当前待确认玩家副本；每轮结束后重新获取，安全覆盖领袖到其他玩家的阶段切换。
 		var pending_player_ids: Array[int] = character_selection.get_pending_player_ids()
+		# 首任AI领袖已经锁定公开武将，但仍等待最终座次身份。真人全部确认后，它必须先取得仍空缺的一号位与领袖，
+		# 否则按稳定玩家ID排序的其他AI会先抢占领袖，使已公开武将被错误降为其他身份。
+		var retained_initial_leader_player_id: int = character_selection.leader_player_id
+		if character_selection.is_retaining_initial_leader_character(retained_initial_leader_player_id):
+			pending_player_ids.erase(retained_initial_leader_player_id)
+			pending_player_ids.push_front(retained_initial_leader_player_id)
 		for player_id: int in pending_player_ids:
 			if not ai_coordinator.is_ai_controlled(player_id):
 				continue
