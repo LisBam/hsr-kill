@@ -467,6 +467,7 @@ func _ready() -> void:
 	main_menu.set_lan_default_port(match_controller.network_gateway.default_lan_port)
 	character_selection_panel.selection_submitted.connect(_on_character_selection_submitted)
 	character_selection_panel.candidate_replacement_requested.connect(_on_character_candidate_replacement_requested)
+	character_selection_panel.custom_assignment_preview_requested.connect(_on_custom_assignment_preview_requested)
 	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))
 	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
@@ -2787,6 +2788,14 @@ func _on_character_candidate_replacement_requested(character_id: String) -> void
 	# 换将动作；只携带本人当前候选的稳定武将 ID，不传递按钮、牌面节点或随机结果。
 	var action: PlayerAction = PlayerAction.new("replace_character_candidate", match_controller.local_human_player_id)
 	action.payload = {"character_id":character_id}
+	match_controller.submit_action(action)
+
+
+## 把座次身份按钮的即时改动封装为预览动作；控制器在不确认武将的前提下刷新全部角色与 AI 展示。
+func _on_custom_assignment_preview_requested(seat_number: int, identity: String) -> void:
+	# 自选预览动作；只携带已经由界面完成领袖联动的稳定座次与身份，不传递按钮或候选节点。
+	var action: PlayerAction = PlayerAction.new("preview_custom_assignment", match_controller.local_human_player_id)
+	action.payload = {"seat_number":seat_number, "identity":identity}
 	match_controller.submit_action(action)
 
 

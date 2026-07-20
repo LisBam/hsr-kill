@@ -27,14 +27,17 @@ func _init() -> void:
 	})
 
 
-## 订阅连环状态完成时机；set_player_linked 的两个变化方向共用同一 linkAfter 事实事件。
+## 订阅连环状态完成时机；只在角色实际变为横置时继续处理，竖直状态变化不满足技能原文条件。
 func install() -> void:
 	subscribe_timing("linkAfter", _on_link_after, "global")
 
 
-## 任意星穹列车角色使连环状态发生变化后询问技能持有者；横置转竖直同样满足“使一名角色横置时”。
+## 任意星穹列车角色使目标实际横置后询问技能持有者；来源没有普通手牌时不创建无法产生效果的嵌套选择。
 func _on_link_after(event: RuleEvent) -> void:
 	if _used_turn_number == host.state.turn_number:
+		return
+	# 连环结果状态；只有 false 到 true 的实际横置满足“使一名角色横置时”，竖直不再重复创建选择链。
+	if not bool(event.data.get("linked", false)):
 		return
 	# 技能持有者；死亡或离场领袖不能发动其触发技。
 	var owner: PlayerState = get_owner_skill_player().get_state()
@@ -44,6 +47,8 @@ func _on_link_after(event: RuleEvent) -> void:
 	var source_player_id: int = event.source_id
 	var source_player: PlayerState = host.state.get_player(source_player_id) as PlayerState
 	if source_player == null or not source_player.alive or source_player.out_of_game or not _is_faction_player(source_player, FACTION_ID):
+		return
+	if source_player.hand.is_empty():
 		return
 	request_card_selection("领航", "是否对使角色横置状态发生变化的角色发动【领航】？", [], 0, 0, true, {"kind":"linghang_confirm", "source_player_id":source_player_id, "ai_allow_confirm":true})
 

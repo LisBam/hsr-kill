@@ -69,6 +69,18 @@ var _selected_identities_by_player: Dictionary = {}
 ## 首次身份分配产生的领袖武将 ID；自选座次身份期间继续公开，最终确认后由新领袖选择刷新。
 var _initial_leader_character_id: String = ""
 
+## 首次随机分配的玩家座次；自选阶段用作本地默认选中值和未确认玩家的预览回退，不占最终座次名额。
+var _initial_seats_by_player: Dictionary = {}
+
+## 首次随机分配的玩家身份；自选阶段用作本地默认选中值和未确认玩家的预览回退，不占最终身份名额。
+var _initial_identities_by_player: Dictionary = {}
+
+## 玩家正在编辑的座次预览；只用于开局前即时展示，确认武将后才写入最终座次映射。
+var _preview_seats_by_player: Dictionary = {}
+
+## 玩家正在编辑的身份预览；只用于开局前即时展示，确认武将后才写入最终身份映射。
+var _preview_identities_by_player: Dictionary = {}
+
 ## 选将使用的随机数生成器；由对局控制器注入，与本局种子保持一致且不创建第二套随机源。
 var _rng: RandomNumberGenerator
 
@@ -87,6 +99,10 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	_selected_seats_by_player.clear()
 	_selected_identities_by_player.clear()
 	_initial_leader_character_id = ""
+	_initial_seats_by_player.clear()
+	_initial_identities_by_player.clear()
+	_preview_seats_by_player.clear()
+	_preview_identities_by_player.clear()
 	leader_player_id = -1
 	_rng = rng
 	custom_assignment_enabled = allow_custom_assignment
@@ -99,9 +115,13 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	for character_id: String in leader_skill_character_ids:
 		if _character_ids.has(character_id) and not _leader_skill_character_ids.has(character_id):
 			_leader_skill_character_ids.append(character_id)
-	for player: PlayerState in players:
+	for player_index: int in range(players.size()):
+		# 当前参与选将的玩家；初始数组顺序就是随机身份分配阶段生成的物理座次顺序。
+		var player: PlayerState = players[player_index]
 		_player_ids.append(player.player_id)
 		_identities_by_player[player.player_id] = player.identity
+		_initial_seats_by_player[player.player_id] = player_index + 1
+		_initial_identities_by_player[player.player_id] = player.identity
 		_identity_limits[player.identity] = int(_identity_limits.get(player.identity, 0)) + 1
 		_replacement_cards_remaining_by_player[player.player_id] = replacement_card_count
 		if player.identity == "leader":
@@ -132,6 +152,8 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	var candidates: Array[String] = get_candidates(player_id)
 	if not candidates.has(character_id) and not (custom_assignment_enabled and phase == PHASE_CUSTOM and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
+	if _is_character_selected_by_other_player(player_id, character_id):
+		return "该武将已经被其他玩家选择。"
 	if phase == PHASE_CUSTOM:
 		# 规范化后的座次与身份；选择一号位或领袖会强制形成同一配对。
 		var seat_number: int = requested_seat_number
@@ -162,6 +184,8 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 			return "该身份的可选名额已经用完。"
 		_selected_seats_by_player[player_id] = seat_number
 		_selected_identities_by_player[player_id] = identity
+		_preview_seats_by_player.erase(player_id)
+		_preview_identities_by_player.erase(player_id)
 	_selections_by_player[player_id] = character_id
 	if phase == PHASE_LEADER:
 		_initial_leader_character_id = character_id
@@ -208,6 +232,10 @@ func replace_candidate(player_id: int, character_id: String) -> String:
 	var pool: Array[String] = _character_ids.duplicate()
 	for current_candidate_id: String in candidates:
 		pool.erase(current_candidate_id)
+	for selected_character_id_variant: Variant in _selections_by_player.values():
+		# 已确认武将；换将结果不能把已落定的武将再次发给当前玩家。
+		var selected_character_id: String = str(selected_character_id_variant)
+		pool.erase(selected_character_id)
 	for leader_skill_character_id: String in _leader_skill_character_ids:
 		pool.erase(leader_skill_character_id)
 	# 首任领袖已经公开后，后续随机候选继续排除该武将；全武将入口仍可由玩家主动选择它。
@@ -268,6 +296,10 @@ func get_replaceable_candidate_ids(player_id: int) -> Array[String]:
 	var replacement_pool: Array[String] = _character_ids.duplicate()
 	for candidate_id: String in candidates:
 		replacement_pool.erase(candidate_id)
+	for selected_character_id_variant: Variant in _selections_by_player.values():
+		# 已确认武将；存在候选时也不能向界面错误声明该武将可作为换将结果。
+		var selected_character_id: String = str(selected_character_id_variant)
+		replacement_pool.erase(selected_character_id)
 	for leader_skill_character_id: String in _leader_skill_character_ids:
 		replacement_pool.erase(leader_skill_character_id)
 	if not _initial_leader_character_id.is_empty():
@@ -282,6 +314,17 @@ func get_replaceable_candidate_ids(player_id: int) -> Array[String]:
 	return result
 
 
+## 为仍在等待的 AI 重建一组未被最终确认占用的候选；只用于自动选将防冲突，不消耗玩家换将卡。
+func reroll_unclaimed_candidates(player_id: int) -> void:
+	if not can_player_select(player_id):
+		return
+	# 已公开的首任领袖武将；后续候选继续排除，避免 AI 直接重复初始公开结果。
+	var excluded_character_id: String = _initial_leader_character_id
+	# 当前是否应附加领袖技固定候选；只有首任领袖与自选阶段保留该附加入口。
+	var include_leader_skill_characters: bool = phase == PHASE_LEADER or custom_assignment_enabled
+	_candidates_by_player[player_id] = _make_candidates(player_id, excluded_character_id, include_leader_skill_characters)
+
+
 ## 返回自选模式下玩家确认的座次号；尚未确认或普通模式返回-1。
 func get_selected_seat_number(player_id: int) -> int:
 	return int(_selected_seats_by_player.get(player_id, -1))
@@ -290,6 +333,76 @@ func get_selected_seat_number(player_id: int) -> int:
 ## 返回自选模式下玩家确认的身份；尚未确认或普通模式返回空字符串。
 func get_selected_identity(player_id: int) -> String:
 	return str(_selected_identities_by_player.get(player_id, ""))
+
+
+## 返回首次随机分配给指定玩家的座次；自选阶段尚未确认时用于自动选中对应按钮。
+func get_initial_seat_number(player_id: int) -> int:
+	return int(_initial_seats_by_player.get(player_id, -1))
+
+
+## 返回首次随机分配给指定玩家的身份；自选阶段尚未确认时用于自动选中对应按钮。
+func get_initial_identity(player_id: int) -> String:
+	return str(_initial_identities_by_player.get(player_id, _identities_by_player.get(player_id, "")))
+
+
+## 返回指定玩家当前应在界面上显示的座次；最终确认优先于编辑预览，最后回退首次随机座次。
+func get_preview_seat_number(player_id: int) -> int:
+	if _selected_seats_by_player.has(player_id):
+		return int(_selected_seats_by_player.get(player_id, -1))
+	return int(_preview_seats_by_player.get(player_id, get_initial_seat_number(player_id)))
+
+
+## 返回指定玩家当前应在界面上显示的身份；最终确认优先于编辑预览，最后回退首次随机身份。
+func get_preview_identity(player_id: int) -> String:
+	if _selected_identities_by_player.has(player_id):
+		return str(_selected_identities_by_player.get(player_id, ""))
+	return str(_preview_identities_by_player.get(player_id, get_initial_identity(player_id)))
+
+
+## 返回指定玩家是否已经提交过未确认的座次身份预览；控制器据此区分默认随机分配与玩家主动改动。
+func has_custom_assignment_preview(player_id: int) -> bool:
+	return _preview_seats_by_player.has(player_id) and _preview_identities_by_player.has(player_id)
+
+
+## 更新玩家尚未确认武将时的座次与身份预览；该操作不占最终名额，方便控制器即时重排未确认 AI。
+func preview_custom_assignment(player_id: int, requested_seat_number: int, requested_identity: String) -> String:
+	if phase != PHASE_CUSTOM or not can_player_select(player_id):
+		return "当前玩家不能预览座次与身份。"
+	# 规范化后的预览座次与身份；一号位和领袖始终保持双向绑定。
+	var seat_number: int = requested_seat_number
+	var identity: String = requested_identity
+	if seat_number == 1 or identity == "leader":
+		seat_number = 1
+		identity = "leader"
+	if seat_number < 1 or seat_number > _player_ids.size() or not _identity_limits.has(identity):
+		return "请选择有效座次与身份。"
+	# 已确认结果才占用最终名额；其他未确认玩家仍可在各自界面预览原始分配，控制器会即时重排剩余位置。
+	for selected_player_id_variant: Variant in _selected_seats_by_player.keys():
+		# 已确认玩家 ID；预览者自身尚未确认，不会出现在该映射中。
+		var confirmed_seat_player_id: int = int(selected_player_id_variant)
+		if confirmed_seat_player_id != player_id and int(_selected_seats_by_player.get(confirmed_seat_player_id, -1)) == seat_number:
+			return "该座次已经被其他玩家确认。"
+	for preview_player_id_variant: Variant in _preview_seats_by_player.keys():
+		# 其他玩家主动预览的座次；默认随机分配不占用，但已经点击改动的预览需要即时互斥。
+		var preview_seat_player_id: int = int(preview_player_id_variant)
+		if preview_seat_player_id != player_id and int(_preview_seats_by_player.get(preview_seat_player_id, -1)) == seat_number:
+			return "该座次正在被其他玩家预览。"
+	var used_identity_count: int = 0
+	for selected_player_id_variant: Variant in _selected_identities_by_player.keys():
+		# 已确认身份玩家 ID；只有最终提交才消耗身份名额。
+		var confirmed_identity_player_id: int = int(selected_player_id_variant)
+		if confirmed_identity_player_id != player_id and str(_selected_identities_by_player.get(confirmed_identity_player_id, "")) == identity:
+			used_identity_count += 1
+	for preview_player_id_variant: Variant in _preview_identities_by_player.keys():
+		# 其他玩家主动预览的身份；默认随机身份不占用，已修改的预览与最终名额保持同一互斥语义。
+		var preview_identity_player_id: int = int(preview_player_id_variant)
+		if preview_identity_player_id != player_id and str(_preview_identities_by_player.get(preview_identity_player_id, "")) == identity:
+			used_identity_count += 1
+	if used_identity_count >= int(_identity_limits.get(identity, 0)):
+		return "该身份的可选名额已经用完。"
+	_preview_seats_by_player[player_id] = seat_number
+	_preview_identities_by_player[player_id] = identity
+	return ""
 
 
 ## 返回指定玩家当前仍可选择的座次；已经被其他确认玩家占用的座次会被移除。
@@ -372,6 +485,10 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"allow_custom_assignment":custom_assignment_enabled,
 		"seat_options":get_available_seat_numbers(viewer_id) if custom_assignment_enabled and can_player_select(viewer_id) else [],
 		"identity_options":get_available_identities(viewer_id) if custom_assignment_enabled and can_player_select(viewer_id) else [],
+		"initial_seat_number":get_initial_seat_number(viewer_id) if custom_assignment_enabled else -1,
+		"initial_identity":get_initial_identity(viewer_id) if custom_assignment_enabled else "",
+		"preview_seat_number":get_preview_seat_number(viewer_id) if custom_assignment_enabled else -1,
+		"preview_identity":get_preview_identity(viewer_id) if custom_assignment_enabled else "",
 		"local_selected_character_id":get_selection(viewer_id),
 		"can_select":can_player_select(viewer_id),
 		"readiness":readiness,
@@ -398,11 +515,15 @@ func _make_candidates(player_id: int, excluded_character_id: String, include_lea
 	var pool: Array[String] = _character_ids.duplicate()
 	if not excluded_character_id.is_empty():
 		pool.erase(excluded_character_id)
+	# 已确认武将；候选可以在未确认玩家之间重叠，但已落定结果不能再次进入 AI 补发候选或换将池。
+	for selected_character_id_variant: Variant in _selections_by_player.values():
+		var selected_character_id: String = str(selected_character_id_variant)
+		pool.erase(selected_character_id)
 	# 固定领袖技武将；先从随机池移除，再按数据库稳定顺序放在结果开头，因此不会占用普通候选数量。
 	var fixed_candidates: Array[String] = []
 	if include_leader_skill_characters:
 		for leader_character_id: String in _leader_skill_character_ids:
-			if leader_character_id == excluded_character_id:
+			if leader_character_id == excluded_character_id or _is_character_selected_by_other_player(player_id, leader_character_id):
 				continue
 			pool.erase(leader_character_id)
 			fixed_candidates.append(leader_character_id)
@@ -418,6 +539,16 @@ func _make_candidates(player_id: int, excluded_character_id: String, include_lea
 			locked_candidates.append(candidate_id)
 	_locked_candidates_by_player[player_id] = locked_candidates
 	return result
+
+
+## 判断武将是否已由另一名玩家最终确认；随机候选可以重叠，但最终身份局不允许两名玩家使用同一武将。
+func _is_character_selected_by_other_player(player_id: int, character_id: String) -> bool:
+	for selected_player_id_variant: Variant in _selections_by_player.keys():
+		# 已确认玩家 ID；当前提交者自身的旧值不应被视为冲突。
+		var selected_player_id: int = int(selected_player_id_variant)
+		if selected_player_id != player_id and str(_selections_by_player.get(selected_player_id, "")) == character_id:
+			return true
+	return false
 
 
 ## 使用本局随机数生成器原地洗牌；保持相同 seed 下身份、牌堆和选将候选均可复现。

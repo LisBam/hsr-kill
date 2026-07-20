@@ -12,6 +12,9 @@ signal selection_submitted(selection_data: Dictionary)
 ## 玩家点击单张候选上方“换将”按钮时发出的信号；参数只包含被替换候选的稳定武将 ID。
 signal candidate_replacement_requested(character_id: String)
 
+## 本地修改自选座次或身份时发出的预览信号；参数始终是已经完成一号位与领袖联动后的稳定组合。
+signal custom_assignment_preview_requested(seat_number: int, identity: String)
+
 ## 选将候选或公开领袖武将牌请求显示统一悬停信息时发出的转发信号。
 signal information_requested(information: Dictionary, anchor_rect: Rect2)
 
@@ -61,7 +64,7 @@ const SEAT_BUTTONS_PATH: NodePath = NodePath("SelectionFrame/SeatButtons")
 const IDENTITY_BUTTONS_PATH: NodePath = NodePath("SelectionFrame/IdentityButtons")
 
 ## 自选模式候选区域矩形；为多行全部武将与下方座次、身份按钮预留空间。
-const CUSTOM_CANDIDATE_RECT: Rect2 = Rect2(24.0, 72.0, 992.0, 286.0)
+const CUSTOM_CANDIDATE_RECT: Rect2 = Rect2(24.0, 68.0, 992.0, 332.0)
 
 ## 全武将模式主框距离视口四边的安全边距；16像素可最大化牌面区域并避免贴边裁切。
 const ALL_CHARACTERS_FRAME_MARGIN: float = 16.0
@@ -86,8 +89,8 @@ const IDENTITY_OPTIONS: Array[Dictionary] = [
 	{"id":"renegade", "label":"内奸"},
 ]
 
-## 候选武将牌之间的水平间距；默认18像素，在1280×720界面中可完整容纳五张148.35像素牌。
-@export_range(0.0, 48.0, 1.0) var candidate_gap: float = 18.0
+## 候选武将牌之间的水平与垂直间距；默认8像素，让多行候选在保留原尺寸牌面的前提下更紧凑。
+@export_range(0.0, 48.0, 1.0) var candidate_gap: float = 8.0
 
 ## 候选武将悬停时的放大倍数；默认1.08提供清晰反馈且不会明显遮挡相邻牌，运行时无需动态修改。
 @export_range(1.0, 1.25, 0.01) var candidate_hover_scale: float = 1.08
@@ -322,11 +325,17 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
 	if not preserves_local_context:
 		_selected_character_id = ""
-		_selected_seat_number = -1
-		_selected_identity = ""
+		# 首次进入最终自选阶段时，座次和身份按钮默认高亮首次随机分配的结果；普通选将不保留这些临时值。
+		_selected_seat_number = int(snapshot.get("preview_seat_number", snapshot.get("initial_seat_number", -1))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else -1
+		_selected_identity = str(snapshot.get("preview_identity", snapshot.get("initial_identity", ""))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else ""
 		_showing_all_characters = false
 		_apply_all_characters_layout(false)
-	visible = not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
+	elif str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM:
+		# 权威预览回包；联机或其他输入源改变座次身份后以房主规范化结果覆盖本地临时状态。
+		_selected_seat_number = int(snapshot.get("preview_seat_number", _selected_seat_number))
+		_selected_identity = str(snapshot.get("preview_identity", _selected_identity))
+	# 已确认、尚未轮到本地或仅等待其他玩家的阶段不显示空选将框，避免首任领袖确认后再次弹出无候选遮罩。
+	visible = bool(_snapshot.get("can_select", false)) and not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
 	if not visible:
 		return
 	_render_header()
@@ -477,8 +486,6 @@ func _render_candidates() -> void:
 	var replacement_cards_remaining: int = int(_snapshot.get("replacement_cards_remaining", 0))
 	# 不可换将候选；领袖技固定武将由权威服务放入该集合，界面不自行识别技能。
 	var locked_candidate_ids: Array = _snapshot.get("locked_candidate_ids", []) as Array
-	# 可换候选；权威服务已经确认仍存在不重复的新武将结果，界面只据此创建按钮。
-	var replaceable_candidate_ids: Array = _snapshot.get("replaceable_candidate_ids", []) as Array
 	for candidate_index: int in range(candidate_ids.size()):
 		# 当前候选武将 ID；点击与确认只使用该稳定 ID。
 		var character_id: String = str(candidate_ids[candidate_index])
@@ -511,7 +518,7 @@ func _render_candidates() -> void:
 		character_view.pressed.connect(_select_candidate.bind(character_id))
 		character_view.hover_changed.connect(_on_candidate_hover_changed.bind(character_id))
 		_candidate_views[character_id] = character_view
-		if not _showing_all_characters and replacement_cards_remaining > 0 and not locked_candidate_ids.has(character_id) and replaceable_candidate_ids.has(character_id):
+		if not _showing_all_characters and replacement_cards_remaining > 0 and not locked_candidate_ids.has(character_id):
 			# 单张候选换将按钮；默认隐藏，只有鼠标停留在对应牌面或按钮自身上方时显示。
 			var replacement_button: Button = Button.new()
 			replacement_button.custom_minimum_size = Vector2(REPLACEMENT_BUTTON_WIDTH, REPLACEMENT_BUTTON_HEIGHT)
@@ -520,6 +527,7 @@ func _render_candidates() -> void:
 			replacement_button.tooltip_text = "剩余换将卡：%d" % replacement_cards_remaining
 			replacement_button.visible = false
 			replacement_button.z_index = 20
+			replacement_button.mouse_filter = Control.MOUSE_FILTER_STOP
 			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 			replacement_button.pressed.connect(_request_candidate_replacement.bind(character_id))
 			replacement_button.mouse_entered.connect(_show_replacement_button.bind(character_id))
@@ -552,7 +560,7 @@ func _render_candidates() -> void:
 	# 原尺寸牌高；候选滚动只增加内容高度，不缩放牌面。
 	var scaled_card_height: float = card_height
 	# 每行换将按钮预留高度；全武将入口和已用尽次数时为0，牌面直接从行首开始。
-	var replacement_strip_height: float = REPLACEMENT_BUTTON_HEIGHT + REPLACEMENT_BUTTON_GAP if not _showing_all_characters else 0.0
+	var replacement_strip_height: float = REPLACEMENT_BUTTON_HEIGHT + REPLACEMENT_BUTTON_GAP if not _showing_all_characters and not _replacement_buttons.is_empty() else 0.0
 	# 单行槽位高度；按钮与牌面属于同一固定槽位，悬停显隐不会造成后续行位移。
 	var row_slot_height: float = replacement_strip_height + scaled_card_height
 	# 全部候选占用宽度；用于在候选区域中水平居中，并支持后续调整候选数量。
@@ -610,7 +618,7 @@ func _render_custom_assignment_controls() -> void:
 	_all_characters_button.visible = allow_all_characters and bool(_snapshot.get("can_select", false))
 	_all_characters_button.text = "随机候选" if _showing_all_characters else "所有武将"
 	# 是否允许选择座次与身份；AI 调整阶段明确关闭这两组控件。
-	var allow_custom_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false)) and not _showing_all_characters
+	var allow_custom_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false)) and str(_snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM and not _showing_all_characters
 	_seat_buttons.visible = allow_custom_assignment
 	_identity_buttons.visible = allow_custom_assignment
 	_seat_selection_label.visible = allow_custom_assignment
@@ -673,6 +681,7 @@ func _select_seat(seat_number: int) -> void:
 		_selected_identity = ""
 	_update_custom_button_states()
 	_update_confirm_state()
+	_request_custom_assignment_preview()
 
 
 ## 选择一个临时身份；领袖自动联动一号位，选择其他身份时清除仍残留的一号位。
@@ -684,6 +693,14 @@ func _select_identity(identity: String) -> void:
 		_selected_seat_number = -1
 	_update_custom_button_states()
 	_update_confirm_state()
+	_request_custom_assignment_preview()
+
+
+## 向牌桌请求当前有效座次身份组合的权威预览；未完成领袖联动的半成品不提前改写所有角色展示。
+func _request_custom_assignment_preview() -> void:
+	if str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_CUSTOM or _selected_seat_number < 1 or _selected_identity.is_empty():
+		return
+	custom_assignment_preview_requested.emit(_selected_seat_number, _selected_identity)
 
 
 ## 同步动态座次与身份按钮的选中主题；禁用状态保持服务快照提供的名额结果。
@@ -916,8 +933,8 @@ func _apply_all_characters_layout(enabled: bool) -> void:
 	if _selection_frame == null or _default_layout_rects.is_empty():
 		return
 	if not enabled:
-		# 普通主框锚点；场景使用中心锚定的1040×540布局，退出全武将时恢复原偏移。
-		var frame_offsets: Rect2 = _default_layout_rects.get("frame_offsets", Rect2(-520.0, -270.0, 1040.0, 540.0)) as Rect2
+		# 普通主框锚点；场景使用中心锚定的1040×600布局，退出全武将时恢复原偏移。
+		var frame_offsets: Rect2 = _default_layout_rects.get("frame_offsets", Rect2(-520.0, -300.0, 1040.0, 600.0)) as Rect2
 		_selection_frame.anchor_left = 0.5
 		_selection_frame.anchor_top = 0.5
 		_selection_frame.anchor_right = 0.5
@@ -930,7 +947,12 @@ func _apply_all_characters_layout(enabled: bool) -> void:
 		_restore_control_rect(_all_characters_button, _default_layout_rects.get("all_characters_button", Rect2()) as Rect2)
 		_restore_control_rect(_candidate_area, _default_layout_rects.get("candidate_area", Rect2()) as Rect2)
 		_restore_control_rect(_confirm_button, _default_layout_rects.get("confirm_button", Rect2()) as Rect2)
+		_render_leader_character()
 		return
+	# 全武将模式只展示当前全量列表；首任领袖牌与分隔线必须同时隐藏，不能残留在扩展面板背景。
+	_leader_character_area.visible = false
+	_leader_character_label.visible = false
+	_leader_divider.visible = false
 	_selection_frame.anchor_left = 0.0
 	_selection_frame.anchor_top = 0.0
 	_selection_frame.anchor_right = 1.0
