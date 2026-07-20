@@ -5637,6 +5637,8 @@ func _get_ai_character_selection_candidate(player_id: int) -> String:
 			return preview_leader.character_id
 	# 当前 AI 私有候选；候选仍由选将服务生成，控制器只过滤已经落定的稳定武将 ID。
 	var candidates: Array[String] = character_selection.get_candidates(player_id)
+	# 当前尚未被其他玩家确认的合法候选；保持服务生成顺序，普通AI继续使用首张随机候选。
+	var available_candidates: Array[String] = []
 	for candidate_id: String in candidates:
 		var already_selected: bool = false
 		for player: PlayerState in state.players:
@@ -5644,7 +5646,19 @@ func _get_ai_character_selection_candidate(player_id: int) -> String:
 				already_selected = true
 				break
 		if not already_selected:
-			return candidate_id
+			available_candidates.append(candidate_id)
+	# 首任AI领袖的领袖技候选固定排在列表前端，若总取首张会令每局都固定为同一武将。
+	# 仅在这些合法固定候选之间使用本局随机源随机选择，既保留领袖技优先级，也让按设置重开得到不同领袖。
+	if character_selection.phase == CharacterSelectionService.PHASE_LEADER and player_id == character_selection.leader_player_id:
+		var available_leader_skill_candidates: Array[String] = []
+		var locked_candidate_ids: Array[String] = character_selection.get_locked_candidate_ids(player_id)
+		for candidate_id: String in available_candidates:
+			if locked_candidate_ids.has(candidate_id):
+				available_leader_skill_candidates.append(candidate_id)
+		if not available_leader_skill_candidates.is_empty():
+			return available_leader_skill_candidates[_rng.randi_range(0, available_leader_skill_candidates.size() - 1)]
+	if not available_candidates.is_empty():
+		return available_candidates[0]
 	return ""
 
 
