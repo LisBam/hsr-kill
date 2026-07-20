@@ -452,23 +452,39 @@ func _resume_ai_after_gameplay_pause() -> void:
 	_ensure_ai_progress_after_resolution()
 
 
-## 返回标准身份局开局请求的前置校验错误；空字符串表示可以安全进入会替换旧局的初始化阶段。
-func get_match_start_validation_error(player_count: int = -1) -> String:
-	# 实际玩家人数；未指定时使用检查器默认值，并限制在支持范围内。
+## 返回开局请求的前置校验错误；空字符串表示可以安全进入会替换旧局的初始化阶段。
+## mode_id 空时读取 GameSettings.next_match_mode；人数与模式组合不支持时返回明确中文原因。
+func get_match_start_validation_error(player_count: int = -1, mode_id: String = "") -> String:
+	# 实际玩家人数；未指定时使用检查器默认值。
 	var actual_player_count: int = default_player_count if player_count < 0 else player_count
-	if actual_player_count < 2 or actual_player_count > 10:
+	# 规范化模式；空字符串回退全局下一局设置，再由身份规则兜底为 identity。
+	var actual_mode: String = _resolve_match_mode(mode_id)
+	if not identity_rules.supports_player_count(actual_mode, actual_player_count):
+		if actual_mode == IdentityRules.MODE_DOUDIZHU:
+			return "斗地主仅支持3人或6人。"
 		return "标准身份局仅支持2至10名玩家。"
 	if not GameDatabase.validation_errors.is_empty():
 		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
 	return ""
 
 
-## 创建并开始一局标准身份局；seed 为0时使用系统随机种子。
-func start_match(player_count: int = -1, seed: int = 0) -> bool:
-	# 实际玩家人数；未指定时使用检查器默认值，并限制在支持范围内。
+## 规范化对局模式；空值优先读取 GameSettings.next_match_mode，再回退到身份局。
+func _resolve_match_mode(mode_id: String = "") -> String:
+	# 调用方显式模式优先；否则使用全局下一局设置。
+	var raw_mode: String = mode_id
+	if raw_mode.is_empty() and GameSettings != null:
+		raw_mode = str(GameSettings.next_match_mode)
+	return identity_rules.normalize_mode(raw_mode)
+
+
+## 创建并开始一局；seed 为0时使用系统随机种子，mode_id 空时读取 GameSettings.next_match_mode。
+func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") -> bool:
+	# 实际玩家人数；未指定时使用检查器默认值。
 	var actual_player_count: int = default_player_count if player_count < 0 else player_count
-	# 开局前置校验错误；任何错误都在破坏旧对局状态和表现之前同步拒绝，调用方可以安全保留原局。
-	var validation_error: String = get_match_start_validation_error(actual_player_count)
+	# 本局模式；在破坏旧状态前完成校验，失败时调用方可保留原局。
+	var actual_mode: String = _resolve_match_mode(mode_id)
+	# 开局前置校验错误；任何错误都在破坏旧对局状态和表现之前同步拒绝。
+	var validation_error: String = get_match_start_validation_error(actual_player_count, actual_mode)
 	if not validation_error.is_empty():
 		action_rejected.emit(validation_error)
 		return false
@@ -502,6 +518,8 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	CardInstance._next_uid = 1
 	state = GameState.new()
 	state.match_id = "%d-%d" % [Time.get_unix_time_from_system(), _rng.randi()]
+	# 本局锁定的模式；菜单之后的模式切换只写入 GameSettings，不改进行中的规则。
+	state.match_mode = actual_mode
 	ai_coordinator.reset_identity_observations()
 	state.random_seed = _rng.seed
 	state.deck_id = default_deck_id
@@ -539,7 +557,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	event_scheduler.reset()
 	_gameplay_event_pause_token = -1
 	# 根事件只保存规则启动元数据；后续身份、阶段和卡牌事件通过 parent_id 关联到该入口。
-	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":"identity", "match_id":state.match_id, "deck_id":state.deck_id})
+	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":state.match_mode, "match_id":state.match_id, "deck_id":state.deck_id})
 	_runtime_root_event_id = root_event.event_id
 	event_scheduler.begin_root(_runtime_root_event_id, true)
 	if is_gameplay_paused():
@@ -585,7 +603,7 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
-	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":seed})
+	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":seed, "mode":state.match_mode})
 	state.current_phase = "character_selection"
 	# 可用武将 ID；服务只持有字符串副本，不接触全局配置的可修改引用。
 	var available_character_ids: Array[String] = []
@@ -599,7 +617,9 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
 		return false
-	add_log("选将开始：领袖先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
+	# 首任公开选将身份文案；身份局为领袖，斗地主为地主。
+	var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
+	add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
@@ -4194,6 +4214,56 @@ func get_hand_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
 	return _build_player_zone_candidates(viewer_id, target_id, true, false, false)
 
 
+## 返回目标判定区中的选牌候选；viewer_id 保留与其他区域候选 API 一致，判定区牌默认公开。
+func get_judgment_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	return _build_player_zone_candidates(viewer_id, target_id, false, false, true)
+
+
+## 仅弃置玩家手牌中被明确选择的实体；装备与判定区 UID 不会被本端口处理。
+func discard_selected_hand_cards(player_id: int, selected_uids: Array[int]) -> int:
+	# 实际弃置数量；调用方据此判断费用是否完整支付。
+	var discarded_count: int = 0
+	# 持有者；不存在时安全返回 0。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return 0
+	for selected_uid: int in selected_uids:
+		# 从手牌区取出实体；take_hand_card 保证不会误取装备。
+		var hand_card: CardInstance = player.take_hand_card(selected_uid)
+		if hand_card == null:
+			continue
+		_move_to_discard(hand_card)
+		discarded_count += 1
+	return discarded_count
+
+
+## 弃置目标判定区中被明确选择的一张牌；成功返回 true。
+func discard_selected_judgment_card(target_id: int, card_uid: int) -> bool:
+	# 判定区持有者；不存在时失败。
+	var target: PlayerState = state.get_player(target_id) if state != null else null
+	if target == null:
+		return false
+	for judgment_index: int in range(target.judgment_area.size()):
+		if target.judgment_area[judgment_index].uid == card_uid:
+			_move_to_discard(target.judgment_area.pop_at(judgment_index))
+			return true
+	return false
+
+
+## 判断两名玩家是否为队友；队友不包括自己，模式取自当前对局。
+func are_teammates(from_player_id: int, to_player_id: int) -> bool:
+	if state == null:
+		return false
+	return identity_rules.are_teammates(state.get_player(from_player_id), state.get_player(to_player_id), str(state.match_mode))
+
+
+## 判断目标是否为来源的友方；友方包括自己，其他友方等于队友。
+func is_friendly(from_player_id: int, to_player_id: int) -> bool:
+	if state == null:
+		return false
+	return identity_rules.is_friendly(state.get_player(from_player_id), state.get_player(to_player_id), str(state.match_mode))
+
+
 ## 返回指定玩家可用作视为牌材料的全部自有牌；包含手牌、木牛“粮”与装备区。
 func get_skill_material_candidates(player_id: int) -> Array[Dictionary]:
 	# 材料候选结果；按手牌、木牛“粮”、标准装备槽顺序返回，保证UI、AI与回放枚举一致。
@@ -4751,9 +4821,12 @@ func _uninstall_all_card_runtimes() -> void:
 
 ## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
 func _create_players(player_count: int) -> void:
-	# 身份配置副本；包含领袖在内全部洗牌，使领袖与本地玩家都不与任何固定座次绑定。
-	var identities: Array[String] = identity_rules.get_distribution(player_count)
-	_shuffle_array(identities)
+	# 本局模式；决定身份表是否洗牌以及开局公开身份规则。
+	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
+	# 身份配置副本；身份局整表洗牌，斗地主按座次固定（一号位地主，六人时三号位亦为地主）。
+	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
+	if match_mode != IdentityRules.MODE_DOUDIZHU:
+		_shuffle_array(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
 	if network_gateway != null and network_gateway.is_lan_host():
@@ -4766,15 +4839,15 @@ func _create_players(player_count: int) -> void:
 		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
 		var player: PlayerState = PlayerState.new(index, default_player_name)
-		# 当前座次身份；直接读取已完整洗牌的身份池，领袖可以出现在任意座次。
+		# 当前座次身份；身份局已洗牌，斗地主按固定座次表赋值。
 		player.identity = identities[index]
-		player.identity_revealed = player.identity == "leader"
+		player.identity_revealed = identity_rules.is_identity_public_at_start(player.identity, match_mode)
 		player.character_id = ""
 		player.character_revealed = false
 		state.players.append(player)
 		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
-	state.random_history.append({"kind":"identity_distribution", "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id]})
+	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id]})
 
 
 ## 把已确认武将应用到玩家状态；体力上限只在该入口初始化，避免界面与选将服务重复写数值。
@@ -4790,11 +4863,11 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	if player == null or player.character_id.is_empty():
 		return
-	# 已选武将配置；基础体力上限取 max_hp，仅不少于5人的身份局领袖额外增加1点上限与当前体力。
+	# 已选武将配置；基础体力上限取 max_hp，模式与身份可再叠加开局加值。
 	var character: Dictionary = GameDatabase.get_character(player.character_id)
-	# 领袖体力加值；规则集3.0规定参与玩家不少于5人时才增加1点。
-	var leader_hp_bonus: int = 1 if player.identity == "leader" and state.players.size() >= 5 else 0
-	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + leader_hp_bonus
+	# 模式开局体力上限加值；身份局领袖在不少于5人时+1，斗地主地主固定+1。
+	var opening_max_hp_bonus: int = identity_rules.get_opening_max_hp_bonus(player.identity, state.players.size(), str(state.match_mode))
+	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + opening_max_hp_bonus
 	player.hp = player.max_hp
 	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
 	player.shield = 0
@@ -4817,6 +4890,20 @@ func skill_ignores_play_count_limit(player_id: int, card_definition: Dictionary)
 		if skill != null and skill.ignores_play_count_limit(card_definition):
 			return true
 	return false
+
+
+## 汇总指定玩家全部已安装技能对某张牌 play_limit 的额外次数加成；返回非负整数，由卡牌规则服务叠加到配置上限。
+func skill_play_count_limit_bonus(player_id: int, card_definition: Dictionary) -> int:
+	# 加成总和；多个技能可同时对同一牌族生效并累加。
+	var total_bonus: int = 0
+	# 当前玩家技能实例表；模式技能与武将技能共用同一容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；无效对象跳过。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null:
+			total_bonus += maxi(skill.get_play_count_limit_bonus(card_definition), 0)
+	return total_bonus
 
 
 ## 汇总指定玩家全部已安装技能的目标附加限制；首个非空错误会阻止目标进入使用指令。
@@ -5103,9 +5190,14 @@ func _install_all_character_skills() -> void:
 		var character: Dictionary = GameDatabase.get_character(player.character_id)
 		# 当前玩家技能实例表；不同玩家即使持有同一技能也不会共享次数、标记或临时状态。
 		var player_skills: Dictionary = {}
+		# 待安装技能 ID；武将固有技能后追加模式/身份技能，避免覆盖同名键。
+		var skill_ids_to_install: Array[String] = []
 		for skill_id_variant: Variant in character.get("skills", []):
-			# 当前技能稳定 ID；用于从数据库脚本索引创建独立运行时实例。
-			var skill_id: String = str(skill_id_variant)
+			skill_ids_to_install.append(str(skill_id_variant))
+		for mode_skill_id: String in identity_rules.get_mode_skill_ids(player.identity, str(state.match_mode)):
+			if not skill_ids_to_install.has(mode_skill_id):
+				skill_ids_to_install.append(mode_skill_id)
+		for skill_id: String in skill_ids_to_install:
 			# 当前技能运行时实例；配置校验已保证正常开局时不会为空。
 			var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
 			if skill == null:
@@ -5173,13 +5265,14 @@ func _apply_custom_assignment_preview() -> void:
 		assignments_by_player[player.player_id] = {"seat_number":fixed_seat_number, "identity":fixed_identity}
 		available_seats.erase(fixed_seat_number)
 		available_identities.erase(fixed_identity)
-	# 未固定领袖；保留首次领袖优先级，若其已经被其他预览占用则按当前玩家数组选择首名可用角色。
-	if available_seats.has(1) and available_identities.has("leader"):
+	# 未固定首任一号位身份；保留首次公开角色优先级，若其已经被其他预览占用则按当前玩家数组选择首名可用角色。
+	var first_seat_identity: String = character_selection.get_first_seat_identity()
+	if available_seats.has(1) and available_identities.has(first_seat_identity):
 		var fallback_leader_player_id: int = -1
 		for player: PlayerState in state.players:
 			if assignments_by_player.has(player.player_id):
 				continue
-			if character_selection.get_initial_identity(player.player_id) == "leader":
+			if character_selection.get_initial_identity(player.player_id) == first_seat_identity:
 				fallback_leader_player_id = player.player_id
 				break
 		if fallback_leader_player_id < 0:
@@ -5188,9 +5281,9 @@ func _apply_custom_assignment_preview() -> void:
 					fallback_leader_player_id = player.player_id
 					break
 		if fallback_leader_player_id >= 0:
-			assignments_by_player[fallback_leader_player_id] = {"seat_number":1, "identity":"leader"}
+			assignments_by_player[fallback_leader_player_id] = {"seat_number":1, "identity":first_seat_identity}
 			available_seats.erase(1)
-			available_identities.erase("leader")
+			available_identities.erase(first_seat_identity)
 	# 其余未确认玩家；尽量保留首次随机座次与身份，冲突时使用剩余池中的首个稳定值。
 	for player: PlayerState in state.players:
 		if assignments_by_player.has(player.player_id) or available_seats.is_empty() or available_identities.is_empty():
@@ -5209,7 +5302,7 @@ func _apply_custom_assignment_preview() -> void:
 		# 当前玩家预览数据；缺失时保留首次随机分配，防御异常快照导致数组出现空位。
 		var assignment: Dictionary = assignments_by_player.get(player.player_id, {"seat_number":character_selection.get_initial_seat_number(player.player_id), "identity":character_selection.get_initial_identity(player.player_id)}) as Dictionary
 		player.identity = str(assignment.get("identity", character_selection.get_initial_identity(player.player_id)))
-		player.identity_revealed = player.identity == "leader"
+		player.identity_revealed = identity_rules.is_identity_public_at_start(player.identity, str(state.match_mode))
 		var applied_seat_number: int = int(assignment.get("seat_number", -1))
 		if applied_seat_number >= 1 and applied_seat_number <= reordered_players.size():
 			reordered_players[applied_seat_number - 1] = player
@@ -5222,7 +5315,7 @@ func _apply_custom_assignment_preview() -> void:
 	var preview_leader_before_clear: PlayerState = state.players[0] if not state.players.is_empty() else null
 	for player: PlayerState in state.players:
 		# 保留条件；只有同一名首任领袖仍是当前预览领袖且尚未提交最终新武将时，才沿用其已经公开的牌面。
-		var preserves_initial_leader_character: bool = player == preview_leader_before_clear and player.player_id == character_selection.leader_player_id and player.identity == "leader" and not player.character_id.is_empty()
+		var preserves_initial_leader_character: bool = player == preview_leader_before_clear and player.player_id == character_selection.leader_player_id and player.identity == character_selection.get_first_seat_identity() and not player.character_id.is_empty()
 		if character_selection.get_selection(player.player_id).is_empty() and not preserves_initial_leader_character:
 			_clear_pre_game_character_preview(player)
 	# 当前预览领袖；只在领袖由AI控制且尚未最终确认时公开其重新选择的一张候选，保持首任领袖流程的唯一公开牌语义。
@@ -5363,7 +5456,7 @@ func _complete_pre_game_start() -> void:
 	state.current_phase = "round_start"
 	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
 	# 首回合玩家状态；领袖固定为一号位且不受本地玩家稳定 ID 影响。
-	var first_turn_player: PlayerState = _find_player_by_identity("leader")
+	var first_turn_player: PlayerState = _find_player_by_identity(identity_rules.get_first_player_identity(str(state.match_mode)))
 	if first_turn_player == null:
 		push_error("标准身份局缺少领袖，无法开始首回合。")
 		return
@@ -5514,14 +5607,16 @@ func _refresh_starting_hand(player_id: int, is_ai: bool) -> bool:
 
 ## 以领袖为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
 func _reorder_players_from_leader() -> void:
-	# 领袖在当前随机身份数组中的索引；身份分配完成前不调用此函数。
+	# 首任公开身份；身份局为领袖，斗地主为地主（固定一号位时索引通常已为0）。
+	var first_identity: String = identity_rules.get_first_player_identity(str(state.match_mode))
+	# 首任身份在当前数组中的索引；身份分配完成前不调用此函数。
 	var leader_index: int = -1
 	for index: int in range(state.players.size()):
-		if state.players[index].identity == "leader":
+		if state.players[index].identity == first_identity:
 			leader_index = index
 			break
 	if leader_index > 0:
-		# 旋转后的座次数组；领袖为一号位，其原下家按顺时针依次成为后续座次。
+		# 旋转后的座次数组；首任身份角色为一号位，其原下家按顺时针依次成为后续座次。
 		var reordered_players: Array[PlayerState] = []
 		for offset: int in range(state.players.size()):
 			reordered_players.append(state.players[(leader_index + offset) % state.players.size()])
@@ -5599,12 +5694,13 @@ func _drive_ai_character_selection() -> void:
 				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
 				var selected_seat_number: int = -1
 				var selected_identity: String = ""
-				if available_seats.has(1) and available_identities.has("leader"):
+				var first_seat_identity: String = character_selection.get_first_seat_identity()
+				if available_seats.has(1) and available_identities.has(first_seat_identity):
 					selected_seat_number = 1
-					selected_identity = "leader"
+					selected_identity = first_seat_identity
 				else:
 					available_seats.erase(1)
-					available_identities.erase("leader")
+					available_identities.erase(first_seat_identity)
 					if not available_seats.is_empty() and not available_identities.is_empty():
 						selected_seat_number = available_seats[0]
 						selected_identity = available_identities[0]
@@ -5626,7 +5722,7 @@ func _get_ai_character_selection_candidate(player_id: int) -> String:
 		return retained_initial_leader_character_id
 	# 当前公开预览领袖；最终自选中该AI已经有向玩家展示的武将时，确认必须复用该结果而不是改取另一张随机候选。
 	var preview_leader: PlayerState = state.players[0] if state != null and not state.players.is_empty() else null
-	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and preview_leader != null and preview_leader.player_id == player_id and preview_leader.identity == "leader" and not preview_leader.character_id.is_empty():
+	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and preview_leader != null and preview_leader.player_id == player_id and preview_leader.identity == character_selection.get_first_seat_identity() and not preview_leader.character_id.is_empty():
 		# 公开领袖武将是否已经被其他玩家确认；若发生冲突则继续走普通候选筛选，避免AI提交无效重复武将。
 		var preview_character_already_selected: bool = false
 		for player: PlayerState in state.players:
@@ -7790,7 +7886,7 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	# 击杀者状态；无来源伤害或击杀者已不存在时不执行奖惩。
 	var killer: PlayerState = state.get_player(killer_id)
 	# 身份规则返回的奖惩类型；控制器负责实际摸牌与弃牌移动。
-	var reward: String = identity_rules.get_death_reward(killer, victim)
+	var reward: String = identity_rules.get_death_reward(killer, victim, str(state.match_mode))
 	if reward == "draw_three" and killer != null and killer.alive:
 		draw(killer.player_id, 3)
 	elif reward == "leader_penalty" and killer != null and killer.alive:
@@ -8805,7 +8901,7 @@ func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 		var preview_leader_has_confirmed_character: bool = preview_leader != null and not character_selection.get_selection(preview_leader.player_id).is_empty()
 		# 是否已经进入自选投射状态；首任领袖提交后即使没有保留中的预览字典，也必须以当前一号位覆盖旧领袖快照。
 		var uses_projected_custom_leader: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM or has_active_custom_assignment_preview or preview_leader_has_confirmed_character
-		if uses_projected_custom_leader and preview_leader != null and preview_leader.identity == "leader":
+		if uses_projected_custom_leader and preview_leader != null and preview_leader.identity == character_selection.get_first_seat_identity():
 			selection_snapshot["leader_player_id"] = preview_leader.player_id
 			selection_snapshot["leader_character_id"] = preview_leader.character_id
 		return selection_snapshot
@@ -8940,6 +9036,16 @@ func _should_auto_negate(responder: PlayerState, source_id: int, target_id: int,
 
 ## 返回两个身份的简化阵营关系，供基础自动响应使用。
 func _identity_attitude(from_identity: String, to_identity: String) -> int:
+	# 本局模式；斗地主按地主/农民阵营简化态度。
+	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode) if state != null else IdentityRules.MODE_IDENTITY)
+	if match_mode == IdentityRules.MODE_DOUDIZHU:
+		if from_identity == to_identity and not from_identity.is_empty():
+			return 1
+		if from_identity == "landlord" and to_identity == "landlord":
+			return 1
+		if from_identity == "peasant" and to_identity == "peasant":
+			return 1
+		return -1
 	if from_identity == "renegade":
 		return -1
 	if from_identity == to_identity:
@@ -8969,9 +9075,22 @@ func _nature_text(nature: String) -> String:
 
 ## 将身份 ID 转换为界面与日志文本。
 func _identity_text(identity: String) -> String:
-	return {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸"}.get(identity, identity)
+	return {
+		"leader":"领袖",
+		"loyalist":"忠臣",
+		"rebel":"反贼",
+		"renegade":"内奸",
+		"landlord":"地主",
+		"peasant":"农民",
+	}.get(identity, identity)
 
 
 ## 将获胜方 ID 转换为界面与日志文本。
 func _winner_text(winner: String) -> String:
-	return {"leader_and_loyalists":"领袖与忠臣", "rebels":"反贼", "renegade":"内奸"}.get(winner, winner)
+	return {
+		"leader_and_loyalists":"领袖与忠臣",
+		"rebels":"反贼",
+		"renegade":"内奸",
+		"landlords":"地主",
+		"peasants":"农民",
+	}.get(winner, winner)

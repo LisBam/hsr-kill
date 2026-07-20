@@ -233,6 +233,12 @@ func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
 	return false
 
 
+## 返回当前技能对指定牌 play_limit 的额外次数加成；默认0，正值在配置基础上增加可使用次数，不修改历史统计。
+## 例如【跋扈】对 slash 牌族返回1，使出牌阶段使用【杀】的次数上限+1。
+func get_play_count_limit_bonus(_card_definition: Dictionary) -> int:
+	return 0
+
+
 ## 校验持有者使用牌时的技能附加目标限制；空字符串表示合法，非空文本会作为统一拒绝原因。
 func validate_card_target_selection(_card_definition: Dictionary, _target_id: int, _all_target_ids: Array[int]) -> String:
 	return ""

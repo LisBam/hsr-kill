@@ -1,0 +1,272 @@
+extends Node
+
+## 斗地主模式与队友机制冒烟。验证身份表、开局体力、模式技能安装、队友关系与胜负判定。
+
+## 权威控制器；与正式场景组件结构保持一致。
+var _controller: MatchController
+
+## 身份规则服务；用于在控制器外直接断言纯规则逻辑。
+var _identity_rules: IdentityRules = IdentityRules.new()
+
+## 测试开始前的 AI 调整开关；结束时还原，避免污染其他设置。
+var _original_customize_ai: bool = false
+
+## 测试开始前的自选座次开关；结束时还原。
+var _original_custom_assignment: bool = false
+
+## 测试开始前的对局模式；结束时还原。
+var _original_match_mode: String = "identity"
+
+
+## 延迟执行，确保自动加载与全局类完成初始化。
+func _ready() -> void:
+	call_deferred("_run")
+
+
+## 依次执行规则层与对局层断言。
+func _run() -> void:
+	if GameSettings != null:
+		_original_customize_ai = GameSettings.customize_ai_characters_enabled
+		_original_custom_assignment = GameSettings.custom_character_assignment_enabled
+		_original_match_mode = str(GameSettings.next_match_mode)
+		GameSettings.set_customize_ai_characters_enabled(false)
+		if GameSettings.has_method("set_custom_character_assignment_enabled"):
+			GameSettings.set_custom_character_assignment_enabled(false)
+	if not _test_identity_rules_pure():
+		_restore_settings()
+		return
+	if not await _test_three_player_match_bootstrap():
+		_restore_settings()
+		return
+	if not _test_six_player_distribution_and_winner():
+		_restore_settings()
+		return
+	_restore_settings()
+	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner")
+	get_tree().quit(0)
+
+
+## 还原全局设置，避免冒烟测试污染后续对局入口。
+func _restore_settings() -> void:
+	if GameSettings == null:
+		return
+	GameSettings.set_customize_ai_characters_enabled(_original_customize_ai)
+	if GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(_original_custom_assignment)
+	GameSettings.set_next_match_mode(_original_match_mode)
+
+
+## 纯规则层：分配表、队友、友方、开局加值、模式技能与斗地主胜负。
+func _test_identity_rules_pure() -> bool:
+	var three: Array[String] = _identity_rules.get_distribution(3, IdentityRules.MODE_DOUDIZHU)
+	if three != ["landlord", "peasant", "peasant"]:
+		return _fail("doudizhu_3_distribution=%s" % str(three))
+	var six: Array[String] = _identity_rules.get_distribution(6, IdentityRules.MODE_DOUDIZHU)
+	if six != ["landlord", "peasant", "landlord", "peasant", "peasant", "peasant"]:
+		return _fail("doudizhu_6_distribution=%s" % str(six))
+	if _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 4):
+		return _fail("doudizhu_should_reject_4")
+	if not _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 3):
+		return _fail("doudizhu_should_allow_3")
+	if _identity_rules.get_first_player_identity(IdentityRules.MODE_DOUDIZHU) != "landlord":
+		return _fail("first_player_identity")
+	if _identity_rules.get_opening_max_hp_bonus("landlord", 3, IdentityRules.MODE_DOUDIZHU) != 1:
+		return _fail("landlord_hp_bonus")
+	if _identity_rules.get_opening_max_hp_bonus("peasant", 3, IdentityRules.MODE_DOUDIZHU) != 0:
+		return _fail("peasant_hp_bonus")
+	var landlord_skills: Array[String] = _identity_rules.get_mode_skill_ids("landlord", IdentityRules.MODE_DOUDIZHU)
+	if landlord_skills != ["feiyang", "bahu"]:
+		return _fail("landlord_skills=%s" % str(landlord_skills))
+	var peasant_skills: Array[String] = _identity_rules.get_mode_skill_ids("peasant", IdentityRules.MODE_DOUDIZHU)
+	if peasant_skills != ["gongku"]:
+		return _fail("peasant_skills=%s" % str(peasant_skills))
+	if not _identity_rules.are_identities_teammates("leader", "loyalist", IdentityRules.MODE_IDENTITY):
+		return _fail("leader_loyalist_teammates")
+	if not _identity_rules.are_identities_teammates("rebel", "rebel", IdentityRules.MODE_IDENTITY):
+		return _fail("rebel_rebel_teammates")
+	if _identity_rules.are_identities_teammates("renegade", "renegade", IdentityRules.MODE_IDENTITY):
+		return _fail("renegade_should_have_no_teammates")
+	if _identity_rules.are_identities_teammates("leader", "rebel", IdentityRules.MODE_IDENTITY):
+		return _fail("leader_rebel_not_teammates")
+	if not _identity_rules.are_identities_teammates("landlord", "landlord", IdentityRules.MODE_DOUDIZHU):
+		return _fail("landlord_landlord_teammates")
+	if not _identity_rules.are_identities_teammates("peasant", "peasant", IdentityRules.MODE_DOUDIZHU):
+		return _fail("peasant_peasant_teammates")
+	if _identity_rules.are_identities_teammates("landlord", "peasant", IdentityRules.MODE_DOUDIZHU):
+		return _fail("landlord_peasant_not_teammates")
+	var p0 := PlayerState.new()
+	p0.player_id = 0
+	p0.identity = "peasant"
+	var p1 := PlayerState.new()
+	p1.player_id = 1
+	p1.identity = "peasant"
+	if not _identity_rules.is_friendly(p0, p0, IdentityRules.MODE_DOUDIZHU):
+		return _fail("friendly_self")
+	if not _identity_rules.are_teammates(p0, p1, IdentityRules.MODE_DOUDIZHU):
+		return _fail("are_teammates_peasants")
+	if _identity_rules.are_teammates(p0, p0, IdentityRules.MODE_DOUDIZHU):
+		return _fail("teammates_exclude_self")
+	var win_state := GameState.new()
+	win_state.match_mode = IdentityRules.MODE_DOUDIZHU
+	for i in range(3):
+		var player := PlayerState.new()
+		player.player_id = i
+		player.identity = ["landlord", "peasant", "peasant"][i]
+		player.alive = true
+		win_state.players.append(player)
+	if _identity_rules.evaluate_winner(win_state) != "":
+		return _fail("game_should_continue")
+	win_state.players[0].alive = false
+	if _identity_rules.evaluate_winner(win_state) != "peasants":
+		return _fail("one_landlord_dead_peasants_win")
+	win_state.players[0].alive = true
+	win_state.players[1].alive = false
+	win_state.players[2].alive = false
+	if _identity_rules.evaluate_winner(win_state) != "landlords":
+		return _fail("all_peasants_dead_landlords_win")
+	return true
+
+
+## 三人对局开局：固定座次身份、地主公开、体力上限+1、模式技能安装。
+func _test_three_player_match_bootstrap() -> bool:
+	_create_controller()
+	_controller.local_human_player_id = 0
+	_controller.randomize_local_human_seat = false
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
+	if not _controller.start_match(3, 20260720, IdentityRules.MODE_DOUDIZHU):
+		return _fail("start_match_doudizhu_3")
+	if str(_controller.state.match_mode) != IdentityRules.MODE_DOUDIZHU:
+		return _fail("state.match_mode=%s" % str(_controller.state.match_mode))
+	var expected: Array[String] = ["landlord", "peasant", "peasant"]
+	for i in range(3):
+		var player: PlayerState = _controller.state.get_player(i)
+		if player == null or player.identity != expected[i]:
+			return _fail("seat_%d_identity=%s" % [i, str(player.identity if player != null else null)])
+		if player.identity == "landlord" and not player.identity_revealed:
+			return _fail("landlord_should_be_public")
+		if player.identity == "peasant" and player.identity_revealed:
+			return _fail("peasant_should_be_hidden_at_start")
+	# 选将：先让地主（0）选完，再驱动其余 AI 完成选将，直到技能安装完成。
+	for player_id in range(3):
+		if not str(_controller.state.get_player(player_id).character_id).is_empty():
+			continue
+		if _controller.state.current_phase != "character_selection":
+			break
+		var candidates: Array[String] = _controller.character_selection.get_candidates(player_id)
+		var picked: String = ""
+		for candidate_id: String in candidates:
+			if candidate_id not in ["march_7th", "bronya"]:
+				picked = candidate_id
+				break
+		if picked.is_empty() and not candidates.is_empty():
+			picked = candidates[0]
+		if picked.is_empty():
+			return _fail("no_candidates_%d" % player_id)
+		if not _controller.select_character(player_id, picked):
+			# AI 可能已在驱动中完成；若仍缺武将则失败。
+			if str(_controller.state.get_player(player_id).character_id).is_empty() and _controller.state.current_phase == "character_selection":
+				return _fail("select_character_%d phase=%s" % [player_id, _controller.state.current_phase])
+		await get_tree().process_frame
+	for _frame in range(90):
+		await get_tree().process_frame
+		if _controller.state == null:
+			continue
+		if _controller.state.current_phase == "character_selection":
+			# 继续催促 AI 选将。
+			if _controller.has_method("_drive_ai_character_selection"):
+				_controller.call("_drive_ai_character_selection")
+			continue
+		var all_ready: bool = true
+		for player: PlayerState in _controller.state.players:
+			if str(player.character_id).is_empty():
+				all_ready = false
+				break
+		var skills_ready: bool = not _controller.skill_instances_by_player.is_empty()
+		if all_ready and skills_ready:
+			break
+	var landlord: PlayerState = _controller.state.get_player(0)
+	if landlord == null or str(landlord.character_id).is_empty():
+		return _fail("missing_landlord_character phase=%s" % str(_controller.state.current_phase if _controller.state else "null"))
+	var installed: Array[String] = _collect_installed_skill_ids(0)
+	if not installed.has("feiyang") or not installed.has("bahu"):
+		return _fail("landlord_mode_skills=%s phase=%s" % [str(installed), _controller.state.current_phase])
+	var peasant_installed: Array[String] = _collect_installed_skill_ids(1)
+	if not peasant_installed.has("gongku"):
+		return _fail("peasant_mode_skills=%s" % str(peasant_installed))
+	var char_def: Dictionary = GameDatabase.get_character(landlord.character_id)
+	var base_max_hp: int = maxi(int(char_def.get("max_hp", 4)), 1)
+	var expected_max: int = base_max_hp + 1
+	if landlord.max_hp != expected_max:
+		return _fail("landlord_max_hp=%d expected=%d base=%d char=%s" % [landlord.max_hp, expected_max, base_max_hp, landlord.character_id])
+	if not _controller.are_teammates(1, 2):
+		return _fail("controller_are_teammates_peasants")
+	if _controller.are_teammates(0, 1):
+		return _fail("controller_landlord_not_teammate_peasant")
+	if not _controller.is_friendly(0, 0):
+		return _fail("controller_is_friendly_self")
+	if _controller.are_teammates(0, 0):
+		return _fail("controller_teammates_exclude_self")
+	var slash_def: Dictionary = {"play_limit_group": "slash", "id": "sha"}
+	var bonus: int = _controller.skill_play_count_limit_bonus(0, slash_def)
+	if bonus < 1:
+		return _fail("bahu_play_limit_bonus=%d" % bonus)
+	return true
+
+
+## 六人身份表与胜负：击杀一名地主即农民胜。
+func _test_six_player_distribution_and_winner() -> bool:
+	var state := GameState.new()
+	state.match_mode = IdentityRules.MODE_DOUDIZHU
+	var table: Array[String] = _identity_rules.get_distribution(6, IdentityRules.MODE_DOUDIZHU)
+	for i in range(6):
+		var player := PlayerState.new()
+		player.player_id = i
+		player.identity = table[i]
+		player.alive = true
+		state.players.append(player)
+	if table[0] != "landlord" or table[2] != "landlord":
+		return _fail("six_seat_landlords")
+	if _identity_rules.evaluate_winner(state) != "":
+		return _fail("six_should_continue")
+	state.players[2].alive = false
+	if _identity_rules.evaluate_winner(state) != "peasants":
+		return _fail("kill_one_landlord_peasants_win")
+	return true
+
+
+## 创建标准控制器组件树。
+func _create_controller() -> void:
+	if _controller != null and is_instance_valid(_controller):
+		_controller.queue_free()
+	_controller = MatchController.new()
+	_controller.name = "MatchController"
+	var event_bus: RuleEventBus = RuleEventBus.new()
+	event_bus.name = "RuleEventBus"
+	_controller.add_child(event_bus)
+	var ai_coordinator: AICoordinator = AICoordinator.new()
+	ai_coordinator.name = "AICoordinator"
+	_controller.add_child(ai_coordinator)
+	var network_gateway: NetworkGateway = NetworkGateway.new()
+	network_gateway.name = "NetworkGateway"
+	_controller.add_child(network_gateway)
+	add_child(_controller)
+
+
+## 从 skill_instances_by_player 收集指定玩家已安装技能 ID。
+func _collect_installed_skill_ids(player_id: int) -> Array[String]:
+	var result: Array[String] = []
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_id_variant: Variant in player_skills.keys():
+		result.append(str(skill_id_variant))
+	return result
+
+
+## 失败出口；打印标记并退出非零码。
+func _fail(reason: String) -> bool:
+	printerr("DOUDIZHU_MODE_FAIL %s" % reason)
+	_restore_settings()
+	get_tree().quit(1)
+	return false

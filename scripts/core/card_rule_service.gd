@@ -103,6 +103,8 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
 	# 配置化使用次数；同一 play_limit_group 的不同实体定义共享计数，例如普通、火与雷【杀】。
 	var play_limit: int = int(definition.get("play_limit", 0))
+	if play_limit > 0:
+		play_limit += _skill_play_count_limit_bonus(actor.player_id, definition)
 	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)) and not _skill_ignores_play_count_limit(actor.player_id, definition):
 		return str(definition.get("play_limit_message", "本阶段使用次数已用尽。"))
 
@@ -146,6 +148,8 @@ func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Arra
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
 	# 虚拟牌与实体牌读取同一配置化分组计数，避免视为牌绕过次数限制。
 	var play_limit: int = int(definition.get("play_limit", 0))
+	if play_limit > 0:
+		play_limit += _skill_play_count_limit_bonus(actor.player_id, definition)
 	var ignore_play_count_limit: bool = bool(rule_overrides.get("ignore_play_count_limit", false)) or _skill_ignores_play_count_limit(actor.player_id, definition)
 	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)) and not ignore_play_count_limit:
 		return str(definition.get("play_limit_message", "本阶段使用次数已用尽。"))
@@ -362,3 +366,10 @@ func _skill_ignores_play_count_limit(actor_id: int, definition: Dictionary) -> b
 	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_ignores_play_count_limit"):
 		return false
 	return bool(skill_rule_provider.call("skill_ignores_play_count_limit", actor_id, definition))
+
+
+## 汇总已安装技能对指定牌 play_limit 的额外次数加成；各技能返回值相加，负数按0处理。
+func _skill_play_count_limit_bonus(actor_id: int, definition: Dictionary) -> int:
+	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_play_count_limit_bonus"):
+		return 0
+	return maxi(int(skill_rule_provider.call("skill_play_count_limit_bonus", actor_id, definition)), 0)

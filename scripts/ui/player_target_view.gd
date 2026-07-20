@@ -631,7 +631,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 公开身份 ID；其他玩家身份尚未公开时为 hidden。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 身份徽记单字；用于在窄牌面右上角保持可读。
-	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"?"}.get(identity, "?")
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "landlord":"地", "peasant":"农", "hidden":"?"}.get(identity, "?")
 	# 当前体力；允许为0或负数，牌面心形显示时会安全裁剪。
 	var hp: int = int(_player_snapshot.get("hp", 0))
 	# 当前体力上限；1至5使用圆点，超过5直接使用数字，因此无需裁剪规则快照中的真实数值。
@@ -900,7 +900,7 @@ func _refresh_identity_badge() -> void:
 	# 当前实际显示身份；公开身份优先，未知身份才允许使用本地或自动推测标记。
 	var displayed_identity: String = identity if identity != "hidden" else _identity_mark
 	# 当前徽记文本；没有公开身份与本地标记时保持ASCII问号。
-	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(displayed_identity, "?")
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "landlord":"地", "peasant":"农"}.get(displayed_identity, "?")
 	_identity_badge_label.text = identity_text
 	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
 	# 当前设计改用固定身份语义色统一公开、手动与自动标记，未知状态仍使用次级文字色。

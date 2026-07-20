@@ -25,6 +25,9 @@ signal online_avatar_character_changed(character_id: String)
 ## 下一局人数变化信号；主菜单与局内菜单收到后同步各自输入框，不修改正在进行的对局人数。
 signal next_match_player_count_changed(player_count: int)
 
+## 下一局模式变化信号；主菜单选中身份模式或斗地主后发出，不修改正在进行的对局模式。
+signal next_match_mode_changed(mode_id: String)
+
 ## 自选全部武将、座次与身份开关变化信号；该设置只在之后由离线玩家或房主创建的新对局中生效。
 signal custom_character_assignment_changed(enabled: bool)
 
@@ -161,6 +164,15 @@ const MAX_NEXT_MATCH_PLAYER_COUNT: int = 10
 ## 下一局人数的默认值；与 MatchController 默认8人身份局保持一致，首次启动或无效存档时使用。
 const DEFAULT_NEXT_MATCH_PLAYER_COUNT: int = 8
 
+## 下一局标准身份局模式稳定 ID；与 IdentityRules.MODE_IDENTITY 一致。
+const MATCH_MODE_IDENTITY: String = "identity"
+
+## 下一局斗地主模式稳定 ID；与 IdentityRules.MODE_DOUDIZHU 一致。
+const MATCH_MODE_DOUDIZHU: String = "doudizhu"
+
+## 下一局默认模式；首次启动或无效存档时进入标准身份局。
+const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
+
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
 
@@ -182,8 +194,11 @@ var online_player_name: String = DEFAULT_ONLINE_PLAYER_NAME
 ## 当前联机形象对应的稳定武将 ID；空值表示尚未选择，资料面板或网络网关会回退到首个可用武将。
 var online_avatar_character_id: String = ""
 
-## 当前下一局人数；默认8人，仅影响之后创建或重开的身份局，不修改正在运行的规则状态。
+## 当前下一局人数；默认8人，仅影响之后创建或重开的对局，不修改正在运行的规则状态。
 var next_match_player_count: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
+
+## 当前下一局模式稳定 ID；默认 identity，仅影响之后创建或重开的对局。
+var next_match_mode: String = DEFAULT_NEXT_MATCH_MODE
 
 ## 是否允许玩家在选将时打开全部武将并自选座次与身份；默认关闭，仅在下一局初始化时读取。
 var custom_character_assignment_enabled: bool = false
@@ -339,6 +354,24 @@ func set_next_match_player_count(player_count: int) -> void:
 	next_match_player_count_changed.emit(next_match_player_count)
 
 
+## 规范化下一局模式 ID；未知值回退到标准身份局。
+func normalize_match_mode(mode_id: String) -> String:
+	if mode_id == MATCH_MODE_DOUDIZHU:
+		return MATCH_MODE_DOUDIZHU
+	return MATCH_MODE_IDENTITY
+
+
+## 设置下一局模式并同步主菜单；未知模式回退身份局，不修改进行中的对局。
+func set_next_match_mode(mode_id: String) -> void:
+	# 规范化后的模式；只写入下一局配置。
+	var normalized_mode: String = normalize_match_mode(mode_id)
+	if next_match_mode == normalized_mode:
+		return
+	next_match_mode = normalized_mode
+	_queue_settings_save()
+	next_match_mode_changed.emit(next_match_mode)
+
+
 ## 设置下一局是否开放全部武将、座次与身份自选；当前已经创建的玩家与身份不会被修改。
 func set_custom_character_assignment_enabled(enabled: bool) -> void:
 	if custom_character_assignment_enabled == enabled:
@@ -433,6 +466,7 @@ func _load_saved_settings() -> void:
 	ui_style_id = UIStyleRegistry.normalize_style_id(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)))
 	auto_identity_marking_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled))
 	next_match_player_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)), MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+	next_match_mode = normalize_match_mode(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)))
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
 	customize_ai_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled))
 	# 已保存手气卡张数；旧版一至五张保持兼容，十张与无限张分别保留稳定值。
@@ -505,6 +539,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit)
