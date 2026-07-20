@@ -432,7 +432,8 @@ func _render_header() -> void:
 		var displayed_identity: String = _selected_identity if not _selected_identity.is_empty() else str(_snapshot.get("local_identity", "hidden"))
 		var keeps_initial_leader_character: bool = can_select and bool(_snapshot.get("retains_selected_character", false))
 		# 当前自选提示；首任领袖第一次打开面板时直接一次性选择武将、座次和身份，不再等待第二个确认面板。
-		var custom_action_text: String = "请选择座次与身份" if keeps_initial_leader_character else ("请选择武将、座次与身份" if phase == CharacterSelectionService.PHASE_LEADER else ("请重新选择武将、座次与身份" if can_select else "请等待其他玩家完成自选"))
+		# 斗地主与身份局首次自选统一为“请选择…”；“重新”易被误认为二次选将（尤其斗地主地主同时选将路径）。
+		var custom_action_text: String = "请选择座次与身份" if keeps_initial_leader_character else ("请选择武将、座次与身份" if can_select else "请等待其他玩家完成自选")
 		_set_identity_title(displayed_identity, custom_action_text)
 		_status_label.text = ""
 		return

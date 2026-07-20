@@ -701,6 +701,8 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	var was_initial_leader_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_LEADER
 	# 本次提交前是否处于最终自选阶段；该阶段每名玩家确认时立即写入当前预览座次身份，完成时不得再次重置武将。
 	var was_custom_character_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+	# 斗地主同时选将阶段；提交前相位为 PHASE_OTHERS，完成后统一亮将，确认过程中仅投射自选座次身份。
+	var was_doudizhu_simultaneous_selection: bool = character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS
 	# 本次提交是否只确认首任领袖的座次身份；该武将已在领袖阶段应用并公开，不能再次改写稳定武将ID。
 	# 该分支只处理AI首任领袖延后占用剩余名额；真人首任领袖不会产生第二次提交。
 	var confirms_retained_initial_leader_character: bool = character_selection.is_retaining_initial_leader_character(player_id)
@@ -730,6 +732,9 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 		else:
 			# 首任领袖最终身份可能改为非领袖；只按最终身份刷新基础体力，不重新写入或随机选择武将。
 			_refresh_pre_game_character_stats(state.get_player(player_id))
+	elif was_doudizhu_simultaneous_selection and character_selection.custom_assignment_enabled:
+		# 斗地主自选：阶段完成前不逐人亮将（统一由 _finish_character_selection 亮出），但座次/身份需即时投射到牌桌。
+		_apply_custom_assignment_preview()
 	if was_initial_leader_selection:
 		# 领袖选择立即写入并公开，其他玩家候选只会在此之后生成。
 		var leader: PlayerState = state.get_player(player_id)
@@ -5230,10 +5235,18 @@ func _uninstall_all_character_skills() -> void:
 
 ## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由领袖开始首回合。
 func _finish_character_selection() -> void:
-	if not character_selection.custom_assignment_enabled:
-		for player: PlayerState in state.players:
-			if player.player_id != character_selection.leader_player_id:
-				_apply_character(player, character_selection.get_selection(player.player_id), true)
+	# 完成时统一写入全部选将结果。身份局旧路径会跳过 leader_player_id（依赖领袖阶段已亮将），
+	# 斗地主没有领袖优先亮将，且自选提交发生在 PHASE_OTHERS，跳过/不批量应用会导致地主或全员 character_id 为空并显示“未选武将”。
+	if character_selection.custom_assignment_enabled:
+		# 自选：先把最终座次与身份落到玩家状态，再写武将，保证地主体力+1 等模式加值按最终身份计算。
+		_apply_custom_assignment_preview()
+	for player: PlayerState in state.players:
+		# 服务中已确认的稳定武将 ID；空值表示该玩家未能完成选将（不应在 PHASE_COMPLETE 出现）。
+		var selected_character_id: String = character_selection.get_selection(player.player_id)
+		if selected_character_id.is_empty():
+			push_error("选将完成时玩家%d缺少已确认武将（mode=%s identity=%s）。" % [player.player_id, str(state.match_mode), player.identity])
+			continue
+		_apply_character(player, selected_character_id, true)
 	add_log("所有玩家完成选将并同时亮出武将。")
 	if _begin_ai_character_adjustment():
 		return

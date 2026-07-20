@@ -234,7 +234,9 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	var candidates: Array[String] = get_candidates(player_id)
 	if is_initial_leader_assignment and character_id != get_selection(player_id):
 		return "首任领袖必须保留已经公开的武将。"
-	if not is_initial_leader_assignment and not candidates.has(character_id) and not (custom_assignment_enabled and phase == PHASE_CUSTOM and _character_ids.has(character_id)):
+	# 全武将入口：身份局最终自选（PHASE_CUSTOM）与斗地主同时自选（PHASE_OTHERS）均可提交任意已登记武将。
+	var allows_all_characters_now: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
+	if not is_initial_leader_assignment and not candidates.has(character_id) and not (allows_all_characters_now and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
 	if _is_character_selected_by_other_player(player_id, character_id):
 		return "该武将已经被其他玩家选择。"

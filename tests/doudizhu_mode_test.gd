@@ -38,6 +38,9 @@ func _run() -> void:
 	if not await _test_three_player_match_bootstrap():
 		_restore_settings()
 		return
+	if not _test_all_players_have_characters_after_selection():
+		_restore_settings()
+		return
 	if not _test_six_player_distribution_and_winner():
 		_restore_settings()
 		return
@@ -54,7 +57,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+settings+round+lobby")
+	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+settings+round+lobby+characters")
 	get_tree().quit(0)
 
 
@@ -223,6 +226,76 @@ func _test_three_player_match_bootstrap() -> bool:
 	var bonus: int = _controller.skill_play_count_limit_bonus(0, slash_def)
 	if bonus < 1:
 		return _fail("bahu_play_limit_bonus=%d" % bonus)
+	return true
+
+
+## 斗地主选将完成后全员必须有 character_id；覆盖无自选/自选与 3/6 人，防止再出现“未选武将”。
+func _test_all_players_have_characters_after_selection() -> bool:
+	for player_count in [3, 6]:
+		for custom_enabled in [false, true]:
+			_controller = MatchController.new()
+			add_child(_controller)
+			_controller.identity_rules = _identity_rules
+			_controller.local_human_player_id = 0
+			_controller.randomize_local_human_seat = false
+			_controller.game_flow_interval_seconds = 0.0
+			_controller.ai_action_delay_seconds = 0.0
+			if GameSettings != null:
+				GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
+				GameSettings.set_customize_ai_characters_enabled(false)
+				if GameSettings.has_method("set_custom_character_assignment_enabled"):
+					GameSettings.set_custom_character_assignment_enabled(custom_enabled)
+			# 显式传入模式与种子，避免依赖菜单状态；0 号位固定为真人地主（三人）或首名地主（六人）。
+			if not _controller.start_match(player_count, 20260721, IdentityRules.MODE_DOUDIZHU):
+				return _fail("start_match_doudizhu_%d_custom=%s" % [player_count, str(custom_enabled)])
+			# 驱动全员选将直到阶段离开 character_selection。
+			var safety: int = 0
+			while _controller.state != null and str(_controller.state.current_phase) == "character_selection" and safety < 80:
+				safety += 1
+				var selection = _controller.character_selection
+				if selection == null:
+					return _fail("selection_null count=%d custom=%s" % [player_count, str(custom_enabled)])
+				var pending: Array = selection.get_pending_player_ids()
+				if pending.is_empty():
+					if _controller.has_method("_drive_ai_character_selection"):
+						_controller.call("_drive_ai_character_selection")
+					continue
+				for player_id in pending:
+					var candidates: Array = selection.get_candidates(int(player_id))
+					if candidates.is_empty():
+						selection.reroll_unclaimed_candidates(int(player_id))
+						candidates = selection.get_candidates(int(player_id))
+					if candidates.is_empty():
+						return _fail("no_candidates_pid=%d count=%d custom=%s" % [int(player_id), player_count, str(custom_enabled)])
+					var seat_number: int = -1
+					var identity: String = ""
+					if custom_enabled:
+						var seats: Array = selection.get_available_seat_numbers(int(player_id))
+						var identities: Array = selection.get_available_identities(int(player_id))
+						if seats.is_empty() or identities.is_empty():
+							return _fail("no_seat_or_identity_pid=%d count=%d" % [int(player_id), player_count])
+						seat_number = int(seats[0])
+						identity = str(identities[0])
+						if seats.has(1) and identities.has(selection.get_first_seat_identity()):
+							seat_number = 1
+							identity = selection.get_first_seat_identity()
+					if not _controller.select_character(int(player_id), str(candidates[0]), seat_number, identity):
+						# 并发 AI 驱动可能已替该玩家提交；仅当仍待选时失败。
+						if selection.get_pending_player_ids().has(int(player_id)):
+							return _fail("select_failed_pid=%d count=%d custom=%s" % [int(player_id), player_count, str(custom_enabled)])
+				if _controller.has_method("_drive_ai_character_selection"):
+					_controller.call("_drive_ai_character_selection")
+			if _controller.state == null:
+				return _fail("state_null_after_selection count=%d custom=%s" % [player_count, str(custom_enabled)])
+			if str(_controller.state.current_phase) == "character_selection":
+				return _fail("stuck_in_character_selection count=%d custom=%s" % [player_count, str(custom_enabled)])
+			for player in _controller.state.players:
+				if str(player.character_id).is_empty():
+					return _fail("empty_character after selection pid=%d identity=%s count=%d custom=%s phase=%s" % [player.player_id, player.identity, player_count, str(custom_enabled), str(_controller.state.current_phase)])
+				if not player.character_revealed:
+					return _fail("character_not_revealed pid=%d count=%d custom=%s" % [player.player_id, player_count, str(custom_enabled)])
+			_controller.queue_free()
+			_controller = null
 	return true
 
 
