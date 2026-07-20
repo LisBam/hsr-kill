@@ -149,13 +149,17 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "领袖尚未完成选将。"
 	if phase == PHASE_OTHERS and player_id == leader_player_id:
 		return "领袖已经完成选将。"
-	if _selections_by_player.has(player_id):
+	# 首任领袖已公开武将后只剩最终座次身份待确认；该特殊提交必须复用同一武将，不能重新进入候选选择。
+	var is_initial_leader_assignment: bool = phase == PHASE_CUSTOM and player_id == leader_player_id and _selections_by_player.has(player_id) and not _selected_seats_by_player.has(player_id)
+	if _selections_by_player.has(player_id) and not is_initial_leader_assignment:
 		return "该玩家已经确认武将。"
 	# 自选模式允许通过“所有武将”提交任意已登记武将，普通模式仍严格使用本次随机候选。
 	# 当前玩家候选数组；具体选择必须来自服务生成的五张候选牌。
 	# “五张”仅表示历史默认值；实际普通随机数量由本局1至20张设置决定，自选阶段仍允许全武将入口。
 	var candidates: Array[String] = get_candidates(player_id)
-	if not candidates.has(character_id) and not (custom_assignment_enabled and phase == PHASE_CUSTOM and _character_ids.has(character_id)):
+	if is_initial_leader_assignment and character_id != get_selection(player_id):
+		return "首任领袖必须保留已经公开的武将。"
+	if not is_initial_leader_assignment and not candidates.has(character_id) and not (custom_assignment_enabled and phase == PHASE_CUSTOM and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
 	if _is_character_selected_by_other_player(player_id, character_id):
 		return "该武将已经被其他玩家选择。"
@@ -191,14 +195,18 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		_selected_identities_by_player[player_id] = identity
 		_preview_seats_by_player.erase(player_id)
 		_preview_identities_by_player.erase(player_id)
-	_selections_by_player[player_id] = character_id
+	if not is_initial_leader_assignment:
+		_selections_by_player[player_id] = character_id
 	if phase == PHASE_LEADER:
 		_initial_leader_character_id = character_id
 		if custom_assignment_enabled:
-			# 首任领袖的公开结果独立保存；全员随后重新确认最终武将、座次与身份，包括首任领袖本人。
-			_selections_by_player.clear()
+			# 首任领袖武将同时作为最终武将保留；其后只确认座次与身份，不能再次随机发牌或弹出候选框。
 			phase = PHASE_CUSTOM
 			for custom_player_id: int in _player_ids:
+				if custom_player_id == leader_player_id:
+					_candidates_by_player.erase(custom_player_id)
+					_locked_candidates_by_player.erase(custom_player_id)
+					continue
 				# 最终自选严格只发放房主设置数量的随机候选；领袖技固定前缀只属于首任领袖阶段。
 				_candidates_by_player[custom_player_id] = _make_candidates(custom_player_id, character_id)
 		else:
@@ -206,7 +214,11 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 			for other_player_id: int in _player_ids:
 				if other_player_id != leader_player_id:
 					_candidates_by_player[other_player_id] = _make_candidates(other_player_id, character_id)
-	if _selections_by_player.size() == _player_ids.size():
+	# 普通模式只等待武将确认；最终自选还必须等待每名角色确认座次与身份，首任领袖已选武将不能提前结束阶段。
+	var all_players_selected: bool = _selections_by_player.size() == _player_ids.size()
+	if custom_assignment_enabled and phase == PHASE_CUSTOM:
+		all_players_selected = all_players_selected and _selected_seats_by_player.size() == _player_ids.size() and _selected_identities_by_player.size() == _player_ids.size()
+	if all_players_selected:
 		phase = PHASE_COMPLETE
 		if custom_assignment_enabled:
 			for selected_player_id_variant: Variant in _player_ids:
@@ -477,7 +489,10 @@ func get_pending_player_ids() -> Array[int]:
 	for player_id: int in _player_ids:
 		if phase == PHASE_LEADER and player_id != leader_player_id:
 			continue
-		if not _selections_by_player.has(player_id):
+		if phase == PHASE_CUSTOM:
+			if not _selected_seats_by_player.has(player_id):
+				result.append(player_id)
+		elif not _selections_by_player.has(player_id):
 			result.append(player_id)
 	return result
 
@@ -489,7 +504,7 @@ func to_dict(viewer_id: int) -> Dictionary:
 	for player_id: int in _player_ids:
 		readiness.append({
 			"player_id":player_id,
-			"ready":_selections_by_player.has(player_id),
+			"ready":_selected_seats_by_player.has(player_id) if phase == PHASE_CUSTOM else _selections_by_player.has(player_id),
 		})
 	# 本地候选数组；只有轮到观察者且尚未确认时才包含实际武将 ID。
 	var local_candidates: Array[String] = []
@@ -497,6 +512,8 @@ func to_dict(viewer_id: int) -> Dictionary:
 		local_candidates = get_candidates(viewer_id)
 	# 最终自选阶段标记；首任领袖公开选将不展示或要求座次身份控件，避免领袖因隐藏按钮无法确认。
 	var is_custom_assignment_phase: bool = custom_assignment_enabled and phase == PHASE_CUSTOM
+	# 首任领袖保留的最终武将；该玩家只提交座次身份，不能再次打开全武将或随机候选列表。
+	var is_initial_leader_assignment: bool = is_custom_assignment_phase and viewer_id == leader_player_id and _selections_by_player.has(viewer_id) and not _selected_seats_by_player.has(viewer_id)
 	return {
 		"phase":phase,
 		"selection_kind":"initial",
@@ -510,8 +527,8 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"locked_candidate_ids":get_locked_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replaceable_candidate_ids":get_replaceable_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replacement_cards_remaining":get_replacement_cards_remaining(viewer_id) if can_player_select(viewer_id) else 0,
-		"all_character_ids":_character_ids.duplicate() if is_custom_assignment_phase and can_player_select(viewer_id) else [],
-		"allow_all_characters":is_custom_assignment_phase,
+		"all_character_ids":_character_ids.duplicate() if is_custom_assignment_phase and not is_initial_leader_assignment and can_player_select(viewer_id) else [],
+		"allow_all_characters":is_custom_assignment_phase and not is_initial_leader_assignment,
 		"allow_custom_assignment":is_custom_assignment_phase,
 		"seat_options":get_available_seat_numbers(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
 		"identity_options":get_available_identities(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
@@ -527,14 +544,14 @@ func to_dict(viewer_id: int) -> Dictionary:
 
 ## 返回指定玩家当前是否可以确认候选；该判断只检查选将状态，不涉及界面可用性。
 func can_player_select(player_id: int) -> bool:
+	if phase == PHASE_CUSTOM:
+		return _player_ids.has(player_id) and not _selected_seats_by_player.has(player_id)
 	if _selections_by_player.has(player_id):
 		return false
 	if phase == PHASE_LEADER:
 		return player_id == leader_player_id
 	if phase == PHASE_OTHERS:
 		return _player_ids.has(player_id) and player_id != leader_player_id
-	if phase == PHASE_CUSTOM:
-		return _player_ids.has(player_id)
 	return false
 
 

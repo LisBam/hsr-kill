@@ -251,6 +251,8 @@ func _ready() -> void:
 		candidate_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 		# 空白候选区也必须能拖动；武将牌自身输入会先消费事件并走独立滚动信号，二者不会重复滚动。
 		candidate_scroll.gui_input.connect(_on_candidate_area_gui_input)
+		# 右侧原生拖条；与候选内容位移共用同一数值，直接拖动滑块也能显示相同位置。
+		candidate_scroll.get_v_scroll_bar().value_changed.connect(_on_candidate_scroll_bar_value_changed)
 	if _candidate_content != null:
 		# 候选内容节点会覆盖滚动容器的全部空白区域；必须直接转发手势，否则空白位置会在此节点被拦截。
 		_candidate_content.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -356,7 +358,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	var preserves_local_context: bool = visible and str(_snapshot.get("phase", "")) == str(snapshot.get("phase", "")) and int(_snapshot.get("target_player_id", -1)) == int(snapshot.get("target_player_id", -1))
 	_snapshot = snapshot.duplicate(true)
 	if not preserves_local_context:
-		_selected_character_id = ""
+		_selected_character_id = str(snapshot.get("local_selected_character_id", "")) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else ""
 		# 首次进入最终自选阶段时，座次和身份按钮默认高亮首次随机分配的结果；普通选将不保留这些临时值。
 		_selected_seat_number = int(snapshot.get("preview_seat_number", snapshot.get("initial_seat_number", -1))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else -1
 		_selected_identity = str(snapshot.get("preview_identity", snapshot.get("initial_identity", ""))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else ""
@@ -374,7 +376,9 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	_render_leader_character()
 	_render_custom_assignment_controls()
 	_render_candidates()
-	if not _get_displayed_candidate_ids().has(_selected_character_id):
+	# 首任领袖在最终自选阶段只确认座次身份：公开武将已由权威快照保留，候选列表刻意为空，不能套用“离开候选则清空选择”的普通规则。
+	var retains_initial_leader_character: bool = str(_snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM and bool(_snapshot.get("allow_custom_assignment", false)) and not str(_snapshot.get("local_selected_character_id", "")).is_empty() and (_snapshot.get("local_candidates", []) as Array).is_empty()
+	if not retains_initial_leader_character and not _get_displayed_candidate_ids().has(_selected_character_id):
 		_selected_character_id = ""
 	_update_confirm_state()
 	if preserves_local_context and candidate_scroll != null:
@@ -422,7 +426,8 @@ func _render_header() -> void:
 		# 首次分配身份；自选阶段继续明确展示，最终座次身份只在全员确认后刷新到权威玩家状态。
 		# 当前编辑身份；自选阶段优先使用本地已选身份，使领袖改为其他身份时标题立即同步，不等待权威快照往返。
 		var displayed_identity: String = _selected_identity if not _selected_identity.is_empty() else str(_snapshot.get("local_identity", "hidden"))
-		_set_identity_title(displayed_identity, "请重新选择武将、座次与身份" if can_select else "请等待其他玩家完成自选")
+		var keeps_initial_leader_character: bool = can_select and not str(_snapshot.get("local_selected_character_id", "")).is_empty() and (_snapshot.get("local_candidates", []) as Array).is_empty()
+		_set_identity_title(displayed_identity, "请选择座次与身份" if keeps_initial_leader_character else ("请重新选择武将、座次与身份" if can_select else "请等待其他玩家完成自选"))
 		_status_label.text = ""
 		return
 	# 本地真实身份；选将服务只把该字段发送给本人，旧快照在领袖阶段使用领袖身份作为兼容回退。
@@ -511,7 +516,8 @@ func _render_candidates() -> void:
 	# “五张”是历史默认值；实际快照通常包含1至20张普通随机候选，首任领袖阶段可额外包含领袖技固定候选。
 	var candidate_ids: Array = _get_displayed_candidate_ids()
 	if candidate_ids.is_empty():
-		_confirm_button.visible = false
+		# 首任领袖已经保留公开武将时不再渲染第二组选将牌，但仍必须显示确认座次身份的固定按钮。
+		_confirm_button.visible = not _selected_character_id.is_empty() and bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false))
 		return
 	_confirm_button.visible = true
 	_confirm_button.text = "请选择武将牌"
@@ -644,6 +650,7 @@ func _render_candidates() -> void:
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
 	if candidate_scroll != null:
 		candidate_scroll.queue_sort()
+		call_deferred("_refresh_candidate_scroll_bar_range")
 
 
 ## 返回当前需要展示的候选武将；“所有武将”开启时使用静态全量列表，否则使用本次随机候选。
@@ -842,21 +849,45 @@ func _scroll_candidate_area_by(vertical_delta: float) -> void:
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
 	if candidate_scroll == null:
 		return
-	# 当前竖向滚动条；动态候选内容的实际位移仍需与原生拖条范围保持同一上下限。
+	_refresh_candidate_scroll_bar_range()
+	# 当前竖向滚动条；动态候选内容与右侧滑块共用同一上下限与位置。
 	var vertical_scroll_bar: ScrollBar = candidate_scroll.get_v_scroll_bar()
-	# 动态Node2D候选不会稳定触发ScrollContainer的纵向范围刷新，因此按内容实际高度补齐同一原生拖条范围。
-	var content_height: float = _candidate_content.size.y if _candidate_content != null else 0.0
-	var viewport_height: float = candidate_scroll.size.y
-	var required_maximum_scroll_vertical: int = maxi(ceili(content_height - viewport_height), 0)
-	if required_maximum_scroll_vertical > 0 and vertical_scroll_bar.max_value - vertical_scroll_bar.page < float(required_maximum_scroll_vertical):
-		vertical_scroll_bar.max_value = content_height
-		vertical_scroll_bar.page = viewport_height
-	var maximum_scroll_vertical: int = maxi(roundi(vertical_scroll_bar.max_value - vertical_scroll_bar.page), required_maximum_scroll_vertical)
-	# 当前内容位移；ScrollContainer对动态Node2D内容会重置scroll_vertical，因此以内容局部位置作为稳定滚动来源。
+	var maximum_scroll_vertical: int = maxi(roundi(vertical_scroll_bar.max_value - vertical_scroll_bar.page), 0)
+	# 当前内容位移；动态Node2D候选以内容局部位置作为稳定滚动来源。
 	var current_scroll_vertical: int = roundi(-_candidate_content.position.y) if _candidate_content != null else candidate_scroll.scroll_vertical
 	var next_scroll_vertical: int = clampi(roundi(float(current_scroll_vertical) + vertical_delta), 0, maximum_scroll_vertical)
+	vertical_scroll_bar.set_block_signals(true)
+	vertical_scroll_bar.value = float(next_scroll_vertical)
+	vertical_scroll_bar.set_block_signals(false)
 	if _candidate_content != null:
 		_candidate_content.position.y = -float(next_scroll_vertical)
+
+
+## 按候选内容实际高度刷新右侧拖条范围；动态Node2D候选不会稳定触发ScrollContainer内部范围计算。
+func _refresh_candidate_scroll_bar_range() -> void:
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	if candidate_scroll == null or _candidate_content == null:
+		return
+	var vertical_scroll_bar: ScrollBar = candidate_scroll.get_v_scroll_bar()
+	var viewport_height: float = candidate_scroll.size.y
+	var content_height: float = maxf(_candidate_content.size.y, viewport_height)
+	var maximum_scroll_vertical: int = maxi(ceili(content_height - viewport_height), 0)
+	var current_scroll_vertical: int = clampi(roundi(-_candidate_content.position.y), 0, maximum_scroll_vertical)
+	vertical_scroll_bar.set_block_signals(true)
+	vertical_scroll_bar.min_value = 0.0
+	vertical_scroll_bar.max_value = content_height
+	vertical_scroll_bar.page = viewport_height
+	vertical_scroll_bar.value = float(current_scroll_vertical)
+	vertical_scroll_bar.set_block_signals(false)
+
+
+## 接收右侧拖条的手动位置；候选内容同步平移，保证拖条、滚轮与空白拖动始终显示同一列表位置。
+func _on_candidate_scroll_bar_value_changed(next_scroll_vertical: float) -> void:
+	if _candidate_content == null:
+		return
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	var maximum_scroll_vertical: int = maxi(roundi(candidate_scroll.get_v_scroll_bar().max_value - candidate_scroll.get_v_scroll_bar().page), 0) if candidate_scroll != null else 0
+	_candidate_content.position.y = -float(clampi(roundi(next_scroll_vertical), 0, maximum_scroll_vertical))
 
 
 ## 优先处理候选区域内的鼠标滚轮；候选牌输入区即使覆盖整张牌，也不会再吞掉列表滚动事件。

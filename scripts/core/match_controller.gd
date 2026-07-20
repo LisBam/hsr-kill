@@ -5222,6 +5222,7 @@ func _apply_custom_assignment_preview() -> void:
 			return
 	state.players = reordered_players
 	# 首任领袖在仍占一号位时保留首次公开武将；其余未确认角色必须恢复未亮将，不能在背景抢先展示所有AI武将。
+	# 首任领袖公开武将已是最终选择，即使预览后暂不位于一号位也不能清空或重新随机。
 	var preview_leader_before_clear: PlayerState = state.players[0] if not state.players.is_empty() else null
 	for player: PlayerState in state.players:
 		# 保留条件；只有同一名首任领袖仍是当前预览领袖且尚未提交最终新武将时，才沿用其已经公开的牌面。
@@ -5615,6 +5616,10 @@ func _drive_ai_character_selection() -> void:
 func _get_ai_character_selection_candidate(player_id: int) -> String:
 	if character_selection == null:
 		return ""
+	# 首任领袖的公开武将已经写入最终选择；自选阶段只差座次身份确认时，AI必须提交同一ID，不能因候选列表已清空而停住或重新抽取。
+	var retained_initial_leader_character_id: String = character_selection.get_selection(player_id)
+	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and not retained_initial_leader_character_id.is_empty() and character_selection.get_selected_seat_number(player_id) < 1:
+		return retained_initial_leader_character_id
 	# 当前公开预览领袖；最终自选中该AI已经有向玩家展示的武将时，确认必须复用该结果而不是改取另一张随机候选。
 	var preview_leader: PlayerState = state.players[0] if state != null and not state.players.is_empty() else null
 	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and preview_leader != null and preview_leader.player_id == player_id and preview_leader.identity == "leader" and not preview_leader.character_id.is_empty():
