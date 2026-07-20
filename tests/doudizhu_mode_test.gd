@@ -59,8 +59,11 @@ func _run() -> void:
 	if not _test_lobby_mode_options_include_doudizhu():
 		_restore_settings()
 		return
+	if not _test_gongku_ai_prefers_draw_when_full_hp():
+		_restore_settings()
+		return
 	_restore_settings()
-	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters")
+	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters+gongku_ai")
 	get_tree().quit(0)
 
 
@@ -474,6 +477,57 @@ func _test_doudizhu_preview_does_not_reveal_character() -> bool:
 		if not str(player.character_id).is_empty() and _controller.character_selection.get_selection(player.player_id).is_empty():
 			return _fail("preview_leaked_character player=%d char=%s seat_identity=%s" % [player.player_id, player.character_id, player.identity])
 	return true
+
+## 验证共苦 AI 满体力时选择摸两张牌，受伤时选择回复；必须读取 selected_control_id。
+func _test_gongku_ai_prefers_draw_when_full_hp() -> bool:
+	_create_controller()
+	# 共苦运行时实例；只服务评分钩子，不真正订阅死亡时机。
+	var gongku: SkillDefinition = GameDatabase.create_skill("gongku")
+	if gongku == null:
+		return _fail("gongku_skill_missing")
+	gongku.bind(_controller, 0)
+	# 权威快照；0号满体力，1号受伤。
+	var full_hp_snapshot: Dictionary = {
+		"players":[
+			{"player_id":0, "hp":4, "max_hp":4, "alive":true},
+			{"player_id":1, "hp":2, "max_hp":4, "alive":true},
+		],
+	}
+	var wounded_snapshot: Dictionary = {
+		"players":[
+			{"player_id":0, "hp":2, "max_hp":4, "alive":true},
+			{"player_id":1, "hp":4, "max_hp":4, "alive":true},
+		],
+	}
+	# 统一文字选项请求；与正式 control 协议一致。
+	var choice_request: Dictionary = {
+		"choice_type":"control",
+		"allow_cancel":true,
+		"min_select":1,
+		"max_select":1,
+		"control_options":[{"id":"recover", "label":"回复1点体力"}, {"id":"draw_two", "label":"摸两张牌"}],
+		"context":{"kind":"gongku_choice", "skill_id":"gongku", "skill_owner_id":0, "victim_id":1},
+	}
+	var recover_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"selected_control_id":"recover", "confirmed":true}}
+	var draw_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"selected_control_id":"draw_two", "confirmed":true}}
+	# 满体力：摸牌必须严格高于回复，避免无脑点回复。
+	var full_recover_score: float = gongku.score_ai_choice(full_hp_snapshot, choice_request, recover_action, null)
+	var full_draw_score: float = gongku.score_ai_choice(full_hp_snapshot, choice_request, draw_action, null)
+	if full_draw_score <= full_recover_score or full_recover_score > 0.0:
+		return _fail("gongku_full_hp recover=%.2f draw=%.2f" % [full_recover_score, full_draw_score])
+	# 受伤：回复必须高于摸牌。
+	var wounded_recover_score: float = gongku.score_ai_choice(wounded_snapshot, choice_request, recover_action, null)
+	var wounded_draw_score: float = gongku.score_ai_choice(wounded_snapshot, choice_request, draw_action, null)
+	if wounded_recover_score <= wounded_draw_score:
+		return _fail("gongku_wounded recover=%.2f draw=%.2f" % [wounded_recover_score, wounded_draw_score])
+	# 基础策略综合选择；满血最终动作必须是摸两张。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	var legal_actions: Array[Dictionary] = [recover_action, draw_action]
+	var chosen: Dictionary = policy.choose_card_choice(full_hp_snapshot, choice_request, legal_actions)
+	if str((chosen.get("payload", {}) as Dictionary).get("selected_control_id", "")) != "draw_two":
+		return _fail("gongku_policy_full_hp_choice=%s" % chosen)
+	return true
+
 
 ## 创建标准控制器组件树。
 func _create_controller() -> void:

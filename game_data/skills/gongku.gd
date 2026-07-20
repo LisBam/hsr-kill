@@ -78,14 +78,14 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		if int(player.get("player_id", -1)) == owner_player_id:
 			owner = player
 			break
-	# 当前选项；仅 recover 与 draw_two 有意义。
-	var control_id: String = str(payload.get("control_id", ""))
-	# 是否受伤；满体力时回复收益极低。
+	# 当前选项稳定 ID；统一选择协议写入 selected_control_id，不能读取不存在的 control_id。
+	var control_id: String = str(payload.get("selected_control_id", payload.get("control_id", "")))
+	# 是否受伤；满体力时回复收益为0，必须低于摸牌，避免AI无脑点回复。
 	var missing_hp: int = maxi(int(owner.get("max_hp", 0)) - int(owner.get("hp", 0)), 0)
 	if control_id == "recover":
-		return 4.0 if missing_hp > 0 else 0.2
+		return 4.0 if missing_hp > 0 else 0.0
 	if control_id == "draw_two":
-		return 3.0 if missing_hp <= 0 else 2.0
+		return 3.5 if missing_hp <= 0 else 2.0
 	return 0.0
 
 

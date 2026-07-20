@@ -27,7 +27,7 @@ func _init() -> void:
 	})
 
 
-## 只有在自身出牌阶段、存在黑色材料且至少有一名合法雷【杀】目标时可主动发动。
+## 只有在自身出牌阶段、存在黑色材料且至少有一名完整合法雷【杀】目标时可主动发动。
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场或非本人出牌阶段时不能主动转化。
 	var owner: PlayerState = get_owner_skill_player().get_state()
@@ -44,10 +44,20 @@ func can_activate(_context: Dictionary = {}) -> bool:
 		return false
 	# 材料与目标组合数据；黑色材料会在此排除拥有【琥珀】的角色。
 	var selection_data: Dictionary = build_virtual_target_selection_data(THUNDER_SLASH_DEFINITION_ID, candidates)
-	if not (selection_data.get("target_ids", []) as Array).is_empty():
-		# 单目标数组；虚拟使用还需复核阶段【杀】次数、距离与目标组合。
-		# 当前可用性只确认存在至少一个逐材料合法目标，具体单目标数组在动作枚举和提交阶段继续完整复核。
-		return true
+	# 逐材料合法目标映射；按钮可用性必须与虚拟使用完整校验一致，包括本阶段【杀】次数。
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	for candidate: Dictionary in candidates:
+		# 当前材料UID；手牌、木牛“粮”与装备共用同一实体标识。
+		var material_card_uid: int = int(candidate.get("uid", -1))
+		# 当前材料实体；找不到时跳过，避免候选快照与权威区域短暂不一致。
+		var material_card: CardInstance = _find_owned_material_card(material_card_uid)
+		if material_card == null:
+			continue
+		for target_id_variant: Variant in target_ids_by_card_id.get(str(material_card_uid), []) as Array:
+			# 当前单目标数组；validate_virtual_use_for_material 会复核阶段次数、距离、目标与来牌限制。
+			var target_ids: Array[int] = [int(target_id_variant)]
+			if validate_virtual_use_for_material(THUNDER_SLASH_DEFINITION_ID, material_card, target_ids).is_empty():
+				return true
 	return false
 
 
