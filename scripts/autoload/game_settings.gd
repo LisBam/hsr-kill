@@ -37,6 +37,12 @@ signal mulligan_limit_changed(limit: int)
 ## AI 是否使用手气卡的开关变化信号；实际次数仍受手气卡数量设置约束。
 signal ai_uses_mulligan_changed(enabled: bool)
 
+## 换将卡数量变化信号；参数只会是0、3、5、8、10或20，仅影响之后创建的新对局。
+signal character_replacement_count_changed(count: int)
+
+## 随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的新对局。
+signal character_candidate_count_changed(count: int)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -59,6 +65,49 @@ const MULLIGAN_LIMIT_OPTIONS: Array[Dictionary] = [
 	{"value":5, "label":"五次"},
 	{"value":-1, "label":"无限次"},
 ]
+
+## 换将卡数量下拉选项；稳定值0表示关闭，其余数值表示每名玩家本局最多可换将的次数。
+const CHARACTER_REPLACEMENT_COUNT_OPTIONS: Array[Dictionary] = [
+	{"value":0, "label":"关闭"},
+	{"value":3, "label":"三张"},
+	{"value":5, "label":"五张"},
+	{"value":8, "label":"八张"},
+	{"value":10, "label":"十张"},
+	{"value":20, "label":"二十张"},
+]
+
+## 随机选将牌数下拉选项；稳定数值1至20直接作为每名玩家的普通随机候选数量。
+const CHARACTER_CANDIDATE_COUNT_OPTIONS: Array[Dictionary] = [
+	{"value":1, "label":"一张"},
+	{"value":2, "label":"两张"},
+	{"value":3, "label":"三张"},
+	{"value":4, "label":"四张"},
+	{"value":5, "label":"五张"},
+	{"value":6, "label":"六张"},
+	{"value":7, "label":"七张"},
+	{"value":8, "label":"八张"},
+	{"value":9, "label":"九张"},
+	{"value":10, "label":"十张"},
+	{"value":11, "label":"十一张"},
+	{"value":12, "label":"十二张"},
+	{"value":13, "label":"十三张"},
+	{"value":14, "label":"十四张"},
+	{"value":15, "label":"十五张"},
+	{"value":16, "label":"十六张"},
+	{"value":17, "label":"十七张"},
+	{"value":18, "label":"十八张"},
+	{"value":19, "label":"十九张"},
+	{"value":20, "label":"二十张"},
+]
+
+## 随机选将牌数允许的最小值；至少保留一张普通随机候选，运行时不应修改。
+const MIN_CHARACTER_CANDIDATE_COUNT: int = 1
+
+## 随机选将牌数允许的最大值；与菜单选项和选将滚动布局上限一致，运行时不应修改。
+const MAX_CHARACTER_CANDIDATE_COUNT: int = 20
+
+## 随机选将牌数默认值；5张保持旧版本开局行为，旧存档缺失字段时使用该值。
+const DEFAULT_CHARACTER_CANDIDATE_COUNT: int = 5
 
 ## AI 响应等待时间的最小值；默认0.05秒，在保留可见异步边界的同时支持快速对局。
 const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.05
@@ -146,6 +195,12 @@ var mulligan_limit: int = 0
 
 ## AI 是否根据起始手牌质量自动使用手气卡；默认关闭，且手气卡数量为0时不会产生额外阶段。
 var ai_uses_mulligan_enabled: bool = false
+
+## 每名玩家下一局可使用的换将卡数量；默认0表示关闭，只接受设置列表中的离散值。
+var character_replacement_count: int = 0
+
+## 每名玩家下一局获得的普通随机选将牌数；默认5张，领袖技武将不计入该数值。
+var character_candidate_count: int = DEFAULT_CHARACTER_CANDIDATE_COUNT
 
 ## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
 var _settings_file_path: String = SETTINGS_FILE_PATH
@@ -321,6 +376,28 @@ func set_ai_uses_mulligan_enabled(enabled: bool) -> void:
 	ai_uses_mulligan_changed.emit(ai_uses_mulligan_enabled)
 
 
+## 设置下一局每名玩家的换将卡数量；未知离散值统一回退关闭，避免存档或外部调用产生隐藏规则档位。
+func set_character_replacement_count(count: int) -> void:
+	# 标准化后的换将卡数量；仅允许菜单公开的六个稳定值。
+	var normalized_count: int = count if [0, 3, 5, 8, 10, 20].has(count) else 0
+	if character_replacement_count == normalized_count:
+		return
+	character_replacement_count = normalized_count
+	_queue_settings_save()
+	character_replacement_count_changed.emit(character_replacement_count)
+
+
+## 设置下一局普通随机选将牌数；范围外输入限制到1至20，当前已经建立的候选不会中途改变。
+func set_character_candidate_count(count: int) -> void:
+	# 标准化后的随机候选数量；菜单、存档和控制器统一使用同一范围。
+	var normalized_count: int = clampi(count, MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	if character_candidate_count == normalized_count:
+		return
+	character_candidate_count = normalized_count
+	_queue_settings_save()
+	character_candidate_count_changed.emit(character_candidate_count)
+
+
 ## 返回符合联机协议的玩家名称；该纯函数可供设置界面预览与未来资料持久化复用。
 func normalize_online_player_name(player_name: String) -> String:
 	# 去除首尾空白后的名称；内部空格保留，允许玩家使用自然昵称。
@@ -361,6 +438,10 @@ func _load_saved_settings() -> void:
 	var stored_mulligan_limit: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit))
 	mulligan_limit = -1 if stored_mulligan_limit == -1 else clampi(stored_mulligan_limit, 0, 5)
 	ai_uses_mulligan_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled))
+	# 已保存换将卡数量；未知值回退关闭，避免旧测试或手工配置绕过离散选项。
+	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))
+	character_replacement_count = stored_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_character_replacement_count) else 0
+	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
 	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
 	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
 
@@ -427,6 +508,8 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
 	last_save_error = settings_file.save(_settings_file_path)

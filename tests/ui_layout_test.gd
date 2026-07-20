@@ -35,6 +35,10 @@ func _run() -> void:
 	# 正式主场景实例；作为测试根节点子节点运行完整界面初始化流程。
 	var main_instance: Control = main_scene.instantiate() as Control
 	add_child(main_instance)
+	# 牌桌根节点必须忽略鼠标，让背景空白左键进入未处理输入回调；实际按钮和面板仍由各自子控件命中。
+	if main_instance.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		_fail("main_root_mouse_filter:%d" % main_instance.mouse_filter)
+		return
 	# 正式对局控制器；先使用非法的1人配置阻止规则对局和AI异步任务启动，随后以五号位作为本地玩家注入只读十人界面快照。
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	# 牌桌统一信息框；本地装备、手牌、技能和双方武将牌都通过该单一组件显示说明。
@@ -1170,16 +1174,23 @@ func _run() -> void:
 	if not is_equal_approx(lower_left_seat_to_log_gap, 2.0):
 		_fail("ten_player_record_gap:%s labels=%s button=%s" % [lower_left_seat_to_log_gap, lower_left_seat_label_rect, log_toggle_button_rect])
 		return
+	# 对局记录组件；直接调用其始终处理输入回调，验证离线暂停时空白点击仍能触发关闭意图。
+	var log_panel: MatchLogPanel = main_instance.get_node("LogPanel") as MatchLogPanel
 	# 对局日志正文面板；折叠组件只改变该节点可见性，不中断日志追加。
 	var log_content_panel: PanelContainer = main_instance.get_node("%LogContentPanel") as PanelContainer
 	await _click_control(log_toggle_button)
 	if not log_content_panel.visible or not get_tree().paused or not bool(main_instance.get("_owns_log_pause")) or not match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) < 0 or not match_controller.event_scheduler.pause_registry.has_active():
 		_fail("offline_log_pause expanded=%s paused=%s owner=%s interface=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause"), match_controller.is_gameplay_paused()])
 		return
-	# 暂停后日志按钮仍需接收真实输入；收起正文时只释放由牌桌持有的离线暂停。
-	await _click_control(log_toggle_button)
-	if log_content_panel.visible or get_tree().paused or bool(main_instance.get("_owns_log_pause")) or match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) >= 0 or match_controller.event_scheduler.pause_registry.has_active():
-		_fail("offline_log_resume expanded=%s paused=%s owner=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause")])
+	# 离线日志打开时牌桌本身已暂停；始终处理的日志组件仍要把空白左键交给牌桌，收起记录与菜单并释放日志暂停。
+	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
+	match_menu.set_menu_open(true)
+	var blank_click_event: InputEventMouseButton = InputEventMouseButton.new()
+	blank_click_event.button_index = MOUSE_BUTTON_LEFT
+	blank_click_event.pressed = true
+	log_panel.call("_unhandled_input", blank_click_event)
+	if log_content_panel.visible or match_menu.is_menu_open() or get_tree().paused or bool(main_instance.get("_owns_log_pause")) or match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) >= 0 or match_controller.event_scheduler.pause_registry.has_active():
+		_fail("offline_blank_click_overlay_close expanded=%s menu=%s paused=%s owner=%s" % [log_content_panel.visible, match_menu.is_menu_open(), get_tree().paused, main_instance.get("_owns_log_pause")])
 		return
 	# 远程通信模式；本地展开日志只能改变可见性，不得暂停仍由权威端推进的联网对局。
 	match_controller.network_gateway.mode = NetworkGateway.Mode.REMOTE

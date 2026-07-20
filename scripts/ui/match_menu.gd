@@ -60,6 +60,12 @@ signal main_menu_requested
 ## AI 使用手气卡开关；实际可用次数仍由手气卡数量设置决定。
 @onready var _ai_uses_mulligan_checkbox: CheckBox = %AiUsesMulliganCheckBox
 
+## 换将卡数量下拉框；选项元数据保存房主下一局为每名玩家提供的换将次数。
+@onready var _character_replacement_count_option: OptionButton = %CharacterReplacementCountOption
+
+## 随机选将牌数下拉框；选项元数据保存1至20张普通随机候选数量。
+@onready var _character_candidate_count_option: OptionButton = %CharacterCandidateCountOption
+
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
@@ -86,6 +92,12 @@ signal main_menu_requested
 
 ## AI 手气卡控件；仅房主可决定下一局 AI 是否自动刷新起始手牌。
 @onready var _ai_uses_mulligan_row: Control = _ai_uses_mulligan_checkbox
+
+## 换将卡数量整行容器；属于房主权威规则，局域网客户端必须整行隐藏。
+@onready var _character_replacement_count_row: Control = _character_replacement_count_option.get_parent() as Control
+
+## 随机选将牌数整行容器；属于房主权威规则，局域网客户端必须整行隐藏。
+@onready var _character_candidate_count_row: Control = _character_candidate_count_option.get_parent() as Control
 
 ## 当前权威控件是否允许显示；默认true兼容离线对局，局域网客户端由牌桌协调器关闭。
 var _authority_controls_visible: bool = true
@@ -138,6 +150,12 @@ func _ready() -> void:
 	_ai_uses_mulligan_checkbox.set_pressed_no_signal(GameSettings.ai_uses_mulligan_enabled)
 	_ai_uses_mulligan_checkbox.toggled.connect(GameSettings.set_ai_uses_mulligan_enabled)
 	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
+	_populate_character_replacement_count_options()
+	_character_replacement_count_option.item_selected.connect(_on_character_replacement_count_selected)
+	GameSettings.character_replacement_count_changed.connect(_refresh_character_replacement_count_selection)
+	_populate_character_candidate_count_options()
+	_character_candidate_count_option.item_selected.connect(_on_character_candidate_count_selected)
+	GameSettings.character_candidate_count_changed.connect(_refresh_character_candidate_count_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_menu_panel.visible = false
 	refresh_card_name_text()
@@ -145,6 +163,8 @@ func _ready() -> void:
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
+	_refresh_character_replacement_count_selection(GameSettings.character_replacement_count)
+	_refresh_character_candidate_count_selection(GameSettings.character_candidate_count)
 	refresh_ui_style()
 
 
@@ -199,10 +219,12 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_customize_ai_characters_row.visible = controls_visible
 	_mulligan_limit_row.visible = controls_visible
 	_ai_uses_mulligan_row.visible = controls_visible
+	_character_replacement_count_row.visible = controls_visible
+	_character_candidate_count_row.visible = controls_visible
 	_restart_button.visible = controls_visible
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
-	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox):
+	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
 		_main_menu_button.grab_focus()
 
 
@@ -235,10 +257,14 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/CardNameRow/CardNameLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/MulliganLimitRow/MulliganLimitLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/CharacterReplacementCountRow/CharacterReplacementCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/CharacterCandidateCountRow/CharacterCandidateCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_apply_option_button_style(_card_name_option)
 	_apply_option_button_style(_ui_style_option)
 	_apply_option_button_style(_mulligan_limit_option)
+	_apply_option_button_style(_character_replacement_count_option)
+	_apply_option_button_style(_character_candidate_count_option)
 
 
 ## 为局内设置下拉框及其弹出列表应用完整交互状态主题；悬停、按下和焦点状态不得回退Godot默认皮肤。
@@ -292,6 +318,26 @@ func _populate_mulligan_limit_options() -> void:
 		var option_index: int = _mulligan_limit_option.item_count
 		_mulligan_limit_option.add_item(str(limit_option.get("label", "关闭")))
 		_mulligan_limit_option.set_item_metadata(option_index, int(limit_option.get("value", 0)))
+
+
+## 从全局标准配置生成换将卡数量选项；稳定次数写入元数据，中文量词只负责显示。
+func _populate_character_replacement_count_options() -> void:
+	_character_replacement_count_option.clear()
+	for count_option: Dictionary in GameSettings.CHARACTER_REPLACEMENT_COUNT_OPTIONS:
+		# 当前换将卡选项索引；保存0、3、5、8、10或20供两个菜单同步。
+		var option_index: int = _character_replacement_count_option.item_count
+		_character_replacement_count_option.add_item(str(count_option.get("label", "关闭")))
+		_character_replacement_count_option.set_item_metadata(option_index, int(count_option.get("value", 0)))
+
+
+## 从全局标准配置生成一至二十张随机选将牌选项；规则不依赖显示文字解析数量。
+func _populate_character_candidate_count_options() -> void:
+	_character_candidate_count_option.clear()
+	for count_option: Dictionary in GameSettings.CHARACTER_CANDIDATE_COUNT_OPTIONS:
+		# 当前随机候选选项索引；稳定数值直接作为下一局选将服务参数。
+		var option_index: int = _character_candidate_count_option.item_count
+		_character_candidate_count_option.add_item(str(count_option.get("label", "五张")))
+		_character_candidate_count_option.set_item_metadata(option_index, int(count_option.get("value", GameSettings.DEFAULT_CHARACTER_CANDIDATE_COUNT)))
 
 
 ## 依据全局名称模式同步下拉框选中项；无信号更新避免界面刷新重复提交同一个设置。
@@ -359,6 +405,40 @@ func _on_mulligan_limit_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _mulligan_limit_option.item_count:
 		return
 	GameSettings.set_mulligan_limit(int(_mulligan_limit_option.get_item_metadata(option_index)))
+
+
+## 按全局设置同步换将卡数量；无信号选择防止外部菜单变化形成重复保存。
+func _refresh_character_replacement_count_selection(count: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_character_replacement_count_option.item_count):
+		if int(_character_replacement_count_option.get_item_metadata(option_index)) == count:
+			_character_replacement_count_option.select(option_index)
+			return
+
+
+## 将房主选择的换将卡数量写入下一局设置；当前对局继续使用创建时锁定的规则快照。
+func _on_character_replacement_count_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _character_replacement_count_option.item_count:
+		return
+	GameSettings.set_character_replacement_count(int(_character_replacement_count_option.get_item_metadata(option_index)))
+
+
+## 按全局设置同步随机选将牌数；无信号选择保证主菜单与局内菜单显示一致。
+func _refresh_character_candidate_count_selection(count: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_character_candidate_count_option.item_count):
+		if int(_character_candidate_count_option.get_item_metadata(option_index)) == count:
+			_character_candidate_count_option.select(option_index)
+			return
+
+
+## 将房主选择的随机选将牌数写入下一局设置；领袖技固定候选由规则层额外追加。
+func _on_character_candidate_count_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _character_candidate_count_option.item_count:
+		return
+	GameSettings.set_character_candidate_count(int(_character_candidate_count_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。

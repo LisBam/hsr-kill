@@ -6,6 +6,9 @@ extends Control
 ## 日志展开状态改变时发出的界面信号；牌桌协调器可据此实现离线暂停等外围行为，组件自身不读取通信模式。
 signal expanded_changed(expanded: bool)
 
+## 点击未被控件消费的牌桌空白区域时发出的信号；牌桌协调器据此统一收起记录与局内菜单。
+signal blank_area_pressed
+
 ## 展开按钮显示文本；默认“记录”，用于牌桌左侧常驻入口，运行时通常无需动态修改。
 @export var collapsed_button_text: String = "记录"
 
@@ -43,6 +46,17 @@ func is_expanded() -> bool:
 ## 公开设置对局记录显隐；空白点击与按钮切换共用同一状态入口，确保暂停信号始终成对发送。
 func set_expanded(expanded: bool) -> void:
 	_set_expanded(expanded)
+
+
+## 在离线日志暂停期间继续监听未被界面消费的左键；只上报关闭意图，不直接引用菜单或暂停服务。
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_expanded:
+		return
+	if event is InputEventMouseButton:
+		# 当前鼠标事件；只有按下左键且没有被日志正文、按钮或其他控件消费时才视为点击空白区域。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			blank_area_pressed.emit()
 
 
 ## 统一写入展开状态、正文可见性和按钮文本，避免多个节点分别维护状态。

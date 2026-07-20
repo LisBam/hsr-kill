@@ -32,6 +32,9 @@ var _host_match_started: bool = false
 ## 当前进程是否已经提交自己的选将；每个真人每局只允许提交一次候选 ID。
 var _character_selection_submitted: bool = false
 
+## 最近一次已经提交的选将阶段；阶段从领袖先选切换到最终自选后允许同一真人再次提交。
+var _last_submitted_character_selection_phase: String = ""
+
 ## 客户端是否已经在收到起始手牌快照后发送确认动作；防止连续状态快照重复确认。
 var _client_snapshot_acknowledged: bool = false
 
@@ -42,6 +45,8 @@ var _timeout_timer: Timer
 ## 初始化控制器测试速度、连接信号和进程角色；所有组件先完成子节点 _ready 后再启动网络。
 func _ready() -> void:
 	_parse_user_arguments()
+	# 本测试不包含房主人工调整AI的桌面入口；仅覆盖联网选将和私有手牌，因此直接关闭进程内该阶段且不写入玩家设置文件。
+	GameSettings.customize_ai_characters_enabled = false
 	_controller.ai_action_delay_seconds = 0.0
 	_controller.game_flow_interval_seconds = 0.0
 	_gateway.lan_lobby_changed.connect(_on_lobby_changed)
@@ -140,7 +145,9 @@ func _on_match_started(local_player_id: int, player_count: int) -> void:
 
 ## 真人收到自己的裁剪选将快照后选择首张候选；房主与客户端都通过统一 PlayerAction 提交。
 func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
-	if _character_selection_submitted or not bool(selection_snapshot.get("can_select", false)):
+	# 当前选将阶段；同一阶段只提交一次，阶段推进后恢复一次新的合法提交机会。
+	var selection_phase: String = str(selection_snapshot.get("phase", ""))
+	if (_character_selection_submitted and _last_submitted_character_selection_phase == selection_phase) or not bool(selection_snapshot.get("can_select", false)):
 		return
 	# 当前真人私有候选；必须至少有1项，且只有该观察者能收到具体稳定武将 ID。
 	var local_candidates: Array = selection_snapshot.get("local_candidates", []) as Array
@@ -148,9 +155,21 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 		_fail("missing_private_character_candidates")
 		return
 	_character_selection_submitted = true
+	_last_submitted_character_selection_phase = selection_phase
 	# 选将动作；客户端 submit_action 只上行，房主 submit_action 直接进入同一权威校验。
 	var action: PlayerAction = PlayerAction.new("select_character", int(selection_snapshot.get("local_player_id", _controller.local_human_player_id)))
 	action.payload = {"character_id":str(local_candidates[0])}
+	if bool(selection_snapshot.get("allow_custom_assignment", false)):
+		# 当前真人稳定ID、首任领袖ID与首次身份；按ID顺序映射到除一号位外的座次，领袖仍固定一号位。
+		var local_player_id: int = int(selection_snapshot.get("local_player_id", _controller.local_human_player_id))
+		# 首任领袖稳定ID；第一次身份在最终自选中保持不变时仍对应最终一号位。
+		var leader_player_id: int = int(selection_snapshot.get("leader_player_id", -1))
+		# 本地第一次身份；测试按原身份提交可覆盖完整名额且不会产生身份冲突。
+		var local_identity: String = str(selection_snapshot.get("local_identity", ""))
+		# 本地最终座次；非领袖按稳定ID跳过一号位后顺序映射到2号位及以后。
+		var selected_seat_number: int = 1 if local_identity == "leader" else local_player_id + 2 if local_player_id < leader_player_id else local_player_id + 1
+		action.payload["seat_number"] = selected_seat_number
+		action.payload["identity"] = local_identity
 	_controller.submit_action(action)
 
 
@@ -267,7 +286,13 @@ func _install_timeout_guard() -> void:
 
 ## 流程测试超时回调；输出当前进程角色后终止。
 func _on_timeout() -> void:
-	_fail("timeout role=%s" % ("client" if _is_client_process else "host"))
+	# 当前权威阶段与选将待确认者；双进程失败时保留最小诊断，避免只能看到无上下文超时。
+	var current_phase: String = str(_controller.state.current_phase) if _controller.state != null else "none"
+	# 当前选将子阶段；无活动服务时使用none，便于区分开局与对局阶段超时。
+	var selection_phase: String = _controller.character_selection.phase if _controller.character_selection != null else "none"
+	# 当前尚未确认玩家；只在测试失败输出，不修改服务内部数组。
+	var pending_player_ids: Array[int] = _controller.character_selection.get_pending_player_ids() if _controller.character_selection != null else []
+	_fail("timeout role=%s phase=%s selection=%s pending=%s" % ["client" if _is_client_process else "host", current_phase, selection_phase, pending_player_ids])
 
 
 ## 房主发送完成事件后等待可靠包刷出，再释放 ENet 与权威状态并正常退出。
