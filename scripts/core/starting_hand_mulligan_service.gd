@@ -1,7 +1,7 @@
 class_name StartingHandMulliganService
 extends RefCounted
 
-## 开局手气卡服务。该组件只管理次数、完成状态与 AI 起手评估，不移动实体牌、不推进阶段。
+## 开局手气卡服务。该组件只管理张数、完成状态与 AI 起手评估，不移动实体牌、不推进阶段。
 
 ## 无限手气卡模式下 AI 的单局安全评估上限；避免极端随机序列阻塞开局，玩家本人仍不受该上限影响。
 const MAX_AI_UNLIMITED_ATTEMPTS: int = 20
@@ -33,7 +33,7 @@ const MINIMUM_AVERAGE_HAND_VALUE: float = 3.5
 ## 当前手气卡阶段是否仍在进行；全部玩家确认结束后改为false。
 var active: bool = false
 
-## 每名玩家配置的刷新次数；0关闭、1至5有限次数、-1无限次。
+## 每名玩家配置的手气卡张数；0关闭、1至5与10为有限张数、-1无限张。
 var configured_limit: int = 0
 
 ## 是否允许 AI 自动评估并使用手气卡；关闭时 AI 会立即确认保留起始手牌。
@@ -42,7 +42,7 @@ var ai_enabled: bool = false
 ## 本局参与手气卡确认的玩家 ID；按最终座次保存。
 var _player_ids: Array[int] = []
 
-## 玩家 ID 到剩余刷新次数的映射；无限次玩家保存-1。
+## 玩家 ID 到剩余手气卡张数的映射；无限张玩家保存-1。
 var _remaining_by_player: Dictionary = {}
 
 ## 已经确认不再刷新的玩家集合；键为玩家 ID，值固定true。
@@ -55,7 +55,8 @@ var _ai_attempts_by_player: Dictionary = {}
 ## 创建一次手气卡阶段；数量关闭或没有玩家时保持inactive。
 func begin(player_ids: Array[int], limit: int, allow_ai: bool) -> void:
 	_player_ids = player_ids.duplicate()
-	configured_limit = -1 if limit == -1 else clampi(limit, 0, 5)
+	# 标准化后的手气卡张数；服务与设置层共用公开档位，直接构造服务时也不能绕过房主规则。
+	configured_limit = limit if [0, 1, 2, 3, 4, 5, 10, -1].has(limit) else 0
 	ai_enabled = allow_ai
 	_remaining_by_player.clear()
 	_finished_by_player.clear()
@@ -71,18 +72,18 @@ func can_choose(player_id: int) -> bool:
 	return active and _player_ids.has(player_id) and not _finished_by_player.has(player_id)
 
 
-## 返回指定玩家当前是否还有刷新次数；无限次始终返回true。
+## 返回指定玩家当前是否还有手气卡张数；无限张始终返回true。
 func can_refresh(player_id: int) -> bool:
 	if not can_choose(player_id):
 		return false
 	return int(_remaining_by_player.get(player_id, 0)) == -1 or int(_remaining_by_player.get(player_id, 0)) > 0
 
 
-## 消耗一次刷新资格；控制器只有在实体手牌成功重新发放后才能调用。
+## 消耗一张手气卡资格；控制器只有在实体手牌成功重新发放后才能调用。
 func consume_refresh(player_id: int, is_ai: bool = false) -> bool:
 	if not can_refresh(player_id):
 		return false
-	# 当前剩余次数；无限模式不递减，有限模式每次成功刷新减1。
+	# 当前剩余张数；无限模式不递减，有限模式每次成功刷新减1张。
 	var remaining: int = int(_remaining_by_player.get(player_id, 0))
 	if remaining > 0:
 		_remaining_by_player[player_id] = remaining - 1
@@ -101,9 +102,9 @@ func finish_player(player_id: int) -> bool:
 	return true
 
 
-## 返回指定玩家的私有手气卡快照；其他玩家只能从公共阶段得知仍在等待，不获得其剩余次数。
+## 返回指定玩家的私有手气卡快照；其他玩家只能从公共阶段得知仍在等待，不获得其剩余张数。
 func to_dict(viewer_id: int) -> Dictionary:
-	# 当前观察者是否仍需操作；只有本人可以读取剩余次数和提交按钮状态。
+	# 当前观察者是否仍需操作；只有本人可以读取剩余张数和提交按钮状态。
 	var viewer_can_choose: bool = can_choose(viewer_id)
 	return {
 		"active":active,

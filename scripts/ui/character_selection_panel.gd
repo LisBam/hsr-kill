@@ -72,7 +72,7 @@ const NON_CUSTOM_CANDIDATE_CONFIRM_GAP: float = 18.0
 ## 全武将模式主框距离视口四边的安全边距；16像素可最大化牌面区域并避免贴边裁切。
 const ALL_CHARACTERS_FRAME_MARGIN: float = 16.0
 
-## 候选换将按钮宽度；96像素可稳定容纳“换将（20）”且不遮挡相邻牌面。
+## 候选换将按钮宽度；96像素可稳定容纳“换将20”且不遮挡相邻牌面。
 const REPLACEMENT_BUTTON_WIDTH: float = 96.0
 
 ## 候选换将按钮高度；30像素与设置紧凑按钮规格一致，悬停时不会推动牌面布局。
@@ -103,6 +103,9 @@ const IDENTITY_OPTIONS: Array[Dictionary] = [
 
 ## 候选武将悬停放大与恢复的过渡时长；默认0.14秒兼顾响应速度与缩放可见性，运行时无需动态修改。
 @export_range(0.0, 0.5, 0.01) var candidate_hover_transition_seconds: float = 0.14
+
+## 候选区空白位置开始拖动前允许的最大位移；超过该值后转为滚动，避免轻点空白区域误触控件。
+@export_range(4.0, 48.0, 1.0) var candidate_blank_drag_tolerance: float = 18.0
 
 ## 已公开领袖武将牌的显示缩放；默认0.78使其弱于可选候选并保留分隔层级，运行时无需动态修改。
 @export_range(0.5, 1.0, 0.01) var leader_character_scale: float = 0.78
@@ -213,6 +216,18 @@ var _identity_button_views: Dictionary = {}
 ## 普通选将布局的节点矩形缓存；退出全武将模式时原样恢复，避免重复硬编码场景坐标。
 var _default_layout_rects: Dictionary = {}
 
+## 候选空白区域当前是否正在追踪鼠标或触摸拖动；只在未被武将牌输入区消费的手势中启用。
+var _candidate_blank_drag_tracking: bool = false
+
+## 候选空白区域拖动的起始画布坐标；用于区分点击、原生拖条操作与滚动手势。
+var _candidate_blank_drag_start_position: Vector2 = Vector2.ZERO
+
+## 候选空白区域最近一次画布坐标；连续拖动时以相邻事件的位移更新滚动值。
+var _candidate_blank_drag_last_position: Vector2 = Vector2.ZERO
+
+## 候选空白区域当前手势是否已进入滚动；进入后释放不会触发底层控件或后续点击。
+var _candidate_blank_drag_active: bool = false
+
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
@@ -231,6 +246,8 @@ func _ready() -> void:
 		candidate_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		# 候选滚动条始终保留，滚轮滚动后仍可通过右侧拖条继续浏览下方武将。
 		candidate_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+		# 空白候选区也必须能拖动；武将牌自身输入会先消费事件并走独立滚动信号，二者不会重复滚动。
+		candidate_scroll.gui_input.connect(_on_candidate_area_gui_input)
 	_status_label.visible = false
 	_leader_character_label.visible = false
 	_leader_character_area.visible = false
@@ -283,7 +300,7 @@ func refresh_ui_style() -> void:
 		if identity_button != null:
 			_apply_assignment_button_style(identity_button, BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
 	for replacement_button_variant: Variant in _replacement_buttons.values():
-		# 当前换将按钮；主题切换只重绘颜色，不改变剩余次数、悬停显隐或候选内容。
+		# 当前换将按钮；主题切换只重绘颜色，不改变剩余张数、悬停显隐或候选内容。
 		var replacement_button: Button = replacement_button_variant as Button
 		if replacement_button != null:
 			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
@@ -534,7 +551,7 @@ func _render_candidates() -> void:
 			var replacement_button: Button = Button.new()
 			replacement_button.custom_minimum_size = Vector2(REPLACEMENT_BUTTON_WIDTH, REPLACEMENT_BUTTON_HEIGHT)
 			replacement_button.size = replacement_button.custom_minimum_size
-			replacement_button.text = "换将（%d）" % replacement_cards_remaining
+			replacement_button.text = "换将%d" % replacement_cards_remaining
 			replacement_button.tooltip_text = ""
 			replacement_button.visible = false
 			replacement_button.z_index = 20
@@ -576,6 +593,8 @@ func _render_candidates() -> void:
 	var scaled_card_height: float = card_height
 	# 单行槽位高度；换将按钮覆盖牌面底部，不为它预留额外高度，悬停显隐不会造成后续行位移。
 	var row_slot_height: float = scaled_card_height
+	# 悬停顶部安全留白；放大后的首行候选仍完整显示在滚动裁切区内，不会被标题所在上方UI遮住。
+	var hover_vertical_padding: float = card_height * (candidate_hover_scale - 1.0) * 0.5 + 1.0
 	# 全部候选占用宽度；用于在候选区域中水平居中，并支持后续调整候选数量。
 	# 多行布局中该值表示完整行的最大宽度；普通单行布局继续等于全部候选的实际占用宽度。
 	var total_width: float = scaled_card_width * float(column_count) + candidate_gap * float(maxi(column_count - 1, 0))
@@ -598,8 +617,8 @@ func _render_candidates() -> void:
 		var row_width: float = scaled_card_width * float(row_item_count) + candidate_gap * float(maxi(row_item_count - 1, 0))
 		# 当前行起点；完整行沿用统一start_x，最后一行按实际牌数单独居中。
 		var row_start_x: float = start_x if row_item_count == column_count else maxf((_candidate_area.size.x - row_width) * 0.5, 0.0)
-		# 当前行顶部；行间只使用统一候选间距，不因某张牌是否锁定而改变高度。
-		var row_top: float = float(row_index) * (row_slot_height + candidate_gap)
+		# 当前行顶部；顶部悬停留白使第一行放大时不会被候选裁切区域切掉。
+		var row_top: float = hover_vertical_padding + float(row_index) * (row_slot_height + candidate_gap)
 		# 当前牌面基础位置；换将按钮覆盖在牌面底部，不参与悬停缩放中心。
 		var base_position: Vector2 = Vector2(row_start_x + float(column_index) * (scaled_card_width + candidate_gap), row_top)
 		character_view.scale = Vector2.ONE
@@ -610,8 +629,8 @@ func _render_candidates() -> void:
 		var replacement_button: Button = _replacement_buttons.get(character_id) as Button
 		if replacement_button != null:
 			replacement_button.position = Vector2(base_position.x + (card_width - REPLACEMENT_BUTTON_WIDTH) * 0.5, base_position.y + card_height - REPLACEMENT_BUTTON_HEIGHT - REPLACEMENT_BUTTON_BOTTOM_INSET)
-	# 滚动内容尺寸；至少等于可视区域，超出时ScrollContainer自动启用垂直滚动条。
-	var content_height: float = row_slot_height * float(row_count) + candidate_gap * float(maxi(row_count - 1, 0))
+	# 滚动内容尺寸；上下同时保留悬停放大空间，至少等于可视区域时也不会把首尾牌裁切。
+	var content_height: float = row_slot_height * float(row_count) + candidate_gap * float(maxi(row_count - 1, 0)) + hover_vertical_padding * 2.0
 	_candidate_content.custom_minimum_size = Vector2(maxf(_candidate_area.size.x - 16.0, 0.0), maxf(content_height, _candidate_area.size.y))
 	_candidate_content.size = _candidate_content.custom_minimum_size
 
@@ -750,6 +769,60 @@ func _get_random_enabled_seat(excluded_seat_number: int) -> int:
 ## 接收候选牌转发的拖动位移；手指或鼠标向上拖动时增加滚动值，以显示后续武将牌。
 func _on_candidate_scroll_gesture_moved(relative: Vector2) -> void:
 	_scroll_candidate_area_by(-relative.y)
+
+
+## 处理候选区空白位置的鼠标与触屏拖动；候选牌自身已消费的手势不会到达这里，因此不会重复滚动或误选武将。
+func _on_candidate_area_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		# 当前鼠标按键；滚轮由组件级_input统一处理，空白拖动只跟踪左键按下与释放。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if mouse_event.button_index != MOUSE_BUTTON_LEFT:
+			return
+		if mouse_event.pressed:
+			_candidate_blank_drag_tracking = true
+			_candidate_blank_drag_active = false
+			_candidate_blank_drag_start_position = mouse_event.position
+			_candidate_blank_drag_last_position = mouse_event.position
+			return
+		_candidate_blank_drag_tracking = false
+		_candidate_blank_drag_active = false
+		return
+	if event is InputEventMouseMotion and _candidate_blank_drag_tracking:
+		# 当前鼠标位移；达到容差后才开始滚动，避免点击候选区空白时出现短促跳动。
+		var motion_event: InputEventMouseMotion = event as InputEventMouseMotion
+		if motion_event.position.distance_to(_candidate_blank_drag_start_position) > candidate_blank_drag_tolerance:
+			_candidate_blank_drag_active = true
+		if _candidate_blank_drag_active:
+			_scroll_candidate_area_by(-motion_event.relative.y)
+			get_viewport().set_input_as_handled()
+		_candidate_blank_drag_last_position = motion_event.position
+		return
+	if event is InputEventScreenTouch and not _uses_touch_mouse_emulation():
+		# 当前原始触屏按下或释放；Android模拟鼠标开启时只处理上方鼠标路径，防止同一次触摸滚动两遍。
+		var touch_event: InputEventScreenTouch = event as InputEventScreenTouch
+		if touch_event.pressed:
+			_candidate_blank_drag_tracking = true
+			_candidate_blank_drag_active = false
+			_candidate_blank_drag_start_position = touch_event.position
+			_candidate_blank_drag_last_position = touch_event.position
+		else:
+			_candidate_blank_drag_tracking = false
+			_candidate_blank_drag_active = false
+		return
+	if event is InputEventScreenDrag and _candidate_blank_drag_tracking and not _uses_touch_mouse_emulation():
+		# 当前原始触屏位移；与鼠标拖动使用同一容差和像素滚动方向，方便安卓端滑过武将间空白处。
+		var touch_drag_event: InputEventScreenDrag = event as InputEventScreenDrag
+		if touch_drag_event.position.distance_to(_candidate_blank_drag_start_position) > candidate_blank_drag_tolerance:
+			_candidate_blank_drag_active = true
+		if _candidate_blank_drag_active:
+			_scroll_candidate_area_by(-touch_drag_event.relative.y)
+			get_viewport().set_input_as_handled()
+		_candidate_blank_drag_last_position = touch_drag_event.position
+
+
+## 返回项目是否已经把触摸统一转换为鼠标事件；开启时空白候选拖动只走鼠标路径，避免重复消费位移。
+func _uses_touch_mouse_emulation() -> bool:
+	return bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false))
 
 
 ## 在候选滚动区内按像素增量移动并限制到可拖动范围；确认按钮位于兄弟节点，不会随此操作离开视口。
@@ -992,7 +1065,7 @@ func _refresh_replacement_button_visibility(character_id: String) -> void:
 	replacement_button.visible = over_button or over_character
 
 
-## 提交单张候选换将请求并暂时禁用全部换将按钮；下一份权威快照会重建剩余次数与候选。
+## 提交单张候选换将请求并暂时禁用全部换将按钮；下一份权威快照会重建剩余张数与候选。
 func _request_candidate_replacement(character_id: String) -> void:
 	for replacement_button_variant: Variant in _replacement_buttons.values():
 		# 当前换将按钮；统一禁用可防止网络往返期间连续点击重复消耗。

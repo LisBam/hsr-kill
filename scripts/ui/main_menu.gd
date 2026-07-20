@@ -125,10 +125,10 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 房主调整全部 AI 武将开关；初次选将完成后决定是否插入开局前调整阶段。
 @onready var _customize_ai_characters_checkbox: CheckBox = %MainMenuCustomizeAiCharactersCheckBox
 
-## 手气卡数量下拉框；选项元数据保存0至5或-1，不依赖显示文字解析次数。
+## 手气卡数量下拉框；选项元数据保存0至5、10或-1，不依赖显示文字解析张数。
 @onready var _mulligan_limit_option: OptionButton = %MainMenuMulliganLimitOption
 
-## AI 使用手气卡开关；实际刷新次数仍读取手气卡数量设置。
+## AI 使用手气卡开关；实际刷新张数仍读取手气卡数量设置。
 @onready var _ai_uses_mulligan_checkbox: CheckBox = %MainMenuAiUsesMulliganCheckBox
 
 ## 换将卡数量下拉框；元数据保存0、3、5、8、10或20，作为房主下一局权威规则。
@@ -697,11 +697,11 @@ func _populate_card_name_options() -> void:
 		_card_name_option.set_item_metadata(option_index, mode_option.get("mode", GameSettings.NameMode.CUSTOM))
 
 
-## 从标准手气卡配置构建下拉选项；次数语义保存在元数据中，界面文字调整不会影响规则值。
+## 从标准手气卡配置构建下拉选项；张数语义保存在元数据中，界面文字调整不会影响规则值。
 func _populate_mulligan_limit_options() -> void:
 	_mulligan_limit_option.clear()
 	for limit_option: Dictionary in GameSettings.MULLIGAN_LIMIT_OPTIONS:
-		# 当前手气卡选项索引；元数据保存0至5或-1，避免通过中文显示文字反向解析规则。
+		# 当前手气卡选项索引；元数据保存0至5、10或-1，避免通过中文显示文字反向解析规则。
 		var option_index: int = _mulligan_limit_option.item_count
 		_mulligan_limit_option.add_item(str(limit_option.get("label", "关闭")))
 		_mulligan_limit_option.set_item_metadata(option_index, int(limit_option.get("value", 0)))
@@ -779,7 +779,7 @@ func _refresh_mulligan_limit_selection(limit: int) -> void:
 			return
 
 
-## 将玩家选中的手气卡次数写入下一局全局设置；当前已经创建的对局继续使用自身锁定配置。
+## 将玩家选中的手气卡张数写入下一局全局设置；当前已经创建的对局继续使用自身锁定配置。
 func _on_mulligan_limit_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _mulligan_limit_option.item_count:
 		return
