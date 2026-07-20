@@ -72,7 +72,7 @@ const NON_CUSTOM_CANDIDATE_CONFIRM_GAP: float = 18.0
 ## 全武将模式主框距离视口四边的安全边距；16像素可最大化牌面区域并避免贴边裁切。
 const ALL_CHARACTERS_FRAME_MARGIN: float = 16.0
 
-## 候选换将按钮宽度；96像素可稳定容纳“换将20”且不遮挡相邻牌面。
+## 候选换将按钮宽度；96像素可稳定容纳“换将 20”且不遮挡相邻牌面。
 const REPLACEMENT_BUTTON_WIDTH: float = 96.0
 
 ## 候选换将按钮高度；30像素与设置紧凑按钮规格一致，悬停时不会推动牌面布局。
@@ -83,6 +83,9 @@ const REPLACEMENT_BUTTON_BOTTOM_INSET: float = 12.0
 
 ## 全武将模式确认按钮上方与滚动区之间的间距；12像素保证滚动条不会贴住主要操作。
 const ALL_CHARACTERS_CONFIRM_GAP: float = 12.0
+
+## 全武将模式右上返回按钮为常驻菜单预留的横向空间；避免两个可点击入口发生视觉或输入覆盖。
+const ALL_CHARACTERS_MENU_BUTTON_CLEARANCE: float = 192.0
 
 ## 四种身份按钮的稳定排列；显示文字与主题颜色均从该表统一解析。
 const IDENTITY_OPTIONS: Array[Dictionary] = [
@@ -248,6 +251,11 @@ func _ready() -> void:
 		candidate_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
 		# 空白候选区也必须能拖动；武将牌自身输入会先消费事件并走独立滚动信号，二者不会重复滚动。
 		candidate_scroll.gui_input.connect(_on_candidate_area_gui_input)
+	if _candidate_content != null:
+		# 候选内容节点会覆盖滚动容器的全部空白区域；必须直接转发手势，否则空白位置会在此节点被拦截。
+		_candidate_content.mouse_filter = Control.MOUSE_FILTER_STOP
+		_candidate_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_candidate_content.gui_input.connect(_on_candidate_area_gui_input)
 	_status_label.visible = false
 	_leader_character_label.visible = false
 	_leader_character_area.visible = false
@@ -551,7 +559,7 @@ func _render_candidates() -> void:
 			var replacement_button: Button = Button.new()
 			replacement_button.custom_minimum_size = Vector2(REPLACEMENT_BUTTON_WIDTH, REPLACEMENT_BUTTON_HEIGHT)
 			replacement_button.size = replacement_button.custom_minimum_size
-			replacement_button.text = "换将%d" % replacement_cards_remaining
+			replacement_button.text = "换将 %d" % replacement_cards_remaining
 			replacement_button.tooltip_text = ""
 			replacement_button.visible = false
 			replacement_button.z_index = 20
@@ -632,7 +640,10 @@ func _render_candidates() -> void:
 	# 滚动内容尺寸；上下同时保留悬停放大空间，至少等于可视区域时也不会把首尾牌裁切。
 	var content_height: float = row_slot_height * float(row_count) + candidate_gap * float(maxi(row_count - 1, 0)) + hover_vertical_padding * 2.0
 	_candidate_content.custom_minimum_size = Vector2(maxf(_candidate_area.size.x - 16.0, 0.0), maxf(content_height, _candidate_area.size.y))
-	_candidate_content.size = _candidate_content.custom_minimum_size
+	# 内容最小尺寸改变后主动请求ScrollContainer重新计算滚动范围；尺寸由容器自行分配，不能手动覆盖。
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	if candidate_scroll != null:
+		candidate_scroll.queue_sort()
 
 
 ## 返回当前需要展示的候选武将；“所有武将”开启时使用静态全量列表，否则使用本次随机候选。
@@ -648,7 +659,7 @@ func _render_custom_assignment_controls() -> void:
 	# 是否允许展开全部武将；初次自选与启用联动设置后的 AI 调整都可显示。
 	var allow_all_characters: bool = bool(_snapshot.get("allow_all_characters", false))
 	_all_characters_button.visible = allow_all_characters and bool(_snapshot.get("can_select", false))
-	_all_characters_button.text = "随机候选" if _showing_all_characters else "所有武将"
+	_all_characters_button.text = "返回" if _showing_all_characters else "所有武将"
 	# 是否允许选择座次与身份；AI 调整阶段明确关闭这两组控件。
 	var allow_custom_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false)) and str(_snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM and not _showing_all_characters
 	_seat_buttons.visible = allow_custom_assignment
@@ -693,7 +704,7 @@ func _toggle_all_characters() -> void:
 		return
 	_showing_all_characters = not _showing_all_characters
 	_apply_all_characters_layout(_showing_all_characters)
-	_all_characters_button.text = "随机候选" if _showing_all_characters else "所有武将"
+	_all_characters_button.text = "返回" if _showing_all_characters else "所有武将"
 	# 当前武将若不在切换后的展示列表中，清除临时选择防止确认不可见牌面。
 	var displayed_candidates: Array = _get_displayed_candidate_ids()
 	if not displayed_candidates.has(_selected_character_id):
@@ -831,11 +842,21 @@ func _scroll_candidate_area_by(vertical_delta: float) -> void:
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
 	if candidate_scroll == null:
 		return
-	# 当前竖向滚动条；最大值减去可视页高才是允许写入scroll_vertical的最大位置。
+	# 当前竖向滚动条；动态候选内容的实际位移仍需与原生拖条范围保持同一上下限。
 	var vertical_scroll_bar: ScrollBar = candidate_scroll.get_v_scroll_bar()
-	var maximum_scroll_vertical: int = maxi(roundi(vertical_scroll_bar.max_value - vertical_scroll_bar.page), 0)
-	var next_scroll_vertical: int = clampi(roundi(float(candidate_scroll.scroll_vertical) + vertical_delta), 0, maximum_scroll_vertical)
-	candidate_scroll.scroll_vertical = next_scroll_vertical
+	# 动态Node2D候选不会稳定触发ScrollContainer的纵向范围刷新，因此按内容实际高度补齐同一原生拖条范围。
+	var content_height: float = _candidate_content.size.y if _candidate_content != null else 0.0
+	var viewport_height: float = candidate_scroll.size.y
+	var required_maximum_scroll_vertical: int = maxi(ceili(content_height - viewport_height), 0)
+	if required_maximum_scroll_vertical > 0 and vertical_scroll_bar.max_value - vertical_scroll_bar.page < float(required_maximum_scroll_vertical):
+		vertical_scroll_bar.max_value = content_height
+		vertical_scroll_bar.page = viewport_height
+	var maximum_scroll_vertical: int = maxi(roundi(vertical_scroll_bar.max_value - vertical_scroll_bar.page), required_maximum_scroll_vertical)
+	# 当前内容位移；ScrollContainer对动态Node2D内容会重置scroll_vertical，因此以内容局部位置作为稳定滚动来源。
+	var current_scroll_vertical: int = roundi(-_candidate_content.position.y) if _candidate_content != null else candidate_scroll.scroll_vertical
+	var next_scroll_vertical: int = clampi(roundi(float(current_scroll_vertical) + vertical_delta), 0, maximum_scroll_vertical)
+	if _candidate_content != null:
+		_candidate_content.position.y = -float(next_scroll_vertical)
 
 
 ## 优先处理候选区域内的鼠标滚轮；候选牌输入区即使覆盖整张牌，也不会再吞掉列表滚动事件。
@@ -920,7 +941,8 @@ func _select_candidate(character_id: String) -> void:
 ## 根据当前武将、座次与身份临时值更新确认按钮；AI 调整模式只要求选择武将。
 func _update_confirm_state() -> void:
 	# 自选模式完整性；普通选将与 AI 调整不要求座次和身份字段。
-	var requires_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false))
+	# 座次身份只在首任领袖公开选将后的最终自选阶段要求；首任领袖阶段不能因隐藏控件而无法确认武将。
+	var requires_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and str(_snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM
 	var assignment_complete: bool = not requires_assignment or (_selected_seat_number >= 1 and not _selected_identity.is_empty())
 	_confirm_button.disabled = _selected_character_id.is_empty() or not assignment_complete
 	if _selected_character_id.is_empty():
@@ -1123,8 +1145,10 @@ func _apply_all_characters_layout(enabled: bool) -> void:
 	_selection_frame.offset_bottom = -ALL_CHARACTERS_FRAME_MARGIN
 	# 全屏主框实际尺寸；锚点和偏移赋值后可直接用于内部稳定矩形计算。
 	var frame_size: Vector2 = _selection_frame.size
-	_restore_control_rect(_title_label, Rect2(24.0, 18.0, maxf(frame_size.x - 222.0, 0.0), 36.0))
-	_restore_control_rect(_all_characters_button, Rect2(maxf(frame_size.x - 188.0, 24.0), 16.0, 164.0, 38.0))
+	# 右上返回按钮；在常驻菜单按钮左侧预留固定空间，避免遮挡返回入口或拦截其点击。
+	var all_characters_button_x: float = maxf(frame_size.x - ALL_CHARACTERS_MENU_BUTTON_CLEARANCE - 164.0, 24.0)
+	_restore_control_rect(_title_label, Rect2(24.0, 18.0, maxf(all_characters_button_x - 36.0, 0.0), 36.0))
+	_restore_control_rect(_all_characters_button, Rect2(all_characters_button_x, 16.0, 164.0, 38.0))
 	_restore_control_rect(_confirm_button, Rect2(maxf((frame_size.x - 260.0) * 0.5, 24.0), maxf(frame_size.y - 66.0, 68.0), 260.0, 48.0))
 	# 候选滚动区；上方避开标题，下方停在固定确认按钮之前。
 	var candidate_bottom: float = _confirm_button.position.y - ALL_CHARACTERS_CONFIRM_GAP
