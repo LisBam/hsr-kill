@@ -176,7 +176,7 @@ func _validate_card_touch_input() -> bool:
 	return true
 
 
-## 验证武将牌的Android模拟鼠标长按打开详情，并抑制同一次手势的目标激活。
+## 验证武将牌的Android模拟鼠标长按显示信息、双击打开详情，并抑制长按手势的目标激活。
 func _validate_player_touch_input() -> bool:
 	# 测试武将输入组件；长按阈值调到允许范围下限以缩短自动回归耗时。
 	var player_input_area: PlayerTargetInputArea = PlayerTargetInputArea.new()
@@ -184,11 +184,14 @@ func _validate_player_touch_input() -> bool:
 	player_input_area.touch_details_hold_seconds = 0.25
 	add_child(player_input_area)
 	player_input_area.configure(true)
-	# 武将详情请求次数；稳定长按应且只能发出一次details_requested。
+	# 武将详情请求次数；连续双击应且只能发出一次details_requested。
 	var details_count: Array[int] = [0]
+	# 武将信息请求次数；稳定长按应且只能发出一次information_requested。
+	var information_count: Array[int] = [0]
 	# 武将目标激活次数；同一次长按释放不得再额外选择目标。
 	var activated_count: Array[int] = [0]
 	player_input_area.details_requested.connect(func() -> void: details_count[0] += 1)
+	player_input_area.information_requested.connect(func(_local_position: Vector2) -> void: information_count[0] += 1)
 	player_input_area.activated.connect(func(_local_position: Vector2) -> void: activated_count[0] += 1)
 	# 武将牌模拟鼠标按下事件；位置位于组件内部并保持不移动以满足长按语义。
 	var press_event: InputEventMouseButton = InputEventMouseButton.new()
@@ -197,16 +200,41 @@ func _validate_player_touch_input() -> bool:
 	press_event.pressed = true
 	player_input_area._gui_input(press_event)
 	await get_tree().create_timer(TOUCH_HOLD_TEST_WAIT_SECONDS).timeout
-	# 武将牌模拟鼠标释放事件；详情已打开时释放只结束手势，不提交目标选择。
+	# 武将牌模拟鼠标释放事件；信息已打开时释放只结束手势，不提交目标选择。
 	var release_event: InputEventMouseButton = InputEventMouseButton.new()
 	release_event.button_index = MOUSE_BUTTON_LEFT
 	release_event.position = press_event.position
 	release_event.pressed = false
 	player_input_area._gui_input(release_event)
 	await get_tree().process_frame
-	player_input_area.queue_free()
-	if details_count[0] != 1 or activated_count[0] != 0:
+	if information_count[0] != 1 or details_count[0] != 0 or activated_count[0] != 0:
 		return _fail("player_touch_hold")
+	# 首次双击按下；快速轻触仍走标准鼠标模拟路径，不使用原始触屏事件避免重复处理。
+	var first_double_press_event: InputEventMouseButton = InputEventMouseButton.new()
+	first_double_press_event.button_index = MOUSE_BUTTON_LEFT
+	first_double_press_event.position = Vector2(70.0, 90.0)
+	first_double_press_event.pressed = true
+	player_input_area._gui_input(first_double_press_event)
+	var first_double_release_event: InputEventMouseButton = InputEventMouseButton.new()
+	first_double_release_event.button_index = MOUSE_BUTTON_LEFT
+	first_double_release_event.position = first_double_press_event.position
+	first_double_release_event.pressed = false
+	player_input_area._gui_input(first_double_release_event)
+	# 第二次轻触；间隔小于组件导出的0.32秒窗口后必须转为资料请求。
+	var second_double_press_event: InputEventMouseButton = InputEventMouseButton.new()
+	second_double_press_event.button_index = MOUSE_BUTTON_LEFT
+	second_double_press_event.position = first_double_press_event.position
+	second_double_press_event.pressed = true
+	player_input_area._gui_input(second_double_press_event)
+	var second_double_release_event: InputEventMouseButton = InputEventMouseButton.new()
+	second_double_release_event.button_index = MOUSE_BUTTON_LEFT
+	second_double_release_event.position = second_double_press_event.position
+	second_double_release_event.pressed = false
+	player_input_area._gui_input(second_double_release_event)
+	await get_tree().process_frame
+	player_input_area.queue_free()
+	if details_count[0] != 1:
+		return _fail("player_touch_double_tap")
 	return true
 
 

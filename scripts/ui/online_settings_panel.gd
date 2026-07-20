@@ -21,10 +21,10 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 相邻武将牌行之间的垂直间距；默认16像素避免选中描边与下一行牌面相交，运行时只影响资料面板布局。
 @export_range(0.0, 48.0, 1.0) var avatar_vertical_gap: float = 16.0
 
-## 面板全屏遮罩；打开资料设置时阻断主菜单底层鼠标输入，并使用当前主题 shade 语义色。
+## 旧版全屏遮罩节点；资料设置现作为主菜单内容页展示，保留该节点仅兼容既有场景资源且始终隐藏。
 @onready var _backdrop: ColorRect = %OnlineSettingsBackdrop
 
-## 联机资料中央主面板；名称编辑、武将形象列表和保存操作共同位于该容器。
+## 联机资料内容框；名称编辑、武将形象列表和保存操作共同位于主菜单客户区。
 @onready var _panel: PanelContainer = %OnlineSettingsFrame
 
 ## 面板标题；固定显示“联机设置”，只承担界面说明。
@@ -61,7 +61,8 @@ var _avatar_views: Dictionary = {}
 ## 初始化资料面板信号与主题监听；组件默认隐藏，只有主菜单顶部入口显式打开后才接收输入。
 func _ready() -> void:
 	visible = false
-	_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_backdrop.visible = false
+	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
 	_player_name_input.select_all_on_focus = false
 	_save_button.pressed.connect(_save_and_close)

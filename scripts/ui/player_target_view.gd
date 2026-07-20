@@ -136,6 +136,9 @@ var _match_overlays_visible: bool = false
 ## 当前是否允许在武将牌中绘制公开装备横条；第一视角本地牌关闭，其他玩家与通用候选保持开启。
 var _public_equipment_visible: bool = true
 
+## 当前是否允许在武将牌底边绘制公开延时锦囊；第一视角本地牌关闭后改由手牌区上方的独立判定区显示。
+var _public_judgment_visible: bool = true
+
 ## 当前客户端为未知身份添加的本地标注；空字符串表示保持问号，不参与规则、AI、网络或回放。
 var _identity_mark: String = ""
 
@@ -219,6 +222,8 @@ func _ready() -> void:
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(_on_input_activated)
 	_input_area.details_requested.connect(_on_input_details_requested)
+	_input_area.information_requested.connect(_on_input_information_requested)
+	_input_area.information_dismissed.connect(_on_input_information_dismissed)
 	_input_area.pointer_moved.connect(_on_input_pointer_moved)
 	_input_area.scroll_gesture_moved.connect(_on_input_scroll_gesture_moved)
 	_input_area.mouse_entered.connect(_on_input_mouse_entered)
@@ -344,6 +349,7 @@ func set_match_overlays_visible(visible_in_match: bool) -> void:
 	_refresh_input_area_size()
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
+	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_refresh_auto_managed_label()
 	_refresh_hover_name_visibility()
 
@@ -353,7 +359,7 @@ func _refresh_input_area_size() -> void:
 	if _input_area == null or _public_zone_label == null:
 		return
 	# 当前输入高度；只有正式对局的延时锦囊需要扩展到牌面底边之外，选将候选继续严格占用自身牌面矩形。
-	var input_height: float = maxf(card_size.y, _public_zone_label.position.y + _public_zone_label.size.y) if _match_overlays_visible else card_size.y
+	var input_height: float = maxf(card_size.y, _public_zone_label.position.y + _public_zone_label.size.y) if _match_overlays_visible and _public_judgment_visible else card_size.y
 	_input_area.size = Vector2(card_size.x, input_height)
 
 
@@ -365,6 +371,17 @@ func set_public_equipment_visible(visible_on_card: bool) -> void:
 	if not is_node_ready():
 		return
 	_refresh_equipment_rows()
+
+
+## 设置武将牌底边是否显示公开延时锦囊；本地第一视角关闭后由桌面独立区域承担相同公开信息。
+func set_public_judgment_visible(visible_on_card: bool) -> void:
+	if _public_judgment_visible == visible_on_card:
+		return
+	_public_judgment_visible = visible_on_card
+	if not is_node_ready():
+		return
+	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
+	_refresh_input_area_size()
 
 
 ## 写入当前客户端对未知身份的本地标注；身份公开时标注自动失效且不会覆盖真实身份。
@@ -421,6 +438,27 @@ func _on_input_details_requested() -> void:
 	if not _match_overlays_visible or _player_snapshot.is_empty() or _character_definition.is_empty():
 		return
 	details_requested.emit(_player_snapshot.duplicate(true), _character_definition.duplicate(true), _faction_definition.duplicate(true))
+
+
+## 处理触屏或模拟触摸的长按信息请求；命中公开装备或延时锦囊时优先显示该牌，否则显示武将静态资料。
+func _on_input_information_requested(local_position: Vector2) -> void:
+	if _player_snapshot.is_empty() or _character_definition.is_empty():
+		return
+	_is_hovered = true
+	_refresh_hover_name_visibility()
+	_request_character_information()
+	_update_public_equipment_information(local_position)
+	_update_public_judgment_information(local_position)
+
+
+## 结束触屏或模拟触摸的长按信息；清理本次命中状态并关闭当前武将牌来源的信息框。
+func _on_input_information_dismissed() -> void:
+	_is_hovered = false
+	_refresh_hover_name_visibility()
+	_dismiss_public_equipment_information()
+	_dismiss_public_judgment_information()
+	if _hovered_equipment_slot.is_empty() and _hovered_judgment_index < 0:
+		information_dismissed.emit()
 
 
 ## 请求通过统一目标旁信息框显示武将静态资料；本地、其他玩家与选将候选共用相同内容结构。
@@ -629,6 +667,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 木牛数量在装备条刷新时读取；显式访问保证公开数量字段缺失时仍使用0作为稳定回退。
 	wooden_ox_count = maxi(wooden_ox_count, 0)
 	_public_zone_label.configure(judgment_names)
+	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_faction_badge_label.text = faction_short_name
 	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_faction_badge_label.tooltip_text = ""
@@ -929,7 +968,7 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 
 ## 根据公开判定区菱形标记命中延时锦囊，并请求与装备横条相同的统一卡牌信息。
 func _update_public_judgment_information(local_position: Vector2) -> void:
-	if not _match_overlays_visible or not _is_hovered or is_face_down:
+	if not _match_overlays_visible or not _public_judgment_visible or not _is_hovered or is_face_down:
 		return
 	# 当前公开判定区；空数组无需进行标记命中，也不泄漏任何隐藏区域信息。
 	var judgment_area: Array = _player_snapshot.get("judgment_area", []) as Array

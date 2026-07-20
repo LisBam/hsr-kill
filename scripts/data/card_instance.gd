@@ -41,6 +41,12 @@ var hand_view_as_original_definition_id: String = ""
 ## 赋予当前手牌视为效果的技能ID；只用于规则追踪与清理，不改变技能归属或实体所有者。
 var hand_view_as_source_skill_id: String = ""
 
+## 最近一次离开手牌时的原实体定义ID；仅供处理区与弃牌堆展示保留来源牌面，不参与后续规则判定。
+var last_hand_view_as_original_definition_id: String = ""
+
+## 最近一次离开手牌时的视为逻辑定义ID；仅供处理区与弃牌堆展示保留本次视为牌名，不参与后续规则判定。
+var last_hand_view_as_definition_id: String = ""
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 ## existing_uid 仅供网络快照、回放与规则续接恢复既有实体；默认-1会生成全新递增编号，运行时通常不动态指定。
@@ -73,6 +79,8 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	card.private_owner_id = int(data.get("private_owner_id", -1))
 	card.hand_view_as_original_definition_id = str(data.get("original_definition_id", ""))
 	card.hand_view_as_source_skill_id = str(data.get("hand_view_as_source_skill_id", ""))
+	card.last_hand_view_as_original_definition_id = str(data.get("presentation_original_definition_id", ""))
+	card.last_hand_view_as_definition_id = str(data.get("view_as_definition_id", ""))
 	return card
 
 
@@ -100,6 +108,9 @@ func set_hand_view_as(view_as_definition_id: String, source_skill_id: String) ->
 func clear_hand_view_as() -> String:
 	# 清除前逻辑牌ID；响应与虚拟使用流程可据此继续结算已经声明的牌效。
 	var previous_view_as_definition_id: String = definition_id
+	# 离手展示来源；弃牌与处理区仍需保留原实体与本次视为牌名，规则定义本身会立刻恢复。
+	last_hand_view_as_original_definition_id = hand_view_as_original_definition_id
+	last_hand_view_as_definition_id = previous_view_as_definition_id
 	if not hand_view_as_original_definition_id.is_empty():
 		definition_id = hand_view_as_original_definition_id
 	hand_view_as_original_definition_id = ""
@@ -112,10 +123,20 @@ func has_hand_view_as() -> bool:
 	return not hand_view_as_original_definition_id.is_empty()
 
 
+## 清理已结束的视为牌展示来源；牌进入牌堆、手牌、装备、判定或木牛区域后不再保留旧一次性视为记录。
+func clear_hand_view_as_presentation() -> void:
+	last_hand_view_as_original_definition_id = ""
+	last_hand_view_as_definition_id = ""
+
+
 ## 序列化为网络安全字典；不包含任何对象引用或可执行回调。
 func to_dict() -> Dictionary:
 	# 原始定义 ID；手牌处于视为状态时供表现层保留实体牌面名称，空字符串表示当前没有临时视为效果。
 	var original_definition_id: String = hand_view_as_original_definition_id
+	# 展示原始定义 ID；已清除手牌视为状态后仍保留到本次处理或弃牌展示结束。
+	var presentation_original_definition_id: String = hand_view_as_original_definition_id if not hand_view_as_original_definition_id.is_empty() else last_hand_view_as_original_definition_id
+	# 展示视为定义 ID；手牌中直接使用当前逻辑定义，离手后读取最近一次已结束的视为记录。
+	var view_as_definition_id: String = definition_id if not hand_view_as_original_definition_id.is_empty() else last_hand_view_as_definition_id
 	return {
 		"uid": uid,
 		"definition_id": definition_id,
@@ -128,4 +149,6 @@ func to_dict() -> Dictionary:
 		"known_to": known_to.duplicate(),
 		"shown": shown,
 		"private_owner_id": private_owner_id,
+		"presentation_original_definition_id": presentation_original_definition_id,
+		"view_as_definition_id": view_as_definition_id,
 	}

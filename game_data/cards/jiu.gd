@@ -2,6 +2,9 @@ extends CardDefinition
 
 ## 【酒】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
+## AI判定【酒】缺少可获益【杀】时的固定降权；-4分会抵消出牌顺序带来的微弱正值，避免无【杀】时空用【酒】。
+const AI_WINE_WITHOUT_SLASH_PENALTY: float = 4.0
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -66,6 +69,51 @@ func resolve_dying_response(match_host: Object, responder_id: int, dying_player_
 	match_host.recover(responder_id, dying_player_id, 1, get_id())
 	match_host.add_log("%s在濒死时使用【酒】自救。" % target.display_name)
 	return true
+
+
+## 修正出牌阶段的【酒】评分；正常使用不会回复体力，只有存在一张可对敌方产生正收益的【杀】时才保留主动使用价值。
+func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
+	# 当前行动者；动作字典必须携带稳定 ID，缺失时保守拒绝消耗本牌。
+	var actor_id: int = int(action.get("actor_id", -1))
+	# 当前行动者快照；完整 AI 快照同时包含普通手牌与木牛“粮”中的可用【杀】。
+	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, actor_id)
+	if actor.is_empty():
+		return current_score - AI_WINE_WITHOUT_SLASH_PENALTY
+	# 当前是否存在可产生正收益的下一张【杀】；仅有【杀】但没有可攻击敌人或全部被防具拦截时同样不应喝酒。
+	var has_profitable_slash: bool = false
+	# 【酒】后的下一张【杀】伤害基数；本牌正常使用固定把基础1点提高到2点。
+	var boosted_damage_amount: int = 2
+	for zone_name: String in ["hand", "wooden_ox_storage"]:
+		for card_variant: Variant in actor.get(zone_name, []) as Array:
+			# 当前可用实体牌；只读快照提供花色，供仁王盾等颜色型防具预判。
+			var slash_card: Dictionary = card_variant as Dictionary
+			# 当前实体逻辑定义；普通、火与雷【杀】都以 effect_id=slash 进入统一判断。
+			var slash_definition: Dictionary = GameDatabase.get_card(str(slash_card.get("definition_id", "")))
+			if str(slash_definition.get("effect_id", "")) != "slash":
+				continue
+			# 当前【杀】AI配置；目标结果和响应要求由卡牌定义声明，不复制到【酒】的专属逻辑中。
+			var slash_ai: Dictionary = evaluator.get_card_ai_profile(slash_definition)
+			# 当前目标效果基准；缺失配置按伤害牌的负向目标效果安全回退。
+			var slash_target_result: float = float(slash_ai.get("target_result", -1.0))
+			for target_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+				# 当前潜在目标；死亡、离场、自己和非敌方角色都不能让主动喝酒成立。
+				var target: Dictionary = target_variant as Dictionary
+				var target_id: int = int(target.get("player_id", -1))
+				if target_id == actor_id or not bool(target.get("alive", false)) or bool(target.get("out_of_game", false)) or evaluator.get_attitude(authoritative_snapshot, actor_id, target_id) >= 0.0:
+					continue
+				# 当前攻击距离；下一张【杀】仍必须遵守当前武器和坐骑形成的正式攻击范围。
+				if evaluator.get_distance(authoritative_snapshot, actor_id, target_id) > evaluator.get_attack_range(authoritative_snapshot, actor_id):
+					continue
+				# 酒杀目标收益；防具、已知响应牌、濒危与连环风险均由统一评估器计算。
+				var slash_score: float = evaluator.score_target_effect(authoritative_snapshot, actor_id, target_id, slash_definition, slash_ai, slash_target_result, str(slash_card.get("color", "")), boosted_damage_amount)
+				if slash_score > 0.0:
+					has_profitable_slash = true
+					break
+			if has_profitable_slash:
+				break
+		if has_profitable_slash:
+			break
+	return current_score if has_profitable_slash else current_score - AI_WINE_WITHOUT_SLASH_PENALTY
 
 
 ## 新回合开始时重置该玩家的【酒】使用标记与未消耗伤害加值。

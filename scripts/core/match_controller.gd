@@ -8052,6 +8052,8 @@ func _reshuffle_discard_pile() -> void:
 	for card: CardInstance in state.draw_pile:
 		card.zone = "draw_pile"
 		card.owner_id = -1
+		# 弃牌展示用的临时视为记录只属于上一轮公共区可见性；洗回牌堆后必须恢复为未展示状态。
+		card.clear_hand_view_as_presentation()
 		card.known_to.clear()
 		card.shown = false
 		card.private_owner_id = -1

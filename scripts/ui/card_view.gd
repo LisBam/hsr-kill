@@ -220,8 +220,10 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	is_interactable = interactable
 	_dim_when_disabled = dim_when_disabled
 	is_face_down = false
-	# 当前实体牌的原始定义 ID；视为状态中 definition 仍是逻辑牌定义，原始 ID 仅由快照明确传入。
-	var original_definition_id: String = str(card.get("original_definition_id", ""))
+	# 当前实体牌的展示原始定义 ID；手牌视为状态与离手后的弃牌展示都通过该字段保留真实牌面。
+	var original_definition_id: String = str(card.get("presentation_original_definition_id", card.get("original_definition_id", "")))
+	# 当前实体牌的展示视为定义 ID；离手后实体定义已经恢复原牌，因此必须从独立展示字段读取本次逻辑牌名。
+	var view_as_definition_id: String = str(card.get("view_as_definition_id", ""))
 	# 当前实体牌的视觉定义；视为状态必须保留原牌插画、类别和底部名称，不把原实体牌改画成逻辑牌。
 	var visual_definition: Dictionary = definition.duplicate(true)
 	# 当前视为名称；空字符串表示普通实体牌无需额外覆盖层。
@@ -231,9 +233,13 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 		var original_definition: Dictionary = GameDatabase.get_card(original_definition_id)
 		if not original_definition.is_empty():
 			visual_definition = original_definition
-			_view_as_display_name_text = GameSettings.resolve_card_display_name(definition)
+			# 视为逻辑定义；手牌中的旧快照缺失独立字段时回退当前 definition，兼容既有网络与回放数据。
+			var view_as_definition: Dictionary = GameDatabase.get_card(view_as_definition_id) if not view_as_definition_id.is_empty() else definition
+			_view_as_display_name_text = GameSettings.resolve_card_display_name(view_as_definition)
+			_view_as_card_definition = view_as_definition.duplicate(true)
 	_card_definition = visual_definition
-	_view_as_card_definition = definition.duplicate(true)
+	if _view_as_card_definition.is_empty():
+		_view_as_card_definition = definition.duplicate(true)
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
 	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。

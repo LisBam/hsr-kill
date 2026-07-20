@@ -2,6 +2,9 @@ extends CardDefinition
 
 ## 【铁索连环】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
+## AI把本次连环切换判定为不利时的固定惩罚；0.75分会压过纯出牌顺序，仍允许多目标组合以更高收益覆盖。
+const AI_UNFAVORABLE_CHAIN_TARGET_PENALTY: float = 0.75
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -81,9 +84,17 @@ func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictiona
 		var target_id: int = int(target_id_variant)
 		# 当前目标快照；未横置时通用负面目标评分已经正确。
 		var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
-		if target.is_empty() or not bool(target.get("chained", false)):
+		if target.is_empty():
 			continue
-		# 通用评分把横置视为-0.5目标效果；解除时反转该分量，因此减去原分量的两倍。
+		# 通用评分把横置视为-0.5目标效果；当前目标若已横置，本次会解除连环并反转该分量。
 		var original_target_score: float = -0.5 * evaluator.get_attitude(authoritative_snapshot, int(action.get("actor_id", -1)), target_id) / 5.0
-		score -= original_target_score * 2.0
+		# 本次切换后的实际目标收益；未横置沿用原分量，已横置则使用反向后的解除收益。
+		var resolved_target_score: float = original_target_score
+		if bool(target.get("chained", false)):
+			score -= original_target_score * 2.0
+			resolved_target_score = -original_target_score
+		# 敌方已横置时解除连环属于帮助，不得再被出牌顺序的微弱正分驱动为无脑使用。
+		# 友方未横置时强行施加连环同样是不利目标；多目标动作只有整体收益足够高才会保留。
+		if resolved_target_score < 0.0:
+			score -= AI_UNFAVORABLE_CHAIN_TARGET_PENALTY
 	return score
