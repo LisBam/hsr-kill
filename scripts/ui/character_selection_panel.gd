@@ -358,7 +358,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	var preserves_local_context: bool = visible and str(_snapshot.get("phase", "")) == str(snapshot.get("phase", "")) and int(_snapshot.get("target_player_id", -1)) == int(snapshot.get("target_player_id", -1))
 	_snapshot = snapshot.duplicate(true)
 	if not preserves_local_context:
-		_selected_character_id = str(snapshot.get("local_selected_character_id", "")) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else ""
+		_selected_character_id = str(snapshot.get("local_selected_character_id", "")) if bool(snapshot.get("retains_selected_character", false)) else ""
 		# 首次进入最终自选阶段时，座次和身份按钮默认高亮首次随机分配的结果；普通选将不保留这些临时值。
 		_selected_seat_number = int(snapshot.get("preview_seat_number", snapshot.get("initial_seat_number", -1))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else -1
 		_selected_identity = str(snapshot.get("preview_identity", snapshot.get("initial_identity", ""))) if str(snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM else ""
@@ -377,7 +377,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	_render_custom_assignment_controls()
 	_render_candidates()
 	# 首任领袖在最终自选阶段只确认座次身份：公开武将已由权威快照保留，候选列表刻意为空，不能套用“离开候选则清空选择”的普通规则。
-	var retains_initial_leader_character: bool = str(_snapshot.get("phase", "")) == CharacterSelectionService.PHASE_CUSTOM and bool(_snapshot.get("allow_custom_assignment", false)) and not str(_snapshot.get("local_selected_character_id", "")).is_empty() and (_snapshot.get("local_candidates", []) as Array).is_empty()
+	var retains_initial_leader_character: bool = bool(_snapshot.get("retains_selected_character", false))
 	if not retains_initial_leader_character and not _get_displayed_candidate_ids().has(_selected_character_id):
 		_selected_character_id = ""
 	_update_confirm_state()
@@ -426,7 +426,7 @@ func _render_header() -> void:
 		# 首次分配身份；自选阶段继续明确展示，最终座次身份只在全员确认后刷新到权威玩家状态。
 		# 当前编辑身份；自选阶段优先使用本地已选身份，使领袖改为其他身份时标题立即同步，不等待权威快照往返。
 		var displayed_identity: String = _selected_identity if not _selected_identity.is_empty() else str(_snapshot.get("local_identity", "hidden"))
-		var keeps_initial_leader_character: bool = can_select and not str(_snapshot.get("local_selected_character_id", "")).is_empty() and (_snapshot.get("local_candidates", []) as Array).is_empty()
+		var keeps_initial_leader_character: bool = can_select and bool(_snapshot.get("retains_selected_character", false))
 		_set_identity_title(displayed_identity, "请选择座次与身份" if keeps_initial_leader_character else ("请重新选择武将、座次与身份" if can_select else "请等待其他玩家完成自选"))
 		_status_label.text = ""
 		return
@@ -517,7 +517,7 @@ func _render_candidates() -> void:
 	var candidate_ids: Array = _get_displayed_candidate_ids()
 	if candidate_ids.is_empty():
 		# 首任领袖已经保留公开武将时不再渲染第二组选将牌，但仍必须显示确认座次身份的固定按钮。
-		_confirm_button.visible = not _selected_character_id.is_empty() and bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false))
+		_confirm_button.visible = not _selected_character_id.is_empty() and bool(_snapshot.get("retains_selected_character", false)) and bool(_snapshot.get("can_select", false))
 		return
 	_confirm_button.visible = true
 	_confirm_button.text = "请选择武将牌"

@@ -5,6 +5,9 @@ extends Node
 ## 专项集成测试使用的固定玩家人数；1名真人与3名AI可覆盖剩余名额分配和AI调整。
 const TEST_PLAYER_COUNT: int = 4
 
+## 本地首任领袖真实场景回归使用的玩家人数；五人局可同时验证领袖武将锁定与额外1点体力上限。
+const LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT: int = 5
+
 ## 专项集成测试使用的固定随机种子；保证身份、候选与牌堆顺序可重复复现。
 const TEST_RANDOM_SEED: int = 20260720
 
@@ -49,6 +52,8 @@ func _run() -> void:
 	if not await _test_character_selection_panel_layout():
 		return
 	if not _test_character_selection_service():
+		return
+	if not await _test_local_initial_leader_flow():
 		return
 	if not _test_mulligan_ai_evaluation():
 		return
@@ -252,6 +257,7 @@ func _test_character_selection_panel_layout() -> bool:
 	leader_custom_snapshot["initial_identity"] = "leader"
 	leader_custom_snapshot["preview_seat_number"] = 1
 	leader_custom_snapshot["preview_identity"] = "leader"
+	leader_custom_snapshot["retains_selected_character"] = true
 	selection_panel.bind_snapshot(leader_custom_snapshot)
 	await get_tree().process_frame
 	if not initial_leader_seat_buttons.visible or not initial_leader_identity_buttons.visible or not initial_leader_confirm_button.visible or initial_leader_confirm_button.disabled:
@@ -436,7 +442,7 @@ func _test_character_selection_service() -> bool:
 		return _fail("initial_leader_selection")
 	# 首任领袖的公开武将就是最终武将；候选必须清空但座次身份控件仍保持可确认，避免再次弹出选将框。
 	var leader_custom_snapshot: Dictionary = service.to_dict(0)
-	if not service.can_player_select(0) or not service.get_candidates(0).is_empty() or str(leader_custom_snapshot.get("local_selected_character_id", "")) != initial_leader_character_id or bool(leader_custom_snapshot.get("allow_all_characters", true)):
+	if not service.can_player_select(0) or not service.get_candidates(0).is_empty() or str(leader_custom_snapshot.get("local_selected_character_id", "")) != initial_leader_character_id or not bool(leader_custom_snapshot.get("retains_selected_character", false)) or bool(leader_custom_snapshot.get("allow_all_characters", true)):
 		return _fail("initial_leader_retained_character_assignment")
 	# 二号玩家自选快照；必须继续显示首次忠臣身份与首任领袖武将，同时提供最终座次身份按钮。
 	var custom_snapshot: Dictionary = service.to_dict(1)
@@ -503,6 +509,84 @@ func _test_character_selection_service() -> bool:
 	var duplicate_identity_error: String = service.select_character(3, third_character_id, 4, "loyalist")
 	if duplicate_identity_error.is_empty():
 		return _fail("identity_limit_allowed")
+	return true
+
+
+## 验证本地真人首次随机成为领袖时，正式界面只补交座次身份，并在开局后保留首次公开武将。
+func _test_local_initial_leader_flow() -> bool:
+	GameSettings.set_custom_character_assignment_enabled(true)
+	GameSettings.set_customize_ai_characters_enabled(false)
+	GameSettings.set_mulligan_limit(0)
+	# 正式主场景；测试复用玩家实际使用的控制器、牌桌信号连接与选将面板，不手工拼接中间快照。
+	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
+	if main_scene == null:
+		return _fail("local_initial_leader_main_scene_load")
+	# 正式主场景实例；固定逻辑视口尺寸保证座次身份控件使用与实机相同的布局路径。
+	var main_instance: Control = main_scene.instantiate() as Control
+	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	main_instance.size = Vector2(1280.0, 720.0)
+	add_child(main_instance)
+	for _frame_index: int in range(4):
+		await get_tree().process_frame
+	# 正式权威控制器；保持默认随机本地座次，覆盖玩家ID先随机再分配身份的实际离线开局路径。
+	var controller: MatchController = main_instance.get_node("MatchController") as MatchController
+	# 正式选将面板；其提交信号已经由牌桌连接到同一控制器。
+	var selection_panel: CharacterSelectionPanel = main_instance.get_node("CharacterSelectionPanel") as CharacterSelectionPanel
+	controller.local_human_player_id = 0
+	controller.randomize_local_human_seat = true
+	controller.game_flow_interval_seconds = 0.0
+	controller.ai_action_delay_seconds = 0.0
+	# 能让随机座次后的本地玩家首次成为领袖的种子；从小整数稳定扫描，避免测试依赖随机算法之外的硬编码身份排列。
+	var local_leader_seed: int = -1
+	# 当前种子实际分配的本地玩家ID；后续所有界面提交和状态断言都必须使用同一稳定值。
+	var local_player_id: int = -1
+	for candidate_seed: int in range(1, 65):
+		if not controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+			main_instance.queue_free()
+			await get_tree().process_frame
+			return _fail("local_initial_leader_start")
+		if controller.character_selection.get_initial_identity(controller.local_human_player_id) == "leader":
+			local_leader_seed = candidate_seed
+			local_player_id = controller.local_human_player_id
+			break
+	if local_leader_seed < 0 or local_player_id < 0 or controller.character_selection.phase != CharacterSelectionService.PHASE_LEADER:
+		main_instance.queue_free()
+		await get_tree().process_frame
+		return _fail("local_initial_leader_seed")
+	# 首次领袖候选；点击并确认后，该稳定武将ID必须同时成为公开预览和最终保留结果。
+	var initial_leader_candidates: Array[String] = controller.character_selection.get_candidates(local_player_id)
+	if initial_leader_candidates.is_empty():
+		main_instance.queue_free()
+		await get_tree().process_frame
+		return _fail("local_initial_leader_candidates")
+	# 首次领袖选择；使用面板私有入口模拟正式牌面短按，再走确认按钮信号提交标准动作。
+	var initial_leader_character_id: String = initial_leader_candidates[0]
+	selection_panel.call("_select_candidate", initial_leader_character_id)
+	selection_panel.call("_confirm_selection")
+	await get_tree().process_frame
+	# 最终自选阶段控件；本地首任领袖不得获得第二批候选，但必须保留座次、身份和可用确认按钮。
+	var seat_buttons: HBoxContainer = selection_panel.get_node("SelectionFrame/SeatButtons") as HBoxContainer
+	# 最终自选身份控件；与座次控件同时显示，初始领袖默认高亮一号位和领袖身份。
+	var identity_buttons: HBoxContainer = selection_panel.get_node("SelectionFrame/IdentityButtons") as HBoxContainer
+	# 固定确认按钮；首任领袖复用首次武将，因此无需再次点击候选即可确认座次身份。
+	var confirm_button: Button = selection_panel.get_node("SelectionFrame/ConfirmCharacterButton") as Button
+	if controller.character_selection.phase != CharacterSelectionService.PHASE_CUSTOM or not selection_panel.visible or not seat_buttons.visible or not identity_buttons.visible or confirm_button.disabled or not controller.character_selection.get_candidates(local_player_id).is_empty() or not bool((selection_panel.get("_snapshot") as Dictionary).get("retains_selected_character", false)) or str(selection_panel.get("_selected_character_id")) != initial_leader_character_id:
+		main_instance.queue_free()
+		await get_tree().process_frame
+		return _fail("local_initial_leader_assignment_controls")
+	selection_panel.call("_confirm_selection")
+	await get_tree().process_frame
+	# 开局后的本地玩家；稳定ID不随最终座次重排，武将必须与首次公开选择完全一致。
+	var final_local_player: PlayerState = controller.state.get_player(local_player_id)
+	# 首次选择武将的基础体力上限；五人局最终领袖应在该配置上准确增加1点，不能因重复应用武将产生其他结果。
+	var initial_character_base_max_hp: int = int(GameDatabase.get_character(initial_leader_character_id).get("max_hp", 4))
+	if final_local_player == null or final_local_player.character_id != initial_leader_character_id or final_local_player.max_hp != initial_character_base_max_hp + 1 or controller.state.players[0].player_id != local_player_id or controller.state.players[0].identity != "leader":
+		main_instance.queue_free()
+		await get_tree().process_frame
+		return _fail("local_initial_leader_character_retained")
+	controller.abandon_match()
+	main_instance.queue_free()
+	await get_tree().process_frame
 	return true
 
 

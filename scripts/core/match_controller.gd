@@ -678,6 +678,8 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	var was_initial_leader_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_LEADER
 	# 本次提交前是否处于最终自选阶段；该阶段每名玩家确认时立即写入当前预览座次身份，完成时不得再次重置武将。
 	var was_custom_character_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+	# 本次提交是否只确认首任领袖的座次身份；该武将已在领袖阶段应用并公开，不能再次改写稳定武将ID。
+	var confirms_retained_initial_leader_character: bool = character_selection.is_retaining_initial_leader_character(player_id)
 	# 选将服务返回的校验错误；空字符串表示选择已经记录并可能推进阶段。
 	var selection_error: String = character_selection.select_character(player_id, character_id, seat_number, identity)
 	if not selection_error.is_empty():
@@ -693,9 +695,13 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	if was_custom_character_selection:
 		# 已确认自选先投射当前完整座次身份；随后只应用本次玩家的新武将，避免结算末尾再次覆盖已经显示的牌面。
 		_apply_custom_assignment_preview()
-		# 当前确认玩家；预览重排后按稳定玩家ID重新查询，保证领袖体力加值按最终身份计算。
-		var custom_selected_player: PlayerState = state.get_player(player_id)
-		_apply_character(custom_selected_player, character_id, true)
+		if not confirms_retained_initial_leader_character:
+			# 当前确认玩家；预览重排后按稳定玩家ID重新查询，保证领袖体力加值按最终身份计算。
+			var custom_selected_player: PlayerState = state.get_player(player_id)
+			_apply_character(custom_selected_player, character_id, true)
+		else:
+			# 首任领袖最终身份可能改为非领袖；只按最终身份刷新基础体力，不重新写入或随机选择武将。
+			_refresh_pre_game_character_stats(state.get_player(player_id))
 	if was_initial_leader_selection:
 		# 领袖选择立即写入并公开，其他玩家候选只会在此之后生成。
 		var leader: PlayerState = state.get_player(player_id)
@@ -4770,8 +4776,15 @@ func _apply_character(player: PlayerState, character_id: String, reveal_characte
 		return
 	player.character_id = character_id
 	player.character_revealed = reveal_character
+	_refresh_pre_game_character_stats(player)
+
+
+## 按玩家当前武将与最终身份刷新开局基础体力；该函数不修改武将ID、公开状态、候选或随机源。
+func _refresh_pre_game_character_stats(player: PlayerState) -> void:
+	if player == null or player.character_id.is_empty():
+		return
 	# 已选武将配置；基础体力上限取 max_hp，仅不少于5人的身份局领袖额外增加1点上限与当前体力。
-	var character: Dictionary = GameDatabase.get_character(character_id)
+	var character: Dictionary = GameDatabase.get_character(player.character_id)
 	# 领袖体力加值；规则集3.0规定参与玩家不少于5人时才增加1点。
 	var leader_hp_bonus: int = 1 if player.identity == "leader" and state.players.size() >= 5 else 0
 	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + leader_hp_bonus
@@ -5618,7 +5631,7 @@ func _get_ai_character_selection_candidate(player_id: int) -> String:
 		return ""
 	# 首任领袖的公开武将已经写入最终选择；自选阶段只差座次身份确认时，AI必须提交同一ID，不能因候选列表已清空而停住或重新抽取。
 	var retained_initial_leader_character_id: String = character_selection.get_selection(player_id)
-	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and not retained_initial_leader_character_id.is_empty() and character_selection.get_selected_seat_number(player_id) < 1:
+	if character_selection.is_retaining_initial_leader_character(player_id):
 		return retained_initial_leader_character_id
 	# 当前公开预览领袖；最终自选中该AI已经有向玩家展示的武将时，确认必须复用该结果而不是改取另一张随机候选。
 	var preview_leader: PlayerState = state.players[0] if state != null and not state.players.is_empty() else null
