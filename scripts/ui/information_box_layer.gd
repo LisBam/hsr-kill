@@ -18,6 +18,15 @@ signal character_details_visibility_changed(visible: bool)
 ## 目标旁信息框优先保持的宽高比例；默认4:3使短中等长度说明呈稳定长方形，正文超过比例高度时以完整显示内容为优先，运行时通常无需动态修改。
 @export_range(1.0, 3.0, 0.01) var hover_panel_aspect_ratio: float = 4.0 / 3.0
 
+## 目标旁信息框允许的最小宽高比；默认0.8避免长说明在尚有横向空间时变成过窄高条，运行时通常无需动态修改。
+@export_range(0.4, 1.5, 0.01) var hover_panel_minimum_aspect_ratio: float = 0.8
+
+## 目标旁信息框允许的最大宽高比；默认2.2避免短说明只占一条过宽面板，运行时通常无需动态修改。
+@export_range(1.2, 4.0, 0.01) var hover_panel_maximum_aspect_ratio: float = 2.2
+
+## 目标旁信息框比例搜索的单次宽度步长；默认20像素在测量稳定性与尺寸精度之间取平衡，运行时通常无需动态修改。
+@export_range(4.0, 80.0, 1.0) var hover_panel_width_adjustment_step: float = 20.0
+
 ## 目标旁信息框与悬停目标之间的间距；默认10像素避免浮层遮挡当前目标，运行时通常无需动态修改。
 @export_range(4.0, 32.0, 1.0) var hover_target_gap: float = 10.0
 
@@ -51,11 +60,17 @@ signal character_details_visibility_changed(visible: bool)
 ## 武将牌正式场景；详情框复用与牌桌和选将界面相同的牌面结构，避免维护第二套武将牌 UI。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 单次信息框宽度搜索的最大迭代数；32次足以覆盖默认240至520像素范围，并防止异常检查器参数导致无界布局计算。
+const MAX_HOVER_WIDTH_SEARCH_ITERATIONS: int = 32
+
 ## 当前目标旁信息框对应的来源节点实例 ID；-1表示没有活动来源，旧来源离开时不能关闭新来源的信息。
 var _hover_source_id: int = -1
 
 ## 当前目标旁信息框内容副本；主题切换时保留文字并只重绘样式，不重新查询业务数据。
 var _hover_information: Dictionary = {}
+
+## 当前已显示信息框的来源锚点矩形；名称模式改变文字长度后复用该矩形重新测量和定位。
+var _hover_anchor_rect: Rect2 = Rect2()
 
 ## 正在等待显示的统一信息框来源节点实例 ID；-1表示当前没有延迟中的悬停请求。
 var _pending_hover_source_id: int = -1
@@ -155,12 +170,15 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 	if information.is_empty() or source_id < 0 or _character_shade.visible:
 		return
 	# 当前请求内容副本；后续幂等比较和延迟显示都只使用副本，避免来源在等待期间修改原字典。
-	var information_copy: Dictionary = information.duplicate(true)
+	# 名称解析同样基于新副本执行，不会回写来源持有的数据。
+	# 当前请求内容副本；先按当前名称模式解析括号牌名，再用于幂等比较和延迟显示。
+	var information_copy: Dictionary = _resolve_information_card_names(information)
 	if source_id == _pending_hover_source_id and _pending_hover_information == information_copy:
 		# 同一来源在等待期间重复发送相同资料时只更新锚点，不重启0.5秒计时器。
 		_pending_hover_anchor_rect = anchor_rect
 		return
 	if source_id == _hover_source_id and _hover_information == information_copy and _hover_panel.visible:
+		_hover_anchor_rect = anchor_rect
 		# 公开快照刷新会重复发送相同武将资料；完成首帧布局后只校正位置，测量期间则保持透明等待原布局收尾。
 		if _hover_panel.modulate.a > 0.0:
 			_place_hover_panel(anchor_rect, source_id, _hover_layout_generation)
@@ -171,6 +189,7 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 		_hover_layout_generation += 1
 		_hover_source_id = -1
 		_hover_information.clear()
+		_hover_anchor_rect = Rect2()
 		_hover_panel.visible = false
 		_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_pending_hover_source_id = source_id
@@ -191,6 +210,7 @@ func hide_hover_information(source_id: int) -> void:
 		return
 	_hover_source_id = -1
 	_hover_information.clear()
+	_hover_anchor_rect = Rect2()
 	_hover_layout_generation += 1
 	_hover_panel.visible = false
 	_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
@@ -208,6 +228,7 @@ func show_character_details(snapshot: Dictionary, character_definition: Dictiona
 	_cancel_pending_hover_information()
 	_hover_source_id = -1
 	_hover_information.clear()
+	_hover_anchor_rect = Rect2()
 	_hover_panel.visible = false
 	_character_shade.visible = true
 	_character_panel.visible = true
@@ -326,6 +347,53 @@ func refresh_ui_style() -> void:
 	call_deferred("_resize_character_panel_to_content")
 
 
+## 响应卡牌名称模式变化并原位刷新当前悬停说明与武将详情；不要求玩家移开鼠标或重新打开详情。
+func refresh_card_name_mode() -> void:
+	if not is_node_ready():
+		return
+	if not _pending_hover_information.is_empty():
+		_pending_hover_information = _resolve_information_card_names(_pending_hover_information)
+	if not _hover_information.is_empty() and _hover_panel.visible:
+		_hover_information = _resolve_information_card_names(_hover_information)
+		_hover_title_label.text = str(_hover_information.get("title", "信息"))
+		_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
+		_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
+		_render_hover_description()
+		_refresh_hover_text_styles()
+		# 当前锚点在模式切换时保持不变；下一布局帧重新测量文本，避免牌名长度变化后面板尺寸失真。
+		_hover_layout_generation += 1
+		var layout_generation: int = _hover_layout_generation
+		_hover_panel.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
+		_hover_panel.size = Vector2(hover_panel_width, 0.0)
+		_hover_panel.reset_size()
+		_place_hover_panel_after_layout(_hover_anchor_rect, _hover_source_id, layout_generation)
+	if _character_shade.visible:
+		_render_character_skills()
+		call_deferred("_resize_character_panel_to_content")
+
+
+## 深复制一份统一信息并解析其中全部【牌名】字段；已解析为另一模式的名称也能再次切换。
+func _resolve_information_card_names(information: Dictionary) -> Dictionary:
+	# 可写信息副本；来源组件持有的数据不会因信息框动态切换而被改写。
+	var resolved_information: Dictionary = information.duplicate(true)
+	for text_key: String in ["title", "subtitle", "description"]:
+		if resolved_information.has(text_key):
+			resolved_information[text_key] = GameDatabase.resolve_card_names_in_text(str(resolved_information.get(text_key, "")))
+	# 结构化技能说明；每个条目继续保留标题和其他扩展字段，只动态解析文本内容。
+	var description_sections: Array = resolved_information.get("description_sections", []) as Array
+	for section_index: int in range(description_sections.size()):
+		# 当前技能分段；深复制已保证修改不会回写来源字典。
+		var section: Dictionary = description_sections[section_index] as Dictionary
+		if section.has("title"):
+			section["title"] = GameDatabase.resolve_card_names_in_text(str(section.get("title", "")))
+		if section.has("description"):
+			section["description"] = GameDatabase.resolve_card_names_in_text(str(section.get("description", "")))
+		description_sections[section_index] = section
+	resolved_information["description_sections"] = description_sections
+	return resolved_information
+
+
 ## 构建统一信息框的单次延迟计时器；计时器始终处理，离线暂停时仍能按真实悬停时长显示或取消信息。
 func _build_hover_delay_timer() -> void:
 	_hover_delay_timer = Timer.new()
@@ -360,6 +428,7 @@ func _show_pending_hover_information() -> void:
 	var layout_generation: int = _hover_layout_generation
 	_hover_source_id = source_id
 	_hover_information = information
+	_hover_anchor_rect = anchor_rect
 	_hover_title_label.text = str(_hover_information.get("title", "信息"))
 	_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
 	_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
@@ -520,8 +589,14 @@ func _build_character_panel() -> void:
 func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: int) -> void:
 	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
 		return
+	# 当前布局可用尺寸；组件尚保留旧逻辑画布尺寸时，以已缩小的父Control客户区作为更严格上限。
+	var layout_size: Vector2 = size
+	# 父级布局控件；仅Control具有可直接比较的客户区尺寸，其他父节点保持本组件自身尺寸。
+	var parent_control: Control = get_parent() as Control
+	if parent_control != null:
+		layout_size = Vector2(minf(layout_size.x, parent_control.size.x), minf(layout_size.y, parent_control.size.y))
 	# 当前组件可用视口矩形；根控件与牌桌共享逻辑画布坐标。
-	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), size - Vector2.ONE * viewport_margin * 2.0)
+	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), layout_size - Vector2.ONE * viewport_margin * 2.0)
 	# 可用宽度范围；检查器配置与当前视口都可能收紧上限，最小值始终不会超过实际可显示宽度。
 	var available_width: float = maxf(available_rect.size.x, 1.0)
 	var minimum_width: float = minf(maxf(hover_panel_minimum_width, 1.0), available_width)
@@ -530,10 +605,36 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: i
 	var measuring_width: float = clampf(hover_panel_width, minimum_width, maximum_width)
 	var measuring_height: float = _measure_hover_panel_content_height(measuring_width)
 	# 按目标4:3比例反推适合当前内容的宽度；短内容取最小宽度，长内容扩展到最大宽度后再自然增高。
-	var desired_width: float = clampf(measuring_height * hover_panel_aspect_ratio, minimum_width, maximum_width)
+	# 首选宽高比；只用于根据估算内容面积选择起始宽度，不再强制最终面板精确保持该比例。
+	var preferred_aspect_ratio: float = maxf(hover_panel_aspect_ratio, 0.01)
+	# 最小允许比例；异常配置时与最大比例自动排序，不把检查器输入传播成布局错误。
+	var minimum_aspect_ratio: float = minf(hover_panel_minimum_aspect_ratio, hover_panel_maximum_aspect_ratio)
+	# 最大允许比例；始终不小于最小值，后续可安全用于高度下限计算。
+	var maximum_aspect_ratio: float = maxf(hover_panel_minimum_aspect_ratio, hover_panel_maximum_aspect_ratio)
+	# 估算内容面积；基准宽高乘积能同时反映文本长度和当前换行情况。
+	var estimated_content_area: float = maxf(measuring_width * measuring_height, 1.0)
+	# 初始目标宽度；以面积和首选比例开平方反推，使短、中、长说明自然获得不同宽度。
+	var desired_width: float = clampf(sqrt(estimated_content_area * preferred_aspect_ratio), minimum_width, maximum_width)
 	var content_height: float = _measure_hover_panel_content_height(desired_width)
+	# 宽度搜索步长；至少为1像素，避免检查器或旧场景异常值使循环停滞。
+	var width_step: float = maxf(hover_panel_width_adjustment_step, 1.0)
+	# 当前宽高比；真实内容高度为0时使用1像素作安全分母。
+	var current_aspect_ratio: float = desired_width / maxf(content_height, 1.0)
+	# 当前搜索迭代数；增宽与缩宽共享上限，保证单次悬停布局耗时可控。
+	var search_iteration_count: int = 0
+	while current_aspect_ratio < minimum_aspect_ratio and desired_width < maximum_width and search_iteration_count < MAX_HOVER_WIDTH_SEARCH_ITERATIONS:
+		desired_width = minf(desired_width + width_step, maximum_width)
+		content_height = _measure_hover_panel_content_height(desired_width)
+		current_aspect_ratio = desired_width / maxf(content_height, 1.0)
+		search_iteration_count += 1
+	while current_aspect_ratio > maximum_aspect_ratio and desired_width > minimum_width and search_iteration_count < MAX_HOVER_WIDTH_SEARCH_ITERATIONS:
+		desired_width = maxf(desired_width - width_step, minimum_width)
+		content_height = _measure_hover_panel_content_height(desired_width)
+		current_aspect_ratio = desired_width / maxf(content_height, 1.0)
+		search_iteration_count += 1
 	# 最终高度同时满足完整文字与4:3目标比例；正文特别长时允许高于比例，避免裁切技能或卡牌说明。
-	var desired_height: float = maxf(content_height, desired_width / hover_panel_aspect_ratio)
+	# 最终高度；优先容纳全部文字，短内容过宽时只补足到最大比例下限，不再补齐固定4:3空白。
+	var desired_height: float = maxf(content_height, desired_width / maximum_aspect_ratio)
 	_hover_panel.custom_minimum_size = Vector2(desired_width, desired_height)
 	_hover_panel.size = Vector2(desired_width, desired_height)
 	# 当前信息框实际尺寸；完成内容与比例测量后使用该值进行视口边界计算。
@@ -546,6 +647,33 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: i
 	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
 	_hover_panel.position = target_position
 	# 位置与最终尺寸都稳定后再显示；这一步也是当前布局代次唯一允许恢复不透明度的入口。
+	# 容器的自动换行高度会在最终宽度写入后的下一帧稳定；实际显示和边界收紧交由二次布局入口完成。
+	_hover_panel.modulate = Color.WHITE
+	_finalize_hover_panel_after_layout(anchor_rect, source_id, layout_generation)
+
+
+## 等待最终宽度下的自动换行高度稳定，再按真实面板尺寸收紧位置并恢复不透明度。
+func _finalize_hover_panel_after_layout(anchor_rect: Rect2, source_id: int, layout_generation: int) -> void:
+	await get_tree().process_frame
+	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
+		return
+	# 最终布局可用尺寸；与初次测量一样优先服从已缩小的父Control客户区。
+	var layout_size: Vector2 = size
+	# 父级布局控件；紧凑窗口测试会直接修改其尺寸，信息框不应继续使用旧逻辑画布边界。
+	var parent_control: Control = get_parent() as Control
+	if parent_control != null:
+		layout_size = Vector2(minf(layout_size.x, parent_control.size.x), minf(layout_size.y, parent_control.size.y))
+	# 最终安全矩形；保留与初次定位相同的视口边距。
+	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), layout_size - Vector2.ONE * viewport_margin * 2.0)
+	# 最终面板尺寸；已包含当前宽度下全部标题、副标题和正文换行高度。
+	var panel_size: Vector2 = _hover_panel.size
+	# 最终目标位置；仍优先目标右侧，空间不足时翻转到左侧。
+	var target_position: Vector2 = Vector2(anchor_rect.end.x + hover_target_gap, anchor_rect.position.y)
+	if target_position.x + panel_size.x > available_rect.end.x:
+		target_position.x = anchor_rect.position.x - panel_size.x - hover_target_gap
+	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
+	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
+	_hover_panel.position = target_position
 	_hover_panel.modulate = Color.WHITE
 
 

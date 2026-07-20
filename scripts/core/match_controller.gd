@@ -108,6 +108,30 @@ var network_gateway: NetworkGateway
 ## 当前选将规则服务；负责候选、阶段与隐藏选择，不接触卡牌规则或界面节点。
 var character_selection: CharacterSelectionService
 
+## 当前房主调整 AI 武将服务；只在对应开局选项启用且存在 AI 时创建活动阶段。
+var ai_character_adjustment: AICharacterAdjustmentService
+
+## 当前起始手牌手气卡服务；数量关闭或全部玩家确认后为非活动状态。
+var starting_hand_mulligan: StartingHandMulliganService
+
+## 本局经过 gameDraw 时机确认的实际起始手牌数；手气卡刷新始终重新发放相同数量。
+var _starting_hand_count: int = 4
+
+## 本局 gameDraw 前后时机是否允许实际发放起始手牌；手气卡与最终日志都复用该结果。
+var _starting_cards_were_dealt: bool = true
+
+## 本局是否启用全武将、座次与身份自选；开局时从房主设置复制，之后不随菜单变化。
+var _custom_character_assignment_enabled: bool = false
+
+## 本局是否启用房主调整全部 AI 武将；开局时锁定。
+var _customize_ai_characters_enabled: bool = false
+
+## 本局每名玩家的手气卡次数；0关闭、1至5有限次数、-1无限次。
+var _mulligan_limit: int = 0
+
+## 本局 AI 是否自动评估并使用手气卡；手气卡数量为0时该值不会产生流程。
+var _ai_uses_mulligan_enabled: bool = false
+
 ## 当前对局按玩家 ID 分组的独立技能实例；每个技能文件自行安装事件订阅与主动发动函数，重新开局时整体卸载。
 var skill_instances_by_player: Dictionary = {}
 
@@ -475,6 +499,17 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	ai_coordinator.reset_identity_observations()
 	state.random_seed = _rng.seed
 	state.deck_id = default_deck_id
+	# 本局锁定的房主权威开局选项；菜单之后的修改只作用于下一局，不会改变进行中的选将或手气卡阶段。
+	_custom_character_assignment_enabled = GameSettings.custom_character_assignment_enabled
+	_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled
+	_mulligan_limit = GameSettings.mulligan_limit
+	_ai_uses_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
+	state.match_options = {
+		"custom_character_assignment_enabled":_custom_character_assignment_enabled,
+		"customize_ai_characters_enabled":_customize_ai_characters_enabled,
+		"mulligan_limit":_mulligan_limit,
+		"ai_uses_mulligan_enabled":_ai_uses_mulligan_enabled,
+	}
 	card_rules = CardRuleService.new(state, self)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
@@ -500,6 +535,9 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	state.current_event_id = _runtime_root_event_id
 	state.event_history = event_scheduler.get_event_history()
 	character_selection = CharacterSelectionService.new()
+	ai_character_adjustment = AICharacterAdjustmentService.new()
+	starting_hand_mulligan = StartingHandMulliganService.new()
+	_starting_hand_count = 4
 	_ai_drive_token += 1
 	_scheduled_ai_drive_token = -1
 	_scheduled_ai_choice_request_id = -1
@@ -542,12 +580,15 @@ func start_match(player_count: int = -1, seed: int = 0) -> bool:
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		available_character_ids.append(str(character_id_variant))
 	# 选将初始化错误；空字符串表示领袖候选已生成。
-	var selection_error: String = character_selection.begin(state.players, available_character_ids, character_candidate_count, _rng)
+	var selection_error: String = character_selection.begin(state.players, available_character_ids, character_candidate_count, _rng, _custom_character_assignment_enabled)
 	if not selection_error.is_empty():
 		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
 		return false
-	add_log("选将开始：领袖先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
+	if _custom_character_assignment_enabled:
+		add_log("选将开始：所有真人玩家可自选武将、座次与身份，确认后由 AI 使用剩余名额。")
+	else:
+		add_log("选将开始：领袖先从%d张候选武将牌中选择并亮出。" % mini(character_candidate_count, available_character_ids.size()))
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
@@ -566,6 +607,8 @@ func _discard_failed_match_start() -> void:
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	character_selection = null
+	ai_character_adjustment = null
+	starting_hand_mulligan = null
 	card_rules = null
 	effect_resolver = null
 	card_movement = null
@@ -601,16 +644,22 @@ func _assign_local_human_player_seat(player_count: int) -> void:
 
 
 ## 提交一名玩家的选将结果；所有人类、AI与网络入口共用相同阶段和候选校验。
-func select_character(player_id: int, character_id: String) -> bool:
+func select_character(player_id: int, character_id: String, seat_number: int = -1, identity: String = "") -> bool:
 	if state == null or state.game_over or state.current_phase != "character_selection" or character_selection == null:
 		return _reject("当前不在选将阶段。")
 	# 选将服务返回的校验错误；空字符串表示选择已经记录并可能推进阶段。
-	var selection_error: String = character_selection.select_character(player_id, character_id)
+	var selection_error: String = character_selection.select_character(player_id, character_id, seat_number, identity)
 	if not selection_error.is_empty():
+		# 自选模式可能因其他真人先确认同一座次或身份名额而冲突；立即重发最新可用按钮快照。
+		_emit_state()
 		return _reject(selection_error)
 	state.action_sequence += 1
-	state.random_history.append({"kind":"character_selection", "player_id":player_id, "character_id":character_id, "candidates":character_selection.get_candidates(player_id)})
-	if player_id == character_selection.leader_player_id:
+	# 权威确认座次；自选模式记录服务完成一号位/领袖联动后的最终值，普通模式保留无效默认值。
+	var confirmed_seat_number: int = character_selection.get_selected_seat_number(player_id) if character_selection.custom_assignment_enabled else seat_number
+	# 权威确认身份；回放历史不能保存联动前的请求值，否则一号位自动领袖会与最终状态不一致。
+	var confirmed_identity: String = character_selection.get_selected_identity(player_id) if character_selection.custom_assignment_enabled else identity
+	state.random_history.append({"kind":"character_selection", "player_id":player_id, "character_id":character_id, "seat_number":confirmed_seat_number, "identity":confirmed_identity, "candidates":character_selection.get_candidates(player_id)})
+	if player_id == character_selection.leader_player_id and not character_selection.custom_assignment_enabled:
 		# 领袖选择立即写入并公开，其他玩家候选只会在此之后生成。
 		var leader: PlayerState = state.get_player(player_id)
 		_apply_character(leader, character_id, true)
@@ -647,7 +696,17 @@ func submit_action(action: PlayerAction) -> bool:
 	if is_gameplay_paused() and ai_coordinator != null and ai_coordinator.is_ai_controlled(action.actor_id):
 		return false
 	if action.action_type == "select_character":
-		return select_character(action.actor_id, str(action.payload.get("character_id", "")))
+		return select_character(action.actor_id, str(action.payload.get("character_id", "")), int(action.payload.get("seat_number", -1)), str(action.payload.get("identity", "")))
+	if action.action_type == "select_ai_adjustment_target":
+		return _select_ai_adjustment_target(action)
+	if action.action_type == "set_ai_character":
+		return _set_ai_character(action)
+	if action.action_type == "finish_ai_character_adjustment":
+		return _finish_ai_character_adjustment_action(action)
+	if action.action_type == "mulligan_refresh":
+		return _submit_mulligan_refresh(action)
+	if action.action_type == "mulligan_finish":
+		return _submit_mulligan_finish(action)
 	if action.action_type == "use_skill":
 		# 出牌阶段主动技能必须先完成当前 chooseToUse，技能内部后续选牌或选目标才会成为其子选择上下文。
 		if action.actor_id == state.current_player_id and state.current_phase == "play":
@@ -4761,8 +4820,19 @@ func is_processing_black_slash(card_uid: int) -> bool:
 
 ## 查询主动技能当前是否可发动；技能文件负责阶段、次数、目标和资源条件，控制器只提供统一入口。
 func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = {}) -> bool:
+	if skill_id.is_empty():
+		return false
 	if network_gateway != null and network_gateway.is_lan_client():
-		if player_id != local_human_player_id or skill_id.is_empty():
+		if player_id != local_human_player_id:
+			return false
+		# 远端持有者公开状态；死亡或离场后即使旧请求仍含技能白名单也不能继续点击发动。
+		var remote_owner: Dictionary = {}
+		for player_variant: Variant in _remote_snapshot.get("players", []) as Array:
+			var remote_player: Dictionary = player_variant as Dictionary
+			if int(remote_player.get("player_id", -1)) == player_id:
+				remote_owner = remote_player
+				break
+		if remote_owner.is_empty() or not bool(remote_owner.get("alive", false)) or bool(remote_owner.get("out_of_game", false)):
 			return false
 		# 当前远端请求；房主已经完成技能入口、次数、资源和阶段校验，客户端只据其私有白名单控制按钮亮起。
 		var remote_choice: Dictionary = _remote_snapshot.get("current_choice_request", {}) as Dictionary
@@ -4777,6 +4847,10 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 		# 响应转换技能；请求上下文会明确列出已逐材料校验通过的稳定技能 ID。
 		var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", active_context.get("response_conversion_skill_ids", [])) as Array
 		return response_conversion_skill_ids.has(skill_id)
+	# 本地权威技能持有者；死亡或离场角色不能通过旧按钮、网络动作或未完整自检的技能脚本发动主动技能。
+	var owner: PlayerState = state.get_player(player_id) if state != null else null
+	if owner == null or not owner.alive or owner.out_of_game:
+		return false
 	# 当前技能运行时实例；未安装的技能不能通过伪造动作直接发动。
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
 	if skill == null:
@@ -4804,6 +4878,10 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 	# 可发动技能结果；按武将技能安装顺序遍历，界面和 AI 得到稳定按钮顺序。
 	var result: Array[String] = []
 	if not RuleTimingCatalog.has_active_entry(active_entry):
+		return result
+	# 当前技能持有者；死亡或离场后不再向界面、AI或网络请求公开主动技能入口。
+	var owner: PlayerState = state.get_player(player_id) if state != null else null
+	if owner == null or not owner.alive or owner.out_of_game:
 		return result
 	# 当前玩家技能表；未选将或技能尚未安装时为空字典。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
@@ -4959,9 +5037,76 @@ func _uninstall_all_character_skills() -> void:
 
 ## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由领袖开始首回合。
 func _finish_character_selection() -> void:
+	if character_selection.custom_assignment_enabled:
+		_apply_custom_character_assignments()
+	else:
+		for player: PlayerState in state.players:
+			if player.player_id != character_selection.leader_player_id:
+				_apply_character(player, character_selection.get_selection(player.player_id), true)
+	add_log("所有玩家完成选将并同时亮出武将。")
+	if _begin_ai_character_adjustment():
+		return
+	_continue_game_start_after_character_adjustment()
+
+
+## 应用自选模式中已经确认的身份、座次与武将；全部结果先通过服务名额校验，再一次性写入权威玩家状态。
+func _apply_custom_character_assignments() -> void:
+	# 按目标座次索引保存玩家；数组长度固定为参与人数，服务已保证座次唯一且完整。
+	var reordered_players: Array[PlayerState] = []
+	reordered_players.resize(state.players.size())
 	for player: PlayerState in state.players:
-		if player.player_id != character_selection.leader_player_id:
-			_apply_character(player, character_selection.get_selection(player.player_id), true)
+		# 当前玩家确认身份；领袖唯一且与一号位绑定。
+		var selected_identity: String = character_selection.get_selected_identity(player.player_id)
+		# 当前玩家确认座次；从1开始，转换为数组索引时减1。
+		var selected_seat_number: int = character_selection.get_selected_seat_number(player.player_id)
+		player.identity = selected_identity
+		player.identity_revealed = selected_identity == "leader"
+		_apply_character(player, character_selection.get_selection(player.player_id), true)
+		if selected_seat_number >= 1 and selected_seat_number <= reordered_players.size():
+			reordered_players[selected_seat_number - 1] = player
+	# 完整座次数组；服务只有全员确认后才进入本函数，因此每个位置都应存在有效玩家。
+	for seat_index: int in range(reordered_players.size()):
+		if reordered_players[seat_index] == null:
+			push_error("自选座次结果缺少第%d号位玩家。" % (seat_index + 1))
+			return
+	state.players = reordered_players
+	_refresh_player_display_names_for_current_seats()
+
+
+## 在需要时进入房主调整 AI 武将阶段；返回true表示开局流程已经暂停等待房主操作。
+func _begin_ai_character_adjustment() -> bool:
+	if not _customize_ai_characters_enabled or ai_character_adjustment == null:
+		return false
+	# 当前全部 AI 玩家；按当前玩家数组顺序保存，真人和掉线托管尚未进入对局，不属于内置 AI 调整对象。
+	var ai_player_ids: Array[int] = []
+	for player: PlayerState in state.players:
+		if ai_coordinator.is_ai_controlled(player.player_id):
+			ai_player_ids.append(player.player_id)
+	# 全部武将 ID；调整服务使用副本重新随机候选。
+	var available_character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		available_character_ids.append(str(character_id_variant))
+	# 房主权威玩家；离线为本地真人，局域网房主同样使用已经绑定的本地玩家 ID。
+	var authority_player_id: int = local_human_player_id
+	ai_character_adjustment.begin(ai_player_ids, available_character_ids, character_candidate_count, _custom_character_assignment_enabled, authority_player_id, _rng)
+	if not ai_character_adjustment.active:
+		return false
+	# 普通身份局原本在起始手牌后旋转领袖座次；调整阶段需要先显示最终一号位，因此提前执行同一幂等排序。
+	_reorder_players_from_leader()
+	state.current_phase = "ai_character_adjustment"
+	state.pre_game_setup = {
+		"kind":"ai_character_adjustment",
+		"host_player_id":authority_player_id,
+		"target_player_ids":ai_character_adjustment.get_ai_player_ids(),
+	}
+	add_log("初次选将完成，等待房主调整 AI 武将。")
+	_emit_state()
+	return true
+
+
+## 完成武将调整后继续安装技能、派发开局时机并发放起始手牌。
+func _continue_game_start_after_character_adjustment() -> void:
+	state.pre_game_setup.clear()
 	# 选将完成后的过渡阶段；先离开character_selection并同步全部亮将结果，避免开局时机创建的技能询问被选将遮罩拦截。
 	state.current_phase = "game_start"
 	_emit_state()
@@ -4990,22 +5135,188 @@ func _finish_character_selection() -> void:
 		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size()}
 		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
 		_emit_rule_timing("gameDrawAfter", -1, -1, -1, game_draw_result_data)
-	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
+	_starting_hand_count = starting_hand_count
+	_starting_cards_were_dealt = should_deal_starting_cards
 	# 身份确认后重新旋转物理座次；领袖固定为一号位，后续数组顺序就是顺时针座次。
 	_reorder_players_from_leader()
+	if should_deal_starting_cards and _begin_starting_hand_mulligan():
+		return
+	_complete_pre_game_start()
+
+
+## 创建所有玩家的手气卡确认阶段；返回true表示仍有真人需要决定是否刷新。
+func _begin_starting_hand_mulligan() -> bool:
+	if starting_hand_mulligan == null or _mulligan_limit == 0:
+		return false
+	# 按最终座次保存参与玩家 ID；服务只管理次数，不持有玩家或卡牌引用。
+	var player_ids: Array[int] = []
+	for player: PlayerState in state.players:
+		player_ids.append(player.player_id)
+	starting_hand_mulligan.begin(player_ids, _mulligan_limit, _ai_uses_mulligan_enabled)
+	if not starting_hand_mulligan.active:
+		return false
+	state.current_phase = "starting_hand_mulligan"
+	state.pre_game_setup = {"kind":"starting_hand_mulligan"}
+	_drive_ai_starting_hand_mulligan()
+	if not starting_hand_mulligan.active:
+		return false
+	add_log("起始手牌发放完成，等待所有玩家确认是否使用手气卡。")
+	_emit_state()
+	return true
+
+
+## 完成全部开局前设置并由领袖开始首回合；普通开局和手气卡结束共用本唯一出口。
+func _complete_pre_game_start() -> void:
+	state.pre_game_setup.clear()
+	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
 	# 首回合玩家状态；领袖固定为一号位且不受本地玩家稳定 ID 影响。
 	var first_turn_player: PlayerState = _find_player_by_identity("leader")
 	if first_turn_player == null:
 		push_error("标准身份局缺少领袖，无法开始首回合。")
 		return
-	add_log("所有玩家完成选将并同时亮出武将。")
-	if should_deal_starting_cards:
-		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), starting_hand_count])
+	if _starting_cards_were_dealt:
+		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), _starting_hand_count])
 	else:
 		add_log("对局开始：%d名玩家，起始手牌分发被规则取消。" % state.players.size())
 	# 首回合可能在roundStart立即创建技能询问；开始回合前必须先同步最终座次与起始手牌，保证本地内联候选已经存在于牌桌快照中。
 	_emit_state()
 	_start_turn(first_turn_player.player_id)
+
+
+## 处理房主点击 AI 武将牌；目标合法后生成一组新的随机候选并通过私有选将快照打开选将框。
+func _select_ai_adjustment_target(action: PlayerAction) -> bool:
+	if state == null or state.current_phase != "ai_character_adjustment" or ai_character_adjustment == null:
+		return _reject("当前不在 AI 武将调整阶段。")
+	# 当前目标玩家 ID；只允许来自公共可调整 AI 集合。
+	var target_player_id: int = int(action.payload.get("target_player_id", -1))
+	# 调整服务校验结果；只有房主和内置 AI 目标可以通过。
+	var selection_error: String = ai_character_adjustment.select_ai_target(action.actor_id, target_player_id)
+	if not selection_error.is_empty():
+		return _reject(selection_error)
+	state.action_sequence += 1
+	_emit_state()
+	return true
+
+
+## 应用房主为当前 AI 选择的武将；技能尚未安装，因此只需重新初始化该玩家武将与基础体力。
+func _set_ai_character(action: PlayerAction) -> bool:
+	if state == null or state.current_phase != "ai_character_adjustment" or ai_character_adjustment == null:
+		return _reject("当前不在 AI 武将调整阶段。")
+	# 当前 AI 玩家与武将 ID；均由选将框提交稳定值。
+	var target_player_id: int = int(action.payload.get("target_player_id", -1))
+	var character_id: String = str(action.payload.get("character_id", ""))
+	# 服务校验结果；空字符串表示房主、目标与候选均有效。
+	var selection_error: String = ai_character_adjustment.select_character(action.actor_id, target_player_id, character_id)
+	if not selection_error.is_empty():
+		return _reject(selection_error)
+	# 当前 AI 玩家状态；服务已经确认目标属于本局 AI，仍防御性检查状态存在。
+	var target_player: PlayerState = state.get_player(target_player_id)
+	if target_player == null:
+		return _reject("需要调整的 AI 玩家不存在。")
+	_apply_character(target_player, character_id, true)
+	state.action_sequence += 1
+	state.random_history.append({"kind":"ai_character_adjustment", "player_id":target_player_id, "character_id":character_id})
+	add_log("房主将%s的武将调整为【%s】。" % [target_player.display_name, GameDatabase.resolve_character_name(character_id)])
+	_emit_state()
+	return true
+
+
+## 处理房主结束 AI 武将调整的动作；完成后立即进入统一开局与起始手牌流程。
+func _finish_ai_character_adjustment_action(action: PlayerAction) -> bool:
+	if state == null or state.current_phase != "ai_character_adjustment" or ai_character_adjustment == null:
+		return _reject("当前不在 AI 武将调整阶段。")
+	# 服务结束结果；非房主提交会被明确拒绝。
+	var finish_error: String = ai_character_adjustment.finish(action.actor_id)
+	if not finish_error.is_empty():
+		return _reject(finish_error)
+	state.action_sequence += 1
+	add_log("房主完成 AI 武将调整。")
+	_continue_game_start_after_character_adjustment()
+	return true
+
+
+## 处理玩家使用一次手气卡；成功后旧手牌洗回牌堆并重新发放相同数量的起始手牌。
+func _submit_mulligan_refresh(action: PlayerAction) -> bool:
+	if state == null or state.current_phase != "starting_hand_mulligan" or starting_hand_mulligan == null:
+		return _reject("当前不在手气卡阶段。")
+	if not starting_hand_mulligan.can_refresh(action.actor_id):
+		return _reject("当前玩家没有剩余手气卡次数。")
+	if not _refresh_starting_hand(action.actor_id, false):
+		return _reject("起始手牌刷新失败。")
+	state.action_sequence += 1
+	add_log("%s使用手气卡刷新了起始手牌。" % state.get_player(action.actor_id).display_name)
+	_emit_state()
+	return true
+
+
+## 处理玩家确认保留当前起始手牌；全部玩家完成后才进入领袖首回合。
+func _submit_mulligan_finish(action: PlayerAction) -> bool:
+	if state == null or state.current_phase != "starting_hand_mulligan" or starting_hand_mulligan == null:
+		return _reject("当前不在手气卡阶段。")
+	if not starting_hand_mulligan.finish_player(action.actor_id):
+		return _reject("当前玩家已经完成手气卡确认。")
+	state.action_sequence += 1
+	if starting_hand_mulligan.active:
+		_emit_state()
+	else:
+		_complete_pre_game_start()
+	return true
+
+
+## 让全部内置 AI 按最终座次评估起始手牌；关闭 AI 手气卡时直接确认保留。
+func _drive_ai_starting_hand_mulligan() -> void:
+	if starting_hand_mulligan == null or not starting_hand_mulligan.active:
+		return
+	for seat_index: int in range(state.players.size()):
+		# 当前最终座次玩家；只有内置 AI 自动处理，真人与局域网玩家等待各自提交。
+		var player: PlayerState = state.players[seat_index]
+		if not ai_coordinator.is_ai_controlled(player.player_id):
+			continue
+		while starting_hand_mulligan.can_choose(player.player_id):
+			# 当前 AI 是否需要刷新；后置位防御需求通过服务按座次连续提高。
+			var should_refresh: bool = starting_hand_mulligan.should_ai_refresh(player, seat_index + 1, state.players.size())
+			if should_refresh and _refresh_starting_hand(player.player_id, true):
+				continue
+			starting_hand_mulligan.finish_player(player.player_id)
+			break
+
+
+## 把一名玩家当前全部起始手牌洗回牌堆、重洗并重新发放；不进入弃牌堆、不触发普通摸牌时机且不改变手牌数量。
+func _refresh_starting_hand(player_id: int, is_ai: bool) -> bool:
+	# 当前刷新玩家；无效、死亡或手气卡服务拒绝时不移动任何牌。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or starting_hand_mulligan == null or not starting_hand_mulligan.can_refresh(player_id):
+		return false
+	_ensure_card_movement()
+	if card_movement == null:
+		return false
+	# 当前旧手牌副本；逐张通过唯一移动服务返回牌堆，避免直接清空数组留下区域字段不一致。
+	var returned_cards: Array[CardInstance] = player.hand.duplicate()
+	# 本次需要重新发放的牌数；使用实际起始手牌数量，兼容开局规则调整后的非4张初始手牌。
+	var redeal_count: int = returned_cards.size()
+	for card: CardInstance in returned_cards:
+		if card_movement.move_card(card, "draw_pile", -1, "mulligan_return", state.current_event_id) == null:
+			return false
+		card.known_to.clear()
+		card.shown = false
+		card.private_owner_id = -1
+	# 牌堆重新洗牌；固定种子下每次手气卡结果可由 random_history 复现。
+	_shuffle_array(state.draw_pile)
+	var shuffled_card_uids: Array[int] = []
+	for shuffled_card: CardInstance in state.draw_pile:
+		shuffled_card_uids.append(shuffled_card.uid)
+	state.random_history.append({"kind":"mulligan_shuffle", "player_id":player_id, "card_uids":shuffled_card_uids})
+	if not starting_hand_mulligan.consume_refresh(player_id, is_ai):
+		return false
+	# 手气卡重发只属于开局配置替换，不是回合内摸牌；直接移动实体牌可避免触发摸牌技能或被摸牌修正改变数量。
+	for _card_index: int in range(redeal_count):
+		if state.draw_pile.is_empty():
+			return false
+		# 当前牌堆顶实体；数组末尾与普通摸牌入口保持相同牌堆方向。
+		var redealt_card: CardInstance = state.draw_pile.back()
+		if card_movement.move_card(redealt_card, "hand", player_id, "mulligan_deal", state.current_event_id, "", [player_id]) == null:
+			return false
+	return player.hand.size() == redeal_count
 
 
 ## 以领袖为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
@@ -5032,10 +5343,26 @@ func _reorder_players_from_leader() -> void:
 			seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
 
 
+## 按当前玩家数组顺序刷新座次显示名；自选座次已经完成排序时不再旋转数组。
+func _refresh_player_display_names_for_current_seats() -> void:
+	for seat_index: int in range(state.players.size()):
+		# 当前座次玩家；局域网真人沿用大厅名称，离线真人与 AI 使用最终座次编号。
+		var seated_player: PlayerState = state.players[seat_index]
+		if network_gateway != null and network_gateway.is_lan_host() and network_gateway.get_lan_human_player_ids().has(seated_player.player_id):
+			seated_player.display_name = network_gateway.get_lan_player_display_name(seated_player.player_id)
+		else:
+			seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
+
+
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
 func _drive_ai_character_selection() -> void:
 	if is_gameplay_paused() or _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
 		return
+	# 自选模式优先等待全部真人确认，避免 AI 抢占真人希望选择的座次与身份名额。
+	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+		for pending_player_id: int in character_selection.get_pending_player_ids():
+			if not ai_coordinator.is_ai_controlled(pending_player_id):
+				return
 	_is_driving_character_selection = true
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
 		# 当前轮是否提交了至少一项 AI 选择；没有进展表示正在等待人类或网络玩家。
@@ -5052,6 +5379,23 @@ func _drive_ai_character_selection() -> void:
 			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
 			var action: PlayerAction = PlayerAction.new("select_character", player_id)
 			action.payload = {"character_id":candidates[0]}
+			if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+				# 当前剩余座次与身份；优先把一号位和领袖绑定给同一 AI，其余角色只选择非一号位与非领袖身份。
+				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
+				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
+				var selected_seat_number: int = -1
+				var selected_identity: String = ""
+				if available_seats.has(1) and available_identities.has("leader"):
+					selected_seat_number = 1
+					selected_identity = "leader"
+				else:
+					available_seats.erase(1)
+					available_identities.erase("leader")
+					if not available_seats.is_empty() and not available_identities.is_empty():
+						selected_seat_number = available_seats[0]
+						selected_identity = available_identities[0]
+				action.payload["seat_number"] = selected_seat_number
+				action.payload["identity"] = selected_identity
 			_submit_ai_action(action)
 			made_progress = true
 		if not made_progress:
@@ -5974,7 +6318,8 @@ func _get_equipment_card_by_definition(player_id: int, definition_id: String) ->
 
 
 ## 创建一张虚拟牌并使用；单材料转化保留花色点数，多材料转化保持无花色无点数。
-func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String, material_card_uids: Array[int], target_ids: Array[int], log_message: String) -> bool:
+## 可选规则覆写只表达技能的距离、次数或目标上限修正，材料真实颜色由本入口强制写入并参与最终目标校验。
+func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String, material_card_uids: Array[int], target_ids: Array[int], log_message: String, rule_overrides: Dictionary = {}) -> bool:
 	if virtual_card_definition_id.is_empty() or material_card_uids.is_empty():
 		return false
 	# 单材料转化牌的花色；默认none用于丈八蛇矛等多材料虚拟牌。
@@ -5992,6 +6337,12 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, virtual_suit, virtual_rank)
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
+	# 最终规则覆写；复制技能参数后用真实代理牌颜色覆盖同名字段，禁止调用方伪造材料颜色绕过来牌限制。
+	var validated_rule_overrides: Dictionary = rule_overrides.duplicate(true)
+	validated_rule_overrides["card_color"] = virtual_card.get_color()
+	# 虚拟牌最终合法性；在移动任何材料或创建处理区表现前统一复核次数、距离、目标组合与目标技能免疫。
+	if card_rules.validate_virtual_use(actor_id, virtual_card_definition_id, target_ids, validated_rule_overrides) != "":
+		return false
 	_ensure_card_movement()
 	if _move_card_with_timings(virtual_card, "processing", -1, "virtual_card_begin", state.current_event_id) == null:
 		return false
@@ -8150,9 +8501,13 @@ func _emit_state() -> void:
 		state.event_history = event_scheduler.get_event_history()
 	# 本地界面快照；仅公开本地玩家手牌和自身身份。
 	var local_snapshot: Dictionary = state.to_dict(local_human_player_id, false)
+	# 本地手气卡私有状态；只包含本人的剩余次数与按钮权限。
+	local_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(local_human_player_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 	state_changed.emit(local_snapshot)
-	if state.current_phase == "character_selection" and character_selection != null:
-		character_selection_changed.emit(character_selection.to_dict(local_human_player_id))
+	# 本地选将类私有快照；初次选将与房主调整 AI 共用同一选将面板协议。
+	var local_selection_snapshot: Dictionary = _get_character_selection_snapshot(local_human_player_id)
+	if not local_selection_snapshot.is_empty():
+		character_selection_changed.emit(local_selection_snapshot)
 	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
 		for peer_id_variant: Variant in network_gateway.get_remote_player_assignments().keys():
 			# 当前远端 peer 与其稳定玩家 ID；每人单独生成私有快照，禁止广播同一观察者数据。
@@ -8167,8 +8522,26 @@ func _emit_state() -> void:
 			# 本地合法动作；只发送给实际行动玩家，用于客户端无状态预览，最终提交仍由房主重新校验。
 			remote_snapshot["local_legal_actions"] = get_legal_actions(viewer_id) if state.current_phase == "play" and state.current_player_id == viewer_id else []
 			# 选将私有快照；候选仅进入对应观察者的定向状态包，其他玩家只能看到公开确认状态。
-			remote_snapshot["character_selection"] = character_selection.to_dict(viewer_id) if state.current_phase == "character_selection" and character_selection != null else {}
+			remote_snapshot["character_selection"] = _get_character_selection_snapshot(viewer_id)
+			# 手气卡私有快照；每名远端玩家只接收自己的剩余次数和确认状态。
+			remote_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(viewer_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
+
+
+## 返回面向指定观察者的选将类私有快照；普通选将与房主 AI 调整阶段互斥。
+func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
+	if state == null:
+		return {}
+	if state.current_phase == "character_selection" and character_selection != null:
+		return character_selection.to_dict(viewer_id)
+	if state.current_phase == "ai_character_adjustment" and ai_character_adjustment != null:
+		# AI 调整选将快照；补充当前目标显示名只用于标题，不扩大服务对玩家状态的依赖。
+		var adjustment_snapshot: Dictionary = ai_character_adjustment.to_selection_dict(viewer_id)
+		if not adjustment_snapshot.is_empty():
+			var target_player: PlayerState = state.get_player(int(adjustment_snapshot.get("target_player_id", -1)))
+			adjustment_snapshot["target_display_name"] = target_player.display_name if target_player != null else "AI角色"
+		return adjustment_snapshot
+	return {}
 
 
 ## 拒绝动作并返回 false，统一错误信号与调用结果。

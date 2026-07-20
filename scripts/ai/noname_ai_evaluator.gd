@@ -24,6 +24,21 @@ const RECAST_DRAW_VALUE: float = 4.5
 ## 必须响应伤害时的基础收益；确保【闪】、【杀】等防止常规1点伤害时通常值得打出。
 const RESPONSE_SURVIVAL_VALUE: float = 6.0
 
+## 酒杀每多1点伤害对【闪】响应的额外保命收益；固定4.0分使高伤害响应明显高于普通杀。
+const WINE_SLASH_RESPONSE_EXTRA_DAMAGE_BONUS: float = 4.0
+
+## 酒杀足以打穿当前体力与护盾时的致命响应奖励；固定8.0分确保AI不会为非致命连环收益放弃保命。
+const LETHAL_SLASH_RESPONSE_BONUS: float = 8.0
+
+## 非致命酒杀威胁下保留最后1张【闪】的价值加成；固定2.0分优先于一般低价资源，但不轻易压过【桃】。
+const WINE_SLASH_DODGE_RESERVE_BONUS: float = 2.0
+
+## 致命酒杀威胁下保留最后1张【闪】的价值加成；固定6.0分允许AI为避免立即濒死而优先保留确定防御牌。
+const LETHAL_WINE_SLASH_DODGE_RESERVE_BONUS: float = 6.0
+
+## 酒杀每多1点伤害的主动目标效果倍率；固定2.0使AI同时考虑额外资源压力与更接近击杀的价值。
+const WINE_SLASH_EXTRA_DAMAGE_EFFECT_MULTIPLIER: float = 2.0
+
 ## 友方属性伤害可传导至全部横置敌人时放弃【闪】的响应修正；固定8.0分，足以使AI保留响应牌并让连环伤害结算。
 const FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE: float = 8.0
 
@@ -99,10 +114,12 @@ func score_action(authoritative_snapshot: Dictionary, action: Dictionary, actor_
 	var target_ids: Array[int] = get_effective_target_ids(authoritative_snapshot, actor_id, definition, action.get("target_ids", []) as Array)
 	# 当前实体牌颜色；仁王盾等颜色型防具必须读取实际使用牌，虚拟且未声明颜色的牌保持未知。
 	var action_card_color: String = _get_action_card_color(authoritative_snapshot, actor_id, action)
+	# 本次牌效的预期伤害值；【杀】会读取使用者当前公开酒加成，其他伤害牌默认为1。
+	var expected_damage_amount: int = _get_action_expected_damage_amount(authoritative_snapshot, actor_id, definition, action)
 	# 目标结果基础值；负值代表伤害、弃牌或跳阶段，正值代表回复和摸牌。
 	var target_result: float = float(ai_profile.get("target_result", 0.0))
 	for target_id: int in target_ids:
-		score += score_target_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, action_card_color)
+		score += score_target_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, action_card_color, expected_damage_amount)
 	# 可重铸牌只有实际使用收益高于换牌收益时才使用；否则重铸动作会在合法列表中胜出。
 	if bool(definition.get("recast", false)):
 		score -= maxf(0.0, RECAST_DRAW_VALUE - card_value) * 0.5
@@ -111,7 +128,8 @@ func score_action(authoritative_snapshot: Dictionary, action: Dictionary, actor_
 
 ## 计算一名目标承受当前牌效的观察者收益；包含身份态度、濒危状态、手牌数、防具与属性连环传播。
 ## card_color 仅由主动使用实体提供；空字符串表示未知颜色，不能臆测颜色型防具必定生效。
-func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, card_color: String = "") -> float:
+## expected_damage_amount 是本次对目标的伤害基数；默认1保持普通牌和旧调用方的原有评分语义。
+func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, card_color: String = "", expected_damage_amount: int = 1) -> float:
 	# AI 对目标的当前态度；正值为友方，负值为敌方，隐藏身份会按暴露度衰减。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
 	# 目标状态；体力和手牌会放大伤害、控制与救援效果。
@@ -134,14 +152,22 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 	if bool(ai_profile.get("recover", false)) and int(target.get("hp", 0)) >= int(target.get("max_hp", 0)):
 		return 0.0
 	if bool(ai_profile.get("damage", false)):
+		# 安全伤害值；异常或缺失数据至少按1点伤害评估。
+		expected_damage_amount = maxi(expected_damage_amount, 1)
 		if armor_definition != null:
 			status_multiplier *= armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
 		# 目标体力；1点体力时伤害价值显著上升，2点体力时次级上升。
-		var target_hp: int = int(target.get("hp", 0))
-		if target_hp <= 1:
+		# 目标可承受值；体力与护盾共同决定酒杀是否会立即令其进入濒死。
+		var target_survival: int = int(target.get("hp", 0)) + int(target.get("shield", 0))
+		# 受伤后剩余可承受值；不大于0代表预期致命，等于1代表下一次伤害即致命。
+		var remaining_survival_after_damage: int = target_survival - expected_damage_amount
+		if remaining_survival_after_damage <= 0:
 			status_multiplier *= 2.5
-		elif target_hp == 2:
+		elif remaining_survival_after_damage == 1:
 			status_multiplier *= 1.8
+		# 额外伤害倍率；酒杀不只更接近击杀，也会一次压缩更多体力与救援资源。
+		if expected_damage_amount > 1:
+			status_multiplier *= pow(WINE_SLASH_EXTRA_DAMAGE_EFFECT_MULTIPLIER, expected_damage_amount - 1)
 		# 目标手牌数；无牌更难响应【杀】或群体牌，三张以上则不应过度确信命中。
 		var hand_count: int = int(target.get("hand_count", 0))
 		if hand_count == 0:
@@ -160,14 +186,15 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			# 八卦阵红色判定约有一半成功率，因此没有手牌【闪】时仍降低预期命中收益。
 			status_multiplier *= BAGUA_DAMAGE_MULTIPLIER
 		# 濒危目标持有桃或自救酒时降低一次伤害直接完成击杀的预期，但仍保留压低资源的收益。
-		if int(target.get("hp", 0)) <= 1 and get_survival_card_count(authoritative_snapshot, target_id) > 0:
+		if target_survival <= expected_damage_amount and get_survival_card_count(authoritative_snapshot, target_id) > 0:
 			status_multiplier *= SURVIVAL_CARD_DAMAGE_MULTIPLIER
 	# 当前目标直接效用；牌效结果乘观察者态度后，敌方负面效果会转为正收益。
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
 	# 身份局战略附加分；领袖保护、反贼集火和内奸控场不改变实际牌效数值。
 	result += identity_strategy.score_target_strategy(authoritative_snapshot, actor_id, target_id, ai_profile)
-	if bool(ai_profile.get("damage", false)) and int(target.get("hp", 0)) <= 1:
+	if bool(ai_profile.get("damage", false)) and int(target.get("hp", 0)) + int(target.get("shield", 0)) <= expected_damage_amount:
 		# 预计1点伤害即可击杀时纳入身份死亡奖惩；群体牌逐目标调用本方法，因此天然覆盖全部可能受害队友。
+		# 预期伤害即可击杀时纳入身份死亡奖惩；群体牌逐目标调用本方法，因此天然覆盖全部可能受害队友。
 		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, target_id)
 	# 属性伤害连环传播；目标已横置时把同值伤害继续计入其他横置角色。
 	if bool(ai_profile.get("nature_damage", false)) and bool(target.get("chained", false)):
@@ -178,12 +205,13 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			var chained_id: int = int(chained_player.get("player_id", -1))
 			if chained_id == target_id or not bool(chained_player.get("alive", false)) or not bool(chained_player.get("chained", false)):
 				continue
-			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, ai_profile, target_result)
+			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, ai_profile, target_result, expected_damage_amount)
 	return result
 
 
 ## 评估属性伤害经铁索传导到另一名横置角色的收益；统一纳入自身风险、濒危队友与预计击杀的身份奖惩。
-func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, ai_profile: Dictionary, target_result: float) -> float:
+## expected_damage_amount 与直接目标共享同一张属性【杀】的酒加成，多目标和连环均不重复消耗该状态。
+func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, ai_profile: Dictionary, target_result: float, expected_damage_amount: int = 1) -> float:
 	# 传导受击者快照；不存在或已离场的玩家不会参与当前属性伤害结算。
 	var chained_player: Dictionary = get_player(authoritative_snapshot, chained_id)
 	if chained_player.is_empty() or not bool(chained_player.get("alive", false)):
@@ -192,15 +220,19 @@ func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: 
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, chained_id)
 	# 传导伤害状态倍率；低体力目标更接近死亡，必须放大其对友军风险和敌军收益的影响。
 	var status_multiplier: float = 1.0
-	if int(chained_player.get("hp", 0)) <= 1:
+	# 传导受击者可承受值；护盾与体力共同参与致命性判断。
+	var chained_survival: int = int(chained_player.get("hp", 0)) + int(chained_player.get("shield", 0))
+	if chained_survival <= expected_damage_amount:
 		status_multiplier *= CHAINED_CRITICAL_HP_MULTIPLIER
+	if expected_damage_amount > 1:
+		status_multiplier *= pow(WINE_SLASH_EXTRA_DAMAGE_EFFECT_MULTIPLIER, expected_damage_amount - 1)
 	# 行动者自身被传导时额外放大损失，确保“自己横置”会显著降低向横置目标施放属性伤害的评分。
 	if chained_id == actor_id:
 		status_multiplier *= CHAINED_SELF_DAMAGE_RISK_MULTIPLIER
 	# 当前传导伤害基础收益；仍沿用卡牌或技能声明的 target_result，避免为属性伤害另建硬编码评分表。
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
 	# 传导到濒危角色时的身份死亡后果；可同时处理友军误杀、击杀反贼摸牌与主公误杀忠臣的资源惩罚。
-	if int(chained_player.get("hp", 0)) <= 1:
+	if chained_survival <= expected_damage_amount:
 		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, chained_id)
 		if chained_id == actor_id:
 			# 自己横置且1血会在传导后立即濒死；死亡奖惩接口刻意跳过自身，因此在此补充纯生存风险。
@@ -286,10 +318,20 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 			# 借刀持刀者同时考虑保住武器和【杀】命中受害者的阵营收益。
 			var victim_id: int = int(context.get("victim_id", -1))
 			return RESPONSE_SURVIVAL_VALUE - get_attitude(authoritative_snapshot, actor_id, victim_id) - selected_value * CARD_COST_WEIGHT
+		# 当前响应保命收益；【闪】会根据真实伤害值和致命性加分，其他响应保持原有6.0分基准。
+		var response_survival_value: float = RESPONSE_SURVIVAL_VALUE
+		if response_patterns.has("shan"):
+			# 当前预期伤害；【杀】响应上下文优先提供damage_amount，缺失时安全回退1。
+			var expected_response_damage: int = maxi(int(context.get("damage_amount", context.get("amount", 1))), 1)
+			response_survival_value += float(expected_response_damage - 1) * WINE_SLASH_RESPONSE_EXTRA_DAMAGE_BONUS
+			# 当前响应者；体力和护盾之和不大于预期伤害时，本次【闪】属于致命防御。
+			var response_player: Dictionary = get_player(authoritative_snapshot, actor_id)
+			if not response_player.is_empty() and int(response_player.get("hp", 0)) + int(response_player.get("shield", 0)) <= expected_response_damage:
+				response_survival_value += LETHAL_SLASH_RESPONSE_BONUS
 		if _should_decline_response_for_friendly_chain_damage(authoritative_snapshot, actor_id, context, response_patterns):
 			# 友方属性伤害会经本人传导到全部横置敌人；此时使用【闪】会阻断更高总收益，故把确认响应压到取消动作以下。
-			return RESPONSE_SURVIVAL_VALUE - FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE - selected_value * CARD_COST_WEIGHT
-		return RESPONSE_SURVIVAL_VALUE - selected_value * CARD_COST_WEIGHT
+			return response_survival_value - FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE - selected_value * CARD_COST_WEIGHT
+		return response_survival_value - selected_value * CARD_COST_WEIGHT
 	# 普通选目标默认按友方收益排序；专属技能通常会覆盖该分数。
 	if not selected_target_ids.is_empty():
 		# 首个目标 ID；当前基础协议主要枚举单目标动作。
@@ -378,15 +420,22 @@ func get_card_value_by_id(card_id: String, authoritative_snapshot: Dictionary, o
 	var ai_profile: Dictionary = get_card_ai_profile(definition)
 	# 配置价值；允许单值或按同名牌序号递减的数组。
 	var configured_value: Variant = ai_profile.get("value", definition.get("ai_use_value", 3.0))
+	# 当前实际保留价值；先解析卡牌配置，再叠加对局上下文修正。
+	var result: float = 3.0
 	if configured_value is Array:
 		# 持有者同名牌数量；当前牌按数组最后一个可用下标估值。
 		var same_card_count: int = count_owned_cards(authoritative_snapshot, owner_id, card_id)
 		# 价值数组；空数组回退3分。
 		var values: Array = configured_value as Array
 		if values.is_empty():
-			return 3.0
-		return float(values[mini(maxi(same_card_count - 1, 0), values.size() - 1)])
-	return float(configured_value)
+			result = 3.0
+		else:
+			result = float(values[mini(maxi(same_card_count - 1, 0), values.size() - 1)])
+	else:
+		result = float(configured_value)
+	if card_id == "shan" and get_known_response_count(authoritative_snapshot, owner_id, "shan") == 1:
+		result += _get_wine_slash_dodge_reserve_bonus(authoritative_snapshot, owner_id)
+	return result
 
 
 ## 返回选择请求中某个候选实体的价值；隐藏牌只按2分未知资源估值，不猜测未公开牌面。
@@ -417,6 +466,65 @@ func get_owned_card_value_by_uid(authoritative_snapshot: Dictionary, owner_id: i
 			if int(card.get("uid", -1)) == card_uid:
 				return get_card_value_by_id(str(card.get("definition_id", "")), authoritative_snapshot, owner_id)
 	return 2.0
+
+
+## 返回持有者手牌或木牛“粮”中指定实体 UID 的只读副本；技能AI可用它查询材料牌族、颜色和定义ID。
+func get_owned_card_by_uid(authoritative_snapshot: Dictionary, owner_id: int, card_uid: int) -> Dictionary:
+	# 持有者快照；异常缺失时返回空字典，调用方不得猜测牌面。
+	var owner: Dictionary = get_player(authoritative_snapshot, owner_id)
+	if owner.is_empty():
+		return {}
+	for zone_name: String in ["hand", "wooden_ox_storage"]:
+		for card_variant: Variant in owner.get(zone_name, []) as Array:
+			# 当前实体牌；UID匹配时返回深拷贝，避免内容脚本改写AI权威快照。
+			var card: Dictionary = card_variant as Dictionary
+			if int(card.get("uid", -1)) == card_uid:
+				return card.duplicate(true)
+	return {}
+
+
+## 返回当前动作的预期伤害基数；显式动作字段优先，【杀】其次读取使用者公开酒加成，其他牌回退1。
+func _get_action_expected_damage_amount(authoritative_snapshot: Dictionary, actor_id: int, definition: Dictionary, action: Dictionary) -> int:
+	# 动作负载；扩展牌或技能可显式声明已经算定的伤害值。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 显式伤害值；正数时不再叠加酒状态，避免特殊动作重复计算。
+	var declared_damage_amount: int = int(action.get("expected_damage_amount", payload.get("expected_damage_amount", 0)))
+	if declared_damage_amount > 0:
+		return declared_damage_amount
+	if str(definition.get("effect_id", "")) != "slash":
+		return 1
+	# 【杀】使用者快照；酒加成是当前回合的公开规则状态，可用于AI攻防评估。
+	var actor: Dictionary = get_player(authoritative_snapshot, actor_id)
+	return maxi(1 + int(actor.get("wine_bonus", 0)), 1)
+
+
+## 计算最后1张【闪】在当前酒杀威胁下的额外保留价值；只读取存活敌人、已知【杀】、酒加成、座次距离和公开武器范围。
+func _get_wine_slash_dodge_reserve_bonus(authoritative_snapshot: Dictionary, owner_id: int) -> float:
+	# 防守者快照；死亡或离场角色不再为未来酒杀保留手牌。
+	var owner: Dictionary = get_player(authoritative_snapshot, owner_id)
+	if owner.is_empty() or not bool(owner.get("alive", false)) or bool(owner.get("out_of_game", false)):
+		return 0.0
+	# 防守者当前可承受值；护盾可以吸收酒杀伤害，因此与体力一同判定致命性。
+	var owner_survival: int = int(owner.get("hp", 0)) + int(owner.get("shield", 0))
+	# 当前最高保留加成；多名威胁者存在时取其中最危险的一名，不重复累加。
+	var reserve_bonus: float = 0.0
+	for attacker_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 潜在酒杀使用者；只有存活、未离场且与防守者敌对的角色会形成威胁。
+		var attacker: Dictionary = attacker_variant as Dictionary
+		# 潜在使用者ID；用于态度、距离和攻击范围查询。
+		var attacker_id: int = int(attacker.get("player_id", -1))
+		if attacker_id == owner_id or not bool(attacker.get("alive", false)) or bool(attacker.get("out_of_game", false)) or get_attitude(authoritative_snapshot, owner_id, attacker_id) >= 0.0:
+			continue
+		# 酒加成值；不大于0表示下一张【杀】仍是普通伤害，不触发专项保留。
+		var wine_bonus: int = int(attacker.get("wine_bonus", 0))
+		if wine_bonus <= 0 or get_known_response_count(authoritative_snapshot, attacker_id, "sha") <= 0:
+			continue
+		if get_distance(authoritative_snapshot, attacker_id, owner_id) > get_attack_range(authoritative_snapshot, attacker_id):
+			continue
+		# 潜在酒杀伤害；与真实【杀】结算相同，基础1点叠加公开酒加成。
+		var expected_damage: int = 1 + wine_bonus
+		reserve_bonus = maxf(reserve_bonus, LETHAL_WINE_SLASH_DODGE_RESERVE_BONUS if owner_survival <= expected_damage else WINE_SLASH_DODGE_RESERVE_BONUS)
+	return reserve_bonus
 
 
 ## 返回本次主动使用实体的公开颜色；手牌与木牛“粮”均可能作为合法使用区，找不到时保持未知。
@@ -487,6 +595,19 @@ func get_distance(authoritative_snapshot: Dictionary, source_id: int, target_id:
 	if (target.get("equipment", {}) as Dictionary).has("defensive_mount"):
 		distance += 1
 	return maxi(distance, 1)
+
+
+## 返回指定玩家的公开攻击范围；无武器或定义异常时为1，装备武器时读取卡牌配置的attack_range。
+func get_attack_range(authoritative_snapshot: Dictionary, player_id: int) -> int:
+	# 玩家快照；不存在时使用规则默认攻击范围1。
+	var player: Dictionary = get_player(authoritative_snapshot, player_id)
+	if player.is_empty():
+		return 1
+	# 公开武器快照；空槽位安全回退至默认范围。
+	var weapon: Dictionary = (player.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary
+	# 武器卡牌定义；所有武器范围由内容文件统一声明，AI不维护装备ID白名单。
+	var weapon_definition: Dictionary = GameDatabase.get_card(str(weapon.get("definition_id", "")))
+	return maxi(int(weapon_definition.get("attack_range", 1)), 1)
 
 
 ## 返回角色综合强度；额外回合、威胁与目标优先级可直接复用无名杀 condition 公式。

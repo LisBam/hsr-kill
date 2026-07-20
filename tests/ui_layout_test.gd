@@ -81,6 +81,8 @@ func _run() -> void:
 	# 当前默认显示名为“崩铁风格”，稳定 ID 仍为 `space_mono`，旧设置应直接映射到新版主题。
 	# 暖木风格的设置显示名现为“暖木家园”，稳定 ID 继续沿用原值以兼容已有设置。
 	var ui_style_option: OptionButton = main_instance.get_node("%UiStyleOption") as OptionButton
+	# 卡牌名称选项；与UI风格下拉框共用完整悬停和弹出列表主题。
+	var card_name_option: OptionButton = main_instance.get_node("%MenuCardNameOption") as OptionButton
 	# 左上信息面板；切换风格后边框颜色必须立即跟随注册表更新，不需要重新开局。
 	var top_info_panel: PanelContainer = main_instance.get_node("TopInfoPanel") as PanelContainer
 	# 黑白太空背景遮罩；重新设计后不再用近黑覆盖层模拟滤镜，透明度必须为0。
@@ -110,6 +112,17 @@ func _run() -> void:
 		if not primary_color.is_equal_approx(expected_style_colors[primary_key] as Color):
 			_fail("space_style_palette:%s/%s" % [primary_key, primary_color])
 			return
+	# 局内下拉框悬停样式；按钮本体与PopupMenu都必须使用当前主题，不能回退引擎默认皮肤。
+	var card_name_hover_style: StyleBoxFlat = card_name_option.get_theme_stylebox("hover") as StyleBoxFlat
+	# UI风格按钮悬停样式；与卡牌名称控件保持同一交互语义。
+	var ui_style_hover_style: StyleBoxFlat = ui_style_option.get_theme_stylebox("hover") as StyleBoxFlat
+	# 卡牌名称弹出列表悬停样式；选项行必须保留主题背景与强调边框。
+	var card_name_popup_hover_style: StyleBoxFlat = card_name_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
+	# UI风格弹出列表悬停样式；切换主题后由同一入口即时重绘。
+	var ui_style_popup_hover_style: StyleBoxFlat = ui_style_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
+	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")) or not card_name_popup_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")):
+		_fail("match_menu_option_hover_style")
+		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
 	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or not is_equal_approx(reference_backdrop.table_inset, 18.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
@@ -149,7 +162,7 @@ func _run() -> void:
 	var confirm_disabled_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 确定按钮普通样式；用于验证禁用状态具有明确亮度差。
 	var confirm_normal_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
-	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or not end_play_normal_style.bg_color.is_equal_approx(BattleUIStyle.get_color("end_play_button")) or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
+	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.text != "结束阶段" or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or not end_play_normal_style.bg_color.is_equal_approx(BattleUIStyle.get_color("end_play_button")) or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
 	# 手牌栏继续保留175像素抬升空间；装备栏只等于148像素牌面高度，二者底边对齐且横向边界精确相接。
@@ -188,6 +201,26 @@ func _run() -> void:
 		_fail("skill_information:%s/%s" % [first_skill_button.tooltip_text, information_box.get_hover_title_text() if information_box != null else "missing"])
 		return
 	first_skill_button.mouse_exited.emit()
+	await get_tree().process_frame
+	# 动态技能牌名说明；原文使用崩铁杀【药】，切换三国杀名称后已打开的信息框必须立即显示【桃】。
+	var skill_name_hover_delay_seconds: float = information_box.hover_display_delay_seconds
+	information_box.hover_display_delay_seconds = 0.0
+	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
+	await get_tree().process_frame
+	information_box.show_hover_information({"title":"【焕发】", "description":str(GameDatabase.get_skill("huanfa").get("description", ""))}, Rect2(Vector2(320.0, 240.0), Vector2(60.0, 40.0)), 990001)
+	await get_tree().process_frame
+	if not information_box.get_hover_description_text().contains("【药】"):
+		_fail("skill_description_custom_name:%s" % information_box.get_hover_description_text())
+		return
+	GameSettings.set_card_name_mode(GameSettings.NameMode.ORIGINAL)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not information_box.get_hover_description_text().contains("【桃】") or information_box.get_hover_description_text().contains("【药】"):
+		_fail("skill_description_original_name:%s" % information_box.get_hover_description_text())
+		return
+	information_box.hide_hover_information(990001)
+	information_box.hover_display_delay_seconds = skill_name_hover_delay_seconds
+	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	await get_tree().process_frame
 	# 技能点击错误区；直接调用处理入口模拟过期点击，不可发动技能必须保持静默。
 	var error_label: Label = main_instance.get_node("%ErrorLabel") as Label
@@ -288,10 +321,11 @@ func _run() -> void:
 		return
 	await _wait_for_hover_information_delay()
 	# 目标旁信息面板；按内容在240至520像素宽度内动态调整，并优先保持4:3比例且始终限制在当前客户区内。
+	# 目标旁信息面板；按内容在240至520像素宽度内动态调整，并在可配的最小与最大比例内保持自然形状。
 	var hover_information_panel: PanelContainer = information_box.get_node("HoverInformationPanel") as PanelContainer
 	var hover_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hover_information_panel.size.y, 1.0)
-	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("货运星槎（3）") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hover_information_aspect_ratio, information_box.hover_panel_aspect_ratio) or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
-		_fail("local_equipment_information:%s/%s" % [information_box.get_hover_title_text() if information_box != null else "missing", hover_information_panel.size if hover_information_panel != null else Vector2.ZERO])
+	if information_box == null or not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("货运星槎（3）") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or hover_information_aspect_ratio < information_box.hover_panel_minimum_aspect_ratio or hover_information_aspect_ratio > information_box.hover_panel_maximum_aspect_ratio or not main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) or not local_equipment_label.tooltip_text.is_empty():
+		_fail("local_equipment_information:%s/%s ratio=%.3f limits=%.3f-%.3f bounds=%s main=%s panel=%s tooltip=%s" % [information_box.get_hover_title_text() if information_box != null else "missing", hover_information_panel.size if hover_information_panel != null else Vector2.ZERO, hover_information_aspect_ratio, information_box.hover_panel_minimum_aspect_ratio if information_box != null else -1.0, information_box.hover_panel_maximum_aspect_ratio if information_box != null else -1.0, main_instance.get_global_rect().encloses(hover_information_panel.get_global_rect()) if hover_information_panel != null else false, main_instance.get_global_rect(), hover_information_panel.get_global_rect() if hover_information_panel != null else Rect2(), local_equipment_label.tooltip_text])
 		return
 	local_treasure_row.mouse_exited.emit()
 	await get_tree().process_frame
@@ -514,6 +548,20 @@ func _run() -> void:
 	if not information_box.is_hover_information_visible() or not is_equal_approx(pre_layout_hover_panel.modulate.a, 1.0):
 		_fail("player_hover_post_layout_visibility:%s/%s" % [information_box.is_hover_information_visible(), pre_layout_hover_panel.modulate.a])
 		return
+	# 短说明最终宽度；再等待1帧让二次边界收紧完成，作为长说明的动态宽度对照。
+	await get_tree().process_frame
+	var compact_hover_width: float = pre_layout_hover_panel.size.x
+	information_box.hide_hover_information(current_operator_view.get_instance_id())
+	# 长说明请求；使用显式长文本验证信息框会扩宽，不依赖某张卡牌当前翻译长度。
+	information_box.show_hover_information({"title":"动态宽度回归", "description":"这是一段用于验证悬停信息框动态宽度的较长说明文本。面板应根据实际文字量适度扩宽，同时受最小和最大宽高比限制，不再固定为四比三，也不应形成过窄过高或过宽过矮的异常形状。"}, Rect2(Vector2(42.0, 42.0), Vector2(80.0, 80.0)), current_operator_view.get_instance_id())
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 长说明最终宽度与比例；宽度必须大于短文本，比例仍保持在组件声明的安全范围内。
+	var expanded_hover_width: float = pre_layout_hover_panel.size.x
+	var expanded_hover_aspect_ratio: float = expanded_hover_width / maxf(pre_layout_hover_panel.size.y, 1.0)
+	if expanded_hover_width <= compact_hover_width or expanded_hover_aspect_ratio < information_box.hover_panel_minimum_aspect_ratio or expanded_hover_aspect_ratio > information_box.hover_panel_maximum_aspect_ratio:
+		_fail("hover_dynamic_width compact=%.2f expanded=%.2f ratio=%.3f" % [compact_hover_width, expanded_hover_width, expanded_hover_aspect_ratio])
+		return
 	information_box.hide_hover_information(current_operator_view.get_instance_id())
 	information_box.hover_display_delay_seconds = original_hover_delay_seconds
 	# 武将牌右键事件；保留一个临时选牌 UID，用于确认武将输入组件消费按下与释放后不会触发牌桌右键取消。
@@ -591,7 +639,7 @@ func _run() -> void:
 	var identity_mark_menu_texts: Array[String] = []
 	for identity_mark_menu_index: int in range(identity_mark_menu.item_count):
 		identity_mark_menu_texts.append(identity_mark_menu.get_item_text(identity_mark_menu_index))
-	if identity_mark_menu_texts != ["？", "忠", "反", "内"]:
+	if identity_mark_menu_texts != ["?", "忠", "反", "内"]:
 		_fail("identity_mark_menu_texts:%s" % [identity_mark_menu_texts])
 		return
 	# 自动身份标记设置；默认开启并使用复选框呈现，二元配置不通过普通文字按钮模拟。
@@ -616,26 +664,32 @@ func _run() -> void:
 	var marked_identity_badge: Label = current_operator_view.get_node("IdentityBadge") as Label
 	# 自动标记目标的公开玩家快照；其身份必须继续保持hidden，证明模型没有覆盖界面状态。
 	var observed_public_player: Dictionary = (ten_player_snapshot.get("players", []) as Array)[5] as Dictionary
-	if marked_identity_badge.text != "反" or (main_instance.get("_identity_marks") as Dictionary).has(5) or str(observed_public_player.get("identity", "")) != "hidden":
+	if marked_identity_badge.text != "反" or marked_identity_badge.get_theme_color("font_color") != BattleUIStyle.get_color("identity_rebel") or (main_instance.get("_identity_marks") as Dictionary).has(5) or str(observed_public_player.get("identity", "")) != "hidden":
 		_fail("automatic_identity_mark:%s" % marked_identity_badge.text)
 		return
 	# 关闭自动标记后立即恢复未知徽记；模型观察结果继续保留，重新开启时无需重算历史行为。
 	auto_identity_marking_checkbox.button_pressed = false
 	await get_tree().process_frame
-	if GameSettings.auto_identity_marking_enabled or marked_identity_badge.text != "？":
+	if GameSettings.auto_identity_marking_enabled or marked_identity_badge.text != "?":
 		_fail("automatic_identity_mark_disabled:%s" % marked_identity_badge.text)
 		return
 	# 未知身份本地标注；选择反贼后只改变当前客户端徽记，不修改快照中的 hidden 身份。
 	main_instance.call("_on_identity_badge_pressed", 5)
 	main_instance.call("_on_identity_mark_selected", 1)
 	# 已标注身份徽记；用于验证本地推测文本与标注字典同步。
-	if marked_identity_badge.text != "反" or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
+	if marked_identity_badge.text != "反" or marked_identity_badge.get_theme_color("font_color") != BattleUIStyle.get_color("identity_rebel") or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
 		_fail("identity_local_mark:%s" % marked_identity_badge.text)
 		return
+	# 本地内奸标记；身份文字使用蓝色，且仍不修改公开快照。
+	current_operator_view.set_identity_mark("renegade")
+	if marked_identity_badge.text != "内" or marked_identity_badge.get_theme_color("font_color") != BattleUIStyle.get_color("identity_renegade"):
+		_fail("identity_renegade_color:%s/%s" % [marked_identity_badge.text, marked_identity_badge.get_theme_color("font_color")])
+		return
+	current_operator_view.set_identity_mark("rebel")
 	# 清除身份本地标注；重新选择问号后删除字典记录并恢复未知徽记。
 	main_instance.call("_on_identity_badge_pressed", 5)
 	main_instance.call("_on_identity_mark_selected", 3)
-	if marked_identity_badge.text != "？" or (main_instance.get("_identity_marks") as Dictionary).has(5):
+	if marked_identity_badge.text != "?" or (main_instance.get("_identity_marks") as Dictionary).has(5):
 		_fail("identity_mark_reset:%s" % marked_identity_badge.text)
 		return
 	# 真实身份公开优先级；即使随后写入另一项本地标注，徽记仍必须显示权威忠臣身份。
@@ -647,8 +701,13 @@ func _run() -> void:
 	var revealed_faction_definition: Dictionary = GameDatabase.get_faction(str(revealed_character_definition.get("faction", "")))
 	current_operator_view.configure_snapshot(revealed_player_snapshot, revealed_character_definition, false, revealed_faction_definition)
 	current_operator_view.set_identity_mark("renegade")
-	if marked_identity_badge.text != "忠":
+	if marked_identity_badge.text != "忠" or marked_identity_badge.get_theme_color("font_color") != BattleUIStyle.get_color("identity_loyalist"):
 		_fail("identity_reveal_priority:%s" % marked_identity_badge.text)
+		return
+	# 公开领袖身份徽记；固定使用红色阵营字体。
+	var leader_identity_badge: Label = (player_views.get(0) as PlayerTargetView).get_node("IdentityBadge") as Label
+	if leader_identity_badge.text != "领" or leader_identity_badge.get_theme_color("font_color") != BattleUIStyle.get_color("identity_leader"):
+		_fail("identity_leader_color:%s/%s" % [leader_identity_badge.text, leader_identity_badge.get_theme_color("font_color")])
 		return
 	# 恢复默认自动标记设置，避免本用例后续菜单和重复渲染检查继承关闭状态。
 	auto_identity_marking_checkbox.button_pressed = true
@@ -671,12 +730,16 @@ func _run() -> void:
 	var selection_snapshot_without_leader: Dictionary = {
 		"phase":CharacterSelectionService.PHASE_OTHERS,
 		"can_select":true,
+		"local_identity":"rebel",
 		"local_candidates":["gepard", "march_7th"],
 		"leader_character_id":"",
 		"leader_player_id":0,
 	}
 	character_selection_panel.bind_snapshot(selection_snapshot_without_leader)
 	await get_tree().process_frame
+	if character_selection_panel.get_title_plain_text() != "你的身份为：反贼，请选择武将" or character_selection_panel.get_title_identity_color() != BattleUIStyle.get_color("identity_rebel"):
+		_fail("selection_identity_title:%s/%s" % [character_selection_panel.get_title_plain_text(), character_selection_panel.get_title_identity_color()])
+		return
 	# 候选区域与领袖区域；无领袖时两者左边界应完全一致，分隔线保持隐藏。
 	var candidate_area: Control = character_selection_panel.get_node("SelectionFrame/CharacterCandidateArea") as Control
 	# 领袖只读区域；无领袖时其左边界成为候选区新的左对齐基准。
@@ -888,9 +951,10 @@ func _run() -> void:
 		return
 	await _wait_for_hover_information_delay()
 	# 首次手牌说明的面板比例；【桃】说明应在动态宽度下保持4:3，不能因自动换行初始宽度错误而被撑成大量空白。
+	# 首次手牌说明的面板比例；【桃】短说明应保持在允许比例范围内，且不与更长的装备说明共用固定宽度。
 	var hand_information_panel_height: float = hover_information_panel.size.y
 	var hand_information_aspect_ratio: float = hover_information_panel.size.x / maxf(hand_information_panel_height, 1.0)
-	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("药") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or not is_equal_approx(hand_information_aspect_ratio, information_box.hover_panel_aspect_ratio):
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_title_text().contains("药") or hover_information_panel.size.x < information_box.hover_panel_minimum_width or hover_information_panel.size.x > information_box.hover_panel_maximum_width or hand_information_aspect_ratio < information_box.hover_panel_minimum_aspect_ratio or hand_information_aspect_ratio > information_box.hover_panel_maximum_aspect_ratio:
 		_fail("hand_card_information:%s/%s" % [information_box.get_hover_title_text(), hover_information_panel.size])
 		return
 	gained_hand_card.call("_on_mouse_exited")
@@ -1050,7 +1114,8 @@ func _run() -> void:
 		_fail("selection_effect_only:%s" % selection_effect_label.text)
 		return
 	# 三张例外自身牌；【桃】【酒】【无中生有】仍在选中后自动锁定本地玩家本人。
-	for self_target_definition_id: String in ["tao", "jiu", "wuzhong"]:
+	# 【闪电】新增复用同一自身唯一目标规则，因此一并进入本组自动锁定回归。
+	for self_target_definition_id: String in ["tao", "jiu", "wuzhong", "shandian"]:
 		single_target_card.definition_id = self_target_definition_id
 		single_target_state.players[4].hp = 3 if self_target_definition_id == "tao" else 4
 		main_instance.call("_on_state_changed", single_target_state.to_dict(4, false))

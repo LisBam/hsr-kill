@@ -41,6 +41,8 @@ func _run() -> void:
 		return
 	if not _test_chain_targets_and_ai():
 		return
+	if not _test_tiebi_accepts_chained_target():
+		return
 	if not await _test_opening_skill_prompt_and_hidden_hand_privacy():
 		return
 	if not _test_restricted_group_trick_targets():
@@ -75,6 +77,9 @@ func _create_controller() -> void:
 	_controller.add_child(network_gateway)
 	add_child(_controller)
 	_controller.local_human_player_id = 0
+	# 本组只验证规则语义与选择顺序；关闭表现节奏等待，避免无头模式按帧轮询快于真实计时器而产生伪超时。
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
 	_controller.state_changed.connect(_on_state_changed)
 
@@ -209,6 +214,32 @@ func _test_chain_targets_and_ai() -> bool:
 	return true
 
 
+## 验证【铁壁】允许选择已经横置的其他角色，并在再次“横置”时将其切换为竖直后授予【琥珀】。
+func _test_tiebi_accepts_chained_target() -> bool:
+	_scenario = "tiebi_chained_target"
+	_reset_state(2)
+	# 已横置目标；按照统一横置语义仍应属于铁壁合法目标。
+	var target: PlayerState = _controller.state.get_player(1)
+	target.chained = true
+	# 铁壁费用【闪】；必须位于持有者普通手牌区。
+	var shan: CardInstance = _add_hand_card(0, "shan", "heart", 2)
+	# 铁壁运行时实例；直接调用恢复入口验证等待期间的最终权威复核与状态切换。
+	var tiebi: SkillDefinition = GameDatabase.create_skill("tiebi")
+	tiebi.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"tiebi":tiebi}}
+	if not (tiebi.call("_get_unchained_other_target_ids") as Array).has(1):
+		return _fail("tiebi_chained_target_missing")
+	# 标准确认响应；不依赖界面节点，费用与目标仍由技能恢复入口重新检查。
+	var response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	response.card_ids = [shan.uid]
+	response.target_ids = [1]
+	if not tiebi.continue_selection({"kind":"tiebi_cost_target"}, response):
+		return _fail("tiebi_chained_response_unhandled")
+	if target.chained or not (target.temporary_skills as Dictionary).has("hupo") or not _controller.state.discard_pile.has(shan):
+		return _fail("tiebi_chained_toggle chained=%s temporary=%s discard=%s" % [target.chained, target.temporary_skills, _controller.state.discard_pile.has(shan)])
+	return true
+
+
 ## 验证选将结束先同步亮将与4张起始手牌，并验证【铁壁】【坚垒】不会因没有【闪】而跳过可取消询问。
 func _test_opening_skill_prompt_and_hidden_hand_privacy() -> bool:
 	_scenario = "opening_tiebi_privacy"
@@ -224,6 +255,10 @@ func _test_opening_skill_prompt_and_hidden_hand_privacy() -> bool:
 	selection_rng.seed = 20260720
 	if not selection_service.begin(_controller.state.players, ["xing_cunhu", "xier"], 2, selection_rng).is_empty():
 		return _fail("opening_selection_begin")
+	# 本人选将快照；只返回观察者自己的真实身份，供标题显示且不泄漏其他玩家身份。
+	var local_selection_snapshot: Dictionary = selection_service.to_dict(1)
+	if str(local_selection_snapshot.get("local_identity", "")) != _controller.state.get_player(1).identity:
+		return _fail("opening_selection_identity=%s" % [local_selection_snapshot])
 	if not selection_service.select_character(0, "xing_cunhu").is_empty() or not selection_service.select_character(1, "xier").is_empty():
 		return _fail("opening_selection_submit")
 	_controller.character_selection = selection_service

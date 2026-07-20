@@ -43,9 +43,13 @@ func _ready() -> void:
 		return
 	if not _test_hostile_card_target():
 		return
+	if not _test_quanlei_slash_material_priority():
+		return
 	if not _test_renwang_shield_black_slash():
 		return
 	if not _test_friendly_chain_damage_response():
+		return
+	if not _test_wine_slash_defense():
 		return
 	if not _test_chained_damage_team_risk():
 		return
@@ -420,6 +424,36 @@ func _test_hostile_card_target() -> bool:
 	return true
 
 
+## 验证【全垒】AI在持有实体【杀】时，会把该【杀】转化为目标上限+1的雷【杀】同时攻击两名正收益敌人。
+func _test_quanlei_slash_material_priority() -> bool:
+	# 公开五人身份快照；领袖0与反贼1、4之间有稳定敌对态度，可对比单目标【杀】与双目标【全垒】。
+	var snapshot: Dictionary = _build_strategy_snapshot(true)
+	# 全垒使用者快照；手中只保留一张实体【杀】，确保技能选中的材料就是需求所指卡牌。
+	var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	actor["character_id"] = "qiong"
+	actor["hand"] = [_card(501, "sha", 0)]
+	actor["hand_count"] = 1
+	# 两名敌方目标；清空已知【闪】使两段雷【杀】均保持严格正收益。
+	for target_index: int in [1, 4]:
+		# 当前反贼快照；体力3、空手牌作为稳定可攻击基线。
+		var target: Dictionary = (snapshot.get("players", []) as Array)[target_index] as Dictionary
+		target["hp"] = 3
+		target["hand"] = []
+		target["hand_count"] = 0
+	# 普通实体【杀】动作；仅指定一名反贼，作为技能选择的直接竞争项。
+	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":501, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	# 全垒双目标动作；使用同一张实体【杀】作材料，同时指定两名反贼。
+	var quanlei_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"quanlei", "target_ids":[1, 4], "payload":{"skill_id":"quanlei", "material_card_uid":501, "target_ids":[1, 4]}}
+	# 独立领袖策略；不复用前序身份暴露历史，确保选择只由本快照与全垒评分决定。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# AI最终动作；应优先全垒并保留【杀】材料UID与两名目标。
+	var chosen: Dictionary = policy.choose_action(snapshot, [slash_action, quanlei_action])
+	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
+	if str(chosen.get("action_type", "")) != "use_skill" or str(chosen_payload.get("skill_id", "")) != "quanlei" or int(chosen_payload.get("material_card_uid", -1)) != 501 or (chosen.get("target_ids", []) as Array) != [1, 4]:
+		return _fail("quanlei_slash_material_priority=%s" % chosen)
+	return true
+
+
 ## 验证 AI 会跳过防具完全免疫的攻击，但【星火】等仍能产生正向技能收益时保留该合法动作。
 func _test_renwang_shield_black_slash() -> bool:
 	# 全身份公开快照；一号反贼是唯一敌方目标，黑色【杀】实体来自领袖完整手牌。
@@ -505,6 +539,73 @@ func _test_friendly_chain_damage_response() -> bool:
 	var unchained_enemy_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
 	if not bool((unchained_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("friendly_chain_damage_should_dodge=%s" % unchained_enemy_choice)
+	return true
+
+
+## 验证参考无名杀的防酒杀策略：高伤害与致命响应加权、保留最后【闪】，并在主动评估中识别酒加成。
+func _test_wine_slash_defense() -> bool:
+	# 玩家权威状态；公开的酒使用与伤害加值必须进入序列化快照，供服务端AI和联机表现一致读取。
+	var serialized_player: PlayerState = PlayerState.new(9, "酒杀测试")
+	serialized_player.wine_used = true
+	serialized_player.wine_bonus = 1
+	var serialized_data: Dictionary = serialized_player.to_dict(9, true)
+	if not bool(serialized_data.get("wine_used", false)) or int(serialized_data.get("wine_bonus", 0)) != 1:
+		return _fail("wine_state_serialization=%s" % serialized_data)
+	# 公开三人身份快照；领袖0用于响应和保牌，反贼1用于构造可达的酒杀威胁。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 领袖的唯一【闪】；响应请求和后续弃牌比较都使用该实体UID。
+	var defender: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	defender["hp"] = 2
+	defender["shield"] = 0
+	defender["hand"] = [_card(601, "shan", 0)]
+	defender["hand_count"] = 1
+	# 普通【杀】响应请求；伤害值1用于对比酒杀的额外防守分。
+	var normal_response_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[_candidate(601, "shan", 0)], "context":{"kind":"slash_response", "response_patterns":["shan"], "actor_id":1, "target_id":0, "nature":"normal", "damage_amount":1, "slash_card_definition_id":"sha"}}
+	# 酒杀响应请求；其他字段与普通【杀】一致，只把真实伤害提高到2。
+	var wine_response_request: Dictionary = normal_response_request.duplicate(true)
+	(wine_response_request.get("context", {}) as Dictionary)["damage_amount"] = 2
+	# 标准【闪】确认动作；两份请求共用同一响应牌以隔离伤害值差异。
+	var dodge_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":601, "selected_card_uids":[601], "selected_target_ids":[], "confirmed":true}}
+	# 取消响应动作；致命酒杀场景下不应成为AI最终选择。
+	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":601, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 响应评估器；直接比较两份确认动作分数，证明酒杀不是仅与普通杀作相同布尔决策。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	var normal_response_score: float = evaluator.score_choice_action(snapshot, normal_response_request, dodge_action, 0)
+	var wine_response_score: float = evaluator.score_choice_action(snapshot, wine_response_request, dodge_action, 0)
+	if wine_response_score <= normal_response_score:
+		return _fail("wine_slash_response_score normal=%.2f wine=%.2f" % [normal_response_score, wine_response_score])
+	# 领袖响应策略；2点酒杀足以打穿2点体力，必须打出【闪】。
+	var defender_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var lethal_response_choice: Dictionary = defender_policy.choose_card_choice(snapshot, wine_response_request, [pass_action, dodge_action])
+	if not bool((lethal_response_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wine_slash_lethal_response=%s" % lethal_response_choice)
+	# 酒杀主动评分动作；目标体力2且无护盾，酒加成应使该【杀】的预期收益高于普通状态。
+	var attack_snapshot: Dictionary = _build_snapshot(true)
+	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	var normal_slash_score: float = evaluator.score_action(attack_snapshot, slash_action, 0)
+	((attack_snapshot.get("players", []) as Array)[0] as Dictionary)["wine_bonus"] = 1
+	var wine_slash_score: float = evaluator.score_action(attack_snapshot, slash_action, 0)
+	if wine_slash_score <= normal_slash_score:
+		return _fail("wine_slash_action_score normal=%.2f wine=%.2f" % [normal_slash_score, wine_slash_score])
+	# 致命威胁者；反贼1已使用【酒】、手中有已知【杀】，且与领袖距离1。
+	var attacker: Dictionary = (snapshot.get("players", []) as Array)[1] as Dictionary
+	attacker["wine_bonus"] = 1
+	attacker["hand"] = [_card(701, "sha", 1)]
+	attacker["hand_count"] = 1
+	# 强制弃牌候选；【桃】的默认价值9高于【闪】7，没有酒杀威胁时应先弃【闪】。
+	defender["hand"] = [_card(601, "shan", 0), _card(602, "tao", 0)]
+	defender["hand_count"] = 2
+	var discard_request: Dictionary = {"allow_cancel":false, "min_card_select":1, "max_card_select":1, "candidates":[_candidate(601, "shan", 0), _candidate(602, "tao", 0)], "context":{"kind":"discard_phase"}}
+	var discard_dodge_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":602, "selected_card_uids":[601], "selected_target_ids":[], "confirmed":true}}
+	var discard_peach_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":602, "selected_card_uids":[602], "selected_target_ids":[], "confirmed":true}}
+	var wine_threat_discard_choice: Dictionary = defender_policy.choose_card_choice(snapshot, discard_request, [discard_dodge_action, discard_peach_action])
+	if ((wine_threat_discard_choice.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array) != [602]:
+		return _fail("wine_slash_keep_last_dodge=%s" % wine_threat_discard_choice)
+	# 移除酒加成的对照选择；没有即将到来的2点【杀】时，AI应恢复默认价值并优先弃置【闪】。
+	attacker["wine_bonus"] = 0
+	var normal_threat_discard_choice: Dictionary = defender_policy.choose_card_choice(snapshot, discard_request, [discard_dodge_action, discard_peach_action])
+	if ((normal_threat_discard_choice.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array) != [601]:
+		return _fail("normal_slash_discard_baseline=%s" % normal_threat_discard_choice)
 	return true
 
 

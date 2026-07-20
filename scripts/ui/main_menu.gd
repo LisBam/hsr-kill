@@ -119,6 +119,18 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 自动身份标记复选框；开关仅影响本地显示推测，不写入对局规则状态。
 @onready var _auto_identity_marking_checkbox: CheckBox = %MainMenuAutoIdentityMarkingCheckBox
 
+## 自选全武将、座次与身份开关；仅在之后由本机创建或房主创建的新对局中生效。
+@onready var _custom_character_assignment_checkbox: CheckBox = %MainMenuCustomCharacterAssignmentCheckBox
+
+## 房主调整全部 AI 武将开关；初次选将完成后决定是否插入开局前调整阶段。
+@onready var _customize_ai_characters_checkbox: CheckBox = %MainMenuCustomizeAiCharactersCheckBox
+
+## 手气卡数量下拉框；选项元数据保存0至5或-1，不依赖显示文字解析次数。
+@onready var _mulligan_limit_option: OptionButton = %MainMenuMulliganLimitOption
+
+## AI 使用手气卡开关；实际刷新次数仍读取手气卡数量设置。
+@onready var _ai_uses_mulligan_checkbox: CheckBox = %MainMenuAiUsesMulliganCheckBox
+
 ## AI 响应速度标签；显示下一次 AI 行动或响应会使用的等待秒数。
 @onready var _ai_response_delay_label: Label = %MainMenuAiResponseDelayLabel
 
@@ -190,11 +202,23 @@ func _ready() -> void:
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
+	_custom_character_assignment_checkbox.set_pressed_no_signal(GameSettings.custom_character_assignment_enabled)
+	_custom_character_assignment_checkbox.toggled.connect(GameSettings.set_custom_character_assignment_enabled)
+	_customize_ai_characters_checkbox.set_pressed_no_signal(GameSettings.customize_ai_characters_enabled)
+	_customize_ai_characters_checkbox.toggled.connect(GameSettings.set_customize_ai_characters_enabled)
+	_populate_mulligan_limit_options()
+	_mulligan_limit_option.item_selected.connect(_on_mulligan_limit_selected)
+	_ai_uses_mulligan_checkbox.set_pressed_no_signal(GameSettings.ai_uses_mulligan_enabled)
+	_ai_uses_mulligan_checkbox.toggled.connect(GameSettings.set_ai_uses_mulligan_enabled)
 	GameSettings.card_name_mode_changed.connect(_refresh_card_name_text)
 	GameSettings.ui_style_changed.connect(_refresh_ui_style_selection)
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
 	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	GameSettings.custom_character_assignment_changed.connect(_custom_character_assignment_checkbox.set_pressed_no_signal)
+	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
+	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
+	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
@@ -203,6 +227,7 @@ func _ready() -> void:
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
+	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
 
@@ -279,6 +304,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_mulligan_limit_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -296,17 +322,28 @@ func refresh_ui_style() -> void:
 	_settings_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	(%MainMenuCardNameLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuUiStyleLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%MainMenuMulliganLimitLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_custom_character_assignment_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_custom_character_assignment_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_customize_ai_characters_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_customize_ai_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_ai_uses_mulligan_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_ai_uses_mulligan_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_apply_slider_style(_ai_response_delay_slider)
 	_apply_slider_style(_game_speed_slider)
 	_apply_spin_box_style(_player_count_input)
 	_apply_option_popup_style(_ui_style_option)
 	_apply_option_popup_style(_card_name_option)
+	_apply_option_popup_style(_mulligan_limit_option)
 	_lan_lobby_panel.refresh_ui_style()
 	_online_settings_panel.refresh_ui_style()
 	_online_lobby_panel.refresh_ui_style()
@@ -640,6 +677,16 @@ func _populate_card_name_options() -> void:
 		_card_name_option.set_item_metadata(option_index, mode_option.get("mode", GameSettings.NameMode.CUSTOM))
 
 
+## 从标准手气卡配置构建下拉选项；次数语义保存在元数据中，界面文字调整不会影响规则值。
+func _populate_mulligan_limit_options() -> void:
+	_mulligan_limit_option.clear()
+	for limit_option: Dictionary in GameSettings.MULLIGAN_LIMIT_OPTIONS:
+		# 当前手气卡选项索引；元数据保存0至5或-1，避免通过中文显示文字反向解析规则。
+		var option_index: int = _mulligan_limit_option.item_count
+		_mulligan_limit_option.add_item(str(limit_option.get("label", "关闭")))
+		_mulligan_limit_option.set_item_metadata(option_index, int(limit_option.get("value", 0)))
+
+
 ## 按全局风格同步下拉框与主菜单颜色；无信号选择避免界面刷新产生重复设置回调。
 func _refresh_ui_style_selection(style_id: String) -> void:
 	if not is_node_ready():
@@ -680,6 +727,23 @@ func _on_card_name_selected(option_index: int) -> void:
 	if selected_mode == null:
 		return
 	GameSettings.set_card_name_mode(int(selected_mode))
+
+
+## 按全局设置同步手气卡下拉框；无信号选择避免菜单刷新再次提交同一规则值。
+func _refresh_mulligan_limit_selection(limit: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_mulligan_limit_option.item_count):
+		if int(_mulligan_limit_option.get_item_metadata(option_index)) == limit:
+			_mulligan_limit_option.select(option_index)
+			return
+
+
+## 将玩家选中的手气卡次数写入下一局全局设置；当前已经创建的对局继续使用自身锁定配置。
+func _on_mulligan_limit_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _mulligan_limit_option.item_count:
+		return
+	GameSettings.set_mulligan_limit(int(_mulligan_limit_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应速度显示；数值越小代表 AI 行动与选牌等待越短。

@@ -53,10 +53,14 @@ func activate(context: Dictionary = {}) -> String:
 	# 当前全部自有材料；可来自手牌、木牛“粮”或装备区。
 	var candidates: Array[Dictionary] = _get_material_candidates()
 	# 当前无距离火【杀】目标；提交时仍会完整复核次数、存活状态和目标模式。
-	var legal_target_ids: Array[int] = _get_legal_target_ids()
+	# 材料与目标组合数据；黑色材料转换的火【杀】同样受【琥珀】目标限制，红色材料不受影响。
+	var selection_data: Dictionary = build_virtual_target_selection_data(FIRE_SLASH_DEFINITION_ID, candidates, VIRTUAL_RULE_OVERRIDES)
+	# 当前无距离火【杀】目标并集；提交时仍会完整复核次数、存活状态、材料颜色和目标模式。
+	var legal_target_ids: Array[int] = []
+	legal_target_ids.assign(selection_data.get("target_ids", []) as Array)
 	if candidates.is_empty() or legal_target_ids.is_empty():
 		return "当前没有可用的牌或火【杀】目标。"
-	request_card_target_selection("安打", "请选择一张牌和一名火【杀】目标", candidates, legal_target_ids, 1, 1, 1, 1, true, {"kind":"anda_use"})
+	request_card_target_selection("安打", "请选择一张牌和一名火【杀】目标", candidates, legal_target_ids, 1, 1, 1, 1, true, {"kind":"anda_use", "target_ids_by_card_id":selection_data.get("target_ids_by_card_id", {})})
 	return ""
 
 
@@ -76,15 +80,14 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 	if _used_turn_number == host.state.turn_number or material_card == null:
 		return false
 	# 本次规则覆写；复制常量后补充材料颜色，避免修改共享常量字典。
-	var rule_overrides: Dictionary = VIRTUAL_RULE_OVERRIDES.duplicate(true)
-	rule_overrides["card_color"] = material_card.get_color()
-	if host.card_rules.validate_virtual_use(owner_player_id, FIRE_SLASH_DEFINITION_ID, target_ids, rule_overrides) != "":
+	# 规则覆写由技能基类统一深复制并写入真实材料颜色，调用方不再持有可变副本。
+	if validate_virtual_use_for_material(FIRE_SLASH_DEFINITION_ID, material_card, target_ids, VIRTUAL_RULE_OVERRIDES) != "":
 		return false
 	# 单材料数组；显式类型保证动态控制器端口收到稳定整数数组。
 	var material_card_uids: Array[int] = [material_card_uid]
 	# 技能持有者；仅用于长期语义日志，不直接修改其牌区。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, FIRE_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【安打】，将一张牌当火【杀】使用。" % owner.display_name)):
+	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, FIRE_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【安打】，将一张牌当火【杀】使用。" % owner.display_name, VIRTUAL_RULE_OVERRIDES)):
 		return false
 	_used_turn_number = host.state.turn_number
 	announce_activation({"material_card_uid":material_card_uid, "target_ids":target_ids.duplicate(), "virtual_card_id":FIRE_SLASH_DEFINITION_ID})
@@ -94,7 +97,14 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 
 ## 返回安打主动使用时的全部合法无距离目标。
 func _get_legal_target_ids() -> Array[int]:
-	return host.card_rules.list_legal_virtual_targets(owner_player_id, FIRE_SLASH_DEFINITION_ID, VIRTUAL_RULE_OVERRIDES)
+	# 当前材料候选；目标并集必须包含每张材料真实颜色下至少一种合法组合。
+	var candidates: Array[Dictionary] = _get_material_candidates()
+	# 当前材料选择数据；用于保持主动按钮与后续组合请求采用同一规则来源。
+	var selection_data: Dictionary = build_virtual_target_selection_data(FIRE_SLASH_DEFINITION_ID, candidates, VIRTUAL_RULE_OVERRIDES)
+	# 当前合法目标并集；调用方只能用于初步可用性判断，具体组合仍读取材料映射。
+	var target_ids: Array[int] = []
+	target_ids.assign(selection_data.get("target_ids", []) as Array)
+	return target_ids
 
 
 ## 返回技能持有者当前全部自有材料候选。
@@ -139,11 +149,26 @@ func on_converted_response_consumed(_card: CardInstance, _response_pattern: Stri
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
 		return
-	for candidate: Dictionary in _get_material_candidates():
+	# 当前全部材料；目标集合根据每张实体的真实颜色分别计算。
+	var candidates: Array[Dictionary] = _get_material_candidates()
+	# 材料到合法目标映射；AI不会再枚举提交时必定失败的材料目标组合。
+	var selection_data: Dictionary = build_virtual_target_selection_data(FIRE_SLASH_DEFINITION_ID, candidates, VIRTUAL_RULE_OVERRIDES)
+	# 当前映射字典；键为材料UID字符串。
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	for candidate: Dictionary in candidates:
 		# 当前材料UID；用于权威提交和材料价值评估。
 		var material_card_uid: int = int(candidate.get("uid", -1))
-		for target_id: int in _get_legal_target_ids():
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "material_card_uid":material_card_uid, "target_ids":[target_id]}})
+		# 当前材料实体；用于最终完整虚拟牌组合校验。
+		var material_card: CardInstance = _find_owned_material_card(material_card_uid)
+		# 当前材料合法目标；每项已经包含无距离覆写与材料颜色限制。
+		var material_target_ids: Array = target_ids_by_card_id.get(str(material_card_uid), []) as Array
+		for target_id_variant: Variant in material_target_ids:
+			# 当前目标ID；显式转为整数保证动作负载稳定。
+			var target_id: int = int(target_id_variant)
+			# 当前单目标组合；最终校验通过后才进入AI合法动作列表。
+			var target_ids: Array[int] = [target_id]
+			if material_card != null and validate_virtual_use_for_material(FIRE_SLASH_DEFINITION_ID, material_card, target_ids, VIRTUAL_RULE_OVERRIDES).is_empty():
+				result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "material_card_uid":material_card_uid, "target_ids":target_ids.duplicate()}})
 
 
 ## 复用火【杀】标准收益并扣除真实材料价值，使AI优先消耗低价值牌攻击敌方。

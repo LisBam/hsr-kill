@@ -131,24 +131,59 @@ func get_skill(skill_id: String) -> Dictionary:
 
 ## 按当前卡牌名称模式替换文本中的【原版牌名】引用；技能说明可复用本入口保持静态原文与动态展示解耦。
 ## 只替换完整书名号包裹的已登记名称，普通叙述文字、稳定 ID 与规则数值均保持不变。
+## 括号引用同时允许使用原版牌名或崩铁杀牌名；展示时统一解析到当前模式。
+## 解析采用完整括号精确匹配，技能名、未登记术语和括号外正文保持不变。
 func resolve_card_names_in_text(source_text: String) -> String:
 	# 当前解析结果；从调用方原文副本开始，仅在命中完整卡牌名称引用时更新。
-	var resolved_text: String = source_text
+	# 实现使用逐段追加而非原地替换，仍保持上述只修改完整引用的职责。
+	# 当前解析结果；逐段追加可以避免某个牌名替换后又被另一张牌的名称二次命中。
+	var resolved_text: String = ""
+	# 当前扫描位置；范围为0至文本长度，始终从上一组完整括号之后继续。
+	var cursor: int = 0
+	while cursor < source_text.length():
+		# 下一处左括号位置；不存在时把剩余正文原样追加并结束。
+		var opening_index: int = source_text.find("【", cursor)
+		if opening_index < 0:
+			resolved_text += source_text.substr(cursor)
+			break
+		# 与当前左括号配对的首个右括号；缺失时保留剩余原文，避免破坏不完整内容。
+		var closing_index: int = source_text.find("】", opening_index + 1)
+		if closing_index < 0:
+			resolved_text += source_text.substr(cursor)
+			break
+		resolved_text += source_text.substr(cursor, opening_index - cursor)
+		# 当前括号文本；只有与任一卡牌原版名或崩铁杀名完全一致时才参与动态切换。
+		var referenced_name: String = source_text.substr(opening_index + 1, closing_index - opening_index - 1)
+		# 当前命中的卡牌定义；空字典表示括号内是技能名、术语或未登记内容，应保持原样。
+		var matched_definition: Dictionary = _find_card_by_display_name(referenced_name)
+		if matched_definition.is_empty():
+			resolved_text += source_text.substr(opening_index, closing_index - opening_index + 1)
+		else:
+			resolved_text += "【%s】" % GameSettings.resolve_card_name(matched_definition)
+		cursor = closing_index + 1
+	return resolved_text
+
+
+## 按原版牌名或崩铁杀牌名精确查找卡牌定义；仅供技能说明等括号文本动态解析，不接受部分匹配。
+func _find_card_by_display_name(display_name: String) -> Dictionary:
+	if display_name.is_empty():
+		return {}
 	for card_variant: Variant in cards.values():
 		# 当前卡牌定义；名称解析始终读取数据库已校验的双名称元数据。
+		# 当前卡牌定义；数据库加载阶段已校验稳定ID，名称字段缺失时使用空字符串跳过。
 		var card_definition: Dictionary = card_variant as Dictionary
 		# 当前卡牌原版名称；技能源码统一以该名称书写，空名称不会参与替换。
+		# 当前原版牌名；技能描述以三国杀牌名书写时通过该字段命中。
 		var original_name: String = str(card_definition.get("original_name", "")).strip_edges()
-		if original_name.is_empty():
-			continue
+		# 当前崩铁杀牌名；技能描述以项目牌名书写时通过该字段命中。
+		var custom_name: String = str(card_definition.get("custom_name", "")).strip_edges()
 		# 原版名称引用标记；完整匹配可避免短牌名误改普通语句或其他牌名的一部分。
-		var original_reference: String = "【%s】" % original_name
-		if not resolved_text.contains(original_reference):
-			continue
+		# 当前直接比较括号内部文本，不再额外构造引用字符串，完整匹配边界由扫描器保证。
 		# 当前模式名称引用；统一复用 GameSettings，保证卡牌牌面与技能说明显示一致。
-		var resolved_reference: String = "【%s】" % GameSettings.resolve_card_name(card_definition)
-		resolved_text = resolved_text.replace(original_reference, resolved_reference)
-	return resolved_text
+		# 命中定义后由调用函数统一复用 GameSettings 生成当前模式名称。
+		if display_name == original_name or display_name == custom_name:
+			return card_definition
+	return {}
 
 
 ## 为一名技能持有者创建独立技能实例；实例尚未绑定玩家，也不会自动订阅规则事件。

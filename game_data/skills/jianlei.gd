@@ -54,7 +54,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var shan_uid: int = response.card_ids[0]
 	if not _is_hand_shan(shan_uid) or not bool(host.call("discard_card_from_hand", owner_player_id, shan_uid)):
 		return true
-	host.call("set_player_linked", target_id, true, owner_player_id, get_id())
+	# 横置状态切换；目标已横置时再次横置会恢复竖直，但仍照常令本次黑色【杀】无效。
+	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
 	host.call("exclude_card_target", card_uid, target_id, get_id())
 	announce_activation({"card_uid":card_uid, "cost_card_uid":shan_uid, "target_id":target_id})
 	observe_identity_behavior([target_id], {"target_result":1.0})
@@ -96,9 +97,15 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_id: int = int(context.get("target_id", -1))
 	# 当前目标快照；用于读取体力，缺失时按普通状态处理。
 	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	# 对目标态度；正值表示友方，负值表示敌方。
+	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	# 横置切换价值；已横置友方恢复竖直为正，未横置友方进入连环为负，敌方方向相反。
+	var link_state_value: float = attitude / 5.0 if bool(target.get("chained", false)) else -attitude / 5.0
 	# 费用实体；高价值【闪】会提高机会成本。
 	var selected_card_uids: Array = payload.get("selected_card_uids", []) as Array
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(selected_card_uids[0])) if selected_card_uids.size() == 1 else 8.0
 	# 防护收益；1体力友方额外获得濒死规避价值，横置风险固定扣1分。
+	# 固定风险语义由当前横置状态的动态切换价值取代，但濒死规避与费用权重保持原有职责。
+	# 防护收益；1体力友方额外获得濒死规避价值，横置或重置方向按目标当前状态动态估值。
 	var rescue_bonus: float = 4.0 if int(target.get("hp", 4)) <= 1 else 0.0
-	return evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) * 1.4 + rescue_bonus - material_value * 0.55 - 1.0
+	return attitude * 1.4 + rescue_bonus - material_value * 0.55 + link_state_value
