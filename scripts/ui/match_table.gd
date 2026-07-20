@@ -641,6 +641,9 @@ func _create_identity_mark_menu() -> void:
 func _on_identity_badge_pressed(player_id: int) -> void:
 	if player_id == match_controller.local_human_player_id:
 		return
+	# 斗地主身份全明置，不提供本地身份标记菜单。
+	if str(_snapshot.get("match_mode", "")) == "doudizhu":
+		return
 	# 当前目标公开快照；只有 identity=hidden 时允许创建或修改本地推测。
 	var player: Dictionary = _get_player_snapshot(player_id)
 	if player.is_empty() or str(player.get("identity", "hidden")) != "hidden":
@@ -672,6 +675,9 @@ func _on_identity_mark_selected(item_id: int) -> void:
 
 ## 返回指定其他角色当前应显示的本地身份推测；手动标注优先，自动模式只接收共享模型的忠反结果。
 func _resolve_display_identity_mark(player_id: int) -> String:
+	# 斗地主身份开局全明置，不需要也不显示推测/手动身份标记。
+	if str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity")) == "doudizhu":
+		return ""
 	if _identity_marks.has(player_id):
 		return str(_identity_marks.get(player_id, ""))
 	if not GameSettings.auto_identity_marking_enabled or match_controller.ai_coordinator == null:
@@ -710,7 +716,9 @@ func _on_main_menu_start_requested(player_count: int) -> void:
 ## 接收连接入口创建房间意图；网关保存形象、密码、人数与模式初始配置，成功后进入独立联机大厅。
 func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int) -> void:
 	# 建房结果；Godot Error 只用于程序判断，玩家可见文本由网关统一返回。
-	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID)
+	# 使用主菜单当前下一局模式；斗地主入口建房时自动创建斗地房间。
+	var game_mode_id: String = GameSettings.normalize_match_mode(GameSettings.next_match_mode) if GameSettings != null else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
+	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, game_mode_id)
 	if host_error != OK:
 		lan_lobby_panel.show_error("创建局域网房间失败，请检查端口是否被占用。")
 
@@ -730,15 +738,19 @@ func _on_lan_start_match_requested() -> void:
 		return
 	# 当前权威大厅设置；房主本地读取总人数与稳定模式 ID，不相信界面临时输入。
 	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot(true)
-	# 当前游戏模式；当前只有身份模式拥有实际规则控制器。
+	# 当前游戏模式；身份模式与斗地主均可创建权威对局。
 	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
-	if game_mode_id != NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID:
+	if game_mode_id != NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID and game_mode_id != "doudizhu":
 		online_lobby_panel.show_error("当前游戏模式尚未实现。")
 		return
 	# 当前大厅总人数；用于前置校验、真人映射与权威对局创建。
 	var player_count: int = int(lobby_snapshot.get("player_count", 2))
+	# 开局前写入全局下一局模式；保证 start_match 与局内设置读取到大厅权威模式。
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(game_mode_id)
+		GameSettings.set_next_match_player_count(player_count)
 	# 数据配置前置错误；必须在生成成员座次与清理旧表现前返回，房间可原地重试。
-	var validation_error: String = match_controller.get_match_start_validation_error(player_count)
+	var validation_error: String = match_controller.get_match_start_validation_error(player_count, game_mode_id)
 	if not validation_error.is_empty():
 		online_lobby_panel.show_error(validation_error)
 		return
@@ -823,6 +835,12 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 		_inline_selected_card_uids.clear()
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
+	# 从权威大厅快照同步模式与人数；客户端局内设置与斗地主人数限制才能与房主一致。
+	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot()
+	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(game_mode_id)
+		GameSettings.set_next_match_player_count(player_count)
 	match_controller.default_player_count = player_count
 	match_menu.set_next_player_count(player_count)
 	_refresh_match_menu_authority_controls()
@@ -1259,7 +1277,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	# 本地武将定义；技能列表只保存稳定技能 ID。
 	var character: Dictionary = _get_cached_character_definition(local_character_id)
 	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
-	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity)
+	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
 	if skill_ids.is_empty():
 		_layout_local_skill_area(0)
 		return
@@ -1286,8 +1304,8 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	_layout_local_skill_area(skill_ids.size())
 
 
-## 返回指定身份实际拥有并可显示的武将技能；领袖技元数据只允许 leader 身份通过，其余技能保持武将定义顺序。
-func _get_visible_skill_ids(character: Dictionary, identity: String) -> Array[String]:
+## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能（飞扬/跋扈/共苦）追加在固有技能之后。
+func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
@@ -1297,6 +1315,15 @@ func _get_visible_skill_ids(character: Dictionary, identity: String) -> Array[St
 		if bool(skill_definition.get("leader_skill", false)) and identity != "leader":
 			continue
 		result.append(skill_id)
+	# 模式技能；优先读玩家快照注入字段，缺省时按对局模式与身份推算。
+	var mode_skill_ids: Array = player_snapshot.get("mode_skill_ids", []) as Array
+	if mode_skill_ids.is_empty() and not identity.is_empty():
+		var match_mode: String = str(_snapshot.get("match_mode", "identity"))
+		mode_skill_ids = IdentityRules.new().get_mode_skill_ids(identity, match_mode)
+	for mode_skill_id_variant: Variant in mode_skill_ids:
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not result.has(mode_skill_id):
+			result.append(mode_skill_id)
 	return result
 
 
@@ -2572,6 +2599,9 @@ func _refresh_match_menu_authority_controls() -> void:
 	if match_menu == null or not is_instance_valid(match_menu) or match_controller == null or match_controller.network_gateway == null:
 		return
 	match_menu.set_authority_controls_visible(not match_controller.network_gateway.is_lan_client())
+	# 斗地主身份全明置：局内菜单不展示自动身份标记开关。
+	var current_match_mode: String = str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity"))
+	match_menu.set_auto_identity_marking_visible(current_match_mode != "doudizhu")
 
 
 ## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。

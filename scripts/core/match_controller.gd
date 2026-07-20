@@ -612,14 +612,17 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	# 领袖技武将 ID；依据技能元数据自动识别，选将服务只接收纯字符串数组并保持与数据库解耦。
 	var leader_skill_character_ids: Array[String] = _get_leader_skill_character_ids(available_character_ids)
 	# 选将初始化错误；空字符串表示领袖候选已生成。
-	var selection_error: String = character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids)
+	var selection_error: String = character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids, str(state.match_mode))
 	if not selection_error.is_empty():
 		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
 		return false
-	# 首任公开选将身份文案；身份局为领袖，斗地主为地主。
-	var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
-	add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
+	# 选将日志；身份局保留领袖优先亮将文案，斗地主改为全员同时选将。
+	if str(state.match_mode) == IdentityRules.MODE_DOUDIZHU:
+		add_log("选将开始：斗地主全员同时从%d张随机候选中选择武将（身份明置，不公开武将）。" % mini(_character_candidate_count, available_character_ids.size()))
+	else:
+		var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
+		add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
 	_emit_state()
 	_drive_ai_character_selection()
 	return true
@@ -5647,14 +5650,22 @@ func _drive_ai_character_selection() -> void:
 	if is_gameplay_paused() or _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
 		return
 	# 自选模式优先等待全部真人确认，避免 AI 抢占真人希望选择的座次与身份名额。
-	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+	# 斗地主全员同时选将也使用同一等待策略（阶段为 PHASE_OTHERS，而非身份局 PHASE_CUSTOM）。
+	if character_selection.custom_assignment_enabled and (
+		character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+		or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+	):
 		for pending_player_id: int in character_selection.get_pending_player_ids():
 			if not ai_coordinator.is_ai_controlled(pending_player_id):
 				return
 	_is_driving_character_selection = true
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
 		# 自选阶段每轮都重新检查真人完成状态；首任领袖由 AI 确认后可能在同一循环内刚进入该阶段。
-		if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+		# 斗地主同时选将同样需等待真人，防止 AI 先占座次/身份导致六人局卡死。
+		if character_selection.custom_assignment_enabled and (
+			character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+			or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+		):
 			var waiting_for_human: bool = false
 			for pending_custom_player_id: int in character_selection.get_pending_player_ids():
 				if not ai_coordinator.is_ai_controlled(pending_custom_player_id):
@@ -5686,24 +5697,33 @@ func _drive_ai_character_selection() -> void:
 			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
 			var action: PlayerAction = PlayerAction.new("select_character", player_id)
 			action.payload = {"character_id":character_id}
-			# 当前 AI 是否必须同时提交座次身份；首任AI领袖先亮将并等待真人选完名额，进入最终自选后再完成自身分配。
-			var requires_custom_assignment: bool = character_selection.custom_assignment_enabled and character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+			# 当前 AI 是否必须同时提交座次身份；身份局最终自选与斗地主同时选将均需完整分配。
+			var requires_custom_assignment: bool = character_selection.custom_assignment_enabled and (
+				character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+				or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+			)
 			if requires_custom_assignment:
-				# 当前剩余座次与身份；优先把一号位和领袖绑定给同一 AI，其余角色只选择非一号位与非领袖身份。
+				# 当前剩余座次与身份；优先把一号位与唯一首任身份绑定，多地主时仅强制一号位为地主、不抹去其余地主名额。
 				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
 				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
 				var selected_seat_number: int = -1
 				var selected_identity: String = ""
 				var first_seat_identity: String = character_selection.get_first_seat_identity()
+				var unique_first_seat: bool = character_selection.has_unique_first_seat_identity()
 				if available_seats.has(1) and available_identities.has(first_seat_identity):
 					selected_seat_number = 1
 					selected_identity = first_seat_identity
 				else:
 					available_seats.erase(1)
-					available_identities.erase(first_seat_identity)
+					# 唯一首任身份（领袖/单地主）占满后才从可选列表移除；六人双地主仍保留 landlord 名额给 3 号位等地主。
+					if unique_first_seat:
+						available_identities.erase(first_seat_identity)
 					if not available_seats.is_empty() and not available_identities.is_empty():
 						selected_seat_number = available_seats[0]
 						selected_identity = available_identities[0]
+						# 一号位必须是首任身份：若只剩一号位则强制配对首任身份（名额仍在时）。
+						if selected_seat_number == 1 and available_identities.has(first_seat_identity):
+							selected_identity = first_seat_identity
 				action.payload["seat_number"] = selected_seat_number
 				action.payload["identity"] = selected_identity
 			made_progress = _submit_ai_action(action) or made_progress
@@ -5812,8 +5832,16 @@ func _start_turn(player_id: int) -> void:
 	_judgment_resume_needs_result_pause = false
 	state.current_player_id = player_id
 	state.turn_number += 1
-	# 本回合是否开启新轮；保存为基础布尔值后交给分段续接，等待选择期间不再依赖可能变化的数组位置。
-	var starts_new_round: bool = state.players.find(player) == 0
+	# 本回合是否开启新轮：仅普通回合可开新轮，额外回合即使落在一号位也不得递增 round_number 或再发 roundStart。
+	# 轮锚点取座次数组中第一名存活且未离场的角色（一号位死亡时顺延），时机顺序保持 roundStart 早于该角色的回合开始初始化。
+	var starts_new_round: bool = false
+	if not _current_turn_is_extra:
+		var round_anchor_player: PlayerState = null
+		for candidate_player: PlayerState in state.players:
+			if candidate_player != null and candidate_player.alive and not candidate_player.out_of_game:
+				round_anchor_player = candidate_player
+				break
+		starts_new_round = round_anchor_player != null and round_anchor_player.player_id == player_id
 	if starts_new_round:
 		state.round_number += 1
 	_continue_turn_start({"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round})

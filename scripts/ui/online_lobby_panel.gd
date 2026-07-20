@@ -143,6 +143,7 @@ func _ready() -> void:
 	_surface.resized.connect(_on_surface_resized)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	_populate_game_mode_options()
+	_game_mode_option.item_selected.connect(_on_game_mode_option_selected)
 	refresh_ui_style()
 
 
@@ -309,16 +310,20 @@ func _refresh_room_controls() -> void:
 	_start_button.visible = _local_is_host
 	_start_button.disabled = not _local_is_host or int(_snapshot.get("member_count", 0)) < 2
 	_leave_button.text = "关闭房间" if _local_is_host else "离开房间"
-	_player_count_input.min_value = maxi(int(_snapshot.get("member_count", 0)), 2)
-	_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
+	_apply_player_count_limits_for_mode(str(_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID)))
 
 
 ## 打开房主对局设置；当前权威快照回填模式、人数与房主私有密码。
 func _open_settings() -> void:
 	if not _local_is_host:
 		return
-	_select_game_mode(str(_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID)))
-	_player_count_input.value = clampi(int(_snapshot.get("player_count", 2)), int(_player_count_input.min_value), NetworkGateway.MAX_MATCH_PLAYER_COUNT)
+	# 当前权威模式；先同步选项再按模式限制人数 SpinBox，避免身份局人数残留到斗地设置。
+	var game_mode_id: String = str(_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
+	_select_game_mode(game_mode_id)
+	_apply_player_count_limits_for_mode(game_mode_id)
+	# 规范化后的人数；斗地主夹到 3/6，身份局夹到 2–10，且不低于当前真人数。
+	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_snapshot.get("player_count", 2)))
+	_player_count_input.set_value_no_signal(float(normalized_count))
 	_password_input.text = str(_snapshot.get("room_password", ""))
 	_settings_backdrop.visible = true
 	_settings_panel.visible = true
@@ -345,8 +350,9 @@ func _save_settings() -> void:
 	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
 	# 当前人数输入；编辑文本优先，0或非法值回退 SpinBox 已确认值。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	# 最终人数候选；网络层仍会复核当前真人数与10人上限。
+	# 最终人数候选；先按模式规范化，网络层仍会复核真人数下限。
 	var player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	player_count = _normalize_player_count_for_mode(game_mode_id, player_count)
 	settings_update_requested.emit(game_mode_id, player_count, _password_input.text)
 
 
@@ -490,6 +496,43 @@ func _select_game_mode(game_mode_id: String) -> void:
 			return
 	if _game_mode_option.item_count > 0:
 		_game_mode_option.select(0)
+
+
+## 房主设置中切换游戏模式时立即按模式收紧人数输入范围，避免提交非法总人数。
+func _on_game_mode_option_selected(_index: int) -> void:
+	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
+	_apply_player_count_limits_for_mode(game_mode_id)
+	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_player_count_input.value))
+	if int(_player_count_input.value) != normalized_count:
+		_player_count_input.set_value_no_signal(float(normalized_count))
+
+
+## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/6 步长3，最小值不低于当前真人数。
+func _apply_player_count_limits_for_mode(game_mode_id: String) -> void:
+	var member_floor: int = maxi(int(_snapshot.get("member_count", 0)), 2)
+	if game_mode_id == "doudizhu":
+		_player_count_input.min_value = maxi(member_floor, 3)
+		_player_count_input.max_value = 6
+		_player_count_input.step = 3.0
+	else:
+		_player_count_input.min_value = member_floor
+		_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
+		_player_count_input.step = 1.0
+
+
+## 将人数规范到当前模式合法值，并保证不低于大厅当前真人数。
+func _normalize_player_count_for_mode(game_mode_id: String, player_count: int) -> int:
+	var normalized: int = player_count
+	if GameSettings != null and GameSettings.has_method("normalize_player_count_for_mode"):
+		normalized = GameSettings.normalize_player_count_for_mode(game_mode_id, player_count)
+	elif game_mode_id == "doudizhu":
+		if player_count == 3 or player_count == 6:
+			normalized = player_count
+		else:
+			normalized = 3 if player_count < 5 else 6
+	else:
+		normalized = clampi(player_count, 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
+	return maxi(normalized, int(_snapshot.get("member_count", 0)))
 
 
 ## 返回稳定模式 ID 对应的玩家可见名称；未知 ID 回退“身份模式”。

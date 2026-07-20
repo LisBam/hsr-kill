@@ -110,10 +110,8 @@ func _ready() -> void:
 	_menu_button.pressed.connect(_toggle_menu)
 	_restart_button.pressed.connect(_request_restart)
 	_main_menu_button.pressed.connect(_request_main_menu)
-	_player_count_input.min_value = minimum_player_count
-	_player_count_input.max_value = maximum_player_count
-	_player_count_input.step = 1.0
-	_player_count_input.value = GameSettings.next_match_player_count
+	_apply_player_count_limits_for_mode(GameSettings.next_match_mode if GameSettings != null else "identity")
+	_player_count_input.set_value_no_signal(float(GameSettings.next_match_player_count if GameSettings != null else minimum_player_count))
 	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
 	_player_count_input.update_on_text_changed = true
 	_player_count_input.value_changed.connect(_on_next_player_count_changed)
@@ -157,6 +155,8 @@ func _ready() -> void:
 	_character_candidate_count_option.item_selected.connect(_on_character_candidate_count_selected)
 	GameSettings.character_candidate_count_changed.connect(_refresh_character_candidate_count_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
+	GameSettings.next_match_mode_changed.connect(_on_next_match_mode_changed)
+	_apply_player_count_limits_for_mode(GameSettings.next_match_mode)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
@@ -178,18 +178,23 @@ func _move_to_input_front() -> void:
 
 ## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。
 func set_next_player_count(player_count: int) -> void:
-	# 当前菜单允许的人数；范围以组件导出的身份局限制为准，避免未来调整检查器范围时写入无效存档。
-	var clamped_player_count: int = clampi(player_count, minimum_player_count, maximum_player_count)
-	_player_count_input.value = clamped_player_count
-	GameSettings.set_next_match_player_count(clamped_player_count)
+	# 按当前下一局模式规范化；无信号写 SpinBox，切断 value_changed → set_next → value 的无限递归。
+	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
+	var clamped_player_count: int = GameSettings.normalize_player_count_for_mode(mode_id, player_count) if GameSettings != null else clampi(player_count, minimum_player_count, maximum_player_count)
+	_apply_player_count_limits_for_mode(mode_id)
+	if int(_player_count_input.value) != clamped_player_count:
+		_player_count_input.set_value_no_signal(float(clamped_player_count))
+	if GameSettings != null:
+		GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回菜单中设置的下一局人数；始终限制在标准身份局2至10人范围。
 func get_next_player_count() -> int:
-	# 输入框当前文本；优先读取尚未因焦点切换而提交的键入内容，保证鼠标点击重开时人数准确。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	# 有效人数；空文本或非数字文本回退到 SpinBox 已确认值，并始终限制在标准身份局范围内。
 	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
+	if GameSettings != null:
+		return GameSettings.normalize_player_count_for_mode(mode_id, resolved_player_count)
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
@@ -208,6 +213,18 @@ func set_menu_open(open: bool) -> void:
 			_main_menu_button.grab_focus()
 	else:
 		_menu_button.grab_focus()
+
+
+## 控制自动身份标记开关是否显示；斗地主全明置时隐藏，避免无效设置干扰。
+func set_auto_identity_marking_visible(controls_visible: bool) -> void:
+	if _auto_identity_marking_checkbox == null:
+		return
+	_auto_identity_marking_checkbox.visible = controls_visible
+	if not controls_visible:
+		# 隐藏时若焦点落在该开关上则释放，避免键盘导航停在不可见控件。
+		var focus_owner: Control = get_viewport().gui_get_focus_owner() if get_viewport() != null else null
+		if focus_owner == _auto_identity_marking_checkbox:
+			_auto_identity_marking_checkbox.release_focus()
 
 
 ## 统一控制所有依赖房主权威的局内设置；后续新增同类功能必须加入本入口，避免非房主看到无法生效的控件。
@@ -481,7 +498,7 @@ func _request_restart() -> void:
 		return
 	# 已确认的下一局人数；先写回输入框，使界面文本、Range 数值与重开参数保持一致。
 	var player_count: int = get_next_player_count()
-	_player_count_input.value = player_count
+	_player_count_input.set_value_no_signal(float(player_count))
 	GameSettings.set_next_match_player_count(player_count)
 	_menu_panel.visible = false
 	restart_requested.emit(player_count)
@@ -489,7 +506,36 @@ func _request_restart() -> void:
 
 ## 下一局人数输入变化时写入全局持久化设置；该值仅用于之后的重开请求，不会改写当前对局。
 func _on_next_player_count_changed(player_count: float) -> void:
-	GameSettings.set_next_match_player_count(int(player_count))
+	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
+	var resolved_count: int = GameSettings.normalize_player_count_for_mode(mode_id, int(player_count)) if GameSettings != null else int(player_count)
+	if int(_player_count_input.value) != resolved_count:
+		_player_count_input.set_value_no_signal(float(resolved_count))
+	if GameSettings != null:
+		GameSettings.set_next_match_player_count(resolved_count)
+
+
+## 根据下一局模式调整局内菜单人数 SpinBox 上下限与步长；斗地主仅 3↔6。
+func _on_next_match_mode_changed(mode_id: String) -> void:
+	_apply_player_count_limits_for_mode(mode_id)
+	if GameSettings != null:
+		set_next_player_count(GameSettings.next_match_player_count)
+
+
+## 应用模式人数限制到局内 SpinBox；不写 GameSettings，避免与 set_next 互相重入。
+func _apply_player_count_limits_for_mode(mode_id: String) -> void:
+	var normalized_mode: String = GameSettings.normalize_match_mode(mode_id) if GameSettings != null else str(mode_id)
+	if normalized_mode == GameSettings.MATCH_MODE_DOUDIZHU if GameSettings != null else normalized_mode == "doudizhu":
+		minimum_player_count = 3
+		maximum_player_count = 6
+		_player_count_input.min_value = 3
+		_player_count_input.max_value = 6
+		_player_count_input.step = 3.0
+	else:
+		minimum_player_count = 2
+		maximum_player_count = 10
+		_player_count_input.min_value = 2
+		_player_count_input.max_value = 10
+		_player_count_input.step = 1.0
 
 
 ## 请求退出当前对局；先收起局内菜单，避免主菜单出现后仍保留局内浮层输入。

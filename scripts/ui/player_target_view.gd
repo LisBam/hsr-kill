@@ -473,8 +473,12 @@ func _request_character_information() -> void:
 	var gender_text: String = str({"male":"男", "female":"女", "unknown":"未知"}.get(str(_character_definition.get("gender", "unknown")), "未知"))
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
-	# 当前武将全部可见技能ID；先保留固有技能顺序，再追加当前运行时临时技能且不重复。
+	# 当前武将全部可见技能ID；固有技能 → 模式技能 → 运行时临时技能，均不重复。
 	var visible_skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
+	for mode_skill_id_variant: Variant in (_player_snapshot.get("mode_skill_ids", []) as Array):
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not visible_skill_ids.has(mode_skill_id):
+			visible_skill_ids.append(mode_skill_id)
 	for temporary_skill_id_variant: Variant in (_player_snapshot.get("temporary_skills", {}) as Dictionary).keys():
 		# 当前临时技能ID；已是固有技能时不重复显示。
 		var temporary_skill_id: String = str(temporary_skill_id_variant)

@@ -137,6 +137,9 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		# 座次快照；从1开始，供界面显示领袖为一号位且不依赖稳定 player_id。
 		var serialized_player: Dictionary = player.to_dict(viewer_id, reveal_private)
 		serialized_player["seat_number"] = seat_index + 1
+		# 模式授予技能 ID；供技能栏与武将信息框展示飞扬/跋扈/共苦等，不修改武将静态定义。
+		var mode_skill_ids: Array[String] = IdentityRules.new().get_mode_skill_ids(player.identity, match_mode)
+		serialized_player["mode_skill_ids"] = mode_skill_ids
 		player_data.append(serialized_player)
 	# 当前选择请求快照；非响应者不能看到私有牌候选、已选牌和技能活动上下文。
 	var choice_request_data: Dictionary = current_choice_request.duplicate(true)

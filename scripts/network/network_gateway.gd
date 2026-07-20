@@ -73,6 +73,7 @@ const DEFAULT_LOBBY_GAME_MODE_ID: String = "identity"
 ## 当前已实现的大厅游戏模式配置；后续新增真实规则模式时可追加稳定 ID 与玩家可见名称。
 const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"id":DEFAULT_LOBBY_GAME_MODE_ID, "display_name":"身份模式"},
+	{"id":"doudizhu", "display_name":"斗地主"},
 ]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
@@ -114,10 +115,10 @@ var _lobby_password: String = ""
 ## 当前大厅快照是否标记房间存在密码；客户端只保存布尔值，不能取得房主明文密码。
 var _lobby_password_enabled: bool = false
 
-## 当前大厅配置的游戏总人数；范围2至10，空座位在正式开局时由基础 AI 补齐。
+## 当前大厅配置的游戏总人数；身份模式2至10，斗地主仅3或6，空座位在正式开局时由基础 AI 补齐。
 var _lobby_player_count: int = 2
 
-## 当前大厅配置的游戏模式稳定 ID；未知值统一回退身份模式，当前仅该模式可以实际开局。
+## 当前大厅配置的游戏模式稳定 ID；未知值统一回退身份模式，已实现 identity 与 doudizhu。
 var _lobby_game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID
 
 ## 当前大厅公共聊天历史；每项只含递增序号、玩家名、消息与显示时间，最多保留100条。
@@ -193,8 +194,8 @@ func host_lan(display_name: String, port: int = -1, avatar_character_id: String 
 	_local_avatar_character_id = _sanitize_avatar_character_id(avatar_character_id)
 	_lobby_password = _sanitize_lobby_password(room_password)
 	_lobby_password_enabled = not _lobby_password.is_empty()
-	_lobby_player_count = clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
 	_lobby_game_mode_id = _normalize_lobby_game_mode_id(game_mode_id)
+	_lobby_player_count = _normalize_lobby_player_count(player_count, _lobby_game_mode_id)
 	_lobby_members[SERVER_PEER_ID] = _make_lobby_member(SERVER_PEER_ID, _local_display_name, _local_avatar_character_id, true, 0, 0)
 	connection_state_changed.emit(true, "局域网房间已创建，等待其他玩家加入。")
 	_emit_lobby_state()
@@ -305,8 +306,8 @@ func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_pas
 		return "当前不是可修改设置的局域网房主。"
 	# 规范化后的游戏模式 ID；当前未知模式回退身份模式，保证开始按钮不会请求不存在的规则。
 	var normalized_game_mode_id: String = _normalize_lobby_game_mode_id(game_mode_id)
-	# 限制后的总人数；房间至少2人且不能超过项目身份局10人上限。
-	var normalized_player_count: int = clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
+	# 按模式规范化人数；身份 2–10，斗地主仅 3/6，且不得少于当前真人数。
+	var normalized_player_count: int = _normalize_lobby_player_count(player_count, normalized_game_mode_id)
 	if normalized_player_count < _lobby_members.size():
 		return "游戏总人数不能少于当前真人数量。"
 	_lobby_game_mode_id = normalized_game_mode_id
@@ -374,11 +375,13 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 	var human_count: int = _lobby_members.size()
 	if human_count < 2:
 		return "至少需要2名真人玩家才能开始局域网对局。"
-	if player_count < human_count or player_count > MAX_MATCH_PLAYER_COUNT:
-		return "游戏总人数必须介于当前真人数量与10人之间。"
+	if player_count < human_count:
+		return "游戏总人数不能少于当前真人数量。"
+	if player_count != _normalize_lobby_player_count(player_count, _lobby_game_mode_id):
+		return "当前模式的游戏总人数不合法。"
 	if player_count != _lobby_player_count:
 		return "开局人数必须与大厅当前对局设置一致。"
-	if _lobby_game_mode_id != DEFAULT_LOBBY_GAME_MODE_ID:
+	if not _is_lobby_game_mode_playable(_lobby_game_mode_id):
 		return "当前游戏模式尚未实现。"
 	_peer_to_player_id.clear()
 	_player_to_peer_id.clear()
@@ -807,8 +810,8 @@ func _apply_remote_lobby_state(snapshot: Dictionary) -> void:
 		var member: Dictionary = (member_variant as Dictionary).duplicate(true)
 		_lobby_members[int(member.get("peer_id", 0))] = member
 	_lan_match_player_count = int(snapshot.get("player_count", 0))
-	_lobby_player_count = clampi(int(snapshot.get("player_count", 2)), 2, MAX_MATCH_PLAYER_COUNT)
 	_lobby_game_mode_id = _normalize_lobby_game_mode_id(str(snapshot.get("game_mode_id", DEFAULT_LOBBY_GAME_MODE_ID)))
+	_lobby_player_count = _normalize_lobby_player_count(int(snapshot.get("player_count", 2)), _lobby_game_mode_id)
 	_lobby_password_enabled = bool(snapshot.get("has_password", false))
 	_lobby_chat_history.clear()
 	for chat_variant: Variant in snapshot.get("chat_history", []) as Array:
@@ -1030,6 +1033,24 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 		if str(mode_option.get("id", "")) == game_mode_id:
 			return game_mode_id
 	return DEFAULT_LOBBY_GAME_MODE_ID
+
+
+## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局与斗地主。
+func _is_lobby_game_mode_playable(game_mode_id: String) -> bool:
+	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
+	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu"
+
+
+## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 6。
+func _normalize_lobby_player_count(player_count: int, game_mode_id: String) -> int:
+	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
+	if GameSettings != null and GameSettings.has_method("normalize_player_count_for_mode"):
+		return GameSettings.normalize_player_count_for_mode(normalized_mode, player_count)
+	if normalized_mode == "doudizhu":
+		if player_count == 3 or player_count == 6:
+			return player_count
+		return 3 if player_count < 5 else 6
+	return clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
 
 
 ## 返回大厅需要绘制的视觉位置数；2人局与3人局都使用3个居中位置，其余人数与设置人数一致。

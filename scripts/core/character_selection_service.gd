@@ -24,6 +24,9 @@ var phase: String = ""
 ## 本局领袖玩家 ID；默认 -1，开始流程时从身份状态中解析。
 var leader_player_id: int = -1
 
+## 当前选将所属对局模式；identity 保留领袖优先选将，doudizhu 全员同时选将且不公开地主武将。
+var match_mode: String = "identity"
+
 ## 每名玩家的候选武将数量；默认5，实际数量不会超过已登记武将总数。
 var candidate_count: int = 5
 
@@ -90,13 +93,52 @@ var _rng: RandomNumberGenerator
 
 ## 返回一号位绑定的首任身份 ID；斗地主为 landlord，标准身份局为 leader。
 func get_first_seat_identity() -> String:
+	if is_doudizhu_mode():
+		return "landlord"
 	if _identity_limits.has("landlord"):
 		return "landlord"
 	return "leader"
 
 
+## 判断当前选将是否为斗地主模式；用于跳过领袖阶段与过滤身份选项。
+func is_doudizhu_mode() -> bool:
+	return match_mode == "doudizhu" or _identity_limits.has("landlord")
+
+
+## 返回是否启用领袖优先选将与公开领袖武将；斗地主为 false。
+func uses_leader_priority_selection() -> bool:
+	return not is_doudizhu_mode()
+
+
+## 返回一号位身份是否全局唯一；唯一时身份与一号位双向绑定（身份局领袖、三人斗地主地主）。
+func has_unique_first_seat_identity() -> bool:
+	return int(_identity_limits.get(get_first_seat_identity(), 0)) <= 1
+
+
+## 规范化自选座次与身份的联动结果；返回 seat_number、identity 与 error。
+func _normalize_custom_seat_identity(requested_seat_number: int, requested_identity: String) -> Dictionary:
+	var seat_number: int = requested_seat_number
+	var identity: String = requested_identity
+	var first_seat_identity: String = get_first_seat_identity()
+	# 一号位始终绑定首任身份；唯一首任身份选择时同步绑回一号位。
+	if seat_number == 1:
+		identity = first_seat_identity
+	elif has_unique_first_seat_identity() and identity == first_seat_identity:
+		seat_number = 1
+		identity = first_seat_identity
+	if seat_number < 1 or seat_number > _player_ids.size():
+		return {"error": "请选择有效座次。"}
+	if identity.is_empty() or not _identity_limits.has(identity):
+		return {"error": "请选择有效身份。"}
+	if seat_number == 1 and identity != first_seat_identity:
+		return {"error": "一号位必须选择%s身份。" % ("地主" if first_seat_identity == "landlord" else "领袖")}
+	if has_unique_first_seat_identity() and identity == first_seat_identity and seat_number != 1:
+		return {"error": "%s身份必须选择一号位。" % ("地主" if first_seat_identity == "landlord" else "领袖")}
+	return {"seat_number": seat_number, "identity": identity, "error": ""}
+
+
 ## 创建一局选将流程并为领袖生成首批候选；返回空字符串表示初始化成功。
-func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false, requested_replacement_card_count: int = 0, leader_skill_character_ids: Array[String] = []) -> String:
+func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false, requested_replacement_card_count: int = 0, leader_skill_character_ids: Array[String] = [], requested_match_mode: String = "") -> String:
 	_player_ids.clear()
 	_character_ids = character_ids.duplicate()
 	_leader_skill_character_ids.clear()
@@ -123,9 +165,18 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	replacement_card_count = maxi(requested_replacement_card_count, 0)
 	if _character_ids.is_empty():
 		return "没有可用于选将的武将配置。"
-	for character_id: String in leader_skill_character_ids:
-		if _character_ids.has(character_id) and not _leader_skill_character_ids.has(character_id):
-			_leader_skill_character_ids.append(character_id)
+	# 模式：显式参数优先；否则根据身份表推断（含地主/农民则为斗地主）。
+	var inferred_mode: String = "identity"
+	for probe_player: PlayerState in players:
+		if probe_player != null and (probe_player.identity == "landlord" or probe_player.identity == "peasant"):
+			inferred_mode = "doudizhu"
+			break
+	match_mode = "doudizhu" if requested_match_mode == "doudizhu" or (requested_match_mode.is_empty() and inferred_mode == "doudizhu") else "identity"
+	# 领袖技武将仅身份局领袖阶段使用；斗地主不注入领袖技固定候选。
+	if uses_leader_priority_selection():
+		for character_id: String in leader_skill_character_ids:
+			if _character_ids.has(character_id) and not _leader_skill_character_ids.has(character_id):
+				_leader_skill_character_ids.append(character_id)
 	for player_index: int in range(players.size()):
 		# 当前参与选将的玩家；初始数组顺序就是随机身份分配阶段生成的物理座次顺序。
 		var player: PlayerState = players[player_index]
@@ -134,23 +185,30 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		_initial_identities_by_player[player.player_id] = player.identity
 		_identity_limits[player.identity] = int(_identity_limits.get(player.identity, 0)) + 1
 		_replacement_cards_remaining_by_player[player.player_id] = replacement_card_count
-		# 首任公开选将者：身份局唯一领袖，斗地主取座次表中第一名地主。
+		# 身份局记录唯一领袖；斗地主仅缓存首名地主供兼容字段，不作为优先选将者。
 		if player.identity == "leader":
 			leader_player_id = player.player_id
 		elif player.identity == "landlord" and leader_player_id < 0:
 			leader_player_id = player.player_id
-	if leader_player_id < 0:
-		return "身份配置缺少首任公开角色，无法开始选将。"
-	_initial_leader_player_id = leader_player_id
-	# 首次生效座次；身份随机完成后立即按首任领袖旋转，保证默认一号位与领袖身份是同一套真实状态。
-	var initial_leader_index: int = _player_ids.find(leader_player_id)
+	if uses_leader_priority_selection():
+		if leader_player_id < 0:
+			return "身份配置缺少领袖，无法开始选将。"
+		_initial_leader_player_id = leader_player_id
+		# 首次生效座次；身份随机完成后立即按领袖旋转，保证默认一号位与领袖身份一致。
+		var initial_leader_index: int = _player_ids.find(leader_player_id)
+		for player_index: int in range(_player_ids.size()):
+			var initial_seat_number: int = (player_index - initial_leader_index + _player_ids.size()) % _player_ids.size() + 1
+			_initial_seats_by_player[_player_ids[player_index]] = initial_seat_number
+		phase = PHASE_LEADER
+		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
+		return ""
+	# 斗地主：分配表已按一号位（及六人三号位）固定地主，不再旋转座次；全员同时选将且不公开武将。
+	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
-		# 当前玩家旋转后的首次座次；从领袖开始顺时针编号，范围固定为1至总玩家数。
-		var initial_seat_number: int = (player_index - initial_leader_index + _player_ids.size()) % _player_ids.size() + 1
-		_initial_seats_by_player[_player_ids[player_index]] = initial_seat_number
-	# 即使启用座次与身份自选，也必须先保留首次身份分配并让首任领袖完成公开选将。
-	phase = PHASE_LEADER
-	_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
+		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1
+	phase = PHASE_OTHERS
+	for player_id: int in _player_ids:
+		_candidates_by_player[player_id] = _make_candidates(player_id, "", false)
 	return ""
 
 
@@ -160,10 +218,11 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "当前没有可提交的选将操作。"
 	if not _player_ids.has(player_id):
 		return "选将玩家不存在。"
-	if phase == PHASE_LEADER and player_id != leader_player_id:
-		return "领袖尚未完成选将。"
-	if phase == PHASE_OTHERS and player_id == leader_player_id:
-		return "领袖已经完成选将。"
+	if uses_leader_priority_selection():
+		if phase == PHASE_LEADER and player_id != leader_player_id:
+			return "领袖尚未完成选将。"
+		if phase == PHASE_OTHERS and player_id == leader_player_id:
+			return "领袖已经完成选将。"
 	# 首任领袖已公开武将后只剩最终座次身份待确认；该特殊提交必须复用同一武将，不能重新进入候选选择。
 	# 该保留分支只会由先亮将、后等待真人释放名额的AI首任领袖进入；真人首任领袖第一次提交已经同时确认三项。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(player_id)
@@ -180,26 +239,20 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	if _is_character_selected_by_other_player(player_id, character_id):
 		return "该武将已经被其他玩家选择。"
 	# 首任领袖是否随武将一起提交了座次身份；真人界面始终提供完整值，AI首任领袖可先亮将并把最终名额留到真人确认之后。
-	var has_initial_custom_assignment: bool = phase == PHASE_LEADER and requested_seat_number >= 1 and not requested_identity.is_empty()
-	# 一次性自选确认；最终自选必须提交完整分配，首任领袖仅在请求实际携带座次身份时同步落定。
-	var confirms_custom_assignment: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or has_initial_custom_assignment)
+	var has_initial_custom_assignment: bool = (phase == PHASE_LEADER or (is_doudizhu_mode() and phase == PHASE_OTHERS)) and requested_seat_number >= 1 and not requested_identity.is_empty()
+	# 一次性自选确认；身份局最终自选与斗地主同时选将必须提交完整分配，首任领袖仅在请求实际携带座次身份时同步落定。
+	var confirms_custom_assignment: bool = custom_assignment_enabled and (
+		phase == PHASE_CUSTOM
+		or has_initial_custom_assignment
+		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+	)
 	if confirms_custom_assignment:
-		# 规范化后的座次与身份；选择一号位或领袖会强制形成同一配对。
-		var seat_number: int = requested_seat_number
-		# 请求身份ID；与一号位或领袖任一条件命中时会同步规范为领袖。
-		var identity: String = requested_identity
-		var first_seat_identity: String = get_first_seat_identity()
-		if seat_number == 1 or identity == first_seat_identity:
-			seat_number = 1
-			identity = first_seat_identity
-		if seat_number < 1 or seat_number > _player_ids.size():
-			return "请选择有效座次。"
-		if not _identity_limits.has(identity):
-			return "请选择有效身份。"
-		if seat_number == 1 and identity != first_seat_identity:
-			return "一号位必须选择%s身份。" % ("地主" if first_seat_identity == "landlord" else "领袖")
-		if identity == first_seat_identity and seat_number != 1:
-			return "%s身份必须选择一号位。" % ("地主" if first_seat_identity == "landlord" else "领袖")
+		# 规范化后的座次与身份；一号位与唯一首任身份双向绑定，多地主时仅强制一号位为地主。
+		var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity)
+		if not str(normalized_assignment.get("error", "")).is_empty():
+			return str(normalized_assignment.get("error", "请选择有效座次。"))
+		var seat_number: int = int(normalized_assignment.get("seat_number", -1))
+		var identity: String = str(normalized_assignment.get("identity", ""))
 		for selected_player_id_variant: Variant in _selected_seats_by_player.keys():
 			# 已确认玩家 ID；同一座次不能由两名玩家占用。
 			var selected_player_id: int = int(selected_player_id_variant)
@@ -239,7 +292,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	# 普通模式只等待武将确认；最终自选还必须等待每名角色确认座次与身份，首任领袖已选武将不能提前结束阶段。
 	# 真人首任领袖已经同时写入两份最终映射；AI首任领袖则必须等后续补齐映射后才允许完成。
 	var all_players_selected: bool = _selections_by_player.size() == _player_ids.size()
-	if custom_assignment_enabled and phase == PHASE_CUSTOM:
+	if custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS)):
 		all_players_selected = all_players_selected and _selected_seats_by_player.size() == _player_ids.size() and _selected_identities_by_player.size() == _player_ids.size()
 	if all_players_selected:
 		phase = PHASE_COMPLETE
@@ -422,18 +475,15 @@ func has_custom_assignment_preview(player_id: int) -> bool:
 ## 更新玩家尚未确认武将时的座次与身份预览；该操作不占最终名额，方便控制器即时重排未确认 AI。
 func preview_custom_assignment(player_id: int, requested_seat_number: int, requested_identity: String) -> String:
 	# 可预览阶段；首任领袖在第一次选将框中即可调整座次身份，其他玩家继续在最终自选阶段使用相同入口。
-	var can_preview_current_phase: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM)
+	var can_preview_current_phase: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
 	if not can_preview_current_phase or not can_player_select(player_id):
 		return "当前玩家不能预览座次与身份。"
-	# 规范化后的预览座次与身份；一号位和领袖始终保持双向绑定。
-	var seat_number: int = requested_seat_number
-	var identity: String = requested_identity
-	var first_seat_identity: String = get_first_seat_identity()
-	if seat_number == 1 or identity == first_seat_identity:
-		seat_number = 1
-		identity = first_seat_identity
-	if seat_number < 1 or seat_number > _player_ids.size() or not _identity_limits.has(identity):
-		return "请选择有效座次与身份。"
+	# 规范化后的预览座次与身份；一号位与唯一首任身份双向绑定。
+	var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity)
+	if not str(normalized_assignment.get("error", "")).is_empty():
+		return str(normalized_assignment.get("error", "请选择有效座次与身份。"))
+	var seat_number: int = int(normalized_assignment.get("seat_number", -1))
+	var identity: String = str(normalized_assignment.get("identity", ""))
 	# 已确认结果才占用最终名额；其他未确认玩家仍可在各自界面预览原始分配，控制器会即时重排剩余位置。
 	for selected_player_id_variant: Variant in _selected_seats_by_player.keys():
 		# 已确认玩家 ID；预览者自身尚未确认，不会出现在该映射中。
@@ -523,7 +573,8 @@ func get_pending_player_ids() -> Array[int]:
 				result.append(player_id)
 			continue
 		if phase == PHASE_OTHERS:
-			if player_id != leader_player_id and not _selections_by_player.has(player_id):
+			var excluded_as_leader: bool = uses_leader_priority_selection() and player_id == leader_player_id
+			if not excluded_as_leader and not _selections_by_player.has(player_id):
 				result.append(player_id)
 			continue
 		if phase == PHASE_CUSTOM:
@@ -549,16 +600,21 @@ func to_dict(viewer_id: int) -> Dictionary:
 		local_candidates = get_candidates(viewer_id)
 	# 最终自选阶段标记；首任领袖公开选将不展示或要求座次身份控件，避免领袖因隐藏按钮无法确认。
 	# 该标记只控制PHASE_CUSTOM的全武将候选语义；首任真人领袖的座次身份权限由下方独立变量覆盖。
-	var is_custom_assignment_phase: bool = custom_assignment_enabled and phase == PHASE_CUSTOM
-	# 当前可提交座次身份的阶段；首任领袖在公开选将框内一次性确认，后续阶段仅向尚未确认的其他玩家开放。
-	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM)
+	var is_custom_assignment_phase: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
+	# 当前可提交座次身份的阶段；身份局领袖/自选与斗地主全员同时选将均可携带座次身份。
+	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
 	# 首任领袖保留的最终武将；该玩家只提交座次身份，不能再次打开全武将或随机候选列表。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(viewer_id)
+	# 公开领袖武将 ID；斗地主不公开展示任何角色武将。
+	var public_leader_character_id: String = ""
+	if uses_leader_priority_selection():
+		public_leader_character_id = _initial_leader_character_id if phase == PHASE_CUSTOM else get_selection(leader_player_id)
 	return {
 		"phase":phase,
 		"selection_kind":"initial",
-		"leader_player_id":leader_player_id,
-		"leader_character_id":_initial_leader_character_id if phase == PHASE_CUSTOM else get_selection(leader_player_id),
+		"match_mode":match_mode,
+		"leader_player_id":leader_player_id if uses_leader_priority_selection() else -1,
+		"leader_character_id":public_leader_character_id,
 		"candidate_count":candidate_count,
 		"player_count":_player_ids.size(),
 		"local_player_id":viewer_id,
@@ -592,7 +648,9 @@ func can_player_select(player_id: int) -> bool:
 	if phase == PHASE_LEADER:
 		return player_id == leader_player_id
 	if phase == PHASE_OTHERS:
-		return _player_ids.has(player_id) and player_id != leader_player_id
+		if uses_leader_priority_selection():
+			return _player_ids.has(player_id) and player_id != leader_player_id
+		return _player_ids.has(player_id)
 	return false
 
 
@@ -628,9 +686,11 @@ func _make_candidates(player_id: int, excluded_character_id: String, include_lea
 
 ## 判断玩家当前是否处于领袖身份；首任领袖始终为领袖，最终自选则读取已经规范化的预览或确认身份。
 func _is_player_previewing_leader(player_id: int) -> bool:
+	if not uses_leader_priority_selection():
+		return false
 	if phase == PHASE_LEADER:
 		return player_id == leader_player_id
-	# 自选阶段：一号位首任身份（领袖或地主）预览者可使用领袖技候选规则。
+	# 自选阶段：一号位领袖预览者可使用领袖技候选规则。
 	return phase == PHASE_CUSTOM and get_preview_identity(player_id) == get_first_seat_identity()
 
 
