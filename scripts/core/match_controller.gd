@@ -8397,11 +8397,19 @@ func _reshuffle_discard_pile() -> void:
 
 
 ## 校验并追加一个使用牌候选动作。
+## target_ids 保留客户端/AI 提交形态（群体牌为空数组）；normalized_target_ids 供 UI 预览暗置与联机只读预览使用。
 func _append_if_legal(result: Array[Dictionary], player_id: int, card: CardInstance, requested_targets: Array[int]) -> void:
-	# 自动展开后的目标；全体牌使用空请求数组即可。
+	# 自动展开后的目标；全体牌使用空请求数组即可，展开结果写入独立字段避免破坏“空数组表示群体提交”语义。
 	var normalized_targets: Array[int] = card_rules.normalize_targets(player_id, card, requested_targets)
 	if card_rules.validate_use(player_id, card, normalized_targets).is_empty():
-		result.append({"action_type":"use_card", "actor_id":player_id, "card_uid":card.uid, "target_ids":requested_targets.duplicate(), "card_definition_id":card.definition_id})
+		result.append({
+			"action_type": "use_card",
+			"actor_id": player_id,
+			"card_uid": card.uid,
+			"target_ids": requested_targets.duplicate(),
+			"normalized_target_ids": normalized_targets.duplicate(),
+			"card_definition_id": card.definition_id,
+		})
 
 
 ## 校验并追加一条由卡牌源码生成的复杂目标动作；卡牌文件不需要复制标准动作字典结构。
@@ -8683,13 +8691,23 @@ func _get_remote_card_use_preview(player_id: int, card_uid: int, selected_target
 		if _int_arrays_equal(action_target_ids, selected_target_ids):
 			result["can_submit"] = true
 			result["validation_error"] = ""
+			# 规则展开后的目标列表；群体牌 target_ids 仍为空，暗置预览必须读独立字段。
+			var expanded_target_ids: Array[int] = _int_array(action.get("normalized_target_ids", []) as Array)
+			if expanded_target_ids.is_empty():
+				expanded_target_ids = action_target_ids.duplicate()
+			result["normalized_target_ids"] = expanded_target_ids
 		if _is_int_array_prefix(selected_target_ids, action_target_ids) and action_target_ids.size() > selected_target_ids.size():
 			# 当前合法动作中紧随已选前缀的目标；加入去重集合供界面继续高亮。
 			var next_target_id: int = action_target_ids[selected_target_ids.size()]
 			if not legal_target_ids.has(next_target_id):
 				legal_target_ids.append(next_target_id)
 	result["legal_target_ids"] = legal_target_ids
-	if authoritative_minimum_target_count >= 0:
+	# 群体锦囊：提交形态目标为空，静态 max_targets 仍用于界面；权威组合数量对空数组无意义。
+	var remote_target_mode: String = str(result.get("target_mode", ""))
+	if remote_target_mode in ["all_players", "all_others"]:
+		result["min_targets"] = int(definition.get("min_targets", 0))
+		result["max_targets"] = int(definition.get("max_targets", 99))
+	elif authoritative_minimum_target_count >= 0:
 		result["min_targets"] = authoritative_minimum_target_count
 		result["max_targets"] = authoritative_maximum_target_count
 	return result
