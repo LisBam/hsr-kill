@@ -320,11 +320,29 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "自选全武将、座次与身份"
 
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomCharacterAssignmentCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
+
 [node name="CustomizeAiCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320002]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "自选所有AI的武将"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomizeAiCharactersCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="MulliganLimitRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320003]
 unique_name_in_owner = true
@@ -347,6 +365,15 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "AI使用手气卡"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AiUsesMulliganCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
 layout_mode = 2
@@ -1324,12 +1351,30 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选全武将、座次与身份"
 
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomCharacterAssignmentCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
+
 [node name="MainMenuCustomizeAiCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320012]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选所有AI的武将"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomizeAiCharactersCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuMulliganLimitRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320013]
 unique_name_in_owner = true
@@ -1355,6 +1400,15 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "AI使用手气卡"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAiUsesMulliganCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuAiResponseDelayLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=489346337]
 unique_name_in_owner = true

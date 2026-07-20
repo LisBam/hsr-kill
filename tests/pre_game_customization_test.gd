@@ -68,6 +68,10 @@ func _test_settings_controls() -> bool:
 	var main_custom_checkbox: CheckBox = main_instance.get_node("%MainMenuCustomCharacterAssignmentCheckBox") as CheckBox
 	# 局内菜单自选开关；非房主模式下应整项隐藏。
 	var match_custom_checkbox: CheckBox = main_instance.get_node("%CustomCharacterAssignmentCheckBox") as CheckBox
+	# 主菜单自动身份标记开关；它与全部设置开关共用独立主题指示器。
+	var main_auto_identity_checkbox: CheckBox = main_instance.get_node("%MainMenuAutoIdentityMarkingCheckBox") as CheckBox
+	# 局内自动身份标记开关；作为统一复选框视觉规格的基准项。
+	var match_auto_identity_checkbox: CheckBox = main_instance.get_node("%AutoIdentityMarkingCheckBox") as CheckBox
 	# 主菜单AI改将开关；与局内控件共享持久设置。
 	var main_ai_checkbox: CheckBox = main_instance.get_node("%MainMenuCustomizeAiCharactersCheckBox") as CheckBox
 	# 局内菜单AI改将开关；只允许离线玩家或房主查看。
@@ -82,9 +86,20 @@ func _test_settings_controls() -> bool:
 	var match_ai_mulligan_checkbox: CheckBox = main_instance.get_node("%AiUsesMulliganCheckBox") as CheckBox
 	# 正式局内菜单组件；公开权限入口必须统一隐藏四项新设置。
 	var match_menu: MatchMenu = main_instance.get_node("%MatchMenu") as MatchMenu
-	if main_custom_checkbox == null or match_custom_checkbox == null or main_ai_checkbox == null or match_ai_checkbox == null or main_mulligan_option == null or match_mulligan_option == null or main_ai_mulligan_checkbox == null or match_ai_mulligan_checkbox == null or match_menu == null:
+	if main_custom_checkbox == null or match_custom_checkbox == null or main_auto_identity_checkbox == null or match_auto_identity_checkbox == null or main_ai_checkbox == null or match_ai_checkbox == null or main_mulligan_option == null or match_mulligan_option == null or main_ai_mulligan_checkbox == null or match_ai_mulligan_checkbox == null or match_menu == null:
 		main_instance.queue_free()
 		return _fail("settings_controls_missing")
+	# 两个设置入口的全部二元选项；每项都必须覆盖默认勾选图标并使用同一主题化指示器。
+	var settings_checkboxes: Array[CheckBox] = [main_auto_identity_checkbox, match_auto_identity_checkbox, main_custom_checkbox, match_custom_checkbox, main_ai_checkbox, match_ai_checkbox, main_ai_mulligan_checkbox, match_ai_mulligan_checkbox]
+	for settings_checkbox: CheckBox in settings_checkboxes:
+		# 当前开关的独立指示器；子节点只负责重绘，不接收鼠标输入或改写设置状态。
+		var indicator: IdentityMarkingIndicator = settings_checkbox.get_node_or_null("SettingsCheckBoxIndicator") as IdentityMarkingIndicator
+		# 自动身份标记是原有基准项，保留其历史节点名；其余开关统一使用通用节点名。
+		if indicator == null:
+			indicator = settings_checkbox.get_node_or_null("IdentityMarkingIndicator") as IdentityMarkingIndicator
+		if indicator == null or not indicator.position.is_equal_approx(Vector2(2.0, 5.0)) or not indicator.size.is_equal_approx(Vector2(20.0, 20.0)) or indicator.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			main_instance.queue_free()
+			return _fail("settings_checkbox_indicator:%s" % settings_checkbox.name)
 	if main_mulligan_option.item_count != 7 or match_mulligan_option.item_count != 7 or main_mulligan_option.get_item_text(0) != "关闭" or main_mulligan_option.get_item_text(6) != "无限次":
 		main_instance.queue_free()
 		return _fail("mulligan_options")
