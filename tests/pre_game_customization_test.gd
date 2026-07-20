@@ -55,6 +55,8 @@ func _run() -> void:
 		return
 	if not await _test_local_initial_leader_flow():
 		return
+	if not _test_ai_initial_leader_retains_default_leader_assignment():
+		return
 	if not _test_mulligan_ai_evaluation():
 		return
 	if not _test_authoritative_pre_game_flow():
@@ -636,6 +638,46 @@ func _test_local_initial_leader_flow() -> bool:
 	controller.abandon_match()
 	main_instance.queue_free()
 	await get_tree().process_frame
+	return true
+
+
+## 验证首任AI领袖在真人按首次随机座次身份确认后，优先取得仍空缺的一号位与领袖身份并保留公开武将。
+func _test_ai_initial_leader_retains_default_leader_assignment() -> bool:
+	GameSettings.set_custom_character_assignment_enabled(true)
+	GameSettings.set_customize_ai_characters_enabled(false)
+	GameSettings.set_mulligan_limit(0)
+	_create_controller()
+	# 当前首任AI领袖对局种子；循环避免把某次随机洗牌恰好令本地真人成为领袖误判为测试通过。
+	var selected_seed: int = -1
+	for candidate_seed: int in range(1, 65):
+		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+			return _fail("ai_initial_leader_default_start")
+		if _controller.character_selection.leader_player_id != _controller.local_human_player_id:
+			selected_seed = candidate_seed
+			break
+	# 首任领袖稳定玩家ID；只有AI持有该ID时才覆盖本次自动优先确认规则。
+	var initial_leader_player_id: int = _controller.character_selection.leader_player_id
+	# 首任领袖已经公开的稳定武将ID；最终桌面的领袖必须保留该值。
+	var initial_leader_character_id: String = _controller.state.get_player(initial_leader_player_id).character_id
+	# 本地真人的私有随机候选；按首次随机座次身份确认其首张候选，不主动改变领袖归属。
+	var local_candidates: Array[String] = _controller.character_selection.get_candidates(_controller.local_human_player_id)
+	if selected_seed < 0 or _controller.character_selection.phase != CharacterSelectionService.PHASE_CUSTOM or initial_leader_character_id.is_empty() or local_candidates.is_empty():
+		return _fail("ai_initial_leader_default_setup")
+	# 本地真人首次随机座次；提交默认值保证测试覆盖“未抢占领袖”的常规流程。
+	var local_initial_seat_number: int = _controller.character_selection.get_initial_seat_number(_controller.local_human_player_id)
+	# 本地真人首次随机身份；与默认座次一起确认，不能使用预览中的临时值替代。
+	var local_initial_identity: String = _controller.character_selection.get_initial_identity(_controller.local_human_player_id)
+	if not _controller.select_character(_controller.local_human_player_id, local_candidates[0], local_initial_seat_number, local_initial_identity):
+		return _fail("ai_initial_leader_default_submit")
+	# 最终首任领袖状态；稳定玩家ID即使经过座次旋转也必须保留原武将与领袖身份。
+	var final_initial_leader: PlayerState = _controller.state.get_player(initial_leader_player_id)
+	# 最终一号位；身份局开局会以领袖旋转数组，因此该对象必须就是首任AI领袖。
+	var table_leader: PlayerState = _controller.state.players[0] if not _controller.state.players.is_empty() else null
+	if final_initial_leader == null or final_initial_leader.character_id != initial_leader_character_id or final_initial_leader.identity != "leader" or table_leader == null or table_leader.player_id != initial_leader_player_id or table_leader.character_id != initial_leader_character_id:
+		return _fail("ai_initial_leader_default_retained seed=%d initial=%s final=%s identity=%s table=%d/%s" % [selected_seed, initial_leader_character_id, final_initial_leader.character_id if final_initial_leader != null else "", final_initial_leader.identity if final_initial_leader != null else "", table_leader.player_id if table_leader != null else -1, table_leader.character_id if table_leader != null else ""])
+	_controller.abandon_match()
+	_controller.queue_free()
+	_controller = null
 	return true
 
 
