@@ -147,8 +147,17 @@ var _section_labels: Array[Label] = []
 ## 当前公共牌领取者标签；主题切换时同步文字与背景描边，固定牌位和归属数据保持不变。
 var _owner_labels: Array[Label] = []
 
+## 公共牌实体 UID 到领取者标签的映射；五谷后续领取更新只改写对应标签，不重复实例化整组牌面节点。
+var _owner_labels_by_card_uid: Dictionary = {}
+
 ## 当前文字选项按钮集合；只用于主题刷新，请求切换或关闭时随动态内容一并清空。
 var _control_option_buttons: Array[Button] = []
+
+## 当前公共牌阵结构签名；牌位 UID 与牌面数据不变时复用现有节点，避免重复状态广播造成集中释放与重建。
+var _public_layout_signature: int = 0
+
+## 当前公共展示对应的本地请求 ID；同一请求重复刷新时保留玩家临时选择，切换选择者时恢复为空选择。
+var _public_request_id: int = -1
 
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
@@ -246,7 +255,10 @@ func show_request(choice_request: Dictionary) -> void:
 	_selectable_card_uids.clear()
 	_section_labels.clear()
 	_owner_labels.clear()
+	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_public_layout_signature = 0
+	_public_request_id = -1
 	_steal_zone_container = null
 	_steal_zone_column_width = 0.0
 	_clear_container(_zone_container)
@@ -393,6 +405,23 @@ func _calculate_steal_panel_layout(candidates_by_zone: Dictionary) -> Dictionary
 
 ## 显示一份跨多名玩家持续存在的公共选牌快照；只有传入有效本地请求时开放牌面与确认按钮。
 func show_public_display(display_data: Dictionary, choice_request: Dictionary = {}) -> void:
+	# 下一份公共牌阵结构签名；领取者、提示和当前请求不属于牌面结构，变化时只需原位刷新状态。
+	var next_layout_signature: int = _get_public_layout_signature(display_data)
+	# 下一份本地请求 ID；旁观状态使用-1，轮到本地玩家时使用权威请求序号。
+	var next_request_id: int = int(choice_request.get("request_id", -1))
+	if visible and not _public_display.is_empty() and _public_layout_signature == next_layout_signature and not _card_views.is_empty():
+		_public_display = display_data.duplicate(true)
+		_choice_request = choice_request.duplicate(true)
+		if _public_request_id != next_request_id:
+			_selected_card_uids.clear()
+		_public_request_id = next_request_id
+		_title_label.text = str(_public_display.get("title", "公共选牌"))
+		_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
+		_refresh_public_selectable_card_uids()
+		_refresh_public_slot_states(_public_display.get("slots", []) as Array)
+		_refresh_public_action_row()
+		_refresh_selection_state()
+		return
 	_public_display = display_data.duplicate(true)
 	_choice_request = choice_request.duplicate(true)
 	_selected_card_uids.clear()
@@ -400,7 +429,10 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_selectable_card_uids.clear()
 	_section_labels.clear()
 	_owner_labels.clear()
+	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_public_layout_signature = next_layout_signature
+	_public_request_id = next_request_id
 	_steal_zone_container = null
 	_steal_zone_column_width = 0.0
 	_clear_container(_zone_container)
@@ -419,6 +451,28 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_title_label.text = str(_public_display.get("title", "公共选牌"))
 	_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
 	# 当前本地可选候选；只取有效 UID，公共牌位仍由完整 slots 数组决定固定顺序。
+	_refresh_public_selectable_card_uids()
+	_add_public_card_row(_public_display.get("slots", []) as Array)
+	_refresh_public_slot_states(_public_display.get("slots", []) as Array)
+	_refresh_public_action_row()
+	_refresh_selection_state()
+	visible = true
+
+
+## 计算公共牌阵的稳定结构签名；只有固定牌位或原始牌面变化时才允许重建正式 CardView 节点。
+func _get_public_layout_signature(display_data: Dictionary) -> int:
+	# 参与结构比较的牌位数据；领取者归属与客户端补充名称只影响覆盖层状态，不改变牌面节点。
+	var layout_slots: Array = []
+	for slot_variant: Variant in display_data.get("slots", []) as Array:
+		# 当前固定牌位；UID 与牌面快照共同决定是否可以安全复用节点。
+		var display_slot: Dictionary = slot_variant as Dictionary
+		layout_slots.append({"uid":int(display_slot.get("uid", -1)), "card_data":(display_slot.get("card_data", {}) as Dictionary).duplicate(true)})
+	return hash([str(display_data.get("kind", "")), layout_slots, GameSettings.card_name_mode, GameSettings.ui_style_id])
+
+
+## 从当前本地权威请求刷新公共牌可点击集合；旁观状态保持空集合且不会压暗仍未领取的公开牌面。
+func _refresh_public_selectable_card_uids() -> void:
+	_selectable_card_uids.clear()
 	for candidate_variant: Variant in _choice_request.get("candidates", []) as Array:
 		# 当前规则候选；已被其他角色取得的牌不会出现在该请求中。
 		var candidate: Dictionary = candidate_variant as Dictionary
@@ -426,14 +480,41 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 		var candidate_uid: int = int(candidate.get("uid", -1))
 		if candidate_uid >= 0 and not _selectable_card_uids.has(candidate_uid):
 			_selectable_card_uids.append(candidate_uid)
-	_add_public_card_row(_public_display.get("slots", []) as Array)
+	for selected_uid: int in _selected_card_uids.duplicate():
+		if not _selectable_card_uids.has(selected_uid):
+			_selected_card_uids.erase(selected_uid)
+
+
+## 原位刷新公共牌的领取虚影、归属标签与输入权限；固定牌位节点在整次五谷流程中持续复用。
+func _refresh_public_slot_states(display_slots: Array) -> void:
+	for slot_variant: Variant in display_slots:
+		# 当前固定牌位；领取状态只改变表现，不删除或移动节点。
+		var display_slot: Dictionary = slot_variant as Dictionary
+		# 当前实体 UID；用于定位已经实例化的正式牌面与领取者标签。
+		var card_uid: int = int(display_slot.get("uid", -1))
+		# 当前领取者 ID；非负值表示该牌位只保留复制虚影。
+		var taken_by_player_id: int = int(display_slot.get("taken_by_player_id", -1))
+		# 当前正式牌面；结构签名一致时该实例会贯穿整次公共选择流程。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view != null and is_instance_valid(card_view):
+			card_view.modulate = taken_card_ghost_modulate if taken_by_player_id >= 0 else Color.WHITE
+			card_view.set_interactable_state(_selectable_card_uids.has(card_uid) and taken_by_player_id < 0)
+		# 当前归属标签；所有公共牌位预先创建隐藏标签，领取时只更新文本与显隐。
+		var owner_label: Label = _owner_labels_by_card_uid.get(card_uid) as Label
+		if owner_label != null and is_instance_valid(owner_label):
+			owner_label.text = str(display_slot.get("taken_by_character_name", "已领取")) if taken_by_player_id >= 0 else ""
+			if taken_by_player_id >= 0 and owner_label.text.is_empty():
+				owner_label.text = "已领取"
+			owner_label.visible = taken_by_player_id >= 0
+
+
+## 刷新公共窗口操作行；只有轮到本地玩家时显示确认及规则允许的取消按钮。
+func _refresh_public_action_row() -> void:
 	# 是否存在本地交互请求；旁观其他角色选择时只保留公共牌位，不显示确定或取消按钮。
 	var has_interactive_request: bool = int(_choice_request.get("request_id", -1)) >= 0
 	_action_row.visible = has_interactive_request
 	_confirm_button.visible = true
 	_cancel_button.visible = has_interactive_request and (bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0)
-	_refresh_selection_state()
-	visible = true
 
 
 ## 关闭并清理当前选择请求；规则层提交成功或重新开局时调用。
@@ -444,7 +525,12 @@ func close() -> void:
 	_selected_card_uids.clear()
 	_card_views.clear()
 	_selectable_card_uids.clear()
+	_section_labels.clear()
+	_owner_labels.clear()
+	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_public_layout_signature = 0
+	_public_request_id = -1
 	_clear_container(_zone_container)
 	_confirm_button.visible = true
 
@@ -530,11 +616,12 @@ func _add_public_card_row(display_slots: Array) -> void:
 			"visible":true,
 			"card_data":display_slot.get("card_data", {}) as Dictionary,
 		}
-		_add_card_slot(card_row, candidate, _selectable_card_uids.has(card_uid) and taken_by_player_id < 0, taken_by_player_id >= 0, str(display_slot.get("taken_by_character_name", "")))
+		_add_card_slot(card_row, candidate, _selectable_card_uids.has(card_uid) and taken_by_player_id < 0, taken_by_player_id >= 0, str(display_slot.get("taken_by_character_name", "")), true)
 
 
 ## 创建一个正式卡牌牌位；可选牌连接输入，只读牌保留完整亮度，已领取牌叠加复制虚影与武将名。
-func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool, taken: bool, taken_by_character_name: String) -> void:
+## 公共牌会额外预建领取者标签，供后续状态广播原位刷新而不重建牌面。
+func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool, taken: bool, taken_by_character_name: String, create_owner_label: bool = false) -> void:
 	# 固定牌位包装器；尺寸始终等于正式111×148像素牌面，领取标签覆盖牌底而不改变换行计算。
 	var wrapper: Control = Control.new()
 	wrapper.custom_minimum_size = Vector2(111.0, 148.0)
@@ -551,21 +638,24 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		card_view.configure(card_data, definition, false, selectable, taken)
 	else:
 		card_view.configure_back(card_uid, selectable)
-	if selectable:
+	# 公共牌位即使首次以旁观状态创建，也预先连接点击信号；后续轮到本地玩家时只切换输入权限即可复用节点。
+	if selectable or create_owner_label:
 		card_view.pressed.connect(_on_card_pressed.bind(card_uid))
 	if taken:
 		card_view.modulate = taken_card_ghost_modulate
 	wrapper.add_child(card_view)
 	_card_views[card_uid] = card_view
-	if not taken:
+	if not create_owner_label:
 		return
 	# 领取者武将名标签；空名称使用稳定占位，避免配置缺失时牌底完全没有归属提示。
+	# 公共牌位始终预建并在未领取时隐藏，后续更新不再创建新节点。
 	var owner_label: Label = Label.new()
 	owner_label.position = TAKEN_CARD_LABEL_RECT.position
 	owner_label.size = TAKEN_CARD_LABEL_RECT.size
 	owner_label.z_index = 10
 	owner_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	owner_label.text = taken_by_character_name if not taken_by_character_name.is_empty() else "已领取"
+	owner_label.visible = taken
 	owner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	owner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	owner_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -573,6 +663,7 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	_apply_owner_label_style(owner_label)
 	wrapper.add_child(owner_label)
 	_owner_labels.append(owner_label)
+	_owner_labels_by_card_uid[card_uid] = owner_label
 
 
 ## 为公共牌领取者标签应用当前主题；该入口只处理配色与边距，不读取领取者数据。

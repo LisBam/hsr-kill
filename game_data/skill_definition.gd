@@ -115,7 +115,23 @@ func subscribe_timing(event_name: String, callback: Callable, role: String = "pl
 		return -1
 	# 当前对局高级触发器；由技能基类统一传入 self 与 owner_player_id，具体技能无需复制解绑字段。
 	var manager: TriggerManager = host.get("trigger_manager") as TriggerManager
-	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, condition)
+	# 技能统一生效条件；默认先校验持有者仍存活在场，再执行技能文件提供的附加条件。
+	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition)
+	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, guarded_condition)
+
+
+## 判断技能持有者失效后是否仍可接收指定时机；普通技能默认 false，明确设计为死亡后触发的技能可覆盖本接口。
+func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
+	return false
+
+
+## 统一校验技能时机订阅是否仍有效；死亡或离场持有者不会继续发动普通全局技能。
+func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable) -> bool:
+	# 技能持有者权威状态；未绑定、死亡或离场时仅允许显式覆盖的特殊技能继续接收时机。
+	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
+	if (owner == null or not owner.alive or owner.out_of_game) and not can_trigger_while_owner_inactive(event):
+		return false
+	return not custom_condition.is_valid() or bool(custom_condition.call(event))
 
 
 ## 安装被动或触发技能；具体技能可在此订阅 host.event_bus 或 host.trigger_manager。
@@ -285,6 +301,64 @@ func request_card_target_selection(title: String, prompt: String, candidates: Ar
 	# 技能恢复上下文；可在 context.target_ids_by_card_id 中提供实体牌到合法目标的组合映射。
 	var skill_context: Dictionary = _build_selection_context(context)
 	return host.call("request_card_target_choice", owner_player_id, title, prompt, candidates, target_ids, min_cards, max_cards, min_targets, max_targets, allow_cancel, skill_context) as Dictionary
+
+
+## 按稳定UID查找技能持有者当前拥有的转化材料；支持手牌、木牛“粮”与装备区，不移动实体牌。
+func get_owned_conversion_material_card(card_uid: int) -> CardInstance:
+	# 技能持有者权威状态；未绑定或角色无效时没有任何可用材料。
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if owner == null:
+		return null
+	# 手牌或木牛“粮”实体；PlayerState统一可使用牌源保证临时视为牌也能保留原实体颜色。
+	var playable_card: CardInstance = owner.find_playable_card(card_uid)
+	if playable_card != null:
+		return playable_card
+	for equipment_variant: Variant in owner.equipment.values():
+		# 当前装备实体；稳定UID匹配时允许满足“一张牌”类转化材料描述。
+		var equipment_card: CardInstance = equipment_variant as CardInstance
+		if equipment_card != null and equipment_card.uid == card_uid:
+			return equipment_card
+	return null
+
+
+## 构建单材料虚拟牌的规则覆写；材料真实颜色会覆盖调用方同名字段，防止预览或动作伪造颜色。
+func build_virtual_rule_overrides(material_card: CardInstance, base_overrides: Dictionary = {}) -> Dictionary:
+	# 本次独立规则覆写；深复制避免向技能常量或后续候选查询写入材料状态。
+	var rule_overrides: Dictionary = base_overrides.duplicate(true)
+	# 单材料真实颜色；无材料时使用none，让多材料或无色虚拟牌继续接受最终事件复核。
+	rule_overrides["card_color"] = material_card.get_color() if material_card != null else "none"
+	return rule_overrides
+
+
+## 使用材料真实颜色校验虚拟牌的完整目标组合；次数、距离、技能免疫和目标数量均走统一规则服务。
+func validate_virtual_use_for_material(virtual_definition_id: String, material_card: CardInstance, target_ids: Array[int], base_overrides: Dictionary = {}) -> String:
+	if host == null or host.get("card_rules") == null or material_card == null:
+		return "转化材料或规则服务不存在。"
+	return str(host.card_rules.validate_virtual_use(owner_player_id, virtual_definition_id, target_ids, build_virtual_rule_overrides(material_card, base_overrides)))
+
+
+## 为每张候选材料计算其转化牌合法目标，并同时返回全部目标并集；UI与AI据此避免先选到材料不兼容的目标。
+func build_virtual_target_selection_data(virtual_definition_id: String, candidates: Array[Dictionary], base_overrides: Dictionary = {}) -> Dictionary:
+	# 实体UID到合法目标数组的映射；键使用字符串保证网络序列化后仍可稳定查询。
+	var target_ids_by_card_id: Dictionary = {}
+	# 全部材料合法目标的并集；用于材料尚未选中时展示至少存在一种材料可以命中的角色。
+	var all_target_ids: Array[int] = []
+	if host == null or host.get("card_rules") == null:
+		return {"target_ids":all_target_ids, "target_ids_by_card_id":target_ids_by_card_id}
+	for candidate: Dictionary in candidates:
+		# 当前候选材料UID；无效候选仍写入空映射，禁止界面回退到全部目标。
+		var material_card_uid: int = int(candidate.get("uid", -1))
+		# 当前权威材料实体；等待期间已离区的候选自然得到空目标集合。
+		var material_card: CardInstance = get_owned_conversion_material_card(material_card_uid)
+		# 当前材料对应的合法目标；传入真实颜色后，【琥珀】等来牌限制会在预览与AI枚举阶段生效。
+		var material_target_ids: Array[int] = []
+		if material_card != null:
+			material_target_ids.assign(host.card_rules.list_legal_virtual_targets(owner_player_id, virtual_definition_id, build_virtual_rule_overrides(material_card, base_overrides)))
+		target_ids_by_card_id[str(material_card_uid)] = material_target_ids.duplicate()
+		for target_id: int in material_target_ids:
+			if not all_target_ids.has(target_id):
+				all_target_ids.append(target_id)
+	return {"target_ids":all_target_ids, "target_ids_by_card_id":target_ids_by_card_id}
 
 
 ## 构建技能选择恢复上下文；调用方同名字段不能覆盖稳定技能归属，避免响应被错误技能消费。

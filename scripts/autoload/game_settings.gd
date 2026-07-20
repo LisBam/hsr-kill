@@ -25,6 +25,18 @@ signal online_avatar_character_changed(character_id: String)
 ## 下一局人数变化信号；主菜单与局内菜单收到后同步各自输入框，不修改正在进行的对局人数。
 signal next_match_player_count_changed(player_count: int)
 
+## 自选全部武将、座次与身份开关变化信号；该设置只在之后由离线玩家或房主创建的新对局中生效。
+signal custom_character_assignment_changed(enabled: bool)
+
+## 房主调整全部 AI 武将开关变化信号；当前对局已越过选将阶段时不会中途插入流程。
+signal customize_ai_characters_changed(enabled: bool)
+
+## 手气卡可用次数变化信号；参数为0至5或-1，-1表示无限次，仅影响之后创建的新对局。
+signal mulligan_limit_changed(limit: int)
+
+## AI 是否使用手气卡的开关变化信号；实际次数仍受手气卡数量设置约束。
+signal ai_uses_mulligan_changed(enabled: bool)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -35,6 +47,17 @@ enum NameMode {
 const CARD_NAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"mode":NameMode.CUSTOM, "label":"崩铁杀"},
 	{"mode":NameMode.ORIGINAL, "label":"三国杀"},
+]
+
+## 手气卡数量下拉选项；稳定值0表示关闭，1至5表示最多刷新次数，-1表示无限次。
+const MULLIGAN_LIMIT_OPTIONS: Array[Dictionary] = [
+	{"value":0, "label":"关闭"},
+	{"value":1, "label":"一次"},
+	{"value":2, "label":"两次"},
+	{"value":3, "label":"三次"},
+	{"value":4, "label":"四次"},
+	{"value":5, "label":"五次"},
+	{"value":-1, "label":"无限次"},
 ]
 
 ## AI 响应等待时间的最小值；默认0.05秒，在保留可见异步边界的同时支持快速对局。
@@ -111,6 +134,18 @@ var online_avatar_character_id: String = ""
 
 ## 当前下一局人数；默认8人，仅影响之后创建或重开的身份局，不修改正在运行的规则状态。
 var next_match_player_count: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
+
+## 是否允许玩家在选将时打开全部武将并自选座次与身份；默认关闭，仅在下一局初始化时读取。
+var custom_character_assignment_enabled: bool = false
+
+## 是否在全员初次选将后由房主调整 AI 武将；默认关闭，仅在下一局开局流程中读取。
+var customize_ai_characters_enabled: bool = false
+
+## 每名玩家下一局可使用的手气卡次数；0关闭、1至5为有限次数、-1为无限次。
+var mulligan_limit: int = 0
+
+## AI 是否根据起始手牌质量自动使用手气卡；默认关闭，且手气卡数量为0时不会产生额外阶段。
+var ai_uses_mulligan_enabled: bool = false
 
 ## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
 var _settings_file_path: String = SETTINGS_FILE_PATH
@@ -248,6 +283,44 @@ func set_next_match_player_count(player_count: int) -> void:
 	next_match_player_count_changed.emit(next_match_player_count)
 
 
+## 设置下一局是否开放全部武将、座次与身份自选；当前已经创建的玩家与身份不会被修改。
+func set_custom_character_assignment_enabled(enabled: bool) -> void:
+	if custom_character_assignment_enabled == enabled:
+		return
+	custom_character_assignment_enabled = enabled
+	_queue_settings_save()
+	custom_character_assignment_changed.emit(custom_character_assignment_enabled)
+
+
+## 设置下一局是否允许房主在初次选将后调整全部 AI 武将。
+func set_customize_ai_characters_enabled(enabled: bool) -> void:
+	if customize_ai_characters_enabled == enabled:
+		return
+	customize_ai_characters_enabled = enabled
+	_queue_settings_save()
+	customize_ai_characters_changed.emit(customize_ai_characters_enabled)
+
+
+## 设置下一局手气卡次数；只接受0至5与-1，其他负值回退关闭，超过5限制为5。
+func set_mulligan_limit(limit: int) -> void:
+	# 标准化后的次数；-1保留无限语义，其余输入限制到0至5。
+	var normalized_limit: int = -1 if limit == -1 else clampi(limit, 0, 5)
+	if mulligan_limit == normalized_limit:
+		return
+	mulligan_limit = normalized_limit
+	_queue_settings_save()
+	mulligan_limit_changed.emit(mulligan_limit)
+
+
+## 设置 AI 是否使用手气卡；开关不自动改变玩家手气卡数量配置。
+func set_ai_uses_mulligan_enabled(enabled: bool) -> void:
+	if ai_uses_mulligan_enabled == enabled:
+		return
+	ai_uses_mulligan_enabled = enabled
+	_queue_settings_save()
+	ai_uses_mulligan_changed.emit(ai_uses_mulligan_enabled)
+
+
 ## 返回符合联机协议的玩家名称；该纯函数可供设置界面预览与未来资料持久化复用。
 func normalize_online_player_name(player_name: String) -> String:
 	# 去除首尾空白后的名称；内部空格保留，允许玩家使用自然昵称。
@@ -282,6 +355,12 @@ func _load_saved_settings() -> void:
 	ui_style_id = UIStyleRegistry.normalize_style_id(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)))
 	auto_identity_marking_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled))
 	next_match_player_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)), MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
+	customize_ai_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled))
+	# 已保存手气卡次数；-1保留无限次，其余旧值限制到0至5。
+	var stored_mulligan_limit: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit))
+	mulligan_limit = -1 if stored_mulligan_limit == -1 else clampi(stored_mulligan_limit, 0, 5)
+	ai_uses_mulligan_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled))
 	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
 	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
 
@@ -344,6 +423,10 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
 	last_save_error = settings_file.save(_settings_file_path)

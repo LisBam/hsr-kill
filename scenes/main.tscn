@@ -244,9 +244,9 @@ anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -286.0
-offset_top = 58.0
+offset_top = 52.0
 offset_right = -18.0
-offset_bottom = 500.0
+offset_bottom = 642.0
 grow_horizontal = 0
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
@@ -313,6 +313,40 @@ offset_right = 22.0
 offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
+
+[node name="CustomCharacterAssignmentCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320001]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+text = "自选全武将、座次与身份"
+
+[node name="CustomizeAiCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320002]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+text = "自选所有AI的武将"
+
+[node name="MulliganLimitRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320003]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="MulliganLimitLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/MulliganLimitRow" unique_id=190320004]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "手气卡数量"
+vertical_alignment = 1
+
+[node name="MulliganLimitOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/MulliganLimitRow" unique_id=190320005]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 34)
+layout_mode = 2
+
+[node name="AiUsesMulliganCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320006]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+text = "AI使用手气卡"
 
 [node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
 layout_mode = 2
@@ -552,7 +586,7 @@ offset_bottom = -182.0
 grow_horizontal = 0
 grow_vertical = 0
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
-text = "回合结束"
+text = "结束阶段"
 
 [node name="EquipmentPanel" type="PanelContainer" parent="." unique_id=874383388]
 unique_name_in_owner = true
@@ -713,17 +747,20 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
-[node name="CharacterSelectionTitle" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=98725864]
+[node name="CharacterSelectionTitle" type="RichTextLabel" parent="CharacterSelectionPanel/SelectionFrame" unique_id=98725864]
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 24.0
 offset_top = 18.0
-offset_right = 1016.0
+offset_right = 842.0
 offset_bottom = 52.0
-theme_override_colors/font_color = Color(0.94, 0.82, 0.57, 1)
-theme_override_font_sizes/font_size = 24
+mouse_filter = 2
+theme_override_colors/default_color = Color(0.94, 0.82, 0.57, 1)
+theme_override_font_sizes/normal_font_size = 24
+bbcode_enabled = true
 text = "领袖选将"
-horizontal_alignment = 1
+fit_content = true
+scroll_active = false
 
 [node name="CharacterSelectionStatus" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1416584960]
 unique_name_in_owner = true
@@ -736,6 +773,16 @@ offset_bottom = 88.0
 theme_override_colors/font_color = Color(0.78, 0.76, 0.68, 1)
 text = "从五张候选武将牌中选择一张"
 horizontal_alignment = 1
+
+[node name="AllCharactersButton" type="Button" parent="CharacterSelectionPanel/SelectionFrame" unique_id=190310001]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 852.0
+offset_top = 16.0
+offset_right = 1016.0
+offset_bottom = 54.0
+text = "所有武将"
 
 [node name="LeaderCharacterLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1459193555]
 unique_name_in_owner = true
@@ -776,6 +823,48 @@ offset_left = 214.0
 offset_top = 106.0
 offset_right = 1016.0
 offset_bottom = 304.0
+
+[node name="SeatSelectionLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=190310002]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 24.0
+offset_top = 370.0
+offset_right = 106.0
+offset_bottom = 404.0
+text = "选择座次"
+vertical_alignment = 1
+
+[node name="SeatButtons" type="HBoxContainer" parent="CharacterSelectionPanel/SelectionFrame" unique_id=190310003]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 112.0
+offset_top = 370.0
+offset_right = 1016.0
+offset_bottom = 404.0
+theme_override_constants/separation = 6
+
+[node name="IdentitySelectionLabel" type="Label" parent="CharacterSelectionPanel/SelectionFrame" unique_id=190310004]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 24.0
+offset_top = 414.0
+offset_right = 106.0
+offset_bottom = 448.0
+text = "选择身份"
+vertical_alignment = 1
+
+[node name="IdentityButtons" type="HBoxContainer" parent="CharacterSelectionPanel/SelectionFrame" unique_id=190310005]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 112.0
+offset_top = 414.0
+offset_right = 1016.0
+offset_bottom = 448.0
+theme_override_constants/separation = 8
 
 [node name="ConfirmCharacterButton" type="Button" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1555114007]
 unique_name_in_owner = true
@@ -1146,9 +1235,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -252.0
-offset_top = -232.0
+offset_top = -310.0
 offset_right = 252.0
-offset_bottom = 232.0
+offset_bottom = 310.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -1227,6 +1316,45 @@ offset_right = 22.0
 offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
+
+[node name="MainMenuCustomCharacterAssignmentCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320011]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "自选全武将、座次与身份"
+
+[node name="MainMenuCustomizeAiCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320012]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "自选所有AI的武将"
+
+[node name="MainMenuMulliganLimitRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320013]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuMulliganLimitLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuMulliganLimitRow" unique_id=190320014]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "手气卡数量"
+vertical_alignment = 1
+
+[node name="MainMenuMulliganLimitOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuMulliganLimitRow" unique_id=190320015]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(156, 34)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+
+[node name="MainMenuAiUsesMulliganCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320016]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "AI使用手气卡"
 
 [node name="MainMenuAiResponseDelayLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=489346337]
 unique_name_in_owner = true

@@ -60,9 +60,11 @@ func _run() -> void:
 	var player_views: Dictionary = main_instance.get("_player_views") as Dictionary
 	# 1号目标玩家视图；用于验证合法目标和已选目标描边状态。
 	var target_view: PlayerTargetView = player_views.get(1) as PlayerTargetView
+	# 本地玩家武将牌；纯目标请求中不属于合法候选，应使用统一非法目标暗色。
+	var local_player_view: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
 	# 牌桌目标指示线层；技能尚未选中目标时不能提前出现指示线。
 	var animation_layer: CardUseAnimationLayer = main_instance.get_node("%CardUseAnimationLayer") as CardUseAnimationLayer
-	if selection_panel.visible or confirm_button.disabled == false or target_view == null or animation_layer == null or not target_view.is_legal_target or target_view.is_target_selected or animation_layer._line_presentations.has(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY):
+	if selection_panel.visible or confirm_button.disabled == false or target_view == null or local_player_view == null or animation_layer == null or not target_view.is_legal_target or target_view.is_target_selected or not target_view.is_target_selection_active or not local_player_view.is_target_selection_active or local_player_view.is_legal_target or local_player_view.modulate.r >= target_view.modulate.r or animation_layer._line_presentations.has(CardUseAnimationLayer.TARGET_PREVIEW_PRESENTATION_KEY):
 		_fail("target_initial")
 		return
 	main_instance.call("_on_target_pressed", 1)
@@ -131,11 +133,94 @@ func _run() -> void:
 	# 同一操作行中的追加取消按钮；control询问不得重新打开中央 CardSelectionPanel。
 	var inline_cancel_button: Button = main_instance.get_node_or_null("InteractionPanel/InteractionVBox/ActionRow/InlineControlCancelButton") as Button
 	var interaction_panel: Control = main_instance.get_node("InteractionPanel") as Control
-	if selection_panel.visible or not interaction_panel.visible or confirm_button.text != "1.竖直目标武将牌" or cancel_button.text != "2.弃置目标手牌" or inline_cancel_button == null or not inline_cancel_button.visible:
+	if selection_panel.visible or not interaction_panel.visible or confirm_button.text != "1.竖直目标武将牌" or cancel_button.text != "2.弃置目标手牌" or inline_cancel_button == null or not inline_cancel_button.visible or local_player_view.is_target_selection_active or not local_player_view.modulate.is_equal_approx(Color.WHITE):
 		_fail("bingfeng_inline_control")
+		return
+	if not await _test_active_skill_second_click_cancels(main_instance, match_controller):
+		return
+	# 对局记录与局内菜单同时展开；未被控件消费的左键代表点击牌桌空白，应一次收起两个浮层。
+	var match_log_panel: MatchLogPanel = main_instance.get_node("LogPanel") as MatchLogPanel
+	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
+	match_log_panel.set_expanded(true)
+	match_menu.set_menu_open(true)
+	var blank_click_event: InputEventMouseButton = InputEventMouseButton.new()
+	blank_click_event.button_index = MOUSE_BUTTON_LEFT
+	blank_click_event.pressed = true
+	main_instance.call("_unhandled_input", blank_click_event)
+	if match_log_panel.is_expanded() or match_menu.is_menu_open():
+		_fail("blank_click_overlay_close")
 		return
 	print("SKILL_TARGET_UI_PASS")
 	get_tree().quit(0)
+
+
+## 建立真实【药理】主动流程并再次点击同一技能按钮；取消后材料仍在原手牌且出牌请求重新开放。
+func _test_active_skill_second_click_cancels(main_instance: Control, match_controller: MatchController) -> bool:
+	# 启动菜单在专项对局期间隐藏；空白点击与技能栏均按正式局内输入层级工作。
+	var main_menu: MainMenu = main_instance.get_node("MainMenu") as MainMenu
+	main_menu.visible = false
+	match_controller.event_scheduler.reset()
+	match_controller._pending_card_choice.clear()
+	match_controller._pending_negation_choices.clear()
+	match_controller._play_choice_request_id = -1
+	match_controller._play_choice_event_id = -1
+	match_controller._play_choice_actor_id = -1
+	match_controller._play_choice_match_id = ""
+	# 真实权威状态；娜塔莎持有一张红色手牌，满足【药理】主动发动和后续可取消组合选择条件。
+	var game_state: GameState = GameState.new()
+	game_state.match_id = "skill-second-click-cancel"
+	game_state.current_player_id = 0
+	game_state.current_phase = "play"
+	game_state.phase_index = 3
+	var local_player: PlayerState = PlayerState.new(0, "本地玩家")
+	local_player.character_id = "natasha"
+	local_player.identity = "leader"
+	local_player.identity_revealed = true
+	local_player.max_hp = 3
+	local_player.hp = 3
+	# 【药理】红色材料；取消技能后该实体必须仍位于持有者手牌区。
+	var red_material_card: CardInstance = CardInstance.new("shan", "heart", 2)
+	red_material_card.zone = "hand"
+	red_material_card.owner_id = 0
+	local_player.hand.append(red_material_card)
+	var target_player: PlayerState = PlayerState.new(1, "目标玩家")
+	target_player.character_id = "xier"
+	target_player.identity = "rebel"
+	target_player.identity_revealed = true
+	game_state.players.append(local_player)
+	game_state.players.append(target_player)
+	match_controller.state = game_state
+	match_controller.card_rules = CardRuleService.new(game_state, match_controller)
+	match_controller.effect_resolver = CardEffectResolver.new(match_controller, game_state)
+	match_controller.card_movement = CardMovementService.new(game_state)
+	match_controller.trigger_manager = TriggerManager.new()
+	match_controller.timing_service = RuleTimingService.new(match_controller.event_bus, match_controller.trigger_manager, game_state)
+	# 【药理】独立运行时实例；与正式开局相同地绑定、安装并登记到玩家技能表。
+	var yaoli: SkillDefinition = GameDatabase.create_skill("yaoli")
+	if yaoli == null:
+		return _fail_bool("yaoli_missing")
+	yaoli.bind(match_controller, 0)
+	yaoli.install()
+	match_controller.skill_instances_by_player = {0:{"yaoli":yaoli}}
+	match_controller.call("_begin_play_choice", 0)
+	match_controller.call("_emit_state")
+	await get_tree().process_frame
+	# 初次技能按钮；发动后应保持选中且仍可点击，以承担第二次点击取消语义。
+	var skill_views: Dictionary = main_instance.get("_skill_views") as Dictionary
+	var yaoli_button: SkillButtonView = skill_views.get("yaoli") as SkillButtonView
+	if yaoli_button == null or yaoli_button.disabled:
+		return _fail_bool("yaoli_button_unavailable")
+	main_instance.call("_on_skill_requested", "yaoli")
+	await get_tree().process_frame
+	yaoli_button = (main_instance.get("_skill_views") as Dictionary).get("yaoli") as SkillButtonView
+	var inline_choice: Dictionary = main_instance.get("_inline_card_choice") as Dictionary
+	if yaoli_button == null or yaoli_button.disabled or not yaoli_button.is_skill_selected or str((inline_choice.get("context", {}) as Dictionary).get("skill_id", "")) != "yaoli":
+		return _fail_bool("yaoli_release_not_selected")
+	main_instance.call("_on_skill_requested", "yaoli")
+	await get_tree().process_frame
+	if match_controller.has_pending_card_choice() or local_player.find_hand_card(red_material_card.uid) == null or not bool(match_controller.call("_has_active_play_choice")) or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty():
+		return _fail_bool("yaoli_second_click_cancel")
+	return true
 
 
 ## 构造本地观察者快照；只包含技能目标选择需要的公开玩家与本地手牌。
@@ -151,3 +236,9 @@ func _make_snapshot(material_card: Dictionary, request_id: int) -> Dictionary:
 func _fail(reason: String) -> void:
 	printerr("SKILL_TARGET_UI_FAIL %s" % reason)
 	get_tree().quit(1)
+
+
+## 输出失败并返回 false；异步辅助场景可直接把结果交还主流程停止后续断言。
+func _fail_bool(reason: String) -> bool:
+	_fail(reason)
+	return false

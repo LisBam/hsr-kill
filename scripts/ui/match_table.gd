@@ -9,7 +9,8 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
 ## 可自动锁定自身目标的牌定义 ID；【桃】【酒】与【无中生有】按自身牌规则自动选择本人，自身限定装备另由目标模式通用判断。
-const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wuzhong"]
+## 【闪电】同样只有使用者本人这一名合法目标，因此与既有自身牌共用自动锁定流程。
+const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wuzhong", "shandian"]
 
 ## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
 const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/components/information_box_layer.tscn")
@@ -454,7 +455,7 @@ func _ready() -> void:
 	_refresh_match_menu_authority_controls()
 	main_menu.set_next_player_count(saved_next_match_player_count)
 	main_menu.set_lan_default_port(match_controller.network_gateway.default_lan_port)
-	character_selection_panel.character_selected.connect(_on_character_selected)
+	character_selection_panel.selection_submitted.connect(_on_character_selection_submitted)
 	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))
 	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
@@ -594,7 +595,7 @@ func _configure_interaction_controls() -> void:
 func _create_identity_mark_menu() -> void:
 	_identity_mark_menu = PopupMenu.new()
 	_identity_mark_menu.name = "IdentityMarkMenu"
-	_identity_mark_menu.add_item("？", 3)
+	_identity_mark_menu.add_item("?", 3)
 	_identity_mark_menu.add_item("忠", 0)
 	_identity_mark_menu.add_item("反", 1)
 	_identity_mark_menu.add_item("内", 2)
@@ -1167,9 +1168,14 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var skill_id: String = str(skill_id_variant)
 			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
 			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+			# 当前技能是否拥有正在进行的可取消释放流程；选中按钮允许再次点击放弃本次材料或目标选择。
+			var skill_selected: bool = _get_selected_skill_release_id() == skill_id
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
-			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context())
-			(_skill_views[skill_id] as SkillButtonView).configure(skill_definition, skill_available)
+			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
+			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
+			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
+			existing_skill_view.configure(skill_definition, skill_available)
+			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
 	_rendered_skill_character_id = local_character_id
@@ -1191,11 +1197,14 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		if skill_definition.is_empty():
 			skill_definition = {"id":skill_id, "name":skill_id, "description":"技能元数据尚未登记。"}
+		# 当前技能是否拥有正在进行的可取消释放流程；初次创建按钮时同步选中描边。
+		var skill_selected: bool = _get_selected_skill_release_id() == skill_id
 		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
-		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context())
+		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		skill_button.configure(skill_definition, skill_available)
+		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
 		skill_button.information_dismissed.connect(_on_information_dismissed.bind(skill_button))
@@ -1287,6 +1296,20 @@ func _layout_auto_managed_hand_overlay() -> void:
 
 ## 响应技能按钮请求；不可发动技能静默忽略，可主动发动技能通过统一 PlayerAction 进入规则核心。
 func _on_skill_requested(skill_id: String) -> void:
+	# 响应转化技能已处于选中状态时，第二次点击只退出材料转化模式，不取消整条响应请求。
+	if _active_response_skill_id == skill_id:
+		_active_response_skill_id = ""
+		_inline_selected_card_uids.clear()
+		error_label.text = ""
+		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+		_render_local_hand()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
+		_refresh_selection_text()
+		return
+	# 主动技能已经创建可取消的内联选择时，第二次点击提交标准取消响应，不消费材料、目标或发动次数。
+	if _is_originating_inline_skill_release(skill_id):
+		_cancel_originating_inline_skill_release()
+		return
 	# 被请求的技能定义；用于展示名称、说明和接入状态。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 	# 不可主动发动、条件不满足或锁定技按钮保持静默；说明只由工具提示承担，不写入错误提示区。
@@ -1307,6 +1330,36 @@ func _on_skill_requested(skill_id: String) -> void:
 	var action: PlayerAction = PlayerAction.new("use_skill", match_controller.local_human_player_id)
 	action.payload = {"skill_id":skill_id}
 	match_controller.submit_action(action)
+
+
+## 返回当前界面正在选择材料或目标的主动技能 ID；空字符串表示没有可由技能按钮再次取消的释放流程。
+func _get_selected_skill_release_id() -> String:
+	if not _active_response_skill_id.is_empty():
+		return _active_response_skill_id
+	if _inline_card_choice.is_empty() or not bool(_inline_card_choice.get("allow_cancel", false)):
+		return ""
+	# 当前技能选择上下文；基类会为主动技能请求写入稳定技能 ID 与持有者 ID。
+	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	# 当前技能 ID；只有拥有主动按钮的技能才使用再次点击取消语义，被动触发询问继续使用原取消按钮。
+	var skill_id: String = str(context.get("skill_id", ""))
+	return skill_id if bool(GameDatabase.get_skill(skill_id).get("ui_enabled", false)) else ""
+
+
+## 判断指定技能是否正拥有当前可取消内联选择；用于把第二次按钮点击与其他技能的新发动请求区分开。
+func _is_originating_inline_skill_release(skill_id: String) -> bool:
+	return not skill_id.is_empty() and _get_selected_skill_release_id() == skill_id and _active_response_skill_id.is_empty()
+
+
+## 取消当前主动技能创建的内联选择；文字选项与牌/目标请求分别沿用既有标准 ChoiceResponse 提交入口。
+func _cancel_originating_inline_skill_release() -> void:
+	if _inline_card_choice.is_empty() or not bool(_inline_card_choice.get("allow_cancel", false)):
+		return
+	if _is_inline_control_choice(_inline_card_choice):
+		_submit_inline_control_choice("", false)
+	else:
+		# 空材料数组；confirmed=false 明确表达整次主动技能选择取消，不会被最少选择数量误判为确认。
+		var cancelled_card_uids: Array[int] = []
+		_submit_inline_card_choice(cancelled_card_uids, false)
 
 
 ## 返回本地技能按钮当前使用的主动入口上下文；响应请求之外保持空字典并沿用普通出牌阶段判断。
@@ -1690,7 +1743,10 @@ func _on_card_pressed(card_uid: int) -> void:
 		var selected_definition: Dictionary = _get_cached_card_definition(selected_definition_id)
 		# 自身限定装备；所有 type=equipment 且 target_mode=self 的装备都与自身牌使用同一自动锁定流程。
 		var is_self_only_equipment: bool = str(selected_definition.get("type", "")) == "equipment" and target_mode == "self"
-		if ((target_mode == "self" or target_mode == "self_wounded") and AUTO_SELECTED_SELF_CARD_DEFINITION_IDS.has(selected_definition_id)) or is_self_only_equipment:
+		# 唯一合法目标；自动锁定只在规则预览确认本人是唯一候选时成立，异常空候选不会伪造目标。
+		var legal_target_ids: Array = initial_preview.get("legal_target_ids", []) as Array
+		var only_self_is_legal: bool = legal_target_ids.size() == 1 and int(legal_target_ids[0]) == match_controller.local_human_player_id
+		if only_self_is_legal and (((target_mode == "self" or target_mode == "self_wounded") and AUTO_SELECTED_SELF_CARD_DEFINITION_IDS.has(selected_definition_id)) or is_self_only_equipment):
 			_selected_target_ids.assign([match_controller.local_human_player_id])
 			_auto_locked_target_id = match_controller.local_human_player_id
 		elif target_mode == "all_players" or target_mode == "all_others":
@@ -1847,6 +1903,16 @@ func _on_target_pressed(target_id: int) -> void:
 func _on_persistent_target_pressed(player_view: PlayerTargetView) -> void:
 	if player_view == null or not is_instance_valid(player_view):
 		return
+	if str(_snapshot.get("current_phase", "")) == "ai_character_adjustment":
+		# 当前本地是否为房主；其他玩家只显示等待提示，点击武将牌不提交网络动作。
+		var pre_game_setup: Dictionary = _snapshot.get("pre_game_setup", {}) as Dictionary
+		if int(pre_game_setup.get("host_player_id", -1)) != match_controller.local_human_player_id:
+			return
+		# 房主调整 AI 目标动作；核心仍会再次校验房主身份与目标属于内置 AI。
+		var adjustment_action: PlayerAction = PlayerAction.new("select_ai_adjustment_target", match_controller.local_human_player_id)
+		adjustment_action.payload = {"target_player_id":player_view.player_id}
+		match_controller.submit_action(adjustment_action)
+		return
 	_on_target_pressed(player_view.player_id)
 
 
@@ -1892,6 +1958,15 @@ func _uses_rule_expanded_targets() -> bool:
 	return str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"]
 
 
+## 判断当前界面是否正在手动选择目标；规则自动展开的群体牌和没有目标维度的请求不会压暗武将牌。
+func _is_manual_target_selection_active() -> bool:
+	if not _inline_card_choice.is_empty():
+		return str(_inline_card_choice.get("choice_type", "card")) in ["target", "card_target"]
+	if not _active_equipment_action.is_empty():
+		return int(_card_use_preview.get("max_targets", 0)) > 0
+	return _selected_card_uid >= 0 and not _uses_rule_expanded_targets() and int(_card_use_preview.get("max_targets", 0)) > 0
+
+
 ## 将本地玩家自身加入或移出目标列表。
 func _on_self_target_pressed() -> void:
 	_on_target_pressed(match_controller.local_human_player_id)
@@ -1901,6 +1976,12 @@ func _on_self_target_pressed() -> void:
 func _on_use_pressed() -> void:
 	if _should_show_post_match_actions():
 		_on_restart_requested(match_menu.get_next_player_count())
+		return
+	if str(_snapshot.get("current_phase", "")) == "ai_character_adjustment":
+		match_controller.submit_action(PlayerAction.new("finish_ai_character_adjustment", match_controller.local_human_player_id))
+		return
+	if str(_snapshot.get("current_phase", "")) == "starting_hand_mulligan":
+		match_controller.submit_action(PlayerAction.new("mulligan_refresh", match_controller.local_human_player_id))
 		return
 	if not _active_equipment_action.is_empty():
 		_submit_equipment_action()
@@ -1994,22 +2075,42 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif key_event.keycode == KEY_SPACE and _selected_card_uid < 0 and _active_equipment_action.is_empty() and not end_play_button.disabled:
 			_on_end_play_pressed()
 			get_viewport().set_input_as_handled()
-	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
-		if not _active_equipment_action.is_empty():
-			_on_cancel_pressed()
+	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		# 当前未被任何控件消费的鼠标按键；左键表示点击牌桌空白处，右键沿用规则选择取消快捷操作。
+		var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+		if mouse_event.button_index == MOUSE_BUTTON_LEFT and _close_open_match_overlays_from_blank_click():
 			get_viewport().set_input_as_handled()
-		elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
-			_on_zhenqi_cancel_pressed()
-			get_viewport().set_input_as_handled()
-		elif _is_inline_control_choice(_inline_card_choice) and bool(_inline_card_choice.get("allow_cancel", false)):
-			_submit_inline_control_choice("", false)
-			get_viewport().set_input_as_handled()
-		elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
-			_on_cancel_pressed()
-			get_viewport().set_input_as_handled()
-		elif _selected_card_uid >= 0:
-			_on_cancel_pressed()
-			get_viewport().set_input_as_handled()
+		elif mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			if not _active_equipment_action.is_empty():
+				_on_cancel_pressed()
+				get_viewport().set_input_as_handled()
+			elif _is_inline_zhenqi_cost_choice(_inline_card_choice):
+				_on_zhenqi_cancel_pressed()
+				get_viewport().set_input_as_handled()
+			elif _is_inline_control_choice(_inline_card_choice) and bool(_inline_card_choice.get("allow_cancel", false)):
+				_submit_inline_control_choice("", false)
+				get_viewport().set_input_as_handled()
+			elif not _inline_card_choice.is_empty() and bool(_inline_card_choice.get("allow_cancel", false)):
+				_on_cancel_pressed()
+				get_viewport().set_input_as_handled()
+			elif _selected_card_uid >= 0:
+				_on_cancel_pressed()
+				get_viewport().set_input_as_handled()
+
+
+## 关闭点击牌桌空白处时仍展开的对局记录与局内菜单；返回 true 表示本次点击实际收起了至少一个浮层。
+func _close_open_match_overlays_from_blank_click() -> bool:
+	if main_menu != null and main_menu.visible:
+		return false
+	# 是否关闭了任一浮层；两个面板可同时展开，因此需要分别处理后再统一返回。
+	var closed_any_overlay: bool = false
+	if match_log_panel != null and match_log_panel.is_expanded():
+		match_log_panel.set_expanded(false)
+		closed_any_overlay = true
+	if match_menu != null and match_menu.is_menu_open():
+		match_menu.set_menu_open(false)
+		closed_any_overlay = true
+	return closed_any_overlay
 
 
 ## 处理没有被模态界面、详情框或选牌流程消费的安卓返回键；主页退出应用，对局中切换局内菜单。
@@ -2024,6 +2125,9 @@ func _on_unhandled_android_back_requested() -> void:
 func _on_cancel_pressed() -> void:
 	if _should_show_post_match_actions():
 		_on_main_menu_requested()
+		return
+	if str(_snapshot.get("current_phase", "")) == "starting_hand_mulligan":
+		match_controller.submit_action(PlayerAction.new("mulligan_finish", match_controller.local_human_player_id))
 		return
 	if not _active_equipment_action.is_empty():
 		_clear_equipment_action()
@@ -2087,6 +2191,8 @@ func _on_name_mode_pressed(mode: int) -> void:
 ## 响应名称模式变化并重新渲染现有快照；技能说明中的卡牌引用与牌面使用同一名称模式。
 func _on_card_name_mode_changed(_mode: GameSettings.NameMode) -> void:
 	match_menu.refresh_card_name_text()
+	if information_box != null and is_instance_valid(information_box):
+		information_box.refresh_card_name_mode()
 	if not _snapshot.is_empty():
 		_render_players()
 		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
@@ -2620,6 +2726,29 @@ func _on_character_selected(character_id: String) -> void:
 	match_controller.submit_action(action)
 
 
+## 把选将面板提交的完整武将、座次、身份或 AI 调整数据转换为对应标准动作。
+func _on_character_selection_submitted(selection_data: Dictionary) -> void:
+	# 当前选将用途；AI 调整与初次选将使用不同权威动作，不能只凭目标 ID 猜测。
+	var selection_kind: String = str(selection_data.get("selection_kind", "initial"))
+	if selection_kind == "ai_adjustment":
+		# 房主调整 AI 武将动作；目标与武将 ID 均由当前私有选将快照产生。
+		var adjustment_action: PlayerAction = PlayerAction.new("set_ai_character", match_controller.local_human_player_id)
+		adjustment_action.payload = {
+			"target_player_id":int(selection_data.get("target_player_id", -1)),
+			"character_id":str(selection_data.get("character_id", "")),
+		}
+		match_controller.submit_action(adjustment_action)
+		return
+	# 初次选将动作；普通模式的座次和身份保持无效默认值，自选模式由核心服务复核联动与剩余名额。
+	var action: PlayerAction = PlayerAction.new("select_character", match_controller.local_human_player_id)
+	action.payload = {
+		"character_id":str(selection_data.get("character_id", "")),
+		"seat_number":int(selection_data.get("seat_number", -1)),
+		"identity":str(selection_data.get("identity", "")),
+	}
+	match_controller.submit_action(action)
+
+
 ## 追加一条规则日志并自动滚动到底部。
 func _on_log_added(message: String) -> void:
 	log_view.append_text("%s\n" % message)
@@ -3060,6 +3189,14 @@ func _refresh_selection_text() -> void:
 	if _should_show_post_match_actions():
 		_refresh_post_match_actions()
 		return
+	# 房主调整 AI 武将阶段；房主可点击合法 AI 并用确定结束，其他玩家只显示等待提示。
+	if str(_snapshot.get("current_phase", "")) == "ai_character_adjustment":
+		_refresh_ai_character_adjustment_text()
+		return
+	# 起始手牌手气卡阶段；每名真人只操作自己的刷新与结束按钮。
+	if str(_snapshot.get("current_phase", "")) == "starting_hand_mulligan":
+		_refresh_starting_hand_mulligan_text()
+		return
 	# 本地玩家托管时不显示任何牌、技能、响应或结束阶段操作；手牌遮罩仍保留“取消托管”按钮以外的所有输入隔离。
 	if bool(_get_player_snapshot(match_controller.local_human_player_id).get("auto_managed", false)):
 		interaction_panel.visible = false
@@ -3113,6 +3250,49 @@ func _refresh_selection_text() -> void:
 		interaction_guide_label.text = "请选择目标"
 	use_button.disabled = not can_act or (not bool(_card_use_preview.get("can_submit", false)) and not can_confirm_recast)
 	%CancelButton.visible = true
+	_refresh_component_states()
+
+
+## 显示房主调整 AI 武将阶段的操作提示；局域网客户端不能看到可提交按钮。
+func _refresh_ai_character_adjustment_text() -> void:
+	# 当前公共开局设置；包含房主稳定玩家 ID 与可点击 AI 目标集合。
+	var pre_game_setup: Dictionary = _snapshot.get("pre_game_setup", {}) as Dictionary
+	# 当前本地玩家是否为权威房主；离线模式同样使用本地真人 ID。
+	var is_authority_player: bool = int(pre_game_setup.get("host_player_id", -1)) == match_controller.local_human_player_id
+	interaction_panel.visible = true
+	selection_label.visible = false
+	selection_label.text = ""
+	interaction_guide_label.text = "请选择需要修改武将的角色" if is_authority_player else "房主调整武将中..."
+	use_button.visible = is_authority_player
+	use_button.text = "结束修改"
+	use_button.disabled = not is_authority_player
+	%CancelButton.visible = false
+	end_play_button.visible = false
+	end_play_button.disabled = true
+	_refresh_component_states()
+
+
+## 显示本地玩家手气卡询问；确认刷新，取消表示保留当前手牌并完成自己的开局确认。
+func _refresh_starting_hand_mulligan_text() -> void:
+	# 本地私有手气卡状态；房主按观察者裁剪，其他玩家看不到剩余次数。
+	var mulligan_snapshot: Dictionary = _snapshot.get("starting_hand_mulligan", {}) as Dictionary
+	# 当前玩家是否仍需操作；已完成玩家只显示等待其他玩家。
+	var can_choose: bool = bool(mulligan_snapshot.get("can_choose", false))
+	interaction_panel.visible = true
+	selection_label.visible = false
+	selection_label.text = ""
+	use_button.visible = can_choose
+	use_button.text = "使用手气卡"
+	use_button.disabled = not bool(mulligan_snapshot.get("can_refresh", false))
+	# 当前剩余次数；-1使用“无限次”，有限次数显示具体数字。
+	var remaining: int = int(mulligan_snapshot.get("remaining", 0))
+	var remaining_text: String = "无限次" if remaining == -1 else "%d次" % remaining
+	interaction_guide_label.text = "是否使用手气卡？剩余%s" % remaining_text if can_choose else "等待其他玩家确认手气卡..."
+	%CancelButton.visible = can_choose
+	%CancelButton.text = "不再刷新"
+	%CancelButton.disabled = false
+	end_play_button.visible = false
+	end_play_button.disabled = true
 	_refresh_component_states()
 
 
@@ -3432,7 +3612,7 @@ func _refresh_group_trick_response_button() -> void:
 	if not is_node_ready() or end_play_button == null:
 		return
 	if not _has_group_trick_response_button_context():
-		end_play_button.text = "回合结束"
+		end_play_button.text = "结束阶段"
 		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 		return
 	end_play_button.visible = true
@@ -3471,14 +3651,26 @@ func _refresh_component_states() -> void:
 	# 合法目标 ID 数组；没有选牌时为空，角色卡保持普通状态。
 	# 单目标牌已有选择时仍补充空选择预览中的候选，以支持直接切换目标。
 	var legal_target_ids: Array[int] = _get_selectable_target_ids()
+	# 当前是否处于手动选目标流程；非法武将牌仅在该状态下整体变暗。
+	var target_selection_active: bool = _is_manual_target_selection_active()
+	if str(_snapshot.get("current_phase", "")) == "ai_character_adjustment":
+		# 房主调整 AI 的公共合法目标；非房主只显示等待文本，不进入目标选择视觉状态。
+		legal_target_ids.clear()
+		var pre_game_setup: Dictionary = _snapshot.get("pre_game_setup", {}) as Dictionary
+		if int(pre_game_setup.get("host_player_id", -1)) == match_controller.local_human_player_id:
+			for target_id_variant: Variant in pre_game_setup.get("target_player_ids", []) as Array:
+				legal_target_ids.append(int(target_id_variant))
+			target_selection_active = true
+		else:
+			target_selection_active = false
 	for player_id_variant: Variant in _player_views.keys():
 		# 当前角色 ID；用于同步合法与已选状态。
 		var player_id: int = int(player_id_variant)
-		(_player_views[player_id] as PlayerTargetView).set_target_state(legal_target_ids.has(player_id), _selected_target_ids.has(player_id))
+		(_player_views[player_id] as PlayerTargetView).set_target_state(legal_target_ids.has(player_id), _selected_target_ids.has(player_id), target_selection_active)
 	# 本地玩家目标按钮；自身目标合法或已选择时使用与角色卡一致的颜色语义。
 	var self_is_legal: bool = legal_target_ids.has(match_controller.local_human_player_id)
 	var self_is_selected: bool = _selected_target_ids.has(match_controller.local_human_player_id)
-	local_player_card.set_target_state(self_is_legal, self_is_selected)
+	local_player_card.set_target_state(self_is_legal, self_is_selected, target_selection_active)
 	# 技能目标只在实际发动后播放动态线；选择中的候选与临时目标仅用武将牌描边表达。
 	if card_use_animation_layer != null:
 		card_use_animation_layer.clear_target_preview_indicator()

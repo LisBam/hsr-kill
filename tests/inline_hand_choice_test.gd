@@ -292,6 +292,11 @@ func _run() -> void:
 	var taken_card_view: CardView = public_card_views.get(7010) as CardView
 	# 领取者标签；固定作为牌位包装器中正式牌面之后的第二个子节点。
 	var taken_owner_label: Label = taken_card_view.get_parent().get_child(1) as Label
+	# 首次公共牌位节点实例；重复状态广播必须持续复用，避免五谷期间集中释放并重建全部牌面。
+	var initial_public_card_instance_ids: Dictionary = {}
+	for public_card_uid_variant: Variant in public_card_views.keys():
+		var public_card_uid: int = int(public_card_uid_variant)
+		initial_public_card_instance_ids[public_card_uid] = (public_card_views[public_card_uid] as CardView).get_instance_id()
 	# 公共牌阵；固定使用4列网格且不创建“展示区”标题标签。
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
@@ -301,6 +306,15 @@ func _run() -> void:
 	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(385.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4 or local_hand_panel.z_index >= selection_panel.z_index or selection_panel.z_index <= CardView.HOVER_Z_INDEX + 1:
 		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
 		return
+	# 重复公共快照；提示、牌位和归属均未变化时不得重新实例化任何正式CardView。
+	main_instance.call("_on_public_card_choice_display_changed", harvest_public_display)
+	await get_tree().process_frame
+	for public_card_uid_variant: Variant in initial_public_card_instance_ids.keys():
+		var public_card_uid: int = int(public_card_uid_variant)
+		var reused_public_card: CardView = (selection_panel.get("_card_views") as Dictionary).get(public_card_uid) as CardView
+		if reused_public_card == null or reused_public_card.get_instance_id() != int(initial_public_card_instance_ids[public_card_uid]):
+			_fail("harvest_public_card_rebuilt:%d" % public_card_uid)
+			return
 	# 五谷展示期间的无懈请求；公共数据继续保留，但本地窗口必须暂时关闭以让出手牌与确认按钮输入。
 	var harvest_negation_request: Dictionary = {
 		"request_id":14,
@@ -337,6 +351,18 @@ func _run() -> void:
 	if not selection_panel.visible or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty() or not public_action_row.visible or not (interactive_public_card_views.get(7003) as CardView).is_interactable or not (interactive_public_card_views.get(7004) as CardView).is_interactable or (interactive_public_card_views.get(7010) as CardView).is_interactable:
 		_fail("harvest_modal_state")
 		return
+	# 同一交互请求的桌面刷新；本地选择权限变化通过原位更新完成，不能再次重建公共牌位。
+	var interactive_card_instance_ids: Dictionary = {}
+	for interactive_card_uid_variant: Variant in interactive_public_card_views.keys():
+		var interactive_card_uid: int = int(interactive_card_uid_variant)
+		interactive_card_instance_ids[interactive_card_uid] = (interactive_public_card_views[interactive_card_uid] as CardView).get_instance_id()
+	main_instance.call("_refresh_card_selection_panel")
+	for interactive_card_uid_variant: Variant in interactive_card_instance_ids.keys():
+		var interactive_card_uid: int = int(interactive_card_uid_variant)
+		var reused_interactive_card: CardView = (selection_panel.get("_card_views") as Dictionary).get(interactive_card_uid) as CardView
+		if reused_interactive_card == null or reused_interactive_card.get_instance_id() != int(interactive_card_instance_ids[interactive_card_uid]):
+			_fail("harvest_interactive_card_rebuilt:%d" % interactive_card_uid)
+			return
 	# 先选择第一张、再选择第二张展示牌；单选上限不能令第二张失去点击权限，最终只保留替换后的稳定UID。
 	selection_panel.call("_on_card_pressed", 7003)
 	selection_panel.call("_on_card_pressed", 7004)

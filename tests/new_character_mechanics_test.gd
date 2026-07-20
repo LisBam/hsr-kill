@@ -46,6 +46,8 @@ func _run() -> void:
 		return
 	if not _test_huanfa_extra_play_phase_completion():
 		return
+	if not _test_dead_huanfa_owner_cannot_trigger():
+		return
 	if not await _test_character_card_link_overlay():
 		return
 	if not _test_jiahu_and_bingfeng():
@@ -53,6 +55,8 @@ func _run() -> void:
 	if not await _test_deferred_phase_choice_resumption():
 		return
 	if not _test_gangfeng_response():
+		return
+	if not _test_conversion_material_target_rules():
 		return
 	if not _test_jiyu_branches():
 		return
@@ -611,6 +615,32 @@ func _test_huanfa_extra_play_phase_completion() -> bool:
 	return true
 
 
+## 验证死亡或离场的【焕发】持有者不会继续响应全局phaseEnd时机并创建新的发动询问。
+func _test_dead_huanfa_owner_cannot_trigger() -> bool:
+	_reset_state(3)
+	_controller.state.get_player(0).character_id = "natasha"
+	_controller.state.current_player_id = 1
+	_controller.state.current_phase = "finish"
+	_controller.state.phase_index = 5
+	# 焕发运行时实例；全局订阅仍保留，用于复现持有者死亡后错误弹出技能询问的问题。
+	var huanfa: SkillDefinition = _install_single_skill(0, "huanfa")
+	if huanfa == null:
+		return _fail("dead_huanfa_missing")
+	# 当前回合角色的用药事实；若没有持有者状态保护，本次phaseEnd会满足焕发全部其他条件。
+	_controller._cards_used_this_turn_by_player[1] = {"tao":true}
+	_controller.state.get_player(0).alive = false
+	_controller._emit_rule_timing("phaseEnd", 1, 1, 1, {"turn_number":1})
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("dead_huanfa_prompt=%s" % [_controller._pending_card_choice])
+	# 离场状态与死亡状态使用同一基类保护；即使alive异常保留true也不能继续发动技能。
+	_controller.state.get_player(0).alive = true
+	_controller.state.get_player(0).out_of_game = true
+	_controller._emit_rule_timing("phaseEnd", 1, 1, 1, {"turn_number":1})
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("absent_huanfa_prompt=%s" % [_controller._pending_card_choice])
+	return true
+
+
 ## 验证横置只显示灰白横线状态，不旋转或移动武将牌；竖置时灰白横线状态必须取消。
 func _test_character_card_link_overlay() -> bool:
 	# 真实武将牌视图；加入场景树后验证规则状态与表现状态的分离。
@@ -806,6 +836,52 @@ func _test_gangfeng_response() -> bool:
 	var equipment_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, armor_material.uid, ["sha"], [], "gangfeng")
 	if equipment_response_card == null or equipment_response_card.definition_id != "sha_thunder" or response_owner.equipment.has("armor") or _controller.card_runtime_instances.has(armor_material.uid) or response_owner.hp != 4 or not _controller.state.discard_pile.has(armor_material):
 		return _fail("gangfeng_equipment_response hp=%d equipment=%s runtime=%s discard=%s" % [response_owner.hp, response_owner.equipment, _controller.card_runtime_instances.has(armor_material.uid), _controller.state.discard_pile.has(armor_material)])
+	return true
+
+
+## 验证转化牌目标枚举按每张材料的真实颜色执行，【全垒】AI不会用黑色材料指定拥有【琥珀】的角色。
+func _test_conversion_material_target_rules() -> bool:
+	_reset_state(3)
+	# 黑色与红色普通手牌；两张牌都满足【全垒】材料条件，但只有黑色牌会触发【琥珀】免疫。
+	var black_material: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	var red_material: CardInstance = _add_hand_card(0, "sha", "heart", 8)
+	# 全垒与琥珀运行时实例；目标规则服务通过控制器统一汇总双方技能限制。
+	var quanlei: SkillDefinition = GameDatabase.create_skill("quanlei")
+	var hupo: SkillDefinition = GameDatabase.create_skill("hupo")
+	quanlei.bind(_controller, 0)
+	hupo.bind(_controller, 1)
+	_controller.skill_instances_by_player = {0:{"quanlei":quanlei}, 1:{"hupo":hupo}}
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 材料到目标映射；1号拥有琥珀，2号没有来牌限制。
+	var candidates: Array[Dictionary] = _controller.get_hand_candidates(0, 0)
+	var selection_data: Dictionary = quanlei.build_virtual_target_selection_data("sha_thunder", candidates, {"maximum_target_count_bonus":1})
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	var black_target_ids: Array = target_ids_by_card_id.get(str(black_material.uid), []) as Array
+	var red_target_ids: Array = target_ids_by_card_id.get(str(red_material.uid), []) as Array
+	if black_target_ids.has(1) or not black_target_ids.has(2) or not red_target_ids.has(1) or not red_target_ids.has(2):
+		return _fail("conversion_target_mapping black=%s red=%s" % [black_target_ids, red_target_ids])
+	# AI合法动作；任何黑色材料指定琥珀目标的动作都属于预览阶段应排除的非法组合。
+	var actions: Array[Dictionary] = []
+	quanlei.append_play_phase_actions(actions)
+	var has_black_hupo_action: bool = false
+	var has_red_hupo_action: bool = false
+	for action: Dictionary in actions:
+		# 当前技能动作负载；保存实际材料UID与目标集合。
+		var payload: Dictionary = action.get("payload", {}) as Dictionary
+		# 当前材料UID；用于区分黑色与红色转化组合。
+		var material_card_uid: int = int(payload.get("material_card_uid", -1))
+		# 当前目标集合；全垒支持一至两名目标，任意包含1号都视为指定琥珀角色。
+		var target_ids: Array = payload.get("target_ids", []) as Array
+		if material_card_uid == black_material.uid and target_ids.has(1):
+			has_black_hupo_action = true
+		if material_card_uid == red_material.uid and target_ids.has(1):
+			has_red_hupo_action = true
+	if has_black_hupo_action or not has_red_hupo_action:
+		return _fail("conversion_ai_actions black_hupo=%s red_hupo=%s actions=%s" % [has_black_hupo_action, has_red_hupo_action, actions])
+	# 控制器最终入口；即使调用方绕过技能预览，黑色材料目标仍会在移动牌前被拒绝。
+	var black_material_uids: Array[int] = [black_material.uid]
+	if bool(_controller.execute_virtual_card_use(0, "sha_thunder", black_material_uids, [1], "", {"maximum_target_count_bonus":1})) or not _controller.state.get_player(0).hand.has(black_material):
+		return _fail("conversion_final_validation")
 	return true
 
 

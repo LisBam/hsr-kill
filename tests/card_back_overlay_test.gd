@@ -58,6 +58,17 @@ func _run() -> void:
 	if card_name_label.text != original_name or view_as_banner == null or not view_as_banner.visible or view_as_name == null or view_as_name.text != viewed_name or not is_equal_approx(view_as_banner.position.y + view_as_banner.size.y * 0.5, card_view.card_height * 0.5):
 		_fail("card_view_as_banner:%s/%s/%s" % [card_name_label.text, view_as_name.text if view_as_name != null else "", view_as_banner.get_rect() if view_as_banner != null else Rect2()])
 		return
+	# 视为横条样式；红桃【闪】视为【桃】时，底板使用牌面白色、边框使用逻辑基本牌色、文字使用红色牌名色。
+	var view_as_banner_style: StyleBoxFlat = view_as_banner.get_theme_stylebox("panel") as StyleBoxFlat
+	# 期望底板色；不透明度沿用卡牌组件的可配置参数。
+	var expected_banner_background: Color = BattleUIStyle.get_color("card_paper")
+	expected_banner_background.a = card_view.view_as_banner_opacity
+	# 期望边框色；逻辑【桃】属于基本牌，横条边框保留0.96不透明度。
+	var expected_banner_border: Color = BattleUIStyle.get_color("card_basic")
+	expected_banner_border.a = 0.96
+	if view_as_banner_style == null or not view_as_banner_style.bg_color.is_equal_approx(expected_banner_background) or not view_as_banner_style.border_color.is_equal_approx(expected_banner_border) or not view_as_name.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("card_red_suit")):
+		_fail("card_view_as_banner_style:%s/%s/%s" % [view_as_banner_style.bg_color if view_as_banner_style != null else Color.TRANSPARENT, view_as_banner_style.border_color if view_as_banner_style != null else Color.TRANSPARENT, view_as_name.get_theme_color("font_color")])
+		return
 	# 普通牌重新配置后横条必须隐藏，避免旧实体复用时残留视为状态。
 	card_view.configure(card_data, card_definition, false, true)
 	if view_as_banner.visible:

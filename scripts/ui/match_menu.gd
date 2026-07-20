@@ -48,6 +48,18 @@ signal main_menu_requested
 ## 自动身份标记复选框；勾选状态直接映射全局设置，只影响其他角色的本地推测徽记。
 @onready var _auto_identity_marking_checkbox: CheckBox = %AutoIdentityMarkingCheckBox
 
+## 自选全武将、座次与身份开关；仅影响之后由本机或房主创建的新对局。
+@onready var _custom_character_assignment_checkbox: CheckBox = %CustomCharacterAssignmentCheckBox
+
+## 房主调整全部 AI 武将开关；决定下一局初次选将后是否插入调整阶段。
+@onready var _customize_ai_characters_checkbox: CheckBox = %CustomizeAiCharactersCheckBox
+
+## 手气卡数量下拉框；选项元数据保存0至5或-1，显示文字不参与规则解析。
+@onready var _mulligan_limit_option: OptionButton = %MulliganLimitOption
+
+## AI 使用手气卡开关；实际可用次数仍由手气卡数量设置决定。
+@onready var _ai_uses_mulligan_checkbox: CheckBox = %AiUsesMulliganCheckBox
+
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
@@ -62,6 +74,18 @@ signal main_menu_requested
 
 ## 下一局人数整行容器；仅实际拥有重新开局权限的离线玩家与房主可见。
 @onready var _player_count_row: Control = _player_count_input.get_parent() as Control
+
+## 自选武将座次身份控件；局域网客户端不可修改房主权威开局规则，因此整项隐藏。
+@onready var _custom_character_assignment_row: Control = _custom_character_assignment_checkbox
+
+## AI 武将调整控件；仅离线玩家与房主可见，避免客户端产生无法生效的本地配置。
+@onready var _customize_ai_characters_row: Control = _customize_ai_characters_checkbox
+
+## 手气卡数量整行容器；下一局规则由房主锁定，局域网客户端不显示该设置。
+@onready var _mulligan_limit_row: Control = _mulligan_limit_option.get_parent() as Control
+
+## AI 手气卡控件；仅房主可决定下一局 AI 是否自动刷新起始手牌。
+@onready var _ai_uses_mulligan_row: Control = _ai_uses_mulligan_checkbox
 
 ## 当前权威控件是否允许显示；默认true兼容离线对局，局域网客户端由牌桌协调器关闭。
 var _authority_controls_visible: bool = true
@@ -102,12 +126,25 @@ func _ready() -> void:
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	_custom_character_assignment_checkbox.set_pressed_no_signal(GameSettings.custom_character_assignment_enabled)
+	_custom_character_assignment_checkbox.toggled.connect(GameSettings.set_custom_character_assignment_enabled)
+	GameSettings.custom_character_assignment_changed.connect(_custom_character_assignment_checkbox.set_pressed_no_signal)
+	_customize_ai_characters_checkbox.set_pressed_no_signal(GameSettings.customize_ai_characters_enabled)
+	_customize_ai_characters_checkbox.toggled.connect(GameSettings.set_customize_ai_characters_enabled)
+	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
+	_populate_mulligan_limit_options()
+	_mulligan_limit_option.item_selected.connect(_on_mulligan_limit_selected)
+	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
+	_ai_uses_mulligan_checkbox.set_pressed_no_signal(GameSettings.ai_uses_mulligan_enabled)
+	_ai_uses_mulligan_checkbox.toggled.connect(GameSettings.set_ai_uses_mulligan_enabled)
+	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_menu_panel.visible = false
 	refresh_card_name_text()
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
+	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	refresh_ui_style()
 
 
@@ -158,10 +195,14 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_ai_response_delay_row.visible = controls_visible
 	_game_speed_row.visible = controls_visible
 	_player_count_row.visible = controls_visible
+	_custom_character_assignment_row.visible = controls_visible
+	_customize_ai_characters_row.visible = controls_visible
+	_mulligan_limit_row.visible = controls_visible
+	_ai_uses_mulligan_row.visible = controls_visible
 	_restart_button.visible = controls_visible
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
-	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner)):
+	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox):
 		_main_menu_button.grab_focus()
 
 
@@ -188,13 +229,39 @@ func refresh_ui_style() -> void:
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CardNameRow/CardNameLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/MulliganLimitRow/MulliganLimitLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_card_name_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_card_name_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	_ui_style_option.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_ui_style_option.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	_apply_option_button_style(_card_name_option)
+	_apply_option_button_style(_ui_style_option)
+	_apply_option_button_style(_mulligan_limit_option)
+
+
+## 为局内设置下拉框及其弹出列表应用完整交互状态主题；悬停、按下和焦点状态不得回退Godot默认皮肤。
+func _apply_option_button_style(option_button: OptionButton) -> void:
+	if option_button == null:
+		return
+	option_button.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	option_button.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
+	option_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), true))
+	option_button.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true))
+	option_button.add_theme_stylebox_override("disabled", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("disabled_button"), BattleUIStyle.get_color("disabled_button_border"), false))
+	option_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	option_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
+	option_button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("button_pressed_font"))
+	option_button.add_theme_color_override("font_focus_color", BattleUIStyle.get_color("text_primary"))
+	option_button.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
+	# 下拉弹出列表；OptionButton内部PopupMenu必须单独覆盖，否则列表悬停仍会使用引擎默认主题。
+	var popup: PopupMenu = option_button.get_popup()
+	popup.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	popup.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
+	popup.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	popup.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	popup.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
 
 
 ## 从注册表构建 UI 风格选项；菜单显示名称可以调整，选中行为始终依赖稳定风格标识。
@@ -215,6 +282,16 @@ func _populate_card_name_options() -> void:
 		var option_index: int = _card_name_option.item_count
 		_card_name_option.add_item(str(mode_option.get("label", "")))
 		_card_name_option.set_item_metadata(option_index, mode_option.get("mode", GameSettings.NameMode.CUSTOM))
+
+
+## 从全局标准配置生成手气卡数量选项；稳定数值写入元数据，显示文字不承担规则含义。
+func _populate_mulligan_limit_options() -> void:
+	_mulligan_limit_option.clear()
+	for limit_option: Dictionary in GameSettings.MULLIGAN_LIMIT_OPTIONS:
+		# 当前手气卡选项索引；保存0至5或-1，保证菜单与持久化配置使用同一数值协议。
+		var option_index: int = _mulligan_limit_option.item_count
+		_mulligan_limit_option.add_item(str(limit_option.get("label", "关闭")))
+		_mulligan_limit_option.set_item_metadata(option_index, int(limit_option.get("value", 0)))
 
 
 ## 依据全局名称模式同步下拉框选中项；无信号更新避免界面刷新重复提交同一个设置。
@@ -265,6 +342,23 @@ func _refresh_auto_identity_marking_state(enabled: bool) -> void:
 	if not is_node_ready():
 		return
 	_auto_identity_marking_checkbox.set_pressed_no_signal(enabled)
+
+
+## 按全局设置同步手气卡下拉框；无信号选择避免外部设置变化形成重复保存。
+func _refresh_mulligan_limit_selection(limit: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_mulligan_limit_option.item_count):
+		if int(_mulligan_limit_option.get_item_metadata(option_index)) == limit:
+			_mulligan_limit_option.select(option_index)
+			return
+
+
+## 将房主选中的手气卡次数写入下一局设置；当前对局继续使用创建时锁定的规则快照。
+func _on_mulligan_limit_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _mulligan_limit_option.item_count:
+		return
+	GameSettings.set_mulligan_limit(int(_mulligan_limit_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。

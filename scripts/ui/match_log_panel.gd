@@ -35,6 +35,16 @@ func _toggle_log() -> void:
 	_set_expanded(not _is_expanded)
 
 
+## 返回对局记录当前是否展开；牌桌用该只读状态判断空白点击是否需要收起浮层。
+func is_expanded() -> bool:
+	return _is_expanded
+
+
+## 公开设置对局记录显隐；空白点击与按钮切换共用同一状态入口，确保暂停信号始终成对发送。
+func set_expanded(expanded: bool) -> void:
+	_set_expanded(expanded)
+
+
 ## 统一写入展开状态、正文可见性和按钮文本，避免多个节点分别维护状态。
 func _set_expanded(expanded: bool) -> void:
 	# 展开状态是否实际变化；重复配置只同步视觉，不重复通知牌桌暂停协调器。

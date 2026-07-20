@@ -58,6 +58,9 @@ signal information_dismissed
 ## 当前标准尺寸为148.35×197.8像素，通过只增宽武将插画与牌框实现精确3:4比例，信息控件尺寸保持不变。
 @export var card_size: Vector2 = Vector2(148.35, 197.8)
 
+## 选目标期间非法武将牌的整体调制色；默认保留42%亮度与完整不透明度，运行时通常无需动态修改。
+@export var invalid_target_modulate: Color = Color(0.42, 0.42, 0.42, 1.0)
+
 ## 当前角色稳定玩家 ID；由 configure 写入，未配置时为 -1。
 var player_id: int = -1
 
@@ -66,6 +69,9 @@ var is_legal_target: bool = false
 
 ## 当前角色是否已加入目标顺序；选中状态优先使用金色提示。
 var is_target_selected: bool = false
+
+## 当前桌面是否处于需要手动选择目标的交互；启用时非法且未选中的武将牌整体变暗。
+var is_target_selection_active: bool = false
 
 ## 当前角色是否正在行动；行动状态使用左侧文本标记，不影响目标合法性。
 var is_current_actor: bool = false
@@ -332,9 +338,11 @@ func set_identity_mark(identity_mark: String) -> void:
 
 
 ## 更新合法与选中状态；已选目标始终优先显示金色边框。
-func set_target_state(legal_target: bool, selected_target: bool) -> void:
+## 第三个参数标记当前是否正在手动选目标，非法且未选中的武将牌仅在该状态下变暗。
+func set_target_state(legal_target: bool, selected_target: bool, target_selection_active: bool = false) -> void:
 	is_legal_target = legal_target
 	is_target_selected = selected_target
+	is_target_selection_active = target_selection_active
 	if is_node_ready():
 		_input_area.configure(is_interactable)
 	_refresh_visual_state()
@@ -462,6 +470,8 @@ func _on_input_mouse_exited() -> void:
 func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
+	# 武将牌整体亮度；只有正在手动选目标且当前角色非法时变暗，普通浏览、公开全体目标和已选目标保持原亮度。
+	modulate = invalid_target_modulate if is_target_selection_active and not is_legal_target and not is_target_selected else Color.WHITE
 	# 角色卡背景；当前行动者略微提亮，帮助玩家定位回合归属。
 	var background_color: Color = BattleUIStyle.get_color("player_background") if not is_current_actor else BattleUIStyle.get_color("player_current_background")
 	if is_current_operator:
@@ -540,7 +550,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 公开身份 ID；其他玩家身份尚未公开时为 hidden。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 身份徽记单字；用于在窄牌面右上角保持可读。
-	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"？"}.get(identity, "？")
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内", "hidden":"?"}.get(identity, "?")
 	# 当前体力；允许为0或负数，牌面心形显示时会安全裁剪。
 	var hp: int = int(_player_snapshot.get("hp", 0))
 	# 当前体力上限；1至5使用圆点，超过5直接使用数字，因此无需裁剪规则快照中的真实数值。
@@ -803,10 +813,16 @@ func _refresh_identity_badge() -> void:
 	# 当前公开身份；非 hidden 时必须直接显示权威身份，禁止本地标注覆盖。
 	var identity: String = str(_player_snapshot.get("identity", "hidden"))
 	# 当前徽记文本；未知身份可使用本地忠、反、内标注，否则保持问号。
-	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(identity, {"loyalist":"忠", "rebel":"反", "renegade":"内"}.get(_identity_mark, "？"))
+	# 徽记文本先通过 displayed_identity 统一公开身份与本地标记，再使用ASCII问号作为未知回退。
+	# 当前实际显示身份；公开身份优先，未知身份才允许使用本地或自动推测标记。
+	var displayed_identity: String = identity if identity != "hidden" else _identity_mark
+	# 当前徽记文本；没有公开身份与本地标记时保持ASCII问号。
+	var identity_text: String = {"leader":"领", "loyalist":"忠", "rebel":"反", "renegade":"内"}.get(displayed_identity, "?")
 	_identity_badge_label.text = identity_text
 	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
-	var identity_color: Color = BattleUIStyle.get_color("accent") if identity != "hidden" else (BattleUIStyle.get_color("legal_target") if not _identity_mark.is_empty() else BattleUIStyle.get_color("text_secondary"))
+	# 当前设计改用固定身份语义色统一公开、手动与自动标记，未知状态仍使用次级文字色。
+	# 当前身份字体色；公开身份、手动标记与自动标记使用同一阵营语义色，未知状态使用次级文字色。
+	var identity_color: Color = BattleUIStyle.get_color("identity_%s" % displayed_identity, BattleUIStyle.get_color("text_secondary")) if not displayed_identity.is_empty() else BattleUIStyle.get_color("text_secondary")
 	_identity_badge_label.add_theme_color_override("font_color", identity_color)
 
 

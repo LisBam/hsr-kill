@@ -18,6 +18,9 @@ var random_history: Array[Dictionary] = []
 ## 当前使用的牌堆配置 ID；默认采用标准、EX 与军争合并牌堆。
 var deck_id: String = "standard_162"
 
+## 本局由离线玩家或局域网房主在创建时锁定的开局选项；只包含可序列化配置，不随菜单中途变化。
+var match_options: Dictionary = {}
+
 ## 按座次排列的玩家状态；死亡玩家保留在数组中以维持距离与历史索引稳定。
 var players: Array[PlayerState] = []
 
@@ -45,6 +48,9 @@ var public_card_choice_display: Dictionary = {}
 
 ## 当前同时响应展示；保存本轮所有被询问玩家 ID 与锦囊目标，不包含任何玩家是否持有响应牌的私有信息。
 var simultaneous_response_display: Dictionary = {}
+
+## 当前开局前公共交互状态；用于房主调整 AI 武将等阶段，只保存可点击玩家 ID 与房主 ID，不含私有候选。
+var pre_game_setup: Dictionary = {}
 
 ## 已完成事件摘要历史；记录事件父子、步骤和终止原因，支持规则回放与无头验收。
 var event_history: Array[Dictionary] = []
@@ -152,6 +158,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"random_seed": random_seed,
 		"random_history_count": random_history.size(),
 		"deck_id": deck_id,
+		"match_options": match_options.duplicate(true),
 		"players": player_data,
 		"draw_pile_count": draw_pile.size(),
 		"discard_pile_count": discard_pile.size(),
@@ -161,6 +168,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"current_choice_request": choice_request_data,
 		"public_card_choice_display": public_card_choice_display.duplicate(true),
 		"simultaneous_response_display": simultaneous_response_display.duplicate(true),
+		"pre_game_setup": pre_game_setup.duplicate(true),
 		"event_history_count": event_history.size(),
 		"card_move_history_count": card_move_history.size(),
 		"round_number": round_number,

@@ -56,7 +56,8 @@ signal information_dismissed
 @export_range(10, 26, 1) var view_as_banner_font_size: int = 16
 
 ## 视为名称横条的类别色底板不透明度；默认0.90保证小号文字清晰且仍与原牌插画融合，运行时可调整。
-@export_range(0.0, 1.0, 0.01) var view_as_banner_opacity: float = 0.90
+## 当前白色纸张底板默认完全不透明；降低该值只用于特殊主题与插画的表现融合，不改变边框和文字的视为牌语义。
+@export_range(0.0, 1.0, 0.01) var view_as_banner_opacity: float = 1.0
 
 ## 当前实体牌 UID；由 configure 写入，未配置时为 -1。
 var card_uid: int = -1
@@ -424,19 +425,24 @@ func _configure_view_as_banner_geometry() -> void:
 
 
 ## 刷新视为名称横条的主题样式；底板跟随当前实体牌的类别色，避免使用与牌面脱节的通用金属面板色。
+## 当前视觉规范使用牌面纸张白色作为底板，视为后的逻辑牌类别色作为边框，文字则沿用当前花色决定的牌名红黑配色。
 func _refresh_view_as_banner_style() -> void:
 	if not is_node_ready():
 		return
 	# 横条底色；由当前牌面的类别色加深得到，属性【杀】和各类实体牌都会自然匹配。
-	var banner_background: Color = _category_color.darkened(0.28)
+	# 横条底色；使用与实体牌相同的纸张白色，让视为标签看起来像牌面本身的结构。
+	var banner_background: Color = BattleUIStyle.get_color("card_paper")
 	banner_background.a = view_as_banner_opacity
 	# 横条边框；轻微提亮同一类别色，形成紧凑边界且不与选中金边竞争视觉层级。
-	var banner_border: Color = _category_color.lightened(0.20)
+	# 横条边框；从视为后的逻辑牌定义取得属性或类别色，不再沿用原实体牌类别。
+	var banner_border: Color = _resolve_category_color(_view_as_card_definition)
 	banner_border.a = 0.96
+	# 视为牌名文字颜色；红桃和方块使用牌名红色，黑桃和梅花使用牌名深色。
+	var banner_name_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
 	_view_as_banner.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 2))
-	_view_as_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_paper").lightened(0.08))
-	_view_as_name_label.add_theme_color_override("font_outline_color", banner_background.darkened(0.55))
-	_view_as_name_label.add_theme_constant_override("outline_size", 1)
+	_view_as_name_label.add_theme_color_override("font_color", banner_name_color)
+	_view_as_name_label.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
+	_view_as_name_label.add_theme_constant_override("outline_size", 0)
 
 
 ## 将输入组件的开始拖动通知向桌面转发；实际位置与排序决策始终由持有全部手牌视图的桌面协调器负责。

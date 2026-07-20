@@ -23,10 +23,13 @@ func install() -> void:
 
 
 ## 存在未横置其他角色时创建牌与目标组合选择；即使没有【闪】也保留可取消询问，防止旁观者从请求是否出现反推隐藏手牌。
+## “横置一名角色”按状态切换解释，已经横置的其他角色同样是合法目标，再次横置会将其调整为竖直。
 func _on_round_start(_event: RuleEvent) -> void:
 	# 普通手牌区【闪】候选；木牛“粮”不属于手牌弃置费用。
 	var shan_candidates: Array[Dictionary] = _get_hand_shan_candidates()
 	# 可横置目标；排除持有者、死亡离场角色与已经横置者。
+	# 私有函数名继续保留“未横置”的兼容含义，但通用横置术语按状态切换，不再排除已横置角色。
+	# 可横置目标；只排除持有者、死亡与离场角色，当前已横置角色仍可被再次横置并切换为竖直。
 	var target_ids: Array[int] = _get_unchained_other_target_ids()
 	if target_ids.is_empty():
 		return
@@ -40,6 +43,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if not response.confirmed or response.card_ids.size() != 1 or response.target_ids.size() != 1:
 		return true
 	# 当前目标ID；等待期间必须仍为其他存活、在场且竖置角色。
+	# 当前通用术语不再要求竖置；保留的复核职责是确保目标仍为其他存活在场角色。
+	# 当前目标ID；等待期间必须仍为其他存活在场角色，横置状态变化不取消本次合法选择。
 	var target_id: int = response.target_ids[0]
 	if not _get_unchained_other_target_ids().has(target_id):
 		return true
@@ -47,7 +52,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var shan_uid: int = response.card_ids[0]
 	if not _is_hand_shan(shan_uid) or not bool(host.call("discard_card_from_hand", owner_player_id, shan_uid)):
 		return true
-	host.call("set_player_linked", target_id, true, owner_player_id, get_id())
+	# 横置状态切换；竖置目标变为横置，已经横置的目标再次横置则恢复竖直。
+	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
 	# 到期轮数；下一次新轮roundStart触发前移除，完整覆盖当前轮剩余时间。
 	var expires_at_round: int = host.state.round_number + 1
 	if bool(host.call("grant_temporary_skill", target_id, GRANTED_SKILL_ID, expires_at_round)):
@@ -78,11 +84,12 @@ func _is_hand_shan(card_uid: int) -> bool:
 
 
 ## 返回当前全部未横置的其他存活在场角色。
+## 为兼容既有技能私有接口保留函数名；实际返回全部其他存活在场角色，不再排除已经横置者。
 func _get_unchained_other_target_ids() -> Array[int]:
 	# 目标结果；沿用座次顺序保证UI、AI与回放稳定。
 	var result: Array[int] = []
 	for player: PlayerState in host.state.players:
-		if player.player_id != owner_player_id and player.alive and not player.out_of_game and not player.chained:
+		if player.player_id != owner_player_id and player.alive and not player.out_of_game:
 			result.append(player.player_id)
 	return result
 
@@ -101,7 +108,15 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_ids: Array = payload.get("selected_target_ids", []) as Array
 	if target_ids.size() != 1:
 		return -20.0
+	# 当前目标ID；用于读取其横置状态并评估本次切换方向。
+	var target_id: int = int(target_ids[0])
+	# 当前目标快照；已横置友方被再次横置会恢复竖直，未横置友方则承担连环风险。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	# 对目标态度；正值表示友方，负值表示敌方。
+	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	# 横置切换价值；重置友方或横置敌方为正，横置友方或重置敌方为负。
+	var link_state_value: float = attitude / 5.0 if bool(target.get("chained", false)) else -attitude / 5.0
 	# 已选费用；【闪】具有较高防御价值，因此费用按通用持有牌价值扣除。
 	var selected_card_uids: Array = payload.get("selected_card_uids", []) as Array
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(selected_card_uids[0])) if selected_card_uids.size() == 1 else 8.0
-	return evaluator.get_attitude(authoritative_snapshot, owner_player_id, int(target_ids[0])) * 1.2 - material_value * 0.55 - 1.0
+	return attitude * 1.2 - material_value * 0.55 + link_state_value

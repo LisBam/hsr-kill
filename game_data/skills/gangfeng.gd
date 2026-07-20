@@ -38,13 +38,16 @@ func can_activate(_context: Dictionary = {}) -> bool:
 		return (_context.get("response_patterns", []) as Array).has("sha") and not _get_black_material_candidates().is_empty()
 	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
-	if _get_black_material_candidates().is_empty():
+	# 当前黑色材料候选；目标合法性必须同时读取每张材料的真实颜色，不能先按无色雷【杀】枚举。
+	var candidates: Array[Dictionary] = _get_black_material_candidates()
+	if candidates.is_empty():
 		return false
-	for target_id: int in host.card_rules.list_legal_virtual_targets(owner_player_id, THUNDER_SLASH_DEFINITION_ID):
+	# 材料与目标组合数据；黑色材料会在此排除拥有【琥珀】的角色。
+	var selection_data: Dictionary = build_virtual_target_selection_data(THUNDER_SLASH_DEFINITION_ID, candidates)
+	if not (selection_data.get("target_ids", []) as Array).is_empty():
 		# 单目标数组；虚拟使用还需复核阶段【杀】次数、距离与目标组合。
-		var target_ids: Array[int] = [target_id]
-		if host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, target_ids).is_empty():
-			return true
+		# 当前可用性只确认存在至少一个逐材料合法目标，具体单目标数组在动作枚举和提交阶段继续完整复核。
+		return true
 	return false
 
 
@@ -61,10 +64,14 @@ func activate(context: Dictionary = {}) -> String:
 	# 黑色材料候选；包含手牌、木牛“粮”与装备区实体。
 	var candidates: Array[Dictionary] = _get_black_material_candidates()
 	# 虚拟雷【杀】目标；距离与存活状态由CardRuleService统一计算。
-	var legal_target_ids: Array[int] = host.card_rules.list_legal_virtual_targets(owner_player_id, THUNDER_SLASH_DEFINITION_ID)
+	# 材料与目标组合数据；每张材料独立参与虚拟雷【杀】目标判断。
+	var selection_data: Dictionary = build_virtual_target_selection_data(THUNDER_SLASH_DEFINITION_ID, candidates)
+	# 虚拟雷【杀】目标并集；材料选中后界面会按映射缩小为该牌自己的合法目标。
+	var legal_target_ids: Array[int] = []
+	legal_target_ids.assign(selection_data.get("target_ids", []) as Array)
 	if candidates.is_empty() or legal_target_ids.is_empty():
 		return "当前没有可用的黑色牌或雷【杀】目标。"
-	request_card_target_selection("罡风", "请选择一张黑色牌和一名雷【杀】目标", candidates, legal_target_ids, 1, 1, 1, 1, true, {"kind":"gangfeng_use"})
+	request_card_target_selection("罡风", "请选择一张黑色牌和一名雷【杀】目标", candidates, legal_target_ids, 1, 1, 1, 1, true, {"kind":"gangfeng_use", "target_ids_by_card_id":selection_data.get("target_ids_by_card_id", {})})
 	return ""
 
 
@@ -83,13 +90,13 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 	var material_card: CardInstance = _find_owned_material_card(material_card_uid)
 	if material_card == null or material_card.get_color() != REQUIRED_COLOR:
 		return false
-	if host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, target_ids) != "":
+	if validate_virtual_use_for_material(THUNDER_SLASH_DEFINITION_ID, material_card, target_ids) != "":
 		return false
 	# 技能持有者；只用于构造长期语义日志，不直接修改区域。
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	# 单张材料UID数组；显式Array[int]类型保证动态host.call与核心端口的强类型参数一致。
 	var material_card_uids: Array[int] = [material_card_uid]
-	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【罡风】，将一张黑色牌当雷【杀】使用。" % owner.display_name)):
+	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【罡风】，将一张黑色牌当雷【杀】使用。" % owner.display_name, {})):
 		return false
 	announce_activation({"material_card_uid":material_card_uid, "target_ids":target_ids.duplicate(), "virtual_card_id":THUNDER_SLASH_DEFINITION_ID})
 	observe_identity_behavior(target_ids, {"target_result":-1.5, "damage":true, "respond_shan":true, "nature_damage":true})
@@ -142,13 +149,25 @@ func get_converted_response_definition_id(card: CardInstance, response_patterns:
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
 		return
-	for candidate: Dictionary in _get_black_material_candidates():
+	# 当前全部黑色材料；每张牌需要独立计算其真实颜色下的目标集合。
+	var candidates: Array[Dictionary] = _get_black_material_candidates()
+	# 材料到合法目标映射；AI只枚举权威预览已经确认的组合。
+	var selection_data: Dictionary = build_virtual_target_selection_data(THUNDER_SLASH_DEFINITION_ID, candidates)
+	# 当前映射字典；字符串UID键与选择请求序列化格式保持一致。
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	for candidate: Dictionary in candidates:
 		# 当前材料UID；手牌、木牛“粮”与装备共用同一实体标识。
 		var material_card_uid: int = int(candidate.get("uid", -1))
-		for target_id: int in host.card_rules.list_legal_virtual_targets(owner_player_id, THUNDER_SLASH_DEFINITION_ID):
+		# 当前材料合法目标；黑色材料不能枚举拥有【琥珀】的角色。
+		var material_target_ids: Array = target_ids_by_card_id.get(str(material_card_uid), []) as Array
+		for target_id_variant: Variant in material_target_ids:
+			# 当前合法目标ID；从序列化数组显式转为整数。
+			var target_id: int = int(target_id_variant)
 			# 单目标数组；每个AI动作可直接作为权威提交再次复核。
 			var target_ids: Array[int] = [target_id]
-			if host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, target_ids).is_empty():
+			# 当前材料实体；最终组合校验继续使用真实颜色，避免候选与提交规则漂移。
+			var material_card: CardInstance = _find_owned_material_card(material_card_uid)
+			if material_card != null and validate_virtual_use_for_material(THUNDER_SLASH_DEFINITION_ID, material_card, target_ids).is_empty():
 				result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "material_card_uid":material_card_uid, "target_ids":target_ids.duplicate()}})
 
 

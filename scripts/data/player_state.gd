@@ -224,6 +224,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"face_down": face_down,
 		"auto_managed": auto_managed,
 		"auto_managed_offline": auto_managed_offline,
+		"wine_used": wine_used,
+		"wine_bonus": wine_bonus,
 		"hand_count": hand.size(),
 		"hand": hand_data,
 		"equipment": equipment_data,
