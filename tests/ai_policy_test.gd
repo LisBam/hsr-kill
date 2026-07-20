@@ -15,6 +15,8 @@ func _ready() -> void:
 	_policy = BasicAIPolicy.new(0, _identity_model)
 	if not _test_all_cards_have_ai_profiles():
 		return
+	if not _test_scoring_cache_lifecycle():
+		return
 	if not _test_identity_exposure():
 		return
 	if not _test_identity_target_evidence():
@@ -80,6 +82,45 @@ func _test_all_cards_have_ai_profiles() -> bool:
 		var ai_profile: Dictionary = GameDatabase.get_card(card_id).get("ai", {}) as Dictionary
 		if ai_profile.is_empty():
 			return _fail("missing_card_ai=%s" % card_id)
+	return true
+
+
+## 验证静态定义在重复评分中只缓存一次，并且单次决策技能实例会复用且在决策后释放。
+func _test_scoring_cache_lifecycle() -> bool:
+	# 独立完整快照；希儿的两项技能可同时验证武将定义缓存与决策技能实例集合。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 独立评估器；避免其他用例已经填充的缓存掩盖首次评分行为。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 标准【杀】动作；重复评分必须得到相同结果且不继续增加静态卡牌缓存种类。
+	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	# 第一次评分；会按需缓存【杀】和当前已知响应牌定义。
+	var first_score: float = evaluator.score_action(snapshot, slash_action, 0)
+	# 首次评分后的缓存条目数；必须大于0才能证明用例确实经过缓存入口。
+	var first_cache_size: int = (evaluator.get("_card_definition_cache") as Dictionary).size()
+	# 第二次评分；相同快照与动作不得改变分数或扩张静态定义缓存。
+	var second_score: float = evaluator.score_action(snapshot, slash_action, 0)
+	# 重复评分后的缓存条目数；应与首次完全一致。
+	var second_cache_size: int = (evaluator.get("_card_definition_cache") as Dictionary).size()
+	if first_cache_size <= 0 or second_cache_size != first_cache_size or not is_equal_approx(first_score, second_score):
+		return _fail("static_definition_cache first=%d second=%d scores=%.3f/%.3f" % [first_cache_size, second_cache_size, first_score, second_score])
+	# 独立策略；手动准备一次评分上下文以检查同一技能 ID 返回的对象身份。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	policy.call("_prepare_action_scoring_context", snapshot)
+	# 当前武将修正技能集合；希儿至少配置【再现】与【蝶影】，不能为空。
+	var modifier_skills: Array[SkillDefinition] = policy.get("_decision_card_modifier_skills") as Array[SkillDefinition]
+	# 当前技能实例索引；每个修正器应按稳定技能 ID 登记一次。
+	var skill_instances: Dictionary = policy.get("_decision_skill_instances") as Dictionary
+	if modifier_skills.is_empty() or skill_instances.size() != modifier_skills.size():
+		return _fail("decision_skill_prepare modifiers=%d instances=%d" % [modifier_skills.size(), skill_instances.size()])
+	# 首个修正器；再次按 ID 查询时必须返回同一 RefCounted 实例，而不是重新创建脚本对象。
+	var first_skill: SkillDefinition = modifier_skills[0]
+	# 同 ID 查询结果；对象实例 ID 用于确定引用身份，不依赖脚本字典相等比较。
+	var reused_skill: SkillDefinition = policy.call("_get_decision_skill_instance", first_skill.get_id()) as SkillDefinition
+	if reused_skill == null or reused_skill.get_instance_id() != first_skill.get_instance_id():
+		return _fail("decision_skill_not_reused:%s" % first_skill.get_id())
+	policy.call("_clear_action_scoring_context")
+	if bool(policy.get("_action_scoring_context_prepared")) or not (policy.get("_decision_card_modifier_skills") as Array).is_empty() or not (policy.get("_decision_skill_instances") as Dictionary).is_empty():
+		return _fail("decision_skill_context_not_cleared")
 	return true
 
 

@@ -42,6 +42,8 @@ func configure(auto_managed: bool) -> void:
 	_auto_managed = auto_managed
 	visible = _auto_managed
 	mouse_filter = Control.MOUSE_FILTER_STOP if _auto_managed else Control.MOUSE_FILTER_IGNORE
+	# 隐藏状态不需要接收每帧回调；重新开启托管时恢复处理以维持原0.45秒文字动画。
+	set_process(_auto_managed)
 	if not _auto_managed:
 		_dot_elapsed_seconds = 0.0
 		_dot_count = 1

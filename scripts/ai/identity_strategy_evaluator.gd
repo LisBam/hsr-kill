@@ -147,6 +147,10 @@ const RENEGADE_CONDITION_WEIGHT: float = 0.2
 ## 当前战略层使用的身份模型；共享暴露度、身份标记、真实态度和局势计算。
 var identity_model: IdentityAIModel
 
+## 已读取的卡牌静态定义缓存；威胁评估只读数据库副本，避免同一手牌在多个目标动作中反复深拷贝元数据。
+## 缓存最多随已评估卡牌种类增长，项目运行时无需动态修改，调用方不得写入其中的字典。
+var _card_definition_cache: Dictionary = {}
+
 
 ## 创建绑定身份模型的战略评估器；模型为空时创建独立默认实例。
 func _init(model: IdentityAIModel = null) -> void:
@@ -357,7 +361,7 @@ func get_threat(authoritative_snapshot: Dictionary, viewer_id: int, target_id: i
 		# 当前手牌实体；只读取稳定卡牌定义 ID。
 		var card: Dictionary = card_variant as Dictionary
 		# 当前手牌定义；伤害牌与【杀】均提高主动威胁。
-		var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
+		var definition: Dictionary = _get_cached_card_definition(str(card.get("definition_id", "")))
 		# 当前手牌 AI 配置；damage 标志表示主动伤害能力。
 		var ai_profile: Dictionary = definition.get("ai", {}) as Dictionary
 		if bool(ai_profile.get("damage", false)) or str(definition.get("effect_id", "")) == "slash":
@@ -368,6 +372,15 @@ func get_threat(authoritative_snapshot: Dictionary, viewer_id: int, target_id: i
 	# 对观察者阵营的敌对程度；友方角色保留强度信息但不作为攻击优先级。
 	var attitude: float = identity_model.get_attitude(authoritative_snapshot, viewer_id, target_id)
 	return threat * maxf(-attitude / THREAT_ATTITUDE_SCALE, MINIMUM_THREAT_MULTIPLIER)
+
+
+## 返回战略评估器内部缓存的卡牌静态定义；空 ID 安全返回空字典，缓存值仅供威胁查询读取。
+func _get_cached_card_definition(card_id: String) -> Dictionary:
+	if card_id.is_empty():
+		return {}
+	if not _card_definition_cache.has(card_id):
+		_card_definition_cache[card_id] = GameDatabase.get_card(card_id)
+	return _card_definition_cache.get(card_id, {}) as Dictionary
 
 
 ## 返回当前领袖危险度；体力、手牌短缺和敌方总威胁越高，数值越大。

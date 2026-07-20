@@ -25,6 +25,8 @@ AI 不持有 `GameState` 的可变引用。每次行动固定执行：
 
 选择请求同样只从规则层生成的合法动作中决策。AI 不能移动牌、修改体力、跳过距离、伪造目标或绕过次数限制。
 
+静态内容与运行时决策采用不同生命周期：`BasicAIPolicy`、`NonameAIEvaluator` 和 `IdentityStrategyEvaluator` 各自在自身职责内缓存 `GameDatabase` 返回的卡牌或武将元数据独立副本，同一定义后续评分不再重复深拷贝；`BasicAIPolicy` 只在一次合法动作集合评分期间复用武将技能和主动技能的纯 AI 实例，并在返回动作前清空。缓存不保存 `GameState`、玩家快照、合法动作、选择结果、技能结算字段或节点引用，因此下一次决策仍完全读取最新权威快照。所有 `score_ai_action()`、`score_ai_choice()` 与 `modify_ai_card_action_score()` 都必须保持只读，不能依靠技能实例字段在候选之间累积结果。
+
 ## 三、组件职责
 
 | 组件 | 职责 |
@@ -222,6 +224,7 @@ func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dic
 
 ## 八、调度安全与数值
 
+- 卡牌与武将静态元数据缓存最多按实际查询到的定义种类增长；缓存内容来自数据库独立副本，只读且不跨模块共享可写引用。同一批候选的技能 AI 实例按稳定技能 ID 复用，动作选定或选择结束后立即释放，不跨决策保留。
 - `GameSettings.ai_response_delay_seconds` 默认 `0.30` 秒，可在 `0.05` 至 `1.00` 秒之间以 `0.05` 秒调整。
 - `GameSettings.game_speed_interval_seconds` 默认 `0.30` 秒，可在 `0.10` 至 `1.00` 秒之间以 `0.10` 秒调整；AI 普通行动等待它与 `ai_response_delay_seconds` 的较大值，响应牌与同时无懈先经过流程间隔发布提示，再开始同一较大值的AI等待。
 - 单个 AI 出牌阶段最多执行 `64` 个动作，超过后强制结束。
@@ -255,6 +258,7 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 `tests/ai_policy_test.tscn` 固定验证：
 
 - 46种卡牌均存在本地 AI 配置。
+- 重复评分保持相同结果且不扩张已命中的静态定义缓存；同一决策内技能实例按稳定 ID 复用，决策上下文清理后不残留实例引用。
 - 隐藏身份从0暴露度开始，公开目标行为后态度产生变化。
 - 行为收益生成忠反标记，战略层不会直接读取尚未暴露的隐藏身份。
 - 忠臣救领袖、反贼拒绝救领袖、多人局内奸保护领袖和角色自救。

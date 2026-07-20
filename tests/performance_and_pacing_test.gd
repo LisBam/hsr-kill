@@ -1,6 +1,7 @@
 extends Node
 
 ## 性能与流程节奏专项回归。验证全局速度边界、阶段延时、历史增量同步和武将牌视觉缓存。
+## 界面性能同时验证相同对手座位绑定不会重复执行位置与缩放布局。
 
 ## 阶段间隔测试秒数；0.10秒是正式设置允许的最小值，足以观察到到期前后的状态边界。
 const TEST_FLOW_INTERVAL_SECONDS: float = 0.10
@@ -32,6 +33,10 @@ func _run() -> void:
 	if not await _test_response_prompt_pacing():
 		return
 	if not _test_incremental_event_history():
+		return
+	if not await _test_repeated_opponent_layout_binding():
+		return
+	if not await _test_repeated_hand_layout():
 		return
 	if not await _test_player_visual_signature():
 		return
@@ -153,6 +158,66 @@ func _test_incremental_event_history() -> bool:
 	_controller._emit_state()
 	if _controller.state.event_history.size() != _controller.event_scheduler.get_event_history_count():
 		return _fail("history_reconciliation")
+	return true
+
+
+## 验证节点身份、顺序和总人数均未变化时跳过座位重排，而真实顺序变化仍会触发布局。
+func _test_repeated_opponent_layout_binding() -> bool:
+	# 独立环桌布局组件；固定尺寸保证无头环境可以实际写入座位位置。
+	var battle_layout: DecadeBattleLayout = DecadeBattleLayout.new()
+	battle_layout.size = Vector2(1000.0, 600.0)
+	add_child(battle_layout)
+	# 第一名测试对手座位；标准尺寸只用于产生稳定布局坐标。
+	var first_opponent: Control = Control.new()
+	first_opponent.size = Vector2(148.0, 224.0)
+	battle_layout.add_child(first_opponent)
+	# 第二名测试对手座位；与首名尺寸一致以隔离绑定缓存行为。
+	var second_opponent: Control = Control.new()
+	second_opponent.size = Vector2(148.0, 224.0)
+	battle_layout.add_child(second_opponent)
+	await get_tree().process_frame
+	# 初始绑定数组；顺序对应本地玩家之后的环形座次。
+	var opponent_views: Array[Control] = [first_opponent, second_opponent]
+	battle_layout.bind_opponent_views(opponent_views, 3)
+	# 初次有效布局序号；必须至少执行一次。
+	var initial_revision: int = battle_layout.get_layout_revision()
+	battle_layout.bind_opponent_views(opponent_views, 3)
+	# 重复绑定序号；节点集合完全相同时应保持不变。
+	var repeated_revision: int = battle_layout.get_layout_revision()
+	# 反向顺序数组；真实座次顺序变化必须使缓存失效并重新布局。
+	var reordered_views: Array[Control] = [second_opponent, first_opponent]
+	battle_layout.bind_opponent_views(reordered_views, 3)
+	# 重排后的序号；应严格大于重复绑定后的值。
+	var reordered_revision: int = battle_layout.get_layout_revision()
+	battle_layout.queue_free()
+	if initial_revision <= 0 or repeated_revision != initial_revision or reordered_revision <= repeated_revision:
+		return _fail("opponent_layout_cache:%d/%d/%d" % [initial_revision, repeated_revision, reordered_revision])
+	return true
+
+
+## 验证手牌结构未变化时跳过重复位置计算，而可视宽度变化会让布局签名正常失效。
+func _test_repeated_hand_layout() -> bool:
+	# 手牌可视父节点；容器按该宽度计算展开、覆盖或滚动布局。
+	var hand_parent: Control = Control.new()
+	hand_parent.size = Vector2(640.0, 175.0)
+	add_child(hand_parent)
+	# 独立手牌容器；空手牌同样需要维护稳定最小尺寸，因此足以验证结构签名缓存。
+	var hand_layout: DecadeHandContainer = DecadeHandContainer.new()
+	hand_parent.add_child(hand_layout)
+	await get_tree().process_frame
+	hand_layout.layout_cards_now()
+	# 首次有效布局序号；进入场景树后的排队布局可能已经完成，记录当前稳定值即可。
+	var initial_revision: int = hand_layout.get_layout_revision()
+	hand_layout.layout_cards_now()
+	# 重复布局序号；没有卡牌、尺寸或配置变化时必须保持不变。
+	var repeated_revision: int = hand_layout.get_layout_revision()
+	hand_parent.size.x = 720.0
+	hand_layout.layout_cards_now()
+	# 宽度变化后的序号；可用空间属于布局输入，必须触发一次真实重新计算。
+	var resized_revision: int = hand_layout.get_layout_revision()
+	hand_parent.queue_free()
+	if initial_revision <= 0 or repeated_revision != initial_revision or resized_revision <= repeated_revision:
+		return _fail("hand_layout_cache:%d/%d/%d" % [initial_revision, repeated_revision, resized_revision])
 	return true
 
 

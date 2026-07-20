@@ -23,6 +23,12 @@ extends Container
 ## 该高度让选中且悬停的牌面仍完整位于手牌滚动区域内，不会被手牌框或相邻界面裁剪。
 @export_range(148.0, 240.0, 1.0) var content_height: float = 175.0
 
+## 最近一次已应用的结构布局签名；默认-1强制首次布局，重复快照只有结构或交互状态变化时才重新计算位置。
+var _layout_signature: int = -1
+
+## 已实际执行的结构布局次数；从0开始，仅供性能诊断与回归测试读取，运行时不得手动修改。
+var _layout_revision: int = 0
+
 ## 连接父级尺寸变化并请求首次布局；父级通常是只启用横向滚动的 ScrollContainer。
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_PASS
@@ -49,6 +55,11 @@ func layout_cards_now() -> void:
 	_layout_cards()
 
 
+## 返回有效手牌结构布局执行序号；只读诊断值可判断重复刷新是否真正触发了位置计算。
+func get_layout_revision() -> int:
+	return _layout_revision
+
+
 ## 按参考实现的 updateHand 算法排列手牌：空间足够时完整展开，不足时等距覆盖，达到最小露出宽度后允许横向滚动。
 func _layout_cards() -> void:
 	# 当前参与布局的可见卡牌；卡牌根节点统一为 Node2D，不依赖按钮或 Control 布局属性。
@@ -60,6 +71,17 @@ func _layout_cards() -> void:
 	var parent_control: Control = get_parent() as Control
 	# 当前可用于摆放手牌的宽度；扣除两侧安全边距后计算相邻牌步长。
 	var available_width: float = maxf((parent_control.size.x if parent_control != null else size.x) - horizontal_padding * 2.0, card_size.x)
+	# 本次布局签名数据；只包含决定基准位置、缩放补偿和绘制层级的稳定字段，不保存节点或对局快照。
+	var layout_signature_data: Array = [available_width, card_size, horizontal_padding, preferred_card_gap, minimum_visible_width, selected_lift, content_height]
+	# 当前写入签名的卡牌节点；节点身份、顺序和交互状态共同决定现有结构布局能否继续复用。
+	for card: CardView in cards:
+		layout_signature_data.append([card.get_instance_id(), card.is_card_selected, card.is_hovered_in_hand(), card.is_hand_dragging(), card.hover_scale])
+	# 本次结构布局签名；相同结果表示现有位置仍有效，入场与选中 Tween 会通过自身偏移属性继续移动原节点。
+	var next_layout_signature: int = hash(layout_signature_data)
+	if _layout_signature == next_layout_signature:
+		return
+	_layout_signature = next_layout_signature
+	_layout_revision += 1
 	if cards.is_empty():
 		custom_minimum_size = Vector2(available_width + horizontal_padding * 2.0, content_height)
 		return

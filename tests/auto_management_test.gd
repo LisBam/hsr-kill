@@ -96,13 +96,15 @@ func _test_auto_management_ui_components() -> bool:
 	var overlay: PlayerAutoManagedHandOverlay = overlay_scene.instantiate() as PlayerAutoManagedHandOverlay
 	add_child(overlay)
 	await get_tree().process_frame
+	if overlay.is_processing():
+		return _fail("overlay_idle_process_enabled")
 	_overlay_cancel_request_count = 0
 	overlay.cancel_requested.connect(_on_overlay_cancel_requested)
 	overlay.configure(true)
 	# 托管文字标签；使用独立输入节点接收取消意图，滤镜其余区域仍只负责阻断输入。
 	var status_label: Label = overlay.get_node("StatusLabel") as Label
 	var first_status: String = (overlay.get_node("StatusLabel") as Label).text
-	if not overlay.visible or overlay.mouse_filter != Control.MOUSE_FILTER_STOP or status_label.mouse_filter != Control.MOUSE_FILTER_STOP or first_status != "托管中.":
+	if not overlay.visible or not overlay.is_processing() or overlay.mouse_filter != Control.MOUSE_FILTER_STOP or status_label.mouse_filter != Control.MOUSE_FILTER_STOP or first_status != "托管中.":
 		return _fail("overlay_enable visible=%s filter=%d text=%s" % [overlay.visible, overlay.mouse_filter, first_status])
 	# 托管文字左键事件；实际 GUI 输入会先被标签消费，再由组件发出取消意图。
 	var cancel_event: InputEventMouseButton = InputEventMouseButton.new()
@@ -116,7 +118,7 @@ func _test_auto_management_ui_components() -> bool:
 	if animated_status == first_status or not animated_status.begins_with("托管中"):
 		return _fail("overlay_animation=%s" % animated_status)
 	overlay.configure(false)
-	if overlay.visible or overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+	if overlay.visible or overlay.is_processing() or overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 		return _fail("overlay_disable")
 	# 正式武将牌场景；托管标签必须由公开快照渲染，并携带描边配置。
 	var player_view_scene: PackedScene = load("res://scenes/components/player_target_view.tscn") as PackedScene

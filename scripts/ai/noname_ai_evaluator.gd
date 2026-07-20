@@ -66,6 +66,10 @@ var identity_model: IdentityAIModel
 ## 当前评估器使用的身份战略层；负责领袖危险、威胁集火、内奸控场和濒死救援。
 var identity_strategy: IdentityStrategyEvaluator
 
+## 已读取的卡牌静态定义缓存；每个评估器只保存数据库返回的独立副本，用于消除候选评分期间对同一定义的重复深拷贝。
+## 缓存内容只允许读取，卡牌规则或技能 AI 不得向其中写入任何临时评分字段；运行时无需动态修改。
+var _card_definition_cache: Dictionary = {}
+
 
 ## 创建绑定身份模型的效用评估器；模型为空时创建独立默认实例。
 func _init(model: IdentityAIModel = null) -> void:
@@ -94,7 +98,7 @@ func score_action(authoritative_snapshot: Dictionary, action: Dictionary, actor_
 	# 当前卡牌定义 ID；合法动作由核心写入该字段。
 	var card_id: String = str(action.get("card_definition_id", ""))
 	# 当前卡牌定义；AI 配置与规则元数据均由对应卡牌文件提供。
-	var definition: Dictionary = GameDatabase.get_card(card_id)
+	var definition: Dictionary = _get_cached_card_definition(card_id)
 	if definition.is_empty():
 		return 0.0
 	# 当前卡牌 AI 配置；每张与无名杀共有的牌在自身 GD 文件中声明其基础数据。
@@ -360,7 +364,7 @@ func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: 
 	var nature: String = str(context.get("nature", ""))
 	if nature.is_empty():
 		var card_definition_id: String = str(context.get("slash_card_definition_id", context.get("card_definition_id", "")))
-		nature = str(GameDatabase.get_card(card_definition_id).get("nature", "normal"))
+		nature = str(_get_cached_card_definition(card_definition_id).get("nature", "normal"))
 	if nature == "normal" or nature.is_empty():
 		return false
 	# 本次预期伤害；自身会先受到这段伤害，濒死或必死时不能为了传导盲目放弃响应。
@@ -392,7 +396,7 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	# 当前锦囊 ID；对应卡牌文件声明 target_result、beneficial 等 AI 数据。
 	var trick_id: String = str(context.get("trick_id", context.get("card_definition_id", "")))
 	# 当前锦囊定义；未知锦囊按普通负面牌处理。
-	var trick_definition: Dictionary = GameDatabase.get_card(trick_id)
+	var trick_definition: Dictionary = _get_cached_card_definition(trick_id)
 	# 当前锦囊 AI 配置；目标结果正负可直接表达收益方向。
 	var trick_ai: Dictionary = get_card_ai_profile(trick_definition)
 	# 锦囊对目标的基础结果；正值有利，负值有害。
@@ -413,7 +417,7 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 ## 返回指定卡牌的保留价值；支持无名杀数组价值随同名牌数量递减的常用写法。
 func get_card_value_by_id(card_id: String, authoritative_snapshot: Dictionary, owner_id: int) -> float:
 	# 卡牌定义；未知牌使用3分中性价值。
-	var definition: Dictionary = GameDatabase.get_card(card_id)
+	var definition: Dictionary = _get_cached_card_definition(card_id)
 	if definition.is_empty():
 		return 3.0
 	# 卡牌 AI 配置；优先使用 value，缺失时兼容旧 ai_use_value。
@@ -606,7 +610,7 @@ func get_attack_range(authoritative_snapshot: Dictionary, player_id: int) -> int
 	# 公开武器快照；空槽位安全回退至默认范围。
 	var weapon: Dictionary = (player.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary
 	# 武器卡牌定义；所有武器范围由内容文件统一声明，AI不维护装备ID白名单。
-	var weapon_definition: Dictionary = GameDatabase.get_card(str(weapon.get("definition_id", "")))
+	var weapon_definition: Dictionary = _get_cached_card_definition(str(weapon.get("definition_id", "")))
 	return maxi(int(weapon_definition.get("attack_range", 1)), 1)
 
 
@@ -705,7 +709,7 @@ func get_known_response_count(authoritative_snapshot: Dictionary, player_id: int
 			# 当前实体牌；定义 ID 用于查找其可提供的响应模式。
 			var card: Dictionary = card_variant as Dictionary
 			# 当前实体牌定义；provided_response_pattern 决定实际可提供的响应类型。
-			var definition: Dictionary = GameDatabase.get_card(str(card.get("definition_id", "")))
+			var definition: Dictionary = _get_cached_card_definition(str(card.get("definition_id", "")))
 			if str(definition.get("provided_response_pattern", "")) == response_pattern:
 				result += 1
 	return result
@@ -749,8 +753,18 @@ func _score_equipment_action(authoritative_snapshot: Dictionary, actor_id: int, 
 		# 当前同槽装备牌面；读取其对应卡牌文件 AI 配置。
 		var old_equipment: Dictionary = (actor.get("equipment", {}) as Dictionary).get(slot, {}) as Dictionary
 		# 当前同槽装备定义；未知定义按0处理。
-		var old_definition: Dictionary = GameDatabase.get_card(str(old_equipment.get("definition_id", "")))
+		var old_definition: Dictionary = _get_cached_card_definition(str(old_equipment.get("definition_id", "")))
 		# 当前同槽装备 AI 配置；优先 equip_value。
 		var old_ai: Dictionary = get_card_ai_profile(old_definition)
 		old_value = float(old_ai.get("equip_value", old_ai.get("value", 0.0)))
 	return new_value - old_value + order * ORDER_WEIGHT
+
+
+## 返回评估器内部缓存的卡牌静态定义；空 ID 返回空字典，命中后不再向数据库申请新的深拷贝。
+## 返回值是评估器私有只读数据，调用方只能查询字段，禁止修改字典或其嵌套数组。
+func _get_cached_card_definition(card_id: String) -> Dictionary:
+	if card_id.is_empty():
+		return {}
+	if not _card_definition_cache.has(card_id):
+		_card_definition_cache[card_id] = GameDatabase.get_card(card_id)
+	return _card_definition_cache.get(card_id, {}) as Dictionary
