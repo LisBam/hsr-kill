@@ -1488,11 +1488,16 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"deferred":interactive_human or ai_controlled_chooser,
 	}
 	# 请求结构自检；没有任何标准合法动作的请求无法由玩家、AI或网络完成，必须在注册暂停令牌前安全拒绝。
+	# allow_cancel=true 时 _build_card_choice_actions 必含取消动作，即使 candidates 为空（火攻同花色、铁壁无【闪】等隐私询问）也不得在此跳过。【无懈可击】并行登记不走本入口，仍可空候选不建阻塞窗口。
 	if _build_card_choice_actions(_pending_card_choice).is_empty():
-		var invalid_choice_kind: String = str((_pending_card_choice.get("context", {}) as Dictionary).get("kind", "unknown"))
-		_pending_card_choice.clear()
-		_reject("选择请求没有合法结果，已跳过以避免流程停滞：%s。" % invalid_choice_kind)
-		return []
+		if allow_cancel:
+			# 防御分支：未来枚举若遗漏取消动作，仍强制可取消并继续登记，避免私密空候选被静默吞掉。
+			_pending_card_choice["allow_cancel"] = true
+		else:
+			var invalid_choice_kind: String = str((_pending_card_choice.get("context", {}) as Dictionary).get("kind", "unknown"))
+			_pending_card_choice.clear()
+			_reject("选择请求没有合法结果，已跳过以避免流程停滞：%s。" % invalid_choice_kind)
+			return []
 	# 独立选择事件；控制器的兼容恢复分支继续执行具体效果，EventScheduler 负责请求身份和旧响应失效。
 	# 选择父事件；规则效果内创建的响应必须挂到当前 content 子事件，阶段级选择则回退到长期根事件。
 	var choice_parent_event_id: int = event_scheduler.get_current_event_id()

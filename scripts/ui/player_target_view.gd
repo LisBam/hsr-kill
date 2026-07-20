@@ -64,6 +64,15 @@ signal scroll_gesture_moved(relative: Vector2)
 ## 选目标期间非法武将牌的整体调制色；默认保留42%亮度与完整不透明度，运行时通常无需动态修改。
 @export var invalid_target_modulate: Color = Color(0.42, 0.42, 0.42, 1.0)
 
+## 选目标“选中”提示的固定绿色；与太空主题合法目标色一致，不随选中金色边框变化，运行时通常无需动态修改。
+const SELECTED_MARKER_COLOR: Color = Color("61c7a4")
+
+## 选中提示字号；与桌面技能发动提示保持同级可读性，运行时通常无需动态修改。
+@export_range(18, 40, 1) var selected_marker_font_size: int = 28
+
+## 选中提示描边宽度；与技能发动黄字描边一致，保证深色插画上仍清晰，运行时通常无需动态修改。
+@export_range(2, 12, 1) var selected_marker_outline_size: int = 6
+
 ## 当前角色稳定玩家 ID；由 configure 写入，未配置时为 -1。
 var player_id: int = -1
 
@@ -213,8 +222,12 @@ var _scroll_gesture_enabled: bool = false
 ## 武将牌受伤抖动组件；只接收表现调用并恢复牌面原位，不读取当前体力或伤害来源。
 @onready var _damage_shake_feedback: DamageShakeFeedback = $DamageShakeFeedback
 
+## 选目标期间的“选中”提示；常驻至取消选中，不读取规则状态，仅跟随 set_target_state。
+var _selected_marker_label: Label
+
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
+	_ensure_selected_marker_label()
 	_card_body.size = card_size
 	_card_back.size = card_size
 	_refresh_input_area_size()
@@ -587,7 +600,48 @@ func _refresh_visual_state() -> void:
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
 	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0)
+	_refresh_selected_marker()
 
+
+
+## 确保选中提示标签存在；首次创建后复用，不随 configure 重建以免丢失布局。
+func _ensure_selected_marker_label() -> void:
+	if _selected_marker_label != null and is_instance_valid(_selected_marker_label):
+		return
+	# 中央“选中”字；格式对齐技能发动黄字，颜色固定为绿色，生命周期跟随 is_target_selected。
+	_selected_marker_label = Label.new()
+	_selected_marker_label.name = "SelectedTargetMarker"
+	_selected_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_selected_marker_label.text = "选中"
+	_selected_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_selected_marker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_selected_marker_label.z_index = 20
+	_selected_marker_label.visible = false
+	_selected_marker_label.add_theme_font_size_override("font_size", selected_marker_font_size)
+	_selected_marker_label.add_theme_color_override("font_color", SELECTED_MARKER_COLOR)
+	_selected_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_selected_marker_label.add_theme_constant_override("outline_size", selected_marker_outline_size)
+	add_child(_selected_marker_label)
+	_layout_selected_marker()
+
+
+## 将“选中”提示铺满当前武将牌矩形；card_size 或布局变化后由刷新路径重入。
+func _layout_selected_marker() -> void:
+	if _selected_marker_label == null or not is_instance_valid(_selected_marker_label):
+		return
+	_selected_marker_label.position = Vector2.ZERO
+	_selected_marker_label.size = card_size
+
+
+## 按 set_target_state 结果显示或隐藏绿色“选中”字；仅表现层，不读取规则引擎。
+func _refresh_selected_marker() -> void:
+	_ensure_selected_marker_label()
+	_layout_selected_marker()
+	_selected_marker_label.add_theme_font_size_override("font_size", selected_marker_font_size)
+	_selected_marker_label.add_theme_color_override("font_color", SELECTED_MARKER_COLOR)
+	_selected_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_selected_marker_label.add_theme_constant_override("outline_size", selected_marker_outline_size)
+	_selected_marker_label.visible = is_target_selected
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
 ## 当前横条几何改为直接读取静态插画槽，完整铺满武将插画宽度。

@@ -3502,8 +3502,14 @@ func _get_post_match_result_text() -> String:
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 当前本地身份；快照不完整时不能错误宣告胜负。
 	var local_identity: String = str(local_player.get("identity", ""))
-	# 当前阵营是否与权威胜者一致；领袖与忠臣共享胜利条件，反贼和内奸分别独立。
-	var is_victory: bool = (winner == "leader_and_loyalists" and local_identity in ["leader", "loyalist"]) or (winner == "rebels" and local_identity == "rebel") or (winner == "renegade" and local_identity == "renegade")
+	# 当前阵营是否与权威胜者一致；领袖与忠臣共享胜利条件，反贼和内奸分别独立，斗地主地主与农民各自对应胜方字段。
+	var is_victory: bool = (
+		(winner == "leader_and_loyalists" and local_identity in ["leader", "loyalist"])
+		or (winner == "rebels" and local_identity == "rebel")
+		or (winner == "renegade" and local_identity == "renegade")
+		or (winner == "landlords" and local_identity == "landlord")
+		or (winner == "peasants" and local_identity == "peasant")
+	)
 	if is_victory:
 		return "对局结算，游戏胜利"
 	if not winner.is_empty():

@@ -35,6 +35,9 @@ func _run() -> void:
 	if not _test_identity_rules_pure():
 		_restore_settings()
 		return
+	if not _test_post_match_result_text_doudizhu():
+		_restore_settings()
+		return
 	if not await _test_three_player_match_bootstrap():
 		_restore_settings()
 		return
@@ -62,8 +65,11 @@ func _run() -> void:
 	if not _test_gongku_ai_prefers_draw_when_full_hp():
 		_restore_settings()
 		return
+	if not _test_fire_attack_empty_same_suit_still_prompts():
+		_restore_settings()
+		return
 	_restore_settings()
-	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters+gongku_ai")
+	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters+gongku_ai+post_match+huogong_privacy")
 	get_tree().quit(0)
 
 
@@ -532,6 +538,135 @@ func _test_gongku_ai_prefers_draw_when_full_hp() -> bool:
 	var chosen: Dictionary = policy.choose_card_choice(full_hp_snapshot, choice_request, legal_actions)
 	if str((chosen.get("payload", {}) as Dictionary).get("selected_control_id", "")) != "draw_two":
 		return _fail("gongku_policy_full_hp_choice=%s" % chosen)
+	return true
+
+
+
+## 验证斗地主终局文案映射：地主全灭农民时本地地主显示胜利，而非因缺失 identity 映射误报失败。
+func _test_post_match_result_text_doudizhu() -> bool:
+	# 纯映射表；与 MatchTable._get_post_match_result_text 保持一致，避免实例化完整牌桌场景。
+	var cases: Array[Dictionary] = [
+		{"winner":"landlords", "identity":"landlord", "expect_victory":true},
+		{"winner":"landlords", "identity":"peasant", "expect_victory":false},
+		{"winner":"peasants", "identity":"peasant", "expect_victory":true},
+		{"winner":"peasants", "identity":"landlord", "expect_victory":false},
+		{"winner":"leader_and_loyalists", "identity":"leader", "expect_victory":true},
+		{"winner":"rebels", "identity":"rebel", "expect_victory":true},
+		{"winner":"renegade", "identity":"renegade", "expect_victory":true},
+		{"winner":"draw", "identity":"landlord", "expect_draw":true},
+	]
+	for case_variant: Variant in cases:
+		var case_data: Dictionary = case_variant as Dictionary
+		var winner: String = str(case_data.get("winner", ""))
+		var local_identity: String = str(case_data.get("identity", ""))
+		var text_result: String = _map_post_match_result_text(winner, local_identity)
+		if bool(case_data.get("expect_draw", false)):
+			if text_result != "对局结算，游戏平局":
+				return _fail("post_match_draw winner=%s text=%s" % [winner, text_result])
+			continue
+		var expect_victory: bool = bool(case_data.get("expect_victory", false))
+		var expected: String = "对局结算，游戏胜利" if expect_victory else "对局结算，游戏失败"
+		if text_result != expected:
+			return _fail("post_match winner=%s identity=%s text=%s expected=%s" % [winner, local_identity, text_result, expected])
+	return true
+
+
+## 与 MatchTable._get_post_match_result_text 同构的胜负文案映射；身份局与斗地均需覆盖。
+func _map_post_match_result_text(winner: String, local_identity: String) -> String:
+	if winner == "draw":
+		return "对局结算，游戏平局"
+	var is_victory: bool = (
+		(winner == "leader_and_loyalists" and local_identity in ["leader", "loyalist"])
+		or (winner == "rebels" and local_identity == "rebel")
+		or (winner == "renegade" and local_identity == "renegade")
+		or (winner == "landlords" and local_identity == "landlord")
+		or (winner == "peasants" and local_identity == "peasant")
+	)
+	if is_victory:
+		return "对局结算，游戏胜利"
+	if not winner.is_empty():
+		return "对局结算，游戏失败"
+	return "对局结算"
+
+
+## 验证【火攻】同花色候选为空时仍登记可取消选牌请求，禁止因空候选静默跳过而泄露手牌信息。
+func _test_fire_attack_empty_same_suit_still_prompts() -> bool:
+	_create_controller()
+	# 人类交互局：非空 match_id 使 request_card_choice 挂起，便于断言空候选仍会建窗。
+	_controller.state = GameState.new()
+	_controller.state.match_mode = IdentityRules.MODE_DOUDIZHU
+	_controller.state.match_id = "huogong_privacy_test"
+	_controller.state.current_phase = "play"
+	_controller.local_human_player_id = 0
+	# 火攻使用者：手中仅有黑色【杀】，与展示红桃花色不同；本断言重点是空同花色候选仍建窗。
+	var actor := PlayerState.new()
+	actor.player_id = 0
+	actor.alive = true
+	actor.identity = "landlord"
+	actor.character_id = "danheng"
+	actor.max_hp = 4
+	actor.hp = 4
+	var black_hand := CardInstance.new("sha", "club", 7)
+	black_hand.owner_id = 0
+	black_hand.zone = "hand"
+	actor.hand.append(black_hand)
+	var target := PlayerState.new()
+	target.player_id = 1
+	target.alive = true
+	target.identity = "peasant"
+	target.character_id = "march7th"
+	target.max_hp = 4
+	target.hp = 4
+	_controller.state.players = [actor, target]
+	if _controller.event_scheduler == null:
+		return _fail("huogong_privacy missing event_scheduler")
+	# 登记长期根事件，使选择子事件可挂到事件树（与 start_match 入口一致）。
+	_controller.event_scheduler.reset()
+	var root_event: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"mode":_controller.state.match_mode, "match_id":_controller.state.match_id})
+	_controller._runtime_root_event_id = root_event.event_id
+	_controller.event_scheduler.begin_root(root_event.event_id, true)
+	_controller.state.current_event_id = root_event.event_id
+	# 与 huogong 弃牌相同的参数：空候选、可取消、隐私标记。
+	var discard_context: Dictionary = {
+		"kind":"fire_attack_discard",
+		"private_info_safe_prompt":true,
+		"shown_suit":"heart",
+		"actor_id":0,
+		"target_id":1,
+	}
+	_controller._pending_card_choice.clear()
+	var selected: Array[int] = _controller.request_card_choice(0, "火攻弃牌", "是否弃置一张同花色手牌？", [], 0, 1, true, discard_context)
+	if not selected.is_empty():
+		return _fail("huogong_privacy selected_uids=%s" % str(selected))
+	if not _controller.has_pending_card_choice():
+		return _fail("huogong_privacy empty same-suit must still open cancelable prompt")
+	var pending: Dictionary = _controller.get("_pending_card_choice") as Dictionary
+	if not bool(pending.get("allow_cancel", false)):
+		return _fail("huogong_privacy pending allow_cancel=false")
+	if not (pending.get("candidates", []) as Array).is_empty():
+		return _fail("huogong_privacy candidates should stay empty")
+	if str((pending.get("context", {}) as Dictionary).get("kind", "")) != "fire_attack_discard":
+		return _fail("huogong_privacy kind=%s" % str((pending.get("context", {}) as Dictionary).get("kind", "")))
+	# 空候选可取消请求必须至少枚举出取消动作。
+	var legal_actions: Array[Dictionary] = _controller.call("_build_card_choice_actions", pending) as Array
+	var has_cancel: bool = false
+	for action_variant: Variant in legal_actions:
+		var payload: Dictionary = (action_variant as Dictionary).get("payload", {}) as Dictionary
+		if not bool(payload.get("confirmed", true)):
+			has_cancel = true
+			break
+	if not has_cancel:
+		return _fail("huogong_privacy cancel action missing")
+	# 清理挂起请求，避免污染后续断言。
+	_controller._pending_card_choice.clear()
+	_controller.event_scheduler.reset()
+	# 对照：强制不可取消且无候选仍应拒绝登记，避免无解死锁。
+	var root_event_forced: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"mode":_controller.state.match_mode})
+	_controller._runtime_root_event_id = root_event_forced.event_id
+	_controller.event_scheduler.begin_root(root_event_forced.event_id, true)
+	var forced_selected: Array[int] = _controller.request_card_choice(0, "强制空候选", "应被拒绝", [], 1, 1, false, {"kind":"forced_empty_sample"})
+	if not forced_selected.is_empty() or _controller.has_pending_card_choice():
+		return _fail("forced_empty_should_reject pending=%s selected=%s" % [str(_controller.has_pending_card_choice()), str(forced_selected)])
 	return true
 
 
