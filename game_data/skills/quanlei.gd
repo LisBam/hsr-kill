@@ -48,9 +48,31 @@ func can_activate(_context: Dictionary = {}) -> bool:
 	var candidates: Array[Dictionary] = _get_hand_candidates()
 	if candidates.is_empty():
 		return false
-	# 材料与目标组合数据；至少存在一组合法组合时才开放主动按钮。
+	# 材料与目标组合数据；目标预览不校验次数，因此下方必须再走完整校验。
 	var selection_data: Dictionary = build_virtual_target_selection_data(THUNDER_SLASH_DEFINITION_ID, candidates, VIRTUAL_RULE_OVERRIDES)
-	return not (selection_data.get("target_ids", []) as Array).is_empty()
+	# 逐材料合法目标映射；键为材料UID字符串。
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	for candidate: Dictionary in candidates:
+		# 当前材料UID；仅普通手牌可作全垒材料。
+		var material_card_uid: int = int(candidate.get("uid", -1))
+		# 当前材料实体；找不到时跳过，避免候选快照与权威区域短暂不一致。
+		var material_card: CardInstance = get_owned_conversion_material_card(material_card_uid)
+		if material_card == null:
+			continue
+		# 当前材料合法目标；至少一组合法完整虚拟使用时按钮才亮起。
+		var legal_target_ids: Array[int] = []
+		legal_target_ids.assign(target_ids_by_card_id.get(str(material_card_uid), []) as Array)
+		for first_index: int in range(legal_target_ids.size()):
+			# 当前首目标；单目标组合先完整校验阶段【杀】次数与目标规则。
+			var first_target_id: int = legal_target_ids[first_index]
+			if validate_virtual_use_for_material(THUNDER_SLASH_DEFINITION_ID, material_card, [first_target_id], VIRTUAL_RULE_OVERRIDES).is_empty():
+				return true
+			for second_index: int in range(first_index + 1, legal_target_ids.size()):
+				# 当前双目标组合；目标上限+1 时也必须通过同一套完整校验。
+				var combined_target_ids: Array[int] = [first_target_id, legal_target_ids[second_index]]
+				if validate_virtual_use_for_material(THUNDER_SLASH_DEFINITION_ID, material_card, combined_target_ids, VIRTUAL_RULE_OVERRIDES).is_empty():
+					return true
+	return false
 
 
 ## 主动发动全垒；允许选择1至2名不同目标，AI动作可直接携带材料与目标数组。
@@ -102,7 +124,7 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 		return false
 	# 单材料数组；用于控制器统一移动、回放和最终弃牌。
 	var material_card_uids: Array[int] = [material_card_uid]
-	if not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【全垒】，将一张手牌当雷【杀】使用。" % owner.display_name, VIRTUAL_RULE_OVERRIDES)):
+	if not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "", VIRTUAL_RULE_OVERRIDES)):
 		return false
 	_used_current_play_phase = true
 	announce_activation({"material_card_uid":material_card_uid, "target_ids":target_ids.duplicate(), "virtual_card_id":THUNDER_SLASH_DEFINITION_ID})

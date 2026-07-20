@@ -586,7 +586,7 @@ func _refresh_visual_state() -> void:
 	_card_body.add_theme_stylebox_override("panel", player_style)
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
-	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)))
+	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0)
 
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。

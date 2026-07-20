@@ -430,25 +430,25 @@ func _select_identity_mode() -> void:
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
-## 选中斗地主模式；人数限制为 3 与 6，写入下一局模式配置后不改进行中的对局。
+## 选中斗地主模式；人数限制为 3 与 5，写入下一局模式配置后不改进行中的对局。
 func _select_doudizhu_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_DOUDIZHU
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
-	# 斗地主仅 3/6 人；步长 3 使上下键在 3 与 6 之间切换，禁止其它人数。
+	# 斗地主仅 3/5 人；步长 2 使上下键在 3 与 5 之间切换，禁止其它人数。
 	minimum_player_count = 3
-	maximum_player_count = 6
+	maximum_player_count = 5
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
-	_player_count_input.step = 3.0
-	# 恢复该模式独立保存人数；非 3/6 时由全局规范化夹到合法值。
+	_player_count_input.step = 2.0
+	# 恢复该模式独立保存人数；非 3/5 时由全局规范化夹到合法值。
 	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU) if GameSettings != null else 3
-	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, preferred_count) if GameSettings != null else (3 if preferred_count < 5 else 6)
+	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, preferred_count) if GameSettings != null else (3 if preferred_count < 4 else 5)
 	set_next_player_count(preferred_count)
 	_mode_title.text = "斗地主"
-	_mode_description.text = "斗地主·3或6人·地主VS农民"
+	_mode_description.text = "斗地主·3或5人·地主VS农民"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
@@ -982,7 +982,7 @@ func _on_game_speed_changed(interval_seconds: float) -> void:
 
 ## 下一局人数输入变化时写入全局持久化设置；已开始对局不会读取该值改变当前身份与座次。
 func _on_next_player_count_changed(player_count: float) -> void:
-	# 按模式规范化；斗地主仅 3/6，身份局 2–10。无信号回写避免重复回调。
+	# 按模式规范化；斗地主仅 3/5，身份局 2–10。无信号回写避免重复回调。
 	var resolved_count: int = GameSettings.normalize_player_count_for_mode(_selected_match_mode, int(player_count)) if GameSettings != null else int(player_count)
 	if int(_player_count_input.value) != resolved_count:
 		_player_count_input.set_value_no_signal(float(resolved_count))

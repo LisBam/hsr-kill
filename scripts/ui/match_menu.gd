@@ -514,7 +514,7 @@ func _on_next_player_count_changed(player_count: float) -> void:
 		GameSettings.set_next_match_player_count(resolved_count)
 
 
-## 根据下一局模式调整局内菜单人数 SpinBox 上下限与步长；斗地主仅 3↔6。
+## 根据下一局模式调整局内菜单人数 SpinBox 上下限与步长；斗地主仅 3↔5。
 func _on_next_match_mode_changed(mode_id: String) -> void:
 	_apply_player_count_limits_for_mode(mode_id)
 	if GameSettings != null:
@@ -526,10 +526,10 @@ func _apply_player_count_limits_for_mode(mode_id: String) -> void:
 	var normalized_mode: String = GameSettings.normalize_match_mode(mode_id) if GameSettings != null else str(mode_id)
 	if normalized_mode == GameSettings.MATCH_MODE_DOUDIZHU if GameSettings != null else normalized_mode == "doudizhu":
 		minimum_player_count = 3
-		maximum_player_count = 6
+		maximum_player_count = 5
 		_player_count_input.min_value = 3
-		_player_count_input.max_value = 6
-		_player_count_input.step = 3.0
+		_player_count_input.max_value = 5
+		_player_count_input.step = 2.0
 	else:
 		minimum_player_count = 2
 		maximum_player_count = 10

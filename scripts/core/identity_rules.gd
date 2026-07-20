@@ -6,7 +6,7 @@ extends RefCounted
 ## 标准身份局模式稳定 ID；主菜单与对局状态均使用该字符串标识。
 const MODE_IDENTITY: String = "identity"
 
-## 斗地主模式稳定 ID；仅支持三人与六人局，使用地主与农民身份。
+## 斗地主模式稳定 ID；仅支持三人与五人局，使用地主与农民身份。
 const MODE_DOUDIZHU: String = "doudizhu"
 
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
@@ -23,10 +23,10 @@ const IDENTITY_DISTRIBUTIONS: Dictionary = {
 }
 
 ## 斗地主人数到身份表；键为总人数，值为开局固定座次顺序的身份数组（1号位起）。
-## 三人：一名地主与两名农民；六人：两名地主与四名农民，地主固定一号位与三号位。
+## 三人：一名地主与两名农民；五人：两名地主与三名农民，地主固定一号位与三号位。
 const DOUDIZHU_DISTRIBUTIONS: Dictionary = {
 	3: ["landlord", "peasant", "peasant"],
-	6: ["landlord", "peasant", "landlord", "peasant", "peasant", "peasant"],
+	5: ["landlord", "peasant", "landlord", "peasant", "peasant"],
 }
 
 ## 兼容旧常量名；外部若仍引用 DISTRIBUTIONS 时指向标准身份表。
@@ -48,7 +48,7 @@ func get_supported_player_counts(mode_id: String) -> Array[int]:
 	var result: Array[int] = []
 	if mode == MODE_DOUDIZHU:
 		result.append(3)
-		result.append(6)
+		result.append(5)
 		return result
 	for player_count: int in range(2, 11):
 		if IDENTITY_DISTRIBUTIONS.has(player_count):
@@ -62,7 +62,7 @@ func supports_player_count(mode_id: String, player_count: int) -> bool:
 
 
 ## 返回指定人数与模式的身份数组副本；人数不支持时返回空数组。
-## 斗地主返回已按一号位（及六人三号位）排好的固定身份表，调用方只需整表洗牌玩家或直接按座次应用。
+## 斗地主返回已按一号位（及五人三号位）排好的固定身份表，调用方只需整表洗牌玩家或直接按座次应用。
 func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Array[String]:
 	# 规范化模式；缺省为标准身份局以保持旧调用兼容。
 	var mode: String = normalize_mode(mode_id)
@@ -210,7 +210,7 @@ func _evaluate_doudizhu_winner(state: GameState) -> String:
 	var landlord_alive: int = 0
 	# 存活农民数量；全部出局后地主方获胜。
 	var peasant_alive: int = 0
-	# 是否已有地主死亡；六人双地主时只需击杀一名地主。
+	# 是否已有地主死亡；五人双地主时只需击杀一名地主。
 	var landlord_dead: bool = false
 	for player: PlayerState in state.players:
 		if player.identity == "landlord":

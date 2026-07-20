@@ -173,7 +173,7 @@ const MATCH_MODE_DOUDIZHU: String = "doudizhu"
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
-## 斗地主模式默认人数；仅允许 3 或 6，默认 3 人。
+## 斗地主模式默认人数；仅允许 3 或 5，默认 3 人。
 const DEFAULT_DOUDIZHU_PLAYER_COUNT: int = 3
 
 ## 身份模式默认人数；与历史全局默认 8 人保持一致。
@@ -209,7 +209,7 @@ var next_match_mode: String = DEFAULT_NEXT_MATCH_MODE
 ## 身份模式独立保存的下一局人数；切换回身份模式时恢复，不与斗地主人数互相覆盖。
 var next_match_player_count_identity: int = DEFAULT_IDENTITY_PLAYER_COUNT
 
-## 斗地主模式独立保存的下一局人数；仅 3 或 6，切换回斗地主时恢复。
+## 斗地主模式独立保存的下一局人数；仅 3 或 5，切换回斗地主时恢复。
 var next_match_player_count_doudizhu: int = DEFAULT_DOUDIZHU_PLAYER_COUNT
 
 
@@ -358,7 +358,7 @@ func set_online_avatar_character_id(character_id: String) -> void:
 
 ## 设置下一局人数并同步所有菜单；范围外输入自动限制为标准身份局支持的2至10人。
 func set_next_match_player_count(player_count: int) -> void:
-	# 按当前下一局模式规范化人数；身份局 2–10，斗地主仅 3/6，并同步写入该模式独立存档槽。
+	# 按当前下一局模式规范化人数；身份局 2–10，斗地主仅 3/5，并同步写入该模式独立存档槽。
 	var normalized_player_count: int = normalize_player_count_for_mode(next_match_mode, player_count)
 	if next_match_player_count == normalized_player_count:
 		_store_player_count_for_mode(next_match_mode, normalized_player_count)
@@ -376,13 +376,13 @@ func normalize_match_mode(mode_id: String) -> String:
 	return MATCH_MODE_IDENTITY
 
 
-## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 6（小于 5 夹到 3，否则夹到 6）。
+## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 5（小于 4 夹到 3，否则夹到 5）。
 func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 	var mode: String = normalize_match_mode(mode_id)
 	if mode == MATCH_MODE_DOUDIZHU:
-		if player_count == 3 or player_count == 6:
+		if player_count == 3 or player_count == 5:
 			return player_count
-		return 3 if player_count < 5 else 6
+		return 3 if player_count < 4 else 5
 	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 
 
