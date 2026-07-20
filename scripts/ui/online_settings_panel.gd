@@ -24,9 +24,6 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 右侧详情区遮罩透明度；默认0.18与模式选择预览遮罩一致，运行时只影响视觉明暗。
 @export_range(0.0, 1.0, 0.01) var detail_shade_opacity: float = 0.18
 
-## 右上角资料摘要板不透明度；默认0.82与模式选择摘要板一致，运行时只影响视觉层级。
-@export_range(0.0, 1.0, 0.01) var summary_panel_opacity: float = 0.82
-
 ## 底部操作栏不透明度；默认0.88与模式选择操作栏一致，运行时不影响资料提交逻辑。
 @export_range(0.0, 1.0, 0.01) var action_panel_opacity: float = 0.88
 
@@ -54,7 +51,7 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 左侧分区选中指示线；读取主题强调色，与身份模式卡片左侧竖线视觉一致。
 @onready var _profile_section_indicator: ColorRect = %OnlineProfileSectionIndicator
 
-## 右侧资料详情区；承载摘要、名称编辑、武将形象列表与底部操作栏。
+## 右侧资料详情区；承载名称编辑、武将形象列表与底部操作栏。
 @onready var _detail_panel: PanelContainer = %OnlineSettingsDetailPanel
 
 ## 右侧详情底色；使用主题桌面色层次，替代模式选择预览中的大图背景。
@@ -63,28 +60,10 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 右侧详情遮罩；只改善前景文本可读性，透明度与模式选择预览遮罩一致。
 @onready var _detail_shade: ColorRect = %OnlineSettingsDetailShade
 
-## 右上角资料摘要板；使用局部主题底板保证名称与形象说明不被底色吞没。
-@onready var _summary_panel: PanelContainer = %OnlineSettingsSummaryPanel
-
-## 摘要眉题；固定显示“当前资料”，对应模式选择摘要中的“当前模式”。
-@onready var _summary_eyebrow: Label = %OnlineSettingsSummaryEyebrow
-
-## 摘要主标题；实时显示当前编辑中的玩家名称，保存前仅反映面板临时输入。
-@onready var _title_label: Label = %OnlineSettingsTitle
-
-## 摘要形象说明；显示所选武将的本地化名称，不暴露稳定英文 ID。
+## 当前形象说明；位于形象列表标题行右侧，显示所选武将本地化名称，不暴露稳定英文 ID。
 @onready var _selected_avatar_label: Label = %OnlineSelectedAvatarLabel
 
-## 摘要提示；说明联机形象在局域网房间中的用途，只承担界面说明。
-@onready var _hint_label: Label = %OnlineSettingsHint
-
-## 左上角分区标签；与模式选择预览徽章同尺寸，标明当前处于联机资料编辑。
-@onready var _detail_badge: PanelContainer = %OnlineSettingsDetailBadge
-
-## 分区标签文字；固定显示“联机资料”。
-@onready var _detail_badge_label: Label = %OnlineSettingsDetailBadgeLabel
-
-## 底部操作栏；承载取消与保存按钮，尺寸与模式选择底部操作栏一致。
+## 底部操作栏；承载取消与保存按钮，位于纵向分栏最底部，高 z_index 避免武将牌 Node2D 绘制遮挡。
 @onready var _action_panel: PanelContainer = %OnlineSettingsActionPanel
 
 ## 玩家名称输入框；最大长度与局域网协议统一为20个 Unicode 字符，保存前仍会经过全局标准化。
@@ -116,7 +95,6 @@ func _ready() -> void:
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
 	_player_name_input.select_all_on_focus = false
-	_player_name_input.text_changed.connect(_on_player_name_text_changed)
 	_save_button.pressed.connect(_save_and_close)
 	_cancel_button.pressed.connect(_cancel_and_close)
 	_profile_section_button.pressed.connect(_keep_profile_section_selected)
@@ -130,9 +108,10 @@ func open_panel() -> void:
 	move_to_front()
 	_player_name_input.text = GameSettings.online_player_name
 	_player_name_input.caret_column = _player_name_input.text.length()
-	_sync_summary_name()
 	_rebuild_avatar_options()
 	_keep_profile_section_selected()
+	# 操作栏与形象列表纵向分栏；仍抬升 z_index，避免 Node2D 武将牌绘制压过取消/保存按钮。
+	_action_panel.z_index = 20
 	call_deferred("_focus_primary_control")
 
 
@@ -146,20 +125,13 @@ func refresh_ui_style() -> void:
 	_detail_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_detail_surface.color = BattleUIStyle.get_color("table_surface")
 	_detail_shade.color = Color(BattleUIStyle.get_color("panel"), detail_shade_opacity)
-	_detail_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
-	_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), summary_panel_opacity), BattleUIStyle.get_color("border")))
 	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), action_panel_opacity), BattleUIStyle.get_color("accent"), 1, 0))
+	_action_panel.z_index = 20
 	_profile_section_indicator.color = BattleUIStyle.get_color("accent")
 	_side_list_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_profile_section_name.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_profile_section_hint.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_detail_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_summary_eyebrow.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_title_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
-	_selected_avatar_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_selected_avatar_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
-	_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	_selected_avatar_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%OnlinePlayerNameLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OnlineAvatarLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	BattleUIStyle.apply_interaction_button(_profile_section_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -225,6 +197,9 @@ func _rebuild_avatar_options() -> void:
 			"wooden_ox_storage_count": 0,
 		}
 		avatar_view.configure_snapshot(avatar_snapshot, character_definition, false, faction_definition)
+		# 列表拖动手势；武将牌 Node2D 会拦截滚轮外的拖动，开启后才能在形象列表中纵向滚动。
+		avatar_view.set_scroll_gesture_enabled(true)
+		avatar_view.scroll_gesture_moved.connect(_on_avatar_scroll_gesture_moved)
 		avatar_view.pressed.connect(_select_avatar.bind(character_id))
 		_avatar_views[character_id] = avatar_view
 		if scaled_card_size == Vector2.ZERO:
@@ -266,6 +241,11 @@ func _sort_character_ids_by_name(left_character_id: String, right_character_id: 
 	return left_name < right_name
 
 
+## 把武将牌拖动手势转给形象滚动容器；只调整纵向滚动偏移，不改变当前临时形象选择。
+func _on_avatar_scroll_gesture_moved(relative: Vector2) -> void:
+	_avatar_scroll.scroll_vertical = maxi(0, int(_avatar_scroll.scroll_vertical - relative.y))
+
+
 ## 选中指定稳定武将 ID 作为临时联机形象；在保存前不写入 GameSettings。
 func _select_avatar(character_id: String) -> void:
 	if character_id.is_empty() or not _avatar_views.has(character_id):
@@ -283,18 +263,6 @@ func _update_avatar_selection() -> void:
 		var avatar_view: PlayerTargetView = _avatar_views[character_id] as PlayerTargetView
 		avatar_view.set_target_state(false, character_id == _selected_character_id)
 	_selected_avatar_label.text = "当前形象：%s" % GameDatabase.resolve_character_name(_selected_character_id)
-
-
-## 名称输入变化时同步右上角摘要主标题；保存前仅反映面板临时文本。
-func _on_player_name_text_changed(_new_text: String) -> void:
-	_sync_summary_name()
-
-
-## 把摘要主标题更新为当前名称输入；空文本时显示占位“玩家”，避免摘要板留下空白。
-func _sync_summary_name() -> void:
-	# 当前编辑中的名称；去除首尾空白后若为空则使用默认显示，真正标准化仍在保存时由 GameSettings 完成。
-	var preview_name: String = _player_name_input.text.strip_edges()
-	_title_label.text = preview_name if not preview_name.is_empty() else "玩家"
 
 
 ## 保持左侧联机资料分区始终为选中态；当前仅一项分区，点击不得取消按下。
