@@ -643,13 +643,13 @@ func _test_local_initial_leader_flow() -> bool:
 	return true
 
 
-## 验证AI首任领袖只在领袖技固定候选中使用本局随机源选择，连续固定种子不能总是同一名武将。
+## 验证AI首任领袖在本次全部候选中使用本局随机源选择，连续固定种子必须能选到普通与领袖技武将。
 func _test_ai_initial_leader_character_variation() -> bool:
 	GameSettings.set_custom_character_assignment_enabled(true)
 	GameSettings.set_customize_ai_characters_enabled(false)
 	GameSettings.set_mulligan_limit(0)
 	_create_controller()
-	# 当前拥有至少一个领袖技的武将集合；内容库拥有多名时，AI首任领袖必须能产生多个稳定武将ID。
+	# 当前拥有至少一个领袖技的武将集合；用于验证AI首任领袖不会只从该固定前缀中选择。
 	var leader_skill_character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		# 当前武将定义；技能数组只读，用于确认该武将是否属于领袖技固定候选。
@@ -662,6 +662,8 @@ func _test_ai_initial_leader_character_variation() -> bool:
 				break
 	# 多个固定种子下实际由AI首任领袖选中的武将ID；字典键去重避免依赖随机生成顺序。
 	var observed_initial_leader_character_ids: Dictionary = {}
+	# 是否已经观测到没有领袖技的普通候选武将；true表示AI的随机范围没有被固定前缀限制。
+	var observed_non_leader_skill_character: bool = false
 	for candidate_seed: int in range(1, 65):
 		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
 			return _fail("ai_initial_leader_variation_start")
@@ -674,8 +676,14 @@ func _test_ai_initial_leader_character_variation() -> bool:
 		if initial_leader_character_id.is_empty():
 			return _fail("ai_initial_leader_variation_missing_character")
 		observed_initial_leader_character_ids[initial_leader_character_id] = true
-	# 当前内容库拥有两名或以上领袖技武将时，固定种子覆盖必须至少观测到两种结果，防止退化为恒取候选首张。
-	if leader_skill_character_ids.size() >= 2 and observed_initial_leader_character_ids.size() < 2:
+		if not leader_skill_character_ids.has(initial_leader_character_id):
+			observed_non_leader_skill_character = true
+	# 当前内容库既有领袖技武将又有普通武将时，固定种子覆盖必须观测到普通候选，防止退化为只选固定前缀。
+	var has_non_leader_skill_character: bool = GameDatabase.characters.size() > leader_skill_character_ids.size()
+	if has_non_leader_skill_character and not observed_non_leader_skill_character:
+		return _fail("ai_initial_leader_variation_missing_normal_candidate")
+	# 多个固定种子还必须至少观测到两种结果，防止退化为任何候选列表的恒取首项。
+	if observed_initial_leader_character_ids.size() < 2:
 		return _fail("ai_initial_leader_variation=%s" % str(observed_initial_leader_character_ids.keys()))
 	_controller.abandon_match()
 	_controller.queue_free()
