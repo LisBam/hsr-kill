@@ -5611,10 +5611,21 @@ func _drive_ai_character_selection() -> void:
 	_is_driving_character_selection = false
 
 
-## 返回 AI 当前可安全确认的一张候选武将；最终确认结果与所有已选武将保持唯一，避免选将循环或全员同将。
+## 返回 AI 当前可安全确认的一张候选武将；当前已公开的预览领袖优先确认同一武将，避免进入对局时重新随机。
 func _get_ai_character_selection_candidate(player_id: int) -> String:
 	if character_selection == null:
 		return ""
+	# 当前公开预览领袖；最终自选中该AI已经有向玩家展示的武将时，确认必须复用该结果而不是改取另一张随机候选。
+	var preview_leader: PlayerState = state.players[0] if state != null and not state.players.is_empty() else null
+	if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM and preview_leader != null and preview_leader.player_id == player_id and preview_leader.identity == "leader" and not preview_leader.character_id.is_empty():
+		# 公开领袖武将是否已经被其他玩家确认；若发生冲突则继续走普通候选筛选，避免AI提交无效重复武将。
+		var preview_character_already_selected: bool = false
+		for player: PlayerState in state.players:
+			if player.player_id != player_id and character_selection.get_selection(player.player_id) == preview_leader.character_id:
+				preview_character_already_selected = true
+				break
+		if not preview_character_already_selected:
+			return preview_leader.character_id
 	# 当前 AI 私有候选；候选仍由选将服务生成，控制器只过滤已经落定的稳定武将 ID。
 	var candidates: Array[String] = character_selection.get_candidates(player_id)
 	for candidate_id: String in candidates:

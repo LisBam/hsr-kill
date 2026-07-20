@@ -495,6 +495,8 @@ func to_dict(viewer_id: int) -> Dictionary:
 	var local_candidates: Array[String] = []
 	if can_player_select(viewer_id):
 		local_candidates = get_candidates(viewer_id)
+	# 最终自选阶段标记；首任领袖公开选将不展示或要求座次身份控件，避免领袖因隐藏按钮无法确认。
+	var is_custom_assignment_phase: bool = custom_assignment_enabled and phase == PHASE_CUSTOM
 	return {
 		"phase":phase,
 		"selection_kind":"initial",
@@ -508,11 +510,11 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"locked_candidate_ids":get_locked_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replaceable_candidate_ids":get_replaceable_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replacement_cards_remaining":get_replacement_cards_remaining(viewer_id) if can_player_select(viewer_id) else 0,
-		"all_character_ids":_character_ids.duplicate() if custom_assignment_enabled and can_player_select(viewer_id) else [],
-		"allow_all_characters":custom_assignment_enabled,
-		"allow_custom_assignment":custom_assignment_enabled,
-		"seat_options":get_available_seat_numbers(viewer_id) if custom_assignment_enabled and can_player_select(viewer_id) else [],
-		"identity_options":get_available_identities(viewer_id) if custom_assignment_enabled and can_player_select(viewer_id) else [],
+		"all_character_ids":_character_ids.duplicate() if is_custom_assignment_phase and can_player_select(viewer_id) else [],
+		"allow_all_characters":is_custom_assignment_phase,
+		"allow_custom_assignment":is_custom_assignment_phase,
+		"seat_options":get_available_seat_numbers(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
+		"identity_options":get_available_identities(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
 		"initial_seat_number":get_initial_seat_number(viewer_id) if custom_assignment_enabled else -1,
 		"initial_identity":get_initial_identity(viewer_id) if custom_assignment_enabled else "",
 		"preview_seat_number":get_preview_seat_number(viewer_id) if custom_assignment_enabled else -1,
