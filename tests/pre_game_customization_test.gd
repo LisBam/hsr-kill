@@ -55,6 +55,8 @@ func _run() -> void:
 		return
 	if not await _test_local_initial_leader_flow():
 		return
+	if not _test_ai_initial_leader_character_variation():
+		return
 	if not _test_ai_initial_leader_retains_default_leader_assignment():
 		return
 	if not _test_mulligan_ai_evaluation():
@@ -638,6 +640,46 @@ func _test_local_initial_leader_flow() -> bool:
 	controller.abandon_match()
 	main_instance.queue_free()
 	await get_tree().process_frame
+	return true
+
+
+## 验证AI首任领袖只在领袖技固定候选中使用本局随机源选择，连续固定种子不能总是同一名武将。
+func _test_ai_initial_leader_character_variation() -> bool:
+	GameSettings.set_custom_character_assignment_enabled(true)
+	GameSettings.set_customize_ai_characters_enabled(false)
+	GameSettings.set_mulligan_limit(0)
+	_create_controller()
+	# 当前拥有至少一个领袖技的武将集合；内容库拥有多名时，AI首任领袖必须能产生多个稳定武将ID。
+	var leader_skill_character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		# 当前武将定义；技能数组只读，用于确认该武将是否属于领袖技固定候选。
+		var character_id: String = str(character_id_variant)
+		# 当前武将技能ID；任一技能带领袖技标记即可加入固定候选集合。
+		var skill_ids: Array = GameDatabase.get_character(character_id).get("skills", []) as Array
+		for skill_id_variant: Variant in skill_ids:
+			if bool(GameDatabase.get_skill(str(skill_id_variant)).get("leader_skill", false)):
+				leader_skill_character_ids.append(character_id)
+				break
+	# 多个固定种子下实际由AI首任领袖选中的武将ID；字典键去重避免依赖随机生成顺序。
+	var observed_initial_leader_character_ids: Dictionary = {}
+	for candidate_seed: int in range(1, 65):
+		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+			return _fail("ai_initial_leader_variation_start")
+		# 当前首任领袖稳定玩家ID；本地真人成为首任领袖时不会进入AI自动选择，跳过该种子。
+		var initial_leader_player_id: int = _controller.character_selection.leader_player_id
+		if initial_leader_player_id == _controller.local_human_player_id:
+			continue
+		# 当前首任AI领袖公开武将；服务已经把自动选择写入权威状态，空值表示阶段推进失败。
+		var initial_leader_character_id: String = _controller.state.get_player(initial_leader_player_id).character_id
+		if initial_leader_character_id.is_empty():
+			return _fail("ai_initial_leader_variation_missing_character")
+		observed_initial_leader_character_ids[initial_leader_character_id] = true
+	# 当前内容库拥有两名或以上领袖技武将时，固定种子覆盖必须至少观测到两种结果，防止退化为恒取候选首张。
+	if leader_skill_character_ids.size() >= 2 and observed_initial_leader_character_ids.size() < 2:
+		return _fail("ai_initial_leader_variation=%s" % str(observed_initial_leader_character_ids.keys()))
+	_controller.abandon_match()
+	_controller.queue_free()
+	_controller = null
 	return true
 
 
