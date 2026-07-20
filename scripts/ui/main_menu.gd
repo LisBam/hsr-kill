@@ -70,8 +70,11 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 顶部身份模式选项；当前唯一的游戏模式入口，按下后仅重新确认身份模式为选中状态。
 @onready var _top_identity_mode_button: Button = %TopIdentityModeButton
 
-## 顶部联机设置入口；位于“模式选择”右侧，切换主菜单内容页且不直接建立网络连接。
+## 顶部联机设置入口；位于“模式选择”右侧，与模式选择对等切换主菜单客户区内容，不直接建立网络连接。
 @onready var _online_settings_button: Button = %MainMenuOnlineSettingsButton
+
+## 顶部联机设置选中指示线；与模式选择指示线共用主题强调色，仅表达当前内容页。
+@onready var _top_online_settings_indicator: ColorRect = %TopOnlineSettingsIndicator
 
 ## 左侧身份模式按钮；对应参考布局中的模式选择列表，目前是唯一可选择的模式。
 @onready var _identity_mode_button: Button = %IdentityModeButton
@@ -95,7 +98,7 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 局域网大厅组件；只负责连接表单与成员快照展示，实际网络动作由牌桌协调器接收其信号。
 @onready var _lan_lobby_panel: LanLobbyPanel = %LanLobbyPanel
 
-## 联机资料设置组件；只编辑全局玩家名称与武将形象，主菜单负责内容页切换和关闭后的入口恢复。
+## 联机资料设置组件；只编辑全局玩家名称与武将形象，作为与模式预览对等的主菜单客户区内容页，不弹出独立遮罩。
 @onready var _online_settings_panel: OnlineSettingsPanel = %OnlineSettingsPanel
 
 ## 联机大厅组件；连接成功后接管全屏座位、聊天与房间控制，主菜单只维护焦点和场景覆盖边界。
@@ -306,11 +309,11 @@ func refresh_ui_style() -> void:
 	_preview_shade.color = Color(BattleUIStyle.get_color("panel"), preview_shade_opacity)
 	_settings_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
 	_top_mode_indicator.color = BattleUIStyle.get_color("accent")
+	_top_online_settings_indicator.color = BattleUIStyle.get_color("accent")
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
-	BattleUIStyle.apply_interaction_button(_top_identity_mode_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_online_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_refresh_top_navigation_page_style()
 	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
@@ -369,14 +372,14 @@ func refresh_ui_style() -> void:
 	_online_lobby_panel.refresh_ui_style()
 
 
-## 重新确认身份模式为当前唯一选择；未来接入其他模式时只需在此处更新预览绑定而不改变开局信号。
+## 切换到模式选择内容页；顶部“模式选择”与“联机设置”对等互斥，仅替换客户区，不创建弹层。
 func _select_identity_mode() -> void:
 	# 联机设置内容页；点击“模式选择”时回到默认主菜单内容，顶部导航始终保留在原位。
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	_mode_title.text = "身份模式"
 	_mode_description.text = "标准身份局 · %d—%d人" % [minimum_player_count, maximum_player_count]
-	_top_identity_mode_button.button_pressed = true
+	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = true
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
@@ -390,16 +393,18 @@ func _open_settings() -> void:
 	_settings_close_button.grab_focus()
 
 
-## 打开独立联机资料设置内容页；名称与形象由组件从 GameSettings 读取，顶部导航保持可见并可直接切回模式选择。
+## 切换到联机资料设置内容页；名称与形象由组件从 GameSettings 读取，顶部导航保持可点并可直接切回模式选择。
 func _open_online_settings() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
 	_online_lobby_panel.visible = false
-	# 默认主菜单内容；资料页与模式预览互斥显示，避免“联机设置”看起来像覆盖式弹窗。
+	# 默认主菜单内容；资料页与模式预览互斥显示，形成与“模式选择”对等的页面切换。
 	_main_frame.visible = false
+	_set_top_navigation_page(true)
 	_online_settings_panel.open_panel()
-	_suspend_background_focus(_online_settings_panel)
+	# 仅冻结模式预览与开局区；顶部“模式选择 / 联机设置”必须保持可聚焦，才能完成对等切页。
+	_suspend_background_focus(_online_settings_panel, [_top_navigation])
 
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
@@ -419,12 +424,13 @@ func _close_settings() -> void:
 	_settings_button.grab_focus()
 
 
-## 关闭联机资料设置内容页并恢复主菜单内容；可选参数用于切换到其他页面时避免抢占新入口焦点。
+## 关闭联机资料设置内容页并恢复模式选择内容；可选参数用于切换到其他页面时避免抢占新入口焦点。
 func _close_online_settings(restore_focus: bool = true) -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_online_settings_panel.visible = false
 	# 默认内容框；资料页关闭后立即恢复，不让主菜单留下空白客户区。
 	_main_frame.visible = true
+	_set_top_navigation_page(false)
 	_restore_background_focus()
 	if restore_focus:
 		call_deferred("_focus_online_settings_button")
@@ -519,17 +525,27 @@ func _set_settings_visible(settings_visible: bool) -> void:
 		_restore_background_focus()
 
 
-## 暂停主菜单内指定模态面板之外全部可聚焦控件；保证 Tab、Shift+Tab 与手柄导航始终留在当前模态内容中。
-func _suspend_background_focus(active_modal: Control = null) -> void:
+## 暂停主菜单内指定模态面板之外全部可聚焦控件；可选保留导航祖先，使内容页切换时顶部标签仍可点击。
+func _suspend_background_focus(active_modal: Control = null, focus_keep_roots: Array = []) -> void:
 	# 实际活动模态；未显式传入时继续使用设置面板，保持旧调用入口语义不变。
 	var modal: Control = _settings_panel if active_modal == null else active_modal
 	# 主菜单下的全部控件；设置浮层只需冻结同一组件内的模式和开局入口，局内焦点由主菜单覆盖边界独立管理。
 	var menu_controls: Array[Node] = find_children("*", "Control", true, false)
 	# 主菜单控件遍历项；逐个保留原始焦点模式，后续追加的模式按钮无需在组件中硬编码节点名。
 	for control_node: Node in menu_controls:
-		# 当前可聚焦控件；设置面板及其后代保留原焦点模式，供模态内部正常循环导航。
+		# 当前可聚焦控件；活动面板与允许保留的导航祖先及其后代保持原焦点模式。
 		var control: Control = control_node as Control
 		if control == null or control == modal or modal.is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _background_focus_modes.has(control):
+			continue
+		# 是否属于需要继续接收输入的导航根；联机设置内容页必须保留顶部“模式选择 / 联机设置”。
+		var keep_focus: bool = false
+		for keep_root_variant: Variant in focus_keep_roots:
+			# 当前允许保留焦点的导航根；根节点自身及其后代都跳过冻结。
+			var keep_root: Control = keep_root_variant as Control
+			if keep_root != null and (control == keep_root or keep_root.is_ancestor_of(control)):
+				keep_focus = true
+				break
+		if keep_focus:
 			continue
 		_background_focus_modes[control] = control.focus_mode
 		control.focus_mode = Control.FOCUS_NONE
@@ -635,6 +651,33 @@ func show_online_lobby() -> void:
 	_close_online_settings(false)
 	_lan_lobby_panel.visible = false
 	_suspend_background_focus(_online_lobby_panel)
+
+
+## 同步顶部“模式选择 / 联机设置”互斥选中态与底部指示线；仅表达当前主菜单内容页，不保存业务状态。
+func _set_top_navigation_page(is_online_settings_page: bool) -> void:
+	_top_identity_mode_button.set_pressed_no_signal(not is_online_settings_page)
+	_online_settings_button.set_pressed_no_signal(is_online_settings_page)
+	_top_mode_indicator.visible = not is_online_settings_page
+	_top_online_settings_indicator.visible = is_online_settings_page
+	_refresh_top_navigation_page_style()
+
+
+## 按当前内容页刷新顶部导航按钮主题；选中页使用强调边框，未选中页使用普通边框。
+func _refresh_top_navigation_page_style() -> void:
+	# 是否位于联机设置内容页；运行时由按钮按下状态表达，避免额外布尔字段与场景可见性脱节。
+	var is_online_settings_page: bool = _online_settings_button.button_pressed
+	BattleUIStyle.apply_interaction_button(
+		_top_identity_mode_button,
+		BattleUIStyle.get_color("panel"),
+		BattleUIStyle.get_color("border") if is_online_settings_page else BattleUIStyle.get_color("accent"),
+		not is_online_settings_page
+	)
+	BattleUIStyle.apply_interaction_button(
+		_online_settings_button,
+		BattleUIStyle.get_color("panel"),
+		BattleUIStyle.get_color("accent") if is_online_settings_page else BattleUIStyle.get_color("border"),
+		is_online_settings_page
+	)
 
 
 ## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。

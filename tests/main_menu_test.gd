@@ -32,7 +32,7 @@ func _run() -> void:
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	# 设置按钮；替代参考布局中的商店入口，点击后展示配置浮层。
 	var settings_button: Button = main_instance.get_node("%MainMenuSettingsButton") as Button
-	# 顶部联机设置按钮；必须位于模式选择右侧并切换到独立玩家资料内容页。
+	# 顶部联机设置按钮；必须位于模式选择右侧并对等切换主菜单客户区资料页。
 	var online_settings_button: Button = main_instance.get_node("%MainMenuOnlineSettingsButton") as Button
 	# 开始按钮；文字固定为“开始游戏”，点击后关闭主菜单并开始身份局。
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
@@ -127,11 +127,15 @@ func _run() -> void:
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
 		return
+	# 默认客户区矩形；打开联机设置前记录，用于断言资料页与模式预览使用同一客户区，而不是全屏弹层。
+	var mode_page_rect: Rect2 = main_frame.get_global_rect()
 	await _click_control(online_settings_button)
 	await get_tree().process_frame
 	# 动态联机形象牌；每个数据库武将都必须对应一张正式 PlayerTargetView 候选。
 	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
-	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE:
+	# 联机设置页矩形；必须贴合原主菜单客户区，顶部导航仍可聚焦并可对等切回模式选择。
+	var online_settings_rect: Rect2 = online_settings_panel.get_global_rect()
+	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5:
 		_fail("online_settings_open")
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
@@ -146,8 +150,19 @@ func _run() -> void:
 	await _click_control(selected_avatar_input_area)
 	await _click_control(online_settings_save_button)
 	await get_tree().process_frame
-	if online_settings_panel.visible or not main_frame.visible or GameSettings.online_player_name != "联机测试玩家" or GameSettings.online_avatar_character_id != selected_avatar_character_id or online_settings_button.focus_mode == Control.FOCUS_NONE:
+	if online_settings_panel.visible or not main_frame.visible or GameSettings.online_player_name != "联机测试玩家" or GameSettings.online_avatar_character_id != selected_avatar_character_id or online_settings_button.focus_mode == Control.FOCUS_NONE or not top_identity_mode_button.button_pressed or online_settings_button.button_pressed:
 		_fail("online_settings_save")
+		return
+	# 顶部导航对等切页；再次进入联机设置后点击“模式选择”必须直接切回默认内容，而不是依赖保存/取消弹窗。
+	await _click_control(online_settings_button)
+	await get_tree().process_frame
+	if not online_settings_panel.visible or main_frame.visible or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or top_identity_mode_button.focus_mode == Control.FOCUS_NONE:
+		_fail("online_settings_reopen_page")
+		return
+	await _click_control(top_identity_mode_button)
+	await get_tree().process_frame
+	if online_settings_panel.visible or not main_frame.visible or not top_identity_mode_button.button_pressed or online_settings_button.button_pressed:
+		_fail("online_settings_switch_to_mode_page")
 		return
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	main_instance.position = Vector2.ZERO
