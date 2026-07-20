@@ -149,16 +149,18 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	var selection_phase: String = str(selection_snapshot.get("phase", ""))
 	if (_character_selection_submitted and _last_submitted_character_selection_phase == selection_phase) or not bool(selection_snapshot.get("can_select", false)):
 		return
-	# 当前真人私有候选；必须至少有1项，且只有该观察者能收到具体稳定武将 ID。
+	# 当前真人私有候选；普通玩家至少有1项，首任领袖最终自选则以显式保留字段复用已公开武将。
 	var local_candidates: Array = selection_snapshot.get("local_candidates", []) as Array
-	if local_candidates.is_empty():
+	# 本次提交武将ID；首任领袖只补交座次身份时读取已锁定结果，其他玩家继续选择首张私有候选。
+	var selected_character_id: String = str(selection_snapshot.get("local_selected_character_id", "")) if bool(selection_snapshot.get("retains_selected_character", false)) else (str(local_candidates[0]) if not local_candidates.is_empty() else "")
+	if selected_character_id.is_empty():
 		_fail("missing_private_character_candidates")
 		return
 	_character_selection_submitted = true
 	_last_submitted_character_selection_phase = selection_phase
 	# 选将动作；客户端 submit_action 只上行，房主 submit_action 直接进入同一权威校验。
 	var action: PlayerAction = PlayerAction.new("select_character", int(selection_snapshot.get("local_player_id", _controller.local_human_player_id)))
-	action.payload = {"character_id":str(local_candidates[0])}
+	action.payload = {"character_id":selected_character_id}
 	if bool(selection_snapshot.get("allow_custom_assignment", false)):
 		# 当前真人稳定ID、首任领袖ID与首次身份；按ID顺序映射到除一号位外的座次，领袖仍固定一号位。
 		var local_player_id: int = int(selection_snapshot.get("local_player_id", _controller.local_human_player_id))
