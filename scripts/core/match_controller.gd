@@ -679,7 +679,12 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	# 本次提交前是否处于最终自选阶段；该阶段每名玩家确认时立即写入当前预览座次身份，完成时不得再次重置武将。
 	var was_custom_character_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
 	# 本次提交是否只确认首任领袖的座次身份；该武将已在领袖阶段应用并公开，不能再次改写稳定武将ID。
+	# 该分支只处理AI首任领袖延后占用剩余名额；真人首任领袖不会产生第二次提交。
 	var confirms_retained_initial_leader_character: bool = character_selection.is_retaining_initial_leader_character(player_id)
+	# 真人首任领袖一次性提交完整性；AI可以先公开武将并等待真人占用名额，真人不得退回会再次弹框的旧式分步协议。
+	var requires_initial_human_assignment: bool = was_initial_leader_selection and character_selection.custom_assignment_enabled and not ai_coordinator.is_ai_controlled(player_id)
+	if requires_initial_human_assignment and (seat_number < 1 or identity.is_empty()):
+		return _reject("请选择武将、座次与身份后再确认。")
 	# 选将服务返回的校验错误；空字符串表示选择已经记录并可能推进阶段。
 	var selection_error: String = character_selection.select_character(player_id, character_id, seat_number, identity)
 	if not selection_error.is_empty():
@@ -710,7 +715,9 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 		if character_selection.custom_assignment_enabled:
 			# 初次自选默认值已是有效的真实座次身份；进入界面前立即投射，避免一号位和领袖只停留在按钮高亮。
 			_apply_custom_assignment_preview()
-			add_log("首任领袖选将完成，所有玩家开始重新自选武将、座次与身份。")
+			# 首任领袖的武将与座次身份已经在同一次提交中落定；投射最终身份后重算体力，避免领袖加成沿用提交前身份。
+			_refresh_pre_game_character_stats(state.get_player(player_id))
+			add_log("首任领袖选将完成，其他未确认玩家开始自选武将、座次与身份。")
 		else:
 			add_log("其他玩家开始同时选将，每人随机展示%d张候选武将牌。" % character_selection.candidate_count)
 	if character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
@@ -5602,7 +5609,9 @@ func _drive_ai_character_selection() -> void:
 			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
 			var action: PlayerAction = PlayerAction.new("select_character", player_id)
 			action.payload = {"character_id":character_id}
-			if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+			# 当前 AI 是否必须同时提交座次身份；首任AI领袖先亮将并等待真人选完名额，进入最终自选后再完成自身分配。
+			var requires_custom_assignment: bool = character_selection.custom_assignment_enabled and character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
+			if requires_custom_assignment:
 				# 当前剩余座次与身份；优先把一号位和领袖绑定给同一 AI，其余角色只选择非一号位与非领袖身份。
 				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
 				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
@@ -8793,7 +8802,7 @@ func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 		var selection_snapshot: Dictionary = character_selection.to_dict(viewer_id)
 		# 是否存在任意真人已提交的座次身份预览；没有预览时必须继续显示首任领袖公开武将。
 		var has_active_custom_assignment_preview: bool = false
-		if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+		if character_selection.custom_assignment_enabled and (character_selection.phase == CharacterSelectionService.PHASE_LEADER or character_selection.phase == CharacterSelectionService.PHASE_CUSTOM):
 			for player: PlayerState in state.players:
 				if character_selection.has_custom_assignment_preview(player.player_id):
 					has_active_custom_assignment_preview = true
@@ -8802,7 +8811,9 @@ func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 		var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
 		# 当前领袖是否已经确认最终武将；确认后立即公开其当前牌面，即使本轮没有额外座次身份预览也不回退到首任领袖旧武将。
 		var preview_leader_has_confirmed_character: bool = preview_leader != null and not character_selection.get_selection(preview_leader.player_id).is_empty()
-		if (has_active_custom_assignment_preview or preview_leader_has_confirmed_character) and preview_leader != null and preview_leader.identity == "leader":
+		# 是否已经进入自选投射状态；首任领袖提交后即使没有保留中的预览字典，也必须以当前一号位覆盖旧领袖快照。
+		var uses_projected_custom_leader: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM or has_active_custom_assignment_preview or preview_leader_has_confirmed_character
+		if uses_projected_custom_leader and preview_leader != null and preview_leader.identity == "leader":
 			selection_snapshot["leader_player_id"] = preview_leader.player_id
 			selection_snapshot["leader_character_id"] = preview_leader.character_id
 		return selection_snapshot

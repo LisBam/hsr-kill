@@ -155,6 +155,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	if phase == PHASE_OTHERS and player_id == leader_player_id:
 		return "领袖已经完成选将。"
 	# 首任领袖已公开武将后只剩最终座次身份待确认；该特殊提交必须复用同一武将，不能重新进入候选选择。
+	# 该保留分支只会由先亮将、后等待真人释放名额的AI首任领袖进入；真人首任领袖第一次提交已经同时确认三项。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(player_id)
 	if _selections_by_player.has(player_id) and not is_initial_leader_assignment:
 		return "该玩家已经确认武将。"
@@ -168,7 +169,11 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "所选武将不在当前候选列表中。"
 	if _is_character_selected_by_other_player(player_id, character_id):
 		return "该武将已经被其他玩家选择。"
-	if phase == PHASE_CUSTOM:
+	# 首任领袖是否随武将一起提交了座次身份；真人界面始终提供完整值，AI首任领袖可先亮将并把最终名额留到真人确认之后。
+	var has_initial_custom_assignment: bool = phase == PHASE_LEADER and requested_seat_number >= 1 and not requested_identity.is_empty()
+	# 一次性自选确认；最终自选必须提交完整分配，首任领袖仅在请求实际携带座次身份时同步落定。
+	var confirms_custom_assignment: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or has_initial_custom_assignment)
+	if confirms_custom_assignment:
 		# 规范化后的座次与身份；选择一号位或领袖会强制形成同一配对。
 		var seat_number: int = requested_seat_number
 		# 请求身份ID；与一号位或领袖任一条件命中时会同步规范为领袖。
@@ -206,6 +211,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		_initial_leader_character_id = character_id
 		if custom_assignment_enabled:
 			# 首任领袖武将同时作为最终武将保留；其后只确认座次与身份，不能再次随机发牌或弹出候选框。
+			# 真人已在本次动作确认座次身份，因此会直接退出待选集合；只有未携带分配字段的AI继续走保留确认分支。
 			phase = PHASE_CUSTOM
 			for custom_player_id: int in _player_ids:
 				if custom_player_id == leader_player_id:
@@ -220,6 +226,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 				if other_player_id != leader_player_id:
 					_candidates_by_player[other_player_id] = _make_candidates(other_player_id, character_id)
 	# 普通模式只等待武将确认；最终自选还必须等待每名角色确认座次与身份，首任领袖已选武将不能提前结束阶段。
+	# 真人首任领袖已经同时写入两份最终映射；AI首任领袖则必须等后续补齐映射后才允许完成。
 	var all_players_selected: bool = _selections_by_player.size() == _player_ids.size()
 	if custom_assignment_enabled and phase == PHASE_CUSTOM:
 		all_players_selected = all_players_selected and _selected_seats_by_player.size() == _player_ids.size() and _selected_identities_by_player.size() == _player_ids.size()
@@ -403,7 +410,9 @@ func has_custom_assignment_preview(player_id: int) -> bool:
 
 ## 更新玩家尚未确认武将时的座次与身份预览；该操作不占最终名额，方便控制器即时重排未确认 AI。
 func preview_custom_assignment(player_id: int, requested_seat_number: int, requested_identity: String) -> String:
-	if phase != PHASE_CUSTOM or not can_player_select(player_id):
+	# 可预览阶段；首任领袖在第一次选将框中即可调整座次身份，其他玩家继续在最终自选阶段使用相同入口。
+	var can_preview_current_phase: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM)
+	if not can_preview_current_phase or not can_player_select(player_id):
 		return "当前玩家不能预览座次与身份。"
 	# 规范化后的预览座次与身份；一号位和领袖始终保持双向绑定。
 	var seat_number: int = requested_seat_number
@@ -497,13 +506,19 @@ func get_pending_player_ids() -> Array[int]:
 	# 尚未完成的玩家数组；顺序与桌面座次一致，便于 AI 和网络层稳定调度。
 	var result: Array[int] = []
 	for player_id: int in _player_ids:
-		if phase == PHASE_LEADER and player_id != leader_player_id:
+		if phase == PHASE_LEADER:
+			if player_id == leader_player_id and not _selections_by_player.has(player_id):
+				result.append(player_id)
+			continue
+		if phase == PHASE_OTHERS:
+			if player_id != leader_player_id and not _selections_by_player.has(player_id):
+				result.append(player_id)
 			continue
 		if phase == PHASE_CUSTOM:
 			if not _selected_seats_by_player.has(player_id):
 				result.append(player_id)
-		elif not _selections_by_player.has(player_id):
-			result.append(player_id)
+			elif not _selections_by_player.has(player_id):
+				result.append(player_id)
 	return result
 
 
@@ -521,7 +536,10 @@ func to_dict(viewer_id: int) -> Dictionary:
 	if can_player_select(viewer_id):
 		local_candidates = get_candidates(viewer_id)
 	# 最终自选阶段标记；首任领袖公开选将不展示或要求座次身份控件，避免领袖因隐藏按钮无法确认。
+	# 该标记只控制PHASE_CUSTOM的全武将候选语义；首任真人领袖的座次身份权限由下方独立变量覆盖。
 	var is_custom_assignment_phase: bool = custom_assignment_enabled and phase == PHASE_CUSTOM
+	# 当前可提交座次身份的阶段；首任领袖在公开选将框内一次性确认，后续阶段仅向尚未确认的其他玩家开放。
+	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM)
 	# 首任领袖保留的最终武将；该玩家只提交座次身份，不能再次打开全武将或随机候选列表。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(viewer_id)
 	return {
@@ -538,10 +556,10 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"replaceable_candidate_ids":get_replaceable_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replacement_cards_remaining":get_replacement_cards_remaining(viewer_id) if can_player_select(viewer_id) else 0,
 		"all_character_ids":_character_ids.duplicate() if is_custom_assignment_phase and not is_initial_leader_assignment and can_player_select(viewer_id) else [],
-		"allow_all_characters":is_custom_assignment_phase and not is_initial_leader_assignment,
-		"allow_custom_assignment":is_custom_assignment_phase,
-		"seat_options":get_available_seat_numbers(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
-		"identity_options":get_available_identities(viewer_id) if is_custom_assignment_phase and can_player_select(viewer_id) else [],
+		"allow_all_characters":is_custom_assignment_phase and not is_initial_leader_assignment and can_player_select(viewer_id),
+		"allow_custom_assignment":allows_custom_assignment_now and can_player_select(viewer_id),
+		"seat_options":get_available_seat_numbers(viewer_id) if allows_custom_assignment_now and can_player_select(viewer_id) else [],
+		"identity_options":get_available_identities(viewer_id) if allows_custom_assignment_now and can_player_select(viewer_id) else [],
 		"initial_seat_number":get_initial_seat_number(viewer_id) if custom_assignment_enabled else -1,
 		"initial_identity":get_initial_identity(viewer_id) if custom_assignment_enabled else "",
 		"preview_seat_number":get_preview_seat_number(viewer_id) if custom_assignment_enabled else -1,

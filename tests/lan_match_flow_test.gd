@@ -33,6 +33,7 @@ var _host_match_started: bool = false
 var _character_selection_submitted: bool = false
 
 ## 最近一次已经提交的选将阶段；阶段从领袖先选切换到最终自选后允许同一真人再次提交。
+## 真人首任领袖现在一次性确认且不会再次提交；阶段记录仍用于普通真人在不同开局阶段收到新权限时去重。
 var _last_submitted_character_selection_phase: String = ""
 
 ## 客户端是否已经在收到起始手牌快照后发送确认动作；防止连续状态快照重复确认。
@@ -150,6 +151,7 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	if (_character_selection_submitted and _last_submitted_character_selection_phase == selection_phase) or not bool(selection_snapshot.get("can_select", false)):
 		return
 	# 当前真人私有候选；普通玩家至少有1项，首任领袖最终自选则以显式保留字段复用已公开武将。
+	# 保留字段只兼容房主内部AI延后分配；联网真人首任领袖的首次快照已经携带完整座次身份按钮。
 	var local_candidates: Array = selection_snapshot.get("local_candidates", []) as Array
 	# 本次提交武将ID；首任领袖只补交座次身份时读取已锁定结果，其他玩家继续选择首张私有候选。
 	var selected_character_id: String = str(selection_snapshot.get("local_selected_character_id", "")) if bool(selection_snapshot.get("retains_selected_character", false)) else (str(local_candidates[0]) if not local_candidates.is_empty() else "")
