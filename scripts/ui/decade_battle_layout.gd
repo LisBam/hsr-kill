@@ -32,6 +32,9 @@ var _opponent_views: Array[Control] = []
 ## 当前对局总人数；支持2至10人，用于选择与无名杀相同的座次模板。
 var _total_player_count: int = 0
 
+## 已实际执行的有效座位布局次数；从0开始，仅供性能诊断与回归测试确认重复绑定是否被跳过，运行时不得手动修改。
+var _layout_revision: int = 0
+
 
 ## 启用尺寸变化监听；窗口拉伸后会基于当前可视区域重新计算全部座位。
 func _ready() -> void:
@@ -42,10 +45,22 @@ func _ready() -> void:
 
 ## 绑定一组新建的角色视图并立即应用座次；组件不持有玩家快照或身份等业务数据。
 func bind_opponent_views(opponent_views: Array[Control], total_player_count: int) -> void:
+	# 规范化后的对局总人数；先裁剪再比较，确保异常输入与已绑定值使用同一语义。
+	var normalized_player_count: int = clampi(total_player_count, 2, 10)
+	# 当前绑定是否与已有节点身份、顺序和人数完全一致；相同快照无需重复写入位置与缩放。
+	var binding_unchanged: bool = _total_player_count == normalized_player_count and _opponent_views.size() == opponent_views.size()
+	if binding_unchanged:
+		# 当前对手视图比较索引；依次核对节点身份与顺序，任一位置不同都会使本次绑定失效并触发重排。
+		for view_index: int in range(opponent_views.size()):
+			if _opponent_views[view_index] != opponent_views[view_index]:
+				binding_unchanged = false
+				break
+	if binding_unchanged:
+		return
 	_opponent_views.clear()
 	for opponent_view: Control in opponent_views:
 		_opponent_views.append(opponent_view)
-	_total_player_count = clampi(total_player_count, 2, 10)
+	_total_player_count = normalized_player_count
 	_layout_opponents()
 
 
@@ -53,6 +68,11 @@ func bind_opponent_views(opponent_views: Array[Control], total_player_count: int
 func clear_opponent_views() -> void:
 	_opponent_views.clear()
 	_total_player_count = 0
+
+
+## 返回有效座位布局执行序号；只读诊断值可比较两次操作之间是否发生了真实重排。
+func get_layout_revision() -> int:
+	return _layout_revision
 
 
 ## 按人数把角色分配到右侧、顶部和左侧，并使用参考扩展的百分比位置。
@@ -66,6 +86,7 @@ func _layout_opponents() -> void:
 			valid_views.append(opponent_view)
 	if valid_views.is_empty():
 		return
+	_layout_revision += 1
 	# 左右侧座位数量；二至三人局全部位于顶部，四至九人局每侧一名，十人局每侧两名。
 	var side_count_per_edge: int = 0 if _total_player_count <= 3 else (2 if _total_player_count >= 10 else 1)
 	# 顶部座位数量；用于生成均匀但符合参考比例的横坐标。

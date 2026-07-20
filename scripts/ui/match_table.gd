@@ -97,6 +97,10 @@ const MILLISECONDS_PER_SECOND: int = 1000
 ## 每分钟包含的秒数；左上角时长固定格式化为“分:秒”。
 const SECONDS_PER_MINUTE: int = 60
 
+## 对局时长标签的检查间隔；0.25秒把每帧轮询降低为每秒4次，同时让整秒显示延迟最多为0.25秒。
+## 该参数只影响客户端文本刷新频率，不改变规则计时、动画、AI延迟或游戏流程，运行时无需动态修改。
+const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
+
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
@@ -156,6 +160,7 @@ const SECONDS_PER_MINUTE: int = 60
 @onready var card_selection_panel: CardSelectionPanel = $CardSelectionPanel
 
 ## 其他玩家与本地玩家状态卡容器；每次快照整体重建以避免状态残留。
+## 实际运行时按玩家 ID 持久复用其他玩家座位节点，仅在玩家集合变化时创建或释放，并由组件对重复布局进行去重。
 @onready var player_grid: DecadeBattleLayout = %PlayerGrid
 
 ## 本地玩家装备区文本；固定显示在牌桌左下角，与右下角武将牌分离。
@@ -361,6 +366,9 @@ var _match_finished_msec: int = -1
 ## 最近一次写入左上角的整秒时长；默认-1强制首个有效快照立即刷新。
 var _last_rendered_duration_seconds: int = -1
 
+## 对局时长低频刷新计时器；仅在有效对局进行期间运行，主菜单与终局保持停止，运行时不得替换。
+var _match_clock_timer: Timer
+
 ## 当前通过点击装备进入的主动交互类型；空字符串表示普通出牌或普通内联选择，具体字符串来自装备定义元数据。
 var _active_equipment_action: String = ""
 
@@ -406,6 +414,7 @@ func _ready() -> void:
 	_create_information_box()
 	_create_local_player_card()
 	_create_identity_mark_menu()
+	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
 	hand_panel.resized.connect(_queue_auto_managed_hand_overlay_layout)
 	local_player_seat_slot.item_rect_changed.connect(_queue_auto_managed_hand_overlay_layout)
@@ -547,8 +556,18 @@ func _configure_local_card_areas() -> void:
 
 
 ## 按整秒刷新左上角对局时长；只更新文本，不驱动任何规则阶段、计时器或 AI 行为。
-func _process(_delta: float) -> void:
+func _on_match_clock_timeout() -> void:
 	_refresh_match_duration_label()
+
+
+## 创建牌桌私有的低频时长计时器；初始保持停止，收到有效进行中快照后才开始周期检查。
+func _create_match_clock_timer() -> void:
+	_match_clock_timer = Timer.new()
+	_match_clock_timer.name = "MatchClockTimer"
+	_match_clock_timer.wait_time = MATCH_CLOCK_REFRESH_INTERVAL_SECONDS
+	_match_clock_timer.one_shot = false
+	_match_clock_timer.timeout.connect(_on_match_clock_timeout)
+	add_child(_match_clock_timer)
 
 
 ## 统一操作区的运行时节点结构与视觉规格；即使旧场景缺少唯一名称或仍保留旧按钮层级，也能恢复当前交互布局。
@@ -1023,6 +1042,12 @@ func _sync_match_clock() -> void:
 		_last_rendered_duration_seconds = -1
 	if bool(_snapshot.get("game_over", false)) and _match_finished_msec < 0:
 		_match_finished_msec = Time.get_ticks_msec()
+	if _match_clock_timer == null:
+		return
+	if bool(_snapshot.get("game_over", false)):
+		_match_clock_timer.stop()
+	elif _match_clock_timer.is_stopped():
+		_match_clock_timer.start()
 
 
 ## 把单调时钟差格式化为“对局时长：分:秒”；相同整秒不会重复写入标签。
@@ -1048,7 +1073,6 @@ func _refresh_match_duration_label(force_refresh: bool = false) -> void:
 
 ## 渲染全部玩家状态卡，并为存活角色提供按顺序选择目标的按钮。
 func _render_players() -> void:
-	player_grid.clear_opponent_views()
 	# 下一帧玩家视图索引；按本地相对座次重新插入键，同时复用已有实际节点。
 	var next_player_views: Dictionary = {}
 	# 本地玩家 ID；由控制器在每局创建时随机分配座次。
@@ -1123,7 +1147,8 @@ func _render_players() -> void:
 			_identity_marks.erase(target_id)
 		player_button.set_identity_mark(_resolve_display_identity_mark(target_id))
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
-		player_grid.move_child(player_seat_slot, seat_offset - 1)
+		if player_seat_slot.get_index() != seat_offset - 1:
+			player_grid.move_child(player_seat_slot, seat_offset - 1)
 		next_player_views[target_id] = player_button
 	_player_views = next_player_views
 	_layout_opponent_players()
@@ -1472,7 +1497,8 @@ func _render_local_hand() -> void:
 	_card_views = next_card_views
 	# 当前正式手牌顺序索引；把复用或新建的节点顺序与两个分区各自的本地排列保持一致。
 	for card_index: int in range(ordered_card_views.size()):
-		hand_container.move_child(ordered_card_views[card_index], card_index)
+		if ordered_card_views[card_index].get_index() != card_index:
+			hand_container.move_child(ordered_card_views[card_index], card_index)
 	hand_container.layout_cards_now()
 	_start_pending_local_hand_gain_animations()
 	use_button.disabled = true
@@ -1510,7 +1536,8 @@ func _apply_local_hand_display_order(cards: Array, display_order: Array[int]) ->
 		var card: Dictionary = card_variant as Dictionary
 		# 当前实体稳定 UID；同一实体在不同快照中保持不变，是本地排列的唯一键。
 		var card_uid: int = int(card.get("uid", -1))
-		cards_by_uid[card_uid] = card.duplicate(true)
+		# 本地排序只复制快照引用并读取 UID，不向牌面字典写入选中、顺序或动画状态，因此无需逐牌深拷贝。
+		cards_by_uid[card_uid] = card
 		snapshot_uids.append(card_uid)
 	# 规范化后的本地 UID 顺序；先保留仍在分区的旧排列，再追加新实体。
 	var normalized_order: Array[int] = []
@@ -2297,6 +2324,8 @@ func _on_restart_requested(player_count: int) -> bool:
 	_match_started_msec = -1
 	_match_finished_msec = -1
 	_last_rendered_duration_seconds = -1
+	if _match_clock_timer != null:
+		_match_clock_timer.stop()
 	_presented_discard_card_uids.clear()
 	_identity_marks.clear()
 	_identity_mark_target_id = -1
@@ -2327,6 +2356,8 @@ func _on_main_menu_requested() -> void:
 	_modal_choice_request_id = -1
 	_modal_card_choice_request.clear()
 	_suppressed_group_trick_uid = -1
+	if _match_clock_timer != null:
+		_match_clock_timer.stop()
 	main_menu.set_next_player_count(match_menu.get_next_player_count())
 	main_menu.return_to_main_menu()
 
