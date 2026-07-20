@@ -5301,13 +5301,43 @@ func _apply_custom_assignment_preview() -> void:
 			available_seats.erase(1)
 			available_identities.erase(first_seat_identity)
 	# 其余未确认玩家；尽量保留首次随机座次与身份，冲突时使用剩余池中的首个稳定值。
+	# 斗地主额外约束：剩余地主名额只落到固定地主座（1/3），农民名额不占地主座。
+	var landlord_seats: Array[int] = character_selection.get_landlord_seat_numbers()
 	for player: PlayerState in state.players:
 		if assignments_by_player.has(player.player_id) or available_seats.is_empty() or available_identities.is_empty():
 			continue
 		var preferred_seat_number: int = character_selection.get_initial_seat_number(player.player_id)
-		var remaining_seat_number: int = preferred_seat_number if available_seats.has(preferred_seat_number) else available_seats[0]
 		var preferred_identity: String = character_selection.get_initial_identity(player.player_id)
+		var remaining_seat_number: int = preferred_seat_number if available_seats.has(preferred_seat_number) else available_seats[0]
 		var remaining_identity: String = preferred_identity if available_identities.has(preferred_identity) else str(available_identities[0])
+		if character_selection.is_doudizhu_mode() and not landlord_seats.is_empty():
+			# 若剩余池仍有地主位且有地主名额，优先把偏好为地主的玩家（或任意剩余）填到地主位。
+			var free_landlord_seats: Array[int] = []
+			for seat_option: int in landlord_seats:
+				if available_seats.has(seat_option):
+					free_landlord_seats.append(seat_option)
+			var free_peasant_seats: Array[int] = []
+			for seat_option: int in available_seats:
+				if not landlord_seats.has(seat_option):
+					free_peasant_seats.append(seat_option)
+			if preferred_identity == "landlord" and available_identities.has("landlord") and not free_landlord_seats.is_empty():
+				remaining_seat_number = preferred_seat_number if free_landlord_seats.has(preferred_seat_number) else free_landlord_seats[0]
+				remaining_identity = "landlord"
+			elif preferred_identity == "peasant" and available_identities.has("peasant") and not free_peasant_seats.is_empty():
+				remaining_seat_number = preferred_seat_number if free_peasant_seats.has(preferred_seat_number) else free_peasant_seats[0]
+				remaining_identity = "peasant"
+			elif available_identities.has("landlord") and not free_landlord_seats.is_empty():
+				remaining_seat_number = free_landlord_seats[0]
+				remaining_identity = "landlord"
+			elif available_identities.has("peasant") and not free_peasant_seats.is_empty():
+				remaining_seat_number = free_peasant_seats[0]
+				remaining_identity = "peasant"
+			else:
+				# 兜底：座次决定身份，保证预览桌面不出现“2号位地主”等非法组合。
+				remaining_seat_number = available_seats[0]
+				remaining_identity = "landlord" if landlord_seats.has(remaining_seat_number) else "peasant"
+				if not available_identities.has(remaining_identity):
+					remaining_identity = str(available_identities[0])
 		assignments_by_player[player.player_id] = {"seat_number":remaining_seat_number, "identity":remaining_identity}
 		available_seats.erase(remaining_seat_number)
 		available_identities.erase(remaining_identity)
@@ -5328,18 +5358,27 @@ func _apply_custom_assignment_preview() -> void:
 	state.players = reordered_players
 	# 首任领袖在仍占一号位时保留首次公开武将；其余未确认角色必须恢复未亮将，不能在背景抢先展示所有AI武将。
 	# 首任领袖公开武将已是最终选择，即使预览后暂不位于一号位也不能清空或重新随机。
+	# 斗地主无领袖优先选将：自选预览只重排座次/身份，任何角色均不得提前亮将（含一号位 AI 地主）。
+	var uses_leader_preview: bool = character_selection.uses_leader_priority_selection()
 	var preview_leader_before_clear: PlayerState = state.players[0] if not state.players.is_empty() else null
 	for player: PlayerState in state.players:
-		# 保留条件；只有同一名首任领袖仍是当前预览领袖且尚未提交最终新武将时，才沿用其已经公开的牌面。
-		var preserves_initial_leader_character: bool = player == preview_leader_before_clear and player.player_id == character_selection.leader_player_id and player.identity == character_selection.get_first_seat_identity() and not player.character_id.is_empty()
+		# 保留条件；仅身份局下同一名首任领袖仍是当前预览领袖且尚未提交最终新武将时，才沿用其已经公开的牌面。
+		var preserves_initial_leader_character: bool = (
+			uses_leader_preview
+			and player == preview_leader_before_clear
+			and player.player_id == character_selection.leader_player_id
+			and player.identity == character_selection.get_first_seat_identity()
+			and not player.character_id.is_empty()
+		)
 		if character_selection.get_selection(player.player_id).is_empty() and not preserves_initial_leader_character:
 			_clear_pre_game_character_preview(player)
-	# 当前预览领袖；只在领袖由AI控制且尚未最终确认时公开其重新选择的一张候选，保持首任领袖流程的唯一公开牌语义。
-	var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
-	if preview_leader != null and ai_coordinator.is_ai_controlled(preview_leader.player_id) and character_selection.get_selection(preview_leader.player_id).is_empty() and preview_leader.character_id.is_empty():
-		var preview_character_id: String = _get_preview_ai_character_id(preview_leader)
-		if not preview_character_id.is_empty():
-			_apply_character(preview_leader, preview_character_id, true)
+	# 当前预览领袖；仅身份局在领袖由 AI 控制且尚未最终确认时公开候选，斗地主全程保持未亮将。
+	if uses_leader_preview:
+		var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
+		if preview_leader != null and ai_coordinator.is_ai_controlled(preview_leader.player_id) and character_selection.get_selection(preview_leader.player_id).is_empty() and preview_leader.character_id.is_empty():
+			var preview_character_id: String = _get_preview_ai_character_id(preview_leader)
+			if not preview_character_id.is_empty():
+				_apply_character(preview_leader, preview_character_id, true)
 	_refresh_player_display_names_for_current_seats()
 
 
@@ -5716,25 +5755,44 @@ func _drive_ai_character_selection() -> void:
 				or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
 			)
 			if requires_custom_assignment:
-				# 当前剩余座次与身份；优先把一号位与唯一首任身份绑定，多地主时仅强制一号位为地主、不抹去其余地主名额。
+				# 当前剩余座次与身份；斗地优先占满固定地主座（1/3），身份局优先一号位与领袖绑定。
 				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
 				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
 				var selected_seat_number: int = -1
 				var selected_identity: String = ""
 				var first_seat_identity: String = character_selection.get_first_seat_identity()
-				var unique_first_seat: bool = character_selection.has_unique_first_seat_identity()
-				if available_seats.has(1) and available_identities.has(first_seat_identity):
+				var landlord_seats: Array[int] = character_selection.get_landlord_seat_numbers()
+				if character_selection.is_doudizhu_mode() and not landlord_seats.is_empty():
+					# 优先给空闲地主位填地主，再给空闲农民位填农民。
+					var filled: bool = false
+					if available_identities.has("landlord"):
+						for landlord_seat: int in landlord_seats:
+							if available_seats.has(landlord_seat):
+								selected_seat_number = landlord_seat
+								selected_identity = "landlord"
+								filled = true
+								break
+					if not filled and available_identities.has("peasant"):
+						for seat_option: int in available_seats:
+							if not landlord_seats.has(seat_option):
+								selected_seat_number = seat_option
+								selected_identity = "peasant"
+								filled = true
+								break
+					if not filled and not available_seats.is_empty() and not available_identities.is_empty():
+						selected_seat_number = available_seats[0]
+						selected_identity = available_identities[0]
+				elif available_seats.has(1) and available_identities.has(first_seat_identity):
 					selected_seat_number = 1
 					selected_identity = first_seat_identity
 				else:
 					available_seats.erase(1)
-					# 唯一首任身份（领袖/单地主）占满后才从可选列表移除；六人双地主仍保留 landlord 名额给 3 号位等地主。
-					if unique_first_seat:
+					# 唯一首任身份（领袖/单地主）占满后才从可选列表移除。
+					if character_selection.has_unique_first_seat_identity():
 						available_identities.erase(first_seat_identity)
 					if not available_seats.is_empty() and not available_identities.is_empty():
 						selected_seat_number = available_seats[0]
 						selected_identity = available_identities[0]
-						# 一号位必须是首任身份：若只剩一号位则强制配对首任身份（名额仍在时）。
 						if selected_seat_number == 1 and available_identities.has(first_seat_identity):
 							selected_identity = first_seat_identity
 				action.payload["seat_number"] = selected_seat_number
