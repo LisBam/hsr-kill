@@ -1182,6 +1182,14 @@ func _run() -> void:
 	if not log_content_panel.visible or not get_tree().paused or not bool(main_instance.get("_owns_log_pause")) or not match_controller.is_gameplay_paused() or int(main_instance.get("_log_pause_token")) < 0 or not match_controller.event_scheduler.pause_registry.has_active():
 		_fail("offline_log_pause expanded=%s paused=%s owner=%s interface=%s" % [log_content_panel.visible, get_tree().paused, main_instance.get("_owns_log_pause"), match_controller.is_gameplay_paused()])
 		return
+	# 顶部回合信息板；记录展开后正文顶部必须紧贴该信息板下边，不再只占左下角的小窗口。
+	var expanded_log_top_info_panel: PanelContainer = main_instance.get_node("TopInfoPanel") as PanelContainer
+	# 展开记录正文的屏幕矩形；高度应延伸到常驻“记录”按钮上方并保持可滚动。
+	var log_content_screen_rect: Rect2 = _screen_rect(log_content_panel)
+	# 记录根节点；层级必须高于阵亡滤镜的30层，避免展开后被角色状态覆盖。
+	if log_panel.z_index <= 30 or not is_equal_approx(log_content_screen_rect.position.y, _screen_rect(expanded_log_top_info_panel).end.y) or log_content_screen_rect.end.y >= log_toggle_button_rect.position.y:
+		_fail("expanded_log_layer_or_bounds:%s/%s/%s" % [log_panel.z_index, log_content_screen_rect, _screen_rect(expanded_log_top_info_panel)])
+		return
 	# 离线日志打开时牌桌本身已暂停；始终处理的日志组件仍要把空白左键交给牌桌，收起记录与菜单并释放日志暂停。
 	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
 	match_menu.set_menu_open(true)
@@ -1200,6 +1208,11 @@ func _run() -> void:
 		return
 	await _click_control(log_toggle_button)
 	match_controller.network_gateway.mode = NetworkGateway.Mode.OFFLINE
+	# 空白点击已按规则收起局内菜单；重开前重新通过真实入口展开，避免向不可见按钮注入失真的鼠标事件。
+	await _click_control(menu_button)
+	if not match_menu.is_menu_open():
+		_fail("menu_reopen_before_restart")
+		return
 	# 下一局人数输入；直接写入尚未失焦提交的文本，验证重开按钮会读取玩家当前键入值。
 	var player_count_input: SpinBox = main_instance.get_node("%NextPlayerCountInput") as SpinBox
 	player_count_input.get_line_edit().text = "6"

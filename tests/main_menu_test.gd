@@ -32,7 +32,7 @@ func _run() -> void:
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	# 设置按钮；替代参考布局中的商店入口，点击后展示配置浮层。
 	var settings_button: Button = main_instance.get_node("%MainMenuSettingsButton") as Button
-	# 顶部联机设置按钮；必须位于模式选择右侧并打开独立玩家资料模态层。
+	# 顶部联机设置按钮；必须位于模式选择右侧并切换到独立玩家资料内容页。
 	var online_settings_button: Button = main_instance.get_node("%MainMenuOnlineSettingsButton") as Button
 	# 开始按钮；文字固定为“开始游戏”，点击后关闭主菜单并开始身份局。
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
@@ -54,7 +54,7 @@ func _run() -> void:
 	var online_player_name_input: LineEdit = online_settings_panel.get_node("%OnlinePlayerNameInput") as LineEdit
 	# 联机武将形象承载区；动态候选数量必须覆盖数据库中的全部现有武将牌。
 	var online_avatar_content: Control = online_settings_panel.get_node("%OnlineAvatarContent") as Control
-	# 联机资料保存按钮；提交当前名称与稳定武将 ID 后关闭模态层。
+	# 联机资料保存按钮；提交当前名称与稳定武将 ID 后返回默认主菜单内容页。
 	var online_settings_save_button: Button = online_settings_panel.get_node("%OnlineSettingsSaveButton") as Button
 	# 游戏人数输入框；2至10范围内的值会作为主菜单开局请求参数。
 	var player_count_input: SpinBox = main_instance.get_node("%MainMenuPlayerCountInput") as SpinBox
@@ -131,7 +131,7 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 动态联机形象牌；每个数据库武将都必须对应一张正式 PlayerTargetView 候选。
 	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
-	if not online_settings_panel.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE:
+	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE:
 		_fail("online_settings_open")
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
@@ -146,7 +146,7 @@ func _run() -> void:
 	await _click_control(selected_avatar_input_area)
 	await _click_control(online_settings_save_button)
 	await get_tree().process_frame
-	if online_settings_panel.visible or GameSettings.online_player_name != "联机测试玩家" or GameSettings.online_avatar_character_id != selected_avatar_character_id or online_settings_button.focus_mode == Control.FOCUS_NONE:
+	if online_settings_panel.visible or not main_frame.visible or GameSettings.online_player_name != "联机测试玩家" or GameSettings.online_avatar_character_id != selected_avatar_character_id or online_settings_button.focus_mode == Control.FOCUS_NONE:
 		_fail("online_settings_save")
 		return
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -292,9 +292,11 @@ func _run() -> void:
 	var terminal_snapshot: Dictionary = match_controller.state.to_dict(match_controller.local_human_player_id, true)
 	terminal_snapshot["game_over"] = true
 	terminal_snapshot["current_phase"] = "end"
+	terminal_snapshot["winner"] = "draw"
 	match_controller.state_changed.emit(terminal_snapshot)
 	await get_tree().process_frame
-	if interaction_use_button.text != "重新开始" or interaction_cancel_button.text != "返回主菜单" or interaction_use_button.disabled or interaction_cancel_button.disabled:
+	var interaction_guide_label: Label = main_instance.get_node("%InteractionGuideLabel") as Label
+	if interaction_use_button.text != "重新开始" or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_cancel_button.disabled:
 		_fail("post_match_actions")
 		return
 	# 点击终局返回按钮；必须释放当前权威状态并恢复主菜单，而不是保留一个不可继续的旧对局。

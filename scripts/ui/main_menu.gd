@@ -70,7 +70,7 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 顶部身份模式选项；当前唯一的游戏模式入口，按下后仅重新确认身份模式为选中状态。
 @onready var _top_identity_mode_button: Button = %TopIdentityModeButton
 
-## 顶部联机设置入口；位于“模式选择”右侧，打开独立资料面板且不直接建立网络连接。
+## 顶部联机设置入口；位于“模式选择”右侧，切换主菜单内容页且不直接建立网络连接。
 @onready var _online_settings_button: Button = %MainMenuOnlineSettingsButton
 
 ## 左侧身份模式按钮；对应参考布局中的模式选择列表，目前是唯一可选择的模式。
@@ -95,7 +95,7 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 ## 局域网大厅组件；只负责连接表单与成员快照展示，实际网络动作由牌桌协调器接收其信号。
 @onready var _lan_lobby_panel: LanLobbyPanel = %LanLobbyPanel
 
-## 联机资料设置组件；只编辑全局玩家名称与武将形象，主菜单负责模态焦点和关闭后的入口恢复。
+## 联机资料设置组件；只编辑全局玩家名称与武将形象，主菜单负责内容页切换和关闭后的入口恢复。
 @onready var _online_settings_panel: OnlineSettingsPanel = %OnlineSettingsPanel
 
 ## 联机大厅组件；连接成功后接管全屏座位、聊天与房间控制，主菜单只维护焦点和场景覆盖边界。
@@ -371,6 +371,9 @@ func refresh_ui_style() -> void:
 
 ## 重新确认身份模式为当前唯一选择；未来接入其他模式时只需在此处更新预览绑定而不改变开局信号。
 func _select_identity_mode() -> void:
+	# 联机设置内容页；点击“模式选择”时回到默认主菜单内容，顶部导航始终保留在原位。
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
 	_mode_title.text = "身份模式"
 	_mode_description.text = "标准身份局 · %d—%d人" % [minimum_player_count, maximum_player_count]
 	_top_identity_mode_button.button_pressed = true
@@ -387,12 +390,14 @@ func _open_settings() -> void:
 	_settings_close_button.grab_focus()
 
 
-## 打开独立联机资料设置；名称与形象由组件从 GameSettings 读取，主菜单只维护模态焦点边界。
+## 打开独立联机资料设置内容页；名称与形象由组件从 GameSettings 读取，顶部导航保持可见并可直接切回模式选择。
 func _open_online_settings() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
 	_online_lobby_panel.visible = false
+	# 默认主菜单内容；资料页与模式预览互斥显示，避免“联机设置”看起来像覆盖式弹窗。
+	_main_frame.visible = false
 	_online_settings_panel.open_panel()
 	_suspend_background_focus(_online_settings_panel)
 
@@ -414,10 +419,12 @@ func _close_settings() -> void:
 	_settings_button.grab_focus()
 
 
-## 关闭联机资料设置并恢复主菜单焦点；可选参数用于切换到其他模态时避免抢占新入口焦点。
+## 关闭联机资料设置内容页并恢复主菜单内容；可选参数用于切换到其他页面时避免抢占新入口焦点。
 func _close_online_settings(restore_focus: bool = true) -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_online_settings_panel.visible = false
+	# 默认内容框；资料页关闭后立即恢复，不让主菜单留下空白客户区。
+	_main_frame.visible = true
 	_restore_background_focus()
 	if restore_focus:
 		call_deferred("_focus_online_settings_button")

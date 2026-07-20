@@ -37,6 +37,9 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	card.zone = to_zone
 	card.owner_id = target_player_id if to_zone in ["hand", "equipment", "judgment", "wooden_ox"] else -1
 	_update_knowledge(card, to_zone, target_player_id, visible_to)
+	# 已结束的视为展示来源；处理区和弃牌堆需要保留本次记录，其余稳定区域不能携带上一轮的一次性视为牌名。
+	if to_zone in ["draw_pile", "hand", "equipment", "judgment", "wooden_ox"]:
+		card.clear_hand_view_as_presentation()
 	# 移牌事件；所有字段在追加历史前已经完成权威区域变化。
 	var move: CardMoveEvent = CardMoveEvent.new([card.uid], source_zone, to_zone, source_owner, target_player_id, reason)
 	move.move_id = _next_move_id

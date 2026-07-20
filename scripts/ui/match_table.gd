@@ -80,6 +80,12 @@ const LOCAL_PLAYER_SEAT_LEFT_OFFSET: float = -164.35
 ## 本地装备区与手牌区的统一高度；175像素覆盖148像素牌面、18像素选中抬升及悬停缩放余量。
 const LOCAL_CARD_AREA_HEIGHT: float = 175.0
 
+## 本地延时锦囊标记区的固定高度；22像素与武将牌原判定菱形尺寸保持一致，避免移动后改变图标比例。
+const LOCAL_JUDGMENT_ZONE_HEIGHT: float = 22.0
+
+## 本地延时锦囊标记区与手牌区顶边之间的间距；6像素使图标不压住手牌选中抬升空间。
+const LOCAL_JUDGMENT_ZONE_HAND_GAP: float = 6.0
+
 ## 本地装备栏的独立高度；148像素严格等于单张玩家手牌牌面高度，不包含手牌栏的选中抬升预留空间。
 const LOCAL_EQUIPMENT_AREA_HEIGHT: float = 148.0
 
@@ -187,6 +193,9 @@ var local_player_seat_label: Label
 
 ## 本地手牌透明外层；技能数量变化时只调整右边界，不改变175像素固定高度。
 @onready var hand_panel: PanelContainer = $HandPanel
+
+## 本地延时锦囊独立标记区；运行时固定布局到手牌区上方，不再随右下武将牌移动。
+var local_judgment_zone: JudgmentZoneView
 
 ## 本地技能透明外层；尺寸严格跟随当前一列或两列按钮，不绘制独立背景框。
 @onready var skill_bar: PanelContainer = $SkillBar
@@ -413,10 +422,13 @@ func _ready() -> void:
 	_configure_interaction_controls()
 	_create_information_box()
 	_create_local_player_card()
+	_create_local_judgment_zone()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
+	resized.connect(_queue_local_judgment_zone_layout)
 	hand_panel.resized.connect(_queue_auto_managed_hand_overlay_layout)
+	hand_panel.resized.connect(_queue_local_judgment_zone_layout)
 	local_player_seat_slot.item_rect_changed.connect(_queue_auto_managed_hand_overlay_layout)
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
@@ -894,6 +906,7 @@ func _create_local_player_card() -> void:
 	local_player_seat_label.text = ""
 	local_player_card.visible = true
 	local_player_card.set_public_equipment_visible(false)
+	local_player_card.set_public_judgment_visible(false)
 	local_player_seat_slot.z_index = 12
 	local_player_seat_slot.anchor_left = 1.0
 	local_player_seat_slot.anchor_top = 1.0
@@ -911,6 +924,36 @@ func _create_local_player_card() -> void:
 	local_player_seat_slot.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	local_player_seat_slot.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(local_player_seat_slot)
+
+
+## 创建本地玩家专用的延时锦囊标记区；该组件与手牌区同级，避免延时锦囊图标压在右下武将牌底部。
+func _create_local_judgment_zone() -> void:
+	# 本地判定区实例；沿用其他玩家武将牌上的同一标记组件，保证图标形状、配色与名称缩写一致。
+	local_judgment_zone = JudgmentZoneView.new()
+	local_judgment_zone.name = "LocalJudgmentZone"
+	# 本地判定区绘制层级；高于普通手牌但低于选择弹窗与菜单，图标不会被手牌插画或阵亡滤镜遮挡。
+	local_judgment_zone.z_index = 6
+	# 本地判定区固定高度；宽度在手牌区域发生响应式变化后由统一布局函数同步。
+	local_judgment_zone.size = Vector2(1.0, LOCAL_JUDGMENT_ZONE_HEIGHT)
+	add_child(local_judgment_zone)
+	_queue_local_judgment_zone_layout()
+
+
+## 在布局帧结束后重新计算本地延时锦囊标记区的位置；技能栏变化会连带改变手牌右边界，不能读取旧尺寸。
+func _queue_local_judgment_zone_layout() -> void:
+	call_deferred("_layout_local_judgment_zone")
+
+
+## 将本地延时锦囊标记区紧贴手牌区上方；不与右下武将牌或手牌悬停抬升共享坐标系。
+func _layout_local_judgment_zone() -> void:
+	if local_judgment_zone == null or not is_instance_valid(local_judgment_zone) or hand_panel == null or not is_instance_valid(hand_panel):
+		return
+	# 当前手牌区域全局布局；直接使用根节点局部坐标，二者同为牌桌根节点的子控件，不需要额外变换。
+	var hand_position: Vector2 = hand_panel.position
+	# 当前手牌区域尺寸；宽度随技能栏列数收紧或扩展，判定标记区必须同步避免越过技能按钮。
+	var hand_size: Vector2 = hand_panel.size
+	local_judgment_zone.position = hand_position - Vector2(0.0, LOCAL_JUDGMENT_ZONE_HEIGHT + LOCAL_JUDGMENT_ZONE_HAND_GAP)
+	local_judgment_zone.size = Vector2(maxf(hand_size.x, 1.0), LOCAL_JUDGMENT_ZONE_HEIGHT)
 
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
@@ -1162,8 +1205,10 @@ func _render_players() -> void:
 	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
+	local_player_card.set_public_judgment_visible(false)
 	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = ""
+	_render_local_judgment_zone(local_player_snapshot)
 	_render_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)
 
@@ -1263,6 +1308,7 @@ func _layout_local_skill_area(skill_count: int) -> void:
 		skill_bar.visible = false
 		hand_panel.offset_right = LOCAL_PLAYER_SEAT_LEFT_OFFSET - HAND_SKILL_GAP
 		_layout_auto_managed_hand_overlay()
+		_queue_local_judgment_zone_layout()
 		return
 	# 当前首个技能按钮；动态按钮共用相同尺寸，缺失时回退组件默认62×44像素。
 	var first_skill_button: SkillButtonView
@@ -1295,6 +1341,7 @@ func _layout_local_skill_area(skill_count: int) -> void:
 	hand_panel.offset_right = skill_bar.offset_left - HAND_SKILL_GAP
 	skill_grid.queue_sort()
 	_layout_auto_managed_hand_overlay()
+	_queue_local_judgment_zone_layout()
 
 
 ## 延迟到当前控件布局完成后重新计算托管滤镜；窗口缩放和本地座位锚点变化会在同一帧触发，不能读取旧坐标。
@@ -1744,6 +1791,22 @@ func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
 	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
 	var card: Dictionary = equipment.get(slot, {}) as Dictionary
 	return GameSettings.resolve_card_display_name(_get_cached_card_definition(str(card.get("definition_id", ""))))
+
+
+## 将本地玩家公开判定区同步到手牌区上方的独立标记组件；牌名继续遵循全局名称模式。
+func _render_local_judgment_zone(player: Dictionary) -> void:
+	if local_judgment_zone == null or not is_instance_valid(local_judgment_zone):
+		return
+	# 当前判定区公开实体；快照顺序就是规则结算顺序，标记从左到右保持同一顺序。
+	var judgment_area: Array = player.get("judgment_area", []) as Array
+	# 当前判定牌显示名；只读取静态定义与全局名称模式，不把实体引用交给 UI 组件。
+	var judgment_names: Array[String] = []
+	for judgment_variant: Variant in judgment_area:
+		# 当前判定牌快照；定义缺失时名称解析会返回稳定空回退，组件仍保持固定图标尺寸。
+		var judgment_card: Dictionary = judgment_variant as Dictionary
+		judgment_names.append(GameSettings.resolve_card_name(_get_cached_card_definition(str(judgment_card.get("definition_id", "")))))
+	local_judgment_zone.configure(judgment_names)
+	_queue_local_judgment_zone_layout()
 
 
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
@@ -2266,6 +2329,8 @@ func _apply_ui_style() -> void:
 	character_selection_panel.refresh_ui_style()
 	card_use_animation_layer.target_line_color = BattleUIStyle.get_color("target_line")
 	equipment_label.refresh_ui_style()
+	if local_judgment_zone != null and is_instance_valid(local_judgment_zone):
+		local_judgment_zone.refresh_ui_style()
 	if information_box != null and is_instance_valid(information_box):
 		information_box.refresh_ui_style()
 	for card_view_variant: Variant in _card_views.values():
@@ -3362,7 +3427,7 @@ func _refresh_post_match_actions() -> void:
 	interaction_panel.visible = true
 	selection_label.text = ""
 	selection_label.visible = false
-	interaction_guide_label.text = ""
+	interaction_guide_label.text = _get_post_match_result_text()
 	use_button.visible = true
 	use_button.text = "重新开始"
 	use_button.disabled = false
@@ -3376,6 +3441,25 @@ func _refresh_post_match_actions() -> void:
 	end_play_button.visible = false
 	end_play_button.disabled = true
 	_refresh_component_states()
+
+
+## 返回本地玩家视角的终局提示；胜者字段由权威对局快照给出，缺失时只保留中性结算标题供场景测试与旧回放使用。
+func _get_post_match_result_text() -> String:
+	# 当前权威胜者阵营；draw 代表牌堆与弃牌堆均无法提供摸牌时的平局终局。
+	var winner: String = str(_snapshot.get("winner", ""))
+	if winner == "draw":
+		return "对局结算，游戏平局"
+	# 当前本地玩家公开身份；身份局终局阵营只由该稳定枚举判断，不依赖武将或座次。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	# 当前本地身份；快照不完整时不能错误宣告胜负。
+	var local_identity: String = str(local_player.get("identity", ""))
+	# 当前阵营是否与权威胜者一致；领袖与忠臣共享胜利条件，反贼和内奸分别独立。
+	var is_victory: bool = (winner == "leader_and_loyalists" and local_identity in ["leader", "loyalist"]) or (winner == "rebels" and local_identity == "rebel") or (winner == "renegade" and local_identity == "renegade")
+	if is_victory:
+		return "对局结算，游戏胜利"
+	if not winner.is_empty():
+		return "对局结算，游戏失败"
+	return "对局结算"
 
 
 ## 刷新点击装备后的材料、目标和中央主按钮；交互规则全部读取当前装备定义元数据与核心预览。

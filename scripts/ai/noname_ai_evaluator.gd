@@ -60,6 +60,9 @@ const CHAINED_CRITICAL_HP_MULTIPLIER: float = 2.5
 ## 行动者被横置传导伤害且仅剩1点体力时的额外生存惩罚；防止技能微小收益掩盖自身立即濒死风险。
 const CHAINED_SELF_LETHAL_PENALTY: float = 12.0
 
+## 【白银狮子】的稳定卡牌 ID；装备取得、换装与弃置估值共用该常量，避免在多个决策分支重复书写字符串。
+const BAIYIN_LION_CARD_ID: String = "baiyin"
+
 ## 当前评估器使用的身份关系模型；由协调器共享，保证所有 AI 观察到一致的身份暴露度。
 var identity_model: IdentityAIModel
 
@@ -85,6 +88,37 @@ func score_resource_change(authoritative_snapshot: Dictionary, observer_id: int,
 	# 观察者对资源变化目标的态度；友方获得和敌方失去都会形成正收益。
 	var attitude: float = get_attitude(authoritative_snapshot, observer_id, target_id)
 	return resource_value * attitude / ATTITUDE_SCALE
+
+
+## 计算弃置或转移装备区【白银狮子】时的回复收益；只有受伤持有者失去实际装备才会触发该效果。
+func score_baiyin_equipment_loss_recovery(authoritative_snapshot: Dictionary, observer_id: int, owner_id: int, card_data: Dictionary) -> float:
+	# 当前实体定义；非白银狮子或不完整候选都没有离区回复收益。
+	if str(card_data.get("definition_id", "")) != BAIYIN_LION_CARD_ID:
+		return 0.0
+	# 当前实体区域；手牌中的白银狮子被弃置或转移不会触发防具离区效果。
+	if str(card_data.get("zone", "")) != "equipment":
+		return 0.0
+	# 当前装备持有者；满体力、死亡或不存在的角色不会从本次离区获得回复。
+	var owner: Dictionary = get_player(authoritative_snapshot, owner_id)
+	if owner.is_empty() or not bool(owner.get("alive", false)) or int(owner.get("hp", 0)) >= int(owner.get("max_hp", 0)):
+		return 0.0
+	return score_resource_change(authoritative_snapshot, observer_id, owner_id, 0, 1)
+
+
+## 计算获得一张【白银狮子】后替换自身同名防具的额外回复价值；只用于实际取得该牌的候选选择。
+func get_baiyin_acquisition_recovery_value(authoritative_snapshot: Dictionary, recipient_id: int, card_data: Dictionary) -> float:
+	# 当前取得的实体定义；不是白银狮子时不需要处理换装离区回复。
+	if str(card_data.get("definition_id", "")) != BAIYIN_LION_CARD_ID:
+		return 0.0
+	# 当前接收者；没有已装备白银狮子或已满体力时，新牌不会创造回复机会。
+	var recipient: Dictionary = get_player(authoritative_snapshot, recipient_id)
+	if recipient.is_empty() or int(recipient.get("hp", 0)) >= int(recipient.get("max_hp", 0)):
+		return 0.0
+	# 当前防具实体；只有同名防具会在装备新牌时被弃置并触发回复。
+	var armor: Dictionary = (recipient.get("equipment", {}) as Dictionary).get("armor", {}) as Dictionary
+	if str(armor.get("definition_id", "")) != BAIYIN_LION_CARD_ID:
+		return 0.0
+	return HP_RESOURCE_VALUE
 
 
 ## 计算一项出牌阶段动作的基础效用；具体技能可在自身文件中继续修正。
@@ -279,7 +313,25 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	# 选牌资源总价值；费用与弃牌倾向选择最低价值，获得牌与展示选择可由专属卡牌调整。
 	var selected_value: float = 0.0
 	for selected_uid_variant: Variant in selected_card_uids:
-		selected_value += get_choice_card_value(authoritative_snapshot, choice_request, int(selected_uid_variant), actor_id)
+		# 当前选择候选 UID；候选快照同时提供实际持有者和区域，用于计算白银狮子离区回复。
+		var selected_uid: int = int(selected_uid_variant)
+		# 当前候选数据；不存在时保持原有未知牌2分价值，不伪造装备离区效果。
+		var candidate: Dictionary = _get_choice_candidate_by_uid(choice_request, selected_uid)
+		# 当前候选牌面；隐藏手牌只提供空定义，白银狮子修正会自然跳过。
+		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+		# 当前候选持有者；弃置和转移时由候选快照提供，避免把发起选择者误当成装备持有者。
+		var candidate_owner_id: int = int(candidate.get("owner_id", -1))
+		selected_value += get_choice_card_value(authoritative_snapshot, choice_request, selected_uid, actor_id)
+		# 白银狮子离区回复对敌方会减少拆取收益，对友方则增加收益；手牌候选与满体力持有者不会产生修正。
+		var baiyin_loss_recovery_score: float = score_baiyin_equipment_loss_recovery(authoritative_snapshot, actor_id, candidate_owner_id, card_data)
+		if choice_kind in ["discard_target", "steal_target"]:
+			selected_value += baiyin_loss_recovery_score
+		elif choice_kind == "discard_phase" or choice_kind in ["dieying_discard", "zaixian_discard", "guanshi_cost"] or int(choice_request.get("min_card_select", choice_request.get("min_select", 0))) > 0:
+			# 自己把受伤白银狮子作为费用时，失去防具后的回复会降低净弃置成本。
+			selected_value -= baiyin_loss_recovery_score
+		if choice_kind in ["steal_target", "harvest"]:
+			# 取得白银狮子后若可换下自身同名防具，额外回复属于取得者的真实收益。
+			selected_value += get_baiyin_acquisition_recovery_value(authoritative_snapshot, actor_id, card_data)
 	if choice_kind in ["discard_target", "steal_target", "harvest"]:
 		# 操作他人区域或领取公共牌时优先选择已知价值最高的牌；隐藏手牌只按统一未知价值比较。
 		return selected_value
@@ -455,6 +507,16 @@ func get_choice_card_value(authoritative_snapshot: Dictionary, choice_request: D
 		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
 		return get_card_value_by_id(str(card_data.get("definition_id", "")), authoritative_snapshot, owner_id)
 	return 2.0
+
+
+## 按稳定 UID 返回选择请求中的候选副本；缺失候选返回空字典，调用方必须按未知资源而非猜测牌面处理。
+func _get_choice_candidate_by_uid(choice_request: Dictionary, card_uid: int) -> Dictionary:
+	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
+		# 当前候选副本；每个请求内 UID 唯一，命中后深拷贝避免技能评分改写原始请求。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("uid", -1)) == card_uid:
+			return candidate.duplicate(true)
+	return {}
 
 
 ## 返回持有者手牌或木牛“粮”中指定实体 UID 的保留价值；自定义装备动作使用该接口评估材料。
@@ -749,15 +811,19 @@ func _score_equipment_action(authoritative_snapshot: Dictionary, actor_id: int, 
 	var actor: Dictionary = get_player(authoritative_snapshot, actor_id)
 	# 当前同槽装备价值；无装备时为0。
 	var old_value: float = 0.0
+	# 被替换的旧装备快照；仅在当前槽位存在实体时用于评估白银狮子离区回复。
+	var old_equipment: Dictionary = {}
 	if not actor.is_empty() and (actor.get("equipment", {}) as Dictionary).has(slot):
 		# 当前同槽装备牌面；读取其对应卡牌文件 AI 配置。
-		var old_equipment: Dictionary = (actor.get("equipment", {}) as Dictionary).get(slot, {}) as Dictionary
+		old_equipment = (actor.get("equipment", {}) as Dictionary).get(slot, {}) as Dictionary
 		# 当前同槽装备定义；未知定义按0处理。
 		var old_definition: Dictionary = _get_cached_card_definition(str(old_equipment.get("definition_id", "")))
 		# 当前同槽装备 AI 配置；优先 equip_value。
 		var old_ai: Dictionary = get_card_ai_profile(old_definition)
 		old_value = float(old_ai.get("equip_value", old_ai.get("value", 0.0)))
-	return new_value - old_value + order * ORDER_WEIGHT
+	# 白银狮子换装回复；装备新防具会令旧防具离区，受伤时的1点回复应增加友方自身换装收益。
+	var baiyin_replacement_recovery_value: float = score_baiyin_equipment_loss_recovery(authoritative_snapshot, actor_id, actor_id, old_equipment)
+	return new_value - old_value + baiyin_replacement_recovery_value + order * ORDER_WEIGHT
 
 
 ## 返回评估器内部缓存的卡牌静态定义；空 ID 返回空字典，命中后不再向数据库申请新的深拷贝。
