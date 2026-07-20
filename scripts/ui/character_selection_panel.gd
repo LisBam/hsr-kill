@@ -738,6 +738,34 @@ func _toggle_all_characters() -> void:
 	refresh_ui_style()
 
 
+## 返回本局一号位绑定的首任身份 ID；优先读服务快照，缺省时按模式推断（斗地主地主，身份局领袖）。
+func _get_first_seat_identity_id() -> String:
+	var snapshot_identity: String = str(_snapshot.get("first_seat_identity", ""))
+	if not snapshot_identity.is_empty():
+		return snapshot_identity
+	var selection_mode: String = str(_snapshot.get("match_mode", ""))
+	if selection_mode.is_empty():
+		# 快照未带模式时，用身份选项或本地身份推断，避免跨模式错绑。
+		var available_identities: Array = _snapshot.get("identity_options", []) as Array
+		var local_identity: String = str(_snapshot.get("local_identity", ""))
+		if available_identities.has("landlord") or available_identities.has("peasant") or local_identity == "landlord" or local_identity == "peasant":
+			return "landlord"
+		return "leader"
+	return "landlord" if selection_mode == "doudizhu" else "leader"
+
+
+## 返回首任身份是否唯一绑定一号位；六人双地主时为 false（选地主不强制 seat1），三人地主与身份局领袖为 true。
+func _is_unique_first_seat_identity() -> bool:
+	if _snapshot.has("unique_first_seat_identity"):
+		return bool(_snapshot.get("unique_first_seat_identity", true))
+	# 无快照字段时：斗地六人双地主不唯一，其余默认唯一。
+	var first_seat_identity: String = _get_first_seat_identity_id()
+	if first_seat_identity != "landlord":
+		return true
+	var player_count: int = int(_snapshot.get("player_count", 0))
+	return player_count != 6
+
+
 ## 选择一个临时座次；一号位自动联动领袖/地主，离开一号位时清除仍残留的唯一首任身份。
 func _select_seat(seat_number: int) -> void:
 	_selected_seat_number = seat_number

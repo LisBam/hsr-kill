@@ -613,6 +613,8 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"phase":phase,
 		"selection_kind":"initial",
 		"match_mode":match_mode,
+		"first_seat_identity":get_first_seat_identity(),
+		"unique_first_seat_identity":has_unique_first_seat_identity(),
 		"leader_player_id":leader_player_id if uses_leader_priority_selection() else -1,
 		"leader_character_id":public_leader_character_id,
 		"candidate_count":candidate_count,
