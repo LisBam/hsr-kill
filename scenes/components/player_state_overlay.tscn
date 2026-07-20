@@ -29,6 +29,15 @@ mouse_filter = 2
 material = SubResource("ShaderMaterialDeathGrayscale")
 color = Color(1, 1, 1, 1)
 
+
+[node name="WineFilter" type="ColorRect" parent="."]
+visible = false
+layout_mode = 0
+offset_right = 148.35
+offset_bottom = 197.8
+mouse_filter = 2
+color = Color(0.78, 0.08, 0.08, 0.28)
+
 [node name="DeathLabel" type="Label" parent="."]
 visible = false
 layout_mode = 0

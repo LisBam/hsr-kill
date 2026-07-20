@@ -37,7 +37,25 @@ func can_activate(context: Dictionary = {}) -> bool:
 		return (context.get("response_patterns", []) as Array).has("sha")
 	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
-	return not _get_legal_target_ids().is_empty()
+	# 材料候选；按钮可用性必须与虚拟火【杀】完整校验一致，包括本阶段【杀】次数。
+	var candidates: Array[Dictionary] = _get_material_candidates()
+	# 材料与目标组合数据；目标预览不校验次数，因此下方必须再走完整校验。
+	var selection_data: Dictionary = build_virtual_target_selection_data(FIRE_SLASH_DEFINITION_ID, candidates, VIRTUAL_RULE_OVERRIDES)
+	# 逐材料合法目标映射；键为材料UID字符串。
+	var target_ids_by_card_id: Dictionary = selection_data.get("target_ids_by_card_id", {}) as Dictionary
+	for candidate: Dictionary in candidates:
+		# 当前材料UID；手牌、木牛“粮”与装备共用同一实体标识。
+		var material_card_uid: int = int(candidate.get("uid", -1))
+		# 当前材料实体；找不到时跳过，避免候选快照与权威区域短暂不一致。
+		var material_card: CardInstance = _find_owned_material_card(material_card_uid)
+		if material_card == null:
+			continue
+		for target_id_variant: Variant in target_ids_by_card_id.get(str(material_card_uid), []) as Array:
+			# 当前单目标数组；validate_virtual_use_for_material 会复核阶段次数、存活状态与目标模式。
+			var target_ids: Array[int] = [int(target_id_variant)]
+			if validate_virtual_use_for_material(FIRE_SLASH_DEFINITION_ID, material_card, target_ids, VIRTUAL_RULE_OVERRIDES).is_empty():
+				return true
+	return false
 
 
 ## 主动发动安打；AI可直接提交材料与目标，玩家按钮进入统一牌目标组合选择。
@@ -87,7 +105,7 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 	var material_card_uids: Array[int] = [material_card_uid]
 	# 技能持有者；仅用于长期语义日志，不直接修改其牌区。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, FIRE_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【安打】，将一张牌当火【杀】使用。" % owner.display_name, VIRTUAL_RULE_OVERRIDES)):
+	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, FIRE_SLASH_DEFINITION_ID, material_card_uids, target_ids, "", VIRTUAL_RULE_OVERRIDES)):
 		return false
 	_used_turn_number = host.state.turn_number
 	announce_activation({"material_card_uid":material_card_uid, "target_ids":target_ids.duplicate(), "virtual_card_id":FIRE_SLASH_DEFINITION_ID})

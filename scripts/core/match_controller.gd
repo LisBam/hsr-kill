@@ -84,6 +84,26 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 特殊模式预留的首回合座次号；标准身份局不读取该值而始终由随机座次的领袖开始，运行时无需修改。
 @export_range(1, 10, 1) var first_turn_seat_number: int = 1
 
+## 座次中文数字映射；仅用于对局日志中的“X号位”展示，不参与规则计算。
+const SEAT_NUMBER_CN: Array[String] = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+
+## 标准阶段英文 ID 到中文名；对局日志统一写“xx阶段开始/结束”。
+const PHASE_LOG_NAMES: Dictionary = {
+	"start": "准备阶段",
+	"judgment": "判定阶段",
+	"draw": "摸牌阶段",
+	"play": "出牌阶段",
+	"discard": "弃牌阶段",
+	"finish": "结束阶段",
+	"phaseZhunbei": "准备阶段",
+	"phaseJudge": "判定阶段",
+	"phaseDraw": "摸牌阶段",
+	"phaseUse": "出牌阶段",
+	"phaseDiscard": "弃牌阶段",
+	"phaseJieshu": "结束阶段",
+}
+
+
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
 var state: GameState
 
@@ -461,7 +481,7 @@ func get_match_start_validation_error(player_count: int = -1, mode_id: String = 
 	var actual_mode: String = _resolve_match_mode(mode_id)
 	if not identity_rules.supports_player_count(actual_mode, actual_player_count):
 		if actual_mode == IdentityRules.MODE_DOUDIZHU:
-			return "斗地主仅支持3人或6人。"
+			return "斗地主仅支持3人或5人。"
 		return "标准身份局仅支持2至10名玩家。"
 	if not GameDatabase.validation_errors.is_empty():
 		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
@@ -2204,6 +2224,91 @@ func add_log(message: String) -> void:
 	log_added.emit(message)
 
 
+## 返回日志用角色名“武将名（X号位）”；武将未亮出或缺失时回退显示名。
+func format_player_log_name(player_id: int) -> String:
+	if state == null:
+		return "未知角色"
+	return format_player_state_log_name(state.get_player(player_id), player_id)
+
+
+## 返回日志用角色名；seat 取当前 players 数组顺序（一号位起）。
+func format_player_state_log_name(player: PlayerState, fallback_player_id: int = -1) -> String:
+	if player == null:
+		return "未知角色"
+	# 座次序号；players 数组下标+1 与快照 seat_number 一致。
+	var seat_number: int = fallback_player_id + 1
+	if state != null:
+		var seat_index: int = state.players.find(player)
+		if seat_index >= 0:
+			seat_number = seat_index + 1
+	# 座次中文；超出映射时退回阿拉伯数字，保证日志仍可读。
+	var seat_text: String = SEAT_NUMBER_CN[seat_number] if seat_number >= 1 and seat_number < SEAT_NUMBER_CN.size() else str(maxi(seat_number, 1))
+	# 武将显示名；优先解析 character_id，缺失时用 display_name。
+	var character_name: String = GameDatabase.resolve_character_name(player.character_id) if not player.character_id.is_empty() else ""
+	if character_name.is_empty() or character_name == player.character_id:
+		character_name = player.display_name if not player.display_name.is_empty() else "未知角色"
+	return "%s（%s号位）" % [character_name, seat_text]
+
+
+## 将目标 ID 列表格式化为“甲、乙”日志片段；空列表返回空串。
+func format_target_log_names(target_ids: Array) -> String:
+	# 已格式化目标名；按声明顺序去重，避免同一目标重复出现。
+	var names: Array[String] = []
+	for target_variant: Variant in target_ids:
+		var target_id: int = int(target_variant)
+		if target_id < 0:
+			continue
+		var target_name: String = format_player_log_name(target_id)
+		if not names.has(target_name):
+			names.append(target_name)
+	if names.is_empty():
+		return ""
+	return "、".join(names)
+
+
+## 返回实体牌在日志中的【牌名】文本；不含花色点数，便于统一阅读。
+func format_card_log_name(card: CardInstance) -> String:
+	if card == null:
+		return "【未知牌】"
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	return "【%s】" % GameSettings.resolve_card_name(definition)
+
+
+## 返回定义 ID 对应的【牌名】日志文本。
+func format_card_definition_log_name(definition_id: String) -> String:
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	if definition.is_empty():
+		return "【%s】" % definition_id
+	return "【%s】" % GameSettings.resolve_card_name(definition)
+
+
+## 返回阶段中文名；未知阶段回退原字符串。
+func format_phase_log_name(phase_id: String) -> String:
+	return str(PHASE_LOG_NAMES.get(phase_id, phase_id))
+
+
+## 写入阶段开始日志；额外出牌阶段不加技能括号。
+func log_phase_begin(phase_id: String, extra_phase: bool = false) -> void:
+	var phase_name: String = format_phase_log_name(phase_id)
+	if phase_name.is_empty():
+		return
+	if extra_phase and phase_id in ["play", "phaseUse"]:
+		add_log("额外出牌阶段开始。")
+	else:
+		add_log("%s开始。" % phase_name)
+
+
+## 写入阶段结束日志。
+func log_phase_end(phase_id: String, extra_phase: bool = false) -> void:
+	var phase_name: String = format_phase_log_name(phase_id)
+	if phase_name.is_empty():
+		return
+	if extra_phase and phase_id in ["play", "phaseUse"]:
+		add_log("额外出牌阶段结束。")
+	else:
+		add_log("%s结束。" % phase_name)
+
+
 ## 返回适合界面显示的一张实体牌描述，名称模式由全局配置决定。
 func describe_card(card: CardInstance) -> String:
 	if card == null:
@@ -2276,7 +2381,7 @@ func draw(player_id: int, count: int, announce: bool = true) -> void:
 	_emit_rule_timing("drawEnd", player_id, -1, player_id, result_data)
 	_emit_rule_timing("drawAfter", player_id, -1, player_id, result_data)
 	if announce and drawn_count > 0:
-		add_log("%s摸了%d张牌。" % [player.display_name, drawn_count])
+		add_log("%s摸了%d张牌。" % [format_player_state_log_name(player), drawn_count])
 
 
 ## 回复体力并限制在体力上限内；无效目标、死亡目标或非正数回复不会改变状态。
@@ -2303,7 +2408,7 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "") -
 	var previous_hp: int = target.hp
 	target.hp = mini(target.max_hp, target.hp + final_amount)
 	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":final_amount, "reason":reason}, {"amount":target.hp - previous_hp, "hp":target.hp})
-	add_log("%s回复%d点体力（%d/%d）。" % [target.display_name, target.hp - previous_hp, target.hp, target.max_hp])
+	add_log("%s回复%d点体力（%d/%d）。" % [format_player_state_log_name(target), target.hp - previous_hp, target.hp, target.max_hp])
 	# 体力值实际变化时机；回复、伤害与失去体力共用 changeHp，并通过 change_type 区分来源。
 	var result_data: Dictionary = {"amount":target.hp - previous_hp, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"recover"}
 	_emit_rule_timing("changeHp", target_id, source_id, target_id, result_data)
@@ -2333,7 +2438,7 @@ func shield(target_id: int, amount: int, source_id: int = -1, reason: String = "
 	target.shield = maxi(target.shield, 0) + gained_amount
 	# 护盾事件记录；保存来源、技能或卡牌原因、实际增加量和结算后的总护盾值。
 	var shield_event_id: int = _record_runtime_event("ShieldEvent", "shield", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":gained_amount, "shield":target.shield})
-	add_log("%s获得%d点护盾（护盾%d）。" % [target.display_name, gained_amount, target.shield])
+	add_log("%s获得%d点护盾（护盾%d）。" % [format_player_state_log_name(target), gained_amount, target.shield])
 	# 获得护盾后事件；技能可以读取来源、目标、实际增加量、当前护盾与效果原因。
 	var event: RuleEvent = RuleEvent.new("shield_after", source_id, target_id, {"amount":gained_amount, "shield":target.shield, "reason":reason, "event_id":shield_event_id})
 	_dispatch_rule_event(event)
@@ -2477,7 +2582,7 @@ func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "") -
 	target.hp -= final_amount
 	# 失去体力父事件；与伤害事件使用不同类型，回放和技能触发不会混淆两种体力减少来源。
 	var lose_hp_event_id: int = _record_runtime_event("LoseHpEvent", "lose_hp", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":final_amount, "hp":target.hp})
-	add_log("%s失去%d点体力（%d/%d，护盾%d）。" % [target.display_name, final_amount, target.hp, target.max_hp, target.shield])
+	add_log("%s失去%d点体力（%d/%d，护盾%d）。" % [format_player_state_log_name(target), final_amount, target.hp, target.max_hp, target.shield])
 	# 失去体力后事件；与 damage_after 完全独立，受到伤害和造成伤害技能不会收到本事件。
 	var after_event: RuleEvent = RuleEvent.new("lose_hp_after", source_id, target_id, {"amount":final_amount, "hp":target.hp, "shield":target.shield, "reason":reason, "event_id":lose_hp_event_id})
 	_dispatch_rule_event(after_event)
@@ -2612,9 +2717,9 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	if target.chained and nature != "normal":
 		target.chained = false
 	if shield_absorbed > 0:
-		add_log("%s受到%d点%s伤害，护盾抵消%d点（%d/%d，护盾%d）。" % [target.display_name, final_amount, _nature_text(nature), shield_absorbed, target.hp, target.max_hp, target.shield])
+		add_log("%s受到%d点%s伤害，护盾抵消%d点（%d/%d，护盾%d）。" % [format_player_state_log_name(target), final_amount, _nature_text(nature), shield_absorbed, target.hp, target.max_hp, target.shield])
 	else:
-		add_log("%s受到%d点%s伤害（%d/%d）。" % [target.display_name, final_amount, _nature_text(nature), target.hp, target.max_hp])
+		add_log("%s受到%d点%s伤害（%d/%d）。" % [format_player_state_log_name(target), final_amount, _nature_text(nature), target.hp, target.max_hp])
 	# 伤害实际成立时机；发生在护甲和体力扣减后、旧 damage_after 与濒死流程前。
 	var damage_result_data: Dictionary = {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
 	for context_key_variant: Variant in source_context.keys():
@@ -3023,7 +3128,7 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 		resolved_response_card.uid = consumed.uid
 		resolved_response_card.zone = consumed.zone
 	# 响应日志显示已经声明的逻辑牌名，弃牌堆中的实体快照仍展示恢复后的原始牌名。
-	add_log("%s打出了%s。" % [player.display_name, describe_card(resolved_response_card)])
+	add_log("%s打出了%s。" % [format_player_state_log_name(player), format_card_log_name(resolved_response_card)])
 	_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
 	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
 	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
@@ -3763,7 +3868,7 @@ func equip_from_processing(player_id: int, card: CardInstance) -> void:
 	_ensure_card_movement()
 	_move_card_with_timings(card, "equipment", player_id, "equip", state.current_event_id, slot)
 	_install_card_runtime(card, player_id)
-	add_log("%s装备了%s。" % [player.display_name, describe_card(card)])
+	add_log("%s装备了%s。" % [format_player_state_log_name(player), format_card_log_name(card)])
 
 
 ## 将处理区中的延时锦囊放入目标判定区。
@@ -4329,7 +4434,7 @@ func add_phase(player_id: int, reason: String = "") -> bool:
 	if player == null or not player.alive or player.out_of_game or state.game_over:
 		return false
 	_extra_turn_queue.append(player_id)
-	add_log("%s获得了一个额外的回合%s。" % [player.display_name, "（%s）" % reason if not reason.is_empty() else ""])
+	add_log("%s获得了一个额外的回合。" % format_player_state_log_name(player))
 	return true
 
 
@@ -4361,7 +4466,7 @@ func add_play_phase(player_id: int, reason: String = "") -> bool:
 	# 弃牌阶段获得的额外出牌阶段完成后直接进入结束阶段，不能再次执行一个普通弃牌阶段。
 	if return_point == "finish":
 		_extra_play_phase_returns_to_finish[player_id] = true
-	add_log("%s获得了一个额外的出牌阶段%s。" % [player.display_name, "（%s）" % reason if not reason.is_empty() else ""])
+	add_log("%s获得了一个额外的出牌阶段。" % format_player_state_log_name(player))
 	return true
 
 
@@ -4443,7 +4548,7 @@ func request_extra_discard_phase(player_id: int, source_id: int, reason: String,
 	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
 		_active_extra_discard_phase.clear()
 		return false
-	add_log("%s开始执行额外的弃牌阶段。" % player.display_name)
+	log_phase_begin("discard", true)
 	_active_extra_discard_phase["status"] = "body"
 	# 阶段开始时触发的其他技能必须先完成自身连续选择，再计算本阶段的最终手牌上限。
 	if has_pending_card_choice():
@@ -4494,7 +4599,7 @@ func _continue_extra_discard_phase_choice(context: Dictionary, selected_uids: Ar
 	# 阶段角色；日志只读取永久显示名，不暴露手牌定义。
 	var player: PlayerState = state.get_player(player_id)
 	if player != null:
-		add_log("%s在额外弃牌阶段弃置了%d张手牌。" % [player.display_name, discarded_count])
+		add_log("%s在额外弃牌阶段完成弃置。" % format_player_state_log_name(player))
 	_finish_active_extra_discard_phase()
 
 
@@ -4831,7 +4936,7 @@ func _uninstall_all_card_runtimes() -> void:
 func _create_players(player_count: int) -> void:
 	# 本局模式；决定身份表是否洗牌以及开局公开身份规则。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
-	# 身份配置副本；身份局整表洗牌，斗地主按座次固定（一号位地主，六人时三号位亦为地主）。
+	# 身份配置副本；身份局整表洗牌，斗地主按座次固定（一号位地主，五人时三号位亦为地主）。
 	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
 	if match_mode != IdentityRules.MODE_DOUDIZHU:
 		_shuffle_array(identities)
@@ -5147,7 +5252,22 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	var skill_name: String = str(skill_metadata.get("name", skill_id))
 	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
 	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
-	add_log("%s发动了【%s】。" % [player.display_name, skill_name])
+	# 技能目标日志片段；有目标时追加“，目标为xx”。
+	var skill_target_text: String = format_target_log_names(context.get("target_ids", []) as Array)
+	if skill_target_text.is_empty():
+		skill_target_text = format_target_log_names([context.get("target_id", -1)])
+	if skill_target_text.is_empty():
+		for fallback_key: String in ["recipient_id", "slash_user_id", "restricted_target_ids"]:
+			if fallback_key == "restricted_target_ids":
+				skill_target_text = format_target_log_names(context.get(fallback_key, []) as Array)
+			else:
+				skill_target_text = format_target_log_names([context.get(fallback_key, -1)])
+			if not skill_target_text.is_empty():
+				break
+	if skill_target_text.is_empty():
+		add_log("%s发动了【%s】。" % [format_player_state_log_name(player), skill_name])
+	else:
+		add_log("%s发动了【%s】，目标为%s。" % [format_player_state_log_name(player), skill_name, skill_target_text])
 	# 技能表现上下文副本；目标线等客户端表现只读取已经确认的稳定目标字段，不能持有或改写规则历史原字典。
 	var presentation_context: Dictionary = context.duplicate(true)
 	skill_activated.emit(player_id, skill_name, presentation_context)
@@ -5585,7 +5705,7 @@ func _submit_mulligan_refresh(action: PlayerAction) -> bool:
 	if not _refresh_starting_hand(action.actor_id, false):
 		return _reject("起始手牌刷新失败。")
 	state.action_sequence += 1
-	add_log("%s使用手气卡刷新了起始手牌。" % state.get_player(action.actor_id).display_name)
+	add_log("%s使用手气卡刷新了起始手牌。" % format_player_log_name(action.actor_id))
 	_emit_state()
 	return true
 
@@ -5713,7 +5833,7 @@ func _drive_ai_character_selection() -> void:
 	_is_driving_character_selection = true
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
 		# 自选阶段每轮都重新检查真人完成状态；首任领袖由 AI 确认后可能在同一循环内刚进入该阶段。
-		# 斗地主同时选将同样需等待真人，防止 AI 先占座次/身份导致六人局卡死。
+		# 斗地主同时选将同样需等待真人，防止 AI 先占座次/身份导致五人局卡死。
 		if character_selection.custom_assignment_enabled and (
 			character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
 			or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
@@ -6048,7 +6168,8 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 		_advance_after_current_player_death(player_id)
 		return
 	if _is_phase_lifecycle_body_active("phaseZhunbei", player_id):
-		add_log("第%d回合：%s的回合开始。" % [state.turn_number, player.display_name])
+		add_log("————————")
+		add_log("%s的回合开始。" % format_player_state_log_name(player))
 		_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
 	if _started_phase_lifecycles.has(lifecycle_key):
 		_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
@@ -6062,7 +6183,7 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 		return
 	if player.face_down:
 		turn_over_player(player_id, player_id, "turn_start_skip")
-		add_log("%s翻回正面并跳过本回合。" % player.display_name)
+		add_log("%s翻回正面并跳过本回合。" % format_player_state_log_name(player))
 		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
 		_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
 		_finish_turn(player_id)
@@ -6119,7 +6240,7 @@ func _enter_draw_phase(player_id: int) -> void:
 	state.phase_index = 2
 	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("draw", false)):
-		add_log("%s跳过摸牌阶段。" % player.display_name)
+		add_log("%s跳过摸牌阶段。" % format_player_state_log_name(player))
 		_emit_rule_timing("phaseDrawSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 	elif _begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":2, "turn_number":state.turn_number}, _current_turn_event_id):
 		# 两个摸牌数量修改窗口严格按序执行；第二窗口结果作为实际基础摸牌数传入通用 draw 生命周期。
@@ -6153,7 +6274,7 @@ func _enter_play_phase(player_id: int) -> void:
 	player.play_phase_card_use_history.clear()
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
-		add_log("%s跳过出牌阶段。" % player.display_name)
+		add_log("%s跳过出牌阶段。" % format_player_state_log_name(player))
 		_emit_rule_timing("phaseUseSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		_end_play_phase(player_id, false, true)
 		return
@@ -6367,6 +6488,8 @@ func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dicti
 			return false
 	# 活动生命周期上下文；status=body表示Before与Begin已经完成，阶段主体尚可执行，后续End/After会原地推进状态。
 	_started_phase_lifecycles[lifecycle_key] = {"status":"body", "event_data":current_event_data.duplicate(true), "parent_event_id":parent_event_id}
+	# 阶段开始对局日志；额外出牌阶段由 event_data.extra_phase 标记。
+	log_phase_begin(base_name, bool(current_event_data.get("extra_phase", false)))
 	return true
 
 
@@ -6404,6 +6527,8 @@ func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dict
 			_emit_rule_timing(after_name, player_id, player_id, player_id, completion_data, completion_parent_event_id)
 		if has_pending_card_choice():
 			return
+	# 阶段结束对局日志；仅在完整走完 End/After 后输出一次。
+	log_phase_end(base_name, bool(completion_data.get("extra_phase", false)))
 	_started_phase_lifecycles.erase(lifecycle_key)
 
 
@@ -6452,7 +6577,7 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 		_move_card_with_timings(delayed_card, "processing", -1, "judge", delayed_event_id)
 		# 延时锦囊展示；表现接管其可能发生的处理区到弃牌堆移动，闪电传递时由新区域移动释放所有权。
 		_request_card_presentation(delayed_card, player_id, [], "delayedJudge", delayed_event_id, true)
-		add_log("%s开始判定%s。" % [player.display_name, describe_card(delayed_card)])
+		add_log("%s开始判定%s。" % [format_player_state_log_name(player), describe_card(delayed_card)])
 		_emit_state()
 		if delayed_judgment_preview_seconds > 0.0 and not state.match_id.is_empty():
 			await get_tree().create_timer(delayed_judgment_preview_seconds, false).timeout
@@ -6544,7 +6669,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 		if not has_same_delayed_card:
 			_ensure_card_movement()
 			_move_card_with_timings(delayed_card, "judgment", candidate.player_id, "add_judge", state.current_event_id)
-			add_log("【%s】移动至%s的判定区。" % [delayed_name, candidate.display_name])
+			add_log("【%s】移动至%s的判定区。" % [delayed_name, format_player_state_log_name(candidate)])
 			return
 		candidate = state.get_next_alive_player(candidate.player_id)
 		checked_count += 1
@@ -6553,7 +6678,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 	if original_player != null and original_player.alive:
 		_ensure_card_movement()
 		_move_card_with_timings(delayed_card, "judgment", original_player.player_id, "add_judge", state.current_event_id)
-		add_log("没有其他合法目标，【%s】回到%s的判定区。" % [delayed_name, original_player.display_name])
+		add_log("没有其他合法目标，【%s】回到%s的判定区。" % [delayed_name, format_player_state_log_name(original_player)])
 	else:
 		_move_to_discard(delayed_card)
 
@@ -6936,7 +7061,12 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if source_definition != null:
 		source_definition.on_card_declared(self, actor, card)
-	add_log("%s使用了%s。" % [actor.display_name, describe_card(card)])
+	# 使用牌目标日志；空目标（如【酒】【无中生有】）不追加目标片段。
+	var use_target_text: String = format_target_log_names(event.target_ids)
+	if use_target_text.is_empty():
+		add_log("%s使用了%s。" % [format_player_state_log_name(actor), format_card_log_name(card)])
+	else:
+		add_log("%s使用了%s，目标为%s。" % [format_player_state_log_name(actor), format_card_log_name(card), use_target_text])
 	# 只有正常规则终点为弃牌堆的牌接管后续 processing -> discard 表现，装备与延时锦囊保留未来真实离区动画。
 	var owns_discard_transfer: bool = str(definition.get("final_zone", "discard")) == "discard" and not bool(card_use_context.get("virtual_proxy", false))
 	# 卡牌展示请求只携带序列化数据与稳定玩家 ID，界面可据此播放飞牌和目标指示动画，不持有权威状态对象。
@@ -7434,7 +7564,7 @@ func recast_hand_card(player_id: int, card_uid: int) -> bool:
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	player.take_hand_card(card.uid)
 	_move_to_discard(card)
-	add_log("%s重铸了%s。" % [player.display_name, GameSettings.resolve_card_name(definition)])
+	add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_card_name(definition)])
 	# 重铸牌离开最后手牌时产生的技能或装备触发必须先完整结算，随后再执行固定摸1张牌。
 	if _has_nested_settlement_barrier():
 		_defer_rule_continuation("recast_draw", {"player_id":player_id})
@@ -7527,7 +7657,7 @@ func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
 			return
 		for selected_uid: int in selected_uids:
 			discard_card_from_hand(player_id, selected_uid)
-		add_log("%s在弃牌阶段弃置了%d张手牌。" % [player.display_name, selected_uids.size()])
+		add_log("%s在弃牌阶段完成弃置。" % format_player_state_log_name(player))
 		# 最后一张手牌产生的嵌套技能必须先结算；恢复入口会重新计算为无需弃牌，再安全进入阶段End与After。
 		if _has_nested_settlement_barrier():
 			return
@@ -7555,7 +7685,7 @@ func _start_extra_play_phase(player_id: int) -> void:
 		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id)
 		_end_play_phase(player_id, false)
 		return
-	add_log("%s开始执行额外的出牌阶段。" % player.display_name)
+	log_phase_begin("play", true)
 	# 额外阶段Begin中的技能选择与普通阶段使用相同暂停边界，不能并行创建chooseToUse请求。
 	if has_pending_card_choice():
 		return
@@ -7575,7 +7705,7 @@ func _continue_discard_phase_choice(context: Dictionary, selected_uids: Array[in
 		return
 	for selected_uid: int in selected_uids:
 		discard_card_from_hand(player_id, selected_uid)
-	add_log("%s在弃牌阶段弃置了%d张手牌。" % [player.display_name, selected_uids.size()])
+	add_log("%s在弃牌阶段完成弃置。" % format_player_state_log_name(player))
 	# 弃牌移动触发选择时保持阶段主体游标；选择完成后由统一阶段恢复入口继续，而不是提前发布阶段结束时机。
 	if _has_nested_settlement_barrier():
 		return
@@ -7735,7 +7865,7 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 	# 当前轮已经完成询问的角色 ID；异步响应恢复时沿用，整个濒死流程不会清空全体名单开启第二轮。
 	var asked_rescuer_ids: Array[int] = already_asked_rescuer_ids.duplicate()
 	if is_new_dying_flow:
-		add_log("%s进入濒死状态，需要回复至1点体力。" % target.display_name)
+		add_log("%s进入濒死状态，需要回复至1点体力。" % format_player_state_log_name(target))
 		_dispatch_rule_event(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
 	# 救援询问顺序；同一轮从指定起点按行动座次遍历，已完成询问的角色直接跳过。
 	var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
@@ -7917,7 +8047,7 @@ func _finish_dying_rescue(target_id: int) -> void:
 	_record_runtime_event("dyingAfter", "dying", {"target_id":target_id, "hp":target.hp, "rescued":true})
 	_emit_rule_timing("dyingAfter", target_id, target_id, target_id, {"hp":target.hp, "rescued":true})
 	_dispatch_rule_event(RuleEvent.new("dying_end", target_id, target_id, {"hp":target.hp, "rescued":true}))
-	add_log("%s脱离濒死状态，求桃流程结算完成。" % target.display_name)
+	add_log("%s脱离濒死状态，求桃流程结算完成。" % format_player_state_log_name(target))
 	_finish_pending_damage(target_id)
 
 
@@ -7968,7 +8098,7 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	victim.death_confirmed = true
 	victim.identity_revealed = true
 	_emit_rule_timing("die", victim_id, killer_id, victim_id, {"hp":victim.hp, "death_event_id":death_event_id}, death_event_id)
-	add_log("%s死亡，身份为%s。" % [victim.display_name, _identity_text(victim.identity)])
+	add_log("%s死亡，身份为%s。" % [format_player_state_log_name(victim), _identity_text(victim.identity)])
 	# 亮出身份后立即检测胜负；若条件已满足，规则要求直接结束游戏，不再继续死亡弃牌与奖惩。
 	_check_game_over()
 	if state.game_over:
@@ -8062,6 +8192,10 @@ func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	# 该来源玩家由 CardMovementService 在移动前写入 CardMoveEvent，表现层不再依赖规则调用点重复传参。
 	# 弃置前区域；表现层可区分处理区、手牌、装备、判定和展示牌。
 	var source_zone: String = card.zone
+	# 弃置前持有者；仅玩家区域弃置写入单牌日志，处理区弃置通常已有使用/打出日志。
+	var source_owner_id: int = card.owner_id
+	if source_owner_id >= 0 and source_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
+		add_log("%s弃置了%s。" % [format_player_log_name(source_owner_id), format_card_log_name(card)])
 	# 弃牌父事件；默认使用当前规则摘要，判定与直接使用牌会显式传入稳定父事件。
 	var discard_parent_event_id: int = _current_rule_parent_event_id() if related_event_id == -2 else related_event_id
 	# 弃牌事件；实体移动历史关联到该事件，等价表达 orderingDiscard 最终创建 cardsDiscard 的收尾关系。

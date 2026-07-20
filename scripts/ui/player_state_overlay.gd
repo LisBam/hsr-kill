@@ -61,11 +61,17 @@ var _is_dead: bool = false
 ## 当前角色是否横置；仅存活且该值为 true 时绘制穿过牌面中心的链条。
 var _is_chained: bool = false
 
+## 当前角色是否持有未消耗的【酒】加伤；存活且为 true 时显示红色滤镜。
+var _has_wine_bonus: bool = false
+
 ## 阵亡滤镜所需的屏幕拷贝节点；只复制当前武将牌矩形，不影响桌面其他区域。
 @onready var _death_back_buffer: BackBufferCopy = $DeathBackBuffer
 
 ## 阵亡黑白滤镜层；着色器读取当前武将牌画面并转换为灰度。
 @onready var _death_filter: ColorRect = $DeathFilter
+
+## 酒加伤红色滤镜层；仅在存活且 wine_bonus>0 时显示，不遮挡目标选择。
+@onready var _wine_filter: ColorRect = $WineFilter
 
 ## 阵亡文字标签；固定在武将牌中心并使用红色高对比字体。
 @onready var _death_label: Label = $DeathLabel
@@ -101,14 +107,19 @@ func _refresh_geometry() -> void:
 	_death_back_buffer.rect = card_rect
 	_death_filter.position = card_rect.position
 	_death_filter.size = card_rect.size
+	if _wine_filter != null:
+		_wine_filter.position = card_rect.position
+		_wine_filter.size = card_rect.size
 	_death_label.position = card_rect.position
 	_death_label.size = card_rect.size
 
 
 ## 写入公开存活与横置状态；死亡表现优先于横置链条。
-func configure(alive: bool, chained: bool) -> void:
+func configure(alive: bool, chained: bool, wine_bonus: bool = false) -> void:
 	_is_dead = not alive
 	_is_chained = chained
+	# 酒滤镜仅对存活角色生效；阵亡优先显示死亡滤镜。
+	_has_wine_bonus = wine_bonus and alive
 	_refresh_state()
 
 
@@ -119,6 +130,9 @@ func _refresh_state() -> void:
 	_death_back_buffer.visible = _is_dead
 	_death_filter.visible = _is_dead
 	_death_label.visible = _is_dead
+	# 酒滤镜在存活且持有加伤时显示；阵亡时隐藏以免与灰度滤镜叠色。
+	if _wine_filter != null:
+		_wine_filter.visible = _has_wine_bonus and not _is_dead
 	queue_redraw()
 
 

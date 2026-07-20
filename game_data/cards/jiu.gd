@@ -49,7 +49,6 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 		return "discard"
 	actor.wine_used = true
 	wine_target.wine_bonus = 1
-	resolver.host.add_log("%s使用【酒】，本回合下一张【杀】伤害+1。" % actor.display_name)
 	return resolver.default_destination()
 
 
@@ -67,7 +66,7 @@ func resolve_dying_response(match_host: Object, responder_id: int, dying_player_
 	if target == null or not target.alive:
 		return false
 	match_host.recover(responder_id, dying_player_id, 1, get_id())
-	match_host.add_log("%s在濒死时使用【酒】自救。" % target.display_name)
+	match_host.add_log("%s在濒死时使用【酒】自救。" % match_host.format_player_state_log_name(target))
 	return true
 
 

@@ -41,7 +41,7 @@ func _run() -> void:
 	if not _test_all_players_have_characters_after_selection():
 		_restore_settings()
 		return
-	if not _test_six_player_distribution_and_winner():
+	if not _test_five_player_distribution_and_winner():
 		_restore_settings()
 		return
 	if not _test_public_identity_and_selection_mode():
@@ -82,13 +82,17 @@ func _test_identity_rules_pure() -> bool:
 	var three: Array[String] = _identity_rules.get_distribution(3, IdentityRules.MODE_DOUDIZHU)
 	if three != ["landlord", "peasant", "peasant"]:
 		return _fail("doudizhu_3_distribution=%s" % str(three))
-	var six: Array[String] = _identity_rules.get_distribution(6, IdentityRules.MODE_DOUDIZHU)
-	if six != ["landlord", "peasant", "landlord", "peasant", "peasant", "peasant"]:
-		return _fail("doudizhu_6_distribution=%s" % str(six))
+	var five: Array[String] = _identity_rules.get_distribution(5, IdentityRules.MODE_DOUDIZHU)
+	if five != ["landlord", "peasant", "landlord", "peasant", "peasant"]:
+		return _fail("doudizhu_5_distribution=%s" % str(five))
 	if _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 4):
 		return _fail("doudizhu_should_reject_4")
+	if _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 6):
+		return _fail("doudizhu_should_reject_6")
 	if not _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 3):
 		return _fail("doudizhu_should_allow_3")
+	if not _identity_rules.supports_player_count(IdentityRules.MODE_DOUDIZHU, 5):
+		return _fail("doudizhu_should_allow_5")
 	if _identity_rules.get_first_player_identity(IdentityRules.MODE_DOUDIZHU) != "landlord":
 		return _fail("first_player_identity")
 	if _identity_rules.get_opening_max_hp_bonus("landlord", 3, IdentityRules.MODE_DOUDIZHU) != 1:
@@ -235,9 +239,9 @@ func _test_three_player_match_bootstrap() -> bool:
 	return true
 
 
-## 斗地主选将完成后全员必须有 character_id；覆盖无自选/自选与 3/6 人，防止再出现“未选武将”。
+## 斗地主选将完成后全员必须有 character_id；覆盖无自选/自选与 3/5 人，防止再出现“未选武将”。
 func _test_all_players_have_characters_after_selection() -> bool:
-	for player_count in [3, 6]:
+	for player_count in [3, 5]:
 		for custom_enabled in [false, true]:
 			_create_controller()
 			_controller.identity_rules = _identity_rules
@@ -250,7 +254,7 @@ func _test_all_players_have_characters_after_selection() -> bool:
 				GameSettings.set_customize_ai_characters_enabled(false)
 				if GameSettings.has_method("set_custom_character_assignment_enabled"):
 					GameSettings.set_custom_character_assignment_enabled(custom_enabled)
-			# 显式传入模式与种子，避免依赖菜单状态；0 号位固定为真人地主（三人）或首名地主（六人）。
+			# 显式传入模式与种子，避免依赖菜单状态；0 号位固定为真人地主（三人）或首名地主（五人）。
 			if not _controller.start_match(player_count, 20260721, IdentityRules.MODE_DOUDIZHU):
 				return _fail("start_match_doudizhu_%d_custom=%s" % [player_count, str(custom_enabled)])
 			# 驱动全员选将直到阶段离开 character_selection。
@@ -304,21 +308,21 @@ func _test_all_players_have_characters_after_selection() -> bool:
 	return true
 
 
-## 六人身份表与胜负：击杀一名地主即农民胜。
-func _test_six_player_distribution_and_winner() -> bool:
+## 五人身份表与胜负：击杀一名地主即农民胜。
+func _test_five_player_distribution_and_winner() -> bool:
 	var state := GameState.new()
 	state.match_mode = IdentityRules.MODE_DOUDIZHU
-	var table: Array[String] = _identity_rules.get_distribution(6, IdentityRules.MODE_DOUDIZHU)
-	for i in range(6):
+	var table: Array[String] = _identity_rules.get_distribution(5, IdentityRules.MODE_DOUDIZHU)
+	for i in range(5):
 		var player := PlayerState.new()
 		player.player_id = i
 		player.identity = table[i]
 		player.alive = true
 		state.players.append(player)
 	if table[0] != "landlord" or table[2] != "landlord":
-		return _fail("six_seat_landlords")
+		return _fail("five_seat_landlords")
 	if _identity_rules.evaluate_winner(state) != "":
-		return _fail("six_should_continue")
+		return _fail("five_should_continue")
 	state.players[2].alive = false
 	if _identity_rules.evaluate_winner(state) != "peasants":
 		return _fail("kill_one_landlord_peasants_win")
@@ -336,8 +340,8 @@ func _test_public_identity_and_selection_mode() -> bool:
 		return _fail("loyalist_should_stay_hidden_in_identity")
 	var service := CharacterSelectionService.new()
 	var players: Array[PlayerState] = []
-	var table: Array[String] = _identity_rules.get_distribution(6, IdentityRules.MODE_DOUDIZHU)
-	for i in range(6):
+	var table: Array[String] = _identity_rules.get_distribution(5, IdentityRules.MODE_DOUDIZHU)
+	for i in range(5):
 		var player := PlayerState.new()
 		player.player_id = i
 		player.identity = table[i]
@@ -356,12 +360,12 @@ func _test_public_identity_and_selection_mode() -> bool:
 		return _fail("doudizhu_should_hide_leader_character")
 	if int(snapshot.get("leader_player_id", 0)) != -1:
 		return _fail("doudizhu_leader_player_id_should_be_hidden")
-	# 六人双地主：首任身份名额不唯一，但地主固定占 1/3 号位。
+	# 五人双地主：首任身份名额不唯一，但地主固定占 1/3 号位。
 	if service.has_unique_first_seat_identity():
-		return _fail("six_landlords_should_not_be_unique_first_seat")
+		return _fail("five_landlords_should_not_be_unique_first_seat")
 	var landlord_seats: Array[int] = service.get_landlord_seat_numbers()
 	if landlord_seats.size() != 2 or not landlord_seats.has(1) or not landlord_seats.has(3):
-		return _fail("six_landlord_seats=%s" % str(landlord_seats))
+		return _fail("five_landlord_seats=%s" % str(landlord_seats))
 	var normalized: Dictionary = service._normalize_custom_seat_identity(3, "landlord")
 	if not str(normalized.get("error", "")).is_empty():
 		return _fail("second_landlord_seat3_error=%s" % str(normalized.get("error", "")))
@@ -394,24 +398,26 @@ func _test_public_identity_and_selection_mode() -> bool:
 	return true
 
 
-## 下一局人数按模式独立存档，且斗地主规范化仅 3/6。
+## 下一局人数按模式独立存档，且斗地主规范化仅 3/5。
 func _test_player_count_storage_by_mode() -> bool:
 	if GameSettings == null:
 		return _fail("game_settings_missing")
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	GameSettings.set_next_match_player_count(8)
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
-	GameSettings.set_next_match_player_count(6)
+	GameSettings.set_next_match_player_count(5)
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	if GameSettings.next_match_player_count != 8:
 		return _fail("identity_count_not_restored=%d" % GameSettings.next_match_player_count)
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
-	if GameSettings.next_match_player_count != 6:
+	if GameSettings.next_match_player_count != 5:
 		return _fail("doudizhu_count_not_restored=%d" % GameSettings.next_match_player_count)
-	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, 4) != 3:
+	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, 4) != 5:
 		return _fail("doudizhu_normalize_4")
-	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, 5) != 6:
+	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, 5) != 5:
 		return _fail("doudizhu_normalize_5")
+	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, 6) != 5:
+		return _fail("doudizhu_normalize_6")
 	return true
 
 
@@ -456,8 +462,8 @@ func _test_doudizhu_preview_does_not_reveal_character() -> bool:
 	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
 		GameSettings.set_custom_character_assignment_enabled(true)
 	_create_controller()
-	_controller.default_player_count = 6
-	if not _controller.start_match(6, 17, IdentityRules.MODE_DOUDIZHU):
+	_controller.default_player_count = 5
+	if not _controller.start_match(5, 17, IdentityRules.MODE_DOUDIZHU):
 		return _fail("preview_start_match")
 	if _controller.character_selection == null:
 		return _fail("preview_no_selection_service")

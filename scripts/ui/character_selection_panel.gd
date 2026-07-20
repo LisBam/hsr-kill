@@ -755,19 +755,19 @@ func _get_first_seat_identity_id() -> String:
 	return "landlord" if selection_mode == "doudizhu" else "leader"
 
 
-## 返回首任身份是否唯一绑定一号位；六人双地主时为 false，三人地主与身份局领袖为 true。
+## 返回首任身份是否唯一绑定一号位；五人双地主时为 false，三人地主与身份局领袖为 true。
 func _is_unique_first_seat_identity() -> bool:
 	if _snapshot.has("unique_first_seat_identity"):
 		return bool(_snapshot.get("unique_first_seat_identity", true))
-	# 无快照字段时：斗地六人双地主不唯一，其余默认唯一。
+	# 无快照字段时：斗地五人双地主不唯一，其余默认唯一。
 	var first_seat_identity: String = _get_first_seat_identity_id()
 	if first_seat_identity != "landlord":
 		return true
 	var player_count: int = int(_snapshot.get("player_count", 0))
-	return player_count != 6
+	return player_count != 5
 
 
-## 返回本局固定地主座次列表；优先读快照，缺省时按人数推断（3人=[1]，6人=[1,3]）。
+## 返回本局固定地主座次列表；优先读快照，缺省时按人数推断（3人=[1]，5人=[1,3]）。
 func _get_landlord_seat_numbers() -> Array[int]:
 	var result: Array[int] = []
 	var raw: Array = _snapshot.get("landlord_seat_numbers", []) as Array
@@ -788,7 +788,7 @@ func _get_landlord_seat_numbers() -> Array[int]:
 		player_count = int((_snapshot.get("seat_options", []) as Array).size())
 	if player_count >= 1:
 		result.append(1)
-	if player_count >= 6:
+	if player_count >= 5:
 		result.append(3)
 	return result
 

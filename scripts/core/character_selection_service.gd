@@ -115,13 +115,13 @@ func has_unique_first_seat_identity() -> bool:
 	return int(_identity_limits.get(get_first_seat_identity(), 0)) <= 1
 
 
-## 返回本局固定地主座次号列表；按标准斗地身份表生成（3人为[1]，6人为[1,3]），非斗地返回空数组。
+## 返回本局固定地主座次号列表；按标准斗地身份表生成（3人为[1]，5人为[1,3]），非斗地返回空数组。
 ## 调用方可安全修改返回数组；该列表用于自选座次/身份联动与校验，不改变最终洗牌后的玩家对象。
 func get_landlord_seat_numbers() -> Array[int]:
 	var result: Array[int] = []
 	if not is_doudizhu_mode():
 		return result
-	# 按 DOUDIZHU_DISTRIBUTIONS 的固定座次：地主占一号位，六人局另占三号位。
+	# 按 DOUDIZHU_DISTRIBUTIONS 的固定座次：地主占一号位，五人局另占三号位。
 	var player_count: int = _player_ids.size()
 	var landlord_limit: int = int(_identity_limits.get("landlord", 0))
 	if player_count >= 1 and landlord_limit >= 1:
@@ -296,7 +296,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		phase = PHASE_LEADER
 		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
 		return ""
-	# 斗地主：分配表已按一号位（及六人三号位）固定地主，不再旋转座次；全员同时选将且不公开武将。
+	# 斗地主：分配表已按一号位（及五人三号位）固定地主，不再旋转座次；全员同时选将且不公开武将。
 	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
 		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1

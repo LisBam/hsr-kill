@@ -106,7 +106,7 @@ func _execute_conversion(material_card_uid: int, target_ids: Array[int]) -> bool
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	# 单张材料UID数组；显式Array[int]类型保证动态host.call与核心端口的强类型参数一致。
 	var material_card_uids: Array[int] = [material_card_uid]
-	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "%s发动【罡风】，将一张黑色牌当雷【杀】使用。" % owner.display_name, {})):
+	if owner == null or not bool(host.call("execute_virtual_card_use", owner_player_id, THUNDER_SLASH_DEFINITION_ID, material_card_uids, target_ids, "", {})):
 		return false
 	announce_activation({"material_card_uid":material_card_uid, "target_ids":target_ids.duplicate(), "virtual_card_id":THUNDER_SLASH_DEFINITION_ID})
 	observe_identity_behavior(target_ids, {"target_result":-1.5, "damage":true, "respond_shan":true, "nature_damage":true})

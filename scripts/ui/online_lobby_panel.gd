@@ -321,7 +321,7 @@ func _open_settings() -> void:
 	var game_mode_id: String = str(_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
 	_select_game_mode(game_mode_id)
 	_apply_player_count_limits_for_mode(game_mode_id)
-	# 规范化后的人数；斗地主夹到 3/6，身份局夹到 2–10，且不低于当前真人数。
+	# 规范化后的人数；斗地主夹到 3/5，身份局夹到 2–10，且不低于当前真人数。
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_snapshot.get("player_count", 2)))
 	_player_count_input.set_value_no_signal(float(normalized_count))
 	_password_input.text = str(_snapshot.get("room_password", ""))
@@ -507,13 +507,13 @@ func _on_game_mode_option_selected(_index: int) -> void:
 		_player_count_input.set_value_no_signal(float(normalized_count))
 
 
-## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/6 步长3，最小值不低于当前真人数。
+## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/5 步长2，最小值不低于当前真人数。
 func _apply_player_count_limits_for_mode(game_mode_id: String) -> void:
 	var member_floor: int = maxi(int(_snapshot.get("member_count", 0)), 2)
 	if game_mode_id == "doudizhu":
 		_player_count_input.min_value = maxi(member_floor, 3)
-		_player_count_input.max_value = 6
-		_player_count_input.step = 3.0
+		_player_count_input.max_value = 5
+		_player_count_input.step = 2.0
 	else:
 		_player_count_input.min_value = member_floor
 		_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
@@ -526,10 +526,10 @@ func _normalize_player_count_for_mode(game_mode_id: String, player_count: int) -
 	if GameSettings != null and GameSettings.has_method("normalize_player_count_for_mode"):
 		normalized = GameSettings.normalize_player_count_for_mode(game_mode_id, player_count)
 	elif game_mode_id == "doudizhu":
-		if player_count == 3 or player_count == 6:
+		if player_count == 3 or player_count == 5:
 			normalized = player_count
 		else:
-			normalized = 3 if player_count < 5 else 6
+			normalized = 3 if player_count < 4 else 5
 	else:
 		normalized = clampi(player_count, 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
 	return maxi(normalized, int(_snapshot.get("member_count", 0)))
