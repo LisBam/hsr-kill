@@ -1170,7 +1170,7 @@ text = "斗地主"
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
-text = "3/6人"
+text = "3/5人"
 
 [node name="DouDizhuModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/DouDizhuModeButton" unique_id=163114731]
 unique_name_in_owner = true

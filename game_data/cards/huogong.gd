@@ -78,8 +78,16 @@ func _apply_shown_card(resolver: Object, context: Dictionary, shown_card_uid: in
 		if candidate_card != null and candidate_card.suit == shown_card.suit:
 			discard_candidates.append(candidate)
 	# 弃牌阶段上下文；空选择表示放弃造成火焰伤害。
-	var discard_context: Dictionary = {"kind":"fire_attack_discard", "parent_card_uid":int(context.get("parent_card_uid", -1)), "actor_id":actor_id, "target_id":target_id, "suit":shown_card.suit}
-	# 使用者选择结果；允许取消且至多弃置一张同花色手牌。
+	# private_info_safe_prompt：同花色手牌属于隐藏信息，候选为空时仍必须完整询问并由持有者手动取消，禁止静默跳过以免泄露手牌。
+	var discard_context: Dictionary = {
+		"kind":"fire_attack_discard",
+		"parent_card_uid":int(context.get("parent_card_uid", -1)),
+		"actor_id":actor_id,
+		"target_id":target_id,
+		"suit":shown_card.suit,
+		"private_info_safe_prompt":true,
+	}
+	# 使用者选择结果；允许取消且至多弃置一张同花色手牌。即使无同花色候选也不得跳过本询问。
 	var selected_uids: Array[int] = resolver.host.request_card_choice(actor_id, "火攻弃牌", "是否弃置一张同花色手牌？", discard_candidates, 0, 1, true, discard_context)
 	if resolver.host.has_pending_card_choice():
 		return

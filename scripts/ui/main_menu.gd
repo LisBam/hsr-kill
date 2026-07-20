@@ -449,6 +449,10 @@ func _select_doudizhu_mode() -> void:
 	set_next_player_count(preferred_count)
 	_mode_title.text = "斗地主"
 	_mode_description.text = "斗地主·3或5人·地主VS农民"
+	# 左侧模式卡片人数标签；场景默认与斗地主合法人数 3/5 保持一致。
+	var doudizhu_count_label: Label = %DouDizhuModePlayerCount as Label
+	if doudizhu_count_label != null:
+		doudizhu_count_label.text = "3/5人"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
