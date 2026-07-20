@@ -171,7 +171,7 @@ func _ready() -> void:
 ## 在父节点完成子节点初始化后提升菜单分支顺序；绘制层级与真实 GUI 命中顺序由同一入口保持一致。
 func _move_to_input_front() -> void:
 	move_to_front()
-	# 展开的菜单面板覆盖整个右侧高度，但常驻入口必须始终位于面板前方，才能再次点击“菜单”收起。
+	# 展开的菜单面板从常驻入口下缘开始；按钮仍位于面板前方，保证随时可再次点击收起。
 	_menu_panel.move_to_front()
 	_menu_button.move_to_front()
 

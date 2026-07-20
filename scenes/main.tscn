@@ -246,16 +246,16 @@ anchor_left = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -286.0
-offset_top = 18.0
+offset_top = 65.0
 offset_right = -18.0
-offset_bottom = -18.0
+offset_bottom = -28.0
 grow_horizontal = 0
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="MenuVBox" type="VBoxContainer" parent="MatchMenu/MenuPanel" unique_id=731239853]
 layout_mode = 2
-theme_override_constants/separation = 5
+theme_override_constants/separation = 2
 
 [node name="MenuTitle" type="Label" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1601890631]
 layout_mode = 2
@@ -884,7 +884,7 @@ offset_top = 68.0
 offset_right = 1016.0
 offset_bottom = 400.0
 horizontal_scroll_mode = 0
-vertical_scroll_mode = 1
+vertical_scroll_mode = 2
 
 [node name="CandidateScrollContent" type="Control" parent="CharacterSelectionPanel/SelectionFrame/CharacterCandidateArea"]
 custom_minimum_size = Vector2(0, 256)

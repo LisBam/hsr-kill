@@ -41,6 +41,15 @@ func configure(card_names: Array[String]) -> void:
 	_refresh_markers()
 
 
+## 返回指定判定牌标记在本组件局部坐标系中的命中矩形；索引无效时返回空矩形，供外层统一悬停信息使用。
+func get_marker_rect(card_index: int) -> Rect2:
+	if card_index < 0 or card_index >= _card_names.size():
+		return Rect2()
+	# 当前标记横坐标；与_refresh_markers使用同一公式，视觉位置和输入命中始终保持一致。
+	var marker_x: float = first_marker_left_margin + float(card_index) * (marker_size + marker_gap)
+	return Rect2(Vector2(marker_x, 0.0), Vector2.ONE * marker_size)
+
+
 ## 按当前活动 UI 风格刷新判定菱形配色；牌名数组与公开顺序保持不变。
 func refresh_ui_style() -> void:
 	marker_background_color = BattleUIStyle.get_color("panel", marker_background_color)
