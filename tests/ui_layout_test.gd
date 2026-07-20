@@ -466,16 +466,19 @@ func _run() -> void:
 	if not current_turn_view.is_current_actor or current_turn_view.is_current_operator or current_turn_style.border_color != BattleUIStyle.get_color("accent") or current_turn_style.border_width_left != 3 or current_operator_view.is_current_actor or not current_operator_view.is_current_operator or current_operator_style.shadow_color == Color("72d8b5aa"):
 		_fail("player_operation_highlight")
 		return
-	# 全体目标牌交互状态；规则自动展开目标时角色牌不得进入合法或选中配色，点击也不能写入手动目标数组。
+	# 全体目标牌交互状态；不可手动点选写入目标，但规则展开后的合法目标应亮起，非法目标进入暗置预览。
+	# 本地人类为 0 号，当前操作角色为 5 号；展开仅含 5 时 5 合法且不暗置，0 非法且压暗。
 	main_instance.set("_selected_card_uid", 999999)
 	main_instance.set("_selected_target_ids", [])
-	main_instance.set("_card_use_preview", {"target_mode":"all_others", "legal_target_ids":[0, 5], "max_targets":99})
+	main_instance.set("_card_use_preview", {"target_mode":"all_others", "legal_target_ids":[], "normalized_target_ids":[5], "max_targets":99})
 	main_instance.call("_refresh_component_states")
 	main_instance.call("_on_target_pressed", 5)
 	# 自动目标点击后的临时目标数组；必须保持为空并由规则层在提交时自行展开。
 	var automatic_target_selection: Array = main_instance.get("_selected_target_ids") as Array
-	if not automatic_target_selection.is_empty() or current_operator_view.is_legal_target or current_operator_view.is_target_selected:
-		_fail("automatic_target_manual_selection:%s" % [automatic_target_selection])
+	# 本地玩家武将牌；群体预览下若不在展开列表中应非法且压暗（避免与外层已有 local_player_card 变量名冲突）。
+	var self_target_view: PlayerTargetView = main_instance.get("local_player_card") as PlayerTargetView
+	if not automatic_target_selection.is_empty() or current_operator_view.is_target_selected or not current_operator_view.is_legal_target or not current_operator_view.is_target_selection_active or self_target_view == null or self_target_view.is_legal_target or not self_target_view.is_target_selection_active or self_target_view.modulate == Color.WHITE or current_operator_view.modulate != Color.WHITE:
+		_fail("automatic_target_preview_dim:%s legal5=%s dim5=%s legal0=%s dim0=%s selection_active=%s" % [automatic_target_selection, current_operator_view.is_legal_target, current_operator_view.modulate, self_target_view.is_legal_target if self_target_view != null else false, self_target_view.modulate if self_target_view != null else Color.TRANSPARENT, current_operator_view.is_target_selection_active])
 		return
 	main_instance.set("_selected_card_uid", -1)
 	main_instance.set("_card_use_preview", {})

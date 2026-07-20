@@ -2076,7 +2076,11 @@ func _get_selectable_target_ids() -> Array[int]:
 				inline_target_ids.assign(targets_by_card_id.get(str(selected_card_uid), targets_by_card_id.get(selected_card_uid, [])) as Array)
 		return inline_target_ids
 	if _uses_rule_expanded_targets():
-		return []
+		# 群体锦囊由规则自动展开目标：亮起集合取规范化后的合法目标，禁止手动点选写入。
+		# 非法目标在选中该牌期间压暗；藤甲等“效果无效”仍会进入展开列表，因此不会被暗置。
+		var expanded_target_ids: Array[int] = []
+		expanded_target_ids.assign(_card_use_preview.get("normalized_target_ids", []) as Array)
+		return expanded_target_ids
 	# 当前预览给出的后续合法目标；多目标牌直接按已有选择继续追加。
 	var selectable_target_ids: Array[int] = []
 	selectable_target_ids.assign(_card_use_preview.get("legal_target_ids", []) as Array)
@@ -2090,20 +2094,26 @@ func _get_selectable_target_ids() -> Array[int]:
 	return selectable_target_ids
 
 
-## 返回当前卡牌是否由规则层自动展开全体目标；此类牌不开放武将牌点击或手动高亮入口。
+## 返回当前卡牌是否由规则层自动展开全体目标；此类牌仍禁止武将牌点击改目标，但会用展开结果做预览暗置。
 func _uses_rule_expanded_targets() -> bool:
 	if _selected_card_uid < 0 or not _active_equipment_action.is_empty():
 		return false
 	return str(_card_use_preview.get("target_mode", "")) in ["all_players", "all_others"]
 
 
-## 判断当前界面是否正在手动选择目标；规则自动展开的群体牌和没有目标维度的请求不会压暗武将牌。
+## 判断当前界面是否处于目标预览/选择态；合法目标保持正常亮度，非法目标在此期间压暗。
+## 群体锦囊虽不可手动点选目标，仍开启该态，以规则展开后的合法目标集合控制暗置范围。
 func _is_manual_target_selection_active() -> bool:
 	if not _inline_card_choice.is_empty():
 		return str(_inline_card_choice.get("choice_type", "card")) in ["target", "card_target"]
 	if not _active_equipment_action.is_empty():
 		return int(_card_use_preview.get("max_targets", 0)) > 0
-	return _selected_card_uid >= 0 and not _uses_rule_expanded_targets() and int(_card_use_preview.get("max_targets", 0)) > 0
+	if _selected_card_uid < 0:
+		return false
+	# 群体锦囊：开启暗置预览，亮起集合来自 normalized_target_ids 而非手动候选。
+	if _uses_rule_expanded_targets():
+		return true
+	return int(_card_use_preview.get("max_targets", 0)) > 0
 
 
 ## 将本地玩家自身加入或移出目标列表。
@@ -3840,7 +3850,7 @@ func _refresh_component_states() -> void:
 	# 合法目标 ID 数组；没有选牌时为空，角色卡保持普通状态。
 	# 单目标牌已有选择时仍补充空选择预览中的候选，以支持直接切换目标。
 	var legal_target_ids: Array[int] = _get_selectable_target_ids()
-	# 当前是否处于手动选目标流程；非法武将牌仅在该状态下整体变暗。
+	# 当前是否处于目标选择/群体预览流程；非法武将牌仅在该状态下整体变暗。
 	var target_selection_active: bool = _is_manual_target_selection_active()
 	if str(_snapshot.get("current_phase", "")) == "ai_character_adjustment":
 		# 房主调整 AI 的公共合法目标；非房主只显示等待文本，不进入目标选择视觉状态。
