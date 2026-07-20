@@ -487,10 +487,7 @@ mouse_filter = 2
 unique_name_in_owner = true
 z_index = 35
 layout_mode = 1
-anchors_preset = 0
-anchor_left = 0.0
-anchor_top = 0.0
-anchor_right = 0.0
+anchors_preset = 9
 anchor_bottom = 1.0
 offset_left = 18.0
 offset_top = 104.0
@@ -529,13 +526,12 @@ text = "托管"
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
-anchors_preset = 0
-anchor_left = 0.0
-anchor_top = 0.0
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_bottom = -54.0
 grow_horizontal = 2
+grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="LogVBox" type="VBoxContainer" parent="LogPanel/LogContentPanel" unique_id=1624197810]
@@ -550,7 +546,6 @@ horizontal_alignment = 1
 
 [node name="LogView" type="RichTextLabel" parent="LogPanel/LogContentPanel/LogVBox" unique_id=1132612850]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 0)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_colors/default_color = Color(0.82, 0.79, 0.7, 1)
@@ -1042,7 +1037,22 @@ custom_minimum_size = Vector2(192, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
+toggle_mode = true
 text = "联机设置"
+
+[node name="TopOnlineSettingsIndicator" type="ColorRect" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuOnlineSettingsButton" unique_id=749061044]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -4.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="TopNavigationSpacer" type="Control" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=1238528856]
 layout_mode = 2

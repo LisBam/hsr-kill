@@ -5,11 +5,15 @@
 [node name="OnlineSettingsPanel" type="Control"]
 unique_name_in_owner = true
 visible = false
-z_index = 13
+z_index = 5
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 54.0
+offset_top = 104.0
+offset_right = -54.0
+offset_bottom = -38.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_online_settings")
@@ -32,10 +36,6 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 54.0
-offset_top = 104.0
-offset_right = -54.0
-offset_bottom = -38.0
 grow_horizontal = 2
 grow_vertical = 2
 

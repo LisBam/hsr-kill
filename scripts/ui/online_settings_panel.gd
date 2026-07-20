@@ -1,9 +1,9 @@
 class_name OnlineSettingsPanel
 extends Control
 
-## 联机资料设置组件。该组件只编辑跨大厅复用的玩家名称与武将形象，不创建网络连接或修改对局状态。
+## 联机资料设置组件。该组件只编辑跨大厅复用的玩家名称与武将形象，作为主菜单客户区内容页展示，不创建网络连接或修改对局状态。
 
-## 玩家保存资料或取消返回时发出的关闭请求；主菜单据此恢复底层焦点，不依赖组件内部节点路径。
+## 玩家保存资料或取消返回时发出的关闭请求；主菜单据此切回模式选择内容页，不依赖组件内部节点路径。
 signal close_requested()
 
 ## 正式武将牌场景；联机形象选择与选将、局内角色牌复用同一插画和主题渲染组件。
@@ -21,10 +21,10 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 相邻武将牌行之间的垂直间距；默认16像素避免选中描边与下一行牌面相交，运行时只影响资料面板布局。
 @export_range(0.0, 48.0, 1.0) var avatar_vertical_gap: float = 16.0
 
-## 旧版全屏遮罩节点；资料设置现作为主菜单内容页展示，保留该节点仅兼容既有场景资源且始终隐藏。
+## 旧版全屏遮罩节点；联机设置现与模式选择对等切换客户区，保留该节点仅兼容既有场景资源且始终隐藏。
 @onready var _backdrop: ColorRect = %OnlineSettingsBackdrop
 
-## 联机资料内容框；名称编辑、武将形象列表和保存操作共同位于主菜单客户区。
+## 联机资料内容框；名称编辑、武将形象列表和保存操作填满主菜单客户区，与 MainMenuFrame 对齐。
 @onready var _panel: PanelContainer = %OnlineSettingsFrame
 
 ## 面板标题；固定显示“联机设置”，只承担界面说明。
@@ -45,10 +45,10 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 当前选择文字；只显示所选武将的本地化名称，不暴露稳定英文 ID。
 @onready var _selected_avatar_label: Label = %OnlineSelectedAvatarLabel
 
-## 保存并返回按钮；提交标准化名称与稳定武将 ID 后请求主菜单关闭模态层。
+## 保存并返回按钮；提交标准化名称与稳定武将 ID 后请求主菜单切回模式选择内容页。
 @onready var _save_button: Button = %OnlineSettingsSaveButton
 
-## 取消返回按钮；放弃本次未保存编辑并请求主菜单关闭模态层。
+## 取消返回按钮；放弃本次未保存编辑并请求主菜单切回模式选择内容页。
 @onready var _cancel_button: Button = %OnlineSettingsCancelButton
 
 ## 当前临时选择的稳定武将 ID；点击保存前不写入 GameSettings，取消时直接丢弃。
@@ -58,7 +58,7 @@ var _selected_character_id: String = ""
 var _avatar_views: Dictionary = {}
 
 
-## 初始化资料面板信号与主题监听；组件默认隐藏，只有主菜单顶部入口显式打开后才接收输入。
+## 初始化资料面板信号与主题监听；组件默认隐藏，只有主菜单顶部“联机设置”内容页被选中后才接收输入。
 func _ready() -> void:
 	visible = false
 	_backdrop.visible = false
@@ -71,7 +71,7 @@ func _ready() -> void:
 	refresh_ui_style()
 
 
-## 打开联机资料设置；每次从全局设置重新载入名称与形象，保证取消后再次进入不会保留未提交内容。
+## 打开联机资料设置内容页；每次从全局设置重新载入名称与形象，保证取消后再次进入不会保留未提交内容。
 func open_panel() -> void:
 	visible = true
 	move_to_front()
