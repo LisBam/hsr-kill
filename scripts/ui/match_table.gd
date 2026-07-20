@@ -3324,7 +3324,7 @@ func _refresh_ai_character_adjustment_text() -> void:
 
 ## 显示本地玩家手气卡询问；确认刷新，取消表示保留当前手牌并完成自己的开局确认。
 func _refresh_starting_hand_mulligan_text() -> void:
-	# 本地私有手气卡状态；房主按观察者裁剪，其他玩家看不到剩余次数。
+	# 本地私有手气卡状态；房主按观察者裁剪，其他玩家看不到剩余张数。
 	var mulligan_snapshot: Dictionary = _snapshot.get("starting_hand_mulligan", {}) as Dictionary
 	# 当前玩家是否仍需操作；已完成玩家只显示等待其他玩家。
 	var can_choose: bool = bool(mulligan_snapshot.get("can_choose", false))
@@ -3334,9 +3334,9 @@ func _refresh_starting_hand_mulligan_text() -> void:
 	use_button.visible = can_choose
 	use_button.text = "使用手气卡"
 	use_button.disabled = not bool(mulligan_snapshot.get("can_refresh", false))
-	# 当前剩余次数；-1使用“无限次”，有限次数显示具体数字。
+	# 当前剩余张数；-1使用“无限张”，有限张数显示具体数字。
 	var remaining: int = int(mulligan_snapshot.get("remaining", 0))
-	var remaining_text: String = "无限次" if remaining == -1 else "%d次" % remaining
+	var remaining_text: String = "无限张" if remaining == -1 else "%d张" % remaining
 	interaction_guide_label.text = "是否使用手气卡？剩余%s" % remaining_text if can_choose else "等待其他玩家确认手气卡..."
 	%CancelButton.visible = can_choose
 	%CancelButton.text = "不再刷新"

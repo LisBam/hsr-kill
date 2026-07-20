@@ -48,7 +48,7 @@ var _candidates_by_player: Dictionary = {}
 ## 玩家 ID 到不可使用换将卡替换的候选武将 ID 数组；仅保存首任领袖阶段的领袖技固定候选。
 var _locked_candidates_by_player: Dictionary = {}
 
-## 玩家 ID 到剩余换将卡数量的映射；只有本人能从裁剪快照读取自己的剩余次数。
+## 玩家 ID 到剩余换将卡数量的映射；只有本人能从裁剪快照读取自己的剩余张数。
 var _replacement_cards_remaining_by_player: Dictionary = {}
 
 ## 玩家 ID 到已选武将 ID 的映射；非领袖选择在流程完成前不会向其他观察者公开。
@@ -69,7 +69,7 @@ var _selected_identities_by_player: Dictionary = {}
 ## 首次身份分配产生的领袖武将 ID；自选座次身份期间继续公开，最终确认后由新领袖选择刷新。
 var _initial_leader_character_id: String = ""
 
-## 首次随机分配的玩家座次；自选阶段用作本地默认选中值和未确认玩家的预览回退，不占最终座次名额。
+## 首次身份分配旋转后的玩家座次；首任领袖固定为一号位，用作自选阶段生效的默认值与未确认玩家的预览回退，不占最终座次名额。
 var _initial_seats_by_player: Dictionary = {}
 
 ## 首次随机分配的玩家身份；自选阶段用作本地默认选中值和未确认玩家的预览回退，不占最终身份名额。
@@ -120,7 +120,6 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		var player: PlayerState = players[player_index]
 		_player_ids.append(player.player_id)
 		_identities_by_player[player.player_id] = player.identity
-		_initial_seats_by_player[player.player_id] = player_index + 1
 		_initial_identities_by_player[player.player_id] = player.identity
 		_identity_limits[player.identity] = int(_identity_limits.get(player.identity, 0)) + 1
 		_replacement_cards_remaining_by_player[player.player_id] = replacement_card_count
@@ -128,6 +127,12 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			leader_player_id = player.player_id
 	if leader_player_id < 0:
 		return "身份配置缺少领袖，无法开始选将。"
+	# 首次生效座次；身份随机完成后立即按首任领袖旋转，保证默认一号位与领袖身份是同一套真实状态。
+	var initial_leader_index: int = _player_ids.find(leader_player_id)
+	for player_index: int in range(_player_ids.size()):
+		# 当前玩家旋转后的首次座次；从领袖开始顺时针编号，范围固定为1至总玩家数。
+		var initial_seat_number: int = (player_index - initial_leader_index + _player_ids.size()) % _player_ids.size() + 1
+		_initial_seats_by_player[_player_ids[player_index]] = initial_seat_number
 	# 即使启用座次与身份自选，也必须先保留首次身份分配并让首任领袖完成公开选将。
 	phase = PHASE_LEADER
 	_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)

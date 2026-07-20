@@ -31,10 +31,10 @@ signal custom_character_assignment_changed(enabled: bool)
 ## 房主调整全部 AI 武将开关变化信号；当前对局已越过选将阶段时不会中途插入流程。
 signal customize_ai_characters_changed(enabled: bool)
 
-## 手气卡可用次数变化信号；参数为0至5或-1，-1表示无限次，仅影响之后创建的新对局。
+## 手气卡数量变化信号；参数为0至5、10或-1，-1表示无限张，仅影响之后创建的新对局。
 signal mulligan_limit_changed(limit: int)
 
-## AI 是否使用手气卡的开关变化信号；实际次数仍受手气卡数量设置约束。
+## AI 是否使用手气卡的开关变化信号；实际张数仍受手气卡数量设置约束。
 signal ai_uses_mulligan_changed(enabled: bool)
 
 ## 换将卡数量变化信号；参数只会是0、3、5、8、10或20，仅影响之后创建的新对局。
@@ -55,15 +55,16 @@ const CARD_NAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"mode":NameMode.ORIGINAL, "label":"三国杀"},
 ]
 
-## 手气卡数量下拉选项；稳定值0表示关闭，1至5表示最多刷新次数，-1表示无限次。
+## 手气卡数量下拉选项；稳定值0表示关闭，1至5与10表示可用手气卡张数，-1表示无限张。
 const MULLIGAN_LIMIT_OPTIONS: Array[Dictionary] = [
 	{"value":0, "label":"关闭"},
-	{"value":1, "label":"一次"},
-	{"value":2, "label":"两次"},
-	{"value":3, "label":"三次"},
-	{"value":4, "label":"四次"},
-	{"value":5, "label":"五次"},
-	{"value":-1, "label":"无限次"},
+	{"value":1, "label":"一张"},
+	{"value":2, "label":"两张"},
+	{"value":3, "label":"三张"},
+	{"value":4, "label":"四张"},
+	{"value":5, "label":"五张"},
+	{"value":10, "label":"十张"},
+	{"value":-1, "label":"无限张"},
 ]
 
 ## 换将卡数量下拉选项；稳定值0表示关闭，其余数值表示每名玩家本局最多可换将的次数。
@@ -190,7 +191,7 @@ var custom_character_assignment_enabled: bool = false
 ## 是否在全员初次选将后由房主调整 AI 武将；默认关闭，仅在下一局开局流程中读取。
 var customize_ai_characters_enabled: bool = false
 
-## 每名玩家下一局可使用的手气卡次数；0关闭、1至5为有限次数、-1为无限次。
+## 每名玩家下一局可使用的手气卡数量；0关闭、1至5与10为有限张数、-1为无限张。
 var mulligan_limit: int = 0
 
 ## AI 是否根据起始手牌质量自动使用手气卡；默认关闭，且手气卡数量为0时不会产生额外阶段。
@@ -356,10 +357,10 @@ func set_customize_ai_characters_enabled(enabled: bool) -> void:
 	customize_ai_characters_changed.emit(customize_ai_characters_enabled)
 
 
-## 设置下一局手气卡次数；只接受0至5与-1，其他负值回退关闭，超过5限制为5。
+## 设置下一局手气卡数量；只接受关闭、一至五张、十张与无限张，其他值回退关闭。
 func set_mulligan_limit(limit: int) -> void:
-	# 标准化后的次数；-1保留无限语义，其余输入限制到0至5。
-	var normalized_limit: int = -1 if limit == -1 else clampi(limit, 0, 5)
+	# 标准化后的手气卡张数；仅允许界面公开的离散档位，防止存档或外部调用产生不可见数值。
+	var normalized_limit: int = limit if [0, 1, 2, 3, 4, 5, 10, -1].has(limit) else 0
 	if mulligan_limit == normalized_limit:
 		return
 	mulligan_limit = normalized_limit
@@ -434,9 +435,9 @@ func _load_saved_settings() -> void:
 	next_match_player_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)), MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
 	customize_ai_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled))
-	# 已保存手气卡次数；-1保留无限次，其余旧值限制到0至5。
+	# 已保存手气卡张数；旧版一至五张保持兼容，十张与无限张分别保留稳定值。
 	var stored_mulligan_limit: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit))
-	mulligan_limit = -1 if stored_mulligan_limit == -1 else clampi(stored_mulligan_limit, 0, 5)
+	mulligan_limit = stored_mulligan_limit if [0, 1, 2, 3, 4, 5, 10, -1].has(stored_mulligan_limit) else 0
 	ai_uses_mulligan_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled))
 	# 已保存换将卡数量；未知值回退关闭，避免旧测试或手工配置绕过离散选项。
 	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))

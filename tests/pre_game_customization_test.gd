@@ -99,7 +99,7 @@ func _test_settings_controls() -> bool:
 	var main_ai_checkbox: CheckBox = main_instance.get_node("%MainMenuCustomizeAiCharactersCheckBox") as CheckBox
 	# 局内菜单AI改将开关；只允许离线玩家或房主查看。
 	var match_ai_checkbox: CheckBox = main_instance.get_node("%CustomizeAiCharactersCheckBox") as CheckBox
-	# 主菜单手气卡下拉框；必须完整展示关闭、1至5次和无限次共7项。
+	# 主菜单手气卡下拉框；必须完整展示关闭、一至五张、十张与无限张共8项。
 	var main_mulligan_option: OptionButton = main_instance.get_node("%MainMenuMulliganLimitOption") as OptionButton
 	# 局内菜单手气卡下拉框；选择结果必须即时同步回主菜单。
 	var match_mulligan_option: OptionButton = main_instance.get_node("%MulliganLimitOption") as OptionButton
@@ -146,7 +146,7 @@ func _test_settings_controls() -> bool:
 		if indicator == null or not indicator.position.is_equal_approx(Vector2(2.0, 5.0)) or not indicator.size.is_equal_approx(Vector2(20.0, 20.0)) or indicator.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 			main_instance.queue_free()
 			return _fail("settings_checkbox_indicator:%s" % settings_checkbox.name)
-	if main_mulligan_option.item_count != 7 or match_mulligan_option.item_count != 7 or main_mulligan_option.get_item_text(0) != "关闭" or main_mulligan_option.get_item_text(6) != "无限次":
+	if main_mulligan_option.item_count != 8 or match_mulligan_option.item_count != 8 or main_mulligan_option.get_item_text(0) != "关闭" or main_mulligan_option.get_item_text(6) != "十张" or main_mulligan_option.get_item_text(7) != "无限张":
 		main_instance.queue_free()
 		return _fail("mulligan_options")
 	if main_replacement_option.item_count != 6 or match_replacement_option.item_count != 6 or main_replacement_option.get_item_text(0) != "关闭" or main_replacement_option.get_item_text(5) != "二十张":
@@ -158,11 +158,11 @@ func _test_settings_controls() -> bool:
 	main_custom_checkbox.toggled.emit(true)
 	main_ai_checkbox.toggled.emit(true)
 	main_ai_mulligan_checkbox.toggled.emit(true)
-	match_mulligan_option.item_selected.emit(2)
+	match_mulligan_option.item_selected.emit(6)
 	match_replacement_option.item_selected.emit(3)
 	match_candidate_count_option.item_selected.emit(19)
 	await get_tree().process_frame
-	if not match_custom_checkbox.button_pressed or not match_ai_checkbox.button_pressed or not match_ai_mulligan_checkbox.button_pressed or GameSettings.mulligan_limit != 2 or main_mulligan_option.selected != 2 or GameSettings.character_replacement_count != 8 or main_replacement_option.selected != 3 or GameSettings.character_candidate_count != 20 or main_candidate_count_option.selected != 19:
+	if not match_custom_checkbox.button_pressed or not match_ai_checkbox.button_pressed or not match_ai_mulligan_checkbox.button_pressed or GameSettings.mulligan_limit != 10 or main_mulligan_option.selected != 6 or GameSettings.character_replacement_count != 8 or main_replacement_option.selected != 3 or GameSettings.character_candidate_count != 20 or main_candidate_count_option.selected != 19:
 		main_instance.queue_free()
 		return _fail("settings_cross_menu_sync")
 	# 展开局内菜单；面板顶部必须紧贴常驻菜单按钮的下缘，避免覆盖并阻断收起入口。
@@ -245,6 +245,22 @@ func _test_character_selection_panel_layout() -> bool:
 	if candidate_scroll.scroll_vertical <= 0:
 		main_instance.queue_free()
 		return _fail("candidate_scroll_input")
+	# 候选区空白拖动；不命中任一武将牌时仍必须驱动同一个垂直滚动入口，方便移动端滑动卡牌间空白位置。
+	candidate_scroll.scroll_vertical = 0
+	# 空白拖动按下事件；使用候选区中心位置模拟不由武将牌输入区域消费的开始手势。
+	var blank_drag_press: InputEventMouseButton = InputEventMouseButton.new()
+	blank_drag_press.button_index = MOUSE_BUTTON_LEFT
+	blank_drag_press.pressed = true
+	blank_drag_press.position = candidate_scroll.get_global_rect().get_center()
+	selection_panel.call("_on_candidate_area_gui_input", blank_drag_press)
+	# 空白拖动位移事件；向上96像素必须进入候选区的向下滚动方向。
+	var blank_drag_motion: InputEventMouseMotion = InputEventMouseMotion.new()
+	blank_drag_motion.position = blank_drag_press.position + Vector2(0.0, -96.0)
+	blank_drag_motion.relative = Vector2(0.0, -96.0)
+	selection_panel.call("_on_candidate_area_gui_input", blank_drag_motion)
+	if candidate_scroll.scroll_vertical <= 0:
+		main_instance.queue_free()
+		return _fail("candidate_blank_drag_scroll")
 	# 可换普通候选；悬停后牌面底部按钮必须可见，非领袖身份中的领袖技武将也不额外锁定。
 	var replacement_buttons: Dictionary = selection_panel.get("_replacement_buttons") as Dictionary
 	# 当前候选牌视图映射；用于触发真实牌面悬停入口。
@@ -256,9 +272,16 @@ func _test_character_selection_panel_layout() -> bool:
 	# 本次换将按钮与对应牌面；按钮必须覆盖在牌面底部，不增加当前候选行高度。
 	var replacement_button: Button = replacement_buttons.get(replaceable_character_id) as Button
 	var replaceable_character_view: PlayerTargetView = candidate_views.get(replaceable_character_id) as PlayerTargetView
-	if not replacement_buttons.has(replaceable_character_id) or replacement_button == null or replaceable_character_view == null or not replacement_button.visible or replacement_button.text != "换将（3）" or not replacement_button.tooltip_text.is_empty() or replacement_button.position.y < replaceable_character_view.position.y + replaceable_character_view.card_size.y - replacement_button.size.y - CharacterSelectionPanel.REPLACEMENT_BUTTON_BOTTOM_INSET:
+	if not replacement_buttons.has(replaceable_character_id) or replacement_button == null or replaceable_character_view == null or not replacement_button.visible or replacement_button.text != "换将3" or not replacement_button.tooltip_text.is_empty() or replacement_button.position.y < replaceable_character_view.position.y + replaceable_character_view.card_size.y - replacement_button.size.y - CharacterSelectionPanel.REPLACEMENT_BUTTON_BOTTOM_INSET:
 		main_instance.queue_free()
 		return _fail("replacement_hover_button")
+	# 首行候选悬停放大；顶部必须保留安全留白，不能被标题所在的上方UI或滚动裁切区域切掉。
+	candidate_scroll.scroll_vertical = 0
+	(candidate_views[replaceable_character_id] as PlayerTargetView).call("_on_input_mouse_entered")
+	await get_tree().create_timer(selection_panel.candidate_hover_transition_seconds + 0.02).timeout
+	if replaceable_character_view.position.y < 0.0:
+		main_instance.queue_free()
+		return _fail("candidate_hover_top_clipped")
 	# 从非领袖切换到领袖；座次必须自动联动为一号位，标题也要立即同步为领袖。
 	selection_panel.call("_select_identity", "leader")
 	if int(selection_panel.get("_selected_seat_number")) != 1 or not selection_panel.get_title_plain_text().contains("领袖"):
@@ -430,7 +453,7 @@ func _test_character_selection_service() -> bool:
 	return true
 
 
-## 验证AI后置位防御阈值、关闭开关和无限次数语义。
+## 验证AI后置位防御阈值、关闭开关和无限张语义。
 func _test_mulligan_ai_evaluation() -> bool:
 	# AI测试玩家；手牌仅有1分防御但总牌值充足，使前置位保留、末位刷新。
 	var player: PlayerState = PlayerState.new(7, "手气卡AI")
@@ -454,7 +477,7 @@ func _test_mulligan_ai_evaluation() -> bool:
 	disabled_service.begin(player_ids, 2, false)
 	if disabled_service.should_ai_refresh(player, 4, 4):
 		return _fail("disabled_ai_mulligan")
-	# 无限次数服务；连续消费不会递减私有快照中的-1。
+	# 无限张服务；连续消费不会递减私有快照中的-1。
 	var unlimited_service: StartingHandMulliganService = StartingHandMulliganService.new()
 	unlimited_service.begin(player_ids, -1, false)
 	for _attempt_index: int in range(7):
@@ -503,13 +526,27 @@ func _test_authoritative_pre_game_flow() -> bool:
 	var local_custom_snapshot: Dictionary = _controller.character_selection.to_dict(0)
 	if str(local_custom_snapshot.get("local_identity", "")) != initial_local_identity or str(local_custom_snapshot.get("leader_character_id", "")) != initial_leader_character_id:
 		return _fail("authoritative_initial_identity_or_leader_snapshot")
+	# 默认高亮不是纯界面效果；按首次随机的座次身份提交预览后，当前场上领袖与公开武将必须保持原状。
+	# 本地首次随机座次；服务快照与当前PlayerState必须使用同一个实际分配值。
+	var initial_local_seat_number: int = _controller.character_selection.get_initial_seat_number(0)
+	if not _controller.preview_custom_assignment(0, initial_local_seat_number, initial_local_identity):
+		return _fail("default_custom_assignment_preview_submit")
+	# 默认组合预览快照；用于确认首次公开领袖牌没有被预览流程重新随机。
+	var default_preview_snapshot: Dictionary = _controller._get_character_selection_snapshot(0)
+	if _controller.state.players[0].player_id != initial_leader_player_id or _controller.state.players[0].identity != "leader" or str(default_preview_snapshot.get("leader_character_id", "")) != initial_leader_character_id:
+		return _fail("default_custom_assignment_preserves_initial_state leader=%d/%d identity=%s character=%s/%s" % [_controller.state.players[0].player_id, initial_leader_player_id, _controller.state.players[0].identity, str(default_preview_snapshot.get("leader_character_id", "")), initial_leader_character_id])
 	# 真人将自身预览为一号位领袖；不确认武将也必须立刻重排牌桌、更新身份，并为全部AI展示不同的候选武将。
 	if not _controller.preview_custom_assignment(0, 1, "leader"):
 		return _fail("custom_assignment_preview_submit")
 	# 预览后的本地真人；一号位与领袖身份由服务规范化后必须立即投射到权威玩家数组。
 	var previewed_local_player: PlayerState = _controller.state.players[0]
+	# 新领袖是尚未选将的真人时，公开区域必须立即清空旧首任领袖，而不能继续显示错误的背景领袖牌。
+	# 人类领袖预览快照；尚未确认武将时应主动清空旧领袖武将ID。
+	var human_leader_preview_snapshot: Dictionary = _controller._get_character_selection_snapshot(0)
 	# 预览中的其他AI；座次身份预览相当于重新进入选将，不能在背景提前亮出全部AI武将。
-	if previewed_local_player.player_id != 0 or previewed_local_player.identity != "leader":
+	# 是否由另一名首任领袖切换而来；首任领袖恰为本地玩家时保留其公开牌属于正确状态。
+	var expects_previous_leader_hidden: bool = initial_leader_player_id != 0
+	if previewed_local_player.player_id != 0 or previewed_local_player.identity != "leader" or int(human_leader_preview_snapshot.get("leader_player_id", -1)) != 0 or (expects_previous_leader_hidden and not str(human_leader_preview_snapshot.get("leader_character_id", "fallback")).is_empty()):
 		return _fail("custom_assignment_preview_seat_or_identity")
 	for previewed_player: PlayerState in _controller.state.players:
 		if not _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id):

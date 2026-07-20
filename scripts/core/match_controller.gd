@@ -126,7 +126,7 @@ var _custom_character_assignment_enabled: bool = false
 ## 本局是否启用房主调整全部 AI 武将；开局时锁定。
 var _customize_ai_characters_enabled: bool = false
 
-## 本局每名玩家的手气卡次数；0关闭、1至5有限次数、-1无限次。
+## 本局每名玩家的手气卡张数；0关闭、1至5与10有限张数、-1无限张。
 var _mulligan_limit: int = 0
 
 ## 本局 AI 是否自动评估并使用手气卡；手气卡数量为0时该值不会产生流程。
@@ -702,6 +702,8 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 		_apply_character(leader, character_id, true)
 		add_log("领袖%s亮出武将【%s】。" % [leader.display_name, GameDatabase.resolve_character_name(character_id)])
 		if character_selection.custom_assignment_enabled:
+			# 初次自选默认值已是有效的真实座次身份；进入界面前立即投射，避免一号位和领袖只停留在按钮高亮。
+			_apply_custom_assignment_preview()
 			add_log("首任领袖选将完成，所有玩家开始重新自选武将、座次与身份。")
 		else:
 			add_log("其他玩家开始同时选将，每人随机展示%d张候选武将牌。" % character_selection.candidate_count)
@@ -729,7 +731,7 @@ func replace_character_candidate(player_id: int, character_id: String) -> bool:
 	return true
 
 
-## 预览自选模式中的座次与身份改动；玩家尚未确认武将时，仍即时重排所有角色并刷新 AI 武将展示。
+## 预览自选模式中的座次与身份改动；玩家尚未确认武将时即时重排角色，但保留仍为领袖的首次公开武将。
 func preview_custom_assignment(player_id: int, seat_number: int, identity: String) -> bool:
 	if state == null or state.game_over or state.current_phase != "character_selection" or character_selection == null:
 		return _reject("当前不在自选座次与身份阶段。")
@@ -5219,13 +5221,16 @@ func _apply_custom_assignment_preview() -> void:
 		if reordered_players[seat_index] == null:
 			return
 	state.players = reordered_players
-	# 预览相当于重新进入开局选将；未最终确认的角色必须恢复未亮将，不能在背景抢先展示所有AI武将。
+	# 首任领袖在仍占一号位时保留首次公开武将；其余未确认角色必须恢复未亮将，不能在背景抢先展示所有AI武将。
+	var preview_leader_before_clear: PlayerState = state.players[0] if not state.players.is_empty() else null
 	for player: PlayerState in state.players:
-		if character_selection.get_selection(player.player_id).is_empty():
+		# 保留条件；只有同一名首任领袖仍是当前预览领袖且尚未提交最终新武将时，才沿用其已经公开的牌面。
+		var preserves_initial_leader_character: bool = player == preview_leader_before_clear and player.player_id == character_selection.leader_player_id and player.identity == "leader" and not player.character_id.is_empty()
+		if character_selection.get_selection(player.player_id).is_empty() and not preserves_initial_leader_character:
 			_clear_pre_game_character_preview(player)
 	# 当前预览领袖；只在领袖由AI控制且尚未最终确认时公开其重新选择的一张候选，保持首任领袖流程的唯一公开牌语义。
 	var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
-	if preview_leader != null and ai_coordinator.is_ai_controlled(preview_leader.player_id) and character_selection.get_selection(preview_leader.player_id).is_empty():
+	if preview_leader != null and ai_coordinator.is_ai_controlled(preview_leader.player_id) and character_selection.get_selection(preview_leader.player_id).is_empty() and preview_leader.character_id.is_empty():
 		var preview_character_id: String = _get_preview_ai_character_id(preview_leader)
 		if not preview_character_id.is_empty():
 			_apply_character(preview_leader, preview_character_id, true)
@@ -5431,7 +5436,7 @@ func _submit_mulligan_refresh(action: PlayerAction) -> bool:
 	if state == null or state.current_phase != "starting_hand_mulligan" or starting_hand_mulligan == null:
 		return _reject("当前不在手气卡阶段。")
 	if not starting_hand_mulligan.can_refresh(action.actor_id):
-		return _reject("当前玩家没有剩余手气卡次数。")
+		return _reject("当前玩家没有剩余手气卡张数。")
 	if not _refresh_starting_hand(action.actor_id, false):
 		return _reject("起始手牌刷新失败。")
 	state.action_sequence += 1
@@ -8723,7 +8728,7 @@ func _emit_state() -> void:
 		state.event_history = event_scheduler.get_event_history()
 	# 本地界面快照；仅公开本地玩家手牌和自身身份。
 	var local_snapshot: Dictionary = state.to_dict(local_human_player_id, false)
-	# 本地手气卡私有状态；只包含本人的剩余次数与按钮权限。
+	# 本地手气卡私有状态；只包含本人的剩余张数与按钮权限。
 	local_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(local_human_player_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 	state_changed.emit(local_snapshot)
 	# 本地选将类私有快照；初次选将与房主调整 AI 共用同一选将面板协议。
@@ -8745,7 +8750,7 @@ func _emit_state() -> void:
 			remote_snapshot["local_legal_actions"] = get_legal_actions(viewer_id) if state.current_phase == "play" and state.current_player_id == viewer_id else []
 			# 选将私有快照；候选仅进入对应观察者的定向状态包，其他玩家只能看到公开确认状态。
 			remote_snapshot["character_selection"] = _get_character_selection_snapshot(viewer_id)
-			# 手气卡私有快照；每名远端玩家只接收自己的剩余次数和确认状态。
+			# 手气卡私有快照；每名远端玩家只接收自己的剩余张数和确认状态。
 			remote_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(viewer_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
 
@@ -8768,7 +8773,7 @@ func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 		var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
 		# 当前领袖是否已经确认最终武将；确认后立即公开其当前牌面，即使本轮没有额外座次身份预览也不回退到首任领袖旧武将。
 		var preview_leader_has_confirmed_character: bool = preview_leader != null and not character_selection.get_selection(preview_leader.player_id).is_empty()
-		if (has_active_custom_assignment_preview or preview_leader_has_confirmed_character) and preview_leader != null and preview_leader.identity == "leader" and not preview_leader.character_id.is_empty():
+		if (has_active_custom_assignment_preview or preview_leader_has_confirmed_character) and preview_leader != null and preview_leader.identity == "leader":
 			selection_snapshot["leader_player_id"] = preview_leader.player_id
 			selection_snapshot["leader_character_id"] = preview_leader.character_id
 		return selection_snapshot

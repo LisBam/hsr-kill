@@ -9,7 +9,7 @@ var _used_this_turn: bool = false
 ## 写入锁定技静态信息；技能描述严格保持设计原文。
 func _init() -> void:
 	super({
-		"id": "sefu",
+		"id": "shefu",
 		"name": "摄伏",
 		"trigger": "damageSource",
 		"ui_enabled": false,

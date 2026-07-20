@@ -180,16 +180,16 @@ func _test_expanded_character_metadata() -> bool:
 		return _fail("natasha_metadata=%s" % natasha)
 	if str(hanya.get("gender", "")) != "female" or str(hanya.get("faction", "")) != "xianzhou" or int(hanya.get("max_hp", 0)) != 3 or (hanya.get("skills", []) as Array) != ["mingchen", "lushi"]:
 		return _fail("hanya_metadata=%s" % hanya)
-	if str(xveyi.get("display_name", "")) != "雪衣" or str(xveyi.get("gender", "")) != "female" or str(xveyi.get("faction", "")) != "xianzhou" or int(xveyi.get("max_hp", 0)) != 4 or (xveyi.get("skills", []) as Array) != ["huanyang", "sefu"]:
+	if str(xveyi.get("display_name", "")) != "雪衣" or str(xveyi.get("gender", "")) != "female" or str(xveyi.get("faction", "")) != "xianzhou" or int(xveyi.get("max_hp", 0)) != 4 or (xveyi.get("skills", []) as Array) != ["huanyang", "shefu"]:
 		return _fail("xveyi_metadata=%s" % xveyi)
 	# 六项技能说明；玩家可见文本必须逐字保持机制设计原文。
 	var expected_descriptions: Dictionary = {
 		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
 		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
 		"mingchen":"锁定技，当你于回合内失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害，并令此技能失效直到回合结束。",
-		"lushi":"出牌阶段，你可弃置两张牌名字字数相同的牌，然后摸一张牌。",
+		"lushi":"出牌阶段，你可弃置两张牌名字数相同的牌，然后摸一张牌。",
 		"huanyang":"锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
-		"sefu":"锁定技，当你于回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
+		"shefu":"锁定技，当你于一回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
 		# 当前技能ID；用于自动索引中读取对应说明。
@@ -469,14 +469,14 @@ func _test_mingchen_recast_continuation() -> bool:
 func _test_damage_timing_choice_continuation() -> bool:
 	_reset_state(3)
 	# 伤害来源的摄伏实例；首次使用牌造成伤害后创建强制获牌目标选择。
-	var sefu: SkillDefinition = GameDatabase.create_skill("sefu")
+	var sefu: SkillDefinition = GameDatabase.create_skill("shefu")
 	# 伤害目标的永屹实例；体力实际减少后在damageAfter创建可取消确认选择。
 	var yongyi: SkillDefinition = GameDatabase.create_skill("yongyi")
 	if sefu == null or yongyi == null:
 		return _fail("damage_timing_skills_missing")
 	sefu.bind(_controller, 0)
 	yongyi.bind(_controller, 1)
-	_controller.skill_instances_by_player = {0:{"sefu":sefu}, 1:{"yongyi":yongyi}}
+	_controller.skill_instances_by_player = {0:{"shefu":sefu}, 1:{"yongyi":yongyi}}
 	sefu.install()
 	yongyi.install()
 	# 摄伏按一字【杀】取得的牌；选择安全的三号角色可避免额外装备弃置步骤干扰时机顺序断言。
@@ -546,10 +546,10 @@ func _test_huanyang_and_sefu() -> bool:
 	# 还阳实例；直接消费标准damageSource事件。
 	var huanyang: SkillDefinition = GameDatabase.create_skill("huanyang")
 	# 摄伏实例；维护本回合首次伤害额度并创建两段选择。
-	var sefu: SkillDefinition = GameDatabase.create_skill("sefu")
+	var sefu: SkillDefinition = GameDatabase.create_skill("shefu")
 	huanyang.bind(_controller, 0)
 	sefu.bind(_controller, 0)
-	_controller.skill_instances_by_player = {0:{"huanyang":huanyang, "sefu":sefu}}
+	_controller.skill_instances_by_player = {0:{"huanyang":huanyang, "shefu":sefu}}
 	# 雪衣受伤状态；满足还阳时应从3点回复至4点。
 	var xveyi_player: PlayerState = _controller.state.get_player(0)
 	xveyi_player.hp = 3
