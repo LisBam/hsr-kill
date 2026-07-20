@@ -171,6 +171,9 @@ func _ready() -> void:
 ## 在父节点完成子节点初始化后提升菜单分支顺序；绘制层级与真实 GUI 命中顺序由同一入口保持一致。
 func _move_to_input_front() -> void:
 	move_to_front()
+	# 展开的菜单面板覆盖整个右侧高度，但常驻入口必须始终位于面板前方，才能再次点击“菜单”收起。
+	_menu_panel.move_to_front()
+	_menu_button.move_to_front()
 
 
 ## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。

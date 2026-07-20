@@ -721,6 +721,24 @@ func replace_character_candidate(player_id: int, character_id: String) -> bool:
 	return true
 
 
+## 预览自选模式中的座次与身份改动；玩家尚未确认武将时，仍即时重排所有角色并刷新 AI 武将展示。
+func preview_custom_assignment(player_id: int, seat_number: int, identity: String) -> bool:
+	if state == null or state.game_over or state.current_phase != "character_selection" or character_selection == null:
+		return _reject("当前不在自选座次与身份阶段。")
+	if ai_coordinator.is_ai_controlled(player_id):
+		return _reject("AI 不会提交自选座次与身份预览。")
+	# 服务校验结果；预览不会写入最终名额，但会与已确认结果及其他玩家主动预览保持互斥。
+	var preview_error: String = character_selection.preview_custom_assignment(player_id, seat_number, identity)
+	if not preview_error.is_empty():
+		_emit_state()
+		return _reject(preview_error)
+	_apply_custom_assignment_preview()
+	state.action_sequence += 1
+	state.random_history.append({"kind":"custom_assignment_preview", "player_id":player_id, "seat_number":character_selection.get_preview_seat_number(player_id), "identity":character_selection.get_preview_identity(player_id)})
+	_emit_state()
+	return true
+
+
 ## 接受来自人类、AI 或网络的统一行为指令；返回是否通过规则校验并执行。
 func submit_action(action: PlayerAction) -> bool:
 	if action == null:
@@ -746,6 +764,8 @@ func submit_action(action: PlayerAction) -> bool:
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")), int(action.payload.get("seat_number", -1)), str(action.payload.get("identity", "")))
 	if action.action_type == "replace_character_candidate":
 		return replace_character_candidate(action.actor_id, str(action.payload.get("character_id", "")))
+	if action.action_type == "preview_custom_assignment":
+		return preview_custom_assignment(action.actor_id, int(action.payload.get("seat_number", -1)), str(action.payload.get("identity", "")))
 	if action.action_type == "select_ai_adjustment_target":
 		return _select_ai_adjustment_target(action)
 	if action.action_type == "set_ai_character":
@@ -884,7 +904,6 @@ func _submit_auto_management_change(action: PlayerAction) -> bool:
 	if player.auto_managed == enabled and not player.auto_managed_offline:
 		return true
 	_set_player_auto_management(action.actor_id, enabled, false)
-	add_log("%s%s托管。" % [player.display_name, "开启" if enabled else "取消"])
 	return true
 
 
@@ -5122,6 +5141,112 @@ func _apply_custom_character_assignments() -> void:
 	_refresh_player_display_names_for_current_seats()
 
 
+## 将未确认的自选座次身份即时投射到开局前牌桌；最终确认仍由 _apply_custom_character_assignments 以服务结果为准。
+func _apply_custom_assignment_preview() -> void:
+	if state == null or character_selection == null:
+		return
+	# 当前可分配座次；已确认或主动预览的玩家先占用，剩余玩家随后按首次随机分配稳定补位。
+	var available_seats: Array[int] = []
+	for seat_number: int in range(1, state.players.size() + 1):
+		available_seats.append(seat_number)
+	# 当前可分配身份池；身份数量只从首次随机分配读取，连续预览不会把上一帧预览误作新的规则名额。
+	var available_identities: Array[String] = []
+	for player: PlayerState in state.players:
+		available_identities.append(character_selection.get_initial_identity(player.player_id))
+	# 玩家 ID 到预览结果的映射；每项只保存稳定座次和身份，不保存节点或角色对象。
+	var assignments_by_player: Dictionary = {}
+	for player: PlayerState in state.players:
+		# 当前是否已有最终确认；确认结果和主动预览都优先于首次随机分配。
+		var has_final_assignment: bool = character_selection.get_selected_seat_number(player.player_id) >= 1 and not character_selection.get_selected_identity(player.player_id).is_empty()
+		var has_preview_assignment: bool = character_selection.has_custom_assignment_preview(player.player_id)
+		if not has_final_assignment and not has_preview_assignment:
+			continue
+		# 当前固定座次与身份；服务已在提交或预览入口完成一号位与领袖联动及互斥校验。
+		var fixed_seat_number: int = character_selection.get_preview_seat_number(player.player_id)
+		var fixed_identity: String = character_selection.get_preview_identity(player.player_id)
+		if not available_seats.has(fixed_seat_number) or not available_identities.has(fixed_identity):
+			continue
+		assignments_by_player[player.player_id] = {"seat_number":fixed_seat_number, "identity":fixed_identity}
+		available_seats.erase(fixed_seat_number)
+		available_identities.erase(fixed_identity)
+	# 未固定领袖；保留首次领袖优先级，若其已经被其他预览占用则按当前玩家数组选择首名可用角色。
+	if available_seats.has(1) and available_identities.has("leader"):
+		var fallback_leader_player_id: int = -1
+		for player: PlayerState in state.players:
+			if assignments_by_player.has(player.player_id):
+				continue
+			if character_selection.get_initial_identity(player.player_id) == "leader":
+				fallback_leader_player_id = player.player_id
+				break
+		if fallback_leader_player_id < 0:
+			for player: PlayerState in state.players:
+				if not assignments_by_player.has(player.player_id):
+					fallback_leader_player_id = player.player_id
+					break
+		if fallback_leader_player_id >= 0:
+			assignments_by_player[fallback_leader_player_id] = {"seat_number":1, "identity":"leader"}
+			available_seats.erase(1)
+			available_identities.erase("leader")
+	# 其余未确认玩家；尽量保留首次随机座次与身份，冲突时使用剩余池中的首个稳定值。
+	for player: PlayerState in state.players:
+		if assignments_by_player.has(player.player_id) or available_seats.is_empty() or available_identities.is_empty():
+			continue
+		var preferred_seat_number: int = character_selection.get_initial_seat_number(player.player_id)
+		var remaining_seat_number: int = preferred_seat_number if available_seats.has(preferred_seat_number) else available_seats[0]
+		var preferred_identity: String = character_selection.get_initial_identity(player.player_id)
+		var remaining_identity: String = preferred_identity if available_identities.has(preferred_identity) else str(available_identities[0])
+		assignments_by_player[player.player_id] = {"seat_number":remaining_seat_number, "identity":remaining_identity}
+		available_seats.erase(remaining_seat_number)
+		available_identities.erase(remaining_identity)
+	# 已被真人临时亮出的武将；AI预览优先避开，避免开局牌桌再次出现全员同一武将的错误画面。
+	var occupied_character_ids: Array[String] = []
+	for player: PlayerState in state.players:
+		if not ai_coordinator.is_ai_controlled(player.player_id) and not player.character_id.is_empty():
+			occupied_character_ids.append(player.character_id)
+	# 按预览座次构建显示顺序；所有位置都在服务与补位规则下得到一个稳定玩家对象。
+	var reordered_players: Array[PlayerState] = []
+	reordered_players.resize(state.players.size())
+	for player: PlayerState in state.players:
+		# 当前玩家预览数据；缺失时保留首次随机分配，防御异常快照导致数组出现空位。
+		var assignment: Dictionary = assignments_by_player.get(player.player_id, {"seat_number":character_selection.get_initial_seat_number(player.player_id), "identity":character_selection.get_initial_identity(player.player_id)}) as Dictionary
+		player.identity = str(assignment.get("identity", character_selection.get_initial_identity(player.player_id)))
+		player.identity_revealed = player.identity == "leader"
+		if ai_coordinator.is_ai_controlled(player.player_id):
+			# AI预览武将；每次玩家主动修改座次或身份都选取一张不同的可用候选，立即反映新领袖与其他 AI 的牌面。
+			var preview_character_id: String = _get_preview_ai_character_id(player, occupied_character_ids)
+			if not preview_character_id.is_empty():
+				_apply_character(player, preview_character_id, true)
+				occupied_character_ids.append(preview_character_id)
+		var applied_seat_number: int = int(assignment.get("seat_number", -1))
+		if applied_seat_number >= 1 and applied_seat_number <= reordered_players.size():
+			reordered_players[applied_seat_number - 1] = player
+	for seat_index: int in range(reordered_players.size()):
+		if reordered_players[seat_index] == null:
+			return
+	state.players = reordered_players
+	_refresh_player_display_names_for_current_seats()
+
+
+## 从 AI 当前私有候选中挑选一张未占用且尽量不同于原武将的预览角色；候选不足时回退全部登记武将。
+func _get_preview_ai_character_id(player: PlayerState, occupied_character_ids: Array[String]) -> String:
+	if player == null or character_selection == null:
+		return ""
+	# 当前 AI 私有随机候选；优先保持正式选将阶段已经生成的随机结果，不额外消耗换将卡或重洗候选。
+	var candidates: Array[String] = character_selection.get_candidates(player.player_id)
+	for candidate_id: String in candidates:
+		if candidate_id != player.character_id and not occupied_character_ids.has(candidate_id):
+			return candidate_id
+	for candidate_id: String in candidates:
+		if not occupied_character_ids.has(candidate_id):
+			return candidate_id
+	# 全局回退候选；随机候选刚好全部冲突时仍保证 AI 不会继承同一名武将造成错误的全桌同图显示。
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		var character_id: String = str(character_id_variant)
+		if character_id != player.character_id and not occupied_character_ids.has(character_id):
+			return character_id
+	return ""
+
+
 ## 在需要时进入房主调整 AI 武将阶段；返回true表示开局流程已经暂停等待房主操作。
 func _begin_ai_character_adjustment() -> bool:
 	if not _customize_ai_characters_enabled or ai_character_adjustment == null:
@@ -5432,13 +5557,17 @@ func _drive_ai_character_selection() -> void:
 		for player_id: int in pending_player_ids:
 			if not ai_coordinator.is_ai_controlled(player_id):
 				continue
-			# AI 候选武将；基础策略使用随机列表首项，后续可由独立选将策略替换。
-			var candidates: Array[String] = character_selection.get_candidates(player_id)
-			if candidates.is_empty():
+			# AI 候选武将；优先从尚未被其他玩家确认的私有候选中选择，避免所有 AI 继承同一张武将牌。
+			var character_id: String = _get_ai_character_selection_candidate(player_id)
+			if character_id.is_empty():
+				# 当前候选若全部已被其他玩家确认，重建不占用换将卡的未占用候选后重试一次。
+				character_selection.reroll_unclaimed_candidates(player_id)
+				character_id = _get_ai_character_selection_candidate(player_id)
+			if character_id.is_empty():
 				continue
 			# AI 选将动作；与人类和网络玩家共用标准 PlayerAction 入口及服务校验。
 			var action: PlayerAction = PlayerAction.new("select_character", player_id)
-			action.payload = {"character_id":candidates[0]}
+			action.payload = {"character_id":character_id}
 			if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
 				# 当前剩余座次与身份；优先把一号位和领袖绑定给同一 AI，其余角色只选择非一号位与非领袖身份。
 				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
@@ -5456,11 +5585,27 @@ func _drive_ai_character_selection() -> void:
 						selected_identity = available_identities[0]
 				action.payload["seat_number"] = selected_seat_number
 				action.payload["identity"] = selected_identity
-			_submit_ai_action(action)
-			made_progress = true
+			made_progress = _submit_ai_action(action) or made_progress
 		if not made_progress:
 			break
 	_is_driving_character_selection = false
+
+
+## 返回 AI 当前可安全确认的一张候选武将；最终确认结果与所有已选武将保持唯一，避免选将循环或全员同将。
+func _get_ai_character_selection_candidate(player_id: int) -> String:
+	if character_selection == null:
+		return ""
+	# 当前 AI 私有候选；候选仍由选将服务生成，控制器只过滤已经落定的稳定武将 ID。
+	var candidates: Array[String] = character_selection.get_candidates(player_id)
+	for candidate_id: String in candidates:
+		var already_selected: bool = false
+		for player: PlayerState in state.players:
+			if player.player_id != player_id and character_selection.get_selection(player.player_id) == candidate_id:
+				already_selected = true
+				break
+		if not already_selected:
+			return candidate_id
+	return ""
 
 
 ## 根据牌堆配置创建实体牌、设置区域并洗牌。
@@ -8593,7 +8738,21 @@ func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 	if state == null:
 		return {}
 	if state.current_phase == "character_selection" and character_selection != null:
-		return character_selection.to_dict(viewer_id)
+		# 基础选将私有快照；候选、首次身份和最终名额全部仍由服务独立裁剪。
+		var selection_snapshot: Dictionary = character_selection.to_dict(viewer_id)
+		# 是否存在任意真人已提交的座次身份预览；没有预览时必须继续显示首任领袖公开武将。
+		var has_active_custom_assignment_preview: bool = false
+		if character_selection.phase == CharacterSelectionService.PHASE_CUSTOM:
+			for player: PlayerState in state.players:
+				if character_selection.has_custom_assignment_preview(player.player_id):
+					has_active_custom_assignment_preview = true
+					break
+		# 当前预览领袖；预览应用后 state.players 的一号位就是当前领袖，空武将表示真人尚未最终选将。
+		var preview_leader: PlayerState = state.players[0] if not state.players.is_empty() else null
+		if has_active_custom_assignment_preview and preview_leader != null and preview_leader.identity == "leader" and not preview_leader.character_id.is_empty():
+			selection_snapshot["leader_player_id"] = preview_leader.player_id
+			selection_snapshot["leader_character_id"] = preview_leader.character_id
+		return selection_snapshot
 	if state.current_phase == "ai_character_adjustment" and ai_character_adjustment != null:
 		# AI 调整选将快照；补充当前目标显示名只用于标题，不扩大服务对玩家状态的依赖。
 		var adjustment_snapshot: Dictionary = ai_character_adjustment.to_selection_dict(viewer_id)

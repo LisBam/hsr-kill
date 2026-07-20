@@ -1,6 +1,6 @@
 extends Node
 
-## 领袖技专项回归。验证身份归属、文字选项、振旗同位配对、领航次数消费与双向连环状态触发。
+## 领袖技专项回归。验证身份归属、文字选项、振旗同位配对、领航次数消费与实际横置状态触发。
 
 ## 测试使用的权威控制器；全部选择仍通过标准 PlayerAction 提交并由 ChoiceRequest 复核。
 var _controller: MatchController
@@ -27,7 +27,7 @@ func _run() -> void:
 		return
 	if not _test_linghang_link_directions_and_limit():
 		return
-	print("LEADER_SKILL_PASS ownership=leader_only zhenqi=paired linghang=bidirectional_once")
+	print("LEADER_SKILL_PASS ownership=leader_only zhenqi=paired linghang=linked_once")
 	get_tree().quit(0)
 
 
@@ -236,7 +236,7 @@ func _test_zhenqi_paired_branches() -> bool:
 	return zhenqi != null
 
 
-## 验证领航由连环事件来源角色重铸，横置与竖直两种变化都触发，并在确认发动时立即消费回合次数。
+## 验证领航由使目标横置的星穹列车来源角色重铸，竖直变化不触发，并在确认发动时立即消费回合次数。
 func _test_linghang_link_directions_and_limit() -> bool:
 	_reset_state(["himeko", "dan_heng", "xier"], ["leader", "loyalist", "loyalist"])
 	var linghang: SkillDefinition = _install_single_skill(0, "linghang")
@@ -255,17 +255,19 @@ func _test_linghang_link_directions_and_limit() -> bool:
 		return false
 	if _controller.state.get_player(1).find_hand_card(recast_card.uid) == null:
 		return _fail("linghang_cancel_moved_card")
-	# 同回合由同一来源角色把目标竖直；状态变化成功，但已消耗次数，因此不会再次询问。
+	# 同回合由同一来源角色把目标竖直；竖直变化不满足技能原文，不能再次询问。
 	if not _controller.set_player_linked(2, false, 1, "leader_skill_test") or not _controller._pending_card_choice.is_empty():
 		return _fail("linghang_same_turn_limit=%s" % [_controller._pending_card_choice])
-	# 非星穹列车角色先重新横置目标，不触发领航；下一回合再由来源角色1将其竖直，必须创建询问。
+	# 非星穹列车角色先重新横置目标，不触发领航；下一回合来源角色1先将其竖直，再横置时才必须创建询问。
 	if not _controller.set_player_linked(2, true, 2, "leader_skill_test") or not _controller._pending_card_choice.is_empty():
 		return _fail("linghang_wrong_faction_trigger=%s" % [_controller._pending_card_choice])
 	_controller.state.turn_number = 2
-	if not _controller.set_player_linked(2, false, 1, "leader_skill_test") or int(_controller._pending_card_choice.get("chooser_id", -1)) != 0:
-		return _fail("linghang_vertical_prompt=%s" % [_controller._pending_card_choice])
+	if not _controller.set_player_linked(2, false, 1, "leader_skill_test") or not _controller._pending_card_choice.is_empty():
+		return _fail("linghang_straighten_prompt=%s" % [_controller._pending_card_choice])
+	if not _controller.set_player_linked(2, true, 1, "leader_skill_test") or int(_controller._pending_card_choice.get("chooser_id", -1)) != 0:
+		return _fail("linghang_linked_prompt=%s" % [_controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [], "", true) or int(_controller._pending_card_choice.get("chooser_id", -1)) != 1:
-		return _fail("linghang_vertical_recast_chooser=%s" % [_controller._pending_card_choice])
+		return _fail("linghang_linked_recast_chooser=%s" % [_controller._pending_card_choice])
 	if not _submit_pending_choice(1, [recast_card.uid], [], "", true):
 		return false
 	if _controller.state.get_player(1).find_hand_card(recast_card.uid) != null or _controller.state.get_player(1).find_hand_card(replacement_card.uid) == null or not _controller.state.discard_pile.has(recast_card) or not _controller.state.get_player(2).hand.is_empty():
