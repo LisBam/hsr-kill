@@ -455,6 +455,7 @@ func _ready() -> void:
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
+	match_log_panel.blank_area_pressed.connect(_close_open_match_overlays_from_blank_click)
 	auto_manage_button.pressed.connect(_on_auto_manage_pressed)
 	auto_managed_hand_overlay.cancel_requested.connect(_on_auto_manage_pressed)
 	# 已保存的下一局人数；主菜单与局内菜单共用同一全局配置，首次进入场景时同步覆盖检查器默认值。
@@ -465,6 +466,7 @@ func _ready() -> void:
 	main_menu.set_next_player_count(saved_next_match_player_count)
 	main_menu.set_lan_default_port(match_controller.network_gateway.default_lan_port)
 	character_selection_panel.selection_submitted.connect(_on_character_selection_submitted)
+	character_selection_panel.candidate_replacement_requested.connect(_on_character_candidate_replacement_requested)
 	character_selection_panel.information_requested.connect(_on_information_requested.bind(character_selection_panel))
 	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
@@ -2777,6 +2779,14 @@ func _on_character_selection_submitted(selection_data: Dictionary) -> void:
 		"seat_number":int(selection_data.get("seat_number", -1)),
 		"identity":str(selection_data.get("identity", "")),
 	}
+	match_controller.submit_action(action)
+
+
+## 把选将面板的单张换将请求封装为标准动作；房主权威服务会再次校验候选、锁定状态与剩余次数。
+func _on_character_candidate_replacement_requested(character_id: String) -> void:
+	# 换将动作；只携带本人当前候选的稳定武将 ID，不传递按钮、牌面节点或随机结果。
+	var action: PlayerAction = PlayerAction.new("replace_character_candidate", match_controller.local_human_player_id)
+	action.payload = {"character_id":character_id}
 	match_controller.submit_action(action)
 
 

@@ -9,6 +9,9 @@ signal character_selected(character_id: String)
 ## 玩家确认完整选将数据时发出的信号；包含武将 ID，可选座次、身份和 AI 调整目标，全部字段可序列化。
 signal selection_submitted(selection_data: Dictionary)
 
+## 玩家点击单张候选上方“换将”按钮时发出的信号；参数只包含被替换候选的稳定武将 ID。
+signal candidate_replacement_requested(character_id: String)
+
 ## 选将候选或公开领袖武将牌请求显示统一悬停信息时发出的转发信号。
 signal information_requested(information: Dictionary, anchor_rect: Rect2)
 
@@ -26,6 +29,9 @@ const STATUS_LABEL_PATH: NodePath = NodePath("SelectionFrame/CharacterSelectionS
 
 ## 候选武将牌承载区的组件内相对路径；所有动态候选都只添加到该容器。
 const CANDIDATE_AREA_PATH: NodePath = NodePath("SelectionFrame/CharacterCandidateArea")
+
+## 候选滚动内容节点的组件内相对路径；正式武将牌和换将按钮都只添加到该节点。
+const CANDIDATE_CONTENT_PATH: NodePath = NodePath("SelectionFrame/CharacterCandidateArea/CandidateScrollContent")
 
 ## 领袖武将牌承载区的组件内相对路径；领袖亮将后创建的只读牌面添加到该容器。
 const LEADER_CHARACTER_AREA_PATH: NodePath = NodePath("SelectionFrame/LeaderCharacterArea")
@@ -57,6 +63,21 @@ const IDENTITY_BUTTONS_PATH: NodePath = NodePath("SelectionFrame/IdentityButtons
 ## 自选模式候选区域矩形；为多行全部武将与下方座次、身份按钮预留空间。
 const CUSTOM_CANDIDATE_RECT: Rect2 = Rect2(24.0, 72.0, 992.0, 286.0)
 
+## 全武将模式主框距离视口四边的安全边距；16像素可最大化牌面区域并避免贴边裁切。
+const ALL_CHARACTERS_FRAME_MARGIN: float = 16.0
+
+## 候选换将按钮宽度；84像素足以稳定容纳“换将”两字且不遮挡相邻牌面。
+const REPLACEMENT_BUTTON_WIDTH: float = 84.0
+
+## 候选换将按钮高度；30像素与设置紧凑按钮规格一致，悬停时不会推动牌面布局。
+const REPLACEMENT_BUTTON_HEIGHT: float = 30.0
+
+## 换将按钮与对应武将牌之间的垂直间距；6像素明确表达按钮归属并保留点击边界。
+const REPLACEMENT_BUTTON_GAP: float = 6.0
+
+## 全武将模式确认按钮上方与滚动区之间的间距；12像素保证滚动条不会贴住主要操作。
+const ALL_CHARACTERS_CONFIRM_GAP: float = 12.0
+
 ## 四种身份按钮的稳定排列；显示文字与主题颜色均从该表统一解析。
 const IDENTITY_OPTIONS: Array[Dictionary] = [
 	{"id":"leader", "label":"领袖"},
@@ -86,6 +107,12 @@ const IDENTITY_OPTIONS: Array[Dictionary] = [
 
 ## 候选武将牌承载区域；只负责提供局部坐标，牌面根节点保持 Node2D 类型。
 @onready var _candidate_area: Control = get_node_or_null(CANDIDATE_AREA_PATH) as Control
+
+## 候选滚动内容节点；其最小高度按实际行数更新，ScrollContainer据此决定是否显示垂直滚动条。
+@onready var _candidate_content: Control = get_node_or_null(CANDIDATE_CONTENT_PATH) as Control
+
+## 选将主框；普通模式保持场景几何，全武将模式临时扩展到视口安全边距内。
+@onready var _selection_frame: Panel = get_node_or_null("SelectionFrame") as Panel
 
 ## 领袖武将牌承载区域；领袖确认后固定显示在选将框左侧，不参与候选点击或提交。
 @onready var _leader_character_area: Control = get_node_or_null(LEADER_CHARACTER_AREA_PATH) as Control
@@ -135,6 +162,9 @@ var _candidate_base_scales: Dictionary = {}
 ## 候选武将 ID 到当前缩放补间的映射；重复进入或离开时停止旧补间，避免多个动画同时写入同一节点。
 var _candidate_hover_tweens: Dictionary = {}
 
+## 候选武将 ID 到换将按钮的映射；只有仍可消耗换将卡的普通随机候选会创建按钮。
+var _replacement_buttons: Dictionary = {}
+
 ## 候选区域存在领袖时的原始左边界；从场景保存几何读取，避免脚本重复硬编码布局坐标。
 var _candidate_area_with_leader_left: float = 0.0
 
@@ -171,6 +201,9 @@ var _seat_button_views: Dictionary = {}
 ## 当前动态身份按钮映射；键为稳定身份 ID，值为主题按钮节点。
 var _identity_button_views: Dictionary = {}
 
+## 普通选将布局的节点矩形缓存；退出全武将模式时原样恢复，避免重复硬编码场景坐标。
+var _default_layout_rects: Dictionary = {}
+
 
 ## 初始化确认信号并保持选将遮罩默认隐藏，直到收到规则核心快照。
 func _ready() -> void:
@@ -183,6 +216,11 @@ func _ready() -> void:
 	_confirm_button.pressed.connect(_confirm_selection)
 	BattleUIStyle.apply_interaction_button(_all_characters_button)
 	_all_characters_button.pressed.connect(_toggle_all_characters)
+	# 候选区只允许垂直滚动；横向始终由自适应列数完整容纳，避免左右滑动寻找牌面。
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	if candidate_scroll != null:
+		candidate_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		candidate_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	_status_label.visible = false
 	_leader_character_label.visible = false
 	_leader_character_area.visible = false
@@ -197,6 +235,7 @@ func _ready() -> void:
 	_candidate_area_right = _candidate_area.position.x + _candidate_area.size.x
 	_candidate_default_position = _candidate_area.position
 	_candidate_default_size = _candidate_area.size
+	_capture_default_layout()
 	refresh_ui_style()
 	visible = false
 
@@ -226,13 +265,18 @@ func refresh_ui_style() -> void:
 		# 当前座次按钮；选中项使用强调边框，禁用项继续保留低对比度主题。
 		var seat_button: Button = seat_button_variant as Button
 		if seat_button != null:
-			BattleUIStyle.apply_interaction_button(seat_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _selected_seat_number)
+			_apply_assignment_button_style(seat_button, BattleUIStyle.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _selected_seat_number)
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；边框使用身份语义色，使选择结果与局内身份徽记一致。
 		var identity: String = str(identity_variant)
 		var identity_button: Button = _identity_button_views[identity] as Button
 		if identity_button != null:
-			BattleUIStyle.apply_interaction_button(identity_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+			_apply_assignment_button_style(identity_button, BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+	for replacement_button_variant: Variant in _replacement_buttons.values():
+		# 当前换将按钮；主题切换只重绘颜色，不改变剩余次数、悬停显隐或候选内容。
+		var replacement_button: Button = replacement_button_variant as Button
+		if replacement_button != null:
+			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 	if _leader_character_view != null and is_instance_valid(_leader_character_view):
 		_leader_character_view.refresh_ui_style()
 	for candidate_view_variant: Variant in _candidate_views.values():
@@ -269,11 +313,19 @@ func _ensure_leader_divider() -> void:
 func bind_snapshot(snapshot: Dictionary) -> void:
 	if not _required_nodes_ready:
 		return
+	# 当前滚动位置；同一选将上下文内换将或名额刷新后恢复，避免下方候选突然跳回列表顶部。
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	# 上一份快照的垂直滚动值；新阶段不恢复，同一阶段刷新时延迟写回。
+	var previous_scroll_vertical: int = candidate_scroll.scroll_vertical if candidate_scroll != null else 0
+	# 是否延续同一私有选将上下文；阶段或AI目标变化时必须清除全部临时选择。
+	var preserves_local_context: bool = visible and str(_snapshot.get("phase", "")) == str(snapshot.get("phase", "")) and int(_snapshot.get("target_player_id", -1)) == int(snapshot.get("target_player_id", -1))
 	_snapshot = snapshot.duplicate(true)
-	_selected_character_id = ""
-	_selected_seat_number = -1
-	_selected_identity = ""
-	_showing_all_characters = false
+	if not preserves_local_context:
+		_selected_character_id = ""
+		_selected_seat_number = -1
+		_selected_identity = ""
+		_showing_all_characters = false
+		_apply_all_characters_layout(false)
 	visible = not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
 	if not visible:
 		return
@@ -281,12 +333,17 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	_render_leader_character()
 	_render_custom_assignment_controls()
 	_render_candidates()
-	_confirm_button.disabled = true
+	if not _get_displayed_candidate_ids().has(_selected_character_id):
+		_selected_character_id = ""
+	_update_confirm_state()
+	if preserves_local_context and candidate_scroll != null:
+		candidate_scroll.set_deferred("scroll_vertical", previous_scroll_vertical)
 
 
 ## 在正式对局开始后隐藏选将遮罩并清理动态候选牌。
 func close() -> void:
 	visible = false
+	_apply_all_characters_layout(false)
 	if not _required_nodes_ready:
 		_snapshot.clear()
 		_selected_character_id = ""
@@ -321,10 +378,9 @@ func _render_header() -> void:
 		_status_label.text = ""
 		return
 	if bool(_snapshot.get("allow_custom_assignment", false)):
-		_title_label.clear()
-		_title_label.push_paragraph(HORIZONTAL_ALIGNMENT_CENTER)
-		_title_label.append_text("请选择武将、座次与身份" if can_select else "请等待其他玩家完成自选")
-		_title_label.pop()
+		# 首次分配身份；自选阶段继续明确展示，最终座次身份只在全员确认后刷新到权威玩家状态。
+		var initial_identity: String = str(_snapshot.get("local_identity", "hidden"))
+		_set_identity_title(initial_identity, "请重新选择武将、座次与身份" if can_select else "请等待其他玩家完成自选")
 		_status_label.text = ""
 		return
 	# 本地真实身份；选将服务只把该字段发送给本人，旧快照在领袖阶段使用领袖身份作为兼容回退。
@@ -362,7 +418,8 @@ func get_title_identity_color() -> Color:
 ## 在选将框左侧渲染已经公开的领袖武将牌；领袖阶段尚未确认时保持该区域隐藏。
 func _render_leader_character() -> void:
 	_clear_leader_character()
-	if bool(_snapshot.get("allow_custom_assignment", false)) or str(_snapshot.get("selection_kind", "initial")) == "ai_adjustment":
+	# 自选阶段继续显示首次身份分配产生的公开领袖武将，只有AI调整用途不显示该只读区域。
+	if str(_snapshot.get("selection_kind", "initial")) == "ai_adjustment":
 		_update_leader_partition(false)
 		return
 	# 已公开领袖武将 ID；空字符串表示领袖尚未完成选择，不创建占位牌。
@@ -409,12 +466,19 @@ func _render_candidates() -> void:
 	# 本地可见候选数组；未轮到本地或已经确认时为空，不创建占位按钮。
 	# 自选与AI调整开启全部武将入口时，服务快照会显式提供额外全量合法集合，界面仍不自行扫描或伪造规则候选。
 	# 当前玩家候选数组；具体选择必须来自服务生成的五张候选牌。
+	# “五张”是历史默认值；实际快照可包含1至20张普通随机候选及额外领袖技固定候选。
 	var candidate_ids: Array = _get_displayed_candidate_ids()
 	if candidate_ids.is_empty():
 		_confirm_button.visible = false
 		return
 	_confirm_button.visible = true
 	_confirm_button.text = "请选择武将牌"
+	# 本人剩余换将卡；按钮只在随机候选视图、次数大于0且候选未锁定时创建。
+	var replacement_cards_remaining: int = int(_snapshot.get("replacement_cards_remaining", 0))
+	# 不可换将候选；领袖技固定武将由权威服务放入该集合，界面不自行识别技能。
+	var locked_candidate_ids: Array = _snapshot.get("locked_candidate_ids", []) as Array
+	# 可换候选；权威服务已经确认仍存在不重复的新武将结果，界面只据此创建按钮。
+	var replaceable_candidate_ids: Array = _snapshot.get("replaceable_candidate_ids", []) as Array
 	for candidate_index: int in range(candidate_ids.size()):
 		# 当前候选武将 ID；点击与确认只使用该稳定 ID。
 		var character_id: String = str(candidate_ids[candidate_index])
@@ -424,7 +488,7 @@ func _render_candidates() -> void:
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
 		# 正式武将牌节点；根类型为 Node2D，透明输入区域负责点击。
 		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-		_candidate_area.add_child(character_view)
+		_candidate_content.add_child(character_view)
 		character_view.information_requested.connect(information_requested.emit)
 		character_view.information_dismissed.connect(information_dismissed.emit)
 		# 候选牌快照；只包含表现所需字段，不伪造玩家规则状态或加入对局玩家数组。
@@ -447,31 +511,50 @@ func _render_candidates() -> void:
 		character_view.pressed.connect(_select_candidate.bind(character_id))
 		character_view.hover_changed.connect(_on_candidate_hover_changed.bind(character_id))
 		_candidate_views[character_id] = character_view
-	# 当前是否使用全部武将多行布局；随机候选继续保持单行原尺寸。
+		if not _showing_all_characters and replacement_cards_remaining > 0 and not locked_candidate_ids.has(character_id) and replaceable_candidate_ids.has(character_id):
+			# 单张候选换将按钮；默认隐藏，只有鼠标停留在对应牌面或按钮自身上方时显示。
+			var replacement_button: Button = Button.new()
+			replacement_button.custom_minimum_size = Vector2(REPLACEMENT_BUTTON_WIDTH, REPLACEMENT_BUTTON_HEIGHT)
+			replacement_button.size = replacement_button.custom_minimum_size
+			replacement_button.text = "换将"
+			replacement_button.tooltip_text = "剩余换将卡：%d" % replacement_cards_remaining
+			replacement_button.visible = false
+			replacement_button.z_index = 20
+			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
+			replacement_button.pressed.connect(_request_candidate_replacement.bind(character_id))
+			replacement_button.mouse_entered.connect(_show_replacement_button.bind(character_id))
+			replacement_button.mouse_exited.connect(_queue_replacement_button_visibility_refresh.bind(character_id))
+			_candidate_content.add_child(replacement_button)
+			_replacement_buttons[character_id] = replacement_button
+	# 当前是否使用全部武将多行布局；随机候选超出一行时同样使用原尺寸垂直滚动。
 	var uses_all_character_layout: bool = _showing_all_characters
 	# 普通布局左边界；存在公开领袖时保留左侧牌位，否则使用无领袖的扩展区域。
-	var normal_candidate_left: float = _candidate_area_with_leader_left if not str(_snapshot.get("leader_character_id", "")).is_empty() and not bool(_snapshot.get("allow_custom_assignment", false)) else _candidate_area_without_leader_left
-	_candidate_area.position = CUSTOM_CANDIDATE_RECT.position if uses_all_character_layout else Vector2(normal_candidate_left, _candidate_default_position.y)
-	_candidate_area.size = CUSTOM_CANDIDATE_RECT.size if uses_all_character_layout else Vector2(maxf(_candidate_area_right - normal_candidate_left, 0.0), _candidate_default_size.y)
+	var normal_candidate_left: float = _candidate_area_with_leader_left if not str(_snapshot.get("leader_character_id", "")).is_empty() else _candidate_area_without_leader_left
+	if not uses_all_character_layout:
+		_candidate_area.position = Vector2(normal_candidate_left, _candidate_default_position.y)
+		_candidate_area.size = Vector2(maxf(_candidate_area_right - normal_candidate_left, 0.0), _candidate_default_size.y)
 	# 第一张正式候选牌；其场景尺寸是全部候选布局的唯一牌宽来源，避免桌面脚本重复保存几何常量。
 	var first_character_view: PlayerTargetView = _candidate_views[str(candidate_ids[0])] as PlayerTargetView
 	# 单张武将牌宽度；直接读取正式3:4牌面，不创建选将专用尺寸或硬编码副本。
 	var card_width: float = first_character_view.card_size.x
 	# 单张武将牌高度；多行全部武将布局同时使用该正式尺寸计算缩放。
 	var card_height: float = first_character_view.card_size.y
-	# 当前列数；全部武将最多5列，普通随机候选保持单行全部列。
-	var column_count: int = mini(5, candidate_ids.size()) if uses_all_character_layout else candidate_ids.size()
-	# 当前行数；普通候选固定1行，全部武将按5列自动换行。
+	# 当前列数；按原尺寸牌面和区域宽度自动铺满，任何模式都不会为容纳更多候选缩小武将牌。
+	var usable_width: float = maxf(_candidate_area.size.x - 16.0, card_width)
+	# 当前区域最多可容纳列数；预留16像素给纵向滚动条及其安全间距。
+	var maximum_column_count: int = maxi(int(floor((usable_width + candidate_gap) / (card_width + candidate_gap))), 1)
+	# 实际列数；候选不足一整行时按实际数量收紧并保持整行居中。
+	var column_count: int = mini(maximum_column_count, candidate_ids.size())
+	# 当前行数；超过一行时由候选区垂直滚动，确认按钮始终位于滚动区外。
 	var row_count: int = ceili(float(candidate_ids.size()) / float(maxi(column_count, 1)))
-	# 候选基础缩放；多行布局按区域宽高共同限制，确保所有武将完整显示。
-	var candidate_scale: float = 1.0
-	if uses_all_character_layout:
-		var width_scale: float = (_candidate_area.size.x - candidate_gap * float(maxi(column_count - 1, 0))) / (card_width * float(maxi(column_count, 1)))
-		var height_scale: float = (_candidate_area.size.y - candidate_gap * float(maxi(row_count - 1, 0))) / (card_height * float(maxi(row_count, 1)))
-		candidate_scale = minf(1.0, minf(width_scale, height_scale))
 	# 单行或单行宽度；每一行独立居中，最后一行不足列数时不会偏向左侧。
-	var scaled_card_width: float = card_width * candidate_scale
-	var scaled_card_height: float = card_height * candidate_scale
+	var scaled_card_width: float = card_width
+	# 原尺寸牌高；候选滚动只增加内容高度，不缩放牌面。
+	var scaled_card_height: float = card_height
+	# 每行换将按钮预留高度；全武将入口和已用尽次数时为0，牌面直接从行首开始。
+	var replacement_strip_height: float = REPLACEMENT_BUTTON_HEIGHT + REPLACEMENT_BUTTON_GAP if not _showing_all_characters else 0.0
+	# 单行槽位高度；按钮与牌面属于同一固定槽位，悬停显隐不会造成后续行位移。
+	var row_slot_height: float = replacement_strip_height + scaled_card_height
 	# 全部候选占用宽度；用于在候选区域中水平居中，并支持后续调整候选数量。
 	# 多行布局中该值表示完整行的最大宽度；普通单行布局继续等于全部候选的实际占用宽度。
 	var total_width: float = scaled_card_width * float(column_count) + candidate_gap * float(maxi(column_count - 1, 0))
@@ -486,17 +569,30 @@ func _render_candidates() -> void:
 		var character_view: PlayerTargetView = _candidate_views[character_id] as PlayerTargetView
 		# 当前行列索引；全部武将按多行排列，普通候选行索引始终为0。
 		var row_index: int = candidate_index / maxi(column_count, 1)
+		# 当前列索引；每行从0开始并按原尺寸牌宽与间距递增。
 		var column_index: int = candidate_index % maxi(column_count, 1)
 		# 当前行实际卡牌数量；最后一行可能少于最大列数，需要单独计算居中起点。
 		var row_item_count: int = mini(column_count, candidate_ids.size() - row_index * column_count)
+		# 当前行实际宽度；用于让不满列的末行独立居中。
 		var row_width: float = scaled_card_width * float(row_item_count) + candidate_gap * float(maxi(row_item_count - 1, 0))
 		# 当前行起点；完整行沿用统一start_x，最后一行按实际牌数单独居中。
 		var row_start_x: float = start_x if row_item_count == column_count else maxf((_candidate_area.size.x - row_width) * 0.5, 0.0)
-		var base_position: Vector2 = Vector2(row_start_x + float(column_index) * (scaled_card_width + candidate_gap), float(row_index) * (scaled_card_height + candidate_gap))
-		character_view.scale = Vector2.ONE * candidate_scale
+		# 当前行顶部；行间只使用统一候选间距，不因某张牌是否锁定而改变高度。
+		var row_top: float = float(row_index) * (row_slot_height + candidate_gap)
+		# 当前牌面基础位置；换将按钮预留条位于其正上方且不参与悬停缩放中心。
+		var base_position: Vector2 = Vector2(row_start_x + float(column_index) * (scaled_card_width + candidate_gap), row_top + replacement_strip_height)
+		character_view.scale = Vector2.ONE
 		character_view.position = base_position
 		_candidate_base_positions[character_id] = base_position
-		_candidate_base_scales[character_id] = candidate_scale
+		_candidate_base_scales[character_id] = 1.0
+		# 当前候选换将按钮；水平居中位于牌面正上方，锁定候选不创建按钮但仍保留同一行顶部空间。
+		var replacement_button: Button = _replacement_buttons.get(character_id) as Button
+		if replacement_button != null:
+			replacement_button.position = Vector2(base_position.x + (card_width - REPLACEMENT_BUTTON_WIDTH) * 0.5, row_top)
+	# 滚动内容尺寸；至少等于可视区域，超出时ScrollContainer自动启用垂直滚动条。
+	var content_height: float = row_slot_height * float(row_count) + candidate_gap * float(maxi(row_count - 1, 0))
+	_candidate_content.custom_minimum_size = Vector2(maxf(_candidate_area.size.x - 16.0, 0.0), maxf(content_height, _candidate_area.size.y))
+	_candidate_content.size = _candidate_content.custom_minimum_size
 
 
 ## 返回当前需要展示的候选武将；“所有武将”开启时使用静态全量列表，否则使用本次随机候选。
@@ -514,7 +610,7 @@ func _render_custom_assignment_controls() -> void:
 	_all_characters_button.visible = allow_all_characters and bool(_snapshot.get("can_select", false))
 	_all_characters_button.text = "随机候选" if _showing_all_characters else "所有武将"
 	# 是否允许选择座次与身份；AI 调整阶段明确关闭这两组控件。
-	var allow_custom_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false))
+	var allow_custom_assignment: bool = bool(_snapshot.get("allow_custom_assignment", false)) and bool(_snapshot.get("can_select", false)) and not _showing_all_characters
 	_seat_buttons.visible = allow_custom_assignment
 	_identity_buttons.visible = allow_custom_assignment
 	_seat_selection_label.visible = allow_custom_assignment
@@ -556,11 +652,13 @@ func _toggle_all_characters() -> void:
 	if not bool(_snapshot.get("allow_all_characters", false)):
 		return
 	_showing_all_characters = not _showing_all_characters
+	_apply_all_characters_layout(_showing_all_characters)
 	_all_characters_button.text = "随机候选" if _showing_all_characters else "所有武将"
 	# 当前武将若不在切换后的展示列表中，清除临时选择防止确认不可见牌面。
 	var displayed_candidates: Array = _get_displayed_candidate_ids()
 	if not displayed_candidates.has(_selected_character_id):
 		_selected_character_id = ""
+	_render_custom_assignment_controls()
 	_render_candidates()
 	_update_confirm_state()
 	refresh_ui_style()
@@ -594,12 +692,26 @@ func _update_custom_button_states() -> void:
 		# 当前座次按钮；选中项使用强调状态。
 		var seat_number: int = int(seat_number_variant)
 		var seat_button: Button = _seat_button_views[seat_number] as Button
-		BattleUIStyle.apply_interaction_button(seat_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), seat_number == _selected_seat_number)
+		_apply_assignment_button_style(seat_button, BattleUIStyle.get_color("accent"), seat_number == _selected_seat_number)
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；使用对应身份语义色作为边框。
 		var identity: String = str(identity_variant)
 		var identity_button: Button = _identity_button_views[identity] as Button
-		BattleUIStyle.apply_interaction_button(identity_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+		_apply_assignment_button_style(identity_button, BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+
+
+## 为座次与身份按钮应用明确选中反馈；选中项同时改变背景、边框和字体色，未选项保持普通操作色。
+func _apply_assignment_button_style(button: Button, border_color: Color, selected: bool) -> void:
+	# 选中背景色；从主题操作底色向语义边框色混合，保持文字可读且在两套主题中都有明显变化。
+	var background_color: Color = BattleUIStyle.get_color("action_button").lerp(border_color, 0.34) if selected else BattleUIStyle.get_color("action_button")
+	BattleUIStyle.apply_interaction_button(button, background_color, border_color, selected)
+	if selected:
+		button.add_theme_color_override("font_color", border_color)
+		button.add_theme_color_override("font_hover_color", border_color.lightened(0.12))
+		button.add_theme_color_override("font_pressed_color", border_color.lightened(0.18))
+		button.add_theme_color_override("font_focus_color", border_color)
+	else:
+		button.add_theme_color_override("font_focus_color", BattleUIStyle.get_color("button_font"))
 
 
 ## 清理动态座次与身份按钮；每次私有快照变化后按最新可用名额重建。
@@ -670,9 +782,11 @@ func _clear_candidates() -> void:
 	_candidate_base_positions.clear()
 	_candidate_base_scales.clear()
 	_candidate_views.clear()
-	for child: Node in _candidate_area.get_children():
-		_candidate_area.remove_child(child)
+	_replacement_buttons.clear()
+	for child: Node in _candidate_content.get_children():
+		_candidate_content.remove_child(child)
 		child.queue_free()
+	_candidate_content.custom_minimum_size = Vector2.ZERO
 
 
 ## 清理左侧领袖武将牌；阶段切换和重新开局时不会保留旧局节点。
@@ -703,6 +817,10 @@ func _on_candidate_hover_changed(hovered: bool, character_id: String) -> void:
 	var character_view: PlayerTargetView = _candidate_views.get(character_id) as PlayerTargetView
 	if character_view == null or not is_instance_valid(character_view) or not _candidate_base_positions.has(character_id) or not _candidate_base_scales.has(character_id):
 		return
+	if hovered:
+		_show_replacement_button(character_id)
+	else:
+		_queue_replacement_button_visibility_refresh(character_id)
 	# 当前候选已有补间；新的进入或离开状态应从实时变换继续，不叠加第二个写入者。
 	var previous_tween: Tween = _candidate_hover_tweens.get(character_id) as Tween
 	if previous_tween != null and previous_tween.is_valid():
@@ -738,6 +856,107 @@ func _on_candidate_hover_tween_finished(character_id: String, hover_tween: Tween
 		_candidate_hover_tweens.erase(character_id)
 
 
+## 直接显示指定候选的换将按钮；锁定候选或次数用尽时映射中不存在按钮，因此保持无入口状态。
+func _show_replacement_button(character_id: String) -> void:
+	# 当前候选换将按钮；只有权威快照允许的普通候选才会创建。
+	var replacement_button: Button = _replacement_buttons.get(character_id) as Button
+	if replacement_button != null and is_instance_valid(replacement_button):
+		replacement_button.visible = true
+
+
+## 延迟检查鼠标是否仍位于牌面或按钮；从牌面移动到上方按钮时不会在两者交界处闪退。
+func _queue_replacement_button_visibility_refresh(character_id: String) -> void:
+	call_deferred("_refresh_replacement_button_visibility", character_id)
+
+
+## 根据实时鼠标位置刷新单个换将按钮；离开牌面和按钮后隐藏，进入任一范围时保持显示。
+func _refresh_replacement_button_visibility(character_id: String) -> void:
+	# 当前换将按钮；候选快照重建后旧延迟调用会安全忽略无效实例。
+	var replacement_button: Button = _replacement_buttons.get(character_id) as Button
+	# 当前候选武将牌；用于按正式牌面矩形判断鼠标是否仍停留。
+	var character_view: PlayerTargetView = _candidate_views.get(character_id) as PlayerTargetView
+	if replacement_button == null or character_view == null or not is_instance_valid(replacement_button) or not is_instance_valid(character_view):
+		return
+	# 当前鼠标画布坐标；按钮和Node2D牌面分别使用自身全局变换判断命中。
+	var mouse_position: Vector2 = get_global_mouse_position()
+	# 鼠标是否位于换将按钮；从牌面进入按钮时保持入口可见。
+	var over_button: bool = replacement_button.get_global_rect().has_point(mouse_position)
+	# 牌面局部鼠标坐标；正式武将牌原点位于左上角，card_size提供稳定3:4命中矩形。
+	var character_local_mouse_position: Vector2 = character_view.get_global_transform().affine_inverse() * mouse_position
+	# 鼠标是否位于候选牌面；离开牌面和按钮后才隐藏入口。
+	var over_character: bool = Rect2(Vector2.ZERO, character_view.card_size).has_point(character_local_mouse_position)
+	replacement_button.visible = over_button or over_character
+
+
+## 提交单张候选换将请求并暂时禁用全部换将按钮；下一份权威快照会重建剩余次数与候选。
+func _request_candidate_replacement(character_id: String) -> void:
+	for replacement_button_variant: Variant in _replacement_buttons.values():
+		# 当前换将按钮；统一禁用可防止网络往返期间连续点击重复消耗。
+		var replacement_button: Button = replacement_button_variant as Button
+		if replacement_button != null:
+			replacement_button.disabled = true
+	candidate_replacement_requested.emit(character_id)
+
+
+## 缓存普通选将模式使用的稳定节点矩形；全武将模式退出后依此恢复原布局。
+func _capture_default_layout() -> void:
+	if _selection_frame == null:
+		return
+	_default_layout_rects = {
+		"frame_offsets":Rect2(Vector2(_selection_frame.offset_left, _selection_frame.offset_top), Vector2(_selection_frame.offset_right, _selection_frame.offset_bottom)),
+		"title":Rect2(_title_label.position, _title_label.size),
+		"all_characters_button":Rect2(_all_characters_button.position, _all_characters_button.size),
+		"candidate_area":Rect2(_candidate_area.position, _candidate_area.size),
+		"confirm_button":Rect2(_confirm_button.position, _confirm_button.size),
+	}
+
+
+## 在全部武将模式中扩展主框和滚动候选区；确认按钮固定在主框底部且始终位于滚动区外。
+func _apply_all_characters_layout(enabled: bool) -> void:
+	if _selection_frame == null or _default_layout_rects.is_empty():
+		return
+	if not enabled:
+		# 普通主框锚点；场景使用中心锚定的1040×540布局，退出全武将时恢复原偏移。
+		var frame_offsets: Rect2 = _default_layout_rects.get("frame_offsets", Rect2(-520.0, -270.0, 1040.0, 540.0)) as Rect2
+		_selection_frame.anchor_left = 0.5
+		_selection_frame.anchor_top = 0.5
+		_selection_frame.anchor_right = 0.5
+		_selection_frame.anchor_bottom = 0.5
+		_selection_frame.offset_left = frame_offsets.position.x
+		_selection_frame.offset_top = frame_offsets.position.y
+		_selection_frame.offset_right = frame_offsets.size.x
+		_selection_frame.offset_bottom = frame_offsets.size.y
+		_restore_control_rect(_title_label, _default_layout_rects.get("title", Rect2()) as Rect2)
+		_restore_control_rect(_all_characters_button, _default_layout_rects.get("all_characters_button", Rect2()) as Rect2)
+		_restore_control_rect(_candidate_area, _default_layout_rects.get("candidate_area", Rect2()) as Rect2)
+		_restore_control_rect(_confirm_button, _default_layout_rects.get("confirm_button", Rect2()) as Rect2)
+		return
+	_selection_frame.anchor_left = 0.0
+	_selection_frame.anchor_top = 0.0
+	_selection_frame.anchor_right = 1.0
+	_selection_frame.anchor_bottom = 1.0
+	_selection_frame.offset_left = ALL_CHARACTERS_FRAME_MARGIN
+	_selection_frame.offset_top = ALL_CHARACTERS_FRAME_MARGIN
+	_selection_frame.offset_right = -ALL_CHARACTERS_FRAME_MARGIN
+	_selection_frame.offset_bottom = -ALL_CHARACTERS_FRAME_MARGIN
+	# 全屏主框实际尺寸；锚点和偏移赋值后可直接用于内部稳定矩形计算。
+	var frame_size: Vector2 = _selection_frame.size
+	_restore_control_rect(_title_label, Rect2(24.0, 18.0, maxf(frame_size.x - 222.0, 0.0), 36.0))
+	_restore_control_rect(_all_characters_button, Rect2(maxf(frame_size.x - 188.0, 24.0), 16.0, 164.0, 38.0))
+	_restore_control_rect(_confirm_button, Rect2(maxf((frame_size.x - 260.0) * 0.5, 24.0), maxf(frame_size.y - 66.0, 68.0), 260.0, 48.0))
+	# 候选滚动区；上方避开标题，下方停在固定确认按钮之前。
+	var candidate_bottom: float = _confirm_button.position.y - ALL_CHARACTERS_CONFIRM_GAP
+	_restore_control_rect(_candidate_area, Rect2(24.0, 68.0, maxf(frame_size.x - 48.0, 0.0), maxf(candidate_bottom - 68.0, 0.0)))
+
+
+## 把缓存或计算得到的局部矩形写回控件；位置与尺寸同时更新，不改变节点锚点或输入行为。
+func _restore_control_rect(control: Control, rect: Rect2) -> void:
+	if control == null:
+		return
+	control.position = rect.position
+	control.size = rect.size
+
+
 ## 校验选将组件依赖的静态节点；缺失时只输出一条包含全部节点名的长期诊断信息。
 func _validate_required_nodes() -> bool:
 	# 缺失节点名称数组；完整收集后一次性输出，避免每个 visible/text 赋值分别产生空实例错误。
@@ -748,6 +967,10 @@ func _validate_required_nodes() -> bool:
 		missing_node_names.append(str(STATUS_LABEL_PATH))
 	if _candidate_area == null:
 		missing_node_names.append(str(CANDIDATE_AREA_PATH))
+	if _candidate_content == null:
+		missing_node_names.append(str(CANDIDATE_CONTENT_PATH))
+	if _selection_frame == null:
+		missing_node_names.append("SelectionFrame")
 	if _leader_character_area == null:
 		missing_node_names.append(str(LEADER_CHARACTER_AREA_PATH))
 	if _leader_character_label == null:

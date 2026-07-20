@@ -27,6 +27,9 @@ var leader_player_id: int = -1
 ## 每名玩家的候选武将数量；默认5，实际数量不会超过已登记武将总数。
 var candidate_count: int = 5
 
+## 每名玩家本局初始拥有的换将卡数量；只接受控制器锁定后的非负值，0表示关闭换将入口。
+var replacement_card_count: int = 0
+
 ## 本局是否启用全武将、座次与身份自选；开始后固定，界面设置变化不会中途改变候选协议。
 var custom_assignment_enabled: bool = false
 
@@ -36,8 +39,17 @@ var _player_ids: Array[int] = []
 ## 全部可用武将 ID；开始流程时复制，候选生成不会修改全局数据索引。
 var _character_ids: Array[String] = []
 
+## 全部拥有至少一个领袖技的武将 ID；领袖候选会把这些武将固定放在普通随机候选之前。
+var _leader_skill_character_ids: Array[String] = []
+
 ## 玩家 ID 到候选武将 ID 数组的映射；只有对应观察者可从公开快照取得具体内容。
 var _candidates_by_player: Dictionary = {}
+
+## 玩家 ID 到不可使用换将卡替换的候选武将 ID 数组；当前用于标记领袖技固定候选。
+var _locked_candidates_by_player: Dictionary = {}
+
+## 玩家 ID 到剩余换将卡数量的映射；只有本人能从裁剪快照读取自己的剩余次数。
+var _replacement_cards_remaining_by_player: Dictionary = {}
 
 ## 玩家 ID 到已选武将 ID 的映射；非领袖选择在流程完成前不会向其他观察者公开。
 var _selections_by_player: Dictionary = {}
@@ -54,42 +66,51 @@ var _selected_seats_by_player: Dictionary = {}
 ## 自选模式下玩家 ID 到已确认身份 ID 的映射；每种身份数量不得超过标准分布。
 var _selected_identities_by_player: Dictionary = {}
 
+## 首次身份分配产生的领袖武将 ID；自选座次身份期间继续公开，最终确认后由新领袖选择刷新。
+var _initial_leader_character_id: String = ""
+
 ## 选将使用的随机数生成器；由对局控制器注入，与本局种子保持一致且不创建第二套随机源。
 var _rng: RandomNumberGenerator
 
 
 ## 创建一局选将流程并为领袖生成首批候选；返回空字符串表示初始化成功。
-func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false) -> String:
+func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false, requested_replacement_card_count: int = 0, leader_skill_character_ids: Array[String] = []) -> String:
 	_player_ids.clear()
 	_character_ids = character_ids.duplicate()
+	_leader_skill_character_ids.clear()
 	_candidates_by_player.clear()
+	_locked_candidates_by_player.clear()
+	_replacement_cards_remaining_by_player.clear()
 	_selections_by_player.clear()
 	_identities_by_player.clear()
 	_identity_limits.clear()
 	_selected_seats_by_player.clear()
 	_selected_identities_by_player.clear()
+	_initial_leader_character_id = ""
 	leader_player_id = -1
 	_rng = rng
 	custom_assignment_enabled = allow_custom_assignment
-	candidate_count = clampi(requested_candidate_count, 1, maxi(_character_ids.size(), 1))
+	# 普通随机候选数量；设置允许1至20，武将库不足时由实际候选生成自然限制，不改变已锁定设置值。
+	candidate_count = clampi(requested_candidate_count, 1, 20)
+	# 本局换将卡数量；设置层已经限制为离散档位，服务仍防御性拒绝负数。
+	replacement_card_count = maxi(requested_replacement_card_count, 0)
 	if _character_ids.is_empty():
 		return "没有可用于选将的武将配置。"
+	for character_id: String in leader_skill_character_ids:
+		if _character_ids.has(character_id) and not _leader_skill_character_ids.has(character_id):
+			_leader_skill_character_ids.append(character_id)
 	for player: PlayerState in players:
 		_player_ids.append(player.player_id)
 		_identities_by_player[player.player_id] = player.identity
 		_identity_limits[player.identity] = int(_identity_limits.get(player.identity, 0)) + 1
+		_replacement_cards_remaining_by_player[player.player_id] = replacement_card_count
 		if player.identity == "leader":
 			leader_player_id = player.player_id
 	if leader_player_id < 0:
 		return "身份配置缺少领袖，无法开始选将。"
-	if custom_assignment_enabled:
-		phase = PHASE_CUSTOM
-		leader_player_id = -1
-		for player_id: int in _player_ids:
-			_candidates_by_player[player_id] = _make_candidates("")
-	else:
-		phase = PHASE_LEADER
-		_candidates_by_player[leader_player_id] = _make_candidates("")
+	# 即使启用座次与身份自选，也必须先保留首次身份分配并让首任领袖完成公开选将。
+	phase = PHASE_LEADER
+	_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
 	return ""
 
 
@@ -107,12 +128,14 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "该玩家已经确认武将。"
 	# 自选模式允许通过“所有武将”提交任意已登记武将，普通模式仍严格使用本次随机候选。
 	# 当前玩家候选数组；具体选择必须来自服务生成的五张候选牌。
+	# “五张”仅表示历史默认值；实际普通随机数量由本局1至20张设置决定，自选阶段仍允许全武将入口。
 	var candidates: Array[String] = get_candidates(player_id)
-	if not candidates.has(character_id) and not (custom_assignment_enabled and _character_ids.has(character_id)):
+	if not candidates.has(character_id) and not (custom_assignment_enabled and phase == PHASE_CUSTOM and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
 	if phase == PHASE_CUSTOM:
 		# 规范化后的座次与身份；选择一号位或领袖会强制形成同一配对。
 		var seat_number: int = requested_seat_number
+		# 请求身份ID；与一号位或领袖任一条件命中时会同步规范为领袖。
 		var identity: String = requested_identity
 		if seat_number == 1 or identity == "leader":
 			seat_number = 1
@@ -141,10 +164,18 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		_selected_identities_by_player[player_id] = identity
 	_selections_by_player[player_id] = character_id
 	if phase == PHASE_LEADER:
-		phase = PHASE_OTHERS
-		for other_player_id: int in _player_ids:
-			if other_player_id != leader_player_id:
-				_candidates_by_player[other_player_id] = _make_candidates(character_id)
+		_initial_leader_character_id = character_id
+		if custom_assignment_enabled:
+			# 首任领袖的公开结果独立保存；全员随后重新确认最终武将、座次与身份，包括首任领袖本人。
+			_selections_by_player.clear()
+			phase = PHASE_CUSTOM
+			for custom_player_id: int in _player_ids:
+				_candidates_by_player[custom_player_id] = _make_candidates(custom_player_id, character_id, true)
+		else:
+			phase = PHASE_OTHERS
+			for other_player_id: int in _player_ids:
+				if other_player_id != leader_player_id:
+					_candidates_by_player[other_player_id] = _make_candidates(other_player_id, character_id)
 	if _selections_by_player.size() == _player_ids.size():
 		phase = PHASE_COMPLETE
 		if custom_assignment_enabled:
@@ -154,6 +185,42 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 				if str(_selected_identities_by_player.get(selected_player_id, "")) == "leader":
 					leader_player_id = selected_player_id
 					break
+	return ""
+
+
+## 使用一张换将卡替换指定玩家候选列表中的单张普通武将；返回空字符串表示替换成功。
+func replace_candidate(player_id: int, character_id: String) -> String:
+	if not can_player_select(player_id):
+		return "当前玩家不能使用换将卡。"
+	# 当前候选数组；替换必须精确命中本人私有列表中的一个稳定武将 ID。
+	var candidates: Array[String] = get_candidates(player_id)
+	# 被替换候选索引；负值表示请求中的武将已不属于当前私有列表。
+	var candidate_index: int = candidates.find(character_id)
+	if candidate_index < 0:
+		return "所选武将不在当前候选列表中。"
+	if get_locked_candidate_ids(player_id).has(character_id):
+		return "领袖技武将不能使用换将卡替换。"
+	# 当前剩余换将卡；0表示该玩家已经关闭或用尽全部次数。
+	var remaining_count: int = get_replacement_cards_remaining(player_id)
+	if remaining_count <= 0:
+		return "换将卡已经用完。"
+	# 可替换武将池；排除本人当前全部候选，保证换将结果既不同于原牌也不会在同一选将框重复。
+	var pool: Array[String] = _character_ids.duplicate()
+	for current_candidate_id: String in candidates:
+		pool.erase(current_candidate_id)
+	for leader_skill_character_id: String in _leader_skill_character_ids:
+		pool.erase(leader_skill_character_id)
+	# 首任领袖已经公开后，后续随机候选继续排除该武将；全武将入口仍可由玩家主动选择它。
+	if not _initial_leader_character_id.is_empty():
+		pool.erase(_initial_leader_character_id)
+	if pool.is_empty():
+		return "没有可用于换将的其他武将。"
+	_shuffle(pool)
+	# 新武将 ID；共享随机源保证固定种子下换将历史可以复现。
+	var replacement_character_id: String = pool[0]
+	candidates[candidate_index] = replacement_character_id
+	_candidates_by_player[player_id] = candidates
+	_replacement_cards_remaining_by_player[player_id] = remaining_count - 1
 	return ""
 
 
@@ -171,6 +238,48 @@ func get_candidates(player_id: int) -> Array[String]:
 ## 返回指定玩家已确认的武将 ID；尚未确认时返回空字符串。
 func get_selection(player_id: int) -> String:
 	return str(_selections_by_player.get(player_id, ""))
+
+
+## 返回指定玩家不可换将的候选 ID 副本；调用方可用于渲染禁用入口但不能修改服务内部集合。
+func get_locked_candidate_ids(player_id: int) -> Array[String]:
+	# 原始锁定候选；逐项复制为强类型字符串，避免字典中的数组引用被外部修改。
+	var raw_locked_candidates: Array = _locked_candidates_by_player.get(player_id, []) as Array
+	# 强类型锁定候选副本；当前通常只包含领袖技武将。
+	var result: Array[String] = []
+	for character_id_variant: Variant in raw_locked_candidates:
+		result.append(str(character_id_variant))
+	return result
+
+
+## 返回指定玩家剩余换将卡数量；不存在的玩家按0处理，不公开其他玩家的私有消耗状态。
+func get_replacement_cards_remaining(player_id: int) -> int:
+	return int(_replacement_cards_remaining_by_player.get(player_id, 0))
+
+
+## 返回指定玩家当前可使用换将卡的候选 ID；没有剩余随机池时返回空数组，界面不会显示必然失败的按钮。
+func get_replaceable_candidate_ids(player_id: int) -> Array[String]:
+	if get_replacement_cards_remaining(player_id) <= 0 or not can_player_select(player_id):
+		return []
+	# 当前候选；全部从潜在结果池排除，保证换将后同一选将框不产生重复武将。
+	var candidates: Array[String] = get_candidates(player_id)
+	# 当前锁定候选；任何领袖技武将都不能作为换将目标。
+	var locked_candidates: Array[String] = get_locked_candidate_ids(player_id)
+	# 潜在换将池；存在至少一个不同且非领袖技武将时，普通候选才显示换将入口。
+	var replacement_pool: Array[String] = _character_ids.duplicate()
+	for candidate_id: String in candidates:
+		replacement_pool.erase(candidate_id)
+	for leader_skill_character_id: String in _leader_skill_character_ids:
+		replacement_pool.erase(leader_skill_character_id)
+	if not _initial_leader_character_id.is_empty():
+		replacement_pool.erase(_initial_leader_character_id)
+	if replacement_pool.is_empty():
+		return []
+	# 可换候选结果；保持原候选顺序，便于界面和回放稳定定位牌位。
+	var result: Array[String] = []
+	for candidate_id: String in candidates:
+		if not locked_candidates.has(candidate_id):
+			result.append(candidate_id)
+	return result
 
 
 ## 返回自选模式下玩家确认的座次号；尚未确认或普通模式返回-1。
@@ -249,12 +358,15 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"phase":phase,
 		"selection_kind":"initial",
 		"leader_player_id":leader_player_id,
-		"leader_character_id":get_selection(leader_player_id),
+		"leader_character_id":_initial_leader_character_id if phase == PHASE_CUSTOM else get_selection(leader_player_id),
 		"candidate_count":candidate_count,
 		"player_count":_player_ids.size(),
 		"local_player_id":viewer_id,
-		"local_identity":get_selected_identity(viewer_id) if custom_assignment_enabled else str(_identities_by_player.get(viewer_id, "hidden")),
+		"local_identity":str(_identities_by_player.get(viewer_id, "hidden")),
 		"local_candidates":local_candidates,
+		"locked_candidate_ids":get_locked_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
+		"replaceable_candidate_ids":get_replaceable_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
+		"replacement_cards_remaining":get_replacement_cards_remaining(viewer_id) if can_player_select(viewer_id) else 0,
 		"all_character_ids":_character_ids.duplicate() if custom_assignment_enabled and can_player_select(viewer_id) else [],
 		"allow_all_characters":custom_assignment_enabled,
 		"allow_custom_assignment":custom_assignment_enabled,
@@ -280,16 +392,31 @@ func can_player_select(player_id: int) -> bool:
 
 
 ## 为一名玩家生成不重复的随机候选；其他玩家候选优先排除已经公开的领袖武将。
-func _make_candidates(excluded_character_id: String) -> Array[String]:
+func _make_candidates(player_id: int, excluded_character_id: String, include_leader_skill_characters: bool = false) -> Array[String]:
 	# 候选池副本；排除领袖武将后若数量不足，会回退完整武将池保证配置数量可满足。
+	# 当前实现始终排除已经公开的首任领袖，武将库不足时只减少实际候选数，不再回填重复或公开武将。
 	var pool: Array[String] = _character_ids.duplicate()
-	if not excluded_character_id.is_empty() and pool.size() > candidate_count:
+	if not excluded_character_id.is_empty():
 		pool.erase(excluded_character_id)
+	# 固定领袖技武将；先从随机池移除，再按数据库稳定顺序放在结果开头，因此不会占用普通候选数量。
+	var fixed_candidates: Array[String] = []
+	if include_leader_skill_characters:
+		for leader_character_id: String in _leader_skill_character_ids:
+			if leader_character_id == excluded_character_id:
+				continue
+			pool.erase(leader_character_id)
+			fixed_candidates.append(leader_character_id)
 	_shuffle(pool)
 	# 本次候选；数量最多为检查器配置的 candidate_count，且单名玩家列表内不会重复。
-	var result: Array[String] = []
+	var result: Array[String] = fixed_candidates.duplicate()
 	for candidate_index: int in range(mini(candidate_count, pool.size())):
 		result.append(pool[candidate_index])
+	# 当前锁定候选；任何拥有领袖技的武将都不可作为换将目标，不局限于固定前缀来源。
+	var locked_candidates: Array[String] = []
+	for candidate_id: String in result:
+		if _leader_skill_character_ids.has(candidate_id):
+			locked_candidates.append(candidate_id)
+	_locked_candidates_by_player[player_id] = locked_candidates
 	return result
 
 
