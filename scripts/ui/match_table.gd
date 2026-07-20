@@ -324,6 +324,9 @@ var _rendered_skill_character_id: String = ""
 ## 最近一次已经渲染技能栏的本地身份；与武将 ID 共同决定领袖技是否需要创建按钮。
 var _rendered_skill_identity: String = ""
 
+## 最近一次已经渲染技能栏的可见技能列表签名；武将固有技能、模式技能与局内临时技能变化时必须重建按钮。
+var _rendered_skill_list_signature: String = ""
+
 ## 当前已选卡牌的只读规则预览；由 MatchController 查询接口生成，不包含权威对象引用。
 var _card_use_preview: Dictionary = {}
 
@@ -1253,9 +1256,15 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	var local_character_id: String = str(local_player.get("character_id", ""))
 	# 当前本地身份；本人快照始终可见真实身份，领袖技只在该值为 leader 时进入技能栏。
 	var local_identity: String = str(local_player.get("identity", ""))
-	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity:
+	# 本地武将定义；技能列表只保存稳定技能 ID。
+	var character: Dictionary = _get_cached_character_definition(local_character_id)
+	# 当前完整可见技能 ID；包含武将固有技能、模式技能与局内获得的临时技能。
+	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
+	# 可见技能列表签名；临时技能增减时即使武将与身份不变也必须重建按钮。
+	var skill_list_signature: String = ",".join(skill_ids)
+	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity and _rendered_skill_list_signature == skill_list_signature:
 		for skill_id_variant: Variant in _skill_views.keys():
-			# 当前已存在按钮的技能 ID；相同武将只刷新动态可发动状态，不重建节点。
+			# 当前已存在按钮的技能 ID；相同可见技能集合只刷新动态可发动状态，不重建节点。
 			var skill_id: String = str(skill_id_variant)
 			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
 			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
@@ -1271,13 +1280,10 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		return
 	_rendered_skill_character_id = local_character_id
 	_rendered_skill_identity = local_identity
+	_rendered_skill_list_signature = skill_list_signature
 	_clear_container(skill_button_container)
 	_skill_views.clear()
 	skill_status_label.text = ""
-	# 本地武将定义；技能列表只保存稳定技能 ID。
-	var character: Dictionary = _get_cached_character_definition(local_character_id)
-	# 武将技能 ID 数组；空数组表示该武将当前没有配置技能。
-	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
 	if skill_ids.is_empty():
 		_layout_local_skill_area(0)
 		return
@@ -1304,7 +1310,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	_layout_local_skill_area(skill_ids.size())
 
 
-## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能（飞扬/跋扈/共苦）追加在固有技能之后。
+## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []
@@ -1324,6 +1330,19 @@ func _get_visible_skill_ids(character: Dictionary, identity: String, player_snap
 		var mode_skill_id: String = str(mode_skill_id_variant)
 		if not mode_skill_id.is_empty() and not result.has(mode_skill_id):
 			result.append(mode_skill_id)
+	# 局内临时技能；例如【铁壁】授予的【琥珀】，必须显示在主视角技能栏。
+	# 键顺序保持字典遍历顺序，稳定追加到固有与模式技能之后。
+	var temporary_skills: Dictionary = player_snapshot.get("temporary_skills", {}) as Dictionary
+	# 临时技能 ID 列表副本；排序保证同帧内不同来源快照不会打乱按钮相对位置。
+	var temporary_skill_ids: Array[String] = []
+	for temporary_skill_id_variant: Variant in temporary_skills.keys():
+		var temporary_skill_id: String = str(temporary_skill_id_variant)
+		if temporary_skill_id.is_empty() or result.has(temporary_skill_id):
+			continue
+		temporary_skill_ids.append(temporary_skill_id)
+	temporary_skill_ids.sort()
+	for temporary_skill_id: String in temporary_skill_ids:
+		result.append(temporary_skill_id)
 	return result
 
 

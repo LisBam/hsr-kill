@@ -34,9 +34,6 @@ var skill_description: String = ""
 ## 当前技能完整显示名副本；按钮正文只显示前两个字，统一信息框使用该字段显示完整名称。
 var _skill_display_name: String = ""
 
-## 当前技能状态说明副本；用于统一信息框区分预留、锁定、被动、可发动与暂不可发动状态。
-var _skill_tooltip_status: String = ""
-
 
 ## 初始化按钮尺寸、焦点、字体和点击信号。
 func _ready() -> void:
@@ -58,18 +55,9 @@ func configure(definition: Dictionary, available: bool = false) -> void:
 	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
-	# 技能触发类型；sample_only 表示仅保留数据接口，其他值代表规则代码已经接入。
-	var trigger_type: String = str(definition.get("trigger", "sample_only"))
-	# 技能是否配置主动按钮；false 的正式技能按被动技能展示，不错误标记为预留。
-	var ui_enabled: bool = bool(definition.get("ui_enabled", false))
-	# 技能是否为锁定技；锁定技满足条件时自动执行，不应显示为可点击主动按钮。
-	var lock: bool = bool(definition.get("lock", false))
-	# 技能按钮短名称；固定截取前两个字符，完整名称继续保留在工具提示中供长期查阅。
+	# 技能按钮短名称；固定截取前两个字符，完整名称改由统一信息框标题展示。
 	var short_skill_name: String = skill_name.substr(0, mini(2, skill_name.length()))
-	# 工具提示状态；完整说明当前技能属于预留、被动、可发动或暂不满足条件。
-	var tooltip_status: String = "界面已预留，规则尚未接入" if trigger_type == "sample_only" else ("锁定技已接入规则" if lock else (("当前可发动" if is_skill_available else "当前不满足发动条件") if ui_enabled else "被动技能已接入规则"))
 	_skill_display_name = skill_name
-	_skill_tooltip_status = tooltip_status
 	text = short_skill_name
 	tooltip_text = ""
 	disabled = not is_skill_available
@@ -89,14 +77,13 @@ func _on_pressed() -> void:
 		skill_requested.emit(skill_id)
 
 
-## 请求在技能按钮附近显示完整名称、说明和运行时状态；禁用按钮仍允许查看信息。
+## 请求在技能按钮附近显示完整名称与技能说明；禁用按钮仍允许查看信息，不再附加“状态：...”副标题。
 func _on_information_mouse_entered() -> void:
 	if skill_id.is_empty():
 		return
-	# 统一技能信息；状态放入副标题，说明保持卡牌名称模式解析后的完整文本。
+	# 统一技能信息；只展示技能名与描述原文，不展示接入状态等开发期调试文案。
 	var information: Dictionary = {
 		"title":"【%s】" % _skill_display_name,
-		"subtitle":"状态：%s" % _skill_tooltip_status,
 		"description":skill_description,
 	}
 	information_requested.emit(information, get_global_rect())

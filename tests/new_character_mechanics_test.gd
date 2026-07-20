@@ -62,6 +62,8 @@ func _run() -> void:
 		return
 	if not _test_gangfeng_jiyu_play_priority():
 		return
+	if not _test_gangfeng_respects_slash_play_limit():
+		return
 	if not _test_ai_active_skill_progress_recovery():
 		return
 	if not _test_ai_choice_fallback_integrity():
@@ -936,6 +938,42 @@ func _test_gangfeng_jiyu_play_priority() -> bool:
 	var chosen_payload: Dictionary = chosen_action.get("payload", {}) as Dictionary
 	if str(chosen_action.get("action_type", "")) != "use_skill" or str(chosen_payload.get("skill_id", "")) != "gangfeng" or int(chosen_payload.get("material_card_uid", -1)) != black_slash.uid:
 		return _fail("jiyu_black_slash_conversion action=%s" % [chosen_action])
+	return true
+
+
+## 验证本阶段【杀】次数用尽后【罡风】不可主动发动，按钮可用性与动作枚举同时关闭。
+func _test_gangfeng_respects_slash_play_limit() -> bool:
+	_reset_state(2)
+	# 罡风运行时实例；本测试不需要疾雨联动。
+	var gangfeng: SkillDefinition = GameDatabase.create_skill("gangfeng")
+	gangfeng.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"gangfeng":gangfeng}}
+	# 黑色材料；目标规则与次数校验都必须在 can_activate 阶段生效。
+	_add_hand_card(0, "sha", "club", 5)
+	# 行动者进入自己的出牌阶段，并已使用本阶段唯一一次【杀】。
+	var actor: PlayerState = _controller.state.get_player(0)
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "play"
+	# 阶段作用域用牌历史；validate_virtual_use 与 can_activate 均读取该字段而不是旧 slash_count。
+	actor.play_phase_card_use_history["sha"] = 1
+	actor.card_use_history["sha"] = 1
+	actor.slash_count = 1
+	if gangfeng.can_activate():
+		return _fail("gangfeng_available_after_slash_limit history=%s" % actor.play_phase_card_use_history)
+	# 合法动作列表；次数用尽时不得再出现罡风主动动作。
+	var has_gangfeng_action: bool = false
+	for action: Dictionary in _controller.get_legal_actions(0):
+		if str(action.get("action_type", "")) == "use_skill" and str(action.get("skill_id", (action.get("payload", {}) as Dictionary).get("skill_id", ""))) == "gangfeng":
+			has_gangfeng_action = true
+			break
+	if has_gangfeng_action:
+		return _fail("gangfeng_action_after_slash_limit")
+	# 恢复阶段历史后必须重新可发动，证明灰显只来自次数而不是材料或目标缺失。
+	actor.play_phase_card_use_history.clear()
+	actor.card_use_history.clear()
+	actor.slash_count = 0
+	if not gangfeng.can_activate():
+		return _fail("gangfeng_unavailable_with_remaining_slash")
 	return true
 
 
