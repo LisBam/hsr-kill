@@ -113,6 +113,7 @@ size_flags_horizontal = 3
 [node name="OnlineSettingsDetailContent" type="Control" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel"]
 unique_name_in_owner = true
 layout_mode = 2
+clip_contents = true
 
 [node name="OnlineSettingsDetailSurface" type="ColorRect" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
 unique_name_in_owner = true
@@ -136,105 +137,44 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.11, 0.1, 0.09, 0.18)
 
-[node name="OnlineSettingsDetailBadge" type="PanelContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
-unique_name_in_owner = true
-z_index = 2
-custom_minimum_size = Vector2(170, 66)
-layout_mode = 0
-offset_right = 170.0
-offset_bottom = 66.0
-mouse_filter = 2
-
-[node name="OnlineSettingsDetailBadgeLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailBadge"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 15
-text = "联机资料"
-horizontal_alignment = 1
-vertical_alignment = 1
-
-[node name="OnlineSettingsSummaryPanel" type="PanelContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
-unique_name_in_owner = true
-z_index = 2
-layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -390.0
-offset_top = 28.0
-offset_right = -24.0
-offset_bottom = 188.0
-grow_horizontal = 0
-
-[node name="SummaryVBox" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsSummaryPanel"]
-layout_mode = 2
-theme_override_constants/separation = 2
-
-[node name="OnlineSettingsSummaryEyebrow" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsSummaryPanel/SummaryVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "当前资料"
-horizontal_alignment = 2
-
-[node name="OnlineSettingsTitle" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsSummaryPanel/SummaryVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_outline_color = Color(0.05, 0.05, 0.05, 1)
-theme_override_constants/outline_size = 5
-theme_override_font_sizes/font_size = 32
-text = "玩家"
-horizontal_alignment = 2
-
-[node name="OnlineSelectedAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsSummaryPanel/SummaryVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_outline_color = Color(0.05, 0.05, 0.05, 1)
-theme_override_constants/outline_size = 3
-theme_override_font_sizes/font_size = 18
-text = "当前形象：未选择"
-horizontal_alignment = 2
-
-[node name="OnlineSettingsHint" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsSummaryPanel/SummaryVBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "保存后用于局域网房间"
-horizontal_alignment = 2
-
-[node name="OnlineSettingsBody" type="MarginContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
-unique_name_in_owner = true
+[node name="OnlineSettingsDetailLayout" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 22.0
-offset_top = 200.0
+offset_top = 18.0
 offset_right = -22.0
-offset_bottom = -104.0
+offset_bottom = -18.0
 grow_horizontal = 2
 grow_vertical = 2
+theme_override_constants/separation = 12
+
+[node name="OnlineSettingsBody" type="MarginContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
 theme_override_constants/margin_left = 0
 theme_override_constants/margin_top = 0
 theme_override_constants/margin_right = 0
 theme_override_constants/margin_bottom = 0
 
-[node name="OnlineSettingsBodyVBox" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody"]
+[node name="OnlineSettingsBodyVBox" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="OnlinePlayerNameRow" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox"]
+[node name="OnlinePlayerNameRow" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox"]
 layout_mode = 2
 theme_override_constants/separation = 14
 
-[node name="OnlinePlayerNameLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlinePlayerNameRow"]
+[node name="OnlinePlayerNameLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlinePlayerNameRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(120, 40)
 layout_mode = 2
 text = "玩家名称"
 vertical_alignment = 1
 
-[node name="OnlinePlayerNameInput" type="LineEdit" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlinePlayerNameRow"]
+[node name="OnlinePlayerNameInput" type="LineEdit" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlinePlayerNameRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
@@ -243,52 +183,54 @@ text = "玩家"
 placeholder_text = "请输入联机显示名称"
 max_length = 20
 
-[node name="OnlineAvatarHeader" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox"]
+[node name="OnlineAvatarHeader" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox"]
 layout_mode = 2
 theme_override_constants/separation = 14
 
-[node name="OnlineAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarHeader"]
+[node name="OnlineAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarHeader"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "联机形象（从现有武将牌中选择）"
 
-[node name="OnlineAvatarScroll" type="ScrollContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox"]
+[node name="OnlineSelectedAvatarLabel" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "当前形象：未选择"
+horizontal_alignment = 2
+
+[node name="OnlineAvatarScroll" type="ScrollContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 220)
 layout_mode = 2
 size_flags_vertical = 3
+clip_contents = true
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 1
 
-[node name="OnlineAvatarCenter" type="CenterContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarScroll"]
+[node name="OnlineAvatarCenter" type="CenterContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="OnlineAvatarContent" type="Control" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarScroll/OnlineAvatarCenter"]
+[node name="OnlineAvatarContent" type="Control" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsBody/OnlineSettingsBodyVBox/OnlineAvatarScroll/OnlineAvatarCenter"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 1)
 layout_mode = 2
 mouse_filter = 2
 
-[node name="OnlineSettingsActionPanel" type="PanelContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent"]
+[node name="OnlineSettingsActionPanel" type="PanelContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout"]
 unique_name_in_owner = true
-z_index = 3
-layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = -92.0
-grow_horizontal = 2
-grow_vertical = 0
+custom_minimum_size = Vector2(0, 92)
+layout_mode = 2
+size_flags_vertical = 0
+mouse_filter = 0
 
-[node name="OnlineSettingsActionRow" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsActionPanel"]
+[node name="OnlineSettingsActionRow" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsActionPanel"]
 layout_mode = 2
 theme_override_constants/separation = 14
 alignment = 2
 
-[node name="OnlineSettingsCancelButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsActionPanel/OnlineSettingsActionRow"]
+[node name="OnlineSettingsCancelButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsActionPanel/OnlineSettingsActionRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 56)
 layout_mode = 2
@@ -296,7 +238,7 @@ mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 20
 text = "取消"
 
-[node name="OnlineSettingsSaveButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsActionPanel/OnlineSettingsActionRow"]
+[node name="OnlineSettingsSaveButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel/OnlineSettingsDetailContent/OnlineSettingsDetailLayout/OnlineSettingsActionPanel/OnlineSettingsActionRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(250, 56)
 layout_mode = 2
