@@ -243,13 +243,18 @@ func _test_character_selection_panel_layout() -> bool:
 	# 首任领袖确认后进入最终自选；即使本地第一次身份就是领袖，也必须重新显示座次与身份按钮。
 	var leader_custom_snapshot: Dictionary = snapshot.duplicate(true)
 	leader_custom_snapshot["local_identity"] = "leader"
+	# 首任领袖已经公开的武将会保留为最终武将；该阶段只显示座次身份控件和确认按钮，不再生成第二组选将牌。
+	leader_custom_snapshot["local_candidates"] = []
+	leader_custom_snapshot["all_character_ids"] = []
+	leader_custom_snapshot["allow_all_characters"] = false
+	leader_custom_snapshot["local_selected_character_id"] = character_ids[0]
 	leader_custom_snapshot["initial_seat_number"] = 1
 	leader_custom_snapshot["initial_identity"] = "leader"
 	leader_custom_snapshot["preview_seat_number"] = 1
 	leader_custom_snapshot["preview_identity"] = "leader"
 	selection_panel.bind_snapshot(leader_custom_snapshot)
 	await get_tree().process_frame
-	if not initial_leader_seat_buttons.visible or not initial_leader_identity_buttons.visible:
+	if not initial_leader_seat_buttons.visible or not initial_leader_identity_buttons.visible or not initial_leader_confirm_button.visible or initial_leader_confirm_button.disabled:
 		main_instance.queue_free()
 		return _fail("initial_leader_custom_assignment_controls")
 	selection_panel.bind_snapshot(snapshot)
@@ -273,11 +278,12 @@ func _test_character_selection_panel_layout() -> bool:
 	candidate_scroll.scroll_vertical = 0
 	selection_panel.call("_scroll_candidate_area_by", 120.0)
 	await get_tree().process_frame
-	if candidate_content.position.y >= 0.0:
+	if candidate_content.position.y >= 0.0 or candidate_scroll.get_v_scroll_bar().value <= 0.0:
 		main_instance.queue_free()
-		return _fail("candidate_scroll_input")
+		return _fail("candidate_scroll_input_or_scrollbar_sync")
 	# 候选区空白拖动；不命中任一武将牌时仍必须驱动同一个垂直滚动入口，方便移动端滑动卡牌间空白位置。
 	candidate_content.position.y = 0.0
+	selection_panel.call("_refresh_candidate_scroll_bar_range")
 	# 空白拖动按下事件；使用候选区中心位置模拟不由武将牌输入区域消费的开始手势。
 	var blank_drag_press: InputEventMouseButton = InputEventMouseButton.new()
 	blank_drag_press.button_index = MOUSE_BUTTON_LEFT
@@ -289,9 +295,9 @@ func _test_character_selection_panel_layout() -> bool:
 	blank_drag_motion.position = blank_drag_press.position + Vector2(0.0, -96.0)
 	blank_drag_motion.relative = Vector2(0.0, -96.0)
 	candidate_content.gui_input.emit(blank_drag_motion)
-	if candidate_content.position.y >= 0.0:
+	if candidate_content.position.y >= 0.0 or candidate_scroll.get_v_scroll_bar().value <= 0.0:
 		main_instance.queue_free()
-		return _fail("candidate_blank_drag_scroll")
+		return _fail("candidate_blank_drag_scrollbar_sync")
 	# 可换普通候选；悬停后牌面底部按钮必须可见，非领袖身份中的领袖技武将也不额外锁定。
 	var replacement_buttons: Dictionary = selection_panel.get("_replacement_buttons") as Dictionary
 	# 当前候选牌视图映射；用于触发真实牌面悬停入口。
@@ -424,13 +430,16 @@ func _test_character_selection_service() -> bool:
 	var replaceable_character_id: String = initial_leader_candidates[leader_skill_character_ids.size()]
 	if not service.replace_candidate(0, replaceable_character_id).is_empty() or service.get_replacement_cards_remaining(0) != 2 or service.get_candidates(0).has(replaceable_character_id):
 		return _fail("candidate_replacement")
-	# 首任领袖选择；自选模式仍须先完成该公开步骤，之后才进入全员重新分配阶段。
+	# 首任领袖选择；自选模式仍须先完成该公开步骤，之后才进入全员最终确认阶段。
 	var initial_leader_character_id: String = leader_skill_character_ids[0]
 	if not service.select_character(0, initial_leader_character_id).is_empty() or service.phase != CharacterSelectionService.PHASE_CUSTOM:
 		return _fail("initial_leader_selection")
+	# 首任领袖的公开武将就是最终武将；候选必须清空但座次身份控件仍保持可确认，避免再次弹出选将框。
+	var leader_custom_snapshot: Dictionary = service.to_dict(0)
+	if not service.can_player_select(0) or not service.get_candidates(0).is_empty() or str(leader_custom_snapshot.get("local_selected_character_id", "")) != initial_leader_character_id or bool(leader_custom_snapshot.get("allow_all_characters", true)):
+		return _fail("initial_leader_retained_character_assignment")
 	# 二号玩家自选快照；必须继续显示首次忠臣身份与首任领袖武将，同时提供最终座次身份按钮。
 	var custom_snapshot: Dictionary = service.to_dict(1)
-	var leader_custom_snapshot: Dictionary = service.to_dict(0)
 	if str(custom_snapshot.get("local_identity", "")) != "loyalist" or str(custom_snapshot.get("leader_character_id", "")) != initial_leader_character_id or not bool(custom_snapshot.get("allow_custom_assignment", false)) or not bool(leader_custom_snapshot.get("allow_custom_assignment", false)):
 		return _fail("custom_snapshot_initial_identity_or_leader")
 	# 最终自选候选；每名玩家严格只收到设置的两张随机武将，不再附加领袖技固定前缀或错误锁定。
@@ -448,42 +457,50 @@ func _test_character_selection_service() -> bool:
 	service._locked_candidates_by_player[1] = []
 	if service.get_locked_candidate_ids(1).has(leader_skill_character_ids[0]) or not service.replace_candidate(1, leader_skill_character_ids[0]).is_empty():
 		return _fail("non_leader_leader_skill_replacement")
-	# 一号玩家候选外武将；开启自选后仍必须允许提交。
-	var outside_candidate_id: String = ""
+	# 首任领袖只确认座次与身份并复用公开武将；请求新武将必须被拒绝，一号位会自动联动领袖身份。
+	var different_character_id: String = ""
 	for character_id: String in character_ids:
-		if not service.get_candidates(0).has(character_id):
-			outside_candidate_id = character_id
+		if character_id != initial_leader_character_id:
+			different_character_id = character_id
 			break
-	if outside_candidate_id.is_empty() or not service.select_character(0, outside_candidate_id, 1, "rebel").is_empty():
-		return _fail("all_character_or_seat_leader_link")
+	if different_character_id.is_empty() or service.select_character(0, different_character_id, 1, "rebel").is_empty() or not service.select_character(0, initial_leader_character_id, 1, "rebel").is_empty():
+		return _fail("initial_leader_retained_character_submit")
 	if service.get_selected_seat_number(0) != 1 or service.get_selected_identity(0) != "leader":
 		return _fail("seat_one_forces_leader")
-	# 二号玩家的合法未占用武将；后续座次与身份断言必须排除“重复武将”这一更早的拒绝原因。
+	# 二号玩家候选外武将；开启自选后仍必须允许提交。
+	var outside_candidate_id: String = ""
+	for character_id: String in character_ids:
+		if character_id != initial_leader_character_id and not service.get_candidates(1).has(character_id):
+			outside_candidate_id = character_id
+			break
+	if outside_candidate_id.is_empty() or not service.select_character(1, outside_candidate_id, 2, "loyalist").is_empty():
+		return _fail("all_character_or_seat_leader_link")
+	# 三号玩家的合法未占用武将；后续座次与身份断言必须排除“重复武将”这一更早的拒绝原因。
 	var second_character_id: String = ""
 	for character_id: String in character_ids:
-		if character_id != outside_candidate_id:
+		if character_id != initial_leader_character_id and character_id != outside_candidate_id:
 			second_character_id = character_id
 			break
-	if second_character_id.is_empty() or service.select_character(1, outside_candidate_id, 2, "loyalist").is_empty():
+	if second_character_id.is_empty() or service.select_character(2, outside_candidate_id, 3, "rebel").is_empty():
 		return _fail("duplicate_character_allowed")
-	# 二号玩家尝试重复一号位；即使请求普通身份也会先联动领袖并因座次占用被拒绝。
-	var duplicate_seat_error: String = service.select_character(1, second_character_id, 1, "loyalist")
+	# 三号玩家尝试重复一号位；即使请求普通身份也会先联动领袖并因座次占用被拒绝。
+	var duplicate_seat_error: String = service.select_character(2, second_character_id, 1, "loyalist")
 	if duplicate_seat_error.is_empty():
 		return _fail("duplicate_seat_allowed")
-	# 二号玩家选择领袖但请求三号位；服务应自动切换为一号位并继续因名额占用拒绝。
-	var duplicate_leader_error: String = service.select_character(1, second_character_id, 3, "leader")
+	# 三号玩家选择领袖但请求三号位；服务应自动切换为一号位并继续因名额占用拒绝。
+	var duplicate_leader_error: String = service.select_character(2, second_character_id, 3, "leader")
 	if duplicate_leader_error.is_empty():
 		return _fail("leader_forces_seat_one")
-	if not service.select_character(1, second_character_id, 2, "loyalist").is_empty():
+	if not service.select_character(2, second_character_id, 3, "rebel").is_empty():
 		return _fail("valid_second_assignment")
-	# 三号玩家的合法未占用武将；用于确认拒绝原因来自忠臣名额而不是武将重复。
+	# 四号玩家的合法未占用武将；用于确认拒绝原因来自忠臣名额而不是武将重复。
 	var third_character_id: String = ""
 	for character_id: String in character_ids:
-		if character_id != outside_candidate_id and character_id != second_character_id:
+		if character_id != initial_leader_character_id and character_id != outside_candidate_id and character_id != second_character_id:
 			third_character_id = character_id
 			break
-	# 三号玩家重复忠臣名额；四人局只有1名忠臣，必须被服务拒绝。
-	var duplicate_identity_error: String = service.select_character(2, third_character_id, 3, "loyalist")
+	# 四号玩家重复忠臣名额；四人局只有1名忠臣，必须被服务拒绝。
+	var duplicate_identity_error: String = service.select_character(3, third_character_id, 4, "loyalist")
 	if duplicate_identity_error.is_empty():
 		return _fail("identity_limit_allowed")
 	return true
@@ -571,7 +588,7 @@ func _test_authoritative_pre_game_flow() -> bool:
 	var default_preview_snapshot: Dictionary = _controller._get_character_selection_snapshot(0)
 	if _controller.state.players[0].player_id != initial_leader_player_id or _controller.state.players[0].identity != "leader" or str(default_preview_snapshot.get("leader_character_id", "")) != initial_leader_character_id:
 		return _fail("default_custom_assignment_preserves_initial_state leader=%d/%d identity=%s character=%s/%s" % [_controller.state.players[0].player_id, initial_leader_player_id, _controller.state.players[0].identity, str(default_preview_snapshot.get("leader_character_id", "")), initial_leader_character_id])
-	# 真人将自身预览为一号位领袖；不确认武将也必须立刻重排牌桌、更新身份，并为全部AI展示不同的候选武将。
+	# 真人将自身预览为一号位领袖；不确认武将也必须立刻重排牌桌、更新身份。
 	if not _controller.preview_custom_assignment(0, 1, "leader"):
 		return _fail("custom_assignment_preview_submit")
 	# 预览后的本地真人；一号位与领袖身份由服务规范化后必须立即投射到权威玩家数组。
@@ -579,13 +596,17 @@ func _test_authoritative_pre_game_flow() -> bool:
 	# 新领袖是尚未选将的真人时，公开区域必须立即清空旧首任领袖，而不能继续显示错误的背景领袖牌。
 	# 人类领袖预览快照；尚未确认武将时应主动清空旧领袖武将ID。
 	var human_leader_preview_snapshot: Dictionary = _controller._get_character_selection_snapshot(0)
-	# 预览中的其他AI；座次身份预览相当于重新进入选将，不能在背景提前亮出全部AI武将。
+	# 预览中的其他AI；首任领袖的公开武将属于已确定的最终结果，其他未确认AI仍不得提前亮将。
 	# 是否由另一名首任领袖切换而来；首任领袖恰为本地玩家时保留其公开牌属于正确状态。
 	var expects_previous_leader_hidden: bool = initial_leader_player_id != 0
 	if previewed_local_player.player_id != 0 or previewed_local_player.identity != "leader" or int(human_leader_preview_snapshot.get("leader_player_id", -1)) != 0 or (expects_previous_leader_hidden and not str(human_leader_preview_snapshot.get("leader_character_id", "fallback")).is_empty()):
 		return _fail("custom_assignment_preview_seat_or_identity")
 	for previewed_player: PlayerState in _controller.state.players:
 		if not _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id):
+			continue
+		if previewed_player.player_id == initial_leader_player_id:
+			if previewed_player.character_id != initial_leader_character_id or not previewed_player.character_revealed:
+				return _fail("custom_assignment_preview_lost_initial_leader=%s/%s" % [previewed_player.character_id, initial_leader_character_id])
 			continue
 		if not previewed_player.character_id.is_empty() or previewed_player.character_revealed:
 			return _fail("custom_assignment_preview_revealed_ai=%s" % previewed_player.character_id)
@@ -601,7 +622,7 @@ func _test_authoritative_pre_game_flow() -> bool:
 	if not _controller.ai_coordinator.is_ai_controlled(previewed_ai_leader.player_id) or previewed_ai_leader.character_id.is_empty() or int(previewed_selection_snapshot.get("leader_player_id", -1)) != previewed_ai_leader.player_id or str(previewed_selection_snapshot.get("leader_character_id", "")) != previewed_ai_leader.character_id:
 		return _fail("custom_assignment_preview_ai_leader_snapshot")
 	for previewed_player: PlayerState in _controller.state.players.slice(1):
-		if _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id) and (not previewed_player.character_id.is_empty() or previewed_player.character_revealed):
+		if _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id) and previewed_player.player_id != initial_leader_player_id and (not previewed_player.character_id.is_empty() or previewed_player.character_revealed):
 			return _fail("custom_assignment_preview_other_ai_revealed=%s" % previewed_player.character_id)
 	# 本地真人选定【铁壁】持有者；用于在首个roundStart建立真实的可取消技能选择。
 	# 本地选择武将ID；自选模式允许直接提交已登记武将，无需受随机候选限制。
@@ -611,7 +632,8 @@ func _test_authoritative_pre_game_flow() -> bool:
 	if selected_character_id.is_empty() or not _controller.select_character(0, selected_character_id, 2, "rebel"):
 		return _fail("human_custom_selection")
 	# 真人确认后AI应立即使用剩余座次与身份完成自选，并停在房主调整阶段。
-	if _controller.state.current_phase != "ai_character_adjustment" or _controller.state.players[1].player_id != 0 or _controller.state.players[1].identity != "rebel" or _controller.state.players[0].identity != "leader" or _controller.state.players[0].character_id != previewed_ai_leader_character_id:
+	var final_initial_leader: PlayerState = _controller.state.get_player(initial_leader_player_id)
+	if _controller.state.current_phase != "ai_character_adjustment" or _controller.state.players[1].player_id != 0 or _controller.state.players[1].identity != "rebel" or _controller.state.players[0].identity != "leader" or _controller.state.players[0].character_id != previewed_ai_leader_character_id or final_initial_leader == null or final_initial_leader.character_id != initial_leader_character_id:
 		return _fail("ai_remaining_assignments phase=%s" % _controller.state.current_phase)
 	# 可调整AI列表；必须排除本地真人并按最终座次提供稳定玩家ID。
 	var adjustable_ai_ids: Array[int] = _controller.ai_character_adjustment.get_ai_player_ids()

@@ -107,18 +107,6 @@ script = ExtResource("29_android_display")
 
 [node name="MatchController" type="Node" parent="." unique_id=1222667046]
 script = ExtResource("2_match")
-default_deck_id = null
-default_player_count = null
-local_human_player_id = null
-randomize_local_human_seat = null
-ai_action_delay_seconds = null
-game_flow_interval_seconds = null
-delayed_judgment_preview_seconds = null
-delayed_judgment_result_pause_seconds = null
-max_ai_actions_per_turn = null
-max_ai_choice_combinations = null
-character_candidate_count = null
-first_turn_seat_number = null
 
 [node name="GameplayPauseService" type="Node" parent="MatchController" unique_id=2076753312]
 script = ExtResource("19_pause_service")
@@ -241,7 +229,7 @@ text = "菜单"
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
-anchors_preset = 1
+anchors_preset = 11
 anchor_left = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -323,7 +311,7 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "自选全武将、座次与身份"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomCharacterAssignmentCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomCharacterAssignmentCheckBox" unique_id=1307882500]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -338,7 +326,7 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "自选所有AI的武将"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomizeAiCharactersCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/CustomizeAiCharactersCheckBox" unique_id=2141872505]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -369,7 +357,7 @@ custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 text = "AI使用手气卡"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AiUsesMulliganCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/AiUsesMulliganCheckBox" unique_id=1760685271]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -378,32 +366,32 @@ offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
 
-[node name="CharacterReplacementCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="CharacterReplacementCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=224430129]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="CharacterReplacementCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow"]
+[node name="CharacterReplacementCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow" unique_id=1396380644]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "换将卡数量"
 vertical_alignment = 1
 
-[node name="CharacterReplacementCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow"]
+[node name="CharacterReplacementCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow" unique_id=1250072613]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 34)
 layout_mode = 2
 
-[node name="CharacterCandidateCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="CharacterCandidateCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=912874038]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="CharacterCandidateCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow"]
+[node name="CharacterCandidateCountLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow" unique_id=316781482]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "随机选将牌数"
 vertical_alignment = 1
 
-[node name="CharacterCandidateCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow"]
+[node name="CharacterCandidateCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow" unique_id=347731405]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 34)
 layout_mode = 2
@@ -780,7 +768,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("14_character_selection")
-candidate_gap = 8.0
 
 [node name="SelectionShade" type="ColorRect" parent="CharacterSelectionPanel" unique_id=1779437543]
 layout_mode = 1
@@ -878,7 +865,7 @@ color = Color(0.78, 0.63, 0.34, 0.72)
 
 [node name="CharacterCandidateArea" type="ScrollContainer" parent="CharacterSelectionPanel/SelectionFrame" unique_id=1250766479]
 unique_name_in_owner = true
-anchors_preset = 0
+layout_mode = 0
 offset_left = 214.0
 offset_top = 68.0
 offset_right = 1016.0
@@ -886,7 +873,7 @@ offset_bottom = 400.0
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 
-[node name="CandidateScrollContent" type="Control" parent="CharacterSelectionPanel/SelectionFrame/CharacterCandidateArea"]
+[node name="CandidateScrollContent" type="Control" parent="CharacterSelectionPanel/SelectionFrame/CharacterCandidateArea" unique_id=1725656224]
 custom_minimum_size = Vector2(0, 256)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -1297,9 +1284,8 @@ unique_name_in_owner = true
 visible = false
 z_index = 3
 layout_mode = 1
-anchors_preset = 8
+anchors_preset = 13
 anchor_left = 0.5
-anchor_top = 0.0
 anchor_right = 0.5
 anchor_bottom = 1.0
 offset_left = -252.0
@@ -1392,7 +1378,7 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选全武将、座次与身份"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomCharacterAssignmentCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomCharacterAssignmentCheckBox" unique_id=909209709]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -1408,7 +1394,7 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选所有AI的武将"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomizeAiCharactersCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCustomizeAiCharactersCheckBox" unique_id=1678877574]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -1442,7 +1428,7 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "AI使用手气卡"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAiUsesMulliganCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAiUsesMulliganCheckBox" unique_id=2101656574]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -1451,35 +1437,35 @@ offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
 
-[node name="MainMenuCharacterReplacementCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="MainMenuCharacterReplacementCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1193887918]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="MainMenuCharacterReplacementCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow"]
+[node name="MainMenuCharacterReplacementCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow" unique_id=418029496]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "换将卡数量"
 vertical_alignment = 1
 
-[node name="MainMenuCharacterReplacementCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow"]
+[node name="MainMenuCharacterReplacementCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow" unique_id=526646588]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(156, 34)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
-[node name="MainMenuCharacterCandidateCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="MainMenuCharacterCandidateCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=113849462]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="MainMenuCharacterCandidateCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow"]
+[node name="MainMenuCharacterCandidateCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow" unique_id=1103240660]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "随机选将牌数"
 vertical_alignment = 1
 
-[node name="MainMenuCharacterCandidateCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow"]
+[node name="MainMenuCharacterCandidateCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow" unique_id=793187536]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(156, 34)
 layout_mode = 2
