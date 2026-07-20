@@ -21,6 +21,9 @@ signal information_requested(information: Dictionary, anchor_rect: Rect2)
 ## 鼠标离开武将牌静态资料、公开装备横条或武将牌时发出的统一信息关闭请求。
 signal information_dismissed
 
+## 武将牌位于可滚动候选列表时转发的拖动位移；外部界面按自身滚动方向解释该值。
+signal scroll_gesture_moved(relative: Vector2)
+
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
@@ -183,6 +186,12 @@ var _configuration_signature: int = -1
 ## 当前鼠标命中的公开装备槽位；空字符串表示鼠标不在装备横条上或该牌不显示公开装备。
 var _hovered_equipment_slot: String = ""
 
+## 当前鼠标命中的公开延时锦囊索引；-1表示未命中，索引与公开判定区快照顺序一致。
+var _hovered_judgment_index: int = -1
+
+## 当前武将牌是否允许把拖动手势转交外层滚动容器；选将候选启用，局内武将牌保持关闭。
+var _scroll_gesture_enabled: bool = false
+
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
 
@@ -205,18 +214,32 @@ var _hovered_equipment_slot: String = ""
 func _ready() -> void:
 	_card_body.size = card_size
 	_card_back.size = card_size
-	_input_area.size = card_size
+	_refresh_input_area_size()
 	_state_overlay.configure_card_size(card_size)
 	_health_pip_container.add_theme_constant_override("separation", health_pip_separation)
 	_input_area.activated.connect(_on_input_activated)
 	_input_area.details_requested.connect(_on_input_details_requested)
 	_input_area.pointer_moved.connect(_on_input_pointer_moved)
+	_input_area.scroll_gesture_moved.connect(_on_input_scroll_gesture_moved)
 	_input_area.mouse_entered.connect(_on_input_mouse_entered)
 	_input_area.mouse_exited.connect(_on_input_mouse_exited)
 	_input_area.configure(is_interactable)
+	_input_area.set_scroll_gesture_enabled(_scroll_gesture_enabled)
 	_refresh_artwork()
 	_refresh_decade_overlay()
 	_refresh_visual_state()
+
+
+## 设置候选牌是否把拖动手势交由外层滚动列表；正式对局不调用该接口，保持原有点选行为。
+func set_scroll_gesture_enabled(enabled: bool) -> void:
+	_scroll_gesture_enabled = enabled
+	if _input_area != null:
+		_input_area.set_scroll_gesture_enabled(enabled)
+
+
+## 转发输入区域已经判定的列表拖动；本组件不读取或修改外层选将滚动位置。
+func _on_input_scroll_gesture_moved(relative: Vector2) -> void:
+	scroll_gesture_moved.emit(relative)
 
 
 ## 返回武将牌在全局画布中的矩形；卡牌动画通过该接口取得角色中心点。
@@ -268,6 +291,8 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
+	# 旧判定牌索引；公开判定区更新后必须重新命中，不能复用同一索引显示已经离开的延时锦囊信息。
+	_hovered_judgment_index = -1
 	_player_snapshot = snapshot.duplicate(true)
 	_character_definition = character_definition.duplicate(true)
 	_faction_definition = faction_definition.duplicate(true)
@@ -313,12 +338,23 @@ func set_match_overlays_visible(visible_in_match: bool) -> void:
 	_match_overlays_visible = visible_in_match
 	if not _match_overlays_visible:
 		_dismiss_public_equipment_information()
+		_dismiss_public_judgment_information()
 	if not is_node_ready():
 		return
+	_refresh_input_area_size()
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
 	_refresh_auto_managed_label()
 	_refresh_hover_name_visibility()
+
+
+## 按当前展示用途同步透明输入区域；正式对局覆盖延时锦囊标记，选将候选保持标准牌面高度避免相邻行输入重叠。
+func _refresh_input_area_size() -> void:
+	if _input_area == null or _public_zone_label == null:
+		return
+	# 当前输入高度；只有正式对局的延时锦囊需要扩展到牌面底边之外，选将候选继续严格占用自身牌面矩形。
+	var input_height: float = maxf(card_size.y, _public_zone_label.position.y + _public_zone_label.size.y) if _match_overlays_visible else card_size.y
+	_input_area.size = Vector2(card_size.x, input_height)
 
 
 ## 设置武将牌是否绘制公开装备横条；本地第一视角关闭后仍由左侧独立装备栏完整显示五个槽位。
@@ -440,6 +476,7 @@ func _request_character_information() -> void:
 ## 根据鼠标局部坐标识别其他玩家牌面上的公开装备横条，并请求统一卡牌信息。
 func _on_input_pointer_moved(local_position: Vector2) -> void:
 	_update_public_equipment_information(local_position)
+	_update_public_judgment_information(local_position)
 
 
 ## 鼠标进入武将牌后请求静态资料；只有选将候选会转发悬停状态以播放缩放反馈。
@@ -451,16 +488,18 @@ func _on_input_mouse_entered() -> void:
 	if not _match_overlays_visible:
 		hover_changed.emit(true)
 	_update_public_equipment_information(_input_area.get_local_mouse_position())
+	_update_public_judgment_information(_input_area.get_local_mouse_position())
 
 
 ## 鼠标离开武将牌后关闭所属资料；只有选将候选会收到恢复基础尺寸的悬停状态。
 func _on_input_mouse_exited() -> void:
 	_is_hovered = false
 	_refresh_hover_name_visibility()
-	if _hovered_equipment_slot.is_empty():
+	if _hovered_equipment_slot.is_empty() and _hovered_judgment_index < 0:
 		information_dismissed.emit()
 	else:
 		_dismiss_public_equipment_information()
+		_dismiss_public_judgment_information()
 	# 与鼠标进入保持对称；正式对局不触发候选牌缩放恢复，避免任何外部监听器改写武将牌尺寸。
 	if not _match_overlays_visible:
 		hover_changed.emit(false)
@@ -478,16 +517,16 @@ func _refresh_visual_state() -> void:
 		background_color = BattleUIStyle.get_color("player_operator_background")
 	# 角色卡边框；选中金色优先，其次合法青绿，最后使用统一暗金边框。
 	var border_color: Color = BattleUIStyle.get_color("border")
-	# 角色卡描边宽度；合法或选中时使用3像素，普通状态使用1像素。
+	# 角色卡描边宽度；已选目标使用3像素金边，合法目标使用较细2像素绿边，普通状态使用1像素。
 	var border_width: int = 1
 	if is_target_selected:
 		border_color = BattleUIStyle.get_color("accent")
 		border_width = 3
-	elif is_current_actor:
-		border_color = BattleUIStyle.get_color("accent")
-		border_width = 3
 	elif is_legal_target:
 		border_color = BattleUIStyle.get_color("legal_target")
+		border_width = 2
+	elif is_current_actor:
+		border_color = BattleUIStyle.get_color("accent")
 		border_width = 3
 	elif is_current_operator:
 		border_color = BattleUIStyle.get_color("legal_target").lightened(0.12)
@@ -496,8 +535,12 @@ func _refresh_visual_state() -> void:
 		background_color = BattleUIStyle.get_color("player_disabled_background")
 		border_color = BattleUIStyle.get_color("player_disabled_border")
 		border_width = 1
-	# 角色卡最终样式；当前回合与操作状态只改变底色和边框，不绘制彩色外发光。
+	# 角色卡最终样式；合法但未选中的目标附加细绿光，选中后立即切换为金色描边而不保留绿光。
 	var player_style: StyleBoxFlat = _make_player_style(background_color, border_color, border_width)
+	if is_legal_target and not is_target_selected and is_interactable:
+		player_style.shadow_color = Color(BattleUIStyle.get_color("legal_target"), 0.42)
+		player_style.shadow_size = 4
+		player_style.shadow_offset = Vector2.ZERO
 	_card_body.add_theme_stylebox_override("panel", player_style)
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
@@ -804,6 +847,7 @@ func _refresh_equipment_rows() -> void:
 	if _is_hovered:
 		_request_character_information()
 		call_deferred("_update_public_equipment_information", _input_area.get_local_mouse_position())
+		call_deferred("_update_public_judgment_information", _input_area.get_local_mouse_position())
 
 
 ## 根据公开身份与本地标注刷新身份徽记；真实身份始终优先，本地标注只替换未知问号。
@@ -854,7 +898,8 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 		if not _hovered_equipment_slot.is_empty():
 			_hovered_equipment_slot = ""
 			# 鼠标仍停留在其他玩家武将牌内时，离开装备横条后恢复该武将全部技能资料，而非直接留下空白。
-			_request_character_information()
+			if _hovered_judgment_index < 0:
+				_request_character_information()
 		return
 	if hovered_slot == _hovered_equipment_slot:
 		return
@@ -882,17 +927,77 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 	information_requested.emit(information, hovered_row.get_global_rect())
 
 
+## 根据公开判定区菱形标记命中延时锦囊，并请求与装备横条相同的统一卡牌信息。
+func _update_public_judgment_information(local_position: Vector2) -> void:
+	if not _match_overlays_visible or not _is_hovered or is_face_down:
+		return
+	# 当前公开判定区；空数组无需进行标记命中，也不泄漏任何隐藏区域信息。
+	var judgment_area: Array = _player_snapshot.get("judgment_area", []) as Array
+	# 当前命中的判定牌索引；逐张读取正式标记矩形，避免依据文字宽度或首字反推位置。
+	var hovered_judgment_index: int = -1
+	for judgment_index: int in range(judgment_area.size()):
+		# 当前判定牌标记局部矩形；由JudgmentZoneView统一计算，展示与悬停命中不会出现偏移。
+		var marker_rect: Rect2 = _public_zone_label.get_marker_rect(judgment_index)
+		# 当前标记在武将牌中的矩形；PublicZone与透明输入区共用武将牌局部坐标空间。
+		var marker_rect_in_card: Rect2 = Rect2(_public_zone_label.position + marker_rect.position, marker_rect.size)
+		if marker_rect_in_card.has_point(local_position):
+			hovered_judgment_index = judgment_index
+			break
+	if hovered_judgment_index < 0:
+		if _hovered_judgment_index >= 0:
+			_hovered_judgment_index = -1
+			# 离开延时锦囊但仍处于武将牌内时，恢复武将静态资料；装备信息优先时不覆盖它。
+			if _hovered_equipment_slot.is_empty():
+				_request_character_information()
+		return
+	if hovered_judgment_index == _hovered_judgment_index:
+		return
+	# 当前公开延时锦囊实体；快照只包含公开花色、点数与定义ID，信息框不读取任何私有牌区。
+	var judgment_card: Dictionary = judgment_area[hovered_judgment_index] as Dictionary
+	# 当前延时锦囊静态定义；名称与说明从数据库统一解析，配置缺失时保留稳定ID回退。
+	var card_definition: Dictionary = GameDatabase.get_card(str(judgment_card.get("definition_id", "")))
+	# 当前延时锦囊显示名；与装备横条一致跟随全局牌名模式。
+	var judgment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(judgment_card.get("definition_id", "未知延时锦囊"))
+	# 当前延时锦囊花色点数；与公开实体快照保持一致。
+	var suit_rank_text: String = "%s%s" % [_suit_symbol(str(judgment_card.get("suit", "none"))), _rank_text(int(judgment_card.get("rank", 0)))]
+	# 当前标记局部矩形；用于计算与候选牌缩放兼容的全局信息框锚点。
+	var local_marker_rect: Rect2 = _public_zone_label.get_marker_rect(hovered_judgment_index)
+	# 当前标记左上与右下全局坐标；通过PublicZone变换兼容候选缩放和父级画布变换。
+	var marker_global_transform: Transform2D = _public_zone_label.get_global_transform()
+	var marker_global_position: Vector2 = marker_global_transform * local_marker_rect.position
+	var marker_global_end: Vector2 = marker_global_transform * local_marker_rect.end
+	# 统一延时锦囊信息；内容结构与公开装备横条一致，信息层继续负责悬停延时与位置避让。
+	var information: Dictionary = {
+		"title":"【%s】" % judgment_name,
+		"subtitle":"延时锦囊｜%s" % suit_rank_text,
+		"description":str(card_definition.get("description", "暂无卡牌说明。")),
+	}
+	_hovered_judgment_index = hovered_judgment_index
+	information_requested.emit(information, Rect2(marker_global_position, marker_global_end - marker_global_position))
+
+
 ## 关闭当前公开装备横条拥有的信息框；重复调用保持幂等且不会影响其他来源。
 func _dismiss_public_equipment_information() -> void:
 	if _hovered_equipment_slot.is_empty():
 		return
 	_hovered_equipment_slot = ""
-	information_dismissed.emit()
+	if _hovered_judgment_index < 0:
+		information_dismissed.emit()
+
+
+## 关闭当前公开延时锦囊拥有的信息框；与装备悬停共存时只在两者均离开后关闭来源信息。
+func _dismiss_public_judgment_information() -> void:
+	if _hovered_judgment_index < 0:
+		return
+	_hovered_judgment_index = -1
+	if _hovered_equipment_slot.is_empty():
+		information_dismissed.emit()
 
 
 ## 武将牌退出场景树时关闭公开装备信息，避免座位移除后残留旧浮层。
 func _exit_tree() -> void:
 	_dismiss_public_equipment_information()
+	_dismiss_public_judgment_information()
 
 
 ## 刷新武将牌统一牌背配色；翻面状态只改变信息遮挡，不改变角色交互权限或规则状态。

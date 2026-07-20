@@ -439,7 +439,12 @@ func _refresh_view_as_banner_style() -> void:
 	banner_border.a = 0.96
 	# 视为牌名文字颜色；红桃和方块使用牌名红色，黑桃和梅花使用牌名深色。
 	var banner_name_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
-	_view_as_banner.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 2))
+	# 视为横条样式；保留轻微层次但大幅收窄阴影，避免覆盖原牌信息时形成厚重黑框。
+	var view_as_banner_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 2)
+	view_as_banner_style.shadow_color = Color(0.0, 0.0, 0.0, 0.22)
+	view_as_banner_style.shadow_size = 3
+	view_as_banner_style.shadow_offset = Vector2(0.0, 1.0)
+	_view_as_banner.add_theme_stylebox_override("panel", view_as_banner_style)
 	_view_as_name_label.add_theme_color_override("font_color", banner_name_color)
 	_view_as_name_label.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
 	_view_as_name_label.add_theme_constant_override("outline_size", 0)

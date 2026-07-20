@@ -19,7 +19,7 @@ func _init() -> void:
 		"enable": "phaseUse",
 		"ui_enabled": true,
 		"ai_extra_play_phase_value": 1.8,
-		"description": "出牌阶段，你可弃置两张牌名字字数相同的牌，然后摸一张牌。",
+		"description": "出牌阶段，你可弃置两张牌名字数相同的牌，然后摸一张牌。",
 	})
 
 

@@ -117,6 +117,8 @@ func _test_settings_controls() -> bool:
 	var match_candidate_count_option: OptionButton = main_instance.get_node("%CharacterCandidateCountOption") as OptionButton
 	# 正式局内菜单组件；公开权限入口必须统一隐藏四项新设置。
 	var match_menu: MatchMenu = main_instance.get_node("%MatchMenu") as MatchMenu
+	# 右上菜单常驻按钮；展开面板必须从其下缘开始，不能重叠遮挡入口。
+	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# 主菜单设置面板与内容列；新增两行后全部控件仍必须位于面板高度内。
 	var main_settings_panel: PanelContainer = main_instance.get_node("%MainMenuSettingsPanel") as PanelContainer
 	# 主菜单设置内容列；实际高度用于检查新增选项没有溢出面板。
@@ -125,7 +127,7 @@ func _test_settings_controls() -> bool:
 	var match_settings_panel: PanelContainer = main_instance.get_node("%MenuPanel") as PanelContainer
 	# 局内菜单内容列；实际高度必须小于等于房主菜单面板高度。
 	var match_settings_content: VBoxContainer = match_settings_panel.get_node("MenuVBox") as VBoxContainer
-	if main_custom_checkbox == null or match_custom_checkbox == null or main_auto_identity_checkbox == null or match_auto_identity_checkbox == null or main_ai_checkbox == null or match_ai_checkbox == null or main_mulligan_option == null or match_mulligan_option == null or main_ai_mulligan_checkbox == null or match_ai_mulligan_checkbox == null or main_replacement_option == null or match_replacement_option == null or main_candidate_count_option == null or match_candidate_count_option == null or match_menu == null:
+	if main_custom_checkbox == null or match_custom_checkbox == null or main_auto_identity_checkbox == null or match_auto_identity_checkbox == null or main_ai_checkbox == null or match_ai_checkbox == null or main_mulligan_option == null or match_mulligan_option == null or main_ai_mulligan_checkbox == null or match_ai_mulligan_checkbox == null or main_replacement_option == null or match_replacement_option == null or main_candidate_count_option == null or match_candidate_count_option == null or match_menu == null or menu_button == null:
 		main_instance.queue_free()
 		return _fail("settings_controls_missing")
 	# 紧凑客户区矩形；两套设置面板都必须完整位于1152×648范围内。
@@ -163,6 +165,13 @@ func _test_settings_controls() -> bool:
 	if not match_custom_checkbox.button_pressed or not match_ai_checkbox.button_pressed or not match_ai_mulligan_checkbox.button_pressed or GameSettings.mulligan_limit != 2 or main_mulligan_option.selected != 2 or GameSettings.character_replacement_count != 8 or main_replacement_option.selected != 3 or GameSettings.character_candidate_count != 20 or main_candidate_count_option.selected != 19:
 		main_instance.queue_free()
 		return _fail("settings_cross_menu_sync")
+	# 展开局内菜单；面板顶部必须紧贴常驻菜单按钮的下缘，避免覆盖并阻断收起入口。
+	match_menu.set_menu_open(true)
+	await get_tree().process_frame
+	if match_settings_panel.position.y < menu_button.position.y + menu_button.size.y:
+		main_instance.queue_free()
+		return _fail("menu_panel_overlaps_menu_button panel=%s button=%s" % [match_settings_panel.get_rect(), menu_button.get_rect()])
+	match_menu.set_menu_open(false)
 	match_menu.set_authority_controls_visible(false)
 	if match_custom_checkbox.visible or match_ai_checkbox.visible or match_mulligan_option.get_parent().visible or match_ai_mulligan_checkbox.visible or match_replacement_option.get_parent().visible or match_candidate_count_option.get_parent().visible:
 		main_instance.queue_free()
@@ -187,8 +196,8 @@ func _test_character_selection_panel_layout() -> bool:
 	var character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		character_ids.append(str(character_id_variant))
-	# 领袖技锁定候选；选取首个实际武将作为界面层不可换标记即可，规则识别已由服务专项覆盖。
-	var locked_candidate_ids: Array[String] = [character_ids[0]]
+	# 非领袖身份的自选快照；领袖技武将不应被额外锁定，是否属于领袖由服务专项覆盖。
+	var locked_candidate_ids: Array[String] = []
 	# 自选私有快照；保留首次反贼身份与公开领袖武将，并开放全部座次身份及换将入口。
 	var snapshot: Dictionary = {
 		"phase":CharacterSelectionService.PHASE_CUSTOM,
@@ -226,20 +235,51 @@ func _test_character_selection_panel_layout() -> bool:
 	var candidate_content: Control = selection_panel.get_node("SelectionFrame/CharacterCandidateArea/CandidateScrollContent") as Control
 	# 固定确认按钮；必须始终属于SelectionFrame而不是滚动内容。
 	var confirm_button: Button = selection_panel.get_node("SelectionFrame/ConfirmCharacterButton") as Button
-	if candidate_content.custom_minimum_size.y <= candidate_scroll.size.y or candidate_scroll.is_ancestor_of(confirm_button) or not confirm_button.visible:
+	if candidate_content.custom_minimum_size.y <= candidate_scroll.size.y or candidate_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or candidate_scroll.is_ancestor_of(confirm_button) or not confirm_button.visible:
 		main_instance.queue_free()
 		return _fail("candidate_scroll_or_sticky_confirm")
-	# 可换普通候选；悬停后其上方按钮必须可见，锁定候选则不创建按钮。
+	# 候选滚动位置；直接调用统一滚动入口后必须能进入第二行，滚轮与拖动手势都复用该入口。
+	candidate_scroll.scroll_vertical = 0
+	selection_panel.call("_scroll_candidate_area_by", 120.0)
+	await get_tree().process_frame
+	if candidate_scroll.scroll_vertical <= 0:
+		main_instance.queue_free()
+		return _fail("candidate_scroll_input")
+	# 可换普通候选；悬停后牌面底部按钮必须可见，非领袖身份中的领袖技武将也不额外锁定。
 	var replacement_buttons: Dictionary = selection_panel.get("_replacement_buttons") as Dictionary
 	# 当前候选牌视图映射；用于触发真实牌面悬停入口。
 	var candidate_views: Dictionary = selection_panel.get("_candidate_views") as Dictionary
-	# 本次悬停的普通候选ID；避开首张锁定领袖技候选。
-	var replaceable_character_id: String = character_ids[1]
+	# 本次悬停的普通候选ID；快照没有锁定项，因此首张也必须获得换将入口。
+	var replaceable_character_id: String = character_ids[0]
 	(candidate_views[replaceable_character_id] as PlayerTargetView).call("_on_input_mouse_entered")
 	await get_tree().process_frame
-	if replacement_buttons.has(locked_candidate_ids[0]) or not replacement_buttons.has(replaceable_character_id) or not (replacement_buttons[replaceable_character_id] as Button).visible:
+	# 本次换将按钮与对应牌面；按钮必须覆盖在牌面底部，不增加当前候选行高度。
+	var replacement_button: Button = replacement_buttons.get(replaceable_character_id) as Button
+	var replaceable_character_view: PlayerTargetView = candidate_views.get(replaceable_character_id) as PlayerTargetView
+	if not replacement_buttons.has(replaceable_character_id) or replacement_button == null or replaceable_character_view == null or not replacement_button.visible or replacement_button.text != "换将（3）" or not replacement_button.tooltip_text.is_empty() or replacement_button.position.y < replaceable_character_view.position.y + replaceable_character_view.card_size.y - replacement_button.size.y - CharacterSelectionPanel.REPLACEMENT_BUTTON_BOTTOM_INSET:
 		main_instance.queue_free()
 		return _fail("replacement_hover_button")
+	# 从非领袖切换到领袖；座次必须自动联动为一号位，标题也要立即同步为领袖。
+	selection_panel.call("_select_identity", "leader")
+	if int(selection_panel.get("_selected_seat_number")) != 1 or not selection_panel.get_title_plain_text().contains("领袖"):
+		main_instance.queue_free()
+		return _fail("identity_to_leader_assignment_completion")
+	# 从领袖切换到反贼；座次必须自动随机补全为非一号位，不能留下半成品选择。
+	selection_panel.call("_select_identity", "rebel")
+	if int(selection_panel.get("_selected_seat_number")) == 1 or str(selection_panel.get("_selected_identity")) == "leader" or not selection_panel.get_title_plain_text().contains("反贼"):
+		main_instance.queue_free()
+		return _fail("identity_from_leader_assignment_completion")
+	# 从二号位切换到一号位再离开；身份必须分别自动成为领袖和随机非领袖，不能要求玩家二次点击。
+	selection_panel.call("_select_seat", 1)
+	if str(selection_panel.get("_selected_identity")) != "leader":
+		main_instance.queue_free()
+		return _fail("seat_to_leader_assignment_completion")
+	selection_panel.call("_select_seat", 2)
+	if str(selection_panel.get("_selected_identity")) == "leader" or str(selection_panel.get("_selected_identity")).is_empty():
+		main_instance.queue_free()
+		return _fail("seat_from_leader_assignment_completion")
+	# 自选模式候选可视高度；关闭座次身份自选后，候选区应释放原控件占位并扩展到确认按钮上方。
+	var custom_candidate_height: float = candidate_scroll.size.y
 	# 二号位与反贼按钮；选中后字体必须切换为各自边框语义色，形成明确反馈。
 	selection_panel.call("_select_seat", 2)
 	selection_panel.call("_select_identity", "rebel")
@@ -268,6 +308,16 @@ func _test_character_selection_panel_layout() -> bool:
 	if selection_frame.size.x < main_instance.size.x - 40.0 or seat_label.visible or identity_label.visible or leader_character_area.visible or candidate_scroll.is_ancestor_of(confirm_button) or confirm_button.position.y < candidate_scroll.position.y + candidate_scroll.size.y:
 		main_instance.queue_free()
 		return _fail("all_characters_fullscreen_controls_or_confirm")
+	# 退出全武将模式后关闭座次身份自选；隐藏控件不得继续占据候选滚动区的下方高度。
+	selection_panel.call("_toggle_all_characters")
+	var no_custom_snapshot: Dictionary = snapshot.duplicate(true)
+	no_custom_snapshot["allow_custom_assignment"] = false
+	no_custom_snapshot["allow_all_characters"] = false
+	selection_panel.bind_snapshot(no_custom_snapshot)
+	await get_tree().process_frame
+	if seat_label.visible or identity_label.visible or candidate_scroll.size.y <= custom_candidate_height or candidate_scroll.position.y + candidate_scroll.size.y > confirm_button.position.y:
+		main_instance.queue_free()
+		return _fail("non_custom_candidate_area_not_released")
 	selection_panel.close()
 	main_instance.queue_free()
 	await get_tree().process_frame
@@ -324,6 +374,21 @@ func _test_character_selection_service() -> bool:
 	var custom_snapshot: Dictionary = service.to_dict(1)
 	if str(custom_snapshot.get("local_identity", "")) != "loyalist" or str(custom_snapshot.get("leader_character_id", "")) != initial_leader_character_id or not bool(custom_snapshot.get("allow_custom_assignment", false)):
 		return _fail("custom_snapshot_initial_identity_or_leader")
+	# 最终自选候选；每名玩家严格只收到设置的两张随机武将，不再附加领袖技固定前缀或错误锁定。
+	if service.get_candidates(1).size() != 2 or not service.get_locked_candidate_ids(1).is_empty():
+		return _fail("custom_candidate_count_or_leader_lock")
+	# 非领袖身份候选中的领袖技武将；该身份必须允许换将，避免把首任领袖阶段的固定限制错误扩散给其他角色。
+	var non_leader_companion_character_id: String = ""
+	for character_id: String in character_ids:
+		if character_id != leader_skill_character_ids[0]:
+			non_leader_companion_character_id = character_id
+			break
+	if non_leader_companion_character_id.is_empty():
+		return _fail("non_leader_replacement_candidate_missing")
+	service._candidates_by_player[1] = [leader_skill_character_ids[0], non_leader_companion_character_id]
+	service._locked_candidates_by_player[1] = []
+	if service.get_locked_candidate_ids(1).has(leader_skill_character_ids[0]) or not service.replace_candidate(1, leader_skill_character_ids[0]).is_empty():
+		return _fail("non_leader_leader_skill_replacement")
 	# 一号玩家候选外武将；开启自选后仍必须允许提交。
 	var outside_candidate_id: String = ""
 	for character_id: String in character_ids:
@@ -443,16 +508,14 @@ func _test_authoritative_pre_game_flow() -> bool:
 		return _fail("custom_assignment_preview_submit")
 	# 预览后的本地真人；一号位与领袖身份由服务规范化后必须立即投射到权威玩家数组。
 	var previewed_local_player: PlayerState = _controller.state.players[0]
-	# 预览中的AI武将集合；用于验证每名AI都已获得一张非空且不重复的即时展示武将。
-	var previewed_ai_character_ids: Array[String] = []
+	# 预览中的其他AI；座次身份预览相当于重新进入选将，不能在背景提前亮出全部AI武将。
 	if previewed_local_player.player_id != 0 or previewed_local_player.identity != "leader":
 		return _fail("custom_assignment_preview_seat_or_identity")
 	for previewed_player: PlayerState in _controller.state.players:
 		if not _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id):
 			continue
-		if previewed_player.character_id.is_empty() or previewed_ai_character_ids.has(previewed_player.character_id):
-			return _fail("custom_assignment_preview_ai_character=%s" % previewed_player.character_id)
-		previewed_ai_character_ids.append(previewed_player.character_id)
+		if not previewed_player.character_id.is_empty() or previewed_player.character_revealed:
+			return _fail("custom_assignment_preview_revealed_ai=%s" % previewed_player.character_id)
 	# 再把真人预览为二号位反贼；此时一号位必为AI，选将快照必须把公开领袖牌同步为该AI的即时重选武将。
 	if not _controller.preview_custom_assignment(0, 2, "rebel"):
 		return _fail("custom_assignment_preview_ai_leader_submit")
@@ -462,6 +525,9 @@ func _test_authoritative_pre_game_flow() -> bool:
 	var previewed_selection_snapshot: Dictionary = _controller._get_character_selection_snapshot(0)
 	if not _controller.ai_coordinator.is_ai_controlled(previewed_ai_leader.player_id) or previewed_ai_leader.character_id.is_empty() or int(previewed_selection_snapshot.get("leader_player_id", -1)) != previewed_ai_leader.player_id or str(previewed_selection_snapshot.get("leader_character_id", "")) != previewed_ai_leader.character_id:
 		return _fail("custom_assignment_preview_ai_leader_snapshot")
+	for previewed_player: PlayerState in _controller.state.players.slice(1):
+		if _controller.ai_coordinator.is_ai_controlled(previewed_player.player_id) and (not previewed_player.character_id.is_empty() or previewed_player.character_revealed):
+			return _fail("custom_assignment_preview_other_ai_revealed=%s" % previewed_player.character_id)
 	# 本地真人选定【铁壁】持有者；用于在首个roundStart建立真实的可取消技能选择。
 	# 本地选择武将ID；自选模式允许直接提交已登记武将，无需受随机候选限制。
 	var selected_character_id: String = "xing_cunhu"

@@ -13,11 +13,17 @@ signal details_requested
 ## 鼠标在武将牌内移动时发出的局部坐标信号；武将牌组件据此识别公开装备横条悬停目标。
 signal pointer_moved(local_position: Vector2)
 
+## 武将牌承载滚动列表时发出的拖动位移；参数为画布坐标增量，由外层列表决定是否消费为滚动。
+signal scroll_gesture_moved(relative: Vector2)
+
 ## 触屏长按多久后打开武将详情；默认0.5秒可与快速点选目标清晰区分，运行时通常无需动态修改。
 @export_range(0.25, 1.0, 0.05) var touch_details_hold_seconds: float = 0.5
 
 ## 触屏长按允许的最大抖动距离；默认18像素适应手指自然晃动，超过后不再打开详情，运行时通常无需动态修改。
 @export_range(4.0, 48.0, 1.0) var touch_hold_movement_tolerance: float = 18.0
+
+## 是否把超过长按容差的拖动转发给外层滚动列表；默认关闭，正式对局武将牌保持原有点选与长按行为。
+@export var scroll_gesture_enabled: bool = false
 
 ## 当前武将牌是否允许点击；默认 false，由公开存活状态动态修改。
 var is_interactable: bool = false
@@ -49,6 +55,12 @@ var _pointer_details_requested: bool = false
 ## 当前左键手势序列编号；每次按下或释放递增，使旧的异步长按计时自动失效。
 var _pointer_sequence_id: int = 0
 
+## 当前指针手势是否已经被识别为滚动；为true时释放不再触发武将牌点击，避免滑动列表误选候选。
+var _pointer_scroll_gesture_active: bool = false
+
+## 当前触屏手势是否已经被识别为滚动；为true时松手不再触发目标选择或武将详情。
+var _touch_scroll_gesture_active: bool = false
+
 
 ## 初始化覆盖整张武将牌的透明输入区域。
 func _ready() -> void:
@@ -62,12 +74,29 @@ func configure(interactable: bool) -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if is_interactable else Control.CURSOR_ARROW
 
 
+## 设置是否允许将拖动手势转交外层滚动容器；选将候选开启，正式牌桌保持关闭。
+func set_scroll_gesture_enabled(enabled: bool) -> void:
+	scroll_gesture_enabled = enabled
+	if not scroll_gesture_enabled:
+		_pointer_scroll_gesture_active = false
+		_touch_scroll_gesture_active = false
+
+
 ## 把左键释放转换为武将牌激活信号。
 ## 右键按下与释放会被本组件消费，并在释放时转换为不依赖存活状态的详情请求。
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		# 当前鼠标移动事件；局部坐标只供武将牌表现组件识别公开装备横条，不进入规则状态。
 		var motion_event: InputEventMouseMotion = event as InputEventMouseMotion
+		if scroll_gesture_enabled and _pointer_pressed and motion_event.button_mask & MOUSE_BUTTON_MASK_LEFT != 0:
+			# 当前鼠标到按下点的距离；超过长按容差后才视为列表拖动，短距离点击仍正常选择候选。
+			var pointer_drag_distance: float = get_global_mouse_position().distance_to(_pointer_press_global_position)
+			if pointer_drag_distance > touch_hold_movement_tolerance:
+				_pointer_scroll_gesture_active = true
+			if _pointer_scroll_gesture_active:
+				scroll_gesture_moved.emit(motion_event.relative)
+				accept_event()
+				return
 		pointer_moved.emit(motion_event.position)
 		return
 	if event is InputEventMouseButton:
@@ -85,16 +114,20 @@ func _gui_input(event: InputEvent) -> void:
 			_pointer_pressed = true
 			_pointer_press_global_position = get_global_mouse_position()
 			_pointer_details_requested = false
+			_pointer_scroll_gesture_active = false
 			_pointer_sequence_id += 1
 			_start_pointer_details_timer(_pointer_sequence_id)
 			accept_event()
 			return
 		# 本次左键手势是否已经打开详情；长按释放只结束手势，不再追加目标选择。
 		var completed_pointer_details: bool = _pointer_details_requested
+		# 当前手势是否已经滚动候选列表；滚动结束时不得把释放解释为武将选择。
+		var completed_pointer_scroll: bool = _pointer_scroll_gesture_active
 		_pointer_pressed = false
 		_pointer_details_requested = false
+		_pointer_scroll_gesture_active = false
 		_pointer_sequence_id += 1
-		if not completed_pointer_details and is_interactable:
+		if not completed_pointer_details and not completed_pointer_scroll and is_interactable:
 			activated.emit(mouse_event.position)
 		accept_event()
 		return
@@ -108,6 +141,7 @@ func _gui_input(event: InputEvent) -> void:
 			_touch_press_global_position = touch_event.position
 			_touch_current_global_position = touch_event.position
 			_touch_details_requested = false
+			_touch_scroll_gesture_active = false
 			_touch_sequence_id += 1
 			_start_touch_details_timer(_touch_sequence_id, touch_event.index)
 			accept_event()
@@ -122,12 +156,15 @@ func _input(event: InputEvent) -> void:
 			return
 		# 本次全局释放前是否已打开详情；详情手势结束时不会追加目标选择。
 		var completed_pointer_details: bool = _pointer_details_requested
+		# 当前全局释放前是否已经滚动过列表；防止输入路径早于_gui_input时误触发候选选择。
+		var completed_pointer_scroll: bool = _pointer_scroll_gesture_active
 		# 当前全局释放位置是否仍在武将牌内；普通目标点击只有按下与释放都位于牌面时才成立。
 		var released_inside: bool = get_global_rect().has_point(mouse_event.position)
 		_pointer_pressed = false
 		_pointer_details_requested = false
+		_pointer_scroll_gesture_active = false
 		_pointer_sequence_id += 1
-		if not completed_pointer_details and released_inside and is_interactable:
+		if not completed_pointer_details and not completed_pointer_scroll and released_inside and is_interactable:
 			activated.emit(_global_canvas_to_local(mouse_event.position))
 		get_viewport().set_input_as_handled()
 		return
@@ -139,6 +176,13 @@ func _input(event: InputEvent) -> void:
 		if touch_drag_event.index != _active_touch_index:
 			return
 		_touch_current_global_position = touch_drag_event.position
+		if scroll_gesture_enabled:
+			# 当前触点相对按下点的距离；越过长按容差后以原始位移驱动外层滚动，避免安卓端单击候选失效。
+			var touch_drag_distance: float = _touch_current_global_position.distance_to(_touch_press_global_position)
+			if touch_drag_distance > touch_hold_movement_tolerance:
+				_touch_scroll_gesture_active = true
+			if _touch_scroll_gesture_active:
+				scroll_gesture_moved.emit(touch_drag_event.relative)
 		pointer_moved.emit(_global_canvas_to_local(touch_drag_event.position))
 		get_viewport().set_input_as_handled()
 		return
@@ -153,12 +197,15 @@ func _input(event: InputEvent) -> void:
 	_touch_current_global_position = touch_event.position
 	# 本次触摸是否已用于打开详情；保存后立即清理状态，避免详情回调刷新节点时读到陈旧触点。
 	var completed_details_request: bool = _touch_details_requested
+	# 当前触摸是否已经滚动候选列表；滚动释放不再转化为候选点击。
+	var completed_scroll_gesture: bool = _touch_scroll_gesture_active
 	# 当前释放位置的武将牌局部坐标；与桌面左键激活信号使用相同坐标语义。
 	var local_release_position: Vector2 = _global_canvas_to_local(touch_event.position)
 	_active_touch_index = -1
 	_touch_details_requested = false
+	_touch_scroll_gesture_active = false
 	_touch_sequence_id += 1
-	if not completed_details_request and is_interactable:
+	if not completed_details_request and not completed_scroll_gesture and is_interactable:
 		activated.emit(local_release_position)
 	get_viewport().set_input_as_handled()
 

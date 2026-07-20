@@ -319,6 +319,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL manual_multi_target_order=%s" % normalized_manual_target_order)
 		get_tree().quit(1)
 		return
+	# 测试多目标【杀】；由技能增加目标数时也必须忽略玩家点击顺序，始终从使用者下家开始顺时针结算。
+	var multi_target_slash: CardInstance = CardInstance.new("sha", "spade", 7)
+	var normalized_multi_target_slash_order: Array[int] = target_order_rules.normalize_targets(2, multi_target_slash, [1, 3])
+	if normalized_multi_target_slash_order != [3, 1]:
+		printerr("SMOKE_FAIL multi_target_slash_order=%s" % normalized_multi_target_slash_order)
+		get_tree().quit(1)
+		return
 	# 测试借刀杀人实体；使用时按“持刀者、被【杀】者”保留完整声明顺序，实际目标时机由卡牌源码另行剥离第二名角色。
 	var borrow_sword_order_card: CardInstance = CardInstance.new("jiedao", "club", 12)
 	if target_order_rules.normalize_targets(2, borrow_sword_order_card, [1, 3]) != [1, 3]:
