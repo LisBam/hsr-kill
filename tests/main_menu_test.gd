@@ -56,6 +56,12 @@ func _run() -> void:
 	var online_avatar_content: Control = online_settings_panel.get_node("%OnlineAvatarContent") as Control
 	# 联机资料保存按钮；提交当前名称与稳定武将 ID 后返回默认主菜单内容页。
 	var online_settings_save_button: Button = online_settings_panel.get_node("%OnlineSettingsSaveButton") as Button
+	# 联机设置左侧分区列表；宽与模式选择左侧栏一致，确保两页同款左右分栏。
+	var online_side_list: PanelContainer = online_settings_panel.get_node("%OnlineSettingsSideList") as PanelContainer
+	# 联机设置左侧分区卡片；当前唯一“联机资料”入口，对应模式选择页的身份模式卡。
+	var online_profile_section_button: Button = online_settings_panel.get_node("%OnlineProfileSectionButton") as Button
+	# 联机设置底部操作栏；高度与模式选择底部操作栏一致。
+	var online_action_panel: PanelContainer = online_settings_panel.get_node("%OnlineSettingsActionPanel") as PanelContainer
 	# 游戏人数输入框；2至10范围内的值会作为主菜单开局请求参数。
 	var player_count_input: SpinBox = main_instance.get_node("%MainMenuPlayerCountInput") as SpinBox
 	# 顶部模式栏；主题切换后其边框必须从统一注册表即时更新。
@@ -135,7 +141,7 @@ func _run() -> void:
 	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
 	# 联机设置页矩形；必须贴合原主菜单客户区，顶部导航仍可聚焦并可对等切回模式选择。
 	var online_settings_rect: Rect2 = online_settings_panel.get_global_rect()
-	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5:
+	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(online_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or not online_profile_section_button.button_pressed or absf(online_action_panel.size.y - 92.0) > 1.0:
 		_fail("online_settings_open")
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。

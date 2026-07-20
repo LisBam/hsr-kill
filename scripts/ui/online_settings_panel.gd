@@ -1,7 +1,7 @@
 class_name OnlineSettingsPanel
 extends Control
 
-## 联机资料设置组件。该组件只编辑跨大厅复用的玩家名称与武将形象，作为主菜单客户区内容页展示，不创建网络连接或修改对局状态。
+## 联机资料设置组件。该组件只编辑跨大厅复用的玩家名称与武将形象，作为主菜单客户区内容页展示，布局与模式选择页同款左右分栏，不创建网络连接或修改对局状态。
 
 ## 玩家保存资料或取消返回时发出的关闭请求；主菜单据此切回模式选择内容页，不依赖组件内部节点路径。
 signal close_requested()
@@ -9,7 +9,7 @@ signal close_requested()
 ## 正式武将牌场景；联机形象选择与选将、局内角色牌复用同一插画和主题渲染组件。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
-## 每行显示的武将牌数量；默认5张可在1280×720逻辑视口内保留舒适间距，运行时一般无需动态修改。
+## 每行显示的武将牌数量；默认5张可在右侧详情区内保留舒适间距，运行时一般无需动态修改。
 @export_range(1, 8, 1) var avatar_columns: int = 5
 
 ## 联机形象武将牌的显示比例；默认0.72可同时展示两行候选，运行时只影响资料面板布局。
@@ -21,17 +21,71 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 相邻武将牌行之间的垂直间距；默认16像素避免选中描边与下一行牌面相交，运行时只影响资料面板布局。
 @export_range(0.0, 48.0, 1.0) var avatar_vertical_gap: float = 16.0
 
+## 右侧详情区遮罩透明度；默认0.18与模式选择预览遮罩一致，运行时只影响视觉明暗。
+@export_range(0.0, 1.0, 0.01) var detail_shade_opacity: float = 0.18
+
+## 右上角资料摘要板不透明度；默认0.82与模式选择摘要板一致，运行时只影响视觉层级。
+@export_range(0.0, 1.0, 0.01) var summary_panel_opacity: float = 0.82
+
+## 底部操作栏不透明度；默认0.88与模式选择操作栏一致，运行时不影响资料提交逻辑。
+@export_range(0.0, 1.0, 0.01) var action_panel_opacity: float = 0.88
+
 ## 旧版全屏遮罩节点；联机设置现与模式选择对等切换客户区，保留该节点仅兼容既有场景资源且始终隐藏。
 @onready var _backdrop: ColorRect = %OnlineSettingsBackdrop
 
-## 联机资料内容框；名称编辑、武将形象列表和保存操作填满主菜单客户区，与 MainMenuFrame 对齐。
+## 联机设置外框；左侧分区列表与右侧资料详情共同位于此容器内，样式与 MainMenuFrame 对齐。
 @onready var _panel: PanelContainer = %OnlineSettingsFrame
 
-## 面板标题；固定显示“联机设置”，只承担界面说明。
+## 左侧分区列表；与模式选择页左侧模式列表同宽同款，当前仅承载“联机资料”一项。
+@onready var _side_list: PanelContainer = %OnlineSettingsSideList
+
+## 左侧列表标题；固定显示“联机设置”，对应模式选择页的“模式选择”标题。
+@onready var _side_list_title: Label = %OnlineSettingsSideListTitle
+
+## 左侧联机资料分区卡片；当前唯一分区入口，保持选中态表达资料编辑上下文。
+@onready var _profile_section_button: Button = %OnlineProfileSectionButton
+
+## 左侧分区主标题；显示“联机资料”，对应身份模式卡片中的模式名层级。
+@onready var _profile_section_name: Label = %OnlineProfileSectionName
+
+## 左侧分区副标题；显示“名称与形象”，对应身份模式卡片中的人数说明层级。
+@onready var _profile_section_hint: Label = %OnlineProfileSectionHint
+
+## 左侧分区选中指示线；读取主题强调色，与身份模式卡片左侧竖线视觉一致。
+@onready var _profile_section_indicator: ColorRect = %OnlineProfileSectionIndicator
+
+## 右侧资料详情区；承载摘要、名称编辑、武将形象列表与底部操作栏。
+@onready var _detail_panel: PanelContainer = %OnlineSettingsDetailPanel
+
+## 右侧详情底色；使用主题桌面色层次，替代模式选择预览中的大图背景。
+@onready var _detail_surface: ColorRect = %OnlineSettingsDetailSurface
+
+## 右侧详情遮罩；只改善前景文本可读性，透明度与模式选择预览遮罩一致。
+@onready var _detail_shade: ColorRect = %OnlineSettingsDetailShade
+
+## 右上角资料摘要板；使用局部主题底板保证名称与形象说明不被底色吞没。
+@onready var _summary_panel: PanelContainer = %OnlineSettingsSummaryPanel
+
+## 摘要眉题；固定显示“当前资料”，对应模式选择摘要中的“当前模式”。
+@onready var _summary_eyebrow: Label = %OnlineSettingsSummaryEyebrow
+
+## 摘要主标题；实时显示当前编辑中的玩家名称，保存前仅反映面板临时输入。
 @onready var _title_label: Label = %OnlineSettingsTitle
 
-## 面板提示；说明联机形象当前只保存选择，未来大厅实现后再消费该配置。
+## 摘要形象说明；显示所选武将的本地化名称，不暴露稳定英文 ID。
+@onready var _selected_avatar_label: Label = %OnlineSelectedAvatarLabel
+
+## 摘要提示；说明联机形象在局域网房间中的用途，只承担界面说明。
 @onready var _hint_label: Label = %OnlineSettingsHint
+
+## 左上角分区标签；与模式选择预览徽章同尺寸，标明当前处于联机资料编辑。
+@onready var _detail_badge: PanelContainer = %OnlineSettingsDetailBadge
+
+## 分区标签文字；固定显示“联机资料”。
+@onready var _detail_badge_label: Label = %OnlineSettingsDetailBadgeLabel
+
+## 底部操作栏；承载取消与保存按钮，尺寸与模式选择底部操作栏一致。
+@onready var _action_panel: PanelContainer = %OnlineSettingsActionPanel
 
 ## 玩家名称输入框；最大长度与局域网协议统一为20个 Unicode 字符，保存前仍会经过全局标准化。
 @onready var _player_name_input: LineEdit = %OnlinePlayerNameInput
@@ -41,9 +95,6 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 
 ## 动态武将牌承载区；脚本按稳定排序写入正式 PlayerTargetView 节点，不保存规则对象引用。
 @onready var _avatar_content: Control = %OnlineAvatarContent
-
-## 当前选择文字；只显示所选武将的本地化名称，不暴露稳定英文 ID。
-@onready var _selected_avatar_label: Label = %OnlineSelectedAvatarLabel
 
 ## 保存并返回按钮；提交标准化名称与稳定武将 ID 后请求主菜单切回模式选择内容页。
 @onready var _save_button: Button = %OnlineSettingsSaveButton
@@ -65,8 +116,10 @@ func _ready() -> void:
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
 	_player_name_input.select_all_on_focus = false
+	_player_name_input.text_changed.connect(_on_player_name_text_changed)
 	_save_button.pressed.connect(_save_and_close)
 	_cancel_button.pressed.connect(_cancel_and_close)
+	_profile_section_button.pressed.connect(_keep_profile_section_selected)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	refresh_ui_style()
 
@@ -77,22 +130,39 @@ func open_panel() -> void:
 	move_to_front()
 	_player_name_input.text = GameSettings.online_player_name
 	_player_name_input.caret_column = _player_name_input.text.length()
+	_sync_summary_name()
 	_rebuild_avatar_options()
+	_keep_profile_section_selected()
 	call_deferred("_focus_primary_control")
 
 
-## 按当前活动主题刷新面板、文本框、按钮与动态武将牌；不改变任何临时编辑或已保存资料。
+## 按当前活动主题刷新左右分栏、摘要、输入框、按钮与动态武将牌；不改变任何临时编辑或已保存资料。
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_backdrop.color = BattleUIStyle.get_color("shade")
-	_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	_panel.add_theme_stylebox_override("panel", _make_frame_panel())
+	_side_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_detail_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
+	_detail_surface.color = BattleUIStyle.get_color("table_surface")
+	_detail_shade.color = Color(BattleUIStyle.get_color("panel"), detail_shade_opacity)
+	_detail_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
+	_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), summary_panel_opacity), BattleUIStyle.get_color("border")))
+	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), action_panel_opacity), BattleUIStyle.get_color("accent"), 1, 0))
+	_profile_section_indicator.color = BattleUIStyle.get_color("accent")
+	_side_list_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_profile_section_name.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_profile_section_hint.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_detail_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_summary_eyebrow.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_title_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
+	_selected_avatar_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_selected_avatar_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	(%OnlinePlayerNameLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OnlineAvatarLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_selected_avatar_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%OnlineSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
+	BattleUIStyle.apply_interaction_button(_profile_section_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	_apply_line_edit_style(_player_name_input)
 	BattleUIStyle.apply_interaction_button(_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
@@ -140,19 +210,19 @@ func _rebuild_avatar_options() -> void:
 		avatar_view.scale = Vector2.ONE * avatar_card_scale
 		# 联机形象预览快照；只包含牌面渲染字段，不进入 GameState、网络快照或选将流程。
 		var avatar_snapshot: Dictionary = {
-			"player_id":character_index,
-			"display_name":"联机形象",
-			"character_id":character_id,
-			"character_revealed":true,
-			"identity":"hidden",
-			"hp":int(character_definition.get("max_hp", 4)),
-			"max_hp":int(character_definition.get("max_hp", 4)),
-			"alive":true,
-			"chained":false,
-			"hand_count":0,
-			"equipment":{},
-			"judgment_area":[],
-			"wooden_ox_storage_count":0,
+			"player_id": character_index,
+			"display_name": "联机形象",
+			"character_id": character_id,
+			"character_revealed": true,
+			"identity": "hidden",
+			"hp": int(character_definition.get("max_hp", 4)),
+			"max_hp": int(character_definition.get("max_hp", 4)),
+			"alive": true,
+			"chained": false,
+			"hand_count": 0,
+			"equipment": {},
+			"judgment_area": [],
+			"wooden_ox_storage_count": 0,
 		}
 		avatar_view.configure_snapshot(avatar_snapshot, character_definition, false, faction_definition)
 		avatar_view.pressed.connect(_select_avatar.bind(character_id))
@@ -165,35 +235,40 @@ func _rebuild_avatar_options() -> void:
 	var row_count: int = ceili(float(character_ids.size()) / float(avatar_columns))
 	# 实际显示列数；武将不足一行时按真实数量收紧内容并保持整体居中。
 	var visible_column_count: int = mini(character_ids.size(), avatar_columns)
-	# 全部候选占用宽度；不包含额外边距，滚动容器会按内容实际尺寸处理裁剪。
-	var content_width: float = scaled_card_size.x * float(visible_column_count) + avatar_horizontal_gap * float(maxi(visible_column_count - 1, 0))
-	# 全部候选占用高度；每行牌高固定，行间只加入统一垂直间距。
-	var content_height: float = scaled_card_size.y * float(row_count) + avatar_vertical_gap * float(maxi(row_count - 1, 0))
-	_avatar_content.custom_minimum_size = Vector2(content_width, content_height)
+	# 全部候选占用宽高；供 CenterContainer 居中滚动内容。
+	_avatar_content.custom_minimum_size = Vector2(
+		visible_column_count * scaled_card_size.x + maxi(visible_column_count - 1, 0) * avatar_horizontal_gap,
+		row_count * scaled_card_size.y + maxi(row_count - 1, 0) * avatar_vertical_gap
+	)
 	_update_avatar_selection()
 
 
-## 返回指定候选在滚动内容中的左上坐标；列数和间距均来自可视化配置参数。
+## 按网格索引计算武将牌槽位左上角；列数与间距均来自导出参数，便于在检查器中微调布局。
 func _resolve_avatar_slot_position(character_index: int, scaled_card_size: Vector2) -> Vector2:
-	# 当前候选列索引；从0开始并在达到每行上限后回到首列。
+	# 当前行内列号；从左到右填充，满列后换行。
 	var column_index: int = character_index % avatar_columns
-	# 当前候选行索引；整数除法保证同一行共享相同纵坐标。
-	var row_index: int = character_index / avatar_columns
-	return Vector2(float(column_index) * (scaled_card_size.x + avatar_horizontal_gap), float(row_index) * (scaled_card_size.y + avatar_vertical_gap))
+	# 当前行号；从上到下递增。
+	var row_index: int = int(character_index / float(avatar_columns))
+	return Vector2(
+		column_index * (scaled_card_size.x + avatar_horizontal_gap),
+		row_index * (scaled_card_size.y + avatar_vertical_gap)
+	)
 
 
-## 按本地化武将名称排序稳定 ID；名称相同的异常配置再按稳定 ID 排序，保证跨平台显示顺序一致。
-func _sort_character_ids_by_name(first_character_id: String, second_character_id: String) -> bool:
-	# 第一名武将的本地化名称；所有玩家可见排序都不直接显示稳定英文 ID。
-	var first_name: String = GameDatabase.resolve_character_name(first_character_id)
-	# 第二名武将的本地化名称；仅用于当前排序比较。
-	var second_name: String = GameDatabase.resolve_character_name(second_character_id)
-	return first_character_id < second_character_id if first_name == second_name else first_name < second_name
+## 武将 ID 排序比较；按中文显示名升序，名称相同再按稳定 ID，保证联机形象列表顺序可复现。
+func _sort_character_ids_by_name(left_character_id: String, right_character_id: String) -> bool:
+	# 左侧武将显示名；用于玩家可见排序。
+	var left_name: String = GameDatabase.resolve_character_name(left_character_id)
+	# 右侧武将显示名；用于玩家可见排序。
+	var right_name: String = GameDatabase.resolve_character_name(right_character_id)
+	if left_name == right_name:
+		return left_character_id < right_character_id
+	return left_name < right_name
 
 
-## 更新临时联机形象选择；只改变本面板金色描边与文字，保存前不影响全局配置。
+## 选中指定稳定武将 ID 作为临时联机形象；在保存前不写入 GameSettings。
 func _select_avatar(character_id: String) -> void:
-	if not _avatar_views.has(character_id):
+	if character_id.is_empty() or not _avatar_views.has(character_id):
 		return
 	_selected_character_id = character_id
 	_update_avatar_selection()
@@ -210,7 +285,24 @@ func _update_avatar_selection() -> void:
 	_selected_avatar_label.text = "当前形象：%s" % GameDatabase.resolve_character_name(_selected_character_id)
 
 
-## 保存标准化名称与稳定武将形象 ID；资料更新完成后由主菜单统一关闭模态并恢复焦点。
+## 名称输入变化时同步右上角摘要主标题；保存前仅反映面板临时文本。
+func _on_player_name_text_changed(_new_text: String) -> void:
+	_sync_summary_name()
+
+
+## 把摘要主标题更新为当前名称输入；空文本时显示占位“玩家”，避免摘要板留下空白。
+func _sync_summary_name() -> void:
+	# 当前编辑中的名称；去除首尾空白后若为空则使用默认显示，真正标准化仍在保存时由 GameSettings 完成。
+	var preview_name: String = _player_name_input.text.strip_edges()
+	_title_label.text = preview_name if not preview_name.is_empty() else "玩家"
+
+
+## 保持左侧联机资料分区始终为选中态；当前仅一项分区，点击不得取消按下。
+func _keep_profile_section_selected() -> void:
+	_profile_section_button.set_pressed_no_signal(true)
+
+
+## 保存标准化名称与稳定武将形象 ID；资料更新完成后由主菜单统一切回模式选择内容页。
 func _save_and_close() -> void:
 	GameSettings.set_online_player_name(_player_name_input.text)
 	GameSettings.set_online_avatar_character_id(_selected_character_id)
@@ -218,7 +310,7 @@ func _save_and_close() -> void:
 	close_requested.emit()
 
 
-## 放弃本次临时编辑并返回主菜单；全局名称与形象配置保持打开面板前的值。
+## 放弃本次临时编辑并返回模式选择内容页；全局名称与形象配置保持打开面板前的值。
 func _cancel_and_close() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	close_requested.emit()
@@ -239,6 +331,20 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
+
+
+## 创建与主菜单外框一致的内嵌面板；保留主题阴影，保证联机设置页与模式选择页外框观感统一。
+func _make_frame_panel() -> StyleBoxFlat:
+	return BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8)
+
+
+## 创建没有重复阴影的内层面板；外框保留唯一强阴影，内部只用细边区分内容层级。
+func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
+	# 内层面板样式；复用主题工厂的边距与圆角后移除阴影，避免多层金框产生视觉噪声。
+	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
+	return style
 
 
 ## 把初始焦点放到当前平台的安全控件；Android等待玩家主动点击名称框，避免打开面板时自动弹出输入法。
