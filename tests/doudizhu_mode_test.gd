@@ -47,6 +47,9 @@ func _run() -> void:
 	if not _test_public_identity_and_selection_mode():
 		_restore_settings()
 		return
+	if not _test_doudizhu_preview_does_not_reveal_character():
+		_restore_settings()
+		return
 	if not _test_player_count_storage_by_mode():
 		_restore_settings()
 		return
@@ -57,7 +60,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+settings+round+lobby+characters")
+	print("DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters")
 	get_tree().quit(0)
 
 
@@ -233,8 +236,7 @@ func _test_three_player_match_bootstrap() -> bool:
 func _test_all_players_have_characters_after_selection() -> bool:
 	for player_count in [3, 6]:
 		for custom_enabled in [false, true]:
-			_controller = MatchController.new()
-			add_child(_controller)
+			_create_controller()
 			_controller.identity_rules = _identity_rules
 			_controller.local_human_player_id = 0
 			_controller.randomize_local_human_seat = false
@@ -351,14 +353,41 @@ func _test_public_identity_and_selection_mode() -> bool:
 		return _fail("doudizhu_should_hide_leader_character")
 	if int(snapshot.get("leader_player_id", 0)) != -1:
 		return _fail("doudizhu_leader_player_id_should_be_hidden")
-	# 六人双地主：自选时选地主不必强制一号位（仅唯一首任身份才双向绑定）。
+	# 六人双地主：首任身份名额不唯一，但地主固定占 1/3 号位。
 	if service.has_unique_first_seat_identity():
 		return _fail("six_landlords_should_not_be_unique_first_seat")
+	var landlord_seats: Array[int] = service.get_landlord_seat_numbers()
+	if landlord_seats.size() != 2 or not landlord_seats.has(1) or not landlord_seats.has(3):
+		return _fail("six_landlord_seats=%s" % str(landlord_seats))
 	var normalized: Dictionary = service._normalize_custom_seat_identity(3, "landlord")
 	if not str(normalized.get("error", "")).is_empty():
 		return _fail("second_landlord_seat3_error=%s" % str(normalized.get("error", "")))
 	if int(normalized.get("seat_number", -1)) != 3 or str(normalized.get("identity", "")) != "landlord":
 		return _fail("second_landlord_seat3_normalize")
+	# 仅提交 2 号位（身份空）→ 农民；选农民且已在农民位 → 保持。
+	var seat2: Dictionary = service._normalize_custom_seat_identity(2, "")
+	if str(seat2.get("identity", "")) != "peasant" or int(seat2.get("seat_number", -1)) != 2:
+		return _fail("seat2_must_become_peasant=%s" % str(seat2))
+	var peasant_on_2: Dictionary = service._normalize_custom_seat_identity(2, "peasant")
+	if str(peasant_on_2.get("identity", "")) != "peasant" or int(peasant_on_2.get("seat_number", -1)) != 2:
+		return _fail("peasant_keeps_seat2=%s" % str(peasant_on_2))
+	# 选农民但座次在 1 号位 → 必须离开 1/3 号位。
+	var peasant_on_1: Dictionary = service._normalize_custom_seat_identity(1, "peasant")
+	if str(peasant_on_1.get("identity", "")) != "peasant":
+		return _fail("peasant_identity_expected")
+	if int(peasant_on_1.get("seat_number", -1)) in [1, 3]:
+		return _fail("peasant_should_leave_landlord_seats=%s" % str(peasant_on_1))
+	# 选地主但座次不在 1/3 → 自动落到 1 或 3。
+	var landlord_from_2: Dictionary = service._normalize_custom_seat_identity(2, "landlord")
+	if str(landlord_from_2.get("identity", "")) != "landlord":
+		return _fail("landlord_from_2_identity=%s" % str(landlord_from_2))
+	if not [1, 3].has(int(landlord_from_2.get("seat_number", -1))):
+		return _fail("landlord_from_2_seat=%s" % str(landlord_from_2))
+	var landlord_pick: Dictionary = service._normalize_custom_seat_identity(4, "landlord")
+	if str(landlord_pick.get("identity", "")) != "landlord":
+		return _fail("landlord_pick_identity")
+	if not [1, 3].has(int(landlord_pick.get("seat_number", -1))):
+		return _fail("landlord_pick_seat=%s" % str(landlord_pick))
 	return true
 
 
@@ -417,10 +446,40 @@ func _test_lobby_mode_options_include_doudizhu() -> bool:
 	return true
 
 
+
+
+## 斗地主自选预览不得提前亮将（身份局的一号位 AI 领袖预览逻辑不得误用）。
+func _test_doudizhu_preview_does_not_reveal_character() -> bool:
+	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(true)
+	_create_controller()
+	_controller.default_player_count = 6
+	if not _controller.start_match(6, 17, IdentityRules.MODE_DOUDIZHU):
+		return _fail("preview_start_match")
+	if _controller.character_selection == null:
+		return _fail("preview_no_selection_service")
+	if not _controller.character_selection.is_doudizhu_mode():
+		return _fail("preview_not_doudizhu")
+	# 对首名玩家写入座次/身份预览，触发控制器重排。
+	var human_id: int = int(_controller.state.players[0].player_id)
+	var err: String = _controller.character_selection.preview_custom_assignment(human_id, 2, "peasant")
+	if not err.is_empty():
+		# 若 2 号位已被占用，改试其他农民位。
+		err = _controller.character_selection.preview_custom_assignment(human_id, 4, "peasant")
+	if not err.is_empty():
+		return _fail("preview_assignment_err=%s" % err)
+	_controller._apply_custom_assignment_preview()
+	for player: PlayerState in _controller.state.players:
+		# 选将未完成前，任何角色（含一号位 AI 地主）都不应已有 character_id。
+		if not str(player.character_id).is_empty() and _controller.character_selection.get_selection(player.player_id).is_empty():
+			return _fail("preview_leaked_character player=%d char=%s seat_identity=%s" % [player.player_id, player.character_id, player.identity])
+	return true
+
 ## 创建标准控制器组件树。
 func _create_controller() -> void:
 	if _controller != null and is_instance_valid(_controller):
-		_controller.queue_free()
+		remove_child(_controller)
+		_controller.free()
 	_controller = MatchController.new()
 	_controller.name = "MatchController"
 	var event_bus: RuleEventBus = RuleEventBus.new()
@@ -433,6 +492,10 @@ func _create_controller() -> void:
 	network_gateway.name = "NetworkGateway"
 	_controller.add_child(network_gateway)
 	add_child(_controller)
+	_controller.local_human_player_id = 0
+	_controller.randomize_local_human_seat = false
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
 
 
 ## 从 skill_instances_by_player 收集指定玩家已安装技能 ID。

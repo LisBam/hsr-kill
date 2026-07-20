@@ -115,12 +115,106 @@ func has_unique_first_seat_identity() -> bool:
 	return int(_identity_limits.get(get_first_seat_identity(), 0)) <= 1
 
 
+## 返回本局固定地主座次号列表；按标准斗地身份表生成（3人为[1]，6人为[1,3]），非斗地返回空数组。
+## 调用方可安全修改返回数组；该列表用于自选座次/身份联动与校验，不改变最终洗牌后的玩家对象。
+func get_landlord_seat_numbers() -> Array[int]:
+	var result: Array[int] = []
+	if not is_doudizhu_mode():
+		return result
+	# 按 DOUDIZHU_DISTRIBUTIONS 的固定座次：地主占一号位，六人局另占三号位。
+	var player_count: int = _player_ids.size()
+	var landlord_limit: int = int(_identity_limits.get("landlord", 0))
+	if player_count >= 1 and landlord_limit >= 1:
+		result.append(1)
+	if player_count >= 3 and landlord_limit >= 2:
+		result.append(3)
+	return result
+
+
+## 从候选座次中挑选一个地主位；优先保留 requested，其次随机/首个可用地主位。
+func _pick_landlord_seat(available_seats: Array[int], preferred_seat_number: int) -> int:
+	var landlord_seats: Array[int] = get_landlord_seat_numbers()
+	if landlord_seats.has(preferred_seat_number) and available_seats.has(preferred_seat_number):
+		return preferred_seat_number
+	# 可用地主位；顺序保持 1、3 稳定，随机仅决定多地主时落到哪一席。
+	var candidates: Array[int] = []
+	for seat_number: int in landlord_seats:
+		if available_seats.has(seat_number):
+			candidates.append(seat_number)
+	if candidates.is_empty():
+		return preferred_seat_number if landlord_seats.has(preferred_seat_number) else (landlord_seats[0] if not landlord_seats.is_empty() else preferred_seat_number)
+	if candidates.size() == 1 or _rng == null:
+		return candidates[0]
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+
+## 从候选座次中挑选一个农民位；优先保留 requested，其次随机/首个非地主可用座次。
+func _pick_peasant_seat(available_seats: Array[int], preferred_seat_number: int) -> int:
+	var landlord_seats: Array[int] = get_landlord_seat_numbers()
+	if preferred_seat_number >= 1 and not landlord_seats.has(preferred_seat_number) and available_seats.has(preferred_seat_number):
+		return preferred_seat_number
+	var candidates: Array[int] = []
+	for seat_number: int in available_seats:
+		if not landlord_seats.has(seat_number):
+			candidates.append(seat_number)
+	if candidates.is_empty():
+		return preferred_seat_number
+	if candidates.size() == 1 or _rng == null:
+		return candidates[0]
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+
 ## 规范化自选座次与身份的联动结果；返回 seat_number、identity 与 error。
-func _normalize_custom_seat_identity(requested_seat_number: int, requested_identity: String) -> Dictionary:
+## player_id 用于解析“除本人外已被占用”的可用座次，使选地主/农民时自动落到空闲地主位/农民位。
+func _normalize_custom_seat_identity(requested_seat_number: int, requested_identity: String, player_id: int = -1) -> Dictionary:
 	var seat_number: int = requested_seat_number
 	var identity: String = requested_identity
 	var first_seat_identity: String = get_first_seat_identity()
-	# 一号位始终绑定首任身份；唯一首任身份选择时同步绑回一号位。
+	# 当前可选座次；未传 player_id 时退回全部座次，仅做规则层联动与校验。
+	var available_seats: Array[int] = []
+	if player_id >= 0:
+		available_seats = get_available_seat_numbers(player_id)
+	if available_seats.is_empty():
+		for seat_index: int in range(1, _player_ids.size() + 1):
+			available_seats.append(seat_index)
+	# 若本人当前座次不在 available（因 get_available 会排除他人占用），把本人 requested 也视作可选，便于保持原座。
+	if seat_number >= 1 and not available_seats.has(seat_number):
+		available_seats.append(seat_number)
+
+	# 斗地主：地主固定占 get_landlord_seat_numbers()；座次与身份双向强制一致。
+	# UI 选座/选身份后总会提交一致对；服务端再强制：地主仅 1/3，农民仅非地主座。
+	var landlord_seats: Array[int] = get_landlord_seat_numbers()
+	if is_doudizhu_mode() and not landlord_seats.is_empty():
+		var seat_is_valid: bool = seat_number >= 1 and seat_number <= _player_ids.size()
+		if identity == "landlord":
+			# 选地主 → 座次落到可用 1/3（已在地主位则保持）。
+			seat_number = _pick_landlord_seat(available_seats, seat_number)
+			identity = "landlord"
+		elif identity == "peasant":
+			# 选农民 → 座次落到非 1/3（已在农民位则保持）。
+			seat_number = _pick_peasant_seat(available_seats, seat_number)
+			identity = "peasant"
+		elif seat_is_valid and landlord_seats.has(seat_number):
+			# 仅提交座次时：1/3 → 地主。
+			identity = "landlord"
+		elif seat_is_valid:
+			# 仅提交座次时：其他位置 → 农民。
+			identity = "peasant"
+		else:
+			return {"error": "请选择有效座次。"}
+		if seat_number < 1 or seat_number > _player_ids.size():
+			return {"error": "请选择有效座次。"}
+		if identity.is_empty() or not _identity_limits.has(identity):
+			return {"error": "请选择有效身份。"}
+		if landlord_seats.has(seat_number) and identity != "landlord":
+			return {"error": "%d号位必须选择地主身份。" % seat_number}
+		if not landlord_seats.has(seat_number) and identity == "landlord":
+			if landlord_seats.size() > 1:
+				return {"error": "地主身份必须选择一号位或三号位。"}
+			return {"error": "地主身份必须选择一号位。"}
+		return {"seat_number": seat_number, "identity": identity, "error": ""}
+
+	# 身份局：一号位始终绑定首任身份；唯一首任身份选择时同步绑回一号位。
 	if seat_number == 1:
 		identity = first_seat_identity
 	elif has_unique_first_seat_identity() and identity == first_seat_identity:
@@ -249,8 +343,8 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
 	)
 	if confirms_custom_assignment:
-		# 规范化后的座次与身份；一号位与唯一首任身份双向绑定，多地主时仅强制一号位为地主。
-		var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity)
+		# 规范化后的座次与身份；斗地强制地主占固定座（1/3），身份局一号位与领袖双向绑定。
+		var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity, player_id)
 		if not str(normalized_assignment.get("error", "")).is_empty():
 			return str(normalized_assignment.get("error", "请选择有效座次。"))
 		var seat_number: int = int(normalized_assignment.get("seat_number", -1))
@@ -481,7 +575,7 @@ func preview_custom_assignment(player_id: int, requested_seat_number: int, reque
 	if not can_preview_current_phase or not can_player_select(player_id):
 		return "当前玩家不能预览座次与身份。"
 	# 规范化后的预览座次与身份；一号位与唯一首任身份双向绑定。
-	var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity)
+	var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity, player_id)
 	if not str(normalized_assignment.get("error", "")).is_empty():
 		return str(normalized_assignment.get("error", "请选择有效座次与身份。"))
 	var seat_number: int = int(normalized_assignment.get("seat_number", -1))
@@ -617,6 +711,7 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"match_mode":match_mode,
 		"first_seat_identity":get_first_seat_identity(),
 		"unique_first_seat_identity":has_unique_first_seat_identity(),
+		"landlord_seat_numbers":get_landlord_seat_numbers(),
 		"leader_player_id":leader_player_id if uses_leader_priority_selection() else -1,
 		"leader_character_id":public_leader_character_id,
 		"candidate_count":candidate_count,

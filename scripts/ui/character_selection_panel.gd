@@ -755,7 +755,7 @@ func _get_first_seat_identity_id() -> String:
 	return "landlord" if selection_mode == "doudizhu" else "leader"
 
 
-## 返回首任身份是否唯一绑定一号位；六人双地主时为 false（选地主不强制 seat1），三人地主与身份局领袖为 true。
+## 返回首任身份是否唯一绑定一号位；六人双地主时为 false，三人地主与身份局领袖为 true。
 func _is_unique_first_seat_identity() -> bool:
 	if _snapshot.has("unique_first_seat_identity"):
 		return bool(_snapshot.get("unique_first_seat_identity", true))
@@ -767,12 +767,73 @@ func _is_unique_first_seat_identity() -> bool:
 	return player_count != 6
 
 
-## 选择一个临时座次；一号位自动联动领袖/地主，离开一号位时清除仍残留的唯一首任身份。
+## 返回本局固定地主座次列表；优先读快照，缺省时按人数推断（3人=[1]，6人=[1,3]）。
+func _get_landlord_seat_numbers() -> Array[int]:
+	var result: Array[int] = []
+	var raw: Array = _snapshot.get("landlord_seat_numbers", []) as Array
+	for seat_variant: Variant in raw:
+		var seat_number: int = int(seat_variant)
+		if seat_number >= 1 and not result.has(seat_number):
+			result.append(seat_number)
+	if not result.is_empty():
+		return result
+	# 快照缺省：仅在斗地相关界面按人数回填固定地主位。
+	var selection_mode: String = str(_snapshot.get("match_mode", ""))
+	var available_identities: Array = _snapshot.get("identity_options", []) as Array
+	var is_doudizhu: bool = selection_mode == "doudizhu" or available_identities.has("landlord") or _get_first_seat_identity_id() == "landlord"
+	if not is_doudizhu:
+		return result
+	var player_count: int = int(_snapshot.get("player_count", 0))
+	if player_count <= 0:
+		player_count = int((_snapshot.get("seat_options", []) as Array).size())
+	if player_count >= 1:
+		result.append(1)
+	if player_count >= 6:
+		result.append(3)
+	return result
+
+
+## 从可用座次按钮中随机挑选一个地主位；无可用时返回 -1。
+func _get_random_enabled_landlord_seat() -> int:
+	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	var enabled_seat_numbers: Array[int] = []
+	for seat_number: int in landlord_seats:
+		var seat_button: Button = _seat_button_views.get(seat_number) as Button
+		if seat_button != null and not seat_button.disabled:
+			enabled_seat_numbers.append(seat_number)
+	if enabled_seat_numbers.is_empty():
+		return -1
+	return enabled_seat_numbers[randi_range(0, enabled_seat_numbers.size() - 1)]
+
+
+## 从可用座次按钮中随机挑选一个农民位（非地主座）；无可用时返回 -1。
+func _get_random_enabled_peasant_seat() -> int:
+	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	var enabled_seat_numbers: Array[int] = []
+	for seat_number_variant: Variant in _seat_button_views.keys():
+		var seat_number: int = int(seat_number_variant)
+		var seat_button: Button = _seat_button_views[seat_number] as Button
+		if landlord_seats.has(seat_number):
+			continue
+		if seat_button != null and not seat_button.disabled:
+			enabled_seat_numbers.append(seat_number)
+	if enabled_seat_numbers.is_empty():
+		return -1
+	return enabled_seat_numbers[randi_range(0, enabled_seat_numbers.size() - 1)]
+
+
+## 选择一个临时座次；斗地地主位联动地主/农民位联动农民，身份局一号位联动领袖。
 func _select_seat(seat_number: int) -> void:
 	_selected_seat_number = seat_number
-	# 一号位绑定的首任身份；斗地主为地主，身份局为领袖。
 	var first_seat_identity: String = _get_first_seat_identity_id()
-	if seat_number == 1:
+	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	if not landlord_seats.is_empty() and first_seat_identity == "landlord":
+		# 斗地主：1/3 号位固定地主，其余固定农民。
+		if landlord_seats.has(seat_number):
+			_selected_identity = "landlord"
+		else:
+			_selected_identity = "peasant"
+	elif seat_number == 1:
 		_selected_identity = first_seat_identity
 	elif _selected_identity == first_seat_identity and _is_unique_first_seat_identity():
 		# 离开一号位时自动补全一个可用非首任身份，避免玩家必须再点一次身份按钮才能确认选将。
@@ -783,11 +844,25 @@ func _select_seat(seat_number: int) -> void:
 	_request_custom_assignment_preview()
 
 
-## 选择一个临时身份；唯一首任身份（领袖/三人地主）自动联动一号位。
+## 选择一个临时身份；斗地地主随机落到 1/3 号位，农民落到非地主位；身份局唯一首任身份联动一号位。
 func _select_identity(identity: String) -> void:
 	_selected_identity = identity
 	var first_seat_identity: String = _get_first_seat_identity_id()
-	if identity == first_seat_identity and _is_unique_first_seat_identity():
+	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	if not landlord_seats.is_empty() and first_seat_identity == "landlord":
+		if identity == "landlord":
+			# 已在地主位则保持；否则随机可用地主位（1 或 3）。
+			if not landlord_seats.has(_selected_seat_number):
+				var landlord_seat: int = _get_random_enabled_landlord_seat()
+				if landlord_seat >= 1:
+					_selected_seat_number = landlord_seat
+		elif identity == "peasant":
+			# 已在农民位则保持；否则随机可用农民位。
+			if landlord_seats.has(_selected_seat_number) or _selected_seat_number < 1:
+				var peasant_seat: int = _get_random_enabled_peasant_seat()
+				if peasant_seat >= 1:
+					_selected_seat_number = peasant_seat
+	elif identity == first_seat_identity and _is_unique_first_seat_identity():
 		_selected_seat_number = 1
 	elif _selected_seat_number == 1 and identity != first_seat_identity:
 		# 离开首任身份时自动补全一个可用非一号位座次，避免玩家必须再点一次座次按钮才能确认选将。
