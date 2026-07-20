@@ -29,7 +29,13 @@ signal start_game_requested(player_count: int)
 const MODE_READY_STATUS_TEXT: String = ""
 
 ## 开局请求同步处理期间显示的状态文字；若控制器拒绝请求，会被具体错误原因立即替换。
-const STARTING_STATUS_TEXT: String = "正在创建身份局……"
+const STARTING_STATUS_TEXT_IDENTITY: String = "正在创建身份局……"
+
+## 斗地主开局请求处理期间显示的状态文字。
+const STARTING_STATUS_TEXT_DOUDIZHU: String = "正在创建斗地主对局……"
+
+## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
+var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
 ## 顶部模式导航栏；目前只承载唯一的“身份模式”选项，后续新增模式仍可复用同一容器与主题样式。
 @onready var _top_navigation: PanelContainer = %MainMenuTopNavigation
@@ -57,6 +63,12 @@ const STARTING_STATUS_TEXT: String = "正在创建身份局……"
 
 ## 左侧身份模式卡片的选中指示线；与按钮按下状态共同表达当前唯一可用模式。
 @onready var _mode_card_indicator: ColorRect = %IdentityModeIndicator
+
+## 左侧斗地主模式按钮指示条；选中斗地主时显示主题强调色。
+@onready var _doudizhu_mode_card_indicator: ColorRect = %DouDizhuModeIndicator
+
+## 左侧斗地主模式卡片按钮；与身份模式并列，只负责写入下一局模式配置。
+@onready var _doudizhu_mode_button: Button = %DouDizhuModeButton
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -181,6 +193,7 @@ func _ready() -> void:
 	visibility_changed.connect(_on_visibility_changed)
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
+	_doudizhu_mode_button.pressed.connect(_select_doudizhu_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
@@ -237,7 +250,7 @@ func _ready() -> void:
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
-	_select_identity_mode()
+	_restore_selected_match_mode()
 	_refresh_card_name_text()
 	_refresh_ui_style_selection(GameSettings.ui_style_id)
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
@@ -311,10 +324,12 @@ func refresh_ui_style() -> void:
 	_top_mode_indicator.color = BattleUIStyle.get_color("accent")
 	_top_online_settings_indicator.color = BattleUIStyle.get_color("accent")
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_doudizhu_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
 	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	BattleUIStyle.apply_interaction_button(_doudizhu_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -333,6 +348,8 @@ func refresh_ui_style() -> void:
 	(%MainMenuModeListTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%IdentityModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%DouDizhuModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -373,14 +390,61 @@ func refresh_ui_style() -> void:
 
 
 ## 切换到模式选择内容页；顶部“模式选择”与“联机设置”对等互斥，仅替换客户区，不创建弹层。
+func _restore_selected_match_mode() -> void:
+	# 根据全局下一局模式恢复主菜单选中态；未知值回退身份模式。
+	if GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_DOUDIZHU:
+		_select_doudizhu_mode()
+	else:
+		_select_identity_mode()
+
+
 func _select_identity_mode() -> void:
 	# 联机设置内容页；点击“模式选择”时回到默认主菜单内容，顶部导航始终保留在原位。
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_IDENTITY
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
+	# 身份模式人数范围；恢复检查器默认 2-10。
+	minimum_player_count = 2
+	maximum_player_count = 10
+	_player_count_input.min_value = minimum_player_count
+	_player_count_input.max_value = maximum_player_count
+	set_next_player_count(int(_player_count_input.value))
 	_mode_title.text = "身份模式"
-	_mode_description.text = "标准身份局 · %d—%d人" % [minimum_player_count, maximum_player_count]
+	_mode_description.text = "标准身份局 · %d—%d人 · 主公忠臣 vs 反贼内奸" % [minimum_player_count, maximum_player_count]
 	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = true
+	_doudizhu_mode_button.button_pressed = false
+	_mode_card_indicator.visible = true
+	_doudizhu_mode_card_indicator.visible = false
+	_show_status(MODE_READY_STATUS_TEXT, false)
+
+
+## 选中斗地主模式；人数限制为 3 与 6，写入下一局模式配置后不改进行中的对局。
+func _select_doudizhu_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_DOUDIZHU
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
+	# 斗地主仅 3/6 人；SpinBox 仍用连续范围，开局校验会拒绝其它人数。
+	minimum_player_count = 3
+	maximum_player_count = 6
+	_player_count_input.min_value = minimum_player_count
+	_player_count_input.max_value = maximum_player_count
+	# 默认人数夹到 3 或 6；5 夹到 6，2 夹到 3。
+	var preferred_count: int = int(_player_count_input.value)
+	if preferred_count != 3 and preferred_count != 6:
+		preferred_count = 3 if preferred_count < 5 else 6
+	set_next_player_count(preferred_count)
+	_mode_title.text = "斗地主"
+	_mode_description.text = "地主与农民对决 · 仅 3 人或 6 人 · 地主获飞扬/跋扈并+1体力上限，农民获共苦"
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = true
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
@@ -444,11 +508,16 @@ func _request_start_game() -> void:
 	GameSettings.set_next_match_player_count(player_count)
 	_set_settings_visible(false)
 	_start_game_button.disabled = true
-	_show_status(STARTING_STATUS_TEXT, false)
+	# 当前模式开局状态文案；失败时会被具体错误替换。
+	var starting_status: String = STARTING_STATUS_TEXT_DOUDIZHU if _selected_match_mode == GameSettings.MATCH_MODE_DOUDIZHU else STARTING_STATUS_TEXT_IDENTITY
+	_show_status(starting_status, false)
+	# 再次确认模式写入；防止设置浮层改人数后模式丢失。
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(_selected_match_mode)
 	start_game_requested.emit(player_count)
 	if visible:
 		_start_game_button.disabled = false
-		if _menu_status_label.text == STARTING_STATUS_TEXT:
+		if _menu_status_label.text == starting_status:
 			show_start_error("无法开始游戏，请检查数据配置后重试。")
 
 
@@ -898,7 +967,12 @@ func _on_game_speed_changed(interval_seconds: float) -> void:
 
 ## 下一局人数输入变化时写入全局持久化设置；已开始对局不会读取该值改变当前身份与座次。
 func _on_next_player_count_changed(player_count: float) -> void:
-	GameSettings.set_next_match_player_count(int(player_count))
+	# 原始输入人数；斗地主模式只允许 3 或 6。
+	var resolved_count: int = int(player_count)
+	if _selected_match_mode == GameSettings.MATCH_MODE_DOUDIZHU and resolved_count != 3 and resolved_count != 6:
+		resolved_count = 3 if resolved_count < 5 else 6
+		_player_count_input.set_value_no_signal(resolved_count)
+	GameSettings.set_next_match_player_count(resolved_count)
 
 
 ## 将自动身份标记开关写入全局设置；该设置只影响客户端推测徽记显示。

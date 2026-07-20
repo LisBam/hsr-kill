@@ -93,6 +93,8 @@ const IDENTITY_OPTIONS: Array[Dictionary] = [
 	{"id":"loyalist", "label":"忠臣"},
 	{"id":"rebel", "label":"反贼"},
 	{"id":"renegade", "label":"内奸"},
+	{"id":"landlord", "label":"地主"},
+	{"id":"peasant", "label":"农民"},
 ]
 
 ## 候选武将牌之间的水平与垂直间距；默认8像素，让多行候选在保留原尺寸牌面的前提下更紧凑。
@@ -443,7 +445,7 @@ func _render_header() -> void:
 ## 使用阵营语义色写入“你的身份为：身份，提示”标题；身份只来自观察者自己的裁剪选将快照。
 func _set_identity_title(identity: String, action_text: String) -> void:
 	# 玩家可见身份名称；未知旧快照使用“未知”保持标题完整，不推断其他角色身份。
-	var identity_name: String = {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸"}.get(identity, "未知")
+	var identity_name: String = {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸", "landlord":"地主", "peasant":"农民"}.get(identity, "未知")
 	# 当前身份语义色；四种身份分别固定使用红、黄、绿、蓝，未知身份回退主题次级文字色。
 	_rendered_identity_color = BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("text_secondary"))
 	_title_label.clear()
