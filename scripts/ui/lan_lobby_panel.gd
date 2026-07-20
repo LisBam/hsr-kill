@@ -93,7 +93,11 @@ func open_panel(default_player_count: int, default_port: int) -> void:
 	visible = true
 	move_to_front()
 	if not _session_active:
-		_initial_player_count = clampi(default_player_count, MINIMUM_PLAYER_COUNT, MAXIMUM_PLAYER_COUNT)
+		# 按当前全局下一局模式规范化人数；斗地主仅保留 3/6，避免入口带入身份局人数。
+		if GameSettings != null and GameSettings.has_method("normalize_player_count_for_mode"):
+			_initial_player_count = GameSettings.normalize_player_count_for_mode(GameSettings.next_match_mode, default_player_count)
+		else:
+			_initial_player_count = clampi(default_player_count, MINIMUM_PLAYER_COUNT, MAXIMUM_PLAYER_COUNT)
 		_port_input.value = clampi(default_port, MINIMUM_PORT, MAXIMUM_PORT)
 		_display_name_value.text = GameSettings.online_player_name
 		_show_entry_state()

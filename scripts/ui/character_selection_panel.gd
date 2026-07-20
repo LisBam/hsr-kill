@@ -697,11 +697,20 @@ func _render_custom_assignment_controls() -> void:
 		seat_button.pressed.connect(_select_seat.bind(seat_number))
 		_seat_buttons.add_child(seat_button)
 		_seat_button_views[seat_number] = seat_button
-	# 当前仍有名额的身份；四种身份始终显示，名额耗尽时禁用。
+	# 当前仍有名额的身份；仅渲染本模式可选身份（身份局不含地主农民，斗地主不含主忠反内）。
 	var available_identities: Array = _snapshot.get("identity_options", []) as Array
+	# 本局模式；快照缺省时根据可选身份推断，避免错显跨模式按钮。
+	var selection_mode: String = str(_snapshot.get("match_mode", ""))
+	if selection_mode.is_empty():
+		selection_mode = "doudizhu" if available_identities.has("landlord") or available_identities.has("peasant") else "identity"
 	for identity_option: Dictionary in IDENTITY_OPTIONS:
 		# 当前身份稳定 ID 与显示名；按钮颜色由主题身份语义色决定。
 		var identity: String = str(identity_option.get("id", ""))
+		var is_doudizhu_identity: bool = identity == "landlord" or identity == "peasant"
+		if selection_mode == "doudizhu" and not is_doudizhu_identity:
+			continue
+		if selection_mode != "doudizhu" and is_doudizhu_identity:
+			continue
 		var identity_button: Button = Button.new()
 		identity_button.custom_minimum_size = Vector2(112.0, 34.0)
 		identity_button.text = str(identity_option.get("label", identity))
@@ -729,27 +738,30 @@ func _toggle_all_characters() -> void:
 	refresh_ui_style()
 
 
-## 选择一个临时座次；一号位自动联动领袖，离开一号位时清除仍残留的领袖身份。
+## 选择一个临时座次；一号位自动联动领袖/地主，离开一号位时清除仍残留的唯一首任身份。
 func _select_seat(seat_number: int) -> void:
 	_selected_seat_number = seat_number
+	# 一号位绑定的首任身份；斗地主为地主，身份局为领袖。
+	var first_seat_identity: String = _get_first_seat_identity_id()
 	if seat_number == 1:
-		_selected_identity = "leader"
-	elif _selected_identity == "leader":
-		# 离开一号位时自动补全一个可用非领袖身份，避免玩家必须再点一次身份按钮才能确认选将。
-		_selected_identity = _get_random_enabled_identity("leader")
+		_selected_identity = first_seat_identity
+	elif _selected_identity == first_seat_identity and _is_unique_first_seat_identity():
+		# 离开一号位时自动补全一个可用非首任身份，避免玩家必须再点一次身份按钮才能确认选将。
+		_selected_identity = _get_random_enabled_identity(first_seat_identity)
 	_update_custom_button_states()
 	_render_header()
 	_update_confirm_state()
 	_request_custom_assignment_preview()
 
 
-## 选择一个临时身份；领袖自动联动一号位，选择其他身份时清除仍残留的一号位。
+## 选择一个临时身份；唯一首任身份（领袖/三人地主）自动联动一号位。
 func _select_identity(identity: String) -> void:
 	_selected_identity = identity
-	if identity == "leader":
+	var first_seat_identity: String = _get_first_seat_identity_id()
+	if identity == first_seat_identity and _is_unique_first_seat_identity():
 		_selected_seat_number = 1
-	elif _selected_seat_number == 1:
-		# 离开领袖身份时自动补全一个可用非一号位座次，避免玩家必须再点一次座次按钮才能确认选将。
+	elif _selected_seat_number == 1 and identity != first_seat_identity:
+		# 离开首任身份时自动补全一个可用非一号位座次，避免玩家必须再点一次座次按钮才能确认选将。
 		_selected_seat_number = _get_random_enabled_seat(1)
 	_update_custom_button_states()
 	_render_header()

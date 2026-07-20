@@ -173,6 +173,12 @@ const MATCH_MODE_DOUDIZHU: String = "doudizhu"
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
+## 斗地主模式默认人数；仅允许 3 或 6，默认 3 人。
+const DEFAULT_DOUDIZHU_PLAYER_COUNT: int = 3
+
+## 身份模式默认人数；与历史全局默认 8 人保持一致。
+const DEFAULT_IDENTITY_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
+
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
 
@@ -199,6 +205,13 @@ var next_match_player_count: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
 
 ## 当前下一局模式稳定 ID；默认 identity，仅影响之后创建或重开的对局。
 var next_match_mode: String = DEFAULT_NEXT_MATCH_MODE
+
+## 身份模式独立保存的下一局人数；切换回身份模式时恢复，不与斗地主人数互相覆盖。
+var next_match_player_count_identity: int = DEFAULT_IDENTITY_PLAYER_COUNT
+
+## 斗地主模式独立保存的下一局人数；仅 3 或 6，切换回斗地主时恢复。
+var next_match_player_count_doudizhu: int = DEFAULT_DOUDIZHU_PLAYER_COUNT
+
 
 ## 是否允许玩家在选将时打开全部武将并自选座次与身份；默认关闭，仅在下一局初始化时读取。
 var custom_character_assignment_enabled: bool = false
@@ -345,11 +358,13 @@ func set_online_avatar_character_id(character_id: String) -> void:
 
 ## 设置下一局人数并同步所有菜单；范围外输入自动限制为标准身份局支持的2至10人。
 func set_next_match_player_count(player_count: int) -> void:
-	# 限制后的人数；只保存下一局配置，当前对局已经创建时不改变其玩家、身份或座次。
-	var normalized_player_count: int = clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+	# 按当前下一局模式规范化人数；身份局 2–10，斗地主仅 3/6，并同步写入该模式独立存档槽。
+	var normalized_player_count: int = normalize_player_count_for_mode(next_match_mode, player_count)
 	if next_match_player_count == normalized_player_count:
+		_store_player_count_for_mode(next_match_mode, normalized_player_count)
 		return
 	next_match_player_count = normalized_player_count
+	_store_player_count_for_mode(next_match_mode, normalized_player_count)
 	_queue_settings_save()
 	next_match_player_count_changed.emit(next_match_player_count)
 
@@ -361,13 +376,47 @@ func normalize_match_mode(mode_id: String) -> String:
 	return MATCH_MODE_IDENTITY
 
 
+## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 6（小于 5 夹到 3，否则夹到 6）。
+func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
+	var mode: String = normalize_match_mode(mode_id)
+	if mode == MATCH_MODE_DOUDIZHU:
+		if player_count == 3 or player_count == 6:
+			return player_count
+		return 3 if player_count < 5 else 6
+	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
+
+
+## 读取指定模式独立保存的下一局人数；未知模式回退身份局默认。
+func get_stored_player_count_for_mode(mode_id: String) -> int:
+	var mode: String = normalize_match_mode(mode_id)
+	if mode == MATCH_MODE_DOUDIZHU:
+		return next_match_player_count_doudizhu
+	return next_match_player_count_identity
+
+
+## 将人数写入指定模式的独立存档槽；不广播信号，由调用方决定是否同步全局 next_match_player_count。
+func _store_player_count_for_mode(mode_id: String, player_count: int) -> void:
+	var mode: String = normalize_match_mode(mode_id)
+	var normalized_count: int = normalize_player_count_for_mode(mode, player_count)
+	if mode == MATCH_MODE_DOUDIZHU:
+		next_match_player_count_doudizhu = normalized_count
+	else:
+		next_match_player_count_identity = normalized_count
+
+
 ## 设置下一局模式并同步主菜单；未知模式回退身份局，不修改进行中的对局。
 func set_next_match_mode(mode_id: String) -> void:
-	# 规范化后的模式；只写入下一局配置。
+	# 规范化模式后切换；同时加载该模式独立保存的人数，避免身份局与斗地主共用同一数字造成非法人数。
 	var normalized_mode: String = normalize_match_mode(mode_id)
 	if next_match_mode == normalized_mode:
 		return
 	next_match_mode = normalized_mode
+	# 切换模式时恢复该模式自己的人数，并广播人数变化让各设置入口同步 SpinBox。
+	var mode_player_count: int = get_stored_player_count_for_mode(next_match_mode)
+	mode_player_count = normalize_player_count_for_mode(next_match_mode, mode_player_count)
+	if next_match_player_count != mode_player_count:
+		next_match_player_count = mode_player_count
+		next_match_player_count_changed.emit(next_match_player_count)
 	_queue_settings_save()
 	next_match_mode_changed.emit(next_match_mode)
 
@@ -465,8 +514,19 @@ func _load_saved_settings() -> void:
 	game_speed_interval_seconds = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "game_speed_interval_seconds", game_speed_interval_seconds)), MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS), GAME_SPEED_INTERVAL_STEP_SECONDS)
 	ui_style_id = UIStyleRegistry.normalize_style_id(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)))
 	auto_identity_marking_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled))
-	next_match_player_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)), MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 	next_match_mode = normalize_match_mode(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)))
+	# 分模式人数：优先读独立字段；旧存档仅有单一 next_match_player_count 时按当前模式回填对应槽位。
+	var stored_identity_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", -1))
+	var stored_doudizhu_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", -1))
+	var legacy_player_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count))
+	if stored_identity_count < 0:
+		stored_identity_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_IDENTITY else DEFAULT_IDENTITY_PLAYER_COUNT
+	if stored_doudizhu_count < 0:
+		stored_doudizhu_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_DOUDIZHU else DEFAULT_DOUDIZHU_PLAYER_COUNT
+	next_match_player_count_identity = normalize_player_count_for_mode(MATCH_MODE_IDENTITY, stored_identity_count)
+	next_match_player_count_doudizhu = normalize_player_count_for_mode(MATCH_MODE_DOUDIZHU, stored_doudizhu_count)
+	next_match_player_count = get_stored_player_count_for_mode(next_match_mode)
+
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
 	customize_ai_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled))
 	# 已保存手气卡张数；旧版一至五张保持兼容，十张与无限张分别保留稳定值。
@@ -539,6 +599,8 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", next_match_player_count_identity)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", next_match_player_count_doudizhu)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)

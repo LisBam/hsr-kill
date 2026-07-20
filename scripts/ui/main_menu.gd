@@ -285,18 +285,22 @@ func _on_visibility_changed() -> void:
 
 ## 将牌桌提供的下一局人数写入主菜单设置；人数保持限制在标准身份局的有效范围。
 func set_next_player_count(player_count: int) -> void:
-	# 当前菜单允许的人数；范围以组件导出的身份局限制为准，避免未来调整检查器范围时写入无效存档。
-	var clamped_player_count: int = clampi(player_count, minimum_player_count, maximum_player_count)
-	_player_count_input.value = clamped_player_count
-	GameSettings.set_next_match_player_count(clamped_player_count)
+	# 按当前选中模式规范化人数；使用无信号写入避免与 GameSettings 信号形成无限递归。
+	var mode_id: String = _selected_match_mode
+	var clamped_player_count: int = GameSettings.normalize_player_count_for_mode(mode_id, player_count) if GameSettings != null else clampi(player_count, minimum_player_count, maximum_player_count)
+	if int(_player_count_input.value) != clamped_player_count:
+		_player_count_input.set_value_no_signal(float(clamped_player_count))
+	if GameSettings != null:
+		GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回设置面板当前指定的人数；优先读取仍在编辑中的文本，避免输入框失焦前的数据丢失。
 func get_next_player_count() -> int:
-	# 当前手动输入文本；数值文本优先于 SpinBox 已确认值，空文本与非数字文本会安全回退。
+	# 输入框当前文本；优先读取尚未因焦点切换而提交的键入内容。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	# 实际人数；0不是合法标准身份局人数，因此可作为无效文本的回退标记。
 	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	if GameSettings != null:
+		return GameSettings.normalize_player_count_for_mode(_selected_match_mode, resolved_player_count)
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
 
 
@@ -405,14 +409,19 @@ func _select_identity_mode() -> void:
 	_selected_match_mode = GameSettings.MATCH_MODE_IDENTITY
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
-	# 身份模式人数范围；恢复检查器默认 2-10。
+	# 身份模式人数范围；恢复检查器默认 2-10，并加载身份模式独立人数。
 	minimum_player_count = 2
 	maximum_player_count = 10
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
-	set_next_player_count(int(_player_count_input.value))
+	_player_count_input.step = 1.0
+	var identity_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_IDENTITY) if GameSettings != null else int(_player_count_input.value)
+	set_next_player_count(identity_count)
 	_mode_title.text = "身份模式"
 	_mode_description.text = "标准身份局 · %d—%d人 · 主公忠臣 vs 反贼内奸" % [minimum_player_count, maximum_player_count]
+	# 预览左上角“标准身份局”徽章已按需求隐藏；身份与斗地主均不展示该 UI。
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = true
 	_doudizhu_mode_button.button_pressed = false
@@ -428,18 +437,20 @@ func _select_doudizhu_mode() -> void:
 	_selected_match_mode = GameSettings.MATCH_MODE_DOUDIZHU
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
-	# 斗地主仅 3/6 人；SpinBox 仍用连续范围，开局校验会拒绝其它人数。
+	# 斗地主仅 3/6 人；步长 3 使上下键在 3 与 6 之间切换，禁止其它人数。
 	minimum_player_count = 3
 	maximum_player_count = 6
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
-	# 默认人数夹到 3 或 6；5 夹到 6，2 夹到 3。
-	var preferred_count: int = int(_player_count_input.value)
-	if preferred_count != 3 and preferred_count != 6:
-		preferred_count = 3 if preferred_count < 5 else 6
+	_player_count_input.step = 3.0
+	# 恢复该模式独立保存人数；非 3/6 时由全局规范化夹到合法值。
+	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU) if GameSettings != null else 3
+	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, preferred_count) if GameSettings != null else (3 if preferred_count < 5 else 6)
 	set_next_player_count(preferred_count)
 	_mode_title.text = "斗地主"
-	_mode_description.text = "地主与农民对决 · 仅 3 人或 6 人 · 地主获飞扬/跋扈并+1体力上限，农民获共苦"
+	_mode_description.text = "斗地主·3或6人·地主VS农民"
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = false
 	_doudizhu_mode_button.button_pressed = true
@@ -477,6 +488,10 @@ func _open_lan_panel() -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
 	_online_lobby_panel.visible = false
+	# 打开局域网前再次写入当前模式与人数；斗地主入口建房时 host_lan 读取 next_match_mode 创建对应房间。
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(_selected_match_mode)
+		GameSettings.set_next_match_player_count(get_next_player_count())
 	_lan_lobby_panel.open_panel(get_next_player_count(), _lan_default_port)
 	_suspend_background_focus(_lan_lobby_panel)
 
@@ -967,12 +982,12 @@ func _on_game_speed_changed(interval_seconds: float) -> void:
 
 ## 下一局人数输入变化时写入全局持久化设置；已开始对局不会读取该值改变当前身份与座次。
 func _on_next_player_count_changed(player_count: float) -> void:
-	# 原始输入人数；斗地主模式只允许 3 或 6。
-	var resolved_count: int = int(player_count)
-	if _selected_match_mode == GameSettings.MATCH_MODE_DOUDIZHU and resolved_count != 3 and resolved_count != 6:
-		resolved_count = 3 if resolved_count < 5 else 6
-		_player_count_input.set_value_no_signal(resolved_count)
-	GameSettings.set_next_match_player_count(resolved_count)
+	# 按模式规范化；斗地主仅 3/6，身份局 2–10。无信号回写避免重复回调。
+	var resolved_count: int = GameSettings.normalize_player_count_for_mode(_selected_match_mode, int(player_count)) if GameSettings != null else int(player_count)
+	if int(_player_count_input.value) != resolved_count:
+		_player_count_input.set_value_no_signal(float(resolved_count))
+	if GameSettings != null:
+		GameSettings.set_next_match_player_count(resolved_count)
 
 
 ## 将自动身份标记开关写入全局设置；该设置只影响客户端推测徽记显示。

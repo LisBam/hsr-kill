@@ -86,10 +86,10 @@ func get_first_player_identity(mode_id: String) -> String:
 	return "leader"
 
 
-## 返回身份是否在开局时公开；标准身份局的领袖与斗地主的地主默认公开。
+## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主全部身份明置（无需标记或隐藏）。
 func is_identity_public_at_start(identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	if normalize_mode(mode_id) == MODE_DOUDIZHU:
-		return identity == "landlord"
+		return not identity.is_empty()
 	return identity == "leader"
 
 
