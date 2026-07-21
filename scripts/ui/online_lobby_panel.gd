@@ -507,13 +507,18 @@ func _on_game_mode_option_selected(_index: int) -> void:
 		_player_count_input.set_value_no_signal(float(normalized_count))
 
 
-## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/5 步长2，最小值不低于当前真人数。
+## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/5 步长2，2v2 固定 4 人，最小值不低于当前真人数。
 func _apply_player_count_limits_for_mode(game_mode_id: String) -> void:
 	var member_floor: int = maxi(int(_snapshot.get("member_count", 0)), 2)
 	if game_mode_id == "doudizhu":
 		_player_count_input.min_value = maxi(member_floor, 3)
 		_player_count_input.max_value = 5
 		_player_count_input.step = 2.0
+	elif game_mode_id == "team2v2":
+		# 2v2 仅支持 4 人：两蓝两红，座次 1/4 与 2/3 固定成队。
+		_player_count_input.min_value = maxi(member_floor, 4)
+		_player_count_input.max_value = 4
+		_player_count_input.step = 1.0
 	else:
 		_player_count_input.min_value = member_floor
 		_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
@@ -530,6 +535,9 @@ func _normalize_player_count_for_mode(game_mode_id: String, player_count: int) -
 			normalized = player_count
 		else:
 			normalized = 3 if player_count < 4 else 5
+	elif game_mode_id == "team2v2":
+		# 2v2 固定 4 人；GameSettings 规范化失败时仍钳制到 4。
+		normalized = 4
 	else:
 		normalized = clampi(player_count, 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
 	return maxi(normalized, int(_snapshot.get("member_count", 0)))

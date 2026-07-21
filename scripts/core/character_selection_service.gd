@@ -16,7 +16,7 @@ const PHASE_COMPLETE: String = "complete"
 const PHASE_CUSTOM: String = "custom_selecting"
 
 ## 身份按钮与 AI 自动分配使用的稳定顺序；顺序只影响界面排列和剩余名额选择，不改变身份规则。
-const IDENTITY_ORDER: Array[String] = ["leader", "loyalist", "rebel", "renegade", "landlord", "peasant"]
+const IDENTITY_ORDER: Array[String] = ["leader", "loyalist", "rebel", "renegade", "landlord", "peasant", "blue", "red"]
 
 ## 当前选将阶段；默认空字符串表示尚未创建选将流程。
 var phase: String = ""
@@ -92,7 +92,10 @@ var _rng: RandomNumberGenerator
 
 
 ## 返回一号位绑定的首任身份 ID；斗地主为 landlord，标准身份局为 leader。
+## 2v2 不绑定首任身份（蓝/红各两张且可互换座次色），返回空字符串。
 func get_first_seat_identity() -> String:
+	if is_team2v2_mode():
+		return ""
 	if is_doudizhu_mode():
 		return "landlord"
 	if _identity_limits.has("landlord"):
@@ -105,14 +108,28 @@ func is_doudizhu_mode() -> bool:
 	return match_mode == "doudizhu" or _identity_limits.has("landlord")
 
 
-## 返回是否启用领袖优先选将与公开领袖武将；斗地主为 false。
+## 返回是否为 2v2 模式；身份表含蓝方/红方时同样判定为真。
+func is_team2v2_mode() -> bool:
+	return match_mode == "team2v2" or _identity_limits.has("blue") or _identity_limits.has("red")
+
+
+## 返回是否全员同时选将（不公开武将）；斗地主与 2v2 均为 true。
+func uses_simultaneous_selection() -> bool:
+	return is_doudizhu_mode() or is_team2v2_mode()
+
+
+## 返回是否启用领袖优先选将与公开领袖武将；斗地主与 2v2 为 false。
 func uses_leader_priority_selection() -> bool:
-	return not is_doudizhu_mode()
+	return not uses_simultaneous_selection()
 
 
 ## 返回一号位身份是否全局唯一；唯一时身份与一号位双向绑定（身份局领袖、三人斗地主地主）。
+## 2v2 不绑定一号位身份，恒为 false。
 func has_unique_first_seat_identity() -> bool:
-	return int(_identity_limits.get(get_first_seat_identity(), 0)) <= 1
+	var first_seat_identity: String = get_first_seat_identity()
+	if first_seat_identity.is_empty():
+		return false
+	return int(_identity_limits.get(first_seat_identity, 0)) <= 1
 
 
 ## 返回本局固定地主座次号列表；按标准斗地身份表生成（3人为[1]，5人为[1,3]），非斗地返回空数组。
@@ -214,6 +231,14 @@ func _normalize_custom_seat_identity(requested_seat_number: int, requested_ident
 			return {"error": "地主身份必须选择一号位。"}
 		return {"seat_number": seat_number, "identity": identity, "error": ""}
 
+	# 2v2：座次与蓝/红身份自由组合，仅校验名额与有效性，不强制一号位绑定。
+	if is_team2v2_mode() or first_seat_identity.is_empty():
+		if seat_number < 1 or seat_number > _player_ids.size():
+			return {"error": "请选择有效座次。"}
+		if identity.is_empty() or not _identity_limits.has(identity):
+			return {"error": "请选择有效身份。"}
+		return {"seat_number": seat_number, "identity": identity, "error": ""}
+
 	# 身份局：一号位始终绑定首任身份；唯一首任身份选择时同步绑回一号位。
 	if seat_number == 1:
 		identity = first_seat_identity
@@ -259,13 +284,22 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	replacement_card_count = maxi(requested_replacement_card_count, 0)
 	if _character_ids.is_empty():
 		return "没有可用于选将的武将配置。"
-	# 模式：显式参数优先；否则根据身份表推断（含地主/农民则为斗地主）。
+	# 模式：显式参数优先；否则根据身份表推断（地主/农民→斗地主，蓝/红→2v2）。
 	var inferred_mode: String = "identity"
 	for probe_player: PlayerState in players:
-		if probe_player != null and (probe_player.identity == "landlord" or probe_player.identity == "peasant"):
+		if probe_player == null:
+			continue
+		if probe_player.identity == "landlord" or probe_player.identity == "peasant":
 			inferred_mode = "doudizhu"
 			break
-	match_mode = "doudizhu" if requested_match_mode == "doudizhu" or (requested_match_mode.is_empty() and inferred_mode == "doudizhu") else "identity"
+		if probe_player.identity == "blue" or probe_player.identity == "red":
+			inferred_mode = "team2v2"
+	if requested_match_mode == "doudizhu" or (requested_match_mode.is_empty() and inferred_mode == "doudizhu"):
+		match_mode = "doudizhu"
+	elif requested_match_mode == "team2v2" or (requested_match_mode.is_empty() and inferred_mode == "team2v2"):
+		match_mode = "team2v2"
+	else:
+		match_mode = "identity"
 	# 领袖技武将仅身份局领袖阶段使用；斗地主不注入领袖技固定候选。
 	if uses_leader_priority_selection():
 		for character_id: String in leader_skill_character_ids:
@@ -284,6 +318,9 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			leader_player_id = player.player_id
 		elif player.identity == "landlord" and leader_player_id < 0:
 			leader_player_id = player.player_id
+		elif is_team2v2_mode() and leader_player_id < 0 and player_index == 0:
+			# 2v2 兼容字段：记录一号位玩家 ID，不表示领袖优先选将。
+			leader_player_id = player.player_id
 	if uses_leader_priority_selection():
 		if leader_player_id < 0:
 			return "身份配置缺少领袖，无法开始选将。"
@@ -296,7 +333,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		phase = PHASE_LEADER
 		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
 		return ""
-	# 斗地主：分配表已按一号位（及五人三号位）固定地主，不再旋转座次；全员同时选将且不公开武将。
+	# 斗地主 / 2v2：座次与身份已在创建玩家时固定，不再旋转；全员同时选将且不公开武将。
 	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
 		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1
@@ -333,19 +370,19 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	var allows_all_characters_now: bool = custom_assignment_enabled and (
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
-		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+		or uses_simultaneous_selection() and phase == PHASE_OTHERS
 	)
 	if not is_initial_leader_assignment and not candidates.has(character_id) and not (allows_all_characters_now and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
 	if _is_character_selected_by_other_player(player_id, character_id):
 		return "该武将已经被其他玩家选择。"
 	# 首任领袖是否随武将一起提交了座次身份；真人界面始终提供完整值，AI首任领袖可先亮将并把最终名额留到真人确认之后。
-	var has_initial_custom_assignment: bool = (phase == PHASE_LEADER or (is_doudizhu_mode() and phase == PHASE_OTHERS)) and requested_seat_number >= 1 and not requested_identity.is_empty()
+	var has_initial_custom_assignment: bool = (phase == PHASE_LEADER or uses_simultaneous_selection() and phase == PHASE_OTHERS) and requested_seat_number >= 1 and not requested_identity.is_empty()
 	# 一次性自选确认；身份局最终自选与斗地主同时选将必须提交完整分配，首任领袖仅在请求实际携带座次身份时同步落定。
 	var confirms_custom_assignment: bool = custom_assignment_enabled and (
 		phase == PHASE_CUSTOM
 		or has_initial_custom_assignment
-		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+		or uses_simultaneous_selection() and phase == PHASE_OTHERS
 	)
 	if confirms_custom_assignment:
 		# 规范化后的座次与身份；斗地强制地主占固定座（1/3），身份局一号位与领袖双向绑定。
@@ -393,7 +430,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	# 普通模式只等待武将确认；最终自选还必须等待每名角色确认座次与身份，首任领袖已选武将不能提前结束阶段。
 	# 真人首任领袖已经同时写入两份最终映射；AI首任领袖则必须等后续补齐映射后才允许完成。
 	var all_players_selected: bool = _selections_by_player.size() == _player_ids.size()
-	if custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS)):
+	if custom_assignment_enabled and (phase == PHASE_CUSTOM or uses_simultaneous_selection() and phase == PHASE_OTHERS):
 		all_players_selected = all_players_selected and _selected_seats_by_player.size() == _player_ids.size() and _selected_identities_by_player.size() == _player_ids.size()
 	if all_players_selected:
 		phase = PHASE_COMPLETE
@@ -576,7 +613,7 @@ func has_custom_assignment_preview(player_id: int) -> bool:
 ## 更新玩家尚未确认武将时的座次与身份预览；该操作不占最终名额，方便控制器即时重排未确认 AI。
 func preview_custom_assignment(player_id: int, requested_seat_number: int, requested_identity: String) -> String:
 	# 可预览阶段；首任领袖在第一次选将框中即可调整座次身份，其他玩家继续在最终自选阶段使用相同入口。
-	var can_preview_current_phase: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
+	var can_preview_current_phase: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or uses_simultaneous_selection() and phase == PHASE_OTHERS)
 	if not can_preview_current_phase or not can_player_select(player_id):
 		return "当前玩家不能预览座次与身份。"
 	# 规范化后的预览座次与身份；一号位与唯一首任身份双向绑定。
@@ -700,12 +737,12 @@ func to_dict(viewer_id: int) -> Dictionary:
 	if can_player_select(viewer_id):
 		local_candidates = get_candidates(viewer_id)
 	# 当前可提交座次身份的阶段；身份局领袖/自选与斗地主全员同时选将均可携带座次身份。
-	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
+	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or uses_simultaneous_selection() and phase == PHASE_OTHERS)
 	# 当前可打开“所有武将”的阶段；开启自选后，首任领袖公开选将与后续最终自选、斗地主同时选将均应显示全武将入口。
 	var allows_all_characters_now: bool = custom_assignment_enabled and (
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
-		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+		or uses_simultaneous_selection() and phase == PHASE_OTHERS
 	)
 	# 首任领袖保留的最终武将；该状态只对应 AI 补交座次身份，真人首任领袖在 PHASE_LEADER 仍可使用全武将。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(viewer_id)

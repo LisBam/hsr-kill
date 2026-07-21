@@ -260,9 +260,14 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 	# 观察者身份；项目稳定名称映射无名杀 zhu、zhong、fan、nei。
 	var from_identity: String = str(from_player.get("identity", "renegade"))
 	# 目标身份；未知值按内奸处理，避免把异常配置误判为固定友方。
-	var to_identity: String = assumed_target_identity if assumed_target_identity in ["leader", "loyalist", "rebel", "renegade", "landlord", "peasant"] else str(to_player.get("identity", "renegade"))
+	var to_identity: String = assumed_target_identity if assumed_target_identity in ["leader", "loyalist", "rebel", "renegade", "landlord", "peasant", "blue", "red"] else str(to_player.get("identity", "renegade"))
 	# 斗地主简化态度：同身份（地主对地主、农民对农民）为友，对立为敌。
 	if from_identity in ["landlord", "peasant"] or to_identity in ["landlord", "peasant"]:
+		if from_identity == to_identity:
+			return 8.0
+		return -8.0
+	# 2v2 简化态度：同色（蓝对蓝、红对红）为友，对立为敌；与斗地主同量级。
+	if from_identity in ["blue", "red"] or to_identity in ["blue", "red"]:
 		if from_identity == to_identity:
 			return 8.0
 		return -8.0

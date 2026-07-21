@@ -34,6 +34,9 @@ const STARTING_STATUS_TEXT_IDENTITY: String = "正在创建身份局……"
 ## 斗地主开局请求处理期间显示的状态文字。
 const STARTING_STATUS_TEXT_DOUDIZHU: String = "正在创建斗地主对局……"
 
+## 2v2 开局请求处理期间显示的状态文字。
+const STARTING_STATUS_TEXT_TEAM2V2: String = "正在创建2v2对局……"
+
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
@@ -67,8 +70,14 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 左侧斗地主模式按钮指示条；选中斗地主时显示主题强调色。
 @onready var _doudizhu_mode_card_indicator: ColorRect = %DouDizhuModeIndicator
 
+## 左侧 2v2 模式按钮指示条；选中 2v2 时显示主题强调色。
+@onready var _team2v2_mode_card_indicator: ColorRect = %Team2v2ModeIndicator
+
 ## 左侧斗地主模式卡片按钮；与身份模式并列，只负责写入下一局模式配置。
 @onready var _doudizhu_mode_button: Button = %DouDizhuModeButton
+
+## 左侧 2v2 模式卡片按钮；与身份模式、斗地主并列，写入下一局 team2v2 配置。
+@onready var _team2v2_mode_button: Button = %Team2v2ModeButton
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -194,6 +203,7 @@ func _ready() -> void:
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
 	_doudizhu_mode_button.pressed.connect(_select_doudizhu_mode)
+	_team2v2_mode_button.pressed.connect(_select_team2v2_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
@@ -329,11 +339,13 @@ func refresh_ui_style() -> void:
 	_top_online_settings_indicator.color = BattleUIStyle.get_color("accent")
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_doudizhu_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_team2v2_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
 	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_doudizhu_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	BattleUIStyle.apply_interaction_button(_team2v2_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -396,8 +408,14 @@ func refresh_ui_style() -> void:
 ## 切换到模式选择内容页；顶部“模式选择”与“联机设置”对等互斥，仅替换客户区，不创建弹层。
 func _restore_selected_match_mode() -> void:
 	# 根据全局下一局模式恢复主菜单选中态；未知值回退身份模式。
-	if GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_DOUDIZHU:
+	if GameSettings == null:
+		_select_identity_mode()
+		return
+	var restored_mode: String = GameSettings.normalize_match_mode(GameSettings.next_match_mode)
+	if restored_mode == GameSettings.MATCH_MODE_DOUDIZHU:
 		_select_doudizhu_mode()
+	elif restored_mode == GameSettings.MATCH_MODE_TEAM2V2:
+		_select_team2v2_mode()
 	else:
 		_select_identity_mode()
 
@@ -425,8 +443,10 @@ func _select_identity_mode() -> void:
 	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = true
 	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = false
 	_mode_card_indicator.visible = true
 	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = false
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
@@ -458,8 +478,43 @@ func _select_doudizhu_mode() -> void:
 	_set_top_navigation_page(false)
 	_identity_mode_button.button_pressed = false
 	_doudizhu_mode_button.button_pressed = true
+	_team2v2_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = true
+	_team2v2_mode_card_indicator.visible = false
+	_show_status(MODE_READY_STATUS_TEXT, false)
+
+
+## 选中 2v2 模式；固定 4 人，写入下一局模式配置后不改进行中的对局。
+func _select_team2v2_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_TEAM2V2
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_TEAM2V2)
+	# 2v2 固定 4 人；禁用人数微调范围外的值。
+	minimum_player_count = 4
+	maximum_player_count = 4
+	_player_count_input.min_value = 4
+	_player_count_input.max_value = 4
+	_player_count_input.step = 1.0
+	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_TEAM2V2) if GameSettings != null else 4
+	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_TEAM2V2, preferred_count) if GameSettings != null else 4
+	set_next_player_count(preferred_count)
+	_mode_title.text = "2v2"
+	_mode_description.text = "2v2·4人·蓝方VS红方·一/四同队、二/三同队"
+	var team2v2_count_label: Label = %Team2v2ModePlayerCount as Label
+	if team2v2_count_label != null:
+		team2v2_count_label.text = "4人"
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = true
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
@@ -528,7 +583,11 @@ func _request_start_game() -> void:
 	_set_settings_visible(false)
 	_start_game_button.disabled = true
 	# 当前模式开局状态文案；失败时会被具体错误替换。
-	var starting_status: String = STARTING_STATUS_TEXT_DOUDIZHU if _selected_match_mode == GameSettings.MATCH_MODE_DOUDIZHU else STARTING_STATUS_TEXT_IDENTITY
+	var starting_status: String = STARTING_STATUS_TEXT_IDENTITY
+	if _selected_match_mode == GameSettings.MATCH_MODE_DOUDIZHU:
+		starting_status = STARTING_STATUS_TEXT_DOUDIZHU
+	elif _selected_match_mode == GameSettings.MATCH_MODE_TEAM2V2:
+		starting_status = STARTING_STATUS_TEXT_TEAM2V2
 	_show_status(starting_status, false)
 	# 再次确认模式写入；防止设置浮层改人数后模式丢失。
 	if GameSettings != null:

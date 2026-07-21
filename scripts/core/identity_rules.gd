@@ -9,6 +9,9 @@ const MODE_IDENTITY: String = "identity"
 ## 斗地主模式稳定 ID；仅支持三人与五人局，使用地主与农民身份。
 const MODE_DOUDIZHU: String = "doudizhu"
 
+## 2v2 模式稳定 ID；固定四人，两名蓝方与两名红方，座次一号位与四号位同队、二号位与三号位同队。
+const MODE_TEAM2V2: String = "team2v2"
+
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
 const IDENTITY_DISTRIBUTIONS: Dictionary = {
 	2: ["leader", "rebel"],
@@ -29,6 +32,9 @@ const DOUDIZHU_DISTRIBUTIONS: Dictionary = {
 	5: ["landlord", "peasant", "landlord", "peasant", "peasant"],
 }
 
+## 2v2 基准身份表；一号位与四号位同队、二号位与三号位同队。开局时按 50% 概率整表互换蓝红。
+const TEAM2V2_DISTRIBUTION_BASE: Array[String] = ["blue", "red", "red", "blue"]
+
 ## 兼容旧常量名；外部若仍引用 DISTRIBUTIONS 时指向标准身份表。
 const DISTRIBUTIONS: Dictionary = IDENTITY_DISTRIBUTIONS
 
@@ -37,6 +43,8 @@ const DISTRIBUTIONS: Dictionary = IDENTITY_DISTRIBUTIONS
 func normalize_mode(mode_id: String) -> String:
 	if mode_id == MODE_DOUDIZHU:
 		return MODE_DOUDIZHU
+	if mode_id == MODE_TEAM2V2:
+		return MODE_TEAM2V2
 	return MODE_IDENTITY
 
 
@@ -49,6 +57,9 @@ func get_supported_player_counts(mode_id: String) -> Array[int]:
 	if mode == MODE_DOUDIZHU:
 		result.append(3)
 		result.append(5)
+		return result
+	if mode == MODE_TEAM2V2:
+		result.append(4)
 		return result
 	for player_count: int in range(2, 11):
 		if IDENTITY_DISTRIBUTIONS.has(player_count):
@@ -70,6 +81,8 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 	var raw: Array = []
 	if mode == MODE_DOUDIZHU:
 		raw = DOUDIZHU_DISTRIBUTIONS.get(player_count, []) as Array
+	elif mode == MODE_TEAM2V2:
+		raw = TEAM2V2_DISTRIBUTION_BASE.duplicate() if player_count == 4 else []
 	else:
 		raw = IDENTITY_DISTRIBUTIONS.get(player_count, []) as Array
 	# 强类型身份结果；逐项转换保证调用方获得字符串数组。
@@ -80,23 +93,47 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 
 
 ## 返回模式开局首回合与首任公开选将角色的身份 ID；身份局为 leader，斗地主为 landlord。
+## 2v2 以一号位固定开局，不绑定单一身份；调用方应优先按座次 1 取首回合角色。
 func get_first_player_identity(mode_id: String) -> String:
 	if normalize_mode(mode_id) == MODE_DOUDIZHU:
 		return "landlord"
+	if normalize_mode(mode_id) == MODE_TEAM2V2:
+		return ""
 	return "leader"
 
 
-## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主全部身份明置（无需标记或隐藏）。
+## 返回模式是否固定按一号位开始首回合；2v2 固定 true，其他模式 false（由首任身份决定）。
+func starts_from_first_seat(mode_id: String) -> bool:
+	return normalize_mode(mode_id) == MODE_TEAM2V2
+
+
+## 返回 2v2 是否应对基准身份表进行蓝红互换；coin_flip 为 true 时一号/四号变为红方，二号/三号变为蓝方。
+func get_team2v2_distribution(swap_colors: bool) -> Array[String]:
+	# 结果身份表；始终复制基准再按需互换，避免修改常量数组。
+	var result: Array[String] = []
+	for identity_value: String in TEAM2V2_DISTRIBUTION_BASE:
+		if swap_colors:
+			result.append("red" if identity_value == "blue" else "blue")
+		else:
+			result.append(identity_value)
+	return result
+
+
+## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主与 2v2 全部身份明置（阵营对战无需隐藏）。
 func is_identity_public_at_start(identity: String, mode_id: String = MODE_IDENTITY) -> bool:
-	if normalize_mode(mode_id) == MODE_DOUDIZHU:
+	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2:
 		return not identity.is_empty()
 	return identity == "leader"
 
 
-## 返回模式授予的额外体力上限；斗地主地主固定 +1，身份局领袖仅在不少于 5 人时 +1。
+## 返回模式授予的额外体力上限；斗地主地主固定 +1，身份局领袖仅在不少于 5 人时 +1；2v2 不加体力。
 func get_opening_max_hp_bonus(identity: String, player_count: int, mode_id: String = MODE_IDENTITY) -> int:
-	if normalize_mode(mode_id) == MODE_DOUDIZHU:
+	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_DOUDIZHU:
 		return 1 if identity == "landlord" else 0
+	if mode == MODE_TEAM2V2:
+		return 0
 	return 1 if identity == "leader" and player_count >= 5 else 0
 
 
@@ -117,13 +154,21 @@ func get_mode_skill_ids(identity: String, mode_id: String = MODE_IDENTITY) -> Ar
 ## 判断两个身份是否互为队友；队友不包括自己，调用方必须先确认两个不同角色。
 ## 身份局：主公与忠臣互为队友，反贼与反贼互为队友，内奸没有任何队友（含两个内奸之间）。
 ## 斗地主：地主与地主互为队友，农民与农民互为队友。
+## 2v2：蓝方与蓝方互为队友，红方与红方互为队友。
 func are_identities_teammates(from_identity: String, to_identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	if from_identity.is_empty() or to_identity.is_empty():
 		return false
-	if normalize_mode(mode_id) == MODE_DOUDIZHU:
+	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_DOUDIZHU:
 		if from_identity == "landlord" and to_identity == "landlord":
 			return true
 		if from_identity == "peasant" and to_identity == "peasant":
+			return true
+		return false
+	if mode == MODE_TEAM2V2:
+		if from_identity == "blue" and to_identity == "blue":
+			return true
+		if from_identity == "red" and to_identity == "red":
 			return true
 		return false
 	if from_identity in ["leader", "loyalist"] and to_identity in ["leader", "loyalist"]:
@@ -160,15 +205,23 @@ func evaluate_winner(state: GameState) -> String:
 	var mode: String = normalize_mode(str(state.match_mode))
 	if mode == MODE_DOUDIZHU:
 		return _evaluate_doudizhu_winner(state)
+	if mode == MODE_TEAM2V2:
+		return _evaluate_team2v2_winner(state)
 	return _evaluate_identity_winner(state)
 
 
-## 返回死亡奖惩类型，由控制器执行具体移动：draw_three、leader_penalty 或空字符串。
+## 返回死亡奖惩类型，由控制器执行具体移动：draw_three、leader_penalty、teammate_draw 或空字符串。
 ## 斗地主没有身份局的击杀反贼摸三与主公误杀忠臣惩罚。
+## 2v2 击杀任何人（含队友）均无击杀奖惩；队友死亡后由存活队友各摸一张，类型为 teammate_draw。
 func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String = MODE_IDENTITY) -> String:
-	if killer == null or victim == null:
+	if victim == null:
 		return ""
-	if normalize_mode(mode_id) == MODE_DOUDIZHU:
+	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_DOUDIZHU:
+		return ""
+	if mode == MODE_TEAM2V2:
+		return "teammate_draw"
+	if killer == null:
 		return ""
 	if victim.identity == "rebel":
 		return "draw_three"
@@ -225,6 +278,26 @@ func _evaluate_doudizhu_winner(state: GameState) -> String:
 		return "peasants"
 	if peasant_alive == 0 and landlord_alive > 0:
 		return "landlords"
+	return ""
+
+
+## 2v2 胜负：任一阵营全部出局则另一阵营获胜；双方均仍有存活角色时对局继续。
+func _evaluate_team2v2_winner(state: GameState) -> String:
+	# 存活蓝方数量。
+	var blue_alive: int = 0
+	# 存活红方数量。
+	var red_alive: int = 0
+	for player: PlayerState in state.players:
+		if not player.alive or player.out_of_game:
+			continue
+		if player.identity == "blue":
+			blue_alive += 1
+		elif player.identity == "red":
+			red_alive += 1
+	if blue_alive == 0 and red_alive > 0:
+		return "red_team"
+	if red_alive == 0 and blue_alive > 0:
+		return "blue_team"
 	return ""
 
 

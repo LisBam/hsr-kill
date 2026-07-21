@@ -74,6 +74,7 @@ const DEFAULT_LOBBY_GAME_MODE_ID: String = "identity"
 const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"id":DEFAULT_LOBBY_GAME_MODE_ID, "display_name":"身份模式"},
 	{"id":"doudizhu", "display_name":"斗地主"},
+	{"id":"team2v2", "display_name":"2v2"},
 ]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
@@ -1035,13 +1036,13 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 	return DEFAULT_LOBBY_GAME_MODE_ID
 
 
-## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局与斗地主。
+## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主与 2v2。
 func _is_lobby_game_mode_playable(game_mode_id: String) -> bool:
 	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
-	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu"
+	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2"
 
 
-## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 5。
+## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 5，2v2 固定 4。
 func _normalize_lobby_player_count(player_count: int, game_mode_id: String) -> int:
 	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
 	if GameSettings != null and GameSettings.has_method("normalize_player_count_for_mode"):
