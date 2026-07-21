@@ -1,6 +1,9 @@
 extends SkillDefinition
 
-## 【永屹】技能源码。持有者的体力值实际因伤害减少后可执行额外弃牌阶段并获得护盾，也可在弃牌阶段对自己造成伤害以换取额外出牌阶段。
+## 【永屹】技能源码。持有者的体力值实际因伤害减少后可执行额外弃牌阶段并获得护盾，也可在弃牌阶段对自己造成伤害以换取额外出牌阶段；第二段效果每回合限一次。
+
+## 最近一次成功发动第二段效果所在的全局回合号；默认-1表示本局尚未发动第二段，比较 state.turn_number 实现每回合限一次。
+var _used_play_branch_turn_number: int = -1
 
 ## 额外弃牌阶段完成后获得的护盾数；默认1点，修改后必须同步技能原文与玩法数值文档。
 const SHIELD_GAIN_AMOUNT: int = 1
@@ -37,7 +40,7 @@ func _init() -> void:
 		"name": "永屹",
 		"trigger": "damageAfter/phaseDiscardBegin",
 		"ui_enabled": false,
-		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。",
+		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。每回合限一次，弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。",
 	})
 
 
@@ -58,8 +61,11 @@ func _on_damage_after(event: RuleEvent) -> void:
 	request_card_selection("永屹", "是否发动【永屹】执行一个额外的弃牌阶段？", [], 0, 0, true, {"kind":"yongyi_damage_confirm", "damage_source_id":event.source_id, "hp_lost":hp_lost, "ai_allow_confirm":true})
 
 
-## 弃牌阶段开始时在持有者存活且能排队额外出牌阶段时请求确认。
+## 弃牌阶段开始时在持有者存活、本回合第二段未发动且能排队额外出牌阶段时请求确认。
 func _on_discard_phase_begin(_event: RuleEvent) -> void:
+	# 第二段每回合限一次；同一回合内普通弃牌、额外弃牌或自伤嵌套产生的后续弃牌阶段均共享该额度。
+	if _used_play_branch_turn_number == host.state.turn_number:
+		return
 	# 技能持有者状态；死亡或离场时该效果不可触发并直接跳过。
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner == null or not owner.alive or owner.out_of_game or not bool(host.call("can_add_play_phase", owner_player_id)):
@@ -86,6 +92,9 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if choice_kind == "yongyi_play_phase_confirm":
 		if not response.confirmed:
 			return true
+		# 第二段每回合限一次；若等待确认期间本回合额度已被其他弃牌阶段消费，则本次确认直接失效。
+		if _used_play_branch_turn_number == host.state.turn_number:
+			return true
 		# 技能持有者状态；等待确认期间死亡、离场或额外阶段容量失效时不支付自伤。
 		var owner: PlayerState = get_owner_skill_player().get_state()
 		if owner == null or not owner.alive or owner.out_of_game or not bool(host.call("can_add_play_phase", owner_player_id)):
@@ -94,6 +103,8 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		var continuation: Dictionary = {"kind":"yongyi_after_self_damage"}
 		if not defer_settlement(continuation):
 			return true
+		# 一旦确认并成功进入自伤流程便立即消耗本回合第二段额度；取消确认不消耗，死亡或离场跳过后续也不会返还。
+		_used_play_branch_turn_number = host.state.turn_number
 		announce_activation({"branch":"extra_play", "self_damage":SELF_DAMAGE_AMOUNT, "draw_count":EXTRA_PLAY_DRAW_COUNT})
 		# 技能持有者规则对象；伤害来源与目标均为自己，普通伤害会正常由护盾优先吸收。
 		var owner_skill_player: SkillPlayer = get_owner_skill_player()

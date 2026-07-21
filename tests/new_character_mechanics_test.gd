@@ -1174,7 +1174,47 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	# 空手牌额外出牌阶段可能同步完成并消耗队列计数；自伤、摸到指定实体与返回结束阶段标记共同证明结算顺序正确。
 	if empty_hand_gepard.hp != empty_hand_hp_before - 1 or empty_hand_gepard.shield != 0 or empty_hand_gepard.hand.size() != 1 or empty_hand_gepard.find_hand_card(empty_hand_draw_card.uid) == null or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
 		return _fail("yongyi_empty_hand_confirm hp=%d shield=%d hand=%d return_finish=%s" % [empty_hand_gepard.hp, empty_hand_gepard.shield, empty_hand_gepard.hand.size(), _controller._extra_play_phase_returns_to_finish])
+
+	# 第二段每回合限一次：同一技能实例确认发动后，同回合再次触发弃牌阶段Begin不得询问。
+	_reset_state(2)
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "discard"
+	_controller.state.phase_index = 4
+	_controller.state.turn_number = 3
+	# 固定摸牌来源；第一次成功发动后会摸入1张，用于证明首次自伤后续完整执行。
+	var once_draw_card: CardInstance = _add_draw_pile_card("shan", "club", 3)
+	# 同一永屹实例；直接走技能确认入口，避免依赖阶段生命周期的中间清理细节。
+	var once_per_turn_yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
+	if once_per_turn_yongyi == null:
+		return _fail("yongyi_once_missing_skill")
+	# 第一次弃牌阶段Begin；应正常创建第二段确认请求。
+	once_per_turn_yongyi.call("_on_discard_phase_begin", RuleEvent.new("phaseDiscardBegin", 0, -1, {"turn_number":_controller.state.turn_number}))
+	if not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "yongyi_play_phase_confirm":
+		return _fail("yongyi_once_first_prompt pending=%s" % [_controller._pending_card_choice])
+	# 确认前体力；成功发动后应减少1点，且第二次Begin不得再次改变。
+	var once_hp_before: int = _controller.state.get_player(0).hp
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 自伤可能嵌套第一段确认；取消后继续排空第二段后续。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) == "yongyi_damage_confirm":
+		if not _submit_pending_choice(0, [], [], false):
+			return false
+	_controller._resume_settlement_pipeline()
+	var once_owner: PlayerState = _controller.state.get_player(0)
+	if once_owner.hp != once_hp_before - 1 or once_owner.find_hand_card(once_draw_card.uid) == null or once_per_turn_yongyi._used_play_branch_turn_number != 3:
+		return _fail("yongyi_once_first_effect hp=%d hand=%d used_turn=%s" % [once_owner.hp, once_owner.hand.size(), once_per_turn_yongyi._used_play_branch_turn_number])
+	# 同回合第二次Begin；额度已消耗，不得创建新的第二段确认。
+	_controller._pending_card_choice.clear()
+	once_per_turn_yongyi.call("_on_discard_phase_begin", RuleEvent.new("phaseDiscardBegin", 0, -1, {"turn_number":_controller.state.turn_number}))
+	if _controller.has_pending_card_choice() or once_owner.hp != once_hp_before - 1:
+		return _fail("yongyi_once_second_blocked pending=%s hp=%d" % [_controller.has_pending_card_choice(), once_owner.hp])
+	# 下一全局回合应重新允许第二段询问。
+	_controller.state.turn_number = 4
+	once_per_turn_yongyi.call("_on_discard_phase_begin", RuleEvent.new("phaseDiscardBegin", 0, -1, {"turn_number":_controller.state.turn_number}))
+	if not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "yongyi_play_phase_confirm":
+		return _fail("yongyi_once_next_turn pending=%s" % [_controller._pending_card_choice])
 	return true
+
 
 
 ## 验证统一体力牌差比例、冰封联动、疾雨选项与永屹收益判断。
