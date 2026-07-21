@@ -9,6 +9,9 @@ const TEST_FLOW_INTERVAL_SECONDS: float = 0.10
 ## 到期后观察秒数；大于阶段间隔并留出无头模式首帧资源加载与计时调度余量。
 const POST_DEADLINE_OBSERVATION_SECONDS: float = 0.18
 
+## 性能回归专用设置文件；速度边界测试的所有持久化写入均与玩家正式设置隔离。
+const TEST_SETTINGS_FILE_PATH: String = "user://performance_and_pacing_test_settings.cfg"
+
 ## 专项测试使用的权威控制器；子组件与正式场景保持相同名称和职责边界。
 var _controller: MatchController
 
@@ -18,6 +21,12 @@ var _phase_transition_executed: bool = false
 ## 人类响应牌提示是否已经发布；默认false，用于验证权威请求可先暂停而界面提示遵守流程间隔。
 var _response_prompt_published: bool = false
 
+## 测试开始前的游戏速度；测试结束恢复该原值，不再固定写回0.30秒。
+var _original_game_speed_interval_seconds: float = 0.30
+
+## 测试开始前的正式设置文件路径；测试结束后恢复供同进程其他模块继续使用。
+var _original_settings_file_path: String = "user://game_settings.cfg"
+
 ## 延迟一帧运行专项断言，保证自动加载数据库与全局类注册已经完成。
 func _ready() -> void:
 	call_deferred("_run")
@@ -25,6 +34,7 @@ func _ready() -> void:
 
 ## 依次验证设置、节奏、历史与视觉缓存；任一失败立即以非零状态退出。
 func _run() -> void:
+	_begin_settings_isolation()
 	if not _test_game_speed_setting():
 		return
 	_create_controller()
@@ -40,7 +50,7 @@ func _run() -> void:
 		return
 	if not await _test_player_visual_signature():
 		return
-	GameSettings.set_game_speed_interval_seconds(0.30)
+	_restore_original_settings()
 	print("PERFORMANCE_AND_PACING_PASS")
 	get_tree().quit(0)
 
@@ -268,6 +278,26 @@ func _test_player_visual_signature() -> bool:
 ## 输出稳定失败原因并以非零状态退出；返回false便于调用方立即停止后续断言。
 func _fail(reason: String) -> bool:
 	printerr("PERFORMANCE_AND_PACING_FAIL %s" % reason)
-	GameSettings.set_game_speed_interval_seconds(0.30)
+	_restore_original_settings()
 	get_tree().quit(1)
 	return false
+
+
+## 保存玩家原设置并把测试写盘路径切换到独立文件；即使中途失败也不会覆盖正式配置。
+func _begin_settings_isolation() -> void:
+	if GameSettings == null:
+		return
+	_original_game_speed_interval_seconds = GameSettings.game_speed_interval_seconds
+	_original_settings_file_path = GameSettings.get_settings_file_path()
+	GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
+
+
+## 恢复测试前速度、刷新临时文件并删除它；正式设置路径只在全部待保存变化清空后恢复。
+func _restore_original_settings() -> void:
+	if GameSettings == null:
+		return
+	GameSettings.set_game_speed_interval_seconds(_original_game_speed_interval_seconds)
+	GameSettings.flush_pending_settings()
+	GameSettings.set("_settings_file_path", _original_settings_file_path)
+	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_FILE_PATH))

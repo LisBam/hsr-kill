@@ -14,11 +14,23 @@ const SHORT_TWEEN_SETTLE_SECONDS: float = 0.08
 ## 统一悬停信息框延迟的回归等待时长；默认0.55秒覆盖正式0.5秒配置与无头计时器调度余量。
 const HOVER_INFORMATION_DELAY_SETTLE_SECONDS: float = 0.55
 
+## 界面回归专用设置文件；测试期间所有滑条写盘只进入该临时文件，不接触玩家正式game_settings.cfg。
+const TEST_SETTINGS_FILE_PATH: String = "user://ui_layout_test_settings.cfg"
+
 ## 菜单按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
 var _menu_button_pressed: bool = false
 
 ## 测试开始前的下一局模式；结束时原样恢复，避免残留 2v2 把六人重开钳制为四人。
 var _original_next_match_mode: String = GameSettings.DEFAULT_NEXT_MATCH_MODE
+
+## 测试开始前的AI响应速度；成功与失败出口均恢复该精确值，不假定玩家使用默认0.30秒。
+var _original_ai_response_delay_seconds: float = 0.30
+
+## 测试开始前的游戏速度；成功与失败出口均恢复该精确值，不固定覆写为默认值。
+var _original_game_speed_interval_seconds: float = 0.30
+
+## 测试开始前的正式设置文件路径；测试结束后恢复，使同进程后续功能继续使用原配置位置。
+var _original_settings_file_path: String = "user://game_settings.cfg"
 
 
 ## 延迟执行正式场景检查，保证测试根节点已经进入场景树。
@@ -30,6 +42,7 @@ func _ready() -> void:
 
 ## 检查默认窗口中的可视范围、按钮鼠标命中与底部安全区。
 func _run() -> void:
+	_begin_settings_isolation()
 	# 布局回归覆盖身份局十人桌与六人重开；强制身份模式，避免持久化 2v2 将人数钳为 4。
 	_original_next_match_mode = str(GameSettings.next_match_mode)
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
@@ -1267,15 +1280,32 @@ func _run() -> void:
 	main_instance.free()
 	await get_tree().process_frame
 	print("UI_LAYOUT_PASS viewport=%s" % viewport_rect.size)
-	_restore_original_match_mode()
+	_restore_original_settings()
 	get_tree().quit(0)
 
 
 
-## 恢复测试前的下一局模式，避免污染同进程后续专项或玩家设置。
-func _restore_original_match_mode() -> void:
-	if GameSettings != null:
-		GameSettings.set_next_match_mode(_original_next_match_mode)
+## 保存玩家原设置并把测试写盘路径切换到独立文件；真实滑条输入不会再覆盖正式配置。
+func _begin_settings_isolation() -> void:
+	if GameSettings == null:
+		return
+	_original_ai_response_delay_seconds = GameSettings.ai_response_delay_seconds
+	_original_game_speed_interval_seconds = GameSettings.game_speed_interval_seconds
+	_original_settings_file_path = GameSettings.get_settings_file_path()
+	GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
+
+
+## 恢复测试前全部设置并删除临时配置；恢复动作仍写入临时文件，正式玩家配置从始至终不会被打开写入。
+func _restore_original_settings() -> void:
+	if GameSettings == null:
+		return
+	GameSettings.set_next_match_mode(_original_next_match_mode)
+	GameSettings.set_ai_response_delay_seconds(_original_ai_response_delay_seconds)
+	GameSettings.set_game_speed_interval_seconds(_original_game_speed_interval_seconds)
+	GameSettings.flush_pending_settings()
+	GameSettings.set("_settings_file_path", _original_settings_file_path)
+	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_FILE_PATH))
 
 
 ## 等待统一信息框完成正式0.5秒悬停延迟；集中保留无头测试调度余量，避免各个手牌、装备、技能和武将牌断言使用不同等待值。
@@ -1424,6 +1454,6 @@ func _on_menu_button_pressed() -> void:
 
 ## 输出统一失败原因并以非零状态结束测试。
 func _fail(reason: String) -> void:
-	_restore_original_match_mode()
+	_restore_original_settings()
 	printerr("UI_LAYOUT_FAIL %s" % reason)
 	get_tree().quit(1)
