@@ -63,7 +63,7 @@ func _run() -> void:
 		return
 	if not _test_jiyu_branches():
 		return
-	if not _test_gangfeng_jiyu_play_priority():
+	if not _test_jiyu_all_slash_ai_priority():
 		return
 	if not _test_gangfeng_respects_slash_play_limit():
 		return
@@ -786,9 +786,11 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	_controller.state.current_player_id = 0
 	_controller.state.current_phase = "discard"
 	_controller.state.phase_index = 4
-	# 永屹持有者状态；1点护盾正好满足支付额外出牌阶段费用。
+	# 永屹持有者状态；0点护盾确保第二段1点伤害实际扣减体力并触发伤害后分支。
 	var gepard: PlayerState = _controller.state.get_player(0)
-	gepard.shield = 1
+	gepard.shield = 0
+	# 永屹自伤前体力；用于验证确认后准确受到1点普通伤害。
+	var hp_before_yongyi_damage: int = gepard.hp
 	# 可用于额外出牌阶段的实体【杀】；本段验证有牌时的阶段恢复，空手牌仍会创建确认请求并在后续独立断言。
 	_add_hand_card(0, "sha", "spade", 7)
 	# 永屹第二段的固定摸牌来源；避免空牌堆提前结束对局而掩盖额外出牌阶段的恢复结果。
@@ -801,14 +803,21 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	var discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
 	if yongyi == null or not discard_started or not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
 		return _fail("yongyi_begin_choice skill=%s started=%s pending=%s phase=%s" % [yongyi, discard_started, _controller.has_pending_card_choice(), _controller.state.current_phase])
-	# 确认支付护盾；这是此前额外出牌阶段无法被安排、游戏卡死的路径。
+	# 确认发动第二段；自伤产生的伤害后分支必须先创建嵌套确认，不能提前摸牌或恢复阶段。
 	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 嵌套伤害后确认；后续摸牌和额外出牌阶段仍在技能结算队列中等待。
+	var nested_damage_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if gepard.hp != hp_before_yongyi_damage - 1 or gepard.hand.size() != hand_count_before_yongyi_draw or str(nested_damage_context.get("kind", "")) != "yongyi_damage_confirm":
+		return _fail("yongyi_nested_damage hp=%d hand=%d context=%s" % [gepard.hp, gepard.hand.size(), nested_damage_context])
+	# 取消自伤再次触发的第一段；完整伤害尾部排空后才允许第二段继续摸牌和登记阶段。
+	if not _submit_pending_choice(0, [], [], false):
 		return false
 	# 阶段转换等待；额外出牌阶段不经过摸牌阶段，因此短暂等待后应稳定进入新的出牌请求。
 	await get_tree().create_timer(0.10, false).timeout
-	# 永屹结果与额外出牌阶段；护盾已支付、额外阶段回到结束阶段标记存在，且已打开新的正式出牌请求。
-	if gepard.shield != 0 or gepard.hand.size() != hand_count_before_yongyi_draw + 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
-		return _fail("yongyi_resume shield=%d hand=%d return_finish=%s phase=%s play_choice=%s" % [gepard.shield, gepard.hand.size(), _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
+	# 永屹结果与额外出牌阶段；体力减少1、护盾保持0、固定摸1张牌，且额外阶段已进入正式出牌请求。
+	if gepard.hp != hp_before_yongyi_damage - 1 or gepard.shield != 0 or gepard.hand.size() != hand_count_before_yongyi_draw + 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
+		return _fail("yongyi_resume hp=%d shield=%d hand=%d return_finish=%s phase=%s play_choice=%s" % [gepard.hp, gepard.shield, gepard.hand.size(), _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
 	return true
 
 
@@ -907,18 +916,33 @@ func _test_conversion_material_target_rules() -> bool:
 	return true
 
 
-## 验证疾雨第1项写入雷【杀】直击目标，并验证第2项仅横置丹恒当前攻击范围内的另一名角色。
+## 验证普通【杀】可触发疾雨、原目标只调整至横置，并验证两个后续分支的实际效果。
 func _test_jiyu_branches() -> bool:
 	_reset_state(3)
-	# 疾雨运行时技能；分支恢复使用权威卡牌上下文与攻击范围查询。
+	# 疾雨运行时技能；安装真实指定目标时机并登记到技能表以经过统一选择恢复入口。
 	var jiyu: SkillDefinition = GameDatabase.create_skill("jiyu")
 	jiyu.bind(_controller, 0)
+	_controller.skill_instances_by_player = {0:{"jiyu":jiyu}}
+	jiyu.install()
 	_controller._card_use_contexts[9101] = {"target_ids":[1], "excluded_target_ids":[], "direct_hit_target_ids":[]}
+	# 原目标预先横置；“调整至横置状态”必须保持该状态，不能按旧切换语义翻回竖直。
+	_controller.state.get_player(1).chained = true
+	# 普通【杀】指定目标时机；三种【杀】共享slash牌效，不能再限定雷【杀】定义ID。
+	_controller._emit_rule_timing("useCardToTargeted", 0, 0, 1, {"card_id":"sha", "card_uid":9101, "target_id":1})
+	# 疾雨发动确认；普通【杀】同样必须创建持有者确认请求。
+	var confirm_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(confirm_context.get("kind", "")) != "jiyu_confirm":
+		return _fail("jiyu_normal_slash_trigger context=%s" % [confirm_context])
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 发动后原目标仍为横置，且后续选择权准确交给该【杀】目标。
+	var target_option_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if not _controller.state.get_player(1).chained or str(target_option_context.get("kind", "")) != "jiyu_target_option" or int(_controller._pending_card_choice.get("chooser_id", -1)) != 1:
+		return _fail("jiyu_adjust_chained chained=%s choice=%s" % [_controller.state.get_player(1).chained, _controller._pending_card_choice])
 	# 疾雨第1项响应；目标明确选择不可响应此【杀】。
-	var direct_hit_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 1, true)
-	direct_hit_response.control_id = "direct_hit"
-	jiyu.continue_selection({"kind":"jiyu_target_option", "target_id":1, "card_uid":9101}, direct_hit_response)
-	# 雷【杀】使用上下文；二号玩家应成为唯一直击目标。
+	if not _submit_pending_choice(1, [], [], true, "direct_hit"):
+		return false
+	# 普通【杀】使用上下文；二号玩家应成为唯一直击目标。
 	var card_context: Dictionary = _controller._card_use_contexts[9101] as Dictionary
 	if not (card_context.get("direct_hit_target_ids", []) as Array).has(1):
 		return _fail("jiyu_direct_hit=%s" % card_context)
@@ -931,33 +955,30 @@ func _test_jiyu_branches() -> bool:
 	return true
 
 
-## 验证丹恒拥有疾雨时先使用实体雷【杀】，没有实体雷【杀】时把普通黑色【杀】通过罡风转为雷【杀】。
-func _test_gangfeng_jiyu_play_priority() -> bool:
+## 验证疾雨为普通、火与雷【杀】提供相同AI优先值，不再额外诱导罡风转换雷【杀】。
+func _test_jiyu_all_slash_ai_priority() -> bool:
 	_reset_state(2)
-	# 丹恒武将快照；基础策略会从武将静态技能元数据读取疾雨的雷【杀】联动分。
-	var dan_heng: PlayerState = _controller.state.get_player(0)
-	dan_heng.character_id = "dan_heng"
-	# 罡风与疾雨运行时实例；合法动作仍由控制器从真实技能实例生成。
-	var gangfeng: SkillDefinition = GameDatabase.create_skill("gangfeng")
+	# 疾雨静态AI实例；动作修正只读取逻辑牌定义，无需连接权威控制器。
 	var jiyu: SkillDefinition = GameDatabase.create_skill("jiyu")
-	gangfeng.bind(_controller, 0)
-	jiyu.bind(_controller, 0)
-	_controller.skill_instances_by_player = {0:{"gangfeng":gangfeng, "jiyu":jiyu}}
-	# 实体雷【杀】；存在时应优先直接使用，避免为相同逻辑牌额外支付罡风材料成本。
-	var thunder_slash: CardInstance = _add_hand_card(0, "sha_thunder", "spade", 7)
-	# 普通黑色【杀】；实体雷【杀】离开后应成为罡风转换材料，而不是按普通【杀】使用。
-	var black_slash: CardInstance = _add_hand_card(0, "sha", "club", 8)
-	# 丹恒基础策略；公开领袖对公开反贼的态度保证两张攻击牌都具备正收益。
-	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
-	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
-	if str(chosen_action.get("action_type", "")) != "use_card" or int(chosen_action.get("card_uid", -1)) != thunder_slash.uid:
-		return _fail("jiyu_thunder_first action=%s" % [chosen_action])
-	# 移除实体雷【杀】后重新决策；普通黑色【杀】必须进入罡风主动技能动作并保留准确材料UID。
-	dan_heng.take_hand_card(thunder_slash.uid)
-	chosen_action = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
-	var chosen_payload: Dictionary = chosen_action.get("payload", {}) as Dictionary
-	if str(chosen_action.get("action_type", "")) != "use_skill" or str(chosen_payload.get("skill_id", "")) != "gangfeng" or int(chosen_payload.get("material_card_uid", -1)) != black_slash.uid:
-		return _fail("jiyu_black_slash_conversion action=%s" % [chosen_action])
+	jiyu.bind(null, 0)
+	# 权威AI快照；疾雨只需要牌定义，本测试仍传入完整结构以保持接口契约。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	# 通用AI评估器；动作修正当前不读取其状态，但调用参数必须使用正式类型。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	for slash_definition_id: String in ["sha", "sha_fire", "sha_thunder"]:
+		# 当前【杀】动作；三种定义共享slash牌效并应获得完全相同的4.0分增益。
+		var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_definition_id":slash_definition_id, "target_ids":[1]}
+		# 当前【杀】修正结果；与固定基础分之差必须准确等于技能声明值。
+		var modified_score: float = jiyu.modify_ai_card_action_score(snapshot, slash_action, 3.0, evaluator)
+		if not is_equal_approx(modified_score, 7.0):
+			return _fail("jiyu_slash_priority id=%s score=%s" % [slash_definition_id, modified_score])
+	# 非【杀】动作；不能因疾雨获得任何额外分数。
+	var non_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_definition_id":"wuzhong", "target_ids":[0]}
+	if not is_equal_approx(jiyu.modify_ai_card_action_score(snapshot, non_slash_action, 3.0, evaluator), 3.0):
+		return _fail("jiyu_non_slash_priority")
+	# 技能静态元数据；旧雷【杀】联动字段必须移除，避免基础策略继续偏向罡风转换。
+	if GameDatabase.get_skill("jiyu").has("ai_thunder_slash_priority_bonus"):
+		return _fail("jiyu_obsolete_thunder_priority_metadata")
 	return true
 
 
@@ -1101,22 +1122,34 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	if not _controller.request_extra_discard_phase(0, 1, "yongyi", completion_context) or gepard.shield != 1 or not _controller._active_extra_discard_phase.is_empty():
 		return _fail("yongyi_extra_discard shield=%d active=%s" % [gepard.shield, _controller._active_extra_discard_phase])
 	_controller.state.current_phase = "discard"
+	# 第二段测试不保留第一段所得护盾；确保1点普通自伤穿透并写入真实伤害历史。
+	gepard.shield = 0
 	# 额外出牌阶段可用实体牌；用于验证固定摸牌后仍会正常登记额外出牌阶段。
 	_add_hand_card(0, "sha", "club", 6)
 	# 永屹固定摸牌来源；数组末尾为牌堆顶，确认后应移入杰帕德手牌。
 	var extra_play_draw_card: CardInstance = _add_draw_pile_card("shan", "diamond", 8)
 	# 确认前手牌数；用于断言第二段准确摸取1张牌。
 	var hand_count_before_extra_play_draw: int = gepard.hand.size()
-	# 永屹弃牌阶段确认响应；支付1点护盾后应排队1个额外出牌阶段并标记其结束后直接进入结束阶段。
+	# 第二段自伤前体力；固定1点普通伤害应使该值准确减少1。
+	var hp_before_extra_play_damage: int = gepard.hp
+	# 第二段自伤前伤害历史数；用于证明新费用属于伤害而不是失去护盾或失去体力。
+	var history_before_extra_play_damage: int = gepard.damage_history.size()
+	# 永屹弃牌阶段确认响应；直接调用技能会先造成伤害并把摸牌、额外阶段登记为延迟技能后续。
 	var extra_play_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
 	yongyi.continue_selection({"kind":"yongyi_play_phase_confirm"}, extra_play_response)
-	if gepard.shield != 0 or gepard.hand.size() != hand_count_before_extra_play_draw + 1 or gepard.find_hand_card(extra_play_draw_card.uid) == null or int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or (_controller._extra_play_phase_return_points.get(0, []) as Array) != ["finish"]:
-		return _fail("yongyi_extra_play shield=%d hand=%d count=%d return_finish=%s" % [gepard.shield, gepard.hand.size(), int(_controller._extra_play_phase_counts.get(0, 0)), _controller._extra_play_phase_returns_to_finish])
-	# 无手牌场景；【永屹】的原始技能逻辑仍须向玩家提供支付护盾的确认窗口，只有AI评分会倾向取消。
+	if gepard.hp != hp_before_extra_play_damage - 1 or gepard.damage_history.size() != history_before_extra_play_damage + 1 or gepard.hand.size() != hand_count_before_extra_play_draw or _controller._deferred_skill_settlements.size() != 1:
+		return _fail("yongyi_self_damage hp=%d history=%d hand=%d deferred=%s" % [gepard.hp, gepard.damage_history.size(), gepard.hand.size(), _controller._deferred_skill_settlements])
+	# 直接技能调用绕过选择提交入口；手动排空统一结算管线以恢复摸牌和额外阶段登记。
+	_controller._resume_settlement_pipeline()
+	if gepard.shield != 0 or gepard.hand.size() != hand_count_before_extra_play_draw + 1 or gepard.find_hand_card(extra_play_draw_card.uid) == null or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
+		return _fail("yongyi_extra_play hp=%d shield=%d hand=%d return_finish=%s" % [gepard.hp, gepard.shield, gepard.hand.size(), _controller._extra_play_phase_returns_to_finish])
+	# 无手牌场景；【永屹】仍须向玩家提供自伤确认窗口，只有AI评分会根据收益与生存风险倾向取消。
 	_reset_state(2)
-	# 空手牌杰帕德；护盾与弃牌阶段条件都满足，但不额外加入可使用牌。
+	# 空手牌杰帕德；无护盾且处于弃牌阶段，但不额外加入可使用牌。
 	var empty_hand_gepard: PlayerState = _controller.state.get_player(0)
-	empty_hand_gepard.shield = 1
+	empty_hand_gepard.shield = 0
+	# 空手牌场景自伤前体力；用于验证嵌套询问出现时伤害已实际成立。
+	var empty_hand_hp_before: int = empty_hand_gepard.hp
 	# 空手牌场景的固定摸牌来源；确认后必须由永屹将该实体移入手牌。
 	var empty_hand_draw_card: CardInstance = _add_draw_pile_card("tao", "heart", 5)
 	_controller.state.current_player_id = 0
@@ -1128,12 +1161,19 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	var empty_hand_discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
 	if empty_hand_yongyi == null or not empty_hand_discard_started or not _controller.has_pending_card_choice():
 		return _fail("yongyi_empty_hand_choice skill=%s started=%s pending=%s" % [empty_hand_yongyi, empty_hand_discard_started, _controller.has_pending_card_choice()])
-	# 玩家明确确认；无可用牌不应阻止原技能失去护盾、摸1张牌并排队额外出牌阶段。
+	# 玩家明确确认；无可用牌不应阻止技能造成自伤，但后续摸牌必须等待伤害流程完成。
 	if not _submit_pending_choice(0, [], [], true):
 		return false
-	# 空手牌额外出牌阶段可能同步完成并消耗队列计数；护盾支付、摸到指定实体与返回结束阶段标记共同证明确认按原规则成功登记。
-	if empty_hand_gepard.shield != 0 or empty_hand_gepard.hand.size() != 1 or empty_hand_gepard.find_hand_card(empty_hand_draw_card.uid) == null or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
-		return _fail("yongyi_empty_hand_confirm shield=%d hand=%d return_finish=%s" % [empty_hand_gepard.shield, empty_hand_gepard.hand.size(), _controller._extra_play_phase_returns_to_finish])
+	# 自伤再次触发永屹第一段；此时尚未摸牌，也未登记额外出牌阶段。
+	var nested_damage_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if empty_hand_gepard.hp != empty_hand_hp_before - 1 or not empty_hand_gepard.hand.is_empty() or str(nested_damage_context.get("kind", "")) != "yongyi_damage_confirm":
+		return _fail("yongyi_empty_hand_nested hp=%d hand=%d context=%s" % [empty_hand_gepard.hp, empty_hand_gepard.hand.size(), nested_damage_context])
+	# 取消本次自伤触发的额外弃牌阶段；随后统一管线继续原第二段后续。
+	if not _submit_pending_choice(0, [], [], false):
+		return false
+	# 空手牌额外出牌阶段可能同步完成并消耗队列计数；自伤、摸到指定实体与返回结束阶段标记共同证明结算顺序正确。
+	if empty_hand_gepard.hp != empty_hand_hp_before - 1 or empty_hand_gepard.shield != 0 or empty_hand_gepard.hand.size() != 1 or empty_hand_gepard.find_hand_card(empty_hand_draw_card.uid) == null or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)):
+		return _fail("yongyi_empty_hand_confirm hp=%d shield=%d hand=%d return_finish=%s" % [empty_hand_gepard.hp, empty_hand_gepard.shield, empty_hand_gepard.hand.size(), _controller._extra_play_phase_returns_to_finish])
 	return true
 
 
@@ -1181,7 +1221,7 @@ func _test_new_skill_ai_rules() -> bool:
 	var chained_enemy_request: Dictionary = {"context":{"kind":"jiyu_target_option", "target_id":2, "redirect_target_ids":[1]}}
 	if jiyu.score_ai_choice(chained_enemy_snapshot, chained_enemy_request, redirect_action, evaluator) <= jiyu.score_ai_choice(chained_enemy_snapshot, chained_enemy_request, direct_action, evaluator):
 		return _fail("jiyu_ai_all_hostiles_chained")
-	# 永屹静态AI技能；可命中敌方的【杀】应使额外出牌收益高于1点护盾。
+	# 永屹静态AI技能；可命中敌方的【杀】应使额外出牌收益高于1点自伤代价。
 	var yongyi: SkillDefinition = GameDatabase.create_skill("yongyi")
 	yongyi.bind(null, 0)
 	# 永屹额外出牌确认请求；显式写入1张可用牌与可命中敌方【杀】。
@@ -1190,10 +1230,16 @@ func _test_new_skill_ai_rules() -> bool:
 	var confirm_action: Dictionary = {"payload":{"confirmed":true}}
 	if yongyi.score_ai_choice(snapshot, play_request, confirm_action, evaluator) <= 0.0:
 		return _fail("yongyi_ai_extra_play")
-	# 永屹固定摸牌收益不足以覆盖1点护盾；AI 应保持取消，但该评分不影响玩家确认后实际摸1张牌。
+	# 4体力且无护盾时，固定摸1张牌与实际失去1点体力的基础资源值相抵，不应压过取消动作。
 	var draw_only_play_request: Dictionary = {"context":{"kind":"yongyi_play_phase_confirm", "usable_card_count":0, "enemy_slash_available":false}}
-	if yongyi.score_ai_choice(snapshot, draw_only_play_request, confirm_action, evaluator) >= 0.0:
+	if yongyi.score_ai_choice(snapshot, draw_only_play_request, confirm_action, evaluator) > 0.0:
 		return _fail("yongyi_ai_draw_only")
+	# 1体力无护盾快照；确认会因1点自伤进入濒死，必须获得稳定的强负分。
+	_controller.state.get_player(0).hp = 1
+	# 致命自伤AI快照；重新序列化确保评分读取最新体力与护盾。
+	var lethal_self_damage_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	if yongyi.score_ai_choice(lethal_self_damage_snapshot, play_request, confirm_action, evaluator) > -50.0:
+		return _fail("yongyi_ai_lethal_self_damage")
 	# 焕发静态AI；娜塔莎只有黑色【闪】时没有可用手牌，也不满足药理的红色材料条件。
 	_reset_state(3)
 	_controller.state.get_player(0).character_id = "natasha"
