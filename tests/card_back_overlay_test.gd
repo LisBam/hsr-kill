@@ -1,6 +1,6 @@
 extends Node
 
-## 牌背覆盖层回归测试。验证手牌与武将牌都使用场景内节点遮挡信息，而非改写底层展示数据。
+## 牌背覆盖层回归测试。验证手牌与武将牌都使用场景内节点遮挡信息，而非改写底层展示数据；并校验隐藏候选选中时牌背外框与正面共用 accent 描边。
 
 ## 正式手牌场景；测试必须实例化生产资源，避免节点路径与层级在独立样例中失效。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
@@ -40,6 +40,23 @@ func _run() -> void:
 	card_view.configure_back(99001, true)
 	if not card_back.visible or card_name_label.text != front_name:
 		_fail("card_back_overlay_switch")
+		return
+	# 未选中牌背；默认主题边框色与 2 像素宽度，不能误用强调金色。
+	var unselected_back_style: StyleBoxFlat = card_back.get_theme_stylebox("panel") as StyleBoxFlat
+	if unselected_back_style == null or not unselected_back_style.border_color.is_equal_approx(BattleUIStyle.get_color("border")) or unselected_back_style.border_width_left != 2:
+		_fail("card_back_unselected_border:%s/%d" % [unselected_back_style.border_color if unselected_back_style != null else Color.TRANSPARENT, unselected_back_style.border_width_left if unselected_back_style != null else -1])
+		return
+	# 选中牌背；必须与正面选中态共用 accent 色和 3 像素描边，覆盖【寒冰剑】等隐藏候选与五谷丰登一致的选中反馈。
+	card_view.set_selected_state(true)
+	var selected_back_style: StyleBoxFlat = card_back.get_theme_stylebox("panel") as StyleBoxFlat
+	if selected_back_style == null or not selected_back_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")) or selected_back_style.border_width_left != 3:
+		_fail("card_back_selected_border:%s/%d" % [selected_back_style.border_color if selected_back_style != null else Color.TRANSPARENT, selected_back_style.border_width_left if selected_back_style != null else -1])
+		return
+	# 取消选中后牌背必须恢复默认边框，避免残留强调描边。
+	card_view.set_selected_state(false)
+	var restored_back_style: StyleBoxFlat = card_back.get_theme_stylebox("panel") as StyleBoxFlat
+	if restored_back_style == null or not restored_back_style.border_color.is_equal_approx(BattleUIStyle.get_color("border")) or restored_back_style.border_width_left != 2:
+		_fail("card_back_restored_border:%s/%d" % [restored_back_style.border_color if restored_back_style != null else Color.TRANSPARENT, restored_back_style.border_width_left if restored_back_style != null else -1])
 		return
 	# 独立输入区必须位于牌背之后，使已隐藏候选仍能接收选择输入。
 	var card_input_area: Control = card_view.get_node("InputArea") as Control

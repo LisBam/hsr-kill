@@ -483,12 +483,28 @@ func _on_hand_drag_finished(source_card_uid: int, pointer_global_position: Vecto
 	hand_drag_finished.emit(source_card_uid, pointer_global_position)
 
 
-## 刷新统一牌背配色；正面牌与牌背共用同一主题入口，隐藏信息状态不会暴露实体内容。
+## 刷新统一牌背配色与选中描边；正面牌与牌背共用同一主题入口，隐藏信息状态不会暴露实体内容。
+## 选中时牌背外框使用与 CardBody 相同的主题 accent 色和 3 像素宽度，使【寒冰剑】【过河拆桥】等隐藏手牌候选与五谷丰登正面选中反馈一致。
 func _refresh_card_back_style() -> void:
 	if not is_node_ready() or _card_back == null:
 		return
-	# 牌背外框样式；使用主题近黑背景与统一边框保持黑白太空层次。
-	var card_back_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("card_back_background"), BattleUIStyle.get_color("border"), 2, 6)
+	# 牌背底板色；禁用且需要压暗时与正面纸张一致降低亮度，仅影响客户端表现。
+	var card_back_background: Color = BattleUIStyle.get_color("card_back_background")
+	# 牌背外框色；默认使用主题统一边框，选中时切换为与正面相同的强调金色。
+	var card_back_border_color: Color = BattleUIStyle.get_color("border")
+	# 牌背外框宽度；默认 2 像素保持清晰外框，选中时升为 3 像素对齐正面选中描边。
+	var card_back_border_width: int = 2
+	if is_card_selected:
+		card_back_border_color = BattleUIStyle.get_color("accent")
+		card_back_border_width = 3
+	elif _is_hovered and is_interactable:
+		# 可点击牌背悬停反馈；略提亮边框即可，不改变默认宽度以免与选中态混淆。
+		card_back_border_color = BattleUIStyle.get_color("border").lightened(0.12)
+	if not is_interactable and _dim_when_disabled:
+		card_back_background = card_back_background.darkened(disabled_darkening)
+		card_back_border_color = BattleUIStyle.get_color("card_disabled_border")
+	# 牌背外框样式；选中强调色只作用于外层 Panel，中心同心结构保持默认层次。
+	var card_back_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(card_back_background, card_back_border_color, card_back_border_width, 6)
 	_card_back.add_theme_stylebox_override("panel", card_back_style)
 	# 牌背中心面板；使用较亮一层背景形成可辨识的同心结构。
 	var card_back_center: Panel = _card_back.get_node("Center") as Panel
