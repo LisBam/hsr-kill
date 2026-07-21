@@ -1,17 +1,17 @@
 extends SkillDefinition
 
-## 【永屹】技能源码。持有者的体力值实际因伤害减少后可执行额外弃牌阶段并获得护盾，也可在弃牌阶段以护盾换取额外出牌阶段。
+## 【永屹】技能源码。持有者的体力值实际因伤害减少后可执行额外弃牌阶段并获得护盾，也可在弃牌阶段对自己造成伤害以换取额外出牌阶段。
 
 ## 额外弃牌阶段完成后获得的护盾数；默认1点，修改后必须同步技能原文与玩法数值文档。
 const SHIELD_GAIN_AMOUNT: int = 1
 
-## 获得额外出牌阶段需要失去的护盾数；默认1点，不会触发失去体力或受到伤害。
-const SHIELD_PLAY_PHASE_COST: int = 1
+## 第二段对技能持有者造成的普通伤害值；默认1点，会正常经过护盾、伤害时机与濒死流程。
+const SELF_DAMAGE_AMOUNT: int = 1
 
-## 第二段确认支付护盾后固定摸取的牌数；默认1张，摸牌须在登记额外出牌阶段前完成。
+## 第二段完成自伤结算后固定摸取的牌数；默认1张，摸牌须在登记额外出牌阶段前完成。
 const EXTRA_PLAY_DRAW_COUNT: int = 1
 
-## AI对1点护盾的防御资源估值；两个发动分支都以此作为收益或机会成本基准。
+## AI对1点护盾的防御资源估值；第一段作为收益，第二段用于计算自伤被护盾吸收时的机会成本。
 const AI_SHIELD_VALUE: float = 2.5
 
 ## AI对第二段固定摸取1张未知牌的自身收益；由统一牌差基础值与自身态度倍率换算，只用于确认决策。
@@ -23,8 +23,11 @@ const AI_DISCARD_COST_WEIGHT: float = 0.55
 ## AI对额外出牌阶段中每张可主动使用手牌的通用收益；用于补充可命中敌方【杀】的显式收益。
 const AI_USABLE_CARD_VALUE: float = 0.8
 
-## AI对额外出牌阶段中一张可命中敌方【杀】的攻击收益；应高于1点护盾代价。
+## AI对额外出牌阶段中一张可命中敌方【杀】的攻击收益；应足以覆盖1点普通自伤的基础代价。
 const AI_ENEMY_SLASH_VALUE: float = 4.0
+
+## AI对无护盾且会令自身进入濒死的第二段确认评分；固定负值确保取消动作优先。
+const AI_LETHAL_SELF_DAMAGE_SCORE: float = -100.0
 
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。
@@ -34,7 +37,7 @@ func _init() -> void:
 		"name": "永屹",
 		"trigger": "damageAfter/phaseDiscardBegin",
 		"ui_enabled": false,
-		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，若你有护盾，你可以失去1点护盾并摸一张牌，然后进行一个额外的出牌阶段。",
+		"description": "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。",
 	})
 
 
@@ -55,18 +58,18 @@ func _on_damage_after(event: RuleEvent) -> void:
 	request_card_selection("永屹", "是否发动【永屹】执行一个额外的弃牌阶段？", [], 0, 0, true, {"kind":"yongyi_damage_confirm", "damage_source_id":event.source_id, "hp_lost":hp_lost, "ai_allow_confirm":true})
 
 
-## 弃牌阶段开始时在护盾充足且能排队额外出牌阶段时请求支付。
+## 弃牌阶段开始时在持有者存活且能排队额外出牌阶段时请求确认。
 func _on_discard_phase_begin(_event: RuleEvent) -> void:
-	# 技能持有者状态；护盾不足、死亡或离场时该效果不可触发并直接跳过。
+	# 技能持有者状态；死亡或离场时该效果不可触发并直接跳过。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	if owner == null or not owner.alive or owner.out_of_game or owner.shield < SHIELD_PLAY_PHASE_COST or not bool(host.call("can_add_play_phase", owner_player_id)):
+	if owner == null or not owner.alive or owner.out_of_game or not bool(host.call("can_add_play_phase", owner_player_id)):
 		return
 	# AI快照所需的实时可用牌估计；这些字段只影响确认决策，提交后仍由权威阶段端口复核。
 	var play_estimate: Dictionary = _estimate_extra_play_phase()
-	request_card_selection("永屹", "是否失去1点护盾，摸1张牌并进行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"yongyi_play_phase_confirm", "usable_card_count":int(play_estimate.get("usable_card_count", 0)), "enemy_slash_available":bool(play_estimate.get("enemy_slash_available", false)), "ai_allow_confirm":true})
+	request_card_selection("永屹", "是否对自己造成1点伤害，摸1张牌并进行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"yongyi_play_phase_confirm", "usable_card_count":int(play_estimate.get("usable_card_count", 0)), "enemy_slash_available":bool(play_estimate.get("enemy_slash_available", false)), "ai_allow_confirm":true})
 
 
-## 恢复永屹的伤害后确认或弃牌阶段支付确认；取消不产生任何资源变化。
+## 恢复永屹的伤害后确认或弃牌阶段自伤确认；取消不产生任何资源变化。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response == null:
 		return false
@@ -81,16 +84,35 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			announce_activation({"hp_lost":int(context.get("hp_lost", 0)), "branch":"extra_discard"})
 		return true
 	if choice_kind == "yongyi_play_phase_confirm":
-		if not response.confirmed or not bool(host.call("can_add_play_phase", owner_player_id)):
+		if not response.confirmed:
 			return true
-		if get_owner_skill_player().loseShield(SHIELD_PLAY_PHASE_COST, get_owner_skill_player()) < SHIELD_PLAY_PHASE_COST:
+		# 技能持有者状态；等待确认期间死亡、离场或额外阶段容量失效时不支付自伤。
+		var owner: PlayerState = get_owner_skill_player().get_state()
+		if owner == null or not owner.alive or owner.out_of_game or not bool(host.call("can_add_play_phase", owner_player_id)):
 			return true
-		# 第二段固定资源收益；护盾支付成功后立即摸牌，使新增手牌可用于随后登记的额外出牌阶段。
-		host.draw(owner_player_id, EXTRA_PLAY_DRAW_COUNT)
-		if get_owner_skill_player().addPlayPhase():
-			announce_activation({"branch":"extra_play", "draw_count":EXTRA_PLAY_DRAW_COUNT})
+		# 自伤后的后续步骤；必须先登记，保证伤害产生的全部时机、选择与濒死流程完成后才恢复。
+		var continuation: Dictionary = {"kind":"yongyi_after_self_damage"}
+		if not defer_settlement(continuation):
+			return true
+		announce_activation({"branch":"extra_play", "self_damage":SELF_DAMAGE_AMOUNT, "draw_count":EXTRA_PLAY_DRAW_COUNT})
+		# 技能持有者规则对象；伤害来源与目标均为自己，普通伤害会正常由护盾优先吸收。
+		var owner_skill_player: SkillPlayer = get_owner_skill_player()
+		owner_skill_player.damage(SELF_DAMAGE_AMOUNT, owner_skill_player, "normal")
 		return true
 	return false
+
+
+## 在自伤的全部伤害时机、嵌套选择与濒死流程结束后，继续摸牌并登记额外出牌阶段。
+func continue_settlement(context: Dictionary) -> bool:
+	if str(context.get("kind", "")) != "yongyi_after_self_damage":
+		return false
+	# 技能持有者状态；自伤期间死亡或离场时不能再获得手牌与额外阶段。
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if owner == null or not owner.alive or owner.out_of_game or not bool(host.call("can_add_play_phase", owner_player_id)):
+		return true
+	host.draw(owner_player_id, EXTRA_PLAY_DRAW_COUNT)
+	get_owner_skill_player().addPlayPhase()
+	return true
 
 
 ## 在权威额外弃牌阶段完整结束后获得护盾；中途选择或弃牌未完成时不会提前结算。
@@ -133,7 +155,7 @@ func _estimate_extra_play_phase() -> Dictionary:
 	return result
 
 
-## 评估永屹的两个确认选择；额外弃牌代价必须低于护盾收益，额外出牌收益必须高于护盾代价。
+## 评估永屹的两个确认选择；额外弃牌代价必须低于护盾收益，第二段同时计算护盾吸收、实际掉血与额外出牌收益。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 请求上下文；包含分支种类与规则层在触发时写入的可用牌估计。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -161,9 +183,19 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 			discard_cost += hand_values[index] * AI_DISCARD_COST_WEIGHT
 		return AI_SHIELD_VALUE - discard_cost
 	if choice_kind == "yongyi_play_phase_confirm":
+		# 技能持有者快照；当前护盾决定1点自伤消耗防御资源还是实际扣减体力。
+		var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+		# 护盾实际吸收量；第二段固定1点伤害，因此结果范围为0至1。
+		var shield_absorbed: int = mini(maxi(int(owner.get("shield", 0)), 0), SELF_DAMAGE_AMOUNT)
+		# 穿透护盾的实际体力减少量；用于通用资源估值与致命边界判断。
+		var hp_lost: int = SELF_DAMAGE_AMOUNT - shield_absorbed
+		if hp_lost > 0 and int(owner.get("hp", 0)) <= hp_lost:
+			return AI_LETHAL_SELF_DAMAGE_SCORE
 		# 额外出牌阶段收益；固定摸1张未知牌提供基础收益，可命中敌方的【杀】使用显式攻击分，其余可用牌按数量提供资源分。
 		var play_value: float = AI_EXTRA_PLAY_DRAW_VALUE + float(int(context.get("usable_card_count", 0))) * AI_USABLE_CARD_VALUE
 		if bool(context.get("enemy_slash_available", false)):
 			play_value += AI_ENEMY_SLASH_VALUE
-		return play_value - AI_SHIELD_VALUE
+		# 自伤代价；被护盾吸收的部分按护盾价值计，穿透部分按统一体力资源价值计。
+		var self_damage_cost: float = float(shield_absorbed) * AI_SHIELD_VALUE
+		return play_value - self_damage_cost + evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -hp_lost)
 	return 0.0
