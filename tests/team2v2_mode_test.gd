@@ -47,6 +47,9 @@ func _run() -> void:
 	if not await _test_four_player_match_bootstrap():
 		_restore_settings()
 		return
+	if not await _test_custom_assignment_ai_completes_without_invalid_seat():
+		_restore_settings()
+		return
 	if not await _test_seat4_starting_hand_bonus():
 		_restore_settings()
 		return
@@ -60,7 +63,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+seat4_hand+seat1_draw+teammate_draw+winner")
+	print("TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+custom_ai_seat+seat4_hand+seat1_draw+teammate_draw+winner")
 	get_tree().quit(0)
 
 
@@ -224,6 +227,54 @@ func _test_four_player_match_bootstrap() -> bool:
 			var picked: String = candidates[0]
 			_controller.select_character(player_id, picked)
 		await get_tree().process_frame
+	return true
+
+
+## 2v2 开启自选座次时，真人占用非一号位后 AI 仍能自动补齐剩余座次身份，不出现“请选择有效座次”卡死。
+func _test_custom_assignment_ai_completes_without_invalid_seat() -> bool:
+	# 复现条件：自选开启 + 真人先占非一号位，旧 AI 分支会无条件 erase(1) 导致最后一名 AI 提交 seat=-1。
+	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(true)
+	_create_controller()
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_TEAM2V2)
+	if not _controller.start_match(4, 20260722, IdentityRules.MODE_TEAM2V2):
+		return _fail("custom_ai_start_match")
+	if _controller.character_selection == null or not _controller.character_selection.is_team2v2_mode():
+		return _fail("custom_ai_not_team2v2")
+	if not bool(_controller.character_selection.custom_assignment_enabled):
+		return _fail("custom_ai_assignment_not_enabled")
+	var human_id: int = _controller.local_human_player_id
+	var human_candidates: Array[String] = _controller.character_selection.get_candidates(human_id)
+	if human_candidates.is_empty():
+		return _fail("custom_ai_human_candidates_empty")
+	# 故意提交 2 号位，确保一号位仍留给后续 AI；同时带上当前仍有名额的身份。
+	var human_identities: Array[String] = _controller.character_selection.get_available_identities(human_id)
+	if human_identities.is_empty():
+		return _fail("custom_ai_human_identities_empty")
+	var rejected_messages: Array[String] = []
+	var on_rejected := func(message: String) -> void:
+		rejected_messages.append(str(message))
+	_controller.action_rejected.connect(on_rejected)
+	if not _controller.select_character(human_id, human_candidates[0], 2, human_identities[0]):
+		_controller.action_rejected.disconnect(on_rejected)
+		return _fail("custom_ai_human_select_failed rejects=%s" % str(rejected_messages))
+	# 交给正式 AI 驱动完成其余三人；成功后阶段应离开 character_selection。
+	var safety: int = 0
+	while _controller.state.current_phase == "character_selection" and safety < 60:
+		safety += 1
+		_controller.call("_drive_ai_character_selection")
+		await get_tree().process_frame
+	_controller.action_rejected.disconnect(on_rejected)
+	for message in rejected_messages:
+		if str(message).contains("请选择有效座次"):
+			return _fail("custom_ai_invalid_seat_reject=%s phase=%s" % [message, _controller.state.current_phase])
+	if _controller.state.current_phase == "character_selection":
+		# 列出仍待确认玩家，便于诊断 AI 是否仍卡在无座次提交。
+		var pending: Array = _controller.character_selection.get_pending_player_ids()
+		return _fail("custom_ai_stuck_in_character_selection pending=%s rejects=%s" % [str(pending), str(rejected_messages)])
+	# 关闭本用例开关，避免后续 seat4 手牌用例受自选路径影响。
+	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(false)
 	return true
 
 
