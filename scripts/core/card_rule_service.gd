@@ -136,7 +136,9 @@ func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Arra
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null or not actor.alive or actor.out_of_game:
 		return "行动玩家不存在、已经死亡或已移出游戏。"
-	if state.current_player_id != actor_id or state.current_phase != "play":
+	# 是否忽略出牌阶段限制；仅供准备阶段等明确写有“视为使用”的技能传入，普通虚拟牌保持原限制。
+	var ignore_phase_limit: bool = bool(rule_overrides.get("ignore_phase_limit", false))
+	if (state.current_player_id != actor_id or state.current_phase != "play") and not ignore_phase_limit:
 		return "当前不是该玩家的出牌阶段。"
 	# 虚拟牌定义；丈八蛇矛当前固定生成普通【杀】，保留通用定义参数便于其他视为牌复用。
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
@@ -185,7 +187,9 @@ func list_legal_virtual_targets(actor_id: int, definition_id: String, rule_overr
 		return result
 	# 虚拟牌整体合法性；阶段次数用尽时不再返回任何目标，转化技能按钮可据此实时熄灭。
 	# 先用空目标做次数与阶段检查会失败（目标数不足），因此单独复用与 validate_virtual_use 相同的次数规则。
-	if state.current_player_id != actor_id or state.current_phase != "play":
+	# 是否忽略出牌阶段限制；目标预览必须与最终虚拟牌校验读取同一覆写，避免合法询问被提前隐藏。
+	var ignore_phase_limit: bool = bool(rule_overrides.get("ignore_phase_limit", false))
+	if (state.current_player_id != actor_id or state.current_phase != "play") and not ignore_phase_limit:
 		return result
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
 	var play_limit: int = int(definition.get("play_limit", 0))

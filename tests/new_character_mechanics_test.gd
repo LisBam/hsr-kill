@@ -27,6 +27,8 @@ func _run() -> void:
 		return
 	if not _test_expanded_character_metadata():
 		return
+	if not _test_feiyan_preparation_phase_virtual_use():
+		return
 	if not _test_named_card_gain_and_hand_view_as():
 		return
 	if not _test_lushi_mingchen_deferred_settlement():
@@ -226,6 +228,27 @@ func _test_expanded_character_metadata() -> bool:
 			return _fail("expanded_skill_description=%s" % skill_id)
 	if not GameDatabase.get_character("jingyuan").is_empty() or not GameDatabase.get_character("kafka").is_empty() or not GameDatabase.get_character("welt").is_empty():
 		return _fail("removed_placeholder_character_registered")
+	return true
+
+
+## 验证飞焰在准备阶段能够枚举火攻目标并通过最终虚拟牌校验，不会被出牌阶段限制提前拦截。
+func _test_feiyan_preparation_phase_virtual_use() -> bool:
+	_reset_state(2)
+	_controller.state.current_phase = "preparation"
+	_controller.state.current_player_id = 0
+	# 火攻目标手牌；目标至少拥有一张手牌才符合【火攻】的标准目标规则。
+	var target_hand_card: CardInstance = CardInstance.new("sha", "heart", 7)
+	target_hand_card.owner_id = 1
+	target_hand_card.zone = "hand"
+	_controller.state.players[1].hand.append(target_hand_card)
+	# 飞焰准备阶段覆写；只解除阶段限制，目标模式与其他卡牌规则仍由统一服务校验。
+	var rule_overrides: Dictionary = {"ignore_phase_limit":true}
+	# 准备阶段合法目标；敌方拥有手牌时必须出现在询问候选中。
+	var legal_target_ids: Array[int] = _controller.card_rules.list_legal_virtual_targets(0, "huogong", rule_overrides)
+	if not legal_target_ids.has(1):
+		return _fail("feiyan_preparation_targets=%s" % [legal_target_ids])
+	if not _controller.card_rules.validate_virtual_use(0, "huogong", [1], rule_overrides).is_empty():
+		return _fail("feiyan_preparation_virtual_validation")
 	return true
 
 
