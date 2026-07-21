@@ -48,6 +48,9 @@ var chained: bool = false
 ## 当前是否处于翻面状态；为后续武将技能与完整回合规则预留。
 var face_down: bool = false
 
+## 武将牌左上角通用公开文本；空字符串隐藏组件，技能或模式只能写入面向所有观察者一致的展示内容。
+var character_corner_text: String = ""
+
 ## 当前是否由基础 AI 代替真人执行操作；默认 false，仅在真人主动托管或联机掉线后由权威控制器写入，并会同步到所有观察者。
 var auto_managed: bool = false
 
@@ -231,6 +234,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"out_of_game": out_of_game,
 		"chained": chained,
 		"face_down": face_down,
+		"character_corner_text": character_corner_text,
 		"auto_managed": auto_managed,
 		"auto_managed_offline": auto_managed_offline,
 		"wine_used": wine_used,

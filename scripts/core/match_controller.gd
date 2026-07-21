@@ -155,8 +155,14 @@ var _mulligan_limit: int = 0
 ## 本局 AI 是否自动评估并使用手气卡；手气卡数量为0时该值不会产生流程。
 var _ai_uses_mulligan_enabled: bool = false
 
-## 本局是否由离线本机控制全部角色；开局时锁定，任何局域网模式都强制为false。
+## 离线对局是否由本机动态控制全部角色；设置可在对局中实时切换，任何局域网模式都强制为false。
 var _control_all_characters_enabled: bool = false
+
+## 离线对局最初由玩家控制的稳定角色ID；关闭全角色控制时恢复该第一视角。
+var _primary_offline_human_player_id: int = -1
+
+## 全角色控制当前临时接管的非主视角角色ID；负数表示没有额外角色被人工接管。
+var _offline_manually_controlled_player_id: int = -1
 
 ## 本局1v1车轮战明置候选数量；开局时从房主设置锁定，默认6且范围3至20。
 var _wheel_duel_face_up_candidate_count: int = 6
@@ -423,6 +429,8 @@ func _ready() -> void:
 		GameSettings.ai_response_delay_changed.connect(_on_ai_response_delay_changed)
 	if not GameSettings.game_speed_changed.is_connected(_on_game_speed_changed):
 		GameSettings.game_speed_changed.connect(_on_game_speed_changed)
+	if not GameSettings.control_all_characters_changed.is_connected(_on_control_all_characters_changed):
+		GameSettings.control_all_characters_changed.connect(_on_control_all_characters_changed)
 	if not gameplay_pause_service.pause_state_changed.is_connected(_on_gameplay_pause_state_changed):
 		gameplay_pause_service.pause_state_changed.connect(_on_gameplay_pause_state_changed)
 	_on_ai_response_delay_changed(GameSettings.ai_response_delay_seconds)
@@ -573,7 +581,9 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled
 	_mulligan_limit = GameSettings.mulligan_limit
 	_ai_uses_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
-	_control_all_characters_enabled = network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE and GameSettings.control_all_characters_enabled
+	_control_all_characters_enabled = network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE and local_human_player_id >= 0 and GameSettings.control_all_characters_enabled
+	_primary_offline_human_player_id = local_human_player_id
+	_offline_manually_controlled_player_id = -1
 	_character_replacement_count = GameSettings.character_replacement_count
 	_character_candidate_count = GameSettings.character_candidate_count
 	_wheel_duel_face_up_candidate_count = GameSettings.wheel_duel_face_up_candidate_count
@@ -879,8 +889,17 @@ func _drive_ai_wheel_duel_selection() -> void:
 		var pool_slots: Array = selection_snapshot.get("pool_slots", []) as Array
 		if pool_slots.is_empty():
 			break
+		# 当前首个未被选择的公共槽；已选槽保留原位并带有相对归属，AI不得重复提交。
+		var available_slot_id: int = -1
+		for slot_variant: Variant in pool_slots:
+			var slot: Dictionary = slot_variant as Dictionary
+			if str(slot.get("selection_owner", "")).is_empty():
+				available_slot_id = int(slot.get("slot_id", -1))
+				break
+		if available_slot_id < 0:
+			break
 		var pick_action: PlayerAction = PlayerAction.new("wheel_duel_pick", drafter_id)
-		pick_action.payload = {"slot_id":int((pool_slots[0] as Dictionary).get("slot_id", -1))}
+		pick_action.payload = {"slot_id":available_slot_id}
 		_submit_ai_action(pick_action)
 		if state == null or state.current_phase != "wheel_duel_selection":
 			return
@@ -5605,7 +5624,7 @@ func _create_players(player_count: int) -> void:
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		# 内置 AI 名称带有明确前缀，真实玩家保持“玩家X”；选将完成旋转座次后会按最终座次再次统一刷新。
-		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else (_control_all_characters_enabled or index == local_human_player_id)
+		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else index == local_human_player_id
 		# 当前玩家显示名；局域网真人沿用大厅昵称，离线真人与 AI 继续使用原有稳定座次名称。
 		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
@@ -10138,9 +10157,11 @@ func _emit_state() -> void:
 
 
 ## 在离线“控制所有角色”模式中选择当前需要操作的角色，并把唯一第一视角切换到该稳定玩家ID。
-## explicit_player_id用于即将发布的选择请求；未指定时按选择、选将、手气卡和当前回合的优先级自动推导。
+## 选将、车轮战抓将与手气卡属于开局配置阶段，始终保持原真人与内置AI控制，不参与动态接管。
 func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 	if not _control_all_characters_enabled or state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return false
+	if state.current_phase in ["character_selection", "wheel_duel_selection", "starting_hand_mulligan", "ai_character_adjustment", "game_start"]:
 		return false
 	# 目标第一视角玩家ID；显式选择请求优先，避免响应者与当前回合角色不同时界面仍停留在旧角色。
 	var target_player_id: int = explicit_player_id
@@ -10152,30 +10173,49 @@ func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 			target_player_id = int(request_data.get("chooser_id", -1))
 			if target_player_id >= 0:
 				break
-	if target_player_id < 0 and state.current_phase == "wheel_duel_selection" and wheel_duel_selection != null:
-		if wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_DRAFT:
-			target_player_id = wheel_duel_selection.get_current_drafter_id()
-		elif wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_LINEUP:
-			for player: PlayerState in state.players:
-				if not wheel_duel_selection.has_submitted_lineup(player.player_id):
-					target_player_id = player.player_id
-					break
-	if target_player_id < 0 and state.current_phase == "character_selection" and character_selection != null:
-		var pending_player_ids: Array[int] = character_selection.get_pending_player_ids()
-		if not pending_player_ids.is_empty():
-			target_player_id = pending_player_ids[0]
-	if target_player_id < 0 and state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null:
-		for player: PlayerState in state.players:
-			if starting_hand_mulligan.can_choose(player.player_id):
-				target_player_id = player.player_id
-				break
 	if target_player_id < 0:
 		target_player_id = state.current_player_id
 	var target_player: PlayerState = state.get_player(target_player_id)
-	if target_player == null or not target_player.alive or target_player.out_of_game or local_human_player_id == target_player_id:
+	if target_player == null or not target_player.alive or target_player.out_of_game:
 		return false
+	return _set_offline_manual_control_player(target_player_id)
+
+
+## 切换全角色控制当前接管者；上一名非主角色恢复基础AI，新目标停止AI并成为本地第一视角。
+func _set_offline_manual_control_player(target_player_id: int) -> bool:
+	if state == null or target_player_id < 0:
+		return false
+	# 切换前第一视角；返回值只表达界面是否需要立即重发快照。
+	var previous_viewer_id: int = local_human_player_id
+	if _offline_manually_controlled_player_id >= 0 and _offline_manually_controlled_player_id != _primary_offline_human_player_id and _offline_manually_controlled_player_id != target_player_id:
+		ai_coordinator.register_basic_ai(_offline_manually_controlled_player_id)
+	_offline_manually_controlled_player_id = -1
+	if target_player_id != _primary_offline_human_player_id:
+		ai_coordinator.unregister_ai(target_player_id)
+		_offline_manually_controlled_player_id = target_player_id
 	local_human_player_id = target_player_id
-	return true
+	return previous_viewer_id != local_human_player_id
+
+
+## 响应设置中的实时全角色控制开关；关闭后立即恢复原真人视角，开启后接管当前规则操作者。
+func _on_control_all_characters_changed(enabled: bool) -> void:
+	if network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE or _primary_offline_human_player_id < 0:
+		_control_all_characters_enabled = false
+		return
+	_control_all_characters_enabled = enabled
+	if state == null:
+		return
+	state.match_options["control_all_characters_enabled"] = _control_all_characters_enabled
+	if not enabled:
+		if _offline_manually_controlled_player_id >= 0 and _offline_manually_controlled_player_id != _primary_offline_human_player_id:
+			ai_coordinator.register_basic_ai(_offline_manually_controlled_player_id)
+		_offline_manually_controlled_player_id = -1
+		local_human_player_id = _primary_offline_human_player_id
+		_emit_state()
+		_ensure_ai_progress_after_resolution()
+		return
+	if not _prepare_offline_controlled_view():
+		_emit_state()
 
 
 ## 返回面向指定观察者的选将类私有快照；普通选将与房主 AI 调整阶段互斥。

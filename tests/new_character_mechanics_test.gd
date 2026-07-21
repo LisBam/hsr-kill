@@ -1845,6 +1845,8 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	for anke_card: CardInstance in anke_cards:
 		anke_uids.append(anke_card.uid)
 	anke.call("_on_cards_discarded", RuleEvent.new("cardsDiscardAfter", -1, -1, {"card_uids":anke_uids}))
+	if _controller.state.get_player(0).character_corner_text != "安可：♠♥♣♦" or str(_controller.state.get_player(0).to_dict(0, false).get("character_corner_text", "")) != "安可：♠♥♣♦":
+		return _fail("anke_corner_text=%s" % _controller.state.get_player(0).character_corner_text)
 	# 其他角色回合结束不能触发“回合结束时”的安可；只有技能持有者自己的回合结束才会询问。
 	anke.call("_on_turn_end", RuleEvent.new("phaseEnd", 1, 1, {"turn_number":_controller.state.turn_number}))
 	if _controller.has_pending_card_choice():

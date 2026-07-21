@@ -1,0 +1,30 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/character_corner_text_badge.gd" id="1_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleCornerTextBadge"]
+content_margin_left = 4.0
+content_margin_top = 2.0
+content_margin_right = 4.0
+content_margin_bottom = 2.0
+bg_color = Color(0, 0, 0, 0.88)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[node name="CharacterCornerTextBadge" type="PanelContainer"]
+visible = false
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleCornerTextBadge")
+script = ExtResource("1_script")
+
+[node name="TextLabel" type="Label" parent="."]
+layout_mode = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 10
+text = "状态文本"
+vertical_alignment = 1

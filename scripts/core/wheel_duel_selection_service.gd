@@ -48,7 +48,7 @@ var draft_batch_index: int = 0
 ## 当前抓将批次已经选择的数量；达到该批次数量后自动推进到下一批。
 var picks_in_current_batch: int = 0
 
-## 公共候选槽数组；每项保存稳定slot_id、真实character_id与是否明置，真实暗将ID只在权威端保留。
+## 公共候选槽数组；每项保存稳定slot_id、真实character_id、是否明置与选择者ID，已选槽继续保留原位置。
 var _pool_slots: Array[Dictionary] = []
 
 ## 玩家已取得的五名武将；键为稳定玩家ID，值按取得顺序保存武将ID。
@@ -88,7 +88,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	var shuffled_character_ids: Array[String] = character_ids.duplicate()
 	_shuffle_strings(shuffled_character_ids)
 	for slot_index: int in range(total_candidate_count):
-		_pool_slots.append({"slot_id":slot_index, "character_id":shuffled_character_ids[slot_index], "face_up":slot_index < face_up_candidate_count})
+		_pool_slots.append({"slot_id":slot_index, "character_id":shuffled_character_ids[slot_index], "face_up":slot_index < face_up_candidate_count, "picked_by_player_id":-1})
 	phase = PHASE_DRAFT
 	return ""
 
@@ -119,7 +119,11 @@ func pick_candidate(player_id: int, slot_id: int) -> String:
 	var drafted: Array = _drafted_by_player.get(player_id, []) as Array
 	if drafted.size() >= DRAFTED_CHARACTER_COUNT_PER_PLAYER:
 		return "该玩家已经取得5名武将。"
-	var selected_slot: Dictionary = _pool_slots.pop_at(slot_index)
+	var selected_slot: Dictionary = _pool_slots[slot_index]
+	if int(selected_slot.get("picked_by_player_id", -1)) >= 0:
+		return "该候选武将已被选择或不存在。"
+	selected_slot["picked_by_player_id"] = player_id
+	_pool_slots[slot_index] = selected_slot
 	drafted.append(str(selected_slot.get("character_id", "")))
 	_drafted_by_player[player_id] = drafted
 	picks_in_current_batch += 1
@@ -176,14 +180,21 @@ func has_submitted_lineup(player_id: int) -> bool:
 	return (_lineup_by_player.get(player_id, []) as Array).size() == LINEUP_CHARACTER_COUNT_PER_PLAYER
 
 
-## 生成面向单一观察者的私有快照；暗置候选不发送真实ID，对手取得的武将与阵容也不发送牌面。
+## 生成面向单一观察者的私有快照；已选槽统一暗置并公开我方/对方归属，不发送被选武将真实ID。
 func to_dict(viewer_id: int) -> Dictionary:
 	if phase.is_empty():
 		return {}
 	var pool_snapshot: Array[Dictionary] = []
 	for slot: Dictionary in _pool_slots:
-		var is_face_up: bool = bool(slot.get("face_up", false))
-		pool_snapshot.append({"slot_id":int(slot.get("slot_id", -1)), "face_up":is_face_up, "character_id":str(slot.get("character_id", "")) if is_face_up else ""})
+		# 当前槽位选择者；负数表示仍可选择，已选槽必须保持牌背且只显示观察者相对归属。
+		var picked_by_player_id: int = int(slot.get("picked_by_player_id", -1))
+		# 当前槽位是否仍公开正面；被选择后无论原本明暗均强制暗置。
+		var is_face_up: bool = bool(slot.get("face_up", false)) and picked_by_player_id < 0
+		# 当前观察者看到的选择归属；旁观者统一视为对方选择，避免公开稳定玩家ID产生额外界面依赖。
+		var selection_owner: String = ""
+		if picked_by_player_id >= 0:
+			selection_owner = "self" if picked_by_player_id == viewer_id else "opponent"
+		pool_snapshot.append({"slot_id":int(slot.get("slot_id", -1)), "face_up":is_face_up, "character_id":str(slot.get("character_id", "")) if is_face_up else "", "selection_owner":selection_owner})
 	var opponent_id: int = second_player_id if viewer_id == first_player_id else first_player_id
 	var viewer_is_player: bool = viewer_id == first_player_id or viewer_id == second_player_id
 	var can_select: bool = phase == PHASE_DRAFT and viewer_id == get_current_drafter_id()
@@ -212,7 +223,7 @@ func to_dict(viewer_id: int) -> Dictionary:
 ## 按稳定槽ID查找当前公共候选数组索引；候选被取得后槽ID不会复用。
 func _find_pool_slot_index(slot_id: int) -> int:
 	for slot_index: int in range(_pool_slots.size()):
-		if int(_pool_slots[slot_index].get("slot_id", -1)) == slot_id:
+		if int(_pool_slots[slot_index].get("slot_id", -1)) == slot_id and int(_pool_slots[slot_index].get("picked_by_player_id", -1)) < 0:
 			return slot_index
 	return -1
 

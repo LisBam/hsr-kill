@@ -155,7 +155,7 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 自动身份标记复选框；开关仅影响本地显示推测，不写入对局规则状态。
 @onready var _auto_identity_marking_checkbox: CheckBox = %MainMenuAutoIdentityMarkingCheckBox
 
-## 离线控制全部角色开关；联机入口打开或已连接时由牌桌协调器隐藏，设置只影响下一局离线对局。
+## 离线控制全部角色开关；联机入口打开或已连接时由牌桌协调器隐藏，进行中的离线对局会实时响应变化。
 @onready var _control_all_characters_checkbox: CheckBox = %MainMenuControlAllCharactersCheckBox
 
 ## 自选全武将、座次与身份开关；仅在之后由本机创建或房主创建的新对局中生效。
@@ -176,6 +176,18 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 随机选将牌数下拉框；元数据保存1至20，领袖技武将不计入该普通候选数量。
 @onready var _character_candidate_count_option: OptionButton = %MainMenuCharacterCandidateCountOption
 
+## 普通模式自选规则控件；车轮战使用独立抓将规则时隐藏。
+@onready var _custom_character_assignment_row: Control = _custom_character_assignment_checkbox
+
+## 普通模式AI武将调整控件；车轮战抓将阶段由专属服务处理时隐藏。
+@onready var _customize_ai_characters_row: Control = _customize_ai_characters_checkbox
+
+## 普通模式换将卡整行；车轮战改用固定公共候选池，不显示该设置。
+@onready var _character_replacement_count_row: Control = _character_replacement_count_option.get_parent() as Control
+
+## 普通模式随机候选整行；车轮战显示明置与暗置候选数量代替该设置。
+@onready var _character_candidate_count_row: Control = _character_candidate_count_option.get_parent() as Control
+
 ## AI 响应速度标签；显示下一次 AI 行动或响应会使用的等待秒数。
 @onready var _ai_response_delay_label: Label = %MainMenuAiResponseDelayLabel
 
@@ -190,6 +202,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 下一局人数输入框；开始游戏时读取该控件，限制为标准身份局支持的2至10人范围。
 @onready var _player_count_input: SpinBox = %MainMenuPlayerCountInput
+
+## 游戏人数整行容器；车轮战固定2人时隐藏，普通模式继续显示各自独立人数。
+@onready var _player_count_row: Control = _player_count_input.get_parent() as Control
 
 ## 车轮战明置候选数量输入框；范围3至20，默认6，仅在该模式选中时显示。
 @onready var _wheel_duel_face_up_candidate_input: SpinBox = %WheelDuelFaceUpCandidateInput
@@ -611,6 +626,12 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 		face_up_row.visible = visible_state
 	if face_down_row != null:
 		face_down_row.visible = visible_state
+	_custom_character_assignment_row.visible = not visible_state
+	_customize_ai_characters_row.visible = not visible_state
+	_character_replacement_count_row.visible = not visible_state
+	_character_candidate_count_row.visible = not visible_state
+	_auto_identity_marking_checkbox.visible = not visible_state
+	_player_count_row.visible = not visible_state
 
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。

@@ -78,9 +78,22 @@ func _test_draft_service_and_privacy() -> bool:
 			var slot: Dictionary = slot_variant as Dictionary
 			if not bool(slot.get("face_up", false)) and not str(slot.get("character_id", "")).is_empty():
 				return _fail("hidden_candidate_leaked")
-		var pick_error: String = service.pick_candidate(expected_drafter, int((slots[0] as Dictionary).get("slot_id", -1)))
+		# 当前仍未被选择的首个槽；已选槽保留原位并通过selection_owner公开相对归属。
+		var available_slot_id: int = -1
+		for slot_variant: Variant in slots:
+			var slot: Dictionary = slot_variant as Dictionary
+			if str(slot.get("selection_owner", "")).is_empty():
+				available_slot_id = int(slot.get("slot_id", -1))
+				break
+		if available_slot_id < 0:
+			return _fail("no_available_slot")
+		var pick_error: String = service.pick_candidate(expected_drafter, available_slot_id)
 		if not pick_error.is_empty():
 			return _fail("pick=%s" % pick_error)
+		var post_pick_snapshot: Dictionary = service.to_dict(expected_drafter)
+		var post_pick_slots: Array = post_pick_snapshot.get("pool_slots", []) as Array
+		if post_pick_slots.size() != 10 or str((post_pick_slots[available_slot_id] as Dictionary).get("selection_owner", "")) != "self" or bool((post_pick_slots[available_slot_id] as Dictionary).get("face_up", true)):
+			return _fail("picked_slot_should_remain_hidden")
 	if service.phase != WheelDuelSelectionService.PHASE_LINEUP:
 		return _fail("phase_after_draft=%s" % service.phase)
 	for player_id: int in [0, 1]:
@@ -102,13 +115,21 @@ func _test_selection_panel_renders_hidden_candidates_and_lineup() -> bool:
 	add_child(main_instance)
 	await get_tree().process_frame
 	var selection_panel: CharacterSelectionPanel = main_instance.get_node("CharacterSelectionPanel") as CharacterSelectionPanel
+	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
 	var available_ids: Array = GameDatabase.characters.keys()
-	if selection_panel == null or available_ids.size() < 5:
+	if selection_panel == null or match_menu == null or available_ids.size() < 5:
 		main_instance.queue_free()
 		return _fail("selection_panel_setup")
+	match_menu.set_match_mode(GameSettings.MATCH_MODE_WHEEL_DUEL)
+	var face_up_row: Control = main_instance.get_node("%WheelDuelFaceUpCandidateRow") as Control
+	var face_down_row: Control = main_instance.get_node("%WheelDuelFaceDownCandidateRow") as Control
+	var normal_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
+	if match_menu.z_index <= selection_panel.z_index or not face_up_row.visible or not face_down_row.visible or normal_candidate_row.visible:
+		main_instance.queue_free()
+		return _fail("wheel_menu_mode_or_layer")
 	var pool_slots: Array[Dictionary] = []
 	for slot_index: int in range(10):
-		pool_slots.append({"slot_id":slot_index, "face_up":slot_index < 6, "character_id":str(available_ids[slot_index]) if slot_index < 6 else ""})
+		pool_slots.append({"slot_id":slot_index, "face_up":slot_index < 6, "character_id":str(available_ids[slot_index]) if slot_index < 6 else "", "selection_owner":"self" if slot_index == 0 else ("opponent" if slot_index == 1 else "")})
 	selection_panel.bind_snapshot({
 		"selection_kind":"wheel_duel",
 		"phase":WheelDuelSelectionService.PHASE_DRAFT,
@@ -122,6 +143,11 @@ func _test_selection_panel_renders_hidden_candidates_and_lineup() -> bool:
 	if not selection_panel.visible or candidate_views.size() != 10 or not candidate_views.has("slot:9"):
 		main_instance.queue_free()
 		return _fail("hidden_candidate_render")
+	var self_picked_view: PlayerTargetView = candidate_views.get("slot:0") as PlayerTargetView
+	var opponent_picked_view: PlayerTargetView = candidate_views.get("slot:1") as PlayerTargetView
+	if self_picked_view == null or opponent_picked_view == null or self_picked_view.is_interactable or opponent_picked_view.is_interactable or str((self_picked_view.get_node("CenterStatusMarker") as Label).text) != "我方选择" or str((opponent_picked_view.get_node("CenterStatusMarker") as Label).text) != "对方选择":
+		main_instance.queue_free()
+		return _fail("picked_candidate_markers")
 	var drafted_ids: Array[String] = []
 	for index: int in range(5):
 		drafted_ids.append(str(available_ids[index]))

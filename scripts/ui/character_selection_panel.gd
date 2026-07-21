@@ -714,6 +714,7 @@ func _render_wheel_duel_candidates() -> void:
 				"token":"slot:%d" % int(slot.get("slot_id", -1)),
 				"character_id":str(slot.get("character_id", "")),
 				"face_down":not bool(slot.get("face_up", false)),
+				"selection_owner":str(slot.get("selection_owner", "")),
 			})
 	else:
 		for character_id_variant: Variant in _snapshot.get("local_drafted_characters", []) as Array:
@@ -729,6 +730,8 @@ func _render_wheel_duel_candidates() -> void:
 		var token: String = str(entry.get("token", ""))
 		var character_id: String = str(entry.get("character_id", ""))
 		var is_face_down: bool = bool(entry.get("face_down", false))
+		# 已选择槽位相对当前观察者的归属；空字符串表示该槽仍可选择。
+		var selection_owner: String = str(entry.get("selection_owner", ""))
 		var character_definition: Dictionary = GameDatabase.get_character(character_id) if not character_id.is_empty() else {}
 		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", ""))) if not character_definition.is_empty() else {}
 		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
@@ -755,7 +758,14 @@ func _render_wheel_duel_candidates() -> void:
 			"wooden_ox_storage_count":0,
 		}
 		character_view.configure_snapshot(candidate_snapshot, character_definition, false, faction_definition)
-		character_view.pressed.connect(_select_candidate.bind(token))
+		if selection_owner.is_empty():
+			character_view.pressed.connect(_select_candidate.bind(token))
+		else:
+			character_view.set_interactable(false)
+			# 我方使用深绿色、对方使用深红色；统一黑色描边由武将牌中央状态接口提供。
+			var marker_text: String = "我方选择" if selection_owner == "self" else "对方选择"
+			var marker_color: Color = Color("176b3a") if selection_owner == "self" else Color("8f1f28")
+			character_view.set_center_status_marker(marker_text, marker_color)
 		character_view.hover_changed.connect(_on_candidate_hover_changed.bind(token))
 		_candidate_views[token] = character_view
 	var first_view: PlayerTargetView = _candidate_views[str(candidate_entries[0].get("token", ""))] as PlayerTargetView

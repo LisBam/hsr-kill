@@ -34,7 +34,7 @@ func _run() -> void:
 	get_tree().quit(0)
 
 
-## 验证离线开局不注册任何AI，并在每次选将确认后自动切换到下一名待操作角色。
+## 验证离线选将仍由原真人与AI分别处理，进入对局后全角色控制可实时切换第一视角与控制权。
 func _test_offline_controls_every_player() -> bool:
 	_create_controller(NetworkGateway.Mode.OFFLINE)
 	GameSettings.set_control_all_characters_enabled(true)
@@ -43,22 +43,22 @@ func _test_offline_controls_every_player() -> bool:
 	GameSettings.set_mulligan_limit(0)
 	if not _controller.start_match(3, 20260722, IdentityRules.MODE_IDENTITY):
 		return _fail("offline_start")
+	var initial_ai_count: int = 0
 	for player: PlayerState in _controller.state.players:
 		if _controller.ai_coordinator.is_ai_controlled(player.player_id):
-			return _fail("offline_player_registered_ai_%d" % player.player_id)
+			initial_ai_count += 1
+	if initial_ai_count != 2:
+		return _fail("selection_should_keep_ai_count=%d" % initial_ai_count)
 	var safety: int = 0
 	while _controller.state.current_phase == "character_selection" and safety < 12:
 		safety += 1
-		var pending_player_ids: Array[int] = _controller.character_selection.get_pending_player_ids()
-		if pending_player_ids.is_empty():
-			break
-		var expected_player_id: int = pending_player_ids[0]
 		_controller.call("_emit_state")
-		if _controller.local_human_player_id != expected_player_id:
-			return _fail("selection_view expected=%d got=%d" % [expected_player_id, _controller.local_human_player_id])
-		var candidates: Array[String] = _controller.character_selection.get_candidates(expected_player_id)
-		if candidates.is_empty() or not _controller.select_character(expected_player_id, candidates[0]):
-			return _fail("selection_submit_%d" % expected_player_id)
+		if _controller.local_human_player_id != 0:
+			return _fail("selection_view_should_remain_primary=%d" % _controller.local_human_player_id)
+		if _controller.character_selection.get_pending_player_ids().has(0):
+			var candidates: Array[String] = _controller.character_selection.get_candidates(0)
+			if candidates.is_empty() or not _controller.select_character(0, candidates[0]):
+				return _fail("selection_submit_primary")
 		await get_tree().process_frame
 	if _controller.state.current_phase == "character_selection":
 		return _fail("selection_stuck")
@@ -71,6 +71,16 @@ func _test_offline_controls_every_player() -> bool:
 		requested_player_id = _controller.state.players[2].player_id
 	if not bool(_controller.call("_prepare_offline_controlled_view", requested_player_id)) or _controller.local_human_player_id != requested_player_id:
 		return _fail("explicit_choice_view")
+	if _controller.ai_coordinator.is_ai_controlled(requested_player_id):
+		return _fail("explicit_choice_ai_not_released")
+	# 关闭后立即恢复最初真人视角，并把临时接管的非主角色交还基础AI。
+	GameSettings.set_control_all_characters_enabled(false)
+	if _controller.local_human_player_id != 0 or not _controller.ai_coordinator.is_ai_controlled(requested_player_id):
+		return _fail("runtime_disable_restore")
+	# 再次开启无需重新开局；控制器应立刻接管当前回合或活动请求角色。
+	GameSettings.set_control_all_characters_enabled(true)
+	if not bool(_controller.get("_control_all_characters_enabled")):
+		return _fail("runtime_enable")
 	_controller.abandon_match()
 	return true
 
