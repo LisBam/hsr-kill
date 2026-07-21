@@ -5,6 +5,9 @@ extends Node
 ## 武将牌可复用场景；用真实场景结构验证横置灰白线状态不会改变牌面变换或全局包围矩形。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 通用选牌面板场景；用真实卡牌输入节点验证暗置候选与牌堆排序拖拽释放均不会绕过交互边界。
+const CARD_SELECTION_PANEL_SCENE: PackedScene = preload("res://scenes/components/card_selection_panel.tscn")
+
 ## 每个机制场景共用的权威对局控制器；所有状态变化仍通过正式公开端口执行。
 var _controller: MatchController
 
@@ -75,6 +78,8 @@ func _run() -> void:
 	if not _test_hsr_character_metadata_and_rule_catalog():
 		return
 	if not await _test_out_of_game_pile_arrangement_and_ui():
+		return
+	if not await _test_card_selection_panel_disabled_cards_and_arrangement_drag():
 		return
 	if not _test_misha_and_alan_skills():
 		return
@@ -1297,6 +1302,11 @@ func _test_out_of_game_pile_arrangement_and_ui() -> bool:
 	if removed_player_view.is_interactable or not is_equal_approx(removed_player_view.modulate.a, removed_player_view.out_of_game_modulate.a):
 		removed_player_view.queue_free()
 		return _fail("out_of_game_view interactable=%s alpha=%s" % [removed_player_view.is_interactable, removed_player_view.modulate.a])
+	# 离场武将牌状态文字；离场仍是存活角色，不能把透明表现误画为真实阵亡。
+	var removed_death_label: Label = removed_player_view.get_node("StateOverlay/DeathLabel") as Label
+	if removed_death_label == null or removed_death_label.visible:
+		removed_player_view.queue_free()
+		return _fail("out_of_game_death_label visible=%s" % [removed_death_label.visible if removed_death_label != null else true])
 	removed_player_view.queue_free()
 	if not _controller.restore_player_to_game(1, "new_character_test") or removed_player.out_of_game:
 		return _fail("restore_player_to_game")
@@ -1333,6 +1343,66 @@ func _test_out_of_game_pile_arrangement_and_ui() -> bool:
 	return true
 
 
+## 验证私有观看的不可选牌保持可见暗置，受保护牌展示遵循同一机制，且排序拖拽重建节点后安全结束输入。
+func _test_card_selection_panel_disabled_cards_and_arrangement_drag() -> bool:
+	# 正式通用选牌面板；必须挂入场景树才能让CardView和CardInputArea完成输入节点初始化。
+	var card_selection_panel: CardSelectionPanel = CARD_SELECTION_PANEL_SCENE.instantiate() as CardSelectionPanel
+	add_child(card_selection_panel)
+	await get_tree().process_frame
+	# 星祈观看到的非锦囊牌；需要展示但不得进入本次权威选择候选。
+	var xingqi_non_trick_candidate: Dictionary = {"uid":99001, "owner_id":-1, "zone":"processing", "visible":true, "card_data":{"uid":99001, "definition_id":"shan", "suit":"club", "rank":4}}
+	# 星祈观看到的锦囊牌；本次唯一可选择的候选。
+	var xingqi_trick_candidate: Dictionary = {"uid":99002, "owner_id":-1, "zone":"processing", "visible":true, "card_data":{"uid":99002, "definition_id":"wuzhong", "suit":"heart", "rank":5}}
+	# 私有观看请求；display_candidates完整显示两张牌，candidates只授予锦囊牌权威选择权。
+	var xingqi_choice_request: Dictionary = {"request_id":990, "title":"星祈", "prompt":"请选择其中一张锦囊牌", "choice_type":"card", "candidates":[xingqi_trick_candidate], "min_select":1, "max_select":1, "allow_cancel":true, "context":{"kind":"xingqi_trick", "display_candidates":[xingqi_non_trick_candidate, xingqi_trick_candidate]}}
+	card_selection_panel.show_request(xingqi_choice_request)
+	await get_tree().process_frame
+	# 非锦囊正式牌面；不可交互状态会由CardView统一压暗插画、纸张与文字。
+	var xingqi_non_trick_view: CardView = card_selection_panel._card_views.get(99001) as CardView
+	# 锦囊正式牌面；应保持可点选，证明展示候选没有误把全部牌暗置。
+	var xingqi_trick_view: CardView = card_selection_panel._card_views.get(99002) as CardView
+	if xingqi_non_trick_view == null or xingqi_non_trick_view.is_interactable or xingqi_trick_view == null or not xingqi_trick_view.is_interactable:
+		card_selection_panel.queue_free()
+		return _fail("xingqi_disabled_presentation non_trick=%s trick=%s" % [xingqi_non_trick_view.is_interactable if xingqi_non_trick_view != null else true, xingqi_trick_view.is_interactable if xingqi_trick_view != null else false])
+	# 机巧受保护防具；与可弃置武器共同展示时必须保持可见但不可选。
+	var protected_armor_candidate: Dictionary = {"uid":99003, "owner_id":1, "zone":"equipment", "slot":"armor", "visible":true, "card_data":{"uid":99003, "definition_id":"bagua", "suit":"club", "rank":9}}
+	# 同一装备区的普通武器；作为权威候选保留可点击状态。
+	var discardable_weapon_candidate: Dictionary = {"uid":99004, "owner_id":1, "zone":"equipment", "slot":"weapon", "visible":true, "card_data":{"uid":99004, "definition_id":"qinggang", "suit":"spade", "rank":10}}
+	# 外部弃置请求；只有武器进入candidates，防具仅通过display_candidates展示暗置状态。
+	var discard_choice_request: Dictionary = {"request_id":991, "title":"选择弃置牌", "prompt":"请选择目标区域内的一张牌", "choice_type":"card", "candidates":[discardable_weapon_candidate], "min_select":1, "max_select":1, "allow_cancel":false, "context":{"kind":"discard_target", "display_candidates":[protected_armor_candidate, discardable_weapon_candidate]}}
+	card_selection_panel.show_request(discard_choice_request)
+	await get_tree().process_frame
+	# 受保护防具与可弃置武器的正式牌面；暗置不能只依赖实际点击校验，必须在视觉上可辨认。
+	var protected_armor_view: CardView = card_selection_panel._card_views.get(99003) as CardView
+	var discardable_weapon_view: CardView = card_selection_panel._card_views.get(99004) as CardView
+	if protected_armor_view == null or protected_armor_view.is_interactable or discardable_weapon_view == null or not discardable_weapon_view.is_interactable:
+		card_selection_panel.queue_free()
+		return _fail("jiqiao_disabled_presentation armor=%s weapon=%s" % [protected_armor_view.is_interactable if protected_armor_view != null else true, discardable_weapon_view.is_interactable if discardable_weapon_view != null else false])
+	# 双行排序请求；两张牌均为正式可拖动候选，确保释放回调会重建其所在行。
+	var arrangement_choice_request: Dictionary = {"request_id":992, "title":"排序", "prompt":"请调整牌堆", "choice_type":"arrange", "candidates":[xingqi_non_trick_candidate, xingqi_trick_candidate], "min_select":2, "max_select":2, "allow_cancel":false, "context":{"kind":"test_arrangement"}}
+	card_selection_panel.show_request(arrangement_choice_request)
+	await get_tree().process_frame
+	# 当前排序牌面；取其真实输入区模拟一次已经开始的鼠标拖拽释放。
+	var arrangement_card_view: CardView = card_selection_panel._card_views.get(99001) as CardView
+	var arrangement_input_area: CardInputArea = arrangement_card_view.get_node("InputArea") as CardInputArea if arrangement_card_view != null else null
+	if arrangement_input_area == null:
+		card_selection_panel.queue_free()
+		return _fail("arrangement_input_missing")
+	# 鼠标释放事件；在hand_drag_finished同步重建旧CardView后，旧输入节点不再拥有视口也不能报错。
+	var drag_release_event: InputEventMouseButton = InputEventMouseButton.new()
+	drag_release_event.button_index = MOUSE_BUTTON_LEFT
+	drag_release_event.pressed = false
+	arrangement_input_area._pointer_pressed = true
+	arrangement_input_area._is_hand_dragging = true
+	arrangement_input_area._input(drag_release_event)
+	await get_tree().process_frame
+	if card_selection_panel._arrangement_top_uids.size() + card_selection_panel._arrangement_bottom_uids.size() != 2:
+		card_selection_panel.queue_free()
+		return _fail("arrangement_drag_release rows=%s/%s" % [card_selection_panel._arrangement_top_uids, card_selection_panel._arrangement_bottom_uids])
+	card_selection_panel.queue_free()
+	return true
+
+
 ## 验证【幻影】的离场回归、【倾力】的无材料雷杀和【强攻】的红黑武器三种强化分支。
 func _test_misha_and_alan_skills() -> bool:
 	_reset_state(2)
@@ -1346,6 +1416,49 @@ func _test_misha_and_alan_skills() -> bool:
 	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	if _controller.state.get_player(1).out_of_game:
 		return _fail("huanying_restore")
+	_reset_state(2)
+	# 方块传冲材料；点击技能后应直接创建牌目标组合请求，并把实体牌按【无中生有】规则对自身使用。
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	var chuanchong_material: CardInstance = _add_hand_card(0, "shan", "diamond", 6)
+	_add_draw_pile_card("sha", "heart", 7)
+	_add_draw_pile_card("shan", "club", 8)
+	var chuanchong: SkillDefinition = _install_single_skill(0, "chuanchong")
+	if chuanchong == null or not chuanchong.activate().is_empty():
+		return _fail("chuanchong_activate")
+	var chuanchong_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var chuanchong_context: Dictionary = chuanchong_choice.get("context", {}) as Dictionary
+	var chuanchong_target_combinations: Dictionary = chuanchong_context.get("target_combinations_by_card_id", {}) as Dictionary
+	var chuanchong_material_combinations: Array = chuanchong_target_combinations.get(str(chuanchong_material.uid), []) as Array
+	if str(chuanchong_choice.get("choice_type", "")) != "card_target" or str(chuanchong_context.get("kind", "")) != "chuanchong_use" or chuanchong_material_combinations != [[0]]:
+		return _fail("chuanchong_card_target_choice choice=%s" % [chuanchong_choice])
+	if not _submit_pending_choice(0, [chuanchong_material.uid], [0], true):
+		return false
+	if _controller.state.get_player(0).hand.has(chuanchong_material) or not bool(chuanchong.get("_used_current_play_phase")):
+		return _fail("chuanchong_virtual_use hand=%s used=%s" % [_controller.state.get_player(0).hand, chuanchong.get("_used_current_play_phase")])
+	_reset_state(3)
+	# 梅花传冲材料；转化【借刀杀人】时必须按“持刀者、被杀者”保存有序双目标组合。
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	var borrow_sword_material: CardInstance = _add_hand_card(0, "shan", "club", 9)
+	# 借刀持刀者的武器实体；二号位装备后才可成为借刀第一目标。
+	var borrow_sword_weapon: CardInstance = CardInstance.new("qinggang", "spade", 10)
+	borrow_sword_weapon.zone = "equipment"
+	borrow_sword_weapon.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = borrow_sword_weapon
+	var borrow_sword_chuanchong: SkillDefinition = _install_single_skill(0, "chuanchong")
+	if borrow_sword_chuanchong == null or not borrow_sword_chuanchong.activate().is_empty():
+		return _fail("chuanchong_borrow_sword_activate")
+	var borrow_sword_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var borrow_sword_context: Dictionary = borrow_sword_choice.get("context", {}) as Dictionary
+	var borrow_sword_combinations: Array = ((borrow_sword_context.get("target_combinations_by_card_id", {}) as Dictionary).get(str(borrow_sword_material.uid), []) as Array)
+	if borrow_sword_combinations.is_empty() or not borrow_sword_combinations.has([1, 2]):
+		return _fail("chuanchong_borrow_sword_combinations=%s" % [borrow_sword_combinations])
+	# 伪造的反向顺序；第一名不是持刀者时必须由材料专属完整组合校验拒绝，且原请求保持等待。
+	var invalid_borrow_sword_action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	invalid_borrow_sword_action.payload = {"request_id":int(borrow_sword_choice.get("request_id", -1)), "selected_card_uids":[borrow_sword_material.uid], "selected_target_ids":[2, 1], "confirmed":true}
+	if _controller.submit_action(invalid_borrow_sword_action) or _controller._pending_card_choice.is_empty():
+		return _fail("chuanchong_borrow_sword_order_validation")
+	if not _submit_pending_choice(0, [], [], false):
+		return false
 	_reset_state(2)
 	# 倾力测试前的正式规则服务；技能距离和次数查询应经过控制器钩子。
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
@@ -1410,6 +1523,12 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	if xingqi == null:
 		return _fail("xingqi_missing")
 	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	# 星祈首段私有请求；非锦囊牌必须留在展示候选中但不能进入权威可选集合。
+	var xingqi_initial_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var xingqi_selectable_candidates: Array = xingqi_initial_choice.get("candidates", []) as Array
+	var xingqi_display_candidates: Array = (xingqi_initial_choice.get("context", {}) as Dictionary).get("display_candidates", []) as Array
+	if xingqi_selectable_candidates.size() != 1 or int((xingqi_selectable_candidates[0] as Dictionary).get("uid", -1)) != xingqi_trick_card.uid or xingqi_display_candidates.size() != 2:
+		return _fail("xingqi_display_candidates selectable=%s display=%s" % [xingqi_selectable_candidates, xingqi_display_candidates])
 	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [xingqi_trick_card.uid], [], true):
 		return _fail("xingqi_trick_choice")
 	if not _submit_pending_choice(0, [], [1], true):
@@ -1456,12 +1575,30 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	treasure_card.zone = "equipment"
 	treasure_card.owner_id = 0
 	_controller.state.get_player(0).equipment["treasure"] = treasure_card
+	# 可弃置武器实体；用于验证受保护防具、宝物仍出现在展示候选中，但只有武器进入权威选择集合。
+	var discardable_weapon_card: CardInstance = CardInstance.new("qinggang", "spade", 11)
+	discardable_weapon_card.zone = "equipment"
+	discardable_weapon_card.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = discardable_weapon_card
 	# 距离2的目标手牌；用于验证【顺手牵羊】因机巧解除距离限制仍可合法指定。
 	_add_hand_card(2, "shan", "heart", 11)
 	if jiqiao == null or _controller.can_discard_player_card(1, 0, armor_card, "equipment", "armor") or _controller.can_discard_player_card(1, 0, treasure_card, "equipment", "treasure") or _controller._discard_selected_player_card(0, armor_card.uid, 1):
 		return _fail("jiqiao_protection")
 	if _controller.card_rules.validate_virtual_use(0, "shunshou", [2]) != "":
 		return _fail("jiqiao_distance")
+	# 外部弃置操作改由一号以外的本地选择者发起；请求必须公开三张装备，却只允许提交武器UID。
+	_controller.local_human_player_id = 1
+	_controller.discard_one_from_player(1, 0)
+	var jiqiao_discard_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var jiqiao_display_candidates: Array = (jiqiao_discard_choice.get("context", {}) as Dictionary).get("display_candidates", []) as Array
+	var jiqiao_selectable_candidates: Array = jiqiao_discard_choice.get("candidates", []) as Array
+	if jiqiao_display_candidates.size() != 3 or jiqiao_selectable_candidates.size() != 1 or int((jiqiao_selectable_candidates[0] as Dictionary).get("uid", -1)) != discardable_weapon_card.uid:
+		_controller.local_human_player_id = 0
+		return _fail("jiqiao_discard_presentation display=%s selectable=%s" % [jiqiao_display_candidates, jiqiao_selectable_candidates])
+	if not _submit_pending_choice(1, [discardable_weapon_card.uid], [], true):
+		_controller.local_human_player_id = 0
+		return false
+	_controller.local_human_player_id = 0
 	_reset_state(2)
 	# 弦奏用于出牌阶段的梅花手牌；重铸完成后必须写入跳过状态并进入阶段转场。
 	var xianzou_cost_card: CardInstance = _add_hand_card(0, "shan", "club", 12)
@@ -1475,6 +1612,17 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	if _controller.state.current_phase != "play_skipped" or not _controller.state.get_player(0).skipped_phases.get("play", false):
 		return _fail("xianzou_skip phase=%s skipped=%s" % [_controller.state.current_phase, _controller.state.get_player(0).skipped_phases])
 	_controller.game_flow_pacer.cancel_all()
+	_reset_state(2)
+	# 无可重铸手牌的弦奏；仍必须由玩家亲自取消，禁止以不建立请求的方式泄露当前手牌花色。
+	var xianzou_empty: SkillDefinition = _install_single_skill(0, "xianzou")
+	if xianzou_empty == null:
+		return _fail("xianzou_empty_missing")
+	_controller._emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	var xianzou_empty_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if xianzou_empty_choice.is_empty() or not (xianzou_empty_choice.get("candidates", []) as Array).is_empty() or not bool((xianzou_empty_choice.get("context", {}) as Dictionary).get("private_info_safe_prompt", false)):
+		return _fail("xianzou_private_empty_prompt choice=%s" % [xianzou_empty_choice])
+	if not _submit_pending_choice(0, [], [], false) or _controller.state.get_player(0).skipped_phases.get("play", false):
+		return _fail("xianzou_private_empty_cancel")
 	_reset_state(2)
 	# 安可四花色弃牌记录；满足条件后的确认应消耗本轮第一次额外回合额度。
 	var anke: SkillDefinition = _install_single_skill(0, "anke")
