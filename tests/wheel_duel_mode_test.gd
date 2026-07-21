@@ -87,13 +87,19 @@ func _test_draft_service_and_privacy() -> bool:
 				break
 		if available_slot_id < 0:
 			return _fail("no_available_slot")
+		# 被选槽原始明暗状态；选择后必须与此值完全一致。
+		var selected_slot_was_face_up: bool = bool((slots[available_slot_id] as Dictionary).get("face_up", false))
 		var pick_error: String = service.pick_candidate(expected_drafter, available_slot_id)
 		if not pick_error.is_empty():
 			return _fail("pick=%s" % pick_error)
 		var post_pick_snapshot: Dictionary = service.to_dict(expected_drafter)
 		var post_pick_slots: Array = post_pick_snapshot.get("pool_slots", []) as Array
-		if post_pick_slots.size() != 10 or str((post_pick_slots[available_slot_id] as Dictionary).get("selection_owner", "")) != "self" or bool((post_pick_slots[available_slot_id] as Dictionary).get("face_up", true)):
-			return _fail("picked_slot_should_remain_hidden")
+		# 被选择槽保持原始明暗状态；明置槽继续公开真实武将，暗置槽继续隐藏真实武将。
+		var picked_slot: Dictionary = post_pick_slots[available_slot_id] as Dictionary
+		if post_pick_slots.size() != 10 or str(picked_slot.get("selection_owner", "")) != "self" or bool(picked_slot.get("face_up", false)) != selected_slot_was_face_up:
+			return _fail("picked_slot_should_preserve_visibility")
+		if selected_slot_was_face_up != not str(picked_slot.get("character_id", "")).is_empty():
+			return _fail("picked_slot_character_privacy")
 	if service.phase != WheelDuelSelectionService.PHASE_LINEUP:
 		return _fail("phase_after_draft=%s" % service.phase)
 	for player_id: int in [0, 1]:

@@ -198,12 +198,16 @@ func _test_expanded_character_metadata() -> bool:
 	var hanya: Dictionary = GameDatabase.get_character("hanya")
 	# 雪衣定义；内部ID按设计固定为xveyi，基础体力为4。
 	var xveyi: Dictionary = GameDatabase.get_character("xveyi")
+	# 虎克定义；贝洛伯格女性、3点体力与双技能顺序必须保持稳定。
+	var huke: Dictionary = GameDatabase.get_character("huke")
 	if str(natasha.get("gender", "")) != "female" or str(natasha.get("faction", "")) != "beiluoboge" or int(natasha.get("max_hp", 0)) != 3 or (natasha.get("skills", []) as Array) != ["yaoli", "huanfa"]:
 		return _fail("natasha_metadata=%s" % natasha)
 	if str(hanya.get("gender", "")) != "female" or str(hanya.get("faction", "")) != "xianzhou" or int(hanya.get("max_hp", 0)) != 3 or (hanya.get("skills", []) as Array) != ["mingchen", "lushi"]:
 		return _fail("hanya_metadata=%s" % hanya)
 	if str(xveyi.get("display_name", "")) != "雪衣" or str(xveyi.get("gender", "")) != "female" or str(xveyi.get("faction", "")) != "xianzhou" or int(xveyi.get("max_hp", 0)) != 4 or (xveyi.get("skills", []) as Array) != ["huanyang", "shefu"]:
 		return _fail("xveyi_metadata=%s" % xveyi)
+	if str(huke.get("display_name", "")) != "虎克" or str(huke.get("gender", "")) != "female" or str(huke.get("faction", "")) != "beiluoboge" or int(huke.get("max_hp", 0)) != 3 or (huke.get("skills", []) as Array) != ["wuxie_2", "feiyan"]:
+		return _fail("huke_metadata=%s" % huke)
 	# 六项技能说明；玩家可见文本必须逐字保持机制设计原文。
 	var expected_descriptions: Dictionary = {
 		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
@@ -212,6 +216,8 @@ func _test_expanded_character_metadata() -> bool:
 		"lushi":"出牌阶段，你可弃置两张牌名字数相同的牌，然后摸一张牌。",
 		"huanyang":"锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
 		"shefu":"锁定技，当你于一回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
+		"wuxie_2":"当你造成伤害后，你可令受到伤害的角色回复1点体力。",
+		"feiyan":"准备阶段，你可以视为使用一张【火攻】，若此牌造成伤害，你摸三张牌，且本回合内你的所有主要阶段都变为出牌阶段。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
 		# 当前技能ID；用于自动索引中读取对应说明。

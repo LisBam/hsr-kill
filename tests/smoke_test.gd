@@ -182,7 +182,7 @@ func _run() -> void:
 	skill_button_view.free()
 	# 技能元数据数量；当前十九名正式武将共登记三十九个独立技能源码定义，其中包含两项领袖技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 39:
+	if skill_definition_count != 41:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -214,13 +214,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 正式武将数量；当前共十九名可参与选将与对局的角色。
+	# 正式武将数量；当前共二十名可参与选将与对局的角色。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 19:
+	if character_definition_count != 20:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前十九名武将共使用七个独立势力主题。
+	# 势力展示元数据数量；当前二十名武将共使用七个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 7:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
