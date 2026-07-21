@@ -87,6 +87,10 @@ var _preview_seats_by_player: Dictionary = {}
 ## 玩家正在编辑的身份预览；只用于开局前即时展示，确认武将后才写入最终身份映射。
 var _preview_identities_by_player: Dictionary = {}
 
+## 2v2 开局座次→颜色绑定表；键为座次号 1–4，值为 blue/red。
+## 由首次身份分配写入：一/四号位同色、二/三号位同色，整表蓝红可互换，自选期间不可拆散成队关系。
+var _team2v2_identity_by_seat: Dictionary = {}
+
 ## 选将使用的随机数生成器；由对局控制器注入，与本局种子保持一致且不创建第二套随机源。
 var _rng: RandomNumberGenerator
 
@@ -181,6 +185,41 @@ func _pick_peasant_seat(available_seats: Array[int], preferred_seat_number: int)
 	return candidates[_rng.randi_range(0, candidates.size() - 1)]
 
 
+## 返回 2v2 某座次开局绑定的蓝/红身份；非 2v2 或未知座次返回空字符串。
+func get_team2v2_identity_for_seat(seat_number: int) -> String:
+	if not is_team2v2_mode():
+		return ""
+	return str(_team2v2_identity_by_seat.get(seat_number, ""))
+
+
+## 返回 2v2 某颜色在本局绑定的座次号列表（稳定升序）；非 2v2 返回空数组。
+func get_team2v2_seats_for_identity(identity: String) -> Array[int]:
+	var result: Array[int] = []
+	if not is_team2v2_mode() or identity.is_empty():
+		return result
+	for seat_number: int in range(1, _player_ids.size() + 1):
+		if str(_team2v2_identity_by_seat.get(seat_number, "")) == identity:
+			result.append(seat_number)
+	return result
+
+
+## 从可用座次中挑选与指定蓝/红身份绑定的座次；优先保留 preferred，其次随机/首个绑定座。
+func _pick_team2v2_seat(available_seats: Array[int], preferred_seat_number: int, identity: String) -> int:
+	var team_seats: Array[int] = get_team2v2_seats_for_identity(identity)
+	if team_seats.has(preferred_seat_number) and available_seats.has(preferred_seat_number):
+		return preferred_seat_number
+	var candidates: Array[int] = []
+	for seat_number: int in team_seats:
+		if available_seats.has(seat_number):
+			candidates.append(seat_number)
+	if candidates.is_empty():
+		# 无可用绑定座时，若 preferred 本身合法绑定则返回 preferred，便于调用方报错文案。
+		return preferred_seat_number if team_seats.has(preferred_seat_number) else (team_seats[0] if not team_seats.is_empty() else preferred_seat_number)
+	if candidates.size() == 1 or _rng == null:
+		return candidates[0]
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+
 ## 规范化自选座次与身份的联动结果；返回 seat_number、identity 与 error。
 ## player_id 用于解析“除本人外已被占用”的可用座次，使选地主/农民时自动落到空闲地主位/农民位。
 func _normalize_custom_seat_identity(requested_seat_number: int, requested_identity: String, player_id: int = -1) -> Dictionary:
@@ -231,8 +270,29 @@ func _normalize_custom_seat_identity(requested_seat_number: int, requested_ident
 			return {"error": "地主身份必须选择一号位。"}
 		return {"seat_number": seat_number, "identity": identity, "error": ""}
 
-	# 2v2：座次与蓝/红身份自由组合，仅校验名额与有效性，不强制一号位绑定。
-	if is_team2v2_mode() or first_seat_identity.is_empty():
+	# 2v2：按开局座次成队表绑定蓝/红（1/4 同色、2/3 同色，整表可互换）。
+	# 选座→同步该座绑定色；选色→落到仍可用的同色座（优先保持当前座）。
+	if is_team2v2_mode():
+		var seat_is_valid: bool = seat_number >= 1 and seat_number <= _player_ids.size()
+		if identity == "blue" or identity == "red":
+			seat_number = _pick_team2v2_seat(available_seats, seat_number, identity)
+		elif seat_is_valid:
+			identity = get_team2v2_identity_for_seat(seat_number)
+		else:
+			return {"error": "请选择有效座次。"}
+		if seat_number < 1 or seat_number > _player_ids.size():
+			return {"error": "请选择有效座次。"}
+		if identity.is_empty() or not _identity_limits.has(identity):
+			return {"error": "请选择有效身份。"}
+		var bound_identity: String = get_team2v2_identity_for_seat(seat_number)
+		if bound_identity.is_empty():
+			return {"error": "请选择有效座次。"}
+		if identity != bound_identity:
+			return {"error": "%d号位必须选择%s身份。" % [seat_number, "蓝方" if bound_identity == "blue" else "红方"]}
+		return {"seat_number": seat_number, "identity": identity, "error": ""}
+
+	# 无首任身份绑定的兜底模式：仅校验座次范围与身份名额。
+	if first_seat_identity.is_empty():
 		if seat_number < 1 or seat_number > _player_ids.size():
 			return {"error": "请选择有效座次。"}
 		if identity.is_empty() or not _identity_limits.has(identity):
@@ -275,6 +335,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	_initial_identities_by_player.clear()
 	_preview_seats_by_player.clear()
 	_preview_identities_by_player.clear()
+	_team2v2_identity_by_seat.clear()
 	leader_player_id = -1
 	_rng = rng
 	custom_assignment_enabled = allow_custom_assignment
@@ -337,6 +398,13 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
 		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1
+	# 2v2：把开局座次颜色表固化为自选联动依据（1/4 同色、2/3 同色）。
+	if is_team2v2_mode():
+		for mapped_player_id: int in _player_ids:
+			var mapped_seat_number: int = int(_initial_seats_by_player.get(mapped_player_id, -1))
+			var mapped_identity: String = str(_initial_identities_by_player.get(mapped_player_id, ""))
+			if mapped_seat_number >= 1 and not mapped_identity.is_empty():
+				_team2v2_identity_by_seat[mapped_seat_number] = mapped_identity
 	phase = PHASE_OTHERS
 	for player_id: int in _player_ids:
 		_candidates_by_player[player_id] = _make_candidates(player_id, "", false)
@@ -385,7 +453,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		or uses_simultaneous_selection() and phase == PHASE_OTHERS
 	)
 	if confirms_custom_assignment:
-		# 规范化后的座次与身份；斗地强制地主占固定座（1/3），身份局一号位与领袖双向绑定。
+		# 规范化后的座次与身份；斗地强制地主占固定座（1/3），2v2 按开局成队表绑定蓝/红，身份局一号位与领袖双向绑定。
 		var normalized_assignment: Dictionary = _normalize_custom_seat_identity(requested_seat_number, requested_identity, player_id)
 		if not str(normalized_assignment.get("error", "")).is_empty():
 			return str(normalized_assignment.get("error", "请选择有效座次。"))
@@ -757,6 +825,9 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"first_seat_identity":get_first_seat_identity(),
 		"unique_first_seat_identity":has_unique_first_seat_identity(),
 		"landlord_seat_numbers":get_landlord_seat_numbers(),
+		"team2v2_identity_by_seat":_team2v2_identity_by_seat.duplicate() if is_team2v2_mode() else {},
+		"team2v2_blue_seat_numbers":get_team2v2_seats_for_identity("blue") if is_team2v2_mode() else [],
+		"team2v2_red_seat_numbers":get_team2v2_seats_for_identity("red") if is_team2v2_mode() else [],
 		"leader_player_id":leader_player_id if uses_leader_priority_selection() else -1,
 		"leader_character_id":public_leader_character_id,
 		"candidate_count":candidate_count,

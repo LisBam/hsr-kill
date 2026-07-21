@@ -62,8 +62,11 @@ func _run() -> void:
 	if not _test_winner_evaluation():
 		_restore_settings()
 		return
+	if not await _test_team2v2_custom_seat_identity_binding():
+		_restore_settings()
+		return
 	_restore_settings()
-	print("TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+custom_ai_seat+seat4_hand+seat1_draw+teammate_draw+winner")
+	print("TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+custom_ai_seat+seat_identity_bind+seat4_hand+seat1_draw+teammate_draw+winner")
 	get_tree().quit(0)
 
 
@@ -247,15 +250,18 @@ func _test_custom_assignment_ai_completes_without_invalid_seat() -> bool:
 	var human_candidates: Array[String] = _controller.character_selection.get_candidates(human_id)
 	if human_candidates.is_empty():
 		return _fail("custom_ai_human_candidates_empty")
-	# 故意提交 2 号位，确保一号位仍留给后续 AI；同时带上当前仍有名额的身份。
+	# 故意提交 2 号位，确保一号位仍留给后续 AI；身份必须用该座绑定色，禁止自由组合非法对。
+	var seat2_identity: String = _controller.character_selection.get_team2v2_identity_for_seat(2)
+	if seat2_identity.is_empty():
+		return _fail("custom_ai_seat2_identity_empty")
 	var human_identities: Array[String] = _controller.character_selection.get_available_identities(human_id)
-	if human_identities.is_empty():
-		return _fail("custom_ai_human_identities_empty")
+	if human_identities.is_empty() or not human_identities.has(seat2_identity):
+		return _fail("custom_ai_human_identities_missing_bound seat2=%s pool=%s" % [seat2_identity, str(human_identities)])
 	var rejected_messages: Array[String] = []
 	var on_rejected := func(message: String) -> void:
 		rejected_messages.append(str(message))
 	_controller.action_rejected.connect(on_rejected)
-	if not _controller.select_character(human_id, human_candidates[0], 2, human_identities[0]):
+	if not _controller.select_character(human_id, human_candidates[0], 2, seat2_identity):
 		_controller.action_rejected.disconnect(on_rejected)
 		return _fail("custom_ai_human_select_failed rejects=%s" % str(rejected_messages))
 	# 交给正式 AI 驱动完成其余三人；成功后阶段应离开 character_selection。
@@ -273,6 +279,66 @@ func _test_custom_assignment_ai_completes_without_invalid_seat() -> bool:
 		var pending: Array = _controller.character_selection.get_pending_player_ids()
 		return _fail("custom_ai_stuck_in_character_selection pending=%s rejects=%s" % [str(pending), str(rejected_messages)])
 	# 关闭本用例开关，避免后续 seat4 手牌用例受自选路径影响。
+	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(false)
+	return true
+
+
+## 2v2 自选：选座强制绑定开局色，选色落到同色可用座；非法自由组合会被规范化或拒绝。
+func _test_team2v2_custom_seat_identity_binding() -> bool:
+	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(true)
+	_create_controller()
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_TEAM2V2)
+	if not _controller.start_match(4, 20260723, IdentityRules.MODE_TEAM2V2):
+		return _fail("bind_start_match")
+	var service: CharacterSelectionService = _controller.character_selection
+	if service == null or not service.is_team2v2_mode():
+		return _fail("bind_not_team2v2")
+	if not bool(service.custom_assignment_enabled):
+		return _fail("bind_assignment_not_enabled")
+	# 开局表：1/4 同色、2/3 同色。
+	var seat1_identity: String = service.get_team2v2_identity_for_seat(1)
+	var seat2_identity: String = service.get_team2v2_identity_for_seat(2)
+	var seat3_identity: String = service.get_team2v2_identity_for_seat(3)
+	var seat4_identity: String = service.get_team2v2_identity_for_seat(4)
+	if seat1_identity.is_empty() or seat2_identity.is_empty() or seat3_identity.is_empty() or seat4_identity.is_empty():
+		return _fail("bind_table_empty seats=%s/%s/%s/%s" % [seat1_identity, seat2_identity, seat3_identity, seat4_identity])
+	if seat1_identity != seat4_identity or seat2_identity != seat3_identity or seat1_identity == seat2_identity:
+		return _fail("bind_table_invalid seats=%s/%s/%s/%s" % [seat1_identity, seat2_identity, seat3_identity, seat4_identity])
+	var human_id: int = _controller.local_human_player_id
+	# 选 4 号位（不带身份）预览：应同步为 seat4 绑定色。
+	var preview_err: String = service.preview_custom_assignment(human_id, 4, "")
+	if not preview_err.is_empty():
+		return _fail("bind_preview_seat4_err=%s" % preview_err)
+	if service.get_preview_seat_number(human_id) != 4:
+		return _fail("bind_preview_seat4_seat=%d" % service.get_preview_seat_number(human_id))
+	if service.get_preview_identity(human_id) != seat4_identity:
+		return _fail("bind_preview_seat4_identity=%s expected=%s" % [service.get_preview_identity(human_id), seat4_identity])
+	# 选 seat2 的对立色：应落到 seat2 对立色绑定座（1 或 4）。
+	var opposite_identity: String = seat1_identity
+	preview_err = service.preview_custom_assignment(human_id, 2, opposite_identity)
+	if not preview_err.is_empty():
+		return _fail("bind_preview_opposite_err=%s" % preview_err)
+	var preview_seat: int = service.get_preview_seat_number(human_id)
+	var preview_identity: String = service.get_preview_identity(human_id)
+	if preview_identity != opposite_identity:
+		return _fail("bind_preview_opposite_identity=%s expected=%s" % [preview_identity, opposite_identity])
+	if preview_seat != 1 and preview_seat != 4:
+		return _fail("bind_preview_opposite_seat=%d expected 1 or 4" % preview_seat)
+	if service.get_team2v2_identity_for_seat(preview_seat) != opposite_identity:
+		return _fail("bind_preview_opposite_seat_mismatch seat=%d color=%s" % [preview_seat, opposite_identity])
+	# 正式确认：提交 seat2 + seat2 绑定色应成功。
+	var human_candidates: Array[String] = service.get_candidates(human_id)
+	if human_candidates.is_empty():
+		return _fail("bind_human_candidates_empty")
+	if not _controller.select_character(human_id, human_candidates[0], 2, seat2_identity):
+		return _fail("bind_human_select_seat2_failed")
+	if service.get_selected_seat_number(human_id) != 2:
+		return _fail("bind_selected_seat=%d" % service.get_selected_seat_number(human_id))
+	if service.get_selected_identity(human_id) != seat2_identity:
+		return _fail("bind_selected_identity=%s expected=%s" % [service.get_selected_identity(human_id), seat2_identity])
+	# 关闭本用例开关，避免污染后续用例。
 	if GameSettings != null and GameSettings.has_method("set_custom_character_assignment_enabled"):
 		GameSettings.set_custom_character_assignment_enabled(false)
 	return true

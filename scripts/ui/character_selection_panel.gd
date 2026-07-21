@@ -840,7 +840,60 @@ func _get_random_enabled_peasant_seat() -> int:
 	return enabled_seat_numbers[randi_range(0, enabled_seat_numbers.size() - 1)]
 
 
-## 选择一个临时座次；斗地地主位联动地主/农民位联动农民，身份局一号位联动领袖；2v2 不强制座次与蓝红绑定。
+## 返回本局 2v2 某座次绑定的蓝/红身份；优先读服务快照 `team2v2_identity_by_seat`。
+func _get_team2v2_identity_for_seat(seat_number: int) -> String:
+	var mapping: Dictionary = _snapshot.get("team2v2_identity_by_seat", {}) as Dictionary
+	if mapping.has(seat_number):
+		return str(mapping.get(seat_number, ""))
+	# 字典键可能是字符串形式的座次号。
+	if mapping.has(str(seat_number)):
+		return str(mapping.get(str(seat_number), ""))
+	return ""
+
+
+## 返回本局 2v2 某蓝/红身份绑定的座次号列表；优先读快照字段，缺省时从映射表反查。
+func _get_team2v2_seats_for_identity(identity: String) -> Array[int]:
+	var result: Array[int] = []
+	if identity == "blue":
+		var raw_blue: Array = _snapshot.get("team2v2_blue_seat_numbers", []) as Array
+		for seat_variant: Variant in raw_blue:
+			var seat_number: int = int(seat_variant)
+			if seat_number >= 1 and not result.has(seat_number):
+				result.append(seat_number)
+	elif identity == "red":
+		var raw_red: Array = _snapshot.get("team2v2_red_seat_numbers", []) as Array
+		for seat_variant: Variant in raw_red:
+			var seat_number: int = int(seat_variant)
+			if seat_number >= 1 and not result.has(seat_number):
+				result.append(seat_number)
+	if not result.is_empty():
+		return result
+	# 快照缺列表时：从座次→颜色映射反查，保证 UI 仍可联动。
+	var mapping: Dictionary = _snapshot.get("team2v2_identity_by_seat", {}) as Dictionary
+	for seat_key: Variant in mapping.keys():
+		if str(mapping.get(seat_key, "")) != identity:
+			continue
+		var seat_number: int = int(seat_key)
+		if seat_number >= 1 and not result.has(seat_number):
+			result.append(seat_number)
+	result.sort()
+	return result
+
+
+## 从可用座次按钮中随机挑选一个与指定蓝/红身份绑定的座次；无可用时返回 -1。
+func _get_random_enabled_team2v2_seat(identity: String) -> int:
+	var team_seats: Array[int] = _get_team2v2_seats_for_identity(identity)
+	var enabled_seat_numbers: Array[int] = []
+	for seat_number: int in team_seats:
+		var seat_button: Button = _seat_button_views.get(seat_number) as Button
+		if seat_button != null and not seat_button.disabled:
+			enabled_seat_numbers.append(seat_number)
+	if enabled_seat_numbers.is_empty():
+		return -1
+	return enabled_seat_numbers[randi_range(0, enabled_seat_numbers.size() - 1)]
+
+
+## 选择一个临时座次；斗地地主位联动地主/农民位联动农民，2v2 按开局成队表联动蓝/红，身份局一号位联动领袖。
 func _select_seat(seat_number: int) -> void:
 	_selected_seat_number = seat_number
 	var first_seat_identity: String = _get_first_seat_identity_id()
@@ -852,8 +905,13 @@ func _select_seat(seat_number: int) -> void:
 			_selected_identity = "landlord"
 		else:
 			_selected_identity = "peasant"
-	elif selection_mode == "team2v2" or first_seat_identity.is_empty():
-		# 2v2：座次不强制绑定蓝/红；保留玩家已选身份。
+	elif selection_mode == "team2v2" or (first_seat_identity.is_empty() and not _get_team2v2_identity_for_seat(seat_number).is_empty()):
+		# 2v2：座次决定本局绑定色（1/4 同色、2/3 同色），选座即同步身份。
+		var bound_identity: String = _get_team2v2_identity_for_seat(seat_number)
+		if not bound_identity.is_empty():
+			_selected_identity = bound_identity
+	elif first_seat_identity.is_empty():
+		# 无首任身份绑定的其他模式：座次与身份各自独立。
 		pass
 	elif seat_number == 1:
 		_selected_identity = first_seat_identity
@@ -866,7 +924,7 @@ func _select_seat(seat_number: int) -> void:
 	_request_custom_assignment_preview()
 
 
-## 选择一个临时身份；斗地地主随机落到 1/3 号位，农民落到非地主位；身份局唯一首任身份联动一号位；2v2 不联动座次。
+## 选择一个临时身份；斗地地主/农民联动固定座，2v2 蓝/红落到本局同色绑定座，身份局唯一首任身份联动一号位。
 func _select_identity(identity: String) -> void:
 	_selected_identity = identity
 	var first_seat_identity: String = _get_first_seat_identity_id()
@@ -885,8 +943,14 @@ func _select_identity(identity: String) -> void:
 				var peasant_seat: int = _get_random_enabled_peasant_seat()
 				if peasant_seat >= 1:
 					_selected_seat_number = peasant_seat
-	elif selection_mode == "team2v2" or first_seat_identity.is_empty():
-		# 2v2：身份与座次自由组合，不因选择蓝/红改动座次。
+	elif selection_mode == "team2v2" or identity == "blue" or identity == "red":
+		# 2v2：选蓝/红 → 若当前座不在同色绑定表则落到可用同色座（优先保持已在同色座的当前选择）。
+		var team_seats: Array[int] = _get_team2v2_seats_for_identity(identity)
+		if not team_seats.is_empty() and not team_seats.has(_selected_seat_number):
+			var team_seat: int = _get_random_enabled_team2v2_seat(identity)
+			if team_seat >= 1:
+				_selected_seat_number = team_seat
+	elif first_seat_identity.is_empty():
 		pass
 	elif identity == first_seat_identity and _is_unique_first_seat_identity():
 		_selected_seat_number = 1
