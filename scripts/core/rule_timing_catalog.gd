@@ -83,6 +83,9 @@ const MODE_TIMINGS: Array[String] = [
 ## 主动技能可声明的四种发动入口；数组顺序按常见主动使用、用牌询问、响应询问和普通选牌排列。
 const ACTIVE_ENTRIES: Array[String] = ["phaseUse", "chooseToUse", "chooseToRespond", "chooseCard"]
 
+## 主要阶段的稳定内部名称；技能按此集合识别判定、摸牌、出牌与弃牌阶段，避免重复维护字符串白名单。
+const MAIN_PHASES: Array[String] = ["judgment", "draw", "play", "discard"]
+
 
 ## 返回全部220个标准监听时机的新数组；调用方修改返回值不会污染静态目录。
 static func get_all_timing_names() -> Array[String]:
@@ -108,3 +111,8 @@ static func has_timing(event_name: String) -> bool:
 ## 返回名称是否属于四种主动技能发动入口；用于技能元数据校验与选择请求候选生成。
 static func has_active_entry(entry_name: String) -> bool:
 	return ACTIVE_ENTRIES.has(entry_name)
+
+
+## 判断内部阶段名是否属于主要阶段；空值、准备阶段与结束阶段均返回 false。
+static func is_main_phase(phase_name: String) -> bool:
+	return MAIN_PHASES.has(phase_name)

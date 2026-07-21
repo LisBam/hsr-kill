@@ -249,7 +249,7 @@ func abort(reason: String) -> void:
 
 ## 返回当前 choice_type 对应的选择结果数组；bool 与 control 也转换为长度 0 或 1 的数组参与通用数量校验。
 func _get_selected_values(response: ChoiceResponse) -> Array:
-	if choice_type in ["use", "respond", "card", "discard"]:
+	if choice_type in ["use", "respond", "card", "discard", "arrange"]:
 		return response.card_ids
 	if choice_type == "target":
 		return response.target_ids
@@ -262,7 +262,7 @@ func _get_selected_values(response: ChoiceResponse) -> Array:
 
 ## 返回当前 choice_type 对应的合法候选数组；调用方可用 active_context 保存更复杂的组合过滤信息。
 func _get_allowed_values() -> Array:
-	if choice_type in ["use", "respond", "card", "discard"]:
+	if choice_type in ["use", "respond", "card", "discard", "arrange"]:
 		return card_ids
 	if choice_type == "target":
 		return target_ids

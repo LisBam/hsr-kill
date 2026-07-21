@@ -191,6 +191,16 @@ func on_converted_response_consumed(_card: CardInstance, _response_pattern: Stri
 	pass
 
 
+## 返回无需实体材料即可提供的响应牌定义 ID；空字符串表示技能不支持无材料响应。
+func get_cardless_response_definition_id(_response_patterns: Array[String]) -> String:
+	return ""
+
+
+## 通知技能无材料响应已经通过权威校验并实际打出；费用应在 activate() 中完成，本回调只记录成功事实。
+func on_cardless_response_consumed(_response_pattern: String, _virtual_definition_id: String) -> void:
+	pass
+
+
 ## 恢复由控制器完整执行的额外阶段；上下文只包含稳定玩家、技能与阶段来源数据，不持有运行时对象。
 func continue_extra_phase(_context: Dictionary) -> bool:
 	return false
@@ -237,6 +247,16 @@ func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
 ## 例如【跋扈】对 slash 牌族返回1，使出牌阶段使用【杀】的次数上限+1。
 func get_play_count_limit_bonus(_card_definition: Dictionary) -> int:
 	return 0
+
+
+## 判断技能是否令指定卡牌忽略距离限制；默认保持卡牌自身的攻击范围、距离1或特殊距离规则。
+func ignores_card_distance_limit(_card_definition: Dictionary) -> bool:
+	return false
+
+
+## 判断其他角色能否弃置持有者的指定牌；默认允许，保护技能只拒绝规则明确覆盖的区域与牌型。
+func can_other_player_discard_card(_source_player_id: int, _card: CardInstance, _zone: String, _slot: String) -> bool:
+	return true
 
 
 ## 校验持有者使用牌时的技能附加目标限制；空字符串表示合法，非空文本会作为统一拒绝原因。
@@ -307,6 +327,21 @@ func request_card_target_selection(title: String, prompt: String, candidates: Ar
 	# 技能恢复上下文；可在 context.target_ids_by_card_id 中提供实体牌到合法目标的组合映射。
 	var skill_context: Dictionary = _build_selection_context(context)
 	return host.call("request_card_target_choice", owner_player_id, title, prompt, candidates, target_ids, min_cards, max_cards, min_targets, max_targets, allow_cancel, skill_context) as Dictionary
+
+
+## 为技能持有者创建牌堆顶/底双行排序请求；响应 card_ids 保存从左到右顺序，control_id 保存牌堆顶行数量。
+func request_pile_arrangement(title: String, prompt: String, candidates: Array[Dictionary], context: Dictionary = {}) -> Array[int]:
+	if host == null or not host.has_method("request_card_choice") or candidates.is_empty():
+		return []
+	# 排序上下文；全部候选必须恰好出现一次，界面可在两行之间拖动并保持每行从左到右的顺序语义。
+	var skill_context: Dictionary = _build_selection_context(context)
+	skill_context["choice_type_override"] = "arrange"
+	# 顶行数量选项；稳定ID随候选总数生成，权威提交据此分割顶行和底行。
+	var top_count_options: Array[Dictionary] = []
+	for top_count: int in range(candidates.size() + 1):
+		top_count_options.append({"id":"top_count_%d" % top_count, "label":str(top_count)})
+	skill_context["control_options"] = top_count_options
+	return host.call("request_card_choice", owner_player_id, title, prompt, candidates, candidates.size(), candidates.size(), false, skill_context) as Array[int]
 
 
 ## 按稳定UID查找技能持有者当前拥有的转化材料；支持手牌、木牛“粮”与装备区，不移动实体牌。

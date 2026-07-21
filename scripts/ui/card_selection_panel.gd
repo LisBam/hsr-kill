@@ -12,6 +12,9 @@ signal choice_cancelled(request_id: int)
 ## 用户选择文字控制项时发出请求序号与稳定选项 ID；组件不解释该选项对应的技能效果。
 signal control_submitted(request_id: int, control_id: String)
 
+## 用户确认牌堆双行排序时发出完整UID顺序与牌堆顶行数量；组件不直接改写权威牌堆。
+signal arrangement_submitted(request_id: int, ordered_card_uids: Array[int], top_count: int)
+
 ## 正式卡牌视图场景；正面候选和牌背候选都复用同一111×148像素组件。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -159,6 +162,21 @@ var _public_layout_signature: int = 0
 ## 当前公共展示对应的本地请求 ID；同一请求重复刷新时保留玩家临时选择，切换选择者时恢复为空选择。
 var _public_request_id: int = -1
 
+## 牌堆排序请求中的牌堆顶行UID；数组顺序对应界面从左到右，也对应更早到更晚的摸牌顺序。
+var _arrangement_top_uids: Array[int] = []
+
+## 牌堆排序请求中的牌堆底行UID；数组顺序同样从左到右表示由更上方到更下方。
+var _arrangement_bottom_uids: Array[int] = []
+
+## 牌堆排序请求的候选快照映射；重建两行时按稳定UID恢复原牌面，不读取规则状态。
+var _arrangement_candidates_by_uid: Dictionary = {}
+
+## 当前牌堆顶排序行容器；拖动释放时只读取其全局矩形判断目标行，不保存任何规则对象。
+var _arrangement_top_row: HFlowContainer
+
+## 当前牌堆底排序行容器；与顶行共同提供跨行拖动的纯表现落点。
+var _arrangement_bottom_row: HFlowContainer
+
 
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
@@ -265,6 +283,10 @@ func show_request(choice_request: Dictionary) -> void:
 	_restore_standard_zone_scroll_behavior()
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
 	_prompt_label.text = str(_choice_request.get("prompt", "请选择卡牌"))
+	if str(_choice_request.get("choice_type", "card")) == "arrange":
+		_show_arrangement_request()
+		visible = true
+		return
 	# 文字控制项请求；每个选项直接以独立按钮提交，底部确定按钮不重复制造二次确认。
 	if str(_choice_request.get("choice_type", "card")) in ["control", "bool"]:
 		_add_control_options(_choice_request.get("control_options", []) as Array)
@@ -276,11 +298,17 @@ func show_request(choice_request: Dictionary) -> void:
 	_confirm_button.visible = true
 	# 按区域聚合候选；字典数组保持请求原始顺序，手牌牌背仍可逐张选择。
 	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[]}
-	for candidate_variant: Variant in _choice_request.get("candidates", []):
+	# 权威可选UID只取candidates；display_candidates可额外显示受保护或不满足类型条件的暗置牌。
+	var selectable_candidate_uids: Array[int] = []
+	for selectable_variant: Variant in _choice_request.get("candidates", []):
+		var selectable_candidate: Dictionary = selectable_variant as Dictionary
+		selectable_candidate_uids.append(int(selectable_candidate.get("uid", -1)))
+	var display_candidates: Array = ((_choice_request.get("context", {}) as Dictionary).get("display_candidates", _choice_request.get("candidates", [])) as Array)
+	for candidate_variant: Variant in display_candidates:
 		var candidate: Dictionary = candidate_variant as Dictionary
 		# 当前候选实体 UID；有效值会加入本地可选集合并用于点击校验。
 		var candidate_uid: int = int(candidate.get("uid", -1))
-		if candidate_uid >= 0 and not _selectable_card_uids.has(candidate_uid):
+		if candidate_uid >= 0 and selectable_candidate_uids.has(candidate_uid) and not _selectable_card_uids.has(candidate_uid):
 			_selectable_card_uids.append(candidate_uid)
 		var zone: String = str(candidate.get("zone", "processing"))
 		if not candidates_by_zone.has(zone):
@@ -531,8 +559,126 @@ func close() -> void:
 	_control_option_buttons.clear()
 	_public_layout_signature = 0
 	_public_request_id = -1
+	_arrangement_top_uids.clear()
+	_arrangement_bottom_uids.clear()
+	_arrangement_candidates_by_uid.clear()
+	_arrangement_top_row = null
+	_arrangement_bottom_row = null
 	_clear_container(_zone_container)
 	_confirm_button.visible = true
+
+
+## 初始化牌堆双行排序界面；全部候选默认位于牌堆顶行，并保持观看时从上到下的顺序。
+func _show_arrangement_request() -> void:
+	_arrangement_top_uids.clear()
+	_arrangement_bottom_uids.clear()
+	_arrangement_candidates_by_uid.clear()
+	_selectable_card_uids.clear()
+	for candidate_variant: Variant in _choice_request.get("candidates", []) as Array:
+		# 当前排序候选；UID同时用于界面顺序和权威提交，不保存CardInstance引用。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		var card_uid: int = int(candidate.get("uid", -1))
+		if card_uid < 0 or _arrangement_candidates_by_uid.has(card_uid):
+			continue
+		_arrangement_candidates_by_uid[card_uid] = candidate.duplicate(true)
+		_arrangement_top_uids.append(card_uid)
+		_selectable_card_uids.append(card_uid)
+	_cancel_button.visible = false
+	_action_row.visible = true
+	_confirm_button.visible = true
+	_render_arrangement_rows()
+
+
+## 按当前两个UID数组重建固定牌位；重建只发生在点击换行或拖动结束后，拖动过程中原牌节点持续跟随指针。
+func _render_arrangement_rows() -> void:
+	_clear_container(_zone_container)
+	_card_views.clear()
+	_section_labels.clear()
+	_arrangement_top_row = _create_arrangement_row("牌堆顶", _arrangement_top_uids)
+	_arrangement_bottom_row = _create_arrangement_row("牌堆底", _arrangement_bottom_uids)
+	_refresh_selection_state()
+
+
+## 创建牌堆排序中的一行；左侧牌代表该区域更上方的牌，空行仍保留可拖入高度。
+func _create_arrangement_row(title: String, card_uids: Array[int]) -> HFlowContainer:
+	# 单行分区；标题和牌位采用与普通选择相同的间距与主题色。
+	var section: VBoxContainer = VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+	section.custom_minimum_size = Vector2(0.0, 182.0)
+	_zone_container.add_child(section)
+	var label: Label = Label.new()
+	label.text = title
+	label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
+	label.add_theme_font_size_override("font_size", 16)
+	section.add_child(label)
+	_section_labels.append(label)
+	var row: HFlowContainer = HFlowContainer.new()
+	row.custom_minimum_size = Vector2(0.0, 148.0)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("h_separation", 8)
+	row.add_theme_constant_override("v_separation", 8)
+	section.add_child(row)
+	for card_uid: int in card_uids:
+		_add_card_slot(row, _arrangement_candidates_by_uid.get(card_uid, {}) as Dictionary, true, false, "")
+	return row
+
+
+## 点击排序牌时在牌堆顶与牌堆底之间移动；新位置追加到目标行右侧，适合触屏快速操作。
+func _toggle_arrangement_row(card_uid: int) -> void:
+	if _arrangement_top_uids.has(card_uid):
+		_arrangement_top_uids.erase(card_uid)
+		_arrangement_bottom_uids.append(card_uid)
+	elif _arrangement_bottom_uids.has(card_uid):
+		_arrangement_bottom_uids.erase(card_uid)
+		_arrangement_top_uids.append(card_uid)
+	_render_arrangement_rows()
+
+
+## 开始拖动排序牌；原CardView节点进入与手牌相同的直接跟随状态。
+func _on_arrangement_drag_started(card_uid: int, pointer_global_position: Vector2) -> void:
+	var card_view: CardView = _card_views.get(card_uid) as CardView
+	if card_view != null and is_instance_valid(card_view):
+		card_view.begin_hand_drag(pointer_global_position)
+
+
+## 更新拖动排序牌的位置；布局容器中的固定包装器保持原尺寸，因此其余牌不会在拖动中跳位。
+func _on_arrangement_drag_moved(card_uid: int, pointer_global_position: Vector2) -> void:
+	var card_view: CardView = _card_views.get(card_uid) as CardView
+	if card_view != null and is_instance_valid(card_view):
+		card_view.move_hand_drag(pointer_global_position)
+
+
+## 完成拖动排序；释放到任一牌面时按左右半区插入，释放到空白行时追加到该行末尾。
+func _on_arrangement_drag_finished(card_uid: int, pointer_global_position: Vector2) -> void:
+	var source_view: CardView = _card_views.get(card_uid) as CardView
+	if source_view != null and is_instance_valid(source_view):
+		source_view.end_hand_drag()
+	# 命中的目标牌与插入方向；未命中时根据两行中心距离选择目标行。
+	var target_uid: int = -1
+	var insert_after_target: bool = true
+	for candidate_uid_variant: Variant in _card_views.keys():
+		var candidate_uid: int = int(candidate_uid_variant)
+		if candidate_uid == card_uid:
+			continue
+		var candidate_view: CardView = _card_views.get(candidate_uid) as CardView
+		if candidate_view != null and is_instance_valid(candidate_view) and candidate_view.get_global_rect().has_point(pointer_global_position):
+			target_uid = candidate_uid
+			insert_after_target = pointer_global_position.x >= candidate_view.get_global_rect().get_center().x
+			break
+	var destination_top: bool = _arrangement_top_uids.has(target_uid)
+	if target_uid < 0:
+		var top_center_y: float = _arrangement_top_row.get_global_rect().get_center().y if _arrangement_top_row != null else pointer_global_position.y
+		var bottom_center_y: float = _arrangement_bottom_row.get_global_rect().get_center().y if _arrangement_bottom_row != null else pointer_global_position.y
+		destination_top = absf(pointer_global_position.y - top_center_y) <= absf(pointer_global_position.y - bottom_center_y)
+	_arrangement_top_uids.erase(card_uid)
+	_arrangement_bottom_uids.erase(card_uid)
+	var destination: Array[int] = _arrangement_top_uids if destination_top else _arrangement_bottom_uids
+	if target_uid >= 0 and destination.has(target_uid):
+		var insertion_index: int = destination.find(target_uid) + (1 if insert_after_target else 0)
+		destination.insert(insertion_index, card_uid)
+	else:
+		destination.append(card_uid)
+	_render_arrangement_rows()
 
 
 ## 为一个非空区域创建标题与横向牌列；空区域不占用布局空间。
@@ -641,6 +787,12 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	# 公共牌位即使首次以旁观状态创建，也预先连接点击信号；后续轮到本地玩家时只切换输入权限即可复用节点。
 	if selectable or create_owner_label:
 		card_view.pressed.connect(_on_card_pressed.bind(card_uid))
+	if str(_choice_request.get("choice_type", "")) == "arrange":
+		# 排序牌面开启通用拖动分区；点击可在两行间快速移动，拖动可同时改变所属行与位置。
+		card_view.set_external_reorder_zone("pile_arrangement")
+		card_view.hand_drag_started.connect(_on_arrangement_drag_started)
+		card_view.hand_drag_moved.connect(_on_arrangement_drag_moved)
+		card_view.hand_drag_finished.connect(_on_arrangement_drag_finished)
 	if taken:
 		card_view.modulate = taken_card_ghost_modulate
 	wrapper.add_child(card_view)
@@ -680,6 +832,9 @@ func _apply_owner_label_style(owner_label: Label) -> void:
 
 ## 切换一张候选牌的本地选择状态，并遵守请求最大选择数量。
 func _on_card_pressed(card_uid: int) -> void:
+	if str(_choice_request.get("choice_type", "")) == "arrange":
+		_toggle_arrangement_row(card_uid)
+		return
 	if not _get_dynamic_selectable_card_uids().has(card_uid):
 		return
 	if _selected_card_uids.has(card_uid):
@@ -706,6 +861,9 @@ func _refresh_selection_state() -> void:
 		card_view.set_selected_state(_selected_card_uids.has(card_uid))
 		card_view.set_interactable_state(dynamic_selectable_card_uids.has(card_uid))
 	# 数量约束；允许取消不代表空选择可以通过“确定”按钮提交。
+	if str(_choice_request.get("choice_type", "")) == "arrange":
+		_confirm_button.disabled = _arrangement_top_uids.size() + _arrangement_bottom_uids.size() != _arrangement_candidates_by_uid.size()
+		return
 	var min_select: int = int(_choice_request.get("min_select", 0))
 	var max_select: int = int(_choice_request.get("max_select", 0))
 	_confirm_button.disabled = _selected_card_uids.size() < min_select or _selected_card_uids.size() > max_select
@@ -755,6 +913,11 @@ func _has_compatible_card_combination(candidate_uid: int, valid_card_combination
 
 ## 发出当前选择结果；实际 UID 和请求序号仍会由 MatchController 权威校验。
 func _on_confirm_pressed() -> void:
+	if str(_choice_request.get("choice_type", "")) == "arrange":
+		var ordered_uids: Array[int] = _arrangement_top_uids.duplicate()
+		ordered_uids.append_array(_arrangement_bottom_uids)
+		arrangement_submitted.emit(int(_choice_request.get("request_id", -1)), ordered_uids, _arrangement_top_uids.size())
+		return
 	choice_submitted.emit(int(_choice_request.get("request_id", -1)), _selected_card_uids.duplicate())
 
 

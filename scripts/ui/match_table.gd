@@ -487,6 +487,7 @@ func _ready() -> void:
 	character_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(character_selection_panel))
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
 	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
+	card_selection_panel.arrangement_submitted.connect(_on_pile_arrangement_submitted)
 	use_button.pressed.connect(_on_use_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)
@@ -1449,7 +1450,9 @@ func _on_skill_requested(skill_id: String) -> void:
 		return
 	# 主动技能动作；技能文件自行校验阶段、次数、目标与资源，界面不直接修改任何规则状态。
 	var action: PlayerAction = PlayerAction.new("use_skill", match_controller.local_human_player_id)
-	action.payload = {"skill_id":skill_id}
+	# 当前主动入口上下文；响应技能必须把房主下发的牌型与active_entry原样带回，出牌阶段空上下文仍只增加skill_id。
+	action.payload = activation_context.duplicate(true)
+	action.payload["skill_id"] = skill_id
 	match_controller.submit_action(action)
 
 
@@ -2562,6 +2565,23 @@ func _on_card_choice_submitted(request_id: int, selected_card_uids: Array[int]) 
 			_modal_choice_request_id = -1
 			_modal_card_choice_request.clear()
 			_refresh_card_selection_panel()
+
+
+## 把牌堆双行排序转换为标准选择动作；UID总顺序和顶行数量都会在权威端再次校验。
+func _on_pile_arrangement_submitted(request_id: int, ordered_card_uids: Array[int], top_count: int) -> void:
+	# 排序动作；control_id复用稳定选择协议表达顶行数量，避免网络负载携带UI节点或行容器。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {
+		"request_id":request_id,
+		"selected_card_uids":ordered_card_uids.duplicate(),
+		"selected_target_ids":[],
+		"selected_control_id":"top_count_%d" % top_count,
+		"confirmed":true,
+	}
+	if match_controller.submit_action(action) and _modal_choice_request_id == request_id:
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_refresh_card_selection_panel()
 
 
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。

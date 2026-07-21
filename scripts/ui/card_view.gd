@@ -65,6 +65,9 @@ var card_uid: int = -1
 ## 当前牌是否来自木牛流马“粮”；用于显示独立来源标记。
 var is_wooden_ox_card: bool = false
 
+## 外部组件指定的拖动排序分区；空字符串沿用正式手牌规则，非空时允许通用排序面板复用同一拖动输入。
+var external_reorder_zone: String = ""
+
 ## 当前牌是否被桌面选中；只影响视觉状态，不代表规则合法。
 var is_card_selected: bool = false
 
@@ -312,8 +315,17 @@ func set_interactable_state(interactable: bool) -> void:
 	_refresh_visual_state()
 
 
+## 配置非手牌组件的拖动排序分区；只改变输入信号，不修改实体牌区域或本地选择状态。
+func set_external_reorder_zone(reorder_zone: String) -> void:
+	external_reorder_zone = reorder_zone
+	if is_node_ready():
+		_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
+
+
 ## 返回当前正式手牌所属的可排序分区；木牛“粮”与普通手牌严格分离，其他区域卡牌不参与任何拖拽排序。
 func _get_hand_reorder_zone() -> String:
+	if not external_reorder_zone.is_empty():
+		return external_reorder_zone
 	if not (get_parent() is DecadeHandContainer):
 		return ""
 	return "wooden_ox" if is_wooden_ox_card else "hand"
