@@ -17,6 +17,9 @@ const AI_SELF_TARGET_SCORE: float = 18.0
 ## AI发动飞焰的基础收益；体现摸3张牌和四段出牌阶段带来的高行动价值。
 const AI_ACTIVATION_VALUE: float = 12.0
 
+## 准备阶段虚拟使用火攻的规则覆写；只解除出牌阶段限制，不跳过目标、距离或次数校验。
+const VIRTUAL_RULE_OVERRIDES: Dictionary = {"ignore_phase_limit":true}
+
 ## 当前是否正在结算由飞焰使用的虚拟火攻；只在该牌完整生命周期内为true。
 var _resolving_feiyan_huogong: bool = false
 
@@ -46,7 +49,7 @@ func install() -> void:
 func _on_preparation_phase_begin(_event: RuleEvent) -> void:
 	# 当前虚拟火攻合法目标；卡牌规则负责目标存活、手牌与免疫校验。
 	var target_ids: Array[int] = []
-	for target_variant: Variant in host.card_rules.list_legal_virtual_targets(owner_player_id, "huogong", {"card_color":"none"}):
+	for target_variant: Variant in host.card_rules.list_legal_virtual_targets(owner_player_id, "huogong", VIRTUAL_RULE_OVERRIDES):
 		target_ids.append(int(target_variant))
 	if target_ids.is_empty():
 		return
@@ -63,7 +66,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var target_id: int = response.target_ids[0]
 	_resolving_feiyan_huogong = true
 	_reward_resolved = false
-	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", [target_id], "虎克发动【飞焰】，视为使用【火攻】。")):
+	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", [target_id], "虎克发动【飞焰】，视为使用【火攻】。", VIRTUAL_RULE_OVERRIDES)):
 		_resolving_feiyan_huogong = false
 		return true
 	announce_activation({"target_id":target_id})
