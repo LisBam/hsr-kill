@@ -183,6 +183,17 @@ func list_legal_virtual_targets(actor_id: int, definition_id: String, rule_overr
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
 	if actor == null or definition.is_empty():
 		return result
+	# 虚拟牌整体合法性；阶段次数用尽时不再返回任何目标，转化技能按钮可据此实时熄灭。
+	# 先用空目标做次数与阶段检查会失败（目标数不足），因此单独复用与 validate_virtual_use 相同的次数规则。
+	if state.current_player_id != actor_id or state.current_phase != "play":
+		return result
+	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
+	var play_limit: int = int(definition.get("play_limit", 0))
+	if play_limit > 0:
+		play_limit += _skill_play_count_limit_bonus(actor.player_id, definition)
+	var ignore_play_count_limit: bool = bool(rule_overrides.get("ignore_play_count_limit", false)) or _skill_ignores_play_count_limit(actor.player_id, definition)
+	if play_limit > 0 and _get_grouped_play_count(actor, definition) >= play_limit and (use_limit_weapon_definition == null or not use_limit_weapon_definition.ignores_play_count_limit(definition)) and not ignore_play_count_limit:
+		return result
 	for target: PlayerState in state.players:
 		if target.alive and not target.out_of_game and _validate_target(actor, definition, target.player_id, [target.player_id], rule_overrides).is_empty():
 			result.append(target.player_id)
