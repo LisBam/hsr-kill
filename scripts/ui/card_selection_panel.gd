@@ -27,21 +27,6 @@ const MODAL_Z_INDEX: int = 150
 ## 选择面板最大高度；默认590像素确保1280×720视口仍保留外侧边距，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var panel_max_height: float = 590.0
 
-## 【顺手牵羊】选择框最小宽度；默认520像素保证三个区域并排时仍保留清晰的区域标题，运行时通常无需修改。
-@export_range(420.0, 1180.0, 1.0) var steal_panel_min_width: float = 520.0
-
-## 【顺手牵羊】选择框最大宽度；默认1180像素让1280宽度的常规窗口能尽量展示更多区域牌，运行时通常无需修改。
-@export_range(520.0, 1400.0, 1.0) var steal_panel_max_width: float = 1180.0
-
-## 【顺手牵羊】选择框最小高度；默认320像素完整保留标题、三个区域标题、单行牌面与操作按钮，运行时通常无需修改。
-@export_range(280.0, 680.0, 1.0) var steal_panel_min_height: float = 320.0
-
-## 【顺手牵羊】选择框最大高度；默认680像素用于多行区域牌，运行时通常无需修改。
-@export_range(360.0, 860.0, 1.0) var steal_panel_max_height: float = 680.0
-
-## 【顺手牵羊】选择框相对视口的安全边距；默认左右32、上下24像素，运行时通常无需修改。
-@export var steal_panel_viewport_margin: Vector2 = Vector2(32.0, 24.0)
-
 ## 全屏背景滤镜颜色；默认沿用深色强遮罩，正式主场景可在检查器中覆盖为更浅透明度。
 @export var shade_color: Color = Color("010205dc")
 
@@ -75,27 +60,6 @@ const PUBLIC_PANEL_HORIZONTAL_PADDING: float = 36.0
 ## 公共展示窗口允许的最大高度；默认620像素可完整容纳最多10人时的三行牌，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var public_panel_max_height: float = 620.0
 
-## 【顺手牵羊】分区列之间的水平间距；默认12像素与普通分区纵向间距保持一致。
-const STEAL_ZONE_GAP: float = 12.0
-
-## 【顺手牵羊】每个分区中卡牌的水平和垂直间距；默认8像素与正式牌列保持一致。
-const STEAL_CARD_GAP: float = 8.0
-
-## 【顺手牵羊】单个分区标题的布局预留高度；默认26像素包含16号字体和标题到牌列的分隔。
-const STEAL_ZONE_HEADER_HEIGHT: float = 26.0
-
-## 【顺手牵羊】窗口除区域牌列外的标题、说明、操作行与内边距预留高度；默认126像素。
-const STEAL_PANEL_CHROME_HEIGHT: float = 126.0
-
-## 【顺手牵羊】窗口区域牌阵的横向总留白；默认36像素使动态分区与面板边框保持稳定间距。
-const STEAL_PANEL_HORIZONTAL_PADDING: float = 36.0
-
-## 【顺手牵羊】每个区域优先尝试在同一行展示的牌数；超过后由区域内牌列自动换行并带动窗口增高。
-const STEAL_PREFERRED_ZONE_COLUMNS: int = 4
-
-## 【顺手牵羊】区域牌阵的正式牌面尺寸；与CardView的111×148像素规格一致。
-const STEAL_CARD_SIZE: Vector2 = Vector2(111.0, 148.0)
-
 ## 当前请求只读快照；空字典表示面板已关闭。
 var _choice_request: Dictionary = {}
 
@@ -126,14 +90,8 @@ var _prompt_label: Label
 ## 分区内容容器；固定按手牌区、装备区、判定区和展示区顺序重建。
 var _zone_container: VBoxContainer
 
-## 分区滚动容器；普通请求保留滚动，顺手牵羊请求会关闭滚动并由动态窗口完整承载三个区域。
+## 分区滚动容器；普通卡牌选择请求共用纵向滚动，牌数较多时保持固定窗口尺寸。
 var _zone_scroll: ScrollContainer
-
-## 【顺手牵羊】的横向分区容器；仅在该请求显示期间存在，按手牌、装备、判定三列排列。
-var _steal_zone_container: HBoxContainer
-
-## 【顺手牵羊】单个分区可用宽度；由动态窗口计算后提供给区域牌列换行使用，0表示普通纵向布局。
-var _steal_zone_column_width: float = 0.0
 
 ## 确认按钮；仅在当前选择数量满足请求约束时可用。
 var _confirm_button: Button
@@ -209,7 +167,7 @@ func _ready() -> void:
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	# 可复用滚动容器引用；顺手牵羊请求切换无滚动动态布局时仍在原节点上修改，不重建选择框层级。
+	# 可复用滚动容器引用；公共展示与普通选择切换尺寸时仍在原节点上修改，不重建选择框层级。
 	_zone_scroll = scroll
 	content.add_child(scroll)
 	_zone_container = VBoxContainer.new()
@@ -277,8 +235,6 @@ func show_request(choice_request: Dictionary) -> void:
 	_control_option_buttons.clear()
 	_public_layout_signature = 0
 	_public_request_id = -1
-	_steal_zone_container = null
-	_steal_zone_column_width = 0.0
 	_clear_container(_zone_container)
 	_restore_standard_zone_scroll_behavior()
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
@@ -314,9 +270,6 @@ func show_request(choice_request: Dictionary) -> void:
 		if not candidates_by_zone.has(zone):
 			candidates_by_zone[zone] = []
 		(candidates_by_zone[zone] as Array).append(candidate)
-	_configure_card_choice_layout(candidates_by_zone)
-	if _is_steal_target_request():
-		_create_steal_zone_container()
 	for zone: String in ["hand", "equipment", "judgment", "processing"]:
 		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
 	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0
@@ -325,14 +278,7 @@ func show_request(choice_request: Dictionary) -> void:
 	visible = true
 
 
-## 判断当前请求是否为【顺手牵羊】的目标区域选牌；只有该卡牌使用并排三分区且关闭滚动的紧凑布局。
-func _is_steal_target_request() -> bool:
-	# 当前规则上下文；空字典与其他卡牌请求都继续使用通用固定窗口布局。
-	var context: Dictionary = _choice_request.get("context", {}) as Dictionary
-	return str(context.get("kind", "")) == "steal_target"
-
-
-## 恢复普通请求的固定窗口与纵向滚动行为；公共展示、文字选项和非顺手牵羊选牌均共用该配置。
+## 恢复普通请求的固定窗口与纵向滚动行为；公共展示关闭后和全部独立选牌请求均共用该配置。
 func _restore_standard_zone_scroll_behavior() -> void:
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
 	if _zone_scroll == null:
@@ -341,94 +287,6 @@ func _restore_standard_zone_scroll_behavior() -> void:
 	_zone_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_zone_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_zone_scroll.scroll_vertical = 0
-
-
-## 根据顺手牵羊候选区域动态设置窗口；手牌、装备与判定区并列展示，窗口高度按各列实际换行数增长。
-func _configure_card_choice_layout(candidates_by_zone: Dictionary) -> void:
-	if not _is_steal_target_request():
-		_restore_standard_zone_scroll_behavior()
-		return
-	# 顺手牵羊布局数据；帧尺寸和单列宽度必须由同一轮计算产生，避免卡牌换行后超出窗口。
-	var steal_layout: Dictionary = _calculate_steal_panel_layout(candidates_by_zone)
-	# 动态窗口尺寸；三个区域都存在时会同时增宽并增高，而不是交由滚动容器裁切。
-	var frame_size: Vector2 = steal_layout.get("frame_size", Vector2(steal_panel_min_width, steal_panel_min_height)) as Vector2
-	# 单个区域列宽；供后续创建的VBox分区约束HFlowContainer的自动换行宽度。
-	_steal_zone_column_width = float(steal_layout.get("zone_column_width", STEAL_CARD_SIZE.x))
-	_set_frame_size(frame_size)
-	if _zone_scroll == null:
-		return
-	_zone_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_zone_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_zone_scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_zone_scroll.scroll_vertical = 0
-
-
-## 创建顺手牵羊专用的横向分区行；每个非空区域占一列，区域内部仍使用正式卡牌视图并自动换行。
-func _create_steal_zone_container() -> void:
-	_steal_zone_container = HBoxContainer.new()
-	_steal_zone_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_steal_zone_container.add_theme_constant_override("separation", int(STEAL_ZONE_GAP))
-	_zone_container.add_child(_steal_zone_container)
-
-
-## 计算顺手牵羊选择窗口的尺寸与分区列宽；计算只依赖候选快照，因此不读取或修改规则状态。
-func _calculate_steal_panel_layout(candidates_by_zone: Dictionary) -> Dictionary:
-	# 顺手牵羊可见区域顺序；与规则候选生成顺序一致，展示区不属于该牌的可偷取区域。
-	var zone_names: Array[String] = ["hand", "equipment", "judgment"]
-	# 实际非空区域数量；空区域不创建占位列，避免窗口为不存在的区域保留空白。
-	var visible_zone_count: int = 0
-	# 单一区域中的最大候选数；决定优先宽度与最终需要的最大换行行数。
-	var largest_zone_card_count: int = 0
-	for zone_name: String in zone_names:
-		# 当前区域候选；候选数组只包含本请求允许获取的实体牌。
-		var zone_candidates: Array = candidates_by_zone.get(zone_name, []) as Array
-		if zone_candidates.is_empty():
-			continue
-		visible_zone_count += 1
-		largest_zone_card_count = maxi(largest_zone_card_count, zone_candidates.size())
-	# 至少保留一个分区宽度；异常空候选仍能安全计算并由上层显示常规空选择窗口。
-	var safe_zone_count: int = maxi(visible_zone_count, 1)
-	# 单列优先展示数量；最多四张横排，其余牌在同一分区内自动换行以限制窗口横向膨胀。
-	var preferred_card_columns: int = mini(maxi(largest_zone_card_count, 1), STEAL_PREFERRED_ZONE_COLUMNS)
-	# 单个分区的理想宽度；含牌位之间的8像素间距，不额外增加没有候选的区域。
-	var desired_zone_width: float = STEAL_CARD_SIZE.x * float(preferred_card_columns) + STEAL_CARD_GAP * float(maxi(preferred_card_columns - 1, 0))
-	# 预期窗口宽度；为三列、列间距和面板内边距一起预留空间。
-	var desired_frame_width: float = desired_zone_width * float(safe_zone_count) + STEAL_ZONE_GAP * float(maxi(safe_zone_count - 1, 0)) + STEAL_PANEL_HORIZONTAL_PADDING
-	# 当前视口尺寸；窗口在正式主场景和测试场景都以实际可用尺寸限制最大值。
-	var viewport_size: Vector2 = get_viewport_rect().size
-	# 当前视口可用的最大宽度；视口尚未初始化时回退到导出的最大宽度，保证组件独立实例也可工作。
-	var viewport_max_width: float = steal_panel_max_width if viewport_size.x <= 0.0 else maxf(viewport_size.x - steal_panel_viewport_margin.x * 2.0, STEAL_CARD_SIZE.x)
-	# 当前视口可用的最大高度；与宽度采用相同的独立组件回退规则。
-	var viewport_max_height: float = steal_panel_max_height if viewport_size.y <= 0.0 else maxf(viewport_size.y - steal_panel_viewport_margin.y * 2.0, STEAL_CARD_SIZE.y)
-	# 最终窗口宽度上限；同时受导出配置和当前视口约束，防止居中窗口超出屏幕。
-	var allowed_frame_width: float = minf(steal_panel_max_width, viewport_max_width)
-	# 最终窗口高度上限；同时受导出配置和当前视口约束。
-	var allowed_frame_height: float = minf(steal_panel_max_height, viewport_max_height)
-	# 最终窗口宽度；不足最小宽度的窄视口优先保证至少一张正式牌面可见。
-	var frame_width: float = clampf(desired_frame_width, minf(steal_panel_min_width, allowed_frame_width), allowed_frame_width)
-	# 面板中实际可分配给所有区域列的宽度；使用与前述预留一致的总边距确保计算和真实容器宽度接近。
-	var zone_row_width: float = maxf(frame_width - STEAL_PANEL_HORIZONTAL_PADDING - STEAL_ZONE_GAP * float(maxi(safe_zone_count - 1, 0)), STEAL_CARD_SIZE.x)
-	# 单个区域列宽；三个区域均分可用空间，HFlowContainer据此计算换行。
-	var zone_column_width: float = maxf(zone_row_width / float(safe_zone_count), STEAL_CARD_SIZE.x)
-	# 单列一行可容纳的正式牌数；最少一张，避免极窄窗口导致除零或零行高度。
-	var cards_per_zone_row: int = maxi(floori((zone_column_width + STEAL_CARD_GAP) / (STEAL_CARD_SIZE.x + STEAL_CARD_GAP)), 1)
-	# 所有分区里最多的换行行数；并排布局的窗口高度只需容纳最高的一列。
-	var maximum_zone_row_count: int = 1
-	for zone_name: String in zone_names:
-		# 当前区域候选；空区域不参与行数计算。
-		var zone_candidates: Array = candidates_by_zone.get(zone_name, []) as Array
-		if zone_candidates.is_empty():
-			continue
-		# 当前区域实际行数；按可容纳牌数向上取整，确保最后一行也不被裁切。
-		var row_count: int = maxi(ceili(float(zone_candidates.size()) / float(cards_per_zone_row)), 1)
-		maximum_zone_row_count = maxi(maximum_zone_row_count, row_count)
-	# 最大区域的牌阵高度；多行之间沿用正式8像素垂直间距。
-	var card_area_height: float = STEAL_CARD_SIZE.y * float(maximum_zone_row_count) + STEAL_CARD_GAP * float(maxi(maximum_zone_row_count - 1, 0))
-	# 预期窗口高度；标题、提示、区域标题、牌阵与底部操作行均包含在内。
-	var desired_frame_height: float = STEAL_PANEL_CHROME_HEIGHT + STEAL_ZONE_HEADER_HEIGHT + card_area_height
-	# 最终窗口高度；通常会随区域牌换行增加，受屏幕高度约束时优先保持可见边距。
-	var frame_height: float = clampf(desired_frame_height, minf(steal_panel_min_height, allowed_frame_height), allowed_frame_height)
-	return {"frame_size":Vector2(frame_width, frame_height), "zone_column_width":zone_column_width}
 
 
 ## 显示一份跨多名玩家持续存在的公共选牌快照；只有传入有效本地请求时开放牌面与确认按钮。
@@ -461,8 +319,6 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_control_option_buttons.clear()
 	_public_layout_signature = next_layout_signature
 	_public_request_id = next_request_id
-	_steal_zone_container = null
-	_steal_zone_column_width = 0.0
 	_clear_container(_zone_container)
 	_restore_standard_zone_scroll_behavior()
 	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
@@ -688,12 +544,7 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	# 当前区域容器；标题在上、牌列在下，符合从上到下的区域阅读顺序。
 	var section: VBoxContainer = VBoxContainer.new()
 	section.add_theme_constant_override("separation", 6)
-	if _steal_zone_container != null:
-		section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		section.custom_minimum_size = Vector2(_steal_zone_column_width, 0.0)
-		_steal_zone_container.add_child(section)
-	else:
-		_zone_container.add_child(section)
+	_zone_container.add_child(section)
 	# 区域标题；使用规则区名称而不是技术字符串。
 	var zone_label: Label = Label.new()
 	zone_label.text = {"hand":"手牌区", "equipment":"装备区", "judgment":"判定区", "processing":"展示区"}.get(zone, zone)

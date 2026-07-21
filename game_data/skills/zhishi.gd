@@ -14,12 +14,13 @@ func _init() -> void:
 	})
 
 
-## 订阅持有者的整牌使用时机；多目标锦囊只在useCard阶段询问一次。
+## 订阅持有者的使用与打出时机；普通锦囊走useCard，无懈可击等响应锦囊走respond。
 func install() -> void:
 	subscribe_timing("useCard", _on_owner_used_card, "source")
+	subscribe_timing("respond", _on_owner_used_card, "source")
 
 
-## 使用锦囊牌时创建零材料确认请求；取消不产生任何资源变化。
+## 使用或打出锦囊牌时创建零材料确认请求；卡牌类别统一来自定义，取消不产生任何资源变化。
 func _on_owner_used_card(event: RuleEvent) -> void:
 	var definition: Dictionary = GameDatabase.get_card(str(event.data.get("card_id", "")))
 	if str(definition.get("type", "")) != "trick":

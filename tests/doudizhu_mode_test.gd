@@ -151,10 +151,34 @@ func _test_identity_rules_pure() -> bool:
 	if _identity_rules.evaluate_winner(win_state) != "peasants":
 		return _fail("one_landlord_dead_peasants_win")
 	win_state.players[0].alive = true
+	win_state.players[0].out_of_game = true
+	if _identity_rules.evaluate_winner(win_state) != "":
+		return _fail("out_of_game_landlord_should_still_count_alive")
+	win_state.players[0].out_of_game = false
+	win_state.players[1].out_of_game = true
+	win_state.players[2].out_of_game = true
+	if _identity_rules.evaluate_winner(win_state) != "":
+		return _fail("out_of_game_peasants_should_still_count_alive")
+	win_state.players[1].out_of_game = false
+	win_state.players[2].out_of_game = false
 	win_state.players[1].alive = false
 	win_state.players[2].alive = false
 	if _identity_rules.evaluate_winner(win_state) != "landlords":
 		return _fail("all_peasants_dead_landlords_win")
+	# 身份局终局状态；领袖与反贼死亡后，离场但仍存活的唯一内奸必须正常获胜。
+	var identity_state: GameState = GameState.new()
+	identity_state.match_mode = IdentityRules.MODE_IDENTITY
+	# 身份局测试身份顺序；分别表示领袖、反贼与内奸。
+	var identity_values: Array[String] = ["leader", "rebel", "renegade"]
+	for player_id: int in range(identity_values.size()):
+		# 当前身份局测试角色；仅内奸保持存活并设置为离场。
+		var identity_player: PlayerState = PlayerState.new(player_id, "身份胜负测试玩家%d" % (player_id + 1))
+		identity_player.identity = identity_values[player_id]
+		identity_player.alive = player_id == 2
+		identity_player.out_of_game = player_id == 2
+		identity_state.players.append(identity_player)
+	if _identity_rules.evaluate_winner(identity_state) != "renegade":
+		return _fail("out_of_game_renegade_should_still_count_alive")
 	return true
 
 

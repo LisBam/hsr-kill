@@ -235,8 +235,12 @@ func _evaluate_identity_winner(state: GameState) -> String:
 	# 领袖状态；身份局必须且只能存在一名领袖。
 	var leader: PlayerState = _find_identity(state, "leader")
 	if leader == null or not leader.alive:
-		# 领袖死亡时的存活玩家；若仅剩内奸，则内奸单独获胜。
-		var survivors: Array[PlayerState] = state.get_alive_players()
+		# 领袖死亡时仍存活的玩家；离场不是死亡，胜负统计不能复用排除离场角色的行动集合。
+		var survivors: Array[PlayerState] = []
+		# 当前玩家；只按死亡标记筛选，离场状态不会把存活者移出胜负集合。
+		for player: PlayerState in state.players:
+			if player.alive:
+				survivors.append(player)
 		if survivors.size() == 1 and survivors[0].identity == "renegade":
 			return "renegade"
 		return "rebels"
@@ -267,12 +271,12 @@ func _evaluate_doudizhu_winner(state: GameState) -> String:
 	var landlord_dead: bool = false
 	for player: PlayerState in state.players:
 		if player.identity == "landlord":
-			if player.alive and not player.out_of_game:
+			if player.alive:
 				landlord_alive += 1
 			else:
 				landlord_dead = true
 		elif player.identity == "peasant":
-			if player.alive and not player.out_of_game:
+			if player.alive:
 				peasant_alive += 1
 	if landlord_dead:
 		return "peasants"
@@ -288,7 +292,8 @@ func _evaluate_team2v2_winner(state: GameState) -> String:
 	# 存活红方数量。
 	var red_alive: int = 0
 	for player: PlayerState in state.players:
-		if not player.alive or player.out_of_game:
+		# 离场角色仍然存活；这里只排除已经确认死亡的角色，不能复用在场行动条件。
+		if not player.alive:
 			continue
 		if player.identity == "blue":
 			blue_alive += 1

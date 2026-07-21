@@ -21,7 +21,7 @@ func _run() -> void:
 		return
 	if not _test_control_choice_panel():
 		return
-	if not _test_steal_target_panel_layout():
+	if not _test_target_area_card_panel_shared_layout():
 		return
 	if not _test_zhenqi_paired_branches():
 		return
@@ -137,26 +137,50 @@ func _test_control_choice_panel() -> bool:
 	return true
 
 
-## 验证【顺手牵羊】的独立选牌窗口按手牌、装备和判定候选动态扩展，并且不再依赖滚动查看三个区域。
-func _test_steal_target_panel_layout() -> bool:
-	# 独立选择面板；使用正式组件验证动态尺寸、横向分区与滚动模式，不依赖牌桌内联选择条件。
+## 验证【顺手牵羊】与【过河拆桥】的目标区域选牌严格复用同一固定窗口、纵向分区与滚动规则。
+func _test_target_area_card_panel_shared_layout() -> bool:
+	# 独立选择面板；使用正式组件比较两种规则请求，不依赖牌桌内联选择条件。
 	var panel: CardSelectionPanel = CardSelectionPanel.new()
 	add_child(panel)
-	# 顺手牵羊候选；每个可偷取区域各放入5张，强制检验窗口宽度增长与区域内部自动换行。
+	# 目标区域候选；手牌、装备与判定区各提供一张，确保两种请求都会建立相同的三个纵向分区。
 	var candidates: Array[Dictionary] = []
-	# 区域显示顺序；与控制器构建顺手牵羊候选时的手牌、装备、判定顺序保持一致。
+	# 区域显示顺序；与控制器构建目标区域候选时的手牌、装备、判定顺序保持一致。
 	var zones: Array[String] = ["hand", "equipment", "judgment"]
 	for zone_index: int in range(zones.size()):
 		# 当前测试区域；不同区域使用可被正式CardView解析的定义ID。
 		var zone: String = zones[zone_index]
 		# 当前区域的展示定义；手牌保持牌背，装备与判定区保持公开正面牌。
 		var definition_id: String = ["sha", "qinggang", "lebu"][zone_index]
-		for card_index: int in range(5):
-			# 当前候选实体UID；按区域和牌序生成稳定且互不重复的整数。
-			var card_uid: int = 9800 + zone_index * 10 + card_index
-			# 当前候选快照；牌背候选仍带完整规则数据，正面候选会由CardView读取名称与花色。
-			var candidate: Dictionary = {"uid":card_uid, "owner_id":1, "zone":zone, "visible":zone != "hand", "card_data":{"uid":card_uid, "definition_id":definition_id, "suit":"spade", "rank":card_index + 1, "zone":zone, "owner_id":1}}
-			candidates.append(candidate)
+		# 当前候选实体UID；按区域生成稳定且互不重复的整数。
+		var card_uid: int = 9800 + zone_index
+		# 当前候选快照；牌背候选仍带完整规则数据，正面候选会由CardView读取名称与花色。
+		var candidate: Dictionary = {"uid":card_uid, "owner_id":1, "zone":zone, "visible":zone != "hand", "card_data":{"uid":card_uid, "definition_id":definition_id, "suit":"spade", "rank":zone_index + 1, "zone":zone, "owner_id":1}}
+		candidates.append(candidate)
+	# 选择窗口及分区节点；两次请求都复用同一组件实例，避免主题或视口差异干扰比较。
+	var frame: PanelContainer = panel.get("_frame") as PanelContainer
+	# 候选滚动容器；目标区域牌较多时必须统一使用纵向滚动。
+	var zone_scroll: ScrollContainer = panel.get("_zone_scroll") as ScrollContainer
+	# 纵向分区根容器；两个请求都应直接建立手牌、装备、判定三个区域。
+	var zone_container: VBoxContainer = panel.get("_zone_container") as VBoxContainer
+	panel.show_request({
+		"request_id":97,
+		"chooser_id":0,
+		"title":"选择弃置牌",
+		"prompt":"请选择目标区域内的一张牌",
+		"candidates":candidates,
+		"min_select":1,
+		"max_select":1,
+		"allow_cancel":false,
+		"context":{"kind":"discard_target", "source_id":0, "target_id":1},
+	})
+	# 过河拆桥窗口尺寸；作为顺手牵羊必须一致的基准。
+	var discard_frame_size: Vector2 = frame.size if frame != null else Vector2.ZERO
+	# 过河拆桥纵向滚动模式；普通固定窗口应在内容超高时自动滚动。
+	var discard_vertical_scroll_mode: int = zone_scroll.vertical_scroll_mode if zone_scroll != null else -1
+	# 过河拆桥横向滚动模式；区域始终纵向排列，不允许横向滚动。
+	var discard_horizontal_scroll_mode: int = zone_scroll.horizontal_scroll_mode if zone_scroll != null else -1
+	# 过河拆桥分区数量；三个非空区域应各自直接占据一行。
+	var discard_zone_count: int = zone_container.get_child_count() if zone_container != null else -1
 	panel.show_request({
 		"request_id":98,
 		"chooser_id":0,
@@ -168,25 +192,19 @@ func _test_steal_target_panel_layout() -> bool:
 		"allow_cancel":false,
 		"context":{"kind":"steal_target", "source_id":0, "target_id":1},
 	})
-	# 动态窗口节点；顺手牵羊应使用横向三列，而非普通请求的纵向区域容器。
-	var frame: PanelContainer = panel.get("_frame") as PanelContainer
-	# 候选滚动容器；禁用纵横滚动后，三个区域只能由窗口动态尺寸完整承载。
-	var zone_scroll: ScrollContainer = panel.get("_zone_scroll") as ScrollContainer
-	# 顺手牵羊分区行；仅当前请求创建并作为区域容器的唯一子节点。
-	var steal_zone_row: HBoxContainer = (panel.get("_zone_container") as VBoxContainer).get_child(0) as HBoxContainer
-	# 当前动态窗口尺寸；在释放面板前保存，失败信息不再读取等待删除的节点。
-	var frame_size: Vector2 = frame.size if frame != null else Vector2.ZERO
-	# 当前纵向滚动模式；禁用值用于证明三个区域不会依赖滚轮浏览。
-	var vertical_scroll_mode: int = zone_scroll.vertical_scroll_mode if zone_scroll != null else -1
-	# 当前横向滚动模式；禁用值用于证明动态增宽不会退化为横向滚动。
-	var horizontal_scroll_mode: int = zone_scroll.horizontal_scroll_mode if zone_scroll != null else -1
-	# 当前并排区域数量；三个非空区域应各自生成一列。
-	var zone_count: int = steal_zone_row.get_child_count() if steal_zone_row != null else -1
-	# 验证结果；宽度必须超过通用窗口宽度，三个区域均存在，且滚动条模式均关闭。
-	var valid: bool = panel.visible and frame != null and frame_size.x > panel.panel_max_width and zone_scroll != null and vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and steal_zone_row != null and zone_count == 3
+	# 顺手牵羊窗口尺寸；必须与过河拆桥固定窗口完全一致。
+	var steal_frame_size: Vector2 = frame.size if frame != null else Vector2.ZERO
+	# 顺手牵羊纵向滚动模式；必须继续使用通用自动滚动。
+	var steal_vertical_scroll_mode: int = zone_scroll.vertical_scroll_mode if zone_scroll != null else -1
+	# 顺手牵羊横向滚动模式；必须与过河拆桥一样保持关闭。
+	var steal_horizontal_scroll_mode: int = zone_scroll.horizontal_scroll_mode if zone_scroll != null else -1
+	# 顺手牵羊分区数量；重建后仍应是三个直接纵向分区，不存在专用横向容器。
+	var steal_zone_count: int = zone_container.get_child_count() if zone_container != null else -1
+	# 验证结果；请求用途只改变后续获得或弃置效果，不得改变目标区域选牌组件结构。
+	var valid: bool = panel.visible and frame != null and discard_frame_size == steal_frame_size and steal_frame_size == Vector2(panel.panel_max_width, panel.panel_max_height) and zone_scroll != null and discard_vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO and steal_vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO and discard_horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and steal_horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and discard_zone_count == 3 and steal_zone_count == 3
 	panel.queue_free()
 	if not valid:
-		return _fail("steal_target_panel frame=%s scroll=%s/%s zones=%d" % [frame_size, vertical_scroll_mode, horizontal_scroll_mode, zone_count])
+		return _fail("target_area_panel discard=%s/%s/%s/%d steal=%s/%s/%s/%d" % [discard_frame_size, discard_vertical_scroll_mode, discard_horizontal_scroll_mode, discard_zone_count, steal_frame_size, steal_vertical_scroll_mode, steal_horizontal_scroll_mode, steal_zone_count])
 	return true
 
 
