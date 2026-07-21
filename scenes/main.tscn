@@ -1226,6 +1226,48 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
+[node name="WheelDuelModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+toggle_mode = true
+alignment = 0
+
+[node name="WheelDuelModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/WheelDuelModeButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 14.0
+offset_right = -14.0
+offset_bottom = -14.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 2
+
+[node name="WheelDuelModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/WheelDuelModeButton/WheelDuelModeContent"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 27
+text = "1v1车轮战"
+
+[node name="WheelDuelModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/WheelDuelModeButton/WheelDuelModeContent"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "2人"
+
+[node name="WheelDuelModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/WheelDuelModeButton"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 5.0
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.831373, 0.709804, 0.372549, 1)
+
 [node name="MainMenuPreviewPanel" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent" unique_id=119656469]
 unique_name_in_owner = true
 layout_mode = 2
@@ -1623,6 +1665,44 @@ mouse_default_cursor_shape = 2
 min_value = 2.0
 max_value = 10.0
 value = 8.0
+
+[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "车轮战候选明置武将"
+vertical_alignment = 1
+
+[node name="WheelDuelFaceUpCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(108, 34)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+min_value = 3.0
+max_value = 20.0
+value = 6.0
+
+[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "车轮战候选暗置武将"
+vertical_alignment = 1
+
+[node name="WheelDuelFaceDownCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(108, 34)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+min_value = 3.0
+max_value = 20.0
+value = 4.0
 
 [node name="MainMenuSettingsCloseButton" type="Button" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=155077055]
 unique_name_in_owner = true

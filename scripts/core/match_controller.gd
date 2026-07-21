@@ -128,6 +128,9 @@ var network_gateway: NetworkGateway
 ## 当前选将规则服务；负责候选、阶段与隐藏选择，不接触卡牌规则或界面节点。
 var character_selection: CharacterSelectionService
 
+## 当前1v1车轮战专属选将服务；只在wheel_duel模式创建并与普通选将服务互斥。
+var wheel_duel_selection: WheelDuelSelectionService
+
 ## 当前房主调整 AI 武将服务；只在对应开局选项启用且存在 AI 时创建活动阶段。
 var ai_character_adjustment: AICharacterAdjustmentService
 
@@ -151,6 +154,12 @@ var _mulligan_limit: int = 0
 
 ## 本局 AI 是否自动评估并使用手气卡；手气卡数量为0时该值不会产生流程。
 var _ai_uses_mulligan_enabled: bool = false
+
+## 本局1v1车轮战明置候选数量；开局时从房主设置锁定，默认6且范围3至20。
+var _wheel_duel_face_up_candidate_count: int = 6
+
+## 本局1v1车轮战暗置候选数量；开局时从房主设置锁定，默认4且范围3至20。
+var _wheel_duel_face_down_candidate_count: int = 4
 
 ## 本局每名玩家拥有的换将卡数量；开局时从房主设置锁定，0表示关闭。
 var _character_replacement_count: int = 0
@@ -469,6 +478,9 @@ func _resume_ai_after_gameplay_pause() -> void:
 	if state.current_phase == "character_selection":
 		_drive_ai_character_selection()
 		return
+	if state.current_phase == "wheel_duel_selection":
+		_drive_ai_wheel_duel_selection()
+		return
 	_ensure_ai_progress_after_resolution()
 
 
@@ -484,9 +496,17 @@ func get_match_start_validation_error(player_count: int = -1, mode_id: String = 
 			return "斗地主仅支持3人或5人。"
 		if actual_mode == IdentityRules.MODE_TEAM2V2:
 			return "2v2仅支持4名玩家。"
+		if actual_mode == IdentityRules.MODE_WHEEL_DUEL:
+			return "1v1车轮战仅支持2名玩家。"
 		return "标准身份局仅支持2至10名玩家。"
 	if not GameDatabase.validation_errors.is_empty():
 		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
+	if actual_mode == IdentityRules.MODE_WHEEL_DUEL:
+		var wheel_candidate_total: int = GameSettings.wheel_duel_face_up_candidate_count + GameSettings.wheel_duel_face_down_candidate_count
+		if wheel_candidate_total < WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2:
+			return "1v1车轮战的明置与暗置候选合计至少需要10名。"
+		if GameDatabase.characters.size() < wheel_candidate_total:
+			return "当前武将数量不足，无法生成%d名不重复的车轮战候选武将。" % wheel_candidate_total
 	return ""
 
 
@@ -552,6 +572,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_ai_uses_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
 	_character_replacement_count = GameSettings.character_replacement_count
 	_character_candidate_count = GameSettings.character_candidate_count
+	_wheel_duel_face_up_candidate_count = GameSettings.wheel_duel_face_up_candidate_count
+	_wheel_duel_face_down_candidate_count = GameSettings.wheel_duel_face_down_candidate_count
 	# 检查器兼容字段；运行时同步为房主设置锁定值，旧诊断与外部只读代码仍能看到本局实际候选数量。
 	character_candidate_count = _character_candidate_count
 	state.match_options = {
@@ -561,6 +583,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"ai_uses_mulligan_enabled":_ai_uses_mulligan_enabled,
 		"character_replacement_count":_character_replacement_count,
 		"character_candidate_count":_character_candidate_count,
+		"wheel_duel_face_up_candidate_count":_wheel_duel_face_up_candidate_count,
+		"wheel_duel_face_down_candidate_count":_wheel_duel_face_down_candidate_count,
 	}
 	card_rules = CardRuleService.new(state, self)
 	effect_resolver = CardEffectResolver.new(self, state)
@@ -587,6 +611,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	state.current_event_id = _runtime_root_event_id
 	state.event_history = event_scheduler.get_event_history()
 	character_selection = CharacterSelectionService.new()
+	wheel_duel_selection = WheelDuelSelectionService.new() if actual_mode == IdentityRules.MODE_WHEEL_DUEL else null
 	ai_character_adjustment = AICharacterAdjustmentService.new()
 	starting_hand_mulligan = StartingHandMulliganService.new()
 	_starting_hand_count = 4
@@ -626,7 +651,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_create_players(actual_player_count)
 	_create_and_shuffle_deck()
 	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":seed, "mode":state.match_mode})
-	state.current_phase = "character_selection"
+	state.current_phase = "wheel_duel_selection" if actual_mode == IdentityRules.MODE_WHEEL_DUEL else "character_selection"
 	# 可用武将 ID；服务只持有字符串副本，不接触全局配置的可修改引用。
 	var available_character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
@@ -634,13 +659,15 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	# 领袖技武将 ID；依据技能元数据自动识别，选将服务只接收纯字符串数组并保持与数据库解耦。
 	var leader_skill_character_ids: Array[String] = _get_leader_skill_character_ids(available_character_ids)
 	# 选将初始化错误；空字符串表示领袖候选已生成。
-	var selection_error: String = character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids, str(state.match_mode))
+	var selection_error: String = wheel_duel_selection.begin(state.players, available_character_ids, _wheel_duel_face_up_candidate_count, _wheel_duel_face_down_candidate_count, _rng) if wheel_duel_selection != null else character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids, str(state.match_mode))
 	if not selection_error.is_empty():
 		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
 		return false
 	# 选将日志；身份局保留领袖优先亮将文案，斗地主改为全员同时选将。
-	if str(state.match_mode) == IdentityRules.MODE_DOUDIZHU:
+	if str(state.match_mode) == IdentityRules.MODE_WHEEL_DUEL:
+		add_log("选将开始：后手先选，按122221顺序从%d名明置与%d名暗置候选中抓将。" % [_wheel_duel_face_up_candidate_count, _wheel_duel_face_down_candidate_count])
+	elif str(state.match_mode) == IdentityRules.MODE_DOUDIZHU:
 		add_log("选将开始：斗地主全员同时从%d张随机候选中选择武将（身份明置，不公开武将）。" % mini(_character_candidate_count, available_character_ids.size()))
 	elif str(state.match_mode) == IdentityRules.MODE_TEAM2V2:
 		add_log("选将开始：2v2全员同时从%d张随机候选中选择武将（蓝红身份明置，座次一/四同队、二/三同队）。" % mini(_character_candidate_count, available_character_ids.size()))
@@ -648,7 +675,10 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
 		add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
 	_emit_state()
-	_drive_ai_character_selection()
+	if wheel_duel_selection != null:
+		_drive_ai_wheel_duel_selection()
+	else:
+		_drive_ai_character_selection()
 	return true
 
 
@@ -665,6 +695,7 @@ func _discard_failed_match_start() -> void:
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
 	character_selection = null
+	wheel_duel_selection = null
 	ai_character_adjustment = null
 	starting_hand_mulligan = null
 	card_rules = null
@@ -781,6 +812,84 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	return true
 
 
+## 提交1v1车轮战的一次公共候选抓取；权威服务按当前批次、行动玩家与稳定槽ID重新校验。
+func pick_wheel_duel_candidate(player_id: int, slot_id: int) -> bool:
+	if state == null or state.game_over or state.current_phase != "wheel_duel_selection" or wheel_duel_selection == null:
+		return _reject("当前不在1v1车轮战选将阶段。")
+	var selection_error: String = wheel_duel_selection.pick_candidate(player_id, slot_id)
+	if not selection_error.is_empty():
+		_emit_state()
+		return _reject(selection_error)
+	state.action_sequence += 1
+	state.random_history.append({"kind":"wheel_duel_pick", "player_id":player_id, "slot_id":slot_id})
+	if wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_LINEUP:
+		add_log("双方已各取得5名武将，请各自选择3名并确认固定出场顺序。")
+	_emit_state()
+	_drive_ai_wheel_duel_selection()
+	return true
+
+
+## 提交1v1车轮战三名武将的固定出场顺序；顺序仅对本人和权威端可见，完成后不可再次修改。
+func submit_wheel_duel_lineup(player_id: int, ordered_character_ids: Array[String]) -> bool:
+	if state == null or state.game_over or state.current_phase != "wheel_duel_selection" or wheel_duel_selection == null:
+		return _reject("当前不在1v1车轮战阵容确认阶段。")
+	var selection_error: String = wheel_duel_selection.submit_lineup(player_id, ordered_character_ids)
+	if not selection_error.is_empty():
+		_emit_state()
+		return _reject(selection_error)
+	state.action_sequence += 1
+	state.random_history.append({"kind":"wheel_duel_lineup", "player_id":player_id, "character_ids":ordered_character_ids.duplicate()})
+	if wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_COMPLETE:
+		_finish_wheel_duel_selection()
+	else:
+		_emit_state()
+		_drive_ai_wheel_duel_selection()
+	return true
+
+
+## 完成车轮战选将并只亮出双方首发武将；后续阵容继续保存在玩家私有状态中。
+func _finish_wheel_duel_selection() -> void:
+	if state == null or wheel_duel_selection == null:
+		return
+	for player: PlayerState in state.players:
+		# 本人最终阵容；服务已经校验固定为3名且互不重复。
+		var lineup: Array[String] = wheel_duel_selection.get_lineup(player.player_id)
+		player.wheel_duel_lineup = lineup.duplicate()
+		player.wheel_duel_lineup_index = 0
+		player.wheel_duel_defeated_count = 0
+		_apply_character(player, lineup[0], true)
+	add_log("双方亮出初始武将，未出场武将及其顺序继续对对手保密。")
+	_continue_game_start_after_character_adjustment()
+
+
+## 驱动车轮战内置AI完成当前抓将或阵容确认；AI仍通过标准PlayerAction入口接受完整权威校验。
+func _drive_ai_wheel_duel_selection() -> void:
+	if is_gameplay_paused() or state == null or wheel_duel_selection == null or wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_COMPLETE:
+		return
+	while wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_DRAFT:
+		var drafter_id: int = wheel_duel_selection.get_current_drafter_id()
+		if not ai_coordinator.is_ai_controlled(drafter_id):
+			break
+		var selection_snapshot: Dictionary = wheel_duel_selection.to_dict(drafter_id)
+		var pool_slots: Array = selection_snapshot.get("pool_slots", []) as Array
+		if pool_slots.is_empty():
+			break
+		var pick_action: PlayerAction = PlayerAction.new("wheel_duel_pick", drafter_id)
+		pick_action.payload = {"slot_id":int((pool_slots[0] as Dictionary).get("slot_id", -1))}
+		_submit_ai_action(pick_action)
+		if state == null or state.current_phase != "wheel_duel_selection":
+			return
+	if wheel_duel_selection.phase != WheelDuelSelectionService.PHASE_LINEUP:
+		return
+	for player: PlayerState in state.players:
+		if not ai_coordinator.is_ai_controlled(player.player_id) or wheel_duel_selection.has_submitted_lineup(player.player_id):
+			continue
+		var drafted: Array[String] = wheel_duel_selection.get_drafted_characters(player.player_id)
+		var lineup_action: PlayerAction = PlayerAction.new("wheel_duel_submit_lineup", player.player_id)
+		lineup_action.payload = {"character_ids":drafted.slice(0, WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER)}
+		_submit_ai_action(lineup_action)
+
+
 ## 使用一张换将卡替换本人当前选将框中的指定普通候选；规则服务负责次数、锁定候选与随机池校验。
 func replace_character_candidate(player_id: int, character_id: String) -> bool:
 	if state == null or state.game_over or state.current_phase != "character_selection" or character_selection == null:
@@ -841,6 +950,13 @@ func submit_action(action: PlayerAction) -> bool:
 		return false
 	if action.action_type == "select_character":
 		return select_character(action.actor_id, str(action.payload.get("character_id", "")), int(action.payload.get("seat_number", -1)), str(action.payload.get("identity", "")))
+	if action.action_type == "wheel_duel_pick":
+		return pick_wheel_duel_candidate(action.actor_id, int(action.payload.get("slot_id", -1)))
+	if action.action_type == "wheel_duel_submit_lineup":
+		var lineup_ids: Array[String] = []
+		for character_id_variant: Variant in action.payload.get("character_ids", []) as Array:
+			lineup_ids.append(str(character_id_variant))
+		return submit_wheel_duel_lineup(action.actor_id, lineup_ids)
 	if action.action_type == "replace_character_candidate":
 		return replace_character_candidate(action.actor_id, str(action.payload.get("character_id", "")))
 	if action.action_type == "preview_custom_assignment":
@@ -1042,6 +1158,8 @@ func _republish_manual_player_choice(player_id: int) -> void:
 		return
 	if state.current_phase == "character_selection" and character_selection != null:
 		character_selection_changed.emit(character_selection.to_dict(local_human_player_id))
+	elif state.current_phase == "wheel_duel_selection" and wheel_duel_selection != null:
+		character_selection_changed.emit(wheel_duel_selection.to_dict(local_human_player_id))
 	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
 		# 当前兼容选择副本；本地 UI 与远端私有请求都只接收可序列化数据。
 		var choice_data: Dictionary = _pending_card_choice.duplicate(true)
@@ -5450,7 +5568,7 @@ func _create_players(player_count: int) -> void:
 	if match_mode == IdentityRules.MODE_TEAM2V2:
 		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队。
 		identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
-	elif match_mode != IdentityRules.MODE_DOUDIZHU:
+	elif match_mode != IdentityRules.MODE_DOUDIZHU and match_mode != IdentityRules.MODE_WHEEL_DUEL:
 		_shuffle_array(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
@@ -5913,6 +6031,34 @@ func _uninstall_all_character_skills() -> void:
 	skill_instances_by_player.clear()
 
 
+## 仅重新安装指定玩家当前武将的技能；车轮战换将使用该入口，避免卸载并重建对手未变化的技能实例。
+func _reinstall_character_skills_for_player(player: PlayerState) -> void:
+	if player == null:
+		return
+	# 旧武将技能实例；逐个卸载后清空该玩家映射，防止死亡武将的订阅继续响应规则时机。
+	var previous_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
+	for skill_variant: Variant in previous_skills.values():
+		var previous_skill: SkillDefinition = skill_variant as SkillDefinition
+		if previous_skill != null:
+			previous_skill.uninstall()
+	var player_skills: Dictionary = {}
+	var character: Dictionary = GameDatabase.get_character(player.character_id)
+	var skill_ids_to_install: Array[String] = []
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		skill_ids_to_install.append(str(skill_id_variant))
+	for mode_skill_id: String in identity_rules.get_mode_skill_ids(player.identity, str(state.match_mode)):
+		if not skill_ids_to_install.has(mode_skill_id):
+			skill_ids_to_install.append(mode_skill_id)
+	for skill_id: String in skill_ids_to_install:
+		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		if skill == null or skill.leader_skill and player.identity != "leader":
+			continue
+		skill.bind(self, player.player_id)
+		player_skills[skill_id] = skill
+		skill.install()
+	skill_instances_by_player[player.player_id] = player_skills
+
+
 ## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由领袖开始首回合。
 func _finish_character_selection() -> void:
 	# 完成时统一写入全部选将结果。身份局旧路径会跳过 leader_player_id（依赖领袖阶段已亮将），
@@ -6224,7 +6370,9 @@ func _complete_pre_game_start() -> void:
 	state.pre_game_setup.clear()
 	# 手气卡阶段已经由最后一名玩家完成；先切换到首轮roundStart窗口，避免该时机的技能选择继续沿用开局确认界面。
 	state.current_phase = "round_start"
-	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
+	# 首回合稳定玩家ID；车轮战固定先手红方，其他模式继续读取普通选将服务的首任角色。
+	var configured_first_player_id: int = state.players[0].player_id if identity_rules.starts_from_first_seat(str(state.match_mode)) and not state.players.is_empty() else character_selection.leader_player_id
+	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":configured_first_player_id})
 	# 首回合玩家状态；身份局/斗地主由首任身份决定，2v2 固定一号位。
 	var first_turn_player: PlayerState = null
 	if identity_rules.starts_from_first_seat(str(state.match_mode)):
@@ -8855,6 +9003,12 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 		return
 	var death_event_id: int = _record_runtime_event("die", "death", {"victim_id":victim_id, "killer_id":killer_id})
 	state.dying_queue.erase(victim_id)
+	# 车轮战前两名武将阵亡只淘汰当前武将并立即换上下一名；第三名阵亡才把玩家标记为真正死亡。
+	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_WHEEL_DUEL:
+		victim.wheel_duel_defeated_count += 1
+		if victim.wheel_duel_defeated_count < WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
+			_resolve_wheel_duel_character_replacement(victim, killer_id, death_event_id)
+			return
 	victim.alive = false
 	victim.dying = false
 	victim.death_confirmed = true
@@ -8900,6 +9054,50 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
 	_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
 	_finish_pending_damage(victim_id)
+
+
+## 结算车轮战非末将阵亡：清空全部区域、换上下一名武将、补满体力并立即摸4张牌。
+func _resolve_wheel_duel_character_replacement(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
+	if victim == null or state == null:
+		return
+	# 当前阵亡武将名称；换将前保存用于永久日志，避免应用新武将后名称被覆盖。
+	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
+	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
+	add_log("%s的武将【%s】阵亡。" % [victim.display_name, defeated_character_name])
+	while not victim.hand.is_empty():
+		_move_to_discard(victim.hand.pop_back())
+	discard_all_equipment(victim.player_id, false)
+	while not victim.judgment_area.is_empty():
+		_move_to_discard(victim.judgment_area.pop_back())
+	victim.wheel_duel_lineup_index += 1
+	# 下一名出场武将ID；阵容固定3名且索引已由阵亡数量保护，不会越界。
+	var next_character_id: String = victim.wheel_duel_lineup[victim.wheel_duel_lineup_index]
+	_apply_character(victim, next_character_id, true)
+	_reinstall_character_skills_for_player(victim)
+	victim.hp = victim.max_hp
+	victim.shield = 0
+	victim.dying = false
+	victim.death_confirmed = false
+	victim.chained = false
+	victim.face_down = false
+	victim.skipped_phases.clear()
+	victim.slash_count = 0
+	victim.wine_used = false
+	victim.wine_bonus = 0
+	victim.wooden_ox_used = false
+	draw(victim.player_id, 4)
+	add_log("%s亮出下一名武将【%s】，体力补至%d并摸4张牌。" % [victim.display_name, GameDatabase.resolve_character_name(next_character_id), victim.max_hp])
+	_record_runtime_event("dieAfter", "death", {"victim_id":victim.player_id, "game_over":false, "wheel_duel_replacement":true, "next_character_id":next_character_id}, {}, death_event_id)
+	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
+	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
+	_finish_pending_damage(victim.player_id)
+	# 当前行动玩家自己的武将阵亡时直接终止本回合；对方回合内阵亡则由原结算继续当前回合。
+	if state.current_player_id == victim.player_id and not state.game_over:
+		state.current_phase = "wheel_duel_replacing"
+		state.phase_index = -1
+		_advance_after_current_player_death(victim.player_id)
+	else:
+		_emit_state()
 
 
 ## 检查身份胜负条件并结束对局。
@@ -9914,6 +10112,8 @@ func _emit_state() -> void:
 func _get_character_selection_snapshot(viewer_id: int) -> Dictionary:
 	if state == null:
 		return {}
+	if state.current_phase == "wheel_duel_selection" and wheel_duel_selection != null:
+		return wheel_duel_selection.to_dict(viewer_id)
 	if state.current_phase == "character_selection" and character_selection != null:
 		# 基础选将私有快照；候选、首次身份和最终名额全部仍由服务独立裁剪。
 		var selection_snapshot: Dictionary = character_selection.to_dict(viewer_id)
@@ -9952,11 +10152,12 @@ func _reject(message: String) -> bool:
 
 
 ## 查找指定身份玩家；标准身份局中领袖查询只会返回一人。
-## 返回当前角色在摸牌阶段的基础摸牌数；2v2 一号位全场首个回合固定 1，其余默认 2。
+## 返回当前角色在摸牌阶段的基础摸牌数；2v2与1v1车轮战的一号位全场首个回合固定1，其余默认2。
 func _get_phase_draw_base_count(player_id: int) -> int:
 	if state == null:
 		return 2
-	if identity_rules.normalize_mode(str(state.match_mode)) != IdentityRules.MODE_TEAM2V2:
+	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
+	if match_mode != IdentityRules.MODE_TEAM2V2 and match_mode != IdentityRules.MODE_WHEEL_DUEL:
 		return 2
 	# 仅全场第一回合生效；一号位玩家位于 players 数组首位。
 	if state.turn_number != 1:
@@ -10081,7 +10282,7 @@ func _should_auto_negate(responder: PlayerState, source_id: int, target_id: int,
 func _identity_attitude(from_identity: String, to_identity: String) -> int:
 	# 本局模式；斗地主与 2v2 按同身份为友、异身份为敌的简化态度。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode) if state != null else IdentityRules.MODE_IDENTITY)
-	if match_mode == IdentityRules.MODE_DOUDIZHU or match_mode == IdentityRules.MODE_TEAM2V2:
+	if match_mode == IdentityRules.MODE_DOUDIZHU or match_mode == IdentityRules.MODE_TEAM2V2 or match_mode == IdentityRules.MODE_WHEEL_DUEL:
 		if from_identity == to_identity and not from_identity.is_empty():
 			return 1
 		if match_mode == IdentityRules.MODE_DOUDIZHU:

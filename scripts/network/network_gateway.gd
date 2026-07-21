@@ -43,8 +43,8 @@ enum LanRole {
 	CLIENT,
 }
 
-## 当前封包协议版本；版本3在版本2身份字段基础上新增大厅密码、形象、座位、聊天、踢出与房间设置消息。
-const PROTOCOL_VERSION: int = 3
+## 当前封包协议版本；版本4新增1v1车轮战模式、候选槽抓取动作与私有三将阵容快照。
+const PROTOCOL_VERSION: int = 4
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -75,6 +75,7 @@ const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"id":DEFAULT_LOBBY_GAME_MODE_ID, "display_name":"身份模式"},
 	{"id":"doudizhu", "display_name":"斗地主"},
 	{"id":"team2v2", "display_name":"2v2"},
+	{"id":"wheel_duel", "display_name":"1v1车轮战"},
 ]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
@@ -1036,10 +1037,10 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 	return DEFAULT_LOBBY_GAME_MODE_ID
 
 
-## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主与 2v2。
+## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主、2v2与1v1车轮战。
 func _is_lobby_game_mode_playable(game_mode_id: String) -> bool:
 	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
-	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2"
+	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2" or normalized_mode == "wheel_duel"
 
 
 ## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 5，2v2 固定 4。

@@ -519,6 +519,11 @@ func _apply_player_count_limits_for_mode(game_mode_id: String) -> void:
 		_player_count_input.min_value = maxi(member_floor, 4)
 		_player_count_input.max_value = 4
 		_player_count_input.step = 1.0
+	elif game_mode_id == "wheel_duel":
+		# 1v1车轮战固定2人；房间已有超过2名真人时网关会拒绝该设置提交。
+		_player_count_input.min_value = 2
+		_player_count_input.max_value = 2
+		_player_count_input.step = 1.0
 	else:
 		_player_count_input.min_value = member_floor
 		_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
@@ -538,6 +543,8 @@ func _normalize_player_count_for_mode(game_mode_id: String, player_count: int) -
 	elif game_mode_id == "team2v2":
 		# 2v2 固定 4 人；GameSettings 规范化失败时仍钳制到 4。
 		normalized = 4
+	elif game_mode_id == "wheel_duel":
+		normalized = 2
 	else:
 		normalized = clampi(player_count, 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
 	return maxi(normalized, int(_snapshot.get("member_count", 0)))

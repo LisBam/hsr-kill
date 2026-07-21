@@ -84,6 +84,8 @@ func _run() -> void:
 	var doudizhu_mode_button: Button = main_instance.get_node("%DouDizhuModeButton") as Button
 	# 左侧2v2模式按钮；与另外两种模式共用模式卡片选中底色规范。
 	var team2v2_mode_button: Button = main_instance.get_node("%Team2v2ModeButton") as Button
+	# 左侧1v1车轮战模式按钮；与其他模式共用相同卡片样式和稳定排列。
+	var wheel_duel_mode_button: Button = main_instance.get_node("%WheelDuelModeButton") as Button
 	# 左侧身份模式标题；必须独立于按钮文本呈现，以便标题可使用更大的主题字号。
 	var identity_mode_name: Label = main_instance.get_node("%IdentityModeName") as Label
 	# 左侧身份模式人数说明；仅展示可选人数范围，不重复标准身份局描述。
@@ -139,15 +141,17 @@ func _run() -> void:
 	var doudizhu_selected_style: StyleBoxFlat = doudizhu_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	# 2v2卡片的持续选中样式；三张卡片必须保持完全一致的选中颜色规则。
 	var team2v2_selected_style: StyleBoxFlat = team2v2_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
-	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
+	# 1v1车轮战卡片的持续选中样式；四张模式卡片使用同一视觉规则。
+	var wheel_duel_selected_style: StyleBoxFlat = wheel_duel_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or wheel_duel_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not wheel_duel_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
 		_fail("mode_selected_background")
 		return
 	# 顶部按钮顺序；“联机设置”必须紧跟在“模式选择”右侧，左侧游戏模式列表仍只有身份模式一项。
-	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2排列，三项均直接可选；后一句是现行场景结构的补充约束。
+	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2、1v1车轮战排列，四项均直接可选。
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
 	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
 	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 3 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button:
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 4 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
@@ -165,7 +169,8 @@ func _run() -> void:
 		_fail("online_settings_open")
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
-	var selected_avatar_view: PlayerTargetView = online_avatar_views[online_avatar_views.size() - 1] as PlayerTargetView
+	# 选择当前可视区首张武将牌；测试目标是验证稳定ID保存，不依赖滚动容器末项是否处于当前视口。
+	var selected_avatar_view: PlayerTargetView = online_avatar_views[0] as PlayerTargetView
 	# 测试武将快照；资料面板不会创建真实玩家，因此这里只消费 character_id 展示字段。
 	var selected_avatar_snapshot: Dictionary = selected_avatar_view.get("_player_snapshot") as Dictionary
 	# 测试目标武将 ID；保存后必须原样写入全局联机形象配置。

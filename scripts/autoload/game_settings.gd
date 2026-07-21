@@ -46,6 +46,12 @@ signal character_replacement_count_changed(count: int)
 ## 随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的新对局。
 signal character_candidate_count_changed(count: int)
 
+## 1v1车轮战明置候选数量变化信号；参数范围3至20，仅影响之后创建的新对局。
+signal wheel_duel_face_up_candidate_count_changed(count: int)
+
+## 1v1车轮战暗置候选数量变化信号；参数范围3至20，仅影响之后创建的新对局。
+signal wheel_duel_face_down_candidate_count_changed(count: int)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -173,6 +179,9 @@ const MATCH_MODE_DOUDIZHU: String = "doudizhu"
 ## 下一局 2v2 模式稳定 ID；与 IdentityRules.MODE_TEAM2V2 一致。
 const MATCH_MODE_TEAM2V2: String = "team2v2"
 
+## 下一局1v1车轮战模式稳定ID；与IdentityRules.MODE_WHEEL_DUEL一致。
+const MATCH_MODE_WHEEL_DUEL: String = "wheel_duel"
+
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
@@ -181,6 +190,21 @@ const DEFAULT_DOUDIZHU_PLAYER_COUNT: int = 3
 
 ## 2v2 模式默认人数；固定 4 人。
 const DEFAULT_TEAM2V2_PLAYER_COUNT: int = 4
+
+## 1v1车轮战默认人数；固定2人。
+const DEFAULT_WHEEL_DUEL_PLAYER_COUNT: int = 2
+
+## 1v1车轮战默认明置候选数量；主公指定为6名。
+const DEFAULT_WHEEL_DUEL_FACE_UP_CANDIDATE_COUNT: int = 6
+
+## 1v1车轮战默认暗置候选数量；主公指定为4名。
+const DEFAULT_WHEEL_DUEL_FACE_DOWN_CANDIDATE_COUNT: int = 4
+
+## 1v1车轮战单类候选允许的最小值；明置与暗置设置均不可低于3。
+const MIN_WHEEL_DUEL_CANDIDATE_COUNT: int = 3
+
+## 1v1车轮战单类候选允许的最大值；明置与暗置设置均不可高于20。
+const MAX_WHEEL_DUEL_CANDIDATE_COUNT: int = 20
 
 ## 身份模式默认人数；与历史全局默认 8 人保持一致。
 const DEFAULT_IDENTITY_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
@@ -220,6 +244,15 @@ var next_match_player_count_doudizhu: int = DEFAULT_DOUDIZHU_PLAYER_COUNT
 
 ## 2v2 模式独立保存的下一局人数；固定 4，切换回 2v2 时恢复。
 var next_match_player_count_team2v2: int = DEFAULT_TEAM2V2_PLAYER_COUNT
+
+## 1v1车轮战独立保存的下一局人数；固定2人。
+var next_match_player_count_wheel_duel: int = DEFAULT_WHEEL_DUEL_PLAYER_COUNT
+
+## 下一局1v1车轮战明置候选数量；默认6，运行时设置范围3至20。
+var wheel_duel_face_up_candidate_count: int = DEFAULT_WHEEL_DUEL_FACE_UP_CANDIDATE_COUNT
+
+## 下一局1v1车轮战暗置候选数量；默认4，运行时设置范围3至20。
+var wheel_duel_face_down_candidate_count: int = DEFAULT_WHEEL_DUEL_FACE_DOWN_CANDIDATE_COUNT
 
 
 ## 是否允许玩家在选将时打开全部武将并自选座次与身份；默认关闭，仅在下一局初始化时读取。
@@ -384,6 +417,8 @@ func normalize_match_mode(mode_id: String) -> String:
 		return MATCH_MODE_DOUDIZHU
 	if mode_id == MATCH_MODE_TEAM2V2:
 		return MATCH_MODE_TEAM2V2
+	if mode_id == MATCH_MODE_WHEEL_DUEL:
+		return MATCH_MODE_WHEEL_DUEL
 	return MATCH_MODE_IDENTITY
 
 
@@ -396,6 +431,8 @@ func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 		return 3 if player_count < 4 else 5
 	if mode == MATCH_MODE_TEAM2V2:
 		return DEFAULT_TEAM2V2_PLAYER_COUNT
+	if mode == MATCH_MODE_WHEEL_DUEL:
+		return DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 
 
@@ -406,6 +443,8 @@ func get_stored_player_count_for_mode(mode_id: String) -> int:
 		return next_match_player_count_doudizhu
 	if mode == MATCH_MODE_TEAM2V2:
 		return next_match_player_count_team2v2
+	if mode == MATCH_MODE_WHEEL_DUEL:
+		return next_match_player_count_wheel_duel
 	return next_match_player_count_identity
 
 
@@ -417,6 +456,8 @@ func _store_player_count_for_mode(mode_id: String, player_count: int) -> void:
 		next_match_player_count_doudizhu = normalized_count
 	elif mode == MATCH_MODE_TEAM2V2:
 		next_match_player_count_team2v2 = normalized_count
+	elif mode == MATCH_MODE_WHEEL_DUEL:
+		next_match_player_count_wheel_duel = normalized_count
 	else:
 		next_match_player_count_identity = normalized_count
 
@@ -498,6 +539,28 @@ func set_character_candidate_count(count: int) -> void:
 	character_candidate_count_changed.emit(character_candidate_count)
 
 
+## 设置下一局1v1车轮战明置候选数量；范围外输入限制到3至20，并要求调用方在开局前保证明暗合计不少于10。
+func set_wheel_duel_face_up_candidate_count(count: int) -> void:
+	# 标准化后的明置候选数量；默认6，修改只影响之后创建的新车轮战对局。
+	var normalized_count: int = clampi(count, MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	if wheel_duel_face_up_candidate_count == normalized_count:
+		return
+	wheel_duel_face_up_candidate_count = normalized_count
+	_queue_settings_save()
+	wheel_duel_face_up_candidate_count_changed.emit(wheel_duel_face_up_candidate_count)
+
+
+## 设置下一局1v1车轮战暗置候选数量；范围外输入限制到3至20，并要求调用方在开局前保证明暗合计不少于10。
+func set_wheel_duel_face_down_candidate_count(count: int) -> void:
+	# 标准化后的暗置候选数量；默认4，修改只影响之后创建的新车轮战对局。
+	var normalized_count: int = clampi(count, MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	if wheel_duel_face_down_candidate_count == normalized_count:
+		return
+	wheel_duel_face_down_candidate_count = normalized_count
+	_queue_settings_save()
+	wheel_duel_face_down_candidate_count_changed.emit(wheel_duel_face_down_candidate_count)
+
+
 ## 返回符合联机协议的玩家名称；该纯函数可供设置界面预览与未来资料持久化复用。
 func normalize_online_player_name(player_name: String) -> String:
 	# 去除首尾空白后的名称；内部空格保留，允许玩家使用自然昵称。
@@ -536,6 +599,8 @@ func _load_saved_settings() -> void:
 	var stored_identity_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", -1))
 	var stored_doudizhu_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", -1))
 	var stored_team2v2_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", -1))
+	# 1v1车轮战独立人数存档；当前固定2人，字段保留以维持分模式设置结构一致。
+	var stored_wheel_duel_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", -1))
 	var legacy_player_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count))
 	if stored_identity_count < 0:
 		stored_identity_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_IDENTITY else DEFAULT_IDENTITY_PLAYER_COUNT
@@ -543,9 +608,12 @@ func _load_saved_settings() -> void:
 		stored_doudizhu_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_DOUDIZHU else DEFAULT_DOUDIZHU_PLAYER_COUNT
 	if stored_team2v2_count < 0:
 		stored_team2v2_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_TEAM2V2 else DEFAULT_TEAM2V2_PLAYER_COUNT
+	if stored_wheel_duel_count < 0:
+		stored_wheel_duel_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_WHEEL_DUEL else DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 	next_match_player_count_identity = normalize_player_count_for_mode(MATCH_MODE_IDENTITY, stored_identity_count)
 	next_match_player_count_doudizhu = normalize_player_count_for_mode(MATCH_MODE_DOUDIZHU, stored_doudizhu_count)
 	next_match_player_count_team2v2 = normalize_player_count_for_mode(MATCH_MODE_TEAM2V2, stored_team2v2_count)
+	next_match_player_count_wheel_duel = normalize_player_count_for_mode(MATCH_MODE_WHEEL_DUEL, stored_wheel_duel_count)
 	next_match_player_count = get_stored_player_count_for_mode(next_match_mode)
 
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
@@ -558,6 +626,8 @@ func _load_saved_settings() -> void:
 	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))
 	character_replacement_count = stored_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_character_replacement_count) else 0
 	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
 	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
 
@@ -623,6 +693,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", next_match_player_count_identity)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", next_match_player_count_doudizhu)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", next_match_player_count_team2v2)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", next_match_player_count_wheel_duel)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)
@@ -630,6 +701,8 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
 	last_save_error = settings_file.save(_settings_file_path)

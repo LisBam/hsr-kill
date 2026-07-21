@@ -2953,6 +2953,16 @@ func _on_character_selected(character_id: String) -> void:
 func _on_character_selection_submitted(selection_data: Dictionary) -> void:
 	# 当前选将用途；AI 调整与初次选将使用不同权威动作，不能只凭目标 ID 猜测。
 	var selection_kind: String = str(selection_data.get("selection_kind", "initial"))
+	if selection_kind == "wheel_duel":
+		if not (selection_data.get("character_ids", []) as Array).is_empty():
+			var lineup_action: PlayerAction = PlayerAction.new("wheel_duel_submit_lineup", match_controller.local_human_player_id)
+			lineup_action.payload = {"character_ids":(selection_data.get("character_ids", []) as Array).duplicate()}
+			match_controller.submit_action(lineup_action)
+		else:
+			var pick_action: PlayerAction = PlayerAction.new("wheel_duel_pick", match_controller.local_human_player_id)
+			pick_action.payload = {"slot_id":int(selection_data.get("slot_id", -1))}
+			match_controller.submit_action(pick_action)
+		return
 	if selection_kind == "ai_adjustment":
 		# 房主调整 AI 武将动作；目标与武将 ID 均由当前私有选将快照产生。
 		var adjustment_action: PlayerAction = PlayerAction.new("set_ai_character", match_controller.local_human_player_id)
