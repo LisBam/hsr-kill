@@ -428,28 +428,44 @@ func _render_header() -> void:
 		_title_label.pop()
 		_status_label.text = ""
 		return
-	if bool(_snapshot.get("allow_custom_assignment", false)):
-		# 首次分配身份；自选阶段继续明确展示，最终座次身份只在全员确认后刷新到权威玩家状态。
-		# 当前编辑身份；自选阶段优先使用本地已选身份，使领袖改为其他身份时标题立即同步，不等待权威快照往返。
-		var displayed_identity: String = _selected_identity if not _selected_identity.is_empty() else str(_snapshot.get("local_identity", "hidden"))
-		var keeps_initial_leader_character: bool = can_select and bool(_snapshot.get("retains_selected_character", false))
-		# 当前自选提示；首任领袖第一次打开面板时直接一次性选择武将、座次和身份，不再等待第二个确认面板。
-		# 斗地主与身份局首次自选统一为“请选择…”；“重新”易被误认为二次选将（尤其斗地主地主同时选将路径）。
-		var custom_action_text: String = "请选择座次与身份" if keeps_initial_leader_character else ("请选择武将、座次与身份" if can_select else "请等待其他玩家完成自选")
-		_set_identity_title(displayed_identity, custom_action_text)
-		_status_label.text = ""
-		return
-	# 本地真实身份；选将服务只把该字段发送给本人，旧快照在领袖阶段使用领袖身份作为兼容回退。
-	var local_identity: String = str(_snapshot.get("local_identity", "leader" if phase == CharacterSelectionService.PHASE_LEADER else "hidden"))
-	_set_identity_title(local_identity, "请选择武将" if can_select else "请等待其他玩家选将")
+	# 当前展示身份：自选时优先本地临时选择，使点身份按钮后标题立即同步；普通模式读本人快照身份。
+	var displayed_identity: String = ""
+	if bool(_snapshot.get("allow_custom_assignment", false)) and not _selected_identity.is_empty():
+		displayed_identity = _selected_identity
+	else:
+		displayed_identity = str(_snapshot.get("local_identity", "leader" if phase == CharacterSelectionService.PHASE_LEADER else "hidden"))
+	# 当前展示座次：自选临时座优先，其次预览/初始/本地座次快照字段。
+	var displayed_seat_number: int = _get_displayed_seat_number()
+	# 全部模式统一动作文案：可选时“请选择你的武将”，已确认等待时提示等待其他玩家。
+	var action_text: String = "请选择你的武将" if can_select else "请等待其他玩家选将"
+	_set_identity_title(displayed_identity, displayed_seat_number, action_text)
 	_status_label.text = ""
 
 
-## 使用阵营语义色写入“你的身份为：身份，提示”标题；身份只来自观察者自己的裁剪选将快照。
-func _set_identity_title(identity: String, action_text: String) -> void:
+## 返回标题应展示的本地座次号；优先临时自选，其次快照预览/初始/本地座次，未知时返回 -1。
+func _get_displayed_seat_number() -> int:
+	if _selected_seat_number >= 1:
+		return _selected_seat_number
+	var preview_seat_number: int = int(_snapshot.get("preview_seat_number", -1))
+	if preview_seat_number >= 1:
+		return preview_seat_number
+	var local_seat_number: int = int(_snapshot.get("local_seat_number", -1))
+	if local_seat_number >= 1:
+		return local_seat_number
+	var initial_seat_number: int = int(_snapshot.get("initial_seat_number", -1))
+	if initial_seat_number >= 1:
+		return initial_seat_number
+	return -1
+
+
+## 使用阵营语义色写入统一标题“你的身份为：xx，你的座次为x号位，动作文案”。
+## 身份只来自观察者自己的裁剪选将快照或本地自选临时值；座次来自 `_get_displayed_seat_number`。
+func _set_identity_title(identity: String, seat_number: int, action_text: String) -> void:
 	# 玩家可见身份名称；未知旧快照使用“未知”保持标题完整，不推断其他角色身份。
 	var identity_name: String = {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸", "landlord":"地主", "peasant":"农民", "blue":"蓝方", "red":"红方"}.get(identity, "未知")
-	# 当前身份语义色；四种身份分别固定使用红、黄、绿、蓝，未知身份回退主题次级文字色。
+	# 玩家可见座次文案；有效座次显示“N号位”，未知时显示“未知”避免标题缺段。
+	var seat_text: String = "%d号位" % seat_number if seat_number >= 1 else "未知"
+	# 当前身份语义色；身份片段着色，座次与动作文案使用默认主文字色。
 	_rendered_identity_color = BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("text_secondary"))
 	_title_label.clear()
 	_title_label.push_paragraph(HORIZONTAL_ALIGNMENT_CENTER)
@@ -457,7 +473,7 @@ func _set_identity_title(identity: String, action_text: String) -> void:
 	_title_label.push_color(_rendered_identity_color)
 	_title_label.append_text(identity_name)
 	_title_label.pop()
-	_title_label.append_text("，%s" % action_text)
+	_title_label.append_text("，你的座次为%s，%s" % [seat_text, action_text])
 	_title_label.pop()
 
 

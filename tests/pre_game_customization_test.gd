@@ -38,6 +38,9 @@ var _original_character_replacement_count: int = 0
 ## 测试开始前的随机选将牌数；结束时原样恢复。
 var _original_character_candidate_count: int = GameSettings.DEFAULT_CHARACTER_CANDIDATE_COUNT
 
+## 测试开始前的下一局模式；结束时原样恢复，避免残留 2v2/斗地主导致五人身份局开局校验失败。
+var _original_next_match_mode: String = GameSettings.DEFAULT_NEXT_MATCH_MODE
+
 
 ## 延迟执行全部断言，确保自动加载数据库已经完成内容扫描。
 func _ready() -> void:
@@ -47,6 +50,8 @@ func _ready() -> void:
 ## 依次验证界面设置、独立规则服务和完整开局流程；任一失败立即退出。
 func _run() -> void:
 	_store_original_settings()
+	# 本专项覆盖身份局自选/领袖/手气卡；强制身份模式，避免用户或前序测试残留 2v2 等模式导致 5 人开局被拒。
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	if not await _test_settings_controls():
 		return
 	if not await _test_character_selection_panel_layout():
@@ -81,6 +86,7 @@ func _store_original_settings() -> void:
 	_original_ai_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
 	_original_character_replacement_count = GameSettings.character_replacement_count
 	_original_character_candidate_count = GameSettings.character_candidate_count
+	_original_next_match_mode = str(GameSettings.next_match_mode)
 
 
 ## 验证主菜单与局内菜单使用同一设置源，并且局域网客户端会隐藏全部房主权威控件。
@@ -227,6 +233,7 @@ func _test_character_selection_panel_layout() -> bool:
 		"identity_options":["leader", "loyalist", "rebel", "renegade"],
 		"initial_seat_number":2,
 		"initial_identity":"rebel",
+		"local_seat_number":2,
 		"preview_seat_number":2,
 		"preview_identity":"rebel",
 	}
@@ -592,7 +599,7 @@ func _test_local_initial_leader_flow() -> bool:
 	# 当前种子实际分配的本地玩家ID；后续所有界面提交和状态断言都必须使用同一稳定值。
 	var local_player_id: int = -1
 	for candidate_seed: int in range(1, 65):
-		if not controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+		if not controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed, GameSettings.MATCH_MODE_IDENTITY):
 			main_instance.queue_free()
 			await get_tree().process_frame
 			return _fail("local_initial_leader_start")
@@ -686,7 +693,7 @@ func _test_ai_initial_leader_character_variation() -> bool:
 	# 是否已经观测到没有领袖技的普通候选武将；true表示AI的随机范围没有被固定前缀限制。
 	var observed_non_leader_skill_character: bool = false
 	for candidate_seed: int in range(1, 65):
-		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed, GameSettings.MATCH_MODE_IDENTITY):
 			return _fail("ai_initial_leader_variation_start")
 		# 当前首任领袖稳定玩家ID；本地真人成为首任领袖时不会进入AI自动选择，跳过该种子。
 		var initial_leader_player_id: int = _controller.character_selection.leader_player_id
@@ -721,7 +728,7 @@ func _test_ai_initial_leader_retains_default_leader_assignment() -> bool:
 	# 当前首任AI领袖对局种子；循环避免把某次随机洗牌恰好令本地真人成为领袖误判为测试通过。
 	var selected_seed: int = -1
 	for candidate_seed: int in range(1, 65):
-		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed):
+		if not _controller.start_match(LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT, candidate_seed, GameSettings.MATCH_MODE_IDENTITY):
 			return _fail("ai_initial_leader_default_start")
 		if _controller.character_selection.leader_player_id != _controller.local_human_player_id:
 			selected_seed = candidate_seed
@@ -800,7 +807,7 @@ func _test_authoritative_pre_game_flow() -> bool:
 	# 同时排除 AI 首任领袖随机抽中【星·存护】的种子：后续真人必须稳定提交 xing_cunhu 以验证 roundStart【铁壁】。
 	var authoritative_seed: int = -1
 	for candidate_seed: int in range(TEST_RANDOM_SEED, TEST_RANDOM_SEED + 128):
-		if not _controller.start_match(TEST_PLAYER_COUNT, candidate_seed):
+		if not _controller.start_match(TEST_PLAYER_COUNT, candidate_seed, GameSettings.MATCH_MODE_IDENTITY):
 			return _fail("authoritative_start")
 		if _controller.character_selection.get_initial_identity(0) == "leader":
 			continue
@@ -892,7 +899,7 @@ func _test_authoritative_pre_game_flow() -> bool:
 	if initial_leader_character_id == selected_character_id or previewed_ai_leader_character_id == selected_character_id:
 		var recovered: bool = false
 		for recovery_seed: int in range(authoritative_seed + 1, TEST_RANDOM_SEED + 128):
-			if not _controller.start_match(TEST_PLAYER_COUNT, recovery_seed):
+			if not _controller.start_match(TEST_PLAYER_COUNT, recovery_seed, GameSettings.MATCH_MODE_IDENTITY):
 				return _fail("authoritative_recovery_start")
 			if _controller.character_selection.get_initial_identity(0) == "leader":
 				continue
@@ -1058,6 +1065,7 @@ func _restore_original_settings() -> void:
 	GameSettings.set_ai_uses_mulligan_enabled(_original_ai_mulligan_enabled)
 	GameSettings.set_character_replacement_count(_original_character_replacement_count)
 	GameSettings.set_character_candidate_count(_original_character_candidate_count)
+	GameSettings.set_next_match_mode(_original_next_match_mode)
 
 
 ## 输出稳定失败标识、恢复全局设置并以非零状态结束测试。
