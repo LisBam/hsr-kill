@@ -38,7 +38,9 @@ func can_activate(context: Dictionary = {}) -> bool:
 	if legal_target_ids.is_empty():
 		return false
 	# 用任意一名合法目标复核虚拟用牌规则；play_limit 用尽时 validate 会失败，按钮同步熄灭。
-	return str(host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, [legal_target_ids[0]])) == ""
+	# 必须构造 typed Array[int]；字面量 [int] 在 GDScript 中是无类型 Array，会触发 validate_virtual_use 参数类型错误。
+	var preview_target_ids: Array[int] = [legal_target_ids[0]]
+	return str(host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, preview_target_ids)) == ""
 
 
 ## 发动倾力；响应入口只支付费用，控制器随后建立无材料虚拟响应，主动入口则选择雷【杀】目标。
