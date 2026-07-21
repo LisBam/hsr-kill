@@ -83,6 +83,14 @@ func configure(uid: int, interactable: bool, reorder_zone: String = "") -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if is_interactable or not hand_reorder_zone.is_empty() else Control.CURSOR_ARROW
 
 
+## 安全消费当前输入事件；拖拽完成回调可能重建并移除本输入节点，因此视口为空时只跳过消费标记。
+func _mark_input_as_handled() -> void:
+	# 当前所在视口；节点仍在场景树时写入输入已消费状态，重建后为空属于正常生命周期。
+	var viewport: Viewport = get_viewport()
+	if viewport != null:
+		viewport.set_input_as_handled()
+
+
 ## 记录左键按下位置；释放与拖动跟踪统一在_input中处理，保证鼠标离开原牌后仍由同一实体完成本次交互。
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -129,7 +137,7 @@ func _input(event: InputEvent) -> void:
 			hand_drag_started.emit(card_uid, _touch_current_global_position)
 		if _is_hand_dragging:
 			hand_drag_moved.emit(card_uid, _touch_current_global_position)
-		get_viewport().set_input_as_handled()
+		_mark_input_as_handled()
 		return
 	if event is InputEventScreenTouch:
 		if _uses_touch_mouse_emulation():
@@ -153,7 +161,7 @@ func _input(event: InputEvent) -> void:
 			hand_drag_finished.emit(card_uid, _touch_current_global_position)
 		elif not completed_touch_information and is_interactable:
 			activated.emit()
-		get_viewport().set_input_as_handled()
+		_mark_input_as_handled()
 		return
 	if not _pointer_pressed:
 		return
@@ -179,7 +187,7 @@ func _input(event: InputEvent) -> void:
 			hand_drag_finished.emit(card_uid, release_global_position)
 		elif is_interactable:
 			activated.emit()
-		get_viewport().set_input_as_handled()
+		_mark_input_as_handled()
 
 
 ## 等待触屏长按阈值后请求卡牌说明；序列号、触点和移动距离共同防止旧计时器误触发。

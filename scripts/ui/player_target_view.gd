@@ -605,7 +605,11 @@ func _refresh_visual_state() -> void:
 	_card_body.add_theme_stylebox_override("panel", player_style)
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
-	_state_overlay.configure(is_interactable, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0)
+	# 快照存活状态；不能用输入权限替代，离场角色仍存活但应保持透明武将牌而非显示阵亡文字。
+	var snapshot_alive: bool = bool(_player_snapshot.get("alive", false))
+	# 快照离场状态；只影响状态覆盖层是否绘制死亡滤镜，透明度与输入仍由本视图统一处理。
+	var snapshot_out_of_game: bool = bool(_player_snapshot.get("out_of_game", false))
+	_state_overlay.configure(snapshot_alive, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0, snapshot_out_of_game)
 	_refresh_selected_marker()
 
 

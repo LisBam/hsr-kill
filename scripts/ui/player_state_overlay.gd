@@ -55,7 +55,7 @@ extends Control
 ## 当前默认使用较浅的深灰色，在透明中段轻量标出与武将牌等长的横置区域。
 @export var chained_inner_color: Color = Color("686868d9")
 
-## 当前角色是否阵亡；为 true 时显示黑白滤镜与红色阵亡文字并停止绘制链条。
+## 当前角色是否阵亡；仅真实阵亡时显示黑白滤镜与红色阵亡文字，离场角色保持透明牌面。
 var _is_dead: bool = false
 
 ## 当前角色是否横置；仅存活且该值为 true 时绘制穿过牌面中心的链条。
@@ -114,12 +114,12 @@ func _refresh_geometry() -> void:
 	_death_label.size = card_rect.size
 
 
-## 写入公开存活与横置状态；死亡表现优先于横置链条。
-func configure(alive: bool, chained: bool, wine_bonus: bool = false) -> void:
-	_is_dead = not alive
-	_is_chained = chained
-	# 酒滤镜仅对存活角色生效；阵亡优先显示死亡滤镜。
-	_has_wine_bonus = wine_bonus and alive
+## 写入公开存活、离场与横置状态；离场只由父牌面透明化，不能借用阵亡滤镜或文字。
+func configure(alive: bool, chained: bool, wine_bonus: bool = false, out_of_game: bool = false) -> void:
+	_is_dead = not alive and not out_of_game
+	_is_chained = chained and alive and not out_of_game
+	# 酒滤镜仅对在场存活角色生效；阵亡与离场都不叠加额外状态表现。
+	_has_wine_bonus = wine_bonus and alive and not out_of_game
 	_refresh_state()
 
 

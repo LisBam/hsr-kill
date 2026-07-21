@@ -1822,6 +1822,9 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 	var candidates: Array = choice_request.get("candidates", []) as Array
 	# 当前目标候选；只包含稳定玩家 ID。
 	var target_ids: Array = choice_request.get("target_ids", []) as Array
+	# 牌到完整有序目标组合的映射；用于同一技能内不同材料转化出不同目标数或目标语义的情况。
+	var choice_context: Dictionary = choice_request.get("context", {}) as Dictionary
+	var target_combinations_by_card_id: Dictionary = choice_context.get("target_combinations_by_card_id", {}) as Dictionary
 	if allow_cancel:
 		var pass_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		pass_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":"", "confirmed":false}
@@ -1874,6 +1877,24 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 			var target_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 			target_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[int(target_id_variant)], "confirmed":true}
 			result.append(target_action.to_dict())
+	elif choice_type == "card_target" and max_select == 1 and not target_combinations_by_card_id.is_empty():
+		# 逐材料完整目标组合；例如【传冲】的梅花材料转化【借刀杀人】时必须同时提交有序双目标。
+		for candidate_variant: Variant in candidates:
+			# 当前材料候选；只读取稳定UID以生成后续仍会被权威端复核的AI动作。
+			var candidate: Dictionary = candidate_variant as Dictionary
+			# 当前材料UID；字符串和整数键都兼容网络序列化前后的字典形态。
+			var candidate_uid: int = int(candidate.get("uid", -1))
+			# 当前材料允许的完整目标组合；不存在映射时不得回退到任意目标。
+			var candidate_target_combinations: Array = target_combinations_by_card_id.get(str(candidate_uid), target_combinations_by_card_id.get(candidate_uid, [])) as Array
+			for target_combination_variant: Variant in candidate_target_combinations:
+				# 当前有序目标组合；复制为整数数组以保持【借刀杀人】等第一、第二目标语义。
+				var target_combination: Array[int] = _int_array(target_combination_variant as Array)
+				if target_combination.size() < min_target_select or target_combination.size() > max_target_select:
+					continue
+				var combined_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+				combined_action.payload = {"request_id":request_id, "selected_card_uids":[candidate_uid], "selected_target_ids":target_combination.duplicate(), "confirmed":true}
+				result.append(combined_action.to_dict())
+		return result
 	elif max_select == 1 and max_target_select == 1:
 		# 可选牌到目标映射；技能可用该字段表达选择一张牌后目标集合动态变化的组合规则。
 		var targets_by_card_id: Dictionary = (choice_request.get("context", {}) as Dictionary).get("target_ids_by_card_id", {}) as Dictionary
@@ -2103,7 +2124,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return _reject("选择的目标数不足。")
 	if selected_target_ids.size() > max_target_select:
 		return _reject("选择的目标数超过上限。")
-	if confirmed and not _is_allowed_target_combination(_pending_card_choice.get("context", {}) as Dictionary, selected_target_ids):
+	if confirmed and not _is_allowed_target_combination(_pending_card_choice.get("context", {}) as Dictionary, selected_target_ids, selected_uids):
 		return _reject("所选目标组合不符合当前技能要求。")
 	# 已完成请求上下文；运行时确认接收后再清空窗口，避免失败响应把仍可重试的权威请求提前丢失。
 	var completed_choice: Dictionary = _pending_card_choice.duplicate(true)
@@ -2211,8 +2232,24 @@ func _is_allowed_card_combination(context: Dictionary, selected_uids: Array[int]
 	return false
 
 
-## 校验请求上下文声明的有序目标组合；未声明valid_target_combinations时保持全部数量合法组合可用。
-func _is_allowed_target_combination(context: Dictionary, selected_target_ids: Array[int]) -> bool:
+## 校验请求上下文声明的有序目标组合；材料专属组合优先于通用组合，未声明时保持全部数量合法组合可用。
+func _is_allowed_target_combination(context: Dictionary, selected_target_ids: Array[int], selected_card_uids: Array[int] = []) -> bool:
+	# 材料UID到完整目标组合的映射；用于同一请求内不同材料生成不同虚拟牌目标规则的技能。
+	var target_combinations_by_card_id: Dictionary = context.get("target_combinations_by_card_id", {}) as Dictionary
+	if not target_combinations_by_card_id.is_empty():
+		# 当前组合请求只允许一张材料；缺失或多张材料都不能通过材料专属目标校验。
+		if selected_card_uids.size() != 1:
+			return false
+		# 当前材料UID；字符串和整数键共同兼容本地与网络字典。
+		var material_uid: int = selected_card_uids[0]
+		# 当前材料允许的完整目标组合；缺失映射时不回退为任意目标。
+		var target_combinations: Array = target_combinations_by_card_id.get(str(material_uid), target_combinations_by_card_id.get(material_uid, [])) as Array
+		for combination_variant: Variant in target_combinations:
+			# 当前有序目标组合；顺序必须与玩家提交严格一致。
+			var combination: Array[int] = _int_array(combination_variant as Array)
+			if combination == selected_target_ids:
+				return true
+		return false
 	if not context.has("valid_target_combinations"):
 		return true
 	for combination_variant: Variant in context.get("valid_target_combinations", []) as Array:

@@ -31,7 +31,7 @@ func install() -> void:
 	subscribe_timing("phaseDiscardBegin", _on_main_phase_begin.bind("discard"), "player")
 
 
-## 在主要阶段开始时提供本轮未使用花色的普通手牌；取消不会消耗该花色额度。
+## 在主要阶段开始时提供本轮未使用花色的普通手牌；即使候选为空也必须允许玩家亲自取消，避免泄露手牌花色。
 func _on_main_phase_begin(_event: RuleEvent, phase_name: String) -> void:
 	_sync_round_state()
 	var candidates: Array[Dictionary] = []
@@ -42,8 +42,8 @@ func _on_main_phase_begin(_event: RuleEvent, phase_name: String) -> void:
 		var card: CardInstance = owner.find_hand_card(int(candidate.get("uid", -1)))
 		if card != null and CARD_SUITS.has(card.suit) and not _used_suits_this_round.has(card.suit):
 			candidates.append(candidate)
-	if not candidates.is_empty():
-		request_card_selection("弦奏", "你可以重铸一张手牌并跳过%s" % {"judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段"}.get(phase_name, phase_name), candidates, 0, 1, true, {"kind":"xianzou_recast", "phase_name":phase_name})
+	# 私有手牌候选即使为空也要建立可取消询问；自动跳过会向其他玩家泄露“没有可用花色”的隐藏信息。
+	request_card_selection("弦奏", "你可以重铸一张手牌并跳过%s" % {"judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段"}.get(phase_name, phase_name), candidates, 0, 1, true, {"kind":"xianzou_recast", "phase_name":phase_name, "private_info_safe_prompt":true})
 
 
 ## 恢复重铸选择；移动前锁定花色额度，随后等待完整重铸与嵌套触发再处理阶段效果。

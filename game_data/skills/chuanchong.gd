@@ -34,19 +34,16 @@ func _on_play_phase_begin(_event: RuleEvent) -> void:
 	_used_current_play_phase = false
 
 
-## 仅在自己的出牌阶段、仍有额度且至少存在一个合法材料目标组合时开放技能。
+## 仅在自己的出牌阶段、仍有额度且至少存在一个完整合法的材料目标组合时开放技能。
 func can_activate(_context: Dictionary = {}) -> bool:
 	if host == null or _used_current_play_phase or host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
-	for candidate: Dictionary in _get_hand_candidates():
-		# 当前材料实体与其花色对应锦囊；未知花色不会进入正式候选。
-		var material: CardInstance = _get_hand_card(int(candidate.get("uid", -1)))
-		if material != null and not _get_valid_target_combinations(str(TRICK_BY_SUIT.get(material.suit, "")), material).is_empty():
-			return true
-	return false
+	# 当前材料与完整目标组合数据；只有至少一张材料能够转化并完整使用时才点亮技能。
+	var selection_data: Dictionary = _build_material_target_selection_data()
+	return not (selection_data.get("candidates", []) as Array).is_empty()
 
 
-## 发动传冲；AI可直接携带材料与目标，玩家先选材料再进入对应锦囊的目标选择。
+## 发动传冲；AI可直接携带材料与目标，玩家通过单个牌目标请求完成与【罡风】一致的转化使用。
 func activate(context: Dictionary = {}) -> String:
 	# 动作指定的材料UID；负数表示需要创建玩家选牌请求。
 	var material_uid: int = int(context.get("material_card_uid", -1))
@@ -56,38 +53,26 @@ func activate(context: Dictionary = {}) -> String:
 		target_ids.append(int(target_variant))
 	if material_uid >= 0 and not target_ids.is_empty():
 		return "" if _execute_conversion(material_uid, target_ids) else "【传冲】材料或目标已不合法。"
-	var candidates: Array[Dictionary] = _get_hand_candidates()
-	if candidates.is_empty():
-		return "当前没有可用于【传冲】的手牌。"
-	request_card_selection("传冲", "请选择一张手牌", candidates, 1, 1, true, {"kind":"chuanchong_material"})
+	# 当前材料与目标组合数据；每张材料独立保存其花色转化后允许的有序目标数组。
+	var selection_data: Dictionary = _build_material_target_selection_data()
+	# 实际可转化的普通手牌候选；无合法目标的材料不进入本次内联选择，避免玩家选中后没有可指定目标。
+	var candidates: Array[Dictionary] = selection_data.get("candidates", []) as Array[Dictionary]
+	# 全部材料目标并集；材料尚未选中时供界面预览，选中后由组合映射缩小候选。
+	var legal_target_ids: Array[int] = selection_data.get("target_ids", []) as Array[int]
+	if candidates.is_empty() or legal_target_ids.is_empty():
+		return "当前没有可用于【传冲】的手牌或转化锦囊目标。"
+	request_card_target_selection("传冲", "请选择一张手牌，并指定其转化锦囊的目标", candidates, legal_target_ids, 1, 1, 1, 2, true, {"kind":"chuanchong_use", "target_combinations_by_card_id":selection_data.get("target_combinations_by_card_id", {})})
 	return ""
 
 
-## 恢复材料或目标选择；材料等待期间仍需留在普通手牌区并保持原花色。
+## 恢复牌目标组合选择；提交前后的材料仍需留在普通手牌区并保持原花色。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response == null:
 		return false
 	var choice_kind: String = str(context.get("kind", ""))
-	if choice_kind == "chuanchong_material":
-		if not response.confirmed or response.card_ids.size() != 1:
-			return true
-		var material: CardInstance = _get_hand_card(response.card_ids[0])
-		var trick_id: String = str(TRICK_BY_SUIT.get(material.suit, "")) if material != null else ""
-		var combinations: Array = _get_valid_target_combinations(trick_id, material)
-		if combinations.is_empty():
-			return true
-		var target_candidates: Array[int] = []
-		for combination_variant: Variant in combinations:
-			for target_variant: Variant in combination_variant as Array:
-				var target_id: int = int(target_variant)
-				if not target_candidates.has(target_id):
-					target_candidates.append(target_id)
-		var required_count: int = (combinations[0] as Array).size()
-		request_target_selection("【传冲】请选择目标", target_candidates, required_count, required_count, true, {"kind":"chuanchong_targets", "material_card_uid":material.uid, "valid_target_combinations":combinations})
-		return true
-	if choice_kind == "chuanchong_targets":
-		if response.confirmed:
-			_execute_conversion(int(context.get("material_card_uid", -1)), response.target_ids)
+	if choice_kind == "chuanchong_use":
+		if response.confirmed and response.card_ids.size() == 1 and response.target_ids.size() in [1, 2]:
+			_execute_conversion(response.card_ids[0], response.target_ids)
 		return true
 	return false
 
@@ -118,6 +103,38 @@ func _get_hand_candidates() -> Array[Dictionary]:
 		if material != null and TRICK_BY_SUIT.has(material.suit):
 			result.append(candidate)
 	return result
+
+
+## 为每张普通手牌计算对应虚拟锦囊的完整目标组合；返回值同时供玩家筛选、AI动作与权威提交复用。
+func _build_material_target_selection_data() -> Dictionary:
+	# 实际可进入选择的材料候选；没有完整合法使用的手牌不会泄露为可点击入口。
+	var valid_candidates: Array[Dictionary] = []
+	# 材料UID到有序目标组合的映射；【借刀杀人】保留“持刀者、被杀者”的顺序。
+	var target_combinations_by_card_id: Dictionary = {}
+	# 全部材料目标并集；材料尚未选中时用于武将牌目标预览。
+	var all_target_ids: Array[int] = []
+	for candidate: Dictionary in _get_hand_candidates():
+		# 当前普通手牌材料；只有仍在手牌区的实体才能按其真实花色转化。
+		var material: CardInstance = _get_hand_card(int(candidate.get("uid", -1)))
+		# 当前花色对应的虚拟锦囊定义；无映射花色不会进入正式候选。
+		var trick_id: String = str(TRICK_BY_SUIT.get(material.suit, "")) if material != null else ""
+		# 当前材料完整合法目标组合；单目标、【无中生有】自身目标与借刀双目标都统一保存为数组。
+		var target_combinations: Array = _get_valid_target_combinations(trick_id, material)
+		if target_combinations.is_empty():
+			continue
+		# 当前材料UID；字符串键可在网络序列化后稳定读取。
+		var material_uid: int = material.uid
+		valid_candidates.append(candidate)
+		target_combinations_by_card_id[str(material_uid)] = target_combinations.duplicate(true)
+		for target_combination_variant: Variant in target_combinations:
+			# 当前有序目标组合；只汇总目标预览，不改变原组合顺序。
+			var target_combination: Array = target_combination_variant as Array
+			for target_variant: Variant in target_combination:
+				# 当前目标ID；去重后保持首次出现顺序，界面选择后仍由完整组合映射收紧。
+				var target_id: int = int(target_variant)
+				if not all_target_ids.has(target_id):
+					all_target_ids.append(target_id)
+	return {"candidates":valid_candidates, "target_ids":all_target_ids, "target_combinations_by_card_id":target_combinations_by_card_id}
 
 
 ## 按UID返回仍位于技能持有者普通手牌区的实体。

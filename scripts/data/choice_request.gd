@@ -226,6 +226,31 @@ func validate_response(response: ChoiceResponse) -> String:
 			for selected_target_id: int in response.target_ids:
 				if not allowed_target_ids.has(selected_target_id):
 					return "所选卡牌与目标的组合不合法。"
+	# 材料专属完整目标组合；优先约束有序数组，支持同一选牌请求内出现单目标与双目标虚拟牌。
+	var target_combinations_by_card_id: Dictionary = active_context.get("target_combinations_by_card_id", {}) as Dictionary
+	if target_combinations_by_card_id.is_empty():
+		# 备份上下文同样可保存该过滤器；网络恢复后仍必须维持材料与目标序列的绑定。
+		target_combinations_by_card_id = (active_context.get("filters", {}) as Dictionary).get("target_combinations_by_card_id", {}) as Dictionary
+	if not target_combinations_by_card_id.is_empty():
+		# 当前完整组合绑定一张材料；多张或空材料不能模糊匹配任何目标序列。
+		if response.card_ids.size() != 1:
+			return "所选卡牌与目标的组合不合法。"
+		# 当前材料UID；同时兼容本地整数键与网络字符串键。
+		var material_uid: int = response.card_ids[0]
+		# 当前材料允许的有序目标组合；不存在映射时禁止回退到全部公开目标。
+		var allowed_target_combinations: Array = target_combinations_by_card_id.get(str(material_uid), target_combinations_by_card_id.get(material_uid, [])) as Array
+		# 当前是否精确命中完整组合；【借刀杀人】等技能的目标先后顺序属于规则语义。
+		var matches_target_combination: bool = false
+		for target_combination_variant: Variant in allowed_target_combinations:
+			# 当前映射中的目标组合；逐项转整数以避免网络JSON把数值表示变为弱类型。
+			var target_combination: Array[int] = []
+			for target_id_variant: Variant in target_combination_variant as Array:
+				target_combination.append(int(target_id_variant))
+			if target_combination == response.target_ids:
+				matches_target_combination = true
+				break
+		if not matches_target_combination:
+			return "所选卡牌与目标的组合不合法。"
 	return ""
 
 

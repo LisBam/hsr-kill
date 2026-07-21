@@ -2071,6 +2071,35 @@ func _get_selectable_target_ids() -> Array[int]:
 		if inline_choice_type == "card_target" and _inline_selected_card_uids.size() == 1:
 			# 当前请求恢复上下文；组合映射只读取可序列化字典。
 			var inline_context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+			# 实体牌UID到完整有序目标组合的映射；优先用于不同材料转化出不同目标数量的主动技能。
+			var target_combinations_by_card_id: Dictionary = inline_context.get("target_combinations_by_card_id", {}) as Dictionary
+			if not target_combinations_by_card_id.is_empty():
+				# 当前唯一选中的材料UID；完整组合只在该材料范围内筛选，不回退到其他材料的目标。
+				var selected_material_uid: int = _inline_selected_card_uids[0]
+				# 当前材料全部完整目标组合；字符串和整数键共同兼容网络序列化。
+				var target_combinations: Array = target_combinations_by_card_id.get(str(selected_material_uid), target_combinations_by_card_id.get(selected_material_uid, [])) as Array
+				# 当前准备选择的目标位置；已选目标形成前缀，下一次点击只能补全至少一条合法组合。
+				var target_position: int = _selected_target_ids.size()
+				# 下一步可点击目标；按映射出现顺序去重，保证目标高亮与点击顺序稳定。
+				var next_target_ids: Array[int] = []
+				for target_combination_variant: Variant in target_combinations:
+					# 当前有序目标组合；需要先匹配已选前缀，才能开放后续位置。
+					var target_combination: Array = target_combination_variant as Array
+					if target_combination.size() <= target_position:
+						continue
+					# 当前组合是否匹配已经选择的目标前缀；顺序必须保留，不能把借刀两名目标视为无序集合。
+					var matches_selected_prefix: bool = true
+					for selected_index: int in range(_selected_target_ids.size()):
+						if int(target_combination[selected_index]) != _selected_target_ids[selected_index]:
+							matches_selected_prefix = false
+							break
+					if matches_selected_prefix:
+						# 当前可追加目标；只在尚未出现时写入，避免重复目标破坏请求的单击语义。
+						var next_target_id: int = int(target_combination[target_position])
+						if not next_target_ids.has(next_target_id):
+							next_target_ids.append(next_target_id)
+				inline_target_ids = next_target_ids
+				return inline_target_ids
 			# 实体牌 UID 到合法目标 ID 数组的映射；空字典表示全部请求目标均可用。
 			var targets_by_card_id: Dictionary = inline_context.get("target_ids_by_card_id", {}) as Dictionary
 			if not targets_by_card_id.is_empty():
