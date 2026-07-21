@@ -17,6 +17,9 @@ const HOVER_INFORMATION_DELAY_SETTLE_SECONDS: float = 0.55
 ## 菜单按钮是否通过真实视口输入收到点击；默认 false，按钮信号触发后改为 true。
 var _menu_button_pressed: bool = false
 
+## 测试开始前的下一局模式；结束时原样恢复，避免残留 2v2 把六人重开钳制为四人。
+var _original_next_match_mode: String = GameSettings.DEFAULT_NEXT_MATCH_MODE
+
 
 ## 延迟执行正式场景检查，保证测试根节点已经进入场景树。
 func _ready() -> void:
@@ -27,6 +30,9 @@ func _ready() -> void:
 
 ## 检查默认窗口中的可视范围、按钮鼠标命中与底部安全区。
 func _run() -> void:
+	# 布局回归覆盖身份局十人桌与六人重开；强制身份模式，避免持久化 2v2 将人数钳为 4。
+	_original_next_match_mode = str(GameSettings.next_match_mode)
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	# 正式主场景资源；测试必须覆盖与玩家运行完全相同的节点结构和脚本连接。
 	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	if main_scene == null:
@@ -738,13 +744,14 @@ func _run() -> void:
 		"phase":CharacterSelectionService.PHASE_OTHERS,
 		"can_select":true,
 		"local_identity":"rebel",
+		"local_seat_number":3,
 		"local_candidates":["gepard", "march_7th"],
 		"leader_character_id":"",
 		"leader_player_id":0,
 	}
 	character_selection_panel.bind_snapshot(selection_snapshot_without_leader)
 	await get_tree().process_frame
-	if character_selection_panel.get_title_plain_text() != "你的身份为：反贼，请选择武将" or character_selection_panel.get_title_identity_color() != BattleUIStyle.get_color("identity_rebel"):
+	if character_selection_panel.get_title_plain_text() != "你的身份为：反贼，你的座次为3号位，请选择你的武将" or character_selection_panel.get_title_identity_color() != BattleUIStyle.get_color("identity_rebel"):
 		_fail("selection_identity_title:%s/%s" % [character_selection_panel.get_title_plain_text(), character_selection_panel.get_title_identity_color()])
 		return
 	# 候选区域与领袖区域；无领袖时两者左边界应完全一致，分隔线保持隐藏。
@@ -1260,7 +1267,15 @@ func _run() -> void:
 	main_instance.free()
 	await get_tree().process_frame
 	print("UI_LAYOUT_PASS viewport=%s" % viewport_rect.size)
+	_restore_original_match_mode()
 	get_tree().quit(0)
+
+
+
+## 恢复测试前的下一局模式，避免污染同进程后续专项或玩家设置。
+func _restore_original_match_mode() -> void:
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(_original_next_match_mode)
 
 
 ## 等待统一信息框完成正式0.5秒悬停延迟；集中保留无头测试调度余量，避免各个手牌、装备、技能和武将牌断言使用不同等待值。
@@ -1409,5 +1424,6 @@ func _on_menu_button_pressed() -> void:
 
 ## 输出统一失败原因并以非零状态结束测试。
 func _fail(reason: String) -> void:
+	_restore_original_match_mode()
 	printerr("UI_LAYOUT_FAIL %s" % reason)
 	get_tree().quit(1)
