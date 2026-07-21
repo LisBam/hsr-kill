@@ -249,6 +249,16 @@ func _test_feiyan_preparation_phase_virtual_use() -> bool:
 		return _fail("feiyan_preparation_targets=%s" % [legal_target_ids])
 	if not _controller.card_rules.validate_virtual_use(0, "huogong", [1], rule_overrides).is_empty():
 		return _fail("feiyan_preparation_virtual_validation")
+	# 飞焰技能实例；直接恢复已确认目标以实际覆盖Object.call到Array[int]端口的运行时类型检查。
+	var feiyan: SkillDefinition = GameDatabase.create_skill("feiyan")
+	feiyan.bind(_controller, 0)
+	# 已确认的单目标响应；目标数组字段本身是标准强类型Array[int]。
+	var response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	response.target_ids = [1]
+	if not feiyan.continue_selection({"kind":"feiyan_target"}, response):
+		return _fail("feiyan_runtime_virtual_use_not_consumed")
+	if not _controller.has_pending_card_choice():
+		return _fail("feiyan_runtime_virtual_use_did_not_start_huogong")
 	return true
 
 
