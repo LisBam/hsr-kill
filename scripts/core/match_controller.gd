@@ -863,7 +863,8 @@ func submit_action(action: PlayerAction) -> bool:
 			# 技能发动结果；失败时仍会恢复新的出牌请求供玩家继续操作。
 			var activated: bool = activate_skill(action.actor_id, skill_id, action.payload)
 			# 技能被规则取消或执行入口返回错误时也必须恢复出牌请求，避免已关闭的 chooseToUse 令玩家失去后续操作。
-			if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+			# 多步技能在流程间隔等待下一段选牌时仍算交互未完成，不能在空窗期抢先打开出牌窗口。
+			if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
 				_begin_play_choice(state.current_player_id)
 			# 主动技能分支会在通用动作尾部之前返回；统一续接入口负责调度同步技能后的下一次AI行动或技能子选择。
 			_ensure_ai_progress_after_resolution()
@@ -955,7 +956,7 @@ func submit_action(action: PlayerAction) -> bool:
 			else:
 				_advance_after_current_player_death(current_turn_player.player_id)
 			return true
-	if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+	if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
 		_begin_play_choice(state.current_player_id)
 	_emit_state()
 	_ensure_ai_progress_after_resolution()
@@ -1263,6 +1264,32 @@ func has_pending_card_choice() -> bool:
 	return not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty()
 
 
+## 返回出牌阶段是否仍有未完成的交互结算；包含临时选择与会创建下一段选择的技能流程间隔，避免星落等多步技能在弹窗间隔空窗期误开 chooseToUse。
+func has_pending_play_interaction() -> bool:
+	if has_pending_card_choice():
+		return true
+	# 仅技能多步选牌间隔阻塞出牌窗口恢复；response_prompt 与 phase_transition 有各自恢复路径，不得因残留计时器卡住 chooseToUse。
+	return game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()
+
+
+## 在多步技能或流程间隔结束后尝试恢复正式出牌窗口；已有选择、间隔任务或活动 chooseToUse 时安全忽略。
+func resume_play_phase_choice() -> void:
+	if state == null or state.game_over or state.current_phase != "play":
+		return
+	if has_pending_play_interaction() or _has_active_play_choice():
+		return
+	_begin_play_choice(state.current_player_id)
+	_emit_state()
+	_ensure_ai_progress_after_resolution()
+
+
+## 取消指定请求的延时响应提示任务；请求已提交、中断或关闭后必须立即释放，否则 GameFlowPacer 残留任务会让 has_pending_play_interaction 误判为仍在交互中。
+func _cancel_paced_response_prompt(request_id: int) -> void:
+	if request_id < 0 or game_flow_pacer == null:
+		return
+	game_flow_pacer.cancel("response_prompt:%d" % request_id)
+
+
 ## 为当前角色创建可持续的 chooseToUse 请求；候选只包含当前仍可使用或重铸的实体牌 UID。
 func _begin_play_choice(player_id: int) -> void:
 	if state == null or state.game_over or state.current_phase != "play" or state.current_player_id != player_id:
@@ -1564,6 +1591,9 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	_pending_card_choice["request_id"] = runtime_request.request_id
 	_pending_card_choice["runtime_event_id"] = choice_event.event_id
 	_pending_card_choice["runtime_request_id"] = runtime_request.request_id
+	# 技能或效果子选择一旦登记成功，必须关闭可能在流程间隔空窗期误开的出牌请求，避免旧 chooseToUse 继续占用运行时请求表。
+	if choice_type != "use":
+		_cancel_active_play_choice("nested_choice_started")
 	state.current_phase = "choice"
 	_publish_card_choice_request(_pending_card_choice, choice_type == "respond")
 	# 当前调用不在调度器内容步骤内时立即把选择子事件压栈；调度中重入 drain 会安全返回并由外层循环接管。
@@ -1783,6 +1813,7 @@ func _abort_unresolvable_ai_choice(request_id: int, reason: String) -> void:
 	# 失效请求快照；清理前保存原阶段与业务类型，便于恢复阶段并输出长期诊断信息。
 	var failed_choice: Dictionary = _pending_card_choice.duplicate(true)
 	var failed_kind: String = str((failed_choice.get("context", {}) as Dictionary).get("kind", "unknown"))
+	_cancel_paced_response_prompt(request_id)
 	_pending_card_choice.clear()
 	_scheduled_ai_choice_request_id = -1
 	_ai_choice_submit_failures.erase(request_id)
@@ -2185,6 +2216,8 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
 	if RuleTimingCatalog.has_timing(choice_after_name):
 		_emit_rule_timing(choice_after_name, action.actor_id, action.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "selected_control_id":selected_control_id, "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1)))
+	# 已提交的延时提示必须立刻失效，避免空窗残留阻塞出牌窗口恢复。
+	_cancel_paced_response_prompt(int(completed_choice.get("request_id", -1)))
 	_pending_card_choice.clear()
 	state.current_phase = str(completed_choice.get("resume_phase", "play"))
 	_resolved_card_choice_uids = selected_uids.duplicate()
@@ -2208,7 +2241,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return true
 	if bool(completed_choice.get("deferred", false)):
 		# 新的 chooseToUse 必须等原 CardUseEvent 及其后续目标全部排空后再创建，避免后续响应覆盖已经提前发布的出牌请求快照。
-		if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+		if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
 			_begin_play_choice(state.current_player_id)
 		_emit_state()
 		# AI 出牌被响应或技能选择暂停后，原异步驱动已经结束；统一续接入口负责下一动作或新子选择。
@@ -3714,6 +3747,7 @@ func _submit_simultaneous_negation_choice(action: PlayerAction) -> bool:
 	runtime_response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
 	if not event_scheduler.submit_choice(runtime_response, true):
 		return _reject("事件运行时拒绝了已过期的无懈响应。")
+	_cancel_paced_response_prompt(request_id)
 	_pending_negation_choices.erase(request_id)
 	state.action_sequence += 1
 	# 当前轮共享上下文；所有请求都持有相同初始链状态，首个合法响应成为唯一写入者。
@@ -3788,7 +3822,7 @@ func _finish_simultaneous_negation_submission(context: Dictionary) -> void:
 	_resume_settlement_pipeline()
 	event_scheduler.drain()
 	# 无懈链可能是出牌阶段最后一个异步窗口；原卡牌事件排空后重新建立唯一 chooseToUse 请求。
-	if not state.game_over and state.current_phase == "play" and not has_pending_card_choice():
+	if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
 		_begin_play_choice(state.current_player_id)
 	_emit_state()
 	if not state.game_over and state.current_phase == "play" and ai_coordinator.is_ai_controlled(state.current_player_id) and not has_pending_card_choice():
@@ -3810,6 +3844,7 @@ func _close_remaining_simultaneous_negation_choices() -> void:
 		var response: ChoiceResponse = ChoiceResponse.new(request_id, int(choice_data.get("runtime_event_id", -1)), int(choice_data.get("chooser_id", -1)), false)
 		response.source = "system"
 		event_scheduler.submit_choice(response, true)
+		_cancel_paced_response_prompt(request_id)
 		_pending_negation_choices.erase(request_id)
 
 
@@ -8993,15 +9028,16 @@ func _ensure_ai_progress_after_resolution() -> void:
 	if state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id):
 		return
 	# 同步主动技能可能已经完成旧chooseToUse但未创建下一请求；统一在安全出口补齐唯一正式出牌窗口。
-	if not _has_active_play_choice():
+	# 流程间隔等待中不得补开出牌请求，否则多步技能恢复后会出现无快照的孤儿 chooseToUse 并卡住手牌。
+	if not _has_active_play_choice() and not has_pending_play_interaction():
 		_begin_play_choice(state.current_player_id)
-	if _has_active_play_choice() and not has_pending_card_choice():
+	if _has_active_play_choice() and not has_pending_play_interaction():
 		_schedule_ai_action()
 
 
 ## 安排下一次 AI 操作；令牌保证阶段变化后旧计时器不会执行。
 func _schedule_ai_action() -> void:
-	if is_gameplay_paused() or state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_card_choice() or not _has_active_play_choice():
+	if is_gameplay_paused() or state == null or state.game_over or state.current_phase != "play" or not ai_coordinator.is_ai_controlled(state.current_player_id) or has_pending_play_interaction() or not _has_active_play_choice():
 		return
 	if _scheduled_ai_drive_token == _ai_drive_token:
 		return

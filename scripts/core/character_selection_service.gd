@@ -328,8 +328,13 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 	var candidates: Array[String] = get_candidates(player_id)
 	if is_initial_leader_assignment and character_id != get_selection(player_id):
 		return "首任领袖必须保留已经公开的武将。"
-	# 全武将入口：身份局最终自选（PHASE_CUSTOM）与斗地主同时自选（PHASE_OTHERS）均可提交任意已登记武将。
-	var allows_all_characters_now: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
+	# 全武将入口：开启自选后，身份局首任领袖公开选将、最终自选与斗地主同时选将均可提交任意已登记武将。
+	# is_initial_leader_assignment 只对应 AI 首任领袖补交座次身份，真人首任领袖在 PHASE_LEADER 仍可使用全武将。
+	var allows_all_characters_now: bool = custom_assignment_enabled and (
+		phase == PHASE_LEADER
+		or phase == PHASE_CUSTOM
+		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+	)
 	if not is_initial_leader_assignment and not candidates.has(character_id) and not (allows_all_characters_now and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
 	if _is_character_selected_by_other_player(player_id, character_id):
@@ -694,12 +699,15 @@ func to_dict(viewer_id: int) -> Dictionary:
 	var local_candidates: Array[String] = []
 	if can_player_select(viewer_id):
 		local_candidates = get_candidates(viewer_id)
-	# 最终自选阶段标记；首任领袖公开选将不展示或要求座次身份控件，避免领袖因隐藏按钮无法确认。
-	# 该标记只控制PHASE_CUSTOM的全武将候选语义；首任真人领袖的座次身份权限由下方独立变量覆盖。
-	var is_custom_assignment_phase: bool = custom_assignment_enabled and (phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
 	# 当前可提交座次身份的阶段；身份局领袖/自选与斗地主全员同时选将均可携带座次身份。
 	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or (is_doudizhu_mode() and phase == PHASE_OTHERS))
-	# 首任领袖保留的最终武将；该玩家只提交座次身份，不能再次打开全武将或随机候选列表。
+	# 当前可打开“所有武将”的阶段；开启自选后，首任领袖公开选将与后续最终自选、斗地主同时选将均应显示全武将入口。
+	var allows_all_characters_now: bool = custom_assignment_enabled and (
+		phase == PHASE_LEADER
+		or phase == PHASE_CUSTOM
+		or (is_doudizhu_mode() and phase == PHASE_OTHERS)
+	)
+	# 首任领袖保留的最终武将；该状态只对应 AI 补交座次身份，真人首任领袖在 PHASE_LEADER 仍可使用全武将。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(viewer_id)
 	# 公开领袖武将 ID；斗地主不公开展示任何角色武将。
 	var public_leader_character_id: String = ""
@@ -722,8 +730,8 @@ func to_dict(viewer_id: int) -> Dictionary:
 		"locked_candidate_ids":get_locked_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replaceable_candidate_ids":get_replaceable_candidate_ids(viewer_id) if can_player_select(viewer_id) else [],
 		"replacement_cards_remaining":get_replacement_cards_remaining(viewer_id) if can_player_select(viewer_id) else 0,
-		"all_character_ids":_character_ids.duplicate() if is_custom_assignment_phase and not is_initial_leader_assignment and can_player_select(viewer_id) else [],
-		"allow_all_characters":is_custom_assignment_phase and not is_initial_leader_assignment and can_player_select(viewer_id),
+		"all_character_ids":_character_ids.duplicate() if allows_all_characters_now and not is_initial_leader_assignment and can_player_select(viewer_id) else [],
+		"allow_all_characters":allows_all_characters_now and not is_initial_leader_assignment and can_player_select(viewer_id),
 		"allow_custom_assignment":allows_custom_assignment_now and can_player_select(viewer_id),
 		"seat_options":get_available_seat_numbers(viewer_id) if allows_custom_assignment_now and can_player_select(viewer_id) else [],
 		"identity_options":get_available_identities(viewer_id) if allows_custom_assignment_now and can_player_select(viewer_id) else [],

@@ -183,6 +183,9 @@ func _finish_recast_sequence(context: Dictionary) -> void:
 	announce_activation({"target_ids":_int_values(context.get("player_ids", []) as Array), "recast_count":int(context.get("recast_count", 0)), "draw_count":draw_count})
 	if draw_count > 0:
 		host.call("draw", owner_player_id, draw_count)
+	# 序列可能结束在流程间隔回调中，此时没有选择提交栈去自动恢复出牌窗口，需显式重新开放。
+	if host != null and host.has_method("resume_play_phase_choice"):
+		host.call("resume_play_phase_choice")
 
 
 ## 将弱类型数组转换为稳定整数数组。

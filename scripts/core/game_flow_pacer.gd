@@ -39,6 +39,23 @@ func has_pending(task_key: String) -> bool:
 	return _task_tokens_by_key.has(task_key)
 
 
+## 返回是否存在任意尚未执行的流程延时任务；供测试与全量取消前查询，不直接作为出牌恢复条件。
+func has_any_pending() -> bool:
+	return not _task_tokens_by_key.is_empty()
+
+
+## 返回是否存在会创建下一段技能选择的流程间隔任务。
+## 排除 `response_prompt:*` 与 `phase_transition`：前者只延时 UI 提示，后者只推进阶段；二者残留不得阻塞出牌阶段 chooseToUse 恢复。
+func has_pending_skill_interval() -> bool:
+	for task_key_variant: Variant in _task_tokens_by_key.keys():
+		# 当前业务键；技能多步间隔使用 `skill_id:owner_id:task_name` 格式。
+		var task_key: String = str(task_key_variant)
+		if task_key.begins_with("response_prompt:") or task_key == "phase_transition":
+			continue
+		return true
+	return false
+
+
 ## 等待指定秒数后尝试执行任务；计时器服从场景树暂停，暂停期间不会消耗流程间隔。
 func _run_after_delay(task_key: String, task_token: int, delay_seconds: float, callback: Callable) -> void:
 	await get_tree().create_timer(delay_seconds, false).timeout

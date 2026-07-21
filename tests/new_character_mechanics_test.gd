@@ -111,6 +111,13 @@ func _create_controller() -> void:
 
 ## 为当前单项测试创建最小权威状态；一号领袖、二号反贼、三号及以后忠臣使AI态度确定。
 func _reset_state(player_count: int) -> void:
+	# 专项场景隔离：取消上一场景残留的流程延时与出牌请求标记；不改动 game_flow_interval_seconds，由各场景自行设置。
+	if _controller.game_flow_pacer != null:
+		_controller.game_flow_pacer.cancel_all()
+	_controller._play_choice_request_id = -1
+	_controller._play_choice_event_id = -1
+	_controller._play_choice_actor_id = -1
+	_controller._play_choice_match_id = ""
 	_controller.event_scheduler.reset()
 	_controller.state = GameState.new()
 	_controller.state.match_id = "new-character-mechanics"
@@ -1540,6 +1547,8 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	if not _controller.state.get_player(1).hand.has(xingqi_trick_card) or _controller.state.draw_pile.back() != xingqi_remaining_card:
 		return _fail("xingqi_result target_hand=%s top=%s" % [_controller.state.get_player(1).hand, _controller.state.draw_pile.back().uid if not _controller.state.draw_pile.is_empty() else -1])
 	_reset_state(3)
+	# 星落相邻选牌必须使用非零流程间隔，才能复现空窗期误开 chooseToUse 的卡死路径。
+	_controller.game_flow_interval_seconds = 0.05
 	# 星落自身与其他角色的红色锦囊；两项条件同时满足时持有者累计摸三张。
 	var xingluo_self_card: CardInstance = _add_hand_card(0, "wuzhong", "heart", 6)
 	var xingluo_first_other_card: CardInstance = _add_hand_card(1, "guohe", "diamond", 7)
@@ -1554,6 +1563,9 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	# 相邻重铸选择必须经过全局流程间隔，避免自身与其他角色的选牌弹窗在同一帧无缝替换。
 	if _controller.has_pending_card_choice():
 		return _fail("xingluo_missing_prompt_interval")
+	# 间隔空窗期不得提前打开出牌请求，否则下一段选牌会与孤儿 chooseToUse 冲突并卡住。
+	if _controller.call("_has_active_play_choice") or not _controller.has_pending_play_interaction():
+		return _fail("xingluo_interval_opened_play_choice")
 	await get_tree().create_timer(_controller.game_flow_interval_seconds + 0.05).timeout
 	var xingluo_first_other_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
 	if int((xingluo_first_other_choice.get("context", {}) as Dictionary).get("current_player_id", -1)) != 1 or not _submit_pending_choice(0, [xingluo_first_other_card.uid], [], true):
@@ -1567,6 +1579,9 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 		return _fail("xingluo_second_other_choice")
 	if _controller.state.get_player(0).hand.size() != 4 or _controller.state.get_player(1).hand.size() != 1 or _controller.state.get_player(2).hand.size() != 1:
 		return _fail("xingluo_rewards hand=%d/%d/%d" % [_controller.state.get_player(0).hand.size(), _controller.state.get_player(1).hand.size(), _controller.state.get_player(2).hand.size()])
+	# 星落整段结束后必须恢复正式出牌窗口，否则出牌阶段会卡在无 chooseToUse 的状态。
+	if not _controller.call("_has_active_play_choice") or _controller.has_pending_card_choice() or _controller.has_pending_play_interaction():
+		return _fail("xingluo_play_choice_resume active=%s pending=%s interaction=%s" % [_controller.call("_has_active_play_choice"), _controller.has_pending_card_choice(), _controller.has_pending_play_interaction()])
 	_reset_state(2)
 	# 智识补牌来源；使用锦囊后的确认应只摸一张并保留可取消选择协议。
 	var zhishi_draw_card: CardInstance = _add_draw_pile_card("sha", "spade", 8)
