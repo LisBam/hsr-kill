@@ -2886,11 +2886,25 @@ func _toggle_inline_card_choice(card_uid: int) -> void:
 			_inline_selected_card_uids.append(card_uid)
 	# 组合技能切换材料牌后重新校验目标；旧目标不在新映射中时立即清除临时选择。
 	if str(_inline_card_choice.get("choice_type", "card")) == "card_target":
+		# 当前请求上下文；材料目标映射和自动目标映射都只读取这份可序列化规则数据。
+		var inline_context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
 		# 当前材料牌对应的合法目标；切换材料后用于清理已经失效的旧目标。
 		var legal_target_ids: Array[int] = _get_selectable_target_ids()
 		for selected_target_id: int in _selected_target_ids.duplicate():
 			if not legal_target_ids.has(selected_target_id):
 				_selected_target_ids.erase(selected_target_id)
+		# 自身目标虚拟牌由规则上下文预填唯一合法目标；必须在旧目标清理后写入，避免“下一目标为空”误删已经完整的自身组合。
+		if _inline_selected_card_uids.size() == 1:
+			# 材料UID到唯一自动目标数组的映射；字符串键兼容网络快照JSON化后的字典结构。
+			var auto_target_ids_by_card_id: Dictionary = inline_context.get("auto_target_ids_by_card_id", {}) as Dictionary
+			# 当前唯一选中材料UID；多选请求不会进入该自动预填分支。
+			var selected_material_uid: int = _inline_selected_card_uids[0]
+			# 当前材料的规则自动目标；未声明时保留玩家手动选择流程。
+			var auto_target_ids: Array = auto_target_ids_by_card_id.get(str(selected_material_uid), auto_target_ids_by_card_id.get(selected_material_uid, [])) as Array
+			if not auto_target_ids.is_empty():
+				_selected_target_ids.clear()
+				for auto_target_id_variant: Variant in auto_target_ids:
+					_selected_target_ids.append(int(auto_target_id_variant))
 	error_label.text = ""
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()

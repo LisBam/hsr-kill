@@ -83,7 +83,7 @@ func _run() -> void:
 		return
 	if not _test_misha_and_alan_skills():
 		return
-	if not _test_aisida_heita_xiluwa_skills():
+	if not await _test_aisida_heita_xiluwa_skills():
 		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
@@ -1361,7 +1361,7 @@ func _test_card_selection_panel_disabled_cards_and_arrangement_drag() -> bool:
 	var xingqi_non_trick_view: CardView = card_selection_panel._card_views.get(99001) as CardView
 	# 锦囊正式牌面；应保持可点选，证明展示候选没有误把全部牌暗置。
 	var xingqi_trick_view: CardView = card_selection_panel._card_views.get(99002) as CardView
-	if xingqi_non_trick_view == null or xingqi_non_trick_view.is_interactable or xingqi_trick_view == null or not xingqi_trick_view.is_interactable:
+	if xingqi_non_trick_view == null or xingqi_non_trick_view.is_interactable or not bool(xingqi_non_trick_view.get("_dim_when_disabled")) or xingqi_trick_view == null or not xingqi_trick_view.is_interactable:
 		card_selection_panel.queue_free()
 		return _fail("xingqi_disabled_presentation non_trick=%s trick=%s" % [xingqi_non_trick_view.is_interactable if xingqi_non_trick_view != null else true, xingqi_trick_view.is_interactable if xingqi_trick_view != null else false])
 	# 机巧受保护防具；与可弃置武器共同展示时必须保持可见但不可选。
@@ -1375,7 +1375,7 @@ func _test_card_selection_panel_disabled_cards_and_arrangement_drag() -> bool:
 	# 受保护防具与可弃置武器的正式牌面；暗置不能只依赖实际点击校验，必须在视觉上可辨认。
 	var protected_armor_view: CardView = card_selection_panel._card_views.get(99003) as CardView
 	var discardable_weapon_view: CardView = card_selection_panel._card_views.get(99004) as CardView
-	if protected_armor_view == null or protected_armor_view.is_interactable or discardable_weapon_view == null or not discardable_weapon_view.is_interactable:
+	if protected_armor_view == null or protected_armor_view.is_interactable or not bool(protected_armor_view.get("_dim_when_disabled")) or discardable_weapon_view == null or not discardable_weapon_view.is_interactable:
 		card_selection_panel.queue_free()
 		return _fail("jiqiao_disabled_presentation armor=%s weapon=%s" % [protected_armor_view.is_interactable if protected_armor_view != null else true, discardable_weapon_view.is_interactable if discardable_weapon_view != null else false])
 	# 双行排序请求；两张牌均为正式可拖动候选，确保释放回调会重建其所在行。
@@ -1429,7 +1429,9 @@ func _test_misha_and_alan_skills() -> bool:
 	var chuanchong_context: Dictionary = chuanchong_choice.get("context", {}) as Dictionary
 	var chuanchong_target_combinations: Dictionary = chuanchong_context.get("target_combinations_by_card_id", {}) as Dictionary
 	var chuanchong_material_combinations: Array = chuanchong_target_combinations.get(str(chuanchong_material.uid), []) as Array
-	if str(chuanchong_choice.get("choice_type", "")) != "card_target" or str(chuanchong_context.get("kind", "")) != "chuanchong_use" or chuanchong_material_combinations != [[0]]:
+	# 方块材料的自身目标预填；界面读取此映射后无需玩家额外点击自己。
+	var chuanchong_auto_targets: Array = ((chuanchong_context.get("auto_target_ids_by_card_id", {}) as Dictionary).get(str(chuanchong_material.uid), []) as Array)
+	if str(chuanchong_choice.get("choice_type", "")) != "card_target" or str(chuanchong_context.get("kind", "")) != "chuanchong_use" or chuanchong_material_combinations != [[0]] or chuanchong_auto_targets != [0]:
 		return _fail("chuanchong_card_target_choice choice=%s" % [chuanchong_choice])
 	if not _submit_pending_choice(0, [chuanchong_material.uid], [0], true):
 		return false
@@ -1514,7 +1516,7 @@ func _test_misha_and_alan_skills() -> bool:
 
 ## 验证艾丝妲、黑塔与希露瓦的私有选牌、重铸奖励、装备保护、主要阶段跳过和额外回合确认。
 func _test_aisida_heita_xiluwa_skills() -> bool:
-	_reset_state(2)
+	_reset_state(3)
 	# 星祈观看的非锦囊余牌；在锦囊分配后进入双行牌堆排序请求。
 	var xingqi_remaining_card: CardInstance = _add_draw_pile_card("shan", "club", 4)
 	# 星祈观看的锦囊牌；本测试将其交给二号角色。
@@ -1537,19 +1539,34 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 		return _fail("xingqi_arrangement_choice")
 	if not _controller.state.get_player(1).hand.has(xingqi_trick_card) or _controller.state.draw_pile.back() != xingqi_remaining_card:
 		return _fail("xingqi_result target_hand=%s top=%s" % [_controller.state.get_player(1).hand, _controller.state.draw_pile.back().uid if not _controller.state.draw_pile.is_empty() else -1])
-	_reset_state(2)
+	_reset_state(3)
 	# 星落自身与其他角色的红色锦囊；两项条件同时满足时持有者累计摸三张。
 	var xingluo_self_card: CardInstance = _add_hand_card(0, "wuzhong", "heart", 6)
-	var xingluo_other_card: CardInstance = _add_hand_card(1, "guohe", "diamond", 7)
-	for draw_rank: int in range(1, 6):
+	var xingluo_first_other_card: CardInstance = _add_hand_card(1, "guohe", "diamond", 7)
+	var xingluo_second_other_card: CardInstance = _add_hand_card(2, "shunshou", "heart", 8)
+	for draw_rank: int in range(1, 7):
 		_add_draw_pile_card("shan", "club", draw_rank)
 	var xingluo: SkillDefinition = _install_single_skill(0, "xingluo")
-	if xingluo == null or not xingluo.activate({"target_ids":[1]}).is_empty():
+	if xingluo == null or not xingluo.activate({"target_ids":[1, 2]}).is_empty():
 		return _fail("xingluo_activate")
-	if not _submit_pending_choice(0, [xingluo_self_card.uid], [], true) or not _submit_pending_choice(0, [xingluo_other_card.uid], [], true):
+	if not _submit_pending_choice(0, [xingluo_self_card.uid], [], true):
 		return false
-	if _controller.state.get_player(0).hand.size() != 4 or _controller.state.get_player(1).hand.size() != 1:
-		return _fail("xingluo_rewards hand=%d/%d" % [_controller.state.get_player(0).hand.size(), _controller.state.get_player(1).hand.size()])
+	# 相邻重铸选择必须经过全局流程间隔，避免自身与其他角色的选牌弹窗在同一帧无缝替换。
+	if _controller.has_pending_card_choice():
+		return _fail("xingluo_missing_prompt_interval")
+	await get_tree().create_timer(_controller.game_flow_interval_seconds + 0.05).timeout
+	var xingluo_first_other_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if int((xingluo_first_other_choice.get("context", {}) as Dictionary).get("current_player_id", -1)) != 1 or not _submit_pending_choice(0, [xingluo_first_other_card.uid], [], true):
+		return _fail("xingluo_first_other_choice")
+	# 两名其他角色都重铸时，每一段相邻弹窗都使用同一节奏器间隔。
+	if _controller.has_pending_card_choice():
+		return _fail("xingluo_second_missing_prompt_interval")
+	await get_tree().create_timer(_controller.game_flow_interval_seconds + 0.05).timeout
+	var xingluo_second_other_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if int((xingluo_second_other_choice.get("context", {}) as Dictionary).get("current_player_id", -1)) != 2 or not _submit_pending_choice(0, [xingluo_second_other_card.uid], [], true):
+		return _fail("xingluo_second_other_choice")
+	if _controller.state.get_player(0).hand.size() != 4 or _controller.state.get_player(1).hand.size() != 1 or _controller.state.get_player(2).hand.size() != 1:
+		return _fail("xingluo_rewards hand=%d/%d/%d" % [_controller.state.get_player(0).hand.size(), _controller.state.get_player(1).hand.size(), _controller.state.get_player(2).hand.size()])
 	_reset_state(2)
 	# 智识补牌来源；使用锦囊后的确认应只摸一张并保留可取消选择协议。
 	var zhishi_draw_card: CardInstance = _add_draw_pile_card("sha", "spade", 8)
@@ -1639,6 +1656,10 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	for anke_card: CardInstance in anke_cards:
 		anke_uids.append(anke_card.uid)
 	anke.call("_on_cards_discarded", RuleEvent.new("cardsDiscardAfter", -1, -1, {"card_uids":anke_uids}))
+	# 其他角色回合结束不能触发“回合结束时”的安可；只有技能持有者自己的回合结束才会询问。
+	anke.call("_on_turn_end", RuleEvent.new("phaseEnd", 1, 1, {"turn_number":_controller.state.turn_number}))
+	if _controller.has_pending_card_choice():
+		return _fail("anke_other_player_turn_end")
 	anke.call("_on_turn_end", RuleEvent.new("phaseEnd", 0, 0, {"turn_number":_controller.state.turn_number}))
 	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [], true):
 		return _fail("anke_choice")

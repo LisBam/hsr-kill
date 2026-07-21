@@ -32,11 +32,11 @@ func _init() -> void:
 	})
 
 
-## 订阅每个回合的开始、全局弃牌移动与回合结束；统计不区分弃牌原因或牌的原持有者。
+## 订阅每个回合的开始、全局弃牌移动与持有者自己的回合结束；统计不区分弃牌原因或牌的原持有者。
 func install() -> void:
 	subscribe_timing("phaseBefore", _on_turn_before, "global")
 	subscribe_timing("cardsDiscardAfter", _on_cards_discarded, "global")
-	subscribe_timing("phaseEnd", _on_turn_end, "global")
+	subscribe_timing("phaseEnd", _on_turn_end, "player")
 
 
 ## 新回合开始时清空花色集合，并在新轮到来时恢复三次额度。
@@ -58,8 +58,10 @@ func _on_cards_discarded(event: RuleEvent) -> void:
 			_discarded_suits_this_turn[card.suit] = true
 
 
-## 回合结束时满足四花色且本轮未达上限则询问；取消不会消耗次数。
-func _on_turn_end(_event: RuleEvent) -> void:
+## 持有者自己的回合结束时满足四花色且本轮未达上限则询问；取消不会消耗次数。
+func _on_turn_end(event: RuleEvent) -> void:
+	if event.player_id != owner_player_id:
+		return
 	if _discarded_suits_this_turn.size() < REQUIRED_SUIT_COUNT or _uses_this_round >= MAX_USES_PER_ROUND:
 		return
 	request_card_selection("安可", "是否发动【安可】执行一个额外的回合？", [], 0, 0, true, {"kind":"anke_confirm", "ai_allow_confirm":true})
