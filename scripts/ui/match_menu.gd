@@ -48,6 +48,9 @@ signal main_menu_requested
 ## 自动身份标记复选框；勾选状态直接映射全局设置，只影响其他角色的本地推测徽记。
 @onready var _auto_identity_marking_checkbox: CheckBox = %AutoIdentityMarkingCheckBox
 
+## 离线控制全部角色开关；只影响下一局离线对局，局域网房主与客户端均隐藏。
+@onready var _control_all_characters_checkbox: CheckBox = %ControlAllCharactersCheckBox
+
 ## 自选全武将、座次与身份开关；仅影响之后由本机或房主创建的新对局。
 @onready var _custom_character_assignment_checkbox: CheckBox = %CustomCharacterAssignmentCheckBox
 
@@ -102,6 +105,9 @@ signal main_menu_requested
 ## 当前权威控件是否允许显示；默认true兼容离线对局，局域网客户端由牌桌协调器关闭。
 var _authority_controls_visible: bool = true
 
+## 当前是否处于纯离线模式；false时控制全部角色选项无条件隐藏。
+var _offline_controls_visible: bool = true
+
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
 func _ready() -> void:
@@ -136,6 +142,9 @@ func _ready() -> void:
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	_control_all_characters_checkbox.set_pressed_no_signal(GameSettings.control_all_characters_enabled)
+	_control_all_characters_checkbox.toggled.connect(GameSettings.set_control_all_characters_enabled)
+	GameSettings.control_all_characters_changed.connect(_control_all_characters_checkbox.set_pressed_no_signal)
 	_custom_character_assignment_checkbox.set_pressed_no_signal(GameSettings.custom_character_assignment_enabled)
 	_custom_character_assignment_checkbox.toggled.connect(GameSettings.set_custom_character_assignment_enabled)
 	GameSettings.custom_character_assignment_changed.connect(_custom_character_assignment_checkbox.set_pressed_no_signal)
@@ -242,9 +251,10 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_character_replacement_count_row.visible = controls_visible
 	_character_candidate_count_row.visible = controls_visible
 	_restart_button.visible = controls_visible
+	_control_all_characters_checkbox.visible = controls_visible and _offline_controls_visible
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
-	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
+	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or focus_owner == _control_all_characters_checkbox or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
 		_main_menu_button.grab_focus()
 
 
@@ -252,6 +262,14 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 func restore_after_restart_failure() -> void:
 	_menu_panel.visible = true
 	_restart_button.grab_focus()
+
+
+## 设置离线专属控件是否可见；联机房主虽然拥有权威设置权限，也不能启用控制全部角色。
+func set_offline_controls_visible(controls_visible: bool) -> void:
+	_offline_controls_visible = controls_visible
+	_control_all_characters_checkbox.visible = _authority_controls_visible and _offline_controls_visible
+	if not _control_all_characters_checkbox.visible and _control_all_characters_checkbox.has_focus():
+		_control_all_characters_checkbox.release_focus()
 
 
 ## 按全局名称模式刷新菜单下拉选择，不创建第二份名称状态。
@@ -271,6 +289,7 @@ func refresh_ui_style() -> void:
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_control_all_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))

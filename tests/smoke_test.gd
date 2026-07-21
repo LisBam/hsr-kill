@@ -70,6 +70,9 @@ const MAX_FRAMES: int = 1200
 ## 测试用对局控制器；在 _initialize 中按正式场景的组件结构装配。
 var _controller: MatchController
 
+## 测试开始前的离线全角色控制设置；烟雾用例要求保留“单一真人+其余AI”的历史前提，成功退出时原样恢复内存值。
+var _original_control_all_characters_enabled: bool = false
+
 
 ## 创建纯 AI 对局并开始异步帧检查。
 func _ready() -> void:
@@ -79,6 +82,9 @@ func _ready() -> void:
 ## 执行数据断言和纯 AI 对局烟雾测试。
 func _run() -> void:
 	await get_tree().process_frame
+	_original_control_all_characters_enabled = GameSettings.control_all_characters_enabled
+	# 直接修改测试进程内存而不调用持久化setter；玩家正式设置文件不会因烟雾测试被改写。
+	GameSettings.control_all_characters_enabled = false
 	# 数据校验错误；任何非空结果都说明配置不能安全开局。
 	var validation_errors: Array[String] = GameDatabase.validation_errors
 	if not validation_errors.is_empty():
@@ -1214,6 +1220,7 @@ func _run() -> void:
 ## 输出成功结果并释放纯 AI 测试控制器；额外等待一帧让零延迟 AI 计时器完成断连，避免测试退出时残留 SceneTreeTimer。
 func _finish_success(message: String) -> void:
 	print(message)
+	GameSettings.control_all_characters_enabled = _original_control_all_characters_enabled
 	if _controller != null and is_instance_valid(_controller):
 		# 收尾令牌；递增后所有已经创建的 AI 延迟任务都会在超时回调中判定失效。
 		_controller._ai_drive_token += 1

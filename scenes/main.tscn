@@ -305,6 +305,22 @@ offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
 
+[node name="ControlAllCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "控制所有角色（下局生效）"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/ControlAllCharactersCheckBox"]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
+
 [node name="CustomCharacterAssignmentCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320001]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 30)
@@ -1508,6 +1524,22 @@ button_pressed = true
 text = "自动标记身份"
 
 [node name="IdentityMarkingIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAutoIdentityMarkingCheckBox" unique_id=947762808]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
+
+[node name="MainMenuControlAllCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "控制所有角色"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuControlAllCharactersCheckBox"]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
