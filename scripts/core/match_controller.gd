@@ -2440,12 +2440,21 @@ func format_target_log_names(target_ids: Array) -> String:
 	return "、".join(names)
 
 
-## 返回实体牌在日志中的【牌名】文本；不含花色点数，便于统一阅读。
+## 返回实体牌在日志中的显示文本；含花色与点数，格式如“♠A【杀】”，虚拟牌无花色点数时仅显示【牌名】。
 func format_card_log_name(card: CardInstance) -> String:
 	if card == null:
 		return "【未知牌】"
+	# 当前卡牌定义；用于解析当前名称模式。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	return "【%s】" % GameSettings.resolve_card_name(definition)
+	# 牌名主体；统一包在中文方括号内，与历史日志阅读习惯一致。
+	var card_name_text: String = "【%s】" % GameSettings.resolve_card_name(definition)
+	# 点数字符串；11至13显示为J、Q、K，1显示为A；无点数的虚拟牌不追加点数。
+	var rank_text: String = "" if card.rank <= 0 else str({1:"A", 11:"J", 12:"Q", 13:"K"}.get(card.rank, str(card.rank)))
+	# 花色显示文本；仅四花色输出符号，none 或未知花色不追加前缀。
+	var suit_text: String = {"spade":"♠", "heart":"♥", "club":"♣", "diamond":"♦"}.get(card.suit, "")
+	if suit_text.is_empty() and rank_text.is_empty():
+		return card_name_text
+	return "%s%s%s" % [suit_text, rank_text, card_name_text]
 
 
 ## 返回定义 ID 对应的【牌名】日志文本。

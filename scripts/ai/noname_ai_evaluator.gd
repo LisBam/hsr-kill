@@ -15,6 +15,12 @@ const CARD_COST_WEIGHT: float = 0.08
 ## 获得或失去1张牌的统一基础收益单位；所有直接牌差收益必须从该常量换算，不能在技能内另设比例。
 const CARD_RESOURCE_VALUE: float = 1.0
 
+## 敌方判定区延时锦囊对“弃置/获得”选择的负价值；拆走敌方【乐】【兵】等等于帮其解控，因此取负值。
+const HOSTILE_JUDGMENT_DISCARD_VALUE: float = -8.0
+
+## 友方判定区延时锦囊对“弃置/获得”选择的正价值；帮助友方解除延时锦囊是明确正收益。
+const FRIENDLY_JUDGMENT_DISCARD_VALUE: float = 6.0
+
 ## 回复或失去1点体力的统一基础收益单位；固定等于2张牌，保证全局AI遵循“1点体力=2张牌”。
 const HP_RESOURCE_VALUE: float = CARD_RESOURCE_VALUE * 2.0
 
@@ -495,18 +501,45 @@ func get_card_value_by_id(card_id: String, authoritative_snapshot: Dictionary, o
 
 
 ## 返回选择请求中某个候选实体的价值；隐藏牌只按2分未知资源估值，不猜测未公开牌面。
+## 判定区候选按敌我态度重估：拆敌方延时锦囊为负收益，拆友方延时锦囊为正收益，禁止AI无脑弃置/获得敌人判定区。
 func get_choice_card_value(authoritative_snapshot: Dictionary, choice_request: Dictionary, card_uid: int, owner_id: int) -> float:
 	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
 		# 当前候选快照；UID 不匹配时继续寻找。
 		var candidate: Dictionary = candidate_variant as Dictionary
 		if int(candidate.get("uid", -1)) != card_uid:
 			continue
+		# 候选所在区域；判定区与手牌/装备使用不同收益语义。
+		var candidate_zone: String = str(candidate.get("zone", ""))
+		# 候选实际持有者；过河拆桥/顺手牵羊的区域归属与动作发起者 owner_id 不同。
+		var candidate_owner_id: int = int(candidate.get("owner_id", -1))
+		if candidate_zone == "judgment":
+			return _get_judgment_choice_card_value(authoritative_snapshot, owner_id, candidate_owner_id, candidate)
 		if not bool(candidate.get("visible", false)):
 			return 2.0
 		# 可见牌面；定义 ID 用于读取对应卡牌文件的 AI 价值。
 		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
 		return get_card_value_by_id(str(card_data.get("definition_id", "")), authoritative_snapshot, owner_id)
 	return 2.0
+
+
+## 返回判定区候选对动作发起者的选择价值；敌方延时锦囊取负值，友方取正值，未知阵营按轻微负值保守处理。
+func _get_judgment_choice_card_value(authoritative_snapshot: Dictionary, actor_id: int, candidate_owner_id: int, candidate: Dictionary) -> float:
+	# 判定区牌面；缺失定义时仍按延时控制牌处理。
+	var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+	# 延时锦囊定义 ID；用于必要时区分闪电与乐/兵的价值，当前统一按解控收益处理。
+	var definition_id: String = str(card_data.get("definition_id", ""))
+	if candidate_owner_id < 0:
+		return HOSTILE_JUDGMENT_DISCARD_VALUE
+	# 动作发起者对判定区持有者的态度；负值为敌，正值为友。
+	var attitude: float = get_attitude(authoritative_snapshot, actor_id, candidate_owner_id)
+	if attitude < 0.0:
+		# 敌方判定区：弃置/获得等于帮其解控，收益为负；闪电稍轻但仍为负，避免误拆。
+		return HOSTILE_JUDGMENT_DISCARD_VALUE * (0.6 if definition_id == "shandian" else 1.0)
+	if attitude > 0.0:
+		# 友方判定区：帮助解除延时锦囊是正收益。
+		return FRIENDLY_JUDGMENT_DISCARD_VALUE * (0.6 if definition_id == "shandian" else 1.0)
+	# 态度为0时保守视作轻微负收益，避免在身份不明时主动拆人判定区。
+	return HOSTILE_JUDGMENT_DISCARD_VALUE * 0.5
 
 
 ## 按稳定 UID 返回选择请求中的候选副本；缺失候选返回空字典，调用方必须按未知资源而非猜测牌面处理。

@@ -39,8 +39,11 @@ func _on_preparation_begin(_event: RuleEvent) -> void:
 		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
 		if str(GameDatabase.get_card(str(card_data.get("definition_id", ""))).get("type", "")) == "trick":
 			trick_candidates.append(candidate)
-	var minimum_select: int = 1 if not trick_candidates.is_empty() else 0
-	request_card_selection("星祈", "请选择其中一张锦囊牌", trick_candidates, minimum_select, 1, true, {"kind":"xingqi_trick", "viewed_card_uids":viewed_uids, "display_candidates":viewed_candidates, "ai_allow_confirm":trick_candidates.is_empty()})
+	# 观看牌中没有任何锦囊时，跳过选锦囊与选受益角色，直接进入牌堆顶底排布，避免空候选弹窗后卡死。
+	if trick_candidates.is_empty():
+		_begin_arrangement(viewed_uids)
+		return
+	request_card_selection("星祈", "请选择其中一张锦囊牌", trick_candidates, 1, 1, true, {"kind":"xingqi_trick", "viewed_card_uids":viewed_uids, "display_candidates":viewed_candidates})
 
 
 ## 恢复锦囊、受益目标或最终牌堆排序选择。

@@ -22,6 +22,7 @@ func _init() -> void:
 
 
 ## 分别校验主动使用与响应入口；响应时保守要求至少2点体力，避免费用濒死与父响应窗口互相覆盖。
+## 主动入口必须复用虚拟雷【杀】完整合法性（含阶段次数上限），保证用杀次数用尽后按钮立即熄灭。
 func can_activate(context: Dictionary = {}) -> bool:
 	if host == null:
 		return false
@@ -32,7 +33,12 @@ func can_activate(context: Dictionary = {}) -> bool:
 		return owner.hp > HP_COST and (context.get("response_patterns", []) as Array).has("sha")
 	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
-	return not _get_legal_target_ids().is_empty()
+	# 当前仍可选的雷【杀】目标；空列表表示距离或状态上已无目标。
+	var legal_target_ids: Array[int] = _get_legal_target_ids()
+	if legal_target_ids.is_empty():
+		return false
+	# 用任意一名合法目标复核虚拟用牌规则；play_limit 用尽时 validate 会失败，按钮同步熄灭。
+	return str(host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, [legal_target_ids[0]])) == ""
 
 
 ## 发动倾力；响应入口只支付费用，控制器随后建立无材料虚拟响应，主动入口则选择雷【杀】目标。
