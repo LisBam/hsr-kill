@@ -17,6 +17,9 @@ const MAX_HAND_CARD_EXTRA_PLAY_PHASE_VALUE: float = 3.5
 ## 自身没有任何可用手牌或满足条件的主动技能时的确认评分；固定-20分确保可取消询问选择放弃。
 const SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE: float = -20.0
 
+## 非友方目标或任何没有实际行动机会的目标确认评分；固定-20分抵消通用选择的微弱基础正分。
+const INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE: float = -20.0
+
 
 ## 写入技能静态信息；技能描述严格保持设计原文。
 func _init() -> void:
@@ -75,11 +78,15 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_id: int = int(context.get("target_id", -1))
 	# 当前目标的实际额外阶段机会；空手、仅响应牌或技能材料不满足时会返回0。
 	var extra_play_phase_value: float = _estimate_extra_play_phase_value(authoritative_snapshot, target_id)
-	# 娜塔莎自身没有可用行动时不能为消耗次数而发动；药理必须持有红色普通手牌才算可用机会。
-	if target_id == owner_player_id and is_zero_approx(extra_play_phase_value):
-		return SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE
+	# 当前目标关系；敌方与中立目标不会因本技能获得额外行动，避免身份置信度较低时被通用基础分误推为确认。
+	var target_attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	if target_attitude <= 0.0:
+		return INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE
+	# 没有可用牌或满足条件技能的角色都必须明确取消；自身沿用专属常量，其他友方使用通用无效目标常量。
+	if is_zero_approx(extra_play_phase_value):
+		return SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE if target_id == owner_player_id else INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE
 	# 当前发动收益；正值表示立即使用本轮额度比取消更有利。
-	var current_value: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) / 5.0 * extra_play_phase_value
+	var current_value: float = target_attitude / 5.0 * extra_play_phase_value
 	# 后续保留价值；只考虑本轮尚未行动、手中明确拥有【药】且对娜塔莎友好的角色。
 	var future_value: float = _best_future_candidate_value(authoritative_snapshot, target_id, evaluator)
 	return current_value - future_value
@@ -171,12 +178,19 @@ func _is_snapshot_card_playable(authoritative_snapshot: Dictionary, target: Dict
 	var target_mode: String = str(definition.get("target_mode", ""))
 	if target_mode == "response_only":
 		return false
+	# 【酒】使用次数属于整回合限制；额外出牌阶段不会重置 wine_used，已使用时不能构成任何行动机会。
+	if str(definition.get("id", "")) == "jiu" and bool(target.get("wine_used", false)):
+		return false
 	if target_mode == "self_wounded":
 		return int(target.get("hp", 0)) < int(target.get("max_hp", 0))
-	if target_mode in ["self", "all_players"]:
+	if target_mode in ["self", "all_players", "one_or_two"]:
 		return true
 	if target_mode == "single_with_hand":
 		return _has_snapshot_alive_player_with_hand(authoritative_snapshot)
+	if target_mode == "single_other_with_cards":
+		return _has_snapshot_other_alive_player_with_cards(authoritative_snapshot, int(target.get("player_id", -1)))
+	if target_mode == "weapon_holder":
+		return _has_snapshot_other_weapon_holder(authoritative_snapshot, int(target.get("player_id", -1)))
 	return _has_snapshot_other_alive_player(authoritative_snapshot, int(target.get("player_id", -1)))
 
 
@@ -215,6 +229,30 @@ func _has_snapshot_alive_player_with_hand(authoritative_snapshot: Dictionary) ->
 		# 当前候选角色；必须在场且公开手牌数量大于0才能满足目标模式。
 		var player: Dictionary = player_variant as Dictionary
 		if bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)) and int(player.get("hand_count", 0)) > 0:
+			return true
+	return false
+
+
+## 判断快照中是否存在区域内至少一张牌的其他存活角色；顺手牵羊与过河拆桥等目标模式使用该条件。
+func _has_snapshot_other_alive_player_with_cards(authoritative_snapshot: Dictionary, target_id: int) -> bool:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前候选角色；手牌、装备或判定区任一区域非空即可成为区域牌操作目标。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) == target_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		if int(player.get("hand_count", 0)) > 0 or not (player.get("equipment", {}) as Dictionary).is_empty() or not (player.get("judgment_area", []) as Array).is_empty():
+			return true
+	return false
+
+
+## 判断快照中是否存在装备武器的其他存活角色；借刀杀人至少需要该公开前置条件才可能形成行动。
+func _has_snapshot_other_weapon_holder(authoritative_snapshot: Dictionary, target_id: int) -> bool:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前候选角色；只读取公开装备区，不猜测隐藏手牌是否包含【杀】。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) == target_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		if not ((player.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary).is_empty():
 			return true
 	return false
 

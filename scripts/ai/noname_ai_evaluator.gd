@@ -469,6 +469,9 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	var currently_negated: bool = bool(context.get("negated", false))
 	# 原效果从响应者视角的收益；正数表示希望它生效，负数表示希望它失效。
 	var effect_utility: float = target_result * attitude
+	# 当前锦囊源码；复合收益锦囊可结合来源与响应者关系修正静态目标结果，但不能改变无懈奇偶规则。
+	if trick_definition_instance != null:
+		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
 	return effect_utility > 0.0 if currently_negated else effect_utility < 0.0
 
 

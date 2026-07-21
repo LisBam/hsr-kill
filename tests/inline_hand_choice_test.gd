@@ -288,6 +288,16 @@ func _run() -> void:
 	var public_action_row: HBoxContainer = selection_panel.get("_action_row") as HBoxContainer
 	# 公共牌位视图映射；领取牌仍以原 UID 留在固定位置。
 	var public_card_views: Dictionary = selection_panel.get("_card_views") as Dictionary
+	# 选择窗口悬停信息历史；明置公共牌即使处于旁观只读状态也必须像手牌一样转发完整牌面说明。
+	var modal_hover_information: Array[Dictionary] = []
+	selection_panel.information_requested.connect(func(information: Dictionary, _anchor_rect: Rect2) -> void: modal_hover_information.append(information.duplicate(true)))
+	# 未领取五谷牌面；直接调用正式CardView悬停入口验证选择面板没有吞掉信息信号。
+	var public_hover_card: CardView = public_card_views.get(7003) as CardView
+	public_hover_card.call("_on_mouse_entered")
+	if modal_hover_information.is_empty() or not str((modal_hover_information.back() as Dictionary).get("title", "")).contains(GameSettings.resolve_card_display_name(GameDatabase.get_card("tao"))):
+		_fail("harvest_hover_information=%s" % [modal_hover_information])
+		return
+	public_hover_card.call("_on_mouse_exited")
 	# 已领取展示牌视图；输入应禁用且整体透明度低于未领取牌。
 	var taken_card_view: CardView = public_card_views.get(7010) as CardView
 	# 领取者标签；固定作为牌位包装器中正式牌面之后的第二个子节点。

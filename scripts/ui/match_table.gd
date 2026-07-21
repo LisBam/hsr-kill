@@ -488,6 +488,8 @@ func _ready() -> void:
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
 	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
 	card_selection_panel.arrangement_submitted.connect(_on_pile_arrangement_submitted)
+	card_selection_panel.information_requested.connect(_on_information_requested.bind(card_selection_panel))
+	card_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(card_selection_panel))
 	use_button.pressed.connect(_on_use_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)

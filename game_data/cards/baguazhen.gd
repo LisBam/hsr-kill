@@ -42,6 +42,16 @@ func can_offer_equipment_response(match_host: Object, player_id: int, response_p
 	return response_patterns.has("shan")
 
 
+## 八卦阵必须在需要使用或打出【闪】的时机优先独立询问，取消或判定失败后才进入普通响应牌选择。
+func uses_immediate_equipment_response_prompt() -> bool:
+	return true
+
+
+## 返回八卦阵的独立发动询问；提示只表达是否发动，不混入后续手牌响应说明。
+func get_immediate_equipment_response_prompt() -> String:
+	return "是否发动【八卦阵】？"
+
+
 ## 选择八卦阵后执行判定；红色视为打出虚拟【闪】，黑色表示响应失败。
 func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int]) -> CardInstance:
 	if not response_patterns.has("shan"):

@@ -135,5 +135,11 @@ func on_turn_started(match_host: Object, player_id: int) -> void:
 
 ## 任意回合结束或中断时清除全部未消耗酒加值，保持原有持续时间规则。
 func on_turn_ended(match_host: Object, _player_id: int, _interrupted: bool) -> void:
+	# 是否实际清除了至少一名角色的酒加值；只有状态变化时才额外发布快照，避免无意义重复刷新。
+	var state_changed: bool = false
 	for player: PlayerState in match_host.state.players:
+		if player.wine_bonus > 0:
+			state_changed = true
 		player.wine_bonus = 0
+	if state_changed:
+		match_host.refresh_public_state_snapshot()
