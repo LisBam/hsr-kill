@@ -64,9 +64,11 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 最终火攻目标ID；执行前由统一虚拟牌入口再次完成完整合法性校验。
 	var target_id: int = response.target_ids[0]
+	# 强类型火攻目标数组；通过Object.call调用参数为Array[int]的端口时，禁止直接传入会推断为普通Array的字面量。
+	var target_ids: Array[int] = [target_id]
 	_resolving_feiyan_huogong = true
 	_reward_resolved = false
-	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", [target_id], "虎克发动【飞焰】，视为使用【火攻】。", VIRTUAL_RULE_OVERRIDES)):
+	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", target_ids, "虎克发动【飞焰】，视为使用【火攻】。", VIRTUAL_RULE_OVERRIDES)):
 		_resolving_feiyan_huogong = false
 		return true
 	announce_activation({"target_id":target_id})
