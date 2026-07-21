@@ -46,13 +46,13 @@ func loseShield(count: int, source: SkillPlayer) -> int:
 	return -int(_host.call("change_hujia", player_id, -count, source_id, _reason))
 
 
-## 使当前角色失去指定点数体力；该操作绕过护盾且不触发造成伤害或受到伤害事件。
-func loseHp(count: int, source: SkillPlayer) -> int:
+## 使当前角色失去指定点数体力；该操作绕过护盾且不触发造成伤害或受到伤害事件，离场技可显式允许离场持有者结算。
+func loseHp(count: int, source: SkillPlayer, allow_out_of_game: bool = false) -> int:
 	if _host == null or not _host.has_method("lose_hp"):
 		return 0
 	# 失去体力来源玩家 ID；只用于独立事件、日志和回放，不作为伤害来源或死亡击杀者。
 	var source_id: int = source.player_id if source != null else -1
-	return int(_host.call("lose_hp", source_id, player_id, count, _reason))
+	return int(_host.call("lose_hp", source_id, player_id, count, _reason, allow_out_of_game))
 
 
 ## 由当前角色对目标造成指定点数伤害；默认造成普通伤害，护盾、装备、连环与濒死均由权威控制器处理。

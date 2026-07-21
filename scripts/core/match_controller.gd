@@ -113,6 +113,9 @@ var identity_rules: IdentityRules
 ## 卡牌合法性服务；每次开局绑定新状态实例。
 var card_rules: CardRuleService
 
+## 角色公开标记服务；每次开局绑定新状态实例，技能只通过控制器转发端口增删与查询标记。
+var player_mark_service: PlayerMarkService
+
 ## 卡牌效果执行器；每次开局绑定当前控制器操作端口与新状态。
 var effect_resolver: CardEffectResolver
 
@@ -602,6 +605,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"wheel_duel_face_down_candidate_count":_wheel_duel_face_down_candidate_count,
 	}
 	card_rules = CardRuleService.new(state, self)
+	player_mark_service = PlayerMarkService.new(state)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
 	_bind_card_movement_service()
@@ -714,6 +718,7 @@ func _discard_failed_match_start() -> void:
 	ai_character_adjustment = null
 	starting_hand_mulligan = null
 	card_rules = null
+	player_mark_service = null
 	effect_resolver = null
 	card_movement = null
 	modifier_pipeline = null
@@ -961,9 +966,19 @@ func submit_action(action: PlayerAction) -> bool:
 		return true
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
-	# 对局内行动者状态；移出游戏的角色不能借旧请求、旧按钮或网络封包继续执行任何玩家操作。
+	# 离场技选择许可；只接受当前权威请求中明确写入的同一选择者和请求ID，旧请求或伪造普通动作无法复用该例外。
+	var out_of_game_choice_allowed: bool = false
+	if action.action_type in ["choose_cards", "choice_response"] and not _pending_card_choice.is_empty():
+		# 当前提交请求ID；choice_response与choose_cards都使用payload中的同名稳定字段。
+		var submitted_request_id: int = int(action.payload.get("request_id", -1))
+		# 当前请求上下文；allow_out_of_game_chooser只由SkillDefinition为离场技自动写入。
+		var pending_choice_context: Dictionary = _pending_card_choice.get("context", {}) as Dictionary
+		out_of_game_choice_allowed = action.actor_id == int(_pending_card_choice.get("chooser_id", -1)) \
+			and submitted_request_id == int(_pending_card_choice.get("request_id", -2)) \
+			and bool(pending_choice_context.get("allow_out_of_game_chooser", false))
+	# 对局内行动者状态；普通离场角色不能借旧请求、旧按钮或网络封包继续执行任何玩家操作。
 	var submitted_actor: PlayerState = state.get_player(action.actor_id)
-	if submitted_actor != null and submitted_actor.out_of_game:
+	if submitted_actor != null and submitted_actor.out_of_game and not out_of_game_choice_allowed:
 		return _reject("当前角色已移出游戏，不能执行操作。")
 	if action.action_type == "set_auto_managed":
 		return _submit_auto_management_change(action)
@@ -1578,9 +1593,10 @@ func _prevalidate_play_action(action: PlayerAction) -> String:
 func request_card_choice(chooser_id: int, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary) -> Array[int]:
 	if state == null or state.game_over or not _pending_card_choice.is_empty() or not _pending_negation_choices.is_empty():
 		return []
-	# 当前选择者；死亡或离场角色不能通过技能、卡牌或遗留请求建立新的选择窗口。
+	# 当前选择者；死亡角色始终不能建立请求，离场角色仅可继续明确标记为离场技的自身选择。
 	var choice_player: PlayerState = state.get_player(chooser_id)
-	if choice_player == null or not choice_player.alive or choice_player.out_of_game:
+	var allow_out_of_game_chooser: bool = bool(context.get("allow_out_of_game_chooser", false))
+	if choice_player == null or not choice_player.alive or (choice_player.out_of_game and not allow_out_of_game_chooser):
 		return []
 	_resolved_card_choice_uids.clear()
 	_resolved_target_choice_ids.clear()
@@ -2662,13 +2678,13 @@ func describe_card(card: CardInstance) -> String:
 	return "%s%s %s" % [suit_text, rank_text, GameSettings.resolve_card_name(definition)]
 
 
-## 为指定玩家摸若干牌；牌堆不足时自动将弃牌堆洗回，无法继续时提前停止。
-func draw(player_id: int, count: int, announce: bool = true) -> void:
+## 为指定玩家摸若干牌；牌堆不足时自动将弃牌堆洗回，离场技可通过allow_out_of_game显式允许离场持有者获得牌。
+func draw(player_id: int, count: int, announce: bool = true, allow_out_of_game: bool = false) -> void:
 	if state == null or state.game_over:
 		return
 	# 摸牌玩家状态；不存在或死亡玩家不会获得牌。
 	var player: PlayerState = state.get_player(player_id)
-	if player == null or not player.alive or player.out_of_game:
+	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game):
 		return
 	# 摸牌生命周期数据；触发器可在 Before 与 Begin 中修改 count，但不能直接取得牌堆实体引用。
 	var timing_data: Dictionary = {"count":maxi(count, 0), "reason":"draw"}
@@ -2844,8 +2860,8 @@ func change_max_hp(target_id: int, delta: int, source_id: int = -1, reason: Stri
 	return actual_amount if delta > 0 else -actual_amount
 
 
-## 将一名仍存活角色移出游戏；离场期间其不参与行动、距离、响应、技能与目标选择。
-func remove_player_from_game(player_id: int, reason: String = "") -> bool:
+## 将一名仍存活角色移出游戏；离场期间其不参与行动、距离、响应、普通技能与目标选择，回合自然尾部可关闭中断调度。
+func remove_player_from_game(player_id: int, reason: String = "", interrupt_current_turn: bool = true) -> bool:
 	if state == null or state.game_over:
 		return false
 	# 离场角色；死亡、未知或已经离场的角色不会重复派发移出时机。
@@ -2861,7 +2877,7 @@ func remove_player_from_game(player_id: int, reason: String = "") -> bool:
 	_emit_rule_timing("removeCharacterEnd", player_id, player_id, player_id, {"reason":reason, "turn_number":state.turn_number})
 	_emit_state()
 	# 当前回合角色离场后立即结束回合；阶段尾部使用独立中断入口，不伪造未进入阶段的End与After。
-	if state.current_player_id == player_id:
+	if interrupt_current_turn and state.current_player_id == player_id:
 		_advance_after_current_player_out_of_game(player_id)
 	return true
 
@@ -2929,13 +2945,13 @@ func turn_over_player(target_id: int, source_id: int = -1, reason: String = "") 
 	return true
 
 
-## 使指定角色失去体力；该流程绕过护盾、装备修正、伤害事件、伤害历史与属性连环。
-func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "") -> int:
+## 使指定角色失去体力；该流程绕过护盾、装备修正、伤害事件、伤害历史与属性连环，离场技可显式允许离场持有者结算。
+func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "", allow_out_of_game: bool = false) -> int:
 	if state == null or state.game_over:
 		return 0
 	# 失去体力目标状态；死亡角色与非正数请求不会重复修改公开体力。
 	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive or target.out_of_game or amount <= 0:
+	if target == null or not target.alive or (target.out_of_game and not allow_out_of_game) or amount <= 0:
 		return 0
 	# 无名杀式失去体力前时机；与旧 lose_hp_before 并行保留，标准技能应优先订阅驼峰事件名。
 	var standard_before_event: RuleEvent = _emit_rule_timing("loseHpBefore", target_id, source_id, target_id, {"amount":amount, "reason":reason, "hp":target.hp})
@@ -4836,6 +4852,16 @@ func get_hand_equipment_candidates(viewer_id: int, target_id: int) -> Array[Dict
 	return _build_player_zone_candidates(viewer_id, target_id, true, true, false)
 
 
+## 返回目标手牌、装备与判定区的完整选择候选；技能可用于“弃置一名角色的一张牌”，最终移动仍需调用权威弃置端口复核。
+func get_player_zone_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	return _build_player_zone_candidates(viewer_id, target_id, true, true, true)
+
+
+## 由来源角色弃置目标区域内指定UID的一张牌；成功返回true，装备保护与等待期间区域变化会在移动前再次校验。
+func discard_selected_player_card(source_player_id: int, target_player_id: int, card_uid: int) -> bool:
+	return _discard_selected_player_card(target_player_id, card_uid, source_player_id)
+
+
 ## 返回一名玩家普通手牌区的可选实体快照；木牛“粮”和装备牌不会混入要求弃置手牌的装备效果。
 func get_hand_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
 	return _build_player_zone_candidates(viewer_id, target_id, true, false, false)
@@ -5708,6 +5734,46 @@ func skill_ignores_card_distance_limit(player_id: int, card_definition: Dictiona
 	return false
 
 
+## 汇总指定来源角色全部技能对某名目标的最终距离修正；技能按安装顺序串联，返回值最低为1。
+func modify_skill_distance_to_target(player_id: int, target_id: int, current_distance: int) -> int:
+	# 串联后的距离；每项技能读取上一项结果，允许通用加减与“固定为1”效果自然组合。
+	var modified_distance: int = maxi(current_distance, 1)
+	# 当前玩家技能实例表；固有、模式与临时技能共用纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；距离修正不得移动牌、记录发动或创建选择。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null:
+			modified_distance = maxi(skill.modify_distance_to_target(target_id, modified_distance), 1)
+	return modified_distance
+
+
+## 设置一名角色的公开标记；globally_unique用于“全场同ID仅一名角色拥有”的转移型标记。
+func set_player_mark(player_id: int, mark_id: String, mark_data: Dictionary, globally_unique: bool = false) -> bool:
+	if player_mark_service == null or not player_mark_service.set_mark(player_id, mark_id, mark_data, globally_unique):
+		return false
+	_emit_state()
+	return true
+
+
+## 移除一名角色的公开标记；标记不存在时返回false且不发送冗余快照。
+func remove_player_mark(player_id: int, mark_id: String) -> bool:
+	if player_mark_service == null or not player_mark_service.remove_mark(player_id, mark_id):
+		return false
+	_emit_state()
+	return true
+
+
+## 返回一名角色指定公开标记的深拷贝；空字典表示当前没有该标记。
+func get_player_mark(player_id: int, mark_id: String) -> Dictionary:
+	return player_mark_service.get_mark(player_id, mark_id) if player_mark_service != null else {}
+
+
+## 查找指定来源创建的公开标记当前属于哪名角色；未找到返回-1。
+func find_player_mark_owner(mark_id: String, source_player_id: int = -1) -> int:
+	return player_mark_service.find_mark_owner(mark_id, source_player_id) if player_mark_service != null else -1
+
+
 ## 判断来源角色是否可以弃置目标角色区域内的指定牌；目标本人弃置自己的牌始终允许。
 func can_discard_player_card(source_player_id: int, target_player_id: int, card: CardInstance, zone: String, slot: String = "") -> bool:
 	if card == null or source_player_id == target_player_id or source_player_id < 0:
@@ -5968,12 +6034,13 @@ func _submit_cardless_skill_response_choice(player_id: int, skill_id: String) ->
 func record_skill_activation(player_id: int, skill_id: String, context: Dictionary = {}) -> void:
 	if state == null or state.game_over:
 		return
-	# 发动者状态；未知、死亡或离场角色不能留下新的有效技能发动记录。
-	var player: PlayerState = state.get_player(player_id)
-	if player == null or not player.alive or player.out_of_game:
-		return
-	# 技能元数据；名称缺失时回退稳定 ID，保证日志与动画仍能定位来源。
+	# 技能元数据；离场技允许存活但离场的持有者记录真实成立的触发，普通技能仍保持在场限制。
 	var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+	# 发动者状态；未知或死亡角色不能留下新记录，离场角色仅在技能明确声明离场技时例外。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or (player.out_of_game and not bool(skill_metadata.get("out_of_game_skill", false))):
+		return
+	# 技能名称；缺失时回退稳定 ID，保证日志与动画仍能定位来源。
 	var skill_name: String = str(skill_metadata.get("name", skill_id))
 	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
 	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
@@ -9068,6 +9135,8 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 		_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":true}, {}, death_event_id)
 		_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
 		_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
+		if player_mark_service != null:
+			player_mark_service.clear_marks_for_dead_player(victim_id)
 		_finish_pending_damage(victim_id)
 		return
 	while not victim.hand.is_empty():
@@ -9100,6 +9169,8 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":state.game_over}, {}, death_event_id)
 	_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
 	_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
+	if player_mark_service != null:
+		player_mark_service.clear_marks_for_dead_player(victim_id)
 	_finish_pending_damage(victim_id)
 
 
@@ -9137,6 +9208,8 @@ func _resolve_wheel_duel_character_replacement(victim: PlayerState, killer_id: i
 	_record_runtime_event("dieAfter", "death", {"victim_id":victim.player_id, "game_over":false, "wheel_duel_replacement":true, "next_character_id":next_character_id}, {}, death_event_id)
 	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
 	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
+	if player_mark_service != null:
+		player_mark_service.clear_marks_for_dead_player(victim.player_id)
 	_finish_pending_damage(victim.player_id)
 	# 当前行动玩家自己的武将阵亡时直接终止本回合；对方回合内阵亡则由原结算继续当前回合。
 	if state.current_player_id == victim.player_id and not state.game_over:

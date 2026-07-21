@@ -51,6 +51,9 @@ var face_down: bool = false
 ## 武将牌左上角通用公开文本；空字符串隐藏组件，技能或模式只能写入面向所有观察者一致的展示内容。
 var character_corner_text: String = ""
 
+## 当前角色持有的公开标记；键为稳定标记ID，值包含单字图标、名称、说明、数量与来源角色，全部观察者均可见。
+var public_marks: Dictionary = {}
+
 ## 当前是否由基础 AI 代替真人执行操作；默认 false，仅在真人主动托管或联机掉线后由权威控制器写入，并会同步到所有观察者。
 var auto_managed: bool = false
 
@@ -235,6 +238,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"chained": chained,
 		"face_down": face_down,
 		"character_corner_text": character_corner_text,
+		"public_marks": public_marks.duplicate(true),
 		"auto_managed": auto_managed,
 		"auto_managed_offline": auto_managed_offline,
 		"wine_used": wine_used,

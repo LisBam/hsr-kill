@@ -127,6 +127,26 @@ func get_next_alive_player(player_id: int) -> PlayerState:
 	return null
 
 
+## 返回指定玩家之前的上一名存活且未离场玩家；按座次向前环形查找，全场仅一名在场角色时返回其自身。
+func get_previous_alive_player(player_id: int) -> PlayerState:
+	if players.is_empty():
+		return null
+	# 指定玩家在座次数组中的位置；找不到时从一号位之前开始向前寻找。
+	var start_index: int = 0
+	for index: int in range(players.size()):
+		if players[index].player_id == player_id:
+			start_index = index
+			break
+	for offset: int in range(1, players.size() + 1):
+		# 向前环形移动后的候选索引；posmod保证一号位的上家从数组末尾继续查找。
+		var candidate_index: int = posmod(start_index - offset, players.size())
+		# 当前候选玩家；死亡或离场角色不属于规则定义中的上家。
+		var candidate: PlayerState = players[candidate_index]
+		if candidate.alive and not candidate.out_of_game:
+			return candidate
+	return null
+
+
 ## 生成面向指定观察者的完整对局快照，供 UI、AI、网络和回放统一使用。
 func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 玩家快照数组；每名玩家自行处理手牌与身份的可见性。

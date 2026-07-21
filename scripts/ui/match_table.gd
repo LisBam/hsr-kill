@@ -86,6 +86,12 @@ const LOCAL_JUDGMENT_ZONE_HEIGHT: float = 22.0
 ## 本地延时锦囊标记区与手牌区顶边之间的间距；6像素使图标不压住手牌选中抬升空间。
 const LOCAL_JUDGMENT_ZONE_HAND_GAP: float = 6.0
 
+## 本地公开标记横排的固定高度；32像素等于单枚圆形标记直径，多个标记只横向增长。
+const LOCAL_PLAYER_MARKER_ZONE_HEIGHT: float = 32.0
+
+## 本地公开标记横排与右侧判定区之间的水平间距；默认8像素防止圆形图标与判定菱形相贴。
+const LOCAL_PLAYER_MARKER_JUDGMENT_GAP: float = 8.0
+
 ## 本地装备栏的独立高度；148像素严格等于单张玩家手牌牌面高度，不包含手牌栏的选中抬升预留空间。
 const LOCAL_EQUIPMENT_AREA_HEIGHT: float = 148.0
 
@@ -199,6 +205,9 @@ var local_player_seat_label: Label
 
 ## 本地延时锦囊独立标记区；运行时固定布局到手牌区上方，不再随右下武将牌移动。
 var local_judgment_zone: JudgmentZoneView
+
+## 本地玩家公开标记横排；从手牌栏上方左侧开始排列，并与其他角色纵排复用相同图标和悬停协议。
+var local_player_markers: PlayerMarkersView
 
 ## 本地技能透明外层；尺寸严格跟随当前一列或两列按钮，不绘制独立背景框。
 @onready var skill_bar: PanelContainer = $SkillBar
@@ -429,6 +438,7 @@ func _ready() -> void:
 	_create_information_box()
 	_create_local_player_card()
 	_create_local_judgment_zone()
+	_create_local_player_markers()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -936,6 +946,7 @@ func _create_local_player_card() -> void:
 	local_player_card.visible = true
 	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_public_judgment_visible(false)
+	local_player_card.set_public_markers_visible(false)
 	local_player_seat_slot.z_index = 12
 	local_player_seat_slot.anchor_left = 1.0
 	local_player_seat_slot.anchor_top = 1.0
@@ -968,6 +979,17 @@ func _create_local_judgment_zone() -> void:
 	_queue_local_judgment_zone_layout()
 
 
+## 创建第一视角公开标记横排；组件位于手牌区上方左侧，不随右下武将牌移动。
+func _create_local_player_markers() -> void:
+	local_player_markers = PlayerMarkersView.new()
+	local_player_markers.name = "LocalPlayerMarkers"
+	local_player_markers.z_index = 7
+	add_child(local_player_markers)
+	local_player_markers.information_requested.connect(_on_information_requested.bind(local_player_markers))
+	local_player_markers.information_dismissed.connect(_on_information_dismissed.bind(local_player_markers))
+	_queue_local_judgment_zone_layout()
+
+
 ## 在布局帧结束后重新计算本地延时锦囊标记区的位置；技能栏变化会连带改变手牌右边界，不能读取旧尺寸。
 func _queue_local_judgment_zone_layout() -> void:
 	call_deferred("_layout_local_judgment_zone")
@@ -981,9 +1003,18 @@ func _layout_local_judgment_zone() -> void:
 	var hand_position: Vector2 = hand_panel.position
 	# 当前手牌区域尺寸；宽度随技能栏列数收紧或扩展，判定标记区必须同步避免越过技能按钮。
 	var hand_size: Vector2 = hand_panel.size
-	# 判定区左侧避让距离；延时锦囊从托管按钮右侧开始排列，剩余宽度仍随手牌区响应式变化。
-	var horizontal_offset: float = minf(local_judgment_zone_left_offset, maxf(hand_size.x - 1.0, 0.0))
-	local_judgment_zone.position = hand_position + Vector2(horizontal_offset, -LOCAL_JUDGMENT_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HAND_GAP)
+	# 本地标记占用尺寸；空标记集合返回0宽，不改变原判定区左移配置。
+	var marker_size: Vector2 = local_player_markers.get_required_size() if local_player_markers != null and is_instance_valid(local_player_markers) else Vector2.ZERO
+	# 手牌上方统一标记带顶边；使用32像素圆形高度，判定菱形在该带内垂直居中。
+	var marker_zone_top: float = -LOCAL_PLAYER_MARKER_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HAND_GAP
+	if local_player_markers != null and is_instance_valid(local_player_markers):
+		local_player_markers.position = hand_position + Vector2(0.0, marker_zone_top)
+	# 判定区左侧避让距离；至少保留检查器配置，同时避开当前全部第一视角圆形标记。
+	var desired_horizontal_offset: float = maxf(local_judgment_zone_left_offset, marker_size.x + (LOCAL_PLAYER_MARKER_JUDGMENT_GAP if marker_size.x > 0.0 else 0.0))
+	var horizontal_offset: float = minf(desired_horizontal_offset, maxf(hand_size.x - 1.0, 0.0))
+	# 判定区纵坐标；在32像素标记带内居中，二者底部与手牌区保持相同6像素安全间距。
+	var judgment_vertical_offset: float = marker_zone_top + (LOCAL_PLAYER_MARKER_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HEIGHT) * 0.5
+	local_judgment_zone.position = hand_position + Vector2(horizontal_offset, judgment_vertical_offset)
 	local_judgment_zone.size = Vector2(maxf(hand_size.x - horizontal_offset, 1.0), LOCAL_JUDGMENT_ZONE_HEIGHT)
 
 
@@ -1238,8 +1269,10 @@ func _render_players() -> void:
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_public_judgment_visible(false)
+	local_player_card.set_public_markers_visible(false)
 	local_player_card.set_match_overlays_visible(true)
 	local_player_seat_label.text = ""
+	_render_local_player_markers(local_player_snapshot)
 	_render_local_judgment_zone(local_player_snapshot)
 	_render_local_equipment(local_player_snapshot)
 	_render_local_skills(local_player_snapshot)
@@ -1868,6 +1901,16 @@ func _render_local_judgment_zone(player: Dictionary) -> void:
 	_queue_local_judgment_zone_layout()
 
 
+## 将本地玩家公开标记同步到手牌栏上方左侧横排；空集合隐藏且自动释放判定区避让宽度。
+func _render_local_player_markers(player: Dictionary) -> void:
+	if local_player_markers == null or not is_instance_valid(local_player_markers):
+		return
+	# 本地公开标记；与其他观察者收到的内容一致，不包含身份推测或客户端私有状态。
+	var public_marks: Dictionary = player.get("public_marks", {}) as Dictionary
+	local_player_markers.configure(public_marks, true)
+	_queue_local_judgment_zone_layout()
+
+
 ## 选择或取消一张手牌；切换牌时保留目标，便于快速比较合法性。
 ## 无名杀式交互以当前牌为完整选择上下文；切换或取消卡牌时会清空旧目标，避免非法目标残留高亮。
 func _on_card_pressed(card_uid: int) -> void:
@@ -2429,6 +2472,8 @@ func _apply_ui_style() -> void:
 	equipment_label.refresh_ui_style()
 	if local_judgment_zone != null and is_instance_valid(local_judgment_zone):
 		local_judgment_zone.refresh_ui_style()
+	if local_player_markers != null and is_instance_valid(local_player_markers):
+		local_player_markers.refresh_ui_style()
 	if information_box != null and is_instance_valid(information_box):
 		information_box.refresh_ui_style()
 	for card_view_variant: Variant in _card_views.values():
