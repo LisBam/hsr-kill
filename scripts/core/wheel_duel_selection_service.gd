@@ -180,16 +180,16 @@ func has_submitted_lineup(player_id: int) -> bool:
 	return (_lineup_by_player.get(player_id, []) as Array).size() == LINEUP_CHARACTER_COUNT_PER_PLAYER
 
 
-## 生成面向单一观察者的私有快照；已选槽统一暗置并公开我方/对方归属，不发送被选武将真实ID。
+## 生成面向单一观察者的私有快照；已选槽保留原明暗状态并公开我方/对方归属，暗置槽始终隐藏真实ID。
 func to_dict(viewer_id: int) -> Dictionary:
 	if phase.is_empty():
 		return {}
 	var pool_snapshot: Array[Dictionary] = []
 	for slot: Dictionary in _pool_slots:
-		# 当前槽位选择者；负数表示仍可选择，已选槽必须保持牌背且只显示观察者相对归属。
+		# 当前槽位选择者；负数表示仍可选择，非负数表示需要显示观察者相对归属。
 		var picked_by_player_id: int = int(slot.get("picked_by_player_id", -1))
-		# 当前槽位是否仍公开正面；被选择后无论原本明暗均强制暗置。
-		var is_face_up: bool = bool(slot.get("face_up", false)) and picked_by_player_id < 0
+		# 当前槽位原始明暗状态；明置牌被选择后继续显示正面，暗置牌仍隐藏真实武将。
+		var is_face_up: bool = bool(slot.get("face_up", false))
 		# 当前观察者看到的选择归属；旁观者统一视为对方选择，避免公开稳定玩家ID产生额外界面依赖。
 		var selection_owner: String = ""
 		if picked_by_player_id >= 0:

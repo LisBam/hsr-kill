@@ -10211,6 +10211,10 @@ func _on_control_all_characters_changed(enabled: bool) -> void:
 			ai_coordinator.register_basic_ai(_offline_manually_controlled_player_id)
 		_offline_manually_controlled_player_id = -1
 		local_human_player_id = _primary_offline_human_player_id
+		# 废弃接管期间创建的旧AI等待任务；关闭后必须使用新令牌重新安排当前选择或出牌动作。
+		_ai_drive_token += 1
+		_scheduled_ai_drive_token = -1
+		_scheduled_ai_choice_request_id = -1
 		_emit_state()
 		_ensure_ai_progress_after_resolution()
 		return
