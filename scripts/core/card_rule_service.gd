@@ -45,7 +45,11 @@ func calculate_distance(source_id: int, target_id: int) -> int:
 		distance -= 1
 	if target.equipment.has("defensive_mount"):
 		distance += 1
-	return maxi(distance, 1)
+	# 技能最终距离修正；目标型锁定效果在坐骑结算后覆盖或调整距离，查询过程不得消费资源或创建选择。
+	var final_distance: int = maxi(distance, 1)
+	if skill_rule_provider != null and skill_rule_provider.has_method("modify_skill_distance_to_target"):
+		final_distance = int(skill_rule_provider.call("modify_skill_distance_to_target", source_id, target_id, final_distance))
+	return maxi(final_distance, 1)
 
 
 ## 返回玩家当前攻击范围；无武器为1，装备武器时读取卡牌配置的 attack_range。

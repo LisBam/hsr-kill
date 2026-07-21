@@ -87,6 +87,8 @@ func _run() -> void:
 		return
 	if not await _test_aisida_heita_xiluwa_skills():
 		return
+	if not await _test_moze_marks_and_out_of_game_skills():
+		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
 
@@ -135,7 +137,8 @@ func _reset_state(player_count: int) -> void:
 		player.max_hp = 4
 		player.hp = 4
 		_controller.state.players.append(player)
-	_controller.card_rules = CardRuleService.new(_controller.state)
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	_controller.player_mark_service = PlayerMarkService.new(_controller.state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, _controller.state)
 	_controller.card_movement = CardMovementService.new(_controller.state)
 	_controller.trigger_manager = TriggerManager.new()
@@ -202,6 +205,8 @@ func _test_expanded_character_metadata() -> bool:
 	var xveyi: Dictionary = GameDatabase.get_character("xveyi")
 	# 虎克定义；贝洛伯格女性、3点体力与双技能顺序必须保持稳定。
 	var huke: Dictionary = GameDatabase.get_character("huke")
+	# 貊泽定义；仙舟联盟男性、2点体力与三项离场技顺序必须保持稳定。
+	var moze: Dictionary = GameDatabase.get_character("moze")
 	if str(natasha.get("gender", "")) != "female" or str(natasha.get("faction", "")) != "beiluoboge" or int(natasha.get("max_hp", 0)) != 3 or (natasha.get("skills", []) as Array) != ["yaoli", "huanfa"]:
 		return _fail("natasha_metadata=%s" % natasha)
 	if str(hanya.get("gender", "")) != "female" or str(hanya.get("faction", "")) != "xianzhou" or int(hanya.get("max_hp", 0)) != 3 or (hanya.get("skills", []) as Array) != ["mingchen", "lushi"]:
@@ -210,6 +215,8 @@ func _test_expanded_character_metadata() -> bool:
 		return _fail("xveyi_metadata=%s" % xveyi)
 	if str(huke.get("display_name", "")) != "虎克" or str(huke.get("gender", "")) != "female" or str(huke.get("faction", "")) != "beiluoboge" or int(huke.get("max_hp", 0)) != 3 or (huke.get("skills", []) as Array) != ["wuxie_2", "feiyan"]:
 		return _fail("huke_metadata=%s" % huke)
+	if str(moze.get("display_name", "")) != "貊泽" or str(moze.get("gender", "")) != "male" or str(moze.get("faction", "")) != "xianzhou" or int(moze.get("max_hp", 0)) != 2 or (moze.get("skills", []) as Array) != ["youfeng", "lvexi", "yingchu"]:
+		return _fail("moze_metadata=%s" % moze)
 	# 六项技能说明；玩家可见文本必须逐字保持机制设计原文。
 	var expected_descriptions: Dictionary = {
 		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
@@ -220,6 +227,9 @@ func _test_expanded_character_metadata() -> bool:
 		"shefu":"锁定技，当你于一回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
 		"wuxie_2":"当你造成伤害后，你可令受到伤害的角色回复1点体力。",
 		"feiyan":"准备阶段，你可以视为使用一张【火攻】，若此牌造成伤害，你摸三张牌，且本回合内你的所有主要阶段都变为出牌阶段。",
+		"youfeng":"离场技，锁定技，每轮开始时，你弃置一名其他角色的一张牌并令其获得“猎物”标记，然后若你未处于离场状态，你离场；若你已处于离场状态，你失去1点体力。",
+		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸两张牌并返场。",
+		"yingchu":"离场技，锁定技，当你上家的回合结束时，若你处于离场状态，你返场；该回合结束时，你再次离场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
 		# 当前技能ID；用于自动索引中读取对应说明。
@@ -1435,6 +1445,7 @@ func _test_hsr_character_metadata_and_rule_catalog() -> bool:
 		"aisida":["yinhexvezhe", "female", 3, ["xingqi", "xingluo"]],
 		"heita":["yinhexvezhe", "female", 3, ["zhishi", "jiqiao"]],
 		"xiluwa":["beiluoboge", "female", 3, ["xianzou", "anke"]],
+		"moze":["xianzhou", "male", 2, ["youfeng", "lvexi", "yingchu"]],
 	}
 	for character_id_variant: Variant in expected_characters.keys():
 		# 当前武将稳定ID；字典键转换为字符串后读取自动索引定义。
@@ -1472,6 +1483,9 @@ func _test_hsr_character_metadata_and_rule_catalog() -> bool:
 		"jiqiao":"锁定技，你使用锦囊牌没有距离限制。其他角色不可弃置你装备区内的防具牌与宝物牌。",
 		"xianzou":"每个主要阶段开始时，你可以重铸一张手牌并跳过该阶段，若为弃牌阶段，你将手牌数调整至X。每轮每种花色限一次。（X等于你的当前体力值。）",
 		"anke":"回合结束时，若本回合内有四种花色的牌进入过弃牌堆，你可执行一个额外的回合。每轮限三次。",
+		"youfeng":"离场技，锁定技，每轮开始时，你弃置一名其他角色的一张牌并令其获得“猎物”标记，然后若你未处于离场状态，你离场；若你已处于离场状态，你失去1点体力。",
+		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸两张牌并返场。",
+		"yingchu":"离场技，锁定技，当你上家的回合结束时，若你处于离场状态，你返场；该回合结束时，你再次离场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
 		# 当前技能稳定ID；用于读取数据目录自动注册的说明文本。
@@ -1873,6 +1887,25 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	var anke: SkillDefinition = _install_single_skill(0, "anke")
 	if anke == null:
 		return _fail("anke_missing")
+	# 其他角色回合；即使四种花色进入弃牌堆，也不能计算或显示安可文本标记。
+	_controller.state.current_player_id = 1
+	_controller.state.turn_number = 2
+	anke.call("_on_turn_before", RuleEvent.new("phaseBefore", 1, 1, {"turn_number":_controller.state.turn_number}))
+	var off_turn_anke_cards: Array[CardInstance] = [
+		_add_discard_pile_card("sha", "spade", 5),
+		_add_discard_pile_card("shan", "heart", 6),
+		_add_discard_pile_card("tao", "club", 7),
+		_add_discard_pile_card("wuzhong", "diamond", 8),
+	]
+	var off_turn_anke_uids: Array[int] = []
+	for off_turn_card: CardInstance in off_turn_anke_cards:
+		off_turn_anke_uids.append(off_turn_card.uid)
+	anke.call("_on_cards_discarded", RuleEvent.new("cardsDiscardAfter", -1, -1, {"card_uids":off_turn_anke_uids}))
+	if not _controller.state.get_player(0).character_corner_text.is_empty():
+		return _fail("anke_off_turn_corner_text=%s" % _controller.state.get_player(0).character_corner_text)
+	# 希露瓦自己的新回合；重新开启花色统计并按固定顺序显示文本。
+	_controller.state.current_player_id = 0
+	_controller.state.turn_number = 3
 	anke.call("_on_turn_before", RuleEvent.new("phaseBefore", 0, 0, {"turn_number":_controller.state.turn_number}))
 	var anke_cards: Array[CardInstance] = [
 		_add_discard_pile_card("sha", "spade", 1),
@@ -1895,6 +1928,168 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 		return _fail("anke_choice")
 	if int(anke.get("_uses_this_round")) != 1:
 		return _fail("anke_extra_turn_count=%s" % anke.get("_uses_this_round"))
+	return true
+
+
+## 验证貊泽三项离场技、全场唯一猎物标记、上家查询、距离直击、返场追击、死亡收益与标记UI排列。
+func _test_moze_marks_and_out_of_game_skills() -> bool:
+	_reset_state(4)
+	# 貊泽基础状态；专项重置默认4点体力，此处按武将定义改为2点。
+	var moze_player: PlayerState = _controller.state.get_player(0)
+	moze_player.character_id = "moze"
+	moze_player.max_hp = 2
+	moze_player.hp = 2
+	# 第一名猎物候选手牌；幽锋必须先弃置该实体再写入标记。
+	var first_hunt_card: CardInstance = _add_hand_card(1, "shan", "heart", 4)
+	# 第二名猎物候选手牌；下一轮用于验证标记转移和离场失去1点体力。
+	var second_hunt_card: CardInstance = _add_hand_card(2, "sha", "spade", 9)
+	# 貊泽三项运行时技能；连续安装验证同一武将技能表不会互相覆盖。
+	var youfeng: SkillDefinition = _install_single_skill(0, "youfeng")
+	var lvexi: SkillDefinition = _install_single_skill(0, "lvexi")
+	var yingchu: SkillDefinition = _install_single_skill(0, "yingchu")
+	if youfeng == null or lvexi == null or yingchu == null:
+		return _fail("moze_skill_missing")
+	# 第一轮由四号位作为当前角色触发，避免貊泽离场中断本测试的阶段调度。
+	_controller.state.current_player_id = 3
+	_controller._emit_rule_timing("roundStart", 3, 3, 3, {"round_number":1})
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [1], true):
+		return _fail("youfeng_first_target_choice")
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [first_hunt_card.uid], [], true):
+		return _fail("youfeng_first_discard_choice")
+	# 第一轮结果；一号目标获得来源属于貊泽的唯一猎物标记，实体进入弃牌堆且貊泽离场。
+	var first_mark: Dictionary = _controller.get_player_mark(1, "liewu")
+	if not moze_player.out_of_game or int(first_mark.get("count", 0)) != 1 or int(first_mark.get("source_player_id", -1)) != 0 or not _controller.state.discard_pile.has(first_hunt_card):
+		return _fail("youfeng_first_result owner_out=%s mark=%s discarded=%s" % [moze_player.out_of_game, first_mark, _controller.state.discard_pile.has(first_hunt_card)])
+	# 第二轮离场技仍须正常触发；标记转移给三号位，原目标失去标记，貊泽失去固定1点体力。
+	# 专项测试没有正式回合父事件；重置独立事件运行时，使第二个模拟轮开始拥有新的根级选择上下文。
+	_controller.event_scheduler.reset()
+	_controller.state.current_event_id = -1
+	# 离场接收能力由技能元数据统一校验；随后直接进入回调，避免专项测试复用上一轮TriggerManager暂停栈。
+	var second_round_event: RuleEvent = RuleEvent.new("roundStart", 3, 3, {"round_number":2})
+	if not youfeng.out_of_game_skill or not bool(youfeng.call("_can_receive_timing_event", second_round_event, Callable())):
+		return _fail("youfeng_out_of_game_metadata")
+	youfeng.call("_on_round_start", second_round_event)
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [2], true):
+		return _fail("youfeng_second_target_choice")
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [second_hunt_card.uid], [], true):
+		return _fail("youfeng_second_discard_choice")
+	var second_mark: Dictionary = _controller.get_player_mark(2, "liewu")
+	if not _controller.get_player_mark(1, "liewu").is_empty() or int(second_mark.get("source_player_id", -1)) != 0 or moze_player.hp != 1 or not moze_player.out_of_game:
+		return _fail("youfeng_second_result old=%s new=%s hp=%d out=%s" % [_controller.get_player_mark(1, "liewu"), second_mark, moze_player.hp, moze_player.out_of_game])
+	# 掠袭距离；貊泽返场后无论座次和坐骑基础距离如何，到猎物最终固定为1。
+	_controller.restore_player_to_game(0, "moze_test")
+	if _controller.card_rules.calculate_distance(0, 2) != 1:
+		return _fail("lvexi_distance=%d" % _controller.card_rules.calculate_distance(0, 2))
+	# 掠袭直击；活动用牌指定猎物后必须写入目标直击集合，使其无法响应本牌。
+	var direct_hit_card: CardInstance = CardInstance.new("sha", "club", 7)
+	_controller._card_use_contexts[direct_hit_card.uid] = {"target_ids":[2], "direct_hit_target_ids":[]}
+	lvexi.call("_on_card_targeted", RuleEvent.new("useCardToTargeted", 0, 2, {"card_uid":direct_hit_card.uid, "target_id":2, "card_id":"sha"}))
+	if not _controller.is_card_target_direct_hit(direct_hit_card.uid, 2):
+		return _fail("lvexi_direct_hit")
+	# 猎物受伤追击；貊泽离场时，任意来源的1点伤害会令其返场并再造成固定1点伤害。
+	_controller.remove_player_from_game(0, "moze_test")
+	var hunt_hp_before_damage: int = _controller.state.get_player(2).hp
+	_controller.damage(3, 2, 1, "normal", "")
+	if moze_player.out_of_game or _controller.state.get_player(2).hp != hunt_hp_before_damage - 2:
+		return _fail("lvexi_follow_up owner_out=%s hp=%d/%d" % [moze_player.out_of_game, _controller.state.get_player(2).hp, hunt_hp_before_damage])
+	# 猎物死亡收益；离场中的貊泽可以先摸2张牌再返场，死亡目标的猎物标记随之清理。
+	_controller.remove_player_from_game(0, "moze_test")
+	var death_draw_one: CardInstance = _add_draw_pile_card("shan", "diamond", 10)
+	var death_draw_two: CardInstance = _add_draw_pile_card("tao", "heart", 11)
+	_controller.state.get_player(2).alive = false
+	var hand_count_before_death_reward: int = moze_player.hand.size()
+	_controller._emit_rule_timing("dieAfter", 2, 3, 2, {"death_event_id":901})
+	if moze_player.out_of_game or moze_player.hand.size() != hand_count_before_death_reward + 2 or not moze_player.hand.has(death_draw_one) or not moze_player.hand.has(death_draw_two) or not _controller.get_player_mark(2, "liewu").is_empty():
+		return _fail("lvexi_death_reward out=%s hand=%d/%d mark=%s" % [moze_player.out_of_game, moze_player.hand.size(), hand_count_before_death_reward, _controller.get_player_mark(2, "liewu")])
+
+	# 影出与上家；四号位离场后，貊泽的有效上家应跳过四号位并取三号位。
+	_reset_state(4)
+	moze_player = _controller.state.get_player(0)
+	moze_player.character_id = "moze"
+	moze_player.max_hp = 2
+	moze_player.hp = 2
+	moze_player.out_of_game = true
+	_controller.state.get_player(3).out_of_game = true
+	_controller.state.current_player_id = 2
+	yingchu = _install_single_skill(0, "yingchu")
+	var previous_player: PlayerState = _controller.state.get_previous_alive_player(0)
+	if previous_player == null or previous_player.player_id != 2:
+		return _fail("previous_alive_player=%s" % [previous_player.player_id if previous_player != null else -1])
+	_controller._emit_rule_timing("phaseEnd", 2, 2, 2, {"turn_number":2})
+	if moze_player.out_of_game or not bool(yingchu.get("_waiting_owner_turn_end")):
+		return _fail("yingchu_return")
+	_controller._emit_rule_timing("phaseAfter", 2, 2, 2, {"turn_number":2})
+	if moze_player.out_of_game:
+		return _fail("yingchu_removed_on_previous_phase_after")
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "finish"
+	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":3})
+	if not moze_player.out_of_game or bool(yingchu.get("_waiting_owner_turn_end")) or _controller.state.current_phase != "finish":
+		return _fail("yingchu_leave_again")
+
+	# 幽锋AI；敌方低生存角色必须高于友方角色，体现主公指定的脆皮和易受伤目标优先级。
+	_reset_state(3)
+	_controller.state.get_player(0).character_id = "moze"
+	_controller.state.get_player(1).hp = 1
+	youfeng = GameDatabase.create_skill("youfeng")
+	youfeng.bind(_controller, 0)
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	var ai_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var target_request: Dictionary = {"context":{"kind":"youfeng_target"}}
+	var enemy_action: Dictionary = {"payload":{"selected_target_ids":[1], "confirmed":true}}
+	var friend_action: Dictionary = {"payload":{"selected_target_ids":[2], "confirmed":true}}
+	if youfeng.score_ai_choice(ai_snapshot, target_request, enemy_action, evaluator) <= youfeng.score_ai_choice(ai_snapshot, target_request, friend_action, evaluator):
+		return _fail("youfeng_ai_target_priority")
+
+	# 标记快照与武将牌纵排UI；两个标记按order纵向排列，图标内显示单字且右下角显示数量。
+	_controller.player_mark_service.set_mark(1, "liewu", {"icon":"猎", "name":"猎物标记", "description":"猎物详细说明", "count":1, "source_player_id":0, "order":0}, true)
+	_controller.player_mark_service.set_mark(1, "test_mark", {"icon":"测", "name":"测试标记", "description":"测试详细说明", "count":2, "source_player_id":-1, "order":1})
+	var marked_snapshot: Dictionary = _controller.state.get_player(1).to_dict(0, false)
+	if (marked_snapshot.get("public_marks", {}) as Dictionary).size() != 2:
+		return _fail("public_mark_snapshot=%s" % marked_snapshot.get("public_marks", {}))
+	var marked_player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	add_child(marked_player_view)
+	await get_tree().process_frame
+	marked_player_view.set_match_overlays_visible(true)
+	marked_snapshot["character_id"] = "moze"
+	marked_snapshot["identity"] = "rebel"
+	marked_snapshot["hand_count"] = 0
+	marked_snapshot["equipment"] = {}
+	marked_snapshot["judgment_area"] = []
+	marked_snapshot["wooden_ox_storage_count"] = 0
+	marked_player_view.configure_snapshot(marked_snapshot, GameDatabase.get_character("moze"))
+	await get_tree().process_frame
+	var vertical_markers: PlayerMarkersView = marked_player_view.get_node("PublicMarkers") as PlayerMarkersView
+	if vertical_markers == null or vertical_markers.get_child_count() != 2 or vertical_markers.horizontal:
+		marked_player_view.queue_free()
+		return _fail("vertical_markers count=%s horizontal=%s" % [vertical_markers.get_child_count() if vertical_markers != null else -1, vertical_markers.horizontal if vertical_markers != null else true])
+	var first_badge: PlayerMarkerBadge = vertical_markers.get_child(0) as PlayerMarkerBadge
+	var second_badge: PlayerMarkerBadge = vertical_markers.get_child(1) as PlayerMarkerBadge
+	if first_badge.position.y >= second_badge.position.y or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
+		marked_player_view.queue_free()
+		return _fail("vertical_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
+	# 标记悬停详细信息；武将牌必须把子组件请求转发到统一信息出口。
+	var marker_information: Array[Dictionary] = []
+	marked_player_view.information_requested.connect(func(information: Dictionary, _anchor_rect: Rect2) -> void: marker_information.append(information.duplicate(true)))
+	first_badge.call("_on_mouse_entered")
+	if marker_information.is_empty() or str(marker_information[0].get("title", "")) != "猎物标记" or not str(marker_information[0].get("description", "")).contains("猎物详细说明"):
+		marked_player_view.queue_free()
+		return _fail("marker_hover_information=%s" % [marker_information])
+	marked_player_view.queue_free()
+	# 第一视角横排UI；复用相同标记数据后第二枚图标必须只向右移动，不产生纵向堆叠。
+	var horizontal_markers: PlayerMarkersView = PlayerMarkersView.new()
+	add_child(horizontal_markers)
+	horizontal_markers.configure(marked_snapshot.get("public_marks", {}) as Dictionary, true)
+	await get_tree().process_frame
+	if horizontal_markers.get_child_count() != 2 or not horizontal_markers.horizontal:
+		horizontal_markers.queue_free()
+		return _fail("horizontal_markers count=%d horizontal=%s" % [horizontal_markers.get_child_count(), horizontal_markers.horizontal])
+	first_badge = horizontal_markers.get_child(0) as PlayerMarkerBadge
+	second_badge = horizontal_markers.get_child(1) as PlayerMarkerBadge
+	if first_badge.position.x >= second_badge.position.x or not is_equal_approx(first_badge.position.y, second_badge.position.y):
+		horizontal_markers.queue_free()
+		return _fail("horizontal_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
+	horizontal_markers.queue_free()
 	return true
 
 
@@ -1935,7 +2130,10 @@ func _install_single_skill(player_id: int, skill_id: String) -> SkillDefinition:
 	if skill == null:
 		return null
 	skill.bind(_controller, player_id)
-	_controller.skill_instances_by_player[player_id] = {skill_id:skill}
+	# 当前玩家已安装技能表；同一场景可连续追加多个技能以验证武将内技能联动。
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(player_id, {}) as Dictionary
+	player_skills[skill_id] = skill
+	_controller.skill_instances_by_player[player_id] = player_skills
 	skill.install()
 	return skill
 

@@ -318,10 +318,19 @@ func _test_all_players_have_characters_after_selection() -> bool:
 						if seats.has(1) and identities.has(selection.get_first_seat_identity()):
 							seat_number = 1
 							identity = selection.get_first_seat_identity()
-					if not _controller.select_character(int(player_id), str(candidates[0]), seat_number, identity):
-						# 并发 AI 驱动可能已替该玩家提交；仅当仍待选时失败。
-						if selection.get_pending_player_ids().has(int(player_id)):
-							return _fail("select_failed_pid=%d count=%d custom=%s" % [int(player_id), player_count, str(custom_enabled)])
+					# 当前玩家是否已成功提交或被并发 AI 完成选将；候选池扩充后首项可能已被其他角色占用，因此依序尝试仍合法的候选。
+					var selection_completed: bool = false
+					# 当前候选武将；按服务返回顺序尝试，不改变正式候选生成与占用规则。
+					for candidate_variant: Variant in candidates:
+						if _controller.select_character(int(player_id), str(candidate_variant), seat_number, identity):
+							selection_completed = true
+							break
+						# 并发 AI 驱动可能已替该玩家提交；不再待选时视为本轮处理完成。
+						if not selection.get_pending_player_ids().has(int(player_id)):
+							selection_completed = true
+							break
+					if not selection_completed and selection.get_pending_player_ids().has(int(player_id)):
+						return _fail("select_failed_pid=%d count=%d custom=%s" % [int(player_id), player_count, str(custom_enabled)])
 				if _controller.has_method("_drive_ai_character_selection"):
 					_controller.call("_drive_ai_character_selection")
 			if _controller.state == null:

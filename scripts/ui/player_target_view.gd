@@ -154,6 +154,12 @@ var _public_equipment_visible: bool = true
 ## 当前是否允许在武将牌底边绘制公开延时锦囊；第一视角本地牌关闭后改由手牌区上方的独立判定区显示。
 var _public_judgment_visible: bool = true
 
+## 当前是否允许在武将牌左侧绘制公开标记；第一视角关闭后由手牌栏上方的独立横排组件显示。
+var _public_markers_visible: bool = true
+
+## 武将牌左侧公开标记纵排组件；运行时创建以保持选将候选场景不需要额外空节点。
+var _public_markers_view: PlayerMarkersView
+
 ## 当前客户端为未知身份添加的本地标注；空字符串表示保持问号，不参与规则、AI、网络或回放。
 var _identity_mark: String = ""
 
@@ -237,6 +243,7 @@ var _center_status_marker_label: Label
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
 	_ensure_selected_marker_label()
+	_ensure_public_markers_view()
 	_card_body.size = card_size
 	_card_back.size = card_size
 	_refresh_input_area_size()
@@ -255,6 +262,29 @@ func _ready() -> void:
 	_refresh_artwork()
 	_refresh_decade_overlay()
 	_refresh_visual_state()
+
+
+## 确保公开标记纵排组件存在并连接统一信息协议；首次创建后随武将牌复用。
+func _ensure_public_markers_view() -> void:
+	if _public_markers_view != null and is_instance_valid(_public_markers_view):
+		return
+	_public_markers_view = PlayerMarkersView.new()
+	_public_markers_view.name = "PublicMarkers"
+	_public_markers_view.z_index = 30
+	_public_markers_view.position = Vector2(-36.0, 0.0)
+	add_child(_public_markers_view)
+	_public_markers_view.information_requested.connect(_on_public_marker_information_requested)
+	_public_markers_view.information_dismissed.connect(_on_public_marker_information_dismissed)
+
+
+## 把标记悬停信息转发给武将牌既有统一信息出口；外层牌桌不需要识别子组件类型。
+func _on_public_marker_information_requested(information: Dictionary, anchor_rect: Rect2) -> void:
+	information_requested.emit(information, anchor_rect)
+
+
+## 把标记悬停关闭请求转发给武将牌既有统一信息出口。
+func _on_public_marker_information_dismissed() -> void:
+	information_dismissed.emit()
 
 
 ## 设置候选牌是否把拖动手势交由外层滚动列表；正式对局不调用该接口，保持原有点选行为。
@@ -380,6 +410,7 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("chained", false),
 		snapshot.get("face_down", false),
 		snapshot.get("character_corner_text", ""),
+		snapshot.get("public_marks", {}),
 		snapshot.get("auto_managed", false),
 		snapshot.get("auto_managed_offline", false),
 		snapshot.get("hand_count", 0),
@@ -404,6 +435,7 @@ func set_match_overlays_visible(visible_in_match: bool) -> void:
 	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_refresh_auto_managed_label()
 	_refresh_hover_name_visibility()
+	_refresh_public_markers()
 
 
 ## 按当前展示用途同步透明输入区域；正式对局覆盖延时锦囊标记，选将候选保持标准牌面高度避免相邻行输入重叠。
@@ -434,6 +466,15 @@ func set_public_judgment_visible(visible_on_card: bool) -> void:
 		return
 	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_refresh_input_area_size()
+
+
+## 设置武将牌左侧是否显示公开标记；第一视角关闭后由牌桌独立横排组件承担相同信息与悬停说明。
+func set_public_markers_visible(visible_on_card: bool) -> void:
+	_public_markers_visible = visible_on_card
+	if not is_node_ready():
+		return
+	_ensure_public_markers_view()
+	_refresh_public_markers()
 
 
 ## 写入当前客户端对未知身份的本地标注；身份公开时标注自动失效且不会覆盖真实身份。
@@ -469,6 +510,8 @@ func refresh_ui_style() -> void:
 	# 当前武将定义；从稳定角色 ID 重新取得只读配置，避免组件为主题刷新长期保存额外对象引用。
 	var character_definition: Dictionary = GameDatabase.get_character(str(_player_snapshot.get("character_id", "")))
 	_public_zone_label.refresh_ui_style()
+	if _public_markers_view != null:
+		_public_markers_view.refresh_ui_style()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
 
@@ -647,6 +690,19 @@ func _refresh_visual_state() -> void:
 	_state_overlay.configure(snapshot_alive, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0, snapshot_out_of_game)
 	_refresh_selected_marker()
 	_corner_text_badge.set_display_text(str(_player_snapshot.get("character_corner_text", "")))
+	_refresh_public_markers()
+
+
+## 根据公开快照刷新武将牌左侧纵排标记；选将候选、本地第一视角或空集合均不占用画面。
+func _refresh_public_markers() -> void:
+	if not is_node_ready():
+		return
+	_ensure_public_markers_view()
+	# 当前公开标记；全部字段已经由PlayerState按观察者统一序列化，不包含隐藏信息。
+	var public_marks: Dictionary = _player_snapshot.get("public_marks", {}) as Dictionary
+	_public_markers_view.configure(public_marks, false)
+	_public_markers_view.position = Vector2(-_public_markers_view.size.x - 4.0, 0.0)
+	_public_markers_view.visible = _match_overlays_visible and _public_markers_visible and not public_marks.is_empty()
 
 
 

@@ -180,9 +180,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；当前十九名正式武将共登记三十九个独立技能源码定义，其中包含两项领袖技。
+	# 技能元数据数量；当前二十一名正式武将与模式规则共登记四十四个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 41:
+	if skill_definition_count != 44:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -214,13 +214,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 正式武将数量；当前共二十名可参与选将与对局的角色。
+	# 正式武将数量；当前共二十一名可参与选将与对局的角色。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 20:
+	if character_definition_count != 21:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前二十名武将共使用七个独立势力主题。
+	# 势力展示元数据数量；当前二十一名武将共使用七个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 7:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
@@ -430,8 +430,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL character_selection_hidden_choices")
 		get_tree().quit(1)
 		return
-	selection_service.select_character(2, selection_service.get_candidates(2)[0])
-	if selection_service.phase != CharacterSelectionService.PHASE_COMPLETE:
+	# 玩家三最终选择；候选池扩充后固定种子可能让首项与已占用武将重合，因此按候选顺序提交首个仍合法项。
+	var player_three_selected: bool = false
+	for player_three_candidate: String in selection_service.get_candidates(2):
+		if selection_service.select_character(2, player_three_candidate).is_empty():
+			player_three_selected = true
+			break
+	if not player_three_selected or selection_service.phase != CharacterSelectionService.PHASE_COMPLETE:
 		printerr("SMOKE_FAIL character_selection_complete")
 		get_tree().quit(1)
 		return

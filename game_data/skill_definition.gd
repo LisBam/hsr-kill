@@ -18,6 +18,9 @@ var lock: bool = false
 ## 当前技能是否为领袖技；true 表示只有身份为 leader 的角色实际拥有并显示该技能，默认 false 表示不限制身份。
 var leader_skill: bool = false
 
+## 当前技能是否为离场技；true表示持有者存活但离场时仍可接收触发时机并参与纯查询效果，死亡后仍然失效。
+var out_of_game_skill: bool = false
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
@@ -26,6 +29,8 @@ func _init(metadata: Dictionary = {}) -> void:
 	_metadata["lock"] = lock
 	leader_skill = bool(_metadata.get("leader_skill", false))
 	_metadata["leader_skill"] = leader_skill
+	out_of_game_skill = bool(_metadata.get("out_of_game_skill", false))
+	_metadata["out_of_game_skill"] = out_of_game_skill
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -129,7 +134,9 @@ func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
 func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable) -> bool:
 	# 技能持有者权威状态；未绑定、死亡或离场时仅允许显式覆盖的特殊技能继续接收时机。
 	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
-	if (owner == null or not owner.alive or owner.out_of_game) and not can_trigger_while_owner_inactive(event):
+	if (owner == null or not owner.alive) and not can_trigger_while_owner_inactive(event):
+		return false
+	if owner != null and owner.out_of_game and not out_of_game_skill and not can_trigger_while_owner_inactive(event):
 		return false
 	return not custom_condition.is_valid() or bool(custom_condition.call(event))
 
@@ -270,6 +277,11 @@ func get_play_count_limit_bonus(_card_definition: Dictionary) -> int:
 ## 判断技能是否令指定卡牌忽略距离限制；默认保持卡牌自身的攻击范围、距离1或特殊距离规则。
 func ignores_card_distance_limit(_card_definition: Dictionary) -> bool:
 	return false
+
+
+## 修正持有者到指定目标的最终距离；默认保持坐骑与座次计算结果，返回值必须收敛为0以上整数。
+func modify_distance_to_target(_target_id: int, current_distance: int) -> int:
+	return current_distance
 
 
 ## 判断其他角色能否弃置持有者的指定牌；默认允许，保护技能只拒绝规则明确覆盖的区域与牌型。
@@ -426,4 +438,7 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	var result: Dictionary = context.duplicate(true)
 	result["skill_id"] = get_id()
 	result["skill_owner_id"] = owner_player_id
+	# 离场技选择许可；控制器只在请求归属技能明确声明离场技时允许存活离场持有者继续完成目标或选牌。
+	if out_of_game_skill:
+		result["allow_out_of_game_chooser"] = true
 	return result

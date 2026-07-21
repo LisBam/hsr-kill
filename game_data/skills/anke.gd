@@ -38,16 +38,16 @@ func _init() -> void:
 	})
 
 
-## 订阅每个回合的开始、全局弃牌移动与持有者自己的回合结束；统计不区分弃牌原因或牌的原持有者。
+## 订阅每个回合的开始、全局弃牌移动与持有者自己的回合结束；只有持有者自己的回合会开启统计与文本显示。
 func install() -> void:
 	subscribe_timing("phaseBefore", _on_turn_before, "global")
 	subscribe_timing("cardsDiscardAfter", _on_cards_discarded, "global")
 	subscribe_timing("phaseEnd", _on_turn_end, "player")
 
 
-## 新回合开始时清空花色集合，并在新轮到来时恢复三次额度。
-func _on_turn_before(_event: RuleEvent) -> void:
-	_tracked_turn_number = host.state.turn_number
+## 新回合开始时清空花色集合；只有持有者自己的回合记录有效回合号，回合外保持关闭并清除文本。
+func _on_turn_before(event: RuleEvent) -> void:
+	_tracked_turn_number = host.state.turn_number if event.player_id == owner_player_id else -1
 	_discarded_suits_this_turn.clear()
 	_refresh_corner_text()
 	if _tracked_round_number != host.state.round_number:
@@ -57,7 +57,7 @@ func _on_turn_before(_event: RuleEvent) -> void:
 
 ## 从弃牌堆按UID读取刚进入的实体牌并记录有效花色；虚拟牌与none花色不计入。
 func _on_cards_discarded(event: RuleEvent) -> void:
-	if _tracked_turn_number != host.state.turn_number:
+	if host.state.current_player_id != owner_player_id or _tracked_turn_number != host.state.turn_number:
 		return
 	for card_uid_variant: Variant in event.data.get("card_uids", []) as Array:
 		var card: CardInstance = _find_discard_card(int(card_uid_variant))
@@ -69,6 +69,8 @@ func _on_cards_discarded(event: RuleEvent) -> void:
 ## 持有者自己的回合结束时满足四花色且本轮未达上限则询问；取消不会消耗次数。
 func _on_turn_end(event: RuleEvent) -> void:
 	if event.player_id != owner_player_id:
+		return
+	if _tracked_turn_number != host.state.turn_number:
 		return
 	if _discarded_suits_this_turn.size() < REQUIRED_SUIT_COUNT or _uses_this_round >= MAX_USES_PER_ROUND:
 		return
