@@ -86,8 +86,8 @@ func get_maximum_target_count(actor_id: int, card: CardInstance) -> int:
 func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> String:
 	# 使用者状态；死亡、越权或不存在的玩家均不能行动。
 	var actor: PlayerState = state.get_player(actor_id)
-	if actor == null or not actor.alive:
-		return "行动玩家不存在或已经死亡。"
+	if actor == null or not actor.alive or actor.out_of_game:
+		return "行动玩家不存在、已经死亡或已移出游戏。"
 	if state.current_player_id != actor_id or state.current_phase != "play":
 		return "当前不是该玩家的出牌阶段。"
 	if card == null or actor.find_playable_card(card.uid) == null:
@@ -134,8 +134,8 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Array[int], rule_overrides: Dictionary = {}) -> String:
 	# 虚拟牌使用者；不存在、死亡或不处于自己的出牌阶段时不能声明视为牌。
 	var actor: PlayerState = state.get_player(actor_id)
-	if actor == null or not actor.alive:
-		return "行动玩家不存在或已经死亡。"
+	if actor == null or not actor.alive or actor.out_of_game:
+		return "行动玩家不存在、已经死亡或已移出游戏。"
 	if state.current_player_id != actor_id or state.current_phase != "play":
 		return "当前不是该玩家的出牌阶段。"
 	# 虚拟牌定义；丈八蛇矛当前固定生成普通【杀】，保留通用定义参数便于其他视为牌复用。
@@ -184,7 +184,7 @@ func list_legal_virtual_targets(actor_id: int, definition_id: String, rule_overr
 	if actor == null or definition.is_empty():
 		return result
 	for target: PlayerState in state.players:
-		if target.alive and _validate_target(actor, definition, target.player_id, [target.player_id], rule_overrides).is_empty():
+		if target.alive and not target.out_of_game and _validate_target(actor, definition, target.player_id, [target.player_id], rule_overrides).is_empty():
 			result.append(target.player_id)
 	return result
 
@@ -206,7 +206,7 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 			result.append(actor_id)
 		return result
 	for target: PlayerState in state.players:
-		if not target.alive:
+		if not target.alive or target.out_of_game:
 			continue
 		if _validate_target(state.get_player(actor_id), definition, target.player_id, [target.player_id], {"card_color":card.get_color()}).is_empty():
 			result.append(target.player_id)
@@ -237,7 +237,7 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 		for seat_offset: int in range(state.players.size()):
 			# 当前行动顺序玩家；使用者本人首先参与 all_players，all_others 则从其下家开始产生首个目标。
 			var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
-			if not player.alive:
+			if not player.alive or player.out_of_game:
 				continue
 			if target_mode == "all_others" and player.player_id == actor_id:
 				continue
@@ -268,8 +268,8 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int, all_target_ids: Array[int], rule_overrides: Dictionary = {}) -> String:
 	# 目标玩家状态；不存在或死亡的角色不是合法目标。
 	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive:
-		return "目标不存在或已经死亡。"
+	if target == null or not target.alive or target.out_of_game:
+		return "目标不存在、已经死亡或已移出游戏。"
 	# 卡牌目标模式；决定身份、区域与状态限制。
 	var target_mode: String = str(definition.get("target_mode", ""))
 	# 当前卡牌源码；目标组合与效果前置条件等专属规则由对应卡牌文件校验。
@@ -295,7 +295,7 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 
 	# 距离限制；攻击范围与距离1均在此统一计算。
 	var distance_limit: String = str(definition.get("distance_limit", "none"))
-	var ignore_distance_limit: bool = bool(rule_overrides.get("ignore_distance_limit", false))
+	var ignore_distance_limit: bool = bool(rule_overrides.get("ignore_distance_limit", false)) or _skill_ignores_card_distance_limit(actor.player_id, definition)
 	if not ignore_distance_limit and distance_limit == "attack_range" and calculate_distance(actor.player_id, target_id) > get_attack_range(actor.player_id):
 		return "目标不在攻击范围内。"
 	if not ignore_distance_limit and distance_limit == "one" and calculate_distance(actor.player_id, target_id) > 1:
@@ -373,3 +373,10 @@ func _skill_play_count_limit_bonus(actor_id: int, definition: Dictionary) -> int
 	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_play_count_limit_bonus"):
 		return 0
 	return maxi(int(skill_rule_provider.call("skill_play_count_limit_bonus", actor_id, definition)), 0)
+
+
+## 汇总行动玩家当前技能提供的卡牌距离解除规则；查询失败时保持卡牌基础限制。
+func _skill_ignores_card_distance_limit(actor_id: int, definition: Dictionary) -> bool:
+	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_ignores_card_distance_limit"):
+		return false
+	return bool(skill_rule_provider.call("skill_ignores_card_distance_limit", actor_id, definition))

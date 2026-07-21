@@ -80,16 +80,19 @@ func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, 
 	var actor: PlayerState = state.get_player(actor_id)
 	# 目标状态；死亡或离场目标直接跳过本次结算。
 	var target: PlayerState = state.get_player(target_id)
-	if actor == null or target == null or not target.alive:
+	if actor == null or not actor.alive or actor.out_of_game or target == null or not target.alive or target.out_of_game:
 		return
 	# 通用【杀】上下文；只保存可序列化字段，异步恢复时重新查询实体与装备。
+	# 当前使用牌对本目标的技能伤害加值；多目标【杀】按目标独立读取，不污染其他目标基础伤害。
+	var parent_card_uid: int = card.uid if resolution_parent_card_uid < 0 else resolution_parent_card_uid
+	var target_damage_bonus: int = int(host.call("get_card_target_damage_bonus", parent_card_uid, target_id)) if host.has_method("get_card_target_damage_bonus") else 0
 	var context: Dictionary = {
-		"parent_card_uid":card.uid if resolution_parent_card_uid < 0 else resolution_parent_card_uid,
+		"parent_card_uid":parent_card_uid,
 		"slash_card_uid":card.uid,
 		"slash_card_definition_id":card.definition_id,
 		"actor_id":actor_id,
 		"target_id":target_id,
-		"damage_amount":damage_amount,
+		"damage_amount":maxi(damage_amount + target_damage_bonus, 0),
 		"nature":nature,
 		"ignore_armor":ignore_armor,
 	}
@@ -106,7 +109,7 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 	var card: CardInstance = _find_card(int(context.get("slash_card_uid", -1)))
 	# 当前目标状态；等待期间死亡或离场时停止。
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
-	if card == null or target == null or not target.alive or resolver.is_resolution_stopped():
+	if card == null or target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	# 当前攻击者武器；目标结算开始时再次读取，确保借刀【杀】与异步恢复都能正确应用青釭剑的无视防具能力。
 	var current_weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
@@ -140,7 +143,7 @@ func _finish_slash_response(context: Dictionary, dodged: bool) -> void:
 	var actor: PlayerState = state.get_player(int(context.get("actor_id", -1)))
 	# 目标状态；响应插入结算可能已经改变其存活状态。
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
-	if actor == null or target == null or not target.alive or resolver.is_resolution_stopped():
+	if actor == null or not actor.alive or actor.out_of_game or target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	# 武器阶段上下文；dodged 可由贯石斧等装备在支付费用后改写。
 	var weapon_context: Dictionary = context.duplicate(true)
@@ -156,7 +159,7 @@ func _finish_slash_response(context: Dictionary, dodged: bool) -> void:
 func continue_after_weapon_dodged(context: Dictionary) -> void:
 	# 目标状态；用于记录【闪】抵消日志。
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
-	if target == null or not target.alive or resolver.is_resolution_stopped():
+	if target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	if bool(context.get("dodged", false)):
 		host.emit_rule_timing("shaMiss", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)

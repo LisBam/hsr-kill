@@ -72,6 +72,14 @@ func _run() -> void:
 		return
 	if not _test_new_skill_ai_rules():
 		return
+	if not _test_hsr_character_metadata_and_rule_catalog():
+		return
+	if not await _test_out_of_game_pile_arrangement_and_ui():
+		return
+	if not _test_misha_and_alan_skills():
+		return
+	if not _test_aisida_heita_xiluwa_skills():
+		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
 
@@ -1202,6 +1210,292 @@ func _test_new_skill_ai_rules() -> bool:
 	var mingchen_enemy_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[1]}}
 	if mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator) <= mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator):
 		return _fail("mingchen_ai_preserve_retrigger self=%.2f enemy=%.2f" % [mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator), mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator)])
+	return true
+
+
+## 验证五名新武将、十项技能和三项势力的静态资料，同时校验主要阶段目录保持固定顺序。
+func _test_hsr_character_metadata_and_rule_catalog() -> bool:
+	# 新武将元数据期望；顺序同时决定技能栏展示与运行时安装次序。
+	var expected_characters: Dictionary = {
+		"misha":["pinuokangni", "male", 3, ["huanying", "chuanchong"]],
+		"alan":["xingjianhuanyv", "male", 4, ["qingli", "qianggong"]],
+		"aisida":["yinhexvezhe", "female", 3, ["xingqi", "xingluo"]],
+		"heita":["yinhexvezhe", "female", 3, ["zhishi", "jiqiao"]],
+		"xiluwa":["beiluoboge", "female", 3, ["xianzou", "anke"]],
+	}
+	for character_id_variant: Variant in expected_characters.keys():
+		# 当前武将稳定ID；字典键转换为字符串后读取自动索引定义。
+		var character_id: String = str(character_id_variant)
+		# 当前武将期望数组；依次保存势力、性别、体力和技能ID数组。
+		var expectation: Array = expected_characters[character_id] as Array
+		# 当前武将静态定义；数据库必须已扫描对应GD文件并保留全部字段。
+		var character_definition: Dictionary = GameDatabase.get_character(character_id)
+		if str(character_definition.get("faction", "")) != str(expectation[0]) or str(character_definition.get("gender", "")) != str(expectation[1]) or int(character_definition.get("max_hp", 0)) != int(expectation[2]) or (character_definition.get("skills", []) as Array) != (expectation[3] as Array):
+			return _fail("hsr_character_metadata id=%s definition=%s" % [character_id, character_definition])
+	# 新势力展示资料期望；颜色固定为主公指定的金、淡灰与紫色十六进制值。
+	var expected_factions: Dictionary = {
+		"pinuokangni":["匹诺康尼", "匹", "d6ad45"],
+		"xingjianhuanyv":["星间寰宇", "星", "c7c9ce"],
+		"yinhexvezhe":["银河学者", "学", "8a63b8"],
+	}
+	for faction_id_variant: Variant in expected_factions.keys():
+		# 当前势力稳定ID；与武将faction字段一一对应。
+		var faction_id: String = str(faction_id_variant)
+		# 当前势力期望数组；依次保存全称、简称与无井号颜色值。
+		var faction_expectation: Array = expected_factions[faction_id] as Array
+		# 当前势力定义；由factions.json自动载入。
+		var faction_definition: Dictionary = GameDatabase.get_faction(faction_id)
+		if str(faction_definition.get("display_name", "")) != str(faction_expectation[0]) or str(faction_definition.get("short_name", "")) != str(faction_expectation[1]) or str(faction_definition.get("color", "")) != str(faction_expectation[2]):
+			return _fail("hsr_faction_metadata id=%s definition=%s" % [faction_id, faction_definition])
+	# 主公钦定的技能原文；逐项精确比较，防止玩家面板文字在后续重构中被改写。
+	var expected_descriptions: Dictionary = {
+		"huanying":"锁定技，你的回合外，当你受到伤害后，你移出游戏直到本回合结束。",
+		"chuanchong":"出牌阶段限一次，你可将一张红桃/方块/黑桃/梅花手牌当【顺手牵羊】/【无中生有】/【过河拆桥】/【借刀杀人】使用。",
+		"qingli":"你可以失去1点体力并视为使用或打出一张雷【杀】。",
+		"qianggong":"当你使用【杀】指定目标时，你可以弃置一张牌，若此牌为红色，此【杀】不可被【闪】响应；若此牌为黑色，此【杀】伤害+1；若此牌为武器牌，则以上两项均执行。",
+		"xingqi":"准备阶段，你可以观看牌堆顶的X张牌，然后令一名角色获得其中一张锦囊牌，并将其余的牌以任意顺序放回牌堆顶或牌堆底。（X为场上存活角色数，且至多为5。）",
+		"xingluo":"出牌阶段限一次，你可以重铸你与至多两名其他角色各一张手牌。若这些牌：类型均为锦囊牌，你摸两张牌；颜色均为红色，你摸一张牌。",
+		"zhishi":"当你使用锦囊牌时，你可以摸一张牌。",
+		"jiqiao":"锁定技，你使用锦囊牌没有距离限制。其他角色不可弃置你装备区内的防具牌与宝物牌。",
+		"xianzou":"每个主要阶段开始时，你可以重铸一张手牌并跳过该阶段，若为弃牌阶段，你将手牌数调整至X。每轮每种花色限一次。（X等于你的当前体力值。）",
+		"anke":"回合结束时，若本回合内有四种花色的牌进入过弃牌堆，你可执行一个额外的回合。每轮限三次。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前技能稳定ID；用于读取数据目录自动注册的说明文本。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("hsr_skill_description id=%s" % skill_id)
+	if RuleTimingCatalog.MAIN_PHASES != ["judgment", "draw", "play", "discard"] or RuleTimingCatalog.is_main_phase("start") or not RuleTimingCatalog.is_main_phase("discard"):
+		return _fail("main_phase_catalog=%s" % [RuleTimingCatalog.MAIN_PHASES])
+	return true
+
+
+## 验证离场角色不参与规则与输入，并验证双行牌堆排序和调整手牌数均按公开端口执行。
+func _test_out_of_game_pile_arrangement_and_ui() -> bool:
+	_reset_state(3)
+	# 当前攻击牌；用于确认移出游戏的角色不能再成为实体牌的合法目标。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	# 离场角色手牌计数；离场后执行摸牌必须保持该数量不变。
+	var removed_player: PlayerState = _controller.state.get_player(1)
+	# 为离场摸牌断言预置的牌堆顶实体；其不能被离场角色取得。
+	var guarded_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 8)
+	if not _controller.remove_player_from_game(1, "new_character_test") or not removed_player.out_of_game:
+		return _fail("remove_player_from_game")
+	if _controller.card_rules.validate_use(0, slash_card, [1]).is_empty() or _controller.state.get_alive_players().size() != 2:
+		return _fail("out_of_game_targeting")
+	var removed_hand_count: int = removed_player.hand.size()
+	_controller.draw(1, 1)
+	if removed_player.hand.size() != removed_hand_count or not _controller.state.draw_pile.has(guarded_draw_card):
+		return _fail("out_of_game_draw hand=%d/%d" % [removed_player.hand.size(), removed_hand_count])
+	# 正式武将牌场景；以真实输入组件验证离场表现既透明又不可点击。
+	var removed_player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	add_child(removed_player_view)
+	await get_tree().process_frame
+	# 离场公开快照；字段与正式网络快照保持一致。
+	var removed_snapshot: Dictionary = {"player_id":1, "display_name":"离场测试", "character_id":"misha", "identity":"rebel", "hp":3, "max_hp":3, "shield":0, "alive":true, "out_of_game":true, "chained":false, "face_down":false, "hand_count":0, "equipment":{}, "judgment_area":[], "wooden_ox_storage_count":0}
+	removed_player_view.configure_snapshot(removed_snapshot, GameDatabase.get_character("misha"))
+	if removed_player_view.is_interactable or not is_equal_approx(removed_player_view.modulate.a, removed_player_view.out_of_game_modulate.a):
+		removed_player_view.queue_free()
+		return _fail("out_of_game_view interactable=%s alpha=%s" % [removed_player_view.is_interactable, removed_player_view.modulate.a])
+	removed_player_view.queue_free()
+	if not _controller.restore_player_to_game(1, "new_character_test") or removed_player.out_of_game:
+		return _fail("restore_player_to_game")
+	_reset_state(2)
+	# 未参与排序的原牌堆底部实体；排序后必须保持在四张观看牌之间的相对位置。
+	var untouched_card: CardInstance = _add_draw_pile_card("tao", "heart", 3)
+	# 牌堆底行左侧实体；最终应比右侧实体更靠近牌堆顶。
+	var bottom_left_card: CardInstance = _add_draw_pile_card("shan", "club", 4)
+	# 牌堆底行右侧实体；最终应成为四张观看牌中最底部的实体。
+	var bottom_right_card: CardInstance = _add_draw_pile_card("sha", "spade", 5)
+	# 牌堆顶行右侧实体；最终位于顶行左侧实体之下。
+	var top_right_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 6)
+	# 牌堆顶行左侧实体；最终必须成为实际牌堆顶。
+	var top_left_card: CardInstance = _add_draw_pile_card("guohe", "spade", 7)
+	var ordered_uids: Array[int] = [top_left_card.uid, top_right_card.uid, bottom_left_card.uid, bottom_right_card.uid]
+	if not _controller.arrange_draw_pile_cards(ordered_uids, 2, "new_character_test"):
+		return _fail("pile_arrangement_rejected")
+	# 牌堆真实数组UID顺序；数组末尾是实际牌堆顶。
+	var arranged_uids: Array[int] = []
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		arranged_uids.append(draw_card.uid)
+	var expected_arranged_uids: Array[int] = [bottom_right_card.uid, bottom_left_card.uid, untouched_card.uid, top_right_card.uid, top_left_card.uid]
+	if arranged_uids != expected_arranged_uids:
+		return _fail("pile_arrangement_order actual=%s expected=%s" % [arranged_uids, expected_arranged_uids])
+	# 调整手牌前的唯一手牌；后续先补足到三张，再通过统一选择弃至一张。
+	var initial_hand_card: CardInstance = _add_hand_card(0, "shan", "heart", 9)
+	if not _controller.adjust_hand_size(0, 3) or _controller.state.get_player(0).hand.size() != 3:
+		return _fail("adjust_hand_size_draw hand=%d" % _controller.state.get_player(0).hand.size())
+	var discard_uids: Array[int] = [initial_hand_card.uid, _controller.state.get_player(0).hand[1].uid]
+	if not _controller.adjust_hand_size(0, 1) or not _submit_pending_choice(0, discard_uids, [], true):
+		return false
+	if _controller.state.get_player(0).hand.size() != 1:
+		return _fail("adjust_hand_size_discard hand=%d" % _controller.state.get_player(0).hand.size())
+	return true
+
+
+## 验证【幻影】的离场回归、【倾力】的无材料雷杀和【强攻】的红黑武器三种强化分支。
+func _test_misha_and_alan_skills() -> bool:
+	_reset_state(2)
+	# 幻影持有者；二号位在一号位回合内受伤后应暂时离场。
+	var huanying: SkillDefinition = _install_single_skill(1, "huanying")
+	if huanying == null:
+		return _fail("huanying_missing")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if not _controller.state.get_player(1).out_of_game:
+		return _fail("huanying_remove")
+	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if _controller.state.get_player(1).out_of_game:
+		return _fail("huanying_restore")
+	_reset_state(2)
+	# 倾力测试前的正式规则服务；技能距离和次数查询应经过控制器钩子。
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 倾力持有者；主动雷杀会失去一点体力并对无响应目标造成一点雷属性伤害。
+	var qingli: SkillDefinition = GameDatabase.create_skill("qingli")
+	qingli.bind(_controller, 0)
+	var qingli_result: String = qingli.activate({"target_ids":[1]})
+	if _controller.has_pending_card_choice() and not _submit_pending_choice(1, [], [], false):
+		return false
+	if not qingli_result.is_empty() or _controller.state.get_player(0).hp != 3 or _controller.state.get_player(1).hp != 3:
+		return _fail("qingli_virtual_slash result=%s hp=%d/%d" % [qingli_result, _controller.state.get_player(0).hp, _controller.state.get_player(1).hp])
+	_reset_state(2)
+	# 红色强攻费用；应只写入不可响应的直击目标。
+	var qianggong_red: SkillDefinition = GameDatabase.create_skill("qianggong")
+	qianggong_red.bind(_controller, 0)
+	var red_cost: CardInstance = _add_hand_card(0, "shan", "heart", 10)
+	_controller._card_use_contexts[9101] = {"target_ids":[1], "direct_hit_target_ids":[], "custom_args":{}}
+	var red_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	red_response.card_ids = [red_cost.uid]
+	qianggong_red.continue_selection({"kind":"qianggong_cost", "card_uid":9101, "target_id":1}, red_response)
+	var red_context: Dictionary = _controller._card_use_contexts[9101] as Dictionary
+	if not (red_context.get("direct_hit_target_ids", []) as Array).has(1) or _controller.get_card_target_damage_bonus(9101, 1) != 0:
+		return _fail("qianggong_red context=%s" % [red_context])
+	_reset_state(2)
+	# 黑色强攻费用；应只为该目标增加一点伤害。
+	var qianggong_black: SkillDefinition = GameDatabase.create_skill("qianggong")
+	qianggong_black.bind(_controller, 0)
+	var black_cost: CardInstance = _add_hand_card(0, "shan", "spade", 11)
+	_controller._card_use_contexts[9102] = {"target_ids":[1], "direct_hit_target_ids":[], "custom_args":{}}
+	var black_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	black_response.card_ids = [black_cost.uid]
+	qianggong_black.continue_selection({"kind":"qianggong_cost", "card_uid":9102, "target_id":1}, black_response)
+	var black_context: Dictionary = _controller._card_use_contexts[9102] as Dictionary
+	if (black_context.get("direct_hit_target_ids", []) as Array).has(1) or _controller.get_card_target_damage_bonus(9102, 1) != 1:
+		return _fail("qianggong_black context=%s" % [black_context])
+	_reset_state(2)
+	# 武器强攻费用；武器自身颜色不影响“直击与增伤同时执行”的专属规则。
+	var qianggong_weapon: SkillDefinition = GameDatabase.create_skill("qianggong")
+	qianggong_weapon.bind(_controller, 0)
+	var weapon_cost: CardInstance = CardInstance.new("qinggang", "spade", 12)
+	weapon_cost.zone = "equipment"
+	weapon_cost.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = weapon_cost
+	_controller._card_use_contexts[9103] = {"target_ids":[1], "direct_hit_target_ids":[], "custom_args":{}}
+	var weapon_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	weapon_response.card_ids = [weapon_cost.uid]
+	qianggong_weapon.continue_selection({"kind":"qianggong_cost", "card_uid":9103, "target_id":1}, weapon_response)
+	var weapon_context: Dictionary = _controller._card_use_contexts[9103] as Dictionary
+	if not (weapon_context.get("direct_hit_target_ids", []) as Array).has(1) or _controller.get_card_target_damage_bonus(9103, 1) != 1:
+		return _fail("qianggong_weapon context=%s" % [weapon_context])
+	return true
+
+
+## 验证艾丝妲、黑塔与希露瓦的私有选牌、重铸奖励、装备保护、主要阶段跳过和额外回合确认。
+func _test_aisida_heita_xiluwa_skills() -> bool:
+	_reset_state(2)
+	# 星祈观看的非锦囊余牌；在锦囊分配后进入双行牌堆排序请求。
+	var xingqi_remaining_card: CardInstance = _add_draw_pile_card("shan", "club", 4)
+	# 星祈观看的锦囊牌；本测试将其交给二号角色。
+	var xingqi_trick_card: CardInstance = _add_draw_pile_card("wuzhong", "heart", 5)
+	var xingqi: SkillDefinition = _install_single_skill(0, "xingqi")
+	if xingqi == null:
+		return _fail("xingqi_missing")
+	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [xingqi_trick_card.uid], [], true):
+		return _fail("xingqi_trick_choice")
+	if not _submit_pending_choice(0, [], [1], true):
+		return false
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [xingqi_remaining_card.uid], [], true, "top_count_1"):
+		return _fail("xingqi_arrangement_choice")
+	if not _controller.state.get_player(1).hand.has(xingqi_trick_card) or _controller.state.draw_pile.back() != xingqi_remaining_card:
+		return _fail("xingqi_result target_hand=%s top=%s" % [_controller.state.get_player(1).hand, _controller.state.draw_pile.back().uid if not _controller.state.draw_pile.is_empty() else -1])
+	_reset_state(2)
+	# 星落自身与其他角色的红色锦囊；两项条件同时满足时持有者累计摸三张。
+	var xingluo_self_card: CardInstance = _add_hand_card(0, "wuzhong", "heart", 6)
+	var xingluo_other_card: CardInstance = _add_hand_card(1, "guohe", "diamond", 7)
+	for draw_rank: int in range(1, 6):
+		_add_draw_pile_card("shan", "club", draw_rank)
+	var xingluo: SkillDefinition = _install_single_skill(0, "xingluo")
+	if xingluo == null or not xingluo.activate({"target_ids":[1]}).is_empty():
+		return _fail("xingluo_activate")
+	if not _submit_pending_choice(0, [xingluo_self_card.uid], [], true) or not _submit_pending_choice(0, [xingluo_other_card.uid], [], true):
+		return false
+	if _controller.state.get_player(0).hand.size() != 4 or _controller.state.get_player(1).hand.size() != 1:
+		return _fail("xingluo_rewards hand=%d/%d" % [_controller.state.get_player(0).hand.size(), _controller.state.get_player(1).hand.size()])
+	_reset_state(2)
+	# 智识补牌来源；使用锦囊后的确认应只摸一张并保留可取消选择协议。
+	var zhishi_draw_card: CardInstance = _add_draw_pile_card("sha", "spade", 8)
+	var zhishi: SkillDefinition = _install_single_skill(0, "zhishi")
+	if zhishi == null:
+		return _fail("zhishi_missing")
+	_controller._emit_rule_timing("useCard", 0, 0, 1, {"card_id":"wuzhong", "card_uid":9201})
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [], true):
+		return _fail("zhishi_choice")
+	if not _controller.state.get_player(0).hand.has(zhishi_draw_card):
+		return _fail("zhishi_draw")
+	_reset_state(4)
+	# 机巧规则测试使用真实控制器提供者；距离和弃置保护均需遍历运行时技能表。
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	var jiqiao: SkillDefinition = _install_single_skill(0, "jiqiao")
+	# 受保护防具实体；其他角色不得通过权威弃置入口移走。
+	var armor_card: CardInstance = CardInstance.new("bagua", "club", 9)
+	armor_card.zone = "equipment"
+	armor_card.owner_id = 0
+	_controller.state.get_player(0).equipment["armor"] = armor_card
+	# 受保护宝物实体；与防具共享机巧的外部弃置限制。
+	var treasure_card: CardInstance = CardInstance.new("muniu", "diamond", 10)
+	treasure_card.zone = "equipment"
+	treasure_card.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = treasure_card
+	# 距离2的目标手牌；用于验证【顺手牵羊】因机巧解除距离限制仍可合法指定。
+	_add_hand_card(2, "shan", "heart", 11)
+	if jiqiao == null or _controller.can_discard_player_card(1, 0, armor_card, "equipment", "armor") or _controller.can_discard_player_card(1, 0, treasure_card, "equipment", "treasure") or _controller._discard_selected_player_card(0, armor_card.uid, 1):
+		return _fail("jiqiao_protection")
+	if _controller.card_rules.validate_virtual_use(0, "shunshou", [2]) != "":
+		return _fail("jiqiao_distance")
+	_reset_state(2)
+	# 弦奏用于出牌阶段的梅花手牌；重铸完成后必须写入跳过状态并进入阶段转场。
+	var xianzou_cost_card: CardInstance = _add_hand_card(0, "shan", "club", 12)
+	_add_draw_pile_card("sha", "heart", 13)
+	var xianzou: SkillDefinition = _install_single_skill(0, "xianzou")
+	if xianzou == null:
+		return _fail("xianzou_missing")
+	_controller._emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [xianzou_cost_card.uid], [], true):
+		return _fail("xianzou_choice")
+	if _controller.state.current_phase != "play_skipped" or not _controller.state.get_player(0).skipped_phases.get("play", false):
+		return _fail("xianzou_skip phase=%s skipped=%s" % [_controller.state.current_phase, _controller.state.get_player(0).skipped_phases])
+	_controller.game_flow_pacer.cancel_all()
+	_reset_state(2)
+	# 安可四花色弃牌记录；满足条件后的确认应消耗本轮第一次额外回合额度。
+	var anke: SkillDefinition = _install_single_skill(0, "anke")
+	if anke == null:
+		return _fail("anke_missing")
+	anke.call("_on_turn_before", RuleEvent.new("phaseBefore", 0, 0, {"turn_number":_controller.state.turn_number}))
+	var anke_cards: Array[CardInstance] = [
+		_add_discard_pile_card("sha", "spade", 1),
+		_add_discard_pile_card("shan", "heart", 2),
+		_add_discard_pile_card("tao", "club", 3),
+		_add_discard_pile_card("wuzhong", "diamond", 4),
+	]
+	var anke_uids: Array[int] = []
+	for anke_card: CardInstance in anke_cards:
+		anke_uids.append(anke_card.uid)
+	anke.call("_on_cards_discarded", RuleEvent.new("cardsDiscardAfter", -1, -1, {"card_uids":anke_uids}))
+	anke.call("_on_turn_end", RuleEvent.new("phaseEnd", 0, 0, {"turn_number":_controller.state.turn_number}))
+	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [], true):
+		return _fail("anke_choice")
+	if int(anke.get("_uses_this_round")) != 1:
+		return _fail("anke_extra_turn_count=%s" % anke.get("_uses_this_round"))
 	return true
 
 

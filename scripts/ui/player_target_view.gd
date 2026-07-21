@@ -64,6 +64,9 @@ signal scroll_gesture_moved(relative: Vector2)
 ## 选目标期间非法武将牌的整体调制色；默认保留42%亮度与完整不透明度，运行时通常无需动态修改。
 @export var invalid_target_modulate: Color = Color(0.42, 0.42, 0.42, 1.0)
 
+## 移出游戏时的武将牌调制色；默认保留18%不透明度表达角色暂时不存在，仅影响表现且运行时无需动态修改。
+@export var out_of_game_modulate: Color = Color(1.0, 1.0, 1.0, 0.18)
+
 ## 选目标“选中”提示的固定绿色；与太空主题合法目标色一致，不随选中金色边框变化，运行时通常无需动态修改。
 const SELECTED_MARKER_COLOR: Color = Color("61c7a4")
 
@@ -316,7 +319,7 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_faction_definition = faction_definition.duplicate(true)
 	player_id = int(snapshot.get("player_id", -1))
 	is_current_actor = current_actor
-	is_interactable = bool(snapshot.get("alive", false))
+	is_interactable = bool(snapshot.get("alive", false)) and not bool(snapshot.get("out_of_game", false))
 	is_face_down = bool(snapshot.get("face_down", false))
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
@@ -339,6 +342,7 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("max_hp", 0),
 		snapshot.get("shield", 0),
 		snapshot.get("alive", false),
+		snapshot.get("out_of_game", false),
 		snapshot.get("chained", false),
 		snapshot.get("face_down", false),
 		snapshot.get("auto_managed", false),
@@ -565,7 +569,9 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 武将牌整体亮度；只有正在手动选目标且当前角色非法时变暗，普通浏览、公开全体目标和已选目标保持原亮度。
-	modulate = invalid_target_modulate if is_target_selection_active and not is_legal_target and not is_target_selected else Color.WHITE
+	# 武将牌整体透明度；移出游戏优先于目标选择暗置，避免临时不存在的角色仍被误认为可指定目标。
+	var is_out_of_game: bool = bool(_player_snapshot.get("out_of_game", false))
+	modulate = out_of_game_modulate if is_out_of_game else (invalid_target_modulate if is_target_selection_active and not is_legal_target and not is_target_selected else Color.WHITE)
 	# 角色卡背景；当前行动者略微提亮，帮助玩家定位回合归属。
 	var background_color: Color = BattleUIStyle.get_color("player_background") if not is_current_actor else BattleUIStyle.get_color("player_current_background")
 	if is_current_operator:
