@@ -12,6 +12,9 @@ const MODE_DOUDIZHU: String = "doudizhu"
 ## 2v2 模式稳定 ID；固定四人，两名蓝方与两名红方，座次一号位与四号位同队、二号位与三号位同队。
 const MODE_TEAM2V2: String = "team2v2"
 
+## 1v1车轮战模式稳定ID；固定两人，先手为红方、后手为蓝方，每方依次使用三名武将。
+const MODE_WHEEL_DUEL: String = "wheel_duel"
+
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
 const IDENTITY_DISTRIBUTIONS: Dictionary = {
 	2: ["leader", "rebel"],
@@ -45,6 +48,8 @@ func normalize_mode(mode_id: String) -> String:
 		return MODE_DOUDIZHU
 	if mode_id == MODE_TEAM2V2:
 		return MODE_TEAM2V2
+	if mode_id == MODE_WHEEL_DUEL:
+		return MODE_WHEEL_DUEL
 	return MODE_IDENTITY
 
 
@@ -60,6 +65,9 @@ func get_supported_player_counts(mode_id: String) -> Array[int]:
 		return result
 	if mode == MODE_TEAM2V2:
 		result.append(4)
+		return result
+	if mode == MODE_WHEEL_DUEL:
+		result.append(2)
 		return result
 	for player_count: int in range(2, 11):
 		if IDENTITY_DISTRIBUTIONS.has(player_count):
@@ -83,6 +91,8 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 		raw = DOUDIZHU_DISTRIBUTIONS.get(player_count, []) as Array
 	elif mode == MODE_TEAM2V2:
 		raw = TEAM2V2_DISTRIBUTION_BASE.duplicate() if player_count == 4 else []
+	elif mode == MODE_WHEEL_DUEL:
+		raw = ["red", "blue"] if player_count == 2 else []
 	else:
 		raw = IDENTITY_DISTRIBUTIONS.get(player_count, []) as Array
 	# 强类型身份结果；逐项转换保证调用方获得字符串数组。
@@ -97,14 +107,15 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 func get_first_player_identity(mode_id: String) -> String:
 	if normalize_mode(mode_id) == MODE_DOUDIZHU:
 		return "landlord"
-	if normalize_mode(mode_id) == MODE_TEAM2V2:
+	if normalize_mode(mode_id) == MODE_TEAM2V2 or normalize_mode(mode_id) == MODE_WHEEL_DUEL:
 		return ""
 	return "leader"
 
 
 ## 返回模式是否固定按一号位开始首回合；2v2 固定 true，其他模式 false（由首任身份决定）。
 func starts_from_first_seat(mode_id: String) -> bool:
-	return normalize_mode(mode_id) == MODE_TEAM2V2
+	var mode: String = normalize_mode(mode_id)
+	return mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL
 
 
 ## 返回 2v2 是否应对基准身份表进行蓝红互换；coin_flip 为 true 时一号/四号变为红方，二号/三号变为蓝方。
@@ -122,7 +133,7 @@ func get_team2v2_distribution(swap_colors: bool) -> Array[String]:
 ## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主与 2v2 全部身份明置（阵营对战无需隐藏）。
 func is_identity_public_at_start(identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	var mode: String = normalize_mode(mode_id)
-	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2:
+	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
 		return not identity.is_empty()
 	return identity == "leader"
 
@@ -132,7 +143,7 @@ func get_opening_max_hp_bonus(identity: String, player_count: int, mode_id: Stri
 	var mode: String = normalize_mode(mode_id)
 	if mode == MODE_DOUDIZHU:
 		return 1 if identity == "landlord" else 0
-	if mode == MODE_TEAM2V2:
+	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
 		return 0
 	return 1 if identity == "leader" and player_count >= 5 else 0
 
@@ -165,7 +176,7 @@ func are_identities_teammates(from_identity: String, to_identity: String, mode_i
 		if from_identity == "peasant" and to_identity == "peasant":
 			return true
 		return false
-	if mode == MODE_TEAM2V2:
+	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
 		if from_identity == "blue" and to_identity == "blue":
 			return true
 		if from_identity == "red" and to_identity == "red":
@@ -207,6 +218,8 @@ func evaluate_winner(state: GameState) -> String:
 		return _evaluate_doudizhu_winner(state)
 	if mode == MODE_TEAM2V2:
 		return _evaluate_team2v2_winner(state)
+	if mode == MODE_WHEEL_DUEL:
+		return _evaluate_wheel_duel_winner(state)
 	return _evaluate_identity_winner(state)
 
 
@@ -221,6 +234,8 @@ func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String 
 		return ""
 	if mode == MODE_TEAM2V2:
 		return "teammate_draw"
+	if mode == MODE_WHEEL_DUEL:
+		return ""
 	if killer == null:
 		return ""
 	if victim.identity == "rebel":
@@ -303,6 +318,21 @@ func _evaluate_team2v2_winner(state: GameState) -> String:
 		return "red_team"
 	if red_alive == 0 and blue_alive > 0:
 		return "blue_team"
+	return ""
+
+
+## 1v1车轮战胜负：任一方三名出场武将全部阵亡后，另一方立即获胜。
+func _evaluate_wheel_duel_winner(state: GameState) -> String:
+	# 红方玩家；模式固定只有一名红方，缺失时不擅自判定异常状态胜负。
+	var red_player: PlayerState = _find_identity(state, "red")
+	# 蓝方玩家；模式固定只有一名蓝方，缺失时不擅自判定异常状态胜负。
+	var blue_player: PlayerState = _find_identity(state, "blue")
+	if red_player == null or blue_player == null:
+		return ""
+	if not red_player.alive or red_player.wheel_duel_defeated_count >= WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
+		return "blue_team"
+	if not blue_player.alive or blue_player.wheel_duel_defeated_count >= WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
+		return "red_team"
 	return ""
 
 

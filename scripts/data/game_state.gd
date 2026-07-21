@@ -21,7 +21,7 @@ var deck_id: String = "standard_162"
 ## 本局由离线玩家或局域网房主在创建时锁定的开局选项；只包含可序列化配置，不随菜单中途变化。
 var match_options: Dictionary = {}
 
-## 当前对局模式稳定 ID；identity=标准身份局，doudizhu=斗地主，缺省 identity 兼容旧状态。
+## 当前对局模式稳定ID；identity=标准身份局、doudizhu=斗地主、team2v2=2v2、wheel_duel=1v1车轮战，缺省identity兼容旧状态。
 var match_mode: String = "identity"
 
 ## 按座次排列的玩家状态；死亡玩家保留在数组中以维持距离与历史索引稳定。

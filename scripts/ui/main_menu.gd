@@ -40,6 +40,9 @@ const STARTING_STATUS_TEXT_DOUDIZHU: String = "正在创建斗地主对局……
 ## 2v2 开局请求处理期间显示的状态文字。
 const STARTING_STATUS_TEXT_TEAM2V2: String = "正在创建2v2对局……"
 
+## 1v1车轮战创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
+const STARTING_STATUS_TEXT_WHEEL_DUEL: String = "正在创建1v1车轮战对局……"
+
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
@@ -76,11 +79,17 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 左侧 2v2 模式按钮指示条；选中 2v2 时显示主题强调色。
 @onready var _team2v2_mode_card_indicator: ColorRect = %Team2v2ModeIndicator
 
+## 左侧1v1车轮战模式按钮指示条；选中时显示主题强调色。
+@onready var _wheel_duel_mode_card_indicator: ColorRect = %WheelDuelModeIndicator
+
 ## 左侧斗地主模式卡片按钮；与身份模式并列，只负责写入下一局模式配置。
 @onready var _doudizhu_mode_button: Button = %DouDizhuModeButton
 
 ## 左侧 2v2 模式卡片按钮；与身份模式、斗地主并列，写入下一局 team2v2 配置。
 @onready var _team2v2_mode_button: Button = %Team2v2ModeButton
+
+## 左侧1v1车轮战模式卡片按钮；固定2人并启用专属候选设置。
+@onready var _wheel_duel_mode_button: Button = %WheelDuelModeButton
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -179,6 +188,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 下一局人数输入框；开始游戏时读取该控件，限制为标准身份局支持的2至10人范围。
 @onready var _player_count_input: SpinBox = %MainMenuPlayerCountInput
 
+## 车轮战明置候选数量输入框；范围3至20，默认6，仅在该模式选中时显示。
+@onready var _wheel_duel_face_up_candidate_input: SpinBox = %WheelDuelFaceUpCandidateInput
+
+## 车轮战暗置候选数量输入框；范围3至20，默认4，仅在该模式选中时显示。
+@onready var _wheel_duel_face_down_candidate_input: SpinBox = %WheelDuelFaceDownCandidateInput
+
 ## 底部操作栏状态文字；正常显示模式选择，开局失败时在原位展示控制器返回的具体原因。
 @onready var _menu_status_label: Label = %MainMenuStatusLabel
 
@@ -207,6 +222,7 @@ func _ready() -> void:
 	_identity_mode_button.pressed.connect(_select_identity_mode)
 	_doudizhu_mode_button.pressed.connect(_select_doudizhu_mode)
 	_team2v2_mode_button.pressed.connect(_select_team2v2_mode)
+	_wheel_duel_mode_button.pressed.connect(_select_wheel_duel_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
@@ -221,6 +237,10 @@ func _ready() -> void:
 	# 当前人数输入提交策略；键入数值后立即同步 Range，防止按下开始游戏时读取焦点尚未提交的旧值。
 	_player_count_input.update_on_text_changed = true
 	_player_count_input.value_changed.connect(_on_next_player_count_changed)
+	_wheel_duel_face_up_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_up_candidate_count)
+	_wheel_duel_face_up_candidate_input.value_changed.connect(_on_wheel_duel_face_up_candidate_count_changed)
+	_wheel_duel_face_down_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_down_candidate_count)
+	_wheel_duel_face_down_candidate_input.value_changed.connect(_on_wheel_duel_face_down_candidate_count_changed)
 	_ai_response_delay_slider.min_value = GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.max_value = GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS
 	_ai_response_delay_slider.step = GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS
@@ -343,12 +363,14 @@ func refresh_ui_style() -> void:
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_doudizhu_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_team2v2_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_wheel_duel_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
 	_apply_mode_button_style(_identity_mode_button)
 	_apply_mode_button_style(_doudizhu_mode_button)
 	_apply_mode_button_style(_team2v2_mode_button)
+	_apply_mode_button_style(_wheel_duel_mode_button)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -398,6 +420,8 @@ func refresh_ui_style() -> void:
 	_apply_slider_style(_ai_response_delay_slider)
 	_apply_slider_style(_game_speed_slider)
 	_apply_spin_box_style(_player_count_input)
+	_apply_spin_box_style(_wheel_duel_face_up_candidate_input)
+	_apply_spin_box_style(_wheel_duel_face_down_candidate_input)
 	_apply_option_popup_style(_ui_style_option)
 	_apply_option_popup_style(_card_name_option)
 	_apply_option_popup_style(_mulligan_limit_option)
@@ -419,6 +443,8 @@ func _restore_selected_match_mode() -> void:
 		_select_doudizhu_mode()
 	elif restored_mode == GameSettings.MATCH_MODE_TEAM2V2:
 		_select_team2v2_mode()
+	elif restored_mode == GameSettings.MATCH_MODE_WHEEL_DUEL:
+		_select_wheel_duel_mode()
 	else:
 		_select_identity_mode()
 
@@ -447,9 +473,12 @@ func _select_identity_mode() -> void:
 	_identity_mode_button.button_pressed = true
 	_doudizhu_mode_button.button_pressed = false
 	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = false
 	_mode_card_indicator.visible = true
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = false
+	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
@@ -482,9 +511,12 @@ func _select_doudizhu_mode() -> void:
 	_identity_mode_button.button_pressed = false
 	_doudizhu_mode_button.button_pressed = true
 	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = true
 	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = false
+	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 
 
@@ -515,10 +547,52 @@ func _select_team2v2_mode() -> void:
 	_identity_mode_button.button_pressed = false
 	_doudizhu_mode_button.button_pressed = false
 	_team2v2_mode_button.button_pressed = true
+	_wheel_duel_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = true
+	_wheel_duel_mode_card_indicator.visible = false
+	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
+
+
+## 选中1v1车轮战模式；固定2人并显示明置X、暗置Y两项专属候选设置。
+func _select_wheel_duel_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_WHEEL_DUEL
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_WHEEL_DUEL)
+	minimum_player_count = 2
+	maximum_player_count = 2
+	_player_count_input.min_value = 2
+	_player_count_input.max_value = 2
+	_player_count_input.step = 1.0
+	set_next_player_count(2)
+	_mode_title.text = "1v1车轮战"
+	_mode_description.text = "2人·先手红方VS后手蓝方·三将车轮对战"
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = true
+	_set_wheel_duel_settings_visible(true)
+	_show_status(MODE_READY_STATUS_TEXT, false)
+
+
+## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，避免普通模式设置面板溢出。
+func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
+	var face_up_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
+	var face_down_row: Control = _wheel_duel_face_down_candidate_input.get_parent() as Control
+	if face_up_row != null:
+		face_up_row.visible = visible_state
+	if face_down_row != null:
+		face_down_row.visible = visible_state
 
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
@@ -591,6 +665,8 @@ func _request_start_game() -> void:
 		starting_status = STARTING_STATUS_TEXT_DOUDIZHU
 	elif _selected_match_mode == GameSettings.MATCH_MODE_TEAM2V2:
 		starting_status = STARTING_STATUS_TEXT_TEAM2V2
+	elif _selected_match_mode == GameSettings.MATCH_MODE_WHEEL_DUEL:
+		starting_status = STARTING_STATUS_TEXT_WHEEL_DUEL
 	_show_status(starting_status, false)
 	# 再次确认模式写入；防止设置浮层改人数后模式丢失。
 	if GameSettings != null:
@@ -1068,6 +1144,26 @@ func _on_next_player_count_changed(player_count: float) -> void:
 		_player_count_input.set_value_no_signal(float(resolved_count))
 	if GameSettings != null:
 		GameSettings.set_next_match_player_count(resolved_count)
+
+
+## 写入车轮战明置候选数量；若明暗合计不足10，则同步抬高暗置数量以保证双方能够各抓5名武将。
+func _on_wheel_duel_face_up_candidate_count_changed(candidate_count: float) -> void:
+	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	GameSettings.set_wheel_duel_face_up_candidate_count(normalized_count)
+	var required_face_down_count: int = maxi(WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
+	if GameSettings.wheel_duel_face_down_candidate_count < required_face_down_count:
+		GameSettings.set_wheel_duel_face_down_candidate_count(required_face_down_count)
+		_wheel_duel_face_down_candidate_input.set_value_no_signal(required_face_down_count)
+
+
+## 写入车轮战暗置候选数量；若明暗合计不足10，则同步抬高明置数量以保证双方能够各抓5名武将。
+func _on_wheel_duel_face_down_candidate_count_changed(candidate_count: float) -> void:
+	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	GameSettings.set_wheel_duel_face_down_candidate_count(normalized_count)
+	var required_face_up_count: int = maxi(WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
+	if GameSettings.wheel_duel_face_up_candidate_count < required_face_up_count:
+		GameSettings.set_wheel_duel_face_up_candidate_count(required_face_up_count)
+		_wheel_duel_face_up_candidate_input.set_value_no_signal(required_face_up_count)
 
 
 ## 将自动身份标记开关写入全局设置；该设置只影响客户端推测徽记显示。

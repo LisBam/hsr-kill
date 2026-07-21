@@ -15,7 +15,7 @@ var character_id: String = ""
 ## 当前武将是否已经向所有玩家亮出；选将阶段领袖先公开，其他玩家完成后同时公开。
 var character_revealed: bool = false
 
-## 当前身份；可取 leader、loyalist、rebel、renegade。
+## 当前身份；身份局取leader/loyalist/rebel/renegade，斗地主取landlord/peasant，2v2与车轮战取blue/red。
 var identity: String = "rebel"
 
 ## 身份是否对公共信息可见；领袖开局明置，其他身份通常在死亡时公开。
@@ -107,6 +107,15 @@ var skill_history: Array[Dictionary] = []
 
 ## 当前回合内未能对指定目标产生预期效果的牌；键为卡牌定义ID，值为目标ID数组，供AI避免重复无效尝试。
 var ai_failed_card_target_ids: Dictionary = {}
+
+## 1v1车轮战中已经锁定的三名出场武将；仅本人、权威端与回放可读取完整顺序，对手始终只能看到当前已亮出的武将。
+var wheel_duel_lineup: Array[String] = []
+
+## 1v1车轮战当前出场武将在阵容中的索引；范围0至2，普通模式保持0且不参与规则。
+var wheel_duel_lineup_index: int = 0
+
+## 1v1车轮战本局已经阵亡的武将数量；范围0至3，达到3时该玩家真正出局并触发胜负结算。
+var wheel_duel_defeated_count: int = 0
 
 
 ## 使用稳定 ID 与显示名创建玩家状态，其他字段由开局流程填充。
@@ -240,6 +249,9 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"damage_history_count": damage_history.size(),
 		"damage_taken_count": damage_taken_count,
 		"ai_failed_card_target_ids": ai_failed_card_target_ids.duplicate(true),
+		"wheel_duel_lineup": wheel_duel_lineup.duplicate() if reveal_private or viewer_id == player_id else [],
+		"wheel_duel_lineup_index": wheel_duel_lineup_index if reveal_private or viewer_id == player_id else -1,
+		"wheel_duel_defeated_count": wheel_duel_defeated_count,
 		# 技能发动历史是公开事实；AI用稳定回合号与目标上下文判断“每回合每名角色限一次”。
 		"skill_history": skill_history.duplicate(true),
 		"skill_history_count": skill_history.size(),

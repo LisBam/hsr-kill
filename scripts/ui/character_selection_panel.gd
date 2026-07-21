@@ -166,6 +166,9 @@ var _snapshot: Dictionary = {}
 ## 本地临时选中的武将 ID；点击确认前不会发送规则动作或改变公开状态。
 var _selected_character_id: String = ""
 
+## 1v1车轮战阵容阶段按点击顺序保存的三名武将ID；数组顺序就是不可变出场顺序。
+var _selected_wheel_duel_lineup: Array[String] = []
+
 ## 当前候选武将 ID 到正式武将牌视图的映射；只用于同步金色选中边框。
 var _candidate_views: Dictionary = {}
 
@@ -363,6 +366,7 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
 	if not preserves_local_context:
 		_selected_character_id = str(snapshot.get("local_selected_character_id", "")) if bool(snapshot.get("retains_selected_character", false)) else ""
+		_selected_wheel_duel_lineup.clear()
 		# 首次进入最终自选阶段时，座次和身份按钮默认高亮首次随机分配的结果；普通选将不保留这些临时值。
 		# 自选真人首任领袖也在第一次公开选将快照读取同一默认值，判断以权威allow_custom_assignment字段为准。
 		_selected_seat_number = int(snapshot.get("preview_seat_number", snapshot.get("initial_seat_number", -1))) if bool(snapshot.get("allow_custom_assignment", false)) else -1
@@ -377,6 +381,8 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	visible = bool(_snapshot.get("can_select", false)) and not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
 	if not visible:
 		return
+	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel" and str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_DRAFT:
+		_selected_character_id = ""
 	_render_header()
 	_render_leader_character()
 	_render_custom_assignment_controls()
@@ -384,8 +390,9 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 	# 首任领袖在最终自选阶段只确认座次身份：公开武将已由权威快照保留，候选列表刻意为空，不能套用“离开候选则清空选择”的普通规则。
 	# 当前仅AI延后分配兼容快照可能带有该标记；已一次性确认的真人首任领袖不会再次显示本面板。
 	var retains_initial_leader_character: bool = bool(_snapshot.get("retains_selected_character", false))
-	if not retains_initial_leader_character and not _get_displayed_candidate_ids().has(_selected_character_id):
+	if str(_snapshot.get("selection_kind", "initial")) != "wheel_duel" and not retains_initial_leader_character and not _get_displayed_candidate_ids().has(_selected_character_id):
 		_selected_character_id = ""
+		_selected_wheel_duel_lineup.clear()
 	_update_confirm_state()
 	if preserves_local_context and candidate_scroll != null:
 		candidate_scroll.set_deferred("scroll_vertical", previous_scroll_vertical)
@@ -421,6 +428,19 @@ func _render_header() -> void:
 	var selection_kind: String = str(_snapshot.get("selection_kind", "initial"))
 	# 本地是否可以选择；已经确认的玩家只看到等待提示，不再显示候选内容。
 	var can_select: bool = bool(_snapshot.get("can_select", false))
+	if selection_kind == "wheel_duel":
+		var identity_name: String = "先手（红）" if str(_snapshot.get("local_identity", "")) == "red" else "后手（蓝）"
+		var wheel_action_text: String = ""
+		if phase == WheelDuelSelectionService.PHASE_DRAFT:
+			wheel_action_text = "请选择候选武将，本批还需选择%d名" % int(_snapshot.get("remaining_picks_in_batch", 0)) if can_select else "请等待对方选择候选武将"
+		elif phase == WheelDuelSelectionService.PHASE_LINEUP:
+			wheel_action_text = "请按顺序选择3名出场武将" if can_select else "阵容已确认，请等待对方"
+		_title_label.clear()
+		_title_label.push_paragraph(HORIZONTAL_ALIGNMENT_CENTER)
+		_title_label.append_text("你的身份为：%s，%s" % [identity_name, wheel_action_text])
+		_title_label.pop()
+		_status_label.text = ""
+		return
 	if selection_kind == "ai_adjustment":
 		_title_label.clear()
 		_title_label.push_paragraph(HORIZONTAL_ALIGNMENT_CENTER)
@@ -491,7 +511,7 @@ func get_title_identity_color() -> Color:
 func _render_leader_character() -> void:
 	_clear_leader_character()
 	# 自选阶段继续显示首次身份分配产生的公开领袖武将，只有AI调整用途不显示该只读区域。
-	if str(_snapshot.get("selection_kind", "initial")) == "ai_adjustment":
+	if str(_snapshot.get("selection_kind", "initial")) in ["ai_adjustment", "wheel_duel"]:
 		_update_leader_partition(false)
 		return
 	# 已公开领袖武将 ID；空字符串表示领袖尚未完成选择，不创建占位牌。
@@ -535,6 +555,9 @@ func _render_leader_character() -> void:
 ## 使用正式 Node2D 武将牌横向排列本地候选；候选数量由快照决定，可从默认5张继续扩展。
 func _render_candidates() -> void:
 	_clear_candidates()
+	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel":
+		_render_wheel_duel_candidates()
+		return
 	# 本地可见候选数组；未轮到本地或已经确认时为空，不创建占位按钮。
 	# 自选与AI调整开启全部武将入口时，服务快照会显式提供额外全量合法集合，界面仍不自行扫描或伪造规则候选。
 	# 当前玩家候选数组；具体选择必须来自服务生成的五张候选牌。
@@ -673,6 +696,88 @@ func _render_candidates() -> void:
 	var content_height: float = row_slot_height * float(row_count) + candidate_gap * float(maxi(row_count - 1, 0)) + hover_vertical_padding * 2.0
 	_candidate_content.custom_minimum_size = Vector2(maxf(_candidate_area.size.x - 16.0, 0.0), maxf(content_height, _candidate_area.size.y))
 	# 内容最小尺寸改变后主动请求ScrollContainer重新计算滚动范围；尺寸由容器自行分配，不能手动覆盖。
+	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
+	if candidate_scroll != null:
+		candidate_scroll.queue_sort()
+		call_deferred("_refresh_candidate_scroll_bar_range")
+
+
+## 渲染1v1车轮战公共候选池或本人五将阵容；暗置槽只创建牌背，不从客户端推断真实武将ID。
+func _render_wheel_duel_candidates() -> void:
+	_confirm_button.visible = bool(_snapshot.get("can_select", false))
+	var phase: String = str(_snapshot.get("phase", ""))
+	var candidate_entries: Array[Dictionary] = []
+	if phase == WheelDuelSelectionService.PHASE_DRAFT:
+		for slot_variant: Variant in _snapshot.get("pool_slots", []) as Array:
+			var slot: Dictionary = slot_variant as Dictionary
+			candidate_entries.append({
+				"token":"slot:%d" % int(slot.get("slot_id", -1)),
+				"character_id":str(slot.get("character_id", "")),
+				"face_down":not bool(slot.get("face_up", false)),
+			})
+	else:
+		for character_id_variant: Variant in _snapshot.get("local_drafted_characters", []) as Array:
+			var drafted_character_id: String = str(character_id_variant)
+			candidate_entries.append({"token":drafted_character_id, "character_id":drafted_character_id, "face_down":false})
+	if candidate_entries.is_empty():
+		return
+	_candidate_area.position = _candidate_default_position
+	_candidate_area.size = Vector2(_candidate_area_right - _candidate_area_without_leader_left, maxf(_confirm_button.position.y - NON_CUSTOM_CANDIDATE_CONFIRM_GAP - _candidate_default_position.y, _candidate_default_size.y))
+	_candidate_area.position.x = _candidate_area_without_leader_left
+	for entry_index: int in range(candidate_entries.size()):
+		var entry: Dictionary = candidate_entries[entry_index]
+		var token: String = str(entry.get("token", ""))
+		var character_id: String = str(entry.get("character_id", ""))
+		var is_face_down: bool = bool(entry.get("face_down", false))
+		var character_definition: Dictionary = GameDatabase.get_character(character_id) if not character_id.is_empty() else {}
+		var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", ""))) if not character_definition.is_empty() else {}
+		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+		_candidate_content.add_child(character_view)
+		character_view.set_scroll_gesture_enabled(true)
+		character_view.scroll_gesture_moved.connect(_on_candidate_scroll_gesture_moved)
+		if not is_face_down:
+			character_view.information_requested.connect(information_requested.emit)
+			character_view.information_dismissed.connect(information_dismissed.emit)
+		var candidate_snapshot: Dictionary = {
+			"player_id":entry_index,
+			"display_name":"暗置候选" if is_face_down else "候选武将",
+			"character_id":character_id,
+			"character_revealed":not is_face_down,
+			"identity":"hidden",
+			"hp":int(character_definition.get("max_hp", 4)),
+			"max_hp":int(character_definition.get("max_hp", 4)),
+			"alive":true,
+			"chained":false,
+			"face_down":is_face_down,
+			"hand_count":0,
+			"equipment":{},
+			"judgment_area":[],
+			"wooden_ox_storage_count":0,
+		}
+		character_view.configure_snapshot(candidate_snapshot, character_definition, false, faction_definition)
+		character_view.pressed.connect(_select_candidate.bind(token))
+		character_view.hover_changed.connect(_on_candidate_hover_changed.bind(token))
+		_candidate_views[token] = character_view
+	var first_view: PlayerTargetView = _candidate_views[str(candidate_entries[0].get("token", ""))] as PlayerTargetView
+	var card_width: float = first_view.card_size.x
+	var card_height: float = first_view.card_size.y
+	var usable_width: float = maxf(_candidate_area.size.x - 16.0, card_width)
+	var column_count: int = mini(maxi(int(floor((usable_width + candidate_gap) / (card_width + candidate_gap))), 1), candidate_entries.size())
+	var row_count: int = ceili(float(candidate_entries.size()) / float(column_count))
+	var hover_padding: float = card_height * (candidate_hover_scale - 1.0) * 0.5 + 1.0
+	for entry_index: int in range(candidate_entries.size()):
+		var token: String = str(candidate_entries[entry_index].get("token", ""))
+		var row_index: int = entry_index / column_count
+		var column_index: int = entry_index % column_count
+		var row_item_count: int = mini(column_count, candidate_entries.size() - row_index * column_count)
+		var row_width: float = card_width * row_item_count + candidate_gap * maxi(row_item_count - 1, 0)
+		var base_position: Vector2 = Vector2(maxf((_candidate_area.size.x - row_width) * 0.5, 0.0) + column_index * (card_width + candidate_gap), hover_padding + row_index * (card_height + candidate_gap))
+		var character_view: PlayerTargetView = _candidate_views[token] as PlayerTargetView
+		character_view.position = base_position
+		_candidate_base_positions[token] = base_position
+		_candidate_base_scales[token] = 1.0
+	_candidate_content.custom_minimum_size = Vector2(maxf(_candidate_area.size.x - 16.0, 0.0), maxf(row_count * card_height + maxi(row_count - 1, 0) * candidate_gap + hover_padding * 2.0, _candidate_area.size.y))
+	_update_confirm_state()
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
 	if candidate_scroll != null:
 		candidate_scroll.queue_sort()
@@ -1188,6 +1293,17 @@ func _clear_custom_assignment_buttons() -> void:
 
 ## 更新本地临时选择和候选牌边框；规则状态在确认按钮点击前保持不变。
 func _select_candidate(character_id: String) -> void:
+	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel" and str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_LINEUP:
+		if _selected_wheel_duel_lineup.has(character_id):
+			_selected_wheel_duel_lineup.erase(character_id)
+		elif _selected_wheel_duel_lineup.size() < WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
+			_selected_wheel_duel_lineup.append(character_id)
+		for candidate_id_variant: Variant in _candidate_views.keys():
+			var lineup_character_id: String = str(candidate_id_variant)
+			var lineup_view: PlayerTargetView = _candidate_views[lineup_character_id] as PlayerTargetView
+			lineup_view.set_target_state(false, _selected_wheel_duel_lineup.has(lineup_character_id))
+		_update_confirm_state()
+		return
 	_selected_character_id = character_id
 	for candidate_id_variant: Variant in _candidate_views.keys():
 		# 当前候选 ID；与临时选择相同时显示金色选中边框。
@@ -1200,6 +1316,17 @@ func _select_candidate(character_id: String) -> void:
 
 ## 根据当前武将、座次与身份临时值更新确认按钮；AI 调整模式只要求选择武将。
 func _update_confirm_state() -> void:
+	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel":
+		if str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_LINEUP:
+			_confirm_button.disabled = _selected_wheel_duel_lineup.size() != WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER
+			var lineup_names: Array[String] = []
+			for lineup_character_id: String in _selected_wheel_duel_lineup:
+				lineup_names.append(GameDatabase.resolve_character_name(lineup_character_id))
+			_confirm_button.text = "确认顺序：%s" % " → ".join(lineup_names) if not lineup_names.is_empty() else "请按顺序选择3名武将"
+		else:
+			_confirm_button.disabled = _selected_character_id.is_empty()
+			_confirm_button.text = "确认选择" if not _selected_character_id.is_empty() else "请选择候选武将"
+		return
 	# 自选模式完整性；普通选将与 AI 调整不要求座次和身份字段。
 	# 座次身份只在首任领袖公开选将后的最终自选阶段要求；首任领袖阶段不能因隐藏控件而无法确认武将。
 	# 当前真人首任领袖公开阶段同样要求完整分配；权威allow_custom_assignment是唯一判断来源。
@@ -1216,7 +1343,8 @@ func _update_confirm_state() -> void:
 
 ## 发出稳定武将 ID 选择请求；权威服务仍会再次校验阶段、玩家和候选列表。
 func _confirm_selection() -> void:
-	if _selected_character_id.is_empty() or not bool(_snapshot.get("can_select", false)) or _confirm_button.disabled:
+	var is_wheel_lineup: bool = str(_snapshot.get("selection_kind", "initial")) == "wheel_duel" and str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_LINEUP
+	if (not is_wheel_lineup and _selected_character_id.is_empty()) or not bool(_snapshot.get("can_select", false)) or _confirm_button.disabled:
 		return
 	_confirm_button.disabled = true
 	# 完整选将数据；普通模式的座次为-1、身份为空，AI调整模式额外携带目标玩家 ID。
@@ -1227,8 +1355,12 @@ func _confirm_selection() -> void:
 		"identity":_selected_identity,
 		"target_player_id":int(_snapshot.get("target_player_id", -1)),
 	}
+	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel":
+		selection_data["slot_id"] = _selected_character_id.trim_prefix("slot:").to_int() if not is_wheel_lineup else -1
+		selection_data["character_ids"] = _selected_wheel_duel_lineup.duplicate()
 	selection_submitted.emit(selection_data)
-	character_selected.emit(_selected_character_id)
+	if str(_snapshot.get("selection_kind", "initial")) != "wheel_duel":
+		character_selected.emit(_selected_character_id)
 
 
 ## 清理所有动态候选牌；每次阶段快照重建，避免保留旧输入连接或高亮状态。
