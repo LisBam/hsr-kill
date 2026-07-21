@@ -129,6 +129,9 @@ var _artwork_texture: Texture2D
 ## 势力圆形徽记；显示势力简称并使用数据配置的主题颜色，不参与身份或胜负判断。
 @onready var _faction_badge_label: Label = $FactionBadge
 
+## 武将牌左上角通用文本组件；位于势力徽记右下侧与武将名右侧，只读取公开快照文本。
+@onready var _corner_text_badge: CharacterCornerTextBadge = $CharacterCornerTextBadge
+
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
 ## 当前容器位于独立 HealthFrame 边框内，并按从上往下的方向显示已损失体力。
 @onready var _health_pip_container: VBoxContainer = $HealthFrame/HealthPips
@@ -228,6 +231,9 @@ var _scroll_gesture_enabled: bool = false
 ## 选目标期间的“选中”提示；常驻至取消选中，不读取规则状态，仅跟随 set_target_state。
 var _selected_marker_label: Label
 
+## 外部模式写入的中央状态提示；车轮战候选归属等只读表现复用该标签，不改变牌面交互与规则状态。
+var _center_status_marker_label: Label
+
 ## 初始化武将牌视觉与独立输入区域；静态几何完全由场景资源定义。
 func _ready() -> void:
 	_ensure_selected_marker_label()
@@ -256,6 +262,34 @@ func set_scroll_gesture_enabled(enabled: bool) -> void:
 	_scroll_gesture_enabled = enabled
 	if _input_area != null:
 		_input_area.set_scroll_gesture_enabled(enabled)
+
+
+## 设置牌面是否允许点击；用于保留但禁用的公共候选槽，不修改快照中的存活或离场状态。
+func set_interactable(enabled: bool) -> void:
+	is_interactable = enabled
+	if _input_area != null:
+		_input_area.configure(is_interactable)
+	_refresh_visual_state()
+
+
+## 设置中央状态提示文本与颜色；空文本隐藏，非空文本使用黑色描边保证牌背和插画上均可读。
+func set_center_status_marker(marker_text: String, marker_color: Color) -> void:
+	if _center_status_marker_label == null or not is_instance_valid(_center_status_marker_label):
+		_center_status_marker_label = Label.new()
+		_center_status_marker_label.name = "CenterStatusMarker"
+		_center_status_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_center_status_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_center_status_marker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_center_status_marker_label.z_index = 21
+		_center_status_marker_label.add_theme_font_size_override("font_size", 20)
+		_center_status_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
+		_center_status_marker_label.add_theme_constant_override("outline_size", 5)
+		add_child(_center_status_marker_label)
+	_center_status_marker_label.position = Vector2.ZERO
+	_center_status_marker_label.size = card_size
+	_center_status_marker_label.text = marker_text
+	_center_status_marker_label.add_theme_color_override("font_color", marker_color)
+	_center_status_marker_label.visible = not marker_text.is_empty()
 
 
 ## 转发输入区域已经判定的列表拖动；本组件不读取或修改外层选将滚动位置。
@@ -345,6 +379,7 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("out_of_game", false),
 		snapshot.get("chained", false),
 		snapshot.get("face_down", false),
+		snapshot.get("character_corner_text", ""),
 		snapshot.get("auto_managed", false),
 		snapshot.get("auto_managed_offline", false),
 		snapshot.get("hand_count", 0),
@@ -611,6 +646,7 @@ func _refresh_visual_state() -> void:
 	var snapshot_out_of_game: bool = bool(_player_snapshot.get("out_of_game", false))
 	_state_overlay.configure(snapshot_alive, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0, snapshot_out_of_game)
 	_refresh_selected_marker()
+	_corner_text_badge.set_display_text(str(_player_snapshot.get("character_corner_text", "")))
 
 
 

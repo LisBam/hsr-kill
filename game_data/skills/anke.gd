@@ -8,6 +8,12 @@ const REQUIRED_SUIT_COUNT: int = 4
 ## 每轮最多发动次数；固定3，与技能原文一致。
 const MAX_USES_PER_ROUND: int = 3
 
+## 花色在武将牌组件中的固定显示顺序；保证相同集合在所有客户端得到一致文本。
+const SUIT_DISPLAY_ORDER: Array[String] = ["spade", "heart", "club", "diamond"]
+
+## 稳定花色到符号的映射；无花色与虚拟牌不会进入该表。
+const SUIT_SYMBOLS: Dictionary = {"spade":"♠", "heart":"♥", "club":"♣", "diamond":"♦"}
+
 ## 当前正在统计的全局回合号；默认-1表示尚未进入有效回合。
 var _tracked_turn_number: int = -1
 
@@ -43,6 +49,7 @@ func install() -> void:
 func _on_turn_before(_event: RuleEvent) -> void:
 	_tracked_turn_number = host.state.turn_number
 	_discarded_suits_this_turn.clear()
+	_refresh_corner_text()
 	if _tracked_round_number != host.state.round_number:
 		_tracked_round_number = host.state.round_number
 		_uses_this_round = 0
@@ -56,6 +63,7 @@ func _on_cards_discarded(event: RuleEvent) -> void:
 		var card: CardInstance = _find_discard_card(int(card_uid_variant))
 		if card != null and card.suit in ["spade", "heart", "club", "diamond"]:
 			_discarded_suits_this_turn[card.suit] = true
+	_refresh_corner_text()
 
 
 ## 持有者自己的回合结束时满足四花色且本轮未达上限则询问；取消不会消耗次数。
@@ -83,6 +91,20 @@ func _find_discard_card(card_uid: int) -> CardInstance:
 		if card.uid == card_uid:
 			return card
 	return null
+
+
+## 把本回合已出现花色写入持有者公开文本；尚无有效花色时清空组件内容。
+func _refresh_corner_text() -> void:
+	var owner: PlayerState = host.state.get_player(owner_player_id)
+	if owner == null:
+		return
+	# 按固定顺序拼接的花色符号；示例三种花色会显示为“安可：♥♣♦”。
+	var suit_text: String = ""
+	for suit: String in SUIT_DISPLAY_ORDER:
+		if _discarded_suits_this_turn.has(suit):
+			suit_text += str(SUIT_SYMBOLS.get(suit, ""))
+	owner.character_corner_text = "安可：%s" % suit_text if not suit_text.is_empty() else ""
+	host.refresh_public_state_snapshot()
 
 
 ## 额外完整回合具有高正收益，只要持有者仍存活在场基础AI就会确认。

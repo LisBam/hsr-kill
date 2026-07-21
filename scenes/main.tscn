@@ -201,7 +201,7 @@ horizontal_alignment = 1
 
 [node name="MatchMenu" type="Control" parent="." unique_id=822365686]
 unique_name_in_owner = true
-z_index = 50
+z_index = 500
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -236,14 +236,14 @@ anchor_bottom = 1.0
 offset_left = -286.0
 offset_top = 65.0
 offset_right = -18.0
-offset_bottom = -28.0
+offset_bottom = -27.0
 grow_horizontal = 0
 grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleMetalPanel")
 
 [node name="MenuVBox" type="VBoxContainer" parent="MatchMenu/MenuPanel" unique_id=731239853]
 layout_mode = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 1
 
 [node name="MenuTitle" type="Label" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1601890631]
 layout_mode = 2
@@ -264,7 +264,7 @@ vertical_alignment = 1
 
 [node name="MenuCardNameOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CardNameRow" unique_id=1005214864]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 34)
+custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
 [node name="UiStyleRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=664868405]
@@ -280,7 +280,7 @@ vertical_alignment = 1
 
 [node name="UiStyleOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/UiStyleRow" unique_id=589273892]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 34)
+custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 selected = 0
 item_count = 2
@@ -291,7 +291,7 @@ popup/item_1/id = 1
 
 [node name="AutoIdentityMarkingCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=691615404]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 26)
 layout_mode = 2
 button_pressed = true
 text = "自动标记身份"
@@ -307,10 +307,10 @@ script = ExtResource("23_identity_indicator")
 
 [node name="ControlAllCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-text = "控制所有角色（下局生效）"
+text = "控制所有角色"
 
 [node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/ControlAllCharactersCheckBox"]
 anchors_preset = 0
@@ -323,7 +323,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="CustomCharacterAssignmentCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320001]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 26)
 layout_mode = 2
 text = "自选全武将、座次与身份"
 
@@ -338,7 +338,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="CustomizeAiCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320002]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 26)
 layout_mode = 2
 text = "自选所有AI的武将"
 
@@ -364,12 +364,12 @@ vertical_alignment = 1
 
 [node name="MulliganLimitOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/MulliganLimitRow" unique_id=190320005]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 34)
+custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
 [node name="AiUsesMulliganCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=190320006]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 26)
 layout_mode = 2
 text = "AI使用手气卡"
 
@@ -394,7 +394,7 @@ vertical_alignment = 1
 
 [node name="CharacterReplacementCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow" unique_id=1250072613]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 34)
+custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
 [node name="CharacterCandidateCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=912874038]
@@ -409,8 +409,48 @@ vertical_alignment = 1
 
 [node name="CharacterCandidateCountOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow" unique_id=347731405]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(132, 34)
+custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
+
+[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "明置候选武将"
+vertical_alignment = 1
+
+[node name="MatchMenuWheelDuelFaceUpCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(90, 34)
+layout_mode = 2
+min_value = 3.0
+max_value = 20.0
+value = 6.0
+
+[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "暗置候选武将"
+vertical_alignment = 1
+
+[node name="MatchMenuWheelDuelFaceDownCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(90, 34)
+layout_mode = 2
+min_value = 3.0
+max_value = 20.0
+value = 4.0
 
 [node name="AiResponseDelayRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=467391300]
 layout_mode = 2
@@ -459,7 +499,7 @@ vertical_alignment = 1
 
 [node name="NextPlayerCountInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/PlayerCountRow" unique_id=2052189361]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(90, 34)
+custom_minimum_size = Vector2(90, 30)
 layout_mode = 2
 min_value = 2.0
 max_value = 10.0
@@ -467,14 +507,14 @@ value = 8.0
 
 [node name="MenuRestartButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1272565438]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
+custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "按设置重新开局"
 
 [node name="MenuReturnToMainButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1771219610]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 text = "返回主菜单"
 
@@ -1458,7 +1498,7 @@ grow_vertical = 2
 
 [node name="SettingsVBox" type="VBoxContainer" parent="MainMenu/MainMenuSettingsPanel" unique_id=236641704]
 layout_mode = 2
-theme_override_constants/separation = 5
+theme_override_constants/separation = 3
 
 [node name="MainMenuSettingsTitle" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=168713084]
 unique_name_in_owner = true
@@ -1699,6 +1739,7 @@ max_value = 10.0
 value = 8.0
 
 [node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+visible = false
 layout_mode = 2
 theme_override_constants/separation = 12
 
@@ -1718,6 +1759,7 @@ max_value = 20.0
 value = 6.0
 
 [node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+visible = false
 layout_mode = 2
 theme_override_constants/separation = 12
 

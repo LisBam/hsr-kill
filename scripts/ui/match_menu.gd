@@ -48,7 +48,7 @@ signal main_menu_requested
 ## 自动身份标记复选框；勾选状态直接映射全局设置，只影响其他角色的本地推测徽记。
 @onready var _auto_identity_marking_checkbox: CheckBox = %AutoIdentityMarkingCheckBox
 
-## 离线控制全部角色开关；只影响下一局离线对局，局域网房主与客户端均隐藏。
+## 离线控制全部角色开关；离线对局中即时生效，局域网房主与客户端均隐藏。
 @onready var _control_all_characters_checkbox: CheckBox = %ControlAllCharactersCheckBox
 
 ## 自选全武将、座次与身份开关；仅影响之后由本机或房主创建的新对局。
@@ -68,6 +68,12 @@ signal main_menu_requested
 
 ## 随机选将牌数下拉框；选项元数据保存1至20张普通随机候选数量。
 @onready var _character_candidate_count_option: OptionButton = %CharacterCandidateCountOption
+
+## 车轮战明置候选数量输入；仅当前模式为1v1车轮战时显示并用于下一次重开。
+@onready var _wheel_duel_face_up_candidate_input: SpinBox = %MatchMenuWheelDuelFaceUpCandidateInput
+
+## 车轮战暗置候选数量输入；仅当前模式为1v1车轮战时显示并与明置数量保持合计至少10名。
+@onready var _wheel_duel_face_down_candidate_input: SpinBox = %MatchMenuWheelDuelFaceDownCandidateInput
 
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
@@ -102,11 +108,20 @@ signal main_menu_requested
 ## 随机选将牌数整行容器；属于房主权威规则，局域网客户端必须整行隐藏。
 @onready var _character_candidate_count_row: Control = _character_candidate_count_option.get_parent() as Control
 
+## 车轮战明置候选整行容器；普通模式隐藏，车轮战模式按权威权限显示。
+@onready var _wheel_duel_face_up_candidate_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
+
+## 车轮战暗置候选整行容器；与明置候选共同组成车轮战专属设置。
+@onready var _wheel_duel_face_down_candidate_row: Control = _wheel_duel_face_down_candidate_input.get_parent() as Control
+
 ## 当前权威控件是否允许显示；默认true兼容离线对局，局域网客户端由牌桌协调器关闭。
 var _authority_controls_visible: bool = true
 
 ## 当前是否处于纯离线模式；false时控制全部角色选项无条件隐藏。
 var _offline_controls_visible: bool = true
+
+## 当前正在进行的对局模式；局内菜单只展示该模式的专属设置，不跟随隐藏主菜单的待选模式漂移。
+var _active_match_mode: String = "identity"
 
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
@@ -163,6 +178,12 @@ func _ready() -> void:
 	_populate_character_candidate_count_options()
 	_character_candidate_count_option.item_selected.connect(_on_character_candidate_count_selected)
 	GameSettings.character_candidate_count_changed.connect(_refresh_character_candidate_count_selection)
+	_wheel_duel_face_up_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_up_candidate_count)
+	_wheel_duel_face_up_candidate_input.value_changed.connect(_on_wheel_duel_face_up_candidate_count_changed)
+	_wheel_duel_face_down_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_down_candidate_count)
+	_wheel_duel_face_down_candidate_input.value_changed.connect(_on_wheel_duel_face_down_candidate_count_changed)
+	GameSettings.wheel_duel_face_up_candidate_count_changed.connect(_wheel_duel_face_up_candidate_input.set_value_no_signal)
+	GameSettings.wheel_duel_face_down_candidate_count_changed.connect(_wheel_duel_face_down_candidate_input.set_value_no_signal)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	GameSettings.next_match_mode_changed.connect(_on_next_match_mode_changed)
 	_apply_player_count_limits_for_mode(GameSettings.next_match_mode)
@@ -174,6 +195,7 @@ func _ready() -> void:
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	_refresh_character_replacement_count_selection(GameSettings.character_replacement_count)
 	_refresh_character_candidate_count_selection(GameSettings.character_candidate_count)
+	set_match_mode(GameSettings.next_match_mode)
 	refresh_ui_style()
 
 
@@ -244,12 +266,9 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_ai_response_delay_row.visible = controls_visible
 	_game_speed_row.visible = controls_visible
 	_player_count_row.visible = controls_visible
-	_custom_character_assignment_row.visible = controls_visible
-	_customize_ai_characters_row.visible = controls_visible
+	_apply_mode_specific_settings_visibility()
 	_mulligan_limit_row.visible = controls_visible
 	_ai_uses_mulligan_row.visible = controls_visible
-	_character_replacement_count_row.visible = controls_visible
-	_character_candidate_count_row.visible = controls_visible
 	_restart_button.visible = controls_visible
 	_control_all_characters_checkbox.visible = controls_visible and _offline_controls_visible
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
@@ -270,6 +289,29 @@ func set_offline_controls_visible(controls_visible: bool) -> void:
 	_control_all_characters_checkbox.visible = _authority_controls_visible and _offline_controls_visible
 	if not _control_all_characters_checkbox.visible and _control_all_characters_checkbox.has_focus():
 		_control_all_characters_checkbox.release_focus()
+
+
+## 设置局内菜单绑定的当前对局模式；人数限制与模式专属设置均以该值为准。
+func set_match_mode(mode_id: String) -> void:
+	_active_match_mode = GameSettings.normalize_match_mode(mode_id) if GameSettings != null else mode_id
+	_apply_player_count_limits_for_mode(_active_match_mode)
+	_apply_mode_specific_settings_visibility()
+
+
+## 根据当前对局模式显示独立设置；车轮战隐藏普通选将项并显示明暗候选数量。
+func _apply_mode_specific_settings_visibility() -> void:
+	if not is_node_ready():
+		return
+	var is_wheel_duel: bool = _active_match_mode == GameSettings.MATCH_MODE_WHEEL_DUEL
+	var show_normal_selection_settings: bool = _authority_controls_visible and not is_wheel_duel
+	_custom_character_assignment_row.visible = show_normal_selection_settings
+	_customize_ai_characters_row.visible = show_normal_selection_settings
+	_character_replacement_count_row.visible = show_normal_selection_settings
+	_character_candidate_count_row.visible = show_normal_selection_settings
+	_wheel_duel_face_up_candidate_row.visible = _authority_controls_visible and is_wheel_duel
+	_wheel_duel_face_down_candidate_row.visible = _authority_controls_visible and is_wheel_duel
+	_auto_identity_marking_checkbox.visible = not is_wheel_duel
+	_player_count_row.visible = _authority_controls_visible and not is_wheel_duel
 
 
 ## 按全局名称模式刷新菜单下拉选择，不创建第二份名称状态。
@@ -298,12 +340,28 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/MulliganLimitRow/MulliganLimitLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterReplacementCountRow/CharacterReplacementCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterCandidateCountRow/CharacterCandidateCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_apply_option_button_style(_card_name_option)
 	_apply_option_button_style(_ui_style_option)
 	_apply_option_button_style(_mulligan_limit_option)
 	_apply_option_button_style(_character_replacement_count_option)
 	_apply_option_button_style(_character_candidate_count_option)
+	_apply_spin_box_style(_wheel_duel_face_up_candidate_input)
+	_apply_spin_box_style(_wheel_duel_face_down_candidate_input)
+
+
+## 为车轮战候选数量输入应用主题样式；SpinBox内部编辑框与增减按钮保持菜单统一配色。
+func _apply_spin_box_style(spin_box: SpinBox) -> void:
+	if spin_box == null:
+		return
+	var line_edit: LineEdit = spin_box.get_line_edit()
+	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	line_edit.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("text_primary"))
+	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
 
 
 ## 为局内设置下拉框及其弹出列表应用完整交互状态主题；悬停、按下和焦点状态不得回退Godot默认皮肤。
@@ -480,6 +538,24 @@ func _on_character_candidate_count_selected(option_index: int) -> void:
 	GameSettings.set_character_candidate_count(int(_character_candidate_count_option.get_item_metadata(option_index)))
 
 
+## 更新车轮战明置候选数量；若合计不足10名则自动抬高暗置数量。
+func _on_wheel_duel_face_up_candidate_count_changed(candidate_count: float) -> void:
+	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	GameSettings.set_wheel_duel_face_up_candidate_count(normalized_count)
+	var required_face_down_count: int = maxi(10 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
+	if GameSettings.wheel_duel_face_down_candidate_count < required_face_down_count:
+		GameSettings.set_wheel_duel_face_down_candidate_count(required_face_down_count)
+
+
+## 更新车轮战暗置候选数量；若合计不足10名则自动抬高明置数量。
+func _on_wheel_duel_face_down_candidate_count_changed(candidate_count: float) -> void:
+	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	GameSettings.set_wheel_duel_face_down_candidate_count(normalized_count)
+	var required_face_up_count: int = maxi(10 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
+	if GameSettings.wheel_duel_face_up_candidate_count < required_face_up_count:
+		GameSettings.set_wheel_duel_face_up_candidate_count(required_face_up_count)
+
+
 ## 更新 AI 响应时间显示；该设置的数值表示每次 AI 进行行动或选择前等待的秒数，数值越小响应越快。
 func _refresh_ai_response_delay_text(delay_seconds: float) -> void:
 	if not is_node_ready():
@@ -535,7 +611,8 @@ func _on_next_player_count_changed(player_count: float) -> void:
 
 ## 根据下一局模式调整局内菜单人数 SpinBox 上下限与步长；斗地主仅 3↔5。
 func _on_next_match_mode_changed(mode_id: String) -> void:
-	_apply_player_count_limits_for_mode(mode_id)
+	if _active_match_mode.is_empty():
+		set_match_mode(mode_id)
 	if GameSettings != null:
 		set_next_player_count(GameSettings.next_match_player_count)
 

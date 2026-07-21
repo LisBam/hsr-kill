@@ -993,6 +993,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
 	_snapshot = snapshot
+	match_menu.set_match_mode(str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity")))
 	_refresh_match_menu_authority_controls()
 	_player_snapshots_by_id.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
@@ -2691,9 +2692,9 @@ func _refresh_match_menu_authority_controls() -> void:
 	match_menu.set_offline_controls_visible(is_offline_mode)
 	if main_menu != null and is_instance_valid(main_menu):
 		main_menu.set_control_all_characters_visible(is_offline_mode)
-	# 斗地主身份全明置：局内菜单不展示自动身份标记开关。
+	# 只有标准身份局需要推测隐藏身份；斗地主、2v2与车轮战身份全明置时隐藏该开关。
 	var current_match_mode: String = str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity"))
-	match_menu.set_auto_identity_marking_visible(current_match_mode != "doudizhu")
+	match_menu.set_auto_identity_marking_visible(current_match_mode == "identity")
 
 
 ## 为公共选牌牌位补充当前选择者与领取者武将名；规则状态仍只保存稳定玩家 ID。
