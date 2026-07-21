@@ -5973,6 +5973,36 @@ func _apply_custom_assignment_preview() -> void:
 				remaining_identity = "landlord" if landlord_seats.has(remaining_seat_number) else "peasant"
 				if not available_identities.has(remaining_identity):
 					remaining_identity = str(available_identities[0])
+		elif character_selection.is_team2v2_mode():
+			# 2v2：剩余补位必须遵守开局座次→蓝/红绑定表，禁止出现“3号蓝位却显示红方”等错位预览。
+			var bound_for_preferred: String = character_selection.get_team2v2_identity_for_seat(preferred_seat_number)
+			if available_seats.has(preferred_seat_number) and available_identities.has(bound_for_preferred if not bound_for_preferred.is_empty() else preferred_identity):
+				remaining_seat_number = preferred_seat_number
+				remaining_identity = bound_for_preferred if not bound_for_preferred.is_empty() else preferred_identity
+			else:
+				var filled_preview: bool = false
+				var preview_bound_identity: String = ""
+				# 尽量保留偏好颜色的绑定座。
+				var preferred_team_seats: Array[int] = character_selection.get_team2v2_seats_for_identity(preferred_identity)
+				for team_seat: int in preferred_team_seats:
+					if available_seats.has(team_seat) and available_identities.has(preferred_identity):
+						remaining_seat_number = team_seat
+						remaining_identity = preferred_identity
+						filled_preview = true
+						break
+				if not filled_preview:
+					for seat_option: int in available_seats:
+						preview_bound_identity = character_selection.get_team2v2_identity_for_seat(seat_option)
+						if not preview_bound_identity.is_empty() and available_identities.has(preview_bound_identity):
+							remaining_seat_number = seat_option
+							remaining_identity = preview_bound_identity
+							filled_preview = true
+							break
+				if not filled_preview:
+					remaining_seat_number = available_seats[0]
+					remaining_identity = character_selection.get_team2v2_identity_for_seat(remaining_seat_number)
+					if remaining_identity.is_empty() or not available_identities.has(remaining_identity):
+						remaining_identity = str(available_identities[0])
 		assignments_by_player[player.player_id] = {"seat_number":remaining_seat_number, "identity":remaining_identity}
 		available_seats.erase(remaining_seat_number)
 		available_identities.erase(remaining_identity)
@@ -6399,7 +6429,7 @@ func _drive_ai_character_selection() -> void:
 				or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
 			)
 			if requires_custom_assignment:
-				# 当前剩余座次与身份；斗地优先占满固定地主座（1/3），身份局优先一号位与领袖绑定，2v2 自由组合。
+				# 当前剩余座次与身份；斗地优先占满固定地主座（1/3），2v2 按开局成队表绑定蓝/红，身份局优先一号位与领袖。
 				var available_seats: Array[int] = character_selection.get_available_seat_numbers(player_id)
 				var available_identities: Array[String] = character_selection.get_available_identities(player_id)
 				var selected_seat_number: int = -1
@@ -6426,13 +6456,49 @@ func _drive_ai_character_selection() -> void:
 					if not filled and not available_seats.is_empty() and not available_identities.is_empty():
 						selected_seat_number = available_seats[0]
 						selected_identity = available_identities[0]
+				elif character_selection.is_team2v2_mode():
+					# 2v2：座次与蓝/红按开局成队表绑定；优先沿用首次随机座次（其身份由绑定表决定）。
+					var preferred_seat_number: int = character_selection.get_initial_seat_number(player_id)
+					var preferred_identity: String = character_selection.get_initial_identity(player_id)
+					var filled: bool = false
+					var seat_bound_identity: String = ""
+					if available_seats.has(preferred_seat_number):
+						seat_bound_identity = character_selection.get_team2v2_identity_for_seat(preferred_seat_number)
+						if seat_bound_identity.is_empty():
+							seat_bound_identity = preferred_identity
+						if available_identities.has(seat_bound_identity):
+							selected_seat_number = preferred_seat_number
+							selected_identity = seat_bound_identity
+							filled = true
+					if not filled:
+						# 偏好座已被占用：先找仍可用的同色座，再任意合法绑定对。
+						var team_seats: Array[int] = character_selection.get_team2v2_seats_for_identity(preferred_identity)
+						for team_seat: int in team_seats:
+							if available_seats.has(team_seat) and available_identities.has(preferred_identity):
+								selected_seat_number = team_seat
+								selected_identity = preferred_identity
+								filled = true
+								break
+					if not filled:
+						for seat_option: int in available_seats:
+							seat_bound_identity = character_selection.get_team2v2_identity_for_seat(seat_option)
+							if not seat_bound_identity.is_empty() and available_identities.has(seat_bound_identity):
+								selected_seat_number = seat_option
+								selected_identity = seat_bound_identity
+								filled = true
+								break
+					if not filled and not available_seats.is_empty() and not available_identities.is_empty():
+						selected_seat_number = available_seats[0]
+						selected_identity = character_selection.get_team2v2_identity_for_seat(selected_seat_number)
+						if selected_identity.is_empty() or not available_identities.has(selected_identity):
+							selected_identity = available_identities[0]
 				elif not first_seat_identity.is_empty() and available_seats.has(1) and available_identities.has(first_seat_identity):
 					# 身份局/需绑定一号位的模式：优先同时占住一号位与首任身份。
 					selected_seat_number = 1
 					selected_identity = first_seat_identity
 				else:
 					# 仅当仍有“唯一首任身份”尚未落定，才预留一号位给后续玩家。
-					# 2v2 的 first_seat_identity 为空，绝不能 erase(1)，否则最后一名 AI 会只剩无效座次 -1。
+					# 2v2 已在上方专用分支处理，绝不能 erase(1) 导致最后一名 AI 提交 seat=-1。
 					if (
 						not first_seat_identity.is_empty()
 						and character_selection.has_unique_first_seat_identity()
@@ -6441,7 +6507,6 @@ func _drive_ai_character_selection() -> void:
 						available_seats.erase(1)
 						available_identities.erase(first_seat_identity)
 					if not available_seats.is_empty() and not available_identities.is_empty():
-						# 2v2 等自由组合模式优先沿用首次随机座次/身份，降低与桌面默认高亮不一致。
 						var preferred_seat_number: int = character_selection.get_initial_seat_number(player_id)
 						var preferred_identity: String = character_selection.get_initial_identity(player_id)
 						selected_seat_number = preferred_seat_number if available_seats.has(preferred_seat_number) else available_seats[0]
