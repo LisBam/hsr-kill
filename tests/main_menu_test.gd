@@ -16,6 +16,8 @@ func _ready() -> void:
 
 ## 验证启动页面、设置浮层和身份局开始请求；任一断言失败后以非零状态退出。
 func _run() -> void:
+	# 主菜单回归固定从身份模式开始；避免其他模式测试留下的持久化选择改变本测试的默认文案与六人开局断言。
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	# 正式主场景资源；测试必须使用玩家实际启动的场景而非构造替代界面。
 	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	if main_scene == null:
@@ -78,6 +80,10 @@ func _run() -> void:
 	var top_identity_mode_button: Button = main_instance.get_node("%TopIdentityModeButton") as Button
 	# 左侧身份模式按钮；左侧模式列表目前只能存在这一项。
 	var identity_mode_button: Button = main_instance.get_node("%IdentityModeButton") as Button
+	# 左侧斗地主模式按钮；与身份模式共用模式卡片选中底色规范。
+	var doudizhu_mode_button: Button = main_instance.get_node("%DouDizhuModeButton") as Button
+	# 左侧2v2模式按钮；与另外两种模式共用模式卡片选中底色规范。
+	var team2v2_mode_button: Button = main_instance.get_node("%Team2v2ModeButton") as Button
 	# 左侧身份模式标题；必须独立于按钮文本呈现，以便标题可使用更大的主题字号。
 	var identity_mode_name: Label = main_instance.get_node("%IdentityModeName") as Label
 	# 左侧身份模式人数说明；仅展示可选人数范围，不重复标准身份局描述。
@@ -125,10 +131,24 @@ func _run() -> void:
 	if mode_background.texture == null or mode_background.texture.resource_path != "res://assets/art/身份模式主菜单背景.png" or mode_background.stretch_mode != TextureRect.STRETCH_KEEP_ASPECT_COVERED:
 		_fail("mode_preview")
 		return
+	# 当前主题下模式卡片的目标选中底色；使用组件暴露的加深比例验证视觉参数能够随主题复用。
+	var expected_selected_mode_background: Color = BattleUIStyle.get_color("action_button").darkened(main_menu.mode_selected_background_darkening)
+	# 身份模式卡片的持续选中样式；按钮保持按下时应使用更深的内部棕色。
+	var identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	# 斗地主卡片的持续选中样式；未选中时同样预先持有正确的按下态样式以供切换使用。
+	var doudizhu_selected_style: StyleBoxFlat = doudizhu_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	# 2v2卡片的持续选中样式；三张卡片必须保持完全一致的选中颜色规则。
+	var team2v2_selected_style: StyleBoxFlat = team2v2_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
+		_fail("mode_selected_background")
+		return
 	# 顶部按钮顺序；“联机设置”必须紧跟在“模式选择”右侧，左侧游戏模式列表仍只有身份模式一项。
+	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2排列，三项均直接可选；后一句是现行场景结构的补充约束。
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list.find_children("*", "Button", true, false).size() != 1:
-		_fail("top_navigation_entries")
+	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
+	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 3 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button:
+		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
@@ -212,6 +232,13 @@ func _run() -> void:
 	await get_tree().process_frame
 	if not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
 		_fail("theme_refresh")
+		return
+	# 暖木家园主题的模式卡片目标选中底色；主题切换后应以新的棕色基底重新计算，而非保留旧样式。
+	var expected_warm_selected_mode_background: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "action_button").darkened(main_menu.mode_selected_background_darkening)
+	# 暖木家园主题下身份模式卡片的实际持续选中样式。
+	var warm_identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	if warm_identity_selected_style == null or not warm_identity_selected_style.bg_color.is_equal_approx(expected_warm_selected_mode_background):
+		_fail("mode_selected_background_theme_refresh")
 		return
 	if not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
 		_fail("settings_theme_refresh")

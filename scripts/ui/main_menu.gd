@@ -24,6 +24,9 @@ signal start_game_requested(player_count: int)
 ## 设置模态遮罩的不透明度；默认0.86确保设置面板成为唯一视觉焦点，运行时仅阻断主菜单底层输入。
 @export_range(0.0, 1.0, 0.01) var settings_backdrop_opacity: float = 0.86
 
+## 左侧模式卡片选中态相对主题操作色的加深比例；默认0.28让身份模式、斗地主与2v2的内部棕色形成清晰选中层级，运行时仅影响视觉表现，可在检查器中按主题对比度调整。
+@export_range(0.0, 0.6, 0.01) var mode_selected_background_darkening: float = 0.28
+
 ## 身份模式正常待机时显示的状态文字；集中定义可避免按钮区与错误提示使用不同默认文案。
 ## 待机状态保留空文本，以便底部操作栏只在开局反馈或错误发生时显示状态信息。
 const MODE_READY_STATUS_TEXT: String = ""
@@ -343,9 +346,9 @@ func refresh_ui_style() -> void:
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
-	BattleUIStyle.apply_interaction_button(_identity_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_doudizhu_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_team2v2_mode_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	_apply_mode_button_style(_identity_mode_button)
+	_apply_mode_button_style(_doudizhu_mode_button)
+	_apply_mode_button_style(_team2v2_mode_button)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -834,6 +837,20 @@ func _make_flat_inner_panel(background_color: Color, border_color: Color, border
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
 	return style
+
+
+## 为左侧模式卡片配置通用交互外观，并单独加深持续选中时的内部底色；该样式不影响顶部导航和其他操作按钮。
+func _apply_mode_button_style(button: Button) -> void:
+	if button == null:
+		return
+	# 模式卡片常态背景色；始终读取当前主题的操作按钮语义色，切换主题后会重新计算。
+	var background_color: Color = BattleUIStyle.get_color("action_button")
+	# 模式卡片边框色；沿用当前主题强调色以配合左侧选中指示条。
+	var border_color: Color = BattleUIStyle.get_color("accent")
+	# 模式卡片选中背景色；只对主题操作色做比例加深，保留原有色相与透明度。
+	var selected_background_color: Color = background_color.darkened(mode_selected_background_darkening)
+	BattleUIStyle.apply_interaction_button(button, background_color, border_color, true)
+	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(selected_background_color, border_color, true))
 
 
 ## 为主菜单设置滑条应用主题轨道与已选区域；数值范围和步长仍由 GameSettings 决定。
