@@ -155,6 +155,9 @@ var _mulligan_limit: int = 0
 ## 本局 AI 是否自动评估并使用手气卡；手气卡数量为0时该值不会产生流程。
 var _ai_uses_mulligan_enabled: bool = false
 
+## 本局是否由离线本机控制全部角色；开局时锁定，任何局域网模式都强制为false。
+var _control_all_characters_enabled: bool = false
+
 ## 本局1v1车轮战明置候选数量；开局时从房主设置锁定，默认6且范围3至20。
 var _wheel_duel_face_up_candidate_count: int = 6
 
@@ -570,6 +573,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled
 	_mulligan_limit = GameSettings.mulligan_limit
 	_ai_uses_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
+	_control_all_characters_enabled = network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE and GameSettings.control_all_characters_enabled
 	_character_replacement_count = GameSettings.character_replacement_count
 	_character_candidate_count = GameSettings.character_candidate_count
 	_wheel_duel_face_up_candidate_count = GameSettings.wheel_duel_face_up_candidate_count
@@ -581,6 +585,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"customize_ai_characters_enabled":_customize_ai_characters_enabled,
 		"mulligan_limit":_mulligan_limit,
 		"ai_uses_mulligan_enabled":_ai_uses_mulligan_enabled,
+		"control_all_characters_enabled":_control_all_characters_enabled,
 		"character_replacement_count":_character_replacement_count,
 		"character_candidate_count":_character_candidate_count,
 		"wheel_duel_face_up_candidate_count":_wheel_duel_face_up_candidate_count,
@@ -1764,7 +1769,14 @@ func request_control_choice(chooser_id: int, title: String, prompt: String, opti
 func _publish_card_choice_request(choice_data: Dictionary, paced_response: bool) -> void:
 	# 当前请求 ID；独立业务键允许同时无懈的多个请求并行等待且互不取消。
 	var request_id: int = int(choice_data.get("request_id", -1))
+	# 离线全角色控制把并行无懈转为同一玩家依次操作；后登记请求保留权威并行状态，但等前一名明确放弃后再显示。
+	if _control_all_characters_enabled and not _pending_negation_choices.is_empty():
+		var first_pending_request_id: int = int(_pending_negation_choices.keys()[0])
+		if request_id != first_pending_request_id:
+			return
 	if not paced_response or game_flow_pacer == null or game_flow_interval_seconds <= 0.0 or request_id < 0:
+		if _prepare_offline_controlled_view(int(choice_data.get("chooser_id", -1))):
+			_emit_state()
 		card_choice_requested.emit(choice_data.duplicate(true))
 		_replicate_choice_request_to_remote_player(choice_data)
 		return
@@ -1776,6 +1788,8 @@ func _publish_card_choice_request(choice_data: Dictionary, paced_response: bool)
 ## 发出仍然有效的延时响应提示；请求已提交、取消或重开时不显示过期窗口。
 func _emit_paced_card_choice_request(request_id: int) -> void:
 	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("request_id", -1)) == request_id:
+		if _prepare_offline_controlled_view(int(_pending_card_choice.get("chooser_id", -1))):
+			_emit_state()
 		card_choice_requested.emit(_pending_card_choice.duplicate(true))
 		_replicate_choice_request_to_remote_player(_pending_card_choice)
 		# 当前普通响应选择者；AI 从提示已经公开的时刻开始计算自身响应等待，人类则继续等待标准动作提交。
@@ -1786,6 +1800,8 @@ func _emit_paced_card_choice_request(request_id: int) -> void:
 	if _pending_negation_choices.has(request_id):
 		# 当前同时无懈请求；每名响应者拥有独立私有候选，提示只发送对应请求的只读副本。
 		var negation_choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
+		if _prepare_offline_controlled_view(int(negation_choice_data.get("chooser_id", -1))):
+			_emit_state()
 		card_choice_requested.emit(negation_choice_data.duplicate(true))
 		_replicate_choice_request_to_remote_player(negation_choice_data)
 		# 当前无懈响应者；与普通响应一致，从提示发布后再开始独立 AI 等待。
@@ -3948,6 +3964,7 @@ func _submit_simultaneous_negation_choice(action: PlayerAction) -> bool:
 		_refresh_simultaneous_choice_snapshot()
 		event_scheduler.drain()
 		_emit_state()
+		_publish_next_control_all_negation_choice()
 		return true
 	# 本轮最后一名响应者明确放弃；此时没有失效实体需要重试，应直接以当前奇偶结果结束无懈链。
 	if selected_uids.is_empty():
@@ -4049,6 +4066,17 @@ func _refresh_simultaneous_choice_snapshot() -> void:
 			"base_context":choice_data.get("context", {}) as Dictionary,
 			"active_context":choice_data.get("context", {}) as Dictionary,
 		}
+
+
+## 离线全角色控制中发布下一名仍待操作角色的无懈请求；普通离线与联机仍保持原并行发布语义。
+func _publish_next_control_all_negation_choice() -> void:
+	if not _control_all_characters_enabled or _pending_negation_choices.is_empty():
+		return
+	for choice_variant: Variant in _pending_negation_choices.values():
+		var choice_data: Dictionary = choice_variant as Dictionary
+		if int(choice_data.get("chooser_id", -1)) != local_human_player_id:
+			continue
+		card_choice_requested.emit(choice_data.duplicate(true))
 		return
 
 
@@ -5577,7 +5605,7 @@ func _create_players(player_count: int) -> void:
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
 		# 内置 AI 名称带有明确前缀，真实玩家保持“玩家X”；选将完成旋转座次后会按最终座次再次统一刷新。
-		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else index == local_human_player_id
+		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else (_control_all_characters_enabled or index == local_human_player_id)
 		# 当前玩家显示名；局域网真人沿用大厅昵称，离线真人与 AI 继续使用原有稳定座次名称。
 		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
@@ -10076,6 +10104,7 @@ func _on_runtime_choice_resolved(request_data: Dictionary, _response_data: Dicti
 func _emit_state() -> void:
 	if state == null:
 		return
+	_prepare_offline_controlled_view()
 	# 正常运行时历史由事件信号逐条增量同步；只有计数失配才执行全量校准，避免长对局每次界面刷新都复制完整回放。
 	if event_scheduler != null and state.event_history.size() != event_scheduler.get_event_history_count():
 		state.event_history = event_scheduler.get_event_history()
@@ -10106,6 +10135,47 @@ func _emit_state() -> void:
 			# 手气卡私有快照；每名远端玩家只接收自己的剩余张数和确认状态。
 			remote_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(viewer_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
+
+
+## 在离线“控制所有角色”模式中选择当前需要操作的角色，并把唯一第一视角切换到该稳定玩家ID。
+## explicit_player_id用于即将发布的选择请求；未指定时按选择、选将、手气卡和当前回合的优先级自动推导。
+func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
+	if not _control_all_characters_enabled or state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return false
+	# 目标第一视角玩家ID；显式选择请求优先，避免响应者与当前回合角色不同时界面仍停留在旧角色。
+	var target_player_id: int = explicit_player_id
+	if target_player_id < 0 and not _pending_card_choice.is_empty():
+		target_player_id = int(_pending_card_choice.get("chooser_id", -1))
+	if target_player_id < 0 and not _pending_negation_choices.is_empty():
+		for request_variant: Variant in _pending_negation_choices.values():
+			var request_data: Dictionary = request_variant as Dictionary
+			target_player_id = int(request_data.get("chooser_id", -1))
+			if target_player_id >= 0:
+				break
+	if target_player_id < 0 and state.current_phase == "wheel_duel_selection" and wheel_duel_selection != null:
+		if wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_DRAFT:
+			target_player_id = wheel_duel_selection.get_current_drafter_id()
+		elif wheel_duel_selection.phase == WheelDuelSelectionService.PHASE_LINEUP:
+			for player: PlayerState in state.players:
+				if not wheel_duel_selection.has_submitted_lineup(player.player_id):
+					target_player_id = player.player_id
+					break
+	if target_player_id < 0 and state.current_phase == "character_selection" and character_selection != null:
+		var pending_player_ids: Array[int] = character_selection.get_pending_player_ids()
+		if not pending_player_ids.is_empty():
+			target_player_id = pending_player_ids[0]
+	if target_player_id < 0 and state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null:
+		for player: PlayerState in state.players:
+			if starting_hand_mulligan.can_choose(player.player_id):
+				target_player_id = player.player_id
+				break
+	if target_player_id < 0:
+		target_player_id = state.current_player_id
+	var target_player: PlayerState = state.get_player(target_player_id)
+	if target_player == null or not target_player.alive or target_player.out_of_game or local_human_player_id == target_player_id:
+		return false
+	local_human_player_id = target_player_id
+	return true
 
 
 ## 返回面向指定观察者的选将类私有快照；普通选将与房主 AI 调整阶段互斥。

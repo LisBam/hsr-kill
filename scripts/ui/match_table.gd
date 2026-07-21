@@ -120,6 +120,9 @@ const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 ## 主视角武将牌与客户区底边之间的垂直留白；默认0像素为十人局右侧下方座位腾出完整的垂直安全区，运行时通常无需动态修改。
 @export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 0.0
 
+## 第一视角判定区相对手牌左边界的右移距离；默认120像素避开左侧“托管”按钮，运行时通常无需动态修改。
+@export_range(0.0, 240.0, 1.0) var local_judgment_zone_left_offset: float = 120.0
+
 ## 对局控制器节点路径；默认指向同场景根节点下的 MatchController，运行时无需修改。
 @export var match_controller_path: NodePath = NodePath("MatchController")
 
@@ -809,6 +812,7 @@ func _on_lan_leave_requested() -> void:
 	# 连接入口会话状态；先复位已禁用的建房/加入按钮，再由主菜单隐藏入口，确保下次打开可以立即重新创建房间。
 	lan_lobby_panel.return_to_entry()
 	main_menu.close_lan_panel()
+	_refresh_match_menu_authority_controls()
 
 
 ## 绑定房主广播的公共大厅成员表；房主额外显示本机可分享 IPv4 地址，客户端不显示网卡列表。
@@ -822,6 +826,7 @@ func _on_lan_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	var display_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot(true) if match_controller.network_gateway.is_lan_host() else lobby_snapshot.duplicate(true)
 	online_lobby_panel.bind_lobby(display_snapshot, host_addresses, lan_lobby_panel.get_port())
 	main_menu.show_online_lobby()
+	_refresh_match_menu_authority_controls()
 
 
 ## 把网关连接状态转交大厅状态栏；该回调不据文本推断角色或对局阶段。
@@ -976,8 +981,10 @@ func _layout_local_judgment_zone() -> void:
 	var hand_position: Vector2 = hand_panel.position
 	# 当前手牌区域尺寸；宽度随技能栏列数收紧或扩展，判定标记区必须同步避免越过技能按钮。
 	var hand_size: Vector2 = hand_panel.size
-	local_judgment_zone.position = hand_position - Vector2(0.0, LOCAL_JUDGMENT_ZONE_HEIGHT + LOCAL_JUDGMENT_ZONE_HAND_GAP)
-	local_judgment_zone.size = Vector2(maxf(hand_size.x, 1.0), LOCAL_JUDGMENT_ZONE_HEIGHT)
+	# 判定区左侧避让距离；延时锦囊从托管按钮右侧开始排列，剩余宽度仍随手牌区响应式变化。
+	var horizontal_offset: float = minf(local_judgment_zone_left_offset, maxf(hand_size.x - 1.0, 0.0))
+	local_judgment_zone.position = hand_position + Vector2(horizontal_offset, -LOCAL_JUDGMENT_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HAND_GAP)
+	local_judgment_zone.size = Vector2(maxf(hand_size.x - horizontal_offset, 1.0), LOCAL_JUDGMENT_ZONE_HEIGHT)
 
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
@@ -2679,6 +2686,11 @@ func _refresh_match_menu_authority_controls() -> void:
 	if match_menu == null or not is_instance_valid(match_menu) or match_controller == null or match_controller.network_gateway == null:
 		return
 	match_menu.set_authority_controls_visible(not match_controller.network_gateway.is_lan_client())
+	# 控制全部角色只属于纯离线对局；局域网房主虽然拥有其他权威设置，也必须隐藏该项。
+	var is_offline_mode: bool = match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE
+	match_menu.set_offline_controls_visible(is_offline_mode)
+	if main_menu != null and is_instance_valid(main_menu):
+		main_menu.set_control_all_characters_visible(is_offline_mode)
 	# 斗地主身份全明置：局内菜单不展示自动身份标记开关。
 	var current_match_mode: String = str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity"))
 	match_menu.set_auto_identity_marking_visible(current_match_mode != "doudizhu")
@@ -2797,12 +2809,12 @@ func _is_inline_candidate_compatible(candidate_uid: int) -> bool:
 	return false
 
 
-## 返回可自动选中的装备触发 UID；只有上下文明确绑定同一公开装备实体时生效，普通响应与目标区域选牌不自动选择。
+## 返回可自动选中的装备触发UID；兼容普通装备触发equipment_uid与八卦阵优先响应immediate_response_equipment_uid。
 func _get_auto_selected_equipment_trigger_uid(choice_data: Dictionary) -> int:
-	# 触发上下文；装备规则创建询问时写入 equipment_uid，客户端不能从候选位置自行推断发动语义。
+	# 触发上下文；装备规则必须写入明确UID，客户端不能仅凭“唯一候选”推断发动语义。
 	var context: Dictionary = choice_data.get("context", {}) as Dictionary
-	# 请求绑定的装备实体 UID；负数表示本请求不是装备发动询问。
-	var equipment_uid: int = int(context.get("equipment_uid", -1))
+	# 请求绑定的装备实体UID；八卦阵独立询问使用immediate_response_equipment_uid，其他装备触发使用equipment_uid。
+	var equipment_uid: int = int(context.get("equipment_uid", context.get("immediate_response_equipment_uid", -1)))
 	if equipment_uid < 0:
 		return -1
 	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:

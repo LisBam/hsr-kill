@@ -46,6 +46,9 @@ signal character_replacement_count_changed(count: int)
 ## 随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的新对局。
 signal character_candidate_count_changed(count: int)
 
+## 离线下一局是否由本机控制全部角色的变化信号；联机模式不会读取该设置。
+signal control_all_characters_changed(enabled: bool)
+
 ## 1v1车轮战明置候选数量变化信号；参数范围3至20，仅影响之后创建的新对局。
 signal wheel_duel_face_up_candidate_count_changed(count: int)
 
@@ -272,6 +275,9 @@ var character_replacement_count: int = 0
 
 ## 每名玩家下一局获得的普通随机选将牌数；默认5张，领袖技武将不计入该数值。
 var character_candidate_count: int = DEFAULT_CHARACTER_CANDIDATE_COUNT
+
+## 下一局离线对局是否由本机控制全部角色；默认关闭，联机房主与客户端均忽略该值。
+var control_all_characters_enabled: bool = false
 
 ## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
 var _settings_file_path: String = SETTINGS_FILE_PATH
@@ -539,6 +545,15 @@ func set_character_candidate_count(count: int) -> void:
 	character_candidate_count_changed.emit(character_candidate_count)
 
 
+## 设置下一局离线对局是否控制全部角色；当前已创建对局不会中途改变角色控制权。
+func set_control_all_characters_enabled(enabled: bool) -> void:
+	if control_all_characters_enabled == enabled:
+		return
+	control_all_characters_enabled = enabled
+	_queue_settings_save()
+	control_all_characters_changed.emit(control_all_characters_enabled)
+
+
 ## 设置下一局1v1车轮战明置候选数量；范围外输入限制到3至20，并要求调用方在开局前保证明暗合计不少于10。
 func set_wheel_duel_face_up_candidate_count(count: int) -> void:
 	# 标准化后的明置候选数量；默认6，修改只影响之后创建的新车轮战对局。
@@ -626,6 +641,7 @@ func _load_saved_settings() -> void:
 	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))
 	character_replacement_count = stored_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_character_replacement_count) else 0
 	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
@@ -701,6 +717,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)

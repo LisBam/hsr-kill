@@ -155,6 +155,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 自动身份标记复选框；开关仅影响本地显示推测，不写入对局规则状态。
 @onready var _auto_identity_marking_checkbox: CheckBox = %MainMenuAutoIdentityMarkingCheckBox
 
+## 离线控制全部角色开关；联机入口打开或已连接时由牌桌协调器隐藏，设置只影响下一局离线对局。
+@onready var _control_all_characters_checkbox: CheckBox = %MainMenuControlAllCharactersCheckBox
+
 ## 自选全武将、座次与身份开关；仅在之后由本机创建或房主创建的新对局中生效。
 @onready var _custom_character_assignment_checkbox: CheckBox = %MainMenuCustomCharacterAssignmentCheckBox
 
@@ -257,6 +260,8 @@ func _ready() -> void:
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
+	_control_all_characters_checkbox.set_pressed_no_signal(GameSettings.control_all_characters_enabled)
+	_control_all_characters_checkbox.toggled.connect(GameSettings.set_control_all_characters_enabled)
 	_custom_character_assignment_checkbox.set_pressed_no_signal(GameSettings.custom_character_assignment_enabled)
 	_custom_character_assignment_checkbox.toggled.connect(GameSettings.set_custom_character_assignment_enabled)
 	_customize_ai_characters_checkbox.set_pressed_no_signal(GameSettings.customize_ai_characters_enabled)
@@ -274,6 +279,7 @@ func _ready() -> void:
 	GameSettings.ai_response_delay_changed.connect(_refresh_ai_response_delay_text)
 	GameSettings.game_speed_changed.connect(_refresh_game_speed_text)
 	GameSettings.auto_identity_marking_changed.connect(_refresh_auto_identity_marking_state)
+	GameSettings.control_all_characters_changed.connect(_control_all_characters_checkbox.set_pressed_no_signal)
 	GameSettings.custom_character_assignment_changed.connect(_custom_character_assignment_checkbox.set_pressed_no_signal)
 	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
 	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
@@ -342,6 +348,15 @@ func set_lan_default_port(port: int) -> void:
 	_lan_default_port = clampi(port, 1024, 65535)
 
 
+## 设置离线专属控制权选项是否可见；联机模式隐藏整项但不改写之后离线对局使用的偏好。
+func set_control_all_characters_visible(controls_visible: bool) -> void:
+	if _control_all_characters_checkbox == null:
+		return
+	_control_all_characters_checkbox.visible = controls_visible
+	if not controls_visible and _control_all_characters_checkbox.has_focus():
+		_control_all_characters_checkbox.release_focus()
+
+
 ## 按当前活动主题刷新主菜单全部静态控件；不保存主题颜色副本，也不修改任何玩法配置。
 func refresh_ui_style() -> void:
 	if not is_node_ready():
@@ -408,6 +423,9 @@ func refresh_ui_style() -> void:
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_control_all_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_control_all_characters_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_control_all_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
