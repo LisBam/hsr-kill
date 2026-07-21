@@ -95,6 +95,8 @@ const IDENTITY_OPTIONS: Array[Dictionary] = [
 	{"id":"renegade", "label":"内奸"},
 	{"id":"landlord", "label":"地主"},
 	{"id":"peasant", "label":"农民"},
+	{"id":"blue", "label":"蓝方"},
+	{"id":"red", "label":"红方"},
 ]
 
 ## 候选武将牌之间的水平与垂直间距；默认8像素，让多行候选在保留原尺寸牌面的前提下更紧凑。
@@ -446,7 +448,7 @@ func _render_header() -> void:
 ## 使用阵营语义色写入“你的身份为：身份，提示”标题；身份只来自观察者自己的裁剪选将快照。
 func _set_identity_title(identity: String, action_text: String) -> void:
 	# 玩家可见身份名称；未知旧快照使用“未知”保持标题完整，不推断其他角色身份。
-	var identity_name: String = {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸", "landlord":"地主", "peasant":"农民"}.get(identity, "未知")
+	var identity_name: String = {"leader":"领袖", "loyalist":"忠臣", "rebel":"反贼", "renegade":"内奸", "landlord":"地主", "peasant":"农民", "blue":"蓝方", "red":"红方"}.get(identity, "未知")
 	# 当前身份语义色；四种身份分别固定使用红、黄、绿、蓝，未知身份回退主题次级文字色。
 	_rendered_identity_color = BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("text_secondary"))
 	_title_label.clear()
@@ -698,19 +700,29 @@ func _render_custom_assignment_controls() -> void:
 		seat_button.pressed.connect(_select_seat.bind(seat_number))
 		_seat_buttons.add_child(seat_button)
 		_seat_button_views[seat_number] = seat_button
-	# 当前仍有名额的身份；仅渲染本模式可选身份（身份局不含地主农民，斗地主不含主忠反内）。
+	# 当前仍有名额的身份；仅渲染本模式可选身份（身份局不含地主/农民/蓝红，斗地不含身份局与2v2，2v2仅蓝红）。
 	var available_identities: Array = _snapshot.get("identity_options", []) as Array
 	# 本局模式；快照缺省时根据可选身份推断，避免错显跨模式按钮。
 	var selection_mode: String = str(_snapshot.get("match_mode", ""))
 	if selection_mode.is_empty():
-		selection_mode = "doudizhu" if available_identities.has("landlord") or available_identities.has("peasant") else "identity"
+		if available_identities.has("landlord") or available_identities.has("peasant"):
+			selection_mode = "doudizhu"
+		elif available_identities.has("blue") or available_identities.has("red"):
+			selection_mode = "team2v2"
+		else:
+			selection_mode = "identity"
 	for identity_option: Dictionary in IDENTITY_OPTIONS:
 		# 当前身份稳定 ID 与显示名；按钮颜色由主题身份语义色决定。
 		var identity: String = str(identity_option.get("id", ""))
 		var is_doudizhu_identity: bool = identity == "landlord" or identity == "peasant"
+		var is_team2v2_identity: bool = identity == "blue" or identity == "red"
 		if selection_mode == "doudizhu" and not is_doudizhu_identity:
 			continue
-		if selection_mode != "doudizhu" and is_doudizhu_identity:
+		if selection_mode == "team2v2" and not is_team2v2_identity:
+			continue
+		if selection_mode == "identity" and (is_doudizhu_identity or is_team2v2_identity):
+			continue
+		if selection_mode not in ["identity", "doudizhu", "team2v2"] and (is_doudizhu_identity or is_team2v2_identity):
 			continue
 		var identity_button: Button = Button.new()
 		identity_button.custom_minimum_size = Vector2(112.0, 34.0)
@@ -741,9 +753,9 @@ func _toggle_all_characters() -> void:
 
 ## 返回本局一号位绑定的首任身份 ID；优先读服务快照，缺省时按模式推断（斗地主地主，身份局领袖）。
 func _get_first_seat_identity_id() -> String:
-	var snapshot_identity: String = str(_snapshot.get("first_seat_identity", ""))
-	if not snapshot_identity.is_empty():
-		return snapshot_identity
+	# 快照可显式给出空字符串（2v2 不绑定首任身份），因此不能用 is_empty 判断“是否有字段”。
+	if _snapshot.has("first_seat_identity"):
+		return str(_snapshot.get("first_seat_identity", ""))
 	var selection_mode: String = str(_snapshot.get("match_mode", ""))
 	if selection_mode.is_empty():
 		# 快照未带模式时，用身份选项或本地身份推断，避免跨模式错绑。
@@ -751,8 +763,14 @@ func _get_first_seat_identity_id() -> String:
 		var local_identity: String = str(_snapshot.get("local_identity", ""))
 		if available_identities.has("landlord") or available_identities.has("peasant") or local_identity == "landlord" or local_identity == "peasant":
 			return "landlord"
+		if available_identities.has("blue") or available_identities.has("red") or local_identity == "blue" or local_identity == "red":
+			return ""
 		return "leader"
-	return "landlord" if selection_mode == "doudizhu" else "leader"
+	if selection_mode == "doudizhu":
+		return "landlord"
+	if selection_mode == "team2v2":
+		return ""
+	return "leader"
 
 
 ## 返回首任身份是否唯一绑定一号位；五人双地主时为 false，三人地主与身份局领袖为 true。
@@ -822,17 +840,21 @@ func _get_random_enabled_peasant_seat() -> int:
 	return enabled_seat_numbers[randi_range(0, enabled_seat_numbers.size() - 1)]
 
 
-## 选择一个临时座次；斗地地主位联动地主/农民位联动农民，身份局一号位联动领袖。
+## 选择一个临时座次；斗地地主位联动地主/农民位联动农民，身份局一号位联动领袖；2v2 不强制座次与蓝红绑定。
 func _select_seat(seat_number: int) -> void:
 	_selected_seat_number = seat_number
 	var first_seat_identity: String = _get_first_seat_identity_id()
 	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	var selection_mode: String = str(_snapshot.get("match_mode", ""))
 	if not landlord_seats.is_empty() and first_seat_identity == "landlord":
 		# 斗地主：1/3 号位固定地主，其余固定农民。
 		if landlord_seats.has(seat_number):
 			_selected_identity = "landlord"
 		else:
 			_selected_identity = "peasant"
+	elif selection_mode == "team2v2" or first_seat_identity.is_empty():
+		# 2v2：座次不强制绑定蓝/红；保留玩家已选身份。
+		pass
 	elif seat_number == 1:
 		_selected_identity = first_seat_identity
 	elif _selected_identity == first_seat_identity and _is_unique_first_seat_identity():
@@ -844,11 +866,12 @@ func _select_seat(seat_number: int) -> void:
 	_request_custom_assignment_preview()
 
 
-## 选择一个临时身份；斗地地主随机落到 1/3 号位，农民落到非地主位；身份局唯一首任身份联动一号位。
+## 选择一个临时身份；斗地地主随机落到 1/3 号位，农民落到非地主位；身份局唯一首任身份联动一号位；2v2 不联动座次。
 func _select_identity(identity: String) -> void:
 	_selected_identity = identity
 	var first_seat_identity: String = _get_first_seat_identity_id()
 	var landlord_seats: Array[int] = _get_landlord_seat_numbers()
+	var selection_mode: String = str(_snapshot.get("match_mode", ""))
 	if not landlord_seats.is_empty() and first_seat_identity == "landlord":
 		if identity == "landlord":
 			# 已在地主位则保持；否则随机可用地主位（1 或 3）。
@@ -862,6 +885,9 @@ func _select_identity(identity: String) -> void:
 				var peasant_seat: int = _get_random_enabled_peasant_seat()
 				if peasant_seat >= 1:
 					_selected_seat_number = peasant_seat
+	elif selection_mode == "team2v2" or first_seat_identity.is_empty():
+		# 2v2：身份与座次自由组合，不因选择蓝/红改动座次。
+		pass
 	elif identity == first_seat_identity and _is_unique_first_seat_identity():
 		_selected_seat_number = 1
 	elif _selected_seat_number == 1 and identity != first_seat_identity:

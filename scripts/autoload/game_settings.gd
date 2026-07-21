@@ -170,11 +170,17 @@ const MATCH_MODE_IDENTITY: String = "identity"
 ## 下一局斗地主模式稳定 ID；与 IdentityRules.MODE_DOUDIZHU 一致。
 const MATCH_MODE_DOUDIZHU: String = "doudizhu"
 
+## 下一局 2v2 模式稳定 ID；与 IdentityRules.MODE_TEAM2V2 一致。
+const MATCH_MODE_TEAM2V2: String = "team2v2"
+
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
 ## 斗地主模式默认人数；仅允许 3 或 5，默认 3 人。
 const DEFAULT_DOUDIZHU_PLAYER_COUNT: int = 3
+
+## 2v2 模式默认人数；固定 4 人。
+const DEFAULT_TEAM2V2_PLAYER_COUNT: int = 4
 
 ## 身份模式默认人数；与历史全局默认 8 人保持一致。
 const DEFAULT_IDENTITY_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
@@ -211,6 +217,9 @@ var next_match_player_count_identity: int = DEFAULT_IDENTITY_PLAYER_COUNT
 
 ## 斗地主模式独立保存的下一局人数；仅 3 或 5，切换回斗地主时恢复。
 var next_match_player_count_doudizhu: int = DEFAULT_DOUDIZHU_PLAYER_COUNT
+
+## 2v2 模式独立保存的下一局人数；固定 4，切换回 2v2 时恢复。
+var next_match_player_count_team2v2: int = DEFAULT_TEAM2V2_PLAYER_COUNT
 
 
 ## 是否允许玩家在选将时打开全部武将并自选座次与身份；默认关闭，仅在下一局初始化时读取。
@@ -373,16 +382,20 @@ func set_next_match_player_count(player_count: int) -> void:
 func normalize_match_mode(mode_id: String) -> String:
 	if mode_id == MATCH_MODE_DOUDIZHU:
 		return MATCH_MODE_DOUDIZHU
+	if mode_id == MATCH_MODE_TEAM2V2:
+		return MATCH_MODE_TEAM2V2
 	return MATCH_MODE_IDENTITY
 
 
-## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 5（小于 4 夹到 3，否则夹到 5）。
+## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 5，2v2 固定 4。
 func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 	var mode: String = normalize_match_mode(mode_id)
 	if mode == MATCH_MODE_DOUDIZHU:
 		if player_count == 3 or player_count == 5:
 			return player_count
 		return 3 if player_count < 4 else 5
+	if mode == MATCH_MODE_TEAM2V2:
+		return DEFAULT_TEAM2V2_PLAYER_COUNT
 	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 
 
@@ -391,6 +404,8 @@ func get_stored_player_count_for_mode(mode_id: String) -> int:
 	var mode: String = normalize_match_mode(mode_id)
 	if mode == MATCH_MODE_DOUDIZHU:
 		return next_match_player_count_doudizhu
+	if mode == MATCH_MODE_TEAM2V2:
+		return next_match_player_count_team2v2
 	return next_match_player_count_identity
 
 
@@ -400,6 +415,8 @@ func _store_player_count_for_mode(mode_id: String, player_count: int) -> void:
 	var normalized_count: int = normalize_player_count_for_mode(mode, player_count)
 	if mode == MATCH_MODE_DOUDIZHU:
 		next_match_player_count_doudizhu = normalized_count
+	elif mode == MATCH_MODE_TEAM2V2:
+		next_match_player_count_team2v2 = normalized_count
 	else:
 		next_match_player_count_identity = normalized_count
 
@@ -518,13 +535,17 @@ func _load_saved_settings() -> void:
 	# 分模式人数：优先读独立字段；旧存档仅有单一 next_match_player_count 时按当前模式回填对应槽位。
 	var stored_identity_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", -1))
 	var stored_doudizhu_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", -1))
+	var stored_team2v2_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", -1))
 	var legacy_player_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count))
 	if stored_identity_count < 0:
 		stored_identity_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_IDENTITY else DEFAULT_IDENTITY_PLAYER_COUNT
 	if stored_doudizhu_count < 0:
 		stored_doudizhu_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_DOUDIZHU else DEFAULT_DOUDIZHU_PLAYER_COUNT
+	if stored_team2v2_count < 0:
+		stored_team2v2_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_TEAM2V2 else DEFAULT_TEAM2V2_PLAYER_COUNT
 	next_match_player_count_identity = normalize_player_count_for_mode(MATCH_MODE_IDENTITY, stored_identity_count)
 	next_match_player_count_doudizhu = normalize_player_count_for_mode(MATCH_MODE_DOUDIZHU, stored_doudizhu_count)
+	next_match_player_count_team2v2 = normalize_player_count_for_mode(MATCH_MODE_TEAM2V2, stored_team2v2_count)
 	next_match_player_count = get_stored_player_count_for_mode(next_match_mode)
 
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
@@ -601,6 +622,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", next_match_player_count_identity)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", next_match_player_count_doudizhu)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", next_match_player_count_team2v2)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)

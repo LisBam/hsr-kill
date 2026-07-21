@@ -482,6 +482,8 @@ func get_match_start_validation_error(player_count: int = -1, mode_id: String = 
 	if not identity_rules.supports_player_count(actual_mode, actual_player_count):
 		if actual_mode == IdentityRules.MODE_DOUDIZHU:
 			return "斗地主仅支持3人或5人。"
+		if actual_mode == IdentityRules.MODE_TEAM2V2:
+			return "2v2仅支持4名玩家。"
 		return "标准身份局仅支持2至10名玩家。"
 	if not GameDatabase.validation_errors.is_empty():
 		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
@@ -640,6 +642,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	# 选将日志；身份局保留领袖优先亮将文案，斗地主改为全员同时选将。
 	if str(state.match_mode) == IdentityRules.MODE_DOUDIZHU:
 		add_log("选将开始：斗地主全员同时从%d张随机候选中选择武将（身份明置，不公开武将）。" % mini(_character_candidate_count, available_character_ids.size()))
+	elif str(state.match_mode) == IdentityRules.MODE_TEAM2V2:
+		add_log("选将开始：2v2全员同时从%d张随机候选中选择武将（蓝红身份明置，座次一/四同队、二/三同队）。" % mini(_character_candidate_count, available_character_ids.size()))
 	else:
 		var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
 		add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
@@ -722,7 +726,7 @@ func select_character(player_id: int, character_id: String, seat_number: int = -
 	# 本次提交前是否处于最终自选阶段；该阶段每名玩家确认时立即写入当前预览座次身份，完成时不得再次重置武将。
 	var was_custom_character_selection: bool = character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
 	# 斗地主同时选将阶段；提交前相位为 PHASE_OTHERS，完成后统一亮将，确认过程中仅投射自选座次身份。
-	var was_doudizhu_simultaneous_selection: bool = character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS
+	var was_doudizhu_simultaneous_selection: bool = character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS
 	# 本次提交是否只确认首任领袖的座次身份；该武将已在领袖阶段应用并公开，不能再次改写稳定武将ID。
 	# 该分支只处理AI首任领袖延后占用剩余名额；真人首任领袖不会产生第二次提交。
 	var confirms_retained_initial_leader_character: bool = character_selection.is_retaining_initial_leader_character(player_id)
@@ -5396,9 +5400,12 @@ func _uninstall_all_card_runtimes() -> void:
 func _create_players(player_count: int) -> void:
 	# 本局模式；决定身份表是否洗牌以及开局公开身份规则。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
-	# 身份配置副本；身份局整表洗牌，斗地主按座次固定（一号位地主，五人时三号位亦为地主）。
+	# 身份配置副本；身份局整表洗牌；斗地主按座次固定；2v2 按座次固定后可整体互换蓝红。
 	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
-	if match_mode != IdentityRules.MODE_DOUDIZHU:
+	if match_mode == IdentityRules.MODE_TEAM2V2:
+		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队。
+		identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
+	elif match_mode != IdentityRules.MODE_DOUDIZHU:
 		_shuffle_array(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
@@ -6097,9 +6104,14 @@ func _continue_game_start_after_character_adjustment() -> void:
 		else:
 			starting_hand_count = maxi(int(game_draw_begin_event.data.get("cards_per_player", starting_hand_count)) if game_draw_begin_event != null else starting_hand_count, 0)
 	if should_deal_starting_cards:
-		for player: PlayerState in state.players:
-			draw(player.player_id, starting_hand_count, false)
-		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size()}
+		# 2v2：四号位初始手牌 +1；其他模式与各座次统一使用 starting_hand_count。
+		var is_team2v2_start: bool = identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_TEAM2V2
+		for seat_index: int in range(state.players.size()):
+			# 当前座次玩家；seat_index 0 为一号位，3 为四号位。
+			var seated_player: PlayerState = state.players[seat_index]
+			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0)
+			draw(seated_player.player_id, seat_hand_count, false)
+		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size(), "team2v2_seat4_bonus":1 if is_team2v2_start else 0}
 		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
 		_emit_rule_timing("gameDrawAfter", -1, -1, -1, game_draw_result_data)
 	_starting_hand_count = starting_hand_count
@@ -6138,10 +6150,14 @@ func _complete_pre_game_start() -> void:
 	# 手气卡阶段已经由最后一名玩家完成；先切换到首轮roundStart窗口，避免该时机的技能选择继续沿用开局确认界面。
 	state.current_phase = "round_start"
 	_record_runtime_event("phaseLoop", "phase_loop", {"first_player_id":character_selection.leader_player_id})
-	# 首回合玩家状态；领袖固定为一号位且不受本地玩家稳定 ID 影响。
-	var first_turn_player: PlayerState = _find_player_by_identity(identity_rules.get_first_player_identity(str(state.match_mode)))
+	# 首回合玩家状态；身份局/斗地主由首任身份决定，2v2 固定一号位。
+	var first_turn_player: PlayerState = null
+	if identity_rules.starts_from_first_seat(str(state.match_mode)):
+		first_turn_player = state.players[0] if not state.players.is_empty() else null
+	else:
+		first_turn_player = _find_player_by_identity(identity_rules.get_first_player_identity(str(state.match_mode)))
 	if first_turn_player == null:
-		push_error("标准身份局缺少领袖，无法开始首回合。")
+		push_error("对局缺少首回合角色，无法开始首回合。")
 		return
 	if _starting_cards_were_dealt:
 		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), _starting_hand_count])
@@ -6333,7 +6349,7 @@ func _drive_ai_character_selection() -> void:
 	# 斗地主全员同时选将也使用同一等待策略（阶段为 PHASE_OTHERS，而非身份局 PHASE_CUSTOM）。
 	if character_selection.custom_assignment_enabled and (
 		character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
-		or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+		or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
 	):
 		for pending_player_id: int in character_selection.get_pending_player_ids():
 			if not ai_coordinator.is_ai_controlled(pending_player_id):
@@ -6344,7 +6360,7 @@ func _drive_ai_character_selection() -> void:
 		# 斗地主同时选将同样需等待真人，防止 AI 先占座次/身份导致五人局卡死。
 		if character_selection.custom_assignment_enabled and (
 			character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
-			or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+			or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
 		):
 			var waiting_for_human: bool = false
 			for pending_custom_player_id: int in character_selection.get_pending_player_ids():
@@ -6380,7 +6396,7 @@ func _drive_ai_character_selection() -> void:
 			# 当前 AI 是否必须同时提交座次身份；身份局最终自选与斗地主同时选将均需完整分配。
 			var requires_custom_assignment: bool = character_selection.custom_assignment_enabled and (
 				character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
-				or (character_selection.is_doudizhu_mode() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
+				or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
 			)
 			if requires_custom_assignment:
 				# 当前剩余座次与身份；斗地优先占满固定地主座（1/3），身份局优先一号位与领袖绑定。
@@ -6761,11 +6777,13 @@ func _enter_draw_phase(player_id: int) -> void:
 	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"judgment", "to_phase":"draw"}, _current_turn_event_id)
 	state.current_phase = "draw"
 	state.phase_index = 2
-	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":2}, {}, _current_turn_event_id)
+	# 本阶段基础摸牌数；2v2 一号位的首个回合（全场 turn_number==1）只摸 1 张，其余默认 2。
+	var base_draw_count: int = _get_phase_draw_base_count(player_id)
+	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":base_draw_count}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("draw", false)):
 		add_log("%s跳过摸牌阶段。" % format_player_state_log_name(player))
 		_emit_rule_timing("phaseDrawSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	elif _begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":2, "turn_number":state.turn_number}, _current_turn_event_id):
+	elif _begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":base_draw_count, "turn_number":state.turn_number}, _current_turn_event_id):
 		# phaseDrawBegin中的技能选择必须先完成；阶段主体通过独立幂等入口执行，恢复时不会重复摸牌。
 		if has_pending_card_choice():
 			return
@@ -6790,12 +6808,14 @@ func _continue_turn_after_draw_phase_begin(player_id: int) -> void:
 	if not _started_phase_lifecycles.has(lifecycle_key):
 		return
 	var lifecycle_context: Dictionary = _started_phase_lifecycles.get(lifecycle_key, {}) as Dictionary
-	var draw_count: int = int(lifecycle_context.get("resolved_draw_count", 2))
+	# 生命周期初始摸牌基数；优先读取进入阶段时写入的 draw_count，兼容旧上下文缺省 2。
+	var phase_base_draw_count: int = int(lifecycle_context.get("draw_count", _get_phase_draw_base_count(player_id)))
+	var draw_count: int = int(lifecycle_context.get("resolved_draw_count", phase_base_draw_count))
 	if not bool(lifecycle_context.get("body_complete", false)):
 		# 先写入主体完成标记再派发数量修改与摸牌，嵌套选择恢复时不会再次执行同一批摸牌。
 		lifecycle_context["body_complete"] = true
-		var draw_one_event: RuleEvent = _emit_rule_timing("phaseDrawBegin1", player_id, player_id, player_id, {"draw_count":2, "turn_number":state.turn_number}, _current_turn_event_id)
-		draw_count = maxi(int(draw_one_event.data.get("draw_count", 2)) if draw_one_event != null else 2, 0)
+		var draw_one_event: RuleEvent = _emit_rule_timing("phaseDrawBegin1", player_id, player_id, player_id, {"draw_count":phase_base_draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
+		draw_count = maxi(int(draw_one_event.data.get("draw_count", phase_base_draw_count)) if draw_one_event != null else phase_base_draw_count, 0)
 		var draw_two_event: RuleEvent = _emit_rule_timing("phaseDrawBegin2", player_id, player_id, player_id, {"draw_count":draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
 		draw_count = maxi(int(draw_two_event.data.get("draw_count", draw_count)) if draw_two_event != null else draw_count, 0)
 		lifecycle_context["resolved_draw_count"] = draw_count
@@ -8723,7 +8743,17 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	var killer: PlayerState = state.get_player(killer_id)
 	# 身份规则返回的奖惩类型；控制器负责实际摸牌与弃牌移动。
 	var reward: String = identity_rules.get_death_reward(killer, victim, str(state.match_mode))
-	if reward == "draw_three" and killer != null and killer.alive:
+	if reward == "teammate_draw":
+		# 2v2：队友死亡后（不论击杀者），存活队友各摸一张；击杀队友无额外惩罚。
+		for ally: PlayerState in state.players:
+			if ally == null or not ally.alive or ally.out_of_game:
+				continue
+			if ally.player_id == victim.player_id:
+				continue
+			if identity_rules.are_teammates(ally, victim, str(state.match_mode)):
+				draw(ally.player_id, 1)
+				add_log("%s因队友阵亡摸了1张牌。" % ally.display_name)
+	elif reward == "draw_three" and killer != null and killer.alive:
 		draw(killer.player_id, 3)
 	elif reward == "leader_penalty" and killer != null and killer.alive:
 		while not killer.hand.is_empty():
@@ -9782,6 +9812,20 @@ func _reject(message: String) -> bool:
 
 
 ## 查找指定身份玩家；标准身份局中领袖查询只会返回一人。
+## 返回当前角色在摸牌阶段的基础摸牌数；2v2 一号位全场首个回合固定 1，其余默认 2。
+func _get_phase_draw_base_count(player_id: int) -> int:
+	if state == null:
+		return 2
+	if identity_rules.normalize_mode(str(state.match_mode)) != IdentityRules.MODE_TEAM2V2:
+		return 2
+	# 仅全场第一回合生效；一号位玩家位于 players 数组首位。
+	if state.turn_number != 1:
+		return 2
+	if state.players.is_empty() or state.players[0].player_id != player_id:
+		return 2
+	return 1
+
+
 func _find_player_by_identity(identity: String) -> PlayerState:
 	for player: PlayerState in state.players:
 		if player.identity == identity:
@@ -9895,15 +9939,21 @@ func _should_auto_negate(responder: PlayerState, source_id: int, target_id: int,
 
 ## 返回两个身份的简化阵营关系，供基础自动响应使用。
 func _identity_attitude(from_identity: String, to_identity: String) -> int:
-	# 本局模式；斗地主按地主/农民阵营简化态度。
+	# 本局模式；斗地主与 2v2 按同身份为友、异身份为敌的简化态度。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode) if state != null else IdentityRules.MODE_IDENTITY)
-	if match_mode == IdentityRules.MODE_DOUDIZHU:
+	if match_mode == IdentityRules.MODE_DOUDIZHU or match_mode == IdentityRules.MODE_TEAM2V2:
 		if from_identity == to_identity and not from_identity.is_empty():
 			return 1
-		if from_identity == "landlord" and to_identity == "landlord":
-			return 1
-		if from_identity == "peasant" and to_identity == "peasant":
-			return 1
+		if match_mode == IdentityRules.MODE_DOUDIZHU:
+			if from_identity == "landlord" and to_identity == "landlord":
+				return 1
+			if from_identity == "peasant" and to_identity == "peasant":
+				return 1
+		if match_mode == IdentityRules.MODE_TEAM2V2:
+			if from_identity == "blue" and to_identity == "blue":
+				return 1
+			if from_identity == "red" and to_identity == "red":
+				return 1
 		return -1
 	if from_identity == "renegade":
 		return -1
@@ -9941,6 +9991,8 @@ func _identity_text(identity: String) -> String:
 		"renegade":"内奸",
 		"landlord":"地主",
 		"peasant":"农民",
+		"blue":"蓝方",
+		"red":"红方",
 	}.get(identity, identity)
 
 
@@ -9952,4 +10004,6 @@ func _winner_text(winner: String) -> String:
 		"renegade":"内奸",
 		"landlords":"地主",
 		"peasants":"农民",
+		"blue_team":"蓝方",
+		"red_team":"红方",
 	}.get(winner, winner)

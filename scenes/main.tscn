@@ -1182,6 +1182,50 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
+[node name="Team2v2ModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=129181091]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+toggle_mode = true
+alignment = 0
+
+[node name="Team2v2ModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/Team2v2ModeButton" unique_id=1109330443]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 14.0
+offset_right = -14.0
+offset_bottom = -14.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 2
+
+[node name="Team2v2ModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/Team2v2ModeButton/Team2v2ModeContent" unique_id=129181092]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 27
+text = "2v2"
+
+[node name="Team2v2ModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/Team2v2ModeButton/Team2v2ModeContent" unique_id=129181093]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "4人"
+
+[node name="Team2v2ModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/Team2v2ModeButton" unique_id=163114732]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 5.0
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.831373, 0.709804, 0.372549, 1)
+
 [node name="MainMenuPreviewPanel" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent" unique_id=119656469]
 unique_name_in_owner = true
 layout_mode = 2
