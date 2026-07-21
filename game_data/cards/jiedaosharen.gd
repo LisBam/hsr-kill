@@ -122,6 +122,17 @@ func append_play_phase_card_actions(match_host: Object, actor_id: int, card: Car
 	return true
 
 
+## 修正无懈估值：队友对响应者使用借刀时，无论响应者攻击合法目标还是拒绝后把武器交给队友，团队都不会因锦囊生效受损。
+func modify_ai_negation_effect_utility(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary, current_utility: float, evaluator: Object) -> float:
+	# 当前锦囊实际目标；只有持刀者本人评估队友对自己使用借刀时应用复合收益语义。
+	var target_id: int = int(context.get("target_id", -1))
+	# 当前锦囊来源；缺失来源或不是响应者友方时继续使用通用负面锦囊估值。
+	var source_id: int = int(context.get("source_id", -1))
+	if target_id == responder_id and source_id >= 0 and evaluator.get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0:
+		return absf(current_utility) if not is_zero_approx(current_utility) else 1.0
+	return current_utility
+
+
 ## 返回持刀者攻击范围内的全部其他存活角色；自身永远不是其【杀】的合法目标。
 func _get_legal_slash_target_ids(rule_service: Object, weapon_holder_id: int) -> Array[int]:
 	# 合法【杀】目标结果；规则服务无效时保持空数组，调用方会安全转入交出武器分支。
@@ -156,9 +167,13 @@ func _apply_borrow_sword_response(resolver: Object, context: Dictionary, slash: 
 	var weapon_holder: PlayerState = resolver.state.get_player(weapon_holder_id)
 	if weapon_holder == null:
 		return
+	# 本次借刀【杀】消耗的酒加值；读取后立即清除公开状态，确保红色滤镜不延续到响应或伤害结算。
+	var consumed_wine_bonus: int = weapon_holder.wine_bonus
 	# 本次借刀【杀】伤害基数；固定基础1点并叠加一次酒加值。
-	var damage_amount: int = 1 + weapon_holder.wine_bonus
+	var damage_amount: int = 1 + consumed_wine_bonus
 	weapon_holder.wine_bonus = 0
+	if consumed_wine_bonus > 0:
+		resolver.host.refresh_public_state_snapshot()
 	# 持刀者当前武器定义；借刀【杀】同样读取武器源码决定是否忽略防具。
 	var weapon_definition: CardDefinition = resolver.host.get_equipment_definition(weapon_holder_id, "weapon")
 	SlashCardEffect.new(resolver).resolve_external_target(slash, weapon_holder_id, int(context.get("victim_id", -1)), damage_amount, str(GameDatabase.get_card(slash.definition_id).get("nature", "normal")), weapon_definition != null and weapon_definition.slash_ignores_armor(), int(context.get("parent_card_uid", -1)))

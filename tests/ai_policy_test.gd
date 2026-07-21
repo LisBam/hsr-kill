@@ -747,6 +747,12 @@ func _test_wuxie_decision() -> bool:
 	var enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_request, [pass_action, use_action])
 	if bool((enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_enemy=%s" % [enemy_choice])
+	# 队友对领袖本人使用借刀杀人；持刀者可攻击敌方或拒绝后把武器交给队友，因此抵消锦囊属于负收益。
+	var allied_borrow_sword_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"jiedao", "source_id":2, "target_id":0, "negated":false}}
+	# 队友借刀的无懈选择结果；应明确取消并保留无懈可击。
+	var allied_borrow_sword_choice: Dictionary = _policy.choose_card_choice(snapshot, allied_borrow_sword_request, [pass_action, use_action])
+	if bool((allied_borrow_sword_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_allied_borrow_sword=%s" % [allied_borrow_sword_choice])
 	# 友方已横置时的【铁索连环】会解除连环，动态逐目标结果为正收益，不能再错误地使用无懈抵消。
 	(snapshot.get("players", []) as Array)[2]["chained"] = true
 	var chained_tiesuo_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"tiesuo", "source_id":1, "target_id":2, "negated":false}}

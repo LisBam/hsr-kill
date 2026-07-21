@@ -95,6 +95,9 @@ var _bagua_retry_has_hand_shan: bool = false
 ## 八卦阵失败后的第二次请求是否排除已判定防具；默认false，用于防止重复发动形成无限响应循环。
 var _bagua_retry_excludes_bagua: bool = false
 
+## 八卦阵首次响应请求是否为只包含防具本身的独立即时询问；默认false，收到正确标题、提示与候选后改为true。
+var _bagua_first_prompt_is_immediate: bool = false
+
 ## 麒麟弓回归收到的坐骑选择请求数量；标准流程只应创建一次公开装备选择。
 var _qilin_request_count: int = 0
 
@@ -616,6 +619,23 @@ func _test_full_health_wine_use() -> bool:
 	var player: PlayerState = _controller.state.get_player(0)
 	if player.hp != 4 or not player.wine_used or player.wine_bonus != 1 or not _controller.state.discard_pile.has(wine):
 		return _fail("full_health_wine_result=%d:%s:%d" % [player.hp, player.wine_used, player.wine_bonus])
+	# 酒状态公开快照历史；【杀】开始和回合结束清理都必须在对应时机立即广播 wine_bonus=0。
+	var wine_state_snapshots: Array[Dictionary] = []
+	_controller.state_changed.connect(func(snapshot: Dictionary) -> void: wine_state_snapshots.append(snapshot.duplicate(true)))
+	# 测试【杀】代理；共享上下文入口应读取1点酒加值并在进入任何响应窗口前清除红色渲染状态。
+	var slash_card: CardInstance = CardInstance.new("sha", "spade", 7)
+	# 【杀】共享结算上下文；伤害值应为2，同时公开快照中的酒加值已经归零。
+	var slash_context: Dictionary = {}
+	SlashCardEffect.configure_shared_resolution_context(_controller, slash_card, 0, slash_context)
+	if int(slash_context.get("slash_damage_amount", 0)) != 2 or player.wine_bonus != 0 or wine_state_snapshots.is_empty() or int((((wine_state_snapshots.back() as Dictionary).get("players", []) as Array)[0] as Dictionary).get("wine_bonus", -1)) != 0:
+		return _fail("wine_clear_on_slash context=%s bonus=%d snapshots=%d" % [slash_context, player.wine_bonus, wine_state_snapshots.size()])
+	# 回合结束前重新放入未消耗酒加值；卡牌结束钩子应同步清除并再次发布零值快照。
+	player.wine_bonus = 1
+	# 酒卡牌源码；回合结束清理由内容钩子执行，控制器不维护具体卡牌 ID 分支。
+	var wine_definition: CardDefinition = GameDatabase.get_card_definition("jiu")
+	wine_definition.on_turn_ended(_controller, 0, false)
+	if player.wine_bonus != 0 or int((((wine_state_snapshots.back() as Dictionary).get("players", []) as Array)[0] as Dictionary).get("wine_bonus", -1)) != 0:
+		return _fail("wine_clear_on_turn_end bonus=%d snapshots=%d" % [player.wine_bonus, wine_state_snapshots.size()])
 	return true
 
 
@@ -814,8 +834,8 @@ func _test_bagua_failure_allows_hand_shan() -> bool:
 		return _fail("bagua_retry_timeout")
 	# 防守结果；两次请求后手牌【闪】与黑色判定牌都进入弃牌堆，目标不受伤且八卦阵仍在装备区。
 	var defender: PlayerState = _controller.state.get_player(1)
-	if _bagua_response_request_count != 2 or not _bagua_retry_has_hand_shan or not _bagua_retry_excludes_bagua or defender.hp != defender.max_hp or defender.find_hand_card(hand_shan.uid) != null or defender.equipment.get("armor") != bagua_card or not _controller.state.discard_pile.has(hand_shan) or not _controller.state.discard_pile.has(black_judgment_card):
-		return _fail("bagua_retry requests=%d hand=%s excluded=%s hp=%d discard=%s" % [_bagua_response_request_count, _bagua_retry_has_hand_shan, _bagua_retry_excludes_bagua, defender.hp, _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid)])
+	if _bagua_response_request_count != 2 or not _bagua_first_prompt_is_immediate or not _bagua_retry_has_hand_shan or not _bagua_retry_excludes_bagua or defender.hp != defender.max_hp or defender.find_hand_card(hand_shan.uid) != null or defender.equipment.get("armor") != bagua_card or not _controller.state.discard_pile.has(hand_shan) or not _controller.state.discard_pile.has(black_judgment_card):
+		return _fail("bagua_retry requests=%d immediate=%s hand=%s excluded=%s hp=%d discard=%s" % [_bagua_response_request_count, _bagua_first_prompt_is_immediate, _bagua_retry_has_hand_shan, _bagua_retry_excludes_bagua, defender.hp, _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid)])
 	return true
 
 
@@ -1091,11 +1111,12 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		material_card_uids = _zhangba_material_uids.duplicate()
 	elif _scenario == "bagua_retry" and kind == "slash_response":
 		_bagua_response_request_count += 1
-		# 当前八卦响应候选；首次主动选择防具，第二次验证防具被排除且手牌【闪】仍可使用。
+		# 当前八卦响应候选；首次必须是独立防具询问，第二次验证防具被排除且手牌【闪】仍可使用。
 		var candidate_uids: Array[int] = []
 		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
 			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
 		if _bagua_response_request_count == 1:
+			_bagua_first_prompt_is_immediate = candidate_uids == [_bagua_uid] and str(choice_data.get("title", "")) == GameSettings.resolve_card_name(GameDatabase.get_card("bagua")) and str(choice_data.get("prompt", "")) == "是否发动【八卦阵】？"
 			selected_uids = [_bagua_uid]
 		else:
 			_bagua_retry_has_hand_shan = candidate_uids.has(_bagua_hand_shan_uid)

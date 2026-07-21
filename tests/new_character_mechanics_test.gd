@@ -818,6 +818,52 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 永屹结果与额外出牌阶段；体力减少1、护盾保持0、固定摸1张牌，且额外阶段已进入正式出牌请求。
 	if gepard.hp != hp_before_yongyi_damage - 1 or gepard.shield != 0 or gepard.hand.size() != hand_count_before_yongyi_draw + 1 or not bool(_controller._extra_play_phase_returns_to_finish.get(0, false)) or str(_controller._active_extra_play_phase_context.get("return_point", "")) != "finish" or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
 		return _fail("yongyi_resume hp=%d shield=%d hand=%d return_finish=%s phase=%s play_choice=%s" % [gepard.hp, gepard.shield, gepard.hand.size(), _controller._extra_play_phase_returns_to_finish, _controller.state.current_phase, _controller._has_active_play_choice()])
+
+	# 再建一局确认嵌套伤害后的额外弃牌阶段；该分支完成后必须继续恢复原第二段的摸牌与额外出牌阶段。
+	_controller.game_flow_pacer.cancel_all()
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.05
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "discard"
+	_controller.state.phase_index = 4
+	# 需要额外弃置的杰帕德；自伤后体力为3，四张手牌会在额外弃牌阶段强制弃置1张。
+	var confirmed_gepard: PlayerState = _controller.state.get_player(0)
+	confirmed_gepard.shield = 0
+	var confirmed_discard_card: CardInstance = _add_hand_card(0, "shan", "club", 2)
+	# 普通弃牌阶段继续使用的第二张费用牌；证明嵌套询问结束后原阶段主体仍会完成，再进入额外出牌阶段。
+	var confirmed_normal_discard_card: CardInstance = _add_hand_card(0, "sha", "spade", 3)
+	_add_hand_card(0, "wuxie", "club", 4)
+	_add_hand_card(0, "tao", "heart", 5)
+	# 原第二段固定摸牌；额外弃牌结束后恢复技能后续时必须进入手牌。
+	var confirmed_draw_card: CardInstance = _add_draw_pile_card("shan", "diamond", 6)
+	# 初始手牌数；完成额外弃1张并固定摸1张后应回到相同数量。
+	var confirmed_hand_count_before: int = confirmed_gepard.hand.size()
+	# 真实永屹实例；弃牌阶段Begin首先创建第二段确认。
+	var confirmed_yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
+	if confirmed_yongyi == null or not _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1):
+		return _fail("yongyi_confirmed_nested_setup")
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 自伤触发的第一段询问；本次确认执行真实额外弃牌阶段，而不是取消后直接恢复。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "yongyi_damage_confirm" or not _submit_pending_choice(0, [], [], true):
+		return _fail("yongyi_confirmed_damage_prompt=%s" % [_controller._pending_card_choice])
+	# 额外弃牌阶段请求；确认第一段后应要求按当前3点体力弃置正好1张手牌。
+	var extra_discard_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(extra_discard_context.get("kind", "")) != "extra_discard_phase" or int(extra_discard_context.get("discard_count", 0)) != 1:
+		return _fail("yongyi_confirmed_extra_discard=%s" % [_controller._pending_card_choice])
+	if not _submit_pending_choice(0, [confirmed_discard_card.uid], [], true):
+		return false
+	# 原普通弃牌阶段仍需按摸牌后的实际手牌上限弃置1张；该请求不能吞掉已经登记的额外出牌阶段。
+	await get_tree().process_frame
+	var normal_discard_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(normal_discard_context.get("kind", "")) != "discard_phase" or int(normal_discard_context.get("discard_count", 0)) != 1:
+		return _fail("yongyi_confirmed_normal_discard=%s" % [_controller._pending_card_choice])
+	if not _submit_pending_choice(0, [confirmed_normal_discard_card.uid], [], true):
+		return false
+	# 阶段恢复使用延后一帧继续排空新暴露的技能后续；等待流程间隔后应进入唯一额外出牌阶段。
+	await get_tree().create_timer(0.12, false).timeout
+	if confirmed_gepard.hp != 3 or confirmed_gepard.shield != 1 or confirmed_gepard.hand.size() != confirmed_hand_count_before - 1 or confirmed_gepard.find_hand_card(confirmed_draw_card.uid) == null or confirmed_gepard.find_hand_card(confirmed_discard_card.uid) != null or confirmed_gepard.find_hand_card(confirmed_normal_discard_card.uid) != null or _controller.state.current_phase != "play" or not _controller._has_active_play_choice():
+		return _fail("yongyi_confirmed_resume hp=%d shield=%d hand=%d phase=%s play_choice=%s counts=%s returns=%s active=%s" % [confirmed_gepard.hp, confirmed_gepard.shield, confirmed_gepard.hand.size(), _controller.state.current_phase, _controller._has_active_play_choice(), _controller._extra_play_phase_counts, _controller._extra_play_phase_return_points, _controller._active_extra_play_phase_context])
 	return true
 
 
@@ -913,6 +959,17 @@ func _test_conversion_material_target_rules() -> bool:
 	var black_material_uids: Array[int] = [black_material.uid]
 	if bool(_controller.execute_virtual_card_use(0, "sha_thunder", black_material_uids, [1], "", {"maximum_target_count_bonus":1})) or not _controller.state.get_player(0).hand.has(black_material):
 		return _fail("conversion_final_validation")
+	# 单材料转化牌表现历史；控制器应把材料原牌面与转化后逻辑牌名同时写入useCard表现快照。
+	var conversion_presentations: Array[Dictionary] = []
+	_controller.card_presentation_requested.connect(func(presentation_data: Dictionary) -> void: conversion_presentations.append(presentation_data.duplicate(true)))
+	# 红色材料转化使用；目标2没有琥珀限制，可进入正式虚拟牌生命周期并立即发布牌面表现。
+	var red_material_uids: Array[int] = [red_material.uid]
+	if not bool(_controller.execute_virtual_card_use(0, "sha_thunder", red_material_uids, [2], "", {"maximum_target_count_bonus":1})) or conversion_presentations.is_empty():
+		return _fail("conversion_presentation_missing")
+	# 最新使用牌表现数据；definition_id保持逻辑牌，原材料定义和横条定义分别供CardView绘制原牌与转化标签。
+	var conversion_card_data: Dictionary = (conversion_presentations.back() as Dictionary).get("card_data", {}) as Dictionary
+	if str(conversion_card_data.get("definition_id", "")) != "sha_thunder" or str(conversion_card_data.get("presentation_original_definition_id", "")) != "sha" or str(conversion_card_data.get("view_as_definition_id", "")) != "sha_thunder":
+		return _fail("conversion_presentation_data=%s" % [conversion_card_data])
 	return true
 
 
@@ -1290,6 +1347,25 @@ func _test_new_skill_ai_rules() -> bool:
 	var no_opportunity_snapshot: Dictionary = _controller.state.to_dict(0, true)
 	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) >= 0.0:
 		return _fail("huanfa_ai_self_without_usable_card")
+	# 焕发正式选择策略；通用选择评分会额外提供微弱基础分，因此必须验证技能负分能让AI真正提交取消。
+	var huanfa_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 焕发取消动作；confirmed=false表示保留本轮技能次数。
+	var huanfa_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":7301, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 焕发确认动作；零材料选择依靠confirmed=true区分发动。
+	var huanfa_policy_confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":7301, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
+	# 自身无行动机会请求；完整技能归属字段使基础策略加载焕发专属评分器。
+	var huanfa_self_policy_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"huanfa_confirm", "target_id":0, "skill_id":"huanfa", "skill_owner_id":0, "ai_allow_confirm":true}}
+	var huanfa_self_policy_choice: Dictionary = huanfa_policy.choose_card_choice(no_opportunity_snapshot, huanfa_self_policy_request, [huanfa_pass_action, huanfa_policy_confirm_action])
+	if bool((huanfa_self_policy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("huanfa_policy_self_without_usable_card=%s" % [huanfa_self_policy_choice])
+	# 敌方持有可用【杀】；即使额外阶段本身有行动空间，娜塔莎也不能把每轮一次技能交给敌方。
+	_add_hand_card(1, "sha", "spade", 9)
+	var enemy_opportunity_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var huanfa_enemy_policy_request: Dictionary = huanfa_self_policy_request.duplicate(true)
+	(huanfa_enemy_policy_request.get("context", {}) as Dictionary)["target_id"] = 1
+	var huanfa_enemy_policy_choice: Dictionary = huanfa_policy.choose_card_choice(enemy_opportunity_snapshot, huanfa_enemy_policy_request, [huanfa_pass_action, huanfa_policy_confirm_action])
+	if bool((huanfa_enemy_policy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("huanfa_policy_enemy=%s" % [huanfa_enemy_policy_choice])
 	# 忠臣空手时不应凭空获得额外阶段收益；加入一张可使用【杀】后才恢复正向发动价值。
 	huanfa_confirm_request["context"] = {"kind":"huanfa_confirm", "target_id":2}
 	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) > 0.0:

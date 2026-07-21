@@ -3132,12 +3132,21 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 		return null
 	# 同一响应时机已经失败的装备入口；判定型装备失败后不会在重开窗口中再次出现，其他手牌与装备仍正常保留。
 	var excluded_response_candidate_uids: Array[int] = _int_array(context.get("excluded_response_candidate_uids", []) as Array)
+	# 需要优先独立询问的装备候选；同一时机只取装备区稳定遍历顺序中的首个入口，取消或失败后通过排除集合继续寻找下一项。
+	var immediate_equipment_candidate: Dictionary = _get_immediate_equipment_response_candidate(player, allowed_patterns, excluded_response_candidate_uids)
 	# 可响应候选；手牌与木牛“粮”都按实际 UID 提供给本人，规则定义决定是否匹配响应模式。
-	var candidates: Array[Dictionary] = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids)
+	var candidates: Array[Dictionary] = []
+	if not immediate_equipment_candidate.is_empty():
+		candidates.append(immediate_equipment_candidate)
+	else:
+		candidates = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids)
 	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
 	response_context["response_prompt"] = prompt
+	# 独立装备入口 UID；恢复时取消也会把该入口加入排除集合并重新打开原普通响应窗口。
+	if not immediate_equipment_candidate.is_empty():
+		response_context["immediate_response_equipment_uid"] = int(immediate_equipment_candidate.get("uid", -1))
 	# 当前候选需要显式点击的转化技能；该列表由实体候选反向汇总，确保任何合法视为牌在本次响应窗口都有可用技能入口。
 	var response_conversion_skill_ids: Array[String] = []
 	for candidate: Dictionary in candidates:
@@ -3147,10 +3156,36 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 			response_conversion_skill_ids.append(response_skill_id)
 	response_context["response_conversion_skill_ids"] = response_conversion_skill_ids
 	# 响应允许主动不出牌；即使候选为空也创建请求，保证 AI 与真实玩家经历相同问询。
-	var selected_uids: Array[int] = request_card_choice(player_id, "响应询问", prompt, candidates, 0, 1, true, response_context)
+	# 当前窗口标题与提示；独立装备询问使用装备名称和自身提示，普通窗口保持原响应语义。
+	var request_title: String = str(immediate_equipment_candidate.get("response_title", "响应询问"))
+	# 当前窗口说明；独立装备提示由卡牌源码提供，避免控制器硬编码具体装备名。
+	var request_prompt: String = str(immediate_equipment_candidate.get("response_prompt", prompt))
+	var selected_uids: Array[int] = request_card_choice(player_id, request_title, request_prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
 		return null
 	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns, _resolved_equipment_material_uids, _resolved_response_skill_id)
+
+
+## 返回当前响应时机最先需要独立询问的装备候选；普通装备继续留在统一响应候选窗口中。
+func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int]) -> Dictionary:
+	# 默认空候选；无存活角色、无装备或装备不支持当前模式时保持普通响应流程。
+	var result: Dictionary = {}
+	if player == null or not player.alive or player.out_of_game:
+		return result
+	for equipment_variant: Variant in player.equipment.values():
+		# 当前装备实体；同一响应时机已取消或判定失败的入口不能再次询问。
+		var equipment_card: CardInstance = equipment_variant as CardInstance
+		if equipment_card == null or excluded_card_uids.has(equipment_card.uid):
+			continue
+		# 当前装备源码；只有同时支持本响应模式并声明优先询问时才建立独立窗口。
+		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
+		if equipment_definition == null or not equipment_definition.can_offer_equipment_response(self, player.player_id, allowed_patterns) or not equipment_definition.uses_immediate_equipment_response_prompt():
+			continue
+		result = _serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, str(GameDatabase.get_card(equipment_card.definition_id).get("slot", "")))
+		result["response_title"] = GameSettings.resolve_card_name(equipment_definition.get_metadata())
+		result["response_prompt"] = equipment_definition.get_immediate_equipment_response_prompt()
+		return result
+	return result
 
 
 ## 构造指定玩家在同一响应模式集合下的私有候选；普通逐人响应与无懈同时响应共用此入口。
@@ -3203,6 +3238,10 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	if not cardless_skill_id.is_empty() and not cardless_definition_id.is_empty():
 		return _consume_cardless_skill_response(responder_id, cardless_skill_id, cardless_definition_id, response_patterns)
 	if selected_uids.is_empty():
+		# 独立装备询问被取消；本次只放弃该装备入口，随后立即恢复原手牌、技能与其他装备响应窗口。
+		var declined_immediate_equipment_uid: int = int(context.get("immediate_response_equipment_uid", -1))
+		if declined_immediate_equipment_uid >= 0:
+			return _retry_response_after_equipment_attempt(context, responder_id, response_patterns, declined_immediate_equipment_uid)
 		return null
 	# 当前响应结果；普通实体牌与成功的虚拟装备响应会直接返回，不创建第二次询问。
 	var response_card: CardInstance = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns, _int_array(context.get("equipment_material_uids", []) as Array), str(context.get("selected_response_skill_id", "")))
@@ -3212,14 +3251,20 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	var failed_equipment_uid: int = int(context.get("selected_response_equipment_uid", -1))
 	if failed_equipment_uid < 0 or failed_equipment_uid != selected_uids[0]:
 		return null
-	# 重试上下文；移除上一次选择标记，并把失败装备加入本响应时机的排除集合。
+	return _retry_response_after_equipment_attempt(context, responder_id, response_patterns, failed_equipment_uid)
+
+
+## 在独立装备被取消或判定型装备失败后重开同一响应时机，并永久排除本次已经处理的装备 UID。
+func _retry_response_after_equipment_attempt(context: Dictionary, responder_id: int, response_patterns: Array[String], equipment_uid: int) -> CardInstance:
+	# 重试上下文；移除上一次选择标记，并把已处理装备加入本响应时机的排除集合。
 	var retry_context: Dictionary = context.duplicate(true)
 	retry_context.erase("selected_response_equipment_uid")
+	retry_context.erase("immediate_response_equipment_uid")
 	retry_context.erase("equipment_material_uids")
 	# 已排除装备 UID；数组会跨多次判定型装备失败累积，但只作用于当前响应上下文。
 	var excluded_response_candidate_uids: Array[int] = _int_array(retry_context.get("excluded_response_candidate_uids", []) as Array)
-	if not excluded_response_candidate_uids.has(failed_equipment_uid):
-		excluded_response_candidate_uids.append(failed_equipment_uid)
+	if not excluded_response_candidate_uids.has(equipment_uid):
+		excluded_response_candidate_uids.append(equipment_uid)
 	retry_context["excluded_response_candidate_uids"] = excluded_response_candidate_uids
 	# 原响应提示；上下文缺失时使用稳定通用文本，不把具体牌名硬编码进控制器。
 	var response_prompt: String = str(context.get("response_prompt", "请选择是否响应。"))
@@ -6952,6 +6997,9 @@ func _enter_play_phase(player_id: int) -> void:
 func _resume_interrupted_turn_flow() -> void:
 	if state == null or state.game_over or has_pending_card_choice():
 		return
+	# 已经登记阶段切换时当前阶段主体与后继均已确定；重复恢复会用同一业务键覆盖原任务，导致额外阶段被普通后继吞掉。
+	if game_flow_pacer != null and game_flow_pacer.has_pending("phase_transition"):
+		return
 	# 额外弃牌阶段是独立的嵌套阶段；其Begin、End或After时机被选择暂停后必须优先恢复。
 	if not _active_extra_discard_phase.is_empty():
 		# 当前额外弃牌阶段状态；body重新计算弃牌，完成状态则续接End、After或技能回调。
@@ -7128,6 +7176,9 @@ func _resume_settlement_pipeline() -> void:
 		return
 	if state != null and not state.game_over and not has_pending_card_choice():
 		_resume_interrupted_turn_flow()
+		# 阶段恢复可能刚刚完成额外弃牌阶段并暴露新的技能“然后”步骤；延后一帧再次排空，避免后续额外出牌阶段被嵌套询问吞掉。
+		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
+			call_deferred("_resume_settlement_pipeline")
 
 
 ## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
@@ -7571,6 +7622,12 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 		virtual_rank = single_material.rank
 	# 逻辑代理实体；只在本次CardUseEvent的处理区生命周期内存在。
 	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, virtual_suit, virtual_rank)
+	if material_card_uids.size() == 1:
+		# 单材料转化的原牌面定义；表现层继续绘制材料实体，并以横条标明本次实际使用的逻辑牌名。
+		var presentation_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uids[0])
+		if presentation_material != null:
+			virtual_card.last_hand_view_as_original_definition_id = presentation_material.definition_id
+			virtual_card.last_hand_view_as_definition_id = virtual_card_definition_id
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
 	# 虚拟牌规范目标；技能附加目标数后的多目标【杀】同样必须按使用者起算的顺时针顺序结算，不能保留点击顺序。
@@ -9674,6 +9731,11 @@ func _request_card_presentation(card: CardInstance, actor_id: int, target_ids: A
 		indicator_stages
 	)
 	card_presentation_requested.emit(presentation.to_dict())
+
+
+## 立即发布当前权威状态快照；内容脚本在公开持续状态于规则时机内结束时调用，不能借此修改任何规则数据。
+func refresh_public_state_snapshot() -> void:
+	_emit_state()
 
 
 ## 写入一条迁移期规则事件记录并同步 GameState；所有记录默认挂在当前对局根事件下。

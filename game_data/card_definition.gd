@@ -73,6 +73,12 @@ func modify_ai_action_score(_authoritative_snapshot: Dictionary, _action: Dictio
 	return current_score
 
 
+## 修正 AI 对本锦囊当前生效结果的收益判断；复杂锦囊可结合来源、目标和阵营关系覆盖静态 target_result。
+## 返回值为原效果从响应者视角产生的效用，正数表示希望锦囊生效，负数表示希望锦囊被抵消。
+func modify_ai_negation_effect_utility(_authoritative_snapshot: Dictionary, _responder_id: int, _context: Dictionary, current_utility: float, _evaluator: Object) -> float:
+	return current_utility
+
+
 ## 计算装备或卡牌注册的自定义出牌动作评分；动作需携带 ai_card_definition_id 以定位对应内容文件。
 func score_ai_play_phase_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
 	return 0.0
@@ -320,6 +326,16 @@ func continue_equipment_response(_match_host: Object, _context: Dictionary, _res
 ## 判断装备是否能作为当前响应模式集合中的可选入口；返回 true 时控制器展示装备实体候选。
 func can_offer_equipment_response(_match_host: Object, _player_id: int, _response_patterns: Array[String]) -> bool:
 	return false
+
+
+## 判断装备是否需要在普通响应牌窗口之前独立询问；默认false保持手牌、技能与装备处于同一候选窗口。
+func uses_immediate_equipment_response_prompt() -> bool:
+	return false
+
+
+## 返回装备独立响应询问的永久提示文本；只有 uses_immediate_equipment_response_prompt() 为true时使用。
+func get_immediate_equipment_response_prompt() -> String:
+	return "是否发动【%s】？" % GameSettings.resolve_card_name(_metadata)
 
 
 ## 返回装备响应需要选择的普通手牌材料数量；0表示直接选择装备即可结算。

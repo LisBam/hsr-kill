@@ -22,8 +22,12 @@ static func configure_shared_resolution_context(match_host: Object, card: CardIn
 		resolution_context["slash_nature"] = "normal"
 		resolution_context["slash_ignore_armor"] = false
 		return
-	resolution_context["slash_damage_amount"] = 1 + actor.wine_bonus
+	# 本次消耗的酒伤害加值；读取后立即清零，并在进入任何防具或响应窗口前刷新公开红色滤镜。
+	var consumed_wine_bonus: int = actor.wine_bonus
+	resolution_context["slash_damage_amount"] = 1 + consumed_wine_bonus
 	actor.wine_bonus = 0
+	if consumed_wine_bonus > 0:
+		match_host.refresh_public_state_snapshot()
 	resolution_context["slash_nature"] = str(GameDatabase.get_card(card.definition_id).get("nature", "normal"))
 	# 当前武器定义；是否忽略防具由装备源码钩子声明，不依赖任何具体装备 ID。
 	var weapon_definition: CardDefinition = match_host.get_equipment_definition(actor_id, "weapon")
@@ -50,9 +54,13 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 	var actor: PlayerState = state.get_player(actor_id)
 	if actor == null:
 		return "discard"
+	# 本次消耗的酒伤害加值；整牌兼容入口同样必须在【杀】开始时立即撤销公开红色滤镜。
+	var consumed_wine_bonus: int = actor.wine_bonus
 	# 本张【杀】对全部目标共享的基础伤害。
-	var base_damage: int = 1 + actor.wine_bonus
+	var base_damage: int = 1 + consumed_wine_bonus
 	actor.wine_bonus = 0
+	if consumed_wine_bonus > 0:
+		host.refresh_public_state_snapshot()
 	# 当前实体【杀】属性；允许 normal、fire 或 thunder。
 	var nature: String = str(GameDatabase.get_card(card.definition_id).get("nature", "normal"))
 	# 当前武器定义；锁定效果通过源码钩子声明是否忽略防具。

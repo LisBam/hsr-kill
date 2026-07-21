@@ -15,6 +15,12 @@ signal control_submitted(request_id: int, control_id: String)
 ## 用户确认牌堆双行排序时发出完整UID顺序与牌堆顶行数量；组件不直接改写权威牌堆。
 signal arrangement_submitted(request_id: int, ordered_card_uids: Array[int], top_count: int)
 
+## 鼠标进入选择窗口内的明置牌时转发统一卡牌信息；内容与锚点完全来自正式 CardView。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开选择窗口内的牌面或窗口关闭时请求关闭统一信息框。
+signal information_dismissed
+
 ## 正式卡牌视图场景；正面候选和牌背候选都复用同一111×148像素组件。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -403,6 +409,7 @@ func _refresh_public_action_row() -> void:
 
 ## 关闭并清理当前选择请求；规则层提交成功或重新开局时调用。
 func close() -> void:
+	information_dismissed.emit()
 	visible = false
 	_choice_request.clear()
 	_public_display.clear()
@@ -648,6 +655,9 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	if taken:
 		card_view.modulate = taken_card_ghost_modulate
 	wrapper.add_child(card_view)
+	# 所有明置牌都转发统一悬停说明；只读、禁用和已领取虚影仍可查看，牌背不会由 CardView 发出信息。
+	card_view.information_requested.connect(information_requested.emit)
+	card_view.information_dismissed.connect(information_dismissed.emit)
 	_card_views[card_uid] = card_view
 	if not create_owner_label:
 		return
