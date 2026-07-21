@@ -1593,6 +1593,18 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 		return _fail("zhishi_choice")
 	if not _controller.state.get_player(0).hand.has(zhishi_draw_card):
 		return _fail("zhishi_draw")
+	# 无懈可击响应实体；该牌属于锦囊，但通过respond而不是useCard生命周期打出。
+	var zhishi_wuxie_card: CardInstance = _add_hand_card(0, "wuxie", "club", 12)
+	# 无懈可击触发智识后的补牌；响应成功后应恰好进入技能持有者手牌。
+	var zhishi_wuxie_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 9)
+	# 实际响应结果；必须由正式响应消费入口移动实体并派发respond时机。
+	var consumed_wuxie_card: CardInstance = _controller._consume_response_card_uid(0, zhishi_wuxie_card.uid, "wuxie")
+	if consumed_wuxie_card == null or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zhishi_confirm":
+		return _fail("zhishi_wuxie_trigger response=%s pending=%s" % [consumed_wuxie_card, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	if not _controller.state.get_player(0).hand.has(zhishi_wuxie_draw_card) or _controller.state.get_player(0).find_hand_card(zhishi_wuxie_card.uid) != null or not _controller.state.discard_pile.has(zhishi_wuxie_card):
+		return _fail("zhishi_wuxie_draw hand=%s discard=%s" % [_controller.state.get_player(0).hand, _controller.state.discard_pile])
 	_reset_state(4)
 	# 机巧规则测试使用真实控制器提供者；距离和弃置保护均需遍历运行时技能表。
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)

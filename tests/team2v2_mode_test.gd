@@ -488,7 +488,12 @@ func _test_winner_evaluation() -> bool:
 		state.players.append(player)
 	if not _identity_rules.evaluate_winner(state).is_empty():
 		return _fail("winner_should_continue")
+	# 蓝方一名角色死亡、最后一名存活角色离场；离场不是死亡，对局必须继续等待其返回或真正死亡。
 	state.players[0].alive = false
+	state.players[2].out_of_game = true
+	if not _identity_rules.evaluate_winner(state).is_empty():
+		return _fail("out_of_game_blue_should_still_count_alive")
+	state.players[2].out_of_game = false
 	state.players[2].alive = false
 	var winner: String = _identity_rules.evaluate_winner(state)
 	if winner != "red_team":

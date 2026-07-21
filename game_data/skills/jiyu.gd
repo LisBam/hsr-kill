@@ -1,6 +1,6 @@
 extends SkillDefinition
 
-## 【疾雨】技能源码。持有者使用雷【杀】指定目标时，可切换目标的横置状态，再由目标在不可使用【闪】与令持有者横置范围内另一名角色之间选择。
+## 【疾雨】技能源码。持有者使用任意【杀】指定目标时，可令目标调整至横置状态，再由目标在不可使用【闪】与令持有者横置范围内另一名角色之间选择。
 
 ## 目标不可使用【闪】响应的稳定选项ID；通过当前使用牌的direct_hit_target_ids实现。
 const DIRECT_HIT_OPTION_ID: String = "direct_hit"
@@ -8,14 +8,14 @@ const DIRECT_HIT_OPTION_ID: String = "direct_hit"
 ## 令丹恒横置攻击范围内另一名角色的稳定选项ID；没有合法角色时不展示该项。
 const REDIRECT_LINK_OPTION_ID: String = "link_other"
 
-## AI对切换一次横置状态的基础估值；应与【冰封】的状态估值保持同一量级。
+## AI对令一名未横置角色调整至横置状态的基础估值；应与【冰封】的状态估值保持同一量级。
 const AI_LINK_VALUE: float = 1.5
 
 ## AI在目标没有已知【闪】时选择不可响应的优先分；高于通用取消与普通选项分。
 const AI_PREFERRED_OPTION_SCORE: float = 6.0
 
-## AI使用雷【杀】触发疾雨的主动优先分；同时提供给罡风等雷【杀】转换技能读取，不改变卡牌实际收益。
-const AI_THUNDER_SLASH_PRIORITY_BONUS: float = 4.0
+## AI使用任意【杀】触发疾雨的主动优先分；只提高已有【杀】动作价值，不再诱导雷【杀】转换。
+const AI_SLASH_PRIORITY_BONUS: float = 4.0
 
 
 ## 写入技能静态信息；技能描述必须与武将面板展示原文完全一致。
@@ -25,21 +25,20 @@ func _init() -> void:
 		"name": "疾雨",
 		"trigger": "useCardToTargeted",
 		"ui_enabled": false,
-		"ai_thunder_slash_priority_bonus": AI_THUNDER_SLASH_PRIORITY_BONUS,
-		"description": "当你使用雷【杀】指定目标时，你可横置目标角色，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。",
+		"description": "当你使用【杀】指定目标时，你可令目标角色调整至横置状态，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。",
 	})
 
 
-## 订阅持有者使用牌的指定目标后时机；只处理共享slash牌效且nature=thunder的雷【杀】。
+## 订阅持有者使用牌的指定目标后时机；普通、火与雷【杀】均通过共享slash牌效识别。
 func install() -> void:
-	subscribe_timing("useCardToTargeted", _on_thunder_slash_targeted, "source")
+	subscribe_timing("useCardToTargeted", _on_slash_targeted, "source")
 
 
-## 雷【杀】指定一名存活目标后请求丹恒确认发动；取消不改变横置或响应状态。
-func _on_thunder_slash_targeted(event: RuleEvent) -> void:
-	# 当前使用牌定义；普通【杀】与火【杀】不满足雷电属性。
+## 任意【杀】指定一名存活目标后请求丹恒确认发动；取消不改变横置或响应状态。
+func _on_slash_targeted(event: RuleEvent) -> void:
+	# 当前使用牌定义；三种【杀】共享slash牌效，其他基本牌与锦囊不会触发。
 	var definition: Dictionary = GameDatabase.get_card(str(event.data.get("card_id", "")))
-	if str(definition.get("effect_id", "")) != "slash" or str(definition.get("nature", "normal")) != "thunder":
+	if str(definition.get("effect_id", "")) != "slash":
 		return
 	# 当前目标ID；死亡或离场目标不再触发可选效果。
 	var target_id: int = int(event.data.get("target_id", event.target_id))
@@ -54,7 +53,7 @@ func _on_thunder_slash_targeted(event: RuleEvent) -> void:
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response == null:
 		return false
-	# 当前选择步骤；三个步骤分别由丹恒、雷【杀】目标、丹恒作出决定。
+	# 当前选择步骤；三个步骤分别由丹恒、【杀】目标、丹恒作出决定。
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == "jiyu_confirm":
 		return _continue_confirm(context, response)
@@ -65,25 +64,25 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return false
 
 
-## 执行丹恒的发动确认；先切换原目标横置状态，再由目标选择响应限制或横置另一名角色。
+## 执行丹恒的发动确认；先令原目标调整至横置状态，再由目标选择响应限制或横置另一名角色。
 func _continue_confirm(context: Dictionary, response: ChoiceResponse) -> bool:
 	if not response.confirmed:
 		return true
-	# 原雷【杀】目标ID；等待期间已死亡或离场时直接跳过整个后续效果。
+	# 原【杀】目标ID；等待期间已死亡或离场时直接跳过整个后续效果。
 	var target_id: int = int(context.get("target_id", -1))
 	# 原目标状态；还存活在场时才能作为后续选项的决定者。
 	var target: PlayerState = host.state.get_player(target_id) as PlayerState
 	if target == null or not target.alive or target.out_of_game:
 		return true
 	announce_activation({"target_id":target_id, "card_uid":int(context.get("card_uid", -1))})
-	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
+	host.call("set_player_linked", target_id, true, owner_player_id, get_id())
 	_request_target_option(context)
 	return true
 
 
-## 请求雷【杀】目标选择后续分支；丹恒范围内无另一名角色时只保留不可响应选项。
+## 请求【杀】目标选择后续分支；丹恒范围内无另一名角色时只保留不可响应选项。
 func _request_target_option(context: Dictionary) -> void:
-	# 原雷【杀】目标ID；不可作为“另一名角色”的后续候选。
+	# 原【杀】目标ID；不可作为“另一名角色”的后续候选。
 	var target_id: int = int(context.get("target_id", -1))
 	# 攻击范围查询的排除目标；显式Array[int]类型保证动态调用与权威端口一致。
 	var excluded_target_ids: Array[int] = [target_id]
@@ -100,9 +99,9 @@ func _request_target_option(context: Dictionary) -> void:
 	request_control_selection_for_player(target_id, "疾雨", "请选择【疾雨】的后续效果", options, false, option_context)
 
 
-## 执行雷【杀】目标选定的分支；第二项在范围内无合法角色时直接跳过。
+## 执行【杀】目标选定的分支；第二项在范围内无合法角色时直接跳过。
 func _continue_target_option(context: Dictionary, response: ChoiceResponse) -> bool:
-	# 原雷【杀】目标ID；直击标记只能写入该牌声明过的目标。
+	# 原【杀】目标ID；直击标记只能写入该牌声明过的目标。
 	var target_id: int = int(context.get("target_id", -1))
 	if response.control_id == DIRECT_HIT_OPTION_ID:
 		host.call("add_card_direct_hit_target", int(context.get("card_uid", -1)), target_id, get_id())
@@ -137,20 +136,20 @@ func _continue_link_other_target(context: Dictionary, response: ChoiceResponse) 
 	return true
 
 
-## 提高雷【杀】主动动作的评分，使AI优先触发疾雨；普通【杀】与火【杀】保持原有通用估值。
+## 提高全部【杀】主动动作的评分，使AI在合法且有利时优先触发疾雨。
 func modify_ai_card_action_score(_authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, _evaluator: Object) -> float:
 	if str(action.get("action_type", "")) != "use_card":
 		return current_score
-	# 当前逻辑牌定义；雷【杀】通过共享slash牌族与thunder属性共同识别，不绑定实体牌UID。
+	# 当前逻辑牌定义；普通、火与雷【杀】通过共享slash牌效识别，不绑定实体牌UID。
 	var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
-	if str(definition.get("effect_id", "")) != "slash" or str(definition.get("nature", "normal")) != "thunder":
+	if str(definition.get("effect_id", "")) != "slash":
 		return current_score
-	return current_score + AI_THUNDER_SLASH_PRIORITY_BONUS
+	return current_score + AI_SLASH_PRIORITY_BONUS
 
 
 ## 评估疾雨的发动确认、目标分支与丹恒的横置目标；完整实现指定的【闪】判断与队友优先规则。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 请求上下文；三个选择步骤共用原雷【杀】目标ID。
+	# 请求上下文；三个选择步骤共用原【杀】目标ID。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
 	# 选择动作负载；文字选项、目标ID与确认状态均在该字典中。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
@@ -159,17 +158,21 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	if choice_kind == "jiyu_confirm":
 		if not bool(payload.get("confirmed", false)):
 			return 0.0
-		# 原雷【杀】目标ID；对敌方发动通常有利，对友方仅在横置切换可带来足够收益时考虑。
+		# 原【杀】目标ID；对敌方发动通常有利，对友方使用控制效果通常不利。
 		var target_id: int = int(context.get("target_id", -1))
-		# 原目标快照；当前横置时再次“横置”将切换为竖置。
+		# 原目标快照；已横置时首次效果不再改变状态，仍可继续选择后续控制分支。
 		var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
-		# 丹恒对目标的态度；敌方负态度使雷【杀】控制收益为正。
+		# 丹恒对目标的态度；敌方负态度使不可响应或横置其他角色的控制收益为正。
 		var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
-		return (-attitude / 5.0 * AI_LINK_VALUE) if not bool(target.get("chained", false)) else (attitude / 5.0 * AI_LINK_VALUE)
+		# 后续控制分支基础收益；即使原目标已经横置，AI仍会考虑不可响应或第二目标效果。
+		var control_value: float = -attitude / 5.0 * AI_PREFERRED_OPTION_SCORE
+		if not bool(target.get("chained", false)):
+			control_value += -attitude / 5.0 * AI_LINK_VALUE
+		return control_value
 	if choice_kind == "jiyu_target_option":
 		# 目标选定的文字分支ID；两个选项均不可取消。
 		var option_id: String = str(payload.get("selected_control_id", ""))
-		# 原雷【杀】目标ID；用于检查其已知【闪】数量。
+		# 原【杀】目标ID；用于检查其已知【闪】数量。
 		var target_id: int = int(context.get("target_id", -1))
 		# 丹恒攻击范围内的另一名角色候选；只用触发时的稳定快照判断“只有丹恒队友”。
 		var redirect_target_ids: Array = context.get("redirect_target_ids", []) as Array
