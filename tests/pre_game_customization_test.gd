@@ -401,6 +401,18 @@ func _test_character_selection_panel_layout() -> bool:
 	if seat_label.visible or identity_label.visible or candidate_scroll.size.y <= custom_candidate_height or candidate_scroll.position.y + candidate_scroll.size.y > confirm_button.position.y:
 		main_instance.queue_free()
 		return _fail("non_custom_candidate_area_not_released")
+	# 初始身份为领袖时，权威快照授权全武将入口后仍必须显示“所有武将”，不能错误沿用首任领袖阶段的隐藏状态。
+	var initial_leader_all_character_snapshot: Dictionary = snapshot.duplicate(true)
+	initial_leader_all_character_snapshot["local_identity"] = "leader"
+	initial_leader_all_character_snapshot["initial_identity"] = "leader"
+	initial_leader_all_character_snapshot["preview_identity"] = "leader"
+	initial_leader_all_character_snapshot["allow_all_characters"] = true
+	selection_panel.bind_snapshot(initial_leader_all_character_snapshot)
+	await get_tree().process_frame
+	selection_panel.call("_toggle_all_characters")
+	if not all_characters_button.visible or (selection_panel.call("_get_displayed_candidate_ids") as Array) != (initial_leader_all_character_snapshot.get("all_character_ids", []) as Array):
+		main_instance.queue_free()
+		return _fail("initial_leader_all_characters_available")
 	selection_panel.close()
 	main_instance.queue_free()
 	await get_tree().process_frame

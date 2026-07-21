@@ -91,6 +91,11 @@ func _begin_recast_sequence(other_target_ids: Array[int]) -> bool:
 
 ## 为序列中的当前角色建立一牌选择；技能持有者负责选择，其他角色手牌保持牌背未知。
 func _request_recast_at_index(context: Dictionary) -> void:
+	# 相邻重铸选牌之间的表现间隔；重铸效果和嵌套技能已经结算完毕后再显示下一张手牌选择，避免多个弹窗无缝替换。
+	if bool(context.get("wait_before_next_recast", false)):
+		context.erase("wait_before_next_recast")
+		_schedule_next_recast_request(context)
+		return
 	var player_ids: Array[int] = _int_values(context.get("player_ids", []) as Array)
 	var player_index: int = int(context.get("player_index", 0))
 	while player_index < player_ids.size():
@@ -106,6 +111,21 @@ func _request_recast_at_index(context: Dictionary) -> void:
 	_finish_recast_sequence(context)
 
 
+## 使用对局统一流程节奏器延后下一次重铸请求；测试或零速度模式保持同步推进，规则状态不依赖计时器。
+func _schedule_next_recast_request(context: Dictionary) -> void:
+	# 延时恢复的上下文副本；回调不能继续持有调用链会修改的字典引用。
+	var scheduled_context: Dictionary = context.duplicate(true)
+	# 下一弹窗恢复回调；统一基类会使用当前游戏速度安排或在零速度模式同步执行。
+	var resume_callback: Callable = Callable(self, "_resume_paced_recast").bind(scheduled_context)
+	if not schedule_after_flow_interval("next_recast", resume_callback):
+		_request_recast_at_index(context)
+
+
+## 到达表现间隔后恢复下一名角色的重铸选牌；玩家和手牌状态仍在请求创建前逐项复核。
+func _resume_paced_recast(context: Dictionary) -> void:
+	_request_recast_at_index(context)
+
+
 ## 在移动前读取重铸牌类型与颜色，执行重铸后等待其嵌套触发，再继续下一名角色。
 func _continue_recast_card(context: Dictionary, card_uid: int) -> void:
 	var target_id: int = int(context.get("current_player_id", -1))
@@ -118,6 +138,8 @@ func _continue_recast_card(context: Dictionary, card_uid: int) -> void:
 	context["all_red"] = bool(context.get("all_red", true)) and card.get_color() == "red"
 	context["recast_count"] = int(context.get("recast_count", 0)) + 1
 	context["player_index"] = int(context.get("player_index", 0)) + 1
+	# 下一名仍有手牌的重铸对象存在时，给相邻弹窗留出统一流程间隔；最后一次重铸直接结算奖励，不产生无意义等待。
+	context["wait_before_next_recast"] = _has_remaining_recast_candidate(context)
 	if not bool(host.call("recast_hand_card", target_id, card_uid)):
 		return
 	if host.has_pending_card_choice():
@@ -126,6 +148,20 @@ func _continue_recast_card(context: Dictionary, card_uid: int) -> void:
 		defer_settlement(deferred_context)
 	else:
 		_request_recast_at_index(context)
+
+
+## 检查当前序列后方是否仍有有效重铸对象；离场、死亡或失去全部手牌的角色会被正常跳过且不产生空白延时。
+func _has_remaining_recast_candidate(context: Dictionary) -> bool:
+	# 本次固定重铸顺序；数组只保存稳定玩家ID，不持有角色节点。
+	var player_ids: Array[int] = _int_values(context.get("player_ids", []) as Array)
+	# 下一次待处理的数组位置；该位置之前的角色都已经完成重铸。
+	var next_player_index: int = int(context.get("player_index", 0))
+	for player_index: int in range(next_player_index, player_ids.size()):
+		# 当前后续目标；必须仍在场且至少有一张手牌，才能产生下一条选牌请求。
+		var player: PlayerState = host.state.get_player(player_ids[player_index]) if host != null else null
+		if player != null and player.alive and not player.out_of_game and not player.hand.is_empty():
+			return true
+	return false
 
 
 ## 恢复某次重铸移动产生的嵌套选择，然后继续稳定玩家序列。

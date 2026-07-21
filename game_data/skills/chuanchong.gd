@@ -61,7 +61,7 @@ func activate(context: Dictionary = {}) -> String:
 	var legal_target_ids: Array[int] = selection_data.get("target_ids", []) as Array[int]
 	if candidates.is_empty() or legal_target_ids.is_empty():
 		return "当前没有可用于【传冲】的手牌或转化锦囊目标。"
-	request_card_target_selection("传冲", "请选择一张手牌，并指定其转化锦囊的目标", candidates, legal_target_ids, 1, 1, 1, 2, true, {"kind":"chuanchong_use", "target_combinations_by_card_id":selection_data.get("target_combinations_by_card_id", {})})
+	request_card_target_selection("传冲", "请选择一张手牌，并指定其转化锦囊的目标", candidates, legal_target_ids, 1, 1, 1, 2, true, {"kind":"chuanchong_use", "target_combinations_by_card_id":selection_data.get("target_combinations_by_card_id", {}), "auto_target_ids_by_card_id":selection_data.get("auto_target_ids_by_card_id", {})})
 	return ""
 
 
@@ -113,6 +113,8 @@ func _build_material_target_selection_data() -> Dictionary:
 	var target_combinations_by_card_id: Dictionary = {}
 	# 全部材料目标并集；材料尚未选中时用于武将牌目标预览。
 	var all_target_ids: Array[int] = []
+	# 材料UID到自动目标数组的映射；只记录规则已唯一确定的自身目标，不替代权威完整组合校验。
+	var auto_target_ids_by_card_id: Dictionary = {}
 	for candidate: Dictionary in _get_hand_candidates():
 		# 当前普通手牌材料；只有仍在手牌区的实体才能按其真实花色转化。
 		var material: CardInstance = _get_hand_card(int(candidate.get("uid", -1)))
@@ -126,6 +128,12 @@ func _build_material_target_selection_data() -> Dictionary:
 		var material_uid: int = material.uid
 		valid_candidates.append(candidate)
 		target_combinations_by_card_id[str(material_uid)] = target_combinations.duplicate(true)
+		# 【无中生有】等自身目标虚拟牌不应要求玩家再点击自身；只有定义声明self且唯一合法组合正好为持有者时才预填。
+		var virtual_definition: Dictionary = GameDatabase.get_card(trick_id)
+		if str(virtual_definition.get("target_mode", "")) == "self" and target_combinations.size() == 1:
+			var unique_target_combination: Array = target_combinations[0] as Array
+			if unique_target_combination.size() == 1 and int(unique_target_combination[0]) == owner_player_id:
+				auto_target_ids_by_card_id[str(material_uid)] = [owner_player_id]
 		for target_combination_variant: Variant in target_combinations:
 			# 当前有序目标组合；只汇总目标预览，不改变原组合顺序。
 			var target_combination: Array = target_combination_variant as Array
@@ -134,7 +142,7 @@ func _build_material_target_selection_data() -> Dictionary:
 				var target_id: int = int(target_variant)
 				if not all_target_ids.has(target_id):
 					all_target_ids.append(target_id)
-	return {"candidates":valid_candidates, "target_ids":all_target_ids, "target_combinations_by_card_id":target_combinations_by_card_id}
+	return {"candidates":valid_candidates, "target_ids":all_target_ids, "target_combinations_by_card_id":target_combinations_by_card_id, "auto_target_ids_by_card_id":auto_target_ids_by_card_id}
 
 
 ## 按UID返回仍位于技能持有者普通手牌区的实体。

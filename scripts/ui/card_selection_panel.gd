@@ -781,7 +781,8 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
 		# 当前卡牌静态定义；名称模式、类别颜色与插画均从该只读配置解析。
 		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
-		card_view.configure(card_data, definition, false, selectable, taken)
+		# 不可选的展示牌必须传入禁用暗置；公共牌被领取时改由复制虚影表达，不能叠加禁用暗置而失去归属可读性。
+		card_view.configure(card_data, definition, false, selectable, not taken)
 	else:
 		card_view.configure_back(card_uid, selectable)
 	# 公共牌位即使首次以旁观状态创建，也预先连接点击信号；后续轮到本地玩家时只切换输入权限即可复用节点。

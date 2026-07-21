@@ -218,6 +218,24 @@ func defer_settlement(context: Dictionary) -> bool:
 	return bool(host.call("defer_skill_settlement", owner_player_id, get_id(), context))
 
 
+## 按当前对局流程间隔安排一次纯表现延时回调；技能只提供稳定业务键与恢复回调，不直接读取或管理流程计时器。
+## 回调应只在已经完成规则结算后创建下一段交互或表现，不能把伤害、摸牌等规则数值依赖于等待是否完成。
+func schedule_after_flow_interval(task_name: String, callback: Callable) -> bool:
+	if host == null or not callback.is_valid():
+		return false
+	# 当前对局节奏器；不存在时按同步模式执行，保持无场景测试与零速度模式的规则结果一致。
+	var flow_pacer: GameFlowPacer = host.get("game_flow_pacer") as GameFlowPacer
+	# 当前全局流程间隔；读取控制器公开配置而不由技能写入，范围由控制器和设置层统一限制。
+	var delay_seconds: float = float(host.get("game_flow_interval_seconds"))
+	if flow_pacer == null or delay_seconds <= 0.0:
+		callback.call()
+		return true
+	# 同一技能持有者和业务键共享取消域；新回调会替换旧回调，重新开局时控制器统一取消全部任务。
+	var task_key: String = "%s:%d:%s" % [get_id(), owner_player_id, task_name]
+	flow_pacer.schedule(task_key, delay_seconds, callback)
+	return true
+
+
 ## 向基础 AI 的出牌阶段合法动作列表追加技能动作；动作必须使用 action_type=use_skill 并携带稳定 skill_id。
 func append_play_phase_actions(_result: Array[Dictionary]) -> void:
 	pass
