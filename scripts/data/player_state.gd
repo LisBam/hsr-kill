@@ -12,6 +12,9 @@ var display_name: String = "玩家"
 ## 当前武将配置 ID；通过数据仓库查询名称、性别、势力与技能。
 var character_id: String = ""
 
+## 当前武将入场代次；每次正式应用或交换武将牌时递增，0表示尚未选择武将，用于阻止异步事件跨武将生效。
+var character_generation: int = 0
+
 ## 当前武将是否已经向所有玩家亮出；选将阶段领袖先公开，其他玩家完成后同时公开。
 var character_revealed: bool = false
 
@@ -240,6 +243,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"player_id": player_id,
 		"display_name": display_name,
 		"character_id": character_id if character_revealed or viewer_id == player_id or reveal_private else "",
+		"character_generation": character_generation,
 		"character_revealed": character_revealed,
 		"identity": identity if identity_revealed or viewer_id == player_id or reveal_private else "hidden",
 		"identity_revealed": identity_revealed,

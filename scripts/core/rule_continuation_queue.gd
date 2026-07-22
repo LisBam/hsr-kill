@@ -34,6 +34,13 @@ func pop() -> Dictionary:
 	return continuation.duplicate(true)
 
 
+## 返回最内层续接记录的深拷贝但不移除；结算管线可据此让模式边界等待技能后续先完成。
+func peek() -> Dictionary:
+	if _continuations.is_empty():
+		return {}
+	return (_continuations.back() as Dictionary).duplicate(true)
+
+
 ## 按稳定编号移除一条尚未恢复的记录；用于子事件同步完成时撤销父流程预先登记的保险续接点。
 func remove(continuation_id: int) -> bool:
 	# 倒序续接索引；从栈顶开始查找最近父流程，取值范围为现有记录下标至0。

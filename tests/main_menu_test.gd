@@ -122,6 +122,22 @@ func _run() -> void:
 	var main_menu_card_name_option: OptionButton = main_instance.get_node("%MainMenuCardNameOption") as OptionButton
 	# 局内卡牌名称下拉框；应使用与主菜单相同的两项稳定名称模式配置。
 	var match_menu_card_name_option: OptionButton = main_instance.get_node("%MenuCardNameOption") as OptionButton
+	# 主菜单车轮战明置候选标签；必须在车轮战设置页使用统一回退字体和主题文字色。
+	var main_wheel_face_up_label: Label = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
+	# 主菜单车轮战暗置候选标签；与明置标签共同验证局外菜单的字体和颜色覆盖。
+	var main_wheel_face_down_label: Label = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
+	# 主菜单车轮战明置候选输入；其内部文本框必须使用主题字体、文字色和光标色。
+	var main_wheel_face_up_input: SpinBox = main_instance.get_node("%WheelDuelFaceUpCandidateInput") as SpinBox
+	# 主菜单车轮战暗置候选输入；数值与局内菜单共享同一GameSettings配置。
+	var main_wheel_face_down_input: SpinBox = main_instance.get_node("%WheelDuelFaceDownCandidateInput") as SpinBox
+	# 局内车轮战明置候选标签；完整路径避免与主菜单同名节点混淆。
+	var match_wheel_face_up_label: Label = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
+	# 局内车轮战暗置候选标签；与明置标签共同验证重开菜单的字体和颜色覆盖。
+	var match_wheel_face_down_label: Label = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
+	# 局内车轮战明置候选输入；稳定唯一名用于验证局内外数值同步。
+	var match_wheel_face_up_input: SpinBox = main_instance.get_node("%MatchMenuWheelDuelFaceUpCandidateInput") as SpinBox
+	# 局内车轮战暗置候选输入；稳定唯一名用于验证局内外数值同步。
+	var match_wheel_face_down_input: SpinBox = main_instance.get_node("%MatchMenuWheelDuelFaceDownCandidateInput") as SpinBox
 	# 手牌区上方原确定按钮；终局时复用为“重新开始”。
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
@@ -172,6 +188,15 @@ func _run() -> void:
 	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
+	# 车轮战模式专属设置；局内、局外必须同时显示明置与暗置数量，并应用同一字体、文字色及全局配置值。
+	main_menu.call("_select_wheel_duel_mode")
+	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
+	match_menu.set_match_mode(GameSettings.MATCH_MODE_WHEEL_DUEL)
+	var expected_menu_text_color: Color = BattleUIStyle.get_color("text_secondary")
+	var expected_input_text_color: Color = BattleUIStyle.get_color("text_primary")
+	if not main_wheel_face_up_input.get_parent().visible or not main_wheel_face_down_input.get_parent().visible or not match_wheel_face_up_input.get_parent().visible or not match_wheel_face_down_input.get_parent().visible or main_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or main_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not main_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or main_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or not match_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or int(main_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(match_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(main_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count or int(match_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count:
+		_fail("wheel_duel_menu_settings_style_or_sync")
+		return
 	# 模式卡滚动范围；六张100像素卡片加五段12像素间距必须高于可视区，确保新增入口通过滚动浏览而非缩小。
 	var mode_scroll_bar: VScrollBar = mode_scroll.get_v_scroll_bar() if mode_scroll != null else null
 	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
@@ -195,7 +220,6 @@ func _run() -> void:
 	# 过关斩将专属开局设置；换将卡与随机选将牌数均须显示，车轮战专属候选则不得误入该模式。
 	var main_conquest_replacement_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow") as Control
 	var main_conquest_candidate_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow") as Control
-	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
 	var match_conquest_replacement_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow") as Control
 	var match_conquest_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_CONQUEST)

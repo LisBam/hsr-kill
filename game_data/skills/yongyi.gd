@@ -85,7 +85,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if not response.confirmed:
 			return true
 		# 额外弃牌阶段完成上下文；技能回调会在End与After后据此获得护盾。
-		var completion_context: Dictionary = {"kind":"yongyi_extra_discard_complete", "skill_owner_id":owner_player_id, "skill_id":get_id()}
+		var completion_context: Dictionary = {"kind":"yongyi_extra_discard_complete", "skill_owner_id":owner_player_id, "skill_id":get_id(), "skill_character_generation":get_bound_character_generation()}
 		if bool(host.call("request_extra_discard_phase", owner_player_id, int(context.get("damage_source_id", -1)), get_id(), completion_context)):
 			announce_activation({"hp_lost":int(context.get("hp_lost", 0)), "branch":"extra_discard"})
 		return true

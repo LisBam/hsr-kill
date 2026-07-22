@@ -109,7 +109,9 @@ func _run() -> void:
 	conquest_snapshot["conquest_state"] = {"level":7}
 	match_controller.state_changed.emit(conquest_snapshot)
 	await get_tree().process_frame
-	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or conquest_level_label.get_theme_font_size("font_size") != round_label.get_theme_font_size("font_size"):
+	# 关轮横排容器；关卡必须位于轮次之前且两者共享同一父容器，不能依靠重叠标签替换文本。
+	var round_info_row: HBoxContainer = conquest_level_label.get_parent() as HBoxContainer
+	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or round_info_row == null or round_label.get_parent() != round_info_row or conquest_level_label.get_index() >= round_label.get_index() or conquest_level_label.get_theme_font_size("font_size") != round_label.get_theme_font_size("font_size") or conquest_level_label.get_theme_font("font") != ThemeDB.fallback_font or round_label.get_theme_font("font") != ThemeDB.fallback_font or not conquest_level_label.get_theme_color("font_color").is_equal_approx(round_label.get_theme_color("font_color")):
 		_fail("conquest_top_info:%s/%s/%s" % [round_label.text, conquest_level_label.text, str(conquest_level_label.visible)])
 		return
 	# 后续布局断言继续使用身份局快照，避免模式专属菜单与资料逻辑影响既有十人桌测试。

@@ -249,6 +249,11 @@ func pause(channel: String, reason: String, owner_event_id: int = -1) -> int:
 	return pause_registry.acquire(channel, resolved_owner, reason)
 
 
+## 创建阻塞完整事件栈的全局暂停令牌；规则过渡可冻结事件推进而不暂停场景树、动画或界面输入。
+func pause_global(channel: String, reason: String) -> int:
+	return pause_registry.acquire(channel, -1, reason)
+
+
 ## 解决暂停 token 并尝试恢复事件；未解决的其他通道仍会继续阻塞事件栈。
 func resume(token_id: int, resolution: String = "completed") -> bool:
 	if not pause_registry.resolve(token_id, resolution):
