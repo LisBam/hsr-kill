@@ -918,7 +918,7 @@ func _run() -> void:
 	_controller.add_child(ai_coordinator)
 	# 测试通信网关；保持离线模式，不接入外部网络。
 	var network_gateway: NetworkGateway = NetworkGateway.new()
-	if NetworkGateway.PROTOCOL_VERSION != 4:
+	if NetworkGateway.PROTOCOL_VERSION != 5:
 		printerr("SMOKE_FAIL protocol_version=%d" % NetworkGateway.PROTOCOL_VERSION)
 		get_tree().quit(1)
 		return

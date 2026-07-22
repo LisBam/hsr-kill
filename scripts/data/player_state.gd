@@ -90,6 +90,12 @@ var wooden_ox_used: bool = false
 ## 当前临时技能与失效时机；键为技能 ID，值为 turn_end、phase_end 等稳定持续标识。
 var temporary_skills: Dictionary = {}
 
+## 当前通过机缘等局内永久来源获得的技能；键为技能 ID，值保存来源、每回合次数、总次数与已用次数，死亡前持续有效。
+var acquired_skills: Dictionary = {}
+
+## 当前额外手牌上限；默认0，机缘等永久效果可累加修改，最终手牌上限仍不会低于0。
+var hand_limit_bonus: int = 0
+
 ## 玩家回合历史；每个回合保存阶段跳过、使用牌、响应、伤害和发动技能摘要。
 var turn_history: Array[Dictionary] = []
 
@@ -140,9 +146,9 @@ func get_armor() -> CardInstance:
 	return equipment.get("armor") as CardInstance
 
 
-## 返回手牌上限。基础规则等于当前体力值，最低可为0。
+## 返回手牌上限。基础规则等于当前体力值，再叠加局内永久加成，最终最低为0。
 func get_hand_limit() -> int:
-	return maxi(hp, 0)
+	return maxi(hp + hand_limit_bonus, 0)
 
 
 ## 按实体牌 UID 查找手牌；未找到时返回 null。
@@ -250,6 +256,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"wooden_ox_storage_count": wooden_ox_storage.size(),
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),
+		"acquired_skills": acquired_skills.duplicate(true),
+		"hand_limit_bonus": hand_limit_bonus,
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),

@@ -77,6 +77,9 @@ func announce_activation(context: Dictionary = {}) -> void:
 	# 永久记录上下文副本；只允许基础可序列化值，不能把技能对象或界面节点交给日志、回放或表现层。
 	var activation_context: Dictionary = context.duplicate(true)
 	host.call("record_skill_activation", owner_player_id, get_id(), activation_context)
+	# 局内获得技能次数；固有技能会由控制器直接返回true且不写入任何额外状态。
+	if host.has_method("consume_acquired_skill_use"):
+		host.call("consume_acquired_skill_use", owner_player_id, get_id())
 
 
 ## 记录一次由指定角色实际支付费用或执行效果的技能发动；领袖技可用此入口将提示与日志归属到本回合发动者。
@@ -137,6 +140,9 @@ func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable) -> 
 	if (owner == null or not owner.alive) and not can_trigger_while_owner_inactive(event):
 		return false
 	if owner != null and owner.out_of_game and not out_of_game_skill and not can_trigger_while_owner_inactive(event):
+		return false
+	# 局内获得技能的每回合或总次数限制；额度耗尽后不再接收新的触发时机。
+	if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, get_id())):
 		return false
 	return not custom_condition.is_valid() or bool(custom_condition.call(event))
 

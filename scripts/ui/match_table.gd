@@ -15,6 +15,9 @@ const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wu
 ## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
 const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/components/information_box_layer.tscn")
 
+## 全体机缘选择弹窗场景；只渲染本地观察者自己的三张私有候选并提交稳定机缘卡ID。
+const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/components/opportunity_choice_panel.tscn")
+
 ## 中央确定与取消按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
 const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 
@@ -184,6 +187,9 @@ const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 
 ## 牌桌统一信息框组件；运行时实例化后集中处理目标旁说明和居中武将详情。
 var information_box: InformationBoxLayer
+
+## 机缘选择弹窗组件；规则暂停期间保持可输入，所有效果仍由MatchController权威结算。
+var opportunity_choice_panel: OpportunityChoicePanel
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
@@ -439,6 +445,7 @@ func _ready() -> void:
 	_create_local_player_card()
 	_create_local_judgment_zone()
 	_create_local_player_markers()
+	_create_opportunity_choice_panel()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -990,6 +997,39 @@ func _create_local_player_markers() -> void:
 	_queue_local_judgment_zone_layout()
 
 
+## 创建独立机缘选择弹窗并绑定统一玩家动作入口；组件不直接读取或修改GameState。
+func _create_opportunity_choice_panel() -> void:
+	opportunity_choice_panel = OPPORTUNITY_CHOICE_PANEL_SCENE.instantiate() as OpportunityChoicePanel
+	opportunity_choice_panel.name = "OpportunityChoicePanel"
+	add_child(opportunity_choice_panel)
+	opportunity_choice_panel.opportunity_selected.connect(_on_opportunity_selected)
+
+
+## 使用最新观察者快照刷新机缘弹窗；角色名只取公开显示名，不向等待玩家暴露身份或候选正文。
+func _refresh_opportunity_choice_panel() -> void:
+	if opportunity_choice_panel == null:
+		return
+	# 玩家ID到公开显示名映射；弹窗等待文案使用当前武将名或玩家名，不读取私有身份。
+	var player_names: Dictionary = {}
+	for player_id_variant: Variant in _player_snapshots_by_id.keys():
+		# 当前玩家ID；快照索引键由状态广播时统一转换为整数。
+		var player_id: int = int(player_id_variant)
+		# 当前公开玩家快照；武将未公开时回退玩家显示名。
+		var player_snapshot: Dictionary = _player_snapshots_by_id.get(player_id, {}) as Dictionary
+		player_names[player_id] = _snapshot_character_name(player_snapshot, str(player_snapshot.get("display_name", "角色")))
+	opportunity_choice_panel.show_opportunity(_snapshot.get("opportunity_state", {}) as Dictionary, match_controller.local_human_player_id, player_names)
+
+
+## 将机缘卡点击转换为统一玩家动作；局域网客户端沿用MatchController的标准上行路径。
+func _on_opportunity_selected(card_id: String) -> void:
+	if card_id.is_empty():
+		return
+	# 机缘选择动作；只携带稳定卡牌ID，品质、正文和效果均由房主权威目录重新读取。
+	var action: PlayerAction = PlayerAction.new("choose_opportunity", match_controller.local_human_player_id)
+	action.payload = {"card_id":card_id}
+	match_controller.submit_action(action)
+
+
 ## 在布局帧结束后重新计算本地延时锦囊标记区的位置；技能栏变化会连带改变手牌右边界，不能读取旧尺寸。
 func _queue_local_judgment_zone_layout() -> void:
 	call_deferred("_layout_local_judgment_zone")
@@ -1031,6 +1071,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
 		var indexed_player: Dictionary = player_variant as Dictionary
 		_player_snapshots_by_id[int(indexed_player.get("player_id", -1))] = indexed_player
+	_refresh_opportunity_choice_panel()
 	_refresh_auto_management_controls()
 	_sync_match_clock()
 	if _snapshot.has("processing_card_uids"):
@@ -1387,6 +1428,19 @@ func _get_visible_skill_ids(character: Dictionary, identity: String, player_snap
 	temporary_skill_ids.sort()
 	for temporary_skill_id: String in temporary_skill_ids:
 		result.append(temporary_skill_id)
+	# 局内永久获得技能；机缘授予技能在临时技能之后按稳定ID排序显示，死亡前不会因轮数自动移除。
+	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
+	# 已获得技能ID副本；排序避免字典序列化实现差异改变按钮位置。
+	var acquired_skill_ids: Array[String] = []
+	for acquired_skill_id_variant: Variant in acquired_skills.keys():
+		# 当前已获得技能ID；与固有、模式或临时技能重复时只显示一次。
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		if acquired_skill_id.is_empty() or result.has(acquired_skill_id):
+			continue
+		acquired_skill_ids.append(acquired_skill_id)
+	acquired_skill_ids.sort()
+	for acquired_skill_id: String in acquired_skill_ids:
+		result.append(acquired_skill_id)
 	return result
 
 
@@ -4167,7 +4221,7 @@ func _clear_container(container: Node) -> void:
 
 ## 将阶段 ID 转换为中文界面文本。
 func _phase_text(phase: String) -> String:
-	return {"setup":"准备", "character_selection":"选将阶段", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "choice":"等待选择", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
+	return {"setup":"准备", "character_selection":"选将阶段", "start":"开始阶段", "judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "choice":"等待选择", "opportunity":"选择机缘", "discard":"弃牌阶段", "finish":"结束阶段", "game_over":"对局结束"}.get(phase, phase)
 
 
 ## 返回一至十号座次的中文数字；座次标签属于游戏内座位容器，超出当前模式上限时回退阿拉伯数字。

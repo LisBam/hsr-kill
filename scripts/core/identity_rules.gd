@@ -15,6 +15,9 @@ const MODE_TEAM2V2: String = "team2v2"
 ## 1v1车轮战模式稳定ID；固定两人，先手为红方、后手为蓝方，每方依次使用三名武将。
 const MODE_WHEEL_DUEL: String = "wheel_duel"
 
+## 机缘大乱斗模式稳定ID；规则基础继承身份模式，并额外挂载全体机缘选择组件。
+const MODE_OPPORTUNITY_BRAWL: String = "opportunity_brawl"
+
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
 const IDENTITY_DISTRIBUTIONS: Dictionary = {
 	2: ["leader", "rebel"],
@@ -50,6 +53,8 @@ func normalize_mode(mode_id: String) -> String:
 		return MODE_TEAM2V2
 	if mode_id == MODE_WHEEL_DUEL:
 		return MODE_WHEEL_DUEL
+	if mode_id == MODE_OPPORTUNITY_BRAWL:
+		return MODE_OPPORTUNITY_BRAWL
 	return MODE_IDENTITY
 
 

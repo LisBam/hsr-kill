@@ -281,16 +281,33 @@ func _prepare_action_scoring_context(authoritative_snapshot: Dictionary) -> void
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
 	# 使用者武将定义；技能 ID 数组由 CharacterDefinition 自动生成。
 	var character: Dictionary = _get_cached_character_definition(str(owner.get("character_id", "")))
+	# 本次全部技能ID；固有、模式、临时与局内永久获得技能都应参与卡牌联动估值。
+	var all_skill_ids: Array[String] = []
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		all_skill_ids.append(str(skill_id_variant))
+	for mode_skill_id_variant: Variant in owner.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；与固有技能重复时只创建一个只读评分实例。
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not all_skill_ids.has(mode_skill_id):
+			all_skill_ids.append(mode_skill_id)
+	for runtime_skill_map_variant: Variant in [owner.get("temporary_skills", {}), owner.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键为稳定技能ID，值只保存持续或次数状态。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for runtime_skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；按快照字典顺序追加且去重。
+			var runtime_skill_id: String = str(runtime_skill_id_variant)
+			if not runtime_skill_id.is_empty() and not all_skill_ids.has(runtime_skill_id):
+				all_skill_ids.append(runtime_skill_id)
+	for skill_id: String in all_skill_ids:
 		# 当前技能 ID；用于让主动动作与卡牌修正复用同一纯评估实例。
-		var skill_id: String = str(skill_id_variant)
+		var resolved_skill_id: String = skill_id
 		# 当前技能静态实例；占位技能保持基类空实现，不影响评分。
-		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		var skill: SkillDefinition = GameDatabase.create_skill(resolved_skill_id)
 		# 领袖技只在使用者身份确为领袖时参与牌效联动估值；非领袖不会借用武将静态列表中的领袖能力。
 		if skill != null and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
 			skill.bind(null, player_id)
 			_decision_card_modifier_skills.append(skill)
-			_decision_skill_instances[skill_id] = skill
+			_decision_skill_instances[resolved_skill_id] = skill
 
 
 ## 清理一次出牌决策的技能评分上下文；静态元数据缓存保留，运行时技能实例不跨决策复用。

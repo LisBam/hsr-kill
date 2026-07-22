@@ -55,6 +55,9 @@ var simultaneous_response_display: Dictionary = {}
 ## 当前开局前公共交互状态；用于房主调整 AI 武将等阶段，只保存可点击玩家 ID 与房主 ID，不含私有候选。
 var pre_game_setup: Dictionary = {}
 
+## 当前机缘系统公开交互状态；权威端保存全体候选，生成观察者快照时只向对应角色公开其三张候选牌。
+var opportunity_state: Dictionary = {}
+
 ## 已完成事件摘要历史；记录事件父子、步骤和终止原因，支持规则回放与无头验收。
 var event_history: Array[Dictionary] = []
 
@@ -178,6 +181,16 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 当前处理区实体；只序列化稳定 UID，不附加新的牌面可见信息。
 	for processing_card: CardInstance in processing_area:
 		processing_card_uids.append(processing_card.uid)
+	# 当前机缘快照；候选牌属于各角色私有信息，非权威观察者只能读取自己的候选数组。
+	var opportunity_snapshot: Dictionary = opportunity_state.duplicate(true)
+	if not opportunity_snapshot.is_empty() and not reveal_private:
+		# 全体候选映射；权威状态保留每名参与者的三张牌，普通快照只投射当前观察者自己的条目。
+		var all_options_by_player: Dictionary = opportunity_snapshot.get("options_by_player", {}) as Dictionary
+		# 当前观察者候选；字符串键兼容网络序列化后的字典形式。
+		var viewer_options: Array = all_options_by_player.get(str(viewer_id), all_options_by_player.get(viewer_id, [])) as Array
+		opportunity_snapshot["options_by_player"] = {str(viewer_id):viewer_options.duplicate(true)} if viewer_id >= 0 else {}
+		# 已选择卡牌正文只属于权威结算数据，公共界面仅需要知道哪些角色已经完成选择。
+		opportunity_snapshot.erase("selected_cards_by_player")
 	return {
 		"match_id": match_id,
 		"rules_snapshot": rules_snapshot,
@@ -196,6 +209,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"public_card_choice_display": public_card_choice_display.duplicate(true),
 		"simultaneous_response_display": simultaneous_response_display.duplicate(true),
 		"pre_game_setup": pre_game_setup.duplicate(true),
+		"opportunity_state": opportunity_snapshot,
 		"event_history_count": event_history.size(),
 		"card_move_history_count": card_move_history.size(),
 		"round_number": round_number,
