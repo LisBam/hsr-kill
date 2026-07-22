@@ -14,6 +14,9 @@ const AI_MATERIAL_COST_WEIGHT: float = 0.45
 ## AI使用【杀】牌族作为材料且同时指定2名正收益目标时的额外奖励；固定4.0分确保目标数+1的技能优势不会被单目标实体【杀】评分覆盖。
 const AI_SLASH_MATERIAL_MULTI_TARGET_BONUS: float = 4.0
 
+## AI用转化后的属性优势抵扣原材料保留成本的比例；1.0表示普通【杀】被防具拦截而雷【杀】有效时完整认可该升级收益。
+const AI_CONVERSION_GAIN_COST_OFFSET_WEIGHT: float = 1.0
+
 ## 当前出牌阶段是否已经成功发动；phaseUseBegin重置，使普通与额外出牌阶段分别拥有1次额度。
 var _used_current_play_phase: bool = false
 
@@ -199,7 +202,9 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 材料牌定义；通过effect_id识别普通、火和雷【杀】共享的slash牌族。
 	var material_definition: Dictionary = GameDatabase.get_card(str(material_card.get("definition_id", "")))
 	# 组合总收益；逐目标复用通用雷【杀】评估，包含闪、横置与防具预期。
-	var score: float = 0.0
+	var virtual_slash_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
+	# 整张虚拟雷【杀】收益；基础用牌成本只计算一次，多目标效果由评估器逐名累加。
+	var score: float = evaluator.score_action(authoritative_snapshot, virtual_slash_action, owner_player_id)
 	# 全部目标是否均具有严格正收益；只有不会为了触发奖励而误伤友方时才优先【杀】材料双目标动作。
 	var all_targets_profitable: bool = not target_ids.is_empty()
 	for target_id_variant: Variant in target_ids:
@@ -207,11 +212,27 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 		var slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "card_color":str(material_card.get("color", "")), "target_ids":[int(target_id_variant)]}
 		# 当前目标收益；与总分分开保存，用于禁止双目标奖励掩盖负收益目标。
 		var target_score: float = evaluator.score_action(authoritative_snapshot, slash_action, owner_player_id)
-		score += target_score
 		if target_score <= 0.0:
 			all_targets_profitable = false
 	# 材料牌保留价值；优先把低价值手牌转化为多目标进攻。
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
+	# 材料机会成本；属性升级的真实收益可抵扣静态保留价值，避免普通【杀】面对藤甲时仍被当作完整可用资源保留。
+	var material_cost: float = material_value * AI_MATERIAL_COST_WEIGHT
+	if str(material_definition.get("effect_id", "")) == "slash":
+		# 原材料直接作为【杀】使用的对照动作；相同目标、颜色和当前局势保证只比较转化前后的牌效差异。
+		var original_slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":str(material_definition.get("id", "")), "card_color":str(material_card.get("color", "")), "target_ids":target_ids.duplicate()}
+		# 属性与目标上限升级收益；藤甲免疫普通【杀】但不免疫雷【杀】时会形成明确正值。
+		var conversion_gain: float = maxf(score - evaluator.score_action(authoritative_snapshot, original_slash_action, owner_player_id), 0.0)
+		material_cost = maxf(material_cost - conversion_gain * AI_CONVERSION_GAIN_COST_OFFSET_WEIGHT, 0.0)
 	if target_ids.size() == 2 and all_targets_profitable and str(material_definition.get("effect_id", "")) == "slash":
 		score += AI_SLASH_MATERIAL_MULTI_TARGET_BONUS
-	return score - material_value * AI_MATERIAL_COST_WEIGHT
+	return score - material_cost
+
+
+## 构造全垒实际生成的多目标雷【杀】代理动作；真实材料颜色与全部目标会进入完整用牌收益链。
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
+	# 技能动作负载；保存手牌材料UID和一至两名目标。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 手牌材料快照；虚拟雷【杀】保留该实体颜色以兼容防具与目标保护技能。
+	var material_card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "card_color":str(material_card.get("color", "")), "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}

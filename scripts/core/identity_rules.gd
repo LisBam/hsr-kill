@@ -291,24 +291,20 @@ func _evaluate_identity_winner(state: GameState) -> String:
 	return ""
 
 
-## 斗地主胜负：任一地主死亡则农民获胜；全部农民死亡则地主获胜。
+## 斗地主胜负：全部地主死亡则农民获胜；全部农民死亡则地主获胜。
 func _evaluate_doudizhu_winner(state: GameState) -> String:
-	# 存活地主数量；任一地主死亡即农民达成胜利条件。
+	# 存活地主数量；五人双地主模式中只要仍有一名地主存活，对局就继续。
 	var landlord_alive: int = 0
 	# 存活农民数量；全部出局后地主方获胜。
 	var peasant_alive: int = 0
-	# 是否已有地主死亡；五人双地主时只需击杀一名地主。
-	var landlord_dead: bool = false
 	for player: PlayerState in state.players:
 		if player.identity == "landlord":
 			if player.alive:
 				landlord_alive += 1
-			else:
-				landlord_dead = true
 		elif player.identity == "peasant":
 			if player.alive:
 				peasant_alive += 1
-	if landlord_dead:
+	if landlord_alive == 0:
 		return "peasants"
 	if peasant_alive == 0 and landlord_alive > 0:
 		return "landlords"

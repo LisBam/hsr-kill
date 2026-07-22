@@ -41,6 +41,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"blue_draw_three", "quality":"blue", "description":"摸三张牌。", "effect":"draw", "count":3},
 	{"id":"blue_max_hp_one", "quality":"blue", "description":"增加1点体力上限。", "effect":"max_hp", "count":1},
 	{"id":"blue_hand_limit_two", "quality":"blue", "description":"手牌上限+2", "effect":"hand_limit", "count":2},
+	{"id":"blue_draw_phase_one", "quality":"blue", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
 	{"id":"blue_skill_jiqiao", "quality":"blue", "description":"获得技能“机巧”", "effect":"grant_skill", "skill_id":"jiqiao"},
 	{"id":"blue_skill_huanyang", "quality":"blue", "description":"获得每回合能发动三次的技能“还阳”", "effect":"grant_skill", "skill_id":"huanyang", "per_turn_limit":3},
 	{"id":"blue_skill_jiahu", "quality":"blue", "description":"获得技能“加护”", "effect":"grant_skill", "skill_id":"jiahu"},

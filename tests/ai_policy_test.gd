@@ -45,7 +45,13 @@ func _ready() -> void:
 		return
 	if not _test_hostile_card_target():
 		return
+	if not _test_tiesuo_prefers_recast_when_use_value_is_low():
+		return
 	if not _test_quanlei_slash_material_priority():
+		return
+	if not _test_conversion_virtual_card_skill_synergy():
+		return
+	if not _test_xingqi_always_activates():
 		return
 	if not _test_renwang_shield_black_slash():
 		return
@@ -467,6 +473,29 @@ func _test_hostile_card_target() -> bool:
 	return true
 
 
+## 验证【铁索连环】解除敌方横置等低收益用法不会被出牌顺序驱动，AI会改为重铸摸1张牌。
+func _test_tiesuo_prefers_recast_when_use_value_is_low() -> bool:
+	# 全身份公开快照；敌方已经横置，本次使用只会帮助其解除连环。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 使用者手牌；确保使用与重铸引用同一张铁索连环实体。
+	var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	actor["hand"] = [_card(450, "tiesuo", 0)]
+	actor["hand_count"] = 1
+	# 已横置敌方；对其使用铁索连环属于负收益目标效果。
+	(snapshot.get("players", []) as Array)[1]["chained"] = true
+	# 低收益使用动作；实际规则允许解除敌方横置，但AI不应主动帮助敌方。
+	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[1], "payload":{}}
+	# 同实体重铸动作；弃置后摸1张未知牌，作为低收益使用的直接替代项。
+	var recast_action: Dictionary = {"action_type":"recast_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[], "payload":{}}
+	# 独立策略；避免其他测试的身份暴露历史改变敌我态度。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 最终选择；必须提交重铸而不是使用铁索连环。
+	var chosen: Dictionary = policy.choose_action(snapshot, [use_action, recast_action])
+	if str(chosen.get("action_type", "")) != "recast_card" or int(chosen.get("card_uid", -1)) != 450:
+		return _fail("tiesuo_low_value_recast=%s" % chosen)
+	return true
+
+
 ## 验证【全垒】AI在持有实体【杀】时，会把该【杀】转化为目标上限+1的雷【杀】同时攻击两名正收益敌人。
 func _test_quanlei_slash_material_priority() -> bool:
 	# 公开五人身份快照；领袖0与反贼1、4之间有稳定敌对态度，可对比单目标【杀】与双目标【全垒】。
@@ -494,6 +523,70 @@ func _test_quanlei_slash_material_priority() -> bool:
 	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
 	if str(chosen.get("action_type", "")) != "use_skill" or str(chosen_payload.get("skill_id", "")) != "quanlei" or int(chosen_payload.get("material_card_uid", -1)) != 501 or (chosen.get("target_ids", []) as Array) != [1, 4]:
 		return _fail("quanlei_slash_material_priority=%s" % chosen)
+	# 藤甲单目标场景；普通【杀】完全无效，但转化后的雷【杀】可以正常造成伤害。
+	var vine_snapshot: Dictionary = _build_snapshot(true)
+	# 全垒使用者手牌；只持有一张黑色普通【杀】，排除其他材料干扰。
+	var vine_actor: Dictionary = (vine_snapshot.get("players", []) as Array)[0] as Dictionary
+	vine_actor["character_id"] = "qiong"
+	vine_actor["hand"] = [_card(502, "sha", 0)]
+	vine_actor["hand_count"] = 1
+	# 藤甲敌方；普通【杀】的目标效果为0，雷【杀】不受藤甲免疫。
+	(vine_snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(503, "tengjia", 1)}
+	# 普通【杀】动作；用于证明AI不会直接消耗被藤甲完全拦截的实体牌。
+	var blocked_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":502, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	# 全垒单目标动作；同一张普通【杀】转化为雷【杀】后应成为明确正收益。
+	var thunder_conversion_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"quanlei", "target_ids":[1], "payload":{"skill_id":"quanlei", "material_card_uid":502, "target_ids":[1]}}
+	# 独立藤甲场景策略；最终必须选择全垒转化。
+	var vine_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var vine_choice: Dictionary = vine_policy.choose_action(vine_snapshot, [blocked_slash_action, thunder_conversion_action])
+	if str(vine_choice.get("action_type", "")) != "use_skill" or str((vine_choice.get("payload", {}) as Dictionary).get("skill_id", "")) != "quanlei":
+		return _fail("quanlei_tengjia_thunder_conversion=%s" % vine_choice)
+	return true
+
+
+## 验证转化技能生成的虚拟牌会进入持有者被动技能评分链，避免只计算材料费用而漏掉实际用牌收益。
+func _test_conversion_virtual_card_skill_synergy() -> bool:
+	# 基础快照；黑色普通【杀】作为罡风材料，目标为公开敌方。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 使用者手牌；稳定材料UID用于两份对照快照。
+	var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	actor["hand"] = [_card(560, "sha", 0)]
+	actor["hand_count"] = 1
+	# 罡风转化动作；完整评分应把生成的雷【杀】继续交给疾雨等modify_ai_card_action_score钩子。
+	var conversion_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"gangfeng", "target_ids":[1], "payload":{"skill_id":"gangfeng", "material_card_uid":560, "target_ids":[1]}}
+	# 无疾雨对照；角色本身不提供任何【杀】联动，只保留罡风的虚拟雷【杀】与材料成本。
+	actor["character_id"] = "xier"
+	var baseline_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var baseline_score: float = float(baseline_policy.call("_score_action", snapshot, conversion_action))
+	# 丹恒快照；固有疾雨会对任意【杀】增加4分，转化后的雷【杀】也必须获得同一收益。
+	var synergy_snapshot: Dictionary = snapshot.duplicate(true)
+	(synergy_snapshot.get("players", []) as Array)[0]["character_id"] = "dan_heng"
+	var synergy_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var synergy_score: float = float(synergy_policy.call("_score_action", synergy_snapshot, conversion_action))
+	if synergy_score < baseline_score + 3.9:
+		return _fail("conversion_virtual_skill_synergy baseline=%.3f synergy=%.3f" % [baseline_score, synergy_score])
+	return true
+
+
+## 验证【星祈】在存在锦囊候选时无条件确认发动，不会把牌堆顶候选误当作自身弃牌成本而取消。
+func _test_xingqi_always_activates() -> bool:
+	# 全身份公开快照；技能选择只依赖稳定持有者ID，不需要运行时规则宿主。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 牌堆顶锦囊候选；归属为-1表示公共牌堆，不是AI自身手牌。
+	var trick_candidate: Dictionary = _candidate(570, "wuzhong", -1)
+	trick_candidate["zone"] = "draw_pile"
+	# 星祈首步请求；保持原规则“可以”的可取消语义，仅由AI评分选择确认。
+	var choice_request: Dictionary = {"request_id":570, "choice_type":"card", "allow_cancel":true, "min_select":1, "max_select":1, "min_card_select":1, "max_card_select":1, "candidates":[trick_candidate], "context":{"kind":"xingqi_trick", "skill_id":"xingqi", "skill_owner_id":0}}
+	# 取消动作；通用可取消选择的0分基线。
+	var cancel_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":570, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 确认动作；选择唯一锦囊后应获得星祈固定发动分。
+	var confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":570, "selected_card_uids":[570], "selected_target_ids":[], "confirmed":true}}
+	# 独立策略选择；必须确认并保留所选锦囊UID。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, choice_request, [cancel_action, confirm_action])
+	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
+	if not bool(chosen_payload.get("confirmed", false)) or chosen_payload.get("selected_card_uids", []) != [570]:
+		return _fail("xingqi_always_activate=%s" % chosen)
 	return true
 
 

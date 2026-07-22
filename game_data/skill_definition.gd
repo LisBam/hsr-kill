@@ -296,6 +296,12 @@ func score_ai_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _
 	return 0.0
 
 
+## 返回主动技能实际生成的虚拟用牌动作；基础AI会把该动作送入完整卡牌与被动技能评分链，再把新增收益合并回技能动作。
+## 非转化技能保持空字典；覆盖时只能返回只读、可序列化的use_card动作，不得修改对局状态或技能运行时字段。
+func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _evaluator: Object) -> Dictionary:
+	return {}
+
+
 ## 计算基础 AI 对本技能创建的选择动作评分；确认、费用、选牌与选目标逻辑应写在对应技能文件中。
 func score_ai_choice(_authoritative_snapshot: Dictionary, _choice_request: Dictionary, _action: Dictionary, _evaluator: Object) -> float:
 	return 0.0

@@ -1134,10 +1134,23 @@ func _apply_mode_scroll_bar_style() -> void:
 	if scroll_bar == null:
 		return
 	scroll_bar.custom_minimum_size.x = mode_scroll_bar_width
-	scroll_bar.add_theme_stylebox_override("scroll", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_highlight", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_pressed", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("scroll", _make_mode_scroll_bar_style(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
+	scroll_bar.add_theme_stylebox_override("grabber", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent")))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08)))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent")))
+
+
+## 创建贴合纵向滚动范围两端的滑条样式；清除通用面板上下边距后，滑块在最小值和最大值处与轨道端点齐平。
+func _make_mode_scroll_bar_style(background_color: Color, border_color: Color) -> StyleBoxFlat:
+	# 滑条样式；保留主题色、1像素描边与4像素圆角，只移除会改变有效拖动范围的内容边距和阴影。
+	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, 1, 4)
+	style.content_margin_left = 0.0
+	style.content_margin_top = 0.0
+	style.content_margin_right = 0.0
+	style.content_margin_bottom = 0.0
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
+	return style
 
 
 ## 让当前选中的模式卡完整进入滚动窗口；键盘恢复持久化模式时也不会把选中项留在视口外。

@@ -155,7 +155,7 @@ func _test_level_bonus_service() -> bool:
 	state.conquest_state["level"] = 4
 	# 第2、3、4关固定机缘；直接跳关时服务也必须补齐每一层记录，保证回放恢复不会缺失历史。
 	var level_four_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_four_opportunities != ["blue_max_hp_one", "purple_draw_phase_one", "blue_hand_limit_two"] or service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 0:
+	if level_four_opportunities != ["gray_initial_hand_one", "blue_hand_limit_two", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 0 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 1:
 		return _fail("level_four_opportunities=%s" % level_four_opportunities)
 	state.conquest_state["level"] = 5
 	# 第5关本次新抽取的技能机缘；历史保存完整机缘ID，且实际效果必须是获得技能。
@@ -163,13 +163,13 @@ func _test_level_bonus_service() -> bool:
 	if level_five_skill_opportunities.size() != 1 or str(OpportunityCatalog.get_card(level_five_skill_opportunities[0]).get("effect", "")) != "grant_skill" or service.get_enemy_skill_ids().size() != 1:
 		return _fail("level_five_skill_opportunity")
 	state.conquest_state["level"] = 8
-	# 第6、7、8关继续追加蓝、紫、灰机缘；灰色初始手牌机缘只由关卡授予。
+	# 第6、7、8关继续追加体力上限、【杀】次数和摸牌阶段机缘。
 	var level_eight_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_eight_opportunities != ["blue_max_hp_one", "purple_draw_phase_one", "gray_initial_hand_four"] or service.get_max_hp_bonus() != 2 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 4:
+	if level_eight_opportunities != ["blue_max_hp_one", "green_slash_play_limit_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 1 or service.get_slash_limit_bonus() != 1:
 		return _fail("level_eight_opportunities=%s" % level_eight_opportunities)
 	state.conquest_state["level"] = 9
 	var level_nine_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_nine_opportunities != ["green_slash_play_limit_one"] or service.get_slash_limit_bonus() != 1:
+	if level_nine_opportunities != ["gray_initial_hand_four"] or service.get_initial_hand_bonus() != 5:
 		return _fail("level_nine_opportunities=%s" % level_nine_opportunities)
 	state.conquest_state["level"] = 10
 	# 第10关技能机缘必须与第5关不重复；比较稳定技能ID而非随机机缘品质。
@@ -178,7 +178,7 @@ func _test_level_bonus_service() -> bool:
 		return _fail("level_ten_skill_opportunity")
 	state.conquest_state["level"] = 13
 	var level_thirteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_thirteen_opportunities != ["purple_max_hp_two", "purple_draw_phase_one", "orange_damage_one"] or service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 3 or service.get_damage_bonus() != 1:
+	if level_thirteen_opportunities != ["purple_max_hp_two", "blue_draw_phase_one", "orange_damage_one"] or service.get_max_hp_bonus() != 3 or service.get_draw_phase_bonus() != 3 or service.get_damage_bonus() != 1:
 		return _fail("level_thirteen_opportunities=%s" % level_thirteen_opportunities)
 	state.conquest_state["level"] = 14
 	var level_fourteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
@@ -191,11 +191,11 @@ func _test_level_bonus_service() -> bool:
 		return _fail("level_fifteen_skill_opportunity")
 	state.conquest_state["level"] = 16
 	var level_sixteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_sixteen_opportunities != ["gray_initial_hand_one", "blue_max_hp_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 5 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 5:
+	if level_sixteen_opportunities != ["gray_initial_hand_one", "blue_max_hp_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 6:
 		return _fail("level_sixteen_opportunities=%s" % level_sixteen_opportunities)
 	state.conquest_state["level"] = 19
 	var level_nineteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_nineteen_opportunities.size() != 9 or service.get_max_hp_bonus() != 8 or service.get_draw_phase_bonus() != 7 or service.get_initial_hand_bonus() != 8:
+	if level_nineteen_opportunities.size() != 9 or service.get_max_hp_bonus() != 7 or service.get_draw_phase_bonus() != 7 or service.get_initial_hand_bonus() != 9:
 		return _fail("level_nineteen_opportunities=%s" % level_nineteen_opportunities)
 	return true
 
@@ -280,7 +280,7 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("replacement_opportunity_preview")
 	if not await _wait_for_conquest_replacement_opportunity():
 		return _fail("replacement_opportunity_delay")
-	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.character_generation != defeated_character_generation + 1 or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or enemy.acquired_opportunity_ids != ["blue_max_hp_one"] or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
+	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.character_generation != defeated_character_generation + 1 or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT + 1 or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) or enemy.mode_hand_limit_bonus != 0 or enemy.acquired_opportunity_ids != ["gray_initial_hand_one"] or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
 		return _fail("first_replacement")
 	if _controller.state.discard_pile.find(extra_enemy_card) < 0:
 		return _fail("replacement_discards_all_regions")

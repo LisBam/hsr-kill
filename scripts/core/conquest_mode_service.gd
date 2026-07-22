@@ -20,15 +20,15 @@ const LEVEL_FOURTEEN_EQUIPMENT_SUBTYPE_COUNT: int = 4
 
 ## 每个固定关卡授予的非技能机缘稳定ID；同一ID允许在不同关卡重复获得，并在右键机缘历史中按顺序显示。
 const FIXED_LEVEL_OPPORTUNITY_IDS: Dictionary = {
-	2:["blue_max_hp_one"],
-	3:["purple_draw_phase_one"],
-	4:["blue_hand_limit_two"],
+	2:["gray_initial_hand_one"],
+	3:["blue_hand_limit_two"],
+	4:["purple_draw_phase_one"],
 	6:["blue_max_hp_one"],
-	7:["purple_draw_phase_one"],
-	8:["gray_initial_hand_four"],
-	9:["green_slash_play_limit_one"],
+	7:["green_slash_play_limit_one"],
+	8:["purple_draw_phase_one"],
+	9:["gray_initial_hand_four"],
 	11:["purple_max_hp_two"],
-	12:["purple_draw_phase_one"],
+	12:["blue_draw_phase_one"],
 	13:["orange_damage_one"],
 	14:["gray_equip_distinct_four"],
 }

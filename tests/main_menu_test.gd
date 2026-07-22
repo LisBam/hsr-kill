@@ -206,6 +206,13 @@ func _run() -> void:
 	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
 		_fail("mode_scroll_layout title=%s cards=%s range=%s/%s" % [str(mode_list_title.custom_minimum_size if mode_list_title != null else Vector2.ZERO), str(mode_cards.get_theme_constant("separation") if mode_cards != null else -1), str(mode_scroll_bar.max_value if mode_scroll_bar != null else -1.0), str(mode_scroll_bar.page if mode_scroll_bar != null else -1.0)])
 		return
+	# 滑条轨道样式；上下内容边距为0才能让滑块在最小值和最大值处真正贴合轨道端点。
+	var mode_scroll_track_style: StyleBoxFlat = mode_scroll_bar.get_theme_stylebox("scroll") as StyleBoxFlat
+	# 滑条常态拖块样式；与轨道共用零边距几何，悬停和按下态由同一工厂生成。
+	var mode_scroll_grabber_style: StyleBoxFlat = mode_scroll_bar.get_theme_stylebox("grabber") as StyleBoxFlat
+	if mode_scroll_track_style == null or mode_scroll_grabber_style == null or not is_zero_approx(mode_scroll_track_style.content_margin_top) or not is_zero_approx(mode_scroll_track_style.content_margin_bottom) or not is_zero_approx(mode_scroll_grabber_style.content_margin_top) or not is_zero_approx(mode_scroll_grabber_style.content_margin_bottom):
+		_fail("mode_scroll_endpoint_margins track=%s/%s grabber=%s/%s" % [str(mode_scroll_track_style.content_margin_top if mode_scroll_track_style != null else -1.0), str(mode_scroll_track_style.content_margin_bottom if mode_scroll_track_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_top if mode_scroll_grabber_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_bottom if mode_scroll_grabber_style != null else -1.0)])
+		return
 	# 滚动到底部后第六张模式卡必须完整进入视口；证明模式入口没有依赖裁切区域外的不可点击节点。
 	mode_scroll.scroll_vertical = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
 	await get_tree().process_frame

@@ -85,9 +85,9 @@ func _test_catalog_and_weights() -> bool:
 	var weights: Dictionary = _controller.opportunity_system.get_quality_weights()
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
-	# 全部机缘卡目录；当前61张随机机缘与7张新增关卡机缘共68张，灰色卡仍属于目录与详情历史。
+	# 全部机缘卡目录；当前共69张，其中3张灰色卡只属于过关斩将关卡与详情历史。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 68 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 69 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 灰色机缘目录；三张都必须可供过关斩将授予，但禁止进入可随机抽取的品质顺序。
 	var gray_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("gray")
@@ -134,6 +134,7 @@ func _test_catalog_and_weights() -> bool:
 		"gray_equip_distinct_four":"进入战斗后随机使用牌堆或弃牌堆中的4张不同子类别的装备牌",
 		"gray_initial_hand_one":"初始手牌数+1",
 		"green_slash_play_limit_one":"出牌阶段使用【杀】的次数上限+1",
+		"blue_draw_phase_one":"摸牌阶段额外摸一张牌",
 		"purple_draw_phase_one":"摸牌阶段额外摸一张牌",
 		"purple_max_hp_two":"增加2点体力上限。",
 		"orange_damage_one":"造成的伤害+1",
@@ -593,5 +594,5 @@ func _finish_success() -> void:
 	_controller.opportunity_system.shutdown()
 	_main_instance.queue_free()
 	await get_tree().process_frame
-	print("OPPORTUNITY_SYSTEM_PASS cards=68 gray_excluded=true private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
+	print("OPPORTUNITY_SYSTEM_PASS cards=%d gray_excluded=true private=true reverse=true seat_swap=true character_swap=true limits=true hover=true" % OpportunityCatalog.CARD_DEFINITIONS.size())
 	get_tree().quit(0)

@@ -84,6 +84,12 @@ func score_ai_play_phase_action(_authoritative_snapshot: Dictionary, _action: Di
 	return 0.0
 
 
+## 返回装备等自定义动作实际生成的虚拟用牌动作；基础AI据此补入卡牌本体与持有者技能的完整联动收益。
+## 普通卡牌和非转化装备保持空字典；覆盖实现只能构造只读use_card代理动作，不能直接执行牌效。
+func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _evaluator: Object) -> Dictionary:
+	return {}
+
+
 ## 绑定需要持续存在于装备区等区域的卡牌实例；普通一次性卡牌无需调用本函数。
 func bind_runtime(match_host: Object, owner_player_id: int, card_uid: int) -> void:
 	runtime_host = match_host
