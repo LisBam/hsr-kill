@@ -1242,9 +1242,10 @@ func _render_header() -> void:
 	var match_mode: String = str(_snapshot.get("match_mode", "identity"))
 	var conquest_state: Dictionary = _snapshot.get("conquest_state", {}) as Dictionary
 	phase_label.text = "第%d轮" % int(_snapshot.get("round_number", 0))
-	conquest_level_label.visible = match_mode == IdentityRules.MODE_CONQUEST
-	if conquest_level_label.visible:
-		conquest_level_label.text = "第%d关" % int(conquest_state.get("level", 1))
+	if conquest_level_label != null:
+		conquest_level_label.visible = match_mode == IdentityRules.MODE_CONQUEST
+		if conquest_level_label.visible:
+			conquest_level_label.text = "第%d关" % int(conquest_state.get("level", 1))
 	center_turn_label.text = "牌堆剩余：%d" % int(_snapshot.get("draw_pile_count", 0))
 	_refresh_match_duration_label(true)
 
@@ -2620,7 +2621,8 @@ func _apply_ui_style() -> void:
 	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
 	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	conquest_level_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	if conquest_level_label != null:
+		conquest_level_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	match_menu.refresh_ui_style()
