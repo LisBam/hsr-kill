@@ -623,7 +623,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_primary_offline_human_player_id = local_human_player_id
 	_offline_manually_controlled_player_id = -1
 	_character_replacement_count = GameSettings.character_replacement_count
-	_character_candidate_count = GameSettings.character_candidate_count
+	_character_candidate_count = GameSettings.get_character_candidate_count_for_mode(actual_mode)
 	_wheel_duel_face_up_candidate_count = GameSettings.wheel_duel_face_up_candidate_count
 	_wheel_duel_face_down_candidate_count = GameSettings.wheel_duel_face_down_candidate_count
 	# 检查器兼容字段；运行时同步为房主设置锁定值，旧诊断与外部只读代码仍能看到本局实际候选数量。

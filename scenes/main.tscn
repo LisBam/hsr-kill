@@ -1385,7 +1385,7 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
-[node name="ConquestModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox"]
+[node name="ConquestModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=425616849]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
@@ -1393,7 +1393,7 @@ mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
 
-[node name="ConquestModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton"]
+[node name="ConquestModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton" unique_id=895808783]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -1407,19 +1407,19 @@ grow_vertical = 2
 mouse_filter = 2
 theme_override_constants/separation = 2
 
-[node name="ConquestModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent"]
+[node name="ConquestModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent" unique_id=127818140]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 27
 text = "过关斩将"
 
-[node name="ConquestModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent"]
+[node name="ConquestModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent" unique_id=1253392206]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "1人"
 
-[node name="ConquestModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton"]
+[node name="ConquestModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton" unique_id=1106655057]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
