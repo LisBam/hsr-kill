@@ -3,11 +3,12 @@ extends RefCounted
 
 ## 机缘卡静态目录。卡牌正文严格保存设计原文，运行时只通过稳定ID、品质与效果参数读取，不持有对局状态。
 
-## 品质从低到高的稳定顺序；抽取权重、颜色和文档均以该数组为唯一顺序来源。
+## 可随机抽取的品质从低到高的稳定顺序；灰色关卡专属机缘不在本数组中，因此永远不会进入三选一。
 const QUALITY_ORDER: Array[String] = ["green", "blue", "purple", "orange", "red"]
 
 ## 品质稳定ID到玩家可见名称的映射；界面不自行拼接“卡”字，避免不同入口显示不一致。
 const QUALITY_NAMES: Dictionary = {
+	"gray":"灰卡",
 	"green":"绿卡",
 	"blue":"蓝卡",
 	"purple":"紫卡",
@@ -17,6 +18,11 @@ const QUALITY_NAMES: Dictionary = {
 
 ## 全部机缘卡定义；description字段逐字保留主公给出的原文，effect与参数只服务权威结算。
 const CARD_DEFINITIONS: Array[Dictionary] = [
+	# 灰色机缘仅由过关斩将关卡授予；不在QUALITY_ORDER中，所以权重抽取与全零权重回退都不会选中。
+	{"id":"gray_initial_hand_four", "quality":"gray", "description":"初始手牌数+4", "effect":"initial_hand_bonus", "count":4},
+	{"id":"gray_equip_distinct_four", "quality":"gray", "description":"进入战斗后随机使用牌堆或弃牌堆中的4张不同子类别的装备牌", "effect":"equip_distinct_subtypes", "count":4},
+	{"id":"gray_initial_hand_one", "quality":"gray", "description":"初始手牌数+1", "effect":"initial_hand_bonus", "count":1},
+
 	{"id":"green_draw_two", "quality":"green", "description":"摸两张牌。", "effect":"draw", "count":2},
 	{"id":"green_recover_one", "quality":"green", "description":"回复1点体力。", "effect":"recover", "count":1},
 	{"id":"green_discard_two", "quality":"green", "description":"弃置一名角色区域内的两张牌。", "effect":"discard_two_from_player"},
@@ -24,6 +30,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"green_gain_one", "quality":"green", "description":"获得一名角色区域内的一张牌。", "effect":"gain_one_from_player"},
 	{"id":"green_link_three", "quality":"green", "description":"将至多三名角色的武将牌横置。", "effect":"link_targets", "max_targets":3},
 	{"id":"green_hand_limit_one", "quality":"green", "description":"手牌上限+1", "effect":"hand_limit", "count":1},
+	{"id":"green_slash_play_limit_one", "quality":"green", "description":"出牌阶段使用【杀】的次数上限+1", "effect":"slash_play_limit_bonus", "count":1},
 	{"id":"green_discard_one_each", "quality":"green", "description":"弃置任意名角色区域内各一张牌", "effect":"discard_one_each_target", "max_targets":10},
 	{"id":"green_virtual_nanman", "quality":"green", "description":"视为使用一张【南蛮入侵】", "effect":"virtual_card_use", "definition_id":"nanman"},
 	{"id":"green_virtual_wanjian", "quality":"green", "description":"视为使用一张【万箭齐发】", "effect":"virtual_card_use", "definition_id":"wanjian"},
@@ -48,6 +55,8 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 
 	{"id":"purple_reduce_max_hp", "quality":"purple", "description":"令一名角色减少1点体力上限。", "effect":"max_hp_target", "count":-1},
 	{"id":"purple_draw_five", "quality":"purple", "description":"摸五张牌。", "effect":"draw", "count":5},
+	{"id":"purple_draw_phase_one", "quality":"purple", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
+	{"id":"purple_max_hp_two", "quality":"purple", "description":"增加2点体力上限。", "effect":"max_hp", "count":2},
 	{"id":"purple_lose_hp_two", "quality":"purple", "description":"令一名角色失去2点体力。", "effect":"lose_hp_target", "count":2},
 	{"id":"purple_discard_all_hand", "quality":"purple", "description":"令一名角色弃置所有手牌。", "effect":"discard_all_hand_target"},
 	{"id":"purple_recover_full", "quality":"purple", "description":"将体力值回复至体力上限", "effect":"recover_full"},
@@ -63,6 +72,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_remove_until_round_end", "quality":"purple", "description":"令一名角色离场直到本轮结束", "effect":"remove_until_round_end_target"},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
+	{"id":"orange_damage_one", "quality":"orange", "description":"造成的伤害+1", "effect":"damage_bonus", "count":1},
 	{"id":"orange_skill_yongyi", "quality":"orange", "description":"获得技能“永屹”", "effect":"grant_skill", "skill_id":"yongyi"},
 	{"id":"orange_skill_junshi", "quality":"orange", "description":"获得技能“军势”", "effect":"grant_skill", "skill_id":"junshi"},
 	{"id":"orange_swap_seat", "quality":"orange", "description":"选择一名其他角色，你与其交换座位。", "effect":"swap_seat_target"},

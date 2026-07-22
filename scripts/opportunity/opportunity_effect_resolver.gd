@@ -82,6 +82,9 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 		"grant_skill":
 			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), int(card_definition.get("per_turn_limit", 0)), int(card_definition.get("total_limit", 0)), "opportunity", true, int(card_definition.get("per_round_limit", 0)))
 			_system.complete_current_effect()
+		"draw_phase_bonus", "slash_play_limit_bonus", "damage_bonus", "initial_hand_bonus", "equip_distinct_subtypes":
+			# 被动机缘已在全体选择完成时写入角色历史；控制器在对应规则查询点从历史汇总，无须重复修改状态。
+			_system.complete_current_effect()
 		"double_max_hp":
 			# 体力上限翻倍目标；增加量等于结算时的当前上限，后续其他修正不会回溯重算。
 			var max_hp_owner: PlayerState = _state.get_player(owner_player_id)

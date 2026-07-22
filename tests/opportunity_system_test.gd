@@ -25,6 +25,8 @@ func _ready() -> void:
 	_setup_test_state()
 	if not _test_catalog_and_weights():
 		return
+	if not _test_passive_opportunity_effects():
+		return
 	if not await _test_opportunity_card_hover():
 		return
 	if not _test_private_choice_and_counterclockwise_order():
@@ -83,11 +85,28 @@ func _test_catalog_and_weights() -> bool:
 	var weights: Dictionary = _controller.opportunity_system.get_quality_weights()
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
-	# 全部机缘卡目录；原45张加本批17张共62张，任何遗漏都会改变三选一内容范围。
-	# 当前已移除橙色行军机缘，目录共61张；旧ID回流同样视为失败。
+	# 全部机缘卡目录；当前61张随机机缘与7张新增关卡机缘共68张，灰色卡仍属于目录与详情历史。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 61 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 68 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
+	# 灰色机缘目录；三张都必须可供过关斩将授予，但禁止进入可随机抽取的品质顺序。
+	var gray_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("gray")
+	if gray_cards.size() != 3 or OpportunityCatalog.QUALITY_ORDER.has("gray"):
+		return _fail("gray_catalog=%s quality_order=%s" % [gray_cards, OpportunityCatalog.QUALITY_ORDER])
+	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
+	_controller.opportunity_system.green_weight = 0
+	_controller.opportunity_system.blue_weight = 0
+	_controller.opportunity_system.purple_weight = 0
+	_controller.opportunity_system.orange_weight = 0
+	_controller.opportunity_system.red_weight = 0
+	var fallback_card: Dictionary = _controller.opportunity_system._draw_single_card([])
+	if fallback_card.is_empty() or str(fallback_card.get("quality", "")) == "gray":
+		return _fail("gray_random_fallback=%s" % fallback_card)
+	_controller.opportunity_system.green_weight = 100
+	_controller.opportunity_system.blue_weight = 80
+	_controller.opportunity_system.purple_weight = 60
+	_controller.opportunity_system.orange_weight = 30
+	_controller.opportunity_system.red_weight = 10
 	# 关键原文卡；重复“获得获得”属于主公钦定正文，测试确保实现不会擅自润色。
 	var preserved_card: Dictionary = OpportunityCatalog.get_card("red_gain_sha_zaixian")
 	if str(preserved_card.get("description", "")) != "从牌堆或弃牌堆中获得三张【杀】并获得获得技能“再现”":
@@ -111,12 +130,42 @@ func _test_catalog_and_weights() -> bool:
 		"red_all_hand_view_as_wuzhong":"所有手牌视为【无中生有】直到离开你的手牌区",
 		"red_gain_all_equipment":"获得牌堆与弃牌堆与场上的所有装备牌",
 		"red_gain_random_three_each":"获得每名角色区域内的随机三张牌",
+		"gray_initial_hand_four":"初始手牌数+4",
+		"gray_equip_distinct_four":"进入战斗后随机使用牌堆或弃牌堆中的4张不同子类别的装备牌",
+		"gray_initial_hand_one":"初始手牌数+1",
+		"green_slash_play_limit_one":"出牌阶段使用【杀】的次数上限+1",
+		"purple_draw_phase_one":"摸牌阶段额外摸一张牌",
+		"purple_max_hp_two":"增加2点体力上限。",
+		"orange_damage_one":"造成的伤害+1",
 	}
 	for card_id_variant: Variant in new_descriptions.keys():
 		# 当前新增卡ID与精确原文；目录缺失同样会得到空字符串并失败。
 		var card_id: String = str(card_id_variant)
 		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
 			return _fail("new_description_%s" % card_id)
+	return true
+
+
+## 验证摸牌、【杀】次数与伤害三类新被动机缘从角色历史统一生效，不依赖过关斩将专用数值分支。
+func _test_passive_opportunity_effects() -> bool:
+	# 机缘持有者；直接写入已获得历史模拟全体选择完成后的权威状态。
+	var owner: PlayerState = _controller.state.get_player(0)
+	# 伤害目标；保持正体力，避免本测试进入濒死救援窗口而遮蔽数值断言。
+	var target: PlayerState = _controller.state.get_player(1)
+	if owner == null or target == null:
+		return _fail("passive_opportunity_players")
+	owner.acquired_opportunity_ids = ["purple_draw_phase_one", "green_slash_play_limit_one", "orange_damage_one"]
+	# 【杀】定义；读取正式共同次数组，普通、火与雷【杀】均由控制器按该组增加上限。
+	var slash_definition: Dictionary = GameDatabase.get_card("sha")
+	if _controller._get_phase_draw_base_count(owner.player_id) != 3 or _controller.skill_play_count_limit_bonus(owner.player_id, slash_definition) != 1:
+		return _fail("passive_opportunity_draw_or_slash")
+	target.hp = 4
+	target.shield = 0
+	_controller.damage(owner.player_id, target.player_id, 1, "normal", "opportunity_test")
+	if target.hp != 2:
+		return _fail("passive_opportunity_damage hp=%d" % target.hp)
+	owner.acquired_opportunity_ids.clear()
+	target.hp = 4
 	return true
 
 
@@ -544,5 +593,5 @@ func _finish_success() -> void:
 	_controller.opportunity_system.shutdown()
 	_main_instance.queue_free()
 	await get_tree().process_frame
-	print("OPPORTUNITY_SYSTEM_PASS cards=61 private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
+	print("OPPORTUNITY_SYSTEM_PASS cards=68 gray_excluded=true private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
 	get_tree().quit(0)

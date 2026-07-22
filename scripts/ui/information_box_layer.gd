@@ -948,8 +948,8 @@ func _append_character_opportunity_section() -> void:
 		var opportunity_id: String = str(opportunity_id_variant)
 		# 当前机缘静态定义；正文保持目录中主公钦定原文，不在详情层重新解释效果。
 		var opportunity_definition: Dictionary = OpportunityCatalog.get_card(opportunity_id)
-		# 当前品质中文；未知品质回退“未知”，仅用于资料标识而不参与抽取权重。
-		var quality_name: String = str({"green":"绿色", "blue":"蓝色", "purple":"紫色", "orange":"橙色", "red":"红色"}.get(str(opportunity_definition.get("quality", "")), "未知"))
+		# 当前品质中文；灰色表示仅由关卡授予且不参与随机抽取，未知值只用于暴露内容配置错误。
+		var quality_name: String = str({"gray":"灰色", "green":"绿色", "blue":"蓝色", "purple":"紫色", "orange":"橙色", "red":"红色"}.get(str(opportunity_definition.get("quality", "")), "未知"))
 		# 单个机缘历史条目；名称与正文分行，保持长规则原文可自动换行。
 		var opportunity_entry: VBoxContainer = VBoxContainer.new()
 		opportunity_entry.add_theme_constant_override("separation", 4)

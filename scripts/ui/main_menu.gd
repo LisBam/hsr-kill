@@ -469,6 +469,17 @@ func refresh_ui_style() -> void:
 	(%MainMenuMulliganLimitLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuCharacterReplacementCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuCharacterCandidateCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	# 车轮战两项候选设置与其他开局规则共享主题字体色；避免模式切换后回退到场景默认白字。
+	# 明置候选标签；精简的界面回归场景可能不含车轮战设置，缺失时只跳过表现覆盖。
+	var wheel_duel_face_up_candidate_label: Label = get_node_or_null("%WheelDuelFaceUpCandidateLabel") as Label
+	if wheel_duel_face_up_candidate_label != null:
+		wheel_duel_face_up_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		wheel_duel_face_up_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	# 暗置候选标签；与明置标签独立校验，避免局部场景缓存缺失其中一项时中断整页主题刷新。
+	var wheel_duel_face_down_candidate_label: Label = get_node_or_null("%WheelDuelFaceDownCandidateLabel") as Label
+	if wheel_duel_face_down_candidate_label != null:
+		wheel_duel_face_down_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		wheel_duel_face_down_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -1151,6 +1162,8 @@ func _apply_slider_style(slider: HSlider) -> void:
 func _apply_spin_box_style(spin_box: SpinBox) -> void:
 	# SpinBox 内部文本框；只负责显示和编辑人数，不另存人数配置。
 	var line_edit: LineEdit = spin_box.get_line_edit()
+	# 直接指定全局回退字体，保证运行时创建的 SpinBox 编辑框与菜单其余中文控件使用同一字体来源。
+	line_edit.add_theme_font_override("font", ThemeDB.fallback_font)
 	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
 	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))

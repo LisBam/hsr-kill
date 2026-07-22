@@ -2627,8 +2627,11 @@ func _apply_ui_style() -> void:
 	($BackdropShade as ColorRect).color = BattleUIStyle.get_color("backdrop_shade", Color.TRANSPARENT)
 	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
 	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	# 顶栏轮次与关卡统一指定回退字体；动态显示“第N关”时不会因场景默认主题差异出现字形不一致。
+	phase_label.add_theme_font_override("font", ThemeDB.fallback_font)
 	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	if conquest_level_label != null:
+		conquest_level_label.add_theme_font_override("font", ThemeDB.fallback_font)
 		conquest_level_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))

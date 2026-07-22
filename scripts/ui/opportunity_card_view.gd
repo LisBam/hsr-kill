@@ -107,8 +107,9 @@ func set_interactive(interactive: bool) -> void:
 
 ## 根据品质应用整张卡面颜色；颜色仅表达稀有度，不改变正文与规则数值。
 func _apply_quality_style(quality_id: String) -> void:
-	# 品质主色；五种颜色在深色牌桌上保持足够亮度并与武将牌金属边框风格协调。
+	# 品质主色；灰色用于不参与随机抽取的关卡专属机缘，其余五种颜色用于普通三选一卡池。
 	_quality_color = {
+		"gray":Color("707782"),
 		"green":Color("3f8f58"),
 		"blue":Color("356fa8"),
 		"purple":Color("7550a8"),

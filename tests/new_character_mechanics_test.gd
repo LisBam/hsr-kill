@@ -730,6 +730,31 @@ func _test_huanyang_and_sefu() -> bool:
 		return _fail("sefu_equipment_choice")
 	if not _controller.state.get_player(1).hand.has(gained_same_length_card) or _controller.state.get_player(1).equipment.has("weapon") or not _controller.state.discard_pile.has(target_equipment):
 		return _fail("sefu_result hand=%d equipment=%s" % [_controller.state.get_player(1).hand.size(), _controller.state.get_player(1).equipment])
+	# 濒死目标被【桃】救回后，damageSource 只在救援流程完成时派发；还阳必须仍能回复雪衣1点体力。
+	_reset_state(2)
+	var rescued_xveyi: PlayerState = _controller.state.get_player(0)
+	# 还阳持有者受伤；从3点回复到4点可证明尾部时机没有因目标濒死而丢失。
+	rescued_xveyi.hp = 3
+	# 濒死目标；先降至1点体力，再受到1点伤害以创建标准求桃窗口。
+	var rescued_target: PlayerState = _controller.state.get_player(1)
+	rescued_target.hp = 1
+	# 自救桃；使用后目标会恢复至1点体力并继续伤害来源尾部。
+	var rescue_peach: CardInstance = _add_hand_card(1, "tao", "heart", 9)
+	var rescued_huanyang: SkillDefinition = _install_single_skill(0, "huanyang")
+	if rescued_huanyang == null:
+		return _fail("huanyang_dying_skill_missing")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "dying_response":
+		return _fail("huanyang_dying_prompt=%s" % _controller._pending_card_choice)
+	# 救援顺序从当前回合角色开始；雪衣没有【桃】时先明确放弃，再由濒死目标使用自己的【桃】。
+	if not _submit_pending_choice(0, [], [], false):
+		return false
+	if not _controller.has_pending_card_choice() or int(_controller._pending_card_choice.get("chooser_id", -1)) != 1:
+		return _fail("huanyang_dying_self_rescue_prompt=%s" % _controller._pending_card_choice)
+	if not _submit_pending_choice(1, [rescue_peach.uid], [], true):
+		return false
+	if rescued_target.hp != 1 or rescued_xveyi.hp != 4:
+		return _fail("huanyang_after_dying_rescue target=%d owner=%d" % [rescued_target.hp, rescued_xveyi.hp])
 	return true
 
 
@@ -1865,6 +1890,10 @@ func _test_misha_and_alan_skills() -> bool:
 		return false
 	if not qingli_result.is_empty() or _controller.state.get_player(0).hp != 3 or _controller.state.get_player(1).hp != 3:
 		return _fail("qingli_virtual_slash result=%s hp=%d/%d" % [qingli_result, _controller.state.get_player(0).hp, _controller.state.get_player(1).hp])
+	# 仅剩1点体力时仍允许在响应窗口发动；失去体力后的濒死与父响应恢复交由统一续接处理。
+	_controller.state.get_player(0).hp = 1
+	if not qingli.can_activate({"active_entry":"chooseToRespond", "response_patterns":["sha"]}):
+		return _fail("qingli_one_hp_response_disabled")
 	_reset_state(2)
 	# 红色强攻费用；应只写入不可响应的直击目标。
 	var qianggong_red: SkillDefinition = GameDatabase.create_skill("qianggong")

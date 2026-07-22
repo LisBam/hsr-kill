@@ -200,6 +200,15 @@ func _test_chain_targets_and_ai() -> bool:
 	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), legal_actions)
 	if str(chosen_action.get("action_type", "")) != "use_card" or int(chosen_action.get("card_uid", -1)) != chain.uid or (chosen_action.get("target_ids", []) as Array).size() != 2:
 		return _fail("chain_ai_action=%s" % [chosen_action])
+	# 两名敌方已经横置时，继续指定会帮助其解除连环；AI应选择同一张牌的重铸动作而非无收益使用。
+	_controller.state.get_player(1).chained = true
+	_controller.state.get_player(2).chained = true
+	var recast_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
+	if str(recast_action.get("action_type", "")) != "recast_card" or int(recast_action.get("card_uid", -1)) != chain.uid:
+		return _fail("chain_ai_recast=%s" % [recast_action])
+	# 还原星火触发场景的初始竖置状态；该断言只验证AI决策，不应改变后续状态切换用例。
+	_controller.state.get_player(1).chained = false
+	_controller.state.get_player(2).chained = false
 	# 星火运行时技能；同一唯一目标连续触发两次应先横置再竖置。
 	var xinghuo: SkillDefinition = GameDatabase.create_skill("xinghuo")
 	xinghuo.bind(_controller, 0)

@@ -69,7 +69,7 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 相邻阶段与自动响应之间的最小等待秒数；正式菜单限制为0.1至1.0秒，规则测试可设为0关闭表现节奏。
 @export_range(0.0, 1.0, 0.1) var game_flow_interval_seconds: float = 0.30
 
-## 过关斩将敌方新武将入场后展示至玩家机缘弹出的等待秒数；默认1.20秒，测试可设为0关闭表现节奏。
+## 过关斩将敌方死亡后等待区域弃牌表现完成、再让新武将入场并弹出机缘的等待秒数；默认1.20秒，测试可设为0关闭表现节奏。
 @export_range(0.0, 5.0, 0.05) var conquest_enemy_replacement_opportunity_delay_seconds: float = 1.20
 
 ## 延时锦囊进入中央展示后等待再开始无懈与判定的秒数；默认1.00秒保证玩家能辨认当前结算牌，运行时通常无需动态修改。
@@ -209,8 +209,8 @@ var gameplay_pause_service: GameplayPauseService
 ## 对局流程节奏组件；只负责可取消计时，不读取规则状态或决定下一阶段。
 var game_flow_pacer: GameFlowPacer
 
-## 敌方换将展示等待持有的暂停令牌；-1表示当前没有延迟机缘任务阻塞原卡牌结算。
-var _conquest_replacement_opportunity_pause_token: int = -1
+## 过关斩将敌方换将过渡是否正在等待弃牌表现或机缘选择；true 时阻止旧回合重新建立操作，表现层仍保持正常播放。
+var _conquest_replacement_transition_active: bool = false
 
 ## 触发器排序组件；保留与同步 RuleEventBus 的兼容边界，逐步承载技能时机排序。
 var trigger_manager: TriggerManager
@@ -700,6 +700,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_active_card_resolutions.clear()
 	_card_use_contexts.clear()
 	_pending_damage_finalizations.clear()
+	_conquest_replacement_transition_active = false
 	_started_phase_lifecycles.clear()
 	_queued_equipment_triggers.clear()
 	_current_turn_event_id = -1
@@ -1026,6 +1027,9 @@ func submit_action(action: PlayerAction) -> bool:
 		return true
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
+	# 过关斩将换将过渡只允许随后创建的机缘选择提交；旧回合遗留的出牌按钮或 AI 动作不能越过死亡结算继续执行。
+	if _conquest_replacement_transition_active and action.action_type != "choose_opportunity":
+		return _reject("敌方正在重新入场，请等待机缘选择。")
 	# 离场技选择许可；只接受当前权威请求中明确写入的同一选择者和请求ID，旧请求或伪造普通动作无法复用该例外。
 	var out_of_game_choice_allowed: bool = false
 	# 机缘选择属于模式级三选一；离场角色仍可提交，但候选ID与当前选择者继续由机缘组件权威复核。
@@ -3275,9 +3279,8 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	var card_user_id: int = int(source_context.get("card_user_id", source_id))
 	# 最终伤害值；先应用武器增伤，再应用防具修正与事件处理器。
 	var final_amount: int = amount
-	# 过关斩将第13关起敌方造成伤害+1；仅正数伤害进入本入口，因此不会把0伤害或无效目标转为伤害。
-	if conquest_mode != null and conquest_mode.is_enemy(source_id):
-		final_amount += conquest_mode.get_damage_bonus()
+	# 造成伤害加成机缘；机缘历史是唯一来源，过关斩将与普通机缘模式都通过同一查询生效。
+	final_amount += get_acquired_opportunity_effect_total(source_id, "damage_bonus")
 	# 伤害父事件；多级 Begin、扣血、濒死和来源事件均通过该 ID 建立可回放关系。
 	var damage_event_id: int = _record_runtime_event("DamageEvent", "damage", {"source_id":source_id, "target_id":target_id, "amount":amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer})
 	# 伤害生命周期共享数据；四个修改窗口逐次读取上一时机写回的 amount，保证数值修改链可预测。
@@ -6309,7 +6312,7 @@ func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	# 模式开局体力上限加值；身份局领袖在不少于5人时+1，斗地主地主固定+1。
 	var opening_max_hp_bonus: int = identity_rules.get_opening_max_hp_bonus(player.identity, state.players.size(), str(state.match_mode))
 	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + opening_max_hp_bonus
-	# 过关斩将敌方增益在每次新武将入场时重新依据当前关卡叠加；其他角色或模式保持0。
+	# 过关斩将敌方的体力与手牌上限从已获得关卡机缘重新汇总；其他角色不写模式专属字段。
 	if conquest_mode != null and conquest_mode.is_enemy(player.player_id):
 		player.max_hp += conquest_mode.get_max_hp_bonus()
 		player.mode_hand_limit_bonus = conquest_mode.get_hand_limit_bonus()
@@ -6318,6 +6321,22 @@ func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	player.hp = player.max_hp
 	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
 	player.shield = 0
+
+
+## 从角色已获得机缘历史中累加指定效果数值；目录定义是伤害、摸牌与次数加成的唯一数值来源。
+func get_acquired_opportunity_effect_total(player_id: int, effect_id: String) -> int:
+	# 当前机缘持有者；无效来源或空效果名不产生任何修正，保证无来源伤害等路径安全。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or effect_id.is_empty():
+		return 0
+	# 累计效果值；允许同一机缘在不同时机重复获得并按每张卡的count叠加。
+	var result: int = 0
+	for opportunity_id: String in player.acquired_opportunity_ids:
+		# 当前机缘定义；未知历史ID只跳过，不应使对局规则或回放失效。
+		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		if str(opportunity_card.get("effect", "")) == effect_id:
+			result += int(opportunity_card.get("count", 0))
+	return result
 
 
 ## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
@@ -6350,9 +6369,9 @@ func skill_play_count_limit_bonus(player_id: int, card_definition: Dictionary) -
 		var skill: SkillDefinition = skill_variant as SkillDefinition
 		if skill != null:
 			total_bonus += maxi(skill.get_play_count_limit_bonus(card_definition), 0)
-	# 过关斩将第9关后，敌方出牌阶段使用【杀】的次数上限额外+1；按同一slash分组覆盖属性杀。
-	if conquest_mode != null and conquest_mode.is_enemy(player_id) and str(card_definition.get("play_limit_group", card_definition.get("id", ""))) == "slash":
-		total_bonus += conquest_mode.get_slash_limit_bonus()
+	# 【杀】次数机缘按共同次数组作用于普通、火与雷【杀】，普通机缘模式与过关斩将使用同一历史查询。
+	if str(card_definition.get("play_limit_group", card_definition.get("id", ""))) == "slash":
+		total_bonus += get_acquired_opportunity_effect_total(player_id, "slash_play_limit_bonus")
 	return total_bonus
 
 
@@ -8256,6 +8275,8 @@ func _resume_next_rule_continuation() -> void:
 			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 		"round_end_restore":
 			_continue_round_end_after_restore(int(context.get("finished_player_id", -1)))
+		"conquest_enemy_replacement":
+			_begin_conquest_enemy_replacement(context)
 		"opportunity_resolution":
 			if opportunity_system != null:
 				opportunity_system.continue_after_barrier()
@@ -8263,11 +8284,11 @@ func _resume_next_rule_continuation() -> void:
 
 ## 按触发、装备、规则后半段、技能后续的固定优先级排空当前结算，最后才恢复阶段或父牌游标。
 func _resume_settlement_pipeline() -> void:
-	if state == null or state.game_over or has_pending_card_choice():
+	if state == null or state.game_over or has_pending_card_choice() or _conquest_replacement_transition_active:
 		return
 	# 单次恢复保护计数；正常每轮都会移除至少一条队列记录，达到检查器上限时延后一帧继续而不推进父流程。
 	var settlement_step_count: int = 0
-	while state != null and not state.game_over and not has_pending_card_choice() and settlement_step_count < max_settlement_steps_per_pass:
+	while state != null and not state.game_over and not has_pending_card_choice() and not _conquest_replacement_transition_active and settlement_step_count < max_settlement_steps_per_pass:
 		settlement_step_count += 1
 		# 同一规则时机尚未询问的技能必须先完成，不能让原操作的后半段越过触发顺序。
 		_resume_deferred_rule_timing_dispatches()
@@ -8292,7 +8313,7 @@ func _resume_settlement_pipeline() -> void:
 	if settlement_step_count >= max_settlement_steps_per_pass and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
 		call_deferred("_resume_settlement_pipeline")
 		return
-	if state != null and not state.game_over and not has_pending_card_choice():
+	if state != null and not state.game_over and not has_pending_card_choice() and not _conquest_replacement_transition_active:
 		_resume_interrupted_turn_flow()
 		# 阶段恢复可能刚刚完成额外弃牌阶段并暴露新的技能“然后”步骤；延后一帧再次排空，避免后续额外出牌阶段被嵌套询问吞掉。
 		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
@@ -10201,63 +10222,93 @@ func _resolve_conquest_enemy_replacement(victim: PlayerState, killer_id: int, de
 	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
 	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "conquest_replacement":true}, death_event_id)
 	add_log("%s击败敌方武将【%s】。" % [format_player_log_name(killer_id), defeated_character_name])
+	# 旧武将从死亡时机结束起立即失效；随后伤害尾部只能被真正的伤害来源触发，不能被下一名入场武将继承为受伤时机。
+	victim.alive = false
+	victim.dying = false
+	victim.death_confirmed = true
+	victim.identity_revealed = true
 	_discard_all_conquest_player_cards(victim)
-	# 关卡必须在新武将写入前提升，使本次入场立刻取得刚刚达成的全部层数增强。
+	_record_runtime_event("dieAfter", "death", {"victim_id":victim.player_id, "game_over":false, "conquest_replacement":true}, {}, death_event_id)
+	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "conquest_replacement":true}, death_event_id)
+	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "conquest_replacement":true}, death_event_id)
+	if player_mark_service != null:
+		player_mark_service.clear_marks_for_dead_player(victim.player_id)
+	# 先登记换将续接，再排空旧伤害尾部。若【摄伏】等来源技能创建选择，尾部续接会压在本记录上方，确认后才安全开始换将。
+	_defer_rule_continuation("conquest_enemy_replacement", {"defeated_enemy_id":victim.player_id, "current_player_id":state.current_player_id})
+	_finish_pending_damage(victim.player_id)
+	_resume_settlement_pipeline()
+
+
+## 在旧角色死亡、弃牌移动和伤害来源尾部全部结束后冻结旧回合，并等待表现层完成弃牌动画。
+func _begin_conquest_enemy_replacement(context: Dictionary) -> void:
+	if state == null or state.game_over or conquest_mode == null or _conquest_replacement_transition_active:
+		return
+	# 旧回合阶段；机缘完成后仍要依据击杀者所在回合决定继续出牌或直接换回玩家。
+	var resume_phase: String = state.current_phase
+	# 旧阶段游标；额外阶段或阶段中击杀恢复时必须保留，不能把玩家强制跳到新的回合起点。
+	var resume_phase_index: int = state.phase_index
+	var replacement_context: Dictionary = context.duplicate(true)
+	replacement_context["resume_phase"] = resume_phase
+	replacement_context["resume_phase_index"] = resume_phase_index
+	_conquest_replacement_transition_active = true
+	state.current_phase = "conquest_replacing"
+	_emit_state()
+	# 本等待不申请 GameplayPauseService；弃牌飞向弃牌堆的 Tween 与伤害反馈必须持续播放。
+	if conquest_enemy_replacement_opportunity_delay_seconds <= 0.0 or game_flow_pacer == null:
+		_complete_conquest_enemy_replacement(replacement_context)
+		return
+	game_flow_pacer.schedule(CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY, conquest_enemy_replacement_opportunity_delay_seconds, Callable(self, "_complete_conquest_enemy_replacement").bind(replacement_context), false)
+
+
+## 在弃牌表现等待结束后创建新的敌方武将；此时旧伤害事件已经排空，新技能不会接收旧角色的受伤时机。
+func _complete_conquest_enemy_replacement(context: Dictionary) -> void:
+	if state == null or state.game_over or conquest_mode == null or not _conquest_replacement_transition_active:
+		_cancel_conquest_replacement_opportunity_preview()
+		return
+	var enemy_id: int = int(context.get("defeated_enemy_id", conquest_mode.get_enemy_id()))
+	var enemy: PlayerState = state.get_player(enemy_id)
+	if enemy == null:
+		_cancel_conquest_replacement_opportunity_preview()
+		return
+	# 关卡必须在新武将写入前提升并记录本层固定机缘，使本次入场立刻从机缘历史取得全部数值效果。
 	var new_level: int = conquest_mode.advance_level()
+	# 本层新增的固定机缘；先写入敌方历史，再应用新武将以便体力与手牌上限在基础属性刷新时正确汇总。
+	var newly_awarded_fixed_opportunity_ids: Array[String] = conquest_mode.award_fixed_opportunities_through_current_level()
+	_record_conquest_enemy_opportunities(enemy, newly_awarded_fixed_opportunity_ids)
 	var character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		character_ids.append(str(character_id_variant))
-	var next_character_id: String = conquest_mode.choose_replacement_character(victim.character_id, character_ids)
+	var next_character_id: String = conquest_mode.choose_replacement_character(enemy.character_id, character_ids)
 	if next_character_id.is_empty():
-		# 武将库在运行中异常清空时不留下无法行动的假存活敌人，退回标准真实死亡结算。
-		victim.alive = false
-		victim.dying = false
-		victim.death_confirmed = true
 		_check_game_over()
-		_finish_pending_damage(victim.player_id)
+		_cancel_conquest_replacement_opportunity_preview()
 		return
-	_apply_character(victim, next_character_id, true)
-	_reinstall_character_skills_for_player(victim)
-	_restore_conquest_enemy_skills(victim)
-	_equip_conquest_enemy_from_piles(victim.player_id)
-	victim.hp = victim.max_hp
-	victim.shield = 0
-	victim.alive = true
-	victim.dying = false
-	victim.death_confirmed = false
-	victim.chained = false
-	victim.face_down = false
-	victim.skipped_phases.clear()
-	victim.slash_count = 0
-	victim.wine_used = false
-	victim.wine_bonus = 0
-	victim.wooden_ox_used = false
+	_apply_character(enemy, next_character_id, true)
+	_reinstall_character_skills_for_player(enemy)
+	_restore_conquest_enemy_skills(enemy)
+	_equip_conquest_enemy_from_piles(enemy.player_id)
+	enemy.hp = enemy.max_hp
+	enemy.shield = 0
+	enemy.alive = true
+	enemy.dying = false
+	enemy.death_confirmed = false
+	enemy.chained = false
+	enemy.face_down = false
+	enemy.skipped_phases.clear()
+	enemy.slash_count = 0
+	enemy.wine_used = false
+	enemy.wine_bonus = 0
+	enemy.wooden_ox_used = false
 	# 换将基础摸4张；第8关和无限层数的初始手牌增强在这项基础上累加。
 	var entry_draw_count: int = ConquestModeService.REPLACEMENT_DRAW_COUNT + conquest_mode.get_initial_hand_bonus()
-	draw(victim.player_id, entry_draw_count)
-	add_log("敌方以【%s】进入第%d关，体力补至%d并摸%d张牌。" % [GameDatabase.resolve_character_name(next_character_id), new_level, victim.max_hp, entry_draw_count])
-	_record_runtime_event("dieAfter", "death", {"victim_id":victim.player_id, "game_over":false, "conquest_replacement":true, "level":new_level, "next_character_id":next_character_id}, {}, death_event_id)
-	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "conquest_replacement":true, "level":new_level}, death_event_id)
-	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "conquest_replacement":true, "level":new_level}, death_event_id)
-	if player_mark_service != null:
-		player_mark_service.clear_marks_for_dead_player(victim.player_id)
-	_finish_pending_damage(victim.player_id)
-	# 敌方新武将完整入场后，先展示其武将牌，再固定由玩家选择一次机缘；当前回合的后继在机缘全部结算后按行动者决定。
-	_queue_conquest_replacement_opportunity({"defeated_enemy_id":victim.player_id, "current_player_id":state.current_player_id})
+	draw(enemy.player_id, entry_draw_count)
+	add_log("敌方以【%s】进入第%d关，体力补至%d并摸%d张牌。" % [GameDatabase.resolve_character_name(next_character_id), new_level, enemy.max_hp, entry_draw_count])
+	_begin_conquest_replacement_opportunity(context)
 
 
-## 暂停原卡牌与阶段结算并展示敌方新武将，等待指定秒数后再创建玩家机缘选择；等待期间不改变原回合阶段。
+## 敌方完成重新入场后发起单人机缘选择；换将过渡仍保持阻塞，防止旧回合在机缘前重建操作。
 func _queue_conquest_replacement_opportunity(context: Dictionary) -> void:
-	if state == null or state.game_over or conquest_mode == null:
-		return
-	# 展示等待关闭时直接进入机缘，保留无头测试和快速调试的同步流程。
-	if conquest_enemy_replacement_opportunity_delay_seconds <= 0.0 or game_flow_pacer == null:
-		_begin_conquest_replacement_opportunity(context)
-		return
-	# 新武将已经写入权威状态；先发布快照再暂停，确保玩家能在计时内看清其武将牌和入场增益。
-	_emit_state()
-	_conquest_replacement_opportunity_pause_token = acquire_gameplay_pause("conquest_enemy_replacement_preview")
-	game_flow_pacer.schedule(CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY, conquest_enemy_replacement_opportunity_delay_seconds, Callable(self, "_begin_conquest_replacement_opportunity").bind(context.duplicate(true)), true)
+	_begin_conquest_replacement_opportunity(context)
 
 
 ## 展示等待结束后发起单人机缘；机缘自身会接管暂停令牌，失败时才立即恢复原回合后继。
@@ -10268,23 +10319,16 @@ func _begin_conquest_replacement_opportunity(context: Dictionary) -> void:
 	# 玩家稳定ID；敌方换将后的机缘永远只由玩家从三张候选中选择。
 	var player_id: int = conquest_mode.get_player_id()
 	var opportunity_started: bool = opportunity_system != null and opportunity_system.force_trigger_for_players(player_id, [player_id], "conquest_enemy_replacement", context)
-	# 新机缘流程已经持有自己的暂停令牌；后释放展示令牌不会让旧卡牌结算跨过当前选择。
-	_cancel_conquest_replacement_opportunity_preview()
 	if opportunity_started:
 		return
 	_finish_conquest_replacement_turn(context)
 
 
-## 取消敌方换将展示等待并释放其暂停令牌；重开、异常终局和正常计时结束均通过本入口清理。
+## 取消敌方换将表现等待并清除过渡状态；重开、异常终局和无候选武将均通过本入口清理。
 func _cancel_conquest_replacement_opportunity_preview() -> void:
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel(CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY)
-	if _conquest_replacement_opportunity_pause_token < 0:
-		return
-	# 当前展示暂停令牌；先清空字段再释放，防止暂停状态回调重入时重复释放。
-	var pause_token: int = _conquest_replacement_opportunity_pause_token
-	_conquest_replacement_opportunity_pause_token = -1
-	release_gameplay_pause(pause_token)
+	_conquest_replacement_transition_active = false
 
 
 ## 弃置过关斩将敌方当前区域内的全部牌；手牌、装备、判定区与木牛“粮”均属于“区域内所有牌”。
@@ -10300,15 +10344,32 @@ func _discard_all_conquest_player_cards(player: PlayerState) -> void:
 		_move_to_discard(player.wooden_ox_storage.pop_back())
 
 
-## 重新安装过关斩将层数抽取的机缘技能；武将切换会卸载旧运行时实例，因此同一稳定技能需按服务快照恢复。
+## 重新安装过关斩将获得技能机缘；武将切换会卸载旧运行时实例，因此所有历史技能机缘需按服务快照恢复。
 func _restore_conquest_enemy_skills(enemy: PlayerState) -> void:
 	if enemy == null or conquest_mode == null:
 		return
-	var newly_granted_skill_ids: Array[String] = conquest_mode.ensure_skill_rewards(enemy)
-	for skill_id: String in conquest_mode.get_enemy_skill_ids():
-		grant_acquired_skill(enemy.player_id, skill_id, 0, 0, "conquest", false)
-	for newly_granted_skill_id: String in newly_granted_skill_ids:
-		add_log("第%d关敌方获得机缘技能【%s】。" % [conquest_mode.get_level(), str(GameDatabase.get_skill(newly_granted_skill_id).get("name", newly_granted_skill_id))])
+	# 本层新增技能机缘；服务确保技能机缘与已获技能、当前新武将固有技能均不重复。
+	var newly_awarded_skill_opportunity_ids: Array[String] = conquest_mode.ensure_skill_opportunity_rewards(enemy)
+	_record_conquest_enemy_opportunities(enemy, newly_awarded_skill_opportunity_ids)
+	for opportunity_id: String in conquest_mode.get_enemy_opportunity_ids():
+		# 当前历史机缘定义；只有获得技能效果需要在每次新武将入场时重新安装运行时实例。
+		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		if str(opportunity_card.get("effect", "")) != "grant_skill":
+			continue
+		grant_acquired_skill(enemy.player_id, str(opportunity_card.get("skill_id", "")), int(opportunity_card.get("per_turn_limit", 0)), int(opportunity_card.get("total_limit", 0)), "conquest", false, int(opportunity_card.get("per_round_limit", 0)))
+
+
+## 把本层新获得的过关斩将机缘写入敌方永久历史；右键武将详情据此按实际获取顺序显示对应品质与原文。
+func _record_conquest_enemy_opportunities(enemy: PlayerState, opportunity_ids: Array[String]) -> void:
+	if enemy == null:
+		return
+	for opportunity_id: String in opportunity_ids:
+		# 当前机缘定义；目录异常时不写入无效历史，避免详情出现无法解析的占位条目。
+		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		if opportunity_card.is_empty():
+			continue
+		enemy.acquired_opportunity_ids.append(opportunity_id)
+		add_log("第%d关敌方获得%s机缘：%s" % [conquest_mode.get_level() if conquest_mode != null else 0, OpportunityCatalog.get_quality_name(str(opportunity_card.get("quality", ""))), str(opportunity_card.get("description", ""))])
 
 
 ## 从牌堆或弃牌堆随机取出至多四张不同装备子类别的牌并直接装备给刚入场敌方；空类别不会以其他类别替代。
@@ -10353,12 +10414,15 @@ func _equip_conquest_enemy_from_piles(enemy_player_id: int) -> void:
 func _finish_conquest_replacement_turn(context: Dictionary) -> void:
 	if state == null or state.game_over or conquest_mode == null:
 		return
+	_conquest_replacement_transition_active = false
 	var enemy_id: int = int(context.get("defeated_enemy_id", conquest_mode.get_enemy_id()))
 	if state.current_player_id == enemy_id:
 		state.current_phase = "conquest_enemy_replacing"
 		state.phase_index = -1
 		_advance_after_current_player_death(enemy_id)
 		return
+	state.current_phase = str(context.get("resume_phase", state.current_phase))
+	state.phase_index = int(context.get("resume_phase_index", state.phase_index))
 	# 玩家击杀敌方后必须恢复被死亡与机缘依次暂停的原卡牌结算；排空后才创建下一次出牌选择，避免机缘结束留在无交互的出牌阶段。
 	_resume_settlement_pipeline()
 	if event_scheduler != null:
@@ -10654,7 +10718,7 @@ func append_card_action_if_legal(result: Array[Dictionary], player_id: int, card
 ## 在任意动作、技能或选择结算出口统一恢复AI流程；普通行动与子选择只能由本函数分流到各自调度器。
 ## 调用方必须位于规则效果已经应用完成的安全点；本函数不执行技能、牌效或阶段推进，只补齐缺失的异步驱动任务。
 func _ensure_ai_progress_after_resolution() -> void:
-	if is_gameplay_paused() or state == null or state.game_over or ai_coordinator == null:
+	if is_gameplay_paused() or state == null or state.game_over or ai_coordinator == null or _conquest_replacement_transition_active:
 		return
 	if not _pending_card_choice.is_empty():
 		# 当前普通选择请求；只有请求所属角色由AI控制时才补调度，人类与网络请求保持等待输入。
@@ -11505,8 +11569,8 @@ func _get_phase_draw_base_count(player_id: int) -> int:
 	if (match_mode == IdentityRules.MODE_TEAM2V2 or match_mode == IdentityRules.MODE_WHEEL_DUEL) and state.turn_number == 1 and not state.players.is_empty() and state.players[0].player_id == player_id:
 		# 仅2v2与车轮战的一号位全场首个回合生效；过关斩将玩家首回合保持常规摸2张。
 		result = 1
-	if conquest_mode != null and conquest_mode.is_enemy(player_id):
-		result += conquest_mode.get_draw_phase_bonus()
+	# 摸牌阶段加成机缘统一从角色历史汇总；过关斩将敌方与普通机缘角色不再维护两套数值来源。
+	result += get_acquired_opportunity_effect_total(player_id, "draw_phase_bonus")
 	return result
 
 
