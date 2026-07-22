@@ -345,8 +345,17 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/MulliganLimitRow/MulliganLimitLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterReplacementCountRow/CharacterReplacementCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterCandidateCountRow/CharacterCandidateCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(_menu_panel.get_node("MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(_menu_panel.get_node("MenuVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	# 车轮战候选标签与内部输入框都指定同一回退字体，保证局内重开菜单的中文显示与主菜单一致。
+	# 明置候选标签；旧局内菜单场景可能未同步该行，缺失时不得妨碍其他设置刷新。
+	var wheel_duel_face_up_candidate_label: Label = _menu_panel.get_node_or_null("MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
+	if wheel_duel_face_up_candidate_label != null:
+		wheel_duel_face_up_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		wheel_duel_face_up_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	# 暗置候选标签；单独容错可兼容增量缓存，同时正式场景始终覆盖字体与文字色。
+	var wheel_duel_face_down_candidate_label: Label = _menu_panel.get_node_or_null("MenuVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
+	if wheel_duel_face_down_candidate_label != null:
+		wheel_duel_face_down_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		wheel_duel_face_down_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_apply_option_button_style(_card_name_option)
 	_apply_option_button_style(_ui_style_option)
@@ -362,6 +371,8 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 	if spin_box == null:
 		return
 	var line_edit: LineEdit = spin_box.get_line_edit()
+	# 局内重开设置与主菜单共用全局回退字体，避免车轮战候选数量输入在主题刷新后使用不同的默认字形。
+	line_edit.add_theme_font_override("font", ThemeDB.fallback_font)
 	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
 	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))

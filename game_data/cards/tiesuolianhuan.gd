@@ -5,6 +5,9 @@ extends CardDefinition
 ## AI把本次连环切换判定为不利时的固定惩罚；0.75分会压过纯出牌顺序，仍允许多目标组合以更高收益覆盖。
 const AI_UNFAVORABLE_CHAIN_TARGET_PENALTY: float = 0.75
 
+## AI使用效果必须至少比同一张牌的重铸收益高出的最小分差；避免微弱出牌顺序压过真实的换牌收益。
+const AI_RECAST_USE_ADVANTAGE_MARGIN: float = 0.15
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -79,6 +82,8 @@ func append_play_phase_card_actions(match_host: Object, actor_id: int, card: Car
 func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
 	# 修正后评分；逐目标检查当前是否已经横置。
 	var score: float = current_score
+	# 本次使用是否至少有一名实际受益目标；没有时同牌重铸一定优先，不能让出牌顺序形成伪收益。
+	var has_positive_target_effect: bool = false
 	for target_id_variant: Variant in action.get("target_ids", []) as Array:
 		# 当前目标 ID；用于读取连环状态与身份态度。
 		var target_id: int = int(target_id_variant)
@@ -93,8 +98,23 @@ func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictiona
 		if bool(target.get("chained", false)):
 			score -= original_target_score * 2.0
 			resolved_target_score = -original_target_score
+		if resolved_target_score > 0.0:
+			has_positive_target_effect = true
 		# 敌方已横置时解除连环属于帮助，不得再被出牌顺序的微弱正分驱动为无脑使用。
 		# 友方未横置时强行施加连环同样是不利目标；多目标动作只有整体收益足够高才会保留。
 		if resolved_target_score < 0.0:
 			score -= AI_UNFAVORABLE_CHAIN_TARGET_PENALTY
+	# 同一实体牌始终同时提供重铸合法动作；使用效果没有明显高于换牌收益时，明确把本动作压到重铸之后。
+	var recast_action: Dictionary = {
+		"action_type":"recast_card",
+		"actor_id":int(action.get("actor_id", -1)),
+		"card_uid":int(action.get("card_uid", -1)),
+		"card_definition_id":get_id(),
+	}
+	# 同一张牌的未知摸牌收益；评估器复用全局卡牌价值与重铸资源价值，避免卡牌文件复制估值常量。
+	var recast_score: float = evaluator.score_action(authoritative_snapshot, recast_action, int(action.get("actor_id", -1)))
+	if not has_positive_target_effect:
+		return recast_score - AI_RECAST_USE_ADVANTAGE_MARGIN
+	if score <= recast_score + AI_RECAST_USE_ADVANTAGE_MARGIN:
+		return recast_score - AI_RECAST_USE_ADVANTAGE_MARGIN
 	return score

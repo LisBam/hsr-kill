@@ -120,44 +120,53 @@ func _test_level_bonus_service() -> bool:
 	state.players = players
 	rng.seed = 20260722
 	service.configure(state, rng, 0, 1)
-	if service.get_level() != 1 or service.get_max_hp_bonus() != 0 or service.get_draw_phase_bonus() != 0 or service.get_initial_hand_bonus() != 0 or service.get_hand_limit_bonus() != 0 or service.get_slash_limit_bonus() != 0 or service.get_damage_bonus() != 0:
+	if service.get_level() != 1 or not service.get_enemy_opportunity_ids().is_empty() or service.get_max_hp_bonus() != 0 or service.get_draw_phase_bonus() != 0 or service.get_initial_hand_bonus() != 0 or service.get_hand_limit_bonus() != 0 or service.get_slash_limit_bonus() != 0 or service.get_damage_bonus() != 0:
 		return _fail("level_one_bonus")
 	state.conquest_state["level"] = 4
-	if service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 0:
-		return _fail("level_four_bonus")
+	# 第2、3、4关固定机缘；直接跳关时服务也必须补齐每一层记录，保证回放恢复不会缺失历史。
+	var level_four_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_four_opportunities != ["blue_max_hp_one", "purple_draw_phase_one", "blue_hand_limit_two"] or service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 0:
+		return _fail("level_four_opportunities=%s" % level_four_opportunities)
 	state.conquest_state["level"] = 5
-	# 第5关本次新抽取的技能；应只新增第一项非重复技能。
-	var level_five_skills: Array[String] = service.ensure_skill_rewards(enemy)
-	if level_five_skills.size() != 1 or service.get_enemy_skill_ids().size() != 1:
-		return _fail("level_five_skill")
+	# 第5关本次新抽取的技能机缘；历史保存完整机缘ID，且实际效果必须是获得技能。
+	var level_five_skill_opportunities: Array[String] = service.ensure_skill_opportunity_rewards(enemy)
+	if level_five_skill_opportunities.size() != 1 or str(OpportunityCatalog.get_card(level_five_skill_opportunities[0]).get("effect", "")) != "grant_skill" or service.get_enemy_skill_ids().size() != 1:
+		return _fail("level_five_skill_opportunity")
 	state.conquest_state["level"] = 8
-	if service.get_max_hp_bonus() != 2 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 4:
-		return _fail("level_eight_bonus")
+	# 第6、7、8关继续追加蓝、紫、灰机缘；灰色初始手牌机缘只由关卡授予。
+	var level_eight_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_eight_opportunities != ["blue_max_hp_one", "purple_draw_phase_one", "gray_initial_hand_four"] or service.get_max_hp_bonus() != 2 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 4:
+		return _fail("level_eight_opportunities=%s" % level_eight_opportunities)
 	state.conquest_state["level"] = 9
-	if service.get_slash_limit_bonus() != 1:
-		return _fail("level_nine_slash")
+	var level_nine_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_nine_opportunities != ["green_slash_play_limit_one"] or service.get_slash_limit_bonus() != 1:
+		return _fail("level_nine_opportunities=%s" % level_nine_opportunities)
 	state.conquest_state["level"] = 10
-	# 第10关本次新抽取的技能；必须不同于第5关已保存的稳定ID。
-	var level_ten_skills: Array[String] = service.ensure_skill_rewards(enemy)
-	if level_ten_skills.size() != 1 or service.get_enemy_skill_ids().size() != 2 or service.get_enemy_skill_ids()[0] == service.get_enemy_skill_ids()[1]:
-		return _fail("level_ten_skill")
+	# 第10关技能机缘必须与第5关不重复；比较稳定技能ID而非随机机缘品质。
+	var level_ten_skill_opportunities: Array[String] = service.ensure_skill_opportunity_rewards(enemy)
+	if level_ten_skill_opportunities.size() != 1 or service.get_enemy_skill_ids().size() != 2 or service.get_enemy_skill_ids()[0] == service.get_enemy_skill_ids()[1]:
+		return _fail("level_ten_skill_opportunity")
 	state.conquest_state["level"] = 13
-	if service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 3 or service.get_damage_bonus() != 1:
-		return _fail("level_thirteen_bonus")
+	var level_thirteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_thirteen_opportunities != ["purple_max_hp_two", "purple_draw_phase_one", "orange_damage_one"] or service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 3 or service.get_damage_bonus() != 1:
+		return _fail("level_thirteen_opportunities=%s" % level_thirteen_opportunities)
 	state.conquest_state["level"] = 14
-	if not service.should_equip_distinct_subtypes():
-		return _fail("level_fourteen_equipment")
+	var level_fourteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_fourteen_opportunities != ["gray_equip_distinct_four"] or not service.should_equip_distinct_subtypes():
+		return _fail("level_fourteen_opportunities=%s" % level_fourteen_opportunities)
 	state.conquest_state["level"] = 15
-	# 第15关本次新抽取的技能；应补足第三项且之后不再增加技能槽。
-	var level_fifteen_skills: Array[String] = service.ensure_skill_rewards(enemy)
-	if level_fifteen_skills.size() != 1 or service.get_enemy_skill_ids().size() != 3:
-		return _fail("level_fifteen_skill")
+	# 第15关技能机缘补足第三项；所有技能卡都应同时保留在敌方机缘历史中。
+	var level_fifteen_skill_opportunities: Array[String] = service.ensure_skill_opportunity_rewards(enemy)
+	if level_fifteen_skill_opportunities.size() != 1 or service.get_enemy_skill_ids().size() != 3:
+		return _fail("level_fifteen_skill_opportunity")
 	state.conquest_state["level"] = 16
-	if service.get_max_hp_bonus() != 5 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 5:
-		return _fail("level_sixteen_bonus")
+	var level_sixteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_sixteen_opportunities != ["gray_initial_hand_one", "blue_max_hp_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 5 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 5:
+		return _fail("level_sixteen_opportunities=%s" % level_sixteen_opportunities)
 	state.conquest_state["level"] = 19
-	if service.get_max_hp_bonus() != 8 or service.get_draw_phase_bonus() != 7 or service.get_initial_hand_bonus() != 8:
-		return _fail("level_nineteen_bonus")
+	var level_nineteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
+	if level_nineteen_opportunities.size() != 9 or service.get_max_hp_bonus() != 8 or service.get_draw_phase_bonus() != 7 or service.get_initial_hand_bonus() != 8:
+		return _fail("level_nineteen_opportunities=%s" % level_nineteen_opportunities)
 	return true
 
 
@@ -186,18 +195,47 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("initial_opportunity")
 	if _controller.state.current_player_id != player.player_id:
 		return _fail("player_first_turn")
+	# 摄伏技能实例；优先复用随机武将自带实例，缺失时以局内获得技能安装，覆盖击杀后来源时机创建嵌套选择的卡死路径。
+	var player_sefu: SkillDefinition = _controller.get_skill_instance(player.player_id, "shefu")
+	if player_sefu == null and not _controller.grant_acquired_skill(player.player_id, "shefu", 0, 0, "conquest_test"):
+		return _fail("conquest_sefu_install")
+	player_sefu = _controller.get_skill_instance(player.player_id, "shefu")
+	if player_sefu == null:
+		return _fail("conquest_sefu_missing")
+	# 双方初始手牌；清空所有可能的【桃】或【酒】，使本次真实致死伤害稳定走到死亡与来源尾部。
+	while not player.hand.is_empty():
+		_controller._move_to_discard(player.hand.pop_back())
+	while not enemy.hand.is_empty():
+		_controller._move_to_discard(enemy.hand.pop_back())
 	# 首次击败前敌方武将；换将后必须改为另一稳定ID（武将库充足时不允许重复）。
 	var defeated_character_id: String = enemy.character_id
 	# 敌方手牌；预置一张牌后用于验证死亡时“区域内所有牌”会清空并进入弃牌堆。
 	var extra_enemy_card: CardInstance = _controller.state.draw_pile.back()
 	_controller._move_card_with_timings(extra_enemy_card, "hand", enemy.player_id, "conquest_test_setup")
-	enemy.hp = 0
-	_controller._resolve_death(enemy.player_id, player.player_id)
-	if not _controller.is_gameplay_paused() or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.state.opportunity_state.is_empty():
+	# 敌方剩余体力；用真实伤害击杀以让摄伏在damageSource中产生嵌套目标选择。
+	enemy.hp = 1
+	enemy.shield = 0
+	_controller.damage(player.player_id, enemy.player_id, 1, "normal", "sha")
+	# 濒死救援请求；双方没有可救援牌仍须按标准顺序主动放弃，死亡后才会派发摄伏监听的来源尾部。
+	for _dying_choice_index: int in range(4):
+		var current_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+		if str(current_choice_context.get("kind", "")) != "dying_response":
+			break
+		# 当前救援者稳定ID；以权威请求为准，避免依赖固定座次顺序。
+		var dying_chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+		if not _submit_choice(dying_chooser_id, [], false):
+			return false
+	# 摄伏选择必须在换将等待开始前完成；此时既没有暂停也没有换将计时，防止旧尾部被新武将继承。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "sefu_gain_target" or _controller._conquest_replacement_transition_active or (_controller.game_flow_pacer != null and _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY)):
+		return _fail("replacement_sefu_damage_source")
+	if not _submit_target_choice(player.player_id, player.player_id):
+		return false
+	# 换将等待只阻止旧规则继续，不暂停场景树；弃置区域的飞牌动画必须能在此期间持续播放。
+	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.state.opportunity_state.is_empty():
 		return _fail("replacement_opportunity_preview")
 	if not await _wait_for_conquest_replacement_opportunity():
 		return _fail("replacement_opportunity_delay")
-	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
+	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or enemy.acquired_opportunity_ids != ["blue_max_hp_one"] or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
 		return _fail("first_replacement")
 	if _controller.state.discard_pile.find(extra_enemy_card) < 0:
 		return _fail("replacement_discards_all_regions")
@@ -205,8 +243,10 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("replacement_opportunity")
 	if _controller.state.current_player_id != player.player_id:
 		return _fail("player_turn_continues")
-	# 关卡14装备；强制当前关卡后使用真实牌堆/弃牌堆入场装备入口，必须装入四个不同子类别槽位。
+	# 关卡14灰色装备机缘；手动提升测试关卡后先记录对应机缘，再使用真实牌堆/弃牌堆入场装备入口。
 	_controller.state.conquest_state["level"] = 14
+	var level_fourteen_opportunities: Array[String] = _controller.conquest_mode.award_fixed_opportunities_through_current_level()
+	_controller._record_conquest_enemy_opportunities(enemy, level_fourteen_opportunities)
 	_controller._equip_conquest_enemy_from_piles(enemy.player_id)
 	# 敌方已占用装备槽列表；四张装备必须落入四个不同的稳定子类别槽。
 	var equipped_slots: Array = enemy.equipment.keys()
@@ -221,7 +261,7 @@ func _test_full_match_replacement_flow() -> bool:
 		var equipment_definition: Dictionary = GameDatabase.get_card(equipment_card.definition_id) if equipment_card != null else {}
 		if equipment_card == null or not EquipmentSubtype.is_valid(str(equipment_definition.get("subtype", ""))) or EquipmentSubtype.get_slot(str(equipment_definition.get("subtype", ""))) != slot:
 			return _fail("level_fourteen_equipment_slot=%s" % slot)
-	# 第5/10/15关技能；控制器安装入口必须保留同一局的三项非重复机缘技能。
+	# 第5/10/15关技能机缘；控制器安装入口必须保留同一局的三项非重复技能机缘与运行时技能。
 	_controller.state.conquest_state["level"] = 5
 	_controller._restore_conquest_enemy_skills(enemy)
 	_controller.state.conquest_state["level"] = 10
@@ -281,6 +321,25 @@ func _choose_safe_opportunity(player_id: int) -> bool:
 			return true
 		await get_tree().process_frame
 	return false
+
+
+## 为当前强制目标选择提交一名角色；测试经统一PlayerAction入口验证嵌套选择会恢复到过关斩将换将续接。
+func _submit_target_choice(actor_id: int, target_id: int) -> bool:
+	return _submit_choice(actor_id, [target_id], true)
+
+
+## 为当前选择请求提交目标或取消；濒死放弃和摄伏目标选择共用同一权威动作协议。
+func _submit_choice(actor_id: int, target_ids: Array[int], confirmed: bool) -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return _fail("missing_choice")
+	# 当前请求稳定编号；同步恢复可能立刻创建下一请求，提交必须绑定创建时的同一编号。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	# 标准选择动作；摄伏只提交唯一目标，濒死放弃提交空目标与confirmed=false。
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":target_ids.duplicate(), "confirmed":confirmed}
+	if not _controller.submit_action(action):
+		return _fail("choice_rejected")
+	return true
 
 
 ## 创建与正式场景一致的最小控制器组件树；红方为本地玩家，蓝方由AI管理。

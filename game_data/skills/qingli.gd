@@ -21,7 +21,7 @@ func _init() -> void:
 	})
 
 
-## 分别校验主动使用与响应入口；响应时保守要求至少2点体力，避免费用濒死与父响应窗口互相覆盖。
+## 分别校验主动使用与响应入口；1点体力也可支付固定费用，费用后的濒死流程仍由统一续接管线处理。
 ## 主动入口必须复用虚拟雷【杀】完整合法性（含阶段次数上限），保证用杀次数用尽后按钮立即熄灭。
 func can_activate(context: Dictionary = {}) -> bool:
 	if host == null:
@@ -30,7 +30,7 @@ func can_activate(context: Dictionary = {}) -> bool:
 	if owner == null or not owner.alive or owner.out_of_game or owner.hp <= 0:
 		return false
 	if str(context.get("active_entry", "")) == "chooseToRespond":
-		return owner.hp > HP_COST and (context.get("response_patterns", []) as Array).has("sha")
+		return owner.hp >= HP_COST and (context.get("response_patterns", []) as Array).has("sha")
 	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
 	# 当前仍可选的雷【杀】目标；空列表表示距离或状态上已无目标。

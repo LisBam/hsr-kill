@@ -588,7 +588,7 @@ func _choose_ai_card(player_id: int, options: Array) -> Dictionary:
 ## 计算单张机缘对指定AI角色的基础收益；不修改状态、不预抽牌，也不读取其他角色私有候选。
 func _score_ai_card(player_id: int, card_definition: Dictionary) -> float:
 	# 品质基础价值；体现高品质卡的整体强度，同时允许具体效果按局势覆盖选择。
-	var score: float = float({"green":2, "blue":5, "purple":9, "orange":14, "red":22}.get(str(card_definition.get("quality", "green")), 0))
+	var score: float = float({"gray":0, "green":2, "blue":5, "purple":9, "orange":14, "red":22}.get(str(card_definition.get("quality", "green")), 0))
 	# 当前AI角色；不存在时只返回品质基础分。
 	var player: PlayerState = _state.get_player(player_id)
 	if player == null:
@@ -603,6 +603,20 @@ func _score_ai_card(player_id: int, card_definition: Dictionary) -> float:
 		score += float(player.max_hp) * (1.0 if effect_id == "double_max_hp" else 0.5)
 	elif effect_id == "hand_limit":
 		score += float(int(card_definition.get("count", 0))) * 2.0
+	elif effect_id == "draw_phase_bonus":
+		# 每回合稳定额外摸牌；长期收益高于一次性摸牌，但不读取未公开牌堆内容。
+		score += float(int(card_definition.get("count", 0))) * 5.0
+	elif effect_id == "slash_play_limit_bonus":
+		# 次数上限只在拥有可用【杀】或后续摸牌时转化为收益，基础分保持保守避免无脑选择。
+		score += float(int(card_definition.get("count", 0))) * (3.0 if not player.hand.is_empty() else 1.0)
+	elif effect_id == "damage_bonus":
+		# 伤害加成对后续每次正数伤害生效；基础AI仅按在场敌对角色数估算可实现次数。
+		# 当前可受伤的敌对角色数量；最多按三名估算，避免多人局将长期加成无限放大。
+		var damage_bonus_hostile_count: int = 0
+		for target: PlayerState in _state.players:
+			if target != null and target.alive and not target.out_of_game and target.player_id != player_id and not _host.is_friendly(player_id, target.player_id):
+				damage_bonus_hostile_count += 1
+		score += float(int(card_definition.get("count", 0)) * mini(damage_bonus_hostile_count, 3)) * 2.0
 	elif effect_id == "grant_skill":
 		# 重复技能不会创建第二个实例，因此AI显著降低已拥有技能卡的价值。
 		var skill_id: String = str(card_definition.get("skill_id", ""))

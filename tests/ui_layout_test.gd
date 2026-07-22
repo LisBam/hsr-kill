@@ -754,20 +754,23 @@ func _run() -> void:
 		# 当前详情角色机缘历史；稳定ID由InformationBoxLayer从静态目录解析品质与主公钦定正文。
 		var opportunity_details_player: Dictionary = opportunity_details_player_variant as Dictionary
 		if int(opportunity_details_player.get("player_id", -1)) == 5:
-			opportunity_details_player["acquired_opportunity_ids"] = ["blue_skill_jiqiao"]
+			opportunity_details_player["acquired_opportunity_ids"] = ["blue_skill_jiqiao", "gray_initial_hand_four"]
 			break
 	match_controller.state_changed.emit(opportunity_details_snapshot)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	# 机缘详情正文命中；遍历资料列表中的标签，避免测试依赖具体容器深度或固定条目索引。
 	var opportunity_description_found: bool = false
+	# 灰色机缘品质标题；过关斩将专属机缘同样必须在右键详情中显示为灰色条目。
+	var gray_opportunity_title_found: bool = false
 	for opportunity_label_variant: Variant in information_box.get_character_skill_list().find_children("*", "Label", true, false):
 		var opportunity_label: Label = opportunity_label_variant as Label
 		if opportunity_label != null and opportunity_label.text == str(OpportunityCatalog.get_card("blue_skill_jiqiao").get("description", "")):
 			opportunity_description_found = true
-			break
-	if information_box.get_character_skill_entry_count() != 2 or information_box.get_character_opportunity_entry_count() != 1 or not opportunity_description_found:
-		_fail("opportunity_character_details skills=%d opportunities=%d found=%s" % [information_box.get_character_skill_entry_count(), information_box.get_character_opportunity_entry_count(), opportunity_description_found])
+		if opportunity_label != null and opportunity_label.text == "【灰色机缘】":
+			gray_opportunity_title_found = true
+	if information_box.get_character_skill_entry_count() != 2 or information_box.get_character_opportunity_entry_count() != 2 or not opportunity_description_found or not gray_opportunity_title_found:
+		_fail("opportunity_character_details skills=%d opportunities=%d description=%s gray=%s" % [information_box.get_character_skill_entry_count(), information_box.get_character_opportunity_entry_count(), opportunity_description_found, gray_opportunity_title_found])
 		return
 	# 多技能武将定义；布洛妮娅拥有3个静态技能，应在相邻技能之间创建正好2条主题横线。
 	var bronya_definition: Dictionary = GameDatabase.get_character("bronya")
