@@ -79,11 +79,34 @@ var identity_strategy: IdentityStrategyEvaluator
 ## 缓存内容只允许读取，卡牌规则或技能 AI 不得向其中写入任何临时评分字段；运行时无需动态修改。
 var _card_definition_cache: Dictionary = {}
 
+## 当前一次出牌决策的完整合法动作副本；卡牌专属AI只可查询实际可执行后续，不得据手牌猜测已超次数的动作。
+var _current_legal_actions: Array[Dictionary] = []
+
 
 ## 创建绑定身份模型的效用评估器；模型为空时创建独立默认实例。
 func _init(model: IdentityAIModel = null) -> void:
 	identity_model = model if model != null else IdentityAIModel.new()
 	identity_strategy = IdentityStrategyEvaluator.new(identity_model)
+
+
+## 写入本次决策的合法动作上下文；每项深拷贝，卡牌评分不能改写控制器提供的权威候选。
+func set_current_legal_actions(legal_actions: Array[Dictionary]) -> void:
+	_current_legal_actions.clear()
+	for action: Dictionary in legal_actions:
+		_current_legal_actions.append(action.duplicate(true))
+
+
+## 返回本次决策的合法动作副本；直接评分或选择请求期间没有动作上下文时返回空数组。
+func get_current_legal_actions() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for action: Dictionary in _current_legal_actions:
+		result.append(action.duplicate(true))
+	return result
+
+
+## 清理单次出牌决策的合法动作上下文；策略返回动作后必须调用，避免下一次决策读取旧阶段候选。
+func clear_current_legal_actions() -> void:
+	_current_legal_actions.clear()
 
 
 ## 计算指定角色获得牌与改变体力的统一资源收益；正数表示获得，负数表示失去，结果会按观察者态度转换为敌我收益。
@@ -199,6 +222,10 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		# 安全伤害值；异常或缺失数据至少按1点伤害评估。
 		expected_damage_amount = maxi(expected_damage_amount, 1)
 		if armor_definition != null:
+			# 防具伤害上限；白银狮子等会把酒杀或其他高额伤害的实际收益压缩到规则上限。
+			var damage_cap: int = maxi(armor_definition.get_ai_incoming_damage_cap(str(definition.get("nature", "normal"))), 0)
+			if damage_cap > 0:
+				expected_damage_amount = mini(expected_damage_amount, damage_cap)
 			status_multiplier *= armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
 		# 目标体力；1点体力时伤害价值显著上升，2点体力时次级上升。
 		# 目标可承受值；体力与护盾共同决定酒杀是否会立即令其进入濒死。
@@ -249,21 +276,29 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			var chained_id: int = int(chained_player.get("player_id", -1))
 			if chained_id == target_id or not bool(chained_player.get("alive", false)) or not bool(chained_player.get("chained", false)):
 				continue
-			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, ai_profile, target_result, expected_damage_amount)
+			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, definition, ai_profile, target_result, expected_damage_amount)
 	return result
 
 
 ## 评估属性伤害经铁索传导到另一名横置角色的收益；统一纳入自身风险、濒危队友与预计击杀的身份奖惩。
-## expected_damage_amount 与直接目标共享同一张属性【杀】的酒加成，多目标和连环均不重复消耗该状态。
-func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, ai_profile: Dictionary, target_result: float, expected_damage_amount: int = 1) -> float:
+## expected_damage_amount 与直接目标共享同一张属性【杀】的实际传导值，多目标和连环均不重复消耗该状态。
+func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int = 1) -> float:
 	# 传导受击者快照；不存在或已离场的玩家不会参与当前属性伤害结算。
 	var chained_player: Dictionary = get_player(authoritative_snapshot, chained_id)
 	if chained_player.is_empty() or not bool(chained_player.get("alive", false)):
 		return 0.0
+	# 传导伤害状态倍率；低体力目标、防具与自身风险都在同一倍率上叠加。
+	var status_multiplier: float = 1.0
+	# 传导目标防具；无视防具武器与直接目标共用同一判断，白银狮子会再次限制该角色实际承受的伤害。
+	var chained_armor_definition: CardDefinition = _get_effective_armor_definition(authoritative_snapshot, actor_id, chained_player, definition)
+	if chained_armor_definition != null:
+		# 传导目标伤害上限；0表示防具不封顶，正数时只降低该名角色的预期承伤。
+		var chained_damage_cap: int = maxi(chained_armor_definition.get_ai_incoming_damage_cap(str(definition.get("nature", "normal"))), 0)
+		if chained_damage_cap > 0:
+			expected_damage_amount = mini(expected_damage_amount, chained_damage_cap)
+		status_multiplier *= chained_armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
 	# 行动者对传导受击者的态度；友方受伤为负收益，敌方受伤为正收益。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, chained_id)
-	# 传导伤害状态倍率；低体力目标更接近死亡，必须放大其对友军风险和敌军收益的影响。
-	var status_multiplier: float = 1.0
 	# 传导受击者可承受值；护盾与体力共同参与致命性判断。
 	var chained_survival: int = int(chained_player.get("hp", 0)) + int(chained_player.get("shield", 0))
 	if chained_survival <= expected_damage_amount:
@@ -472,6 +507,10 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	# 当前锦囊源码；复合收益锦囊可结合来源与响应者关系修正静态目标结果，但不能改变无懈奇偶规则。
 	if trick_definition_instance != null:
 		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
+	# 队友对响应者本人使用动态结果为负的锦囊时，首轮保留无懈并相信队友的战术意图；反无懈仍可恢复该锦囊生效。
+	var source_id: int = int(context.get("source_id", -1))
+	if not currently_negated and responder_id == target_id and target_result < 0.0 and source_id >= 0 and source_id != responder_id and get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0:
+		return false
 	return effect_utility > 0.0 if currently_negated else effect_utility < 0.0
 
 

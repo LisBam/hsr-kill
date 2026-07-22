@@ -63,6 +63,9 @@ var _current_effect_card: Dictionary = {}
 ## 当前效果是否已经执行且只等待嵌套结算屏障；恢复后应直接进入下一张机缘而不能重复执行效果。
 var _current_effect_waiting_for_barrier: bool = false
 
+## 是否已经登记下一帧继续机缘队列；防止响应请求清理边界重复连接process_frame或产生递归deferred调用。
+var _next_effect_retry_scheduled: bool = false
+
 ## 机缘流程完成后的恢复类型；turn_start恢复回合开始游标，round_end恢复轮末到下一回合的阶段切换。
 var _resume_kind: String = ""
 
@@ -95,6 +98,8 @@ func configure(host: MatchController, state: GameState, rng: RandomNumberGenerat
 
 ## 释放进行中的暂停与所有跨步骤状态；重新开局、放弃对局和组件退出时均可安全重复调用。
 func shutdown() -> void:
+	if is_inside_tree() and get_tree().process_frame.is_connected(_on_next_effect_retry_frame):
+		get_tree().process_frame.disconnect(_on_next_effect_retry_frame)
 	if _selection_pause_token >= 0 and _host != null:
 		_host.release_gameplay_pause(_selection_pause_token)
 	_selection_pause_token = -1
@@ -104,6 +109,7 @@ func shutdown() -> void:
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false
+	_next_effect_retry_scheduled = false
 	_resume_kind = ""
 	_resume_context.clear()
 	_resume_phase = ""
@@ -215,7 +221,7 @@ func continue_after_barrier() -> void:
 		_current_effect_waiting_for_barrier = false
 		_finish_current_effect_and_continue()
 		return
-	_resolve_next_effect()
+	_schedule_next_effect_resolution()
 
 
 ## 返回完整机缘卡目录，供无头测试与内容校验读取；调用方获得深拷贝。
@@ -271,9 +277,9 @@ func _advance_selection_queue() -> void:
 	while not _selection_queue.is_empty():
 		# 当前选择者；队首顺序仅影响交互展示，效果仍要等全部选择完成后统一逆时针结算。
 		var chooser_id: int = _selection_queue.pop_front()
-		# 当前选择者状态；等待期间死亡或离场时跳过其选择与效果，不阻塞其他参与者。
+		# 当前选择者状态；死亡角色跳过，仍存活的离场角色继续参与机缘三选一。
 		var chooser: PlayerState = _state.get_player(chooser_id)
-		if chooser == null or not chooser.alive or chooser.out_of_game:
+		if chooser == null or not chooser.alive:
 			continue
 		_state.opportunity_state["current_chooser_id"] = chooser_id
 		_host.refresh_state_snapshot()
@@ -305,25 +311,41 @@ func _record_player_choice(player_id: int, card_definition: Dictionary) -> void:
 
 ## 全体选择完成后释放全局暂停、关闭机缘卡弹窗并开始逆时针逐张结算。
 func _finish_all_choices() -> void:
+	# 已获得机缘历史；全体选择完成后才公开写入，避免其他观察者在私有选择阶段反推出具体卡面。
+	for player_id_key: Variant in _selected_cards_by_player.keys():
+		# 选择者稳定ID；字典键使用字符串以兼容网络序列化。
+		var player_id: int = int(str(player_id_key))
+		# 选择者状态；死亡前已经完成选择的角色不再获得历史，离场但存活角色正常记录。
+		var player: PlayerState = _state.get_player(player_id)
+		if player == null or not player.alive:
+			continue
+		# 已选机缘ID；允许跨轮重复获得同一机缘，详情按真实获得顺序逐项展示。
+		var opportunity_id: String = str((_selected_cards_by_player.get(str(player_id), {}) as Dictionary).get("id", ""))
+		if not opportunity_id.is_empty():
+			player.acquired_opportunity_ids.append(opportunity_id)
 	_state.opportunity_state["current_chooser_id"] = -1
 	_state.opportunity_state["stage"] = "resolving"
 	if _selection_pause_token >= 0:
 		_host.release_gameplay_pause(_selection_pause_token)
 		_selection_pause_token = -1
 	_host.refresh_state_snapshot()
-	call_deferred("_resolve_next_effect")
+	_schedule_next_effect_resolution()
 
 
 ## 取得逆时针队列中的下一名角色并执行其已选机缘；全部完成后恢复触发前流程。
 func _resolve_next_effect() -> void:
-	if not is_active() or _state.game_over or _host.has_pending_card_choice():
+	if not is_active() or _state.game_over:
+		return
+	if _host.has_pending_card_choice():
+		# 响应或无懈的最后一条续接可能先于控制器清空兼容请求字段恢复；按帧重试且同一时刻只保留一个回调。
+		_schedule_next_effect_resolution()
 		return
 	while not _resolution_queue.is_empty():
 		# 下一名结算角色；队列在触发时已经固定为当前角色起逆时针顺序。
 		var owner_player_id: int = _resolution_queue.pop_front()
-		# 结算时角色状态；已经死亡或离场角色的已选机缘不再生效。
+		# 结算时角色状态；死亡角色不再生效，存活离场角色仍可结算自己已经选择的模式机缘。
 		var owner: PlayerState = _state.get_player(owner_player_id)
-		if owner == null or not owner.alive or owner.out_of_game:
+		if owner == null or not owner.alive:
 			continue
 		# 该角色选择的完整卡定义；未完成选择的异常角色直接跳过。
 		var selected_card: Dictionary = _selected_cards_by_player.get(str(owner_player_id), {}) as Dictionary
@@ -348,7 +370,37 @@ func _finish_current_effect_and_continue() -> void:
 	if not _state.opportunity_state.is_empty():
 		_state.opportunity_state["current_resolver_id"] = -1
 	_host.refresh_state_snapshot()
-	call_deferred("_resolve_next_effect")
+	_schedule_next_effect_resolution()
+
+
+## 在下一帧尝试继续机缘效果；同一等待周期只连接一次SceneTree.process_frame。
+func _schedule_next_effect_resolution() -> void:
+	if _next_effect_retry_scheduled or not is_inside_tree():
+		return
+	_next_effect_retry_scheduled = true
+	_connect_next_effect_retry_frame()
+
+
+## 连接单次帧信号；从帧回调内部重试时延迟调用，等待上一条ONE_SHOT连接先自动解除。
+func _connect_next_effect_retry_frame() -> void:
+	if not _next_effect_retry_scheduled or not is_inside_tree():
+		return
+	if not get_tree().process_frame.is_connected(_on_next_effect_retry_frame):
+		get_tree().process_frame.connect(_on_next_effect_retry_frame, Object.CONNECT_ONE_SHOT)
+
+
+## process_frame恢复点；请求仍未清理时继续等待下一帧，否则进入唯一效果队列入口。
+func _on_next_effect_retry_frame() -> void:
+	if not _next_effect_retry_scheduled:
+		return
+	if not is_active() or _state.game_over:
+		_next_effect_retry_scheduled = false
+		return
+	if _host.has_pending_card_choice():
+		call_deferred("_connect_next_effect_retry_frame")
+		return
+	_next_effect_retry_scheduled = false
+	_resolve_next_effect()
 
 
 ## 全部机缘结算完成后恢复原阶段，并通过控制器唯一入口续接回合开始或轮末流程。
@@ -409,31 +461,32 @@ func _can_trigger_now() -> bool:
 	return _enabled and _host != null and _state != null and not _state.game_over and _state.opportunity_state.is_empty() and _rng != null
 
 
-## 从触发角色开始沿座次数组逆时针返回全部在场角色；每名角色只出现一次。
+## 从触发角色开始沿座次数组逆时针返回全部存活角色；离场角色仍参与机缘，每名角色只出现一次。
 func _build_counterclockwise_order(trigger_player_id: int) -> Array[int]:
 	# 逆时针顺序结果；触发角色有效时固定放在首位。
 	var result: Array[int] = []
-	# 起始角色；无效时优先回退当前回合角色，再回退首名在场角色。
+	# 起始角色；无效时优先回退当前回合角色，再回退首名存活角色。
 	var start_player: PlayerState = _state.get_player(trigger_player_id)
-	if start_player == null or not start_player.alive or start_player.out_of_game:
+	if start_player == null or not start_player.alive:
 		start_player = _state.get_player(_state.current_player_id)
-	if start_player == null or not start_player.alive or start_player.out_of_game:
+	if start_player == null or not start_player.alive:
 		for player: PlayerState in _state.players:
-			if player != null and player.alive and not player.out_of_game:
+			if player != null and player.alive:
 				start_player = player
 				break
 	if start_player == null:
 		return result
-	result.append(start_player.player_id)
-	# 当前逆时针游标；反复查询上家，直到回到起点或达到总座位数保护上限。
-	var cursor_player_id: int = start_player.player_id
-	for _step: int in range(maxi(_state.players.size() - 1, 0)):
-		# 当前上家；GameState负责跳过死亡与离场角色并处理一号位环回。
-		var previous_player: PlayerState = _state.get_previous_alive_player(cursor_player_id)
-		if previous_player == null or result.has(previous_player.player_id):
-			break
-		result.append(previous_player.player_id)
-		cursor_player_id = previous_player.player_id
+	# 起始座次索引；机缘逆时针顺序按完整座次数组移动，只跳过死亡角色而保留离场角色。
+	var start_index: int = _state.players.find(start_player)
+	if start_index < 0:
+		return result
+	for step: int in range(_state.players.size()):
+		# 当前逆时针座次；从起点向数组前方环回，确保交换座位后立即使用新顺序。
+		var seat_index: int = posmod(start_index - step, _state.players.size())
+		# 当前座次角色；离场但存活者仍加入，死亡角色跳过。
+		var participant: PlayerState = _state.players[seat_index]
+		if participant != null and participant.alive:
+			result.append(participant.player_id)
 	return result
 
 
@@ -533,13 +586,47 @@ func _score_ai_card(player_id: int, card_definition: Dictionary) -> float:
 		var skill_id: String = str(card_definition.get("skill_id", ""))
 		var owned_skills: Dictionary = _host.skill_instances_by_player.get(player_id, {}) as Dictionary
 		score += -12.0 if owned_skills.has(skill_id) else 6.0
-	elif effect_id in ["discard_two_from_player", "damage_target", "gain_one_from_player", "max_hp_target", "lose_hp_target", "discard_all_hand_target", "damage_targets", "gain_all_hand_target"]:
+	elif effect_id in ["discard_two_from_player", "damage_target", "gain_one_from_player", "max_hp_target", "lose_hp_target", "discard_all_hand_target", "damage_targets", "gain_all_hand_target", "discard_one_each_target", "discard_half_all_cards_target", "lose_half_hp_target", "remove_until_round_end_target", "reduce_half_max_hp_target", "damage_current_hp_target"]:
 		# 敌对角色数量；存在敌人才为负面机缘提供正收益，没有敌人时降低误伤风险。
 		var hostile_count: int = 0
 		for target: PlayerState in _state.players:
 			if target != null and target.alive and not target.out_of_game and target.player_id != player_id and not _host.is_friendly(player_id, target.player_id):
 				hostile_count += 1
 		score += 5.0 if hostile_count > 0 else -8.0
+	elif effect_id in ["swap_hand_targets", "swap_equipment_targets", "swap_character_targets"]:
+		# 交换类效果至少需要一名敌方和一名友方才能稳定转化为己方收益。
+		var has_hostile: bool = false
+		var has_friendly: bool = false
+		for target: PlayerState in _state.players:
+			if target == null or not target.alive or target.out_of_game:
+				continue
+			if _host.is_friendly(player_id, target.player_id):
+				has_friendly = true
+			else:
+				has_hostile = true
+		score += 7.0 if has_hostile and has_friendly else -6.0
+	elif effect_id == "virtual_card_use":
+		# 群体伤害锦囊在敌方数量多于友方时更有价值；最终无懈、响应和防具仍由卡牌AI与规则层处理。
+		var virtual_hostile_count: int = 0
+		var virtual_friendly_count: int = 0
+		for target: PlayerState in _state.players:
+			if target == null or not target.alive or target.out_of_game or target.player_id == player_id:
+				continue
+			if _host.is_friendly(player_id, target.player_id):
+				virtual_friendly_count += 1
+			else:
+				virtual_hostile_count += 1
+		score += float(virtual_hostile_count - virtual_friendly_count) * 2.5
+	elif effect_id == "discard_own_zone_and_draw":
+		score += float(player.judgment_area.size()) * 3.0
+	elif effect_id == "gain_distinct_delayed":
+		score += 6.0
+	elif effect_id == "view_all_hand_as":
+		score += float(player.hand.size()) * 2.0
+	elif effect_id == "gain_all_equipment":
+		score += float(_host.get_all_global_equipment_card_uids().size()) * 1.5
+	elif effect_id == "gain_random_zone_cards_each":
+		score += float(_state.players.size()) * float(int(card_definition.get("count", 0)))
 	elif effect_id == "extra_turns":
 		score += float(int(card_definition.get("count", 0))) * 8.0
 	return score

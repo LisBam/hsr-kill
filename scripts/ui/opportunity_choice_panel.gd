@@ -6,6 +6,12 @@ extends Control
 ## 本地玩家点击机缘卡时发出稳定ID；牌桌负责转换为统一PlayerAction并交由权威端校验。
 signal opportunity_selected(card_id: String)
 
+## 当前机缘牌包含获得技能时转发统一悬停资料；牌桌唯一InformationBoxLayer负责实际显示。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 当前机缘牌离开或禁用时转发说明撤销请求。
+signal information_dismissed
+
 ## 正式机缘卡场景；三张候选均复用同一无插画牌面组件。
 const OPPORTUNITY_CARD_SCENE: PackedScene = preload("res://scenes/components/opportunity_card.tscn")
 
@@ -78,6 +84,8 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 			_cards_row.add_child(card_view)
 			card_view.configure(option_variant as Dictionary, true)
 			card_view.card_selected.connect(_on_card_selected)
+			card_view.information_requested.connect(_on_card_information_requested)
+			card_view.information_dismissed.connect(_on_card_information_dismissed)
 		return
 	# 当前等待角色名；缺失时回退“其他角色”，不暴露身份或私有候选。
 	var chooser_name: String = str(player_names.get(current_chooser_id, "其他角色"))
@@ -106,3 +114,13 @@ func _on_card_selected(card_id: String) -> void:
 		if card_view != null:
 			card_view.set_interactive(false)
 	opportunity_selected.emit(card_id)
+
+
+## 转发单张机缘卡的技能资料请求；弹窗不保存信息内容或创建第二套悬停组件。
+func _on_card_information_requested(information: Dictionary, anchor_rect: Rect2) -> void:
+	information_requested.emit(information, anchor_rect)
+
+
+## 转发单张机缘卡的资料撤销；牌桌用弹窗实例ID维护统一来源所有权。
+func _on_card_information_dismissed() -> void:
+	information_dismissed.emit()

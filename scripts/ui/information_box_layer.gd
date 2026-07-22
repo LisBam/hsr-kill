@@ -153,6 +153,9 @@ var _character_card_view: PlayerTargetView
 ## 当前详情右侧已经创建的技能条目数量；只供界面回归与调试读取，不参与技能规则。
 var _character_skill_entry_count: int = 0
 
+## 当前详情右侧已经创建的机缘历史条目数量；只供界面回归与调试读取，不参与机缘规则。
+var _character_opportunity_entry_count: int = 0
+
 
 ## 初始化两类信息框节点；组件始终处理输入，确保离线暂停后仍能滚动和关闭详情。
 func _ready() -> void:
@@ -182,6 +185,28 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 		# 公开快照刷新会重复发送相同武将资料；完成首帧布局后只校正位置，测量期间则保持透明等待原布局收尾。
 		if _hover_panel.modulate.a > 0.0:
 			_place_hover_panel(anchor_rect, source_id, _hover_layout_generation)
+		return
+	# 同一逻辑资料主题；只有显式稳定主题一致时允许跳过悬停延迟，装备与武将资料切换仍按新目标重新等待。
+	var current_refresh_subject: String = str(_hover_information.get("refresh_subject", ""))
+	var incoming_refresh_subject: String = str(information_copy.get("refresh_subject", ""))
+	if source_id == _hover_source_id and _hover_panel.visible and not current_refresh_subject.is_empty() and current_refresh_subject == incoming_refresh_subject:
+		# 同一悬停来源的公开资料发生变化；已获得技能等更新必须原位立即替换内容，不重新等待0.5秒。
+		_cancel_pending_hover_information()
+		_hover_layout_generation += 1
+		# 当前刷新布局代次；新状态再次到达时会使旧的异步测量安全失效。
+		var refresh_layout_generation: int = _hover_layout_generation
+		_hover_information = information_copy
+		_hover_anchor_rect = anchor_rect
+		_hover_title_label.text = str(_hover_information.get("title", "信息"))
+		_hover_subtitle_label.text = str(_hover_information.get("subtitle", ""))
+		_hover_subtitle_label.visible = not _hover_subtitle_label.text.is_empty()
+		_render_hover_description()
+		_refresh_hover_text_styles()
+		# 内容先在原位置即时更新，再异步重测最终宽高；不会隐藏旧面板或闪回默认位置。
+		_hover_panel.custom_minimum_size = Vector2(hover_panel_width, 0.0)
+		_hover_panel.size = Vector2(hover_panel_width, 0.0)
+		_hover_panel.reset_size()
+		_place_hover_panel_after_layout(anchor_rect, source_id, refresh_layout_generation)
 		return
 	_cancel_pending_hover_information()
 	# 已显示的旧目标信息必须立即退场；新的目标会在完整0.5秒悬停后再显示，避免内容跨目标残留。
@@ -241,6 +266,28 @@ func show_character_details(snapshot: Dictionary, character_definition: Dictiona
 		character_details_visibility_changed.emit(true)
 
 
+## 使用最新公开快照原位刷新已经打开的同一角色详情；不会重复开关面板或改变离线暂停令牌所有权。
+func refresh_character_details(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary = {}) -> void:
+	if not is_character_details_visible() or snapshot.is_empty() or character_definition.is_empty():
+		return
+	# 当前详情角色与新快照角色；稳定ID不同表示详情仍属于另一名角色，状态广播不能擅自切换目标。
+	var current_player_id: int = int(_character_snapshot.get("player_id", -1))
+	var refreshed_player_id: int = int(snapshot.get("player_id", -2))
+	if current_player_id != refreshed_player_id:
+		return
+	if _character_snapshot == snapshot and _character_definition == character_definition and _faction_definition == faction_definition:
+		return
+	# 当前滚动位置；技能或机缘内容变化后尽量保持阅读位置，最终仍由标准滚动范围自动夹紧。
+	var previous_scroll_vertical: int = _character_skill_scroll.scroll_vertical
+	_character_snapshot = snapshot.duplicate(true)
+	_character_definition = character_definition.duplicate(true)
+	_faction_definition = faction_definition.duplicate(true)
+	_render_character_card()
+	_render_character_skills()
+	_character_skill_scroll.scroll_vertical = previous_scroll_vertical
+	call_deferred("_resize_character_panel_to_content")
+
+
 ## 关闭居中武将详情并释放其只读内容副本；牌桌收到状态信号后只释放详情框自己的暂停令牌。
 func close_character_details() -> void:
 	if not _character_shade.visible:
@@ -293,6 +340,16 @@ func get_character_title_label() -> Label:
 ## 返回武将详情实际创建的技能条目数量；数量仅对应静态武将技能列表。
 func get_character_skill_entry_count() -> int:
 	return _character_skill_entry_count
+
+
+## 返回武将详情实际创建的已获得机缘条目数量；非机缘模式固定为0。
+func get_character_opportunity_entry_count() -> int:
+	return _character_opportunity_entry_count
+
+
+## 返回当前打开详情对应的稳定玩家ID；未打开时返回-1，牌桌只用它查找最新公开快照。
+func get_character_details_player_id() -> int:
+	return int(_character_snapshot.get("player_id", -1)) if is_character_details_visible() else -1
 
 
 ## 返回武将详情技能分隔线数量；正常数量应等于技能条目数减一。
@@ -799,6 +856,7 @@ func _render_character_skills() -> void:
 		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 		_character_skill_list.add_child(empty_label)
+		_append_character_opportunity_section()
 		_append_character_skill_bottom_spacer()
 		call_deferred("_refresh_character_skill_vertical_layout")
 		return
@@ -837,8 +895,65 @@ func _render_character_skills() -> void:
 		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 		skill_entry.add_child(skill_description_label)
 		_character_skill_entry_count += 1
+	_append_character_opportunity_section()
 	_append_character_skill_bottom_spacer()
 	call_deferred("_refresh_character_skill_vertical_layout")
+
+
+## 在挂载机缘组件的模式中追加永久机缘历史；只读取公开稳定ID并从静态目录解析品质与原文。
+func _append_character_opportunity_section() -> void:
+	if not bool(_character_snapshot.get("opportunity_mode_enabled", false)):
+		return
+	# 技能与机缘分组线；独立元数据避免被技能分隔线计数与布局测试误认。
+	var section_separator: HSeparator = HSeparator.new()
+	section_separator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	section_separator.set_meta("information_box_opportunity_separator", true)
+	_apply_skill_separator_style(section_separator)
+	_character_skill_list.add_child(section_separator)
+	# 机缘分组标题；使用主题强调色，与技能名形成同一资料层级。
+	var section_title: Label = Label.new()
+	section_title.text = "机缘"
+	section_title.add_theme_font_size_override("font_size", 18)
+	section_title.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	section_title.set_meta("information_box_opportunity_title", true)
+	_character_skill_list.add_child(section_title)
+	# 已获得机缘ID历史；数组按实际获得顺序保存且允许重复，详情不自行去重或改写卡面正文。
+	var opportunity_ids: Array = _character_snapshot.get("acquired_opportunity_ids", []) as Array
+	if opportunity_ids.is_empty():
+		# 空历史说明；机缘模式开局即可看到稳定分组，而不是等首次获得后突然改变详情结构。
+		var empty_opportunity_label: Label = Label.new()
+		empty_opportunity_label.text = "尚未获得机缘。"
+		empty_opportunity_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_opportunity_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+		empty_opportunity_label.set_meta("information_box_opportunity_empty", true)
+		_character_skill_list.add_child(empty_opportunity_label)
+		return
+	for opportunity_id_variant: Variant in opportunity_ids:
+		# 当前机缘稳定ID；目录缺失时仍保留明确占位，便于内容维护者定位历史数据问题。
+		var opportunity_id: String = str(opportunity_id_variant)
+		# 当前机缘静态定义；正文保持目录中主公钦定原文，不在详情层重新解释效果。
+		var opportunity_definition: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		# 当前品质中文；未知品质回退“未知”，仅用于资料标识而不参与抽取权重。
+		var quality_name: String = str({"green":"绿色", "blue":"蓝色", "purple":"紫色", "orange":"橙色", "red":"红色"}.get(str(opportunity_definition.get("quality", "")), "未知"))
+		# 单个机缘历史条目；名称与正文分行，保持长规则原文可自动换行。
+		var opportunity_entry: VBoxContainer = VBoxContainer.new()
+		opportunity_entry.add_theme_constant_override("separation", 4)
+		opportunity_entry.set_meta("information_box_opportunity_entry", true)
+		_character_skill_list.add_child(opportunity_entry)
+		# 机缘品质名称；无独立卡名时使用“品质机缘”作为稳定标题。
+		var opportunity_name_label: Label = Label.new()
+		opportunity_name_label.text = "【%s机缘】" % quality_name
+		opportunity_name_label.add_theme_font_size_override("font_size", 16)
+		opportunity_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+		opportunity_entry.add_child(opportunity_name_label)
+		# 机缘规则正文；技能牌、数值牌与目标牌都显示原始完整描述。
+		var opportunity_description_label: Label = Label.new()
+		opportunity_description_label.text = str(opportunity_definition.get("description", "机缘元数据尚未登记。"))
+		opportunity_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		opportunity_description_label.add_theme_font_size_override("font_size", 14)
+		opportunity_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		opportunity_entry.add_child(opportunity_description_label)
+		_character_opportunity_entry_count += 1
 
 
 ## 清理详情左侧武将牌；节点离树后不保留鼠标信号、快照或主题状态。
@@ -856,6 +971,7 @@ func _clear_character_card() -> void:
 func _clear_skill_entries() -> void:
 	if _character_skill_list == null:
 		_character_skill_entry_count = 0
+		_character_opportunity_entry_count = 0
 		return
 	for child: Node in _character_skill_list.get_children():
 		_character_skill_list.remove_child(child)
@@ -863,6 +979,7 @@ func _clear_skill_entries() -> void:
 	_character_skill_list.custom_minimum_size.y = 0.0
 	_character_skill_bottom_spacer = null
 	_character_skill_entry_count = 0
+	_character_opportunity_entry_count = 0
 
 
 ## 刷新已经显示的技能条目颜色；节点元数据只标识布局用途，不包含任何技能业务状态。
@@ -881,6 +998,16 @@ func _refresh_skill_entry_styles() -> void:
 			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 		elif entry_node is HSeparator and entry_node.has_meta("information_box_skill_separator"):
 			_apply_skill_separator_style(entry_node as HSeparator)
+		elif entry_node is VBoxContainer and entry_node.has_meta("information_box_opportunity_entry"):
+			# 机缘历史条目；索引0为品质标题，索引1为主公钦定规则正文。
+			var opportunity_name_label: Label = entry_node.get_child(0) as Label
+			var opportunity_description_label: Label = entry_node.get_child(1) as Label
+			opportunity_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+			opportunity_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		elif entry_node is HSeparator and entry_node.has_meta("information_box_opportunity_separator"):
+			_apply_skill_separator_style(entry_node as HSeparator)
+		elif entry_node is Label and entry_node.has_meta("information_box_opportunity_title"):
+			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 		elif entry_node is Label:
 			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 

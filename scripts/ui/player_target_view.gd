@@ -373,11 +373,8 @@ func configure(id: int, formatted_text: String, alive: bool, current_actor: bool
 func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary = {}, current_actor: bool = false, faction_definition: Dictionary = {}) -> void:
 	# 本次视觉配置签名；排除用牌、响应和技能历史等非视觉字段，避免每次动作都重建体力点与装备节点。
 	var next_configuration_signature: int = hash([_get_visual_snapshot_data(snapshot), character_definition, current_actor, faction_definition, GameSettings.card_name_mode, GameSettings.ui_style_id])
-	if _configuration_signature == next_configuration_signature:
-		return
-	_configuration_signature = next_configuration_signature
-	# 旧判定牌索引；公开判定区更新后必须重新命中，不能复用同一索引显示已经离开的延时锦囊信息。
-	_hovered_judgment_index = -1
+	# 是否需要重建武将牌视觉；资料快照即使不改画面也必须先更新，确保新获得技能能立即进入悬停与右键详情。
+	var visual_configuration_changed: bool = _configuration_signature != next_configuration_signature
 	_player_snapshot = snapshot.duplicate(true)
 	_character_definition = character_definition.duplicate(true)
 	_faction_definition = faction_definition.duplicate(true)
@@ -385,6 +382,14 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	is_current_actor = current_actor
 	is_interactable = bool(snapshot.get("alive", false)) and not bool(snapshot.get("out_of_game", false))
 	is_face_down = bool(snapshot.get("face_down", false))
+	if not visual_configuration_changed:
+		# 当前正悬停武将资料；公开技能变化后原来源立即重发新内容，同一来源不会重新等待0.5秒。
+		if is_node_ready() and _is_hovered and _hovered_equipment_slot.is_empty() and _hovered_judgment_index < 0:
+			_request_character_information()
+		return
+	_configuration_signature = next_configuration_signature
+	# 旧判定牌索引；公开判定区更新后必须重新命中，不能复用同一索引显示已经离开的延时锦囊信息。
+	_hovered_judgment_index = -1
 	_artwork_texture = ArtworkLoader.load_from_definition(character_definition, ArtworkLoader.CHARACTER_ART_FIELD)
 	if is_node_ready():
 		_input_area.tooltip_text = ""
@@ -392,6 +397,8 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	_refresh_artwork()
 	_refresh_decade_overlay(character_definition)
 	_refresh_visual_state()
+	if _is_hovered and _hovered_equipment_slot.is_empty() and _hovered_judgment_index < 0:
+		_request_character_information()
 
 
 ## 提取武将牌真正消费的公开字段；返回值只用于哈希，不会作为新的状态副本长期保存。
@@ -608,6 +615,7 @@ func _request_character_information() -> void:
 	var information: Dictionary = {
 		"title":character_name,
 		"title_emphasis":true,
+		"refresh_subject":"character:%d" % player_id,
 		"subtitle":"势力：%s｜性别：%s｜体力上限：%d" % [faction_name, gender_text, maximum_health],
 		"description":skills_text,
 		"description_sections":skill_description_sections,

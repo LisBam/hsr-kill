@@ -5,9 +5,6 @@ extends SkillDefinition
 ## 飞焰命中后摸牌数；固定为3，修改时必须同步技能原文与玩法文档。
 const DRAW_COUNT: int = 3
 
-## 命中后为被替换的判定、摸牌与弃牌阶段登记的额外出牌阶段数。
-const EXTRA_PLAY_PHASE_COUNT: int = 3
-
 ## AI判定为手牌较少并优先对自己使用火攻的手牌上限。
 const AI_LOW_HAND_THRESHOLD: int = 2
 
@@ -81,15 +78,8 @@ func _on_damage_after(event: RuleEvent) -> void:
 		return
 	_reward_resolved = true
 	host.call("draw", owner_player_id, DRAW_COUNT)
-	# 技能持有者状态；本回合尚未开始的判定、摸牌与弃牌阶段由跳过标记替换。
-	var owner: PlayerState = host.state.get_player(owner_player_id)
-	if owner == null:
-		return
-	owner.skipped_phases["judgment"] = true
-	owner.skipped_phases["draw"] = true
-	owner.skipped_phases["discard"] = true
-	for _index: int in range(EXTRA_PLAY_PHASE_COUNT):
-		get_owner_skill_player().addPlayPhase()
+	# 主要阶段转换；四个阶段直接按普通出牌阶段执行，不派发跳过时机，也不进入额外出牌阶段队列。
+	host.call("convert_current_turn_main_phases_to_play", owner_player_id, "feiyan")
 
 
 ## 本次虚拟火攻完整结束后清理运行时识别标记，避免后续普通火攻误触发飞焰奖励。

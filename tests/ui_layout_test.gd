@@ -530,6 +530,22 @@ func _run() -> void:
 	if not information_box.is_hover_information_visible() or repeated_hover_delay_timer == null or not repeated_hover_delay_timer.is_stopped():
 		_fail("player_hover_repeated_request_flicker:%s/%s" % [information_box.is_hover_information_visible(), repeated_hover_delay_timer.is_stopped() if repeated_hover_delay_timer != null else false])
 		return
+	# 运行时获得技能快照；武将牌视觉字段不变时也必须更新内部资料并原位刷新已经显示的悬停说明。
+	var acquired_skill_hover_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	for acquired_hover_player_variant: Variant in acquired_skill_hover_snapshot.get("players", []) as Array:
+		# 当前悬停角色快照；只为稳定玩家5追加机巧，其他画面字段保持完全相同以覆盖视觉签名早退路径。
+		var acquired_hover_player: Dictionary = acquired_hover_player_variant as Dictionary
+		if int(acquired_hover_player.get("player_id", -1)) == 5:
+			acquired_hover_player["acquired_skills"] = {"jiqiao":{"source":"test"}}
+			break
+	match_controller.state_changed.emit(acquired_skill_hover_snapshot)
+	await get_tree().process_frame
+	if not information_box.is_hover_information_visible() or not information_box.get_hover_description_text().contains(str(GameDatabase.get_skill("jiqiao").get("description", ""))):
+		_fail("acquired_skill_hover_refresh:%s" % information_box.get_hover_description_text())
+		return
+	# 恢复原快照；后续单技能详情布局断言继续使用杰帕德固有的一项技能作为稳定基线。
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
 	# 其他玩家公开装备横条；透明武将牌输入层按局部坐标识别装备，并把目标牌说明交给统一信息框。
 	var opponent_equipment_rows: Array = current_operator_view.get("_equipment_rows") as Array
 	if opponent_equipment_rows.is_empty():
@@ -620,6 +636,42 @@ func _run() -> void:
 		return
 	if not information_box.is_character_details_visible() or information_box.get_character_title_text() != "武将详情" or not is_equal_approx(character_details_panel.size.x, 760.0) or character_details_panel.size.y >= 440.0 or character_details_panel.size.y < information_box.character_panel_minimum_height or not character_details_panel.get_global_rect().get_center().is_equal_approx(main_instance.get_global_rect().get_center()) or not is_equal_approx(character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x) or not information_box.get_character_card_scale().is_equal_approx(Vector2.ONE * 0.78) or information_box.get_character_skill_entry_count() != 1 or information_box.get_character_skill_separator_count() != 0 or single_skill_entry.position.y <= 0.0 or not is_equal_approx(single_skill_top_gap, single_skill_bottom_gap) or character_card_area == null or detail_character_card == null or not detail_character_card.position.is_equal_approx(expected_detail_character_position) or information_box.get_character_skill_scroll_bar() == null or not is_equal_approx(information_box.get_character_skill_scroll_bar().custom_minimum_size.x, 12.0) or int(main_instance.get("_selected_card_uid")) != 999999 or not get_tree().paused or not bool(main_instance.get("_owns_character_details_pause")) or int(main_instance.get("_character_details_pause_token")) < 0:
 		_fail("character_details_open:%s/%s/%d/%s size=%s min=%s center=%s/%s title=%s/%s scale=%s separators=%d entry_y=%s gaps=%s/%s scrollbar=%s/%s selected=%d pause=%s/%s token=%d" % [information_box.is_character_details_visible(), information_box.get_character_title_text(), information_box.get_character_skill_entry_count(), get_tree().paused, character_details_panel.size, information_box.character_panel_minimum_height, character_details_panel.get_global_rect().get_center(), main_instance.get_global_rect().get_center(), character_details_title.get_global_rect().get_center().x, character_details_panel.get_global_rect().get_center().x, information_box.get_character_card_scale(), information_box.get_character_skill_separator_count(), single_skill_entry.position.y, single_skill_top_gap, single_skill_bottom_gap, information_box.get_character_skill_scroll_bar(), information_box.get_character_skill_scroll_bar().custom_minimum_size.x if information_box.get_character_skill_scroll_bar() != null else -1.0, int(main_instance.get("_selected_card_uid")), bool(main_instance.get("_owns_character_details_pause")), int(main_instance.get("_character_details_pause_token")) >= 0, int(main_instance.get("_character_details_pause_token"))])
+		return
+	# 已打开详情的技能刷新；状态广播追加机巧后应原位变为2项技能，不能要求关闭后重新右键。
+	var acquired_skill_details_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	for acquired_details_player_variant: Variant in acquired_skill_details_snapshot.get("players", []) as Array:
+		# 当前详情角色快照；只追加局内技能，稳定玩家ID与武将定义保持不变。
+		var acquired_details_player: Dictionary = acquired_details_player_variant as Dictionary
+		if int(acquired_details_player.get("player_id", -1)) == 5:
+			acquired_details_player["acquired_skills"] = {"jiqiao":{"source":"test"}}
+			break
+	match_controller.state_changed.emit(acquired_skill_details_snapshot)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if information_box.get_character_skill_entry_count() != 2:
+		_fail("acquired_skill_details_refresh:%d" % information_box.get_character_skill_entry_count())
+		return
+	# 机缘模式详情；追加一项已获得机缘后应显示独立“机缘”分组及对应原文，且不计入技能条目数量。
+	var opportunity_details_snapshot: Dictionary = acquired_skill_details_snapshot.duplicate(true)
+	opportunity_details_snapshot["match_mode"] = IdentityRules.MODE_OPPORTUNITY_BRAWL
+	for opportunity_details_player_variant: Variant in opportunity_details_snapshot.get("players", []) as Array:
+		# 当前详情角色机缘历史；稳定ID由InformationBoxLayer从静态目录解析品质与主公钦定正文。
+		var opportunity_details_player: Dictionary = opportunity_details_player_variant as Dictionary
+		if int(opportunity_details_player.get("player_id", -1)) == 5:
+			opportunity_details_player["acquired_opportunity_ids"] = ["blue_skill_jiqiao"]
+			break
+	match_controller.state_changed.emit(opportunity_details_snapshot)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 机缘详情正文命中；遍历资料列表中的标签，避免测试依赖具体容器深度或固定条目索引。
+	var opportunity_description_found: bool = false
+	for opportunity_label_variant: Variant in information_box.get_character_skill_list().find_children("*", "Label", true, false):
+		var opportunity_label: Label = opportunity_label_variant as Label
+		if opportunity_label != null and opportunity_label.text == str(OpportunityCatalog.get_card("blue_skill_jiqiao").get("description", "")):
+			opportunity_description_found = true
+			break
+	if information_box.get_character_skill_entry_count() != 2 or information_box.get_character_opportunity_entry_count() != 1 or not opportunity_description_found:
+		_fail("opportunity_character_details skills=%d opportunities=%d found=%s" % [information_box.get_character_skill_entry_count(), information_box.get_character_opportunity_entry_count(), opportunity_description_found])
 		return
 	# 多技能武将定义；布洛妮娅拥有3个静态技能，应在相邻技能之间创建正好2条主题横线。
 	var bronya_definition: Dictionary = GameDatabase.get_character("bronya")

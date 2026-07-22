@@ -42,6 +42,11 @@ func modify_incoming_damage(match_host: Object, owner: PlayerState, context: Dic
 	return 1 if amount > 1 else amount
 
 
+## 白银狮子把AI预期的单次伤害同步封顶为1点，避免把酒杀额外伤害误算为真实收益。
+func get_ai_incoming_damage_cap(_nature: String) -> int:
+	return 1
+
+
 ## 白银狮子离开装备区后，若持有者已受伤且仍存活则回复1点体力。
 func on_leave_equipment(match_host: Object, owner: PlayerState, trigger_loss_effects: bool) -> void:
 	if trigger_loss_effects and owner.alive and owner.hp < owner.max_hp:
