@@ -931,12 +931,34 @@ func _on_character_details_requested(snapshot: Dictionary, character_definition:
 ## 为武将详情补充当前模式展示语义；角色公开快照本身保持纯规则数据，不由牌面组件硬编码模式ID。
 func _build_character_details_snapshot(snapshot: Dictionary) -> Dictionary:
 	# 详情专用快照；复制后追加是否显示机缘分组，避免改写桌面共享的观察者快照。
-	var details_snapshot: Dictionary = snapshot.duplicate(true)
+	var details_snapshot: Dictionary = _build_player_display_snapshot(snapshot)
 	# 当前观察者模式；远程客户端可能没有权威GameState，因此优先从桌面最新根快照和控制器导出模式列表判断。
 	var snapshot_mode: String = str(_snapshot.get("match_mode", ""))
 	var opportunity_mode_enabled: bool = match_controller != null and (match_controller.is_opportunity_enabled_for_current_match() or match_controller.opportunity_enabled_mode_ids.has(snapshot_mode))
 	details_snapshot["opportunity_mode_enabled"] = opportunity_mode_enabled
 	return details_snapshot
+
+
+## 为玩家公开快照补充仅供界面读取的受限技能次数文案；不修改权威获得技能记录或规则状态。
+func _build_player_display_snapshot(player_snapshot: Dictionary) -> Dictionary:
+	# 显示专用玩家副本；其他玩家武将牌、悬停资料与右键详情共同使用，避免各自计算次数造成显示不一致。
+	var display_snapshot: Dictionary = player_snapshot.duplicate(true)
+	# 当前局内获得技能记录；没有局内技能时不写入额外展示字段，固有与临时技能保持原有资料格式。
+	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
+	# 受限技能完整次数文案；键为技能ID，值为“还可发动”等完整句式。
+	var remaining_uses_by_skill: Dictionary = {}
+	for skill_id_variant: Variant in acquired_skills.keys():
+		# 当前局内获得技能ID；只为确实存在限制维度的记录写入展示数据。
+		var skill_id: String = str(skill_id_variant)
+		# 当前技能剩余次数；统一复用本地技能栏的回合、轮次和总次数计算，不让展示层自行扣减。
+		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(player_snapshot, skill_id)
+		# 当前技能完整说明；空字符串表示未设置任一限制，悬停与详情不附加括号。
+		var remaining_uses_description: String = str(remaining_uses.get("description", ""))
+		if not remaining_uses_description.is_empty():
+			remaining_uses_by_skill[skill_id] = remaining_uses_description
+	if not remaining_uses_by_skill.is_empty():
+		display_snapshot["acquired_skill_remaining_uses"] = remaining_uses_by_skill
+	return display_snapshot
 
 
 ## 使用最新公开状态原位刷新已打开的武将详情；局域网对局继续运行时获得技能与机缘会立即显示。
@@ -1327,7 +1349,7 @@ func _render_players() -> void:
 		var character_definition: Dictionary = _get_cached_character_definition(str(player.get("character_id", "")))
 		# 当前武将势力展示元数据；独立配置提供牌面简称、完整名称和主题颜色。
 		var faction_definition: Dictionary = _get_cached_faction_definition(str(character_definition.get("faction", "")))
-		player_button.configure_snapshot(player, character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
+		player_button.configure_snapshot(_build_player_display_snapshot(player), character_definition, target_id == int(_snapshot.get("current_player_id", -1)), faction_definition)
 		player_button.set_operation_state(target_id == _current_operator_player_id or _simultaneous_operator_player_ids.has(target_id))
 		# 当前公开身份；身份已经展示时清理旧本地标注，未知身份继续显示当前客户端的推测结果。
 		var public_identity: String = str(player.get("identity", "hidden"))
@@ -1344,7 +1366,7 @@ func _render_players() -> void:
 	var local_character_definition: Dictionary = _get_cached_character_definition(str(local_player_snapshot.get("character_id", "")))
 	# 本地武将势力展示元数据；与其他玩家使用同一配置入口，避免本地牌面拥有独立硬编码样式。
 	var local_faction_definition: Dictionary = _get_cached_faction_definition(str(local_character_definition.get("faction", "")))
-	local_player_card.configure_snapshot(local_player_snapshot, local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
+	local_player_card.configure_snapshot(_build_player_display_snapshot(local_player_snapshot), local_character_definition, int(local_player_snapshot.get("player_id", -1)) == int(_snapshot.get("current_player_id", -1)), local_faction_definition)
 	local_player_card.set_operation_state(int(local_player_snapshot.get("player_id", -1)) == _current_operator_player_id or _simultaneous_operator_player_ids.has(int(local_player_snapshot.get("player_id", -1))))
 	local_player_card.set_public_equipment_visible(false)
 	local_player_card.set_public_judgment_visible(false)
@@ -1399,7 +1421,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
 			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
-			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("compact_text", "")), str(remaining_uses.get("description", "")))
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")))
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -1427,7 +1449,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
-		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("compact_text", "")), str(remaining_uses.get("description", "")))
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")))
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
@@ -1462,25 +1484,22 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 	# 本局累计已用次数；总共限制不随回合或轮次重置。
 	var total_uses: int = maxi(int(usage.get("total_uses", 0)), 0)
 	# 按固定顺序写入按钮缩写；总、回、轮可在62像素按钮第二行稳定并列显示。
-	var compact_parts: Array[String] = []
+	# 当前界面规范取消按钮缩写，以下固定顺序只用于悬停与右键详情的完整文案。
 	# 按固定顺序写入悬停完整说明；文本直接说明剩余次数，避免玩家自行推导已用次数。
 	var description_parts: Array[String] = []
 	if total_limit > 0:
 		# 总共剩余次数；达到0时仍显示，提示玩家该获得技能已耗尽。
 		var total_remaining: int = maxi(total_limit - total_uses, 0)
-		compact_parts.append("总%d" % total_remaining)
-		description_parts.append("总共还可发动%d次" % total_remaining)
+		description_parts.append("还可发动%d次" % total_remaining)
 	if per_turn_limit > 0:
 		# 回合剩余次数；跨回合时uses_this_turn已按0读取。
 		var turn_remaining: int = maxi(per_turn_limit - uses_this_turn, 0)
-		compact_parts.append("回%d" % turn_remaining)
-		description_parts.append("每回合还可发动%d次" % turn_remaining)
+		description_parts.append("每回合可发动%d次" % turn_remaining)
 	if per_round_limit > 0:
 		# 轮次剩余次数；额外回合仍使用同一轮的已用次数。
 		var round_remaining: int = maxi(per_round_limit - uses_this_round, 0)
-		compact_parts.append("轮%d" % round_remaining)
-		description_parts.append("每轮还可发动%d次" % round_remaining)
-	return {"compact_text":" ".join(compact_parts), "description":"；".join(description_parts)}
+		description_parts.append("每轮可发动%d次" % round_remaining)
+	return {"description":"；".join(description_parts)}
 
 
 ## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。

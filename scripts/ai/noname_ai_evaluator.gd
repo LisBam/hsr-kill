@@ -530,15 +530,17 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	var attitude: float = get_attitude(authoritative_snapshot, responder_id, target_id)
 	# 当前是否已被奇数张无懈抵消；下一张无懈会翻转该状态。
 	var currently_negated: bool = bool(context.get("negated", false))
+	# 当前锦囊来源；来源为正态度队友时，需要尊重其对自己或响应者的主动锦囊决策。
+	var source_id: int = int(context.get("source_id", -1))
+	# 队友在原锦囊尚未被抵消时对自身或响应者使用锦囊，响应者固定保留【无懈可击】；反无懈仍可恢复队友已经被抵消的锦囊。
+	# 队友对响应者本人使用动态结果为负的锦囊时，首轮保留无懈并相信队友的战术意图；反无懈仍可恢复该锦囊生效。
+	if not currently_negated and source_id >= 0 and source_id != responder_id and get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0 and (target_id == source_id or target_id == responder_id):
+		return false
 	# 原效果从响应者视角的收益；正数表示希望它生效，负数表示希望它失效。
 	var effect_utility: float = target_result * attitude
 	# 当前锦囊源码；复合收益锦囊可结合来源与响应者关系修正静态目标结果，但不能改变无懈奇偶规则。
 	if trick_definition_instance != null:
 		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
-	# 队友对响应者本人使用动态结果为负的锦囊时，首轮保留无懈并相信队友的战术意图；反无懈仍可恢复该锦囊生效。
-	var source_id: int = int(context.get("source_id", -1))
-	if not currently_negated and responder_id == target_id and target_result < 0.0 and source_id >= 0 and source_id != responder_id and get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0:
-		return false
 	return effect_utility > 0.0 if currently_negated else effect_utility < 0.0
 
 

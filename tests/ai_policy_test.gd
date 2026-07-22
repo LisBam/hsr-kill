@@ -761,6 +761,18 @@ func _test_wuxie_decision() -> bool:
 	var allied_negative_trick_choice: Dictionary = _policy.choose_card_choice(snapshot, allied_negative_trick_request, [pass_action, use_action])
 	if bool((allied_negative_trick_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_allied_negative_trick=%s" % [allied_negative_trick_choice])
+	# 队友对自己使用【闪电】；该牌静态结果为负，若缺少来源与目标保护分支，领袖会错误消耗无懈可击。
+	var allied_self_lightning_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"shandian", "source_id":2, "target_id":2, "negated":false}}
+	# 队友自用锦囊的无懈选择结果；应明确取消并保留无懈可击。
+	var allied_self_lightning_choice: Dictionary = _policy.choose_card_choice(snapshot, allied_self_lightning_request, [pass_action, use_action])
+	if bool((allied_self_lightning_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_allied_self_lightning=%s" % [allied_self_lightning_choice])
+	# 敌方对领袖使用乐不思蜀；友方来源保护不能扩展到敌方来源，领袖仍应使用无懈自保。
+	var enemy_negative_trick_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"lebu", "source_id":1, "target_id":0, "negated":false}}
+	# 敌方负面锦囊的无懈选择结果；应确认使用候选牌。
+	var enemy_negative_trick_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_negative_trick_request, [pass_action, use_action])
+	if not bool((enemy_negative_trick_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_enemy_negative_trick=%s" % [enemy_negative_trick_choice])
 	# 友方已横置时的【铁索连环】会解除连环，动态逐目标结果为正收益，不能再错误地使用无懈抵消。
 	(snapshot.get("players", []) as Array)[2]["chained"] = true
 	var chained_tiesuo_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"tiesuo", "source_id":1, "target_id":2, "negated":false}}
