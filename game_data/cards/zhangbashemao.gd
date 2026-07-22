@@ -131,7 +131,7 @@ func score_ai_play_phase_action(authoritative_snapshot: Dictionary, action: Dict
 	# 发动者 ID；用于身份态度和材料估值。
 	var actor_id: int = int(action.get("actor_id", -1))
 	# 虚拟【杀】动作；只向评估器提供合法目标与【杀】定义，不伪造实体 UID。
-	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":actor_id, "card_definition_id":"sha", "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+	var slash_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
 	# 虚拟【杀】基础收益；包含目标体力、手牌与身份态度。
 	var score: float = evaluator.score_action(authoritative_snapshot, slash_action, actor_id)
 	for material_uid_variant: Variant in (action.get("payload", {}) as Dictionary).get("material_card_uids", []) as Array:
@@ -139,6 +139,13 @@ func score_ai_play_phase_action(authoritative_snapshot: Dictionary, action: Dict
 		var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, actor_id, int(material_uid_variant))
 		score -= material_value * 0.45
 	return score
+
+
+## 构造丈八蛇矛实际生成的普通【杀】代理动作；疾雨、星火等使用【杀】联动会由基础AI统一计入。
+func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
+	# 发动者ID；自定义装备动作与虚拟【杀】必须保持同一使用者。
+	var actor_id: int = int(action.get("actor_id", -1))
+	return {"action_type":"use_card", "actor_id":actor_id, "card_definition_id":"sha", "target_ids":(action.get("target_ids", []) as Array).duplicate()}
 
 
 ## 校验丈八主动使用：装备、两张材料、阶段次数、攻击范围和目标必须全部合法。

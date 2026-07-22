@@ -191,7 +191,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 技能动作负载；保存材料UID和实际目标。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	# 虚拟雷【杀】动作；通用评估器会计算敌我态度、体力、手牌、响应与属性连环传导。
-	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
+	var slash_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
 	# 雷【杀】基础收益；包含出牌顺序、目标效用和属性伤害。
 	var score: float = evaluator.score_action(authoritative_snapshot, slash_action, owner_player_id)
 	# 雷【杀】联动技能优先分；疾雨等技能可在自身元数据声明，普通黑色【杀】因此会优先通过罡风转化。
@@ -199,6 +199,15 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 材料牌保留价值；高价值【桃】、【闪】或关键装备不会被低收益攻击轻易消耗。
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
 	return score - material_value * AI_MATERIAL_COST_WEIGHT
+
+
+## 构造罡风实际生成的雷【杀】代理动作；完整评分链会把疾雨、还阳等用牌联动自然计入技能收益。
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
+	# 技能动作负载；保存黑色材料UID和目标数组。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 黑色材料牌快照；颜色字段用于防具与目标规则的AI复核。
+	var material_card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "card_color":str(material_card.get("color", "")), "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
 
 
 ## 汇总持有者技能声明的雷【杀】联动优先分；内容扩展可复用同一元数据字段而无需修改罡风源码。

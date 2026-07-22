@@ -347,7 +347,7 @@ func _test_all_players_have_characters_after_selection() -> bool:
 	return true
 
 
-## 五人身份表与胜负：击杀一名地主即农民胜。
+## 五人身份表与胜负：两名地主全部被击杀后农民方才获胜。
 func _test_five_player_distribution_and_winner() -> bool:
 	var state := GameState.new()
 	state.match_mode = IdentityRules.MODE_DOUDIZHU
@@ -363,8 +363,11 @@ func _test_five_player_distribution_and_winner() -> bool:
 	if _identity_rules.evaluate_winner(state) != "":
 		return _fail("five_should_continue")
 	state.players[2].alive = false
+	if _identity_rules.evaluate_winner(state) != "":
+		return _fail("kill_one_landlord_should_continue")
+	state.players[0].alive = false
 	if _identity_rules.evaluate_winner(state) != "peasants":
-		return _fail("kill_one_landlord_peasants_win")
+		return _fail("kill_all_landlords_peasants_win")
 	return true
 
 

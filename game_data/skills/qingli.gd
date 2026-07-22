@@ -124,5 +124,12 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 
 ## 使用雷【杀】标准牌效并扣除1点体力的统一资源价值；低体力风险由通用评估器进一步体现。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+	var slash_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
 	return evaluator.score_action(authoritative_snapshot, slash_action, owner_player_id) + evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -HP_COST)
+
+
+## 构造倾力实际生成的无材料雷【杀】代理动作；其完整用牌联动收益与1点体力费用分别结算。
+func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
+	# 雷【杀】目标数组；动作已由规则层确认满足距离和次数限制。
+	var target_ids: Array = (action.get("target_ids", []) as Array).duplicate()
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":THUNDER_SLASH_DEFINITION_ID, "target_ids":target_ids}

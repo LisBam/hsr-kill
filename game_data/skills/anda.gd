@@ -194,9 +194,18 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 技能动作负载；保存材料UID与目标。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	# 火【杀】代理动作；通用评估器负责敌我、闪、藤甲和属性连环收益。
-	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":FIRE_SLASH_DEFINITION_ID, "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
+	var slash_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
 	# 火【杀】基础收益；不包含材料机会成本。
 	var score: float = evaluator.score_action(authoritative_snapshot, slash_action, owner_player_id)
 	# 材料牌保留价值；桃、闪与关键装备会获得更高保留权重。
 	var material_value: float = evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
 	return score - material_value * AI_MATERIAL_COST_WEIGHT
+
+
+## 构造安打实际生成的火【杀】代理动作；材料颜色会继续参与仁王盾等防具的完整AI判断。
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
+	# 技能动作负载；保存材料UID与目标数组。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 材料牌快照；虚拟火【杀】继承该实体的真实颜色。
+	var material_card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":FIRE_SLASH_DEFINITION_ID, "card_color":str(material_card.get("color", "")), "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}

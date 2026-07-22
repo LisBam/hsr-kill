@@ -8,6 +8,9 @@ const MAX_VIEW_COUNT: int = 5
 ## AI在没有判定区时优先置于牌堆顶的摸牌数量；默认2对应基础摸牌阶段。
 const AI_BASE_DRAW_COUNT: int = 2
 
+## AI确认发动星祈的固定收益；100分保证任意可选锦囊都不会因通用选牌成本而被取消，仅影响AI决策。
+const AI_ALWAYS_ACTIVATE_SCORE: float = 100.0
+
 
 ## 写入触发技能静态信息；技能描述严格保持主公提供的原文。
 func _init() -> void:
@@ -190,8 +193,11 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == "xingqi_trick":
+		# 取消动作保持0分；确认动作固定获得必发动收益，同时继续按牌值挑选具体锦囊。
+		if not bool(payload.get("confirmed", false)):
+			return 0.0
 		var selected_cards: Array = payload.get("selected_card_uids", []) as Array
-		return evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id) if selected_cards.size() == 1 else 0.1
+		return AI_ALWAYS_ACTIVATE_SCORE + evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id) if selected_cards.size() == 1 else AI_ALWAYS_ACTIVATE_SCORE
 	if choice_kind == "xingqi_recipient":
 		var selected_targets: Array = payload.get("selected_target_ids", []) as Array
 		if selected_targets.size() != 1:

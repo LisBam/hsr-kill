@@ -166,7 +166,17 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 		var skill: SkillDefinition = _get_decision_skill_instance(skill_id)
 		if skill != null:
 			skill.bind(null, player_id)
-			return skill.score_ai_action(authoritative_snapshot, action, evaluator)
+			# 技能自身评分；负责材料、体力等发动成本以及技能独有的额外收益。
+			var skill_score: float = skill.score_ai_action(authoritative_snapshot, action, evaluator)
+			# 技能生成的虚拟用牌代理；转化牌必须继续经过卡牌本体和持有者其他技能的完整评分链。
+			var virtual_card_action: Dictionary = skill.build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
+			if not virtual_card_action.is_empty():
+				# 技能评分中已经包含的通用虚拟牌收益；只追加完整评分相对该基础值的差额，避免重复计算目标牌效。
+				var base_virtual_score: float = evaluator.score_action(authoritative_snapshot, virtual_card_action, player_id)
+				# 完整虚拟牌收益；包含卡牌专属修正、被动技能联动以及防具完全拦截判断。
+				var complete_virtual_score: float = _score_ai_virtual_card_action(authoritative_snapshot, virtual_card_action)
+				skill_score += complete_virtual_score - base_virtual_score
+			return skill_score
 		return 0.0
 	# 通用卡牌或重铸基础评分；具体卡牌数据来自自身 GD 文件的 ai 字典。
 	var score: float = evaluator.score_action(authoritative_snapshot, action, player_id)
@@ -177,7 +187,17 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 			# 自定义动作所属卡牌定义；内容文件负责补充专属评分，规则合法性仍由核心保证。
 			var custom_definition: CardDefinition = GameDatabase.get_card_definition(custom_card_id)
 			if custom_definition != null:
-				return custom_definition.score_ai_play_phase_action(authoritative_snapshot, action, evaluator)
+				# 自定义动作本体评分；装备材料成本仍由对应卡牌文件独立维护。
+				var custom_score: float = custom_definition.score_ai_play_phase_action(authoritative_snapshot, action, evaluator)
+				# 自定义动作生成的虚拟用牌代理；丈八蛇矛等转化装备由此获得持有者技能联动收益。
+				var custom_virtual_action: Dictionary = custom_definition.build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
+				if not custom_virtual_action.is_empty():
+					# 自定义评分中已经包含的通用虚拟牌收益；仅追加完整链路产生的差额。
+					var custom_base_virtual_score: float = evaluator.score_action(authoritative_snapshot, custom_virtual_action, player_id)
+					# 自定义虚拟牌完整收益；与主动技能转化使用相同的卡牌和被动技能评分入口。
+					var custom_complete_virtual_score: float = _score_ai_virtual_card_action(authoritative_snapshot, custom_virtual_action)
+					custom_score += custom_complete_virtual_score - custom_base_virtual_score
+				return custom_score
 		return score
 	# 当前卡牌源码定义；特殊牌可在自身文件内修正通用元数据无法完整表达的动作收益。
 	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
@@ -193,6 +213,32 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 		# 当前牌AI配置；order只用于收益接近时排序，不能单独构成消耗无效牌的理由。
 		var action_ai_profile: Dictionary = evaluator.get_card_ai_profile(action_definition)
 		# 纯顺序分；移除后剩余分数才表示防具拦截之外的真实卡牌或技能收益。
+		var action_order_score: float = float(action_ai_profile.get("order", 0.0)) * NonameAIEvaluator.ORDER_WEIGHT
+		if score - action_order_score <= ACTION_ACCEPTANCE_THRESHOLD:
+			return -INF
+	return score
+
+
+## 计算一项已经由规则确认合法的虚拟用牌完整收益；只补齐卡牌专属与持有者技能修正，不执行任何牌效。
+func _score_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary) -> float:
+	# 通用虚拟牌收益；包含定义自身的顺序、目标效果与属性伤害估值。
+	var score: float = evaluator.score_action(authoritative_snapshot, action, player_id)
+	if str(action.get("action_type", "")) != "use_card":
+		return score
+	# 当前虚拟牌源码；复杂卡牌仍可通过自身钩子修正动作收益。
+	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
+	if card_definition != null:
+		score = card_definition.modify_ai_action_score(authoritative_snapshot, action, score, evaluator)
+	# 使用者全部有效技能；转化牌实际使用后会触发的被动联动必须与实体牌使用保持一致。
+	for skill: SkillDefinition in _decision_card_modifier_skills:
+		score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
+	# 防具完全拦截时移除纯出牌顺序造成的伪收益；仍允许星火等独立技能收益保留该动作。
+	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
+		# 当前虚拟牌静态定义；用于读取只承担排序作用的order字段。
+		var action_definition: Dictionary = _get_cached_card_definition(str(action.get("card_definition_id", "")))
+		# 当前虚拟牌AI配置；缺失order时按0处理。
+		var action_ai_profile: Dictionary = evaluator.get_card_ai_profile(action_definition)
+		# 纯顺序分；扣除后没有正向联动表示该虚拟牌不值得使用。
 		var action_order_score: float = float(action_ai_profile.get("order", 0.0)) * NonameAIEvaluator.ORDER_WEIGHT
 		if score - action_order_score <= ACTION_ACCEPTANCE_THRESHOLD:
 			return -INF
@@ -216,8 +262,10 @@ func _is_slash_fully_blocked_by_armor(authoritative_snapshot: Dictionary, action
 	var card_uid: int = int(action.get("card_uid", -1))
 	# 当前使用实体快照；仅【杀】的颜色型防具需要读取该字段。
 	var used_card: Dictionary = _find_owned_card(authoritative_snapshot, player_id, card_uid)
-	# 当前实体颜色；空值表示虚拟牌或无法确认颜色，防具钩子必须自行决定是否仍可拦截。
-	var card_color: String = str(used_card.get("color", ""))
+	# 当前动作负载；虚拟用牌会在此显式保留真实材料颜色。
+	var action_payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 当前实体或材料颜色；显式虚拟颜色优先，空值再回退实体牌快照。
+	var card_color: String = str(action.get("card_color", action_payload.get("card_color", used_card.get("color", ""))))
 	# 当前使用者公开武器；声明无视防具时不应把合法攻击误判为无效。
 	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
 	# 当前武器快照；只在【杀】动作中参与防具忽略判断。

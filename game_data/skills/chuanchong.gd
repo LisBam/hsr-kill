@@ -191,7 +191,16 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	var material_uid: int = int(payload.get("material_card_uid", -1))
-	var material_data: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, material_uid)
-	var trick_id: String = str(TRICK_BY_SUIT.get(str(material_data.get("suit", "")), ""))
-	var trick_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":trick_id, "target_ids":(payload.get("target_ids", []) as Array).duplicate()}
+	var trick_action: Dictionary = build_ai_virtual_card_action(authoritative_snapshot, action, evaluator)
 	return evaluator.score_action(authoritative_snapshot, trick_action, owner_player_id) - evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, material_uid) * AI_MATERIAL_COST_WEIGHT
+
+
+## 构造传冲按材料花色实际生成的锦囊代理动作；星火等“使用锦囊”联动由基础AI统一补入。
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
+	# 技能动作负载；保存材料UID和当前花色分支的完整目标数组。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 材料牌快照；花色决定顺手牵羊、无中生有、过河拆桥或借刀杀人。
+	var material_data: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, int(payload.get("material_card_uid", -1)))
+	# 实际虚拟锦囊定义ID；异常花色返回空值并由评估器给出0分。
+	var trick_id: String = str(TRICK_BY_SUIT.get(str(material_data.get("suit", "")), ""))
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":trick_id, "card_color":str(material_data.get("color", "")), "target_ids":(payload.get("target_ids", []) as Array).duplicate()}
