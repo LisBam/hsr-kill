@@ -558,6 +558,19 @@ func _test_mingchen_guanshi_cost_continuation() -> bool:
 	_controller._execute_card_use(0, slash_card, [1])
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response" or not _submit_pending_choice(1, [dodge_card.uid], [], true):
 		return _fail("mingchen_guanshi_dodge")
+	# 贯石斧费用请求；当前武器本体不能进入候选，界面因此也不会将它自动选为第一张弃牌费用。
+	var guanshi_cost_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	# 费用候选UID；应且只应包含两张普通手牌。
+	var guanshi_cost_candidate_uids: Array[int] = []
+	# 当前候选快照；测试只提取稳定UID，不依赖牌面文本或区域排序。
+	for candidate_variant: Variant in guanshi_cost_choice.get("candidates", []) as Array:
+		guanshi_cost_candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+	guanshi_cost_candidate_uids.sort()
+	# 期望候选UID；排序后比较可避免候选区域枚举顺序影响规则断言。
+	var expected_guanshi_cost_uids: Array[int] = [first_cost.uid, second_cost.uid]
+	expected_guanshi_cost_uids.sort()
+	if str((guanshi_cost_choice.get("context", {}) as Dictionary).get("kind", "")) != "guanshi_cost" or guanshi_cost_candidate_uids != expected_guanshi_cost_uids or guanshi_cost_candidate_uids.has(guanshi_card.uid):
+		return _fail("mingchen_guanshi_candidates=%s weapon=%d" % [guanshi_cost_candidate_uids, guanshi_card.uid])
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "guanshi_cost" or not _submit_pending_choice(0, [first_cost.uid, second_cost.uid], [], true):
 		return _fail("mingchen_guanshi_cost")
 	# 两张费用已弃置但伤害仍等待冥谶；栈内同时保留武器阶段与父目标收尾且目标体力尚未改变。
@@ -566,7 +579,7 @@ func _test_mingchen_guanshi_cost_continuation() -> bool:
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
 	# 冥谶结束后先恢复贯石斧令杀命中，再完成父目标；费用、闪和杀都只移动一次。
-	if target.hp != 3 or not hanya.hand.has(mingchen_gain_card) or not _controller.state.discard_pile.has(first_cost) or not _controller.state.discard_pile.has(second_cost) or not _controller.state.discard_pile.has(dodge_card) or not _controller.state.discard_pile.has(slash_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+	if target.hp != 3 or hanya.get_weapon() != guanshi_card or not hanya.hand.has(mingchen_gain_card) or not _controller.state.discard_pile.has(first_cost) or not _controller.state.discard_pile.has(second_cost) or not _controller.state.discard_pile.has(dodge_card) or not _controller.state.discard_pile.has(slash_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
 		return _fail("mingchen_guanshi_complete hp=%d continuations=%s" % [target.hp, _controller._rule_continuations.to_array()])
 	return true
 
