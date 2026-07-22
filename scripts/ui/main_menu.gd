@@ -27,6 +27,9 @@ signal start_game_requested(player_count: int)
 ## 左侧模式卡片选中态相对主题操作色的加深比例；默认0.28让身份模式、斗地主与2v2的内部棕色形成清晰选中层级，运行时仅影响视觉表现，可在检查器中按主题对比度调整。
 @export_range(0.0, 0.6, 0.01) var mode_selected_background_darkening: float = 0.28
 
+## 左侧模式列表纵向滚动条宽度；默认12像素兼顾鼠标拖动与紧凑侧栏，运行时只影响界面浏览区域。
+@export_range(8.0, 24.0, 1.0) var mode_scroll_bar_width: float = 12.0
+
 ## 身份模式正常待机时显示的状态文字；集中定义可避免按钮区与错误提示使用不同默认文案。
 ## 待机状态保留空文本，以便底部操作栏只在开局反馈或错误发生时显示状态信息。
 const MODE_READY_STATUS_TEXT: String = ""
@@ -43,6 +46,9 @@ const STARTING_STATUS_TEXT_TEAM2V2: String = "正在创建2v2对局……"
 ## 1v1车轮战创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
 const STARTING_STATUS_TEXT_WHEEL_DUEL: String = "正在创建1v1车轮战对局……"
 
+## 机缘大乱斗创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
+const STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL: String = "正在创建机缘大乱斗对局……"
+
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
@@ -52,8 +58,11 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 主菜单外框；左侧模式列表与右侧模式预览共同位于此容器内，颜色始终由当前 UI 风格提供。
 @onready var _main_frame: PanelContainer = %MainMenuFrame
 
-## 左侧模式选择区域；当前只显示身份模式，后续模式可在不改变右侧开局协议的前提下追加。
+## 左侧模式选择区域；标题保持固定，模式卡通过内部滚动窗口扩展而不压缩原版卡片规格。
 @onready var _mode_list: PanelContainer = %MainMenuModeList
+
+## 左侧模式卡滚动窗口；只滚动模式卡片，固定标题、右侧预览和底部操作栏不随列表移动。
+@onready var _mode_scroll: ScrollContainer = %MainMenuModeScroll
 
 ## 右侧身份模式预览区域；承载可裁剪的模式背景与底部操作按钮，不保存玩法状态。
 @onready var _preview_panel: PanelContainer = %MainMenuPreviewPanel
@@ -82,6 +91,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 左侧1v1车轮战模式按钮指示条；选中时显示主题强调色。
 @onready var _wheel_duel_mode_card_indicator: ColorRect = %WheelDuelModeIndicator
 
+## 左侧机缘大乱斗模式按钮指示条；选中时显示主题强调色。
+@onready var _opportunity_brawl_mode_card_indicator: ColorRect = %OpportunityBrawlModeIndicator
+
 ## 左侧斗地主模式卡片按钮；与身份模式并列，只负责写入下一局模式配置。
 @onready var _doudizhu_mode_button: Button = %DouDizhuModeButton
 
@@ -90,6 +102,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 左侧1v1车轮战模式卡片按钮；固定2人并启用专属候选设置。
 @onready var _wheel_duel_mode_button: Button = %WheelDuelModeButton
+
+## 左侧机缘大乱斗模式卡片按钮；继承身份规则人数并启用机缘组件。
+@onready var _opportunity_brawl_mode_button: Button = %OpportunityBrawlModeButton
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -241,6 +256,7 @@ func _ready() -> void:
 	_doudizhu_mode_button.pressed.connect(_select_doudizhu_mode)
 	_team2v2_mode_button.pressed.connect(_select_team2v2_mode)
 	_wheel_duel_mode_button.pressed.connect(_select_wheel_duel_mode)
+	_opportunity_brawl_mode_button.pressed.connect(_select_opportunity_brawl_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
@@ -381,6 +397,7 @@ func refresh_ui_style() -> void:
 	_top_navigation.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
 	_main_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
 	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_apply_mode_scroll_bar_style()
 	_preview_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_preview_mode_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
 	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_summary_opacity), BattleUIStyle.get_color("border")))
@@ -394,6 +411,7 @@ func refresh_ui_style() -> void:
 	_doudizhu_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_team2v2_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_wheel_duel_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_opportunity_brawl_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
@@ -401,6 +419,7 @@ func refresh_ui_style() -> void:
 	_apply_mode_button_style(_doudizhu_mode_button)
 	_apply_mode_button_style(_team2v2_mode_button)
 	_apply_mode_button_style(_wheel_duel_mode_button)
+	_apply_mode_button_style(_opportunity_brawl_mode_button)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -421,6 +440,8 @@ func refresh_ui_style() -> void:
 	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%DouDizhuModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%OpportunityBrawlModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -478,6 +499,8 @@ func _restore_selected_match_mode() -> void:
 		_select_team2v2_mode()
 	elif restored_mode == GameSettings.MATCH_MODE_WHEEL_DUEL:
 		_select_wheel_duel_mode()
+	elif restored_mode == GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:
+		_select_opportunity_brawl_mode()
 	else:
 		_select_identity_mode()
 
@@ -507,12 +530,15 @@ func _select_identity_mode() -> void:
 	_doudizhu_mode_button.button_pressed = false
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = false
 	_mode_card_indicator.visible = true
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _identity_mode_button)
 
 
 ## 选中斗地主模式；人数限制为 3 与 5，写入下一局模式配置后不改进行中的对局。
@@ -545,12 +571,15 @@ func _select_doudizhu_mode() -> void:
 	_doudizhu_mode_button.button_pressed = true
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = true
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _doudizhu_mode_button)
 
 
 ## 选中 2v2 模式；固定 4 人，写入下一局模式配置后不改进行中的对局。
@@ -581,12 +610,15 @@ func _select_team2v2_mode() -> void:
 	_doudizhu_mode_button.button_pressed = false
 	_team2v2_mode_button.button_pressed = true
 	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = true
 	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _team2v2_mode_button)
 
 
 ## 选中1v1车轮战模式；固定2人并显示明置X、暗置Y两项专属候选设置。
@@ -610,12 +642,49 @@ func _select_wheel_duel_mode() -> void:
 	_doudizhu_mode_button.button_pressed = false
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = true
+	_opportunity_brawl_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = true
+	_opportunity_brawl_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(true)
 	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _wheel_duel_mode_button)
+
+
+## 选中机缘大乱斗模式；人数范围继承身份模式2至10人，并显示普通身份局的开局设置。
+func _select_opportunity_brawl_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL)
+	minimum_player_count = 2
+	maximum_player_count = 10
+	_player_count_input.min_value = minimum_player_count
+	_player_count_input.max_value = maximum_player_count
+	_player_count_input.step = 1.0
+	# 机缘大乱斗独立人数设置；默认8人，切换模式时不覆盖普通身份局人数。
+	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL)
+	set_next_player_count(preferred_count)
+	_mode_title.text = "机缘大乱斗"
+	_mode_description.text = "身份模式基础 · 2—10人 · 每轮全体三选一机缘"
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = true
+	_set_wheel_duel_settings_visible(false)
+	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _opportunity_brawl_mode_button)
 
 
 ## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，避免普通模式设置面板溢出。
@@ -706,6 +775,8 @@ func _request_start_game() -> void:
 		starting_status = STARTING_STATUS_TEXT_TEAM2V2
 	elif _selected_match_mode == GameSettings.MATCH_MODE_WHEEL_DUEL:
 		starting_status = STARTING_STATUS_TEXT_WHEEL_DUEL
+	elif _selected_match_mode == GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:
+		starting_status = STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL
 	_show_status(starting_status, false)
 	# 再次确认模式写入；防止设置浮层改人数后模式丢失。
 	if GameSettings != null:
@@ -966,6 +1037,28 @@ func _apply_mode_button_style(button: Button) -> void:
 	var selected_background_color: Color = background_color.darkened(mode_selected_background_darkening)
 	BattleUIStyle.apply_interaction_button(button, background_color, border_color, true)
 	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(selected_background_color, border_color, true))
+
+
+## 为左侧模式列表滚动条应用当前主题；滚动轨道与拖块只负责浏览，不改变模式选择状态。
+func _apply_mode_scroll_bar_style() -> void:
+	if _mode_scroll == null:
+		return
+	# 模式列表纵向滚动条；宽度由检查器参数统一控制，主题切换时原位重绘。
+	var scroll_bar: VScrollBar = _mode_scroll.get_v_scroll_bar()
+	if scroll_bar == null:
+		return
+	scroll_bar.custom_minimum_size.x = mode_scroll_bar_width
+	scroll_bar.add_theme_stylebox_override("scroll", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
+
+
+## 让当前选中的模式卡完整进入滚动窗口；键盘恢复持久化模式时也不会把选中项留在视口外。
+func _ensure_mode_button_visible(button: Control) -> void:
+	if _mode_scroll == null or button == null or not is_instance_valid(button):
+		return
+	_mode_scroll.ensure_control_visible(button)
 
 
 ## 为主菜单设置滑条应用主题轨道与已选区域；数值范围和步长仍由 GameSettings 决定。

@@ -787,6 +787,11 @@ func _render_character_skills() -> void:
 		var temporary_skill_id: String = str(temporary_skill_id_variant)
 		if not skill_ids.has(temporary_skill_id):
 			skill_ids.append(temporary_skill_id)
+	for acquired_skill_id_variant: Variant in (_character_snapshot.get("acquired_skills", {}) as Dictionary).keys():
+		# 当前局内永久获得技能ID；与固有或临时技能同名时只显示一次。
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		if not skill_ids.has(acquired_skill_id):
+			skill_ids.append(acquired_skill_id)
 	if skill_ids.is_empty():
 		# 无技能占位说明；只表达静态内容为空，不推断运行时技能状态。
 		var empty_label: Label = Label.new()

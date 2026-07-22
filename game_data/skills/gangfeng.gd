@@ -155,6 +155,11 @@ func get_converted_response_definition_id(card: CardInstance, response_patterns:
 	return THUNDER_SLASH_DEFINITION_ID if can_convert_response_card(card, response_patterns) else ""
 
 
+## 黑色材料已经实际转化并响应成功后记录罡风发动；用于公开日志与机缘授予的每回合三次额度。
+func on_converted_response_consumed(card: CardInstance, response_pattern: String, virtual_definition_id: String) -> void:
+	announce_activation({"material_card_uid":card.uid if card != null else -1, "response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
+
+
 ## 向AI合法动作列表追加每个黑色材料与雷【杀】目标的合法组合。
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():

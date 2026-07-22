@@ -579,6 +579,11 @@ func _request_character_information() -> void:
 		var temporary_skill_id: String = str(temporary_skill_id_variant)
 		if not visible_skill_ids.has(temporary_skill_id):
 			visible_skill_ids.append(temporary_skill_id)
+	for acquired_skill_id_variant: Variant in (_player_snapshot.get("acquired_skills", {}) as Dictionary).keys():
+		# 当前局内永久获得技能ID；与固有、模式或临时技能同名时不重复显示。
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		if not visible_skill_ids.has(acquired_skill_id):
+			visible_skill_ids.append(acquired_skill_id)
 	# 当前武将全部技能文本；严格保持固有技能顺序，临时技能按运行时授予顺序追加。
 	var skill_information_lines: Array[String] = []
 	# 当前武将结构化技能分段；统一信息框据此把技能名绘制为与右键详情一致的金色，同时保持说明文字颜色不变。

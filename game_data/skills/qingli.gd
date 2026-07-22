@@ -104,6 +104,11 @@ func get_cardless_response_definition_id(response_patterns: Array[String]) -> St
 	return THUNDER_SLASH_DEFINITION_ID if response_patterns.has("sha") else ""
 
 
+## 无材料雷【杀】已经实际响应成功后记录倾力发动；用于公开日志与机缘授予的每回合三次额度。
+func on_cardless_response_consumed(response_pattern: String, virtual_definition_id: String) -> void:
+	announce_activation({"response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
+
+
 ## 返回主动使用雷【杀】的全部合法单目标。
 func _get_legal_target_ids() -> Array[int]:
 	return host.card_rules.list_legal_virtual_targets(owner_player_id, THUNDER_SLASH_DEFINITION_ID)

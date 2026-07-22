@@ -86,6 +86,10 @@ func _run() -> void:
 	var team2v2_mode_button: Button = main_instance.get_node("%Team2v2ModeButton") as Button
 	# 左侧1v1车轮战模式按钮；与其他模式共用相同卡片样式和稳定排列。
 	var wheel_duel_mode_button: Button = main_instance.get_node("%WheelDuelModeButton") as Button
+	# 左侧机缘大乱斗模式按钮；排列在车轮战之后并复用同一模式卡片视觉规范。
+	var opportunity_brawl_mode_button: Button = main_instance.get_node("%OpportunityBrawlModeButton") as Button
+	# 左侧机缘大乱斗模式标题；新增入口必须与原版模式卡使用相同27像素标题字号。
+	var opportunity_brawl_mode_name: Label = main_instance.get_node("%OpportunityBrawlModeName") as Label
 	# 左侧身份模式标题；必须独立于按钮文本呈现，以便标题可使用更大的主题字号。
 	var identity_mode_name: Label = main_instance.get_node("%IdentityModeName") as Label
 	# 左侧身份模式人数说明；仅展示可选人数范围，不重复标准身份局描述。
@@ -94,6 +98,12 @@ func _run() -> void:
 	var mode_rule_hint: Label = main_instance.get_node("%MainMenuModeRuleHint") as Label
 	# 左侧模式面板；用于确认其中没有隐藏的第二个模式按钮。
 	var mode_list: PanelContainer = main_instance.get_node("%MainMenuModeList") as PanelContainer
+	# 左侧模式卡滚动窗口；新增模式只能扩展滚动内容，不能压缩原有卡片尺寸。
+	var mode_scroll: ScrollContainer = main_instance.get_node("%MainMenuModeScroll") as ScrollContainer
+	# 左侧模式卡纵向容器；保持原版12像素间距并作为滚动范围的唯一内容节点。
+	var mode_cards: VBoxContainer = main_instance.get_node("%ModeCardsVBox") as VBoxContainer
+	# 左侧模式列表固定标题；不随模式卡滚动并保留原版48像素高度。
+	var mode_list_title: Label = main_instance.get_node("%MainMenuModeListTitle") as Label
 	# 预览底部操作栏；主题切换后其描边必须使用当前主题强调色。
 	var action_panel: PanelContainer = main_instance.get_node("%MainMenuActionPanel") as PanelContainer
 	# 主菜单状态文字；开局失败时必须展示控制器返回的具体拒绝原因。
@@ -143,18 +153,47 @@ func _run() -> void:
 	var team2v2_selected_style: StyleBoxFlat = team2v2_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	# 1v1车轮战卡片的持续选中样式；四张模式卡片使用同一视觉规则。
 	var wheel_duel_selected_style: StyleBoxFlat = wheel_duel_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
-	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or wheel_duel_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not wheel_duel_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
+	# 机缘大乱斗卡片的持续选中样式；第五张模式卡片仍使用完全相同的选中底色。
+	var opportunity_brawl_selected_style: StyleBoxFlat = opportunity_brawl_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or wheel_duel_selected_style == null or opportunity_brawl_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not wheel_duel_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not opportunity_brawl_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
 		_fail("mode_selected_background")
 		return
 	# 顶部按钮顺序；“联机设置”必须紧跟在“模式选择”右侧，左侧游戏模式列表仍只有身份模式一项。
-	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2、1v1车轮战排列，四项均直接可选。
+	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2、1v1车轮战、机缘大乱斗排列，五项均直接可选。
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
 	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
 	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 4 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button:
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 5 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
-	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
+	# 模式卡滚动范围；五张100像素卡片加四段12像素间距必须高于可视区，确保新增入口通过滚动浏览而非缩小。
+	var mode_scroll_bar: VScrollBar = mode_scroll.get_v_scroll_bar() if mode_scroll != null else null
+	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
+		_fail("mode_scroll_layout title=%s cards=%s range=%s/%s" % [str(mode_list_title.custom_minimum_size if mode_list_title != null else Vector2.ZERO), str(mode_cards.get_theme_constant("separation") if mode_cards != null else -1), str(mode_scroll_bar.max_value if mode_scroll_bar != null else -1.0), str(mode_scroll_bar.page if mode_scroll_bar != null else -1.0)])
+		return
+	# 滚动到底部后第五张模式卡必须完整进入视口；证明模式入口没有依赖裁切区域外的不可点击节点。
+	mode_scroll.scroll_vertical = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var opportunity_mode_rect: Rect2 = opportunity_brawl_mode_button.get_global_rect()
+	var mode_scroll_rect: Rect2 = mode_scroll.get_global_rect()
+	if opportunity_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or opportunity_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
+		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(opportunity_mode_rect), str(mode_scroll_rect)])
+		return
+	# 通过滚动窗口内的真实鼠标点击选择第五项；模式切换不能依赖列表外部快捷入口。
+	await _click_control(opportunity_brawl_mode_button)
+	await get_tree().process_frame
+	if not opportunity_brawl_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:
+		_fail("mode_scroll_opportunity_click")
+		return
+	mode_scroll.scroll_vertical = 0
+	await get_tree().process_frame
+	await _click_control(identity_mode_button)
+	await get_tree().process_frame
+	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY:
+		_fail("mode_scroll_identity_restore")
+		return
+	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
 		return
 	# 默认客户区矩形；打开联机设置前记录，用于断言资料页与模式预览使用同一客户区，而不是全屏弹层。

@@ -302,6 +302,8 @@ func _test_restricted_group_trick_targets() -> bool:
 	pofeng.set("_active_restricted_target_ids", {1:true})
 	_controller.skill_instances_by_player = {0:{"pofeng":pofeng}}
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 桃园结义只把已受伤角色纳入实际目标；令破风允许的二号玩家受伤，才能同时验证两张群体锦囊的目标收敛。
+	_controller.state.get_player(1).hp = 3
 	# 两张全体目标锦囊；五谷与桃园都应自动得到唯一合法目标，并继续进入合法动作列表。
 	var harvest: CardInstance = _add_hand_card(0, "wugu", "heart", 3)
 	var peach_garden: CardInstance = _add_hand_card(0, "taoyuan", "heart", 1)
