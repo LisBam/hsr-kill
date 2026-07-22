@@ -9,11 +9,38 @@ signal card_selected(card_id: String)
 ## 正式机缘卡固定尺寸；宽高参考武将牌比例，三张并列时适配1280×720战斗视口。
 @export var card_size: Vector2 = Vector2(180.0, 240.0)
 
+## 鼠标悬停时的缩放倍率；默认1.06与正式卡牌一致，运行时只改变机缘卡视觉反馈。
+@export_range(1.0, 1.2, 0.01) var hover_scale: float = 1.06
+
+## 悬停缩放动画时长；默认0.12秒与正式卡牌一致，暂停选择期间仍会继续播放。
+@export_range(0.05, 0.4, 0.01) var hover_animation_seconds: float = 0.12
+
+## 悬停时卡面背景提亮比例；默认0.08与正式卡牌纸张反馈一致，不改变品质语义。
+@export_range(0.0, 0.3, 0.01) var hover_lightening: float = 0.08
+
+## 悬停时额外增加的边框像素；默认1像素，在保留品质粗边框的同时模拟正式卡牌加粗反馈。
+@export_range(0, 4, 1) var hover_border_bonus: int = 1
+
+## 悬停卡牌临时绘制层级；固定100与正式卡牌一致，确保三张卡重叠时当前牌显示在最上方。
+const HOVER_Z_INDEX: int = 100
+
 ## 当前机缘卡稳定ID；空字符串表示尚未配置，点击不会发出选择。
 var _card_id: String = ""
 
 ## 当前是否允许点击；等待其他玩家时牌面可保持显示但不会提交动作。
 var _interactive: bool = false
+
+## 当前机缘卡品质主色；配置卡牌时写入，悬停刷新只基于该颜色计算而不重复解析卡牌定义。
+var _quality_color: Color = Color("3f8f58")
+
+## 当前鼠标是否悬停在可交互机缘卡上；只决定缩放、提亮、边框与绘制层级。
+var _is_hovered: bool = false
+
+## 当前悬停缩放动画；进入、离开或禁用时先停止旧动画，避免快速移动鼠标产生缩放抖动。
+var _hover_tween: Tween
+
+## 机缘卡未悬停时的原始绘制层级；默认0，恢复时不假设父容器永远使用同一层级。
+var _resting_z_index: int = 0
 
 ## 卡面规则正文；只显示主公提供的机缘描述，不添加插画、标题或额外规则改写。
 @onready var _description_label: Label = %DescriptionLabel
@@ -24,8 +51,13 @@ var _interactive: bool = false
 
 ## 初始化透明输入并应用默认不可交互状态。
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	custom_minimum_size = card_size
+	pivot_offset = card_size * 0.5
+	_resting_z_index = z_index
 	_input_button.pressed.connect(_on_pressed)
+	_input_button.mouse_entered.connect(_on_mouse_entered)
+	_input_button.mouse_exited.connect(_on_mouse_exited)
 	_input_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_refresh_interaction_state()
 
@@ -36,38 +68,55 @@ func configure(card_definition: Dictionary, interactive: bool = true) -> void:
 	_interactive = interactive and not _card_id.is_empty()
 	_description_label.text = str(card_definition.get("description", ""))
 	_apply_quality_style(str(card_definition.get("quality", "green")))
+	if not _interactive:
+		_restore_hover_state()
 	_refresh_interaction_state()
 
 
 ## 设置当前牌面是否允许提交选择；权威回包前可立即禁用内部按钮，避免快速连点产生重复动作。
 func set_interactive(interactive: bool) -> void:
 	_interactive = interactive and not _card_id.is_empty()
+	if not _interactive:
+		_restore_hover_state()
 	_refresh_interaction_state()
 
 
 ## 根据品质应用整张卡面颜色；颜色仅表达稀有度，不改变正文与规则数值。
 func _apply_quality_style(quality_id: String) -> void:
 	# 品质主色；五种颜色在深色牌桌上保持足够亮度并与武将牌金属边框风格协调。
-	var quality_color: Color = {
+	_quality_color = {
 		"green":Color("3f8f58"),
 		"blue":Color("356fa8"),
 		"purple":Color("7550a8"),
 		"orange":Color("b66a2f"),
 		"red":Color("a9363f"),
 	}.get(quality_id, Color("3f8f58")) as Color
+	_refresh_visual_state()
+	_description_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_description_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
+	_description_label.add_theme_constant_override("outline_size", 4)
+
+
+## 根据品质、悬停与交互状态重绘卡面；悬停只提亮原品质色，不替换品质颜色。
+func _refresh_visual_state() -> void:
+	if not is_node_ready():
+		return
+	# 当前卡面背景色；悬停时按正式卡牌相同的0.08默认比例轻量提亮。
+	var background_color: Color = _quality_color.darkened(0.42)
+	if _is_hovered and _interactive:
+		background_color = background_color.lightened(hover_lightening)
+	# 当前卡面边框宽度；普通品质边框保持4像素，悬停时再增加配置值。
+	var border_width: int = 4 + (hover_border_bonus if _is_hovered and _interactive else 0)
 	# 卡面样式；深色品质底面承托白色正文，亮色边框模拟武将牌的正式轮廓。
 	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
-	panel_style.bg_color = quality_color.darkened(0.42)
-	panel_style.border_color = quality_color.lightened(0.30)
-	panel_style.set_border_width_all(4)
+	panel_style.bg_color = background_color
+	panel_style.border_color = _quality_color.lightened(0.30)
+	panel_style.set_border_width_all(border_width)
 	panel_style.set_corner_radius_all(10)
 	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
 	panel_style.shadow_size = 10
 	panel_style.shadow_offset = Vector2(0.0, 5.0)
 	add_theme_stylebox_override("panel", panel_style)
-	_description_label.add_theme_color_override("font_color", Color("fff8e8"))
-	_description_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
-	_description_label.add_theme_constant_override("outline_size", 4)
 
 
 ## 同步透明按钮禁用状态与牌面明暗；等待状态仍可阅读正文但不会产生悬停误导。
@@ -76,9 +125,52 @@ func _refresh_interaction_state() -> void:
 		return
 	_input_button.disabled = not _interactive
 	modulate = Color.WHITE if _interactive else Color(0.72, 0.72, 0.72, 1.0)
+	_refresh_visual_state()
+
+
+## 鼠标进入可交互机缘卡时播放与正式卡牌一致的放大动画，并将当前卡提升至最上层。
+func _on_mouse_entered() -> void:
+	if not _interactive:
+		return
+	_is_hovered = true
+	z_index = HOVER_Z_INDEX
+	_refresh_visual_state()
+	_start_hover_tween(Vector2.ONE * hover_scale)
+
+
+## 鼠标离开机缘卡时恢复原始缩放、品质样式和父容器绘制层级。
+func _on_mouse_exited() -> void:
+	_restore_hover_state()
+
+
+## 结束悬停状态；提交选择导致按钮禁用时也调用，避免牌面停留在放大状态。
+func _restore_hover_state() -> void:
+	_is_hovered = false
+	z_index = _resting_z_index
+	_refresh_visual_state()
+	_start_hover_tween(Vector2.ONE)
+
+
+## 启动悬停缩放补间；二次缓出曲线与正式卡牌保持一致，连续进入离开时从当前比例平滑过渡。
+func _start_hover_tween(target_scale: Vector2) -> void:
+	if _hover_tween != null and _hover_tween.is_valid():
+		_hover_tween.kill()
+	if hover_animation_seconds <= 0.0:
+		scale = target_scale
+		return
+	_hover_tween = create_tween()
+	_hover_tween.set_trans(Tween.TRANS_QUAD)
+	_hover_tween.set_ease(Tween.EASE_OUT)
+	_hover_tween.tween_property(self, "scale", target_scale, hover_animation_seconds)
 
 
 ## 提交当前稳定卡牌ID；空ID与禁用状态由配置层和按钮共同防御。
 func _on_pressed() -> void:
 	if _interactive and not _card_id.is_empty():
 		card_selected.emit(_card_id)
+
+
+## 节点离开场景树时停止尚未完成的补间，避免动态重建下一名选择者牌面时保留旧动画引用。
+func _exit_tree() -> void:
+	if _hover_tween != null and _hover_tween.is_valid():
+		_hover_tween.kill()

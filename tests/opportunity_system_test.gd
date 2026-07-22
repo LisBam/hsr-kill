@@ -5,6 +5,9 @@ extends Node
 ## 正式主场景；测试复用真实MatchController、暂停服务、AI与UI绑定，避免构造缺失依赖的替代控制器。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 
+## 正式机缘卡场景；悬停测试直接复用玩家实际看到的牌面与透明输入按钮。
+const OPPORTUNITY_CARD_SCENE: PackedScene = preload("res://scenes/components/opportunity_card.tscn")
+
 ## 本次测试主场景实例；完成后显式释放，避免跨测试保留暂停令牌或全局信号连接。
 var _main_instance: Control
 
@@ -21,6 +24,8 @@ func _ready() -> void:
 	_controller = _main_instance.get_node("MatchController") as MatchController
 	_setup_test_state()
 	if not _test_catalog_and_weights():
+		return
+	if not await _test_opportunity_card_hover():
 		return
 	if not _test_private_choice_and_counterclockwise_order():
 		return
@@ -79,6 +84,48 @@ func _test_catalog_and_weights() -> bool:
 	var preserved_card: Dictionary = OpportunityCatalog.get_card("red_gain_sha_zaixian")
 	if str(preserved_card.get("description", "")) != "从牌堆或弃牌堆中获得三张【杀】并获得获得技能“再现”":
 		return _fail("preserved_description")
+	return true
+
+
+## 校验机缘卡在暂停选择期间复用正式卡牌的1.06缩放、0.12秒补间、提亮边框和顶层绘制反馈。
+func _test_opportunity_card_hover() -> bool:
+	# 测试机缘卡；使用绿色摸牌定义，视觉断言不依赖随机候选内容。
+	var card_view: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
+	add_child(card_view)
+	card_view.configure(OpportunityCatalog.get_card("green_draw_two"), true)
+	await get_tree().process_frame
+	# 机缘卡透明输入按钮；正式悬停信号由该覆盖按钮发出。
+	var input_button: Button = card_view.get_node("%InputButton") as Button
+	# 普通状态样式；用于确认悬停后背景确实提亮而不是只缩放节点。
+	var normal_style: StyleBoxFlat = card_view.get_theme_stylebox("panel") as StyleBoxFlat
+	# 普通状态背景色；保存独立值避免后续样式覆盖影响比较。
+	var normal_background_color: Color = normal_style.bg_color if normal_style != null else Color.BLACK
+	get_tree().paused = true
+	input_button.mouse_entered.emit()
+	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
+	# 悬停状态样式；边框宽度应从4增加到5，背景按正式卡牌默认比例提亮。
+	var hovered_style: StyleBoxFlat = card_view.get_theme_stylebox("panel") as StyleBoxFlat
+	if not card_view.scale.is_equal_approx(Vector2.ONE * 1.06) or card_view.z_index != OpportunityCardView.HOVER_Z_INDEX or hovered_style == null or hovered_style.border_width_left != 5 or hovered_style.bg_color == normal_background_color or not card_view.pivot_offset.is_equal_approx(card_view.card_size * 0.5):
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_card_hover scale=%s z=%d border=%s" % [str(card_view.scale), card_view.z_index, str(hovered_style.border_width_left if hovered_style != null else -1)])
+	input_button.mouse_exited.emit()
+	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
+	if not card_view.scale.is_equal_approx(Vector2.ONE) or card_view.z_index != 0:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_card_hover_restore scale=%s z=%d" % [str(card_view.scale), card_view.z_index])
+	input_button.mouse_entered.emit()
+	await get_tree().create_timer(0.04, true).timeout
+	card_view.set_interactive(false)
+	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
+	if not input_button.disabled or not card_view.scale.is_equal_approx(Vector2.ONE) or card_view.z_index != 0:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_card_hover_disable")
+	get_tree().paused = false
+	card_view.queue_free()
+	await get_tree().process_frame
 	return true
 
 
@@ -245,5 +292,5 @@ func _finish_success() -> void:
 	_controller.opportunity_system.shutdown()
 	_main_instance.queue_free()
 	await get_tree().process_frame
-	print("OPPORTUNITY_SYSTEM_PASS cards=45 private=true reverse=true seat_swap=true limits=true")
+	print("OPPORTUNITY_SYSTEM_PASS cards=45 private=true reverse=true seat_swap=true limits=true hover=true")
 	get_tree().quit(0)
