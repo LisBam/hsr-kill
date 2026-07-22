@@ -73,6 +73,7 @@ func _setup_test_state() -> void:
 
 
 ## 校验五档权重、红色补全值与全部设计卡正文均已登记。
+## 同时确认已移除的行军机缘不会重新进入卡池。
 func _test_catalog_and_weights() -> bool:
 	# 模式规则；机缘大乱斗必须独立保留稳定ID并支持身份模式相同的2至10人范围。
 	var identity_rules: IdentityRules = IdentityRules.new()
@@ -83,8 +84,9 @@ func _test_catalog_and_weights() -> bool:
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
 	# 全部机缘卡目录；原45张加本批17张共62张，任何遗漏都会改变三选一内容范围。
+	# 当前已移除橙色行军机缘，目录共61张；旧ID回流同样视为失败。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 62:
+	if cards.size() != 61 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 关键原文卡；重复“获得获得”属于主公钦定正文，测试确保实现不会擅自润色。
 	var preserved_card: Dictionary = OpportunityCatalog.get_card("red_gain_sha_zaixian")
@@ -496,25 +498,34 @@ func _test_hand_limit_bonus() -> bool:
 
 
 ## 校验每回合三次在新全局回合自动恢复，以及行军第五次成功发动后失去技能。
+## 当前覆盖局内获得技能的每回合、每轮与总共次数独立累计、按对应边界恢复与总次数耗尽移除。
 func _test_acquired_skill_limits() -> bool:
-	if not _controller.grant_acquired_skill(0, "huanyang", 3, 0, "test"):
+	if not _controller.grant_acquired_skill(0, "huanyang", 3, 5, "test", false, 2):
 		return _fail("grant_huanyang")
-	for _use_index: int in range(3):
+	for _use_index: int in range(2):
 		if not _controller.consume_acquired_skill_use(0, "huanyang"):
 			return _fail("huanyang_consume")
+	# 每轮两次先耗尽；每回合尚余一次不能绕过轮次限制。
 	if _controller.can_use_acquired_skill(0, "huanyang"):
-		return _fail("huanyang_turn_limit")
+		return _fail("huanyang_round_limit")
+	# 同一轮进入下一全局回合后仍然不能发动，证明额外或普通换回合都不会错误重置轮次额度。
 	_controller.state.turn_number = 2
+	if _controller.can_use_acquired_skill(0, "huanyang"):
+		return _fail("huanyang_same_round_limit")
+	# 新轮同时进入新回合后重新获得每回合与每轮额度。
+	_controller.state.round_number = 2
 	if not _controller.can_use_acquired_skill(0, "huanyang"):
-		return _fail("huanyang_turn_reset")
-	_controller.remove_acquired_skill(0, "huanyang")
-	if not _controller.grant_acquired_skill(0, "xingjun", 0, 5, "test"):
-		return _fail("grant_xingjun")
-	for use_index: int in range(5):
-		if not _controller.consume_acquired_skill_use(0, "xingjun"):
-			return _fail("xingjun_consume_%d" % use_index)
-	if (_controller.skill_instances_by_player.get(0, {}) as Dictionary).has("xingjun") or _controller.state.get_player(0).acquired_skills.has("xingjun"):
-		return _fail("xingjun_not_removed")
+		return _fail("huanyang_round_reset")
+	for _use_index: int in range(2):
+		if not _controller.consume_acquired_skill_use(0, "huanyang"):
+			return _fail("huanyang_second_round_consume")
+	# 第三轮只剩总共最后一次；成功发动后必须完整移除局内获得技能。
+	_controller.state.turn_number = 3
+	_controller.state.round_number = 3
+	if not _controller.consume_acquired_skill_use(0, "huanyang"):
+		return _fail("huanyang_total_last_use")
+	if (_controller.skill_instances_by_player.get(0, {}) as Dictionary).has("huanyang") or _controller.state.get_player(0).acquired_skills.has("huanyang"):
+		return _fail("huanyang_total_not_removed")
 	return true
 
 
@@ -531,5 +542,5 @@ func _finish_success() -> void:
 	_controller.opportunity_system.shutdown()
 	_main_instance.queue_free()
 	await get_tree().process_frame
-	print("OPPORTUNITY_SYSTEM_PASS cards=62 private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
+	print("OPPORTUNITY_SYSTEM_PASS cards=61 private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
 	get_tree().quit(0)

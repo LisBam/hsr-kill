@@ -64,7 +64,6 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
 	{"id":"orange_skill_yongyi", "quality":"orange", "description":"获得技能“永屹”", "effect":"grant_skill", "skill_id":"yongyi"},
-	{"id":"orange_skill_xingjun", "quality":"orange", "description":"获得发动五次后失去的技能“行军”", "effect":"grant_skill", "skill_id":"xingjun", "total_limit":5},
 	{"id":"orange_skill_junshi", "quality":"orange", "description":"获得技能“军势”", "effect":"grant_skill", "skill_id":"junshi"},
 	{"id":"orange_swap_seat", "quality":"orange", "description":"选择一名其他角色，你与其交换座位。", "effect":"swap_seat_target"},
 	{"id":"orange_damage_three", "quality":"orange", "description":"对至多三名角色依次造成2点伤害。", "effect":"damage_targets", "count":2, "max_targets":3},
