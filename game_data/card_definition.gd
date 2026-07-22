@@ -240,6 +240,11 @@ func get_ai_incoming_damage_multiplier(_nature: String) -> float:
 	return 1.0
 
 
+## 返回防具对单次伤害的AI预期上限；0表示不封顶，正数用于让AI按实际可造成伤害估值酒杀与致命收益。
+func get_ai_incoming_damage_cap(_nature: String) -> int:
+	return 0
+
+
 ## 返回锦囊被【无懈可击】抵消时是否应记录本回合AI失败目标；默认不保存牌目标记忆。
 func records_failed_ai_target_when_negated() -> bool:
 	return false

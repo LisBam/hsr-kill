@@ -31,6 +31,10 @@ func _ready() -> void:
 		return
 	if not await _test_target_effect_resolution_flow():
 		return
+	if not await _test_new_effect_resolution_flow():
+		return
+	if not _test_new_opportunity_mechanisms():
+		return
 	if not _test_seat_swap_changes_next_player():
 		return
 	if not _test_hand_limit_bonus():
@@ -59,6 +63,8 @@ func _setup_test_state() -> void:
 		player.character_revealed = true
 		state.players.append(player)
 	_controller.state = state
+	_controller.card_rules = CardRuleService.new(state, _controller)
+	_controller.effect_resolver = CardEffectResolver.new(_controller, state)
 	_controller.skill_instances_by_player = {0:{}, 1:{}, 2:{}, 3:{}}
 	# 固定随机源；候选内容可复现，但测试只依赖数量、合法ID与隐私裁剪。
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -76,14 +82,39 @@ func _test_catalog_and_weights() -> bool:
 	var weights: Dictionary = _controller.opportunity_system.get_quality_weights()
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
-	# 全部机缘卡目录；当前设计共45张，任何遗漏都会改变三选一内容范围。
+	# 全部机缘卡目录；原45张加本批17张共62张，任何遗漏都会改变三选一内容范围。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 45:
+	if cards.size() != 62:
 		return _fail("catalog_count %d" % cards.size())
 	# 关键原文卡；重复“获得获得”属于主公钦定正文，测试确保实现不会擅自润色。
 	var preserved_card: Dictionary = OpportunityCatalog.get_card("red_gain_sha_zaixian")
 	if str(preserved_card.get("description", "")) != "从牌堆或弃牌堆中获得三张【杀】并获得获得技能“再现”":
 		return _fail("preserved_description")
+	# 本批新增卡原文；逐项精确校验，防止自动补标点或改写主公定义。
+	var new_descriptions: Dictionary = {
+		"green_discard_one_each":"弃置任意名角色区域内各一张牌",
+		"green_virtual_nanman":"视为使用一张【南蛮入侵】",
+		"green_virtual_wanjian":"视为使用一张【万箭齐发】",
+		"green_discard_draw":"弃置区域内任意张牌并摸等量的牌",
+		"green_swap_equipment":"令两名角色交换装备区内的所有牌",
+		"green_discard_half_all":"令一名角色弃置X张牌（X为其所有牌数的一半，向上取整）",
+		"blue_gain_wuxie_two":"从牌堆或弃牌堆中获得两张【无懈可击】",
+		"blue_swap_hands":"令两名角色交换所有手牌",
+		"blue_lose_half_hp":"令一名角色失去X点体力（X为其当前体力值的一半，向上取整）",
+		"purple_gain_distinct_delayed_three":"从牌堆或弃牌堆中获得三张牌名不同的延时锦囊牌",
+		"purple_remove_until_round_end":"令一名角色离场直到本轮结束",
+		"orange_reduce_half_max_hp":"令一名角色减少X点体力上限（X为其体力上限的一半，向上取整）",
+		"orange_damage_current_hp":"对一名角色造成X点伤害（X为其当前体力值）",
+		"orange_swap_characters":"令两名角色交换武将牌",
+		"red_all_hand_view_as_wuzhong":"所有手牌视为【无中生有】直到离开你的手牌区",
+		"red_gain_all_equipment":"获得牌堆与弃牌堆与场上的所有装备牌",
+		"red_gain_random_three_each":"获得每名角色区域内的随机三张牌",
+	}
+	for card_id_variant: Variant in new_descriptions.keys():
+		# 当前新增卡ID与精确原文；目录缺失同样会得到空字符串并失败。
+		var card_id: String = str(card_id_variant)
+		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
+			return _fail("new_description_%s" % card_id)
 	return true
 
 
@@ -123,6 +154,22 @@ func _test_opportunity_card_hover() -> bool:
 		get_tree().paused = false
 		card_view.queue_free()
 		return _fail("opportunity_card_hover_disable")
+	# 技能机缘悬停资料；只有定义包含skill_id时才应发出对应技能名称与完整说明。
+	var skill_information: Array[Dictionary] = []
+	var skill_information_dismissed: Array[bool] = []
+	card_view.information_requested.connect(func(information: Dictionary, _anchor_rect: Rect2) -> void: skill_information.append(information.duplicate(true)))
+	card_view.information_dismissed.connect(func() -> void: skill_information_dismissed.append(true))
+	card_view.configure(OpportunityCatalog.get_card("blue_skill_jiqiao"), true)
+	input_button.mouse_entered.emit()
+	if skill_information.is_empty() or str(skill_information[0].get("title", "")) != "【机巧】" or not str(skill_information[0].get("description", "")).contains(str(GameDatabase.get_skill("jiqiao").get("description", ""))):
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_skill_hover=%s" % [skill_information])
+	input_button.mouse_exited.emit()
+	if skill_information_dismissed.is_empty():
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_skill_hover_dismiss")
 	get_tree().paused = false
 	card_view.queue_free()
 	await get_tree().process_frame
@@ -131,6 +178,8 @@ func _test_opportunity_card_hover() -> bool:
 
 ## 校验候选只向本人公开、每人三张不重复，并且参与者顺序从当前角色起逆时针排列。
 func _test_private_choice_and_counterclockwise_order() -> bool:
+	# 四号角色处于离场状态；机缘属于模式级全体选择，仍必须参与候选、提交与获得历史。
+	_controller.state.get_player(3).out_of_game = true
 	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
 		return _fail("force_trigger")
 	# 权威参与顺序；四人座次0、1、2、3的逆时针结果应为0、3、2、1。
@@ -161,11 +210,17 @@ func _test_private_choice_and_counterclockwise_order() -> bool:
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
 		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
 		var chooser_options: Array = (options_by_player.get(str(chooser_id), []) as Array)
-		if chooser_options.is_empty() or not _controller.opportunity_system.submit_choice(chooser_id, str((chooser_options[0] as Dictionary).get("id", ""))):
+		# 统一机缘动作；离场角色也必须通过MatchController提交入口，而不是只在组件内部绕过动作状态校验。
+		var choice_action: PlayerAction = PlayerAction.new("choose_opportunity", chooser_id)
+		choice_action.payload = {"card_id":str((chooser_options[0] as Dictionary).get("id", ""))} if not chooser_options.is_empty() else {}
+		if chooser_options.is_empty() or not _controller.submit_action(choice_action):
 			return _fail("submit_choice player=%d" % chooser_id)
 	if str(_controller.state.opportunity_state.get("stage", "")) != "resolving":
 		return _fail("all_choices_not_resolving")
+	if _controller.state.get_player(3).acquired_opportunity_ids.size() != 1:
+		return _fail("out_of_game_opportunity_history=%s" % [_controller.state.get_player(3).acquired_opportunity_ids])
 	_controller.opportunity_system.shutdown()
+	_controller.state.get_player(3).out_of_game = false
 	_controller.state.current_phase = "start"
 	# 重新启用同一局组件；shutdown用于中断随机效果，下一项测试需要新的固定候选流程。
 	var next_rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -195,8 +250,10 @@ func _test_target_effect_resolution_flow() -> bool:
 		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(selected_card_ids.get(chooser_id, ""))):
 			return _fail("target_flow_submit player=%d" % chooser_id)
-	await get_tree().process_frame
-	await get_tree().process_frame
+	for _wait_request_frame: int in range(12):
+		if not _controller.state.current_choice_request.is_empty():
+			break
+		await get_tree().process_frame
 	# 当前角色的交换座位机缘应先创建单目标选择；其他三名角色的手牌上限此时尚未生效。
 	var choice_request: Dictionary = _controller.state.current_choice_request
 	if str(choice_request.get("choice_type", "")) != "target" or int(choice_request.get("actor_id", -1)) != 0:
@@ -228,6 +285,188 @@ func _test_target_effect_resolution_flow() -> bool:
 		_controller.state.get_player(reset_player_id).hand_limit_bonus = 0
 	_controller.state.current_phase = "start"
 	return true
+
+
+## 通过完整机缘选择流程校验“两名角色交换所有手牌”的双目标请求、UID锁定与逆时针后续恢复。
+func _test_new_effect_resolution_flow() -> bool:
+	# 双方原始手牌；交换结果按稳定UID确认，避免同名牌造成误判。
+	var first_original_card: CardInstance = _add_test_card("sha", "hand", 0)
+	var second_original_card_a: CardInstance = _add_test_card("shan", "hand", 1)
+	var second_original_card_b: CardInstance = _add_test_card("tao", "hand", 1)
+	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
+		return _fail("new_effect_force_trigger")
+	# 其余角色使用无目标安全机缘，确保交换手牌完成后机缘队列能够继续并正常清空。
+	var selected_card_ids: Dictionary = {0:"blue_swap_hands", 3:"green_hand_limit_one", 2:"green_hand_limit_one", 1:"green_hand_limit_one"}
+	var options_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _controller.state.opportunity_state.get("participant_ids", []) as Array:
+		var participant_id: int = int(participant_id_variant)
+		options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
+	_controller.state.opportunity_state["options_by_player"] = options_by_player
+	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
+		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		if not _controller.opportunity_system.submit_choice(chooser_id, str(selected_card_ids.get(chooser_id, ""))):
+			return _fail("new_effect_submit_%d" % chooser_id)
+	for _wait_request_frame: int in range(12):
+		if not _controller.state.current_choice_request.is_empty():
+			break
+		await get_tree().process_frame
+	# 双目标请求；允许选择机缘拥有者本人和另一名角色。
+	var choice_request: Dictionary = _controller.state.current_choice_request
+	if str(choice_request.get("choice_type", "")) != "target" or int(choice_request.get("min_count", -1)) != 2 or int(choice_request.get("max_count", -1)) != 2:
+		return _fail("new_effect_target_request=%s" % [choice_request])
+	var action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	action.payload = {"request_id":int(choice_request.get("request_id", -1)), "selected_card_uids":[], "selected_target_ids":[0, 1], "confirmed":true}
+	if not _controller.submit_action(action):
+		return _fail("new_effect_target_submit")
+	for _wait_frame: int in range(20):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		await get_tree().process_frame
+	if not _controller.state.opportunity_state.is_empty():
+		return _fail("new_effect_not_finished")
+	# 一号角色得到二号原两张手牌，二号角色得到一号原一张手牌。
+	if _controller.state.get_player(0).find_hand_card(second_original_card_a.uid) == null or _controller.state.get_player(0).find_hand_card(second_original_card_b.uid) == null or _controller.state.get_player(1).find_hand_card(first_original_card.uid) == null:
+		return _fail("new_effect_hand_swap_result")
+	# 清理测试手牌和其余角色手牌上限，后续公共机制测试保持独立初始条件。
+	_controller.discard_all_hand_cards(0, -1, "test_cleanup")
+	_controller.discard_all_hand_cards(1, -1, "test_cleanup")
+	for reset_player_id: int in [1, 2, 3]:
+		_controller.state.get_player(reset_player_id).hand_limit_bonus = 0
+	_controller.state.current_phase = "start"
+	# 再以完整机缘流程验证无实体【南蛮入侵】进入群体牌结算，三名其他角色各受到1点普通伤害。
+	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
+		return _fail("virtual_aoe_force_trigger")
+	var virtual_selected_card_ids: Dictionary = {0:"green_virtual_nanman", 3:"green_hand_limit_one", 2:"green_hand_limit_one", 1:"green_hand_limit_one"}
+	var virtual_options_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _controller.state.opportunity_state.get("participant_ids", []) as Array:
+		# 当前参与者候选；第一项固定为本轮需要结算的卡，其余保持合法三选一结构。
+		var participant_id: int = int(participant_id_variant)
+		virtual_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(virtual_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
+	_controller.state.opportunity_state["options_by_player"] = virtual_options_by_player
+	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
+		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		if not _controller.opportunity_system.submit_choice(chooser_id, str(virtual_selected_card_ids.get(chooser_id, ""))):
+			return _fail("virtual_aoe_submit_%d" % chooser_id)
+	for _wait_virtual_frame: int in range(40):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		# 测试状态没有为其他角色注册正式AI；遇到群体锦囊响应请求时按标准动作明确放弃。
+		var response_request: Dictionary = _controller.state.current_choice_request
+		if str(response_request.get("choice_type", "")) == "respond":
+			var pass_action: PlayerAction = PlayerAction.new("choose_cards", int(response_request.get("actor_id", -1)))
+			pass_action.payload = {"request_id":int(response_request.get("request_id", -1)), "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+			_controller.submit_action(pass_action)
+		await get_tree().create_timer(0.05).timeout
+	if not _controller.state.opportunity_state.is_empty():
+		return _fail("virtual_aoe_not_finished")
+	for damaged_player_id: int in [1, 2, 3]:
+		if _controller.state.get_player(damaged_player_id).hp != 3:
+			return _fail("virtual_aoe_damage_%d=%d" % [damaged_player_id, _controller.state.get_player(damaged_player_id).hp])
+		_controller.state.get_player(damaged_player_id).hp = 4
+		_controller.state.get_player(damaged_player_id).hand_limit_bonus = 0
+	_controller.state.current_phase = "start"
+	return true
+
+
+## 校验武将牌交换、轮末离场、手牌视为、不同名延时锦囊检索与装备双向交换公共端口。
+func _test_new_opportunity_mechanisms() -> bool:
+	# 双方测试武将；三月七与丹恒拥有不同体力上限和固有技能，便于确认交换边界。
+	var first_player: PlayerState = _controller.state.get_player(0)
+	var second_player: PlayerState = _controller.state.get_player(1)
+	first_player.character_id = "march_7th"
+	first_player.max_hp = 3
+	first_player.hp = 3
+	second_player.character_id = "dan_heng"
+	second_player.max_hp = 4
+	second_player.hp = 4
+	_controller._reinstall_character_skills_for_player(first_player)
+	_controller._reinstall_character_skills_for_player(second_player)
+	# 局内获得技能；交换武将牌后必须仍归原角色且保留实例。
+	if not _controller.grant_acquired_skill(0, "huanyang", 3, 0, "test"):
+		return _fail("character_swap_grant_runtime")
+	if not _controller.swap_player_character_cards(0, 1, "test"):
+		return _fail("character_swap_rejected")
+	# 新旧固有技能ID；用于确认只移动武将牌技能，不移动局内获得技能。
+	var march_skill_ids: Array = GameDatabase.get_character("march_7th").get("skills", []) as Array
+	var dan_heng_skill_ids: Array = GameDatabase.get_character("dan_heng").get("skills", []) as Array
+	var first_skills: Dictionary = _controller.skill_instances_by_player.get(0, {}) as Dictionary
+	var second_skills: Dictionary = _controller.skill_instances_by_player.get(1, {}) as Dictionary
+	if first_player.character_id != "dan_heng" or first_player.max_hp != 4 or second_player.character_id != "march_7th" or second_player.max_hp != 3 or not first_skills.has("huanyang"):
+		return _fail("character_swap_state")
+	for skill_id_variant: Variant in dan_heng_skill_ids:
+		if not first_skills.has(str(skill_id_variant)):
+			return _fail("character_swap_first_native_%s" % str(skill_id_variant))
+	for skill_id_variant: Variant in march_skill_ids:
+		if not second_skills.has(str(skill_id_variant)):
+			return _fail("character_swap_second_native_%s" % str(skill_id_variant))
+	# 换回原武将并移除测试获得技能，避免影响后续机缘技能次数断言。
+	_controller.swap_player_character_cards(0, 1, "test_restore")
+	_controller.remove_acquired_skill(0, "huanyang")
+	first_player.max_hp = 4
+	first_player.hp = 4
+	second_player.max_hp = 4
+	second_player.hp = 4
+	# 当前手牌实体；视为无中生有后保留原定义，离开手牌区时自动恢复为杀。
+	var view_as_card: CardInstance = _add_test_card("sha", "hand", 0)
+	if _controller.set_all_hand_cards_view_as(0, "wuzhong", "test") != 1 or view_as_card.definition_id != "wuzhong" or view_as_card.hand_view_as_original_definition_id != "sha":
+		return _fail("view_all_hand_as")
+	if not _controller.discard_card_from_hand(0, view_as_card.uid) or view_as_card.definition_id != "sha" or view_as_card.has_hand_view_as():
+		return _fail("view_as_leave_hand")
+	# 三种不同延时锦囊与一张重复乐不思蜀；检索结果必须只取三个不同稳定定义ID。
+	_add_test_card("lebu", "draw_pile")
+	_add_test_card("bingliang", "draw_pile")
+	_add_test_card("shandian", "discard_pile")
+	_add_test_card("lebu", "discard_pile")
+	var delayed_uids: Array[int] = _controller.get_distinct_delayed_trick_card_uids(3)
+	var delayed_definition_ids: Dictionary = {}
+	for delayed_uid: int in delayed_uids:
+		# 当前延时锦囊位置；测试通过公开UID获得端口读取并移动到手牌后确认定义。
+		if not _controller.gain_card_to_hand_by_uid(0, delayed_uid, "test"):
+			return _fail("distinct_delayed_gain")
+		var gained_card: CardInstance = first_player.find_hand_card(delayed_uid)
+		delayed_definition_ids[gained_card.definition_id] = true
+	if delayed_uids.size() != 3 or delayed_definition_ids.size() != 3:
+		return _fail("distinct_delayed=%s" % [delayed_definition_ids.keys()])
+	# 两张不同槽位装备；先统一移入处理区再装入对方，不能因同槽覆盖丢失实体。
+	var weapon_card: CardInstance = _add_test_card("qinggang", "equipment", 0, "weapon")
+	var armor_card: CardInstance = _add_test_card("baiyin", "equipment", 1, "armor")
+	_controller._install_card_runtime(weapon_card, 0)
+	_controller._install_card_runtime(armor_card, 1)
+	var equipment_entries: Array[Dictionary] = _controller.get_equipment_swap_entries(0, 1)
+	for entry: Dictionary in equipment_entries:
+		if not _controller.move_equipment_card_to_processing(int(entry.get("source_player_id", -1)), int(entry.get("card_uid", -1)), "test"):
+			return _fail("equipment_swap_evacuation")
+	for entry: Dictionary in equipment_entries:
+		if not _controller.move_processing_card_to_equipment(int(entry.get("target_player_id", -1)), int(entry.get("card_uid", -1)), str(entry.get("slot", "")), "test"):
+			return _fail("equipment_swap_install")
+	if first_player.get_armor() != armor_card or second_player.get_weapon() != weapon_card:
+		return _fail("equipment_swap_result")
+	# 限时离场标记；新轮边界恢复后清空标记并重新进入游戏。
+	var round_limited_player: PlayerState = _controller.state.get_player(2)
+	if not _controller.remove_player_until_round_end(2, "test") or not round_limited_player.out_of_game or round_limited_player.out_of_game_until_round != _controller.state.round_number:
+		return _fail("round_limited_remove")
+	if _controller._restore_round_limited_out_of_game_players(_controller.state.round_number + 1) != 1 or round_limited_player.out_of_game or round_limited_player.out_of_game_until_round != -1:
+		return _fail("round_limited_restore")
+	return true
+
+
+## 向测试状态指定区域加入一张真实实体牌；仅用于公共机制端口的最小权威数据准备。
+func _add_test_card(definition_id: String, zone: String, owner_id: int = -1, slot: String = "") -> CardInstance:
+	# 测试实体牌；固定黑桃7只为提供完整花色点数，不影响本批机制断言。
+	var card: CardInstance = CardInstance.new(definition_id, "spade", 7)
+	card.zone = zone
+	card.owner_id = owner_id
+	if zone == "draw_pile":
+		_controller.state.draw_pile.append(card)
+	elif zone == "discard_pile":
+		_controller.state.discard_pile.append(card)
+	elif zone == "hand":
+		_controller.state.get_player(owner_id).hand.append(card)
+	elif zone == "equipment":
+		_controller.state.get_player(owner_id).equipment[slot] = card
+	elif zone == "judgment":
+		_controller.state.get_player(owner_id).judgment_area.append(card)
+	return card
 
 
 ## 校验交换一号与三号位后，当前一号位角色的正常下家变为原四号位角色。
@@ -292,5 +531,5 @@ func _finish_success() -> void:
 	_controller.opportunity_system.shutdown()
 	_main_instance.queue_free()
 	await get_tree().process_frame
-	print("OPPORTUNITY_SYSTEM_PASS cards=45 private=true reverse=true seat_swap=true limits=true hover=true")
+	print("OPPORTUNITY_SYSTEM_PASS cards=62 private=true reverse=true seat_swap=true character_swap=true limits=true hover=true")
 	get_tree().quit(0)

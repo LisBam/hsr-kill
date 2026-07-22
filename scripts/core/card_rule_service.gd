@@ -136,9 +136,10 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 ## 检查一张无实体牌面的虚拟牌是否可以在当前出牌阶段使用；材料与装备条件由创建虚拟牌的独立规则入口负责校验。
 ## 虚拟牌不会进入行动玩家的手牌或木牛牌源，因此本函数只复用阶段、次数、目标和距离规则，不执行实体来源检查或方天画戟最后手牌修正。
 func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Array[int], rule_overrides: Dictionary = {}) -> String:
-	# 虚拟牌使用者；不存在、死亡或不处于自己的出牌阶段时不能声明视为牌。
+	# 虚拟牌使用者；模式级机缘可显式允许仍存活的离场角色结算本张虚拟牌，普通内容不得开放该覆写。
 	var actor: PlayerState = state.get_player(actor_id)
-	if actor == null or not actor.alive or actor.out_of_game:
+	var allow_out_of_game_actor: bool = bool(rule_overrides.get("allow_out_of_game_actor", false))
+	if actor == null or not actor.alive or (actor.out_of_game and not allow_out_of_game_actor):
 		return "行动玩家不存在、已经死亡或已移出游戏。"
 	# 是否忽略出牌阶段限制；仅供准备阶段等明确写有“视为使用”的技能传入，普通虚拟牌保持原限制。
 	var ignore_phase_limit: bool = bool(rule_overrides.get("ignore_phase_limit", false))
@@ -187,7 +188,8 @@ func list_legal_virtual_targets(actor_id: int, definition_id: String, rule_overr
 	var actor: PlayerState = state.get_player(actor_id)
 	# 虚拟牌定义；当前丈八蛇矛使用普通【杀】定义。
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
-	if actor == null or definition.is_empty():
+	var allow_out_of_game_actor: bool = bool(rule_overrides.get("allow_out_of_game_actor", false))
+	if actor == null or not actor.alive or (actor.out_of_game and not allow_out_of_game_actor) or definition.is_empty():
 		return result
 	# 虚拟牌整体合法性；阶段次数用尽时不再返回任何目标，转化技能按钮可据此实时熄灭。
 	# 先用空目标做次数与阶段检查会失败（目标数不足），因此单独复用与 validate_virtual_use 相同的次数规则。

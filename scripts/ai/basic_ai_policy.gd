@@ -54,6 +54,8 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	identity_model.synchronize(authoritative_snapshot)
 	if legal_actions.is_empty():
 		return {"action_type":"end_play", "actor_id":player_id}
+	# 当前合法动作上下文；卡牌专属AI据此识别阶段次数、目标与防具校验后仍可执行的真实后续动作。
+	evaluator.set_current_legal_actions(legal_actions)
 	_prepare_action_scoring_context(authoritative_snapshot)
 	# 当前最佳动作；只有评分严格提高时替换，平分保持规则层稳定枚举顺序。
 	var best_action: Dictionary = {}
@@ -70,6 +72,7 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	if not best_action.is_empty() and best_score > ACTION_ACCEPTANCE_THRESHOLD:
 		result = _normalize_action(best_action)
 	_clear_action_scoring_context()
+	evaluator.clear_current_legal_actions()
 	return result
 
 

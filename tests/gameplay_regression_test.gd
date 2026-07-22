@@ -110,6 +110,12 @@ var _qilin_candidate_present: bool = false
 ## 濒死前时机被测试触发器取消的次数；用于验证取消标志不能留下非正体力的存活角色。
 var _cancelled_dying_before_count: int = 0
 
+## 离场角色进入濒死后收到的救援请求数量；正确规则固定为0，角色应直接转入死亡流程。
+var _out_of_game_dying_choice_count: int = 0
+
+## 离场角色濒死、返场与死亡的关键时机顺序；用于验证返场严格发生在死亡前。
+var _out_of_game_dying_timing_order: Array[String] = []
+
 
 ## 延迟一帧执行测试，确保自动加载卡牌数据和节点依赖已经完成初始化。
 func _ready() -> void:
@@ -126,6 +132,8 @@ func _run() -> void:
 	if not await _test_dynamic_targets_direct_hit_and_exclusion():
 		return
 	if not await _test_cancelled_dying_timing_keeps_health_invariant():
+		return
+	if not await _test_out_of_game_dying_returns_before_immediate_death():
 		return
 	if not await _test_dying_peach_and_wine_share_one_request():
 		return
@@ -498,6 +506,41 @@ func _test_cancelled_dying_timing_keeps_health_invariant() -> bool:
 func _cancel_dying_before_without_recovery(event: RuleEvent) -> void:
 	_cancelled_dying_before_count += 1
 	event.cancel()
+
+
+## 验证离场角色进入濒死后不询问任何救援者，并按“濒死、返场、死亡前、死亡”顺序立即死亡。
+func _test_out_of_game_dying_returns_before_immediate_death() -> bool:
+	_scenario = "out_of_game_dying"
+	_out_of_game_dying_choice_count = 0
+	_out_of_game_dying_timing_order.clear()
+	_reset_state(3)
+	_controller.trigger_manager.subscribe("dying", self, _record_out_of_game_dying_timing, 0, -1, "global")
+	_controller.trigger_manager.subscribe("enterGame", self, _record_out_of_game_dying_timing, 0, -1, "global")
+	_controller.trigger_manager.subscribe("dieBefore", self, _record_out_of_game_dying_timing, 0, -1, "global")
+	_controller.trigger_manager.subscribe("die", self, _record_out_of_game_dying_timing, 0, -1, "global")
+	# 场上救援者持有的桃；离场濒死者不能建立求桃窗口，因此该牌必须完整保留。
+	var rescuer_peach: CardInstance = _add_hand_card(0, "tao", "heart", 6)
+	# 离场濒死目标；限时离场轮次也应在死亡前返场时统一清除。
+	var target: PlayerState = _controller.state.get_player(1)
+	target.hp = 1
+	target.out_of_game = true
+	target.out_of_game_until_round = 4
+	_controller.lose_hp(-1, target.player_id, 1, "out_of_game_dying_test", true)
+	await get_tree().process_frame
+	if _controller.has_pending_card_choice() or _out_of_game_dying_choice_count != 0:
+		return _fail("out_of_game_dying_choice=%s:%d" % [_controller.has_pending_card_choice(), _out_of_game_dying_choice_count])
+	if target.alive or target.out_of_game or target.dying or not target.death_confirmed or target.out_of_game_until_round != -1:
+		return _fail("out_of_game_dying_state=%s:%s:%s:%s:%d" % [target.alive, target.out_of_game, target.dying, target.death_confirmed, target.out_of_game_until_round])
+	if _out_of_game_dying_timing_order != ["dying", "enterGame", "dieBefore", "die"]:
+		return _fail("out_of_game_dying_order=%s" % [_out_of_game_dying_timing_order])
+	if _controller.state.dying_queue.has(target.player_id) or _controller.state.get_player(0).find_hand_card(rescuer_peach.uid) == null:
+		return _fail("out_of_game_dying_cleanup=%s:%s" % [_controller.state.dying_queue, _controller.state.get_player(0).find_hand_card(rescuer_peach.uid) != null])
+	return true
+
+
+## 记录离场濒死测试关注的标准时机名称；所有名称均来自权威触发事件本身。
+func _record_out_of_game_dying_timing(event: RuleEvent) -> void:
+	_out_of_game_dying_timing_order.append(event.name)
 
 
 ## 验证濒死者在一个请求中同时选择桃或酒；选择酒后桃保留且角色回复至1点。
@@ -1085,6 +1128,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 				break
 	elif _scenario == "dying_cancel_invariant" and kind == "dying_response":
 		# 三名测试角色都没有救援牌；逐个提交取消以走完正式单轮求桃协议。
+		selected_uids = []
+	elif _scenario == "out_of_game_dying" and kind == "dying_response":
+		_out_of_game_dying_choice_count += 1
 		selected_uids = []
 	elif _scenario == "taoyuan_resume" and kind == "trick_negation":
 		_taoyuan_negation_request_count += 1

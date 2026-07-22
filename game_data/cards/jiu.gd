@@ -2,7 +2,7 @@ extends CardDefinition
 
 ## 【酒】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
-## AI判定【酒】缺少可获益【杀】时的固定降权；-4分会抵消出牌顺序带来的微弱正值，避免无【杀】时空用【酒】。
+## AI判定【酒】缺少真实可用且能从加伤获益的【杀】时的固定降权；-4分会抵消出牌顺序带来的微弱正值。
 const AI_WINE_WITHOUT_SLASH_PENALTY: float = 4.0
 
 ## 有可获益【杀】时额外优先分；保证“先酒后杀”的收益链不被单张普通【杀】即时分压过。
@@ -73,8 +73,8 @@ func resolve_dying_response(match_host: Object, responder_id: int, dying_player_
 	return true
 
 
-## 修正出牌阶段的【酒】评分；正常使用不会回复体力，只有存在一张可对敌方产生正收益的【杀】时才保留主动使用价值。
-## 有可获益【杀】时，把“酒杀相对普杀的边际收益”叠加到本牌，使 AI 先喝酒再出杀，避免先出完【杀】后【酒】失去意义。
+## 修正出牌阶段的【酒】评分；正常使用不会回复体力，只有当前合法动作中存在能从加伤取得正边际收益的【杀】才使用。
+## 有可获益【杀】时，把“酒杀相对普杀的边际收益”叠加到本牌，使 AI 先喝酒再出杀；次数已尽或白银狮子封顶时均拒绝空喝。
 func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
 	# 当前行动者；动作字典必须携带稳定 ID，缺失时保守拒绝消耗本牌。
 	var actor_id: int = int(action.get("actor_id", -1))
@@ -82,43 +82,44 @@ func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictiona
 	var actor: Dictionary = evaluator.get_player(authoritative_snapshot, actor_id)
 	if actor.is_empty():
 		return current_score - AI_WINE_WITHOUT_SLASH_PENALTY
-	# 当前是否存在可产生正收益的下一张【杀】；仅有【杀】但没有可攻击敌人或全部被防具拦截时同样不应喝酒。
-	var has_profitable_slash: bool = false
+	# 当前是否存在能因酒加伤获得严格正边际收益的下一张【杀】；单纯存在合法【杀】不足以支持喝酒。
+	var has_profitable_boost: bool = false
 	# 酒杀相对普杀的最大边际收益；仅统计仍能对敌方产生正收益的目标，避免无效酒杀抬分。
 	var best_boost_margin: float = 0.0
 	# 【酒】后的下一张【杀】伤害基数；本牌正常使用固定把基础1点提高到2点。
 	var boosted_damage_amount: int = 2
-	for zone_name: String in ["hand", "wooden_ox_storage"]:
-		for card_variant: Variant in actor.get(zone_name, []) as Array:
-			# 当前可用实体牌；只读快照提供花色，供仁王盾等颜色型防具预判。
-			var slash_card: Dictionary = card_variant as Dictionary
-			# 当前实体逻辑定义；普通、火与雷【杀】都以 effect_id=slash 进入统一判断。
-			var slash_definition: Dictionary = GameDatabase.get_card(str(slash_card.get("definition_id", "")))
-			if str(slash_definition.get("effect_id", "")) != "slash":
+	# 本次出牌阶段合法动作；只包含已经通过阶段次数、目标、距离、防具与技能限制的实际可执行动作。
+	var legal_actions: Array[Dictionary] = evaluator.get_current_legal_actions()
+	for legal_action: Dictionary in legal_actions:
+		if str(legal_action.get("action_type", "")) != "use_card":
+			continue
+		# 当前合法【杀】定义；普通、火与雷【杀】都以 effect_id=slash 进入统一判断。
+		var slash_definition: Dictionary = GameDatabase.get_card(str(legal_action.get("card_definition_id", "")))
+		if str(slash_definition.get("effect_id", "")) != "slash":
+			continue
+		# 当前合法【杀】实体；只读快照提供颜色，供仁王盾等颜色型防具预判。
+		var slash_card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, actor_id, int(legal_action.get("card_uid", -1)))
+		# 当前【杀】AI配置；目标结果和响应要求由卡牌定义声明，不复制到【酒】的专属逻辑中。
+		var slash_ai: Dictionary = evaluator.get_card_ai_profile(slash_definition)
+		# 当前目标效果基准；缺失配置按伤害牌的负向目标效果安全回退。
+		var slash_target_result: float = float(slash_ai.get("target_result", -1.0))
+		# 当前实体颜色；虚拟牌没有稳定颜色时保持空值，防具钩子不得臆测。
+		var slash_color: String = str(slash_card.get("color", ""))
+		for target_id_variant: Variant in legal_action.get("target_ids", []) as Array:
+			# 当前合法目标ID；友方或中立目标不用于支持主动喝酒。
+			var target_id: int = int(target_id_variant)
+			if target_id == actor_id or evaluator.get_attitude(authoritative_snapshot, actor_id, target_id) >= 0.0:
 				continue
-			# 当前【杀】AI配置；目标结果和响应要求由卡牌定义声明，不复制到【酒】的专属逻辑中。
-			var slash_ai: Dictionary = evaluator.get_card_ai_profile(slash_definition)
-			# 当前目标效果基准；缺失配置按伤害牌的负向目标效果安全回退。
-			var slash_target_result: float = float(slash_ai.get("target_result", -1.0))
-			# 当前实体颜色；仁王盾等颜色型防具需要真实花色，不能传空字符串臆测。
-			var slash_color: String = str(slash_card.get("color", ""))
-			for target_variant: Variant in authoritative_snapshot.get("players", []) as Array:
-				# 当前潜在目标；死亡、离场、自己和非敌方角色都不能让主动喝酒成立。
-				var target: Dictionary = target_variant as Dictionary
-				var target_id: int = int(target.get("player_id", -1))
-				if target_id == actor_id or not bool(target.get("alive", false)) or bool(target.get("out_of_game", false)) or evaluator.get_attitude(authoritative_snapshot, actor_id, target_id) >= 0.0:
-					continue
-				# 当前攻击距离；下一张【杀】仍必须遵守当前武器和坐骑形成的正式攻击范围。
-				if evaluator.get_distance(authoritative_snapshot, actor_id, target_id) > evaluator.get_attack_range(authoritative_snapshot, actor_id):
-					continue
-				# 普杀目标收益；用于计算喝酒后的真实边际增益，而不是只判断酒杀是否为正分。
-				var plain_slash_score: float = evaluator.score_target_effect(authoritative_snapshot, actor_id, target_id, slash_definition, slash_ai, slash_target_result, slash_color, 1)
-				# 酒杀目标收益；防具、已知响应牌、濒危与连环风险均由统一评估器计算。
-				var boosted_slash_score: float = evaluator.score_target_effect(authoritative_snapshot, actor_id, target_id, slash_definition, slash_ai, slash_target_result, slash_color, boosted_damage_amount)
-				if boosted_slash_score > 0.0:
-					has_profitable_slash = true
-					best_boost_margin = maxf(best_boost_margin, boosted_slash_score - plain_slash_score)
-	if not has_profitable_slash:
+			# 普杀目标收益；用于计算喝酒后的真实边际增益，而不是只判断酒杀是否为正分。
+			var plain_slash_score: float = evaluator.score_target_effect(authoritative_snapshot, actor_id, target_id, slash_definition, slash_ai, slash_target_result, slash_color, 1)
+			# 酒杀目标收益；白银狮子伤害封顶、已知响应牌、濒危与连环风险均由统一评估器计算。
+			var boosted_slash_score: float = evaluator.score_target_effect(authoritative_snapshot, actor_id, target_id, slash_definition, slash_ai, slash_target_result, slash_color, boosted_damage_amount)
+			# 本次加伤边际；必须严格为正且酒杀本身仍为正收益，才值得预先消耗【酒】。
+			var boost_margin: float = boosted_slash_score - plain_slash_score
+			if boosted_slash_score > 0.0 and boost_margin > 0.0:
+				has_profitable_boost = true
+				best_boost_margin = maxf(best_boost_margin, boost_margin)
+	if not has_profitable_boost:
 		return current_score - AI_WINE_WITHOUT_SLASH_PENALTY
 	# 有可获益【杀】时：基础分 + 酒杀边际收益 + 少量顺序优先分，确保先用【酒】再出【杀】。
 	return current_score + best_boost_margin + AI_WINE_BEFORE_SLASH_PRIORITY

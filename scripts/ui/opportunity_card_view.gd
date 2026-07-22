@@ -6,6 +6,12 @@ extends PanelContainer
 ## 玩家点击可选机缘卡时发出稳定卡牌ID；组件不解释或执行任何效果。
 signal card_selected(card_id: String)
 
+## 机缘包含获得技能时发出统一悬停资料；弹窗与牌桌只负责转发，不创建机缘专用说明框。
+signal information_requested(information: Dictionary, anchor_rect: Rect2)
+
+## 鼠标离开、牌面禁用或节点释放时撤销当前机缘技能说明。
+signal information_dismissed
+
 ## 正式机缘卡固定尺寸；宽高参考武将牌比例，三张并列时适配1280×720战斗视口。
 @export var card_size: Vector2 = Vector2(180.0, 240.0)
 
@@ -42,6 +48,12 @@ var _hover_tween: Tween
 ## 机缘卡未悬停时的原始绘制层级；默认0，恢复时不假设父容器永远使用同一层级。
 var _resting_z_index: int = 0
 
+## 当前机缘可获得技能的统一信息内容；空字典表示本卡不授予技能，悬停只保留牌面动画。
+var _skill_information: Dictionary = {}
+
+## 当前是否已经发出技能悬停资料；用于禁用或离树时只撤销真实存在的说明来源。
+var _skill_information_visible: bool = false
+
 ## 卡面规则正文；只显示主公提供的机缘描述，不添加插画、标题或额外规则改写。
 @onready var _description_label: Label = %DescriptionLabel
 
@@ -64,9 +76,21 @@ func _ready() -> void:
 
 ## 配置机缘卡静态快照；card_definition必须来自权威快照或OpportunityCatalog深拷贝。
 func configure(card_definition: Dictionary, interactive: bool = true) -> void:
+	_dismiss_skill_information()
 	_card_id = str(card_definition.get("id", ""))
 	_interactive = interactive and not _card_id.is_empty()
 	_description_label.text = str(card_definition.get("description", ""))
+	# 机缘授予的技能ID；没有技能字段的普通数值机缘不创建空说明框。
+	var skill_id: String = str(card_definition.get("skill_id", ""))
+	# 机缘技能定义；说明沿用技能源码唯一原文，并按当前卡牌名称模式解析完整书名号。
+	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id) if not skill_id.is_empty() else {}
+	_skill_information = {}
+	if not skill_definition.is_empty():
+		_skill_information = {
+			"title":"【%s】" % str(skill_definition.get("name", skill_id)),
+			"subtitle":"机缘可获得技能",
+			"description":GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。"))),
+		}
 	_apply_quality_style(str(card_definition.get("quality", "green")))
 	if not _interactive:
 		_restore_hover_state()
@@ -136,6 +160,9 @@ func _on_mouse_entered() -> void:
 	z_index = HOVER_Z_INDEX
 	_refresh_visual_state()
 	_start_hover_tween(Vector2.ONE * hover_scale)
+	if not _skill_information.is_empty():
+		_skill_information_visible = true
+		information_requested.emit(_skill_information.duplicate(true), get_global_rect())
 
 
 ## 鼠标离开机缘卡时恢复原始缩放、品质样式和父容器绘制层级。
@@ -145,10 +172,19 @@ func _on_mouse_exited() -> void:
 
 ## 结束悬停状态；提交选择导致按钮禁用时也调用，避免牌面停留在放大状态。
 func _restore_hover_state() -> void:
+	_dismiss_skill_information()
 	_is_hovered = false
 	z_index = _resting_z_index
 	_refresh_visual_state()
 	_start_hover_tween(Vector2.ONE)
+
+
+## 撤销当前机缘技能说明；普通机缘或尚未发出说明时保持静默。
+func _dismiss_skill_information() -> void:
+	if not _skill_information_visible:
+		return
+	_skill_information_visible = false
+	information_dismissed.emit()
 
 
 ## 启动悬停缩放补间；二次缓出曲线与正式卡牌保持一致，连续进入离开时从当前比例平滑过渡。
@@ -172,5 +208,6 @@ func _on_pressed() -> void:
 
 ## 节点离开场景树时停止尚未完成的补间，避免动态重建下一名选择者牌面时保留旧动画引用。
 func _exit_tree() -> void:
+	_dismiss_skill_information()
 	if _hover_tween != null and _hover_tween.is_valid():
 		_hover_tween.kill()

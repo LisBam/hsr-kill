@@ -42,6 +42,9 @@ var death_confirmed: bool = false
 ## 当前是否离开游戏但未死亡；离场角色保留稳定座次和历史，但默认不参与距离与选择。
 var out_of_game: bool = false
 
+## 机缘等规则要求角色仅离场至指定轮结束时保存的轮数；-1表示普通离场，不由轮次流程自动返回。
+var out_of_game_until_round: int = -1
+
 ## 当前是否处于连环状态；属性伤害结算后会触发横置角色间的伤害传导。
 var chained: bool = false
 
@@ -92,6 +95,9 @@ var temporary_skills: Dictionary = {}
 
 ## 当前通过机缘等局内永久来源获得的技能；键为技能 ID，值保存来源、每回合次数、总次数与已用次数，死亡前持续有效。
 var acquired_skills: Dictionary = {}
+
+## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
+var acquired_opportunity_ids: Array[String] = []
 
 ## 当前额外手牌上限；默认0，机缘等永久效果可累加修改，最终手牌上限仍不会低于0。
 var hand_limit_bonus: int = 0
@@ -241,6 +247,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"dying": dying,
 		"death_confirmed": death_confirmed,
 		"out_of_game": out_of_game,
+		"out_of_game_until_round": out_of_game_until_round,
 		"chained": chained,
 		"face_down": face_down,
 		"character_corner_text": character_corner_text,
@@ -257,6 +264,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
+		"acquired_opportunity_ids": acquired_opportunity_ids.duplicate(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),

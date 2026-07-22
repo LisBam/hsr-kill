@@ -29,6 +29,8 @@ func _run() -> void:
 		return
 	if not _test_feiyan_preparation_phase_virtual_use():
 		return
+	if not await _test_feiyan_main_phase_conversion():
+		return
 	if not _test_named_card_gain_and_hand_view_as():
 		return
 	if not _test_lushi_mingchen_deferred_settlement():
@@ -153,6 +155,8 @@ func _reset_state(player_count: int) -> void:
 	_controller._extra_play_phase_returns_to_finish.clear()
 	_controller._extra_play_phase_return_points.clear()
 	_controller._active_extra_play_phase_context.clear()
+	_controller._main_phase_play_conversions.clear()
+	_controller._active_converted_play_phase_context.clear()
 	_controller._deferred_skill_settlements.clear()
 	_controller._rule_continuations.reset()
 	_controller._pending_damage_finalizations.clear()
@@ -269,6 +273,59 @@ func _test_feiyan_preparation_phase_virtual_use() -> bool:
 		return _fail("feiyan_runtime_virtual_use_not_consumed")
 	if not _controller.has_pending_card_choice():
 		return _fail("feiyan_runtime_virtual_use_did_not_start_huogong")
+	return true
+
+
+## 验证飞焰把判定、摸牌、正常出牌与弃牌四个主要阶段直接依次转换为普通出牌阶段，不产生跳过或额外阶段日志。
+func _test_feiyan_main_phase_conversion() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "start"
+	_controller.state.phase_index = 0
+	# 本次阶段日志；用于确认转换流程只出现四次普通出牌阶段，不出现额外阶段或弃牌阶段。
+	var phase_logs: Array[String] = []
+	var log_callback: Callable = func(message: String) -> void: phase_logs.append(message)
+	_controller.log_added.connect(log_callback)
+	if not _controller.convert_current_turn_main_phases_to_play(0, "test_feiyan"):
+		_controller.log_added.disconnect(log_callback)
+		return _fail("feiyan_conversion_registration")
+	# 第一段原判定阶段；应直接进入普通phaseUse，且没有任何额外阶段排队或跳过标记。
+	_controller._enter_judgment_phase(0)
+	if _controller.state.current_phase != "play" or str(_controller._active_converted_play_phase_context.get("original_phase", "")) != "judgment" or not _controller._extra_play_phase_counts.is_empty() or not _controller.state.get_player(0).skipped_phases.is_empty():
+		_controller.log_added.disconnect(log_callback)
+		return _fail("feiyan_judgment_conversion context=%s extra=%s skipped=%s" % [_controller._active_converted_play_phase_context, _controller._extra_play_phase_counts, _controller.state.get_player(0).skipped_phases])
+	# 依次结束原判定与原摸牌转换段；每段转场后都应建立新的普通出牌阶段生命周期。
+	_controller._cancel_active_play_choice("feiyan_test_judgment")
+	_controller._end_play_phase(0)
+	await get_tree().process_frame
+	if str(_controller._active_converted_play_phase_context.get("original_phase", "")) != "draw":
+		_controller.log_added.disconnect(log_callback)
+		return _fail("feiyan_draw_conversion=%s" % [_controller._active_converted_play_phase_context])
+	_controller._cancel_active_play_choice("feiyan_test_draw")
+	_controller._end_play_phase(0)
+	await get_tree().process_frame
+	# 第三段本来就是正常出牌阶段，因此没有转换上下文，但仍是四段序列中的独立普通阶段。
+	if _controller.state.current_phase != "play" or not _controller._active_converted_play_phase_context.is_empty():
+		_controller.log_added.disconnect(log_callback)
+		return _fail("feiyan_normal_play_phase=%s/%s" % [_controller.state.current_phase, _controller._active_converted_play_phase_context])
+	_controller._cancel_active_play_choice("feiyan_test_play")
+	_controller._end_play_phase(0)
+	await get_tree().process_frame
+	# 第四段原弃牌阶段；应再次作为普通出牌阶段开始，证明不会进入实际弃牌主体。
+	if str(_controller._active_converted_play_phase_context.get("original_phase", "")) != "discard":
+		_controller.log_added.disconnect(log_callback)
+		return _fail("feiyan_discard_conversion=%s" % [_controller._active_converted_play_phase_context])
+	# 阶段日志语义；四段都叫“出牌阶段”，不能出现“额外”“跳过”或真实弃牌阶段开始。
+	var play_begin_count: int = phase_logs.count("出牌阶段开始。")
+	for log_message: String in phase_logs:
+		if log_message.contains("额外出牌阶段") or log_message.contains("跳过判定阶段") or log_message.contains("跳过摸牌阶段") or log_message.contains("跳过弃牌阶段") or log_message == "弃牌阶段开始。":
+			_controller.log_added.disconnect(log_callback)
+			return _fail("feiyan_phase_log=%s" % [phase_logs])
+	_controller._cancel_active_play_choice("feiyan_test_cleanup")
+	_controller.log_added.disconnect(log_callback)
+	if play_begin_count != 4:
+		return _fail("feiyan_play_phase_count=%d logs=%s" % [play_begin_count, phase_logs])
 	return true
 
 
@@ -576,6 +633,10 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 	_reset_state(3)
 	# 阶段节奏；选择全部完成后只登记判定阶段转换，测试结束前不会真的进入后续阶段。
 	_controller.game_flow_interval_seconds = 0.05
+	# 回合开始日志顺序；分隔与回合开始必须先于phaseBefore技能询问和准备阶段开始。
+	var turn_logs: Array[String] = []
+	var turn_log_callback: Callable = func(message: String) -> void: turn_logs.append(message)
+	_controller.log_added.connect(turn_log_callback)
 	# 领袖技持有者；设置为贝洛伯格角色，使其也能成为【振旗】的合法受益者。
 	var leader: PlayerState = _controller.state.get_player(0)
 	leader.character_id = "natasha"
@@ -593,6 +654,7 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 	# 第一层请求上下文；必须仍是【振旗】费用选择，证明准备阶段尚未越过回合前屏障。
 	var zhenqi_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 	if zhenqi == null or jiahu == null or str(zhenqi_choice_context.get("kind", "")) != "zhenqi_cost_option" or _controller._rule_continuations.size() != 1:
+		_controller.log_added.disconnect(turn_log_callback)
 		return _fail("turn_start_zhenqi_first context=%s continuations=%s" % [zhenqi_choice_context, _controller._rule_continuations.to_array()])
 	# 明确取消【振旗】；规则续接应继续发布剩余回合开始时机，并在准备阶段打开【加护】。
 	if not _submit_pending_choice(1, [], [], false):
@@ -600,13 +662,23 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 	# 第二层请求上下文；只有【振旗】请求已经完整关闭后才能成为当前唯一选择。
 	var jiahu_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or _controller._rule_continuations.size() != 1:
+		_controller.log_added.disconnect(turn_log_callback)
 		return _fail("turn_start_jiahu_second context=%s continuations=%s" % [jiahu_choice_context, _controller._rule_continuations.to_array()])
 	# 选择第三名角色接受【加护】；技能结果完成后才允许准备阶段收尾并安排判定阶段。
 	if not _submit_pending_choice(1, [], [2], true):
 		return false
 	if not support_target.chained or support_target.shield != 1 or _controller.has_pending_card_choice() or _controller._rule_continuations.has_pending() or _controller.state.current_phase != "start" or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending("phase_transition"):
+		_controller.log_added.disconnect(turn_log_callback)
 		return _fail("turn_start_complete chained=%s shield=%d pending=%s phase=%s transition=%s" % [support_target.chained, support_target.shield, _controller.has_pending_card_choice(), _controller.state.current_phase, _controller.game_flow_pacer.has_pending("phase_transition") if _controller.game_flow_pacer != null else false])
+	# 日志索引；准备阶段开始必须位于回合开始之后，且回合分隔线紧邻并先于回合开始。
+	var turn_begin_log: String = "%s的回合开始。" % _controller.format_player_state_log_name(turn_player)
+	var turn_begin_index: int = turn_logs.find(turn_begin_log)
+	var preparation_begin_index: int = turn_logs.find("准备阶段开始。")
+	if turn_begin_index <= 0 or preparation_begin_index <= turn_begin_index or turn_logs[turn_begin_index - 1] != "————————":
+		_controller.log_added.disconnect(turn_log_callback)
+		return _fail("turn_start_log_order=%s" % [turn_logs])
 	_controller.game_flow_pacer.cancel_all()
+	_controller.log_added.disconnect(turn_log_callback)
 	return true
 
 

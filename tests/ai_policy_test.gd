@@ -53,6 +53,8 @@ func _ready() -> void:
 		return
 	if not _test_wine_slash_defense():
 		return
+	if not _test_wine_action_value_and_baiyin_damage_cap():
+		return
 	if not _test_chained_damage_team_risk():
 		return
 	if not _test_fire_attack_failed_target_memory():
@@ -753,12 +755,57 @@ func _test_wuxie_decision() -> bool:
 	var allied_borrow_sword_choice: Dictionary = _policy.choose_card_choice(snapshot, allied_borrow_sword_request, [pass_action, use_action])
 	if bool((allied_borrow_sword_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_allied_borrow_sword=%s" % [allied_borrow_sword_choice])
+	# 队友对领袖本人使用普通负面锦囊；即使静态牌效对自己不利，也应相信队友战术并保留无懈。
+	var allied_negative_trick_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"lebu", "source_id":2, "target_id":0, "negated":false}}
+	# 队友负面锦囊的无懈选择结果；应取消响应，不把通用负面牌效覆盖在队友关系之上。
+	var allied_negative_trick_choice: Dictionary = _policy.choose_card_choice(snapshot, allied_negative_trick_request, [pass_action, use_action])
+	if bool((allied_negative_trick_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_allied_negative_trick=%s" % [allied_negative_trick_choice])
 	# 友方已横置时的【铁索连环】会解除连环，动态逐目标结果为正收益，不能再错误地使用无懈抵消。
 	(snapshot.get("players", []) as Array)[2]["chained"] = true
 	var chained_tiesuo_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"tiesuo", "source_id":1, "target_id":2, "negated":false}}
 	var chained_tiesuo_choice: Dictionary = _policy.choose_card_choice(snapshot, chained_tiesuo_request, [pass_action, use_action])
 	if bool((chained_tiesuo_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_chained_tiesuo=%s" % [chained_tiesuo_choice])
+	return true
+
+
+## 验证【酒】只为当前合法且能从加伤取得正边际收益的【杀】使用，并把白银狮子的预期承伤封顶为1点。
+func _test_wine_action_value_and_baiyin_damage_cap() -> bool:
+	# 全身份公开快照；领袖0持有【酒】与【杀】，反贼1作为唯一合法攻击目标。
+	var snapshot: Dictionary = _build_snapshot(true)
+	var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	actor["hand"] = [_card(101, "sha", 0), _card(102, "jiu", 0)]
+	actor["hand_count"] = 2
+	# 【酒】与【杀】合法动作；结束阶段动作作为0分基线，确保无意义喝酒会被明确拒绝。
+	var wine_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":102, "card_definition_id":"jiu", "target_ids":[0], "payload":{}}
+	var slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	var end_action: Dictionary = {"action_type":"end_play", "actor_id":0}
+	# 本阶段【杀】已经不可用的动作集合；手里仍有【杀】也不能让AI空喝【酒】。
+	var no_legal_slash_choice: Dictionary = _policy.choose_action(snapshot, [wine_action, end_action])
+	if str(no_legal_slash_choice.get("action_type", "")) != "end_play":
+		return _fail("wine_without_legal_slash=%s" % [no_legal_slash_choice])
+	# 无防具敌人；酒后2点伤害产生真实正边际收益，AI应先使用【酒】而不是直接出【杀】。
+	var profitable_wine_choice: Dictionary = _policy.choose_action(snapshot, [wine_action, slash_action, end_action])
+	if str(profitable_wine_choice.get("card_definition_id", "")) != "jiu":
+		return _fail("wine_before_profitable_slash=%s" % [profitable_wine_choice])
+	# 白银狮子目标；其单次承伤固定封顶1点，普通杀与酒杀的目标收益应完全相同。
+	var target: Dictionary = (snapshot.get("players", []) as Array)[1] as Dictionary
+	# 白银狮子装备快照；区域字段保持equipment，供离区与防具语义统一识别。
+	var baiyin_armor: Dictionary = _card(701, "baiyin", 1)
+	baiyin_armor["zone"] = "equipment"
+	target["equipment"] = {"armor":baiyin_armor}
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	var slash_definition: Dictionary = GameDatabase.get_card("sha")
+	var slash_ai: Dictionary = evaluator.get_card_ai_profile(slash_definition)
+	var plain_score: float = evaluator.score_target_effect(snapshot, 0, 1, slash_definition, slash_ai, float(slash_ai.get("target_result", -1.0)), "black", 1)
+	var wine_score: float = evaluator.score_target_effect(snapshot, 0, 1, slash_definition, slash_ai, float(slash_ai.get("target_result", -1.0)), "black", 2)
+	if not is_equal_approx(plain_score, wine_score):
+		return _fail("baiyin_damage_cap plain=%.3f wine=%.3f" % [plain_score, wine_score])
+	# 同一合法动作集合面对白银狮子；【酒】没有边际收益，AI应直接出【杀】而不是酒杀。
+	var baiyin_choice: Dictionary = _policy.choose_action(snapshot, [wine_action, slash_action, end_action])
+	if str(baiyin_choice.get("card_definition_id", "")) != "sha":
+		return _fail("wine_against_baiyin=%s" % [baiyin_choice])
 	return true
 
 

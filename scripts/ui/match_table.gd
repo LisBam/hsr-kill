@@ -920,7 +920,34 @@ func _on_information_dismissed(source: Node) -> void:
 func _on_character_details_requested(snapshot: Dictionary, character_definition: Dictionary, faction_definition: Dictionary) -> void:
 	if information_box == null:
 		return
-	information_box.show_character_details(snapshot, character_definition, faction_definition)
+	information_box.show_character_details(_build_character_details_snapshot(snapshot), character_definition, faction_definition)
+
+
+## 为武将详情补充当前模式展示语义；角色公开快照本身保持纯规则数据，不由牌面组件硬编码模式ID。
+func _build_character_details_snapshot(snapshot: Dictionary) -> Dictionary:
+	# 详情专用快照；复制后追加是否显示机缘分组，避免改写桌面共享的观察者快照。
+	var details_snapshot: Dictionary = snapshot.duplicate(true)
+	# 当前观察者模式；远程客户端可能没有权威GameState，因此优先从桌面最新根快照和控制器导出模式列表判断。
+	var snapshot_mode: String = str(_snapshot.get("match_mode", ""))
+	var opportunity_mode_enabled: bool = match_controller != null and (match_controller.is_opportunity_enabled_for_current_match() or match_controller.opportunity_enabled_mode_ids.has(snapshot_mode))
+	details_snapshot["opportunity_mode_enabled"] = opportunity_mode_enabled
+	return details_snapshot
+
+
+## 使用最新公开状态原位刷新已打开的武将详情；局域网对局继续运行时获得技能与机缘会立即显示。
+func _refresh_open_character_details() -> void:
+	if information_box == null or not information_box.is_character_details_visible():
+		return
+	# 当前详情玩家ID；详情组件只允许同一稳定角色原位刷新，不在状态广播中自动切换查看目标。
+	var details_player_id: int = information_box.get_character_details_player_id()
+	# 最新公开玩家快照；角色离场或死亡仍保留公开资料，只有快照缺失时跳过本次刷新。
+	var player_snapshot: Dictionary = _player_snapshots_by_id.get(details_player_id, {}) as Dictionary
+	if player_snapshot.is_empty():
+		return
+	# 最新武将与势力静态定义；名称模式和UI风格仍由信息框统一解析与重绘。
+	var character_definition: Dictionary = _get_cached_character_definition(str(player_snapshot.get("character_id", "")))
+	var faction_definition: Dictionary = _get_cached_faction_definition(str(character_definition.get("faction", "")))
+	information_box.refresh_character_details(_build_character_details_snapshot(player_snapshot), character_definition, faction_definition)
 
 
 ## 根据武将详情可见状态管理独立离线暂停令牌；LAN 与远程对局始终继续运行。
@@ -1003,6 +1030,8 @@ func _create_opportunity_choice_panel() -> void:
 	opportunity_choice_panel.name = "OpportunityChoicePanel"
 	add_child(opportunity_choice_panel)
 	opportunity_choice_panel.opportunity_selected.connect(_on_opportunity_selected)
+	opportunity_choice_panel.information_requested.connect(_on_information_requested.bind(opportunity_choice_panel))
+	opportunity_choice_panel.information_dismissed.connect(_on_information_dismissed.bind(opportunity_choice_panel))
 
 
 ## 使用最新观察者快照刷新机缘弹窗；角色名只取公开显示名，不向等待玩家暴露身份或候选正文。
@@ -1071,6 +1100,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
 		var indexed_player: Dictionary = player_variant as Dictionary
 		_player_snapshots_by_id[int(indexed_player.get("player_id", -1))] = indexed_player
+	_refresh_open_character_details()
 	_refresh_opportunity_choice_panel()
 	_refresh_auto_management_controls()
 	_sync_match_clock()
