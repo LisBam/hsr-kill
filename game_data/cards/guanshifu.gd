@@ -2,6 +2,9 @@ extends CardDefinition
 
 ## 【贯石斧】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
+## 贯石斧发动时必须弃置的其他牌数；固定2张，武器本体不计入候选或费用。
+const COST_CARD_COUNT: int = 2
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -43,7 +46,8 @@ func on_slash_dodged(slash_effect: Object, context: Dictionary) -> bool:
 		return false
 	# 攻击者 ID；费用必须来自其手牌区或装备区。
 	var actor_id: int = int(context.get("actor_id", -1))
-	if slash_effect.host.get_hand_equipment_card_count(actor_id) < 2:
+	# 总数中包含当前装备的贯石斧；只有本体之外仍有2张牌时才能建立费用请求。
+	if slash_effect.host.get_hand_equipment_card_count(actor_id) <= COST_CARD_COUNT:
 		return false
 	# 当前装备实体；UID 用于防止等待期间换装后误发动。
 	var equipment_card: CardInstance = slash_effect.host.get_equipment_card(actor_id, "weapon")
@@ -51,6 +55,13 @@ func on_slash_dodged(slash_effect: Object, context: Dictionary) -> bool:
 		return false
 	# 贯石斧费用候选；可选择普通手牌或任意装备。
 	var candidates: Array[Dictionary] = slash_effect.host.get_hand_equipment_candidates(actor_id, actor_id)
+	# 发动中的贯石斧只用于校验武器不变，必须从费用候选中移除，不能被自动选中或手动弃置。
+	# 当前候选索引；倒序遍历使移除实体时不会改变尚未检查的数组下标。
+	for candidate_index: int in range(candidates.size() - 1, -1, -1):
+		if int(candidates[candidate_index].get("uid", -1)) == equipment_card.uid:
+			candidates.remove_at(candidate_index)
+	if candidates.size() < COST_CARD_COUNT:
+		return false
 	# 费用恢复上下文；完整保存原【杀】参数和装备实体 UID。
 	var cost_context: Dictionary = context.duplicate(true)
 	cost_context["kind"] = "guanshi_cost"
@@ -58,7 +69,7 @@ func on_slash_dodged(slash_effect: Object, context: Dictionary) -> bool:
 	cost_context["equipment_uid"] = equipment_card.uid
 	cost_context["ai_prefer_select"] = true
 	# 两张费用牌；允许取消，但确认时必须正好选择2张。
-	var selected_uids: Array[int] = slash_effect.host.request_card_choice(actor_id, "贯石斧", "是否弃置两张牌发动【贯石斧】？", candidates, 2, 2, true, cost_context)
+	var selected_uids: Array[int] = slash_effect.host.request_card_choice(actor_id, "贯石斧", "是否弃置两张牌发动【贯石斧】？", candidates, COST_CARD_COUNT, COST_CARD_COUNT, true, cost_context)
 	if slash_effect.host.has_pending_card_choice():
 		return true
 	_apply_cost(slash_effect, cost_context, selected_uids)
@@ -74,10 +85,14 @@ func _apply_cost(slash_effect: Object, context: Dictionary, selected_uids: Array
 	if equipment_card == null or equipment_card.uid != int(context.get("equipment_uid", -1)):
 		context["dodged"] = true
 		return
+	# 费用边界复核；数量异常或伪造提交贯石斧本体时直接保留【闪】的抵消结果，不移动任何费用牌。
+	if selected_uids.size() != COST_CARD_COUNT or selected_uids.has(equipment_card.uid):
+		context["dodged"] = true
+		return
 	# 实际弃置数量；等待期间牌已移动时支付失败。
 	var discarded_count: int = slash_effect.host.discard_selected_hand_equipment(actor_id, selected_uids)
-	context["dodged"] = discarded_count != 2
-	if discarded_count == 2:
+	context["dodged"] = discarded_count != COST_CARD_COUNT
+	if discarded_count == COST_CARD_COUNT:
 		slash_effect.host.add_log("%s发动【贯石斧】，令【杀】继续生效。" % slash_effect.state.get_player(actor_id).display_name)
 
 
