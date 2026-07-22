@@ -10,8 +10,8 @@ var _next_task_token: int = 1
 var _task_tokens_by_key: Dictionary = {}
 
 
-## 按业务键安排一次延时回调；延时为0时同步执行，便于规则测试关闭表现节奏。
-func schedule(task_key: String, delay_seconds: float, callback: Callable) -> int:
+## 按业务键安排一次延时回调；延时为0时同步执行，process_always用于暂停规则流程期间仍需完成的纯表现等待。
+func schedule(task_key: String, delay_seconds: float, callback: Callable, process_always: bool = false) -> int:
 	cancel(task_key)
 	# 当前任务令牌；计时结束时必须仍与业务键登记值一致才允许执行。
 	var task_token: int = _next_task_token
@@ -20,7 +20,7 @@ func schedule(task_key: String, delay_seconds: float, callback: Callable) -> int
 	if delay_seconds <= 0.0:
 		_execute_if_current(task_key, task_token, callback)
 	else:
-		_run_after_delay(task_key, task_token, delay_seconds, callback)
+		_run_after_delay(task_key, task_token, delay_seconds, callback, process_always)
 	return task_token
 
 
@@ -56,9 +56,9 @@ func has_pending_skill_interval() -> bool:
 	return false
 
 
-## 等待指定秒数后尝试执行任务；计时器服从场景树暂停，暂停期间不会消耗流程间隔。
-func _run_after_delay(task_key: String, task_token: int, delay_seconds: float, callback: Callable) -> void:
-	await get_tree().create_timer(delay_seconds, false).timeout
+## 等待指定秒数后尝试执行任务；普通流程计时器服从场景树暂停，process_always任务可在暂停期间完成已展示的固定等待。
+func _run_after_delay(task_key: String, task_token: int, delay_seconds: float, callback: Callable, process_always: bool) -> void:
+	await get_tree().create_timer(delay_seconds, process_always).timeout
 	_execute_if_current(task_key, task_token, callback)
 
 

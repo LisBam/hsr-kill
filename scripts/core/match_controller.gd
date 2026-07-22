@@ -35,6 +35,9 @@ const DRAW_PRESENTATION_BATCH_ID_KEY: String = "_draw_presentation_batch_id"
 ## 统一选择请求信号；选牌、选目标与组合选择都先发送可序列化询问，再提交兼容 choose_cards 动作。
 signal card_choice_requested(choice_data: Dictionary)
 
+## 过关斩将敌方换将后展示新武将的流程任务键；同一时刻最多允许一条等待机缘的预览任务。
+const CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY: String = "conquest_enemy_replacement_opportunity"
+
 ## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
 signal public_card_choice_display_changed(display_data: Dictionary)
 
@@ -65,6 +68,9 @@ signal character_selection_changed(snapshot: Dictionary)
 
 ## 相邻阶段与自动响应之间的最小等待秒数；正式菜单限制为0.1至1.0秒，规则测试可设为0关闭表现节奏。
 @export_range(0.0, 1.0, 0.1) var game_flow_interval_seconds: float = 0.30
+
+## 过关斩将敌方新武将入场后展示至玩家机缘弹出的等待秒数；默认1.20秒，测试可设为0关闭表现节奏。
+@export_range(0.0, 5.0, 0.05) var conquest_enemy_replacement_opportunity_delay_seconds: float = 1.20
 
 ## 延时锦囊进入中央展示后等待再开始无懈与判定的秒数；默认1.00秒保证玩家能辨认当前结算牌，运行时通常无需动态修改。
 @export_range(0.0, 3.0, 0.05) var delayed_judgment_preview_seconds: float = 1.00
@@ -202,6 +208,9 @@ var gameplay_pause_service: GameplayPauseService
 
 ## 对局流程节奏组件；只负责可取消计时，不读取规则状态或决定下一阶段。
 var game_flow_pacer: GameFlowPacer
+
+## 敌方换将展示等待持有的暂停令牌；-1表示当前没有延迟机缘任务阻塞原卡牌结算。
+var _conquest_replacement_opportunity_pause_token: int = -1
 
 ## 触发器排序组件；保留与同步 RuleEventBus 的兼容边界，逐步承载技能时机排序。
 var trigger_manager: TriggerManager
@@ -573,6 +582,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		return false
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
+	_cancel_conquest_replacement_opportunity_preview()
 	if opportunity_system != null:
 		opportunity_system.shutdown()
 	if conquest_mode != null:
@@ -622,7 +632,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_control_all_characters_enabled = network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE and local_human_player_id >= 0 and GameSettings.control_all_characters_enabled
 	_primary_offline_human_player_id = local_human_player_id
 	_offline_manually_controlled_player_id = -1
-	_character_replacement_count = GameSettings.character_replacement_count
+	_character_replacement_count = GameSettings.get_character_replacement_count_for_mode(actual_mode)
 	_character_candidate_count = GameSettings.get_character_candidate_count_for_mode(actual_mode)
 	_wheel_duel_face_up_candidate_count = GameSettings.wheel_duel_face_up_candidate_count
 	_wheel_duel_face_down_candidate_count = GameSettings.wheel_duel_face_down_candidate_count
@@ -749,6 +759,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 func _discard_failed_match_start() -> void:
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
+	_cancel_conquest_replacement_opportunity_preview()
 	if opportunity_system != null:
 		opportunity_system.shutdown()
 	_uninstall_all_character_skills()
@@ -3544,6 +3555,9 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
 		return null
+	# 直击目标不创建空响应窗口；【掠袭】等效果写入父牌直击集合后，目标不能用任何响应牌或响应技能。
+	if is_response_blocked_by_direct_hit(player_id, context):
+		return null
 	# 去重后的合法响应模式；空数组不能创建没有明确规则语义的响应请求。
 	var allowed_patterns: Array[String] = []
 	for response_pattern: String in response_patterns:
@@ -4503,9 +4517,8 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, co
 	var parent_card_uid_hint: int = int(continuation_context.get("parent_card_uid", -1))
 	# 当前被响应锦囊；普通锦囊和延时锦囊结算时都位于公共处理区。
 	var parent_card: CardInstance = _find_processing_card(parent_card_uid_hint) if parent_card_uid_hint >= 0 else _find_processing_card_by_definition(trick_id)
-	# 直击目标不能响应本次锦囊；该查询来自当前 CardUseEvent 的 directHit 集合，不创建空无懈窗口。
-	if parent_card != null and is_card_target_direct_hit(parent_card.uid, target_id):
-		return false
+	# 当前锦囊目标是否被直击；其本人不进入无懈名单，但其他角色仍可对该锦囊正常使用无懈。
+	var target_response_blocked: bool = parent_card != null and is_card_target_direct_hit(parent_card.uid, target_id)
 	# 恢复结果键；本地玩家提交后重新进入效果执行器时只读取一次，避免再次弹出同一询问。
 	var resume_key: String = _negation_resume_key(parent_card.uid if parent_card != null else -1, source_id, target_id, trick_id)
 	if _negation_resume_results.has(resume_key):
@@ -4517,6 +4530,8 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, co
 	# 本次目标独立的响应顺序；无名杀在每个 useCardToBegin 目标事件上分别建立无懈链，多目标牌不会共享一次抵消结果。
 	var response_order_ids: Array[int] = []
 	for player: PlayerState in _get_alive_players_in_action_order(state.current_player_id):
+		if target_response_blocked and player.player_id == target_id:
+			continue
 		response_order_ids.append(player.player_id)
 	# 无懈响应上下文；全部字段可序列化，异步选择后能够从准确响应者与目标继续。
 	var negate_context: Dictionary = {
@@ -9367,6 +9382,13 @@ func is_card_target_direct_hit(card_uid: int, target_id: int) -> bool:
 	return (card_use_context.get("direct_hit_target_ids", []) as Array).has(target_id)
 
 
+## 返回指定响应者是否被父使用牌的直击集合禁止响应；父牌UID缺失时保持普通响应规则。
+func is_response_blocked_by_direct_hit(responder_id: int, context: Dictionary) -> bool:
+	# 响应父牌UID；所有标准【杀】、决斗、群体锦囊与装备响应上下文均使用此稳定字段。
+	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
+	return parent_card_uid >= 0 and is_card_target_direct_hit(parent_card_uid, responder_id)
+
+
 ## 执行铁索连环等允许重铸的牌：弃置该牌并摸一张牌。
 func _execute_recast(actor_id: int, card_uid: int) -> bool:
 	# 重铸玩家状态；必须处于自己的出牌阶段。
@@ -10199,11 +10221,49 @@ func _resolve_conquest_enemy_replacement(victim: PlayerState, killer_id: int, de
 	if player_mark_service != null:
 		player_mark_service.clear_marks_for_dead_player(victim.player_id)
 	_finish_pending_damage(victim.player_id)
-	# 敌方新武将完整入场后，固定由玩家选择一次机缘；当前回合的后继在机缘全部结算后按行动者决定。
-	var player_id: int = conquest_mode.get_player_id()
-	if opportunity_system != null and opportunity_system.force_trigger_for_players(player_id, [player_id], "conquest_enemy_replacement", {"defeated_enemy_id":victim.player_id, "current_player_id":state.current_player_id}):
+	# 敌方新武将完整入场后，先展示其武将牌，再固定由玩家选择一次机缘；当前回合的后继在机缘全部结算后按行动者决定。
+	_queue_conquest_replacement_opportunity({"defeated_enemy_id":victim.player_id, "current_player_id":state.current_player_id})
+
+
+## 暂停原卡牌与阶段结算并展示敌方新武将，等待指定秒数后再创建玩家机缘选择；等待期间不改变原回合阶段。
+func _queue_conquest_replacement_opportunity(context: Dictionary) -> void:
+	if state == null or state.game_over or conquest_mode == null:
 		return
-	_finish_conquest_replacement_turn({"defeated_enemy_id":victim.player_id, "current_player_id":state.current_player_id})
+	# 展示等待关闭时直接进入机缘，保留无头测试和快速调试的同步流程。
+	if conquest_enemy_replacement_opportunity_delay_seconds <= 0.0 or game_flow_pacer == null:
+		_begin_conquest_replacement_opportunity(context)
+		return
+	# 新武将已经写入权威状态；先发布快照再暂停，确保玩家能在计时内看清其武将牌和入场增益。
+	_emit_state()
+	_conquest_replacement_opportunity_pause_token = acquire_gameplay_pause("conquest_enemy_replacement_preview")
+	game_flow_pacer.schedule(CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY, conquest_enemy_replacement_opportunity_delay_seconds, Callable(self, "_begin_conquest_replacement_opportunity").bind(context.duplicate(true)), true)
+
+
+## 展示等待结束后发起单人机缘；机缘自身会接管暂停令牌，失败时才立即恢复原回合后继。
+func _begin_conquest_replacement_opportunity(context: Dictionary) -> void:
+	if state == null or state.game_over or conquest_mode == null:
+		_cancel_conquest_replacement_opportunity_preview()
+		return
+	# 玩家稳定ID；敌方换将后的机缘永远只由玩家从三张候选中选择。
+	var player_id: int = conquest_mode.get_player_id()
+	var opportunity_started: bool = opportunity_system != null and opportunity_system.force_trigger_for_players(player_id, [player_id], "conquest_enemy_replacement", context)
+	# 新机缘流程已经持有自己的暂停令牌；后释放展示令牌不会让旧卡牌结算跨过当前选择。
+	_cancel_conquest_replacement_opportunity_preview()
+	if opportunity_started:
+		return
+	_finish_conquest_replacement_turn(context)
+
+
+## 取消敌方换将展示等待并释放其暂停令牌；重开、异常终局和正常计时结束均通过本入口清理。
+func _cancel_conquest_replacement_opportunity_preview() -> void:
+	if game_flow_pacer != null:
+		game_flow_pacer.cancel(CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY)
+	if _conquest_replacement_opportunity_pause_token < 0:
+		return
+	# 当前展示暂停令牌；先清空字段再释放，防止暂停状态回调重入时重复释放。
+	var pause_token: int = _conquest_replacement_opportunity_pause_token
+	_conquest_replacement_opportunity_pause_token = -1
+	release_gameplay_pause(pause_token)
 
 
 ## 弃置过关斩将敌方当前区域内的全部牌；手牌、装备、判定区与木牛“粮”均属于“区域内所有牌”。
@@ -10278,7 +10338,14 @@ func _finish_conquest_replacement_turn(context: Dictionary) -> void:
 		state.phase_index = -1
 		_advance_after_current_player_death(enemy_id)
 		return
+	# 玩家击杀敌方后必须恢复被死亡与机缘依次暂停的原卡牌结算；排空后才创建下一次出牌选择，避免机缘结束留在无交互的出牌阶段。
+	_resume_settlement_pipeline()
+	if event_scheduler != null:
+		event_scheduler.drain()
+	if state.current_phase == "play" and not has_pending_play_interaction() and _active_card_resolutions.is_empty() and not _has_active_play_choice():
+		_begin_play_choice(state.current_player_id)
 	_emit_state()
+	_ensure_ai_progress_after_resolution()
 
 
 ## 检查身份胜负条件并结束对局。

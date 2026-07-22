@@ -89,15 +89,29 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 当前模拟客户区矩形；直接使用主场景尺寸，覆盖编辑器嵌入运行未应用画布拉伸的情况。
 	var viewport_rect: Rect2 = Rect2(main_instance.position, main_instance.size)
-	# 左上角三行对局信息；只允许显示轮数、牌堆剩余与对局时长，不再混入行动角色或阶段。
+	# 左上角对局信息；默认显示轮数、牌堆剩余与对局时长，过关斩将会在轮数右侧额外显示关卡。
 	var round_label: Label = main_instance.get_node("%PhaseLabel") as Label
+	# 左上角过关斩将关卡标签；仅过关斩将显示，字体须与轮次标签保持一致。
+	var conquest_level_label: Label = main_instance.get_node("%ConquestLevelLabel") as Label
 	# 左上角牌堆标签；只显示当前摸牌堆剩余数量。
 	var draw_pile_label: Label = main_instance.get_node("%CenterTurnLabel") as Label
 	# 左上角时长标签；按“对局时长：分:秒”格式持续刷新。
 	var match_duration_label: Label = main_instance.get_node("%CenterPhaseLabel") as Label
-	if round_label.text != "第3轮" or draw_pile_label.text != "牌堆剩余：121" or not match_duration_label.text.begins_with("对局时长：") or round_label.text.contains("玩家") or draw_pile_label.text.contains("阶段"):
-		_fail("top_info:%s/%s/%s" % [round_label.text, draw_pile_label.text, match_duration_label.text])
+	if round_label.text != "第3轮" or conquest_level_label.visible or draw_pile_label.text != "牌堆剩余：121" or not match_duration_label.text.begins_with("对局时长：") or round_label.text.contains("玩家") or draw_pile_label.text.contains("阶段"):
+		_fail("top_info:%s/%s/%s/%s" % [round_label.text, conquest_level_label.text, str(conquest_level_label.visible), draw_pile_label.text])
 		return
+	# 过关斩将顶栏；关卡必须与轮次同排显示，不允许覆盖轮次标签，并继承相同字体尺寸。
+	var conquest_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	conquest_snapshot["match_mode"] = IdentityRules.MODE_CONQUEST
+	conquest_snapshot["conquest_state"] = {"level":7}
+	match_controller.state_changed.emit(conquest_snapshot)
+	await get_tree().process_frame
+	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or conquest_level_label.get_theme_font_size("font_size") != round_label.get_theme_font_size("font_size"):
+		_fail("conquest_top_info:%s/%s/%s" % [round_label.text, conquest_level_label.text, str(conquest_level_label.visible)])
+		return
+	# 后续布局断言继续使用身份局快照，避免模式专属菜单与资料逻辑影响既有十人桌测试。
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# UI 风格选项；默认必须选中黑白太空，同时保留暖木十周年作为可切换项。
