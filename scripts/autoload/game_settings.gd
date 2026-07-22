@@ -43,6 +43,9 @@ signal ai_uses_mulligan_changed(enabled: bool)
 ## 换将卡数量变化信号；参数只会是0、3、5、8、10或20，仅影响之后创建的新对局。
 signal character_replacement_count_changed(count: int)
 
+## 过关斩将换将卡数量变化信号；参数只会是0、3、5、8、10或20，仅影响之后创建的过关斩将对局。
+signal conquest_character_replacement_count_changed(count: int)
+
 ## 随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的新对局。
 signal character_candidate_count_changed(count: int)
 
@@ -91,6 +94,9 @@ const CHARACTER_REPLACEMENT_COUNT_OPTIONS: Array[Dictionary] = [
 	{"value":10, "label":"十张"},
 	{"value":20, "label":"二十张"},
 ]
+
+## 过关斩将换将卡数量默认值；0表示默认关闭，旧存档缺失字段时不会意外启用换将。
+const DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT: int = 0
 
 ## 随机选将牌数下拉选项；稳定数值1至20直接作为每名玩家的普通随机候选数量。
 const CHARACTER_CANDIDATE_COUNT_OPTIONS: Array[Dictionary] = [
@@ -296,6 +302,9 @@ var ai_uses_mulligan_enabled: bool = false
 
 ## 每名玩家下一局可使用的换将卡数量；默认0表示关闭，只接受设置列表中的离散值。
 var character_replacement_count: int = 0
+
+## 过关斩将中每名角色下一局可使用的换将卡数量；默认关闭，与普通模式独立保存且只在该模式创建时读取。
+var conquest_character_replacement_count: int = DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT
 
 ## 每名玩家下一局获得的普通随机选将牌数；默认5张，领袖技武将不计入该数值。
 var character_candidate_count: int = DEFAULT_CHARACTER_CANDIDATE_COUNT
@@ -575,6 +584,34 @@ func set_character_replacement_count(count: int) -> void:
 	character_replacement_count_changed.emit(character_replacement_count)
 
 
+## 设置下一局过关斩将每名角色的换将卡数量；未知离散值统一回退关闭，不会修改普通模式的换将设置。
+func set_conquest_character_replacement_count(count: int) -> void:
+	# 标准化后的过关斩将换将卡数量；与普通模式共享公开档位，但写入独立持久化字段。
+	var normalized_count: int = count if [0, 3, 5, 8, 10, 20].has(count) else DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT
+	if conquest_character_replacement_count == normalized_count:
+		return
+	conquest_character_replacement_count = normalized_count
+	_queue_settings_save()
+	conquest_character_replacement_count_changed.emit(conquest_character_replacement_count)
+
+
+## 返回指定模式应读取的换将卡数量；只有过关斩将使用专属设置，其余模式保留普通换将配置。
+func get_character_replacement_count_for_mode(mode_id: String) -> int:
+	# 规范化后的模式ID；未知模式按身份局处理，避免外部调用读取到不稳定配置。
+	var normalized_mode: String = normalize_match_mode(mode_id)
+	return conquest_character_replacement_count if normalized_mode == MATCH_MODE_CONQUEST else character_replacement_count
+
+
+## 按指定模式写入换将卡数量；菜单只调用该接口，不应自行判断或修改两个持久化字段。
+func set_character_replacement_count_for_mode(mode_id: String, count: int) -> void:
+	# 规范化后的模式ID；与读取接口使用同一规则，确保主菜单和局内菜单不会写入不同设置槽。
+	var normalized_mode: String = normalize_match_mode(mode_id)
+	if normalized_mode == MATCH_MODE_CONQUEST:
+		set_conquest_character_replacement_count(count)
+		return
+	set_character_replacement_count(count)
+
+
 ## 设置下一局普通随机选将牌数；范围外输入限制到1至20，当前已经建立的候选不会中途改变。
 func set_character_candidate_count(count: int) -> void:
 	# 标准化后的随机候选数量；菜单、存档和控制器统一使用同一范围。
@@ -719,6 +756,9 @@ func _load_saved_settings() -> void:
 	# 已保存换将卡数量；未知值回退关闭，避免旧测试或手工配置绕过离散选项。
 	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))
 	character_replacement_count = stored_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_character_replacement_count) else 0
+	# 过关斩将独立换将卡数量；旧存档未保存该字段时固定回退关闭，不继承普通模式当前值。
+	var stored_conquest_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_replacement_count", DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT))
+	conquest_character_replacement_count = stored_conquest_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_conquest_character_replacement_count) else DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT
 	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
 	# 过关斩将独立随机选将牌数；旧存档未保存该字段时固定回退12张，不继承普通模式当前值。
 	conquest_character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
@@ -799,6 +839,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", mulligan_limit)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_replacement_count", conquest_character_replacement_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", conquest_character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)

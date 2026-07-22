@@ -192,6 +192,16 @@ func _run() -> void:
 	if not conquest_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_CONQUEST:
 		_fail("mode_scroll_conquest_click")
 		return
+	# 过关斩将专属开局设置；换将卡与随机选将牌数均须显示，车轮战专属候选则不得误入该模式。
+	var main_conquest_replacement_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow") as Control
+	var main_conquest_candidate_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow") as Control
+	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
+	var match_conquest_replacement_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow") as Control
+	var match_conquest_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
+	match_menu.set_match_mode(GameSettings.MATCH_MODE_CONQUEST)
+	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible:
+		_fail("conquest_selection_settings_visible")
+		return
 	mode_scroll.scroll_vertical = 0
 	await get_tree().process_frame
 	await _click_control(identity_mode_button)

@@ -146,6 +146,9 @@ const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 ## 顶栏阶段文本；展示当前回合、阶段与牌堆数量。
 @onready var phase_label: Label = %PhaseLabel
 
+## 顶栏过关斩将关卡文本；仅该模式显示并与轮次文本同排，不覆盖通用轮次信息。
+@onready var conquest_level_label: Label = %ConquestLevelLabel
+
 ## 中央弃牌结算区；其全局中心用于确定卡牌飞行动画的落点，不承载规则状态。
 @onready var discard_pile_panel: PanelContainer = %DiscardPilePanel
 
@@ -1234,11 +1237,14 @@ func _play_damage_feedback(damaged_player_ids: Array[int]) -> void:
 			player_view.play_damage_feedback()
 
 
-## 渲染顶栏回合与牌堆信息。
+## 渲染顶栏轮次、过关斩将关卡与牌堆信息；关卡只额外显示，不替代所有模式通用的轮次。
 func _render_header() -> void:
 	var match_mode: String = str(_snapshot.get("match_mode", "identity"))
 	var conquest_state: Dictionary = _snapshot.get("conquest_state", {}) as Dictionary
-	phase_label.text = "第%d关" % int(conquest_state.get("level", 1)) if match_mode == IdentityRules.MODE_CONQUEST else "第%d轮" % int(_snapshot.get("round_number", 0))
+	phase_label.text = "第%d轮" % int(_snapshot.get("round_number", 0))
+	conquest_level_label.visible = match_mode == IdentityRules.MODE_CONQUEST
+	if conquest_level_label.visible:
+		conquest_level_label.text = "第%d关" % int(conquest_state.get("level", 1))
 	center_turn_label.text = "牌堆剩余：%d" % int(_snapshot.get("draw_pile_count", 0))
 	_refresh_match_duration_label(true)
 
@@ -2614,6 +2620,7 @@ func _apply_ui_style() -> void:
 	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
 	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	conquest_level_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	match_menu.refresh_ui_style()

@@ -325,7 +325,8 @@ func _ready() -> void:
 	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
 	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
 	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
-	GameSettings.character_replacement_count_changed.connect(_refresh_character_replacement_count_selection)
+	GameSettings.character_replacement_count_changed.connect(_refresh_active_character_replacement_count_selection)
+	GameSettings.conquest_character_replacement_count_changed.connect(_refresh_active_character_replacement_count_selection)
 	GameSettings.character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.conquest_character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
@@ -337,7 +338,7 @@ func _ready() -> void:
 	_refresh_ai_response_delay_text(GameSettings.ai_response_delay_seconds)
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
-	_refresh_character_replacement_count_selection(GameSettings.character_replacement_count)
+	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
@@ -760,10 +761,11 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 		face_down_row.visible = visible_state and not is_conquest
 	_custom_character_assignment_row.visible = not visible_state
 	_customize_ai_characters_row.visible = not visible_state
-	_character_replacement_count_row.visible = not visible_state
+	_character_replacement_count_row.visible = not visible_state or is_conquest
 	_character_candidate_count_row.visible = not visible_state or is_conquest
 	_auto_identity_marking_checkbox.visible = not visible_state
 	_player_count_row.visible = not visible_state
+	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 
 
@@ -1277,7 +1279,7 @@ func _on_mulligan_limit_selected(option_index: int) -> void:
 	GameSettings.set_mulligan_limit(int(_mulligan_limit_option.get_item_metadata(option_index)))
 
 
-## 按全局设置同步换将卡数量下拉框；无信号选择避免两套菜单互相重复写入。
+## 按传入值同步换将卡数量下拉框；无信号选择避免两套菜单互相重复写入。
 func _refresh_character_replacement_count_selection(count: int) -> void:
 	if not is_node_ready():
 		return
@@ -1287,11 +1289,18 @@ func _refresh_character_replacement_count_selection(count: int) -> void:
 			return
 
 
-## 将玩家选择的换将卡数量写入下一局设置；当前选将阶段继续使用开局时锁定的次数。
+## 按当前模式读取正确的换将卡数量并刷新下拉框；过关斩将不会被普通模式信号覆盖。
+func _refresh_active_character_replacement_count_selection(_changed_count: int = 0) -> void:
+	if GameSettings == null:
+		return
+	_refresh_character_replacement_count_selection(GameSettings.get_character_replacement_count_for_mode(_selected_match_mode))
+
+
+## 将玩家选择的换将卡数量写入当前模式的独立设置；当前选将阶段继续使用开局时锁定的次数。
 func _on_character_replacement_count_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _character_replacement_count_option.item_count:
 		return
-	GameSettings.set_character_replacement_count(int(_character_replacement_count_option.get_item_metadata(option_index)))
+	GameSettings.set_character_replacement_count_for_mode(_selected_match_mode, int(_character_replacement_count_option.get_item_metadata(option_index)))
 
 
 ## 按传入值同步随机选将牌数下拉框；无信号选择保证主菜单与局内菜单稳定联动。

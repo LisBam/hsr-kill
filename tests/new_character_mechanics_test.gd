@@ -2120,6 +2120,24 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 	lvexi.call("_on_card_targeted", RuleEvent.new("useCardToTargeted", 0, 2, {"card_uid":direct_hit_card.uid, "target_id":2, "card_id":"sha"}))
 	if not _controller.is_card_target_direct_hit(direct_hit_card.uid, 2):
 		return _fail("lvexi_direct_hit")
+	# 掠袭直击响应过滤；猎物即使持有对应牌也不能收到【闪】或【杀】响应选择窗口。
+	var hunt_response_shan: CardInstance = _add_hand_card(2, "shan", "diamond", 6)
+	var hunt_response_sha: CardInstance = _add_hand_card(2, "sha", "heart", 7)
+	var direct_hit_response_context: Dictionary = {"parent_card_uid":direct_hit_card.uid}
+	if _controller.request_response_card(2, "shan", "猎物不应收到闪响应。", direct_hit_response_context) != null or _controller.has_pending_card_choice() or _controller.request_response_card(2, "sha", "猎物不应收到杀响应。", direct_hit_response_context) != null or _controller.has_pending_card_choice() or not _controller.state.get_player(2).hand.has(hunt_response_shan) or not _controller.state.get_player(2).hand.has(hunt_response_sha):
+		return _fail("lvexi_direct_hit_response_patterns")
+	# 掠袭锦囊无懈过滤；目标持有无懈时不进入本次无懈响应名单，也不创建空询问。
+	var direct_hit_trick: CardInstance = CardInstance.new("juedou", "club", 8)
+	direct_hit_trick.zone = "processing"
+	direct_hit_trick.owner_id = -1
+	_controller.state.processing_area.append(direct_hit_trick)
+	_controller._card_use_contexts[direct_hit_trick.uid] = {"target_ids":[2], "direct_hit_target_ids":[2]}
+	var hunt_response_wuxie: CardInstance = _add_hand_card(2, "wuxie", "spade", 9)
+	_controller.resolve_trick_negation(0, 2, "juedou", {"parent_card_uid":direct_hit_trick.uid})
+	if _controller.has_pending_card_choice() or not _controller._pending_negation_choices.is_empty() or (_controller.state.simultaneous_response_display.get("responder_ids", []) as Array).has(2) or not _controller.state.get_player(2).hand.has(hunt_response_wuxie):
+		return _fail("lvexi_direct_hit_wuxie")
+	_controller.state.processing_area.erase(direct_hit_trick)
+	_controller._card_use_contexts.erase(direct_hit_trick.uid)
 	# 猎物受伤追击；貊泽离场时，任意来源的1点伤害会令其返场并再造成固定1点伤害。
 	_controller.remove_player_from_game(0, "moze_test")
 	var hunt_hp_before_damage: int = _controller.state.get_player(2).hp

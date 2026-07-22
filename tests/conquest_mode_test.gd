@@ -20,6 +20,9 @@ var _original_custom_character_assignment_enabled: bool = false
 ## 测试前过关斩将随机选将牌数；结束时恢复，避免本专项覆盖用户保存的1至20张配置。
 var _original_conquest_character_candidate_count: int = GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT
 
+## 测试前过关斩将换将卡数量；结束时恢复，避免本专项覆盖用户保存的独立离散档位配置。
+var _original_conquest_character_replacement_count: int = GameSettings.DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT
+
 
 ## 延迟执行以等待自动加载数据库完成卡牌、武将与技能索引。
 func _ready() -> void:
@@ -34,11 +37,13 @@ func _run() -> void:
 	_original_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled
 	_original_custom_character_assignment_enabled = GameSettings.custom_character_assignment_enabled
 	_original_conquest_character_candidate_count = GameSettings.conquest_character_candidate_count
+	_original_conquest_character_replacement_count = GameSettings.conquest_character_replacement_count
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	GameSettings.set_mulligan_limit(0)
 	GameSettings.set_customize_ai_characters_enabled(false)
 	GameSettings.set_custom_character_assignment_enabled(false)
 	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
+	GameSettings.set_conquest_character_replacement_count(3)
 	if not _test_mode_rules_and_equipment_subtypes():
 		_restore_settings()
 		return
@@ -78,6 +83,15 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 	if GameSettings.conquest_character_candidate_count != 1 or GameSettings.get_character_candidate_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 1:
 		return _fail("conquest_candidate_count_min")
 	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
+	# 普通模式原换将卡数量；过关斩将设置改变时必须保持不变，证明两个持久化槽彼此独立。
+	var standard_replacement_count: int = GameSettings.character_replacement_count
+	GameSettings.set_conquest_character_replacement_count(20)
+	if GameSettings.conquest_character_replacement_count != 20 or GameSettings.get_character_replacement_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 20 or GameSettings.character_replacement_count != standard_replacement_count:
+		return _fail("conquest_replacement_count_max")
+	GameSettings.set_conquest_character_replacement_count(99)
+	if GameSettings.conquest_character_replacement_count != GameSettings.DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT or GameSettings.get_character_replacement_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != GameSettings.DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT:
+		return _fail("conquest_replacement_count_invalid")
+	GameSettings.set_conquest_character_replacement_count(3)
 	if EquipmentSubtype.ALL.size() != expected_slots.size() or EquipmentSubtype.get_slot("unknown") != "":
 		return _fail("equipment_subtype_count")
 	for subtype: String in EquipmentSubtype.ALL:
@@ -152,6 +166,8 @@ func _test_full_match_replacement_flow() -> bool:
 	_create_controller()
 	if not _controller.start_match(2, 20260722, IdentityRules.MODE_CONQUEST):
 		return _fail("start_match")
+	if int(_controller.state.match_options.get("character_replacement_count", -1)) != 3:
+		return _fail("conquest_replacement_count_locked")
 	# 本地玩家候选；过关斩将固定一号位为真人，二号位AI会由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
 	if player_candidates.size() != GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT or not _controller.select_character(0, player_candidates[0]):
@@ -177,6 +193,10 @@ func _test_full_match_replacement_flow() -> bool:
 	_controller._move_card_with_timings(extra_enemy_card, "hand", enemy.player_id, "conquest_test_setup")
 	enemy.hp = 0
 	_controller._resolve_death(enemy.player_id, player.player_id)
+	if not _controller.is_gameplay_paused() or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.state.opportunity_state.is_empty():
+		return _fail("replacement_opportunity_preview")
+	if not await _wait_for_conquest_replacement_opportunity():
+		return _fail("replacement_opportunity_delay")
 	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
 		return _fail("first_replacement")
 	if _controller.state.discard_pile.find(extra_enemy_card) < 0:
@@ -215,6 +235,8 @@ func _test_full_match_replacement_flow() -> bool:
 	_controller.state.current_phase = "play"
 	enemy.hp = 0
 	_controller._resolve_death(enemy.player_id, player.player_id)
+	if not await _wait_for_conquest_replacement_opportunity():
+		return _fail("enemy_turn_replacement_opportunity_delay")
 	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
 		return _fail("enemy_turn_replacement_opportunity")
 	if not await _choose_safe_opportunity(player.player_id):
@@ -227,6 +249,13 @@ func _test_full_match_replacement_flow() -> bool:
 	if player.alive or not _controller.state.game_over or _controller.state.winner != "blue_team":
 		return _fail("player_death_game_over")
 	return true
+
+
+## 等待敌方新武将展示时间结束并进入单人机缘选择；测试根节点保持暂停可运行，避免依赖普通场景帧推进。
+func _wait_for_conquest_replacement_opportunity() -> bool:
+	# 展示等待上限；0.20秒覆盖正式0.05秒测试配置及无头计时器调度余量。
+	await get_tree().create_timer(0.20, true).timeout
+	return str(_controller.state.opportunity_state.get("stage", "")) == "choosing"
 
 
 ## 把当前单人机缘候选固定为无目标摸牌卡并提交；避免随机卡牌的额外目标选择遮蔽本模式流程断言。
@@ -274,6 +303,7 @@ func _create_controller() -> void:
 	_controller.local_human_player_id = 0
 	_controller.randomize_local_human_seat = false
 	_controller.game_flow_interval_seconds = 0.0
+	_controller.conquest_enemy_replacement_opportunity_delay_seconds = 0.05
 	_controller.ai_action_delay_seconds = 0.0
 
 
@@ -284,6 +314,7 @@ func _restore_settings() -> void:
 	GameSettings.set_customize_ai_characters_enabled(_original_customize_ai_characters_enabled)
 	GameSettings.set_custom_character_assignment_enabled(_original_custom_character_assignment_enabled)
 	GameSettings.set_conquest_character_candidate_count(_original_conquest_character_candidate_count)
+	GameSettings.set_conquest_character_replacement_count(_original_conquest_character_replacement_count)
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。
