@@ -31,6 +31,9 @@ var is_skill_selected: bool = false
 ## 当前技能说明文本；用于工具提示和桌面状态提示。
 var skill_description: String = ""
 
+## 当前技能受限次数完整说明；空字符串表示此技能没有局内总共、每回合或每轮次数限制。
+var skill_limit_description: String = ""
+
 ## 当前技能完整显示名副本；按钮正文只显示前两个字，统一信息框使用该字段显示完整名称。
 var _skill_display_name: String = ""
 
@@ -49,16 +52,20 @@ func _ready() -> void:
 
 
 ## 写入技能定义和运行时可用状态；技能定义来自 GameDatabase 的深拷贝。
-func configure(definition: Dictionary, available: bool = false) -> void:
+## 剩余次数由可选参数传入，局内获得且受限的技能会在按钮第二行显示简写。
+func configure(definition: Dictionary, available: bool = false, remaining_uses_text: String = "", remaining_uses_description: String = "") -> void:
 	skill_id = str(definition.get("id", ""))
 	is_skill_available = available
 	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
+	skill_limit_description = remaining_uses_description
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
 	# 技能按钮短名称；固定截取前两个字符，完整名称改由统一信息框标题展示。
 	var short_skill_name: String = skill_name.substr(0, mini(2, skill_name.length()))
 	_skill_display_name = skill_name
-	text = short_skill_name
+	# 紧凑剩余次数；总、回合与轮次分别使用总、回、轮前缀，完整文字仍在统一信息框中显示。
+	text = "%s\n%s" % [short_skill_name, remaining_uses_text] if not remaining_uses_text.is_empty() else short_skill_name
+	add_theme_font_size_override("font_size", 11 if not remaining_uses_text.is_empty() else 14)
 	tooltip_text = ""
 	disabled = not is_skill_available
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if is_skill_available else Control.CURSOR_ARROW
@@ -82,9 +89,13 @@ func _on_information_mouse_entered() -> void:
 	if skill_id.is_empty():
 		return
 	# 统一技能信息；只展示技能名与描述原文，不展示接入状态等开发期调试文案。
+	# 当前受限技能会在原文后追加可随快照刷新的完整剩余次数说明。
+	var information_description: String = skill_description
+	if not skill_limit_description.is_empty():
+		information_description += "\n\n%s" % skill_limit_description
 	var information: Dictionary = {
 		"title":"【%s】" % _skill_display_name,
-		"description":skill_description,
+		"description":information_description,
 	}
 	information_requested.emit(information, get_global_rect())
 

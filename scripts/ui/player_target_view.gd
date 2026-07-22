@@ -714,7 +714,7 @@ func _refresh_public_markers() -> void:
 	# 当前公开标记；全部字段已经由PlayerState按观察者统一序列化，不包含隐藏信息。
 	var public_marks: Dictionary = _player_snapshot.get("public_marks", {}) as Dictionary
 	_public_markers_view.configure(public_marks, false)
-	_public_markers_view.position = Vector2(-_public_markers_view.size.x - 4.0, 0.0)
+	_public_markers_view.position = Vector2(-_public_markers_view.size.x - 2.0, 0.0)
 	_public_markers_view.visible = _match_overlays_visible and _public_markers_visible and not public_marks.is_empty()
 
 

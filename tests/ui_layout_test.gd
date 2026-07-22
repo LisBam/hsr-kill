@@ -199,12 +199,33 @@ func _run() -> void:
 	# 当前本地技能按钮映射；测试武将只有一个技能，手牌栏应增长到该按钮左侧。
 	var skill_views: Dictionary = main_instance.get("_skill_views") as Dictionary
 	# 当前唯一技能按钮；正文固定只显示技能名前两个字，不附加状态文字。
+	# 没有次数限制时继续保持两字正文；受限局内获得技能才显示第二行剩余次数。
 	var first_skill_button: SkillButtonView
 	if not skill_views.is_empty():
 		first_skill_button = skill_views.values()[0] as SkillButtonView
 	if not skill_bar.get_theme_stylebox("panel") is StyleBoxEmpty or skill_status_label.visible or skill_views.size() != 1 or first_skill_button == null or first_skill_button.text.length() > 2 or not is_equal_approx(hand_panel.position.x + hand_panel.size.x + 8.0, skill_bar.position.x) or not is_equal_approx(skill_bar.position.x + skill_bar.size.x + 6.0, (main_instance.get_node("LocalPlayerSeatSlot") as Control).position.x):
 		_fail("skill_button_only_layout:%s/%s" % [skill_bar.get_rect(), first_skill_button.text if first_skill_button != null else "null"])
 		return
+	# 带三类次数限制的本地获得技能快照；三项剩余次数必须在按钮第二行按总、回、轮固定顺序同时显示。
+	var limited_skill_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	for limited_skill_player_variant: Variant in limited_skill_snapshot.get("players", []) as Array:
+		# 当前本地玩家快照；局内获得还阳保留总共3次、每回合2次、每轮1次的权威使用记录。
+		var limited_skill_player: Dictionary = limited_skill_player_variant as Dictionary
+		if int(limited_skill_player.get("player_id", -1)) == 4:
+			limited_skill_player["acquired_skills"] = {"huanyang":{"source":"test", "per_turn_limit":2, "per_round_limit":1, "total_limit":3, "tracked_turn_number":1, "tracked_round_number":3, "uses_this_turn":0, "uses_this_round":0, "total_uses":0}}
+			break
+	match_controller.state_changed.emit(limited_skill_snapshot)
+	await get_tree().process_frame
+	# 受限技能按钮；技能名第一行与三类额度第二行均必须完整显示，不能只依赖灰显表达次数。
+	var limited_skill_button: SkillButtonView = (main_instance.get("_skill_views") as Dictionary).get("huanyang") as SkillButtonView
+	if limited_skill_button == null or not limited_skill_button.text.begins_with("还阳\n") or not limited_skill_button.text.contains("总3 回2 轮1"):
+		_fail("limited_skill_remaining_text:%s" % [limited_skill_button.text if limited_skill_button != null else "missing"])
+		return
+	# 恢复基础快照；后续单技能灰显、悬停与布局断言继续以无次数限制的杰帕德固有技能为基线。
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
+	skill_views = main_instance.get("_skill_views") as Dictionary
+	first_skill_button = skill_views.values()[0] as SkillButtonView if not skill_views.is_empty() else null
 	# 不可发动技能普通样式；测试武将为样例技能，因此按钮必须使用中性灰禁用外观。
 	var skill_normal_style: StyleBoxFlat = first_skill_button.get_theme_stylebox("normal") as StyleBoxFlat
 	# 不可发动技能悬停样式；颜色和边框必须与普通样式完全一致，不产生悬停反馈。

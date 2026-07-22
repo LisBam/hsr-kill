@@ -73,7 +73,13 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		var candidates: Array[Dictionary] = host.call("get_hand_candidates", source_player_id, source_player_id) as Array[Dictionary]
 		if candidates.is_empty():
 			return true
-		request_card_selection_for_player(source_player_id, "领航", "你可重铸一张手牌，或直接取消", candidates, 1, 1, true, {"kind":"linghang_recast", "source_player_id":source_player_id})
+		# 原卡牌时机事件ID；第二段选择与确认选择共享同一父事件，避免把新请求挂到已经解决的确认事件下。
+		var choice_parent_event_id: int = int(context.get("choice_parent_event_id", -1))
+		# 重铸选择上下文；保留原时机父事件以维持连续选择与卡牌结算的稳定父子关系。
+		var recast_context: Dictionary = {"kind":"linghang_recast", "source_player_id":source_player_id}
+		if choice_parent_event_id >= 0:
+			recast_context["choice_parent_event_id"] = choice_parent_event_id
+		request_card_selection_for_player(source_player_id, "领航", "你可重铸一张手牌，或直接取消", candidates, 1, 1, true, recast_context)
 		return true
 	if choice_kind == "linghang_recast":
 		if response.confirmed and response.card_ids.size() == 1:
@@ -81,7 +87,6 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			host.call("recast_hand_card", int(context.get("source_player_id", -1)), response.card_ids[0])
 		return true
 	return false
-
 
 ## 判断权威玩家当前武将是否属于指定势力；势力元数据只筛选技能触发者，不替代身份模式阵营。
 func _is_faction_player(player: PlayerState, faction_id: String) -> bool:

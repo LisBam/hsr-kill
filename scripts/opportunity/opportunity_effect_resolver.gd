@@ -80,7 +80,7 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 				_host.recover(owner_player_id, owner_player_id, maxi(recover_owner.max_hp - recover_owner.hp, 0), "opportunity", true)
 			_system.complete_current_effect()
 		"grant_skill":
-			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), int(card_definition.get("per_turn_limit", 0)), int(card_definition.get("total_limit", 0)), "opportunity", true)
+			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), int(card_definition.get("per_turn_limit", 0)), int(card_definition.get("total_limit", 0)), "opportunity", true, int(card_definition.get("per_round_limit", 0)))
 			_system.complete_current_effect()
 		"double_max_hp":
 			# 体力上限翻倍目标；增加量等于结算时的当前上限，后续其他修正不会回溯重算。

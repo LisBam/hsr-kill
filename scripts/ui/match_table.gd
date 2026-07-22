@@ -90,10 +90,15 @@ const LOCAL_JUDGMENT_ZONE_HEIGHT: float = 22.0
 const LOCAL_JUDGMENT_ZONE_HAND_GAP: float = 6.0
 
 ## 本地公开标记横排的固定高度；32像素等于单枚圆形标记直径，多个标记只横向增长。
-const LOCAL_PLAYER_MARKER_ZONE_HEIGHT: float = 32.0
+## 当前标记主体缩小为24像素，本常量同步作为本地武将牌旁标记的垂直居中高度。
+const LOCAL_PLAYER_MARKER_ZONE_HEIGHT: float = 24.0
 
 ## 本地公开标记横排与右侧判定区之间的水平间距；默认8像素防止圆形图标与判定菱形相贴。
-const LOCAL_PLAYER_MARKER_JUDGMENT_GAP: float = 8.0
+## 当前标记缩小后间距调整为2像素；判定区仍保留独立的左侧安全偏移。
+const LOCAL_PLAYER_MARKER_JUDGMENT_GAP: float = 2.0
+
+## 本地公开标记与武将牌左边缘之间的间距；默认2像素让标记紧贴武将牌，同时保持独立悬停命中区域。
+const LOCAL_PLAYER_MARKER_CARD_GAP: float = 2.0
 
 ## 本地装备栏的独立高度；148像素严格等于单张玩家手牌牌面高度，不包含手牌栏的选中抬升预留空间。
 const LOCAL_EQUIPMENT_AREA_HEIGHT: float = 148.0
@@ -1075,9 +1080,12 @@ func _layout_local_judgment_zone() -> void:
 	# 本地标记占用尺寸；空标记集合返回0宽，不改变原判定区左移配置。
 	var marker_size: Vector2 = local_player_markers.get_required_size() if local_player_markers != null and is_instance_valid(local_player_markers) else Vector2.ZERO
 	# 手牌上方统一标记带顶边；使用32像素圆形高度，判定菱形在该带内垂直居中。
+	# 当前圆形标记高度为24像素；标记本身改由本地武将牌左侧锚定，判定菱形继续使用该带的几何计算。
 	var marker_zone_top: float = -LOCAL_PLAYER_MARKER_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HAND_GAP
-	if local_player_markers != null and is_instance_valid(local_player_markers):
-		local_player_markers.position = hand_position + Vector2(0.0, marker_zone_top)
+	if local_player_markers != null and is_instance_valid(local_player_markers) and local_player_seat_slot != null and is_instance_valid(local_player_seat_slot):
+		# 本地标记垂直偏移；以武将牌高度居中，使第一视角也与其他角色一样紧贴武将牌左侧。
+		var marker_vertical_offset: float = (local_player_card.card_size.y - LOCAL_PLAYER_MARKER_ZONE_HEIGHT) * 0.5
+		local_player_markers.position = local_player_seat_slot.position + Vector2(-marker_size.x - LOCAL_PLAYER_MARKER_CARD_GAP, marker_vertical_offset)
 	# 判定区左侧避让距离；至少保留检查器配置，同时避开当前全部第一视角圆形标记。
 	var desired_horizontal_offset: float = maxf(local_judgment_zone_left_offset, marker_size.x + (LOCAL_PLAYER_MARKER_JUDGMENT_GAP if marker_size.x > 0.0 else 0.0))
 	var horizontal_offset: float = minf(desired_horizontal_offset, maxf(hand_size.x - 1.0, 0.0))
@@ -1387,9 +1395,11 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var skill_selected: bool = _get_selected_skill_release_id() == skill_id
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
 			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
+			# 当前受限技能剩余次数；普通固有技能返回空文本，按钮保持原有两字显示。
+			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
 			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
-			existing_skill_view.configure(skill_definition, skill_available)
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("compact_text", "")), str(remaining_uses.get("description", "")))
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -1413,9 +1423,11 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_selected: bool = _get_selected_skill_release_id() == skill_id
 		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
 		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
+		# 当前受限技能剩余次数；快照中的获得技能记录是唯一数据来源，UI不自行扣减次数。
+		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
-		skill_button.configure(skill_definition, skill_available)
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("compact_text", "")), str(remaining_uses.get("description", "")))
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
@@ -1423,6 +1435,52 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		skill_button_container.add_child(skill_button)
 		_skill_views[skill_id] = skill_button
 	_layout_local_skill_area(skill_ids.size())
+
+
+## 返回局内获得技能在当前快照中的剩余额度；总共、每回合与每轮限制均独立显示，0表示该维度无限制。
+func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: String) -> Dictionary:
+	# 局内获得技能记录；固有、模式与临时技能不存在该记录，直接返回空显示数据。
+	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
+	# 当前技能限制状态；缺失记录时保持普通技能按钮的原有外观。
+	var usage: Dictionary = acquired_skills.get(skill_id, {}) as Dictionary
+	if usage.is_empty():
+		return {}
+	# 当前全局回合编号；只在记录属于当前回合时读取已用次数，跨回合自动视为0。
+	var current_turn_number: int = int(_snapshot.get("turn_number", -1))
+	# 当前全局轮编号；额外回合不会增加该编号，因此会继续共享本轮额度。
+	var current_round_number: int = int(_snapshot.get("round_number", -1))
+	# 每回合额度；0表示不限制，非0时显示剩余次数。
+	var per_turn_limit: int = maxi(int(usage.get("per_turn_limit", 0)), 0)
+	# 每轮额度；0表示不限制，非0时显示剩余次数。
+	var per_round_limit: int = maxi(int(usage.get("per_round_limit", 0)), 0)
+	# 总共额度；0表示不限制，非0时显示本局累计剩余次数。
+	var total_limit: int = maxi(int(usage.get("total_limit", 0)), 0)
+	# 当前回合已用次数；旧快照缺失tracked_turn_number时按跨回合处理，保证不会显示负数。
+	var uses_this_turn: int = int(usage.get("uses_this_turn", 0)) if int(usage.get("tracked_turn_number", -1)) == current_turn_number else 0
+	# 当前轮已用次数；旧快照缺失tracked_round_number时按跨轮处理，保证不会显示负数。
+	var uses_this_round: int = int(usage.get("uses_this_round", 0)) if int(usage.get("tracked_round_number", -1)) == current_round_number else 0
+	# 本局累计已用次数；总共限制不随回合或轮次重置。
+	var total_uses: int = maxi(int(usage.get("total_uses", 0)), 0)
+	# 按固定顺序写入按钮缩写；总、回、轮可在62像素按钮第二行稳定并列显示。
+	var compact_parts: Array[String] = []
+	# 按固定顺序写入悬停完整说明；文本直接说明剩余次数，避免玩家自行推导已用次数。
+	var description_parts: Array[String] = []
+	if total_limit > 0:
+		# 总共剩余次数；达到0时仍显示，提示玩家该获得技能已耗尽。
+		var total_remaining: int = maxi(total_limit - total_uses, 0)
+		compact_parts.append("总%d" % total_remaining)
+		description_parts.append("总共还可发动%d次" % total_remaining)
+	if per_turn_limit > 0:
+		# 回合剩余次数；跨回合时uses_this_turn已按0读取。
+		var turn_remaining: int = maxi(per_turn_limit - uses_this_turn, 0)
+		compact_parts.append("回%d" % turn_remaining)
+		description_parts.append("每回合还可发动%d次" % turn_remaining)
+	if per_round_limit > 0:
+		# 轮次剩余次数；额外回合仍使用同一轮的已用次数。
+		var round_remaining: int = maxi(per_round_limit - uses_this_round, 0)
+		compact_parts.append("轮%d" % round_remaining)
+		description_parts.append("每轮还可发动%d次" % round_remaining)
+	return {"compact_text":" ".join(compact_parts), "description":"；".join(description_parts)}
 
 
 ## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。

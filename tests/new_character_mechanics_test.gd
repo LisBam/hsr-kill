@@ -75,6 +75,8 @@ func _run() -> void:
 		return
 	if not _test_ai_choice_fallback_integrity():
 		return
+	if not _test_himeko_card_use_linghang_choice_resumption():
+		return
 	if not _test_yongyi_and_shield_semantics():
 		return
 	if not _test_new_skill_ai_rules():
@@ -1233,6 +1235,66 @@ func _test_ai_active_skill_progress_recovery() -> bool:
 	return true
 
 
+## 验证姬子在自己出牌阶段以唯一目标【杀】触发【星火】后，【领航】的确认与重铸选择会完整恢复原使用牌事件。
+func _test_himeko_card_use_linghang_choice_resumption() -> bool:
+	_reset_state(2)
+	# 姬子角色状态；领袖身份使其实际拥有【领航】，并作为【星火】横置事件的星穹列车来源。
+	var himeko: PlayerState = _controller.state.get_player(0)
+	himeko.character_id = "himeko"
+	# 被指定角色；只需保留存活在场状态，使唯一目标【杀】满足【星火】与正式响应流程。
+	var target: PlayerState = _controller.state.get_player(1)
+	target.character_id = "dan_heng"
+	# 星火与领航运行时实例；两项均通过正式有序触发器订阅，不能以直接方法调用替代。
+	var xinghuo: SkillDefinition = _install_single_skill(0, "xinghuo")
+	var linghang: SkillDefinition = _install_single_skill(0, "linghang")
+	# 姬子本次实际使用的唯一目标【杀】；进入真实CardUseEvent后才会触发星火的useCardToTargeted时机。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	# 领航重铸候选；保留第二张手牌确保确认发动后一定会创建第二层选择。
+	var recast_card: CardInstance = _add_hand_card(0, "shan", "heart", 8)
+	# 重铸摸牌来源；取消重铸时该牌必须仍留在牌堆，防止测试把取消路径误判成成功重铸。
+	var draw_card: CardInstance = _add_draw_pile_card("tao", "club", 9)
+	if xinghuo == null or linghang == null:
+		return _fail("himeko_linghang_skill_missing")
+	# 正式出牌阶段请求；必须先消费chooseToUse再执行卡牌，覆盖真人点击技能或卡牌时使用的完整事件树。
+	_controller._begin_play_choice(0)
+	if not _controller.call("_has_active_play_choice"):
+		return _fail("himeko_missing_play_choice")
+	# 玩家实际使用【杀】动作；目标由标准PlayerAction提交，不能绕过出牌请求直接进入内部结算函数。
+	var use_slash_action: PlayerAction = PlayerAction.new("use_card", 0, slash_card.uid)
+	use_slash_action.target_ids = [1]
+	if not _controller.submit_action(use_slash_action):
+		return _fail("himeko_submit_slash")
+	# 领航第一层确认；触发者是姬子本人，选择上下文必须仍附着在未收尾的【杀】事件树上。
+	var confirm_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var confirm_context: Dictionary = confirm_choice.get("context", {}) as Dictionary
+	if str(confirm_context.get("kind", "")) != "linghang_confirm" or int(confirm_choice.get("chooser_id", -1)) != 0 or not _controller._card_use_contexts.has(slash_card.uid):
+		return _fail("himeko_linghang_confirm choice=%s contexts=%s" % [confirm_choice, _controller._card_use_contexts])
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 领航第二层重铸；确认后原选择已清理，新选择必须由同一使用牌事件继续承载而非停在孤立窗口。
+	var recast_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var recast_context: Dictionary = recast_choice.get("context", {}) as Dictionary
+	# 原卡牌时机事件；连续选择必须都挂在该事件下，不能让重铸成为确认选择事件的子节点。
+	var card_timing_event_id: int = int(confirm_context.get("choice_parent_event_id", -1))
+	# 重铸选择事件摘要；父事件关系是卡牌流程能在第二段选择结束后继续的必要条件。
+	var recast_event: Dictionary = _controller.event_scheduler.get_event_snapshot(int(recast_choice.get("runtime_event_id", -1)))
+	if str(recast_context.get("kind", "")) != "linghang_recast" or int(recast_choice.get("chooser_id", -1)) != 0 or int(recast_event.get("parent_id", -1)) != card_timing_event_id or not _controller._card_use_contexts.has(slash_card.uid):
+		return _fail("himeko_linghang_recast choice=%s contexts=%s" % [recast_choice, _controller._card_use_contexts])
+	if not _submit_pending_choice(0, [recast_card.uid], [], true):
+		return false
+	# 重铸完成后原【杀】必须恢复到目标响应步骤；若仍停在领航选择或没有后续事件，出牌阶段将无法继续。
+	var slash_response_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var slash_response_context: Dictionary = slash_response_choice.get("context", {}) as Dictionary
+	if str(slash_response_context.get("kind", "")) != "slash_response" or int(slash_response_choice.get("chooser_id", -1)) != 1:
+		return _fail("himeko_linghang_missing_slash_response choice=%s contexts=%s" % [slash_response_choice, _controller._card_use_contexts])
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 目标放弃响应后原【杀】必须完成处理区收尾并恢复下一次出牌选择；重铸牌与使用牌均进入弃牌堆，摸牌进入手牌。
+	if _controller.has_pending_card_choice() or _controller._card_use_contexts.has(slash_card.uid) or not _controller.call("_has_active_play_choice") or _controller.state.get_player(0).hand.has(recast_card) or not _controller.state.get_player(0).hand.has(draw_card) or not _controller.state.discard_pile.has(recast_card) or not _controller.state.discard_pile.has(slash_card):
+		return _fail("himeko_linghang_resume pending=%s contexts=%s active=%s hand=%s discard=%s" % [_controller.has_pending_card_choice(), _controller._card_use_contexts, _controller.call("_has_active_play_choice"), _controller.state.get_player(0).hand, _controller.state.discard_pile])
+	return true
+
+
 ## 验证AI异常回退直接复用完整合法动作，固定组合与响应转化技能ID都不会被“前N张候选”逻辑破坏。
 func _test_ai_choice_fallback_integrity() -> bool:
 	_reset_state(2)
@@ -2137,7 +2199,7 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 		return _fail("vertical_markers count=%s horizontal=%s" % [vertical_markers.get_child_count() if vertical_markers != null else -1, vertical_markers.horizontal if vertical_markers != null else true])
 	var first_badge: PlayerMarkerBadge = vertical_markers.get_child(0) as PlayerMarkerBadge
 	var second_badge: PlayerMarkerBadge = vertical_markers.get_child(1) as PlayerMarkerBadge
-	if first_badge.position.y >= second_badge.position.y or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
+	if first_badge.position.y >= second_badge.position.y or not is_equal_approx(first_badge.badge_diameter, 24.0) or first_badge.icon_font_size != 14 or not is_equal_approx(first_badge.count_diameter, 12.0) or first_badge.count_font_size != 8 or not is_equal_approx(vertical_markers.marker_gap, 2.0) or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
 		marked_player_view.queue_free()
 		return _fail("vertical_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
 	# 标记悬停详细信息；武将牌必须把子组件请求转发到统一信息出口。

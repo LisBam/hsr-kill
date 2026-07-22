@@ -1742,6 +1742,12 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var choice_parent_event_id: int = event_scheduler.get_current_event_id()
 	if choice_parent_event_id < 0:
 		choice_parent_event_id = _runtime_root_event_id
+	# 调用方请求的稳定父事件；连续选择可复用原卡牌时机，避免把后续选择挂到已经解决的上一条选择事件。
+	var requested_choice_parent_event_id: int = int(context.get("choice_parent_event_id", -1))
+	# 被请求父事件的只读摘要；只有尚未终结的事件才能继续接收子选择，过期值安全回退当前事件。
+	var requested_parent_event_snapshot: Dictionary = event_scheduler.get_event_snapshot(requested_choice_parent_event_id)
+	if requested_choice_parent_event_id >= 0 and not requested_parent_event_snapshot.is_empty() and not bool(requested_parent_event_snapshot.get("finalized", true)):
+		choice_parent_event_id = requested_choice_parent_event_id
 	# 独立选择事件；控制器恢复分支执行具体结果，EventScheduler 负责父子阻塞、请求身份和旧响应失效。
 	var choice_event: GameEvent = event_scheduler.create_event(choice_event_name, "choice", [], context, choice_parent_event_id)
 	choice_event.player_id = chooser_id
@@ -1755,6 +1761,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	runtime_request.forced = not allow_cancel
 	runtime_request.can_cancel = allow_cancel
 	runtime_request.base_context = context.duplicate(true)
+	# 实际选择父事件ID；后续连续选择可显式复用这个仍在等待的规则事件，避免依赖短生命周期的选择事件栈顶。
+	runtime_request.base_context["choice_parent_event_id"] = choice_parent_event_id
 	runtime_request.active_context = context.duplicate(true)
 	# 当前选择可发动的主动技能；响应入口与普通选牌入口分别查询，结果只进入请求上下文不改变牌候选。
 	var active_entry: String = "chooseToRespond" if choice_event_name == "chooseToRespond" else "chooseCard"
@@ -6385,7 +6393,8 @@ func validate_incoming_skill_card_target_selection(target_id: int, actor_id: int
 
 
 ## 永久授予一项数据库技能并立即安装；可配置每个全局回合次数与总发动次数，相同技能不会重复创建。
-func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int = 0, total_limit: int = 0, source: String = "runtime", allow_out_of_game: bool = false) -> bool:
+## 当前接口额外支持每轮次数，0表示对应维度不限制；新增参数置于末尾以兼容既有调用方。
+func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int = 0, total_limit: int = 0, source: String = "runtime", allow_out_of_game: bool = false, per_round_limit: int = 0) -> bool:
 	# 技能获得者；死亡、离场或无效角色不能取得新技能。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or skill_id.is_empty():
@@ -6406,9 +6415,12 @@ func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int 
 	player.acquired_skills[skill_id] = {
 		"source":source,
 		"per_turn_limit":maxi(per_turn_limit, 0),
+		"per_round_limit":maxi(per_round_limit, 0),
 		"total_limit":maxi(total_limit, 0),
 		"tracked_turn_number":state.turn_number,
+		"tracked_round_number":state.round_number,
 		"uses_this_turn":0,
+		"uses_this_round":0,
 		"total_uses":0,
 	}
 	skill.install()
@@ -6429,11 +6441,15 @@ func can_use_acquired_skill(player_id: int, skill_id: String) -> bool:
 	var usage: Dictionary = player.acquired_skills.get(skill_id, {}) as Dictionary
 	# 当前回合已用次数；跨回合时按0读取。
 	var uses_this_turn: int = int(usage.get("uses_this_turn", 0)) if int(usage.get("tracked_turn_number", -1)) == state.turn_number else 0
+	# 当前轮已用次数；跨轮时按0读取，额外回合保持同一轮的累计限制。
+	var uses_this_round: int = int(usage.get("uses_this_round", 0)) if int(usage.get("tracked_round_number", -1)) == state.round_number else 0
 	# 每回合限制；0表示无限制。
 	var per_turn_limit: int = maxi(int(usage.get("per_turn_limit", 0)), 0)
+	# 每轮限制；0表示无限制，独立于每回合与总次数统计。
+	var per_round_limit: int = maxi(int(usage.get("per_round_limit", 0)), 0)
 	# 总发动限制；0表示不会因累计次数失去技能。
 	var total_limit: int = maxi(int(usage.get("total_limit", 0)), 0)
-	return (per_turn_limit == 0 or uses_this_turn < per_turn_limit) and (total_limit == 0 or int(usage.get("total_uses", 0)) < total_limit)
+	return (per_turn_limit == 0 or uses_this_turn < per_turn_limit) and (per_round_limit == 0 or uses_this_round < per_round_limit) and (total_limit == 0 or int(usage.get("total_uses", 0)) < total_limit)
 
 
 ## 消耗一次已获得技能发动额度；普通固有技能返回true但不记录，达到总次数后立即失去该获得技能。
@@ -6449,7 +6465,12 @@ func consume_acquired_skill_use(player_id: int, skill_id: String) -> bool:
 	if int(usage.get("tracked_turn_number", -1)) != state.turn_number:
 		usage["tracked_turn_number"] = state.turn_number
 		usage["uses_this_turn"] = 0
+	# 新轮重置轮内已用次数；额外回合不改变round_number，因此会继续消耗同一轮额度。
+	if int(usage.get("tracked_round_number", -1)) != state.round_number:
+		usage["tracked_round_number"] = state.round_number
+		usage["uses_this_round"] = 0
 	usage["uses_this_turn"] = int(usage.get("uses_this_turn", 0)) + 1
+	usage["uses_this_round"] = int(usage.get("uses_this_round", 0)) + 1
 	usage["total_uses"] = int(usage.get("total_uses", 0)) + 1
 	player.acquired_skills[skill_id] = usage
 	# 总次数耗尽标记；先保存本次发动记录，再卸载技能，保证第五次【行军】完整生效后才失去。
