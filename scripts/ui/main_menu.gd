@@ -183,6 +183,7 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 @onready var _control_all_characters_checkbox: CheckBox = %MainMenuControlAllCharactersCheckBox
 
 ## 自选全武将、座次与身份开关；仅在之后由本机创建或房主创建的新对局中生效。
+## 过关斩将显示为“自选武将”，只开放全部武将列表，不允许修改固定的一号位红方身份。
 @onready var _custom_character_assignment_checkbox: CheckBox = %MainMenuCustomCharacterAssignmentCheckBox
 
 ## 房主调整全部 AI 武将开关；初次选将完成后决定是否插入开局前调整阶段。
@@ -772,7 +773,8 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 		face_up_row.visible = visible_state and not is_conquest
 	if face_down_row != null:
 		face_down_row.visible = visible_state and not is_conquest
-	_custom_character_assignment_row.visible = not visible_state
+	_custom_character_assignment_row.visible = not visible_state or is_conquest
+	_custom_character_assignment_checkbox.text = "自选武将" if is_conquest else "自选全武将、座次与身份"
 	_customize_ai_characters_row.visible = not visible_state
 	_character_replacement_count_row.visible = not visible_state or is_conquest
 	_character_candidate_count_row.visible = not visible_state or is_conquest

@@ -164,6 +164,9 @@ var _starting_cards_were_dealt: bool = true
 ## 本局是否启用全武将、座次与身份自选；开局时从房主设置复制，之后不随菜单变化。
 var _custom_character_assignment_enabled: bool = false
 
+## 本局是否开放全部武将候选；普通模式随座次身份自选开启，过关斩将只开放武将而保持固定座次与阵营。
+var _all_character_selection_enabled: bool = false
+
 ## 本局是否启用房主调整全部 AI 武将；开局时锁定。
 var _customize_ai_characters_enabled: bool = false
 
@@ -628,7 +631,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	state.random_seed = _rng.seed
 	state.deck_id = default_deck_id
 	# 本局锁定的房主权威开局选项；菜单之后的修改只作用于下一局，不会改变进行中的选将或手气卡阶段。
-	_custom_character_assignment_enabled = GameSettings.custom_character_assignment_enabled and actual_mode != IdentityRules.MODE_CONQUEST
+	_all_character_selection_enabled = GameSettings.custom_character_assignment_enabled and actual_mode != IdentityRules.MODE_WHEEL_DUEL
+	_custom_character_assignment_enabled = _all_character_selection_enabled and actual_mode != IdentityRules.MODE_CONQUEST
 	_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled and actual_mode != IdentityRules.MODE_CONQUEST
 	_mulligan_limit = GameSettings.mulligan_limit
 	_ai_uses_mulligan_enabled = GameSettings.ai_uses_mulligan_enabled
@@ -643,6 +647,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	character_candidate_count = _character_candidate_count
 	state.match_options = {
 		"custom_character_assignment_enabled":_custom_character_assignment_enabled,
+		"all_character_selection_enabled":_all_character_selection_enabled,
 		"customize_ai_characters_enabled":_customize_ai_characters_enabled,
 		"mulligan_limit":_mulligan_limit,
 		"ai_uses_mulligan_enabled":_ai_uses_mulligan_enabled,
@@ -735,7 +740,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	# 领袖技武将 ID；依据技能元数据自动识别，选将服务只接收纯字符串数组并保持与数据库解耦。
 	var leader_skill_character_ids: Array[String] = _get_leader_skill_character_ids(available_character_ids)
 	# 选将初始化错误；空字符串表示领袖候选已生成。
-	var selection_error: String = wheel_duel_selection.begin(state.players, available_character_ids, _wheel_duel_face_up_candidate_count, _wheel_duel_face_down_candidate_count, _rng) if wheel_duel_selection != null else character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids, str(state.match_mode))
+	var selection_error: String = wheel_duel_selection.begin(state.players, available_character_ids, _wheel_duel_face_up_candidate_count, _wheel_duel_face_down_candidate_count, _rng) if wheel_duel_selection != null else character_selection.begin(state.players, available_character_ids, _character_candidate_count, _rng, _custom_character_assignment_enabled, _character_replacement_count, leader_skill_character_ids, str(state.match_mode), _all_character_selection_enabled)
 	if not selection_error.is_empty():
 		_discard_failed_match_start()
 		action_rejected.emit(selection_error)
@@ -1017,6 +1022,26 @@ func preview_custom_assignment(player_id: int, seat_number: int, identity: Strin
 	return true
 
 
+## 判断换将过渡中的操作是否属于当前机缘流程；请求类型、选择者、请求ID和上下文必须全部匹配。
+func _is_conquest_replacement_opportunity_action_allowed(action: PlayerAction) -> bool:
+	if action == null:
+		return false
+	if action.action_type == "choose_opportunity":
+		return true
+	if action.action_type not in ["choose_cards", "choice_response"]:
+		return false
+	if opportunity_system == null or not opportunity_system.is_active() or state == null or str(state.opportunity_state.get("stage", "")) != "resolving":
+		return false
+	if _pending_card_choice.is_empty():
+		return false
+	# 当前机缘选择上下文；只有解析器声明的opportunity_前缀可以越过换将边界，普通技能与旧卡牌请求继续被拒绝。
+	var pending_choice_context: Dictionary = _pending_card_choice.get("context", {}) as Dictionary
+	if not str(pending_choice_context.get("kind", "")).begins_with("opportunity_"):
+		return false
+	return action.actor_id == int(_pending_card_choice.get("chooser_id", -1)) \
+		and int(action.payload.get("request_id", -1)) == int(_pending_card_choice.get("request_id", -2))
+
+
 ## 接受来自人类、AI 或网络的统一行为指令；返回是否通过规则校验并执行。
 func submit_action(action: PlayerAction) -> bool:
 	if action == null:
@@ -1032,7 +1057,7 @@ func submit_action(action: PlayerAction) -> bool:
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
 	# 过关斩将换将过渡只允许随后创建的机缘选择提交；旧回合遗留的出牌按钮或 AI 动作不能越过死亡结算继续执行。
-	if _conquest_replacement_transition_active and action.action_type != "choose_opportunity":
+	if _conquest_replacement_transition_active and not _is_conquest_replacement_opportunity_action_allowed(action):
 		return _reject("敌方正在重新入场，请等待机缘选择。")
 	# 离场技选择许可；只接受当前权威请求中明确写入的同一选择者和请求ID，旧请求或伪造普通动作无法复用该例外。
 	var out_of_game_choice_allowed: bool = false
