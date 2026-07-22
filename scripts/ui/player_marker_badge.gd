@@ -9,21 +9,19 @@ signal information_requested(information: Dictionary, anchor_rect: Rect2)
 ## 鼠标离开标记时发送关闭请求；来源匹配由牌桌唯一信息框负责校验。
 signal information_dismissed
 
-## 标记圆形图标直径；默认32像素兼顾武将牌左侧纵排与第一视角横排，运行时通常无需动态修改。
-## 当前默认值缩小为24像素，使公开标记紧贴武将牌时不遮挡牌面。
-@export_range(20.0, 48.0, 1.0) var badge_diameter: float = 24.0
+## 标记圆形图标直径；默认20像素兼顾武将牌左侧纵排与第一视角横排，运行时通常无需动态修改。
+## 较小主体为武将牌和手牌右上角保留空间，不影响权威标记数量或悬停信息。
+@export_range(16.0, 48.0, 1.0) var badge_diameter: float = 20.0
 
-## 标记中央单字字号；默认18像素可在32像素圆内清晰显示，运行时通常无需动态修改。
-## 当前默认值调整为14像素，对应24像素圆形主体。
-@export_range(10, 28, 1) var icon_font_size: int = 14
+## 标记中央单字字号；默认12像素对应20像素圆形主体，运行时通常无需动态修改。
+@export_range(9, 28, 1) var icon_font_size: int = 12
 
-## 右下角数量徽记直径；默认15像素用于显示1至999，运行时通常无需动态修改。
-## 当前默认值调整为12像素，与缩小后的主圆保持清晰比例。
-@export_range(10.0, 22.0, 1.0) var count_diameter: float = 12.0
+## 右下角数量徽记直径；默认13像素用于显示1至999，运行时通常无需动态修改。
+## 数量徽记刻意大于主体缩放比例，保证多位标记数仍能在牌桌上辨认。
+@export_range(10.0, 22.0, 1.0) var count_diameter: float = 13.0
 
-## 数量徽记字号；默认9像素可容纳三位数，运行时通常无需动态修改。
-## 当前默认值调整为8像素，仍可容纳1至999的公开数量。
-@export_range(7, 13, 1) var count_font_size: int = 8
+## 数量徽记字号；默认10像素可容纳三位数，运行时通常无需动态修改。
+@export_range(8, 13, 1) var count_font_size: int = 10
 
 ## 当前标记公开数据；包含稳定ID、单字图标、名称、说明、数量和来源角色ID。
 var _mark_data: Dictionary = {}

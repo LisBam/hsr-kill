@@ -1081,6 +1081,16 @@ func _run() -> void:
 	self_fire_cost.zone = "hand"
 	self_fire_cost.owner_id = 1
 	current_death_state.players[1].hand.append(self_fire_cost)
+	# 后继回合第一张摸牌；当前回合死亡会立刻启动三号位摸牌阶段，测试状态必须提供实体避免空牌堆按规则判平局。
+	var successor_draw_one: CardInstance = CardInstance.new("sha", "club", 4)
+	successor_draw_one.zone = "draw_pile"
+	successor_draw_one.owner_id = -1
+	current_death_state.draw_pile.append(successor_draw_one)
+	# 后继回合第二张摸牌；标准摸牌阶段固定摸两张，第二张保证完整走到出牌阶段。
+	var successor_draw_two: CardInstance = CardInstance.new("shan", "diamond", 5)
+	successor_draw_two.zone = "draw_pile"
+	successor_draw_two.owner_id = -1
+	current_death_state.draw_pile.append(successor_draw_two)
 	_controller.state = current_death_state
 	_controller.card_rules = CardRuleService.new(current_death_state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, current_death_state)

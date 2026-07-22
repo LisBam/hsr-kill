@@ -66,6 +66,9 @@ const PUBLIC_PANEL_HORIZONTAL_PADDING: float = 36.0
 ## 公共展示窗口允许的最大高度；默认620像素可完整容纳最多10人时的三行牌，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var public_panel_max_height: float = 620.0
 
+## 目标武将名在区域选牌提示中的强调颜色；固定暖金色使目标归属在所有主题下保持可辨认，运行时通常无需动态修改。
+const TARGET_CHARACTER_NAME_COLOR: Color = Color("e4c84f")
+
 ## 当前请求只读快照；空字典表示面板已关闭。
 var _choice_request: Dictionary = {}
 
@@ -90,8 +93,8 @@ var _frame: PanelContainer
 ## 请求标题标签；显示“响应询问”“弃牌阶段”等永久规则语义。
 var _title_label: Label
 
-## 请求说明标签；显示本次所需选择数量与操作目的。
-var _prompt_label: Label
+## 请求说明富文本标签；显示本次所需选择数量与操作目的，并可独立强调公开目标武将名。
+var _prompt_label: RichTextLabel
 
 ## 分区内容容器；固定按手牌区、装备区、判定区和展示区顺序重建。
 var _zone_container: VBoxContainer
@@ -164,8 +167,11 @@ func _ready() -> void:
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(_title_label)
-	_prompt_label = Label.new()
-	_prompt_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_prompt_label = RichTextLabel.new()
+	_prompt_label.bbcode_enabled = true
+	_prompt_label.scroll_active = false
+	_prompt_label.custom_minimum_size = Vector2(0.0, 24.0)
+	_prompt_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(_prompt_label)
@@ -209,7 +215,7 @@ func refresh_ui_style() -> void:
 	_shade.color = shade_color
 	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_prompt_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_prompt_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
 	BattleUIStyle.apply_interaction_button(_confirm_button)
 	BattleUIStyle.apply_interaction_button(_cancel_button)
 	for section_label: Label in _section_labels:
@@ -244,7 +250,7 @@ func show_request(choice_request: Dictionary) -> void:
 	_clear_container(_zone_container)
 	_restore_standard_zone_scroll_behavior()
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
-	_prompt_label.text = str(_choice_request.get("prompt", "请选择卡牌"))
+	_set_prompt_text(str(_choice_request.get("prompt", "请选择卡牌")), str(_choice_request.get("prompt_highlight", "")))
 	if str(_choice_request.get("choice_type", "card")) == "arrange":
 		_show_arrangement_request()
 		visible = true
@@ -284,6 +290,15 @@ func show_request(choice_request: Dictionary) -> void:
 	visible = true
 
 
+## 写入普通或带目标名称强调的提示文本；高亮字段只来自当前观察者已公开的武将名，不能承载规则状态。
+func _set_prompt_text(prompt_text: String, highlighted_text: String = "") -> void:
+	if highlighted_text.is_empty() or not prompt_text.contains(highlighted_text):
+		_prompt_label.text = prompt_text
+		return
+	var highlighted_markup: String = "[color=#%s]%s[/color]" % [TARGET_CHARACTER_NAME_COLOR.to_html(false), highlighted_text]
+	_prompt_label.text = prompt_text.replace(highlighted_text, highlighted_markup)
+
+
 ## 恢复普通请求的固定窗口与纵向滚动行为；公共展示关闭后和全部独立选牌请求均共用该配置。
 func _restore_standard_zone_scroll_behavior() -> void:
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
@@ -308,7 +323,7 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 			_selected_card_uids.clear()
 		_public_request_id = next_request_id
 		_title_label.text = str(_public_display.get("title", "公共选牌"))
-		_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
+		_set_prompt_text(str(_public_display.get("prompt", "等待当前角色选择")))
 		_refresh_public_selectable_card_uids()
 		_refresh_public_slot_states(_public_display.get("slots", []) as Array)
 		_refresh_public_action_row()
@@ -339,7 +354,7 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	var public_cards_height: float = PUBLIC_CARD_SIZE.y * float(row_count) + PUBLIC_CARD_GAP * float(maxi(row_count - 1, 0))
 	_set_frame_size(Vector2(maxf(PUBLIC_PANEL_MIN_WIDTH, public_cards_width + PUBLIC_PANEL_HORIZONTAL_PADDING), minf(public_panel_max_height, public_cards_height + PUBLIC_PANEL_CHROME_HEIGHT)))
 	_title_label.text = str(_public_display.get("title", "公共选牌"))
-	_prompt_label.text = str(_public_display.get("prompt", "等待当前角色选择"))
+	_set_prompt_text(str(_public_display.get("prompt", "等待当前角色选择")))
 	# 当前本地可选候选；只取有效 UID，公共牌位仍由完整 slots 数组决定固定顺序。
 	_refresh_public_selectable_card_uids()
 	_add_public_card_row(_public_display.get("slots", []) as Array)

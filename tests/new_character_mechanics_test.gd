@@ -87,6 +87,8 @@ func _run() -> void:
 		return
 	if not await _test_card_selection_panel_disabled_cards_and_arrangement_drag():
 		return
+	if not await _test_target_zone_prompt_highlight():
+		return
 	if not _test_misha_and_alan_skills():
 		return
 	if not await _test_aisida_heita_xiluwa_skills():
@@ -705,10 +707,15 @@ func _test_huanyang_and_sefu() -> bool:
 		return _fail("huanyang_damage_timing hp=%d trigger=%s" % [xveyi_player.hp, huanyang.get_metadata().get("trigger", "")])
 	# 标准伤害来源事件；【杀】规则名字数为1，目标是距离1的二号角色。
 	# 兼容测试变量仍沿用原有名称；还阳的正式订阅已经由上方真实damage流程覆盖。
-	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha"})
+	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha", "card_user_id":0})
 	huanyang.call("_on_owner_damage_source", damage_source_event)
 	if xveyi_player.hp != 4:
 		return _fail("huanyang_recover=%d" % xveyi_player.hp)
+	# 他人使用【决斗】时，持有者即使成为最终伤害来源也没有使用该牌，摄伏不得创建获牌请求。
+	var foreign_card_user_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha", "card_user_id":1})
+	sefu.call("_on_owner_damage_source", foreign_card_user_event)
+	if _controller.has_pending_card_choice():
+		return _fail("sefu_foreign_card_user_triggered")
 	# 二号角色测试装备；摄伏选择原伤害目标后必须建立装备弃置步骤。
 	var target_equipment: CardInstance = CardInstance.new("qinggang", "spade", 6)
 	target_equipment.zone = "equipment"
@@ -1759,6 +1766,25 @@ func _test_card_selection_panel_disabled_cards_and_arrangement_drag() -> bool:
 	return true
 
 
+## 验证目标区域选牌提示以金色富文本强调公开武将名，不影响请求的普通文字或选择协议。
+func _test_target_zone_prompt_highlight() -> bool:
+	# 正式选择面板实例；必须从运行时场景取得富文本标签，避免仅测试格式化字符串而漏掉渲染配置。
+	var card_selection_panel: CardSelectionPanel = CARD_SELECTION_PANEL_SCENE.instantiate() as CardSelectionPanel
+	add_child(card_selection_panel)
+	await get_tree().process_frame
+	# 目标区域展示请求；候选为空即可验证提示渲染，选择资格仍由其他专项场景覆盖。
+	var target_zone_request: Dictionary = {"request_id":95001, "title":"选择获得牌", "prompt":"请选择“丹恒”区域内的一张牌", "prompt_highlight":"丹恒", "candidates":[], "min_select":0, "max_select":0, "allow_cancel":true}
+	card_selection_panel.show_request(target_zone_request)
+	await get_tree().process_frame
+	# 实际富文本提示标签；颜色标签必须使用统一金色，名称外的文本保持普通提示内容。
+	var prompt_label: RichTextLabel = card_selection_panel.get("_prompt_label") as RichTextLabel
+	if prompt_label == null or not prompt_label.text.contains("[color=#e4c84f]丹恒[/color]") or not prompt_label.text.contains("请选择"):
+		card_selection_panel.queue_free()
+		return _fail("target_zone_prompt_highlight:%s" % [prompt_label.text if prompt_label != null else "missing"])
+	card_selection_panel.queue_free()
+	return true
+
+
 ## 验证【幻影】的离场回归、【倾力】的无材料雷杀和【强攻】的红黑武器三种强化分支。
 func _test_misha_and_alan_skills() -> bool:
 	_reset_state(2)
@@ -1772,6 +1798,17 @@ func _test_misha_and_alan_skills() -> bool:
 	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	if _controller.state.get_player(1).out_of_game:
 		return _fail("huanying_restore")
+	_reset_state(2)
+	# 遗漏结束边界的异常流程；下一回合开始必须作为兜底让仍在场外的幻影持有者返场。
+	huanying = _install_single_skill(1, "huanying")
+	if huanying == null:
+		return _fail("huanying_fallback_missing")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if not _controller.state.get_player(1).out_of_game:
+		return _fail("huanying_fallback_remove")
+	_controller._emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":_controller.state.turn_number + 1})
+	if _controller.state.get_player(1).out_of_game:
+		return _fail("huanying_phase_before_fallback")
 	_reset_state(2)
 	# 方块传冲材料；点击技能后应直接创建牌目标组合请求，并把实体牌按【无中生有】规则对自身使用。
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
@@ -2217,7 +2254,7 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 		return _fail("vertical_markers count=%s horizontal=%s" % [vertical_markers.get_child_count() if vertical_markers != null else -1, vertical_markers.horizontal if vertical_markers != null else true])
 	var first_badge: PlayerMarkerBadge = vertical_markers.get_child(0) as PlayerMarkerBadge
 	var second_badge: PlayerMarkerBadge = vertical_markers.get_child(1) as PlayerMarkerBadge
-	if first_badge.position.y >= second_badge.position.y or not is_equal_approx(first_badge.badge_diameter, 24.0) or first_badge.icon_font_size != 14 or not is_equal_approx(first_badge.count_diameter, 12.0) or first_badge.count_font_size != 8 or not is_equal_approx(vertical_markers.marker_gap, 2.0) or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
+	if first_badge.position.y >= second_badge.position.y or not is_equal_approx(first_badge.badge_diameter, 20.0) or first_badge.icon_font_size != 12 or not is_equal_approx(first_badge.count_diameter, 13.0) or first_badge.count_font_size != 10 or not is_equal_approx(vertical_markers.marker_gap, 1.0) or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
 		marked_player_view.queue_free()
 		return _fail("vertical_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
 	# 标记悬停详细信息；武将牌必须把子组件请求转发到统一信息出口。

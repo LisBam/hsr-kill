@@ -3019,7 +3019,7 @@ func swap_player_seats(first_player_id: int, second_player_id: int, reason: Stri
 	return true
 
 
-## 交换两名角色的武将牌资料；只交换武将ID、体力上限和武将固有技能，身份、当前体力来源与局内获得技能仍归原角色。
+## 交换两名角色的武将牌资料；只交换武将ID、武将牌基础体力上限和武将固有技能，身份、当前体力来源与局内获得技能仍归原角色。
 func swap_player_character_cards(first_player_id: int, second_player_id: int, reason: String = "") -> bool:
 	if state == null or state.game_over or first_player_id == second_player_id:
 		return false
@@ -3032,16 +3032,23 @@ func swap_player_character_cards(first_player_id: int, second_player_id: int, re
 	# 双方原武将ID；用于定位应卸载的武将固有技能并写入可回放历史。
 	var first_character_id: String = first_player.character_id
 	var second_character_id: String = second_player.character_id
-	# 双方原体力上限；武将牌交换直接交换当前牌面记录的上限数值，不重新计算身份加成。
+	# 双方当前体力上限；用于保留游戏过程中由身份、模式或效果产生的独立增减值。
 	var first_max_hp: int = first_player.max_hp
 	var second_max_hp: int = second_player.max_hp
+	# 双方原武将牌基础体力上限；武将定义缺失时回退4点，避免异常数据制造非法上限。
+	var first_character_base_max_hp: int = maxi(int(GameDatabase.get_character(first_character_id).get("max_hp", 4)), 1)
+	var second_character_base_max_hp: int = maxi(int(GameDatabase.get_character(second_character_id).get("max_hp", 4)), 1)
+	# 双方随角色保留的局内体力上限修正；正值与负值都必须在换将后继续归属于原角色。
+	var first_runtime_max_hp_delta: int = first_max_hp - first_character_base_max_hp
+	var second_runtime_max_hp_delta: int = second_max_hp - second_character_base_max_hp
 	# 双方原武将固有技能；局内获得、临时与模式技能不在该数组中，因此不会随武将牌移动。
 	var first_native_skill_ids: Array = GameDatabase.get_character(first_character_id).get("skills", []) as Array
 	var second_native_skill_ids: Array = GameDatabase.get_character(second_character_id).get("skills", []) as Array
 	first_player.character_id = second_character_id
 	second_player.character_id = first_character_id
-	first_player.max_hp = second_max_hp
-	second_player.max_hp = first_max_hp
+	# 新上限由交换得到的武将牌基础值与原角色局内修正组成，不能直接交换当前总上限。
+	first_player.max_hp = maxi(second_character_base_max_hp + first_runtime_max_hp_delta, 1)
+	second_player.max_hp = maxi(first_character_base_max_hp + second_runtime_max_hp_delta, 1)
 	# 当前体力不属于武将牌；仅在新体力上限更低的时候收敛到上限，避免产生当前体力高于上限的非法状态。
 	var first_previous_hp: int = first_player.hp
 	var second_previous_hp: int = second_player.hp
@@ -3053,7 +3060,7 @@ func swap_player_character_cards(first_player_id: int, second_player_id: int, re
 		_emit_rule_timing("changeHp", first_player_id, -1, first_player_id, {"amount":first_previous_hp - first_player.hp, "hp":first_player.hp, "max_hp":first_player.max_hp, "reason":reason, "change_type":"character_card_swap_clamp"})
 	if second_player.hp != second_previous_hp:
 		_emit_rule_timing("changeHp", second_player_id, -1, second_player_id, {"amount":second_previous_hp - second_player.hp, "hp":second_player.hp, "max_hp":second_player.max_hp, "reason":reason, "change_type":"character_card_swap_clamp"})
-	state.random_history.append({"kind":"character_card_swap", "reason":reason, "first_player_id":first_player_id, "second_player_id":second_player_id, "first_old_character_id":first_character_id, "second_old_character_id":second_character_id, "first_old_max_hp":first_max_hp, "second_old_max_hp":second_max_hp})
+	state.random_history.append({"kind":"character_card_swap", "reason":reason, "first_player_id":first_player_id, "second_player_id":second_player_id, "first_old_character_id":first_character_id, "second_old_character_id":second_character_id, "first_old_max_hp":first_max_hp, "second_old_max_hp":second_max_hp, "first_runtime_max_hp_delta":first_runtime_max_hp_delta, "second_runtime_max_hp_delta":second_runtime_max_hp_delta})
 	add_log("%s与%s交换了武将牌。" % [format_player_state_log_name(first_player), format_player_state_log_name(second_player)])
 	_emit_state()
 	return true
@@ -3264,15 +3271,17 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or target.out_of_game or amount <= 0:
 		return
+	# 造成伤害的牌实际使用者；默认等于伤害来源，决斗等“原使用者与最终伤害来源不同”的牌效必须通过source_context显式覆盖。
+	var card_user_id: int = int(source_context.get("card_user_id", source_id))
 	# 最终伤害值；先应用武器增伤，再应用防具修正与事件处理器。
 	var final_amount: int = amount
 	# 过关斩将第13关起敌方造成伤害+1；仅正数伤害进入本入口，因此不会把0伤害或无效目标转为伤害。
 	if conquest_mode != null and conquest_mode.is_enemy(source_id):
 		final_amount += conquest_mode.get_damage_bonus()
 	# 伤害父事件；多级 Begin、扣血、濒死和来源事件均通过该 ID 建立可回放关系。
-	var damage_event_id: int = _record_runtime_event("DamageEvent", "damage", {"source_id":source_id, "target_id":target_id, "amount":amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer})
+	var damage_event_id: int = _record_runtime_event("DamageEvent", "damage", {"source_id":source_id, "target_id":target_id, "amount":amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer})
 	# 伤害生命周期共享数据；四个修改窗口逐次读取上一时机写回的 amount，保证数值修改链可预测。
-	var timing_data: Dictionary = {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
+	var timing_data: Dictionary = {"amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
 	var damage_before_event: RuleEvent = _emit_rule_timing("damageBefore", target_id, source_id, target_id, timing_data, damage_event_id)
 	if damage_before_event != null and (damage_before_event.cancelled or damage_before_event.neutralized):
 		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_before_event.data, damage_event_id)
@@ -3377,7 +3386,7 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	else:
 		add_log("%s受到%d点%s伤害（%d/%d）。" % [format_player_state_log_name(target), final_amount, _nature_text(nature), target.hp, target.max_hp])
 	# 伤害实际成立时机；发生在护甲和体力扣减后、旧 damage_after 与濒死流程前。
-	var damage_result_data: Dictionary = {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
+	var damage_result_data: Dictionary = {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id}
 	for context_key_variant: Variant in source_context.keys():
 		# 来源上下文字段名；只补充【杀】父牌与目标流程数据，不覆盖伤害核心最终值。
 		var context_key: String = str(context_key_variant)
@@ -3387,7 +3396,7 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":hp_lost, "hp":target.hp, "max_hp":target.max_hp, "reason":card_id, "change_type":"damage", "damage_event_id":damage_event_id}, damage_event_id)
 	_emit_rule_timing("damage", target_id, source_id, target_id, damage_result_data, damage_event_id)
 	# 伤害实际成立后的可序列化上下文；标准damage时机可能产生装备或技能选择，后续旧事件、濒死与尾部必须原地恢复。
-	var post_result_context: Dictionary = {"post_result_stage":"damage_after", "source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "hp":target.hp, "shield":target.shield, "chain_targets":chain_targets.duplicate()}
+	var post_result_context: Dictionary = {"post_result_stage":"damage_after", "source_id":source_id, "target_id":target_id, "amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "hp":target.hp, "shield":target.shield, "chain_targets":chain_targets.duplicate()}
 	# damage时机内的选择必须先完成全部同一时机处理器；不能提前发布damage_after、濒死或整条伤害尾部。
 	if _has_nested_settlement_barrier():
 		_defer_rule_continuation("damage_after_result", post_result_context)
@@ -3430,7 +3439,7 @@ func _continue_damage_after_result(context: Dictionary) -> void:
 		_defer_rule_continuation("damage_after_result", hp_reduced_resume_context)
 		return
 	# 伤害尾部上下文；濒死可能暂停，因此 damageSource、End、After 和连环必须保存到救援结束后执行。
-	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "amount":int(context.get("amount", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "chain_transfer":bool(context.get("chain_transfer", false)), "damage_event_id":int(context.get("damage_event_id", -1)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "chain_targets":(context.get("chain_targets", []) as Array).duplicate()}
+	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "amount":int(context.get("amount", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "card_user_id":int(context.get("card_user_id", source_id)), "chain_transfer":bool(context.get("chain_transfer", false)), "damage_event_id":int(context.get("damage_event_id", -1)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "chain_targets":(context.get("chain_targets", []) as Array).duplicate()}
 	# 最新伤害目标；damage或兼容事件等待期间可能已被其他嵌套效果回复、杀死或移出游戏。
 	var target: PlayerState = state.get_player(target_id)
 	if target == null:
@@ -3463,6 +3472,7 @@ func _finish_damage_timing(context: Dictionary) -> void:
 		"hp_lost":int(context.get("hp_lost", 0)),
 		"nature":str(context.get("nature", "normal")),
 		"card_id":str(context.get("card_id", "")),
+		"card_user_id":int(context.get("card_user_id", source_id)),
 		"chain_transfer":bool(context.get("chain_transfer", false)),
 		"damage_event_id":damage_event_id,
 	}
@@ -3519,7 +3529,7 @@ func _finish_damage_timing(context: Dictionary) -> void:
 		chain_resume_context["chain_target_index"] = chain_target_index
 		# 父伤害保险续接编号；异步子伤害保留该记录，同步完成则立即移除并继续本循环。
 		var chain_continuation_id: int = _defer_rule_continuation("damage_finalization", chain_resume_context)
-		damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false)
+		damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false, {"card_user_id":int(context.get("card_user_id", source_id))})
 		if state == null or state.game_over:
 			return
 		if _has_nested_settlement_barrier():
@@ -9754,7 +9764,11 @@ func is_opportunity_enabled_for_current_match() -> bool:
 
 ## 当前回合角色在事件结算中死亡后转交回合；不触发正常结束阶段，但会清除只持续到本回合的酒加值。
 func _advance_after_current_player_death(dead_player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != dead_player_id or state.current_phase == "dead":
+		return
 	_ai_drive_token += 1
+	# 已打开的出牌窗口属于死亡角色，必须在转交前取消，避免旧请求恢复后重新驱动已结束的回合。
+	_cancel_active_play_choice("current_player_death")
 	_main_phase_play_conversions.erase(dead_player_id)
 	_extra_play_phase_counts.erase(dead_player_id)
 	_extra_play_phase_return_points.erase(dead_player_id)
@@ -9763,10 +9777,14 @@ func _advance_after_current_player_death(dead_player_id: int) -> void:
 		_active_extra_play_phase_context.clear()
 	if int(_active_converted_play_phase_context.get("player_id", -1)) == dead_player_id:
 		_active_converted_play_phase_context.clear()
+	# 中断时机在阶段状态切换前派发，保证“直到本回合结束”的离场效果仍可识别正确回合号。
 	_emit_rule_timing("phaseOver", dead_player_id, dead_player_id, dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number}, _current_turn_event_id)
 	_notify_card_definitions_turn_ended(dead_player_id, true)
+	# 死亡中断标志防止响应、阶段回调和动作收尾重复安排下一回合。
+	state.current_phase = "dead"
+	state.phase_index = -1
 	# 死亡回合仍需遵守已经排队的额外回合与额外回合链恢复顺序。
-	_schedule_phase_transition(dead_player_id, state.current_phase, Callable(self, "_start_queued_or_normal_turn").bind(dead_player_id))
+	_schedule_phase_transition(dead_player_id, "dead", Callable(self, "_start_queued_or_normal_turn").bind(dead_player_id))
 
 
 ## 当前回合角色移出游戏后立即中断本回合；不执行弃牌或结束阶段，但保留phaseOver供持续到回合结束的效果清理。
@@ -10124,6 +10142,9 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	if player_mark_service != null:
 		player_mark_service.clear_marks_for_dead_player(victim_id)
 	_finish_pending_damage(victim_id)
+	# 无论死亡来自出牌、响应、阶段效果或异步续接，只要死者仍是当前回合角色就必须在死亡结算后立即转交回合。
+	if not state.game_over and state.current_player_id == victim_id:
+		_advance_after_current_player_death(victim_id)
 
 
 ## 结算车轮战非末将阵亡：清空全部区域、换上下一名武将、补满体力并立即摸4张牌。

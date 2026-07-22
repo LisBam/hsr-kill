@@ -126,7 +126,7 @@ func _run() -> void:
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
-	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
@@ -347,7 +347,7 @@ func _run() -> void:
 	await _click_control(start_game_button)
 	for _start_frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
-	if main_menu.visible or settings_panel.visible or match_controller.state == null or match_controller.state.players.size() != 6 or match_controller.default_player_count != 6:
+	if main_menu.visible or settings_panel.visible or match_controller.state == null or match_controller.state.players.size() != 6 or match_controller.default_player_count != 6 or not (main_instance.get_node("MatchMenu") as MatchMenu).visible:
 		_fail("start_identity_match")
 		return
 	if match_menu_button.focus_mode == Control.FOCUS_NONE or log_toggle_button.focus_mode == Control.FOCUS_NONE:

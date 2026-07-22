@@ -1,6 +1,6 @@
 extends SkillDefinition
 
-## 【摄伏】技能源码。持有者每个全局回合内首次以使用牌造成伤害后，令一名角色按该牌名字数从牌堆获得牌。
+## 【摄伏】技能源码。持有者每个全局回合内首次以自己使用的牌造成伤害后，令一名角色按该牌名字数从牌堆获得牌。
 
 ## 当前全局回合是否已经触发；每次phaseBefore重置，首次符合条件的伤害立即锁定额度。
 var _used_this_turn: bool = false
@@ -32,6 +32,10 @@ func _on_any_turn_before(_event: RuleEvent) -> void:
 ## 首次由已使用卡牌造成伤害时锁定牌名字数与本次伤害目标，并创建不可取消的角色选择。
 func _on_owner_damage_source(event: RuleEvent) -> void:
 	if _used_this_turn or int(event.data.get("amount", 0)) <= 0:
+		return
+	# 实际使用该伤害牌的角色；决斗等效果的最终伤害来源可能与原使用者不同，不能用event.source_id替代。
+	var card_user_id: int = int(event.data.get("card_user_id", event.source_id))
+	if card_user_id != owner_player_id:
 		return
 	# 造成伤害的逻辑牌；技能伤害没有有效卡牌定义，不满足“使用牌造成伤害”。
 	var card_id: String = str(event.data.get("card_id", ""))

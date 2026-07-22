@@ -36,25 +36,25 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
 		resolver.host.emit_rule_timing("juedouBegin", actor_id, actor_id, target_id, {"parent_card_uid":card.uid, "card_id":card.definition_id})
-		_continue_exchange(resolver, card.uid, target_id, actor_id)
+		_continue_exchange(resolver, card.uid, target_id, actor_id, actor_id)
 	return resolver.default_destination()
 
 
 ## 从指定响应者继续【决斗】轮换；每轮都通过统一响应端口请求一张实体【杀】。
-func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: int, opponent_id: int) -> void:
+func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: int, opponent_id: int, card_user_id: int) -> void:
 	# 安全轮次计数；实体牌有限，设置上限用于防止扩展技能制造无限响应。
 	var exchange_count: int = 0
 	while exchange_count < 100 and not resolver.is_resolution_stopped():
 		exchange_count += 1
 		resolver.host.emit_rule_timing("juedou", responder_id, opponent_id, responder_id, {"parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "exchange_count":exchange_count})
 		# 当前轮响应上下文；成功响应后交换双方，放弃时由对手造成伤害。
-		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "complete_parent_target_after_response":true}
+		var response_context: Dictionary = {"kind":"duel_response", "parent_card_uid":parent_card_uid, "responder_id":responder_id, "opponent_id":opponent_id, "card_user_id":card_user_id, "complete_parent_target_after_response":true}
 		# 当前轮实体【杀】；为空表示放弃或没有合法响应牌。
 		var response_card: CardInstance = resolver.host.request_response_card(responder_id, "sha", "请响应决斗并打出【杀】。", response_context)
 		if resolver.host.has_pending_card_choice():
 			return
 		if response_card == null:
-			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":card_user_id, "parent_card_uid":parent_card_uid})
 			resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":parent_card_uid, "loser_id":responder_id})
 			return
 		# 上一轮响应者；交换后由其对手成为下一轮响应者。
@@ -72,8 +72,8 @@ func continue_response(resolver: Object, context: Dictionary, response_card: Car
 	# 当前对手 ID；未响应时成为伤害来源，成功时成为下一响应者。
 	var opponent_id: int = int(context.get("opponent_id", -1))
 	if response_card == null:
-		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou")
+		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":int(context.get("card_user_id", opponent_id)), "parent_card_uid":int(context.get("parent_card_uid", -1))})
 		resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":int(context.get("parent_card_uid", -1)), "loser_id":responder_id})
 	else:
-		_continue_exchange(resolver, int(context.get("parent_card_uid", -1)), opponent_id, responder_id)
+		_continue_exchange(resolver, int(context.get("parent_card_uid", -1)), opponent_id, responder_id, int(context.get("card_user_id", opponent_id)))
 	return true

@@ -67,6 +67,12 @@ signal scroll_gesture_moved(relative: Vector2)
 ## 移出游戏时的武将牌调制色；默认保留18%不透明度表达角色暂时不存在，仅影响表现且运行时无需动态修改。
 @export var out_of_game_modulate: Color = Color(1.0, 1.0, 1.0, 0.18)
 
+## 其他角色公开标记与武将牌左边缘的水平间距；默认1像素使标记贴近牌面，运行时通常无需动态修改。
+@export_range(0.0, 16.0, 1.0) var public_marker_card_gap: float = 1.0
+
+## 其他角色公开标记相对武将牌顶边的下移距离；默认8像素避开势力角标并保持贴近牌面，运行时通常无需动态修改。
+@export_range(0.0, 48.0, 1.0) var public_marker_vertical_offset: float = 8.0
+
 ## 选目标“选中”提示的固定绿色；与太空主题合法目标色一致，不随选中金色边框变化，运行时通常无需动态修改。
 const SELECTED_MARKER_COLOR: Color = Color("61c7a4")
 
@@ -729,7 +735,7 @@ func _refresh_public_markers() -> void:
 	# 当前公开标记；全部字段已经由PlayerState按观察者统一序列化，不包含隐藏信息。
 	var public_marks: Dictionary = _player_snapshot.get("public_marks", {}) as Dictionary
 	_public_markers_view.configure(public_marks, false)
-	_public_markers_view.position = Vector2(-_public_markers_view.size.x - 2.0, 0.0)
+	_public_markers_view.position = Vector2(-_public_markers_view.size.x - public_marker_card_gap, public_marker_vertical_offset)
 	_public_markers_view.visible = _match_overlays_visible and _public_markers_visible and not public_marks.is_empty()
 
 
