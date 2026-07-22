@@ -29,6 +29,10 @@ func _run() -> void:
 	match_controller.randomize_local_human_seat = false
 	for _frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
+	# 启动主菜单遮罩；本测试随后注入局内快照，因此显式关闭遮罩以同步恢复局内菜单和全部局内控件。
+	var startup_main_menu: MainMenu = main_instance.get_node("%MainMenu") as MainMenu
+	startup_main_menu.visible = false
+	await get_tree().process_frame
 	# 测试手牌快照；普通【杀】应灰显，【闪】应成为唯一可交互响应候选。
 	var slash_data: Dictionary = {"uid":7001, "definition_id":"sha", "suit":"spade", "rank":7, "zone":"hand", "owner_id":0}
 	# 测试【闪】快照；点击后确认按钮才允许提交。
@@ -414,6 +418,7 @@ func _run() -> void:
 	var zhangba_request: Dictionary = {
 		"request_id":17,
 		"chooser_id":0,
+		"choice_type":"respond",
 		"title":"响应询问",
 		"prompt":"请打出一张【杀】",
 		"candidates":[_candidate(zhangba_data)],
@@ -442,6 +447,13 @@ func _run() -> void:
 	main_instance.call("_on_card_pressed", 7002)
 	if confirm_button.disabled or (main_instance.get("_equipment_action_material_uids") as Array) != [7001, 7002]:
 		_fail("zhangba_two_material_confirm")
+		return
+	# 普通弃置选择中的丈八蛇矛；虽然装备定义声明响应材料，但非响应请求只能选中装备本身并保持普通确定语义。
+	main_instance.call("_on_card_choice_requested", {"request_id":171, "chooser_id":0, "choice_type":"card", "title":"弃置牌", "prompt":"请选择一张牌弃置", "candidates":[_candidate(zhangba_data)], "min_select":1, "max_select":1, "allow_cancel":false, "context":{"kind":"discard_cost"}})
+	await get_tree().process_frame
+	main_instance.call("_on_equipment_pressed", 7007)
+	if not str(main_instance.get("_active_equipment_action")).is_empty() or not (main_instance.get("_inline_selected_card_uids") as Array).has(7007) or confirm_button.disabled:
+		_fail("zhangba_discard_must_not_enter_material_mode")
 		return
 	# 木牛流马出牌快照；chooseToUse 直接把宝物实体列为候选，不再显示“存木牛”专用按钮。
 	var wooden_ox_play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 18, {"treasure":treasure_data})
@@ -504,6 +516,8 @@ func _run() -> void:
 	if not character_selection_panel.visible or not leader_character_area.visible or leader_character_area.get_child_count() != 1 or character_status_label.visible or not character_status_label.text.is_empty() or not is_equal_approx(character_candidate_area.position.x, 214.0):
 		_fail("character_selection_leader_card")
 		return
+	# 局内菜单模式；固定身份局以验证通用权威设置，避免用户持久化的车轮战或过关斩将模式隐藏人数行。
+	(main_instance.get_node("MatchMenu") as MatchMenu).set_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	# 局域网非房主权限；AI速度、游戏速度、下一局人数与重新开局不能影响房主权威状态，客户端界面必须统一隐藏。
 	match_controller.network_gateway.mode = NetworkGateway.Mode.LAN
 	match_controller.network_gateway.lan_role = NetworkGateway.LanRole.CLIENT

@@ -89,16 +89,20 @@ const LOCAL_JUDGMENT_ZONE_HEIGHT: float = 22.0
 ## 本地延时锦囊标记区与手牌区顶边之间的间距；6像素使图标不压住手牌选中抬升空间。
 const LOCAL_JUDGMENT_ZONE_HAND_GAP: float = 6.0
 
-## 本地公开标记横排的固定高度；32像素等于单枚圆形标记直径，多个标记只横向增长。
-## 当前标记主体缩小为24像素，本常量同步作为本地武将牌旁标记的垂直居中高度。
-const LOCAL_PLAYER_MARKER_ZONE_HEIGHT: float = 24.0
+## 本地公开标记横排的固定高度；20像素等于单枚圆形标记直径，多个标记只横向增长。
+const LOCAL_PLAYER_MARKER_ZONE_HEIGHT: float = 20.0
 
 ## 本地公开标记横排与右侧判定区之间的水平间距；默认8像素防止圆形图标与判定菱形相贴。
 ## 当前标记缩小后间距调整为2像素；判定区仍保留独立的左侧安全偏移。
+## 当前主视角标记已移至手牌栏右上方，本常量仅保留给旧场景或外部脚本兼容，不参与现行布局。
 const LOCAL_PLAYER_MARKER_JUDGMENT_GAP: float = 2.0
 
 ## 本地公开标记与武将牌左边缘之间的间距；默认2像素让标记紧贴武将牌，同时保持独立悬停命中区域。
+## 当前主视角不再锚定本地武将牌左侧，本常量仅保留给旧场景或外部脚本兼容，不参与现行布局。
 const LOCAL_PLAYER_MARKER_CARD_GAP: float = 2.0
+
+## 本地主视角标记相对手牌栏顶边的下移量；默认8像素让标记位于手牌栏右上方且不压住判定牌。
+const LOCAL_PLAYER_MARKER_HAND_TOP_OFFSET: float = 8.0
 
 ## 本地装备栏的独立高度；148像素严格等于单张玩家手牌牌面高度，不包含手牌栏的选中抬升预留空间。
 const LOCAL_EQUIPMENT_AREA_HEIGHT: float = 148.0
@@ -484,6 +488,7 @@ func _ready() -> void:
 	match_menu.main_menu_requested.connect(_on_main_menu_requested)
 	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
+	main_menu.visibility_changed.connect(_sync_match_menu_visibility)
 	lan_lobby_panel.host_requested.connect(_on_lan_host_requested)
 	lan_lobby_panel.join_requested.connect(_on_lan_join_requested)
 	lan_lobby_panel.leave_requested.connect(_on_lan_leave_requested)
@@ -532,6 +537,7 @@ func _ready() -> void:
 	match_menu.refresh_card_name_text()
 	_apply_ui_style()
 	_layout_auto_managed_hand_overlay()
+	_sync_match_menu_visibility()
 
 
 ## 牌桌退出时只释放自身创建的日志暂停，避免场景切换后 SceneTree 残留暂停状态。
@@ -1104,17 +1110,15 @@ func _layout_local_judgment_zone() -> void:
 	var hand_size: Vector2 = hand_panel.size
 	# 本地标记占用尺寸；空标记集合返回0宽，不改变原判定区左移配置。
 	var marker_size: Vector2 = local_player_markers.get_required_size() if local_player_markers != null and is_instance_valid(local_player_markers) else Vector2.ZERO
-	# 手牌上方统一标记带顶边；使用32像素圆形高度，判定菱形在该带内垂直居中。
-	# 当前圆形标记高度为24像素；标记本身改由本地武将牌左侧锚定，判定菱形继续使用该带的几何计算。
+	# 手牌上方判定区带顶边；20像素标记改由手牌栏右上方独立锚定，判定菱形继续使用该带的几何计算。
 	var marker_zone_top: float = -LOCAL_PLAYER_MARKER_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HAND_GAP
-	if local_player_markers != null and is_instance_valid(local_player_markers) and local_player_seat_slot != null and is_instance_valid(local_player_seat_slot):
-		# 本地标记垂直偏移；以武将牌高度居中，使第一视角也与其他角色一样紧贴武将牌左侧。
-		var marker_vertical_offset: float = (local_player_card.card_size.y - LOCAL_PLAYER_MARKER_ZONE_HEIGHT) * 0.5
-		local_player_markers.position = local_player_seat_slot.position + Vector2(-marker_size.x - LOCAL_PLAYER_MARKER_CARD_GAP, marker_vertical_offset)
-	# 判定区左侧避让距离；至少保留检查器配置，同时避开当前全部第一视角圆形标记。
-	var desired_horizontal_offset: float = maxf(local_judgment_zone_left_offset, marker_size.x + (LOCAL_PLAYER_MARKER_JUDGMENT_GAP if marker_size.x > 0.0 else 0.0))
+	if local_player_markers != null and is_instance_valid(local_player_markers):
+		# 本地标记固定贴合手牌栏右上方；横排从右向左保留完整宽度，避免压住右侧技能栏。
+		local_player_markers.position = hand_position + Vector2(maxf(hand_size.x - marker_size.x, 0.0), -marker_size.y + LOCAL_PLAYER_MARKER_HAND_TOP_OFFSET)
+	# 判定区左侧避让距离；第一视角标记已移至手牌右上方，不再占用判定区的横向空间。
+	var desired_horizontal_offset: float = local_judgment_zone_left_offset
 	var horizontal_offset: float = minf(desired_horizontal_offset, maxf(hand_size.x - 1.0, 0.0))
-	# 判定区纵坐标；在32像素标记带内居中，二者底部与手牌区保持相同6像素安全间距。
+	# 判定区纵坐标；当前在20像素标记带内居中，二者底部与手牌区保持相同6像素安全间距。
 	var judgment_vertical_offset: float = marker_zone_top + (LOCAL_PLAYER_MARKER_ZONE_HEIGHT - LOCAL_JUDGMENT_ZONE_HEIGHT) * 0.5
 	local_judgment_zone.position = hand_position + Vector2(horizontal_offset, judgment_vertical_offset)
 	local_judgment_zone.size = Vector2(maxf(hand_size.x - horizontal_offset, 1.0), LOCAL_JUDGMENT_ZONE_HEIGHT)
@@ -2194,11 +2198,14 @@ func _toggle_equipment_action_material(card_uid: int) -> void:
 
 ## 判断内联响应候选是否为需要额外普通手牌材料的装备入口。
 func _is_inline_material_equipment_response_candidate(card_uid: int) -> bool:
+	# 只有权威请求已经声明为响应时，装备才可以进入材料响应模式；弃置、获得等普通选牌不能被装备定义劫持。
+	if str(_inline_card_choice.get("choice_type", "")) != "respond":
+		return false
 	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
 		# 当前候选；装备定义元数据声明响应材料数量。
 		var candidate: Dictionary = candidate_variant as Dictionary
 		var candidate_card: Dictionary = candidate.get("card_data", {}) as Dictionary
-		if int(candidate.get("uid", -1)) == card_uid and str(candidate.get("zone", "")) == "equipment":
+		if int(candidate.get("uid", -1)) == card_uid and int(candidate.get("owner_id", -1)) == match_controller.local_human_player_id and str(candidate.get("zone", "")) == "equipment":
 			var definition: Dictionary = _get_cached_card_definition(str(candidate_card.get("definition_id", "")))
 			return int(definition.get("response_material_count", 0)) > 0
 	return false
@@ -2745,6 +2752,16 @@ func _on_main_menu_requested() -> void:
 	main_menu.return_to_main_menu()
 
 
+## 主菜单覆盖牌桌时隐藏右上局内菜单入口；可见性切换由主菜单信号驱动，测试与场景路由同样生效。
+func _sync_match_menu_visibility() -> void:
+	if match_menu == null or not is_instance_valid(match_menu) or main_menu == null or not is_instance_valid(main_menu):
+		return
+	var main_menu_visible: bool = main_menu.visible
+	if main_menu_visible and match_menu.is_menu_open():
+		match_menu.set_menu_open(false)
+	match_menu.visible = not main_menu_visible
+
+
 ## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
 func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 	character_selection_panel.bind_snapshot(selection_snapshot)
@@ -2872,7 +2889,7 @@ func _refresh_card_selection_panel() -> void:
 			return
 		# 本地存在与公共展示不同类型的独立请求时优先显示该请求，公共牌位数据仍保留在桌面快照中。
 		if not _modal_card_choice_request.is_empty() and str((_modal_card_choice_request.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
-			card_selection_panel.show_request(_modal_card_choice_request)
+			card_selection_panel.show_request(_enrich_target_zone_card_choice_request(_modal_card_choice_request))
 			return
 		# 公共展示副本；补充武将显示名后交给纯 UI 组件，不把玩家快照或规则对象传入牌位节点。
 		var enriched_display: Dictionary = _enrich_public_card_choice_display(_public_card_choice_display)
@@ -2886,9 +2903,44 @@ func _refresh_card_selection_panel() -> void:
 		card_selection_panel.show_public_display(enriched_display, interactive_request)
 		return
 	if not _modal_card_choice_request.is_empty():
-		card_selection_panel.show_request(_modal_card_choice_request)
+		card_selection_panel.show_request(_enrich_target_zone_card_choice_request(_modal_card_choice_request))
 		return
 	card_selection_panel.close()
+
+
+## 为“选择角色区域内的牌”补充公开目标武将名；该副本只改变当前客户端提示，不写回权威选择请求。
+func _enrich_target_zone_card_choice_request(choice_request: Dictionary) -> Dictionary:
+	var result: Dictionary = choice_request.duplicate(true)
+	# 只有固定数量的目标区域选择才改写提示；可变数量费用和普通手牌选择继续保留规则端原文。
+	var required_count: int = int(result.get("min_select", 0))
+	if required_count <= 0 or int(result.get("max_select", 0)) != required_count:
+		return result
+	var context: Dictionary = result.get("context", {}) as Dictionary
+	# 目标角色稳定ID；通用牌和技能使用target_id，机缘逐目标流程使用target_player_id，二者都只作为展示定位。
+	var target_id: int = int(context.get("target_id", context.get("target_player_id", -1)))
+	if target_id < 0:
+		return result
+	# 用于展示的候选；不可弃置的保护牌也可能在该数组中，仍然属于“目标角色区域”的提示语义。
+	var display_candidates: Array = context.get("display_candidates", result.get("candidates", [])) as Array
+	var has_target_zone_candidate: bool = false
+	for candidate_variant: Variant in display_candidates:
+		var candidate: Dictionary = candidate_variant as Dictionary
+		var candidate_zone: String = str(candidate.get("zone", ""))
+		if int(candidate.get("owner_id", -1)) == target_id and candidate_zone in ["hand", "equipment", "judgment"]:
+			has_target_zone_candidate = true
+			break
+	if not has_target_zone_candidate:
+		return result
+	# 目标公开快照；已亮将时使用武将名，未亮将时安全回退公开玩家显示名。
+	var target_snapshot: Dictionary = _get_player_snapshot(target_id)
+	var target_name: String = _snapshot_character_name(target_snapshot, str(target_snapshot.get("display_name", "角色")))
+	if target_name.is_empty():
+		return result
+	# 目标区域固定数量文案；一张使用中文量词，其余数量沿用阿拉伯数字以便玩家快速确认费用。
+	var count_text: String = "一张" if required_count == 1 else "%d张" % required_count
+	result["prompt"] = "请选择“%s”区域内的%s牌" % [target_name, count_text]
+	result["prompt_highlight"] = target_name
+	return result
 
 
 ## 保持本地手牌处于牌桌基础层级；五谷丰登等模态选择窗口必须完整覆盖手牌和悬停放大牌面。

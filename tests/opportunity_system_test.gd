@@ -372,15 +372,15 @@ func _test_new_effect_resolution_flow() -> bool:
 
 ## 校验武将牌交换、轮末离场、手牌视为、不同名延时锦囊检索与装备双向交换公共端口。
 func _test_new_opportunity_mechanisms() -> bool:
-	# 双方测试武将；三月七与丹恒拥有不同体力上限和固有技能，便于确认交换边界。
+	# 双方测试武将；丹恒的局内+1体力上限与三月七基础3点体力共同验证交换时只移动武将牌基础值。
 	var first_player: PlayerState = _controller.state.get_player(0)
 	var second_player: PlayerState = _controller.state.get_player(1)
-	first_player.character_id = "march_7th"
-	first_player.max_hp = 3
-	first_player.hp = 3
-	second_player.character_id = "dan_heng"
-	second_player.max_hp = 4
-	second_player.hp = 4
+	first_player.character_id = "dan_heng"
+	first_player.max_hp = 5
+	first_player.hp = 5
+	second_player.character_id = "march_7th"
+	second_player.max_hp = 3
+	second_player.hp = 3
 	_controller._reinstall_character_skills_for_player(first_player)
 	_controller._reinstall_character_skills_for_player(second_player)
 	# 局内获得技能；交换武将牌后必须仍归原角色且保留实例。
@@ -393,16 +393,18 @@ func _test_new_opportunity_mechanisms() -> bool:
 	var dan_heng_skill_ids: Array = GameDatabase.get_character("dan_heng").get("skills", []) as Array
 	var first_skills: Dictionary = _controller.skill_instances_by_player.get(0, {}) as Dictionary
 	var second_skills: Dictionary = _controller.skill_instances_by_player.get(1, {}) as Dictionary
-	if first_player.character_id != "dan_heng" or first_player.max_hp != 4 or second_player.character_id != "march_7th" or second_player.max_hp != 3 or not first_skills.has("huanyang"):
+	if first_player.character_id != "march_7th" or first_player.max_hp != 4 or second_player.character_id != "dan_heng" or second_player.max_hp != 4 or not first_skills.has("huanyang"):
 		return _fail("character_swap_state")
-	for skill_id_variant: Variant in dan_heng_skill_ids:
+	for skill_id_variant: Variant in march_skill_ids:
 		if not first_skills.has(str(skill_id_variant)):
 			return _fail("character_swap_first_native_%s" % str(skill_id_variant))
-	for skill_id_variant: Variant in march_skill_ids:
+	for skill_id_variant: Variant in dan_heng_skill_ids:
 		if not second_skills.has(str(skill_id_variant)):
 			return _fail("character_swap_second_native_%s" % str(skill_id_variant))
 	# 换回原武将并移除测试获得技能，避免影响后续机缘技能次数断言。
 	_controller.swap_player_character_cards(0, 1, "test_restore")
+	if first_player.character_id != "dan_heng" or first_player.max_hp != 5 or second_player.character_id != "march_7th" or second_player.max_hp != 3:
+		return _fail("character_swap_restore_runtime_delta")
 	_controller.remove_acquired_skill(0, "huanyang")
 	first_player.max_hp = 4
 	first_player.hp = 4

@@ -9,9 +9,8 @@ signal information_requested(information: Dictionary, anchor_rect: Rect2)
 ## 任一子标记离开时向外转发关闭请求。
 signal information_dismissed
 
-## 相邻标记间距；默认4像素让多个32像素圆形图标保持清晰分隔，运行时通常无需动态修改。
-## 当前默认间距调整为2像素，配合24像素圆形图标紧凑贴近武将牌。
-@export_range(0.0, 12.0, 1.0) var marker_gap: float = 2.0
+## 相邻标记间距；默认1像素让多个20像素圆形图标紧凑贴近武将牌，运行时通常无需动态修改。
+@export_range(0.0, 12.0, 1.0) var marker_gap: float = 1.0
 
 ## 是否横向排列；false用于其他角色武将牌左侧纵排，true用于第一视角手牌栏上方横排。
 var horizontal: bool = false

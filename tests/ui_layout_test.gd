@@ -78,6 +78,9 @@ func _run() -> void:
 		return
 	# 本回归用例后续需要注入稳定快照并验证局内输入；隐藏启动覆盖层不触发开局，避免与人为快照混入真实选将流程。
 	startup_main_menu.visible = false
+	if not (main_instance.get_node("MatchMenu") as MatchMenu).visible:
+		_fail("startup_match_menu_visibility_restore")
+		return
 	var ten_player_snapshot: Dictionary = _make_ten_player_snapshot()
 	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
@@ -112,6 +115,31 @@ func _run() -> void:
 	# 后续布局断言继续使用身份局快照，避免模式专属菜单与资料逻辑影响既有十人桌测试。
 	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
+	# 目标公开快照；六号位的公开武器作为目标区域选择候选，武将名应从该快照解析。
+	var target_zone_player_snapshot: Dictionary = ((ten_player_snapshot.get("players", []) as Array)[5] as Dictionary)
+	# 目标公开装备；候选继续使用实际装备 UID、归属与区域字段，避免测试只覆盖文案字符串。
+	var target_zone_card: Dictionary = ((target_zone_player_snapshot.get("equipment", {}) as Dictionary).get("weapon", {}) as Dictionary).duplicate(true)
+	# 目标区域候选；由机缘逐目标流程使用target_player_id，专门覆盖该上下文别名。
+	var target_zone_candidate: Dictionary = {"uid":int(target_zone_card.get("uid", -1)), "owner_id":5, "zone":"equipment", "slot":"weapon", "visible":true, "card_data":target_zone_card.duplicate(true)}
+	# 目标区域选择请求；一张装备牌必须使用独立选牌弹窗而不是本地内联手牌选择。
+	var target_zone_request: Dictionary = {"request_id":97001, "chooser_id":4, "choice_type":"card", "title":"选择获得牌", "prompt":"请选择目标区域内的一张牌", "candidates":[target_zone_candidate], "min_select":1, "max_select":1, "allow_cancel":false, "context":{"kind":"opportunity_zone_cards", "target_player_id":5}}
+	# 目标武将公开名；与桌面补全函数使用同一数据库解析，避免将本地化名称写死在测试中。
+	var target_zone_character_name: String = GameDatabase.resolve_character_name(str(target_zone_player_snapshot.get("character_id", "")))
+	# 补全后的展示请求；仅验证客户端副本，不修改规则端原始请求。
+	var enriched_target_zone_request: Dictionary = main_instance.call("_enrich_target_zone_card_choice_request", target_zone_request) as Dictionary
+	if str(enriched_target_zone_request.get("prompt", "")) != "请选择“%s”区域内的一张牌" % target_zone_character_name or str(enriched_target_zone_request.get("prompt_highlight", "")) != target_zone_character_name:
+		_fail("target_zone_prompt_enrichment:%s" % enriched_target_zone_request)
+		return
+	# 正式选牌面板；富文本标签必须用金色BBCode强调目标武将名。
+	var target_zone_selection_panel: CardSelectionPanel = main_instance.get_node("CardSelectionPanel") as CardSelectionPanel
+	target_zone_selection_panel.show_request(enriched_target_zone_request)
+	await get_tree().process_frame
+	# 面板提示富文本节点；读取已渲染的BBCode而非请求副本，验证视觉强调进入实际组件。
+	var target_zone_prompt_label: RichTextLabel = target_zone_selection_panel.get("_prompt_label") as RichTextLabel
+	if not target_zone_selection_panel.visible or target_zone_prompt_label == null or not target_zone_prompt_label.text.contains("[color=#e4c84f]%s[/color]" % target_zone_character_name):
+		_fail("target_zone_prompt_highlight:%s" % [target_zone_prompt_label.text if target_zone_prompt_label != null else "missing"])
+		return
+	target_zone_selection_panel.close()
 	# 右上角菜单按钮；必须完整位于视口内并能通过真实鼠标事件收到 pressed 信号。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
 	# UI 风格选项；默认必须选中黑白太空，同时保留暖木十周年作为可切换项。
@@ -175,6 +203,23 @@ func _run() -> void:
 		return
 	# 底部手牌面板；其底边必须随窗口底部锚定，不能继续停留在固定720坐标。
 	var hand_panel: Control = main_instance.get_node("HandPanel") as Control
+	# 带公开标记的本地快照；用真实标记尺寸验证第一视角锚定在手牌栏右上方，并保持8像素下移。
+	var marked_local_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
+	# 本地玩家公开快照；五号位为本机操作角色，直接补充一枚公开标记而不启动规则服务。
+	var marked_local_player_snapshot: Dictionary = ((marked_local_snapshot.get("players", []) as Array)[4] as Dictionary)
+	marked_local_player_snapshot["public_marks"] = {"layout_test":{"icon":"测", "name":"布局标记", "description":"用于验证本地标记位置。", "count":1, "source_player_id":-1, "order":0}}
+	match_controller.state_changed.emit(marked_local_snapshot)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 本地标记容器；其水平右边界贴合手牌栏右边界，垂直位置相对标记自身高度下移8像素。
+	var local_player_markers: PlayerMarkersView = main_instance.get_node("LocalPlayerMarkers") as PlayerMarkersView
+	# 当前本地标记实际占用尺寸；从组件读取以适配将来的标记数量变化。
+	var local_marker_size: Vector2 = local_player_markers.get_required_size() if local_player_markers != null else Vector2.ZERO
+	if local_player_markers == null or not is_equal_approx(local_player_markers.position.x, hand_panel.position.x + hand_panel.size.x - local_marker_size.x) or not is_equal_approx(local_player_markers.position.y, hand_panel.position.y - local_marker_size.y + 8.0):
+		_fail("local_marker_hand_top_layout:%s/%s" % [local_player_markers.position if local_player_markers != null else Vector2.ZERO, hand_panel.get_rect()])
+		return
+	match_controller.state_changed.emit(ten_player_snapshot)
+	await get_tree().process_frame
 	# 本地托管覆盖层；必须直属主场景，才能从手牌横向延伸到本地武将牌左侧。
 	var auto_managed_hand_overlay: PlayerAutoManagedHandOverlay = main_instance.get_node("%AutoManagedHandOverlay") as PlayerAutoManagedHandOverlay
 	# 手牌栏背景样式；当前只保留透明滚动容器，不绘制整块边框或底色。
