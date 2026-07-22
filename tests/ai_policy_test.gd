@@ -789,6 +789,19 @@ func _test_wine_action_value_and_baiyin_damage_cap() -> bool:
 	var profitable_wine_choice: Dictionary = _policy.choose_action(snapshot, [wine_action, slash_action, end_action])
 	if str(profitable_wine_choice.get("card_definition_id", "")) != "jiu":
 		return _fail("wine_before_profitable_slash=%s" % [profitable_wine_choice])
+	# 反向枚举顺序；即使规则先列出【杀】，连续评分也必须识别酒杀链路并稳定选择先喝酒。
+	var slash_first_wine_choice: Dictionary = _policy.choose_action(snapshot, [slash_action, wine_action, end_action])
+	if str(slash_first_wine_choice.get("card_definition_id", "")) != "jiu":
+		return _fail("wine_before_slash_regardless_of_enumeration=%s" % [slash_first_wine_choice])
+	# 已经没有可执行【杀】时的后续决策；只剩【酒】必须直接结束出牌，不能产生“先杀后喝酒”的空行动。
+	actor["hand"] = [_card(102, "jiu", 0)]
+	actor["hand_count"] = 1
+	var post_slash_wine_choice: Dictionary = _policy.choose_action(snapshot, [wine_action, end_action])
+	if str(post_slash_wine_choice.get("action_type", "")) != "end_play":
+		return _fail("wine_after_slash_without_follow_up=%s" % [post_slash_wine_choice])
+	# 还原后续白银狮子场景所需的【杀】实体与手牌数量。
+	actor["hand"] = [_card(101, "sha", 0), _card(102, "jiu", 0)]
+	actor["hand_count"] = 2
 	# 白银狮子目标；其单次承伤固定封顶1点，普通杀与酒杀的目标收益应完全相同。
 	var target: Dictionary = (snapshot.get("players", []) as Array)[1] as Dictionary
 	# 白银狮子装备快照；区域字段保持equipment，供离区与防具语义统一识别。

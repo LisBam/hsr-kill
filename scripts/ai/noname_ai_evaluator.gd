@@ -82,6 +82,10 @@ var _card_definition_cache: Dictionary = {}
 ## 当前一次出牌决策的完整合法动作副本；卡牌专属AI只可查询实际可执行后续，不得据手牌猜测已超次数的动作。
 var _current_legal_actions: Array[Dictionary] = []
 
+## 当前一次出牌决策的首轮完整动作评分；供需要比较连续行动的卡牌读取真实的直接行动收益。
+## 每项仅保存动作副本与只读分数，不能跨决策保留，也不能用来修改核心提供的合法动作。
+var _current_scored_legal_actions: Array[Dictionary] = []
+
 
 ## 创建绑定身份模型的效用评估器；模型为空时创建独立默认实例。
 func _init(model: IdentityAIModel = null) -> void:
@@ -104,9 +108,33 @@ func get_current_legal_actions() -> Array[Dictionary]:
 	return result
 
 
+## 写入当前合法动作的首轮完整评分；连续行动牌据此与真正的直接行动比较，避免只按局部牌效推断后续。
+func set_current_legal_action_scores(scored_actions: Array[Dictionary]) -> void:
+	_current_scored_legal_actions.clear()
+	for scored_action: Dictionary in scored_actions:
+		# 当前动作副本；空动作不构成可比较的后续行动。
+		var action: Dictionary = scored_action.get("action", {}) as Dictionary
+		if action.is_empty():
+			continue
+		_current_scored_legal_actions.append({
+			"action":action.duplicate(true),
+			"score":float(scored_action.get("score", -INF)),
+		})
+
+
+## 返回当前合法动作的首轮完整评分副本；没有建立两阶段评分上下文时返回空数组。
+func get_current_legal_action_scores() -> Array[Dictionary]:
+	# 当前评分结果副本；调用方只能读取，不能改写本次策略的内部比较基线。
+	var result: Array[Dictionary] = []
+	for scored_action: Dictionary in _current_scored_legal_actions:
+		result.append(scored_action.duplicate(true))
+	return result
+
+
 ## 清理单次出牌决策的合法动作上下文；策略返回动作后必须调用，避免下一次决策读取旧阶段候选。
 func clear_current_legal_actions() -> void:
 	_current_legal_actions.clear()
+	_current_scored_legal_actions.clear()
 
 
 ## 计算指定角色获得牌与改变体力的统一资源收益；正数表示获得，负数表示失去，结果会按观察者态度转换为敌我收益。
