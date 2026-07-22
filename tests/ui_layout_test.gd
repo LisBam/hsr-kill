@@ -217,10 +217,18 @@ func _run() -> void:
 	match_controller.state_changed.emit(limited_skill_snapshot)
 	await get_tree().process_frame
 	# 受限技能按钮；技能名第一行与三类额度第二行均必须完整显示，不能只依赖灰显表达次数。
+	# 当前界面规范把完整额度移到悬停标题与右键详情，按钮本身始终只显示前两个字。
 	var limited_skill_button: SkillButtonView = (main_instance.get("_skill_views") as Dictionary).get("huanyang") as SkillButtonView
-	if limited_skill_button == null or not limited_skill_button.text.begins_with("还阳\n") or not limited_skill_button.text.contains("总3 回2 轮1"):
+	if limited_skill_button == null or limited_skill_button.text != "还阳":
 		_fail("limited_skill_remaining_text:%s" % [limited_skill_button.text if limited_skill_button != null else "missing"])
 		return
+	limited_skill_button.mouse_entered.emit()
+	await _wait_for_hover_information_delay()
+	if information_box == null or not information_box.is_hover_information_visible() or information_box.get_hover_title_text() != "【还阳】（还可发动3次；每回合可发动2次；每轮可发动1次）":
+		_fail("limited_skill_hover_information:%s" % [information_box.get_hover_title_text() if information_box != null else "missing"])
+		return
+	limited_skill_button.mouse_exited.emit()
+	await get_tree().process_frame
 	# 恢复基础快照；后续单技能灰显、悬停与布局断言继续以无次数限制的杰帕德固有技能为基线。
 	match_controller.state_changed.emit(ten_player_snapshot)
 	await get_tree().process_frame
@@ -664,13 +672,21 @@ func _run() -> void:
 		# 当前详情角色快照；只追加局内技能，稳定玩家ID与武将定义保持不变。
 		var acquired_details_player: Dictionary = acquired_details_player_variant as Dictionary
 		if int(acquired_details_player.get("player_id", -1)) == 5:
-			acquired_details_player["acquired_skills"] = {"jiqiao":{"source":"test"}}
+			acquired_details_player["acquired_skills"] = {"huanyang":{"source":"test", "per_turn_limit":2, "per_round_limit":1, "total_limit":3, "tracked_turn_number":1, "tracked_round_number":3, "uses_this_turn":0, "uses_this_round":0, "total_uses":0}}
 			break
 	match_controller.state_changed.emit(acquired_skill_details_snapshot)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	if information_box.get_character_skill_entry_count() != 2:
-		_fail("acquired_skill_details_refresh:%d" % information_box.get_character_skill_entry_count())
+	# 受限局内技能右键详情标题；次数文案必须附在技能名后，不能混入技能描述原文。
+	var limited_skill_details_title_found: bool = false
+	for skill_label_variant: Variant in information_box.get_character_skill_list().find_children("*", "Label", true, false):
+		# 当前详情标签；只匹配完整受限技能标题，避免普通描述文本中的相同片段形成误判。
+		var skill_label: Label = skill_label_variant as Label
+		if skill_label != null and skill_label.text == "【还阳】（还可发动3次；每回合可发动2次；每轮可发动1次）":
+			limited_skill_details_title_found = true
+			break
+	if information_box.get_character_skill_entry_count() != 2 or not limited_skill_details_title_found:
+		_fail("acquired_skill_details_refresh:%d/%s" % [information_box.get_character_skill_entry_count(), limited_skill_details_title_found])
 		return
 	# 机缘模式详情；追加一项已获得机缘后应显示独立“机缘”分组及对应原文，且不计入技能条目数量。
 	var opportunity_details_snapshot: Dictionary = acquired_skill_details_snapshot.duplicate(true)

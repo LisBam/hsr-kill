@@ -867,6 +867,8 @@ func _render_character_skills() -> void:
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		# 当前技能显示名；数据库缺失时回退稳定 ID，便于内容维护者定位问题。
 		var skill_name: String = str(skill_definition.get("name", skill_id))
+		# 当前技能详情标题；受限的局内获得技能在技能名后追加完整次数文案，技能描述原文不插入次数状态。
+		var skill_information_title: String = _get_character_skill_information_title(skill_id, skill_name)
 		# 当前技能显示说明；只替换完整书名号中的卡牌名称，其他原文保持不变。
 		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
 		if _character_skill_entry_count > 0:
@@ -883,7 +885,7 @@ func _render_character_skills() -> void:
 		_character_skill_list.add_child(skill_entry)
 		# 技能名称行；完整名称独占一行并使用主题强调色。
 		var skill_name_label: Label = Label.new()
-		skill_name_label.text = "【%s】" % skill_name
+		skill_name_label.text = skill_information_title
 		skill_name_label.add_theme_font_size_override("font_size", 17)
 		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 		skill_entry.add_child(skill_name_label)
@@ -898,6 +900,19 @@ func _render_character_skills() -> void:
 	_append_character_opportunity_section()
 	_append_character_skill_bottom_spacer()
 	call_deferred("_refresh_character_skill_vertical_layout")
+
+
+## 返回右键武将详情中的技能标题；局内获得的受限技能只在标题后显示完整次数文案，避免改写技能原文。
+func _get_character_skill_information_title(skill_id: String, skill_name: String) -> String:
+	# 默认技能详情标题；所有技能均使用统一书名号样式，保证右键详情与悬停资料语义一致。
+	var skill_information_title: String = "【%s】" % skill_name
+	# 当前详情快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，详情组件不自行计算或扣减次数。
+	var remaining_uses_by_skill: Dictionary = _character_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
+	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
+	var remaining_uses_description: String = str(remaining_uses_by_skill.get(skill_id, ""))
+	if not remaining_uses_description.is_empty():
+		skill_information_title += "（%s）" % remaining_uses_description
+	return skill_information_title
 
 
 ## 在挂载机缘组件的模式中追加永久机缘历史；只读取公开稳定ID并从静态目录解析品质与原文。

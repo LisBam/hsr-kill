@@ -602,11 +602,13 @@ func _request_character_information() -> void:
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		# 当前技能完整名称；信息框不截取技能按钮使用的前两个字。
 		var skill_name: String = str(skill_definition.get("name", skill_id))
+		# 当前技能资料标题；受限的局内获得技能在技能名后追加完整次数文案，技能描述原文不插入次数状态。
+		var skill_information_title: String = _get_skill_information_title(skill_id, skill_name)
 		# 当前技能完整描述；卡牌书名号按全局名称模式解析，其他原文保持不变。
 		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
-		skill_information_lines.append("【%s】\n%s" % [skill_name, skill_description])
+		skill_information_lines.append("%s\n%s" % [skill_information_title, skill_description])
 		skill_description_sections.append({
-			"title":"【%s】" % skill_name,
+			"title":skill_information_title,
 			"description":skill_description,
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
@@ -621,6 +623,19 @@ func _request_character_information() -> void:
 		"description_sections":skill_description_sections,
 	}
 	information_requested.emit(information, get_global_rect())
+
+
+## 返回武将资料中的技能标题；局内获得的受限技能只在标题后显示完整次数文案，避免改写技能原文。
+func _get_skill_information_title(skill_id: String, skill_name: String) -> String:
+	# 默认技能资料标题；所有技能均使用统一书名号样式，保证悬停与右键详情视觉一致。
+	var skill_information_title: String = "【%s】" % skill_name
+	# 当前快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，视图不自行计算或扣减次数。
+	var remaining_uses_by_skill: Dictionary = _player_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
+	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
+	var remaining_uses_description: String = str(remaining_uses_by_skill.get(skill_id, ""))
+	if not remaining_uses_description.is_empty():
+		skill_information_title += "（%s）" % remaining_uses_description
+	return skill_information_title
 
 
 ## 根据鼠标局部坐标识别其他玩家牌面上的公开装备横条，并请求统一卡牌信息。
