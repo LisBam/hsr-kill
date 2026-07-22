@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 一局游戏的权威状态根对象。核心规则只操作该结构，外部模块通过快照读取而不直接持有可变引用。
 
+## 快照序列化复用的无状态身份规则服务；模式技能查询不需要为每名玩家重复创建RefCounted实例。
+static var _snapshot_identity_rules: IdentityRules = IdentityRules.new()
+
 ## 当前对局唯一 ID；联机与回放系统使用该值区分不同会话。
 var match_id: String = ""
 
@@ -164,7 +167,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		var serialized_player: Dictionary = player.to_dict(viewer_id, reveal_private)
 		serialized_player["seat_number"] = seat_index + 1
 		# 模式授予技能 ID；供技能栏与武将信息框展示飞扬/跋扈/共苦等，不修改武将静态定义。
-		var mode_skill_ids: Array[String] = IdentityRules.new().get_mode_skill_ids(player.identity, match_mode)
+		var mode_skill_ids: Array[String] = _snapshot_identity_rules.get_mode_skill_ids(player.identity, match_mode)
 		serialized_player["mode_skill_ids"] = mode_skill_ids
 		player_data.append(serialized_player)
 	# 当前选择请求快照；非响应者不能看到私有牌候选、已选牌和技能活动上下文。
@@ -185,10 +188,27 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	for processing_card: CardInstance in processing_area:
 		processing_card_uids.append(processing_card.uid)
 	# 当前机缘快照；候选牌属于各角色私有信息，非权威观察者只能读取自己的候选数组。
-	var opportunity_snapshot: Dictionary = opportunity_state.duplicate(true)
-	if not opportunity_snapshot.is_empty() and not reveal_private:
+	var opportunity_snapshot: Dictionary = {}
+	if not opportunity_state.is_empty() and reveal_private:
+		# 权威调试或规则内部快照；明确要求公开全部私有信息时才深复制完整候选映射。
+		opportunity_snapshot = opportunity_state.duplicate(true)
+	elif not opportunity_state.is_empty():
+		# 公共机缘字段；先跳过全部私有候选与权威已选内容，避免深复制后再删除造成多人局瞬时分配尖峰。
+		for opportunity_key_variant: Variant in opportunity_state.keys():
+			# 当前机缘状态字段名；候选映射在后方只投射当前观察者的三张，已选定义永不进入普通快照。
+			var opportunity_key: String = str(opportunity_key_variant)
+			if opportunity_key in ["options_by_player", "selected_cards_by_player"]:
+				continue
+			# 当前公共字段值；数组与字典仍复制为只读快照，数字、布尔值和字符串可直接复用不可变值。
+			var opportunity_value: Variant = opportunity_state.get(opportunity_key_variant)
+			if opportunity_value is Dictionary:
+				opportunity_snapshot[opportunity_key] = (opportunity_value as Dictionary).duplicate(true)
+			elif opportunity_value is Array:
+				opportunity_snapshot[opportunity_key] = (opportunity_value as Array).duplicate(true)
+			else:
+				opportunity_snapshot[opportunity_key] = opportunity_value
 		# 全体候选映射；权威状态保留每名参与者的三张牌，普通快照只投射当前观察者自己的条目。
-		var all_options_by_player: Dictionary = opportunity_snapshot.get("options_by_player", {}) as Dictionary
+		var all_options_by_player: Dictionary = opportunity_state.get("options_by_player", {}) as Dictionary
 		# 当前观察者候选；字符串键兼容网络序列化后的字典形式。
 		var viewer_options: Array = all_options_by_player.get(str(viewer_id), all_options_by_player.get(viewer_id, [])) as Array
 		opportunity_snapshot["options_by_player"] = {str(viewer_id):viewer_options.duplicate(true)} if viewer_id >= 0 else {}

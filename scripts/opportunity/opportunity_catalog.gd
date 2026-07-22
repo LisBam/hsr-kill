@@ -95,6 +95,40 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"red_gain_random_three_each", "quality":"red", "description":"获得每名角色区域内的随机三张牌", "effect":"gain_random_zone_cards_each", "count":3},
 ]
 
+## 稳定机缘ID到静态定义的运行时索引；首次查询时一次性构建，之后高频规则查询保持常数时间。
+static var _card_definitions_by_id: Dictionary = {}
+
+## 品质ID到稳定机缘ID数组的运行时索引；数组顺序严格沿用CARD_DEFINITIONS，保证固定种子结果不变。
+static var _card_ids_by_quality: Dictionary = {}
+
+## 静态目录索引是否已经完成构建；默认false，首次公开查询后变为true且不需要运行时动态修改。
+static var _catalog_indexes_initialized: bool = false
+
+
+## 延迟建立静态目录索引；目录只读且整局不变化，因此一次构建即可供机缘抽取、效果查询与详情展示复用。
+static func _ensure_catalog_indexes() -> void:
+	if _catalog_indexes_initialized:
+		return
+	# 新的ID索引；先在局部完整构建，再一次性替换静态字段，避免初始化中途暴露不完整结果。
+	var definitions_by_id: Dictionary = {}
+	# 新的品质索引；包含灰色关卡机缘，随机抽取端仍只遍历QUALITY_ORDER中的五种品质。
+	var ids_by_quality: Dictionary = {}
+	for card_definition: Dictionary in CARD_DEFINITIONS:
+		# 当前机缘稳定ID；空ID不会进入索引，但仍会由目录专项测试暴露配置错误。
+		var card_id: String = str(card_definition.get("id", ""))
+		# 当前机缘品质ID；未知品质仍建立独立索引，便于内容维护工具读取并诊断。
+		var quality_id: String = str(card_definition.get("quality", ""))
+		if card_id.is_empty():
+			continue
+		definitions_by_id[card_id] = card_definition
+		# 当前品质已有ID数组；数组只保存字符串，不复制正文、效果参数或嵌套分组。
+		var quality_card_ids: Array = ids_by_quality.get(quality_id, []) as Array
+		quality_card_ids.append(card_id)
+		ids_by_quality[quality_id] = quality_card_ids
+	_card_definitions_by_id = definitions_by_id
+	_card_ids_by_quality = ids_by_quality
+	_catalog_indexes_initialized = true
+
 
 ## 返回全部机缘卡定义的深拷贝；调用方可安全排序或筛选，不会改写静态目录。
 static func get_all_cards() -> Array[Dictionary]:
@@ -107,20 +141,33 @@ static func get_all_cards() -> Array[Dictionary]:
 
 ## 返回指定品质的全部机缘卡；未知品质返回空数组。
 static func get_cards_by_quality(quality_id: String) -> Array[Dictionary]:
+	_ensure_catalog_indexes()
 	# 品质卡牌结果；顺序沿用设计清单，固定随机种子下抽取结果可稳定复现。
 	var result: Array[Dictionary] = []
-	for card_definition: Dictionary in CARD_DEFINITIONS:
-		if str(card_definition.get("quality", "")) == quality_id:
+	for card_id_variant: Variant in _card_ids_by_quality.get(quality_id, []) as Array:
+		# 当前索引对应定义；公开接口继续深复制，调用方排序或修改参数不会污染静态目录。
+		var card_definition: Dictionary = _card_definitions_by_id.get(str(card_id_variant), {}) as Dictionary
+		if not card_definition.is_empty():
 			result.append(card_definition.duplicate(true))
 	return result
 
 
 ## 按稳定ID返回机缘卡定义；不存在时返回空字典。
 static func get_card(card_id: String) -> Dictionary:
-	for card_definition: Dictionary in CARD_DEFINITIONS:
-		if str(card_definition.get("id", "")) == card_id:
-			return card_definition.duplicate(true)
-	return {}
+	_ensure_catalog_indexes()
+	# 索引命中的静态定义；返回深拷贝维持原公开接口的隔离契约。
+	var card_definition: Dictionary = _card_definitions_by_id.get(card_id, {}) as Dictionary
+	return card_definition.duplicate(true) if not card_definition.is_empty() else {}
+
+
+## 返回指定品质的稳定机缘ID数组；结果为独立副本，适合组件按局缓存并在抽取时安全过滤。
+static func get_card_ids_by_quality(quality_id: String) -> Array[String]:
+	_ensure_catalog_indexes()
+	# 品质ID副本；只复制短字符串数组，不复制69张机缘的正文和效果字典。
+	var result: Array[String] = []
+	for card_id_variant: Variant in _card_ids_by_quality.get(quality_id, []) as Array:
+		result.append(str(card_id_variant))
+	return result
 
 
 ## 返回品质玩家可见名称；未知品质回退稳定ID，便于诊断内容配置错误。

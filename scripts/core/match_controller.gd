@@ -11497,6 +11497,11 @@ func _on_runtime_choice_resolved(request_data: Dictionary, _response_data: Dicti
 	_append_runtime_history_record(event_scheduler.get_latest_history_record())
 
 
+## 为机缘选择队列同步当前操作者；只处理离线全角色控制归属，不生成或广播完整对局快照。
+func prepare_opportunity_chooser(player_id: int) -> void:
+	_prepare_offline_controlled_view(player_id)
+
+
 ## 公开刷新当前状态快照；独立规则组件完成自身可序列化状态更新后通过本入口通知UI与网络。
 func refresh_state_snapshot() -> void:
 	_emit_state()
