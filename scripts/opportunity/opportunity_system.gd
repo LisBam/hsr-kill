@@ -30,6 +30,9 @@ var _state: GameState
 ## 当前对局共享随机源；由控制器注入以保证固定种子、回放历史与其他随机流程处于同一序列。
 var _rng: RandomNumberGenerator
 
+## 本局五种随机品质对应的稳定机缘ID池；配置时从静态目录复制一次，抽取期间不再扫描或复制完整卡牌定义。
+var _random_card_ids_by_quality: Dictionary = {}
+
 ## 当前效果解析器；每局重新绑定，独立负责目标与具体效果，不承担触发概率和选择队列。
 var _effect_resolver: OpportunityEffectResolver = OpportunityEffectResolver.new()
 
@@ -95,6 +98,8 @@ func configure(host: MatchController, state: GameState, rng: RandomNumberGenerat
 	_rng = rng
 	_enabled = enabled
 	_automatic_triggers_enabled = automatic_triggers_enabled and enabled
+	for quality_id: String in OpportunityCatalog.QUALITY_ORDER:
+		_random_card_ids_by_quality[quality_id] = OpportunityCatalog.get_card_ids_by_quality(quality_id)
 	_effect_resolver.configure(self, _host, _state)
 	if _state != null:
 		_state.opportunity_state.clear()
@@ -110,6 +115,7 @@ func shutdown() -> void:
 	_selection_queue.clear()
 	_selected_cards_by_player.clear()
 	_resolution_queue.clear()
+	_random_card_ids_by_quality.clear()
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false
@@ -273,8 +279,17 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 	_selected_cards_by_player.clear()
 	# 每名角色私有候选映射；权威状态保存完整定义，GameState.to_dict负责按观察者裁剪。
 	var options_by_player: Dictionary = {}
+	# 随机历史只记录稳定ID；正文与效果参数始终由同一静态目录解析，避免长期历史重复保存完整定义。
+	var option_ids_by_player: Dictionary = {}
 	for participant_id: int in participant_ids:
-		options_by_player[str(participant_id)] = _draw_options_for_player(participant_id)
+		# 当前角色私有候选；权威交互状态仍保存完整卡面，只有随机历史改为紧凑ID摘要。
+		var participant_options: Array[Dictionary] = _draw_options_for_player(participant_id)
+		options_by_player[str(participant_id)] = participant_options
+		# 当前角色候选ID；顺序必须与实际三张卡一致，固定种子回放可据此复核抽取结果。
+		var participant_option_ids: Array[String] = []
+		for option_definition: Dictionary in participant_options:
+			participant_option_ids.append(str(option_definition.get("id", "")))
+		option_ids_by_player[str(participant_id)] = participant_option_ids
 	_state.opportunity_state = {
 		"active":true,
 		"stage":"choosing",
@@ -286,9 +301,8 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 		"current_chooser_id":-1,
 		"current_resolver_id":-1,
 		"options_by_player":options_by_player,
-		"selected_cards_by_player":{},
 	}
-	_state.random_history.append({"kind":"opportunity_options", "round_number":_state.round_number, "trigger_player_id":participant_ids[0], "options_by_player":options_by_player.duplicate(true)})
+	_state.random_history.append({"kind":"opportunity_options", "round_number":_state.round_number, "trigger_player_id":participant_ids[0], "option_ids_by_player":option_ids_by_player})
 	_host.add_log("触发全体机缘选择：每名角色从三张机缘卡中选择一张。")
 	_selection_pause_token = _host.acquire_gameplay_pause("opportunity_selection")
 	_advance_selection_queue()
@@ -304,7 +318,8 @@ func _advance_selection_queue() -> void:
 		if chooser == null or not chooser.alive:
 			continue
 		_state.opportunity_state["current_chooser_id"] = chooser_id
-		_host.refresh_state_snapshot()
+		# 离线控制全部角色时先切换权威操作者；该轻量入口不会广播完整快照，真正需要人类选择时再统一刷新。
+		_host.prepare_opportunity_chooser(chooser_id)
 		if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(chooser_id):
 			# AI私有候选；从权威映射读取，基础策略不接触其他角色的机缘牌面。
 			var options_by_player: Dictionary = _state.opportunity_state.get("options_by_player", {}) as Dictionary
@@ -315,6 +330,8 @@ func _advance_selection_queue() -> void:
 			if not ai_card.is_empty():
 				_record_player_choice(chooser_id, ai_card)
 			continue
+		# 只有实际需要本地或远端人类作答时才广播一次私有候选；连续AI选择不会触发无视觉价值的整局重绘。
+		_host.refresh_state_snapshot()
 		return
 	_finish_all_choices()
 
@@ -322,7 +339,6 @@ func _advance_selection_queue() -> void:
 ## 记录一名角色的最终机缘选择；公开状态只暴露已完成角色ID，不在其他观察者快照中公开卡面正文。
 func _record_player_choice(player_id: int, card_definition: Dictionary) -> void:
 	_selected_cards_by_player[str(player_id)] = card_definition.duplicate(true)
-	_state.opportunity_state["selected_cards_by_player"] = _selected_cards_by_player.duplicate(true)
 	# 已完成选择角色列表；只追加一次，供等待界面显示进度。
 	var chosen_player_ids: Array = (_state.opportunity_state.get("chosen_player_ids", []) as Array).duplicate()
 	if not chosen_player_ids.has(player_id):
@@ -378,7 +394,6 @@ func _resolve_next_effect() -> void:
 		_current_effect_waiting_for_barrier = false
 		_state.opportunity_state["current_resolver_id"] = owner_player_id
 		_host.add_log("%s触发机缘：%s" % [_host.format_player_log_name(owner_player_id), str(selected_card.get("description", ""))])
-		_host.refresh_state_snapshot()
 		_effect_resolver.resolve_card(owner_player_id, selected_card)
 		return
 	_finish_flow()
@@ -391,7 +406,6 @@ func _finish_current_effect_and_continue() -> void:
 	_current_effect_waiting_for_barrier = false
 	if not _state.opportunity_state.is_empty():
 		_state.opportunity_state["current_resolver_id"] = -1
-	_host.refresh_state_snapshot()
 	_schedule_next_effect_resolution()
 
 
@@ -530,42 +544,60 @@ func _draw_options_for_player(_player_id: int) -> Array[Dictionary]:
 
 ## 按当前检查器权重抽取一张未被排除的机缘卡；无可用正权重卡池时回退全部剩余卡等概率抽取。
 func _draw_single_card(excluded_card_ids: Array[String]) -> Dictionary:
-	# 当前品质权重；运行时读取导出参数，主公调整检查器后无需修改静态目录。
-	var weights: Dictionary = get_quality_weights()
-	# 可参与抽取的品质到剩余卡池映射；空品质不进入总权重。
-	var available_cards_by_quality: Dictionary = {}
+	# 可参与抽取的品质到剩余稳定ID池映射；只处理短字符串，选中后才复制一份完整卡牌定义。
+	var available_card_ids_by_quality: Dictionary = {}
 	# 当前有效总权重；只累加仍有候选且配置为正数的品质。
 	var total_weight: int = 0
 	for quality_id: String in OpportunityCatalog.QUALITY_ORDER:
-		# 当前品质剩余卡池；过滤同一角色已经抽到的稳定ID。
-		var available_cards: Array[Dictionary] = []
-		for card_definition: Dictionary in OpportunityCatalog.get_cards_by_quality(quality_id):
-			if not excluded_card_ids.has(str(card_definition.get("id", ""))):
-				available_cards.append(card_definition)
-		available_cards_by_quality[quality_id] = available_cards
-		if not available_cards.is_empty():
-			total_weight += maxi(int(weights.get(quality_id, 0)), 0)
+		# 当前品质剩余ID池；过滤同一角色已经抽到的稳定ID，其他角色仍可独立抽到相同机缘。
+		var available_card_ids: Array[String] = []
+		for card_id_variant: Variant in _random_card_ids_by_quality.get(quality_id, []) as Array:
+			# 当前候选稳定ID；空ID与本角色已经抽到的ID都不进入可用池。
+			var card_id: String = str(card_id_variant)
+			if not card_id.is_empty() and not excluded_card_ids.has(card_id):
+				available_card_ids.append(card_id)
+		available_card_ids_by_quality[quality_id] = available_card_ids
+		if not available_card_ids.is_empty():
+			total_weight += maxi(_get_quality_weight(quality_id), 0)
 	if total_weight > 0:
 		# 品质权重随机点；范围1至总权重，逐品质扣减保证边界值不会偏向前一品质。
 		var quality_roll: int = _rng.randi_range(1, total_weight)
 		for quality_id: String in OpportunityCatalog.QUALITY_ORDER:
-			# 当前品质剩余卡池；空池或零权重直接跳过。
-			var quality_cards: Array = available_cards_by_quality.get(quality_id, []) as Array
+			# 当前品质剩余ID池；空池或零权重直接跳过。
+			var quality_card_ids: Array = available_card_ids_by_quality.get(quality_id, []) as Array
 			# 当前品质非负权重；负数检查器异常值按0处理。
-			var quality_weight: int = maxi(int(weights.get(quality_id, 0)), 0)
-			if quality_cards.is_empty() or quality_weight <= 0:
+			var quality_weight: int = maxi(_get_quality_weight(quality_id), 0)
+			if quality_card_ids.is_empty() or quality_weight <= 0:
 				continue
 			quality_roll -= quality_weight
 			if quality_roll <= 0:
-				return (quality_cards[_rng.randi_range(0, quality_cards.size() - 1)] as Dictionary).duplicate(true)
+				# 选中的稳定ID；到此才通过目录索引复制唯一一份完整定义写入权威候选。
+				var selected_card_id: String = str(quality_card_ids[_rng.randi_range(0, quality_card_ids.size() - 1)])
+				return OpportunityCatalog.get_card(selected_card_id)
 	# 回退卡池；所有权重为0时仍允许组件工作，便于检查器调试而不产生空弹窗。
-	var fallback_cards: Array[Dictionary] = []
+	var fallback_card_ids: Array[String] = []
 	for quality_id: String in OpportunityCatalog.QUALITY_ORDER:
-		for card_variant: Variant in available_cards_by_quality.get(quality_id, []) as Array:
-			fallback_cards.append((card_variant as Dictionary).duplicate(true))
-	if fallback_cards.is_empty():
+		for card_id_variant: Variant in available_card_ids_by_quality.get(quality_id, []) as Array:
+			fallback_card_ids.append(str(card_id_variant))
+	if fallback_card_ids.is_empty():
 		return {}
-	return fallback_cards[_rng.randi_range(0, fallback_cards.size() - 1)].duplicate(true)
+	return OpportunityCatalog.get_card(fallback_card_ids[_rng.randi_range(0, fallback_card_ids.size() - 1)])
+
+
+## 返回指定随机品质当前配置权重；抽取热路径直接读取导出变量，避免为每张候选重复构造权重字典。
+func _get_quality_weight(quality_id: String) -> int:
+	match quality_id:
+		"green":
+			return green_weight
+		"blue":
+			return blue_weight
+		"purple":
+			return purple_weight
+		"orange":
+			return orange_weight
+		"red":
+			return red_weight
+	return 0
 
 
 ## 为AI从三张机缘中选择综合收益最高的一张；品质基础价值再结合当前体力、手牌和已有技能修正。

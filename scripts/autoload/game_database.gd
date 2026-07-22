@@ -24,8 +24,17 @@ const DECKS_PATH: String = "res://data/decks.json"
 ## 势力展示配置文件路径；势力只提供名称、简称与颜色，不承载武将或技能逻辑。
 const FACTIONS_PATH: String = "res://game_data/factions.json"
 
+## 每种卡牌名称模式最多缓存的完整说明文本数量；512足以覆盖现有静态技能与界面说明，并限制异常动态文本增长。
+const MAX_RESOLVED_CARD_TEXT_CACHE_ENTRIES_PER_MODE: int = 512
+
 ## 以卡牌 ID 为键的卡牌元数据索引；界面、AI、网络与规则查询只读取深拷贝。
 var cards: Dictionary = {}
+
+## 原版牌名或项目牌名到卡牌元数据的只读索引；数据库重载时重建，用于说明文本常数时间解析。
+var _card_definitions_by_display_name: Dictionary = {}
+
+## 卡牌名称模式到“原始说明→解析结果”的缓存；字符串不可变，重复展示同一技能时可安全直接复用。
+var _resolved_card_text_cache_by_mode: Dictionary = {}
 
 ## 以卡牌 ID 为键的卡牌源码定义对象；效果解析器通过该索引调用对应卡牌文件的函数。
 var card_definitions: Dictionary = {}
@@ -64,6 +73,8 @@ func _ready() -> void:
 func reload_all() -> bool:
 	validation_errors.clear()
 	cards.clear()
+	_card_definitions_by_display_name.clear()
+	_resolved_card_text_cache_by_mode.clear()
 	card_definitions.clear()
 	card_scripts.clear()
 	decks.clear()
@@ -111,7 +122,8 @@ func get_character(character_id: String) -> Dictionary:
 ## 返回武将的本地化显示名称；界面只能使用该入口显示名称，避免稳定英文 ID 泄漏到玩家可见区域。
 func resolve_character_name(character_id: String) -> String:
 	# 当前武将定义；从静态索引读取以取得配置的中文 display_name。
-	var character_definition: Dictionary = get_character(character_id)
+	# 本函数只返回不可变字符串，可直接读取内部索引而无须深复制整份静态元数据。
+	var character_definition: Dictionary = characters.get(character_id, {}) as Dictionary
 	# 当前武将配置的显示名称；空值表示配置缺失或未填写本地化文本。
 	var display_name: String = str(character_definition.get("display_name", "")).strip_edges()
 	if not display_name.is_empty():
@@ -134,6 +146,12 @@ func get_skill(skill_id: String) -> Dictionary:
 ## 括号引用同时允许使用原版牌名或崩铁杀牌名；展示时统一解析到当前模式。
 ## 解析采用完整括号精确匹配，技能名、未登记术语和括号外正文保持不变。
 func resolve_card_names_in_text(source_text: String) -> String:
+	# 当前卡牌名称模式；原版与项目名分别保存缓存，切换设置时不会复用另一模式的旧文本。
+	var name_mode_key: int = int(GameSettings.card_name_mode)
+	# 当前模式文本缓存；字典只保存不可变字符串，不持有界面节点或运行时规则对象。
+	var mode_cache: Dictionary = _resolved_card_text_cache_by_mode.get(name_mode_key, {}) as Dictionary
+	if mode_cache.has(source_text):
+		return str(mode_cache.get(source_text, ""))
 	# 当前解析结果；从调用方原文副本开始，仅在命中完整卡牌名称引用时更新。
 	# 实现使用逐段追加而非原地替换，仍保持上述只修改完整引用的职责。
 	# 当前解析结果；逐段追加可以避免某个牌名替换后又被另一张牌的名称二次命中。
@@ -161,6 +179,11 @@ func resolve_card_names_in_text(source_text: String) -> String:
 		else:
 			resolved_text += "【%s】" % GameSettings.resolve_card_name(matched_definition)
 		cursor = closing_index + 1
+	if mode_cache.size() >= MAX_RESOLVED_CARD_TEXT_CACHE_ENTRIES_PER_MODE:
+		# 缓存达到边界时整体清空当前模式；静态说明会按实际访问重新填充，避免维护复杂淘汰链表。
+		mode_cache.clear()
+	mode_cache[source_text] = resolved_text
+	_resolved_card_text_cache_by_mode[name_mode_key] = mode_cache
 	return resolved_text
 
 
@@ -168,22 +191,29 @@ func resolve_card_names_in_text(source_text: String) -> String:
 func _find_card_by_display_name(display_name: String) -> Dictionary:
 	if display_name.is_empty():
 		return {}
-	for card_variant: Variant in cards.values():
-		# 当前卡牌定义；名称解析始终读取数据库已校验的双名称元数据。
-		# 当前卡牌定义；数据库加载阶段已校验稳定ID，名称字段缺失时使用空字符串跳过。
-		var card_definition: Dictionary = card_variant as Dictionary
-		# 当前卡牌原版名称；技能源码统一以该名称书写，空名称不会参与替换。
-		# 当前原版牌名；技能描述以三国杀牌名书写时通过该字段命中。
-		var original_name: String = str(card_definition.get("original_name", "")).strip_edges()
-		# 当前崩铁杀牌名；技能描述以项目牌名书写时通过该字段命中。
-		var custom_name: String = str(card_definition.get("custom_name", "")).strip_edges()
-		# 原版名称引用标记；完整匹配可避免短牌名误改普通语句或其他牌名的一部分。
-		# 当前直接比较括号内部文本，不再额外构造引用字符串，完整匹配边界由扫描器保证。
-		# 当前模式名称引用；统一复用 GameSettings，保证卡牌牌面与技能说明显示一致。
-		# 命中定义后由调用函数统一复用 GameSettings 生成当前模式名称。
-		if display_name == original_name or display_name == custom_name:
-			return card_definition
-	return {}
+	# 当前卡牌定义；名称解析始终读取数据库已校验的双名称元数据。
+	# 当前卡牌定义；数据库加载阶段已校验稳定ID，名称字段缺失时使用空字符串跳过。
+	# 当前卡牌原版名称；技能源码统一以该名称书写，空名称不会参与替换。
+	# 当前原版牌名；技能描述以三国杀牌名书写时通过该字段命中。
+	# 当前崩铁杀牌名；技能描述以项目牌名书写时通过该字段命中。
+	# 原版名称引用标记；完整匹配可避免短牌名误改普通语句或其他牌名的一部分。
+	# 当前直接比较括号内部文本，不再额外构造引用字符串，完整匹配边界由扫描器保证。
+	# 当前模式名称引用；统一复用 GameSettings，保证卡牌牌面与技能说明显示一致。
+	# 命中定义后由调用函数统一复用 GameSettings 生成当前模式名称。
+	# 上述字段已经在数据库加载阶段建立只读名称索引，查询时无需再次遍历全部卡牌。
+	return _card_definitions_by_display_name.get(display_name, {}) as Dictionary
+
+
+## 把卡牌的原版名与项目名写入只读名称索引；重复名称保持首个已登记定义，与原线性扫描命中顺序一致。
+func _index_card_display_names(card_definition: Dictionary) -> void:
+	# 当前卡牌原版名称；空名称不会参与技能说明中的完整书名号匹配。
+	var original_name: String = str(card_definition.get("original_name", "")).strip_edges()
+	# 当前卡牌项目名称；与原版名称相同时只写入同一个索引条目。
+	var custom_name: String = str(card_definition.get("custom_name", "")).strip_edges()
+	for display_name: String in [original_name, custom_name]:
+		if display_name.is_empty() or _card_definitions_by_display_name.has(display_name):
+			continue
+		_card_definitions_by_display_name[display_name] = card_definition
 
 
 ## 为一名技能持有者创建独立技能实例；实例尚未绑定玩家，也不会自动订阅规则事件。
@@ -225,6 +255,7 @@ func _load_cards() -> void:
 			validation_errors.append("卡牌 ID 重复：%s" % card_id)
 		else:
 			cards[card_id] = metadata
+			_index_card_display_names(metadata)
 			card_definitions[card_id] = definition
 			card_scripts[card_id] = card_script
 

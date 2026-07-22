@@ -37,6 +37,8 @@ func _run() -> void:
 	_begin_settings_isolation()
 	if not _test_game_speed_setting():
 		return
+	if not _test_static_text_resolution_cache():
+		return
 	_create_controller()
 	if not await _test_phase_transition_pacing():
 		return
@@ -66,6 +68,35 @@ func _test_game_speed_setting() -> bool:
 	GameSettings.set_game_speed_interval_seconds(0.64)
 	if not is_equal_approx(GameSettings.game_speed_interval_seconds, 0.60):
 		return _fail("game_speed_step:%s" % GameSettings.game_speed_interval_seconds)
+	return true
+
+
+## 验证静态牌名说明按名称模式缓存，并通过显示名索引直接命中卡牌定义。
+func _test_static_text_resolution_cache() -> bool:
+	# 当前名称模式缓存总表；测试只清理本用例专用文本，不影响其他静态说明已经建立的缓存。
+	var cache_by_mode: Dictionary = GameDatabase.get("_resolved_card_text_cache_by_mode") as Dictionary
+	# 当前名称模式稳定整数；原版与项目名必须维护互不污染的独立缓存。
+	var mode_key: int = int(GameSettings.card_name_mode)
+	# 当前模式缓存；不存在时使用新字典，并在清理测试文本后写回总表。
+	var mode_cache: Dictionary = cache_by_mode.get(mode_key, {}) as Dictionary
+	# 本用例专用原始说明；包含两个已登记牌名，保证解析器实际经过完整书名号查找。
+	var source_text: String = "性能缓存验证：【桃】与【无懈可击】。"
+	mode_cache.erase(source_text)
+	cache_by_mode[mode_key] = mode_cache
+	# 首次解析前缓存数量；首次调用应只新增当前完整原文一个条目。
+	var initial_cache_size: int = mode_cache.size()
+	# 首次解析结果；具体显示名随当前模式变化，但不能为空或丢失普通正文。
+	var first_result: String = GameDatabase.resolve_card_names_in_text(source_text)
+	# 首次解析后的模式缓存；用于验证条目实际被写入统一仓库。
+	var first_mode_cache: Dictionary = (GameDatabase.get("_resolved_card_text_cache_by_mode") as Dictionary).get(mode_key, {}) as Dictionary
+	# 重复解析结果；应直接命中缓存并保持字节级一致。
+	var repeated_result: String = GameDatabase.resolve_card_names_in_text(source_text)
+	# 重复解析后的缓存；相同原文不能继续增长条目数量。
+	var repeated_mode_cache: Dictionary = (GameDatabase.get("_resolved_card_text_cache_by_mode") as Dictionary).get(mode_key, {}) as Dictionary
+	# 原版显示名索引结果；静态名称查找必须直接返回已登记卡牌定义。
+	var indexed_card_definition: Dictionary = GameDatabase.call("_find_card_by_display_name", "桃") as Dictionary
+	if first_result.is_empty() or first_result != repeated_result or first_mode_cache.size() != initial_cache_size + 1 or repeated_mode_cache.size() != first_mode_cache.size() or indexed_card_definition.is_empty():
+		return _fail("static_text_cache first=%s repeated=%s sizes=%d/%d/%d indexed=%s" % [first_result, repeated_result, initial_cache_size, first_mode_cache.size(), repeated_mode_cache.size(), not indexed_card_definition.is_empty()])
 	return true
 
 

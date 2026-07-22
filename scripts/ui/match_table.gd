@@ -957,7 +957,7 @@ func _build_character_details_snapshot(snapshot: Dictionary) -> Dictionary:
 ## 为玩家公开快照补充仅供界面读取的受限技能次数文案；不修改权威获得技能记录或规则状态。
 func _build_player_display_snapshot(player_snapshot: Dictionary) -> Dictionary:
 	# 显示专用玩家副本；其他玩家武将牌、悬停资料与右键详情共同使用，避免各自计算次数造成显示不一致。
-	var display_snapshot: Dictionary = player_snapshot.duplicate(true)
+	var display_snapshot: Dictionary = player_snapshot.duplicate()
 	# 当前局内获得技能记录；没有局内技能时不写入额外展示字段，固有与临时技能保持原有资料格式。
 	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
 	# 受限技能完整次数文案；键为技能ID，值为“还可发动”等完整句式。
@@ -1080,6 +1080,11 @@ func _create_opportunity_choice_panel() -> void:
 func _refresh_opportunity_choice_panel() -> void:
 	if opportunity_choice_panel == null:
 		return
+	# 当前机缘交互快照；绝大多数普通状态广播不处于选择阶段，应直接关闭弹窗并跳过全体武将名解析。
+	var opportunity_snapshot: Dictionary = _snapshot.get("opportunity_state", {}) as Dictionary
+	if opportunity_snapshot.is_empty() or str(opportunity_snapshot.get("stage", "")) != "choosing":
+		opportunity_choice_panel.show_opportunity(opportunity_snapshot, match_controller.local_human_player_id, {})
+		return
 	# 玩家ID到公开显示名映射；弹窗等待文案使用当前武将名或玩家名，不读取私有身份。
 	var player_names: Dictionary = {}
 	for player_id_variant: Variant in _player_snapshots_by_id.keys():
@@ -1088,7 +1093,7 @@ func _refresh_opportunity_choice_panel() -> void:
 		# 当前公开玩家快照；武将未公开时回退玩家显示名。
 		var player_snapshot: Dictionary = _player_snapshots_by_id.get(player_id, {}) as Dictionary
 		player_names[player_id] = _snapshot_character_name(player_snapshot, str(player_snapshot.get("display_name", "角色")))
-	opportunity_choice_panel.show_opportunity(_snapshot.get("opportunity_state", {}) as Dictionary, match_controller.local_human_player_id, player_names)
+	opportunity_choice_panel.show_opportunity(opportunity_snapshot, match_controller.local_human_player_id, player_names)
 
 
 ## 将机缘卡点击转换为统一玩家动作；局域网客户端沿用MatchController的标准上行路径。
@@ -1156,7 +1161,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	if bool(_snapshot.get("game_over", false)):
 		# 对局结束会中断尚未产生最终移牌的响应树；中央牌面改为正常停留淡出，避免终局后永久残留。
 		card_use_animation_layer.finish_pending_claimed_presentations()
-	_public_card_choice_display = (_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate(true)
+	_public_card_choice_display = (_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate()
 	if str(_snapshot.get("current_phase", "")) != "character_selection":
 		character_selection_panel.close()
 	# 当前运行时请求；用于清理已经完成或中断的旧内联/窗口状态，同时保留同步创建的新请求。
@@ -1863,12 +1868,16 @@ func _apply_local_hand_display_order(cards: Array, display_order: Array[int]) ->
 		snapshot_uids.append(card_uid)
 	# 规范化后的本地 UID 顺序；先保留仍在分区的旧排列，再追加新实体。
 	var normalized_order: Array[int] = []
+	# 已进入规范化顺序的UID集合；长手牌下使用常数时间去重，避免每次快照反复线性扫描结果数组。
+	var normalized_uid_lookup: Dictionary = {}
 	for stored_uid: int in display_order:
-		if cards_by_uid.has(stored_uid) and not normalized_order.has(stored_uid):
+		if cards_by_uid.has(stored_uid) and not normalized_uid_lookup.has(stored_uid):
 			normalized_order.append(stored_uid)
+			normalized_uid_lookup[stored_uid] = true
 	for snapshot_uid: int in snapshot_uids:
-		if not normalized_order.has(snapshot_uid):
+		if not normalized_uid_lookup.has(snapshot_uid):
 			normalized_order.append(snapshot_uid)
+			normalized_uid_lookup[snapshot_uid] = true
 	display_order.clear()
 	display_order.append_array(normalized_order)
 	# 按规范化 UID 顺序输出的牌面数组；调用方据此重排正式 CardView 子节点。
@@ -2788,7 +2797,7 @@ func _on_character_selection_changed(selection_snapshot: Dictionary) -> void:
 
 ## 接收公共选牌展示快照并立即刷新所有观察者可见窗口；空字典只关闭公共层，不影响其他有效本地请求。
 func _on_public_card_choice_display_changed(display_data: Dictionary) -> void:
-	_public_card_choice_display = display_data.duplicate(true)
+	_public_card_choice_display = display_data.duplicate()
 	_refresh_card_selection_panel()
 
 

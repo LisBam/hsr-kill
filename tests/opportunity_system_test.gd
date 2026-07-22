@@ -14,6 +14,9 @@ var _main_instance: Control
 ## 本次测试权威控制器；所有状态修改均通过正式公开接口执行。
 var _controller: MatchController
 
+## AI连续机缘选择期间收到的完整状态快照数量；专项断言使用，默认0且每次用例开始前重置。
+var _selection_snapshot_count: int = 0
+
 
 ## 运行全部断言；测试节点保持ALWAYS，使机缘选择暂停SceneTree时仍能继续提交模拟玩家选择。
 func _ready() -> void:
@@ -24,6 +27,8 @@ func _ready() -> void:
 	_controller = _main_instance.get_node("MatchController") as MatchController
 	_setup_test_state()
 	if not _test_catalog_and_weights():
+		return
+	if not _test_ai_selection_snapshot_batching():
 		return
 	if not _test_passive_opportunity_effects():
 		return
@@ -89,6 +94,13 @@ func _test_catalog_and_weights() -> bool:
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
 	if cards.size() != 69 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
+	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
+	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
+	# 静态目录原始正文；保存后故意改写副本，用于确认索引没有泄露可写引用。
+	var isolated_card_description: String = str(isolated_card_copy.get("description", ""))
+	isolated_card_copy["description"] = "测试修改"
+	if str(OpportunityCatalog.get_card("green_draw_two").get("description", "")) != isolated_card_description:
+		return _fail("catalog_index_copy_isolation")
 	# 灰色机缘目录；三张都必须可供过关斩将授予，但禁止进入可随机抽取的品质顺序。
 	var gray_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("gray")
 	if gray_cards.size() != 3 or OpportunityCatalog.QUALITY_ORDER.has("gray"):
@@ -147,6 +159,38 @@ func _test_catalog_and_weights() -> bool:
 	return true
 
 
+## 验证连续AI三选一只在全体选择完成后广播一次快照，避免每名AI选择前重复深复制整局状态。
+func _test_ai_selection_snapshot_batching() -> bool:
+	# 测试参与者全部临时交给基础AI；本用例只观察同步选择阶段，不等待下一帧效果结算。
+	for player_id: int in range(4):
+		_controller.ai_coordinator.register_basic_ai(player_id)
+	_selection_snapshot_count = 0
+	_controller.state_changed.connect(_on_selection_snapshot_emitted)
+	# 同步触发结果；全AI会在同一调用栈内完成选择并进入resolving，效果队列下一帧才开始。
+	var triggered: bool = _controller.opportunity_system.force_trigger(0, "manual", {})
+	_controller.state_changed.disconnect(_on_selection_snapshot_emitted)
+	for player_id: int in range(4):
+		_controller.ai_coordinator.unregister_ai(player_id)
+	# 当前机缘阶段；只有全体选择完成刷新一次时，计数才严格等于1。
+	var reached_resolution: bool = str(_controller.state.opportunity_state.get("stage", "")) == "resolving"
+	_controller.opportunity_system.shutdown()
+	for player: PlayerState in _controller.state.players:
+		player.acquired_opportunity_ids.clear()
+	_controller.state.current_phase = "start"
+	# 下一测试随机源；中断待结算效果后重新配置，避免本用例消费的随机序列影响正式机制断言。
+	var next_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	next_rng.seed = 202607221
+	_controller.opportunity_system.configure(_controller, _controller.state, next_rng, true)
+	if not triggered or not reached_resolution or _selection_snapshot_count != 1:
+		return _fail("ai_selection_snapshot_batching triggered=%s resolving=%s snapshots=%d" % [triggered, reached_resolution, _selection_snapshot_count])
+	return true
+
+
+## 记录机缘选择阶段发出的完整状态快照；信号参数只用于满足统一状态通知签名。
+func _on_selection_snapshot_emitted(_snapshot: Dictionary) -> void:
+	_selection_snapshot_count += 1
+
+
 ## 验证摸牌、【杀】次数与伤害三类新被动机缘从角色历史统一生效，不依赖过关斩将专用数值分支。
 func _test_passive_opportunity_effects() -> bool:
 	# 机缘持有者；直接写入已获得历史模拟全体选择完成后的权威状态。
@@ -194,12 +238,20 @@ func _test_opportunity_card_hover() -> bool:
 		return _fail("opportunity_card_hover scale=%s z=%d border=%s" % [str(card_view.scale), card_view.z_index, str(hovered_style.border_width_left if hovered_style != null else -1)])
 	input_button.mouse_exited.emit()
 	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
-	if not card_view.scale.is_equal_approx(Vector2.ONE) or card_view.z_index != 0:
+	# 恢复样式引用；普通状态必须复用配置时的缓存资源，不能在每次鼠标离开时重新分配StyleBoxFlat。
+	var restored_style: StyleBoxFlat = card_view.get_theme_stylebox("panel") as StyleBoxFlat
+	if not card_view.scale.is_equal_approx(Vector2.ONE) or card_view.z_index != 0 or restored_style != normal_style:
 		get_tree().paused = false
 		card_view.queue_free()
-		return _fail("opportunity_card_hover_restore scale=%s z=%d" % [str(card_view.scale), card_view.z_index])
+		return _fail("opportunity_card_hover_restore scale=%s z=%d cached=%s" % [str(card_view.scale), card_view.z_index, restored_style == normal_style])
 	input_button.mouse_entered.emit()
 	await get_tree().create_timer(0.04, true).timeout
+	# 再次悬停样式引用；相同品质与参数下必须复用第一次悬停的缓存资源。
+	var reused_hovered_style: StyleBoxFlat = card_view.get_theme_stylebox("panel") as StyleBoxFlat
+	if reused_hovered_style != hovered_style:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_card_hover_style_not_reused")
 	card_view.set_interactive(false)
 	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
 	if not input_button.disabled or not card_view.scale.is_equal_approx(Vector2.ONE) or card_view.z_index != 0:

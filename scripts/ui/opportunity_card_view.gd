@@ -39,6 +39,12 @@ var _interactive: bool = false
 ## 当前机缘卡品质主色；配置卡牌时写入，悬停刷新只基于该颜色计算而不重复解析卡牌定义。
 var _quality_color: Color = Color("3f8f58")
 
+## 当前品质普通状态的缓存面板样式；配置卡牌时重建一次，重复进入、离开与禁用时直接复用资源。
+var _normal_panel_style: StyleBoxFlat
+
+## 当前品质悬停状态的缓存面板样式；背景提亮与边框加粗在配置阶段预先计算，鼠标移动时不再分配新资源。
+var _hovered_panel_style: StyleBoxFlat
+
 ## 当前鼠标是否悬停在可交互机缘卡上；只决定缩放、提亮、边框与绘制层级。
 var _is_hovered: bool = false
 
@@ -116,6 +122,7 @@ func _apply_quality_style(quality_id: String) -> void:
 		"orange":Color("b66a2f"),
 		"red":Color("a9363f"),
 	}.get(quality_id, Color("3f8f58")) as Color
+	_rebuild_panel_style_cache()
 	_refresh_visual_state()
 	_description_label.add_theme_color_override("font_color", Color("fff8e8"))
 	_description_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
@@ -126,13 +133,26 @@ func _apply_quality_style(quality_id: String) -> void:
 func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
-	# 当前卡面背景色；悬停时按正式卡牌相同的0.08默认比例轻量提亮。
-	var background_color: Color = _quality_color.darkened(0.42)
-	if _is_hovered and _interactive:
-		background_color = background_color.lightened(hover_lightening)
-	# 当前卡面边框宽度；普通品质边框保持4像素，悬停时再增加配置值。
-	var border_width: int = 4 + (hover_border_bonus if _is_hovered and _interactive else 0)
+	if _normal_panel_style == null or _hovered_panel_style == null:
+		_rebuild_panel_style_cache()
 	# 卡面样式；深色品质底面承托白色正文，亮色边框模拟武将牌的正式轮廓。
+	var panel_style: StyleBoxFlat = _hovered_panel_style if _is_hovered and _interactive else _normal_panel_style
+	add_theme_stylebox_override("panel", panel_style)
+
+
+## 按当前品质与导出参数建立普通、悬停两份样式；只在配置变化时分配资源，悬停热路径仅切换引用。
+func _rebuild_panel_style_cache() -> void:
+	# 普通卡面背景色；固定按品质主色压暗0.42，确保白色正文在所有品质下均可阅读。
+	var normal_background_color: Color = _quality_color.darkened(0.42)
+	_normal_panel_style = _create_panel_style(normal_background_color, 4)
+	# 悬停卡面背景色；按检查器比例提亮并增加配置边框像素，不改变品质主色或卡面尺寸。
+	var hovered_background_color: Color = normal_background_color.lightened(hover_lightening)
+	_hovered_panel_style = _create_panel_style(hovered_background_color, 4 + hover_border_bonus)
+
+
+## 创建一份完整机缘卡面样式；调用方传入背景色与边框宽度，品质边框、圆角和阴影保持统一。
+func _create_panel_style(background_color: Color, border_width: int) -> StyleBoxFlat:
+	# 新面板样式；只由缓存重建入口创建，不在鼠标进入或离开事件中反复分配。
 	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
 	panel_style.bg_color = background_color
 	panel_style.border_color = _quality_color.lightened(0.30)
@@ -141,7 +161,7 @@ func _refresh_visual_state() -> void:
 	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
 	panel_style.shadow_size = 10
 	panel_style.shadow_offset = Vector2(0.0, 5.0)
-	add_theme_stylebox_override("panel", panel_style)
+	return panel_style
 
 
 ## 同步透明按钮禁用状态与牌面明暗；等待状态仍可阅读正文但不会产生悬停误导。
