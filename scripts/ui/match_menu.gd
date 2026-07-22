@@ -351,11 +351,13 @@ func refresh_ui_style() -> void:
 	if wheel_duel_face_up_candidate_label != null:
 		wheel_duel_face_up_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
 		wheel_duel_face_up_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		wheel_duel_face_up_candidate_label.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("outer_background"))
 	# 暗置候选标签；单独容错可兼容增量缓存，同时正式场景始终覆盖字体与文字色。
 	var wheel_duel_face_down_candidate_label: Label = _menu_panel.get_node_or_null("MenuVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
 	if wheel_duel_face_down_candidate_label != null:
 		wheel_duel_face_down_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
 		wheel_duel_face_down_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		wheel_duel_face_down_candidate_label.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("outer_background"))
 	(_menu_panel.get_node("MenuVBox/PlayerCountRow/PlayerCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_apply_option_button_style(_card_name_option)
 	_apply_option_button_style(_ui_style_option)
@@ -377,6 +379,8 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("text_primary"))
+	line_edit.add_theme_color_override("font_uneditable_color", BattleUIStyle.get_color("text_secondary"))
+	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
 
 

@@ -26,6 +26,8 @@ func _run() -> void:
 		return
 	if not _test_trigger_roles():
 		return
+	if not _test_character_generation_trigger_snapshot():
+		return
 	if not _test_damage_order():
 		return
 	if not _test_draw_and_move_order():
@@ -34,7 +36,7 @@ func _run() -> void:
 		return
 	if not _test_card_use_lifecycle_order():
 		return
-	print("RULE_TIMING_PASS catalog=220 active=4 roles=4 damage=10 move=20 card=12")
+	print("RULE_TIMING_PASS catalog=220 active=4 roles=4 generation_snapshot=1 damage=10 move=20 card=12")
 	get_tree().quit(0)
 
 
@@ -170,6 +172,53 @@ func _test_trigger_roles() -> bool:
 	var expected_matches: Array[String] = ["player", "source", "target", "global"]
 	if invalid_registration_id != -1 or matches != expected_matches:
 		return _fail("trigger_roles=%s invalid=%d" % [matches, invalid_registration_id])
+	return true
+
+
+## 验证暂停时机保存的旧处理器快照不能在同一座次换将后调用新武将技能，重订阅后的技能只接收新代次事件。
+func _test_character_generation_trigger_snapshot() -> bool:
+	# 测试目标角色；手动代次变化模拟车轮战或过关斩将中稳定玩家ID不变、武将实例被替换的生命周期边界。
+	var owner: PlayerState = _controller.state.get_player(1)
+	if owner == null:
+		return _fail("generation_snapshot_owner_missing")
+	# 测试前代次；用例完成后恢复，避免影响后续伤害顺序断言的状态输入。
+	var original_generation: int = owner.character_generation
+	owner.character_generation = 1
+	# 可复用技能实例；交换武将牌保留同来源技能时会重绑同一对象，因此本用例专门覆盖对象未销毁的严格场景。
+	var skill: SkillDefinition = SkillDefinition.new({"id":"generation_snapshot_probe"})
+	skill.bind(_controller, owner.player_id)
+	# 技能实际命中的代次记录；旧快照若错误调用会写入1，新事件正确调用只应写入2。
+	var triggered_generations: Array[int] = []
+	# 模拟当前时机是否正等待选择；数组引用允许暂停条件和前置回调共享同一可变状态。
+	var paused: Array[bool] = [false]
+	# 前置处理器；优先级100保证技能处理器已经进入快照但尚未执行时触发暂停。
+	_controller.trigger_manager.subscribe("damageAfter", self, func(_event: RuleEvent) -> void: paused[0] = true, 100, owner.player_id, "target")
+	# 旧代次技能订阅；条件在注册时固化代次1，恢复快照时必须重新校验当前武将代次。
+	skill.subscribe_timing("damageAfter", func(_event: RuleEvent) -> void: triggered_generations.append(skill.get_bound_character_generation()), "target")
+	# 旧武将受伤后事件；派发在前置处理器处暂停并保存包含旧技能处理器的完整数组副本。
+	var old_event: RuleEvent = RuleEvent.new("damageAfter", 0, owner.player_id, {"amount":1, "hp_lost":1, "source_character_generation":1, "target_character_generation":1}, owner.player_id)
+	_controller.trigger_manager.dispatch(old_event, 0, [0, 1, 2], func() -> bool: return paused[0])
+	if not triggered_generations.is_empty() or not _controller.trigger_manager.has_deferred_dispatches():
+		owner.character_generation = original_generation
+		skill.uninstall()
+		_controller.trigger_manager.unsubscribe_owner(self)
+		return _fail("generation_snapshot_not_paused=%s" % [triggered_generations])
+	# 新武将代次；先从当前注册表卸载旧订阅，再重绑同一技能对象并建立只属于代次2的新订阅。
+	owner.character_generation = 2
+	skill.uninstall()
+	skill.bind(_controller, owner.player_id)
+	skill.subscribe_timing("damageAfter", func(_event: RuleEvent) -> void: triggered_generations.append(skill.get_bound_character_generation()), "target")
+	_controller.trigger_manager.unsubscribe_owner(self)
+	paused[0] = false
+	# 恢复旧快照；其中条件仍保存订阅代次1，即使Callable引用的技能对象已重绑也必须跳过旧回调。
+	_controller.trigger_manager.resume_deferred(func() -> bool: return paused[0])
+	# 新武将受伤后事件；实时注册表中只保留代次2订阅，因此应且仅应追加一次2。
+	var new_event: RuleEvent = RuleEvent.new("damageAfter", 0, owner.player_id, {"amount":1, "hp_lost":1, "source_character_generation":1, "target_character_generation":2}, owner.player_id)
+	_controller.trigger_manager.dispatch(new_event, 0, [0, 1, 2])
+	owner.character_generation = original_generation
+	skill.uninstall()
+	if triggered_generations != [2] or _controller.trigger_manager.has_deferred_dispatches():
+		return _fail("generation_snapshot_crossed_boundary=%s" % [triggered_generations])
 	return true
 
 

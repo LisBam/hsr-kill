@@ -202,6 +202,13 @@ func _test_full_match_replacement_flow() -> bool:
 	player_sefu = _controller.get_skill_instance(player.player_id, "shefu")
 	if player_sefu == null:
 		return _fail("conquest_sefu_missing")
+	# 敌方永屹技能；优先复用随机武将自带实例，缺失时临时授予，用于覆盖死亡换将不得继承damageAfter的卡死路径。
+	var enemy_yongyi: SkillDefinition = _controller.get_skill_instance(enemy.player_id, "yongyi")
+	if enemy_yongyi == null and not _controller.grant_acquired_skill(enemy.player_id, "yongyi", 0, 0, "conquest_test"):
+		return _fail("conquest_yongyi_install")
+	enemy_yongyi = _controller.get_skill_instance(enemy.player_id, "yongyi")
+	if enemy_yongyi == null:
+		return _fail("conquest_yongyi_missing")
 	# 双方初始手牌；清空所有可能的【桃】或【酒】，使本次真实致死伤害稳定走到死亡与来源尾部。
 	while not player.hand.is_empty():
 		_controller._move_to_discard(player.hand.pop_back())
@@ -209,6 +216,8 @@ func _test_full_match_replacement_flow() -> bool:
 		_controller._move_to_discard(enemy.hand.pop_back())
 	# 首次击败前敌方武将；换将后必须改为另一稳定ID（武将库充足时不允许重复）。
 	var defeated_character_id: String = enemy.character_id
+	# 首次击败前敌方武将代次；重新入场必须严格递增，旧伤害尾部继续保存该值。
+	var defeated_character_generation: int = enemy.character_generation
 	# 敌方手牌；预置一张牌后用于验证死亡时“区域内所有牌”会清空并进入弃牌堆。
 	var extra_enemy_card: CardInstance = _controller.state.draw_pile.back()
 	_controller._move_card_with_timings(extra_enemy_card, "hand", enemy.player_id, "conquest_test_setup")
@@ -231,18 +240,26 @@ func _test_full_match_replacement_flow() -> bool:
 	if not _submit_target_choice(player.player_id, player.player_id):
 		return false
 	# 换将等待只阻止旧规则继续，不暂停场景树；弃置区域的飞牌动画必须能在此期间持续播放。
-	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.state.opportunity_state.is_empty():
+	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller._conquest_replacement_settlement_pause_token < 0 or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.event_scheduler.pause_registry.has_active() or not _controller.state.opportunity_state.is_empty():
 		return _fail("replacement_opportunity_preview")
 	if not await _wait_for_conquest_replacement_opportunity():
 		return _fail("replacement_opportunity_delay")
-	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or enemy.acquired_opportunity_ids != ["blue_max_hp_one"] or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
+	if _controller.conquest_mode.get_level() != 2 or not enemy.alive or enemy.character_id.is_empty() or enemy.character_id == defeated_character_id or enemy.character_generation != defeated_character_generation + 1 or enemy.hand.size() < ConquestModeService.REPLACEMENT_DRAW_COUNT or enemy.max_hp != int(GameDatabase.get_character(enemy.character_id).get("max_hp", 4)) + 1 or enemy.mode_hand_limit_bonus != 0 or enemy.acquired_opportunity_ids != ["blue_max_hp_one"] or str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("participant_ids", []) != [player.player_id]:
 		return _fail("first_replacement")
 	if _controller.state.discard_pile.find(extra_enemy_card) < 0:
 		return _fail("replacement_discards_all_regions")
 	if not await _choose_safe_opportunity(player.player_id):
 		return _fail("replacement_opportunity")
-	if _controller.state.current_player_id != player.player_id:
+	if _controller.state.current_player_id != player.player_id or _controller._conquest_replacement_settlement_pause_token >= 0:
 		return _fail("player_turn_continues")
+	# 当前玩家出牌选择会占用统一请求槽；本断言先关闭它，再人工派发旧代次damageAfter验证新武将永屹不会继承旧伤害。
+	_controller._cancel_active_play_choice("conquest_generation_test")
+	enemy_yongyi = _controller.get_skill_instance(enemy.player_id, "yongyi")
+	if enemy_yongyi == null and not _controller.grant_acquired_skill(enemy.player_id, "yongyi", 0, 0, "conquest_test"):
+		return _fail("replacement_yongyi_reinstall")
+	_controller._emit_rule_timing("damageAfter", enemy.player_id, player.player_id, enemy.player_id, {"amount":1, "hp_lost":1, "card_id":"sha", "source_character_generation":player.character_generation, "target_character_generation":defeated_character_generation})
+	if _controller.has_pending_card_choice():
+		return _fail("replacement_inherited_damage_after=%s" % [_controller._pending_card_choice])
 	# 关卡14灰色装备机缘；手动提升测试关卡后先记录对应机缘，再使用真实牌堆/弃牌堆入场装备入口。
 	_controller.state.conquest_state["level"] = 14
 	var level_fourteen_opportunities: Array[String] = _controller.conquest_mode.award_fixed_opportunities_through_current_level()
@@ -279,6 +296,10 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("enemy_turn_replacement_opportunity_delay")
 	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
 		return _fail("enemy_turn_replacement_opportunity")
+	# 新敌人恢复的关卡技能；换将时必须先恢复存活状态再重新安装，否则获得技能入口会拒绝死亡角色。
+	for rewarded_skill_id: String in _controller.conquest_mode.get_enemy_skill_ids():
+		if _controller.get_skill_instance(enemy.player_id, rewarded_skill_id) == null:
+			return _fail("enemy_turn_replacement_skill_missing=%s" % rewarded_skill_id)
 	if not await _choose_safe_opportunity(player.player_id):
 		return _fail("enemy_turn_replacement_choice")
 	if _controller.state.current_player_id != player.player_id:

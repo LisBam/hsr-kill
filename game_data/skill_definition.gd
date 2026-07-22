@@ -12,6 +12,9 @@ var owner_player_id: int = -1
 ## 当前技能绑定的对局控制器端口；技能只能通过该端口请求规则操作，不直接修改界面节点。
 var host: Object
 
+## 当前技能实例绑定的武将入场代次；-1表示独立测试或未绑定权威角色，正式对局用于隔离换将前后的异步事件。
+var _bound_character_generation: int = -1
+
 ## 当前技能是否为锁定技；true 表示效果满足条件时强制执行且不创建发动选择，默认 false 表示非锁定技。
 var lock: bool = false
 
@@ -47,6 +50,25 @@ func get_id() -> String:
 func bind(match_host: Object, player_id: int) -> void:
 	host = match_host
 	owner_player_id = player_id
+	# 当前技能所属角色；正式对局在安装技能前已应用武将，因此可以稳定捕获本次入场代次。
+	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
+	_bound_character_generation = owner.character_generation if owner != null else -1
+
+
+## 返回技能实例绑定的武将入场代次；规则续接只保存该整数，不保存技能对象引用。
+func get_bound_character_generation() -> int:
+	return _bound_character_generation
+
+
+## 校验技能实例是否仍属于指定武将代次；负数期望值兼容不绑定权威状态的独立内容测试。
+func matches_character_generation(expected_generation: int = -1) -> bool:
+	# 当前技能持有者；正式对局必须同时满足实例绑定代次与角色最新代次一致。
+	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
+	if owner == null:
+		return expected_generation < 0 and _bound_character_generation < 0
+	if _bound_character_generation >= 0 and owner.character_generation != _bound_character_generation:
+		return false
+	return expected_generation < 0 or _bound_character_generation < 0 or expected_generation == _bound_character_generation
 
 
 ## 返回指定玩家的技能角色操作对象；护盾、失去体力和造成伤害语法均通过该对象进入权威控制器。
@@ -123,8 +145,8 @@ func subscribe_timing(event_name: String, callback: Callable, role: String = "pl
 		return -1
 	# 当前对局高级触发器；由技能基类统一传入 self 与 owner_player_id，具体技能无需复制解绑字段。
 	var manager: TriggerManager = host.get("trigger_manager") as TriggerManager
-	# 技能统一生效条件；默认先校验持有者仍存活在场，再执行技能文件提供的附加条件。
-	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition)
+	# 技能统一生效条件；注册时固化武将代次，暂停保存的旧处理器快照不会因实例之后重新绑定而变成新武将触发器。
+	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition, _bound_character_generation)
 	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, guarded_condition)
 
 
@@ -134,9 +156,21 @@ func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
 
 
 ## 统一校验技能时机订阅是否仍有效；死亡或离场持有者不会继续发动普通全局技能。
-func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable) -> bool:
+func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, subscribed_character_generation: int = -1) -> bool:
 	# 技能持有者权威状态；未绑定、死亡或离场时仅允许显式覆盖的特殊技能继续接收时机。
 	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
+	if not matches_character_generation(subscribed_character_generation):
+		return false
+	# 时机记录的角色代次；旧伤害尾部即使在新武将入场后恢复，也不能命中新安装的同名或同类技能。
+	var expected_generation: int = -1
+	if event.player_id == owner_player_id and event.data.has("player_character_generation"):
+		expected_generation = int(event.data.get("player_character_generation", -1))
+	if event.source_id == owner_player_id and event.data.has("source_character_generation"):
+		expected_generation = int(event.data.get("source_character_generation", -1))
+	if event.target_id == owner_player_id and event.data.has("target_character_generation"):
+		expected_generation = int(event.data.get("target_character_generation", -1))
+	if expected_generation >= 0 and not matches_character_generation(expected_generation):
+		return false
 	if (owner == null or not owner.alive) and not can_trigger_while_owner_inactive(event):
 		return false
 	if owner != null and owner.out_of_game and not out_of_game_skill and not can_trigger_while_owner_inactive(event):
@@ -228,7 +262,10 @@ func continue_settlement(_context: Dictionary) -> bool:
 func defer_settlement(context: Dictionary) -> bool:
 	if host == null or not host.has_method("defer_skill_settlement"):
 		return false
-	return bool(host.call("defer_skill_settlement", owner_player_id, get_id(), context))
+	# 代次化结算上下文；换将后即使新武将再次拥有同名技能，旧“然后”步骤也只能安全失效。
+	var settlement_context: Dictionary = context.duplicate(true)
+	settlement_context["skill_character_generation"] = _bound_character_generation
+	return bool(host.call("defer_skill_settlement", owner_player_id, get_id(), settlement_context))
 
 
 ## 按当前对局流程间隔安排一次纯表现延时回调；技能只提供稳定业务键与恢复回调，不直接读取或管理流程计时器。
@@ -444,6 +481,7 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	var result: Dictionary = context.duplicate(true)
 	result["skill_id"] = get_id()
 	result["skill_owner_id"] = owner_player_id
+	result["skill_character_generation"] = _bound_character_generation
 	# 离场技选择许可；控制器只在请求归属技能明确声明离场技时允许存活离场持有者继续完成目标或选牌。
 	if out_of_game_skill:
 		result["allow_out_of_game_chooser"] = true
