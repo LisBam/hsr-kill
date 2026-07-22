@@ -24,7 +24,7 @@ var phase: String = ""
 ## 本局领袖玩家 ID；默认 -1，开始流程时从身份状态中解析。
 var leader_player_id: int = -1
 
-## 当前选将所属对局模式；identity 保留领袖优先选将，doudizhu 全员同时选将且不公开地主武将。
+## 当前选将所属对局模式；identity 保留领袖优先选将，斗地主、2v2与过关斩将全员同时选将。
 var match_mode: String = "identity"
 
 ## 每名玩家的候选武将数量；默认5，实际数量不会超过已登记武将总数。
@@ -98,7 +98,7 @@ var _rng: RandomNumberGenerator
 ## 返回一号位绑定的首任身份 ID；斗地主为 landlord，标准身份局为 leader。
 ## 2v2 不绑定首任身份（蓝/红各两张且可互换座次色），返回空字符串。
 func get_first_seat_identity() -> String:
-	if is_team2v2_mode():
+	if is_team2v2_mode() or is_conquest_mode():
 		return ""
 	if is_doudizhu_mode():
 		return "landlord"
@@ -114,12 +114,17 @@ func is_doudizhu_mode() -> bool:
 
 ## 返回是否为 2v2 模式；身份表含蓝方/红方时同样判定为真。
 func is_team2v2_mode() -> bool:
-	return match_mode == "team2v2" or _identity_limits.has("blue") or _identity_limits.has("red")
+	return match_mode == "team2v2" or (match_mode != "conquest" and (_identity_limits.has("blue") or _identity_limits.has("red")))
+
+
+## 判断当前是否为过关斩将模式；该模式同样采用固定座次的同步选将，但不复用2v2的成队座次约束。
+func is_conquest_mode() -> bool:
+	return match_mode == "conquest"
 
 
 ## 返回是否全员同时选将（不公开武将）；斗地主与 2v2 均为 true。
 func uses_simultaneous_selection() -> bool:
-	return is_doudizhu_mode() or is_team2v2_mode()
+	return is_doudizhu_mode() or is_team2v2_mode() or is_conquest_mode()
 
 
 ## 返回是否启用领袖优先选将与公开领袖武将；斗地主与 2v2 为 false。
@@ -359,6 +364,8 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		match_mode = "doudizhu"
 	elif requested_match_mode == "team2v2" or (requested_match_mode.is_empty() and inferred_mode == "team2v2"):
 		match_mode = "team2v2"
+	elif requested_match_mode == "conquest":
+		match_mode = "conquest"
 	else:
 		match_mode = "identity"
 	# 领袖技武将仅身份局领袖阶段使用；斗地主不注入领袖技固定候选。
@@ -379,7 +386,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			leader_player_id = player.player_id
 		elif player.identity == "landlord" and leader_player_id < 0:
 			leader_player_id = player.player_id
-		elif is_team2v2_mode() and leader_player_id < 0 and player_index == 0:
+		elif (is_team2v2_mode() or is_conquest_mode()) and leader_player_id < 0 and player_index == 0:
 			# 2v2 兼容字段：记录一号位玩家 ID，不表示领袖优先选将。
 			leader_player_id = player.player_id
 	if uses_leader_priority_selection():

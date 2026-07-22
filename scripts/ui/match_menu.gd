@@ -298,20 +298,21 @@ func set_match_mode(mode_id: String) -> void:
 	_apply_mode_specific_settings_visibility()
 
 
-## 根据当前对局模式显示独立设置；车轮战隐藏普通选将项并显示明暗候选数量。
+## 根据当前对局模式显示独立设置；车轮战显示候选数量，过关斩将隐藏不适用的下一局选将与人数配置。
 func _apply_mode_specific_settings_visibility() -> void:
 	if not is_node_ready():
 		return
 	var is_wheel_duel: bool = _active_match_mode == GameSettings.MATCH_MODE_WHEEL_DUEL
-	var show_normal_selection_settings: bool = _authority_controls_visible and not is_wheel_duel
+	var is_conquest: bool = _active_match_mode == GameSettings.MATCH_MODE_CONQUEST
+	var show_normal_selection_settings: bool = _authority_controls_visible and not is_wheel_duel and not is_conquest
 	_custom_character_assignment_row.visible = show_normal_selection_settings
 	_customize_ai_characters_row.visible = show_normal_selection_settings
 	_character_replacement_count_row.visible = show_normal_selection_settings
 	_character_candidate_count_row.visible = show_normal_selection_settings
 	_wheel_duel_face_up_candidate_row.visible = _authority_controls_visible and is_wheel_duel
 	_wheel_duel_face_down_candidate_row.visible = _authority_controls_visible and is_wheel_duel
-	_auto_identity_marking_checkbox.visible = not is_wheel_duel
-	_player_count_row.visible = _authority_controls_visible and not is_wheel_duel
+	_auto_identity_marking_checkbox.visible = not is_wheel_duel and not is_conquest
+	_player_count_row.visible = _authority_controls_visible and not is_wheel_duel and not is_conquest
 
 
 ## 按全局名称模式刷新菜单下拉选择，不创建第二份名称状态。

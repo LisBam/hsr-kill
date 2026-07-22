@@ -49,6 +49,9 @@ const STARTING_STATUS_TEXT_WHEEL_DUEL: String = "正在创建1v1车轮战对局�
 ## 机缘大乱斗创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
 const STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL: String = "正在创建机缘大乱斗对局……"
 
+## 过关斩将创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
+const STARTING_STATUS_TEXT_CONQUEST: String = "正在创建过关斩将对局……"
+
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
@@ -105,6 +108,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 左侧机缘大乱斗模式卡片按钮；继承身份规则人数并启用机缘组件。
 @onready var _opportunity_brawl_mode_button: Button = %OpportunityBrawlModeButton
+
+## 左侧过关斩将模式卡片按钮；固定一名本地玩家与一名敌方AI，并使用专属关卡增强规则。
+@onready var _conquest_mode_button: Button = %ConquestModeButton
+
+## 左侧过关斩将模式按钮指示条；选中时显示主题强调色。
+@onready var _conquest_mode_card_indicator: ColorRect = %ConquestModeIndicator
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -257,6 +266,7 @@ func _ready() -> void:
 	_team2v2_mode_button.pressed.connect(_select_team2v2_mode)
 	_wheel_duel_mode_button.pressed.connect(_select_wheel_duel_mode)
 	_opportunity_brawl_mode_button.pressed.connect(_select_opportunity_brawl_mode)
+	_conquest_mode_button.pressed.connect(_select_conquest_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
@@ -412,6 +422,7 @@ func refresh_ui_style() -> void:
 	_team2v2_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_wheel_duel_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_opportunity_brawl_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_conquest_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
@@ -420,6 +431,7 @@ func refresh_ui_style() -> void:
 	_apply_mode_button_style(_team2v2_mode_button)
 	_apply_mode_button_style(_wheel_duel_mode_button)
 	_apply_mode_button_style(_opportunity_brawl_mode_button)
+	_apply_mode_button_style(_conquest_mode_button)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -442,6 +454,8 @@ func refresh_ui_style() -> void:
 	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OpportunityBrawlModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%ConquestModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%ConquestModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -501,6 +515,8 @@ func _restore_selected_match_mode() -> void:
 		_select_wheel_duel_mode()
 	elif restored_mode == GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:
 		_select_opportunity_brawl_mode()
+	elif restored_mode == GameSettings.MATCH_MODE_CONQUEST:
+		_select_conquest_mode()
 	else:
 		_select_identity_mode()
 
@@ -531,11 +547,13 @@ func _select_identity_mode() -> void:
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = false
 	_mode_card_indicator.visible = true
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _identity_mode_button)
@@ -572,11 +590,13 @@ func _select_doudizhu_mode() -> void:
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = true
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _doudizhu_mode_button)
@@ -611,11 +631,13 @@ func _select_team2v2_mode() -> void:
 	_team2v2_mode_button.button_pressed = true
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = true
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _team2v2_mode_button)
@@ -643,11 +665,13 @@ func _select_wheel_duel_mode() -> void:
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = true
 	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = true
 	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(true)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _wheel_duel_mode_button)
@@ -677,24 +701,62 @@ func _select_opportunity_brawl_mode() -> void:
 	_team2v2_mode_button.button_pressed = false
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = true
+	_conquest_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = true
+	_conquest_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _opportunity_brawl_mode_button)
 
 
+## 选中过关斩将模式；固定玩家先手对战AI，菜单仅保留通用显示设置并隐藏普通选将与车轮战候选配置。
+func _select_conquest_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_CONQUEST
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
+	minimum_player_count = 2
+	maximum_player_count = 2
+	_player_count_input.min_value = 2
+	_player_count_input.max_value = 2
+	_player_count_input.step = 1.0
+	set_next_player_count(2)
+	_mode_title.text = "过关斩将"
+	_mode_description.text = "1人·玩家固定先手·击败敌方后挑战下一关"
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = true
+	_set_wheel_duel_settings_visible(true)
+	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _conquest_mode_button)
+
+
 ## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，避免普通模式设置面板溢出。
 func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
+	# 过关斩将与车轮战一样都是固定2人，但不需要车轮战候选配置，也不允许普通身份局开局设置。
+	var is_conquest: bool = _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST
 	var face_up_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
 	var face_down_row: Control = _wheel_duel_face_down_candidate_input.get_parent() as Control
 	if face_up_row != null:
-		face_up_row.visible = visible_state
+		face_up_row.visible = visible_state and not is_conquest
 	if face_down_row != null:
-		face_down_row.visible = visible_state
+		face_down_row.visible = visible_state and not is_conquest
 	_custom_character_assignment_row.visible = not visible_state
 	_customize_ai_characters_row.visible = not visible_state
 	_character_replacement_count_row.visible = not visible_state
@@ -728,6 +790,9 @@ func _open_online_settings() -> void:
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
 func _open_lan_panel() -> void:
+	if _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST:
+		_show_status("过关斩将仅支持离线玩家与AI对战。", true)
+		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_close_online_settings(false)
@@ -777,6 +842,8 @@ func _request_start_game() -> void:
 		starting_status = STARTING_STATUS_TEXT_WHEEL_DUEL
 	elif _selected_match_mode == GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:
 		starting_status = STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL
+	elif _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST:
+		starting_status = STARTING_STATUS_TEXT_CONQUEST
 	_show_status(starting_status, false)
 	# 再次确认模式写入；防止设置浮层改人数后模式丢失。
 	if GameSettings != null:

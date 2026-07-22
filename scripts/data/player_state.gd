@@ -102,6 +102,9 @@ var acquired_opportunity_ids: Array[String] = []
 ## 当前额外手牌上限；默认0，机缘等永久效果可累加修改，最终手牌上限仍不会低于0。
 var hand_limit_bonus: int = 0
 
+## 当前模式授予的额外手牌上限；默认0，过关斩将等模式独立写入，避免与机缘和技能的永久加成相互覆盖。
+var mode_hand_limit_bonus: int = 0
+
 ## 玩家回合历史；每个回合保存阶段跳过、使用牌、响应、伤害和发动技能摘要。
 var turn_history: Array[Dictionary] = []
 
@@ -154,7 +157,7 @@ func get_armor() -> CardInstance:
 
 ## 返回手牌上限。基础规则等于当前体力值，再叠加局内永久加成，最终最低为0。
 func get_hand_limit() -> int:
-	return maxi(hp + hand_limit_bonus, 0)
+	return maxi(hp + hand_limit_bonus + mode_hand_limit_bonus, 0)
 
 
 ## 按实体牌 UID 查找手牌；未找到时返回 null。
@@ -266,6 +269,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"acquired_skills": acquired_skills.duplicate(true),
 		"acquired_opportunity_ids": acquired_opportunity_ids.duplicate(),
 		"hand_limit_bonus": hand_limit_bonus,
+		"mode_hand_limit_bonus": mode_hand_limit_bonus,
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),

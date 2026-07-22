@@ -1236,7 +1236,9 @@ func _play_damage_feedback(damaged_player_ids: Array[int]) -> void:
 
 ## 渲染顶栏回合与牌堆信息。
 func _render_header() -> void:
-	phase_label.text = "第%d轮" % int(_snapshot.get("round_number", 0))
+	var match_mode: String = str(_snapshot.get("match_mode", "identity"))
+	var conquest_state: Dictionary = _snapshot.get("conquest_state", {}) as Dictionary
+	phase_label.text = "第%d关" % int(conquest_state.get("level", 1)) if match_mode == IdentityRules.MODE_CONQUEST else "第%d轮" % int(_snapshot.get("round_number", 0))
 	center_turn_label.text = "牌堆剩余：%d" % int(_snapshot.get("draw_pile_count", 0))
 	_refresh_match_duration_label(true)
 

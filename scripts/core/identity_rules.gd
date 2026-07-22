@@ -18,6 +18,9 @@ const MODE_WHEEL_DUEL: String = "wheel_duel"
 ## 机缘大乱斗模式稳定ID；规则基础继承身份模式，并额外挂载全体机缘选择组件。
 const MODE_OPPORTUNITY_BRAWL: String = "opportunity_brawl"
 
+## 过关斩将模式稳定ID；固定一名本地玩家先手对战一名会随关卡无限重生的敌方AI。
+const MODE_CONQUEST: String = "conquest"
+
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
 const IDENTITY_DISTRIBUTIONS: Dictionary = {
 	2: ["leader", "rebel"],
@@ -55,6 +58,8 @@ func normalize_mode(mode_id: String) -> String:
 		return MODE_WHEEL_DUEL
 	if mode_id == MODE_OPPORTUNITY_BRAWL:
 		return MODE_OPPORTUNITY_BRAWL
+	if mode_id == MODE_CONQUEST:
+		return MODE_CONQUEST
 	return MODE_IDENTITY
 
 
@@ -72,6 +77,9 @@ func get_supported_player_counts(mode_id: String) -> Array[int]:
 		result.append(4)
 		return result
 	if mode == MODE_WHEEL_DUEL:
+		result.append(2)
+		return result
+	if mode == MODE_CONQUEST:
 		result.append(2)
 		return result
 	for player_count: int in range(2, 11):
@@ -96,7 +104,7 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 		raw = DOUDIZHU_DISTRIBUTIONS.get(player_count, []) as Array
 	elif mode == MODE_TEAM2V2:
 		raw = TEAM2V2_DISTRIBUTION_BASE.duplicate() if player_count == 4 else []
-	elif mode == MODE_WHEEL_DUEL:
+	elif mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
 		raw = ["red", "blue"] if player_count == 2 else []
 	else:
 		raw = IDENTITY_DISTRIBUTIONS.get(player_count, []) as Array
@@ -112,7 +120,7 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 func get_first_player_identity(mode_id: String) -> String:
 	if normalize_mode(mode_id) == MODE_DOUDIZHU:
 		return "landlord"
-	if normalize_mode(mode_id) == MODE_TEAM2V2 or normalize_mode(mode_id) == MODE_WHEEL_DUEL:
+	if normalize_mode(mode_id) == MODE_TEAM2V2 or normalize_mode(mode_id) == MODE_WHEEL_DUEL or normalize_mode(mode_id) == MODE_CONQUEST:
 		return ""
 	return "leader"
 
@@ -120,7 +128,7 @@ func get_first_player_identity(mode_id: String) -> String:
 ## 返回模式是否固定按一号位开始首回合；2v2 固定 true，其他模式 false（由首任身份决定）。
 func starts_from_first_seat(mode_id: String) -> bool:
 	var mode: String = normalize_mode(mode_id)
-	return mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL
+	return mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST
 
 
 ## 返回 2v2 是否应对基准身份表进行蓝红互换；coin_flip 为 true 时一号/四号变为红方，二号/三号变为蓝方。
@@ -138,7 +146,7 @@ func get_team2v2_distribution(swap_colors: bool) -> Array[String]:
 ## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主与 2v2 全部身份明置（阵营对战无需隐藏）。
 func is_identity_public_at_start(identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	var mode: String = normalize_mode(mode_id)
-	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
+	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
 		return not identity.is_empty()
 	return identity == "leader"
 
@@ -148,7 +156,7 @@ func get_opening_max_hp_bonus(identity: String, player_count: int, mode_id: Stri
 	var mode: String = normalize_mode(mode_id)
 	if mode == MODE_DOUDIZHU:
 		return 1 if identity == "landlord" else 0
-	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
+	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
 		return 0
 	return 1 if identity == "leader" and player_count >= 5 else 0
 
@@ -181,7 +189,7 @@ func are_identities_teammates(from_identity: String, to_identity: String, mode_i
 		if from_identity == "peasant" and to_identity == "peasant":
 			return true
 		return false
-	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL:
+	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
 		if from_identity == "blue" and to_identity == "blue":
 			return true
 		if from_identity == "red" and to_identity == "red":
@@ -225,6 +233,8 @@ func evaluate_winner(state: GameState) -> String:
 		return _evaluate_team2v2_winner(state)
 	if mode == MODE_WHEEL_DUEL:
 		return _evaluate_wheel_duel_winner(state)
+	if mode == MODE_CONQUEST:
+		return _evaluate_conquest_winner(state)
 	return _evaluate_identity_winner(state)
 
 
@@ -239,7 +249,7 @@ func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String 
 		return ""
 	if mode == MODE_TEAM2V2:
 		return "teammate_draw"
-	if mode == MODE_WHEEL_DUEL:
+	if mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
 		return ""
 	if killer == null:
 		return ""
@@ -337,6 +347,21 @@ func _evaluate_wheel_duel_winner(state: GameState) -> String:
 	if not red_player.alive or red_player.wheel_duel_defeated_count >= WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
 		return "blue_team"
 	if not blue_player.alive or blue_player.wheel_duel_defeated_count >= WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
+		return "red_team"
+	return ""
+
+
+## 过关斩将胜负：玩家红方死亡时蓝方AI获胜；敌方蓝方仅在异常真正死亡时判为红方获胜，正常击杀会由模式换将拦截。
+func _evaluate_conquest_winner(state: GameState) -> String:
+	# 玩家角色；过关斩将固定红方先手，缺失时不擅自判定对局结束。
+	var player: PlayerState = _find_identity(state, "red")
+	# 敌方角色；过关斩将固定蓝方，正常死亡结算会在此函数调用前被模式换将拦截。
+	var enemy: PlayerState = _find_identity(state, "blue")
+	if player == null or enemy == null:
+		return ""
+	if not player.alive:
+		return "blue_team"
+	if not enemy.alive:
 		return "red_team"
 	return ""
 
