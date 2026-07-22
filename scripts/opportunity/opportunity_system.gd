@@ -36,6 +36,9 @@ var _effect_resolver: OpportunityEffectResolver = OpportunityEffectResolver.new(
 ## 当前组件是否对本局启用；模式或测试可在开局时配置，禁用后所有钩子均无副作用。
 var _enabled: bool = false
 
+## 当前模式是否允许在普通回合开始与轮末自动触发全体机缘；过关斩将只使用明确时机的单人机缘，因此保持false。
+var _automatic_triggers_enabled: bool = false
+
 ## 当前已经初始化概率状态的轮数；默认-1，进入新轮时更新并重置本轮触发标记。
 var _tracked_round_number: int = -1
 
@@ -85,12 +88,13 @@ func _ready() -> void:
 
 
 ## 为新对局绑定权威服务并重置全部运行时状态；enabled决定当前模式是否挂载机缘规则。
-func configure(host: MatchController, state: GameState, rng: RandomNumberGenerator, enabled: bool) -> void:
+func configure(host: MatchController, state: GameState, rng: RandomNumberGenerator, enabled: bool, automatic_triggers_enabled: bool = enabled) -> void:
 	shutdown()
 	_host = host
 	_state = state
 	_rng = rng
 	_enabled = enabled
+	_automatic_triggers_enabled = automatic_triggers_enabled and enabled
 	_effect_resolver.configure(self, _host, _state)
 	if _state != null:
 		_state.opportunity_state.clear()
@@ -119,6 +123,7 @@ func shutdown() -> void:
 	if _state != null:
 		_state.opportunity_state.clear()
 	_enabled = false
+	_automatic_triggers_enabled = false
 
 
 ## 当前组件是否启用且正在选择或结算机缘；阶段恢复与测试可据此避免重复触发。
@@ -128,7 +133,7 @@ func is_active() -> bool:
 
 ## 在普通回合开始入口尝试触发机缘；返回true表示回合游标必须等待本次机缘完整结束。
 func try_trigger_at_turn_start(turn_context: Dictionary, is_extra_turn: bool) -> bool:
-	if not _can_trigger_now() or is_extra_turn:
+	if not _automatic_triggers_enabled or not _can_trigger_now() or is_extra_turn:
 		return false
 	# 当前轮数；控制器已在调用前完成新轮递增，因此首名角色与后续角色读取同一稳定值。
 	var current_round_number: int = _state.round_number
@@ -147,7 +152,7 @@ func try_trigger_at_turn_start(turn_context: Dictionary, is_extra_turn: bool) ->
 
 ## 在普通轮末强制补触发；仅当本轮所有回合开始均未触发时返回true并阻止进入下一回合。
 func try_trigger_at_round_end(finished_player_id: int) -> bool:
-	if not _can_trigger_now():
+	if not _automatic_triggers_enabled or not _can_trigger_now():
 		return false
 	if _tracked_round_number != _state.round_number:
 		_initialize_round_probability(_state.round_number)
@@ -164,6 +169,23 @@ func force_trigger(trigger_player_id: int, resume_kind: String = "manual", resum
 	if _tracked_round_number != _state.round_number:
 		_initialize_round_probability(_state.round_number)
 	_begin_trigger(trigger_player_id, true, resume_kind, resume_context)
+	return true
+
+
+## 按明确名单触发机缘选择；过关斩将等模式可只让指定玩家三选一，不继承全体逆时针参与者规则。
+func force_trigger_for_players(trigger_player_id: int, participant_ids: Array[int], resume_kind: String = "manual", resume_context: Dictionary = {}) -> bool:
+	if not _can_trigger_now():
+		return false
+	if _tracked_round_number != _state.round_number:
+		_initialize_round_probability(_state.round_number)
+	var valid_participant_ids: Array[int] = []
+	for participant_id: int in participant_ids:
+		var participant: PlayerState = _state.get_player(participant_id)
+		if participant != null and participant.alive and not valid_participant_ids.has(participant_id):
+			valid_participant_ids.append(participant_id)
+	if valid_participant_ids.is_empty():
+		return false
+	_begin_trigger(trigger_player_id, true, resume_kind, resume_context, valid_participant_ids)
 	return true
 
 
@@ -235,14 +257,14 @@ func get_quality_weights() -> Dictionary:
 
 
 ## 开始一次全体机缘；先生成全部私有候选并暂停场景树，所有角色选完后才释放暂停和执行效果。
-func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary) -> void:
+func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary, requested_participant_ids: Array[int] = []) -> void:
 	_triggered_this_round = true
 	_resume_kind = resume_kind
 	_resume_context = resume_context.duplicate(true)
 	_resume_phase = _state.current_phase
 	_state.current_phase = "opportunity"
 	# 本次参与者与逆时针顺序；触发角色无效时回退当前回合角色，再回退首名在场角色。
-	var participant_ids: Array[int] = _build_counterclockwise_order(trigger_player_id)
+	var participant_ids: Array[int] = requested_participant_ids.duplicate() if not requested_participant_ids.is_empty() else _build_counterclockwise_order(trigger_player_id)
 	if participant_ids.is_empty():
 		_finish_without_resume()
 		return

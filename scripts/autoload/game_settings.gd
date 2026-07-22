@@ -188,6 +188,9 @@ const MATCH_MODE_WHEEL_DUEL: String = "wheel_duel"
 ## 下一局机缘大乱斗模式稳定ID；与IdentityRules.MODE_OPPORTUNITY_BRAWL一致。
 const MATCH_MODE_OPPORTUNITY_BRAWL: String = "opportunity_brawl"
 
+## 下一局过关斩将模式稳定ID；与IdentityRules.MODE_CONQUEST一致，固定由一名本地玩家对战AI。
+const MATCH_MODE_CONQUEST: String = "conquest"
+
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
@@ -217,6 +220,9 @@ const DEFAULT_IDENTITY_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
 
 ## 机缘大乱斗默认人数；继承身份模式的2至10人配置并默认使用8人。
 const DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
+
+## 过关斩将默认人数；模式固定为一名玩家和一名敌方AI，因此恒为2人。
+const DEFAULT_CONQUEST_PLAYER_COUNT: int = 2
 
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
@@ -259,6 +265,9 @@ var next_match_player_count_wheel_duel: int = DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 
 ## 机缘大乱斗独立保存的下一局人数；范围2至10，切换模式时不覆盖身份模式人数。
 var next_match_player_count_opportunity_brawl: int = DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT
+
+## 过关斩将独立保存的下一局人数；固定2人，字段保留以与其他模式的持久化结构一致。
+var next_match_player_count_conquest: int = DEFAULT_CONQUEST_PLAYER_COUNT
 
 ## 下一局1v1车轮战明置候选数量；默认6，运行时设置范围3至20。
 var wheel_duel_face_up_candidate_count: int = DEFAULT_WHEEL_DUEL_FACE_UP_CANDIDATE_COUNT
@@ -436,6 +445,8 @@ func normalize_match_mode(mode_id: String) -> String:
 		return MATCH_MODE_WHEEL_DUEL
 	if mode_id == MATCH_MODE_OPPORTUNITY_BRAWL:
 		return MATCH_MODE_OPPORTUNITY_BRAWL
+	if mode_id == MATCH_MODE_CONQUEST:
+		return MATCH_MODE_CONQUEST
 	return MATCH_MODE_IDENTITY
 
 
@@ -450,6 +461,8 @@ func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 		return DEFAULT_TEAM2V2_PLAYER_COUNT
 	if mode == MATCH_MODE_WHEEL_DUEL:
 		return DEFAULT_WHEEL_DUEL_PLAYER_COUNT
+	if mode == MATCH_MODE_CONQUEST:
+		return DEFAULT_CONQUEST_PLAYER_COUNT
 	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 
 
@@ -464,6 +477,8 @@ func get_stored_player_count_for_mode(mode_id: String) -> int:
 		return next_match_player_count_wheel_duel
 	if mode == MATCH_MODE_OPPORTUNITY_BRAWL:
 		return next_match_player_count_opportunity_brawl
+	if mode == MATCH_MODE_CONQUEST:
+		return next_match_player_count_conquest
 	return next_match_player_count_identity
 
 
@@ -479,6 +494,8 @@ func _store_player_count_for_mode(mode_id: String, player_count: int) -> void:
 		next_match_player_count_wheel_duel = normalized_count
 	elif mode == MATCH_MODE_OPPORTUNITY_BRAWL:
 		next_match_player_count_opportunity_brawl = normalized_count
+	elif mode == MATCH_MODE_CONQUEST:
+		next_match_player_count_conquest = normalized_count
 	else:
 		next_match_player_count_identity = normalized_count
 
@@ -633,6 +650,8 @@ func _load_saved_settings() -> void:
 	var stored_wheel_duel_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", -1))
 	# 机缘大乱斗独立人数存档；范围与身份模式一致，但保持单独设置槽位。
 	var stored_opportunity_brawl_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_opportunity_brawl", -1))
+	# 过关斩将独立人数存档；固定2人，旧存档缺失时回退模式默认值。
+	var stored_conquest_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_conquest", -1))
 	var legacy_player_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count))
 	if stored_identity_count < 0:
 		stored_identity_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_IDENTITY else DEFAULT_IDENTITY_PLAYER_COUNT
@@ -644,11 +663,14 @@ func _load_saved_settings() -> void:
 		stored_wheel_duel_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_WHEEL_DUEL else DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 	if stored_opportunity_brawl_count < 0:
 		stored_opportunity_brawl_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_OPPORTUNITY_BRAWL else DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT
+	if stored_conquest_count < 0:
+		stored_conquest_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_CONQUEST else DEFAULT_CONQUEST_PLAYER_COUNT
 	next_match_player_count_identity = normalize_player_count_for_mode(MATCH_MODE_IDENTITY, stored_identity_count)
 	next_match_player_count_doudizhu = normalize_player_count_for_mode(MATCH_MODE_DOUDIZHU, stored_doudizhu_count)
 	next_match_player_count_team2v2 = normalize_player_count_for_mode(MATCH_MODE_TEAM2V2, stored_team2v2_count)
 	next_match_player_count_wheel_duel = normalize_player_count_for_mode(MATCH_MODE_WHEEL_DUEL, stored_wheel_duel_count)
 	next_match_player_count_opportunity_brawl = normalize_player_count_for_mode(MATCH_MODE_OPPORTUNITY_BRAWL, stored_opportunity_brawl_count)
+	next_match_player_count_conquest = normalize_player_count_for_mode(MATCH_MODE_CONQUEST, stored_conquest_count)
 	next_match_player_count = get_stored_player_count_for_mode(next_match_mode)
 
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
@@ -731,6 +753,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", next_match_player_count_team2v2)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", next_match_player_count_wheel_duel)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_opportunity_brawl", next_match_player_count_opportunity_brawl)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_conquest", next_match_player_count_conquest)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)

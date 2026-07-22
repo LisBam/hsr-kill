@@ -58,6 +58,9 @@ var pre_game_setup: Dictionary = {}
 ## 当前机缘系统公开交互状态；权威端保存全体候选，生成观察者快照时只向对应角色公开其三张候选牌。
 var opportunity_state: Dictionary = {}
 
+## 过关斩将公开状态；保存当前关卡、玩家与敌方稳定ID及敌方已获得技能，非该模式保持空字典。
+var conquest_state: Dictionary = {}
+
 ## 已完成事件摘要历史；记录事件父子、步骤和终止原因，支持规则回放与无头验收。
 var event_history: Array[Dictionary] = []
 
@@ -210,6 +213,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"simultaneous_response_display": simultaneous_response_display.duplicate(true),
 		"pre_game_setup": pre_game_setup.duplicate(true),
 		"opportunity_state": opportunity_snapshot,
+		"conquest_state": conquest_state.duplicate(true),
 		"event_history_count": event_history.size(),
 		"card_move_history_count": card_move_history.size(),
 		"round_number": round_number,
