@@ -46,6 +46,9 @@ signal character_replacement_count_changed(count: int)
 ## 随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的新对局。
 signal character_candidate_count_changed(count: int)
 
+## 过关斩将随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的过关斩将对局。
+signal conquest_character_candidate_count_changed(count: int)
+
 ## 离线下一局是否由本机控制全部角色的变化信号；联机模式不会读取该设置。
 signal control_all_characters_changed(enabled: bool)
 
@@ -121,6 +124,9 @@ const MAX_CHARACTER_CANDIDATE_COUNT: int = 20
 
 ## 随机选将牌数默认值；5张保持旧版本开局行为，旧存档缺失字段时使用该值。
 const DEFAULT_CHARACTER_CANDIDATE_COUNT: int = 5
+
+## 过关斩将随机选将牌数默认值；12张给单人玩家与敌方AI提供更充足的随机武将选择，旧存档缺失字段时使用该值。
+const DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT: int = 12
 
 ## AI 响应等待时间的最小值；默认0.05秒，在保留可见异步边界的同时支持快速对局。
 const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.05
@@ -293,6 +299,9 @@ var character_replacement_count: int = 0
 
 ## 每名玩家下一局获得的普通随机选将牌数；默认5张，领袖技武将不计入该数值。
 var character_candidate_count: int = DEFAULT_CHARACTER_CANDIDATE_COUNT
+
+## 过关斩将中每名角色下一局获得的随机选将牌数；默认12张，与普通模式独立保存且只在该模式创建时读取。
+var conquest_character_candidate_count: int = DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT
 
 ## 下一局离线对局是否由本机控制全部角色；默认关闭，联机房主与客户端均忽略该值。
 var control_all_characters_enabled: bool = false
@@ -577,6 +586,34 @@ func set_character_candidate_count(count: int) -> void:
 	character_candidate_count_changed.emit(character_candidate_count)
 
 
+## 设置下一局过关斩将随机选将牌数；范围外输入限制到1至20，不会修改普通模式的候选数量。
+func set_conquest_character_candidate_count(count: int) -> void:
+	# 标准化后的过关斩将候选数量；与普通候选共用一至二十张的下拉范围，但保存到独立字段。
+	var normalized_count: int = clampi(count, MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	if conquest_character_candidate_count == normalized_count:
+		return
+	conquest_character_candidate_count = normalized_count
+	_queue_settings_save()
+	conquest_character_candidate_count_changed.emit(conquest_character_candidate_count)
+
+
+## 返回指定模式应读取的随机选将牌数；只有过关斩将使用专属设置，其余模式保留普通候选配置。
+func get_character_candidate_count_for_mode(mode_id: String) -> int:
+	# 规范化后的模式ID；未知模式按身份局处理，避免外部调用读取到不稳定配置。
+	var normalized_mode: String = normalize_match_mode(mode_id)
+	return conquest_character_candidate_count if normalized_mode == MATCH_MODE_CONQUEST else character_candidate_count
+
+
+## 按指定模式写入随机选将牌数；菜单只调用该接口，不应自行判断或修改两个持久化字段。
+func set_character_candidate_count_for_mode(mode_id: String, count: int) -> void:
+	# 规范化后的模式ID；与读取接口使用同一规则，确保主菜单和局内菜单不会写入不同设置槽。
+	var normalized_mode: String = normalize_match_mode(mode_id)
+	if normalized_mode == MATCH_MODE_CONQUEST:
+		set_conquest_character_candidate_count(count)
+		return
+	set_character_candidate_count(count)
+
+
 ## 设置下一局离线对局是否控制全部角色；当前已创建对局不会中途改变角色控制权。
 func set_control_all_characters_enabled(enabled: bool) -> void:
 	if control_all_characters_enabled == enabled:
@@ -683,6 +720,8 @@ func _load_saved_settings() -> void:
 	var stored_character_replacement_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count))
 	character_replacement_count = stored_character_replacement_count if [0, 3, 5, 8, 10, 20].has(stored_character_replacement_count) else 0
 	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	# 过关斩将独立随机选将牌数；旧存档未保存该字段时固定回退12张，不继承普通模式当前值。
+	conquest_character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
 	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
@@ -761,6 +800,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", ai_uses_mulligan_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", character_replacement_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", conquest_character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)

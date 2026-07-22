@@ -17,6 +17,9 @@ var _original_customize_ai_characters_enabled: bool = false
 ## 测试前自选武将与座次开关；过关斩将不使用该流程，结束后必须恢复用户设置。
 var _original_custom_character_assignment_enabled: bool = false
 
+## 测试前过关斩将随机选将牌数；结束时恢复，避免本专项覆盖用户保存的1至20张配置。
+var _original_conquest_character_candidate_count: int = GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT
+
 
 ## 延迟执行以等待自动加载数据库完成卡牌、武将与技能索引。
 func _ready() -> void:
@@ -30,10 +33,12 @@ func _run() -> void:
 	_original_mulligan_limit = GameSettings.mulligan_limit
 	_original_customize_ai_characters_enabled = GameSettings.customize_ai_characters_enabled
 	_original_custom_character_assignment_enabled = GameSettings.custom_character_assignment_enabled
+	_original_conquest_character_candidate_count = GameSettings.conquest_character_candidate_count
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	GameSettings.set_mulligan_limit(0)
 	GameSettings.set_customize_ai_characters_enabled(false)
 	GameSettings.set_custom_character_assignment_enabled(false)
+	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
 	if not _test_mode_rules_and_equipment_subtypes():
 		_restore_settings()
 		return
@@ -64,6 +69,15 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 		return _fail("mode_rules")
 	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST, 9) != 2 or GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 2:
 		return _fail("mode_settings")
+	# 普通模式原候选数量；过关斩将设置改变时必须保持不变，证明两个持久化槽彼此独立。
+	var standard_candidate_count: int = GameSettings.character_candidate_count
+	GameSettings.set_conquest_character_candidate_count(99)
+	if GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT != 12 or GameSettings.conquest_character_candidate_count != 20 or GameSettings.get_character_candidate_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 20 or GameSettings.character_candidate_count != standard_candidate_count:
+		return _fail("conquest_candidate_count_max")
+	GameSettings.set_conquest_character_candidate_count(-1)
+	if GameSettings.conquest_character_candidate_count != 1 or GameSettings.get_character_candidate_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 1:
+		return _fail("conquest_candidate_count_min")
+	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
 	if EquipmentSubtype.ALL.size() != expected_slots.size() or EquipmentSubtype.get_slot("unknown") != "":
 		return _fail("equipment_subtype_count")
 	for subtype: String in EquipmentSubtype.ALL:
@@ -140,7 +154,7 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("start_match")
 	# 本地玩家候选；过关斩将固定一号位为真人，二号位AI会由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if player_candidates.is_empty() or not _controller.select_character(0, player_candidates[0]):
+	if player_candidates.size() != GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT or not _controller.select_character(0, player_candidates[0]):
 		return _fail("player_character_selection")
 	for _frame_index: int in range(12):
 		if str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
@@ -269,6 +283,7 @@ func _restore_settings() -> void:
 	GameSettings.set_mulligan_limit(_original_mulligan_limit)
 	GameSettings.set_customize_ai_characters_enabled(_original_customize_ai_characters_enabled)
 	GameSettings.set_custom_character_assignment_enabled(_original_custom_character_assignment_enabled)
+	GameSettings.set_conquest_character_candidate_count(_original_conquest_character_candidate_count)
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。

@@ -326,7 +326,8 @@ func _ready() -> void:
 	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
 	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
 	GameSettings.character_replacement_count_changed.connect(_refresh_character_replacement_count_selection)
-	GameSettings.character_candidate_count_changed.connect(_refresh_character_candidate_count_selection)
+	GameSettings.character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
+	GameSettings.conquest_character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
@@ -337,7 +338,7 @@ func _ready() -> void:
 	_refresh_game_speed_text(GameSettings.game_speed_interval_seconds)
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	_refresh_character_replacement_count_selection(GameSettings.character_replacement_count)
-	_refresh_character_candidate_count_selection(GameSettings.character_candidate_count)
+	_refresh_active_character_candidate_count_selection()
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
 
@@ -747,9 +748,9 @@ func _select_conquest_mode() -> void:
 	call_deferred("_ensure_mode_button_visible", _conquest_mode_button)
 
 
-## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，避免普通模式设置面板溢出。
+## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，过关斩将保留独立随机选将牌数设置。
 func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
-	# 过关斩将与车轮战一样都是固定2人，但不需要车轮战候选配置，也不允许普通身份局开局设置。
+	# 过关斩将与车轮战一样都是固定2人，但仅过关斩将保留独立的随机选将牌数设置。
 	var is_conquest: bool = _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST
 	var face_up_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
 	var face_down_row: Control = _wheel_duel_face_down_candidate_input.get_parent() as Control
@@ -760,9 +761,10 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	_custom_character_assignment_row.visible = not visible_state
 	_customize_ai_characters_row.visible = not visible_state
 	_character_replacement_count_row.visible = not visible_state
-	_character_candidate_count_row.visible = not visible_state
+	_character_candidate_count_row.visible = not visible_state or is_conquest
 	_auto_identity_marking_checkbox.visible = not visible_state
 	_player_count_row.visible = not visible_state
+	_refresh_active_character_candidate_count_selection()
 
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
@@ -1292,7 +1294,7 @@ func _on_character_replacement_count_selected(option_index: int) -> void:
 	GameSettings.set_character_replacement_count(int(_character_replacement_count_option.get_item_metadata(option_index)))
 
 
-## 按全局设置同步随机选将牌数下拉框；无信号选择保证主菜单与局内菜单稳定联动。
+## 按传入值同步随机选将牌数下拉框；无信号选择保证主菜单与局内菜单稳定联动。
 func _refresh_character_candidate_count_selection(count: int) -> void:
 	if not is_node_ready():
 		return
@@ -1302,11 +1304,18 @@ func _refresh_character_candidate_count_selection(count: int) -> void:
 			return
 
 
-## 将玩家选择的随机选将牌数写入下一局设置；领袖技固定候选由规则服务另行追加。
+## 按当前模式读取正确的随机选将牌数并刷新下拉框；过关斩将不会被普通模式信号覆盖。
+func _refresh_active_character_candidate_count_selection(_changed_count: int = 0) -> void:
+	if GameSettings == null:
+		return
+	_refresh_character_candidate_count_selection(GameSettings.get_character_candidate_count_for_mode(_selected_match_mode))
+
+
+## 将玩家选择的随机选将牌数写入当前模式的独立设置；领袖技固定候选由规则服务另行追加。
 func _on_character_candidate_count_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _character_candidate_count_option.item_count:
 		return
-	GameSettings.set_character_candidate_count(int(_character_candidate_count_option.get_item_metadata(option_index)))
+	GameSettings.set_character_candidate_count_for_mode(_selected_match_mode, int(_character_candidate_count_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应速度显示；数值越小代表 AI 行动与选牌等待越短。
