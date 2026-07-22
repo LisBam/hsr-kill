@@ -125,6 +125,9 @@ const SECONDS_PER_MINUTE: int = 60
 ## 该参数只影响客户端文本刷新频率，不改变规则计时、动画、AI延迟或游戏流程，运行时无需动态修改。
 const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 
+## 顶栏关卡与轮次的统一字号；13像素可在156像素宽信息框内稳定容纳“第N关 第N轮”，运行时无需动态修改。
+const TOP_INFO_PRIMARY_FONT_SIZE: int = 13
+
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
@@ -152,6 +155,9 @@ const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 
 ## 顶栏过关斩将关卡文本；仅该模式显示并与轮次文本同排，不覆盖通用轮次信息。
 @onready var conquest_level_label: Label = %ConquestLevelLabel
+
+## 顶栏关卡与轮次共享的标签样式；运行时直接绑定字体、字号和主题色，避免两个独立主题覆盖发生漂移。
+var _top_info_primary_label_settings: LabelSettings
 
 ## 中央弃牌结算区；其全局中心用于确定卡牌飞行动画的落点，不承载规则状态。
 @onready var discard_pile_panel: PanelContainer = %DiscardPilePanel
@@ -2628,11 +2634,7 @@ func _apply_ui_style() -> void:
 	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
 	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	# 顶栏轮次与关卡统一指定回退字体；动态显示“第N关”时不会因场景默认主题差异出现字形不一致。
-	phase_label.add_theme_font_override("font", ThemeDB.fallback_font)
-	phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	if conquest_level_label != null:
-		conquest_level_label.add_theme_font_override("font", ThemeDB.fallback_font)
-		conquest_level_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_apply_top_info_primary_label_style()
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	match_menu.refresh_ui_style()
@@ -2675,6 +2677,20 @@ func _apply_ui_style() -> void:
 		var skill_view: SkillButtonView = skill_view_variant as SkillButtonView
 		if skill_view != null and is_instance_valid(skill_view):
 			skill_view.refresh_ui_style()
+
+
+## 把同一份显式标签样式应用到关卡与轮次；LabelSettings直接参与绘制，主题切换时只更新这一份共享资源。
+func _apply_top_info_primary_label_style() -> void:
+	if phase_label == null:
+		return
+	if _top_info_primary_label_settings == null:
+		_top_info_primary_label_settings = LabelSettings.new()
+	_top_info_primary_label_settings.font = ThemeDB.fallback_font
+	_top_info_primary_label_settings.font_size = TOP_INFO_PRIMARY_FONT_SIZE
+	_top_info_primary_label_settings.font_color = BattleUIStyle.get_color("text_primary")
+	phase_label.label_settings = _top_info_primary_label_settings
+	if conquest_level_label != null:
+		conquest_level_label.label_settings = _top_info_primary_label_settings
 
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。

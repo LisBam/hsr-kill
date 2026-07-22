@@ -15,6 +15,7 @@ var _original_mulligan_limit: int = 0
 var _original_customize_ai_characters_enabled: bool = false
 
 ## 测试前自选武将与座次开关；过关斩将不使用该流程，结束后必须恢复用户设置。
+## 过关斩将复用该持久化开关时只开放全部武将，不开放座次与身份，专项测试会显式开启验证降级语义。
 var _original_custom_character_assignment_enabled: bool = false
 
 ## 测试前过关斩将随机选将牌数；结束时恢复，避免本专项覆盖用户保存的1至20张配置。
@@ -41,7 +42,7 @@ func _run() -> void:
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	GameSettings.set_mulligan_limit(0)
 	GameSettings.set_customize_ai_characters_enabled(false)
-	GameSettings.set_custom_character_assignment_enabled(false)
+	GameSettings.set_custom_character_assignment_enabled(true)
 	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
 	GameSettings.set_conquest_character_replacement_count(3)
 	if not _test_mode_rules_and_equipment_subtypes():
@@ -97,6 +98,35 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 	for subtype: String in EquipmentSubtype.ALL:
 		if not EquipmentSubtype.is_valid(subtype) or EquipmentSubtype.get_slot(subtype) != str(expected_slots.get(subtype, "")):
 			return _fail("equipment_subtype_%s" % subtype)
+	# 纯选将服务；隔离验证过关斩将开放所有武将但不进入座次身份自选，不让任意武将技能影响后续死亡专项。
+	var selection_service: CharacterSelectionService = CharacterSelectionService.new()
+	# 固定阵营测试角色；过关斩将始终保持一号位红方、二号位蓝方。
+	var selection_players: Array[PlayerState] = [PlayerState.new(0, "玩家"), PlayerState.new(1, "敌方AI")]
+	selection_players[0].identity = "red"
+	selection_players[1].identity = "blue"
+	# 全部武将稳定ID；使用1张随机候选保证能找到随机列表之外的全量候选。
+	var selection_character_ids: Array[String] = []
+	for character_id_variant: Variant in GameDatabase.characters.keys():
+		# 当前数据库武将ID；复制为强类型字符串供选将服务使用。
+		var selection_character_id: String = str(character_id_variant)
+		selection_character_ids.append(selection_character_id)
+	# 独立随机源；只服务纯选将断言，不改变正式对局固定种子的随机序列。
+	var selection_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	selection_rng.seed = 20260722
+	if not selection_service.begin(selection_players, selection_character_ids, 1, selection_rng, false, 0, [], IdentityRules.MODE_CONQUEST, true).is_empty():
+		return _fail("conquest_all_character_begin")
+	# 本地纯武将快照；所有武将入口开启时座次与身份权限仍必须关闭。
+	var selection_snapshot: Dictionary = selection_service.to_dict(0)
+	# 随机候选外的武将ID；用于证明服务实际接受全量列表，而不是只改变菜单文案。
+	var outside_candidate_character_id: String = ""
+	for character_id_variant: Variant in selection_snapshot.get("all_character_ids", []) as Array:
+		# 当前全量候选ID；只取不在本次1张随机候选中的第一项。
+		var all_character_id: String = str(character_id_variant)
+		if not selection_service.get_candidates(0).has(all_character_id):
+			outside_candidate_character_id = all_character_id
+			break
+	if not bool(selection_snapshot.get("allow_all_characters", false)) or bool(selection_snapshot.get("allow_custom_assignment", true)) or not (selection_snapshot.get("seat_options", []) as Array).is_empty() or not (selection_snapshot.get("identity_options", []) as Array).is_empty() or outside_candidate_character_id.is_empty() or not selection_service.select_character(0, outside_candidate_character_id).is_empty():
+		return _fail("conquest_all_character_permissions")
 	return true
 
 
@@ -175,11 +205,17 @@ func _test_full_match_replacement_flow() -> bool:
 	_create_controller()
 	if not _controller.start_match(2, 20260722, IdentityRules.MODE_CONQUEST):
 		return _fail("start_match")
-	if int(_controller.state.match_options.get("character_replacement_count", -1)) != 3:
+	if int(_controller.state.match_options.get("character_replacement_count", -1)) != 3 or bool(_controller.state.match_options.get("custom_character_assignment_enabled", true)) or not bool(_controller.state.match_options.get("all_character_selection_enabled", false)):
 		return _fail("conquest_replacement_count_locked")
 	# 本地玩家候选；过关斩将固定一号位为真人，二号位AI会由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if player_candidates.size() != GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT or not _controller.select_character(0, player_candidates[0]):
+	# 本地选将快照；开启设置后必须提供全武将入口，但不得提供任何座次或身份编辑数据。
+	var player_selection_snapshot: Dictionary = _controller.character_selection.to_dict(0)
+	if player_candidates.size() != GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT or not bool(player_selection_snapshot.get("allow_all_characters", false)) or bool(player_selection_snapshot.get("allow_custom_assignment", true)) or not (player_selection_snapshot.get("seat_options", []) as Array).is_empty() or not (player_selection_snapshot.get("identity_options", []) as Array).is_empty():
+		return _fail("conquest_character_selection_permissions")
+	# 玩家最终选择的武将；正式死亡时序继续使用固定种子下第一张随机候选，避免全武将技能差异污染其他专项断言。
+	var selected_player_character_id: String = player_candidates[0] if not player_candidates.is_empty() else ""
+	if selected_player_character_id.is_empty() or not _controller.select_character(0, selected_player_character_id):
 		return _fail("player_character_selection")
 	for _frame_index: int in range(12):
 		if str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
@@ -189,7 +225,7 @@ func _test_full_match_replacement_flow() -> bool:
 	var player: PlayerState = _controller.state.get_player(0)
 	# 敌方状态；蓝方二号位由AI控制并在后续死亡时无限换将。
 	var enemy: PlayerState = _controller.state.get_player(1)
-	if player == null or enemy == null or player.identity != "red" or enemy.identity != "blue" or _controller.local_human_player_id != 0 or not _controller.is_opportunity_enabled_for_current_match() or _controller.conquest_mode.get_level() != 1 or str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
+	if player == null or enemy == null or player.character_id != selected_player_character_id or player.identity != "red" or enemy.identity != "blue" or _controller.local_human_player_id != 0 or not _controller.is_opportunity_enabled_for_current_match() or _controller.conquest_mode.get_level() != 1 or str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
 		return _fail("initial_state")
 	if not await _choose_safe_opportunity(0):
 		return _fail("initial_opportunity")
@@ -248,8 +284,8 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("first_replacement")
 	if _controller.state.discard_pile.find(extra_enemy_card) < 0:
 		return _fail("replacement_discards_all_regions")
-	if not await _choose_safe_opportunity(player.player_id):
-		return _fail("replacement_opportunity")
+	if not await _choose_gain_opportunity_from_enemy(player.player_id, enemy.player_id):
+		return false
 	if _controller.state.current_player_id != player.player_id or _controller._conquest_replacement_settlement_pause_token >= 0:
 		return _fail("player_turn_continues")
 	# 当前玩家出牌选择会占用统一请求槽；本断言先关闭它，再人工派发旧代次damageAfter验证新武将永屹不会继承旧伤害。
@@ -344,9 +380,83 @@ func _choose_safe_opportunity(player_id: int) -> bool:
 	return false
 
 
+## 在过关斩将换将过渡中完整执行绿色获得牌机缘；依次提交机缘、敌方目标和目标区域实体牌。
+func _choose_gain_opportunity_from_enemy(player_id: int, enemy_player_id: int) -> bool:
+	if _controller == null or _controller.state == null or str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
+		return _fail("gain_opportunity_not_choosing")
+	# 绿色获得牌机缘；本回归固定把它放入当前玩家私有候选，避免依赖随机品质和抽牌顺序。
+	var gain_one: Dictionary = OpportunityCatalog.get_card("green_gain_one")
+	# 两张无目标候选；只用于保持正式三选一协议，不参与本次效果结算。
+	var draw_three: Dictionary = OpportunityCatalog.get_card("blue_draw_three")
+	# 第三张无目标候选；与前两张稳定ID不同，保持候选目录合法。
+	var draw_five: Dictionary = OpportunityCatalog.get_card("purple_draw_five")
+	if gain_one.is_empty() or draw_three.is_empty() or draw_five.is_empty():
+		return _fail("gain_opportunity_catalog")
+	_controller.state.opportunity_state["options_by_player"] = {str(player_id):[gain_one, draw_three, draw_five]}
+	# 机缘提交动作；第一步仍使用choose_opportunity，成功后应同步建立目标选择请求。
+	var opportunity_action: PlayerAction = PlayerAction.new("choose_opportunity", player_id)
+	opportunity_action.payload = {"card_id":"green_gain_one"}
+	if not _controller.submit_action(opportunity_action):
+		return _fail("gain_opportunity_submit")
+	# 机缘效果在下一帧推进；等待目标请求实际发布后再读取权威候选。
+	for _frame_index: int in range(12):
+		if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) == "opportunity_effect_target":
+			break
+		await get_tree().process_frame
+	# 第一段目标上下文；必须允许选择重新入场后的敌方，且仍保持换将过渡屏障生效。
+	var target_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if not _controller._conquest_replacement_transition_active or str(target_context.get("kind", "")) != "opportunity_effect_target" or not (_controller._pending_card_choice.get("target_ids", []) as Array).has(enemy_player_id):
+		return _fail("gain_opportunity_enemy_target")
+	# 过期请求动作；即使上下文属于机缘，错误请求ID也不能越过换将过渡边界。
+	var stale_target_action: PlayerAction = PlayerAction.new("choose_cards", player_id)
+	stale_target_action.payload = {"request_id":int(_controller._pending_card_choice.get("request_id", -1)) + 1, "selected_card_uids":[], "selected_target_ids":[enemy_player_id], "confirmed":true}
+	if _controller.submit_action(stale_target_action):
+		return _fail("gain_opportunity_stale_request_allowed")
+	if not _submit_target_choice(player_id, enemy_player_id):
+		return false
+	# 目标响应恢复后通常同步创建区域请求；保留逐帧等待可覆盖后续解析器改为延迟推进的实现。
+	for _frame_index: int in range(12):
+		if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) == "opportunity_zone_cards":
+			break
+		await get_tree().process_frame
+	# 第二段区域牌上下文；目标提交后必须继续生成敌方区域候选，不能被“正在重新入场”拦截。
+	var zone_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	# 当前敌方区域候选；至少包含新武将入场时获得的基础手牌。
+	var zone_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if str(zone_context.get("kind", "")) != "opportunity_zone_cards" or str(zone_context.get("zone_operation", "")) != "gain_one" or int(zone_context.get("target_player_id", -1)) != enemy_player_id or zone_candidates.is_empty():
+		return _fail("gain_opportunity_zone_choice")
+	# 选中的敌方区域实体UID；结算后必须进入玩家普通手牌，不能只验证请求被接受。
+	var selected_card_uid: int = int((zone_candidates[0] as Dictionary).get("uid", -1))
+	if selected_card_uid < 0 or not _submit_card_uid_choice(player_id, [selected_card_uid], true):
+		return false
+	for _frame_index: int in range(24):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		await get_tree().process_frame
+	# 玩家与所获实体；机缘结束同时证明换将屏障已按正常续接释放。
+	var player: PlayerState = _controller.state.get_player(player_id)
+	if not _controller.state.opportunity_state.is_empty() or player == null or player.find_hand_card(selected_card_uid) == null or _controller._conquest_replacement_transition_active:
+		return _fail("gain_opportunity_resolution")
+	return true
+
+
 ## 为当前强制目标选择提交一名角色；测试经统一PlayerAction入口验证嵌套选择会恢复到过关斩将换将续接。
 func _submit_target_choice(actor_id: int, target_id: int) -> bool:
 	return _submit_choice(actor_id, [target_id], true)
+
+
+## 为当前选择请求提交实体牌UID；机缘区域选牌与普通目标选择使用同一PlayerAction协议但字段彼此独立。
+func _submit_card_uid_choice(actor_id: int, selected_card_uids: Array[int], confirmed: bool) -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return _fail("missing_card_choice")
+	# 当前区域选择请求编号；提交绑定该稳定ID，避免同步续接后误操作下一请求。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	# 标准选牌动作；只携带实体UID，不伪造目标或机缘定义。
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":[], "confirmed":confirmed}
+	if not _controller.submit_action(action):
+		return _fail("card_choice_rejected")
+	return true
 
 
 ## 为当前选择请求提交目标或取消；濒死放弃和摄伏目标选择共用同一权威动作协议。

@@ -36,6 +36,9 @@ var replacement_card_count: int = 0
 ## 本局是否启用全武将、座次与身份自选；开始后固定，界面设置变化不会中途改变候选协议。
 var custom_assignment_enabled: bool = false
 
+## 本局是否开放“所有武将”入口；可独立于座次身份自选启用，供固定阵营与座次的模式复用。
+var all_characters_enabled: bool = false
+
 ## 本局参与选将的玩家 ID 数组；按座次保存，阶段校验和完成判断均使用该稳定顺序。
 var _player_ids: Array[int] = []
 
@@ -322,7 +325,7 @@ func _normalize_custom_seat_identity(requested_seat_number: int, requested_ident
 
 
 ## 创建一局选将流程并为领袖生成首批候选；返回空字符串表示初始化成功。
-func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false, requested_replacement_card_count: int = 0, leader_skill_character_ids: Array[String] = [], requested_match_mode: String = "") -> String:
+func begin(players: Array[PlayerState], character_ids: Array[String], requested_candidate_count: int, rng: RandomNumberGenerator, allow_custom_assignment: bool = false, requested_replacement_card_count: int = 0, leader_skill_character_ids: Array[String] = [], requested_match_mode: String = "", allow_all_characters: bool = false) -> String:
 	_player_ids.clear()
 	_character_ids = character_ids.duplicate()
 	_leader_skill_character_ids.clear()
@@ -344,6 +347,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 	leader_player_id = -1
 	_rng = rng
 	custom_assignment_enabled = allow_custom_assignment
+	all_characters_enabled = allow_custom_assignment or allow_all_characters
 	# 普通随机候选数量；设置允许1至20，武将库不足时由实际候选生成自然限制，不改变已锁定设置值。
 	candidate_count = clampi(requested_candidate_count, 1, 20)
 	# 本局换将卡数量；设置层已经限制为离散档位，服务仍防御性拒绝负数。
@@ -442,7 +446,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "首任领袖必须保留已经公开的武将。"
 	# 全武将入口：开启自选后，身份局首任领袖公开选将、最终自选与斗地主同时选将均可提交任意已登记武将。
 	# is_initial_leader_assignment 只对应 AI 首任领袖补交座次身份，真人首任领袖在 PHASE_LEADER 仍可使用全武将。
-	var allows_all_characters_now: bool = custom_assignment_enabled and (
+	var allows_all_characters_now: bool = all_characters_enabled and (
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
 		or uses_simultaneous_selection() and phase == PHASE_OTHERS
@@ -814,7 +818,7 @@ func to_dict(viewer_id: int) -> Dictionary:
 	# 当前可提交座次身份的阶段；身份局领袖/自选与斗地主全员同时选将均可携带座次身份。
 	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or uses_simultaneous_selection() and phase == PHASE_OTHERS)
 	# 当前可打开“所有武将”的阶段；开启自选后，首任领袖公开选将与后续最终自选、斗地主同时选将均应显示全武将入口。
-	var allows_all_characters_now: bool = custom_assignment_enabled and (
+	var allows_all_characters_now: bool = all_characters_enabled and (
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
 		or uses_simultaneous_selection() and phase == PHASE_OTHERS

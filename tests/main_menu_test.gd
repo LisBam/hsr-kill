@@ -122,6 +122,10 @@ func _run() -> void:
 	var main_menu_card_name_option: OptionButton = main_instance.get_node("%MainMenuCardNameOption") as OptionButton
 	# 局内卡牌名称下拉框；应使用与主菜单相同的两项稳定名称模式配置。
 	var match_menu_card_name_option: OptionButton = main_instance.get_node("%MenuCardNameOption") as OptionButton
+	# 主菜单自选开关；过关斩将中必须显示为纯“自选武将”，不暴露座次身份语义。
+	var main_custom_character_checkbox: CheckBox = main_instance.get_node("%MainMenuCustomCharacterAssignmentCheckBox") as CheckBox
+	# 局内自选开关；当前对局为过关斩将时与主菜单使用相同纯武将文案。
+	var match_custom_character_checkbox: CheckBox = main_instance.get_node("%CustomCharacterAssignmentCheckBox") as CheckBox
 	# 主菜单车轮战明置候选标签；必须在车轮战设置页使用统一回退字体和主题文字色。
 	var main_wheel_face_up_label: Label = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
 	# 主菜单车轮战暗置候选标签；与明置标签共同验证局外菜单的字体和颜色覆盖。
@@ -223,14 +227,15 @@ func _run() -> void:
 	var match_conquest_replacement_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow") as Control
 	var match_conquest_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_CONQUEST)
-	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible:
+	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or main_custom_character_checkbox == null or match_custom_character_checkbox == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible or not main_custom_character_checkbox.visible or not match_custom_character_checkbox.visible or main_custom_character_checkbox.text != "自选武将" or match_custom_character_checkbox.text != "自选武将":
 		_fail("conquest_selection_settings_visible")
 		return
 	mode_scroll.scroll_vertical = 0
 	await get_tree().process_frame
 	await _click_control(identity_mode_button)
 	await get_tree().process_frame
-	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY:
+	match_menu.set_match_mode(GameSettings.MATCH_MODE_IDENTITY)
+	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY or main_custom_character_checkbox.text != "自选全武将、座次与身份" or match_custom_character_checkbox.text != "自选全武将、座次与身份":
 		_fail("mode_scroll_identity_restore")
 		return
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or conquest_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":

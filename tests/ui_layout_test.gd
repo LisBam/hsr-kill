@@ -111,7 +111,9 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 关轮横排容器；关卡必须位于轮次之前且两者共享同一父容器，不能依靠重叠标签替换文本。
 	var round_info_row: HBoxContainer = conquest_level_label.get_parent() as HBoxContainer
-	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or round_info_row == null or round_label.get_parent() != round_info_row or conquest_level_label.get_index() >= round_label.get_index() or conquest_level_label.get_theme_font_size("font_size") != round_label.get_theme_font_size("font_size") or conquest_level_label.get_theme_font("font") != ThemeDB.fallback_font or round_label.get_theme_font("font") != ThemeDB.fallback_font or not conquest_level_label.get_theme_color("font_color").is_equal_approx(round_label.get_theme_color("font_color")):
+	# 顶栏共享标签样式；直接验证最终绘制资源的字体、字号和当前主题色，避免两个标签同时回退到错误默认值仍通过测试。
+	var top_info_label_settings: LabelSettings = round_label.label_settings
+	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or round_info_row == null or round_label.get_parent() != round_info_row or conquest_level_label.get_index() >= round_label.get_index() or top_info_label_settings == null or conquest_level_label.label_settings != top_info_label_settings or top_info_label_settings.font != ThemeDB.fallback_font or top_info_label_settings.font_size != 13 or not top_info_label_settings.font_color.is_equal_approx(BattleUIStyle.get_color("text_primary")):
 		_fail("conquest_top_info:%s/%s/%s" % [round_label.text, conquest_level_label.text, str(conquest_level_label.visible)])
 		return
 	# 后续布局断言继续使用身份局快照，避免模式专属菜单与资料逻辑影响既有十人桌测试。
