@@ -57,12 +57,21 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	# 当前合法动作上下文；卡牌专属AI据此识别阶段次数、目标与防具校验后仍可执行的真实后续动作。
 	evaluator.set_current_legal_actions(legal_actions)
 	_prepare_action_scoring_context(authoritative_snapshot)
+	# 首轮动作评分；连续行动牌可据此比较“先准备再行动”与直接行动的完整收益。
+	var preliminary_scored_actions: Array[Dictionary] = []
+	for action: Dictionary in legal_actions:
+		# 当前动作的完整直接评分；包含卡牌、装备和已安装技能的全部只读修正。
+		var score: float = _score_action(authoritative_snapshot, action)
+		preliminary_scored_actions.append({"action":action.duplicate(true), "score":score})
+	# 首轮评分上下文；只有在此之后，连续行动牌才允许读取其他合法动作的真实完整分数。
+	evaluator.set_current_legal_action_scores(preliminary_scored_actions)
 	# 当前最佳动作；只有评分严格提高时替换，平分保持规则层稳定枚举顺序。
 	var best_action: Dictionary = {}
 	# 当前最高分；使用极小值确保首个合法动作可以成为比较基准。
 	var best_score: float = -INF
 	for action: Dictionary in legal_actions:
 		# 当前合法动作的综合效用；具体牌与技能只能修正分数，不能绕过合法动作集合。
+		# 连续行动牌会基于首轮完整评分修正自身链路收益，仍只能在同一合法动作集合中竞争。
 		var score: float = _score_action(authoritative_snapshot, action)
 		if score > best_score:
 			best_score = score

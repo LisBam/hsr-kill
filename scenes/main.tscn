@@ -27,7 +27,7 @@
 [ext_resource type="PackedScene" path="res://scenes/components/player_auto_managed_hand_overlay.tscn" id="27_auto_managed_overlay"]
 [ext_resource type="Script" uid="uid://dmfb5tfoschl5" path="res://scripts/platform/android_back_adapter.gd" id="28_android_back"]
 [ext_resource type="Script" uid="uid://cnyink6clckec" path="res://scripts/platform/android_display_stability.gd" id="29_android_display"]
-[ext_resource type="Script" path="res://scripts/opportunity/opportunity_system.gd" id="30_opportunity_system"]
+[ext_resource type="Script" uid="uid://b8v06563qhwaj" path="res://scripts/opportunity/opportunity_system.gd" id="30_opportunity_system"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -124,7 +124,7 @@ script = ExtResource("4_ai")
 [node name="NetworkGateway" type="Node" parent="MatchController" unique_id=1069132406]
 script = ExtResource("5_network")
 
-[node name="OpportunitySystem" type="Node" parent="MatchController"]
+[node name="OpportunitySystem" type="Node" parent="MatchController" unique_id=985942915]
 script = ExtResource("30_opportunity_system")
 
 [node name="Background" type="ColorRect" parent="." unique_id=617244583]
@@ -309,14 +309,14 @@ offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
 
-[node name="ControlAllCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="ControlAllCharactersCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1796864808]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "控制所有角色"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/ControlAllCharactersCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MatchMenu/MenuPanel/MenuVBox/ControlAllCharactersCheckBox" unique_id=1406219382]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -416,19 +416,19 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
-[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1535387167]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow"]
+[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow" unique_id=1074365858]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "明置候选武将"
 vertical_alignment = 1
 
-[node name="MatchMenuWheelDuelFaceUpCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow"]
+[node name="MatchMenuWheelDuelFaceUpCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceUpCandidateRow" unique_id=869519457]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(90, 34)
 layout_mode = 2
@@ -436,19 +436,19 @@ min_value = 3.0
 max_value = 20.0
 value = 6.0
 
-[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox"]
+[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1292078831]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow"]
+[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow" unique_id=399881889]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "暗置候选武将"
 vertical_alignment = 1
 
-[node name="MatchMenuWheelDuelFaceDownCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow"]
+[node name="MatchMenuWheelDuelFaceDownCandidateInput" type="SpinBox" parent="MatchMenu/MenuPanel/MenuVBox/WheelDuelFaceDownCandidateRow" unique_id=1114613655]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(90, 34)
 layout_mode = 2
@@ -1153,14 +1153,14 @@ theme_override_font_sizes/font_size = 19
 text = "模式选择"
 vertical_alignment = 1
 
-[node name="MainMenuModeScroll" type="ScrollContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox"]
+[node name="MainMenuModeScroll" type="ScrollContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=1466164604]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 
-[node name="ModeCardsVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll"]
+[node name="ModeCardsVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll" unique_id=1004611814]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -1299,7 +1299,7 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
-[node name="WheelDuelModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox"]
+[node name="WheelDuelModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=1622993900]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
@@ -1307,7 +1307,7 @@ mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
 
-[node name="WheelDuelModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton"]
+[node name="WheelDuelModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton" unique_id=829726486]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -1321,17 +1321,17 @@ grow_vertical = 2
 mouse_filter = 2
 theme_override_constants/separation = 2
 
-[node name="WheelDuelModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent"]
+[node name="WheelDuelModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent" unique_id=1633810875]
 layout_mode = 2
 theme_override_font_sizes/font_size = 27
 text = "1v1车轮战"
 
-[node name="WheelDuelModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent"]
+[node name="WheelDuelModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent" unique_id=2086648793]
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "2人"
 
-[node name="WheelDuelModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton"]
+[node name="WheelDuelModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton" unique_id=2128503405]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
@@ -1341,7 +1341,7 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
-[node name="OpportunityBrawlModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox"]
+[node name="OpportunityBrawlModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=2039834801]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 100)
 layout_mode = 2
@@ -1349,7 +1349,7 @@ mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
 
-[node name="OpportunityBrawlModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton"]
+[node name="OpportunityBrawlModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton" unique_id=1997866191]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -1363,19 +1363,19 @@ grow_vertical = 2
 mouse_filter = 2
 theme_override_constants/separation = 2
 
-[node name="OpportunityBrawlModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent"]
+[node name="OpportunityBrawlModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent" unique_id=577081913]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 27
 text = "机缘大乱斗"
 
-[node name="OpportunityBrawlModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent"]
+[node name="OpportunityBrawlModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent" unique_id=1196767519]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "2-10人"
 
-[node name="OpportunityBrawlModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton"]
+[node name="OpportunityBrawlModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton" unique_id=1229413148]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
@@ -1633,14 +1633,14 @@ offset_bottom = 25.0
 mouse_filter = 2
 script = ExtResource("23_identity_indicator")
 
-[node name="MainMenuControlAllCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="MainMenuControlAllCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=973708916]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "控制所有角色"
 
-[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuControlAllCharactersCheckBox"]
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuControlAllCharactersCheckBox" unique_id=1115559716]
 anchors_preset = 0
 offset_left = 2.0
 offset_top = 5.0
@@ -1799,18 +1799,18 @@ min_value = 2.0
 max_value = 10.0
 value = 8.0
 
-[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1947879029]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow"]
+[node name="WheelDuelFaceUpCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow" unique_id=691118272]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "车轮战候选明置武将"
 vertical_alignment = 1
 
-[node name="WheelDuelFaceUpCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow"]
+[node name="WheelDuelFaceUpCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow" unique_id=933723517]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(108, 34)
 layout_mode = 2
@@ -1819,18 +1819,18 @@ min_value = 3.0
 max_value = 20.0
 value = 6.0
 
-[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox"]
+[node name="WheelDuelFaceDownCandidateRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=290126256]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow"]
+[node name="WheelDuelFaceDownCandidateLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow" unique_id=1140848335]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "车轮战候选暗置武将"
 vertical_alignment = 1
 
-[node name="WheelDuelFaceDownCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow"]
+[node name="WheelDuelFaceDownCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow" unique_id=1231435001]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(108, 34)
 layout_mode = 2
