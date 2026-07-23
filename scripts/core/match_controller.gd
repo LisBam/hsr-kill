@@ -5788,7 +5788,7 @@ func _find_top_group_card(card_zone: Array[CardInstance], group_kind: String, gr
 	return null
 
 
-## 令指定角色从摸牌堆获得最顶上的固定牌名字数卡牌；名字统一按《崩铁杀》自定义牌名计算，不受当前显示模式影响。
+## 令指定角色从摸牌堆获得最顶上的固定牌名字数卡牌；普通牌按《崩铁杀》自定义牌名计算，属性【杀】等规则名牌优先按规则名计算。
 func gain_top_draw_card_by_name_length(player_id: int, name_length: int, reason: String = "gain_name_length_card") -> CardInstance:
 	# 获得者；无效角色和非正名字数不会查询或移动牌堆。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
@@ -5797,7 +5797,7 @@ func gain_top_draw_card_by_name_length(player_id: int, name_length: int, reason:
 	# 指定实体；倒序扫描摸牌堆取得最顶上的匹配卡牌，弃牌堆不参与本接口。
 	var matched_card: CardInstance
 	for draw_index: int in range(state.draw_pile.size() - 1, -1, -1):
-		# 当前摸牌堆候选；《崩铁杀》自定义名字数匹配时即为最顶上的合法实体。
+		# 当前摸牌堆候选；统一结算名字数匹配时即为最顶上的合法实体。
 		var draw_card: CardInstance = state.draw_pile[draw_index]
 		if get_card_original_name_length(draw_card.definition_id) == name_length:
 			matched_card = draw_card
@@ -5890,11 +5890,17 @@ func record_failed_card_target(actor_id: int, card_definition_id: String, target
 	actor.ai_failed_card_target_ids[card_definition_id] = failed_target_ids
 
 
-## 返回卡牌《崩铁杀》自定义牌名的Unicode字符数；结算固定读取 custom_name，不受当前显示名称模式影响。
+## 返回卡牌用于名字数结算的Unicode字符数；存在规则名时优先读取规则名，否则读取《崩铁杀》自定义牌名，不受当前显示名称模式影响。
 func get_card_original_name_length(definition_id: String) -> int:
-	# 卡牌静态定义；缺失自定义名称时回退原版名称，避免扩展卡牌未填写 custom_name 导致字数规则失效。
+	# 卡牌静态定义；提供规则名的牌可声明与牌面不同的结算名称，例如火、雷【杀】均按“杀”计算。
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
-	return str(definition.get("custom_name", definition.get("original_name", ""))).length()
+	# 规则结算名称；非空时覆盖牌面名称，保证属性【杀】继续按1个汉字参与名字数规则。
+	var rule_name: String = str(definition.get("rule_name", ""))
+	if not rule_name.is_empty():
+		return rule_name.length()
+	# 崩铁杀牌面名称；未声明规则名的普通牌固定按此字段计数，缺失时才回退原版名称以兼容扩展内容。
+	var custom_name: String = str(definition.get("custom_name", definition.get("original_name", "")))
+	return custom_name.length()
 
 
 ## 弃置目标全部装备；水淹七军、死亡与领袖惩罚可复用此操作。
