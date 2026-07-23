@@ -36,6 +36,7 @@ const IDENTITY_DISTRIBUTIONS: Dictionary = {
 
 ## 斗地主人数到身份表；键为总人数，值为开局固定座次顺序的身份数组（1号位起）。
 ## 三人：一名地主与两名农民；五人：两名地主与三名农民，地主固定一号位与三号位。
+## 补充：正式随机开局将此表作为身份数量池洗牌后分配给玩家；固定顺序只保留给自选座次身份与纯规则调用。
 const DOUDIZHU_DISTRIBUTIONS: Dictionary = {
 	3: ["landlord", "peasant", "peasant"],
 	5: ["landlord", "peasant", "landlord", "peasant", "peasant"],
@@ -95,6 +96,7 @@ func supports_player_count(mode_id: String, player_count: int) -> bool:
 
 ## 返回指定人数与模式的身份数组副本；人数不支持时返回空数组。
 ## 斗地主返回已按一号位（及五人三号位）排好的固定身份表，调用方只需整表洗牌玩家或直接按座次应用。
+## 补充：随机对局调用方应洗牌斗地主身份池，自选座次身份流程才按固定槽位使用其地主名额。
 func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Array[String]:
 	# 规范化模式；缺省为标准身份局以保持旧调用兼容。
 	var mode: String = normalize_mode(mode_id)

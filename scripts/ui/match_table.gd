@@ -4212,7 +4212,11 @@ func _submit_inline_control_choice(control_id: String, confirmed: bool = true) -
 	var request_id: int = int(_inline_card_choice.get("request_id", -1))
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
 	# 复合请求确认时携带当前目标；取消始终清空目标，保持confirmed=false的唯一放弃语义。
-	var selected_target_ids: Array[int] = _selected_target_ids.duplicate() if confirmed and str(_inline_card_choice.get("choice_type", "")) == "target_control" else []
+	# 强类型目标结果；避免三元表达式的空数组被推断为弱类型Array后无法赋给Array[int]。
+	var selected_target_ids: Array[int] = []
+	if confirmed and str(_inline_card_choice.get("choice_type", "")) == "target_control":
+		for selected_target_id: int in _selected_target_ids:
+			selected_target_ids.append(selected_target_id)
 	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":selected_target_ids, "selected_control_id":control_id, "confirmed":confirmed}
 	if not match_controller.submit_action(action):
 		return

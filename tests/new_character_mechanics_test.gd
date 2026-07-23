@@ -2758,8 +2758,10 @@ func _test_zhuijian_damage_and_corner_text() -> bool:
 	if not _controller.set_character_corner_text_entry(1, "test:anke", "安可：♠", 100):
 		return _fail("zhuijian_corner_test_entry")
 	var first_target: PlayerState = _controller.state.get_player(1)
-	if first_target.character_corner_text != "追歼\n安可：♠" or first_target.character_corner_text_entries.size() != 2 or not _controller.state.discard_pile.has(first_cost):
-		return _fail("zhuijian_corner_merge text=%s entries=%s" % [first_target.character_corner_text, first_target.character_corner_text_entries])
+	# 追歼公开标记；来源唯一ID供所有队友AI从权威快照识别应优先承受属性伤害的目标。
+	var first_target_mark: Dictionary = first_target.public_marks.get("zhuijian:0", {}) as Dictionary
+	if first_target.character_corner_text != "追歼\n安可：♠" or first_target.character_corner_text_entries.size() != 2 or int(first_target_mark.get("count", 0)) != 1 or int(first_target_mark.get("source_player_id", -1)) != 0 or not _controller.state.discard_pile.has(first_cost):
+		return _fail("zhuijian_corner_merge text=%s entries=%s mark=%s" % [first_target.character_corner_text, first_target.character_corner_text_entries, first_target_mark])
 	# 普通伤害不属于属性伤害；只扣除基础1点体力并保留追歼提示。
 	_controller.damage(2, 1, 1, "normal", "sha")
 	if first_target.hp != 3 or not first_target.character_corner_text.begins_with("追歼"):
@@ -2774,8 +2776,8 @@ func _test_zhuijian_damage_and_corner_text() -> bool:
 		return _fail("zhuijian_zero_preserve hp=%d text=%s" % [first_target.hp, first_target.character_corner_text])
 	# 下一次实际火属性伤害获得固定+1并消费追歼；其他来源文本继续保留。
 	_controller.damage(2, 1, 1, "fire", "sha")
-	if first_target.hp != 1 or first_target.character_corner_text != "安可：♠" or first_target.character_corner_text_entries.size() != 1:
-		return _fail("zhuijian_fire_damage hp=%d text=%s entries=%s" % [first_target.hp, first_target.character_corner_text, first_target.character_corner_text_entries])
+	if first_target.hp != 1 or first_target.character_corner_text != "安可：♠" or first_target.character_corner_text_entries.size() != 1 or first_target.public_marks.has("zhuijian:0"):
+		return _fail("zhuijian_fire_damage hp=%d text=%s entries=%s marks=%s" % [first_target.hp, first_target.character_corner_text, first_target.character_corner_text_entries, first_target.public_marks])
 	# 第二批追歼目标拥有2点护盾；基础1点雷伤加成至2后被护盾完全吸收，但仍属于实际受到属性伤害并消费提示。
 	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	if not _submit_pending_choice(0, [second_cost.uid], [2], true):

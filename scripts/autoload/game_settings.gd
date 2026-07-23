@@ -468,13 +468,18 @@ func set_online_avatar_character_id(character_id: String) -> void:
 func set_next_match_player_count(player_count: int) -> void:
 	# 按当前下一局模式规范化人数；身份局 2–10，斗地主仅 3/5，并同步写入该模式独立存档槽。
 	var normalized_player_count: int = normalize_player_count_for_mode(next_match_mode, player_count)
-	if next_match_player_count == normalized_player_count:
-		_store_player_count_for_mode(next_match_mode, normalized_player_count)
+	# 当前菜单人数是否变化；仅此项决定是否需要向正在显示的输入框广播。
+	var current_count_changed: bool = next_match_player_count != normalized_player_count
+	# 当前模式独立人数槽是否变化；即使菜单显示数字相同，也必须写盘避免切换模式后丢失设置。
+	var stored_count_changed: bool = get_stored_player_count_for_mode(next_match_mode) != normalized_player_count
+	if not current_count_changed and not stored_count_changed:
 		return
-	next_match_player_count = normalized_player_count
+	if current_count_changed:
+		next_match_player_count = normalized_player_count
 	_store_player_count_for_mode(next_match_mode, normalized_player_count)
 	_queue_settings_save()
-	next_match_player_count_changed.emit(next_match_player_count)
+	if current_count_changed:
+		next_match_player_count_changed.emit(next_match_player_count)
 
 
 ## 规范化下一局模式 ID；未知值回退到标准身份局。
@@ -549,13 +554,14 @@ func set_next_match_mode(mode_id: String) -> void:
 	if next_match_mode == normalized_mode:
 		return
 	next_match_mode = normalized_mode
+	# 模式本身也是持久化字段；即使新旧模式恰好使用相同人数，也必须安排一次写盘。
+	_queue_settings_save()
 	# 切换模式时恢复该模式自己的人数，并广播人数变化让各设置入口同步 SpinBox。
 	var mode_player_count: int = get_stored_player_count_for_mode(next_match_mode)
 	mode_player_count = normalize_player_count_for_mode(next_match_mode, mode_player_count)
 	if next_match_player_count != mode_player_count:
 		next_match_player_count = mode_player_count
 		next_match_player_count_changed.emit(next_match_player_count)
-	_queue_settings_save()
 	next_match_mode_changed.emit(next_match_mode)
 
 

@@ -6965,11 +6965,12 @@ func _create_players(player_count: int) -> void:
 	# 本局模式；决定身份表是否洗牌以及开局公开身份规则。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
 	# 身份配置副本；身份局整表洗牌；斗地主按座次固定；2v2 按座次固定后可整体互换蓝红。
+	# 补充：斗地主现将身份数量池洗牌，确保每局由本局随机源重新决定哪名玩家成为地主。
 	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
 	if match_mode == IdentityRules.MODE_TEAM2V2:
 		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队。
 		identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
-	elif match_mode != IdentityRules.MODE_DOUDIZHU and match_mode != IdentityRules.MODE_WHEEL_DUEL and match_mode != IdentityRules.MODE_CONQUEST:
+	elif match_mode != IdentityRules.MODE_WHEEL_DUEL and match_mode != IdentityRules.MODE_CONQUEST:
 		_shuffle_array(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
@@ -6983,7 +6984,7 @@ func _create_players(player_count: int) -> void:
 		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
 		var player: PlayerState = PlayerState.new(index, default_player_name)
-		# 当前座次身份；身份局已洗牌，斗地主按固定座次表赋值。
+		# 当前座次身份；身份局与斗地主均已洗牌，2v2、车轮战与过关斩将按各自固定规则赋值。
 		player.identity = identities[index]
 		player.identity_revealed = identity_rules.is_identity_public_at_start(player.identity, match_mode)
 		player.character_id = ""
@@ -8127,6 +8128,7 @@ func _refresh_starting_hand(player_id: int, is_ai: bool) -> bool:
 ## 以领袖为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
 func _reorder_players_from_leader() -> void:
 	# 首任公开身份；身份局为领袖，斗地主为地主（固定一号位时索引通常已为0）。
+	# 补充：斗地主身份已随机分配，旋转只让随机选出的首名地主获得一号位先手，不会改变其余玩家的身份归属。
 	var first_identity: String = identity_rules.get_first_player_identity(str(state.match_mode))
 	# 首任身份在当前数组中的索引；身份分配完成前不调用此函数。
 	var leader_index: int = -1

@@ -38,6 +38,9 @@ func _run() -> void:
 	if not _test_post_match_result_text_doudizhu():
 		_restore_settings()
 		return
+	if not _test_randomized_landlord_assignment():
+		_restore_settings()
+		return
 	if not await _test_three_player_match_bootstrap():
 		_restore_settings()
 		return
@@ -182,7 +185,7 @@ func _test_identity_rules_pure() -> bool:
 	return true
 
 
-## 三人对局开局：固定座次身份、身份全明置、体力上限+1、模式技能安装。
+## 三人对局开局：随机玩家身份、身份全明置、体力上限+1、模式技能安装。
 func _test_three_player_match_bootstrap() -> bool:
 	_create_controller()
 	_controller.local_human_player_id = 0
@@ -195,14 +198,24 @@ func _test_three_player_match_bootstrap() -> bool:
 		return _fail("start_match_doudizhu_3")
 	if str(_controller.state.match_mode) != IdentityRules.MODE_DOUDIZHU:
 		return _fail("state.match_mode=%s" % str(_controller.state.match_mode))
-	var expected: Array[String] = ["landlord", "peasant", "peasant"]
-	for i in range(3):
-		var player: PlayerState = _controller.state.get_player(i)
-		if player == null or player.identity != expected[i]:
-			return _fail("seat_%d_identity=%s" % [i, str(player.identity if player != null else null)])
+	# 随机分配后唯一地主的稳定玩家ID；后续模式技能、体力和次数加成断言都按真实身份定位。
+	var landlord_player_id: int = -1
+	# 两名农民的稳定玩家ID；用于验证斗地主双方队友关系不依赖原始创建座次。
+	var peasant_player_ids: Array[int] = []
+	for player: PlayerState in _controller.state.players:
+		if player == null:
+			return _fail("missing_player_state")
 		if not player.identity_revealed:
 			return _fail("%s_should_be_public" % player.identity)
-	# 选将：先让地主（0）选完，再驱动其余 AI 完成选将，直到技能安装完成。
+		if player.identity == "landlord":
+			landlord_player_id = player.player_id
+		elif player.identity == "peasant":
+			peasant_player_ids.append(player.player_id)
+		else:
+			return _fail("unexpected_doudizhu_identity=%s" % player.identity)
+	if landlord_player_id < 0 or peasant_player_ids.size() != 2:
+		return _fail("doudizhu_3_identity_counts landlord=%d peasants=%s" % [landlord_player_id, str(peasant_player_ids)])
+	# 选将：依次完成当前尚未选将的角色，再驱动其余 AI 完成选将，直到技能安装完成。
 	for player_id in range(3):
 		if not str(_controller.state.get_player(player_id).character_id).is_empty():
 			continue
@@ -240,13 +253,16 @@ func _test_three_player_match_bootstrap() -> bool:
 		var skills_ready: bool = not _controller.skill_instances_by_player.is_empty()
 		if all_ready and skills_ready:
 			break
-	var landlord: PlayerState = _controller.state.get_player(0)
+	# 本局随机地主；只通过前面扫描到的稳定ID读取，不能再假设0号玩家必为地主。
+	var landlord: PlayerState = _controller.state.get_player(landlord_player_id)
 	if landlord == null or str(landlord.character_id).is_empty():
 		return _fail("missing_landlord_character phase=%s" % str(_controller.state.current_phase if _controller.state else "null"))
-	var installed: Array[String] = _collect_installed_skill_ids(0)
+	# 地主已安装的模式技能；必须包含飞扬与跋扈。
+	var installed: Array[String] = _collect_installed_skill_ids(landlord_player_id)
 	if not installed.has("feiyang") or not installed.has("bahu"):
 		return _fail("landlord_mode_skills=%s phase=%s" % [str(installed), _controller.state.current_phase])
-	var peasant_installed: Array[String] = _collect_installed_skill_ids(1)
+	# 任意一名农民已安装的模式技能；必须包含共苦。
+	var peasant_installed: Array[String] = _collect_installed_skill_ids(peasant_player_ids[0])
 	if not peasant_installed.has("gongku"):
 		return _fail("peasant_mode_skills=%s" % str(peasant_installed))
 	var char_def: Dictionary = GameDatabase.get_character(landlord.character_id)
@@ -254,18 +270,45 @@ func _test_three_player_match_bootstrap() -> bool:
 	var expected_max: int = base_max_hp + 1
 	if landlord.max_hp != expected_max:
 		return _fail("landlord_max_hp=%d expected=%d base=%d char=%s" % [landlord.max_hp, expected_max, base_max_hp, landlord.character_id])
-	if not _controller.are_teammates(1, 2):
+	if not _controller.are_teammates(peasant_player_ids[0], peasant_player_ids[1]):
 		return _fail("controller_are_teammates_peasants")
-	if _controller.are_teammates(0, 1):
+	if _controller.are_teammates(landlord_player_id, peasant_player_ids[0]):
 		return _fail("controller_landlord_not_teammate_peasant")
-	if not _controller.is_friendly(0, 0):
+	if not _controller.is_friendly(landlord_player_id, landlord_player_id):
 		return _fail("controller_is_friendly_self")
-	if _controller.are_teammates(0, 0):
+	if _controller.are_teammates(landlord_player_id, landlord_player_id):
 		return _fail("controller_teammates_exclude_self")
 	var slash_def: Dictionary = {"play_limit_group": "slash", "id": "sha"}
-	var bonus: int = _controller.skill_play_count_limit_bonus(0, slash_def)
+	var bonus: int = _controller.skill_play_count_limit_bonus(landlord_player_id, slash_def)
 	if bonus < 1:
 		return _fail("bahu_play_limit_bonus=%d" % bonus)
+	return true
+
+
+## 验证斗地主每局使用本局随机源重新决定地主玩家，避免身份池总是按原始玩家ID直接分配。
+func _test_randomized_landlord_assignment() -> bool:
+	# 已观察到的地主稳定玩家ID；跨多个固定种子应至少出现两个不同ID。
+	var landlord_player_ids: Array[int] = []
+	for match_seed: int in range(1, 13):
+		_create_controller()
+		_controller.local_human_player_id = 0
+		_controller.randomize_local_human_seat = false
+		_controller.game_flow_interval_seconds = 0.0
+		_controller.ai_action_delay_seconds = 0.0
+		if not _controller.start_match(3, match_seed, IdentityRules.MODE_DOUDIZHU):
+			return _fail("random_landlord_start_seed=%d" % match_seed)
+		# 当前种子下的地主稳定玩家ID；三人局恰好一名地主，找到后立即停止扫描。
+		var landlord_player_id: int = -1
+		for player: PlayerState in _controller.state.players:
+			if player.identity == "landlord":
+				landlord_player_id = player.player_id
+				break
+		if landlord_player_id < 0:
+			return _fail("random_landlord_missing_seed=%d" % match_seed)
+		if not landlord_player_ids.has(landlord_player_id):
+			landlord_player_ids.append(landlord_player_id)
+	if landlord_player_ids.size() < 2:
+		return _fail("random_landlord_not_varied=%s" % str(landlord_player_ids))
 	return true
 
 
@@ -284,7 +327,7 @@ func _test_all_players_have_characters_after_selection() -> bool:
 				GameSettings.set_customize_ai_characters_enabled(false)
 				if GameSettings.has_method("set_custom_character_assignment_enabled"):
 					GameSettings.set_custom_character_assignment_enabled(custom_enabled)
-			# 显式传入模式与种子，避免依赖菜单状态；0 号位固定为真人地主（三人）或首名地主（五人）。
+			# 显式传入模式与种子，避免依赖菜单状态；0号位保持真人控制，但身份由本局随机源决定。
 			if not _controller.start_match(player_count, 20260721, IdentityRules.MODE_DOUDIZHU):
 				return _fail("start_match_doudizhu_%d_custom=%s" % [player_count, str(custom_enabled)])
 			# 驱动全员选将直到阶段离开 character_selection。
