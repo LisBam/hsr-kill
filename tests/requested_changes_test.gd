@@ -20,6 +20,9 @@ var _same_timing_choice_kinds: Array[String] = []
 ## 最近一次控制器状态快照；用于验证选将结束后会在首轮技能询问前同步起始手牌与过渡阶段。
 var _latest_state_snapshot: Dictionary = {}
 
+## 当前专项场景收到的公开对局日志；只保存字符串副本，用于验证中文技能名与公开牌面记录。
+var _captured_logs: Array[String] = []
+
 ## 隐藏手牌保护场景实际收到的技能询问类型；【铁壁】与【坚垒】均应在没有【闪】时出现。
 var _hidden_hand_prompt_kinds: Array[String] = []
 
@@ -44,6 +47,12 @@ func _run() -> void:
 	if not _test_duel_chain_recast_ai():
 		return
 	if not _test_play_choice_candidate_separation():
+		return
+	if not _test_wooden_ox_stores_unusable_card():
+		return
+	if not _test_ai_chuanchong_stale_choice_refresh():
+		return
+	if not _test_public_gain_log_content():
 		return
 	if not _test_tiebi_accepts_chained_target():
 		return
@@ -86,6 +95,7 @@ func _create_controller() -> void:
 	_controller.ai_action_delay_seconds = 0.0
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
 	_controller.state_changed.connect(_on_state_changed)
+	_controller.log_added.connect(_on_log_added)
 
 
 ## 为单项测试创建指定人数的最小权威状态，并重新绑定全部状态型服务。
@@ -126,6 +136,7 @@ func _reset_state(player_count: int) -> void:
 	_xingjun_begin_request_seen = false
 	_same_timing_choice_kinds.clear()
 	_latest_state_snapshot.clear()
+	_captured_logs.clear()
 
 
 ## 验证所有技能元数据都拥有 bool 类型 lock，且现有锁定技【星火】明确标记为 true。
@@ -277,6 +288,116 @@ func _test_play_choice_candidate_separation() -> bool:
 		_controller._cancel_active_play_choice("requested_changes_candidate_failure")
 		return _fail("play_choice_candidates cards=%s buttons=%s" % [candidate_card_ids, candidate_button_ids])
 	_controller._cancel_active_play_choice("requested_changes_candidate_complete")
+	return true
+
+
+## 验证木牛可储存普通出牌阶段不可使用的响应牌，且该材料在未点击木牛时始终不属于普通用牌候选。
+func _test_wooden_ox_stores_unusable_card() -> bool:
+	_scenario = "wooden_ox_unusable_storage"
+	_reset_state(2)
+	# 仅可响应的【闪】；当前出牌阶段不能直接使用，但必须能作为木牛专用材料。
+	var response_only_card: CardInstance = _add_hand_card(0, "shan", "heart", 8)
+	# 当前木牛实体；普通chooseToUse只点亮该装备入口，不点亮上述材料。
+	var wooden_ox: CardInstance = CardInstance.new("muniu", "diamond", 5)
+	wooden_ox.zone = "equipment"
+	wooden_ox.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = wooden_ox
+	_controller._begin_play_choice(0)
+	# 存粮前请求；不可直接使用的【闪】必须保持暗置，木牛装备本体必须可点击。
+	var initial_request: Dictionary = _controller.state.current_choice_request.duplicate(true)
+	# 存粮前普通候选；该数组直接决定未进入木牛专用交互时的手牌可选状态。
+	var initial_card_ids: Array = initial_request.get("card_ids", []) as Array
+	if initial_card_ids.has(response_only_card.uid) or not initial_card_ids.has(wooden_ox.uid):
+		_controller._cancel_active_play_choice("requested_changes_wooden_ox_candidate_failure")
+		return _fail("wooden_ox_initial_candidates=%s" % [initial_card_ids])
+	# 标准木牛动作；card_uid仍表示材料，payload中的equipment_uid只用于明确本次专用入口。
+	var store_action: PlayerAction = PlayerAction.new("store_wooden_ox", 0, response_only_card.uid, [])
+	store_action.payload = {"material_card_uids":[response_only_card.uid], "equipment_uid":wooden_ox.uid}
+	if not _controller.submit_action(store_action):
+		return _fail("wooden_ox_unusable_submit_failed")
+	# 实际区域结果；材料离开普通手牌并进入木牛“粮”，因此之后也不可能被普通出牌候选误选。
+	var owner: PlayerState = _controller.state.get_player(0)
+	if owner.find_hand_card(response_only_card.uid) != null or not owner.wooden_ox_storage.has(response_only_card) or response_only_card.zone != "wooden_ox":
+		return _fail("wooden_ox_storage_result hand=%d storage=%d zone=%s" % [owner.hand.size(), owner.wooden_ox_storage.size(), response_only_card.zone])
+	_controller._cancel_active_play_choice("requested_changes_wooden_ox_complete")
+	return true
+
+
+## 验证AI决策前会刷新缺少动态【传冲】按钮的旧chooseToUse，并可立即提交最新合法技能动作。
+func _test_ai_chuanchong_stale_choice_refresh() -> bool:
+	_scenario = "ai_chuanchong_stale_choice"
+	_reset_state(2)
+	# 方块【闪】材料；传冲会将其视为【无中生有】，但建立旧请求时技能尚未安装。
+	var conversion_material: CardInstance = _add_hand_card(0, "shan", "diamond", 6)
+	# 无中生有将摸取的两张牌；避免牌堆耗尽使本次合法性测试提前进入平局。
+	_add_draw_pile_card("sha", "spade", 7)
+	_add_draw_pile_card("tao", "heart", 3)
+	_controller._begin_play_choice(0)
+	# 旧请求按钮；传冲尚未安装，因此不得提前出现。
+	var stale_request: Dictionary = _controller.state.current_choice_request.duplicate(true)
+	if (stale_request.get("button_ids", []) as Array).has("chuanchong"):
+		_controller._cancel_active_play_choice("requested_changes_chuanchong_unexpected_button")
+		return _fail("chuanchong_stale_request_already_contains_skill")
+	# 动态安装传冲实例；模拟AI等待时间内技能入口或材料条件发生变化。
+	var chuanchong: SkillDefinition = GameDatabase.create_skill("chuanchong")
+	if chuanchong == null:
+		return _fail("chuanchong_refresh_skill_missing")
+	chuanchong.bind(_controller, 0)
+	chuanchong.install()
+	_controller.skill_instances_by_player = {0:{"chuanchong":chuanchong}}
+	# 最新合法动作；至少一条必须使用测试材料把方块牌转化为无中生有。
+	var legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	# 选定的传冲动作；保存完整标准字典供刷新后通过统一AI提交端口复核。
+	var selected_action_data: Dictionary = {}
+	# 当前合法动作；只选取使用测试材料的传冲分支。
+	for legal_action: Dictionary in legal_actions:
+		if str(legal_action.get("action_type", "")) == "use_skill" and int((legal_action.get("payload", {}) as Dictionary).get("material_card_uid", -1)) == conversion_material.uid:
+			selected_action_data = legal_action
+			break
+	if selected_action_data.is_empty() or not _controller._refresh_stale_ai_play_choice(0, legal_actions):
+		_controller._cancel_active_play_choice("requested_changes_chuanchong_refresh_failure")
+		return _fail("chuanchong_refresh_action=%s" % [selected_action_data])
+	# 刷新后请求；技能按钮必须与最新合法动作同步，避免提交时出现“选择已经失效”。
+	var refreshed_request: Dictionary = _controller.state.current_choice_request.duplicate(true)
+	if not (refreshed_request.get("button_ids", []) as Array).has("chuanchong"):
+		_controller._cancel_active_play_choice("requested_changes_chuanchong_button_missing")
+		return _fail("chuanchong_refreshed_request=%s" % [refreshed_request])
+	if not _controller._submit_ai_action(PlayerAction.from_dict(selected_action_data)):
+		return _fail("chuanchong_refreshed_action_rejected")
+	if _controller.state.get_player(0).find_hand_card(conversion_material.uid) != null:
+		return _fail("chuanchong_material_not_consumed")
+	_controller._cancel_active_play_choice("requested_changes_chuanchong_complete")
+	return true
+
+
+## 验证日志把技能稳定ID解析为中文，并仅在当前全部存活角色已知牌面时写出所获得的具体实体牌。
+func _test_public_gain_log_content() -> bool:
+	_scenario = "public_gain_log"
+	_reset_state(3)
+	# 公开装备实体；三名存活角色均已知牌面，获得后日志必须写出花色、点数和牌名。
+	var public_equipment: CardInstance = CardInstance.new("cixiong", "spade", 2)
+	public_equipment.zone = "equipment"
+	public_equipment.owner_id = 1
+	public_equipment.known_to.assign([0, 1, 2])
+	_controller.state.get_player(1).equipment["weapon"] = public_equipment
+	if not _controller.gain_card_to_hand_by_uid(0, public_equipment.uid, "chuanchong"):
+		return _fail("public_gain_move_failed")
+	# 预期公开日志；技能显示中文【传冲】，已知实体显示完整牌面而不是“一张牌”。
+	var expected_public_log: String = "%s因【传冲】获得了%s。" % [_controller.format_player_state_log_name(_controller.state.get_player(0)), _controller.format_card_log_name(public_equipment)]
+	if _captured_logs.is_empty() or _captured_logs.back() != expected_public_log:
+		return _fail("public_gain_log=%s expected=%s" % [_captured_logs, expected_public_log])
+	# 摸牌堆取得实体会按隐藏获得协议重置知识；其他角色未知时日志不能显示具体牌面。
+	var hidden_gain_card: CardInstance = CardInstance.new("sha", "club", 9)
+	hidden_gain_card.zone = "draw_pile"
+	hidden_gain_card.known_to.assign([0])
+	hidden_gain_card.shown = false
+	_controller.state.draw_pile.append(hidden_gain_card)
+	if not _controller.gain_card_to_hand_by_uid(0, hidden_gain_card.uid, "chuanchong"):
+		return _fail("hidden_gain_move_failed")
+	# 隐藏获得日志；技能名仍为中文，但实体牌面不得泄露给第三名角色。
+	var expected_hidden_log: String = "%s因【传冲】获得了一张牌。" % _controller.format_player_state_log_name(_controller.state.get_player(0))
+	if _captured_logs.back() != expected_hidden_log or _captured_logs.back().contains(_controller.format_card_log_name(hidden_gain_card)):
+		return _fail("hidden_gain_log=%s expected=%s" % [_captured_logs.back(), expected_hidden_log])
 	return true
 
 
@@ -567,6 +688,11 @@ func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int],
 ## 保存控制器最近一次公开状态；测试只读取序列化副本，不持有或修改权威PlayerState。
 func _on_state_changed(snapshot: Dictionary) -> void:
 	_latest_state_snapshot = snapshot.duplicate(true)
+
+
+## 保存一条公开对局日志；测试只比较最终中文文本，不修改控制器日志信号内容。
+func _on_log_added(message: String) -> void:
+	_captured_logs.append(message)
 
 
 ## 向当前测试牌堆顶部加入一张实体；数组末尾是正式摸牌顺序中的牌堆顶。

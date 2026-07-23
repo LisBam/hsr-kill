@@ -263,6 +263,7 @@ func records_failed_ai_target_when_negated() -> bool:
 
 
 ## 返回武器是否已通过标准damage时机处理【杀】造成伤害效果；true时跳过旧的伤害完成后兼容钩子。
+## 当前标准说明：此处的“damage时机”泛指正式伤害时机协议；实现可使用扣减前的shaDamage，不要求订阅同名damage事件。
 func uses_damage_timing_trigger() -> bool:
 	return false
 

@@ -1540,6 +1540,25 @@ func _get_play_phase_equipment_action_definition(player_id: int, action_type: St
 	return null
 
 
+## 按主动动作类型返回当前玩家用于进入chooseToUse的装备实体UID；材料牌只属于装备的后续专用选择，不能替代该入口。
+func _get_play_phase_equipment_action_uid(player_id: int, action_type: String) -> int:
+	if action_type.is_empty():
+		return -1
+	# 当前玩家；不存在时没有可用于提交请求的装备入口。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return -1
+	# 当前玩家装备遍历项；每个值都应是公开装备区中的实体牌。
+	for equipment_variant: Variant in player.equipment.values():
+		# 当前装备实体；只有其定义明确声明同一主动动作类型时才返回稳定UID。
+		var equipment_card: CardInstance = equipment_variant as CardInstance
+		# 当前装备定义；内容文件拥有动作类型，控制器不维护具体装备白名单。
+		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
+		if equipment_definition != null and equipment_definition.get_play_phase_action_types().has(action_type):
+			return equipment_card.uid
+	return -1
+
+
 ## 返回当前是否存在等待玩家或 AI 提交的选择窗口；牌、目标和组合请求都会暂停后续结算。
 func has_pending_card_choice() -> bool:
 	if network_gateway != null and network_gateway.is_lan_client():
@@ -1663,6 +1682,57 @@ func _has_active_play_choice() -> bool:
 	return false
 
 
+## 返回当前活动chooseToUse的只读请求快照；请求已经结束或不属于当前记录时返回空字典。
+func _get_active_play_choice_snapshot() -> Dictionary:
+	if not _has_active_play_choice():
+		return {}
+	# 当前待处理请求快照；只返回与控制器记录的请求ID和事件ID同时一致的一项。
+	for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+		if int(request_data.get("request_id", -1)) == _play_choice_request_id and int(request_data.get("event_id", -1)) == _play_choice_event_id:
+			return request_data
+	return {}
+
+
+## 判断一条最新合法动作能否由既有chooseToUse快照表达；技能、普通牌与装备分别校验各自独立入口。
+func _is_play_action_represented_by_choice(action: Dictionary, request_snapshot: Dictionary) -> bool:
+	# 当前动作类型；结束阶段不需要牌或技能候选即可提交取消响应。
+	var action_type: String = str(action.get("action_type", ""))
+	if action_type == "end_play":
+		return true
+	if action_type == "use_skill":
+		# 当前技能ID；优先读取标准负载，兼容合法动作顶层保留的索引字段。
+		var skill_payload: Dictionary = action.get("payload", {}) as Dictionary
+		# 当前技能稳定ID；必须已经登记为请求按钮候选。
+		var skill_id: String = str(skill_payload.get("skill_id", action.get("skill_id", "")))
+		return not skill_id.is_empty() and (request_snapshot.get("button_ids", []) as Array).has(skill_id)
+	# 当前装备入口UID；木牛等动作的card_uid是材料牌，因此必须反查装备本体。
+	var equipment_uid: int = _get_play_phase_equipment_action_uid(int(action.get("actor_id", -1)), action_type)
+	if equipment_uid >= 0:
+		return (request_snapshot.get("card_ids", []) as Array).has(equipment_uid)
+	if action_type in ["use_card", "recast_card"]:
+		return (request_snapshot.get("card_ids", []) as Array).has(int(action.get("card_uid", -1)))
+	return false
+
+
+## AI决策前重建已经落后于动态合法动作的chooseToUse快照；返回true表示本次确实完成了一次无副作用刷新。
+func _refresh_stale_ai_play_choice(player_id: int, legal_actions: Array[Dictionary]) -> bool:
+	if state == null or state.current_player_id != player_id or not _has_active_play_choice():
+		return false
+	# 当前活动请求快照；只读比较候选，不修改请求内部选择状态。
+	var request_snapshot: Dictionary = _get_active_play_choice_snapshot()
+	if request_snapshot.is_empty():
+		return false
+	# 当前最新合法动作；任何一项缺少请求入口都说明整个快照已经落后。
+	for legal_action: Dictionary in legal_actions:
+		if _is_play_action_represented_by_choice(legal_action, request_snapshot):
+			continue
+		# 旧请求只由系统取消，不执行结束出牌阶段；新请求立即按最新技能、装备与普通牌候选重新生成。
+		_cancel_active_play_choice("refresh_stale_ai_play_choice")
+		_begin_play_choice(player_id)
+		return true
+	return false
+
+
 ## 把现有 UI/AI 高层动作转换为当前 chooseToUse 的标准 ChoiceResponse，并交给事件运行时校验。
 func _submit_play_choice_response(action: PlayerAction) -> bool:
 	if not _has_active_play_choice():
@@ -1672,7 +1742,9 @@ func _submit_play_choice_response(action: PlayerAction) -> bool:
 	if action.action_type == "use_skill":
 		response.button_ids = [str(action.payload.get("skill_id", ""))]
 	elif action.action_type != "end_play":
-		response.card_ids = [action.card_uid]
+		# 装备主动入口UID；木牛等动作把card_uid用于材料牌，chooseToUse实际消费的始终是此前点亮的装备本体。
+		var equipment_uid: int = _get_play_phase_equipment_action_uid(action.actor_id, action.action_type)
+		response.card_ids = [equipment_uid if equipment_uid >= 0 else action.card_uid]
 	response.target_ids = action.target_ids.duplicate()
 	response.client_sequence = action.client_sequence
 	response.source = "ai" if ai_coordinator.is_ai_controlled(action.actor_id) else ("network" if network_gateway.mode != NetworkGateway.Mode.OFFLINE else "local")
@@ -2907,6 +2979,51 @@ func format_card_log_name(card: CardInstance) -> String:
 	return "%s%s%s" % [suit_text, rank_text, card_name_text]
 
 
+## 返回技能在公开日志中的中文名称；未知定义不泄露内部稳定ID，以“未知技能”明确表示内容登记异常。
+func format_skill_log_name(skill_id: String) -> String:
+	# 技能静态元数据；正式技能均由目录扫描注册并必须提供中文name字段。
+	var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+	# 技能中文名称；空名称与未知ID使用统一可读回退，不把英文配置键显示给玩家。
+	var skill_name: String = str(skill_metadata.get("name", "")).strip_edges()
+	return skill_name if not skill_name.is_empty() else "未知技能"
+
+
+## 返回日志中的规则原因；技能与卡牌稳定ID解析为中文显示名，普通中文原因保持原文。
+func format_log_reason(reason: String) -> String:
+	if reason.is_empty():
+		return "规则效果"
+	# 技能元数据；命中时优先按中文技能名称格式化，避免公开日志出现内部英文ID。
+	var skill_metadata: Dictionary = GameDatabase.get_skill(reason)
+	if not skill_metadata.is_empty():
+		return "【%s】" % format_skill_log_name(reason)
+	# 卡牌元数据；以卡牌ID作为原因的通用端口同样转换为当前名称模式下的牌名。
+	var card_metadata: Dictionary = GameDatabase.get_card(reason)
+	if not card_metadata.is_empty():
+		return format_card_definition_log_name(reason)
+	return reason
+
+
+## 判断实体牌是否已被当前全部存活角色知晓；知识集合是唯一依据，不能仅凭进入手牌前曾经展示推断。
+func is_card_known_to_all_players(card: CardInstance) -> bool:
+	if card == null or state == null:
+		return false
+	# 当前需要知晓牌面的角色数量；没有存活角色时不把任何牌误判为全公开。
+	var relevant_player_count: int = 0
+	# 当前对局角色；死亡角色不再接收规则日志，全部存活角色均须位于知识集合。
+	for player: PlayerState in state.players:
+		if not player.alive:
+			continue
+		relevant_player_count += 1
+		if not card.known_to.has(player.player_id):
+			return false
+	return relevant_player_count > 0
+
+
+## 返回获得牌日志中的牌面文本；全体存活角色均已知时写出花色点数牌名，否则使用调用方提供的隐藏描述。
+func format_gained_card_log_name(card: CardInstance, hidden_text: String = "一张牌") -> String:
+	return format_card_log_name(card) if is_card_known_to_all_players(card) else hidden_text
+
+
 ## 返回定义 ID 对应的【牌名】日志文本。
 func format_card_definition_log_name(definition_id: String) -> String:
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
@@ -3144,7 +3261,7 @@ func add_hand_limit_bonus(player_id: int, amount: int, reason: String = "", allo
 	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or amount <= 0:
 		return 0
 	player.hand_limit_bonus += amount
-	add_log("%s的手牌上限因%s增加%d点（额外上限%d）。" % [format_player_state_log_name(player), reason if not reason.is_empty() else "规则效果", amount, player.hand_limit_bonus])
+	add_log("%s的手牌上限因%s增加%d点（额外上限%d）。" % [format_player_state_log_name(player), format_log_reason(reason), amount, player.hand_limit_bonus])
 	_emit_state()
 	return amount
 
@@ -3932,7 +4049,7 @@ func _consume_cardless_skill_response(player_id: int, skill_id: String, definiti
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[], "skill_id":skill_id, "virtual_card_id":definition_id})
 	skill.on_cardless_response_consumed(response_pattern, definition_id)
 	skill.announce_activation({"response_pattern":response_pattern, "virtual_card_id":definition_id})
-	add_log("%s通过【%s】视为打出%s。" % [player.display_name, skill.get_metadata().get("name", skill_id), GameSettings.resolve_card_name(definition)])
+	add_log("%s通过【%s】视为打出%s。" % [player.display_name, format_skill_log_name(skill_id), GameSettings.resolve_card_name(definition)])
 	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
 	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
 	return CardInstance.new(definition_id, "none", 0)
@@ -4918,7 +5035,7 @@ func _draw_and_finish_judgment_card(player_id: int, reason: String, parent_event
 	_emit_rule_timing("judge", player_id, player_id, player_id, judge_data, judgment_event_id)
 	# 判定牌属于公共牌堆而非判定角色打出的牌；来源使用-1让界面直接从中央弃牌锚点出现。
 	_request_card_presentation(judgment_card, -1, [], "judge", judgment_event_id, true)
-	add_log("%s的%s判定牌为%s。" % [judgment_player.display_name, reason, describe_card(judgment_card)])
+	add_log("%s的%s判定牌为%s。" % [judgment_player.display_name, format_log_reason(reason), describe_card(judgment_card)])
 	_emit_rule_timing("judgeFixing", player_id, player_id, player_id, judge_data, judgment_event_id)
 	_record_runtime_event("judgeResult", "judgment_result", {"player_id":player_id, "reason":reason, "card_uid":judgment_card.uid}, {"suit":judgment_card.suit, "rank":judgment_card.rank, "color":judgment_card.get_color()}, judgment_event_id)
 	_move_to_discard(judgment_card, judgment_event_id)
@@ -5171,7 +5288,7 @@ func _take_selected_player_card(source_id: int, target_id: int, card_uid: int) -
 	# 该来源现由 CardMovementService 在移动前写入统一事件，避免获得牌出现两次动画。
 	_ensure_card_movement()
 	_move_card_with_timings(taken_card, "hand", source_id, "gain", state.current_event_id, "", [source_id])
-	add_log("%s获得了%s的一张牌。" % [source.display_name, target.display_name])
+	add_log("%s获得了%s的%s。" % [source.display_name, target.display_name, format_gained_card_log_name(taken_card)])
 	return true
 
 
@@ -5225,7 +5342,7 @@ func discard_all_hand_cards(player_id: int, source_id: int = -1, reason: String 
 		if discard_card_from_hand(player_id, card_uid):
 			discarded_count += 1
 	if discarded_count > 0:
-		add_log("%s因%s弃置了全部手牌。" % [format_player_state_log_name(player), reason])
+		add_log("%s因%s弃置了全部手牌。" % [format_player_state_log_name(player), format_log_reason(reason)])
 		if source_id >= 0:
 			observe_skill_identity_behavior(source_id, [player_id], {"target_result":-1.0})
 	return discarded_count
@@ -5249,7 +5366,7 @@ func gain_all_hand_cards(receiver_id: int, target_id: int, reason: String = "gai
 		if _take_selected_player_card(receiver_id, target_id, card_uid):
 			gained_count += 1
 	if gained_count > 0:
-		add_log("%s因%s获得了%s的全部手牌。" % [format_player_state_log_name(receiver), reason, format_player_state_log_name(target)])
+		add_log("%s因%s获得了%s的全部手牌。" % [format_player_state_log_name(receiver), format_log_reason(reason), format_player_state_log_name(target)])
 	return gained_count
 
 
@@ -5326,10 +5443,14 @@ func gain_card_to_hand_by_uid(receiver_id: int, card_uid: int, reason: String = 
 		_on_equipment_lost(equipment_owner, card, true)
 	_ensure_card_movement()
 	# 牌堆与弃牌堆进入手牌时重置为接收者私有知识；公开角色区域牌沿用已经公开的历史知识。
-	var reset_hand_knowledge: bool = source_zone in ["draw_pile", "discard_pile"]
+	# 当前知识说明：已由全部存活角色知晓的公开弃牌堆实体属于例外，移动后继续保留历史知识并显示具体获得牌。
+	# 移动前公开知识；公开弃牌堆选择若已被全部存活角色知晓，进入手牌后仍保持该历史知识并在日志中写出牌面。
+	var source_card_known_to_all: bool = is_card_known_to_all_players(card)
+	# 摸牌堆实体始终重置为接收者私有；弃牌堆中并非全体已知的检索结果同样隐藏，公开选定实体则保留知识。
+	var reset_hand_knowledge: bool = source_zone == "draw_pile" or (source_zone == "discard_pile" and not source_card_known_to_all)
 	if _move_card_with_timings(card, "hand", receiver_id, reason, state.current_event_id, "", [receiver_id], reset_hand_knowledge) == null:
 		return false
-	add_log("%s因%s获得了一张牌。" % [format_player_state_log_name(receiver), reason])
+	add_log("%s因%s获得了%s。" % [format_player_state_log_name(receiver), format_log_reason(reason), format_gained_card_log_name(card)])
 	return true
 
 
@@ -5579,7 +5700,7 @@ func transfer_hand_card_as(from_id: int, to_id: int, card_uid: int, view_as_defi
 	if from_id == to_id:
 		if card.definition_id != view_as_definition_id and not card.set_hand_view_as(view_as_definition_id, source_skill_id):
 			return false
-		add_log("%s将一张手牌交给了自己。" % source.display_name)
+		add_log("%s将%s交给了自己。" % [source.display_name, format_gained_card_log_name(card, "一张手牌")])
 		return true
 	_ensure_card_movement()
 	if _move_card_with_timings(card, "hand", to_id, "give", state.current_event_id, "", [to_id]) == null:
@@ -5587,7 +5708,7 @@ func transfer_hand_card_as(from_id: int, to_id: int, card_uid: int, view_as_defi
 	# 临时牌名只在实体已属于目标手牌时建立；后续离手由统一移动边界自动恢复原始定义。
 	if card.definition_id != view_as_definition_id and not card.set_hand_view_as(view_as_definition_id, source_skill_id):
 		return false
-	add_log("%s交给了%s一张手牌。" % [source.display_name, target.display_name])
+	add_log("%s将%s交给了%s。" % [source.display_name, format_gained_card_log_name(card, "一张手牌"), target.display_name])
 	return true
 
 
@@ -7060,7 +7181,7 @@ func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int 
 	# 当前技能实例表；固有、模式、临时与已获得技能共用同一运行时容器。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
 	if player_skills.has(skill_id):
-		add_log("%s已经拥有【%s】，本次获得未重复安装。" % [format_player_state_log_name(player), str(GameDatabase.get_skill(skill_id).get("name", skill_id))])
+		add_log("%s已经拥有【%s】，本次获得未重复安装。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
 		return false
 	# 新技能运行时实例；领袖技不能通过普通局内效果绕过身份限制获得。
 	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
@@ -7082,7 +7203,7 @@ func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int 
 		"total_uses":0,
 	}
 	skill.install()
-	add_log("%s获得了技能【%s】。" % [format_player_state_log_name(player), str(GameDatabase.get_skill(skill_id).get("name", skill_id))])
+	add_log("%s获得了技能【%s】。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
 	_emit_state()
 	return true
 
@@ -7159,7 +7280,7 @@ func remove_acquired_skill(player_id: int, skill_id: String) -> bool:
 		skill.uninstall()
 	player_skills.erase(skill_id)
 	skill_instances_by_player[player_id] = player_skills
-	add_log("%s失去了技能【%s】。" % [format_player_state_log_name(player), str(GameDatabase.get_skill(skill_id).get("name", skill_id))])
+	add_log("%s失去了技能【%s】。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
 	_emit_state()
 	return true
 
@@ -7389,7 +7510,8 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	if player == null or not player.alive or (player.out_of_game and not bool(skill_metadata.get("out_of_game_skill", false))):
 		return
 	# 技能名称；缺失时回退稳定 ID，保证日志与动画仍能定位来源。
-	var skill_name: String = str(skill_metadata.get("name", skill_id))
+	# 当前日志说明：稳定ID只保存在结构化历史中，玩家可见名称缺失时统一显示中文“未知技能”。
+	var skill_name: String = format_skill_log_name(skill_id)
 	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
 	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
 	# 技能目标日志片段；有目标时追加“，目标为xx”。
@@ -11596,14 +11718,21 @@ func _run_ai_after_delay(token: int) -> void:
 	var player_id: int = state.current_player_id
 	if not ai_coordinator.is_ai_controlled(player_id):
 		return
+	# 当前全部合法候选；核心在决策前完成枚举，AI 无权绕过合法性。
+	var legal_actions: Array[Dictionary] = get_legal_actions(player_id)
+	# 动态技能条件可能在请求建立后改变；先刷新过期候选，避免【传冲】等合法技能动作提交到缺少对应按钮的旧请求。
+	if _refresh_stale_ai_play_choice(player_id, legal_actions):
+		if state == null or state.game_over or has_pending_play_interaction() or not _has_active_play_choice():
+			_ensure_ai_progress_after_resolution()
+			return
+		# 刷新后的合法动作；请求建立时机可能调整状态，因此不得沿用刷新前数组。
+		legal_actions = get_legal_actions(player_id)
 	_ai_actions_this_turn += 1
 	if _ai_actions_this_turn > max_ai_actions_per_turn:
 		_submit_ai_action(PlayerAction.new("end_play", player_id))
 		return
 	# AI 可读取的权威完整快照；包含所有身份与手牌，但策略只能返回标准动作字典。
 	var full_snapshot: Dictionary = state.to_dict(player_id, true)
-	# 当前全部合法候选；核心在决策前完成枚举，AI 无权绕过合法性。
-	var legal_actions: Array[Dictionary] = get_legal_actions(player_id)
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
 	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
 	# AI动作可能因延迟期间的状态变化被权威入口拒绝；失败后仍须回到统一续接出口，最终受每阶段动作上限约束。

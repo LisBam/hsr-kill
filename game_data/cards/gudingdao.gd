@@ -38,5 +38,6 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 
 
 ## 古锭刀使持有者以【杀】伤害无手牌目标时伤害固定增加1点。
+## 时机说明：本修正发生在护盾与体力扣减前，返回的+1结果随后继续进入damageBegin2及后续伤害窗口。
 func modify_outgoing_damage(match_host: Object, owner: PlayerState, target: PlayerState, context: Dictionary, amount: int) -> int:
 	return amount + 1 if str(context.get("card_id", "")) in ["sha", "sha_fire", "sha_thunder"] and target.hand.is_empty() else amount
