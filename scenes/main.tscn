@@ -28,6 +28,7 @@
 [ext_resource type="Script" uid="uid://dmfb5tfoschl5" path="res://scripts/platform/android_back_adapter.gd" id="28_android_back"]
 [ext_resource type="Script" uid="uid://cnyink6clckec" path="res://scripts/platform/android_display_stability.gd" id="29_android_display"]
 [ext_resource type="Script" uid="uid://b8v06563qhwaj" path="res://scripts/opportunity/opportunity_system.gd" id="30_opportunity_system"]
+[ext_resource type="PackedScene" path="res://scenes/components/all_cards_panel.tscn" id="31_all_cards"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -1143,6 +1144,29 @@ grow_vertical = 0
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
+[node name="MainMenuAllCardsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(192, 0)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 18
+toggle_mode = true
+text = "所有卡牌"
+
+[node name="TopAllCardsIndicator" type="ColorRect" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuAllCardsButton"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -4.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.831373, 0.709804, 0.372549, 1)
+
 [node name="TopNavigationSpacer" type="Control" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=1238528856]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -1941,5 +1965,7 @@ text = "返回"
 [node name="LanLobbyPanel" parent="MainMenu" unique_id=188323044 instance=ExtResource("24_lan_lobby")]
 
 [node name="OnlineSettingsPanel" parent="MainMenu" unique_id=1986582550 instance=ExtResource("25_online_settings")]
+
+[node name="AllCardsPanel" parent="MainMenu" instance=ExtResource("31_all_cards")]
 
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]

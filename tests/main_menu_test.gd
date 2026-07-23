@@ -36,6 +36,8 @@ func _run() -> void:
 	var settings_button: Button = main_instance.get_node("%MainMenuSettingsButton") as Button
 	# 顶部联机设置按钮；必须位于模式选择右侧并对等切换主菜单客户区资料页。
 	var online_settings_button: Button = main_instance.get_node("%MainMenuOnlineSettingsButton") as Button
+	# 顶部所有卡牌按钮；必须与模式选择、联机设置同级并切换到独立图鉴客户区。
+	var all_cards_button: Button = main_instance.get_node("%MainMenuAllCardsButton") as Button
 	# 开始按钮；文字固定为“开始游戏”，点击后关闭主菜单并开始身份局。
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
 	# 局内菜单入口；成功开局后用于验证重新开局失败能显式返回主菜单，而不是停留在旧牌桌。
@@ -64,6 +66,26 @@ func _run() -> void:
 	var online_profile_section_button: Button = online_settings_panel.get_node("%OnlineProfileSectionButton") as Button
 	# 联机设置底部操作栏；高度与模式选择底部操作栏一致。
 	var online_action_panel: PanelContainer = online_settings_panel.get_node("%OnlineSettingsActionPanel") as PanelContainer
+	# 所有卡牌内容页；只读取静态目录并提供武将、游戏牌和机缘三个子分页。
+	var all_cards_panel: AllCardsPanel = main_instance.get_node("%AllCardsPanel") as AllCardsPanel
+	# 所有武将子分页按钮；图鉴首次打开时必须默认选中。
+	var all_characters_tab_button: Button = all_cards_panel.get_node("%AllCharactersTabButton") as Button
+	# 所有游戏牌子分页按钮；点击后展示数据库中每种游戏牌定义。
+	var all_game_cards_tab_button: Button = all_cards_panel.get_node("%AllGameCardsTabButton") as Button
+	# 所有机缘子分页按钮；点击后展示含灰色关卡机缘在内的完整目录。
+	var all_opportunities_tab_button: Button = all_cards_panel.get_node("%AllOpportunitiesTabButton") as Button
+	# 图鉴搜索输入框；当前子分页内容应随文本即时过滤。
+	var all_cards_search_input: LineEdit = all_cards_panel.get_node("%AllCardsSearchInput") as LineEdit
+	# 图鉴动态网格内容；用于确认每类条目复用正式牌面场景且数量完整。
+	var all_cards_grid_content: Control = all_cards_panel.get_node("%AllCardsGridContent") as Control
+	# 图鉴结果数量标签；搜索后必须同时显示命中数与当前分类总数。
+	var all_cards_result_count_label: Label = all_cards_panel.get_node("%AllCardsResultCountLabel") as Label
+	# 图鉴完整资料遮罩；点击牌面后显示规则正文并阻断底层输入。
+	var all_cards_information_backdrop: ColorRect = all_cards_panel.get_node("%AllCardsInfoBackdrop") as ColorRect
+	# 图鉴完整资料标题；用于确认点击的是当前类别中的真实静态定义。
+	var all_cards_information_title: Label = all_cards_panel.get_node("%AllCardsInfoTitle") as Label
+	# 图鉴左侧子分页列表；宽度应与模式选择和联机设置列表保持一致。
+	var all_cards_side_list: PanelContainer = all_cards_panel.get_node("%AllCardsSideList") as PanelContainer
 	# 游戏人数输入框；2至10范围内的值会作为主菜单开局请求参数。
 	var player_count_input: SpinBox = main_instance.get_node("%MainMenuPlayerCountInput") as SpinBox
 	# 顶部模式栏；主题切换后其边框必须从统一注册表即时更新。
@@ -156,7 +178,7 @@ func _run() -> void:
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
-	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or all_cards_button.text != "所有卡牌" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or all_cards_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
@@ -199,7 +221,7 @@ func _run() -> void:
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
 	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
 	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 2 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 3 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or top_navigation_buttons[2] != all_cards_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
 	# 车轮战模式专属设置；局内、局外必须同时显示明置与暗置数量，并应用同一字体、文字色及全局配置值。
@@ -368,6 +390,92 @@ func _run() -> void:
 	if online_settings_panel.visible or not main_frame.visible or not top_identity_mode_button.button_pressed or online_settings_button.button_pressed:
 		_fail("online_settings_switch_to_mode_page")
 		return
+	# 打开所有卡牌对等内容页；默认子分页必须完整读取全部已登记武将且复用正式武将牌场景。
+	await _click_control(all_cards_button)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 所有卡牌页客户区矩形；必须与模式选择页严格对齐且不覆盖顶部导航。
+	var all_cards_page_rect: Rect2 = all_cards_panel.get_global_rect()
+	# 所有武将正式牌面节点；数量必须等于当前数据库武将定义总数。
+	var all_character_views: Array[Node] = all_cards_grid_content.find_children("*", "PlayerTargetView", true, false)
+	if not all_cards_panel.visible or main_frame.visible or online_settings_panel.visible or not all_cards_button.button_pressed or top_identity_mode_button.button_pressed or online_settings_button.button_pressed or not (main_instance.get_node("%TopAllCardsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or not all_characters_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunities_tab_button.button_pressed or all_character_views.size() != GameDatabase.characters.size() or absf(all_cards_page_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(all_cards_page_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(all_cards_page_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(all_cards_page_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(all_cards_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or start_game_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE:
+		_fail("all_cards_characters_open")
+		return
+	# 当前武将条目数组；测试使用组件只读运行时索引计算关键词预期命中数，不修改任何条目。
+	var character_entries: Array = all_cards_panel.get("_entries") as Array
+	# 当前搜索关键词；使用首项稳定 ID 保证至少命中一个武将。
+	var character_search_query: String = str((character_entries[0] as Dictionary).get("id", ""))
+	# 当前搜索预期命中数；搜索文本由组件预先标准化，测试只验证筛选与显示数量一致。
+	var expected_character_matches: int = 0
+	for character_entry_variant: Variant in character_entries:
+		# 当前武将测试条目；只读取搜索文本计算命中数量。
+		var character_entry: Dictionary = character_entry_variant as Dictionary
+		if str(character_entry.get("search_text", "")).contains(character_search_query.to_lower()):
+			expected_character_matches += 1
+	all_cards_search_input.text = character_search_query
+	all_cards_search_input.text_changed.emit(character_search_query)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 当前实际可见武将槽数量；隐藏条目不应继续占用网格位置。
+	var visible_character_matches: int = 0
+	for character_entry_variant: Variant in all_cards_panel.get("_entries") as Array:
+		# 当前筛选后武将槽；可见性必须与搜索语料命中结果相同。
+		var character_entry: Dictionary = character_entry_variant as Dictionary
+		# 当前武将槽控件；组件只隐藏槽，不释放静态牌面。
+		var character_slot: Control = character_entry.get("slot") as Control
+		if character_slot != null and character_slot.visible:
+			visible_character_matches += 1
+	if expected_character_matches <= 0 or visible_character_matches != expected_character_matches or not all_cards_result_count_label.text.contains("%d / %d" % [expected_character_matches, GameDatabase.characters.size()]):
+		_fail("all_cards_character_search query=%s expected=%d visible=%d label=%s" % [character_search_query, expected_character_matches, visible_character_matches, all_cards_result_count_label.text])
+		return
+	all_cards_search_input.text = ""
+	all_cards_search_input.text_changed.emit("")
+	await get_tree().process_frame
+	# 切换所有游戏牌；每个稳定卡牌定义只创建一张正式 CardView 代表牌面。
+	await _click_control(all_game_cards_tab_button)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 所有游戏牌正式牌面节点；数量必须等于数据库唯一游戏牌定义总数。
+	var all_game_card_views: Array[Node] = all_cards_grid_content.find_children("*", "CardView", true, false)
+	if not all_game_cards_tab_button.button_pressed or all_characters_tab_button.button_pressed or all_game_card_views.size() != GameDatabase.cards.size() or (all_cards_panel.get("_entries") as Array).size() != GameDatabase.cards.size():
+		_fail("all_cards_game_cards")
+		return
+	# 首张游戏牌透明输入区域；真实点击后应打开当前名称模式下的完整规则资料。
+	var first_game_card_input: Control = (all_game_card_views[0] as CardView).get_node("InputArea") as Control
+	await _click_control(first_game_card_input)
+	await get_tree().process_frame
+	if not all_cards_information_backdrop.visible or all_cards_information_title.text.is_empty():
+		_fail("all_cards_game_card_information visible=%s title=%s input_rect=%s card_interactable=%s grid_pos=%s grid_size=%s scroll_pos=%s scroll_size=%s scroll=%s slot=%s" % [all_cards_information_backdrop.visible, all_cards_information_title.text, _screen_rect(first_game_card_input), (all_game_card_views[0] as CardView).is_interactable, all_cards_grid_content.global_position, all_cards_grid_content.size, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).global_position, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).size, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).scroll_horizontal, first_game_card_input.get_parent().get_parent().get_parent().position])
+		return
+	await _click_control(all_cards_panel.get_node("%AllCardsInfoCloseButton") as Button)
+	await get_tree().process_frame
+	# 切换所有机缘；完整目录包含灰色关卡机缘并全部复用正式 OpportunityCardView。
+	await _click_control(all_opportunities_tab_button)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# 所有机缘正式牌面节点；数量必须等于 OpportunityCatalog 完整目录总数。
+	var all_opportunity_views: Array[Node] = all_cards_grid_content.find_children("*", "OpportunityCardView", true, false)
+	if not all_opportunities_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunity_views.size() != OpportunityCatalog.get_all_cards().size() or (all_cards_panel.get("_entries") as Array).size() != OpportunityCatalog.get_all_cards().size():
+		_fail("all_cards_opportunities")
+		return
+	# 灰卡搜索关键词；品质名称应命中所有灰色关卡机缘且不命中普通随机品质。
+	var gray_opportunity_count: int = OpportunityCatalog.get_cards_by_quality("gray").size()
+	all_cards_search_input.text = "灰卡"
+	all_cards_search_input.text_changed.emit("灰卡")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if gray_opportunity_count <= 0 or not all_cards_result_count_label.text.contains("%d / %d" % [gray_opportunity_count, OpportunityCatalog.get_all_cards().size()]):
+		_fail("all_cards_opportunity_search")
+		return
+	all_cards_search_input.text = ""
+	all_cards_search_input.text_changed.emit("")
+	await get_tree().process_frame
+	# 返回模式选择；图鉴页、资料遮罩与所有卡牌选中态必须同步退出。
+	await _click_control(top_identity_mode_button)
+	await get_tree().process_frame
+	if all_cards_panel.visible or all_cards_information_backdrop.visible or not main_frame.visible or not top_identity_mode_button.button_pressed or all_cards_button.button_pressed:
+		_fail("all_cards_switch_to_mode_page")
+		return
 	main_instance.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	main_instance.position = Vector2.ZERO
 	main_instance.size = Vector2(1152.0, 648.0)
@@ -427,7 +535,7 @@ func _run() -> void:
 	if not settings_panel.visible or not settings_backdrop.visible or settings_backdrop.z_index <= main_frame.z_index or not settings_backdrop.get_global_rect().has_point(start_game_button.get_global_rect().get_center()):
 		_fail("settings_open")
 		return
-	if start_game_button.focus_mode != Control.FOCUS_NONE or settings_button.focus_mode != Control.FOCUS_NONE or online_settings_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE or identity_mode_button.focus_mode != Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if start_game_button.focus_mode != Control.FOCUS_NONE or settings_button.focus_mode != Control.FOCUS_NONE or online_settings_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode != Control.FOCUS_NONE or identity_mode_button.focus_mode != Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("settings_background_focus_suspension")
 		return
 	# 正向焦点循环索引；12次导航覆盖设置面板当前全部控件并再次跨越首尾边界，默认值不影响业务配置。
@@ -450,7 +558,7 @@ func _run() -> void:
 	if settings_panel.visible or settings_backdrop.visible or match_controller.state != null or not main_menu.visible:
 		_fail("settings_modal_input")
 		return
-	if start_game_button.focus_mode == Control.FOCUS_NONE or settings_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or identity_mode_button.focus_mode == Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if start_game_button.focus_mode == Control.FOCUS_NONE or settings_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or identity_mode_button.focus_mode == Control.FOCUS_NONE or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("settings_background_focus_restore")
 		return
 	await _click_control(settings_button)
