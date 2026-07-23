@@ -716,7 +716,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	if is_gameplay_paused():
 		_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
 	state.current_event_id = _runtime_root_event_id
-	state.event_history = event_scheduler.get_event_history()
+	state.event_history = event_scheduler.get_event_history_reference_copy()
 	character_selection = CharacterSelectionService.new()
 	wheel_duel_selection = WheelDuelSelectionService.new() if actual_mode == IdentityRules.MODE_WHEEL_DUEL else null
 	conquest_mode = ConquestModeService.new() if actual_mode == IdentityRules.MODE_CONQUEST else null
@@ -5510,22 +5510,22 @@ func get_turn_play_discard_candidates(_viewer_id: int, turn_number: int, turn_pl
 		discard_cards_by_uid[discarded_card.uid] = discarded_card
 	# 已加入结果的 UID；同一实体在本阶段多次进入弃牌堆时仍只展示一次。
 	var appended_uids: Dictionary = {}
-	for move_variant: Variant in state.card_move_history:
-		# 当前历史移动；只统计指定回合、指定行动角色、play 阶段真实进入弃牌堆的记录。
-		var move: Dictionary = move_variant as Dictionary
-		if int(move.get("turn_number", 0)) != turn_number or int(move.get("turn_player_id", -1)) != turn_player_id or str(move.get("phase", "")) != "play" or str(move.get("to_zone", "")) != "discard_pile":
+	_ensure_card_movement()
+	# 当前历史移动；只统计指定回合、指定行动角色、play 阶段真实进入弃牌堆的记录。
+	# 该筛选现已在移牌组件写入索引时完成，控制器直接读取符合上述条件的UID短桶。
+	# 本回合候选UID；移牌组件已按回合号和行动角色索引，查询范围不再随整局历史长度增长。
+	var indexed_card_uids: Array[int] = card_movement.get_turn_play_discard_uids(turn_number, turn_player_id)
+	# 当前索引桶实体UID；循环只处理目标回合的短数组，不接触其他回合历史。
+	for card_uid: int in indexed_card_uids:
+		# 当前实体 UID；必须仍在弃牌堆且尚未加入结果。
+		if appended_uids.has(card_uid) or not discard_cards_by_uid.has(card_uid):
 			continue
-		for card_uid_variant: Variant in move.get("card_ids", []) as Array:
-			# 当前实体 UID；必须仍在弃牌堆且尚未加入结果。
-			var card_uid: int = int(card_uid_variant)
-			if appended_uids.has(card_uid) or not discard_cards_by_uid.has(card_uid):
-				continue
-			# 当前弃牌实体；无花色虚拟牌不满足任何实体花色条件。
-			var card: CardInstance = discard_cards_by_uid[card_uid] as CardInstance
-			if card == null or card.suit not in ["spade", "heart", "club", "diamond"] or (not suit.is_empty() and card.suit != suit):
-				continue
-			appended_uids[card_uid] = true
-			result.append(_serialize_choice_candidate(card, -1, "discard_pile", true))
+		# 当前弃牌实体；无花色虚拟牌不满足任何实体花色条件。
+		var card: CardInstance = discard_cards_by_uid[card_uid] as CardInstance
+		if card == null or card.suit not in ["spade", "heart", "club", "diamond"] or (not suit.is_empty() and card.suit != suit):
+			continue
+		appended_uids[card_uid] = true
+		result.append(_serialize_choice_candidate(card, -1, "discard_pile", true))
 	return result
 
 
@@ -12542,7 +12542,7 @@ func _record_runtime_event(event_name: String, event_type: String, context: Dict
 	var event_id: int = event_scheduler.record_event(event_name, event_type, context, resolved_parent_id, result)
 	if state != null:
 		state.current_event_id = event_id
-		_append_runtime_history_record(event_scheduler.get_latest_history_record())
+		_append_runtime_history_record()
 	return event_id
 
 
@@ -12621,14 +12621,12 @@ func _resume_deferred_rule_timing_dispatches() -> void:
 
 
 ## 把一条运行时历史增量追加到 GameState；相同 sequence 已存在时不会重复写入。
-func _append_runtime_history_record(record: Dictionary) -> void:
-	if state == null or record.is_empty():
+## 当前实现由调度器共享追加最新不可变记录，调用方不再取得或复制整条字典。
+func _append_runtime_history_record() -> void:
+	if state == null or event_scheduler == null:
 		return
-	var sequence: int = int(record.get("sequence", -1))
-	if not state.event_history.is_empty() and int((state.event_history.back() as Dictionary).get("sequence", -2)) == sequence:
-		return
-	# 调度器查询已经返回独立的可序列化副本；状态层直接接管该副本，避免每条长局历史再次执行第二次深复制。
-	state.event_history.append(record)
+	# 历史条目写入后保持不可变；状态层只拥有独立数组结构，与调度器共享字典可消除长局回放的第二份深拷贝。
+	event_scheduler.append_latest_history_reference_to(state.event_history)
 
 
 ## 运行时事件开始回调；只把摘要 ID 和历史写入权威状态，不暴露 GameEvent 可变引用。
@@ -12636,7 +12634,7 @@ func _on_runtime_event_started(event_data: Dictionary) -> void:
 	if state == null:
 		return
 	state.current_event_id = int(event_data.get("event_id", -1))
-	_append_runtime_history_record(event_scheduler.get_latest_history_record())
+	_append_runtime_history_record()
 
 
 ## 运行时事件完成回调；父事件 ID 成为当前摘要，根级完成后回到对局根事件。
@@ -12646,7 +12644,7 @@ func _on_runtime_event_finished(event_data: Dictionary) -> void:
 	state.current_event_id = int(event_data.get("parent_id", _runtime_root_event_id))
 	if state.current_event_id < 0:
 		state.current_event_id = _runtime_root_event_id
-	_append_runtime_history_record(event_scheduler.get_latest_history_record())
+	_append_runtime_history_record()
 
 
 ## 运行时选择请求回调；保存完整权威摘要，GameState.to_dict 后续可按观察者继续裁剪候选。
@@ -12655,7 +12653,7 @@ func _on_runtime_choice_requested(request_data: Dictionary) -> void:
 		return
 	state.current_choice_request = request_data.duplicate(true)
 	state.current_event_id = int(request_data.get("event_id", state.current_event_id))
-	_append_runtime_history_record(event_scheduler.get_latest_history_record())
+	_append_runtime_history_record()
 	if network_gateway != null and network_gateway.mode == NetworkGateway.Mode.REMOTE:
 		# 联网请求对象；从运行时快照恢复基础字段后交给网关发送，传输端不获得 Callable。
 		var request: ChoiceRequest = ChoiceRequest.from_dict(request_data)
@@ -12668,7 +12666,7 @@ func _on_runtime_choice_resolved(request_data: Dictionary, _response_data: Dicti
 		return
 	if int(state.current_choice_request.get("request_id", -1)) == int(request_data.get("request_id", -2)):
 		state.current_choice_request.clear()
-	_append_runtime_history_record(event_scheduler.get_latest_history_record())
+	_append_runtime_history_record()
 
 
 ## 为机缘选择队列同步当前操作者；只处理离线全角色控制归属，不生成或广播完整对局快照。
@@ -12688,7 +12686,7 @@ func _emit_state() -> void:
 	_prepare_offline_controlled_view()
 	# 正常运行时历史由事件信号逐条增量同步；只有计数失配才执行全量校准，避免长对局每次界面刷新都复制完整回放。
 	if event_scheduler != null and state.event_history.size() != event_scheduler.get_event_history_count():
-		state.event_history = event_scheduler.get_event_history()
+		state.event_history = event_scheduler.get_event_history_reference_copy()
 	# 本地界面快照；仅公开本地玩家手牌和自身身份。
 	var local_snapshot: Dictionary = state.to_dict(local_human_player_id, false)
 	# 本地手气卡私有状态；只包含本人的剩余张数与按钮权限。

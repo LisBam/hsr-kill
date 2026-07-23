@@ -894,7 +894,7 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 	if match_controller.network_gateway.is_lan_client():
 		match_controller.local_human_player_id = local_player_id
 		match_controller.clear_remote_network_state()
-		log_view.clear()
+		match_log_panel.clear_entries()
 		card_use_animation_layer.clear_presentations()
 		card_selection_panel.close()
 		_inline_card_choice.clear()
@@ -2847,7 +2847,7 @@ func _on_restart_requested(player_count: int) -> bool:
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
 		game_settlement_panel.hide_settlement()
 	_settlement_auto_shown_match_id = ""
-	log_view.clear()
+	match_log_panel.clear_entries()
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()
 	_local_hand_display_order.clear()
@@ -3441,9 +3441,9 @@ func _on_custom_assignment_preview_requested(seat_number: int, identity: String)
 
 
 ## 追加一条规则日志并自动滚动到底部。
+## 折叠状态由日志组件只保存字符串历史；只有展开状态会在帧末批量追加并滚动正文。
 func _on_log_added(message: String) -> void:
-	log_view.append_text("%s\n" % message)
-	log_view.scroll_to_line(maxi(log_view.get_line_count() - 1, 0))
+	match_log_panel.append_entry(message)
 
 
 ## 在实际发动者的武将牌中心短暂显示技能名；提示与目标线只订阅控制器信号，不持有技能对象或改写对局状态。

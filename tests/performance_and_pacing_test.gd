@@ -2,6 +2,7 @@ extends Node
 
 ## 性能与流程节奏专项回归。验证全局速度边界、阶段延时、事件历史同步、机缘增量汇总、完成事件压缩和武将牌视觉缓存。
 ## 界面性能同时验证相同对手座位绑定不会重复执行位置与缩放布局。
+## 长局压力同时验证折叠日志零正文排版、事件历史共享同步和出牌阶段弃牌索引。
 
 ## 阶段间隔测试秒数；0.10秒是正式设置允许的最小值，足以观察到到期前后的状态边界。
 const TEST_FLOW_INTERVAL_SECONDS: float = 0.10
@@ -14,6 +15,12 @@ const LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT: int = 4096
 
 ## 已结束事件压缩压力条目数；2048条同步事件用于确认完整GameEvent对象数量不随历史长度增长。
 const FINALIZED_EVENT_COMPACTION_COUNT: int = 2048
+
+## 长局折叠日志压力条目数；4096条足以确认隐藏正文不会随完整日志长度保留排版文档。
+const LONG_MATCH_LOG_ENTRY_COUNT: int = 4096
+
+## 长局移牌历史压力条目数；8192条无关记录用于确认本回合弃牌查询只访问对应索引桶。
+const LONG_CARD_MOVE_HISTORY_ENTRY_COUNT: int = 8192
 
 ## 性能回归专用设置文件；速度边界测试的所有持久化写入均与玩家正式设置隔离。
 const TEST_SETTINGS_FILE_PATH: String = "user://performance_and_pacing_test_settings.cfg"
@@ -45,6 +52,8 @@ func _run() -> void:
 		return
 	if not _test_static_text_resolution_cache():
 		return
+	if not await _test_collapsed_match_log_rendering():
+		return
 	_create_controller()
 	if not await _test_phase_transition_pacing():
 		return
@@ -55,6 +64,8 @@ func _run() -> void:
 	if not _test_incremental_opportunity_effect_cache():
 		return
 	if not _test_finalized_event_runtime_compaction():
+		return
+	if not _test_indexed_turn_play_discard_history():
 		return
 	if not await _test_repeated_opponent_layout_binding():
 		return
@@ -107,6 +118,57 @@ func _test_static_text_resolution_cache() -> bool:
 	var indexed_card_definition: Dictionary = GameDatabase.call("_find_card_by_display_name", "桃") as Dictionary
 	if first_result.is_empty() or first_result != repeated_result or first_mode_cache.size() != initial_cache_size + 1 or repeated_mode_cache.size() != first_mode_cache.size() or indexed_card_definition.is_empty():
 		return _fail("static_text_cache first=%s repeated=%s sizes=%d/%d/%d indexed=%s" % [first_result, repeated_result, initial_cache_size, first_mode_cache.size(), repeated_mode_cache.size(), not indexed_card_definition.is_empty()])
+	return true
+
+
+## 验证折叠日志只保存轻量字符串历史，展开时一次恢复完整正文，重新折叠后立即释放排版内容。
+func _test_collapsed_match_log_rendering() -> bool:
+	# 独立日志组件；最小子树只提供正式脚本要求的按钮、正文面板与RichTextLabel。
+	var log_panel: MatchLogPanel = MatchLogPanel.new()
+	log_panel.name = "PerformanceMatchLogPanel"
+	# 展开按钮；唯一名称与正式场景一致，使组件无需测试专用分支即可完成ready绑定。
+	var toggle_button: Button = Button.new()
+	toggle_button.name = "LogToggleButton"
+	toggle_button.unique_name_in_owner = true
+	log_panel.add_child(toggle_button)
+	toggle_button.owner = log_panel
+	# 正文容器；折叠状态由组件直接控制其visible属性。
+	var content_panel: PanelContainer = PanelContainer.new()
+	content_panel.name = "LogContentPanel"
+	content_panel.unique_name_in_owner = true
+	log_panel.add_child(content_panel)
+	content_panel.owner = log_panel
+	# 日志正文；压力测试检查折叠后解析文本为空，而完整条目仍保留在组件数组。
+	var log_view: RichTextLabel = RichTextLabel.new()
+	log_view.name = "LogView"
+	log_view.unique_name_in_owner = true
+	content_panel.add_child(log_view)
+	log_view.owner = log_panel
+	add_child(log_panel)
+	await get_tree().process_frame
+	# 压力日志序号；每项生成不同文本以避免正文控件通过重复字符串偶然复用布局。
+	for entry_index: int in range(LONG_MATCH_LOG_ENTRY_COUNT):
+		log_panel.append_entry("长局日志性能记录%d" % entry_index)
+	if log_panel.get_entry_count() != LONG_MATCH_LOG_ENTRY_COUNT or log_panel.get_rendered_character_count() != 0:
+		log_panel.queue_free()
+		return _fail("collapsed_log retained=%d rendered=%d" % [log_panel.get_entry_count(), log_panel.get_rendered_character_count()])
+	log_panel.set_expanded(true)
+	if log_panel.get_entry_count() != LONG_MATCH_LOG_ENTRY_COUNT or log_panel.get_rendered_character_count() <= LONG_MATCH_LOG_ENTRY_COUNT:
+		log_panel.queue_free()
+		return _fail("expanded_log retained=%d rendered=%d" % [log_panel.get_entry_count(), log_panel.get_rendered_character_count()])
+	log_panel.append_entry("同帧批量追加甲")
+	log_panel.append_entry("同帧批量追加乙")
+	await get_tree().process_frame
+	# 展开后的完整文本；两条同帧日志必须在一次延迟刷新后保持原到达顺序。
+	var expanded_text: String = log_view.get_parsed_text()
+	if not expanded_text.ends_with("同帧批量追加甲\n同帧批量追加乙\n"):
+		log_panel.queue_free()
+		return _fail("expanded_log_batch_tail")
+	log_panel.set_expanded(false)
+	if log_panel.get_entry_count() != LONG_MATCH_LOG_ENTRY_COUNT + 2 or log_panel.get_rendered_character_count() != 0:
+		log_panel.queue_free()
+		return _fail("collapsed_log_release retained=%d rendered=%d" % [log_panel.get_entry_count(), log_panel.get_rendered_character_count()])
+	log_panel.queue_free()
 	return true
 
 
@@ -258,6 +320,65 @@ func _test_finalized_event_runtime_compaction() -> bool:
 	var first_snapshot: Dictionary = _controller.event_scheduler.get_event_snapshot(first_recorded_event_id)
 	if _controller.event_scheduler.get_live_event_count() != 1 or str(first_snapshot.get("status", "")) != "finished" or not bool(first_snapshot.get("finalized", false)) or int((first_snapshot.get("context", {}) as Dictionary).get("index", -1)) != 0:
 		return _fail("event_compaction live=%d snapshot=%s" % [_controller.event_scheduler.get_live_event_count(), first_snapshot])
+	return true
+
+
+## 验证长局移牌历史会在服务创建时建立回合索引，候选查询只读取目标回合的短UID桶。
+func _test_indexed_turn_play_discard_history() -> bool:
+	# 独立权威状态；无关历史记录模拟多次洗牌后的长局移动规模。
+	var game_state: GameState = GameState.new()
+	# 无关移牌历史序号；每项都属于摸牌阶段，不应进入任何出牌阶段弃牌索引桶。
+	for history_index: int in range(LONG_CARD_MOVE_HISTORY_ENTRY_COUNT):
+		game_state.card_move_history.append({
+			"move_id":history_index + 1,
+			"card_ids":[history_index + 1],
+			"from_zone":"draw_pile",
+			"to_zone":"hand",
+			"turn_number":history_index + 1,
+			"turn_player_id":0,
+			"phase":"draw",
+		})
+	# 目标全局回合；与压力历史回合号分离，保证索引桶只含后方两项。
+	var target_turn_number: int = LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 1
+	# 第一张目标弃牌；黑桃实体用于验证无花色筛选时保持原进入顺序。
+	var first_card: CardInstance = CardInstance.new("sha", "spade", 7, LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 101)
+	first_card.zone = "discard_pile"
+	# 第二张目标弃牌；红桃实体用于验证指定花色只过滤当前短桶。
+	var second_card: CardInstance = CardInstance.new("tao", "heart", 3, LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 102)
+	second_card.zone = "discard_pile"
+	game_state.discard_pile = [first_card, second_card]
+	game_state.card_move_history.append({
+		"move_id":LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 1,
+		"card_ids":[first_card.uid],
+		"from_zone":"processing",
+		"to_zone":"discard_pile",
+		"turn_number":target_turn_number,
+		"turn_player_id":0,
+		"phase":"play",
+	})
+	game_state.card_move_history.append({
+		"move_id":LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 2,
+		"card_ids":[second_card.uid],
+		"from_zone":"hand",
+		"to_zone":"discard_pile",
+		"turn_number":target_turn_number,
+		"turn_player_id":0,
+		"phase":"play",
+	})
+	_controller.state = game_state
+	_controller.card_movement = CardMovementService.new(game_state)
+	# 全花色候选；必须只包含目标桶中的两张牌，且顺序与历史首次进入顺序一致。
+	var all_candidates: Array[Dictionary] = _controller.get_turn_play_discard_candidates(0, target_turn_number, 0)
+	# 红桃候选；筛选在索引读取后执行，只保留第二张实体。
+	var heart_candidates: Array[Dictionary] = _controller.get_turn_play_discard_candidates(0, target_turn_number, 0, "heart")
+	if _controller.card_movement.get_turn_play_discard_indexed_count(target_turn_number, 0) != 2 \
+			or int(_controller.card_movement.get("_next_move_id")) != LONG_CARD_MOVE_HISTORY_ENTRY_COUNT + 3 \
+			or all_candidates.size() != 2 \
+			or int(all_candidates[0].get("uid", -1)) != first_card.uid \
+			or int(all_candidates[1].get("uid", -1)) != second_card.uid \
+			or heart_candidates.size() != 1 \
+			or int(heart_candidates[0].get("uid", -1)) != second_card.uid:
+		return _fail("play_discard_index bucket=%d next_move=%d all=%s heart=%s" % [_controller.card_movement.get_turn_play_discard_indexed_count(target_turn_number, 0), int(_controller.card_movement.get("_next_move_id")), all_candidates, heart_candidates])
 	return true
 
 

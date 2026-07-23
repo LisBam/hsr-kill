@@ -21,8 +21,20 @@ signal blank_area_pressed
 ## 日志正文面板；默认隐藏，展开后显示标题与可滚动日志文本。
 @onready var _content_panel: PanelContainer = %LogContentPanel
 
+## 日志正文控件；仅在面板展开时持有排版文本，折叠期间保持为空以消除长局隐藏文本的持续布局成本。
+@onready var _log_view: RichTextLabel = %LogView
+
 ## 当前日志是否展开；仅控制界面可见性，不影响日志内容的持续追加。
 var _is_expanded: bool = false
+
+## 本局完整语义日志；每项保存一条不可变纯文本，折叠与展开不会丢失历史，重新开局时由牌桌显式清空。
+var _log_entries: Array[String] = []
+
+## 已进入完整历史但尚未批量写入正文控件的日志；只在展开状态使用，同一帧多条规则日志会合并为一次排版更新。
+var _pending_render_entries: Array[String] = []
+
+## 当前是否已经安排延迟渲染；默认false，确保一帧内无论新增多少条日志都只登记一次回调。
+var _render_flush_scheduled: bool = false
 
 
 ## 连接展开按钮并应用默认折叠状态。
@@ -48,6 +60,34 @@ func set_expanded(expanded: bool) -> void:
 	_set_expanded(expanded)
 
 
+## 追加一条永久语义日志；组件始终保存完整历史，但折叠期间不会向RichTextLabel写入任何文本。
+func append_entry(message: String) -> void:
+	_log_entries.append(message)
+	if not _is_expanded:
+		return
+	_pending_render_entries.append(message)
+	_schedule_render_flush()
+
+
+## 清空本局全部语义日志与待渲染内容；重新开局和离开联机会通过该入口释放长局文本。
+func clear_entries() -> void:
+	_log_entries.clear()
+	_pending_render_entries.clear()
+	_render_flush_scheduled = false
+	if _log_view != null:
+		_log_view.clear()
+
+
+## 返回当前保存的完整日志条数；性能回归与调试器可读取数量，但不能修改内部历史。
+func get_entry_count() -> int:
+	return _log_entries.size()
+
+
+## 返回当前正文控件持有的字符数；折叠状态应恒为0，用于确认隐藏面板没有保留排版文档。
+func get_rendered_character_count() -> int:
+	return 0 if _log_view == null else _log_view.get_parsed_text().length()
+
+
 ## 在离线日志暂停期间继续监听未被界面消费的左键；只上报关闭意图，不直接引用菜单或暂停服务。
 func _unhandled_input(event: InputEvent) -> void:
 	if not _is_expanded:
@@ -68,3 +108,44 @@ func _set_expanded(expanded: bool) -> void:
 	_toggle_button.text = expanded_button_text if _is_expanded else collapsed_button_text
 	if state_changed:
 		expanded_changed.emit(_is_expanded)
+	if _is_expanded:
+		_render_complete_history()
+	else:
+		# 完整字符串历史仍由组件保留；释放隐藏RichTextLabel的行布局、滚动和字符缓存，长局主流程不再为不可见日志付费。
+		_pending_render_entries.clear()
+		_render_flush_scheduled = false
+		_log_view.clear()
+
+
+## 安排一次帧末批量追加；多条同步规则日志共享同一延迟回调，避免重复排版和滚动。
+func _schedule_render_flush() -> void:
+	if _render_flush_scheduled:
+		return
+	_render_flush_scheduled = true
+	call_deferred("_flush_pending_render_entries")
+
+
+## 把展开期间积累的新增日志合并为一次正文追加，并在完成后滚动至最新一行。
+func _flush_pending_render_entries() -> void:
+	_render_flush_scheduled = false
+	if not _is_expanded or _pending_render_entries.is_empty():
+		_pending_render_entries.clear()
+		return
+	# 本批新增文本；一次join和append_text替代逐条触发布局，末尾换行保证下一批从新行开始。
+	var appended_text: String = "\n".join(_pending_render_entries) + "\n"
+	_pending_render_entries.clear()
+	_log_view.append_text(appended_text)
+	_log_view.scroll_to_line(maxi(_log_view.get_line_count() - 1, 0))
+
+
+## 展开时用一次写入恢复完整历史；离线对局会先经expanded_changed取得暂停令牌，重排不会与规则流程争用帧时间。
+func _render_complete_history() -> void:
+	_pending_render_entries.clear()
+	_render_flush_scheduled = false
+	_log_view.clear()
+	if _log_entries.is_empty():
+		return
+	# 完整日志文本；数组顺序就是权威信号到达顺序，单次构建不会改变任何日志句式或内容。
+	var complete_text: String = "\n".join(_log_entries) + "\n"
+	_log_view.append_text(complete_text)
+	_log_view.scroll_to_line(maxi(_log_view.get_line_count() - 1, 0))
