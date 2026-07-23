@@ -105,6 +105,18 @@ var acquired_skills: Dictionary = {}
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
+## 已按效果类型汇总的机缘数值缓存；键为机缘effect稳定ID，值为截至已处理历史位置的count累计值，只供权威规则查询且不进入公开快照。
+var opportunity_effect_totals_cache: Dictionary = {}
+
+## 已写入机缘数值缓存的历史条目数量；默认0表示尚未处理任何记录，历史只追加时可增量汇总，检测到历史替换时由查询端自动重建。
+var opportunity_effect_cache_processed_count: int = 0
+
+## 最近一次汇总时已处理前缀的首个机缘ID；默认空字符串，与尾部哨兵共同识别测试或回放工具直接替换历史的情况。
+var opportunity_effect_cache_first_processed_id: String = ""
+
+## 最近一次汇总时已处理前缀的末个机缘ID；默认空字符串，正式只追加路径仅在消费新增尾项后更新且不进入公开快照。
+var opportunity_effect_cache_last_processed_id: String = ""
+
 ## 当前额外手牌上限；默认0，机缘等永久效果可累加修改，最终手牌上限仍不会低于0。
 var hand_limit_bonus: int = 0
 

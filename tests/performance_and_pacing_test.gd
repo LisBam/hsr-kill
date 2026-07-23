@@ -1,6 +1,6 @@
 extends Node
 
-## 性能与流程节奏专项回归。验证全局速度边界、阶段延时、历史增量同步和武将牌视觉缓存。
+## 性能与流程节奏专项回归。验证全局速度边界、阶段延时、事件历史同步、机缘增量汇总、完成事件压缩和武将牌视觉缓存。
 ## 界面性能同时验证相同对手座位绑定不会重复执行位置与缩放布局。
 
 ## 阶段间隔测试秒数；0.10秒是正式设置允许的最小值，足以观察到到期前后的状态边界。
@@ -8,6 +8,12 @@ const TEST_FLOW_INTERVAL_SECONDS: float = 0.10
 
 ## 到期后观察秒数；大于阶段间隔并留出无头模式首帧资源加载与计时调度余量。
 const POST_DEADLINE_OBSERVATION_SECONDS: float = 0.18
+
+## 长局机缘历史压力条目数；4096项足以暴露全量重复汇总，同时不会让无头回归产生过长等待。
+const LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT: int = 4096
+
+## 已结束事件压缩压力条目数；2048条同步事件用于确认完整GameEvent对象数量不随历史长度增长。
+const FINALIZED_EVENT_COMPACTION_COUNT: int = 2048
 
 ## 性能回归专用设置文件；速度边界测试的所有持久化写入均与玩家正式设置隔离。
 const TEST_SETTINGS_FILE_PATH: String = "user://performance_and_pacing_test_settings.cfg"
@@ -45,6 +51,10 @@ func _run() -> void:
 	if not await _test_response_prompt_pacing():
 		return
 	if not _test_incremental_event_history():
+		return
+	if not _test_incremental_opportunity_effect_cache():
+		return
+	if not _test_finalized_event_runtime_compaction():
 		return
 	if not await _test_repeated_opponent_layout_binding():
 		return
@@ -199,6 +209,55 @@ func _test_incremental_event_history() -> bool:
 	_controller._emit_state()
 	if _controller.state.event_history.size() != _controller.event_scheduler.get_event_history_count():
 		return _fail("history_reconciliation")
+	return true
+
+
+## 验证长机缘历史只在首次查询时汇总，后续不同效果查询与单条新增均复用同一增量缓存。
+func _test_incremental_opportunity_effect_cache() -> bool:
+	# 独立权威状态；本用例只测试机缘数值查询，不进入阶段、AI或事件流程。
+	var game_state: GameState = GameState.new()
+	# 长局测试玩家；全部机缘记录按正式追加语义写入同一历史数组。
+	var player: PlayerState = PlayerState.new(0, "机缘缓存测试玩家")
+	game_state.players.append(player)
+	_controller.state = game_state
+	for history_index: int in range(LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT):
+		# 交替写入【杀】次数与伤害加成；两个效果可验证首次查询会一次构建全部effect累计值。
+		player.acquired_opportunity_ids.append("green_slash_play_limit_one" if history_index % 2 == 0 else "orange_damage_one")
+	# 首次【杀】加成查询；应处理完整历史并得到一半条目对应的累计数值。
+	var expected_half_count: int = LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT / 2
+	var slash_bonus: int = _controller.get_acquired_opportunity_effect_total(player.player_id, "slash_play_limit_bonus")
+	if slash_bonus != expected_half_count or player.opportunity_effect_cache_processed_count != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT:
+		return _fail("opportunity_cache_initial total=%d processed=%d" % [slash_bonus, player.opportunity_effect_cache_processed_count])
+	# 不同效果查询；首次扫描已经同时汇总全部效果，因此处理位置不得再次变化。
+	var damage_bonus: int = _controller.get_acquired_opportunity_effect_total(player.player_id, "damage_bonus")
+	if damage_bonus != expected_half_count or player.opportunity_effect_cache_processed_count != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT:
+		return _fail("opportunity_cache_reuse total=%d processed=%d" % [damage_bonus, player.opportunity_effect_cache_processed_count])
+	player.acquired_opportunity_ids.append("green_slash_play_limit_one")
+	# 单条追加后的结果；查询只消费新增尾项并把处理位置精确推进1。
+	var appended_slash_bonus: int = _controller.get_acquired_opportunity_effect_total(player.player_id, "slash_play_limit_bonus")
+	if appended_slash_bonus != expected_half_count + 1 or player.opportunity_effect_cache_processed_count != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT + 1:
+		return _fail("opportunity_cache_append total=%d processed=%d" % [appended_slash_bonus, player.opportunity_effect_cache_processed_count])
+	return true
+
+
+## 验证同步完成事件只留下可序列化摘要，长期根事件之外不保留带Callable的完整运行时对象。
+func _test_finalized_event_runtime_compaction() -> bool:
+	_controller.event_scheduler.reset()
+	# 长期根事件；正式对局同样只应持续保留这一完整运行时对象。
+	var root_event: GameEvent = _controller.event_scheduler.create_event("PerformanceRoot", "root")
+	if not _controller.event_scheduler.begin_root(root_event.event_id, true):
+		return _fail("event_compaction_root")
+	# 首条记录事件ID；压力结束后仍须能从轻量归档取得最终摘要。
+	var first_recorded_event_id: int = -1
+	for event_index: int in range(FINALIZED_EVENT_COMPACTION_COUNT):
+		# 同步历史事件；上下文包含基础数据以确认归档不是空占位。
+		var recorded_event_id: int = _controller.event_scheduler.record_event("performance_record_%d" % event_index, "test", {"index":event_index}, root_event.event_id)
+		if first_recorded_event_id < 0:
+			first_recorded_event_id = recorded_event_id
+	# 首条归档摘要；完成状态、finalized标记和原始上下文均必须保留。
+	var first_snapshot: Dictionary = _controller.event_scheduler.get_event_snapshot(first_recorded_event_id)
+	if _controller.event_scheduler.get_live_event_count() != 1 or str(first_snapshot.get("status", "")) != "finished" or not bool(first_snapshot.get("finalized", false)) or int((first_snapshot.get("context", {}) as Dictionary).get("index", -1)) != 0:
+		return _fail("event_compaction live=%d snapshot=%s" % [_controller.event_scheduler.get_live_event_count(), first_snapshot])
 	return true
 
 

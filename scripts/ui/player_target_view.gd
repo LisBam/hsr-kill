@@ -387,9 +387,12 @@ func configure_snapshot(snapshot: Dictionary, character_definition: Dictionary =
 	var next_configuration_signature: int = hash([_get_visual_snapshot_data(snapshot), character_definition, current_actor, faction_definition, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	# 是否需要重建武将牌视觉；资料快照即使不改画面也必须先更新，确保新获得技能能立即进入悬停与右键详情。
 	var visual_configuration_changed: bool = _configuration_signature != next_configuration_signature
-	_player_snapshot = snapshot.duplicate(true)
-	_character_definition = character_definition.duplicate(true)
-	_faction_definition = faction_definition.duplicate(true)
+	# 桌面传入的序列化快照在本广播周期内只读；浅复制顶层即可隔离字段增删，并复用长机缘历史等嵌套只读数据。
+	_player_snapshot = snapshot.duplicate()
+	# 静态定义来自数据库或牌桌缓存且调用方只读；浅复制避免每次出牌刷新都递归复制不变的技能与素材元数据。
+	_character_definition = character_definition.duplicate()
+	# 势力定义同样只包含静态展示数据；顶层副本足以防止组件意外增删字段。
+	_faction_definition = faction_definition.duplicate()
 	player_id = int(snapshot.get("player_id", -1))
 	is_current_actor = current_actor
 	is_interactable = bool(snapshot.get("alive", false)) and not bool(snapshot.get("out_of_game", false))

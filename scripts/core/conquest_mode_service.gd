@@ -63,12 +63,25 @@ var _state: GameState
 ## 当前对局共享随机源；随机武将、随机技能和随机装备均使用同一随机序列以支持固定种子复现。
 var _rng: RandomNumberGenerator
 
+## 已校验的敌方机缘ID派生缓存；顺序和重复项与conquest_state权威历史一致，仅减少同一关内的重复目录查询。
+var _cached_enemy_opportunity_ids: Array[String] = []
+
+## 敌方机缘按effect汇总的派生缓存；键为效果稳定ID、值为count累计数，不作为存档或玩法数值的第二权威来源。
+var _cached_enemy_opportunity_effect_totals: Dictionary = {}
+
+## 敌方获得技能类机缘的ID派生缓存；只保存grant_skill条目，使每次换将无需遍历不断增长的全部数值机缘。
+var _cached_enemy_skill_opportunity_ids: Array[String] = []
+
+## 最近一次派生缓存对应的原始敌方机缘条目数；-1表示缓存失效，重新配置、追加奖励与重置都会恢复该值。
+var _cached_enemy_opportunity_source_count: int = -1
+
 
 ## 为一局过关斩将绑定玩家和敌方稳定 ID，并初始化第1关公开快照。
 ## 补充：初始化同时锁定难度、授予玩家开局机缘并建立复活次数快照。
 func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, enemy_id: int, difficulty: int = DEFAULT_DIFFICULTY) -> void:
 	_state = state
 	_rng = rng
+	_invalidate_enemy_opportunity_cache()
 	if _state == null:
 		return
 	# 本局规范化难度；创建后只保存在权威对局快照中，菜单后续修改不会影响进行中的对局。
@@ -91,7 +104,7 @@ func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, ene
 	var player: PlayerState = _state.get_player(player_id)
 	if player != null:
 		for opportunity_id: String in player_starting_opportunity_ids:
-			if not OpportunityCatalog.get_card(opportunity_id).is_empty():
+			if OpportunityCatalog.has_card(opportunity_id):
 				player.acquired_opportunity_ids.append(opportunity_id)
 
 
@@ -99,6 +112,7 @@ func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, ene
 func reset() -> void:
 	_state = null
 	_rng = null
+	_invalidate_enemy_opportunity_cache()
 
 
 ## 返回当前关卡数；无状态或异常值时回退第1关，保证 UI 不显示无效层数。
@@ -133,7 +147,7 @@ func get_player_starting_opportunity_ids() -> Array[String]:
 	for opportunity_id_variant: Variant in _state.conquest_state.get("player_starting_opportunity_ids", []) as Array:
 		# 当前开局机缘ID；目录缺失时跳过，避免损坏存档向运行时传播无效效果。
 		var opportunity_id: String = str(opportunity_id_variant)
-		if not opportunity_id.is_empty() and not OpportunityCatalog.get_card(opportunity_id).is_empty():
+		if OpportunityCatalog.has_card(opportunity_id):
 			result.append(opportunity_id)
 	return result
 
@@ -183,23 +197,29 @@ func award_fixed_opportunities_through_current_level() -> Array[String]:
 		return result
 	# 已处理固定奖励的关卡；字符串化快照恢复后逐项转换为整数，避免重复追加同一层机缘。
 	var awarded_levels: Array[int] = _get_recorded_levels("awarded_fixed_opportunity_levels")
+	# 已处理关卡查找表；长局补齐历史时以常数时间判断层数，避免数组has嵌套在全部关卡循环中形成平方级耗时。
+	var awarded_level_lookup: Dictionary = {}
+	for awarded_level: int in awarded_levels:
+		awarded_level_lookup[awarded_level] = true
 	# 当前累计机缘；新增记录先写入该数组，后续体力与手牌上限查询立刻从同一来源读取。
 	var opportunity_ids: Array[String] = get_enemy_opportunity_ids()
 	for level: int in range(INITIAL_LEVEL + 1, get_level() + 1):
-		if awarded_levels.has(level):
+		if awarded_level_lookup.has(level):
 			continue
 		# 本关固定机缘；普通固定层可能没有条目，16关及以后由独立三项机缘规则提供。
 		var level_opportunity_ids: Array[String] = _get_fixed_opportunity_ids_for_level(level)
 		if level_opportunity_ids.is_empty():
 			continue
 		for opportunity_id: String in level_opportunity_ids:
-			if OpportunityCatalog.get_card(opportunity_id).is_empty():
+			if not OpportunityCatalog.has_card(opportunity_id):
 				continue
 			opportunity_ids.append(opportunity_id)
 			result.append(opportunity_id)
 		awarded_levels.append(level)
+		awarded_level_lookup[level] = true
 	_state.conquest_state["enemy_opportunity_ids"] = opportunity_ids.duplicate()
 	_state.conquest_state["awarded_fixed_opportunity_levels"] = awarded_levels.duplicate()
+	_invalidate_enemy_opportunity_cache()
 	return result
 
 
@@ -265,29 +285,28 @@ func ensure_skill_opportunity_rewards(enemy: PlayerState) -> Array[String]:
 		awarded_levels.append(reward_level)
 	_state.conquest_state["enemy_opportunity_ids"] = opportunity_ids.duplicate()
 	_state.conquest_state["awarded_skill_opportunity_levels"] = awarded_levels.duplicate()
+	_invalidate_enemy_opportunity_cache()
 	return result
 
 
 ## 返回敌方已获得的全部关卡机缘ID；顺序与实际获取顺序一致，重复数值机缘不去重。
 func get_enemy_opportunity_ids() -> Array[String]:
-	var result: Array[String] = []
-	if _state == null:
-		return result
-	for opportunity_id_variant: Variant in _state.conquest_state.get("enemy_opportunity_ids", []) as Array:
-		# 当前机缘稳定ID；目录不存在的历史数据跳过，避免错误定义污染实际强化计算。
-		var opportunity_id: String = str(opportunity_id_variant)
-		if not opportunity_id.is_empty() and not OpportunityCatalog.get_card(opportunity_id).is_empty():
-			result.append(opportunity_id)
-	return result
+	_refresh_enemy_opportunity_cache()
+	return _cached_enemy_opportunity_ids.duplicate()
+
+
+## 返回敌方获得的技能类机缘ID；结果只含grant_skill条目，供换将恢复有限技能集合而不扫描全部关卡数值历史。
+func get_enemy_skill_opportunity_ids() -> Array[String]:
+	_refresh_enemy_opportunity_cache()
+	return _cached_enemy_skill_opportunity_ids.duplicate()
 
 
 ## 返回敌方通过技能机缘获得的稳定技能ID；相同技能不会重复进入结果，供新武将入场重新安装。
 func get_enemy_skill_ids() -> Array[String]:
 	var result: Array[String] = []
-	for opportunity_id: String in get_enemy_opportunity_ids():
-		# 当前机缘定义；只有获得技能效果才参与技能恢复，不把数值机缘误当作运行时技能。
-		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
-		var skill_id: String = str(opportunity_card.get("skill_id", "")) if str(opportunity_card.get("effect", "")) == "grant_skill" else ""
+	for opportunity_id: String in get_enemy_skill_opportunity_ids():
+		# 当前技能稳定ID；目录原始定义是唯一来源，派生缓存只负责缩小待查询集合。
+		var skill_id: String = OpportunityCatalog.get_skill_id(opportunity_id)
 		if not skill_id.is_empty() and not result.has(skill_id):
 			result.append(skill_id)
 	return result
@@ -356,24 +375,50 @@ func _get_opportunity_effect_total_from_ids(opportunity_ids: Array[String], effe
 	if effect_id.is_empty():
 		return result
 	for opportunity_id: String in opportunity_ids:
-		# 当前机缘定义；所有count来源仍由目录统一维护。
-		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
-		if str(opportunity_card.get("effect", "")) == effect_id:
-			result += int(opportunity_card.get("count", 0))
+		# 当前机缘效果；目录提供不可变基础字段查询，避免为两个标量复制完整定义。
+		if OpportunityCatalog.get_effect_id(opportunity_id) == effect_id:
+			result += OpportunityCatalog.get_effect_count(opportunity_id)
 	return result
 
 
 ## 从全部敌方关卡机缘中累加指定效果的数值；卡牌目录是数值与效果类型的唯一来源。
 func _get_opportunity_effect_total(effect_id: String) -> int:
-	var result: int = 0
 	if effect_id.is_empty():
-		return result
-	for opportunity_id: String in get_enemy_opportunity_ids():
-		# 当前机缘定义；只有效果稳定ID匹配时才累加count，避免把获得技能等无数值机缘混入。
-		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
-		if str(opportunity_card.get("effect", "")) == effect_id:
-			result += int(opportunity_card.get("count", 0))
-	return result
+		return 0
+	_refresh_enemy_opportunity_cache()
+	return int(_cached_enemy_opportunity_effect_totals.get(effect_id, 0))
+
+
+## 标记敌方机缘派生缓存失效；权威conquest_state仍保留完整历史，下一次查询再从该历史统一重建。
+func _invalidate_enemy_opportunity_cache() -> void:
+	_cached_enemy_opportunity_ids.clear()
+	_cached_enemy_opportunity_effect_totals.clear()
+	_cached_enemy_skill_opportunity_ids.clear()
+	_cached_enemy_opportunity_source_count = -1
+
+
+## 按权威敌方机缘历史一次性重建全部派生查询结果；同一关内后续数值和技能查询均保持常数时间。
+func _refresh_enemy_opportunity_cache() -> void:
+	# 当前原始机缘历史；只读取conquest_state中的唯一权威数组，不从玩家详情或UI反向推导。
+	var source_opportunity_ids: Array = _state.conquest_state.get("enemy_opportunity_ids", []) as Array if _state != null else []
+	if _cached_enemy_opportunity_source_count == source_opportunity_ids.size():
+		return
+	_cached_enemy_opportunity_ids.clear()
+	_cached_enemy_opportunity_effect_totals.clear()
+	_cached_enemy_skill_opportunity_ids.clear()
+	for opportunity_id_variant: Variant in source_opportunity_ids:
+		# 当前机缘稳定ID；损坏存档中的未知条目不进入规则派生结果。
+		var opportunity_id: String = str(opportunity_id_variant)
+		if not OpportunityCatalog.has_card(opportunity_id):
+			continue
+		_cached_enemy_opportunity_ids.append(opportunity_id)
+		# 当前机缘效果稳定ID；所有有效效果都会建立累计项，非数值效果的count自然为0。
+		var effect_id: String = OpportunityCatalog.get_effect_id(opportunity_id)
+		if not effect_id.is_empty():
+			_cached_enemy_opportunity_effect_totals[effect_id] = int(_cached_enemy_opportunity_effect_totals.get(effect_id, 0)) + OpportunityCatalog.get_effect_count(opportunity_id)
+		if effect_id == "grant_skill":
+			_cached_enemy_skill_opportunity_ids.append(opportunity_id)
+	_cached_enemy_opportunity_source_count = source_opportunity_ids.size()
 
 
 ## 从获得技能机缘中随机选择一项尚未取得、且不与当前敌方固有技能重复的完整机缘卡ID。
