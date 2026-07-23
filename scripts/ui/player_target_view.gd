@@ -27,6 +27,12 @@ signal scroll_gesture_moved(relative: Vector2)
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
+## 高体力数字与护盾分数的字体尺寸；默认10像素可在固定体力框内纵向显示“当前/上限”，运行时可按牌面缩放调整。
+@export_range(8, 24, 1) var numeric_health_font_size: int = 10
+
+## 高体力数字与护盾分数的同色描边宽度；默认1像素用于加粗绿色或灰色文字，设为0可关闭加粗效果，运行时可按主题清晰度调整。
+@export_range(0, 4, 1) var numeric_health_outline_size: int = 1
+
 ## 相邻体力圆点的纵向间距；默认-10像素使18像素圆点紧密排列，只影响表现密度且运行时通常无需修改。
 @export_range(-16, 8, 1) var health_pip_separation: int = -10
 
@@ -928,7 +934,7 @@ func _refresh_auto_managed_label() -> void:
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
 ## 已损失圆点现在从容器顶部开始排列，使扣血方向固定为从上往下。
-## 护盾在圆点模式下使用灰色圆点置于体力上方，体力进入数字模式后护盾同步显示为灰色数字。
+## 护盾在圆点模式下使用灰色圆点置于体力上方，体力进入数字模式后显示为灰色加粗“当前值/当前值”分数。
 func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 	for child: Node in _health_pip_container.get_children():
 		_health_pip_container.remove_child(child)
@@ -938,22 +944,20 @@ func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 	_health_pip_container.add_theme_constant_override("separation", 0 if uses_numeric_health else health_pip_separation)
 	if uses_numeric_health:
 		if shield > 0:
-			# 数字护盾标签；与数字体力上下排列，并固定使用灰色语义色区分真实体力。
+			# 数字护盾标签；与数字体力在VBox中纵向排列。护盾没有独立上限，因此分母使用当前护盾值，稳定显示为“当前/当前”。
 			var shield_number: Label = Label.new()
-			shield_number.text = "盾%d" % shield
+			shield_number.text = "%d/%d" % [shield, shield]
 			shield_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			shield_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			shield_number.add_theme_font_size_override("font_size", 10)
-			shield_number.add_theme_color_override("font_color", BattleUIStyle.get_color("health_shield"))
+			_apply_numeric_health_label_style(shield_number, BattleUIStyle.get_color("health_shield"))
 			shield_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_health_pip_container.add_child(shield_number)
-		# 数字体力标签；高上限角色使用分数格式同时展示当前体力与体力上限。
+		# 数字体力标签；高上限角色使用绿色加粗分数格式同时展示当前体力与体力上限，不再按残血切换黄红色。
 		var health_number: Label = Label.new()
 		health_number.text = "%d/%d" % [safe_hp, max_hp]
 		health_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		health_number.add_theme_font_size_override("font_size", 10)
-		health_number.add_theme_color_override("font_color", _resolve_current_health_color(safe_hp, max_hp, BattleUIStyle.get_color("health_number")))
+		_apply_numeric_health_label_style(health_number, BattleUIStyle.get_color("health_full"))
 		health_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_health_pip_container.add_child(health_number)
 		_layout_health_frame(true)
@@ -985,6 +989,16 @@ func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 		health_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_health_pip_container.add_child(health_pip)
 	_layout_health_frame(false)
+
+
+## 为高体力数字或护盾分数应用统一的加粗主题；同色1像素描边扩大字形轮廓，不依赖外部字体是否提供粗体字重。
+func _apply_numeric_health_label_style(label: Label, text_color: Color) -> void:
+	if label == null:
+		return
+	label.add_theme_font_size_override("font_size", numeric_health_font_size)
+	label.add_theme_color_override("font_color", text_color)
+	label.add_theme_color_override("font_outline_color", text_color)
+	label.add_theme_constant_override("outline_size", numeric_health_outline_size)
 
 
 ## 返回当前剩余体力使用的语义颜色；上限1或2永久保持绿色，其他角色在2点和1点时分别转为黄色与红色。

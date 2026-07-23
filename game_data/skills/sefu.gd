@@ -39,8 +39,8 @@ func _on_owner_damage_source(event: RuleEvent) -> void:
 		return
 	# 造成伤害的逻辑牌；技能伤害没有有效卡牌定义，不满足“使用牌造成伤害”。
 	var card_id: String = str(event.data.get("card_id", ""))
-	# 伤害牌原版名字数；0表示牌定义缺失或不是有效使用牌。
-	# 实际查询优先读取规则名；属性【杀】都按一个汉字参与【摄伏】检索。
+	# 伤害牌《崩铁杀》名字数；0表示牌定义缺失或不是有效使用牌。
+	# 实际查询固定读取 custom_name，属性【杀】按其《崩铁杀》牌名参与【摄伏】检索。
 	var name_length: int = int(host.call("get_card_original_name_length", card_id))
 	if name_length <= 0:
 		return
@@ -106,8 +106,8 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 		# 获得未知牌的基础收益；统一按1张牌换算，友方低手牌时再提高补牌需求。
 		var score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 1, 0) + maxf(3.0 - float(target.get("hand_count", 0)), 0.0) * maxf(attitude, 0.0) * 0.25
-		# 伤害牌原版名字数；1和4分别应用防御牌与锦囊牌倾向。
-		# AI与权威检索共用规则名字数，避免牌面属性前缀造成评分和结算分歧。
+		# 伤害牌《崩铁杀》名字数；1和4分别应用防御牌与锦囊牌倾向。
+		# AI与权威检索共用 custom_name 字数，避免评分和结算使用不同名称口径。
 		var name_length: int = int(context.get("name_length", 0))
 		# 一字牌多为基础防御与救援牌，残血友方获得时增加生存收益。
 		if name_length == 1 and attitude > 0.0:
