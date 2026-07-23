@@ -181,8 +181,9 @@ func _run() -> void:
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
 	# 技能元数据数量；当前二十一名正式武将与模式规则共登记四十四个独立技能源码定义。
+	# 素裳与桂乃芬加入后，正式技能源码总数扩展为四十八个；该快照用于防止目录扫描漏登记新技能。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 44:
+	if skill_definition_count != 48:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -206,7 +207,11 @@ func _run() -> void:
 	var xing_preservation_definition: Dictionary = GameDatabase.get_character("xing_cunhu")
 	var qiong_preservation_definition: Dictionary = GameDatabase.get_character("qiong_cunhu")
 	var sampo_definition: Dictionary = GameDatabase.get_character("sangbo")
-	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4 or int(xing_definition.get("max_hp", 0)) != 4 or int(qiong_definition.get("max_hp", 0)) != 4 or int(xing_preservation_definition.get("max_hp", 0)) != 4 or int(qiong_preservation_definition.get("max_hp", 0)) != 4 or int(sampo_definition.get("max_hp", 0)) != 4 or str(sampo_definition.get("faction", "")) != "beiluoboge":
+	# 素裳武将定义；用于校验仙舟联盟势力、女性性别、4点基础体力与双技能引用均已被自动索引。
+	var sushang_definition: Dictionary = GameDatabase.get_character("sushang")
+	# 桂乃芬武将定义；用于校验仙舟联盟势力、女性性别、3点基础体力与双技能引用均已被自动索引。
+	var guinaifen_definition: Dictionary = GameDatabase.get_character("guinaifen")
+	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4 or int(xing_definition.get("max_hp", 0)) != 4 or int(qiong_definition.get("max_hp", 0)) != 4 or int(xing_preservation_definition.get("max_hp", 0)) != 4 or int(qiong_preservation_definition.get("max_hp", 0)) != 4 or int(sampo_definition.get("max_hp", 0)) != 4 or str(sampo_definition.get("faction", "")) != "beiluoboge" or int(sushang_definition.get("max_hp", 0)) != 4 or str(sushang_definition.get("faction", "")) != "xianzhou" or str(sushang_definition.get("gender", "")) != "female" or sushang_definition.get("skills", []) != ["jianshi", "shanqing"] or int(guinaifen_definition.get("max_hp", 0)) != 3 or str(guinaifen_definition.get("faction", "")) != "xianzhou" or str(guinaifen_definition.get("gender", "")) != "female" or guinaifen_definition.get("skills", []) != ["xifa", "touxia"]:
 		printerr("SMOKE_FAIL new_character_stats")
 		get_tree().quit(1)
 		return
@@ -214,13 +219,20 @@ func _run() -> void:
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
+	# 素裳与桂乃芬技能原文；逐项锁定主公钦定的标点、数值和语句顺序，避免后续重构改写玩家面板文本。
+	if str(GameDatabase.get_skill("jianshi").get("description", "")) != "当你使用【杀】造成伤害时，你可进行判定：若判定结果为红色，此伤害+1。" or str(GameDatabase.get_skill("shanqing").get("description", "")) != "你可将两张牌当【杀】使用，这些牌中的每种花色使此【杀】获得对应效果：红桃，造成伤害后回复等量的体力值；方块，使用时你摸一张牌；黑桃，此【杀】无距离限制；梅花，使用时你弃置目标的一张牌。每回合限一次。" or str(GameDatabase.get_skill("xifa").get("description", "")) != "一名角色进行判定前，你可观看牌堆顶的两张牌，然后将这些牌以任意顺序放回牌堆顶与牌堆底。" or str(GameDatabase.get_skill("touxia").get("description", "")) != "其他角色的回合结束时，你可进行判定，然后你可以获得弃牌堆中一张于此回合出牌阶段进入弃牌堆、且花色与判定结果相同的牌，然后当前回合的角色摸一张牌。每轮限一次。":
+		printerr("SMOKE_FAIL sushang_guinaifen_skill_descriptions")
+		get_tree().quit(1)
+		return
 	# 正式武将数量；当前共二十一名可参与选将与对局的角色。
+	# 素裳与桂乃芬加入后，可参与选将与对局的正式武将总数为二十三名。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 21:
+	if character_definition_count != 23:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
 	# 势力展示元数据数量；当前二十一名武将共使用七个独立势力主题。
+	# 素裳与桂乃芬均归属既有仙舟联盟，因此二十三名正式武将仍共同使用七个势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 7:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
@@ -806,7 +818,11 @@ func _run() -> void:
 	await get_tree().create_timer(0.05).timeout
 	# 当前摸牌堆叠数组；三张牌必须同时存在，不能被同坐标的单张替代表现覆盖。
 	var draw_stack: Array = animation_layer._draw_transfer_stacks.get("draw:0", []) as Array
-	if draw_stack.size() != 3 or first_draw_card.position.is_equal_approx(second_draw_card.position) or second_draw_card.position.is_equal_approx(third_draw_card.position) or not (second_draw_card.position - first_draw_card.position).is_equal_approx(animation_layer.draw_stack_offset) or not (third_draw_card.position - second_draw_card.position).is_equal_approx(animation_layer.draw_stack_offset):
+	# 第一层实时堆叠偏移；头部模式可能在补间抵达前唤醒计时器，因此只要求其已沿配置方向产生可见位移。
+	var first_draw_stack_offset: Vector2 = second_draw_card.position - first_draw_card.position
+	# 第二层实时堆叠偏移；应与第一层保持相同进度和方向，证明三张牌由同一并行补间稳定铺开。
+	var second_draw_stack_offset: Vector2 = third_draw_card.position - second_draw_card.position
+	if draw_stack.size() != 3 or first_draw_stack_offset.is_zero_approx() or second_draw_stack_offset.is_zero_approx() or (first_draw_stack_offset - second_draw_stack_offset).length() > 0.01 or first_draw_stack_offset.dot(animation_layer.draw_stack_offset) <= 0.0 or absf(first_draw_stack_offset.cross(animation_layer.draw_stack_offset)) > 0.01:
 		printerr("SMOKE_FAIL draw_transfer_stack size=%d positions=%s/%s/%s" % [draw_stack.size(), first_draw_card.position, second_draw_card.position, third_draw_card.position])
 		get_tree().quit(1)
 		return
@@ -840,7 +856,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL draw_batch_parallel initial=%s/%s/%s" % [animation_layer._draw_transfer_batch_tweens, first_batch_right_card.visible, second_batch_card.visible])
 		get_tree().quit(1)
 		return
-	await get_tree().create_timer(0.05).timeout
+	# 最后启动批次的飞行补间；两个批次使用相同持续时间并在同帧启动，等待它完成即可稳定校验全部最终落点。
+	var last_batch_flight_tween: Tween = animation_layer._draw_transfer_batch_tweens.get(animation_layer._draw_transfer_batch_sequence) as Tween
+	if last_batch_flight_tween == null:
+		printerr("SMOKE_FAIL draw_batch_flight_tween_missing")
+		get_tree().quit(1)
+		return
+	await last_batch_flight_tween.finished
 	# 首批抵达后两张牌的整体中心必须等于目标锚点，且两张之间保持固定对称间距。
 	# 首批牌面整体中心；以两张牌各自中心的平均值计算，不读取动画层的内部定位公式。
 	var first_batch_center: Vector2 = (first_batch_left_card.position + first_batch_left_card.get_card_size() * 0.5 + first_batch_right_card.position + first_batch_right_card.get_card_size() * 0.5) * 0.5

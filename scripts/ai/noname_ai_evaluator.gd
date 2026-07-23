@@ -625,6 +625,7 @@ func _get_choice_candidate_by_uid(choice_request: Dictionary, card_uid: int) -> 
 
 
 ## 返回持有者手牌或木牛“粮”中指定实体 UID 的保留价值；自定义装备动作使用该接口评估材料。
+## 返回持有者手牌、木牛“粮”或装备区中指定实体 UID 的保留价值；转化技能使用该接口评估材料机会成本。
 func get_owned_card_value_by_uid(authoritative_snapshot: Dictionary, owner_id: int, card_uid: int) -> float:
 	# 持有者快照；不存在时按未知牌2分估值。
 	var owner: Dictionary = get_player(authoritative_snapshot, owner_id)
@@ -636,10 +637,27 @@ func get_owned_card_value_by_uid(authoritative_snapshot: Dictionary, owner_id: i
 			var card: Dictionary = card_variant as Dictionary
 			if int(card.get("uid", -1)) == card_uid:
 				return get_card_value_by_id(str(card.get("definition_id", "")), authoritative_snapshot, owner_id)
+	for equipment_variant: Variant in (owner.get("equipment", {}) as Dictionary).values():
+		# 当前装备实体；装备作为技能材料时使用场面装备价值，而不是普通手牌保留价值。
+		var equipment_card: Dictionary = equipment_variant as Dictionary
+		if int(equipment_card.get("uid", -1)) != card_uid:
+			continue
+		# 当前装备定义与 AI 配置；优先读取 equip_value，缺失时回退普通 value 或未知牌2分。
+		var equipment_definition: Dictionary = _get_cached_card_definition(str(equipment_card.get("definition_id", "")))
+		# 当前装备 AI 配置；与正常换装估值保持同一静态数值来源。
+		var equipment_ai_profile: Dictionary = get_card_ai_profile(equipment_definition)
+		# 当前装备保留价值；数组 value 仅作异常回退，标准装备应填写单值 equip_value。
+		var configured_equipment_value: Variant = equipment_ai_profile.get("equip_value", equipment_ai_profile.get("value", 2.0))
+		if configured_equipment_value is Array:
+			# 装备异常数组价值；读取首项保持确定性，空数组回退未知牌2分。
+			var equipment_values: Array = configured_equipment_value as Array
+			return float(equipment_values[0]) if not equipment_values.is_empty() else 2.0
+		return float(configured_equipment_value)
 	return 2.0
 
 
 ## 返回持有者手牌或木牛“粮”中指定实体 UID 的只读副本；技能AI可用它查询材料牌族、颜色和定义ID。
+## 返回持有者手牌、木牛“粮”或装备区中指定实体 UID 的只读副本；技能 AI 可用它查询材料牌族、花色、颜色和定义 ID。
 func get_owned_card_by_uid(authoritative_snapshot: Dictionary, owner_id: int, card_uid: int) -> Dictionary:
 	# 持有者快照；异常缺失时返回空字典，调用方不得猜测牌面。
 	var owner: Dictionary = get_player(authoritative_snapshot, owner_id)
@@ -651,6 +669,11 @@ func get_owned_card_by_uid(authoritative_snapshot: Dictionary, owner_id: int, ca
 			var card: Dictionary = card_variant as Dictionary
 			if int(card.get("uid", -1)) == card_uid:
 				return card.duplicate(true)
+	for equipment_variant: Variant in (owner.get("equipment", {}) as Dictionary).values():
+		# 当前公开装备实体；UID 匹配时返回副本，技能不得修改权威快照中的装备字典。
+		var equipment_card: Dictionary = equipment_variant as Dictionary
+		if int(equipment_card.get("uid", -1)) == card_uid:
+			return equipment_card.duplicate(true)
 	return {}
 
 

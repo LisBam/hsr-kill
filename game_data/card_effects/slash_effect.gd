@@ -100,10 +100,14 @@ func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, 
 		"slash_card_definition_id":card.definition_id,
 		"actor_id":actor_id,
 		"target_id":target_id,
+		"base_damage_amount":maxi(damage_amount, 0),
+		"applied_target_damage_bonus":target_damage_bonus,
 		"damage_amount":maxi(damage_amount + target_damage_bonus, 0),
 		"nature":nature,
 		"ignore_armor":ignore_armor,
 	}
+	# 虚拟牌扩展存储；【山倾】等多材料【杀】通过该纯数据字段把花色效果传入伤害与目标时机。
+	context["virtual_storage"] = (host.call("get_card_virtual_storage", parent_card_uid) as Dictionary).duplicate(true) if host.has_method("get_card_virtual_storage") else {}
 	# 当前武器定义；每件武器自行判断是否在“指定目标后”接管流程。
 	var weapon_definition: CardDefinition = host.get_equipment_definition(actor_id, "weapon")
 	if state.processing_area.has(card) and weapon_definition != null and weapon_definition.on_slash_targeted(self, context):
@@ -202,7 +206,26 @@ func continue_slash_damage(context: Dictionary) -> void:
 	var damage_timing: RuleEvent = host.emit_rule_timing("shaDamage", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), int(context.get("target_id", -1)), context)
 	if damage_timing != null and (damage_timing.cancelled or damage_timing.neutralized):
 		return
-	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), int(context.get("damage_amount", 1)), str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), context)
+	# 判定、选牌等可选技能必须在真正扣减体力前完成；恢复时会重新读取本目标最新技能伤害加值。
+	if host.has_pending_card_choice() or (host.has_method("has_pending_judgment_request") and bool(host.call("has_pending_judgment_request"))):
+		host.defer_slash_continuation("after_sha_damage", damage_timing.data if damage_timing != null else context)
+		return
+	continue_after_sha_damage(damage_timing.data if damage_timing != null else context)
+
+
+## 在 shaDamage 的全部可选技能与判定完成后造成伤害；目标加值按最新权威状态重读，避免异步判定沿用旧数值。
+func continue_after_sha_damage(context: Dictionary) -> void:
+	# 当前【杀】实体；等待期间已经离开全部权威区域时原伤害不再恢复。
+	var card: CardInstance = _find_card(int(context.get("slash_card_uid", -1)))
+	if card == null or resolver.is_resolution_stopped():
+		return
+	# 当前目标独立技能加值；剑势等效果在 shaDamage 判定完成后写入，不能重复叠加请求建立前已经读取的值。
+	var current_target_damage_bonus: int = int(host.call("get_card_target_damage_bonus", int(context.get("parent_card_uid", -1)), int(context.get("target_id", -1)))) if host.has_method("get_card_target_damage_bonus") else int(context.get("applied_target_damage_bonus", 0))
+	# 本张【杀】的酒等共享基础伤害；与目标加值分离保存，可确保多目标牌互不污染。
+	var final_damage_amount: int = maxi(int(context.get("base_damage_amount", context.get("damage_amount", 1))) + current_target_damage_bonus, 0)
+	context["damage_amount"] = final_damage_amount
+	context["applied_target_damage_bonus"] = current_target_damage_bonus
+	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), final_damage_amount, str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), context)
 	if resolver.is_resolution_stopped():
 		return
 	# 伤害后的目标状态；死亡目标不再执行任何伤害后装备效果。

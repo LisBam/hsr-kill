@@ -73,7 +73,7 @@ func validate_equipment_response_materials(match_host: Object, player_id: int, e
 
 
 ## 消耗两张丈八材料并返回一张无花色、无点数、无颜色的虚拟【杀】。
-func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int]) -> CardInstance:
+func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int], _response_context: Dictionary = {}) -> CardInstance:
 	if not response_patterns.has("sha"):
 		return null
 	# 材料校验结果；等待期间任一材料移动都会拒绝消费。

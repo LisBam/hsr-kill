@@ -64,6 +64,13 @@ func resume_deferred_dispatches() -> bool:
 	return trigger_manager.resume_deferred(trigger_pause_condition)
 
 
+## 只恢复最内层的一条暂停时机；判定等子流程可在父时机剩余处理器之前取得结算优先级。
+func resume_next_deferred_dispatch() -> bool:
+	if trigger_manager == null:
+		return false
+	return trigger_manager.resume_next_deferred(trigger_pause_condition)
+
+
 ## 返回当前存活角色的稳定玩家 ID 座次；状态为空时返回空数组并保持注册顺序。
 func _get_alive_seat_order() -> Array[int]:
 	# 座次结果；只保存稳定 ID，不向触发器暴露 PlayerState 可变引用。

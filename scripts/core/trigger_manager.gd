@@ -153,6 +153,35 @@ func resume_deferred(pause_condition: Callable = Callable()) -> bool:
 	return false
 
 
+## 只恢复最内层的一条有序触发续列；调用方可在每条续列之间优先处理其新建的判定等子流程，避免越过父时机。
+## 返回 true 表示本条续列恢复期间再次创建选择请求；没有续列或同步完成时返回 false。
+func resume_next_deferred(pause_condition: Callable = Callable()) -> bool:
+	if _deferred_dispatches.is_empty():
+		return false
+	# 当前最内层续列；数组尾部始终对应最近因选择暂停的直接子时机。
+	var deferred_dispatch: Dictionary = _deferred_dispatches.pop_back() as Dictionary
+	# 原规则事件；终止或失效事件无需恢复，直接视为本条续列完成。
+	var event: RuleEvent = deferred_dispatch.get("event") as RuleEvent
+	if event == null or event.is_terminal():
+		return false
+	# 已有新选择时不能执行任何处理器；把原续列放回栈顶等待下一次恢复。
+	if pause_condition.is_valid() and bool(pause_condition.call()):
+		_deferred_dispatches.append(deferred_dispatch)
+		return true
+	# 初次派发时已经固定的处理器顺序；恢复时不得重新排列或引入新注册项。
+	var arranged: Array[Dictionary] = []
+	for entry_variant: Variant in deferred_dispatch.get("entries", []) as Array:
+		arranged.append(entry_variant as Dictionary)
+	# 下一项处理器索引；已经完成的技能不会重复询问或再次执行。
+	var next_index: int = int(deferred_dispatch.get("next_index", 0))
+	if _dispatch_arranged(event, arranged, next_index, pause_condition):
+		return true
+	event.data.erase("_trigger_dispatch_deferred")
+	if not event.is_terminal():
+		event.finish()
+	return false
+
+
 ## 返回是否存在尚未完成的有序触发续列；流程诊断只读取布尔值，不取得事件或回调引用。
 func has_deferred_dispatches() -> bool:
 	return not _deferred_dispatches.is_empty()

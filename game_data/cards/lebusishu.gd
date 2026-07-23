@@ -2,6 +2,9 @@ extends CardDefinition
 
 ## 【乐不思蜀】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
+## 保留出牌阶段对判定角色的基础 AI 价值；供改判定技能按阵营选择红桃或非红桃结果。
+const AI_SAFE_RESULT_VALUE: float = 4.0
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -40,9 +43,42 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 
 ## 结算【乐不思蜀】判定；未被无懈抵消且结果不为红桃时跳过本回合出牌阶段。
 func resolve_delayed_judgment(match_host: Object, player_id: int, card: CardInstance, negated: bool) -> void:
-	if not negated:
-		# 【乐不思蜀】判定牌；红桃表示通过，其他三种花色均记录跳过出牌阶段。
-		var judgment_card: CardInstance = match_host.perform_judgment(player_id, "【乐不思蜀】")
-		if judgment_card != null and judgment_card.suit != "heart":
-			match_host.mark_player_phase_skipped(player_id, "play")
+	if negated:
+		match_host.discard_delayed_card(card)
+		return
+	# 【乐不思蜀】判定牌；红桃表示通过，其他三种花色均记录跳过出牌阶段。
+	# 判定恢复上下文；延时牌 UID 用于等待期间确认原牌仍位于处理区。
+	var continuation: Dictionary = {"receiver_type":"card", "card_definition_id":get_id(), "context":{"kind":"lebu_delayed_judgment", "player_id":player_id, "delayed_card_uid":card.uid}}
+	# 红桃令目标保留出牌阶段，属于目标角色的有利结果；其余花色为不利结果。
+	var judgment_ai_context: Dictionary = {"favorable_condition":{"suits":["heart"]}, "unfavorable_condition":{"not":{"suits":["heart"]}}, "favorable_result_player_values":{str(player_id):AI_SAFE_RESULT_VALUE}}
+	# 【乐不思蜀】判定牌；判定前存在选择时由 continue_judgment 恢复，不提前移动原延时牌。
+	var judgment_card: CardInstance = match_host.request_judgment(player_id, "【乐不思蜀】", continuation, judgment_ai_context)
+	if match_host.has_pending_judgment_request():
+		return
+	_apply_delayed_result(match_host, player_id, card, judgment_card)
+
+
+## 恢复【乐不思蜀】异步判定，并在原延时牌仍有效时应用跳过阶段与弃置结果。
+func continue_judgment(match_host: Object, context: Dictionary, judgment_card: CardInstance) -> bool:
+	if str(context.get("kind", "")) != "lebu_delayed_judgment":
+		return false
+	# 原延时牌；等待期间已经离开处理区时旧判定结果不再修改阶段。
+	var delayed_card: CardInstance = _find_processing_card(match_host, int(context.get("delayed_card_uid", -1)))
+	if delayed_card != null:
+		_apply_delayed_result(match_host, int(context.get("player_id", -1)), delayed_card, judgment_card)
+	return true
+
+
+## 应用【乐不思蜀】最终判定；非红桃时跳过出牌阶段，之后原延时牌进入弃牌堆。
+func _apply_delayed_result(match_host: Object, player_id: int, card: CardInstance, judgment_card: CardInstance) -> void:
+	if judgment_card != null and judgment_card.suit != "heart":
+		match_host.mark_player_phase_skipped(player_id, "play")
 	match_host.discard_delayed_card(card)
+
+
+## 按 UID 查找仍在公共处理区的原延时牌；异步恢复不依赖同名牌或数组位置。
+func _find_processing_card(match_host: Object, card_uid: int) -> CardInstance:
+	for processing_card: CardInstance in match_host.state.processing_area:
+		if processing_card.uid == card_uid:
+			return processing_card
+	return null
