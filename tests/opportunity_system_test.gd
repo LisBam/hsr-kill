@@ -91,8 +91,9 @@ func _test_catalog_and_weights() -> bool:
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
 	# 全部机缘卡目录；当前共69张，其中3张灰色卡只属于过关斩将关卡与详情历史。
+	# 补充：新增两张难度专属灰色机缘后，当前目录共71张，其中5张灰色卡不参与随机抽取。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 69 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 71 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
 	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
@@ -102,10 +103,15 @@ func _test_catalog_and_weights() -> bool:
 	if str(OpportunityCatalog.get_card("green_draw_two").get("description", "")) != isolated_card_description:
 		return _fail("catalog_index_copy_isolation")
 	# 灰色机缘目录；三张都必须可供过关斩将授予，但禁止进入可随机抽取的品质顺序。
+	# 补充：当前灰色目录已扩展为五张，新增两张由过关斩将难度配置授予。
 	var gray_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("gray")
-	if gray_cards.size() != 3 or OpportunityCatalog.QUALITY_ORDER.has("gray"):
+	# 新增难度灰色机缘；正文与数值必须逐字匹配设计，复活效果使用独立稳定ID。
+	var gray_initial_hand_two: Dictionary = OpportunityCatalog.get_card("gray_initial_hand_two")
+	var gray_revive_one: Dictionary = OpportunityCatalog.get_card("gray_revive_one")
+	if gray_cards.size() != 5 or OpportunityCatalog.QUALITY_ORDER.has("gray") or str(gray_initial_hand_two.get("description", "")) != "初始手牌数+2" or int(gray_initial_hand_two.get("count", 0)) != 2 or str(gray_revive_one.get("description", "")) != "复活次数+1" or str(gray_revive_one.get("effect", "")) != "revive_count" or int(gray_revive_one.get("count", 0)) != 1:
 		return _fail("gray_catalog=%s quality_order=%s" % [gray_cards, OpportunityCatalog.QUALITY_ORDER])
 	# 紫色与橙色目录；摸牌阶段加成调整品质后，总目录保持69张且旧紫色稳定ID不再登记。
+	# 补充：新增两张灰色机缘后，总目录为71张；紫色与橙色数量仍保持不变。
 	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
 	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
 	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")

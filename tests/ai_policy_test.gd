@@ -962,6 +962,39 @@ func _test_wuxie_decision() -> bool:
 	var chained_tiesuo_choice: Dictionary = _policy.choose_card_choice(snapshot, chained_tiesuo_request, [pass_action, use_action])
 	if bool((chained_tiesuo_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_chained_tiesuo=%s" % [chained_tiesuo_choice])
+	# 敌方对领袖使用【闪电】；低命中且会传递的延时锦囊不值得消耗最后一张无懈。
+	var enemy_lightning_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"shandian", "source_id":1, "target_id":0, "negated":false}}
+	# 闪电响应选择；即使目标为自己且来源敌对，也应明确保留无懈。
+	var enemy_lightning_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_lightning_request, [pass_action, use_action])
+	if bool((enemy_lightning_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_enemy_lightning=%s" % [enemy_lightning_choice])
+	# 敌方对1体力领袖使用【南蛮入侵】；领袖已有一张【杀】时可以直接响应，应下调使用无懈的收益。
+	(snapshot.get("players", []) as Array)[0]["hp"] = 1
+	var enemy_nanman_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"nanman", "source_id":1, "target_id":0, "negated":false}}
+	# 资源充足时的南蛮响应；已知【杀】能够承担本次防御，保留最后一张无懈。
+	var supplied_nanman_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_nanman_request, [pass_action, use_action])
+	if bool((supplied_nanman_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_nanman_with_sha=%s" % [supplied_nanman_choice])
+	# 移除领袖【杀】后的手牌；同一锦囊现在会造成致命伤害，且没有直接响应资源。
+	(snapshot.get("players", []) as Array)[0]["hand"] = [_card(201, "wuxie", 0)]
+	(snapshot.get("players", []) as Array)[0]["hand_count"] = 1
+	# 资源不足时的南蛮响应；致命关键牌应允许动用最后一张无懈。
+	var unsupported_nanman_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_nanman_request, [pass_action, use_action])
+	if not bool((unsupported_nanman_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_nanman_without_sha=%s" % [unsupported_nanman_choice])
+	# 恢复安全体力并验证普通牌差锦囊；只有最后一张无懈时应为后续关键牌保留。
+	(snapshot.get("players", []) as Array)[0]["hp"] = 4
+	var enemy_guohe_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"guohe", "source_id":1, "target_id":0, "negated":false}}
+	# 最后一张无懈面对普通过河拆桥；储备策略应选择放弃。
+	var reserved_guohe_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_guohe_request, [pass_action, use_action])
+	if bool((reserved_guohe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_last_copy_reserve=%s" % [reserved_guohe_choice])
+	# 第二张无懈副本；资源不再稀缺时可以抵消明确不利的普通锦囊。
+	(snapshot.get("players", []) as Array)[0]["hand"] = [_card(201, "wuxie", 0), _card(202, "wuxie", 0)]
+	(snapshot.get("players", []) as Array)[0]["hand_count"] = 2
+	var surplus_guohe_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_guohe_request, [pass_action, use_action])
+	if not bool((surplus_guohe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_surplus_copy=%s" % [surplus_guohe_choice])
 	return true
 
 

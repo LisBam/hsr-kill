@@ -183,8 +183,9 @@ func show_hover_information(information: Dictionary, anchor_rect: Rect2, source_
 	if source_id == _hover_source_id and _hover_information == information_copy and _hover_panel.visible:
 		_hover_anchor_rect = anchor_rect
 		# 公开快照刷新会重复发送相同武将资料；完成首帧布局后只校正位置，测量期间则保持透明等待原布局收尾。
+		# 补充：稳定内容只读取既有宽高并重新定位，不再进入会改变自动换行边界的测量函数。
 		if _hover_panel.modulate.a > 0.0:
-			_place_hover_panel(anchor_rect, source_id, _hover_layout_generation)
+			_reposition_hover_panel(anchor_rect, source_id, _hover_layout_generation)
 		return
 	# 同一逻辑资料主题；只有显式稳定主题一致时允许跳过悬停延迟，装备与武将资料切换仍按新目标重新等待。
 	var current_refresh_subject: String = str(_hover_information.get("refresh_subject", ""))
@@ -695,17 +696,12 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: i
 	_hover_panel.custom_minimum_size = Vector2(desired_width, desired_height)
 	_hover_panel.size = Vector2(desired_width, desired_height)
 	# 当前信息框实际尺寸；完成内容与比例测量后使用该值进行视口边界计算。
-	var panel_size: Vector2 = _hover_panel.size
 	# 默认信息框位置；优先显示在目标右侧并与目标顶边对齐。
-	var target_position: Vector2 = Vector2(anchor_rect.end.x + hover_target_gap, anchor_rect.position.y)
-	if target_position.x + panel_size.x > available_rect.end.x:
-		target_position.x = anchor_rect.position.x - panel_size.x - hover_target_gap
-	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
-	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
-	_hover_panel.position = target_position
+	# 补充：实际尺寸读取和目标位置计算已委托给纯定位入口，避免相同资料重复触发宽度测量。
+	# 初次使用当前测量尺寸定位，但继续保持透明；最终宽度下的自动换行高度将在下一帧稳定。
+	_reposition_hover_panel(anchor_rect, source_id, layout_generation)
 	# 位置与最终尺寸都稳定后再显示；这一步也是当前布局代次唯一允许恢复不透明度的入口。
 	# 容器的自动换行高度会在最终宽度写入后的下一帧稳定；实际显示和边界收紧交由二次布局入口完成。
-	_hover_panel.modulate = Color.WHITE
 	_finalize_hover_panel_after_layout(anchor_rect, source_id, layout_generation)
 
 
@@ -714,24 +710,38 @@ func _finalize_hover_panel_after_layout(anchor_rect: Rect2, source_id: int, layo
 	await get_tree().process_frame
 	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
 		return
+	_reposition_hover_panel(anchor_rect, source_id, layout_generation)
+	_hover_panel.modulate = Color.WHITE
+
+
+## 仅按当前稳定尺寸重新定位信息框；相同内容的高频刷新不得重新测量宽度，否则自动换行边界会在相邻帧振荡。
+func _reposition_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: int) -> void:
+	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
+		return
 	# 最终布局可用尺寸；与初次测量一样优先服从已缩小的父Control客户区。
+	# 补充：本入口也用于稳定内容的重复定位，所以不执行任何文本或宽高测量。
 	var layout_size: Vector2 = size
 	# 父级布局控件；紧凑窗口测试会直接修改其尺寸，信息框不应继续使用旧逻辑画布边界。
+	# 补充：正式运行时缩放同样服从该客户区边界。
 	var parent_control: Control = get_parent() as Control
 	if parent_control != null:
 		layout_size = Vector2(minf(layout_size.x, parent_control.size.x), minf(layout_size.y, parent_control.size.y))
 	# 最终安全矩形；保留与初次定位相同的视口边距。
+	# 补充：面板大于可用空间时仍夹到左上安全边界。
 	var available_rect: Rect2 = Rect2(Vector2(viewport_margin, viewport_margin), layout_size - Vector2.ONE * viewport_margin * 2.0)
+	# 当前信息框实际尺寸；完成内容与比例测量后使用该值进行视口边界计算。
 	# 最终面板尺寸；已包含当前宽度下全部标题、副标题和正文换行高度。
+	# 补充：本函数只读取该稳定尺寸，不修改custom_minimum_size、宽度或自动换行状态。
 	var panel_size: Vector2 = _hover_panel.size
+	# 默认信息框位置；优先显示在目标右侧并与目标顶边对齐。
 	# 最终目标位置；仍优先目标右侧，空间不足时翻转到左侧。
+	# 补充：翻转后还会把位置夹入当前安全区域。
 	var target_position: Vector2 = Vector2(anchor_rect.end.x + hover_target_gap, anchor_rect.position.y)
 	if target_position.x + panel_size.x > available_rect.end.x:
 		target_position.x = anchor_rect.position.x - panel_size.x - hover_target_gap
 	target_position.x = clampf(target_position.x, available_rect.position.x, maxf(available_rect.end.x - panel_size.x, available_rect.position.x))
 	target_position.y = clampf(target_position.y, available_rect.position.y, maxf(available_rect.end.y - panel_size.y, available_rect.position.y))
 	_hover_panel.position = target_position
-	_hover_panel.modulate = Color.WHITE
 
 
 ## 在指定宽度下测量悬停说明所需的最小内容高度；每次测量都重置旧比例产生的高度，保证下一份信息不会继承前一份的空白。

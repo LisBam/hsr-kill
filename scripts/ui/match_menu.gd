@@ -70,6 +70,9 @@ signal main_menu_requested
 ## 随机选将牌数下拉框；选项元数据保存1至20张普通随机候选数量。
 @onready var _character_candidate_count_option: OptionButton = %CharacterCandidateCountOption
 
+## 过关斩将难度下拉框；仅影响下一次重开并通过稳定数值一至五保存。
+@onready var _conquest_difficulty_option: OptionButton = %ConquestDifficultyOption
+
 ## 车轮战明置候选数量输入；仅当前模式为1v1车轮战时显示并用于下一次重开。
 @onready var _wheel_duel_face_up_candidate_input: SpinBox = %MatchMenuWheelDuelFaceUpCandidateInput
 
@@ -108,6 +111,9 @@ signal main_menu_requested
 
 ## 随机选将牌数整行容器；属于房主权威规则，局域网客户端必须整行隐藏。
 @onready var _character_candidate_count_row: Control = _character_candidate_count_option.get_parent() as Control
+
+## 过关斩将难度整行容器；仅在当前对局为过关斩将且拥有重开权限时显示。
+@onready var _conquest_difficulty_row: Control = _conquest_difficulty_option.get_parent() as Control
 
 ## 车轮战明置候选整行容器；普通模式隐藏，车轮战模式按权威权限显示。
 @onready var _wheel_duel_face_up_candidate_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
@@ -181,6 +187,9 @@ func _ready() -> void:
 	_character_candidate_count_option.item_selected.connect(_on_character_candidate_count_selected)
 	GameSettings.character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.conquest_character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
+	_populate_conquest_difficulty_options()
+	_conquest_difficulty_option.item_selected.connect(_on_conquest_difficulty_selected)
+	GameSettings.conquest_difficulty_changed.connect(_refresh_conquest_difficulty_selection)
 	_wheel_duel_face_up_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_up_candidate_count)
 	_wheel_duel_face_up_candidate_input.value_changed.connect(_on_wheel_duel_face_up_candidate_count_changed)
 	_wheel_duel_face_down_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_down_candidate_count)
@@ -198,6 +207,7 @@ func _ready() -> void:
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
+	_refresh_conquest_difficulty_selection(GameSettings.conquest_difficulty)
 	set_match_mode(GameSettings.next_match_mode)
 	refresh_ui_style()
 
@@ -313,6 +323,7 @@ func _apply_mode_specific_settings_visibility() -> void:
 	_customize_ai_characters_row.visible = show_normal_selection_settings
 	_character_replacement_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_character_candidate_count_row.visible = _authority_controls_visible and not is_wheel_duel
+	_conquest_difficulty_row.visible = _authority_controls_visible and is_conquest
 	_wheel_duel_face_up_candidate_row.visible = _authority_controls_visible and is_wheel_duel
 	_wheel_duel_face_down_candidate_row.visible = _authority_controls_visible and is_wheel_duel
 	_auto_identity_marking_checkbox.visible = not is_wheel_duel and not is_conquest
@@ -347,6 +358,7 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/MulliganLimitRow/MulliganLimitLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterReplacementCountRow/CharacterReplacementCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterCandidateCountRow/CharacterCandidateCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/ConquestDifficultyRow/ConquestDifficultyLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	# 车轮战候选标签与内部输入框都指定同一回退字体，保证局内重开菜单的中文显示与主菜单一致。
 	# 明置候选标签；旧局内菜单场景可能未同步该行，缺失时不得妨碍其他设置刷新。
 	var wheel_duel_face_up_candidate_label: Label = _menu_panel.get_node_or_null("MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
@@ -366,6 +378,7 @@ func refresh_ui_style() -> void:
 	_apply_option_button_style(_mulligan_limit_option)
 	_apply_option_button_style(_character_replacement_count_option)
 	_apply_option_button_style(_character_candidate_count_option)
+	_apply_option_button_style(_conquest_difficulty_option)
 	_apply_spin_box_style(_wheel_duel_face_up_candidate_input)
 	_apply_spin_box_style(_wheel_duel_face_down_candidate_input)
 
@@ -457,6 +470,16 @@ func _populate_character_candidate_count_options() -> void:
 		var option_index: int = _character_candidate_count_option.item_count
 		_character_candidate_count_option.add_item(str(count_option.get("label", "五张")))
 		_character_candidate_count_option.set_item_metadata(option_index, int(count_option.get("value", GameSettings.DEFAULT_CHARACTER_CANDIDATE_COUNT)))
+
+
+## 从全局标准配置生成过关斩将难度一至五；稳定数值写入元数据，显示文本只负责界面表达。
+func _populate_conquest_difficulty_options() -> void:
+	_conquest_difficulty_option.clear()
+	for difficulty_option: Dictionary in GameSettings.CONQUEST_DIFFICULTY_OPTIONS:
+		# 当前难度选项索引；元数据直接作为下一局关卡服务参数。
+		var option_index: int = _conquest_difficulty_option.item_count
+		_conquest_difficulty_option.add_item(str(difficulty_option.get("label", "难度五")))
+		_conquest_difficulty_option.set_item_metadata(option_index, int(difficulty_option.get("value", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
 
 
 ## 依据全局名称模式同步下拉框选中项；无信号更新避免界面刷新重复提交同一个设置。
@@ -572,6 +595,23 @@ func _on_character_candidate_count_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _character_candidate_count_option.item_count:
 		return
 	GameSettings.set_character_candidate_count_for_mode(_active_match_mode, int(_character_candidate_count_option.get_item_metadata(option_index)))
+
+
+## 按全局设置同步过关斩将难度选中项；无信号刷新防止两个设置菜单互相重复提交。
+func _refresh_conquest_difficulty_selection(difficulty: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_conquest_difficulty_option.item_count):
+		if int(_conquest_difficulty_option.get_item_metadata(option_index)) == difficulty:
+			_conquest_difficulty_option.select(option_index)
+			return
+
+
+## 将局内菜单选择的难度写入下一局设置；当前对局的难度与已授予机缘保持锁定。
+func _on_conquest_difficulty_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _conquest_difficulty_option.item_count:
+		return
+	GameSettings.set_conquest_difficulty(int(_conquest_difficulty_option.get_item_metadata(option_index)))
 
 
 ## 更新车轮战明置候选数量；若合计不足10名则自动抬高暗置数量。

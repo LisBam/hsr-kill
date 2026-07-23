@@ -24,6 +24,9 @@ var _original_conquest_character_candidate_count: int = GameSettings.DEFAULT_CON
 ## 测试前过关斩将换将卡数量；结束时恢复，避免本专项覆盖用户保存的独立离散档位配置。
 var _original_conquest_character_replacement_count: int = GameSettings.DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT
 
+## 测试前过关斩将难度；专项默认使用难度五保持原流程，并在纯服务断言中独立覆盖五档奖励。
+var _original_conquest_difficulty: int = GameSettings.DEFAULT_CONQUEST_DIFFICULTY
+
 
 ## 延迟执行以等待自动加载数据库完成卡牌、武将与技能索引。
 func _ready() -> void:
@@ -39,23 +42,28 @@ func _run() -> void:
 	_original_custom_character_assignment_enabled = GameSettings.custom_character_assignment_enabled
 	_original_conquest_character_candidate_count = GameSettings.conquest_character_candidate_count
 	_original_conquest_character_replacement_count = GameSettings.conquest_character_replacement_count
+	_original_conquest_difficulty = GameSettings.conquest_difficulty
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	GameSettings.set_mulligan_limit(0)
 	GameSettings.set_customize_ai_characters_enabled(false)
 	GameSettings.set_custom_character_assignment_enabled(true)
 	GameSettings.set_conquest_character_candidate_count(GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)
 	GameSettings.set_conquest_character_replacement_count(3)
+	GameSettings.set_conquest_difficulty(GameSettings.DEFAULT_CONQUEST_DIFFICULTY)
 	if not _test_mode_rules_and_equipment_subtypes():
 		_restore_settings()
 		return
 	if not _test_level_bonus_service():
 		_restore_settings()
 		return
+	if not _test_player_difficulty_service():
+		_restore_settings()
+		return
 	if not await _test_full_match_replacement_flow():
 		_restore_settings()
 		return
 	_restore_settings()
-	print("CONQUEST_MODE_PASS rules+levels+initial_opportunity+zaixian_kill_tail+replacement+skills+equipment+turn_handoff+death")
+	print("CONQUEST_MODE_PASS rules+levels+difficulties+initial_opportunity+zaixian_kill_tail+replacement+skills+equipment+turn_handoff+revival+death")
 	get_tree().quit(0)
 
 
@@ -200,12 +208,49 @@ func _test_level_bonus_service() -> bool:
 	return true
 
 
+## 验证难度一至五只通过机缘目录授予精确开局增益，并由服务权威记录和消耗复活次数。
+func _test_player_difficulty_service() -> bool:
+	# 各难度期望机缘ID；顺序与玩家右键详情中的实际授予顺序保持一致。
+	var expected_opportunity_ids_by_difficulty: Dictionary = {
+		1:["purple_max_hp_two", "orange_draw_phase_one", "gray_initial_hand_two", "green_slash_play_limit_one", "gray_revive_one"],
+		2:["blue_max_hp_one", "orange_draw_phase_one", "gray_initial_hand_two", "green_slash_play_limit_one"],
+		3:["blue_max_hp_one", "gray_initial_hand_two", "green_slash_play_limit_one"],
+		4:["gray_initial_hand_one", "green_slash_play_limit_one"],
+		5:[],
+	}
+	for difficulty: int in range(GameSettings.MIN_CONQUEST_DIFFICULTY, GameSettings.MAX_CONQUEST_DIFFICULTY + 1):
+		# 当前难度独立状态；每档重新构建玩家，避免上一个难度的机缘历史污染结果。
+		var difficulty_state: GameState = GameState.new()
+		# 当前难度两名固定角色；玩家ID为0、敌方ID为1，与正式模式一致。
+		var difficulty_players: Array[PlayerState] = [PlayerState.new(0, "玩家"), PlayerState.new(1, "敌方AI")]
+		difficulty_state.players = difficulty_players
+		# 当前难度服务；随机源不参与固定开局机缘，但仍按正式接口提供。
+		var difficulty_service: ConquestModeService = ConquestModeService.new()
+		# 当前难度随机源；固定种子保证未来扩展仍可复现。
+		var difficulty_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+		difficulty_rng.seed = 20260723 + difficulty
+		difficulty_service.configure(difficulty_state, difficulty_rng, 0, 1, difficulty)
+		# 当前难度期望机缘；强类型副本用于同时校验服务快照与玩家通用机缘历史。
+		var expected_opportunity_ids: Array[String] = []
+		for opportunity_id_variant: Variant in expected_opportunity_ids_by_difficulty.get(difficulty, []) as Array:
+			expected_opportunity_ids.append(str(opportunity_id_variant))
+		if difficulty_service.get_difficulty() != difficulty or difficulty_service.get_player_starting_opportunity_ids() != expected_opportunity_ids or difficulty_players[0].acquired_opportunity_ids != expected_opportunity_ids:
+			return _fail("difficulty_%d_opportunities=%s/%s" % [difficulty, difficulty_service.get_player_starting_opportunity_ids(), difficulty_players[0].acquired_opportunity_ids])
+		# 只有难度一拥有一次复活；消耗后必须归零且不可重复消耗。
+		var expected_revive_count: int = 1 if difficulty == 1 else 0
+		if difficulty_service.get_player_revives_remaining() != expected_revive_count or difficulty_service.can_revive_player(1):
+			return _fail("difficulty_%d_revives=%d" % [difficulty, difficulty_service.get_player_revives_remaining()])
+		if difficulty == 1 and (not difficulty_service.consume_player_revive(0) or difficulty_service.get_player_revives_remaining() != 0 or difficulty_service.consume_player_revive(0)):
+			return _fail("difficulty_one_consume_revive")
+	return true
+
+
 ## 使用真实开局、单人机缘与死亡换将流程验证玩家固定先手、关卡推进、装备入场与敌方回合中断。
 func _test_full_match_replacement_flow() -> bool:
 	_create_controller()
 	if not _controller.start_match(2, 20260722, IdentityRules.MODE_CONQUEST):
 		return _fail("start_match")
-	if int(_controller.state.match_options.get("character_replacement_count", -1)) != 3 or bool(_controller.state.match_options.get("custom_character_assignment_enabled", true)) or not bool(_controller.state.match_options.get("all_character_selection_enabled", false)):
+	if int(_controller.state.match_options.get("character_replacement_count", -1)) != 3 or int(_controller.state.match_options.get("conquest_difficulty", -1)) != GameSettings.DEFAULT_CONQUEST_DIFFICULTY or bool(_controller.state.match_options.get("custom_character_assignment_enabled", true)) or not bool(_controller.state.match_options.get("all_character_selection_enabled", false)):
 		return _fail("conquest_replacement_count_locked")
 	# 本地玩家候选；过关斩将固定一号位为真人，二号位AI会由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
@@ -375,6 +420,21 @@ func _test_full_match_replacement_flow() -> bool:
 	if _controller.state.current_player_id != player.player_id:
 		return _fail("enemy_turn_handoff")
 	# 玩家死亡；本模式不允许玩家换将，必须立刻结束对局并由蓝方AI获胜。
+	# 补充：本断言先人工授予一次复活，验证其拦截首次终局；次数耗尽后的第二次死亡仍执行上述终局规则。
+	# 玩家复活机缘；正式难度五没有开局次数，本段显式追加同一灰色机缘并写入权威剩余次数以覆盖死亡拦截。
+	player.acquired_opportunity_ids.append("gray_revive_one")
+	_controller.state.conquest_state["player_revives_remaining"] = 1
+	_controller.state.conquest_state["player_revives_used"] = 0
+	# 复活前手牌；必须在复活时进入弃牌堆，随后新摸牌不能保留旧实体。
+	var revival_discard_card: CardInstance = CardInstance.new("wuzhong", "diamond", 9)
+	revival_discard_card.zone = "hand"
+	revival_discard_card.owner_id = player.player_id
+	player.hand.append(revival_discard_card)
+	player.hp = 0
+	_controller._resolve_death(player.player_id, enemy.player_id)
+	if not player.alive or _controller.state.game_over or player.hp != player.max_hp or player.hand.size() != ConquestModeService.REVIVAL_DRAW_COUNT or _controller.state.discard_pile.find(revival_discard_card) < 0 or _controller.conquest_mode.get_player_revives_remaining() != 0:
+		return _fail("player_revival alive=%s game_over=%s hp=%d/%d hand=%d revives=%d" % [player.alive, _controller.state.game_over, player.hp, player.max_hp, player.hand.size(), _controller.conquest_mode.get_player_revives_remaining()])
+	# 复活次数耗尽后的再次死亡；此时不再拦截身份胜负结算，蓝方AI应正常获胜。
 	player.hp = 0
 	_controller._resolve_death(player.player_id, enemy.player_id)
 	if player.alive or not _controller.state.game_over or _controller.state.winner != "blue_team":
@@ -539,6 +599,7 @@ func _restore_settings() -> void:
 	GameSettings.set_custom_character_assignment_enabled(_original_custom_character_assignment_enabled)
 	GameSettings.set_conquest_character_candidate_count(_original_conquest_character_candidate_count)
 	GameSettings.set_conquest_character_replacement_count(_original_conquest_character_replacement_count)
+	GameSettings.set_conquest_difficulty(_original_conquest_difficulty)
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。

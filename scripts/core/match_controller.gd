@@ -674,6 +674,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"character_candidate_count":_character_candidate_count,
 		"wheel_duel_face_up_candidate_count":_wheel_duel_face_up_candidate_count,
 		"wheel_duel_face_down_candidate_count":_wheel_duel_face_down_candidate_count,
+		"conquest_difficulty":GameSettings.conquest_difficulty,
 		"opportunity_system_enabled":opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode),
 	}
 	if opportunity_system != null:
@@ -749,7 +750,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_create_players(actual_player_count)
 	if conquest_mode != null and state.players.size() == 2:
 		# 固定一号位玩家与二号位敌方AI；关卡状态在选将前建立，后续初始机缘与换将均复用稳定ID。
-		conquest_mode.configure(state, _rng, state.players[0].player_id, state.players[1].player_id)
+		# 补充：当前关卡状态还会锁定本局难度，并通过稳定机缘ID授予玩家对应开局增益。
+		conquest_mode.configure(state, _rng, state.players[0].player_id, state.players[1].player_id, int(state.match_options.get("conquest_difficulty", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
 	_create_and_shuffle_deck()
 	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":seed, "mode":state.match_mode})
 	state.current_phase = "wheel_duel_selection" if actual_mode == IdentityRules.MODE_WHEEL_DUEL else "character_selection"
@@ -6886,11 +6888,15 @@ func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	var opening_max_hp_bonus: int = identity_rules.get_opening_max_hp_bonus(player.identity, state.players.size(), str(state.match_mode))
 	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + opening_max_hp_bonus
 	# 过关斩将敌方的体力与手牌上限从已获得关卡机缘重新汇总；其他角色不写模式专属字段。
+	# 补充：玩家难度体力机缘不写模式专属字段，而在后续通用机缘历史入口单独计算。
 	if conquest_mode != null and conquest_mode.is_enemy(player.player_id):
 		player.max_hp += conquest_mode.get_max_hp_bonus()
 		player.mode_hand_limit_bonus = conquest_mode.get_hand_limit_bonus()
 	else:
 		player.mode_hand_limit_bonus = 0
+	# 过关斩将玩家由难度获得的体力上限机缘；敌方仍由关卡服务汇总，避免同一历史被重复计算。
+	if conquest_mode != null and player.player_id == conquest_mode.get_player_id():
+		player.max_hp += get_acquired_opportunity_effect_total(player.player_id, "max_hp")
 	player.hp = player.max_hp
 	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
 	player.shield = 0
@@ -7786,7 +7792,8 @@ func _continue_game_start_after_character_adjustment() -> void:
 		for seat_index: int in range(state.players.size()):
 			# 当前座次玩家；seat_index 0 为一号位，3 为四号位。
 			var seated_player: PlayerState = state.players[seat_index]
-			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0)
+			# 当前角色实际起始手牌数；难度灰色机缘与2v2四号位加值在统一基础数量上累加。
+			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0) + get_acquired_opportunity_effect_total(seated_player.player_id, "initial_hand_bonus")
 			draw(seated_player.player_id, seat_hand_count, false)
 		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size(), "team2v2_seat4_bonus":1 if is_team2v2_start else 0}
 		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
@@ -10858,9 +10865,14 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	var death_event_id: int = _record_runtime_event("die", "death", {"victim_id":victim_id, "killer_id":killer_id})
 	state.dying_queue.erase(victim_id)
 	# 过关斩将中敌方每次阵亡都由模式流程换上随机新武将；玩家阵亡则继续走真实死亡与终局流程。
-	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_CONQUEST and conquest_mode != null and conquest_mode.is_enemy(victim_id):
-		_resolve_conquest_enemy_replacement(victim, killer_id, death_event_id)
-		return
+	# 补充：玩家仍有复活次数时，会先进入模式复活分支并拦截本次终局；次数耗尽后才继续上述真实死亡流程。
+	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_CONQUEST and conquest_mode != null:
+		if conquest_mode.can_revive_player(victim_id):
+			_resolve_conquest_player_revival(victim, killer_id, death_event_id)
+			return
+		if conquest_mode.is_enemy(victim_id):
+			_resolve_conquest_enemy_replacement(victim, killer_id, death_event_id)
+			return
 	# 车轮战前两名武将阵亡只淘汰当前武将并立即换上下一名；第三名阵亡才把玩家标记为真正死亡。
 	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_WHEEL_DUEL:
 		victim.wheel_duel_defeated_count += 1
@@ -10919,6 +10931,38 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	# 无论死亡来自出牌、响应、阶段效果或异步续接，只要死者仍是当前回合角色就必须在死亡结算后立即转交回合。
 	if not state.game_over and state.current_player_id == victim_id:
 		_advance_after_current_player_death(victim_id)
+
+
+## 结算过关斩将玩家复活：完成死亡时机后清空全部区域、回复至上限并摸四张牌，且不进入胜负检查。
+func _resolve_conquest_player_revival(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
+	if victim == null or state == null or conquest_mode == null or not conquest_mode.consume_player_revive(victim.player_id):
+		return
+	# 复活前剩余次数已经由服务扣除；死亡时机中的重入无法重复消耗同一次复活。
+	var remaining_revives: int = conquest_mode.get_player_revives_remaining()
+	victim.alive = false
+	victim.dying = false
+	victim.death_confirmed = true
+	victim.identity_revealed = true
+	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "conquest_revival":true, "remaining_revives":remaining_revives}, death_event_id)
+	add_log("%s死亡并触发复活，剩余复活次数%d。" % [format_player_state_log_name(victim), remaining_revives])
+	# 区域清理复用过关斩将统一入口；手牌、装备、判定区与木牛“粮”全部进入弃牌堆。
+	_discard_all_conquest_player_cards(victim)
+	victim.hp = victim.max_hp
+	victim.alive = true
+	victim.dying = false
+	victim.death_confirmed = false
+	draw(victim.player_id, ConquestModeService.REVIVAL_DRAW_COUNT)
+	add_log("%s体力回复至%d并摸%d张牌，继续游戏。" % [format_player_state_log_name(victim), victim.max_hp, ConquestModeService.REVIVAL_DRAW_COUNT])
+	# 死亡尾部明确标记为复活且game_over=false；监听者可以区分普通死亡，但不得再次触发身份胜负结算。
+	var revival_event_data: Dictionary = {"victim_id":victim.player_id, "game_over":false, "death_event_id":death_event_id, "conquest_revival":true, "remaining_revives":remaining_revives}
+	_record_runtime_event("dieAfter", "death", revival_event_data, {}, death_event_id)
+	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, revival_event_data, death_event_id)
+	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, revival_event_data, death_event_id)
+	if player_mark_service != null:
+		player_mark_service.clear_marks_for_dead_player(victim.player_id)
+	_finish_pending_damage(victim.player_id)
+	_resume_settlement_pipeline()
+	_emit_state()
 
 
 ## 结算车轮战非末将阵亡：清空全部区域、换上下一名武将、补满体力并立即摸4张牌。
@@ -11095,6 +11139,7 @@ func _cancel_conquest_replacement_opportunity_preview() -> void:
 
 
 ## 弃置过关斩将敌方当前区域内的全部牌；手牌、装备、判定区与木牛“粮”均属于“区域内所有牌”。
+## 补充：玩家复活现与敌方换将共同复用该入口，因此参数允许传入过关斩将中的任一角色。
 func _discard_all_conquest_player_cards(player: PlayerState) -> void:
 	if player == null:
 		return

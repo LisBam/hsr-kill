@@ -615,12 +615,18 @@ func _run() -> void:
 	if hovered_character_title_label == null or hovered_character_title_label.get_theme_color("font_color") != BattleUIStyle.get_color("accent") or hovered_character_skill_name_labels.size() != 1 or (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") != BattleUIStyle.get_color("accent"):
 		_fail("player_hover_accent_colors:%s/%s" % [hovered_character_title_label.get_theme_color("font_color") if hovered_character_title_label != null else Color.TRANSPARENT, (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") if hovered_character_skill_name_labels.size() == 1 else Color.TRANSPARENT])
 		return
+	# 重复刷新前的稳定信息框尺寸；姬子等回合内高频广播角色必须保持同一自动换行布局。
+	var stable_character_hover_size: Vector2 = (information_box.get_node("HoverInformationPanel") as PanelContainer).size
 	# 重复武将资料请求；公开快照刷新期间同来源同内容必须保持可见，不能隐藏后重新等待0.5秒造成闪烁。
-	current_operator_view.call("_request_character_information")
+	for _repeated_hover_index: int in range(12):
+		current_operator_view.call("_request_character_information")
+		await get_tree().process_frame
 	# 悬停延迟计时器；幂等请求不应重新启动共享计时器。
 	var repeated_hover_delay_timer: Timer = information_box.get("_hover_delay_timer") as Timer
-	if not information_box.is_hover_information_visible() or repeated_hover_delay_timer == null or not repeated_hover_delay_timer.is_stopped():
-		_fail("player_hover_repeated_request_flicker:%s/%s" % [information_box.is_hover_information_visible(), repeated_hover_delay_timer.is_stopped() if repeated_hover_delay_timer != null else false])
+	# 高频刷新后的信息框尺寸；完全相同的资料只能重新定位，宽高改变会导致行末文字跨行跳动。
+	var repeated_character_hover_size: Vector2 = (information_box.get_node("HoverInformationPanel") as PanelContainer).size
+	if not information_box.is_hover_information_visible() or repeated_hover_delay_timer == null or not repeated_hover_delay_timer.is_stopped() or not repeated_character_hover_size.is_equal_approx(stable_character_hover_size):
+		_fail("player_hover_repeated_request_flicker:%s/%s size=%s/%s" % [information_box.is_hover_information_visible(), repeated_hover_delay_timer.is_stopped() if repeated_hover_delay_timer != null else false, stable_character_hover_size, repeated_character_hover_size])
 		return
 	# 运行时获得技能快照；武将牌视觉字段不变时也必须更新内部资料并原位刷新已经显示的悬停说明。
 	var acquired_skill_hover_snapshot: Dictionary = ten_player_snapshot.duplicate(true)
@@ -678,6 +684,8 @@ func _run() -> void:
 	if pre_layout_hover_panel == null or pre_layout_hover_title == null or not pre_layout_hover_panel.visible or not is_zero_approx(pre_layout_hover_panel.modulate.a):
 		_fail("player_hover_pre_layout_flash:%s/%s" % [pre_layout_hover_panel.visible if pre_layout_hover_panel != null else false, pre_layout_hover_panel.modulate.a if pre_layout_hover_panel != null else -1.0])
 		return
+	await get_tree().process_frame
+	# 最终宽度写入后再等待一帧完成自动换行；透明期间不会在默认位置或临界换行状态绘制文字。
 	await get_tree().process_frame
 	if not information_box.is_hover_information_visible() or not is_equal_approx(pre_layout_hover_panel.modulate.a, 1.0):
 		_fail("player_hover_post_layout_visibility:%s/%s" % [information_box.is_hover_information_visible(), pre_layout_hover_panel.modulate.a])

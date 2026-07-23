@@ -12,6 +12,24 @@ const ORDER_WEIGHT: float = 0.12
 ## 卡牌保留价值在主动使用评分中的权重；避免高价值救命牌被低收益动作轻易消耗。
 const CARD_COST_WEIGHT: float = 0.08
 
+## 【无懈可击】在响应评分中的保留价值权重；默认0.12让锦囊收益必须覆盖这张稀缺防御牌的机会成本，运行时无需动态修改。
+const NEGATION_CARD_COST_WEIGHT: float = 0.12
+
+## 仅剩最后一张【无懈可击】时为敌方后续关键锦囊保留的额外价值；默认1.5能压低普通牌差锦囊，但不会阻止保护友方免受【乐不思蜀】等强控制。
+const LAST_WUXIE_RESERVE_VALUE: float = 1.5
+
+## 非关键锦囊在仅剩最后一张【无懈可击】时的收益倍率；默认0.45进一步区分普通牌差与跳过阶段、致命伤害等关键牌效。
+const NON_KEY_TRICK_NEGATION_MULTIPLIER: float = 0.45
+
+## 面对【闪电】时使用【无懈可击】的收益倍率；默认0.10反映闪电命中概率低且可能继续传递，运行时无需动态修改。
+const LIGHTNING_NEGATION_UTILITY_MULTIPLIER: float = 0.10
+
+## 目标本人已有充足响应资源时使用【无懈可击】的收益倍率；默认0.20优先让【杀】或【闪】承担本次锦囊响应。
+const SUFFICIENT_RESPONSE_NEGATION_UTILITY_MULTIPLIER: float = 0.20
+
+## 判定【决斗】响应资源充足所需的已知【杀】数量；默认2张用于覆盖至少一轮往返，避免仅持一张时被误判为稳定应对。
+const DUEL_SUFFICIENT_SHA_COUNT: int = 2
+
 ## 获得或失去1张牌的统一基础收益单位；所有直接牌差收益必须从该常量换算，不能在技能内另设比例。
 const CARD_RESOURCE_VALUE: float = 1.0
 
@@ -474,7 +492,7 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	var response_patterns: Array = context.get("response_patterns", []) as Array
 	if not response_patterns.is_empty():
 		if response_patterns.has("wuxie"):
-			return 1.0 if should_negate(authoritative_snapshot, actor_id, context) else -1.0
+			return score_negation(authoritative_snapshot, actor_id, context)
 		if response_patterns.has("tao") or response_patterns.has("jiu"):
 			# 濒死救援必须结合身份关系、领袖存亡、内奸控场、自救和救援牌成本。
 			var dying_target_id: int = int(context.get("target_id", actor_id))
@@ -549,11 +567,12 @@ func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: 
 
 
 ## 判断当前无懈可击是否值得响应；按奇偶状态恢复或抵消对友方/敌方的牌效。
-func should_negate(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary) -> bool:
+## 补充：本入口现计算连续净收益，正数使用、非正数保留，供同步判断与异步候选评分共同复用。
+func score_negation(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary) -> float:
 	# 当前锦囊目标；无有效目标时不浪费无懈可击。
 	var target_id: int = int(context.get("target_id", -1))
 	if target_id < 0:
-		return false
+		return -1.0
 	# 当前锦囊 ID；对应卡牌文件声明 target_result、beneficial 等 AI 数据。
 	var trick_id: String = str(context.get("trick_id", context.get("card_definition_id", "")))
 	# 当前锦囊定义；未知锦囊按普通负面牌处理。
@@ -575,13 +594,64 @@ func should_negate(authoritative_snapshot: Dictionary, responder_id: int, contex
 	# 队友在原锦囊尚未被抵消时对自身或响应者使用锦囊，响应者固定保留【无懈可击】；反无懈仍可恢复队友已经被抵消的锦囊。
 	# 队友对响应者本人使用动态结果为负的锦囊时，首轮保留无懈并相信队友的战术意图；反无懈仍可恢复该锦囊生效。
 	if not currently_negated and source_id >= 0 and source_id != responder_id and get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0 and (target_id == source_id or target_id == responder_id):
-		return false
+		return -1.0
 	# 原效果从响应者视角的收益；正数表示希望它生效，负数表示希望它失效。
 	var effect_utility: float = target_result * attitude
 	# 当前锦囊源码；复合收益锦囊可结合来源与响应者关系修正静态目标结果，但不能改变无懈奇偶规则。
 	if trick_definition_instance != null:
 		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
-	return effect_utility > 0.0 if currently_negated else effect_utility < 0.0
+	# 下一张无懈造成的正向收益；首轮抵消负收益，反无懈则恢复正收益，并按统一态度尺度归一化。
+	var negation_utility: float = (effect_utility if currently_negated else -effect_utility) / ATTITUDE_SCALE
+	if negation_utility <= 0.0:
+		return negation_utility
+	# 【闪电】命中具有低概率且未命中会继续传递；无论首轮还是反无懈都大幅降低为其消耗资源的倾向。
+	if trick_id == "shandian":
+		negation_utility *= LIGHTNING_NEGATION_UTILITY_MULTIPLIER
+	# 首轮保护目标本人时，若目标就是响应者且已拥有足量【杀】或【闪】，优先保留无懈应对不可直接响应的关键锦囊。
+	if not currently_negated and target_id == responder_id and _has_sufficient_trick_response(authoritative_snapshot, responder_id, trick_id, trick_ai):
+		negation_utility *= SUFFICIENT_RESPONSE_NEGATION_UTILITY_MULTIPLIER
+	# AI 当前可见的实体【无懈可击】数量；技能提供的虚拟响应不会占用手牌，因此不应套用实体牌的资源成本与保留策略。
+	var known_wuxie_count: int = get_known_response_count(authoritative_snapshot, responder_id, "wuxie")
+	# 当前实体无懈的实际机会成本；重复持有时价值数组会自动降低，技能生成的虚拟无懈成本为零。
+	var wuxie_cost: float = get_card_value_by_id("wuxie", authoritative_snapshot, responder_id) * NEGATION_CARD_COST_WEIGHT if known_wuxie_count > 0 else 0.0
+	# 最后一张无懈的关键牌储备；反无懈不额外储备，否则会错误放弃恢复己方已经被抵消的关键收益。
+	var reserve_value: float = 0.0
+	if not currently_negated and known_wuxie_count == 1:
+		if not _is_key_trick_for_negation(authoritative_snapshot, target_id, trick_id, trick_ai):
+			negation_utility *= NON_KEY_TRICK_NEGATION_MULTIPLIER
+		reserve_value = LAST_WUXIE_RESERVE_VALUE
+	return negation_utility - wuxie_cost - reserve_value
+
+
+## 判断当前无懈可击是否值得响应；所有调用方统一读取净收益，避免同步与异步响应采用不同策略。
+func should_negate(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary) -> bool:
+	return score_negation(authoritative_snapshot, responder_id, context) > 0.0
+
+
+## 判断锦囊目标是否已经拥有足量直接响应资源；仅读取AI可见手牌与木牛“粮”，不会猜测其他角色隐藏牌。
+func _has_sufficient_trick_response(authoritative_snapshot: Dictionary, responder_id: int, trick_id: String, trick_ai: Dictionary) -> bool:
+	# 当前锦囊要求的响应模式；万箭使用【闪】，南蛮与决斗使用【杀】，其他锦囊不套用资源充足修正。
+	var response_pattern: String = "shan" if bool(trick_ai.get("respond_shan", false)) else ("sha" if bool(trick_ai.get("respond_sha", false)) else "")
+	if response_pattern.is_empty():
+		return false
+	# 足量响应牌阈值；决斗可能连续往返，至少两张【杀】才视为充足，其他锦囊一张即可完成本目标响应。
+	var required_response_count: int = DUEL_SUFFICIENT_SHA_COUNT if trick_id == "juedou" else 1
+	return get_known_response_count(authoritative_snapshot, responder_id, response_pattern) >= required_response_count
+
+
+## 判断原锦囊是否值得为其动用最后一张【无懈可击】；跳过阶段与足以令目标濒死的伤害属于关键牌效。
+func _is_key_trick_for_negation(authoritative_snapshot: Dictionary, target_id: int, trick_id: String, trick_ai: Dictionary) -> bool:
+	if trick_id == "shandian":
+		return false
+	if bool(trick_ai.get("skip_play", false)) or bool(trick_ai.get("skip_draw", false)):
+		return true
+	if not bool(trick_ai.get("damage", false)):
+		return false
+	# 当前目标生存值；护盾与体力共同抵消即将到来的常规1点锦囊伤害。
+	var target: Dictionary = get_player(authoritative_snapshot, target_id)
+	# 锦囊预期伤害；缺失显式数值时按常规1点判断是否会立即进入濒死。
+	var expected_damage: int = maxi(int(trick_ai.get("damage_amount", 1)), 1)
+	return not target.is_empty() and int(target.get("hp", 0)) + int(target.get("shield", 0)) <= expected_damage
 
 
 ## 返回指定卡牌的保留价值；支持无名杀数组价值随同名牌数量递减的常用写法。
