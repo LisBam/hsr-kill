@@ -118,7 +118,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"red_gain_random_three_each", "quality":"red", "description":"获得每名角色区域内的随机三张牌", "effect":"gain_random_zone_cards_each", "count":3},
 	{"id":"red_gain_same_name_length_lushi", "quality":"red", "description":"从牌堆或弃牌堆中获得四张牌名字数相同的牌并获得技能“录事”", "effect":"gain_same_name_length_and_skill", "count":4, "skill_id":"lushi"},
 	{"id":"red_gain_suits_anke", "quality":"red", "description":"从牌堆或弃牌堆中获得每种花色的牌各一张并获得技能“安可”", "effect":"gain_group_and_skill", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":1, "skill_id":"anke"},
-	{"id":"red_refresh_opportunities", "quality":"red", "description":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。（30%概率白色变绿色，绿色变蓝色，蓝色变紫色，紫色变橙色，橙色变红色）", "effect":"refresh_opportunities", "upgrade_chance":0.3},
+	{"id":"red_refresh_opportunities", "quality":"red", "description":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。", "description_font_size":19, "effect":"refresh_opportunities", "upgrade_chance":0.3},
 	{"id":"red_gain_three_unowned_orange", "quality":"red", "description":"随机获得三项你未拥有的橙色机缘", "effect":"gain_random_unowned_opportunities", "quality_id":"orange", "count":3},
 ]
 

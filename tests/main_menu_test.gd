@@ -678,6 +678,18 @@ func _run() -> void:
 	if match_menu_button.focus_mode == Control.FOCUS_NONE or log_toggle_button.focus_mode == Control.FOCUS_NONE:
 		_fail("match_focus_restore")
 		return
+	# 主菜单创建局的自动种子；局内按设置重新开局必须取得另一实际种子，不能复用入口创建时的随机序列。
+	var initial_automatic_match_seed: int = match_controller.state.random_seed
+	# 主菜单创建局的状态实例；成功重开必须替换整个权威状态，而非只刷新旧局表现。
+	var initial_automatic_match_state: GameState = match_controller.state
+	await _click_control(match_menu_button)
+	await _click_control(match_restart_button)
+	# 成功重开稳定帧索引；等待新权威状态、选将快照与局内菜单关闭状态完成同步。
+	for _successful_restart_frame_index: int in range(SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	if main_menu.visible or match_controller.state == null or match_controller.state == initial_automatic_match_state or match_controller.state.random_seed == initial_automatic_match_seed or match_controller.state.players.size() != 6:
+		_fail("in_match_successful_restart_random_seed")
+		return
 	# 前置重开失败前的权威状态实例；数据校验拒绝不能替换、清空或在主菜单背后继续另一份半成品状态。
 	var running_match_state: GameState = match_controller.state
 	GameDatabase.validation_errors.append(START_FAILURE_TEST_ERROR)
@@ -752,6 +764,12 @@ func _run() -> void:
 	await get_tree().process_frame
 	if not settlement_panel.visible:
 		_fail("settlement_panel_reopen")
+		return
+	# 结算面板属于模态层；验证再次打开后先正常关闭，随后才能点击底层终局操作按钮。
+	await _click_control(settlement_close_button)
+	await get_tree().process_frame
+	if settlement_panel.visible:
+		_fail("settlement_panel_second_close")
 		return
 	# 点击终局返回按钮；必须释放当前权威状态并恢复主菜单，而不是保留一个不可继续的旧对局。
 	await _click_control(interaction_cancel_button)
