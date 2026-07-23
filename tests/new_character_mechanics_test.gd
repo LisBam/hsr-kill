@@ -233,7 +233,7 @@ func _test_sushang_guinaifen_metadata() -> bool:
 	return true
 
 
-## 验证属性【杀】的规则名与显示名分离，并核对三名武将的体力、势力和技能引用。
+## 验证属性【杀】的规则名与显示名分离、《崩铁杀》牌名字数，以及三名武将的体力、势力和技能引用。
 func _test_metadata_and_rule_names() -> bool:
 	# 火【杀】与雷【杀】定义；rule_name用于规则称呼，original_name与custom_name继续提供两字牌面。
 	var fire_slash: Dictionary = GameDatabase.get_card("sha_fire")
@@ -241,9 +241,9 @@ func _test_metadata_and_rule_names() -> bool:
 	var thunder_slash: Dictionary = GameDatabase.get_card("sha_thunder")
 	if str(fire_slash.get("rule_name", "")) != "杀" or str(thunder_slash.get("rule_name", "")) != "杀" or str(fire_slash.get("original_name", "")) != "火杀" or str(thunder_slash.get("custom_name", "")) != "雷杀":
 		return _fail("attribute_slash_names fire=%s thunder=%s" % [fire_slash, thunder_slash])
-	# 寒鸦牌名字数规则；属性【杀】虽然牌面显示两个字，实际规则牌名仍只有一个字。
-	if _controller.get_card_original_name_length("sha_fire") != 1 or _controller.get_card_original_name_length("sha_thunder") != 1:
-		return _fail("attribute_slash_rule_length")
+	# 全局牌名字数规则；属性【杀】固定按《崩铁杀》custom_name“火杀”与“雷杀”计算，不按规则名“杀”或当前显示模式切换。
+	if _controller.get_card_original_name_length("sha_fire") != 2 or _controller.get_card_original_name_length("sha_thunder") != 2:
+		return _fail("attribute_slash_custom_name_length")
 	# 三名新武将定义；技能数组顺序就是面板与运行时安装顺序。
 	var march: Dictionary = GameDatabase.get_character("march_7th")
 	# 杰帕德武将定义；验证势力、性别、体力与【永屹】引用。
@@ -776,7 +776,7 @@ func _test_huanyang_and_sefu() -> bool:
 	_controller.damage(0, 1, 1, "normal", "sha")
 	if xveyi_player.hp != 4 or str(huanyang.get_metadata().get("trigger", "")) != "damage":
 		return _fail("huanyang_damage_timing hp=%d trigger=%s" % [xveyi_player.hp, huanyang.get_metadata().get("trigger", "")])
-	# 标准伤害来源事件；【杀】规则名字数为1，目标是距离1的二号角色。
+	# 标准伤害来源事件；【杀】的《崩铁杀》名字数为1，目标是距离1的二号角色。
 	# 兼容测试变量仍沿用原有名称；还阳的正式订阅已经由上方真实damage流程覆盖。
 	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha", "card_user_id":0})
 	huanyang.call("_on_owner_damage_source", damage_source_event)
@@ -792,7 +792,7 @@ func _test_huanyang_and_sefu() -> bool:
 	target_equipment.zone = "equipment"
 	target_equipment.owner_id = 1
 	_controller.state.get_player(1).equipment["weapon"] = target_equipment
-	# 牌堆顶一字牌；摄伏按【杀】的一字原版牌名使目标获得该牌。
+	# 牌堆顶一字牌；摄伏按【杀】的一字《崩铁杀》牌名使目标获得该牌。
 	var gained_same_length_card: CardInstance = _add_draw_pile_card("shan", "heart", 8)
 	sefu.call("_on_owner_damage_source", damage_source_event)
 	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [1], true):

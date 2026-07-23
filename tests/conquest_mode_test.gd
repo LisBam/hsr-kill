@@ -123,7 +123,7 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 	selection_rng.seed = 20260722
 	if not selection_service.begin(selection_players, selection_character_ids, 1, selection_rng, false, 0, [], IdentityRules.MODE_CONQUEST, true).is_empty():
 		return _fail("conquest_all_character_begin")
-	# 本地纯武将快照；所有武将入口开启时座次与身份权限仍必须关闭。
+	# 本地纯武将快照；过关斩将开局只能由一号位玩家选将，敌方候选必须在玩家确认后才随机生成。
 	var selection_snapshot: Dictionary = selection_service.to_dict(0)
 	# 随机候选外的武将ID；用于证明服务实际接受全量列表，而不是只改变菜单文案。
 	var outside_candidate_character_id: String = ""
@@ -133,8 +133,12 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 		if not selection_service.get_candidates(0).has(all_character_id):
 			outside_candidate_character_id = all_character_id
 			break
-	if not bool(selection_snapshot.get("allow_all_characters", false)) or bool(selection_snapshot.get("allow_custom_assignment", true)) or not (selection_snapshot.get("seat_options", []) as Array).is_empty() or not (selection_snapshot.get("identity_options", []) as Array).is_empty() or outside_candidate_character_id.is_empty() or not selection_service.select_character(0, outside_candidate_character_id).is_empty():
+	if selection_service.get_candidates(1).size() != 0 or selection_service.can_player_select(1) or selection_service.get_pending_player_ids() != [0] or not bool(selection_snapshot.get("allow_all_characters", false)) or bool(selection_snapshot.get("allow_custom_assignment", true)) or not (selection_snapshot.get("seat_options", []) as Array).is_empty() or not (selection_snapshot.get("identity_options", []) as Array).is_empty() or selection_character_ids.is_empty() or selection_service.select_character(1, selection_character_ids[0]).is_empty() or outside_candidate_character_id.is_empty() or not selection_service.select_character(0, outside_candidate_character_id).is_empty():
 		return _fail("conquest_all_character_permissions")
+	# 玩家确认后敌方才取得随机候选与选将权限；候选必须排除玩家已经确认的武将。
+	var enemy_candidates: Array[String] = selection_service.get_candidates(1)
+	if enemy_candidates.is_empty() or enemy_candidates.has(outside_candidate_character_id) or not selection_service.can_player_select(1) or selection_service.get_pending_player_ids() != [1]:
+		return _fail("conquest_enemy_selection_after_player")
 	return true
 
 

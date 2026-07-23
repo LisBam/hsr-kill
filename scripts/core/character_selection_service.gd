@@ -24,7 +24,7 @@ var phase: String = ""
 ## 本局领袖玩家 ID；默认 -1，开始流程时从身份状态中解析。
 var leader_player_id: int = -1
 
-## 当前选将所属对局模式；identity 保留领袖优先选将，斗地主、2v2与过关斩将全员同时选将。
+## 当前选将所属对局模式；identity 保留领袖优先选将，斗地主与2v2全员同时选将，过关斩将固定由玩家先选、敌方后选。
 var match_mode: String = "identity"
 
 ## 每名玩家的候选武将数量；默认5，实际数量不会超过已登记武将总数。
@@ -120,19 +120,19 @@ func is_team2v2_mode() -> bool:
 	return match_mode == "team2v2" or (match_mode != "conquest" and (_identity_limits.has("blue") or _identity_limits.has("red")))
 
 
-## 判断当前是否为过关斩将模式；该模式同样采用固定座次的同步选将，但不复用2v2的成队座次约束。
+## 判断当前是否为过关斩将模式；该模式固定一号位玩家先确认武将，再为二号位敌方生成随机候选，不复用2v2的成队座次约束。
 func is_conquest_mode() -> bool:
 	return match_mode == "conquest"
 
 
-## 返回是否全员同时选将（不公开武将）；斗地主与 2v2 均为 true。
+## 返回是否全员同时选将（不公开武将）；斗地主与 2v2 均为 true，过关斩将使用独立的玩家先选流程。
 func uses_simultaneous_selection() -> bool:
-	return is_doudizhu_mode() or is_team2v2_mode() or is_conquest_mode()
+	return is_doudizhu_mode() or is_team2v2_mode()
 
 
-## 返回是否启用领袖优先选将与公开领袖武将；斗地主与 2v2 为 false。
+## 返回是否启用领袖优先选将与公开领袖武将；斗地主、2v2与过关斩将均为 false。
 func uses_leader_priority_selection() -> bool:
-	return not uses_simultaneous_selection()
+	return not uses_simultaneous_selection() and not is_conquest_mode()
 
 
 ## 返回一号位身份是否全局唯一；唯一时身份与一号位双向绑定（身份局领袖、三人斗地主地主）。
@@ -405,7 +405,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		phase = PHASE_LEADER
 		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
 		return ""
-	# 斗地主 / 2v2：座次与身份已在创建玩家时固定，不再旋转；全员同时选将且不公开武将。
+	# 斗地主、2v2与过关斩将：座次与身份已在创建玩家时固定，不再旋转。
 	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
 		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1
@@ -417,6 +417,14 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			if mapped_seat_number >= 1 and not mapped_identity.is_empty():
 				_team2v2_identity_by_seat[mapped_seat_number] = mapped_identity
 	phase = PHASE_OTHERS
+	# 过关斩将固定由一号位玩家先选；敌方候选必须等玩家确认后才生成，避免提前随机或被AI抢先提交。
+	if is_conquest_mode():
+		if _player_ids.is_empty():
+			return "过关斩将缺少玩家，无法开始选将。"
+		# 过关斩将玩家稳定 ID；固定使用创建顺序的一号位，候选只在此时生成。
+		var conquest_player_id: int = _player_ids[0]
+		_candidates_by_player[conquest_player_id] = _make_candidates(conquest_player_id, "", false)
+		return ""
 	for player_id: int in _player_ids:
 		_candidates_by_player[player_id] = _make_candidates(player_id, "", false)
 	return ""
@@ -428,6 +436,9 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		return "当前没有可提交的选将操作。"
 	if not _player_ids.has(player_id):
 		return "选将玩家不存在。"
+	# 过关斩将顺序校验；即使调用者绕过界面直接提交动作，敌方也不能在玩家确认前抢先使用全武将入口选将。
+	if is_conquest_mode() and phase == PHASE_OTHERS and not _player_ids.is_empty() and player_id != _player_ids[0] and not _selections_by_player.has(_player_ids[0]):
+		return "过关斩将请等待玩家先选将。"
 	if uses_leader_priority_selection():
 		if phase == PHASE_LEADER and player_id != leader_player_id:
 			return "领袖尚未完成选将。"
@@ -450,6 +461,7 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
 		or uses_simultaneous_selection() and phase == PHASE_OTHERS
+		or is_conquest_mode() and phase == PHASE_OTHERS
 	)
 	if not is_initial_leader_assignment and not candidates.has(character_id) and not (allows_all_characters_now and _character_ids.has(character_id)):
 		return "所选武将不在当前候选列表中。"
@@ -488,6 +500,12 @@ func select_character(player_id: int, character_id: String, requested_seat_numbe
 		_preview_identities_by_player.erase(player_id)
 	if not is_initial_leader_assignment:
 		_selections_by_player[player_id] = character_id
+	# 过关斩将仅在玩家确认后才随机生成敌方候选；生成时会自动排除已经确认的玩家武将。
+	if is_conquest_mode() and phase == PHASE_OTHERS and not _player_ids.is_empty() and player_id == _player_ids[0]:
+		for conquest_enemy_player_id: int in _player_ids:
+			if conquest_enemy_player_id != player_id:
+				# 当前敌方稳定玩家 ID；玩家确认后才按同一随机源生成候选，并排除已选武将。
+				_candidates_by_player[conquest_enemy_player_id] = _make_candidates(conquest_enemy_player_id, character_id, false)
 	if phase == PHASE_LEADER:
 		_initial_leader_character_id = character_id
 		if custom_assignment_enabled:
@@ -780,7 +798,7 @@ func get_available_identities(player_id: int) -> Array[String]:
 	return result
 
 
-## 返回当前仍需确认的玩家 ID 数组；领袖阶段只返回领袖，其他阶段返回所有未确认非领袖。
+## 返回当前仍需确认的玩家 ID 数组；领袖阶段只返回领袖，过关斩将的玩家确认前只返回一号位玩家，其他阶段返回全部未确认角色。
 func get_pending_player_ids() -> Array[int]:
 	# 尚未完成的玩家数组；顺序与桌面座次一致，便于 AI 和网络层稳定调度。
 	var result: Array[int] = []
@@ -790,6 +808,11 @@ func get_pending_player_ids() -> Array[int]:
 				result.append(player_id)
 			continue
 		if phase == PHASE_OTHERS:
+			# 过关斩将：敌方候选尚未生成时只允许一号位玩家处于待确认集合，AI驱动因此不会抢先选将。
+			if is_conquest_mode() and not _player_ids.is_empty() and not _selections_by_player.has(_player_ids[0]):
+				if player_id == _player_ids[0]:
+					result.append(player_id)
+				continue
 			var excluded_as_leader: bool = uses_leader_priority_selection() and player_id == leader_player_id
 			if not excluded_as_leader and not _selections_by_player.has(player_id):
 				result.append(player_id)
@@ -817,11 +840,12 @@ func to_dict(viewer_id: int) -> Dictionary:
 		local_candidates = get_candidates(viewer_id)
 	# 当前可提交座次身份的阶段；身份局领袖/自选与斗地主全员同时选将均可携带座次身份。
 	var allows_custom_assignment_now: bool = custom_assignment_enabled and (phase == PHASE_LEADER or phase == PHASE_CUSTOM or uses_simultaneous_selection() and phase == PHASE_OTHERS)
-	# 当前可打开“所有武将”的阶段；开启自选后，首任领袖公开选将与后续最终自选、斗地主同时选将均应显示全武将入口。
+	# 当前可打开“所有武将”的阶段；开启自选后，首任领袖公开选将、后续最终自选、斗地主同时选将与过关斩将玩家先选阶段均应显示全武将入口。
 	var allows_all_characters_now: bool = all_characters_enabled and (
 		phase == PHASE_LEADER
 		or phase == PHASE_CUSTOM
 		or uses_simultaneous_selection() and phase == PHASE_OTHERS
+		or is_conquest_mode() and phase == PHASE_OTHERS
 	)
 	# 首任领袖保留的最终武将；该状态只对应 AI 补交座次身份，真人首任领袖在 PHASE_LEADER 仍可使用全武将。
 	var is_initial_leader_assignment: bool = is_retaining_initial_leader_character(viewer_id)
@@ -877,6 +901,9 @@ func can_player_select(player_id: int) -> bool:
 	if phase == PHASE_LEADER:
 		return player_id == leader_player_id
 	if phase == PHASE_OTHERS:
+		# 过关斩将敌方必须等待一号位玩家确认后才可选将；候选生成与权限开放保持同一边界。
+		if is_conquest_mode() and not _player_ids.is_empty() and player_id != _player_ids[0]:
+			return _player_ids.has(player_id) and _selections_by_player.has(_player_ids[0])
 		if uses_leader_priority_selection():
 			return _player_ids.has(player_id) and player_id != leader_player_id
 		return _player_ids.has(player_id)

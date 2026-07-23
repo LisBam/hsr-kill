@@ -119,7 +119,7 @@ func _test_skill_health_syntax() -> bool:
 	return true
 
 
-## 验证1至5点体力使用灰色护盾圆点，高于5点的数字体力同步使用灰色护盾数字。
+## 验证1至5点体力使用灰色护盾圆点，高于5点时体力与护盾按纵向加粗分数显示。
 func _test_shield_ui() -> bool:
 	# 正式武将牌实例；加入场景树后由原组件创建体力框和主题样式。
 	var player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
@@ -137,7 +137,7 @@ func _test_shield_ui() -> bool:
 	if not shield_pip_color.is_equal_approx(BattleUIStyle.get_color("health_shield")):
 		return _fail("shield_pip_color=%s" % shield_pip_color)
 
-	# 数字模式快照；体力上限6触发数字显示，3点护盾也必须显示为单独灰色数字标签。
+	# 数字模式快照；体力上限6触发纵向数字显示，3点护盾也必须显示为单独灰色分数标签。
 	var numeric_snapshot: Dictionary = pip_snapshot.duplicate(true)
 	numeric_snapshot["hp"] = 5
 	numeric_snapshot["max_hp"] = 6
@@ -145,11 +145,11 @@ func _test_shield_ui() -> bool:
 	player_view.configure_snapshot(numeric_snapshot)
 	if health_container.get_child_count() != 2:
 		return _fail("numeric_health_child_count=%d" % health_container.get_child_count())
-	# 数字护盾标签；固定显示“盾+数值”，方便窄体力框内与“当前/上限”区分。
+	# 数字护盾标签；固定显示“当前/当前”，因为当前护盾规则没有独立护盾上限。
 	var shield_number: Label = health_container.get_child(0) as Label
-	# 数字体力标签；继续沿用当前体力/体力上限格式，不把护盾并入真实体力。
+	# 数字体力标签；继续显示当前体力/体力上限，不把护盾并入真实体力。
 	var health_number: Label = health_container.get_child(1) as Label
-	if shield_number.text != "盾3" or health_number.text != "5/6" or not shield_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_shield")):
+	if shield_number.text != "3/3" or health_number.text != "5/6" or not shield_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_shield")) or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_full")) or shield_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size:
 		return _fail("numeric_health=%s/%s" % [shield_number.text, health_number.text])
 	return true
 
