@@ -1014,6 +1014,27 @@ func _test_wuxie_decision() -> bool:
 	var reserved_guohe_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_guohe_request, [pass_action, use_action])
 	if bool((reserved_guohe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_last_copy_reserve=%s" % [reserved_guohe_choice])
+	# 领袖持有【桃】时的手牌；敌方拆牌会破坏明确的保命资源，最后一张无懈必须改为保护。
+	(snapshot.get("players", []) as Array)[0]["hand"] = [_card(201, "wuxie", 0), _card(203, "tao", 0)]
+	(snapshot.get("players", []) as Array)[0]["hand_count"] = 2
+	# 关键【桃】面对【过河拆桥】的响应；通用资源保护应确认无懈。
+	var protected_guohe_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_guohe_request, [pass_action, use_action])
+	if not bool((protected_guohe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_protect_tao_from_guohe=%s" % [protected_guohe_choice])
+	# 敌方【顺手牵羊】请求；同样通过通用 steal_target 牌效读取关键资源，而非对牌名写死分支。
+	var enemy_shunshou_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"shunshou", "source_id":1, "target_id":0, "negated":false}}
+	# 关键【桃】面对【顺手牵羊】的响应；应确认无懈，避免关键牌被敌方获得。
+	var protected_shunshou_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_shunshou_request, [pass_action, use_action])
+	if not bool((protected_shunshou_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_protect_tao_from_shunshou=%s" % [protected_shunshou_choice])
+	# 仅一张无懈的手牌；敌方【无中生有】能稳定获得两张牌，应纳入所有锦囊的通用收益计算并被抵消。
+	(snapshot.get("players", []) as Array)[0]["hand"] = [_card(201, "wuxie", 0)]
+	(snapshot.get("players", []) as Array)[0]["hand_count"] = 1
+	var enemy_wuzhong_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[wuxie_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"wuzhong", "source_id":1, "target_id":1, "negated":false}}
+	# 敌方两张摸牌的无懈响应；应确认，证明无懈不再只按少数牌名做关键性判断。
+	var enemy_wuzhong_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_wuzhong_request, [pass_action, use_action])
+	if not bool((enemy_wuzhong_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_block_enemy_wuzhong=%s" % [enemy_wuzhong_choice])
 	# 第二张无懈副本；资源不再稀缺时可以抵消明确不利的普通锦囊。
 	(snapshot.get("players", []) as Array)[0]["hand"] = [_card(201, "wuxie", 0), _card(202, "wuxie", 0)]
 	(snapshot.get("players", []) as Array)[0]["hand_count"] = 2
