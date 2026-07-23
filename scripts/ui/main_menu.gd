@@ -64,6 +64,15 @@ const MODE_DETAILS_BACKDROP_Z_INDEX: int = 8
 ## 模式详情正文面板层级；默认9高于自身遮罩1层，保证正文、滚动区与关闭按钮可接收输入。
 const MODE_DETAILS_PANEL_Z_INDEX: int = 9
 
+## 主菜单模式选择内容页稳定标识；只用于顶部导航三态切换，不写入玩家设置。
+const CONTENT_PAGE_MODES: String = "modes"
+
+## 主菜单联机设置内容页稳定标识；只用于顶部导航三态切换，不创建网络连接。
+const CONTENT_PAGE_ONLINE_SETTINGS: String = "online_settings"
+
+## 主菜单所有卡牌内容页稳定标识；只用于顶部导航三态切换，不创建卡牌实体或对局状态。
+const CONTENT_PAGE_ALL_CARDS: String = "all_cards"
+
 ## 支持详情弹窗的模式说明；键为稳定模式ID，标题与正文只用于长期玩法说明，不参与规则判断。
 const MODE_DETAILS_BY_MODE: Dictionary = {
 	GameSettings.MATCH_MODE_DOUDIZHU:{
@@ -84,6 +93,7 @@ const MODE_DETAILS_BY_MODE: Dictionary = {
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
 ## 顶部模式导航栏；目前只承载唯一的“身份模式”选项，后续新增模式仍可复用同一容器与主题样式。
+## 补充：当前容器承载“模式选择”“联机设置”“所有卡牌”三个对等内容页，具体游戏模式仍在模式选择页左侧列表中切换。
 @onready var _top_navigation: PanelContainer = %MainMenuTopNavigation
 
 ## 主菜单外框；左侧模式列表与右侧模式预览共同位于此容器内，颜色始终由当前 UI 风格提供。
@@ -153,6 +163,7 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 @onready var _action_panel: PanelContainer = %MainMenuActionPanel
 
 ## 顶部身份模式选项；当前唯一的游戏模式入口，按下后仅重新确认身份模式为选中状态。
+## 补充：该按钮现作为“模式选择”内容页入口；从其他顶部页返回时继续沿用原入口并恢复身份模式预览。
 @onready var _top_identity_mode_button: Button = %TopIdentityModeButton
 
 ## 顶部联机设置入口；位于“模式选择”右侧，与模式选择对等切换主菜单客户区内容，不直接建立网络连接。
@@ -160,6 +171,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 顶部联机设置选中指示线；与模式选择指示线共用主题强调色，仅表达当前内容页。
 @onready var _top_online_settings_indicator: ColorRect = %TopOnlineSettingsIndicator
+
+## 顶部所有卡牌入口；与模式选择、联机设置对等切换主菜单客户区，不读取或修改对局状态。
+@onready var _all_cards_button: Button = %MainMenuAllCardsButton
+
+## 顶部所有卡牌选中指示线；只表达当前内容页，不保存分类或搜索状态。
+@onready var _top_all_cards_indicator: ColorRect = %TopAllCardsIndicator
 
 ## 左侧身份模式按钮；对应参考布局中的模式选择列表，目前是唯一可选择的模式。
 @onready var _identity_mode_button: Button = %IdentityModeButton
@@ -185,6 +202,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 联机资料设置组件；只编辑全局玩家名称与武将形象，作为与模式预览对等的主菜单客户区内容页，不弹出独立遮罩。
 @onready var _online_settings_panel: OnlineSettingsPanel = %OnlineSettingsPanel
+
+## 所有卡牌浏览组件；只读取三类静态内容目录并提供分类搜索与资料查看。
+@onready var _all_cards_panel: AllCardsPanel = %AllCardsPanel
 
 ## 联机大厅组件；连接成功后接管全屏座位、聊天与房间控制，主菜单只维护焦点和场景覆盖边界。
 @onready var _online_lobby_panel: OnlineLobbyPanel = %OnlineLobbyPanel
@@ -325,9 +345,11 @@ func _ready() -> void:
 	_opportunity_brawl_mode_button.pressed.connect(_select_opportunity_brawl_mode)
 	_conquest_mode_button.pressed.connect(_select_conquest_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
+	_all_cards_button.pressed.connect(_open_all_cards)
 	_settings_button.pressed.connect(_open_settings)
 	_lan_button.pressed.connect(_open_lan_panel)
 	_online_settings_panel.close_requested.connect(_close_online_settings)
+	_all_cards_panel.close_requested.connect(_close_all_cards)
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	# 模式列表滚轮由主菜单统一接收，避免模式卡片按钮先消费滚轮后父级滚动容器无法更新。
@@ -425,6 +447,7 @@ func _on_visibility_changed() -> void:
 		_close_mode_details(false)
 		_set_settings_visible(false)
 		_close_online_settings(false)
+		_close_all_cards(false)
 		_online_lobby_panel.visible = false
 		_restore_covered_interface_focus()
 
@@ -433,7 +456,7 @@ func _on_visibility_changed() -> void:
 func _input(event: InputEvent) -> void:
 	if not visible or _mode_scroll == null or not is_instance_valid(_mode_scroll):
 		return
-	if _settings_panel.visible or (_mode_details_panel != null and _mode_details_panel.visible) or _lan_lobby_panel.visible or _online_settings_panel.visible or _online_lobby_panel.visible:
+	if _settings_panel.visible or (_mode_details_panel != null and _mode_details_panel.visible) or _lan_lobby_panel.visible or _online_settings_panel.visible or _all_cards_panel.visible or _online_lobby_panel.visible:
 		return
 	if not event is InputEventMouseButton:
 		return
@@ -509,6 +532,7 @@ func refresh_ui_style() -> void:
 		_mode_details_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
 	_top_mode_indicator.color = BattleUIStyle.get_color("accent")
 	_top_online_settings_indicator.color = BattleUIStyle.get_color("accent")
+	_top_all_cards_indicator.color = BattleUIStyle.get_color("accent")
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_doudizhu_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_team2v2_mode_card_indicator.color = BattleUIStyle.get_color("accent")
@@ -613,10 +637,12 @@ func refresh_ui_style() -> void:
 	_apply_option_popup_style(_conquest_difficulty_option)
 	_lan_lobby_panel.refresh_ui_style()
 	_online_settings_panel.refresh_ui_style()
+	_all_cards_panel.refresh_ui_style()
 	_online_lobby_panel.refresh_ui_style()
 
 
 ## 切换到模式选择内容页；顶部“模式选择”与“联机设置”对等互斥，仅替换客户区，不创建弹层。
+## 补充：“所有卡牌”加入后同样参与互斥，模式选择页仍是三个内容页的默认回退目标。
 func _restore_selected_match_mode() -> void:
 	# 根据全局下一局模式恢复主菜单选中态；未知值回退身份模式。
 	if GameSettings == null:
@@ -641,6 +667,9 @@ func _select_identity_mode() -> void:
 	# 联机设置内容页；点击“模式选择”时回到默认主菜单内容，顶部导航始终保留在原位。
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	# 所有卡牌内容页；点击“模式选择”时恢复默认客户区，不保留图鉴遮罩或搜索焦点。
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_IDENTITY
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
@@ -679,6 +708,8 @@ func _select_identity_mode() -> void:
 func _select_doudizhu_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_DOUDIZHU
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
@@ -722,6 +753,8 @@ func _select_doudizhu_mode() -> void:
 func _select_team2v2_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_TEAM2V2
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_TEAM2V2)
@@ -763,6 +796,8 @@ func _select_team2v2_mode() -> void:
 func _select_wheel_duel_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_WHEEL_DUEL
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_WHEEL_DUEL)
 	minimum_player_count = 2
@@ -797,6 +832,8 @@ func _select_wheel_duel_mode() -> void:
 func _select_opportunity_brawl_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL)
 	minimum_player_count = 2
@@ -833,6 +870,8 @@ func _select_opportunity_brawl_mode() -> void:
 func _select_conquest_mode() -> void:
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
 	_selected_match_mode = GameSettings.MATCH_MODE_CONQUEST
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	minimum_player_count = 2
@@ -1005,6 +1044,7 @@ func _open_settings() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_close_mode_details(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_online_lobby_panel.visible = false
 	_set_settings_visible(true)
 	_settings_close_button.grab_focus()
@@ -1016,12 +1056,29 @@ func _open_online_settings() -> void:
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
 	_online_lobby_panel.visible = false
+	_close_all_cards(false)
 	# 默认主菜单内容；资料页与模式预览互斥显示，形成与“模式选择”对等的页面切换。
 	_main_frame.visible = false
 	_set_top_navigation_page(true)
 	_online_settings_panel.open_panel()
 	# 仅冻结模式预览与开局区；顶部“模式选择 / 联机设置”必须保持可聚焦，才能完成对等切页。
+	# 补充：所有卡牌入口与上述两个标签同属保留的顶部导航根，因此联机设置页也可直接跳转图鉴。
 	_suspend_background_focus(_online_settings_panel, [_top_navigation])
+
+
+## 切换到所有卡牌内容页；浏览组件从静态目录读取武将、游戏牌与机缘，顶部导航保持可直接切换。
+func _open_all_cards() -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
+	_set_settings_visible(false)
+	_lan_lobby_panel.visible = false
+	_online_lobby_panel.visible = false
+	_close_online_settings(false)
+	# 默认模式内容；图鉴页与模式预览互斥显示，不覆盖顶部导航。
+	_main_frame.visible = false
+	_set_top_navigation_content_page(CONTENT_PAGE_ALL_CARDS)
+	_all_cards_panel.open_panel()
+	# 只冻结图鉴之外的客户区控件；顶部三个内容页标签继续保持可聚焦。
+	_suspend_background_focus(_all_cards_panel, [_top_navigation])
 
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
@@ -1032,6 +1089,7 @@ func _open_lan_panel() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_online_lobby_panel.visible = false
 	# 打开局域网前再次写入当前模式与人数；斗地主入口建房时 host_lan 读取 next_match_mode 创建对应房间。
 	if GameSettings != null:
@@ -1051,6 +1109,9 @@ func _close_settings() -> void:
 ## 关闭联机资料设置内容页并恢复模式选择内容；可选参数用于切换到其他页面时避免抢占新入口焦点。
 func _close_online_settings(restore_focus: bool = true) -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
+	# 未打开联机设置时不重置其他对等内容页；生命周期清理可以安全重复调用。
+	if not _online_settings_panel.visible:
+		return
 	_online_settings_panel.visible = false
 	# 默认内容框；资料页关闭后立即恢复，不让主菜单留下空白客户区。
 	_main_frame.visible = true
@@ -1058,6 +1119,20 @@ func _close_online_settings(restore_focus: bool = true) -> void:
 	_restore_background_focus()
 	if restore_focus:
 		call_deferred("_focus_online_settings_button")
+
+
+## 关闭所有卡牌内容页并恢复模式选择客户区；可选参数用于切换页面时避免抢占新入口焦点。
+func _close_all_cards(restore_focus: bool = true) -> void:
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
+	# 未打开图鉴时保持当前其他内容页不变，允许主菜单生命周期重复执行清理。
+	if not _all_cards_panel.visible:
+		return
+	_all_cards_panel.visible = false
+	_main_frame.visible = true
+	_set_top_navigation_content_page(CONTENT_PAGE_MODES)
+	_restore_background_focus()
+	if restore_focus:
+		call_deferred("_focus_all_cards_button")
 
 
 ## 读取有效人数并请求开始身份局；成功后的实际开局、状态清理与选将流程由牌桌统一处理。
@@ -1095,6 +1170,7 @@ func _request_start_game() -> void:
 func confirm_game_started() -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_lan_lobby_panel.confirm_match_started()
 	_online_lobby_panel.confirm_match_started()
 	_restore_background_focus()
@@ -1115,6 +1191,7 @@ func restore_after_failed_restart(message: String) -> void:
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_start_game_button.disabled = false
 	_show_status(message, true)
 	move_to_front()
@@ -1135,6 +1212,7 @@ func show_lan_session_error(message: String) -> void:
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_lan_lobby_panel.return_to_entry(message)
 	_online_lobby_panel.visible = false
 	_suspend_background_focus(_lan_lobby_panel)
@@ -1147,6 +1225,7 @@ func return_to_main_menu() -> void:
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_online_lobby_panel.visible = false
 	_start_game_button.disabled = false
 	_show_status(MODE_READY_STATUS_TEXT, false)
@@ -1177,6 +1256,7 @@ func _suspend_background_focus(active_modal: Control = null, focus_keep_roots: A
 		if control == null or control == modal or modal.is_ancestor_of(control) or control.focus_mode == Control.FOCUS_NONE or _background_focus_modes.has(control):
 			continue
 		# 是否属于需要继续接收输入的导航根；联机设置内容页必须保留顶部“模式选择 / 联机设置”。
+		# 补充：所有卡牌页复用同一导航根，三个顶部标签都会保持可聚焦。
 		var keep_focus: bool = false
 		for keep_root_variant: Variant in focus_keep_roots:
 			# 当前允许保留焦点的导航根；根节点自身及其后代都跳过冻结。
@@ -1273,36 +1353,53 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## 主菜单完成布局后把键盘焦点放到主要操作；玩家可直接按确认键开始当前唯一模式。
 func _focus_start_game_button() -> void:
-	if visible and not _settings_panel.visible and (_mode_details_panel == null or not _mode_details_panel.visible) and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible:
+	if visible and not _settings_panel.visible and (_mode_details_panel == null or not _mode_details_panel.visible) and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _all_cards_panel.visible and not _online_lobby_panel.visible:
 		_start_game_button.grab_focus()
 
 
 ## 局域网面板关闭后把焦点归还联机入口；若主菜单或按钮不可用则安全跳过。
 func _focus_lan_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible and not _lan_button.disabled:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _all_cards_panel.visible and not _online_lobby_panel.visible and not _lan_button.disabled:
 		_lan_button.grab_focus()
 
 
 ## 联机资料面板关闭后把焦点归还顶部入口；其他模态仍可见时安全跳过。
 func _focus_online_settings_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible and not _online_settings_button.disabled:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _all_cards_panel.visible and not _online_lobby_panel.visible and not _online_settings_button.disabled:
 		_online_settings_button.grab_focus()
+
+
+## 所有卡牌页关闭后把焦点归还顶部入口；其他模态仍可见时安全跳过。
+func _focus_all_cards_button() -> void:
+	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _all_cards_panel.visible and not _online_lobby_panel.visible and not _all_cards_button.disabled:
+		_all_cards_button.grab_focus()
 
 
 ## 打开连接成功后的联机大厅并建立模态焦点边界；快照由牌桌协调器直接绑定到大厅组件。
 func show_online_lobby() -> void:
 	_set_settings_visible(false)
 	_close_online_settings(false)
+	_close_all_cards(false)
 	_lan_lobby_panel.visible = false
 	_suspend_background_focus(_online_lobby_panel)
 
 
 ## 同步顶部“模式选择 / 联机设置”互斥选中态与底部指示线；仅表达当前主菜单内容页，不保存业务状态。
+## 补充：该旧布尔入口继续兼容原有两页调用；三页通用状态由 _set_top_navigation_content_page 统一处理。
 func _set_top_navigation_page(is_online_settings_page: bool) -> void:
-	_top_identity_mode_button.set_pressed_no_signal(not is_online_settings_page)
-	_online_settings_button.set_pressed_no_signal(is_online_settings_page)
-	_top_mode_indicator.visible = not is_online_settings_page
-	_top_online_settings_indicator.visible = is_online_settings_page
+	_set_top_navigation_content_page(CONTENT_PAGE_ONLINE_SETTINGS if is_online_settings_page else CONTENT_PAGE_MODES)
+
+
+## 同步顶部三个对等内容页的互斥选中态与指示线；未知页面安全回退模式选择。
+func _set_top_navigation_content_page(page_id: String) -> void:
+	# 当前规范化页面 ID；只接受三个已登记内容页，避免按钮与客户区出现全不选状态。
+	var resolved_page_id: String = page_id if page_id in [CONTENT_PAGE_MODES, CONTENT_PAGE_ONLINE_SETTINGS, CONTENT_PAGE_ALL_CARDS] else CONTENT_PAGE_MODES
+	_top_identity_mode_button.set_pressed_no_signal(resolved_page_id == CONTENT_PAGE_MODES)
+	_online_settings_button.set_pressed_no_signal(resolved_page_id == CONTENT_PAGE_ONLINE_SETTINGS)
+	_all_cards_button.set_pressed_no_signal(resolved_page_id == CONTENT_PAGE_ALL_CARDS)
+	_top_mode_indicator.visible = resolved_page_id == CONTENT_PAGE_MODES
+	_top_online_settings_indicator.visible = resolved_page_id == CONTENT_PAGE_ONLINE_SETTINGS
+	_top_all_cards_indicator.visible = resolved_page_id == CONTENT_PAGE_ALL_CARDS
 	_refresh_top_navigation_page_style()
 
 
@@ -1310,17 +1407,27 @@ func _set_top_navigation_page(is_online_settings_page: bool) -> void:
 func _refresh_top_navigation_page_style() -> void:
 	# 是否位于联机设置内容页；运行时由按钮按下状态表达，避免额外布尔字段与场景可见性脱节。
 	var is_online_settings_page: bool = _online_settings_button.button_pressed
+	# 是否位于所有卡牌内容页；运行时由按钮按下状态表达，不保存第二份页面状态。
+	var is_all_cards_page: bool = _all_cards_button.button_pressed
+	# 是否位于模式选择内容页；三个按钮互斥时由另外两项共同推导。
+	var is_modes_page: bool = not is_online_settings_page and not is_all_cards_page
 	BattleUIStyle.apply_interaction_button(
 		_top_identity_mode_button,
 		BattleUIStyle.get_color("panel"),
-		BattleUIStyle.get_color("border") if is_online_settings_page else BattleUIStyle.get_color("accent"),
-		not is_online_settings_page
+		BattleUIStyle.get_color("accent") if is_modes_page else BattleUIStyle.get_color("border"),
+		is_modes_page
 	)
 	BattleUIStyle.apply_interaction_button(
 		_online_settings_button,
 		BattleUIStyle.get_color("panel"),
 		BattleUIStyle.get_color("accent") if is_online_settings_page else BattleUIStyle.get_color("border"),
 		is_online_settings_page
+	)
+	BattleUIStyle.apply_interaction_button(
+		_all_cards_button,
+		BattleUIStyle.get_color("panel"),
+		BattleUIStyle.get_color("accent") if is_all_cards_page else BattleUIStyle.get_color("border"),
+		is_all_cards_page
 	)
 
 
