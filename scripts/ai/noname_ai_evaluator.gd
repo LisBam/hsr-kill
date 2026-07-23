@@ -90,8 +90,13 @@ const BAIYIN_LION_CARD_ID: String = "baiyin"
 ## 【追歼】公开标记的稳定ID前缀；实际完整ID以来源玩家ID拼接，支持多名佩拉同时标记同一目标。
 const ZHUIJIAN_MARK_ID_PREFIX: String = "zhuijian:"
 
+## 【追歼】武将牌提示条目的稳定ID前缀；条目以来源玩家ID结尾，供AI在不读取公开标记时识别每个有效来源。
+const ZHUIJIAN_CORNER_ENTRY_ID_PREFIX: String = "zhuijian:"
+
 ## 队友追歼目标承受属性伤害时的额外目标评分；固定4分使火焰、雷电攻击优先集火，普通伤害和敌方来源标记不受影响。
 const ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS: float = 4.0
+
+## 补充：追歼已不创建公开标记；该固定4分改由公开的武将牌提示来源条目触发，来源阵营判断保持不变。
 
 ## 当前评估器使用的身份关系模型；由协调器共享，保证所有 AI 观察到一致的身份暴露度。
 var identity_model: IdentityAIModel
@@ -332,27 +337,36 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 				continue
 			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, definition, ai_profile, target_result, expected_damage_amount)
 	# 追歼协同；己方佩拉公开标记的目标会在属性伤害评分中获得固定集火优先级，仍保留前面的护甲、响应与连环风险校验。
-	# 补充：追歼现仅显示武将牌提示，不再下发公开标记，因此通用AI不能从快照取得可验证的协同目标信息。
+	# 补充：追歼现仅显示武将牌提示；提示条目连同来源ID会进入权威快照，因此属性伤害仍可获得协同集火评分而无需公开标记。
+	if bool(ai_profile.get("nature_damage", false)):
+		result += _score_teammate_zhuijian_priority(authoritative_snapshot, actor_id, target)
 	return result
 
 
 ## 计算友方追歼公开标记带来的属性伤害集火收益；每个有效友方来源对应其实际可触发的一次+1伤害。
+## 补充：当前从武将牌左上角提示的来源条目读取，不读取或依赖`public_marks`。
 func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor_id: int, target: Dictionary) -> float:
 	# 目标公开标记集合；仅使用网络快照已公开的数据，不读取任何技能实例私有字段。
-	var public_marks: Dictionary = target.get("public_marks", {}) as Dictionary
+	# 补充：追歼提示来源集合；键为`zhuijian:<source_player_id>`，值必须保留精确文本“追歼”。
+	var character_corner_text_entries: Dictionary = target.get("character_corner_text_entries", {}) as Dictionary
 	# 叠加后的集火收益；多名友方佩拉标记同一目标时按来源逐项累加。
 	var priority_bonus: float = 0.0
-	for mark_id_variant: Variant in public_marks.keys():
+	for mark_id_variant: Variant in character_corner_text_entries.keys():
 		# 当前公开标记ID；只有追歼来源标记会参与属性伤害集火。
 		var mark_id: String = str(mark_id_variant)
-		if not mark_id.begins_with(ZHUIJIAN_MARK_ID_PREFIX):
+		if not mark_id.begins_with(ZHUIJIAN_CORNER_ENTRY_ID_PREFIX):
 			continue
 		# 当前公开标记数据；数量为零、异常来源或已失效数据都不提供评分。
-		var mark_data: Dictionary = public_marks.get(mark_id_variant, {}) as Dictionary
-		if int(mark_data.get("count", 0)) <= 0:
+		# 补充：当前条目不再存储标记数量；只有文本为“追歼”且来源ID为合法整数时才代表有效持续效果。
+		# 当前提示条目数据；只读取序列化文本，不访问追歼技能实例的私有目标字段。
+		var mark_data: Dictionary = character_corner_text_entries.get(mark_id_variant, {}) as Dictionary
+		# 来源玩家ID文本；由稳定提示条目ID去除前缀得到，必须保持整数格式才能参与阵营判断。
+		var source_player_id_text: String = mark_id.trim_prefix(ZHUIJIAN_CORNER_ENTRY_ID_PREFIX)
+		if str(mark_data.get("text", "")) != "追歼" or not source_player_id_text.is_valid_int():
 			continue
 		# 标记施加者ID；仅当行动者将其视为友方时才形成协同集火意图。
-		var source_player_id: int = int(mark_data.get("source_player_id", -1))
+		# 补充：当前数值来自提示条目ID，而非公开标记数据。
+		var source_player_id: int = source_player_id_text.to_int()
 		if source_player_id < 0 or get_attitude(authoritative_snapshot, actor_id, source_player_id) <= 0.0:
 			continue
 		priority_bonus += ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS
