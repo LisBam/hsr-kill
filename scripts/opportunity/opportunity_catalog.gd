@@ -56,7 +56,6 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 
 	{"id":"purple_reduce_max_hp", "quality":"purple", "description":"令一名角色减少1点体力上限。", "effect":"max_hp_target", "count":-1},
 	{"id":"purple_draw_five", "quality":"purple", "description":"摸五张牌。", "effect":"draw", "count":5},
-	{"id":"purple_draw_phase_one", "quality":"purple", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
 	{"id":"purple_max_hp_two", "quality":"purple", "description":"增加2点体力上限。", "effect":"max_hp", "count":2},
 	{"id":"purple_lose_hp_two", "quality":"purple", "description":"令一名角色失去2点体力。", "effect":"lose_hp_target", "count":2},
 	{"id":"purple_discard_all_hand", "quality":"purple", "description":"令一名角色弃置所有手牌。", "effect":"discard_all_hand_target"},
@@ -73,6 +72,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_remove_until_round_end", "quality":"purple", "description":"令一名角色离场直到本轮结束", "effect":"remove_until_round_end_target"},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
+	{"id":"orange_draw_phase_one", "quality":"orange", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
 	{"id":"orange_damage_one", "quality":"orange", "description":"造成的伤害+1", "effect":"damage_bonus", "count":1},
 	{"id":"orange_skill_yongyi", "quality":"orange", "description":"获得技能“永屹”", "effect":"grant_skill", "skill_id":"yongyi"},
 	{"id":"orange_skill_junshi", "quality":"orange", "description":"获得技能“军势”", "effect":"grant_skill", "skill_id":"junshi"},

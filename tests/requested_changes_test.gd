@@ -41,6 +41,10 @@ func _run() -> void:
 		return
 	if not _test_chain_targets_and_ai():
 		return
+	if not _test_duel_chain_recast_ai():
+		return
+	if not _test_play_choice_candidate_separation():
+		return
 	if not _test_tiebi_accepts_chained_target():
 		return
 	if not await _test_opening_skill_prompt_and_hidden_hand_privacy():
@@ -220,6 +224,59 @@ func _test_chain_targets_and_ai() -> bool:
 	xinghuo.call("_on_owner_card_targeted", targeted_event)
 	if _controller.state.get_player(1).chained:
 		return _fail("second_relink_not_vertical")
+	return true
+
+
+## 验证恰好两名存活在场角色时，基础AI无条件重铸【铁索连环】，不再尝试横置任何目标。
+func _test_duel_chain_recast_ai() -> bool:
+	_scenario = "duel_chain_recast"
+	_reset_state(2)
+	# 1v1铁索实体；规则层仍同时枚举使用与重铸，专属评分负责固定选择后者。
+	var chain: CardInstance = _add_hand_card(0, "tiesuo", "club", 12)
+	# 1v1合法动作；保留完整动作集合以证明结果不是测试提前删除使用分支。
+	var legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	# 基础AI策略；公开敌对身份下即使横置敌方原本有正收益，也必须优先重铸摸1张牌。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	# 最终动作；动作类型与实体UID共同确认AI选择的是同一张铁索的重铸分支。
+	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), legal_actions)
+	if str(chosen_action.get("action_type", "")) != "recast_card" or int(chosen_action.get("card_uid", -1)) != chain.uid:
+		return _fail("duel_chain_action=%s legal=%s" % [chosen_action, legal_actions])
+	return true
+
+
+## 验证普通chooseToUse只点亮可直接使用或重铸的手牌；木牛存粮与传冲材料须等玩家点击对应装备或技能入口后再开放。
+func _test_play_choice_candidate_separation() -> bool:
+	_scenario = "play_choice_candidates"
+	_reset_state(2)
+	# 可直接使用的普通【杀】；应继续出现在chooseToUse.card_ids中。
+	var slash: CardInstance = _add_hand_card(0, "sha", "club", 7)
+	# 传冲方块材料；可转化为【无中生有】，但在技能按钮被点击前不能作为普通手牌候选点亮。
+	var conversion_material: CardInstance = _add_hand_card(0, "shan", "diamond", 6)
+	# 仅用于响应的【无懈可击】；木牛可把它存为“粮”，但该材料动作不能令其在普通出牌界面变亮。
+	var storage_only_material: CardInstance = _add_hand_card(0, "wuxie", "spade", 9)
+	# 已装备木牛流马；其自身通过装备入口进入候选，存粮材料仍保持暗置。
+	var wooden_ox: CardInstance = CardInstance.new("muniu", "diamond", 5)
+	wooden_ox.zone = "equipment"
+	wooden_ox.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = wooden_ox
+	# 传冲运行时实例；技能按钮必须保留在同一请求中，使材料可以在点击按钮后进入独立card_target选择。
+	var chuanchong: SkillDefinition = GameDatabase.create_skill("chuanchong")
+	if chuanchong == null:
+		return _fail("chuanchong_missing")
+	chuanchong.bind(_controller, 0)
+	chuanchong.install()
+	_controller.skill_instances_by_player = {0:{chuanchong.get_id():chuanchong}}
+	_controller._begin_play_choice(0)
+	# 当前运行时请求；ChoiceRequest直接保存权威卡牌与技能按钮候选，界面只读取该集合控制亮暗。
+	var play_request: Dictionary = _controller.state.current_choice_request.duplicate(true)
+	# 可直接点击实体UID；应仅包含普通【杀】和木牛装备本体。
+	var candidate_card_ids: Array = play_request.get("card_ids", []) as Array
+	# 可点击技能按钮ID；传冲保持独立入口，证明材料未被移出合法玩法。
+	var candidate_button_ids: Array = play_request.get("button_ids", []) as Array
+	if candidate_card_ids.size() != 2 or not candidate_card_ids.has(slash.uid) or not candidate_card_ids.has(wooden_ox.uid) or candidate_card_ids.has(conversion_material.uid) or candidate_card_ids.has(storage_only_material.uid) or not candidate_button_ids.has("chuanchong"):
+		_controller._cancel_active_play_choice("requested_changes_candidate_failure")
+		return _fail("play_choice_candidates cards=%s buttons=%s" % [candidate_card_ids, candidate_button_ids])
+	_controller._cancel_active_play_choice("requested_changes_candidate_complete")
 	return true
 
 

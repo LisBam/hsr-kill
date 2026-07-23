@@ -105,6 +105,14 @@ func _test_catalog_and_weights() -> bool:
 	var gray_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("gray")
 	if gray_cards.size() != 3 or OpportunityCatalog.QUALITY_ORDER.has("gray"):
 		return _fail("gray_catalog=%s quality_order=%s" % [gray_cards, OpportunityCatalog.QUALITY_ORDER])
+	# 紫色与橙色目录；摸牌阶段加成调整品质后，总目录保持69张且旧紫色稳定ID不再登记。
+	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
+	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
+	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")
+	# 橙色摸牌阶段机缘；正文与固定数值保持不变，只调整品质和稳定ID。
+	var orange_draw_phase_card: Dictionary = OpportunityCatalog.get_card("orange_draw_phase_one")
+	if purple_cards.size() != 16 or orange_cards.size() != 11 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
+		return _fail("draw_phase_quality purple=%d orange=%d card=%s" % [purple_cards.size(), orange_cards.size(), orange_draw_phase_card])
 	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
 	_controller.opportunity_system.green_weight = 0
 	_controller.opportunity_system.blue_weight = 0
@@ -147,7 +155,7 @@ func _test_catalog_and_weights() -> bool:
 		"gray_initial_hand_one":"初始手牌数+1",
 		"green_slash_play_limit_one":"出牌阶段使用【杀】的次数上限+1",
 		"blue_draw_phase_one":"摸牌阶段额外摸一张牌",
-		"purple_draw_phase_one":"摸牌阶段额外摸一张牌",
+		"orange_draw_phase_one":"摸牌阶段额外摸一张牌",
 		"purple_max_hp_two":"增加2点体力上限。",
 		"orange_damage_one":"造成的伤害+1",
 	}
@@ -199,7 +207,7 @@ func _test_passive_opportunity_effects() -> bool:
 	var target: PlayerState = _controller.state.get_player(1)
 	if owner == null or target == null:
 		return _fail("passive_opportunity_players")
-	owner.acquired_opportunity_ids = ["purple_draw_phase_one", "green_slash_play_limit_one", "orange_damage_one"]
+	owner.acquired_opportunity_ids = ["orange_draw_phase_one", "green_slash_play_limit_one", "orange_damage_one"]
 	# 【杀】定义；读取正式共同次数组，普通、火与雷【杀】均由控制器按该组增加上限。
 	var slash_definition: Dictionary = GameDatabase.get_card("sha")
 	if _controller._get_phase_draw_base_count(owner.player_id) != 3 or _controller.skill_play_count_limit_bonus(owner.player_id, slash_definition) != 1:

@@ -2235,10 +2235,12 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 	_controller.restore_player_to_game(0, "moze_test")
 	if _controller.card_rules.calculate_distance(0, 2) != 1:
 		return _fail("lvexi_distance=%d" % _controller.card_rules.calculate_distance(0, 2))
-	# 掠袭直击；活动用牌指定猎物后必须写入目标直击集合，使其无法响应本牌。
+	# 掠袭直击；通过真实CardUseEvent时机执行器派发指定目标事件，验证同步技能写入不会被派发前的旧上下文副本覆盖。
 	var direct_hit_card: CardInstance = CardInstance.new("sha", "club", 7)
-	_controller._card_use_contexts[direct_hit_card.uid] = {"target_ids":[2], "direct_hit_target_ids":[]}
-	lvexi.call("_on_card_targeted", RuleEvent.new("useCardToTargeted", 0, 2, {"card_uid":direct_hit_card.uid, "target_id":2, "card_id":"sha"}))
+	_controller._card_use_contexts[direct_hit_card.uid] = {"actor_id":0, "card_definition_id":"sha", "target_ids":[2], "excluded_target_ids":[], "direct_hit_target_ids":[], "custom_args":{}, "virtual_storage":{}}
+	# 真实目标时机子事件；执行器会构造RuleEvent、派发掠袭并把最终共享字段写回卡牌生命周期。
+	var direct_hit_timing_event: GameEvent = GameEvent.new("useCardToTargeted", [], {"timing_name":"useCardToTargeted", "card_uid":direct_hit_card.uid, "target_id":2})
+	_controller._execute_card_use_timing_event(direct_hit_timing_event, _controller.event_scheduler)
 	if not _controller.is_card_target_direct_hit(direct_hit_card.uid, 2):
 		return _fail("lvexi_direct_hit")
 	# 掠袭直击响应过滤；猎物即使持有对应牌也不能收到【闪】或【杀】响应选择窗口。

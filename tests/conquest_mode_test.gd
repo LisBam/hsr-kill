@@ -55,7 +55,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("CONQUEST_MODE_PASS rules+levels+initial_opportunity+replacement+skills+equipment+turn_handoff+death")
+	print("CONQUEST_MODE_PASS rules+levels+initial_opportunity+zaixian_kill_tail+replacement+skills+equipment+turn_handoff+death")
 	get_tree().quit(0)
 
 
@@ -155,7 +155,7 @@ func _test_level_bonus_service() -> bool:
 	state.conquest_state["level"] = 4
 	# 第2、3、4关固定机缘；直接跳关时服务也必须补齐每一层记录，保证回放恢复不会缺失历史。
 	var level_four_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_four_opportunities != ["gray_initial_hand_one", "blue_hand_limit_two", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 0 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 1:
+	if level_four_opportunities != ["gray_initial_hand_one", "blue_hand_limit_two", "orange_draw_phase_one"] or service.get_max_hp_bonus() != 0 or service.get_draw_phase_bonus() != 1 or service.get_hand_limit_bonus() != 2 or service.get_initial_hand_bonus() != 1:
 		return _fail("level_four_opportunities=%s" % level_four_opportunities)
 	state.conquest_state["level"] = 5
 	# 第5关本次新抽取的技能机缘；历史保存完整机缘ID，且实际效果必须是获得技能。
@@ -165,7 +165,7 @@ func _test_level_bonus_service() -> bool:
 	state.conquest_state["level"] = 8
 	# 第6、7、8关继续追加体力上限、【杀】次数和摸牌阶段机缘。
 	var level_eight_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_eight_opportunities != ["blue_max_hp_one", "green_slash_play_limit_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 1 or service.get_slash_limit_bonus() != 1:
+	if level_eight_opportunities != ["blue_max_hp_one", "green_slash_play_limit_one", "orange_draw_phase_one"] or service.get_max_hp_bonus() != 1 or service.get_draw_phase_bonus() != 2 or service.get_initial_hand_bonus() != 1 or service.get_slash_limit_bonus() != 1:
 		return _fail("level_eight_opportunities=%s" % level_eight_opportunities)
 	state.conquest_state["level"] = 9
 	var level_nine_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
@@ -191,7 +191,7 @@ func _test_level_bonus_service() -> bool:
 		return _fail("level_fifteen_skill_opportunity")
 	state.conquest_state["level"] = 16
 	var level_sixteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
-	if level_sixteen_opportunities != ["gray_initial_hand_one", "blue_max_hp_one", "purple_draw_phase_one"] or service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 6:
+	if level_sixteen_opportunities != ["gray_initial_hand_one", "blue_max_hp_one", "orange_draw_phase_one"] or service.get_max_hp_bonus() != 4 or service.get_draw_phase_bonus() != 4 or service.get_initial_hand_bonus() != 6:
 		return _fail("level_sixteen_opportunities=%s" % level_sixteen_opportunities)
 	state.conquest_state["level"] = 19
 	var level_nineteen_opportunities: Array[String] = service.award_fixed_opportunities_through_current_level()
@@ -238,6 +238,13 @@ func _test_full_match_replacement_flow() -> bool:
 	player_sefu = _controller.get_skill_instance(player.player_id, "shefu")
 	if player_sefu == null:
 		return _fail("conquest_sefu_missing")
+	# 再现技能实例；真实【杀】击杀后必须在换将边界前收到shaAfter，发放摸1张与1个额外出牌阶段。
+	var player_zaixian: SkillDefinition = _controller.get_skill_instance(player.player_id, "zaixian")
+	if player_zaixian == null and not _controller.grant_acquired_skill(player.player_id, "zaixian", 0, 0, "conquest_test"):
+		return _fail("conquest_zaixian_install")
+	player_zaixian = _controller.get_skill_instance(player.player_id, "zaixian")
+	if player_zaixian == null:
+		return _fail("conquest_zaixian_missing")
 	# 敌方永屹技能；优先复用随机武将自带实例，缺失时临时授予，用于覆盖死亡换将不得继承damageAfter的卡死路径。
 	var enemy_yongyi: SkillDefinition = _controller.get_skill_instance(enemy.player_id, "yongyi")
 	if enemy_yongyi == null and not _controller.grant_acquired_skill(enemy.player_id, "yongyi", 0, 0, "conquest_test"):
@@ -250,17 +257,41 @@ func _test_full_match_replacement_flow() -> bool:
 		_controller._move_to_discard(player.hand.pop_back())
 	while not enemy.hand.is_empty():
 		_controller._move_to_discard(enemy.hand.pop_back())
+	# 初始回合可能已经建立空的chooseToUse；先关闭旧请求，加入测试实体后再建立包含它们的权威候选。
+	_controller._cancel_active_play_choice("conquest_test_setup")
+	# 本次真实击杀使用的【杀】；从普通手牌进入processing并走完整指定目标、响应、伤害与生命周期尾部。
+	var killing_slash: CardInstance = CardInstance.new("sha", "club", 7)
+	killing_slash.zone = "hand"
+	killing_slash.owner_id = player.player_id
+	player.hand.append(killing_slash)
+	# 再现固定弃置费用；成功支付1张后玩家在伤害结算前应回到0张手牌。
+	var zaixian_cost_card: CardInstance = CardInstance.new("wuxie", "spade", 12)
+	zaixian_cost_card.zone = "hand"
+	zaixian_cost_card.owner_id = player.player_id
+	player.hand.append(zaixian_cost_card)
+	_controller._begin_play_choice(player.player_id)
 	# 首次击败前敌方武将；换将后必须改为另一稳定ID（武将库充足时不允许重复）。
 	var defeated_character_id: String = enemy.character_id
 	# 首次击败前敌方武将代次；重新入场必须严格递增，旧伤害尾部继续保存该值。
 	var defeated_character_generation: int = enemy.character_generation
-	# 敌方手牌；预置一张牌后用于验证死亡时“区域内所有牌”会清空并进入弃牌堆。
-	var extra_enemy_card: CardInstance = _controller.state.draw_pile.back()
-	_controller._move_card_with_timings(extra_enemy_card, "hand", enemy.player_id, "conquest_test_setup")
-	# 敌方剩余体力；用真实伤害击杀以让摄伏在damageSource中产生嵌套目标选择。
+	# 敌方手牌；使用已知非响应牌验证死亡时“区域内所有牌”会清空并进入弃牌堆，同时保证本次【杀】稳定命中。
+	var extra_enemy_card: CardInstance = CardInstance.new("wuzhong", "heart", 8)
+	extra_enemy_card.zone = "hand"
+	extra_enemy_card.owner_id = enemy.player_id
+	enemy.hand.append(extra_enemy_card)
+	# 敌方剩余体力；真实【杀】会先询问再现费用与【闪】，随后进入濒死、死亡、摄伏和换将边界。
 	enemy.hp = 1
 	enemy.shield = 0
-	_controller.damage(player.player_id, enemy.player_id, 1, "normal", "sha")
+	# 标准用牌动作；先消费当前chooseToUse，再由正式CardUseEvent推进完整结算，避免测试绕过常驻出牌请求。
+	var killing_slash_action: PlayerAction = PlayerAction.new("use_card", player.player_id, killing_slash.uid, [enemy.player_id])
+	if not _controller.submit_action(killing_slash_action):
+		return _fail("conquest_slash_submit phase=%s play_choice=%s error=%s" % [_controller.state.current_phase, _controller._has_active_play_choice(), _controller._last_action_rejection_message])
+	# 再现费用请求；确认弃置恰好1张牌后才开始跟踪本次【杀】伤害。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zaixian_discard" or not _submit_card_uid_choice(player.player_id, [zaixian_cost_card.uid], true):
+		return _fail("conquest_zaixian_cost pending=%s" % _controller._pending_card_choice)
+	# 猎杀目标的【闪】响应；敌方没有【闪】，仍按标准隐私询问明确放弃后再造成伤害。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response" or not _submit_choice(enemy.player_id, [], false):
+		return _fail("conquest_slash_response")
 	# 濒死救援请求；双方没有可救援牌仍须按标准顺序主动放弃，死亡后才会派发摄伏监听的来源尾部。
 	for _dying_choice_index: int in range(4):
 		var current_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
@@ -275,6 +306,9 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("replacement_sefu_damage_source")
 	if not _submit_target_choice(player.player_id, player.player_id):
 		return false
+	# 目标生命周期尾部；摄伏获得1张牌后，【杀】的shaAfter还必须让再现再摸1张并登记1个额外出牌阶段，然后才能进入换将等待。
+	if player.hand.size() != 2 or int(_controller._extra_play_phase_counts.get(player.player_id, 0)) != 1:
+		return _fail("replacement_zaixian_tail hand=%d extra=%s" % [player.hand.size(), _controller._extra_play_phase_counts])
 	# 换将等待只阻止旧规则继续，不暂停场景树；弃置区域的飞牌动画必须能在此期间持续播放。
 	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller._conquest_replacement_settlement_pause_token < 0 or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.event_scheduler.pause_registry.has_active() or not _controller.state.opportunity_state.is_empty():
 		return _fail("replacement_opportunity_preview")
