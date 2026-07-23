@@ -233,7 +233,7 @@ func _test_sushang_guinaifen_metadata() -> bool:
 	return true
 
 
-## 验证属性【杀】的规则名与显示名分离、《崩铁杀》牌名字数，以及三名武将的体力、势力和技能引用。
+## 验证属性【杀】的规则名与显示名分离、牌名字数优先级，以及三名武将的体力、势力和技能引用。
 func _test_metadata_and_rule_names() -> bool:
 	# 火【杀】与雷【杀】定义；rule_name用于规则称呼，original_name与custom_name继续提供两字牌面。
 	var fire_slash: Dictionary = GameDatabase.get_card("sha_fire")
@@ -241,9 +241,13 @@ func _test_metadata_and_rule_names() -> bool:
 	var thunder_slash: Dictionary = GameDatabase.get_card("sha_thunder")
 	if str(fire_slash.get("rule_name", "")) != "杀" or str(thunder_slash.get("rule_name", "")) != "杀" or str(fire_slash.get("original_name", "")) != "火杀" or str(thunder_slash.get("custom_name", "")) != "雷杀":
 		return _fail("attribute_slash_names fire=%s thunder=%s" % [fire_slash, thunder_slash])
-	# 全局牌名字数规则；属性【杀】固定按《崩铁杀》custom_name“火杀”与“雷杀”计算，不按规则名“杀”或当前显示模式切换。
-	if _controller.get_card_original_name_length("sha_fire") != 2 or _controller.get_card_original_name_length("sha_thunder") != 2:
-		return _fail("attribute_slash_custom_name_length")
+	# 全局牌名字数规则；属性【杀】优先按规则名“杀”计算为1，不受当前显示模式切换影响。
+	if _controller.get_card_original_name_length("sha_fire") != 1 or _controller.get_card_original_name_length("sha_thunder") != 1:
+		return _fail("attribute_slash_rule_name_length")
+	# 无规则名的崩铁杀牌；仍必须按custom_name“普罗米修斯”的5个汉字计算，防止属性【杀】例外影响普通牌。
+	var custom_name_length: int = _controller.get_card_original_name_length("zhuque")
+	if custom_name_length != 5:
+		return _fail("custom_card_name_length=%d" % custom_name_length)
 	# 三名新武将定义；技能数组顺序就是面板与运行时安装顺序。
 	var march: Dictionary = GameDatabase.get_character("march_7th")
 	# 杰帕德武将定义；验证势力、性别、体力与【永屹】引用。

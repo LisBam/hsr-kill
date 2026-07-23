@@ -1,7 +1,7 @@
 extends SkillDefinition
 
-## 【录事】技能源码。持有者可反复弃置两张《崩铁杀》牌名字数相同的手牌或装备牌并摸一张牌。
-## 名字数固定按卡牌 custom_name 计算；函数名保留旧兼容名称，但不会随界面切换为三国杀牌名而改变结算。
+## 【录事】技能源码。持有者可反复弃置两张结算牌名字数相同的手牌或装备牌并摸一张牌。
+## 名字数优先按卡牌 rule_name 计算，未声明规则名时读取 custom_name；函数名保留旧兼容名称，且不会随界面切换而改变结算。
 
 ## 录事每次成功结算摸牌数；固定1张。
 const DRAW_COUNT: int = 1
@@ -91,7 +91,7 @@ func _execute_discard_and_draw(selected_uids: Array[int]) -> bool:
 	return true
 
 
-## 返回当前全部合法双牌UID组合；牌名字数固定读取《崩铁杀》自定义牌名，不随界面名称模式变化。
+## 返回当前全部合法双牌UID组合；牌名字数优先读取规则名，普通牌读取《崩铁杀》自定义牌名，不随界面名称模式变化。
 func _get_valid_pairs() -> Array:
 	# 当前手牌与装备候选；每项都包含公开定义ID与稳定UID。
 	var candidates: Array[Dictionary] = host.call("get_hand_equipment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
@@ -103,7 +103,7 @@ func _get_valid_pairs() -> Array:
 		# 第一张牌公开数据；包含当前定义ID与稳定UID。
 		var first_data: Dictionary = first_candidate.get("card_data", {}) as Dictionary
 		# 第一张牌《崩铁杀》名字数；0表示定义缺失并禁止组成费用。
-		# 实际查询固定读取 custom_name；属性【杀】是否与其他牌同字数由其《崩铁杀》牌名决定。
+		# 实际查询优先读取 rule_name；属性【杀】按“杀”的1个汉字参与组合校验。
 		var first_length: int = int(host.call("get_card_original_name_length", str(first_data.get("definition_id", ""))))
 		for second_index: int in range(first_index + 1, candidates.size()):
 			# 第二张候选；索引严格大于第一张避免实体重复。
@@ -111,7 +111,7 @@ func _get_valid_pairs() -> Array:
 			# 第二张牌公开数据；用于读取定义ID。
 			var second_data: Dictionary = second_candidate.get("card_data", {}) as Dictionary
 			# 第二张牌《崩铁杀》名字数；必须为正且等于第一张。
-			# 第二张同样固定读取 custom_name，确保组合校验与其他名字数规则完全一致。
+			# 第二张同样读取统一结算名称，确保组合校验与其他名字数规则完全一致。
 			var second_length: int = int(host.call("get_card_original_name_length", str(second_data.get("definition_id", ""))))
 			if first_length > 0 and first_length == second_length:
 				result.append([int(first_candidate.get("uid", -1)), int(second_candidate.get("uid", -1))])

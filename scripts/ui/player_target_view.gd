@@ -934,7 +934,7 @@ func _refresh_auto_managed_label() -> void:
 
 ## 按当前体力和体力上限重建右侧圆点；绿色表示现有体力，暗色表示已损失体力。
 ## 已损失圆点现在从容器顶部开始排列，使扣血方向固定为从上往下。
-## 护盾在圆点模式下使用灰色圆点置于体力上方，体力进入数字模式后显示为灰色加粗“当前值/当前值”分数。
+## 护盾在圆点模式下使用灰色圆点置于体力上方，体力进入数字模式后显示为灰色加粗单值。
 func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 	for child: Node in _health_pip_container.get_children():
 		_health_pip_container.remove_child(child)
@@ -944,9 +944,9 @@ func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 	_health_pip_container.add_theme_constant_override("separation", 0 if uses_numeric_health else health_pip_separation)
 	if uses_numeric_health:
 		if shield > 0:
-			# 数字护盾标签；与数字体力在VBox中纵向排列。护盾没有独立上限，因此分母使用当前护盾值，稳定显示为“当前/当前”。
+			# 数字护盾标签；与数字体力在VBox中纵向排列。护盾没有独立上限，只显示当前护盾值避免伪造分母语义。
 			var shield_number: Label = Label.new()
-			shield_number.text = "%d/%d" % [shield, shield]
+			shield_number.text = str(shield)
 			shield_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			shield_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			_apply_numeric_health_label_style(shield_number, BattleUIStyle.get_color("health_shield"))
