@@ -463,6 +463,28 @@ func get_latest_history_record() -> Dictionary:
 	return {} if _event_history.is_empty() else (_event_history.back() as Dictionary).duplicate(true)
 
 
+## 把最新一条不可变历史记录共享追加到指定状态数组；仅供权威状态同步使用，调用方不得修改条目字典。
+func append_latest_history_reference_to(target_history: Array[Dictionary]) -> bool:
+	if _event_history.is_empty():
+		return false
+	# 最新不可变记录；写入历史后调度器只追加新条目，不再修改已有字典。
+	var latest_record: Dictionary = _event_history.back() as Dictionary
+	# 最新序号；目标已经拥有同一条记录时保持幂等，不重复占用数组条目。
+	var latest_sequence: int = int(latest_record.get("sequence", -1))
+	if not target_history.is_empty() and int((target_history.back() as Dictionary).get("sequence", -2)) == latest_sequence:
+		return false
+	target_history.append(latest_record)
+	return true
+
+
+## 返回共享不可变条目的独立数组；用于计数失配后的全量校准，避免把整份长局回放再深复制一遍。
+func get_event_history_reference_copy() -> Array[Dictionary]:
+	# 浅层数组副本；调用方可追加或清空自己的数组，内部字典作为归档记录必须保持只读。
+	var result: Array[Dictionary] = []
+	result.assign(_event_history)
+	return result
+
+
 ## 返回仍等待响应的请求快照；网络重连可据此恢复 UI，而不会恢复旧事件对象。
 func get_pending_choice_requests() -> Array[Dictionary]:
 	# 请求快照结果；按请求 ID 排序保证固定回放顺序。

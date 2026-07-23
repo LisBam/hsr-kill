@@ -12,9 +12,13 @@ var state: GameState
 ## 下一个移牌事件稳定 ID；从1开始，供网络去重与回放关联。
 var _next_move_id: int = 1
 
+## 按“全局回合号:行动角色ID”索引的出牌阶段弃牌UID；每个桶只保存该回合真实进入弃牌堆的顺序，避免查询扫描整局移牌历史。
+var _play_discard_uids_by_turn_player: Dictionary = {}
+
 ## 创建服务时绑定一局状态；服务不会复制或拥有 GameState 生命周期。
 func _init(game_state: GameState) -> void:
 	state = game_state
+	_rebuild_play_discard_index()
 
 
 ## 移动单张实体牌并返回 CardMoveEvent；找不到牌或目的区域不合法时返回 null。
@@ -53,8 +57,11 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	move.turn_player_id = state.current_player_id
 	# 移动发生时的阶段；【投狭】等机制只统计 play 阶段真实进入弃牌堆的实体。
 	move.phase = state.current_phase
-	state.card_move_history.append(move.to_dict())
-	card_moved.emit(move.to_dict(), card.to_dict())
+	# 移牌摘要；同一只读字典同时写入权威历史与增量信号，避免单张移动连续序列化两次。
+	var move_data: Dictionary = move.to_dict()
+	state.card_move_history.append(move_data)
+	_index_play_discard_move(move_data)
+	card_moved.emit(move_data, card.to_dict())
 	return move
 
 
@@ -86,6 +93,62 @@ func reveal_card(card: CardInstance, viewer_ids: Array[int] = []) -> bool:
 				card.known_to.append(viewer_id)
 	card.private_owner_id = -1
 	return true
+
+
+## 返回指定回合与行动角色在出牌阶段进入弃牌堆的UID顺序副本；调用方仍需复核实体当前区域与花色。
+func get_turn_play_discard_uids(turn_number: int, turn_player_id: int) -> Array[int]:
+	# 索引键；使用稳定数字文本组合，避免嵌套字典在高频查询中重复创建中间容器。
+	var index_key: String = _get_play_discard_index_key(turn_number, turn_player_id)
+	# 只读桶；不存在时保持空数组，返回副本防止调用方污染后续规则查询。
+	var indexed_uids: Array[int] = []
+	indexed_uids.assign(_play_discard_uids_by_turn_player.get(index_key, []) as Array)
+	return indexed_uids
+
+
+## 返回指定回合索引桶的条目数；性能回归用它确认查询范围只随本回合移动量增长。
+func get_turn_play_discard_indexed_count(turn_number: int, turn_player_id: int) -> int:
+	# 索引键；与正式查询完全一致，诊断不会遍历历史或复制UID数组。
+	var index_key: String = _get_play_discard_index_key(turn_number, turn_player_id)
+	return (_play_discard_uids_by_turn_player.get(index_key, []) as Array).size()
+
+
+## 从已有权威移牌历史重建出牌阶段弃牌索引；服务晚于状态创建或测试注入历史时只支付一次线性成本。
+func _rebuild_play_discard_index() -> void:
+	_play_discard_uids_by_turn_player.clear()
+	_next_move_id = 1
+	if state == null:
+		return
+	# 既有历史遍历项；服务恢复时逐条重建索引并恢复下一移牌事件ID。
+	for move_variant: Variant in state.card_move_history:
+		# 已有移牌摘要；索引只读取回合、行动角色、阶段、目标区域与UID，不复制完整字典。
+		var move_data: Dictionary = move_variant as Dictionary
+		_next_move_id = maxi(_next_move_id, int(move_data.get("move_id", 0)) + 1)
+		_index_play_discard_move(move_data)
+
+
+## 把单条符合条件的移牌摘要追加到对应索引桶；其他阶段与其他目标区域不会占用索引空间。
+func _index_play_discard_move(move_data: Dictionary) -> void:
+	if str(move_data.get("phase", "")) != "play" or str(move_data.get("to_zone", "")) != "discard_pile":
+		return
+	# 移动发生时的全局回合号；非正数表示开局配置或缺失历史，不属于回合内候选。
+	var turn_number: int = int(move_data.get("turn_number", 0))
+	# 移动发生时的行动角色；负数表示当时没有进行中的角色回合。
+	var turn_player_id: int = int(move_data.get("turn_player_id", -1))
+	if turn_number <= 0 or turn_player_id < 0:
+		return
+	# 当前索引桶键；同一回合同一行动角色的全部有效移动共享一条短数组。
+	var index_key: String = _get_play_discard_index_key(turn_number, turn_player_id)
+	# 当前索引桶；数组保留首次进入顺序，重复UID由最终候选查询按原规则去重。
+	var indexed_uids: Array = _play_discard_uids_by_turn_player.get(index_key, []) as Array
+	# 本次移动中的实体UID；批量摘要仍按原始顺序逐项写入同一桶。
+	for card_uid_variant: Variant in move_data.get("card_ids", []) as Array:
+		indexed_uids.append(int(card_uid_variant))
+	_play_discard_uids_by_turn_player[index_key] = indexed_uids
+
+
+## 生成出牌阶段弃牌索引的稳定键；仅内部使用，不进入快照或玩法状态。
+func _get_play_discard_index_key(turn_number: int, turn_player_id: int) -> String:
+	return "%d:%d" % [turn_number, turn_player_id]
 
 
 ## 返回实体牌实际所在区域；优先扫描数组而不是信任旧逻辑可能遗留的 zone 字段。
