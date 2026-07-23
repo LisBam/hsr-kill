@@ -332,8 +332,7 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 				continue
 			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, definition, ai_profile, target_result, expected_damage_amount)
 	# 追歼协同；己方佩拉公开标记的目标会在属性伤害评分中获得固定集火优先级，仍保留前面的护甲、响应与连环风险校验。
-	if bool(ai_profile.get("damage", false)) and bool(ai_profile.get("nature_damage", false)):
-		result += _score_teammate_zhuijian_priority(authoritative_snapshot, actor_id, target)
+	# 补充：追歼现仅显示武将牌提示，不再下发公开标记，因此通用AI不能从快照取得可验证的协同目标信息。
 	return result
 
 
