@@ -18,6 +18,9 @@ var _bound_character_generation: int = -1
 ## 当前技能是否为锁定技；true 表示效果满足条件时强制执行且不创建发动选择，默认 false 表示非锁定技。
 var lock: bool = false
 
+## 当前技能是否同时包含非锁定技前段与锁定技后段；默认根据正文中非开头位置的“锁定技”标签识别，也可由元数据显式配置。
+var half_locked: bool = false
+
 ## 当前技能是否为领袖技；true 表示只有身份为 leader 的角色实际拥有并显示该技能，默认 false 表示不限制身份。
 var leader_skill: bool = false
 
@@ -30,6 +33,12 @@ func _init(metadata: Dictionary = {}) -> void:
 	_metadata = metadata.duplicate(true)
 	lock = bool(_metadata.get("lock", false))
 	_metadata["lock"] = lock
+	# 技能正文；“锁定技”位于正文中段时，从该标签开始的后段属于锁定技，前段仍按非锁定技处理。
+	var description: String = str(_metadata.get("description", ""))
+	# 锁定技标签位置；索引大于0表示正文具有非锁定前段，索引为0则是完整锁定技。
+	var locked_label_index: int = description.find("锁定技")
+	half_locked = bool(_metadata.get("half_locked", not lock and locked_label_index > 0))
+	_metadata["half_locked"] = half_locked
 	leader_skill = bool(_metadata.get("leader_skill", false))
 	_metadata["leader_skill"] = leader_skill
 	out_of_game_skill = bool(_metadata.get("out_of_game_skill", false))
@@ -139,14 +148,24 @@ func supports_active_entry(entry_name: String) -> bool:
 	return get_active_entries().has(entry_name)
 
 
+## 返回当前效果片段在“非锁定技失效”状态下是否仍能生效；完整锁定技始终有效，半锁定技仅允许显式标记的锁定后段。
+func can_use_effect(locked_segment: bool = false) -> bool:
+	# 技能持有者状态；数据库静态对象和独立内容测试没有权威状态时默认允许读取与执行。
+	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
+	if owner == null or not owner.non_locked_skills_disabled:
+		return true
+	return lock or (half_locked and locked_segment)
+
+
 ## 以技能持有者身份注册标准时机；role 决定匹配 player、source、target 或 global，成功返回稳定注册 ID。
-func subscribe_timing(event_name: String, callback: Callable, role: String = "player", priority: int = 0, first_do: bool = false, last_do: bool = false, condition: Callable = Callable()) -> int:
+## locked_segment只用于半锁定技后段；maintenance只允许持续效果到期或清理回调使用，不得在失效期间产生新收益。
+func subscribe_timing(event_name: String, callback: Callable, role: String = "player", priority: int = 0, first_do: bool = false, last_do: bool = false, condition: Callable = Callable(), locked_segment: bool = false, maintenance: bool = false) -> int:
 	if host == null or host.get("trigger_manager") == null or not RuleTimingCatalog.has_timing(event_name):
 		return -1
 	# 当前对局高级触发器；由技能基类统一传入 self 与 owner_player_id，具体技能无需复制解绑字段。
 	var manager: TriggerManager = host.get("trigger_manager") as TriggerManager
 	# 技能统一生效条件；注册时固化武将代次，暂停保存的旧处理器快照不会因实例之后重新绑定而变成新武将触发器。
-	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition, _bound_character_generation)
+	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition, _bound_character_generation, locked_segment, maintenance)
 	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, guarded_condition)
 
 
@@ -156,7 +175,7 @@ func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
 
 
 ## 统一校验技能时机订阅是否仍有效；死亡或离场持有者不会继续发动普通全局技能。
-func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, subscribed_character_generation: int = -1) -> bool:
+func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, subscribed_character_generation: int = -1, locked_segment: bool = false, maintenance: bool = false) -> bool:
 	# 技能持有者权威状态；未绑定、死亡或离场时仅允许显式覆盖的特殊技能继续接收时机。
 	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
 	if not matches_character_generation(subscribed_character_generation):
@@ -174,6 +193,9 @@ func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, sub
 	if (owner == null or not owner.alive) and not can_trigger_while_owner_inactive(event):
 		return false
 	if owner != null and owner.out_of_game and not out_of_game_skill and not can_trigger_while_owner_inactive(event):
+		return false
+	# 非锁定技失效时，完整非锁定技及半锁定技前段均不接收新时机；完整锁定技与半锁定技后段继续正常结算。
+	if not maintenance and not can_use_effect(locked_segment):
 		return false
 	# 局内获得技能的每回合或总次数限制；额度耗尽后不再接收新的触发时机。
 	if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, get_id())):

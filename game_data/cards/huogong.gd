@@ -115,7 +115,9 @@ func _apply_discard(resolver: Object, context: Dictionary, selected_uids: Array[
 		var target: PlayerState = resolver.state.get_player(target_id)
 		# 伤害前累计受伤次数；目标不存在时使用-1并在结算后记录本次失败。
 		var previous_damage_taken_count: int = target.damage_taken_count if target != null else -1
-		resolver.host.damage(actor_id, target_id, 1, "fire", "huogong")
+		# 来源牌上下文；制动等“此牌受到的直接响应数”效果通过父牌UID读取同一张【火攻】的无懈链。
+		var source_context: Dictionary = {"card_user_id":actor_id, "parent_card_uid":int(context.get("parent_card_uid", -1)), "damage_card_target_count":1}
+		resolver.host.damage(actor_id, target_id, 1, "fire", "huogong", false, false, source_context)
 		if target == null or target.damage_taken_count <= previous_damage_taken_count:
 			resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 	else:

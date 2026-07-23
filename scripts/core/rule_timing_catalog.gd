@@ -30,7 +30,7 @@ const CARD_RESPONSE_TIMINGS: Array[String] = [
 ## 伤害事件从最早拦截到最终完成的全部时机；Begin1 至 Begin4 必须严格按数组顺序派发。
 const DAMAGE_TIMINGS: Array[String] = [
 	"damageBefore", "damageBegin", "damageBegin1", "damageBegin2", "damageBegin3", "damageBegin4",
-	"damage", "damageZero", "damageSource", "damageEnd", "damageAfter", "damageCancelled",
+	"damage", "damageZero", "damageSource", "damageEnd", "damageAfter", "damagePointAfter", "damageCancelled",
 ]
 
 ## 体力、体力上限、护甲、濒死、死亡、连环和翻面时机；只定义名称，不限定具体技能效果。
@@ -87,7 +87,7 @@ const ACTIVE_ENTRIES: Array[String] = ["phaseUse", "chooseToUse", "chooseToRespo
 const MAIN_PHASES: Array[String] = ["judgment", "draw", "play", "discard"]
 
 
-## 返回全部220个标准监听时机的新数组；调用方修改返回值不会污染静态目录。
+## 返回全部标准监听时机的新数组；调用方修改返回值不会污染静态目录。
 static func get_all_timing_names() -> Array[String]:
 	# 完整时机结果；按分类顺序拼接，测试会校验总数和重复项。
 	var result: Array[String] = []
@@ -103,7 +103,7 @@ static func get_all_timing_names() -> Array[String]:
 	return result
 
 
-## 返回事件名是否属于220个标准监听时机；空字符串和未登记自定义事件返回 false。
+## 返回事件名是否属于标准监听时机；空字符串和未登记自定义事件返回 false。
 static func has_timing(event_name: String) -> bool:
 	return not event_name.is_empty() and get_all_timing_names().has(event_name)
 

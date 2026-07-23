@@ -93,11 +93,14 @@ func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, 
 	# 通用【杀】上下文；只保存可序列化字段，异步恢复时重新查询实体与装备。
 	# 当前使用牌对本目标的技能伤害加值；多目标【杀】按目标独立读取，不污染其他目标基础伤害。
 	var parent_card_uid: int = card.uid if resolution_parent_card_uid < 0 else resolution_parent_card_uid
+	# 本张逻辑【杀】的最终目标数；普通用牌读取整张【杀】的目标数组，借刀与武器追击产生的外部【杀】固定为单目标。
+	var slash_target_count: int = int(host.call("get_card_use_target_count", parent_card_uid)) if resolution_parent_card_uid < 0 and host.has_method("get_card_use_target_count") else 1
 	var target_damage_bonus: int = int(host.call("get_card_target_damage_bonus", parent_card_uid, target_id)) if host.has_method("get_card_target_damage_bonus") else 0
 	var context: Dictionary = {
 		"parent_card_uid":parent_card_uid,
 		"slash_card_uid":card.uid,
 		"slash_card_definition_id":card.definition_id,
+		"damage_card_target_count":maxi(slash_target_count, 1),
 		"actor_id":actor_id,
 		"target_id":target_id,
 		"base_damage_amount":maxi(damage_amount, 0),
@@ -225,6 +228,8 @@ func continue_after_sha_damage(context: Dictionary) -> void:
 	var final_damage_amount: int = maxi(int(context.get("base_damage_amount", context.get("damage_amount", 1))) + current_target_damage_bonus, 0)
 	context["damage_amount"] = final_damage_amount
 	context["applied_target_damage_bonus"] = current_target_damage_bonus
+	# 实际造成伤害的逻辑牌目标数；普通多目标【杀】保留整张牌的目标数，外部生成的单目标【杀】保持1。
+	context["damage_card_target_count"] = maxi(int(context.get("damage_card_target_count", 1)), 1)
 	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), final_damage_amount, str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), context)
 	if resolver.is_resolution_stopped():
 		return

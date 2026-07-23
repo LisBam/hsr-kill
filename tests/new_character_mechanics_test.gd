@@ -29,6 +29,8 @@ func _run() -> void:
 		return
 	if not _test_expanded_character_metadata():
 		return
+	if not _test_luka_gallagher_mechanics():
+		return
 	if not _test_feiyan_preparation_phase_virtual_use():
 		return
 	if not await _test_feiyan_main_phase_conversion():
@@ -180,6 +182,7 @@ func _reset_state(player_count: int) -> void:
 	_controller._pending_negation_choices.clear()
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
+	_controller._hand_view_as_turn_expiries.clear()
 	_controller._active_extra_discard_phase.clear()
 	_controller._active_independent_play_phase.clear()
 	# 专项场景之间清空额外回合队列与恢复栈，避免前一技能登记的回合在后一场景收尾时被消费。
@@ -295,7 +298,7 @@ func _test_expanded_character_metadata() -> bool:
 		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
 		"mingchen":"锁定技，当你于回合内失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害，并令此技能失效直到回合结束。",
 		"lushi":"出牌阶段，你可弃置两张牌名字数相同的牌，然后摸一张牌。",
-		"huanyang":"锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
+		"huanyang":"锁定技，当你对距离为1以内的角色造成1点伤害时，你回复1点体力。",
 		"shefu":"锁定技，当你于一回合内首次使用牌造成伤害后，你令一名角色从牌堆中获得一张牌名字数与此牌相同的牌。若该角色为目标角色，你弃置其装备区内的一张牌。",
 		"wuxie_2":"当你造成伤害后，你可令受到伤害的角色回复1点体力。",
 		"feiyan":"准备阶段，你可以视为使用一张【火攻】，若此牌造成伤害，你摸三张牌，且本回合内你的所有主要阶段都变为出牌阶段。",
@@ -310,6 +313,157 @@ func _test_expanded_character_metadata() -> bool:
 			return _fail("expanded_skill_description=%s" % skill_id)
 	if not GameDatabase.get_character("jingyuan").is_empty() or not GameDatabase.get_character("kafka").is_empty() or not GameDatabase.get_character("welt").is_empty():
 		return _fail("removed_placeholder_character_registered")
+	return true
+
+
+## 核对卢卡、加拉赫资料，并验证逐点伤害、半锁定技失效、临时【酒】及酩酊持续回复的权威流程。
+func _test_luka_gallagher_mechanics() -> bool:
+	# 卢卡定义；贝洛伯格男性、4点体力与双技能顺序必须保持稳定。
+	var luka: Dictionary = GameDatabase.get_character("luka")
+	# 加拉赫定义；匹诺康尼男性、4点体力与双技能顺序必须保持稳定。
+	var jialahe: Dictionary = GameDatabase.get_character("jialahe")
+	if str(luka.get("display_name", "")) != "卢卡" or str(luka.get("gender", "")) != "male" or str(luka.get("faction", "")) != "beiluoboge" or int(luka.get("max_hp", 0)) != 4 or (luka.get("skills", []) as Array) != ["baizhe", "zhidong"]:
+		return _fail("luka_metadata=%s" % luka)
+	if str(jialahe.get("display_name", "")) != "加拉赫" or str(jialahe.get("gender", "")) != "male" or str(jialahe.get("faction", "")) != "pinuokangni" or int(jialahe.get("max_hp", 0)) != 4 or (jialahe.get("skills", []) as Array) != ["qinniang", "mingding"]:
+		return _fail("jialahe_metadata=%s" % jialahe)
+	# 新技能原文；半锁定分段和玩家可见标点均由精确正文共同约束。
+	var expected_descriptions: Dictionary = {
+		"baizhe":"你可以消耗2枚“斗志”标记并视为使用一张【决斗】。锁定技，当你受到或造成1点伤害后，你获得一枚“斗志”标记，每回合限3次。",
+		"zhidong":"你可以消耗1枚“斗志”标记并视为使用或打出一张【杀】。锁定技，当你因一张目标数为1的牌造成伤害时，你令此伤害+X。（X为响应此牌的牌数）",
+		"qinniang":"出牌阶段限一次，你可以展示并交给一名角色一张黑色牌，此牌视为【酒】直到其下个回合结束。",
+		"mingding":"限定技，出牌阶段，你可以将武将牌翻面并选择一名其他角色，然后视为对其使用一张【杀】；当一名角色对目标角色造成1点伤害时，造成伤害的角色回复1点体力，直到你的下个回合开始。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前技能ID；目录缺失或正文被自动润色都会触发失败。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("luka_gallagher_skill_description=%s" % skill_id)
+	# 百折实例；显式half_locked保证非锁定前段和锁定后段可分别判定。
+	var baizhe_metadata_skill: SkillDefinition = GameDatabase.create_skill("baizhe")
+	# 制动实例；与百折共享相同的半锁定分段规则。
+	var zhidong_metadata_skill: SkillDefinition = GameDatabase.create_skill("zhidong")
+	if baizhe_metadata_skill == null or zhidong_metadata_skill == null or not baizhe_metadata_skill.half_locked or not zhidong_metadata_skill.half_locked:
+		return _fail("half_locked_metadata")
+
+	_reset_state(2)
+	# 百折持有者；提高体力上限以避免多次专项伤害进入濒死流程。
+	var baizhe_owner: PlayerState = _controller.state.get_player(0)
+	# 百折对手；同样保持足够体力供主动【决斗】和逐点伤害连续结算。
+	var baizhe_target: PlayerState = _controller.state.get_player(1)
+	baizhe_owner.max_hp = 10
+	baizhe_owner.hp = 10
+	baizhe_target.max_hp = 10
+	baizhe_target.hp = 10
+	# 正式百折实例；通过真实damagePointAfter订阅验证每点触发与每回合3次上限。
+	var baizhe: SkillDefinition = _install_single_skill(0, "baizhe")
+	if baizhe == null:
+		return _fail("baizhe_missing")
+	_controller.damage(0, 1, 2, "normal", "test")
+	_controller.damage(1, 0, 2, "normal", "test")
+	if int(_controller.get_player_mark(0, "douzhi").get("count", 0)) != 3:
+		return _fail("baizhe_damage_point_limit=%s" % _controller.get_player_mark(0, "douzhi"))
+	# 百折主动可用性；3枚资源时必须允许按标准出牌阶段入口选择【决斗】目标。
+	if not _controller.can_activate_skill(0, "baizhe", {"active_entry":"phaseUse", "target_ids":[1]}):
+		return _fail("baizhe_active_unavailable")
+	# 非锁定技失效来源；只关闭百折主动前段，锁定获得标记后段仍应在新回合生效。
+	var invalidation_changed: bool = _controller.set_non_locked_skills_disabled(0, true, "test:disable", 1, "专项测试")
+	if not invalidation_changed or _controller.can_activate_skill(0, "baizhe", {"active_entry":"phaseUse", "target_ids":[1]}):
+		return _fail("baizhe_non_locked_invalidation")
+	_controller.state.turn_number = 2
+	_controller.damage(0, 1, 1, "normal", "test")
+	if int(_controller.get_player_mark(0, "douzhi").get("count", 0)) != 4:
+		return _fail("baizhe_locked_segment_disabled=%s" % _controller.get_player_mark(0, "douzhi"))
+
+	_reset_state(2)
+	# 制动持有者；锁定增伤必须在非锁定前段失效时继续工作。
+	var zhidong_owner: PlayerState = _controller.state.get_player(0)
+	# 制动伤害目标；10点体力便于直接断言1+2点最终伤害。
+	var zhidong_target: PlayerState = _controller.state.get_player(1)
+	zhidong_owner.max_hp = 10
+	zhidong_owner.hp = 10
+	zhidong_target.max_hp = 10
+	zhidong_target.hp = 10
+	# 正式制动实例；使用damageBegin3修改最终伤害。
+	var zhidong: SkillDefinition = _install_single_skill(0, "zhidong")
+	if zhidong == null:
+		return _fail("zhidong_missing")
+	_controller.change_player_mark_count(0, "douzhi", 1, {"icon":"斗", "name":"斗志", "description":"专项测试资源", "count":1})
+	_controller.set_non_locked_skills_disabled(0, true, "test:disable", 1, "专项测试")
+	if _controller.can_activate_skill(0, "zhidong", {"active_entry":"phaseUse", "target_ids":[1]}):
+		return _fail("zhidong_non_locked_invalidation")
+	# 来源牌上下文；两张牌直接响应原牌，锁定后段应令1点伤害增加为3点。
+	var response_parent_uid: int = 990001
+	_controller._card_use_contexts[response_parent_uid] = {"target_ids":[1], "direct_response_count":2}
+	_controller.damage(0, 1, 1, "normal", "sha", false, false, {"parent_card_uid":response_parent_uid, "damage_card_target_count":1})
+	if zhidong_target.hp != 7:
+		return _fail("zhidong_direct_response_bonus hp=%d" % zhidong_target.hp)
+	# 多目标来源牌上下文；即使累计2张直接响应，目标数不为1时也不能获得制动增伤。
+	var multi_response_parent_uid: int = 990002
+	_controller._card_use_contexts[multi_response_parent_uid] = {"target_ids":[1, 2], "direct_response_count":2}
+	zhidong_target.hp = 10
+	_controller.damage(0, 1, 1, "normal", "sha", false, false, {"parent_card_uid":multi_response_parent_uid, "damage_card_target_count":2})
+	if zhidong_target.hp != 9:
+		return _fail("zhidong_multi_target_must_not_gain_bonus hp=%d" % zhidong_target.hp)
+
+	_reset_state(2)
+	# 正式亲酿实例；验证黑色手牌交付和“下个回合结束”到期边界。
+	var qinniang: SkillDefinition = _install_single_skill(0, "qinniang")
+	# 亲酿材料；梅花【杀】是黑色普通手牌，交付后临时定义应改为【酒】。
+	var black_gift: CardInstance = _add_hand_card(0, "sha", "club", 7)
+	if qinniang == null or not _controller.activate_skill(0, "qinniang", {"active_entry":"phaseUse", "card_uid":black_gift.uid, "target_ids":[1]}):
+		return _fail("qinniang_activation")
+	if _controller.state.get_player(1).find_hand_card(black_gift.uid) == null or black_gift.definition_id != "jiu" or black_gift.hand_view_as_original_definition_id != "sha":
+		return _fail("qinniang_view_as=%s" % black_gift.to_dict())
+	_controller._arm_hand_view_as_expiries_for_turn(1)
+	_controller._expire_hand_view_as_effects_for_turn(1)
+	if black_gift.definition_id != "sha" or black_gift.has_hand_view_as():
+		return _fail("qinniang_expire=%s" % black_gift.to_dict())
+
+	_reset_state(3)
+	# 酩酊持有者；先损失1点体力，首张虚拟【杀】命中后应立即按点回复。
+	var mingding_owner: PlayerState = _controller.state.get_player(0)
+	# 酩酊目标；承受首次【杀】与后续2点伤害仍不会进入濒死。
+	var mingding_target: PlayerState = _controller.state.get_player(1)
+	# 后续伤害来源；损失2点体力后通过逐点回复恢复至满体力。
+	var allied_damage_source: PlayerState = _controller.state.get_player(2)
+	mingding_owner.hp = 3
+	allied_damage_source.hp = 2
+	# 正式酩酊实例；限定技主动流程负责翻面、目标文本与无材料【杀】。
+	var mingding: SkillDefinition = _install_single_skill(0, "mingding")
+	if mingding == null or not _controller.activate_skill(0, "mingding", {"active_entry":"phaseUse", "target_ids":[1]}):
+		return _fail("mingding_activation")
+	# 目标无【闪】时的明确放弃响应；完成标准【杀】等待后才检查本次伤害带来的逐点回复。
+	if _controller.has_pending_card_choice() and not _submit_pending_choice(1, [], [], false):
+		return false
+	if not mingding_owner.face_down or mingding_owner.hp != 4 or mingding_target.character_corner_text != "酩酊":
+		return _fail("mingding_initial face_down=%s hp=%d text=%s" % [mingding_owner.face_down, mingding_owner.hp, mingding_target.character_corner_text])
+	_controller.damage(2, 1, 2, "normal", "test")
+	if allied_damage_source.hp != 4:
+		return _fail("mingding_damage_point_recover=%d" % allied_damage_source.hp)
+	_controller._emit_rule_timing("phaseBefore", 0, 0, -1, {})
+	if not mingding_target.character_corner_text.is_empty():
+		return _fail("mingding_expire=%s" % mingding_target.character_corner_text)
+
+	# 五张新机缘；品质、正文和授予技能映射均必须使用稳定目录数据。
+	var expected_opportunities: Dictionary = {
+		"blue_skill_qinniang":{"quality":"blue", "description":"获得技能“亲酿”", "skill_id":"qinniang"},
+		"purple_skill_baizhe":{"quality":"purple", "description":"获得技能“百折”", "skill_id":"baizhe"},
+		"purple_skill_mingding":{"quality":"purple", "description":"获得技能“酩酊”", "skill_id":"mingding"},
+		"purple_turn_over_target":{"quality":"purple", "description":"将一名角色的武将牌翻面", "effect":"turn_over_target"},
+		"orange_turn_over_all_others":{"quality":"orange", "description":"将所有其他角色的武将牌翻面", "effect":"turn_over_all_others"},
+	}
+	for opportunity_id_variant: Variant in expected_opportunities.keys():
+		# 当前机缘定义与预期字段；仅校验设计明确要求的品质、正文和稳定效果映射。
+		var opportunity_id: String = str(opportunity_id_variant)
+		# 当前预期字段；授予技能卡和翻面卡拥有不同字段集合。
+		var expected_opportunity: Dictionary = expected_opportunities[opportunity_id] as Dictionary
+		# 当前实际目录数据；空字典同样会在首个字段比较时失败。
+		var opportunity: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		for field_variant: Variant in expected_opportunity.keys():
+			# 当前字段名；全部比较字符串，品质、正文、技能ID和效果ID均为稳定文本。
+			var field_name: String = str(field_variant)
+			if str(opportunity.get(field_name, "")) != str(expected_opportunity[field_name]):
+				return _fail("luka_gallagher_opportunity=%s/%s/%s" % [opportunity_id, field_name, opportunity])
 	return true
 
 

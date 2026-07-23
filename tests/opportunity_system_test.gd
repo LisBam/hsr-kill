@@ -42,6 +42,8 @@ func _ready() -> void:
 		return
 	if not await _test_new_effect_resolution_flow():
 		return
+	if not await _test_turn_over_opportunity_resolution_flow():
+		return
 	if not _test_new_opportunity_mechanisms():
 		return
 	if not _test_seat_swap_changes_next_player():
@@ -93,10 +95,10 @@ func _test_catalog_and_weights() -> bool:
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
 	# 全部机缘卡目录；当前共69张，其中3张灰色卡只属于过关斩将关卡与详情历史。
-	# 补充：目录已扩展为95张；保留原注释用于说明灰色机缘的关卡归属，实际数量以本测试断言为准。
-	# 补充：新增二十四张技能、阶段与刷新机缘后，当前目录共95张，其中5张灰色卡不参与随机抽取。
+	# 补充：目录已扩展为100张；保留原注释用于说明灰色机缘的关卡归属，实际数量以本测试断言为准。
+	# 补充：新增角色技能与翻面机缘后，当前目录共100张，其中5张灰色卡不参与随机抽取。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 95 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 100 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
 	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
@@ -114,8 +116,8 @@ func _test_catalog_and_weights() -> bool:
 	if gray_cards.size() != 5 or OpportunityCatalog.QUALITY_ORDER.has("gray") or str(gray_initial_hand_two.get("description", "")) != "初始手牌数+2" or int(gray_initial_hand_two.get("count", 0)) != 2 or str(gray_revive_one.get("description", "")) != "复活次数+1" or str(gray_revive_one.get("effect", "")) != "revive_count" or int(gray_revive_one.get("count", 0)) != 1:
 		return _fail("gray_catalog=%s quality_order=%s" % [gray_cards, OpportunityCatalog.QUALITY_ORDER])
 	# 紫色与橙色目录；摸牌阶段加成调整品质后，总目录保持69张且旧紫色稳定ID不再登记。
-	# 补充：目录现为95张；本段仍用于校验既有紫色、橙色稳定ID及摸牌阶段加成的兼容性。
-	# 补充：新增二十四张机缘后，紫色与橙色目录分别扩展为20张与15张。
+	# 补充：目录现为100张；本段仍用于校验既有紫色、橙色稳定ID及摸牌阶段加成的兼容性。
+	# 补充：新增角色技能与翻面机缘后，蓝色、紫色与橙色目录分别扩展为24张、23张与16张。
 	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
 	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
 	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")
@@ -125,7 +127,7 @@ func _test_catalog_and_weights() -> bool:
 	var red_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("red")
 	# 橙色摸牌阶段机缘；正文与固定数值保持不变，只调整品质和稳定ID。
 	var orange_draw_phase_card: Dictionary = OpportunityCatalog.get_card("orange_draw_phase_one")
-	if green_cards.size() != 18 or blue_cards.size() != 23 or purple_cards.size() != 20 or orange_cards.size() != 15 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
+	if green_cards.size() != 18 or blue_cards.size() != 24 or purple_cards.size() != 23 or orange_cards.size() != 16 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
 		return _fail("catalog_quality_counts green=%d blue=%d purple=%d orange=%d red=%d card=%s" % [green_cards.size(), blue_cards.size(), purple_cards.size(), orange_cards.size(), red_cards.size(), orange_draw_phase_card])
 	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
 	_controller.opportunity_system.green_weight = 0
@@ -192,6 +194,11 @@ func _test_catalog_and_weights() -> bool:
 		"blue_skill_jianshi":"获得技能“剑势”",
 		"blue_skill_shanqing":"获得每回合能发动三次的技能“山倾”",
 		"purple_skill_xingqi":"获得技能“星祈”",
+		"blue_skill_qinniang":"获得技能“亲酿”",
+		"purple_skill_baizhe":"获得技能“百折”",
+		"purple_skill_mingding":"获得技能“酩酊”",
+		"purple_turn_over_target":"将一名角色的武将牌翻面",
+		"orange_turn_over_all_others":"将所有其他角色的武将牌翻面",
 		"purple_skip_judgment_phase":"永远跳过你的判定阶段",
 		"orange_skip_discard_phase":"永远跳过你的弃牌阶段",
 		"red_refresh_opportunities":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。",
@@ -203,7 +210,7 @@ func _test_catalog_and_weights() -> bool:
 		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
 			return _fail("new_description_%s" % card_id)
 	# 新增技能机缘映射；技能稳定ID与每回合三次限制必须由目录直接声明，不能由中文名或文件名猜测。
-	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi"}
+	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi", "blue_skill_qinniang":"qinniang", "purple_skill_baizhe":"baizhe", "purple_skill_mingding":"mingding"}
 	for skill_card_id_variant: Variant in expected_skill_ids.keys():
 		# 当前技能机缘定义；所有普通技能卡必须使用统一grant_skill效果，供过关斩将与局内获得接口复用。
 		var skill_card_id: String = str(skill_card_id_variant)
@@ -459,6 +466,20 @@ func _test_private_choice_and_counterclockwise_order() -> bool:
 	if _controller.state.get_player(3).acquired_opportunity_ids.size() != 1:
 		return _fail("out_of_game_opportunity_history=%s" % [_controller.state.get_player(3).acquired_opportunity_ids])
 	_controller.opportunity_system.shutdown()
+	# 随机候选测试清理；目录扩展会改变固定种子抽到的卡，后续固定效果用例不能继承随机伤害加成或技能。
+	for cleanup_player: PlayerState in _controller.state.players:
+		# 当前玩家局内获得技能ID副本；移除时会修改原字典，因此必须先复制键集合。
+		var cleanup_skill_ids: Array = cleanup_player.acquired_skills.keys().duplicate()
+		for cleanup_skill_id_variant: Variant in cleanup_skill_ids:
+			# 当前待清理技能ID；只移除机缘来源，不影响测试状态可能预装的固有技能。
+			var cleanup_skill_id: String = str(cleanup_skill_id_variant)
+			# 当前技能获得记录；source字段用于区分机缘与其他模式来源。
+			var cleanup_skill_data: Dictionary = cleanup_player.acquired_skills.get(cleanup_skill_id, {}) as Dictionary
+			if str(cleanup_skill_data.get("source", "")) == "opportunity":
+				_controller.remove_acquired_skill(cleanup_player.player_id, cleanup_skill_id)
+		cleanup_player.acquired_opportunity_ids.clear()
+		cleanup_player.hp = cleanup_player.max_hp
+		cleanup_player.shield = 0
 	_controller.state.get_player(3).out_of_game = false
 	_controller.state.current_phase = "start"
 	# 重新启用同一局组件；shutdown用于中断随机效果，下一项测试需要新的固定候选流程。
@@ -571,6 +592,8 @@ func _test_new_effect_resolution_flow() -> bool:
 	_controller.discard_all_hand_cards(1, -1, "test_cleanup")
 	for reset_player_id: int in [1, 2, 3]:
 		_controller.state.get_player(reset_player_id).hand_limit_bonus = 0
+		# 群体锦囊基准体力；前序随机候选会随目录扩展而变化，本用例必须从4点体力独立验证固定1点伤害。
+		_controller.state.get_player(reset_player_id).hp = 4
 	_controller.state.current_phase = "start"
 	# 再以完整机缘流程验证无实体【南蛮入侵】进入群体牌结算，三名其他角色各受到1点普通伤害。
 	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
@@ -603,6 +626,88 @@ func _test_new_effect_resolution_flow() -> bool:
 			return _fail("virtual_aoe_damage_%d=%d" % [damaged_player_id, _controller.state.get_player(damaged_player_id).hp])
 		_controller.state.get_player(damaged_player_id).hp = 4
 		_controller.state.get_player(damaged_player_id).hand_limit_bonus = 0
+	_controller.state.current_phase = "start"
+	return true
+
+
+## 通过完整机缘选择流程校验单体翻面请求与“所有其他角色”批量翻面都能准确结算并结束队列。
+func _test_turn_over_opportunity_resolution_flow() -> bool:
+	# 翻面测试的统一初始状态；所有角色先恢复正面，避免前序机制改变本次预期。
+	for player: PlayerState in _controller.state.players:
+		player.face_down = false
+		player.hand_limit_bonus = 0
+	# 单体翻面机缘触发结果；当前角色0作为拥有者，应先收到一名角色的目标请求。
+	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
+		return _fail("turn_over_target_force_trigger")
+	# 单体流程指定卡；其余角色选择无目标的手牌上限机缘，让效果队列能够自然完成。
+	var target_selected_card_ids: Dictionary = {0:"purple_turn_over_target", 3:"green_hand_limit_one", 2:"green_hand_limit_one", 1:"green_hand_limit_one"}
+	# 单体流程候选映射；每名参与者仍保留正式三选一结构。
+	var target_options_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _controller.state.opportunity_state.get("participant_ids", []) as Array:
+		# 当前参与者稳定ID；用于读取本轮指定的第一张候选。
+		var participant_id: int = int(participant_id_variant)
+		target_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(target_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
+	_controller.state.opportunity_state["options_by_player"] = target_options_by_player
+	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
+		# 当前选择者稳定ID；按机缘系统公布的逆时针顺序提交第一张候选。
+		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		if not _controller.opportunity_system.submit_choice(chooser_id, str(target_selected_card_ids.get(chooser_id, ""))):
+			return _fail("turn_over_target_submit_%d" % chooser_id)
+	for _wait_target_request_frame: int in range(12):
+		if not _controller.state.current_choice_request.is_empty():
+			break
+		await get_tree().process_frame
+	# 单体翻面目标请求；请求必须属于机缘拥有者且只允许选择一名合法角色。
+	var target_choice_request: Dictionary = _controller.state.current_choice_request
+	if str(target_choice_request.get("choice_type", "")) != "target" or int(target_choice_request.get("actor_id", -1)) != 0 or int(target_choice_request.get("min_count", -1)) != 1 or int(target_choice_request.get("max_count", -1)) != 1:
+		return _fail("turn_over_target_request=%s" % [target_choice_request])
+	# 单体翻面确认动作；选择角色1并通过统一目标选择入口提交。
+	var target_action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	target_action.payload = {"request_id":int(target_choice_request.get("request_id", -1)), "selected_card_uids":[], "selected_target_ids":[1], "confirmed":true}
+	if not _controller.submit_action(target_action):
+		return _fail("turn_over_target_choice_rejected")
+	for _wait_target_finish_frame: int in range(20):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		await get_tree().process_frame
+	if not _controller.state.opportunity_state.is_empty() or not _controller.state.get_player(1).face_down or _controller.state.get_player(0).face_down:
+		return _fail("turn_over_target_result")
+	# 群体翻面初始状态；重新恢复全员正面，确保断言检查的是本张橙色机缘的单次效果。
+	for player: PlayerState in _controller.state.players:
+		player.face_down = false
+		player.hand_limit_bonus = 0
+	_controller.state.current_phase = "start"
+	# 群体翻面机缘触发结果；该效果不创建目标请求，应按当前座次逐名处理所有其他角色。
+	if not _controller.opportunity_system.force_trigger(0, "manual", {}):
+		return _fail("turn_over_all_force_trigger")
+	# 群体流程指定卡；其余三名角色继续使用无目标安全机缘。
+	var all_selected_card_ids: Dictionary = {0:"orange_turn_over_all_others", 3:"green_hand_limit_one", 2:"green_hand_limit_one", 1:"green_hand_limit_one"}
+	# 群体流程候选映射；使用完整静态定义防止绕过目录数据。
+	var all_options_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _controller.state.opportunity_state.get("participant_ids", []) as Array:
+		# 当前参与者稳定ID；用于装入本轮指定机缘定义。
+		var participant_id: int = int(participant_id_variant)
+		all_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(all_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
+	_controller.state.opportunity_state["options_by_player"] = all_options_by_player
+	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
+		# 当前选择者稳定ID；提交后由解析器自动进入无目标翻面队列。
+		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		if not _controller.opportunity_system.submit_choice(chooser_id, str(all_selected_card_ids.get(chooser_id, ""))):
+			return _fail("turn_over_all_submit_%d" % chooser_id)
+	for _wait_all_finish_frame: int in range(24):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		await get_tree().process_frame
+	if not _controller.state.opportunity_state.is_empty() or _controller.state.get_player(0).face_down:
+		return _fail("turn_over_all_owner_result")
+	for other_player_id: int in [1, 2, 3]:
+		if not _controller.state.get_player(other_player_id).face_down:
+			return _fail("turn_over_all_target_%d" % other_player_id)
+	# 后续测试清理；翻面、手牌上限和获得历史都恢复到独立基线。
+	for player: PlayerState in _controller.state.players:
+		player.face_down = false
+		player.hand_limit_bonus = 0
+		player.acquired_opportunity_ids.clear()
 	_controller.state.current_phase = "start"
 	return true
 

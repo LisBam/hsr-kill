@@ -364,7 +364,9 @@ func _prepare_action_scoring_context(authoritative_snapshot: Dictionary) -> void
 		# 当前技能静态实例；占位技能保持基类空实现，不影响评分。
 		var skill: SkillDefinition = GameDatabase.create_skill(resolved_skill_id)
 		# 领袖技只在使用者身份确为领袖时参与牌效联动估值；非领袖不会借用武将静态列表中的领袖能力。
-		if skill != null and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
+		# 非锁定技失效时只保留完整锁定技的通用牌效修正；半锁定技后段通过时机独立结算，不把非锁定前段误加入动作评分。
+		var skill_effect_available: bool = skill != null and (not bool(owner.get("non_locked_skills_disabled", false)) or skill.lock)
+		if skill_effect_available and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
 			skill.bind(null, player_id)
 			_decision_card_modifier_skills.append(skill)
 			_decision_skill_instances[resolved_skill_id] = skill
