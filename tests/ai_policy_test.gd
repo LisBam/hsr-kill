@@ -1281,9 +1281,12 @@ func _test_zhuijian_teammate_attribute_priority() -> bool:
 	# 被友方追歼标记的反贼目标；其公开标记来源为同阵营领袖0。
 	var marked_target: Dictionary = players[1] as Dictionary
 	marked_target["hp"] = 3
-	marked_target["public_marks"] = {"zhuijian:0":{"count":1, "source_player_id":0}}
+	# 补充：追歼仅写入武将牌提示来源条目；公开标记保持空，AI须从该提示识别友方来源0。
+	marked_target["character_corner_text_entries"] = {"zhuijian:0":{"text":"追歼", "order":50}}
+	marked_target["public_marks"] = {}
 	# 未受友方追歼的等价反贼目标；保留敌方来源标记，用于断言不会错误形成协同收益。
-	var comparison_target: Dictionary = {"player_id":3, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard", "public_marks":{"zhuijian:1":{"count":1, "source_player_id":1}}}
+	# 补充：对照目标保留伪造的友方旧公开标记，但提示来源为敌方1；它不能获得协同评分，验证AI未回退读取public_marks。
+	var comparison_target: Dictionary = {"player_id":3, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard", "character_corner_text_entries":{"zhuijian:1":{"text":"追歼", "order":50}}, "public_marks":{"zhuijian:0":{"count":1, "source_player_id":0}}}
 	players.append(comparison_target)
 	# 指向友方标记目标的火杀动作；属性伤害应得到固定集火优先级。
 	var marked_action: Dictionary = {"action_type":"use_card", "actor_id":2, "card_uid":420, "card_definition_id":"sha_fire", "target_ids":[1], "payload":{}}
@@ -1295,7 +1298,8 @@ func _test_zhuijian_teammate_attribute_priority() -> bool:
 	var marked_score: float = evaluator.score_action(snapshot, marked_action, 2)
 	var comparison_score: float = evaluator.score_action(snapshot, comparison_action, 2)
 	# 补充：追歼不再创建公开标记，通用AI不能从伪造或旧快照的标记得到集火加分，两个等价目标应保持同分。
-	if not is_equal_approx(marked_score, comparison_score):
+	# 补充：AI改读提示来源条目后，友方来源0的目标必须比敌方来源1的对照目标至少高出固定4分。
+	if marked_score < comparison_score + NonameAIEvaluator.ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS - 0.01:
 		return _fail("zhuijian_teammate_attribute_priority marked=%.3f comparison=%.3f" % [marked_score, comparison_score])
 	return true
 
