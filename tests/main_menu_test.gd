@@ -222,6 +222,34 @@ func _run() -> void:
 	if conquest_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or conquest_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
 		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(conquest_mode_rect), str(mode_scroll_rect)])
 		return
+	# 滚轮交互；向下滚动必须改变内容位置，并让纵向滑条同步到同一值。
+	main_menu.call("_set_mode_scroll_vertical", 0.0)
+	var wheel_position: Vector2 = _screen_rect(mode_scroll).get_center()
+	var wheel_down_event: InputEventMouseButton = InputEventMouseButton.new()
+	wheel_down_event.position = wheel_position
+	wheel_down_event.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	wheel_down_event.pressed = true
+	wheel_down_event.factor = 1.0
+	get_viewport().push_input(wheel_down_event, true)
+	await get_tree().process_frame
+	var wheel_scroll_value: int = mode_scroll.scroll_vertical
+	if wheel_scroll_value <= 0 or not is_equal_approx(mode_scroll_bar.value, wheel_scroll_value):
+		_fail("mode_scroll_wheel_down scroll=%d bar=%f" % [wheel_scroll_value, mode_scroll_bar.value])
+		return
+	# 滚轮反向与拖条同步；向上滚动回到顶部时内容和滑条都必须归零。
+	var wheel_up_event: InputEventMouseButton = InputEventMouseButton.new()
+	wheel_up_event.position = wheel_position
+	wheel_up_event.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel_up_event.pressed = true
+	wheel_up_event.factor = 1.0
+	get_viewport().push_input(wheel_up_event, true)
+	await get_tree().process_frame
+	if mode_scroll.scroll_vertical != 0 or not is_zero_approx(mode_scroll_bar.value):
+		_fail("mode_scroll_wheel_up scroll=%d bar=%f" % [mode_scroll.scroll_vertical, mode_scroll_bar.value])
+		return
+	# 恢复底部视口；后续原有断言继续从第六张模式卡可见的位置验证真实点击。
+	main_menu.call("_set_mode_scroll_vertical", mode_scroll_bar.max_value - mode_scroll_bar.page)
+	await get_tree().process_frame
 	# 通过滚动窗口内的真实鼠标点击选择第六项；模式切换不能依赖列表外部快捷入口。
 	await _click_control(conquest_mode_button)
 	await get_tree().process_frame

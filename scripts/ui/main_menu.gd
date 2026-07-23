@@ -30,6 +30,9 @@ signal start_game_requested(player_count: int)
 ## 左侧模式列表纵向滚动条宽度；默认12像素兼顾鼠标拖动与紧凑侧栏，运行时只影响界面浏览区域。
 @export_range(8.0, 24.0, 1.0) var mode_scroll_bar_width: float = 12.0
 
+## 左侧模式列表每次滚轮的基础移动距离；默认72像素接近一张模式卡高度，运行时只影响浏览手感。
+@export_range(16.0, 240.0, 1.0) var mode_scroll_wheel_step: float = 72.0
+
 ## 身份模式正常待机时显示的状态文字；集中定义可避免按钮区与错误提示使用不同默认文案。
 ## 待机状态保留空文本，以便底部操作栏只在开局反馈或错误发生时显示状态信息。
 const MODE_READY_STATUS_TEXT: String = ""
@@ -255,6 +258,9 @@ var _background_focus_modes: Dictionary = {}
 ## 主菜单覆盖前的局内控件焦点模式；主菜单可见期间阻止键盘与手柄导航进入隐藏牌桌，进入对局后原样恢复。
 var _covered_interface_focus_modes: Dictionary = {}
 
+## 模式列表滚动同步保护；同步 ScrollContainer 与 VScrollBar 时暂时阻断互相触发的 value_changed 回调。
+var _mode_scroll_syncing: bool = false
+
 
 ## 初始化主菜单交互与全局设置同步；主菜单进入场景后始终覆盖尚未开局的牌桌。
 func _ready() -> void:
@@ -274,6 +280,8 @@ func _ready() -> void:
 	_online_settings_panel.close_requested.connect(_close_online_settings)
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
+	# 模式列表滚轮由主菜单统一接收，避免模式卡片按钮先消费滚轮后父级滚动容器无法更新。
+	_mode_scroll.get_v_scroll_bar().value_changed.connect(_on_mode_scroll_bar_value_changed)
 	_start_game_button.pressed.connect(_request_start_game)
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
@@ -364,6 +372,28 @@ func _on_visibility_changed() -> void:
 		_close_online_settings(false)
 		_online_lobby_panel.visible = false
 		_restore_covered_interface_focus()
+
+
+## 统一处理主菜单模式列表的鼠标滚轮；事件只在滚轮指针位于模式滚动窗口且其他模态未打开时消费。
+func _input(event: InputEvent) -> void:
+	if not visible or _mode_scroll == null or not is_instance_valid(_mode_scroll):
+		return
+	if _settings_panel.visible or _lan_lobby_panel.visible or _online_settings_panel.visible or _online_lobby_panel.visible:
+		return
+	if not event is InputEventMouseButton:
+		return
+	# 当前鼠标滚轮事件；只有按下阶段的上下滚轮才改变模式列表位置。
+	var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+	if not mouse_event.pressed or mouse_event.button_index not in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		return
+	if not _mode_scroll.get_global_rect().has_point(mouse_event.position):
+		return
+	# 滚轮方向；向下滚动增加 ScrollContainer 的纵向值，向上滚动减少该值。
+	var direction: float = 1.0 if mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1.0
+	# 设备滚轮倍率；缺失或零倍率按一格处理，避免合成事件无法滚动。
+	var wheel_factor: float = maxf(absf(mouse_event.factor), 1.0)
+	_set_mode_scroll_vertical(_mode_scroll.scroll_vertical + direction * mode_scroll_wheel_step * wheel_factor)
+	get_viewport().set_input_as_handled()
 
 
 ## 将牌桌提供的下一局人数写入主菜单设置；人数保持限制在标准身份局的有效范围。
@@ -1158,6 +1188,42 @@ func _ensure_mode_button_visible(button: Control) -> void:
 	if _mode_scroll == null or button == null or not is_instance_valid(button):
 		return
 	_mode_scroll.ensure_control_visible(button)
+	_sync_mode_scroll_bar_value()
+
+
+## 按指定像素值设置模式列表滚动位置，并立即把主题化纵向滑条更新到同一数值。
+func _set_mode_scroll_vertical(requested_value: float) -> void:
+	if _mode_scroll == null or not is_instance_valid(_mode_scroll):
+		return
+	# 当前模式列表滑条；其 max_value 包含内容总高，实际可滚动终点还要扣除可视 page 高度。
+	var scroll_bar: VScrollBar = _mode_scroll.get_v_scroll_bar()
+	# 模式列表可滚动最大值；内容未超出窗口时固定为0，避免滚轮写入负值。
+	var maximum_scroll_value: float = maxf(scroll_bar.max_value - scroll_bar.page, 0.0) if scroll_bar != null else 0.0
+	# 规范化滚动目标；整数化与 ScrollContainer 的 scroll_vertical 类型保持一致。
+	var normalized_value: int = roundi(clampf(requested_value, 0.0, maximum_scroll_value))
+	_mode_scroll_syncing = true
+	_mode_scroll.scroll_vertical = normalized_value
+	if scroll_bar != null:
+		scroll_bar.value = normalized_value
+	_mode_scroll_syncing = false
+
+
+## 响应纵向滑条拖动；反向写回 ScrollContainer，保证拖条、滚轮和内容位移共享唯一滚动状态。
+func _on_mode_scroll_bar_value_changed(value: float) -> void:
+	if _mode_scroll_syncing or _mode_scroll == null or not is_instance_valid(_mode_scroll):
+		return
+	_mode_scroll_syncing = true
+	_mode_scroll.scroll_vertical = roundi(value)
+	_mode_scroll_syncing = false
+
+
+## 在布局、程序化定位或主题刷新后对账滑条值；Godot 可能在内容尺寸更新后一帧才重新计算 max/page。
+func _sync_mode_scroll_bar_value() -> void:
+	if _mode_scroll == null or not is_instance_valid(_mode_scroll):
+		return
+	# 当前 ScrollContainer 值；通过统一入口再次钳制并写入 VScrollBar，避免内容尺寸变化造成滑块脱节。
+	var current_scroll_value: float = _mode_scroll.scroll_vertical
+	_set_mode_scroll_vertical(current_scroll_value)
 
 
 ## 为主菜单设置滑条应用主题轨道与已选区域；数值范围和步长仍由 GameSettings 决定。

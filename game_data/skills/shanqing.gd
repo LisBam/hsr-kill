@@ -89,7 +89,18 @@ func activate(context: Dictionary = {}) -> String:
 	var candidates: Array[Dictionary] = _get_material_candidates()
 	if candidates.size() < MATERIAL_COUNT:
 		return "当前没有足够的两张牌发动【山倾】。"
-	request_card_selection("山倾", "请选择两张牌作为【山倾】的【杀】材料", candidates, MATERIAL_COUNT, MATERIAL_COUNT, true, {"kind":"shanqing_materials"})
+	# 复合材料选择数据；只把至少存在一个合法目标的两牌组合放入权威合法集合。
+	var selection_data: Dictionary = _build_material_selection_data(candidates)
+	# 当前目标并集；材料尚未完成前先展示所有可行组合的目标，选牌完成后仍由控制器与技能入口复核具体组合。
+	var legal_target_ids: Array[int] = selection_data.get("target_ids", []) as Array[int]
+	if legal_target_ids.is_empty():
+		return "当前没有可用的两张牌或【杀】目标。"
+	# 同一 card_target 请求同时承载两张材料与一名目标，避免先关掉选牌窗口再打开独立目标窗口。
+	request_card_target_selection("山倾", "请选择两张牌和一名【杀】目标", candidates, legal_target_ids, MATERIAL_COUNT, MATERIAL_COUNT, 1, 1, true, {
+		"kind":"shanqing_materials",
+		"valid_card_combinations":selection_data.get("valid_card_combinations", []),
+		"target_combinations_by_card_combination":selection_data.get("target_combinations_by_card_combination", {}),
+	})
 	return ""
 
 
@@ -100,8 +111,9 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 当前选择步骤；三个步骤分别保存两张材料、单一目标或目标区域牌 UID。
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == "shanqing_materials":
-		if response.confirmed and response.card_ids.size() == MATERIAL_COUNT:
-			_request_target_for_materials(response.card_ids)
+		# 复合请求一次返回两张材料与一名目标；取消或数量不完整时不消耗额度，也不创建第二个目标窗口。
+		if response.confirmed and response.card_ids.size() == MATERIAL_COUNT and response.target_ids.size() == 1:
+			_execute_shanqing(_int_values(response.card_ids), _int_values(response.target_ids))
 		return true
 	if choice_kind == "shanqing_target":
 		if response.confirmed and response.target_ids.size() == 1:
@@ -241,6 +253,50 @@ func _list_legal_targets(material_uids: Array[int]) -> Array[int]:
 	# 去重花色集合；用于黑桃无距离目标枚举。
 	var suits: Array[String] = _get_unique_suits(material_cards)
 	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID, _build_rule_overrides(suits)) as Array[int]
+
+
+## 枚举山倾复合选择窗口的合法材料组合、目标并集和材料组合专属目标映射。
+## 目标映射使用规范化UID键，供界面在已选材料变化时即时收窄目标，也供控制器复核AI与网络提交。
+func _build_material_selection_data(candidates: Array[Dictionary]) -> Dictionary:
+	# 所有至少拥有一个合法目标的两牌组合；界面用它限制材料前缀，防止选到必然失败的组合。
+	var valid_card_combinations: Array = []
+	# 所有合法材料组合目标的并集；尚未选完材料时用于保持目标区可操作。
+	var target_ids: Array[int] = []
+	# 规范化材料组合键到完整目标组合数组；每个山倾目标是一名角色，因此值形如[[target_id], ...]。
+	var target_combinations_by_card_combination: Dictionary = {}
+	for first_index: int in range(candidates.size() - 1):
+		for second_index: int in range(first_index + 1, candidates.size()):
+			# 当前两张材料UID；组合顺序只用于稳定候选顺序，规则语义按无序材料集合处理。
+			var material_uids: Array[int] = [int(candidates[first_index].get("uid", -1)), int(candidates[second_index].get("uid", -1))]
+			# 当前组合的真实合法目标；黑桃无距离等花色覆写在此查询时已经生效。
+			var combination_target_ids: Array[int] = _list_legal_targets(material_uids)
+			if combination_target_ids.is_empty():
+				continue
+			valid_card_combinations.append(material_uids.duplicate())
+			# 当前组合的有序目标组合；控制器可直接生成完整 ChoiceResponse 动作并再次校验。
+			var target_combinations: Array = []
+			for target_id: int in combination_target_ids:
+				target_combinations.append([target_id])
+				if not target_ids.has(target_id):
+					target_ids.append(target_id)
+			target_combinations_by_card_combination[_make_material_combination_key(material_uids)] = target_combinations
+	return {
+		"target_ids":target_ids,
+		"valid_card_combinations":valid_card_combinations,
+		"target_combinations_by_card_combination":target_combinations_by_card_combination,
+	}
+
+
+## 将两张材料UID规范化为稳定组合键；排序只影响选择协议查找，不改变材料实体顺序记录。
+func _make_material_combination_key(material_uids: Array[int]) -> String:
+	# 排序后的UID副本；不改写玩家点击顺序或最终移动历史。
+	var normalized_uids: Array[int] = material_uids.duplicate()
+	normalized_uids.sort()
+	# 字符串键；网络序列化字典后仍能用同一格式读取。
+	var key_parts: Array[String] = []
+	for material_uid: int in normalized_uids:
+		key_parts.append(str(material_uid))
+	return ",".join(key_parts)
 
 
 ## 全局回合号变化时恢复一次发动额度；同一回合内的额外出牌阶段继续共享已使用状态。

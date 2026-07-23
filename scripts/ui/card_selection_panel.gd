@@ -265,7 +265,7 @@ func show_request(choice_request: Dictionary) -> void:
 		return
 	_confirm_button.visible = true
 	# 按区域聚合候选；字典数组保持请求原始顺序，手牌牌背仍可逐张选择。
-	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[]}
+	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[], "discard_pile":[]}
 	# 权威可选UID只取candidates；display_candidates可额外显示受保护或不满足类型条件的暗置牌。
 	var selectable_candidate_uids: Array[int] = []
 	for selectable_variant: Variant in _choice_request.get("candidates", []):
@@ -282,7 +282,7 @@ func show_request(choice_request: Dictionary) -> void:
 		if not candidates_by_zone.has(zone):
 			candidates_by_zone[zone] = []
 		(candidates_by_zone[zone] as Array).append(candidate)
-	for zone: String in ["hand", "equipment", "judgment", "processing"]:
+	for zone: String in ["hand", "equipment", "judgment", "processing", "discard_pile"]:
 		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
 	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0
 	_action_row.visible = true
@@ -569,7 +569,7 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	_zone_container.add_child(section)
 	# 区域标题；使用规则区名称而不是技术字符串。
 	var zone_label: Label = Label.new()
-	zone_label.text = {"hand":"手牌区", "equipment":"装备区", "judgment":"判定区", "processing":"展示区"}.get(zone, zone)
+	zone_label.text = {"hand":"手牌区", "equipment":"装备区", "judgment":"判定区", "processing":"展示区", "discard_pile":"弃牌堆"}.get(zone, zone)
 	zone_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
 	zone_label.add_theme_font_size_override("font_size", 16)
 	section.add_child(zone_label)
