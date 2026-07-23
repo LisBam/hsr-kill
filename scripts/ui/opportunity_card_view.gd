@@ -15,6 +15,9 @@ signal information_dismissed
 ## 正式机缘卡固定尺寸；宽高参考武将牌比例，三张并列时适配1280×720战斗视口。
 @export var card_size: Vector2 = Vector2(180.0, 240.0)
 
+## 普通机缘卡规则正文的默认字号；默认21像素沿用正式牌面规格，内容定义可按单张牌覆盖，运行时无需动态修改。
+@export_range(12, 28, 1) var default_description_font_size: int = 21
+
 ## 鼠标悬停时的缩放倍率；默认1.06与正式卡牌一致，运行时只改变机缘卡视觉反馈。
 @export_range(1.0, 1.2, 0.01) var hover_scale: float = 1.06
 
@@ -99,6 +102,9 @@ func configure(card_definition: Dictionary, interactive: bool = true) -> void:
 	_interactive = interactive and not _card_id.is_empty()
 	# 机缘原始描述；技能名称展示会在下方按原文切分，普通机缘则保持整个描述使用统一正文标签。
 	var description: String = str(card_definition.get("description", ""))
+	# 本张普通机缘正文的最终字号；未声明覆盖值时恢复默认值，保证同一牌面节点复用后不会继承上一张卡的缩小样式。
+	var description_font_size: int = int(card_definition.get("description_font_size", default_description_font_size))
+	_description_label.add_theme_font_size_override("font_size", description_font_size)
 	# 机缘授予的技能ID；没有技能字段的普通数值机缘不创建空说明框。
 	var skill_id: String = str(card_definition.get("skill_id", ""))
 	# 机缘技能定义；说明沿用技能源码唯一原文，并按当前卡牌名称模式解析完整书名号。

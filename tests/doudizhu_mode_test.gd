@@ -2,6 +2,9 @@ extends Node
 
 ## 斗地主模式与队友机制冒烟。验证身份表、开局体力、模式技能安装、队友关系与胜负判定。
 
+## 正式主场景开局、菜单展开与重开后等待的稳定帧数；默认6帧覆盖选将快照和动态候选牌刷新。
+const MENU_RESTART_SETTLE_FRAME_COUNT: int = 6
+
 ## 权威控制器；与正式场景组件结构保持一致。
 var _controller: MatchController
 
@@ -17,6 +20,9 @@ var _original_custom_assignment: bool = false
 ## 测试开始前的对局模式；结束时还原。
 var _original_match_mode: String = "identity"
 
+## 测试开始前斗地主模式独立保存的人数；菜单复现固定使用3人，结束时还原原有3/5人设置。
+var _original_doudizhu_player_count: int = 3
+
 
 ## 延迟执行，确保自动加载与全局类完成初始化。
 func _ready() -> void:
@@ -29,6 +35,7 @@ func _run() -> void:
 		_original_customize_ai = GameSettings.customize_ai_characters_enabled
 		_original_custom_assignment = GameSettings.custom_character_assignment_enabled
 		_original_match_mode = str(GameSettings.next_match_mode)
+		_original_doudizhu_player_count = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU)
 		GameSettings.set_customize_ai_characters_enabled(false)
 		if GameSettings.has_method("set_custom_character_assignment_enabled"):
 			GameSettings.set_custom_character_assignment_enabled(false)
@@ -39,6 +46,9 @@ func _run() -> void:
 		_restore_settings()
 		return
 	if not _test_randomized_landlord_assignment():
+		_restore_settings()
+		return
+	if not await _test_selection_menu_restart_random_assignment():
 		_restore_settings()
 		return
 	if not await _test_three_player_match_bootstrap():
@@ -83,6 +93,8 @@ func _restore_settings() -> void:
 	GameSettings.set_customize_ai_characters_enabled(_original_customize_ai)
 	if GameSettings.has_method("set_custom_character_assignment_enabled"):
 		GameSettings.set_custom_character_assignment_enabled(_original_custom_assignment)
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
+	GameSettings.set_next_match_player_count(_original_doudizhu_player_count)
 	GameSettings.set_next_match_mode(_original_match_mode)
 
 
@@ -331,7 +343,11 @@ func _test_randomized_landlord_assignment() -> bool:
 	_controller.game_flow_interval_seconds = 0.0
 	_controller.ai_action_delay_seconds = 0.0
 	var automatic_match_seeds: Array[int] = []
-	for restart_index: int in range(4):
+	# 连续自动局中实际可见的“本地座次+身份”组合；不能只验证种子数字变化而遗漏随机结果仍被固定的回归。
+	var automatic_local_assignments: Array[String] = []
+	# 上一局自动开局的本地可见组合；每次循环结束后更新，用于阻止相邻两局完全相同却被总体去重数量掩盖。
+	var previous_automatic_local_assignment: String = ""
+	for restart_index: int in range(8):
 		if not _controller.start_match(3, 0, IdentityRules.MODE_DOUDIZHU):
 			return _fail("automatic_restart_start=%d" % restart_index)
 		# 本局记录的实际随机种子；由控制器在自动种子生成后直接保存，不能读取已消耗随机数后的内部状态。
@@ -339,7 +355,111 @@ func _test_randomized_landlord_assignment() -> bool:
 		if automatic_match_seeds.has(automatic_seed):
 			return _fail("automatic_restart_seed_reused=%s" % str(automatic_match_seeds))
 		automatic_match_seeds.append(automatic_seed)
+		# 本局本地玩家；稳定ID由自动座次随机决定，身份来自同一局唯一随机源洗牌后的公开斗地主身份。
+		var automatic_local_player: PlayerState = _controller.state.get_player(_controller.local_human_player_id)
+		# 本地玩家最终可见组合；斗地主保留物理座次数组，因此稳定ID索引与当前座次共同纳入结果。
+		var automatic_assignment: String = "%d:%s" % [_controller.local_human_player_id, automatic_local_player.identity if automatic_local_player != null else ""]
+		if automatic_assignment == previous_automatic_local_assignment:
+			return _fail("automatic_restart_assignment_repeated_at_%d=%s" % [restart_index, automatic_assignment])
+		if not automatic_local_assignments.has(automatic_assignment):
+			automatic_local_assignments.append(automatic_assignment)
+		previous_automatic_local_assignment = automatic_assignment
+	if automatic_local_assignments.size() < 2:
+		return _fail("automatic_restart_assignment_not_varied=%s" % str(automatic_local_assignments))
 	return true
+
+
+## 按玩家实际复现路径验证斗地主选将阶段菜单重开；每次点击“按设置重新开局”后，界面标题与权威状态都必须切换到新的本地身份座次组合。
+func _test_selection_menu_restart_random_assignment() -> bool:
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
+	GameSettings.set_next_match_player_count(3)
+	# 正式主场景资源；复现必须经过主菜单、选将面板和局内菜单的真实信号连接。
+	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
+	if main_scene == null:
+		return _fail("selection_restart_main_scene_load")
+	# 正式主场景实例；测试结束后立即释放，避免与规则层控制器共享节点或输入。
+	var main_instance: Control = main_scene.instantiate() as Control
+	add_child(main_instance)
+	for _ready_frame_index: int in range(MENU_RESTART_SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	# 主菜单开始按钮；当前全局模式已设置为斗地主，点击后应直接进入三人选将阶段。
+	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
+	# 局内菜单入口；选将遮罩存在时仍必须位于其上方并接受点击。
+	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
+	# 局内按设置重新开局按钮；发出的玩家人数由斗地主模式菜单固定为3或5。
+	var restart_button: Button = main_instance.get_node("%MenuRestartButton") as Button
+	# 局内菜单内容面板；每轮重开前确认入口确实展开，避免直接调用隐藏按钮产生失真测试。
+	var menu_panel: PanelContainer = main_instance.get_node("%MenuPanel") as PanelContainer
+	# 权威控制器；每次重开后读取新GameState、本地玩家ID和物理座次数组。
+	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
+	# 选将面板；标题是玩家在复现流程中直接观察身份与座次的界面来源。
+	var selection_panel: CharacterSelectionPanel = main_instance.get_node("CharacterSelectionPanel") as CharacterSelectionPanel
+	start_game_button.pressed.emit()
+	for _start_frame_index: int in range(MENU_RESTART_SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	if match_controller.state == null or str(match_controller.state.match_mode) != IdentityRules.MODE_DOUDIZHU or str(match_controller.state.current_phase) != "character_selection":
+		main_instance.queue_free()
+		return _fail("selection_restart_initial_match")
+	# 初始本地分配；之后每次菜单重开都必须与紧邻上一局不同。
+	var previous_assignment: String = _get_local_doudizhu_assignment(match_controller)
+	if not _selection_title_matches_local_assignment(selection_panel, match_controller):
+		main_instance.queue_free()
+		return _fail("selection_restart_initial_title=%s assignment=%s" % [selection_panel.get_title_plain_text(), previous_assignment])
+	for restart_index: int in range(8):
+		menu_button.pressed.emit()
+		await get_tree().process_frame
+		if not menu_panel.visible:
+			main_instance.queue_free()
+			return _fail("selection_restart_menu_not_open_%d" % restart_index)
+		restart_button.pressed.emit()
+		for _restart_frame_index: int in range(MENU_RESTART_SETTLE_FRAME_COUNT):
+			await get_tree().process_frame
+		if match_controller.state == null or str(match_controller.state.match_mode) != IdentityRules.MODE_DOUDIZHU or str(match_controller.state.current_phase) != "character_selection":
+			main_instance.queue_free()
+			return _fail("selection_restart_state_%d" % restart_index)
+		# 当前按钮重开后的玩家可见分配；连续组合相同就是主公复现问题本身。
+		var current_assignment: String = _get_local_doudizhu_assignment(match_controller)
+		if current_assignment == previous_assignment:
+			main_instance.queue_free()
+			return _fail("selection_restart_assignment_repeated_%d=%s" % [restart_index, current_assignment])
+		if not _selection_title_matches_local_assignment(selection_panel, match_controller):
+			main_instance.queue_free()
+			return _fail("selection_restart_title_%d=%s assignment=%s" % [restart_index, selection_panel.get_title_plain_text(), current_assignment])
+		previous_assignment = current_assignment
+	main_instance.queue_free()
+	await get_tree().process_frame
+	GameSettings.set_next_match_mode(_original_match_mode)
+	return true
+
+
+## 返回本地玩家在当前物理座次数组中的“座次:身份”文本；座次从1开始，避免把稳定player_id误当成界面位置。
+func _get_local_doudizhu_assignment(match_controller: MatchController) -> String:
+	if match_controller == null or match_controller.state == null:
+		return ""
+	# 当前本地玩家状态；稳定ID只用于找到玩家对象，不直接作为座次输出。
+	var local_player: PlayerState = match_controller.state.get_player(match_controller.local_human_player_id)
+	if local_player == null:
+		return ""
+	# 当前物理座次索引；GameState.players数组顺序与选将标题中的座次一致。
+	var local_seat_index: int = match_controller.state.players.find(local_player)
+	return "%d:%s" % [local_seat_index + 1, local_player.identity]
+
+
+## 检查选将标题是否与当前权威本地分配一致；验证重开不仅改了状态，也刷新了玩家实际看到的身份和座次文字。
+func _selection_title_matches_local_assignment(selection_panel: CharacterSelectionPanel, match_controller: MatchController) -> bool:
+	if selection_panel == null or match_controller == null or match_controller.state == null:
+		return false
+	# 当前本地玩家；身份ID映射为选将标题使用的中文名称。
+	var local_player: PlayerState = match_controller.state.get_player(match_controller.local_human_player_id)
+	if local_player == null:
+		return false
+	# 当前本地物理座次；数组下标加1后与界面“N号位”保持一致。
+	var local_seat_number: int = match_controller.state.players.find(local_player) + 1
+	# 当前身份中文名；斗地主只允许地主或农民，未知值使用原ID以输出明确失败信息。
+	var local_identity_name: String = {"landlord":"地主", "peasant":"农民"}.get(local_player.identity, local_player.identity)
+	# 选将标题纯文本；不读取富文本颜色标签，避免主题变化影响内容断言。
+	var title_text: String = selection_panel.get_title_plain_text()
+	return title_text.contains("你的身份为：%s" % local_identity_name) and title_text.contains("你的座次为%d号位" % local_seat_number)
 
 
 ## 斗地主选将完成后全员必须有 character_id；覆盖无自选/自选与 3/5 人，防止再出现“未选武将”。

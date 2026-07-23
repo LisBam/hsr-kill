@@ -245,11 +245,23 @@ var opportunity_system: OpportunitySystem
 ## 自动开局种子序号步长；使用大质数拉开相邻重开种子，避免与单调毫秒时间形成短周期重复。
 const AUTOMATIC_MATCH_SEED_SERIAL_STEP: int = 104729
 
+## 自动开局种子的系统时间换算倍率；把Unix秒转换为微秒，保证完整退出后重新启动也能取得新的跨进程时间分量。
+const AUTOMATIC_MATCH_SEED_MICROSECONDS_PER_SECOND: int = 1000000
+
+## 自动开局种子的进程号混合步长；使用质数让极短时间内重启产生的不同进程号不会直接落入相邻种子。
+const AUTOMATIC_MATCH_SEED_PROCESS_STEP: int = 8191
+
 ## 对局随机数生成器；牌堆、身份与武将选择统一使用，便于未来记录种子回放。
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 ## 自动开局种子自增序号；同一毫秒内连续重开时仍保证每局获得不同随机序列，避免斗地主座位与身份固定。
 var _automatic_match_seed_serial: int = 0
+
+## 上一局自动斗地主中本地玩家的座次索引；范围为0至4，-1表示当前控制器尚未完成自动斗地主开局。
+var _last_automatic_doudizhu_local_seat_index: int = -1
+
+## 上一局自动斗地主中本地玩家的身份ID；取landlord或peasant，空字符串表示尚无可比较的上一局结果。
+var _last_automatic_doudizhu_local_identity: String = ""
 
 ## 当前 AI 出牌阶段已执行动作数；开始新回合时清零。
 var _ai_actions_this_turn: int = 0
@@ -599,10 +611,30 @@ func _resolve_match_mode(mode_id: String = "") -> String:
 	return identity_rules.normalize_mode(raw_mode)
 
 
+## 解析本局唯一随机种子；显式非零值保持可复现，自动值混合跨进程系统时间、进程内单调时间、进程号与重开序号。
+func _resolve_match_seed(requested_seed: int) -> int:
+	if requested_seed != 0:
+		return requested_seed
+	_automatic_match_seed_serial += 1
+	# 跨进程系统时间分量；退出游戏再进入时不依赖相近的菜单操作耗时，微秒精度用于区分快速连续启动。
+	var wall_clock_microseconds: int = int(Time.get_unix_time_from_system() * float(AUTOMATIC_MATCH_SEED_MICROSECONDS_PER_SECOND))
+	# 当前进程单调时间分量；同一进程内快速重开时提供比毫秒更细的启动间隔差异。
+	var monotonic_microseconds: int = Time.get_ticks_usec()
+	# 当前进程分量；极短时间内关闭并重启时进一步区分不同游戏进程。
+	var process_component: int = OS.get_process_id() * AUTOMATIC_MATCH_SEED_PROCESS_STEP
+	# 连续重开序号分量；同一微秒内的多个入口仍不会得到相同自动种子。
+	var serial_component: int = _automatic_match_seed_serial * AUTOMATIC_MATCH_SEED_SERIAL_STEP
+	# 混合后的自动种子；异或避免高位系统时间掩盖较小分量，同时保持完整64位结果供回放记录。
+	var resolved_seed: int = wall_clock_microseconds ^ monotonic_microseconds ^ process_component ^ serial_component
+	return resolved_seed if resolved_seed != 0 else serial_component
+
+
 ## 创建并开始一局；seed 为0时使用系统随机种子，mode_id 空时读取 GameSettings.next_match_mode。
 func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") -> bool:
 	# 实际玩家人数；未指定时使用检查器默认值。
 	var actual_player_count: int = default_player_count if player_count < 0 else player_count
+	# 本次是否使用自动种子；只允许自动开局应用跨局防重复约束，显式种子必须保持完全可复现。
+	var uses_automatic_match_seed: bool = seed == 0
 	# 本局模式；在破坏旧状态前完成校验，失败时调用方可保留原局。
 	var actual_mode: String = _resolve_match_mode(mode_id)
 	# 开局前置校验错误；任何错误都在破坏旧对局状态和表现之前同步拒绝。
@@ -637,11 +669,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_clear_pending_judgment_request()
 	_cards_used_this_turn_by_player.clear()
 
-	# 本局实际随机种子；显式种子用于回放，自动种子结合单调时间与自增序号，保证连续重开不会复用同一序列。
-	var resolved_match_seed: int = seed
-	if resolved_match_seed == 0:
-		_automatic_match_seed_serial += 1
-		resolved_match_seed = Time.get_ticks_msec() + _automatic_match_seed_serial * AUTOMATIC_MATCH_SEED_SERIAL_STEP
+	# 本局实际随机种子；全部无显式种子的入口共用解析函数，保证菜单返回、局内重开与完整重启都重新随机。
+	var resolved_match_seed: int = _resolve_match_seed(seed)
 	# 无论种子由调用方显式指定还是自动生成，都必须在本局开始前写入唯一随机源；显式种子供回放与测试复现，自动种子供菜单重开与退出重进获得新牌局。
 	_rng.seed = resolved_match_seed
 	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；过关斩将固定本地玩家为一号位，其他离线对局继续使用原有随机座次逻辑。
@@ -759,7 +788,9 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	ai_coordinator._policies.clear()
 	_ai_submission_depth_by_player.clear()
 
-	_create_players(actual_player_count)
+	_create_players(actual_player_count, uses_automatic_match_seed)
+	# 最终离线主操作者；自动斗地主防重复可能在创建玩家前改选本地座次，控制归属必须以调整后的稳定ID为准。
+	_primary_offline_human_player_id = local_human_player_id
 	if conquest_mode != null and state.players.size() == 2:
 		# 固定一号位玩家与二号位敌方AI；关卡状态在选将前建立，后续初始机缘与换将均复用稳定ID。
 		# 补充：当前关卡状态还会锁定本局难度，并通过稳定机缘ID授予玩家对应开局增益。
@@ -7060,7 +7091,8 @@ func _uninstall_all_card_runtimes() -> void:
 
 
 ## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
-func _create_players(player_count: int) -> void:
+## automatic_match_seed为true时，离线斗地主会避免连续两局得到完全相同的本地座次与身份组合。
+func _create_players(player_count: int, automatic_match_seed: bool = false) -> void:
 	# 本局模式；决定身份表是否洗牌以及开局公开身份规则。
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
 	# 身份配置副本；身份局整表洗牌；斗地主按座次固定；2v2 按座次固定后可整体互换蓝红。
@@ -7071,6 +7103,8 @@ func _create_players(player_count: int) -> void:
 		identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
 	elif match_mode != IdentityRules.MODE_WHEEL_DUEL and match_mode != IdentityRules.MODE_CONQUEST:
 		_shuffle_array(identities)
+	if automatic_match_seed and match_mode == IdentityRules.MODE_DOUDIZHU:
+		_avoid_repeated_automatic_doudizhu_local_assignment(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
 	var lan_human_player_ids: Array[int] = []
 	if match_mode != IdentityRules.MODE_CONQUEST and network_gateway != null and network_gateway.is_lan_host():
@@ -7092,6 +7126,34 @@ func _create_players(player_count: int) -> void:
 		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
 	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id]})
+
+
+## 避免自动斗地主连续两局向本地玩家展示完全相同的座次与身份；初次抽取仍来自本局随机源，只在命中上一局组合时从其他合法座次中随机改选。
+func _avoid_repeated_automatic_doudizhu_local_assignment(identities: Array[String]) -> void:
+	if network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return
+	if not randomize_local_human_seat or local_human_player_id < 0 or local_human_player_id >= identities.size() or identities.is_empty():
+		return
+	# 本次随机抽取对应的本地身份；与座次共同构成玩家在选将标题中实际观察到的开局分配。
+	var current_local_identity: String = identities[local_human_player_id]
+	if local_human_player_id == _last_automatic_doudizhu_local_seat_index and current_local_identity == _last_automatic_doudizhu_local_identity:
+		# 身份与上一局不同的其他座次；优先从这里随机选择，使重复命中时座次和身份都产生可见变化。
+		var different_identity_seat_indices: Array[int] = []
+		# 任意其他座次；仅在异常身份表没有另一种身份时作为稳定兜底，仍保证座次不会连续重复。
+		var other_seat_indices: Array[int] = []
+		for seat_index: int in range(identities.size()):
+			if seat_index == _last_automatic_doudizhu_local_seat_index:
+				continue
+			other_seat_indices.append(seat_index)
+			if identities[seat_index] != _last_automatic_doudizhu_local_identity:
+				different_identity_seat_indices.append(seat_index)
+		# 最终候选座次数组；标准三人和五人身份表始终存在不同身份座次，兜底只保护未来自定义分布。
+		var replacement_seat_indices: Array[int] = different_identity_seat_indices if not different_identity_seat_indices.is_empty() else other_seat_indices
+		if not replacement_seat_indices.is_empty():
+			local_human_player_id = replacement_seat_indices[_rng.randi_range(0, replacement_seat_indices.size() - 1)]
+			current_local_identity = identities[local_human_player_id]
+	_last_automatic_doudizhu_local_seat_index = local_human_player_id
+	_last_automatic_doudizhu_local_identity = current_local_identity
 
 
 ## 把已确认武将应用到玩家状态；体力上限只在该入口初始化，避免界面与选将服务重复写数值。

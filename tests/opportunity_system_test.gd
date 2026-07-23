@@ -194,7 +194,7 @@ func _test_catalog_and_weights() -> bool:
 		"purple_skill_xingqi":"获得技能“星祈”",
 		"purple_skip_judgment_phase":"永远跳过你的判定阶段",
 		"orange_skip_discard_phase":"永远跳过你的弃牌阶段",
-		"red_refresh_opportunities":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。（30%概率白色变绿色，绿色变蓝色，蓝色变紫色，紫色变橙色，橙色变红色）",
+		"red_refresh_opportunities":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。",
 		"red_gain_three_unowned_orange":"随机获得三项你未拥有的橙色机缘",
 	}
 	for card_id_variant: Variant in new_descriptions.keys():
@@ -387,6 +387,18 @@ func _test_opportunity_card_hover() -> bool:
 		get_tree().paused = false
 		card_view.queue_free()
 		return _fail("opportunity_skill_description_layout normal=%s skill=%s text=%s wrap=%s overrun=%s" % [ordinary_description_label.visible, skill_name_label.visible, skill_name_label.text, skill_name_label.autowrap_mode, skill_name_label.text_overrun_behavior])
+	# 刷新全部机缘卡使用独立19像素正文；文案缩短后仍保留30%升级概率，且牌面复用时不得污染其他机缘的默认字号。
+	card_view.configure(OpportunityCatalog.get_card("red_refresh_opportunities"), true)
+	if not ordinary_description_label.visible or ordinary_description_label.text != "将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。" or ordinary_description_label.get_theme_font_size("font_size") != 19:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_refresh_card_text_font text=%s font=%d" % [ordinary_description_label.text, ordinary_description_label.get_theme_font_size("font_size")])
+	# 后续悬停资料仍使用正式【机巧】机缘；同时验证复用牌面恢复默认21像素正文设置。
+	card_view.configure(OpportunityCatalog.get_card("blue_skill_jiqiao"), true)
+	if ordinary_description_label.get_theme_font_size("font_size") != card_view.default_description_font_size:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_description_font_restore=%d" % ordinary_description_label.get_theme_font_size("font_size"))
 	input_button.mouse_entered.emit()
 	if skill_information.is_empty() or str(skill_information[0].get("title", "")) != "【机巧】" or not str(skill_information[0].get("description", "")).contains(str(GameDatabase.get_skill("jiqiao").get("description", ""))):
 		get_tree().paused = false

@@ -128,8 +128,8 @@ const SECONDS_PER_MINUTE: int = 60
 ## 该参数只影响客户端文本刷新频率，不改变规则计时、动画、AI延迟或游戏流程，运行时无需动态修改。
 const MATCH_CLOCK_REFRESH_INTERVAL_SECONDS: float = 0.25
 
-## 顶栏关卡与轮次的统一字号；13像素可在156像素宽信息框内稳定容纳“第N关 第N轮”，运行时无需动态修改。
-const TOP_INFO_PRIMARY_FONT_SIZE: int = 13
+## 顶栏关卡、轮次、牌堆剩余数与对局时长的统一字号；16像素沿用原有下两行文字规格，运行时无需动态修改。
+const TOP_INFO_PRIMARY_FONT_SIZE: int = 16
 
 ## 本地玩家目标指示锚点与手牌区顶边的垂直间距；默认8像素让线端点位于手牌上方且不遮挡牌面，运行时通常无需修改。
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
@@ -2807,7 +2807,7 @@ func _apply_ui_style() -> void:
 			skill_view.refresh_ui_style()
 
 
-## 把同一份显式标签样式应用到关卡与轮次；LabelSettings直接参与绘制，主题切换时只更新这一份共享资源。
+## 把同一份显式标签样式应用到关卡与轮次；字体、字号和颜色与牌堆剩余数、对局时长保持一致。
 func _apply_top_info_primary_label_style() -> void:
 	if phase_label == null:
 		return
@@ -2815,10 +2815,16 @@ func _apply_top_info_primary_label_style() -> void:
 		_top_info_primary_label_settings = LabelSettings.new()
 	_top_info_primary_label_settings.font = ThemeDB.fallback_font
 	_top_info_primary_label_settings.font_size = TOP_INFO_PRIMARY_FONT_SIZE
-	_top_info_primary_label_settings.font_color = BattleUIStyle.get_color("text_primary")
+	_top_info_primary_label_settings.font_color = BattleUIStyle.get_color("text_secondary")
 	phase_label.label_settings = _top_info_primary_label_settings
 	if conquest_level_label != null:
 		conquest_level_label.label_settings = _top_info_primary_label_settings
+	if center_turn_label != null:
+		center_turn_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		center_turn_label.add_theme_font_size_override("font_size", TOP_INFO_PRIMARY_FONT_SIZE)
+	if center_phase_label != null:
+		center_phase_label.add_theme_font_override("font", ThemeDB.fallback_font)
+		center_phase_label.add_theme_font_size_override("font_size", TOP_INFO_PRIMARY_FONT_SIZE)
 
 
 ## 清空日志并使用菜单设置的人数启动下一局；当前对局人数只在重新开局时改变。
