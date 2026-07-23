@@ -1571,7 +1571,7 @@ func _cancel_paced_response_prompt(request_id: int) -> void:
 	game_flow_pacer.cancel("response_prompt:%d" % request_id)
 
 
-## 为当前角色创建可持续的 chooseToUse 请求；候选只包含当前仍可使用或重铸的实体牌 UID。
+## 为当前角色创建可持续的 chooseToUse 请求；普通牌候选只包含可直接使用或重铸的实体，技能与装备材料由对应入口另行开放。
 func _begin_play_choice(player_id: int) -> void:
 	if state == null or state.game_over or state.current_phase != "play" or state.current_player_id != player_id:
 		return
@@ -1617,6 +1617,11 @@ func _begin_play_choice(player_id: int) -> void:
 	request.active_context = request.base_context.duplicate(true)
 	request.button_ids = active_skill_ids.duplicate()
 	for legal_action: Dictionary in legal_actions:
+		# 当前动作类型；只有普通用牌与重铸能让动作自身的card_uid成为可直接点击手牌，技能或装备材料必须等待对应入口选中后再点亮。
+		var candidate_action_type: String = str(legal_action.get("action_type", ""))
+		if candidate_action_type not in ["use_card", "recast_card"]:
+			continue
+		# 当前可直接点击实体UID；同一张牌的多个目标动作只登记一次。
 		var candidate_uid: int = int(legal_action.get("card_uid", -1))
 		if candidate_uid >= 0 and not request.card_ids.has(candidate_uid):
 			request.card_ids.append(candidate_uid)
@@ -8667,9 +8672,13 @@ func _resume_settlement_pipeline() -> void:
 		if _rule_continuations.has_pending():
 			# 当前最内层续接；过关斩将换将是角色生命周期边界，必须让已经登记的技能“然后”步骤先结束。
 			var next_rule_continuation: Dictionary = _rule_continuations.peek()
-			if str(next_rule_continuation.get("continuation_type", "")) == "conquest_enemy_replacement" and not _deferred_skill_settlements.is_empty():
-				_resume_deferred_skill_settlements()
-				continue
+			if str(next_rule_continuation.get("continuation_type", "")) == "conquest_enemy_replacement":
+				if not _deferred_skill_settlements.is_empty():
+					_resume_deferred_skill_settlements()
+					continue
+				# 换将会全局暂停旧事件树；进入边界前必须先补齐最内层活动目标的End/After时机，避免击杀目标令【再现】等尾部技能被父牌游标跳过。
+				if _complete_innermost_active_card_target_lifecycle():
+					continue
 			_resume_next_rule_continuation()
 			continue
 		# 技能自行声明的“然后”步骤保持登记顺序，每项之后重新检查触发、装备与通用规则续接。
@@ -8686,6 +8695,31 @@ func _resume_settlement_pipeline() -> void:
 		# 阶段恢复可能刚刚完成额外弃牌阶段并暴露新的技能“然后”步骤；延后一帧再次排空，避免后续额外出牌阶段被嵌套询问吞掉。
 		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
 			call_deferred("_resume_settlement_pipeline")
+
+
+## 完成当前最内层尚未收尾的逐目标卡牌生命周期；用于进入角色或模式边界前保证目标End/After时机不会被父事件推进吞掉。
+func _complete_innermost_active_card_target_lifecycle() -> bool:
+	# 最内层活动牌UID；默认-1表示没有已开始但尚未结束的目标生命周期。
+	var selected_parent_card_uid: int = -1
+	# 最内层CardUseEvent ID；事件ID单调递增，数值越大表示嵌套层级越靠内。
+	var selected_card_use_event_id: int = -1
+	for parent_card_uid_variant: Variant in _active_card_resolutions.keys():
+		# 当前活动牌UID；相同事件ID时以实体UID作为稳定次级顺序。
+		var parent_card_uid: int = int(parent_card_uid_variant)
+		# 当前逐目标上下文；只有已经开始且尚未完成的目标需要补齐生命周期尾部。
+		var resolution_context: Dictionary = _active_card_resolutions.get(parent_card_uid, {}) as Dictionary
+		if int(resolution_context.get("current_target_id", -1)) < 0 or not bool(resolution_context.get("target_lifecycle_started", false)) or bool(resolution_context.get("target_lifecycle_finished", false)):
+			continue
+		# 当前父使用牌事件ID；兼容旧上下文缺省-1，并通过UID保证选择结果稳定。
+		var card_use_event_id: int = int(resolution_context.get("card_use_event_id", -1))
+		if card_use_event_id < selected_card_use_event_id or (card_use_event_id == selected_card_use_event_id and parent_card_uid <= selected_parent_card_uid):
+			continue
+		selected_parent_card_uid = parent_card_uid
+		selected_card_use_event_id = card_use_event_id
+	if selected_parent_card_uid < 0:
+		return false
+	_complete_active_card_target(selected_parent_card_uid)
+	return true
 
 
 ## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
@@ -9507,10 +9541,12 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 	rule_event.event_id = event.event_id
 	rule_event.parent_id = event.parent_id
 	_dispatch_timing_service_event(rule_event)
-	# 触发器输出；目标、排除、直击与自定义参数全部写回共享上下文供下一时机重新读取。
+	# 派发后的实时共享上下文；同步技能可能通过控制器辅助接口直接追加排除或直击目标，不能被派发前复制出的RuleEvent旧数组覆盖。
+	var live_card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	# 触发器输出；目标数组以RuleEvent为准，排除与直击属于可叠加集合，需与同步辅助接口写入的实时结果稳定合并。
 	card_use_context["target_ids"] = (rule_event.data.get("target_ids", card_use_context.get("target_ids", [])) as Array).duplicate()
-	card_use_context["excluded_target_ids"] = (rule_event.data.get("excluded_target_ids", card_use_context.get("excluded_target_ids", [])) as Array).duplicate()
-	card_use_context["direct_hit_target_ids"] = (rule_event.data.get("direct_hit_target_ids", card_use_context.get("direct_hit_target_ids", [])) as Array).duplicate()
+	card_use_context["excluded_target_ids"] = _merge_unique_int_arrays(rule_event.data.get("excluded_target_ids", []) as Array, live_card_use_context.get("excluded_target_ids", []) as Array)
+	card_use_context["direct_hit_target_ids"] = _merge_unique_int_arrays(rule_event.data.get("direct_hit_target_ids", []) as Array, live_card_use_context.get("direct_hit_target_ids", []) as Array)
 	card_use_context["custom_args"] = (rule_event.data.get("custom_args", card_use_context.get("custom_args", {})) as Dictionary).duplicate(true)
 	if rule_event.cancelled or rule_event.neutralized:
 		if target_id >= 0:
@@ -11243,6 +11279,23 @@ func _int_array(values: Array) -> Array[int]:
 	var result: Array[int] = []
 	for value_variant: Variant in values:
 		result.append(int(value_variant))
+	return result
+
+
+## 合并两组整数集合并保持首次出现顺序；适用于排除目标、直击目标等只允许追加且不应重复的共享规则字段。
+func _merge_unique_int_arrays(first_values: Array, second_values: Array) -> Array[int]:
+	# 合并结果；先保留规则事件显式输出顺序，再补入同步辅助接口新增但事件副本尚未包含的成员。
+	var result: Array[int] = []
+	for value_variant: Variant in first_values:
+		# 当前整数成员；网络与回放恢复后的弱类型数值统一转换后再去重。
+		var first_value: int = int(value_variant)
+		if not result.has(first_value):
+			result.append(first_value)
+	for value_variant: Variant in second_values:
+		# 当前实时成员；已由规则事件输出的值保持原位置，不重复追加。
+		var second_value: int = int(value_variant)
+		if not result.has(second_value):
+			result.append(second_value)
 	return result
 
 

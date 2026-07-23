@@ -22,10 +22,10 @@ const LEVEL_FOURTEEN_EQUIPMENT_SUBTYPE_COUNT: int = 4
 const FIXED_LEVEL_OPPORTUNITY_IDS: Dictionary = {
 	2:["gray_initial_hand_one"],
 	3:["blue_hand_limit_two"],
-	4:["purple_draw_phase_one"],
+	4:["orange_draw_phase_one"],
 	6:["blue_max_hp_one"],
 	7:["green_slash_play_limit_one"],
-	8:["purple_draw_phase_one"],
+	8:["orange_draw_phase_one"],
 	9:["gray_initial_hand_four"],
 	11:["purple_max_hp_two"],
 	12:["blue_draw_phase_one"],
@@ -33,8 +33,8 @@ const FIXED_LEVEL_OPPORTUNITY_IDS: Dictionary = {
 	14:["gray_equip_distinct_four"],
 }
 
-## 第16关及之后每层固定授予的三项机缘；灰色初始手牌、蓝色体力上限与紫色摸牌阶段加成均可无限累计。
-const REPEATING_LEVEL_OPPORTUNITY_IDS: Array[String] = ["gray_initial_hand_one", "blue_max_hp_one", "purple_draw_phase_one"]
+## 第16关及之后每层固定授予的三项机缘；灰色初始手牌、蓝色体力上限与橙色摸牌阶段加成均可无限累计。
+const REPEATING_LEVEL_OPPORTUNITY_IDS: Array[String] = ["gray_initial_hand_one", "blue_max_hp_one", "orange_draw_phase_one"]
 
 ## 当前权威对局状态；关卡快照写入其 conquest_state，供 UI、网络与回放统一读取。
 var _state: GameState

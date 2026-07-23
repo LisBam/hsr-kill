@@ -8,6 +8,9 @@ const AI_UNFAVORABLE_CHAIN_TARGET_PENALTY: float = 0.75
 ## AI使用效果必须至少比同一张牌的重铸收益高出的最小分差；避免微弱出牌顺序压过真实的换牌收益。
 const AI_RECAST_USE_ADVANTAGE_MARGIN: float = 0.15
 
+## 视为1v1局面的在场角色数量；恰好2名存活在场角色时固定选择重铸，不评估连环切换收益。
+const DUEL_ACTIVE_PLAYER_COUNT: int = 2
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -80,6 +83,24 @@ func append_play_phase_card_actions(match_host: Object, actor_id: int, card: Car
 
 ## 修正铁索连环切换状态的动作价值；解除横置与施加横置的收益方向必须相反。
 func modify_ai_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
+	# 当前存活在场角色数；死亡和离场角色不参与1v1局面判定。
+	var active_player_count: int = 0
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前角色快照；只有存活且未离场的角色构成实际对局人数。
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		if bool(player_snapshot.get("alive", false)) and not bool(player_snapshot.get("out_of_game", false)):
+			active_player_count += 1
+	if active_player_count == DUEL_ACTIVE_PLAYER_COUNT:
+		# 1v1同实体重铸动作；固定比较同一张牌，保证基础AI无条件把使用动作排在重铸之后。
+		var duel_recast_action: Dictionary = {
+			"action_type":"recast_card",
+			"actor_id":int(action.get("actor_id", -1)),
+			"card_uid":int(action.get("card_uid", -1)),
+			"card_definition_id":get_id(),
+		}
+		# 1v1重铸评分；沿用评估器的摸1张收益，不复制卡牌价值常量。
+		var duel_recast_score: float = evaluator.score_action(authoritative_snapshot, duel_recast_action, int(action.get("actor_id", -1)))
+		return duel_recast_score - AI_RECAST_USE_ADVANTAGE_MARGIN
 	# 修正后评分；逐目标检查当前是否已经横置。
 	var score: float = current_score
 	# 本次使用是否至少有一名实际受益目标；没有时同牌重铸一定优先，不能让出牌顺序形成伪收益。
