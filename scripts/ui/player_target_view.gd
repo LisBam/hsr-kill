@@ -28,10 +28,14 @@ signal scroll_gesture_moved(relative: Vector2)
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
 ## 高体力数字与护盾分数的字体尺寸；默认10像素可在固定体力框内纵向显示“当前/上限”，运行时可按牌面缩放调整。
-@export_range(8, 24, 1) var numeric_health_font_size: int = 10
+## 当前标准字号为12像素，在保持窄体力框的同时增强数字辨识度，运行时通常无需动态修改。
+@export_range(8, 24, 1) var numeric_health_font_size: int = 12
 
 ## 高体力数字与护盾分数的同色描边宽度；默认1像素用于加粗绿色或灰色文字，设为0可关闭加粗效果，运行时可按主题清晰度调整。
 @export_range(0, 4, 1) var numeric_health_outline_size: int = 1
+
+## 高体力分数三行文字的额外行间距；默认-4像素收紧当前值、斜杠与上限值，调大可增加三行之间的留白，运行时通常无需动态修改。
+@export_range(-8, 8, 1) var numeric_health_line_spacing: int = -4
 
 ## 相邻体力圆点的纵向间距；默认-10像素使18像素圆点紧密排列，只影响表现密度且运行时通常无需修改。
 @export_range(-16, 8, 1) var health_pip_separation: int = -10
@@ -956,8 +960,9 @@ func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 			shield_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_health_pip_container.add_child(shield_number)
 		# 数字体力标签；高上限角色使用绿色加粗分数格式同时展示当前体力与体力上限，不再按残血切换黄红色。
+		# 分数内容按“当前值、斜杠、上限值”分成三行，确保窄体力框内沿武将牌右侧纵向阅读。
 		var health_number: Label = Label.new()
-		health_number.text = "%d/%d" % [safe_hp, max_hp]
+		health_number.text = "%d\n/\n%d" % [safe_hp, max_hp]
 		health_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_apply_numeric_health_label_style(health_number, BattleUIStyle.get_color("health_full"))
@@ -1002,6 +1007,7 @@ func _apply_numeric_health_label_style(label: Label, text_color: Color) -> void:
 	label.add_theme_color_override("font_color", text_color)
 	label.add_theme_color_override("font_outline_color", text_color)
 	label.add_theme_constant_override("outline_size", numeric_health_outline_size)
+	label.add_theme_constant_override("line_spacing", numeric_health_line_spacing)
 
 
 ## 返回当前剩余体力使用的语义颜色；上限1或2永久保持绿色，其他角色在2点和1点时分别转为黄色与红色。
