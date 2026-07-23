@@ -87,9 +87,25 @@ func _ready() -> void:
 	if (combined_result.get("card_ids", []) as Array) != [101] or (combined_result.get("target_ids", []) as Array) != [1]:
 		_fail("card_target_selection=%s" % combined_result)
 		return
+	# 第二张复合材料；用于验证多材料card_target映射能生成并接受完整材料目标组合。
+	var second_material_card: CardInstance = CardInstance.new("sha", "spade", 7)
+	second_material_card.uid = 102
+	second_material_card.zone = "hand"
+	second_material_card.owner_id = 0
+	# 第二张组合候选；结构与第一张候选保持一致。
+	var second_candidate: Dictionary = {"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":second_material_card.to_dict()}
+	# 同步多材料结果；规范化键101,102只允许两张材料共同指定目标1。
+	var multi_material_result: Dictionary = skill.request_card_target_selection("选择两张牌和目标", "请选择两张牌和一名目标", [candidate, second_candidate], [1], 2, 2, 1, 1, false, {
+		"kind":"test_multi_card_target",
+		"valid_card_combinations":[[101, 102]],
+		"target_combinations_by_card_combination":{"101,102":[[1]]},
+	})
+	if (multi_material_result.get("card_ids", []) as Array) != [101, 102] or (multi_material_result.get("target_ids", []) as Array) != [1]:
+		_fail("multi_card_target_selection=%s" % multi_material_result)
+		return
 	if not _test_choose_to_use_skill_chain(game_state):
 		return
-	print("SKILL_CHOICE_PASS target=%s combined=%s" % [selected_targets, combined_result])
+	print("SKILL_CHOICE_PASS target=%s combined=%s multi=%s" % [selected_targets, combined_result, multi_material_result])
 	get_tree().quit(0)
 
 

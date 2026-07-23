@@ -2383,6 +2383,14 @@ func _test_shanqing_suit_effects() -> bool:
 	var shanqing: SkillDefinition = _install_single_skill(0, "shanqing")
 	if shanqing == null:
 		return _fail("shanqing_missing")
+	# 复合交互回归；玩家发动技能后应一次得到 card_target 请求，而不是先开材料窗口再开目标窗口。
+	var interactive_error: String = shanqing.activate({})
+	var interactive_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if not interactive_error.is_empty() or str(_controller._pending_card_choice.get("choice_type", "")) != "card_target" or str(interactive_context.get("kind", "")) != "shanqing_materials" or (interactive_context.get("valid_card_combinations", []) as Array).is_empty():
+		return _fail("shanqing_card_target_request error=%s pending=%s" % [interactive_error, _controller._pending_card_choice])
+	# 取消复合请求后再进入后续数值效果测试；取消不应消耗每回合额度或移动材料牌。
+	if not _submit_pending_choice(0, [], [], false) or not owner.hand.has(heart_material) or not owner.hand.has(diamond_material):
+		return false
 	# 第一张山倾直接指定相邻敌方；成功后应先进入目标【闪】响应窗口。
 	var first_error: String = shanqing.activate({"material_card_uids":[heart_material.uid, diamond_material.uid], "target_ids":[1]})
 	if not first_error.is_empty() or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response":

@@ -2312,10 +2312,14 @@ func _get_selectable_target_ids() -> Array[int]:
 			return []
 		var inline_target_ids: Array[int] = []
 		inline_target_ids.assign(_inline_card_choice.get("target_ids", []) as Array)
+		# 当前请求恢复上下文；组合映射只读取可序列化字典，不能把规则对象传入界面。
+		var inline_context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+		# 多材料组合到完整目标映射；山倾在选择两张材料时按当前材料前缀即时收窄目标。
+		var target_ids_by_card_combination: Dictionary = inline_context.get("target_combinations_by_card_combination", {}) as Dictionary
+		if inline_choice_type == "card_target" and not target_ids_by_card_combination.is_empty():
+			return _get_inline_combination_target_ids(target_ids_by_card_combination, _inline_selected_card_uids, inline_target_ids)
 		# 牌到目标组合映射；选中一张材料牌后只高亮该牌当前允许的目标。
 		if inline_choice_type == "card_target" and _inline_selected_card_uids.size() == 1:
-			# 当前请求恢复上下文；组合映射只读取可序列化字典。
-			var inline_context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
 			# 实体牌UID到完整有序目标组合的映射；优先用于不同材料转化出不同目标数量的主动技能。
 			var target_combinations_by_card_id: Dictionary = inline_context.get("target_combinations_by_card_id", {}) as Dictionary
 			if not target_combinations_by_card_id.is_empty():
@@ -2369,6 +2373,61 @@ func _get_selectable_target_ids() -> Array[int]:
 	var replacement_preview: Dictionary = match_controller.get_card_use_preview(match_controller.local_human_player_id, _selected_card_uid, [])
 	selectable_target_ids.assign(replacement_preview.get("legal_target_ids", []) as Array)
 	return selectable_target_ids
+
+
+## 根据已选材料前缀读取多材料组合的下一步合法目标；未选材料时返回所有可行组合目标并集。
+func _get_inline_combination_target_ids(target_mapping: Dictionary, selected_card_uids: Array[int], fallback_target_ids: Array[int]) -> Array[int]:
+	# 已声明的完整材料组合；山倾通过该数组让界面无需解析字典键即可判断前缀兼容性。
+	var valid_card_combinations: Array = (_inline_card_choice.get("context", {}) as Dictionary).get("valid_card_combinations", []) as Array
+	if valid_card_combinations.is_empty():
+		return fallback_target_ids
+	# 当前目标位置；已选目标按点击顺序形成完整目标数组前缀。
+	var target_position: int = _selected_target_ids.size()
+	# 当前多材料目标结果；按权威组合与目标数组顺序去重。
+	var result: Array[int] = []
+	for card_combination_variant: Variant in valid_card_combinations:
+		# 当前完整材料组合；只要包含已选材料前缀即可继续展示其目标。
+		var card_combination: Array[int] = []
+		for card_uid_variant: Variant in card_combination_variant as Array:
+			card_combination.append(int(card_uid_variant))
+		var contains_selected_cards: bool = true
+		for selected_card_uid: int in selected_card_uids:
+			if not card_combination.has(selected_card_uid):
+				contains_selected_cards = false
+				break
+		if not contains_selected_cards:
+			continue
+		# 当前材料组合对应的完整目标数组；缺失映射时禁止回退到全部目标。
+		var target_combinations: Array = target_mapping.get(_make_card_combination_key(card_combination), []) as Array
+		for target_combination_variant: Variant in target_combinations:
+			# 当前有序目标组合；目标位置超出长度时表示该组合已完成，不能再添加目标。
+			var target_combination: Array = target_combination_variant as Array
+			if target_combination.size() <= target_position:
+				continue
+			# 当前目标前缀是否仍匹配；多目标技能必须保留玩家点击顺序。
+			var matches_selected_prefix: bool = true
+			for selected_index: int in range(_selected_target_ids.size()):
+				if int(target_combination[selected_index]) != _selected_target_ids[selected_index]:
+					matches_selected_prefix = false
+					break
+			if matches_selected_prefix:
+				# 当前下一目标；同一目标由多个材料组合支持时只显示一次。
+				var next_target_id: int = int(target_combination[target_position])
+				if not result.has(next_target_id):
+					result.append(next_target_id)
+	return result
+
+
+## 将材料UID集合规范化为稳定组合键；排序只影响映射查询，不改变玩家点击顺序。
+func _make_card_combination_key(card_uids: Array[int]) -> String:
+	# 排序后的UID副本；同一材料组合无论点击先后都命中同一键。
+	var normalized_uids: Array[int] = card_uids.duplicate()
+	normalized_uids.sort()
+	# 字符串键；网络快照经过JSON化后仍保持一致。
+	var key_parts: Array[String] = []
+	for card_uid: int in normalized_uids:
+		key_parts.append(str(card_uid))
+	return ",".join(key_parts)
 
 
 ## 返回当前卡牌是否由规则层自动展开全体目标；此类牌仍禁止武将牌点击改目标，但会用展开结果做预览暗置。

@@ -116,6 +116,32 @@ func _run() -> void:
 	if confirm_button.disabled or not target_view.is_target_selected:
 		_fail("combined_complete")
 		return
+	# 公共弃牌候选；投狭的候选属于弃牌堆且不属于本地手牌，必须进入独立窗口并显示正面牌面。
+	var discard_candidate_card: Dictionary = material_card.duplicate(true)
+	discard_candidate_card["uid"] = 802
+	discard_candidate_card["zone"] = "discard_pile"
+	discard_candidate_card["owner_id"] = -1
+	discard_candidate_card["suit"] = "heart"
+	var touxia_gain_request: Dictionary = {
+		"request_id":24,
+		"chooser_id":0,
+		"choice_type":"card",
+		"title":"投狭",
+		"prompt":"请选择获得一张与判定结果花色相同的牌，或取消",
+		"candidates":[{"uid":802, "owner_id":-1, "zone":"discard_pile", "slot":"", "visible":true, "card_data":discard_candidate_card}],
+		"min_select":0,
+		"max_select":1,
+		"allow_cancel":true,
+		"context":{"kind":"touxia_gain", "turn_number":1, "turn_player_id":1, "judgment_suit":"heart"},
+	}
+	main_instance.call("_on_card_choice_requested", touxia_gain_request)
+	await get_tree().process_frame
+	# 独立窗口内部的卡牌视图映射；漏掉 discard_pile 分区会导致该 UID不存在且玩家看不到候选。
+	var discard_card_views: Dictionary = selection_panel.get("_card_views") as Dictionary
+	var discard_section_labels: Array = selection_panel.get("_section_labels") as Array
+	if not selection_panel.visible or not discard_card_views.has(802) or discard_section_labels.is_empty() or str((discard_section_labels[0] as Label).text) != "弃牌堆":
+		_fail("touxia_discard_candidate_visible views=%s labels=%s" % [discard_card_views.keys(), discard_section_labels])
+		return
 	# 冰封文字选项；必须直接使用手牌上方操作区，前两项占用原确定与取消位置，真正放弃使用同一行追加按钮。
 	var bingfeng_control_request: Dictionary = {
 		"request_id":23,
