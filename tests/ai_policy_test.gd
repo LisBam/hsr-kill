@@ -53,6 +53,8 @@ func _ready() -> void:
 		return
 	if not _test_xingqi_always_activates():
 		return
+	if not _test_sushang_guinaifen_skill_ai():
+		return
 	if not _test_renwang_shield_black_slash():
 		return
 	if not _test_friendly_chain_damage_response():
@@ -587,6 +589,92 @@ func _test_xingqi_always_activates() -> bool:
 	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
 	if not bool(chosen_payload.get("confirmed", false)) or chosen_payload.get("selected_card_uids", []) != [570]:
 		return _fail("xingqi_always_activate=%s" % chosen)
+	return true
+
+
+## 验证剑势只对敌方确认、戏法固定发动、投狭按友方与关键牌边界判断，并能选择正收益山倾动作。
+func _test_sushang_guinaifen_skill_ai() -> bool:
+	# 全身份公开快照；0号领袖、1号反贼、2号忠臣使敌友关系确定。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 通用取消动作；零材料确认请求均使用相同取消基线。
+	var cancel_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":610, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 通用确认动作；具体技能通过请求上下文定位自身评分钩子。
+	var confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":610, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
+	# 敌方剑势请求；AI 指定逻辑要求无条件确认。
+	var enemy_jianshi_request: Dictionary = {"request_id":610, "choice_type":"card", "allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"jianshi_confirm", "skill_id":"jianshi", "skill_owner_id":0, "target_id":1, "ai_allow_confirm":true}}
+	# 独立策略；同一身份模型在每次 choose_card_choice 前会同步当前快照。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 敌方剑势最终选择；用于确认固定正分能够压过取消动作。
+	var enemy_jianshi_choice: Dictionary = policy.choose_card_choice(snapshot, enemy_jianshi_request, [cancel_action, confirm_action])
+	if not bool((enemy_jianshi_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("jianshi_enemy_cancelled=%s" % enemy_jianshi_choice)
+	# 友方剑势请求；目标改为忠臣后应选择取消，避免无脑增加友方所受伤害。
+	var ally_jianshi_request: Dictionary = enemy_jianshi_request.duplicate(true)
+	(ally_jianshi_request.get("context", {}) as Dictionary)["target_id"] = 2
+	# 友方剑势最终选择；固定负分应保留取消动作。
+	var ally_jianshi_choice: Dictionary = policy.choose_card_choice(snapshot, ally_jianshi_request, [cancel_action, confirm_action])
+	if bool((ally_jianshi_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("jianshi_ally_confirmed=%s" % ally_jianshi_choice)
+	# 戏法确认请求；只要可以发动就固定确认，不受当前判定对象敌友影响。
+	var xifa_request: Dictionary = {"request_id":611, "choice_type":"card", "allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"xifa_confirm", "skill_id":"xifa", "skill_owner_id":0, "judgment_player_id":1, "ai_allow_confirm":true}}
+	# 戏法最终选择；固定高正分必须选择确认。
+	var xifa_choice: Dictionary = policy.choose_card_choice(snapshot, xifa_request, [cancel_action, confirm_action])
+	if not bool((xifa_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("xifa_not_always_activate=%s" % xifa_choice)
+	# 友方投狭请求；即使当前没有高价值弃牌，也应为了友方摸牌与潜在回收通常发动。
+	var friendly_touxia_request: Dictionary = {"request_id":612, "choice_type":"card", "allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"touxia_confirm", "skill_id":"touxia", "skill_owner_id":0, "turn_player_id":2, "maximum_candidate_value":0.0, "ai_allow_confirm":true}}
+	# 友方投狭最终选择；基础团队收益应压过取消动作。
+	var friendly_touxia_choice: Dictionary = policy.choose_card_choice(snapshot, friendly_touxia_request, [cancel_action, confirm_action])
+	if not bool((friendly_touxia_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("touxia_friend_cancelled=%s" % friendly_touxia_choice)
+	# 敌方普通弃牌请求；没有达到关键牌阈值时应取消，避免无收益地令敌方摸牌。
+	var enemy_low_touxia_request: Dictionary = friendly_touxia_request.duplicate(true)
+	(enemy_low_touxia_request.get("context", {}) as Dictionary)["turn_player_id"] = 1
+	(enemy_low_touxia_request.get("context", {}) as Dictionary)["maximum_candidate_value"] = 3.0
+	# 敌方低价值投狭选择；关键牌收益不足时应取消。
+	var enemy_low_touxia_choice: Dictionary = policy.choose_card_choice(snapshot, enemy_low_touxia_request, [cancel_action, confirm_action])
+	if bool((enemy_low_touxia_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("touxia_enemy_low_confirmed=%s" % enemy_low_touxia_choice)
+	# 敌方关键牌请求；价值达到阈值后应确认，体现“为了关键牌可对敌人发动”的指定边界。
+	var enemy_key_touxia_request: Dictionary = enemy_low_touxia_request.duplicate(true)
+	(enemy_key_touxia_request.get("context", {}) as Dictionary)["maximum_candidate_value"] = 7.0
+	# 敌方关键牌投狭选择；越过阈值后应确认发动。
+	var enemy_key_touxia_choice: Dictionary = policy.choose_card_choice(snapshot, enemy_key_touxia_request, [cancel_action, confirm_action])
+	if not bool((enemy_key_touxia_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("touxia_enemy_key_cancelled=%s" % enemy_key_touxia_choice)
+	# 山倾动作快照；两张低价值黑桃材料可无距离攻击低体力敌方，应形成正收益主动动作。
+	var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	actor["character_id"] = "sushang"
+	actor["hand"] = [_card(620, "sha", 0), _card(621, "tiesuo", 0)]
+	actor["hand_count"] = 2
+	# 山倾合法动作；目标与材料均由规则层预先枚举，AI只负责收益比较。
+	var shanqing_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"shanqing", "target_ids":[1], "payload":{"skill_id":"shanqing", "material_card_uids":[620, 621], "target_ids":[1]}}
+	# 山倾最终主动动作；唯一正收益组合应被策略保留为技能动作。
+	var shanqing_choice: Dictionary = policy.choose_action(snapshot, [shanqing_action])
+	if str(shanqing_choice.get("action_type", "")) != "use_skill" or str((shanqing_choice.get("payload", {}) as Dictionary).get("skill_id", "")) != "shanqing":
+		return _fail("shanqing_positive_action=%s" % shanqing_choice)
+	# 山倾装备材料；通用自有牌查询必须读取公开装备花色，并按八卦阵 equip_value=7.5 计算保留成本。
+	var equipment_material: Dictionary = _card(622, "bagua", 0)
+	equipment_material["zone"] = "equipment"
+	actor["equipment"] = {"armor":equipment_material}
+	# 独立评估器；直接验证所有转化技能共享的装备材料查询接口，不依赖具体动作排列。
+	var material_evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 装备材料快照；花色与定义 ID 都应保持公开实体原值。
+	var resolved_equipment_material: Dictionary = material_evaluator.get_owned_card_by_uid(snapshot, 0, 622)
+	# 装备材料价值；八卦阵静态 equip_value 固定为7.5，不能回退成未知牌2分。
+	var equipment_material_value: float = material_evaluator.get_owned_card_value_by_uid(snapshot, 0, 622)
+	if str(resolved_equipment_material.get("definition_id", "")) != "bagua" or str(resolved_equipment_material.get("suit", "")) != "spade" or not is_equal_approx(equipment_material_value, 7.5):
+		return _fail("shanqing_equipment_material data=%s value=%.2f" % [resolved_equipment_material, equipment_material_value])
+	# 友方梅花弃牌请求；若山倾因其他收益指定队友，AI应在强制弃牌中保留高价值【桃】。
+	var friendly_club_request: Dictionary = {"request_id":613, "choice_type":"card", "allow_cancel":false, "min_select":1, "max_select":1, "min_card_select":1, "max_card_select":1, "candidates":[_candidate(623, "sha", 2), _candidate(624, "tao", 2)], "context":{"kind":"shanqing_club_discard", "skill_id":"shanqing", "skill_owner_id":0, "target_id":2}}
+	# 弃置友方低价值【杀】的动作；应优先于弃置其高价值救援牌。
+	var discard_friendly_slash_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":613, "selected_card_uids":[623], "selected_target_ids":[], "confirmed":true}}
+	# 弃置友方高价值【桃】的动作；完整 AI 应降低其评分以减少对队友的资源伤害。
+	var discard_friendly_peach_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":613, "selected_card_uids":[624], "selected_target_ids":[], "confirmed":true}}
+	# 友方梅花最终选择；必须保留【桃】并弃置价值更低的【杀】。
+	var friendly_club_choice: Dictionary = policy.choose_card_choice(snapshot, friendly_club_request, [discard_friendly_slash_action, discard_friendly_peach_action])
+	if ((friendly_club_choice.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array) != [623]:
+		return _fail("shanqing_friendly_club_discard=%s" % friendly_club_choice)
 	return true
 
 

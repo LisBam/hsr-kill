@@ -258,6 +258,12 @@ func continue_settlement(_context: Dictionary) -> bool:
 	return false
 
 
+## 恢复由本技能发起、曾被判定前选择暂停的判定结果；judgment_card 为 null 表示判定被取消或牌堆耗尽。
+## 返回 true 表示本技能识别并完成该判定后续，控制器只负责继续统一结算管线。
+func continue_judgment(_context: Dictionary, _judgment_card: CardInstance) -> bool:
+	return false
+
+
 ## 将本技能的一段后续效果登记到控制器结算队列；当前嵌套选择全部结束后会回调continue_settlement。
 func defer_settlement(context: Dictionary) -> bool:
 	if host == null or not host.has_method("defer_skill_settlement"):

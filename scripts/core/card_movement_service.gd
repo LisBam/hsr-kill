@@ -47,6 +47,12 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	move.event_id = event_id
 	move.target_slot = target_slot
 	move.visible_to = visible_to.duplicate()
+	# 移动发生时的回合快照；历史查询不得依赖之后已经推进的 GameState 当前游标。
+	move.turn_number = state.turn_number
+	# 移动发生时的回合角色；额外回合仍使用其真实行动角色 ID。
+	move.turn_player_id = state.current_player_id
+	# 移动发生时的阶段；【投狭】等机制只统计 play 阶段真实进入弃牌堆的实体。
+	move.phase = state.current_phase
 	state.card_move_history.append(move.to_dict())
 	card_moved.emit(move.to_dict(), card.to_dict())
 	return move

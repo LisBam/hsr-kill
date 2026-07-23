@@ -36,6 +36,15 @@ var reason: String = ""
 ## 目标装备槽；非装备移动为空字符串。
 var target_slot: String = ""
 
+## 本次移动发生时的全局回合编号；开局前或无有效对局状态时为0，用于按整回合追踪弃牌来源。
+var turn_number: int = 0
+
+## 本次移动发生时的当前回合角色 ID；没有进行中的回合时为-1，用于区分额外回合与其他角色的同阶段移动。
+var turn_player_id: int = -1
+
+## 本次移动发生时的阶段稳定 ID；例如 play、discard、judgment，空字符串表示尚未进入阶段。
+var phase: String = ""
+
 ## 创建一条只保存基础数据的移牌记录；实际区域修改由 CardMovementService 完成。
 func _init(card_uid_list: Array[int] = [], old_zone: String = "", new_zone: String = "", old_owner: int = -1, new_owner: int = -1, move_reason: String = "") -> void:
 	card_ids = card_uid_list.duplicate()
@@ -60,4 +69,7 @@ func to_dict() -> Dictionary:
 		"visible_to": visible_to.duplicate(),
 		"reason": reason,
 		"target_slot": target_slot,
+		"turn_number": turn_number,
+		"turn_player_id": turn_player_id,
+		"phase": phase,
 	}

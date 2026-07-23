@@ -205,6 +205,12 @@ func continue_negation(_resolver: Object, _context: Dictionary, _final_negated: 
 	return false
 
 
+## 恢复由本卡牌或装备发起、曾被判定前选择暂停的判定结果；judgment_card 为 null 表示判定被取消或牌堆耗尽。
+## 返回 true 表示当前定义识别并完成了该判定后续，控制器不得再猜测具体牌效。
+func continue_judgment(_match_host: Object, _context: Dictionary, _judgment_card: CardInstance) -> bool:
+	return false
+
+
 ## 修正装备持有者使用指定牌时的最大目标数；非相关装备保持原值。
 func modify_maximum_target_count(_actor: PlayerState, _card: CardInstance, current_count: int) -> int:
 	return current_count
@@ -360,7 +366,7 @@ func validate_equipment_response_materials(_match_host: Object, _player_id: int,
 
 
 ## 消费装备响应入口并返回虚拟响应牌；材料和装备实体必须在卡牌文件中复核。
-func consume_equipment_response(_match_host: Object, _player_id: int, _equipment_uid: int, _response_patterns: Array[String], _material_card_uids: Array[int]) -> CardInstance:
+func consume_equipment_response(_match_host: Object, _player_id: int, _equipment_uid: int, _response_patterns: Array[String], _material_card_uids: Array[int], _response_context: Dictionary = {}) -> CardInstance:
 	return null
 
 

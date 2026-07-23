@@ -23,6 +23,8 @@ func _ready() -> void:
 ## 按独立状态顺序执行新机制回归；任一场景失败都立即停止。
 func _run() -> void:
 	_create_controller()
+	if not _test_sushang_guinaifen_metadata():
+		return
 	if not _test_metadata_and_rule_names():
 		return
 	if not _test_expanded_character_metadata():
@@ -94,6 +96,18 @@ func _run() -> void:
 	if not await _test_aisida_heita_xiluwa_skills():
 		return
 	if not await _test_moze_marks_and_out_of_game_skills():
+		return
+	if not _test_shanqing_suit_effects():
+		return
+	if not _test_jianshi_xifa_judgment_continuation():
+		return
+	if not _test_bagua_xifa_async_response_continuation():
+		return
+	if not _test_delayed_trick_xifa_async_judgment():
+		return
+	if not _test_xifa_partial_draw_pile_replenishment_and_opposing_ai():
+		return
+	if not _test_touxia_turn_discard_history():
 		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
@@ -167,12 +181,40 @@ func _reset_state(player_count: int) -> void:
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
 	_controller._pending_finish_turn_player_id = -1
+	_controller._clear_pending_judgment_request()
+	_controller._judgment_flow_in_progress = false
+	_controller._judgment_resume_needs_result_pause = false
 	# 旧场景的AI策略与异步令牌；每个专项场景从无控制者、无待执行任务状态开始，避免前一断言的计时器进入新状态。
 	_controller.ai_coordinator._policies.clear()
 	_controller._ai_drive_token += 1
 	_controller._scheduled_ai_drive_token = -1
 	_controller._scheduled_ai_choice_request_id = -1
 	_controller._ai_choice_submit_failures.clear()
+
+
+## 核对素裳、桂乃芬的稳定资料、技能顺序与四段玩家可见技能原文。
+func _test_sushang_guinaifen_metadata() -> bool:
+	# 素裳定义；仙舟联盟女性、4点体力与双技能顺序必须保持稳定。
+	var sushang: Dictionary = GameDatabase.get_character("sushang")
+	# 桂乃芬定义；仙舟联盟女性、3点体力与双技能顺序必须保持稳定。
+	var guinaifen: Dictionary = GameDatabase.get_character("guinaifen")
+	if str(sushang.get("display_name", "")) != "素裳" or str(sushang.get("gender", "")) != "female" or str(sushang.get("faction", "")) != "xianzhou" or int(sushang.get("max_hp", 0)) != 4 or (sushang.get("skills", []) as Array) != ["jianshi", "shanqing"]:
+		return _fail("sushang_metadata=%s" % sushang)
+	if str(guinaifen.get("display_name", "")) != "桂乃芬" or str(guinaifen.get("gender", "")) != "female" or str(guinaifen.get("faction", "")) != "xianzhou" or int(guinaifen.get("max_hp", 0)) != 3 or (guinaifen.get("skills", []) as Array) != ["xifa", "touxia"]:
+		return _fail("guinaifen_metadata=%s" % guinaifen)
+	# 技能原文映射；任何标点、数值、花色顺序或语句顺序变化都应由专项测试立即报告。
+	var expected_descriptions: Dictionary = {
+		"jianshi":"当你使用【杀】造成伤害时，你可进行判定：若判定结果为红色，此伤害+1。",
+		"shanqing":"你可将两张牌当【杀】使用，这些牌中的每种花色使此【杀】获得对应效果：红桃，造成伤害后回复等量的体力值；方块，使用时你摸一张牌；黑桃，此【杀】无距离限制；梅花，使用时你弃置目标的一张牌。每回合限一次。",
+		"xifa":"一名角色进行判定前，你可观看牌堆顶的两张牌，然后将这些牌以任意顺序放回牌堆顶与牌堆底。",
+		"touxia":"其他角色的回合结束时，你可进行判定，然后你可以获得弃牌堆中一张于此回合出牌阶段进入弃牌堆、且花色与判定结果相同的牌，然后当前回合的角色摸一张牌。每轮限一次。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前技能 ID；自动目录索引必须返回完整静态说明。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("sushang_guinaifen_description=%s" % skill_id)
+	return true
 
 
 ## 验证属性【杀】的规则名与显示名分离，并核对三名武将的体力、势力和技能引用。
@@ -2321,6 +2363,306 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 		horizontal_markers.queue_free()
 		return _fail("horizontal_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
 	horizontal_markers.queue_free()
+	return true
+
+
+## 验证山倾的方块摸牌、红桃等量回复、黑桃远距离、梅花单次弃牌、同花色去重与每回合限次。
+func _test_shanqing_suit_effects() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 山倾持有者；预先失去2点体力，用于验证红桃伤害后回复实际伤害量。
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.hp = 2
+	# 方块效果摸到的牌；放在牌堆顶并在 useCard 时进入持有者手牌。
+	var diamond_draw_card: CardInstance = _add_draw_pile_card("shan", "club", 4)
+	# 红桃与方块材料；两种花色应分别产生回复与摸1张牌。
+	var heart_material: CardInstance = _add_hand_card(0, "sha", "heart", 6)
+	# 第二张方块材料；与红桃共同构成第一张山倾【杀】。
+	var diamond_material: CardInstance = _add_hand_card(0, "shan", "diamond", 8)
+	# 山倾运行时技能；缺失表示自动扫描或武将引用配置错误。
+	var shanqing: SkillDefinition = _install_single_skill(0, "shanqing")
+	if shanqing == null:
+		return _fail("shanqing_missing")
+	# 第一张山倾直接指定相邻敌方；成功后应先进入目标【闪】响应窗口。
+	var first_error: String = shanqing.activate({"material_card_uids":[heart_material.uid, diamond_material.uid], "target_ids":[1]})
+	if not first_error.is_empty() or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response":
+		return _fail("shanqing_heart_diamond_start error=%s pending=%s" % [first_error, _controller._pending_card_choice])
+	if not owner.hand.has(diamond_draw_card):
+		return _fail("shanqing_diamond_draw hand=%s" % owner.hand.map(func(card: CardInstance) -> int: return card.uid))
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 普通【杀】造成1点伤害后，红桃效果应令持有者回复1点体力。
+	if _controller.state.get_player(1).hp != 3 or owner.hp != 3 or shanqing.can_activate():
+		return _fail("shanqing_heart_damage target_hp=%d owner_hp=%d reusable=%s" % [_controller.state.get_player(1).hp, owner.hp, shanqing.can_activate()])
+
+	_reset_state(4)
+	_controller.game_flow_interval_seconds = 0.0
+	# 两张同为黑桃的材料；同花色只记录一次，但仍应在指定目标阶段解除距离限制。
+	var first_spade: CardInstance = _add_hand_card(0, "shan", "spade", 2)
+	# 第二张黑桃材料；用于验证重复花色不会产生重复效果或阻止发动。
+	var second_spade: CardInstance = _add_hand_card(0, "tao", "spade", 9)
+	shanqing = _install_single_skill(0, "shanqing")
+	# 四人局0号到2号基础距离为2，普通无武器【杀】不可指定；黑桃山倾应合法进入2号响应窗口。
+	var spade_error: String = shanqing.activate({"material_card_uids":[first_spade.uid, second_spade.uid], "target_ids":[2]})
+	if not spade_error.is_empty() or not _controller.has_pending_card_choice() or int(_controller._pending_card_choice.get("chooser_id", -1)) != 2:
+		return _fail("shanqing_spade_distance error=%s pending=%s" % [spade_error, _controller._pending_card_choice])
+	if not _submit_pending_choice(2, [], [], false):
+		return false
+
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 目标两张区域牌；双梅花材料只允许弹出一次弃牌窗口并弃置其中一张。
+	var target_first_card: CardInstance = _add_hand_card(1, "sha", "heart", 5)
+	# 目标第二张手牌；技能完成后应仍保留，证明同花色梅花没有重复生效。
+	var target_second_card: CardInstance = _add_hand_card(1, "shan", "diamond", 7)
+	# 第一张梅花材料；两张材料都来自普通手牌。
+	var first_club: CardInstance = _add_hand_card(0, "tao", "club", 3)
+	# 第二张梅花材料；重复花色应在虚拟存储中去重。
+	var second_club: CardInstance = _add_hand_card(0, "jiu", "club", 11)
+	shanqing = _install_single_skill(0, "shanqing")
+	# 双梅花山倾发动结果；成功后应只创建一次目标区域弃牌选择。
+	var club_error: String = shanqing.activate({"material_card_uids":[first_club.uid, second_club.uid], "target_ids":[1]})
+	if not club_error.is_empty() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "shanqing_club_discard":
+		return _fail("shanqing_club_prompt error=%s pending=%s" % [club_error, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [target_first_card.uid], [], true):
+		return false
+	if not _controller.state.discard_pile.has(target_first_card) or not _controller.state.get_player(1).hand.has(target_second_card) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response":
+		return _fail("shanqing_club_once discard=%s target_hand=%s pending=%s" % [_controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.state.get_player(1).hand.map(func(card: CardInstance) -> int: return card.uid), _controller._pending_card_choice])
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	return true
+
+
+## 验证剑势在 shaDamage 时暂停原【杀】，戏法调整判定牌后恢复并按红色结果增加1点伤害。
+func _test_jianshi_xifa_judgment_continuation() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 黑色判定候选；最后加入使其成为初始牌堆顶，证明戏法确实改变最终判定结果。
+	var red_judgment_card: CardInstance = _add_draw_pile_card("tao", "heart", 6)
+	# 初始牌堆顶黑牌；未发动戏法时剑势不会增伤。
+	var black_judgment_card: CardInstance = _add_draw_pile_card("shan", "spade", 8)
+	# 虚拟【杀】材料；使用统一虚拟牌入口触发完整 useCard、【闪】与 shaDamage 流程。
+	var slash_material: CardInstance = _add_hand_card(0, "jiu", "club", 4)
+	# 素裳的剑势实例；负责 shaDamage 确认与伤害续接。
+	var jianshi: SkillDefinition = _install_single_skill(0, "jianshi")
+	# 同一角色的戏法实例；用于验证通用判定前接口与排序窗口，不依赖武将组合限制。
+	var xifa: SkillDefinition = _install_single_skill(0, "xifa")
+	if jianshi == null or xifa == null:
+		return _fail("jianshi_xifa_missing")
+	# 使用单材料虚拟【杀】；第一步由目标明确放弃【闪】。
+	var slash_material_uids: Array[int] = [slash_material.uid]
+	if not _controller.execute_virtual_card_use(0, "sha", slash_material_uids, [1], "") or not _controller.has_pending_card_choice():
+		return _fail("jianshi_slash_start pending=%s" % _controller._pending_card_choice)
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 【闪】放弃后应停在剑势确认，尚未扣减目标体力。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "jianshi_confirm" or _controller.state.get_player(1).hp != 4:
+		return _fail("jianshi_confirm_pending=%s hp=%d" % [_controller._pending_card_choice, _controller.state.get_player(1).hp])
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 剑势开始判定后先进入戏法确认；判定 AI 上下文必须公开红色有利和来源/目标相反价值。
+	var xifa_confirm_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	# 剑势判定方向数据；红色条件与角色价值供戏法按阵营决定排序。
+	var judgment_ai_context: Dictionary = xifa_confirm_context.get("judgment_ai_context", {}) as Dictionary
+	if str(xifa_confirm_context.get("kind", "")) != "xifa_confirm" or (judgment_ai_context.get("favorable_condition", {}) as Dictionary).get("colors", []) != ["red"]:
+		return _fail("jianshi_judgment_ai_context=%s" % xifa_confirm_context)
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 戏法排序窗口；将红牌置于顶行最左侧、黑牌置底。
+	if str(_controller._pending_card_choice.get("choice_type", "")) != "arrange":
+		return _fail("xifa_arrangement_missing=%s" % _controller._pending_card_choice)
+	if not _submit_pending_choice(0, [red_judgment_card.uid, black_judgment_card.uid], [], true, "top_count_1"):
+		return false
+	# 红色剑势判定完成后原【杀】恢复并造成2点伤害；判定请求与所有选择均应清空。
+	if _controller.state.get_player(1).hp != 2 or not _controller.state.discard_pile.has(red_judgment_card) or _controller.has_pending_judgment_request() or _controller.has_pending_card_choice():
+		return _fail("jianshi_xifa_result hp=%d discard=%s pending_judge=%s pending_choice=%s" % [_controller.state.get_player(1).hp, _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.has_pending_judgment_request(), _controller._pending_card_choice])
+	return true
+
+
+## 验证八卦阵判定被戏法暂停时不会提前判定响应失败，黑色结果完成后才排除防具并恢复手牌【闪】窗口。
+func _test_bagua_xifa_async_response_continuation() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 防守者手牌【闪】；八卦阵最终判定失败后应重新开放该实体，并在确认后正常抵消【杀】。
+	var hand_shan: CardInstance = _add_hand_card(1, "shan", "heart", 7)
+	# 防守者八卦阵；判定期间始终留在防具槽，失败后只排除本次响应入口而不弃置装备。
+	var bagua_card: CardInstance = CardInstance.new("bagua", "club", 2)
+	bagua_card.zone = "equipment"
+	bagua_card.owner_id = 1
+	_controller.state.get_player(1).equipment["armor"] = bagua_card
+	# 红色观看牌；戏法会把它置底，证明最终黑色结果来自玩家提交的牌堆顺序。
+	var red_judgment_card: CardInstance = _add_draw_pile_card("tao", "heart", 6)
+	# 黑色观看牌；排序后置于顶行最左侧，使八卦阵判定失败并进入普通响应重试。
+	var black_judgment_card: CardInstance = _add_draw_pile_card("sha", "spade", 8)
+	# 攻击者虚拟【杀】材料；通过完整【杀】响应链验证八卦阵的异步判定恢复路由。
+	var slash_material: CardInstance = _add_hand_card(0, "jiu", "diamond", 4)
+	# 防守者戏法实例；全局 judgeBefore 订阅应在八卦阵翻牌前建立确认与排序请求。
+	var xifa: SkillDefinition = _install_single_skill(1, "xifa")
+	if xifa == null:
+		return _fail("bagua_xifa_missing")
+	# 发起单目标虚拟【杀】；第一段响应必须只询问八卦阵装备本身。
+	var slash_material_uids: Array[int] = [slash_material.uid]
+	if not _controller.execute_virtual_card_use(0, "sha", slash_material_uids, [1], ""):
+		return _fail("bagua_xifa_slash_start")
+	# 首次响应候选；立即装备询问不得混入手牌【闪】，避免玩家跳过八卦阵确认协议。
+	var first_response_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if first_response_candidates.size() != 1 or int((first_response_candidates[0] as Dictionary).get("uid", -1)) != bagua_card.uid:
+		return _fail("bagua_xifa_immediate_candidates=%s" % [first_response_candidates])
+	if not _submit_pending_choice(1, [bagua_card.uid], [], true):
+		return false
+	# 八卦阵开始判定后必须先停在戏法确认，不能把尚未翻开的判定误当成失败并提前打开手牌窗口。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "xifa_confirm" or not _controller.has_pending_judgment_request():
+		return _fail("bagua_xifa_confirm pending=%s judge=%s" % [_controller._pending_card_choice, _controller.has_pending_judgment_request()])
+	if not _submit_pending_choice(1, [], [], true):
+		return false
+	# 戏法排序提交黑色牌置顶、红色牌置底；顶行牌数固定为1。
+	if not _submit_pending_choice(1, [black_judgment_card.uid, red_judgment_card.uid], [], true, "top_count_1"):
+		return false
+	# 黑色判定完成后的第二次响应候选；手牌【闪】保留，已经判定过的八卦阵必须被排除。
+	var retry_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	# 第二次响应候选 UID；用于同时检查手牌保留与防具排除，不依赖候选排列顺序。
+	var retry_candidate_uids: Array[int] = []
+	for candidate_variant: Variant in retry_candidates:
+		# 当前响应候选；候选字典只读取稳定实体 UID。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		retry_candidate_uids.append(int(candidate.get("uid", -1)))
+	if not retry_candidate_uids.has(hand_shan.uid) or retry_candidate_uids.has(bagua_card.uid):
+		return _fail("bagua_xifa_retry_candidates=%s" % [retry_candidate_uids])
+	if not _submit_pending_choice(1, [hand_shan.uid], [], true):
+		return false
+	# 最终响应结果；目标不受伤，黑色判定牌与手牌【闪】进入弃牌堆，防具仍留在原槽且全部异步状态清空。
+	var defender: PlayerState = _controller.state.get_player(1)
+	if defender.hp != defender.max_hp or defender.equipment.get("armor") != bagua_card or not _controller.state.discard_pile.has(black_judgment_card) or not _controller.state.discard_pile.has(hand_shan) or _controller.has_pending_judgment_request() or _controller.has_pending_card_choice():
+		return _fail("bagua_xifa_result hp=%d armor=%s discard=%s judge=%s choice=%s" % [defender.hp, defender.equipment.get("armor"), _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.has_pending_judgment_request(), _controller._pending_card_choice])
+	return true
+
+
+## 验证延时锦囊判定被戏法暂停时保留处理区原牌，排序完成后才应用判定结果并结束延时牌生命周期。
+func _test_delayed_trick_xifa_async_judgment() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 使用独立测试阶段避免判定完成后自动推进正式回合；本项只验证延时牌与异步判定的职责边界。
+	_controller.state.current_phase = "judgment_test"
+	# 乐不思蜀实体；模拟其已从判定区进入公共处理区、正等待判定的标准中间状态。
+	var delayed_card: CardInstance = CardInstance.new("lebu", "club", 9)
+	delayed_card.zone = "processing"
+	delayed_card.owner_id = -1
+	_controller.state.processing_area.append(delayed_card)
+	# 红桃观看牌；戏法将其置顶后应使目标保留出牌阶段。
+	var heart_judgment_card: CardInstance = _add_draw_pile_card("shan", "heart", 5)
+	# 黑桃初始牌堆顶；若延时牌绕过戏法同步翻牌，将错误写入跳过出牌阶段状态。
+	var spade_judgment_card: CardInstance = _add_draw_pile_card("sha", "spade", 10)
+	# 目标角色的戏法实例；负责在乐不思蜀 judgeBefore 时暂停并调整两张观看牌。
+	var xifa: SkillDefinition = _install_single_skill(0, "xifa")
+	# 乐不思蜀源码定义；延时判定与恢复均由内容文件自身处理，控制器不识别具体牌名。
+	var lebu_definition: CardDefinition = GameDatabase.get_card_definition("lebu")
+	if xifa == null or lebu_definition == null:
+		return _fail("delayed_xifa_missing")
+	lebu_definition.resolve_delayed_judgment(_controller, 0, delayed_card, false)
+	# 判定暂停期间原延时牌仍在处理区，且尚未根据初始牌堆顶黑桃写入跳过阶段状态。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "xifa_confirm" or not _controller.state.processing_area.has(delayed_card) or bool(_controller.state.get_player(0).skipped_phases.get("play", false)):
+		return _fail("delayed_xifa_pause processing=%s skipped=%s pending=%s" % [_controller.state.processing_area.has(delayed_card), _controller.state.get_player(0).skipped_phases, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	# 戏法把红桃置顶并把黑桃置底，使最终乐不思蜀判定通过。
+	if not _submit_pending_choice(0, [heart_judgment_card.uid, spade_judgment_card.uid], [], true, "top_count_1"):
+		return false
+	# 最终延时结果；红桃不跳过出牌阶段，判定牌与乐不思蜀均已弃置，所有判定与选择状态清空。
+	if bool(_controller.state.get_player(0).skipped_phases.get("play", false)) or _controller.state.processing_area.has(delayed_card) or not _controller.state.discard_pile.has(delayed_card) or not _controller.state.discard_pile.has(heart_judgment_card) or _controller.has_pending_judgment_request() or _controller.has_pending_card_choice():
+		return _fail("delayed_xifa_result skipped=%s processing=%s discard=%s judge=%s choice=%s" % [_controller.state.get_player(0).skipped_phases, _controller.state.processing_area.map(func(card: CardInstance) -> int: return card.uid), _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.has_pending_judgment_request(), _controller._pending_card_choice])
+	return true
+
+
+## 验证戏法补看第二张牌时不会丢失原牌堆顶，并验证敌对改判定者会优先制造投狭无法回收的花色。
+func _test_xifa_partial_draw_pile_replenishment_and_opposing_ai() -> bool:
+	_reset_state(3)
+	# 原摸牌堆唯一顶牌；弃牌堆洗入后仍必须保持为第一张观看牌和实际牌堆顶。
+	var retained_top_card: CardInstance = _add_draw_pile_card("shan", "club", 4)
+	# 第一张待洗回弃牌；红桃与方块保证第二张观看牌不会和原梅花顶牌同花色。
+	var first_recycled_card: CardInstance = _add_discard_pile_card("tao", "heart", 6)
+	# 第二张待洗回弃牌；与第一张共同验证补牌后全部实体仍在摸牌堆且没有丢失。
+	var second_recycled_card: CardInstance = _add_discard_pile_card("wuzhong", "diamond", 8)
+	# 私有观看候选；请求2张时应保留原顶牌，并从洗回弃牌中补足第2张。
+	var viewed_candidates: Array[Dictionary] = _controller.get_top_draw_card_candidates(1, 2)
+	if viewed_candidates.size() != 2 or int(viewed_candidates[0].get("uid", -1)) != retained_top_card.uid or int(viewed_candidates[1].get("uid", -1)) not in [first_recycled_card.uid, second_recycled_card.uid] or not _controller.state.discard_pile.is_empty() or _controller.state.draw_pile.size() != 3 or _controller.state.draw_pile.back() != retained_top_card or not _controller.state.draw_pile.has(first_recycled_card) or not _controller.state.draw_pile.has(second_recycled_card):
+		return _fail("xifa_partial_replenishment viewed=%s draw=%s discard=%s" % [viewed_candidates, _controller.state.draw_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid)])
+	# 第二张观看牌的真实花色；模拟投狭当前只有该花色能够回收高价值牌。
+	var preferred_suit: String = str((viewed_candidates[1].get("card_data", {}) as Dictionary).get("suit", ""))
+	# 投狭判定 AI 上下文；有利结果帮助领袖持有者和忠臣当前回合角色，对反贼戏法持有者整体不利。
+	var judgment_ai_context: Dictionary = {"preferred_suit_values":{preferred_suit:8.0}, "favorable_result_player_values":{"0":1.0, "2":0.5}}
+	# 敌对戏法实例；二号反贼应把不匹配的梅花原顶牌保留在顶端，阻止领袖投狭命中高价值花色。
+	var hostile_xifa: SkillDefinition = _install_single_skill(1, "xifa")
+	if hostile_xifa == null:
+		return _fail("hostile_xifa_missing")
+	# 敌对排序计划；顶行应只有原梅花牌，匹配投狭的候选被放入底行。
+	var hostile_plan: Dictionary = hostile_xifa._build_ai_arrangement(viewed_candidates, judgment_ai_context, 0)
+	if int(hostile_plan.get("top_count", -1)) != 1 or (hostile_plan.get("ordered_card_uids", []) as Array).is_empty() or int((hostile_plan.get("ordered_card_uids", []) as Array)[0]) != retained_top_card.uid:
+		return _fail("hostile_xifa_touxia_plan=%s" % hostile_plan)
+	# 友方戏法实例；一号领袖应反向把可回收高价值花色置顶，保持投狭自身的指定 AI 逻辑。
+	var friendly_xifa: SkillDefinition = _install_single_skill(0, "xifa")
+	if friendly_xifa == null:
+		return _fail("friendly_xifa_missing")
+	# 友方排序计划；顶行第一张必须是拥有投狭偏好花色的第二张观看牌。
+	var friendly_plan: Dictionary = friendly_xifa._build_ai_arrangement(viewed_candidates, judgment_ai_context, 0)
+	if int(friendly_plan.get("top_count", -1)) != 1 or (friendly_plan.get("ordered_card_uids", []) as Array).is_empty() or int((friendly_plan.get("ordered_card_uids", []) as Array)[0]) != int(viewed_candidates[1].get("uid", -1)):
+		return _fail("friendly_xifa_touxia_plan=%s" % friendly_plan)
+	return true
+
+
+## 验证投狭只统计指定回合出牌阶段弃牌、戏法按高价值花色改判、获得后固定令当前回合角色摸1张牌。
+func _test_touxia_turn_discard_history() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_player_id = 1
+	_controller.state.current_phase = "play"
+	_controller.state.turn_number = 1
+	_controller.state.round_number = 1
+	# 出牌阶段进入弃牌堆的红桃关键牌；应成为投狭判定后的唯一可获得候选。
+	var play_discard_card: CardInstance = _add_hand_card(1, "tao", "heart", 9)
+	_controller.card_movement.move_card(play_discard_card, "discard_pile", -1, "discard", 101)
+	# 弃牌阶段进入弃牌堆的梅花牌；即使仍在弃牌堆也不得进入投狭窗口。
+	_controller.state.current_phase = "discard"
+	# 弃牌阶段测试实体；用于确认投狭严格排除非出牌阶段移动记录。
+	var discard_phase_card: CardInstance = _add_hand_card(1, "shan", "club", 7)
+	_controller.card_movement.move_card(discard_phase_card, "discard_pile", -1, "discard", 102)
+	# 戏法观看候选；黑桃先成为牌堆顶，玩家随后把红桃调整为投狭判定结果。
+	var heart_judgment_card: CardInstance = _add_draw_pile_card("sha", "heart", 5)
+	# 黑桃初始牌堆顶；投狭偏好映射应明确更希望红桃以取得关键【桃】。
+	var spade_judgment_card: CardInstance = _add_draw_pile_card("shan", "spade", 10)
+	_controller.state.current_phase = "finish"
+	# 桂乃芬两项技能实例；戏法负责改判，投狭负责回合历史与获得流程。
+	var xifa: SkillDefinition = _install_single_skill(0, "xifa")
+	# 投狭运行时实例；每轮额度从当前 round_number 同步。
+	var touxia: SkillDefinition = _install_single_skill(0, "touxia")
+	if xifa == null or touxia == null:
+		return _fail("touxia_xifa_missing")
+	# 通过正式回合尾部入口派发 phaseAfter；选择与判定完成前不得提前切换到下一角色。
+	_controller._complete_finish_turn(1)
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "touxia_confirm" or _controller.state.current_player_id != 1:
+		return _fail("touxia_confirm_missing=%s" % _controller._pending_card_choice)
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "xifa_confirm":
+		return _fail("touxia_xifa_confirm_missing=%s" % _controller._pending_card_choice)
+	# 投狭向戏法暴露的花色偏好应包含红桃，且不包含仅在弃牌阶段进入弃牌堆的梅花。
+	var touxia_judgment_ai: Dictionary = ((_controller._pending_card_choice.get("context", {}) as Dictionary).get("judgment_ai_context", {}) as Dictionary)
+	# 投狭花色偏好映射；只应记录当前仍可回收牌的实体花色。
+	var preferred_suits: Dictionary = touxia_judgment_ai.get("preferred_suit_values", {}) as Dictionary
+	if not preferred_suits.has("heart") or preferred_suits.has("club"):
+		return _fail("touxia_preferred_suits=%s" % preferred_suits)
+	if not _submit_pending_choice(0, [], [], true):
+		return false
+	if not _submit_pending_choice(0, [heart_judgment_card.uid, spade_judgment_card.uid], [], true, "top_count_1"):
+		return false
+	# 零流程间隔下应立即打开同花色获得窗口，且候选只包含出牌阶段的红桃【桃】。
+	var gain_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "touxia_gain" or gain_candidates.size() != 1 or int((gain_candidates[0] as Dictionary).get("uid", -1)) != play_discard_card.uid:
+		return _fail("touxia_gain_candidates=%s pending=%s" % [gain_candidates, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [play_discard_card.uid], [], true):
+		return false
+	# 桂乃芬获得出牌阶段弃置的【桃】，当前回合角色随后从剩余牌堆摸到黑桃牌；弃牌阶段梅花仍留在弃牌堆。
+	if not _controller.state.get_player(0).hand.has(play_discard_card) or not _controller.state.get_player(1).hand.has(spade_judgment_card) or _controller.state.current_player_id != 0:
+		return _fail("touxia_result owner_hand=%s turn_hand=%s discard=%s current=%d" % [_controller.state.get_player(0).hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.get_player(1).hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.state.current_player_id])
 	return true
 
 
