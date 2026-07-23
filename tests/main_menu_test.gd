@@ -70,20 +70,32 @@ func _run() -> void:
 	var all_cards_panel: AllCardsPanel = main_instance.get_node("%AllCardsPanel") as AllCardsPanel
 	# 所有武将子分页按钮；图鉴首次打开时必须默认选中。
 	var all_characters_tab_button: Button = all_cards_panel.get_node("%AllCharactersTabButton") as Button
+	# 所有武将牌子分页标题；玩家可见文案必须包含“牌”字以与另外两类卡牌保持一致。
+	var all_characters_tab_name: Label = all_cards_panel.get_node("%AllCharactersTabName") as Label
 	# 所有游戏牌子分页按钮；点击后展示数据库中每种游戏牌定义。
 	var all_game_cards_tab_button: Button = all_cards_panel.get_node("%AllGameCardsTabButton") as Button
 	# 所有机缘子分页按钮；点击后展示含灰色关卡机缘在内的完整目录。
 	var all_opportunities_tab_button: Button = all_cards_panel.get_node("%AllOpportunitiesTabButton") as Button
+	# 所有机缘牌子分页标题；玩家可见文案必须明确该分类展示的是机缘牌。
+	var all_opportunities_tab_name: Label = all_cards_panel.get_node("%AllOpportunitiesTabName") as Label
 	# 图鉴搜索输入框；当前子分页内容应随文本即时过滤。
 	var all_cards_search_input: LineEdit = all_cards_panel.get_node("%AllCardsSearchInput") as LineEdit
 	# 图鉴动态网格内容；用于确认每类条目复用正式牌面场景且数量完整。
 	var all_cards_grid_content: Control = all_cards_panel.get_node("%AllCardsGridContent") as Control
+	# 图鉴动态网格滚动区；三类卡牌共用模式选择同款纵向滑条并为最右列保留安全间距。
+	var all_cards_grid_scroll: ScrollContainer = all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer
 	# 图鉴结果数量标签；搜索后必须同时显示命中数与当前分类总数。
 	var all_cards_result_count_label: Label = all_cards_panel.get_node("%AllCardsResultCountLabel") as Label
 	# 图鉴完整资料遮罩；点击牌面后显示规则正文并阻断底层输入。
 	var all_cards_information_backdrop: ColorRect = all_cards_panel.get_node("%AllCardsInfoBackdrop") as ColorRect
 	# 图鉴完整资料标题；用于确认点击的是当前类别中的真实静态定义。
 	var all_cards_information_title: Label = all_cards_panel.get_node("%AllCardsInfoTitle") as Label
+	# 图鉴武将详情双栏主体；武将牌详情打开时显示，其他卡牌资料使用通用正文滚动区。
+	var all_cards_character_information_body: HBoxContainer = all_cards_panel.get_node("%AllCardsInfoCharacterBody") as HBoxContainer
+	# 图鉴武将详情左侧牌面区域；必须承载一张正式 PlayerTargetView。
+	var all_cards_character_information_card_area: Control = all_cards_panel.get_node("%AllCardsInfoCharacterCardArea") as Control
+	# 图鉴通用资料滚动区；武将详情打开时隐藏，游戏牌与机缘详情打开时恢复。
+	var all_cards_information_scroll: ScrollContainer = all_cards_panel.get_node("%AllCardsInfoScroll") as ScrollContainer
 	# 图鉴左侧子分页列表；宽度应与模式选择和联机设置列表保持一致。
 	var all_cards_side_list: PanelContainer = all_cards_panel.get_node("%AllCardsSideList") as PanelContainer
 	# 游戏人数输入框；2至10范围内的值会作为主菜单开局请求参数。
@@ -226,9 +238,12 @@ func _run() -> void:
 		return
 	# 车轮战模式专属设置；局内、局外必须同时显示明置与暗置数量，并应用同一字体、文字色及全局配置值。
 	main_menu.call("_select_wheel_duel_mode")
+	# 局内菜单组件；用于把当前模式切为车轮战并验证对应设置行。
 	var match_menu: MatchMenu = main_instance.get_node("MatchMenu") as MatchMenu
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_WHEEL_DUEL)
+	# 车轮战设置标签期望颜色；取当前主题次级文字语义。
 	var expected_menu_text_color: Color = BattleUIStyle.get_color("text_secondary")
+	# 车轮战数值输入期望颜色；取当前主题主要文字语义。
 	var expected_input_text_color: Color = BattleUIStyle.get_color("text_primary")
 	if not main_wheel_face_up_input.get_parent().visible or not main_wheel_face_down_input.get_parent().visible or not match_wheel_face_up_input.get_parent().visible or not match_wheel_face_down_input.get_parent().visible or main_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or main_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not main_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or main_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or not match_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or int(main_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(match_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(main_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count or int(match_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count:
 		_fail("wheel_duel_menu_settings_style_or_sync")
@@ -249,14 +264,18 @@ func _run() -> void:
 	mode_scroll.scroll_vertical = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
 	await get_tree().process_frame
 	await get_tree().process_frame
+	# 过关斩将模式卡全局矩形；滚动到底部后必须完整位于可视窗口内。
 	var conquest_mode_rect: Rect2 = conquest_mode_button.get_global_rect()
+	# 模式滚动窗口全局矩形；用于与第六张模式卡边界比较。
 	var mode_scroll_rect: Rect2 = mode_scroll.get_global_rect()
 	if conquest_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or conquest_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
 		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(conquest_mode_rect), str(mode_scroll_rect)])
 		return
 	# 滚轮交互；向下滚动必须改变内容位置，并让纵向滑条同步到同一值。
 	main_menu.call("_set_mode_scroll_vertical", 0.0)
+	# 模式滚动窗口屏幕中心；合成滚轮事件必须落在该命中区域内。
 	var wheel_position: Vector2 = _screen_rect(mode_scroll).get_center()
+	# 向下滚轮事件；使用一格倍率验证统一滚动入口。
 	var wheel_down_event: InputEventMouseButton = InputEventMouseButton.new()
 	wheel_down_event.position = wheel_position
 	wheel_down_event.button_index = MOUSE_BUTTON_WHEEL_DOWN
@@ -264,6 +283,7 @@ func _run() -> void:
 	wheel_down_event.factor = 1.0
 	get_viewport().push_input(wheel_down_event, true)
 	await get_tree().process_frame
+	# 滚轮后的内容滚动值；必须为正并与拖条值一致。
 	var wheel_scroll_value: int = mode_scroll.scroll_vertical
 	if wheel_scroll_value <= 0 or not is_equal_approx(mode_scroll_bar.value, wheel_scroll_value):
 		_fail("mode_scroll_wheel_down scroll=%d bar=%f" % [wheel_scroll_value, mode_scroll_bar.value])
@@ -289,13 +309,21 @@ func _run() -> void:
 		_fail("mode_scroll_conquest_click")
 		return
 	# 过关斩将专属开局设置；换将卡与随机选将牌数均须显示，车轮战专属候选则不得误入该模式。
+	# 主菜单过关斩将换将卡设置行；该模式保留普通换将配置。
 	var main_conquest_replacement_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow") as Control
+	# 主菜单过关斩将随机候选设置行；该模式保留普通候选数量配置。
 	var main_conquest_candidate_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow") as Control
+	# 主菜单过关斩将难度设置行；只在该模式显示。
 	var main_conquest_difficulty_row: Control = main_instance.get_node("%MainMenuConquestDifficultyRow") as Control
+	# 主菜单过关斩将难度下拉框；选项元数据与全局难度同步。
 	var main_conquest_difficulty_option: OptionButton = main_instance.get_node("%MainMenuConquestDifficultyOption") as OptionButton
+	# 局内菜单过关斩将换将卡设置行；应与主菜单使用相同显隐规则。
 	var match_conquest_replacement_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow") as Control
+	# 局内菜单过关斩将随机候选设置行；应在该模式保持可见。
 	var match_conquest_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
+	# 局内菜单过关斩将难度设置行；只在当前对局模式适用时显示。
 	var match_conquest_difficulty_row: Control = main_instance.get_node("%ConquestDifficultyRow") as Control
+	# 局内菜单过关斩将难度下拉框；用于验证主菜单设置即时同步。
 	var match_conquest_difficulty_option: OptionButton = main_instance.get_node("%ConquestDifficultyOption") as OptionButton
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_CONQUEST)
 	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or main_conquest_difficulty_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or match_conquest_difficulty_row == null or main_custom_character_checkbox == null or match_custom_character_checkbox == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not main_conquest_difficulty_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible or not match_conquest_difficulty_row.visible or not main_custom_character_checkbox.visible or not match_custom_character_checkbox.visible or main_custom_character_checkbox.text != "自选武将" or match_custom_character_checkbox.text != "自选武将":
@@ -358,9 +386,22 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 动态联机形象牌；每个数据库武将都必须对应一张正式 PlayerTargetView 候选。
 	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
+	# 联机形象实际武将顺序；从每张只读预览牌的快照提取稳定 ID。
+	var online_avatar_character_ids: Array[String] = []
+	for online_avatar_view_node: Node in online_avatar_views:
+		# 当前联机形象预览牌；只读取配置快照，不修改临时选择状态。
+		var online_avatar_view: PlayerTargetView = online_avatar_view_node as PlayerTargetView
+		# 当前联机形象预览快照；character_id 必须按共享势力顺序连续排列。
+		var online_avatar_snapshot: Dictionary = online_avatar_view.get("_player_snapshot") as Dictionary
+		online_avatar_character_ids.append(str(online_avatar_snapshot.get("character_id", "")))
+	# 联机形象期望武将顺序；复制数据库 ID 后用图鉴共享排序器生成。
+	var expected_online_avatar_character_ids: Array[String] = []
+	for online_character_id_variant: Variant in GameDatabase.characters.keys():
+		expected_online_avatar_character_ids.append(str(online_character_id_variant))
+	expected_online_avatar_character_ids.sort_custom(CardGallerySort.sort_character_ids)
 	# 联机设置页矩形；必须贴合原主菜单客户区，顶部导航仍可聚焦并可对等切回模式选择。
 	var online_settings_rect: Rect2 = online_settings_panel.get_global_rect()
-	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(online_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or not online_profile_section_button.button_pressed or absf(online_action_panel.size.y - 92.0) > 1.0:
+	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or online_avatar_character_ids != expected_online_avatar_character_ids or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(online_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or not online_profile_section_button.button_pressed or absf(online_action_panel.size.y - 92.0) > 1.0:
 		_fail("online_settings_open")
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
@@ -398,9 +439,54 @@ func _run() -> void:
 	var all_cards_page_rect: Rect2 = all_cards_panel.get_global_rect()
 	# 所有武将正式牌面节点；数量必须等于当前数据库武将定义总数。
 	var all_character_views: Array[Node] = all_cards_grid_content.find_children("*", "PlayerTargetView", true, false)
-	if not all_cards_panel.visible or main_frame.visible or online_settings_panel.visible or not all_cards_button.button_pressed or top_identity_mode_button.button_pressed or online_settings_button.button_pressed or not (main_instance.get_node("%TopAllCardsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or not all_characters_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunities_tab_button.button_pressed or all_character_views.size() != GameDatabase.characters.size() or absf(all_cards_page_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(all_cards_page_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(all_cards_page_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(all_cards_page_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(all_cards_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or start_game_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE:
+	# 图鉴武将实际稳定 ID 顺序；条目数组顺序必须与联机形象共用同一势力排序结果。
+	var all_character_ids: Array[String] = []
+	for all_character_entry_variant: Variant in all_cards_panel.get("_entries") as Array:
+		# 当前图鉴武将条目；只读取稳定 ID 验证排列，不修改槽或搜索文本。
+		var all_character_entry: Dictionary = all_character_entry_variant as Dictionary
+		all_character_ids.append(str(all_character_entry.get("id", "")))
+	# 图鉴纵向滚动条；外观、宽度和端点边距必须与模式选择滑条相同。
+	var all_cards_scroll_bar: VScrollBar = all_cards_grid_scroll.get_v_scroll_bar()
+	# 图鉴滑条轨道样式；共享样式工厂应生成与模式列表相同的颜色和零边距。
+	var all_cards_scroll_track_style: StyleBoxFlat = all_cards_scroll_bar.get_theme_stylebox("scroll") as StyleBoxFlat
+	# 图鉴滑条常态拖块样式；必须复用模式列表拖块的背景色与描边色。
+	var all_cards_scroll_grabber_style: StyleBoxFlat = all_cards_scroll_bar.get_theme_stylebox("grabber") as StyleBoxFlat
+	if not all_cards_panel.visible or main_frame.visible or online_settings_panel.visible or not all_cards_button.button_pressed or top_identity_mode_button.button_pressed or online_settings_button.button_pressed or not (main_instance.get_node("%TopAllCardsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or not all_characters_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunities_tab_button.button_pressed or all_characters_tab_name.text != "所有武将牌" or all_opportunities_tab_name.text != "所有机缘牌" or all_character_views.size() != GameDatabase.characters.size() or all_character_ids != expected_online_avatar_character_ids or CardGallerySort.CHARACTER_FACTION_ORDER != ["xingqionglieche", "yinhexvezhe", "beiluoboge", "xianzhou", "pinuokangni"] or absf(all_cards_page_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(all_cards_page_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(all_cards_page_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(all_cards_page_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(all_cards_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or start_game_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE or all_cards_grid_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or all_cards_scroll_bar == null or absf(all_cards_scroll_bar.custom_minimum_size.x - mode_scroll_bar.custom_minimum_size.x) > 0.5 or all_cards_scroll_track_style == null or all_cards_scroll_grabber_style == null or not all_cards_scroll_track_style.bg_color.is_equal_approx(mode_scroll_track_style.bg_color) or not all_cards_scroll_track_style.border_color.is_equal_approx(mode_scroll_track_style.border_color) or not all_cards_scroll_grabber_style.bg_color.is_equal_approx(mode_scroll_grabber_style.bg_color) or not all_cards_scroll_grabber_style.border_color.is_equal_approx(mode_scroll_grabber_style.border_color) or not is_zero_approx(all_cards_scroll_track_style.content_margin_top) or not is_zero_approx(all_cards_scroll_track_style.content_margin_bottom):
 		_fail("all_cards_characters_open")
 		return
+	# 当前图鉴最右侧牌面边界；所有可见牌均应停在滚动条安全留白左侧。
+	var all_cards_rightmost_card_edge: float = 0.0
+	for visible_character_entry_variant: Variant in all_cards_panel.get("_entries") as Array:
+		# 当前可见武将条目；初次打开没有过滤，因此全部槽都参与右边界计算。
+		var visible_character_entry: Dictionary = visible_character_entry_variant as Dictionary
+		# 当前武将槽；位置与缩放后尺寸共同确定牌面的最右边界。
+		var visible_character_slot: Control = visible_character_entry.get("slot") as Control
+		if visible_character_slot != null and visible_character_slot.visible:
+			all_cards_rightmost_card_edge = maxf(all_cards_rightmost_card_edge, visible_character_slot.position.x + visible_character_slot.size.x)
+	if all_cards_rightmost_card_edge > all_cards_grid_scroll.size.x - all_cards_panel.gallery_scroll_bar_clearance + 1.0:
+		_fail("all_cards_scroll_clearance right=%f viewport=%f clearance=%f" % [all_cards_rightmost_card_edge, all_cards_grid_scroll.size.x, all_cards_panel.gallery_scroll_bar_clearance])
+		return
+	# 首张武将牌输入区；真实点击后详情必须切换为左牌面、右技能的双栏结构。
+	var first_character_input: Control = (all_character_views[0] as PlayerTargetView).get_node("InputArea") as Control
+	await _click_control(first_character_input)
+	await get_tree().process_frame
+	# 武将详情左侧正式牌面；动态区域内必须只存在当前武将的一张 PlayerTargetView。
+	var character_information_views: Array[Node] = all_cards_character_information_card_area.find_children("*", "PlayerTargetView", true, false)
+	# 武将详情黄色技能名标签；数量应与当前静态武将定义中的固有技能一致。
+	var character_information_skill_names: Array[Label] = all_cards_panel.get("_information_skill_name_labels") as Array[Label]
+	# 当前详情武将稳定 ID；取图鉴排序后的首项用于查询权威技能数量。
+	var information_character_id: String = all_character_ids[0]
+	# 当前详情武将固有技能数量；详情不得丢失或额外安装运行时技能。
+	var information_character_skill_count: int = (GameDatabase.get_character(information_character_id).get("skills", []) as Array).size()
+	if not all_cards_information_backdrop.visible or not all_cards_character_information_body.visible or all_cards_information_scroll.visible or character_information_views.size() != 1 or character_information_skill_names.size() != information_character_skill_count:
+		_fail("all_cards_character_information_layout")
+		return
+	for character_skill_name_label: Label in character_information_skill_names:
+		if not character_skill_name_label.get_theme_color("font_color").is_equal_approx(all_cards_panel.information_skill_name_color):
+			_fail("all_cards_character_skill_name_color")
+			return
+	await _click_control(all_cards_panel.get_node("%AllCardsInfoCloseButton") as Button)
+	await get_tree().process_frame
 	# 当前武将条目数组；测试使用组件只读运行时索引计算关键词预期命中数，不修改任何条目。
 	var character_entries: Array = all_cards_panel.get("_entries") as Array
 	# 当前搜索关键词；使用首项稳定 ID 保证至少命中一个武将。
@@ -437,14 +523,25 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 所有游戏牌正式牌面节点；数量必须等于数据库唯一游戏牌定义总数。
 	var all_game_card_views: Array[Node] = all_cards_grid_content.find_children("*", "CardView", true, false)
-	if not all_game_cards_tab_button.button_pressed or all_characters_tab_button.button_pressed or all_game_card_views.size() != GameDatabase.cards.size() or (all_cards_panel.get("_entries") as Array).size() != GameDatabase.cards.size():
+	# 所有游戏牌实际稳定 ID 顺序；条目应完整遵循基本、锦囊、装备及内部细分类排序。
+	var all_game_card_ids: Array[String] = []
+	for game_card_entry_variant: Variant in all_cards_panel.get("_entries") as Array:
+		# 当前游戏牌图鉴条目；只读取稳定 ID 验证排列。
+		var game_card_entry: Dictionary = game_card_entry_variant as Dictionary
+		all_game_card_ids.append(str(game_card_entry.get("id", "")))
+	# 所有游戏牌期望稳定 ID 顺序；权威数据库 ID 通过共享排序器生成后与实际条目逐项比较。
+	var expected_game_card_ids: Array[String] = []
+	for game_card_id_variant: Variant in GameDatabase.cards.keys():
+		expected_game_card_ids.append(str(game_card_id_variant))
+	expected_game_card_ids.sort_custom(CardGallerySort.sort_game_card_ids)
+	if not all_game_cards_tab_button.button_pressed or all_characters_tab_button.button_pressed or all_game_card_views.size() != GameDatabase.cards.size() or (all_cards_panel.get("_entries") as Array).size() != GameDatabase.cards.size() or all_game_card_ids != expected_game_card_ids or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("basic", -1)) != 0 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("trick", -1)) != 1 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("equipment", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("杀", -1)) != 0 or int(CardGallerySort.BASIC_CARD_ORDER.get("闪", -1)) != 1 or int(CardGallerySort.BASIC_CARD_ORDER.get("桃", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("酒", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("weapon", -1)) != 0 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("armor", -1)) != 1 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("offensive_mount", -1)) != 2 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("defensive_mount", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("treasure", -1)) != 4:
 		_fail("all_cards_game_cards")
 		return
 	# 首张游戏牌透明输入区域；真实点击后应打开当前名称模式下的完整规则资料。
 	var first_game_card_input: Control = (all_game_card_views[0] as CardView).get_node("InputArea") as Control
 	await _click_control(first_game_card_input)
 	await get_tree().process_frame
-	if not all_cards_information_backdrop.visible or all_cards_information_title.text.is_empty():
+	if not all_cards_information_backdrop.visible or all_cards_information_title.text.is_empty() or all_cards_character_information_body.visible or not all_cards_information_scroll.visible:
 		_fail("all_cards_game_card_information visible=%s title=%s input_rect=%s card_interactable=%s grid_pos=%s grid_size=%s scroll_pos=%s scroll_size=%s scroll=%s slot=%s" % [all_cards_information_backdrop.visible, all_cards_information_title.text, _screen_rect(first_game_card_input), (all_game_card_views[0] as CardView).is_interactable, all_cards_grid_content.global_position, all_cards_grid_content.size, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).global_position, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).size, (all_cards_panel.get_node("%AllCardsGridScroll") as ScrollContainer).scroll_horizontal, first_game_card_input.get_parent().get_parent().get_parent().position])
 		return
 	await _click_control(all_cards_panel.get_node("%AllCardsInfoCloseButton") as Button)
@@ -629,6 +726,7 @@ func _run() -> void:
 	terminal_snapshot["winner"] = "draw"
 	match_controller.state_changed.emit(terminal_snapshot)
 	await get_tree().process_frame
+	# 终局交互提示标签；平局快照后必须显示稳定结算文案。
 	var interaction_guide_label: Label = main_instance.get_node("%InteractionGuideLabel") as Label
 	if interaction_use_button.text != "重新开始" or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_cancel_button.disabled:
 		_fail("post_match_actions")

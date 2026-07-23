@@ -43,7 +43,9 @@ const CARD_SUBTYPE_NAMES: Dictionary = {
 	"weapon":"武器",
 	"armor":"防具",
 	"offensive_horse":"进攻坐骑",
+	"offensive_mount":"进攻坐骑",
 	"defensive_horse":"防御坐骑",
+	"defensive_mount":"防御坐骑",
 	"treasure":"宝物",
 }
 
@@ -74,6 +76,21 @@ const GENDER_NAMES: Dictionary = {
 
 ## 卡牌资料遮罩的不透明度；默认0.90使完整说明成为当前视觉焦点，运行时只阻断图鉴底层输入。
 @export_range(0.0, 1.0, 0.01) var information_backdrop_opacity: float = 0.90
+
+## 图鉴及资料区纵向滚动条宽度；默认12像素与主菜单模式选择滑条一致，运行时只影响浏览控件宽度。
+@export_range(8.0, 24.0, 1.0) var scroll_bar_width: float = 12.0
+
+## 图鉴牌面与右侧滚动条之间的安全留白；默认28像素让最右列主动左移并避免被拖条遮挡，运行时只影响网格布局。
+@export_range(0.0, 64.0, 1.0) var gallery_scroll_bar_clearance: float = 28.0
+
+## 武将详情左侧正式武将牌的缩放倍率；默认0.78兼顾牌面辨识度与右侧技能说明宽度，运行时只影响详情布局。
+@export_range(0.5, 1.0, 0.01) var information_character_card_scale: float = 0.78
+
+## 武将详情右侧技能条目之间的垂直间距；默认12像素明确区分相邻技能，运行时只影响文字排版。
+@export_range(4, 28, 1) var information_skill_separation: int = 12
+
+## 武将详情右侧技能名称颜色；默认使用稳定暖黄色确保在两套主题中都与说明正文形成清晰层级，运行时只影响文字表现。
+@export var information_skill_name_color: Color = Color("f4cf66")
 
 ## 图鉴外框；左侧三个子分页与右侧搜索网格共同位于此容器内。
 @onready var _frame: PanelContainer = %AllCardsFrame
@@ -141,6 +158,21 @@ const GENDER_NAMES: Dictionary = {
 ## 完整资料正文；武将技能、卡牌规则或机缘技能说明均在此完整换行显示。
 @onready var _information_description: Label = %AllCardsInfoDescription
 
+## 通用卡牌资料滚动区；游戏牌与机缘继续使用单列正文，武将详情打开时由双栏主体替代。
+@onready var _information_scroll: ScrollContainer = %AllCardsInfoScroll
+
+## 武将详情双栏主体；左侧承载正式武将牌，右侧承载黄色技能名与规则正文。
+@onready var _information_character_body: HBoxContainer = %AllCardsInfoCharacterBody
+
+## 武将详情左侧牌面区域；按实际区域尺寸把缩放后的正式武将牌保持居中。
+@onready var _information_character_card_area: Control = %AllCardsInfoCharacterCardArea
+
+## 武将详情右侧技能滚动区；技能较多时独立纵向浏览，不移动左侧武将牌。
+@onready var _information_character_skill_scroll: ScrollContainer = %AllCardsInfoCharacterSkillScroll
+
+## 武将详情右侧技能列表；每个技能使用独立名称标签与说明标签，允许分别配置颜色。
+@onready var _information_character_skill_list: VBoxContainer = %AllCardsInfoCharacterSkillList
+
 ## 完整资料关闭按钮；关闭后把焦点归还搜索框或当前平台的安全子分页按钮。
 @onready var _information_close_button: Button = %AllCardsInfoCloseButton
 
@@ -166,6 +198,15 @@ var _representative_card_by_definition_id: Dictionary = {}
 ## 网格重排是否已经登记到空闲帧；防止 ScrollContainer 连续尺寸变化创建重复布局任务。
 var _layout_refresh_queued: bool = false
 
+## 武将详情左侧当前创建的正式武将牌；关闭详情或切换到其他卡牌类别时释放，不持有规则运行时对象。
+var _information_character_view: PlayerTargetView
+
+## 武将详情右侧当前创建的技能名称标签；主题刷新时统一恢复指定黄色。
+var _information_skill_name_labels: Array[Label] = []
+
+## 武将详情右侧当前创建的技能说明标签；主题刷新时同步当前主题次级文字颜色。
+var _information_skill_description_labels: Array[Label] = []
+
 
 ## 初始化分类按钮、搜索、资料模态与全局表现信号；组件默认隐藏且不读取任何对局状态。
 func _ready() -> void:
@@ -177,6 +218,7 @@ func _ready() -> void:
 	_grid_scroll.resized.connect(_queue_filter_and_layout)
 	_information_close_button.pressed.connect(_close_information)
 	_information_backdrop.gui_input.connect(_on_information_backdrop_gui_input)
+	_information_character_card_area.resized.connect(_center_information_character_card)
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
 	refresh_ui_style()
@@ -231,11 +273,22 @@ func refresh_ui_style() -> void:
 	_information_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_information_subtitle.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	_information_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_information_character_skill_list.add_theme_constant_override("separation", information_skill_separation)
+	for skill_name_label: Label in _information_skill_name_labels:
+		if skill_name_label != null and is_instance_valid(skill_name_label):
+			skill_name_label.add_theme_color_override("font_color", information_skill_name_color)
+	for skill_description_label: Label in _information_skill_description_labels:
+		if skill_description_label != null and is_instance_valid(skill_description_label):
+			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	BattleUIStyle.apply_interaction_button(_information_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	_apply_scroll_bar_style(_grid_scroll.get_v_scroll_bar())
+	_apply_scroll_bar_style(_information_scroll.get_v_scroll_bar())
+	_apply_scroll_bar_style(_information_character_skill_scroll.get_v_scroll_bar())
 	for view: Node in _content_views:
 		if view != null and is_instance_valid(view) and view.has_method("refresh_ui_style"):
 			view.call("refresh_ui_style")
+	if _information_character_view != null and is_instance_valid(_information_character_view):
+		_information_character_view.refresh_ui_style()
 
 
 ## 切换到指定子分页；每页从自身权威静态目录重建，并恢复该页在本次打开期间保存的搜索词。
@@ -283,6 +336,7 @@ func _rebuild_current_entries() -> void:
 
 
 ## 从全部已登记武将建立正式武将牌条目；按中文名排序，重名时再按稳定 ID 保证顺序可复现。
+## 补充：当前先按主公指定的势力顺序分组，再在同一势力内应用名称与稳定 ID 排序。
 func _build_character_entries() -> void:
 	# 全部武将稳定 ID；复制后排序，避免依赖数据库字典遍历顺序。
 	var character_ids: Array[String] = []
@@ -323,6 +377,7 @@ func _build_character_entries() -> void:
 
 
 ## 从全部已登记游戏牌定义建立唯一牌面条目；同一牌名的不同逻辑定义仍按各自稳定 ID 分别展示。
+## 补充：当前先按基本、锦囊、装备及其内部指定子类顺序分组，再以名称和稳定 ID 处理同组顺序。
 func _build_game_card_entries() -> void:
 	_build_representative_card_cache()
 	# 全部游戏牌稳定 ID；按当前名称模式的玩家可见牌名排序。
@@ -429,7 +484,7 @@ func _apply_filter_and_layout() -> void:
 	var item_size: Vector2 = visible_entries[0].get("size", Vector2.ZERO)
 	# 当前可用网格宽度；最少保留一张牌宽度，窄窗口会通过单列继续完整浏览。
 	var available_width: float = maxf(
-		_content.size.x - _side_list.size.x - _content.get_theme_constant("separation") - 44.0,
+		_content.size.x - _side_list.size.x - _content.get_theme_constant("separation") - 44.0 - gallery_scroll_bar_clearance,
 		item_size.x
 	)
 	# 当前列数；以缩放后牌宽和导出间距动态计算，不硬编码桌面或移动端列数。
@@ -475,6 +530,14 @@ func _open_information(category_id: String, entry_id: String) -> void:
 	_information_subtitle.text = str(information.get("subtitle", ""))
 	_information_subtitle.visible = not _information_subtitle.text.is_empty()
 	_information_description.text = str(information.get("description", "暂无说明。"))
+	if category_id == CATEGORY_CHARACTERS:
+		_information_scroll.visible = false
+		_information_character_body.visible = true
+		_show_character_information(entry_id)
+	else:
+		_clear_information_character_content()
+		_information_character_body.visible = false
+		_information_scroll.visible = true
 	_information_backdrop.visible = true
 	_information_backdrop.move_to_front()
 	_information_close_button.grab_focus()
@@ -490,6 +553,7 @@ func _close_information(restore_focus: bool = true) -> void:
 	if _information_backdrop == null:
 		return
 	_information_backdrop.visible = false
+	_clear_information_character_content()
 	if restore_focus:
 		call_deferred("_focus_primary_control")
 
@@ -536,6 +600,100 @@ func _resolve_character_information(character_id: String) -> Dictionary:
 		],
 		"description":description,
 	}
+
+
+## 构建武将详情双栏内容；左侧复用正式武将牌，右侧按定义顺序创建独立的黄色技能名与规则说明。
+func _show_character_information(character_id: String) -> void:
+	_clear_information_character_content()
+	# 当前武将静态定义；为空时详情保留标题摘要但不创建无来源牌面。
+	var character_definition: Dictionary = GameDatabase.get_character(character_id)
+	if character_definition.is_empty():
+		return
+	# 当前武将势力定义；只用于左侧正式牌面的徽记名称与颜色。
+	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
+	# 武将详情只读牌面快照；使用负玩家 ID 且不进入任何对局状态。
+	var character_snapshot: Dictionary = {
+		"player_id":-1,
+		"display_name":"武将详情",
+		"character_id":character_id,
+		"character_revealed":true,
+		"identity":"hidden",
+		"hp":int(character_definition.get("max_hp", 0)),
+		"max_hp":int(character_definition.get("max_hp", 0)),
+		"alive":true,
+		"chained":false,
+		"hand_count":0,
+		"equipment":{},
+		"judgment_area":[],
+		"wooden_ox_storage_count":0,
+	}
+	_information_character_view = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	_information_character_card_area.add_child(_information_character_view)
+	_information_character_view.scale = Vector2.ONE * information_character_card_scale
+	_information_character_view.configure_snapshot(character_snapshot, character_definition, false, faction_definition)
+	_information_character_view.set_match_overlays_visible(false)
+	_information_character_view.set_interactable(false)
+	for skill_id_variant: Variant in character_definition.get("skills", []) as Array:
+		# 当前技能稳定 ID；只查询静态定义，不安装技能实例。
+		var skill_id: String = str(skill_id_variant)
+		# 当前技能静态定义；缺失时名称回退稳定 ID、正文显示明确维护提示。
+		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		# 当前技能条目容器；名称与说明各占一行以便应用不同颜色。
+		var skill_entry: VBoxContainer = VBoxContainer.new()
+		skill_entry.add_theme_constant_override("separation", 4)
+		_information_character_skill_list.add_child(skill_entry)
+		# 当前技能名称标签；固定暖黄色并保持技能定义中的原始名称。
+		var skill_name_label: Label = Label.new()
+		skill_name_label.text = "【%s】" % str(skill_definition.get("name", skill_id))
+		skill_name_label.add_theme_font_size_override("font_size", 18)
+		skill_name_label.add_theme_color_override("font_color", information_skill_name_color)
+		skill_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		skill_entry.add_child(skill_name_label)
+		_information_skill_name_labels.append(skill_name_label)
+		# 当前技能说明标签；解析全局卡牌名称模式后自动换行，并使用主题次级文字色。
+		var skill_description_label: Label = Label.new()
+		skill_description_label.text = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		skill_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		skill_description_label.add_theme_font_size_override("font_size", 14)
+		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		skill_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		skill_entry.add_child(skill_description_label)
+		_information_skill_description_labels.append(skill_description_label)
+	if _information_skill_name_labels.is_empty():
+		# 无技能占位标签；明确说明静态定义没有技能，不伪造黄色技能标题。
+		var empty_skill_label: Label = Label.new()
+		empty_skill_label.text = "该武将牌没有固有技能"
+		empty_skill_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		_information_character_skill_list.add_child(empty_skill_label)
+	_information_character_skill_scroll.scroll_vertical = 0
+	call_deferred("_center_information_character_card")
+
+
+## 根据左侧可用区域居中武将详情牌面；窗口或面板尺寸改变时只更新显示坐标。
+func _center_information_character_card() -> void:
+	if _information_character_view == null or not is_instance_valid(_information_character_view):
+		return
+	# 详情武将牌缩放后尺寸；公开 card_size 与当前检查器倍率共同决定。
+	var scaled_card_size: Vector2 = _information_character_view.card_size * information_character_card_scale
+	_information_character_view.position = Vector2(
+		maxf((_information_character_card_area.size.x - scaled_card_size.x) * 0.5, 0.0),
+		maxf((_information_character_card_area.size.y - scaled_card_size.y) * 0.5, 0.0)
+	)
+
+
+## 清理武将详情动态牌面与技能条目；游戏牌、机缘牌或关闭详情后不残留隐藏节点和旧主题引用。
+func _clear_information_character_content() -> void:
+	_information_skill_name_labels.clear()
+	_information_skill_description_labels.clear()
+	if _information_character_card_area != null:
+		for child: Node in _information_character_card_area.get_children():
+			_information_character_card_area.remove_child(child)
+			child.queue_free()
+	if _information_character_skill_list != null:
+		for child: Node in _information_character_skill_list.get_children():
+			_information_character_skill_list.remove_child(child)
+			child.queue_free()
+	_information_character_view = null
 
 
 ## 生成游戏牌完整资料；同时显示双名称和细分类别，规则说明保持卡牌文件中的长期文本。
@@ -672,22 +830,36 @@ func _build_representative_card_cache() -> void:
 
 
 ## 按中文武将名排序；重名武将以稳定 ID 排序，保证图鉴顺序在平台之间一致。
+## 补充：共享排序器会先按星穹列车、银河学者、贝洛伯格、仙舟联盟、匹诺康尼分组，扩展势力随后稳定排列。
 func _sort_character_ids(left_character_id: String, right_character_id: String) -> bool:
 	# 左侧武将玩家可见名称；只用于排序。
 	var left_name: String = GameDatabase.resolve_character_name(left_character_id)
 	# 右侧武将玩家可见名称；只用于排序。
 	var right_name: String = GameDatabase.resolve_character_name(right_character_id)
+	# 共享势力排序结果；优先处理所有非相等条目。
+	var shared_result: bool = CardGallerySort.sort_character_ids(left_character_id, right_character_id)
+	# 反向共享势力排序结果；与正向结果共同判断两个条目是否已经形成严格顺序。
+	var reverse_shared_result: bool = CardGallerySort.sort_character_ids(right_character_id, left_character_id)
+	if shared_result or reverse_shared_result:
+		return shared_result
 	if left_name == right_name:
 		return left_character_id < right_character_id
 	return left_name < right_name
 
 
 ## 按当前名称模式下的游戏牌名排序；同名逻辑牌以稳定 ID 排序。
+## 补充：共享排序器会先按基本、锦囊、装备分组，并在组内应用主公指定的细分类顺序。
 func _sort_game_card_ids(left_card_id: String, right_card_id: String) -> bool:
 	# 左侧游戏牌显示名；切换名称模式后重建列表会按新名称重新排序。
 	var left_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card(left_card_id))
 	# 右侧游戏牌显示名；只用于当前图鉴顺序。
 	var right_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card(right_card_id))
+	# 共享类型排序结果；优先处理所有非相等条目。
+	var shared_result: bool = CardGallerySort.sort_game_card_ids(left_card_id, right_card_id)
+	# 反向共享类型排序结果；用于识别排序器判定为完全相等的同一条目。
+	var reverse_shared_result: bool = CardGallerySort.sort_game_card_ids(right_card_id, left_card_id)
+	if shared_result or reverse_shared_result:
+		return shared_result
 	if left_name == right_name:
 		return left_card_id < right_card_id
 	return left_name < right_name
@@ -747,18 +919,7 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 
 ## 为纵向滚动条应用当前主题轨道与拖块；只改变浏览外观，不调整滚动数值。
 func _apply_scroll_bar_style(scroll_bar: VScrollBar) -> void:
-	# 当前滚动条轨道样式；使用内层面板色和普通边框。
-	var background_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 1, 4)
-	background_style.shadow_size = 0
-	background_style.shadow_offset = Vector2.ZERO
-	# 当前滚动条拖块样式；强调色边框让长列表当前位置保持清晰。
-	var grabber_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4)
-	grabber_style.shadow_size = 0
-	grabber_style.shadow_offset = Vector2.ZERO
-	scroll_bar.add_theme_stylebox_override("scroll", background_style)
-	scroll_bar.add_theme_stylebox_override("grabber", grabber_style)
-	scroll_bar.add_theme_stylebox_override("grabber_highlight", grabber_style)
-	scroll_bar.add_theme_stylebox_override("grabber_pressed", grabber_style)
+	BattleUIStyle.apply_main_menu_scroll_bar_style(scroll_bar, scroll_bar_width)
 
 
 ## 创建没有重复阴影的内层面板；图鉴外框保留唯一强阴影，内部只用细边区分内容。
