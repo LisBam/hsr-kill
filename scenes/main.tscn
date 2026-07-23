@@ -692,6 +692,14 @@ layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "确定"
 
+[node name="SettlementButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(146, 42)
+layout_mode = 2
+theme_override_styles/normal = SubResource("StyleButtonPrimary")
+text = "结算界面"
+
 [node name="CancelButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=1689127389]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(146, 42)

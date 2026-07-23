@@ -143,6 +143,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
 	if target.is_empty():
 		return -100.0
+	# 当前是否为酒加成【杀】；仅非自身目标会被冰封无效，此时AI必须保留原牌额外伤害而非确认发动技能。
+	var is_wine_enhanced_slash: bool = _is_owner_wine_enhanced_slash(authoritative_snapshot, str(context.get("card_id", "")), evaluator)
+	if is_wine_enhanced_slash and target_id != owner_player_id:
+		return -100.0
 	# 持有者对目标的态度；正值为友方，负值为敌方。
 	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 	# 原牌对该目标的当前效用；非自身目标会被冰封消除，因此取相反数作为无效收益。
@@ -164,6 +168,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 
 ## 修正持有者的出牌评分；对横置友方的负收益单目标牌可转化为竖置收益。
 func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
+	# 当前出牌是否为酒加成【杀】；即使能借冰封转化对友方的负收益，也不能令额外伤害失效。
+	var is_wine_enhanced_slash: bool = _is_owner_wine_enhanced_slash(authoritative_snapshot, str(action.get("card_definition_id", "")), evaluator)
+	if is_wine_enhanced_slash:
+		return current_score
 	# 最终目标数组；冰封只会处理恰好一名目标的动作。
 	var target_ids: Array = action.get("target_ids", []) as Array
 	if target_ids.size() != 1:
@@ -200,6 +208,17 @@ func _score_original_card_effect(authoritative_snapshot: Dictionary, target_id: 
 	# 原牌对目标的基础结果；负值代表伤害、弃牌或阶段控制。
 	var target_result: float = float(ai_profile.get("target_result", 0.0))
 	return evaluator.score_target_effect(authoritative_snapshot, owner_player_id, target_id, definition, ai_profile, target_result)
+
+
+## 判断当前技能持有者是否正以带酒伤害加成的【杀】指定目标；该信息在useCardToTargeted时仍未被【杀】结算消耗。
+func _is_owner_wine_enhanced_slash(authoritative_snapshot: Dictionary, card_id: String, evaluator: Object) -> bool:
+	# 当前牌定义；只有effect_id为slash的普通、火焰和雷电【杀】才会消耗酒伤害加成。
+	var definition: Dictionary = GameDatabase.get_card(card_id)
+	if str(definition.get("effect_id", "")) != "slash":
+		return false
+	# 技能持有者公开快照；酒加值是规则层公开状态，不依赖私有手牌或临时运行时字典。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	return int(owner.get("wine_bonus", 0)) > 0
 
 
 ## 从公开技能历史判断本回合是否已对目标发动冰封；AI不读取运行时字典。

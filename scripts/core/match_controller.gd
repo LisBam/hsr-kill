@@ -242,8 +242,14 @@ var card_use_event_service: CardUseEventService
 ## 可插拔机缘系统组件；负责全体三选一、私有候选、逆时针效果顺序与轮末保底触发。
 var opportunity_system: OpportunitySystem
 
+## 自动开局种子序号步长；使用大质数拉开相邻重开种子，避免与单调毫秒时间形成短周期重复。
+const AUTOMATIC_MATCH_SEED_SERIAL_STEP: int = 104729
+
 ## 对局随机数生成器；牌堆、身份与武将选择统一使用，便于未来记录种子回放。
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+
+## 自动开局种子自增序号；同一毫秒内连续重开时仍保证每局获得不同随机序列，避免斗地主座位与身份固定。
+var _automatic_match_seed_serial: int = 0
 
 ## 当前 AI 出牌阶段已执行动作数；开始新回合时清零。
 var _ai_actions_this_turn: int = 0
@@ -631,10 +637,12 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_clear_pending_judgment_request()
 	_cards_used_this_turn_by_player.clear()
 
-	if seed == 0:
-		_rng.randomize()
-	else:
-		_rng.seed = seed
+	# 本局实际随机种子；显式种子用于回放，自动种子结合单调时间与自增序号，保证连续重开不会复用同一序列。
+	var resolved_match_seed: int = seed
+	if resolved_match_seed == 0:
+		_automatic_match_seed_serial += 1
+		resolved_match_seed = Time.get_ticks_msec() + _automatic_match_seed_serial * AUTOMATIC_MATCH_SEED_SERIAL_STEP
+	_rng.seed = resolved_match_seed
 	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；过关斩将固定本地玩家为一号位，其他离线对局继续使用原有随机座次逻辑。
 	var lan_local_player_id: int = network_gateway.get_local_lan_player_id() if network_gateway != null and network_gateway.is_lan_host() else -1
 	if actual_mode == IdentityRules.MODE_CONQUEST and local_human_player_id >= 0:
@@ -649,7 +657,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	# 本局锁定的模式；菜单之后的模式切换只写入 GameSettings，不改进行中的规则。
 	state.match_mode = actual_mode
 	ai_coordinator.reset_identity_observations()
-	state.random_seed = _rng.seed
+	state.random_seed = resolved_match_seed
 	state.deck_id = default_deck_id
 	# 本局锁定的房主权威开局选项；菜单之后的修改只作用于下一局，不会改变进行中的选将或手气卡阶段。
 	_all_character_selection_enabled = GameSettings.custom_character_assignment_enabled and actual_mode != IdentityRules.MODE_WHEEL_DUEL
@@ -3131,6 +3139,8 @@ func draw(player_id: int, count: int, announce: bool = true, allow_out_of_game: 
 	draw_presentation_batch_finished.emit(int(draw_presentation_batch.get("batch_id", -1)), player_id)
 	_active_draw_presentation_batch = previous_draw_presentation_batch
 	var result_data: Dictionary = {"count":drawn_count, "requested_count":final_count, "card_uids":drawn_card_uids, "reason":"draw"}
+	# 本次实际摸牌数；终局结算只统计真正从牌堆移入手牌的牌，不把被牌堆耗尽截断的请求计入。
+	player.total_cards_drawn += drawn_count
 	_emit_rule_timing("drawEnd", player_id, -1, player_id, result_data)
 	_emit_rule_timing("drawAfter", player_id, -1, player_id, result_data)
 	if announce and drawn_count > 0:
@@ -3160,15 +3170,21 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "", a
 	# 回复前体力；用于计算实际回复量并记录准确数值。
 	var previous_hp: int = target.hp
 	target.hp = mini(target.max_hp, target.hp + final_amount)
-	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":final_amount, "reason":reason}, {"amount":target.hp - previous_hp, "hp":target.hp})
-	add_log("%s回复%d点体力（%d/%d）。" % [format_player_state_log_name(target), target.hp - previous_hp, target.hp, target.max_hp])
+	# 实际回复量；体力接近上限时小于请求值，结算统计和事件均必须使用这一数值。
+	var recovered_amount: int = target.hp - previous_hp
+	# 回复来源角色；来源为自身时同样累计，来源缺失的系统回复不归属任何角色。
+	var recovery_source: PlayerState = state.get_player(source_id) if source_id >= 0 else null
+	if recovery_source != null and recovered_amount > 0:
+		recovery_source.total_healing_done += recovered_amount
+	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":final_amount, "reason":reason}, {"amount":recovered_amount, "hp":target.hp})
+	add_log("%s回复%d点体力（%d/%d）。" % [format_player_state_log_name(target), recovered_amount, target.hp, target.max_hp])
 	# 体力值实际变化时机；回复、伤害与失去体力共用 changeHp，并通过 change_type 区分来源。
-	var result_data: Dictionary = {"amount":target.hp - previous_hp, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"recover"}
+	var result_data: Dictionary = {"amount":recovered_amount, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"recover"}
 	_emit_rule_timing("changeHp", target_id, source_id, target_id, result_data)
 	_emit_rule_timing("recoverEnd", target_id, source_id, target_id, result_data)
 	_emit_rule_timing("recoverAfter", target_id, source_id, target_id, result_data)
 	# 回复后事件；技能可读取来源、目标、实际回复值与原因牌。
-	var event: RuleEvent = RuleEvent.new("recover_after", source_id, target_id, {"amount": target.hp - previous_hp, "reason": reason})
+	var event: RuleEvent = RuleEvent.new("recover_after", source_id, target_id, {"amount": recovered_amount, "reason": reason})
 	_dispatch_rule_event(event)
 
 
@@ -3687,9 +3703,14 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	if shield_absorbed > 0:
 		_emit_rule_timing("changeHujiaAfter", target_id, source_id, target_id, {"amount":shield_absorbed, "hujia":target.shield, "reason":"damage", "damage_event_id":damage_event_id, "change_type":"lose"}, damage_event_id)
 	_record_runtime_event("damage", "damage", {"source_id":source_id, "target_id":target_id, "nature":nature}, {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp}, damage_event_id)
+	# 终局累计受伤值；护盾抵消的部分仍是有效伤害，和现有damage_taken_count的受伤语义保持一致。
+	target.total_damage_received += final_amount
 	target.damage_taken_count += 1
 	target.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	var source_player: PlayerState = state.get_player(source_id)
+	# 终局累计造成伤害值；自伤仍属于来源角色造成的伤害，故不与目标是否相同绑定。
+	if source_player != null:
+		source_player.total_damage_dealt += final_amount
 	if source_player != null and source_player != target:
 		source_player.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	if target.chained and nature != "normal":
@@ -11186,6 +11207,7 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 	victim.dying = false
 	victim.death_confirmed = true
 	victim.identity_revealed = true
+	_record_match_kill(killer_id, victim.player_id)
 	_emit_rule_timing("die", victim_id, killer_id, victim_id, {"hp":victim.hp, "death_event_id":death_event_id}, death_event_id)
 	add_log("%s死亡，身份为%s。" % [format_player_state_log_name(victim), _identity_text(victim.identity)])
 	# 亮出身份后立即检测胜负；若条件已满足，规则要求直接结束游戏，不再继续死亡弃牌与奖惩。
@@ -11236,6 +11258,16 @@ func _resolve_death(victim_id: int, killer_id: int) -> void:
 		_advance_after_current_player_death(victim_id)
 
 
+## 为真实死亡或模式中的武将击败累计击杀；无来源伤害与自杀不归入任何角色的击杀数。
+func _record_match_kill(killer_id: int, victim_id: int) -> void:
+	if state == null or killer_id < 0 or killer_id == victim_id:
+		return
+	# 击杀来源角色；仅存在于本局状态中的角色可以获得结算统计，已死亡不影响其历史统计保留。
+	var killer: PlayerState = state.get_player(killer_id)
+	if killer != null:
+		killer.total_kill_count += 1
+
+
 ## 结算过关斩将玩家复活：完成死亡时机后清空全部区域、回复至上限并摸四张牌，且不进入胜负检查。
 func _resolve_conquest_player_revival(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
 	if victim == null or state == null or conquest_mode == null or not conquest_mode.consume_player_revive(victim.player_id):
@@ -11276,6 +11308,7 @@ func _resolve_wheel_duel_character_replacement(victim: PlayerState, killer_id: i
 	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
 	# 当前阵亡武将代次；换将后的死亡尾部与回合中断仍只属于本旧武将。
 	var defeated_character_generation: int = victim.character_generation
+	_record_match_kill(killer_id, victim.player_id)
 	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
 	add_log("%s的武将【%s】阵亡。" % [victim.display_name, defeated_character_name])
 	while not victim.hand.is_empty():
@@ -11322,6 +11355,7 @@ func _resolve_conquest_enemy_replacement(victim: PlayerState, killer_id: int, de
 		return
 	# 阵亡武将名称；换将前保存，避免日志在写入随机新武将后丢失本次击败对象。
 	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
+	_record_match_kill(killer_id, victim.player_id)
 	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "conquest_replacement":true}, death_event_id)
 	add_log("%s击败敌方武将【%s】。" % [format_player_log_name(killer_id), defeated_character_name])
 	# 旧武将从死亡时机结束起立即失效；随后伤害尾部只能被真正的伤害来源触发，不能被下一名入场武将继承为受伤时机。

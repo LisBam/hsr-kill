@@ -380,6 +380,13 @@ func _test_opportunity_card_hover() -> bool:
 	card_view.information_requested.connect(func(information: Dictionary, _anchor_rect: Rect2) -> void: skill_information.append(information.duplicate(true)))
 	card_view.information_dismissed.connect(func() -> void: skill_information_dismissed.append(true))
 	card_view.configure(OpportunityCatalog.get_card("blue_skill_jiqiao"), true)
+	# 获得技能牌面布局；技能名必须独占一行并禁止自动换行，空间不足时由省略号策略裁剪而不能拆成两行。
+	var ordinary_description_label: Label = card_view.get_node("Margin/Content/DescriptionLabel") as Label
+	var skill_name_label: Label = card_view.get_node("Margin/Content/SkillDescriptionContent/SkillNameLabel") as Label
+	if ordinary_description_label.visible or not skill_name_label.visible or skill_name_label.text != "“机巧”" or skill_name_label.autowrap_mode != TextServer.AUTOWRAP_OFF or skill_name_label.text_overrun_behavior != TextServer.OVERRUN_TRIM_ELLIPSIS:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_skill_description_layout normal=%s skill=%s text=%s wrap=%s overrun=%s" % [ordinary_description_label.visible, skill_name_label.visible, skill_name_label.text, skill_name_label.autowrap_mode, skill_name_label.text_overrun_behavior])
 	input_button.mouse_entered.emit()
 	if skill_information.is_empty() or str(skill_information[0].get("title", "")) != "【机巧】" or not str(skill_information[0].get("description", "")).contains(str(GameDatabase.get_skill("jiqiao").get("description", ""))):
 		get_tree().paused = false

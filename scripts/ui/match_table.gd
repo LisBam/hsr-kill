@@ -18,6 +18,9 @@ const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/component
 ## 全体机缘选择弹窗场景；只渲染本地观察者自己的三张私有候选并提交稳定机缘卡ID。
 const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/components/opportunity_choice_panel.tscn")
 
+## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
+const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/components/game_settlement_panel.tscn")
+
 ## 中央确定与取消按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
 const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 
@@ -209,6 +212,9 @@ var information_box: InformationBoxLayer
 ## 机缘选择弹窗组件；规则暂停期间保持可输入，所有效果仍由MatchController权威结算。
 var opportunity_choice_panel: OpportunityChoicePanel
 
+## 游戏结算弹窗组件；只展示权威快照已累计的战绩，不参与胜负判定或数值计算。
+var game_settlement_panel: GameSettlementPanel
+
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
 
@@ -255,6 +261,9 @@ var local_player_markers: PlayerMarkersView
 ## 使用牌按钮；将当前选择封装为标准动作。
 @onready var use_button: Button = %UseButton
 
+## 终局结算界面按钮；仅在整局结束后显示，位于重新开始与返回主菜单之间。
+@onready var settlement_button: Button = %SettlementButton
+
 ## 重铸按钮；只对配置允许重铸的牌生效，规则核心负责最终校验。
 ## 该节点仅为旧场景兼容而保留并始终隐藏；实际重铸入口是无目标选择【铁索连环】后点击中央“确定”。
 @onready var recast_button: Button = %RecastButton
@@ -282,6 +291,9 @@ var _last_action_rejection_message: String = ""
 
 ## 最近一次本地可见状态快照；界面刷新与选择校验均以此为准。
 var _snapshot: Dictionary = {}
+
+## 已自动展示结算面板的对局ID；用户手动关闭后保持该ID，避免同一终局快照再次广播时自动弹回。
+var _settlement_auto_shown_match_id: String = ""
 
 ## 当前快照按稳定玩家 ID 建立的只读索引；每次状态广播重建一次，避免同一帧多处线性扫描玩家数组。
 var _player_snapshots_by_id: Dictionary = {}
@@ -464,6 +476,7 @@ func _ready() -> void:
 	_create_local_judgment_zone()
 	_create_local_player_markers()
 	_create_opportunity_choice_panel()
+	_create_game_settlement_panel()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -530,6 +543,7 @@ func _ready() -> void:
 	card_selection_panel.information_requested.connect(_on_information_requested.bind(card_selection_panel))
 	card_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(card_selection_panel))
 	use_button.pressed.connect(_on_use_pressed)
+	settlement_button.pressed.connect(_on_settlement_button_pressed)
 	%CancelButton.pressed.connect(_on_cancel_pressed)
 	recast_button.pressed.connect(_on_recast_pressed)
 	end_play_button.pressed.connect(_on_end_play_pressed)
@@ -638,6 +652,10 @@ func _configure_interaction_controls() -> void:
 	interaction_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	BattleUIStyle.apply_interaction_button(use_button)
+	# 终局结算按钮；常态隐藏，仅在整局结束后插入重新开始与返回主菜单之间。
+	settlement_button.visible = false
+	settlement_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	BattleUIStyle.apply_interaction_button(settlement_button)
 	# 中央取消按钮；与确定按钮使用相同尺寸与主按钮样式，避免旧场景资源保留次级按钮外观。
 	var cancel_button: Button = %CancelButton
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
@@ -1076,6 +1094,44 @@ func _create_opportunity_choice_panel() -> void:
 	opportunity_choice_panel.information_dismissed.connect(_on_information_dismissed.bind(opportunity_choice_panel))
 
 
+## 创建游戏终局结算面板并绑定关闭事件；组件只消费快照，牌桌保留自动展示与再次打开策略。
+func _create_game_settlement_panel() -> void:
+	game_settlement_panel = GAME_SETTLEMENT_PANEL_SCENE.instantiate() as GameSettlementPanel
+	game_settlement_panel.name = "GameSettlementPanel"
+	add_child(game_settlement_panel)
+	game_settlement_panel.close_requested.connect(_on_game_settlement_close_requested)
+
+
+## 同步终局结算面板的自动展示状态；同一局只首次自动展示，用户关闭后不会被重复状态广播打断。
+func _sync_game_settlement_panel() -> void:
+	if game_settlement_panel == null or not is_instance_valid(game_settlement_panel):
+		return
+	# 当前快照是否为整局终局；本地角色阵亡但整局继续时不创建结算面板。
+	var is_game_over: bool = bool(_snapshot.get("game_over", false))
+	if not is_game_over:
+		_settlement_auto_shown_match_id = ""
+		game_settlement_panel.hide_settlement()
+		return
+	# 当前对局稳定ID；测试快照允许为空字符串，仍可用同一空ID防止同局重复弹出。
+	var match_id: String = str(_snapshot.get("match_id", ""))
+	if _settlement_auto_shown_match_id == match_id:
+		return
+	_settlement_auto_shown_match_id = match_id
+	game_settlement_panel.show_settlement(_snapshot)
+
+
+## 响应结算面板关闭；自动展示标记刻意不清空，确保用户关闭后的同局快照不会立即重新打开。
+func _on_game_settlement_close_requested() -> void:
+	pass
+
+
+## 从终局操作区再次打开结算界面；仅整局结束时允许，避免本地阵亡但对局继续时看到未完成统计。
+func _on_settlement_button_pressed() -> void:
+	if game_settlement_panel == null or not is_instance_valid(game_settlement_panel) or not bool(_snapshot.get("game_over", false)):
+		return
+	game_settlement_panel.show_settlement(_snapshot)
+
+
 ## 使用最新观察者快照刷新机缘弹窗；角色名只取公开显示名，不向等待玩家暴露身份或候选正文。
 func _refresh_opportunity_choice_panel() -> void:
 	if opportunity_choice_panel == null:
@@ -1150,6 +1206,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		_player_snapshots_by_id[int(indexed_player.get("player_id", -1))] = indexed_player
 	_refresh_open_character_details()
 	_refresh_opportunity_choice_panel()
+	_sync_game_settlement_panel()
 	_refresh_auto_management_controls()
 	_sync_match_clock()
 	if _snapshot.has("processing_card_uids"):
@@ -2716,7 +2773,10 @@ func _apply_ui_style() -> void:
 	selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	error_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	BattleUIStyle.apply_interaction_button(use_button)
+	BattleUIStyle.apply_interaction_button(settlement_button)
 	BattleUIStyle.apply_interaction_button(%CancelButton)
+	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
+		game_settlement_panel.refresh_ui_style()
 	_refresh_group_trick_response_button()
 	card_selection_panel.refresh_ui_style()
 	character_selection_panel.refresh_ui_style()
@@ -2784,6 +2844,9 @@ func _on_restart_requested(player_count: int) -> bool:
 		return false
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
+	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
+		game_settlement_panel.hide_settlement()
+	_settlement_auto_shown_match_id = ""
 	log_view.clear()
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()
@@ -2823,6 +2886,9 @@ func _on_restart_requested(player_count: int) -> bool:
 func _on_main_menu_requested() -> void:
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
+	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
+		game_settlement_panel.hide_settlement()
+	_settlement_auto_shown_match_id = ""
 	match_controller.abandon_match()
 	if match_controller.network_gateway.mode == NetworkGateway.Mode.LAN:
 		match_controller.network_gateway.leave_lan("")
@@ -3806,6 +3872,8 @@ func _refresh_selection_text() -> void:
 	if _zhenqi_cancel_button != null and is_instance_valid(_zhenqi_cancel_button):
 		_zhenqi_cancel_button.visible = false
 	use_button.visible = true
+	settlement_button.visible = false
+	settlement_button.disabled = true
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	%CancelButton.text = "取消"
 	%CancelButton.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
@@ -3942,6 +4010,11 @@ func _refresh_post_match_actions() -> void:
 	use_button.text = "重新开始"
 	use_button.disabled = false
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
+	# 终局结算入口；仅整局结束时显示，本地阵亡但整局未结束时不展示未完成数据。
+	settlement_button.visible = bool(_snapshot.get("game_over", false))
+	settlement_button.text = "结算界面"
+	settlement_button.disabled = not settlement_button.visible
+	settlement_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	# 原取消按钮；终局时承担退出当前对局的明确命令，不向规则核心提交取消选择。
 	var cancel_button: Button = %CancelButton
 	cancel_button.visible = true

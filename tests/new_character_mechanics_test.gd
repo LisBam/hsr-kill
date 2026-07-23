@@ -83,6 +83,8 @@ func _run() -> void:
 		return
 	if not _test_new_skill_ai_rules():
 		return
+	if not _test_settlement_statistics():
+		return
 	if not _test_hsr_character_metadata_and_rule_catalog():
 		return
 	if not await _test_out_of_game_pile_arrangement_and_ui():
@@ -1600,6 +1602,16 @@ func _test_new_skill_ai_rules() -> bool:
 	var converted_score: float = bingfeng.modify_ai_card_action_score(snapshot, harmful_ally_action, base_harmful_score, evaluator)
 	if converted_score <= base_harmful_score or converted_score <= 0.0:
 		return _fail("bingfeng_ai_conversion base=%s converted=%s" % [base_harmful_score, converted_score])
+	# 酒杀保护状态；冰封在指定目标时若确认会令本张额外伤害【杀】无效，AI必须拒绝发动且不能再把此牌转换为竖置友方的行动。
+	_controller.state.get_player(0).wine_bonus = 1
+	var wine_slash_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var wine_slash_request: Dictionary = {"context":{"kind":"bingfeng_option", "target_id":1, "card_id":"sha"}}
+	var wine_slash_confirm: Dictionary = {"payload":{"confirmed":true, "selected_control_id":"discard_target_hand"}}
+	var wine_slash_choice_score: float = bingfeng.score_ai_choice(wine_slash_snapshot, wine_slash_request, wine_slash_confirm, evaluator)
+	var wine_slash_converted_score: float = bingfeng.modify_ai_card_action_score(wine_slash_snapshot, harmful_ally_action, base_harmful_score, evaluator)
+	if wine_slash_choice_score >= 0.0 or not is_equal_approx(wine_slash_converted_score, base_harmful_score):
+		return _fail("bingfeng_ai_wine_slash choice=%s converted=%s base=%s" % [wine_slash_choice_score, wine_slash_converted_score, base_harmful_score])
+	_controller.state.get_player(0).wine_bonus = 0
 	# 疾雨静态AI技能；选项候选只含三号忠臣，其为丹恒队友。
 	var jiyu: SkillDefinition = GameDatabase.create_skill("jiyu")
 	jiyu.bind(null, 0)
@@ -1685,6 +1697,29 @@ func _test_new_skill_ai_rules() -> bool:
 	var mingchen_enemy_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[1]}}
 	if mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator) <= mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator):
 		return _fail("mingchen_ai_preserve_retrigger self=%.2f enemy=%.2f" % [mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_self_action, evaluator), mingchen.score_ai_choice(mingchen_snapshot, mingchen_request, mingchen_enemy_action, evaluator)])
+	return true
+
+
+## 验证结算累计统计只记录真实结算结果；摸牌、伤害和回复均以实际数值写入公开快照。
+func _test_settlement_statistics() -> bool:
+	_reset_state(3)
+	# 牌堆测试实体；两张牌均由draw()实际移入一号角色手牌。
+	_add_draw_pile_card("sha", "spade", 7)
+	_add_draw_pile_card("shan", "heart", 2)
+	_controller.draw(0, 2, false)
+	# 伤害来源与目标；2点伤害后目标仍存活，便于继续验证同一来源对他人的回复统计。
+	_controller.damage(0, 1, 2, "normal", "sha")
+	_controller.recover(0, 1, 1, "settlement_statistics_test")
+	# 伤害来源角色；累计造成伤害、实际摸牌与对他人回复均应由规则层统一写入。
+	var source: PlayerState = _controller.state.get_player(0)
+	# 伤害目标角色；累计受到伤害按最终伤害值记录，回复不是自身造成故保持0。
+	var target: PlayerState = _controller.state.get_player(1)
+	# 公开结算快照；面板只能读取该快照中的字段，不能访问PlayerState可变引用。
+	var settlement_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	# 来源玩家序列化字段；用于保证联网和界面路径都能取得累计值。
+	var source_snapshot: Dictionary = settlement_snapshot.get("players", [])[0] as Dictionary
+	if source == null or target == null or source.total_damage_dealt != 2 or target.total_damage_received != 2 or source.total_healing_done != 1 or source.total_cards_drawn != 2 or source.total_kill_count != 0 or int(source_snapshot.get("total_damage_dealt", -1)) != 2 or int(source_snapshot.get("total_healing_done", -1)) != 1 or int(source_snapshot.get("total_cards_drawn", -1)) != 2:
+		return _fail("settlement_statistics source=%s target=%s snapshot=%s" % [str(source.to_dict(0, true) if source != null else {}), str(target.to_dict(0, true) if target != null else {}), str(source_snapshot)])
 	return true
 
 

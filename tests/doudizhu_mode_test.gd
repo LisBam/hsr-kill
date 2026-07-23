@@ -309,6 +309,21 @@ func _test_randomized_landlord_assignment() -> bool:
 			landlord_player_ids.append(landlord_player_id)
 	if landlord_player_ids.size() < 2:
 		return _fail("random_landlord_not_varied=%s" % str(landlord_player_ids))
+	# 同一控制器连续自动重开；重开可以发生在同一毫秒，自动种子仍必须逐局变化，不能复用同一座位与身份随机序列。
+	_create_controller()
+	_controller.local_human_player_id = 0
+	_controller.randomize_local_human_seat = true
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
+	var automatic_match_seeds: Array[int] = []
+	for restart_index: int in range(4):
+		if not _controller.start_match(3, 0, IdentityRules.MODE_DOUDIZHU):
+			return _fail("automatic_restart_start=%d" % restart_index)
+		# 本局记录的实际随机种子；由控制器在自动种子生成后直接保存，不能读取已消耗随机数后的内部状态。
+		var automatic_seed: int = _controller.state.random_seed
+		if automatic_match_seeds.has(automatic_seed):
+			return _fail("automatic_restart_seed_reused=%s" % str(automatic_match_seeds))
+		automatic_match_seeds.append(automatic_seed)
 	return true
 
 
