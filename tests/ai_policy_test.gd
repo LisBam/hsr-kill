@@ -1294,7 +1294,8 @@ func _test_zhuijian_teammate_attribute_priority() -> bool:
 	# 两个动作的最终评分；友方追歼目标必须显著高于未受友方标记的等价目标。
 	var marked_score: float = evaluator.score_action(snapshot, marked_action, 2)
 	var comparison_score: float = evaluator.score_action(snapshot, comparison_action, 2)
-	if marked_score < comparison_score + NonameAIEvaluator.ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS - 0.01:
+	# 补充：追歼不再创建公开标记，通用AI不能从伪造或旧快照的标记得到集火加分，两个等价目标应保持同分。
+	if not is_equal_approx(marked_score, comparison_score):
 		return _fail("zhuijian_teammate_attribute_priority marked=%.3f comparison=%.3f" % [marked_score, comparison_score])
 	return true
 

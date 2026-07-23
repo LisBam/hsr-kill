@@ -98,6 +98,25 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 			_host.gain_group_cards_from_draw_or_discard(owner_player_id, str(card_definition.get("group_kind", "")), card_definition.get("groups", []) as Array, int(card_definition.get("count", 0)), "opportunity", true)
 			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
 			_system.complete_current_effect()
+		"gain_same_name_length_and_skill":
+			# 同字数取牌数量；目录以4张配置，牌堆与弃牌堆合计不足时按实际可取得数量结算。
+			var same_name_length_count: int = maxi(int(card_definition.get("count", 0)), 0)
+			_host.gain_same_name_length_cards_from_draw_or_discard(owner_player_id, same_name_length_count, "opportunity", true)
+			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
+			_system.complete_current_effect()
+		"skip_judgment_phase", "skip_discard_phase":
+			# 永久跳过阶段只写入机缘历史；控制器在每个对应阶段入口查询历史，避免保存第二份可漂移状态。
+			_system.complete_current_effect()
+		"refresh_opportunities":
+			# 单张刷新概率；目录固定30%，仍通过定义参数读取以便回放与内容校验保持同一来源。
+			var upgrade_chance: float = clampf(float(card_definition.get("upgrade_chance", 0.0)), 0.0, 1.0)
+			_system.refresh_player_acquired_opportunities(owner_player_id, upgrade_chance)
+			_system.complete_current_effect()
+		"gain_random_unowned_opportunities":
+			# 随机获得数量；组件使用本局统一随机源取得互不重复的未拥有橙色机缘，并将其排入当前角色的后续效果队列。
+			var random_opportunity_count: int = maxi(int(card_definition.get("count", 0)), 0)
+			_system.grant_random_unowned_opportunities(owner_player_id, str(card_definition.get("quality_id", "")), random_opportunity_count)
+			_system.complete_current_effect()
 		"gain_named_and_skill":
 			# 需要获得的同名牌数量；逐次从摸牌堆或弃牌堆顶部方向检索，缺牌时获得现存数量。
 			var named_card_count: int = maxi(int(card_definition.get("count", 0)), 0)

@@ -40,6 +40,10 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"green_discard_draw", "quality":"green", "description":"弃置区域内任意张牌并摸等量的牌", "effect":"discard_own_zone_and_draw"},
 	{"id":"green_swap_equipment", "quality":"green", "description":"令两名角色交换装备区内的所有牌", "effect":"swap_equipment_targets", "max_targets":2},
 	{"id":"green_discard_half_all", "quality":"green", "description":"令一名角色弃置X张牌（X为其所有牌数的一半，向上取整）", "effect":"discard_half_all_cards_target"},
+	{"id":"green_skill_zhuijian", "quality":"green", "description":"获得技能“追歼”", "effect":"grant_skill", "skill_id":"zhuijian"},
+	{"id":"green_skill_bingfeng", "quality":"green", "description":"获得技能“冰封”", "effect":"grant_skill", "skill_id":"bingfeng"},
+	{"id":"green_skill_xinghuo", "quality":"green", "description":"获得技能“星火”", "effect":"grant_skill", "skill_id":"xinghuo"},
+	{"id":"green_skill_xifa", "quality":"green", "description":"获得技能“戏法”", "effect":"grant_skill", "skill_id":"xifa"},
 
 	{"id":"blue_draw_three", "quality":"blue", "description":"摸三张牌。", "effect":"draw", "count":3},
 	{"id":"blue_max_hp_one", "quality":"blue", "description":"增加1点体力上限。", "effect":"max_hp", "count":1},
@@ -56,6 +60,14 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"blue_gain_wuxie_two", "quality":"blue", "description":"从牌堆或弃牌堆中获得两张【无懈可击】", "effect":"gain_group_cards", "group_kind":"definition_id", "groups":["wuxie"], "count":2},
 	{"id":"blue_swap_hands", "quality":"blue", "description":"令两名角色交换所有手牌", "effect":"swap_hand_targets", "max_targets":2},
 	{"id":"blue_lose_half_hp", "quality":"blue", "description":"令一名角色失去X点体力（X为其当前体力值的一半，向上取整）", "effect":"lose_half_hp_target"},
+	{"id":"blue_skill_jiyu", "quality":"blue", "description":"获得技能“疾雨”", "effect":"grant_skill", "skill_id":"jiyu"},
+	{"id":"blue_skill_tianzhui", "quality":"blue", "description":"获得技能“天坠”", "effect":"grant_skill", "skill_id":"tianzhui"},
+	{"id":"blue_skill_anda", "quality":"blue", "description":"获得技能“安打”", "effect":"grant_skill", "skill_id":"anda"},
+	{"id":"blue_skill_touxia", "quality":"blue", "description":"获得技能“投狭”", "effect":"grant_skill", "skill_id":"touxia"},
+	{"id":"blue_skill_qiusheng", "quality":"blue", "description":"获得技能“求生”", "effect":"grant_skill", "skill_id":"qiusheng"},
+	{"id":"blue_skill_quanlei", "quality":"blue", "description":"获得技能“全垒”", "effect":"grant_skill", "skill_id":"quanlei"},
+	{"id":"blue_skill_jianshi", "quality":"blue", "description":"获得技能“剑势”", "effect":"grant_skill", "skill_id":"jianshi"},
+	{"id":"blue_skill_shanqing", "quality":"blue", "description":"获得每回合能发动三次的技能“山倾”", "effect":"grant_skill", "skill_id":"shanqing", "per_turn_limit":3},
 
 	{"id":"purple_reduce_max_hp", "quality":"purple", "description":"令一名角色减少1点体力上限。", "effect":"max_hp_target", "count":-1},
 	{"id":"purple_draw_five", "quality":"purple", "description":"摸五张牌。", "effect":"draw", "count":5},
@@ -73,6 +85,10 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_skill_xingluo", "quality":"purple", "description":"获得技能“星落”", "effect":"grant_skill", "skill_id":"xingluo"},
 	{"id":"purple_gain_distinct_delayed_three", "quality":"purple", "description":"从牌堆或弃牌堆中获得三张牌名不同的延时锦囊牌", "effect":"gain_distinct_delayed", "count":3},
 	{"id":"purple_remove_until_round_end", "quality":"purple", "description":"令一名角色离场直到本轮结束", "effect":"remove_until_round_end_target"},
+	{"id":"purple_skill_huanfa", "quality":"purple", "description":"获得技能“焕发”", "effect":"grant_skill", "skill_id":"huanfa"},
+	{"id":"purple_skill_kance", "quality":"purple", "description":"获得技能“勘测”", "effect":"grant_skill", "skill_id":"kance"},
+	{"id":"purple_skill_xingqi", "quality":"purple", "description":"获得技能“星祈”", "effect":"grant_skill", "skill_id":"xingqi"},
+	{"id":"purple_skip_judgment_phase", "quality":"purple", "description":"永远跳过你的判定阶段", "effect":"skip_judgment_phase", "count":1},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
 	{"id":"orange_draw_phase_one", "quality":"orange", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
@@ -85,6 +101,10 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"orange_reduce_half_max_hp", "quality":"orange", "description":"令一名角色减少X点体力上限（X为其体力上限的一半，向上取整）", "effect":"reduce_half_max_hp_target"},
 	{"id":"orange_damage_current_hp", "quality":"orange", "description":"对一名角色造成X点伤害（X为其当前体力值）", "effect":"damage_current_hp_target"},
 	{"id":"orange_swap_characters", "quality":"orange", "description":"令两名角色交换武将牌", "effect":"swap_character_targets", "max_targets":2},
+	{"id":"orange_skill_mice", "quality":"orange", "description":"获得技能“秘策”", "effect":"grant_skill", "skill_id":"mice"},
+	{"id":"orange_skill_mingchen", "quality":"orange", "description":"获得每回合能发动三次的技能“冥谶”", "effect":"grant_skill", "skill_id":"mingchen", "per_turn_limit":3},
+	{"id":"orange_skill_xianzou", "quality":"orange", "description":"获得技能“弦奏”", "effect":"grant_skill", "skill_id":"xianzou"},
+	{"id":"orange_skip_discard_phase", "quality":"orange", "description":"永远跳过你的弃牌阶段", "effect":"skip_discard_phase", "count":1},
 
 	{"id":"red_gain_types", "quality":"red", "description":"从牌堆或弃牌堆中获得所有类型的牌各4张。（基本牌、锦囊牌、装备牌）", "effect":"gain_group_cards", "group_kind":"type", "groups":["basic", "trick", "equipment"], "count":4},
 	{"id":"red_gain_suits_three", "quality":"red", "description":"从牌堆或弃牌堆中获得所有花色的牌各3张。", "effect":"gain_group_cards", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":3},
@@ -96,6 +116,10 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"red_all_hand_view_as_wuzhong", "quality":"red", "description":"所有手牌视为【无中生有】直到离开你的手牌区", "effect":"view_all_hand_as", "definition_id":"wuzhong"},
 	{"id":"red_gain_all_equipment", "quality":"red", "description":"获得牌堆与弃牌堆与场上的所有装备牌", "effect":"gain_all_equipment"},
 	{"id":"red_gain_random_three_each", "quality":"red", "description":"获得每名角色区域内的随机三张牌", "effect":"gain_random_zone_cards_each", "count":3},
+	{"id":"red_gain_same_name_length_lushi", "quality":"red", "description":"从牌堆或弃牌堆中获得四张牌名字数相同的牌并获得技能“录事”", "effect":"gain_same_name_length_and_skill", "count":4, "skill_id":"lushi"},
+	{"id":"red_gain_suits_anke", "quality":"red", "description":"从牌堆或弃牌堆中获得每种花色的牌各一张并获得技能“安可”", "effect":"gain_group_and_skill", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":1, "skill_id":"anke"},
+	{"id":"red_refresh_opportunities", "quality":"red", "description":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。（30%概率白色变绿色，绿色变蓝色，蓝色变紫色，紫色变橙色，橙色变红色）", "effect":"refresh_opportunities", "upgrade_chance":0.3},
+	{"id":"red_gain_three_unowned_orange", "quality":"red", "description":"随机获得三项你未拥有的橙色机缘", "effect":"gain_random_unowned_opportunities", "quality_id":"orange", "count":3},
 ]
 
 ## 稳定机缘ID到静态定义的运行时索引；首次查询时一次性构建，之后高频规则查询保持常数时间。
@@ -197,6 +221,7 @@ static func get_skill_id(card_id: String) -> String:
 static func get_card_ids_by_quality(quality_id: String) -> Array[String]:
 	_ensure_catalog_indexes()
 	# 品质ID副本；只复制短字符串数组，不复制69张机缘的正文和效果字典。
+	# 补充：目录现已扩展至95张，返回路径仍只复制短字符串数组，不复制正文和效果字典。
 	var result: Array[String] = []
 	for card_id_variant: Variant in _card_ids_by_quality.get(quality_id, []) as Array:
 		result.append(str(card_id_variant))

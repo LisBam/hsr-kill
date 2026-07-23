@@ -21,6 +21,9 @@ extends Node
 ## 红卡抽取权重；需求未给出第五项数值，默认补全为10并暴露在检查器中供主公直接调整。
 @export_range(0, 1000, 1) var red_weight: int = 10
 
+## 机缘刷新时各品质可提升到的下一档稳定ID；灰色对应需求中的白色，红色已经是最高品质因此没有下一档。
+const REFRESH_UPGRADE_QUALITY_BY_QUALITY: Dictionary = {"gray":"green", "green":"blue", "blue":"purple", "purple":"orange", "orange":"red"}
+
 ## 当前权威对局控制器；组件只调用其公开规则端口，不直接改变体力、牌区、技能或座次数组。
 var _host: MatchController
 
@@ -65,6 +68,9 @@ var _current_effect_owner_id: int = -1
 
 ## 当前正在结算的机缘卡定义；空字典表示没有活动效果或正在等待下一张。
 var _current_effect_card: Dictionary = {}
+
+## 当前角色因“随机获得机缘”追加的待结算卡队列；每项仅保存获得者稳定ID与静态定义副本，先于下一名原始选择者结算。
+var _bonus_effect_queue: Array[Dictionary] = []
 
 ## 当前效果是否已经执行且只等待嵌套结算屏障；恢复后应直接进入下一张机缘而不能重复执行效果。
 var _current_effect_waiting_for_barrier: bool = false
@@ -118,6 +124,7 @@ func shutdown() -> void:
 	_random_card_ids_by_quality.clear()
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
+	_bonus_effect_queue.clear()
 	_current_effect_waiting_for_barrier = false
 	_next_effect_retry_scheduled = false
 	_resume_kind = ""
@@ -262,6 +269,103 @@ func get_quality_weights() -> Dictionary:
 	return {"green":green_weight, "blue":blue_weight, "purple":purple_weight, "orange":orange_weight, "red":red_weight}
 
 
+## 将一名角色已拥有的全部机缘替换为同品质新机缘；每张非红机缘独立按指定概率升级一档，返回是否已成功写入新历史。
+func refresh_player_acquired_opportunities(player_id: int, upgrade_chance: float) -> bool:
+	# 当前刷新对象；死亡角色已经不会结算机缘，离场但存活角色仍可按机缘模式规则刷新自身历史。
+	var player: PlayerState = _state.get_player(player_id) if _state != null else null
+	if player == null or not player.alive or _host == null or _rng == null:
+		return false
+	# 原机缘历史副本；刷新必须以本次红色机缘入历史后的完整集合为准，允许包含重复ID。
+	var original_opportunity_ids: Array[String] = player.acquired_opportunity_ids.duplicate()
+	if original_opportunity_ids.is_empty():
+		return false
+	# 刷新后的稳定ID数组；未知旧ID无法判定品质，保留原值以避免损坏回放历史。
+	var refreshed_opportunity_ids: Array[String] = []
+	# 本次随机过程摘要；保存每张旧卡、目标品质、随机值与新ID，供固定种子回放复核。
+	var refresh_entries: Array[Dictionary] = []
+	# 已限制到合法区间的升级概率；目录当前传入0.3，接口仍防御异常扩展内容。
+	var normalized_upgrade_chance: float = clampf(upgrade_chance, 0.0, 1.0)
+	for original_opportunity_id: String in original_opportunity_ids:
+		# 旧机缘静态定义；缺失定义时不改写该历史项，后续条目仍可正常刷新。
+		var original_card: Dictionary = OpportunityCatalog.get_card(original_opportunity_id)
+		var original_quality_id: String = str(original_card.get("quality", ""))
+		if original_card.is_empty() or original_quality_id.is_empty():
+			refreshed_opportunity_ids.append(original_opportunity_id)
+			refresh_entries.append({"old_id":original_opportunity_id, "new_id":original_opportunity_id, "quality":"", "upgraded":false})
+			continue
+		# 可提升品质；红色或未知品质没有下一档，保持原品质且不消耗随机数。
+		var target_quality_id: String = original_quality_id
+		var upgrade_roll: float = -1.0
+		var upgraded: bool = false
+		var upgrade_quality_id: String = str(REFRESH_UPGRADE_QUALITY_BY_QUALITY.get(original_quality_id, ""))
+		if not upgrade_quality_id.is_empty():
+			upgrade_roll = _rng.randf()
+			if upgrade_roll < normalized_upgrade_chance:
+				target_quality_id = upgrade_quality_id
+				upgraded = true
+		# 目标品质可选池；同品质刷新必须排除原卡，确保“新机缘”不会原样保留。
+		var candidate_ids: Array[String] = OpportunityCatalog.get_card_ids_by_quality(target_quality_id)
+		if target_quality_id == original_quality_id:
+			candidate_ids.erase(original_opportunity_id)
+		# 刷新后的稳定ID；理论上每档至少有两张卡，异常配置候选为空时保留原ID而不中断整次刷新。
+		var refreshed_opportunity_id: String = original_opportunity_id
+		if not candidate_ids.is_empty():
+			refreshed_opportunity_id = candidate_ids[_rng.randi_range(0, candidate_ids.size() - 1)]
+		refreshed_opportunity_ids.append(refreshed_opportunity_id)
+		refresh_entries.append({"old_id":original_opportunity_id, "new_id":refreshed_opportunity_id, "quality":target_quality_id, "upgraded":upgraded, "roll":upgrade_roll})
+	# 控制器统一调整历史派生的技能、体力上限与手牌上限；一次性效果不会倒放或重复执行。
+	if not _host.replace_acquired_opportunity_history(player_id, refreshed_opportunity_ids, "opportunity_refresh"):
+		return false
+	_state.random_history.append({"kind":"opportunity_refresh", "player_id":player_id, "upgrade_chance":normalized_upgrade_chance, "entries":refresh_entries})
+	_host.add_log("%s刷新了%d项机缘。" % [_host.format_player_log_name(player_id), refreshed_opportunity_ids.size()])
+	_host.refresh_state_snapshot()
+	return true
+
+
+## 随机授予指定品质中尚未拥有的机缘，并把它们插入当前角色的后续结算队列；返回实际取得的定义数组。
+func grant_random_unowned_opportunities(player_id: int, quality_id: String, requested_count: int) -> Array[Dictionary]:
+	# 当前获得者；死亡角色不能新增历史，离场但存活角色允许结算自己的机缘奖励。
+	var player: PlayerState = _state.get_player(player_id) if _state != null else null
+	# 请求数量；0或负数不消耗随机数，也不创建空的后续效果队列。
+	var grant_count: int = maxi(requested_count, 0)
+	var granted_cards: Array[Dictionary] = []
+	if player == null or not player.alive or _rng == null or grant_count == 0:
+		return granted_cards
+	# 已拥有ID集合；同名机缘重复取得不满足“未拥有”，本次随机还会从候选池删除以保证三项互不重复。
+	var owned_opportunity_ids: Dictionary = {}
+	for owned_opportunity_id: String in player.acquired_opportunity_ids:
+		owned_opportunity_ids[owned_opportunity_id] = true
+	# 可随机取得的候选池；目录返回独立数组，删除已拥有项不会污染本局常驻品质池。
+	var candidate_ids: Array[String] = OpportunityCatalog.get_card_ids_by_quality(quality_id)
+	for candidate_index: int in range(candidate_ids.size() - 1, -1, -1):
+		# 当前候选稳定ID；历史中已出现的项目从尾部安全移除。
+		var candidate_id: String = candidate_ids[candidate_index]
+		if owned_opportunity_ids.has(candidate_id):
+			candidate_ids.remove_at(candidate_index)
+	while granted_cards.size() < grant_count and not candidate_ids.is_empty():
+		# 本次随机位置；使用对局共享随机源，保证网络权威端与回放的结果可复现。
+		var random_index: int = _rng.randi_range(0, candidate_ids.size() - 1)
+		# 本次获得ID；立刻从局部候选移除，确保同一张红色机缘得到的三项互不重复。
+		var granted_opportunity_id: String = candidate_ids[random_index]
+		candidate_ids.remove_at(random_index)
+		# 当前静态定义；异常目录ID跳过，不把空定义写入历史或效果队列。
+		var granted_card: Dictionary = OpportunityCatalog.get_card(granted_opportunity_id)
+		if granted_card.is_empty():
+			continue
+		player.acquired_opportunity_ids.append(granted_opportunity_id)
+		granted_cards.append(granted_card)
+		_bonus_effect_queue.append({"owner_player_id":player_id, "card_definition":granted_card.duplicate(true)})
+	if not granted_cards.is_empty():
+		# 随机历史只保存稳定ID；正文与数值继续由静态目录按当前规则版本解析。
+		var granted_opportunity_ids: Array[String] = []
+		for granted_card: Dictionary in granted_cards:
+			granted_opportunity_ids.append(str(granted_card.get("id", "")))
+		_state.random_history.append({"kind":"opportunity_random_unowned", "player_id":player_id, "quality":quality_id, "opportunity_ids":granted_opportunity_ids})
+		_host.add_log("%s随机获得了%d项%s机缘。" % [_host.format_player_log_name(player_id), granted_cards.size(), OpportunityCatalog.get_quality_name(quality_id)])
+		_host.refresh_state_snapshot()
+	return granted_cards
+
+
 ## 开始一次全体机缘；先生成全部私有候选并暂停场景树，所有角色选完后才释放暂停和执行效果。
 func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary, requested_participant_ids: Array[int] = []) -> void:
 	_triggered_this_round = true
@@ -378,6 +482,25 @@ func _resolve_next_effect() -> void:
 		# 响应或无懈的最后一条续接可能先于控制器清空兼容请求字段恢复；按帧重试且同一时刻只保留一个回调。
 		_schedule_next_effect_resolution()
 		return
+	while not _bonus_effect_queue.is_empty():
+		# 追加机缘条目；只在取得它的角色仍存活时结算，离场存活角色继续享有机缘自用效果例外。
+		var bonus_effect_entry: Dictionary = _bonus_effect_queue.pop_front()
+		# 追加机缘持有者；稳定ID在入队时保存，结算前重新读取状态以防前一张追加卡导致死亡。
+		var bonus_owner_player_id: int = int(bonus_effect_entry.get("owner_player_id", -1))
+		var bonus_owner: PlayerState = _state.get_player(bonus_owner_player_id)
+		if bonus_owner == null or not bonus_owner.alive:
+			continue
+		# 追加机缘静态定义；队列只接受目录深拷贝，空定义不会阻塞原始机缘结算队列。
+		var bonus_card_definition: Dictionary = bonus_effect_entry.get("card_definition", {}) as Dictionary
+		if bonus_card_definition.is_empty():
+			continue
+		_current_effect_owner_id = bonus_owner_player_id
+		_current_effect_card = bonus_card_definition.duplicate(true)
+		_current_effect_waiting_for_barrier = false
+		_state.opportunity_state["current_resolver_id"] = bonus_owner_player_id
+		_host.add_log("%s结算新获得的机缘：%s" % [_host.format_player_log_name(bonus_owner_player_id), str(bonus_card_definition.get("description", ""))])
+		_effect_resolver.resolve_card(bonus_owner_player_id, bonus_card_definition)
+		return
 	while not _resolution_queue.is_empty():
 		# 下一名结算角色；队列在触发时已经固定为当前角色起逆时针顺序。
 		var owner_player_id: int = _resolution_queue.pop_front()
@@ -450,6 +573,7 @@ func _finish_flow() -> void:
 	_selection_queue.clear()
 	_selected_cards_by_player.clear()
 	_resolution_queue.clear()
+	_bonus_effect_queue.clear()
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false
@@ -468,6 +592,7 @@ func _finish_without_resume() -> void:
 	_selection_queue.clear()
 	_selected_cards_by_player.clear()
 	_resolution_queue.clear()
+	_bonus_effect_queue.clear()
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false

@@ -32,6 +32,8 @@ func _ready() -> void:
 		return
 	if not _test_passive_opportunity_effects():
 		return
+	if not _test_new_catalog_effects():
+		return
 	if not await _test_opportunity_card_hover():
 		return
 	if not _test_private_choice_and_counterclockwise_order():
@@ -91,9 +93,10 @@ func _test_catalog_and_weights() -> bool:
 	if weights != {"green":100, "blue":80, "purple":60, "orange":30, "red":10}:
 		return _fail("quality_weights %s" % str(weights))
 	# 全部机缘卡目录；当前共69张，其中3张灰色卡只属于过关斩将关卡与详情历史。
-	# 补充：新增两张难度专属灰色机缘后，当前目录共71张，其中5张灰色卡不参与随机抽取。
+	# 补充：目录已扩展为95张；保留原注释用于说明灰色机缘的关卡归属，实际数量以本测试断言为准。
+	# 补充：新增二十四张技能、阶段与刷新机缘后，当前目录共95张，其中5张灰色卡不参与随机抽取。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 71 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 95 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
 	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
@@ -111,14 +114,19 @@ func _test_catalog_and_weights() -> bool:
 	if gray_cards.size() != 5 or OpportunityCatalog.QUALITY_ORDER.has("gray") or str(gray_initial_hand_two.get("description", "")) != "初始手牌数+2" or int(gray_initial_hand_two.get("count", 0)) != 2 or str(gray_revive_one.get("description", "")) != "复活次数+1" or str(gray_revive_one.get("effect", "")) != "revive_count" or int(gray_revive_one.get("count", 0)) != 1:
 		return _fail("gray_catalog=%s quality_order=%s" % [gray_cards, OpportunityCatalog.QUALITY_ORDER])
 	# 紫色与橙色目录；摸牌阶段加成调整品质后，总目录保持69张且旧紫色稳定ID不再登记。
-	# 补充：新增两张灰色机缘后，总目录为71张；紫色与橙色数量仍保持不变。
+	# 补充：目录现为95张；本段仍用于校验既有紫色、橙色稳定ID及摸牌阶段加成的兼容性。
+	# 补充：新增二十四张机缘后，紫色与橙色目录分别扩展为20张与15张。
 	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
 	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
 	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")
+	# 绿色、蓝色与红色目录；新技能机缘与特殊机缘都必须进入各自随机品质池。
+	var green_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("green")
+	var blue_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("blue")
+	var red_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("red")
 	# 橙色摸牌阶段机缘；正文与固定数值保持不变，只调整品质和稳定ID。
 	var orange_draw_phase_card: Dictionary = OpportunityCatalog.get_card("orange_draw_phase_one")
-	if purple_cards.size() != 16 or orange_cards.size() != 11 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
-		return _fail("draw_phase_quality purple=%d orange=%d card=%s" % [purple_cards.size(), orange_cards.size(), orange_draw_phase_card])
+	if green_cards.size() != 18 or blue_cards.size() != 23 or purple_cards.size() != 20 or orange_cards.size() != 15 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
+		return _fail("catalog_quality_counts green=%d blue=%d purple=%d orange=%d red=%d card=%s" % [green_cards.size(), blue_cards.size(), purple_cards.size(), orange_cards.size(), red_cards.size(), orange_draw_phase_card])
 	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
 	_controller.opportunity_system.green_weight = 0
 	_controller.opportunity_system.blue_weight = 0
@@ -164,12 +172,47 @@ func _test_catalog_and_weights() -> bool:
 		"orange_draw_phase_one":"摸牌阶段额外摸一张牌",
 		"purple_max_hp_two":"增加2点体力上限。",
 		"orange_damage_one":"造成的伤害+1",
+		"orange_skill_mice":"获得技能“秘策”",
+		"green_skill_zhuijian":"获得技能“追歼”",
+		"green_skill_bingfeng":"获得技能“冰封”",
+		"blue_skill_jiyu":"获得技能“疾雨”",
+		"green_skill_xinghuo":"获得技能“星火”",
+		"blue_skill_tianzhui":"获得技能“天坠”",
+		"purple_skill_huanfa":"获得技能“焕发”",
+		"red_gain_same_name_length_lushi":"从牌堆或弃牌堆中获得四张牌名字数相同的牌并获得技能“录事”",
+		"orange_skill_mingchen":"获得每回合能发动三次的技能“冥谶”",
+		"orange_skill_xianzou":"获得技能“弦奏”",
+		"red_gain_suits_anke":"从牌堆或弃牌堆中获得每种花色的牌各一张并获得技能“安可”",
+		"blue_skill_anda":"获得技能“安打”",
+		"green_skill_xifa":"获得技能“戏法”",
+		"blue_skill_touxia":"获得技能“投狭”",
+		"purple_skill_kance":"获得技能“勘测”",
+		"blue_skill_qiusheng":"获得技能“求生”",
+		"blue_skill_quanlei":"获得技能“全垒”",
+		"blue_skill_jianshi":"获得技能“剑势”",
+		"blue_skill_shanqing":"获得每回合能发动三次的技能“山倾”",
+		"purple_skill_xingqi":"获得技能“星祈”",
+		"purple_skip_judgment_phase":"永远跳过你的判定阶段",
+		"orange_skip_discard_phase":"永远跳过你的弃牌阶段",
+		"red_refresh_opportunities":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。（30%概率白色变绿色，绿色变蓝色，蓝色变紫色，紫色变橙色，橙色变红色）",
+		"red_gain_three_unowned_orange":"随机获得三项你未拥有的橙色机缘",
 	}
 	for card_id_variant: Variant in new_descriptions.keys():
 		# 当前新增卡ID与精确原文；目录缺失同样会得到空字符串并失败。
 		var card_id: String = str(card_id_variant)
 		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
 			return _fail("new_description_%s" % card_id)
+	# 新增技能机缘映射；技能稳定ID与每回合三次限制必须由目录直接声明，不能由中文名或文件名猜测。
+	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi"}
+	for skill_card_id_variant: Variant in expected_skill_ids.keys():
+		# 当前技能机缘定义；所有普通技能卡必须使用统一grant_skill效果，供过关斩将与局内获得接口复用。
+		var skill_card_id: String = str(skill_card_id_variant)
+		var skill_card: Dictionary = OpportunityCatalog.get_card(skill_card_id)
+		if str(skill_card.get("effect", "")) != "grant_skill" or str(skill_card.get("skill_id", "")) != str(expected_skill_ids[skill_card_id]):
+			return _fail("new_skill_mapping_%s=%s" % [skill_card_id, skill_card])
+	# 三次限制卡；冥谶与山倾都必须在目录中明示每回合3次，避免只依赖UI文案而漏掉权威端额度。
+	if int(OpportunityCatalog.get_card("orange_skill_mingchen").get("per_turn_limit", 0)) != 3 or int(OpportunityCatalog.get_card("blue_skill_shanqing").get("per_turn_limit", 0)) != 3:
+		return _fail("new_skill_per_turn_limit")
 	return true
 
 
@@ -225,6 +268,65 @@ func _test_passive_opportunity_effects() -> bool:
 		return _fail("passive_opportunity_damage hp=%d" % target.hp)
 	owner.acquired_opportunity_ids.clear()
 	target.hp = 4
+	return true
+
+
+## 验证新增机缘的阶段跳过、同字数取牌、品质刷新与随机未拥有橙色机缘均走正式组件端口。
+func _test_new_catalog_effects() -> bool:
+	# 机缘拥有者；本用例直接维护历史以隔离目录效果，不依赖一次完整三选一流程的随机候选。
+	var owner: PlayerState = _controller.state.get_player(0)
+	if owner == null:
+		return _fail("new_catalog_owner")
+	# 永久阶段跳过历史；判定和弃牌分别从统一历史查询入口返回true，摸牌阶段不会被误判。
+	owner.acquired_opportunity_ids = ["purple_skip_judgment_phase", "orange_skip_discard_phase"]
+	if not _controller.has_acquired_opportunity_permanent_phase_skip(0, "judgment") or not _controller.has_acquired_opportunity_permanent_phase_skip(0, "discard") or _controller.has_acquired_opportunity_permanent_phase_skip(0, "draw"):
+		return _fail("permanent_phase_skip")
+	# 同字数牌源；两张普通【杀】位于摸牌堆、两张属性【杀】位于弃牌堆，四张都按规则名“杀”参与同一字数组。
+	var draw_sha_first: CardInstance = _add_test_card("sha", "draw_pile")
+	var draw_sha_second: CardInstance = _add_test_card("sha", "draw_pile")
+	var discard_fire_sha: CardInstance = _add_test_card("sha_fire", "discard_pile")
+	var discard_thunder_sha: CardInstance = _add_test_card("sha_thunder", "discard_pile")
+	var gained_same_name_length_count: int = _controller.gain_same_name_length_cards_from_draw_or_discard(0, 4, "test")
+	if gained_same_name_length_count != 4 or owner.find_hand_card(draw_sha_first.uid) == null or owner.find_hand_card(draw_sha_second.uid) == null or owner.find_hand_card(discard_fire_sha.uid) == null or owner.find_hand_card(discard_thunder_sha.uid) == null:
+		return _fail("same_name_length_gain")
+	_controller.discard_all_hand_cards(0, -1, "test_cleanup")
+	# 固定升级刷新；100%概率将绿色与蓝色历史各提升一档，新ID不得保留原卡且随机记录必须存在。
+	owner.acquired_opportunity_ids = ["green_skill_zhuijian", "blue_skill_jiqiao"]
+	if not _controller.opportunity_system.refresh_player_acquired_opportunities(0, 1.0):
+		return _fail("opportunity_refresh_rejected")
+	if owner.acquired_opportunity_ids.size() != 2 or str(OpportunityCatalog.get_card(owner.acquired_opportunity_ids[0]).get("quality", "")) != "blue" or str(OpportunityCatalog.get_card(owner.acquired_opportunity_ids[1]).get("quality", "")) != "purple" or owner.acquired_opportunity_ids[0] == "green_skill_zhuijian" or owner.acquired_opportunity_ids[1] == "blue_skill_jiqiao":
+		return _fail("opportunity_refresh_quality=%s" % [owner.acquired_opportunity_ids])
+	# 当前随机历史最后一项；刷新必须写入30%卡同样使用的统一随机历史，而非在UI或本地脚本随机。
+	var refresh_history: Dictionary = _controller.state.random_history.back() as Dictionary
+	if str(refresh_history.get("kind", "")) != "opportunity_refresh" or (refresh_history.get("entries", []) as Array).size() != 2:
+		return _fail("opportunity_refresh_history=%s" % [refresh_history])
+	# 随机未拥有橙色机缘；三项都必须属于橙色、彼此不同且不包含预先拥有的秘策。
+	owner.acquired_opportunity_ids = ["orange_skill_mice"]
+	var random_orange_cards: Array[Dictionary] = _controller.opportunity_system.grant_random_unowned_opportunities(0, "orange", 3)
+	var random_orange_ids: Array[String] = []
+	for random_orange_card: Dictionary in random_orange_cards:
+		var random_orange_id: String = str(random_orange_card.get("id", ""))
+		if str(random_orange_card.get("quality", "")) != "orange" or random_orange_id == "orange_skill_mice" or random_orange_ids.has(random_orange_id):
+			return _fail("random_unowned_orange=%s" % [random_orange_cards])
+		random_orange_ids.append(random_orange_id)
+	if random_orange_ids.size() != 3 or owner.acquired_opportunity_ids.size() != 4:
+		return _fail("random_unowned_orange_count=%s/%s" % [random_orange_ids, owner.acquired_opportunity_ids])
+	# 测试清理；随机获得效果的追加队列仅在正式机缘流程中消费，此处重新配置组件以确保后续用例从空队列与固定随机源开始。
+	_controller.opportunity_system.shutdown()
+	# 刷新后可能安装的局内技能；逐项走正式移除端口，避免将测试来源的时机订阅带入后续用例。
+	var acquired_skill_ids: Array = owner.acquired_skills.keys().duplicate()
+	for acquired_skill_id_variant: Variant in acquired_skill_ids:
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		var acquired_skill_data: Dictionary = owner.acquired_skills.get(acquired_skill_id, {}) as Dictionary
+		if str(acquired_skill_data.get("source", "")) == "opportunity":
+			_controller.remove_acquired_skill(0, acquired_skill_id)
+	owner.acquired_opportunity_ids.clear()
+	owner.hand_limit_bonus = 0
+	owner.max_hp = 4
+	owner.hp = 4
+	var next_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	next_rng.seed = 202607224
+	_controller.opportunity_system.configure(_controller, _controller.state, next_rng, true)
 	return true
 
 

@@ -115,6 +115,9 @@ const PHASE_LOG_NAMES: Dictionary = {
 	"phaseJieshu": "结束阶段",
 }
 
+## 永久跳过阶段机缘效果到主要阶段ID的映射；阶段入口只通过此表查询历史，新增同类效果无需复制判断分支。
+const OPPORTUNITY_PERMANENT_SKIP_EFFECT_BY_PHASE: Dictionary = {"judgment":"skip_judgment_phase", "discard":"skip_discard_phase"}
+
 
 ## 当前权威对局状态；开局前为 null，外部模块应优先读取快照。
 var state: GameState
@@ -3266,6 +3269,24 @@ func add_hand_limit_bonus(player_id: int, amount: int, reason: String = "", allo
 	return amount
 
 
+## 增减角色的永久额外手牌上限；刷新机缘等需要撤销旧加成时使用，最终额外上限始终不低于0。
+func change_hand_limit_bonus(player_id: int, delta: int, reason: String = "", allow_out_of_game: bool = false) -> int:
+	# 手牌上限修正对象；死亡、未获明确离场许可的离场角色与零变化都不写入状态。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or delta == 0:
+		return 0
+	# 实际变化量；减少时最多减至0，避免任意来源把永久额外上限写为负数。
+	var actual_delta: int = delta if delta > 0 else -mini(-delta, maxi(player.hand_limit_bonus, 0))
+	if actual_delta == 0:
+		return 0
+	player.hand_limit_bonus += actual_delta
+	# 公开日志的变化方向；数值始终显示正数，减少时用独立文字避免将负号混入本地化句式。
+	var change_verb: String = "增加" if actual_delta > 0 else "减少"
+	add_log("%s的手牌上限因%s%s%d点（额外上限%d）。" % [format_player_state_log_name(player), format_log_reason(reason), change_verb, absi(actual_delta), player.hand_limit_bonus])
+	_emit_state()
+	return actual_delta
+
+
 ## 交换两名角色在权威座次数组中的位置；玩家ID、身份、技能与牌区随角色整体移动，当前回合归属保持稳定ID不变。
 func swap_player_seats(first_player_id: int, second_player_id: int, reason: String = "") -> bool:
 	if state == null or state.game_over or first_player_id == second_player_id:
@@ -5788,6 +5809,62 @@ func _find_top_group_card(card_zone: Array[CardInstance], group_kind: String, gr
 	return null
 
 
+## 从摸牌堆与弃牌堆获得指定数量且结算牌名字数相同的牌；优先选可取得数量最多的字数组，数量相同则优先含有更顶端牌的字数组。
+func gain_same_name_length_cards_from_draw_or_discard(player_id: int, requested_count: int, reason: String = "gain_same_name_length_cards", allow_out_of_game: bool = false) -> int:
+	# 获得者；死亡、未获明确离场许可的离场角色、终局或非正数量均不执行牌区移动。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or state.game_over or requested_count <= 0:
+		return 0
+	# 各结算名字数的可取得总数；摸牌堆与弃牌堆合并统计，属性【杀】等继续按统一rule_name计数。
+	var available_count_by_name_length: Dictionary = {}
+	for card_zone: Array[CardInstance] in [state.draw_pile, state.discard_pile]:
+		for card: CardInstance in card_zone:
+			# 当前实体的结算名字数；缺失定义返回0，不参与同字数取牌。
+			var name_length: int = get_card_original_name_length(card.definition_id)
+			if name_length > 0:
+				available_count_by_name_length[name_length] = int(available_count_by_name_length.get(name_length, 0)) + 1
+	if available_count_by_name_length.is_empty():
+		return 0
+	# 最佳字数候选；先按可取得数量选择，平局时按“摸牌堆顶、弃牌堆顶”的扫描顺序维持稳定结果。
+	var selected_name_length: int = 0
+	var selected_available_count: int = -1
+	for card_zone: Array[CardInstance] in [state.draw_pile, state.discard_pile]:
+		for card_index: int in range(card_zone.size() - 1, -1, -1):
+			# 当前顶向候选的名字数；同一名字数只在首次遇到时参与平局比较。
+			var candidate_name_length: int = get_card_original_name_length(card_zone[card_index].definition_id)
+			var candidate_available_count: int = int(available_count_by_name_length.get(candidate_name_length, 0))
+			if candidate_name_length > 0 and candidate_available_count > selected_available_count:
+				selected_name_length = candidate_name_length
+				selected_available_count = candidate_available_count
+	if selected_name_length <= 0:
+		return 0
+	# 实际获得数量；先从摸牌堆顶部向下取，摸牌堆不足再从弃牌堆顶部向下补足，始终保持同一结算名字数。
+	var gained_count: int = 0
+	for card_zone: Array[CardInstance] in [state.draw_pile, state.discard_pile]:
+		while gained_count < requested_count:
+			# 当前区域最顶端的同字数实体；未命中时切换下一牌区，绝不移动无关牌。
+			var matched_card: CardInstance = _find_top_card_by_name_length(card_zone, selected_name_length)
+			if matched_card == null:
+				break
+			_prepare_hidden_pile_gain(matched_card, player_id)
+			_ensure_card_movement()
+			if _move_card_with_timings(matched_card, "hand", player_id, reason, state.current_event_id, "", [player_id], true) != null:
+				gained_count += 1
+	if gained_count > 0:
+		add_log("%s从牌堆或弃牌堆获得了%d张牌。" % [format_player_state_log_name(player), gained_count])
+	return gained_count
+
+
+## 从指定牌区顶部方向查找首张结算牌名字数匹配的实体；只读查询不会重排或移动未命中牌。
+func _find_top_card_by_name_length(card_zone: Array[CardInstance], name_length: int) -> CardInstance:
+	for card_index: int in range(card_zone.size() - 1, -1, -1):
+		# 当前实体；统一通过结算名称接口比较，避免显示名称模式影响实际规则。
+		var card: CardInstance = card_zone[card_index]
+		if get_card_original_name_length(card.definition_id) == name_length:
+			return card
+	return null
+
+
 ## 令指定角色从摸牌堆获得最顶上的固定牌名字数卡牌；普通牌按《崩铁杀》自定义牌名计算，属性【杀】等规则名牌优先按规则名计算。
 func gain_top_draw_card_by_name_length(player_id: int, name_length: int, reason: String = "gain_name_length_card") -> CardInstance:
 	# 获得者；无效角色和非正名字数不会查询或移动牌堆。
@@ -7060,6 +7137,78 @@ func get_acquired_opportunity_effect_total(player_id: int, effect_id: String) ->
 		player.opportunity_effect_cache_first_processed_id = player.acquired_opportunity_ids[0]
 		player.opportunity_effect_cache_last_processed_id = player.acquired_opportunity_ids[player.opportunity_effect_cache_processed_count - 1]
 	return int(player.opportunity_effect_totals_cache.get(effect_id, 0))
+
+
+## 判断角色是否因已获得机缘永久跳过指定主要阶段；未登记映射、无历史或0层效果均返回false。
+func has_acquired_opportunity_permanent_phase_skip(player_id: int, phase_name: String) -> bool:
+	# 阶段对应的稳定效果ID；只允许目录声明的判定与弃牌阶段，其他主要阶段不会被本接口误跳过。
+	var effect_id: String = str(OPPORTUNITY_PERMANENT_SKIP_EFFECT_BY_PHASE.get(phase_name, ""))
+	return not effect_id.is_empty() and get_acquired_opportunity_effect_total(player_id, effect_id) > 0
+
+
+## 用新的机缘历史替换角色已有历史，并同步重建该历史派生的技能、体力上限与额外手牌上限；一次性资源效果不会倒放或重复结算。
+func replace_acquired_opportunity_history(player_id: int, replacement_opportunity_ids: Array[String], reason: String = "opportunity_history_replace") -> bool:
+	# 历史所属角色；死亡角色不接收刷新，离场但存活角色允许机缘规则显式修改自身历史。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or replacement_opportunity_ids.is_empty():
+		return false
+	# 新历史合法性；未知卡ID会破坏后续缓存与详情展示，因此整次替换拒绝而不是部分写入。
+	for replacement_opportunity_id: String in replacement_opportunity_ids:
+		if not OpportunityCatalog.has_card(replacement_opportunity_id):
+			return false
+	# 原历史副本；先计算两类需要真实撤销的永久数值，之后再整体写入历史。
+	var original_opportunity_ids: Array[String] = player.acquired_opportunity_ids.duplicate()
+	# 旧体力上限机缘合计；此前每张机缘在结算时已经直接改变最大体力。
+	var original_max_hp_bonus: int = _get_opportunity_effect_total_from_ids(original_opportunity_ids, "max_hp")
+	# 新体力上限机缘合计；替换后只应用差额，不重放历史中的一次性体力变化。
+	var replacement_max_hp_bonus: int = _get_opportunity_effect_total_from_ids(replacement_opportunity_ids, "max_hp")
+	# 旧额外手牌上限合计；该值同样在机缘结算时写入PlayerState，不是纯查询修正。
+	var original_hand_limit_bonus: int = _get_opportunity_effect_total_from_ids(original_opportunity_ids, "hand_limit")
+	# 新额外手牌上限合计；通过差额撤销已失效机缘并保留不属于机缘的其他上限来源。
+	var replacement_hand_limit_bonus: int = _get_opportunity_effect_total_from_ids(replacement_opportunity_ids, "hand_limit")
+	# 旧机缘来源技能ID；只移除source为opportunity的记录，武将、模式、临时与过关斩将来源保持独立。
+	var acquired_skill_ids: Array = player.acquired_skills.keys().duplicate()
+	for acquired_skill_id_variant: Variant in acquired_skill_ids:
+		# 当前局内技能记录；机缘刷新不应误卸载其他系统授予的同名技能。
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		var acquired_skill_data: Dictionary = player.acquired_skills.get(acquired_skill_id, {}) as Dictionary
+		if str(acquired_skill_data.get("source", "")) == "opportunity":
+			remove_acquired_skill(player_id, acquired_skill_id)
+	# 新机缘历史；必须在重新安装技能前写入，保证技能查询与右键详情立即读取同一权威来源。
+	player.acquired_opportunity_ids = replacement_opportunity_ids.duplicate()
+	# 增量缓存失效；刷新可能保留首尾ID却替换中间项，不能依赖普通追加路径的两个边界哨兵判断。
+	player.opportunity_effect_totals_cache.clear()
+	player.opportunity_effect_cache_processed_count = 0
+	player.opportunity_effect_cache_first_processed_id = ""
+	player.opportunity_effect_cache_last_processed_id = ""
+	# 体力上限差额；降低上限仍经统一端口派发时机、压低当前体力并在必要时进入濒死流程。
+	var max_hp_delta: int = replacement_max_hp_bonus - original_max_hp_bonus
+	if max_hp_delta != 0:
+		change_max_hp(player_id, max_hp_delta, player_id, reason, true)
+	# 额外手牌上限差额；新端口只修改机缘原先写入的部分，不触碰模式专属上限字段。
+	var hand_limit_delta: int = replacement_hand_limit_bonus - original_hand_limit_bonus
+	if hand_limit_delta != 0:
+		change_hand_limit_bonus(player_id, hand_limit_delta, reason, true)
+	# 替换后仍存活时逐张恢复其授予的局内技能；同一技能重复出现会由统一授予端口自然去重。
+	if player.alive:
+		for replacement_opportunity_id: String in replacement_opportunity_ids:
+			# 当前替换后的卡定义；仅三种“获得技能”效果会安装运行时实例，其他效果保持历史查询或已结算资源。
+			var replacement_card: Dictionary = OpportunityCatalog.get_card(replacement_opportunity_id)
+			var replacement_effect_id: String = str(replacement_card.get("effect", ""))
+			if replacement_effect_id in ["grant_skill", "gain_group_and_skill", "gain_same_name_length_and_skill"]:
+				grant_acquired_skill(player_id, str(replacement_card.get("skill_id", "")), int(replacement_card.get("per_turn_limit", 0)), int(replacement_card.get("total_limit", 0)), "opportunity", true, int(replacement_card.get("per_round_limit", 0)))
+	_emit_state()
+	return true
+
+
+## 汇总指定机缘ID数组中某种数值效果的count；用于历史整体替换前后的差额计算，不修改缓存或角色状态。
+func _get_opportunity_effect_total_from_ids(opportunity_ids: Array[String], effect_id: String) -> int:
+	# 汇总结果；未知ID与不匹配效果按0处理，调用方已经在替换入口完成完整合法性校验。
+	var total: int = 0
+	for opportunity_id: String in opportunity_ids:
+		if OpportunityCatalog.get_effect_id(opportunity_id) == effect_id:
+			total += OpportunityCatalog.get_effect_count(opportunity_id)
+	return total
 
 
 ## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
@@ -8650,6 +8799,10 @@ func _enter_judgment_phase(player_id: int) -> void:
 	state.current_phase = "judgment"
 	state.phase_index = 1
 	_record_runtime_event("phaseJudgeStage", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
+	# 永久跳过判定阶段机缘；通过统一跳过入口派发Skipped时机并安排唯一的摸牌阶段后继。
+	if has_acquired_opportunity_permanent_phase_skip(player_id, "judgment"):
+		skip_current_main_phase(player_id, "judgment", "opportunity_permanent_skip")
+		return
 	if bool(player.skipped_phases.get("judgment", false)):
 		_emit_rule_timing("phaseJudgeSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		_continue_turn_after_judgment(player_id)
@@ -10338,6 +10491,10 @@ func _enter_discard_phase(player_id: int) -> void:
 	state.current_phase = "discard"
 	state.phase_index = 4
 	_record_runtime_event("phaseDiscard", "phase", {"player_id":player_id})
+	# 永久跳过弃牌阶段机缘；通过统一跳过入口派发Skipped时机并安排唯一的结束阶段后继。
+	if has_acquired_opportunity_permanent_phase_skip(player_id, "discard"):
+		skip_current_main_phase(player_id, "discard", "opportunity_permanent_skip")
+		return
 	if not _begin_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
 		_emit_rule_timing("phaseDiscardCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
 		_finish_turn(player_id)

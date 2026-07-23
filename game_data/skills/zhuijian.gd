@@ -41,6 +41,7 @@ func install() -> void:
 	subscribe_timing("damageCancelled", _on_damage_not_happened, "global")
 	subscribe_timing("damageZero", _on_damage_not_happened, "global")
 	subscribe_timing("dieAfter", _on_player_died, "global")
+	# 补充：追歼的持续目标只由本实例私有字段和武将牌左上角提示表达，不再创建或依赖公开标记数据。
 
 
 ## 卸载技能时清除仍存在的目标提示，再释放基类管理的全部订阅。
@@ -120,6 +121,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	announce_activation({"target_id":target_id, "card_uid":response.card_ids[0]})
 	observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "nature_damage":true})
 	# 弃牌引发的失牌技能或装备询问必须先完成，随后再写入追歼标记。
+	# 补充：这里的“标记”仅指本技能实例的持续目标与武将牌提示，不调用公开标记服务。
 	if bool(host.call("has_nested_settlement_barrier")):
 		defer_settlement({"kind":"zhuijian_apply_mark", "target_id":target_id})
 	else:
@@ -145,16 +147,13 @@ func _apply_mark(target_id: int) -> void:
 	_marked_target_id = target_id
 	_reserved_damage_event_id = -1
 	# 对局公开标记数据；AI与界面只读取此可序列化快照，不访问本技能实例的私有目标字段。
-	var mark_data: Dictionary = {"icon":MARK_ICON, "name":"追歼", "description":"下次受到的属性伤害+1，直到追歼发动者下个回合开始。", "count":1, "source_player_id":owner_player_id, "order":CORNER_TEXT_ORDER}
-	if host.has_method("set_player_mark"):
-		host.call("set_player_mark", target_id, _get_mark_id(), mark_data)
+	# 补充：主公已指定追歼不创建公开标记，保留上方历史说明以兼容旧存档阅读；本逻辑只设置下方武将牌提示。
 	host.call("set_character_corner_text_entry", target_id, _get_corner_entry_id(), "追歼", CORNER_TEXT_ORDER)
 
 
 ## 清除本实例的目标、伤害预留与公开文本；重复调用保持幂等。
 func _clear_mark() -> void:
-	if host != null and _marked_target_id >= 0 and host.has_method("remove_player_mark"):
-		host.call("remove_player_mark", _marked_target_id, _get_mark_id())
+	# 补充：追歼当前没有公开标记，因此清理时只移除自身的武将牌左上角提示，不能影响其他来源条目。
 	if host != null and _marked_target_id >= 0 and host.has_method("remove_character_corner_text_entry"):
 		host.call("remove_character_corner_text_entry", _marked_target_id, _get_corner_entry_id())
 	_marked_target_id = -1
