@@ -148,8 +148,10 @@ func _test_shield_ui() -> bool:
 	# 数字护盾标签；护盾没有独立上限，只显示当前护盾值。
 	var shield_number: Label = health_container.get_child(0) as Label
 	# 数字体力标签；继续显示当前体力/体力上限，不把护盾并入真实体力。
+	# 三行文本依次为当前体力、分隔斜杠和体力上限，防止高体力分数恢复为横向排版。
 	var health_number: Label = health_container.get_child(1) as Label
-	if shield_number.text != "3" or health_number.text != "5/6" or not shield_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_shield")) or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_full")) or shield_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size:
+	# 数字模式排版参数；字号和负行间距共同保证三行分数更醒目且保持紧凑。
+	if shield_number.text != "3" or health_number.text != "5\n/\n6" or not shield_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_shield")) or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_full")) or shield_number.get_theme_font_size("font_size") != player_view.numeric_health_font_size or health_number.get_theme_font_size("font_size") != player_view.numeric_health_font_size or shield_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("line_spacing") != player_view.numeric_health_line_spacing:
 		return _fail("numeric_health=%s/%s" % [shield_number.text, health_number.text])
 	return true
 
