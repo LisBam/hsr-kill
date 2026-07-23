@@ -15,6 +15,18 @@ const REPEATING_BONUS_START_LEVEL: int = 16
 ## 敌方重新入场时的基础摸牌数；灰色初始手牌机缘会在此基础上继续叠加。
 const REPLACEMENT_DRAW_COUNT: int = 4
 
+## 玩家复活后的固定摸牌数；复活会先清空区域、回复至体力上限，再从公共牌堆摸取该数量。
+const REVIVAL_DRAW_COUNT: int = 4
+
+## 过关斩将难度允许的最小值；难度一为玩家开局增益最多的入门档。
+const MIN_DIFFICULTY: int = 1
+
+## 过关斩将难度允许的最大值；难度五不授予任何开局机缘，与新增难度前的规则保持一致。
+const MAX_DIFFICULTY: int = 5
+
+## 过关斩将默认难度；默认难度五保证旧存档缺失该设置时不会静默改变原有开局数值。
+const DEFAULT_DIFFICULTY: int = 5
+
 ## 第14关灰色装备机缘使用的不同装备子类别数量；卡牌目录的count与该常量保持一致，便于装备流程限制最大数量。
 const LEVEL_FOURTEEN_EQUIPMENT_SUBTYPE_COUNT: int = 4
 
@@ -36,6 +48,15 @@ const FIXED_LEVEL_OPPORTUNITY_IDS: Dictionary = {
 ## 第16关及之后每层固定授予的三项机缘；灰色初始手牌、蓝色体力上限与橙色摸牌阶段加成均可无限累计。
 const REPEATING_LEVEL_OPPORTUNITY_IDS: Array[String] = ["gray_initial_hand_one", "blue_max_hp_one", "orange_draw_phase_one"]
 
+## 各难度为本地玩家授予的开局机缘稳定ID；数值与正文均由机缘目录提供，难度服务不复制效果参数。
+const PLAYER_STARTING_OPPORTUNITY_IDS_BY_DIFFICULTY: Dictionary = {
+	1:["purple_max_hp_two", "orange_draw_phase_one", "gray_initial_hand_two", "green_slash_play_limit_one", "gray_revive_one"],
+	2:["blue_max_hp_one", "orange_draw_phase_one", "gray_initial_hand_two", "green_slash_play_limit_one"],
+	3:["blue_max_hp_one", "gray_initial_hand_two", "green_slash_play_limit_one"],
+	4:["gray_initial_hand_one", "green_slash_play_limit_one"],
+	5:[],
+}
+
 ## 当前权威对局状态；关卡快照写入其 conquest_state，供 UI、网络与回放统一读取。
 var _state: GameState
 
@@ -44,19 +65,34 @@ var _rng: RandomNumberGenerator
 
 
 ## 为一局过关斩将绑定玩家和敌方稳定 ID，并初始化第1关公开快照。
-func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, enemy_id: int) -> void:
+## 补充：初始化同时锁定难度、授予玩家开局机缘并建立复活次数快照。
+func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, enemy_id: int, difficulty: int = DEFAULT_DIFFICULTY) -> void:
 	_state = state
 	_rng = rng
 	if _state == null:
 		return
+	# 本局规范化难度；创建后只保存在权威对局快照中，菜单后续修改不会影响进行中的对局。
+	var normalized_difficulty: int = clampi(difficulty, MIN_DIFFICULTY, MAX_DIFFICULTY)
+	# 本难度授予玩家的完整机缘列表；复制后写入快照，避免调用方改写常量数组。
+	var player_starting_opportunity_ids: Array[String] = _get_player_starting_opportunity_ids_for_difficulty(normalized_difficulty)
 	_state.conquest_state = {
 		"level": INITIAL_LEVEL,
 		"player_id": player_id,
 		"enemy_player_id": enemy_id,
+		"difficulty": normalized_difficulty,
+		"player_starting_opportunity_ids": player_starting_opportunity_ids.duplicate(),
+		"player_revives_remaining": _get_opportunity_effect_total_from_ids(player_starting_opportunity_ids, "revive_count"),
+		"player_revives_used": 0,
 		"enemy_opportunity_ids": [],
 		"awarded_fixed_opportunity_levels": [],
 		"awarded_skill_opportunity_levels": [],
 	}
+	# 玩家实体上的机缘历史是所有通用数值查询与右键详情的唯一来源；难度服务只负责在开局时追加目录ID。
+	var player: PlayerState = _state.get_player(player_id)
+	if player != null:
+		for opportunity_id: String in player_starting_opportunity_ids:
+			if not OpportunityCatalog.get_card(opportunity_id).is_empty():
+				player.acquired_opportunity_ids.append(opportunity_id)
 
 
 ## 清理服务持有的跨对局引用；重新开局后旧服务不得继续访问上一局状态或随机源。
@@ -80,6 +116,49 @@ func get_player_id() -> int:
 ## 返回本局敌方稳定 ID；缺失状态返回-1，调用方应拒绝应用敌方层数增益。
 func get_enemy_id() -> int:
 	return int(_state.conquest_state.get("enemy_player_id", -1)) if _state != null else -1
+
+
+## 返回本局锁定的过关斩将难度；无状态时回退兼容旧规则的难度五。
+func get_difficulty() -> int:
+	if _state == null:
+		return DEFAULT_DIFFICULTY
+	return clampi(int(_state.conquest_state.get("difficulty", DEFAULT_DIFFICULTY)), MIN_DIFFICULTY, MAX_DIFFICULTY)
+
+
+## 返回玩家由本局难度获得的开局机缘ID；用于日志、测试与公开详情，不允许调用方改写权威数组。
+func get_player_starting_opportunity_ids() -> Array[String]:
+	var result: Array[String] = []
+	if _state == null:
+		return result
+	for opportunity_id_variant: Variant in _state.conquest_state.get("player_starting_opportunity_ids", []) as Array:
+		# 当前开局机缘ID；目录缺失时跳过，避免损坏存档向运行时传播无效效果。
+		var opportunity_id: String = str(opportunity_id_variant)
+		if not opportunity_id.is_empty() and not OpportunityCatalog.get_card(opportunity_id).is_empty():
+			result.append(opportunity_id)
+	return result
+
+
+## 返回玩家本局剩余复活次数；异常负值按0处理，界面和死亡拦截均读取该唯一快照。
+func get_player_revives_remaining() -> int:
+	if _state == null:
+		return 0
+	return maxi(int(_state.conquest_state.get("player_revives_remaining", 0)), 0)
+
+
+## 判断指定角色是否是仍可复活的过关斩将玩家；敌方换将与普通模式不会进入该分支。
+func can_revive_player(player_id: int) -> bool:
+	return player_id >= 0 and player_id == get_player_id() and get_player_revives_remaining() > 0
+
+
+## 消耗一次玩家复活并记录已使用次数；返回false表示目标不合法或次数耗尽，调用方应继续普通死亡结算。
+func consume_player_revive(player_id: int) -> bool:
+	if _state == null or not can_revive_player(player_id):
+		return false
+	# 消耗后的剩余次数；先写入权威状态，防止死亡时机重入重复使用同一次复活。
+	var remaining_count: int = get_player_revives_remaining() - 1
+	_state.conquest_state["player_revives_remaining"] = remaining_count
+	_state.conquest_state["player_revives_used"] = maxi(int(_state.conquest_state.get("player_revives_used", 0)), 0) + 1
+	return true
 
 
 ## 判断指定角色是否是本模式中会无限重生并叠加关卡增强的敌方角色。
@@ -254,6 +333,33 @@ func _get_fixed_opportunity_ids_for_level(level: int) -> Array[String]:
 		var opportunity_id: String = str(opportunity_id_variant)
 		if not opportunity_id.is_empty():
 			result.append(opportunity_id)
+	return result
+
+
+## 返回指定难度对应的玩家开局机缘；未知输入先夹紧至一至五，结果始终是可独立修改的强类型数组。
+func _get_player_starting_opportunity_ids_for_difficulty(difficulty: int) -> Array[String]:
+	var result: Array[String] = []
+	# 规范化难度；服务对测试、存档恢复与菜单调用采用同一边界规则。
+	var normalized_difficulty: int = clampi(difficulty, MIN_DIFFICULTY, MAX_DIFFICULTY)
+	for opportunity_id_variant: Variant in PLAYER_STARTING_OPPORTUNITY_IDS_BY_DIFFICULTY.get(normalized_difficulty, []) as Array:
+		# 当前配置ID；无效定义在写入玩家历史前由configure再次过滤，但公开快照仍只保留非空稳定ID。
+		var opportunity_id: String = str(opportunity_id_variant)
+		if not opportunity_id.is_empty():
+			result.append(opportunity_id)
+	return result
+
+
+## 从任意机缘ID列表汇总指定效果数值；难度初始化可在 conquest_state 建立前计算复活次数。
+func _get_opportunity_effect_total_from_ids(opportunity_ids: Array[String], effect_id: String) -> int:
+	# 累计效果数值；无效ID与效果不匹配的条目均跳过。
+	var result: int = 0
+	if effect_id.is_empty():
+		return result
+	for opportunity_id: String in opportunity_ids:
+		# 当前机缘定义；所有count来源仍由目录统一维护。
+		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+		if str(opportunity_card.get("effect", "")) == effect_id:
+			result += int(opportunity_card.get("count", 0))
 	return result
 
 

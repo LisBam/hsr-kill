@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dv7b0fvqdb2oo"
-valid=false
+uid="uid://dacqj7owlfvjv"
+path="res://.godot/imported/lingke.png-9bfdc8bda0cac29dc841eba811f047b2.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://game_data/characters/image/lingke.png"
+dest_files=["res://.godot/imported/lingke.png-9bfdc8bda0cac29dc841eba811f047b2.ctex"]
 
 [params]
 

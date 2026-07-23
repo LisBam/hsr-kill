@@ -100,6 +100,16 @@ func _run() -> void:
 	var identity_mode_player_count: Label = main_instance.get_node("%IdentityModePlayerCount") as Label
 	# 右侧模式规则提示；当前只保留随机身份和阵营对抗两项核心玩法说明。
 	var mode_rule_hint: Label = main_instance.get_node("%MainMenuModeRuleHint") as Label
+	# 模式预览左上角详情按钮；仅斗地主、机缘大乱斗与过关斩将显示。
+	var mode_details_button: Button = main_instance.get_node("MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeDetailsButton") as Button
+	# 模式详情居中面板；点击入口后显示当前模式的完整长期说明。
+	var mode_details_panel: PanelContainer = main_instance.get_node("MainMenu/MainMenuModeDetailsPanel") as PanelContainer
+	# 模式详情标题；用于确认弹窗内容跟随当前模式而不是残留上次说明。
+	var mode_details_title: Label = mode_details_panel.get_node("ModeDetailsContent/Title") as Label
+	# 模式详情正文；必须包含模式关键机制而非仅重复预览短标题。
+	var mode_details_description: Label = mode_details_panel.get_node("ModeDetailsContent/DescriptionScroll/Description") as Label
+	# 模式详情关闭按钮；关闭后遮罩与面板必须一起退出。
+	var mode_details_close_button: Button = mode_details_panel.get_node("ModeDetailsContent/CloseButton") as Button
 	# 左侧模式面板；用于确认其中没有隐藏的第二个模式按钮。
 	var mode_list: PanelContainer = main_instance.get_node("%MainMenuModeList") as PanelContainer
 	# 左侧模式卡滚动窗口；新增模式只能扩展滚动内容，不能压缩原有卡片尺寸。
@@ -146,7 +156,7 @@ func _run() -> void:
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
-	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
@@ -259,20 +269,54 @@ func _run() -> void:
 	# 过关斩将专属开局设置；换将卡与随机选将牌数均须显示，车轮战专属候选则不得误入该模式。
 	var main_conquest_replacement_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow") as Control
 	var main_conquest_candidate_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow") as Control
+	var main_conquest_difficulty_row: Control = main_instance.get_node("%MainMenuConquestDifficultyRow") as Control
+	var main_conquest_difficulty_option: OptionButton = main_instance.get_node("%MainMenuConquestDifficultyOption") as OptionButton
 	var match_conquest_replacement_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterReplacementCountRow") as Control
 	var match_conquest_candidate_row: Control = main_instance.get_node("MatchMenu/MenuPanel/MenuVBox/CharacterCandidateCountRow") as Control
+	var match_conquest_difficulty_row: Control = main_instance.get_node("%ConquestDifficultyRow") as Control
+	var match_conquest_difficulty_option: OptionButton = main_instance.get_node("%ConquestDifficultyOption") as OptionButton
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_CONQUEST)
-	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or main_custom_character_checkbox == null or match_custom_character_checkbox == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible or not main_custom_character_checkbox.visible or not match_custom_character_checkbox.visible or main_custom_character_checkbox.text != "自选武将" or match_custom_character_checkbox.text != "自选武将":
+	if main_conquest_replacement_row == null or main_conquest_candidate_row == null or main_conquest_difficulty_row == null or match_menu == null or match_conquest_replacement_row == null or match_conquest_candidate_row == null or match_conquest_difficulty_row == null or main_custom_character_checkbox == null or match_custom_character_checkbox == null or not main_conquest_replacement_row.visible or not main_conquest_candidate_row.visible or not main_conquest_difficulty_row.visible or not match_conquest_replacement_row.visible or not match_conquest_candidate_row.visible or not match_conquest_difficulty_row.visible or not main_custom_character_checkbox.visible or not match_custom_character_checkbox.visible or main_custom_character_checkbox.text != "自选武将" or match_custom_character_checkbox.text != "自选武将":
 		_fail("conquest_selection_settings_visible")
+		return
+	# 难度下拉同步；主菜单选择难度一后，局内下一局设置必须显示同一稳定选项。
+	main_conquest_difficulty_option.item_selected.emit(0)
+	await get_tree().process_frame
+	if GameSettings.conquest_difficulty != 1 or int(match_conquest_difficulty_option.get_item_metadata(match_conquest_difficulty_option.selected)) != 1:
+		_fail("conquest_difficulty_sync")
+		return
+	GameSettings.set_conquest_difficulty(GameSettings.DEFAULT_CONQUEST_DIFFICULTY)
+	# 过关斩将详情；按钮位于预览左上角，打开后正文必须包含复活与难度说明。
+	if not mode_details_button.visible:
+		_fail("conquest_details_button_hidden")
+		return
+	await _click_control(mode_details_button)
+	await get_tree().process_frame
+	if not mode_details_panel.visible or mode_details_title.text != "过关斩将模式详情" or not mode_details_description.text.contains("复活") or not mode_details_description.text.contains("难度五"):
+		_fail("conquest_details_content")
+		return
+	await _click_control(mode_details_close_button)
+	if mode_details_panel.visible:
+		_fail("conquest_details_close")
 		return
 	mode_scroll.scroll_vertical = 0
 	await get_tree().process_frame
 	await _click_control(identity_mode_button)
 	await get_tree().process_frame
 	match_menu.set_match_mode(GameSettings.MATCH_MODE_IDENTITY)
-	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY or main_custom_character_checkbox.text != "自选全武将、座次与身份" or match_custom_character_checkbox.text != "自选全武将、座次与身份":
+	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY or mode_details_button.visible or main_conquest_difficulty_row.visible or match_conquest_difficulty_row.visible or main_custom_character_checkbox.text != "自选全武将、座次与身份" or match_custom_character_checkbox.text != "自选全武将、座次与身份":
 		_fail("mode_scroll_identity_restore")
 		return
+	# 另外两个开放详情的模式；切换时只验证入口显隐与标题来源，随后恢复身份模式供原有开局流程继续。
+	main_menu.call("_select_doudizhu_mode")
+	if not mode_details_button.visible:
+		_fail("doudizhu_details_button_hidden")
+		return
+	main_menu.call("_select_opportunity_brawl_mode")
+	if not mode_details_button.visible:
+		_fail("opportunity_brawl_details_button_hidden")
+		return
+	main_menu.call("_select_identity_mode")
 	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or conquest_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
 		return

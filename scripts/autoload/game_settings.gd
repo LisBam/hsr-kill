@@ -52,6 +52,9 @@ signal character_candidate_count_changed(count: int)
 ## 过关斩将随机选将牌数变化信号；参数范围为1至20，仅影响之后创建的过关斩将对局。
 signal conquest_character_candidate_count_changed(count: int)
 
+## 过关斩将难度变化信号；参数只会是一至五，仅影响之后创建的过关斩将对局。
+signal conquest_difficulty_changed(difficulty: int)
+
 ## 离线下一局是否由本机控制全部角色的变化信号；联机模式不会读取该设置。
 signal control_all_characters_changed(enabled: bool)
 
@@ -97,6 +100,24 @@ const CHARACTER_REPLACEMENT_COUNT_OPTIONS: Array[Dictionary] = [
 
 ## 过关斩将换将卡数量默认值；0表示默认关闭，旧存档缺失字段时不会意外启用换将。
 const DEFAULT_CONQUEST_CHARACTER_REPLACEMENT_COUNT: int = 0
+
+## 过关斩将难度下拉选项；稳定数值一至五写入存档，中文文本只负责菜单显示。
+const CONQUEST_DIFFICULTY_OPTIONS: Array[Dictionary] = [
+	{"value":1, "label":"难度一"},
+	{"value":2, "label":"难度二"},
+	{"value":3, "label":"难度三"},
+	{"value":4, "label":"难度四"},
+	{"value":5, "label":"难度五"},
+]
+
+## 过关斩将允许的最低难度值；难度一提供最多玩家开局机缘。
+const MIN_CONQUEST_DIFFICULTY: int = 1
+
+## 过关斩将允许的最高难度值；难度五不提供玩家开局机缘。
+const MAX_CONQUEST_DIFFICULTY: int = 5
+
+## 过关斩将默认难度；难度五保持旧版本无玩家开局增益的行为，旧存档不会因缺少字段而改变强度。
+const DEFAULT_CONQUEST_DIFFICULTY: int = 5
 
 ## 随机选将牌数下拉选项；稳定数值1至20直接作为每名玩家的普通随机候选数量。
 const CHARACTER_CANDIDATE_COUNT_OPTIONS: Array[Dictionary] = [
@@ -311,6 +332,9 @@ var character_candidate_count: int = DEFAULT_CHARACTER_CANDIDATE_COUNT
 
 ## 过关斩将中每名角色下一局获得的随机选将牌数；默认12张，与普通模式独立保存且只在该模式创建时读取。
 var conquest_character_candidate_count: int = DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT
+
+## 下一局过关斩将难度；默认难度五，仅在创建对局时锁定到 match_options 与关卡状态。
+var conquest_difficulty: int = DEFAULT_CONQUEST_DIFFICULTY
 
 ## 下一局离线对局是否由本机控制全部角色；默认关闭，联机房主与客户端均忽略该值。
 var control_all_characters_enabled: bool = false
@@ -634,6 +658,17 @@ func set_conquest_character_candidate_count(count: int) -> void:
 	conquest_character_candidate_count_changed.emit(conquest_character_candidate_count)
 
 
+## 设置下一局过关斩将难度；范围外输入限制到一至五，不会修改已经开始的关卡、机缘或复活次数。
+func set_conquest_difficulty(difficulty: int) -> void:
+	# 标准化后的难度；菜单、存档与对局创建统一使用一至五的整数协议。
+	var normalized_difficulty: int = clampi(difficulty, MIN_CONQUEST_DIFFICULTY, MAX_CONQUEST_DIFFICULTY)
+	if conquest_difficulty == normalized_difficulty:
+		return
+	conquest_difficulty = normalized_difficulty
+	_queue_settings_save()
+	conquest_difficulty_changed.emit(conquest_difficulty)
+
+
 ## 返回指定模式应读取的随机选将牌数；只有过关斩将使用专属设置，其余模式保留普通候选配置。
 func get_character_candidate_count_for_mode(mode_id: String) -> int:
 	# 规范化后的模式ID；未知模式按身份局处理，避免外部调用读取到不稳定配置。
@@ -762,6 +797,8 @@ func _load_saved_settings() -> void:
 	character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
 	# 过关斩将独立随机选将牌数；旧存档未保存该字段时固定回退12张，不继承普通模式当前值。
 	conquest_character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
+	# 过关斩将难度；旧存档缺少字段时使用难度五，保持新增机制前无玩家开局机缘的对局强度。
+	conquest_difficulty = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", DEFAULT_CONQUEST_DIFFICULTY)), MIN_CONQUEST_DIFFICULTY, MAX_CONQUEST_DIFFICULTY)
 	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
@@ -842,6 +879,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_replacement_count", conquest_character_replacement_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", conquest_character_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", conquest_difficulty)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)

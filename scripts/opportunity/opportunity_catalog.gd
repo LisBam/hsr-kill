@@ -19,9 +19,12 @@ const QUALITY_NAMES: Dictionary = {
 ## 全部机缘卡定义；description字段逐字保留主公给出的原文，effect与参数只服务权威结算。
 const CARD_DEFINITIONS: Array[Dictionary] = [
 	# 灰色机缘仅由过关斩将关卡授予；不在QUALITY_ORDER中，所以权重抽取与全零权重回退都不会选中。
+	# 补充：难度配置也可按稳定ID直接授予灰色机缘，但仍不会让其进入随机三选一。
 	{"id":"gray_initial_hand_four", "quality":"gray", "description":"初始手牌数+4", "effect":"initial_hand_bonus", "count":4},
 	{"id":"gray_equip_distinct_four", "quality":"gray", "description":"进入战斗后随机使用牌堆或弃牌堆中的4张不同子类别的装备牌", "effect":"equip_distinct_subtypes", "count":4},
 	{"id":"gray_initial_hand_one", "quality":"gray", "description":"初始手牌数+1", "effect":"initial_hand_bonus", "count":1},
+	{"id":"gray_initial_hand_two", "quality":"gray", "description":"初始手牌数+2", "effect":"initial_hand_bonus", "count":2},
+	{"id":"gray_revive_one", "quality":"gray", "description":"复活次数+1", "effect":"revive_count", "count":1},
 
 	{"id":"green_draw_two", "quality":"green", "description":"摸两张牌。", "effect":"draw", "count":2},
 	{"id":"green_recover_one", "quality":"green", "description":"回复1点体力。", "effect":"recover", "count":1},
@@ -66,7 +69,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_skill_chuanchong", "quality":"purple", "description":"获得技能“传冲”", "effect":"grant_skill", "skill_id":"chuanchong"},
 	{"id":"purple_skill_qianggong", "quality":"purple", "description":"获得每回合能发动三次的技能“强攻”", "effect":"grant_skill", "skill_id":"qianggong", "per_turn_limit":3},
 	{"id":"purple_skill_dieying", "quality":"purple", "description":"获得技能“蝶影”", "effect":"grant_skill", "skill_id":"dieying"},
-	{"id":"purple_skill_sefu", "quality":"purple", "description":"获得技能“慑伏”", "effect":"grant_skill", "skill_id":"sefu"},
+	{"id":"purple_skill_sefu", "quality":"purple", "description":"获得技能“慑伏”", "effect":"grant_skill", "skill_id":"shefu"},
 	{"id":"purple_skill_xingluo", "quality":"purple", "description":"获得技能“星落”", "effect":"grant_skill", "skill_id":"xingluo"},
 	{"id":"purple_gain_distinct_delayed_three", "quality":"purple", "description":"从牌堆或弃牌堆中获得三张牌名不同的延时锦囊牌", "effect":"gain_distinct_delayed", "count":3},
 	{"id":"purple_remove_until_round_end", "quality":"purple", "description":"令一名角色离场直到本轮结束", "effect":"remove_until_round_end_target"},

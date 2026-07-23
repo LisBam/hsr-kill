@@ -55,6 +55,22 @@ const STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL: String = "正在创建机缘大乱
 ## 过关斩将创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
 const STARTING_STATUS_TEXT_CONQUEST: String = "正在创建过关斩将对局……"
 
+## 支持详情弹窗的模式说明；键为稳定模式ID，标题与正文只用于长期玩法说明，不参与规则判断。
+const MODE_DETAILS_BY_MODE: Dictionary = {
+	GameSettings.MATCH_MODE_DOUDIZHU:{
+		"title":"斗地主模式详情",
+		"description":"支持3人或5人。3人局由1名地主对抗2名农民；5人局由一、三号位的2名地主对抗3名农民。身份开局明置，全员同时选将。地主体力上限+1并获得【飞扬】与【跋扈】，农民获得【共苦】。击杀全部对方阵营即可获胜，本模式不执行身份局击杀奖惩。",
+	},
+	GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:{
+		"title":"机缘大乱斗模式详情",
+		"description":"支持2—10人并继承身份模式的阵营与胜负规则。每轮每个普通回合按1/N概率触发机缘；若整轮都未触发，则在轮末必定触发一次。触发后每名存活且未死亡的角色从3张私有机缘中选择1张，全员选择完成后从当前回合角色开始逆时针依次结算。灰色机缘不会进入随机候选。",
+	},
+	GameSettings.MATCH_MODE_CONQUEST:{
+		"title":"过关斩将模式详情",
+		"description":"固定1名玩家对战1名AI，玩家为一号位红方并先手。开局玩家选择1次机缘；每击败一名敌方武将，敌方会弃置全部区域牌、提升关卡、随机换将并获得累计强化，随后玩家再选择1次机缘。拥有复活次数时，玩家死亡会弃置区域内所有牌、将体力回复至体力上限并摸4张牌，随后继续游戏。难度一至难度四会按设置授予不同的开局机缘，难度五不提供额外增益。",
+	},
+}
+
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
 var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSettings != null else "identity"
 
@@ -204,6 +220,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 随机选将牌数下拉框；元数据保存1至20，领袖技武将不计入该普通候选数量。
 @onready var _character_candidate_count_option: OptionButton = %MainMenuCharacterCandidateCountOption
 
+## 过关斩将难度下拉框；元数据保存一至五，仅在过关斩将设置页显示并影响下一局。
+@onready var _conquest_difficulty_option: OptionButton = %MainMenuConquestDifficultyOption
+
+## 过关斩将难度整行容器；其他模式隐藏且不占用设置面板布局高度。
+@onready var _conquest_difficulty_row: Control = %MainMenuConquestDifficultyRow
+
 ## 普通模式自选规则控件；车轮战使用独立抓将规则时隐藏。
 @onready var _custom_character_assignment_row: Control = _custom_character_assignment_checkbox
 
@@ -261,11 +283,30 @@ var _covered_interface_focus_modes: Dictionary = {}
 ## 模式列表滚动同步保护；同步 ScrollContainer 与 VScrollBar 时暂时阻断互相触发的 value_changed 回调。
 var _mode_scroll_syncing: bool = false
 
+## 模式预览左上角详情按钮；只在斗地主、机缘大乱斗与过关斩将选项页显示。
+var _mode_details_button: Button
+
+## 模式详情全屏遮罩；打开说明时阻断底层模式、设置与开局按钮输入。
+var _mode_details_backdrop: ColorRect
+
+## 模式详情居中面板；承载标题、可换行正文与关闭按钮，不保存任何玩法状态。
+var _mode_details_panel: PanelContainer
+
+## 模式详情标题标签；打开时从当前模式稳定说明表刷新。
+var _mode_details_title_label: Label
+
+## 模式详情正文标签；使用自动换行完整展示当前模式长期规则。
+var _mode_details_description_label: Label
+
+## 模式详情关闭按钮；关闭后把焦点归还详情入口。
+var _mode_details_close_button: Button
+
 
 ## 初始化主菜单交互与全局设置同步；主菜单进入场景后始终覆盖尚未开局的牌桌。
 func _ready() -> void:
 	# 当前菜单绘制与输入层；提升到同级节点最前方，确保选将遮罩和局内菜单不会遮挡启动入口。
 	call_deferred("_move_to_input_front")
+	_build_mode_details_interface()
 	visibility_changed.connect(_on_visibility_changed)
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
@@ -308,6 +349,8 @@ func _ready() -> void:
 	_card_name_option.item_selected.connect(_on_card_name_selected)
 	_populate_ui_style_options()
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
+	_populate_conquest_difficulty_options()
+	_conquest_difficulty_option.item_selected.connect(_on_conquest_difficulty_selected)
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
 	_control_all_characters_checkbox.set_pressed_no_signal(GameSettings.control_all_characters_enabled)
@@ -338,6 +381,7 @@ func _ready() -> void:
 	GameSettings.conquest_character_replacement_count_changed.connect(_refresh_active_character_replacement_count_selection)
 	GameSettings.character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.conquest_character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
+	GameSettings.conquest_difficulty_changed.connect(_refresh_conquest_difficulty_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
@@ -349,6 +393,7 @@ func _ready() -> void:
 	_refresh_mulligan_limit_selection(GameSettings.mulligan_limit)
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
+	_refresh_conquest_difficulty_selection(GameSettings.conquest_difficulty)
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
 
@@ -368,6 +413,7 @@ func _on_visibility_changed() -> void:
 		_suspend_covered_interface_focus()
 		call_deferred("_focus_start_game_button")
 	else:
+		_close_mode_details(false)
 		_set_settings_visible(false)
 		_close_online_settings(false)
 		_online_lobby_panel.visible = false
@@ -378,7 +424,7 @@ func _on_visibility_changed() -> void:
 func _input(event: InputEvent) -> void:
 	if not visible or _mode_scroll == null or not is_instance_valid(_mode_scroll):
 		return
-	if _settings_panel.visible or _lan_lobby_panel.visible or _online_settings_panel.visible or _online_lobby_panel.visible:
+	if _settings_panel.visible or (_mode_details_panel != null and _mode_details_panel.visible) or _lan_lobby_panel.visible or _online_settings_panel.visible or _online_lobby_panel.visible:
 		return
 	if not event is InputEventMouseButton:
 		return
@@ -446,8 +492,12 @@ func refresh_ui_style() -> void:
 	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_summary_opacity), BattleUIStyle.get_color("border")))
 	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_action_opacity), BattleUIStyle.get_color("accent"), 1, 0))
 	_settings_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	if _mode_details_panel != null:
+		_mode_details_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	_preview_shade.color = Color(BattleUIStyle.get_color("panel"), preview_shade_opacity)
 	_settings_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
+	if _mode_details_backdrop != null:
+		_mode_details_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
 	_top_mode_indicator.color = BattleUIStyle.get_color("accent")
 	_top_online_settings_indicator.color = BattleUIStyle.get_color("accent")
 	_mode_card_indicator.color = BattleUIStyle.get_color("accent")
@@ -469,11 +519,16 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	if _mode_details_button != null:
+		BattleUIStyle.apply_interaction_button(_mode_details_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	if _mode_details_close_button != null:
+		BattleUIStyle.apply_interaction_button(_mode_details_close_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_mulligan_limit_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_character_replacement_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_character_candidate_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_conquest_difficulty_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -500,6 +555,11 @@ func refresh_ui_style() -> void:
 	(%MainMenuMulliganLimitLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuCharacterReplacementCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuCharacterCandidateCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%MainMenuConquestDifficultyLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	if _mode_details_title_label != null:
+		_mode_details_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	if _mode_details_description_label != null:
+		_mode_details_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	# 车轮战两项候选设置与其他开局规则共享主题字体色；避免模式切换后回退到场景默认白字。
 	# 明置候选标签；精简的界面回归场景可能不含车轮战设置，缺失时只跳过表现覆盖。
 	var wheel_duel_face_up_candidate_label: Label = get_node_or_null("MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
@@ -541,6 +601,7 @@ func refresh_ui_style() -> void:
 	_apply_option_popup_style(_mulligan_limit_option)
 	_apply_option_popup_style(_character_replacement_count_option)
 	_apply_option_popup_style(_character_candidate_count_option)
+	_apply_option_popup_style(_conquest_difficulty_option)
 	_lan_lobby_panel.refresh_ui_style()
 	_online_settings_panel.refresh_ui_style()
 	_online_lobby_panel.refresh_ui_style()
@@ -808,15 +869,132 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	_customize_ai_characters_row.visible = not visible_state
 	_character_replacement_count_row.visible = not visible_state or is_conquest
 	_character_candidate_count_row.visible = not visible_state or is_conquest
+	_conquest_difficulty_row.visible = is_conquest
 	_auto_identity_marking_checkbox.visible = not visible_state
 	_player_count_row.visible = not visible_state
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
+	_refresh_mode_details_button()
+
+
+## 动态构建模式详情入口与模态面板；节点只承载主菜单说明，避免把模式规则复制进独立场景脚本。
+func _build_mode_details_interface() -> void:
+	# 预览内容根节点；详情按钮挂在原画与遮罩之后并保持左上角固定位置。
+	var preview_content: Control = _preview_panel.get_node("MainMenuPreviewContent") as Control
+	_mode_details_button = Button.new()
+	_mode_details_button.name = "MainMenuModeDetailsButton"
+	_mode_details_button.text = "详情"
+	_mode_details_button.visible = false
+	_mode_details_button.z_index = 4
+	_mode_details_button.custom_minimum_size = Vector2(104.0, 44.0)
+	_mode_details_button.position = Vector2(22.0, 20.0)
+	_mode_details_button.size = Vector2(104.0, 44.0)
+	_mode_details_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_mode_details_button.pressed.connect(_open_mode_details)
+	preview_content.add_child(_mode_details_button)
+	_mode_details_backdrop = ColorRect.new()
+	_mode_details_backdrop.name = "MainMenuModeDetailsBackdrop"
+	_mode_details_backdrop.visible = false
+	_mode_details_backdrop.z_index = 8
+	_mode_details_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_mode_details_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_mode_details_backdrop.gui_input.connect(_on_mode_details_backdrop_gui_input)
+	add_child(_mode_details_backdrop)
+	_mode_details_panel = PanelContainer.new()
+	_mode_details_panel.name = "MainMenuModeDetailsPanel"
+	_mode_details_panel.visible = false
+	_mode_details_panel.z_index = 9
+	_mode_details_panel.custom_minimum_size = Vector2(680.0, 420.0)
+	_mode_details_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_mode_details_panel.offset_left = -340.0
+	_mode_details_panel.offset_top = -210.0
+	_mode_details_panel.offset_right = 340.0
+	_mode_details_panel.offset_bottom = 210.0
+	add_child(_mode_details_panel)
+	# 详情纵向内容；固定顺序为标题、滚动正文与关闭按钮。
+	var details_content: VBoxContainer = VBoxContainer.new()
+	details_content.name = "ModeDetailsContent"
+	details_content.add_theme_constant_override("separation", 14)
+	_mode_details_panel.add_child(details_content)
+	_mode_details_title_label = Label.new()
+	_mode_details_title_label.name = "Title"
+	_mode_details_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mode_details_title_label.add_theme_font_size_override("font_size", 26)
+	details_content.add_child(_mode_details_title_label)
+	# 详情正文滚动区；较长模式描述在紧凑窗口中仍可完整阅读。
+	var description_scroll: ScrollContainer = ScrollContainer.new()
+	description_scroll.name = "DescriptionScroll"
+	description_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	description_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	description_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	details_content.add_child(description_scroll)
+	_mode_details_description_label = Label.new()
+	_mode_details_description_label.name = "Description"
+	_mode_details_description_label.custom_minimum_size.x = 620.0
+	_mode_details_description_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mode_details_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mode_details_description_label.add_theme_font_size_override("font_size", 18)
+	_mode_details_description_label.add_theme_constant_override("line_spacing", 7)
+	description_scroll.add_child(_mode_details_description_label)
+	_mode_details_close_button = Button.new()
+	_mode_details_close_button.name = "CloseButton"
+	_mode_details_close_button.text = "关闭"
+	_mode_details_close_button.custom_minimum_size = Vector2(150.0, 46.0)
+	_mode_details_close_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_mode_details_close_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_mode_details_close_button.pressed.connect(_close_mode_details)
+	details_content.add_child(_mode_details_close_button)
+
+
+## 按当前模式刷新详情按钮显隐；未列入说明表的身份、2v2与车轮战暂时隐藏入口。
+func _refresh_mode_details_button() -> void:
+	if _mode_details_button == null:
+		return
+	_mode_details_button.visible = MODE_DETAILS_BY_MODE.has(_selected_match_mode)
+	if not _mode_details_button.visible and _mode_details_panel != null and _mode_details_panel.visible:
+		_close_mode_details(false)
+
+
+## 打开当前模式详情；标题与正文每次从稳定说明表读取，切换模式后不会残留旧内容。
+func _open_mode_details() -> void:
+	var mode_details: Dictionary = MODE_DETAILS_BY_MODE.get(_selected_match_mode, {}) as Dictionary
+	if mode_details.is_empty() or _mode_details_panel == null:
+		return
+	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
+	_mode_details_title_label.text = str(mode_details.get("title", "模式详情"))
+	_mode_details_description_label.text = str(mode_details.get("description", ""))
+	_mode_details_backdrop.visible = true
+	_mode_details_panel.visible = true
+	_suspend_background_focus(_mode_details_panel)
+	_mode_details_close_button.grab_focus()
+
+
+## 关闭模式详情并恢复主菜单焦点；可选参数用于页面切换或主菜单退出时避免抢占新入口。
+func _close_mode_details(restore_focus: bool = true) -> void:
+	if _mode_details_panel == null or not _mode_details_panel.visible:
+		return
+	_mode_details_backdrop.visible = false
+	_mode_details_panel.visible = false
+	_restore_background_focus()
+	if restore_focus and _mode_details_button != null and _mode_details_button.visible:
+		_mode_details_button.grab_focus()
+
+
+## 点击模式详情面板外的遮罩时关闭弹窗；只响应左键按下，滚轮继续留给正文滚动区。
+func _on_mode_details_backdrop_gui_input(event: InputEvent) -> void:
+	if event is not InputEventMouseButton:
+		return
+	# 当前鼠标事件；按下左键时完成一次关闭并标记输入已处理。
+	var mouse_event: InputEventMouseButton = event as InputEventMouseButton
+	if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
+		_close_mode_details()
+		accept_event()
 
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
 func _open_settings() -> void:
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
+	_close_mode_details(false)
 	_close_online_settings(false)
 	_online_lobby_panel.visible = false
 	_set_settings_visible(true)
@@ -1071,17 +1249,22 @@ func _on_settings_backdrop_gui_input(event: InputEvent) -> void:
 
 
 ## 设置浮层打开时允许使用 Esc 返回；主菜单本身不拦截对局阶段或其他组件的取消输入。
+## 补充：模式详情弹窗使用同一取消入口，并优先于设置浮层关闭。
 func _unhandled_input(event: InputEvent) -> void:
-	if not visible or not _settings_panel.visible:
+	if not visible:
 		return
 	if event.is_action_pressed("ui_cancel"):
-		_close_settings()
-		get_viewport().set_input_as_handled()
+		if _mode_details_panel != null and _mode_details_panel.visible:
+			_close_mode_details()
+			get_viewport().set_input_as_handled()
+		elif _settings_panel.visible:
+			_close_settings()
+			get_viewport().set_input_as_handled()
 
 
 ## 主菜单完成布局后把键盘焦点放到主要操作；玩家可直接按确认键开始当前唯一模式。
 func _focus_start_game_button() -> void:
-	if visible and not _settings_panel.visible and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible:
+	if visible and not _settings_panel.visible and (_mode_details_panel == null or not _mode_details_panel.visible) and not _lan_lobby_panel.visible and not _online_settings_panel.visible and not _online_lobby_panel.visible:
 		_start_game_button.grab_focus()
 
 
@@ -1318,6 +1501,16 @@ func _populate_character_candidate_count_options() -> void:
 		_character_candidate_count_option.set_item_metadata(option_index, int(count_option.get("value", GameSettings.DEFAULT_CHARACTER_CANDIDATE_COUNT)))
 
 
+## 从全局配置构建过关斩将难度一至五；稳定数值写入元数据，显示文字不承担规则含义。
+func _populate_conquest_difficulty_options() -> void:
+	_conquest_difficulty_option.clear()
+	for difficulty_option: Dictionary in GameSettings.CONQUEST_DIFFICULTY_OPTIONS:
+		# 当前难度选项索引；规则只读取一至五的元数据，不通过中文标签反向解析。
+		var option_index: int = _conquest_difficulty_option.item_count
+		_conquest_difficulty_option.add_item(str(difficulty_option.get("label", "难度五")))
+		_conquest_difficulty_option.set_item_metadata(option_index, int(difficulty_option.get("value", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
+
+
 ## 按全局风格同步下拉框与主菜单颜色；无信号选择避免界面刷新产生重复设置回调。
 func _refresh_ui_style_selection(style_id: String) -> void:
 	if not is_node_ready():
@@ -1423,6 +1616,23 @@ func _on_character_candidate_count_selected(option_index: int) -> void:
 	if option_index < 0 or option_index >= _character_candidate_count_option.item_count:
 		return
 	GameSettings.set_character_candidate_count_for_mode(_selected_match_mode, int(_character_candidate_count_option.get_item_metadata(option_index)))
+
+
+## 按全局设置同步过关斩将难度选中项；无信号选择避免主菜单与局内菜单之间形成重复保存。
+func _refresh_conquest_difficulty_selection(difficulty: int) -> void:
+	if not is_node_ready():
+		return
+	for option_index: int in range(_conquest_difficulty_option.item_count):
+		if int(_conquest_difficulty_option.get_item_metadata(option_index)) == difficulty:
+			_conquest_difficulty_option.select(option_index)
+			return
+
+
+## 将玩家选择的过关斩将难度写入下一局设置；进行中的关卡继续使用创建时锁定的难度。
+func _on_conquest_difficulty_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _conquest_difficulty_option.item_count:
+		return
+	GameSettings.set_conquest_difficulty(int(_conquest_difficulty_option.get_item_metadata(option_index)))
 
 
 ## 更新 AI 响应速度显示；数值越小代表 AI 行动与选牌等待越短。

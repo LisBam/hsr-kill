@@ -428,6 +428,23 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
+[node name="ConquestDifficultyRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=2026072311]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ConquestDifficultyLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/ConquestDifficultyRow" unique_id=2026072312]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "过关斩将难度"
+vertical_alignment = 1
+
+[node name="ConquestDifficultyOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/ConquestDifficultyRow" unique_id=2026072313]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 30)
+layout_mode = 2
+
 [node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1535387167]
 unique_name_in_owner = true
 visible = false
@@ -1800,6 +1817,25 @@ text = "随机选将牌数"
 vertical_alignment = 1
 
 [node name="MainMenuCharacterCandidateCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow" unique_id=793187536]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(156, 34)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+
+[node name="MainMenuConquestDifficultyRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=2026072301]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuConquestDifficultyLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestDifficultyRow" unique_id=2026072302]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "过关斩将难度"
+vertical_alignment = 1
+
+[node name="MainMenuConquestDifficultyOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestDifficultyRow" unique_id=2026072303]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(156, 34)
 layout_mode = 2
