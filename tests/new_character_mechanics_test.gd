@@ -109,6 +109,16 @@ func _run() -> void:
 		return
 	if not _test_touxia_turn_discard_history():
 		return
+	if not _test_peila_lingke_metadata():
+		return
+	if not _test_zhuijian_damage_and_corner_text():
+		return
+	if not _test_mice_extra_phase_sequences():
+		return
+	if not await _test_kance_private_view_and_draw_pile_gain():
+		return
+	if not _test_qiusheng_dying_recovery():
+		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
 
@@ -169,6 +179,11 @@ func _reset_state(player_count: int) -> void:
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
 	_controller._active_extra_discard_phase.clear()
+	_controller._active_independent_play_phase.clear()
+	# 专项场景之间清空额外回合队列与恢复栈，避免前一技能登记的回合在后一场景收尾时被消费。
+	_controller._extra_turn_queue.clear()
+	_controller._extra_turn_resume_player_ids.clear()
+	_controller._current_turn_is_extra = false
 	_controller._extra_play_phase_counts.clear()
 	_controller._extra_play_phase_returns_to_finish.clear()
 	_controller._extra_play_phase_return_points.clear()
@@ -181,6 +196,7 @@ func _reset_state(player_count: int) -> void:
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
 	_controller._pending_finish_turn_player_id = -1
+	_controller._pending_dying_start_contexts.clear()
 	_controller._clear_pending_judgment_request()
 	_controller._judgment_flow_in_progress = false
 	_controller._judgment_resume_needs_result_pause = false
@@ -2674,6 +2690,307 @@ func _test_touxia_turn_discard_history() -> bool:
 	if not _controller.state.get_player(0).hand.has(play_discard_card) or not _controller.state.get_player(1).hand.has(spade_judgment_card) or _controller.state.current_player_id != 0:
 		return _fail("touxia_result owner_hand=%s turn_hand=%s discard=%s current=%d" % [_controller.state.get_player(0).hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.get_player(1).hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller.state.current_player_id])
 	return true
+
+
+## 核对佩拉、玲可的稳定资料、技能顺序与四段玩家可见原文。
+func _test_peila_lingke_metadata() -> bool:
+	# 佩拉定义；贝洛伯格女性、3点体力与追歼/秘策顺序必须保持稳定。
+	var peila: Dictionary = GameDatabase.get_character("peila")
+	# 玲可定义；贝洛伯格女性、3点体力与勘测/求生顺序必须保持稳定。
+	var lingke: Dictionary = GameDatabase.get_character("lingke")
+	if str(peila.get("display_name", "")) != "佩拉" or str(peila.get("gender", "")) != "female" or str(peila.get("faction", "")) != "beiluoboge" or int(peila.get("max_hp", 0)) != 3 or (peila.get("skills", []) as Array) != ["zhuijian", "mice"]:
+		return _fail("peila_metadata=%s" % peila)
+	if str(lingke.get("display_name", "")) != "玲可" or str(lingke.get("gender", "")) != "female" or str(lingke.get("faction", "")) != "beiluoboge" or int(lingke.get("max_hp", 0)) != 3 or (lingke.get("skills", []) as Array) != ["kance", "qiusheng"]:
+		return _fail("lingke_metadata=%s" % lingke)
+	# 主公钦定技能原文；任何标点、数值或语句顺序变化都必须由专项回归立即报告。
+	var expected_descriptions: Dictionary = {
+		"zhuijian":"准备阶段，你可以弃置一张牌并选择一名其他角色，其下次受到的属性伤害+1直到你的下个回合开始。",
+		"mice":"回合结束时，你可令一名其他角色执行一项：1.获得一个额外的出牌阶段；2.摸一张牌并获得一个额外的弃牌阶段。该阶段结束后，你执行另一项。",
+		"kance":"出牌阶段限一次，你可以观看一名其他角色的手牌，然后选择并获得牌堆中的一张属性【杀】或【桃】。",
+		"qiusheng":"锁定技，当你进入濒死状态时，若你有手牌，且手牌中没有【桃】或【酒】，你弃置所有手牌并将体力值回复至1点。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前技能稳定ID；数据库说明必须与主公原文逐字一致。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("peila_lingke_description=%s" % skill_id)
+	return true
+
+
+## 验证追歼费用、属性增伤、取消或归零保留、护盾伤害消费、回合到期和左上角多来源文本共存。
+func _test_zhuijian_damage_and_corner_text() -> bool:
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	# 佩拉状态；武将ID只用于快照与日志，技能实例仍通过正式安装入口建立。
+	var peila: PlayerState = _controller.state.get_player(0)
+	peila.character_id = "peila"
+	# 三张独立费用牌；分别覆盖实际增伤、护盾吸收与回合到期三个持续效果批次。
+	var first_cost: CardInstance = _add_hand_card(0, "shan", "club", 2)
+	var second_cost: CardInstance = _add_hand_card(0, "sha", "spade", 5)
+	var third_cost: CardInstance = _add_hand_card(0, "tao", "heart", 7)
+	# 追歼运行时实例；全局监听属性伤害并只维护本佩拉来源的目标提示。
+	var zhuijian: SkillDefinition = _install_single_skill(0, "zhuijian")
+	if zhuijian == null:
+		return _fail("zhuijian_missing")
+	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	# 初次牌目标组合请求；费用和目标必须在同一ChoiceResponse中确认。
+	var first_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str(first_choice.get("choice_type", "")) != "card_target" or str((first_choice.get("context", {}) as Dictionary).get("kind", "")) != "zhuijian_cost_target" or not (first_choice.get("target_ids", []) as Array).has(1):
+		return _fail("zhuijian_choice=%s" % [first_choice])
+	if not _submit_pending_choice(0, [first_cost.uid], [1], true):
+		return false
+	# 目标原有第二项左上角文本；追歼必须以更高优先级合成而不能覆盖或删除其他来源。
+	if not _controller.set_character_corner_text_entry(1, "test:anke", "安可：♠", 100):
+		return _fail("zhuijian_corner_test_entry")
+	var first_target: PlayerState = _controller.state.get_player(1)
+	if first_target.character_corner_text != "追歼\n安可：♠" or first_target.character_corner_text_entries.size() != 2 or not _controller.state.discard_pile.has(first_cost):
+		return _fail("zhuijian_corner_merge text=%s entries=%s" % [first_target.character_corner_text, first_target.character_corner_text_entries])
+	# 普通伤害不属于属性伤害；只扣除基础1点体力并保留追歼提示。
+	_controller.damage(2, 1, 1, "normal", "sha")
+	if first_target.hp != 3 or not first_target.character_corner_text.begins_with("追歼"):
+		return _fail("zhuijian_normal_damage hp=%d text=%s" % [first_target.hp, first_target.character_corner_text])
+	# 最终伤害归零处理器；追歼虽在damageBegin3预留加值，但damageZero后必须继续等待下一次实际属性伤害。
+	var zero_registration_id: int = _controller.trigger_manager.subscribe("damageBegin4", self, Callable(self, "_force_damage_zero"), 1000, -1, "global")
+	if zero_registration_id < 0:
+		return _fail("zhuijian_zero_handler")
+	_controller.damage(2, 1, 1, "fire", "sha")
+	_controller.trigger_manager.unsubscribe_owner(self)
+	if first_target.hp != 3 or not first_target.character_corner_text.begins_with("追歼"):
+		return _fail("zhuijian_zero_preserve hp=%d text=%s" % [first_target.hp, first_target.character_corner_text])
+	# 下一次实际火属性伤害获得固定+1并消费追歼；其他来源文本继续保留。
+	_controller.damage(2, 1, 1, "fire", "sha")
+	if first_target.hp != 1 or first_target.character_corner_text != "安可：♠" or first_target.character_corner_text_entries.size() != 1:
+		return _fail("zhuijian_fire_damage hp=%d text=%s entries=%s" % [first_target.hp, first_target.character_corner_text, first_target.character_corner_text_entries])
+	# 第二批追歼目标拥有2点护盾；基础1点雷伤加成至2后被护盾完全吸收，但仍属于实际受到属性伤害并消费提示。
+	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if not _submit_pending_choice(0, [second_cost.uid], [2], true):
+		return false
+	var shielded_target: PlayerState = _controller.state.get_player(2)
+	shielded_target.shield = 2
+	_controller.damage(1, 2, 1, "thunder", "sha")
+	if shielded_target.hp != 4 or shielded_target.shield != 0 or not shielded_target.character_corner_text.is_empty():
+		return _fail("zhuijian_shield_consumption hp=%d shield=%d text=%s" % [shielded_target.hp, shielded_target.shield, shielded_target.character_corner_text])
+	# 第三批效果未受到属性伤害；佩拉下个回合开始时只移除自己的追歼条目，测试安可文本仍然存在。
+	_controller._emit_rule_timing("phaseZhunbeiBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if not _submit_pending_choice(0, [third_cost.uid], [1], true):
+		return false
+	_controller._emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":_controller.state.turn_number + 1})
+	if first_target.character_corner_text != "安可：♠" or first_target.character_corner_text_entries.size() != 1:
+		return _fail("zhuijian_turn_expire text=%s entries=%s" % [first_target.character_corner_text, first_target.character_corner_text_entries])
+	return true
+
+
+## 验证秘策复合选择、两种阶段顺序、摸牌与弃牌数量，以及真实phaseEnd取消后的正常回合恢复。
+func _test_mice_extra_phase_sequences() -> bool:
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_phase = "finish"
+	_controller.state.phase_index = 5
+	_controller.state.get_player(0).character_id = "peila"
+	# 目标先出牌分支中佩拉随后摸到的牌；手牌未超上限，因此其额外弃牌阶段无需创建选牌请求。
+	var owner_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 4)
+	# 秘策运行时实例；直接触发phaseEnd回调可隔离验证两个额外阶段本身，不提前推进正常下家。
+	var mice: SkillDefinition = _install_single_skill(0, "mice")
+	if mice == null:
+		return _fail("mice_missing")
+	mice.call("_on_phase_end", RuleEvent.new("phaseEnd", 0, 0, {"turn_number":_controller.state.turn_number}))
+	# 复合目标控制请求；两个实际按钮与一名其他角色必须由同一请求同时提交。
+	var play_first_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str(play_first_choice.get("choice_type", "")) != "target_control" or (play_first_choice.get("target_ids", []) as Array) != [1, 2] or (play_first_choice.get("control_options", []) as Array).size() != 2:
+		return _fail("mice_target_control=%s" % [play_first_choice])
+	if not _submit_pending_choice(0, [], [1], true, "play_phase"):
+		return false
+	if int(_controller._active_independent_play_phase.get("player_id", -1)) != 1 or _controller.state.current_player_id != 1 or _controller.state.current_phase != "play":
+		return _fail("mice_target_play_start active=%s phase=%s/%d" % [_controller._active_independent_play_phase, _controller.state.current_phase, _controller.state.current_player_id])
+	if not _controller.end_current_play_phase(1):
+		return _fail("mice_target_play_end")
+	# 目标出牌阶段结束后佩拉执行另一项：摸1张并完成额外弃牌阶段，随后恢复原结束阶段。
+	if not _controller.state.get_player(0).hand.has(owner_draw_card) or not _controller._active_independent_play_phase.is_empty() or not _controller._active_extra_discard_phase.is_empty() or _controller.state.current_player_id != 0 or _controller.state.current_phase != "finish":
+		return _fail("mice_play_then_owner_discard owner_hand=%s active_play=%s active_discard=%s phase=%s/%d" % [_controller.state.get_player(0).hand.map(func(card: CardInstance) -> int: return card.uid), _controller._active_independent_play_phase, _controller._active_extra_discard_phase, _controller.state.current_phase, _controller.state.current_player_id])
+
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_phase = "finish"
+	_controller.state.phase_index = 5
+	_controller.state.get_player(0).character_id = "peila"
+	# 目标当前1点体力且持有3张牌；摸1张后手牌为4，需要在额外弃牌阶段强制弃3张至上限1。
+	var target: PlayerState = _controller.state.get_player(1)
+	target.hp = 1
+	var target_first_card: CardInstance = _add_hand_card(1, "sha", "spade", 2)
+	var target_second_card: CardInstance = _add_hand_card(1, "shan", "heart", 3)
+	var target_third_card: CardInstance = _add_hand_card(1, "wuxie", "club", 4)
+	# 目标在弃牌阶段前固定摸到的第4张牌；本次选择保留该牌以验证最终上限收敛。
+	var target_draw_card: CardInstance = _add_draw_pile_card("tao", "diamond", 5)
+	mice = _install_single_skill(0, "mice")
+	mice.call("_on_phase_end", RuleEvent.new("phaseEnd", 0, 0, {"turn_number":_controller.state.turn_number}))
+	if not _submit_pending_choice(0, [], [1], true, "discard_phase"):
+		return false
+	# 额外弃牌请求属于目标本人，数量严格等于摸牌后超过当前手牌上限的3张。
+	var target_discard_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((target_discard_choice.get("context", {}) as Dictionary).get("kind", "")) != "extra_discard_phase" or int(target_discard_choice.get("chooser_id", -1)) != 1 or int(target_discard_choice.get("min_select", -1)) != 3:
+		return _fail("mice_target_discard_choice=%s" % [target_discard_choice])
+	if not _submit_pending_choice(1, [target_first_card.uid, target_second_card.uid, target_third_card.uid], [], true):
+		return false
+	# 目标弃牌阶段结束后佩拉执行另一项额外出牌阶段；目标最终只保留刚摸到的一张牌。
+	if target.hand.size() != 1 or not target.hand.has(target_draw_card) or int(_controller._active_independent_play_phase.get("player_id", -1)) != 0 or _controller.state.current_player_id != 0 or _controller.state.current_phase != "play":
+		return _fail("mice_discard_then_owner_play target_hand=%s active=%s phase=%s/%d" % [target.hand.map(func(card: CardInstance) -> int: return card.uid), _controller._active_independent_play_phase, _controller.state.current_phase, _controller.state.current_player_id])
+	if not _controller.end_current_play_phase(0):
+		return _fail("mice_owner_play_end")
+	if not _controller._active_independent_play_phase.is_empty() or _controller.state.current_player_id != 0 or _controller.state.current_phase != "finish":
+		return _fail("mice_discard_sequence_restore active=%s phase=%s/%d" % [_controller._active_independent_play_phase, _controller.state.current_phase, _controller.state.current_player_id])
+
+	# 真实结束阶段入口；取消秘策后必须清除待收尾标记并正常开始下一名角色的回合，不能重复发布phaseEnd。
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_phase = "discard"
+	_controller.state.phase_index = 4
+	for draw_rank: int in range(1, 5):
+		_add_draw_pile_card("shan", "club", draw_rank)
+	mice = _install_single_skill(0, "mice")
+	_controller._enter_finish_phase(0)
+	if _controller._pending_finish_turn_player_id != 0 or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mice_target_option":
+		return _fail("mice_finish_pending pending=%d choice=%s" % [_controller._pending_finish_turn_player_id, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [], false):
+		return false
+	if _controller._pending_finish_turn_player_id >= 0 or _controller.state.current_player_id != 1:
+		return _fail("mice_finish_resume pending=%d current=%d phase=%s" % [_controller._pending_finish_turn_player_id, _controller.state.current_player_id, _controller.state.current_phase])
+	return true
+
+
+## 验证勘测私下观看完整手牌、同窗文字选项、只读牌面亮度、牌堆顶向下检索与每阶段次数重置。
+func _test_kance_private_view_and_draw_pile_gain() -> bool:
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.get_player(0).character_id = "lingke"
+	# 被观看目标的两张隐藏手牌；技能只能把牌面放入玲可定向请求，不能修改实体公开或已知状态。
+	var viewed_first_card: CardInstance = _add_hand_card(1, "shan", "heart", 6)
+	var viewed_second_card: CardInstance = _add_hand_card(1, "wuxie", "club", 9)
+	# 观看前知识快照；结算后必须与原数组完全一致。
+	var first_known_to_before: Array[int] = viewed_first_card.known_to.duplicate()
+	var second_known_to_before: Array[int] = viewed_second_card.known_to.duplicate()
+	# 较深位置的火【杀】；上方普通【杀】不满足属性过滤，检索必须越过它且不改变其牌堆位置。
+	var nature_slash_card: CardInstance = _add_draw_pile_card("sha_fire", "heart", 8)
+	var normal_slash_card: CardInstance = _add_draw_pile_card("sha", "spade", 10)
+	# 勘测运行时实例；出牌阶段主动入口先创建目标选择，再创建携带只读手牌的控制请求。
+	var kance: SkillDefinition = _install_single_skill(0, "kance")
+	if kance == null or not kance.activate().is_empty():
+		return _fail("kance_activate")
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "kance_target" or not _submit_pending_choice(0, [], [1], true):
+		return _fail("kance_target_choice")
+	# 获得选项请求中的display_candidates只向选择者公开完整牌面，规则候选数组保持为空且不可提交任意UID。
+	var gain_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var display_candidates: Array = (gain_choice.get("context", {}) as Dictionary).get("display_candidates", []) as Array
+	if str(gain_choice.get("choice_type", "")) != "control" or str((gain_choice.get("context", {}) as Dictionary).get("kind", "")) != "kance_gain_option" or not (gain_choice.get("candidates", []) as Array).is_empty() or display_candidates.size() != 2 or (gain_choice.get("control_options", []) as Array).size() != 2:
+		return _fail("kance_private_choice=%s" % [gain_choice])
+	if viewed_first_card.shown or viewed_second_card.shown or viewed_first_card.known_to != first_known_to_before or viewed_second_card.known_to != second_known_to_before:
+		return _fail("kance_changed_card_knowledge")
+	# 正式模态选牌面板；观看牌不可点击、不显示牌背且保持完整亮度，两个获得按钮直接提交稳定control_id。
+	var card_selection_panel: CardSelectionPanel = CARD_SELECTION_PANEL_SCENE.instantiate() as CardSelectionPanel
+	add_child(card_selection_panel)
+	await get_tree().process_frame
+	card_selection_panel.show_request(gain_choice)
+	await get_tree().process_frame
+	var viewed_card_views: Dictionary = card_selection_panel.get("_card_views") as Dictionary
+	for viewed_card: CardInstance in [viewed_first_card, viewed_second_card]:
+		# 当前只读牌面；完整牌面、禁用输入与不暗置三项必须同时成立。
+		var viewed_card_view: CardView = viewed_card_views.get(viewed_card.uid) as CardView
+		if viewed_card_view == null or viewed_card_view.is_interactable or viewed_card_view.is_face_down or bool(viewed_card_view.get("_dim_when_disabled")):
+			card_selection_panel.queue_free()
+			return _fail("kance_read_only_view uid=%d view=%s" % [viewed_card.uid, viewed_card_view])
+	if (card_selection_panel.get("_control_option_buttons") as Array).size() != 2 or (card_selection_panel.get("_confirm_button") as Button).visible:
+		card_selection_panel.queue_free()
+		return _fail("kance_control_buttons")
+	card_selection_panel.queue_free()
+	if not _submit_pending_choice(0, [], [], true, "nature_slash"):
+		return false
+	# 火【杀】从牌堆中间进入玲可手牌，顶部普通【杀】原位保留且技能本阶段额度被消耗。
+	if not _controller.state.get_player(0).hand.has(nature_slash_card) or not _controller.state.draw_pile.has(normal_slash_card) or _controller.state.draw_pile.back() != normal_slash_card or not bool(kance.get("_used_this_play_phase")):
+		return _fail("kance_nature_slash_gain hand=%s draw=%s" % [_controller.state.get_player(0).hand.map(func(card: CardInstance) -> int: return card.uid), _controller.state.draw_pile.map(func(card: CardInstance) -> int: return card.uid)])
+	# 同一阶段直接动作仍须被最终次数复核拒绝，不能绕过玩家交互路径重复获得牌。
+	if kance.activate({"target_id":2, "control_id":"tao"}).is_empty():
+		return _fail("kance_same_phase_reuse")
+	# 新的普通或额外出牌阶段重置一次额度；选择桃后从最新牌堆顶获得固定定义ID实体。
+	kance.call("_on_play_phase_begin", RuleEvent.new("phaseUseBegin", 0, 0, {"turn_number":_controller.state.turn_number}))
+	var tao_card: CardInstance = _add_draw_pile_card("tao", "heart", 12)
+	if not kance.activate({"target_id":2, "control_id":"tao"}).is_empty() or not _controller.state.get_player(0).hand.has(tao_card):
+		return _fail("kance_tao_gain")
+	return true
+
+
+## 验证求生的全手牌弃置与回复、桃酒阻止条件，以及失牌技能插入时濒死游标不会提前死亡。
+func _test_qiusheng_dying_recovery() -> bool:
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	# 基础求生目标；1点体力受到1点伤害后满足无桃酒且有手牌条件。
+	var lingke: PlayerState = _controller.state.get_player(1)
+	lingke.character_id = "lingke"
+	lingke.max_hp = 3
+	lingke.hp = 1
+	var first_discarded_card: CardInstance = _add_hand_card(1, "sha", "spade", 2)
+	var second_discarded_card: CardInstance = _add_hand_card(1, "shan", "club", 3)
+	var qiusheng: SkillDefinition = _install_single_skill(1, "qiusheng")
+	if qiusheng == null:
+		return _fail("qiusheng_missing")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.is_empty() or not _controller.state.discard_pile.has(first_discarded_card) or not _controller.state.discard_pile.has(second_discarded_card) or _controller.has_pending_card_choice() or not _controller._pending_dying_start_contexts.is_empty():
+		return _fail("qiusheng_basic hp=%d alive=%s dying=%s hand=%s pending=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand, _controller._pending_card_choice])
+
+	# 手牌含桃时求生不得发动；角色保持0点体力并进入标准求桃请求，全部原手牌仍在手中。
+	_reset_state(3)
+	lingke = _controller.state.get_player(1)
+	lingke.character_id = "lingke"
+	lingke.max_hp = 3
+	lingke.hp = 1
+	var peach: CardInstance = _add_hand_card(1, "tao", "heart", 4)
+	var peach_companion: CardInstance = _add_hand_card(1, "sha", "spade", 5)
+	qiusheng = _install_single_skill(1, "qiusheng")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if lingke.hp != 0 or lingke.hand.size() != 2 or not lingke.hand.has(peach) or not lingke.hand.has(peach_companion) or not lingke.dying or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "dying_response":
+		return _fail("qiusheng_peach_block hp=%d hand=%s pending=%s" % [lingke.hp, lingke.hand, _controller._pending_card_choice])
+
+	# 手牌含酒时同样阻止求生；将濒死者设为当前角色可直接检查其自救窗口包含酒实体。
+	_reset_state(3)
+	_controller.state.current_player_id = 1
+	lingke = _controller.state.get_player(1)
+	lingke.character_id = "lingke"
+	lingke.max_hp = 3
+	lingke.hp = 1
+	var wine: CardInstance = _add_hand_card(1, "jiu", "diamond", 6)
+	var wine_companion: CardInstance = _add_hand_card(1, "shan", "club", 7)
+	qiusheng = _install_single_skill(1, "qiusheng")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	var wine_response_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if lingke.hp != 0 or lingke.hand.size() != 2 or not lingke.hand.has(wine) or not lingke.hand.has(wine_companion) or int(_controller._pending_card_choice.get("chooser_id", -1)) != 1 or wine_response_candidates.is_empty() or int((wine_response_candidates[0] as Dictionary).get("uid", -1)) != wine.uid:
+		return _fail("qiusheng_wine_block hand=%s choice=%s" % [lingke.hand, _controller._pending_card_choice])
+
+	# 求生弃置最后手牌时触发冥谶；濒死流程必须暂停在目标选择，待冥谶完成后再回复至1而非提前进入死亡。
+	_reset_state(3)
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.state.current_player_id = 1
+	lingke = _controller.state.get_player(1)
+	lingke.character_id = "lingke"
+	lingke.max_hp = 3
+	lingke.hp = 1
+	var nested_discard_card: CardInstance = _add_hand_card(1, "shan", "spade", 8)
+	# 冥谶获得的无中生有；该牌在求生锁定的原手牌范围之外，后续应保留在玲可手中。
+	var nested_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 9)
+	qiusheng = _install_single_skill(1, "qiusheng")
+	var mingchen: SkillDefinition = _install_single_skill(1, "mingchen")
+	if qiusheng == null or mingchen == null:
+		return _fail("qiusheng_nested_skills")
+	_controller.damage(0, 1, 1, "normal", "sha")
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or lingke.hp != 0 or not lingke.alive or _controller._pending_dying_start_contexts.size() != 1 or _controller._deferred_skill_settlements.is_empty():
+		return _fail("qiusheng_nested_pause hp=%d alive=%s dying_context=%s settlements=%s choice=%s" % [lingke.hp, lingke.alive, _controller._pending_dying_start_contexts, _controller._deferred_skill_settlements, _controller._pending_card_choice])
+	if not _submit_pending_choice(1, [], [1], true):
+		return false
+	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.has(nested_gain_card) or not _controller.state.discard_pile.has(nested_discard_card) or _controller.has_pending_card_choice() or not _controller._pending_dying_start_contexts.is_empty() or _controller._rule_continuations.has_pending():
+		return _fail("qiusheng_nested_complete hp=%d alive=%s dying=%s hand=%s pending=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand.map(func(card: CardInstance) -> int: return card.uid), _controller._pending_card_choice])
+	return true
+
+
+## 把当前伤害的最终修改值设为0；专项测试用完后按owner=self统一注销，不参与正式规则。
+func _force_damage_zero(event: RuleEvent) -> void:
+	event.data["amount"] = 0
 
 
 ## 向指定玩家普通手牌区加入一张测试实体；花色、点数、区域与所有者全部显式写入。

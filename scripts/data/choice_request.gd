@@ -21,7 +21,7 @@ var event_id: int = -1
 ## 需要作出选择的玩家 ID；非当前响应者提交会被权威端拒绝。
 var actor_id: int = -1
 
-## 选择类型；支持 use、respond、card、target、button、control、bool 与 discard 等稳定值。
+## 选择类型；支持 use、respond、card、target、target_control、button、control、bool 与 discard 等稳定值。
 var choice_type: String = "card"
 
 ## 面向当前响应者的长期语义提示；只描述本次选择目标，不承担规则执行逻辑。
@@ -197,7 +197,7 @@ func validate_response(response: ChoiceResponse) -> String:
 		return "选择的目标数量不符合要求。"
 	if choice_type == "button" and (response.button_ids.size() < min_count or response.button_ids.size() > max_count):
 		return "选择的按钮数量不符合要求。"
-	if choice_type in ["control", "bool"]:
+	if choice_type in ["control", "bool", "target_control"]:
 		# 控制项选择数量；空字符串为0项，非空稳定 ID 为1项。
 		var control_count: int = 0 if response.control_id.is_empty() else 1
 		if control_count < min_count or control_count > max_count:
@@ -276,11 +276,11 @@ func abort(reason: String) -> void:
 func _get_selected_values(response: ChoiceResponse) -> Array:
 	if choice_type in ["use", "respond", "card", "discard", "arrange"]:
 		return response.card_ids
-	if choice_type == "target":
+	if choice_type in ["target", "target_control"]:
 		return response.target_ids
 	if choice_type == "button":
 		return response.button_ids
-	if choice_type in ["control", "bool"]:
+	if choice_type in ["control", "bool", "target_control"]:
 		return [] if response.control_id.is_empty() else [response.control_id]
 	return response.card_ids
 
@@ -289,7 +289,7 @@ func _get_selected_values(response: ChoiceResponse) -> Array:
 func _get_allowed_values() -> Array:
 	if choice_type in ["use", "respond", "card", "discard", "arrange"]:
 		return card_ids
-	if choice_type == "target":
+	if choice_type in ["target", "target_control"]:
 		return target_ids
 	if choice_type == "button":
 		return button_ids
@@ -311,6 +311,8 @@ func _get_card_count_range() -> Vector2i:
 func _get_target_count_range() -> Vector2i:
 	if choice_type == "target":
 		return Vector2i(min_count, max_count)
+	if choice_type == "target_control":
+		return Vector2i(maxi(min_target_count, 0), maxi(max_target_count, maxi(min_target_count, 0)))
 	if choice_type == "card_target":
 		return Vector2i(maxi(min_target_count, 0), maxi(max_target_count, maxi(min_target_count, 0)))
 	return Vector2i(-1, -1)

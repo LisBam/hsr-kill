@@ -257,6 +257,9 @@ func show_request(choice_request: Dictionary) -> void:
 		return
 	# 文字控制项请求；每个选项直接以独立按钮提交，底部确定按钮不重复制造二次确认。
 	if str(_choice_request.get("choice_type", "card")) in ["control", "bool"]:
+		# 控制请求可携带只读牌面；用于私下观看手牌后在同一窗口选择后续效果。
+		var control_display_candidates: Array = ((_choice_request.get("context", {}) as Dictionary).get("display_candidates", []) as Array)
+		_add_read_only_display_candidates(control_display_candidates)
 		_add_control_options(_choice_request.get("control_options", []) as Array)
 		_confirm_button.visible = false
 		_cancel_button.visible = bool(_choice_request.get("allow_cancel", false))
@@ -288,6 +291,23 @@ func show_request(choice_request: Dictionary) -> void:
 	_action_row.visible = true
 	_refresh_selection_state()
 	visible = true
+
+
+## 按标准区域顺序显示一组不可点击但保持完整亮度的牌面；空数组不占用窗口空间。
+func _add_read_only_display_candidates(display_candidates: Array) -> void:
+	# 按区域聚合的只读候选；当前私有观看主要使用hand，其他区域仍保持接口通用性。
+	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[], "discard_pile":[]}
+	for candidate_variant: Variant in display_candidates:
+		# 当前只读候选副本；额外标记只影响本地亮度，不写回权威请求。
+		var candidate: Dictionary = (candidate_variant as Dictionary).duplicate(true)
+		candidate["read_only_full_brightness"] = true
+		# 当前候选区域；未知区域统一归入展示区。
+		var zone: String = str(candidate.get("zone", "processing"))
+		if not candidates_by_zone.has(zone):
+			candidates_by_zone[zone] = []
+		(candidates_by_zone[zone] as Array).append(candidate)
+	for zone: String in ["hand", "equipment", "judgment", "processing", "discard_pile"]:
+		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
 
 
 ## 写入普通或带目标名称强调的提示文本；高亮字段只来自当前观察者已公开的武将名，不能承载规则状态。
@@ -655,7 +675,9 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		# 当前卡牌静态定义；名称模式、类别颜色与插画均从该只读配置解析。
 		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 		# 不可选的展示牌必须传入禁用暗置；公共牌被领取时改由复制虚影表达，不能叠加禁用暗置而失去归属可读性。
-		card_view.configure(card_data, definition, false, selectable, not taken)
+		# 只读观看牌保持完整亮度；普通不可选保护牌仍使用禁用暗置，已领取公共牌继续由复制虚影表达。
+		var dim_when_disabled: bool = not taken and not bool(candidate.get("read_only_full_brightness", false))
+		card_view.configure(card_data, definition, false, selectable, dim_when_disabled)
 	else:
 		card_view.configure_back(card_uid, selectable)
 	# 公共牌位即使首次以旁观状态创建，也预先连接点击信号；后续轮到本地玩家时只切换输入权限即可复用节点。

@@ -182,8 +182,9 @@ func _run() -> void:
 	skill_button_view.free()
 	# 技能元数据数量；当前二十一名正式武将与模式规则共登记四十四个独立技能源码定义。
 	# 素裳与桂乃芬加入后，正式技能源码总数扩展为四十八个；该快照用于防止目录扫描漏登记新技能。
+	# 佩拉与玲可加入后，四项新技能使当前技能源码总数扩展为五十二个。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 48:
+	if skill_definition_count != 52:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -211,8 +212,16 @@ func _run() -> void:
 	var sushang_definition: Dictionary = GameDatabase.get_character("sushang")
 	# 桂乃芬武将定义；用于校验仙舟联盟势力、女性性别、3点基础体力与双技能引用均已被自动索引。
 	var guinaifen_definition: Dictionary = GameDatabase.get_character("guinaifen")
+	# 佩拉武将定义；用于校验贝洛伯格势力、女性性别、3点基础体力与双技能顺序。
+	var peila_definition: Dictionary = GameDatabase.get_character("peila")
+	# 玲可武将定义；用于校验贝洛伯格势力、女性性别、3点基础体力与双技能顺序。
+	var lingke_definition: Dictionary = GameDatabase.get_character("lingke")
 	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4 or int(xing_definition.get("max_hp", 0)) != 4 or int(qiong_definition.get("max_hp", 0)) != 4 or int(xing_preservation_definition.get("max_hp", 0)) != 4 or int(qiong_preservation_definition.get("max_hp", 0)) != 4 or int(sampo_definition.get("max_hp", 0)) != 4 or str(sampo_definition.get("faction", "")) != "beiluoboge" or int(sushang_definition.get("max_hp", 0)) != 4 or str(sushang_definition.get("faction", "")) != "xianzhou" or str(sushang_definition.get("gender", "")) != "female" or sushang_definition.get("skills", []) != ["jianshi", "shanqing"] or int(guinaifen_definition.get("max_hp", 0)) != 3 or str(guinaifen_definition.get("faction", "")) != "xianzhou" or str(guinaifen_definition.get("gender", "")) != "female" or guinaifen_definition.get("skills", []) != ["xifa", "touxia"]:
 		printerr("SMOKE_FAIL new_character_stats")
+		get_tree().quit(1)
+		return
+	if int(peila_definition.get("max_hp", 0)) != 3 or str(peila_definition.get("faction", "")) != "beiluoboge" or str(peila_definition.get("gender", "")) != "female" or peila_definition.get("skills", []) != ["zhuijian", "mice"] or int(lingke_definition.get("max_hp", 0)) != 3 or str(lingke_definition.get("faction", "")) != "beiluoboge" or str(lingke_definition.get("gender", "")) != "female" or lingke_definition.get("skills", []) != ["kance", "qiusheng"]:
+		printerr("SMOKE_FAIL peila_lingke_stats")
 		get_tree().quit(1)
 		return
 	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。" or str(GameDatabase.get_skill("zhenqi").get("description", "")) != "领袖技，“贝洛伯格”势力的角色的回合开始时，其可弃置一张手牌/失去1点体力，然后你令另一名“贝洛伯格”势力的角色摸一张牌/回复1点体力。" or str(GameDatabase.get_skill("linghang").get("description", "")) != "领袖技，“星穹列车”势力的角色使一名角色横置时，你可对其发动此技能，然后其可重铸一张手牌。每回合限一次。" or str(GameDatabase.get_skill("jiahu").get("description", "")) != "准备阶段，你可以横置一名武将牌竖置且没有护盾的角色，并令其获得1点护盾。" or str(GameDatabase.get_skill("bingfeng").get("description", "")) != "当你使用牌指定唯一目标时，你可选择一项：1.将目标的武将牌调整为竖直；2.弃置目标一张手牌。然后若该角色不为你，你令此牌无效。每回合每名角色限一次。" or str(GameDatabase.get_skill("yongyi").get("description", "")) != "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。每回合限一次，弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。" or str(GameDatabase.get_skill("gangfeng").get("description", "")) != "你可将黑色牌当雷【杀】使用或打出。" or str(GameDatabase.get_skill("jiyu").get("description", "")) != "当你使用【杀】指定目标时，你可令目标角色调整至横置状态，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。" or str(GameDatabase.get_skill("wangpai").get("description", "")) != "锁定技，你使用【杀】无次数限制。" or str(GameDatabase.get_skill("anda").get("description", "")) != "你可将一张牌当无距离限制的火【杀】使用或打出，每回合限一次。" or str(GameDatabase.get_skill("quanlei").get("description", "")) != "出牌阶段限一次，你可将一张手牌当目标上限+1的雷【杀】使用。" or str(GameDatabase.get_skill("hupo").get("description", "")) != "锁定技，你无法成为黑色【杀】的目标。" or str(GameDatabase.get_skill("tiebi").get("description", "")) != "每轮开始时，你可弃置一张【闪】并横置一名其他角色，其获得技能“琥珀”直到本轮结束。" or str(GameDatabase.get_skill("jianlei").get("description", "")) != "当一名距离为1的其他角色成为黑色【杀】的目标时，你可弃置一张【闪】并横置该角色，然后令此【杀】无效。" or str(GameDatabase.get_skill("pofeng").get("description", "")) != "结束阶段，若你于本回合内使用【杀】指定过目标，你可以弃置一张手牌并进行一个额外的回合，本回合内你使用牌仅可指定你本回合内使用【杀】指定过的角色为目标。每轮限一次。":
@@ -224,10 +233,16 @@ func _run() -> void:
 		printerr("SMOKE_FAIL sushang_guinaifen_skill_descriptions")
 		get_tree().quit(1)
 		return
+	# 佩拉与玲可技能原文；逐字锁定主公指定的标点、数值和语句顺序。
+	if str(GameDatabase.get_skill("zhuijian").get("description", "")) != "准备阶段，你可以弃置一张牌并选择一名其他角色，其下次受到的属性伤害+1直到你的下个回合开始。" or str(GameDatabase.get_skill("mice").get("description", "")) != "回合结束时，你可令一名其他角色执行一项：1.获得一个额外的出牌阶段；2.摸一张牌并获得一个额外的弃牌阶段。该阶段结束后，你执行另一项。" or str(GameDatabase.get_skill("kance").get("description", "")) != "出牌阶段限一次，你可以观看一名其他角色的手牌，然后选择并获得牌堆中的一张属性【杀】或【桃】。" or str(GameDatabase.get_skill("qiusheng").get("description", "")) != "锁定技，当你进入濒死状态时，若你有手牌，且手牌中没有【桃】或【酒】，你弃置所有手牌并将体力值回复至1点。":
+		printerr("SMOKE_FAIL peila_lingke_skill_descriptions")
+		get_tree().quit(1)
+		return
 	# 正式武将数量；当前共二十一名可参与选将与对局的角色。
 	# 素裳与桂乃芬加入后，可参与选将与对局的正式武将总数为二十三名。
+	# 佩拉与玲可加入后，可参与选将与对局的正式武将总数为二十五名。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 23:
+	if character_definition_count != 25:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

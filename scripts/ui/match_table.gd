@@ -2250,7 +2250,7 @@ func _on_target_pressed(target_id: int) -> void:
 	if not _inline_card_choice.is_empty():
 		# 内联技能选目标；只有 target 与 card_target 请求允许武将牌写入临时目标集合。
 		var inline_choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
-		if inline_choice_type not in ["target", "card_target"]:
+		if inline_choice_type not in ["target", "target_control", "card_target"]:
 			return
 		# 当前请求目标候选；界面只更新临时集合，确认时仍由权威 ChoiceRequest 复核。
 		var inline_target_ids: Array[int] = _get_selectable_target_ids()
@@ -2308,7 +2308,7 @@ func _get_selectable_target_ids() -> Array[int]:
 	if not _inline_card_choice.is_empty():
 		# 内联技能目标候选；选牌/响应请求没有目标维度时返回空数组。
 		var inline_choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
-		if inline_choice_type not in ["target", "card_target"]:
+		if inline_choice_type not in ["target", "target_control", "card_target"]:
 			return []
 		var inline_target_ids: Array[int] = []
 		inline_target_ids.assign(_inline_card_choice.get("target_ids", []) as Array)
@@ -2441,7 +2441,7 @@ func _uses_rule_expanded_targets() -> bool:
 ## 群体锦囊虽不可手动点选目标，仍开启该态，以规则展开后的合法目标集合控制暗置范围。
 func _is_manual_target_selection_active() -> bool:
 	if not _inline_card_choice.is_empty():
-		return str(_inline_card_choice.get("choice_type", "card")) in ["target", "card_target"]
+		return str(_inline_card_choice.get("choice_type", "card")) in ["target", "target_control", "card_target"]
 	if not _active_equipment_action.is_empty():
 		return int(_card_use_preview.get("max_targets", 0)) > 0
 	if _selected_card_uid < 0:
@@ -3090,7 +3090,7 @@ func _enrich_public_card_choice_display(display_data: Dictionary) -> Dictionary:
 ## 判断选择请求是否能完全在本地手牌区或装备区完成；空候选的可取消响应也使用内联取消按钮。
 func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	# 文字控制项需要显示独立选项按钮，空候选不能误判为可在手牌区完成。
-	if str(choice_data.get("choice_type", "card")) in ["control", "bool"]:
+	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control"]:
 		return false
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))
@@ -3115,7 +3115,9 @@ func _is_inline_zhenqi_cost_choice(choice_data: Dictionary) -> bool:
 func _is_inline_control_choice(choice_data: Dictionary) -> bool:
 	# 当前选择类型；control 与 bool 都由稳定选项数组表达，其他选择仍按牌区或独立窗口规则处理。
 	var choice_type: String = str(choice_data.get("choice_type", "card"))
-	return choice_type in ["control", "bool"]
+	# 需要同时展示私有牌面的控制请求使用独立窗口，避免手牌上方操作区遮住被观看内容。
+	var display_candidates: Array = ((choice_data.get("context", {}) as Dictionary).get("display_candidates", []) as Array)
+	return choice_type in ["control", "bool", "target_control"] and display_candidates.is_empty()
 
 
 ## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。
@@ -4093,6 +4095,8 @@ func _refresh_inline_control_choice_text() -> void:
 		control_options.append({"id":option_id, "label":str(option.get("label", option_id))})
 	# 当前是否允许放弃；取消必须提交 confirmed=false，不能伪造成任一实际技能分支。
 	var allow_cancel: bool = bool(_inline_card_choice.get("allow_cancel", false))
+	# 当前目标维度是否满足；普通控制请求始终为true，复合请求必须先选择规定数量的武将。
+	var target_selection_ready: bool = _is_inline_target_control_selection_ready()
 	selection_label.text = ""
 	selection_label.visible = false
 	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择一项"))
@@ -4101,7 +4105,7 @@ func _refresh_inline_control_choice_text() -> void:
 	# 原确定按钮；始终承担第一项文字选项，保持所有常见二选一询问的固定视觉位置。
 	use_button.visible = not control_options.is_empty()
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	use_button.disabled = control_options.is_empty()
+	use_button.disabled = control_options.is_empty() or not target_selection_ready
 	if not control_options.is_empty():
 		_inline_control_primary_option_id = str((control_options[0] as Dictionary).get("id", ""))
 		use_button.text = str((control_options[0] as Dictionary).get("label", _inline_control_primary_option_id))
@@ -4112,7 +4116,7 @@ func _refresh_inline_control_choice_text() -> void:
 		_inline_control_secondary_option_id = str((control_options[1] as Dictionary).get("id", ""))
 		cancel_button.visible = true
 		cancel_button.text = str((control_options[1] as Dictionary).get("label", _inline_control_secondary_option_id))
-		cancel_button.disabled = _inline_control_secondary_option_id.is_empty()
+		cancel_button.disabled = _inline_control_secondary_option_id.is_empty() or not target_selection_ready
 	elif allow_cancel:
 		cancel_button.visible = true
 		cancel_button.text = "取消"
@@ -4123,10 +4127,25 @@ func _refresh_inline_control_choice_text() -> void:
 	for option_index: int in range(2, control_options.size()):
 		var extra_option: Dictionary = control_options[option_index] as Dictionary
 		_append_inline_control_option_button(str(extra_option.get("id", "")), str(extra_option.get("label", "")))
+		# 新建的实际选项按钮；复合请求未选满目标时保持禁用，真正取消按钮不受该条件影响。
+		var extra_option_button: Button = _inline_control_extra_option_buttons.back() if not _inline_control_extra_option_buttons.is_empty() else null
+		if extra_option_button != null:
+			extra_option_button.disabled = not target_selection_ready
 	# 两项及以上选项且允许放弃时，额外追加真正取消按钮，避免原第二位置既承担选项又丢失放弃语义。
 	if allow_cancel and control_options.size() >= 2:
 		_append_inline_control_cancel_button()
 	_refresh_component_states()
+
+
+## 判断当前文字选项请求的目标维度是否已经满足；非target_control请求没有目标要求并直接返回true。
+func _is_inline_target_control_selection_ready() -> bool:
+	if str(_inline_card_choice.get("choice_type", "")) != "target_control":
+		return true
+	# 目标最少数量；由权威请求提供，当前秘策固定为1。
+	var minimum_target_count: int = int(_inline_card_choice.get("min_target_select", 1))
+	# 目标最多数量；用于防御异常界面状态，正式请求同样固定为1。
+	var maximum_target_count: int = int(_inline_card_choice.get("max_target_select", minimum_target_count))
+	return _selected_target_ids.size() >= minimum_target_count and _selected_target_ids.size() <= maximum_target_count
 
 
 ## 在当前操作行追加一个实际文字选项按钮；回调只提交稳定ID，不解析技能效果或修改权威请求。
@@ -4187,12 +4206,15 @@ func _submit_inline_control_choice(control_id: String, confirmed: bool = true) -
 	# 当前请求 ID；同步恢复可能建立下一条请求，提交后只清理仍属于该 ID 的本地副本。
 	var request_id: int = int(_inline_card_choice.get("request_id", -1))
 	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":control_id, "confirmed":confirmed}
+	# 复合请求确认时携带当前目标；取消始终清空目标，保持confirmed=false的唯一放弃语义。
+	var selected_target_ids: Array[int] = _selected_target_ids.duplicate() if confirmed and str(_inline_card_choice.get("choice_type", "")) == "target_control" else []
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":selected_target_ids, "selected_control_id":control_id, "confirmed":confirmed}
 	if not match_controller.submit_action(action):
 		return
 	if int(_inline_card_choice.get("request_id", -2)) == request_id:
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
+		_selected_target_ids.clear()
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
 	_refresh_selection_text()
@@ -4330,7 +4352,7 @@ func _refresh_skill_target_preview_indicator() -> void:
 		return
 	# 当前内联选择类型；只有需要在武将牌上选择目标的请求才允许显示预览线。
 	var choice_type: String = str(_inline_card_choice.get("choice_type", "card"))
-	if choice_type not in ["target", "card_target"]:
+	if choice_type not in ["target", "target_control", "card_target"]:
 		card_use_animation_layer.clear_target_preview_indicator()
 		return
 	# 当前规则上下文；技能定义写入稳定 skill_id，普通内联选牌即使有目标也不应伪装为技能目标线。

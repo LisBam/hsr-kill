@@ -1,6 +1,7 @@
 extends Node
 
 ## 技能目标选择界面回归。验证纯目标请求与牌目标组合请求复用牌桌临时选择，不打开独立卡牌窗口。
+## 目标文字选项复合请求同样复用牌桌目标状态，并在目标未选满前禁用实际效果按钮。
 
 ## 正式主场景初始化等待帧数；保证武将视图和中央按钮已经完成绑定。
 const SETTLE_FRAME_COUNT: int = 4
@@ -161,6 +162,36 @@ func _run() -> void:
 	var interaction_panel: Control = main_instance.get_node("InteractionPanel") as Control
 	if selection_panel.visible or not interaction_panel.visible or confirm_button.text != "1.竖直目标武将牌" or cancel_button.text != "2.弃置目标手牌" or inline_cancel_button == null or not inline_cancel_button.visible or local_player_view.is_target_selection_active or not local_player_view.modulate.is_equal_approx(Color.WHITE):
 		_fail("bingfeng_inline_control")
+		return
+	# 秘策式目标文字选项复合请求；未选择目标前两个实际阶段按钮必须保持禁用，真正取消按钮仍可使用。
+	var target_control_request: Dictionary = {
+		"request_id":25,
+		"chooser_id":0,
+		"choice_type":"target_control",
+		"title":"秘策",
+		"prompt":"请选择一名其他角色并选择其执行的阶段",
+		"candidates":[],
+		"target_ids":[1],
+		"control_options":[{"id":"play_phase", "label":"出牌阶段"}, {"id":"discard_phase", "label":"弃牌阶段"}],
+		"min_select":1,
+		"max_select":1,
+		"min_card_select":0,
+		"max_card_select":0,
+		"min_target_select":1,
+		"max_target_select":1,
+		"allow_cancel":true,
+		"context":{"kind":"mice_target_option", "skill_id":"mice", "skill_owner_id":0},
+	}
+	main_instance.call("_on_card_choice_requested", target_control_request)
+	await get_tree().process_frame
+	# 复合请求的真正取消按钮；与两个阶段按钮同处原操作行，但不受目标选择完成度限制。
+	var target_control_cancel_button: Button = main_instance.get_node_or_null("InteractionPanel/InteractionVBox/ActionRow/InlineControlCancelButton") as Button
+	if selection_panel.visible or confirm_button.text != "出牌阶段" or cancel_button.text != "弃牌阶段" or not confirm_button.disabled or not cancel_button.disabled or target_control_cancel_button == null or target_control_cancel_button.disabled or not target_view.is_legal_target or target_view.is_target_selected:
+		_fail("target_control_initial")
+		return
+	main_instance.call("_on_target_pressed", 1)
+	if confirm_button.disabled or cancel_button.disabled or not target_view.is_target_selected or not target_view.is_target_selection_active:
+		_fail("target_control_selected")
 		return
 	if not await _test_active_skill_second_click_cancels(main_instance, match_controller):
 		return
