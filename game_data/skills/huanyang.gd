@@ -1,9 +1,8 @@
 extends SkillDefinition
 
-## 【还阳】技能源码。持有者对当前距离1以内的角色造成伤害后固定回复1点体力。
-## 当前时机说明：正式实现按技能原文的“造成伤害时”前移为先回复1点，再执行本次伤害扣减。
+## 【还阳】技能源码。持有者对当前距离1以内的角色每造成1点伤害，均在扣减伤害前独立回复1点体力。
 
-## 每次满足条件固定回复的体力值；多次独立伤害分别触发。
+## 每个伤害点固定回复的体力值；多点伤害按最终伤害点数连续执行等量次。
 const RECOVER_AMOUNT: int = 1
 
 
@@ -15,7 +14,7 @@ func _init() -> void:
 		"trigger": "damageBegin4",
 		"ui_enabled": false,
 		"lock": true,
-		"description": "锁定技，当你对距离为1以内的角色造成伤害时，你回复1点体力。",
+		"description": "锁定技，当你对距离为1以内的角色造成1点伤害时，你回复1点体力。",
 	})
 
 
@@ -26,8 +25,8 @@ func install() -> void:
 	subscribe_timing("damageBegin4", _on_owner_damage_source, "source")
 
 
-## 对距离1以内目标造成正数伤害后回复体力；满体力时回复端口安全返回且不伪造发动记录。
-## 当前时机说明：回调函数名与旧注释保留以兼容既有引用，实际在damageBegin4先回复，随后由原流程扣减伤害。
+## 对距离1以内目标造成正数伤害时逐点回复体力；满体力时回复端口安全返回且不伪造实际回复记录。
+## 回调函数名保留以兼容既有引用，实际在damageBegin4按最终伤害点数连续回复，随后由原流程扣减伤害。
 func _on_owner_damage_source(event: RuleEvent) -> void:
 	# 技能持有者状态；用于校验存活、距离与回复前后的实际体力变化。
 	var owner: PlayerState = get_owner_skill_player().get_state()
@@ -35,11 +34,14 @@ func _on_owner_damage_source(event: RuleEvent) -> void:
 		return
 	if host.card_rules.calculate_distance(owner_player_id, event.target_id) > 1:
 		return
-	# 回复前体力；公开回复端口没有返回值，因此通过前后状态差确认是否产生实际效果。
-	var previous_hp: int = owner.hp
-	host.call("recover", owner_player_id, owner_player_id, RECOVER_AMOUNT, get_id())
-	if owner.hp > previous_hp:
-		announce_activation({"damage_target_id":event.target_id, "recover":RECOVER_AMOUNT})
+	# 本次最终伤害点数；damageBegin4已经完成伤害、防具与技能数值修正，可直接决定连续回复次数。
+	var damage_point_count: int = maxi(int(event.data.get("amount", 0)), 0)
+	for damage_point_index: int in range(damage_point_count):
+		# 当前伤害点回复前体力；公开回复端口没有返回值，通过前后状态差确认是否产生实际回复。
+		var previous_hp: int = owner.hp
+		host.call("recover", owner_player_id, owner_player_id, RECOVER_AMOUNT, get_id())
+		if owner.hp > previous_hp:
+			announce_activation({"damage_target_id":event.target_id, "recover":RECOVER_AMOUNT, "damage_point_index":damage_point_index + 1, "damage_total_amount":damage_point_count})
 
 
 ## 修正伤害牌AI：受伤时按统一1点体力收益优先攻击距离1以内目标，并允许在安全体力下利用属性连环对自己造成可回复伤害。

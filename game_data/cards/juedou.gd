@@ -54,7 +54,7 @@ func _continue_exchange(resolver: Object, parent_card_uid: int, responder_id: in
 		if resolver.host.has_pending_card_choice():
 			return
 		if response_card == null:
-			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":card_user_id, "parent_card_uid":parent_card_uid})
+			resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":card_user_id, "parent_card_uid":parent_card_uid, "damage_card_target_count":1})
 			resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":parent_card_uid, "loser_id":responder_id})
 			return
 		# 上一轮响应者；交换后由其对手成为下一轮响应者。
@@ -72,7 +72,7 @@ func continue_response(resolver: Object, context: Dictionary, response_card: Car
 	# 当前对手 ID；未响应时成为伤害来源，成功时成为下一响应者。
 	var opponent_id: int = int(context.get("opponent_id", -1))
 	if response_card == null:
-		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":int(context.get("card_user_id", opponent_id)), "parent_card_uid":int(context.get("parent_card_uid", -1))})
+		resolver.host.damage(opponent_id, responder_id, 1, "normal", "juedou", false, false, {"card_user_id":int(context.get("card_user_id", opponent_id)), "parent_card_uid":int(context.get("parent_card_uid", -1)), "damage_card_target_count":1})
 		resolver.host.emit_rule_timing("juedouAfter", opponent_id, opponent_id, responder_id, {"parent_card_uid":int(context.get("parent_card_uid", -1)), "loser_id":responder_id})
 	else:
 		_continue_exchange(resolver, int(context.get("parent_card_uid", -1)), opponent_id, responder_id, int(context.get("card_user_id", opponent_id)))

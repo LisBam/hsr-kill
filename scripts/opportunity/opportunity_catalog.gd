@@ -68,6 +68,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"blue_skill_quanlei", "quality":"blue", "description":"获得技能“全垒”", "effect":"grant_skill", "skill_id":"quanlei"},
 	{"id":"blue_skill_jianshi", "quality":"blue", "description":"获得技能“剑势”", "effect":"grant_skill", "skill_id":"jianshi"},
 	{"id":"blue_skill_shanqing", "quality":"blue", "description":"获得每回合能发动三次的技能“山倾”", "effect":"grant_skill", "skill_id":"shanqing", "per_turn_limit":3},
+	{"id":"blue_skill_qinniang", "quality":"blue", "description":"获得技能“亲酿”", "effect":"grant_skill", "skill_id":"qinniang"},
 
 	{"id":"purple_reduce_max_hp", "quality":"purple", "description":"令一名角色减少1点体力上限。", "effect":"max_hp_target", "count":-1},
 	{"id":"purple_draw_five", "quality":"purple", "description":"摸五张牌。", "effect":"draw", "count":5},
@@ -89,6 +90,9 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_skill_kance", "quality":"purple", "description":"获得技能“勘测”", "effect":"grant_skill", "skill_id":"kance"},
 	{"id":"purple_skill_xingqi", "quality":"purple", "description":"获得技能“星祈”", "effect":"grant_skill", "skill_id":"xingqi"},
 	{"id":"purple_skip_judgment_phase", "quality":"purple", "description":"永远跳过你的判定阶段", "effect":"skip_judgment_phase", "count":1},
+	{"id":"purple_skill_baizhe", "quality":"purple", "description":"获得技能“百折”", "effect":"grant_skill", "skill_id":"baizhe"},
+	{"id":"purple_skill_mingding", "quality":"purple", "description":"获得技能“酩酊”", "effect":"grant_skill", "skill_id":"mingding"},
+	{"id":"purple_turn_over_target", "quality":"purple", "description":"将一名角色的武将牌翻面", "effect":"turn_over_target"},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
 	{"id":"orange_draw_phase_one", "quality":"orange", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
@@ -105,6 +109,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"orange_skill_mingchen", "quality":"orange", "description":"获得每回合能发动三次的技能“冥谶”", "effect":"grant_skill", "skill_id":"mingchen", "per_turn_limit":3},
 	{"id":"orange_skill_xianzou", "quality":"orange", "description":"获得技能“弦奏”", "effect":"grant_skill", "skill_id":"xianzou"},
 	{"id":"orange_skip_discard_phase", "quality":"orange", "description":"永远跳过你的弃牌阶段", "effect":"skip_discard_phase", "count":1},
+	{"id":"orange_turn_over_all_others", "quality":"orange", "description":"将所有其他角色的武将牌翻面", "effect":"turn_over_all_others"},
 
 	{"id":"red_gain_types", "quality":"red", "description":"从牌堆或弃牌堆中获得所有类型的牌各4张。（基本牌、锦囊牌、装备牌）", "effect":"gain_group_cards", "group_kind":"type", "groups":["basic", "trick", "equipment"], "count":4},
 	{"id":"red_gain_suits_three", "quality":"red", "description":"从牌堆或弃牌堆中获得所有花色的牌各3张。", "effect":"gain_group_cards", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":3},

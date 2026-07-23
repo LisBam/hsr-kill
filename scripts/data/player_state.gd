@@ -54,6 +54,12 @@ var chained: bool = false
 ## 当前是否处于翻面状态；为后续武将技能与完整回合规则预留。
 var face_down: bool = false
 
+## 当前是否处于“非锁定技失效”状态；true时完整非锁定技和半锁定技前段均不能发动或触发。
+var non_locked_skills_disabled: bool = false
+
+## 令非锁定技失效的来源表；键为稳定来源ID，值保存来源角色与原因，允许多个效果叠加并分别解除。
+var non_locked_skill_disable_sources: Dictionary = {}
+
 ## 武将牌左上角通用公开文本；空字符串隐藏组件，技能或模式只能写入面向所有观察者一致的展示内容。
 var character_corner_text: String = ""
 
@@ -336,6 +342,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"out_of_game_until_round": out_of_game_until_round,
 		"chained": chained,
 		"face_down": face_down,
+		"non_locked_skills_disabled": non_locked_skills_disabled,
+		"non_locked_skill_disable_sources": non_locked_skill_disable_sources.duplicate(true),
 		"character_corner_text": character_corner_text,
 		"character_corner_text_entries": character_corner_text_entries.duplicate(true),
 		"public_marks": public_marks.duplicate(true),

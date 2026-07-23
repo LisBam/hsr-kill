@@ -42,6 +42,24 @@ const SUFFICIENT_RESPONSE_NEGATION_UTILITY_MULTIPLIER: float = 0.20
 ## 判定【决斗】响应资源充足所需的已知【杀】数量；默认2张用于覆盖至少一轮往返，避免仅持一张时被误判为稳定应对。
 const DUEL_SUFFICIENT_SHA_COUNT: int = 2
 
+## 面对【制动】角色且拼杀资源明显劣势时继续打出【杀】的基础评分；默认-4分使非致命场景优先停止响应。
+const ZHIDONG_DUEL_DECLINE_SCORE: float = -4.0
+
+## 面对【制动】与贯石斧可支付强制命中时打出【闪】的基础评分；默认-5分优先保留无效防御牌。
+const ZHIDONG_FORCED_HIT_DODGE_DECLINE_SCORE: float = -5.0
+
+## 判定与【制动】角色拼杀时“自身【杀】较少”的最大已知数量；默认1张表示只剩当前响应资源。
+const ZHIDONG_LOW_SHA_COUNT_THRESHOLD: int = 1
+
+## 判定【制动】角色“斗志”资源较多的公开标记阈值；默认2枚可同时威胁百折与后续制动。
+const ZHIDONG_DOUZHI_THREAT_THRESHOLD: int = 2
+
+## 【决斗】停止响应时的基础伤害；固定1点，再叠加本张牌已累计的直接响应数。
+const DUEL_BASE_DAMAGE_AMOUNT: int = 1
+
+## 贯石斧强制命中需要支付的其他牌数量；固定2张，与装备规则源码保持一致。
+const GUANSHI_FORCE_HIT_COST_COUNT: int = 2
+
 ## 获得或失去1张牌的统一基础收益单位；所有直接牌差收益必须从该常量换算，不能在技能内另设比例。
 const CARD_RESOURCE_VALUE: float = 1.0
 
@@ -558,9 +576,15 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 			# 借刀持刀者同时考虑保住武器和【杀】命中受害者的阵营收益。
 			var victim_id: int = int(context.get("victim_id", -1))
 			return RESPONSE_SURVIVAL_VALUE - get_attitude(authoritative_snapshot, actor_id, victim_id) - selected_value * CARD_COST_WEIGHT
+		if choice_kind == "duel_response" and response_patterns.has("sha") and _should_decline_duel_response_against_zhidong(authoritative_snapshot, actor_id, context):
+			# 与制动角色拼杀会继续累计原【决斗】的直接响应数；资源明显劣势且当前承伤不致命时主动停止交换。
+			return ZHIDONG_DUEL_DECLINE_SCORE - selected_value * CARD_COST_WEIGHT
 		# 当前响应保命收益；【闪】会根据真实伤害值和致命性加分，其他响应保持原有6.0分基准。
 		var response_survival_value: float = RESPONSE_SURVIVAL_VALUE
 		if response_patterns.has("shan"):
+			if _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot, actor_id, context):
+				# 贯石斧具备足够支付资源时，【闪】只会增加制动伤害且无法阻止命中，因此优先保留。
+				return ZHIDONG_FORCED_HIT_DODGE_DECLINE_SCORE - selected_value * CARD_COST_WEIGHT
 			# 当前预期伤害；【杀】响应上下文优先提供damage_amount，缺失时安全回退1。
 			var expected_response_damage: int = maxi(int(context.get("damage_amount", context.get("amount", 1))), 1)
 			response_survival_value += float(expected_response_damage - 1) * WINE_SLASH_RESPONSE_EXTRA_DAMAGE_BONUS
@@ -581,6 +605,72 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	if not selected_card_uids.is_empty() and bool(context.get("ai_prefer_select", false)):
 		return 1.0 - selected_value * CARD_COST_WEIGHT
 	return 0.1
+
+
+## 判断AI是否应在资源劣势时停止与【制动】角色继续拼【杀】；当前累计伤害致命时仍优先响应自救。
+func _should_decline_duel_response_against_zhidong(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary) -> bool:
+	# 当前决斗对手；只有对手实际拥有制动时，继续打【杀】才会扩大其锁定增伤。
+	var opponent_id: int = int(context.get("opponent_id", -1))
+	# 当前决斗对手快照；用于检查技能、手牌与公开标记资源。
+	var opponent: Dictionary = get_player(authoritative_snapshot, opponent_id)
+	# 当前响应者快照；用于检查体力、护盾、手牌与已知【杀】数量。
+	var responder: Dictionary = get_player(authoritative_snapshot, responder_id)
+	if opponent.is_empty() or responder.is_empty() or not _snapshot_player_has_skill(opponent, "zhidong"):
+		return false
+	# 当前原【决斗】已经收到的直接响应数；现在放弃时预期伤害为基础1点加已有响应数。
+	var current_direct_response_count: int = maxi(int(context.get("direct_response_count", 0)), 0)
+	# 当前停止响应时的预计伤害；用于避免AI在致命伤害前错误放弃拼杀。
+	var expected_damage_if_declined: int = DUEL_BASE_DAMAGE_AMOUNT + current_direct_response_count
+	if int(responder.get("hp", 0)) + int(responder.get("shield", 0)) <= expected_damage_if_declined:
+		return false
+	# 响应者已知【杀】数量；仅剩当前一张或没有实体【杀】时视为拼杀资源偏少。
+	var responder_sha_count: int = get_known_response_count(authoritative_snapshot, responder_id, "sha")
+	if responder_sha_count > ZHIDONG_LOW_SHA_COUNT_THRESHOLD:
+		return false
+	# 响应者手牌数量；与对手公开手牌总数比较其继续拼杀的资源。
+	var responder_hand_count: int = int(responder.get("hand_count", (responder.get("hand", []) as Array).size()))
+	# 对手手牌数量；高于响应者时视为继续响应潜力更强。
+	var opponent_hand_count: int = int(opponent.get("hand_count", (opponent.get("hand", []) as Array).size()))
+	# 对手公开标记集合；只读取所有观察者都可见的“斗志”，不推测隐藏资源。
+	var opponent_marks: Dictionary = opponent.get("public_marks", {}) as Dictionary
+	# 对手“斗志”数量；达到阈值时同时保留百折与制动的后续威胁。
+	var opponent_douzhi_count: int = int((opponent_marks.get("douzhi", {}) as Dictionary).get("count", 0))
+	return opponent_hand_count > responder_hand_count or opponent_douzhi_count >= ZHIDONG_DOUZHI_THREAT_THRESHOLD
+
+
+## 判断【闪】是否会被装备贯石斧强制命中并为【制动】额外增加1点伤害；仅在攻击者有足够公开支付资源时放弃。
+func _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary) -> bool:
+	# 【杀】攻击者；必须是敌对且实际拥有制动的角色。
+	var attacker_id: int = int(context.get("actor_id", context.get("source_id", -1)))
+	# 【杀】攻击者快照；用于读取技能、装备和可支付费用牌数。
+	var attacker: Dictionary = get_player(authoritative_snapshot, attacker_id)
+	if attacker.is_empty() or attacker_id == responder_id or get_attitude(authoritative_snapshot, responder_id, attacker_id) >= 0.0 or not _snapshot_player_has_skill(attacker, "zhidong"):
+		return false
+	# 攻击者公开装备区；用于取得武器并计算非武器装备费用。
+	var equipment: Dictionary = attacker.get("equipment", {}) as Dictionary
+	# 攻击者武器；当前强制命中实现由贯石斧提供，装备不存在时保持普通闪避策略。
+	var weapon: Dictionary = equipment.get("weapon", {}) as Dictionary
+	if str(weapon.get("definition_id", "")) != "guanshi":
+		return false
+	# 可支付牌数；贯石斧需要弃置两张其他牌，手牌加非武器装备不足时不能假定其一定强命。
+	var available_cost_count: int = int(attacker.get("hand_count", (attacker.get("hand", []) as Array).size()))
+	for slot_variant: Variant in equipment.keys():
+		if str(slot_variant) != "weapon":
+			available_cost_count += 1
+	return available_cost_count >= GUANSHI_FORCE_HIT_COST_COUNT
+
+
+## 判断玩家快照是否持有指定固有、模式、临时或局内获得技能；仅使用公开稳定ID，不读取运行时技能对象。
+func _snapshot_player_has_skill(player: Dictionary, skill_id: String) -> bool:
+	if player.is_empty() or skill_id.is_empty():
+		return false
+	# 当前武将固有技能；CharacterDefinition自动生成稳定技能ID数组。
+	var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
+	if (character.get("skills", []) as Array).has(skill_id):
+		return true
+	if (player.get("mode_skill_ids", []) as Array).has(skill_id):
+		return true
+	return (player.get("temporary_skills", {}) as Dictionary).has(skill_id) or (player.get("acquired_skills", {}) as Dictionary).has(skill_id)
 
 
 ## 判断是否应让友方属性伤害命中自己以传导至全部横置敌人；只影响需要【闪】的可取消响应，不改变伤害或连环规则。

@@ -39,6 +39,12 @@ var _pending_discard_one_owner_id: int = -1
 ## 区域弃牌触发嵌套结算后等待执行的等量摸牌；空字典表示没有后续。
 var _pending_draw_after_discard: Dictionary = {}
 
+## 等待依次翻面的角色ID队列；每个翻面时机及其嵌套选择完整结束后才处理下一名角色。
+var _pending_turn_over_target_ids: Array[int] = []
+
+## 当前是否正在结算翻面机缘；即使最后一名目标产生嵌套结算，也能在恢复时准确完成本张机缘。
+var _pending_turn_over_resolution_active: bool = false
+
 
 ## 绑定当前机缘系统、控制器与状态；每局重新调用，避免跨局保存旧状态引用。
 func configure(system: OpportunitySystem, host: MatchController, state: GameState) -> void:
@@ -54,6 +60,8 @@ func configure(system: OpportunitySystem, host: MatchController, state: GameStat
 	_pending_discard_one_target_ids.clear()
 	_pending_discard_one_owner_id = -1
 	_pending_draw_after_discard.clear()
+	_pending_turn_over_target_ids.clear()
+	_pending_turn_over_resolution_active = false
 
 
 ## 解析一张已经完成全体选择的机缘卡；异步目标请求会保留当前效果，选择返回后再通知系统完成。
@@ -130,6 +138,13 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 			for _turn_index: int in range(extra_turn_count):
 				_host.add_phase(owner_player_id, "opportunity", true)
 			_system.complete_current_effect()
+		"turn_over_all_others":
+			# 其他角色目标；按当前座次依次翻面，死亡或离场角色不进入队列。
+			var other_target_ids: Array[int] = []
+			for player: PlayerState in _state.players:
+				if player.player_id != owner_player_id and player.alive and not player.out_of_game:
+					other_target_ids.append(player.player_id)
+			_begin_turn_over_targets(other_target_ids)
 		"virtual_card_use":
 			_resolve_virtual_card_use(owner_player_id, card_definition)
 		"gain_distinct_delayed":
@@ -143,7 +158,7 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 			_begin_transfer_cards(owner_player_id, _host.get_random_zone_card_uids_for_each_player(owner_player_id, int(card_definition.get("count", 0))), "opportunity_random_zone_gain")
 		"discard_own_zone_and_draw":
 			_begin_discard_own_zone_and_draw(owner_player_id, card_definition)
-		"discard_two_from_player", "damage_target", "gain_one_from_player", "link_targets", "max_hp_target", "lose_hp_target", "discard_all_hand_target", "swap_seat_target", "damage_targets", "gain_all_hand_target", "discard_one_each_target", "swap_equipment_targets", "discard_half_all_cards_target", "swap_hand_targets", "lose_half_hp_target", "remove_until_round_end_target", "reduce_half_max_hp_target", "damage_current_hp_target", "swap_character_targets":
+		"discard_two_from_player", "damage_target", "gain_one_from_player", "link_targets", "max_hp_target", "lose_hp_target", "discard_all_hand_target", "swap_seat_target", "damage_targets", "gain_all_hand_target", "discard_one_each_target", "swap_equipment_targets", "discard_half_all_cards_target", "swap_hand_targets", "lose_half_hp_target", "remove_until_round_end_target", "reduce_half_max_hp_target", "damage_current_hp_target", "swap_character_targets", "turn_over_target":
 			_begin_target_effect(owner_player_id, card_definition)
 		_:
 			_host.add_log("机缘卡效果不存在：%s。" % effect_id)
@@ -236,6 +251,9 @@ func continue_after_barrier() -> bool:
 	if not _pending_damage_target_ids.is_empty():
 		_resolve_next_pending_damage()
 		return true
+	if _pending_turn_over_resolution_active:
+		_process_pending_turn_overs()
+		return true
 	return false
 
 
@@ -308,6 +326,9 @@ func _apply_target_effect(owner_player_id: int, card_definition: Dictionary, tar
 		_pending_damage_target_ids = target_ids.duplicate()
 		_resolve_next_pending_damage()
 		return
+	if effect_id == "turn_over_target" and target_ids.size() == 1:
+		_begin_turn_over_targets(target_ids)
+		return
 	# 外层机缘恢复点；下列体力、伤害、弃牌和状态变化产生的内部续接必须先完成。
 	var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
 	if effect_id == "damage_target" and target_ids.size() == 1:
@@ -345,6 +366,30 @@ func _apply_target_effect(owner_player_id: int, card_definition: Dictionary, tar
 	if _host.has_nested_settlement_barrier():
 		return
 	_host.cancel_opportunity_resolution_guard(continuation_guard_id)
+	_system.complete_current_effect()
+
+
+## 建立一组按座次或玩家选择顺序结算的翻面目标；空目标直接完成本张机缘。
+func _begin_turn_over_targets(target_ids: Array[int]) -> void:
+	_pending_turn_over_target_ids = target_ids.duplicate()
+	_pending_turn_over_resolution_active = true
+	_process_pending_turn_overs()
+
+
+## 依次翻转队列中的武将牌；每名角色的翻面时机及嵌套选择结束后才继续下一名。
+func _process_pending_turn_overs() -> void:
+	if not _pending_turn_over_resolution_active:
+		return
+	while not _pending_turn_over_target_ids.is_empty():
+		# 当前翻面目标；先出队保证嵌套恢复后不会对同一角色重复翻面。
+		var target_id: int = _pending_turn_over_target_ids.pop_front()
+		# 外层机缘恢复点；turnOverBefore、End与After产生的选择必须完整结束后再处理下一目标。
+		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
+		_host.turn_over_player(target_id, -1, "opportunity")
+		if _host.has_nested_settlement_barrier():
+			return
+		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
+	_pending_turn_over_resolution_active = false
 	_system.complete_current_effect()
 
 

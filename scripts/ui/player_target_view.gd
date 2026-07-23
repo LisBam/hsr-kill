@@ -235,7 +235,7 @@ var _scroll_gesture_enabled: bool = false
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
 
-## 牌背覆盖层；默认隐藏，显示时覆盖武将插画、状态与公开区域，但保留输入区域可用。
+## 牌背插画层；默认隐藏，显示时替代武将插画，但身份、体力、装备、判定区、标记、状态与输入UI继续保留。
 @onready var _card_back: Panel = get_node("牌背") as Panel
 
 ## 独立输入区域；覆盖整张武将牌并负责点击、详情与悬停协议。
@@ -1256,7 +1256,7 @@ func _exit_tree() -> void:
 	_dismiss_public_judgment_information()
 
 
-## 刷新武将牌统一牌背配色；翻面状态只改变信息遮挡，不改变角色交互权限或规则状态。
+## 刷新武将牌统一牌背配色；翻面状态只替换插画层，不改变角色UI、交互权限或规则状态。
 func _refresh_card_back_style() -> void:
 	if not is_node_ready() or _card_back == null:
 		return

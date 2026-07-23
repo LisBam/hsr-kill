@@ -330,6 +330,9 @@ var _active_card_resolutions: Dictionary = {}
 ## 当前尚未完成 contentAfter 的 CardUseEvent 上下文；键为实体 UID，值保存事件 ID、使用者和最终区域。
 var _card_use_contexts: Dictionary = {}
 
+## 需要在持有者下个回合结束时清理的手牌视为效果；键为实体UID，值保存持有者、来源技能与被标记的到期回合。
+var _hand_view_as_turn_expiries: Dictionary = {}
+
 ## 等待濒死流程完成后收尾的伤害上下文；键为受伤玩家 ID，值只保存伤害来源、数值、连环目标和事件 ID。
 var _pending_damage_finalizations: Dictionary = {}
 
@@ -769,6 +772,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_negation_resume_results.clear()
 	_active_card_resolutions.clear()
 	_card_use_contexts.clear()
+	_hand_view_as_turn_expiries.clear()
 	_pending_damage_finalizations.clear()
 	_conquest_replacement_transition_active = false
 	_started_phase_lifecycles.clear()
@@ -1454,7 +1458,7 @@ func get_legal_actions(player_id: int) -> Array[Dictionary]:
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；样例或纯被动技能默认不会追加动作。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null:
+		if skill != null and skill.can_use_effect():
 			skill.append_play_phase_actions(result)
 	return result
 
@@ -2862,7 +2866,7 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 		var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
 		# 请求创建时的武将代次；缺失字段兼容旧回放，新请求必须与当前技能实例严格一致。
 		var skill_character_generation: int = int(context.get("skill_character_generation", -1))
-		if skill != null and skill.matches_character_generation(skill_character_generation):
+		if skill != null and skill.matches_character_generation(skill_character_generation) and skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 			# 技能响应模式；非空时先统一消费实体牌，再把结果交回技能文件。
 			var skill_response_patterns: Array[String] = _string_array(context.get("response_patterns", []) as Array)
 			if not skill_response_patterns.is_empty():
@@ -3643,6 +3647,11 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 	var damage_event_id: int = _record_runtime_event("DamageEvent", "damage", {"source_id":source_id, "target_id":target_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation, "amount":amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer})
 	# 伤害生命周期共享数据；四个修改窗口逐次读取上一时机写回的 amount，保证数值修改链可预测。
 	var timing_data: Dictionary = {"amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation}
+	for source_context_key_variant: Variant in source_context.keys():
+		# 来源牌上下文字段；父牌UID、逻辑目标数等稳定数据需要贯穿全部伤害修改窗口，但不得覆盖核心伤害字段。
+		var source_context_key: String = str(source_context_key_variant)
+		if not timing_data.has(source_context_key):
+			timing_data[source_context_key] = source_context[source_context_key_variant]
 	var damage_before_event: RuleEvent = _emit_rule_timing("damageBefore", target_id, source_id, target_id, timing_data, damage_event_id)
 	if damage_before_event != null and (damage_before_event.cancelled or damage_before_event.neutralized):
 		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_before_event.data, damage_event_id)
@@ -3666,13 +3675,19 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		if source_weapon_definition != null:
 			final_amount = source_weapon_definition.modify_outgoing_damage(self, equipment_damage_source, target, equipment_damage_context, final_amount)
 	# 第二伤害修改窗口；发生在来源装备修正后、目标防具修正前。
-	var damage_begin_two_event: RuleEvent = _emit_rule_timing("damageBegin2", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation}, damage_event_id)
+	# 第二伤害窗口数据；保留第一窗口与来源牌上下文，只用装备修正后的最终值覆盖amount。
+	var damage_begin_two_data: Dictionary = damage_begin_one_event.data.duplicate(true) if damage_begin_one_event != null else timing_data.duplicate(true)
+	damage_begin_two_data["amount"] = final_amount
+	var damage_begin_two_event: RuleEvent = _emit_rule_timing("damageBegin2", target_id, source_id, target_id, damage_begin_two_data, damage_event_id)
 	if damage_begin_two_event != null and (damage_begin_two_event.cancelled or damage_begin_two_event.neutralized):
 		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_two_event.data, damage_event_id)
 		return
 	final_amount = maxi(int(damage_begin_two_event.data.get("amount", final_amount)) if damage_begin_two_event != null else final_amount, 0)
 	# 第三伤害修改窗口；通常供受伤角色和防御技能在防具结算前修改。
-	var damage_begin_three_event: RuleEvent = _emit_rule_timing("damageBegin3", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation}, damage_event_id)
+	# 第三伤害窗口数据；沿用第二窗口全部扩展字段并更新上一窗口确认后的amount。
+	var damage_begin_three_data: Dictionary = damage_begin_two_event.data.duplicate(true) if damage_begin_two_event != null else damage_begin_two_data.duplicate(true)
+	damage_begin_three_data["amount"] = final_amount
+	var damage_begin_three_event: RuleEvent = _emit_rule_timing("damageBegin3", target_id, source_id, target_id, damage_begin_three_data, damage_event_id)
 	if damage_begin_three_event != null and (damage_begin_three_event.cancelled or damage_begin_three_event.neutralized):
 		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_three_event.data, damage_event_id)
 		return
@@ -3687,7 +3702,10 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 			if final_amount != amount_before_armor:
 				record_equipment_activation(target_id, target_armor_definition.get_id())
 	# 第四及最终伤害修改窗口；其结果直接进入旧 damage_before 兼容事件和实际扣减。
-	var damage_begin_four_event: RuleEvent = _emit_rule_timing("damageBegin4", target_id, source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation}, damage_event_id)
+	# 第四伤害窗口数据；保留制动等第三窗口写入的数据，并用防具修正后的amount进入最终修改阶段。
+	var damage_begin_four_data: Dictionary = damage_begin_three_event.data.duplicate(true) if damage_begin_three_event != null else damage_begin_three_data.duplicate(true)
+	damage_begin_four_data["amount"] = final_amount
+	var damage_begin_four_event: RuleEvent = _emit_rule_timing("damageBegin4", target_id, source_id, target_id, damage_begin_four_data, damage_event_id)
 	if damage_begin_four_event != null and (damage_begin_four_event.cancelled or damage_begin_four_event.neutralized):
 		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_four_event.data, damage_event_id)
 		return
@@ -3820,7 +3838,7 @@ func _continue_damage_after_result(context: Dictionary) -> void:
 	_finish_damage_timing(finalization_context)
 
 
-## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；严格派发 damageSource、damageEnd、damageAfter 后再传导属性伤害。
+## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；标准尾部结束后按最终伤害点数逐次派发damagePointAfter，再传导属性伤害。
 func _finish_damage_timing(context: Dictionary) -> void:
 	# 伤害来源、目标和父事件 ID；全部从保存上下文恢复，异步期间不会引用旧 PlayerState 对象。
 	# 伤害来源稳定 ID；来源时机与连环传导继续沿用原始伤害来源。
@@ -3875,15 +3893,38 @@ func _finish_damage_timing(context: Dictionary) -> void:
 			return
 	if finalization_stage == "damageAfter":
 		_emit_rule_timing("damageAfter", target_id, source_id, target_id, timing_data, damage_event_id)
-		finalization_stage = "chain"
+		finalization_stage = "damagePointAfter"
 		if state == null or state.game_over:
 			return
-		# 伤害后技能完成前不能开始属性连环的下一名目标，避免新伤害选择覆盖当前伤害选择。
+		# 整次伤害后技能完成前不能进入逐点询问，避免两种语义的选择窗口相互覆盖。
 		if _has_nested_settlement_barrier():
 			var after_resume_context: Dictionary = context.duplicate(true)
 			after_resume_context["finalization_stage"] = finalization_stage
 			_defer_rule_continuation("damage_finalization", after_resume_context)
 			return
+	if finalization_stage == "damagePointAfter":
+		# 已经派发的伤害点数；从0开始保存，异步选择恢复后只继续尚未处理的点。
+		var damage_point_index: int = int(context.get("damage_point_index", 0))
+		# 本次最终伤害总点数；护盾吸收不减少“受到/造成1点伤害”的触发次数。
+		var damage_total_amount: int = maxi(int(context.get("amount", 0)), 0)
+		while damage_point_index < damage_total_amount:
+			# 单点时机数据；amount固定为1，并补充从1开始的索引和总点数供技能提示、日志与回放定位。
+			var damage_point_data: Dictionary = timing_data.duplicate(true)
+			damage_point_data["amount"] = 1
+			damage_point_data["damage_total_amount"] = damage_total_amount
+			damage_point_data["damage_point_index"] = damage_point_index + 1
+			_emit_rule_timing("damagePointAfter", target_id, source_id, target_id, damage_point_data, damage_event_id)
+			damage_point_index += 1
+			if state == null or state.game_over:
+				return
+			# 每个伤害点产生的可选技能必须完整处理后才询问下一点，确保“每1点伤害”严格连续发动或询问等量次。
+			if _has_nested_settlement_barrier():
+				var point_resume_context: Dictionary = context.duplicate(true)
+				point_resume_context["finalization_stage"] = "damagePointAfter"
+				point_resume_context["damage_point_index"] = damage_point_index
+				_defer_rule_continuation("damage_finalization", point_resume_context)
+				return
+		finalization_stage = "chain"
 	if state == null or state.game_over:
 		return
 	# 已完成连环目标数量；每个子伤害前预登记父续接，异步时按栈顺序先完成子伤害再回来处理下一名目标。
@@ -3967,6 +4008,10 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["response_patterns"] = allowed_patterns.duplicate()
 	response_context["response_prompt"] = prompt
+	# 父牌当前直接响应数；AI可据此评估【制动】在决斗或强制命中后的累计增伤风险，客户端不能修改权威计数。
+	var response_parent_card_uid: int = int(response_context.get("parent_card_uid", -1))
+	if response_parent_card_uid >= 0:
+		response_context["direct_response_count"] = get_card_direct_response_count(response_parent_card_uid)
 	# 独立装备入口 UID；恢复时取消也会把该入口加入排除集合并重新打开原普通响应窗口。
 	if not immediate_equipment_candidate.is_empty():
 		response_context["immediate_response_equipment_uid"] = int(immediate_equipment_candidate.get("uid", -1))
@@ -3986,7 +4031,11 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var selected_uids: Array[int] = request_card_choice(player_id, request_title, request_prompt, candidates, 0, 1, true, response_context)
 	if has_pending_card_choice() or selected_uids.is_empty():
 		return null
-	return _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns, _resolved_equipment_material_uids, _resolved_response_skill_id)
+	# 同步响应结果；无等待的测试和AI路径也必须与异步提交统一累计父牌的直接响应数。
+	var resolved_response_card: CardInstance = _consume_response_card_uid_patterns(player_id, selected_uids[0], allowed_patterns, _resolved_equipment_material_uids, _resolved_response_skill_id, response_context)
+	if resolved_response_card != null:
+		_record_direct_response_from_context(response_context)
+	return resolved_response_card
 
 
 ## 返回当前响应时机最先需要独立询问的装备候选；普通装备继续留在统一响应候选窗口中。
@@ -4059,7 +4108,11 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	var cardless_skill_id: String = str(context.get("selected_cardless_response_skill_id", ""))
 	var cardless_definition_id: String = str(context.get("selected_cardless_response_definition_id", ""))
 	if not cardless_skill_id.is_empty() and not cardless_definition_id.is_empty():
-		return _consume_cardless_skill_response(responder_id, cardless_skill_id, cardless_definition_id, response_patterns)
+		# 无材料响应结果；成功生成虚拟响应牌后与实体牌一致累计一次直接响应。
+		var cardless_response: CardInstance = _consume_cardless_skill_response(responder_id, cardless_skill_id, cardless_definition_id, response_patterns)
+		if cardless_response != null:
+			_record_direct_response_from_context(context)
+		return cardless_response
 	if selected_uids.is_empty():
 		# 独立装备询问被取消；本次只放弃该装备入口，随后立即恢复原手牌、技能与其他装备响应窗口。
 		var declined_immediate_equipment_uid: int = int(context.get("immediate_response_equipment_uid", -1))
@@ -4069,6 +4122,7 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	# 当前响应结果；普通实体牌与成功的虚拟装备响应会直接返回，不创建第二次询问。
 	var response_card: CardInstance = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns, _int_array(context.get("equipment_material_uids", []) as Array), str(context.get("selected_response_skill_id", "")), context)
 	if response_card != null:
+		_record_direct_response_from_context(context)
 		return response_card
 	# 判定型装备已经建立异步判定时，由装备的 continue_judgment 恢复原响应；此处不能把尚未完成的判定误判为失败并提前重开手牌窗口。
 	if has_pending_judgment_request():
@@ -4102,7 +4156,7 @@ func _consume_cardless_skill_response(player_id: int, skill_id: String, definiti
 	# 响应者与技能实例；离场、死亡或等待期间失去技能都会令旧响应失效。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
-	if player == null or not player.alive or player.out_of_game or skill == null:
+	if player == null or not player.alive or player.out_of_game or skill == null or not skill.can_use_effect():
 		return null
 	# 虚拟响应定义与模式；必须同时匹配技能当前返回值和父请求允许的牌型。
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
@@ -4158,7 +4212,7 @@ func _continue_skill_response_after_barrier(continuation_context: Dictionary) ->
 	var skill: SkillDefinition = get_skill_instance(int(continuation_context.get("skill_owner_id", -1)), str(continuation_context.get("skill_id", "")))
 	# 原响应规则上下文；牌效、响应者和父事件信息保持选择创建时的可序列化快照。
 	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
-	if skill == null or not skill.matches_character_generation(int(rule_context.get("skill_character_generation", -1))):
+	if skill == null or not skill.matches_character_generation(int(rule_context.get("skill_character_generation", -1))) or not skill.can_use_effect(bool(rule_context.get("locked_skill_segment", false))):
 		return
 	# 已经完成消费的响应牌代理；恢复只应用结果，绝不再次移动同一实体。
 	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
@@ -4208,6 +4262,9 @@ func continue_async_equipment_judgment_response(context: Dictionary, response_ca
 	var response_patterns: Array[String] = _string_array(context.get("response_patterns", []) as Array)
 	# 最终响应牌；判定失败时尝试从排除当前装备后的其余合法候选中取得。
 	var resolved_response_card: CardInstance = response_card
+	# 异步判定成功的装备响应此前尚未经过普通消费成功分支，需要在此为父牌登记唯一一次直接响应。
+	if response_card != null:
+		_record_direct_response_from_context(context)
 	if resolved_response_card == null:
 		resolved_response_card = _retry_response_after_equipment_attempt(context, responder_id, response_patterns, failed_equipment_uid)
 		if has_pending_card_choice() or has_pending_judgment_request():
@@ -4219,7 +4276,7 @@ func continue_async_equipment_judgment_response(context: Dictionary, response_ca
 		var skill_owner_id: int = int(context.get("skill_owner_id", -1))
 		# 当前技能实例；等待期间失去技能时旧响应安全失效。
 		var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
-		if skill == null or not skill.matches_character_generation(int(context.get("skill_character_generation", -1))):
+		if skill == null or not skill.matches_character_generation(int(context.get("skill_character_generation", -1))) or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 			return
 		if _has_nested_settlement_barrier():
 			_defer_rule_continuation("skill_response", {"skill_owner_id":skill_owner_id, "skill_id":skill_id, "rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(resolved_response_card)})
@@ -4332,7 +4389,7 @@ func _get_response_conversion_skill_id(player_id: int, card: CardInstance, respo
 	for skill_variant: Variant in player_skills.values():
 		# 当前转化技能；被动、触发和普通主动技能默认返回false。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null and can_use_acquired_skill(player_id, skill.get_id()) and skill.can_convert_response_card(card, response_patterns):
+		if skill != null and skill.can_use_effect() and can_use_acquired_skill(player_id, skill.get_id()) and skill.can_convert_response_card(card, response_patterns):
 			return skill.get_id()
 	return ""
 
@@ -4346,7 +4403,7 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 	for skill_variant: Variant in player_skills.values():
 		# 当前候选技能；必须在提交时再次满足材料颜色、区域和响应模式条件。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null or skill.get_id() != response_skill_id or not can_use_acquired_skill(player_id, skill.get_id()) or not skill.can_convert_response_card(material_card, response_patterns):
+		if skill == null or not skill.can_use_effect() or skill.get_id() != response_skill_id or not can_use_acquired_skill(player_id, skill.get_id()) or not skill.can_convert_response_card(material_card, response_patterns):
 			continue
 		# 转化后的卡牌定义；其自身必须能够提供当前请求中的一种响应模式。
 		var virtual_definition_id: String = skill.get_converted_response_definition_id(material_card, response_patterns)
@@ -4449,8 +4506,12 @@ func _continue_consumed_trick_negation(context: Dictionary, responder_id: int, f
 func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counter_card: CardInstance) -> void:
 	# 已完成响应结果；每项只保存稳定玩家、实体牌和原锦囊信息，不持有可变对象引用。
 	var response_results: Array = (context.get("wuxie_response_results", []) as Array).duplicate(true)
-	response_results.append({"player_id":responder_id, "card_uid":counter_card.uid, "card_id":counter_card.definition_id, "respond_to":str(context.get("trick_id", ""))})
+	# 本张无懈直接响应的对象；第一张响应原锦囊，后续无懈只响应上一张无懈，不重复累计到原锦囊。
+	var responded_card_uid: int = int(context.get("parent_card_uid", -1)) if response_results.is_empty() else int((response_results.back() as Dictionary).get("card_uid", -1))
+	response_results.append({"player_id":responder_id, "card_uid":counter_card.uid, "card_id":counter_card.definition_id, "respond_to":str(context.get("trick_id", "")) if response_results.is_empty() else "wuxie", "respond_to_card_uid":responded_card_uid})
 	context["wuxie_response_results"] = response_results
+	if response_results.size() == 1:
+		record_card_direct_response(int(context.get("parent_card_uid", -1)))
 	# 原锦囊定义；无懈身份观察通过其目标收益与当前奇偶结果判断本次响应的忠反方向。
 	var response_subject_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
 	# 成功打出的无懈可击公开行为；仅在原使用者已有暴露且响应者不是目标本人时形成身份线索。
@@ -5141,7 +5202,7 @@ func _dispatch_judgment_continuation(continuation: Dictionary, judgment_card: Ca
 		var skill_owner_id: int = int(continuation.get("skill_owner_id", -1))
 		# 当前运行时技能实例；角色代次必须与请求建立时一致。
 		var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(continuation.get("skill_id", "")))
-		if skill != null and skill.matches_character_generation(int(continuation.get("skill_character_generation", -1))):
+		if skill != null and skill.matches_character_generation(int(continuation.get("skill_character_generation", -1))) and skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 			skill.continue_judgment(context, judgment_card)
 		return
 	if receiver_type == "card":
@@ -5784,6 +5845,81 @@ func transfer_hand_card_as(from_id: int, to_id: int, card_uid: int, view_as_defi
 		return false
 	add_log("%s将%s交给了%s。" % [source.display_name, format_gained_card_log_name(card, "一张手牌"), target.display_name])
 	return true
+
+
+## 令指定持有者的一张手牌持续视为目标牌名，直到该实体离开手牌区或持有者的下个回合结束。
+func set_hand_card_view_as_until_next_turn_end(holder_id: int, card_uid: int, view_as_definition_id: String, source_skill_id: String) -> bool:
+	# 当前持有者；等待期间死亡或不存在时不能建立到期效果。
+	var holder: PlayerState = state.get_player(holder_id) if state != null else null
+	# 当前手牌实体；等待期间发生转移时不能把旧效果登记到新区域。
+	var card: CardInstance = holder.find_hand_card(card_uid) if holder != null else null
+	if holder == null or card == null or GameDatabase.get_card(view_as_definition_id).is_empty():
+		return false
+	# 已经是目标牌名且没有视为来源时无需创建到期记录；实体本身的真实牌名不会在回合尾被错误恢复。
+	if card.definition_id == view_as_definition_id and not card.has_hand_view_as():
+		return true
+	if card.definition_id != view_as_definition_id and not card.set_hand_view_as(view_as_definition_id, source_skill_id):
+		return false
+	# 到期记录；expire_turn_number为-1表示尚未进入持有者的下个回合，创建于其当前回合时不会提前到期。
+	_hand_view_as_turn_expiries[card_uid] = {
+		"holder_id":holder_id,
+		"source_skill_id":source_skill_id,
+		"expire_turn_number":-1,
+	}
+	_emit_state()
+	return true
+
+
+## 执行“交给一名角色并视为牌”的完整移动；来源装备只允许交给自己，并先通过统一装备离区流程收入手牌。
+func transfer_hand_or_self_equipment_card_as_until_next_turn_end(from_id: int, to_id: int, card_uid: int, view_as_definition_id: String, source_skill_id: String) -> bool:
+	# 实体当前位置；只接受来源角色实际持有的区域实体。
+	var location: Dictionary = _find_card_location_by_uid(card_uid)
+	# 实体来源区域；普通手牌可交给任意目标，装备只允许持有者收回自己手牌。
+	var source_zone: String = str(location.get("zone", ""))
+	if int(location.get("owner_id", -1)) != from_id or source_zone not in ["hand", "equipment"]:
+		return false
+	if source_zone == "equipment":
+		if to_id != from_id or not gain_card_to_hand_by_uid(from_id, card_uid, source_skill_id):
+			return false
+	elif not transfer_hand_card_as(from_id, to_id, card_uid, view_as_definition_id, source_skill_id):
+		return false
+	return set_hand_card_view_as_until_next_turn_end(to_id, card_uid, view_as_definition_id, source_skill_id)
+
+
+## 在一名角色进入回合时锁定其待到期手牌视为效果；本回合内新获得的同类效果会等待再下一个回合。
+func _arm_hand_view_as_expiries_for_turn(player_id: int) -> void:
+	for card_uid_variant: Variant in _hand_view_as_turn_expiries.keys():
+		# 当前实体UID；作为到期记录与权威牌实体的稳定关联键。
+		var card_uid: int = int(card_uid_variant)
+		# 当前实体到期记录；只处理属于本回合角色且尚未锁定到期回合的效果。
+		var expiry: Dictionary = _hand_view_as_turn_expiries.get(card_uid_variant, {}) as Dictionary
+		if int(expiry.get("holder_id", -1)) != player_id or int(expiry.get("expire_turn_number", -1)) >= 0:
+			continue
+		expiry["expire_turn_number"] = state.turn_number
+		_hand_view_as_turn_expiries[card_uid] = expiry
+
+
+## 在持有者回合结束时清理已经锁定到本回合的手牌视为效果；牌已离区时仅移除陈旧记录。
+func _expire_hand_view_as_effects_for_turn(player_id: int) -> void:
+	# 是否实际恢复过手牌定义；只有牌面发生变化时才需要额外广播状态。
+	var changed: bool = false
+	for card_uid_variant: Variant in _hand_view_as_turn_expiries.keys():
+		# 当前实体UID；字典遍历期间使用键副本，可安全删除已处理记录。
+		var card_uid: int = int(card_uid_variant)
+		# 当前到期数据；持有者与锁定回合必须同时匹配才执行恢复。
+		var expiry: Dictionary = _hand_view_as_turn_expiries.get(card_uid_variant, {}) as Dictionary
+		if int(expiry.get("holder_id", -1)) != player_id or int(expiry.get("expire_turn_number", -1)) != state.turn_number:
+			continue
+		# 到期效果持有者；回合结束时重新取得权威角色状态。
+		var player: PlayerState = state.get_player(player_id)
+		# 到期手牌实体；仅清理仍由同一技能来源建立的视为效果，避免覆盖后续规则重新赋予的新效果。
+		var card: CardInstance = player.find_hand_card(card_uid) if player != null else null
+		if card != null and card.has_hand_view_as() and card.hand_view_as_source_skill_id == str(expiry.get("source_skill_id", "")):
+			card.clear_hand_view_as()
+			changed = true
+		_hand_view_as_turn_expiries.erase(card_uid_variant)
+	if changed:
+		_emit_state()
 
 
 ## 令指定角色从摸牌堆或弃牌堆获得最顶上的指定牌；先完整检索摸牌堆，缺失时才检索弃牌堆。
@@ -6442,7 +6578,7 @@ func _complete_active_independent_play_phase(interrupted: bool = false) -> void:
 	var skill_id: String = str(completion_context.get("skill_id", ""))
 	# 当前运行时技能实例；武将代次不一致时安全跳过。
 	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
-	if skill != null and skill.matches_character_generation(int(completion_context.get("skill_character_generation", -1))):
+	if skill != null and skill.matches_character_generation(int(completion_context.get("skill_character_generation", -1))) and skill.can_use_effect(bool(completion_context.get("locked_skill_segment", false))):
 		# 阶段是否因角色死亡、离场或取消被中断；技能可按业务需要读取但不能改写核心阶段状态。
 		var stable_completion_context: Dictionary = completion_context.duplicate(true)
 		stable_completion_context["phase_interrupted"] = interrupted
@@ -6642,7 +6778,7 @@ func _complete_active_extra_discard_phase() -> void:
 	var skill_id: String = str(completion_context.get("skill_id", ""))
 	# 接收额外阶段完成回调的运行时技能实例；实例失效时安全跳过回调。
 	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
-	if skill != null and skill.matches_character_generation(int(completion_context.get("skill_character_generation", -1))):
+	if skill != null and skill.matches_character_generation(int(completion_context.get("skill_character_generation", -1))) and skill.can_use_effect(bool(completion_context.get("locked_skill_segment", false))):
 		skill.continue_extra_phase(completion_context)
 	# 回调可能登记下一项阶段或技能“然后”步骤；全部活动项排空后才允许结束阶段继续收尾。
 	_resume_settlement_pipeline()
@@ -6823,6 +6959,32 @@ func get_card_target_damage_bonus(card_uid: int, target_id: int) -> int:
 	var custom_args: Dictionary = card_use_context.get("custom_args", {}) as Dictionary
 	var target_args: Dictionary = custom_args.get(str(target_id), {}) as Dictionary
 	return int(target_args.get("damage_bonus", 0))
+
+
+## 记录一张牌收到的一次直接响应；只累计直接以该牌为父对象的实际打出，不递归计算响应牌受到的反响应。
+func record_card_direct_response(card_uid: int) -> bool:
+	if card_uid < 0 or not _card_use_contexts.has(card_uid):
+		return false
+	# 当前使用牌上下文；直接响应数在整张牌的全部目标间共享，适用于【决斗】连续打【杀】等流程。
+	var card_use_context: Dictionary = _card_use_contexts[card_uid] as Dictionary
+	card_use_context["direct_response_count"] = maxi(int(card_use_context.get("direct_response_count", 0)) + 1, 0)
+	_card_use_contexts[card_uid] = card_use_context
+	return true
+
+
+## 返回一张仍处于使用生命周期中的牌累计收到的直接响应数；生命周期外或无响应时返回0。
+func get_card_direct_response_count(card_uid: int) -> int:
+	return maxi(int((_card_use_contexts.get(card_uid, {}) as Dictionary).get("direct_response_count", 0)), 0)
+
+
+## 返回一张仍处于使用生命周期中的牌的最终目标数；使用牌时机增删目标后读取最新权威数组。
+func get_card_use_target_count(card_uid: int) -> int:
+	return (_card_use_contexts.get(card_uid, {}) as Dictionary).get("target_ids", []).size()
+
+
+## 从响应上下文登记对父牌的一次直接响应；缺少父牌UID的救援、装备询问和独立响应不会误计数。
+func _record_direct_response_from_context(context: Dictionary) -> void:
+	record_card_direct_response(int(context.get("parent_card_uid", -1)))
 
 
 ## 在整牌准备选择完成后恢复兼容逐目标游标；真实事件树由父事件自然恢复，不主动重复推进。
@@ -7311,7 +7473,7 @@ func skill_ignores_play_count_limit(player_id: int, card_definition: Dictionary)
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；任一技能明确解除限制即可通过，不要求其他技能重复确认。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null and skill.ignores_play_count_limit(card_definition):
+		if skill != null and skill.can_use_effect() and skill.ignores_play_count_limit(card_definition):
 			return true
 	return false
 
@@ -7325,7 +7487,7 @@ func skill_play_count_limit_bonus(player_id: int, card_definition: Dictionary) -
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；无效对象跳过。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null:
+		if skill != null and skill.can_use_effect():
 			total_bonus += maxi(skill.get_play_count_limit_bonus(card_definition), 0)
 	# 【杀】次数机缘按共同次数组作用于普通、火与雷【杀】，普通机缘模式与过关斩将使用同一历史查询。
 	if str(card_definition.get("play_limit_group", card_definition.get("id", ""))) == "slash":
@@ -7340,7 +7502,7 @@ func skill_ignores_card_distance_limit(player_id: int, card_definition: Dictiona
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；距离钩子不得移动牌、消耗次数或创建选择。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null and skill.ignores_card_distance_limit(card_definition):
+		if skill != null and skill.can_use_effect() and skill.ignores_card_distance_limit(card_definition):
 			return true
 	return false
 
@@ -7354,7 +7516,7 @@ func modify_skill_distance_to_target(player_id: int, target_id: int, current_dis
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；距离修正不得移动牌、记录发动或创建选择。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null:
+		if skill != null and skill.can_use_effect():
 			modified_distance = maxi(skill.modify_distance_to_target(target_id, modified_distance), 1)
 	return modified_distance
 
@@ -7380,6 +7542,45 @@ func get_player_mark(player_id: int, mark_id: String) -> Dictionary:
 	return player_mark_service.get_mark(player_id, mark_id) if player_mark_service != null else {}
 
 
+## 按增量修改一名角色的公开标记数量；mark_data提供首次创建时的图标、名称和说明，结果为修改后的权威数量。
+func change_player_mark_count(player_id: int, mark_id: String, amount: int, mark_data: Dictionary = {}) -> int:
+	if player_mark_service == null or mark_id.is_empty() or amount == 0:
+		return int(get_player_mark(player_id, mark_id).get("count", 0))
+	# 当前标记数据；已存在时保留原图标、说明与来源，只更新数量。
+	var current_mark: Dictionary = get_player_mark(player_id, mark_id)
+	# 修改后的标记数量；统一收敛到公开标记服务支持的0至999范围。
+	var changed_count: int = clampi(int(current_mark.get("count", 0)) + amount, 0, PlayerMarkService.MAX_MARK_COUNT)
+	if changed_count <= 0:
+		remove_player_mark(player_id, mark_id)
+		return 0
+	# 待写入标记数据；首次创建读取调用方配置，后续修改以既有权威字段为准。
+	var changed_mark: Dictionary = mark_data.duplicate(true) if current_mark.is_empty() else current_mark.duplicate(true)
+	changed_mark["count"] = changed_count
+	set_player_mark(player_id, mark_id, changed_mark)
+	return changed_count
+
+
+## 添加或解除一项“非锁定技失效”来源；多个来源叠加时，只有全部解除后非锁定技才恢复生效。
+func set_non_locked_skills_disabled(player_id: int, disabled: bool, source_id: String = "runtime", source_player_id: int = -1, reason: String = "") -> bool:
+	if state == null or source_id.is_empty():
+		return false
+	# 目标角色；死亡角色仍允许清理旧来源，但不能新增长期失效状态。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or (disabled and not player.alive):
+		return false
+	# 修改前状态；用于避免无实质变化时发送冗余快照。
+	var previous_sources: Dictionary = player.non_locked_skill_disable_sources.duplicate(true)
+	if disabled:
+		player.non_locked_skill_disable_sources[source_id] = {"source_player_id":source_player_id, "reason":reason}
+	else:
+		player.non_locked_skill_disable_sources.erase(source_id)
+	player.non_locked_skills_disabled = not player.non_locked_skill_disable_sources.is_empty()
+	if previous_sources == player.non_locked_skill_disable_sources:
+		return false
+	_emit_state()
+	return true
+
+
 ## 查找指定来源创建的公开标记当前属于哪名角色；未找到返回-1。
 func find_player_mark_owner(mark_id: String, source_player_id: int = -1) -> int:
 	return player_mark_service.find_mark_owner(mark_id, source_player_id) if player_mark_service != null else -1
@@ -7394,7 +7595,7 @@ func can_discard_player_card(source_player_id: int, target_player_id: int, card:
 	for skill_variant: Variant in target_skills.values():
 		# 当前保护技能；任一技能拒绝即表示该牌不可由其他角色弃置。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null and not skill.can_other_player_discard_card(source_player_id, card, zone, slot):
+		if skill != null and skill.can_use_effect() and not skill.can_other_player_discard_card(source_player_id, card, zone, slot):
 			return false
 	return true
 
@@ -7406,7 +7607,7 @@ func validate_skill_card_target_selection(player_id: int, card_definition: Dicti
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；目标校验必须保持纯查询，不能在此消费技能次数或牌。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null:
+		if skill == null or not skill.can_use_effect():
 			continue
 		var validation_error: String = skill.validate_card_target_selection(card_definition, target_id, all_target_ids)
 		if not validation_error.is_empty():
@@ -7421,7 +7622,7 @@ func validate_incoming_skill_card_target_selection(target_id: int, actor_id: int
 	for skill_variant: Variant in target_skills.values():
 		# 当前目标技能；来牌校验只读取稳定定义、颜色和角色ID。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null:
+		if skill == null or not skill.can_use_effect():
 			continue
 		var validation_error: String = skill.validate_incoming_card_target_selection(actor_id, card_definition, card_color)
 		if not validation_error.is_empty():
@@ -7645,7 +7846,7 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 		return false
 	# 当前技能运行时实例；未安装的技能不能通过伪造动作直接发动。
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
-	if skill == null:
+	if skill == null or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 		return false
 	if not can_use_acquired_skill(player_id, skill_id):
 		return false
@@ -7682,7 +7883,7 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；主动入口与自身规则条件必须同时满足。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_id()):
+		if skill == null or not skill.can_use_effect() or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_id()):
 			continue
 		# 技能查询上下文；补充主动入口但不覆盖调用方其他可序列化参数。
 		var activation_context: Dictionary = context.duplicate(true)
@@ -7696,7 +7897,7 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 func get_skill_activation_preview(player_id: int, skill_id: String, context: Dictionary = {}) -> Dictionary:
 	# 当前技能实例；未安装技能没有预览内容。
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
-	if skill == null:
+	if skill == null or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 		return {}
 	return skill.get_activation_preview(context).duplicate(true)
 
@@ -8675,6 +8876,8 @@ func _start_turn(player_id: int) -> void:
 	_clear_pending_judgment_request()
 	state.current_player_id = player_id
 	state.turn_number += 1
+	# 锁定“直到其下个回合结束”的手牌视为效果；本回合内新建立的效果不会被本次回合尾提前清理。
+	_arm_hand_view_as_expiries_for_turn(player_id)
 	# 本回合是否开启新轮：仅普通回合可开新轮，额外回合即使落在一号位也不得递增 round_number 或再发 roundStart。
 	# 轮锚点取座次数组中第一名存活且未离场的角色（一号位死亡时顺延），时机顺序保持 roundStart 早于该角色的回合开始初始化。
 	var starts_new_round: bool = false
@@ -8766,12 +8969,31 @@ func _continue_turn_start(context: Dictionary) -> void:
 			_record_runtime_event("phaseBefore", "phase", {"player_id":player_id}, {}, turn_event_id)
 			# 回合前事件结果；取消或中立化时只进入取消分支，不再发布本回合后续开始时机。
 			var phase_before_event: RuleEvent = _emit_rule_timing("phaseBefore", player_id, player_id, player_id, {"turn_number":state.turn_number, "round_number":state.round_number}, turn_event_id)
-			context["stage"] = "phase_cancelled" if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized) else "phase_before_start"
+			context["stage"] = "phase_cancelled" if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized) else "face_down_check"
 			if _has_nested_settlement_barrier():
 				_defer_rule_continuation("turn_start", context)
 				return
 			stage = str(context["stage"])
 			continue
+		if stage == "face_down_check":
+			# 翻面状态只在完整回合真正进入前检查；phaseBefore仍可清理“直到你的下个回合开始”效果，但不会进入任何标准阶段。
+			if player.face_down:
+				context["stage"] = "face_down_finish"
+				turn_over_player(player_id, player_id, "turn_start_skip")
+				add_log("%s翻回正面并跳过本回合。" % format_player_state_log_name(player))
+				_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
+				_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
+				if _has_nested_settlement_barrier():
+					_defer_rule_continuation("turn_start", context)
+					return
+				_complete_face_down_skipped_turn(player_id)
+				return
+			context["stage"] = "phase_before_start"
+			stage = "phase_before_start"
+			continue
+		if stage == "face_down_finish":
+			_complete_face_down_skipped_turn(player_id)
+			return
 		if stage == "phase_cancelled":
 			context["stage"] = "finish_cancelled"
 			_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"phaseBefore", "turn_number":state.turn_number}, turn_event_id)
@@ -8862,14 +9084,15 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 		else:
 			_advance_after_current_player_death(player_id)
 		return
-	if player.face_down:
-		turn_over_player(player_id, player_id, "turn_start_skip")
-		add_log("%s翻回正面并跳过本回合。" % format_player_state_log_name(player))
-		_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
-		_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, _current_turn_event_id)
-		_finish_turn(player_id)
-		return
 	_schedule_phase_transition(player_id, "start", Callable(self, "_enter_judgment_phase").bind(player_id))
+
+
+## 完成因背面朝上而跳过的完整回合；不伪造准备、判定、摸牌、出牌、弃牌或结束阶段，只保留统一回合后与下家轮转。
+func _complete_face_down_skipped_turn(player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != player_id:
+		return
+	# 直接复用已完成阶段后的回合尾部；该入口只清理回合持续状态、派发phaseAfter并计算下一回合，不会补发任何阶段主体。
+	_complete_finish_turn(player_id)
 
 
 ## 进入当前角色的判定阶段；阶段主体可能被无懈、濒死或其他统一选择请求异步暂停。
@@ -9142,7 +9365,7 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id) if state != null and not state.game_over else null
 	# 调用方保存的武将代次；缺失时使用当前实例代次兼容旧内容入口。
 	var skill_character_generation: int = int(context.get("skill_character_generation", skill.get_bound_character_generation() if skill != null else -1))
-	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty() or skill == null or not skill.matches_character_generation(skill_character_generation):
+	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty() or skill == null or not skill.matches_character_generation(skill_character_generation) or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 		return false
 	_deferred_skill_settlements.append({"skill_owner_id":skill_owner_id, "skill_id":skill_id, "skill_character_generation":skill_character_generation, "context":context.duplicate(true)})
 	return true
@@ -9160,8 +9383,10 @@ func _resume_deferred_skill_settlements() -> void:
 	var skill_owner_id: int = int(settlement.get("skill_owner_id", -1))
 	# 当前技能实例；每局每名角色唯一，重新开局已清空整个结算队列。
 	var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(settlement.get("skill_id", "")))
-	if skill != null and skill.matches_character_generation(int(settlement.get("skill_character_generation", -1))):
-		skill.continue_settlement((settlement.get("context", {}) as Dictionary).duplicate(true))
+	# 技能结算上下文；半锁定技后段可显式携带locked_skill_segment，普通异步技能在失效期间不再恢复。
+	var settlement_context: Dictionary = (settlement.get("context", {}) as Dictionary).duplicate(true)
+	if skill != null and skill.matches_character_generation(int(settlement.get("skill_character_generation", -1))) and skill.can_use_effect(bool(settlement_context.get("locked_skill_segment", false))):
+		skill.continue_settlement(settlement_context)
 
 
 ## 登记被嵌套选择中断的通用规则后半段；上下文必须只包含基础值、数组和字典。
@@ -9935,6 +10160,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"requested_target_ids":declared_target_ids.duplicate(),
 		"excluded_target_ids":[],
 		"direct_hit_target_ids":[],
+		"direct_response_count":0,
 		"custom_args":{},
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_storage":virtual_card.storage.duplicate(true),
@@ -10765,6 +10991,8 @@ func _complete_finish_turn(player_id: int) -> void:
 	_main_phase_play_conversions.erase(player_id)
 	if int(_active_converted_play_phase_context.get("player_id", -1)) == player_id:
 		_active_converted_play_phase_context.clear()
+	# 清理在本回合开始时已经锁定到期的手牌视为效果；翻面跳过回合也属于该角色下个回合结束。
+	_expire_hand_view_as_effects_for_turn(player_id)
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
@@ -11754,6 +11982,7 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		return null
 	# 手牌视为效果的清理边界；实体离开当前持有者手牌区前立即恢复原名，已经创建的虚拟使用牌或响应代理继续保存本次逻辑牌效。
 	if card.has_hand_view_as() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id):
+		_hand_view_as_turn_expiries.erase(card.uid)
 		card.clear_hand_view_as()
 	# 移动前区域与持有者；即使调用方已从区域数组取出实体，CardInstance 仍保存本次移动的权威来源字段。
 	var source_zone: String = card.zone
