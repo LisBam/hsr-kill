@@ -7036,14 +7036,30 @@ func get_acquired_opportunity_effect_total(player_id: int, effect_id: String) ->
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or effect_id.is_empty():
 		return 0
-	# 累计效果值；允许同一机缘在不同时机重复获得并按每张卡的count叠加。
-	var result: int = 0
-	for opportunity_id: String in player.acquired_opportunity_ids:
-		# 当前机缘定义；未知历史ID只跳过，不应使对局规则或回放失效。
-		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
-		if str(opportunity_card.get("effect", "")) == effect_id:
-			result += int(opportunity_card.get("count", 0))
-	return result
+	# 缓存前后边界是否仍与已处理前缀一致；正式流程只追加，此校验额外兼容测试、回放工具直接清空或替换历史后再写入的情况。
+	var opportunity_history_replaced: bool = player.opportunity_effect_cache_processed_count < 0 or player.opportunity_effect_cache_processed_count > player.acquired_opportunity_ids.size()
+	if not opportunity_history_replaced and player.opportunity_effect_cache_processed_count > 0:
+		opportunity_history_replaced = player.acquired_opportunity_ids.is_empty() \
+			or player.acquired_opportunity_ids[0] != player.opportunity_effect_cache_first_processed_id \
+			or player.acquired_opportunity_ids[player.opportunity_effect_cache_processed_count - 1] != player.opportunity_effect_cache_last_processed_id
+	if opportunity_history_replaced:
+		player.opportunity_effect_totals_cache.clear()
+		player.opportunity_effect_cache_processed_count = 0
+		player.opportunity_effect_cache_first_processed_id = ""
+		player.opportunity_effect_cache_last_processed_id = ""
+	while player.opportunity_effect_cache_processed_count < player.acquired_opportunity_ids.size():
+		# 当前尚未汇总的机缘ID；未知历史项仍推进游标，避免每次规则查询重复验证同一损坏记录。
+		var opportunity_id: String = player.acquired_opportunity_ids[player.opportunity_effect_cache_processed_count]
+		# 当前机缘效果稳定ID；目录以不可变标量接口提供，避免在每次出牌合法性枚举中复制完整定义。
+		var cached_effect_id: String = OpportunityCatalog.get_effect_id(opportunity_id)
+		if not cached_effect_id.is_empty():
+			player.opportunity_effect_totals_cache[cached_effect_id] = int(player.opportunity_effect_totals_cache.get(cached_effect_id, 0)) + OpportunityCatalog.get_effect_count(opportunity_id)
+		player.opportunity_effect_cache_processed_count += 1
+	if player.opportunity_effect_cache_processed_count > 0:
+		# 已处理前缀边界；下次查询以两个常数时间哨兵识别常见的直接替换，正常追加路径无需重新扫描。
+		player.opportunity_effect_cache_first_processed_id = player.acquired_opportunity_ids[0]
+		player.opportunity_effect_cache_last_processed_id = player.acquired_opportunity_ids[player.opportunity_effect_cache_processed_count - 1]
+	return int(player.opportunity_effect_totals_cache.get(effect_id, 0))
 
 
 ## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
@@ -11289,7 +11305,7 @@ func _restore_conquest_enemy_skills(enemy: PlayerState) -> void:
 	# 本层新增技能机缘；服务确保技能机缘与已获技能、当前新武将固有技能均不重复。
 	var newly_awarded_skill_opportunity_ids: Array[String] = conquest_mode.ensure_skill_opportunity_rewards(enemy)
 	_record_conquest_enemy_opportunities(enemy, newly_awarded_skill_opportunity_ids)
-	for opportunity_id: String in conquest_mode.get_enemy_opportunity_ids():
+	for opportunity_id: String in conquest_mode.get_enemy_skill_opportunity_ids():
 		# 当前历史机缘定义；只有获得技能效果需要在每次新武将入场时重新安装运行时实例。
 		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
 		if str(opportunity_card.get("effect", "")) != "grant_skill":
@@ -12415,7 +12431,8 @@ func _append_runtime_history_record(record: Dictionary) -> void:
 	var sequence: int = int(record.get("sequence", -1))
 	if not state.event_history.is_empty() and int((state.event_history.back() as Dictionary).get("sequence", -2)) == sequence:
 		return
-	state.event_history.append(record.duplicate(true))
+	# 调度器查询已经返回独立的可序列化副本；状态层直接接管该副本，避免每条长局历史再次执行第二次深复制。
+	state.event_history.append(record)
 
 
 ## 运行时事件开始回调；只把摘要 ID 和历史写入权威状态，不暴露 GameEvent 可变引用。

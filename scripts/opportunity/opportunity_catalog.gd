@@ -163,6 +163,36 @@ static func get_card(card_id: String) -> Dictionary:
 	return card_definition.duplicate(true) if not card_definition.is_empty() else {}
 
 
+## 返回稳定ID是否对应已登记机缘；高频规则校验只读取布尔值，不为存在性判断复制完整定义。
+static func has_card(card_id: String) -> bool:
+	_ensure_catalog_indexes()
+	return not card_id.is_empty() and _card_definitions_by_id.has(card_id)
+
+
+## 返回指定机缘的效果稳定ID；结果为不可变字符串，适合长局增量汇总且不会暴露静态定义字典。
+static func get_effect_id(card_id: String) -> String:
+	_ensure_catalog_indexes()
+	# 索引命中的静态定义；未知ID使用空字典并返回空效果，调用方可安全跳过损坏历史。
+	var card_definition: Dictionary = _card_definitions_by_id.get(card_id, {}) as Dictionary
+	return str(card_definition.get("effect", ""))
+
+
+## 返回指定机缘的整数count参数；没有count或定义不存在时返回0，其他参数仍通过隔离的get_card接口读取。
+static func get_effect_count(card_id: String) -> int:
+	_ensure_catalog_indexes()
+	# 索引命中的静态定义；只读取基础整数，不复制description、groups等无关字段。
+	var card_definition: Dictionary = _card_definitions_by_id.get(card_id, {}) as Dictionary
+	return int(card_definition.get("count", 0))
+
+
+## 返回指定机缘授予的技能稳定ID；非技能机缘与未知ID返回空字符串，调用方无需复制完整定义后再筛选。
+static func get_skill_id(card_id: String) -> String:
+	_ensure_catalog_indexes()
+	# 索引命中的静态定义；只有grant_skill效果允许被过关斩将恢复为运行时技能。
+	var card_definition: Dictionary = _card_definitions_by_id.get(card_id, {}) as Dictionary
+	return str(card_definition.get("skill_id", "")) if str(card_definition.get("effect", "")) == "grant_skill" else ""
+
+
 ## 返回指定品质的稳定机缘ID数组；结果为独立副本，适合组件按局缓存并在抽取时安全过滤。
 static func get_card_ids_by_quality(quality_id: String) -> Array[String]:
 	_ensure_catalog_indexes()

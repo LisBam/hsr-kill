@@ -30,8 +30,11 @@ var _next_event_id: int = 1
 ## 下一条选择请求稳定 ID；事件与请求分别编号，便于网络日志定位。
 var _next_request_id: int = 1
 
-## 全部事件对象索引；只有调度器内部持有可变引用，外部使用 get_event_snapshot 查询。
+## 尚未结束的完整事件对象索引；只有调度器内部持有可变引用，外部使用get_event_snapshot查询活动或归档摘要。
 var _events: Dictionary = {}
+
+## 已结束事件ID到最终只读摘要的轻量索引；摘要与完成历史共享字典引用，不保留Callable、运行时上下文对象或完整GameEvent实例。
+var _finalized_event_snapshots: Dictionary = {}
 
 ## 当前事件栈；数组末尾是正在执行的事件，父事件必须留在栈中等待子事件。
 var _event_stack: Array[int] = []
@@ -62,7 +65,7 @@ var _history_sequence: int = 0
 var _root_lifecycle_token: int = -1
 
 
-## 创建事件并按 parent_id 放入 next 或 after 队列；返回事件对象供调用方补充上下文。
+## 创建事件并关联parent_id；活动父事件接收next/after队列，归档父事件仅保留语义关系，返回对象供调用方补充上下文。
 func create_event(event_name: String, event_type: String = "rule", steps: Array[Callable] = [], event_context: Dictionary = {}, parent_id: int = -1, queue: String = "next") -> GameEvent:
 	# 新建事件对象；构造时不执行内容，只有 start 或 drain 才会推进。
 	var event: GameEvent = GameEvent.new(event_name, steps, event_context)
@@ -75,7 +78,9 @@ func create_event(event_name: String, event_type: String = "rule", steps: Array[
 		# 父事件对象；未知父事件表示调用顺序错误，事件不会静默脱离事件树。
 		var parent: GameEvent = _events.get(parent_id) as GameEvent
 		if parent == null:
-			event.abort("missing_parent")
+			# 已归档父事件仍可作为外部选择或迁移记录的语义父级；它不再拥有待执行队列，子事件由调用方独立完成。
+			if not _finalized_event_snapshots.has(parent_id):
+				event.abort("missing_parent")
 		else:
 			if queue == "after":
 				parent.insert_after(event.event_id)
@@ -228,8 +233,12 @@ func _finalize_event(event: GameEvent) -> void:
 	if event.finalized:
 		return
 	event.finalized = true
-	_record_history("finish", event)
-	event_finished.emit(event.to_dict())
+	# 完成历史记录；其中的event摘要同时作为后续按ID查询的轻量归档，避免再复制一份相同字典。
+	var final_record: Dictionary = _record_history("finish", event)
+	# 最终事件摘要；信号仍发送独立副本，订阅者无法反向修改历史或归档。
+	var final_event_snapshot: Dictionary = final_record.get("event", {}) as Dictionary
+	_finalized_event_snapshots[event.event_id] = final_event_snapshot
+	event_finished.emit(final_event_snapshot.duplicate(true))
 	if not _event_stack.is_empty() and _event_stack.back() == event.event_id:
 		_event_stack.pop_back()
 	if event.parent_id >= 0:
@@ -239,6 +248,8 @@ func _finalize_event(event: GameEvent) -> void:
 			parent.result = event.result.duplicate(true)
 			if parent.status == GameEvent.Status.WAITING_CHILDREN:
 				parent.status = GameEvent.Status.RUNNING
+	# 已完成事件的可调用步骤和可变上下文不再参与任何调度；归档摘要足以支持回放历史与get_event_snapshot查询。
+	_events.erase(event.event_id)
 
 
 ## 创建并登记暂停 token；owner_event_id 默认使用当前事件，外部系统可传 -1 创建全局暂停。
@@ -399,11 +410,16 @@ func abort_all(reason: String = "game_over") -> void:
 
 ## 创建一条无内容的完成事件作为外部规则调用的事件记录；可用于迁移期间保留父子与回放关联。
 func record_event(event_name: String, event_type: String = "rule", event_context: Dictionary = {}, parent_id: int = -1, result: Dictionary = {}) -> int:
-	var event: GameEvent = create_event(event_name, event_type, [], event_context, parent_id)
+	# 同步记录事件不会进入父事件待调度队列；parent_id只保存事件树关系，避免长期根事件积累大量已经完成的空子事件ID。
+	var event: GameEvent = create_event(event_name, event_type, [], event_context)
+	event.parent_id = parent_id
 	event.result = result.duplicate(true)
 	event.finish()
 	event.finalized = true
-	_record_history("record", event)
+	# 记录历史中的最终摘要同时进入轻量索引，随后立即释放完整GameEvent实例。
+	var record: Dictionary = _record_history("record", event)
+	_finalized_event_snapshots[event.event_id] = record.get("event", {}) as Dictionary
+	_events.erase(event.event_id)
 	return event.event_id
 
 
@@ -420,7 +436,16 @@ func get_current_event() -> GameEvent:
 ## 返回事件摘要快照；未知 ID 返回空字典，避免外部取得可变 GameEvent 引用。
 func get_event_snapshot(event_id: int) -> Dictionary:
 	var event: GameEvent = _events.get(event_id) as GameEvent
-	return {} if event == null else event.to_dict()
+	if event != null:
+		return event.to_dict()
+	# 已结束事件只保留不含Callable的最终摘要；查询继续返回独立副本，保持原公开接口的隔离契约。
+	var finalized_snapshot: Dictionary = _finalized_event_snapshots.get(event_id, {}) as Dictionary
+	return finalized_snapshot.duplicate(true) if not finalized_snapshot.is_empty() else {}
+
+
+## 返回仍持有完整GameEvent对象的数量；正式长局应只包含根事件与当前未完成事件树，供性能诊断与回归测试使用。
+func get_live_event_count() -> int:
+	return _events.size()
 
 
 ## 返回全部事件历史深拷贝；该日志不依赖场景节点，可单独用于回放和无头测试。
@@ -455,6 +480,7 @@ func reset() -> void:
 	_next_event_id = 1
 	_next_request_id = 1
 	_events.clear()
+	_finalized_event_snapshots.clear()
 	_event_stack.clear()
 	_choice_requests.clear()
 	_event_history.clear()
@@ -465,8 +491,8 @@ func reset() -> void:
 	pause_registry.reset()
 
 
-## 写入一条稳定事件历史记录；extra 只允许基础类型，调用方不应传递节点或 Callable。
-func _record_history(kind: String, event: GameEvent, extra: Dictionary = {}) -> void:
+## 写入并返回一条稳定事件历史记录；extra只允许基础类型，调用方不应传递节点或Callable。
+func _record_history(kind: String, event: GameEvent, extra: Dictionary = {}) -> Dictionary:
 	_history_sequence += 1
 	var record: Dictionary = {
 		"sequence": _history_sequence,
@@ -476,3 +502,4 @@ func _record_history(kind: String, event: GameEvent, extra: Dictionary = {}) -> 
 	if not extra.is_empty():
 		record.merge(extra, true)
 	_event_history.append(record)
+	return record
