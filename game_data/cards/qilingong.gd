@@ -38,19 +38,19 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 
 
 ## 安装麒麟弓的标准造成伤害时触发；来源角色必须仍装备同一实体才能创建坐骑选择。
+## 当前时机说明：订阅【杀】专属shaDamage，发生在通用伤害与实际扣减之前。
 func install_runtime() -> void:
 	if runtime_host != null and runtime_host.get("trigger_manager") != null:
-		runtime_host.trigger_manager.subscribe("damage", self, _on_owner_damage, 0, runtime_owner_player_id, "source")
+		runtime_host.trigger_manager.subscribe("shaDamage", self, _on_owner_damage, 0, runtime_owner_player_id, "source")
 
 
 ## 在【杀】造成正数伤害的damage时机请求弃置目标坐骑；该时机早于damageSource、濒死尾部与damageAfter。
+## 当前时机说明：回调已经前移到shaDamage，选择建立与完成时目标都尚未承受本次伤害。
 func _on_owner_damage(event: RuleEvent) -> void:
-	if int(event.data.get("amount", 0)) <= 0 or event.target_id < 0:
+	if int(event.data.get("damage_amount", 0)) <= 0 or event.target_id < 0:
 		return
 	# 造成伤害的牌定义；只有共享slash牌族满足麒麟弓条件。
-	var damage_card_definition: Dictionary = GameDatabase.get_card(str(event.data.get("card_id", "")))
-	if str(damage_card_definition.get("effect_id", "")) != "slash":
-		return
+	# 当前来源说明：shaDamage只由共享【杀】组件派发，因此无需再次读取card_id做重复牌族判断。
 	# 当前武器实体；换装或失去麒麟弓后旧运行时实例不能继续触发。
 	var equipment_card: CardInstance = runtime_host.get_equipment_card(runtime_owner_player_id, "weapon")
 	if equipment_card == null or equipment_card.uid != runtime_card_uid:
@@ -64,6 +64,7 @@ func _on_owner_damage(event: RuleEvent) -> void:
 	# 伤害时机选择上下文；父牌UID用于异步选择完成后恢复当前【杀】目标。
 	var choice_context: Dictionary = event.data.duplicate(true)
 	# 前一轮【闪】响应模式；damage继承的来源上下文不能让本次坐骑选择被误判为响应牌恢复。
+	# 当前来源说明：shaDamage沿用同一【杀】上下文，仍需移除上一轮响应字段。
 	choice_context.erase("response_patterns")
 	# 前一轮响应者字段；麒麟弓选择者固定为伤害来源，不沿用受伤目标的响应身份。
 	choice_context.erase("responder_id")
@@ -76,6 +77,7 @@ func _on_owner_damage(event: RuleEvent) -> void:
 	choice_context["equipment_uid"] = equipment_card.uid
 	choice_context["ai_prefer_select"] = true
 	# 坐骑选择；允许取消且至多选择一张，正式对局会暂停同一damage时机的后续触发器。
+	# 当前时机说明：这里暂停的是shaDamage触发续列，选择结束后才继续实际伤害。
 	var selected_uids: Array[int] = runtime_host.request_card_choice(runtime_owner_player_id, "麒麟弓", "是否发动【麒麟弓】弃置目标一张坐骑？", candidates, 0, 1, true, choice_context)
 	if runtime_host.has_pending_card_choice():
 		return
@@ -83,6 +85,7 @@ func _on_owner_damage(event: RuleEvent) -> void:
 
 
 ## 应用damage时机中的麒麟弓选择；等待期间换装或坐骑离区时安全失效。
+## 当前时机说明：该兼容函数名与原注释保留，但正式调用来源为扣减前shaDamage。
 func _apply_runtime_choice(match_host: Object, context: Dictionary, selected_uids: Array[int]) -> void:
 	if selected_uids.is_empty():
 		return
@@ -97,12 +100,14 @@ func _apply_runtime_choice(match_host: Object, context: Dictionary, selected_uid
 
 
 ## 声明麒麟弓使用标准damage时机；共享【杀】流程不再重复调用伤害完成后兼容钩子。
+## 当前时机说明：标准实现使用shaDamage前置触发，仍返回true以禁用旧伤害后钩子。
 func uses_damage_timing_trigger() -> bool:
 	return true
 
 
 ## 恢复damage时机创建的麒麟弓坐骑选择，并继续父【杀】当前目标。
 ## 父【杀】当前目标由统一伤害续接管线在damageSource、damageEnd与damageAfter结束后推进，本装备只应用自己的坐骑弃置结果。
+## 当前恢复说明：选择现在产生于shaDamage，触发管理器恢复同一前置时机后由【杀】组件进入实际伤害；本函数不直接推进伤害。
 func continue_equipment_choice(match_host: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
 	if str(context.get("kind", "")) != "qilin_damage":
 		return false

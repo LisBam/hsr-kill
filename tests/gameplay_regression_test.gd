@@ -107,6 +107,9 @@ var _qilin_mount_uid: int = -1
 ## 麒麟弓回归是否在选择请求中找到目标坐骑；默认false，收到正确候选后改为true。
 var _qilin_candidate_present: bool = false
 
+## 麒麟弓坐骑选择创建时目标的体力；必须仍为伤害前数值4，证明“造成伤害时”没有落到扣减之后。
+var _qilin_target_hp_at_choice: int = -1
+
 ## 濒死前时机被测试触发器取消的次数；用于验证取消标志不能留下非正体力的存活角色。
 var _cancelled_dying_before_count: int = 0
 
@@ -251,6 +254,7 @@ func _reset_state(player_count: int) -> void:
 	_qilin_request_count = 0
 	_qilin_mount_uid = -1
 	_qilin_candidate_present = false
+	_qilin_target_hp_at_choice = -1
 
 
 ## 验证无懈可击同时询问全部存活玩家、公共高亮不泄露候选，并由最先提交合法牌的玩家取得结算权。
@@ -907,10 +911,12 @@ func _test_qinggang_ignores_tengjia() -> bool:
 
 
 ## 验证麒麟弓通过装备运行时订阅真实damage时机，并在【杀】目标收尾前弃置坐骑。
+## 当前断言说明：正式订阅已前移至shaDamage，测试额外要求坐骑选择发生在目标实际扣血之前。
 func _test_qilin_damage_timing_runtime() -> bool:
 	_scenario = "qilin_damage"
 	_reset_state(2)
 	# 攻击者麒麟弓；安装独立卡牌运行时后订阅来源角色的标准damage时机。
+	# 当前时机说明：这里的正式标准入口为【杀】专属shaDamage前置时机。
 	var qilin_card: CardInstance = CardInstance.new("qilin", "heart", 5)
 	qilin_card.zone = "equipment"
 	qilin_card.owner_id = 0
@@ -923,14 +929,15 @@ func _test_qilin_damage_timing_runtime() -> bool:
 	_controller.state.get_player(1).equipment["offensive_mount"] = mount_card
 	_qilin_mount_uid = mount_card.uid
 	# 造成伤害的普通【杀】；响应处理器拒绝【闪】并确认damage时机中的麒麟弓候选。
+	# 当前断言说明：选择来源实际为shaDamage，处理器会记录选择建立瞬间的目标体力。
 	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
 	_controller._execute_card_use(0, slash_card, [1])
 	if not await _wait_until_card_finalized(slash_card.uid):
 		return _fail("qilin_damage_timeout")
 	# 麒麟弓运行时定义；公开能力声明阻止共享【杀】流程再调用旧伤害结束钩子。
 	var qilin_definition: CardDefinition = _controller.card_runtime_instances.get(qilin_card.uid) as CardDefinition
-	if qilin_definition == null or not qilin_definition.uses_damage_timing_trigger() or _qilin_request_count != 1 or not _qilin_candidate_present or _controller.state.get_player(1).hp != 3 or _controller.state.get_player(1).equipment.has("offensive_mount") or not _controller.state.discard_pile.has(mount_card):
-		return _fail("qilin_damage request=%d candidate=%s hp=%d equipment=%s" % [_qilin_request_count, _qilin_candidate_present, _controller.state.get_player(1).hp, _controller.state.get_player(1).equipment])
+	if qilin_definition == null or not qilin_definition.uses_damage_timing_trigger() or _qilin_request_count != 1 or not _qilin_candidate_present or _qilin_target_hp_at_choice != 4 or _controller.state.get_player(1).hp != 3 or _controller.state.get_player(1).equipment.has("offensive_mount") or not _controller.state.discard_pile.has(mount_card):
+		return _fail("qilin_damage request=%d candidate=%s choice_hp=%d hp=%d equipment=%s" % [_qilin_request_count, _qilin_candidate_present, _qilin_target_hp_at_choice, _controller.state.get_player(1).hp, _controller.state.get_player(1).equipment])
 	_controller._uninstall_card_runtime(qilin_card.uid)
 	return true
 
@@ -1172,6 +1179,8 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		selected_uids = []
 	elif _scenario in ["qilin_mount", "qilin_damage"] and kind in ["qilin_mount", "qilin_damage"]:
 		_qilin_request_count += 1
+		# 选择创建瞬间的目标体力；qilin_damage必须发生在本次【杀】实际扣减前。
+		_qilin_target_hp_at_choice = _controller.state.get_player(1).hp
 		# 当前麒麟弓候选；目标进攻坐骑必须通过强类型槽位过滤进入请求。
 		var candidate_uids: Array[int] = []
 		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:

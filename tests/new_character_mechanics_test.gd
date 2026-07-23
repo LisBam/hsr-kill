@@ -758,10 +758,12 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 
 
 ## 验证还阳按当前距离回复，以及摄伏按伤害牌名字数获牌并在选择原伤害目标时弃置其装备。
+## 当前断言说明：还阳必须在实际伤害前完成回复，不能等待伤害尾部。
 func _test_huanyang_and_sefu() -> bool:
 	_reset_state(2)
 	_controller.state.get_player(0).character_id = "xveyi"
 	# 还阳实例；直接消费标准damageSource事件。
+	# 当前时机说明：实例已经改为消费实际扣减前的damageBegin4来源事件。
 	var huanyang: SkillDefinition = GameDatabase.create_skill("huanyang")
 	# 摄伏实例；维护本回合首次伤害额度并创建两段选择。
 	var sefu: SkillDefinition = GameDatabase.create_skill("shefu")
@@ -769,16 +771,23 @@ func _test_huanyang_and_sefu() -> bool:
 	sefu.bind(_controller, 0)
 	_controller.skill_instances_by_player = {0:{"huanyang":huanyang, "shefu":sefu}}
 	# 雪衣受伤状态；满足还阳时应从3点回复至4点。
+	# 当前顺序断言：额外从1点体力开始自伤，必须先回复至2点再扣回1点，不能先进入濒死。
 	var xveyi_player: PlayerState = _controller.state.get_player(0)
-	xveyi_player.hp = 3
+	xveyi_player.hp = 1
 	# 还阳正式运行时订阅；通过真实伤害流程验证标准damage时机，而非只直接调用回调函数。
 	huanyang.install()
+	_controller.damage(0, 0, 1, "normal", "sha")
+	if xveyi_player.hp != 1 or _controller.has_pending_card_choice() or str(huanyang.get_metadata().get("trigger", "")) != "damageBegin4":
+		return _fail("huanyang_pre_damage_order hp=%d pending=%s trigger=%s" % [xveyi_player.hp, _controller.has_pending_card_choice(), huanyang.get_metadata().get("trigger", "")])
+	# 对其他距离1目标造成伤害；雪衣从3点先回复至4点，再由目标承受伤害。
+	xveyi_player.hp = 3
 	_controller.damage(0, 1, 1, "normal", "sha")
-	if xveyi_player.hp != 4 or str(huanyang.get_metadata().get("trigger", "")) != "damage":
+	if xveyi_player.hp != 4:
 		return _fail("huanyang_damage_timing hp=%d trigger=%s" % [xveyi_player.hp, huanyang.get_metadata().get("trigger", "")])
 	# 标准伤害来源事件；【杀】的《崩铁杀》名字数为1，目标是距离1的二号角色。
+	# 当前时机说明：兼容变量承载的是damageBegin4伤害前事件。
 	# 兼容测试变量仍沿用原有名称；还阳的正式订阅已经由上方真实damage流程覆盖。
-	var damage_source_event: RuleEvent = RuleEvent.new("damageSource", 0, 1, {"amount":1, "card_id":"sha", "card_user_id":0})
+	var damage_source_event: RuleEvent = RuleEvent.new("damageBegin4", 0, 1, {"amount":1, "card_id":"sha", "card_user_id":0})
 	huanyang.call("_on_owner_damage_source", damage_source_event)
 	if xveyi_player.hp != 4:
 		return _fail("huanyang_recover=%d" % xveyi_player.hp)
@@ -802,9 +811,11 @@ func _test_huanyang_and_sefu() -> bool:
 	if not _controller.state.get_player(1).hand.has(gained_same_length_card) or _controller.state.get_player(1).equipment.has("weapon") or not _controller.state.discard_pile.has(target_equipment):
 		return _fail("sefu_result hand=%d equipment=%s" % [_controller.state.get_player(1).hand.size(), _controller.state.get_player(1).equipment])
 	# 濒死目标被【桃】救回后，damageSource 只在救援流程完成时派发；还阳必须仍能回复雪衣1点体力。
+	# 当前顺序断言：还阳已不等待damageSource，目标进入求桃窗口前雪衣必须已经回复。
 	_reset_state(2)
 	var rescued_xveyi: PlayerState = _controller.state.get_player(0)
 	# 还阳持有者受伤；从3点回复到4点可证明尾部时机没有因目标濒死而丢失。
+	# 当前顺序断言：回复应在目标濒死与救援之前发生。
 	rescued_xveyi.hp = 3
 	# 濒死目标；先降至1点体力，再受到1点伤害以创建标准求桃窗口。
 	var rescued_target: PlayerState = _controller.state.get_player(1)
@@ -815,7 +826,7 @@ func _test_huanyang_and_sefu() -> bool:
 	if rescued_huanyang == null:
 		return _fail("huanyang_dying_skill_missing")
 	_controller.damage(0, 1, 1, "normal", "sha")
-	if not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "dying_response":
+	if rescued_xveyi.hp != 4 or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "dying_response":
 		return _fail("huanyang_dying_prompt=%s" % _controller._pending_card_choice)
 	# 救援顺序从当前回合角色开始；雪衣没有【桃】时先明确放弃，再由濒死目标使用自己的【桃】。
 	if not _submit_pending_choice(0, [], [], false):

@@ -30,6 +30,7 @@ func _on_any_turn_before(_event: RuleEvent) -> void:
 
 
 ## 首次由已使用卡牌造成伤害时锁定牌名字数与本次伤害目标，并创建不可取消的角色选择。
+## 时机说明：技能原文为“造成伤害后”，本回调订阅扣减与濒死处理后的damageSource；此处只在伤害事实成立后锁定额度。
 func _on_owner_damage_source(event: RuleEvent) -> void:
 	if _used_this_turn or int(event.data.get("amount", 0)) <= 0:
 		return

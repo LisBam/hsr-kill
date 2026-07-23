@@ -72,6 +72,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 
 
 ## 被强化【杀】作为来源造成伤害时记录成立；护盾完整吸收仍属于造成伤害。
+## 时机说明：本回调订阅扣减与濒死处理后的damageSource，只记录“已经造成伤害”的事实，不属于规则术语中的前置“造成伤害时”。
 func _on_owner_damage_source(event: RuleEvent) -> void:
 	if _tracked_slash_uid < 0 or str(event.data.get("card_id", "")) != _tracked_slash_card_id:
 		return
