@@ -285,10 +285,14 @@ func _test_three_player_match_bootstrap() -> bool:
 	return true
 
 
-## 验证斗地主每局使用本局随机源重新决定地主玩家，避免身份池总是按原始玩家ID直接分配。
+## 验证斗地主每局使用本局随机源重新决定地主玩家并保留随机后的物理座次，避免身份池总是按原始玩家ID直接分配或被开局旋转复位。
 func _test_randomized_landlord_assignment() -> bool:
 	# 已观察到的地主稳定玩家ID；跨多个固定种子应至少出现两个不同ID。
 	var landlord_player_ids: Array[int] = []
+	# 已观察到的当前物理座次身份顺序；显式种子必须驱动随机源，且地主不能被后续座次旋转固定到一号位。
+	var seat_identity_orders: Array[String] = []
+	# 是否至少观察到一号位不是地主；该条件直接覆盖“随机后又旋转地主到一号位”的回归。
+	var observed_non_landlord_first_seat: bool = false
 	for match_seed: int in range(1, 13):
 		_create_controller()
 		_controller.local_human_player_id = 0
@@ -307,8 +311,19 @@ func _test_randomized_landlord_assignment() -> bool:
 			return _fail("random_landlord_missing_seed=%d" % match_seed)
 		if not landlord_player_ids.has(landlord_player_id):
 			landlord_player_ids.append(landlord_player_id)
+		# 当前物理座次的身份文本；数组顺序即牌桌显示的座次顺序，不使用稳定 player_id 代替。
+		var seat_identities: Array[String] = []
+		for seated_player: PlayerState in _controller.state.players:
+			seat_identities.append(seated_player.identity)
+		var seat_identity_order: String = ",".join(seat_identities)
+		if not seat_identity_orders.has(seat_identity_order):
+			seat_identity_orders.append(seat_identity_order)
+		if not _controller.state.players.is_empty() and _controller.state.players[0].identity != "landlord":
+			observed_non_landlord_first_seat = true
 	if landlord_player_ids.size() < 2:
 		return _fail("random_landlord_not_varied=%s" % str(landlord_player_ids))
+	if seat_identity_orders.size() < 2 or not observed_non_landlord_first_seat:
+		return _fail("random_landlord_seat_order_not_varied=%s first_not_landlord=%s" % [str(seat_identity_orders), str(observed_non_landlord_first_seat)])
 	# 同一控制器连续自动重开；重开可以发生在同一毫秒，自动种子仍必须逐局变化，不能复用同一座位与身份随机序列。
 	_create_controller()
 	_controller.local_human_player_id = 0

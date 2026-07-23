@@ -642,6 +642,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	if resolved_match_seed == 0:
 		_automatic_match_seed_serial += 1
 		resolved_match_seed = Time.get_ticks_msec() + _automatic_match_seed_serial * AUTOMATIC_MATCH_SEED_SERIAL_STEP
+	# 无论种子由调用方显式指定还是自动生成，都必须在本局开始前写入唯一随机源；显式种子供回放与测试复现，自动种子供菜单重开与退出重进获得新牌局。
 	_rng.seed = resolved_match_seed
 	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；过关斩将固定本地玩家为一号位，其他离线对局继续使用原有随机座次逻辑。
 	var lan_local_player_id: int = network_gateway.get_local_lan_player_id() if network_gateway != null and network_gateway.is_lan_host() else -1
@@ -764,7 +765,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		# 补充：当前关卡状态还会锁定本局难度，并通过稳定机缘ID授予玩家对应开局增益。
 		conquest_mode.configure(state, _rng, state.players[0].player_id, state.players[1].player_id, int(state.match_options.get("conquest_difficulty", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
 	_create_and_shuffle_deck()
-	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":seed, "mode":state.match_mode})
+	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":resolved_match_seed, "mode":state.match_mode})
 	state.current_phase = "wheel_duel_selection" if actual_mode == IdentityRules.MODE_WHEEL_DUEL else "character_selection"
 	# 可用武将 ID；服务只持有字符串副本，不接触全局配置的可修改引用。
 	var available_character_ids: Array[String] = []
@@ -8311,10 +8312,14 @@ func _refresh_starting_hand(player_id: int, is_ai: bool) -> bool:
 	return player.hand.size() == redeal_count
 
 
-## 以领袖为数组首位旋转玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
+## 以领袖为数组首位旋转普通身份局玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
 func _reorder_players_from_leader() -> void:
-	# 首任公开身份；身份局为领袖，斗地主为地主（固定一号位时索引通常已为0）。
-	# 补充：斗地主身份已随机分配，旋转只让随机选出的首名地主获得一号位先手，不会改变其余玩家的身份归属。
+	# 斗地主的身份池已经按本局随机源洗牌；保留创建时的物理座次，避免把随机地主旋转回一号位而使画面恒为固定身份顺序。
+	# 首回合仍由 _complete_pre_game_start 按地主身份单独寻找，不依赖玩家数组第一位。
+	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_DOUDIZHU:
+		_refresh_player_display_names_for_current_seats()
+		return
+	# 首任公开身份；普通身份局为领袖，非斗地主模式继续沿用领袖一号位的既有规则。
 	var first_identity: String = identity_rules.get_first_player_identity(str(state.match_mode))
 	# 首任身份在当前数组中的索引；身份分配完成前不调用此函数。
 	var leader_index: int = -1

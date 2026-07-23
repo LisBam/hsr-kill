@@ -18,8 +18,20 @@ const NEGATION_CARD_COST_WEIGHT: float = 0.12
 ## 仅剩最后一张【无懈可击】时为敌方后续关键锦囊保留的额外价值；默认1.5能压低普通牌差锦囊，但不会阻止保护友方免受【乐不思蜀】等强控制。
 const LAST_WUXIE_RESERVE_VALUE: float = 1.5
 
+## 仅剩最后一张【无懈可击】且当前已是关键锦囊时保留的较低额外价值；默认0.5使AI继续顾及后续风险，但不会因过度囤牌而放任两张摸牌或关键资源流失。
+const LAST_WUXIE_KEY_TRICK_RESERVE_VALUE: float = 0.5
+
 ## 非关键锦囊在仅剩最后一张【无懈可击】时的收益倍率；默认0.45进一步区分普通牌差与跳过阶段、致命伤害等关键牌效。
 const NON_KEY_TRICK_NEGATION_MULTIPLIER: float = 0.45
+
+## 敌方拆取或获得目标资源时，单张公开装备或响应者可见手牌达到此价值即视为关键资源；默认5分可保护【桃】、高价值装备等，且不会为低价值冗余牌耗尽最后一张【无懈可击】。
+const KEY_NEGATION_RESOURCE_CARD_VALUE: float = 5.0
+
+## 敌方锦囊可令目标获得至少此数量牌时，最后一张【无懈可击】也应优先阻止其扩大手牌差；默认2张对应【无中生有】的完整收益。
+const KEY_NEGATION_CARD_GAIN_COUNT: int = 2
+
+## 敌方回复锦囊的目标体力不高于此值时视为濒危救治，最后一张【无懈可击】应允许阻止其脱离击杀窗口；默认1点仅覆盖临界生存场景。
+const KEY_NEGATION_CRITICAL_HP_THRESHOLD: int = 1
 
 ## 面对【闪电】时使用【无懈可击】的收益倍率；默认0.10反映闪电命中概率低且可能继续传递，运行时无需动态修改。
 const LIGHTNING_NEGATION_UTILITY_MULTIPLIER: float = 0.10
@@ -624,14 +636,8 @@ func score_negation(authoritative_snapshot: Dictionary, responder_id: int, conte
 	var trick_definition: Dictionary = _get_cached_card_definition(trick_id)
 	# 当前锦囊 AI 配置；目标结果正负可直接表达收益方向。
 	var trick_ai: Dictionary = get_card_ai_profile(trick_definition)
-	# 锦囊对目标的基础结果；正值有利，负值有害。
-	var target_result: float = float(trick_ai.get("target_result", 1.0 if bool(trick_definition.get("ai_beneficial", false)) else -1.0))
 	# 当前锦囊源码；允许状态型锦囊按目标的实时状态反转收益方向，避免无懈策略只读取静态配置。
 	var trick_definition_instance: CardDefinition = GameDatabase.get_card_definition(trick_id)
-	if trick_definition_instance != null:
-		target_result = trick_definition_instance.get_identity_observation_target_result(authoritative_snapshot, int(context.get("source_id", -1)), target_id, target_result)
-	# 响应者对目标的态度；隐藏身份使用同一身份模型而不是直接按真实阵营二分。
-	var attitude: float = get_attitude(authoritative_snapshot, responder_id, target_id)
 	# 当前是否已被奇数张无懈抵消；下一张无懈会翻转该状态。
 	var currently_negated: bool = bool(context.get("negated", false))
 	# 当前锦囊来源；来源为正态度队友时，需要尊重其对自己或响应者的主动锦囊决策。
@@ -640,11 +646,8 @@ func score_negation(authoritative_snapshot: Dictionary, responder_id: int, conte
 	# 队友对响应者本人使用动态结果为负的锦囊时，首轮保留无懈并相信队友的战术意图；反无懈仍可恢复该锦囊生效。
 	if not currently_negated and source_id >= 0 and source_id != responder_id and get_attitude(authoritative_snapshot, responder_id, source_id) > 0.0 and (target_id == source_id or target_id == responder_id):
 		return -1.0
-	# 原效果从响应者视角的收益；正数表示希望它生效，负数表示希望它失效。
-	var effect_utility: float = target_result * attitude
-	# 当前锦囊源码；复合收益锦囊可结合来源与响应者关系修正静态目标结果，但不能改变无懈奇偶规则。
-	if trick_definition_instance != null:
-		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
+	# 原效果从响应者视角的通用收益；所有普通、群体与延时锦囊都读取各自 AI 配置和动态钩子，正数表示希望它生效，负数表示希望它失效。
+	var effect_utility: float = _get_trick_effect_utility_for_negation(authoritative_snapshot, responder_id, target_id, context, trick_definition, trick_ai, trick_definition_instance)
 	# 下一张无懈造成的正向收益；首轮抵消负收益，反无懈则恢复正收益，并按统一态度尺度归一化。
 	var negation_utility: float = (effect_utility if currently_negated else -effect_utility) / ATTITUDE_SCALE
 	if negation_utility <= 0.0:
@@ -662,10 +665,28 @@ func score_negation(authoritative_snapshot: Dictionary, responder_id: int, conte
 	# 最后一张无懈的关键牌储备；反无懈不额外储备，否则会错误放弃恢复己方已经被抵消的关键收益。
 	var reserve_value: float = 0.0
 	if not currently_negated and known_wuxie_count == 1:
-		if not _is_key_trick_for_negation(authoritative_snapshot, target_id, trick_id, trick_ai):
+		# 当前锦囊是否属于最后一张无懈也应优先处理的关键牌效；该结果同时决定收益降权与储备额度。
+		var is_key_trick: bool = _is_key_trick_for_negation(authoritative_snapshot, responder_id, target_id, trick_id, trick_ai)
+		if not is_key_trick:
 			negation_utility *= NON_KEY_TRICK_NEGATION_MULTIPLIER
-		reserve_value = LAST_WUXIE_RESERVE_VALUE
+		# 关键牌仍保留少量应对后续的空间，普通牌效则维持完整储备，防止AI为了低收益牌差耗尽唯一无懈。
+		reserve_value = LAST_WUXIE_KEY_TRICK_RESERVE_VALUE if is_key_trick else LAST_WUXIE_RESERVE_VALUE
 	return negation_utility - wuxie_cost - reserve_value
+
+
+## 汇总单个锦囊对无懈响应的真实收益；统一读取静态目标结果、运行时状态修正和卡牌专属钩子，新增锦囊无需在无懈逻辑中硬编码牌名。
+func _get_trick_effect_utility_for_negation(authoritative_snapshot: Dictionary, responder_id: int, target_id: int, context: Dictionary, trick_definition: Dictionary, trick_ai: Dictionary, trick_definition_instance: CardDefinition) -> float:
+	# 锦囊对目标的基础结果；正值有利、负值有害，缺失配置时沿用卡牌的 ai_beneficial 声明。
+	var target_result: float = float(trick_ai.get("target_result", 1.0 if bool(trick_definition.get("ai_beneficial", false)) else -1.0))
+	if trick_definition_instance != null:
+		target_result = trick_definition_instance.get_identity_observation_target_result(authoritative_snapshot, int(context.get("source_id", -1)), target_id, target_result)
+	# 响应者对目标的态度；隐藏身份使用同一身份模型而不是直接按真实阵营二分。
+	var attitude: float = get_attitude(authoritative_snapshot, responder_id, target_id)
+	# 未经卡牌专属修正的目标收益；作为【借刀杀人】等复合锦囊钩子的统一输入尺度。
+	var effect_utility: float = target_result * attitude
+	if trick_definition_instance != null:
+		effect_utility = trick_definition_instance.modify_ai_negation_effect_utility(authoritative_snapshot, responder_id, context, effect_utility, self)
+	return effect_utility
 
 
 ## 判断当前无懈可击是否值得响应；所有调用方统一读取净收益，避免同步与异步响应采用不同策略。
@@ -684,19 +705,63 @@ func _has_sufficient_trick_response(authoritative_snapshot: Dictionary, responde
 	return get_known_response_count(authoritative_snapshot, responder_id, response_pattern) >= required_response_count
 
 
-## 判断原锦囊是否值得为其动用最后一张【无懈可击】；跳过阶段与足以令目标濒死的伤害属于关键牌效。
-func _is_key_trick_for_negation(authoritative_snapshot: Dictionary, target_id: int, trick_id: String, trick_ai: Dictionary) -> bool:
+## 判断原锦囊是否值得为其动用最后一张【无懈可击】；阶段跳过、致命伤害、关键资源拆取与显著牌差均属于关键牌效。
+func _is_key_trick_for_negation(authoritative_snapshot: Dictionary, responder_id: int, target_id: int, trick_id: String, trick_ai: Dictionary) -> bool:
 	if trick_id == "shandian":
 		return false
 	if bool(trick_ai.get("skip_play", false)) or bool(trick_ai.get("skip_draw", false)):
 		return true
-	if not bool(trick_ai.get("damage", false)):
-		return false
 	# 当前目标生存值；护盾与体力共同抵消即将到来的常规1点锦囊伤害。
 	var target: Dictionary = get_player(authoritative_snapshot, target_id)
-	# 锦囊预期伤害；缺失显式数值时按常规1点判断是否会立即进入濒死。
-	var expected_damage: int = maxi(int(trick_ai.get("damage_amount", 1)), 1)
-	return not target.is_empty() and int(target.get("hp", 0)) + int(target.get("shield", 0)) <= expected_damage
+	if bool(trick_ai.get("damage", false)):
+		# 锦囊预期伤害；缺失显式数值时按常规1点判断是否会立即进入濒死。
+		var expected_damage: int = maxi(int(trick_ai.get("damage_amount", 1)), 1)
+		if not target.is_empty() and int(target.get("hp", 0)) + int(target.get("shield", 0)) <= expected_damage:
+			return true
+	# 【过河拆桥】、【顺手牵羊】等通过卡牌定义的 effect_id 声明拆取或获得目标资源；兼容旧配置把该字段置于 AI 数据内的写法。
+	# 只保护公开装备和响应者自己可见的高价值牌，不窥探其他角色隐藏手牌。
+	var effect_id: String = str(_get_cached_card_definition(trick_id).get("effect_id", trick_ai.get("effect_id", "")))
+	if effect_id == "discard_target" or effect_id == "steal_target" or bool(trick_ai.get("lose_card", false)):
+		return _has_negation_worthy_target_resource(authoritative_snapshot, responder_id, target_id)
+	# 目标获得多张牌会明显扩大敌我牌差；读取通用 draw 字段，覆盖所有具有相同收益结构的锦囊。
+	if int(trick_ai.get("draw", 0)) >= KEY_NEGATION_CARD_GAIN_COUNT:
+		return true
+	# 敌方在濒危时的回复会直接关闭当前击杀窗口；普通回复不因最后一张无懈而被过度重视。
+	return bool(trick_ai.get("recover", false)) and not target.is_empty() and int(target.get("hp", 0)) <= KEY_NEGATION_CRITICAL_HP_THRESHOLD
+
+
+## 判断拆取目标是否拥有值得用最后一张【无懈可击】保护的资源；公共装备始终可见，手牌与木牛“粮”仅在目标为响应者本人时读取。
+func _has_negation_worthy_target_resource(authoritative_snapshot: Dictionary, responder_id: int, target_id: int) -> bool:
+	# 被拆取目标的公开状态；不存在时没有可保护资源。
+	var target: Dictionary = get_player(authoritative_snapshot, target_id)
+	if target.is_empty():
+		return false
+	# 公开装备集合；装备区信息对所有 AI 可见，逐张评估即可避免因低价值装备浪费最后一张无懈。
+	var equipment: Dictionary = target.get("equipment", {}) as Dictionary
+	for equipment_card_variant: Variant in equipment.values():
+		# 当前公开装备实体；缺失定义时以中性值估算，保持评估器对扩展卡包的兼容性。
+		var equipment_card: Dictionary = equipment_card_variant as Dictionary
+		if get_card_value_by_id(str(equipment_card.get("definition_id", "")), authoritative_snapshot, target_id) >= KEY_NEGATION_RESOURCE_CARD_VALUE:
+			return true
+	# 非响应者的手牌与木牛“粮”不应被 AI 读取；只有自己可见资源才能作为自保依据。
+	if target_id != responder_id:
+		return false
+	# 响应者自己的手牌；跳过即将打出的无懈本身，避免以“保护这张无懈”作为消耗它的循环理由。
+	var own_hand: Array = target.get("hand", []) as Array
+	for hand_card_variant: Variant in own_hand:
+		# 当前可见手牌实体；牌名为空的异常实体不满足高价值判定。
+		var hand_card: Dictionary = hand_card_variant as Dictionary
+		var hand_card_id: String = str(hand_card.get("definition_id", ""))
+		if hand_card_id != "wuxie" and get_card_value_by_id(hand_card_id, authoritative_snapshot, responder_id) >= KEY_NEGATION_RESOURCE_CARD_VALUE:
+			return true
+	# 响应者自己的木牛“粮”；其与手牌同属本人可见私有资源，纳入同一保护阈值。
+	var wooden_ox_storage: Array = target.get("wooden_ox_storage", []) as Array
+	for storage_card_variant: Variant in wooden_ox_storage:
+		# 当前木牛“粮”实体；仅使用稳定卡牌定义ID评估保留价值。
+		var storage_card: Dictionary = storage_card_variant as Dictionary
+		if get_card_value_by_id(str(storage_card.get("definition_id", "")), authoritative_snapshot, responder_id) >= KEY_NEGATION_RESOURCE_CARD_VALUE:
+			return true
+	return false
 
 
 ## 返回指定卡牌的保留价值；支持无名杀数组价值随同名牌数量递减的常用写法。
