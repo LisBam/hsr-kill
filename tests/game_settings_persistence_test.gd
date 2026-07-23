@@ -17,6 +17,24 @@ const TEST_AVATAR_CHARACTER_ID: String = "xier"
 ## 测试保存的下一局人数；值位于2至10的合法范围，验证游戏设置与联机资料共同写入一个文件。
 const TEST_NEXT_MATCH_PLAYER_COUNT: int = 6
 
+## 身份模式测试人数；6人验证普通2至10范围的独立持久化。
+const TEST_IDENTITY_PLAYER_COUNT: int = 6
+
+## 斗地主模式测试人数；5人验证该模式只接受3或5的独立持久化。
+const TEST_DOUDIZHU_PLAYER_COUNT: int = 5
+
+## 2v2模式测试人数；4人验证固定人数模式同样拥有独立存档槽。
+const TEST_TEAM2V2_PLAYER_COUNT: int = 4
+
+## 车轮战模式测试人数；2人验证固定双人模式的独立存档槽。
+const TEST_WHEEL_DUEL_PLAYER_COUNT: int = 2
+
+## 机缘大乱斗测试人数；6人与身份模式相同，用于覆盖模式切换但当前显示人数不变时仍需写盘的边界。
+const TEST_OPPORTUNITY_BRAWL_PLAYER_COUNT: int = 6
+
+## 过关斩将测试人数；2人验证固定玩家对AI模式的独立存档槽。
+const TEST_CONQUEST_PLAYER_COUNT: int = 2
+
 
 ## 创建独立设置节点、写入所有需要持久化的选项、重新实例化读取并校验字段。
 func _ready() -> void:
@@ -30,7 +48,18 @@ func _ready() -> void:
 	saving_settings.call("set_game_speed_interval_seconds", 0.8)
 	saving_settings.call("set_ui_style", UIStyleRegistry.STYLE_DECADE_WOOD)
 	saving_settings.call("set_auto_identity_marking_enabled", false)
-	saving_settings.call("set_next_match_player_count", TEST_NEXT_MATCH_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_IDENTITY)
+	saving_settings.call("set_next_match_player_count", TEST_IDENTITY_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_DOUDIZHU)
+	saving_settings.call("set_next_match_player_count", TEST_DOUDIZHU_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_TEAM2V2)
+	saving_settings.call("set_next_match_player_count", TEST_TEAM2V2_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_WHEEL_DUEL)
+	saving_settings.call("set_next_match_player_count", TEST_WHEEL_DUEL_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_CONQUEST)
+	saving_settings.call("set_next_match_player_count", TEST_CONQUEST_PLAYER_COUNT)
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL)
+	saving_settings.call("set_next_match_player_count", TEST_OPPORTUNITY_BRAWL_PLAYER_COUNT)
 	saving_settings.call("set_custom_character_assignment_enabled", true)
 	saving_settings.call("set_customize_ai_characters_enabled", true)
 	saving_settings.call("set_mulligan_limit", 10)
@@ -46,14 +75,17 @@ func _ready() -> void:
 	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
 		_fail("save_should_be_deferred")
 		return
-	# 合并保存刷新；设置层公开入口确保测试不依赖真实时间等待，并验证最终一次写盘包含全部字段。
+	# 首次合并保存刷新；先把机缘大乱斗模式写入磁盘，随后专门验证人数相同的模式切换仍会再次写盘。
+	saving_settings.call("flush_pending_settings")
+	saving_settings.call("set_next_match_mode", GameSettings.MATCH_MODE_IDENTITY)
+	# 第二次刷新；身份与机缘大乱斗同为6人，若模式切换未排队写盘则磁盘仍会错误保留机缘模式。
 	saving_settings.call("flush_pending_settings")
 	# 已写入的配置读取器；直接核对磁盘字段，确保测试没有只验证同一内存节点。
 	var saved_file: ConfigFile = ConfigFile.new()
 	if saved_file.load(TEST_SETTINGS_FILE_PATH) != OK:
 		_fail("save_file_missing")
 		return
-	if int(saved_file.get_value(GameSettings.SETTINGS_METADATA_SECTION, "schema_version", 0)) != GameSettings.SETTINGS_SCHEMA_VERSION or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", 0)) != TEST_NEXT_MATCH_PLAYER_COUNT or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", false)) or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", false)) or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", 0)) != 10 or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", false)) or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", 0)) != 20 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_character_replacement_count", 0)) != 10 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", 0)) != 20 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", 0)) != 13 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", 0)) != 2 or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", false)) or str(saved_file.get_value(GameSettings.ONLINE_SETTINGS_SECTION, "player_name", "")) != "存档测试玩家" or str(saved_file.get_value(GameSettings.ONLINE_SETTINGS_SECTION, "avatar_character_id", "")) != TEST_AVATAR_CHARACTER_ID:
+	if int(saved_file.get_value(GameSettings.SETTINGS_METADATA_SECTION, "schema_version", 0)) != GameSettings.SETTINGS_SCHEMA_VERSION or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", 0)) != TEST_NEXT_MATCH_PLAYER_COUNT or str(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_mode", "")) != GameSettings.MATCH_MODE_IDENTITY or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_identity", 0)) != TEST_IDENTITY_PLAYER_COUNT or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_doudizhu", 0)) != TEST_DOUDIZHU_PLAYER_COUNT or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_team2v2", 0)) != TEST_TEAM2V2_PLAYER_COUNT or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", 0)) != TEST_WHEEL_DUEL_PLAYER_COUNT or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_opportunity_brawl", 0)) != TEST_OPPORTUNITY_BRAWL_PLAYER_COUNT or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_conquest", 0)) != TEST_CONQUEST_PLAYER_COUNT or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", false)) or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", false)) or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "mulligan_limit", 0)) != 10 or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "ai_uses_mulligan_enabled", false)) or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "character_replacement_count", 0)) != 20 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_character_replacement_count", 0)) != 10 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", 0)) != 20 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", 0)) != 13 or int(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", 0)) != 2 or not bool(saved_file.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", false)) or str(saved_file.get_value(GameSettings.ONLINE_SETTINGS_SECTION, "player_name", "")) != "存档测试玩家" or str(saved_file.get_value(GameSettings.ONLINE_SETTINGS_SECTION, "avatar_character_id", "")) != TEST_AVATAR_CHARACTER_ID:
 		_fail("saved_fields")
 		return
 	saving_settings.queue_free()
@@ -63,7 +95,7 @@ func _ready() -> void:
 	restored_settings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
 	add_child(restored_settings)
 	await get_tree().process_frame
-	if int(restored_settings.get("card_name_mode")) != int(GameSettings.NameMode.ORIGINAL) or not is_equal_approx(float(restored_settings.get("ai_response_delay_seconds")), 0.65) or not is_equal_approx(float(restored_settings.get("game_speed_interval_seconds")), 0.8) or str(restored_settings.get("ui_style_id")) != UIStyleRegistry.STYLE_DECADE_WOOD or bool(restored_settings.get("auto_identity_marking_enabled")) or int(restored_settings.get("next_match_player_count")) != TEST_NEXT_MATCH_PLAYER_COUNT or not bool(restored_settings.get("custom_character_assignment_enabled")) or not bool(restored_settings.get("customize_ai_characters_enabled")) or int(restored_settings.get("mulligan_limit")) != 10 or not bool(restored_settings.get("ai_uses_mulligan_enabled")) or int(restored_settings.get("character_replacement_count")) != 20 or int(restored_settings.get("conquest_character_replacement_count")) != 10 or int(restored_settings.get("character_candidate_count")) != 20 or int(restored_settings.get("conquest_character_candidate_count")) != 13 or int(restored_settings.get("conquest_difficulty")) != 2 or not bool(restored_settings.get("control_all_characters_enabled")) or str(restored_settings.get("online_player_name")) != "存档测试玩家" or str(restored_settings.get("online_avatar_character_id")) != TEST_AVATAR_CHARACTER_ID:
+	if int(restored_settings.get("card_name_mode")) != int(GameSettings.NameMode.ORIGINAL) or not is_equal_approx(float(restored_settings.get("ai_response_delay_seconds")), 0.65) or not is_equal_approx(float(restored_settings.get("game_speed_interval_seconds")), 0.8) or str(restored_settings.get("ui_style_id")) != UIStyleRegistry.STYLE_DECADE_WOOD or bool(restored_settings.get("auto_identity_marking_enabled")) or int(restored_settings.get("next_match_player_count")) != TEST_NEXT_MATCH_PLAYER_COUNT or str(restored_settings.get("next_match_mode")) != GameSettings.MATCH_MODE_IDENTITY or int(restored_settings.get("next_match_player_count_identity")) != TEST_IDENTITY_PLAYER_COUNT or int(restored_settings.get("next_match_player_count_doudizhu")) != TEST_DOUDIZHU_PLAYER_COUNT or int(restored_settings.get("next_match_player_count_team2v2")) != TEST_TEAM2V2_PLAYER_COUNT or int(restored_settings.get("next_match_player_count_wheel_duel")) != TEST_WHEEL_DUEL_PLAYER_COUNT or int(restored_settings.get("next_match_player_count_opportunity_brawl")) != TEST_OPPORTUNITY_BRAWL_PLAYER_COUNT or int(restored_settings.get("next_match_player_count_conquest")) != TEST_CONQUEST_PLAYER_COUNT or not bool(restored_settings.get("custom_character_assignment_enabled")) or not bool(restored_settings.get("customize_ai_characters_enabled")) or int(restored_settings.get("mulligan_limit")) != 10 or not bool(restored_settings.get("ai_uses_mulligan_enabled")) or int(restored_settings.get("character_replacement_count")) != 20 or int(restored_settings.get("conquest_character_replacement_count")) != 10 or int(restored_settings.get("character_candidate_count")) != 20 or int(restored_settings.get("conquest_character_candidate_count")) != 13 or int(restored_settings.get("conquest_difficulty")) != 2 or not bool(restored_settings.get("control_all_characters_enabled")) or str(restored_settings.get("online_player_name")) != "存档测试玩家" or str(restored_settings.get("online_avatar_character_id")) != TEST_AVATAR_CHARACTER_ID:
 		_fail("restored_fields")
 		return
 	restored_settings.queue_free()

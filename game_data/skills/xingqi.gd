@@ -9,7 +9,8 @@ const MAX_VIEW_COUNT: int = 5
 const AI_BASE_DRAW_COUNT: int = 2
 
 ## AI确认发动星祈的固定收益；100分保证任意可选锦囊都不会因通用选牌成本而被取消，仅影响AI决策。
-const AI_ALWAYS_ACTIVATE_SCORE: float = 100.0
+## 补充：此值提高到10000分，确保后续通用评分或其他技能收益增长时，仍不会压过星祈的无脑确认策略。
+const AI_ALWAYS_ACTIVATE_SCORE: float = 10000.0
 
 
 ## 写入触发技能静态信息；技能描述严格保持主公提供的原文。

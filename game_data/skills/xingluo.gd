@@ -40,7 +40,22 @@ func _on_play_phase_begin(_event: RuleEvent) -> void:
 ## 仅在自己的出牌阶段、仍有额度且自己至少有一张普通手牌时开放技能。
 func can_activate(_context: Dictionary = {}) -> bool:
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	return host != null and not _used_current_play_phase and owner != null and owner.alive and not owner.out_of_game and not owner.hand.is_empty() and host.state.current_player_id == owner_player_id and host.state.current_phase == "play"
+	if not (host != null and not _used_current_play_phase and owner != null and owner.alive and not owner.out_of_game and not owner.hand.is_empty() and host.state.current_player_id == owner_player_id and host.state.current_phase == "play"):
+		return false
+	# 规则补充：星落必须至少指定一名其他角色；没有可重铸手牌的其他角色时不展示主动技能入口。
+	return not _get_available_other_target_ids().is_empty()
+
+
+## 返回当前可作为星落其他目标的稳定玩家ID；目标必须在场、存活且至少持有一张手牌。
+func _get_available_other_target_ids() -> Array[int]:
+	# 可用其他目标结果；只保存稳定玩家ID，供发动校验、界面请求与AI动作枚举共享。
+	var target_ids: Array[int] = []
+	if host == null or host.get("state") == null:
+		return target_ids
+	for player: PlayerState in host.state.players:
+		if player.player_id != owner_player_id and player.alive and not player.out_of_game and not player.hand.is_empty():
+			target_ids.append(player.player_id)
+	return target_ids
 
 
 ## 发动星落；先选择0至2名有手牌的其他角色，再进入固定顺序的逐人重铸。
@@ -50,11 +65,12 @@ func activate(context: Dictionary = {}) -> String:
 		direct_targets.append(int(target_variant))
 	if context.has("target_ids"):
 		return "" if _begin_recast_sequence(direct_targets) else "【星落】目标已经失效。"
-	var target_ids: Array[int] = []
-	for player: PlayerState in host.state.players:
-		if player.player_id != owner_player_id and player.alive and not player.out_of_game and not player.hand.is_empty():
-			target_ids.append(player.player_id)
-	request_target_selection("【星落】请选择至多两名其他角色", target_ids, 0, mini(MAX_OTHER_TARGETS, target_ids.size()), true, {"kind":"xingluo_targets"})
+	# 当前可选其他目标；为空时不得创建最小选择数为零的空目标请求。
+	var target_ids: Array[int] = _get_available_other_target_ids()
+	if target_ids.is_empty():
+		return "【星落】至少需要一名有手牌的其他角色。"
+	# 规则补充：原注释中的“0至2”已由技能规则收紧为“1至2”，自身与所选其他角色都会各重铸一张手牌。
+	request_target_selection("【星落】请选择一至两名其他角色", target_ids, 1, mini(MAX_OTHER_TARGETS, target_ids.size()), true, {"kind":"xingluo_targets"})
 	return ""
 
 
@@ -76,7 +92,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 
 ## 标记本阶段额度并从技能持有者开始逐名请求一张手牌。
 func _begin_recast_sequence(other_target_ids: Array[int]) -> bool:
-	if _used_current_play_phase or other_target_ids.size() > MAX_OTHER_TARGETS:
+	if _used_current_play_phase or other_target_ids.is_empty() or other_target_ids.size() > MAX_OTHER_TARGETS:
 		return false
 	var ordered_player_ids: Array[int] = [owner_player_id]
 	for target_id: int in other_target_ids:
@@ -200,11 +216,8 @@ func _int_values(values: Array) -> Array[int]:
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
 		return
-	var target_ids: Array[int] = []
-	for player: PlayerState in host.state.players:
-		if player.player_id != owner_player_id and player.alive and not player.out_of_game and not player.hand.is_empty():
-			target_ids.append(player.player_id)
-	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[], "payload":{"skill_id":get_id(), "target_ids":[]}})
+	# 当前可枚举的其他目标；can_activate 已保证至少存在一名，故AI只生成单选和双选合法动作。
+	var target_ids: Array[int] = _get_available_other_target_ids()
 	for first_index: int in range(target_ids.size()):
 		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_ids[first_index]], "payload":{"skill_id":get_id(), "target_ids":[target_ids[first_index]]}})
 		for second_index: int in range(first_index + 1, target_ids.size()):

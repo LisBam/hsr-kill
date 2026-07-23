@@ -8,6 +8,12 @@ const DAMAGE_BONUS_AMOUNT: int = 1
 ## 追歼文本在武将牌左上角组合条目中的排序值；较小值使短期受击提示优先于回合统计文本。
 const CORNER_TEXT_ORDER: int = 50
 
+## 追歼公开标记ID前缀；完整ID拼接发动者玩家ID，使多名佩拉的持续效果可独立存在与清除。
+const MARK_ID_PREFIX: String = "zhuijian:"
+
+## 追歼公开标记显示的单字图标；标记组件只显示首个字符，固定“追”便于所有观察者识别集火目标。
+const MARK_ICON: String = "追"
+
 ## 当前被追歼标记的目标玩家ID；默认-1表示没有持续效果。
 var _marked_target_id: int = -1
 
@@ -138,11 +144,17 @@ func _apply_mark(target_id: int) -> void:
 	_clear_mark()
 	_marked_target_id = target_id
 	_reserved_damage_event_id = -1
+	# 对局公开标记数据；AI与界面只读取此可序列化快照，不访问本技能实例的私有目标字段。
+	var mark_data: Dictionary = {"icon":MARK_ICON, "name":"追歼", "description":"下次受到的属性伤害+1，直到追歼发动者下个回合开始。", "count":1, "source_player_id":owner_player_id, "order":CORNER_TEXT_ORDER}
+	if host.has_method("set_player_mark"):
+		host.call("set_player_mark", target_id, _get_mark_id(), mark_data)
 	host.call("set_character_corner_text_entry", target_id, _get_corner_entry_id(), "追歼", CORNER_TEXT_ORDER)
 
 
 ## 清除本实例的目标、伤害预留与公开文本；重复调用保持幂等。
 func _clear_mark() -> void:
+	if host != null and _marked_target_id >= 0 and host.has_method("remove_player_mark"):
+		host.call("remove_player_mark", _marked_target_id, _get_mark_id())
 	if host != null and _marked_target_id >= 0 and host.has_method("remove_character_corner_text_entry"):
 		host.call("remove_character_corner_text_entry", _marked_target_id, _get_corner_entry_id())
 	_marked_target_id = -1
@@ -152,6 +164,11 @@ func _clear_mark() -> void:
 ## 返回本技能实例的稳定左上角条目ID；玩家ID区分多名佩拉同时施加的追歼。
 func _get_corner_entry_id() -> String:
 	return "zhuijian:%d" % owner_player_id
+
+
+## 返回本技能实例的稳定公开标记ID；与角标ID共用来源后缀，避免多人佩拉的标记互相覆盖。
+func _get_mark_id() -> String:
+	return "%s%d" % [MARK_ID_PREFIX, owner_player_id]
 
 
 ## 评估追歼的费用与目标；优先低价值弃牌和更可能承受属性伤害的敌方或横置角色。

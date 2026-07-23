@@ -87,6 +87,12 @@ const CHAINED_SELF_LETHAL_PENALTY: float = 12.0
 ## 【白银狮子】的稳定卡牌 ID；装备取得、换装与弃置估值共用该常量，避免在多个决策分支重复书写字符串。
 const BAIYIN_LION_CARD_ID: String = "baiyin"
 
+## 【追歼】公开标记的稳定ID前缀；实际完整ID以来源玩家ID拼接，支持多名佩拉同时标记同一目标。
+const ZHUIJIAN_MARK_ID_PREFIX: String = "zhuijian:"
+
+## 队友追歼目标承受属性伤害时的额外目标评分；固定4分使火焰、雷电攻击优先集火，普通伤害和敌方来源标记不受影响。
+const ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS: float = 4.0
+
 ## 当前评估器使用的身份关系模型；由协调器共享，保证所有 AI 观察到一致的身份暴露度。
 var identity_model: IdentityAIModel
 
@@ -325,7 +331,33 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			if chained_id == target_id or not bool(chained_player.get("alive", false)) or not bool(chained_player.get("chained", false)):
 				continue
 			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, definition, ai_profile, target_result, expected_damage_amount)
+	# 追歼协同；己方佩拉公开标记的目标会在属性伤害评分中获得固定集火优先级，仍保留前面的护甲、响应与连环风险校验。
+	if bool(ai_profile.get("damage", false)) and bool(ai_profile.get("nature_damage", false)):
+		result += _score_teammate_zhuijian_priority(authoritative_snapshot, actor_id, target)
 	return result
+
+
+## 计算友方追歼公开标记带来的属性伤害集火收益；每个有效友方来源对应其实际可触发的一次+1伤害。
+func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor_id: int, target: Dictionary) -> float:
+	# 目标公开标记集合；仅使用网络快照已公开的数据，不读取任何技能实例私有字段。
+	var public_marks: Dictionary = target.get("public_marks", {}) as Dictionary
+	# 叠加后的集火收益；多名友方佩拉标记同一目标时按来源逐项累加。
+	var priority_bonus: float = 0.0
+	for mark_id_variant: Variant in public_marks.keys():
+		# 当前公开标记ID；只有追歼来源标记会参与属性伤害集火。
+		var mark_id: String = str(mark_id_variant)
+		if not mark_id.begins_with(ZHUIJIAN_MARK_ID_PREFIX):
+			continue
+		# 当前公开标记数据；数量为零、异常来源或已失效数据都不提供评分。
+		var mark_data: Dictionary = public_marks.get(mark_id_variant, {}) as Dictionary
+		if int(mark_data.get("count", 0)) <= 0:
+			continue
+		# 标记施加者ID；仅当行动者将其视为友方时才形成协同集火意图。
+		var source_player_id: int = int(mark_data.get("source_player_id", -1))
+		if source_player_id < 0 or get_attitude(authoritative_snapshot, actor_id, source_player_id) <= 0.0:
+			continue
+		priority_bonus += ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS
+	return priority_bonus
 
 
 ## 依次应用目标当前固有、模式、临时与局内获得技能的来牌估值钩子；相同技能ID只执行一次。

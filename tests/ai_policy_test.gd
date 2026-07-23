@@ -53,6 +53,8 @@ func _ready() -> void:
 		return
 	if not _test_xingqi_always_activates():
 		return
+	if not _test_xingluo_requires_other_target():
+		return
 	if not _test_sushang_guinaifen_skill_ai():
 		return
 	if not _test_renwang_shield_black_slash():
@@ -78,6 +80,8 @@ func _ready() -> void:
 	if not _test_active_skill_payload():
 		return
 	if not _test_peila_lingke_skill_ai():
+		return
+	if not _test_zhuijian_teammate_attribute_priority():
 		return
 	if not _test_low_value_discard():
 		return
@@ -591,6 +595,27 @@ func _test_xingqi_always_activates() -> bool:
 	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
 	if not bool(chosen_payload.get("confirmed", false)) or chosen_payload.get("selected_card_uids", []) != [570]:
 		return _fail("xingqi_always_activate=%s" % chosen)
+	# 星祈技能实例；直接核对固定确认分，防止通用评分增长后又不足以压过取消动作。
+	var xingqi: SkillDefinition = GameDatabase.create_skill("xingqi")
+	xingqi.bind(null, 0)
+	# 独立评估器；星祈首步只读取候选牌价值与固定确认分，不需要运行时对局宿主。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 唯一锦囊确认动作的技能评分；必须保持10000分级别的无脑发动优先级。
+	var confirmation_score: float = xingqi.score_ai_choice(snapshot, choice_request, confirm_action, evaluator)
+	if confirmation_score < 10000.0:
+		return _fail("xingqi_confirmation_score=%.3f" % confirmation_score)
+	return true
+
+
+## 验证【星落】必须至少指定一名其他角色；直接提交空目标不能绕过技能的目标下限。
+func _test_xingluo_requires_other_target() -> bool:
+	# 静态星落技能；空宿主仍可在目标前置校验处拒绝空数组，不会进入重铸流程。
+	var xingluo: SkillDefinition = GameDatabase.create_skill("xingluo")
+	xingluo.bind(null, 0)
+	# 直接空目标发动结果；非空错误信息表示技能没有把“仅重铸自己”作为合法动作。
+	var activation_error: String = xingluo.activate({"target_ids":[]})
+	if activation_error.is_empty():
+		return _fail("xingluo_empty_target_accepted")
 	return true
 
 
@@ -1240,6 +1265,37 @@ func _test_peila_lingke_skill_ai() -> bool:
 	var blocked_ordinary_score: float = evaluator.score_action(lethal_snapshot, lethal_slash_action, 0)
 	if not is_equal_approx(blocked_qiusheng_score, blocked_ordinary_score):
 		return _fail("qiusheng_survival_card_block skill=%.3f ordinary=%.3f" % [blocked_qiusheng_score, blocked_ordinary_score])
+	return true
+
+
+## 验证己方追歼标记会使所有队友的属性伤害优先集火该目标，敌方来源标记不改变本方目标评分。
+func _test_zhuijian_teammate_attribute_priority() -> bool:
+	# 全身份公开快照；0号领袖施加追歼，2号忠臣使用火杀攻击两名等价反贼目标。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 快照玩家数组；追加第二名反贼后形成两个基础状态完全相同的攻击目标。
+	var players: Array = snapshot.get("players", []) as Array
+	# 行动者快照；补入火杀实体，保证评分读取的实际实体与动作定义一致。
+	var actor: Dictionary = players[2] as Dictionary
+	actor["hand"] = [_card(420, "sha_fire", 2)]
+	actor["hand_count"] = 1
+	# 被友方追歼标记的反贼目标；其公开标记来源为同阵营领袖0。
+	var marked_target: Dictionary = players[1] as Dictionary
+	marked_target["hp"] = 3
+	marked_target["public_marks"] = {"zhuijian:0":{"count":1, "source_player_id":0}}
+	# 未受友方追歼的等价反贼目标；保留敌方来源标记，用于断言不会错误形成协同收益。
+	var comparison_target: Dictionary = {"player_id":3, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard", "public_marks":{"zhuijian:1":{"count":1, "source_player_id":1}}}
+	players.append(comparison_target)
+	# 指向友方标记目标的火杀动作；属性伤害应得到固定集火优先级。
+	var marked_action: Dictionary = {"action_type":"use_card", "actor_id":2, "card_uid":420, "card_definition_id":"sha_fire", "target_ids":[1], "payload":{}}
+	# 指向等价目标的火杀动作；敌方来源的同名标记不应提供加分。
+	var comparison_action: Dictionary = {"action_type":"use_card", "actor_id":2, "card_uid":420, "card_definition_id":"sha_fire", "target_ids":[3], "payload":{}}
+	# 独立评估器；避免共享测试身份暴露状态影响队友识别。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 两个动作的最终评分；友方追歼目标必须显著高于未受友方标记的等价目标。
+	var marked_score: float = evaluator.score_action(snapshot, marked_action, 2)
+	var comparison_score: float = evaluator.score_action(snapshot, comparison_action, 2)
+	if marked_score < comparison_score + NonameAIEvaluator.ZHUIJIAN_TEAMMATE_ATTRIBUTE_DAMAGE_PRIORITY_BONUS - 0.01:
+		return _fail("zhuijian_teammate_attribute_priority marked=%.3f comparison=%.3f" % [marked_score, comparison_score])
 	return true
 
 
