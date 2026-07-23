@@ -146,6 +146,7 @@ func refresh_ui_style() -> void:
 
 
 ## 从数据库全部现有武将重建形象候选；显示顺序按中文名称稳定排序，新增武将无需修改本组件。
+## 补充：当前先按主公指定的势力顺序分组，再在同一势力内按中文名称稳定排序。
 func _rebuild_avatar_options() -> void:
 	_clear_avatar_options()
 	# 当前已登记武将 ID；复制后按显示名排序，避免直接依赖数据库字典遍历顺序。
@@ -231,11 +232,18 @@ func _resolve_avatar_slot_position(character_index: int, scaled_card_size: Vecto
 
 
 ## 武将 ID 排序比较；按中文显示名升序，名称相同再按稳定 ID，保证联机形象列表顺序可复现。
+## 补充：势力分组顺序与“所有武将牌”图鉴共用 CardGallerySort，避免两个入口排列不一致。
 func _sort_character_ids_by_name(left_character_id: String, right_character_id: String) -> bool:
 	# 左侧武将显示名；用于玩家可见排序。
 	var left_name: String = GameDatabase.resolve_character_name(left_character_id)
 	# 右侧武将显示名；用于玩家可见排序。
 	var right_name: String = GameDatabase.resolve_character_name(right_character_id)
+	# 共享势力排序结果；优先处理所有非相等条目。
+	var shared_result: bool = CardGallerySort.sort_character_ids(left_character_id, right_character_id)
+	# 反向共享势力排序结果；与正向结果共同识别完全相等条目。
+	var reverse_shared_result: bool = CardGallerySort.sort_character_ids(right_character_id, left_character_id)
+	if shared_result or reverse_shared_result:
+		return shared_result
 	if left_name == right_name:
 		return left_character_id < right_character_id
 	return left_name < right_name

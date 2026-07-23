@@ -75,7 +75,7 @@ theme_override_constants/separation = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 27
-text = "所有武将"
+text = "所有武将牌"
 
 [node name="AllCharactersTabHint" type="Label" parent="AllCardsFrame/AllCardsContent/AllCardsSideList/SideListVBox/AllCharactersTabButton/Content"]
 unique_name_in_owner = true
@@ -162,7 +162,7 @@ theme_override_constants/separation = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 27
-text = "所有机缘"
+text = "所有机缘牌"
 
 [node name="AllOpportunitiesTabHint" type="Label" parent="AllCardsFrame/AllCardsContent/AllCardsSideList/SideListVBox/AllOpportunitiesTabButton/Content"]
 unique_name_in_owner = true
@@ -256,7 +256,7 @@ grow_horizontal = 2
 grow_vertical = 2
 clip_contents = true
 horizontal_scroll_mode = 0
-vertical_scroll_mode = 1
+vertical_scroll_mode = 2
 
 [node name="AllCardsGridContent" type="Control" parent="AllCardsFrame/AllCardsContent/AllCardsDetailPanel/AllCardsDetailContent/AllCardsDetailLayout/AllCardsContentStack/AllCardsGridScroll"]
 unique_name_in_owner = true
@@ -302,7 +302,7 @@ mouse_filter = 2
 
 [node name="AllCardsInfoPanel" type="PanelContainer" parent="AllCardsInfoBackdrop/InfoCenter"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(680, 360)
+custom_minimum_size = Vector2(760, 420)
 layout_mode = 2
 mouse_filter = 0
 
@@ -343,7 +343,36 @@ theme_override_font_sizes/font_size = 16
 text = "基础资料"
 autowrap_mode = 2
 
+[node name="AllCardsInfoCharacterBody" type="HBoxContainer" parent="AllCardsInfoBackdrop/InfoCenter/AllCardsInfoPanel/InfoMargin/InfoVBox"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 286)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 22
+
+[node name="AllCardsInfoCharacterCardArea" type="Control" parent="AllCardsInfoBackdrop/InfoCenter/AllCardsInfoPanel/InfoMargin/InfoVBox/AllCardsInfoCharacterBody"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 286)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="AllCardsInfoCharacterSkillScroll" type="ScrollContainer" parent="AllCardsInfoBackdrop/InfoCenter/AllCardsInfoPanel/InfoMargin/InfoVBox/AllCardsInfoCharacterBody"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
+
+[node name="AllCardsInfoCharacterSkillList" type="VBoxContainer" parent="AllCardsInfoBackdrop/InfoCenter/AllCardsInfoPanel/InfoMargin/InfoVBox/AllCardsInfoCharacterBody/AllCardsInfoCharacterSkillScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
 [node name="AllCardsInfoScroll" type="ScrollContainer" parent="AllCardsInfoBackdrop/InfoCenter/AllCardsInfoPanel/InfoMargin/InfoVBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0

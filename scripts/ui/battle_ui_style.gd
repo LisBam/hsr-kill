@@ -59,6 +59,9 @@ const DISABLED_BUTTON_BORDER_COLOR: Color = Color("514c45")
 ## 兼容旧调用方的暖木静态回退值；运行时应读取 `disabled_button_font` 语义。
 const DISABLED_BUTTON_FONT_COLOR: Color = Color("77736c")
 
+## 主菜单浏览型纵向滚动条的默认宽度；模式列表、卡牌图鉴和资料滚动区共用该几何规格。
+const MAIN_MENU_SCROLL_BAR_WIDTH: float = 12.0
+
 ## 当前生效的 UI 风格标识；由桌面在初始化和设置变化时写入，组件不直接读取设置菜单节点。
 static var _active_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
 
@@ -103,6 +106,30 @@ static func make_panel(background_color: Color = UNSET_COLOR, border_color: Colo
 	style.content_margin_top = 8.0
 	style.content_margin_right = 12.0
 	style.content_margin_bottom = 8.0
+	return style
+
+
+## 为主菜单浏览型纵向滚动条应用统一轨道、拖块与交互态；只改变外观和宽度，不修改滚动范围或当前位置。
+static func apply_main_menu_scroll_bar_style(scroll_bar: VScrollBar, scroll_bar_width: float = MAIN_MENU_SCROLL_BAR_WIDTH) -> void:
+	if scroll_bar == null:
+		return
+	scroll_bar.custom_minimum_size.x = scroll_bar_width
+	scroll_bar.add_theme_stylebox_override("scroll", make_main_menu_scroll_bar_style(get_color("metal_panel"), get_color("border")))
+	scroll_bar.add_theme_stylebox_override("grabber", make_main_menu_scroll_bar_style(get_color("action_button"), get_color("accent")))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", make_main_menu_scroll_bar_style(get_color("action_button").lightened(0.10), get_color("accent").lightened(0.08)))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", make_main_menu_scroll_bar_style(get_color("action_button").darkened(0.10), get_color("accent")))
+
+
+## 创建贴合纵向轨道两端的主菜单滑条样式；零内容边距保证拖块可抵达最小值与最大值端点。
+static func make_main_menu_scroll_bar_style(background_color: Color, border_color: Color) -> StyleBoxFlat:
+	# 主菜单滑条样式；保留主题色、1像素描边和4像素圆角，并移除影响有效拖动范围的边距与阴影。
+	var style: StyleBoxFlat = make_panel(background_color, border_color, 1, 4)
+	style.content_margin_left = 0.0
+	style.content_margin_top = 0.0
+	style.content_margin_right = 0.0
+	style.content_margin_bottom = 0.0
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
 	return style
 
 

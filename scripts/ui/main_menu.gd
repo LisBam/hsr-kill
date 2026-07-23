@@ -478,6 +478,7 @@ func _input(event: InputEvent) -> void:
 func set_next_player_count(player_count: int) -> void:
 	# 按当前选中模式规范化人数；使用无信号写入避免与 GameSettings 信号形成无限递归。
 	var mode_id: String = _selected_match_mode
+	# 当前模式允许的规范人数；非法输入按各模式人数规则收敛到可保存范围。
 	var clamped_player_count: int = GameSettings.normalize_player_count_for_mode(mode_id, player_count) if GameSettings != null else clampi(player_count, minimum_player_count, maximum_player_count)
 	if int(_player_count_input.value) != clamped_player_count:
 		_player_count_input.set_value_no_signal(float(clamped_player_count))
@@ -489,6 +490,7 @@ func set_next_player_count(player_count: int) -> void:
 func get_next_player_count() -> int:
 	# 输入框当前文本；优先读取尚未因焦点切换而提交的键入内容。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
+	# 当前最终人数输入；空或不可解析文本回退 SpinBox 已提交数值。
 	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
 	if GameSettings != null:
 		return GameSettings.normalize_player_count_for_mode(_selected_match_mode, resolved_player_count)
@@ -648,6 +650,7 @@ func _restore_selected_match_mode() -> void:
 	if GameSettings == null:
 		_select_identity_mode()
 		return
+	# 当前持久化模式的规范稳定 ID；未知旧值回退身份模式。
 	var restored_mode: String = GameSettings.normalize_match_mode(GameSettings.next_match_mode)
 	if restored_mode == GameSettings.MATCH_MODE_DOUDIZHU:
 		_select_doudizhu_mode()
@@ -679,6 +682,7 @@ func _select_identity_mode() -> void:
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
+	# 身份模式上次保存的人数；首次运行时回退当前人数输入值。
 	var identity_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_IDENTITY) if GameSettings != null else int(_player_count_input.value)
 	set_next_player_count(identity_count)
 	_mode_title.text = "身份模式"
@@ -764,11 +768,13 @@ func _select_team2v2_mode() -> void:
 	_player_count_input.min_value = 4
 	_player_count_input.max_value = 4
 	_player_count_input.step = 1.0
+	# 2v2 上次保存的人数；规范化后始终为4。
 	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_TEAM2V2) if GameSettings != null else 4
 	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_TEAM2V2, preferred_count) if GameSettings != null else 4
 	set_next_player_count(preferred_count)
 	_mode_title.text = "2v2"
 	_mode_description.text = "2v2·4人·蓝方VS红方·一/四同队、二/三同队"
+	# 2v2 左侧模式卡人数标签；固定显示4人并与输入限制保持一致。
 	var team2v2_count_label: Label = %Team2v2ModePlayerCount as Label
 	if team2v2_count_label != null:
 		team2v2_count_label.text = "4人"
@@ -906,7 +912,9 @@ func _select_conquest_mode() -> void:
 func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	# 过关斩将与车轮战一样都是固定2人，但仅过关斩将保留独立的随机选将牌数设置。
 	var is_conquest: bool = _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST
+	# 车轮战明置候选设置行；仅车轮战显示且隐藏后不占布局高度。
 	var face_up_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
+	# 车轮战暗置候选设置行；显隐规则与明置设置行相同。
 	var face_down_row: Control = _wheel_duel_face_down_candidate_input.get_parent() as Control
 	if face_up_row != null:
 		face_up_row.visible = visible_state and not is_conquest
@@ -1005,6 +1013,7 @@ func _refresh_mode_details_button() -> void:
 
 ## 打开当前模式详情；标题与正文每次从稳定说明表读取，切换模式后不会残留旧内容。
 func _open_mode_details() -> void:
+	# 当前模式详情静态说明；未登记模式不打开空白模态。
 	var mode_details: Dictionary = MODE_DETAILS_BY_MODE.get(_selected_match_mode, {}) as Dictionary
 	if mode_details.is_empty() or _mode_details_panel == null:
 		return
@@ -1462,23 +1471,13 @@ func _apply_mode_scroll_bar_style() -> void:
 	var scroll_bar: VScrollBar = _mode_scroll.get_v_scroll_bar()
 	if scroll_bar == null:
 		return
-	scroll_bar.custom_minimum_size.x = mode_scroll_bar_width
-	scroll_bar.add_theme_stylebox_override("scroll", _make_mode_scroll_bar_style(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
-	scroll_bar.add_theme_stylebox_override("grabber", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent")))
-	scroll_bar.add_theme_stylebox_override("grabber_highlight", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08)))
-	scroll_bar.add_theme_stylebox_override("grabber_pressed", _make_mode_scroll_bar_style(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent")))
+	BattleUIStyle.apply_main_menu_scroll_bar_style(scroll_bar, mode_scroll_bar_width)
 
 
 ## 创建贴合纵向滚动范围两端的滑条样式；清除通用面板上下边距后，滑块在最小值和最大值处与轨道端点齐平。
 func _make_mode_scroll_bar_style(background_color: Color, border_color: Color) -> StyleBoxFlat:
-	# 滑条样式；保留主题色、1像素描边与4像素圆角，只移除会改变有效拖动范围的内容边距和阴影。
-	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, 1, 4)
-	style.content_margin_left = 0.0
-	style.content_margin_top = 0.0
-	style.content_margin_right = 0.0
-	style.content_margin_bottom = 0.0
-	style.shadow_size = 0
-	style.shadow_offset = Vector2.ZERO
+	# 滑条样式；调用共享工厂后与卡牌图鉴保持相同主题色、端点边距和圆角规则。
+	var style: StyleBoxFlat = BattleUIStyle.make_main_menu_scroll_bar_style(background_color, border_color)
 	return style
 
 
@@ -1789,8 +1788,10 @@ func _on_next_player_count_changed(player_count: float) -> void:
 
 ## 写入车轮战明置候选数量；若明暗合计不足10，则同步抬高暗置数量以保证双方能够各抓5名武将。
 func _on_wheel_duel_face_up_candidate_count_changed(candidate_count: float) -> void:
+	# 规范化后的明置候选数量；限制在全局车轮战设置范围内。
 	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	GameSettings.set_wheel_duel_face_up_candidate_count(normalized_count)
+	# 保证双方共抓10名武将所需的最少暗置候选数量。
 	var required_face_down_count: int = maxi(WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
 	if GameSettings.wheel_duel_face_down_candidate_count < required_face_down_count:
 		GameSettings.set_wheel_duel_face_down_candidate_count(required_face_down_count)
@@ -1799,8 +1800,10 @@ func _on_wheel_duel_face_up_candidate_count_changed(candidate_count: float) -> v
 
 ## 写入车轮战暗置候选数量；若明暗合计不足10，则同步抬高明置数量以保证双方能够各抓5名武将。
 func _on_wheel_duel_face_down_candidate_count_changed(candidate_count: float) -> void:
+	# 规范化后的暗置候选数量；限制在全局车轮战设置范围内。
 	var normalized_count: int = clampi(int(candidate_count), GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT, GameSettings.MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	GameSettings.set_wheel_duel_face_down_candidate_count(normalized_count)
+	# 保证双方共抓10名武将所需的最少明置候选数量。
 	var required_face_up_count: int = maxi(WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2 - normalized_count, GameSettings.MIN_WHEEL_DUEL_CANDIDATE_COUNT)
 	if GameSettings.wheel_duel_face_up_candidate_count < required_face_up_count:
 		GameSettings.set_wheel_duel_face_up_candidate_count(required_face_up_count)
