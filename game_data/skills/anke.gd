@@ -14,6 +14,9 @@ const SUIT_DISPLAY_ORDER: Array[String] = ["spade", "heart", "club", "diamond"]
 ## 稳定花色到符号的映射；无花色与虚拟牌不会进入该表。
 const SUIT_SYMBOLS: Dictionary = {"spade":"♠", "heart":"♥", "club":"♣", "diamond":"♦"}
 
+## 安可文本在左上角组合条目中的排序值；默认100让短期目标提示优先显示，单独存在时不改变原文本。
+const CORNER_TEXT_ORDER: int = 100
+
 ## 当前正在统计的全局回合号；默认-1表示尚未进入有效回合。
 var _tracked_turn_number: int = -1
 
@@ -43,6 +46,13 @@ func install() -> void:
 	subscribe_timing("phaseBefore", _on_turn_before, "global")
 	subscribe_timing("cardsDiscardAfter", _on_cards_discarded, "global")
 	subscribe_timing("phaseEnd", _on_turn_end, "player")
+
+
+## 卸载技能时只移除安可自己的公开文本条目，其他技能共享的左上角提示继续保留。
+func uninstall() -> void:
+	if host != null and host.has_method("remove_character_corner_text_entry"):
+		host.call("remove_character_corner_text_entry", owner_player_id, _get_corner_entry_id())
+	super()
 
 
 ## 新回合开始时清空花色集合；只有持有者自己的回合记录有效回合号，回合外保持关闭并清除文本。
@@ -97,16 +107,22 @@ func _find_discard_card(card_uid: int) -> CardInstance:
 
 ## 把本回合已出现花色写入持有者公开文本；尚无有效花色时清空组件内容。
 func _refresh_corner_text() -> void:
-	var owner: PlayerState = host.state.get_player(owner_player_id)
-	if owner == null:
+	if host == null or not host.has_method("set_character_corner_text_entry") or not host.has_method("remove_character_corner_text_entry"):
 		return
 	# 按固定顺序拼接的花色符号；示例三种花色会显示为“安可：♥♣♦”。
 	var suit_text: String = ""
 	for suit: String in SUIT_DISPLAY_ORDER:
 		if _discarded_suits_this_turn.has(suit):
 			suit_text += str(SUIT_SYMBOLS.get(suit, ""))
-	owner.character_corner_text = "安可：%s" % suit_text if not suit_text.is_empty() else ""
-	host.refresh_public_state_snapshot()
+	if suit_text.is_empty():
+		host.call("remove_character_corner_text_entry", owner_player_id, _get_corner_entry_id())
+	else:
+		host.call("set_character_corner_text_entry", owner_player_id, _get_corner_entry_id(), "安可：%s" % suit_text, CORNER_TEXT_ORDER)
+
+
+## 返回本技能实例的稳定左上角条目ID；玩家ID保证多名西露瓦之间可以独立维护文本。
+func _get_corner_entry_id() -> String:
+	return "anke:%d" % owner_player_id
 
 
 ## 额外完整回合具有高正收益，只要持有者仍存活在场基础AI就会确认。

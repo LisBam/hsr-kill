@@ -295,6 +295,8 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		# 预计1点伤害即可击杀时纳入身份死亡奖惩；群体牌逐目标调用本方法，因此天然覆盖全部可能受害队友。
 		# 预期伤害即可击杀时纳入身份死亡奖惩；群体牌逐目标调用本方法，因此天然覆盖全部可能受害队友。
 		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, target_id)
+	# 目标技能对来牌结局的修正；濒死自救等效果在此替换普通击杀预期，不改变实际规则或其他角色技能评分。
+	result = _modify_incoming_card_effect_by_target_skills(authoritative_snapshot, actor_id, target_id, target, definition, ai_profile, target_result, expected_damage_amount, result)
 	# 属性伤害连环传播；目标已横置时把同值伤害继续计入其他横置角色。
 	if bool(ai_profile.get("nature_damage", false)) and bool(target.get("chained", false)):
 		for chained_variant: Variant in authoritative_snapshot.get("players", []) as Array:
@@ -305,6 +307,42 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			if chained_id == target_id or not bool(chained_player.get("alive", false)) or not bool(chained_player.get("chained", false)):
 				continue
 			result += _score_chained_damage_effect(authoritative_snapshot, actor_id, chained_id, definition, ai_profile, target_result, expected_damage_amount)
+	return result
+
+
+## 依次应用目标当前固有、模式、临时与局内获得技能的来牌估值钩子；相同技能ID只执行一次。
+func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, target: Dictionary, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int, current_score: float) -> float:
+	# 目标全部技能ID；先按武将声明顺序加入固有技能，再补充模式与运行时来源。
+	var skill_ids: Array[String] = []
+	# 目标武将定义；未亮将或异常ID返回空技能数组。
+	var character: Dictionary = GameDatabase.get_character(str(target.get("character_id", "")))
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前固有技能ID；空值与重复值不会进入估值链。
+		var native_skill_id: String = str(skill_id_variant)
+		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
+			skill_ids.append(native_skill_id)
+	for mode_skill_id_variant: Variant in target.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项估值钩子。
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
+			skill_ids.append(mode_skill_id)
+	for runtime_skill_map_variant: Variant in [target.get("temporary_skills", {}), target.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键为稳定技能ID，值不参与静态AI钩子。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；已存在的固有同名技能不会重复执行。
+			var runtime_skill_id: String = str(skill_id_variant)
+			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
+				skill_ids.append(runtime_skill_id)
+	# 当前累计评分；每项技能只读取快照与上一项结果。
+	var result: float = current_score
+	for current_skill_id: String in skill_ids:
+		# 无运行时状态的技能实例；只调用纯AI钩子，不安装时机或修改对局。
+		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		if skill == null:
+			continue
+		skill.bind(null, target_id)
+		result = skill.modify_ai_incoming_card_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, expected_damage_amount, result, self)
 	return result
 
 
@@ -344,6 +382,8 @@ func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: 
 		if chained_id == actor_id:
 			# 自己横置且1血会在传导后立即濒死；死亡奖惩接口刻意跳过自身，因此在此补充纯生存风险。
 			result -= CHAINED_SELF_LETHAL_PENALTY
+	# 传导目标的自救或减伤技能与直接目标共用同一纯查询钩子，避免AI只在首个属性伤害目标上识别预期结局。
+	result = _modify_incoming_card_effect_by_target_skills(authoritative_snapshot, actor_id, chained_id, chained_player, definition, ai_profile, target_result, expected_damage_amount, result)
 	return result
 
 

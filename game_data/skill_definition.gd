@@ -318,6 +318,11 @@ func modify_ai_card_action_score(_authoritative_snapshot: Dictionary, _action: D
 	return current_score
 
 
+## 修正其他角色对持有者造成的牌效 AI 估值；濒死自救等改变预期结局的技能可在自身文件内覆盖，默认保持通用估值。
+func modify_ai_incoming_card_effect(_authoritative_snapshot: Dictionary, _actor_id: int, _target_id: int, _definition: Dictionary, _ai_profile: Dictionary, _target_result: float, _expected_damage_amount: int, current_score: float, _evaluator: Object) -> float:
+	return current_score
+
+
 ## 判断持有者是否因本技能解除指定卡牌的配置化使用次数限制；默认不修改任何卡牌次数。
 func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
 	return false
@@ -394,6 +399,15 @@ func request_control_selection_for_player(chooser_id: int, title: String, prompt
 	var skill_context: Dictionary = _build_selection_context(context)
 	skill_context["choice_chooser_id"] = chooser_id
 	return str(host.call("request_control_choice", chooser_id, title, prompt, options, allow_cancel, skill_context))
+
+
+## 为技能持有者创建“目标与文字选项同时确认”的复合请求；适合先点选角色再按效果按钮的一步式交互。
+func request_target_control_selection(title: String, prompt: String, target_ids: Array[int], options: Array[Dictionary], allow_cancel: bool, context: Dictionary = {}) -> Dictionary:
+	if host == null or not host.has_method("request_target_control_choice"):
+		return {}
+	# 技能恢复上下文；目标和控制项均由同一ChoiceResponse提交，避免两个窗口之间出现状态变化歧义。
+	var skill_context: Dictionary = _build_selection_context(context)
+	return host.call("request_target_control_choice", owner_player_id, title, prompt, target_ids, options, allow_cancel, skill_context) as Dictionary
 
 
 ## 为技能持有者创建统一选目标请求；目标 ID 只来自权威规则查询，UI、AI 与网络提交同一种 ChoiceResponse。

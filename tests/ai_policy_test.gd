@@ -77,6 +77,8 @@ func _ready() -> void:
 		return
 	if not _test_active_skill_payload():
 		return
+	if not _test_peila_lingke_skill_ai():
+		return
 	if not _test_low_value_discard():
 		return
 	print("AI_POLICY_PASS cards=%d" % GameDatabase.cards.size())
@@ -1112,6 +1114,99 @@ func _test_active_skill_payload() -> bool:
 	var chosen: Dictionary = _policy.choose_action(snapshot, [skill_action])
 	if str((chosen.get("payload", {}) as Dictionary).get("skill_id", "")) != "xingjun":
 		return _fail("active_skill_payload=%s" % [chosen])
+	return true
+
+
+## 验证追歼敌我目标、秘策目标阶段组合、勘测牌类倾向与求生致命伤害修正。
+func _test_peila_lingke_skill_ai() -> bool:
+	# 完整公开身份快照；佩拉为领袖，二号反贼与三号忠臣提供稳定敌我态度。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 快照玩家数组；后续分别调整佩拉手牌、敌方超限牌量与玲可生存条件。
+	var players: Array = snapshot.get("players", []) as Array
+	# 佩拉本人快照；3点体力与两张完整可见手牌用于计算自身额外出牌阶段收益。
+	var peila_player: Dictionary = players[0] as Dictionary
+	peila_player["character_id"] = "peila"
+	peila_player["hp"] = 3
+	peila_player["max_hp"] = 3
+	peila_player["hand"] = [_card(101, "sha", 0), _card(201, "wuxie", 0)]
+	peila_player["hand_count"] = 2
+	peila_player["hand_limit_bonus"] = 0
+	peila_player["mode_hand_limit_bonus"] = 0
+	# 敌方反贼快照；2点体力却有8张牌，使“摸1张后额外弃牌阶段”产生稳定的大额失牌收益。
+	var rebel_player: Dictionary = players[1] as Dictionary
+	rebel_player["hp"] = 2
+	rebel_player["hand_count"] = 8
+	rebel_player["hand"] = []
+	rebel_player["hand_limit_bonus"] = 0
+	rebel_player["mode_hand_limit_bonus"] = 0
+	# 忠臣快照；正常牌量提供可比较的友方额外出牌收益，但不应压过敌方严重超限弃牌收益。
+	var loyalist_player: Dictionary = players[2] as Dictionary
+	loyalist_player["hp"] = 4
+	loyalist_player["hand_count"] = 4
+	loyalist_player["hand_limit_bonus"] = 0
+	loyalist_player["mode_hand_limit_bonus"] = 0
+	# 通用AI评估器；技能纯查询评分不得依赖运行时控制器或界面节点。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 追歼静态技能；同一低价值费用下应严格偏好敌方目标而不是忠臣目标。
+	var zhuijian: SkillDefinition = GameDatabase.create_skill("zhuijian")
+	zhuijian.bind(null, 0)
+	var zhuijian_request: Dictionary = {"candidates":[_candidate(201, "wuxie", 0)], "context":{"kind":"zhuijian_cost_target"}}
+	var zhuijian_enemy_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[201], "selected_target_ids":[1]}}
+	var zhuijian_friend_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[201], "selected_target_ids":[2]}}
+	if zhuijian.score_ai_choice(snapshot, zhuijian_request, zhuijian_enemy_action, evaluator) <= zhuijian.score_ai_choice(snapshot, zhuijian_request, zhuijian_friend_action, evaluator):
+		return _fail("zhuijian_enemy_priority")
+	# 秘策复合选择请求；基础策略必须比较完整“目标×阶段”动作而非先独立选目标再固定选项。
+	var mice_request: Dictionary = {"allow_cancel":true, "choice_type":"target_control", "min_select":1, "max_select":1, "min_target_select":1, "max_target_select":1, "target_ids":[1, 2], "control_options":[{"id":"play_phase", "label":"出牌阶段"}, {"id":"discard_phase", "label":"弃牌阶段"}], "context":{"kind":"mice_target_option", "skill_id":"mice", "skill_owner_id":0}}
+	# 秘策取消动作；所有组合收益不为正时可由策略保留此0分边界。
+	var mice_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":6101, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":"", "confirmed":false}}
+	# 四个目标阶段组合；当前局面应选择让严重超限敌人执行弃牌阶段，并由佩拉获得额外出牌阶段。
+	var mice_actions: Array[Dictionary] = [mice_pass_action]
+	for target_id: int in [1, 2]:
+		for option_id: String in ["play_phase", "discard_phase"]:
+			# 当前合法复合动作；目标与选项通过同一payload提交。
+			var mice_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":6101, "selected_card_uids":[], "selected_target_ids":[target_id], "selected_control_id":option_id, "confirmed":true}}
+			mice_actions.append(mice_action)
+	var mice_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var chosen_mice_action: Dictionary = mice_policy.choose_card_choice(snapshot, mice_request, mice_actions)
+	var chosen_mice_payload: Dictionary = chosen_mice_action.get("payload", {}) as Dictionary
+	if (chosen_mice_payload.get("selected_target_ids", []) as Array) != [1] or str(chosen_mice_payload.get("selected_control_id", "")) != "discard_phase":
+		return _fail("mice_combination_choice=%s" % [chosen_mice_action])
+	# 勘测静态技能；满体力时属性杀行动价值高于保留桃，低体力时桃的生存价值反超。
+	var kance: SkillDefinition = GameDatabase.create_skill("kance")
+	kance.bind(null, 0)
+	var kance_slash_action: Dictionary = {"payload":{"target_id":1, "control_id":"nature_slash"}}
+	var kance_tao_action: Dictionary = {"payload":{"target_id":1, "control_id":"tao"}}
+	if kance.score_ai_action(snapshot, kance_slash_action, evaluator) <= kance.score_ai_action(snapshot, kance_tao_action, evaluator):
+		return _fail("kance_full_hp_priority")
+	peila_player["hp"] = 1
+	var wounded_snapshot: Dictionary = snapshot.duplicate(true)
+	if kance.score_ai_action(wounded_snapshot, kance_tao_action, evaluator) <= kance.score_ai_action(wounded_snapshot, kance_slash_action, evaluator):
+		return _fail("kance_wounded_priority")
+	# 求生目标无桃酒且预计受到致命伤害；AI应识别其会弃置全部手牌并存活至1点，从而降低普通击杀收益。
+	var lethal_snapshot: Dictionary = _build_snapshot(true)
+	var lethal_players: Array = lethal_snapshot.get("players", []) as Array
+	var qiusheng_target: Dictionary = lethal_players[1] as Dictionary
+	qiusheng_target["character_id"] = "lingke"
+	qiusheng_target["hp"] = 1
+	qiusheng_target["max_hp"] = 3
+	qiusheng_target["shield"] = 0
+	qiusheng_target["hand"] = [_card(711, "wuxie", 1), _card(712, "tiesuo", 1)]
+	qiusheng_target["hand_count"] = 2
+	var lethal_slash_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"sha", "target_ids":[1], "payload":{}}
+	var qiusheng_score: float = evaluator.score_action(lethal_snapshot, lethal_slash_action, 0)
+	qiusheng_target["character_id"] = "gepard"
+	var ordinary_lethal_score: float = evaluator.score_action(lethal_snapshot, lethal_slash_action, 0)
+	if qiusheng_score >= ordinary_lethal_score:
+		return _fail("qiusheng_lethal_score skill=%.3f ordinary=%.3f" % [qiusheng_score, ordinary_lethal_score])
+	# 手牌中存在桃时求生不会发动；玲可与无求生目标必须保持相同来牌评分。
+	qiusheng_target["hand"] = [_card(713, "tao", 1)]
+	qiusheng_target["hand_count"] = 1
+	qiusheng_target["character_id"] = "lingke"
+	var blocked_qiusheng_score: float = evaluator.score_action(lethal_snapshot, lethal_slash_action, 0)
+	qiusheng_target["character_id"] = "gepard"
+	var blocked_ordinary_score: float = evaluator.score_action(lethal_snapshot, lethal_slash_action, 0)
+	if not is_equal_approx(blocked_qiusheng_score, blocked_ordinary_score):
+		return _fail("qiusheng_survival_card_block skill=%.3f ordinary=%.3f" % [blocked_qiusheng_score, blocked_ordinary_score])
 	return true
 
 
