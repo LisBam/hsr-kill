@@ -54,6 +54,9 @@ const MILLISECONDS_PER_SECOND: float = 1000.0
 ## 技能选择预览使用的固定指示线键；负数不会与从1开始递增的正式出牌表现序号冲突。
 const TARGET_PREVIEW_PRESENTATION_KEY: int = -1
 
+## 最近表现ID去重窗口容量；4096项可覆盖大量网络重发与短时乱序，同时让幂等记录的内存占用保持固定上限。
+const PRESENTATION_DEDUPLICATION_CAPACITY: int = 4096
+
 ## 当前正在执行顺序淡出的正式卡牌节点；可能来自手牌，也可能是不可见牌的完整正式视图。
 var _animated_card: CardView
 
@@ -119,7 +122,17 @@ var _discard_transfer_claims: Dictionary = {}
 var _consumed_discard_transfer_claims: Dictionary = {}
 
 ## 本局已经接收的表现 ID 集合；键为单调 presentation_id，值固定为true，用于拒绝网络重发或重复信号。
+## 集合只保存最近4096次有效登记；更早ID由最高序号边界继续判定为过期，不需要永久保留每个整数键。
 var _seen_presentation_ids: Dictionary = {}
+
+## 最近表现ID的固定容量环形槽位；数组填满后原位覆盖最旧条目，避免频繁移除数组头部造成整体搬移。
+var _seen_presentation_id_ring: Array[int] = []
+
+## 下一次覆盖的环形槽位下标；范围0至4095，清空表现时重置为0以开启全新对局窗口。
+var _seen_presentation_id_ring_cursor: int = 0
+
+## 本局已经登记的最高非负表现ID；默认-1表示尚无记录，用于在旧ID离开窗口后继续拒绝远古重发。
+var _highest_seen_presentation_id: int = -1
 
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
@@ -177,10 +190,13 @@ func play_skill_target_indicator(start_position: Vector2, target_positions: Arra
 
 ## 登记一次牌面表现并原子取得弃牌动画所有权；返回false表示相同表现或实体使用已经处理，调用方不得再次创建节点。
 func claim_presentation(presentation_id: int, card_uid: int, owns_discard_transfer: bool) -> bool:
-	if presentation_id >= 0 and _seen_presentation_ids.has(presentation_id):
-		return false
 	if presentation_id >= 0:
-		_seen_presentation_ids[presentation_id] = true
+		if _seen_presentation_ids.has(presentation_id):
+			return false
+		# 已落后最高序号至少一个完整窗口的ID不可能属于当前有效表现；即使其字典键已经淘汰也继续保持幂等拒绝。
+		if _highest_seen_presentation_id >= 0 and presentation_id <= _highest_seen_presentation_id - PRESENTATION_DEDUPLICATION_CAPACITY:
+			return false
+		_remember_presentation_id(presentation_id)
 	if not owns_discard_transfer or card_uid < 0:
 		return true
 	# 同一实体仍有待消费或已消费认领时，新的不同表现 ID 也视为迟到重复；只有权威非弃牌移牌才能开始下一生命周期。
@@ -189,6 +205,25 @@ func claim_presentation(presentation_id: int, card_uid: int, owns_discard_transf
 	# 新一轮真实使用；权威移牌已经清理旧生命周期，此处只登记本轮待到达的最终弃牌移动。
 	_discard_transfer_claims[card_uid] = presentation_id
 	return true
+
+
+## 把有效表现ID写入固定容量窗口；达到上限后同步淘汰最旧字典键，使登记与查询始终保持均摊常量时间。
+func _remember_presentation_id(presentation_id: int) -> void:
+	_seen_presentation_ids[presentation_id] = true
+	_highest_seen_presentation_id = maxi(_highest_seen_presentation_id, presentation_id)
+	if _seen_presentation_id_ring.size() < PRESENTATION_DEDUPLICATION_CAPACITY:
+		_seen_presentation_id_ring.append(presentation_id)
+		return
+	# 被覆盖的最旧ID；先移除字典键，再复用原槽位，整个窗口不会产生数组搬移或继续扩容。
+	var evicted_presentation_id: int = _seen_presentation_id_ring[_seen_presentation_id_ring_cursor]
+	_seen_presentation_ids.erase(evicted_presentation_id)
+	_seen_presentation_id_ring[_seen_presentation_id_ring_cursor] = presentation_id
+	_seen_presentation_id_ring_cursor = (_seen_presentation_id_ring_cursor + 1) % PRESENTATION_DEDUPLICATION_CAPACITY
+
+
+## 返回当前表现ID去重窗口条目数；用于性能诊断，正式逻辑不得依赖该数值决定牌面生命周期。
+func get_remembered_presentation_id_count() -> int:
+	return _seen_presentation_ids.size()
 
 
 ## 播放一次卡牌使用表现；传入节点始终是正式 CardView，所有位置使用本组件局部坐标。
@@ -507,6 +542,9 @@ func clear_presentations() -> void:
 	_discard_transfer_claims.clear()
 	_consumed_discard_transfer_claims.clear()
 	_seen_presentation_ids.clear()
+	_seen_presentation_id_ring.clear()
+	_seen_presentation_id_ring_cursor = 0
+	_highest_seen_presentation_id = -1
 	_card_sequences.clear()
 	_line_presentations.clear()
 	_animated_card = null
