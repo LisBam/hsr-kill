@@ -55,11 +55,20 @@ const STARTING_STATUS_TEXT_OPPORTUNITY_BRAWL: String = "正在创建机缘大乱
 ## 过关斩将创建中的稳定状态文本；只影响主菜单反馈，不参与规则判断。
 const STARTING_STATUS_TEXT_CONQUEST: String = "正在创建过关斩将对局……"
 
+## 模式详情入口的主菜单内容层级；默认1使按钮高于预览原画但低于设置遮罩的第2层，设置打开后不会遮挡任何设置控件或截获输入。
+const MODE_DETAILS_BUTTON_Z_INDEX: int = 1
+
+## 模式详情全屏遮罩层级；默认8高于主菜单设置面板，保证详情作为当前最高优先级模态窗口。
+const MODE_DETAILS_BACKDROP_Z_INDEX: int = 8
+
+## 模式详情正文面板层级；默认9高于自身遮罩1层，保证正文、滚动区与关闭按钮可接收输入。
+const MODE_DETAILS_PANEL_Z_INDEX: int = 9
+
 ## 支持详情弹窗的模式说明；键为稳定模式ID，标题与正文只用于长期玩法说明，不参与规则判断。
 const MODE_DETAILS_BY_MODE: Dictionary = {
 	GameSettings.MATCH_MODE_DOUDIZHU:{
 		"title":"斗地主模式详情",
-		"description":"支持3人或5人。3人局由1名地主对抗2名农民；5人局由一、三号位的2名地主对抗3名农民。身份开局明置，全员同时选将。地主体力上限+1并获得【飞扬】与【跋扈】，农民获得【共苦】。击杀全部对方阵营即可获胜，本模式不执行身份局击杀奖惩。",
+		"description":"支持3人或5人。3人局由1名地主对抗2名农民；5人局由一、三号位的2名地主对抗3名农民。身份开局明置，全员同时选将。地主体力上限+1并获得【飞扬】与【跋扈】，农民获得【共苦】。击杀全部对方阵营即可获胜。",
 	},
 	GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL:{
 		"title":"机缘大乱斗模式详情",
@@ -67,7 +76,7 @@ const MODE_DETAILS_BY_MODE: Dictionary = {
 	},
 	GameSettings.MATCH_MODE_CONQUEST:{
 		"title":"过关斩将模式详情",
-		"description":"固定1名玩家对战1名AI，玩家为一号位红方并先手。开局玩家选择1次机缘；每击败一名敌方武将，敌方会弃置全部区域牌、提升关卡、随机换将并获得累计强化，随后玩家再选择1次机缘。拥有复活次数时，玩家死亡会弃置区域内所有牌、将体力回复至体力上限并摸4张牌，随后继续游戏。难度一至难度四会按设置授予不同的开局机缘，难度五不提供额外增益。",
+		"description":"固定1名玩家对战1名AI，玩家为一号位红方并先手。开局玩家选择1次机缘；每击败一名敌方武将，敌方会弃置全部区域牌、提升关卡、随机换将并获得累计强化，随后玩家再选择1次机缘。拥有复活次数时，玩家死亡会弃置区域内所有牌、将体力回复至体力上限并摸4张牌，随后继续游戏。\n\n难度一：增加2点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1；复活次数+1。\n难度二：增加1点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。\n难度三：增加1点体力上限；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。\n难度四：初始手牌数+1；出牌阶段使用【杀】的次数上限+1。\n难度五：无额外增益。",
 	},
 }
 
@@ -885,7 +894,7 @@ func _build_mode_details_interface() -> void:
 	_mode_details_button.name = "MainMenuModeDetailsButton"
 	_mode_details_button.text = "详情"
 	_mode_details_button.visible = false
-	_mode_details_button.z_index = 4
+	_mode_details_button.z_index = MODE_DETAILS_BUTTON_Z_INDEX
 	_mode_details_button.custom_minimum_size = Vector2(104.0, 44.0)
 	_mode_details_button.position = Vector2(22.0, 20.0)
 	_mode_details_button.size = Vector2(104.0, 44.0)
@@ -895,7 +904,7 @@ func _build_mode_details_interface() -> void:
 	_mode_details_backdrop = ColorRect.new()
 	_mode_details_backdrop.name = "MainMenuModeDetailsBackdrop"
 	_mode_details_backdrop.visible = false
-	_mode_details_backdrop.z_index = 8
+	_mode_details_backdrop.z_index = MODE_DETAILS_BACKDROP_Z_INDEX
 	_mode_details_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
 	_mode_details_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_mode_details_backdrop.gui_input.connect(_on_mode_details_backdrop_gui_input)
@@ -903,7 +912,7 @@ func _build_mode_details_interface() -> void:
 	_mode_details_panel = PanelContainer.new()
 	_mode_details_panel.name = "MainMenuModeDetailsPanel"
 	_mode_details_panel.visible = false
-	_mode_details_panel.z_index = 9
+	_mode_details_panel.z_index = MODE_DETAILS_PANEL_Z_INDEX
 	_mode_details_panel.custom_minimum_size = Vector2(680.0, 420.0)
 	_mode_details_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_mode_details_panel.offset_left = -340.0

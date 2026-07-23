@@ -134,6 +134,17 @@ func _run() -> void:
 	if str(enriched_target_zone_request.get("prompt", "")) != "请选择“%s”区域内的一张牌" % target_zone_character_name or str(enriched_target_zone_request.get("prompt_highlight", "")) != target_zone_character_name:
 		_fail("target_zone_prompt_enrichment:%s" % enriched_target_zone_request)
 		return
+	# 【勘测】私看手牌的候选副本；沿用同一目标与牌面数据，但区域固定为手牌以匹配正式私看请求。
+	var kance_hand_view_candidate: Dictionary = target_zone_candidate.duplicate(true)
+	kance_hand_view_candidate["zone"] = "hand"
+	kance_hand_view_candidate["slot"] = ""
+	# 【勘测】私看手牌后的文字选项；同样携带目标手牌只读副本，但不是选牌请求，提示必须保留为获得牌类的选择。
+	var kance_view_request: Dictionary = {"request_id":97002, "chooser_id":4, "choice_type":"control", "title":"勘测", "prompt":"请选择获得属性【杀】或【桃】", "candidates":[], "min_select":1, "max_select":1, "allow_cancel":false, "context":{"kind":"kance_gain_option", "target_id":5, "display_candidates":[kance_hand_view_candidate]}}
+	# 勘测提示增强结果；只读牌面不应生成区域选牌文案或目标名高亮。
+	var enriched_kance_view_request: Dictionary = main_instance.call("_enrich_target_zone_card_choice_request", kance_view_request) as Dictionary
+	if str(enriched_kance_view_request.get("prompt", "")) != "请选择获得属性【杀】或【桃】" or enriched_kance_view_request.has("prompt_highlight"):
+		_fail("kance_read_only_view_prompt:%s" % enriched_kance_view_request)
+		return
 	# 正式选牌面板；富文本标签必须用金色BBCode强调目标武将名。
 	var target_zone_selection_panel: CardSelectionPanel = main_instance.get_node("CardSelectionPanel") as CardSelectionPanel
 	target_zone_selection_panel.show_request(enriched_target_zone_request)

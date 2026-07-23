@@ -286,13 +286,13 @@ func _run() -> void:
 		_fail("conquest_difficulty_sync")
 		return
 	GameSettings.set_conquest_difficulty(GameSettings.DEFAULT_CONQUEST_DIFFICULTY)
-	# 过关斩将详情；按钮位于预览左上角，打开后正文必须包含复活与难度说明。
+	# 过关斩将详情；按钮位于预览左上角，打开后正文必须包含复活与五档难度的完整开局效果。
 	if not mode_details_button.visible:
 		_fail("conquest_details_button_hidden")
 		return
 	await _click_control(mode_details_button)
 	await get_tree().process_frame
-	if not mode_details_panel.visible or mode_details_title.text != "过关斩将模式详情" or not mode_details_description.text.contains("复活") or not mode_details_description.text.contains("难度五"):
+	if not mode_details_panel.visible or mode_details_title.text != "过关斩将模式详情" or not mode_details_description.text.contains("复活") or not mode_details_description.text.contains("难度一：增加2点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1；复活次数+1。") or not mode_details_description.text.contains("难度二：增加1点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。") or not mode_details_description.text.contains("难度三：增加1点体力上限；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。") or not mode_details_description.text.contains("难度四：初始手牌数+1；出牌阶段使用【杀】的次数上限+1。") or not mode_details_description.text.contains("难度五：无额外增益。"):
 		_fail("conquest_details_content")
 		return
 	await _click_control(mode_details_close_button)
@@ -307,10 +307,20 @@ func _run() -> void:
 	if not identity_mode_button.button_pressed or GameSettings.next_match_mode != GameSettings.MATCH_MODE_IDENTITY or mode_details_button.visible or main_conquest_difficulty_row.visible or match_conquest_difficulty_row.visible or main_custom_character_checkbox.text != "自选全武将、座次与身份" or match_custom_character_checkbox.text != "自选全武将、座次与身份":
 		_fail("mode_scroll_identity_restore")
 		return
-	# 另外两个开放详情的模式；切换时只验证入口显隐与标题来源，随后恢复身份模式供原有开局流程继续。
+	# 另外两个开放详情的模式；斗地主说明不再保留身份局击杀奖惩文案。
 	main_menu.call("_select_doudizhu_mode")
 	if not mode_details_button.visible:
 		_fail("doudizhu_details_button_hidden")
+		return
+	await _click_control(mode_details_button)
+	await get_tree().process_frame
+	if not mode_details_panel.visible or mode_details_title.text != "斗地主模式详情" or mode_details_description.text.contains("本模式不执行身份局击杀奖惩"):
+		_fail("doudizhu_details_content")
+		return
+	await _click_control(mode_details_close_button)
+	# 详情按钮必须低于设置遮罩；设置打开后其不会覆盖设置项或截获输入。
+	if mode_details_button.z_index >= settings_backdrop.z_index:
+		_fail("mode_details_button_settings_layer")
 		return
 	main_menu.call("_select_opportunity_brawl_mode")
 	if not mode_details_button.visible:
