@@ -2995,9 +2995,14 @@ func _refresh_card_selection_panel() -> void:
 	card_selection_panel.close()
 
 
-## 为“选择角色区域内的牌”补充公开目标武将名；该副本只改变当前客户端提示，不写回权威选择请求。
+## 为实际“选择角色区域内的牌”请求补充公开目标武将名；文字控制请求即使携带只读牌面也只负责观看，不能被改写为选牌提示。
 func _enrich_target_zone_card_choice_request(choice_request: Dictionary) -> Dictionary:
 	var result: Dictionary = choice_request.duplicate(true)
+	# 当前选择维度；只有会提交实体牌UID的请求才适用“请选择某角色区域内的牌”文案。
+	# 【勘测】等control/bool请求携带的display_candidates只供私下观看，必须保留其后续效果的原始提示。
+	var choice_type: String = str(result.get("choice_type", "card"))
+	if choice_type in ["control", "bool", "target_control"]:
+		return result
 	# 只有固定数量的目标区域选择才改写提示；可变数量费用和普通手牌选择继续保留规则端原文。
 	var required_count: int = int(result.get("min_select", 0))
 	if required_count <= 0 or int(result.get("max_select", 0)) != required_count:
