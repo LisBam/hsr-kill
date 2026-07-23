@@ -3,6 +3,9 @@ extends Node
 
 ## GameEvent 主循环。它只负责事件栈、子事件、after 队列、暂停恢复和选择结果传递，不执行具体卡牌效果。
 
+## 已结束事件摘要热索引容量；4096项覆盖近期父子关联与规则查询，旧摘要仍可从完整事件历史按需恢复。
+const FINALIZED_EVENT_SNAPSHOT_CACHE_CAPACITY: int = 4096
+
 ## 事件开始信号；参数是只读摘要，UI、调试器和回放可以订阅而不会获得可变事件引用。
 signal event_started(event_data: Dictionary)
 
@@ -34,7 +37,14 @@ var _next_request_id: int = 1
 var _events: Dictionary = {}
 
 ## 已结束事件ID到最终只读摘要的轻量索引；摘要与完成历史共享字典引用，不保留Callable、运行时上下文对象或完整GameEvent实例。
+## 该索引只保存最近4096项；完整历史仍永久保留全部摘要，冷事件查询通过低频回退扫描恢复。
 var _finalized_event_snapshots: Dictionary = {}
+
+## 已结束事件热索引的固定容量环形ID槽位；填满后覆盖最旧ID，避免数组头部删除产生整体搬移。
+var _finalized_event_snapshot_id_ring: Array[int] = []
+
+## 下一次覆盖的已结束事件环形槽位；范围0至4095，重置调度器时归零。
+var _finalized_event_snapshot_id_ring_cursor: int = 0
 
 ## 当前事件栈；数组末尾是正在执行的事件，父事件必须留在栈中等待子事件。
 var _event_stack: Array[int] = []
@@ -79,7 +89,7 @@ func create_event(event_name: String, event_type: String = "rule", steps: Array[
 		var parent: GameEvent = _events.get(parent_id) as GameEvent
 		if parent == null:
 			# 已归档父事件仍可作为外部选择或迁移记录的语义父级；它不再拥有待执行队列，子事件由调用方独立完成。
-			if not _finalized_event_snapshots.has(parent_id):
+			if not _has_finalized_event_snapshot(parent_id):
 				event.abort("missing_parent")
 		else:
 			if queue == "after":
@@ -237,7 +247,7 @@ func _finalize_event(event: GameEvent) -> void:
 	var final_record: Dictionary = _record_history("finish", event)
 	# 最终事件摘要；信号仍发送独立副本，订阅者无法反向修改历史或归档。
 	var final_event_snapshot: Dictionary = final_record.get("event", {}) as Dictionary
-	_finalized_event_snapshots[event.event_id] = final_event_snapshot
+	_cache_finalized_event_snapshot(event.event_id, final_event_snapshot)
 	event_finished.emit(final_event_snapshot.duplicate(true))
 	if not _event_stack.is_empty() and _event_stack.back() == event.event_id:
 		_event_stack.pop_back()
@@ -418,9 +428,54 @@ func record_event(event_name: String, event_type: String = "rule", event_context
 	event.finalized = true
 	# 记录历史中的最终摘要同时进入轻量索引，随后立即释放完整GameEvent实例。
 	var record: Dictionary = _record_history("record", event)
-	_finalized_event_snapshots[event.event_id] = record.get("event", {}) as Dictionary
+	_cache_finalized_event_snapshot(event.event_id, record.get("event", {}) as Dictionary)
 	_events.erase(event.event_id)
 	return event.event_id
+
+
+## 把已结束事件摘要写入固定容量热索引；摘要字典与完整历史共享只读引用，不再为索引额外深拷贝。
+func _cache_finalized_event_snapshot(event_id: int, event_snapshot: Dictionary) -> void:
+	if _finalized_event_snapshots.has(event_id):
+		_finalized_event_snapshots[event_id] = event_snapshot
+		return
+	_finalized_event_snapshots[event_id] = event_snapshot
+	if _finalized_event_snapshot_id_ring.size() < FINALIZED_EVENT_SNAPSHOT_CACHE_CAPACITY:
+		_finalized_event_snapshot_id_ring.append(event_id)
+		return
+	# 被覆盖的最旧事件ID；摘要仍存在于完整历史，仅从常量时间热索引中释放。
+	var evicted_event_id: int = _finalized_event_snapshot_id_ring[_finalized_event_snapshot_id_ring_cursor]
+	_finalized_event_snapshots.erase(evicted_event_id)
+	_finalized_event_snapshot_id_ring[_finalized_event_snapshot_id_ring_cursor] = event_id
+	_finalized_event_snapshot_id_ring_cursor = (_finalized_event_snapshot_id_ring_cursor + 1) % FINALIZED_EVENT_SNAPSHOT_CACHE_CAPACITY
+
+
+## 在完整历史中逆序查找已结束事件摘要；仅供超过热索引窗口的调试、回放或远古父事件查询。
+func _find_finalized_event_snapshot_in_history(event_id: int) -> Dictionary:
+	# 逆序历史下标；最新终态最先命中，范围从最后一项递减至0且空历史不会进入循环。
+	for history_index: int in range(_event_history.size() - 1, -1, -1):
+		# 当前历史记录；步骤与开始记录不是最终摘要，跳过可减少无意义字典读取。
+		var history_record: Dictionary = _event_history[history_index] as Dictionary
+		# 当前历史类型；只有同步记录和正常最终完成记录能作为归档终态。
+		var history_kind: String = str(history_record.get("kind", ""))
+		if history_kind != "record" and history_kind != "finish":
+			continue
+		# 当前历史携带的事件摘要；ID匹配时直接返回内部只读引用，由公开查询接口负责复制隔离。
+		var history_event_snapshot: Dictionary = history_record.get("event", {}) as Dictionary
+		if int(history_event_snapshot.get("event_id", -1)) == event_id:
+			return history_event_snapshot
+	return {}
+
+
+## 判断已结束事件是否仍可查询；近期事件常量时间命中，超出窗口的低频父级校验回退到完整历史。
+func _has_finalized_event_snapshot(event_id: int) -> bool:
+	if _finalized_event_snapshots.has(event_id):
+		return true
+	# 冷历史查询结果；确认存在后提升回热索引，连续挂接同一旧父事件时只扫描一次完整历史。
+	var recovered_snapshot: Dictionary = _find_finalized_event_snapshot_in_history(event_id)
+	if recovered_snapshot.is_empty():
+		return false
+	_cache_finalized_event_snapshot(event_id, recovered_snapshot)
+	return true
 
 
 ## 返回当前事件 ID；无运行中事件时为 -1，规则服务不得自行修改该值。
@@ -440,12 +495,22 @@ func get_event_snapshot(event_id: int) -> Dictionary:
 		return event.to_dict()
 	# 已结束事件只保留不含Callable的最终摘要；查询继续返回独立副本，保持原公开接口的隔离契约。
 	var finalized_snapshot: Dictionary = _finalized_event_snapshots.get(event_id, {}) as Dictionary
+	if finalized_snapshot.is_empty():
+		finalized_snapshot = _find_finalized_event_snapshot_in_history(event_id)
+		if not finalized_snapshot.is_empty():
+			# 冷摘要提升；后续对同一事件的规则、调试或回放查询恢复为常量时间，同时热索引仍保持固定容量。
+			_cache_finalized_event_snapshot(event_id, finalized_snapshot)
 	return finalized_snapshot.duplicate(true) if not finalized_snapshot.is_empty() else {}
 
 
 ## 返回仍持有完整GameEvent对象的数量；正式长局应只包含根事件与当前未完成事件树，供性能诊断与回归测试使用。
 func get_live_event_count() -> int:
 	return _events.size()
+
+
+## 返回近期已结束事件热索引条目数；用于性能诊断，完整可查询事件数量仍由事件历史决定。
+func get_finalized_event_snapshot_cache_count() -> int:
+	return _finalized_event_snapshots.size()
 
 
 ## 返回全部事件历史深拷贝；该日志不依赖场景节点，可单独用于回放和无头测试。
@@ -503,6 +568,8 @@ func reset() -> void:
 	_next_request_id = 1
 	_events.clear()
 	_finalized_event_snapshots.clear()
+	_finalized_event_snapshot_id_ring.clear()
+	_finalized_event_snapshot_id_ring_cursor = 0
 	_event_stack.clear()
 	_choice_requests.clear()
 	_event_history.clear()

@@ -105,6 +105,21 @@ var acquired_skills: Dictionary = {}
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
+## 最近一次公开快照使用的只读机缘历史数组；源历史未变化时由不同观察者共享，避免每次状态广播重复复制长数组。
+var _acquired_opportunity_ids_snapshot_cache: Array[String] = []
+
+## 快照缓存对应的源历史长度；默认-1强制首次序列化构建，正式追加会通过长度变化自动失效。
+var _acquired_opportunity_snapshot_source_size: int = -1
+
+## 快照缓存对应的源历史首项；默认空字符串，与长度和尾项共同识别常见的直接清空或整体替换。
+var _acquired_opportunity_snapshot_source_first_id: String = ""
+
+## 快照缓存对应的源历史尾项；默认空字符串，正式只追加路径可用常量时间判断缓存是否仍然有效。
+var _acquired_opportunity_snapshot_source_last_id: String = ""
+
+## 本对象生命周期内机缘公开快照的实际重建次数；默认0，只供性能诊断与回归测试，不进入公开状态。
+var _acquired_opportunity_snapshot_rebuild_count: int = 0
+
 ## 已按效果类型汇总的机缘数值缓存；键为机缘effect稳定ID，值为截至已处理历史位置的count累计值，只供权威规则查询且不进入公开快照。
 var opportunity_effect_totals_cache: Dictionary = {}
 
@@ -241,6 +256,40 @@ func get_playable_cards() -> Array[CardInstance]:
 	return result
 
 
+## 返回公开快照使用的只读机缘历史；正式追加会自动重建，整体替换必须调用失效接口以覆盖首尾相同的中段变化。
+func get_acquired_opportunity_ids_snapshot() -> Array[String]:
+	# 当前源历史长度；与首尾哨兵共同提供常量时间失效检查，不在每次广播重新遍历完整历史。
+	var current_source_size: int = acquired_opportunity_ids.size()
+	# 当前源历史首项；空历史使用空字符串，正常机缘ID均为非空稳定标识。
+	var current_source_first_id: String = "" if acquired_opportunity_ids.is_empty() else acquired_opportunity_ids[0]
+	# 当前源历史尾项；只追加后该值变化，重复追加相同ID时仍由长度变化触发重建。
+	var current_source_last_id: String = "" if acquired_opportunity_ids.is_empty() else acquired_opportunity_ids.back()
+	if current_source_size != _acquired_opportunity_snapshot_source_size \
+			or current_source_first_id != _acquired_opportunity_snapshot_source_first_id \
+			or current_source_last_id != _acquired_opportunity_snapshot_source_last_id:
+		# 新的不可变快照数组；替换引用而不原地修改旧缓存，保证已经发出的状态快照保持发送瞬间的数据。
+		var refreshed_snapshot: Array[String] = acquired_opportunity_ids.duplicate()
+		refreshed_snapshot.make_read_only()
+		_acquired_opportunity_ids_snapshot_cache = refreshed_snapshot
+		_acquired_opportunity_snapshot_source_size = current_source_size
+		_acquired_opportunity_snapshot_source_first_id = current_source_first_id
+		_acquired_opportunity_snapshot_source_last_id = current_source_last_id
+		_acquired_opportunity_snapshot_rebuild_count += 1
+	return _acquired_opportunity_ids_snapshot_cache
+
+
+## 使机缘公开快照在下一次序列化时重建；整体替换、回放校准或编辑器工具修改中段条目前必须调用。
+func invalidate_acquired_opportunity_snapshot_cache() -> void:
+	_acquired_opportunity_snapshot_source_size = -1
+	_acquired_opportunity_snapshot_source_first_id = ""
+	_acquired_opportunity_snapshot_source_last_id = ""
+
+
+## 返回机缘公开快照累计重建次数；用于验证重复状态广播没有反复复制长历史，玩法逻辑不得依赖该计数。
+func get_acquired_opportunity_snapshot_rebuild_count() -> int:
+	return _acquired_opportunity_snapshot_rebuild_count
+
+
 ## 返回适合指定观察者的状态快照；他人只能看到手牌数量，不能看到牌面。
 func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 序列化后的装备区；装备属于公共信息，始终包含完整实体牌数据。
@@ -302,7 +351,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
-		"acquired_opportunity_ids": acquired_opportunity_ids.duplicate(),
+		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,
 		"turn_history_count": turn_history.size(),

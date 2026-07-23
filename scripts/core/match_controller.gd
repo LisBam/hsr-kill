@@ -7198,6 +7198,8 @@ func replace_acquired_opportunity_history(player_id: int, replacement_opportunit
 			remove_acquired_skill(player_id, acquired_skill_id)
 	# 新机缘历史；必须在重新安装技能前写入，保证技能查询与右键详情立即读取同一权威来源。
 	player.acquired_opportunity_ids = replacement_opportunity_ids.duplicate()
+	# 公开快照缓存失效；整体替换可能保持相同长度和首尾ID，必须显式要求PlayerState在下一次广播生成新只读数组。
+	player.invalidate_acquired_opportunity_snapshot_cache()
 	# 增量缓存失效；刷新可能保留首尾ID却替换中间项，不能依赖普通追加路径的两个边界哨兵判断。
 	player.opportunity_effect_totals_cache.clear()
 	player.opportunity_effect_cache_processed_count = 0

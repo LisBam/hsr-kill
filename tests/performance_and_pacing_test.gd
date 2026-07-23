@@ -2,7 +2,7 @@ extends Node
 
 ## 性能与流程节奏专项回归。验证全局速度边界、阶段延时、事件历史同步、机缘增量汇总、完成事件压缩和武将牌视觉缓存。
 ## 界面性能同时验证相同对手座位绑定不会重复执行位置与缩放布局。
-## 长局压力同时验证折叠日志零正文排版、事件历史共享同步和出牌阶段弃牌索引。
+## 长局压力同时验证折叠日志零正文排版、牌面表现有界去重、机缘快照复用、事件热索引上限和出牌阶段弃牌索引。
 
 ## 阶段间隔测试秒数；0.10秒是正式设置允许的最小值，足以观察到到期前后的状态边界。
 const TEST_FLOW_INTERVAL_SECONDS: float = 0.10
@@ -13,8 +13,11 @@ const POST_DEADLINE_OBSERVATION_SECONDS: float = 0.18
 ## 长局机缘历史压力条目数；4096项足以暴露全量重复汇总，同时不会让无头回归产生过长等待。
 const LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT: int = 4096
 
-## 已结束事件压缩压力条目数；2048条同步事件用于确认完整GameEvent对象数量不随历史长度增长。
-const FINALIZED_EVENT_COMPACTION_COUNT: int = 2048
+## 已结束事件压缩压力条目数；8192条同步事件超过4096条热索引容量，用于验证完整GameEvent对象与快速索引都不会随历史长度增长。
+const FINALIZED_EVENT_COMPACTION_COUNT: int = 8192
+
+## 牌面表现去重压力条目数；8192个单调ID超过4096项窗口容量，用于验证重复包保护不会随对局时长永久增长。
+const PRESENTATION_DEDUPLICATION_STRESS_COUNT: int = 8192
 
 ## 长局折叠日志压力条目数；4096条足以确认隐藏正文不会随完整日志长度保留排版文档。
 const LONG_MATCH_LOG_ENTRY_COUNT: int = 4096
@@ -53,6 +56,8 @@ func _run() -> void:
 	if not _test_static_text_resolution_cache():
 		return
 	if not await _test_collapsed_match_log_rendering():
+		return
+	if not _test_bounded_presentation_deduplication():
 		return
 	_create_controller()
 	if not await _test_phase_transition_pacing():
@@ -169,6 +174,34 @@ func _test_collapsed_match_log_rendering() -> bool:
 		log_panel.queue_free()
 		return _fail("collapsed_log_release retained=%d rendered=%d" % [log_panel.get_entry_count(), log_panel.get_rendered_character_count()])
 	log_panel.queue_free()
+	return true
+
+
+## 验证表现ID只保留固定最近窗口，同时继续拒绝窗口内重复ID与已经淘汰的远古重发ID。
+func _test_bounded_presentation_deduplication() -> bool:
+	# 独立牌面表现组件；本用例只测试表现包幂等登记，不创建任何CardView或补间。
+	var animation_layer: CardUseAnimationLayer = CardUseAnimationLayer.new()
+	# 单调表现ID；从1写至8192，保证固定窗口至少完成一次覆盖并保留稳定最高序号。
+	for presentation_id: int in range(1, PRESENTATION_DEDUPLICATION_STRESS_COUNT + 1):
+		if not animation_layer.claim_presentation(presentation_id, -1, false):
+			animation_layer.free()
+			return _fail("presentation_dedup_initial id=%d" % presentation_id)
+	# 当前窗口条目数；超过容量的旧ID必须已经从字典与环形槽位共同淘汰。
+	var remembered_count: int = animation_layer.get_remembered_presentation_id_count()
+	if remembered_count != CardUseAnimationLayer.PRESENTATION_DEDUPLICATION_CAPACITY:
+		animation_layer.free()
+		return _fail("presentation_dedup_capacity count=%d" % remembered_count)
+	if animation_layer.claim_presentation(PRESENTATION_DEDUPLICATION_STRESS_COUNT, -1, false):
+		animation_layer.free()
+		return _fail("presentation_dedup_recent_duplicate")
+	if animation_layer.claim_presentation(1, -1, false):
+		animation_layer.free()
+		return _fail("presentation_dedup_stale_duplicate")
+	animation_layer.clear_presentations()
+	if animation_layer.get_remembered_presentation_id_count() != 0 or not animation_layer.claim_presentation(1, -1, false):
+		animation_layer.free()
+		return _fail("presentation_dedup_reset")
+	animation_layer.free()
 	return true
 
 
@@ -294,11 +327,29 @@ func _test_incremental_opportunity_effect_cache() -> bool:
 	var damage_bonus: int = _controller.get_acquired_opportunity_effect_total(player.player_id, "damage_bonus")
 	if damage_bonus != expected_half_count or player.opportunity_effect_cache_processed_count != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT:
 		return _fail("opportunity_cache_reuse total=%d processed=%d" % [damage_bonus, player.opportunity_effect_cache_processed_count])
+	# 首次公开快照；长机缘历史只在源数据变化时复制一次，后续不同观察者复用同一只读数组。
+	var first_player_snapshot: Dictionary = player.to_dict(player.player_id, false)
+	# 第二次公开快照；历史没有变化时不得再次分配和复制4096项数组。
+	var repeated_player_snapshot: Dictionary = player.to_dict(-1, false)
+	if player.get_acquired_opportunity_snapshot_rebuild_count() != 1 or (first_player_snapshot.get("acquired_opportunity_ids", []) as Array).size() != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT or (repeated_player_snapshot.get("acquired_opportunity_ids", []) as Array).size() != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT:
+		return _fail("opportunity_snapshot_reuse rebuilds=%d" % player.get_acquired_opportunity_snapshot_rebuild_count())
 	player.acquired_opportunity_ids.append("green_slash_play_limit_one")
 	# 单条追加后的结果；查询只消费新增尾项并把处理位置精确推进1。
 	var appended_slash_bonus: int = _controller.get_acquired_opportunity_effect_total(player.player_id, "slash_play_limit_bonus")
 	if appended_slash_bonus != expected_half_count + 1 or player.opportunity_effect_cache_processed_count != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT + 1:
 		return _fail("opportunity_cache_append total=%d processed=%d" % [appended_slash_bonus, player.opportunity_effect_cache_processed_count])
+	# 追加后的新快照；只重建一次新数组，已经发出的旧快照仍保持原长度，不会被原地改写。
+	var appended_player_snapshot: Dictionary = player.to_dict(player.player_id, false)
+	if player.get_acquired_opportunity_snapshot_rebuild_count() != 2 or (first_player_snapshot.get("acquired_opportunity_ids", []) as Array).size() != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT or (appended_player_snapshot.get("acquired_opportunity_ids", []) as Array).size() != LONG_OPPORTUNITY_HISTORY_ENTRY_COUNT + 1:
+		return _fail("opportunity_snapshot_refresh rebuilds=%d" % player.get_acquired_opportunity_snapshot_rebuild_count())
+	# 替换前中段ID；本次修改保持数组长度、首项和尾项不变，专门验证正式整体替换所需的显式失效端口。
+	var previous_middle_id: String = player.acquired_opportunity_ids[1]
+	player.acquired_opportunity_ids[1] = "green_slash_play_limit_one"
+	player.invalidate_acquired_opportunity_snapshot_cache()
+	# 整体替换后的公开快照；必须生成第三个新数组，而不能依赖长度或首尾哨兵误复用旧缓存。
+	var replacement_player_snapshot: Dictionary = player.to_dict(player.player_id, false)
+	if player.get_acquired_opportunity_snapshot_rebuild_count() != 3 or str((appended_player_snapshot.get("acquired_opportunity_ids", []) as Array)[1]) != previous_middle_id or str((replacement_player_snapshot.get("acquired_opportunity_ids", []) as Array)[1]) != "green_slash_play_limit_one":
+		return _fail("opportunity_snapshot_invalidation rebuilds=%d" % player.get_acquired_opportunity_snapshot_rebuild_count())
 	return true
 
 
@@ -316,10 +367,10 @@ func _test_finalized_event_runtime_compaction() -> bool:
 		var recorded_event_id: int = _controller.event_scheduler.record_event("performance_record_%d" % event_index, "test", {"index":event_index}, root_event.event_id)
 		if first_recorded_event_id < 0:
 			first_recorded_event_id = recorded_event_id
-	# 首条归档摘要；完成状态、finalized标记和原始上下文均必须保留。
+	# 首条归档摘要；即使已经移出热索引，完成状态、finalized标记和原始上下文仍必须可从完整历史恢复。
 	var first_snapshot: Dictionary = _controller.event_scheduler.get_event_snapshot(first_recorded_event_id)
-	if _controller.event_scheduler.get_live_event_count() != 1 or str(first_snapshot.get("status", "")) != "finished" or not bool(first_snapshot.get("finalized", false)) or int((first_snapshot.get("context", {}) as Dictionary).get("index", -1)) != 0:
-		return _fail("event_compaction live=%d snapshot=%s" % [_controller.event_scheduler.get_live_event_count(), first_snapshot])
+	if _controller.event_scheduler.get_live_event_count() != 1 or _controller.event_scheduler.get_finalized_event_snapshot_cache_count() != EventScheduler.FINALIZED_EVENT_SNAPSHOT_CACHE_CAPACITY or str(first_snapshot.get("status", "")) != "finished" or not bool(first_snapshot.get("finalized", false)) or int((first_snapshot.get("context", {}) as Dictionary).get("index", -1)) != 0:
+		return _fail("event_compaction live=%d cache=%d snapshot=%s" % [_controller.event_scheduler.get_live_event_count(), _controller.event_scheduler.get_finalized_event_snapshot_cache_count(), first_snapshot])
 	return true
 
 
