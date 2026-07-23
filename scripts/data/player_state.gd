@@ -138,6 +138,21 @@ var response_history: Array[Dictionary] = []
 ## 当前回合受到或造成的伤害记录；每项保存来源、目标、数值、属性和事件 ID。
 var damage_history: Array[Dictionary] = []
 
+## 本局累计造成的有效伤害值；按伤害最终数值累计，护盾吸收的伤害同样属于已经造成的伤害。
+var total_damage_dealt: int = 0
+
+## 本局累计受到的有效伤害值；按伤害最终数值累计，护盾吸收的伤害同样属于已经受到的伤害。
+var total_damage_received: int = 0
+
+## 本局累计使角色实际回复的体力值；包含对自身和其他角色的回复，但不计入超出体力上限的溢出量。
+var total_healing_done: int = 0
+
+## 本局累计实际摸到的牌数；牌堆不足导致未实际获得的牌不会计入。
+var total_cards_drawn: int = 0
+
+## 本局累计击杀数；仅统计由其他有效角色造成的真实死亡或模式中的武将击败，不把自杀记为击杀。
+var total_kill_count: int = 0
+
 ## 本局累计受到有效伤害的次数；正数伤害即使被护盾完全吸收也会增加，用于客户端播放不依赖体力变化的受伤反馈。
 var damage_taken_count: int = 0
 
@@ -295,6 +310,11 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),
 		"response_history_count": response_history.size(),
 		"damage_history_count": damage_history.size(),
+		"total_damage_dealt": total_damage_dealt,
+		"total_damage_received": total_damage_received,
+		"total_healing_done": total_healing_done,
+		"total_cards_drawn": total_cards_drawn,
+		"total_kill_count": total_kill_count,
 		"damage_taken_count": damage_taken_count,
 		"ai_failed_card_target_ids": ai_failed_card_target_ids.duplicate(true),
 		"wheel_duel_lineup": wheel_duel_lineup.duplicate() if reveal_private or viewer_id == player_id else [],

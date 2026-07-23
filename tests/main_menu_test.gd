@@ -190,6 +190,8 @@ func _run() -> void:
 	var interaction_use_button: Button = main_instance.get_node("%UseButton") as Button
 	# 手牌区上方原取消按钮；终局时复用为“返回主菜单”。
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
+	# 终局结算入口；关闭自动弹出的结算面板后应位于重新开始与返回主菜单之间并可再次打开。
+	var interaction_settlement_button: Button = main_instance.get_node("%SettlementButton") as Button
 	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or all_cards_button.text != "所有卡牌" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or all_cards_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
@@ -728,8 +730,28 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 终局交互提示标签；平局快照后必须显示稳定结算文案。
 	var interaction_guide_label: Label = main_instance.get_node("%InteractionGuideLabel") as Label
-	if interaction_use_button.text != "重新开始" or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_cancel_button.disabled:
+	# 自动弹出的结算面板；终局时必须包含全角色统计列表与左上角关闭按钮。
+	var settlement_panel: GameSettlementPanel = main_instance.get_node("GameSettlementPanel") as GameSettlementPanel
+	# 结算面板左上角关闭按钮；面板创建失败时保持空值并由后续断言统一报错。
+	var settlement_close_button: Button = null
+	# 结算面板动态统计行容器；行数必须等于终局快照中的全部玩家数量。
+	var settlement_rows: VBoxContainer = null
+	if settlement_panel != null:
+		settlement_close_button = settlement_panel.get_node("%SettlementCloseButton") as Button
+		settlement_rows = settlement_panel.get_node("%RowsContainer") as VBoxContainer
+	if interaction_use_button.text != "重新开始" or interaction_settlement_button.text != "结算界面" or not interaction_settlement_button.visible or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_settlement_button.disabled or interaction_cancel_button.disabled or settlement_panel == null or not settlement_panel.visible or settlement_close_button == null or settlement_rows == null or settlement_rows.get_child_count() != terminal_snapshot.get("players", []).size():
 		_fail("post_match_actions")
+		return
+	# 左上角关闭后结算面板必须保持关闭，终局操作区的入口可再次打开同一局数据。
+	await _click_control(settlement_close_button)
+	await get_tree().process_frame
+	if settlement_panel.visible:
+		_fail("settlement_panel_close")
+		return
+	await _click_control(interaction_settlement_button)
+	await get_tree().process_frame
+	if not settlement_panel.visible:
+		_fail("settlement_panel_reopen")
 		return
 	# 点击终局返回按钮；必须释放当前权威状态并恢复主菜单，而不是保留一个不可继续的旧对局。
 	await _click_control(interaction_cancel_button)

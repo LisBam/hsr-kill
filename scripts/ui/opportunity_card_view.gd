@@ -63,6 +63,18 @@ var _skill_information_visible: bool = false
 ## 卡面规则正文；只显示主公提供的机缘描述，不添加插画、标题或额外规则改写。
 @onready var _description_label: Label = %DescriptionLabel
 
+## 获得技能机缘的专用文字容器；把技能名称从描述中拆出为独占一行，避免短技能名被自动换行拆断。
+@onready var _skill_description_content: VBoxContainer = %SkillDescriptionContent
+
+## 获得技能机缘中位于技能名前的原始描述片段；保留原始规则文案与引号格式。
+@onready var _skill_prefix_label: Label = %SkillPrefixLabel
+
+## 获得技能机缘的技能名称专用单行标签；超出牌面宽度时显示省略号而不换行。
+@onready var _skill_name_label: Label = %SkillNameLabel
+
+## 获得技能机缘中位于技能名后的原始描述片段；兼容“并获得技能”等复合规则描述。
+@onready var _skill_suffix_label: Label = %SkillSuffixLabel
+
 ## 覆盖整张牌面的透明按钮；输入与视觉分离，正文标签保持纯展示职责。
 @onready var _input_button: Button = %InputButton
 
@@ -85,11 +97,13 @@ func configure(card_definition: Dictionary, interactive: bool = true) -> void:
 	_dismiss_skill_information()
 	_card_id = str(card_definition.get("id", ""))
 	_interactive = interactive and not _card_id.is_empty()
-	_description_label.text = str(card_definition.get("description", ""))
+	# 机缘原始描述；技能名称展示会在下方按原文切分，普通机缘则保持整个描述使用统一正文标签。
+	var description: String = str(card_definition.get("description", ""))
 	# 机缘授予的技能ID；没有技能字段的普通数值机缘不创建空说明框。
 	var skill_id: String = str(card_definition.get("skill_id", ""))
 	# 机缘技能定义；说明沿用技能源码唯一原文，并按当前卡牌名称模式解析完整书名号。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id) if not skill_id.is_empty() else {}
+	_configure_description_layout(description, skill_definition)
 	_skill_information = {}
 	if not skill_definition.is_empty():
 		_skill_information = {
@@ -101,6 +115,40 @@ func configure(card_definition: Dictionary, interactive: bool = true) -> void:
 	if not _interactive:
 		_restore_hover_state()
 	_refresh_interaction_state()
+
+
+## 根据是否授予技能选择牌面文字布局；技能名保持一整行，其他原始文案继续由可换行正文承载。
+func _configure_description_layout(description: String, skill_definition: Dictionary) -> void:
+	_description_label.text = description
+	_description_label.visible = true
+	_skill_description_content.visible = false
+	_skill_prefix_label.text = ""
+	_skill_prefix_label.visible = false
+	_skill_name_label.text = ""
+	_skill_suffix_label.text = ""
+	_skill_suffix_label.visible = false
+	if skill_definition.is_empty():
+		return
+	# 机缘技能显示名；使用原始中文引号以保持卡牌描述文案不被改写。
+	var skill_name: String = str(skill_definition.get("name", ""))
+	if skill_name.is_empty():
+		return
+	# 原始描述中的完整技能名称片段；只拆分一次，避免复合描述的其他正文被丢失。
+	var quoted_skill_name: String = "“%s”" % skill_name
+	var skill_name_start: int = description.find(quoted_skill_name)
+	if skill_name_start < 0:
+		return
+	# 技能名之前的原文；例如“获得技能”或“……并获得技能”。
+	var prefix_text: String = description.left(skill_name_start)
+	# 技能名之后的原文；当前大多数机缘为空，但保留此段以支持未来追加规则而不破坏布局。
+	var suffix_text: String = description.substr(skill_name_start + quoted_skill_name.length())
+	_skill_prefix_label.text = prefix_text
+	_skill_prefix_label.visible = not prefix_text.is_empty()
+	_skill_name_label.text = quoted_skill_name
+	_skill_suffix_label.text = suffix_text
+	_skill_suffix_label.visible = not suffix_text.is_empty()
+	_description_label.visible = false
+	_skill_description_content.visible = true
 
 
 ## 设置当前牌面是否允许提交选择；权威回包前可立即禁用内部按钮，避免快速连点产生重复动作。
@@ -127,6 +175,15 @@ func _apply_quality_style(quality_id: String) -> void:
 	_description_label.add_theme_color_override("font_color", Color("fff8e8"))
 	_description_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
 	_description_label.add_theme_constant_override("outline_size", 4)
+	_skill_prefix_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_skill_prefix_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
+	_skill_prefix_label.add_theme_constant_override("outline_size", 4)
+	_skill_name_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_skill_name_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
+	_skill_name_label.add_theme_constant_override("outline_size", 4)
+	_skill_suffix_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_skill_suffix_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
+	_skill_suffix_label.add_theme_constant_override("outline_size", 4)
 
 
 ## 根据品质、悬停与交互状态重绘卡面；悬停只提亮原品质色，不替换品质颜色。
