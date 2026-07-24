@@ -5929,6 +5929,8 @@ func _expire_hand_view_as_effects_for_turn(player_id: int) -> void:
 		var card: CardInstance = player.find_hand_card(card_uid) if player != null else null
 		if card != null and card.has_hand_view_as() and card.hand_view_as_source_skill_id == str(expiry.get("source_skill_id", "")):
 			card.clear_hand_view_as()
+			# 到期表现清理；限时视为在持有者手牌内恢复原牌时不是“离手展示”，必须同步移除旧逻辑牌横条。
+			card.clear_hand_view_as_presentation()
 			changed = true
 		_hand_view_as_turn_expiries.erase(card_uid_variant)
 	if changed:
