@@ -846,13 +846,13 @@ func _test_wooden_ox_storage_excluded_from_hand_limit() -> bool:
 
 ## 验证 AI 响应滑条的全局范围、步长与默认值均与菜单契约一致。
 func _test_ai_delay_range() -> bool:
-	if not is_equal_approx(GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, 0.05):
+	if not is_equal_approx(GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, 0.10):
 		return _fail("ai_delay_min")
 	if not is_equal_approx(GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS, 1.0):
 		return _fail("ai_delay_max")
-	if not is_equal_approx(GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS, 0.05):
+	if not is_equal_approx(GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS, 0.50):
 		return _fail("ai_delay_step")
-	if not is_equal_approx(GameSettings.ai_response_delay_seconds, 0.30):
+	if not is_equal_approx(GameSettings.ai_response_delay_seconds, 0.10):
 		return _fail("ai_delay_default")
 	return true
 

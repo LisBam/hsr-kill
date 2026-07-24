@@ -160,6 +160,8 @@ func _run() -> void:
 	var menu_background: ColorRect = main_instance.get_node("%MainMenuBackground") as ColorRect
 	# AI速度滑条；用于验证设置控件轨道也跟随当前主题，不保留默认 Godot 配色。
 	var ai_response_slider: HSlider = main_instance.get_node("%MainMenuAiResponseDelaySlider") as HSlider
+	# 主菜单游戏速度滑条；与AI速度共同验证主菜单设置入口读取统一的秒数范围与步长。
+	var game_speed_slider: HSlider = main_instance.get_node("%MainMenuGameSpeedSlider") as HSlider
 	# 游戏人数文本框；用于验证 SpinBox 编辑区的焦点与常态边框来自当前主题。
 	var player_count_line_edit: LineEdit = player_count_input.get_line_edit()
 	# 主菜单卡牌名称下拉框；必须与UI风格保持标签加下拉框的统一设置格式。
@@ -624,6 +626,9 @@ func _run() -> void:
 	var warm_identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	if warm_identity_selected_style == null or not warm_identity_selected_style.bg_color.is_equal_approx(expected_warm_selected_mode_background):
 		_fail("mode_selected_background_theme_refresh")
+		return
+	if not is_equal_approx(ai_response_slider.min_value, 0.10) or not is_equal_approx(ai_response_slider.max_value, 1.00) or not is_equal_approx(ai_response_slider.step, 0.50) or not is_equal_approx(game_speed_slider.min_value, 0.10) or not is_equal_approx(game_speed_slider.max_value, 1.00) or not is_equal_approx(game_speed_slider.step, 0.50):
+		_fail("main_menu_speed_slider_range")
 		return
 	if not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
 		_fail("settings_theme_refresh")

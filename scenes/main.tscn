@@ -495,16 +495,16 @@ theme_override_constants/separation = 2
 [node name="AiResponseDelayLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/AiResponseDelayRow" unique_id=297365554]
 unique_name_in_owner = true
 layout_mode = 2
-text = "AI响应速度：0.30秒"
+text = "AI响应速度：0.10秒"
 
 [node name="AiResponseDelaySlider" type="HSlider" parent="MatchMenu/MenuPanel/MenuVBox/AiResponseDelayRow" unique_id=388650724]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 22)
 layout_mode = 2
-min_value = 0.05
+min_value = 0.1
 max_value = 1.0
-step = 0.05
-value = 0.3
+step = 0.5
+value = 0.1
 
 [node name="GameSpeedRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=51671744]
 layout_mode = 2
@@ -512,7 +512,7 @@ layout_mode = 2
 [node name="GameSpeedLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/GameSpeedRow" unique_id=1591804437]
 unique_name_in_owner = true
 layout_mode = 2
-text = "游戏速度：0.3秒间隔"
+text = "游戏速度：0.10秒"
 
 [node name="GameSpeedSlider" type="HSlider" parent="MatchMenu/MenuPanel/MenuVBox/GameSpeedRow" unique_id=1480396109]
 unique_name_in_owner = true
@@ -520,8 +520,8 @@ custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 min_value = 0.1
 max_value = 1.0
-step = 0.1
-value = 0.30000000000000004
+step = 0.5
+value = 0.1
 
 [node name="PlayerCountRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1045087042]
 layout_mode = 2
@@ -1878,22 +1878,22 @@ mouse_default_cursor_shape = 2
 [node name="MainMenuAiResponseDelayLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=489346337]
 unique_name_in_owner = true
 layout_mode = 2
-text = "AI响应速度：0.30秒"
+text = "AI响应速度：0.10秒"
 
 [node name="MainMenuAiResponseDelaySlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=555902079]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 22)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-min_value = 0.05
+min_value = 0.1
 max_value = 1.0
-step = 0.05
-value = 0.3
+step = 0.5
+value = 0.1
 
 [node name="MainMenuGameSpeedLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=508850181]
 unique_name_in_owner = true
 layout_mode = 2
-text = "游戏速度：0.3秒"
+text = "游戏速度：0.10秒"
 
 [node name="MainMenuGameSpeedSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=685925191]
 unique_name_in_owner = true
@@ -1902,8 +1902,8 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 0.1
 max_value = 1.0
-step = 0.1
-value = 0.30000000000000004
+step = 0.5
+value = 0.1
 
 [node name="MainMenuPlayerCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=180229364]
 layout_mode = 2
