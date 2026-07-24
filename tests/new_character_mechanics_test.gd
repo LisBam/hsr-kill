@@ -415,6 +415,18 @@ func _test_luka_gallagher_mechanics() -> bool:
 	var qinniang: SkillDefinition = _install_single_skill(0, "qinniang")
 	# 亲酿材料；梅花【杀】是黑色普通手牌，交付后临时定义应改为【酒】。
 	var black_gift: CardInstance = _add_hand_card(0, "sha", "club", 7)
+	# 亲酿AI候选；直接覆盖普通黑色手牌分支，确保强类型目标数组不会在出牌阶段构造动作时报错。
+	var qinniang_play_actions: Array[Dictionary] = []
+	qinniang.append_play_phase_actions(qinniang_play_actions)
+	# 当前材料对应的候选是否存在；至少一条动作证明候选构造已完整枚举普通手牌与存活目标。
+	var has_black_gift_play_action: bool = false
+	# 当前枚举的亲酿动作；从权威负载读取材料UID，避免测试依赖动作数组生成顺序。
+	for qinniang_action: Dictionary in qinniang_play_actions:
+		if int((qinniang_action.get("payload", {}) as Dictionary).get("card_uid", -1)) == black_gift.uid:
+			has_black_gift_play_action = true
+			break
+	if qinniang == null or not has_black_gift_play_action:
+		return _fail("qinniang_play_action_build=%s" % qinniang_play_actions)
 	if qinniang == null or not _controller.activate_skill(0, "qinniang", {"active_entry":"phaseUse", "card_uid":black_gift.uid, "target_ids":[1]}):
 		return _fail("qinniang_activation")
 	if _controller.state.get_player(1).find_hand_card(black_gift.uid) == null or black_gift.definition_id != "jiu" or black_gift.hand_view_as_original_definition_id != "sha":
@@ -552,15 +564,21 @@ func _test_yvkong_mechanics_and_card_tags() -> bool:
 	if not dual_tag_card.set_hand_view_as("sha", "test_view_as") or not _controller.set_hand_card_mark_tag(0, dual_tag_card.uid, "mingxian", {"label":"【鸣弦】", "order":100, "source_skill_id":"mingxian", "rule_overrides":{"ignore_distance_limit":true}}):
 		return _fail("dual_tag_setup=%s" % dual_tag_card.to_dict())
 	# 正式卡牌视图；TagRow必须同时创建视为与鸣弦两个同款标签，并保持4像素间距和整体居中。
+	# 等宽布局补充：两个标签现在各自铺满手牌宽度，并以4像素纵向间距组成居中的标签组。
 	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	add_child(card_view)
 	card_view.configure(dual_tag_card.to_dict(), GameDatabase.get_card(dual_tag_card.definition_id), false, true)
 	await get_tree().process_frame
 	# 标签横排容器；两个子项分别对应视为【杀】与手牌标记【鸣弦】。
-	var tag_row: HBoxContainer = card_view.get_node("%TagRow") as HBoxContainer
+	# 当前布局补充：TagRow已切换为纵向容器，仍按视为标签、手牌标记的稳定顺序保存两个子项。
+	var tag_row: VBoxContainer = card_view.get_node("%TagRow") as VBoxContainer
+	# 第一标签底板；视为标签必须重新铺满完整手牌宽度。
+	var first_tag_panel: PanelContainer = tag_row.get_child(0) as PanelContainer if tag_row != null and tag_row.get_child_count() > 0 else null
+	# 第二标签底板；手牌标记也必须与视为标签和手牌等宽。
+	var second_tag_panel: PanelContainer = tag_row.get_child(1) as PanelContainer if tag_row != null and tag_row.get_child_count() > 1 else null
 	# 第二个标签文字；第一项保留现有视为牌名，第二项必须严格显示设计文本。
 	var marked_tag_label: Label = (tag_row.get_child(1).get_child(0) as Label) if tag_row != null and tag_row.get_child_count() > 1 else null
-	if tag_row == null or tag_row.get_child_count() != 2 or tag_row.alignment != BoxContainer.ALIGNMENT_CENTER or tag_row.get_theme_constant("separation") != 4 or marked_tag_label == null or marked_tag_label.text != "【鸣弦】":
+	if tag_row == null or tag_row.get_child_count() != 2 or tag_row.alignment != BoxContainer.ALIGNMENT_CENTER or tag_row.get_theme_constant("separation") != 4 or first_tag_panel == null or second_tag_panel == null or not is_equal_approx(first_tag_panel.custom_minimum_size.x, card_view.card_width) or not is_equal_approx(second_tag_panel.custom_minimum_size.x, card_view.card_width) or marked_tag_label == null or marked_tag_label.text != "【鸣弦】":
 		card_view.queue_free()
 		return _fail("dual_tag_ui count=%s label=%s" % [tag_row.get_child_count() if tag_row != null else -1, marked_tag_label.text if marked_tag_label != null else ""])
 	card_view.queue_free()

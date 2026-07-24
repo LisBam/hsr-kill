@@ -110,7 +110,7 @@ offset_right = 111.0
 offset_bottom = 89.0
 mouse_filter = 2
 
-[node name="TagRow" type="HBoxContainer" parent="CardBody/ViewAsBanner"]
+[node name="TagRow" type="VBoxContainer" parent="CardBody/ViewAsBanner"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15

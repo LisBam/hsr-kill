@@ -447,14 +447,19 @@ func _test_opportunity_card_hover() -> bool:
 		choice_panel.close()
 		return _fail("opportunity_choice_holders")
 	# 悬停前相邻牌位位置；固定值用于确认HBox没有重新排版。
+	# 当前断言补充：首牌位位置与第二牌位位置均需稳定，保证固定牌位自身也不被视觉缩放改写。
 	var first_holder_position: Vector2 = first_holder.position
 	# 悬停前第二牌位位置；任何变化都说明缩放仍影响外层排版。
 	var second_holder_position: Vector2 = second_holder.position
+	# 悬停前横排尺寸；卡面边框加粗或缩放后不得改变容器的排版尺寸。
+	var cards_row_size: Vector2 = cards_row.size
+	# 悬停前弹窗框全局矩形；横排稳定时居中弹窗也不得因内部视觉反馈移动或扩张。
+	var frame_global_rect: Rect2 = (choice_panel.get_node("%Frame") as Control).get_global_rect()
 	(first_choice_card.get_node("%InputButton") as Button).mouse_entered.emit()
 	await get_tree().create_timer(first_choice_card.hover_animation_seconds + 0.04, true).timeout
-	if first_holder.position != first_holder_position or second_holder.position != second_holder_position or first_holder.custom_minimum_size != first_choice_card.card_size or not first_choice_card.scale.is_equal_approx(Vector2.ONE * first_choice_card.hover_scale):
+	if first_holder.position != first_holder_position or second_holder.position != second_holder_position or cards_row.size != cards_row_size or not (choice_panel.get_node("%Frame") as Control).get_global_rect().is_equal_approx(frame_global_rect) or first_holder.custom_minimum_size != first_choice_card.card_size or first_choice_card.custom_minimum_size != Vector2.ZERO or not first_choice_card.scale.is_equal_approx(Vector2.ONE * first_choice_card.hover_scale):
 		choice_panel.close()
-		return _fail("opportunity_choice_hover_layout first=%s/%s second=%s/%s holder=%s card=%s" % [first_holder.position, first_holder_position, second_holder.position, second_holder_position, first_holder.custom_minimum_size, first_choice_card.scale])
+		return _fail("opportunity_choice_hover_layout first=%s/%s second=%s/%s row=%s/%s frame=%s/%s holder=%s card_min=%s card=%s" % [first_holder.position, first_holder_position, second_holder.position, second_holder_position, cards_row.size, cards_row_size, (choice_panel.get_node("%Frame") as Control).get_global_rect(), frame_global_rect, first_holder.custom_minimum_size, first_choice_card.custom_minimum_size, first_choice_card.scale])
 	choice_panel.close()
 	return true
 
