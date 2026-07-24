@@ -153,6 +153,18 @@ func _test_shield_ui() -> bool:
 	# 数字模式排版参数；字号和负行间距共同保证三行分数更醒目且保持紧凑。
 	if shield_number.text != "3" or health_number.text != "5\n/\n6" or not shield_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_shield")) or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_full")) or shield_number.get_theme_font_size("font_size") != player_view.numeric_health_font_size or health_number.get_theme_font_size("font_size") != player_view.numeric_health_font_size or shield_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("outline_size") != player_view.numeric_health_outline_size or health_number.get_theme_constant("line_spacing") != player_view.numeric_health_line_spacing:
 		return _fail("numeric_health=%s/%s" % [shield_number.text, health_number.text])
+	# 数字模式黄色残血快照；上限仍为6时，2点体力必须与圆点模式使用相同黄色警示语义。
+	numeric_snapshot["hp"] = 2
+	player_view.configure_snapshot(numeric_snapshot)
+	health_number = health_container.get_child(1) as Label
+	if health_number == null or health_number.text != "2\n/\n6" or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_warning")):
+		return _fail("numeric_health_warning=%s/%s" % [health_number.text if health_number != null else "", health_number.get_theme_color("font_color") if health_number != null else Color.TRANSPARENT])
+	# 数字模式红色残血快照；上限仍为6时，1点体力必须使用与圆点模式一致的红色危险语义。
+	numeric_snapshot["hp"] = 1
+	player_view.configure_snapshot(numeric_snapshot)
+	health_number = health_container.get_child(1) as Label
+	if health_number == null or health_number.text != "1\n/\n6" or not health_number.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("health_danger")):
+		return _fail("numeric_health_danger=%s/%s" % [health_number.text if health_number != null else "", health_number.get_theme_color("font_color") if health_number != null else Color.TRANSPARENT])
 	return true
 
 

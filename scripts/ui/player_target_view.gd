@@ -960,12 +960,13 @@ func _refresh_health_pips(safe_hp: int, max_hp: int, shield: int) -> void:
 			shield_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_health_pip_container.add_child(shield_number)
 		# 数字体力标签；高上限角色使用绿色加粗分数格式同时展示当前体力与体力上限，不再按残血切换黄红色。
+		# 当前颜色规则补充：数字模式与圆点模式共用残血语义，体力上限大于2时2点为黄色、1点为红色。
 		# 分数内容按“当前值、斜杠、上限值”分成三行，确保窄体力框内沿武将牌右侧纵向阅读。
 		var health_number: Label = Label.new()
 		health_number.text = "%d\n/\n%d" % [safe_hp, max_hp]
 		health_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		health_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		_apply_numeric_health_label_style(health_number, BattleUIStyle.get_color("health_full"))
+		_apply_numeric_health_label_style(health_number, _resolve_current_health_color(safe_hp, max_hp))
 		health_number.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_health_pip_container.add_child(health_number)
 		_layout_health_frame(true)
