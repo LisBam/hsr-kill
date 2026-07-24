@@ -433,7 +433,7 @@ func _test_luka_gallagher_mechanics() -> bool:
 		return _fail("qinniang_view_as=%s" % black_gift.to_dict())
 	_controller._arm_hand_view_as_expiries_for_turn(1)
 	_controller._expire_hand_view_as_effects_for_turn(1)
-	if black_gift.definition_id != "sha" or black_gift.has_hand_view_as():
+	if black_gift.definition_id != "sha" or black_gift.has_hand_view_as() or not black_gift.last_hand_view_as_original_definition_id.is_empty() or not black_gift.last_hand_view_as_definition_id.is_empty() or not str(black_gift.to_dict().get("view_as_definition_id", "")).is_empty():
 		return _fail("qinniang_expire=%s" % black_gift.to_dict())
 
 	_reset_state(5)
