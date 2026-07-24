@@ -627,7 +627,7 @@ func _run() -> void:
 	if warm_identity_selected_style == null or not warm_identity_selected_style.bg_color.is_equal_approx(expected_warm_selected_mode_background):
 		_fail("mode_selected_background_theme_refresh")
 		return
-	if not is_equal_approx(ai_response_slider.min_value, 0.10) or not is_equal_approx(ai_response_slider.max_value, 1.00) or not is_equal_approx(ai_response_slider.step, 0.50) or not is_equal_approx(game_speed_slider.min_value, 0.10) or not is_equal_approx(game_speed_slider.max_value, 1.00) or not is_equal_approx(game_speed_slider.step, 0.50):
+	if not is_equal_approx(ai_response_slider.min_value, 0.10) or not is_equal_approx(ai_response_slider.max_value, 1.00) or not is_equal_approx(ai_response_slider.step, 0.05) or not is_equal_approx(game_speed_slider.min_value, 0.10) or not is_equal_approx(game_speed_slider.max_value, 1.00) or not is_equal_approx(game_speed_slider.step, 0.05):
 		_fail("main_menu_speed_slider_range")
 		return
 	if not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):

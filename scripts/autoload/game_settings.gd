@@ -163,8 +163,7 @@ const MIN_AI_RESPONSE_DELAY_SECONDS: float = 0.10
 const MAX_AI_RESPONSE_DELAY_SECONDS: float = 1.0
 
 ## AI 响应等待时间的调节步长；默认0.05秒，兼顾可感知变化与菜单滑条的调节精度。
-## 当前步长补充：两个速度设置统一使用0.50秒步长，主菜单与局内菜单均从该常量读取。
-const AI_RESPONSE_DELAY_STEP_SECONDS: float = 0.50
+const AI_RESPONSE_DELAY_STEP_SECONDS: float = 0.05
 
 ## 游戏流程间隔的最小值；默认0.1秒，保证连续阶段与响应之间保留可观察的画面更新边界。
 const MIN_GAME_SPEED_INTERVAL_SECONDS: float = 0.1
@@ -173,8 +172,8 @@ const MIN_GAME_SPEED_INTERVAL_SECONDS: float = 0.1
 const MAX_GAME_SPEED_INTERVAL_SECONDS: float = 1.0
 
 ## 游戏流程间隔的调节步长；默认0.1秒，与菜单滑条显示精度保持一致。
-## 当前步长补充：流程间隔与AI响应等待共用0.50秒调节精度，避免设置入口出现不同档位。
-const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.50
+## 当前步长补充：流程间隔与AI响应等待统一使用0.05秒调节精度，避免设置入口出现不同档位。
+const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.05
 
 ## 联机玩家名称允许的最大 Unicode 字符数；20与局域网成员协议上限一致，运行时无需动态修改。
 const MAX_ONLINE_PLAYER_NAME_LENGTH: int = 20
@@ -264,12 +263,10 @@ const DEFAULT_CONQUEST_PLAYER_COUNT: int = 2
 var card_name_mode: NameMode = NameMode.CUSTOM
 
 ## 当前 AI 每次行动或选择响应前的等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
-## 当前默认补充：默认0.10秒必须是0.10至1.00秒、步长0.50秒约束下的合法值。
-var ai_response_delay_seconds: float = 0.10
+var ai_response_delay_seconds: float = 0.30
 
 ## 当前相邻阶段与自动响应之间的最小等待秒数；默认0.30秒，运行时可通过局内菜单动态修改。
-## 当前默认补充：默认0.10秒必须是0.10至1.00秒、步长0.50秒约束下的合法值。
-var game_speed_interval_seconds: float = 0.10
+var game_speed_interval_seconds: float = 0.30
 
 ## 当前 UI 风格标识；默认使用黑白太空风格，运行时可在局内设置中即时切换且不修改对局规则。
 var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
@@ -408,7 +405,7 @@ func toggle_card_name_mode() -> void:
 ## 设置 AI 每次行动与响应前的统一等待时间；范围外输入会限制到全局设置允许的安全区间。
 func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 	# 限制后的延迟；统一按滑条步长取整，保证界面显示值与调度实际使用值一致。
-	var clamped_delay_seconds: float = _normalize_timed_setting_seconds(delay_seconds, MIN_AI_RESPONSE_DELAY_SECONDS, MAX_AI_RESPONSE_DELAY_SECONDS, AI_RESPONSE_DELAY_STEP_SECONDS)
+	var clamped_delay_seconds: float = snappedf(clampf(delay_seconds, MIN_AI_RESPONSE_DELAY_SECONDS, MAX_AI_RESPONSE_DELAY_SECONDS), AI_RESPONSE_DELAY_STEP_SECONDS)
 	if is_equal_approx(ai_response_delay_seconds, clamped_delay_seconds):
 		return
 	ai_response_delay_seconds = clamped_delay_seconds
@@ -419,25 +416,12 @@ func set_ai_response_delay_seconds(delay_seconds: float) -> void:
 ## 设置相邻阶段和自动响应之间的最小等待时间；范围外输入按菜单允许值限制并对齐到固定步长。
 func set_game_speed_interval_seconds(interval_seconds: float) -> void:
 	# 限制后的流程间隔；统一按滑条步长取整，保证标签显示值与实际调度值一致。
-	var clamped_interval_seconds: float = _normalize_timed_setting_seconds(interval_seconds, MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS, GAME_SPEED_INTERVAL_STEP_SECONDS)
+	var clamped_interval_seconds: float = snappedf(clampf(interval_seconds, MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS), GAME_SPEED_INTERVAL_STEP_SECONDS)
 	if is_equal_approx(game_speed_interval_seconds, clamped_interval_seconds):
 		return
 	game_speed_interval_seconds = clamped_interval_seconds
 	_queue_settings_save()
 	game_speed_changed.emit(game_speed_interval_seconds)
-
-
-## 将任意秒数限制到设置范围并相对最小值按步长对齐；最大值不是步长整倍数时仍保留为可选上限，避免0.10秒配0.50秒步长被错误吸附为0.00秒。
-func _normalize_timed_setting_seconds(value_seconds: float, minimum_seconds: float, maximum_seconds: float, step_seconds: float) -> float:
-	# 已限制到合法闭区间的秒数；先处理上限可保证1.00秒作为范围终点始终可保存和显示。
-	var clamped_seconds: float = clampf(value_seconds, minimum_seconds, maximum_seconds)
-	if is_equal_approx(clamped_seconds, maximum_seconds):
-		return maximum_seconds
-	# 相对最小值的步进距离；减去最小值后再取整，使0.10秒成为首个合法档位而非被全局零点取整。
-	var snapped_offset_seconds: float = snappedf(clamped_seconds - minimum_seconds, step_seconds)
-	return clampf(minimum_seconds + snapped_offset_seconds, minimum_seconds, maximum_seconds)
-
-
 ## 设置全局 UI 风格；未知标识自动回退默认风格，并通知已连接的界面组件即时重绘。
 func set_ui_style(style_id: String) -> void:
 	# 已注册的风格标识；设置层只保存稳定 ID，不持有任何颜色字典或场景节点引用。
@@ -768,8 +752,8 @@ func _load_saved_settings() -> void:
 	if stored_schema_version < 1:
 		return
 	card_name_mode = _normalize_card_name_mode(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "card_name_mode", card_name_mode))
-	ai_response_delay_seconds = _normalize_timed_setting_seconds(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_response_delay_seconds", ai_response_delay_seconds)), MIN_AI_RESPONSE_DELAY_SECONDS, MAX_AI_RESPONSE_DELAY_SECONDS, AI_RESPONSE_DELAY_STEP_SECONDS)
-	game_speed_interval_seconds = _normalize_timed_setting_seconds(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "game_speed_interval_seconds", game_speed_interval_seconds)), MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS, GAME_SPEED_INTERVAL_STEP_SECONDS)
+	ai_response_delay_seconds = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ai_response_delay_seconds", ai_response_delay_seconds)), MIN_AI_RESPONSE_DELAY_SECONDS, MAX_AI_RESPONSE_DELAY_SECONDS), AI_RESPONSE_DELAY_STEP_SECONDS)
+	game_speed_interval_seconds = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "game_speed_interval_seconds", game_speed_interval_seconds)), MIN_GAME_SPEED_INTERVAL_SECONDS, MAX_GAME_SPEED_INTERVAL_SECONDS), GAME_SPEED_INTERVAL_STEP_SECONDS)
 	ui_style_id = UIStyleRegistry.normalize_style_id(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "ui_style_id", ui_style_id)))
 	auto_identity_marking_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "auto_identity_marking_enabled", auto_identity_marking_enabled))
 	next_match_mode = normalize_match_mode(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)))
