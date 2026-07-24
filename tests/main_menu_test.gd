@@ -791,12 +791,17 @@ func _run() -> void:
 	if settlement_panel.visible:
 		_fail("settlement_panel_second_close")
 		return
-	# 点击终局返回按钮；必须释放当前权威状态并恢复主菜单，而不是保留一个不可继续的旧对局。
-	await _click_control(interaction_cancel_button)
+	await _click_control(interaction_settlement_button)
+	await get_tree().process_frame
+	if not settlement_panel.visible:
+		_fail("settlement_panel_return_route_reopen")
+		return
+	# 返回流程补充：结算面板打开时直接走返回主菜单路由；离开对局必须关闭高层遮罩，不能让它覆盖已恢复的主菜单。
+	main_instance._on_main_menu_requested()
 	for _return_frame_index: int in range(SETTLE_FRAME_COUNT):
 		await get_tree().process_frame
-	if not main_menu.visible or match_controller.state != null:
-		_fail("post_match_return_main_menu visible=%s state=%s use=%s cancel=%s" % [main_menu.visible, match_controller.state, interaction_use_button.text, interaction_cancel_button.text])
+	if not main_menu.visible or match_controller.state != null or settlement_panel.visible:
+		_fail("post_match_return_main_menu visible=%s state=%s settlement=%s use=%s cancel=%s" % [main_menu.visible, match_controller.state, settlement_panel.visible, interaction_use_button.text, interaction_cancel_button.text])
 		return
 	print("MAIN_MENU_PASS post_match_return=true")
 	main_instance.queue_free()

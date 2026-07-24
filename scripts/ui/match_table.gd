@@ -918,6 +918,7 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 
 ## 处理意外局域网会话结束；局域网不迁移房主，清空远端表现并以具体原因恢复联机入口。
 func _on_lan_session_closed(message: String) -> void:
+	_hide_game_settlement_panel_for_main_menu()
 	match_controller.clear_remote_network_state()
 	_refresh_match_menu_authority_controls()
 	if match_controller.state != null:
@@ -1123,6 +1124,13 @@ func _sync_game_settlement_panel() -> void:
 ## 响应结算面板关闭；自动展示标记刻意不清空，确保用户关闭后的同局快照不会立即重新打开。
 func _on_game_settlement_close_requested() -> void:
 	pass
+
+
+## 在主菜单重新取得输入前关闭结算模态并清空本局自动展示标记；正常退出、局域网会话结束和菜单可见性变化都复用此边界，避免高层遮罩残留在主菜单之上。
+func _hide_game_settlement_panel_for_main_menu() -> void:
+	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
+		game_settlement_panel.hide_settlement()
+	_settlement_auto_shown_match_id = ""
 
 
 ## 从终局操作区再次打开结算界面；仅整局结束时允许，避免本地阵亡但对局继续时看到未完成统计。
@@ -2892,9 +2900,7 @@ func _on_restart_requested(player_count: int) -> bool:
 func _on_main_menu_requested() -> void:
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
-	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
-		game_settlement_panel.hide_settlement()
-	_settlement_auto_shown_match_id = ""
+	_hide_game_settlement_panel_for_main_menu()
 	match_controller.abandon_match()
 	if match_controller.network_gateway.mode == NetworkGateway.Mode.LAN:
 		match_controller.network_gateway.leave_lan("")
@@ -2913,9 +2919,14 @@ func _on_main_menu_requested() -> void:
 
 ## 主菜单覆盖牌桌时隐藏右上局内菜单入口；可见性切换由主菜单信号驱动，测试与场景路由同样生效。
 func _sync_match_menu_visibility() -> void:
-	if match_menu == null or not is_instance_valid(match_menu) or main_menu == null or not is_instance_valid(main_menu):
+	if main_menu == null or not is_instance_valid(main_menu):
 		return
 	var main_menu_visible: bool = main_menu.visible
+	# 主菜单可见是所有返回入口的最终界面边界；即使未来入口漏掉主动清理，也不能让终局模态继续覆盖主菜单。
+	if main_menu_visible:
+		_hide_game_settlement_panel_for_main_menu()
+	if match_menu == null or not is_instance_valid(match_menu):
+		return
 	if main_menu_visible and match_menu.is_menu_open():
 		match_menu.set_menu_open(false)
 	match_menu.visible = not main_menu_visible
