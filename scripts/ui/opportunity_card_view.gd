@@ -15,6 +15,9 @@ signal information_dismissed
 ## 正式机缘卡固定尺寸；宽高参考武将牌比例，三张并列时适配1280×720战斗视口。
 @export var card_size: Vector2 = Vector2(180.0, 240.0)
 
+## 是否向父级容器报告机缘牌最小尺寸；默认开启供普通独立展示使用，选择弹窗的固定牌位会在入树前关闭以隔离悬停缩放和样式变化。
+@export var reports_layout_minimum_size: bool = true
+
 ## 普通机缘卡规则正文的默认字号；默认21像素沿用正式牌面规格，内容定义可按单张牌覆盖，运行时无需动态修改。
 @export_range(12, 28, 1) var default_description_font_size: int = 21
 
@@ -85,7 +88,8 @@ var _skill_information_visible: bool = false
 ## 初始化透明输入并应用默认不可交互状态。
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	custom_minimum_size = card_size
+	# 对外最小尺寸；固定牌位内的卡面不参与父HBox最小尺寸计算，独立展示仍保持正式卡牌尺寸。
+	custom_minimum_size = card_size if reports_layout_minimum_size else Vector2.ZERO
 	pivot_offset = card_size * 0.5
 	_resting_z_index = z_index
 	_input_button.pressed.connect(_on_pressed)

@@ -50,6 +50,7 @@ signal information_dismissed
 @export var disabled_content_modulate: Color = Color(0.45, 0.45, 0.45, 1.0)
 
 ## 视为名称横条的固定高度；默认22像素形成贴合牌面类别色的细条，不遮挡底部实体牌名，运行时可按牌面比例调整。
+## 多标签布局补充：该高度表示单个标签行高，标签组总高度会按实际非空标签数量和固定间距计算。
 @export_range(16.0, 36.0, 1.0) var view_as_banner_height: float = 22.0
 
 ## 视为名称横条的文字尺寸；默认16像素低于实体牌名层级，运行时可按主题可读性调整。
@@ -169,10 +170,12 @@ var _configuration_signature: int = -1
 @onready var _accent_bar: ColorRect = $CardBody/AccentBar
 
 ## 卡牌标签横条区域；视为牌名与通用手牌标记会在此并排居中，不阻断原有输入区域。
+## 当前布局补充：为了让每个标签恢复与手牌等宽，运行时使用纵向标签组并让整组居中。
 @onready var _view_as_banner: Control = $CardBody/ViewAsBanner
 
 ## 卡牌标签横向容器；动态标签之间保留固定间距，单标签和双标签都会整体居中。
-@onready var _card_tag_row: HBoxContainer = %TagRow
+## 当前容器补充：场景节点使用VBoxContainer，使每个等宽标签按纵向间距排列。
+@onready var _card_tag_row: VBoxContainer = %TagRow
 
 ## 独立输入区域；负责点击、悬停和 Godot 原生拖拽协议。
 @onready var _input_area: CardInputArea = $InputArea
@@ -434,6 +437,7 @@ func _refresh_card_content() -> void:
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
+	_configure_view_as_banner_geometry()
 	_view_as_banner.visible = not is_face_down and (not _view_as_display_name_text.is_empty() or not _hand_mark_tags.is_empty())
 	_rebuild_card_tag_banners()
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
@@ -445,16 +449,28 @@ func _refresh_card_content() -> void:
 
 
 ## 按当前牌面尺寸把卡牌标签行固定在插画中央；多个标签保留间距并作为整体居中。
+## 等宽布局补充：每个标签铺满手牌宽度，多个标签纵向留缝后再按整个标签组居中。
 func _configure_view_as_banner_geometry() -> void:
 	if not is_node_ready():
 		return
-	# 横条尺寸；宽度始终等于牌面宽度，高度读取检查器参数以适配不同牌面缩放。
-	_view_as_banner.size = Vector2(card_width, view_as_banner_height)
-	# 横条纵坐标；以牌面中心为基准上下对称，默认111×148时为59像素。
-	_view_as_banner.position = Vector2(0.0, (card_height - view_as_banner_height) * 0.5)
+	# 当前可见标签数量；视为牌名固定在首行，每个非空手牌标记占用独立一行。
+	var tag_count: int = 1 if not _view_as_display_name_text.is_empty() else 0
+	# 当前待统计的手牌标记；空标签不创建可见行，因此不计入标签组高度。
+	for tag_data: Dictionary in _hand_mark_tags:
+		if not str(tag_data.get("label", "")).is_empty():
+			tag_count += 1
+	# 标签行间距；复用场景容器配置，保证场景编辑器与运行时脚本修改保持一致。
+	var tag_separation: float = float(_card_tag_row.get_theme_constant("separation"))
+	# 标签组高度；没有标签时保留单行高度供后续配置复用，多个标签按行高与间距精确累计。
+	var banner_height: float = view_as_banner_height if tag_count <= 1 else view_as_banner_height * float(tag_count) + tag_separation * float(tag_count - 1)
+	# 标签组尺寸；每一行宽度始终等于手牌宽度，避免视为与标记标签退化为文字宽度。
+	_view_as_banner.size = Vector2(card_width, banner_height)
+	# 标签组纵坐标；以整组高度为基准在牌面中央对称摆放。
+	_view_as_banner.position = Vector2(0.0, (card_height - banner_height) * 0.5)
 
 
 ## 重建视为名称与通用手牌标记标签；两类标签使用同一视觉组件，并由HBox统一保留间距和整体居中。
+## 当前容器补充：等宽标签改由VBoxContainer处理纵向间距，显示顺序仍然保持视为标签在前。
 func _refresh_view_as_banner_style() -> void:
 	if not is_node_ready():
 		return
@@ -480,10 +496,12 @@ func _rebuild_card_tag_banners() -> void:
 
 
 ## 创建一个与视为标签同款的紧凑牌面标签；文字宽度决定自身宽度，父HBox负责双标签整体居中。
+## 等宽布局补充：当前每个标签的最小宽度固定为手牌宽度，父VBox负责多标签整体居中。
 func _create_card_tag_banner(label_text: String, border_color: Color) -> PanelContainer:
 	# 标签底板；白色牌纸和类别色边框与现有视为标签保持一致。
 	var panel: PanelContainer = PanelContainer.new()
-	panel.custom_minimum_size = Vector2(0.0, view_as_banner_height)
+	panel.custom_minimum_size = Vector2(card_width, view_as_banner_height)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# 标签底色；透明度由检查器参数控制，不改变文字和边框可读性。
 	var background_color: Color = BattleUIStyle.get_color("card_paper")
@@ -492,6 +510,7 @@ func _create_card_tag_banner(label_text: String, border_color: Color) -> PanelCo
 	var resolved_border_color: Color = border_color
 	resolved_border_color.a = 0.96
 	# 标签样式；水平内边距为3像素，让并排标签在111像素牌宽内仍能完整显示。
+	# 等宽样式补充：相同内边距继续用于整张手牌宽度内的文字和边框留白。
 	var panel_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(background_color, resolved_border_color, 1, 2)
 	panel_style.content_margin_left = 3.0
 	panel_style.content_margin_right = 3.0

@@ -115,8 +115,13 @@ func _create_card_holder(card_view: OpportunityCardView) -> Control:
 	holder.name = "OpportunityCardHolder"
 	holder.custom_minimum_size = card_view.card_size
 	holder.size = card_view.card_size
+	# 牌位尺寸标志；HBox有额外空间时只移动整个固定牌位，不会把内部卡面扩展为新的布局依据。
+	holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	holder.clip_contents = false
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 内部牌面关闭最小尺寸上报；卡面悬停缩放、边框加粗或正文重排都不能反向触发HBox重新排版。
+	card_view.reports_layout_minimum_size = false
 	holder.add_child(card_view)
 	card_view.position = Vector2.ZERO
 	card_view.size = card_view.card_size

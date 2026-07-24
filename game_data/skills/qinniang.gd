@@ -193,7 +193,13 @@ func _build_candidate_target_maps(candidates: Array[Dictionary], target_ids: Arr
 		# 当前候选UID；作为目标映射和最终提交复核的稳定键。
 		var card_uid: int = int(candidate.get("uid", -1))
 		# 当前候选合法目标；装备候选只允许目标为技能持有者。
-		var legal_target_ids: Array[int] = [owner_player_id] if str(candidate.get("zone", "")) == "equipment" else target_ids.duplicate()
+		# 强类型构造补充：逐项写入Array[int]，避免duplicate返回无类型Array而在出牌阶段候选构造时触发类型错误。
+		var legal_target_ids: Array[int] = []
+		if str(candidate.get("zone", "")) == "equipment":
+			legal_target_ids.append(owner_player_id)
+		else:
+			for target_id: int in target_ids:
+				legal_target_ids.append(target_id)
 		target_ids_by_card_id[str(card_uid)] = legal_target_ids.duplicate()
 		# 当前候选完整组合数组；每个目标以单元素数组表达。
 		var combinations: Array[Array] = []
