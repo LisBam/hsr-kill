@@ -738,6 +738,17 @@ func _run() -> void:
 	terminal_snapshot["game_over"] = true
 	terminal_snapshot["current_phase"] = "end"
 	terminal_snapshot["winner"] = "draw"
+	# 终局角色数组；仅改写显示快照首项，固定覆盖结算角色列的“武将名（玩家名）”排版。
+	var terminal_players: Array = terminal_snapshot.get("players", []) as Array
+	# 排版专项首名角色；使用已登记丹恒与AI玩家名，避免随机选将或本地名字影响精确文本断言。
+	var settlement_title_player: Dictionary = terminal_players[0] as Dictionary if not terminal_players.is_empty() else {}
+	if settlement_title_player.is_empty():
+		_fail("settlement_title_test_player_missing")
+		return
+	settlement_title_player["character_id"] = "dan_heng"
+	settlement_title_player["display_name"] = "[AI]玩家1"
+	terminal_players[0] = settlement_title_player
+	terminal_snapshot["players"] = terminal_players
 	match_controller.state_changed.emit(terminal_snapshot)
 	await get_tree().process_frame
 	# 终局交互提示标签；平局快照后必须显示稳定结算文案。
@@ -750,12 +761,18 @@ func _run() -> void:
 	var settlement_frame: PanelContainer = null
 	# 结算面板动态统计行容器；行数必须等于终局快照中的全部玩家数量。
 	var settlement_rows: VBoxContainer = null
+	# 首行角色列标签；用于验证武将名和玩家名没有被拆成两行。
+	var settlement_first_role_label: Label = null
 	if settlement_panel != null:
 		settlement_close_button = settlement_panel.get_node("%SettlementCloseButton") as Button
 		settlement_frame = settlement_panel.get_node("%Frame") as PanelContainer
 		settlement_rows = settlement_panel.get_node("%RowsContainer") as VBoxContainer
-	if interaction_use_button.text != "重新开始" or interaction_settlement_button.text != "结算界面" or not interaction_settlement_button.visible or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_settlement_button.disabled or interaction_cancel_button.disabled or settlement_panel == null or not settlement_panel.visible or settlement_close_button == null or settlement_frame == null or settlement_close_button.position.x <= settlement_frame.size.x * 0.5 or settlement_rows == null or settlement_rows.get_child_count() != terminal_snapshot.get("players", []).size():
-		_fail("post_match_actions close_position=%s frame_size=%s close=%s frame=%s rows=%s/%s" % [settlement_close_button.position if settlement_close_button != null else Vector2.ZERO, settlement_frame.size if settlement_frame != null else Vector2.ZERO, settlement_close_button != null, settlement_frame != null, settlement_rows.get_child_count() if settlement_rows != null else -1, terminal_snapshot.get("players", []).size()])
+	if settlement_rows != null and settlement_rows.get_child_count() > 0:
+		# 首项统计行；角色列固定为动态行的第一个单元格。
+		var settlement_first_row: HBoxContainer = settlement_rows.get_child(0) as HBoxContainer
+		settlement_first_role_label = settlement_first_row.get_child(0) as Label if settlement_first_row != null and settlement_first_row.get_child_count() > 0 else null
+	if interaction_use_button.text != "重新开始" or interaction_settlement_button.text != "结算界面" or not interaction_settlement_button.visible or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_settlement_button.disabled or interaction_cancel_button.disabled or settlement_panel == null or not settlement_panel.visible or settlement_close_button == null or settlement_frame == null or settlement_close_button.position.x <= settlement_frame.size.x * 0.5 or settlement_rows == null or settlement_rows.get_child_count() != terminal_snapshot.get("players", []).size() or settlement_first_role_label == null or settlement_first_role_label.text != "丹恒（[AI]玩家1）":
+		_fail("post_match_actions close_position=%s frame_size=%s close=%s frame=%s rows=%s/%s role=%s" % [settlement_close_button.position if settlement_close_button != null else Vector2.ZERO, settlement_frame.size if settlement_frame != null else Vector2.ZERO, settlement_close_button != null, settlement_frame != null, settlement_rows.get_child_count() if settlement_rows != null else -1, terminal_snapshot.get("players", []).size(), settlement_first_role_label.text if settlement_first_role_label != null else ""])
 		return
 	# 右上角关闭后结算面板必须保持关闭，终局操作区的入口可再次打开同一局数据。
 	await _click_control(settlement_close_button)

@@ -10,6 +10,7 @@ signal close_requested
 const MODAL_Z_INDEX: int = 220
 
 ## 结算表角色列的最小宽度；保留显示名与武将名，窄窗口由外层滚动区域承接。
+## 当前标题布局补充：已公开武将名在前、玩家显示名置于全角括号内，二者固定使用同一行文本。
 const ROLE_COLUMN_MINIMUM_WIDTH: float = 230.0
 
 ## 每项累计统计列的最小宽度；五列保持同宽，避免不同角色行的数值错位。
@@ -109,7 +110,8 @@ func _create_stat_row(player: Dictionary) -> HBoxContainer:
 	# 武将显示名；未知或旧快照缺失时不在角色名后追加无意义占位符。
 	var character_name: String = GameDatabase.resolve_character_name(character_id) if not character_id.is_empty() else ""
 	# 角色列正文；使用换行显示玩家与武将，使所有角色都能在窄窗口中被识别。
-	var role_text: String = "%s\n%s" % [display_name, character_name] if not character_name.is_empty() else display_name
+	# 当前排版补充：武将名与玩家名同一行展示，武将名在前，玩家名以全角括号附注，便于逐行比较战绩。
+	var role_text: String = "%s（%s）" % [character_name, display_name] if not character_name.is_empty() else display_name
 	row.add_child(_create_cell(role_text, ROLE_COLUMN_MINIMUM_WIDTH, HORIZONTAL_ALIGNMENT_LEFT))
 	row.add_child(_create_cell(str(int(player.get("total_damage_dealt", 0))), STAT_COLUMN_MINIMUM_WIDTH))
 	row.add_child(_create_cell(str(int(player.get("total_damage_received", 0))), STAT_COLUMN_MINIMUM_WIDTH))
