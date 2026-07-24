@@ -443,7 +443,9 @@ func _test_opportunity_card_hover() -> bool:
 	var second_holder: Control = cards_row.get_child(1) as Control if cards_row != null and cards_row.get_child_count() > 1 else null
 	# 首张机缘卡；缩放动画只允许发生在牌位内部的该节点上。
 	var first_choice_card: OpportunityCardView = first_holder.get_child(0) as OpportunityCardView if first_holder != null and first_holder.get_child_count() > 0 else null
-	if cards_row == null or cards_row.get_child_count() != 3 or first_holder == null or second_holder == null or first_choice_card == null:
+	# 第二张技能机缘卡；用于验证技能名专用排版不会被悬停边框挤压或重算。
+	var second_choice_card: OpportunityCardView = second_holder.get_child(0) as OpportunityCardView if second_holder != null and second_holder.get_child_count() > 0 else null
+	if cards_row == null or cards_row.get_child_count() != 3 or first_holder == null or second_holder == null or first_choice_card == null or second_choice_card == null:
 		choice_panel.close()
 		return _fail("opportunity_choice_holders")
 	# 悬停前相邻牌位位置；固定值用于确认HBox没有重新排版。
@@ -460,6 +462,35 @@ func _test_opportunity_card_hover() -> bool:
 	if first_holder.position != first_holder_position or second_holder.position != second_holder_position or cards_row.size != cards_row_size or not (choice_panel.get_node("%Frame") as Control).get_global_rect().is_equal_approx(frame_global_rect) or first_holder.custom_minimum_size != first_choice_card.card_size or first_choice_card.custom_minimum_size != Vector2.ZERO or not first_choice_card.scale.is_equal_approx(Vector2.ONE * first_choice_card.hover_scale):
 		choice_panel.close()
 		return _fail("opportunity_choice_hover_layout first=%s/%s second=%s/%s row=%s/%s frame=%s/%s holder=%s card_min=%s card=%s" % [first_holder.position, first_holder_position, second_holder.position, second_holder_position, cards_row.size, cards_row_size, (choice_panel.get_node("%Frame") as Control).get_global_rect(), frame_global_rect, first_holder.custom_minimum_size, first_choice_card.custom_minimum_size, first_choice_card.scale])
+	# 首张牌结束悬停；真实鼠标移到第二张牌时首张会先复原，测试显式模拟此输入边界。
+	(first_choice_card.get_node("%InputButton") as Button).mouse_exited.emit()
+	await get_tree().create_timer(first_choice_card.hover_animation_seconds + 0.04, true).timeout
+	# 技能名专用布局容器；蓝色【机巧】机缘的前缀与技能名均应在悬停前后保持本地布局不变。
+	var skill_content: VBoxContainer = second_choice_card.get_node("%SkillDescriptionContent") as VBoxContainer
+	# 技能名前缀标签；其纵坐标和尺寸可直接反映可用正文区域是否被边框挤压。
+	var skill_prefix_label: Label = second_choice_card.get_node("%SkillPrefixLabel") as Label
+	# 技能名称专用标签；该行禁止换行，悬停时也不得被重新压缩、移动或省略。
+	var choice_skill_name_label: Label = second_choice_card.get_node("%SkillNameLabel") as Label
+	if skill_content == null or skill_prefix_label == null or choice_skill_name_label == null or not skill_content.visible or not skill_prefix_label.visible or not choice_skill_name_label.visible:
+		choice_panel.close()
+		return _fail("opportunity_skill_hover_layout_nodes")
+	# 悬停前技能布局容器位置；仅比较本地坐标，缩放本身不应影响该稳定排版坐标。
+	var skill_content_position: Vector2 = skill_content.position
+	# 悬停前技能布局容器尺寸；边框变化不得减少可用内容区宽高。
+	var skill_content_size: Vector2 = skill_content.size
+	# 悬停前前缀位置；正文前缀保持在技能名称专用行之前。
+	var skill_prefix_position: Vector2 = skill_prefix_label.position
+	# 悬停前前缀尺寸；文本区域不得因品质边框增加而重新换行。
+	var skill_prefix_size: Vector2 = skill_prefix_label.size
+	# 悬停前技能名位置；用于锁定技能名称专用行的本地布局。
+	var skill_name_position: Vector2 = choice_skill_name_label.position
+	# 悬停前技能名尺寸；必须保持原始省略策略与可用行宽。
+	var skill_name_size: Vector2 = choice_skill_name_label.size
+	(second_choice_card.get_node("%InputButton") as Button).mouse_entered.emit()
+	await get_tree().create_timer(second_choice_card.hover_animation_seconds + 0.04, true).timeout
+	if not skill_content.position.is_equal_approx(skill_content_position) or not skill_content.size.is_equal_approx(skill_content_size) or not skill_prefix_label.position.is_equal_approx(skill_prefix_position) or not skill_prefix_label.size.is_equal_approx(skill_prefix_size) or not choice_skill_name_label.position.is_equal_approx(skill_name_position) or not choice_skill_name_label.size.is_equal_approx(skill_name_size):
+		choice_panel.close()
+		return _fail("opportunity_skill_hover_layout content=%s/%s,%s/%s prefix=%s/%s,%s/%s name=%s/%s,%s/%s" % [skill_content.position, skill_content_position, skill_content.size, skill_content_size, skill_prefix_label.position, skill_prefix_position, skill_prefix_label.size, skill_prefix_size, choice_skill_name_label.position, skill_name_position, choice_skill_name_label.size, skill_name_size])
 	choice_panel.close()
 	return true
 
