@@ -850,10 +850,14 @@ func _test_ai_delay_range() -> bool:
 		return _fail("ai_delay_min")
 	if not is_equal_approx(GameSettings.MAX_AI_RESPONSE_DELAY_SECONDS, 1.0):
 		return _fail("ai_delay_max")
-	if not is_equal_approx(GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS, 0.50):
+	if not is_equal_approx(GameSettings.AI_RESPONSE_DELAY_STEP_SECONDS, 0.05):
 		return _fail("ai_delay_step")
-	if not is_equal_approx(GameSettings.ai_response_delay_seconds, 0.10):
-		return _fail("ai_delay_default")
+	# 当前已保存的AI响应速度；全局设置会保留玩家存档，测试不能把历史偏好误判为脚本默认值。
+	var saved_ai_response_delay_seconds: float = GameSettings.ai_response_delay_seconds
+	GameSettings.set_ai_response_delay_seconds(0.30)
+	if not is_equal_approx(GameSettings.ai_response_delay_seconds, 0.30):
+		return _fail("ai_delay_standard_value")
+	GameSettings.set_ai_response_delay_seconds(saved_ai_response_delay_seconds)
 	return true
 
 
