@@ -84,7 +84,10 @@ func _run() -> void:
 
 
 ## 验证游戏速度会限制到0.1至1.0秒并按0.1秒步长对齐。
+## 当前速度设置补充：AI响应速度和游戏速度均从0.10至1.00秒取值，并按0.50秒步长相对最小值对齐。
 func _test_game_speed_setting() -> bool:
+	if not is_equal_approx(GameSettings.MIN_GAME_SPEED_INTERVAL_SECONDS, 0.10) or not is_equal_approx(GameSettings.MAX_GAME_SPEED_INTERVAL_SECONDS, 1.00) or not is_equal_approx(GameSettings.GAME_SPEED_INTERVAL_STEP_SECONDS, 0.50):
+		return _fail("game_speed_contract")
 	GameSettings.set_game_speed_interval_seconds(0.01)
 	if not is_equal_approx(GameSettings.game_speed_interval_seconds, 0.10):
 		return _fail("game_speed_min:%s" % GameSettings.game_speed_interval_seconds)

@@ -1347,21 +1347,39 @@ func _run() -> void:
 	# AI 响应速度滑条；修改值后必须写入全局设置并同步给当前对局控制器，无需重开对局。
 	var ai_response_delay_slider: HSlider = main_instance.get_node("%AiResponseDelaySlider") as HSlider
 	# 本用例选择的 AI 响应等待时间；0.65秒位于0.05至1秒设置范围内且对默认值具有可见差异。
-	var requested_ai_response_delay: float = 0.65
+	# 当前取值补充：0.60秒是从0.10秒起按0.50秒步长可取得的第二档，用于验证局内滑条的归一化结果。
+	var requested_ai_response_delay: float = 0.60
 	ai_response_delay_slider.value = requested_ai_response_delay
 	await get_tree().process_frame
-	if not is_equal_approx(GameSettings.ai_response_delay_seconds, requested_ai_response_delay) or not is_equal_approx(match_controller.ai_action_delay_seconds, requested_ai_response_delay):
+	if not is_equal_approx(ai_response_delay_slider.min_value, 0.10) or not is_equal_approx(ai_response_delay_slider.max_value, 1.00) or not is_equal_approx(ai_response_delay_slider.step, 0.50) or not is_equal_approx(GameSettings.ai_response_delay_seconds, requested_ai_response_delay) or not is_equal_approx(match_controller.ai_action_delay_seconds, requested_ai_response_delay):
 		_fail("ai_response_delay_setting:%s/%s" % [GameSettings.ai_response_delay_seconds, match_controller.ai_action_delay_seconds])
 		return
+	# AI响应速度上限档位；范围末端不是从0.10秒起点的完整0.50秒步进，仍必须允许用户选择精确1.00秒。
+	ai_response_delay_slider.value = ai_response_delay_slider.max_value
+	await get_tree().process_frame
+	if not is_equal_approx(GameSettings.ai_response_delay_seconds, 1.00) or not is_equal_approx(match_controller.ai_action_delay_seconds, 1.00):
+		_fail("ai_response_delay_max_setting:%s/%s" % [GameSettings.ai_response_delay_seconds, match_controller.ai_action_delay_seconds])
+		return
+	ai_response_delay_slider.value = requested_ai_response_delay
+	await get_tree().process_frame
 	# 游戏速度滑条；范围固定为0.1至1.0秒，修改后立即同步后续阶段与自动响应的全局最小间隔。
 	var game_speed_slider: HSlider = main_instance.get_node("%GameSpeedSlider") as HSlider
 	# 本用例游戏流程间隔；0.8秒与AI独立设置不同，用于验证两个设置没有错误共用同一变量。
-	var requested_game_speed_interval: float = 0.8
+	# 当前取值补充：0.10秒是统一范围的最小合法档位，并与AI响应速度的0.60秒保持不同以验证两个设置独立同步。
+	var requested_game_speed_interval: float = 0.10
 	game_speed_slider.value = requested_game_speed_interval
 	await get_tree().process_frame
-	if not is_equal_approx(game_speed_slider.min_value, 0.1) or not is_equal_approx(game_speed_slider.max_value, 1.0) or not is_equal_approx(game_speed_slider.step, 0.1) or not is_equal_approx(GameSettings.game_speed_interval_seconds, requested_game_speed_interval) or not is_equal_approx(match_controller.game_flow_interval_seconds, requested_game_speed_interval):
+	if not is_equal_approx(game_speed_slider.min_value, 0.10) or not is_equal_approx(game_speed_slider.max_value, 1.00) or not is_equal_approx(game_speed_slider.step, 0.50) or not is_equal_approx(GameSettings.game_speed_interval_seconds, requested_game_speed_interval) or not is_equal_approx(match_controller.game_flow_interval_seconds, requested_game_speed_interval):
 		_fail("game_speed_setting:%s/%s" % [GameSettings.game_speed_interval_seconds, match_controller.game_flow_interval_seconds])
 		return
+	# 游戏速度上限档位；与AI速度相同，滑条必须保留1.00秒这个非整步终点。
+	game_speed_slider.value = game_speed_slider.max_value
+	await get_tree().process_frame
+	if not is_equal_approx(GameSettings.game_speed_interval_seconds, 1.00) or not is_equal_approx(match_controller.game_flow_interval_seconds, 1.00):
+		_fail("game_speed_max_setting:%s/%s" % [GameSettings.game_speed_interval_seconds, match_controller.game_flow_interval_seconds])
+		return
+	game_speed_slider.value = requested_game_speed_interval
+	await get_tree().process_frame
 	# 对局日志展开按钮；点击后正文面板必须显示，验证“记录”入口不再只是静态标题。
 	var log_toggle_button: Button = main_instance.get_node("%LogToggleButton") as Button
 	# 左下四号位座次标签的屏幕矩形；其底边应紧贴记录按钮上边缘，以压缩十人局侧边纵向空白。
