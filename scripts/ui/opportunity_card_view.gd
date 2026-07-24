@@ -36,6 +36,9 @@ signal information_dismissed
 ## 悬停卡牌临时绘制层级；固定100与正式卡牌一致，确保三张卡重叠时当前牌显示在最上方。
 const HOVER_Z_INDEX: int = 100
 
+## 机缘牌内容区的固定内缩；4像素与普通品质边框一致，悬停边框变粗时仍保持正文、技能名与容器的可用区域不变。
+const CARD_CONTENT_MARGIN: float = 4.0
+
 ## 当前机缘卡稳定ID；空字符串表示尚未配置，点击不会发出选择。
 var _card_id: String = ""
 
@@ -224,6 +227,11 @@ func _create_panel_style(background_color: Color, border_width: int) -> StyleBox
 	panel_style.bg_color = background_color
 	panel_style.border_color = _quality_color.lightened(0.30)
 	panel_style.set_border_width_all(border_width)
+	# 内容区内缩；显式固定四边边距，禁止悬停边框由4像素变为5像素时挤压PanelContainer内部文字布局。
+	panel_style.content_margin_left = CARD_CONTENT_MARGIN
+	panel_style.content_margin_top = CARD_CONTENT_MARGIN
+	panel_style.content_margin_right = CARD_CONTENT_MARGIN
+	panel_style.content_margin_bottom = CARD_CONTENT_MARGIN
 	panel_style.set_corner_radius_all(10)
 	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
 	panel_style.shadow_size = 10
