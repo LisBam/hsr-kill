@@ -51,9 +51,11 @@ func _init(controlled_player_id: int, shared_identity_model: IdentityAIModel = n
 
 ## 从核心提供的合法动作中选择一项；动作评分由卡牌 AI 数据、身份态度和技能文件钩子共同决定。
 func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
-	identity_model.synchronize(authoritative_snapshot)
 	if legal_actions.is_empty():
+		identity_model.end_evaluation()
+		identity_model.synchronize(authoritative_snapshot)
 		return {"action_type":"end_play", "actor_id":player_id}
+	identity_model.begin_evaluation(authoritative_snapshot)
 	# 当前合法动作上下文；卡牌专属AI据此识别阶段次数、目标与防具校验后仍可执行的真实后续动作。
 	evaluator.set_current_legal_actions(legal_actions)
 	_prepare_action_scoring_context(authoritative_snapshot)
@@ -82,14 +84,17 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 		result = _normalize_action(best_action)
 	_clear_action_scoring_context()
 	evaluator.clear_current_legal_actions()
+	identity_model.end_evaluation()
 	return result
 
 
 ## 响应统一选择请求；逐项评分合法动作，可取消请求只有在正收益时才主动确认。
 func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
-	identity_model.synchronize(authoritative_snapshot)
 	if legal_actions.is_empty():
+		identity_model.end_evaluation()
+		identity_model.synchronize(authoritative_snapshot)
 		return {}
+	identity_model.begin_evaluation(authoritative_snapshot)
 	_prepare_choice_scoring_context(choice_request)
 	# 当前请求是否允许取消；允许取消时即使 min_count 大于0，也可用 confirmed=false 放弃整次选择。
 	var allow_cancel: bool = bool(choice_request.get("allow_cancel", false))
@@ -122,6 +127,7 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 	else:
 		result = _normalize_action(best_confirmed_action if not best_confirmed_action.is_empty() else legal_actions[0])
 	_clear_choice_scoring_context()
+	identity_model.end_evaluation()
 	return result
 
 
@@ -132,11 +138,16 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 
 ## 判断一轮无懈可击是否应响应；协调器与正式并行响应流程可复用同一效用判断。
 func should_negate(authoritative_snapshot: Dictionary, context: Dictionary) -> bool:
-	return evaluator.should_negate(authoritative_snapshot, player_id, context)
+	identity_model.begin_evaluation(authoritative_snapshot)
+	# 当前无懈响应结论；先保存结果再结束评估，避免返回后仍保留权威快照引用。
+	var result: bool = evaluator.should_negate(authoritative_snapshot, player_id, context)
+	identity_model.end_evaluation()
+	return result
 
 
 ## 从指定实体 UID 中返回保留价值最低的固定数量牌；装备虚拟响应材料仍由规则层再次校验。
 func choose_low_value_card_uids(authoritative_snapshot: Dictionary, candidate_uids: Array[int], required_count: int) -> Array[int]:
+	identity_model.begin_evaluation(authoritative_snapshot)
 	# 可排序候选副本；不修改控制器提供的权威候选顺序。
 	var sorted_uids: Array[int] = candidate_uids.duplicate()
 	sorted_uids.sort_custom(func(first_uid: int, second_uid: int) -> bool:
@@ -150,6 +161,7 @@ func choose_low_value_card_uids(authoritative_snapshot: Dictionary, candidate_ui
 	var result: Array[int] = []
 	for index: int in range(mini(maxi(required_count, 0), sorted_uids.size())):
 		result.append(sorted_uids[index])
+	identity_model.end_evaluation()
 	return result
 
 

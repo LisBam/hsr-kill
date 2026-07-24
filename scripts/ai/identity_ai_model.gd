@@ -79,18 +79,98 @@ var _identity_mark_by_player: Dictionary = {}
 ## 各隐藏玩家的身份标记是否已经终结；忠反角色定型、内奸出现相反行为后均不再反复改标。
 var _identity_mark_finished_by_player: Dictionary = {}
 
+## 当前是否处于一次只读 AI 评估上下文；true 时全部查询必须使用 begin_evaluation() 传入的同一份权威快照。
+var _evaluation_context_active: bool = false
+
+## 当前评估按稳定玩家 ID 建立的快照索引；只保存原快照中的只读字典引用，结束评估后立即清空。
+var _evaluation_player_index: Dictionary = {}
+
+## 当前评估按身份汇总的存活且未离场人数；用于避免每个候选动作重复扫描全部玩家。
+var _evaluation_population_by_identity: Dictionary = {}
+
+## 当前评估按身份记录的首名存活玩家 ID；标准身份局可直接定位领袖，其他模式继续复用相同查询接口。
+var _evaluation_first_player_id_by_identity: Dictionary = {}
+
+## 当前评估中的存活且未离场玩家总数；默认0，建立评估索引时一次性计算。
+var _evaluation_alive_player_count: int = 0
+
+## 当前评估是否已经计算局势值；false 时首次查询计算，后续候选评分直接复用。
+var _evaluation_situation_cached: bool = false
+
+## 当前评估缓存的领忠方局势值；仅在 _evaluation_situation_cached 为 true 时有效。
+var _evaluation_situation: int = 0
+
+## 当前评估按观察者缓存“全部反贼已暴露”的结果；键为观察者 ID，值为只读布尔判断。
+var _evaluation_all_rebels_exposed_by_observer: Dictionary = {}
+
+## 本模型累计建立单次评估索引的次数；只供性能回归与诊断，不参与任何 AI 决策。
+var _evaluation_index_build_count: int = 0
+
+## 未启用评估索引时执行线性玩家查找的累计次数；只供性能回归确认热路径没有退化。
+var _uncached_player_lookup_count: int = 0
+
+## 实际扫描玩家表同步身份观察状态的累计次数；评估上下文内的重复 synchronize() 调用不得增加该值。
+var _snapshot_synchronization_scan_count: int = 0
+
+## 实际遍历玩家表计算局势值的累计次数；同一次评估中的重复查询应只增加一次。
+var _situation_compute_count: int = 0
+
 
 ## 清空全部身份观察状态；新对局、重开或测试独立构造快照时均可安全调用。
 func reset() -> void:
+	end_evaluation()
 	_match_id = ""
 	_exposure_by_player.clear()
 	_camp_signal_by_player.clear()
 	_identity_mark_by_player.clear()
 	_identity_mark_finished_by_player.clear()
+	_evaluation_index_build_count = 0
+	_uncached_player_lookup_count = 0
+	_snapshot_synchronization_scan_count = 0
+	_situation_compute_count = 0
+
+
+## 开始一次只读 AI 评估并为同一快照建立常量时间查询索引；调用方必须在返回决策前调用 end_evaluation()。
+func begin_evaluation(authoritative_snapshot: Dictionary) -> void:
+	end_evaluation()
+	synchronize(authoritative_snapshot)
+	_evaluation_context_active = true
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；索引保存原只读引用，避免为性能缓存深拷贝整份权威状态。
+		var player: Dictionary = player_variant as Dictionary
+		# 当前玩家稳定 ID；无效条目不会进入查询索引。
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id < 0:
+			continue
+		_evaluation_player_index[player_id] = player
+		if not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		_evaluation_alive_player_count += 1
+		# 当前玩家身份；人数与首名玩家查询共享同一轮构建结果。
+		var identity: String = str(player.get("identity", ""))
+		_evaluation_population_by_identity[identity] = int(_evaluation_population_by_identity.get(identity, 0)) + 1
+		if not _evaluation_first_player_id_by_identity.has(identity):
+			_evaluation_first_player_id_by_identity[identity] = player_id
+	_evaluation_index_build_count += 1
+
+
+## 结束当前 AI 评估并释放全部快照引用；静态身份观察结果保留，任何权威状态都不会跨决策缓存。
+func end_evaluation() -> void:
+	_evaluation_context_active = false
+	_evaluation_player_index.clear()
+	_evaluation_population_by_identity.clear()
+	_evaluation_first_player_id_by_identity.clear()
+	_evaluation_alive_player_count = 0
+	_evaluation_situation_cached = false
+	_evaluation_situation = 0
+	_evaluation_all_rebels_exposed_by_observer.clear()
 
 
 ## 确保模型已经与当前快照同步；公开身份固定为1，隐藏身份保留既有观察值。
 func synchronize(authoritative_snapshot: Dictionary) -> void:
+	if _evaluation_context_active:
+		return
+	_snapshot_synchronization_scan_count += 1
 	# 当前快照的对局 ID；空 ID 用于规则测试，同一模型仍按玩家表持续工作。
 	var snapshot_match_id: String = str(authoritative_snapshot.get("match_id", ""))
 	if snapshot_match_id != _match_id:
@@ -350,6 +430,9 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 
 ## 计算无名杀身份 AI 使用的领忠方局势值；正数代表领忠优势，负数代表反贼优势。
 func get_situation(authoritative_snapshot: Dictionary) -> int:
+	if _evaluation_context_active and _evaluation_situation_cached:
+		return _evaluation_situation
+	_situation_compute_count += 1
 	# 领忠方净强度；领袖、忠臣和反贼使用不同权重累计。
 	var loyal_side_strength: float = 0.0
 	# 全部参与比较的总强度；用于把结果归一化到约-10至10。
@@ -385,6 +468,9 @@ func get_situation(authoritative_snapshot: Dictionary) -> int:
 			total_strength += player_strength + 4.0
 			rebel_strength += player_strength + 4.0
 	if total_strength <= 0.0:
+		if _evaluation_context_active:
+			_evaluation_situation = 0
+			_evaluation_situation_cached = true
 		return 0
 	# 归一化结果；取整方式与无名杀 parseInt 的向零截断语义一致。
 	var result: int = int(10.0 * absf(loyal_side_strength / total_strength))
@@ -396,6 +482,9 @@ func get_situation(authoritative_snapshot: Dictionary) -> int:
 		result -= 1
 	if leader_strength < 4.0:
 		result -= 1
+	if _evaluation_context_active:
+		_evaluation_situation = result
+		_evaluation_situation_cached = true
 	return result
 
 
@@ -422,6 +511,9 @@ func get_condition(authoritative_snapshot: Dictionary, player_id: int) -> float:
 
 ## 按稳定玩家 ID 查找快照；返回深层引用只供本次只读评估，不得由 AI 修改。
 func get_player(authoritative_snapshot: Dictionary, player_id: int) -> Dictionary:
+	if _evaluation_context_active:
+		return _evaluation_player_index.get(player_id, {}) as Dictionary
+	_uncached_player_lookup_count += 1
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前玩家快照；ID 匹配后立即返回。
 		var player: Dictionary = player_variant as Dictionary
@@ -432,6 +524,8 @@ func get_player(authoritative_snapshot: Dictionary, player_id: int) -> Dictionar
 
 ## 返回指定身份的存活人数；死亡与离场角色不参与残局关系。
 func get_population(authoritative_snapshot: Dictionary, identity: String) -> int:
+	if _evaluation_context_active:
+		return int(_evaluation_population_by_identity.get(identity, 0))
 	# 匹配人数；从0开始累计。
 	var result: int = 0
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
@@ -444,6 +538,8 @@ func get_population(authoritative_snapshot: Dictionary, identity: String) -> int
 
 ## 返回当前存活且未离场的玩家数量；用于二人和三人残局特殊态度。
 func get_alive_player_count(authoritative_snapshot: Dictionary) -> int:
+	if _evaluation_context_active:
+		return _evaluation_alive_player_count
 	# 存活人数；逐项统计避免依赖数组是否保留死亡玩家。
 	var result: int = 0
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
@@ -456,6 +552,8 @@ func get_alive_player_count(authoritative_snapshot: Dictionary) -> int:
 
 ## 返回指定身份的首名存活玩家 ID；标准身份局领袖唯一，其他身份只用于通用查询。
 func find_identity_player_id(authoritative_snapshot: Dictionary, identity: String) -> int:
+	if _evaluation_context_active:
+		return int(_evaluation_first_player_id_by_identity.get(identity, -1))
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前玩家快照；只返回仍存活且未离场的指定身份。
 		var player: Dictionary = player_variant as Dictionary
@@ -552,6 +650,8 @@ func _update_identity_mark(authoritative_snapshot: Dictionary, player_id: int, l
 
 ## 判断除观察者外的全部存活反贼是否已有可判断行为；用于无名杀隐藏身份的最低推断权重。
 func _all_rebels_exposed(authoritative_snapshot: Dictionary, observer_id: int) -> bool:
+	if _evaluation_context_active and _evaluation_all_rebels_exposed_by_observer.has(observer_id):
+		return bool(_evaluation_all_rebels_exposed_by_observer.get(observer_id, false))
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前玩家快照；只检查其他仍存活的反贼。
 		var player: Dictionary = player_variant as Dictionary
@@ -560,5 +660,9 @@ func _all_rebels_exposed(authoritative_snapshot: Dictionary, observer_id: int) -
 		if player_id == observer_id or not bool(player.get("alive", false)) or str(player.get("identity", "")) != "rebel":
 			continue
 		if is_zero_approx(float(_exposure_by_player.get(player_id, 0.0))):
+			if _evaluation_context_active:
+				_evaluation_all_rebels_exposed_by_observer[observer_id] = false
 			return false
+	if _evaluation_context_active:
+		_evaluation_all_rebels_exposed_by_observer[observer_id] = true
 	return true
