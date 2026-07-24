@@ -44,6 +44,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"green_skill_bingfeng", "quality":"green", "description":"获得技能“冰封”", "effect":"grant_skill", "skill_id":"bingfeng"},
 	{"id":"green_skill_xinghuo", "quality":"green", "description":"获得技能“星火”", "effect":"grant_skill", "skill_id":"xinghuo"},
 	{"id":"green_skill_xifa", "quality":"green", "description":"获得技能“戏法”", "effect":"grant_skill", "skill_id":"xifa"},
+	{"id":"green_skill_mingxian", "quality":"green", "description":"获得技能“鸣弦”", "effect":"grant_skill", "skill_id":"mingxian"},
 
 	{"id":"blue_draw_three", "quality":"blue", "description":"摸三张牌。", "effect":"draw", "count":3},
 	{"id":"blue_max_hp_one", "quality":"blue", "description":"增加1点体力上限。", "effect":"max_hp", "count":1},
@@ -92,6 +93,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_skip_judgment_phase", "quality":"purple", "description":"永远跳过你的判定阶段", "effect":"skip_judgment_phase", "count":1},
 	{"id":"purple_skill_baizhe", "quality":"purple", "description":"获得技能“百折”", "effect":"grant_skill", "skill_id":"baizhe"},
 	{"id":"purple_skill_mingding", "quality":"purple", "description":"获得技能“酩酊”", "effect":"grant_skill", "skill_id":"mingding"},
+	{"id":"purple_skill_zhufeng", "quality":"purple", "description":"获得每回合可发动三次的技能“逐风”", "effect":"grant_skill", "skill_id":"zhufeng", "per_turn_limit":3},
 	{"id":"purple_turn_over_target", "quality":"purple", "description":"将一名角色的武将牌翻面", "effect":"turn_over_target"},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
