@@ -25,6 +25,12 @@ const LONG_MATCH_LOG_ENTRY_COUNT: int = 4096
 ## 长局移牌历史压力条目数；8192条无关记录用于确认本回合弃牌查询只访问对应索引桶。
 const LONG_CARD_MOVE_HISTORY_ENTRY_COUNT: int = 8192
 
+## AI快照查询压力轮数；256轮对应单次多选请求允许枚举的默认组合上限。
+const AI_SNAPSHOT_LOOKUP_STRESS_ITERATIONS: int = 256
+
+## AI快照查询压力玩家数；10人是身份模式正式支持的最大人数。
+const AI_SNAPSHOT_LOOKUP_PLAYER_COUNT: int = 10
+
 ## 性能回归专用设置文件；速度边界测试的所有持久化写入均与玩家正式设置隔离。
 const TEST_SETTINGS_FILE_PATH: String = "user://performance_and_pacing_test_settings.cfg"
 
@@ -54,6 +60,8 @@ func _run() -> void:
 	if not _test_game_speed_setting():
 		return
 	if not _test_static_text_resolution_cache():
+		return
+	if not _test_ai_decision_snapshot_index():
 		return
 	if not await _test_collapsed_match_log_rendering():
 		return
@@ -126,6 +134,67 @@ func _test_static_text_resolution_cache() -> bool:
 	var indexed_card_definition: Dictionary = GameDatabase.call("_find_card_by_display_name", "桃") as Dictionary
 	if first_result.is_empty() or first_result != repeated_result or first_mode_cache.size() != initial_cache_size + 1 or repeated_mode_cache.size() != first_mode_cache.size() or indexed_card_definition.is_empty():
 		return _fail("static_text_cache first=%s repeated=%s sizes=%d/%d/%d indexed=%s" % [first_result, repeated_result, initial_cache_size, first_mode_cache.size(), repeated_mode_cache.size(), not indexed_card_definition.is_empty()])
+	return true
+
+
+## 验证一次AI决策只建立一遍10人查询索引，并让256轮玩家、阵营与局势查询全部复用该临时索引。
+func _test_ai_decision_snapshot_index() -> bool:
+	# 最大人数玩家快照；身份分布覆盖领袖、忠臣、反贼与内奸的全部聚合查询。
+	var players: Array[Dictionary] = []
+	for player_id: int in range(AI_SNAPSHOT_LOOKUP_PLAYER_COUNT):
+		# 当前测试身份；0为领袖、1至4为反贼、5至7为忠臣、8至9为内奸。
+		var identity: String = "leader" if player_id == 0 else ("rebel" if player_id <= 4 else ("loyalist" if player_id <= 7 else "renegade"))
+		players.append({
+			"player_id":player_id,
+			"identity":identity,
+			"identity_revealed":player_id == 0,
+			"alive":true,
+			"out_of_game":false,
+			"hp":4,
+			"max_hp":4,
+			"hand_count":2,
+			"equipment":{},
+		})
+	# 独立权威快照；本用例只读取身份评估所需公共字段，不进入卡牌或规则结算。
+	var snapshot: Dictionary = {"match_id":"performance_ai_snapshot_index", "players":players}
+	# 独立身份模型；诊断计数从0开始，避免其他AI用例影响性能断言。
+	var identity_model: IdentityAIModel = IdentityAIModel.new()
+	identity_model.begin_evaluation(snapshot)
+	# 建立上下文后的同步扫描次数；后续态度查询内部的 synchronize() 不得继续扫描玩家表。
+	var synchronization_scan_count: int = int(identity_model.get("_snapshot_synchronization_scan_count"))
+	# 建立上下文后的未缓存查询次数；压力查询全部应保持该基线。
+	var uncached_lookup_count: int = int(identity_model.get("_uncached_player_lookup_count"))
+	# 首次局势计算前的实际计算次数；同一上下文重复读取只能增加1。
+	var situation_compute_count: int = int(identity_model.get("_situation_compute_count"))
+	for iteration: int in range(AI_SNAPSHOT_LOOKUP_STRESS_ITERATIONS):
+		for player_id: int in range(AI_SNAPSHOT_LOOKUP_PLAYER_COUNT):
+			if int(identity_model.get_player(snapshot, player_id).get("player_id", -1)) != player_id:
+				identity_model.end_evaluation()
+				return _fail("ai_snapshot_index_missing player=%d iteration=%d" % [player_id, iteration])
+		identity_model.get_attitude(snapshot, 0, 1 + iteration % (AI_SNAPSHOT_LOOKUP_PLAYER_COUNT - 1))
+		identity_model.get_population(snapshot, "rebel")
+		identity_model.get_alive_player_count(snapshot)
+		identity_model.find_identity_player_id(snapshot, "leader")
+		identity_model.get_situation(snapshot)
+		identity_model.get_situation(snapshot)
+	if int(identity_model.get("_evaluation_index_build_count")) != 1 \
+			or (identity_model.get("_evaluation_player_index") as Dictionary).size() != AI_SNAPSHOT_LOOKUP_PLAYER_COUNT \
+			or int(identity_model.get("_snapshot_synchronization_scan_count")) != synchronization_scan_count \
+			or int(identity_model.get("_uncached_player_lookup_count")) != uncached_lookup_count \
+			or int(identity_model.get("_situation_compute_count")) != situation_compute_count + 1 \
+			or identity_model.get_population(snapshot, "rebel") != 4 \
+			or identity_model.get_alive_player_count(snapshot) != AI_SNAPSHOT_LOOKUP_PLAYER_COUNT \
+			or identity_model.find_identity_player_id(snapshot, "leader") != 0:
+		identity_model.end_evaluation()
+		return _fail("ai_snapshot_index builds=%d indexed=%d sync=%d/%d lookups=%d/%d situation=%d/%d" % [int(identity_model.get("_evaluation_index_build_count")), (identity_model.get("_evaluation_player_index") as Dictionary).size(), synchronization_scan_count, int(identity_model.get("_snapshot_synchronization_scan_count")), uncached_lookup_count, int(identity_model.get("_uncached_player_lookup_count")), situation_compute_count + 1, int(identity_model.get("_situation_compute_count"))])
+	identity_model.end_evaluation()
+	# 上下文释放后的回退查询；用于确认索引不跨决策保留，普通独立查询仍保持原兼容行为。
+	var fallback_player: Dictionary = identity_model.get_player(snapshot, AI_SNAPSHOT_LOOKUP_PLAYER_COUNT - 1)
+	if bool(identity_model.get("_evaluation_context_active")) \
+			or not (identity_model.get("_evaluation_player_index") as Dictionary).is_empty() \
+			or int(identity_model.get("_uncached_player_lookup_count")) != uncached_lookup_count + 1 \
+			or int(fallback_player.get("player_id", -1)) != AI_SNAPSHOT_LOOKUP_PLAYER_COUNT - 1:
+		return _fail("ai_snapshot_index_release active=%s retained=%d lookups=%d" % [bool(identity_model.get("_evaluation_context_active")), (identity_model.get("_evaluation_player_index") as Dictionary).size(), int(identity_model.get("_uncached_player_lookup_count"))])
 	return true
 
 

@@ -137,6 +137,20 @@ func _test_scoring_cache_lifecycle() -> bool:
 	policy.call("_clear_action_scoring_context")
 	if bool(policy.get("_action_scoring_context_prepared")) or not (policy.get("_decision_card_modifier_skills") as Array).is_empty() or not (policy.get("_decision_skill_instances") as Dictionary).is_empty():
 		return _fail("decision_skill_context_not_cleared")
+	# 独立索引模型；正式 choose_action() 应在两轮候选评分之间共享同一份玩家查询索引。
+	var indexed_identity_model: IdentityAIModel = IdentityAIModel.new()
+	# 独立索引策略；固定控制0号领袖，避免共享模型的既有诊断计数影响断言。
+	var indexed_policy: BasicAIPolicy = BasicAIPolicy.new(0, indexed_identity_model)
+	# 决策前索引构建次数；一次 choose_action() 无论评分多少轮都只能增加1。
+	var index_build_count_before: int = int(indexed_identity_model.get("_evaluation_index_build_count"))
+	# 决策前线性玩家查询次数；评分期间全部查询都应命中单次决策索引。
+	var uncached_lookup_count_before: int = int(indexed_identity_model.get("_uncached_player_lookup_count"))
+	indexed_policy.choose_action(snapshot, [slash_action])
+	if int(indexed_identity_model.get("_evaluation_index_build_count")) != index_build_count_before + 1 \
+			or int(indexed_identity_model.get("_uncached_player_lookup_count")) != uncached_lookup_count_before \
+			or bool(indexed_identity_model.get("_evaluation_context_active")) \
+			or not (indexed_identity_model.get("_evaluation_player_index") as Dictionary).is_empty():
+		return _fail("decision_player_index builds=%d lookups=%d active=%s retained=%d" % [int(indexed_identity_model.get("_evaluation_index_build_count")), int(indexed_identity_model.get("_uncached_player_lookup_count")), bool(indexed_identity_model.get("_evaluation_context_active")), (indexed_identity_model.get("_evaluation_player_index") as Dictionary).size()])
 	return true
 
 
