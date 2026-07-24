@@ -97,8 +97,9 @@ func _test_catalog_and_weights() -> bool:
 	# 全部机缘卡目录；当前共69张，其中3张灰色卡只属于过关斩将关卡与详情历史。
 	# 补充：目录已扩展为100张；保留原注释用于说明灰色机缘的关卡归属，实际数量以本测试断言为准。
 	# 补充：新增角色技能与翻面机缘后，当前目录共100张，其中5张灰色卡不参与随机抽取。
+	# 补充：鸣弦与逐风技能机缘加入后，当前目录共102张，其中5张灰色卡不参与随机抽取。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 100 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 102 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
 	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
@@ -118,6 +119,7 @@ func _test_catalog_and_weights() -> bool:
 	# 紫色与橙色目录；摸牌阶段加成调整品质后，总目录保持69张且旧紫色稳定ID不再登记。
 	# 补充：目录现为100张；本段仍用于校验既有紫色、橙色稳定ID及摸牌阶段加成的兼容性。
 	# 补充：新增角色技能与翻面机缘后，蓝色、紫色与橙色目录分别扩展为24张、23张与16张。
+	# 补充：鸣弦与逐风技能机缘加入后，绿色与紫色目录分别扩展为19张与24张。
 	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
 	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
 	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")
@@ -127,7 +129,7 @@ func _test_catalog_and_weights() -> bool:
 	var red_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("red")
 	# 橙色摸牌阶段机缘；正文与固定数值保持不变，只调整品质和稳定ID。
 	var orange_draw_phase_card: Dictionary = OpportunityCatalog.get_card("orange_draw_phase_one")
-	if green_cards.size() != 18 or blue_cards.size() != 24 or purple_cards.size() != 23 or orange_cards.size() != 16 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
+	if green_cards.size() != 19 or blue_cards.size() != 24 or purple_cards.size() != 24 or orange_cards.size() != 16 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
 		return _fail("catalog_quality_counts green=%d blue=%d purple=%d orange=%d red=%d card=%s" % [green_cards.size(), blue_cards.size(), purple_cards.size(), orange_cards.size(), red_cards.size(), orange_draw_phase_card])
 	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
 	_controller.opportunity_system.green_weight = 0
@@ -187,6 +189,7 @@ func _test_catalog_and_weights() -> bool:
 		"red_gain_suits_anke":"从牌堆或弃牌堆中获得每种花色的牌各一张并获得技能“安可”",
 		"blue_skill_anda":"获得技能“安打”",
 		"green_skill_xifa":"获得技能“戏法”",
+		"green_skill_mingxian":"获得技能“鸣弦”",
 		"blue_skill_touxia":"获得技能“投狭”",
 		"purple_skill_kance":"获得技能“勘测”",
 		"blue_skill_qiusheng":"获得技能“求生”",
@@ -197,6 +200,7 @@ func _test_catalog_and_weights() -> bool:
 		"blue_skill_qinniang":"获得技能“亲酿”",
 		"purple_skill_baizhe":"获得技能“百折”",
 		"purple_skill_mingding":"获得技能“酩酊”",
+		"purple_skill_zhufeng":"获得每回合可发动三次的技能“逐风”",
 		"purple_turn_over_target":"将一名角色的武将牌翻面",
 		"orange_turn_over_all_others":"将所有其他角色的武将牌翻面",
 		"purple_skip_judgment_phase":"永远跳过你的判定阶段",
@@ -210,15 +214,15 @@ func _test_catalog_and_weights() -> bool:
 		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
 			return _fail("new_description_%s" % card_id)
 	# 新增技能机缘映射；技能稳定ID与每回合三次限制必须由目录直接声明，不能由中文名或文件名猜测。
-	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi", "blue_skill_qinniang":"qinniang", "purple_skill_baizhe":"baizhe", "purple_skill_mingding":"mingding"}
+	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "green_skill_mingxian":"mingxian", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi", "blue_skill_qinniang":"qinniang", "purple_skill_baizhe":"baizhe", "purple_skill_mingding":"mingding", "purple_skill_zhufeng":"zhufeng"}
 	for skill_card_id_variant: Variant in expected_skill_ids.keys():
 		# 当前技能机缘定义；所有普通技能卡必须使用统一grant_skill效果，供过关斩将与局内获得接口复用。
 		var skill_card_id: String = str(skill_card_id_variant)
 		var skill_card: Dictionary = OpportunityCatalog.get_card(skill_card_id)
 		if str(skill_card.get("effect", "")) != "grant_skill" or str(skill_card.get("skill_id", "")) != str(expected_skill_ids[skill_card_id]):
 			return _fail("new_skill_mapping_%s=%s" % [skill_card_id, skill_card])
-	# 三次限制卡；冥谶与山倾都必须在目录中明示每回合3次，避免只依赖UI文案而漏掉权威端额度。
-	if int(OpportunityCatalog.get_card("orange_skill_mingchen").get("per_turn_limit", 0)) != 3 or int(OpportunityCatalog.get_card("blue_skill_shanqing").get("per_turn_limit", 0)) != 3:
+	# 三次限制卡；冥谶、山倾与逐风都必须在目录中明示每回合3次，避免只依赖UI文案而漏掉权威端额度。
+	if int(OpportunityCatalog.get_card("orange_skill_mingchen").get("per_turn_limit", 0)) != 3 or int(OpportunityCatalog.get_card("blue_skill_shanqing").get("per_turn_limit", 0)) != 3 or int(OpportunityCatalog.get_card("purple_skill_zhufeng").get("per_turn_limit", 0)) != 3:
 		return _fail("new_skill_per_turn_limit")
 	return true
 
@@ -903,6 +907,25 @@ func _test_acquired_skill_limits() -> bool:
 		return _fail("huanyang_total_last_use")
 	if (_controller.skill_instances_by_player.get(0, {}) as Dictionary).has("huanyang") or _controller.state.get_player(0).acquired_skills.has("huanyang"):
 		return _fail("huanyang_total_not_removed")
+	# 逐风机缘的获得技能；锁定技同样必须通过通用获得技能记录接受每回合三次限制。
+	if not _controller.grant_acquired_skill(0, "zhufeng", 3, 0, "test"):
+		return _fail("grant_zhufeng")
+	# 当前回合内的逐风伤害结束时机序号；前三次应实际结算，第四次必须被统一次数守卫拒绝。
+	for _trigger_index: int in range(3):
+		_controller._emit_rule_timing("damageEnd", 1, 0, 1, {"amount":1})
+	if _controller.can_use_acquired_skill(0, "zhufeng"):
+		return _fail("zhufeng_per_turn_limit")
+	# 同一逐风时机的第四次触发；守卫拒绝后不能额外增加已用次数。
+	_controller._emit_rule_timing("damageEnd", 1, 0, 1, {"amount":1})
+	# 当前逐风机缘的可序列化使用记录；用于确认锁定技每次实际结算都会消耗同一权威额度。
+	var zhufeng_usage: Dictionary = _controller.state.get_player(0).acquired_skills.get("zhufeng", {}) as Dictionary
+	if int(zhufeng_usage.get("uses_this_turn", 0)) != 3:
+		return _fail("zhufeng_usage=%s" % zhufeng_usage)
+	# 下一全局回合；每回合限制应重置，技能实例不需卸载重装。
+	_controller.state.turn_number = 4
+	if not _controller.can_use_acquired_skill(0, "zhufeng"):
+		return _fail("zhufeng_turn_reset")
+	_controller.remove_acquired_skill(0, "zhufeng")
 	return true
 
 
