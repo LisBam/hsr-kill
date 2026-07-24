@@ -16,12 +16,11 @@ signal information_dismissed
 ## 标记中央单字字号；默认12像素对应20像素圆形主体，运行时通常无需动态修改。
 @export_range(9, 28, 1) var icon_font_size: int = 12
 
-## 右下角数量徽记直径；默认13像素用于显示1至999，运行时通常无需动态修改。
-## 数量徽记刻意大于主体缩放比例，保证多位标记数仍能在牌桌上辨认。
-@export_range(10.0, 22.0, 1.0) var count_diameter: float = 13.0
-
-## 数量徽记字号；默认10像素可容纳三位数，运行时通常无需动态修改。
+## 右下角数量文字字号；默认10像素可容纳三位数，运行时通常无需动态修改。
 @export_range(8, 13, 1) var count_font_size: int = 10
+
+## 右下角数量文字描边宽度；默认3像素保证数字直接叠在图标上时仍可辨认，运行时通常无需动态修改。
+@export_range(1, 6, 1) var count_outline_size: int = 3
 
 ## 当前标记公开数据；包含稳定ID、单字图标、名称、说明、数量和来源角色ID。
 var _mark_data: Dictionary = {}
@@ -32,10 +31,7 @@ var _circle_panel: Panel
 ## 圆形中央单字标签；文本只取公开标记icon字段的第一个字符。
 var _icon_label: Label
 
-## 右下角数量背景；与主圆分离以保证数量始终可读。
-var _count_panel: Panel
-
-## 右下角数量文本；显示1至999的权威标记数量。
+## 右下角数量文本；直接叠在主图标上并使用描边显示1至999的权威标记数量。
 var _count_label: Label
 
 
@@ -53,14 +49,10 @@ func _ready() -> void:
 	_icon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_icon_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	add_child(_icon_label)
-	_count_panel = Panel.new()
-	_count_panel.name = "CountCircle"
-	_count_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_count_panel)
 	_count_label = Label.new()
 	_count_label.name = "Count"
 	_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	add_child(_count_label)
 	mouse_entered.connect(_on_mouse_entered)
@@ -81,7 +73,7 @@ func get_badge_size() -> Vector2:
 	return Vector2(badge_diameter, badge_diameter)
 
 
-## 按当前UI风格刷新主圆、数量圆与文字颜色；不改变标记数据和排列顺序。
+## 按当前UI风格刷新主圆与两层文字颜色；不改变标记数据和排列顺序。
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
@@ -100,30 +92,17 @@ func refresh_ui_style() -> void:
 	circle_style.shadow_color = Color(0.0, 0.0, 0.0, 0.58)
 	circle_style.shadow_size = 4
 	_circle_panel.add_theme_stylebox_override("panel", circle_style)
-	# 数量圆样式；使用强调色背景和深色边框，与主圆右下角形成明确层级。
-	var count_style: StyleBoxFlat = StyleBoxFlat.new()
-	count_style.bg_color = BattleUIStyle.get_color("accent")
-	count_style.border_width_left = 1
-	count_style.border_width_top = 1
-	count_style.border_width_right = 1
-	count_style.border_width_bottom = 1
-	count_style.border_color = Color.BLACK
-	count_style.corner_radius_top_left = int(count_diameter * 0.5)
-	count_style.corner_radius_top_right = int(count_diameter * 0.5)
-	count_style.corner_radius_bottom_right = int(count_diameter * 0.5)
-	count_style.corner_radius_bottom_left = int(count_diameter * 0.5)
-	_count_panel.add_theme_stylebox_override("panel", count_style)
 	_icon_label.add_theme_font_size_override("font_size", icon_font_size)
 	_icon_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_icon_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	_icon_label.add_theme_constant_override("outline_size", 3)
 	_count_label.add_theme_font_size_override("font_size", count_font_size)
-	_count_label.add_theme_color_override("font_color", Color.BLACK)
-	_count_label.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.35))
-	_count_label.add_theme_constant_override("outline_size", 1)
+	_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_count_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_count_label.add_theme_constant_override("outline_size", count_outline_size)
 
 
-## 根据可配置直径排列主圆、单字与右下角数量；尺寸变化后由外层重新调用即可。
+## 根据可配置直径排列主圆、单字与右下角描边数量；尺寸变化后由外层重新调用即可。
 func _layout_children() -> void:
 	custom_minimum_size = Vector2(badge_diameter, badge_diameter)
 	size = custom_minimum_size
@@ -133,12 +112,9 @@ func _layout_children() -> void:
 	_circle_panel.size = Vector2(badge_diameter, badge_diameter)
 	_icon_label.position = Vector2.ZERO
 	_icon_label.size = Vector2(badge_diameter, badge_diameter)
-	# 数量圆位置；略微贴出主圆右下角，仍保持在组件矩形内部避免排列额外留白。
-	var count_position: Vector2 = Vector2(badge_diameter - count_diameter, badge_diameter - count_diameter)
-	_count_panel.position = count_position
-	_count_panel.size = Vector2(count_diameter, count_diameter)
-	_count_label.position = count_position
-	_count_label.size = Vector2(count_diameter, count_diameter)
+	_count_label.position = Vector2.ZERO
+	_count_label.size = Vector2(badge_diameter, badge_diameter)
+	_count_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 
 
 ## 刷新单字、数量与可见性；无有效标记时隐藏整个组件。

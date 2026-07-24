@@ -419,6 +419,39 @@ func _test_opportunity_card_hover() -> bool:
 	get_tree().paused = false
 	card_view.queue_free()
 	await get_tree().process_frame
+	# 正式机缘选择弹窗；三张卡必须由固定尺寸牌位承载，悬停缩放不能改变HBox对子项的排版。
+	var choice_panel: OpportunityChoicePanel = _main_instance.get_node("OpportunityChoicePanel") as OpportunityChoicePanel
+	# 三张固定候选；本地0号是当前选择者，因此弹窗会创建三个真实卡牌与三个牌位。
+	var choice_snapshot: Dictionary = {
+		"active":true,
+		"stage":"choosing",
+		"current_chooser_id":0,
+		"chosen_player_ids":[],
+		"options_by_player":{0:[OpportunityCatalog.get_card("green_draw_two"), OpportunityCatalog.get_card("blue_skill_jiqiao"), OpportunityCatalog.get_card("red_refresh_opportunities")]},
+	}
+	choice_panel.show_opportunity(choice_snapshot, 0, {})
+	await get_tree().process_frame
+	# 机缘牌横排；直接子节点必须是固定牌位而不是会缩放的卡面自身。
+	var cards_row: HBoxContainer = choice_panel.get_node("%CardsRow") as HBoxContainer
+	# 首张牌位；保存悬停前的位置和最小尺寸用于比较。
+	var first_holder: Control = cards_row.get_child(0) as Control if cards_row != null and cards_row.get_child_count() > 0 else null
+	# 第二张牌位；相邻位置不得随首张卡悬停发生变化。
+	var second_holder: Control = cards_row.get_child(1) as Control if cards_row != null and cards_row.get_child_count() > 1 else null
+	# 首张机缘卡；缩放动画只允许发生在牌位内部的该节点上。
+	var first_choice_card: OpportunityCardView = first_holder.get_child(0) as OpportunityCardView if first_holder != null and first_holder.get_child_count() > 0 else null
+	if cards_row == null or cards_row.get_child_count() != 3 or first_holder == null or second_holder == null or first_choice_card == null:
+		choice_panel.close()
+		return _fail("opportunity_choice_holders")
+	# 悬停前相邻牌位位置；固定值用于确认HBox没有重新排版。
+	var first_holder_position: Vector2 = first_holder.position
+	# 悬停前第二牌位位置；任何变化都说明缩放仍影响外层排版。
+	var second_holder_position: Vector2 = second_holder.position
+	(first_choice_card.get_node("%InputButton") as Button).mouse_entered.emit()
+	await get_tree().create_timer(first_choice_card.hover_animation_seconds + 0.04, true).timeout
+	if first_holder.position != first_holder_position or second_holder.position != second_holder_position or first_holder.custom_minimum_size != first_choice_card.card_size or not first_choice_card.scale.is_equal_approx(Vector2.ONE * first_choice_card.hover_scale):
+		choice_panel.close()
+		return _fail("opportunity_choice_hover_layout first=%s/%s second=%s/%s holder=%s card=%s" % [first_holder.position, first_holder_position, second_holder.position, second_holder_position, first_holder.custom_minimum_size, first_choice_card.scale])
+	choice_panel.close()
 	return true
 
 

@@ -107,6 +107,9 @@ var _display_name_text: String = "杀"
 ## 待显示的视为牌名称；空字符串表示实体牌没有临时视为效果，横条保持隐藏。
 var _view_as_display_name_text: String = ""
 
+## 当前实体手牌的通用标记标签数组；按order与稳定ID排序，离手快照通常为空。
+var _hand_mark_tags: Array[Dictionary] = []
+
 ## 待显示的类别文本；默认与场景编辑器基本牌预览一致，运行时可附加木牛“粮”来源标记。
 var _card_type_text: String = "基本牌"
 
@@ -165,11 +168,11 @@ var _configuration_signature: int = -1
 ## 牌面顶部类别色条；只表达视觉分类，不参与卡牌规则判断。
 @onready var _accent_bar: ColorRect = $CardBody/AccentBar
 
-## 视为名称横条；仅在实体牌临时视为另一张牌时覆盖插画中心，不阻断原有输入区域。
-@onready var _view_as_banner: Panel = $CardBody/ViewAsBanner
+## 卡牌标签横条区域；视为牌名与通用手牌标记会在此并排居中，不阻断原有输入区域。
+@onready var _view_as_banner: Control = $CardBody/ViewAsBanner
 
-## 视为名称横条内的名称标签；文本始终使用视为后的逻辑牌名。
-@onready var _view_as_name_label: Label = $CardBody/ViewAsBanner/Name
+## 卡牌标签横向容器；动态标签之间保留固定间距，单标签和双标签都会整体居中。
+@onready var _card_tag_row: HBoxContainer = %TagRow
 
 ## 独立输入区域；负责点击、悬停和 Godot 原生拖拽协议。
 @onready var _input_area: CardInputArea = $InputArea
@@ -231,6 +234,15 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	var visual_definition: Dictionary = definition.duplicate(true)
 	# 当前视为名称；空字符串表示普通实体牌无需额外覆盖层。
 	_view_as_display_name_text = ""
+	_view_as_card_definition.clear()
+	# 当前通用手牌标签；复制后排序，禁止UI修改权威快照中的原始字典。
+	_hand_mark_tags = []
+	for tag_data_variant: Variant in (card.get("hand_mark_tags", {}) as Dictionary).values():
+		# 当前标签数据；空标签或无显示文本的异常记录不会占用牌面空间。
+		var tag_data: Dictionary = (tag_data_variant as Dictionary).duplicate(true)
+		if not str(tag_data.get("label", "")).is_empty():
+			_hand_mark_tags.append(tag_data)
+	_hand_mark_tags.sort_custom(_sort_hand_mark_tags)
 	if not original_definition_id.is_empty():
 		# 原实体牌定义；快照异常或扩展缺失时安全回退到逻辑牌定义，避免空白牌面。
 		var original_definition: Dictionary = GameDatabase.get_card(original_definition_id)
@@ -278,6 +290,7 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	_card_definition.clear()
 	_view_as_card_definition.clear()
 	_view_as_display_name_text = ""
+	_hand_mark_tags.clear()
 	if is_node_ready():
 		_input_area.tooltip_text = ""
 		_input_area.configure(card_uid, is_interactable, _get_hand_reorder_zone())
@@ -421,9 +434,8 @@ func _refresh_card_content() -> void:
 	_corner_label.text = _suit_rank_text
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
-	_view_as_banner.visible = not is_face_down and not _view_as_display_name_text.is_empty()
-	_view_as_name_label.text = _view_as_display_name_text
-	_view_as_name_label.add_theme_font_size_override("font_size", view_as_banner_font_size)
+	_view_as_banner.visible = not is_face_down and (not _view_as_display_name_text.is_empty() or not _hand_mark_tags.is_empty())
+	_rebuild_card_tag_banners()
 	# 红色花色使用朱红文字，其他花色使用深褐文字。
 	var content_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
 	_corner_label.add_theme_color_override("font_color", content_color)
@@ -432,7 +444,7 @@ func _refresh_card_content() -> void:
 	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 
 
-## 按当前牌面尺寸把视为名称横条固定在插画中央；细条贴合牌面类别色且不覆盖底部原牌名称。
+## 按当前牌面尺寸把卡牌标签行固定在插画中央；多个标签保留间距并作为整体居中。
 func _configure_view_as_banner_geometry() -> void:
 	if not is_node_ready():
 		return
@@ -442,30 +454,72 @@ func _configure_view_as_banner_geometry() -> void:
 	_view_as_banner.position = Vector2(0.0, (card_height - view_as_banner_height) * 0.5)
 
 
-## 刷新视为名称横条的主题样式；底板跟随当前实体牌的类别色，避免使用与牌面脱节的通用金属面板色。
-## 当前视觉规范使用牌面纸张白色作为底板，视为后的逻辑牌类别色作为边框，文字则沿用当前花色决定的牌名红黑配色。
+## 重建视为名称与通用手牌标记标签；两类标签使用同一视觉组件，并由HBox统一保留间距和整体居中。
 func _refresh_view_as_banner_style() -> void:
 	if not is_node_ready():
 		return
-	# 横条底色；由当前牌面的类别色加深得到，属性【杀】和各类实体牌都会自然匹配。
-	# 横条底色；使用与实体牌相同的纸张白色，让视为标签看起来像牌面本身的结构。
-	var banner_background: Color = BattleUIStyle.get_color("card_paper")
-	banner_background.a = view_as_banner_opacity
-	# 横条边框；轻微提亮同一类别色，形成紧凑边界且不与选中金边竞争视觉层级。
-	# 横条边框；从视为后的逻辑牌定义取得属性或类别色，不再沿用原实体牌类别。
-	var banner_border: Color = _resolve_category_color(_view_as_card_definition)
-	banner_border.a = 0.96
-	# 视为牌名文字颜色；红桃和方块使用牌名红色，黑桃和梅花使用牌名深色。
-	var banner_name_color: Color = BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text")
-	# 视为横条样式；保留轻微层次但大幅收窄阴影，避免覆盖原牌信息时形成厚重黑框。
-	var view_as_banner_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(banner_background, banner_border, 1, 2)
-	view_as_banner_style.shadow_color = Color(0.0, 0.0, 0.0, 0.22)
-	view_as_banner_style.shadow_size = 3
-	view_as_banner_style.shadow_offset = Vector2(0.0, 1.0)
-	_view_as_banner.add_theme_stylebox_override("panel", view_as_banner_style)
-	_view_as_name_label.add_theme_color_override("font_color", banner_name_color)
-	_view_as_name_label.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
-	_view_as_name_label.add_theme_constant_override("outline_size", 0)
+	_rebuild_card_tag_banners()
+
+
+## 清空并按当前缓存创建全部牌面标签；视为标签固定在前，通用标记按数据排序随后排列。
+func _rebuild_card_tag_banners() -> void:
+	if not is_node_ready():
+		return
+	for child: Node in _card_tag_row.get_children():
+		_card_tag_row.remove_child(child)
+		child.queue_free()
+	if is_face_down:
+		return
+	if not _view_as_display_name_text.is_empty():
+		_card_tag_row.add_child(_create_card_tag_banner(_view_as_display_name_text, _resolve_category_color(_view_as_card_definition)))
+	for tag_data: Dictionary in _hand_mark_tags:
+		# 当前手牌标记文本；鸣弦数据已经包含完整“【鸣弦】”格式，UI不重复包裹符号。
+		var label_text: String = str(tag_data.get("label", ""))
+		if not label_text.is_empty():
+			_card_tag_row.add_child(_create_card_tag_banner(label_text, _category_color))
+
+
+## 创建一个与视为标签同款的紧凑牌面标签；文字宽度决定自身宽度，父HBox负责双标签整体居中。
+func _create_card_tag_banner(label_text: String, border_color: Color) -> PanelContainer:
+	# 标签底板；白色牌纸和类别色边框与现有视为标签保持一致。
+	var panel: PanelContainer = PanelContainer.new()
+	panel.custom_minimum_size = Vector2(0.0, view_as_banner_height)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 标签底色；透明度由检查器参数控制，不改变文字和边框可读性。
+	var background_color: Color = BattleUIStyle.get_color("card_paper")
+	background_color.a = view_as_banner_opacity
+	# 标签边框色；视为牌使用逻辑牌类别色，普通标记使用原实体牌类别色。
+	var resolved_border_color: Color = border_color
+	resolved_border_color.a = 0.96
+	# 标签样式；水平内边距为3像素，让并排标签在111像素牌宽内仍能完整显示。
+	var panel_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(background_color, resolved_border_color, 1, 2)
+	panel_style.content_margin_left = 3.0
+	panel_style.content_margin_right = 3.0
+	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.22)
+	panel_style.shadow_size = 3
+	panel_style.shadow_offset = Vector2(0.0, 1.0)
+	panel.add_theme_stylebox_override("panel", panel_style)
+	# 标签文字；红色花色沿用牌名红色，黑色花色沿用牌名深色。
+	var label: Label = Label.new()
+	label.text = label_text
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", view_as_banner_font_size)
+	label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_red_suit") if _suit_rank_text.begins_with("♥") or _suit_rank_text.begins_with("♦") else BattleUIStyle.get_color("card_text"))
+	panel.add_child(label)
+	return panel
+
+
+## 比较两个通用手牌标签的稳定显示顺序；order相同则按ID排序，保证网络客户端布局一致。
+func _sort_hand_mark_tags(first: Dictionary, second: Dictionary) -> bool:
+	# 第一项排序值；缺失时使用0，允许普通标签自然排在高优先级技能标签之前。
+	var first_order: int = int(first.get("order", 0))
+	# 第二项排序值；与第一项相同类型，避免字符串数字产生字典序差异。
+	var second_order: int = int(second.get("order", 0))
+	if first_order != second_order:
+		return first_order < second_order
+	return str(first.get("id", "")) < str(second.get("id", ""))
 
 
 ## 将输入组件的开始拖动通知向桌面转发；实际位置与排序决策始终由持有全部手牌视图的桌面协调器负责。
@@ -526,6 +580,11 @@ func _on_mouse_entered() -> void:
 		# 视为状态提示；原牌名保留在标题，额外标明当前实际按哪张逻辑牌结算。
 		if not _view_as_display_name_text.is_empty():
 			information_subtitle += "｜视为【%s】" % _view_as_display_name_text
+		for tag_data: Dictionary in _hand_mark_tags:
+			# 通用手牌标记提示；直接追加标签原文，方便玩家在放大说明中确认鸣弦状态。
+			var hand_mark_label: String = str(tag_data.get("label", ""))
+			if not hand_mark_label.is_empty():
+				information_subtitle += "｜标记%s" % hand_mark_label
 		# 说明使用的逻辑定义；视为效果需要让玩家查看当前可实际使用或响应的牌效。
 		var information_definition: Dictionary = _view_as_card_definition if not _view_as_card_definition.is_empty() else _card_definition
 		# 统一卡牌信息；标题和说明直接来自当前名称模式与静态定义，不读取权威对局对象。

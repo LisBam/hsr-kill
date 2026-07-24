@@ -29,6 +29,15 @@ const AI_DOUZHI_VALUE: float = 1.0
 ## AI上报制动主动目标的基础负面牌效；默认-1.5分并声明伤害与【闪】响应语义。
 const AI_SLASH_TARGET_RESULT: float = -1.5
 
+## AI把卢卡作为【决斗】目标时扣除的固定制动风险；默认0.75张牌，表达连续响应会抬高最终伤害。
+const AI_DUEL_TARGET_BASE_DETERRENT: float = 0.75
+
+## 卢卡每张手牌额外降低敌方【决斗】目标收益的数值；默认0.5张牌，手牌越多越可能维持拼【杀】。
+const AI_DUEL_TARGET_HAND_CARD_DETERRENT: float = 0.5
+
+## 卢卡每枚“斗志”额外降低敌方【决斗】目标收益的数值；默认1张牌，代表可随时转化为一次【杀】响应。
+const AI_DUEL_TARGET_DOUZHI_DETERRENT: float = 1.0
+
 
 ## 写入技能静态信息；技能正文逐字保持设计原文，half_locked明确标注锁定后段。
 func _init() -> void:
@@ -39,7 +48,7 @@ func _init() -> void:
 		"enable":["phaseUse", "chooseToRespond"],
 		"ui_enabled":true,
 		"half_locked":true,
-		"description":"你可以消耗1枚“斗志”标记并视为使用或打出一张【杀】。锁定技，当你因一张目标数为1的牌造成伤害时，你令此伤害+X。（X为响应此牌的牌数）",
+		"description":"你可以消耗1枚“斗志”标记并视为使用或打出一张【杀】。锁定技，当你因一张目标数为1的牌造成伤害时，你令此伤害+X。（X为其他角色响应此牌的牌数）",
 	})
 
 
@@ -58,8 +67,8 @@ func _on_damage_begin_three(event: RuleEvent) -> void:
 	var target_count: int = int(event.data.get("damage_card_target_count", host.call("get_card_use_target_count", parent_card_uid)))
 	if target_count != SINGLE_DAMAGE_CARD_TARGET_COUNT:
 		return
-	# 原牌收到的直接响应数；反响应只属于其直接父响应牌，不递归计入原牌。
-	var direct_response_count: int = int(host.call("get_card_direct_response_count", parent_card_uid))
+	# 其他角色对原牌的直接响应数；持有者自身响应与反响应均不计入本次增伤。
+	var direct_response_count: int = int(host.call("get_card_direct_response_count_excluding_player", parent_card_uid, owner_player_id))
 	if direct_response_count <= 0:
 		return
 	event.data["amount"] = maxi(int(event.data.get("amount", 0)), 0) + direct_response_count
@@ -175,3 +184,24 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 ## 构建制动实际生成的无材料【杀】代理动作，供通用卡牌评分与其他技能修正复用。
 func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
 	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":SLASH_DEFINITION_ID, "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+
+
+## 降低敌方把卢卡选为【决斗】目标的收益；手牌与“斗志”分别代表持续打出【杀】和制动转化响应的公开威胁。
+func modify_ai_incoming_card_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, _target_result: float, _expected_damage_amount: int, current_score: float, evaluator: Object) -> float:
+	if target_id != owner_player_id or str(definition.get("effect_id", "")) != "duel" or not bool(ai_profile.get("damage", false)):
+		return current_score
+	if evaluator.get_attitude(authoritative_snapshot, actor_id, target_id) >= 0.0:
+		return current_score
+	# 卢卡公开快照；手牌数量和“斗志”数量共同决定敌方发起【决斗】的风险。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	if target.is_empty():
+		return current_score
+	# 卢卡当前手牌数；每张手牌都可能是普通【杀】或制动后续所需的战术资源。
+	var hand_count: int = maxi(int(target.get("hand_count", 0)), 0)
+	# 卢卡当前公开标记；不存在“斗志”时按0处理。
+	var public_marks: Dictionary = target.get("public_marks", {}) as Dictionary
+	# 当前“斗志”标记数据；网络序列化后仍以稳定字符串ID索引。
+	var douzhi_mark: Dictionary = public_marks.get(DOUZHI_MARK_ID, {}) as Dictionary
+	# 可转换为响应【杀】的“斗志”数量；数量越多，敌方【决斗】评分越可能降至负数。
+	var douzhi_count: int = maxi(int(douzhi_mark.get("count", 0)), 0)
+	return current_score - AI_DUEL_TARGET_BASE_DETERRENT - float(hand_count) * AI_DUEL_TARGET_HAND_CARD_DETERRENT - float(douzhi_count) * AI_DUEL_TARGET_DOUZHI_DETERRENT
