@@ -127,7 +127,7 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 			return "不能重复指定同一目标。"
 		unique_targets[target_id] = true
 		# 单个目标的合法性结果；任何目标失败都会拒绝整条指令。
-		var target_error: String = _validate_target(actor, definition, target_id, target_ids, {"card_color":card.get_color()})
+		var target_error: String = _validate_target(actor, definition, target_id, target_ids, _get_entity_card_rule_overrides(card))
 		if not target_error.is_empty():
 			return target_error
 	return ""
@@ -222,14 +222,14 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	var target_mode: String = str(definition.get("target_mode", ""))
 	if target_mode == "self" or target_mode == "self_wounded":
 		# 自身目标校验结果；受伤自身目标需要在此复用完整状态校验，不能因快捷返回而允许满体力使用【桃】。
-		var self_target_error: String = _validate_target(state.get_player(actor_id), definition, actor_id, [actor_id], {"card_color":card.get_color()})
+		var self_target_error: String = _validate_target(state.get_player(actor_id), definition, actor_id, [actor_id], _get_entity_card_rule_overrides(card))
 		if self_target_error.is_empty():
 			result.append(actor_id)
 		return result
 	for target: PlayerState in state.players:
 		if not target.alive or target.out_of_game:
 			continue
-		if _validate_target(state.get_player(actor_id), definition, target.player_id, [target.player_id], {"card_color":card.get_color()}).is_empty():
+		if _validate_target(state.get_player(actor_id), definition, target.player_id, [target.player_id], _get_entity_card_rule_overrides(card)).is_empty():
 			result.append(target.player_id)
 	return result
 
@@ -263,7 +263,7 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 			if target_mode == "all_others" and player.player_id == actor_id:
 				continue
 			# 当前目标合法性；使用单目标数组检查独立资格，使【破风】等限制只移除不允许的角色，而不让一个非法角色否决整张群体锦囊。
-			var target_error: String = _validate_target(actor, definition, player.player_id, [player.player_id], {"card_color":card.get_color()}) if actor != null else "行动玩家不存在。"
+			var target_error: String = _validate_target(actor, definition, player.player_id, [player.player_id], _get_entity_card_rule_overrides(card)) if actor != null else "行动玩家不存在。"
 			if not target_error.is_empty():
 				continue
 			result.append(player.player_id)
@@ -282,6 +282,15 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 	for request_index: int in range(requested_targets.size()):
 		if not appended_requests[request_index]:
 			result.append(requested_targets[request_index])
+	return result
+
+
+## 汇总实体牌颜色与手牌标记提供的纯规则覆写；离开手牌区后标记会被统一移动边界清理。
+func _get_entity_card_rule_overrides(card: CardInstance) -> Dictionary:
+	# 基础规则覆写；所有实体牌始终传递真实颜色供颜色型防御技能判断。
+	var result: Dictionary = {"card_color":card.get_color() if card != null else "none"}
+	if card != null and card.zone == "hand" and card.has_hand_mark_rule("ignore_distance_limit"):
+		result["ignore_distance_limit"] = true
 	return result
 
 

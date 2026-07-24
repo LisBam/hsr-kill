@@ -3,7 +3,7 @@ extends Control
 
 ## 对局结算面板。组件只读取终局快照中的累计统计并渲染列表，不访问或修改权威对局状态。
 
-## 玩家点击左上角关闭按钮时发出；牌桌保留终局快照，以便终局操作区再次打开本面板。
+## 玩家点击右上角唯一关闭按钮时发出；牌桌保留终局快照，以便终局操作区再次打开本面板。
 signal close_requested
 
 ## 结算面板绘制层级；高于机缘选择与普通选牌层，低于局内菜单和主菜单。
@@ -21,13 +21,13 @@ const STAT_ROW_MINIMUM_HEIGHT: float = 38.0
 ## 全屏遮罩；阻止面板显示期间误触桌面，但不承担关闭交互。
 @onready var _shade: ColorRect = %Shade
 
-## 居中结算框；承载标题、表头、可滚动角色列表与左上角关闭按钮。
+## 居中结算框；承载标题、表头、可滚动角色列表与右上角关闭按钮。
 @onready var _frame: PanelContainer = %Frame
 
 ## 终局标题；标题只描述当前面板，不重复判定胜负文案。
 @onready var _title_label: Label = %TitleLabel
 
-## 左上角关闭按钮；只隐藏面板，不清理终局累计数据。
+## 右上角唯一关闭按钮；只隐藏面板，不清理终局累计数据。
 @onready var _close_button: Button = %SettlementCloseButton
 
 ## 结算表头容器；角色列与五个统计列的顺序固定，动态行依此顺序创建。
@@ -134,7 +134,7 @@ func _create_cell(text_value: String, minimum_width: float, alignment: int = HOR
 	return cell
 
 
-## 响应左上角关闭；只关闭本组件，终局操作区会继续保留“结算界面”再次打开入口。
+## 响应右上角唯一关闭按钮；只关闭本组件，终局操作区会继续保留“结算界面”再次打开入口。
 func _on_close_button_pressed() -> void:
 	hide_settlement()
 	close_requested.emit()

@@ -180,16 +180,14 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；当前二十一名正式武将与模式规则共登记四十四个独立技能源码定义。
-	# 素裳与桂乃芬加入后，正式技能源码总数扩展为四十八个；该快照用于防止目录扫描漏登记新技能。
-	# 佩拉与玲可加入后，四项新技能使当前技能源码总数扩展为五十二个。
+	# 技能元数据数量；当前55个正式武将技能与3个模式技能共登记58个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 52:
+	if skill_definition_count != 58:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
 	# 技能脚本数量；技能元数据与可创建的独立运行时代码必须一一对应。
-	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("yongyi") == null or not GameDatabase.get_skill("trailblaze_sample").is_empty():
+	if GameDatabase.skill_scripts.size() != skill_definition_count or GameDatabase.create_skill("yongyi") == null or GameDatabase.create_skill("mingxian") == null or GameDatabase.create_skill("zhufeng") == null or not GameDatabase.get_skill("trailblaze_sample").is_empty():
 		printerr("SMOKE_FAIL skill_source_definitions")
 		get_tree().quit(1)
 		return
@@ -216,12 +214,18 @@ func _run() -> void:
 	var peila_definition: Dictionary = GameDatabase.get_character("peila")
 	# 玲可武将定义；用于校验贝洛伯格势力、女性性别、3点基础体力与双技能顺序。
 	var lingke_definition: Dictionary = GameDatabase.get_character("lingke")
+	# 驭空武将定义；用于校验仙舟联盟势力、女性性别、4点基础体力与双技能顺序。
+	var yvkong_definition: Dictionary = GameDatabase.get_character("yvkong")
 	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4 or int(xing_definition.get("max_hp", 0)) != 4 or int(qiong_definition.get("max_hp", 0)) != 4 or int(xing_preservation_definition.get("max_hp", 0)) != 4 or int(qiong_preservation_definition.get("max_hp", 0)) != 4 or int(sampo_definition.get("max_hp", 0)) != 4 or str(sampo_definition.get("faction", "")) != "beiluoboge" or int(sushang_definition.get("max_hp", 0)) != 4 or str(sushang_definition.get("faction", "")) != "xianzhou" or str(sushang_definition.get("gender", "")) != "female" or sushang_definition.get("skills", []) != ["jianshi", "shanqing"] or int(guinaifen_definition.get("max_hp", 0)) != 3 or str(guinaifen_definition.get("faction", "")) != "xianzhou" or str(guinaifen_definition.get("gender", "")) != "female" or guinaifen_definition.get("skills", []) != ["xifa", "touxia"]:
 		printerr("SMOKE_FAIL new_character_stats")
 		get_tree().quit(1)
 		return
 	if int(peila_definition.get("max_hp", 0)) != 3 or str(peila_definition.get("faction", "")) != "beiluoboge" or str(peila_definition.get("gender", "")) != "female" or peila_definition.get("skills", []) != ["zhuijian", "mice"] or int(lingke_definition.get("max_hp", 0)) != 3 or str(lingke_definition.get("faction", "")) != "beiluoboge" or str(lingke_definition.get("gender", "")) != "female" or lingke_definition.get("skills", []) != ["kance", "qiusheng"]:
 		printerr("SMOKE_FAIL peila_lingke_stats")
+		get_tree().quit(1)
+		return
+	if int(yvkong_definition.get("max_hp", 0)) != 4 or str(yvkong_definition.get("faction", "")) != "xianzhou" or str(yvkong_definition.get("gender", "")) != "female" or yvkong_definition.get("skills", []) != ["mingxian", "zhufeng"]:
+		printerr("SMOKE_FAIL yvkong_stats")
 		get_tree().quit(1)
 		return
 	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。" or str(GameDatabase.get_skill("zhenqi").get("description", "")) != "领袖技，“贝洛伯格”势力的角色的回合开始时，其可弃置一张手牌/失去1点体力，然后你令另一名“贝洛伯格”势力的角色摸一张牌/回复1点体力。" or str(GameDatabase.get_skill("linghang").get("description", "")) != "领袖技，“星穹列车”势力的角色使一名角色横置时，你可对其发动此技能，然后其可重铸一张手牌。每回合限一次。" or str(GameDatabase.get_skill("jiahu").get("description", "")) != "准备阶段，你可以横置一名武将牌竖置且没有护盾的角色，并令其获得1点护盾。" or str(GameDatabase.get_skill("bingfeng").get("description", "")) != "当你使用牌指定唯一目标时，你可选择一项：1.将目标的武将牌调整为竖直；2.弃置目标一张手牌。然后若该角色不为你，你令此牌无效。每回合每名角色限一次。" or str(GameDatabase.get_skill("yongyi").get("description", "")) != "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。每回合限一次，弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。" or str(GameDatabase.get_skill("gangfeng").get("description", "")) != "你可将黑色牌当雷【杀】使用或打出。" or str(GameDatabase.get_skill("jiyu").get("description", "")) != "当你使用【杀】指定目标时，你可令目标角色调整至横置状态，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。" or str(GameDatabase.get_skill("wangpai").get("description", "")) != "锁定技，你使用【杀】无次数限制。" or str(GameDatabase.get_skill("anda").get("description", "")) != "你可将一张牌当无距离限制的火【杀】使用或打出，每回合限一次。" or str(GameDatabase.get_skill("quanlei").get("description", "")) != "出牌阶段限一次，你可将一张手牌当目标上限+1的雷【杀】使用。" or str(GameDatabase.get_skill("hupo").get("description", "")) != "锁定技，你无法成为黑色【杀】的目标。" or str(GameDatabase.get_skill("tiebi").get("description", "")) != "每轮开始时，你可弃置一张【闪】并横置一名其他角色，其获得技能“琥珀”直到本轮结束。" or str(GameDatabase.get_skill("jianlei").get("description", "")) != "当一名距离为1的其他角色成为黑色【杀】的目标时，你可弃置一张【闪】并横置该角色，然后令此【杀】无效。" or str(GameDatabase.get_skill("pofeng").get("description", "")) != "结束阶段，若你于本回合内使用【杀】指定过目标，你可以弃置一张手牌并进行一个额外的回合，本回合内你使用牌仅可指定你本回合内使用【杀】指定过的角色为目标。每轮限一次。":
@@ -238,16 +242,18 @@ func _run() -> void:
 		printerr("SMOKE_FAIL peila_lingke_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 正式武将数量；当前共二十一名可参与选将与对局的角色。
-	# 素裳与桂乃芬加入后，可参与选将与对局的正式武将总数为二十三名。
-	# 佩拉与玲可加入后，可参与选将与对局的正式武将总数为二十五名。
+	# 驭空技能原文；逐字锁定主公指定的标点、数值和语句顺序。
+	if str(GameDatabase.get_skill("mingxian").get("description", "")) != "出牌阶段限一次，你可令任意名与你距离为1以内的角色从牌堆中各获得一张【杀】，这些【杀】无距离限制直到离开其手牌区。" or str(GameDatabase.get_skill("zhufeng").get("description", "")) != "锁定技，当你受到或造成伤害后，你计算与其他角色的距离-1，若此时你与所有角色距离均为1，则改为摸一张牌。":
+		printerr("SMOKE_FAIL yvkong_skill_descriptions")
+		get_tree().quit(1)
+		return
+	# 正式武将数量；当前28名角色均可参与选将与对局。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 25:
+	if character_definition_count != 28:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前二十一名武将共使用七个独立势力主题。
-	# 素裳与桂乃芬均归属既有仙舟联盟，因此二十三名正式武将仍共同使用七个势力主题。
+	# 势力展示元数据数量；当前28名武将仍共同使用7个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 7:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
@@ -1046,7 +1052,19 @@ func _run() -> void:
 	negation_state.players[2].hand.append(seat_three_counter)
 	_controller.state = negation_state
 	_controller.card_rules = CardRuleService.new(negation_state)
-	if not _controller.resolve_trick_negation(3, 1, "guohe") or negation_state.players[2].hand.size() != 0 or negation_state.players[0].hand.size() != 1:
+	# 一号位此前是否由AI控制；规则顺序断言后按原状态恢复，避免影响后续烟雾测试。
+	var seat_one_was_ai_controlled: bool = _controller.ai_coordinator.is_ai_controlled(0)
+	# 三号位此前是否由AI控制；本段临时使用公开身份回退规则，排除随机本地座次对测试分支的影响。
+	var seat_three_was_ai_controlled: bool = _controller.ai_coordinator.is_ai_controlled(2)
+	_controller.ai_coordinator.unregister_ai(0)
+	_controller.ai_coordinator.unregister_ai(2)
+	# 无懈链同步结果；临时取消AI注册后应严格按当前回合角色起始的行动顺序裁决。
+	var negation_resolved: bool = _controller.resolve_trick_negation(3, 1, "guohe")
+	if seat_one_was_ai_controlled:
+		_controller.ai_coordinator.register_basic_ai(0)
+	if seat_three_was_ai_controlled:
+		_controller.ai_coordinator.register_basic_ai(2)
+	if not negation_resolved or negation_state.players[2].hand.size() != 0 or negation_state.players[0].hand.size() != 1:
 		printerr("SMOKE_FAIL negation_response_order seat1=%d seat3=%d" % [negation_state.players[0].hand.size(), negation_state.players[2].hand.size()])
 		get_tree().quit(1)
 		return

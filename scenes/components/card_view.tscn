@@ -102,7 +102,7 @@ text = "◇
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="ViewAsBanner" type="Panel" parent="CardBody" unique_id=132193942]
+[node name="ViewAsBanner" type="Control" parent="CardBody" unique_id=132193942]
 visible = false
 layout_mode = 0
 offset_top = 59.0
@@ -110,19 +110,17 @@ offset_right = 111.0
 offset_bottom = 89.0
 mouse_filter = 2
 
-[node name="Name" type="Label" parent="CardBody/ViewAsBanner" unique_id=103915235]
+[node name="TagRow" type="HBoxContainer" parent="CardBody/ViewAsBanner"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_colors/font_color = Color(0.909804, 0.862745, 0.764706, 1)
-theme_override_font_sizes/font_size = 22
-text = "杀"
-horizontal_alignment = 1
-vertical_alignment = 1
-text_overrun_behavior = 3
+mouse_filter = 2
+theme_override_constants/separation = 4
+alignment = 1
 
 [node name="Corner" type="Label" parent="CardBody" unique_id=447821368]
 unique_name_in_owner = true

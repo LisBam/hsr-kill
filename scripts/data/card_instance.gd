@@ -41,6 +41,9 @@ var hand_view_as_original_definition_id: String = ""
 ## 赋予当前手牌视为效果的技能ID；只用于规则追踪与清理，不改变技能归属或实体所有者。
 var hand_view_as_source_skill_id: String = ""
 
+## 当前手牌拥有的通用标记标签；键为稳定标签ID，值保存显示文本、排序、来源技能与规则覆写，离开手牌区时整体清空。
+var hand_mark_tags: Dictionary = {}
+
 ## 最近一次离开手牌时的原实体定义ID；仅供处理区与弃牌堆展示保留来源牌面，不参与后续规则判定。
 var last_hand_view_as_original_definition_id: String = ""
 
@@ -79,6 +82,7 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	card.private_owner_id = int(data.get("private_owner_id", -1))
 	card.hand_view_as_original_definition_id = str(data.get("original_definition_id", ""))
 	card.hand_view_as_source_skill_id = str(data.get("hand_view_as_source_skill_id", ""))
+	card.hand_mark_tags = (data.get("hand_mark_tags", {}) as Dictionary).duplicate(true)
 	card.last_hand_view_as_original_definition_id = str(data.get("presentation_original_definition_id", ""))
 	card.last_hand_view_as_definition_id = str(data.get("view_as_definition_id", ""))
 	return card
@@ -123,6 +127,39 @@ func has_hand_view_as() -> bool:
 	return not hand_view_as_original_definition_id.is_empty()
 
 
+## 为当前手牌写入或更新一个通用标记标签；标签数据只接受可序列化字典，调用方负责提供长期稳定的标签ID。
+func set_hand_mark_tag(tag_id: String, tag_data: Dictionary) -> bool:
+	if zone != "hand" or tag_id.is_empty() or tag_data.is_empty():
+		return false
+	# 标准化标签数据；稳定ID同时写入数据体，网络与UI排序时不依赖字典键的迭代顺序。
+	var normalized_tag_data: Dictionary = tag_data.duplicate(true)
+	normalized_tag_data["id"] = tag_id
+	hand_mark_tags[tag_id] = normalized_tag_data
+	return true
+
+
+## 清除当前手牌的全部通用标记标签；返回是否实际移除了至少一个标签。
+func clear_hand_mark_tags() -> bool:
+	if hand_mark_tags.is_empty():
+		return false
+	hand_mark_tags.clear()
+	return true
+
+
+## 返回任一手牌标记是否声明指定布尔规则；多个标签可独立提供同一种临时规则能力。
+func has_hand_mark_rule(rule_name: String) -> bool:
+	if rule_name.is_empty():
+		return false
+	for tag_data_variant: Variant in hand_mark_tags.values():
+		# 当前标签数据；异常旧快照会被视为空字典并安全跳过。
+		var tag_data: Dictionary = tag_data_variant as Dictionary
+		# 标签规则覆写；当前鸣弦使用ignore_distance_limit，结构可供后续标记机制复用。
+		var rule_overrides: Dictionary = tag_data.get("rule_overrides", {}) as Dictionary
+		if bool(rule_overrides.get(rule_name, false)):
+			return true
+	return false
+
+
 ## 清理已结束的视为牌展示来源；牌进入牌堆、手牌、装备、判定或木牛区域后不再保留旧一次性视为记录。
 func clear_hand_view_as_presentation() -> void:
 	last_hand_view_as_original_definition_id = ""
@@ -149,6 +186,8 @@ func to_dict() -> Dictionary:
 		"known_to": known_to.duplicate(),
 		"shown": shown,
 		"private_owner_id": private_owner_id,
+		"hand_view_as_source_skill_id": hand_view_as_source_skill_id,
+		"hand_mark_tags": hand_mark_tags.duplicate(true),
 		"presentation_original_definition_id": presentation_original_definition_id,
 		"view_as_definition_id": view_as_definition_id,
 	}

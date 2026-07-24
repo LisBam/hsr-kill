@@ -4006,6 +4006,7 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 		candidates = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids)
 	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
 	var response_context: Dictionary = context.duplicate(true)
+	response_context["responder_id"] = player_id
 	response_context["response_patterns"] = allowed_patterns.duplicate()
 	response_context["response_prompt"] = prompt
 	# 父牌当前直接响应数；AI可据此评估【制动】在决斗或强制命中后的累计增伤风险，客户端不能修改权威计数。
@@ -4511,7 +4512,7 @@ func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counte
 	response_results.append({"player_id":responder_id, "card_uid":counter_card.uid, "card_id":counter_card.definition_id, "respond_to":str(context.get("trick_id", "")) if response_results.is_empty() else "wuxie", "respond_to_card_uid":responded_card_uid})
 	context["wuxie_response_results"] = response_results
 	if response_results.size() == 1:
-		record_card_direct_response(int(context.get("parent_card_uid", -1)))
+		record_card_direct_response(int(context.get("parent_card_uid", -1)), responder_id)
 	# 原锦囊定义；无懈身份观察通过其目标收益与当前奇偶结果判断本次响应的忠反方向。
 	var response_subject_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
 	# 成功打出的无懈可击公开行为；仅在原使用者已有暴露且响应者不是目标本人时形成身份线索。
@@ -5751,6 +5752,18 @@ func set_all_hand_cards_view_as(player_id: int, view_as_definition_id: String, s
 	return affected_count
 
 
+## 为指定持有者的一张普通手牌写入通用标记标签；标签不改变牌名，并在实体离开当前手牌区时自动清除。
+func set_hand_card_mark_tag(holder_id: int, card_uid: int, tag_id: String, tag_data: Dictionary) -> bool:
+	# 当前手牌持有者；死亡、离场或不存在的角色不能获得新的手牌标记。
+	var holder: PlayerState = state.get_player(holder_id) if state != null else null
+	# 当前手牌实体；UID必须仍位于指定角色的普通手牌区。
+	var card: CardInstance = holder.find_hand_card(card_uid) if holder != null else null
+	if holder == null or not holder.alive or holder.out_of_game or card == null or not card.set_hand_mark_tag(tag_id, tag_data):
+		return false
+	_emit_state()
+	return true
+
+
 ## 返回两名角色交换装备区时的完整实体与目标槽位快照；解析器会先清空双方装备区再按本快照装入对方。
 func get_equipment_swap_entries(first_player_id: int, second_player_id: int) -> Array[Dictionary]:
 	# 交换条目；每项保存原持有者、目标持有者、槽位和实体UID。
@@ -6961,13 +6974,17 @@ func get_card_target_damage_bonus(card_uid: int, target_id: int) -> int:
 	return int(target_args.get("damage_bonus", 0))
 
 
-## 记录一张牌收到的一次直接响应；只累计直接以该牌为父对象的实际打出，不递归计算响应牌受到的反响应。
-func record_card_direct_response(card_uid: int) -> bool:
+## 记录一张牌收到的一次直接响应及响应者；只累计直接以该牌为父对象的实际打出，不递归计算响应牌受到的反响应。
+func record_card_direct_response(card_uid: int, responder_id: int = -1) -> bool:
 	if card_uid < 0 or not _card_use_contexts.has(card_uid):
 		return false
 	# 当前使用牌上下文；直接响应数在整张牌的全部目标间共享，适用于【决斗】连续打【杀】等流程。
 	var card_use_context: Dictionary = _card_use_contexts[card_uid] as Dictionary
 	card_use_context["direct_response_count"] = maxi(int(card_use_context.get("direct_response_count", 0)) + 1, 0)
+	# 直接响应者ID序列；保留重复项，使同一角色在【决斗】中连续打出的多张【杀】仍逐张计数。
+	var direct_response_player_ids: Array = (card_use_context.get("direct_response_player_ids", []) as Array).duplicate()
+	direct_response_player_ids.append(responder_id)
+	card_use_context["direct_response_player_ids"] = direct_response_player_ids
 	_card_use_contexts[card_uid] = card_use_context
 	return true
 
@@ -6977,6 +6994,22 @@ func get_card_direct_response_count(card_uid: int) -> int:
 	return maxi(int((_card_use_contexts.get(card_uid, {}) as Dictionary).get("direct_response_count", 0)), 0)
 
 
+## 返回除指定角色外的直接响应牌数量；用于“其他角色响应”语义，未知旧记录按其他角色处理以保持兼容。
+func get_card_direct_response_count_excluding_player(card_uid: int, excluded_player_id: int) -> int:
+	# 当前使用牌上下文；生命周期外没有可统计的响应。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	# 响应者序列；每个元素对应一张实际打出的直接响应牌，同一角色可出现多次。
+	var responder_ids: Array = card_use_context.get("direct_response_player_ids", []) as Array
+	if responder_ids.is_empty():
+		return get_card_direct_response_count(card_uid)
+	# 排除指定角色后的响应牌数量；负数未知ID不会等于任何正常玩家ID。
+	var result: int = 0
+	for responder_id_variant: Variant in responder_ids:
+		if int(responder_id_variant) != excluded_player_id:
+			result += 1
+	return result
+
+
 ## 返回一张仍处于使用生命周期中的牌的最终目标数；使用牌时机增删目标后读取最新权威数组。
 func get_card_use_target_count(card_uid: int) -> int:
 	return (_card_use_contexts.get(card_uid, {}) as Dictionary).get("target_ids", []).size()
@@ -6984,7 +7017,7 @@ func get_card_use_target_count(card_uid: int) -> int:
 
 ## 从响应上下文登记对父牌的一次直接响应；缺少父牌UID的救援、装备询问和独立响应不会误计数。
 func _record_direct_response_from_context(context: Dictionary) -> void:
-	record_card_direct_response(int(context.get("parent_card_uid", -1)))
+	record_card_direct_response(int(context.get("parent_card_uid", -1)), int(context.get("responder_id", -1)))
 
 
 ## 在整牌准备选择完成后恢复兼容逐目标游标；真实事件树由父事件自然恢复，不主动重复推进。
@@ -8976,7 +9009,7 @@ func _continue_turn_start(context: Dictionary) -> void:
 			stage = str(context["stage"])
 			continue
 		if stage == "face_down_check":
-			# 翻面状态只在完整回合真正进入前检查；phaseBefore仍可清理“直到你的下个回合开始”效果，但不会进入任何标准阶段。
+			# 翻面状态只在完整回合真正进入前检查；phaseBefore是回合调度前置时机，翻面跳过不会进入phaseBegin及任何标准阶段。
 			if player.face_down:
 				context["stage"] = "face_down_finish"
 				turn_over_player(player_id, player_id, "turn_start_skip")
@@ -10161,6 +10194,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"excluded_target_ids":[],
 		"direct_hit_target_ids":[],
 		"direct_response_count":0,
+		"direct_response_player_ids":[],
 		"custom_args":{},
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_storage":virtual_card.storage.duplicate(true),
@@ -11984,6 +12018,8 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 	if card.has_hand_view_as() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id):
 		_hand_view_as_turn_expiries.erase(card.uid)
 		card.clear_hand_view_as()
+	# 手牌通用标记是否应在本次移动生效时清理；前置移动时机取消时必须保留原标签。
+	var should_clear_hand_mark_tags: bool = not card.hand_mark_tags.is_empty() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id)
 	# 移动前区域与持有者；即使调用方已从区域数组取出实体，CardInstance 仍保存本次移动的权威来源字段。
 	var source_zone: String = card.zone
 	# 移动前持有者；公共区域固定为-1，玩家区域保留稳定玩家 ID。
@@ -12033,6 +12069,9 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 	var move: CardMoveEvent = card_movement.move_card(card, to_zone, target_player_id, reason, event_id, target_slot, visible_to)
 	if move == null:
 		return null
+	# 手牌通用标记的实际离区边界；只有区域移动确实成功后才清除，取消或底层拒绝移动时继续保留鸣弦标签。
+	if should_clear_hand_mark_tags:
+		card.clear_hand_mark_tags()
 	# 完成后的移动上下文；补充稳定 move_id，后置技能可直接关联网络和回放增量。
 	timing_data["move_id"] = move.move_id
 	for lifecycle_name: String in lifecycle_names:

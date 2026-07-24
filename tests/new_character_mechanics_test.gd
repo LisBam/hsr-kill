@@ -8,6 +8,9 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 通用选牌面板场景；用真实卡牌输入节点验证暗置候选与牌堆排序拖拽释放均不会绕过交互边界。
 const CARD_SELECTION_PANEL_SCENE: PackedScene = preload("res://scenes/components/card_selection_panel.tscn")
 
+## 正式实体牌场景；用于验证视为标签与鸣弦手牌标记同时存在时并排居中显示。
+const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
+
 ## 每个机制场景共用的权威对局控制器；所有状态变化仍通过正式公开端口执行。
 var _controller: MatchController
 
@@ -30,6 +33,8 @@ func _run() -> void:
 	if not _test_expanded_character_metadata():
 		return
 	if not _test_luka_gallagher_mechanics():
+		return
+	if not await _test_yvkong_mechanics_and_card_tags():
 		return
 	if not _test_feiyan_preparation_phase_virtual_use():
 		return
@@ -329,7 +334,7 @@ func _test_luka_gallagher_mechanics() -> bool:
 	# 新技能原文；半锁定分段和玩家可见标点均由精确正文共同约束。
 	var expected_descriptions: Dictionary = {
 		"baizhe":"你可以消耗2枚“斗志”标记并视为使用一张【决斗】。锁定技，当你受到或造成1点伤害后，你获得一枚“斗志”标记，每回合限3次。",
-		"zhidong":"你可以消耗1枚“斗志”标记并视为使用或打出一张【杀】。锁定技，当你因一张目标数为1的牌造成伤害时，你令此伤害+X。（X为响应此牌的牌数）",
+		"zhidong":"你可以消耗1枚“斗志”标记并视为使用或打出一张【杀】。锁定技，当你因一张目标数为1的牌造成伤害时，你令此伤害+X。（X为其他角色响应此牌的牌数）",
 		"qinniang":"出牌阶段限一次，你可以展示并交给一名角色一张黑色牌，此牌视为【酒】直到其下个回合结束。",
 		"mingding":"限定技，出牌阶段，你可以将武将牌翻面并选择一名其他角色，然后视为对其使用一张【杀】；当一名角色对目标角色造成1点伤害时，造成伤害的角色回复1点体力，直到你的下个回合开始。",
 	}
@@ -342,7 +347,7 @@ func _test_luka_gallagher_mechanics() -> bool:
 	var baizhe_metadata_skill: SkillDefinition = GameDatabase.create_skill("baizhe")
 	# 制动实例；与百折共享相同的半锁定分段规则。
 	var zhidong_metadata_skill: SkillDefinition = GameDatabase.create_skill("zhidong")
-	if baizhe_metadata_skill == null or zhidong_metadata_skill == null or not baizhe_metadata_skill.half_locked or not zhidong_metadata_skill.half_locked:
+	if baizhe_metadata_skill == null or zhidong_metadata_skill == null or not baizhe_metadata_skill.half_locked or not zhidong_metadata_skill.half_locked or not is_equal_approx(baizhe_metadata_skill.sell_blood_value, 1.0) or not is_equal_approx(zhidong_metadata_skill.sell_blood_value, 0.0):
 		return _fail("half_locked_metadata")
 
 	_reset_state(2)
@@ -391,11 +396,11 @@ func _test_luka_gallagher_mechanics() -> bool:
 	_controller.set_non_locked_skills_disabled(0, true, "test:disable", 1, "专项测试")
 	if _controller.can_activate_skill(0, "zhidong", {"active_entry":"phaseUse", "target_ids":[1]}):
 		return _fail("zhidong_non_locked_invalidation")
-	# 来源牌上下文；两张牌直接响应原牌，锁定后段应令1点伤害增加为3点。
+	# 来源牌上下文；三张牌直接响应原牌，其中两张由卢卡自己打出，锁定后段只按另一角色的1张响应令伤害加1。
 	var response_parent_uid: int = 990001
-	_controller._card_use_contexts[response_parent_uid] = {"target_ids":[1], "direct_response_count":2}
+	_controller._card_use_contexts[response_parent_uid] = {"target_ids":[1], "direct_response_count":3, "direct_response_player_ids":[0, 1, 0]}
 	_controller.damage(0, 1, 1, "normal", "sha", false, false, {"parent_card_uid":response_parent_uid, "damage_card_target_count":1})
-	if zhidong_target.hp != 7:
+	if zhidong_target.hp != 8:
 		return _fail("zhidong_direct_response_bonus hp=%d" % zhidong_target.hp)
 	# 多目标来源牌上下文；即使累计2张直接响应，目标数不为1时也不能获得制动增伤。
 	var multi_response_parent_uid: int = 990002
@@ -419,28 +424,31 @@ func _test_luka_gallagher_mechanics() -> bool:
 	if black_gift.definition_id != "sha" or black_gift.has_hand_view_as():
 		return _fail("qinniang_expire=%s" % black_gift.to_dict())
 
-	_reset_state(3)
+	_reset_state(5)
 	# 酩酊持有者；先损失1点体力，首张虚拟【杀】命中后应立即按点回复。
 	var mingding_owner: PlayerState = _controller.state.get_player(0)
 	# 酩酊目标；承受首次【杀】与后续2点伤害仍不会进入濒死。
-	var mingding_target: PlayerState = _controller.state.get_player(1)
+	var mingding_target: PlayerState = _controller.state.get_player(2)
 	# 后续伤害来源；损失2点体力后通过逐点回复恢复至满体力。
-	var allied_damage_source: PlayerState = _controller.state.get_player(2)
+	var allied_damage_source: PlayerState = _controller.state.get_player(3)
 	mingding_owner.hp = 3
 	allied_damage_source.hp = 2
 	# 正式酩酊实例；限定技主动流程负责翻面、目标文本与无材料【杀】。
 	var mingding: SkillDefinition = _install_single_skill(0, "mingding")
-	if mingding == null or not _controller.activate_skill(0, "mingding", {"active_entry":"phaseUse", "target_ids":[1]}):
+	if mingding == null or _controller.card_rules.calculate_distance(0, 2) <= 1 or not _controller.activate_skill(0, "mingding", {"active_entry":"phaseUse", "target_ids":[2]}):
 		return _fail("mingding_activation")
 	# 目标无【闪】时的明确放弃响应；完成标准【杀】等待后才检查本次伤害带来的逐点回复。
-	if _controller.has_pending_card_choice() and not _submit_pending_choice(1, [], [], false):
+	if _controller.has_pending_card_choice() and not _submit_pending_choice(2, [], [], false):
 		return false
 	if not mingding_owner.face_down or mingding_owner.hp != 4 or mingding_target.character_corner_text != "酩酊":
 		return _fail("mingding_initial face_down=%s hp=%d text=%s" % [mingding_owner.face_down, mingding_owner.hp, mingding_target.character_corner_text])
-	_controller.damage(2, 1, 2, "normal", "test")
+	_controller.damage(3, 2, 2, "normal", "test")
 	if allied_damage_source.hp != 4:
 		return _fail("mingding_damage_point_recover=%d" % allied_damage_source.hp)
 	_controller._emit_rule_timing("phaseBefore", 0, 0, -1, {})
+	if mingding_target.character_corner_text != "酩酊":
+		return _fail("mingding_face_down_skip_expired=%s" % mingding_target.character_corner_text)
+	_controller._emit_rule_timing("phaseBegin", 0, 0, -1, {})
 	if not mingding_target.character_corner_text.is_empty():
 		return _fail("mingding_expire=%s" % mingding_target.character_corner_text)
 
@@ -464,6 +472,129 @@ func _test_luka_gallagher_mechanics() -> bool:
 			var field_name: String = str(field_variant)
 			if str(opportunity.get(field_name, "")) != str(expected_opportunity[field_name]):
 				return _fail("luka_gallagher_opportunity=%s/%s/%s" % [opportunity_id, field_name, opportunity])
+	return true
+
+
+## 核对驭空资料，并验证鸣弦检索、手牌标记、无距离、离手清理、双标签UI、逐风距离与摸牌替代。
+func _test_yvkong_mechanics_and_card_tags() -> bool:
+	# 驭空武将定义；仙舟联盟女性、4点体力与鸣弦/逐风顺序必须保持稳定。
+	var yvkong: Dictionary = GameDatabase.get_character("yvkong")
+	if str(yvkong.get("display_name", "")) != "驭空" or str(yvkong.get("gender", "")) != "female" or str(yvkong.get("faction", "")) != "xianzhou" or int(yvkong.get("max_hp", 0)) != 4 or (yvkong.get("skills", []) as Array) != ["mingxian", "zhufeng"]:
+		return _fail("yvkong_metadata=%s" % yvkong)
+	# 驭空技能原文；逐字比较避免玩家面板文本被规则说明自动改写。
+	var expected_descriptions: Dictionary = {
+		"mingxian":"出牌阶段限一次，你可令任意名与你距离为1以内的角色从牌堆中各获得一张【杀】，这些【杀】无距离限制直到离开其手牌区。",
+		"zhufeng":"锁定技，当你受到或造成伤害后，你计算与其他角色的距离-1，若此时你与所有角色距离均为1，则改为摸一张牌。",
+	}
+	for skill_id_variant: Variant in expected_descriptions.keys():
+		# 当前驭空技能ID；数据库正文必须与主公原文完全相同。
+		var skill_id: String = str(skill_id_variant)
+		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
+			return _fail("yvkong_skill_description=%s" % skill_id)
+	# 全技能卖血元数据；基类必须把缺省值统一补为浮点0.0，百折是唯一显式1.0用例。
+	for skill_id_variant: Variant in GameDatabase.skills.keys():
+		# 当前全局技能ID；自动目录中的每项技能都必须可构造并暴露浮点卖血价值。
+		var skill_id: String = str(skill_id_variant)
+		# 当前技能实例；静态检查同时覆盖默认值写入和运行时getter。
+		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		if skill == null or typeof(skill.get_metadata().get("sell_blood_value", null)) != TYPE_FLOAT or skill.get_sell_blood_value() < 0.0:
+			return _fail("sell_blood_value skill=%s metadata=%s" % [skill_id, skill.get_metadata() if skill != null else {}])
+
+	_reset_state(5)
+	_controller.state.get_player(0).character_id = "yvkong"
+	# 三张不同属性的【杀】；鸣弦按slash效果族检索，并应为三名合法目标各取得一张。
+	var first_slash: CardInstance = _add_draw_pile_card("sha", "spade", 7)
+	# 第二张牌堆【杀】；不同花色用于确认标记不依赖具体牌色。
+	var second_slash: CardInstance = _add_draw_pile_card("sha_fire", "heart", 8)
+	# 第三张牌堆【杀】；不同定义用于确认规则族检索包含雷【杀】。
+	var third_slash: CardInstance = _add_draw_pile_card("sha_thunder", "club", 9)
+	# 普通未标记【杀】；用于对比标准攻击范围仍会拒绝远距离目标。
+	var ordinary_slash: CardInstance = _add_hand_card(0, "sha", "diamond", 10)
+	# 正式鸣弦实例；通过主动入口取得并标记手牌。
+	var mingxian: SkillDefinition = _install_single_skill(0, "mingxian")
+	if mingxian == null or not _controller.activate_skill(0, "mingxian", {"active_entry":"phaseUse", "target_ids":[0, 1, 4]}):
+		return _fail("mingxian_activation")
+	# 实际取得的鸣弦手牌；牌堆从顶向下依次分配，三个实体均必须离开牌堆并进入对应目标手牌。
+	var owner_marked_slash: CardInstance
+	for owner_hand_card: CardInstance in _controller.state.get_player(0).hand:
+		if not owner_hand_card.hand_mark_tags.is_empty():
+			owner_marked_slash = owner_hand_card
+			break
+	if owner_marked_slash == null or _controller.state.draw_pile.has(first_slash) or _controller.state.draw_pile.has(second_slash) or _controller.state.draw_pile.has(third_slash):
+		return _fail("mingxian_gain owner=%s draw=%s" % [owner_marked_slash.to_dict() if owner_marked_slash != null else {}, _controller.state.draw_pile])
+	for target_id: int in [0, 1, 4]:
+		# 当前目标的鸣弦牌数量；每名目标必须恰好获得并标记1张【杀】。
+		var marked_card_count: int = 0
+		for hand_card: CardInstance in _controller.state.get_player(target_id).hand:
+			if hand_card.hand_mark_tags.has("mingxian"):
+				marked_card_count += 1
+		if marked_card_count != 1:
+			return _fail("mingxian_mark_count target=%d count=%d" % [target_id, marked_card_count])
+	# 五人局0号到2号距离为2；普通【杀】失败，鸣弦标记【杀】则通过无距离规则。
+	if _controller.card_rules.calculate_distance(0, 2) != 2 or _controller.card_rules.validate_use(0, ordinary_slash, [2]).is_empty() or not _controller.card_rules.validate_use(0, owner_marked_slash, [2]).is_empty():
+		return _fail("mingxian_distance normal=%s marked=%s" % [_controller.card_rules.validate_use(0, ordinary_slash, [2]), _controller.card_rules.validate_use(0, owner_marked_slash, [2])])
+	# 鸣弦AI评分；自己与忠臣同时获得牌必须高于加入敌方或只选自己，促使AI无条件选择自己和队友。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	# 当前完整AI快照；身份已公开，0号对4号友好、对1号敌对。
+	var ai_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	# 自己与友方动作评分；两名正收益目标应累加为2张牌价值。
+	var allied_action_score: float = mingxian.score_ai_action(ai_snapshot, {"target_ids":[0, 4]}, evaluator)
+	# 自己与敌方动作评分；敌方获得牌会抵消自己的收益。
+	var enemy_action_score: float = mingxian.score_ai_action(ai_snapshot, {"target_ids":[0, 1]}, evaluator)
+	if allied_action_score <= enemy_action_score or allied_action_score <= mingxian.score_ai_action(ai_snapshot, {"target_ids":[0]}, evaluator):
+		return _fail("mingxian_ai allied=%s enemy=%s" % [allied_action_score, enemy_action_score])
+	# 离手清理；弃置后鸣弦规则与UI标签必须立即从实体移除。
+	_controller.discard_card_from_hand(0, owner_marked_slash.uid)
+	if not owner_marked_slash.hand_mark_tags.is_empty():
+		return _fail("mingxian_leave_hand_cleanup=%s" % owner_marked_slash.to_dict())
+	# 双标签测试牌；同一普通手牌同时视为【杀】并拥有【鸣弦】标签。
+	var dual_tag_card: CardInstance = _add_hand_card(0, "shan", "heart", 6)
+	if not dual_tag_card.set_hand_view_as("sha", "test_view_as") or not _controller.set_hand_card_mark_tag(0, dual_tag_card.uid, "mingxian", {"label":"【鸣弦】", "order":100, "source_skill_id":"mingxian", "rule_overrides":{"ignore_distance_limit":true}}):
+		return _fail("dual_tag_setup=%s" % dual_tag_card.to_dict())
+	# 正式卡牌视图；TagRow必须同时创建视为与鸣弦两个同款标签，并保持4像素间距和整体居中。
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	add_child(card_view)
+	card_view.configure(dual_tag_card.to_dict(), GameDatabase.get_card(dual_tag_card.definition_id), false, true)
+	await get_tree().process_frame
+	# 标签横排容器；两个子项分别对应视为【杀】与手牌标记【鸣弦】。
+	var tag_row: HBoxContainer = card_view.get_node("%TagRow") as HBoxContainer
+	# 第二个标签文字；第一项保留现有视为牌名，第二项必须严格显示设计文本。
+	var marked_tag_label: Label = (tag_row.get_child(1).get_child(0) as Label) if tag_row != null and tag_row.get_child_count() > 1 else null
+	if tag_row == null or tag_row.get_child_count() != 2 or tag_row.alignment != BoxContainer.ALIGNMENT_CENTER or tag_row.get_theme_constant("separation") != 4 or marked_tag_label == null or marked_tag_label.text != "【鸣弦】":
+		card_view.queue_free()
+		return _fail("dual_tag_ui count=%s label=%s" % [tag_row.get_child_count() if tag_row != null else -1, marked_tag_label.text if marked_tag_label != null else ""])
+	card_view.queue_free()
+
+	_reset_state(5)
+	_controller.state.get_player(0).character_id = "yvkong"
+	# 逐风摸牌分支的牌堆顶；首次伤害只缩短距离，第二次伤害在全体距离为1后获得该牌。
+	var zhufeng_draw_card: CardInstance = _add_draw_pile_card("shan", "diamond", 4)
+	# 正式逐风实例；距离钩子与伤害结束时机都通过控制器安装。
+	var zhufeng: SkillDefinition = _install_single_skill(0, "zhufeng")
+	if zhufeng == null or _controller.card_rules.calculate_distance(0, 2) != 2:
+		return _fail("zhufeng_setup")
+	_controller._emit_rule_timing("damageEnd", 1, 0, 1, {"amount":1})
+	if _controller.card_rules.calculate_distance(0, 2) != 1 or _controller.state.get_player(0).character_corner_text != "逐风 1":
+		return _fail("zhufeng_reduce distance=%d text=%s" % [_controller.card_rules.calculate_distance(0, 2), _controller.state.get_player(0).character_corner_text])
+	_controller._emit_rule_timing("damageEnd", 1, 0, 1, {"amount":1})
+	if not _controller.state.get_player(0).hand.has(zhufeng_draw_card) or _controller.state.get_player(0).character_corner_text != "逐风 1":
+		return _fail("zhufeng_draw hand=%s text=%s" % [_controller.state.get_player(0).hand, _controller.state.get_player(0).character_corner_text])
+
+	# 制动初始【决斗】目标AI；卢卡手牌与斗志越多，敌人选择其为目标的收益应降至负值。
+	_reset_state(2)
+	_controller.state.get_player(0).character_id = "luka"
+	for hand_index: int in range(3):
+		_add_hand_card(0, "sha", "spade", hand_index + 2)
+	_controller.player_mark_service.set_mark(0, "douzhi", {"icon":"斗", "name":"斗志", "description":"AI专项标记", "count":2, "source_player_id":0, "order":20})
+	# 制动纯AI实例；无需安装时机即可读取目标公开快照修正【决斗】评分。
+	var zhidong: SkillDefinition = GameDatabase.create_skill("zhidong")
+	zhidong.bind(null, 0)
+	# 敌方1号视角快照；双方身份公开，目标卢卡的手牌数与斗志数均为权威可读字段。
+	var duel_snapshot: Dictionary = _controller.state.to_dict(1, true)
+	# 高资源卢卡的【决斗】目标收益；固定、手牌和斗志三项风险叠加后必须为负。
+	var high_resource_duel_score: float = zhidong.modify_ai_incoming_card_effect(duel_snapshot, 1, 0, GameDatabase.get_card("juedou"), {"damage":true}, -1.5, 1, 1.0, evaluator)
+	if high_resource_duel_score >= 0.0:
+		return _fail("zhidong_duel_ai=%s" % high_resource_duel_score)
 	return true
 
 
@@ -2536,7 +2667,7 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 	if youfeng.score_ai_choice(ai_snapshot, target_request, enemy_action, evaluator) <= youfeng.score_ai_choice(ai_snapshot, target_request, friend_action, evaluator):
 		return _fail("youfeng_ai_target_priority")
 
-	# 标记快照与武将牌纵排UI；两个标记按order纵向排列，图标内显示单字且右下角显示数量。
+	# 标记快照与武将牌纵排UI；两个标记按order纵向排列，图标内显示单字且右下角直接显示描边数量。
 	_controller.player_mark_service.set_mark(1, "liewu", {"icon":"猎", "name":"猎物标记", "description":"猎物详细说明", "count":1, "source_player_id":0, "order":0}, true)
 	_controller.player_mark_service.set_mark(1, "test_mark", {"icon":"测", "name":"测试标记", "description":"测试详细说明", "count":2, "source_player_id":-1, "order":1})
 	var marked_snapshot: Dictionary = _controller.state.get_player(1).to_dict(0, false)
@@ -2560,7 +2691,7 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 		return _fail("vertical_markers count=%s horizontal=%s" % [vertical_markers.get_child_count() if vertical_markers != null else -1, vertical_markers.horizontal if vertical_markers != null else true])
 	var first_badge: PlayerMarkerBadge = vertical_markers.get_child(0) as PlayerMarkerBadge
 	var second_badge: PlayerMarkerBadge = vertical_markers.get_child(1) as PlayerMarkerBadge
-	if first_badge.position.y >= second_badge.position.y or not is_equal_approx(first_badge.badge_diameter, 20.0) or first_badge.icon_font_size != 12 or not is_equal_approx(first_badge.count_diameter, 13.0) or first_badge.count_font_size != 10 or not is_equal_approx(vertical_markers.marker_gap, 1.0) or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
+	if first_badge.position.y >= second_badge.position.y or not is_equal_approx(first_badge.badge_diameter, 20.0) or first_badge.icon_font_size != 12 or first_badge.count_font_size != 10 or first_badge.count_outline_size != 3 or first_badge.get_node_or_null("CountCircle") != null or not is_equal_approx(vertical_markers.marker_gap, 1.0) or (first_badge.get_node("Icon") as Label).text != "猎" or (second_badge.get_node("Count") as Label).text != "2":
 		marked_player_view.queue_free()
 		return _fail("vertical_marker_layout first=%s second=%s" % [first_badge.position, second_badge.position])
 	# 标记悬停详细信息；武将牌必须把子组件请求转发到统一信息出口。

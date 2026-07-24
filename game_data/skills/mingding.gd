@@ -8,6 +8,9 @@ const SLASH_DEFINITION_ID: String = "sha"
 ## 酩酊固定选择的其他角色数量；限定技每次只建立1名持续目标。
 const SLASH_TARGET_COUNT: int = 1
 
+## 酩酊先选择任意其他角色再视为使用【杀】；该规则覆盖选择和实际使用两个阶段的距离限制。
+const VIRTUAL_RULE_OVERRIDES: Dictionary = {"ignore_distance_limit":true}
+
 ## 酩酊对每个伤害点固定回复的体力；逐点伤害时连续执行等量次。
 const RECOVER_AMOUNT: int = 1
 
@@ -46,10 +49,10 @@ func _init() -> void:
 	})
 
 
-## 订阅逐点伤害、持有者下个回合开始与死亡时机；清理回调在非锁定技失效期间仍必须按时移除旧效果。
+## 订阅逐点伤害、持有者下个实际回合开始与死亡时机；翻面跳过不会发布phaseBegin，因此不会提前清除效果。
 func install() -> void:
 	subscribe_timing("damagePointAfter", _on_damage_point_after, "global")
-	subscribe_timing("phaseBefore", _on_owner_turn_before, "player", 0, false, false, Callable(), false, true)
+	subscribe_timing("phaseBegin", _on_owner_turn_begin, "player", 0, false, false, Callable(), false, true)
 	subscribe_timing("dieAfter", _on_player_died, "global", 0, false, false, Callable(), false, true)
 
 
@@ -81,7 +84,7 @@ func activate(context: Dictionary = {}) -> String:
 		target_ids.append(int(target_variant))
 	if target_ids.size() == SLASH_TARGET_COUNT:
 		return "" if _execute_mingding(target_ids[0]) else "【酩酊】目标已经失效或限定次数已用尽。"
-	# 当前合法【杀】目标；普通【杀】的距离、次数与来牌限制全部保留。
+	# 当前合法【杀】目标；酩酊忽略距离，次数与来牌限制仍由统一规则服务复核。
 	var legal_target_ids: Array[int] = _get_legal_slash_targets()
 	if legal_target_ids.is_empty():
 		return "当前没有合法的【杀】目标。"
@@ -104,7 +107,7 @@ func _execute_mingding(target_id: int) -> bool:
 		return false
 	# 唯一目标数组；使用强类型数组供虚拟牌规则服务复核。
 	var target_ids: Array[int] = [target_id]
-	if str(host.card_rules.validate_virtual_use(owner_player_id, SLASH_DEFINITION_ID, target_ids)) != "":
+	if str(host.card_rules.validate_virtual_use(owner_player_id, SLASH_DEFINITION_ID, target_ids, VIRTUAL_RULE_OVERRIDES)) != "":
 		return false
 	if not bool(host.call("turn_over_player", owner_player_id, owner_player_id, get_id())):
 		return false
@@ -113,7 +116,7 @@ func _execute_mingding(target_id: int) -> bool:
 	announce_activation({"target_id":target_id, "face_down":true, "virtual_card_id":SLASH_DEFINITION_ID})
 	observe_identity_behavior(target_ids, {"target_result":AI_SLASH_TARGET_RESULT, "damage":true, "respond_shan":true})
 	# 标记必须早于虚拟【杀】建立，使本次【杀】造成的每点伤害也能令来源回复。
-	host.call("execute_cardless_virtual_card_use", owner_player_id, SLASH_DEFINITION_ID, target_ids, "")
+	host.call("execute_cardless_virtual_card_use", owner_player_id, SLASH_DEFINITION_ID, target_ids, "", VIRTUAL_RULE_OVERRIDES)
 	return true
 
 
@@ -132,8 +135,8 @@ func _on_damage_point_after(event: RuleEvent) -> void:
 		announce_activation({"damage_source_id":event.source_id, "marked_target_id":_marked_target_id, "recover":RECOVER_AMOUNT, "damage_point_index":int(event.data.get("damage_point_index", 1)), "damage_total_amount":int(event.data.get("damage_total_amount", 1))})
 
 
-## 持有者下个回合开始时令酩酊效果到期；该清理早于翻面跳过检查和新的准备阶段。
-func _on_owner_turn_before(_event: RuleEvent) -> void:
+## 持有者下个实际回合进入phaseBegin时令酩酊效果到期；翻面跳过整个回合时不会触发本回调。
+func _on_owner_turn_begin(_event: RuleEvent) -> void:
 	_clear_mark()
 
 
@@ -168,9 +171,9 @@ func _get_corner_entry_id() -> String:
 	return "mingding:%d" % owner_player_id
 
 
-## 返回普通【杀】当前全部合法目标；“其他角色”由标准single_other目标模式保证。
+## 返回酩酊当前全部合法目标；“其他角色”由标准single_other模式保证，距离限制由技能规则覆盖。
 func _get_legal_slash_targets() -> Array[int]:
-	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID)
+	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID, VIRTUAL_RULE_OVERRIDES)
 
 
 ## 为AI枚举每名合法【杀】目标；限定次数已用尽后不再产生动作。

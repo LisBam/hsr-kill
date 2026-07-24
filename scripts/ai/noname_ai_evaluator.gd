@@ -407,6 +407,8 @@ func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor
 func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, target: Dictionary, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int, current_score: float) -> float:
 	# 目标全部技能ID；先按武将声明顺序加入固有技能，再补充模式与运行时来源。
 	var skill_ids: Array[String] = []
+	# 行动者对目标的当前态度；正值表示友方卖血可转化为收益，负值表示敌方卖血会降低攻击价值。
+	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
 	# 目标武将定义；未亮将或异常ID返回空技能数组。
 	var character: Dictionary = GameDatabase.get_character(str(target.get("character_id", "")))
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
@@ -435,6 +437,11 @@ func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dicti
 		if skill == null:
 			continue
 		skill.bind(null, target_id)
+		# 当前技能卖血价值；1点严格按1张牌的基础资源单位换算，只有伤害牌会兑现该收益。
+		var sell_blood_value: float = skill.get_sell_blood_value()
+		if bool(ai_profile.get("damage", false)) and sell_blood_value > 0.0 and not is_zero_approx(attitude):
+			# 卖血方向修正；友方主动造成伤害获得正收益，敌方攻击则扣除同值收益，中立目标保持不变。
+			result += sell_blood_value * CARD_RESOURCE_VALUE * (1.0 if attitude > 0.0 else -1.0)
 		result = skill.modify_ai_incoming_card_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, expected_damage_amount, result, self)
 	return result
 

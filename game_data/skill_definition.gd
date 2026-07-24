@@ -27,6 +27,9 @@ var leader_skill: bool = false
 ## 当前技能是否为离场技；true表示持有者存活但离场时仍可接收触发时机并参与纯查询效果，死亡后仍然失效。
 var out_of_game_skill: bool = false
 
+## 当前技能的卖血价值；非负浮点数，默认0.0表示受到伤害不会为本技能创造额外收益，1.0等价于AI估值中的一张牌。
+var sell_blood_value: float = 0.0
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
@@ -43,6 +46,8 @@ func _init(metadata: Dictionary = {}) -> void:
 	_metadata["leader_skill"] = leader_skill
 	out_of_game_skill = bool(_metadata.get("out_of_game_skill", false))
 	_metadata["out_of_game_skill"] = out_of_game_skill
+	sell_blood_value = maxf(float(_metadata.get("sell_blood_value", 0.0)), 0.0)
+	_metadata["sell_blood_value"] = sell_blood_value
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -53,6 +58,11 @@ func get_metadata() -> Dictionary:
 ## 返回技能稳定 ID；同一技能脚本可被多个武将直接引用，但 ID 必须全项目唯一。
 func get_id() -> String:
 	return str(_metadata.get("id", ""))
+
+
+## 返回技能的非负卖血价值；基础AI按1点等价1张牌修正友方主动卖血与敌方攻击收益。
+func get_sell_blood_value() -> float:
+	return sell_blood_value
 
 
 ## 绑定技能所属玩家与对局端口；数据库定义对象不会调用本函数，只有每局独立运行时实例会绑定。

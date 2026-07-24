@@ -742,19 +742,22 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 终局交互提示标签；平局快照后必须显示稳定结算文案。
 	var interaction_guide_label: Label = main_instance.get_node("%InteractionGuideLabel") as Label
-	# 自动弹出的结算面板；终局时必须包含全角色统计列表与左上角关闭按钮。
+	# 自动弹出的结算面板；终局时必须包含全角色统计列表与右上角唯一关闭按钮。
 	var settlement_panel: GameSettlementPanel = main_instance.get_node("GameSettlementPanel") as GameSettlementPanel
-	# 结算面板左上角关闭按钮；面板创建失败时保持空值并由后续断言统一报错。
+	# 结算面板右上角唯一关闭按钮；面板创建失败时保持空值并由后续断言统一报错。
 	var settlement_close_button: Button = null
+	# 结算面板主框；用于验证关闭按钮确实位于框体右半区而非旧左上角。
+	var settlement_frame: PanelContainer = null
 	# 结算面板动态统计行容器；行数必须等于终局快照中的全部玩家数量。
 	var settlement_rows: VBoxContainer = null
 	if settlement_panel != null:
 		settlement_close_button = settlement_panel.get_node("%SettlementCloseButton") as Button
+		settlement_frame = settlement_panel.get_node("%Frame") as PanelContainer
 		settlement_rows = settlement_panel.get_node("%RowsContainer") as VBoxContainer
-	if interaction_use_button.text != "重新开始" or interaction_settlement_button.text != "结算界面" or not interaction_settlement_button.visible or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_settlement_button.disabled or interaction_cancel_button.disabled or settlement_panel == null or not settlement_panel.visible or settlement_close_button == null or settlement_rows == null or settlement_rows.get_child_count() != terminal_snapshot.get("players", []).size():
-		_fail("post_match_actions")
+	if interaction_use_button.text != "重新开始" or interaction_settlement_button.text != "结算界面" or not interaction_settlement_button.visible or interaction_cancel_button.text != "返回主菜单" or interaction_guide_label.text != "对局结算，游戏平局" or interaction_use_button.disabled or interaction_settlement_button.disabled or interaction_cancel_button.disabled or settlement_panel == null or not settlement_panel.visible or settlement_close_button == null or settlement_frame == null or settlement_close_button.position.x <= settlement_frame.size.x * 0.5 or settlement_rows == null or settlement_rows.get_child_count() != terminal_snapshot.get("players", []).size():
+		_fail("post_match_actions close_position=%s frame_size=%s close=%s frame=%s rows=%s/%s" % [settlement_close_button.position if settlement_close_button != null else Vector2.ZERO, settlement_frame.size if settlement_frame != null else Vector2.ZERO, settlement_close_button != null, settlement_frame != null, settlement_rows.get_child_count() if settlement_rows != null else -1, terminal_snapshot.get("players", []).size()])
 		return
-	# 左上角关闭后结算面板必须保持关闭，终局操作区的入口可再次打开同一局数据。
+	# 右上角关闭后结算面板必须保持关闭，终局操作区的入口可再次打开同一局数据。
 	await _click_control(settlement_close_button)
 	await get_tree().process_frame
 	if settlement_panel.visible:

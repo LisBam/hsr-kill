@@ -81,7 +81,9 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 		for option_variant: Variant in local_options:
 			# 当前机缘卡视图；只接收本地私有定义并发出稳定ID。
 			var card_view: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
-			_cards_row.add_child(card_view)
+			# 固定牌位容器；HBox只布局不缩放的牌位，卡面在内部放大时不会推挤相邻机缘牌。
+			var card_holder: Control = _create_card_holder(card_view)
+			_cards_row.add_child(card_holder)
 			card_view.configure(option_variant as Dictionary, true)
 			card_view.card_selected.connect(_on_card_selected)
 			card_view.information_requested.connect(_on_card_information_requested)
@@ -106,11 +108,28 @@ func _clear_cards() -> void:
 		child.queue_free()
 
 
+## 创建一个与机缘牌原始尺寸一致的固定牌位；牌面缩放只影响视觉变换，不参与HBox最小尺寸计算。
+func _create_card_holder(card_view: OpportunityCardView) -> Control:
+	# 固定牌位；不裁切悬停放大部分，并让鼠标事件继续由内部透明按钮接收。
+	var holder: Control = Control.new()
+	holder.name = "OpportunityCardHolder"
+	holder.custom_minimum_size = card_view.card_size
+	holder.size = card_view.card_size
+	holder.clip_contents = false
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(card_view)
+	card_view.position = Vector2.ZERO
+	card_view.size = card_view.card_size
+	return holder
+
+
 ## 转发玩家选择并立即禁用全部牌面；权威快照返回前防止快速连点重复提交。
 func _on_card_selected(card_id: String) -> void:
 	for child: Node in _cards_row.get_children():
+		# 当前固定牌位；每个牌位只持有一张机缘卡，其他异常子节点安全跳过。
+		var card_holder: Control = child as Control
 		# 当前机缘牌面；直接禁用内部透明按钮，确保权威快照返回前不能快速重复提交。
-		var card_view: OpportunityCardView = child as OpportunityCardView
+		var card_view: OpportunityCardView = card_holder.get_child(0) as OpportunityCardView if card_holder != null and card_holder.get_child_count() > 0 else null
 		if card_view != null:
 			card_view.set_interactive(false)
 	opportunity_selected.emit(card_id)

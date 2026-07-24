@@ -45,6 +45,7 @@ func _init() -> void:
 		"enable":"phaseUse",
 		"ui_enabled":true,
 		"half_locked":true,
+		"sell_blood_value":1.0,
 		"description":"你可以消耗2枚“斗志”标记并视为使用一张【决斗】。锁定技，当你受到或造成1点伤害后，你获得一枚“斗志”标记，每回合限3次。",
 	})
 
