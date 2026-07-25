@@ -519,7 +519,7 @@ func refresh_ui_style() -> void:
 	_menu_surface.color = BattleUIStyle.get_color("table_surface")
 	_top_navigation.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
 	_main_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
-	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("mode_list_panel", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border")))
 	_apply_mode_scroll_bar_style()
 	_preview_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_preview_mode_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
@@ -550,8 +550,8 @@ func refresh_ui_style() -> void:
 	_apply_mode_button_style(_wheel_duel_mode_button)
 	_apply_mode_button_style(_opportunity_brawl_mode_button)
 	_apply_mode_button_style(_conquest_mode_button)
-	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	if _mode_details_button != null:
@@ -1420,24 +1420,22 @@ func _refresh_top_navigation_page_style() -> void:
 	var is_all_cards_page: bool = _all_cards_button.button_pressed
 	# 是否位于模式选择内容页；三个按钮互斥时由另外两项共同推导。
 	var is_modes_page: bool = not is_online_settings_page and not is_all_cards_page
-	BattleUIStyle.apply_interaction_button(
-		_top_identity_mode_button,
-		BattleUIStyle.get_color("panel"),
-		BattleUIStyle.get_color("accent") if is_modes_page else BattleUIStyle.get_color("border"),
-		is_modes_page
-	)
-	BattleUIStyle.apply_interaction_button(
-		_online_settings_button,
-		BattleUIStyle.get_color("panel"),
-		BattleUIStyle.get_color("accent") if is_online_settings_page else BattleUIStyle.get_color("border"),
-		is_online_settings_page
-	)
-	BattleUIStyle.apply_interaction_button(
-		_all_cards_button,
-		BattleUIStyle.get_color("panel"),
-		BattleUIStyle.get_color("accent") if is_all_cards_page else BattleUIStyle.get_color("border"),
-		is_all_cards_page
-	)
+	_apply_top_navigation_button_style(_top_identity_mode_button, is_modes_page)
+	_apply_top_navigation_button_style(_online_settings_button, is_online_settings_page)
+	_apply_top_navigation_button_style(_all_cards_button, is_all_cards_page)
+
+
+## 为单个顶部内容页按钮应用当前主题；持续选中态只切换强调边框，不额外压暗参考图的蓝黑底色。
+func _apply_top_navigation_button_style(button: Button, is_selected: bool) -> void:
+	if button == null:
+		return
+	# 顶部导航底色；高级黑金使用独立蓝黑语义，其他主题回退原有面板颜色。
+	var background_color: Color = BattleUIStyle.get_color("navigation_button", BattleUIStyle.get_color("panel"))
+	# 顶部导航描边；当前页使用强调色，其他页使用普通边框色。
+	var border_color: Color = BattleUIStyle.get_color("accent") if is_selected else BattleUIStyle.get_color("border")
+	BattleUIStyle.apply_interaction_button(button, background_color, border_color, is_selected)
+	# 持续按下样式；显式恢复主题底色，避免通用按钮工厂的瞬时按压加深污染当前页常驻颜色。
+	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(background_color, border_color, is_selected))
 
 
 ## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。
@@ -1453,12 +1451,14 @@ func _make_flat_inner_panel(background_color: Color, border_color: Color, border
 func _apply_mode_button_style(button: Button) -> void:
 	if button == null:
 		return
-	# 模式卡片常态背景色；始终读取当前主题的操作按钮语义色，切换主题后会重新计算。
-	var background_color: Color = BattleUIStyle.get_color("action_button")
+	# 模式卡片常态背景色；独立语义允许参考图使用石墨灰卡片，同时不改变主要操作按钮的暖棕底色。
+	var background_color: Color = BattleUIStyle.get_color("mode_button", BattleUIStyle.get_color("action_button"))
 	# 模式卡片边框色；沿用当前主题强调色以配合左侧选中指示条。
 	var border_color: Color = BattleUIStyle.get_color("accent")
-	# 模式卡片选中背景色；只对主题操作色做比例加深，保留原有色相与透明度。
-	var selected_background_color: Color = background_color.darkened(mode_selected_background_darkening)
+	# 当前主题的模式卡选中加深比例；缺失语义时回退检查器参数，保证旧主题和自定义场景继续兼容。
+	var selected_background_darkening: float = clampf(float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "mode_selected_background_darkening", mode_selected_background_darkening)), 0.0, 0.6)
+	# 模式卡片选中背景色；仅压低亮度，不改变主题提供的石墨灰或木色基调。
+	var selected_background_color: Color = background_color.darkened(selected_background_darkening)
 	BattleUIStyle.apply_interaction_button(button, background_color, border_color, true)
 	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(selected_background_color, border_color, true))
 

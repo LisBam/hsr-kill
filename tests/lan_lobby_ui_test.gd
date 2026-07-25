@@ -214,6 +214,13 @@ func _ready() -> void:
 		return
 	# 崩铁主题大厅边框；切换前记录当前主题结果，确保之后确实发生重绘。
 	var space_surface_style: StyleBoxFlat = online_lobby_panel.get_node("%OnlineLobbySurface").get_theme_stylebox("panel") as StyleBoxFlat
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD)
+	await get_tree().process_frame
+	# 高级黑金主题大厅边框；必须使用新增主题的香槟金语义，且不能保留崩铁风格旧颜色。
+	var premium_surface_style: StyleBoxFlat = online_lobby_panel.get_node("%OnlineLobbySurface").get_theme_stylebox("panel") as StyleBoxFlat
+	if not premium_surface_style.border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or premium_surface_style.border_color.is_equal_approx(space_surface_style.border_color):
+		_fail("premium_theme_refresh")
+		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
 	# 暖木主题大厅边框；必须来自统一主题注册表，不能保留崩铁风格的旧颜色。

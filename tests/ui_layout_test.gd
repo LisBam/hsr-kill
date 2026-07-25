@@ -29,6 +29,9 @@ var _original_ai_response_delay_seconds: float = 0.30
 ## 测试开始前的游戏速度；成功与失败出口均恢复该精确值，不固定覆写为默认值。
 var _original_game_speed_interval_seconds: float = 0.30
 
+## 测试开始前的自动身份标记设置；测试内部固定开启以验证默认勾选外观，结束时恢复玩家原值。
+var _original_auto_identity_marking_enabled: bool = true
+
 ## 测试开始前的正式设置文件路径；测试结束后恢复，使同进程后续功能继续使用原配置位置。
 var _original_settings_file_path: String = "user://game_settings.cfg"
 
@@ -171,7 +174,7 @@ func _run() -> void:
 	# 程序化背景组件；黑白太空风格不再绘制导航网格，只保留星点、轨道和远景剪影。
 	# 崩铁风格关闭旧星点、山脊和建筑剪影，仅保留暖白桌面上的低透明度金色轨道纹样。
 	var reference_backdrop: ReferenceBackdrop = main_instance.get_node("ReferenceBackdrop") as ReferenceBackdrop
-	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 2 or ui_style_option.get_item_text(0) != "崩铁风格" or ui_style_option.get_item_text(1) != "暖木家园" or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 34.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
+	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 3 or ui_style_option.get_item_text(0) != "崩铁风格" or ui_style_option.get_item_text(1) != "暖木家园" or ui_style_option.get_item_text(2) != "高级黑金" or str(ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 34.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
 	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。
@@ -202,6 +205,37 @@ func _run() -> void:
 	var ui_style_popup_hover_style: StyleBoxFlat = ui_style_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
 	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")) or not card_name_popup_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")):
 		_fail("match_menu_option_hover_style")
+		return
+	# 切换主题前的固定局内文案；高级黑金只允许替换视觉，不得改写菜单、牌桌信息或操作按钮文本。
+	var preserved_battle_texts: Dictionary = {
+		"menu":menu_button.text,
+		"round":round_label.text,
+		"draw_pile":draw_pile_label.text,
+		"duration":match_duration_label.text,
+		"main_title":(main_instance.get_node("%MainMenuTitle") as Label).text,
+		"use":(main_instance.get_node("%UseButton") as Button).text,
+		"cancel":(main_instance.get_node("%CancelButton") as Button).text,
+	}
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD)
+	await get_tree().process_frame
+	# 高级黑金机缘弹窗；隐藏状态也必须预先刷新主框和文字主题，后续显示时不能闪回固定暖木色。
+	var opportunity_choice_panel: OpportunityChoicePanel = main_instance.get_node("OpportunityChoicePanel") as OpportunityChoicePanel
+	# 机缘弹窗主框；其描边必须读取高级黑金强调色。
+	var opportunity_choice_frame: PanelContainer = opportunity_choice_panel.get_node("%Frame") as PanelContainer
+	# 高级黑金机缘弹窗样式；读取实际主题覆盖验证遗漏界面已经接入刷新链。
+	var premium_opportunity_style: StyleBoxFlat = opportunity_choice_frame.get_theme_stylebox("panel") as StyleBoxFlat
+	# 切换后的固定局内文案；除风格下拉框自身选中项外，全部现有文本必须原样保留。
+	var refreshed_battle_texts: Dictionary = {
+		"menu":menu_button.text,
+		"round":round_label.text,
+		"draw_pile":draw_pile_label.text,
+		"duration":match_duration_label.text,
+		"main_title":(main_instance.get_node("%MainMenuTitle") as Label).text,
+		"use":(main_instance.get_node("%UseButton") as Button).text,
+		"cancel":(main_instance.get_node("%CancelButton") as Button).text,
+	}
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or not backdrop_shade.color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "backdrop_shade")) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 20.0) or not is_equal_approx(reference_backdrop.rail_width, 8.0) or not is_equal_approx(reference_backdrop.table_corner_radius, 16.0) or not is_equal_approx(reference_backdrop.center_ornament_radius, 176.0) or not is_equal_approx(reference_backdrop.ornament_opacity, 0.09) or premium_opportunity_style == null or not premium_opportunity_style.border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or refreshed_battle_texts != preserved_battle_texts:
+		_fail("ui_style_switch_to_premium_black_gold")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
@@ -847,7 +881,7 @@ func _run() -> void:
 	# 自动身份标记设置；默认开启并使用复选框呈现，二元配置不通过普通文字按钮模拟。
 	var auto_identity_marking_checkbox: CheckBox = main_instance.get_node("%AutoIdentityMarkingCheckBox") as CheckBox
 	if not auto_identity_marking_checkbox.button_pressed or not GameSettings.auto_identity_marking_enabled:
-		_fail("auto_identity_mark_default")
+		_fail("auto_identity_mark_default:%s/%s" % [auto_identity_marking_checkbox.button_pressed, GameSettings.auto_identity_marking_enabled])
 		return
 	# 自动标记使用的权威观察快照；真实身份只交给共享身份模型，牌桌当前公开快照仍保持hidden。
 	var identity_observation_snapshot: Dictionary = _make_ten_player_snapshot()
@@ -1483,8 +1517,10 @@ func _begin_settings_isolation() -> void:
 		return
 	_original_ai_response_delay_seconds = GameSettings.ai_response_delay_seconds
 	_original_game_speed_interval_seconds = GameSettings.game_speed_interval_seconds
+	_original_auto_identity_marking_enabled = GameSettings.auto_identity_marking_enabled
 	_original_settings_file_path = GameSettings.get_settings_file_path()
 	GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
+	GameSettings.set_auto_identity_marking_enabled(true)
 
 
 ## 恢复测试前全部设置并删除临时配置；恢复动作仍写入临时文件，正式玩家配置从始至终不会被打开写入。
@@ -1494,6 +1530,7 @@ func _restore_original_settings() -> void:
 	GameSettings.set_next_match_mode(_original_next_match_mode)
 	GameSettings.set_ai_response_delay_seconds(_original_ai_response_delay_seconds)
 	GameSettings.set_game_speed_interval_seconds(_original_game_speed_interval_seconds)
+	GameSettings.set_auto_identity_marking_enabled(_original_auto_identity_marking_enabled)
 	GameSettings.flush_pending_settings()
 	GameSettings.set("_settings_file_path", _original_settings_file_path)
 	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):

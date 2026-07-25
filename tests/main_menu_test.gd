@@ -166,6 +166,8 @@ func _run() -> void:
 	var player_count_line_edit: LineEdit = player_count_input.get_line_edit()
 	# 主菜单卡牌名称下拉框；必须与UI风格保持标签加下拉框的统一设置格式。
 	var main_menu_card_name_option: OptionButton = main_instance.get_node("%MainMenuCardNameOption") as OptionButton
+	# 主菜单 UI 风格下拉框；必须按注册表顺序显示全部主题并保存稳定标识元数据。
+	var main_menu_ui_style_option: OptionButton = main_instance.get_node("%MainMenuUiStyleOption") as OptionButton
 	# 局内卡牌名称下拉框；应使用与主菜单相同的两项稳定名称模式配置。
 	var match_menu_card_name_option: OptionButton = main_instance.get_node("%MenuCardNameOption") as OptionButton
 	# 主菜单自选开关；过关斩将中必须显示为纯“自选武将”，不暴露座次身份语义。
@@ -200,6 +202,9 @@ func _run() -> void:
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
 		_fail("card_name_option_layout")
 		return
+	if main_menu_ui_style_option == null or main_menu_ui_style_option.item_count != 3 or main_menu_ui_style_option.get_item_text(0) != "崩铁风格" or main_menu_ui_style_option.get_item_text(1) != "暖木家园" or main_menu_ui_style_option.get_item_text(2) != "高级黑金" or str(main_menu_ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD:
+		_fail("ui_style_option_layout")
+		return
 	# 主菜单名称模式选择；通过实际下拉信号写入全局设置并同步到局内同构下拉框。
 	main_menu_card_name_option.item_selected.emit(1)
 	await get_tree().process_frame
@@ -215,9 +220,9 @@ func _run() -> void:
 	if mode_background.texture == null or mode_background.texture.resource_path != "res://assets/art/身份模式主菜单背景.png" or mode_background.stretch_mode != TextureRect.STRETCH_KEEP_ASPECT_COVERED:
 		_fail("mode_preview")
 		return
-	# 当前主题下模式卡片的目标选中底色；使用组件暴露的加深比例验证视觉参数能够随主题复用。
-	var expected_selected_mode_background: Color = BattleUIStyle.get_color("action_button").darkened(main_menu.mode_selected_background_darkening)
-	# 身份模式卡片的持续选中样式；按钮保持按下时应使用更深的内部棕色。
+	# 当前主题下模式卡片的目标选中底色；读取模式卡专用底色与主题加深比例，避免与主操作按钮语义混合。
+	var expected_selected_mode_background: Color = BattleUIStyle.get_color("mode_button", BattleUIStyle.get_color("action_button")).darkened(float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "mode_selected_background_darkening", main_menu.mode_selected_background_darkening)))
+	# 身份模式卡片的持续选中样式；按钮保持按下时应使用主题定义的加深内部底色。
 	var identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	# 斗地主卡片的持续选中样式；未选中时同样预先持有正确的按下态样式以供切换使用。
 	var doudizhu_selected_style: StyleBoxFlat = doudizhu_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
@@ -615,13 +620,52 @@ func _run() -> void:
 		_fail("post_initialization_runtime_cleanup")
 		return
 	GameDatabase.characters = original_characters
+	# 切换主题前的固定主菜单文案；高级黑金只允许改变视觉，不得改写任何现有标题、按钮或模式说明。
+	var preserved_main_menu_texts: Dictionary = {
+		"title":(main_instance.get_node("%MainMenuTitle") as Label).text,
+		"settings":settings_button.text,
+		"online":online_settings_button.text,
+		"cards":all_cards_button.text,
+		"start":start_game_button.text,
+		"mode":(main_instance.get_node("%IdentityModeName") as Label).text,
+	}
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD)
+	await get_tree().process_frame
+	# 参考图实测核心配色；锁定蓝黑、石墨灰、暖灰棕、暗铜、橙铜和灰米六个主层级，避免主题再次漂移。
+	if not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "outer_background").is_equal_approx(Color("0f1017")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "table_surface").is_equal_approx(Color("181926")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "mode_button").is_equal_approx(Color("252429")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "action_button").is_equal_approx(Color("38302d")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border").is_equal_approx(Color("806b56")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent").is_equal_approx(Color("d59e5a")) or not UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "text_primary").is_equal_approx(Color("d8caba")):
+		_fail("premium_reference_palette")
+		return
+	# 高级黑金主题的模式卡片目标选中底色；石墨灰基底与主题专用加深比例共同复刻参考图层次。
+	var expected_premium_selected_mode_background: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "mode_button").darkened(float(UIStyleRegistry.get_value(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "mode_selected_background_darkening", main_menu.mode_selected_background_darkening)))
+	# 高级黑金主题下身份模式卡片的实际持续选中样式。
+	var premium_identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	# 高级黑金主题下左侧模式列表样式；必须使用参考图的蓝黑内容面而不是普通按钮灰。
+	var premium_mode_list_style: StyleBoxFlat = mode_list.get_theme_stylebox("panel") as StyleBoxFlat
+	# 高级黑金主题下顶部选中导航样式；背景必须保持蓝黑，不能复用主操作按钮的暖灰棕。
+	var premium_top_selected_style: StyleBoxFlat = top_identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	# 高级黑金主题下普通设置按钮样式；对应参考图中性石墨按钮层。
+	var premium_settings_style: StyleBoxFlat = settings_button.get_theme_stylebox("normal") as StyleBoxFlat
+	# 高级黑金主题下开始游戏按钮样式；对应参考图唯一的大面积暖灰棕主操作层。
+	var premium_start_style: StyleBoxFlat = start_game_button.get_theme_stylebox("normal") as StyleBoxFlat
+	# 切换后的固定主菜单文案；必须与切换前逐项完全相同。
+	var refreshed_main_menu_texts: Dictionary = {
+		"title":(main_instance.get_node("%MainMenuTitle") as Label).text,
+		"settings":settings_button.text,
+		"online":online_settings_button.text,
+		"cards":all_cards_button.text,
+		"start":start_game_button.text,
+		"mode":(main_instance.get_node("%IdentityModeName") as Label).text,
+	}
+	if not menu_background.color.is_equal_approx(Color("0f1017")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).bg_color.is_equal_approx(Color("171824")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or premium_mode_list_style == null or not premium_mode_list_style.bg_color.is_equal_approx(Color("1b1b26")) or premium_top_selected_style == null or not premium_top_selected_style.bg_color.is_equal_approx(Color("181924")) or premium_settings_style == null or not premium_settings_style.bg_color.is_equal_approx(Color("1f1f24")) or premium_start_style == null or not premium_start_style.bg_color.is_equal_approx(Color("38302d")) or premium_identity_selected_style == null or not premium_identity_selected_style.bg_color.is_equal_approx(expected_premium_selected_mode_background) or not identity_mode_name.get_theme_color("font_color").is_equal_approx(Color("d8caba")) or not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or refreshed_main_menu_texts != preserved_main_menu_texts:
+		_fail("premium_theme_refresh")
+		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
 	if not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
 		_fail("theme_refresh")
 		return
 	# 暖木家园主题的模式卡片目标选中底色；主题切换后应以新的棕色基底重新计算，而非保留旧样式。
-	var expected_warm_selected_mode_background: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "action_button").darkened(main_menu.mode_selected_background_darkening)
+	var expected_warm_selected_mode_background: Color = UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "mode_button").darkened(float(UIStyleRegistry.get_value(UIStyleRegistry.STYLE_DECADE_WOOD, "mode_selected_background_darkening", main_menu.mode_selected_background_darkening)))
 	# 暖木家园主题下身份模式卡片的实际持续选中样式。
 	var warm_identity_selected_style: StyleBoxFlat = identity_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	if warm_identity_selected_style == null or not warm_identity_selected_style.bg_color.is_equal_approx(expected_warm_selected_mode_background):

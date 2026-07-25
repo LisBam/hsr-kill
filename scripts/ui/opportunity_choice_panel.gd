@@ -40,16 +40,23 @@ func _ready() -> void:
 	z_index = MODAL_Z_INDEX
 	visible = false
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	refresh_ui_style()
+
+
+## 按当前活动 UI 风格刷新机缘弹窗遮罩、主框与状态文字；私有候选、等待角色和已提交状态保持不变。
+func refresh_ui_style() -> void:
+	if not is_node_ready():
+		return
+	# 全屏遮罩颜色；统一读取主题 shade 语义，避免弹窗停留在固定暖木色。
+	_shade.color = BattleUIStyle.get_color("shade")
+	# 弹窗主框样式；复用内嵌面板工厂，使所有主题共享尺寸与边距但使用各自材质色。
 	# 弹窗样式；暖黑底与金属边框延续武将牌和现有选择框视觉语言。
-	var frame_style: StyleBoxFlat = StyleBoxFlat.new()
-	frame_style.bg_color = Color("171310f2")
-	frame_style.border_color = Color("c9a65d")
-	frame_style.set_border_width_all(3)
-	frame_style.set_corner_radius_all(10)
+	var frame_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 3, 10)
 	frame_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
 	frame_style.shadow_size = 14
 	frame_style.shadow_offset = Vector2(0.0, 6.0)
 	_frame.add_theme_stylebox_override("panel", frame_style)
+	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 
 
 ## 根据观察者裁剪快照刷新弹窗；非选择阶段立即关闭并清理旧牌面。

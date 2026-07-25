@@ -93,6 +93,12 @@ func _ready() -> void:
 func apply_ui_style(style_id: String) -> void:
 	table_inset = clampf(float(UIStyleRegistry.get_value(style_id, "table_inset", table_inset)), 0.0, 80.0)
 	rail_width = clampf(float(UIStyleRegistry.get_value(style_id, "rail_width", rail_width)), 4.0, 40.0)
+	# 当前主题桌面圆角；允许精细黑金主题使用更克制的窄圆角，同时保持旧主题原有几何值。
+	table_corner_radius = clampf(float(UIStyleRegistry.get_value(style_id, "table_corner_radius", table_corner_radius)), 0.0, 80.0)
+	# 当前主题中央装饰半径；只影响背景纹样覆盖范围，不改变牌位、动画或输入坐标。
+	center_ornament_radius = clampf(float(UIStyleRegistry.get_value(style_id, "center_ornament_radius", center_ornament_radius)), 60.0, 280.0)
+	# 当前主题装饰线透明度；高级黑金使用更低对比度，避免金色纹样压过文字与牌面。
+	ornament_opacity = clampf(float(UIStyleRegistry.get_value(style_id, "ornament_opacity", ornament_opacity)), 0.0, 0.5)
 	outer_background_color = UIStyleRegistry.get_color(style_id, "outer_background", outer_background_color)
 	outer_background_secondary_color = UIStyleRegistry.get_color(style_id, "outer_background_secondary", outer_background_color)
 	table_surface_color = UIStyleRegistry.get_color(style_id, "table_surface", table_surface_color)
