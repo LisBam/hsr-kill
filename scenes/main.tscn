@@ -302,11 +302,13 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 selected = 0
-item_count = 2
+item_count = 3
 popup/item_0/text = "崩铁风格"
 popup/item_0/id = 0
 popup/item_1/text = "暖木家园"
 popup/item_1/id = 1
+popup/item_2/text = "高级黑金"
+popup/item_2/id = 2
 
 [node name="AutoIdentityMarkingCheckBox" type="CheckBox" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=691615404]
 unique_name_in_owner = true

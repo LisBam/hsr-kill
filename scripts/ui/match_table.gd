@@ -2785,6 +2785,8 @@ func _apply_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(%CancelButton)
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
 		game_settlement_panel.refresh_ui_style()
+	if opportunity_choice_panel != null and is_instance_valid(opportunity_choice_panel):
+		opportunity_choice_panel.refresh_ui_style()
 	_refresh_group_trick_response_button()
 	card_selection_panel.refresh_ui_style()
 	character_selection_panel.refresh_ui_style()
