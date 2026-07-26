@@ -50,7 +50,8 @@ enum LanRole {
 }
 
 ## 当前封包协议版本；版本6在版本5基础上新增对局会话令牌下发、断线座位预约与携令牌重连握手。
-const PROTOCOL_VERSION: int = 6
+## 版本7在版本6基础上向大厅公共快照新增 custom_identity_enabled 自选身份开关字段。
+const PROTOCOL_VERSION: int = 7
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -143,6 +144,12 @@ var _lobby_player_count: int = 2
 ## 当前大厅配置的游戏模式稳定 ID；未知值统一回退身份模式，已实现 identity 与 doudizhu。
 var _lobby_game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID
 
+## 当前房间是否开启自选身份；开启后大厅每个位置绑定固定身份、玩家通过换位自选，开局按位置身份表分配身份。
+var _lobby_custom_identity_enabled: bool = false
+
+## 身份规则服务；网关只用其查询大厅位置身份布局、位置到规则座次映射与模式支持性，不接触对局状态。
+var _identity_rules: IdentityRules = IdentityRules.new()
+
 ## 当前大厅公共聊天历史；每项只含递增序号、玩家名、消息与显示时间，最多保留100条。
 var _lobby_chat_history: Array[Dictionary] = []
 
@@ -216,7 +223,7 @@ func set_mode(new_mode: Mode) -> void:
 
 
 ## 创建局域网 ENet 房间；成功后本机成为大厅房主，并应用联机形象、密码、人数与模式初始配置。
-func host_lan(display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "", player_count: int = 2, game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID) -> Error:
+func host_lan(display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "", player_count: int = 2, game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID, custom_identity_enabled: bool = false) -> Error:
 	leave_lan("")
 	_bind_multiplayer_signals()
 	# 实际监听端口；无效输入回退检查器默认值，避免 ENet 接收越界端口。
@@ -241,6 +248,8 @@ func host_lan(display_name: String, port: int = -1, avatar_character_id: String 
 	_lobby_password_enabled = not _lobby_password.is_empty()
 	_lobby_game_mode_id = _normalize_lobby_game_mode_id(game_mode_id)
 	_lobby_player_count = _normalize_lobby_player_count(player_count, _lobby_game_mode_id)
+	# 房间初始自选身份开关；不支持自选身份的模式（过关斩将）强制关闭，避免快照携带无效布局。
+	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
 	_lobby_members[SERVER_PEER_ID] = _make_lobby_member(SERVER_PEER_ID, _local_display_name, _local_avatar_character_id, true, 0, 0)
 	connection_state_changed.emit(true, "局域网房间已创建，等待其他玩家加入。")
 	_emit_lobby_state()
@@ -340,6 +349,7 @@ func get_lan_lobby_snapshot(include_host_private_settings: bool = false) -> Dict
 		"match_active":_lan_match_active,
 		"player_count":_lan_match_player_count if _lan_match_active else _lobby_player_count,
 		"game_mode_id":_lobby_game_mode_id,
+		"custom_identity_enabled":_lobby_custom_identity_enabled,
 		"has_password":_lobby_password_enabled,
 		"chat_history":_lobby_chat_history.duplicate(true),
 	}
@@ -353,8 +363,13 @@ func is_game_mode_playable(game_mode_id: String) -> bool:
 	return _is_lobby_game_mode_playable(game_mode_id)
 
 
-## 房主更新大厅游戏模式、总人数与密码；人数不得少于当前真人数，成功后立即广播全员。
-func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String) -> String:
+## 返回当前局域网房间是否实际启用自选身份；只有支持位置身份布局的模式返回 true，供开局座次绑定与权威身份分配读取。
+func is_lan_custom_identity_enabled() -> bool:
+	return mode == Mode.LAN and _lobby_custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
+
+
+## 房主更新大厅游戏模式、总人数、密码与自选身份开关；人数不得少于当前真人数，成功后立即广播全员。
+func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool = false) -> String:
 	if not is_lan_host() or _lan_match_active:
 		return "当前不是可修改设置的局域网房主。"
 	# 规范化后的游戏模式 ID；当前未知模式回退身份模式，保证开始按钮不会请求不存在的规则。
@@ -367,6 +382,8 @@ func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_pas
 	_lobby_player_count = normalized_player_count
 	_lobby_password = _sanitize_lobby_password(room_password)
 	_lobby_password_enabled = not _lobby_password.is_empty()
+	# 自选身份开关随设置一并更新；不支持自选身份的模式强制关闭，保证位置身份表始终可解析。
+	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
 	_normalize_lobby_member_seats()
 	_emit_lobby_state()
 	return ""
@@ -442,6 +459,12 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 	# 可分配稳定玩家 ID；大厅真人座位按玩家主动选择的0起始位置映射，空余 ID 由 AI 使用。
 	# 过关斩将的真人只占偶数玩家座位（0、2、4、6），奇数敌方座位固定由权威控制器注册内置 AI。
 	var available_player_ids: Array[int] = build_match_seat_player_ids(_lobby_game_mode_id, player_count)
+	# 本次开局是否按自选身份绑定座次；开启时大厅位置直接决定规则座次，空位身份交由补位 AI 使用。
+	var custom_identity_active: bool = is_lan_custom_identity_enabled()
+	# 大厅位置到规则座次映射；仅自选身份使用，2v2 把“上蓝下红”布局换算回一/四与二/三成队座次。
+	var lobby_slot_match_seats: Array[int] = []
+	if custom_identity_active:
+		lobby_slot_match_seats = _identity_rules.get_lobby_slot_match_seats(_lobby_game_mode_id, player_count)
 	# 大厅成员顺序；快照先提供稳定成员副本，再按玩家主动选择的位置排序，不依赖哈希顺序。
 	var lobby_snapshot: Dictionary = get_lan_lobby_snapshot()
 	# 大厅成员数组；成员顺序已经由快照固定，数量应与当前真人数量一致。
@@ -459,6 +482,11 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 		var peer_id: int = int(member.get("peer_id", 0))
 		# 当前成员稳定玩家 ID；按大厅位置从前到后映射到真人 ID，2人房的第三个视觉位置不会越过规则人数范围。
 		var player_id: int = available_player_ids[member_index]
+		if custom_identity_active:
+			# 自选身份下成员的实际大厅位置；位置即身份，必须直接绑定该位置对应的规则座次而不能按先后顺序压缩。
+			var member_seat_index: int = int(member.get("seat_index", member_index))
+			if member_seat_index >= 0 and member_seat_index < lobby_slot_match_seats.size():
+				player_id = lobby_slot_match_seats[member_seat_index]
 		_peer_to_player_id[peer_id] = player_id
 		_player_to_peer_id[player_id] = peer_id
 		_player_display_names[player_id] = str(member.get("display_name", "玩家"))
@@ -1103,6 +1131,8 @@ func _apply_remote_lobby_state(snapshot: Dictionary) -> void:
 	_lan_match_player_count = int(snapshot.get("player_count", 0))
 	_lobby_game_mode_id = _normalize_lobby_game_mode_id(str(snapshot.get("game_mode_id", DEFAULT_LOBBY_GAME_MODE_ID)))
 	_lobby_player_count = _normalize_lobby_player_count(int(snapshot.get("player_count", 2)), _lobby_game_mode_id)
+	# 客户端同步房主权威自选身份开关；本地快照与位置身份徽记据此保持与房主一致。
+	_lobby_custom_identity_enabled = bool(snapshot.get("custom_identity_enabled", false))
 	_lobby_password_enabled = bool(snapshot.get("has_password", false))
 	_lobby_chat_history.clear()
 	for chat_variant: Variant in snapshot.get("chat_history", []) as Array:
@@ -1362,9 +1392,20 @@ func _normalize_lobby_player_count(player_count: int, game_mode_id: String) -> i
 	return clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
 
 
-## 返回大厅需要绘制的视觉位置数；2人局与3人局都使用3个居中位置，其余人数与设置人数一致。
+## 返回大厅需要绘制的视觉位置数；房主换位校验与界面绘制共用静态规则，避免两端位置数量漂移。
 func _get_lobby_display_slot_count() -> int:
-	return 3 if _lobby_player_count <= 3 else _lobby_player_count
+	return get_lobby_display_slot_count_for(_lobby_game_mode_id, _lobby_player_count, _lobby_custom_identity_enabled)
+
+
+## 计算指定模式、人数与自选身份开关下的大厅视觉位置数；网关校验与大厅界面共用该唯一规则。
+## 1v1车轮战固定两名真人1v1、各自选将，不绘制多余空位；自选身份开启后位置与身份一一绑定，位置数必须等于规则人数；
+## 其余情况保持2至3人绘制3个居中位置的既有设计，人数更多时与设置人数一致。
+static func get_lobby_display_slot_count_for(game_mode_id: String, player_count: int, custom_identity_enabled: bool) -> int:
+	if game_mode_id == "wheel_duel":
+		return player_count
+	if custom_identity_enabled and IdentityRules.new().supports_lobby_custom_identity(game_mode_id):
+		return player_count
+	return 3 if player_count <= 3 else player_count
 
 
 ## 从 SceneMultiplayer 解除当前 ENet peer 后关闭底层套接字；先替换框架持有的 peer，才能保证同一端口可立即重新建房。
@@ -1390,6 +1431,7 @@ func _set_offline_state() -> void:
 	_lobby_password_enabled = false
 	_lobby_player_count = 2
 	_lobby_game_mode_id = DEFAULT_LOBBY_GAME_MODE_ID
+	_lobby_custom_identity_enabled = false
 	_lobby_chat_history.clear()
 	_lobby_chat_sequence = 0
 	_rejected_lobby_peer_ids.clear()

@@ -384,6 +384,7 @@ func refresh_ui_style() -> void:
 	(_menu_panel.get_node("MenuVBox/CharacterReplacementCountRow/CharacterReplacementCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CharacterCandidateCountRow/CharacterCandidateCountLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/ConquestDifficultyRow/ConquestDifficultyLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(_menu_panel.get_node("MenuVBox/ConquestOpportunityChoiceRow/ConquestOpportunityChoiceLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	# 车轮战候选标签与内部输入框都指定同一回退字体，保证局内重开菜单的中文显示与主菜单一致。
 	# 明置候选标签；旧局内菜单场景可能未同步该行，缺失时不得妨碍其他设置刷新。
 	var wheel_duel_face_up_candidate_label: Label = _menu_panel.get_node_or_null("MenuVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label

@@ -12,8 +12,8 @@ signal seat_change_requested(seat_index: int)
 ## 房主点击玩家悬停管理按钮时发出的踢出请求；参数为远端成员 ENet peer ID。
 signal kick_requested(peer_id: int)
 
-## 房主保存对局设置时发出的请求；参数依次为稳定模式 ID、总人数与房间密码。
-signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String)
+## 房主保存对局设置时发出的请求；参数依次为稳定模式 ID、总人数、房间密码与是否开启自选身份。
+signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool)
 
 ## 房主点击开始游戏时发出的请求；对局人数与模式已经由权威房间设置保存。
 signal start_match_requested()
@@ -102,6 +102,9 @@ const AVATAR_COMPONENT_SIZE: Vector2 = Vector2(148.35, 227.8)
 ## 房间密码输入；最长32字符，空值表示取消密码并允许后续玩家直接加入。
 @onready var _password_input: LineEdit = %OnlineLobbyPasswordInput
 
+## 自选身份开关；开启后每个大厅位置绑定固定身份并在右上角显示身份徽记，玩家通过换位自选身份。
+@onready var _custom_identity_checkbox: CheckBox = %OnlineLobbyCustomIdentityCheckBox
+
 ## 保存房间设置按钮；发出纯数据请求，成功与失败由牌桌协调器回传。
 @onready var _settings_save_button: Button = %OnlineLobbySettingsSaveButton
 
@@ -122,6 +125,9 @@ var _seat_views: Array[OnlineLobbyAvatar] = []
 
 ## 房主设置模态打开前的大厅控件焦点模式；关闭设置后原样恢复，避免键盘导航穿透到底层聊天与座位。
 var _settings_background_focus_modes: Dictionary = {}
+
+## 身份规则服务；大厅只用其查询自选身份的模式支持性与位置身份布局，不接触对局状态。
+var _identity_rules: IdentityRules = IdentityRules.new()
 
 
 ## 初始化大厅交互信号与游戏模式选项；组件默认隐藏，连接成功后由主菜单显式打开。
@@ -209,6 +215,13 @@ func refresh_ui_style() -> void:
 	(%OnlineLobbyGameModeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OnlineLobbyPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OnlineLobbyPasswordLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%OnlineLobbyCustomIdentityLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_custom_identity_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_custom_identity_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_custom_identity_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_custom_identity_checkbox.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
+	# 大厅错误标签保持危险语义色；主题切换时即使正在显示错误也不会回退默认白字。
+	(%OnlineLobbyErrorLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	_apply_line_edit_style(_chat_input)
 	_apply_line_edit_style(_password_input)
 	_apply_spin_box_style(_player_count_input)
@@ -226,14 +239,23 @@ func refresh_ui_style() -> void:
 
 
 ## 根据当前总人数重建大厅位置；2至3人为单行3位，其余人数按上下两行对称分配。
+## 1v1车轮战固定绘制两个位置，自选身份开启后位置数与规则人数一致且每个位置显示身份徽记。
 func _render_seats() -> void:
 	_clear_seats()
 	if _snapshot.is_empty():
 		return
 	# 当前设置总人数；限制到项目支持范围，并让2人局同样绘制3个视觉位置。
 	var player_count: int = clampi(int(_snapshot.get("player_count", 2)), 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
-	# 当前视觉位置数；2至3人固定3位，其余与总人数一致。
-	var slot_count: int = MINIMUM_DISPLAY_SLOT_COUNT if player_count <= 3 else player_count
+	# 当前游戏模式稳定 ID；决定视觉位置数与位置身份布局。
+	var game_mode_id: String = str(_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
+	# 当前房间是否开启自选身份；开启时每个位置右上角显示绑定身份徽记。
+	var custom_identity_enabled: bool = bool(_snapshot.get("custom_identity_enabled", false)) and _identity_rules.supports_lobby_custom_identity(game_mode_id)
+	# 当前视觉位置数；与网关房主换位校验共用同一静态规则，车轮战固定2位、自选身份等于规则人数。
+	var slot_count: int = NetworkGateway.get_lobby_display_slot_count_for(game_mode_id, player_count, custom_identity_enabled)
+	# 各位置绑定身份表；未开启自选身份或人数不受支持时为空数组，所有位置隐藏徽记。
+	var slot_identities: Array[String] = []
+	if custom_identity_enabled:
+		slot_identities = _identity_rules.get_lobby_slot_identities(game_mode_id, player_count)
 	# 大厅成员按座位索引映射；空位置不创建伪成员字典。
 	var members_by_seat: Dictionary = {}
 	for member_variant: Variant in _snapshot.get("members", []) as Array:
@@ -259,7 +281,9 @@ func _render_seats() -> void:
 		# 当前玩家或空位置组件；所有位置保持与武将牌一致的插画尺寸。
 		var seat_view: OnlineLobbyAvatar = ONLINE_LOBBY_AVATAR_SCENE.instantiate() as OnlineLobbyAvatar
 		_seat_area.add_child(seat_view)
-		seat_view.configure(seat_index, members_by_seat.get(seat_index, {}) as Dictionary, _local_is_host, _local_peer_id)
+		# 当前位置绑定身份；仅自选身份开启且身份表覆盖该位置时传入，其余情况空字符串隐藏徽记。
+		var slot_identity: String = slot_identities[seat_index] if seat_index < slot_identities.size() else ""
+		seat_view.configure(seat_index, members_by_seat.get(seat_index, {}) as Dictionary, _local_is_host, _local_peer_id, slot_identity)
 		seat_view.empty_slot_pressed.connect(seat_change_requested.emit)
 		seat_view.kick_requested.connect(kick_requested.emit)
 		# 当前是否属于下排；上排索引0..top_count-1，下排继续使用稳定位置索引。
@@ -294,6 +318,9 @@ func _render_room_summary() -> void:
 	if game_mode_id == "conquest":
 		player_count_text = "玩家数：%d（敌方AI等量）" % player_count
 	_room_summary_label.text = "真人：%d  ｜  %s  ｜  房间密码：%s" % [member_count, player_count_text, password_text]
+	# 自选身份摘要；仅开启时追加，提示所有成员当前房间按位置绑定身份。
+	if bool(_snapshot.get("custom_identity_enabled", false)):
+		_room_summary_label.text += "  ｜  自选身份：开"
 	(%OnlineLobbyErrorLabel as Label).visible = false
 
 
@@ -329,6 +356,9 @@ func _open_settings() -> void:
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_snapshot.get("player_count", 2)))
 	_player_count_input.set_value_no_signal(float(normalized_count))
 	_password_input.text = str(_snapshot.get("room_password", ""))
+	# 自选身份回填；开关状态来自权威快照，不支持位置身份的模式禁用该复选框。
+	_custom_identity_checkbox.set_pressed_no_signal(bool(_snapshot.get("custom_identity_enabled", false)))
+	_apply_custom_identity_availability_for_mode(game_mode_id)
 	_settings_backdrop.visible = true
 	_settings_panel.visible = true
 	_settings_panel.move_to_front()
@@ -357,7 +387,7 @@ func _save_settings() -> void:
 	# 最终人数候选；先按模式规范化，网络层仍会复核真人数下限。
 	var player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
 	player_count = _normalize_player_count_for_mode(game_mode_id, player_count)
-	settings_update_requested.emit(game_mode_id, player_count, _password_input.text)
+	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id))
 
 
 ## 房主请求开始当前设置的对局；按钮暂时禁用直到成功开局或协调器回传错误。
@@ -506,9 +536,19 @@ func _select_game_mode(game_mode_id: String) -> void:
 func _on_game_mode_option_selected(_index: int) -> void:
 	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
 	_apply_player_count_limits_for_mode(game_mode_id)
+	_apply_custom_identity_availability_for_mode(game_mode_id)
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_player_count_input.value))
 	if int(_player_count_input.value) != normalized_count:
 		_player_count_input.set_value_no_signal(float(normalized_count))
+
+
+## 按模式启用或禁用自选身份复选框；过关斩将真人固定红方无位置身份，禁用时同步取消勾选。
+func _apply_custom_identity_availability_for_mode(game_mode_id: String) -> void:
+	# 当前模式是否支持位置身份布局；决定复选框可交互性。
+	var supports_custom_identity: bool = _identity_rules.supports_lobby_custom_identity(game_mode_id)
+	_custom_identity_checkbox.disabled = not supports_custom_identity
+	if not supports_custom_identity:
+		_custom_identity_checkbox.set_pressed_no_signal(false)
 
 
 ## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/5 步长2，2v2 固定 4 人，最小值不低于当前真人数。

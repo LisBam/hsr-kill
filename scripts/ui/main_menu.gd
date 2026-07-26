@@ -586,6 +586,16 @@ func refresh_ui_style() -> void:
 	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%DouDizhuModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%Team2v2ModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%Team2v2ModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	# 车轮战模式卡两个标签；本机编辑器可能以旧场景缓存覆写 unique 标记，缺失时跳过表现覆盖而不中断整页主题刷新。
+	var wheel_duel_mode_name_label: Label = get_node_or_null("%WheelDuelModeName") as Label
+	if wheel_duel_mode_name_label != null:
+		wheel_duel_mode_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	# 车轮战模式卡人数标签；与名称标签独立校验，任一缺失都不影响其余控件继续应用主题色。
+	var wheel_duel_mode_player_count_label: Label = get_node_or_null("%WheelDuelModePlayerCount") as Label
+	if wheel_duel_mode_player_count_label != null:
+		wheel_duel_mode_player_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OpportunityBrawlModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%ConquestModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -602,6 +612,7 @@ func refresh_ui_style() -> void:
 	(%MainMenuCharacterReplacementCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuCharacterCandidateCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuConquestDifficultyLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%MainMenuConquestOpportunityChoiceLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	if _mode_details_title_label != null:
 		_mode_details_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	if _mode_details_description_label != null:

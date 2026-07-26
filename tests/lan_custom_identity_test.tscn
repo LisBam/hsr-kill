@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/lan_custom_identity_test.gd" id="1_lan_custom_identity"]
+
+[node name="LanCustomIdentityTest" type="Node"]
+script = ExtResource("1_lan_custom_identity")
