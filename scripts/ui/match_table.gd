@@ -21,6 +21,9 @@ const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/compon
 ## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
 const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/components/game_settlement_panel.tscn")
 
+## 断线自动重连期间顶部横幅的常显秒数；默认3600秒远大于整个重连窗口，重连结束时由新的默认时长横幅覆盖淡出。
+const RECONNECT_NOTICE_HOLD_SECONDS: float = 3600.0
+
 ## 中央确定与取消按钮的固定最小尺寸；146×42像素与界面文档的主操作规格一致。
 const ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(146.0, 42.0)
 
@@ -525,6 +528,7 @@ func _ready() -> void:
 	match_controller.network_gateway.connection_state_changed.connect(_on_lan_connection_state_changed)
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
+	match_controller.network_gateway.lan_reconnect_state_changed.connect(_on_lan_reconnect_state_changed)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_log_panel.blank_area_pressed.connect(_close_open_match_overlays_from_blank_click)
 	auto_manage_button.pressed.connect(_on_auto_manage_pressed)
@@ -941,6 +945,16 @@ func _on_lan_session_closed(message: String) -> void:
 	_modal_choice_request_id = -1
 	_modal_card_choice_request.clear()
 	main_menu.show_lan_session_error(message)
+
+
+## 展示局域网断线自动重连进度；重连期间保留当前对局界面并常显顶部横幅，成功或失败的收尾文案复用同一横幅。
+## 重连失败的完整清理仍由 lan_session_closed 回调统一执行，本回调不修改任何对局或网络状态。
+func _on_lan_reconnect_state_changed(reconnecting: bool, message: String) -> void:
+	if information_box == null or not is_instance_valid(information_box):
+		return
+	# 本条横幅停留时长；重连期间使用常显时长保持提示不消失，重连结束回退默认时长自动淡出。
+	var hold_seconds: float = RECONNECT_NOTICE_HOLD_SECONDS if reconnecting else -1.0
+	information_box.show_notice(message, hold_seconds)
 
 
 ## 创建牌桌唯一的统一信息框组件；组件只消费视图请求，不直接访问控制器、网络模式或规则状态。

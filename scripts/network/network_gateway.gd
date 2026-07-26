@@ -26,6 +26,12 @@ signal lan_session_closed(message: String)
 ## 对局中远端成员掉线信号；权威端可将对应稳定玩家 ID 交给 AI 托管，而不终止其他玩家的对局。
 signal lan_match_peer_disconnected(player_id: int, display_name: String)
 
+## 对局中远端成员携令牌重连成功信号；网关已重绑连接映射，权威端应解除该玩家离线托管并补发私有快照。
+signal lan_match_peer_reconnected(player_id: int, display_name: String)
+
+## 客户端断线自动重连状态信号；reconnecting 为 true 表示正在重试，为 false 表示重连结束，message 说明进度或结果。
+signal lan_reconnect_state_changed(reconnecting: bool, message: String)
+
 ## 权威表现事件接收信号；日志、公开卡牌动画和技能提示通过该只读通道同步，不修改客户端规则状态。
 signal game_event_received(event_type: String, event_payload: Dictionary)
 
@@ -43,8 +49,8 @@ enum LanRole {
 	CLIENT,
 }
 
-## 当前封包协议版本；版本5新增机缘大乱斗模式、私有机缘候选快照与机缘选择动作。
-const PROTOCOL_VERSION: int = 5
+## 当前封包协议版本；版本6在版本5基础上新增对局会话令牌下发、断线座位预约与携令牌重连握手。
+const PROTOCOL_VERSION: int = 6
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -66,6 +72,18 @@ const MAX_LOBBY_CHAT_HISTORY: int = 100
 
 ## 房主踢出成员后的同一远端地址重新加入冷却毫秒数；默认5000即5秒，只限制踢出流程，不影响密码错误和满员拒绝。
 const KICK_REJOIN_COOLDOWN_MSEC: int = 5000
+
+## 客户端断线后相邻两次自动重连尝试的间隔秒数；默认2秒在网络抖动恢复速度与房主端连接压力之间取得平衡。
+const RECONNECT_ATTEMPT_INTERVAL_SECONDS: float = 2.0
+
+## 客户端断线后允许的最大自动重连尝试次数；默认15次，叠加单次连接超时后重试窗口约1至2分钟，用尽后按普通会话关闭返回主菜单。
+const MAX_RECONNECT_ATTEMPTS: int = 15
+
+## 对局中新连接完成携令牌重连登记的宽限秒数；默认5秒，超时仍未登记的连接会被断开，防止陌生连接长期占用房主连接槽。
+const MATCH_REJOIN_HANDSHAKE_TIMEOUT_SECONDS: float = 5.0
+
+## 会话令牌的随机字节长度；默认16字节经十六进制编码得到32字符令牌，局域网场景下不可被旁观者猜测即可满足校验需求。
+const SESSION_TOKEN_RANDOM_BYTES: int = 16
 
 ## 当前可启动的默认游戏模式稳定 ID；大厅设置与开局协调只使用稳定 ID，不依赖中文显示名。
 const DEFAULT_LOBBY_GAME_MODE_ID: String = "identity"
@@ -157,6 +175,27 @@ var _current_incoming_peer_id: int = 0
 ## 当前局域网房间是否已经进入对局；开局后拒绝新成员加入，已有成员掉线则交给规则层托管。
 var _lan_match_active: bool = false
 
+## 房主为每名远端真人签发的稳定玩家 ID 到会话令牌映射；令牌在正式开局时生成，同一房间存续期间保持不变。
+var _lan_session_tokens_by_player: Dictionary = {}
+
+## 断线座位预约表；键为会话令牌，值为掉线成员的玩家 ID、显示名、形象与座位资料，重连成功、对局结束或重开新局时移除。
+var _reserved_lan_players: Dictionary = {}
+
+## 客户端持有的本机会话令牌；由房主随 match_start 私发，断线自动重连时作为身份凭证原样上行，仅保存在内存不落盘。
+var _local_session_token: String = ""
+
+## 客户端是否处于断线自动重连流程；期间保留对局绑定、成员表与令牌，不触发普通会话关闭清理。
+var _reconnecting: bool = false
+
+## 剩余自动重连尝试次数；每次发起连接前递减，归零后放弃重连并按普通会话关闭返回主菜单。
+var _reconnect_attempts_remaining: int = 0
+
+## 最近一次加入房间使用的房主地址；断线自动重连直接复用，不要求玩家重新输入。
+var _last_join_address: String = ""
+
+## 最近一次加入房间使用的房主端口；与地址一同保存供断线自动重连重拨。
+var _last_join_port: int = 0
+
 ## 当前房间配置的对局总人数；包含所有真人成员与由房主补齐的 AI 座位，未开局时为0。
 var _lan_match_player_count: int = 0
 
@@ -234,6 +273,9 @@ func join_lan(address: String, display_name: String, port: int = -1, avatar_char
 	_local_display_name = _sanitize_display_name(display_name)
 	_local_avatar_character_id = _sanitize_avatar_character_id(avatar_character_id)
 	_pending_lobby_password = _sanitize_lobby_password(room_password)
+	# 保存本次房主地址与端口；对局中意外断线时自动重连沿用同一目标，不要求玩家重新输入。
+	_last_join_address = resolved_address
+	_last_join_port = resolved_port
 	connection_state_changed.emit(false, "正在连接局域网房主……")
 	return OK
 
@@ -432,7 +474,9 @@ func begin_prepared_lan_match() -> void:
 		if peer_id == SERVER_PEER_ID:
 			lan_match_started.emit(assigned_player_id, _lan_match_player_count)
 		else:
-			_send_packet_to_peer(_build_packet("match_start", {"local_player_id":assigned_player_id, "player_count":_lan_match_player_count}), peer_id)
+			# 该远端玩家的会话令牌；断线重连时作为身份凭证，同一房间重开对局继续复用首次签发的令牌。
+			var session_token: String = _ensure_lan_session_token(assigned_player_id)
+			_send_packet_to_peer(_build_packet("match_start", {"local_player_id":assigned_player_id, "player_count":_lan_match_player_count, "session_token":session_token}), peer_id)
 	_emit_lobby_state()
 
 
@@ -483,6 +527,35 @@ func get_remote_player_assignments() -> Dictionary:
 		if peer_id != SERVER_PEER_ID:
 			result[peer_id] = int(_peer_to_player_id.get(peer_id, -1))
 	return result
+
+
+## 返回客户端当前是否处于断线自动重连流程；界面与测试据此展示或断言重连状态，不暴露内部重试计数。
+func is_lan_reconnecting() -> bool:
+	return _reconnecting
+
+
+## 返回客户端是否已持有房主签发的会话令牌；令牌存在时对局中断线会先尝试自动重连而非直接结束会话。
+func has_lan_session_token() -> bool:
+	return not _local_session_token.is_empty()
+
+
+## 返回当前等待重连的掉线座位数量；供权威端诊断与自动化测试断言预约表状态，不暴露令牌内容。
+func get_reserved_lan_seat_count() -> int:
+	return _reserved_lan_players.size()
+
+
+## 清空全部断线座位预约；权威控制器在对局结束或重开新局时调用，使旧对局的重连凭证立即失效。
+## 已在线玩家的会话令牌保持不变，他们在后续对局中掉线仍可用同一令牌重连。
+func clear_lan_seat_reservations() -> void:
+	_reserved_lan_players.clear()
+
+
+## 模拟一次客户端意外断线（测试与诊断用途）；关闭底层 ENet 后走与真实断线完全相同的客户端处理路径。
+func simulate_lan_connection_drop() -> void:
+	if mode != Mode.LAN or lan_role != LanRole.CLIENT:
+		return
+	_release_lan_peer()
+	_on_server_disconnected()
 
 
 ## 发送标准化玩家指令。离线模式直接回环，LAN 客户端可靠上行至房主，REMOTE 交给外部适配器。
@@ -595,15 +668,32 @@ func _bind_multiplayer_signals() -> void:
 		multiplayer.server_disconnected.connect(_on_server_disconnected)
 
 
-## SceneMultiplayer 远端连接回调；开局中的房间立即拒绝新成员，大厅阶段等待其发送显示名登记包。
+## SceneMultiplayer 远端连接回调；开局中的房间仅在存在掉线预约时给予携令牌重连的登记宽限，否则立即拒绝新成员。
 func _on_peer_connected(peer_id: int) -> void:
 	if lan_role != LanRole.HOST:
 		return
 	if _lan_match_active:
-		if _enet_peer != null:
-			_enet_peer.disconnect_peer(peer_id)
+		if _reserved_lan_players.is_empty() and _lan_session_tokens_by_player.is_empty():
+			# 房间内不存在任何可重连身份；对局中的陌生新连接立即断开，保持开局后拒绝新成员的既有规则。
+			if _enet_peer != null:
+				_enet_peer.disconnect_peer(peer_id)
+			return
+		# 存在可重连身份时等待其提交携令牌的 lobby_join；双端断线感知有时差，掉线预约可能晚于重连方到达，
+		# 因此只要签发过会话令牌就开放登记宽限，令牌校验失败或宽限到期仍未登记的连接都会被断开。
+		get_tree().create_timer(MATCH_REJOIN_HANDSHAKE_TIMEOUT_SECONDS).timeout.connect(_disconnect_unverified_match_peer.bind(peer_id))
 		return
 	connection_state_changed.emit(true, "检测到新玩家，正在登记大厅信息……")
+
+
+## 断开在宽限期内未完成携令牌重连登记的对局中连接；已登记成员与已自行离开的连接不受影响。
+func _disconnect_unverified_match_peer(peer_id: int) -> void:
+	if lan_role != LanRole.HOST or _enet_peer == null or _lobby_members.has(peer_id):
+		return
+	# 当前底层 ENet 对端；宽限期内主动离开或已被拒绝断开的连接返回 null，不再重复断开。
+	var enet_packet_peer: ENetPacketPeer = _enet_peer.get_peer(peer_id)
+	if enet_packet_peer == null:
+		return
+	_enet_peer.disconnect_peer(peer_id)
 
 
 ## SceneMultiplayer 远端断开回调；大厅移除成员，对局中额外通知权威控制器接管对应角色。
@@ -626,24 +716,63 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	if player_id >= 0:
 		_player_to_peer_id.erase(player_id)
 	if _lan_match_active and player_id >= 0:
+		# 掉线座位按会话令牌登记重连预约；同一玩家携令牌回归时可恢复原稳定玩家 ID 与大厅资料。
+		_reserve_lan_seat_for_reconnect(player_id, member)
 		lan_match_peer_disconnected.emit(player_id, display_name)
 	else:
 		_emit_lobby_state()
 	connection_state_changed.emit(true, "%s已离开房间。" % display_name)
 
 
-## 客户端完成 ENet 握手后向房主发送显示名；房主确认大厅快照前仍显示连接中状态。
+## 为对局中掉线的真人按会话令牌登记座位预约；未签发令牌的连接没有可恢复的对局身份，不建立预约。
+func _reserve_lan_seat_for_reconnect(player_id: int, member: Dictionary) -> void:
+	# 掉线玩家的会话令牌；正式开局时随 match_start 签发，同一房间存续期间稳定不变。
+	var session_token: String = str(_lan_session_tokens_by_player.get(player_id, ""))
+	if session_token.is_empty():
+		return
+	_reserved_lan_players[session_token] = {
+		"player_id":player_id,
+		"display_name":str(member.get("display_name", "玩家")),
+		"avatar_character_id":str(member.get("avatar_character_id", "")),
+		"join_order":int(member.get("join_order", 0)),
+		"seat_index":int(member.get("seat_index", 0)),
+	}
+
+
+## 返回指定稳定玩家 ID 的会话令牌；缺失时使用加密随机源签发32字符十六进制令牌并登记。
+func _ensure_lan_session_token(player_id: int) -> String:
+	# 已签发令牌；同一房间内令牌保持稳定，重开对局与多次断线重连共用同一凭证。
+	var existing_token: String = str(_lan_session_tokens_by_player.get(player_id, ""))
+	if not existing_token.is_empty():
+		return existing_token
+	# 加密随机字节；ENet 通道本身无加密，令牌只需不可被旁观者按规律猜测即可满足局域网重连校验。
+	var random_bytes: PackedByteArray = Crypto.new().generate_random_bytes(SESSION_TOKEN_RANDOM_BYTES)
+	# 新签发令牌；十六进制字符串属于可序列化封包允许的基础类型。
+	var session_token: String = random_bytes.hex_encode()
+	_lan_session_tokens_by_player[player_id] = session_token
+	return session_token
+
+
+## 客户端完成 ENet 握手后向房主发送登记包；普通加入携带密码，断线自动重连改为携带会话令牌恢复原座位。
 func _on_connected_to_server() -> void:
 	if lan_role != LanRole.CLIENT:
 		return
 	connected = true
+	if _reconnecting:
+		# 重连握手上行；会话令牌是身份凭证，房主命中座位预约后回发带 rejoined 标记的开局绑定包。
+		connection_state_changed.emit(true, "已连接房主，正在恢复对局……")
+		_send_packet_to_peer(_build_packet("lobby_join", {"display_name":_local_display_name, "avatar_character_id":_local_avatar_character_id, "rejoin_token":_local_session_token}), SERVER_PEER_ID)
+		return
 	connection_state_changed.emit(true, "已连接房主，正在进入大厅……")
 	_send_packet_to_peer(_build_packet("lobby_join", {"display_name":_local_display_name, "avatar_character_id":_local_avatar_character_id, "room_password":_pending_lobby_password}), SERVER_PEER_ID)
 
 
-## 客户端连接失败回调；释放 ENet 资源并返回可重试的离线状态。
+## 客户端连接失败回调；重连流程按一次失败尝试继续重试，普通加入失败则释放 ENet 并返回可重试的离线状态。
 func _on_connection_failed() -> void:
 	if lan_role != LanRole.CLIENT:
+		return
+	if _reconnecting:
+		_handle_lan_reconnect_attempt_failure()
 		return
 	_release_lan_peer()
 	_set_offline_state()
@@ -651,14 +780,74 @@ func _on_connection_failed() -> void:
 	lan_session_closed.emit("连接局域网房主失败，请检查 IP、端口和防火墙。")
 
 
-## 客户端失去房主回调；局域网模式不执行主机迁移，当前对局立即结束并返回主菜单。
+## 客户端失去房主回调；持有会话令牌的进行中对局先进入自动重连流程，其余情况会话立即结束并返回主菜单。
 func _on_server_disconnected() -> void:
 	if lan_role != LanRole.CLIENT:
+		return
+	if _reconnecting:
+		# 重连握手期间连接再次断开；按一次失败尝试处理，消耗剩余次数继续等待房主恢复。
+		_handle_lan_reconnect_attempt_failure()
+		return
+	if _lan_match_active and not _local_session_token.is_empty():
+		_begin_lan_reconnect_cycle()
 		return
 	_release_lan_peer()
 	_set_offline_state()
 	connection_state_changed.emit(false, "与局域网房主的连接已断开。")
 	lan_session_closed.emit("与局域网房主的连接已断开。")
+
+
+## 进入客户端断线自动重连流程；保留对局绑定、成员表与会话令牌，只重建底层 ENet 连接，期间不触发普通会话关闭。
+func _begin_lan_reconnect_cycle() -> void:
+	_release_lan_peer()
+	connected = false
+	_reconnecting = true
+	_reconnect_attempts_remaining = MAX_RECONNECT_ATTEMPTS
+	# 旧连接的入站序号记录；房主在新连接上重新计数，清空后重连首包不会被误判为重复而丢弃。
+	_last_incoming_sequence_by_peer.clear()
+	connection_state_changed.emit(false, "与房主连接中断，正在自动重连……")
+	lan_reconnect_state_changed.emit(true, "与房主连接中断，正在自动重连……")
+	# 首次拨号延迟到本帧断线信号分发结束后执行；避免在 SceneMultiplayer 回调栈内更换底层 peer。
+	_attempt_lan_reconnect.call_deferred()
+
+
+## 发起一次到原房主地址的重连拨号；创建失败按一次失败尝试处理，握手结果由既有连接信号回调继续推进。
+func _attempt_lan_reconnect() -> void:
+	if not _reconnecting or mode != Mode.LAN or lan_role != LanRole.CLIENT:
+		return
+	_reconnect_attempts_remaining -= 1
+	_release_lan_peer()
+	# 重连专用 ENet 客户端；每次尝试都使用独立实例，避免半开连接残留在 SceneMultiplayer。
+	var peer: ENetMultiplayerPeer = ENetMultiplayerPeer.new()
+	if peer.create_client(_last_join_address, _last_join_port) != OK:
+		_handle_lan_reconnect_attempt_failure()
+		return
+	_enet_peer = peer
+	multiplayer.multiplayer_peer = _enet_peer
+	outgoing_sequence = 0
+
+
+## 处理一次重连尝试失败；仍有剩余次数时安排下一次定时尝试，次数用尽后放弃并按普通会话关闭收尾。
+func _handle_lan_reconnect_attempt_failure() -> void:
+	if not _reconnecting:
+		return
+	_release_lan_peer()
+	connected = false
+	if _reconnect_attempts_remaining <= 0:
+		_abort_lan_reconnect("自动重连失败，与局域网房主的对局已结束。")
+		return
+	lan_reconnect_state_changed.emit(true, "与房主连接中断，正在自动重连……（剩余%d次尝试）" % _reconnect_attempts_remaining)
+	get_tree().create_timer(RECONNECT_ATTEMPT_INTERVAL_SECONDS).timeout.connect(_attempt_lan_reconnect)
+
+
+## 放弃断线自动重连并执行完整会话收尾；界面依据 lan_session_closed 返回主菜单并展示失败原因。
+func _abort_lan_reconnect(message: String) -> void:
+	_reconnecting = false
+	_release_lan_peer()
+	_set_offline_state()
+	lan_reconnect_state_changed.emit(false, message)
+	connection_state_changed.emit(false, message)
+	lan_session_closed.emit(message)
 
 
 ## Godot RPC 入口；所有 LAN 封包都从同一路径进入，发送者 ID 由 SceneMultiplayer 提供而不相信 payload 自报。
@@ -688,7 +877,11 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 	var payload: Dictionary = (packet.get("payload", {}) as Dictionary).duplicate(true)
 	if lan_role == LanRole.HOST:
 		if message_type == "lobby_join":
-			_register_lobby_member(sender_peer_id, str(payload.get("display_name", "玩家")), str(payload.get("avatar_character_id", "")), str(payload.get("room_password", "")))
+			if _lan_match_active:
+				# 对局中的登记包只承担断线重连语义；令牌校验失败按普通对局中加入拒绝处理。
+				_register_lan_match_rejoin(sender_peer_id, str(payload.get("rejoin_token", "")))
+			else:
+				_register_lobby_member(sender_peer_id, str(payload.get("display_name", "玩家")), str(payload.get("avatar_character_id", "")), str(payload.get("room_password", "")))
 			return
 		if not _lobby_members.has(sender_peer_id):
 			return
@@ -792,6 +985,72 @@ func _register_lobby_member(peer_id: int, display_name: String, avatar_character
 	_emit_lobby_state()
 
 
+## 校验对局中连接提交的重连令牌并恢复其座位绑定；成功后回发带 rejoined 标记的开局绑定包并通知权威控制器。
+## 令牌不透露校验细节：缺失、过期或未命中预约都返回同一对局中加入拒绝，防止探测房间内令牌状态。
+func _register_lan_match_rejoin(peer_id: int, rejoin_token: String) -> void:
+	if lan_role != LanRole.HOST or not _lan_match_active or peer_id <= SERVER_PEER_ID:
+		return
+	if rejoin_token.is_empty():
+		_reject_lobby_peer(peer_id, "对局正在进行，无法加入该房间。")
+		return
+	# 待恢复的座位预约；只有房主已经察觉掉线的座位才有条目，重连成功后立即移除。
+	var reservation: Dictionary = _reserved_lan_players.get(rejoin_token, {}) as Dictionary
+	if reservation.is_empty():
+		# 双端断线感知存在时差；客户端可能先于房主发现连接失效并重连，此时令牌仍绑定着旧连接，由新连接直接接管。
+		reservation = _supersede_stale_lan_connection(rejoin_token)
+	if reservation.is_empty():
+		_reject_lobby_peer(peer_id, "对局正在进行，无法加入该房间。")
+		return
+	# 预约的稳定玩家 ID；重连只恢复原座位，不允许借机换位或占用其他玩家 ID。
+	var player_id: int = int(reservation.get("player_id", -1))
+	if player_id < 0 or _player_to_peer_id.has(player_id):
+		_reject_lobby_peer(peer_id, "该座位当前无法重连。")
+		return
+	_reserved_lan_players.erase(rejoin_token)
+	# 预约保存的显示名；重连沿用掉线前的名称，保证托管与恢复日志始终指向同一玩家。
+	var display_name: String = str(reservation.get("display_name", "玩家"))
+	_lobby_members[peer_id] = _make_lobby_member(peer_id, display_name, str(reservation.get("avatar_character_id", "")), false, int(reservation.get("join_order", 0)), int(reservation.get("seat_index", 0)))
+	_peer_to_player_id[peer_id] = player_id
+	_player_to_peer_id[player_id] = peer_id
+	_last_incoming_sequence_by_peer.erase(peer_id)
+	# 先回发开局绑定包再通知控制器；可靠通道保证客户端先恢复玩家 ID 绑定，随后到达的私有快照才能被接受。
+	_send_packet_to_peer(_build_packet("match_start", {"local_player_id":player_id, "player_count":_lan_match_player_count, "session_token":rejoin_token, "rejoined":true}), peer_id)
+	connection_state_changed.emit(true, "%s已重新连接房间。" % display_name)
+	lan_match_peer_reconnected.emit(player_id, display_name)
+
+
+## 用重连令牌接管房主尚未察觉掉线的旧连接；断开旧 peer 并返回其座位资料作为即时预约，令牌未命中在线座位时返回空。
+## 旧连接登记为已拒绝后，其延迟到达的断开回调只做冷却清理，不会重复触发掉线托管或大厅广播。
+func _supersede_stale_lan_connection(rejoin_token: String) -> Dictionary:
+	for player_id_variant: Variant in _lan_session_tokens_by_player.keys():
+		# 当前已签发令牌的稳定玩家；只匹配令牌完全一致的座位，不做任何模糊回退。
+		var player_id: int = int(player_id_variant)
+		if str(_lan_session_tokens_by_player.get(player_id, "")) != rejoin_token:
+			continue
+		# 旧连接 peer；令牌命中但没有在线绑定说明预约已被终局或重开清理，交由调用方按普通拒绝处理。
+		var stale_peer_id: int = int(_player_to_peer_id.get(player_id, 0))
+		if stale_peer_id <= SERVER_PEER_ID:
+			return {}
+		# 旧连接的大厅成员资料；先取出供新连接继承，再清理旧连接的全部会话映射。
+		var stale_member: Dictionary = (_lobby_members.get(stale_peer_id, {}) as Dictionary).duplicate(true)
+		_lobby_members.erase(stale_peer_id)
+		_peer_to_player_id.erase(stale_peer_id)
+		_player_to_peer_id.erase(player_id)
+		_last_incoming_sequence_by_peer.erase(stale_peer_id)
+		if not _rejected_lobby_peer_ids.has(stale_peer_id):
+			_rejected_lobby_peer_ids.append(stale_peer_id)
+		if _enet_peer != null and _enet_peer.get_peer(stale_peer_id) != null:
+			_enet_peer.disconnect_peer(stale_peer_id)
+		return {
+			"player_id":player_id,
+			"display_name":str(stale_member.get("display_name", "玩家")),
+			"avatar_character_id":str(stale_member.get("avatar_character_id", "")),
+			"join_order":int(stale_member.get("join_order", 0)),
+			"seat_index":int(stale_member.get("seat_index", 0)),
+		}
+	return {}
+
+
 ## 广播最新大厅快照；房主本地直接发信号，客户端通过可靠定向封包接收同一公共成员表。
 func _emit_lobby_state() -> void:
 	if lan_role != LanRole.HOST:
@@ -845,6 +1104,15 @@ func _apply_remote_match_start(payload: Dictionary) -> void:
 	_player_display_names[local_player_id] = _local_display_name
 	_lan_match_player_count = player_count
 	_lan_match_active = true
+	# 房主签发的会话令牌；仅保存在客户端内存，断线自动重连时作为身份凭证原样上行。
+	var session_token: String = str(payload.get("session_token", ""))
+	if not session_token.is_empty():
+		_local_session_token = session_token
+	if _reconnecting and bool(payload.get("rejoined", false)):
+		# 重连握手完成；结束重试循环并恢复连接状态，随后到达的私有快照会重建对局界面。
+		_reconnecting = false
+		_reconnect_attempts_remaining = 0
+		lan_reconnect_state_changed.emit(false, "已重新连接房主，对局继续。")
 	lan_match_started.emit(local_player_id, player_count)
 
 
@@ -947,7 +1215,9 @@ func _reject_lobby_peer(peer_id: int, message: String, starts_kick_rejoin_cooldo
 	_lobby_members.erase(peer_id)
 	if not _rejected_lobby_peer_ids.has(peer_id):
 		_rejected_lobby_peer_ids.append(peer_id)
-	_emit_lobby_state()
+	if not _lan_match_active:
+		# 对局中的重连拒绝不广播大厅快照；成员表在此期间只服务对局映射，客户端大厅界面已关闭。
+		_emit_lobby_state()
 	# 短暂延迟断开；可靠拒绝包先获得一个网络刷新窗口，客户端才能显示准确密码或踢出原因。
 	get_tree().create_timer(0.15).timeout.connect(_disconnect_rejected_lobby_peer.bind(peer_id))
 
@@ -987,9 +1257,13 @@ func _disconnect_rejected_lobby_peer(peer_id: int) -> void:
 	_enet_peer.disconnect_peer(peer_id)
 
 
-## 客户端处理房主的大厅拒绝原因；立即释放本地 ENet 并返回可重试的离线入口。
+## 客户端处理房主的大厅拒绝原因；重连流程收到确定性拒绝时立即放弃重试，普通加入被拒则返回可重试的离线入口。
 func _apply_lobby_rejection(message: String) -> void:
 	if lan_role != LanRole.CLIENT:
+		return
+	if _reconnecting:
+		# 房主明确拒绝了重连凭证（对局结束、座位失效等）；继续重试不可能成功，立即执行完整收尾。
+		_abort_lan_reconnect(message)
 		return
 	_release_lan_peer()
 	_set_offline_state()
@@ -1099,3 +1373,10 @@ func _set_offline_state() -> void:
 	_current_incoming_peer_id = 0
 	_lan_match_active = false
 	_lan_match_player_count = 0
+	_lan_session_tokens_by_player.clear()
+	_reserved_lan_players.clear()
+	_local_session_token = ""
+	_reconnecting = false
+	_reconnect_attempts_remaining = 0
+	_last_join_address = ""
+	_last_join_port = 0
