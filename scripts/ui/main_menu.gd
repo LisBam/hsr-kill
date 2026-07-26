@@ -255,6 +255,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 过关斩将难度整行容器；其他模式隐藏且不占用设置面板布局高度。
 @onready var _conquest_difficulty_row: Control = %MainMenuConquestDifficultyRow
 
+## 过关斩将机缘选择方式下拉框；元数据保存vote/individual稳定ID，仅在过关斩将设置页显示并影响下一局。
+@onready var _conquest_opportunity_choice_option: OptionButton = %MainMenuConquestOpportunityChoiceOption
+
+## 过关斩将机缘选择方式整行容器；其他模式隐藏且不占用设置面板布局高度。
+@onready var _conquest_opportunity_choice_row: Control = %MainMenuConquestOpportunityChoiceRow
+
 ## 普通模式自选规则控件；车轮战使用独立抓将规则时隐藏。
 @onready var _custom_character_assignment_row: Control = _custom_character_assignment_checkbox
 
@@ -382,6 +388,8 @@ func _ready() -> void:
 	_ui_style_option.item_selected.connect(_on_ui_style_selected)
 	_populate_conquest_difficulty_options()
 	_conquest_difficulty_option.item_selected.connect(_on_conquest_difficulty_selected)
+	_populate_conquest_opportunity_choice_options()
+	_conquest_opportunity_choice_option.item_selected.connect(_on_conquest_opportunity_choice_selected)
 	_auto_identity_marking_checkbox.set_pressed_no_signal(GameSettings.auto_identity_marking_enabled)
 	_auto_identity_marking_checkbox.toggled.connect(_on_auto_identity_marking_toggled)
 	_control_all_characters_checkbox.set_pressed_no_signal(GameSettings.control_all_characters_enabled)
@@ -413,6 +421,7 @@ func _ready() -> void:
 	GameSettings.character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.conquest_character_candidate_count_changed.connect(_refresh_active_character_candidate_count_selection)
 	GameSettings.conquest_difficulty_changed.connect(_refresh_conquest_difficulty_selection)
+	GameSettings.conquest_opportunity_choice_mode_changed.connect(_refresh_conquest_opportunity_choice_selection)
 	GameSettings.next_match_player_count_changed.connect(set_next_player_count)
 	_suspend_covered_interface_focus()
 	_set_settings_visible(false)
@@ -425,6 +434,7 @@ func _ready() -> void:
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 	_refresh_conquest_difficulty_selection(GameSettings.conquest_difficulty)
+	_refresh_conquest_opportunity_choice_selection(GameSettings.conquest_opportunity_choice_mode)
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
 
@@ -564,6 +574,7 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_character_replacement_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_character_candidate_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_conquest_difficulty_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BattleUIStyle.apply_interaction_button(_conquest_opportunity_choice_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -637,6 +648,7 @@ func refresh_ui_style() -> void:
 	_apply_option_popup_style(_character_replacement_count_option)
 	_apply_option_popup_style(_character_candidate_count_option)
 	_apply_option_popup_style(_conquest_difficulty_option)
+	_apply_option_popup_style(_conquest_opportunity_choice_option)
 	_lan_lobby_panel.refresh_ui_style()
 	_online_settings_panel.refresh_ui_style()
 	_all_cards_panel.refresh_ui_style()
@@ -887,7 +899,7 @@ func _select_conquest_mode() -> void:
 	_player_count_input.step = 1.0
 	set_next_player_count(2)
 	_mode_title.text = "过关斩将"
-	_mode_description.text = "1人·玩家固定先手·击败敌方后挑战下一关"
+	_mode_description.text = "单人1人·联机2至4人·击败敌方后挑战下一关"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
@@ -926,6 +938,7 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	_character_replacement_count_row.visible = not visible_state or is_conquest
 	_character_candidate_count_row.visible = not visible_state or is_conquest
 	_conquest_difficulty_row.visible = is_conquest
+	_conquest_opportunity_choice_row.visible = is_conquest
 	_auto_identity_marking_checkbox.visible = not visible_state
 	_player_count_row.visible = not visible_state
 	_refresh_active_character_replacement_count_selection()
@@ -1093,10 +1106,8 @@ func _open_all_cards() -> void:
 
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
+## 过关斩将同样可进入局域网：大厅人数表示玩家数（2至4），每名玩家对应一名敌方AI。
 func _open_lan_panel() -> void:
-	if _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST:
-		_show_status("过关斩将仅支持离线玩家与AI对战。", true)
-		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_close_online_settings(false)
@@ -1748,6 +1759,33 @@ func _on_character_candidate_count_selected(option_index: int) -> void:
 
 
 ## 按全局设置同步过关斩将难度选中项；无信号选择避免主菜单与局内菜单之间形成重复保存。
+## 填充过关斩将机缘选择方式下拉；选项文本与稳定ID均来自 GameSettings 的唯一配置表。
+func _populate_conquest_opportunity_choice_options() -> void:
+	_conquest_opportunity_choice_option.clear()
+	for choice_option: Dictionary in GameSettings.CONQUEST_OPPORTUNITY_CHOICE_MODE_OPTIONS:
+		# 当前下拉项索引；元数据保存稳定方式ID，显示文字仅负责菜单展示。
+		var option_index: int = _conquest_opportunity_choice_option.item_count
+		_conquest_opportunity_choice_option.add_item(str(choice_option.get("label", "投票选择")))
+		_conquest_opportunity_choice_option.set_item_metadata(option_index, str(choice_option.get("value", GameSettings.DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE)))
+
+
+## 同步机缘选择方式下拉的当前选中项；设置来源变化（含其他入口修改）时保持菜单一致。
+func _refresh_conquest_opportunity_choice_selection(mode_id: String) -> void:
+	if _conquest_opportunity_choice_option == null:
+		return
+	for option_index: int in range(_conquest_opportunity_choice_option.item_count):
+		if str(_conquest_opportunity_choice_option.get_item_metadata(option_index)) == mode_id:
+			_conquest_opportunity_choice_option.select(option_index)
+			return
+
+
+## 玩家在主菜单切换机缘选择方式；稳定ID写入全局设置并在下一局锁定。
+func _on_conquest_opportunity_choice_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _conquest_opportunity_choice_option.item_count:
+		return
+	GameSettings.set_conquest_opportunity_choice_mode(str(_conquest_opportunity_choice_option.get_item_metadata(option_index)))
+
+
 func _refresh_conquest_difficulty_selection(difficulty: int) -> void:
 	if not is_node_ready():
 		return

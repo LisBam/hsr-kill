@@ -450,6 +450,23 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(132, 30)
 layout_mode = 2
 
+[node name="ConquestOpportunityChoiceRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=2026072621]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ConquestOpportunityChoiceLabel" type="Label" parent="MatchMenu/MenuPanel/MenuVBox/ConquestOpportunityChoiceRow" unique_id=2026072622]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "机缘选择"
+vertical_alignment = 1
+
+[node name="ConquestOpportunityChoiceOption" type="OptionButton" parent="MatchMenu/MenuPanel/MenuVBox/ConquestOpportunityChoiceRow" unique_id=2026072623]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 30)
+layout_mode = 2
+
 [node name="WheelDuelFaceUpCandidateRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1535387167]
 unique_name_in_owner = true
 visible = false
@@ -1489,7 +1506,7 @@ text = "过关斩将"
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
-text = "1人"
+text = "单人1人 / 联机2-4人"
 
 [node name="ConquestModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton" unique_id=1106655057]
 unique_name_in_owner = true
@@ -1879,6 +1896,25 @@ text = "过关斩将难度"
 vertical_alignment = 1
 
 [node name="MainMenuConquestDifficultyOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestDifficultyRow" unique_id=2026072303]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(156, 34)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+
+[node name="MainMenuConquestOpportunityChoiceRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=2026072624]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MainMenuConquestOpportunityChoiceLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestOpportunityChoiceRow" unique_id=2026072625]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "机缘选择"
+vertical_alignment = 1
+
+[node name="MainMenuConquestOpportunityChoiceOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestOpportunityChoiceRow" unique_id=2026072626]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(156, 34)
 layout_mode = 2

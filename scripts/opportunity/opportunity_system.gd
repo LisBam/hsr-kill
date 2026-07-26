@@ -78,6 +78,9 @@ var _current_effect_waiting_for_barrier: bool = false
 ## 是否已经登记下一帧继续机缘队列；防止响应请求清理边界重复连接process_frame或产生递归deferred调用。
 var _next_effect_retry_scheduled: bool = false
 
+## 当前流程是否为“投票选择”模式；true时全体参与者共享同一组候选，全部提交后按票数决出唯一当选机缘。
+var _vote_mode: bool = false
+
 ## 机缘流程完成后的恢复类型；turn_start恢复回合开始游标，round_end恢复轮末到下一回合的阶段切换。
 var _resume_kind: String = ""
 
@@ -127,6 +130,7 @@ func shutdown() -> void:
 	_bonus_effect_queue.clear()
 	_current_effect_waiting_for_barrier = false
 	_next_effect_retry_scheduled = false
+	_vote_mode = false
 	_resume_kind = ""
 	_resume_context.clear()
 	_resume_phase = ""
@@ -191,15 +195,38 @@ func force_trigger_for_players(trigger_player_id: int, participant_ids: Array[in
 		return false
 	if _tracked_round_number != _state.round_number:
 		_initialize_round_probability(_state.round_number)
-	var valid_participant_ids: Array[int] = []
-	for participant_id: int in participant_ids:
-		var participant: PlayerState = _state.get_player(participant_id)
-		if participant != null and participant.alive and not valid_participant_ids.has(participant_id):
-			valid_participant_ids.append(participant_id)
+	var valid_participant_ids: Array[int] = _filter_alive_participant_ids(participant_ids)
 	if valid_participant_ids.is_empty():
 		return false
 	_begin_trigger(trigger_player_id, true, resume_kind, resume_context, valid_participant_ids)
 	return true
+
+
+## 按明确名单以“投票选择”触发机缘：全体参与者共享同一组三张候选，逐人投出一票。
+## 全部提交后取票数最高的机缘，平票时在同票机缘中随机；当选机缘写入每名存活参与者的公开历史并逐人结算。
+## 单一参与者时投票结果必然是本人所投机缘，行为与各自选择完全一致。
+func force_trigger_vote_for_players(trigger_player_id: int, participant_ids: Array[int], resume_kind: String = "manual", resume_context: Dictionary = {}) -> bool:
+	if not _can_trigger_now():
+		return false
+	if _tracked_round_number != _state.round_number:
+		_initialize_round_probability(_state.round_number)
+	var valid_participant_ids: Array[int] = _filter_alive_participant_ids(participant_ids)
+	if valid_participant_ids.is_empty():
+		return false
+	_begin_trigger(trigger_player_id, true, resume_kind, resume_context, valid_participant_ids, true)
+	return true
+
+
+## 过滤请求参与者中仍存活的角色并去重；死亡角色不进入选择或投票队列，离场但存活角色继续参与。
+func _filter_alive_participant_ids(participant_ids: Array[int]) -> Array[int]:
+	# 合法参与者结果；保持调用方传入顺序，重复稳定ID只保留首个。
+	var result: Array[int] = []
+	for participant_id: int in participant_ids:
+		# 当前候选参与者状态；死亡角色跳过，离场但存活角色仍参与机缘流程。
+		var participant: PlayerState = _state.get_player(participant_id)
+		if participant != null and participant.alive and not result.has(participant_id):
+			result.append(participant_id)
+	return result
 
 
 ## 接受玩家、局域网客户端或回放提交的机缘卡ID；只有当前选择者自己的三张候选可以通过。
@@ -386,8 +413,10 @@ func grant_random_unowned_opportunities(player_id: int, quality_id: String, requ
 
 
 ## 开始一次全体机缘；先生成全部私有候选并暂停场景树，所有角色选完后才释放暂停和执行效果。
-func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary, requested_participant_ids: Array[int] = []) -> void:
+## vote_mode=true 时只抽取一组共享候选并复制给每名参与者，全部提交后按票数决出唯一当选机缘。
+func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary, requested_participant_ids: Array[int] = [], vote_mode: bool = false) -> void:
 	_triggered_this_round = true
+	_vote_mode = vote_mode
 	_resume_kind = resume_kind
 	_resume_context = resume_context.duplicate(true)
 	_resume_phase = _state.current_phase
@@ -404,29 +433,44 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 	var options_by_player: Dictionary = {}
 	# 随机历史只记录稳定ID；正文与效果参数始终由同一静态目录解析，避免长期历史重复保存完整定义。
 	var option_ids_by_player: Dictionary = {}
-	for participant_id: int in participant_ids:
-		# 当前角色私有候选；权威交互状态仍保存完整卡面，只有随机历史改为紧凑ID摘要。
-		var participant_options: Array[Dictionary] = _draw_options_for_player(participant_id)
-		options_by_player[str(participant_id)] = participant_options
-		# 当前角色候选ID；顺序必须与实际三张卡一致，固定种子回放可据此复核抽取结果。
-		var participant_option_ids: Array[String] = []
-		for option_definition: Dictionary in participant_options:
-			participant_option_ids.append(str(option_definition.get("id", "")))
-		option_ids_by_player[str(participant_id)] = participant_option_ids
+	if vote_mode:
+		# 投票共享候选；只抽取一次并复制给全部参与者，因此每名玩家看到与投出的都是同一组机缘。
+		var shared_options: Array[Dictionary] = _draw_options_for_player(participant_ids[0])
+		# 共享候选稳定ID；随机历史只保存一份紧凑摘要，固定种子回放可据此复核抽取结果。
+		var shared_option_ids: Array[String] = []
+		for option_definition: Dictionary in shared_options:
+			shared_option_ids.append(str(option_definition.get("id", "")))
+		for participant_id: int in participant_ids:
+			options_by_player[str(participant_id)] = shared_options.duplicate(true)
+			option_ids_by_player[str(participant_id)] = shared_option_ids.duplicate()
+	else:
+		for participant_id: int in participant_ids:
+			# 当前角色私有候选；权威交互状态仍保存完整卡面，只有随机历史改为紧凑ID摘要。
+			var participant_options: Array[Dictionary] = _draw_options_for_player(participant_id)
+			options_by_player[str(participant_id)] = participant_options
+			# 当前角色候选ID；顺序必须与实际三张卡一致，固定种子回放可据此复核抽取结果。
+			var participant_option_ids: Array[String] = []
+			for option_definition: Dictionary in participant_options:
+				participant_option_ids.append(str(option_definition.get("id", "")))
+			option_ids_by_player[str(participant_id)] = participant_option_ids
 	_state.opportunity_state = {
 		"active":true,
 		"stage":"choosing",
 		"round_number":_state.round_number,
 		"trigger_player_id":participant_ids[0],
 		"forced":forced,
+		"vote_mode":vote_mode,
 		"participant_ids":participant_ids.duplicate(),
 		"chosen_player_ids":[],
 		"current_chooser_id":-1,
 		"current_resolver_id":-1,
 		"options_by_player":options_by_player,
 	}
-	_state.random_history.append({"kind":"opportunity_options", "round_number":_state.round_number, "trigger_player_id":participant_ids[0], "option_ids_by_player":option_ids_by_player})
-	_host.add_log("触发全体机缘选择：每名角色从三张机缘卡中选择一张。")
+	_state.random_history.append({"kind":"opportunity_options", "round_number":_state.round_number, "trigger_player_id":participant_ids[0], "vote_mode":vote_mode, "option_ids_by_player":option_ids_by_player})
+	if vote_mode and participant_ids.size() > 1:
+		_host.add_log("触发全体机缘投票：所有玩家从同一组三张机缘卡中各投一票，票数最高者当选。")
+	else:
+		_host.add_log("触发全体机缘选择：每名角色从三张机缘卡中选择一张。")
 	_selection_pause_token = _host.acquire_gameplay_pause("opportunity_selection")
 	_advance_selection_queue()
 
@@ -467,11 +511,14 @@ func _record_player_choice(player_id: int, card_definition: Dictionary) -> void:
 	if not chosen_player_ids.has(player_id):
 		chosen_player_ids.append(player_id)
 	_state.opportunity_state["chosen_player_ids"] = chosen_player_ids
-	_host.add_log("%s已完成机缘选择。" % _host.format_player_log_name(player_id))
+	_host.add_log("%s已完成机缘%s。" % [_host.format_player_log_name(player_id), "投票" if _vote_mode else "选择"])
 
 
 ## 全体选择完成后释放全局暂停、关闭机缘卡弹窗并开始逆时针逐张结算。
+## 投票模式先按票数决出唯一当选机缘，再把它写入每名存活参与者的选择结果与公开历史。
 func _finish_all_choices() -> void:
+	if _vote_mode:
+		_apply_vote_result()
 	# 已获得机缘历史；全体选择完成后才公开写入，避免其他观察者在私有选择阶段反推出具体卡面。
 	for player_id_key: Variant in _selected_cards_by_player.keys():
 		# 选择者稳定ID；字典键使用字符串以兼容网络序列化。
@@ -491,6 +538,49 @@ func _finish_all_choices() -> void:
 		_selection_pause_token = -1
 	_host.refresh_state_snapshot()
 	_schedule_next_effect_resolution()
+
+
+## 汇总全体投票并把当选机缘写入每名参与者的选择结果；平票时使用对局随机源在同票机缘中随机决出。
+## 计票摘要写入随机历史，当选正文写入对局日志；死亡角色的历史与结算仍由通用存活检查过滤。
+func _apply_vote_result() -> void:
+	# 首名参与者的共享候选；投票模式下所有参与者候选完全一致，以此数组保持稳定计票顺序。
+	var shared_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(int(_state.opportunity_state.get("trigger_player_id", -1))), []) as Array
+	# 各候选得票数；键为机缘稳定ID，值为票数，仅统计实际提交的投票。
+	var vote_counts: Dictionary = {}
+	for voted_card_variant: Variant in _selected_cards_by_player.values():
+		# 当前一票对应的机缘定义；死亡前已投出的票仍然有效。
+		var voted_card_id: String = str((voted_card_variant as Dictionary).get("id", ""))
+		if not voted_card_id.is_empty():
+			vote_counts[voted_card_id] = int(vote_counts.get(voted_card_id, 0)) + 1
+	if vote_counts.is_empty():
+		return
+	# 最高票数；先扫描一遍取得极值，再按候选稳定顺序收集全部同票机缘。
+	var highest_vote_count: int = 0
+	for vote_count_variant: Variant in vote_counts.values():
+		highest_vote_count = maxi(highest_vote_count, int(vote_count_variant))
+	# 与最高票并列的机缘ID；顺序沿用共享候选顺序，保证固定种子下平票随机可复现。
+	var tied_card_ids: Array[String] = []
+	for option_variant: Variant in shared_options:
+		# 当前候选稳定ID；只有得票等于最高票的候选进入平票池。
+		var option_card_id: String = str((option_variant as Dictionary).get("id", ""))
+		if int(vote_counts.get(option_card_id, 0)) == highest_vote_count and not tied_card_ids.has(option_card_id):
+			tied_card_ids.append(option_card_id)
+	if tied_card_ids.is_empty():
+		# 候选与投票意外脱节时回退首个得票机缘；该路径只服务损坏状态，不改变正常规则。
+		tied_card_ids.append(str(vote_counts.keys()[0]))
+	# 最终当选机缘ID；仅一项时直接采用，平票时使用对局共享随机源在同票机缘中等概率决出。
+	var winner_card_id: String = tied_card_ids[0]
+	if tied_card_ids.size() > 1 and _rng != null:
+		winner_card_id = tied_card_ids[_rng.randi_range(0, tied_card_ids.size() - 1)]
+	# 当选机缘完整定义；从静态目录重新读取，不信任投票过程中缓存的候选副本。
+	var winner_card: Dictionary = OpportunityCatalog.get_card(winner_card_id)
+	if winner_card.is_empty():
+		return
+	_state.random_history.append({"kind":"opportunity_vote_result", "vote_counts":vote_counts.duplicate(), "tied_card_ids":tied_card_ids.duplicate(), "winner_card_id":winner_card_id})
+	_host.add_log("机缘投票结束：以%d票当选——%s" % [highest_vote_count, str(winner_card.get("description", ""))] + ("（平票随机决出）" if tied_card_ids.size() > 1 else ""))
+	# 把当选机缘写入每名参与者的最终选择；随后的公开历史写入与逐人结算完全复用普通流程。
+	for participant_id: int in _resolution_queue:
+		_selected_cards_by_player[str(participant_id)] = winner_card.duplicate(true)
 
 
 ## 取得逆时针队列中的下一名角色并执行其已选机缘；全部完成后恢复触发前流程。
@@ -596,6 +686,7 @@ func _finish_flow() -> void:
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false
+	_vote_mode = false
 	_resume_kind = ""
 	_resume_context.clear()
 	_resume_phase = ""
@@ -615,6 +706,7 @@ func _finish_without_resume() -> void:
 	_current_effect_owner_id = -1
 	_current_effect_card.clear()
 	_current_effect_waiting_for_barrier = false
+	_vote_mode = false
 	_resume_kind = ""
 	_resume_context.clear()
 	_resume_phase = ""

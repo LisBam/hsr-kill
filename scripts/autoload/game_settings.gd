@@ -55,6 +55,9 @@ signal conquest_character_candidate_count_changed(count: int)
 ## 过关斩将难度变化信号；参数只会是一至五，仅影响之后创建的过关斩将对局。
 signal conquest_difficulty_changed(difficulty: int)
 
+## 过关斩将机缘选择方式变化时发出；参数为稳定方式ID（vote/individual），仅影响之后创建的对局。
+signal conquest_opportunity_choice_mode_changed(mode_id: String)
+
 ## 离线下一局是否由本机控制全部角色的变化信号；联机模式不会读取该设置。
 signal control_all_characters_changed(enabled: bool)
 
@@ -118,6 +121,27 @@ const MAX_CONQUEST_DIFFICULTY: int = 5
 
 ## 过关斩将默认难度；难度五保持旧版本无玩家开局增益的行为，旧存档不会因缺少字段而改变强度。
 const DEFAULT_CONQUEST_DIFFICULTY: int = 5
+
+## 过关斩将机缘选择方式：投票选择的稳定ID；全体玩家共享同一组候选并各投一票，票数最高者当选且每名玩家都获得。
+const CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE: String = "vote"
+
+## 过关斩将机缘选择方式：各自选择的稳定ID；每名玩家独立从自己的三张私有候选中选择并获得机缘。
+const CONQUEST_OPPORTUNITY_CHOICE_MODE_INDIVIDUAL: String = "individual"
+
+## 过关斩将机缘选择方式默认值；默认投票选择。单人局或仅剩一名存活玩家时两种方式行为完全一致。
+const DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE: String = CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE
+
+## 过关斩将机缘选择方式下拉选项；稳定ID写入存档与对局锁定项，中文文本只负责菜单显示。
+const CONQUEST_OPPORTUNITY_CHOICE_MODE_OPTIONS: Array[Dictionary] = [
+	{"value":CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE, "label":"投票选择"},
+	{"value":CONQUEST_OPPORTUNITY_CHOICE_MODE_INDIVIDUAL, "label":"各自选择"},
+]
+
+## 局域网过关斩将允许的最少玩家数（不含敌方AI）；每名玩家对应一名敌人，规则角色总数为玩家数的两倍。
+const MIN_CONQUEST_LAN_PLAYER_COUNT: int = 2
+
+## 局域网过关斩将允许的最多玩家数（不含敌方AI）；4名玩家对应8个规则角色。
+const MAX_CONQUEST_LAN_PLAYER_COUNT: int = 4
 
 ## 随机选将牌数下拉选项；稳定数值1至20直接作为每名玩家的普通随机候选数量。
 const CHARACTER_CANDIDATE_COUNT_OPTIONS: Array[Dictionary] = [
@@ -256,7 +280,7 @@ const DEFAULT_IDENTITY_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
 ## 机缘大乱斗默认人数；继承身份模式的2至10人配置并默认使用8人。
 const DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_COUNT
 
-## 过关斩将默认人数；模式固定为一名玩家和一名敌方AI，因此恒为2人。
+## 过关斩将默认人数；该值表示“玩家数”，默认2（联机默认2名玩家），离线单人开局仍按历史语义固定创建2个规则角色。
 const DEFAULT_CONQUEST_PLAYER_COUNT: int = 2
 
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
@@ -301,7 +325,7 @@ var next_match_player_count_wheel_duel: int = DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 ## 机缘大乱斗独立保存的下一局人数；范围2至10，切换模式时不覆盖身份模式人数。
 var next_match_player_count_opportunity_brawl: int = DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT
 
-## 过关斩将独立保存的下一局人数；固定2人，字段保留以与其他模式的持久化结构一致。
+## 过关斩将独立保存的下一局人数；表示玩家数（2至4），离线单人不读取该值，仅局域网大厅作为初始玩家数。
 var next_match_player_count_conquest: int = DEFAULT_CONQUEST_PLAYER_COUNT
 
 ## 下一局1v1车轮战明置候选数量；默认6，运行时设置范围3至20。
@@ -337,6 +361,9 @@ var conquest_character_candidate_count: int = DEFAULT_CONQUEST_CHARACTER_CANDIDA
 
 ## 下一局过关斩将难度；默认难度五，仅在创建对局时锁定到 match_options 与关卡状态。
 var conquest_difficulty: int = DEFAULT_CONQUEST_DIFFICULTY
+
+## 下一局过关斩将机缘选择方式；vote为投票选择、individual为各自选择，仅在创建对局时锁定到 match_options。
+var conquest_opportunity_choice_mode: String = DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE
 
 ## 下一局离线对局是否由本机控制全部角色；默认关闭，联机房主与客户端均忽略该值。
 var control_all_characters_enabled: bool = false
@@ -498,6 +525,8 @@ func normalize_match_mode(mode_id: String) -> String:
 
 
 ## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 5，2v2 固定 4。
+## 过关斩将保存“玩家数”而非规则角色总数：离线单人固定2（历史语义，菜单显示1人并创建2个角色），
+## 局域网联机允许2至4名玩家，规则角色总数在开局边界换算为玩家数的两倍。
 func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 	var mode: String = normalize_match_mode(mode_id)
 	if mode == MATCH_MODE_DOUDIZHU:
@@ -509,7 +538,7 @@ func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 	if mode == MATCH_MODE_WHEEL_DUEL:
 		return DEFAULT_WHEEL_DUEL_PLAYER_COUNT
 	if mode == MATCH_MODE_CONQUEST:
-		return DEFAULT_CONQUEST_PLAYER_COUNT
+		return clampi(player_count, MIN_CONQUEST_LAN_PLAYER_COUNT, MAX_CONQUEST_LAN_PLAYER_COUNT)
 	return clampi(player_count, MIN_NEXT_MATCH_PLAYER_COUNT, MAX_NEXT_MATCH_PLAYER_COUNT)
 
 
@@ -675,6 +704,24 @@ func set_conquest_difficulty(difficulty: int) -> void:
 	conquest_difficulty_changed.emit(conquest_difficulty)
 
 
+## 规范化过关斩将机缘选择方式；未知输入回退默认投票选择，保证存档与网络设置只保存两个稳定ID之一。
+func normalize_conquest_opportunity_choice_mode(mode_id: String) -> String:
+	if mode_id == CONQUEST_OPPORTUNITY_CHOICE_MODE_INDIVIDUAL:
+		return CONQUEST_OPPORTUNITY_CHOICE_MODE_INDIVIDUAL
+	return CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE
+
+
+## 设置下一局过关斩将机缘选择方式；仅影响之后创建的对局，进行中的机缘流程不受影响。
+func set_conquest_opportunity_choice_mode(mode_id: String) -> void:
+	# 标准化后的方式ID；菜单、存档与对局锁定统一使用vote/individual两个稳定值。
+	var normalized_mode_id: String = normalize_conquest_opportunity_choice_mode(mode_id)
+	if conquest_opportunity_choice_mode == normalized_mode_id:
+		return
+	conquest_opportunity_choice_mode = normalized_mode_id
+	_queue_settings_save()
+	conquest_opportunity_choice_mode_changed.emit(conquest_opportunity_choice_mode)
+
+
 ## 返回指定模式应读取的随机选将牌数；只有过关斩将使用专属设置，其余模式保留普通候选配置。
 func get_character_candidate_count_for_mode(mode_id: String) -> int:
 	# 规范化后的模式ID；未知模式按身份局处理，避免外部调用读取到不稳定配置。
@@ -805,6 +852,8 @@ func _load_saved_settings() -> void:
 	conquest_character_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT)), MIN_CHARACTER_CANDIDATE_COUNT, MAX_CHARACTER_CANDIDATE_COUNT)
 	# 过关斩将难度；旧存档缺少字段时使用难度五，保持新增机制前无玩家开局机缘的对局强度。
 	conquest_difficulty = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", DEFAULT_CONQUEST_DIFFICULTY)), MIN_CONQUEST_DIFFICULTY, MAX_CONQUEST_DIFFICULTY)
+	# 过关斩将机缘选择方式；旧存档缺失字段时回退默认投票选择，未知值同样收敛到稳定ID。
+	conquest_opportunity_choice_mode = normalize_conquest_opportunity_choice_mode(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_opportunity_choice_mode", DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE)))
 	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
@@ -886,6 +935,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "character_candidate_count", character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", conquest_character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", conquest_difficulty)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_opportunity_choice_mode", conquest_opportunity_choice_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)

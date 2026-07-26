@@ -818,29 +818,32 @@ func _on_lan_start_match_requested() -> void:
 		return
 	# 当前权威大厅设置；房主本地读取总人数与稳定模式 ID，不相信界面临时输入。
 	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot(true)
-	# 当前游戏模式；身份模式与斗地主均可创建权威对局。
+	# 当前游戏模式；可开局集合由网关唯一维护，身份、斗地主、2v2、车轮战、机缘大乱斗与过关斩将均可创建权威对局。
 	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
-	if game_mode_id != NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID and game_mode_id != "doudizhu":
+	if not match_controller.network_gateway.is_game_mode_playable(game_mode_id):
 		online_lobby_panel.show_error("当前游戏模式尚未实现。")
 		return
-	# 当前大厅总人数；用于前置校验、真人映射与权威对局创建。
+	# 当前大厅总人数；过关斩将表示玩家数（2至4），其他模式即规则角色总数。
 	var player_count: int = int(lobby_snapshot.get("player_count", 2))
+	# 本局规则角色总数；过关斩将为玩家数两倍（每名玩家配一名敌方AI），其他模式与大厅人数一致。
+	var role_count: int = NetworkGateway.get_match_role_count_for_mode(game_mode_id, player_count)
 	# 开局前写入全局下一局模式；保证 start_match 与局内设置读取到大厅权威模式。
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(game_mode_id)
 		GameSettings.set_next_match_player_count(player_count)
 	# 数据配置前置错误；必须在生成成员座次与清理旧表现前返回，房间可原地重试。
-	var validation_error: String = match_controller.get_match_start_validation_error(player_count, game_mode_id)
+	var validation_error: String = match_controller.get_match_start_validation_error(role_count, game_mode_id)
 	if not validation_error.is_empty():
 		online_lobby_panel.show_error(validation_error)
 		return
 	# 真人到稳定玩家 ID 的大厅位置映射错误；通常由真人不足2名或总人数小于成员数引起。
+	# 网关按大厅语义接收人数，过关斩将在其内部把真人映射到偶数玩家座位并换算角色总数。
 	var assignment_error: String = match_controller.network_gateway.prepare_lan_match_assignments(player_count)
 	if not assignment_error.is_empty():
 		online_lobby_panel.show_error(assignment_error)
 		return
 	match_menu.set_next_player_count(player_count)
-	if not _on_restart_requested(player_count):
+	if not _on_restart_requested(role_count):
 		match_controller.network_gateway.cancel_prepared_lan_match()
 		# 最近控制器拒绝原因；为空时使用稳定兜底，不把半成品对局广播给客户端。
 		var failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法创建局域网对局，请检查数据配置后重试。"
@@ -920,13 +923,15 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 	# 从权威大厅快照同步模式与人数；客户端局内设置与斗地主人数限制才能与房主一致。
 	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot()
 	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
+	# 写入设置与菜单的人数；过关斩将广播值为规则角色总数，落到设置层时换算回“玩家数”（每2个角色对应1名玩家）。
+	var settings_player_count: int = int(floorf(float(player_count) / 2.0)) if game_mode_id == GameSettings.MATCH_MODE_CONQUEST else player_count
 	if GameSettings != null:
 		GameSettings.set_next_match_mode(game_mode_id)
-		GameSettings.set_next_match_player_count(player_count)
+		GameSettings.set_next_match_player_count(settings_player_count)
 	match_controller.default_player_count = player_count
-	match_menu.set_next_player_count(player_count)
+	match_menu.set_next_player_count(settings_player_count)
 	_refresh_match_menu_authority_controls()
-	main_menu.set_next_player_count(player_count)
+	main_menu.set_next_player_count(settings_player_count)
 	lan_lobby_panel.confirm_match_started()
 	online_lobby_panel.confirm_match_started()
 	main_menu.confirm_game_started()
@@ -2873,8 +2878,11 @@ func _on_restart_requested(player_count: int) -> bool:
 		return false
 	if match_controller.network_gateway.is_lan_host() and match_controller.network_gateway.is_lan_match_active():
 		# 当前局域网总人数；同一 ENet 房间重开保持真人映射稳定，暂不允许改变总座位数。
+		# 对局进行中快照返回的已是规则角色总数；过关斩将的局内菜单不暴露人数控件，重开直接沿用该权威角色数。
 		var current_lan_player_count: int = int(match_controller.network_gateway.get_lan_lobby_snapshot().get("player_count", player_count))
-		if player_count != current_lan_player_count:
+		if GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_CONQUEST:
+			player_count = current_lan_player_count
+		elif player_count != current_lan_player_count:
 			match_controller.action_rejected.emit("局域网房间内重新开始时不能改变游戏总人数。")
 			return false
 	match_controller.default_player_count = player_count

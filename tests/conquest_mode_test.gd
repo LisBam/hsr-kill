@@ -81,7 +81,8 @@ func _test_mode_rules_and_equipment_subtypes() -> bool:
 	}
 	if rules.normalize_mode(IdentityRules.MODE_CONQUEST) != IdentityRules.MODE_CONQUEST or not rules.supports_player_count(IdentityRules.MODE_CONQUEST, 2) or rules.supports_player_count(IdentityRules.MODE_CONQUEST, 3) or rules.get_distribution(2, IdentityRules.MODE_CONQUEST) != ["red", "blue"] or not rules.starts_from_first_seat(IdentityRules.MODE_CONQUEST):
 		return _fail("mode_rules")
-	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST, 9) != 2 or GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 2:
+	# 过关斩将人数设置表示“玩家数”：下限2（离线沿用历史值2）、上限4（局域网2至4名玩家）；超界输入向两端收敛。
+	if GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST, 9) != GameSettings.MAX_CONQUEST_LAN_PLAYER_COUNT or GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST, 1) != GameSettings.MIN_CONQUEST_LAN_PLAYER_COUNT or GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_CONQUEST) != 2:
 		return _fail("mode_settings")
 	# 普通模式原候选数量；过关斩将设置改变时必须保持不变，证明两个持久化槽彼此独立。
 	var standard_candidate_count: int = GameSettings.character_candidate_count
@@ -382,7 +383,8 @@ func _test_full_match_replacement_flow() -> bool:
 	# 关卡14灰色装备机缘；手动提升测试关卡后先记录对应机缘，再使用真实牌堆/弃牌堆入场装备入口。
 	_controller.state.conquest_state["level"] = 14
 	var level_fourteen_opportunities: Array[String] = _controller.conquest_mode.award_fixed_opportunities_through_current_level()
-	_controller._record_conquest_enemy_opportunities(enemy, level_fourteen_opportunities)
+	# 记录入口现按“每名敌人都会获得”写入全体敌方历史；单人局只有唯一敌人，行为与旧接口一致。
+	_controller._record_conquest_enemy_opportunities(level_fourteen_opportunities)
 	_controller._equip_conquest_enemy_from_piles(enemy.player_id)
 	# 敌方已占用装备槽列表；四张装备必须落入四个不同的稳定子类别槽。
 	var equipped_slots: Array = enemy.equipment.keys()
@@ -429,6 +431,9 @@ func _test_full_match_replacement_flow() -> bool:
 	player.acquired_opportunity_ids.append("gray_revive_one")
 	_controller.state.conquest_state["player_revives_remaining"] = 1
 	_controller.state.conquest_state["player_revives_used"] = 0
+	# 多人字段与旧标量并存；服务优先读取按玩家ID的复数映射，因此测试覆盖复活次数时必须同步写入两种形式。
+	_controller.state.conquest_state["player_revives_remaining_by_player"] = {"0":1}
+	_controller.state.conquest_state["player_revives_used_by_player"] = {"0":0}
 	# 复活前手牌；必须在复活时进入弃牌堆，随后新摸牌不能保留旧实体。
 	var revival_discard_card: CardInstance = CardInstance.new("wuzhong", "diamond", 9)
 	revival_discard_card.zone = "hand"

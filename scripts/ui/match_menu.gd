@@ -76,6 +76,9 @@ signal conquest_temporary_exit_toggle_requested
 ## 过关斩将难度下拉框；仅影响下一次重开并通过稳定数值一至五保存。
 @onready var _conquest_difficulty_option: OptionButton = %ConquestDifficultyOption
 
+## 过关斩将机缘选择方式下拉框；元数据保存vote/individual稳定ID，仅影响下一次重开的多人机缘流程。
+@onready var _conquest_opportunity_choice_option: OptionButton = %ConquestOpportunityChoiceOption
+
 ## 车轮战明置候选数量输入；仅当前模式为1v1车轮战时显示并用于下一次重开。
 @onready var _wheel_duel_face_up_candidate_input: SpinBox = %MatchMenuWheelDuelFaceUpCandidateInput
 
@@ -121,6 +124,9 @@ signal conquest_temporary_exit_toggle_requested
 
 ## 过关斩将难度整行容器；仅在当前对局为过关斩将且拥有重开权限时显示。
 @onready var _conquest_difficulty_row: Control = _conquest_difficulty_option.get_parent() as Control
+
+## 过关斩将机缘选择方式整行容器；与难度设置共享“过关斩将+权威权限”的显示条件。
+@onready var _conquest_opportunity_choice_row: Control = _conquest_opportunity_choice_option.get_parent() as Control
 
 ## 车轮战明置候选整行容器；普通模式隐藏，车轮战模式按权威权限显示。
 @onready var _wheel_duel_face_up_candidate_row: Control = _wheel_duel_face_up_candidate_input.get_parent() as Control
@@ -201,6 +207,9 @@ func _ready() -> void:
 	_populate_conquest_difficulty_options()
 	_conquest_difficulty_option.item_selected.connect(_on_conquest_difficulty_selected)
 	GameSettings.conquest_difficulty_changed.connect(_refresh_conquest_difficulty_selection)
+	_populate_conquest_opportunity_choice_options()
+	_conquest_opportunity_choice_option.item_selected.connect(_on_conquest_opportunity_choice_selected)
+	GameSettings.conquest_opportunity_choice_mode_changed.connect(_refresh_conquest_opportunity_choice_selection)
 	_wheel_duel_face_up_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_up_candidate_count)
 	_wheel_duel_face_up_candidate_input.value_changed.connect(_on_wheel_duel_face_up_candidate_count_changed)
 	_wheel_duel_face_down_candidate_input.set_value_no_signal(GameSettings.wheel_duel_face_down_candidate_count)
@@ -219,6 +228,7 @@ func _ready() -> void:
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 	_refresh_conquest_difficulty_selection(GameSettings.conquest_difficulty)
+	_refresh_conquest_opportunity_choice_selection(GameSettings.conquest_opportunity_choice_mode)
 	set_match_mode(GameSettings.next_match_mode)
 	refresh_ui_style()
 
@@ -335,6 +345,7 @@ func _apply_mode_specific_settings_visibility() -> void:
 	_character_replacement_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_character_candidate_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_conquest_difficulty_row.visible = _authority_controls_visible and is_conquest
+	_conquest_opportunity_choice_row.visible = _authority_controls_visible and is_conquest
 	# 临时退出按钮只属于离线过关斩将；该模式本身拒绝局域网，因此权威可见性即等价于离线可见性。
 	_conquest_exit_button.visible = _authority_controls_visible and is_conquest
 	_wheel_duel_face_up_candidate_row.visible = _authority_controls_visible and is_wheel_duel
@@ -393,6 +404,7 @@ func refresh_ui_style() -> void:
 	_apply_option_button_style(_character_replacement_count_option)
 	_apply_option_button_style(_character_candidate_count_option)
 	_apply_option_button_style(_conquest_difficulty_option)
+	_apply_option_button_style(_conquest_opportunity_choice_option)
 	_apply_spin_box_style(_wheel_duel_face_up_candidate_input)
 	_apply_spin_box_style(_wheel_duel_face_down_candidate_input)
 
@@ -612,6 +624,33 @@ func _on_character_candidate_count_selected(option_index: int) -> void:
 
 
 ## 按全局设置同步过关斩将难度选中项；无信号刷新防止两个设置菜单互相重复提交。
+## 填充过关斩将机缘选择方式下拉；选项文本与稳定ID均来自 GameSettings 的唯一配置表。
+func _populate_conquest_opportunity_choice_options() -> void:
+	_conquest_opportunity_choice_option.clear()
+	for choice_option: Dictionary in GameSettings.CONQUEST_OPPORTUNITY_CHOICE_MODE_OPTIONS:
+		# 当前下拉项索引；元数据保存稳定方式ID，显示文字仅负责菜单展示。
+		var option_index: int = _conquest_opportunity_choice_option.item_count
+		_conquest_opportunity_choice_option.add_item(str(choice_option.get("label", "投票选择")))
+		_conquest_opportunity_choice_option.set_item_metadata(option_index, str(choice_option.get("value", GameSettings.DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE)))
+
+
+## 同步机缘选择方式下拉的当前选中项；主菜单等其他入口修改时局内菜单保持一致。
+func _refresh_conquest_opportunity_choice_selection(mode_id: String) -> void:
+	if _conquest_opportunity_choice_option == null:
+		return
+	for option_index: int in range(_conquest_opportunity_choice_option.item_count):
+		if str(_conquest_opportunity_choice_option.get_item_metadata(option_index)) == mode_id:
+			_conquest_opportunity_choice_option.select(option_index)
+			return
+
+
+## 玩家在局内菜单切换机缘选择方式；仅影响下一次重开对局，不改变进行中的机缘流程。
+func _on_conquest_opportunity_choice_selected(option_index: int) -> void:
+	if option_index < 0 or option_index >= _conquest_opportunity_choice_option.item_count:
+		return
+	GameSettings.set_conquest_opportunity_choice_mode(str(_conquest_opportunity_choice_option.get_item_metadata(option_index)))
+
+
 func _refresh_conquest_difficulty_selection(difficulty: int) -> void:
 	if not is_node_ready():
 		return

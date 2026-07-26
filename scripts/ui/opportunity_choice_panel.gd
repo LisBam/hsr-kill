@@ -74,17 +74,19 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 	var local_options: Array = options_by_player.get(str(local_player_id), options_by_player.get(local_player_id, [])) as Array
 	# 已完成选择角色；用于让本地玩家确认自己的选择已经提交并进入等待。
 	var chosen_player_ids: Array = opportunity_snapshot.get("chosen_player_ids", []) as Array
+	# 当前是否为投票选择模式；投票时全体玩家共享同一组候选，状态文字改用投票语义。
+	var vote_mode: bool = bool(opportunity_snapshot.get("vote_mode", false))
 	# 渲染签名；请求角色、完成进度与本地候选ID共同决定是否需要重建。
 	var option_ids: Array[String] = []
 	for option_variant: Variant in local_options:
 		option_ids.append(str((option_variant as Dictionary).get("id", "")))
-	var signature: String = "%d|%s|%s" % [current_chooser_id, str(chosen_player_ids), ",".join(option_ids)]
+	var signature: String = "%d|%s|%s|%s" % [current_chooser_id, str(chosen_player_ids), ",".join(option_ids), str(vote_mode)]
 	if signature == _render_signature:
 		return
 	_render_signature = signature
 	_clear_cards()
 	if current_chooser_id == local_player_id and not local_options.is_empty() and not chosen_player_ids.has(local_player_id):
-		_status_label.text = "选择机缘时间：请选择一张机缘卡"
+		_status_label.text = "机缘投票时间：请把票投给一张机缘卡" if vote_mode else "选择机缘时间：请选择一张机缘卡"
 		for option_variant: Variant in local_options:
 			# 当前机缘卡视图；只接收本地私有定义并发出稳定ID。
 			var card_view: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
@@ -98,7 +100,7 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 		return
 	# 当前等待角色名；缺失时回退“其他角色”，不暴露身份或私有候选。
 	var chooser_name: String = str(player_names.get(current_chooser_id, "其他角色"))
-	_status_label.text = "等待%s选择机缘……" % chooser_name
+	_status_label.text = ("等待%s投票……" if vote_mode else "等待%s选择机缘……") % chooser_name
 
 
 ## 关闭弹窗并释放动态牌面；下一次机缘使用新签名完整重建。
