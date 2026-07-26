@@ -21,7 +21,7 @@ const REPLAY_FILE_EXTENSION: String = "lisbam_replay"
 const REPLAY_FILE_MAGIC: String = "LISBAM_REPLAY"
 
 ## 回放格式版本号；回放头或步骤结构发生不兼容变化时必须递增，读取端会拒绝版本不一致的文件。
-## 新增步骤类型（如目标线表现步骤 "p"）属于兼容性追加：读取端遇到未知类型直接忽略，不递增版本。
+## 新增步骤类型（如桌面表现步骤 "p"）属于兼容性追加：读取端遇到未知类型直接忽略，不递增版本。
 const REPLAY_FORMAT_VERSION: int = 1
 
 ## 回放文件使用的压缩模式；GZIP 在快照流高度重复的场景下压缩率高且为 Godot 内置稳定格式。

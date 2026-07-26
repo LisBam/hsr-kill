@@ -12,7 +12,8 @@ signal snapshot_step_ready(snapshot: Dictionary)
 ## 派发一条对局日志步骤时发出；正文与录制端“记录”面板当时收到的完全一致。
 signal log_step_ready(message: String)
 
-## 派发一步目标线类表现步骤时发出；字典只含稳定玩家 ID 与名称，坐标由牌桌按重演布局解析。
+## 派发一步桌面表现步骤时发出；字典为纯数据（发动提示、卡牌表现、移牌、摸牌批次、所有权释放），
+## 牌桌把它送回与正式对局相同的表现处理器，坐标按重演布局重新解析。
 signal presentation_step_ready(presentation: Dictionary)
 
 ## 全部步骤派发完毕时发出；牌桌据此提示“回放播放完毕”，驱动器停止帧处理。
