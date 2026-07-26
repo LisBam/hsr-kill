@@ -12308,7 +12308,59 @@ func _complete_conquest_enemy_replacement(context: Dictionary) -> void:
 	var entry_draw_count: int = ConquestModeService.REPLACEMENT_DRAW_COUNT + conquest_mode.get_initial_hand_bonus()
 	draw(enemy.player_id, entry_draw_count)
 	add_log("敌方以【%s】进入第%d关，体力补至%d并摸%d张牌。" % [GameDatabase.resolve_character_name(next_character_id), new_level, enemy.max_hp, entry_draw_count])
+	# 进入新一关时复活全部已阵亡的玩家方角色；复活者回到游戏初始状态并照常参与本关的全体机缘选择。
+	_revive_dead_conquest_players_for_new_level(new_level)
 	_begin_conquest_replacement_opportunity(context)
+
+
+## 进入新一关时复活全部已阵亡的玩家方角色并使其回到游戏初始状态；仅在仍有存活玩家令对局延续到新一关时存在此类角色。
+## “游戏初始状态”指：保留开局武将并重装全新固有技能实例（限定技等内部状态归零）、机缘历史重置为本难度开局机缘、
+## 局内获得与临时技能全部移除、体力回满至初始上限、复活次数恢复难度初始值、重新摸取开局数量的起始手牌。
+## 复活发生在敌方新武将入场之后、本关全体机缘选择之前，因此复活者照常参与该次投票或各自选择。
+## 单人局玩家阵亡即终局，本函数在单人局中自然不产生任何效果；击杀统计等终局结算数据不属于玩法状态，保持累计。
+func _revive_dead_conquest_players_for_new_level(new_level: int) -> void:
+	if state == null or state.game_over or conquest_mode == null:
+		return
+	for conquest_player_id: int in conquest_mode.get_player_ids():
+		# 当前玩家方角色；仍存活的玩家不受本机制影响。
+		var fallen_player: PlayerState = state.get_player(conquest_player_id)
+		if fallen_player == null or fallen_player.alive:
+			continue
+		# 区域残留兜底清理；正常死亡已弃置手牌、装备与判定区，此处保证木牛“粮”等边缘区域同样为空。
+		_discard_all_conquest_player_cards(fallen_player)
+		# 机缘历史重置为本难度开局机缘；通用效果缓存与公开快照缓存均通过首尾哨兵自动识别整体替换。
+		fallen_player.acquired_opportunity_ids = conquest_mode.get_player_starting_opportunity_ids()
+		# 局内获得与临时技能记录清空；随后的固有技能重装会先卸载全部旧运行时实例，包括机缘获得技能。
+		fallen_player.acquired_skills.clear()
+		fallen_player.temporary_skills.clear()
+		fallen_player.hand_limit_bonus = 0
+		# 重装武将固有技能；创建全新实例使限定技已用标记等跨回合内部状态回到开局值。
+		_reinstall_character_skills_for_player(fallen_player)
+		# 存活与回合规则状态复位；身份在过关斩将中开局即明置，保持公开不变。
+		fallen_player.alive = true
+		fallen_player.dying = false
+		fallen_player.death_confirmed = false
+		fallen_player.out_of_game = false
+		fallen_player.out_of_game_until_round = -1
+		fallen_player.chained = false
+		fallen_player.face_down = false
+		fallen_player.non_locked_skills_disabled = false
+		fallen_player.non_locked_skill_disable_sources.clear()
+		fallen_player.character_corner_text = ""
+		fallen_player.character_corner_text_entries.clear()
+		fallen_player.skipped_phases.clear()
+		fallen_player.slash_count = 0
+		fallen_player.wine_used = false
+		fallen_player.wine_bonus = 0
+		fallen_player.wooden_ox_used = false
+		# 初始体力与上限；机缘历史已重置，因此这里恢复的就是“武将基础+难度机缘”的开局数值，护盾同步归零。
+		_refresh_pre_game_character_stats(fallen_player)
+		# 复活次数恢复本难度初始值；已用计数同步归零。
+		conquest_mode.reset_player_revives_to_initial(conquest_player_id)
+		# 开局数量的起始手牌；使用本局锁定的初始手牌数并叠加该玩家难度“初始手牌数”机缘，与正式开局完全一致。
+		var revival_hand_count: int = _starting_hand_count + get_acquired_opportunity_effect_total(conquest_player_id, "initial_hand_bonus")
+		draw(conquest_player_id, revival_hand_count)
+		add_log("第%d关开始，%s复活并回到初始状态：体力%d/%d，摸%d张起始手牌。" % [new_level, format_player_state_log_name(fallen_player), fallen_player.hp, fallen_player.max_hp, revival_hand_count])
 
 
 ## 敌方完成重新入场后发起单人机缘选择；换将过渡仍保持阻塞，防止旧回合在机缘前重建操作。
