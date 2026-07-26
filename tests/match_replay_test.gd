@@ -296,6 +296,21 @@ func _run_table_replay_flow() -> void:
 	if table_recorder.is_recording():
 		_fail(null, "table_replay_no_rerecord")
 		return
+	# 控制条可拖动；模拟按住条体空白区域拖动固定位移，位置应精确跟随且不被中途钳制。
+	var control_bar: PanelContainer = replay_overlay._control_bar
+	# 拖动前的条体位置；默认顶部居中，位移后用于差值断言。
+	var bar_position_before_drag: Vector2 = control_bar.position
+	_send_overlay_bar_drag(replay_overlay, Vector2(120.0, 260.0))
+	if not control_bar.position.is_equal_approx(bar_position_before_drag + Vector2(120.0, 260.0)):
+		_fail(null, "overlay_bar_drag before=%s after=%s" % [bar_position_before_drag, control_bar.position])
+		return
+	# 越界拖动被钳制；向右下拖出画面后条体必须完整停在安全边距内。
+	_send_overlay_bar_drag(replay_overlay, Vector2(99999.0, 99999.0))
+	# 钳制后的期望位置；画面尺寸减条体尺寸再留安全边距。
+	var expected_clamped_position: Vector2 = Vector2(replay_overlay.size.x - control_bar.size.x - replay_overlay.bar_boundary_margin, replay_overlay.size.y - control_bar.size.y - replay_overlay.bar_boundary_margin)
+	if not control_bar.position.is_equal_approx(expected_clamped_position):
+		_fail(null, "overlay_bar_clamp position=%s expected=%s" % [control_bar.position, expected_clamped_position])
+		return
 	# 退出回放；应返回主菜单并直接停在“对局回放”内容页，第一视角恢复重演前的值。
 	replay_overlay._exit_button.pressed.emit()
 	await get_tree().process_frame
@@ -308,6 +323,24 @@ func _run_table_replay_flow() -> void:
 	_cleanup_test_files()
 	print("MATCH_REPLAY_PASS 命名保存、重命名顶置、播放意图、驱动器派发与牌桌整局重演全部通过")
 	get_tree().quit(0)
+
+
+## 向回放覆盖层控制条注入一次“按下-位移-松开”的合成拖动；位移经由拖动输入入口逐事件传递。
+func _send_overlay_bar_drag(replay_overlay: MatchReplayOverlay, drag_delta: Vector2) -> void:
+	# 合成左键按下事件；控制条据此进入拖动状态。
+	var press_event: InputEventMouseButton = InputEventMouseButton.new()
+	press_event.button_index = MOUSE_BUTTON_LEFT
+	press_event.pressed = true
+	replay_overlay._on_control_bar_gui_input(press_event)
+	# 合成移动事件；relative 即拖动位移，覆盖层按该值移动并钳制条体。
+	var motion_event: InputEventMouseMotion = InputEventMouseMotion.new()
+	motion_event.relative = drag_delta
+	replay_overlay._on_control_bar_gui_input(motion_event)
+	# 合成左键松开事件；拖动状态结束。
+	var release_event: InputEventMouseButton = InputEventMouseButton.new()
+	release_event.button_index = MOUSE_BUTTON_LEFT
+	release_event.pressed = false
+	replay_overlay._on_control_bar_gui_input(release_event)
 
 
 ## 构建一份满足录制头与武将牌渲染需要的最小公开快照；仅用于测试，不来自任何真实对局。
