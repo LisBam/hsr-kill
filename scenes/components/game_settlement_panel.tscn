@@ -125,6 +125,19 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 4
 
+[node name="ActionRow" type="HBoxContainer" parent="Frame/Margin/Content"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+
+[node name="SaveReplayButton" type="Button" parent="Frame/Margin/Content/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(146, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 16
+text = "保存回放"
+
 [node name="CloseLayer" type="Control" parent="Frame"]
 layout_mode = 2
 mouse_filter = 2

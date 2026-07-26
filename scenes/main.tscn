@@ -29,6 +29,7 @@
 [ext_resource type="Script" uid="uid://cnyink6clckec" path="res://scripts/platform/android_display_stability.gd" id="29_android_display"]
 [ext_resource type="Script" uid="uid://b8v06563qhwaj" path="res://scripts/opportunity/opportunity_system.gd" id="30_opportunity_system"]
 [ext_resource type="PackedScene" path="res://scenes/components/all_cards_panel.tscn" id="31_all_cards"]
+[ext_resource type="PackedScene" path="res://scenes/components/match_replay_panel.tscn" id="32_match_replay"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -243,6 +244,20 @@ offset_bottom = 50.0
 grow_horizontal = 0
 theme_override_styles/normal = SubResource("StyleButtonNormal")
 text = "菜单"
+
+[node name="MatchChatButton" type="Button" parent="MatchMenu" unique_id=1734902158]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -104.0
+offset_top = 58.0
+offset_right = -18.0
+offset_bottom = 92.0
+grow_horizontal = 0
+theme_override_styles/normal = SubResource("StyleButtonNormal")
+text = "聊天"
 
 [node name="MenuPanel" type="PanelContainer" parent="MatchMenu" unique_id=457769022]
 unique_name_in_owner = true
@@ -1203,6 +1218,29 @@ grow_vertical = 0
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
+[node name="MainMenuMatchReplayButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=903412765]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(192, 0)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 18
+toggle_mode = true
+text = "对局回放"
+
+[node name="TopMatchReplayIndicator" type="ColorRect" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuMatchReplayButton" unique_id=903412766]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -4.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.831373, 0.709804, 0.372549, 1)
+
 [node name="TopNavigationSpacer" type="Control" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=1238528856]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -2024,5 +2062,7 @@ text = "返回"
 [node name="OnlineSettingsPanel" parent="MainMenu" unique_id=1986582550 instance=ExtResource("25_online_settings")]
 
 [node name="AllCardsPanel" parent="MainMenu" unique_id=1417086629 instance=ExtResource("31_all_cards")]
+
+[node name="MatchReplayPanel" parent="MainMenu" unique_id=903412767 instance=ExtResource("32_match_replay")]
 
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]

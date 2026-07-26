@@ -38,6 +38,8 @@ func _run() -> void:
 	var online_settings_button: Button = main_instance.get_node("%MainMenuOnlineSettingsButton") as Button
 	# 顶部所有卡牌按钮；必须与模式选择、联机设置同级并切换到独立图鉴客户区。
 	var all_cards_button: Button = main_instance.get_node("%MainMenuAllCardsButton") as Button
+	# 顶部对局回放按钮；必须位于所有卡牌右侧并对等切换到独立回放客户区。
+	var match_replay_button: Button = main_instance.get_node("%MainMenuMatchReplayButton") as Button
 	# 开始按钮；文字固定为“开始游戏”，点击后关闭主菜单并开始身份局。
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
 	# 局内菜单入口；成功开局后用于验证重新开局失败能显式返回主菜单，而不是停留在旧牌桌。
@@ -196,7 +198,7 @@ func _run() -> void:
 	var interaction_cancel_button: Button = main_instance.get_node("%CancelButton") as Button
 	# 终局结算入口；关闭自动弹出的结算面板后应位于重新开始与返回主菜单之间并可再次打开。
 	var interaction_settlement_button: Button = main_instance.get_node("%SettlementButton") as Button
-	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or all_cards_button.text != "所有卡牌" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or all_cards_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
+	if main_menu == null or not main_menu.visible or match_controller.state != null or settings_button.text != "设置" or online_settings_button.text != "联机设置" or all_cards_button.text != "所有卡牌" or match_replay_button.text != "对局回放" or start_game_button.text != "开始游戏" or settings_panel.visible or online_settings_panel.visible or all_cards_panel.visible or settings_backdrop.visible or mode_details_button.visible or mode_details_panel.visible or menu_background.mouse_filter != Control.MOUSE_FILTER_STOP or menu_status_label.visible or not menu_status_label.text.is_empty() or (main_instance.get_node("MatchMenu") as MatchMenu).visible or match_menu_button.focus_mode != Control.FOCUS_NONE or log_toggle_button.focus_mode != Control.FOCUS_NONE:
 		_fail("startup_state")
 		return
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
@@ -242,7 +244,7 @@ func _run() -> void:
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
 	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
 	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 3 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or top_navigation_buttons[2] != all_cards_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 4 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or top_navigation_buttons[2] != all_cards_button or top_navigation_buttons[3] != match_replay_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
 	# 车轮战模式专属设置；局内、局外必须同时显示明置与暗置数量，并应用同一字体、文字色及全局配置值。

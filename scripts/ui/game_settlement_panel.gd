@@ -6,6 +6,9 @@ extends Control
 ## 玩家点击右上角唯一关闭按钮时发出；牌桌保留终局快照，以便终局操作区再次打开本面板。
 signal close_requested
 
+## 玩家点击“保存回放”按钮时发出；实际录制数据与文件写入由牌桌的回放录制器负责，面板不接触回放内容。
+signal save_replay_requested
+
 ## 结算面板绘制层级；高于机缘选择与普通选牌层，低于局内菜单和主菜单。
 const MODAL_Z_INDEX: int = 220
 
@@ -37,6 +40,10 @@ const STAT_ROW_MINIMUM_HEIGHT: float = 38.0
 ## 结算角色行容器；每份终局快照重建一次，避免上局角色或统计残留。
 @onready var _rows_container: VBoxContainer = %RowsContainer
 
+## “保存回放”按钮；位于统计列表下方居中，点击后只发出保存意图信号。
+## 使用 get_node_or_null 防御旧场景缓存缺失该节点；缺失时不影响结算列表与关闭按钮。
+@onready var _save_replay_button: Button = get_node_or_null("%SaveReplayButton") as Button
+
 
 ## 初始化暂停可用的模态面板；终局时规则已停止，但关闭与重开操作仍必须接收输入。
 func _ready() -> void:
@@ -45,6 +52,8 @@ func _ready() -> void:
 	visible = false
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	_close_button.pressed.connect(_on_close_button_pressed)
+	if _save_replay_button != null:
+		_save_replay_button.pressed.connect(_on_save_replay_button_pressed)
 	refresh_ui_style()
 
 
@@ -66,6 +75,8 @@ func refresh_ui_style() -> void:
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("button_font"))
 	BattleUIStyle.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	if _save_replay_button != null:
+		BattleUIStyle.apply_interaction_button(_save_replay_button)
 	for header_variant: Variant in _header_row.get_children():
 		# 当前表头标签；缺失或替换为非标签节点时忽略，保持组件可嵌入旧场景测试。
 		var header_label: Label = header_variant as Label
@@ -140,3 +151,8 @@ func _create_cell(text_value: String, minimum_width: float, alignment: int = HOR
 func _on_close_button_pressed() -> void:
 	hide_settlement()
 	close_requested.emit()
+
+
+## 响应“保存回放”按钮；面板保持打开，保存结果由牌桌通过顶部横幅提示。
+func _on_save_replay_button_pressed() -> void:
+	save_replay_requested.emit()
