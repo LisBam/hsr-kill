@@ -108,6 +108,15 @@ func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, ene
 				player.acquired_opportunity_ids.append(opportunity_id)
 
 
+## 绑定一局已从存档恢复的过关斩将对局；与 configure 不同，本入口完整保留状态中既有的
+## conquest_state（关卡、难度、复活次数与双方机缘历史），只重建服务自身的引用与派生缓存。
+## 调用方必须先把存档中的 conquest_state 写回 GameState，再调用本函数完成绑定。
+func restore(state: GameState, rng: RandomNumberGenerator) -> void:
+	_state = state
+	_rng = rng
+	_invalidate_enemy_opportunity_cache()
+
+
 ## 清理服务持有的跨对局引用；重新开局后旧服务不得继续访问上一局状态或随机源。
 func reset() -> void:
 	_state = null

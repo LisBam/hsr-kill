@@ -506,6 +506,9 @@ func _ready() -> void:
 	match_menu.card_name_toggle_requested.connect(_on_name_mode_pressed)
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_menu.main_menu_requested.connect(_on_main_menu_requested)
+	match_menu.conquest_temporary_exit_toggle_requested.connect(_on_conquest_temporary_exit_toggle_requested)
+	match_controller.conquest_exit_save_ready.connect(_on_conquest_exit_save_ready)
+	match_controller.match_finished.connect(_on_match_finished_for_conquest_save)
 	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
 	main_menu.visibility_changed.connect(_sync_match_menu_visibility)
@@ -772,8 +775,16 @@ func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String)
 
 ## 接收主菜单的身份局开局请求；主菜单关闭后才清理旧表现并创建新的权威对局状态。
 ## 当前失败安全流程先同步尝试创建权威对局，只有返回成功时才通知主菜单关闭；拒绝时入口保持可见并允许重试。
+## 过关斩将存在临时退出存档时，主按钮语义为“继续上次游戏”，改走存档恢复入口而不是全新开局。
 func _on_main_menu_start_requested(player_count: int) -> void:
 	match_menu.set_next_player_count(player_count)
+	if GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_CONQUEST:
+		# 当前过关斩将存档；读取成功即恢复上次对局，文件缺失或损坏时按普通新开局处理。
+		var conquest_save_data: Dictionary = ConquestSaveStore.read_save()
+		if not conquest_save_data.is_empty():
+			if _on_conquest_resume_requested(conquest_save_data):
+				main_menu.confirm_game_started()
+			return
 	if _on_restart_requested(player_count):
 		main_menu.confirm_game_started()
 
@@ -1207,6 +1218,8 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
 	_snapshot = snapshot
 	match_menu.set_match_mode(str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity")))
+	# 临时退出预约状态同步；权威端在预约、取消或存档生效时都会广播快照，按钮文字始终跟随真实状态。
+	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
 	_refresh_match_menu_authority_controls()
 	_player_snapshots_by_id.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
@@ -2859,6 +2872,25 @@ func _on_restart_requested(player_count: int) -> bool:
 		if not main_menu.visible:
 			match_menu.restore_after_restart_failure()
 		return false
+	_reset_presentation_for_new_match()
+	# 当前开局结果；控制器同步返回后才能决定保留主菜单、恢复主菜单或进入新一局选将。
+	var match_started: bool = match_controller.start_match(player_count)
+	if match_started and match_controller.state != null and str(match_controller.state.match_mode) == GameSettings.MATCH_MODE_CONQUEST:
+		# 全新过关斩将开局意味着放弃上一次临时退出的进度；清除旧存档并恢复主菜单主按钮文字。
+		ConquestSaveStore.clear_save()
+		main_menu.refresh_start_button_text()
+	if not match_started and match_controller.state != null and not main_menu.visible:
+		match_menu.restore_after_restart_failure()
+	elif not match_started and not main_menu.visible:
+		# 当前重开失败原因；控制器正常会先发出 action_rejected，空值仅作为未知扩展失败的稳定兜底。
+		var failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法重新开始游戏，请检查数据配置后重试。"
+		main_menu.set_next_player_count(player_count)
+		main_menu.restore_after_failed_restart(failure_message)
+	return match_started
+
+
+## 清空上一局残留的全部本地表现与临时交互状态；普通重开与存档恢复开局共用本入口。
+func _reset_presentation_for_new_match() -> void:
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
@@ -2887,16 +2919,64 @@ func _on_restart_requested(player_count: int) -> bool:
 	_identity_marks.clear()
 	_identity_mark_target_id = -1
 	_suppressed_group_trick_uid = -1
-	# 当前开局结果；控制器同步返回后才能决定保留主菜单、恢复主菜单或进入新一局选将。
-	var match_started: bool = match_controller.start_match(player_count)
-	if not match_started and match_controller.state != null and not main_menu.visible:
-		match_menu.restore_after_restart_failure()
-	elif not match_started and not main_menu.visible:
-		# 当前重开失败原因；控制器正常会先发出 action_rejected，空值仅作为未知扩展失败的稳定兜底。
-		var failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法重新开始游戏，请检查数据配置后重试。"
-		main_menu.set_next_player_count(player_count)
-		main_menu.restore_after_failed_restart(failure_message)
-	return match_started
+
+
+## 从存档恢复上一局过关斩将；失败时清除无法继续的存档并把具体原因反馈到主菜单入口。
+func _on_conquest_resume_requested(save_data: Dictionary) -> bool:
+	if match_controller.network_gateway.is_lan_client() or match_controller.network_gateway.is_lan_host():
+		match_controller.action_rejected.emit("局域网会话中不能继续过关斩将存档。")
+		return false
+	_last_action_rejection_message = ""
+	# 恢复前置校验错误；失败时不清理旧表现，主菜单保持可见并提示玩家。
+	var resume_validation_error: String = match_controller.get_conquest_resume_validation_error(save_data)
+	if not resume_validation_error.is_empty():
+		# 无法继续的存档保留只会让“继续上次游戏”按钮永远失败；清除后玩家可直接开始新的一局。
+		ConquestSaveStore.clear_save()
+		main_menu.refresh_start_button_text()
+		main_menu.show_start_error("%s存档已清除，可重新开始新对局。" % resume_validation_error)
+		return false
+	_reset_presentation_for_new_match()
+	# 恢复结果；校验已提前通过，此处失败属于罕见的运行时异常，同样清档避免入口死循环。
+	var match_resumed: bool = match_controller.resume_conquest_match(save_data)
+	if not match_resumed:
+		ConquestSaveStore.clear_save()
+		main_menu.refresh_start_button_text()
+		var resume_failure_message: String = _last_action_rejection_message if not _last_action_rejection_message.is_empty() else "无法继续上次对局，存档已清除。"
+		main_menu.show_start_error(resume_failure_message)
+	return match_resumed
+
+
+## 转发局内菜单的临时退出切换请求；按权威当前预约状态在预约与取消之间切换，并立即回写按钮文字。
+func _on_conquest_temporary_exit_toggle_requested() -> void:
+	if match_controller.is_conquest_temporary_exit_requested():
+		match_controller.cancel_conquest_temporary_exit()
+	else:
+		match_controller.request_conquest_temporary_exit()
+	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
+
+
+## 接收控制器在回合边界发出的临时退出存档；写入本地文件后按标准返回主菜单流程结束当前会话。
+## 文件写入失败时仍按玩家意图退出，但保留旧存档文件并弹出提醒，避免静默丢失更早的进度。
+func _on_conquest_exit_save_ready(save_data: Dictionary) -> void:
+	# 存档写入结果；成功后主菜单的“开始游戏”会因存在存档而显示“继续上次游戏”。
+	var save_written: bool = ConquestSaveStore.write_save(save_data)
+	if not save_written and information_box != null and is_instance_valid(information_box):
+		information_box.show_notice("过关斩将进度写入失败，本次临时退出未生成新存档。")
+	match_menu.set_conquest_exit_armed(false)
+	# 下一局模式保持过关斩将；重新打开游戏后主菜单会直接选中该模式并显示继续入口。
+	if GameSettings != null:
+		GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_CONQUEST)
+	# 延迟一帧再拆除对局运行时；存档信号发自回合边界的规则调用栈内部，直接同步拆除存在重入风险。
+	call_deferred("_on_main_menu_requested")
+
+
+## 过关斩将终局时清除临时退出存档；对局已经分出胜负，上一次临时退出的进度不再具有继续意义。
+func _on_match_finished_for_conquest_save(_winner: String) -> void:
+	if match_controller.state == null or str(match_controller.state.match_mode) != GameSettings.MATCH_MODE_CONQUEST:
+		return
+	ConquestSaveStore.clear_save()
+	match_menu.set_conquest_exit_armed(false)
+	main_menu.refresh_start_button_text()
 
 
 ## 退出当前权威对局并恢复主菜单；局内表现保留在主菜单下方但不再获得焦点或规则更新。

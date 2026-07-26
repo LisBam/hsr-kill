@@ -199,6 +199,76 @@ func _init(id: int = -1, name: String = "玩家") -> void:
 	display_name = name
 
 
+## 从权威存档字典完整恢复一名玩家状态；仅供过关斩将等离线存档恢复使用。
+## 输入必须来自 to_dict(player_id, true) 加上存档流程补充的 slash_count、skipped_phases、
+## wooden_ox_used、turn_history、response_history、damage_history 字段；网络裁剪快照不含足够信息。
+## dying 与 auto_managed_offline 属于运行期瞬态，恢复后固定为 false，由后续对局流程重新建立。
+static func from_authoritative_dict(data: Dictionary) -> PlayerState:
+	# 恢复后的玩家状态；稳定 ID 与显示名先落定，其余字段逐项从存档回填。
+	var player: PlayerState = PlayerState.new(int(data.get("player_id", -1)), str(data.get("display_name", "玩家")))
+	player.character_id = str(data.get("character_id", ""))
+	player.character_generation = int(data.get("character_generation", 0))
+	player.character_revealed = bool(data.get("character_revealed", false))
+	player.identity = str(data.get("identity", "rebel"))
+	player.identity_revealed = bool(data.get("identity_revealed", false))
+	player.hp = int(data.get("hp", 4))
+	player.max_hp = int(data.get("max_hp", 4))
+	player.shield = maxi(int(data.get("shield", 0)), 0)
+	player.alive = bool(data.get("alive", true))
+	player.dying = false
+	player.death_confirmed = bool(data.get("death_confirmed", false))
+	player.out_of_game = bool(data.get("out_of_game", false))
+	player.out_of_game_until_round = int(data.get("out_of_game_until_round", -1))
+	player.chained = bool(data.get("chained", false))
+	player.face_down = bool(data.get("face_down", false))
+	player.non_locked_skills_disabled = bool(data.get("non_locked_skills_disabled", false))
+	player.non_locked_skill_disable_sources = (data.get("non_locked_skill_disable_sources", {}) as Dictionary).duplicate(true)
+	player.character_corner_text = str(data.get("character_corner_text", ""))
+	player.character_corner_text_entries = (data.get("character_corner_text_entries", {}) as Dictionary).duplicate(true)
+	player.public_marks = (data.get("public_marks", {}) as Dictionary).duplicate(true)
+	player.auto_managed = bool(data.get("auto_managed", false))
+	player.auto_managed_offline = false
+	player.wine_used = bool(data.get("wine_used", false))
+	player.wine_bonus = int(data.get("wine_bonus", 0))
+	player.slash_count = int(data.get("slash_count", 0))
+	player.skipped_phases = (data.get("skipped_phases", {}) as Dictionary).duplicate(true)
+	player.wooden_ox_used = bool(data.get("wooden_ox_used", false))
+	for card_data_variant: Variant in data.get("hand", []) as Array:
+		player.hand.append(CardInstance.from_dict(card_data_variant as Dictionary))
+	# 存档中的装备区；槽位名保持 weapon/armor/offensive_mount/defensive_mount/treasure 稳定协议。
+	var equipment_data: Dictionary = data.get("equipment", {}) as Dictionary
+	for slot_variant: Variant in equipment_data.keys():
+		player.equipment[str(slot_variant)] = CardInstance.from_dict(equipment_data[slot_variant] as Dictionary)
+	for card_data_variant: Variant in data.get("judgment_area", []) as Array:
+		player.judgment_area.append(CardInstance.from_dict(card_data_variant as Dictionary))
+	for card_data_variant: Variant in data.get("wooden_ox_storage", []) as Array:
+		player.wooden_ox_storage.append(CardInstance.from_dict(card_data_variant as Dictionary))
+	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
+	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
+	for opportunity_id_variant: Variant in data.get("acquired_opportunity_ids", []) as Array:
+		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
+	player.hand_limit_bonus = int(data.get("hand_limit_bonus", 0))
+	player.mode_hand_limit_bonus = int(data.get("mode_hand_limit_bonus", 0))
+	player.card_use_history = (data.get("card_use_history", {}) as Dictionary).duplicate(true)
+	player.play_phase_card_use_history = (data.get("play_phase_card_use_history", {}) as Dictionary).duplicate(true)
+	for entry_variant: Variant in data.get("turn_history", []) as Array:
+		player.turn_history.append((entry_variant as Dictionary).duplicate(true))
+	for entry_variant: Variant in data.get("response_history", []) as Array:
+		player.response_history.append((entry_variant as Dictionary).duplicate(true))
+	for entry_variant: Variant in data.get("damage_history", []) as Array:
+		player.damage_history.append((entry_variant as Dictionary).duplicate(true))
+	player.total_damage_dealt = int(data.get("total_damage_dealt", 0))
+	player.total_damage_received = int(data.get("total_damage_received", 0))
+	player.total_healing_done = int(data.get("total_healing_done", 0))
+	player.total_cards_drawn = int(data.get("total_cards_drawn", 0))
+	player.total_kill_count = int(data.get("total_kill_count", 0))
+	player.damage_taken_count = int(data.get("damage_taken_count", 0))
+	player.ai_failed_card_target_ids = (data.get("ai_failed_card_target_ids", {}) as Dictionary).duplicate(true)
+	for entry_variant: Variant in data.get("skill_history", []) as Array:
+		player.skill_history.append((entry_variant as Dictionary).duplicate(true))
+	return player
+
+
 ## 返回当前武器实体牌；未装备武器时返回 null。
 func get_weapon() -> CardInstance:
 	return equipment.get("weapon") as CardInstance

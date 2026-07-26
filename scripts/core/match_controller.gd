@@ -48,6 +48,10 @@ signal character_selection_changed(snapshot: Dictionary)
 ## 报告只包含可序列化诊断字段（修复级别、动作列表、阶段），不携带事件对象或内部队列引用。
 signal self_repair_performed(repair_report: Dictionary)
 
+## 过关斩将临时退出存档就绪信号；玩家预约临时退出后，控制器在下一个干净回合边界构建完整存档并发出。
+## 存档字典只包含可序列化数据；文件写入与返回主菜单由界面层负责，规则核心不接触文件系统。
+signal conquest_exit_save_ready(save_data: Dictionary)
+
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
 @export var default_deck_id: String = "standard_162"
 
@@ -224,6 +228,10 @@ var _conquest_replacement_transition_active: bool = false
 
 ## 过关斩将换将期间冻结事件树的全局暂停令牌；-1表示未冻结，只阻止规则推进而不暂停弃牌动画与界面输入。
 var _conquest_replacement_settlement_pause_token: int = -1
+
+## 过关斩将临时退出预约标志；true 表示玩家已请求在当前结算完成后的下一个干净回合边界存档退出。
+## 只在离线过关斩将中由界面入口写入，回合边界成功存档、取消预约或重新开局都会恢复 false。
+var _conquest_temporary_exit_requested: bool = false
 
 ## 触发器排序组件；保留与同步 RuleEventBus 的兼容边界，逐步承载技能时机排序。
 var trigger_manager: TriggerManager
@@ -1011,32 +1019,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	if not validation_error.is_empty():
 		action_rejected.emit(validation_error)
 		return false
-	if game_flow_pacer != null:
-		game_flow_pacer.cancel_all()
-	_cancel_conquest_replacement_opportunity_preview()
-	if opportunity_system != null:
-		opportunity_system.shutdown()
-	if conquest_mode != null:
-		conquest_mode.reset()
-	_uninstall_all_character_skills()
-	_uninstall_all_card_runtimes()
-	_extra_turn_queue.clear()
-	_extra_turn_resume_player_ids.clear()
-	_current_turn_is_extra = false
-	_extra_play_phase_counts.clear()
-	_extra_play_phase_returns_to_finish.clear()
-	_extra_play_phase_return_points.clear()
-	_active_extra_play_phase_context.clear()
-	_main_phase_play_conversions.clear()
-	_active_converted_play_phase_context.clear()
-	_active_extra_discard_phase.clear()
-	_active_independent_play_phase.clear()
-	_pending_finish_turn_player_id = -1
-	_pending_dying_start_contexts.clear()
-	_deferred_skill_settlements.clear()
-	_rule_continuations.reset()
-	_clear_pending_judgment_request()
-	_cards_used_this_turn_by_player.clear()
+	_teardown_previous_match_runtime()
 
 	# 本局实际随机种子；全部无显式种子的入口共用解析函数，保证菜单返回、局内重开与完整重启都重新随机。
 	var resolved_match_seed: int = _resolve_match_seed(seed)
@@ -1089,74 +1072,13 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	}
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode), opportunity_enabled_mode_ids.has(actual_mode))
-	card_rules = CardRuleService.new(state, self)
-	player_mark_service = PlayerMarkService.new(state)
-	effect_resolver = CardEffectResolver.new(self, state)
-	card_movement = CardMovementService.new(state)
-	_bind_card_movement_service()
-	modifier_pipeline = RuleModifierPipeline.new()
-	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
-	trigger_manager = TriggerManager.new()
-	if timing_service == null:
-		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
-	else:
-		timing_service.configure(event_bus, trigger_manager, state)
-	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
-	skill_instances_by_player.clear()
-	card_runtime_instances.clear()
-	event_scheduler.reset()
-	_gameplay_event_pause_token = -1
-	_conquest_replacement_settlement_pause_token = -1
-	# 根事件只保存规则启动元数据；后续身份、阶段和卡牌事件通过 parent_id 关联到该入口。
-	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":state.match_mode, "match_id":state.match_id, "deck_id":state.deck_id})
-	_runtime_root_event_id = root_event.event_id
-	event_scheduler.begin_root(_runtime_root_event_id, true)
-	if is_gameplay_paused():
-		_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
-	state.current_event_id = _runtime_root_event_id
-	state.event_history = event_scheduler.get_event_history_reference_copy()
+	_rebuild_match_rule_services_and_root_event()
 	character_selection = CharacterSelectionService.new()
 	wheel_duel_selection = WheelDuelSelectionService.new() if actual_mode == IdentityRules.MODE_WHEEL_DUEL else null
 	conquest_mode = ConquestModeService.new() if actual_mode == IdentityRules.MODE_CONQUEST else null
 	ai_character_adjustment = AICharacterAdjustmentService.new()
 	starting_hand_mulligan = StartingHandMulliganService.new()
-	_starting_hand_count = 4
-	_ai_drive_token += 1
-	_scheduled_ai_drive_token = -1
-	_scheduled_ai_choice_request_id = -1
-	_ai_choice_submit_failures.clear()
-	_ai_actions_this_turn = 0
-	_pending_card_choice.clear()
-	_pending_negation_choices.clear()
-	_deferred_skill_settlements.clear()
-	_pending_dying_start_contexts.clear()
-	_rule_continuations.reset()
-	_negation_round_sequence = 0
-	_resolved_card_choice_uids.clear()
-	_resolved_equipment_material_uids.clear()
-	_resolved_response_skill_id = ""
-	_negation_resume_results.clear()
-	_active_card_resolutions.clear()
-	_card_use_contexts.clear()
-	_hand_view_as_turn_expiries.clear()
-	_pending_damage_finalizations.clear()
-	_conquest_replacement_transition_active = false
-	_started_phase_lifecycles.clear()
-	_queued_equipment_triggers.clear()
-	_current_turn_event_id = -1
-	_play_choice_request_id = -1
-	_play_choice_event_id = -1
-	_play_choice_actor_id = -1
-	_play_choice_match_id = ""
-	_card_presentation_sequence = 0
-	_draw_presentation_batch_sequence = 0
-	_active_draw_presentation_batch.clear()
-	_judgment_flow_token += 1
-	_judgment_flow_in_progress = false
-	_judgment_resume_needs_result_pause = false
-	_clear_pending_judgment_request()
-	ai_coordinator._policies.clear()
-	_ai_submission_depth_by_player.clear()
+	_reset_per_match_progress_state()
 
 	_create_players(actual_player_count, uses_automatic_match_seed)
 	# 最终离线主操作者；自动斗地主防重复可能在创建玩家前改选本地座次，控制归属必须以调整后的稳定ID为准。
@@ -1200,11 +1122,118 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	return true
 
 
+## 释放上一局全部运行时残留；普通开局与存档恢复开局共用本入口，保证两条路径的清理清单不彼此漂移。
+## 包含流程计时器、机缘组件、过关斩将服务、技能与卡牌运行时实例、额外回合与阶段队列、规则续接和判定请求。
+func _teardown_previous_match_runtime() -> void:
+	if game_flow_pacer != null:
+		game_flow_pacer.cancel_all()
+	_cancel_conquest_replacement_opportunity_preview()
+	if opportunity_system != null:
+		opportunity_system.shutdown()
+	if conquest_mode != null:
+		conquest_mode.reset()
+	_uninstall_all_character_skills()
+	_uninstall_all_card_runtimes()
+	_conquest_temporary_exit_requested = false
+	_extra_turn_queue.clear()
+	_extra_turn_resume_player_ids.clear()
+	_current_turn_is_extra = false
+	_extra_play_phase_counts.clear()
+	_extra_play_phase_returns_to_finish.clear()
+	_extra_play_phase_return_points.clear()
+	_active_extra_play_phase_context.clear()
+	_main_phase_play_conversions.clear()
+	_active_converted_play_phase_context.clear()
+	_active_extra_discard_phase.clear()
+	_active_independent_play_phase.clear()
+	_pending_finish_turn_player_id = -1
+	_pending_dying_start_contexts.clear()
+	_deferred_skill_settlements.clear()
+	_rule_continuations.reset()
+	_clear_pending_judgment_request()
+	_cards_used_this_turn_by_player.clear()
+
+
+## 以当前 state 重建全部规则服务并创建新的长期根事件；普通开局与存档恢复开局共用本入口。
+## 调用前 state 必须已经创建并写入 match_id、match_mode 与 deck_id，根事件元数据直接引用这些字段。
+func _rebuild_match_rule_services_and_root_event() -> void:
+	card_rules = CardRuleService.new(state, self)
+	player_mark_service = PlayerMarkService.new(state)
+	effect_resolver = CardEffectResolver.new(self, state)
+	card_movement = CardMovementService.new(state)
+	_bind_card_movement_service()
+	modifier_pipeline = RuleModifierPipeline.new()
+	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
+	trigger_manager = TriggerManager.new()
+	if timing_service == null:
+		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
+	else:
+		timing_service.configure(event_bus, trigger_manager, state)
+	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
+	skill_instances_by_player.clear()
+	card_runtime_instances.clear()
+	event_scheduler.reset()
+	_gameplay_event_pause_token = -1
+	_conquest_replacement_settlement_pause_token = -1
+	# 根事件只保存规则启动元数据；后续身份、阶段和卡牌事件通过 parent_id 关联到该入口。
+	var root_event: GameEvent = event_scheduler.create_event("RootGameEvent", "root", [], {"rules_snapshot":"noname-v1.10.16", "mode":state.match_mode, "match_id":state.match_id, "deck_id":state.deck_id})
+	_runtime_root_event_id = root_event.event_id
+	event_scheduler.begin_root(_runtime_root_event_id, true)
+	if is_gameplay_paused():
+		_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
+	state.current_event_id = _runtime_root_event_id
+	state.event_history = event_scheduler.get_event_history_reference_copy()
+
+
+## 重置所有按局清零的进度、AI 调度与请求字段；普通开局与存档恢复开局共用本入口。
+## 该函数不接触 state 的玩家或牌区数据，只保证控制器的每局私有游标从干净状态开始。
+func _reset_per_match_progress_state() -> void:
+	_starting_hand_count = 4
+	_ai_drive_token += 1
+	_scheduled_ai_drive_token = -1
+	_scheduled_ai_choice_request_id = -1
+	_ai_choice_submit_failures.clear()
+	_ai_actions_this_turn = 0
+	_pending_card_choice.clear()
+	_pending_negation_choices.clear()
+	_deferred_skill_settlements.clear()
+	_pending_dying_start_contexts.clear()
+	_rule_continuations.reset()
+	_negation_round_sequence = 0
+	_resolved_card_choice_uids.clear()
+	_resolved_equipment_material_uids.clear()
+	_resolved_response_skill_id = ""
+	_negation_resume_results.clear()
+	_active_card_resolutions.clear()
+	_card_use_contexts.clear()
+	_hand_view_as_turn_expiries.clear()
+	_pending_damage_finalizations.clear()
+	_conquest_replacement_transition_active = false
+	_started_phase_lifecycles.clear()
+	_queued_equipment_triggers.clear()
+	_current_turn_event_id = -1
+	_play_choice_request_id = -1
+	_play_choice_event_id = -1
+	_play_choice_actor_id = -1
+	_play_choice_match_id = ""
+	_card_presentation_sequence = 0
+	_draw_presentation_batch_sequence = 0
+	_active_draw_presentation_batch.clear()
+	_judgment_flow_token += 1
+	_judgment_flow_in_progress = false
+	_judgment_resume_needs_result_pause = false
+	_clear_pending_judgment_request()
+	ai_coordinator._policies.clear()
+	_ai_submission_depth_by_player.clear()
+
+
 ## 丢弃已进入初始化阶段但未能建立选将流程的半成品对局；失败后控制器恢复与首次进入主菜单相同的空状态。
 func _discard_failed_match_start() -> void:
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
 	_cancel_conquest_replacement_opportunity_preview()
+	# 临时退出预约随对局一同丢弃；主动放弃对局后旧预约不得影响下一局的回合边界。
+	_conquest_temporary_exit_requested = false
 	if opportunity_system != null:
 		opportunity_system.shutdown()
 	_uninstall_all_character_skills()
@@ -9273,6 +9302,9 @@ func _execute_scheduled_phase_transition(expected_match_id: String, player_id: i
 func _start_turn(player_id: int) -> void:
 	if state.game_over:
 		return
+	# 已预约的过关斩将临时退出在干净回合边界优先生效；此时上一回合结算已完整结束，新回合尚未产生任何状态变化。
+	if _try_capture_conquest_temporary_exit(player_id):
+		return
 	# 上一回合残留的出牌选择；必须先从真实事件栈移除，新的阶段与 CardUseEvent 才能进入根事件。
 	_cancel_active_play_choice("turn_changed")
 	_started_phase_lifecycles.clear()
@@ -12313,6 +12345,352 @@ func _release_conquest_replacement_settlement_pause() -> void:
 	var pause_token: int = _conquest_replacement_settlement_pause_token
 	_conquest_replacement_settlement_pause_token = -1
 	event_scheduler.resume(pause_token, "conquest_replacement_completed")
+
+
+## 判断当前对局是否支持过关斩将临时退出存档；仅离线进行中的过关斩将可以预约，局域网与终局一律拒绝。
+func supports_conquest_temporary_exit() -> bool:
+	if state == null or state.game_over or conquest_mode == null:
+		return false
+	if str(state.match_mode) != IdentityRules.MODE_CONQUEST:
+		return false
+	return network_gateway == null or network_gateway.mode == NetworkGateway.Mode.OFFLINE
+
+
+## 返回玩家是否已经预约临时退出；界面按钮据此在“临时退出”和“取消临时退出”之间切换。
+func is_conquest_temporary_exit_requested() -> bool:
+	return _conquest_temporary_exit_requested
+
+
+## 预约过关斩将临时退出；真正的存档与退出发生在当前结算完整结束后的下一个干净回合边界。
+## 返回是否成功预约；重复预约保持已预约状态并同样返回true。
+func request_conquest_temporary_exit() -> bool:
+	if not supports_conquest_temporary_exit():
+		return false
+	if not _conquest_temporary_exit_requested:
+		_conquest_temporary_exit_requested = true
+		add_log("已预约临时退出：当前结算完成后将保存进度并返回主菜单。")
+		_emit_state()
+	return true
+
+
+## 取消尚未生效的临时退出预约；存档尚未写出，本局继续正常进行。返回是否实际取消了一次预约。
+func cancel_conquest_temporary_exit() -> bool:
+	if not _conquest_temporary_exit_requested:
+		return false
+	_conquest_temporary_exit_requested = false
+	if state != null and not state.game_over:
+		add_log("已取消临时退出预约，本局继续进行。")
+		_emit_state()
+	return true
+
+
+## 在回合边界尝试执行已预约的临时退出；条件满足时构建完整存档并发出信号交给界面层保存退出。
+## 返回true表示本回合不再开始，界面层会在收到信号后写入存档文件并返回主菜单。
+## 额外回合链、换将过渡、处理区残留或任何未排空的选择都表示边界不干净，此时保持预约等待下一个普通回合。
+func _try_capture_conquest_temporary_exit(next_turn_player_id: int) -> bool:
+	if not _conquest_temporary_exit_requested or state == null or state.game_over or conquest_mode == null:
+		return false
+	if _current_turn_is_extra or not _extra_turn_queue.is_empty() or _conquest_replacement_transition_active:
+		return false
+	if not state.processing_area.is_empty() or has_pending_card_choice() or has_pending_judgment_request():
+		return false
+	# 下一回合角色；死亡或无效角色说明边界仍处于死亡结算过渡，交由后续流程继续推进。
+	var next_player: PlayerState = state.get_player(next_turn_player_id)
+	if next_player == null or not next_player.alive:
+		return false
+	_conquest_temporary_exit_requested = false
+	# 完整存档字典；构建过程只读取权威状态，不修改任何规则数据。
+	var save_data: Dictionary = _build_conquest_save_data(next_turn_player_id)
+	add_log("已保存过关斩将进度：第%d关，下一回合由%s开始。" % [conquest_mode.get_level(), next_player.display_name])
+	conquest_exit_save_ready.emit(save_data)
+	return true
+
+
+## 构建当前回合边界的完整过关斩将存档字典；所有字段均可被 var_to_str 序列化，不包含节点或回调引用。
+## 存档捕获点固定为“上一回合完整结算结束、下一回合尚未开始”，因此不需要保存事件栈、选择请求或阶段游标。
+func _build_conquest_save_data(next_turn_player_id: int) -> Dictionary:
+	# 玩家存档数组；以本人视角加 reveal_private 序列化，包含手牌、装备、判定区与“粮”的完整牌面。
+	var players_data: Array = []
+	for player: PlayerState in state.players:
+		# 单名玩家的权威快照；网络快照缺少的每回合字段与完整历史在此补充，供恢复后技能查询保持一致。
+		var player_data: Dictionary = player.to_dict(player.player_id, true)
+		player_data["slash_count"] = player.slash_count
+		player_data["wooden_ox_used"] = player.wooden_ox_used
+		player_data["skipped_phases"] = player.skipped_phases.duplicate(true)
+		player_data["turn_history"] = player.turn_history.duplicate(true)
+		player_data["response_history"] = player.response_history.duplicate(true)
+		player_data["damage_history"] = player.damage_history.duplicate(true)
+		players_data.append(player_data)
+	# 摸牌堆存档；保持数组顺序（末尾为牌堆顶），恢复后摸牌序列与临时退出前完全一致。
+	var draw_pile_data: Array = []
+	for draw_card: CardInstance in state.draw_pile:
+		draw_pile_data.append(draw_card.to_dict())
+	# 弃牌堆存档；保持进入顺序，重洗规则依赖该顺序的稳定性。
+	var discard_pile_data: Array = []
+	for discard_card: CardInstance in state.discard_pile:
+		discard_pile_data.append(discard_card.to_dict())
+	return {
+		"save_version": ConquestSaveStore.SAVE_FORMAT_VERSION,
+		"saved_at_unix": int(Time.get_unix_time_from_system()),
+		"match_mode": IdentityRules.MODE_CONQUEST,
+		"deck_id": state.deck_id,
+		"random_seed": state.random_seed,
+		"rng_state": _rng.state,
+		"card_next_uid": CardInstance._next_uid,
+		"match_options": state.match_options.duplicate(true),
+		"conquest_state": state.conquest_state.duplicate(true),
+		"round_number": state.round_number,
+		"turn_number": state.turn_number,
+		"action_sequence": state.action_sequence,
+		"next_turn_player_id": next_turn_player_id,
+		"players": players_data,
+		"draw_pile": draw_pile_data,
+		"discard_pile": discard_pile_data,
+		"skill_runtime_states": _capture_skill_runtime_states(),
+		"hand_view_as_turn_expiries": _hand_view_as_turn_expiries.duplicate(true),
+	}
+
+
+## 捕获全部已安装技能实例的可序列化脚本变量；限定技已用标记、每轮限一次记录等跨回合状态借此进入存档。
+## 只保存基础类型与纯数据容器，Object、Callable 等引用类型自动跳过，由恢复流程的 bind/install 重新建立。
+func _capture_skill_runtime_states() -> Dictionary:
+	# 按玩家分组的技能状态；键为稳定玩家ID，值为“技能ID→脚本变量字典”。
+	var result: Dictionary = {}
+	for player_id_variant: Variant in skill_instances_by_player.keys():
+		# 当前玩家的技能状态集合；没有任何可序列化变量的技能不产生条目。
+		var player_states: Dictionary = {}
+		var player_skills: Dictionary = skill_instances_by_player[player_id_variant] as Dictionary
+		for skill_id_variant: Variant in player_skills.keys():
+			# 当前技能实例；卸载竞态下的空实例直接跳过。
+			var skill: SkillDefinition = player_skills[skill_id_variant] as SkillDefinition
+			if skill == null:
+				continue
+			# 当前技能的可序列化脚本变量；包含基类的持有者与代次字段，恢复时按同名覆盖。
+			var skill_state: Dictionary = {}
+			for property: Dictionary in skill.get_property_list():
+				if (int(property.get("usage", 0)) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
+					continue
+				# 当前脚本变量名；引用类型的值会在下方序列化检查中被过滤。
+				var property_name: String = str(property.get("name", ""))
+				# 当前变量值；数组与字典深复制，防止存档字典与运行实例共享可变容器。
+				var property_value: Variant = skill.get(property_name)
+				if not _is_persistable_skill_runtime_value(property_value):
+					continue
+				if property_value is Dictionary:
+					skill_state[property_name] = (property_value as Dictionary).duplicate(true)
+				elif property_value is Array:
+					skill_state[property_name] = (property_value as Array).duplicate(true)
+				else:
+					skill_state[property_name] = property_value
+			if not skill_state.is_empty():
+				player_states[str(skill_id_variant)] = skill_state
+		if not player_states.is_empty():
+			result[int(player_id_variant)] = player_states
+	return result
+
+
+## 判断一个技能脚本变量值是否允许进入存档；只接受空值、布尔、数字、字符串与只含这些类型的数组或字典。
+func _is_persistable_skill_runtime_value(value: Variant) -> bool:
+	match typeof(value):
+		TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME:
+			return true
+		TYPE_ARRAY:
+			for item_variant: Variant in value as Array:
+				if not _is_persistable_skill_runtime_value(item_variant):
+					return false
+			return true
+		TYPE_DICTIONARY:
+			for key_variant: Variant in (value as Dictionary).keys():
+				if not _is_persistable_skill_runtime_value(key_variant) or not _is_persistable_skill_runtime_value((value as Dictionary)[key_variant]):
+					return false
+			return true
+		_:
+			return false
+
+
+## 把存档中的技能脚本变量写回已重新安装的技能实例；实例或变量已不存在时静默跳过对应条目。
+func _apply_skill_runtime_states(saved_states: Dictionary) -> void:
+	for player_id_variant: Variant in saved_states.keys():
+		# 当前玩家的技能实例表；恢复流程已按存档角色重新安装全部技能。
+		var player_skills: Dictionary = skill_instances_by_player.get(int(player_id_variant), {}) as Dictionary
+		var saved_player_states: Dictionary = saved_states[player_id_variant] as Dictionary
+		for skill_id_variant: Variant in saved_player_states.keys():
+			# 目标技能实例；武将或技能目录变化导致缺失时放弃该技能的状态恢复。
+			var skill: SkillDefinition = player_skills.get(str(skill_id_variant)) as SkillDefinition
+			if skill == null:
+				continue
+			var skill_state: Dictionary = saved_player_states[skill_id_variant] as Dictionary
+			for property_name_variant: Variant in skill_state.keys():
+				skill.set(str(property_name_variant), skill_state[property_name_variant])
+
+
+## 校验一份过关斩将存档能否在当前环境恢复；返回空字符串表示可以恢复，否则返回玩家可读的拒绝原因。
+## 深层内容校验覆盖角色与全部实体牌的定义存在性，防止内容更新后的旧存档把无效ID注入运行时。
+func get_conquest_resume_validation_error(save_data: Dictionary) -> String:
+	if network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return "过关斩将存档仅支持离线继续。"
+	if int(save_data.get("save_version", -1)) != ConquestSaveStore.SAVE_FORMAT_VERSION:
+		return "存档版本与当前游戏不兼容。"
+	if str(save_data.get("match_mode", "")) != IdentityRules.MODE_CONQUEST:
+		return "存档不属于过关斩将模式。"
+	# 全局数据配置校验；复用普通开局的前置检查，保证武将、卡牌与牌堆数据均已加载。
+	var base_validation_error: String = get_match_start_validation_error(2, IdentityRules.MODE_CONQUEST)
+	if not base_validation_error.is_empty():
+		return base_validation_error
+	# 玩家存档数组；过关斩将固定两名规则角色。
+	var players_data: Array = save_data.get("players", []) as Array
+	if players_data.size() != 2:
+		return "存档缺少完整的双方角色数据。"
+	# 存档中的合法玩家ID集合；下一回合角色必须属于该集合。
+	var player_ids: Array[int] = []
+	for player_data_variant: Variant in players_data:
+		var player_data: Dictionary = player_data_variant as Dictionary
+		player_ids.append(int(player_data.get("player_id", -1)))
+		# 存档武将ID；目录缺失说明内容版本不匹配。
+		var character_id: String = str(player_data.get("character_id", ""))
+		if character_id.is_empty() or GameDatabase.get_character(character_id).is_empty():
+			return "存档中的武将在当前版本中不存在。"
+		# 该玩家全部区域实体牌；任何一张定义缺失都拒绝恢复。
+		for zone_key: String in ["hand", "judgment_area", "wooden_ox_storage"]:
+			for card_data_variant: Variant in player_data.get(zone_key, []) as Array:
+				if not _is_saved_card_definition_valid(card_data_variant as Dictionary):
+					return "存档中的卡牌在当前版本中不存在。"
+		for equipment_data_variant: Variant in (player_data.get("equipment", {}) as Dictionary).values():
+			if not _is_saved_card_definition_valid(equipment_data_variant as Dictionary):
+				return "存档中的卡牌在当前版本中不存在。"
+	for pile_key: String in ["draw_pile", "discard_pile"]:
+		for card_data_variant: Variant in save_data.get(pile_key, []) as Array:
+			if not _is_saved_card_definition_valid(card_data_variant as Dictionary):
+				return "存档中的卡牌在当前版本中不存在。"
+	if (save_data.get("conquest_state", {}) as Dictionary).is_empty():
+		return "存档缺少过关斩将关卡状态。"
+	if not player_ids.has(int(save_data.get("next_turn_player_id", -1))):
+		return "存档缺少有效的下一回合角色。"
+	return ""
+
+
+## 判断一条实体牌存档记录的逻辑定义与原始定义是否都仍在卡牌目录中；视为牌恢复需要两个ID同时有效。
+func _is_saved_card_definition_valid(card_data: Dictionary) -> bool:
+	# 当前逻辑定义ID；手牌视为状态下保存的是临时牌名，同样必须是已登记卡牌。
+	var definition_id: String = str(card_data.get("definition_id", ""))
+	if definition_id.is_empty() or GameDatabase.get_card(definition_id).is_empty():
+		return false
+	# 原始定义ID；没有视为效果时为空字符串，存在时必须同样有效。
+	var original_definition_id: String = str(card_data.get("original_definition_id", ""))
+	return original_definition_id.is_empty() or not GameDatabase.get_card(original_definition_id).is_empty()
+
+
+## 从存档字典恢复并继续一局过关斩将；成功后直接从存档记录的下一回合角色开始行动。
+## 初始化顺序与 start_match 保持一致并复用同一组运行时重建入口，但跳过选将、起始手牌与手气卡流程。
+func resume_conquest_match(save_data: Dictionary) -> bool:
+	# 恢复前置校验错误；任何错误都在破坏旧对局状态之前同步拒绝，调用方可保留原局或提示玩家。
+	var validation_error: String = get_conquest_resume_validation_error(save_data)
+	if not validation_error.is_empty():
+		action_rejected.emit(validation_error)
+		return false
+	_teardown_previous_match_runtime()
+	# 恢复随机源；先写种子再覆盖内部状态，使后续随机序列与临时退出前完全一致。
+	_rng.seed = int(save_data.get("random_seed", 0))
+	_rng.state = int(save_data.get("rng_state", 0))
+	# 存档中的关卡状态；本地玩家固定为其中记录的过关斩将玩家稳定ID。
+	var saved_conquest_state: Dictionary = (save_data.get("conquest_state", {}) as Dictionary).duplicate(true)
+	local_human_player_id = int(saved_conquest_state.get("player_id", 0))
+	default_player_count = 2
+	CardInstance._next_uid = 1
+	state = GameState.new()
+	# 恢复局的新对局ID；使用存档时间与回合数构造，不消耗已恢复的随机序列。
+	state.match_id = "%d-resume%d" % [Time.get_unix_time_from_system(), int(save_data.get("turn_number", 0))]
+	state.match_mode = IdentityRules.MODE_CONQUEST
+	ai_coordinator.reset_identity_observations()
+	state.random_seed = int(save_data.get("random_seed", 0))
+	state.deck_id = str(save_data.get("deck_id", default_deck_id))
+	# 本局锁定选项从存档恢复；菜单当前设置只影响下一次全新开局，控制全部角色开关保持实时读取。
+	var saved_options: Dictionary = (save_data.get("match_options", {}) as Dictionary).duplicate(true)
+	_all_character_selection_enabled = bool(saved_options.get("all_character_selection_enabled", false))
+	_custom_character_assignment_enabled = false
+	_customize_ai_characters_enabled = false
+	_mulligan_limit = int(saved_options.get("mulligan_limit", 0))
+	_ai_uses_mulligan_enabled = bool(saved_options.get("ai_uses_mulligan_enabled", false))
+	_control_all_characters_enabled = network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE and local_human_player_id >= 0 and GameSettings.control_all_characters_enabled
+	saved_options["control_all_characters_enabled"] = _control_all_characters_enabled
+	_primary_offline_human_player_id = local_human_player_id
+	_offline_manually_controlled_player_id = -1
+	_character_replacement_count = int(saved_options.get("character_replacement_count", 0))
+	_character_candidate_count = int(saved_options.get("character_candidate_count", GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT))
+	character_candidate_count = _character_candidate_count
+	state.match_options = saved_options
+	if opportunity_system != null:
+		opportunity_system.configure(self, state, _rng, true, false)
+	_rebuild_match_rule_services_and_root_event()
+	character_selection = CharacterSelectionService.new()
+	wheel_duel_selection = null
+	conquest_mode = ConquestModeService.new()
+	ai_character_adjustment = AICharacterAdjustmentService.new()
+	starting_hand_mulligan = StartingHandMulliganService.new()
+	_reset_per_match_progress_state()
+	# 恢复双方角色与全部牌区；玩家保持一号位真人，其余角色重新登记基础AI策略。
+	for player_data_variant: Variant in save_data.get("players", []) as Array:
+		var restored_player: PlayerState = PlayerState.from_authoritative_dict(player_data_variant as Dictionary)
+		state.players.append(restored_player)
+		if restored_player.player_id != local_human_player_id:
+			ai_coordinator.register_basic_ai(restored_player.player_id)
+	for card_data_variant: Variant in save_data.get("draw_pile", []) as Array:
+		state.draw_pile.append(CardInstance.from_dict(card_data_variant as Dictionary))
+	for card_data_variant: Variant in save_data.get("discard_pile", []) as Array:
+		state.discard_pile.append(CardInstance.from_dict(card_data_variant as Dictionary))
+	# 实体UID游标下限；from_dict 已按最大恢复UID推进，此处只兜底保证新实体不与存档实体碰撞。
+	CardInstance._next_uid = maxi(CardInstance._next_uid, int(save_data.get("card_next_uid", 1)))
+	state.conquest_state = saved_conquest_state
+	conquest_mode.restore(state, _rng)
+	state.round_number = int(save_data.get("round_number", 0))
+	state.turn_number = int(save_data.get("turn_number", 0))
+	state.action_sequence = int(save_data.get("action_sequence", 0))
+	# 手牌限时视为到期表；键为实体UID，var_to_str 保留整数键，逐项转换只为防御外部构造的字符串键。
+	_hand_view_as_turn_expiries.clear()
+	var saved_expiries: Dictionary = save_data.get("hand_view_as_turn_expiries", {}) as Dictionary
+	for card_uid_variant: Variant in saved_expiries.keys():
+		_hand_view_as_turn_expiries[int(card_uid_variant)] = (saved_expiries[card_uid_variant] as Dictionary).duplicate(true)
+	_record_runtime_event("identity.start", "mode", {"player_count":state.players.size(), "seed":state.random_seed, "mode":state.match_mode, "resumed_from_save":true})
+	# 重新安装武将固有技能与模式技能，再补装存档中的获得技能与临时技能，最后回写全部技能内部状态。
+	_install_all_character_skills()
+	for restored_player: PlayerState in state.players:
+		_reinstall_saved_runtime_skills(restored_player)
+	_apply_skill_runtime_states(save_data.get("skill_runtime_states", {}) as Dictionary)
+	add_log("继续上次的过关斩将：第%d关，第%d轮，第%d回合。" % [conquest_mode.get_level(), maxi(state.round_number, 1), state.turn_number + 1])
+	# 恢复完成后的过渡阶段；与普通开局的回合前窗口保持同名，避免快照短暂显示无效初始化阶段。
+	state.current_phase = "round_start"
+	_emit_state()
+	_start_turn(int(save_data.get("next_turn_player_id", local_human_player_id)))
+	return true
+
+
+## 为一名恢复角色补装存档记录的获得技能与临时技能实例；固有技能已由统一安装入口创建，不会重复订阅。
+## 本入口不改写 acquired_skills 或 temporary_skills 记录，存档中的剩余次数与到期轮数保持原值。
+func _reinstall_saved_runtime_skills(player: PlayerState) -> void:
+	if player == null:
+		return
+	# 当前玩家技能实例表；固有与模式技能在统一安装入口已经写入。
+	var player_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
+	# 待补装技能ID；获得技能与临时技能共用同一运行时容器，同名只安装一次。
+	var runtime_skill_ids: Array[String] = []
+	for skill_id_variant: Variant in player.acquired_skills.keys():
+		runtime_skill_ids.append(str(skill_id_variant))
+	for skill_id_variant: Variant in player.temporary_skills.keys():
+		# 当前临时技能ID；已在获得技能列表中时不重复登记。
+		var temporary_skill_id: String = str(skill_id_variant)
+		if not runtime_skill_ids.has(temporary_skill_id):
+			runtime_skill_ids.append(temporary_skill_id)
+	for skill_id: String in runtime_skill_ids:
+		if player_skills.has(skill_id):
+			continue
+		# 新技能运行时实例；目录缺失或领袖技一律跳过，对应存档记录保留但不产生实例。
+		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		if skill == null or skill.leader_skill:
+			continue
+		skill.bind(self, player.player_id)
+		player_skills[skill_id] = skill
+		skill.install()
+	skill_instances_by_player[player.player_id] = player_skills
 
 
 ## 检查身份胜负条件并结束对局。
