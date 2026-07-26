@@ -15,6 +15,9 @@ signal main_menu_requested
 ## 请求切换过关斩将临时退出预约时发出的信号；实际预约、取消与存档均由桌面调用权威控制器完成。
 signal conquest_temporary_exit_toggle_requested
 
+## 请求切换局内聊天窗口显隐时发出的信号；聊天窗口、历史与头顶气泡均由桌面统一管理，菜单只提供入口。
+signal chat_toggle_requested
+
 ## 标准身份局最少玩家人数；默认2，与 IdentityRules 支持范围一致，运行时无需动态修改。
 @export_range(2, 10, 1) var minimum_player_count: int = 2
 
@@ -23,6 +26,10 @@ signal conquest_temporary_exit_toggle_requested
 
 ## 菜单打开按钮；右上角唯一常驻入口，文字固定为“菜单”。
 @onready var _menu_button: Button = %MenuButton
+
+## 聊天窗口切换按钮；位于“菜单”按钮正下方，对离线、房主与客户端始终可见，不属于房主权威控件组。
+## 使用 get_node_or_null 防御旧场景缓存缺失该节点；缺失时聊天入口不可用但不影响其余菜单功能。
+@onready var _chat_button: Button = get_node_or_null("%MatchChatButton") as Button
 
 ## 菜单内容面板；默认隐藏，点击菜单按钮后切换可见性。
 @onready var _menu_panel: PanelContainer = %MenuPanel
@@ -152,6 +159,8 @@ func _ready() -> void:
 	# 菜单分支移动到同级节点末尾，使展开面板的输入优先于运行时创建的武将牌和选将遮罩；根节点仍忽略空白区域鼠标。
 	call_deferred("_move_to_input_front")
 	_menu_button.pressed.connect(_toggle_menu)
+	if _chat_button != null:
+		_chat_button.pressed.connect(_request_chat_toggle)
 	_restart_button.pressed.connect(_request_restart)
 	_conquest_exit_button.pressed.connect(_request_conquest_exit_toggle)
 	_main_menu_button.pressed.connect(_request_main_menu)
@@ -367,6 +376,8 @@ func refresh_ui_style() -> void:
 		return
 	_menu_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	BattleUIStyle.apply_interaction_button(_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	if _chat_button != null:
+		BattleUIStyle.apply_interaction_button(_chat_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_restart_button)
 	BattleUIStyle.apply_interaction_button(_conquest_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_main_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
@@ -715,6 +726,11 @@ func _on_game_speed_changed(interval_seconds: float) -> void:
 ## 切换菜单面板显隐；当前对局继续运行，不改变任何规则状态。
 func _toggle_menu() -> void:
 	_menu_panel.visible = not _menu_panel.visible
+
+
+## 发出聊天窗口切换请求；菜单不保存聊天窗口显隐状态，由桌面按当前窗口可见性切换。
+func _request_chat_toggle() -> void:
+	chat_toggle_requested.emit()
 
 
 ## 发出携带下一局人数的重开请求，并关闭菜单避免遮挡新一局选将界面。

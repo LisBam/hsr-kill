@@ -35,6 +35,10 @@ signal lan_reconnect_state_changed(reconnecting: bool, message: String)
 ## 权威表现事件接收信号；日志、公开卡牌动画和技能提示通过该只读通道同步，不修改客户端规则状态。
 signal game_event_received(event_type: String, event_payload: Dictionary)
 
+## 对局内聊天消息到达信号；条目含递增序号、发送者稳定玩家 ID、显示名、正文与时间文本。
+## 离线本机发言、LAN 房主中继与 LAN 客户端接收统一经过本信号，牌桌据此刷新聊天窗口并显示头顶气泡。
+signal match_chat_received(chat_entry: Dictionary)
+
 ## 通信模式；OFFLINE 本地回环，LAN 使用内置 ENet，REMOTE 交由外部传输适配器发送。
 enum Mode {
 	OFFLINE,
@@ -51,7 +55,8 @@ enum LanRole {
 
 ## 当前封包协议版本；版本6在版本5基础上新增对局会话令牌下发、断线座位预约与携令牌重连握手。
 ## 版本7在版本6基础上向大厅公共快照新增 custom_identity_enabled 自选身份开关字段。
-const PROTOCOL_VERSION: int = 7
+## 版本8在版本7基础上新增对局内聊天 match_chat 消息类型（客户端上行与房主中继下行共用）。
+const PROTOCOL_VERSION: int = 8
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -70,6 +75,12 @@ const MAX_LOBBY_CHAT_LENGTH: int = 200
 
 ## 大厅聊天历史保留上限；默认100条让后来加入者获得近期上下文，同时限制公共快照体积。
 const MAX_LOBBY_CHAT_HISTORY: int = 100
+
+## 单条对局内聊天允许的最大 Unicode 字符数；默认200与大厅聊天一致，避免超长消息撑爆聊天窗口或封包。
+const MAX_MATCH_CHAT_LENGTH: int = 200
+
+## 对局内聊天历史保留上限；默认100条覆盖整局常规交流量，同时限制聊天窗口重绘与内存开销。
+const MAX_MATCH_CHAT_HISTORY: int = 100
 
 ## 房主踢出成员后的同一远端地址重新加入冷却毫秒数；默认5000即5秒，只限制踢出流程，不影响密码错误和满员拒绝。
 const KICK_REJOIN_COOLDOWN_MSEC: int = 5000
@@ -155,6 +166,13 @@ var _lobby_chat_history: Array[Dictionary] = []
 
 ## 当前大厅聊天消息递增序号；房主每接受一条非空消息增加1，用于跨客户端稳定排序。
 var _lobby_chat_sequence: int = 0
+
+## 当前对局内聊天历史；每项含递增序号、发送者稳定玩家 ID、显示名、正文与时间文本，最多保留100条。
+## 房主保存权威历史，客户端与离线模式保存本机接收到的同构条目；新开一局时清空。
+var _match_chat_history: Array[Dictionary] = []
+
+## 当前对局内聊天消息递增序号；房主（或离线本机）每接受一条非空消息增加1，用于聊天窗口稳定排序。
+var _match_chat_sequence: int = 0
 
 ## 已由房主主动拒绝且等待底层断开的 peer ID；断开回调据此跳过重复离开广播与通用提示。
 var _rejected_lobby_peer_ids: Array[int] = []
@@ -411,6 +429,41 @@ func send_lan_lobby_chat_message(message: String) -> void:
 		_send_packet_to_peer(_build_packet("lobby_chat", {"message":sanitized_message}), SERVER_PEER_ID)
 
 
+## 发送一条对局内聊天消息；离线模式立即本地回环，LAN 房主直接登记并中继，LAN 客户端可靠上行给房主。
+## offline_sender_player_id 与 offline_sender_name 仅在离线模式使用：网关不持有离线对局的玩家信息，
+## 由牌桌传入本机第一视角玩家的稳定 ID 与显示名；LAN 模式忽略这两个参数并以连接绑定为准，客户端无法伪造署名。
+func send_match_chat_message(message: String, offline_sender_player_id: int = -1, offline_sender_name: String = "玩家") -> void:
+	# 标准化后的聊天正文；空白消息不创建历史记录或网络封包。
+	var sanitized_message: String = _sanitize_match_chat_message(message)
+	if sanitized_message.is_empty():
+		return
+	if mode == Mode.OFFLINE:
+		_match_chat_sequence += 1
+		_append_match_chat_entry(_make_match_chat_entry(_match_chat_sequence, offline_sender_player_id, offline_sender_name, sanitized_message))
+		return
+	if mode != Mode.LAN or not _lan_match_active:
+		return
+	if lan_role == LanRole.HOST:
+		_append_match_chat_message(SERVER_PEER_ID, sanitized_message)
+	elif lan_role == LanRole.CLIENT and connected:
+		_send_packet_to_peer(_build_packet("match_chat", {"message":sanitized_message}), SERVER_PEER_ID)
+
+
+## 返回当前对局内聊天历史的深拷贝；聊天窗口重建正文时使用，调用方不能修改网关内部记录。
+func get_match_chat_history() -> Array[Dictionary]:
+	# 历史副本；逐条深拷贝，保证界面持有的字典与网关权威记录互不影响。
+	var history_copy: Array[Dictionary] = []
+	for entry: Dictionary in _match_chat_history:
+		history_copy.append(entry.duplicate(true))
+	return history_copy
+
+
+## 清空对局内聊天历史与序号；离线新开一局由牌桌调用，LAN 开局与会话结束由网关内部调用。
+func clear_match_chat_history() -> void:
+	_match_chat_history.clear()
+	_match_chat_sequence = 0
+
+
 ## 房主踢出指定远端大厅成员；房主本人、未知成员和已开始对局中的成员均不能通过该入口移除。
 func kick_lan_lobby_member(peer_id: int) -> String:
 	if not is_lan_host() or _lan_match_active:
@@ -521,6 +574,8 @@ func begin_prepared_lan_match() -> void:
 	if not is_lan_host() or _peer_to_player_id.is_empty() or _lan_match_player_count < 2:
 		return
 	_lan_match_active = true
+	# 新对局开始时清空上一局的对局内聊天；大厅聊天历史保持不变，返回大厅仍可见。
+	clear_match_chat_history()
 	for peer_id_variant: Variant in _peer_to_player_id.keys():
 		# 当前真人 peer；房主本地直接发出开始信号，远端通过可靠封包接收自己的私有玩家 ID。
 		var peer_id: int = int(peer_id_variant)
@@ -950,6 +1005,10 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 			return
 		if not _lan_match_active or not _peer_to_player_id.has(sender_peer_id):
 			return
+		if message_type == "match_chat":
+			# 对局内聊天上行；发送者身份由连接绑定的稳定玩家 ID 反查，payload 自报字段一律不采信。
+			_append_match_chat_message(sender_peer_id, str(payload.get("message", "")))
+			return
 		if message_type in ["command", "choice_response"]:
 			# 权威分配的玩家 ID；任何 actor_id 不匹配的封包都在进入 MatchController 前拒绝。
 			var assigned_player_id: int = int(_peer_to_player_id.get(sender_peer_id, -1))
@@ -978,6 +1037,8 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 			choice_request_received.emit(payload)
 		elif message_type == "game_event" and _lan_match_active:
 			game_event_received.emit(str(payload.get("event_type", "")), (payload.get("event_payload", {}) as Dictionary).duplicate(true))
+		elif message_type == "match_chat" and _lan_match_active:
+			_apply_remote_match_chat(payload)
 
 
 ## 分发离线回环或外部 REMOTE 适配器封包；仅处理游戏协议消息，不处理 LAN 大厅控制消息。
@@ -1161,6 +1222,9 @@ func _apply_remote_match_start(payload: Dictionary) -> void:
 	_player_display_names[local_player_id] = _local_display_name
 	_lan_match_player_count = player_count
 	_lan_match_active = true
+	if not (_reconnecting and bool(payload.get("rejoined", false))):
+		# 新对局开始时清空上一局的对局内聊天；断线重连回到同一局时保留既有本地聊天历史。
+		clear_match_chat_history()
 	# 房主签发的会话令牌；仅保存在客户端内存，断线自动重连时作为身份凭证原样上行。
 	var session_token: String = str(payload.get("session_token", ""))
 	if not session_token.is_empty():
@@ -1223,6 +1287,52 @@ func _append_lobby_chat_message(peer_id: int, message: String) -> void:
 	while _lobby_chat_history.size() > MAX_LOBBY_CHAT_HISTORY:
 		_lobby_chat_history.pop_front()
 	_emit_lobby_state()
+
+
+## 把对局内聊天登记为房主权威历史并中继给全部远端真人；发送者稳定玩家 ID 与显示名由连接绑定反查。
+func _append_match_chat_message(peer_id: int, message: String) -> void:
+	if lan_role != LanRole.HOST or not _lan_match_active or not _peer_to_player_id.has(peer_id):
+		return
+	# 标准化后的消息；空字符串不进入历史、不产生中继封包。
+	var sanitized_message: String = _sanitize_match_chat_message(message)
+	if sanitized_message.is_empty():
+		return
+	# 发送者稳定玩家 ID；由权威 peer 映射反查，保证头顶气泡定位到真实发言者。
+	var sender_player_id: int = int(_peer_to_player_id.get(peer_id, -1))
+	_match_chat_sequence += 1
+	# 权威聊天条目；署名读取开局锁定的显示名映射，客户端不能通过 payload 伪造。
+	var entry: Dictionary = _make_match_chat_entry(_match_chat_sequence, sender_player_id, get_lan_player_display_name(sender_player_id), sanitized_message)
+	for remote_peer_variant: Variant in get_remote_player_assignments().keys():
+		_send_packet_to_peer(_build_packet("match_chat", entry), int(remote_peer_variant))
+	_append_match_chat_entry(entry)
+
+
+## 客户端应用房主中继的对局内聊天条目；逐字段重建，防止畸形封包污染本地历史。
+func _apply_remote_match_chat(payload: Dictionary) -> void:
+	# 中继正文；再次执行长度与换行标准化，空消息直接丢弃。
+	var sanitized_message: String = _sanitize_match_chat_message(str(payload.get("message", "")))
+	if sanitized_message.is_empty():
+		return
+	_append_match_chat_entry(_make_match_chat_entry(int(payload.get("sequence", 0)), int(payload.get("sender_player_id", -1)), str(payload.get("display_name", "玩家")), sanitized_message, str(payload.get("time_text", ""))))
+
+
+## 创建单个可序列化对局内聊天条目；离线本机、房主权威与客户端重建共用同一结构。
+func _make_match_chat_entry(sequence: int, sender_player_id: int, display_name: String, message: String, time_text: String = "") -> Dictionary:
+	return {
+		"sequence":sequence,
+		"sender_player_id":sender_player_id,
+		"display_name":display_name,
+		"message":message,
+		"time_text":time_text if not time_text.is_empty() else Time.get_time_string_from_system(),
+	}
+
+
+## 把聊天条目追加到本机历史并发出到达信号；历史超过上限时从最早一条开始丢弃。
+func _append_match_chat_entry(entry: Dictionary) -> void:
+	_match_chat_history.append(entry)
+	while _match_chat_history.size() > MAX_MATCH_CHAT_HISTORY:
+		_match_chat_history.pop_front()
+	match_chat_received.emit(entry.duplicate(true))
 
 
 ## 计算从0开始的最小空大厅座位；全部位置占满时返回当前人数上限作为无效标记。
@@ -1363,6 +1473,11 @@ func _sanitize_lobby_chat_message(message: String) -> String:
 	return message.replace("\r", " ").replace("\n", " ").strip_edges().left(MAX_LOBBY_CHAT_LENGTH)
 
 
+## 标准化对局内聊天正文；规则与大厅聊天一致但使用独立上限常量，两类聊天可分别调整而互不影响。
+func _sanitize_match_chat_message(message: String) -> String:
+	return message.replace("\r", " ").replace("\n", " ").strip_edges().left(MAX_MATCH_CHAT_LENGTH)
+
+
 ## 规范化大厅游戏模式稳定 ID；只有已登记选项允许保存，未知值统一回退身份模式。
 func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 	for mode_option: Dictionary in LOBBY_GAME_MODE_OPTIONS:
@@ -1434,6 +1549,8 @@ func _set_offline_state() -> void:
 	_lobby_custom_identity_enabled = false
 	_lobby_chat_history.clear()
 	_lobby_chat_sequence = 0
+	_match_chat_history.clear()
+	_match_chat_sequence = 0
 	_rejected_lobby_peer_ids.clear()
 	_local_avatar_character_id = ""
 	_pending_lobby_password = ""

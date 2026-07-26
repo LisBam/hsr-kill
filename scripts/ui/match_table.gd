@@ -48,6 +48,12 @@ const SKILL_ACTIVATION_FADE_SECONDS: float = 0.32
 ## 技能发动名称的绘制层级；默认31，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
 const SKILL_ACTIVATION_Z_INDEX: int = 31
 
+## 头顶聊天气泡的绘制层级；默认38高于技能发动提示与“记录”面板（35），低于选将遮罩（40）与聊天窗口（45）。
+const CHAT_BUBBLE_Z_INDEX: int = 38
+
+## 头顶聊天气泡与武将牌上边缘的垂直间距像素；默认6保持气泡贴近发言者又不遮挡体力行。
+const CHAT_BUBBLE_VERTICAL_GAP: float = 6.0
+
 ## 托管手牌覆盖层的默认绘制层级；默认5保证滤镜位于普通手牌之上，并保留本地技能按钮与武将牌的更高层级。
 const AUTO_MANAGED_HAND_OVERLAY_Z_INDEX: int = 5
 
@@ -217,6 +223,15 @@ var opportunity_choice_panel: OpportunityChoicePanel
 
 ## 游戏结算弹窗组件；只展示权威快照已累计的战绩，不参与胜负判定或数值计算。
 var game_settlement_panel: GameSettlementPanel
+
+## 局内聊天窗口组件；由局内菜单“聊天”按钮切换显隐，消息权威登记与广播由 NetworkGateway 负责。
+var match_chat_panel: MatchChatPanel
+
+## 按发言者稳定玩家 ID 复用的头顶聊天气泡；键为玩家 ID，值为 ChatBubbleView，新消息复用同一气泡节点。
+var _chat_bubbles: Dictionary = {}
+
+## 对局回放录制器；持续把本机收到的观察者快照与日志写入临时文件，结算面板“保存回放”时落盘为正式回放。
+var _match_replay_recorder: MatchReplayRecorder = MatchReplayRecorder.new()
 
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
@@ -480,6 +495,7 @@ func _ready() -> void:
 	_create_local_player_markers()
 	_create_opportunity_choice_panel()
 	_create_game_settlement_panel()
+	_create_match_chat_panel()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -510,6 +526,7 @@ func _ready() -> void:
 	match_menu.restart_requested.connect(_on_restart_requested)
 	match_menu.main_menu_requested.connect(_on_main_menu_requested)
 	match_menu.conquest_temporary_exit_toggle_requested.connect(_on_conquest_temporary_exit_toggle_requested)
+	match_menu.chat_toggle_requested.connect(_on_match_chat_toggle_requested)
 	match_controller.conquest_exit_save_ready.connect(_on_conquest_exit_save_ready)
 	match_controller.match_finished.connect(_on_match_finished_for_conquest_save)
 	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
@@ -529,6 +546,7 @@ func _ready() -> void:
 	match_controller.network_gateway.lan_match_started.connect(_on_lan_match_started)
 	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed)
 	match_controller.network_gateway.lan_reconnect_state_changed.connect(_on_lan_reconnect_state_changed)
+	match_controller.network_gateway.match_chat_received.connect(_on_match_chat_received)
 	match_log_panel.expanded_changed.connect(_on_match_log_expanded_changed)
 	match_log_panel.blank_area_pressed.connect(_close_open_match_overlays_from_blank_click)
 	auto_manage_button.pressed.connect(_on_auto_manage_pressed)
@@ -920,6 +938,10 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 		_inline_selected_card_uids.clear()
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
+	if match_chat_panel != null and is_instance_valid(match_chat_panel):
+		# 开局与断线重连共用本入口；聊天正文与网关历史对齐（新局为空、重连保留），气泡一律重置。
+		match_chat_panel.set_history(match_controller.network_gateway.get_match_chat_history())
+	_dismiss_all_chat_bubbles()
 	# 从权威大厅快照同步模式与人数；客户端局内设置与斗地主人数限制才能与房主一致。
 	var lobby_snapshot: Dictionary = match_controller.network_gateway.get_lan_lobby_snapshot()
 	var game_mode_id: String = str(lobby_snapshot.get("game_mode_id", NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID))
@@ -1132,6 +1154,16 @@ func _create_game_settlement_panel() -> void:
 	game_settlement_panel.name = "GameSettlementPanel"
 	add_child(game_settlement_panel)
 	game_settlement_panel.close_requested.connect(_on_game_settlement_close_requested)
+	game_settlement_panel.save_replay_requested.connect(_on_save_replay_requested)
+
+
+## 创建局内聊天窗口；窗口默认隐藏，由局内菜单“聊天”按钮切换，消息发送统一交给通信网关。
+func _create_match_chat_panel() -> void:
+	match_chat_panel = MatchChatPanel.new()
+	match_chat_panel.name = "MatchChatPanel"
+	add_child(match_chat_panel)
+	match_chat_panel.chat_submitted.connect(_on_match_chat_submitted)
+	match_chat_panel.close_requested.connect(_on_match_chat_close_requested)
 
 
 ## 同步终局结算面板的自动展示状态；同一局只首次自动展示，用户关闭后不会被重复状态广播打断。
@@ -1169,6 +1201,112 @@ func _on_settlement_button_pressed() -> void:
 	if game_settlement_panel == null or not is_instance_valid(game_settlement_panel) or not bool(_snapshot.get("game_over", false)):
 		return
 	game_settlement_panel.show_settlement(_snapshot)
+
+
+## 把本机收到的观察者快照送入回放录制器；快照属于新对局时自动开始新一份录制并丢弃未保存旧录制。
+func _record_replay_snapshot(snapshot: Dictionary) -> void:
+	if snapshot.is_empty():
+		return
+	# 快照所属对局稳定 ID；与录制器当前对局不一致说明新一局开始，重建录制上下文。
+	var match_id: String = str(snapshot.get("match_id", ""))
+	if not _match_replay_recorder.is_recording() or _match_replay_recorder.get_current_match_id() != match_id:
+		_match_replay_recorder.begin_recording(match_id, match_controller.local_human_player_id)
+	_match_replay_recorder.record_snapshot(snapshot)
+
+
+## 响应结算面板“保存回放”；把当前录制落盘为 .lisbam_replay 文件并通过顶部横幅提示结果。
+func _on_save_replay_requested() -> void:
+	# 保存前已存在的文件名；用于区分“新保存成功”与“重复点击复用既有文件”两种提示。
+	var previously_saved_file_name: String = _match_replay_recorder.get_saved_file_name()
+	# 本次保存结果文件名；失败时为空字符串。
+	var saved_file_name: String = _match_replay_recorder.save_recording()
+	if information_box == null or not is_instance_valid(information_box):
+		return
+	if saved_file_name.is_empty():
+		information_box.show_notice("回放保存失败，未生成回放文件。")
+	elif not previously_saved_file_name.is_empty():
+		information_box.show_notice("本局回放此前已保存为 %s。" % saved_file_name)
+	else:
+		information_box.show_notice("回放已保存为 %s，可在主菜单“对局回放”中查看。" % saved_file_name)
+
+
+## 响应局内菜单“聊天”按钮；窗口开着就收起，收起状态则携带完整历史展开。
+func _on_match_chat_toggle_requested() -> void:
+	if match_chat_panel == null or not is_instance_valid(match_chat_panel):
+		return
+	if match_chat_panel.is_open():
+		match_chat_panel.close_panel()
+	else:
+		match_chat_panel.open_panel(match_controller.network_gateway.get_match_chat_history())
+
+
+## 响应聊天窗口关闭按钮；窗口已自行隐藏，牌桌无需额外处理，历史保留在网关中。
+func _on_match_chat_close_requested() -> void:
+	pass
+
+
+## 把聊天窗口提交的正文交给通信网关；离线模式附带本机第一视角玩家 ID 与显示名用于署名。
+func _on_match_chat_submitted(message: String) -> void:
+	match_controller.network_gateway.send_match_chat_message(message, match_controller.local_human_player_id, _get_local_player_display_name())
+
+
+## 处理网关到达的对局内聊天条目；同步聊天窗口正文并在发言者头顶显示聊天气泡。
+func _on_match_chat_received(chat_entry: Dictionary) -> void:
+	if match_chat_panel != null and is_instance_valid(match_chat_panel):
+		match_chat_panel.append_entry(chat_entry)
+	_show_chat_bubble(int(chat_entry.get("sender_player_id", -1)), str(chat_entry.get("message", "")))
+
+
+## 在发言者武将牌上方显示聊天气泡；按玩家 ID 复用气泡节点，发言者没有可见座位时静默跳过。
+func _show_chat_bubble(player_id: int, message: String) -> void:
+	if message.is_empty():
+		return
+	# 发言者武将牌的全局矩形；本地玩家取右下角第一视角武将牌，其他玩家取座位复用节点。
+	var anchor_rect: Rect2
+	if player_id == match_controller.local_human_player_id and local_player_card != null and is_instance_valid(local_player_card):
+		anchor_rect = local_player_card.get_global_rect()
+	else:
+		# 发言者座位武将牌组件；AI 不发言，找不到座位说明发言者不在当前视图中。
+		var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
+		if player_view == null or not is_instance_valid(player_view):
+			return
+		anchor_rect = player_view.get_global_rect()
+	# 发言者的复用气泡；首条消息时创建并登记，后续消息复用同一节点重启停留计时。
+	var bubble: ChatBubbleView = _chat_bubbles.get(player_id) as ChatBubbleView
+	if bubble == null or not is_instance_valid(bubble):
+		bubble = ChatBubbleView.new()
+		bubble.name = "ChatBubble_%d" % player_id
+		bubble.z_index = CHAT_BUBBLE_Z_INDEX
+		add_child(bubble)
+		_chat_bubbles[player_id] = bubble
+	# 气泡实际尺寸；由正文换行结果决定，用于头顶水平居中定位。
+	var bubble_size: Vector2 = bubble.show_message(message)
+	# 全局到牌桌局部坐标的逆变换；与技能发动提示共用同一定位范式。
+	var root_inverse_transform: Transform2D = get_global_transform().affine_inverse()
+	# 武将牌左上角与右下角的牌桌局部坐标；用于计算头顶居中位置。
+	var card_top_left: Vector2 = root_inverse_transform * anchor_rect.position
+	var card_bottom_right: Vector2 = root_inverse_transform * anchor_rect.end
+	# 气泡横坐标；头顶水平居中并钳制在客户区内，避免边缘座位的气泡被裁切。
+	var bubble_x: float = clampf((card_top_left.x + card_bottom_right.x - bubble_size.x) * 0.5, 4.0, maxf(size.x - bubble_size.x - 4.0, 4.0))
+	# 气泡纵坐标；位于武将牌上边缘上方固定间距处，顶部座位不足时下沉到客户区顶边。
+	var bubble_y: float = maxf(card_top_left.y - bubble_size.y - CHAT_BUBBLE_VERTICAL_GAP, 2.0)
+	bubble.position = Vector2(bubble_x, bubble_y)
+
+
+## 立即隐藏全部头顶聊天气泡；新一局开始与返回主菜单时调用，气泡节点保留供复用。
+func _dismiss_all_chat_bubbles() -> void:
+	for bubble_variant: Variant in _chat_bubbles.values():
+		# 当前玩家气泡；节点可能已随场景清理释放，防御无效实例。
+		var bubble: ChatBubbleView = bubble_variant as ChatBubbleView
+		if bubble != null and is_instance_valid(bubble):
+			bubble.dismiss()
+
+
+## 解析本机第一视角玩家的公开显示名；离线聊天署名使用，缺失快照时回退通用名称。
+func _get_local_player_display_name() -> String:
+	# 本机玩家的只读快照；索引在每次状态广播时重建。
+	var local_player: Dictionary = _player_snapshots_by_id.get(match_controller.local_human_player_id, {}) as Dictionary
+	return str(local_player.get("display_name", "玩家"))
 
 
 ## 使用最新观察者快照刷新机缘弹窗；角色名只取公开显示名，不向等待玩家暴露身份或候选正文。
@@ -1232,6 +1370,7 @@ func _layout_local_judgment_zone() -> void:
 
 ## 接收本地裁剪快照并刷新全部桌面区域。
 func _on_state_changed(snapshot: Dictionary) -> void:
+	_record_replay_snapshot(snapshot)
 	# 本次体力下降玩家 ID；必须在覆盖旧快照前完成对账，渲染新体力后再播放反馈。
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
@@ -2693,6 +2832,9 @@ func _close_open_match_overlays_from_blank_click() -> bool:
 	if match_menu != null and match_menu.is_menu_open():
 		match_menu.set_menu_open(false)
 		closed_any_overlay = true
+	if match_chat_panel != null and is_instance_valid(match_chat_panel) and match_chat_panel.is_open():
+		match_chat_panel.close_panel()
+		closed_any_overlay = true
 	return closed_any_overlay
 
 
@@ -2700,6 +2842,10 @@ func _close_open_match_overlays_from_blank_click() -> bool:
 func _on_unhandled_android_back_requested() -> void:
 	if main_menu.visible:
 		get_tree().quit()
+		return
+	if match_chat_panel != null and is_instance_valid(match_chat_panel) and match_chat_panel.is_open():
+		# 返回键优先收起聊天窗口；与设置、联机面板等可取消层保持一致的返回语义。
+		match_chat_panel.close_panel()
 		return
 	match_menu.set_menu_open(not match_menu.is_menu_open())
 
@@ -2820,6 +2966,13 @@ func _apply_ui_style() -> void:
 		game_settlement_panel.refresh_ui_style()
 	if opportunity_choice_panel != null and is_instance_valid(opportunity_choice_panel):
 		opportunity_choice_panel.refresh_ui_style()
+	if match_chat_panel != null and is_instance_valid(match_chat_panel):
+		match_chat_panel.refresh_ui_style()
+	for chat_bubble_variant: Variant in _chat_bubbles.values():
+		# 当前玩家头顶气泡；主题切换时按当前风格重绘底色、描边与文字色。
+		var chat_bubble: ChatBubbleView = chat_bubble_variant as ChatBubbleView
+		if chat_bubble != null and is_instance_valid(chat_bubble):
+			chat_bubble.refresh_ui_style()
 	_refresh_group_trick_response_button()
 	card_selection_panel.refresh_ui_style()
 	character_selection_panel.refresh_ui_style()
@@ -2919,6 +3072,14 @@ func _reset_presentation_for_new_match() -> void:
 		game_settlement_panel.hide_settlement()
 	_settlement_auto_shown_match_id = ""
 	match_log_panel.clear_entries()
+	if match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE:
+		# 离线对局的聊天历史按局清空；LAN 的房间级历史由网关在大厅开局与会话结束边界维护，同房重开保留聊天。
+		match_controller.network_gateway.clear_match_chat_history()
+	if match_chat_panel != null and is_instance_valid(match_chat_panel):
+		# 聊天窗口收起并与网关当前历史重新对齐；离线新局为空正文，LAN 同房重开保留原正文。
+		match_chat_panel.close_panel()
+		match_chat_panel.set_history(match_controller.network_gateway.get_match_chat_history())
+	_dismiss_all_chat_bubbles()
 	card_use_animation_layer.clear_presentations()
 	_clear_local_hand_gain_animations()
 	_local_hand_display_order.clear()
@@ -3006,6 +3167,11 @@ func _on_main_menu_requested() -> void:
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
 	_hide_game_settlement_panel_for_main_menu()
+	if match_chat_panel != null and is_instance_valid(match_chat_panel):
+		match_chat_panel.close_panel()
+	_dismiss_all_chat_bubbles()
+	# 未保存的回放录制随对局放弃一并丢弃；已保存的回放文件不受影响。
+	_match_replay_recorder.discard_recording()
 	match_controller.abandon_match()
 	if match_controller.network_gateway.mode == NetworkGateway.Mode.LAN:
 		match_controller.network_gateway.leave_lan("")
@@ -3034,6 +3200,11 @@ func _sync_match_menu_visibility() -> void:
 		return
 	if main_menu_visible and match_menu.is_menu_open():
 		match_menu.set_menu_open(false)
+	if main_menu_visible:
+		# 主菜单覆盖牌桌时同步收起聊天窗口与头顶气泡，避免局内浮层残留在主菜单之上。
+		if match_chat_panel != null and is_instance_valid(match_chat_panel):
+			match_chat_panel.close_panel()
+		_dismiss_all_chat_bubbles()
 	match_menu.visible = not main_menu_visible
 
 
@@ -3566,6 +3737,8 @@ func _on_custom_assignment_preview_requested(seat_number: int, identity: String)
 ## 折叠状态由日志组件只保存字符串历史；只有展开状态会在帧末批量追加并滚动正文。
 func _on_log_added(message: String) -> void:
 	match_log_panel.append_entry(message)
+	# 日志与快照共同构成回放步骤流；录制器未激活时该调用为空操作。
+	_match_replay_recorder.record_log(message)
 
 
 ## 在实际发动者的武将牌中心短暂显示技能名；提示与目标线只订阅控制器信号，不持有技能对象或改写对局状态。
