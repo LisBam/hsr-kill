@@ -1,8 +1,8 @@
 extends Node
 
-## 过关斩将存档功能回归测试。验证存档文件读写与版本校验、临时退出预约与取消、
-## 回合边界自动构建存档并发出信号、损坏存档拒绝恢复，以及从存档恢复后的关卡、
-## 角色、牌区、机缘历史与获得技能一致性。
+## 过关斩将存档功能回归测试。验证存档文件读写与版本校验；空闲出牌询问中的立即存档退出；
+## 结算或询问进行中的延迟预约、取消与回合边界存档；损坏存档拒绝恢复；以及两类恢复
+## （回到同一回合出牌阶段 / 从下一回合开始）后的关卡、角色、牌区、机缘历史与获得技能一致性。
 
 ## 测试专用存档路径；绝不读写正式存档文件，避免破坏本机玩家的真实进度。
 const TEST_SAVE_PATH: String = "user://conquest_save_test.dat"
@@ -70,7 +70,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("CONQUEST_SAVE_PASS store_roundtrip+exit_request_toggle+boundary_capture+corrupt_reject+resume_state+resume_skills+resume_zones")
+	print("CONQUEST_SAVE_PASS store_roundtrip+immediate_play_idle_capture+deferred_exit_toggle+boundary_capture+corrupt_reject+resume_play_phase+resume_turn_start+resume_skills+resume_zones")
 	get_tree().quit(0)
 
 
@@ -108,7 +108,9 @@ func _test_store_roundtrip() -> bool:
 	return true
 
 
-## 使用真实对局验证临时退出预约、回合边界存档、文件往返与恢复后的状态一致性。
+## 使用真实对局验证两类临时退出捕获点与恢复一致性：
+## 甲、空闲出牌询问中的立即存档与“回到同一回合出牌阶段”的恢复；
+## 乙、结算或询问进行中的延迟预约、取消，以及回合边界存档与“从下一回合开始”的恢复。
 func _test_exit_and_resume_flow() -> bool:
 	_create_controller()
 	if not _controller.start_match(2, 20260726, IdentityRules.MODE_CONQUEST):
@@ -133,44 +135,30 @@ func _test_exit_and_resume_flow() -> bool:
 		if not _controller.grant_acquired_skill(0, "zaixian", 0, 5, "conquest_save_test"):
 			return _fail("zaixian_grant")
 		granted_zaixian = true
-	# 预约、取消与再次预约；权威开关必须与查询接口保持一致。
-	if not _controller.request_conquest_temporary_exit() or not _controller.is_conquest_temporary_exit_requested():
-		return _fail("exit_request")
-	if not _controller.cancel_conquest_temporary_exit() or _controller.is_conquest_temporary_exit_requested():
-		return _fail("exit_cancel")
-	if not _controller.request_conquest_temporary_exit():
-		return _fail("exit_request_again")
-	_controller.conquest_exit_save_ready.connect(_on_conquest_save_ready)
-	# 高额护盾；敌方完整AI回合中的任何伤害都不能让玩家进入濒死，保证边界存档必然到来。
+	# 高额护盾；后续敌方AI回合中的任何伤害都不能让玩家进入濒死，保证乙阶段边界存档必然到来。
 	player.shield = 99
-	# 清空玩家手牌；弃牌阶段与敌方回合的响应询问都会被显式放弃，避免测试依赖随机手牌内容。
-	while not player.hand.is_empty():
-		_controller._move_to_discard(player.hand.pop_back())
+	_controller.conquest_exit_save_ready.connect(_on_conquest_save_ready)
+	# 等待常驻出牌询问建立；此时没有任何进行中的结算，属于可以立即存档的空闲询问时机。
 	if not await _wait_until(func() -> bool:
 		return _controller._has_active_play_choice()):
 		return _fail("play_choice_missing")
-	# 结束出牌动作；随后进入弃牌与结束阶段，敌方AI回合结束后的回合边界触发存档。
-	var end_play_action: PlayerAction = PlayerAction.new("end_play", 0)
-	if not _controller.submit_action(end_play_action):
-		return _fail("end_play_submit")
-	if not await _wait_until(func() -> bool:
-		if _captured_save.is_empty():
-			_answer_pending_player_choice()
-		return not _captured_save.is_empty()):
-		return _fail("save_not_captured phase=%s player=%d" % [_controller.state.current_phase, _controller.state.current_player_id])
-	# 边界断言；预约已消费、对局未终局。玩家回合完整结算后，下一回合正是尚未开始的敌方回合。
-	if _controller.is_conquest_temporary_exit_requested() or _controller.state.game_over:
-		return _fail("capture_side_effects")
-	if int(_captured_save.get("next_turn_player_id", -1)) != 1 or (_captured_save.get("players", []) as Array).size() != 2:
-		return _fail("capture_shape next=%d" % int(_captured_save.get("next_turn_player_id", -1)))
+	# 甲：空闲询问中的请求必须同步立即存档，不等待回合结束；预约标志同时被消费。
+	if not _controller.request_conquest_temporary_exit():
+		return _fail("immediate_exit_request")
+	if _captured_save.is_empty() or _controller.is_conquest_temporary_exit_requested() or _controller.state.game_over:
+		return _fail("immediate_capture_missing")
+	if str(_captured_save.get("resume_kind", "")) != "play_phase" or int(_captured_save.get("next_turn_player_id", -1)) != 0 or (_captured_save.get("players", []) as Array).size() != 2:
+		return _fail("immediate_capture_shape kind=%s next=%d" % [_captured_save.get("resume_kind", ""), int(_captured_save.get("next_turn_player_id", -1))])
 	if int((_captured_save.get("conquest_state", {}) as Dictionary).get("level", -1)) != 1 or int((_captured_save.get("conquest_state", {}) as Dictionary).get("player_revives_remaining", -1)) != 1:
-		return _fail("capture_conquest_state=%s" % [_captured_save.get("conquest_state", {})])
+		return _fail("immediate_capture_conquest_state=%s" % [_captured_save.get("conquest_state", {})])
+	if not (_captured_save.get("turn_flow", {}) as Dictionary).has("started_phase_lifecycles"):
+		return _fail("immediate_capture_turn_flow=%s" % [_captured_save.get("turn_flow", {})])
 	# 玩家存档条目；护盾与获得技能记录必须原样进入存档。
 	var saved_player: Dictionary = (_captured_save.get("players", []) as Array)[0] as Dictionary
 	if int(saved_player.get("shield", -1)) != 99:
-		return _fail("capture_player_shield=%d" % int(saved_player.get("shield", -1)))
+		return _fail("immediate_capture_shield=%d" % int(saved_player.get("shield", -1)))
 	if granted_zaixian and int(((saved_player.get("acquired_skills", {}) as Dictionary).get("zaixian", {}) as Dictionary).get("total_limit", -1)) != 5:
-		return _fail("capture_acquired_skill=%s" % [saved_player.get("acquired_skills", {})])
+		return _fail("immediate_capture_acquired_skill=%s" % [saved_player.get("acquired_skills", {})])
 	# 文件往返；恢复直接使用读回数据，覆盖文本序列化的完整保真链路。
 	if not ConquestSaveStore.write_save(_captured_save, TEST_SAVE_PATH):
 		return _fail("capture_write")
@@ -181,30 +169,36 @@ func _test_exit_and_resume_flow() -> bool:
 	var expected_turn_number: int = int(loaded_save.get("turn_number", -1))
 	var expected_round_number: int = int(loaded_save.get("round_number", -1))
 	var saved_enemy: Dictionary = (loaded_save.get("players", []) as Array)[1] as Dictionary
-	# 存档玩家手牌UID；恢复后必须全部回到玩家手中（新回合摸牌只会增加实体）。
+	# 存档玩家手牌UID顺序；出牌阶段恢复不发生摸牌，恢复后手牌必须逐张逐序一致。
 	var saved_hand_uids: Array[int] = []
 	for card_data_variant: Variant in saved_player.get("hand", []) as Array:
 		saved_hand_uids.append(int((card_data_variant as Dictionary).get("uid", -1)))
-	# 存档摸牌堆UID顺序；恢复后的摸牌堆必须是该序列去掉顶端已摸部分的前缀。
+	# 存档摸牌堆UID顺序；出牌阶段恢复后的摸牌堆必须与该序列完全一致。
 	var saved_draw_uids: Array[int] = []
 	for card_data_variant: Variant in loaded_save.get("draw_pile", []) as Array:
 		saved_draw_uids.append(int((card_data_variant as Dictionary).get("uid", -1)))
 	# 存档实体总数；恢复后的全区域实体数必须完全一致，证明没有实体丢失或凭空产生。
 	var saved_total_cards: int = _count_saved_cards(loaded_save)
-	# 损坏存档拒绝；空字典与缺少角色的存档都必须在破坏旧状态前被拒绝。
+	# 损坏存档拒绝；空字典、缺少角色与未知恢复类型都必须在破坏旧状态前被拒绝。
 	if _controller.resume_conquest_match({}):
 		return _fail("resume_accepts_empty")
 	var corrupted_save: Dictionary = loaded_save.duplicate(true)
 	corrupted_save["players"] = []
 	if _controller.resume_conquest_match(corrupted_save):
 		return _fail("resume_accepts_corrupted")
-	# 正式恢复；成功后立即从存档记录的下一回合角色开始行动。
+	var unknown_kind_save: Dictionary = loaded_save.duplicate(true)
+	unknown_kind_save["resume_kind"] = "bogus_kind"
+	if _controller.resume_conquest_match(unknown_kind_save):
+		return _fail("resume_accepts_unknown_kind")
+	# 甲恢复；必须回到同一回合的出牌阶段空闲询问，而不是开始新回合。
 	if not _controller.resume_conquest_match(loaded_save):
 		return _fail("resume_rejected")
 	if str(_controller.state.match_mode) != IdentityRules.MODE_CONQUEST or _controller.conquest_mode.get_level() != 1 or _controller.conquest_mode.get_player_revives_remaining() != 1:
 		return _fail("resume_conquest_state level=%d" % _controller.conquest_mode.get_level())
-	if _controller.state.current_player_id != 1 or _controller.state.turn_number != expected_turn_number + 1 or _controller.state.round_number < expected_round_number:
-		return _fail("resume_turn state=%d/%d player=%d" % [_controller.state.turn_number, expected_turn_number, _controller.state.current_player_id])
+	if _controller.state.current_player_id != 0 or _controller.state.current_phase != "play" or _controller.state.turn_number != expected_turn_number or _controller.state.round_number != expected_round_number:
+		return _fail("resume_play_phase turn=%d/%d phase=%s player=%d" % [_controller.state.turn_number, expected_turn_number, _controller.state.current_phase, _controller.state.current_player_id])
+	if not _controller._has_active_play_choice():
+		return _fail("resume_play_choice_missing")
 	# 恢复后的双方角色；武将、体力、护盾与机缘历史必须与存档一致。
 	var resumed_player: PlayerState = _controller.state.get_player(0)
 	var resumed_enemy: PlayerState = _controller.state.get_player(1)
@@ -223,21 +217,66 @@ func _test_exit_and_resume_flow() -> bool:
 		return _fail("resume_zaixian_instance")
 	if granted_zaixian and int((resumed_player.acquired_skills.get("zaixian", {}) as Dictionary).get("total_limit", -1)) != 5:
 		return _fail("resume_zaixian_limit=%s" % [resumed_player.acquired_skills])
-	# 手牌恢复；存档手牌实体必须全部在场，新回合摸牌只能追加新实体。
-	for saved_hand_uid: int in saved_hand_uids:
-		if resumed_player.find_hand_card(saved_hand_uid) == null:
-			return _fail("resume_hand_missing uid=%d" % saved_hand_uid)
-	# 摸牌堆顺序恢复；当前牌堆必须是存档序列的前缀，顶端差额等于恢复后已摸走的张数。
-	if _controller.state.draw_pile.size() > saved_draw_uids.size():
-		return _fail("resume_draw_pile_grew")
-	for pile_index: int in range(_controller.state.draw_pile.size()):
+	# 手牌完整恢复；出牌阶段恢复没有任何摸牌或弃牌，张数与顺序都必须与存档完全一致。
+	if resumed_player.hand.size() != saved_hand_uids.size():
+		return _fail("resume_hand_size=%d/%d" % [resumed_player.hand.size(), saved_hand_uids.size()])
+	for hand_index: int in range(saved_hand_uids.size()):
+		if resumed_player.hand[hand_index].uid != saved_hand_uids[hand_index]:
+			return _fail("resume_hand_order index=%d" % hand_index)
+	# 摸牌堆完整恢复；出牌阶段恢复后的牌堆序列必须逐张一致。
+	if _controller.state.draw_pile.size() != saved_draw_uids.size():
+		return _fail("resume_draw_pile_size=%d/%d" % [_controller.state.draw_pile.size(), saved_draw_uids.size()])
+	for pile_index: int in range(saved_draw_uids.size()):
 		if _controller.state.draw_pile[pile_index].uid != saved_draw_uids[pile_index]:
 			return _fail("resume_draw_pile_order index=%d" % pile_index)
-	# 实体守恒；恢复并开始新回合后的全区域实体总数必须与存档完全一致。
+	# 实体守恒；恢复后的全区域实体总数必须与存档完全一致。
 	if _count_live_cards() != saved_total_cards:
 		return _fail("resume_card_conservation live=%d saved=%d" % [_count_live_cards(), saved_total_cards])
+	# 乙：弃牌询问进行中不属于空闲时机；预约保持挂起，取消与再预约都不得触发存档。
+	_captured_save = {}
+	# 本回合需要弃置的张数；难度一开局手牌远多于手牌上限，保证结束出牌后必然出现弃牌询问。
+	var discard_needed: int = resumed_player.hand.size() - resumed_player.get_hand_limit()
+	if discard_needed <= 0:
+		return _fail("discard_setup hand=%d limit=%d" % [resumed_player.hand.size(), resumed_player.get_hand_limit()])
+	var end_play_action: PlayerAction = PlayerAction.new("end_play", 0)
+	if not _controller.submit_action(end_play_action):
+		return _fail("end_play_submit")
+	if not _controller.has_pending_card_choice() or int(_controller._pending_card_choice.get("chooser_id", -1)) != 0:
+		return _fail("discard_prompt_missing phase=%s" % _controller.state.current_phase)
+	if not _controller.request_conquest_temporary_exit() or not _controller.is_conquest_temporary_exit_requested() or not _captured_save.is_empty():
+		return _fail("deferred_exit_request")
+	# 预约取消与再预约；存档生效前玩家可以反悔，重复预约保持同一挂起状态。
+	if not _controller.cancel_conquest_temporary_exit() or _controller.is_conquest_temporary_exit_requested():
+		return _fail("deferred_exit_cancel")
+	if not _controller.request_conquest_temporary_exit() or not _captured_save.is_empty():
+		return _fail("deferred_exit_request_again")
+	# 完成弃牌询问；本回合随后进入结束阶段，敌方回合开始前的边界触发存档。
+	var discard_uids: Array[int] = []
+	for hand_index: int in range(discard_needed):
+		discard_uids.append(resumed_player.hand[hand_index].uid)
+	if not _submit_card_uid_choice(0, discard_uids, true):
+		return _fail("discard_submit")
+	if not await _wait_until(func() -> bool:
+		if _captured_save.is_empty():
+			_answer_pending_player_choice()
+		return not _captured_save.is_empty()):
+		return _fail("deferred_capture_missing phase=%s player=%d" % [_controller.state.current_phase, _controller.state.current_player_id])
+	# 乙边界断言；玩家回合完整结算后，下一回合正是尚未开始的敌方回合。
+	if str(_captured_save.get("resume_kind", "")) != "turn_start" or int(_captured_save.get("next_turn_player_id", -1)) != 1:
+		return _fail("deferred_capture_shape kind=%s next=%d" % [_captured_save.get("resume_kind", ""), int(_captured_save.get("next_turn_player_id", -1))])
+	if int(_captured_save.get("turn_number", -1)) != expected_turn_number:
+		return _fail("deferred_capture_turn=%d/%d" % [int(_captured_save.get("turn_number", -1)), expected_turn_number])
+	# 乙恢复；敌方新回合立即开始，随后AI完整行动并把行动权交回玩家。
+	if not _controller.resume_conquest_match(_captured_save.duplicate(true)):
+		return _fail("deferred_resume_rejected")
+	if _controller.state.current_player_id != 1 or _controller.state.turn_number != expected_turn_number + 1:
+		return _fail("deferred_resume_turn=%d player=%d" % [_controller.state.turn_number, _controller.state.current_player_id])
+	if not await _wait_until(func() -> bool:
+		_answer_pending_player_choice()
+		return _controller.state.current_player_id == 0 and _controller._has_active_play_choice()):
+		return _fail("deferred_resume_handoff phase=%s player=%d" % [_controller.state.current_phase, _controller.state.current_player_id])
 	ConquestSaveStore.clear_save(TEST_SAVE_PATH)
-	# 结束恢复对局的全部运行时活动；进程退出前敌方AI回合的延时任务不再持有活动引用。
+	# 结束恢复对局的全部运行时活动；进程退出前对局延时任务不再持有活动引用。
 	_controller.abandon_match()
 	return true
 
@@ -270,6 +309,18 @@ func _count_live_cards() -> int:
 		total += player.wooden_ox_storage.size()
 		total += player.equipment.size()
 	return total
+
+
+## 为当前选择请求提交实体牌UID；弃牌询问与机缘区域选牌使用同一PlayerAction协议。
+func _submit_card_uid_choice(actor_id: int, selected_card_uids: Array[int], confirmed: bool) -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return false
+	# 当前区域选择请求编号；提交绑定该稳定ID，避免同步续接后误操作下一请求。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	# 标准选牌动作；只携带实体UID，不伪造目标或机缘定义。
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":[], "confirmed":confirmed}
+	return _controller.submit_action(action)
 
 
 ## 应答敌方回合中属于玩家的选择请求；优先明确放弃，强制请求回退为选择首个候选。

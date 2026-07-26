@@ -2057,6 +2057,10 @@ func _begin_play_choice(player_id: int) -> void:
 		return
 	if _has_active_play_choice():
 		return
+	# 已预约临时退出时，出牌询问重建点就是“每次操作结算完成后”的最近空闲存档点；
+	# 捕获成功后本窗口不再创建，界面层随即保存退出，恢复时会重新建立等价询问。
+	if _try_capture_conquest_temporary_exit_at_play_idle():
+		return
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
 		return
@@ -12361,15 +12365,20 @@ func is_conquest_temporary_exit_requested() -> bool:
 	return _conquest_temporary_exit_requested
 
 
-## 预约过关斩将临时退出；真正的存档与退出发生在当前结算完整结束后的下一个干净回合边界。
+## 预约过关斩将临时退出。若此刻正处于空闲的出牌询问（没有任何进行中的结算），立即存档退出；
+## 否则保持预约，在当前操作结算完成后的最近一个空闲点（出牌询问重建或回合边界）自动生效。
 ## 返回是否成功预约；重复预约保持已预约状态并同样返回true。
 func request_conquest_temporary_exit() -> bool:
 	if not supports_conquest_temporary_exit():
 		return false
-	if not _conquest_temporary_exit_requested:
-		_conquest_temporary_exit_requested = true
-		add_log("已预约临时退出：当前结算完成后将保存进度并返回主菜单。")
-		_emit_state()
+	if _conquest_temporary_exit_requested:
+		return true
+	_conquest_temporary_exit_requested = true
+	# 空闲询问时机直接生效；常驻出牌询问不属于结算，关闭后可在恢复时原样重建。
+	if _try_capture_conquest_temporary_exit_at_play_idle():
+		return true
+	add_log("已预约临时退出：当前操作结算完成后将自动保存进度并返回主菜单。")
+	_emit_state()
 	return true
 
 
@@ -12384,31 +12393,91 @@ func cancel_conquest_temporary_exit() -> bool:
 	return true
 
 
+## 判断当前是否处于没有任何进行中结算的空闲状态；两类临时退出捕获点共用本判定。
+## 覆盖处理区、濒死队列、机缘流程、待办选择与判定、活动卡牌结算、延后技能结算、规则续接、
+## 待派发触发、伤害收尾、装备触发队列、回合尾部等待以及独立阶段与额外弃牌阶段。
+func _is_conquest_settlement_quiescent() -> bool:
+	if state == null or state.game_over or conquest_mode == null or _conquest_replacement_transition_active:
+		return false
+	if not state.processing_area.is_empty() or not state.dying_queue.is_empty() or not state.opportunity_state.is_empty():
+		return false
+	if has_pending_card_choice() or has_pending_judgment_request() or _judgment_flow_in_progress:
+		return false
+	if not _active_card_resolutions.is_empty() or not _card_use_contexts.is_empty():
+		return false
+	if not _deferred_skill_settlements.is_empty() or _rule_continuations.has_pending():
+		return false
+	if trigger_manager != null and trigger_manager.has_deferred_dispatches():
+		return false
+	if not _pending_dying_start_contexts.is_empty() or not _pending_damage_finalizations.is_empty() or not _queued_equipment_triggers.is_empty():
+		return false
+	if _pending_finish_turn_player_id >= 0:
+		return false
+	if not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty():
+		return false
+	return true
+
+
 ## 在回合边界尝试执行已预约的临时退出；条件满足时构建完整存档并发出信号交给界面层保存退出。
 ## 返回true表示本回合不再开始，界面层会在收到信号后写入存档文件并返回主菜单。
-## 额外回合链、换将过渡、处理区残留或任何未排空的选择都表示边界不干净，此时保持预约等待下一个普通回合。
+## 额外回合链的进度已随存档保存，因此边界捕获不再区分普通回合与额外回合；
+## 换将过渡、处理区残留或任何未排空的结算都表示边界不干净，此时保持预约等待下一个空闲点。
 func _try_capture_conquest_temporary_exit(next_turn_player_id: int) -> bool:
-	if not _conquest_temporary_exit_requested or state == null or state.game_over or conquest_mode == null:
+	if not _conquest_temporary_exit_requested:
 		return false
-	if _current_turn_is_extra or not _extra_turn_queue.is_empty() or _conquest_replacement_transition_active:
-		return false
-	if not state.processing_area.is_empty() or has_pending_card_choice() or has_pending_judgment_request():
+	if not _is_conquest_settlement_quiescent():
 		return false
 	# 下一回合角色；死亡或无效角色说明边界仍处于死亡结算过渡，交由后续流程继续推进。
 	var next_player: PlayerState = state.get_player(next_turn_player_id)
 	if next_player == null or not next_player.alive:
 		return false
 	_conquest_temporary_exit_requested = false
+	# 旧AI计时器统一作废；存档已经捕获，任何迟到的AI回调都不得再推进本局状态。
+	_ai_drive_token += 1
 	# 完整存档字典；构建过程只读取权威状态，不修改任何规则数据。
-	var save_data: Dictionary = _build_conquest_save_data(next_turn_player_id)
+	var save_data: Dictionary = _build_conquest_save_data("turn_start", next_turn_player_id)
 	add_log("已保存过关斩将进度：第%d关，下一回合由%s开始。" % [conquest_mode.get_level(), next_player.display_name])
 	conquest_exit_save_ready.emit(save_data)
 	return true
 
 
-## 构建当前回合边界的完整过关斩将存档字典；所有字段均可被 var_to_str 序列化，不包含节点或回调引用。
-## 存档捕获点固定为“上一回合完整结算结束、下一回合尚未开始”，因此不需要保存事件栈、选择请求或阶段游标。
-func _build_conquest_save_data(next_turn_player_id: int) -> Dictionary:
+## 在出牌阶段空闲询问点尝试执行已预约的临时退出；每次操作结算完成后重建出牌询问前与玩家直接
+## 请求时都会调用。常驻 chooseToUse 不属于结算流程：捕获前以系统响应关闭旧窗口，恢复时按当前
+## 合法动作重新创建等价询问，因此存档不需要序列化任何选择请求或事件对象。
+func _try_capture_conquest_temporary_exit_at_play_idle() -> bool:
+	if not _conquest_temporary_exit_requested or state == null:
+		return false
+	if str(state.current_phase) != "play":
+		return false
+	# 多步技能间隔或已排队的阶段切换表示仍有流程在推进；保持预约等待其完成后的下一个空闲点。
+	if game_flow_pacer != null and (game_flow_pacer.has_pending_skill_interval() or game_flow_pacer.has_pending("phase_transition")):
+		return false
+	if not _is_conquest_settlement_quiescent():
+		return false
+	# 当前行动角色；存档记录其出牌阶段仍在进行，恢复后由同一角色继续本回合。
+	var acting_player: PlayerState = state.get_player(state.current_player_id)
+	if acting_player == null or not acting_player.alive:
+		return false
+	if _has_active_play_choice():
+		_cancel_active_play_choice("conquest_temporary_exit")
+		if event_scheduler != null:
+			event_scheduler.drain()
+	_conquest_temporary_exit_requested = false
+	# 旧AI计时器统一作废；AI行动窗口被关闭后，迟到回调不得向已捕获的存档状态提交动作。
+	_ai_drive_token += 1
+	# 完整存档字典；resume_kind 记录需要回到出牌阶段而不是开始新回合。
+	var save_data: Dictionary = _build_conquest_save_data("play_phase", acting_player.player_id)
+	add_log("已保存过关斩将进度：第%d关，%s的回合进行中。" % [conquest_mode.get_level(), acting_player.display_name])
+	conquest_exit_save_ready.emit(save_data)
+	return true
+
+
+## 构建当前空闲点的完整过关斩将存档字典；所有字段均可被 var_to_str 序列化，不包含节点或回调引用。
+## resume_kind 为 turn_start 表示捕获于回合边界（acting_player_id 是尚未开始的下一回合角色），
+## 为 play_phase 表示捕获于出牌阶段空闲询问（acting_player_id 是回合进行中的当前角色）。
+## 两类捕获点都满足“没有任何进行中的结算”，因此不需要保存事件栈或选择请求；
+## 回合与阶段游标（额外回合链、额外出牌阶段、阶段生命周期、本回合用牌记录）统一进入 turn_flow。
+func _build_conquest_save_data(resume_kind: String, acting_player_id: int) -> Dictionary:
 	# 玩家存档数组；以本人视角加 reveal_private 序列化，包含手牌、装备、判定区与“粮”的完整牌面。
 	var players_data: Array = []
 	for player: PlayerState in state.players:
@@ -12442,7 +12511,22 @@ func _build_conquest_save_data(next_turn_player_id: int) -> Dictionary:
 		"round_number": state.round_number,
 		"turn_number": state.turn_number,
 		"action_sequence": state.action_sequence,
-		"next_turn_player_id": next_turn_player_id,
+		"resume_kind": resume_kind,
+		"next_turn_player_id": acting_player_id,
+		"phase_index": state.phase_index,
+		"turn_flow": {
+			"current_turn_is_extra": _current_turn_is_extra,
+			"extra_turn_queue": _extra_turn_queue.duplicate(),
+			"extra_turn_resume_player_ids": _extra_turn_resume_player_ids.duplicate(),
+			"extra_play_phase_counts": _extra_play_phase_counts.duplicate(true),
+			"extra_play_phase_returns_to_finish": _extra_play_phase_returns_to_finish.duplicate(true),
+			"extra_play_phase_return_points": _extra_play_phase_return_points.duplicate(true),
+			"active_extra_play_phase_context": _active_extra_play_phase_context.duplicate(true),
+			"main_phase_play_conversions": _main_phase_play_conversions.duplicate(true),
+			"active_converted_play_phase_context": _active_converted_play_phase_context.duplicate(true),
+			"started_phase_lifecycles": _started_phase_lifecycles.duplicate(true),
+			"cards_used_this_turn_by_player": _cards_used_this_turn_by_player.duplicate(true),
+		},
 		"players": players_data,
 		"draw_pile": draw_pile_data,
 		"discard_pile": discard_pile_data,
@@ -12564,8 +12648,18 @@ func get_conquest_resume_validation_error(save_data: Dictionary) -> String:
 				return "存档中的卡牌在当前版本中不存在。"
 	if (save_data.get("conquest_state", {}) as Dictionary).is_empty():
 		return "存档缺少过关斩将关卡状态。"
-	if not player_ids.has(int(save_data.get("next_turn_player_id", -1))):
-		return "存档缺少有效的下一回合角色。"
+	# 恢复类型；turn_start 从下一回合开始，play_phase 回到出牌阶段空闲询问，未知类型一律拒绝。
+	var resume_kind: String = str(save_data.get("resume_kind", "turn_start"))
+	if resume_kind not in ["turn_start", "play_phase"]:
+		return "存档记录的恢复类型无效。"
+	# 行动角色稳定ID；两类恢复共用同一字段，必须指向存档中的存活角色。
+	var acting_player_id: int = int(save_data.get("next_turn_player_id", -1))
+	if not player_ids.has(acting_player_id):
+		return "存档缺少有效的行动角色。"
+	for player_data_variant: Variant in players_data:
+		var acting_player_data: Dictionary = player_data_variant as Dictionary
+		if int(acting_player_data.get("player_id", -1)) == acting_player_id and not bool(acting_player_data.get("alive", true)):
+			return "存档记录的行动角色已经死亡。"
 	return ""
 
 
@@ -12650,17 +12744,36 @@ func resume_conquest_match(save_data: Dictionary) -> bool:
 	var saved_expiries: Dictionary = save_data.get("hand_view_as_turn_expiries", {}) as Dictionary
 	for card_uid_variant: Variant in saved_expiries.keys():
 		_hand_view_as_turn_expiries[int(card_uid_variant)] = (saved_expiries[card_uid_variant] as Dictionary).duplicate(true)
+	# 恢复回合与阶段游标；额外回合链、额外出牌阶段、阶段生命周期与本回合用牌记录全部回到捕获时刻。
+	_restore_conquest_turn_flow_state(save_data.get("turn_flow", {}) as Dictionary)
 	_record_runtime_event("identity.start", "mode", {"player_count":state.players.size(), "seed":state.random_seed, "mode":state.match_mode, "resumed_from_save":true})
 	# 重新安装武将固有技能与模式技能，再补装存档中的获得技能与临时技能，最后回写全部技能内部状态。
 	_install_all_character_skills()
 	for restored_player: PlayerState in state.players:
 		_reinstall_saved_runtime_skills(restored_player)
 	_apply_skill_runtime_states(save_data.get("skill_runtime_states", {}) as Dictionary)
+	# 恢复类型与行动角色；turn_start 从下一回合开始，play_phase 由同一角色继续进行中的出牌阶段。
+	var resume_kind: String = str(save_data.get("resume_kind", "turn_start"))
+	var acting_player_id: int = int(save_data.get("next_turn_player_id", local_human_player_id))
+	if resume_kind == "play_phase":
+		add_log("继续上次的过关斩将：第%d关，第%d轮，第%d回合的出牌阶段。" % [conquest_mode.get_level(), maxi(state.round_number, 1), state.turn_number])
+		state.current_player_id = acting_player_id
+		state.current_phase = "play"
+		state.phase_index = int(save_data.get("phase_index", 3))
+		# 新的回合运行时父事件；旧事件ID属于上一次会话，恢复的阶段生命周期End/After改挂到本事件。
+		_current_turn_event_id = _record_runtime_event("phase", "turn", {"player_id":acting_player_id, "turn_number":state.turn_number, "round_number":state.round_number, "resumed_from_save":true})
+		_remap_restored_phase_lifecycle_parents(_current_turn_event_id)
+		_emit_state()
+		# 重建常驻出牌询问并按当前操作者继续；真人等待输入，AI角色由统一安全出口重新调度。
+		_begin_play_choice(acting_player_id)
+		_emit_state()
+		_ensure_ai_progress_after_resolution()
+		return true
 	add_log("继续上次的过关斩将：第%d关，第%d轮，第%d回合。" % [conquest_mode.get_level(), maxi(state.round_number, 1), state.turn_number + 1])
 	# 恢复完成后的过渡阶段；与普通开局的回合前窗口保持同名，避免快照短暂显示无效初始化阶段。
 	state.current_phase = "round_start"
 	_emit_state()
-	_start_turn(int(save_data.get("next_turn_player_id", local_human_player_id)))
+	_start_turn(acting_player_id)
 	return true
 
 
@@ -12691,6 +12804,51 @@ func _reinstall_saved_runtime_skills(player: PlayerState) -> void:
 		player_skills[skill_id] = skill
 		skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+
+
+## 从存档回填全部回合与阶段游标；额外回合链与额外出牌阶段的进度借此跨会话保留。
+## 玩家ID键的字典统一经过整数键转换，防御外部工具以字符串键改写存档。
+func _restore_conquest_turn_flow_state(turn_flow: Dictionary) -> void:
+	_current_turn_is_extra = bool(turn_flow.get("current_turn_is_extra", false))
+	_extra_turn_queue.clear()
+	for player_id_variant: Variant in turn_flow.get("extra_turn_queue", []) as Array:
+		_extra_turn_queue.append(int(player_id_variant))
+	_extra_turn_resume_player_ids.clear()
+	for player_id_variant: Variant in turn_flow.get("extra_turn_resume_player_ids", []) as Array:
+		_extra_turn_resume_player_ids.append(int(player_id_variant))
+	_extra_play_phase_counts = _to_int_keyed_dictionary(turn_flow.get("extra_play_phase_counts", {}) as Dictionary)
+	_extra_play_phase_returns_to_finish = _to_int_keyed_dictionary(turn_flow.get("extra_play_phase_returns_to_finish", {}) as Dictionary)
+	_extra_play_phase_return_points = _to_int_keyed_dictionary(turn_flow.get("extra_play_phase_return_points", {}) as Dictionary)
+	_active_extra_play_phase_context = (turn_flow.get("active_extra_play_phase_context", {}) as Dictionary).duplicate(true)
+	_main_phase_play_conversions = _to_int_keyed_dictionary(turn_flow.get("main_phase_play_conversions", {}) as Dictionary)
+	_active_converted_play_phase_context = (turn_flow.get("active_converted_play_phase_context", {}) as Dictionary).duplicate(true)
+	_started_phase_lifecycles = (turn_flow.get("started_phase_lifecycles", {}) as Dictionary).duplicate(true)
+	_cards_used_this_turn_by_player = _to_int_keyed_dictionary(turn_flow.get("cards_used_this_turn_by_player", {}) as Dictionary)
+
+
+## 把任意来源字典的键统一转换为整数玩家ID；容器值深复制，标量值原样保留。
+func _to_int_keyed_dictionary(source: Dictionary) -> Dictionary:
+	# 转换结果；键冲突时后写入项覆盖，正常存档不会同时存在同值的整数键与字符串键。
+	var result: Dictionary = {}
+	for key_variant: Variant in source.keys():
+		# 当前条目值；数组与字典深复制，防止恢复后的运行时与存档字典共享容器。
+		var value: Variant = source[key_variant]
+		if value is Dictionary:
+			result[int(key_variant)] = (value as Dictionary).duplicate(true)
+		elif value is Array:
+			result[int(key_variant)] = (value as Array).duplicate(true)
+		else:
+			result[int(key_variant)] = value
+	return result
+
+
+## 把恢复的阶段生命周期游标重新挂到新建的回合运行时事件；旧父事件ID属于上一次会话不再有效。
+func _remap_restored_phase_lifecycle_parents(new_parent_event_id: int) -> void:
+	for lifecycle_key_variant: Variant in _started_phase_lifecycles.keys():
+		# 当前生命周期记录；只更新父事件ID，状态游标与阶段数据保持存档原值。
+		var lifecycle: Dictionary = _started_phase_lifecycles[lifecycle_key_variant] as Dictionary
+		lifecycle["parent_event_id"] = new_parent_event_id
+		_started_phase_lifecycles[lifecycle_key_variant] = lifecycle
 
 
 ## 检查身份胜负条件并结束对局。
