@@ -430,7 +430,7 @@ func _refresh_detail_section() -> void:
 	lines.append("回放视角：%s" % _resolve_viewer_text(header))
 	lines.append("对局状态：%s" % ("已结束" if bool(header.get("game_over", false)) else "未结束"))
 	lines.append("时长：%s" % _format_duration_text(int(header.get("duration_msec", 0))))
-	lines.append("步骤：%d（快照 %d / 日志 %d）" % [int(header.get("step_count", 0)), int(header.get("snapshot_count", 0)), int(header.get("log_count", 0))])
+	lines.append("步骤：%d（快照 %d / 日志 %d / 表现 %d）" % [int(header.get("step_count", 0)), int(header.get("snapshot_count", 0)), int(header.get("log_count", 0)), int(header.get("presentation_count", 0))])
 	lines.append("文件大小：%.1f KB" % (float(int(_selected_entry.get("file_size", 0))) / 1024.0))
 	if bool(_selected_entry.get("pinned", false)):
 		lines.append("已顶置：该回放固定显示在列表最前。")

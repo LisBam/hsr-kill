@@ -1235,6 +1235,14 @@ func _record_replay_snapshot(snapshot: Dictionary) -> void:
 	_match_replay_recorder.record_snapshot(snapshot)
 
 
+## 把一步目标线类表现送入回放录制器；表现字典只含稳定玩家 ID 与名称，不携带坐标或节点引用。
+## 回放重演期间不录制，与快照入口的旁路规则一致；录制器未激活时该调用为空操作。
+func _record_replay_presentation(presentation: Dictionary) -> void:
+	if _replay_session_active:
+		return
+	_match_replay_recorder.record_presentation(presentation)
+
+
 ## 响应结算面板命名弹窗确认的“保存回放”；custom_name 为空时按默认名落盘，并通过顶部横幅提示结果。
 func _on_save_replay_requested(custom_name: String) -> void:
 	# 保存前已存在的文件名；用于区分“新保存成功”与“重复点击复用既有文件”两种提示。
@@ -1302,6 +1310,7 @@ func _ensure_replay_playback_components() -> void:
 		add_child(_match_replay_playback_driver)
 		_match_replay_playback_driver.snapshot_step_ready.connect(_on_replay_snapshot_step)
 		_match_replay_playback_driver.log_step_ready.connect(_on_replay_log_step)
+		_match_replay_playback_driver.presentation_step_ready.connect(_on_replay_presentation_step)
 		_match_replay_playback_driver.playback_finished.connect(_on_replay_playback_finished)
 	if _match_replay_overlay == null or not is_instance_valid(_match_replay_overlay):
 		_match_replay_overlay = MatchReplayOverlay.new()
@@ -1319,6 +1328,59 @@ func _on_replay_snapshot_step(snapshot: Dictionary) -> void:
 ## 重演日志步骤入口；复用唯一日志入口，“记录”面板正文随重演逐条恢复。
 func _on_replay_log_step(message: String) -> void:
 	_on_log_added(message)
+
+
+## 重演表现步骤入口；按步骤类型重放技能/防具发动提示与卡牌使用目标指示线。
+## 坐标不来自录制：全部按当前重演布局用稳定玩家 ID 重新解析，与录制端解析规则完全一致。
+func _on_replay_presentation_step(presentation: Dictionary) -> void:
+	# 表现步骤类型；activation 为技能或防具发动（名称提示+目标线），card_targets 为卡牌使用目标线。
+	var presentation_kind: String = str(presentation.get("e", ""))
+	if presentation_kind == "activation":
+		_show_character_card_activation(int(presentation.get("player_id", -1)), str(presentation.get("name", "")), {"target_ids":presentation.get("target_ids", [])})
+	elif presentation_kind == "card_targets":
+		_play_replay_card_target_indicator(presentation)
+
+
+## 重演一次卡牌使用目标指示线；与正式出牌共用同一分阶段解析规则和动画层线条参数，只是不移动牌面。
+func _play_replay_card_target_indicator(presentation: Dictionary) -> void:
+	if card_use_animation_layer == null:
+		return
+	# 待播放的指示阶段；规则阶段（借刀杀人等）非空时严格按录制顺序逐段重放。
+	var indicator_stages: Array[Dictionary] = []
+	# 录制的规则阶段数组；每个阶段只含稳定玩家 ID，与正式表现入口的 indicator_stages 同构。
+	var recorded_stages: Array = presentation.get("stages", []) as Array
+	for indicator_stage_variant: Variant in recorded_stages:
+		# 当前录制阶段；缺失来源座位时整段省略，不能从中央伪造玩家位置，与正式表现同一规则。
+		var indicator_stage: Dictionary = indicator_stage_variant as Dictionary
+		# 当前阶段来源锚点；按重演布局解析。
+		var stage_source_result: Dictionary = _try_get_player_indicator_position(int(indicator_stage.get("actor_id", -1)))
+		if not bool(stage_source_result.get("valid", false)):
+			continue
+		# 当前阶段目标锚点数组；个别缺失目标只省略自身线段。
+		var stage_target_positions: Array[Vector2] = []
+		for stage_target_variant: Variant in indicator_stage.get("target_ids", []) as Array:
+			# 当前阶段目标锚点；使用稳定玩家 ID 查询最新重演座位位置。
+			var stage_target_result: Dictionary = _try_get_player_indicator_position(int(stage_target_variant))
+			if bool(stage_target_result.get("valid", false)):
+				stage_target_positions.append(stage_target_result.get("position", Vector2.ZERO) as Vector2)
+		if not stage_target_positions.is_empty():
+			indicator_stages.append({"start_position":stage_source_result.get("position", Vector2.ZERO) as Vector2, "target_positions":stage_target_positions})
+	# 无规则阶段时回退为“使用者到全部目标”的单段线；与正式 play_card 的默认包装规则保持一致。
+	if recorded_stages.is_empty():
+		# 使用者锚点；缺失座位时不回退到桌面中央，避免为回放伪造来源方向。
+		var source_anchor_result: Dictionary = _try_get_player_indicator_position(int(presentation.get("actor_id", -1)))
+		if not bool(source_anchor_result.get("valid", false)):
+			return
+		# 使用牌目标锚点数组；缺失目标只省略对应指示线。
+		var target_positions: Array[Vector2] = []
+		for target_id_variant: Variant in presentation.get("target_ids", []) as Array:
+			# 当前目标锚点；使用稳定玩家 ID 查询最新重演座位位置。
+			var target_anchor_result: Dictionary = _try_get_player_indicator_position(int(target_id_variant))
+			if bool(target_anchor_result.get("valid", false)):
+				target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
+		if not target_positions.is_empty():
+			indicator_stages.append({"start_position":source_anchor_result.get("position", Vector2.ZERO) as Vector2, "target_positions":target_positions})
+	card_use_animation_layer.play_target_indicator_stages(indicator_stages)
 
 
 ## 回放全部步骤播放完毕；覆盖层标记完成，终局画面停留在牌桌上等待玩家退出。
@@ -3877,12 +3939,16 @@ func _on_log_added(message: String) -> void:
 
 
 ## 在实际发动者的武将牌中心短暂显示技能名；提示与目标线只订阅控制器信号，不持有技能对象或改写对局状态。
+## 发动提示与已确认目标同时进入回放录制，重演时按同一入口恢复名称提示与目标指示线。
 func _on_skill_activated(player_id: int, skill_name: String, context: Dictionary) -> void:
+	_record_replay_presentation({"e":"activation", "player_id":player_id, "name":skill_name, "target_ids":_get_skill_activation_target_ids(context)})
 	_show_character_card_activation(player_id, skill_name, context)
 
 
 ## 在防具实际生效时复用武将牌中央提示显示防具名；防具没有目标线，且不会被写入技能发动历史。
+## 防具提示同样进入回放录制，使重演画面与录制端当时所见保持一致。
 func _on_equipment_activated(player_id: int, equipment_name: String, context: Dictionary) -> void:
+	_record_replay_presentation({"e":"activation", "player_id":player_id, "name":equipment_name, "target_ids":_get_skill_activation_target_ids(context)})
 	_show_character_card_activation(player_id, equipment_name, context)
 
 
@@ -4034,6 +4100,15 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	var owns_discard_transfer: bool = bool(presentation_data.get("owns_discard_transfer", false))
 	if not card_use_animation_layer.claim_presentation(presentation_id, card_uid, owns_discard_transfer):
 		return
+	# 目标线重演步骤；去重通过后只在存在目标或规则阶段时录制稳定玩家 ID，重演端按当时布局重新解析坐标。
+	# showCards 与判定牌的目标数组为空，不产生录制步骤，因此重演不会出现多余指示线。
+	if not target_ids.is_empty() or not (presentation_data.get("indicator_stages", []) as Array).is_empty():
+		_record_replay_presentation({
+			"e":"card_targets",
+			"actor_id":actor_id,
+			"target_ids":target_ids,
+			"stages":(presentation_data.get("indicator_stages", []) as Array).duplicate(true),
+		})
 	if not presentation_only:
 		_cancel_local_hand_gain_animation(card_uid)
 		# 普通使用牌最终会从处理区进入弃牌堆；即使中央展示已经淡出，后续移牌信号也不能再生成第二张牌。
