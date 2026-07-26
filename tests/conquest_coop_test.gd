@@ -54,7 +54,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+vote+individual+shared_enemy_awards+partial_death+team_defeat")
+	print("CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+vote+individual+shared_enemy_awards+partial_death+next_level_revival+team_defeat")
 	get_tree().quit(0)
 
 
@@ -113,6 +113,10 @@ func _test_multi_participant_service() -> bool:
 	# 消耗玩家2的复活；玩家0的独立次数不得受影响，重复消耗同一玩家必须失败。
 	if not service.consume_player_revive(2) or service.get_player_revives_remaining(2) != 0 or service.get_player_revives_remaining(0) != 1 or service.consume_player_revive(2):
 		return _fail("per_player_revive_consume")
+	# 下一关复活的次数重置；耗尽后恢复难度初始值并清零已用计数，其他玩家不受影响。
+	service.reset_player_revives_to_initial(2)
+	if service.get_player_revives_remaining(2) != 1 or int((state.conquest_state.get("player_revives_used_by_player", {}) as Dictionary).get("2", -1)) != 0 or service.get_player_revives_remaining(0) != 1:
+		return _fail("per_player_revive_reset")
 	# 旧单人存档回退；缺少复数字段时成员查询与复活次数读取旧标量键。
 	var legacy_state: GameState = GameState.new()
 	legacy_state.players = [PlayerState.new(0, "玩家"), PlayerState.new(1, "敌方AI")] as Array[PlayerState]
@@ -199,12 +203,40 @@ func _test_vote_match_flow() -> bool:
 	if _controller.state.current_player_id != 0:
 		return _fail("vote_turn_resumes_after_replacement")
 	# 部分玩家阵亡；难度五没有复活次数，玩家2真实死亡但对局必须继续。
+	# 死亡前先给玩家2叠加局内获得技能与额外机缘/体力上限，用于验证下一关复活会完整回到初始状态。
+	# 随机武将的技能可能已令玩家2临时离场（限时离场类效果），授予显式允许离场角色以保持固定种子下的确定性。
 	var doomed_player: PlayerState = _controller.state.get_player(2)
+	if not _controller.grant_acquired_skill(doomed_player.player_id, "gongku", 0, 0, "conquest_test", true):
+		return _fail("vote_pre_death_skill_grant")
+	doomed_player.acquired_opportunity_ids.append("blue_max_hp_one")
+	doomed_player.max_hp += 1
 	doomed_player.hp = 0
 	_controller._resolve_death(doomed_player.player_id, 1)
 	if doomed_player.alive or _controller.state.game_over:
 		return _fail("vote_partial_death_continues")
-	# 全体玩家阵亡；最后一名红方死亡后蓝方获胜并结束对局。
+	# 再次击败敌人1推进到第3关；阵亡的玩家2必须在新一关开始时复活并回到游戏初始状态。
+	first_enemy.hp = 0
+	_controller._resolve_death(first_enemy.player_id, 0)
+	if not await _wait_for_stage_choosing():
+		return _fail("revival_level_opportunity_delay")
+	if _controller.conquest_mode.get_level() != 3:
+		return _fail("revival_level_advance")
+	# 复活后的初始状态；存活、机缘历史与获得技能清空、体力回到武将基础上限（难度五无额外增益）、起始手牌4张。
+	var revived_base_max_hp: int = maxi(int(GameDatabase.get_character(doomed_player.character_id).get("max_hp", 4)), 1)
+	if not doomed_player.alive or not doomed_player.acquired_opportunity_ids.is_empty() or not doomed_player.acquired_skills.is_empty() or _controller.get_skill_instance(doomed_player.player_id, "gongku") != null:
+		return _fail("revival_initial_history alive=%s opportunities=%s" % [doomed_player.alive, doomed_player.acquired_opportunity_ids])
+	if doomed_player.max_hp != revived_base_max_hp or doomed_player.hp != doomed_player.max_hp or doomed_player.hand.size() != 4:
+		return _fail("revival_initial_stats hp=%d/%d hand=%d base=%d" % [doomed_player.hp, doomed_player.max_hp, doomed_player.hand.size(), revived_base_max_hp])
+	# 复活者照常参与本关全体机缘投票；参与名单必须重新包含两名玩家。
+	if _controller.state.opportunity_state.get("participant_ids", []) != [0, 2]:
+		return _fail("revival_participates participants=%s" % [_controller.state.opportunity_state.get("participant_ids", [])])
+	if not await _submit_vote_and_wait([0, 2], "green_draw_two"):
+		return false
+	# 全体玩家阵亡；两名红方都死亡且没有新关卡推进时，蓝方获胜并结束对局。
+	doomed_player.hp = 0
+	_controller._resolve_death(doomed_player.player_id, 1)
+	if doomed_player.alive or _controller.state.game_over:
+		return _fail("vote_second_partial_death")
 	var last_player: PlayerState = _controller.state.get_player(0)
 	last_player.hp = 0
 	_controller._resolve_death(last_player.player_id, 1)

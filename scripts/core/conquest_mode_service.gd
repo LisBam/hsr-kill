@@ -274,6 +274,26 @@ func consume_player_revive(player_id: int) -> bool:
 	return true
 
 
+## 把指定玩家的复活次数恢复为本局难度的初始值并清零已用计数；供“下一关复活回到初始状态”机制调用。
+## 首名玩家同步旧标量字段，保证单人存档格式与既有界面读取不受多人字段影响。
+func reset_player_revives_to_initial(player_id: int) -> void:
+	if _state == null or not is_conquest_player(player_id):
+		return
+	# 本局难度的初始复活次数；与开局授予使用同一机缘目录汇总，不维护第二份数值。
+	var starting_revive_count: int = _get_opportunity_effect_total_from_ids(get_player_starting_opportunity_ids(), "revive_count")
+	# 每名玩家的剩余复活映射；旧存档缺失时以本次写入建立。
+	var revives_by_player: Dictionary = _state.conquest_state.get("player_revives_remaining_by_player", {}) as Dictionary
+	revives_by_player[str(player_id)] = starting_revive_count
+	_state.conquest_state["player_revives_remaining_by_player"] = revives_by_player
+	# 每名玩家的已用复活映射；回到初始状态时同步归零。
+	var revives_used_by_player: Dictionary = _state.conquest_state.get("player_revives_used_by_player", {}) as Dictionary
+	revives_used_by_player[str(player_id)] = 0
+	_state.conquest_state["player_revives_used_by_player"] = revives_used_by_player
+	if player_id == get_player_id():
+		_state.conquest_state["player_revives_remaining"] = starting_revive_count
+		_state.conquest_state["player_revives_used"] = 0
+
+
 ## 判断指定角色是否是本模式中会无限重生并叠加关卡增强的敌方角色。
 func is_enemy(player_id: int) -> bool:
 	return player_id >= 0 and get_enemy_ids().has(player_id)
