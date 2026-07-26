@@ -95,6 +95,7 @@ const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"id":"team2v2", "display_name":"2v2"},
 	{"id":"wheel_duel", "display_name":"1v1车轮战"},
 	{"id":"opportunity_brawl", "display_name":"机缘大乱斗"},
+	{"id":"conquest", "display_name":"过关斩将"},
 ]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
@@ -347,6 +348,11 @@ func get_lan_lobby_snapshot(include_host_private_settings: bool = false) -> Dict
 	return snapshot
 
 
+## 返回稳定模式ID当前是否可从大厅实际开局；牌桌开始入口与网关内部开局校验共用同一判定，避免两份模式白名单漂移。
+func is_game_mode_playable(game_mode_id: String) -> bool:
+	return _is_lobby_game_mode_playable(game_mode_id)
+
+
 ## 房主更新大厅游戏模式、总人数与密码；人数不得少于当前真人数，成功后立即广播全员。
 func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String) -> String:
 	if not is_lan_host() or _lan_match_active:
@@ -434,9 +440,8 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 	_player_to_peer_id.clear()
 	_player_display_names.clear()
 	# 可分配稳定玩家 ID；大厅真人座位按玩家主动选择的0起始位置映射，空余 ID 由 AI 使用。
-	var available_player_ids: Array[int] = []
-	for player_id: int in range(player_count):
-		available_player_ids.append(player_id)
+	# 过关斩将的真人只占偶数玩家座位（0、2、4、6），奇数敌方座位固定由权威控制器注册内置 AI。
+	var available_player_ids: Array[int] = build_match_seat_player_ids(_lobby_game_mode_id, player_count)
 	# 大厅成员顺序；快照先提供稳定成员副本，再按玩家主动选择的位置排序，不依赖哈希顺序。
 	var lobby_snapshot: Dictionary = get_lan_lobby_snapshot()
 	# 大厅成员数组；成员顺序已经由快照固定，数量应与当前真人数量一致。
@@ -457,8 +462,30 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 		_peer_to_player_id[peer_id] = player_id
 		_player_to_peer_id[player_id] = peer_id
 		_player_display_names[player_id] = str(member.get("display_name", "玩家"))
-	_lan_match_player_count = player_count
+	# 正式对局的规则角色总数；过关斩将为玩家数的两倍（每名玩家配一名敌方AI），其他模式与大厅人数一致。
+	_lan_match_player_count = get_match_role_count_for_mode(_lobby_game_mode_id, player_count)
 	return ""
+
+
+## 返回指定模式与大厅人数下真人可占用的稳定玩家 ID 序列；顺序即大厅位置从前到后的映射顺序。
+## 过关斩将返回偶数座位（0、2、4……），保证“玩家1、敌人1、玩家2、敌人2”的交替行动座次；其他模式返回连续 ID。
+static func build_match_seat_player_ids(game_mode_id: String, player_count: int) -> Array[int]:
+	# 真人可用稳定 ID 结果；调用方按大厅位置顺序逐个取用。
+	var result: Array[int] = []
+	if game_mode_id == "conquest":
+		for seat_ordinal: int in range(player_count):
+			result.append(seat_ordinal * 2)
+		return result
+	for player_id: int in range(player_count):
+		result.append(player_id)
+	return result
+
+
+## 返回指定模式与大厅人数对应的规则角色总数；过关斩将为玩家数两倍，其他模式人数即角色数。
+static func get_match_role_count_for_mode(game_mode_id: String, player_count: int) -> int:
+	if game_mode_id == "conquest":
+		return player_count * 2
+	return player_count
 
 
 ## 房主在权威控制器成功创建对局后通知全部客户端绑定玩家 ID；此后新连接会被拒绝。
@@ -1317,7 +1344,7 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 ## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主、2v2与1v1车轮战。
 func _is_lobby_game_mode_playable(game_mode_id: String) -> bool:
 	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
-	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2" or normalized_mode == "wheel_duel" or normalized_mode == "opportunity_brawl"
+	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2" or normalized_mode == "wheel_duel" or normalized_mode == "opportunity_brawl" or normalized_mode == "conquest"
 
 
 ## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 5，2v2 固定 4。
@@ -1329,6 +1356,9 @@ func _normalize_lobby_player_count(player_count: int, game_mode_id: String) -> i
 		if player_count == 3 or player_count == 5:
 			return player_count
 		return 3 if player_count < 4 else 5
+	if normalized_mode == "conquest":
+		# 过关斩将大厅人数表示“玩家数”（不含敌方AI）；联机允许2至4名玩家，规则角色总数为其两倍。
+		return clampi(player_count, 2, 4)
 	return clampi(player_count, 2, MAX_MATCH_PLAYER_COUNT)
 
 

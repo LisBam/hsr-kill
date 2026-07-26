@@ -2,6 +2,7 @@ class_name ConquestModeService
 extends RefCounted
 
 ## 过关斩将规则服务。该服务集中记录关卡授予的机缘、由机缘汇总入场效果并抽取技能机缘，不持有界面节点或阶段调度逻辑。
+## 单人模式为1名玩家对1名敌人；联机模式支持2至4名玩家与等量敌人，敌方关卡机缘历史全局唯一并由每名敌人共同享有。
 
 ## 过关斩将的首关数值；玩家面对的第一名敌方武将始终处于第1关且不获得层数增强。
 const INITIAL_LEVEL: int = 1
@@ -78,31 +79,55 @@ var _cached_enemy_opportunity_source_count: int = -1
 
 ## 为一局过关斩将绑定玩家和敌方稳定 ID，并初始化第1关公开快照。
 ## 补充：初始化同时锁定难度、授予玩家开局机缘并建立复活次数快照。
+## 本入口保留单玩家单敌人的历史签名，内部转交多参与者统一配置，测试与旧调用方无需修改。
 func configure(state: GameState, rng: RandomNumberGenerator, player_id: int, enemy_id: int, difficulty: int = DEFAULT_DIFFICULTY) -> void:
+	configure_participants(state, rng, [player_id], [enemy_id], difficulty)
+
+
+## 为一局过关斩将绑定全部玩家方与敌方稳定 ID，并初始化第1关公开快照；联机2至4名玩家与等量敌人共用本入口。
+## 每名玩家独立获得当前难度的开局机缘与复活次数；敌方关卡机缘历史全局共享，由每名敌人共同享有。
+## 快照同时保留旧的单数字段（首名玩家/首名敌人），保证单人存档格式与既有界面读取完全兼容。
+func configure_participants(state: GameState, rng: RandomNumberGenerator, player_ids: Array[int], enemy_ids: Array[int], difficulty: int = DEFAULT_DIFFICULTY) -> void:
 	_state = state
 	_rng = rng
 	_invalidate_enemy_opportunity_cache()
-	if _state == null:
+	if _state == null or player_ids.is_empty() or enemy_ids.is_empty():
 		return
 	# 本局规范化难度；创建后只保存在权威对局快照中，菜单后续修改不会影响进行中的对局。
 	var normalized_difficulty: int = clampi(difficulty, MIN_DIFFICULTY, MAX_DIFFICULTY)
-	# 本难度授予玩家的完整机缘列表；复制后写入快照，避免调用方改写常量数组。
+	# 本难度授予每名玩家的完整机缘列表；复制后写入快照，避免调用方改写常量数组。
 	var player_starting_opportunity_ids: Array[String] = _get_player_starting_opportunity_ids_for_difficulty(normalized_difficulty)
+	# 单人开局机缘对应的复活次数；每名玩家独立持有同一初始值，互不共享。
+	var starting_revive_count: int = _get_opportunity_effect_total_from_ids(player_starting_opportunity_ids, "revive_count")
+	# 每名玩家的剩余复活次数映射；键为稳定玩家ID字符串，兼容存档与网络序列化。
+	var revives_remaining_by_player: Dictionary = {}
+	# 每名玩家的已用复活次数映射；与剩余次数使用同一键规则。
+	var revives_used_by_player: Dictionary = {}
+	for participant_player_id: int in player_ids:
+		revives_remaining_by_player[str(participant_player_id)] = starting_revive_count
+		revives_used_by_player[str(participant_player_id)] = 0
 	_state.conquest_state = {
 		"level": INITIAL_LEVEL,
-		"player_id": player_id,
-		"enemy_player_id": enemy_id,
+		"player_id": player_ids[0],
+		"enemy_player_id": enemy_ids[0],
+		"player_ids": player_ids.duplicate(),
+		"enemy_player_ids": enemy_ids.duplicate(),
 		"difficulty": normalized_difficulty,
 		"player_starting_opportunity_ids": player_starting_opportunity_ids.duplicate(),
-		"player_revives_remaining": _get_opportunity_effect_total_from_ids(player_starting_opportunity_ids, "revive_count"),
+		"player_revives_remaining": starting_revive_count,
 		"player_revives_used": 0,
+		"player_revives_remaining_by_player": revives_remaining_by_player,
+		"player_revives_used_by_player": revives_used_by_player,
 		"enemy_opportunity_ids": [],
 		"awarded_fixed_opportunity_levels": [],
 		"awarded_skill_opportunity_levels": [],
 	}
-	# 玩家实体上的机缘历史是所有通用数值查询与右键详情的唯一来源；难度服务只负责在开局时追加目录ID。
-	var player: PlayerState = _state.get_player(player_id)
-	if player != null:
+	# 玩家实体上的机缘历史是所有通用数值查询与右键详情的唯一来源；难度服务只负责在开局时逐人追加目录ID。
+	for participant_player_id: int in player_ids:
+		# 当前玩家方角色状态；联机模式每名玩家都独立获得完整难度开局机缘。
+		var player: PlayerState = _state.get_player(participant_player_id)
+		if player == null:
+			continue
 		for opportunity_id: String in player_starting_opportunity_ids:
 			if OpportunityCatalog.has_card(opportunity_id):
 				player.acquired_opportunity_ids.append(opportunity_id)
@@ -132,13 +157,58 @@ func get_level() -> int:
 
 
 ## 返回本局玩家稳定 ID；缺失状态返回-1，调用方应拒绝建立机缘或回合恢复。
+## 联机多人局中该函数保持返回首名（一号位）玩家，供旧存档字段与兼容调用方使用。
 func get_player_id() -> int:
 	return int(_state.conquest_state.get("player_id", -1)) if _state != null else -1
 
 
 ## 返回本局敌方稳定 ID；缺失状态返回-1，调用方应拒绝应用敌方层数增益。
+## 联机多人局中该函数保持返回首名敌人，供旧存档字段与兼容调用方使用。
 func get_enemy_id() -> int:
 	return int(_state.conquest_state.get("enemy_player_id", -1)) if _state != null else -1
+
+
+## 返回本局全部玩家方稳定 ID；旧单人存档缺少复数字段时回退为仅含首名玩家的数组。
+func get_player_ids() -> Array[int]:
+	# 玩家方结果数组；始终返回可安全修改的强类型副本。
+	var result: Array[int] = []
+	if _state == null:
+		return result
+	for player_id_variant: Variant in _state.conquest_state.get("player_ids", []) as Array:
+		# 当前玩家方稳定ID；损坏存档中的重复项只保留一次。
+		var participant_player_id: int = int(player_id_variant)
+		if participant_player_id >= 0 and not result.has(participant_player_id):
+			result.append(participant_player_id)
+	if result.is_empty():
+		# 旧单人存档兼容路径；复数字段缺失时以旧标量字段构造单元素数组。
+		var legacy_player_id: int = get_player_id()
+		if legacy_player_id >= 0:
+			result.append(legacy_player_id)
+	return result
+
+
+## 返回本局全部敌方稳定 ID；旧单人存档缺少复数字段时回退为仅含首名敌人的数组。
+func get_enemy_ids() -> Array[int]:
+	# 敌方结果数组；始终返回可安全修改的强类型副本。
+	var result: Array[int] = []
+	if _state == null:
+		return result
+	for enemy_id_variant: Variant in _state.conquest_state.get("enemy_player_ids", []) as Array:
+		# 当前敌方稳定ID；损坏存档中的重复项只保留一次。
+		var enemy_player_id: int = int(enemy_id_variant)
+		if enemy_player_id >= 0 and not result.has(enemy_player_id):
+			result.append(enemy_player_id)
+	if result.is_empty():
+		# 旧单人存档兼容路径；复数字段缺失时以旧标量字段构造单元素数组。
+		var legacy_enemy_id: int = get_enemy_id()
+		if legacy_enemy_id >= 0:
+			result.append(legacy_enemy_id)
+	return result
+
+
+## 判断指定角色是否是本模式中的玩家方角色；玩家方按红方阵营享有难度机缘与复活规则。
+func is_conquest_player(player_id: int) -> bool:
+	return player_id >= 0 and get_player_ids().has(player_id)
 
 
 ## 返回本局锁定的过关斩将难度；无状态时回退兼容旧规则的难度五。
@@ -161,32 +231,52 @@ func get_player_starting_opportunity_ids() -> Array[String]:
 	return result
 
 
-## 返回玩家本局剩余复活次数；异常负值按0处理，界面和死亡拦截均读取该唯一快照。
-func get_player_revives_remaining() -> int:
+## 返回指定玩家本局剩余复活次数；异常负值按0处理，界面和死亡拦截均读取该唯一快照。
+## 缺省参数-1表示查询首名玩家，保持旧无参调用与单人存档兼容；多人局必须显式传入稳定玩家ID。
+func get_player_revives_remaining(player_id: int = -1) -> int:
 	if _state == null:
 		return 0
-	return maxi(int(_state.conquest_state.get("player_revives_remaining", 0)), 0)
+	# 实际查询目标；缺省时回退首名玩家，兼容旧单人调用。
+	var target_player_id: int = player_id if player_id >= 0 else get_player_id()
+	# 每名玩家的剩余复活次数映射；旧单人存档缺少该映射时回退旧标量字段。
+	var revives_by_player: Dictionary = _state.conquest_state.get("player_revives_remaining_by_player", {}) as Dictionary
+	if revives_by_player.has(str(target_player_id)):
+		return maxi(int(revives_by_player.get(str(target_player_id), 0)), 0)
+	if target_player_id == get_player_id():
+		return maxi(int(_state.conquest_state.get("player_revives_remaining", 0)), 0)
+	return 0
 
 
 ## 判断指定角色是否是仍可复活的过关斩将玩家；敌方换将与普通模式不会进入该分支。
 func can_revive_player(player_id: int) -> bool:
-	return player_id >= 0 and player_id == get_player_id() and get_player_revives_remaining() > 0
+	return is_conquest_player(player_id) and get_player_revives_remaining(player_id) > 0
 
 
-## 消耗一次玩家复活并记录已使用次数；返回false表示目标不合法或次数耗尽，调用方应继续普通死亡结算。
+## 消耗指定玩家的一次复活并记录已使用次数；返回false表示目标不合法或次数耗尽，调用方应继续普通死亡结算。
+## 首名玩家的旧标量字段同步更新，保证单人存档格式与既有界面读取不受多人字段影响。
 func consume_player_revive(player_id: int) -> bool:
 	if _state == null or not can_revive_player(player_id):
 		return false
 	# 消耗后的剩余次数；先写入权威状态，防止死亡时机重入重复使用同一次复活。
-	var remaining_count: int = get_player_revives_remaining() - 1
-	_state.conquest_state["player_revives_remaining"] = remaining_count
-	_state.conquest_state["player_revives_used"] = maxi(int(_state.conquest_state.get("player_revives_used", 0)), 0) + 1
+	var remaining_count: int = get_player_revives_remaining(player_id) - 1
+	# 每名玩家的剩余复活映射；旧存档缺失时以本次写入建立，之后统一从映射读取。
+	var revives_by_player: Dictionary = _state.conquest_state.get("player_revives_remaining_by_player", {}) as Dictionary
+	revives_by_player[str(player_id)] = remaining_count
+	_state.conquest_state["player_revives_remaining_by_player"] = revives_by_player
+	# 每名玩家的已用复活映射；与剩余映射共用字符串键规则。
+	var revives_used_by_player: Dictionary = _state.conquest_state.get("player_revives_used_by_player", {}) as Dictionary
+	revives_used_by_player[str(player_id)] = maxi(int(revives_used_by_player.get(str(player_id), 0)), 0) + 1
+	_state.conquest_state["player_revives_used_by_player"] = revives_used_by_player
+	if player_id == get_player_id():
+		# 首名玩家同步旧标量字段；单人存档、界面与旧测试继续读取原有键名。
+		_state.conquest_state["player_revives_remaining"] = remaining_count
+		_state.conquest_state["player_revives_used"] = maxi(int(_state.conquest_state.get("player_revives_used", 0)), 0) + 1
 	return true
 
 
 ## 判断指定角色是否是本模式中会无限重生并叠加关卡增强的敌方角色。
 func is_enemy(player_id: int) -> bool:
-	return player_id >= 0 and player_id == get_enemy_id()
+	return player_id >= 0 and get_enemy_ids().has(player_id)
 
 
 ## 在玩家击败敌方后提升一关；返回提升后的关卡数，供换将日志和敌方入场结算使用。
@@ -322,11 +412,17 @@ func get_enemy_skill_ids() -> Array[String]:
 
 
 ## 从可用武将中随机选择一名与当前武将不同的敌方新武将；武将库不足时允许保留原武将以保证对局可继续。
-func choose_replacement_character(current_character_id: String, character_ids: Array[String]) -> String:
+## excluded_character_ids 供联机多人局排除其他在场角色正在使用的武将，避免同屏出现两名相同武将。
+func choose_replacement_character(current_character_id: String, character_ids: Array[String], excluded_character_ids: Array[String] = []) -> String:
 	var candidates: Array[String] = []
 	for character_id: String in character_ids:
-		if not character_id.is_empty() and character_id != current_character_id:
+		if not character_id.is_empty() and character_id != current_character_id and not excluded_character_ids.has(character_id):
 			candidates.append(character_id)
+	if candidates.is_empty():
+		# 排除在场武将后仍无候选时才允许与其他角色重复；只有武将库极端不足时进入该回退。
+		for character_id: String in character_ids:
+			if not character_id.is_empty() and character_id != current_character_id:
+				candidates.append(character_id)
 	if candidates.is_empty():
 		for character_id: String in character_ids:
 			if not character_id.is_empty():

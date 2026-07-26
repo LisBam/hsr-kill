@@ -966,10 +966,14 @@ func get_match_start_validation_error(player_count: int = -1, mode_id: String = 
 		if actual_mode == IdentityRules.MODE_WHEEL_DUEL:
 			return "1v1车轮战仅支持2名玩家。"
 		if actual_mode == IdentityRules.MODE_CONQUEST:
-			return "过关斩将仅支持1名玩家与1名AI。"
+			return "过关斩将角色总数只支持2、4、6或8（1至4名玩家与等量敌人）。"
 		return "标准身份局仅支持2至10名玩家。"
 	if actual_mode == IdentityRules.MODE_CONQUEST and network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
-		return "过关斩将仅支持离线玩家与AI对战。"
+		# 联机过关斩将只允许房主创建，且必须为2至4名玩家（角色总数4、6、8）；客户端与远程模式不能创建权威对局。
+		if not network_gateway.is_lan_host():
+			return "过关斩将联机对局只能由局域网房主创建。"
+		if actual_player_count < 4:
+			return "局域网过关斩将需要2至4名玩家（角色总数4、6或8）。"
 	if not GameDatabase.validation_errors.is_empty():
 		return "数据配置校验失败：%s" % "；".join(GameDatabase.validation_errors)
 	if actual_mode == IdentityRules.MODE_WHEEL_DUEL:
@@ -1029,12 +1033,13 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	var resolved_match_seed: int = _resolve_match_seed(seed)
 	# 无论种子由调用方显式指定还是自动生成，都必须在本局开始前写入唯一随机源；显式种子供回放与测试复现，自动种子供菜单重开与退出重进获得新牌局。
 	_rng.seed = resolved_match_seed
-	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；过关斩将固定本地玩家为一号位，其他离线对局继续使用原有随机座次逻辑。
+	# 局域网房主的本地玩家 ID 已由大厅位置顺序映射确定；联机过关斩将的真人只占偶数玩家座位，因此优先采用网关映射。
+	# 离线过关斩将固定本地玩家为一号位，其他离线对局继续使用原有随机座次逻辑。
 	var lan_local_player_id: int = network_gateway.get_local_lan_player_id() if network_gateway != null and network_gateway.is_lan_host() else -1
-	if actual_mode == IdentityRules.MODE_CONQUEST and local_human_player_id >= 0:
-		local_human_player_id = 0
-	elif lan_local_player_id >= 0:
+	if lan_local_player_id >= 0:
 		local_human_player_id = lan_local_player_id
+	elif actual_mode == IdentityRules.MODE_CONQUEST and local_human_player_id >= 0:
+		local_human_player_id = 0
 	else:
 		_assign_local_human_player_seat(actual_player_count)
 	CardInstance._next_uid = 1
@@ -1072,6 +1077,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"wheel_duel_face_up_candidate_count":_wheel_duel_face_up_candidate_count,
 		"wheel_duel_face_down_candidate_count":_wheel_duel_face_down_candidate_count,
 		"conquest_difficulty":GameSettings.conquest_difficulty,
+		"conquest_opportunity_choice_mode":GameSettings.conquest_opportunity_choice_mode,
 		"opportunity_system_enabled":opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode),
 	}
 	if opportunity_system != null:
@@ -1087,10 +1093,18 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_create_players(actual_player_count, uses_automatic_match_seed)
 	# 最终离线主操作者；自动斗地主防重复可能在创建玩家前改选本地座次，控制归属必须以调整后的稳定ID为准。
 	_primary_offline_human_player_id = local_human_player_id
-	if conquest_mode != null and state.players.size() == 2:
-		# 固定一号位玩家与二号位敌方AI；关卡状态在选将前建立，后续初始机缘与换将均复用稳定ID。
-		# 补充：当前关卡状态还会锁定本局难度，并通过稳定机缘ID授予玩家对应开局增益。
-		conquest_mode.configure(state, _rng, state.players[0].player_id, state.players[1].player_id, int(state.match_options.get("conquest_difficulty", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
+	if conquest_mode != null and state.players.size() >= 2 and state.players.size() % 2 == 0:
+		# 过关斩将按“玩家1、敌人1、玩家2、敌人2……”交替建位：偶数座次索引为红方玩家，奇数为蓝方敌人。
+		# 关卡状态在选将前建立，后续初始机缘与换将均复用稳定ID；单人局退化为一号位玩家对二号位敌人。
+		# 补充：当前关卡状态还会锁定本局难度，并通过稳定机缘ID为每名玩家授予对应开局增益。
+		var conquest_player_ids: Array[int] = []
+		var conquest_enemy_ids: Array[int] = []
+		for conquest_seat_index: int in range(state.players.size()):
+			if conquest_seat_index % 2 == 0:
+				conquest_player_ids.append(state.players[conquest_seat_index].player_id)
+			else:
+				conquest_enemy_ids.append(state.players[conquest_seat_index].player_id)
+		conquest_mode.configure_participants(state, _rng, conquest_player_ids, conquest_enemy_ids, int(state.match_options.get("conquest_difficulty", GameSettings.DEFAULT_CONQUEST_DIFFICULTY)))
 	_create_and_shuffle_deck()
 	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":resolved_match_seed, "mode":state.match_mode})
 	state.current_phase = "wheel_duel_selection" if actual_mode == IdentityRules.MODE_WHEEL_DUEL else "character_selection"
@@ -7719,8 +7733,9 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 	if automatic_match_seed and match_mode == IdentityRules.MODE_DOUDIZHU:
 		_avoid_repeated_automatic_doudizhu_local_assignment(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
+	# 联机过关斩将的真人由网关映射到偶数玩家座位，奇数敌方座位始终由内置 AI 补齐。
 	var lan_human_player_ids: Array[int] = []
-	if match_mode != IdentityRules.MODE_CONQUEST and network_gateway != null and network_gateway.is_lan_host():
+	if network_gateway != null and network_gateway.is_lan_host():
 		lan_human_player_ids = network_gateway.get_lan_human_player_ids()
 	for index: int in range(player_count):
 		# 新建玩家状态；显示名保持稳定座次便于日志辨认。
@@ -7728,6 +7743,9 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 		var is_human_player: bool = lan_human_player_ids.has(index) if not lan_human_player_ids.is_empty() else index == local_human_player_id
 		# 当前玩家显示名；局域网真人沿用大厅昵称，离线真人与 AI 继续使用原有稳定座次名称。
 		var default_player_name: String = network_gateway.get_lan_player_display_name(index) if not lan_human_player_ids.is_empty() and is_human_player else ("玩家%d" % (index + 1) if is_human_player else "[AI]玩家%d" % (index + 1))
+		if match_mode == IdentityRules.MODE_CONQUEST:
+			# 过关斩将按交替座位命名：偶数座位为“玩家K”（真人沿用大厅昵称），奇数座位固定为“[AI]敌人K”。
+			default_player_name = _make_conquest_seat_display_name(index, is_human_player)
 		# 当前新建玩家状态；稳定玩家 ID 使用原始创建索引，显示名使用本轮默认座次名称。
 		var player: PlayerState = PlayerState.new(index, default_player_name)
 		# 当前座次身份；身份局与斗地主均已洗牌，2v2、车轮战与过关斩将按各自固定规则赋值。
@@ -7797,7 +7815,8 @@ func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	else:
 		player.mode_hand_limit_bonus = 0
 	# 过关斩将玩家由难度获得的体力上限机缘；敌方仍由关卡服务汇总，避免同一历史被重复计算。
-	if conquest_mode != null and player.player_id == conquest_mode.get_player_id():
+	# 联机多人局中每名红方玩家都独立累加自己的机缘体力上限。
+	if conquest_mode != null and conquest_mode.is_conquest_player(player.player_id):
 		player.max_hp += get_acquired_opportunity_effect_total(player.player_id, "max_hp")
 	player.hp = player.max_hp
 	# 初始护盾值；选将应用角色时统一归零，后续只能通过护盾规则端口获得。
@@ -8884,12 +8903,67 @@ func _complete_pre_game_start() -> void:
 	# 首回合可能在roundStart立即创建技能询问；开始回合前必须先同步最终座次与起始手牌，保证本地内联候选已经存在于牌桌快照中。
 	_emit_state()
 	if conquest_mode != null and opportunity_system != null:
-		# 过关斩将开局只由玩家选择一次机缘；完成后通过专用恢复类型开始固定先手的第一回合。
-		var conquest_player_id: int = conquest_mode.get_player_id()
-		if opportunity_system.force_trigger_for_players(conquest_player_id, [conquest_player_id], "conquest_initial_opportunity", {"first_player_id":first_turn_player.player_id}):
-			add_log("第%d关开始，玩家选择一次机缘。" % conquest_mode.get_level())
+		# 过关斩将开局由全体玩家按“投票选择/各自选择”设置完成一次机缘；完成后通过专用恢复类型开始固定先手的第一回合。
+		if _begin_conquest_group_opportunity("conquest_initial_opportunity", {"first_player_id":first_turn_player.player_id}):
 			return
 	_start_turn(first_turn_player.player_id)
+
+
+## 返回过关斩将当前仍存活的全部玩家方稳定ID；按座次顺序排列，供机缘参与名单与全体奖励复用。
+func _get_alive_conquest_player_ids() -> Array[int]:
+	# 存活玩家方结果；死亡且复活耗尽的玩家不再参与机缘选择或投票。
+	var result: Array[int] = []
+	if conquest_mode == null or state == null:
+		return result
+	for conquest_player_id: int in conquest_mode.get_player_ids():
+		# 当前玩家方角色状态；离场但存活角色继续参与机缘流程。
+		var conquest_player: PlayerState = state.get_player(conquest_player_id)
+		if conquest_player != null and conquest_player.alive:
+			result.append(conquest_player_id)
+	return result
+
+
+## 返回过关斩将当前仍存活的全部敌方稳定ID；按座次顺序排列，供关卡奖励同步写入每名敌人。
+func _get_alive_conquest_enemy_ids() -> Array[int]:
+	# 存活敌方结果；换将过渡中的阵亡敌人由调用方按上下文单独处理。
+	var result: Array[int] = []
+	if conquest_mode == null or state == null:
+		return result
+	for conquest_enemy_id: int in conquest_mode.get_enemy_ids():
+		# 当前敌方角色状态；只统计仍然存活的敌人。
+		var conquest_enemy: PlayerState = state.get_player(conquest_enemy_id)
+		if conquest_enemy != null and conquest_enemy.alive:
+			result.append(conquest_enemy_id)
+	return result
+
+
+## 以本局锁定的“机缘选择”设置为过关斩将全体存活玩家发起一次机缘；返回是否成功进入机缘流程。
+## 投票选择：全体玩家共享候选并投票，当选机缘人人获得；各自选择：每名玩家独立三选一。
+## 单人局或仅剩一名存活玩家时两种设置行为一致，保持既有单人流程与存档回放不变。
+func _begin_conquest_group_opportunity(resume_kind: String, resume_context: Dictionary) -> bool:
+	if conquest_mode == null or opportunity_system == null or state == null or state.game_over:
+		return false
+	# 本次机缘参与者；全部存活玩家按座次顺序参与，全部阵亡时跳过机缘直接恢复流程。
+	var participant_ids: Array[int] = _get_alive_conquest_player_ids()
+	if participant_ids.is_empty():
+		return false
+	# 本局锁定的机缘选择方式；vote为投票选择，individual为各自选择，开局时从设置复制后不再变化。
+	var choice_mode: String = str(state.match_options.get("conquest_opportunity_choice_mode", GameSettings.CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE))
+	# 是否走投票流程；只有多名存活玩家且设置为投票时才建立共享候选。
+	var uses_vote: bool = choice_mode == GameSettings.CONQUEST_OPPORTUNITY_CHOICE_MODE_VOTE and participant_ids.size() > 1
+	# 机缘流程启动结果；组件持有活动流程或终局时返回false，调用方继续原有恢复路径。
+	var opportunity_started: bool = false
+	if uses_vote:
+		opportunity_started = opportunity_system.force_trigger_vote_for_players(participant_ids[0], participant_ids, resume_kind, resume_context)
+	else:
+		opportunity_started = opportunity_system.force_trigger_for_players(participant_ids[0], participant_ids, resume_kind, resume_context)
+	if opportunity_started:
+		if participant_ids.size() > 1:
+			add_log("第%d关%s，全体玩家%s一次机缘。" % [conquest_mode.get_level(), "开始" if resume_kind == "conquest_initial_opportunity" else "敌方换将", "投票选择" if uses_vote else "各自选择"])
+		elif resume_kind == "conquest_initial_opportunity":
+			# 单人开局保持既有日志文案；换将后的单人机缘继续沿用机缘组件自身的通用日志。
+			add_log("第%d关开始，玩家选择一次机缘。" % conquest_mode.get_level())
+	return opportunity_started
 
 
 ## 处理房主点击 AI 武将牌；目标合法后生成一组新的随机候选并通过私有选将快照打开选将框。
@@ -9053,10 +9127,7 @@ func _reorder_players_from_leader() -> void:
 	for seat_index: int in range(state.players.size()):
 		# 当前座次玩家；AI 控制权决定显示名前缀，网络或本地真实玩家不添加 AI 标记。
 		var seated_player: PlayerState = state.players[seat_index]
-		if network_gateway != null and network_gateway.is_lan_host() and network_gateway.get_lan_human_player_ids().has(seated_player.player_id):
-			seated_player.display_name = network_gateway.get_lan_player_display_name(seated_player.player_id)
-		else:
-			seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
+		seated_player.display_name = _resolve_seat_display_name(seated_player, seat_index)
 
 
 ## 按当前玩家数组顺序刷新座次显示名；自选座次已经完成排序时不再旋转数组。
@@ -9064,10 +9135,32 @@ func _refresh_player_display_names_for_current_seats() -> void:
 	for seat_index: int in range(state.players.size()):
 		# 当前座次玩家；局域网真人沿用大厅名称，离线真人与 AI 使用最终座次编号。
 		var seated_player: PlayerState = state.players[seat_index]
-		if network_gateway != null and network_gateway.is_lan_host() and network_gateway.get_lan_human_player_ids().has(seated_player.player_id):
-			seated_player.display_name = network_gateway.get_lan_player_display_name(seated_player.player_id)
-		else:
-			seated_player.display_name = ("[AI]玩家%d" if ai_coordinator.is_ai_controlled(seated_player.player_id) else "玩家%d") % (seat_index + 1)
+		seated_player.display_name = _resolve_seat_display_name(seated_player, seat_index)
+
+
+## 解析单名角色在当前座次下的统一显示名；局域网真人沿用大厅昵称，其余按模式与AI控制权生成座次名称。
+## 过关斩将使用“玩家K/[AI]敌人K”的交替命名，其他模式保持“玩家N/[AI]玩家N”的既有规则。
+func _resolve_seat_display_name(seated_player: PlayerState, seat_index: int) -> String:
+	if seated_player == null:
+		return "玩家%d" % (seat_index + 1)
+	# 局域网真人昵称优先；房主与远端真人在任何模式下都沿用大厅显示名。
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.get_lan_human_player_ids().has(seated_player.player_id):
+		return network_gateway.get_lan_player_display_name(seated_player.player_id)
+	# 当前角色是否由内置 AI 控制；决定显示名的 AI 前缀。
+	var is_ai_seat: bool = ai_coordinator != null and ai_coordinator.is_ai_controlled(seated_player.player_id)
+	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_CONQUEST:
+		return _make_conquest_seat_display_name(seat_index, not is_ai_seat)
+	return ("[AI]玩家%d" if is_ai_seat else "玩家%d") % (seat_index + 1)
+
+
+## 生成过关斩将的交替座位默认名：偶数座位为红方“玩家K”，奇数座位为蓝方“[AI]敌人K”。
+## K 为同阵营内的序号（从1开始）；未被真人占用的玩家座位显示“[AI]玩家K”。
+func _make_conquest_seat_display_name(seat_index: int, is_human_player: bool) -> String:
+	# 同阵营序号；玩家1对应座位0，敌人1对应座位1，玩家2对应座位2，以此类推。显式向下取整避免整数除法告警。
+	var side_ordinal: int = int(floorf(float(seat_index) / 2.0)) + 1
+	if seat_index % 2 == 0:
+		return ("玩家%d" if is_human_player else "[AI]玩家%d") % side_ordinal
+	return "[AI]敌人%d" % side_ordinal
 
 
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
@@ -12034,8 +12127,8 @@ func _record_match_kill(killer_id: int, victim_id: int) -> void:
 func _resolve_conquest_player_revival(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
 	if victim == null or state == null or conquest_mode == null or not conquest_mode.consume_player_revive(victim.player_id):
 		return
-	# 复活前剩余次数已经由服务扣除；死亡时机中的重入无法重复消耗同一次复活。
-	var remaining_revives: int = conquest_mode.get_player_revives_remaining()
+	# 复活前剩余次数已经由服务扣除；死亡时机中的重入无法重复消耗同一次复活。联机局按稳定玩家ID查询本人独立次数。
+	var remaining_revives: int = conquest_mode.get_player_revives_remaining(victim.player_id)
 	victim.alive = false
 	victim.dying = false
 	victim.death_confirmed = true
@@ -12173,13 +12266,18 @@ func _complete_conquest_enemy_replacement(context: Dictionary) -> void:
 		return
 	# 关卡必须在新武将写入前提升并记录本层固定机缘，使本次入场立刻从机缘历史取得全部数值效果。
 	var new_level: int = conquest_mode.advance_level()
-	# 本层新增的固定机缘；先写入敌方历史，再应用新武将以便体力与手牌上限在基础属性刷新时正确汇总。
+	# 本层新增的固定机缘；先写入全体敌方历史，再应用新武将以便体力与手牌上限在基础属性刷新时正确汇总。
 	var newly_awarded_fixed_opportunity_ids: Array[String] = conquest_mode.award_fixed_opportunities_through_current_level()
-	_record_conquest_enemy_opportunities(enemy, newly_awarded_fixed_opportunity_ids)
+	_record_conquest_enemy_opportunities(newly_awarded_fixed_opportunity_ids)
 	var character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		character_ids.append(str(character_id_variant))
-	var next_character_id: String = conquest_mode.choose_replacement_character(enemy.character_id, character_ids)
+	# 其他在场角色正在使用的武将；联机多人局的新敌人不与任何存活玩家或其他敌人重复武将。
+	var occupied_character_ids: Array[String] = []
+	for occupied_player: PlayerState in state.players:
+		if occupied_player != null and occupied_player.player_id != enemy.player_id and not occupied_player.character_id.is_empty():
+			occupied_character_ids.append(occupied_player.character_id)
+	var next_character_id: String = conquest_mode.choose_replacement_character(enemy.character_id, character_ids, occupied_character_ids)
 	if next_character_id.is_empty():
 		_check_game_over()
 		_cancel_conquest_replacement_opportunity_preview()
@@ -12199,7 +12297,12 @@ func _complete_conquest_enemy_replacement(context: Dictionary) -> void:
 	enemy.wooden_ox_used = false
 	# 新武将先完成存活与基础状态初始化，再安装固有和关卡技能；获得技能入口会拒绝死亡角色，顺序不能颠倒。
 	_reinstall_character_skills_for_player(enemy)
-	_restore_conquest_enemy_skills(enemy)
+	# 本层新增的技能机缘；入场敌人在恢复流程内安装，同时返回给全体奖励同步入口。
+	var newly_awarded_skill_opportunity_ids: Array[String] = _restore_conquest_enemy_skills(enemy)
+	# 本层全部新增机缘；其他在场敌人也要同步获得体力上限、手牌上限与技能等增量效果。
+	var newly_awarded_opportunity_ids: Array[String] = newly_awarded_fixed_opportunity_ids.duplicate()
+	newly_awarded_opportunity_ids.append_array(newly_awarded_skill_opportunity_ids)
+	_apply_conquest_awards_to_standing_enemies(enemy.player_id, newly_awarded_opportunity_ids)
 	_equip_conquest_enemy_from_piles(enemy.player_id)
 	# 换将基础摸4张；第8关和无限层数的初始手牌增强在这项基础上累加。
 	var entry_draw_count: int = ConquestModeService.REPLACEMENT_DRAW_COUNT + conquest_mode.get_initial_hand_bonus()
@@ -12213,15 +12316,13 @@ func _queue_conquest_replacement_opportunity(context: Dictionary) -> void:
 	_begin_conquest_replacement_opportunity(context)
 
 
-## 展示等待结束后发起单人机缘；机缘自身会接管暂停令牌，失败时才立即恢复原回合后继。
+## 展示等待结束后发起玩家方机缘；机缘自身会接管暂停令牌，失败时才立即恢复原回合后继。
+## 联机多人局中全体存活玩家按本局“投票选择/各自选择”设置共同参与，单人局保持原有仅玩家三选一。
 func _begin_conquest_replacement_opportunity(context: Dictionary) -> void:
 	if state == null or state.game_over or conquest_mode == null:
 		_cancel_conquest_replacement_opportunity_preview()
 		return
-	# 玩家稳定ID；敌方换将后的机缘永远只由玩家从三张候选中选择。
-	var player_id: int = conquest_mode.get_player_id()
-	var opportunity_started: bool = opportunity_system != null and opportunity_system.force_trigger_for_players(player_id, [player_id], "conquest_enemy_replacement", context)
-	if opportunity_started:
+	if _begin_conquest_group_opportunity("conquest_enemy_replacement", context):
 		return
 	_finish_conquest_replacement_turn(context)
 
@@ -12252,31 +12353,72 @@ func _discard_all_conquest_player_cards(player: PlayerState) -> void:
 
 
 ## 重新安装过关斩将获得技能机缘；武将切换会卸载旧运行时实例，因此所有历史技能机缘需按服务快照恢复。
-func _restore_conquest_enemy_skills(enemy: PlayerState) -> void:
-	if enemy == null or conquest_mode == null:
-		return
+## 返回本层新增的技能机缘ID，供调用方把同一奖励同步给其他在场敌人。
+func _restore_conquest_enemy_skills(enemy: PlayerState) -> Array[String]:
 	# 本层新增技能机缘；服务确保技能机缘与已获技能、当前新武将固有技能均不重复。
-	var newly_awarded_skill_opportunity_ids: Array[String] = conquest_mode.ensure_skill_opportunity_rewards(enemy)
-	_record_conquest_enemy_opportunities(enemy, newly_awarded_skill_opportunity_ids)
+	var newly_awarded_skill_opportunity_ids: Array[String] = []
+	if enemy == null or conquest_mode == null:
+		return newly_awarded_skill_opportunity_ids
+	newly_awarded_skill_opportunity_ids = conquest_mode.ensure_skill_opportunity_rewards(enemy)
+	_record_conquest_enemy_opportunities(newly_awarded_skill_opportunity_ids)
 	for opportunity_id: String in conquest_mode.get_enemy_skill_opportunity_ids():
 		# 当前历史机缘定义；只有获得技能效果需要在每次新武将入场时重新安装运行时实例。
 		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
 		if str(opportunity_card.get("effect", "")) != "grant_skill":
 			continue
 		grant_acquired_skill(enemy.player_id, str(opportunity_card.get("skill_id", "")), int(opportunity_card.get("per_turn_limit", 0)), int(opportunity_card.get("total_limit", 0)), "conquest", false, int(opportunity_card.get("per_round_limit", 0)))
+	return newly_awarded_skill_opportunity_ids
 
 
-## 把本层新获得的过关斩将机缘写入敌方永久历史；右键武将详情据此按实际获取顺序显示对应品质与原文。
-func _record_conquest_enemy_opportunities(enemy: PlayerState, opportunity_ids: Array[String]) -> void:
-	if enemy == null:
+## 把本层新获得的过关斩将机缘写入全体敌方永久历史；右键武将详情据此按实际获取顺序显示对应品质与原文。
+## 关卡机缘是“每个敌人都会获得”的全局奖励：无论哪名敌人阵亡换将，历史都同步追加到每名敌人身上，
+## 因此摸牌阶段、【杀】次数与伤害加成等运行时汇总在多人局对全部敌人一致生效；日志每项机缘只记录一次。
+func _record_conquest_enemy_opportunities(opportunity_ids: Array[String]) -> void:
+	if conquest_mode == null or state == null or opportunity_ids.is_empty():
 		return
+	# 全体敌方稳定ID；单人局退化为唯一敌人，行为与既有版本完全一致。
+	var enemy_ids: Array[int] = conquest_mode.get_enemy_ids()
 	for opportunity_id: String in opportunity_ids:
 		# 当前机缘定义；目录异常时不写入无效历史，避免详情出现无法解析的占位条目。
 		var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
 		if opportunity_card.is_empty():
 			continue
-		enemy.acquired_opportunity_ids.append(opportunity_id)
+		for enemy_id: int in enemy_ids:
+			# 当前敌方角色；换将过渡中的阵亡敌人同样写入历史，新武将入场时立即按完整历史汇总数值。
+			var enemy: PlayerState = state.get_player(enemy_id)
+			if enemy != null:
+				enemy.acquired_opportunity_ids.append(opportunity_id)
 		add_log("第%d关敌方获得%s机缘：%s" % [conquest_mode.get_level() if conquest_mode != null else 0, OpportunityCatalog.get_quality_name(str(opportunity_card.get("quality", ""))), str(opportunity_card.get("description", ""))])
+
+
+## 把本层新增机缘的增量效果同步给其他在场敌人；入场敌人已在换将流程内按完整历史重算，不重复处理。
+## 体力上限按新增数值直接累加（当前体力不变），手牌上限重读服务汇总，技能机缘立即安装运行时实例。
+## 摸牌阶段、【杀】次数与伤害加成从各敌人自身机缘历史动态汇总，历史写入后自然生效，无需在此处理。
+func _apply_conquest_awards_to_standing_enemies(entering_enemy_id: int, newly_awarded_opportunity_ids: Array[String]) -> void:
+	if conquest_mode == null or state == null or newly_awarded_opportunity_ids.is_empty():
+		return
+	# 本层新增的体力上限总量；只统计目录中的max_hp效果，其他效果不改变即时体力属性。
+	var max_hp_delta: int = 0
+	for opportunity_id: String in newly_awarded_opportunity_ids:
+		if OpportunityCatalog.get_effect_id(opportunity_id) == "max_hp":
+			max_hp_delta += OpportunityCatalog.get_effect_count(opportunity_id)
+	for enemy_id: int in conquest_mode.get_enemy_ids():
+		if enemy_id == entering_enemy_id:
+			continue
+		# 当前在场敌人；死亡或缺失的敌人由其后续换将流程按完整历史重算，不在此处理。
+		var standing_enemy: PlayerState = state.get_player(enemy_id)
+		if standing_enemy == null or not standing_enemy.alive:
+			continue
+		if max_hp_delta > 0:
+			standing_enemy.max_hp += max_hp_delta
+		# 手牌上限重读服务汇总；与入场敌人的基础属性刷新使用同一唯一数值来源。
+		standing_enemy.mode_hand_limit_bonus = conquest_mode.get_hand_limit_bonus()
+		for opportunity_id: String in newly_awarded_opportunity_ids:
+			# 当前新增机缘定义；技能机缘立即安装，已拥有同名技能的敌人由授予入口自动去重。
+			var opportunity_card: Dictionary = OpportunityCatalog.get_card(opportunity_id)
+			if str(opportunity_card.get("effect", "")) != "grant_skill":
+				continue
+			grant_acquired_skill(standing_enemy.player_id, str(opportunity_card.get("skill_id", "")), int(opportunity_card.get("per_turn_limit", 0)), int(opportunity_card.get("total_limit", 0)), "conquest", false, int(opportunity_card.get("per_round_limit", 0)))
 
 
 ## 从牌堆或弃牌堆随机取出至多四张不同装备子类别的牌并直接装备给刚入场敌方；空类别不会以其他类别替代。
@@ -12355,11 +12497,14 @@ func _release_conquest_replacement_settlement_pause() -> void:
 	event_scheduler.resume(pause_token, "conquest_replacement_completed")
 
 
-## 判断当前对局是否支持过关斩将临时退出存档；仅离线进行中的过关斩将可以预约，局域网与终局一律拒绝。
+## 判断当前对局是否支持过关斩将临时退出存档；仅离线进行中的单人过关斩将可以预约，局域网、多人局与终局一律拒绝。
 func supports_conquest_temporary_exit() -> bool:
 	if state == null or state.game_over or conquest_mode == null:
 		return false
 	if str(state.match_mode) != IdentityRules.MODE_CONQUEST:
+		return false
+	# 存档格式只覆盖“1名玩家+1名敌人”的单人局；多人过关斩将不进入临时退出与恢复流程。
+	if conquest_mode.get_player_ids().size() != 1:
 		return false
 	return network_gateway == null or network_gateway.mode == NetworkGateway.Mode.OFFLINE
 

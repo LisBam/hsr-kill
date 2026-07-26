@@ -81,7 +81,11 @@ func get_supported_player_counts(mode_id: String) -> Array[int]:
 		result.append(2)
 		return result
 	if mode == MODE_CONQUEST:
+		# 过关斩将角色总数为“玩家数×2”：单人为2（1玩家+1敌人），联机2至4名玩家对应4、6、8个规则角色。
 		result.append(2)
+		result.append(4)
+		result.append(6)
+		result.append(8)
 		return result
 	for player_count: int in range(2, 11):
 		if IDENTITY_DISTRIBUTIONS.has(player_count):
@@ -106,8 +110,13 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 		raw = DOUDIZHU_DISTRIBUTIONS.get(player_count, []) as Array
 	elif mode == MODE_TEAM2V2:
 		raw = TEAM2V2_DISTRIBUTION_BASE.duplicate() if player_count == 4 else []
-	elif mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
+	elif mode == MODE_WHEEL_DUEL:
 		raw = ["red", "blue"] if player_count == 2 else []
+	elif mode == MODE_CONQUEST:
+		# 过关斩将按“玩家1、敌人1、玩家2、敌人2……”交替行动；偶数座次索引为红方玩家，奇数为蓝方敌人。
+		if get_supported_player_counts(MODE_CONQUEST).has(player_count):
+			for seat_index: int in range(player_count):
+				raw.append("red" if seat_index % 2 == 0 else "blue")
 	else:
 		raw = IDENTITY_DISTRIBUTIONS.get(player_count, []) as Array
 	# 强类型身份结果；逐项转换保证调用方获得字符串数组。
@@ -349,17 +358,31 @@ func _evaluate_wheel_duel_winner(state: GameState) -> String:
 	return ""
 
 
-## 过关斩将胜负：玩家红方死亡时蓝方AI获胜；敌方蓝方仅在异常真正死亡时判为红方获胜，正常击杀会由模式换将拦截。
+## 过关斩将胜负：全部红方玩家死亡时蓝方AI获胜；敌方蓝方仅在异常全部真正死亡时判为红方获胜，正常击杀会由模式换将拦截。
+## 联机多人局中部分玩家阵亡不结束对局，只要仍有红方玩家存活，闯关就继续进行。
 func _evaluate_conquest_winner(state: GameState) -> String:
-	# 玩家角色；过关斩将固定红方先手，缺失时不擅自判定对局结束。
-	var player: PlayerState = _find_identity(state, "red")
-	# 敌方角色；过关斩将固定蓝方，正常死亡结算会在此函数调用前被模式换将拦截。
-	var enemy: PlayerState = _find_identity(state, "blue")
-	if player == null or enemy == null:
+	# 存活红方玩家数量；只按死亡标记统计，离场存活角色仍计入生存集合。
+	var player_alive_count: int = 0
+	# 红方玩家总数；缺失红方视为异常配置，不擅自判定对局结束。
+	var player_total_count: int = 0
+	# 存活蓝方敌人数量；正常死亡结算会在此函数调用前被模式换将拦截。
+	var enemy_alive_count: int = 0
+	# 蓝方敌人总数；缺失蓝方视为异常配置，不擅自判定对局结束。
+	var enemy_total_count: int = 0
+	for player: PlayerState in state.players:
+		if player.identity == "red":
+			player_total_count += 1
+			if player.alive:
+				player_alive_count += 1
+		elif player.identity == "blue":
+			enemy_total_count += 1
+			if player.alive:
+				enemy_alive_count += 1
+	if player_total_count == 0 or enemy_total_count == 0:
 		return ""
-	if not player.alive:
+	if player_alive_count == 0:
 		return "blue_team"
-	if not enemy.alive:
+	if enemy_alive_count == 0:
 		return "red_team"
 	return ""
 

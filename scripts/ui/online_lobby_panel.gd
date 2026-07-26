@@ -289,7 +289,11 @@ func _render_room_summary() -> void:
 	# 当前密码状态；公共快照只含布尔值，不显示或传递房主明文密码。
 	var password_text: String = "已设置" if bool(_snapshot.get("has_password", false)) else "未设置"
 	_title_label.text = "联机大厅 · %s" % game_mode_name
-	_room_summary_label.text = "真人：%d  ｜  对局人数：%d  ｜  房间密码：%s" % [member_count, player_count, password_text]
+	# 人数摘要文本；过关斩将的大厅人数表示玩家数并额外说明等量敌方AI，其他模式沿用对局总人数。
+	var player_count_text: String = "对局人数：%d" % player_count
+	if game_mode_id == "conquest":
+		player_count_text = "玩家数：%d（敌方AI等量）" % player_count
+	_room_summary_label.text = "真人：%d  ｜  %s  ｜  房间密码：%s" % [member_count, player_count_text, password_text]
 	(%OnlineLobbyErrorLabel as Label).visible = false
 
 
@@ -524,6 +528,11 @@ func _apply_player_count_limits_for_mode(game_mode_id: String) -> void:
 		_player_count_input.min_value = 2
 		_player_count_input.max_value = 2
 		_player_count_input.step = 1.0
+	elif game_mode_id == "conquest":
+		# 过关斩将人数表示“玩家数”（2至4，不含敌方AI）；每名玩家对应一名敌人，角色总数为其两倍。
+		_player_count_input.min_value = maxi(member_floor, 2)
+		_player_count_input.max_value = 4
+		_player_count_input.step = 1.0
 	else:
 		_player_count_input.min_value = member_floor
 		_player_count_input.max_value = NetworkGateway.MAX_MATCH_PLAYER_COUNT
@@ -545,6 +554,9 @@ func _normalize_player_count_for_mode(game_mode_id: String, player_count: int) -
 		normalized = 4
 	elif game_mode_id == "wheel_duel":
 		normalized = 2
+	elif game_mode_id == "conquest":
+		# 过关斩将人数为玩家数2至4；GameSettings 规范化缺失时仍钳制到同一范围。
+		normalized = clampi(player_count, 2, 4)
 	else:
 		normalized = clampi(player_count, 2, NetworkGateway.MAX_MATCH_PLAYER_COUNT)
 	return maxi(normalized, int(_snapshot.get("member_count", 0)))
