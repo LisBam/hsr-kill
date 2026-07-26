@@ -7,13 +7,18 @@ extends RefCounted
 ## 离线对局、局域网房主与局域网客户端录到的都是本机视角快照，因此回放呈现与当局所见完全一致。
 ##
 ## 步骤流结构：每个步骤为一个 store_var 字典 {"t": 相对录制起点的毫秒数, "k": 步骤类型, "d": 数据}；
-## 快照步骤的 d 为完整观察者快照字典，日志步骤的 d 为单条日志字符串。
+## 快照步骤的 d 为完整观察者快照字典，日志步骤的 d 为单条日志字符串，
+## 表现步骤的 d 为只含稳定玩家 ID 与名称的目标线表现字典（结构由牌桌录制点定义）。
 
 ## 快照步骤类型标记；播放器据此把该步骤应用为全场状态刷新。
 const STEP_KIND_SNAPSHOT: String = "s"
 
 ## 日志步骤类型标记；播放器据此把该步骤追加到回放日志正文。
 const STEP_KIND_LOG: String = "l"
+
+## 表现步骤类型标记；承载技能/防具发动提示与卡牌目标指示线，重演端据此重放对应桌面视觉。
+## 该类型为格式版本1的兼容性追加：旧读取端遇到未知类型直接忽略，不影响快照与日志播放。
+const STEP_KIND_PRESENTATION: String = "p"
 
 ## 默认临时步骤流文件路径；对局进行期间逐步追加写入，避免长局把全部快照堆积在内存。
 const DEFAULT_TEMP_RECORDING_PATH: String = "user://replays/recording.tmp"
@@ -44,6 +49,9 @@ var _snapshot_count: int = 0
 
 ## 已录制日志步骤数；写入回放头供列表展示日志规模。
 var _log_count: int = 0
+
+## 已录制表现步骤数；写入回放头供列表展示目标线等表现规模。
+var _presentation_count: int = 0
 
 ## 是否因步骤上限而截断；写入回放头，播放器可提示玩家回放不完整。
 var _truncated: bool = false
@@ -77,6 +85,7 @@ func begin_recording(match_id: String, viewer_player_id: int) -> bool:
 	_step_count = 0
 	_snapshot_count = 0
 	_log_count = 0
+	_presentation_count = 0
 	_truncated = false
 	_latest_snapshot = {}
 	_last_step_time_msec = 0
@@ -120,6 +129,18 @@ func record_log(message: String) -> void:
 	_append_step(STEP_KIND_LOG, message)
 	if _step_count > previous_step_count:
 		_log_count += 1
+
+
+## 录制一步目标线类表现；presentation 为只含稳定玩家 ID 与名称的纯数据字典（技能发动、卡牌目标线），
+## 深拷贝后写入避免调用方后续修改污染，重演端按播放时的桌面布局重新解析坐标。
+func record_presentation(presentation: Dictionary) -> void:
+	if _temp_file == null or presentation.is_empty():
+		return
+	# 追加前的步骤计数；用于判断本步表现是否真正写入（未因步骤上限被丢弃）。
+	var previous_step_count: int = _step_count
+	_append_step(STEP_KIND_PRESENTATION, presentation.duplicate(true))
+	if _step_count > previous_step_count:
+		_presentation_count += 1
 
 
 ## 把当前录制内容保存为正式回放文件；返回保存后的文件名，失败返回空字符串。
@@ -204,5 +225,6 @@ func _build_header() -> Dictionary:
 		"step_count": _step_count,
 		"snapshot_count": _snapshot_count,
 		"log_count": _log_count,
+		"presentation_count": _presentation_count,
 		"truncated": _truncated,
 	}

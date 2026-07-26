@@ -42,6 +42,9 @@ var _driver_snapshot_count: int = 0
 ## 重演驱动器派发的日志正文列表；顺序断言使用。
 var _driver_log_messages: Array[String] = []
 
+## 重演驱动器派发的表现步骤数量；目标线步骤派发断言使用。
+var _driver_presentation_count: int = 0
+
 ## 重演驱动器是否已发出播放完毕信号。
 var _driver_finished: bool = false
 
@@ -64,6 +67,7 @@ func _run() -> void:
 	recorder.record_snapshot(_build_test_snapshot(4, 4))
 	recorder.record_log("测试日志一")
 	recorder.record_log("测试日志二")
+	recorder.record_presentation({"e":"activation", "player_id":0, "name":"测试技", "target_ids":[1]})
 	recorder.record_snapshot(_build_test_snapshot(2, 4))
 	# 首次保存结果文件名；使用玩家自定义名，应直接生成同名 .lisbam_replay 文件。
 	var saved_file_name: String = recorder.save_recording(TEST_REPLAY_DIRECTORY, "我的精彩对局")
@@ -81,15 +85,20 @@ func _run() -> void:
 	var listed_entry: Dictionary = MatchReplayStore.list_replays(TEST_REPLAY_DIRECTORY)[0]
 	# 列表条目的回放头；保存时快照统计为2份快照与2条日志。
 	var header: Dictionary = listed_entry.get("header", {}) as Dictionary
-	if str(listed_entry.get("file_name", "")) != saved_file_name or bool(listed_entry.get("pinned", true)) or int(header.get("player_count", 0)) != 2 or int(header.get("snapshot_count", 0)) != 2 or int(header.get("log_count", 0)) != 2 or int(header.get("step_count", 0)) != 4 or str(header.get("match_mode", "")) != "identity" or int(header.get("viewer_player_id", -1)) != 0 or bool(header.get("truncated", true)):
+	if str(listed_entry.get("file_name", "")) != saved_file_name or bool(listed_entry.get("pinned", true)) or int(header.get("player_count", 0)) != 2 or int(header.get("snapshot_count", 0)) != 2 or int(header.get("log_count", 0)) != 2 or int(header.get("presentation_count", -1)) != 1 or int(header.get("step_count", 0)) != 5 or str(header.get("match_mode", "")) != "identity" or int(header.get("viewer_player_id", -1)) != 0 or bool(header.get("truncated", true)):
 		_fail(recorder, "replay_header %s" % str(header))
 		return
 	# 回放完整路径；供读取与导出断言复用。
 	var replay_path: String = "%s/%s" % [TEST_REPLAY_DIRECTORY, saved_file_name]
-	# 读取的全部步骤；顺序必须与录制一致：快照、日志、日志、快照。
+	# 读取的全部步骤；顺序必须与录制一致：快照、日志、日志、表现、快照。
 	var steps: Array[Dictionary] = MatchReplayStore.read_replay_steps(replay_path)
-	if steps.size() != 4 or str(steps[0].get("k", "")) != MatchReplayRecorder.STEP_KIND_SNAPSHOT or str(steps[1].get("k", "")) != MatchReplayRecorder.STEP_KIND_LOG or str(steps[2].get("k", "")) != MatchReplayRecorder.STEP_KIND_LOG or str(steps[3].get("k", "")) != MatchReplayRecorder.STEP_KIND_SNAPSHOT:
+	if steps.size() != 5 or str(steps[0].get("k", "")) != MatchReplayRecorder.STEP_KIND_SNAPSHOT or str(steps[1].get("k", "")) != MatchReplayRecorder.STEP_KIND_LOG or str(steps[2].get("k", "")) != MatchReplayRecorder.STEP_KIND_LOG or str(steps[3].get("k", "")) != MatchReplayRecorder.STEP_KIND_PRESENTATION or str(steps[4].get("k", "")) != MatchReplayRecorder.STEP_KIND_SNAPSHOT:
 		_fail(recorder, "replay_steps size=%d" % steps.size())
+		return
+	# 表现步骤数据往返；稳定玩家 ID 与名称必须原样保留供重演端解析。
+	var presentation_step: Dictionary = steps[3].get("d", {}) as Dictionary
+	if str(presentation_step.get("e", "")) != "activation" or int(presentation_step.get("player_id", -1)) != 0 or str(presentation_step.get("name", "")) != "测试技" or int((presentation_step.get("target_ids", []) as Array)[0]) != 1:
+		_fail(recorder, "presentation_step_roundtrip %s" % str(presentation_step))
 		return
 	# 第一份快照步骤数据；验证64位整数与嵌套结构无损往返。
 	var first_snapshot: Dictionary = steps[0].get("d", {}) as Dictionary
@@ -227,6 +236,7 @@ func _run() -> void:
 	add_child(playback_driver)
 	playback_driver.snapshot_step_ready.connect(func(_snapshot: Dictionary) -> void: _driver_snapshot_count += 1)
 	playback_driver.log_step_ready.connect(func(message: String) -> void: _driver_log_messages.append(message))
+	playback_driver.presentation_step_ready.connect(func(_presentation: Dictionary) -> void: _driver_presentation_count += 1)
 	playback_driver.playback_finished.connect(func() -> void: _driver_finished = true)
 	# 驱动器测试步骤；读取重命名后的回放文件。
 	var driver_steps: Array[Dictionary] = MatchReplayStore.read_replay_steps("%s/%s" % [TEST_REPLAY_DIRECTORY, "页内改名.%s" % MatchReplayStore.REPLAY_FILE_EXTENSION])
@@ -235,8 +245,8 @@ func _run() -> void:
 		return
 	# 手动推进10秒；间隔按2000毫秒上限截断，足以派发剩余全部步骤并触发完成信号。
 	playback_driver._process(10.0)
-	if _driver_snapshot_count != 2 or _driver_log_messages != ["测试日志一", "测试日志二"] or not _driver_finished or playback_driver.is_playing():
-		_fail(null, "driver_dispatch snapshots=%d logs=%s" % [_driver_snapshot_count, str(_driver_log_messages)])
+	if _driver_snapshot_count != 2 or _driver_log_messages != ["测试日志一", "测试日志二"] or _driver_presentation_count != 1 or not _driver_finished or playback_driver.is_playing():
+		_fail(null, "driver_dispatch snapshots=%d logs=%s presentations=%d" % [_driver_snapshot_count, str(_driver_log_messages), _driver_presentation_count])
 		return
 	playback_driver.queue_free()
 	# 牌桌整局重演流程；使用真实离线对局录制一份回放，再以第一视角在正式牌桌上重演。
@@ -295,6 +305,19 @@ func _run_table_replay_flow() -> void:
 	# 重演期间不产生新的回放录制；录制器保持非活动状态。
 	if table_recorder.is_recording():
 		_fail(null, "table_replay_no_rerecord")
+		return
+	# 重演表现步骤；技能发动应创建名称提示标签，技能与卡牌目标线都应在动画层登记动态线条。
+	var animation_layer: Node = main_instance.get("card_use_animation_layer") as Node
+	# 回放头玩家表；表现步骤使用真实录制的稳定玩家 ID 解析重演座位。
+	var header_players: Array = table_saved_header.get("players", []) as Array
+	var first_player_id: int = int((header_players[0] as Dictionary).get("player_id", 0))
+	var second_player_id: int = int((header_players[1] as Dictionary).get("player_id", 1))
+	main_instance.call("_on_replay_presentation_step", {"e":"activation", "player_id":first_player_id, "name":"回放技", "target_ids":[second_player_id]})
+	main_instance.call("_on_replay_presentation_step", {"e":"card_targets", "actor_id":first_player_id, "target_ids":[second_player_id], "stages":[]})
+	# 动画层活动线条集合；两步表现应各登记一条动态目标指示线。
+	var line_presentations: Dictionary = animation_layer.get("_line_presentations") as Dictionary
+	if line_presentations.size() < 2 or main_instance.get_node_or_null("SkillActivation_%d" % first_player_id) == null:
+		_fail(null, "replay_presentation_lines count=%d" % line_presentations.size())
 		return
 	# 控制条可拖动；模拟按住条体空白区域拖动固定位移，位置应精确跟随且不被中途钳制。
 	var control_bar: PanelContainer = replay_overlay._control_bar

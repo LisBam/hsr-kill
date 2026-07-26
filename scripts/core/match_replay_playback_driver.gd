@@ -12,6 +12,9 @@ signal snapshot_step_ready(snapshot: Dictionary)
 ## 派发一条对局日志步骤时发出；正文与录制端“记录”面板当时收到的完全一致。
 signal log_step_ready(message: String)
 
+## 派发一步目标线类表现步骤时发出；字典只含稳定玩家 ID 与名称，坐标由牌桌按重演布局解析。
+signal presentation_step_ready(presentation: Dictionary)
+
 ## 全部步骤派发完毕时发出；牌桌据此提示“回放播放完毕”，驱动器停止帧处理。
 signal playback_finished
 
@@ -104,16 +107,18 @@ func _get_step_gap_msec(step_index: int) -> int:
 	return clampi(int(_steps[step_index].get("t", 0)) - int(_steps[step_index - 1].get("t", 0)), 0, maximum_step_gap_msec)
 
 
-## 派发单个步骤；快照与日志分别走独立信号，未知步骤类型静默跳过保证向前兼容。
+## 派发单个步骤；快照、日志与表现分别走独立信号，未知步骤类型静默跳过保证向前兼容。
 func _dispatch_step(step_index: int) -> void:
 	if step_index < 0 or step_index >= _steps.size():
 		return
-	# 当前步骤字典；k 为步骤类型，d 为快照或日志数据。
+	# 当前步骤字典；k 为步骤类型，d 为快照、日志或表现数据。
 	var step: Dictionary = _steps[step_index]
 	if str(step.get("k", "")) == MatchReplayRecorder.STEP_KIND_SNAPSHOT:
 		snapshot_step_ready.emit(step.get("d", {}) as Dictionary)
 	elif str(step.get("k", "")) == MatchReplayRecorder.STEP_KIND_LOG:
 		log_step_ready.emit(str(step.get("d", "")))
+	elif str(step.get("k", "")) == MatchReplayRecorder.STEP_KIND_PRESENTATION:
+		presentation_step_ready.emit(step.get("d", {}) as Dictionary)
 
 
 ## 全部步骤派发完毕时收尾；关闭帧处理并发出完成信号，步骤内存保留到外部停止时释放。

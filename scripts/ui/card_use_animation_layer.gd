@@ -168,23 +168,40 @@ func play_skill_target_indicator(start_position: Vector2, target_positions: Arra
 	if target_positions.is_empty():
 		return
 	# 技能目标坐标副本；技能发动记录和桌面座位会在后续快照中变化，当前表现必须固定使用确认瞬间的位置。
-	var activation_target_positions: Array[Vector2] = target_positions.duplicate()
-	# 独立表现序号；与卡牌使用共用递增空间，确保并发技能与卡牌目标线不会覆盖彼此。
+	# 单目标组包装为唯一指示阶段后交给统一无牌面阶段入口，坐标副本由该入口统一完成。
+	play_target_indicator_stages([{"start_position":start_position, "target_positions":target_positions}])
+
+
+## 播放一组不携带牌面的分阶段目标指示线；技能发动线与回放重演的卡牌目标线共用本入口。
+## 每个阶段为 {"start_position": Vector2, "target_positions": Array[Vector2]}，
+## 逐段完整延伸并淡出后才切换下一段，与 play_card 的多段指示线保持同一缓动、时长与绘制样式。
+func play_target_indicator_stages(indicator_stages: Array[Dictionary]) -> void:
+	# 实际参与绘制的阶段副本；空目标阶段不产生可见线条，直接剔除保持补间链紧凑。
+	var resolved_indicator_stages: Array[Dictionary] = []
+	for indicator_stage: Dictionary in indicator_stages:
+		if not (indicator_stage.get("target_positions", []) as Array).is_empty():
+			resolved_indicator_stages.append(indicator_stage.duplicate(true))
+	if resolved_indicator_stages.is_empty():
+		return
+	# 独立表现序号；与卡牌使用共用递增空间，确保并发技能线、回放线与卡牌目标线不会覆盖彼此。
 	_presentation_sequence += 1
 	var sequence: int = _presentation_sequence
-	# 统一线条数据；初始仅显示来源点，补间会驱动 progress 从0延伸到全部已确认目标。
+	# 首阶段数据；统一线条数据初始仅显示来源点，补间会驱动 progress 从0延伸到该段全部目标。
+	var first_indicator_stage: Dictionary = resolved_indicator_stages[0]
 	_line_presentations[sequence] = {
-		"start_position":start_position,
-		"target_positions":activation_target_positions,
+		"start_position":first_indicator_stage.get("start_position", Vector2.ZERO) as Vector2,
+		"target_positions":(first_indicator_stage.get("target_positions", []) as Array).duplicate(),
 		"alpha":1.0,
 		"progress":0.0,
 	}
 	queue_redraw()
-	# 技能线生命周期；与正式出牌目标线使用同一缓动、延伸时间和淡出时间，结束后自动移除而不干预技能规则。
+	# 指示线生命周期；与正式出牌目标线使用同一缓动、延伸时间和淡出时间，结束后自动移除且不干预任何规则。
 	var activation_line_tween: Tween = create_tween()
 	activation_line_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	activation_line_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
-	activation_line_tween.tween_method(_set_line_alpha.bind(sequence), 1.0, 0.0, target_line_fade_duration)
+	for indicator_stage: Dictionary in resolved_indicator_stages:
+		activation_line_tween.tween_callback(_set_line_stage.bind(sequence, indicator_stage))
+		activation_line_tween.tween_method(_set_line_progress.bind(sequence), 0.0, 1.0, target_line_draw_duration)
+		activation_line_tween.tween_method(_set_line_alpha.bind(sequence), 1.0, 0.0, target_line_fade_duration)
 	activation_line_tween.tween_callback(_remove_line_presentation.bind(sequence))
 
 
