@@ -1,6 +1,6 @@
 extends Node
 
-## 局域网联机 UI 回归测试。验证只读连接入口、独立联机大厅、形象尺寸、对称座位、聊天、换位、房间设置、踢出入口、双主题与离开恢复。
+## 局域网联机 UI 回归测试。验证只读连接入口、独立联机大厅、空位同框的形象内嵌尺寸、对称座位、聊天、换位、房间设置、踢出入口、双主题与离开恢复。
 
 ## 正式主场景资源；测试复用完整节点树，覆盖主菜单、牌桌协调器、网络网关与两个联机界面的真实信号链。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
@@ -8,7 +8,7 @@ const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 ## 测试玩家使用的稳定武将 ID；希儿在正式数据库中登记了插画，可验证大厅只加载原始插画纹理。
 const TEST_AVATAR_CHARACTER_ID: String = "xier"
 
-## 大厅形象期望插画尺寸；必须与正式武将牌一致，但大厅组件不能复用武将牌场景。
+## 大厅形象期望武将框尺寸；必须与正式武将牌一致，玩家插画在框内按组件内缩距离嵌入，大厅组件不能复用武将牌场景。
 const EXPECTED_AVATAR_SIZE: Vector2 = Vector2(148.35, 197.8)
 
 ## 几何比较允许误差；界面采用浮点尺寸，0.05像素足以覆盖布局计算误差且不会掩盖实际错位。
@@ -101,14 +101,18 @@ func _ready() -> void:
 	var host_artwork_material: ShaderMaterial = host_artwork.material as ShaderMaterial
 	# 插画圆角遮罩源码；遮罩只能裁切 Alpha，不能乘 CanvasItem 颜色输入把角色形象调制为黑色。
 	var host_artwork_shader_code: String = host_artwork_material.shader.code if host_artwork_material != null and host_artwork_material.shader != null else ""
-	# 房主形象边框；占用位置必须复用空位的圆角边框规格包裹插画，而不是裸露纹理。
+	# 房主形象武将框；占用位置必须以空位同款圆角面板为底框，插画内嵌其中而不是裸露纹理覆盖整框。
 	var host_avatar_frame: Panel = host_avatar.get_node("%OnlineLobbyAvatarFrame") as Panel
-	# 形象边框样式；只允许绘制透明中心与描边，黑色阴影会遮罩联机形象插画。
+	# 形象武将框样式；必须绘制填充中心，且底色与描边与空位按钮常态完全一致。
 	var host_avatar_frame_style: StyleBoxFlat = host_avatar_frame.get_theme_stylebox("panel") as StyleBoxFlat
-	# 房主插画矩形；尺寸与武将牌一致，纵坐标必须大于名称标签底边。
+	# 空位按钮常态样式；作为武将框规格基准，占用位置不得另起一套框体配色。
+	var empty_slot_style: StyleBoxFlat = (host_avatar.get_node("%OnlineLobbyEmptySlotButton") as Button).get_theme_stylebox("normal") as StyleBoxFlat
+	# 房主插画矩形；必须按组件内缩距离嵌入武将框内部，纵坐标大于名称标签底边。
 	var host_avatar_rect: Rect2 = host_avatar.get_avatar_rect()
-	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_artwork_material == null or host_artwork_material.shader == null or host_artwork_shader_code.contains("texture(TEXTURE, UV) * COLOR") or not host_artwork_shader_code.contains("texture_color.a * mask_alpha") or host_avatar_frame == null or host_avatar_frame_style == null or host_avatar_frame_style.draw_center or host_avatar_frame_style.shadow_size != 0 or not host_avatar_frame.visible or not host_avatar_rect.size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_frame.get_rect().is_equal_approx(host_avatar_rect) or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
-		_fail("host_avatar_geometry rect=%s name_rect=%s" % [host_avatar_rect, host_name_label.get_rect()])
+	# 期望插画尺寸；武将框保持武将牌尺寸，插画四周按导出内缩距离缩入框内。
+	var expected_artwork_size: Vector2 = EXPECTED_AVATAR_SIZE - Vector2(host_avatar.artwork_inset * 2.0, host_avatar.artwork_inset * 2.0)
+	if host_avatar.get_seat_index() != 0 or host_artwork.texture == null or host_artwork_material == null or host_artwork_material.shader == null or host_artwork_shader_code.contains("texture(TEXTURE, UV) * COLOR") or not host_artwork_shader_code.contains("texture_color.a * mask_alpha") or host_avatar_frame == null or host_avatar_frame_style == null or empty_slot_style == null or not host_avatar_frame_style.draw_center or not host_avatar_frame_style.bg_color.is_equal_approx(empty_slot_style.bg_color) or not host_avatar_frame_style.border_color.is_equal_approx(empty_slot_style.border_color) or not host_avatar_frame.visible or host_avatar_frame.get_index() >= host_artwork.get_index() or not host_avatar_frame.get_rect().size.is_equal_approx(EXPECTED_AVATAR_SIZE) or not host_avatar_rect.size.is_equal_approx(expected_artwork_size) or not host_avatar_rect.position.is_equal_approx(host_avatar_frame.position + Vector2(host_avatar.artwork_inset, host_avatar.artwork_inset)) or absf(float(host_artwork_material.get_shader_parameter("artwork_aspect_ratio")) - host_avatar_rect.size.x / host_avatar_rect.size.y) > 0.001 or host_avatar_rect.position.y < host_name_label.position.y + host_name_label.size.y or host_avatar.get_node_or_null("PlayerCardTemplate") != null or not host_name_label.text.contains("大厅测试房主"):
+		_fail("host_avatar_geometry rect=%s frame_rect=%s name_rect=%s" % [host_avatar_rect, host_avatar_frame.get_rect(), host_name_label.get_rect()])
 		return
 	# 超长房主地址；模拟多网卡地址列表，地址标签必须在大厅内容面内自动向左调整且不覆盖标题真实文字宽度。
 	var long_host_addresses: Array[String] = ["192.168.100.120", "10.234.56.78", "172.31.255.254", "192.168.200.201"]
@@ -152,7 +156,7 @@ func _ready() -> void:
 	# 五人位置；前三个在上、后两个在下，两排必须分别围绕座位区域中心对称。
 	var five_player_seats: Array[OnlineLobbyAvatar] = _get_seat_views(online_lobby_panel)
 	if five_player_seats.size() != 5 or not _share_row_y(five_player_seats.slice(0, 3)) or not _share_row_y(five_player_seats.slice(3, 5)) or five_player_seats[3].position.y <= five_player_seats[0].position.y or absf(_row_center_x(five_player_seats.slice(0, 3)) - seat_area.size.x * 0.5) > POSITION_EPSILON or absf(_row_center_x(five_player_seats.slice(3, 5)) - seat_area.size.x * 0.5) > POSITION_EPSILON:
-		_fail("five_player_layout")
+		_fail("five_player_layout seats=%d error=%s" % [five_player_seats.size(), (online_lobby_panel.get_node("%OnlineLobbyErrorLabel") as Label).text])
 		return
 	await _save_room_settings(online_lobby_panel, 8, "更新密码")
 	# 八人位置；四上四下，两排数量和中心必须完全一致。

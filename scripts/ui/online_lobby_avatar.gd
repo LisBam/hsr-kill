@@ -1,7 +1,7 @@
 class_name OnlineLobbyAvatar
 extends Control
 
-## 联机大厅单个玩家或空位置的表现组件。玩家只显示名称与联机形象插画，不复用局内武将牌场景或规则覆盖层。
+## 联机大厅单个玩家或空位置的表现组件。占用位置沿用空位同款武将框作为底框，联机形象插画内嵌框中，不复用局内武将牌场景或规则覆盖层。
 
 ## 本地玩家点击空位置时发出的换位请求；参数为大厅0起始位置索引。
 signal empty_slot_pressed(seat_index: int)
@@ -17,6 +17,12 @@ signal kick_requested(peer_id: int)
 
 ## 玩家名称与插画之间的垂直间距；默认4像素保持两者分离且不浪费大厅纵向空间。
 @export_range(0.0, 16.0, 1.0) var name_gap: float = 4.0
+
+## 插画在武将框内的四周内缩；默认7像素露出空位同款底色与描边，让玩家形象嵌入框体而不是覆盖整框。
+@export_range(0.0, 24.0, 0.5) var artwork_inset: float = 7.0
+
+## 插画自身圆角像素；默认4像素小于武将框6像素圆角，保证内缩后的插画四角不越出框体弧线。
+@export_range(0.0, 12.0, 0.5) var artwork_corner_radius: float = 4.0
 
 ## 踢出按钮左右内缩；默认34像素使管理入口比旧版更紧凑，运行时通常无需修改。
 @export_range(0.0, 72.0, 1.0) var kick_button_horizontal_inset: float = 34.0
@@ -42,7 +48,7 @@ signal kick_requested(peer_id: int)
 ## 联机形象插画节点；只显示武将元数据中的插画纹理，不绘制牌框、势力、体力或技能 UI。
 @onready var _artwork_rect: TextureRect = %OnlineLobbyAvatarArtwork
 
-## 联机形象边框节点；占用位置使用与空位相同的圆角边框包裹插画，节点忽略鼠标以保持管理按钮悬停稳定。
+## 联机形象武将框节点；占用位置沿用与空位完全相同的圆角面板作为底框并包裹内嵌插画，节点忽略鼠标以保持管理按钮悬停稳定。
 @onready var _avatar_frame: Panel = %OnlineLobbyAvatarFrame
 
 ## 空位置按钮；覆盖与武将牌一致的插画区域，点击后请求本地玩家换位。
@@ -79,15 +85,26 @@ func _ready() -> void:
 	size = custom_minimum_size
 	_name_label.position = Vector2.ZERO
 	_name_label.size = Vector2(avatar_size.x, name_height)
-	_artwork_rect.position = Vector2(0.0, name_height + name_gap)
-	_artwork_rect.size = avatar_size
-	_avatar_frame.position = _artwork_rect.position
+	# 武将框原点；空位按钮、玩家底框与内嵌插画都以该矩形为基准，保证占用与空位共用同一框体。
+	var frame_position: Vector2 = Vector2(0.0, name_height + name_gap)
+	_avatar_frame.position = frame_position
 	_avatar_frame.size = avatar_size
-	_empty_slot_button.position = _artwork_rect.position
+	_empty_slot_button.position = frame_position
 	_empty_slot_button.size = avatar_size
+	# 插画实际尺寸；在武将框内四周内缩，让空位同款底色与描边完整露出并包裹玩家形象。
+	var artwork_size: Vector2 = Vector2(maxf(avatar_size.x - artwork_inset * 2.0, 1.0), maxf(avatar_size.y - artwork_inset * 2.0, 1.0))
+	_artwork_rect.position = frame_position + Vector2(artwork_inset, artwork_inset)
+	_artwork_rect.size = artwork_size
+	# 插画圆角遮罩材质；场景子资源在全部座位实例间共享，写入本实例内缩后的宽高比与圆角前必须先复制。
+	var mask_material: ShaderMaterial = _artwork_rect.material as ShaderMaterial
+	if mask_material != null:
+		mask_material = mask_material.duplicate() as ShaderMaterial
+		mask_material.set_shader_parameter("artwork_aspect_ratio", artwork_size.x / artwork_size.y)
+		mask_material.set_shader_parameter("corner_radius", artwork_corner_radius / artwork_size.y)
+		_artwork_rect.material = mask_material
 	# 当前踢出按钮宽度；内缩过大时保留24像素宽度，避免检查器配置导致按钮反向或不可点击。
 	var kick_button_width: float = maxf(avatar_size.x - kick_button_horizontal_inset * 2.0, 24.0)
-	_kick_button.position = _artwork_rect.position + Vector2(kick_button_horizontal_inset, avatar_size.y - kick_button_bottom_inset - kick_button_height)
+	_kick_button.position = frame_position + Vector2(kick_button_horizontal_inset, avatar_size.y - kick_button_bottom_inset - kick_button_height)
 	_kick_button.custom_minimum_size = Vector2(kick_button_width, kick_button_height)
 	_kick_button.size = Vector2(kick_button_width, kick_button_height)
 	_empty_slot_button.pressed.connect(_on_empty_slot_pressed)
@@ -136,16 +153,13 @@ func refresh_ui_style() -> void:
 		return
 	_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if _occupied else BattleUIStyle.get_color("text_muted"))
 	_name_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
-	_empty_slot_button.add_theme_stylebox_override("normal", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("panel"), 0.36), Color(BattleUIStyle.get_color("border"), 0.55), 1, 6))
+	_empty_slot_button.add_theme_stylebox_override("normal", _make_slot_frame_style())
 	_empty_slot_button.add_theme_stylebox_override("hover", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.58), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	_empty_slot_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	# 当前玩家形象纯边框；通用面板默认阴影会覆盖插画边缘，因此这里明确关闭填充与阴影，只保留空位同规格的圆角描边。
-	var avatar_frame_style: StyleBoxFlat = BattleUIStyle.make_panel(Color.TRANSPARENT, Color(BattleUIStyle.get_color("border"), 0.55), 1, 6)
-	avatar_frame_style.draw_center = false
-	avatar_frame_style.shadow_size = 0
-	_avatar_frame.add_theme_stylebox_override("panel", avatar_frame_style)
+	# 当前玩家形象武将框；直接沿用空位常态的同一底色、描边与阴影规格，插画节点绘制在框体之上并按内缩距离嵌入。
+	_avatar_frame.add_theme_stylebox_override("panel", _make_slot_frame_style())
 	# 当前踢出按钮背景；在主题危险色基础上加深，避免与普通错误提示和高亮操作混淆。
 	var kick_button_color: Color = BattleUIStyle.get_color("danger").darkened(kick_button_darken_amount)
 	BattleUIStyle.apply_interaction_button(_kick_button, kick_button_color, BattleUIStyle.get_color("danger"), true)
@@ -164,9 +178,14 @@ func get_seat_index() -> int:
 	return _seat_index
 
 
-## 返回插画实际显示矩形；大厅布局测试用于确认玩家形象尺寸与武将牌一致。
+## 返回插画实际显示矩形；大厅布局测试据此确认插画按内缩距离完整嵌入武将框内部。
 func get_avatar_rect() -> Rect2:
 	return Rect2(_artwork_rect.position, _artwork_rect.size)
+
+
+## 构造空位与玩家共用的武将框常态样式；占用位置的底框必须与空位按钮保持同一底色、描边与圆角规格。
+func _make_slot_frame_style() -> StyleBoxFlat:
+	return BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("panel"), 0.36), Color(BattleUIStyle.get_color("border"), 0.55), 1, 6)
 
 
 ## 空位置点击只发出稳定位置索引；房主权威网关决定该位置是否仍为空。
