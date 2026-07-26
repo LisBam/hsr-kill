@@ -506,7 +506,7 @@ layout_mode = 2
 min_value = 0.1
 max_value = 1.0
 step = 0.05
-value = 0.3
+value = 0.30000000000000004
 
 [node name="GameSpeedRow" type="VBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=51671744]
 layout_mode = 2
@@ -696,7 +696,7 @@ layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "确定"
 
-[node name="SettlementButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow"]
+[node name="SettlementButton" type="Button" parent="InteractionPanel/InteractionVBox/ActionRow" unique_id=712686472]
 unique_name_in_owner = true
 visible = false
 custom_minimum_size = Vector2(146, 42)
@@ -1156,7 +1156,7 @@ grow_vertical = 0
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
-[node name="MainMenuAllCardsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent"]
+[node name="MainMenuAllCardsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=852951160]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(192, 0)
 layout_mode = 2
@@ -1165,7 +1165,7 @@ theme_override_font_sizes/font_size = 18
 toggle_mode = true
 text = "所有卡牌"
 
-[node name="TopAllCardsIndicator" type="ColorRect" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuAllCardsButton"]
+[node name="TopAllCardsIndicator" type="ColorRect" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuAllCardsButton" unique_id=1628698880]
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
@@ -1890,7 +1890,7 @@ mouse_default_cursor_shape = 2
 min_value = 0.1
 max_value = 1.0
 step = 0.05
-value = 0.3
+value = 0.30000000000000004
 
 [node name="MainMenuGameSpeedLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=508850181]
 unique_name_in_owner = true
@@ -1978,6 +1978,6 @@ text = "返回"
 
 [node name="OnlineSettingsPanel" parent="MainMenu" unique_id=1986582550 instance=ExtResource("25_online_settings")]
 
-[node name="AllCardsPanel" parent="MainMenu" instance=ExtResource("31_all_cards")]
+[node name="AllCardsPanel" parent="MainMenu" unique_id=1417086629 instance=ExtResource("31_all_cards")]
 
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]

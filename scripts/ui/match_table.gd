@@ -487,6 +487,7 @@ func _ready() -> void:
 	match_controller.state_changed.connect(_on_state_changed)
 	match_controller.log_added.connect(_on_log_added)
 	match_controller.action_rejected.connect(_on_action_rejected)
+	match_controller.self_repair_performed.connect(_on_self_repair_performed)
 	match_controller.card_presentation_requested.connect(_on_card_presentation_requested)
 	match_controller.card_transfer_requested.connect(_on_card_transfer_requested)
 	match_controller.draw_presentation_batch_started.connect(_on_draw_presentation_batch_started)
@@ -3879,6 +3880,19 @@ func _on_action_rejected(message: String) -> void:
 	error_label.text = message
 	if main_menu != null and is_instance_valid(main_menu) and main_menu.visible:
 		main_menu.show_start_error(message)
+
+
+## 展示对局停滞自修复提醒横幅；报告级别决定提示文案，完整修复细节仍可在对局日志中查看。
+func _on_self_repair_performed(repair_report: Dictionary) -> void:
+	if information_box == null or not is_instance_valid(information_box):
+		return
+	# 本次修复级别；human_reminder 只是待办提示重发，其余级别都代表系统实际修复了停滞流程。
+	var repair_kind: String = str(repair_report.get("kind", ""))
+	# 面向玩家的横幅文案；保持一句话说明发生了什么，避免打断对局节奏。
+	var notice_message: String = "检测到对局停滞，系统已自动修复并恢复流程。"
+	if repair_kind == "human_reminder":
+		notice_message = "当前有待办选择等待操作，已重新发送选择提示。"
+	information_box.show_notice(notice_message)
 
 
 ## 更新当前选择摘要，目标以玩家显示名与选择顺序呈现；本地阵亡或终局时改为显示重开与返回主菜单操作。

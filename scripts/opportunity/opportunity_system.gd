@@ -227,6 +227,25 @@ func submit_choice(player_id: int, card_id: String) -> bool:
 	return true
 
 
+## 为被托管、断线接管或停滞修复的玩家代选机缘卡；仅当组件活动、处于全体选择阶段且该玩家正是当前选择者时生效。
+## 代选复用与内置AI完全相同的估值入口，并经由submit_choice权威校验推进队列，不形成绕过校验的第二条写路径。
+func choose_for_managed_player(player_id: int) -> bool:
+	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
+		return false
+	if player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
+		return false
+	# 该玩家私有候选；估值与提交都只使用权威状态中的候选，不信任任何外部传入卡面。
+	var managed_player_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(player_id), []) as Array
+	# AI估值选出的机缘卡；估值异常返回空字典时回退首张候选，保证接管路径始终能解除全体等待。
+	var chosen_card: Dictionary = _choose_ai_card(player_id, managed_player_options)
+	var chosen_card_id: String = str(chosen_card.get("id", ""))
+	if chosen_card_id.is_empty() and not managed_player_options.is_empty():
+		chosen_card_id = str((managed_player_options[0] as Dictionary).get("id", ""))
+	if chosen_card_id.is_empty():
+		return false
+	return submit_choice(player_id, chosen_card_id)
+
+
 ## 恢复机缘解析器创建的标准ChoiceRequest；控制器在普通卡牌、技能处理前优先调用本入口。
 func continue_choice(context: Dictionary, response: ChoiceResponse) -> bool:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "resolving":

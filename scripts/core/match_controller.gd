@@ -44,6 +44,10 @@ signal public_card_choice_display_changed(display_data: Dictionary)
 ## 选将快照变化信号；只包含观察者可见候选、公开领袖武将和全员确认状态。
 signal character_selection_changed(snapshot: Dictionary)
 
+## 停滞自修复完成信号；看门狗触发修复且对局状态确实发生变化后发送，界面据此显示自动修复提醒横幅。
+## 报告只包含可序列化诊断字段（修复级别、动作列表、阶段），不携带事件对象或内部队列引用。
+signal self_repair_performed(repair_report: Dictionary)
+
 ## 默认牌堆 ID；可在检查器中替换为后续扩展牌堆，运行时通常无需动态修改。
 @export var default_deck_id: String = "standard_162"
 
@@ -241,6 +245,12 @@ var card_use_event_service: CardUseEventService
 
 ## 可插拔机缘系统组件；负责全体三选一、私有候选、逆时针效果顺序与轮末保底触发。
 var opportunity_system: OpportunitySystem
+
+## 对局停滞自修复看门狗组件；只通过控制器公开诊断与修复端口工作，检测阈值可在检查器中调整。
+var stall_watchdog: StallWatchdogService
+
+## 上一轮硬修复时仍未解决的兼容选择请求ID；同一请求连续两轮硬修复仍卡住才会被强制中断，-1表示无记录。
+var _stall_repair_last_stuck_request_id: int = -1
 
 ## 自动开局种子序号步长；使用大质数拉开相邻重开种子，避免与单调毫秒时间形成短周期重复。
 const AUTOMATIC_MATCH_SEED_SERIAL_STEP: int = 104729
@@ -467,6 +477,12 @@ func _ready() -> void:
 		event_scheduler = EventScheduler.new()
 		event_scheduler.name = "EventScheduler"
 		add_child(event_scheduler)
+	stall_watchdog = get_node_or_null("StallWatchdogService") as StallWatchdogService
+	if stall_watchdog == null:
+		stall_watchdog = StallWatchdogService.new()
+		stall_watchdog.name = "StallWatchdogService"
+		add_child(stall_watchdog)
+	stall_watchdog.bind(self)
 	_connect_event_runtime()
 	identity_rules = IdentityRules.new()
 	card_use_event_service = CardUseEventService.new()
@@ -566,13 +582,363 @@ func _on_gameplay_pause_state_changed(paused: bool, _active_reasons: Array[Strin
 func _resume_ai_after_gameplay_pause() -> void:
 	if is_gameplay_paused() or state == null or state.game_over:
 		return
-	if state.current_phase == "character_selection":
-		_drive_ai_character_selection()
-		return
-	if state.current_phase == "wheel_duel_selection":
-		_drive_ai_wheel_duel_selection()
+	if _redrive_pre_game_ai_progress():
 		return
 	_ensure_ai_progress_after_resolution()
+
+
+## 按当前预开局阶段补齐AI驱动；托管接管、暂停恢复与停滞修复共用本唯一分派，避免多份阶段清单彼此漂移。
+## 返回true表示当前处于预开局阶段且已执行对应驱动；手气卡驱动后所有玩家可能已确认，此时必须走唯一完成出口。
+func _redrive_pre_game_ai_progress() -> bool:
+	if state == null or state.game_over:
+		return false
+	if state.current_phase == "character_selection":
+		_drive_ai_character_selection()
+		return true
+	if state.current_phase == "wheel_duel_selection":
+		_drive_ai_wheel_duel_selection()
+		return true
+	if state.current_phase == "starting_hand_mulligan":
+		_drive_ai_starting_hand_mulligan()
+		# AI补齐后可能全部玩家均已确认；服务不再活动时复制开局入口的完成检查，防止阶段停在已结束的手气卡。
+		if starting_hand_mulligan != null and not starting_hand_mulligan.active:
+			_complete_pre_game_start()
+		return true
+	return false
+
+
+## 返回对局停滞诊断快照；看门狗只依赖本端口判断“是否可监控、是否有人类待办、对局是否仍在推进”。
+## 指纹覆盖事件历史、动作序号、待办请求、暂停令牌、阶段与机缘进度，任何真实推进都会改变指纹。
+func get_stall_diagnostics() -> Dictionary:
+	# 当前是否具备监控条件；无对局、终局或非权威端（局域网客户端）不做任何检测与修复。
+	var monitorable: bool = state != null and not state.game_over
+	if network_gateway != null and network_gateway.is_lan_client():
+		monitorable = false
+	# 用户主动打开日志或武将详情造成的对局暂停属于正常浏览；只有机缘选择暂停仍需继续监控。
+	if monitorable and gameplay_pause_service != null and gameplay_pause_service.is_paused():
+		for pause_reason: String in gameplay_pause_service.get_active_reasons():
+			if pause_reason != "opportunity_selection":
+				monitorable = false
+				break
+	if not monitorable:
+		return {"monitorable": false, "waiting_for_human": false, "fingerprint": ""}
+	return {
+		"monitorable": true,
+		"waiting_for_human": is_waiting_for_human_input(),
+		"fingerprint": _compose_stall_fingerprint(),
+	}
+
+
+## 返回当前是否存在人类可以实际操作的待办；只要该函数为真，看门狗永远不会执行强制修复。
+## 死亡角色的待办没有任何人能应答，因此不计入人类等待；离场但存活的角色仍可作答（机缘规则允许）。
+func is_waiting_for_human_input() -> bool:
+	if state == null:
+		return false
+	# 机缘全体选择阶段；当前选择者是可应答人类时属于人类等待，AI或死亡选择者交给停滞修复处理。
+	if opportunity_system != null and opportunity_system.is_active() and str(state.opportunity_state.get("stage", "")) == "choosing":
+		return _is_answerable_human_actor(int(state.opportunity_state.get("current_chooser_id", -1)))
+	# 开局配置阶段（选将、车轮战抓将、手气卡、房主调整AI）；存在真人参与即视为人类等待，AI部分有独立驱动。
+	if state.current_phase in ["character_selection", "wheel_duel_selection", "starting_hand_mulligan", "ai_character_adjustment"]:
+		if local_human_player_id >= 0:
+			return true
+		return network_gateway != null and network_gateway.is_lan_host() and not network_gateway.get_remote_player_assignments().is_empty()
+	# 事件运行时待办请求；任意一条属于可应答人类即表示人类可以操作。
+	if event_scheduler != null:
+		for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+			if _is_answerable_human_actor(int(request_data.get("actor_id", -1))):
+				return true
+	# 兼容层普通选择与同时无懈窗口；正常情况与运行时请求一一对应，此处作为一致性兜底再查一遍。
+	if not _pending_card_choice.is_empty() and _is_answerable_human_actor(int(_pending_card_choice.get("chooser_id", -1))):
+		return true
+	for negation_choice_variant: Variant in _pending_negation_choices.values():
+		if _is_answerable_human_actor(int((negation_choice_variant as Dictionary).get("chooser_id", -1))):
+			return true
+	return false
+
+
+## 返回指定玩家是否是“可以实际作答的人类”；AI、托管、死亡、无效ID与无人认领的座位都返回false。
+## 离场但存活的角色不排除：机缘选择与部分效果允许离场角色继续作答，其界面待办仍然有效。
+func _is_answerable_human_actor(player_id: int) -> bool:
+	if player_id < 0 or state == null:
+		return false
+	if ai_coordinator != null and ai_coordinator.is_ai_controlled(player_id):
+		return false
+	# 当前玩家状态；未登记ID无法作答，死亡角色的待办永远不可能被回应。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		return false
+	if player.auto_managed:
+		return false
+	# 该座位必须真的绑定一个人类界面：既非AI又不属于任何真人视角的“无人认领”座位没有任何人能作答，
+	# 其待办必须交给停滞修复而不是当成人类思考无限等待。
+	if network_gateway != null and network_gateway.is_lan_host():
+		return player_id == local_human_player_id or network_gateway.get_peer_id_for_player(player_id) > NetworkGateway.SERVER_PEER_ID
+	return player_id == local_human_player_id or _control_all_characters_enabled
+
+
+## 组合当前对局进度指纹；只读取稳定可序列化字段，任何事件推进、动作提交或窗口变化都会改变结果。
+func _compose_stall_fingerprint() -> String:
+	# 指纹片段列表；顺序固定保证相同状态生成相同指纹。
+	var parts: Array[String] = []
+	parts.append(state.match_id)
+	parts.append(str(state.action_sequence))
+	parts.append(state.current_phase)
+	parts.append(str(state.current_player_id))
+	if event_scheduler != null:
+		parts.append(str(event_scheduler.get_event_history_count()))
+		# 待办请求指纹；修订号纳入其中，技能backup/restore等上下文切换同样视为推进。
+		for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+			parts.append("req:%d:%d:%d" % [int(request_data.get("request_id", -1)), int(request_data.get("actor_id", -1)), int(request_data.get("revision", 0))])
+		# 活动暂停令牌指纹；令牌解决或新增都代表流程仍在变化。
+		for pause_token: Dictionary in event_scheduler.pause_registry.get_active_tokens():
+			parts.append("tok:%d" % int(pause_token.get("token_id", -1)))
+	parts.append("cc:%d" % int(_pending_card_choice.get("request_id", -1)))
+	parts.append("neg:%d" % _pending_negation_choices.size())
+	# AI调度标记；软修复重排计时器同样属于对局被推动，使修复有效性判定与玩家提醒不漏掉重排类修复。
+	parts.append("aisch:%d:%d" % [_scheduled_ai_drive_token, _scheduled_ai_choice_request_id])
+	if game_flow_pacer != null:
+		parts.append("pace:%s:%s" % [str(game_flow_pacer.has_any_pending()), str(game_flow_pacer.has_pending_skill_interval())])
+	# 机缘进度指纹；选择者、结算者与已选人数变化都会更新，机缘内部推进不会被误判为停滞。
+	if not state.opportunity_state.is_empty():
+		parts.append("opp:%s:%d:%d:%d" % [str(state.opportunity_state.get("stage", "")), int(state.opportunity_state.get("current_chooser_id", -1)), int(state.opportunity_state.get("current_resolver_id", -1)), (state.opportunity_state.get("chosen_player_ids", []) as Array).size()])
+	parts.append("conq:%s" % str(_conquest_replacement_transition_active))
+	parts.append("judg:%s:%s" % [str(_judgment_flow_in_progress), str(has_pending_judgment_request())])
+	return "|".join(parts)
+
+
+## 执行指定级别的对局停滞自修复并返回可序列化报告；空字典表示当前不允许修复（非权威端或无对局）。
+## human_reminder只重发界面提示绝不代替玩家选择；soft只重排既有异步任务；hard才清理孤儿令牌与不可应答请求。
+func perform_stall_self_repair(repair_kind: String) -> Dictionary:
+	if state == null or state.game_over:
+		return {}
+	if network_gateway != null and network_gateway.is_lan_client():
+		return {}
+	# 本次修复实际执行的动作代码列表；空列表表示本级修复没有找到可处理的停滞原因。
+	var actions: Array[String] = []
+	if repair_kind == "human_reminder":
+		# 重发人类待办提示；兼容选择重新广播给本地与远端，同时无懈公共展示与完整快照一并刷新。
+		_republish_manual_player_choice(local_human_player_id)
+		if not _pending_negation_choices.is_empty():
+			_refresh_simultaneous_choice_snapshot()
+		_emit_state()
+		actions.append("republish_prompts")
+		add_log("【自动提醒】当前有待办选择等待操作，已重新发送选择提示。")
+		# 提醒报告；提醒本身不改变规则状态，effective恒为true以便界面展示横幅。
+		var reminder_report: Dictionary = {"kind": repair_kind, "actions": actions, "effective": true, "phase": state.current_phase}
+		self_repair_performed.emit(reminder_report.duplicate(true))
+		return reminder_report
+	# 修复前进度指纹；修复后指纹变化才认定本次修复确实产生效果并提醒玩家。
+	var fingerprint_before: String = _compose_stall_fingerprint()
+	# 第一级软修复：重排开局配置阶段的AI驱动（选将、车轮战抓将、手气卡共用统一分派）。
+	if _redrive_pre_game_ai_progress():
+		actions.append("redrive_pre_game_ai")
+	# 软修复：兼容普通选择属于AI时清除防重标记并强制重排延时决策任务。
+	if not _pending_card_choice.is_empty():
+		# 当前兼容请求与应答者；防重标记清零保证即使旧协程仍标记“已安排”也能重新创建计时器。
+		var pending_choice_request_id: int = int(_pending_card_choice.get("request_id", -1))
+		var pending_chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+		if ai_coordinator != null and ai_coordinator.is_ai_controlled(pending_chooser_id):
+			_scheduled_ai_choice_request_id = -1
+			_schedule_ai_card_choice_response(pending_choice_request_id, pending_chooser_id)
+			actions.append("reschedule_ai_choice:%d" % pending_choice_request_id)
+	# 软修复：同时无懈窗口中属于AI的请求逐个重排延时响应任务。
+	var restarted_negation_tasks: int = _redrive_pending_negation_ai_tasks()
+	if restarted_negation_tasks > 0:
+		actions.append("reschedule_negation_ai:%d" % restarted_negation_tasks)
+	# 软修复：机缘流程推进兜底；仅在完全没有待办请求时轻推，避免越过尚未回应的正常选择。
+	if opportunity_system != null and opportunity_system.is_active() and event_scheduler != null and event_scheduler.get_pending_choice_requests().is_empty() and not has_pending_card_choice():
+		# 当前机缘阶段；结算阶段安全重连帧推进回调，选择阶段的强制代选只属于硬修复。
+		var opportunity_stage: String = str(state.opportunity_state.get("stage", ""))
+		if opportunity_stage == "resolving":
+			opportunity_system.continue_after_barrier()
+			actions.append("nudge_opportunity_resolution")
+		elif opportunity_stage == "choosing" and repair_kind == "hard":
+			# 当前机缘选择者；能进入本分支说明其已不可应答（死亡或异常AI残留），按AI估值代选解除全局阻塞。
+			var opportunity_chooser_id: int = int(state.opportunity_state.get("current_chooser_id", -1))
+			if opportunity_chooser_id >= 0 and not _is_answerable_human_actor(opportunity_chooser_id):
+				if opportunity_system.choose_for_managed_player(opportunity_chooser_id):
+					actions.append("opportunity_forced_choice:%d" % opportunity_chooser_id)
+	if repair_kind == "hard":
+		# 第二级硬修复：释放不可能再被解决的孤儿暂停令牌。
+		var released_tokens: Array[String] = _release_orphan_runtime_pause_tokens()
+		if not released_tokens.is_empty():
+			actions.append("released_orphan_tokens:%s" % ",".join(released_tokens))
+		# 硬修复：无人认领的存活座位（既非AI又不属于任何真人视角）转入标准托管，由基础AI接管其全部待办。
+		for orphan_actor_id: int in _collect_orphan_pending_actor_ids():
+			_set_player_auto_management(orphan_actor_id, true, false)
+			actions.append("auto_managed_orphan_seat:%d" % orphan_actor_id)
+		# 硬修复：关闭死亡应答者遗留的待办请求，父流程在令牌释放后继续收尾。
+		var closed_requests: Array[String] = _close_unanswerable_choice_requests()
+		if not closed_requests.is_empty():
+			actions.append("closed_dead_requests:%s" % ",".join(closed_requests))
+		# 硬修复：同一AI兼容请求经历上一轮硬修复仍未解决时，中断该请求并恢复父流程（与AI重试耗尽同一保护出口）。
+		if not _pending_card_choice.is_empty():
+			var stuck_choice_request_id: int = int(_pending_card_choice.get("request_id", -1))
+			var stuck_chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+			if not _is_answerable_human_actor(stuck_chooser_id):
+				if _stall_repair_last_stuck_request_id == stuck_choice_request_id:
+					_abort_unresolvable_ai_choice(stuck_choice_request_id, "stall_watchdog_forced_abort")
+					actions.append("aborted_stuck_choice:%d" % stuck_choice_request_id)
+					_stall_repair_last_stuck_request_id = -1
+				else:
+					_stall_repair_last_stuck_request_id = stuck_choice_request_id
+		else:
+			_stall_repair_last_stuck_request_id = -1
+	# 统一收尾：重进结算管线并排空事件树，再补齐AI进度；全部入口自带安全防重与状态校验。
+	resume_settlement_pipeline()
+	_ensure_ai_progress_after_resolution()
+	_emit_state()
+	# 修复后进度指纹；与修复前不同说明对局确实被推动，此时才向玩家发出自动修复提醒。
+	var fingerprint_after: String = _compose_stall_fingerprint()
+	var effective: bool = fingerprint_after != fingerprint_before
+	# 本次修复报告；看门狗与测试读取动作列表和效果标记，界面据信号展示提醒。
+	var repair_report: Dictionary = {"kind": repair_kind, "actions": actions, "effective": effective, "phase": state.current_phase}
+	if effective:
+		add_log("【自动修复】检测到对局停滞，已自动修复并恢复流程。")
+		self_repair_performed.emit(repair_report.duplicate(true))
+	return repair_report
+
+
+## 释放不可能再被任何代码解决的孤儿暂停令牌；返回“通道#令牌ID”列表供修复报告记录。
+## 判定规则按通道独立：gameplay与conquest_replacement对照各自的权威状态标志，choice对照待办请求，其余对照所属事件是否已终结。
+func _release_orphan_runtime_pause_tokens() -> Array[String]:
+	# 已释放令牌描述列表；空列表表示当前所有令牌都仍有合法的解决路径。
+	var released_tokens: Array[String] = []
+	if event_scheduler == null:
+		return released_tokens
+	# 当前待办请求ID集合；choice通道令牌与请求一一对应，请求消失后令牌永远无法被解决。
+	var pending_request_ids: Dictionary = {}
+	for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+		pending_request_ids[int(request_data.get("request_id", -1))] = true
+	for pause_token: Dictionary in event_scheduler.pause_registry.get_active_tokens():
+		# 当前令牌稳定字段；快照为深拷贝，读取不会影响注册表。
+		var token_id: int = int(pause_token.get("token_id", -1))
+		var token_channel: String = str(pause_token.get("channel", ""))
+		var owner_event_id: int = int(pause_token.get("owner_event_id", -1))
+		# 当前令牌是否已确认为孤儿；默认保守不释放。
+		var orphaned: bool = false
+		if token_channel == "gameplay":
+			# 对局级暂停服务已恢复但事件树令牌残留；同步清空成员字段防止后续误用旧令牌ID。
+			orphaned = not is_gameplay_paused()
+			if orphaned and token_id == _gameplay_event_pause_token:
+				_gameplay_event_pause_token = -1
+		elif token_channel == "conquest_replacement":
+			# 换将过渡标志已复位但专用令牌残留；同步清空成员字段保持释放路径幂等。
+			orphaned = not _conquest_replacement_transition_active
+			if orphaned and token_id == _conquest_replacement_settlement_pause_token:
+				_conquest_replacement_settlement_pause_token = -1
+		elif token_channel == "choice":
+			# 选择令牌的原因固定为 choice_request:请求ID；对应请求已经消失时该令牌不可能再被解决。
+			var token_reason: String = str(pause_token.get("reason", ""))
+			if token_reason.begins_with("choice_request:"):
+				orphaned = not pending_request_ids.has(int(token_reason.get_slice(":", 1)))
+		elif owner_event_id >= 0:
+			# 未来新增通道兜底：所属事件缺失或已终结时，没有任何流程还会解决该令牌。
+			var owner_event_snapshot: Dictionary = event_scheduler.get_event_snapshot(owner_event_id)
+			orphaned = owner_event_snapshot.is_empty() or bool(owner_event_snapshot.get("finalized", false))
+		if orphaned:
+			event_scheduler.resume(token_id, "stall_watchdog_orphan_release")
+			released_tokens.append("%s#%d" % [token_channel, token_id])
+	return released_tokens
+
+
+## 关闭应答者已死亡、永远等不到回应的待办请求；返回“类型#请求ID”列表供修复报告记录。
+## 同时无懈窗口通过标准放弃动作关闭以保持轮次簿记一致，其余请求使用统一中断保护出口。
+func _close_unanswerable_choice_requests() -> Array[String]:
+	# 已关闭请求描述列表；空列表表示所有待办请求的应答者都仍然存活。
+	var closed_requests: Array[String] = []
+	if state == null or event_scheduler == null:
+		return closed_requests
+	# 同时无懈窗口快照键列表；提交放弃动作会修改原字典，必须先复制键再逐个复核。
+	var negation_request_ids: Array = _pending_negation_choices.keys().duplicate()
+	for negation_request_id_variant: Variant in negation_request_ids:
+		var negation_request_id: int = int(negation_request_id_variant)
+		if not _pending_negation_choices.has(negation_request_id):
+			continue
+		# 当前无懈窗口数据与应答者；存活应答者的窗口保持等待，不做任何干预。
+		var negation_choice_data: Dictionary = _pending_negation_choices.get(negation_request_id, {}) as Dictionary
+		var negation_chooser_id: int = int(negation_choice_data.get("chooser_id", -1))
+		var negation_chooser: PlayerState = state.get_player(negation_chooser_id)
+		if negation_chooser != null and negation_chooser.alive:
+			continue
+		# 死亡应答者的标准放弃动作；走正式提交入口保证公共展示、轮次收尾与事件令牌全部一致。
+		var decline_action: PlayerAction = PlayerAction.new("choose_cards", negation_chooser_id)
+		decline_action.payload = {"request_id": negation_request_id, "event_id": int(negation_choice_data.get("runtime_event_id", -1)), "selected_card_uids": []}
+		if _submit_simultaneous_negation_choice(decline_action):
+			closed_requests.append("negation#%d" % negation_request_id)
+	# 兼容普通选择请求；应答者死亡时复用AI不可恢复请求的统一中断保护出口恢复父流程。
+	if not _pending_card_choice.is_empty():
+		var pending_chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+		var pending_chooser: PlayerState = state.get_player(pending_chooser_id)
+		if pending_chooser == null or not pending_chooser.alive:
+			# 当前兼容请求ID；中断入口会释放选择令牌、恢复阶段并重新排空结算管线。
+			var pending_request_id: int = int(_pending_card_choice.get("request_id", -1))
+			_abort_unresolvable_ai_choice(pending_request_id, "stall_watchdog_dead_chooser")
+			closed_requests.append("card_choice#%d" % pending_request_id)
+	# 运行时原生请求；死亡应答者的剩余请求直接中断，父事件在选择令牌释放后继续收尾。
+	for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+		# 当前请求应答者；无效ID或存活应答者都跳过，只处理确认无法作答的死亡角色。
+		var request_actor_id: int = int(request_data.get("actor_id", -1))
+		if request_actor_id < 0:
+			continue
+		var request_actor: PlayerState = state.get_player(request_actor_id)
+		if request_actor != null and request_actor.alive:
+			continue
+		var runtime_request_id: int = int(request_data.get("request_id", -1))
+		if event_scheduler.abort_choice(runtime_request_id, "stall_watchdog_dead_actor"):
+			closed_requests.append("runtime#%d" % runtime_request_id)
+	return closed_requests
+
+
+## 收集当前全部待办请求中“存活但无人能作答且未由AI控制”的座位ID；供硬修复统一转入标准托管。
+## 覆盖运行时原生请求、兼容普通选择、同时无懈窗口与当前回合的chooseToUse归属，去重后按稳定顺序返回。
+func _collect_orphan_pending_actor_ids() -> Array[int]:
+	# 孤儿座位结果；键去重，值固定true，最终导出为有序数组。
+	var orphan_actor_ids: Dictionary = {}
+	if state == null or event_scheduler == null:
+		return []
+	# 候选应答者集合；运行时原生请求已经覆盖兼容层请求，但两边独立收集可抵御一致性缺口。
+	var candidate_actor_ids: Array[int] = []
+	for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
+		candidate_actor_ids.append(int(request_data.get("actor_id", -1)))
+	if not _pending_card_choice.is_empty():
+		candidate_actor_ids.append(int(_pending_card_choice.get("chooser_id", -1)))
+	for negation_choice_variant: Variant in _pending_negation_choices.values():
+		candidate_actor_ids.append(int((negation_choice_variant as Dictionary).get("chooser_id", -1)))
+	for candidate_actor_id: int in candidate_actor_ids:
+		if candidate_actor_id < 0 or orphan_actor_ids.has(candidate_actor_id):
+			continue
+		if ai_coordinator != null and ai_coordinator.is_ai_controlled(candidate_actor_id):
+			continue
+		if _is_answerable_human_actor(candidate_actor_id):
+			continue
+		# 当前候选状态；死亡座位由死亡请求关闭路径处理，托管转入只针对存活的无人认领座位。
+		var candidate_actor: PlayerState = state.get_player(candidate_actor_id)
+		if candidate_actor == null or not candidate_actor.alive or candidate_actor.auto_managed:
+			continue
+		orphan_actor_ids[candidate_actor_id] = true
+	# 有序导出；排序保证同一停滞在不同运行中产生相同的修复动作顺序。
+	var result: Array[int] = []
+	for orphan_actor_id_variant: Variant in orphan_actor_ids.keys():
+		result.append(int(orphan_actor_id_variant))
+	result.sort()
+	return result
+
+
+## 为仍在等待的同时无懈窗口逐个重启AI延时响应任务；返回实际重启数量。
+## 统一AI进度入口对无懈非空直接返回（各窗口设计上自带计时器），因此控全切换、托管恢复与停滞修复必须使用本入口补排。
+func _redrive_pending_negation_ai_tasks() -> int:
+	# 已重启任务数量；0表示当前没有属于AI的无懈窗口需要补排。
+	var restarted_count: int = 0
+	for negation_request_id_variant: Variant in _pending_negation_choices.keys():
+		# 当前无懈请求数据；轮次ID从共享上下文读取，旧轮任务在新一轮开始后自动失效。
+		var negation_request_id: int = int(negation_request_id_variant)
+		var negation_choice_data: Dictionary = _pending_negation_choices.get(negation_request_id, {}) as Dictionary
+		var negation_chooser_id: int = int(negation_choice_data.get("chooser_id", -1))
+		if ai_coordinator != null and ai_coordinator.is_ai_controlled(negation_chooser_id):
+			_run_simultaneous_negation_ai_after_delay(negation_request_id, negation_chooser_id, int((negation_choice_data.get("context", {}) as Dictionary).get("negation_round_id", -1)))
+			restarted_count += 1
+	return restarted_count
 
 
 ## 返回开局请求的前置校验错误；空字符串表示可以安全进入会替换旧局的初始化阶段。
@@ -1100,14 +1466,12 @@ func _is_conquest_replacement_opportunity_action_allowed(action: PlayerAction) -
 		return true
 	if action.action_type not in ["choose_cards", "choice_response"]:
 		return false
-	if opportunity_system == null or not opportunity_system.is_active() or state == null or str(state.opportunity_state.get("stage", "")) != "resolving":
-		return false
 	if _pending_card_choice.is_empty():
 		return false
-	# 当前机缘选择上下文；只有解析器声明的opportunity_前缀可以越过换将边界，普通技能与旧卡牌请求继续被拒绝。
-	var pending_choice_context: Dictionary = _pending_card_choice.get("context", {}) as Dictionary
-	if not str(pending_choice_context.get("kind", "")).begins_with("opportunity_"):
-		return false
+	# 换将过渡期内唯一合法的普通提交：与当前权威待办完全匹配的选择动作。
+	# 机缘效果通过通用规则入口（获得装备、区域选牌等）嵌套创建的标准选择不带opportunity_前缀，同样必须放行；
+	# 只按kind前缀过滤曾把这类嵌套选择全部拒绝，与结算管线的过渡门控形成循环等待并确认为对局死锁。
+	# 旧回合遗留请求在过渡开始前已经清空或完成，请求ID与选择者的双重匹配足以阻挡任何过期或伪造提交。
 	return action.actor_id == int(_pending_card_choice.get("chooser_id", -1)) \
 		and int(action.payload.get("request_id", -1)) == int(_pending_card_choice.get("request_id", -2))
 
@@ -1343,8 +1707,11 @@ func _set_player_auto_management(player_id: int, enabled: bool, offline: bool) -
 func _continue_auto_managed_player(player_id: int) -> void:
 	if state == null or state.game_over:
 		return
-	if state.current_phase == "character_selection":
-		_drive_ai_character_selection()
+	if _redrive_pre_game_ai_progress():
+		return
+	# 机缘全体选择期间接管；当前选择者正是该玩家时由机缘组件按AI估值代选，解除全局暂停等待。
+	# 该分支缺失曾导致断线接管后选择队列永远停在已离线玩家、整个场景树保持暂停的确认卡死。
+	if opportunity_system != null and opportunity_system.choose_for_managed_player(player_id):
 		return
 	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == player_id:
 		_schedule_ai_card_choice_response(int(_pending_card_choice.get("request_id", -1)), player_id)
@@ -1375,6 +1742,13 @@ func _republish_manual_player_choice(player_id: int) -> void:
 		var choice_data: Dictionary = _pending_card_choice.duplicate(true)
 		card_choice_requested.emit(choice_data)
 		_replicate_choice_request_to_remote_player(choice_data)
+	# 仍在等待该玩家的同时无懈窗口；取消托管时其AI计时器已被身份检查静默作废，必须重发私有候选让真人接手。
+	# 统一走发布入口以保持控全模式“只显示首个待办”的既有语义，并同步复制给对应远端观察者。
+	for negation_request_id_variant: Variant in _pending_negation_choices.keys():
+		# 当前无懈窗口数据；只重发属于该玩家的请求，其他响应者的窗口保持原有等待。
+		var negation_choice_data: Dictionary = _pending_negation_choices.get(int(negation_request_id_variant), {}) as Dictionary
+		if int(negation_choice_data.get("chooser_id", -1)) == player_id:
+			_publish_card_choice_request(negation_choice_data, false)
 
 
 ## 返回操作人是否被允许修改其托管状态；LAN 房主用真实发送 peer 复核，离线模式只允许本地座次。
@@ -2189,9 +2563,14 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	await get_tree().create_timer(_get_effective_ai_response_delay_seconds(), false).timeout
 	if _scheduled_ai_choice_request_id == request_id:
 		_scheduled_ai_choice_request_id = -1
-	if is_gameplay_paused() or token != _ai_drive_token or state == null or state.game_over or _pending_card_choice.is_empty():
+	if is_gameplay_paused() or state == null or state.game_over or _pending_card_choice.is_empty():
 		return
 	if int(_pending_card_choice.get("request_id", -1)) != request_id or int(_pending_card_choice.get("chooser_id", -1)) != chooser_id or not ai_coordinator.is_ai_controlled(chooser_id):
+		return
+	if token != _ai_drive_token:
+		# 阶段令牌在等待期间被死亡结算、回合切换或额外阶段递增；同一请求仍是当前权威待办时必须按新令牌重排。
+		# 静默作废会让该请求永远无人提交（重排入口曾被request_id去重挡回），这是已确认的对局卡死根因。
+		_schedule_ai_card_choice_response(request_id, chooser_id)
 		return
 	# 当前运行时请求；待选快照使用 chooser_id/runtime_event_id 字段，恢复时显式映射到 ChoiceRequest 的 actor_id/event_id 协议。
 	var runtime_request: ChoiceRequest = ChoiceRequest.new(int(_pending_card_choice.get("runtime_event_id", -1)), chooser_id, str(_pending_card_choice.get("choice_type", "card")), str(_pending_card_choice.get("prompt", "")))
@@ -9349,7 +9728,9 @@ func _resume_interrupted_turn_flow() -> void:
 	if not _active_extra_discard_phase.is_empty():
 		# 当前额外弃牌阶段状态；body重新计算弃牌，完成状态则续接End、After或技能回调。
 		var extra_discard_status: String = str(_active_extra_discard_phase.get("status", "body"))
-		if extra_discard_status == "body":
+		# discard_choice表示弃牌请求已建立但被中断（如AI重试耗尽或死亡应答者关闭）；主体入口幂等自愈，
+		# 会复核存活、重算弃牌数并重建请求，缺少该路由曾使中断后的额外弃牌阶段永久悬停。
+		if extra_discard_status in ["body", "discard_choice"]:
 			_continue_active_extra_discard_phase_body()
 		elif extra_discard_status in ["finish_end", "finish_after"]:
 			_finish_active_extra_discard_phase()
@@ -9531,7 +9912,15 @@ func _resume_next_rule_continuation() -> void:
 
 ## 按触发、装备、规则后半段、技能后续的固定优先级排空当前结算，最后才恢复阶段或父牌游标。
 func _resume_settlement_pipeline() -> void:
-	if state == null or state.game_over or has_pending_card_choice() or _conquest_replacement_transition_active:
+	if state == null or state.game_over:
+		return
+	# 换将过渡期唯一放行的续接：机缘效果嵌套选择结束后，栈顶的机缘续接必须弹出，否则换将完成回调永远不可达。
+	# 其余旧回合续接（斩杀连锁、伤害尾部等）仍等待换将边界完成后按正常门控恢复，不在过渡期越界执行。
+	if _conquest_replacement_transition_active:
+		if not has_pending_card_choice() and _rule_continuations.has_pending() and str(_rule_continuations.peek().get("continuation_type", "")) == "opportunity_resolution":
+			_resume_next_rule_continuation()
+		return
+	if has_pending_card_choice():
 		return
 	# 技能安排的可见结果停留仍是当前结算的一部分；回调完成后会重新调用本入口。
 	if game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval():
@@ -13112,11 +13501,17 @@ func _on_control_all_characters_changed(enabled: bool) -> void:
 		_ai_drive_token += 1
 		_scheduled_ai_drive_token = -1
 		_scheduled_ai_choice_request_id = -1
+		# 同时无懈窗口的AI计时器不经过统一AI进度入口（该入口对无懈非空直接返回）；关闭接管时必须逐请求重启，
+		# 并把属于恢复后主真人的窗口重新发给界面，否则整轮无懈询问会永久悬停。
+		_redrive_pending_negation_ai_tasks()
+		_republish_manual_player_choice(local_human_player_id)
 		_emit_state()
 		_ensure_ai_progress_after_resolution()
 		return
-	if not _prepare_offline_controlled_view():
-		_emit_state()
+	# 开启方向必须无条件刷新快照：视角切换与开关标志写入两种变化各自都需要广播，旧的反向条件恰好漏掉视角已切换的一侧。
+	_emit_state()
+	# 切换后的第一视角可能正有待办选择；立即重发窗口，避免玩家接管后面对空白操作区。
+	_republish_manual_player_choice(local_human_player_id)
 
 
 ## 返回面向指定观察者的选将类私有快照；普通选将与房主 AI 调整阶段互斥。
