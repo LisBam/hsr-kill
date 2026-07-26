@@ -6,8 +6,12 @@ extends Control
 ## 玩家点击右上角唯一关闭按钮时发出；牌桌保留终局快照，以便终局操作区再次打开本面板。
 signal close_requested
 
-## 玩家点击“保存回放”按钮时发出；实际录制数据与文件写入由牌桌的回放录制器负责，面板不接触回放内容。
-signal save_replay_requested
+## 玩家在命名弹窗确认保存回放时发出；custom_name 为玩家填写的回放名（可为空，空值表示使用默认名）。
+## 实际录制数据与文件写入由牌桌的回放录制器负责，面板不接触回放内容。
+signal save_replay_requested(custom_name: String)
+
+## 回放名称允许的最大 Unicode 字符数；60字符足够描述一局对局且保证列表条目单行可读。
+const REPLAY_NAME_MAX_LENGTH: int = 60
 
 ## 结算面板绘制层级；高于机缘选择与普通选牌层，低于局内菜单和主菜单。
 const MODAL_Z_INDEX: int = 220
@@ -40,9 +44,30 @@ const STAT_ROW_MINIMUM_HEIGHT: float = 38.0
 ## 结算角色行容器；每份终局快照重建一次，避免上局角色或统计残留。
 @onready var _rows_container: VBoxContainer = %RowsContainer
 
-## “保存回放”按钮；位于统计列表下方居中，点击后只发出保存意图信号。
+## “保存回放”按钮；位于统计列表下方居中，点击后打开命名弹窗而不是直接落盘。
 ## 使用 get_node_or_null 防御旧场景缓存缺失该节点；缺失时不影响结算列表与关闭按钮。
 @onready var _save_replay_button: Button = get_node_or_null("%SaveReplayButton") as Button
+
+## 命名弹窗遮罩；打开期间阻断结算面板其余控件的输入。
+var _naming_backdrop: ColorRect = null
+
+## 命名弹窗面板；标题、提示、名称输入与保存/取消按钮，全部在代码中构建。
+var _naming_panel: PanelContainer = null
+
+## 命名弹窗标题标签；固定文本“保存回放”。
+var _naming_title_label: Label = null
+
+## 命名弹窗提示标签；说明留空即按默认名保存。
+var _naming_hint_label: Label = null
+
+## 回放名称输入框；上限与文件名安全性由存储层最终裁决，输入框只限制长度。
+var _naming_input: LineEdit = null
+
+## 命名弹窗“保存”按钮；提交当前输入（可为空）并关闭弹窗。
+var _naming_confirm_button: Button = null
+
+## 命名弹窗“取消”按钮；关闭弹窗且不发出保存信号。
+var _naming_cancel_button: Button = null
 
 
 ## 初始化暂停可用的模态面板；终局时规则已停止，但关闭与重开操作仍必须接收输入。
@@ -54,6 +79,7 @@ func _ready() -> void:
 	_close_button.pressed.connect(_on_close_button_pressed)
 	if _save_replay_button != null:
 		_save_replay_button.pressed.connect(_on_save_replay_button_pressed)
+	_build_naming_modal()
 	refresh_ui_style()
 
 
@@ -77,6 +103,14 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	if _save_replay_button != null:
 		BattleUIStyle.apply_interaction_button(_save_replay_button)
+	if _naming_panel != null:
+		_naming_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
+		_naming_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		_naming_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		_naming_input.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		_naming_input.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
+		BattleUIStyle.apply_interaction_button(_naming_confirm_button)
+		BattleUIStyle.apply_interaction_button(_naming_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	for header_variant: Variant in _header_row.get_children():
 		# 当前表头标签；缺失或替换为非标签节点时忽略，保持组件可嵌入旧场景测试。
 		var header_label: Label = header_variant as Label
@@ -147,12 +181,106 @@ func _create_cell(text_value: String, minimum_width: float, alignment: int = HOR
 	return cell
 
 
+## 在代码中构建保存回放的命名弹窗；仅创建一次，打开时清空输入并聚焦，关闭时只隐藏节点。
+func _build_naming_modal() -> void:
+	_naming_backdrop = ColorRect.new()
+	_naming_backdrop.name = "ReplayNamingBackdrop"
+	_naming_backdrop.visible = false
+	_naming_backdrop.color = Color(0.0, 0.0, 0.0, 0.62)
+	_naming_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_naming_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_naming_backdrop.z_index = 8
+	add_child(_naming_backdrop)
+	_naming_panel = PanelContainer.new()
+	_naming_panel.name = "ReplayNamingPanel"
+	_naming_panel.visible = false
+	_naming_panel.z_index = 9
+	_naming_panel.custom_minimum_size = Vector2(480.0, 0.0)
+	_naming_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_naming_panel.offset_left = -240.0
+	_naming_panel.offset_right = 240.0
+	_naming_panel.offset_top = -104.0
+	_naming_panel.offset_bottom = 104.0
+	add_child(_naming_panel)
+	# 弹窗纵向布局；标题、提示、名称输入与按钮行。
+	var naming_vbox: VBoxContainer = VBoxContainer.new()
+	naming_vbox.add_theme_constant_override("separation", 12)
+	_naming_panel.add_child(naming_vbox)
+	_naming_title_label = Label.new()
+	_naming_title_label.name = "ReplayNamingTitle"
+	_naming_title_label.text = "保存回放"
+	_naming_title_label.add_theme_font_size_override("font_size", 18)
+	_naming_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	naming_vbox.add_child(_naming_title_label)
+	_naming_hint_label = Label.new()
+	_naming_hint_label.name = "ReplayNamingHint"
+	_naming_hint_label.text = "为本局回放输入名称；留空则直接使用默认名（按保存时间生成）。"
+	_naming_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_naming_hint_label.add_theme_font_size_override("font_size", 13)
+	naming_vbox.add_child(_naming_hint_label)
+	_naming_input = LineEdit.new()
+	_naming_input.name = "ReplayNamingInput"
+	_naming_input.max_length = REPLAY_NAME_MAX_LENGTH
+	_naming_input.placeholder_text = "回放名称（可留空）"
+	_naming_input.custom_minimum_size = Vector2(0.0, 36.0)
+	_naming_input.text_submitted.connect(func(_text: String) -> void: _on_naming_confirm_pressed())
+	naming_vbox.add_child(_naming_input)
+	# 弹窗按钮行；保存在左、取消在右并水平居中。
+	var naming_button_row: HBoxContainer = HBoxContainer.new()
+	naming_button_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	naming_button_row.add_theme_constant_override("separation", 20)
+	naming_vbox.add_child(naming_button_row)
+	_naming_confirm_button = Button.new()
+	_naming_confirm_button.name = "ReplayNamingConfirm"
+	_naming_confirm_button.text = "保存"
+	_naming_confirm_button.custom_minimum_size = Vector2(120.0, 38.0)
+	_naming_confirm_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_naming_confirm_button.pressed.connect(_on_naming_confirm_pressed)
+	naming_button_row.add_child(_naming_confirm_button)
+	_naming_cancel_button = Button.new()
+	_naming_cancel_button.name = "ReplayNamingCancel"
+	_naming_cancel_button.text = "取消"
+	_naming_cancel_button.custom_minimum_size = Vector2(120.0, 38.0)
+	_naming_cancel_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_naming_cancel_button.pressed.connect(_close_naming_modal)
+	naming_button_row.add_child(_naming_cancel_button)
+
+
+## 命名弹窗打开期间拦截取消键；Esc 只关闭弹窗，不穿透到牌桌的终局返回主菜单快捷键。
+func _unhandled_input(event: InputEvent) -> void:
+	if _naming_panel == null or not _naming_panel.visible:
+		return
+	if event.is_action_pressed("ui_cancel"):
+		_close_naming_modal()
+		accept_event()
+
+
 ## 响应右上角唯一关闭按钮；只关闭本组件，终局操作区会继续保留“结算界面”再次打开入口。
 func _on_close_button_pressed() -> void:
+	_close_naming_modal()
 	hide_settlement()
 	close_requested.emit()
 
 
-## 响应“保存回放”按钮；面板保持打开，保存结果由牌桌通过顶部横幅提示。
+## 响应“保存回放”按钮；打开命名弹窗等待玩家确认名称，实际保存在确认后由牌桌执行。
 func _on_save_replay_button_pressed() -> void:
-	save_replay_requested.emit()
+	_naming_backdrop.visible = true
+	_naming_panel.visible = true
+	_naming_input.text = ""
+	_naming_input.grab_focus()
+
+
+## 命名弹窗确认；把玩家输入（可为空）作为自定义名发出保存意图并关闭弹窗。
+func _on_naming_confirm_pressed() -> void:
+	# 玩家填写的回放名；首尾空白清理后为空表示按默认名保存，非法字符由存储层统一过滤。
+	var custom_name: String = _naming_input.text.strip_edges()
+	_close_naming_modal()
+	save_replay_requested.emit(custom_name)
+
+
+## 关闭命名弹窗；不执行保存，输入内容不保留到下次打开。
+func _close_naming_modal() -> void:
+	if _naming_backdrop != null:
+		_naming_backdrop.visible = false
+	if _naming_panel != null:
+		_naming_panel.visible = false

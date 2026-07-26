@@ -6,6 +6,10 @@ extends Control
 ## 玩家确认开始身份局时发出的信号；参数为设置中确认的下一局人数，由牌桌统一调用对局控制器。
 signal start_game_requested(player_count: int)
 
+## 玩家在“对局回放”内容页请求播放回放时发出；参数为回放目录内的稳定文件名。
+## 主菜单只转发意图；回放载入与第一视角整局重演由牌桌统一执行，失败经 show_replay_playback_error 回显。
+signal replay_playback_requested(replay_file_name: String)
+
 ## 标准身份局允许的最少玩家人数；默认2人与身份规则支持范围一致，运行时可在检查器中调整显示范围。
 @export_range(2, 10, 1) var minimum_player_count: int = 2
 
@@ -373,6 +377,7 @@ func _ready() -> void:
 	_all_cards_panel.close_requested.connect(_close_all_cards)
 	if _match_replay_panel != null:
 		_match_replay_panel.close_requested.connect(_close_match_replay)
+		_match_replay_panel.playback_requested.connect(_on_replay_playback_requested)
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	# 模式列表滚轮由主菜单统一接收，避免模式卡片按钮先消费滚轮后父级滚动容器无法更新。
@@ -1167,6 +1172,23 @@ func _open_match_replay() -> void:
 	_match_replay_panel.open_panel()
 	# 只冻结回放页之外的客户区控件；顶部四个内容页标签继续保持可聚焦。
 	_suspend_background_focus(_match_replay_panel, [_top_navigation])
+
+
+## 回放页播放意图转发；主菜单不读取回放内容，直接把稳定文件名交给牌桌开始重演。
+func _on_replay_playback_requested(replay_file_name: String) -> void:
+	replay_playback_requested.emit(replay_file_name)
+
+
+## 在回放内容页显示一条播放失败说明；牌桌载入回放失败时经本入口回显原因。
+func show_replay_playback_error(message: String) -> void:
+	if _match_replay_panel != null:
+		_match_replay_panel.show_operation_status(message)
+
+
+## 恢复主菜单并直接打开“对局回放”内容页；退出回放重演后由牌桌调用，玩家回到回放列表继续操作。
+func show_match_replay_page() -> void:
+	return_to_main_menu()
+	_open_match_replay()
 
 
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。

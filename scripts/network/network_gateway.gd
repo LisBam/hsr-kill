@@ -56,7 +56,8 @@ enum LanRole {
 ## 当前封包协议版本；版本6在版本5基础上新增对局会话令牌下发、断线座位预约与携令牌重连握手。
 ## 版本7在版本6基础上向大厅公共快照新增 custom_identity_enabled 自选身份开关字段。
 ## 版本8在版本7基础上新增对局内聊天 match_chat 消息类型（客户端上行与房主中继下行共用）。
-const PROTOCOL_VERSION: int = 8
+## 版本9在版本8基础上移除大厅聊天与对局聊天条目的 time_text 字段（聊天界面不再显示时间）。
+const PROTOCOL_VERSION: int = 9
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -1282,7 +1283,6 @@ func _append_lobby_chat_message(peer_id: int, message: String) -> void:
 		"sequence":_lobby_chat_sequence,
 		"display_name":str(member.get("display_name", "玩家")),
 		"message":sanitized_message,
-		"time_text":Time.get_time_string_from_system(),
 	})
 	while _lobby_chat_history.size() > MAX_LOBBY_CHAT_HISTORY:
 		_lobby_chat_history.pop_front()
@@ -1313,17 +1313,17 @@ func _apply_remote_match_chat(payload: Dictionary) -> void:
 	var sanitized_message: String = _sanitize_match_chat_message(str(payload.get("message", "")))
 	if sanitized_message.is_empty():
 		return
-	_append_match_chat_entry(_make_match_chat_entry(int(payload.get("sequence", 0)), int(payload.get("sender_player_id", -1)), str(payload.get("display_name", "玩家")), sanitized_message, str(payload.get("time_text", ""))))
+	_append_match_chat_entry(_make_match_chat_entry(int(payload.get("sequence", 0)), int(payload.get("sender_player_id", -1)), str(payload.get("display_name", "玩家")), sanitized_message))
 
 
 ## 创建单个可序列化对局内聊天条目；离线本机、房主权威与客户端重建共用同一结构。
-func _make_match_chat_entry(sequence: int, sender_player_id: int, display_name: String, message: String, time_text: String = "") -> Dictionary:
+## 条目只保留序号、发送者稳定玩家 ID、署名与正文；聊天界面不显示时间，因此不携带时间字段。
+func _make_match_chat_entry(sequence: int, sender_player_id: int, display_name: String, message: String) -> Dictionary:
 	return {
 		"sequence":sequence,
 		"sender_player_id":sender_player_id,
 		"display_name":display_name,
 		"message":message,
-		"time_text":time_text if not time_text.is_empty() else Time.get_time_string_from_system(),
 	}
 
 

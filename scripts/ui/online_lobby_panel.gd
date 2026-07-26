@@ -324,13 +324,13 @@ func _render_room_summary() -> void:
 	(%OnlineLobbyErrorLabel as Label).visible = false
 
 
-## 把公共聊天历史渲染为“时间 玩家名：正文”；不启用 BBCode，防止用户文本注入样式标签。
+## 把公共聊天历史渲染为“玩家名：正文”；不启用 BBCode，防止用户文本注入样式标签，不显示时间。
 func _render_chat_history() -> void:
 	var lines: Array[String] = []
 	for chat_variant: Variant in _snapshot.get("chat_history", []) as Array:
 		# 当前公共聊天记录；字段已经由房主标准化，缺失值使用可读回退。
 		var chat_entry: Dictionary = chat_variant as Dictionary
-		lines.append("[%s] %s：%s" % [str(chat_entry.get("time_text", "--:--:--")), str(chat_entry.get("display_name", "玩家")), str(chat_entry.get("message", ""))])
+		lines.append("%s：%s" % [str(chat_entry.get("display_name", "玩家")), str(chat_entry.get("message", ""))])
 	_chat_history.text = "\n".join(lines)
 	call_deferred("_scroll_chat_to_bottom")
 

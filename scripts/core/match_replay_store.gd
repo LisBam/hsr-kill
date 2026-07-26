@@ -4,7 +4,8 @@ extends RefCounted
 ## 对局回放文件持久化边界。该组件只负责把录制器产出的回放头与步骤流写入本地 `.lisbam_replay` 文件、
 ## 枚举与读取已保存回放、按玩家指定路径导出与导入回放；它不读取 GameState、不理解规则语义，
 ## 也不持有任何节点引用，录制器与界面层通过静态函数按需调用。
-## 回放内容的采集由 MatchReplayRecorder 负责，回放播放由 MatchReplayPanel 负责。
+## 回放内容的采集由 MatchReplayRecorder 负责；回放列表与操作入口由 MatchReplayPanel 负责，
+## 回放重演由牌桌协调 MatchReplayPlaybackDriver 在正式对局界面完成。
 ##
 ## 文件格式：使用 FileAccess.open_compressed(GZIP) 容器，先写入一个 store_var 的回放头字典，
 ## 随后连续写入若干个 store_var 的步骤字典；步骤结构见 MatchReplayRecorder。
@@ -25,6 +26,12 @@ const REPLAY_FORMAT_VERSION: int = 1
 ## 回放文件使用的压缩模式；GZIP 在快照流高度重复的场景下压缩率高且为 Godot 内置稳定格式。
 const REPLAY_COMPRESSION_MODE: int = FileAccess.COMPRESSION_GZIP
 
+## 顶置状态元数据文件名；位于回放目录内，按文件名记录顶置标记，不写入回放文件本体，导出不携带。
+const REPLAY_PIN_METADATA_FILE_NAME: String = "replay_pins.cfg"
+
+## 顶置元数据的配置分区名；ConfigFile 分区固定，键为回放文件名、值为布尔顶置标记。
+const REPLAY_PIN_METADATA_SECTION: String = "pinned"
+
 
 ## 确保回放目录存在；返回是否可用。所有写入口径统一先经过本入口，避免各调用方重复建目录。
 static func ensure_replay_directory(directory_path: String = REPLAY_DIRECTORY) -> bool:
@@ -35,13 +42,15 @@ static func ensure_replay_directory(directory_path: String = REPLAY_DIRECTORY) -
 
 ## 把回放头与临时步骤流合并写入正式回放文件；返回保存后的文件名（不含目录），失败返回空字符串。
 ## temp_steps_path 指向录制器以非压缩 store_var 流式写入的临时文件，本函数逐步转存到压缩容器。
-static func save_replay_from_temp(header: Dictionary, temp_steps_path: String, directory_path: String = REPLAY_DIRECTORY) -> String:
+## preferred_base_name 为玩家在保存弹窗填写的自定义回放名（不含后缀）；留空时使用保存时刻默认名，
+## 非法字符统一清理，与既有回放重名时自动追加序号而不覆盖。
+static func save_replay_from_temp(header: Dictionary, temp_steps_path: String, directory_path: String = REPLAY_DIRECTORY, preferred_base_name: String = "") -> String:
 	if header.is_empty() or not FileAccess.file_exists(temp_steps_path):
 		return ""
 	if not ensure_replay_directory(directory_path):
 		return ""
-	# 最终写入的回放文件名；按保存时刻生成并保证目录内唯一，避免连续保存互相覆盖。
-	var file_name: String = _build_unique_replay_file_name(directory_path)
+	# 最终写入的回放文件名；自定义名优先，留空按保存时刻生成，两种来源都保证目录内唯一。
+	var file_name: String = _build_available_file_name(preferred_base_name, directory_path) if not preferred_base_name.strip_edges().is_empty() else _build_unique_replay_file_name(directory_path)
 	# 压缩输出文件句柄；打开失败时直接放弃保存，不残留半成品文件。
 	var output_file: FileAccess = FileAccess.open_compressed("%s/%s" % [directory_path, file_name], FileAccess.WRITE, REPLAY_COMPRESSION_MODE)
 	if output_file == null:
@@ -68,7 +77,8 @@ static func save_replay_from_temp(header: Dictionary, temp_steps_path: String, d
 	return file_name
 
 
-## 枚举目录中全部可解析回放；返回按保存时间倒序的条目数组，每项包含回放头、文件名与文件字节数。
+## 枚举目录中全部可解析回放；返回条目数组，每项包含回放头、文件名、文件字节数与顶置标记。
+## 排序规则：顶置回放整体在前，顶置组内与普通组内均按保存时间倒序，保证顶置条目稳定居顶。
 static func list_replays(directory_path: String = REPLAY_DIRECTORY) -> Array[Dictionary]:
 	# 回放条目结果；目录缺失或为空时返回空数组，调用方不需要区分失败原因。
 	var entries: Array[Dictionary] = []
@@ -87,8 +97,11 @@ static func list_replays(directory_path: String = REPLAY_DIRECTORY) -> Array[Dic
 			"file_name": file_name,
 			"header": header,
 			"file_size": _get_file_size("%s/%s" % [directory_path, file_name]),
+			"pinned": is_replay_pinned(file_name, directory_path),
 		})
 	entries.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if bool(left.get("pinned", false)) != bool(right.get("pinned", false)):
+			return bool(left.get("pinned", false))
 		return int((left.get("header", {}) as Dictionary).get("saved_at_unix", 0)) > int((right.get("header", {}) as Dictionary).get("saved_at_unix", 0)))
 	return entries
 
@@ -168,6 +181,7 @@ static func import_replay(source_path: String, directory_path: String = REPLAY_D
 
 
 ## 删除目录内指定回放文件；文件不存在时静默成功，界面删除与保存失败清理共用本入口。
+## 删除成功后同步移除该文件的顶置标记，避免元数据残留指向不存在的回放。
 static func delete_replay(file_name: String, directory_path: String = REPLAY_DIRECTORY) -> bool:
 	# 待删除回放完整路径；只允许删除回放目录内的文件，不接受任意绝对路径。
 	var target_path: String = "%s/%s" % [directory_path, file_name]
@@ -177,7 +191,67 @@ static func delete_replay(file_name: String, directory_path: String = REPLAY_DIR
 	var directory: DirAccess = DirAccess.open(directory_path)
 	if directory == null:
 		return false
-	return directory.remove(file_name) == OK
+	if directory.remove(file_name) != OK:
+		return false
+	set_replay_pinned(file_name, false, directory_path)
+	return true
+
+
+## 把目录内指定回放重命名为玩家给定的新基础名（不含后缀）；成功返回新文件名，失败返回空字符串。
+## 新名称经过非法字符清理并保证目录内唯一（重名自动追加序号，不覆盖既有回放）；顶置标记随文件迁移。
+static func rename_replay(file_name: String, new_base_name: String, directory_path: String = REPLAY_DIRECTORY) -> String:
+	# 源回放完整路径；只允许重命名回放目录内可解析的合法回放。
+	var source_path: String = "%s/%s" % [directory_path, file_name]
+	if read_replay_header(source_path).is_empty():
+		return ""
+	# 清理后的目标基础名；空名称视为无效重命名请求。
+	var sanitized_base: String = new_base_name.validate_filename().strip_edges()
+	if sanitized_base.is_empty():
+		return ""
+	# 新名称与旧名称一致时视为成功且不触碰文件系统，也不改变顶置状态。
+	if "%s.%s" % [sanitized_base, REPLAY_FILE_EXTENSION] == file_name:
+		return file_name
+	# 目录内唯一化后的目标文件名；与其他既有回放冲突时追加序号。
+	var target_name: String = _build_available_file_name(sanitized_base, directory_path)
+	# 回放目录访问器；目录打开失败按重命名失败处理。
+	var directory: DirAccess = DirAccess.open(directory_path)
+	if directory == null:
+		return ""
+	if directory.rename(file_name, target_name) != OK:
+		return ""
+	# 顶置标记迁移；旧文件名的标记移除后按原状态写到新文件名上。
+	if is_replay_pinned(file_name, directory_path):
+		set_replay_pinned(file_name, false, directory_path)
+		set_replay_pinned(target_name, true, directory_path)
+	return target_name
+
+
+## 查询目录内指定回放是否已顶置；元数据文件缺失或键不存在时视为未顶置。
+static func is_replay_pinned(file_name: String, directory_path: String = REPLAY_DIRECTORY) -> bool:
+	# 顶置元数据配置；读取失败（首次使用未创建）按全部未顶置处理。
+	var pin_config: ConfigFile = ConfigFile.new()
+	if pin_config.load(_get_pin_metadata_path(directory_path)) != OK:
+		return false
+	return bool(pin_config.get_value(REPLAY_PIN_METADATA_SECTION, file_name, false))
+
+
+## 写入目录内指定回放的顶置标记；取消顶置直接删除对应键保持元数据精简。返回是否写入成功。
+static func set_replay_pinned(file_name: String, pinned: bool, directory_path: String = REPLAY_DIRECTORY) -> bool:
+	if not ensure_replay_directory(directory_path):
+		return false
+	# 顶置元数据配置；文件缺失时从空配置开始，保存时自动创建。
+	var pin_config: ConfigFile = ConfigFile.new()
+	pin_config.load(_get_pin_metadata_path(directory_path))
+	if pinned:
+		pin_config.set_value(REPLAY_PIN_METADATA_SECTION, file_name, true)
+	elif pin_config.has_section_key(REPLAY_PIN_METADATA_SECTION, file_name):
+		pin_config.erase_section_key(REPLAY_PIN_METADATA_SECTION, file_name)
+	return pin_config.save(_get_pin_metadata_path(directory_path)) == OK
+
+
+## 返回顶置元数据文件的完整路径；元数据始终与回放文件同目录，测试目录覆盖时随之隔离。
+static func _get_pin_metadata_path(directory_path: String) -> String:
+	return "%s/%s" % [directory_path, REPLAY_PIN_METADATA_FILE_NAME]
 
 
 ## 生成目录内唯一的新回放文件名；以保存时刻的日期时间命名，同秒重复保存时追加递增序号。

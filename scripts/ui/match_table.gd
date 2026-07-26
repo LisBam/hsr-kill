@@ -233,6 +233,21 @@ var _chat_bubbles: Dictionary = {}
 ## 对局回放录制器；持续把本机收到的观察者快照与日志写入临时文件，结算面板“保存回放”时落盘为正式回放。
 var _match_replay_recorder: MatchReplayRecorder = MatchReplayRecorder.new()
 
+## 对局回放重演驱动器；播放回放时按录制节奏把快照与日志重新送入牌桌表现入口，首次播放时创建并复用。
+var _match_replay_playback_driver: MatchReplayPlaybackDriver = null
+
+## 对局回放重演覆盖层；重演期间封锁桌面输入并提供速度选择与退出入口，首次播放时创建并复用。
+var _match_replay_overlay: MatchReplayOverlay = null
+
+## 当前是否处于回放重演会话；重演期间桌面只渲染回放快照、禁止全部操作提交并暂停回放录制。
+var _replay_session_active: bool = false
+
+## 回放重演读取目录覆盖路径；自动化测试指向独立目录避免依赖玩家回放，空字符串表示正式回放目录。
+var replay_playback_directory_override: String = ""
+
+## 进入重演前的本机第一视角玩家 ID；退出回放时恢复，避免重演视角影响之后的正常开局。
+var _replay_previous_local_player_id: int = 0
+
 ## 本地玩家统一武将牌组件；在主场景进入树后从独立武将牌场景实例化并锚定到右下角。
 var local_player_card: PlayerTargetView
 
@@ -531,6 +546,7 @@ func _ready() -> void:
 	match_controller.match_finished.connect(_on_match_finished_for_conquest_save)
 	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
 	main_menu.start_game_requested.connect(_on_main_menu_start_requested)
+	main_menu.replay_playback_requested.connect(_on_replay_playback_requested)
 	main_menu.visibility_changed.connect(_sync_match_menu_visibility)
 	lan_lobby_panel.host_requested.connect(_on_lan_host_requested)
 	lan_lobby_panel.join_requested.connect(_on_lan_join_requested)
@@ -1170,6 +1186,10 @@ func _create_match_chat_panel() -> void:
 func _sync_game_settlement_panel() -> void:
 	if game_settlement_panel == null or not is_instance_valid(game_settlement_panel):
 		return
+	# 回放重演不弹出结算模态；终局画面停留在牌桌上，由回放覆盖层提示播放完毕。
+	if _replay_session_active:
+		game_settlement_panel.hide_settlement()
+		return
 	# 当前快照是否为整局终局；本地角色阵亡但整局继续时不创建结算面板。
 	var is_game_over: bool = bool(_snapshot.get("game_over", false))
 	if not is_game_over:
@@ -1204,8 +1224,9 @@ func _on_settlement_button_pressed() -> void:
 
 
 ## 把本机收到的观察者快照送入回放录制器；快照属于新对局时自动开始新一份录制并丢弃未保存旧录制。
+## 回放重演期间不录制：重演快照来自既有回放文件，再次录制只会产生毫无意义的嵌套回放。
 func _record_replay_snapshot(snapshot: Dictionary) -> void:
-	if snapshot.is_empty():
+	if snapshot.is_empty() or _replay_session_active:
 		return
 	# 快照所属对局稳定 ID；与录制器当前对局不一致说明新一局开始，重建录制上下文。
 	var match_id: String = str(snapshot.get("match_id", ""))
@@ -1214,12 +1235,12 @@ func _record_replay_snapshot(snapshot: Dictionary) -> void:
 	_match_replay_recorder.record_snapshot(snapshot)
 
 
-## 响应结算面板“保存回放”；把当前录制落盘为 .lisbam_replay 文件并通过顶部横幅提示结果。
-func _on_save_replay_requested() -> void:
+## 响应结算面板命名弹窗确认的“保存回放”；custom_name 为空时按默认名落盘，并通过顶部横幅提示结果。
+func _on_save_replay_requested(custom_name: String) -> void:
 	# 保存前已存在的文件名；用于区分“新保存成功”与“重复点击复用既有文件”两种提示。
 	var previously_saved_file_name: String = _match_replay_recorder.get_saved_file_name()
 	# 本次保存结果文件名；失败时为空字符串。
-	var saved_file_name: String = _match_replay_recorder.save_recording()
+	var saved_file_name: String = _match_replay_recorder.save_recording(MatchReplayStore.REPLAY_DIRECTORY, custom_name)
 	if information_box == null or not is_instance_valid(information_box):
 		return
 	if saved_file_name.is_empty():
@@ -1228,6 +1249,110 @@ func _on_save_replay_requested() -> void:
 		information_box.show_notice("本局回放此前已保存为 %s。" % saved_file_name)
 	else:
 		information_box.show_notice("回放已保存为 %s，可在主菜单“对局回放”中查看。" % saved_file_name)
+
+
+## 响应主菜单“对局回放”页的播放意图；载入回放并像进入一场新对局一样在正式牌桌上重演。
+## 重演使用录制端的第一视角快照流，玩家不可操作，只能通过覆盖层加速或退出。
+func _on_replay_playback_requested(replay_file_name: String) -> void:
+	if _replay_session_active:
+		return
+	if match_controller.network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		main_menu.show_replay_playback_error("局域网会话中不能播放回放，请先离开房间。")
+		return
+	# 实际读取目录；测试覆盖优先，正式运行使用存储层默认目录。
+	var replay_directory: String = replay_playback_directory_override if not replay_playback_directory_override.is_empty() else MatchReplayStore.REPLAY_DIRECTORY
+	# 回放完整路径；回放头与步骤流分别读取，任一失败都保持主菜单并提示原因。
+	var replay_path: String = "%s/%s" % [replay_directory, replay_file_name]
+	# 回放头元数据；提供录制端视角玩家 ID 与玩家表。
+	var replay_header: Dictionary = MatchReplayStore.read_replay_header(replay_path)
+	# 回放全部步骤；重演期间常驻驱动器内存，退出时释放。
+	var replay_steps: Array[Dictionary] = MatchReplayStore.read_replay_steps(replay_path)
+	if replay_header.is_empty() or replay_steps.is_empty():
+		main_menu.show_replay_playback_error("回放载入失败：文件缺失或已损坏。")
+		return
+	# 残留的上一局权威状态；重演不依赖任何规则运行时，播放前统一放弃并丢弃未保存录制。
+	if match_controller.state != null:
+		match_controller.abandon_match()
+	_match_replay_recorder.discard_recording()
+	_reset_presentation_for_new_match()
+	_replay_previous_local_player_id = match_controller.local_human_player_id
+	# 重演第一视角玩家 ID；使用录制端视角，异常缺失时回退回放头玩家表首名保证座位可建立。
+	var viewer_player_id: int = int(replay_header.get("viewer_player_id", -1))
+	if viewer_player_id < 0:
+		# 回放头玩家表；录制器保存时至少包含一名玩家，防御空表回退0。
+		var header_players: Array = replay_header.get("players", []) as Array
+		viewer_player_id = int((header_players[0] as Dictionary).get("player_id", 0)) if not header_players.is_empty() else 0
+	match_controller.local_human_player_id = viewer_player_id
+	_replay_session_active = true
+	_ensure_replay_playback_components()
+	_match_replay_overlay.open_overlay(replay_file_name.get_basename())
+	_match_replay_playback_driver.set_speed_multiplier(1.0)
+	main_menu.confirm_game_started()
+	_sync_match_menu_visibility()
+	_match_replay_playback_driver.start_playback(replay_steps)
+
+
+## 惰性创建回放重演驱动器与覆盖层；两个组件全程复用，覆盖层保持在组件树末尾以拦截全部桌面输入。
+func _ensure_replay_playback_components() -> void:
+	if _match_replay_playback_driver == null or not is_instance_valid(_match_replay_playback_driver):
+		_match_replay_playback_driver = MatchReplayPlaybackDriver.new()
+		_match_replay_playback_driver.name = "MatchReplayPlaybackDriver"
+		# 重演纯属表现流程；任何暂停状态（日志展开、详情框）都不应冻结回放推进。
+		_match_replay_playback_driver.process_mode = Node.PROCESS_MODE_ALWAYS
+		add_child(_match_replay_playback_driver)
+		_match_replay_playback_driver.snapshot_step_ready.connect(_on_replay_snapshot_step)
+		_match_replay_playback_driver.log_step_ready.connect(_on_replay_log_step)
+		_match_replay_playback_driver.playback_finished.connect(_on_replay_playback_finished)
+	if _match_replay_overlay == null or not is_instance_valid(_match_replay_overlay):
+		_match_replay_overlay = MatchReplayOverlay.new()
+		_match_replay_overlay.name = "MatchReplayOverlay"
+		add_child(_match_replay_overlay)
+		_match_replay_overlay.speed_selected.connect(_on_replay_speed_selected)
+		_match_replay_overlay.exit_requested.connect(_on_replay_exit_requested)
+
+
+## 重演快照步骤入口；复用唯一状态刷新入口，使回放呈现与录制端当时所见完全一致。
+func _on_replay_snapshot_step(snapshot: Dictionary) -> void:
+	_on_state_changed(snapshot)
+
+
+## 重演日志步骤入口；复用唯一日志入口，“记录”面板正文随重演逐条恢复。
+func _on_replay_log_step(message: String) -> void:
+	_on_log_added(message)
+
+
+## 回放全部步骤播放完毕；覆盖层标记完成，终局画面停留在牌桌上等待玩家退出。
+func _on_replay_playback_finished() -> void:
+	if _match_replay_overlay != null and is_instance_valid(_match_replay_overlay):
+		_match_replay_overlay.mark_finished()
+
+
+## 覆盖层速度选择回调；把倍率转交驱动器，重演只允许加速。
+func _on_replay_speed_selected(speed_multiplier: float) -> void:
+	if _match_replay_playback_driver != null and is_instance_valid(_match_replay_playback_driver):
+		_match_replay_playback_driver.set_speed_multiplier(speed_multiplier)
+
+
+## 覆盖层退出回放回调；结束重演会话并返回主菜单“对局回放”页。
+func _on_replay_exit_requested() -> void:
+	_end_replay_session()
+
+
+## 结束回放重演会话；停止驱动器、收起覆盖层、恢复重演前视角并返回主菜单回放列表。
+## 重演画面与普通对局一样保留在主菜单下方，不再获得输入或状态更新。
+func _end_replay_session() -> void:
+	if not _replay_session_active:
+		return
+	_replay_session_active = false
+	if _match_replay_playback_driver != null and is_instance_valid(_match_replay_playback_driver):
+		_match_replay_playback_driver.stop_playback()
+	if _match_replay_overlay != null and is_instance_valid(_match_replay_overlay):
+		_match_replay_overlay.close_overlay()
+	match_controller.local_human_player_id = _replay_previous_local_player_id
+	if _match_clock_timer != null:
+		_match_clock_timer.stop()
+	_hide_game_settlement_panel_for_main_menu()
+	main_menu.show_match_replay_page()
 
 
 ## 响应局内菜单“聊天”按钮；窗口开着就收起，收起状态则携带完整历史展开。
@@ -2772,6 +2897,9 @@ func _submit_equipment_action() -> void:
 
 ## 处理无名杀式键盘与右键快捷操作；快捷键只调用现有标准动作，不绕过规则核心。
 func _unhandled_input(event: InputEvent) -> void:
+	# 回放重演期间牌桌快捷键整体失效；退出与调速由回放覆盖层独立处理。
+	if _replay_session_active:
+		return
 	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
 		# 当前键盘事件；只响应确认、取消和结束出牌三个稳定桌面操作。
 		var key_event: InputEventKey = event as InputEventKey
@@ -2840,6 +2968,10 @@ func _close_open_match_overlays_from_blank_click() -> bool:
 
 ## 处理没有被模态界面、详情框或选牌流程消费的安卓返回键；主页退出应用，对局中切换局内菜单。
 func _on_unhandled_android_back_requested() -> void:
+	if _replay_session_active:
+		# 回放重演期间返回键等同“退出回放”；直接结束重演会话回到回放列表。
+		_end_replay_session()
+		return
 	if main_menu.visible:
 		get_tree().quit()
 		return
@@ -2968,6 +3100,8 @@ func _apply_ui_style() -> void:
 		opportunity_choice_panel.refresh_ui_style()
 	if match_chat_panel != null and is_instance_valid(match_chat_panel):
 		match_chat_panel.refresh_ui_style()
+	if _match_replay_overlay != null and is_instance_valid(_match_replay_overlay):
+		_match_replay_overlay.refresh_ui_style()
 	for chat_bubble_variant: Variant in _chat_bubbles.values():
 		# 当前玩家头顶气泡；主题切换时按当前风格重绘底色、描边与文字色。
 		var chat_bubble: ChatBubbleView = chat_bubble_variant as ChatBubbleView
@@ -3205,7 +3339,8 @@ func _sync_match_menu_visibility() -> void:
 		if match_chat_panel != null and is_instance_valid(match_chat_panel):
 			match_chat_panel.close_panel()
 		_dismiss_all_chat_bubbles()
-	match_menu.visible = not main_menu_visible
+	# 回放重演期间不显示局内菜单与其下方“聊天”按钮；重演只保留覆盖层的速度与退出入口。
+	match_menu.visible = not main_menu_visible and not _replay_session_active
 
 
 ## 接收观察者裁剪后的选将快照；候选内容只存在于本地选将组件，不写入桌面状态或玩家快照。
