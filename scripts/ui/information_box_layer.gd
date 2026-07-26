@@ -57,6 +57,15 @@ signal character_details_visibility_changed(visible: bool)
 ## 武将详情技能条目之间的垂直间距；默认12像素明确分隔技能名与下一项技能，运行时通常无需动态修改。
 @export_range(4, 28, 1) var skill_entry_separation: int = 12
 
+## 顶部提醒横幅的默认停留秒数；默认4秒足够阅读一句提醒，调用方可为单条提醒传入独立时长。
+@export_range(1.0, 15.0, 0.5) var notice_hold_seconds: float = 4.0
+
+## 顶部提醒横幅的淡出时长；默认0.5秒平滑消失，横幅补间始终以始终处理模式运行以兼容对局暂停。
+@export_range(0.1, 2.0, 0.05) var notice_fade_seconds: float = 0.5
+
+## 顶部提醒横幅与视口上边缘的距离；默认56像素避开顶部信息条，运行时通常无需动态修改。
+@export_range(8.0, 200.0, 1.0) var notice_top_margin: float = 56.0
+
 ## 武将牌正式场景；详情框复用与牌桌和选将界面相同的牌面结构，避免维护第二套武将牌 UI。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
@@ -156,6 +165,15 @@ var _character_skill_entry_count: int = 0
 ## 当前详情右侧已经创建的机缘历史条目数量；只供界面回归与调试读取，不参与机缘规则。
 var _character_opportunity_entry_count: int = 0
 
+## 顶部提醒横幅面板；自动修复等全局提醒复用同一节点，不遮挡任何输入。
+var _notice_panel: PanelContainer
+
+## 顶部提醒横幅文字标签；多条提醒直接覆盖文本并重置停留计时。
+var _notice_label: Label
+
+## 顶部提醒横幅当前活动补间；新提醒到来时先终止旧补间，避免旧淡出提前隐藏新提醒。
+var _notice_tween: Tween
+
 
 ## 初始化两类信息框节点；组件始终处理输入，确保离线暂停后仍能滚动和关闭详情。
 func _ready() -> void:
@@ -165,6 +183,7 @@ func _ready() -> void:
 	_build_hover_panel()
 	_build_hover_delay_timer()
 	_build_character_panel()
+	_build_notice_banner()
 	refresh_ui_style()
 
 
@@ -383,6 +402,54 @@ func get_character_close_button() -> Button:
 	return _character_close_button
 
 
+## 在视口顶部居中显示一条全局提醒横幅；自动修复与待办提醒复用本入口，横幅不拦截任何鼠标输入。
+## hold_seconds 传入0或负数时使用检查器默认停留时长；对局暂停期间横幅仍会正常显示与淡出。
+func show_notice(message: String, hold_seconds: float = -1.0) -> void:
+	if not is_node_ready() or message.is_empty():
+		return
+	# 本条提醒实际停留时长；调用方未指定时回退检查器默认值。
+	var resolved_hold_seconds: float = hold_seconds if hold_seconds > 0.0 else notice_hold_seconds
+	if _notice_tween != null and _notice_tween.is_valid():
+		_notice_tween.kill()
+	_notice_label.text = message
+	_notice_panel.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_notice_panel.visible = true
+	# 提醒淡出补间；始终处理模式保证机缘选择或日志暂停冻结场景树时提醒仍能按时消失。
+	_notice_tween = create_tween()
+	_notice_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	_notice_tween.tween_interval(resolved_hold_seconds)
+	_notice_tween.tween_property(_notice_panel, "modulate:a", 0.0, notice_fade_seconds)
+	_notice_tween.tween_callback(func() -> void: _notice_panel.visible = false)
+
+
+## 返回顶部提醒横幅当前是否可见；供界面回归测试断言提醒确实展示，不暴露内部节点结构。
+func is_notice_visible() -> bool:
+	return _notice_panel != null and is_instance_valid(_notice_panel) and _notice_panel.visible
+
+
+## 返回顶部提醒横幅当前文字；供界面回归测试断言提醒内容，空字符串表示尚未显示过提醒。
+func get_notice_text() -> String:
+	return _notice_label.text if _notice_label != null and is_instance_valid(_notice_label) else ""
+
+
+## 创建顶部提醒横幅节点；横幅默认隐藏，位于全部信息框之上且不参与命中测试。
+func _build_notice_banner() -> void:
+	_notice_panel = PanelContainer.new()
+	_notice_panel.name = "NoticeBanner"
+	_notice_panel.visible = false
+	_notice_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 顶部居中锚点；面板尺寸随文字自适应并向两侧均匀扩展。
+	_notice_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_notice_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_notice_panel.position.y = notice_top_margin
+	add_child(_notice_panel)
+	_notice_label = Label.new()
+	_notice_label.name = "NoticeLabel"
+	_notice_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_notice_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_notice_panel.add_child(_notice_label)
+
+
 ## 按当前活动 UI 风格重绘信息框、文字、关闭按钮与滚动条；可见内容和滚动位置保持不变。
 func refresh_ui_style() -> void:
 	if not is_node_ready():
@@ -390,6 +457,9 @@ func refresh_ui_style() -> void:
 	_character_shade.color = BattleUIStyle.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
 	_hover_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_character_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	if _notice_panel != null and is_instance_valid(_notice_panel):
+		_notice_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 2, 6))
+		_notice_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_refresh_hover_text_styles()
 	_character_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
