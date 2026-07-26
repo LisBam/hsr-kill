@@ -509,6 +509,8 @@ func _ready() -> void:
 		network_gateway.game_event_received.connect(_on_network_game_event_received)
 	if not network_gateway.lan_match_peer_disconnected.is_connected(_on_lan_match_peer_disconnected):
 		network_gateway.lan_match_peer_disconnected.connect(_on_lan_match_peer_disconnected)
+	if not network_gateway.lan_match_peer_reconnected.is_connected(_on_lan_match_peer_reconnected):
+		network_gateway.lan_match_peer_reconnected.connect(_on_lan_match_peer_reconnected)
 	if not log_added.is_connected(_replicate_log_event):
 		log_added.connect(_replicate_log_event)
 	if not card_presentation_requested.is_connected(_replicate_card_presentation_event):
@@ -1020,6 +1022,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		action_rejected.emit(validation_error)
 		return false
 	_teardown_previous_match_runtime()
+	# 上一局的断线座位预约到此失效；重开新局时掉线玩家已被移出真人映射，其座位由 AI 正常补位。
+	_invalidate_lan_seat_reservations()
 
 	# 本局实际随机种子；全部无显式种子的入口共用解析函数，保证菜单返回、局内重开与完整重启都重新随机。
 	var resolved_match_seed: int = _resolve_match_seed(seed)
@@ -12880,6 +12884,8 @@ func _check_game_over() -> void:
 	add_log("对局结束，获胜方：%s。" % _winner_text(winner))
 	_emit_state()
 	match_finished.emit(winner)
+	# 终局后掉线玩家不再能重连恢复座位；预约失效使后续携旧令牌的连接收到明确拒绝而非挂起等待。
+	_invalidate_lan_seat_reservations()
 
 
 ## 在牌堆与弃牌堆均为空时以平局结束；终局原因与身份胜负阵营分开保存。
@@ -12904,6 +12910,8 @@ func _end_match_as_draw(reason: String) -> void:
 	add_log("摸牌堆与弃牌堆均为空，对局以平局结束。")
 	_emit_state()
 	match_finished.emit("draw")
+	# 终局后掉线玩家不再能重连恢复座位；预约失效使后续携旧令牌的连接收到明确拒绝而非挂起等待。
+	_invalidate_lan_seat_reservations()
 
 
 ## 将闪电移至下一角色时、装备效果与其他规则共用的弃牌移动基础操作。
@@ -13400,6 +13408,27 @@ func _on_lan_match_peer_disconnected(player_id: int, display_name: String) -> vo
 		return
 	_set_player_auto_management(player_id, true, true)
 	add_log("%s已断开连接，由 AI 接管后续操作。" % display_name)
+
+
+## 对局中远端玩家携令牌重连成功后恢复真人控制；网关已重绑连接映射，这里负责解除离线托管并补发私有数据。
+## 解除托管复用统一托管入口：注销基础 AI、递增动作序号、向重连客户端重发裁剪快照并重发仍在等待的选择请求。
+func _on_lan_match_peer_reconnected(player_id: int, display_name: String) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or state == null or player_id < 0:
+		return
+	# 重连玩家的权威状态；玩家缺失、终局或未处于托管时不修改任何规则字段，仅补发快照让客户端界面自行恢复。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or state.game_over or not player.auto_managed:
+		replicate_current_state()
+		return
+	_set_player_auto_management(player_id, false, false)
+	add_log("%s已重新连接，恢复手动操作。" % display_name)
+
+
+## 使网关中全部断线座位预约失效；对局结束与重开新局时调用，旧对局的重连令牌不再能恢复座位。
+## 重开新局时掉线玩家已不在真人映射内，其规则座位由 AI 正常补位，不存在可交还的托管状态。
+func _invalidate_lan_seat_reservations() -> void:
+	if network_gateway != null and network_gateway.is_lan_host():
+		network_gateway.clear_lan_seat_reservations()
 
 
 ## 客户端根据房主下发的完整合法动作集合生成普通卡牌预览；该结果只控制 UI，不能替代房主最终校验。
