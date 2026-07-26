@@ -124,7 +124,8 @@ func record_log(message: String) -> void:
 
 ## 把当前录制内容保存为正式回放文件；返回保存后的文件名，失败返回空字符串。
 ## 同一局重复调用直接返回首次保存的文件名；保存后录制继续进行，不影响后续步骤追加。
-func save_recording(directory_path: String = MatchReplayStore.REPLAY_DIRECTORY) -> String:
+## preferred_base_name 为玩家在命名弹窗填写的自定义回放名（不含后缀）；留空时由存储层生成默认名。
+func save_recording(directory_path: String = MatchReplayStore.REPLAY_DIRECTORY, preferred_base_name: String = "") -> String:
 	if _temp_file == null or _snapshot_count <= 0:
 		return _saved_file_name
 	if not _saved_file_name.is_empty():
@@ -133,7 +134,7 @@ func save_recording(directory_path: String = MatchReplayStore.REPLAY_DIRECTORY) 
 	_temp_file.close()
 	_temp_file = null
 	# 转存结果文件名；空字符串表示存储层失败，录制状态仍保留供玩家重试。
-	var file_name: String = MatchReplayStore.save_replay_from_temp(_build_header(), _temp_recording_path, directory_path)
+	var file_name: String = MatchReplayStore.save_replay_from_temp(_build_header(), _temp_recording_path, directory_path, preferred_base_name)
 	# 续写句柄；READ_WRITE 不截断既有内容，指针移动到末尾后继续追加后续步骤。
 	var resumed_file: FileAccess = FileAccess.open(_temp_recording_path, FileAccess.READ_WRITE)
 	if resumed_file != null:

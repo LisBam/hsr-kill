@@ -14,7 +14,7 @@ signal close_requested
 ## 聊天窗口绘制层级；高于“记录”日志面板（35）与头顶气泡，低于主菜单（60）与局内菜单（500）。
 const PANEL_Z_INDEX: int = 45
 
-## 聊天窗口宽度像素；与局内菜单展开面板同级的右侧竖窗宽度，容纳时间戳署名行不换行。
+## 聊天窗口宽度像素；与局内菜单展开面板同级的右侧竖窗宽度，容纳署名与短正文同行不换行。
 @export var panel_width: float = 340.0
 
 ## 聊天窗口高度像素；默认400在1280×720逻辑画布下不遮挡底部手牌区。
@@ -172,9 +172,9 @@ func refresh_ui_style() -> void:
 	_input_field.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 
 
-## 把单条聊天条目格式化为纯文本行；固定“[时间] 玩家名：消息”结构，与联机大厅聊天一致。
+## 把单条聊天条目格式化为纯文本行；固定“玩家名：消息”结构，与联机大厅聊天一致，不显示时间。
 func _format_entry(entry: Dictionary) -> String:
-	return "[%s] %s：%s" % [str(entry.get("time_text", "")), str(entry.get("display_name", "玩家")), str(entry.get("message", ""))]
+	return "%s：%s" % [str(entry.get("display_name", "玩家")), str(entry.get("message", ""))]
 
 
 ## 提交当前输入框内容；空白消息不发出信号，成功提交后清空输入并恢复焦点便于连续聊天。
