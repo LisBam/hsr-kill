@@ -12,6 +12,9 @@ signal restart_requested(player_count: int)
 ## 请求退出当前对局并回到主菜单时发出的信号；桌面负责清理运行时状态并恢复主菜单焦点。
 signal main_menu_requested
 
+## 请求切换过关斩将临时退出预约时发出的信号；实际预约、取消与存档均由桌面调用权威控制器完成。
+signal conquest_temporary_exit_toggle_requested
+
 ## 标准身份局最少玩家人数；默认2，与 IdentityRules 支持范围一致，运行时无需动态修改。
 @export_range(2, 10, 1) var minimum_player_count: int = 2
 
@@ -82,6 +85,10 @@ signal main_menu_requested
 ## 重新开局按钮；点击后携带当前人数设置向桌面发送请求并关闭菜单。
 @onready var _restart_button: Button = %MenuRestartButton
 
+## 过关斩将临时退出按钮；仅离线过关斩将显示，点击在“预约临时退出”和“取消预约”之间切换。
+## 预约生效后对局会在当前结算完整结束的回合边界自动存档并返回主菜单。
+@onready var _conquest_exit_button: Button = %MenuConquestExitButton
+
 ## 返回主菜单按钮；退出当前对局后恢复启动入口，不保留正在进行的权威状态。
 @onready var _main_menu_button: Button = %MenuReturnToMainButton
 
@@ -130,6 +137,9 @@ var _offline_controls_visible: bool = true
 ## 当前正在进行的对局模式；局内菜单只展示该模式的专属设置，不跟随隐藏主菜单的待选模式漂移。
 var _active_match_mode: String = "identity"
 
+## 当前是否已经预约过关斩将临时退出；由桌面按权威控制器状态回写，仅决定按钮显示文字。
+var _conquest_exit_armed: bool = false
+
 
 ## 初始化菜单信号、人数范围和默认关闭状态。
 func _ready() -> void:
@@ -137,6 +147,7 @@ func _ready() -> void:
 	call_deferred("_move_to_input_front")
 	_menu_button.pressed.connect(_toggle_menu)
 	_restart_button.pressed.connect(_request_restart)
+	_conquest_exit_button.pressed.connect(_request_conquest_exit_toggle)
 	_main_menu_button.pressed.connect(_request_main_menu)
 	_apply_player_count_limits_for_mode(GameSettings.next_match_mode if GameSettings != null else "identity")
 	_player_count_input.set_value_no_signal(float(GameSettings.next_match_player_count if GameSettings != null else minimum_player_count))
@@ -324,6 +335,8 @@ func _apply_mode_specific_settings_visibility() -> void:
 	_character_replacement_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_character_candidate_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_conquest_difficulty_row.visible = _authority_controls_visible and is_conquest
+	# 临时退出按钮只属于离线过关斩将；该模式本身拒绝局域网，因此权威可见性即等价于离线可见性。
+	_conquest_exit_button.visible = _authority_controls_visible and is_conquest
 	_wheel_duel_face_up_candidate_row.visible = _authority_controls_visible and is_wheel_duel
 	_wheel_duel_face_down_candidate_row.visible = _authority_controls_visible and is_wheel_duel
 	_auto_identity_marking_checkbox.visible = not is_wheel_duel and not is_conquest
@@ -344,6 +357,7 @@ func refresh_ui_style() -> void:
 	_menu_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
 	BattleUIStyle.apply_interaction_button(_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_restart_button)
+	BattleUIStyle.apply_interaction_button(_conquest_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_main_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -673,6 +687,23 @@ func _request_restart() -> void:
 	GameSettings.set_next_match_player_count(player_count)
 	_menu_panel.visible = false
 	restart_requested.emit(player_count)
+
+
+## 发出过关斩将临时退出切换请求并关闭菜单；预约、取消与存档写入均由桌面协调权威控制器完成。
+func _request_conquest_exit_toggle() -> void:
+	if not _authority_controls_visible:
+		return
+	_menu_panel.visible = false
+	conquest_temporary_exit_toggle_requested.emit()
+
+
+## 由桌面回写当前临时退出预约状态；true 时按钮显示取消入口，提醒玩家结算结束后会自动存档退出。
+func set_conquest_exit_armed(armed: bool) -> void:
+	if _conquest_exit_armed == armed:
+		return
+	_conquest_exit_armed = armed
+	if _conquest_exit_button != null:
+		_conquest_exit_button.text = "取消临时退出" if armed else "临时退出"
 
 
 ## 下一局人数输入变化时写入全局持久化设置；该值仅用于之后的重开请求，不会改写当前对局。

@@ -550,6 +550,13 @@ layout_mode = 2
 theme_override_styles/normal = SubResource("StyleButtonPrimary")
 text = "按设置重新开局"
 
+[node name="MenuConquestExitButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=2026072620]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+text = "临时退出"
+
 [node name="MenuReturnToMainButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1771219610]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 32)

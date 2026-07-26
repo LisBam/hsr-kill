@@ -931,6 +931,8 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 	_refresh_mode_details_button()
+	# 每次模式切换都经过本入口；过关斩将存档存在时把主按钮同步为“继续上次游戏”，其他模式恢复默认文字。
+	refresh_start_button_text()
 
 
 ## 动态构建模式详情入口与模态面板；节点只承载主菜单说明，避免把模式规则复制进独立场景脚本。
@@ -1202,6 +1204,7 @@ func restore_after_failed_restart(message: String) -> void:
 	_close_online_settings(false)
 	_close_all_cards(false)
 	_start_game_button.disabled = false
+	refresh_start_button_text()
 	_show_status(message, true)
 	move_to_front()
 	call_deferred("_focus_start_game_button")
@@ -1237,9 +1240,20 @@ func return_to_main_menu() -> void:
 	_close_all_cards(false)
 	_online_lobby_panel.visible = false
 	_start_game_button.disabled = false
+	refresh_start_button_text()
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	move_to_front()
 	call_deferred("_focus_start_game_button")
+
+
+## 按当前选中模式与过关斩将存档存在性刷新主操作按钮文字；存档存在且选中过关斩将时显示继续入口。
+## 该函数只改变按钮显示文字；点击后的“继续”与“新开局”分流由牌桌按同一存档条件判定，二者始终一致。
+func refresh_start_button_text() -> void:
+	if _start_game_button == null:
+		return
+	# 是否显示继续入口；只有选中过关斩将且本地存在可解析存档时才切换文字。
+	var shows_continue_entry: bool = _selected_match_mode == GameSettings.MATCH_MODE_CONQUEST and ConquestSaveStore.has_save()
+	_start_game_button.text = "继续上次游戏" if shows_continue_entry else "开始游戏"
 
 
 ## 让设置面板与全屏遮罩保持同一可见状态；该入口避免出现只有面板或只有遮罩残留的输入异常。
