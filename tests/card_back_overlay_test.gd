@@ -63,24 +63,29 @@ func _run() -> void:
 	if card_back.get_index() >= card_input_area.get_index():
 		_fail("card_back_input_order")
 		return
-	# 视为牌快照；原实体【闪】保留原牌面名称，逻辑定义【桃】只显示在贯穿插画的独立横条中。
+	# 视为牌快照；原实体【闪】保留原牌面名称，逻辑定义【桃】只显示在贯穿插画的独立标签行中。
 	var view_as_card_data: Dictionary = {"uid":99002, "definition_id":"tao", "original_definition_id":"shan", "suit":"heart", "rank":8}
 	card_view.configure(view_as_card_data, GameDatabase.get_card("tao"), false, true)
 	# 原牌名称标签；当前名称模式下必须继续显示实体【闪】而不是逻辑【桃】。
 	var original_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card("shan"))
-	# 视为横条；节点必须显示逻辑【桃】且位于牌面中部，不替代原名称标签。
-	var view_as_banner: Panel = card_view.get_node("CardBody/ViewAsBanner") as Panel
-	var view_as_name: Label = card_view.get_node("CardBody/ViewAsBanner/Name") as Label
+	# 视为标签行根节点；当前结构为整体居中的等宽标签行，视为名与手牌标记共用同一容器。
+	var view_as_banner: Control = card_view.get_node("CardBody/ViewAsBanner") as Control
+	# 标签行纵向容器；视为名标签在运行时动态创建，固定为容器第一项。
+	var view_as_tag_row: VBoxContainer = card_view.get_node("CardBody/ViewAsBanner/TagRow") as VBoxContainer
+	# 视为名标签面板；等宽标签底板承载牌纸底色与逻辑牌类别色边框。
+	var view_as_tag_panel: PanelContainer = view_as_tag_row.get_child(0) as PanelContainer if view_as_tag_row != null and view_as_tag_row.get_child_count() > 0 else null
+	# 视为名文本标签；动态标签面板内唯一的 Label 子节点。
+	var view_as_name: Label = view_as_tag_panel.get_child(0) as Label if view_as_tag_panel != null and view_as_tag_panel.get_child_count() > 0 else null
 	var viewed_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card("tao"))
 	if card_name_label.text != original_name or view_as_banner == null or not view_as_banner.visible or view_as_name == null or view_as_name.text != viewed_name or not is_equal_approx(view_as_banner.position.y + view_as_banner.size.y * 0.5, card_view.card_height * 0.5):
 		_fail("card_view_as_banner:%s/%s/%s" % [card_name_label.text, view_as_name.text if view_as_name != null else "", view_as_banner.get_rect() if view_as_banner != null else Rect2()])
 		return
-	# 视为横条样式；红桃【闪】视为【桃】时，底板使用牌面白色、边框使用逻辑基本牌色、文字使用红色牌名色。
-	var view_as_banner_style: StyleBoxFlat = view_as_banner.get_theme_stylebox("panel") as StyleBoxFlat
+	# 视为标签样式；红桃【闪】视为【桃】时，底板使用牌面白色、边框使用逻辑基本牌色、文字使用红色牌名色。
+	var view_as_banner_style: StyleBoxFlat = view_as_tag_panel.get_theme_stylebox("panel") as StyleBoxFlat
 	# 期望底板色；不透明度沿用卡牌组件的可配置参数。
 	var expected_banner_background: Color = BattleUIStyle.get_color("card_paper")
 	expected_banner_background.a = card_view.view_as_banner_opacity
-	# 期望边框色；逻辑【桃】属于基本牌，横条边框保留0.96不透明度。
+	# 期望边框色；逻辑【桃】属于基本牌，标签边框保留0.96不透明度。
 	var expected_banner_border: Color = BattleUIStyle.get_color("card_basic")
 	expected_banner_border.a = 0.96
 	if view_as_banner_style == null or not view_as_banner_style.bg_color.is_equal_approx(expected_banner_background) or not view_as_banner_style.border_color.is_equal_approx(expected_banner_border) or not view_as_name.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("card_red_suit")):

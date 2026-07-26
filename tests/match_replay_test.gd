@@ -306,18 +306,41 @@ func _run_table_replay_flow() -> void:
 	if table_recorder.is_recording():
 		_fail(null, "table_replay_no_rerecord")
 		return
-	# 重演表现步骤；技能发动应创建名称提示标签，技能与卡牌目标线都应在动画层登记动态线条。
+	# 重演表现步骤；技能发动应创建名称提示标签并在动画层登记动态目标线。
 	var animation_layer: Node = main_instance.get("card_use_animation_layer") as Node
 	# 回放头玩家表；表现步骤使用真实录制的稳定玩家 ID 解析重演座位。
 	var header_players: Array = table_saved_header.get("players", []) as Array
 	var first_player_id: int = int((header_players[0] as Dictionary).get("player_id", 0))
 	var second_player_id: int = int((header_players[1] as Dictionary).get("player_id", 1))
 	main_instance.call("_on_replay_presentation_step", {"e":"activation", "player_id":first_player_id, "name":"回放技", "target_ids":[second_player_id]})
-	main_instance.call("_on_replay_presentation_step", {"e":"card_targets", "actor_id":first_player_id, "target_ids":[second_player_id], "stages":[]})
-	# 动画层活动线条集合；两步表现应各登记一条动态目标指示线。
-	var line_presentations: Dictionary = animation_layer.get("_line_presentations") as Dictionary
-	if line_presentations.size() < 2 or main_instance.get_node_or_null("SkillActivation_%d" % first_player_id) == null:
-		_fail(null, "replay_presentation_lines count=%d" % line_presentations.size())
+	if (animation_layer.get("_line_presentations") as Dictionary).size() < 1 or main_instance.get_node_or_null("SkillActivation_%d" % first_player_id) == null:
+		_fail(null, "replay_presentation_activation")
+		return
+	# 重演卡牌使用表现；完整表现数据经正式入口复刻中央飞牌与目标线，动画层新增一张展示牌面与一条线。
+	if GameDatabase.get_card("sha").is_empty():
+		_fail(null, "replay_presentation_card_definition")
+		return
+	# 注入前动画层子节点数；卡牌使用与移牌重演各应新增一个正式 CardView 节点。
+	var layer_child_count_before: int = animation_layer.get_child_count()
+	main_instance.call("_on_replay_presentation_step", {"e":"card_presentation", "data":{
+		"event_name":"useCard",
+		"presentation_id":700001,
+		"owns_discard_transfer":false,
+		"actor_id":first_player_id,
+		"target_ids":[second_player_id],
+		"indicator_stages":[],
+		"card_data":{"uid":700990, "definition_id":"sha", "suit":"spade", "number":7},
+	}})
+	if animation_layer.get_child_count() != layer_child_count_before + 1 or (animation_layer.get("_line_presentations") as Dictionary).size() < 2:
+		_fail(null, "replay_presentation_card_flight children=%d" % animation_layer.get_child_count())
+		return
+	# 重演移牌表现；牌堆到远端玩家手牌的转移经正式入口创建一张牌背转移节点（本机获得走手牌入场不加节点）。
+	var viewer_id: int = int(table_saved_header.get("viewer_player_id", -1))
+	# 非本机视角的目标玩家；保证转移动画分支创建可断言的牌背节点。
+	var remote_player_id: int = second_player_id if viewer_id == first_player_id else first_player_id
+	main_instance.call("_on_replay_presentation_step", {"e":"card_transfer", "card_data":{"uid":700991, "definition_id":""}, "source_player_id":-1, "source_zone":"draw_pile", "target_player_id":remote_player_id, "target_zone":"hand"})
+	if animation_layer.get_child_count() != layer_child_count_before + 2:
+		_fail(null, "replay_transfer_flight children=%d" % animation_layer.get_child_count())
 		return
 	# 控制条可拖动；模拟按住条体空白区域拖动固定位移，位置应精确跟随且不被中途钳制。
 	var control_bar: PanelContainer = replay_overlay._control_bar

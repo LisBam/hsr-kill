@@ -1235,7 +1235,7 @@ func _record_replay_snapshot(snapshot: Dictionary) -> void:
 	_match_replay_recorder.record_snapshot(snapshot)
 
 
-## 把一步目标线类表现送入回放录制器；表现字典只含稳定玩家 ID 与名称，不携带坐标或节点引用。
+## 把一步桌面表现送入回放录制器；表现字典为纯数据（稳定玩家 ID、名称、牌面快照），不携带坐标或节点引用。
 ## 回放重演期间不录制，与快照入口的旁路规则一致；录制器未激活时该调用为空操作。
 func _record_replay_presentation(presentation: Dictionary) -> void:
 	if _replay_session_active:
@@ -1330,57 +1330,24 @@ func _on_replay_log_step(message: String) -> void:
 	_on_log_added(message)
 
 
-## 重演表现步骤入口；按步骤类型重放技能/防具发动提示与卡牌使用目标指示线。
-## 坐标不来自录制：全部按当前重演布局用稳定玩家 ID 重新解析，与录制端解析规则完全一致。
+## 重演表现步骤入口；把录制的表现数据送回与正式对局完全相同的表现处理器，直接复刻原表现流程：
+## 技能/防具发动提示与目标线、卡牌进入牌桌中心的使用/展示/判定飞牌、移牌与摸牌批次动画逐步重放。
+## 坐标不来自录制：各处理器按当前重演布局用稳定玩家 ID 重新解析锚点，与录制端解析规则完全一致。
 func _on_replay_presentation_step(presentation: Dictionary) -> void:
-	# 表现步骤类型；activation 为技能或防具发动（名称提示+目标线），card_targets 为卡牌使用目标线。
+	# 表现步骤类型；每种类型对应一个正式表现信号入口，未知类型静默跳过保证向前兼容。
 	var presentation_kind: String = str(presentation.get("e", ""))
 	if presentation_kind == "activation":
 		_show_character_card_activation(int(presentation.get("player_id", -1)), str(presentation.get("name", "")), {"target_ids":presentation.get("target_ids", [])})
-	elif presentation_kind == "card_targets":
-		_play_replay_card_target_indicator(presentation)
-
-
-## 重演一次卡牌使用目标指示线；与正式出牌共用同一分阶段解析规则和动画层线条参数，只是不移动牌面。
-func _play_replay_card_target_indicator(presentation: Dictionary) -> void:
-	if card_use_animation_layer == null:
-		return
-	# 待播放的指示阶段；规则阶段（借刀杀人等）非空时严格按录制顺序逐段重放。
-	var indicator_stages: Array[Dictionary] = []
-	# 录制的规则阶段数组；每个阶段只含稳定玩家 ID，与正式表现入口的 indicator_stages 同构。
-	var recorded_stages: Array = presentation.get("stages", []) as Array
-	for indicator_stage_variant: Variant in recorded_stages:
-		# 当前录制阶段；缺失来源座位时整段省略，不能从中央伪造玩家位置，与正式表现同一规则。
-		var indicator_stage: Dictionary = indicator_stage_variant as Dictionary
-		# 当前阶段来源锚点；按重演布局解析。
-		var stage_source_result: Dictionary = _try_get_player_indicator_position(int(indicator_stage.get("actor_id", -1)))
-		if not bool(stage_source_result.get("valid", false)):
-			continue
-		# 当前阶段目标锚点数组；个别缺失目标只省略自身线段。
-		var stage_target_positions: Array[Vector2] = []
-		for stage_target_variant: Variant in indicator_stage.get("target_ids", []) as Array:
-			# 当前阶段目标锚点；使用稳定玩家 ID 查询最新重演座位位置。
-			var stage_target_result: Dictionary = _try_get_player_indicator_position(int(stage_target_variant))
-			if bool(stage_target_result.get("valid", false)):
-				stage_target_positions.append(stage_target_result.get("position", Vector2.ZERO) as Vector2)
-		if not stage_target_positions.is_empty():
-			indicator_stages.append({"start_position":stage_source_result.get("position", Vector2.ZERO) as Vector2, "target_positions":stage_target_positions})
-	# 无规则阶段时回退为“使用者到全部目标”的单段线；与正式 play_card 的默认包装规则保持一致。
-	if recorded_stages.is_empty():
-		# 使用者锚点；缺失座位时不回退到桌面中央，避免为回放伪造来源方向。
-		var source_anchor_result: Dictionary = _try_get_player_indicator_position(int(presentation.get("actor_id", -1)))
-		if not bool(source_anchor_result.get("valid", false)):
-			return
-		# 使用牌目标锚点数组；缺失目标只省略对应指示线。
-		var target_positions: Array[Vector2] = []
-		for target_id_variant: Variant in presentation.get("target_ids", []) as Array:
-			# 当前目标锚点；使用稳定玩家 ID 查询最新重演座位位置。
-			var target_anchor_result: Dictionary = _try_get_player_indicator_position(int(target_id_variant))
-			if bool(target_anchor_result.get("valid", false)):
-				target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
-		if not target_positions.is_empty():
-			indicator_stages.append({"start_position":source_anchor_result.get("position", Vector2.ZERO) as Vector2, "target_positions":target_positions})
-	card_use_animation_layer.play_target_indicator_stages(indicator_stages)
+	elif presentation_kind == "card_presentation":
+		_on_card_presentation_requested(presentation.get("data", {}) as Dictionary)
+	elif presentation_kind == "card_transfer":
+		_on_card_transfer_requested(presentation.get("card_data", {}) as Dictionary, int(presentation.get("source_player_id", -1)), str(presentation.get("source_zone", "")), int(presentation.get("target_player_id", -1)), str(presentation.get("target_zone", "")))
+	elif presentation_kind == "draw_batch_started":
+		_on_draw_presentation_batch_started(int(presentation.get("batch_id", -1)), int(presentation.get("player_id", -1)))
+	elif presentation_kind == "draw_batch_finished":
+		_on_draw_presentation_batch_finished(int(presentation.get("batch_id", -1)), int(presentation.get("player_id", -1)))
+	elif presentation_kind == "ownership_reset":
+		_on_card_animation_ownership_reset_requested(int(presentation.get("card_uid", -1)))
 
 
 ## 回放全部步骤播放完毕；覆盖层标记完成，终局画面停留在牌桌上等待玩家退出。
@@ -3277,6 +3244,8 @@ func _reset_presentation_for_new_match() -> void:
 		match_chat_panel.set_history(match_controller.network_gateway.get_match_chat_history())
 	_dismiss_all_chat_bubbles()
 	card_use_animation_layer.clear_presentations()
+	# 未收齐的摸牌表现批次随旧局丢弃；新局与回放重演的批次 ID 从干净容器开始，不继承旧填充。
+	_draw_presentation_batches.clear()
 	_clear_local_hand_gain_animations()
 	_local_hand_display_order.clear()
 	_local_wooden_ox_display_order.clear()
@@ -4100,15 +4069,9 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 	var owns_discard_transfer: bool = bool(presentation_data.get("owns_discard_transfer", false))
 	if not card_use_animation_layer.claim_presentation(presentation_id, card_uid, owns_discard_transfer):
 		return
-	# 目标线重演步骤；去重通过后只在存在目标或规则阶段时录制稳定玩家 ID，重演端按当时布局重新解析坐标。
-	# showCards 与判定牌的目标数组为空，不产生录制步骤，因此重演不会出现多余指示线。
-	if not target_ids.is_empty() or not (presentation_data.get("indicator_stages", []) as Array).is_empty():
-		_record_replay_presentation({
-			"e":"card_targets",
-			"actor_id":actor_id,
-			"target_ids":target_ids,
-			"stages":(presentation_data.get("indicator_stages", []) as Array).duplicate(true),
-		})
+	# 卡牌表现重演步骤；去重通过后录制完整表现数据（牌面快照、来源、目标与规则阶段均为纯数据），
+	# 重演端把同一份数据送回本入口，中央飞牌、展示队列与目标指示线按原表现流程完整复刻。
+	_record_replay_presentation({"e":"card_presentation", "data":presentation_data.duplicate(true)})
 	if not presentation_only:
 		_cancel_local_hand_gain_animation(card_uid)
 		# 普通使用牌最终会从处理区进入弃牌堆；即使中央展示已经淡出，后续移牌信号也不能再生成第二张牌。
@@ -4125,15 +4088,18 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 
 
 ## 登记一次权威摸牌调用的表现批次；批次内卡牌先由普通转移信号逐张填充，完成信号到达后才一起交给动画层。
+## 批次边界进入回放录制，重演端按同一开始/填充/完成节拍复刻同批居中并行的摸牌动画。
 func _on_draw_presentation_batch_started(batch_id: int, player_id: int) -> void:
 	if batch_id < 0:
 		return
+	_record_replay_presentation({"e":"draw_batch_started", "batch_id":batch_id, "player_id":player_id})
 	# 当前批次初始数据；卡牌数组按 CardMovementService 信号顺序追加，顺序就是牌堆实际摸取顺序。
 	_draw_presentation_batches[batch_id] = {"player_id":player_id, "cards":[]}
 
 
 ## 将已收齐的同一次摸牌交给动画层；动画层负责同批居中、并行飞行，多个玩家或连续摸牌批次均立即开始，桌面不自行等待计时器。
 func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void:
+	_record_replay_presentation({"e":"draw_batch_finished", "batch_id":batch_id, "player_id":player_id})
 	# 当前批次数据；信号可能在重开清理后迟到，缺失批次安全忽略且不回退到逐张动画。
 	var draw_batch: Dictionary = _draw_presentation_batches.get(batch_id, {}) as Dictionary
 	_draw_presentation_batches.erase(batch_id)
@@ -4164,7 +4130,9 @@ func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void
 
 
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
+## 完整入参在任何早退分支前进入回放录制；重演端以同一入口重跑同样的批次填充、去重与锚点判定。
 func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
+	_record_replay_presentation({"e":"card_transfer", "card_data":card_data.duplicate(true), "source_player_id":source_player_id, "source_zone":source_zone, "target_player_id":target_player_id, "target_zone":target_zone})
 	# 同一张使用牌已经由完整出牌动画接管时，不再创建第二张转移牌，避免瞬间出现在目标武将牌上。
 	var card_uid: int = int(card_data.get("uid", -1))
 	# 当前摸牌表现批次；批次开始信号已先建立容器，只有带此标记的牌堆到手牌移动会延后到完成信号统一播放。
@@ -4241,7 +4209,9 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 
 
 ## 接收实体进入新区域的内部所有权通知；只释放旧弃牌待消费与已消费状态，不创建牌面或修改权威区域。
+## 所有权释放同样进入回放录制，重演端的中央牌面生命周期与录制端逐步一致。
 func _on_card_animation_ownership_reset_requested(card_uid: int) -> void:
+	_record_replay_presentation({"e":"ownership_reset", "card_uid":card_uid})
 	card_use_animation_layer.release_consumed_discard_claim(card_uid)
 
 
