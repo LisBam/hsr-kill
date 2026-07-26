@@ -45,6 +45,12 @@ const DOUDIZHU_DISTRIBUTIONS: Dictionary = {
 ## 2v2 基准身份表；一号位与四号位同队、二号位与三号位同队。开局时按 50% 概率整表互换蓝红。
 const TEAM2V2_DISTRIBUTION_BASE: Array[String] = ["blue", "red", "red", "blue"]
 
+## 2v2 联机大厅自选身份的位置身份表；大厅上排两位为蓝方、下排两位为红方，与规则座次表配套换算。
+const TEAM2V2_LOBBY_SLOT_IDENTITIES: Array[String] = ["blue", "blue", "red", "red"]
+
+## 2v2 大厅位置到规则座次的映射；上排两蓝映射到一号/四号位、下排两红映射到二号/三号位，保持“一/四同队、二/三同队”的行动顺序。
+const TEAM2V2_LOBBY_SLOT_TO_MATCH_SEAT: Array[int] = [0, 3, 1, 2]
+
 ## 兼容旧常量名；外部若仍引用 DISTRIBUTIONS 时指向标准身份表。
 const DISTRIBUTIONS: Dictionary = IDENTITY_DISTRIBUTIONS
 
@@ -123,6 +129,35 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 	var result: Array[String] = []
 	for identity_variant: Variant in raw:
 		result.append(str(identity_variant))
+	return result
+
+
+## 返回模式是否支持联机大厅自选身份；身份局、斗地主、2v2、机缘大乱斗与1v1车轮战按位置绑定身份，过关斩将真人固定红方无可选身份。
+func supports_lobby_custom_identity(mode_id: String) -> bool:
+	return normalize_mode(mode_id) != MODE_CONQUEST
+
+
+## 返回联机大厅自选身份时每个大厅位置对应的身份 ID；索引即大厅0起始位置，人数不支持时返回空数组。
+## 2v2 使用“上排两蓝、下排两红”的大厅专属布局，其余模式直接沿用固定座次身份表（身份局一号位领袖、斗地主一号位地主等）。
+func get_lobby_slot_identities(mode_id: String, player_count: int) -> Array[String]:
+	# 规范化模式；未知模式回退身份局，保持与身份表查询一致。
+	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_TEAM2V2:
+		return TEAM2V2_LOBBY_SLOT_IDENTITIES.duplicate() if player_count == 4 else []
+	return get_distribution(player_count, mode)
+
+
+## 返回联机大厅自选身份时大厅位置到规则座次（稳定玩家 ID）的映射；索引为大厅位置，值为规则座次。
+## 2v2 需要把“上蓝下红”的大厅布局换算回“一/四同队、二/三同队”的规则座次，其余模式大厅位置与规则座次一一对应。
+func get_lobby_slot_match_seats(mode_id: String, player_count: int) -> Array[int]:
+	# 规范化模式；与大厅身份表使用同一模式判定，保证两份映射永远同步。
+	var mode: String = normalize_mode(mode_id)
+	# 座次映射结果；调用方按大厅位置索引取用。
+	var result: Array[int] = []
+	if mode == MODE_TEAM2V2:
+		return TEAM2V2_LOBBY_SLOT_TO_MATCH_SEAT.duplicate() if player_count == 4 else []
+	for slot_index: int in range(player_count):
+		result.append(slot_index)
 	return result
 
 

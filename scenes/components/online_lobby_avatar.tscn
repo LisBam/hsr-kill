@@ -59,6 +59,21 @@ mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
 text = "空位"
 
+[node name="OnlineLobbyIdentityBadge" type="Label" parent="."]
+unique_name_in_owner = true
+visible = false
+z_index = 1
+layout_mode = 0
+offset_left = 96.35
+offset_top = 34.0
+offset_right = 144.35
+offset_bottom = 56.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 13
+text = "身份"
+horizontal_alignment = 1
+vertical_alignment = 1
+
 [node name="OnlineLobbyKickButton" type="Button" parent="."]
 unique_name_in_owner = true
 visible = false

@@ -81,6 +81,7 @@ layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="DisplayNameLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/DisplayNameRow"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 38)
 layout_mode = 2
 text = "玩家名称"
@@ -99,6 +100,7 @@ layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="AddressLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/AddressRow"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 38)
 layout_mode = 2
 text = "房主 IPv4"
@@ -117,6 +119,7 @@ layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="PortLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/PortRow"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 38)
 layout_mode = 2
 text = "端口"
@@ -137,6 +140,7 @@ layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="PasswordLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/PasswordRow"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 38)
 layout_mode = 2
 text = "房间密码"
@@ -150,6 +154,25 @@ size_flags_horizontal = 3
 secret = true
 placeholder_text = "创建时设置，加入时填写；可留空"
 max_length = 32
+
+[node name="CustomIdentityRow" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="CustomIdentityLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/CustomIdentityRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 38)
+layout_mode = 2
+text = "自选身份"
+vertical_alignment = 1
+
+[node name="LanCustomIdentityCheckBox" type="CheckBox" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/CustomIdentityRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+text = "开启后按空位布局自选身份（创建房间时生效）"
 
 [node name="ConnectionButtons" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
 layout_mode = 2

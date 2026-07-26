@@ -1079,6 +1079,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"conquest_difficulty":GameSettings.conquest_difficulty,
 		"conquest_opportunity_choice_mode":GameSettings.conquest_opportunity_choice_mode,
 		"opportunity_system_enabled":opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode),
+		"lan_custom_identity_enabled":network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_custom_identity_enabled(),
 	}
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode), opportunity_enabled_mode_ids.has(actual_mode))
@@ -7724,12 +7725,16 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 	var match_mode: String = identity_rules.normalize_mode(str(state.match_mode))
 	# 身份配置副本；身份局整表洗牌；斗地主按座次固定；2v2 按座次固定后可整体互换蓝红。
 	# 补充：斗地主现将身份数量池洗牌，确保每局由本局随机源重新决定哪名玩家成为地主。
+	# 联机自选身份锁定标志；开启时大厅位置身份表原样按座次生效，不洗牌也不做2v2蓝红互换。
+	var lan_custom_identity_enabled: bool = bool(state.match_options.get("lan_custom_identity_enabled", false))
 	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
 	if match_mode == IdentityRules.MODE_TEAM2V2:
-		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队。
-		identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
+		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队；自选身份保持基准表使大厅蓝红选择生效。
+		if not lan_custom_identity_enabled:
+			identities = identity_rules.get_team2v2_distribution(_rng.randf() < 0.5)
 	elif match_mode != IdentityRules.MODE_WHEEL_DUEL and match_mode != IdentityRules.MODE_CONQUEST:
-		_shuffle_array(identities)
+		if not lan_custom_identity_enabled:
+			_shuffle_array(identities)
 	if automatic_match_seed and match_mode == IdentityRules.MODE_DOUDIZHU:
 		_avoid_repeated_automatic_doudizhu_local_assignment(identities)
 	# 局域网真人玩家 ID；房主大厅已按位置顺序绑定成员，离线模式保持只有 local_human_player_id 一名真人。
@@ -7756,7 +7761,7 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 		state.players.append(player)
 		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
-	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id]})
+	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id], "lan_custom_identity_enabled":lan_custom_identity_enabled})
 
 
 ## 避免自动斗地主连续两局向本地玩家展示完全相同的座次与身份；初次抽取仍来自本局随机源，只在命中上一局组合时从其他合法座次中随机改选。

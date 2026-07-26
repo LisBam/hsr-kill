@@ -42,6 +42,24 @@ signal kick_requested(peer_id: int)
 ## 踢出按钮上下内容边距；默认2像素避免通用操作按钮边距把紧凑高度撑大。
 @export_range(0.0, 8.0, 1.0) var kick_button_vertical_content_margin: float = 2.0
 
+## 身份徽记尺寸；默认48×22像素紧贴武将框右上角，运行时通常无需修改。
+@export var identity_badge_size: Vector2 = Vector2(48.0, 22.0)
+
+## 身份徽记距武将框右上角的内缩距离；默认4像素让徽记完整位于框体描边内部。
+@export_range(0.0, 16.0, 1.0) var identity_badge_inset: float = 4.0
+
+## 身份到玩家可见文案的固定映射；与规则层身份 ID 一一对应，未知身份直接显示原始 ID 便于排查。
+const IDENTITY_DISPLAY_NAMES: Dictionary = {
+	"leader":"领袖",
+	"loyalist":"忠臣",
+	"rebel":"反贼",
+	"renegade":"内奸",
+	"landlord":"地主",
+	"peasant":"农民",
+	"blue":"蓝方",
+	"red":"红方",
+}
+
 ## 玩家名称标签；始终位于联机形象上方，空位置显示对应位置编号。
 @onready var _name_label: Label = %OnlineLobbyAvatarName
 
@@ -56,6 +74,9 @@ signal kick_requested(peer_id: int)
 
 ## 房主踢出按钮；仅房主悬停远端玩家形象时显示，房主本人和空位置始终隐藏。
 @onready var _kick_button: Button = %OnlineLobbyKickButton
+
+## 位置身份徽记；自选身份开启时显示该位置绑定的身份，空位与玩家形象右上角共用同一徽记。
+@onready var _identity_badge_label: Label = %OnlineLobbyIdentityBadge
 
 ## 当前大厅位置索引；由 configure 写入，默认-1表示尚未绑定有效位置。
 var _seat_index: int = -1
@@ -77,6 +98,9 @@ var _hovered: bool = false
 
 ## 鼠标是否停留在踢出按钮范围内；父组件因子控件命中而收到离开事件时，该状态会保持管理按钮可见。
 var _kick_button_hovered: bool = false
+
+## 当前位置绑定的身份 ID；空字符串表示未开启自选身份或该模式无位置身份，徽记隐藏。
+var _identity_id: String = ""
 
 
 ## 初始化输入信号并应用固定几何；玩家与空位置共用同一组件尺寸。
@@ -102,6 +126,9 @@ func _ready() -> void:
 		mask_material.set_shader_parameter("artwork_aspect_ratio", artwork_size.x / artwork_size.y)
 		mask_material.set_shader_parameter("corner_radius", artwork_corner_radius / artwork_size.y)
 		_artwork_rect.material = mask_material
+	# 身份徽记位置；紧贴武将框右上角并按内缩距离嵌入框体，位于插画之上、踢出按钮之下的绘制层。
+	_identity_badge_label.size = identity_badge_size
+	_identity_badge_label.position = frame_position + Vector2(avatar_size.x - identity_badge_size.x - identity_badge_inset, identity_badge_inset)
 	# 当前踢出按钮宽度；内缩过大时保留24像素宽度，避免检查器配置导致按钮反向或不可点击。
 	var kick_button_width: float = maxf(avatar_size.x - kick_button_horizontal_inset * 2.0, 24.0)
 	_kick_button.position = frame_position + Vector2(kick_button_horizontal_inset, avatar_size.y - kick_button_bottom_inset - kick_button_height)
@@ -117,10 +144,12 @@ func _ready() -> void:
 
 
 ## 绑定一名大厅成员或空位置；成员字典只读取名称、形象 ID、peer ID 与房主标记。
-func configure(seat_index: int, member: Dictionary, local_is_host: bool, local_peer_id: int) -> void:
+## identity_id 为该位置在自选身份下绑定的身份；空字符串表示不显示身份徽记。
+func configure(seat_index: int, member: Dictionary, local_is_host: bool, local_peer_id: int, identity_id: String = "") -> void:
 	_seat_index = seat_index
 	_local_is_host = local_is_host
 	_occupied = not member.is_empty()
+	_identity_id = identity_id
 	_peer_id = int(member.get("peer_id", 0)) if _occupied else 0
 	_is_local_member = _occupied and _peer_id == local_peer_id
 	_hovered = false
@@ -170,12 +199,44 @@ func refresh_ui_style() -> void:
 		if kick_button_state_style != null:
 			kick_button_state_style.content_margin_top = kick_button_vertical_content_margin
 			kick_button_state_style.content_margin_bottom = kick_button_vertical_content_margin
+	_refresh_identity_badge()
 	_update_kick_visibility()
 
 
 ## 返回组件当前绑定的大厅位置索引；布局测试与父组件可据此验证人数排版顺序。
 func get_seat_index() -> int:
 	return _seat_index
+
+
+## 返回当前位置绑定的身份 ID；空字符串表示徽记隐藏，回归测试据此验证自选身份布局。
+func get_identity_id() -> String:
+	return _identity_id
+
+
+## 按当前身份 ID 刷新右上角身份徽记；文案取固定映射，颜色取主题身份语义色，空身份直接隐藏。
+func _refresh_identity_badge() -> void:
+	if not is_node_ready() or _identity_badge_label == null:
+		return
+	if _identity_id.is_empty():
+		_identity_badge_label.visible = false
+		return
+	_identity_badge_label.text = str(IDENTITY_DISPLAY_NAMES.get(_identity_id, _identity_id))
+	# 当前身份语义色；未登记身份回退次级文字色，保证徽记在任何主题下可读。
+	var identity_color: Color = BattleUIStyle.get_color("identity_%s" % _identity_id, BattleUIStyle.get_color("text_secondary"))
+	_identity_badge_label.add_theme_color_override("font_color", identity_color)
+	# 徽记底色；沿用金属面板语义并保持高不透明度，让身份文字在插画上保持稳定对比。
+	var badge_background: Color = BattleUIStyle.get_color("metal_panel")
+	badge_background.a = 0.92
+	# 徽记样式；身份色细描边、紧凑零内边距与小圆角，避免遮挡插画主体。
+	var badge_style: StyleBoxFlat = BattleUIStyle.make_panel(badge_background, identity_color, 1, 4)
+	badge_style.content_margin_left = 0.0
+	badge_style.content_margin_top = 0.0
+	badge_style.content_margin_right = 0.0
+	badge_style.content_margin_bottom = 0.0
+	badge_style.shadow_size = 0
+	badge_style.shadow_offset = Vector2.ZERO
+	_identity_badge_label.add_theme_stylebox_override("normal", badge_style)
+	_identity_badge_label.visible = true
 
 
 ## 返回插画实际显示矩形；大厅布局测试据此确认插画按内缩距离完整嵌入武将框内部。
