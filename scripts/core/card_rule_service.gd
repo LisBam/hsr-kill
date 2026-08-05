@@ -300,6 +300,14 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive or target.out_of_game:
 		return "目标不存在、已经死亡或已移出游戏。"
+	# 被废除区域的入口限制；规则查询阶段直接拒绝，避免使用牌进入处理区后才发现没有合法终点。
+	if str(definition.get("type", "")) == "equipment":
+		# 装备牌将进入的固定栏位；部分废除只拒绝对应类型，其他装备栏继续正常使用。
+		var equipment_slot: String = str(definition.get("slot", ""))
+		if target.is_equipment_slot_abolished(equipment_slot):
+			return "目标的%s已被废除。" % _equipment_slot_display_name(equipment_slot)
+	if bool(definition.get("delayed", false)) and target.judgment_area_abolished:
+		return "目标的判定区已被废除。"
 	# 卡牌目标模式；决定身份、区域与状态限制。
 	var target_mode: String = str(definition.get("target_mode", ""))
 	# 当前卡牌源码；目标组合与效果前置条件等专属规则由对应卡牌文件校验。
@@ -407,6 +415,17 @@ func get_grouped_actual_play_count(actor_id: int, definition: Dictionary) -> int
 		if used_group == play_limit_group:
 			used_count += int(use_history.get(used_definition_id, 0))
 	return maxi(used_count, 0)
+
+
+## 将装备栏稳定ID转为规则拒绝信息使用的中文名称。
+func _equipment_slot_display_name(slot: String) -> String:
+	return {
+		"weapon":"武器栏",
+		"armor":"防具栏",
+		"offensive_mount":"进攻坐骑栏",
+		"defensive_mount":"防御坐骑栏",
+		"treasure":"宝物栏",
+	}.get(slot, "装备栏")
 
 
 ## 检查玩家指定装备 ID 是否位于任意装备槽。

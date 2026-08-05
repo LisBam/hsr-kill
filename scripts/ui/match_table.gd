@@ -2418,17 +2418,19 @@ func _cancel_active_hand_drag() -> void:
 func _format_local_equipment(player: Dictionary) -> String:
 	# 本地装备字典；键为weapon、armor、坐骑和treasure等稳定槽位 ID。
 	var equipment: Dictionary = player.get("equipment", {}) as Dictionary
+	# 本地已废除装备栏；无障碍摘要优先说明“已废除”而不是把栏位误读为普通空栏。
+	var abolished_slots: Dictionary = player.get("abolished_equipment_slots", {}) as Dictionary
 	# 武器显示名；槽位为空时显示“无”。
-	var weapon_name: String = _equipment_slot_name(equipment, "weapon")
+	var weapon_name: String = _equipment_slot_name(equipment, "weapon", abolished_slots)
 	# 防具显示名；槽位为空时显示“无”。
-	var armor_name: String = _equipment_slot_name(equipment, "armor")
+	var armor_name: String = _equipment_slot_name(equipment, "armor", abolished_slots)
 	# 进攻坐骑显示名；槽位为空时显示“无”。
-	var offensive_mount_name: String = _equipment_slot_name(equipment, "offensive_mount")
+	var offensive_mount_name: String = _equipment_slot_name(equipment, "offensive_mount", abolished_slots)
 	# 防御坐骑显示名；槽位为空时显示“无”。
-	var defensive_mount_name: String = _equipment_slot_name(equipment, "defensive_mount")
+	var defensive_mount_name: String = _equipment_slot_name(equipment, "defensive_mount", abolished_slots)
 	# 宝物显示名；槽位为空时显示“无”。
-	var treasure_name: String = _equipment_slot_name(equipment, "treasure")
-	if equipment.has("treasure"):
+	var treasure_name: String = _equipment_slot_name(equipment, "treasure", abolished_slots)
+	if equipment.has("treasure") and not bool(abolished_slots.get("treasure", false)):
 		# 当前宝物实体快照；木牛流马需要在装备名后直接显示公开存牌数量。
 		var treasure_card: Dictionary = equipment.get("treasure", {}) as Dictionary
 		var treasure_definition: Dictionary = _get_cached_card_definition(str(treasure_card.get("definition_id", "")))
@@ -2443,6 +2445,8 @@ func _format_local_equipment(player: Dictionary) -> String:
 func _render_local_equipment(player: Dictionary) -> void:
 	# 本地装备字典；组件按固定槽位位置显示已有实体，空槽保留位置但不绘制“无”占位。
 	var equipment: Dictionary = player.get("equipment", {}) as Dictionary
+	# 已废除装备栏公开快照；组件以当前主题的不可交互废除占位条显示。
+	var abolished_slots: Dictionary = player.get("abolished_equipment_slots", {}) as Dictionary
 	# 当前内联候选 UID；组件会自行过滤不属于装备区的手牌或木牛“粮”实体。
 	var candidate_uids: Array[int] = []
 	# 当前内联已选 UID；装备横条与手牌共用同一临时选择顺序和数量约束。
@@ -2455,13 +2459,15 @@ func _render_local_equipment(player: Dictionary) -> void:
 		selected_uids = _inline_selected_card_uids.duplicate()
 	elif _can_local_player_act():
 		candidate_uids = _get_play_phase_equipment_candidate_uids()
-	equipment_label.configure(equipment, int(player.get("wooden_ox_storage_count", 0)), candidate_uids, selected_uids)
+	equipment_label.configure(equipment, int(player.get("wooden_ox_storage_count", 0)), candidate_uids, selected_uids, abolished_slots)
 	# 原固定槽位文本继续作为组件的完整无障碍摘要；可见牌面由堆叠横条负责。
 	equipment_label.tooltip_text = ""
 
 
 ## 按装备槽位返回当前名称模式下的牌名；空槽位统一返回“无”。
-func _equipment_slot_name(equipment: Dictionary, slot: String) -> String:
+func _equipment_slot_name(equipment: Dictionary, slot: String, abolished_slots: Dictionary = {}) -> String:
+	if bool(abolished_slots.get(slot, false)):
+		return "已废除"
 	if not equipment.has(slot):
 		return "无"
 	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
@@ -2481,7 +2487,7 @@ func _render_local_judgment_zone(player: Dictionary) -> void:
 		# 当前判定牌快照；定义缺失时名称解析会返回稳定空回退，组件仍保持固定图标尺寸。
 		var judgment_card: Dictionary = judgment_variant as Dictionary
 		judgment_names.append(GameSettings.resolve_card_name(_get_cached_card_definition(str(judgment_card.get("definition_id", "")))))
-	local_judgment_zone.configure(judgment_names)
+	local_judgment_zone.configure(judgment_names, bool(player.get("judgment_area_abolished", false)))
 	_queue_local_judgment_zone_layout()
 
 

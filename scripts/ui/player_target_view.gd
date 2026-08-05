@@ -441,7 +441,10 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("auto_managed_offline", false),
 		snapshot.get("hand_count", 0),
 		snapshot.get("equipment", {}),
+		snapshot.get("equipment_area_abolished", false),
+		snapshot.get("abolished_equipment_slots", {}),
 		snapshot.get("judgment_area", []),
+		snapshot.get("judgment_area_abolished", false),
 		snapshot.get("wooden_ox_storage_count", 0),
 	]
 	return visual_data
@@ -877,7 +880,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 		judgment_names.clear()
 	# 木牛数量在装备条刷新时读取；显式访问保证公开数量字段缺失时仍使用0作为稳定回退。
 	wooden_ox_count = maxi(wooden_ox_count, 0)
-	_public_zone_label.configure(judgment_names)
+	_public_zone_label.configure(judgment_names, bool(_player_snapshot.get("judgment_area_abolished", false)))
 	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_faction_badge_label.text = faction_short_name
 	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -1067,16 +1070,20 @@ func _refresh_equipment_rows() -> void:
 		return
 	# 当前公开装备字典；快照已包含完整实体牌数据，可安全展示花色、点数和牌名。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
+	# 当前已废除装备栏；其占位条与实体装备共用固定槽位位置，但不伪造卡牌数据。
+	var abolished_slots: Dictionary = _player_snapshot.get("abolished_equipment_slots", {}) as Dictionary
 	for slot: String in EQUIPMENT_SLOT_ORDER:
-		if not equipment.has(slot) or _equipment_rows.size() >= maximum_equipment_rows:
+		# 当前栏位是否已废除；异常快照同时含装备时仍优先显示废除事实。
+		var is_abolished: bool = bool(abolished_slots.get(slot, false))
+		if (not equipment.has(slot) and not is_abolished) or _equipment_rows.size() >= maximum_equipment_rows:
 			continue
 		# 当前槽位的公开装备实体牌；只读取序列化数据，不保留可修改的 CardInstance 引用。
 		var equipment_card: Dictionary = equipment.get(slot, {}) as Dictionary
 		# 当前装备定义；用于按全局名称模式解析牌名，配置缺失时回退到稳定定义 ID。
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则。
-		var equipment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
-		if bool(card_definition.get("shows_attachment_count", false)):
+		var equipment_name: String = "已废除" if is_abolished else (GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备")))
+		if not is_abolished and bool(card_definition.get("shows_attachment_count", false)):
 			# 装备公开附属牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
 			var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
 			equipment_name += "（%d）" % wooden_ox_count
@@ -1091,16 +1098,16 @@ func _refresh_equipment_rows() -> void:
 		equipment_row.scroll_active = false
 		equipment_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		equipment_row.add_theme_font_size_override("normal_font_size", equipment_row_font_size)
-		equipment_row.add_theme_color_override("default_color", BattleUIStyle.get_color("equipment_text"))
+		equipment_row.add_theme_color_override("default_color", BattleUIStyle.get_color("zone_abolished_text") if is_abolished else BattleUIStyle.get_color("equipment_text"))
 		# 装备横条样式；缩小内容边距以在固定60像素条宽内完整显示花色点数与短牌名。
 		# 当前横条已扩展到完整插画宽度，并在宝物名称后容纳木牛公开数量。
-		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("equipment_background"), BattleUIStyle.get_color("equipment_border"), 1, 3)
+		var equipment_row_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("zone_abolished_background") if is_abolished else BattleUIStyle.get_color("equipment_background"), BattleUIStyle.get_color("zone_abolished_border") if is_abolished else BattleUIStyle.get_color("equipment_border"), 1, 3)
 		equipment_row_style.content_margin_left = 2.0
 		equipment_row_style.content_margin_top = 0.0
 		equipment_row_style.content_margin_right = 2.0
 		equipment_row_style.content_margin_bottom = 0.0
 		equipment_row.add_theme_stylebox_override("normal", equipment_row_style)
-		equipment_row.text = "[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]
+		equipment_row.text = "[center]× %s[/center]" % str(EQUIPMENT_SLOT_NAMES.get(slot, "装备")) if is_abolished else "[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]
 		_equipment_layer.add_child(equipment_row)
 		_equipment_rows.append(equipment_row)
 		_equipment_row_slots.append(slot)
@@ -1166,6 +1173,18 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 		return
 	# 当前玩家公开装备字典；快照只包含对所有观察者可见的装备实体数据。
 	var equipment: Dictionary = _player_snapshot.get("equipment", {}) as Dictionary
+	# 当前已废除装备栏快照；废除占位横条显示规则说明而不尝试解析卡牌。
+	var abolished_slots: Dictionary = _player_snapshot.get("abolished_equipment_slots", {}) as Dictionary
+	if bool(abolished_slots.get(hovered_slot, false)):
+		# 废除栏位信息；说明该栏不能放置装备，恢复后也不返还曾离区的牌。
+		var abolished_information: Dictionary = {
+			"title":"【%s已废除】" % str(EQUIPMENT_SLOT_NAMES.get(hovered_slot, "装备栏")),
+			"subtitle":"装备栏状态",
+			"description":"当前不能向该装备栏放置装备牌；恢复栏位不会找回废除时弃置的牌。",
+		}
+		_hovered_equipment_slot = hovered_slot
+		information_requested.emit(abolished_information, hovered_row.get_global_rect())
+		return
 	# 当前命中装备实体快照；槽位在横条创建后仍可能因快照刷新失效，缺失时直接停止显示。
 	var equipment_card: Dictionary = equipment.get(hovered_slot, {}) as Dictionary
 	if equipment_card.is_empty():

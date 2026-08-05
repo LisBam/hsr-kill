@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 单名玩家的权威对局状态。该结构不依赖 UI、AI 或网络节点，可独立序列化与测试。
 
+## 标准装备栏稳定顺序；武器、防具、进攻坐骑、防御坐骑与宝物各有一个基础栏位。
+const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
+
 ## 玩家在本局中的稳定座次 ID；范围从0开始，死亡后也不复用。
 var player_id: int = -1
 
@@ -17,6 +20,9 @@ var character_generation: int = 0
 
 ## 当前武将是否已经向所有玩家亮出；选将阶段领袖先公开，其他玩家完成后同时公开。
 var character_revealed: bool = false
+
+## 当前武将形态跨转换保存的私有规则数据；键和值必须可序列化，默认空字典，普通武将无需在运行时修改。
+var character_form_state: Dictionary = {}
 
 ## 当前身份；身份局取leader/loyalist/rebel/renegade，斗地主取landlord/peasant，2v2与车轮战取blue/red。
 var identity: String = "rebel"
@@ -81,8 +87,17 @@ var hand: Array[CardInstance] = []
 ## 当前装备区；键为 weapon、armor、offensive_mount、defensive_mount、treasure。
 var equipment: Dictionary = {}
 
+## 当前装备区是否已被废除；true时既有装备会被清空且任何新装备不得进入，恢复区域后改回false。
+var equipment_area_abolished: bool = false
+
+## 已废除的单个装备栏；键为五种稳定栏位ID且值固定为true，允许只废除部分栏位而不影响其他装备。
+var abolished_equipment_slots: Dictionary = {}
+
 ## 当前判定区中的延时锦囊；按进入顺序在判定阶段依次处理。
 var judgment_area: Array[CardInstance] = []
+
+## 当前判定区是否已被废除；true时既有延时锦囊会被清空且任何新延时锦囊不得进入，恢复区域后改回false。
+var judgment_area_abolished: bool = false
 
 ## 当前回合已使用【杀】次数；进入新回合时重置为0。
 var slash_count: int = 0
@@ -202,6 +217,56 @@ var wheel_duel_lineup_index: int = 0
 var wheel_duel_defeated_count: int = 0
 
 
+## 返回指定稳定ID是否属于本项目的五个基础装备栏。
+func is_valid_equipment_slot(slot: String) -> bool:
+	return EQUIPMENT_SLOT_ORDER.has(slot)
+
+
+## 返回指定装备栏当前是否已废除；旧存档只含整区布尔值时仍按全部栏位废除兼容。
+func is_equipment_slot_abolished(slot: String) -> bool:
+	if not is_valid_equipment_slot(slot):
+		return false
+	return bool(abolished_equipment_slots.get(slot, false)) or (equipment_area_abolished and abolished_equipment_slots.is_empty())
+
+
+## 设置一个装备栏的废除状态；返回true表示权威状态实际发生变化。
+func set_equipment_slot_abolished(slot: String, abolished: bool) -> bool:
+	if not is_valid_equipment_slot(slot):
+		return false
+	if equipment_area_abolished and abolished_equipment_slots.is_empty():
+		for legacy_slot: String in EQUIPMENT_SLOT_ORDER:
+			abolished_equipment_slots[legacy_slot] = true
+	# 指定栏位修改前的状态；相同值幂等返回，不产生重复事件或网络快照。
+	var previous_abolished: bool = bool(abolished_equipment_slots.get(slot, false))
+	if previous_abolished == abolished:
+		return false
+	if abolished:
+		abolished_equipment_slots[slot] = true
+	else:
+		abolished_equipment_slots.erase(slot)
+	_sync_equipment_area_abolished()
+	return true
+
+
+## 返回按标准栏位顺序排列的已废除ID数组；返回副本不暴露内部可写字典。
+func get_abolished_equipment_slot_ids() -> Array[String]:
+	# 已废除栏位结果；固定顺序供日志、网络和界面使用。
+	var result: Array[String] = []
+	for slot: String in EQUIPMENT_SLOT_ORDER:
+		if is_equipment_slot_abolished(slot):
+			result.append(slot)
+	return result
+
+
+## 将整区兼容布尔值同步为“五个基础装备栏均已废除”的派生事实。
+func _sync_equipment_area_abolished() -> void:
+	equipment_area_abolished = true
+	for slot: String in EQUIPMENT_SLOT_ORDER:
+		if not bool(abolished_equipment_slots.get(slot, false)):
+			equipment_area_abolished = false
+			return
+
+
 ## 使用稳定 ID 与显示名创建玩家状态，其他字段由开局流程填充。
 func _init(id: int = -1, name: String = "玩家") -> void:
 	player_id = id
@@ -218,6 +283,7 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.character_id = str(data.get("character_id", ""))
 	player.character_generation = int(data.get("character_generation", 0))
 	player.character_revealed = bool(data.get("character_revealed", false))
+	player.character_form_state = (data.get("character_form_state", {}) as Dictionary).duplicate(true)
 	player.identity = str(data.get("identity", "rebel"))
 	player.identity_revealed = bool(data.get("identity_revealed", false))
 	player.hp = int(data.get("hp", 4))
@@ -242,6 +308,15 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.slash_count = int(data.get("slash_count", 0))
 	player.skipped_phases = (data.get("skipped_phases", {}) as Dictionary).duplicate(true)
 	player.wooden_ox_used = bool(data.get("wooden_ox_used", false))
+	# 旧格式整区废除标志；新格式缺少栏位字典时将其迁移为全部五栏废除。
+	var legacy_equipment_area_abolished: bool = bool(data.get("equipment_area_abolished", false))
+	# 存档中的单栏废除字典；只接受已知栏位与true，忽略异常扩展键。
+	var saved_abolished_equipment_slots: Dictionary = data.get("abolished_equipment_slots", {}) as Dictionary
+	for slot: String in PlayerState.EQUIPMENT_SLOT_ORDER:
+		if bool(saved_abolished_equipment_slots.get(slot, false)) or (legacy_equipment_area_abolished and saved_abolished_equipment_slots.is_empty()):
+			player.abolished_equipment_slots[slot] = true
+	player._sync_equipment_area_abolished()
+	player.judgment_area_abolished = bool(data.get("judgment_area_abolished", false))
 	for card_data_variant: Variant in data.get("hand", []) as Array:
 		player.hand.append(CardInstance.from_dict(card_data_variant as Dictionary))
 	# 存档中的装备区；槽位名保持 weapon/armor/offensive_mount/defensive_mount/treasure 稳定协议。
@@ -406,12 +481,21 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		for card: CardInstance in wooden_ox_storage:
 			wooden_ox_data.append(card.to_dict())
 
+	# 规范化后的单栏废除快照；运行期仍存在旧式“整区布尔值但字典为空”时也向客户端补齐五栏。
+	var abolished_equipment_slots_data: Dictionary = {}
+	for slot: String in EQUIPMENT_SLOT_ORDER:
+		if is_equipment_slot_abolished(slot):
+			abolished_equipment_slots_data[slot] = true
+	# 规范化后的整区废除结论；只在五个基础栏位全部废除时公开为true。
+	var serialized_equipment_area_abolished: bool = abolished_equipment_slots_data.size() == EQUIPMENT_SLOT_ORDER.size()
+
 	return {
 		"player_id": player_id,
 		"display_name": display_name,
 		"character_id": character_id if character_revealed or viewer_id == player_id or reveal_private else "",
 		"character_generation": character_generation,
 		"character_revealed": character_revealed,
+		"character_form_state": character_form_state.duplicate(true) if reveal_private else {},
 		"identity": identity if identity_revealed or viewer_id == player_id or reveal_private else "hidden",
 		"identity_revealed": identity_revealed,
 		"hp": hp,
@@ -436,7 +520,10 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"hand_count": hand.size(),
 		"hand": hand_data,
 		"equipment": equipment_data,
+		"equipment_area_abolished": serialized_equipment_area_abolished,
+		"abolished_equipment_slots": abolished_equipment_slots_data,
 		"judgment_area": judgment_data,
+		"judgment_area_abolished": judgment_area_abolished,
 		"wooden_ox_storage_count": wooden_ox_storage.size(),
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),

@@ -42,6 +42,21 @@ var _intrinsic_used_count: int = 0
 ## 当前技能是否为轮回技；轮回进度由ReincarnationSkillService保存，不存放在本运行时实例中。
 var reincarnation: bool = false
 
+## 当前正在执行的触发时机回调；仅在统一订阅包装器调用期间有效，用于让“额外发动”重放同一技能入口。
+var _current_timing_callback: Callable = Callable()
+
+## 当前正在执行的触发时机快照；只保存RuleEvent可序列化字段，避免跨结算持有已经结束的可写事件对象。
+var _current_timing_event_snapshot: Dictionary = {}
+
+## 最近一次公开发动对应的重放描述；主动技能保存上下文，触发技能保存回调与事件快照，仅供本技能实例局内使用。
+var _last_activation_repeat_descriptor: Dictionary = {}
+
+## 最近一次公开发动的递增令牌；初始0表示尚未发动，用于避免延迟重放命中后续另一场发动。
+var _last_activation_repeat_token: int = 0
+
+## 当前是否正在执行额外发动；true时新记录会标记为重复发动，防止【奇袭】递归复制自身产生无限循环。
+var _repeat_activation_in_progress: bool = false
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
@@ -144,6 +159,9 @@ func announce_activation(context: Dictionary = {}) -> void:
 		return
 	# 永久记录上下文副本；只允许基础可序列化值，不能把技能对象或界面节点交给日志、回放或表现层。
 	var activation_context: Dictionary = context.duplicate(true)
+	_prepare_repeat_descriptor(activation_context)
+	if _repeat_activation_in_progress:
+		activation_context["repeated_activation"] = true
 	host.call("record_skill_activation", owner_player_id, get_id(), activation_context)
 	consume_intrinsic_use()
 	# 局内获得技能次数；固有技能会由控制器直接返回true且不写入任何额外状态。
@@ -157,6 +175,9 @@ func announce_activation_for_player(activator_player_id: int, context: Dictionar
 		return
 	# 永久记录上下文副本；指定发动者仍须由控制器复核为存活在场角色，避免技能实例直接写入无效日志。
 	var activation_context: Dictionary = context.duplicate(true)
+	_prepare_repeat_descriptor(activation_context)
+	if _repeat_activation_in_progress:
+		activation_context["repeated_activation"] = true
 	host.call("record_skill_activation", activator_player_id, get_id(), activation_context)
 	consume_intrinsic_use()
 
@@ -198,17 +219,17 @@ func get_reincarnation_section_index() -> int:
 
 ## 检查并开始一次轮回技发动；通用永劫与每轮回节阶段限次均在服务中统一复核。
 func begin_reincarnation_activation() -> bool:
-	return reincarnation and host != null and host.has_method("begin_reincarnation_skill_activation") and bool(host.call("begin_reincarnation_skill_activation", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("begin_reincarnation_skill_activation") and bool(host.call("begin_reincarnation_skill_activation", owner_player_id, get_id()))
 
 
 ## 完成轮回技当前轮回节并推进状态；效果未实际成立时不得调用本入口。
 func complete_reincarnation_activation() -> bool:
-	return reincarnation and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_id()))
 
 
 ## 返回当前轮回技是否未触及通用限次；技能自身条件仍应在具体can_activate或触发回调中判断。
 func can_activate_reincarnation() -> bool:
-	return reincarnation and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_id()))
 
 
 ## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
@@ -255,7 +276,9 @@ func subscribe_timing(event_name: String, callback: Callable, role: String = "pl
 	var manager: TriggerManager = host.get("trigger_manager") as TriggerManager
 	# 技能统一生效条件；注册时固化武将代次，暂停保存的旧处理器快照不会因实例之后重新绑定而变成新武将触发器。
 	var guarded_condition: Callable = Callable(self, "_can_receive_timing_event").bind(condition, _bound_character_generation, locked_segment, maintenance)
-	return manager.subscribe(event_name, self, callback, priority, owner_player_id, role, first_do, last_do, guarded_condition)
+	# 技能回调包装器；在不改变原回调签名的前提下记录可供“额外发动”复用的同一时机入口。
+	var guarded_callback: Callable = Callable(self, "_dispatch_timing_callback").bind(callback)
+	return manager.subscribe(event_name, self, guarded_callback, priority, owner_player_id, role, first_do, last_do, guarded_condition)
 
 
 ## 判断技能持有者失效后是否仍可接收指定时机；普通技能默认 false，明确设计为死亡后触发的技能可覆盖本接口。
@@ -315,6 +338,40 @@ func can_activate(_context: Dictionary = {}) -> bool:
 ## 执行主动技能；空字符串表示成功，非空字符串会作为统一动作拒绝原因返回。
 func activate(_context: Dictionary = {}) -> String:
 	return "该技能当前不可主动发动。"
+
+
+## 额外发动最近一次已经成立的技能；触发技重放同一时机入口，主动技复用原上下文并保持既有目标字段。
+## 具体技能存在分段选择或特殊费用时可覆盖本函数，成功提交效果返回true。
+func repeat_activation(context: Dictionary = {}, activation_token: int = -1) -> bool:
+	if activation_token >= 0 and activation_token != _last_activation_repeat_token:
+		return false
+	# 最近一次重放描述；空值表示技能尚未通过announce_activation留下可重放入口。
+	var descriptor: Dictionary = _last_activation_repeat_descriptor.duplicate(true)
+	if descriptor.is_empty():
+		return false
+	_repeat_activation_in_progress = true
+	# 触发技能回调；克隆事件避免重复发动修改原事件的结束状态或结果。
+	if str(descriptor.get("kind", "")) == "timing":
+		# 原技能实际发动时所在的订阅回调；只在当前运行时实例内保存。
+		var callback: Callable = descriptor.get("callback", Callable()) as Callable
+		# 从序列化快照重建的独立规则事件；不复用原事件ID、结果或终止状态。
+		var replay_event: RuleEvent = _create_rule_event_from_snapshot(descriptor.get("event", {}) as Dictionary)
+		if callback.is_valid() and replay_event != null:
+			callback.call(replay_event)
+			_repeat_activation_in_progress = false
+			return true
+	# 主动技能回放；调用方上下文优先保留首次目标，内部标记只用于防止额外发动递归。
+	var replay_context: Dictionary = (descriptor.get("context", context) as Dictionary).duplicate(true)
+	replay_context["repeated_activation"] = true
+	# 主动技能重放的错误文本；空字符串表示原入口已成功提交效果或后续选择。
+	var activation_error: String = activate(replay_context)
+	_repeat_activation_in_progress = false
+	return activation_error.is_empty()
+
+
+## 返回最近一次公开发动令牌；控制器只把该整数写入实际发动时机，不暴露运行时回调。
+func get_last_activation_repeat_token() -> int:
+	return _last_activation_repeat_token
 
 
 ## 恢复由本技能创建的普通选牌请求；返回 true 表示选择已识别并完成或进入下一段等待。
@@ -628,6 +685,40 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	if out_of_game_skill:
 		result["allow_out_of_game_chooser"] = true
 	return result
+
+
+## 通过统一包装器执行技能时机回调，并在调用期间保存可序列化事件快照供announce_activation登记重放入口。
+func _dispatch_timing_callback(event: RuleEvent, callback: Callable) -> void:
+	if event == null or not callback.is_valid():
+		return
+	# 外层嵌套时机的回调；内层时机结束后恢复，避免丢失外层技能重放入口。
+	var previous_timing_callback: Callable = _current_timing_callback
+	# 外层嵌套时机的可序列化快照；深拷贝保证内层修改不影响恢复值。
+	var previous_timing_event_snapshot: Dictionary = _current_timing_event_snapshot.duplicate(true)
+	_current_timing_callback = callback
+	_current_timing_event_snapshot = event.to_dict()
+	callback.call(event)
+	_current_timing_callback = previous_timing_callback
+	_current_timing_event_snapshot = previous_timing_event_snapshot
+
+
+## 为一次实际发动建立稳定重放描述；每次发动递增令牌，较早的延迟请求因此不会误重放后续发动。
+func _prepare_repeat_descriptor(activation_context: Dictionary) -> void:
+	_last_activation_repeat_token += 1
+	if _current_timing_callback.is_valid() and not _current_timing_event_snapshot.is_empty():
+		_last_activation_repeat_descriptor = {"kind":"timing", "callback":_current_timing_callback, "event":_current_timing_event_snapshot.duplicate(true)}
+	else:
+		_last_activation_repeat_descriptor = {"kind":"active", "context":activation_context.duplicate(true)}
+
+
+## 从序列化快照创建独立RuleEvent；额外发动只复用原时机业务字段，不复用终态、结果或事件ID。
+func _create_rule_event_from_snapshot(snapshot: Dictionary) -> RuleEvent:
+	if snapshot.is_empty():
+		return null
+	# 重放规则事件；player参数显式恢复，避免构造器默认把source当作主要角色。
+	var replay_event: RuleEvent = RuleEvent.new(str(snapshot.get("name", "")), int(snapshot.get("source_id", -1)), int(snapshot.get("target_id", -1)), snapshot.get("data", {}) as Dictionary, int(snapshot.get("player_id", -1)))
+	replay_event.data["repeated_activation"] = true
+	return replay_event
 
 
 ## 从技能正文中推导轮回节数量；支持①至⑩，未出现序号时按单轮回节处理。
