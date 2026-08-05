@@ -1820,6 +1820,8 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	var character: Dictionary = _get_cached_character_definition(local_character_id)
 	# 当前完整可见技能 ID；包含武将固有技能、模式技能与局内获得的临时技能。
 	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
+	# 当前已经发动的限定技ID；完全读取权威快照，不根据按钮禁用状态或本地历史自行推断。
+	var used_limited_skill_ids: Array = local_player.get("used_limited_skill_ids", []) as Array
 	# 可见技能列表签名；临时技能增减时即使武将与身份不变也必须重建按钮。
 	var skill_list_signature: String = ",".join(skill_ids)
 	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity and _rendered_skill_list_signature == skill_list_signature:
@@ -1838,7 +1840,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
 			# 当前轮回技公开状态；普通技能获得空字典并保持单色说明。
 			var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state)
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id))
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -1868,7 +1870,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		# 当前轮回技公开状态；技能按钮只转发给统一说明视图，不读取运行时技能对象。
 		var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state)
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id))
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))

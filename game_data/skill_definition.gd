@@ -200,6 +200,12 @@ func restore_intrinsic_use() -> void:
 	_intrinsic_used_count = 0
 
 
+## 复原当前限定技的一次固有发动额度；具体技能若保存了与限定额度同步的兼容状态，应覆盖本方法并在调用super后复原该状态。
+## 本入口只复原限定技次数，不重置轮回、每回合、每轮、每阶段状态，也不清除已经生效的持续效果。
+func restore_limited_use() -> void:
+	restore_intrinsic_use()
+
+
 ## 返回当前轮回技公开状态；普通技能或未绑定状态返回空字典。
 func get_reincarnation_state() -> Dictionary:
 	if not reincarnation or host == null or not host.has_method("get_reincarnation_skill_state"):

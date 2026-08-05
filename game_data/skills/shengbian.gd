@@ -79,17 +79,25 @@ func _execute_shengbian(target_id: int, repeated: bool) -> bool:
 	# 本次轮回数X；效果快照至多取5，推进发生后才会增加下一次使用的轮回数。
 	var round_gain: int = mini(get_reincarnation_round_count(), MAX_ROUND_GAIN)
 	if target_mark_count > 0:
-		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, round_gain, MILITARY_MERIT_MARK_DATA)
+		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, round_gain, _build_military_merit_mark_data())
 		_ensure_derived_skill(target_id)
 	else:
 		_remove_all_field_military_merit()
-		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, INITIAL_MILITARY_MERIT_COUNT, MILITARY_MERIT_MARK_DATA)
+		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, INITIAL_MILITARY_MERIT_COUNT, _build_military_merit_mark_data())
 		_ensure_derived_skill(target_id)
 	if not repeated:
 		_used_this_play_phase = true
 	announce_activation({"target_id":target_id, "target_ids":[target_id], "round_count":get_reincarnation_round_count(), "military_merit_before":target_mark_count, "military_merit_gain":round_gain if target_mark_count > 0 else INITIAL_MILITARY_MERIT_COUNT, "reset_field":target_mark_count <= 0})
 	complete_reincarnation_activation()
 	return true
+
+
+## 构造带有当前施加者归属的军功标记数据；来源死亡时通用标记服务据此清理其给予其他角色的军功。
+func _build_military_merit_mark_data() -> Dictionary:
+	# 军功标记数据；静态显示字段沿用常量，运行时只补充稳定来源角色ID。
+	var mark_data: Dictionary = MILITARY_MERIT_MARK_DATA.duplicate(true)
+	mark_data["source_player_id"] = owner_player_id
+	return mark_data
 
 
 ## 判断奇袭额外发动时仍处于自身出牌阶段且轮回通用额度可用；普通阶段限次由额外发动明确绕过。
