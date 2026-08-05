@@ -171,6 +171,12 @@ func _get_corner_entry_id() -> String:
 	return "mingding:%d" % owner_player_id
 
 
+## 复原酩酊的限定发动额度与兼容使用标记；已经建立的持续目标仍按原技能时限继续生效。
+func restore_limited_use() -> void:
+	super()
+	_used = false
+
+
 ## 返回酩酊当前全部合法目标；“其他角色”由标准single_other模式保证，距离限制由技能规则覆盖。
 func _get_legal_slash_targets() -> Array[int]:
 	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID, VIRTUAL_RULE_OVERRIDES)

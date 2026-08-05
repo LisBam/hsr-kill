@@ -42,6 +42,8 @@ func set_mark(player_id: int, mark_id: String, mark_data: Dictionary, globally_u
 		"description":str(mark_data.get("description", "")),
 		"count":count,
 		"source_player_id":int(mark_data.get("source_player_id", -1)),
+		"source_skill_id":str(mark_data.get("source_skill_id", "")),
+		"first_use_each_turn_ignore_distance_group":str(mark_data.get("first_use_each_turn_ignore_distance_group", "")),
 		"order":int(mark_data.get("order", 0)),
 	}
 	player.public_marks[mark_id] = normalized_mark
@@ -84,6 +86,26 @@ func find_mark_owner(mark_id: String, source_player_id: int = -1) -> int:
 			continue
 		return player.player_id
 	return -1
+
+
+## 判断角色持有的任一公开标记是否允许指定牌族在每个全局回合首次使用时忽略距离；本方法只读取标记声明，不判断本回合使用历史。
+func allows_first_group_use_to_ignore_distance(player_id: int, card_definition: Dictionary) -> bool:
+	if state == null or card_definition.is_empty():
+		return false
+	# 标记持有者；死亡或离场角色不会进入正常用牌校验，不在此重复放宽其行动资格。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 当前逻辑牌族；优先读取共享次数组，未配置时回退稳定卡牌ID供其他牌族复用。
+	var card_group: String = str(card_definition.get("play_limit_group", card_definition.get("id", "")))
+	if card_group.is_empty():
+		return false
+	for mark_variant: Variant in player.public_marks.values():
+		# 当前公开标记；只有数量为正且声明同一牌族的标记才能提供规则能力。
+		var mark_data: Dictionary = mark_variant as Dictionary
+		if int(mark_data.get("count", 0)) > 0 and str(mark_data.get("first_use_each_turn_ignore_distance_group", "")) == card_group:
+			return true
+	return false
 
 
 ## 清理一名死亡角色自身持有及由其作为来源创建的全部公开标记；返回是否实际移除了任一项。

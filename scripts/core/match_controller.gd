@@ -2470,6 +2470,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var legal_actions: Array[Dictionary] = _build_card_choice_actions(_pending_card_choice)
 	# 兼容策略快照；仅用于生成回退动作，不向策略暴露可变状态。
 	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
+	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# 兼容策略选择结果；仍需经 submit_action 与 request_id、UID 和数量校验。
 	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
 	var action_data: Dictionary = {}
@@ -2653,6 +2654,7 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	var legal_actions: Array[Dictionary] = _build_card_choice_actions(_pending_card_choice)
 	# 当前 AI 权威快照；策略只读取快照，不能取得可写的对局状态引用。
 	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
+	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# AI 选择结果；空结果或异常结果随后使用同一候选集中的保守回退动作。
 	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
 	var action_data: Dictionary = {}
@@ -4030,6 +4032,43 @@ func restore_character_card_skills(player_id: int, reason: String = "") -> bool:
 	skill_instances_by_player[player_id] = player_skills
 	# 技能变化时机只公开复原事实和稳定ID，不传递运行时技能对象。
 	_emit_rule_timing("changeSkillsAfter", player_id, player_id, player_id, {"change_type":"restore_character_card_skills", "skill_ids":native_skill_ids.duplicate(), "reason":reason})
+	_emit_state()
+	return true
+
+
+## 返回一名角色已经消耗固有额度的限定技ID；默认排除觉醒技，供“已发动的限定技”选择与公开按钮状态共用。
+func get_used_limited_skill_ids(player_id: int, include_awakening_skills: bool = false) -> Array[String]:
+	# 已发动限定技结果；保持技能安装顺序，使文字选项、AI与回放具有稳定顺序。
+	var result: Array[String] = []
+	# 当前角色技能实例；固有、模式、临时与局内获得技能都可按自身元数据参与精确查询。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_id_variant: Variant in player_skills.keys():
+		# 当前技能实例；限定额度仍可用时不属于“已发动”的候选。
+		var skill: SkillDefinition = player_skills.get(skill_id_variant) as SkillDefinition
+		if skill == null or not skill.limited or skill.has_available_intrinsic_use():
+			continue
+		if skill.awakening and not include_awakening_skills:
+			continue
+		result.append(str(skill_id_variant))
+	return result
+
+
+## 复原一名角色指定限定技的一次固有发动额度；不重置其他技能、轮回进度或阶段次数，觉醒技不属于本入口候选。
+func restore_limited_skill_use(player_id: int, skill_id: String, reason: String = "") -> bool:
+	if state == null or state.game_over or skill_id.is_empty():
+		return false
+	# 待复原角色；死亡或离场角色不能在回合尾获得新的限定技发动额度。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 待复原技能；只接受已经消耗额度的普通限定技，拒绝普通技能、觉醒技和伪造ID。
+	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
+	if skill == null or not skill.limited or skill.awakening or skill.has_available_intrinsic_use():
+		return false
+	skill.restore_limited_use()
+	# 技能变化时机；只公开单项限定额度已复原，不传递运行时对象或扩大到其他技能状态。
+	_emit_rule_timing("changeSkillsAfter", player_id, player_id, player_id, {"change_type":"restore_limited_skill_use", "skill_ids":[skill_id], "reason":reason})
+	add_log("%s的【%s】已复原。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
 	_emit_state()
 	return true
 
@@ -8232,6 +8271,10 @@ func skill_ignores_card_distance_limit(player_id: int, card_definition: Dictiona
 		var skill: SkillDefinition = skill_variant as SkillDefinition
 		if skill != null and skill.can_use_effect() and skill.ignores_card_distance_limit(card_definition):
 			return true
+	# 当前逻辑牌族；公开标记可以声明“每个全局回合首次使用该牌族时忽略距离”，使用历史仍由控制器统一判断。
+	var card_group: String = str(card_definition.get("play_limit_group", card_definition.get("id", "")))
+	if player_mark_service != null and player_mark_service.allows_first_group_use_to_ignore_distance(player_id, card_definition) and not has_used_card_group_this_turn(player_id, card_group):
+		return true
 	return false
 
 
@@ -12293,6 +12336,22 @@ func has_used_card_this_turn(player_id: int, definition_id: String) -> bool:
 	return bool((_cards_used_this_turn_by_player.get(player_id, {}) as Dictionary).get(definition_id, false))
 
 
+## 返回指定角色在当前全局回合是否使用过某个逻辑牌族；普通、火与雷【杀】等共享组按统一配置合并判断。
+func has_used_card_group_this_turn(player_id: int, card_group: String) -> bool:
+	if player_id < 0 or card_group.is_empty():
+		return false
+	# 当前角色已使用的逻辑牌集合；字典只保存存在性事实，不依赖当前行动角色或出牌阶段。
+	var used_cards: Dictionary = _cards_used_this_turn_by_player.get(player_id, {}) as Dictionary
+	for definition_id_variant: Variant in used_cards.keys():
+		# 已使用卡牌定义；未知旧ID按自身ID回退，避免存档兼容数据错误命中其他牌族。
+		var definition_id: String = str(definition_id_variant)
+		var definition: Dictionary = GameDatabase.get_card(definition_id)
+		var used_card_group: String = str(definition.get("play_limit_group", definition_id))
+		if used_card_group == card_group:
+			return true
+	return false
+
+
 ## 在角色体力恢复至1点或以上时统一结算求桃流程；状态、事件与日志在同一入口完成，父级卡牌或阶段随后才能继续。
 func _finish_dying_rescue(target_id: int) -> void:
 	# 已脱离濒死的目标；异常丢失目标时仍清理队列，避免后续流程永久认为存在未结算濒死角色。
@@ -13737,6 +13796,7 @@ func _run_ai_after_delay(token: int) -> void:
 		return
 	# AI 可读取的权威完整快照；包含所有身份与手牌，但策略只能返回标准动作字典。
 	var full_snapshot: Dictionary = state.to_dict(player_id, true)
+	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
 	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
 	# AI动作可能因延迟期间的状态变化被权威入口拒绝；失败后仍须回到统一续接出口，最终受每阶段动作上限约束。
@@ -14484,6 +14544,16 @@ func refresh_state_snapshot() -> void:
 	_emit_state()
 
 
+## 向现有观察者快照补充每名角色已经发动的限定技ID；运行时技能对象仍留在权威控制器内，不进入网络或UI。
+func _append_limited_skill_usage_to_snapshot(snapshot: Dictionary) -> void:
+	for player_variant: Variant in snapshot.get("players", []) as Array:
+		# 当前玩家快照；已发动限定技是公开事实，所有观察者读取相同稳定ID数组。
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		# 当前玩家ID；无效占位玩家获得空数组，不尝试读取运行时技能表。
+		var player_id: int = int(player_snapshot.get("player_id", -1))
+		player_snapshot["used_limited_skill_ids"] = get_used_limited_skill_ids(player_id) if player_id >= 0 else []
+
+
 ## 发出面向本地玩家的状态快照，并让网络网关保留公共同步入口。
 func _emit_state() -> void:
 	if state == null:
@@ -14494,6 +14564,7 @@ func _emit_state() -> void:
 		state.event_history = event_scheduler.get_event_history_reference_copy()
 	# 本地界面快照；仅公开本地玩家手牌和自身身份。
 	var local_snapshot: Dictionary = state.to_dict(local_human_player_id, false)
+	_append_limited_skill_usage_to_snapshot(local_snapshot)
 	# 本地手气卡私有状态；只包含本人的剩余张数与按钮权限。
 	local_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(local_human_player_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 	state_changed.emit(local_snapshot)
@@ -14511,6 +14582,7 @@ func _emit_state() -> void:
 				continue
 			# 观察者裁剪快照；随机种子属于权威端私有信息，联网下不发送给任何客户端。
 			var remote_snapshot: Dictionary = state.to_dict(viewer_id, false)
+			_append_limited_skill_usage_to_snapshot(remote_snapshot)
 			remote_snapshot.erase("random_seed")
 			# 本地合法动作；只发送给实际行动玩家，用于客户端无状态预览，最终提交仍由房主重新校验。
 			remote_snapshot["local_legal_actions"] = get_legal_actions(viewer_id) if state.current_phase == "play" and state.current_player_id == viewer_id else []

@@ -3,6 +3,15 @@ extends Button
 
 ## 可复用的武将技能按钮。组件只展示技能元数据和可用状态，并通过信号请求桌面处理，不直接执行技能效果。
 
+## 限定技尚未满足发动条件时相对可发动红色的加深比例；默认0.18只表达暂时不可用，不与已发动状态混淆。
+const LIMITED_SKILL_UNAVAILABLE_DARKENING: float = 0.18
+
+## 限定技已经发动后相对通用禁用底色的加深比例；默认0.42形成明显深灰且仍保留按钮轮廓。
+const LIMITED_SKILL_USED_BACKGROUND_DARKENING: float = 0.42
+
+## 限定技已经发动后相对通用禁用描边的加深比例；默认0.25让深灰边框弱于未发动状态。
+const LIMITED_SKILL_USED_BORDER_DARKENING: float = 0.25
+
 ## 技能按钮点击信号；参数为全项目稳定技能 ID。
 signal skill_requested(skill_id: String)
 
@@ -43,6 +52,12 @@ var _is_reincarnation_skill: bool = false
 ## 当前轮回节零基索引；局内从玩家公开快照读取，局外或状态缺失时默认为①对应的0。
 var _reincarnation_section_index: int = 0
 
+## 当前技能是否为限定技；true时按钮使用红色可发动、深红暂不可发动和深灰已发动三态视觉。
+var _is_limited_skill: bool = false
+
+## 当前限定技是否已经消耗固有发动额度；普通技能始终为false，不改变原有可用与禁用样式。
+var _is_limited_skill_used: bool = false
+
 
 ## 初始化按钮尺寸、焦点、字体和点击信号。
 func _ready() -> void:
@@ -60,13 +75,15 @@ func _ready() -> void:
 ## 写入技能定义和运行时可用状态；技能定义来自 GameDatabase 的深拷贝。
 ## 剩余次数由可选参数传入，局内获得且受限的技能会在按钮第二行显示简写。
 ## 当前界面规范不在技能按钮正文展示次数；完整次数说明仅用于悬停标题，避免压缩文字影响按钮识别。
-func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "", reincarnation_state: Dictionary = {}) -> void:
+func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "", reincarnation_state: Dictionary = {}, limited_skill_used: bool = false) -> void:
 	skill_id = str(definition.get("id", ""))
 	is_skill_available = available
 	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
 	skill_limit_description = remaining_uses_description
 	_is_reincarnation_skill = bool(definition.get("reincarnation", false))
 	_reincarnation_section_index = maxi(int(reincarnation_state.get("section_index", 0)), 0)
+	_is_limited_skill = bool(definition.get("limited", false))
+	_is_limited_skill_used = _is_limited_skill and limited_skill_used
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
 	# 技能按钮短名称；固定截取前两个字符，完整名称改由统一信息框标题展示。
@@ -129,12 +146,27 @@ func _refresh_visual_state() -> void:
 	var background_color: Color = BattleUIStyle.get_color("skill_available_background") if is_skill_available else BattleUIStyle.get_color("disabled_button")
 	# 技能边框色；选中状态优先使用金色，否则按可用状态区分。
 	var border_color: Color = BattleUIStyle.get_color("accent") if is_skill_selected else (BattleUIStyle.get_color("legal_target") if is_skill_available else BattleUIStyle.get_color("disabled_button_border"))
+	# 限定技禁用文字色；尚未发动仅加深红色并保持正文清晰，已经发动后改用低对比深灰文字。
+	var disabled_font_color: Color = BattleUIStyle.get_color("text_primary") if _is_limited_skill and not _is_limited_skill_used else BattleUIStyle.get_color("disabled_button_font")
+	if _is_limited_skill:
+		if _is_limited_skill_used:
+			background_color = BattleUIStyle.get_color("disabled_button").darkened(LIMITED_SKILL_USED_BACKGROUND_DARKENING)
+			border_color = BattleUIStyle.get_color("disabled_button_border").darkened(LIMITED_SKILL_USED_BORDER_DARKENING)
+		elif is_skill_available:
+			background_color = BattleUIStyle.get_color("danger")
+			border_color = BattleUIStyle.get_color("danger").lightened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+		else:
+			background_color = BattleUIStyle.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+			border_color = BattleUIStyle.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+	# 技能选中描边；限定技只替换普通状态配色，进入选牌或选目标流程后仍保留全技能统一的主题强调色。
+	if is_skill_selected:
+		border_color = BattleUIStyle.get_color("accent")
 	# 技能描边宽度；选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 3 if is_skill_selected else 1
-	add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if is_skill_available else BattleUIStyle.get_color("disabled_button_font"))
-	add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font") if is_skill_available else BattleUIStyle.get_color("disabled_button_font"))
-	add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("button_pressed_font") if is_skill_available else BattleUIStyle.get_color("disabled_button_font"))
-	add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
+	add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if is_skill_available else disabled_font_color)
+	add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font") if is_skill_available else disabled_font_color)
+	add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("button_pressed_font") if is_skill_available else disabled_font_color)
+	add_theme_color_override("font_disabled_color", disabled_font_color)
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.get_color("accent"), 3, 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
