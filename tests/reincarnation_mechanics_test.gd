@@ -8,6 +8,12 @@ var _controller: MatchController
 ## 单节轮回测试捕获的生命周期事件名；用于验证开始、节开始、节结束与轮回结束的严格顺序。
 var _reincarnation_lifecycle_events: Array[String] = []
 
+## 弑神真实用牌测试捕获的关键时机顺序；用于确认濒死完整插入在【杀】目标与牌效结算之间。
+var _shishen_resolution_order: Array[String] = []
+
+## 弑神真实用牌进入shaBefore时读取到的当前目标伤害加值；默认0可识别CardUseEvent回写覆盖回归。
+var _shishen_damage_bonus_at_sha_before: int = 0
+
 
 ## 延迟一帧开始回归，确保GameDatabase已完成目录扫描和静态校验。
 func _ready() -> void:
@@ -177,6 +183,15 @@ func _capture_reincarnation_lifecycle(event: RuleEvent) -> void:
 	_reincarnation_lifecycle_events.append(event.name)
 
 
+## 记录弑神真实【杀】的目标、濒死与牌效时机；shaBefore额外读取控制器共享伤害参数。
+func _capture_shishen_resolution_timing(event: RuleEvent) -> void:
+	_shishen_resolution_order.append(event.name)
+	if event.name == "shaBefore":
+		# 当前真实【杀】UID；由牌效时机数据提供，用于确认弑神增伤已经保留到内容结算前。
+		var card_uid: int = int(event.data.get("card_uid", -1))
+		_shishen_damage_bonus_at_sha_before = _controller.get_card_target_damage_bonus(card_uid, event.target_id)
+
+
 ## 校验血仇两节、弑神前X张规则、逐目标失去体力增伤、永劫限次及完整技能复原。
 func _test_xvechou_shishen_and_restore() -> bool:
 	_reset_state(2)
@@ -229,6 +244,7 @@ func _test_xvechou_shishen_and_restore() -> bool:
 	_controller.emit_rule_timing("useCardToTargeted", 1, 0, 1, {"card_id":"sha", "card_uid":900, "target_id":1, "target_ids":[1]})
 	if owner.hp != 3 or _controller.get_card_target_damage_bonus(900, 1) != 1:
 		return _fail("shishen_target_effect=%d/%d" % [owner.hp, _controller.get_card_target_damage_bonus(900, 1)])
+	_controller._card_use_contexts.erase(900)
 	# 永劫锁定当前①并设置每回合限一次；进入前的既有发动不计入额度。
 	if not _controller.enter_eternal_reincarnation_state(0, "xvechou", 1) or not xvechou.begin_reincarnation_activation() or not xvechou.complete_reincarnation_activation():
 		return _fail("eternal_enter")
@@ -244,6 +260,35 @@ func _test_xvechou_shishen_and_restore() -> bool:
 	var restored_state: Dictionary = _controller.get_reincarnation_skill_state(0, "xvechou")
 	if int(restored_state.get("round_count", 0)) != 1 or int(restored_state.get("section_index", -1)) != 0 or bool(restored_state.get("eternal", true)):
 		return _fail("restored_reincarnation=%s" % restored_state)
+	# 空对局ID使无人持有救援牌时同步跳过响应界面；弑神失去体力触发的血仇濒死仍完整结算。
+	_controller.state.match_id = ""
+	owner.hp = 1
+	owner.play_phase_card_use_history.clear()
+	owner.play_phase_card_use_limit_exempt_history.clear()
+	# 弑神真实用牌目标；无【闪】时应承受基础1点与弑神1点，共2点伤害。
+	var slash_target: PlayerState = _controller.state.get_player(1)
+	# 真实【杀】实体；必须经过submit_action与CardUseEvent，才能覆盖事件参数回写的历史缺陷。
+	var real_slash: CardInstance = CardInstance.new("sha", "spade", 7)
+	real_slash.zone = "hand"
+	real_slash.owner_id = 0
+	owner.hand.append(real_slash)
+	_shishen_resolution_order.clear()
+	_shishen_damage_bonus_at_sha_before = 0
+	for timing_name: String in ["useCardToTargeted", "dyingBegin", "shaBefore"]:
+		_controller.event_bus.subscribe(timing_name, self, _capture_shishen_resolution_timing)
+	# 真实标准用牌动作；弑神须在指定目标时先写入增伤，再失去体力并插入濒死，最后返回本【杀】结算。
+	var use_slash_action: PlayerAction = PlayerAction.new("use_card", 0, real_slash.uid, [1])
+	if not _controller.submit_action(use_slash_action):
+		return _fail("shishen_real_card_rejected")
+	# 三个关键时机的稳定索引；严格递增表示濒死确实位于目标指定与shaBefore之间完成。
+	var targeted_index: int = _shishen_resolution_order.find("useCardToTargeted")
+	# 濒死开始时机索引；血仇①在该时机把0点体力回复至1点。
+	var dying_index: int = _shishen_resolution_order.find("dyingBegin")
+	# 【杀】牌效开始前索引；此时必须仍读取到当前目标的1点弑神加值。
+	var sha_before_index: int = _shishen_resolution_order.find("shaBefore")
+	_controller.event_bus.unsubscribe_owner(self)
+	if owner.hp != 1 or slash_target.hp != 3 or _shishen_damage_bonus_at_sha_before != 1 or targeted_index < 0 or dying_index <= targeted_index or sha_before_index <= dying_index:
+		return _fail("shishen_real_card=%d/%d/%d/%s" % [owner.hp, slash_target.hp, _shishen_damage_bonus_at_sha_before, _shishen_resolution_order])
 	return true
 
 

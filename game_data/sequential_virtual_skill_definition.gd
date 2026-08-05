@@ -73,6 +73,9 @@ func _execute_next_virtual_sequence_card() -> void:
 	var completion_context: Dictionary = _virtual_card_sequence_completion_context.duplicate(true)
 	_virtual_card_sequence_completion_context.clear()
 	on_virtual_card_sequence_completed(completion_context)
+	# 整组连续用牌结束后再恢复普通出牌窗口；延后一帧可确保最后一张牌的contentAfter与orderingDiscard已经完成。
+	if host != null and host.has_method("resume_play_phase_choice"):
+		host.call_deferred("resume_play_phase_choice")
 
 
 ## 识别当前队列所提交虚拟牌的结束或取消时机，并把下一张登记到统一技能结算队列。
@@ -84,4 +87,6 @@ func _on_virtual_sequence_card_finished(event: RuleEvent) -> void:
 	if int(virtual_storage.get("sequence_skill_owner_id", -1)) != owner_player_id or str(virtual_storage.get("sequence_skill_id", "")) != get_id() or int(virtual_storage.get("sequence_token", -1)) != _virtual_card_sequence_token:
 		return
 	_virtual_card_sequence_waiting = false
-	defer_settlement({"kind":"sequential_virtual_card_continue", "sequence_token":_virtual_card_sequence_token})
+	if defer_settlement({"kind":"sequential_virtual_card_continue", "sequence_token":_virtual_card_sequence_token}) and host != null and host.has_method("resume_settlement_pipeline"):
+		# 当前卡牌结束时机先完整返回事件调度器，随后统一管线会连续排空剩余虚拟牌，不要求外部手工恢复每一张。
+		host.call_deferred("resume_settlement_pipeline")

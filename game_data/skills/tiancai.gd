@@ -41,11 +41,13 @@ func can_activate(_context: Dictionary = {}) -> bool:
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner == null or not owner.alive or owner.out_of_game or host.state.current_player_id != owner_player_id or host.state.current_phase != "play" or not can_activate_reincarnation():
 		return false
-	# 当前轮回节与轮回数；③在X=1时使用0张火攻，仍可发动并正常推进轮回。
+	# 当前轮回节；用于区分无需目标的①与可能使用0张牌的③。
 	var section_index: int = get_reincarnation_section_index()
+	# 当前轮回数X；③的实际火攻张数统一收敛为非负的X-1。
+	var round_count: int = get_reincarnation_round_count()
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX:
 		return true
-	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and get_reincarnation_round_count() <= 1:
+	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(round_count) == 0:
 		return true
 	return not _get_fire_attack_target_ids().is_empty()
 
@@ -58,9 +60,11 @@ func activate(context: Dictionary = {}) -> String:
 	var section_index: int = get_reincarnation_section_index()
 	# 当前轮回数X快照；连续卡牌结束前该数值保持不变。
 	var round_count: int = get_reincarnation_round_count()
+	# ③实际需要使用的火攻张数；为0时必须直接完成本节，不能建立最少选择1人的目标窗口。
+	var repeated_fire_attack_count: int = _get_repeated_fire_attack_count(round_count)
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX:
 		return "" if _execute_self_fire_damage(round_count) else "【天裁】的轮回状态已经失效。"
-	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and round_count <= 1:
+	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and repeated_fire_attack_count == 0:
 		return "" if _complete_zero_fire_attack_section(round_count) else "【天裁】的轮回状态已经失效。"
 	# 已提交目标数组；②允许1至X名，③必须恰好1名。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
@@ -101,7 +105,7 @@ func _execute_self_fire_damage(round_count: int) -> bool:
 
 ## ③在X=1时使用X-1即0张火攻；记录一次实际发动并直接推进到下一轮回。
 func _complete_zero_fire_attack_section(round_count: int) -> bool:
-	if get_reincarnation_section_index() != REPEATED_FIRE_ATTACK_SECTION_INDEX or round_count > 1 or not begin_reincarnation_activation():
+	if get_reincarnation_section_index() != REPEATED_FIRE_ATTACK_SECTION_INDEX or _get_repeated_fire_attack_count(round_count) != 0 or not begin_reincarnation_activation():
 		return false
 	announce_activation({"section_number":REPEATED_FIRE_ATTACK_SECTION_INDEX + 1, "round_count":round_count, "target_ids":[], "fire_attack_count":0})
 	complete_reincarnation_activation()
@@ -118,7 +122,7 @@ func _execute_fire_attack_section(section_index: int, round_count: int, target_i
 		for target_id: int in target_ids:
 			entries.append(_build_fire_attack_entry(target_id))
 	else:
-		for _attack_index: int in range(maxi(round_count - 1, 0)):
+		for _attack_index: int in range(_get_repeated_fire_attack_count(round_count)):
 			entries.append(_build_fire_attack_entry(target_ids[0]))
 	# 完成上下文；目标副本供公开发动日志、奇袭目标保持与轮回推进使用。
 	var completion_context: Dictionary = {"section_index":section_index, "round_count":round_count, "target_ids":target_ids.duplicate(), "fire_attack_count":entries.size()}
@@ -150,7 +154,12 @@ func _validate_section_targets(section_index: int, round_count: int, target_ids:
 				return false
 			seen_target_ids[target_id] = true
 		return true
-	return section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and target_ids.size() == 1 and legal_target_ids.has(target_ids[0]) and round_count > 1
+	return section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and target_ids.size() == 1 and legal_target_ids.has(target_ids[0]) and _get_repeated_fire_attack_count(round_count) > 0
+
+
+## 返回③需要依次使用的【火攻】数量；异常的非正轮回数同样收敛为0，避免创建不可能完成的目标选择。
+func _get_repeated_fire_attack_count(round_count: int) -> int:
+	return maxi(round_count - 1, 0)
 
 
 ## 返回当前可成为无材料【火攻】目标的角色；标准目标规则要求其至少有一张手牌。
@@ -166,7 +175,7 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	var section_index: int = get_reincarnation_section_index()
 	# 当前轮回数X；限制②的目标数与③的火攻张数。
 	var round_count: int = get_reincarnation_round_count()
-	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX or section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and round_count <= 1:
+	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX or section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(round_count) == 0:
 		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
 		return
 	# 当前合法目标；②组合上限为X，③逐一枚举唯一目标。
@@ -207,7 +216,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var target_ids: Array = action.get("target_ids", (action.get("payload", {}) as Dictionary).get("target_ids", [])) as Array
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX:
 		return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -get_reincarnation_round_count()) + 2.0
-	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and get_reincarnation_round_count() <= 1:
+	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(get_reincarnation_round_count()) == 0:
 		return 1.0
 	# 标准火攻动作基础值；②各目标各算一张，③对同一目标乘以X-1次。
 	var score: float = 0.0
@@ -216,7 +225,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 		var fire_attack_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":FIRE_ATTACK_DEFINITION_ID, "card_color":"none", "target_ids":[int(target_id_variant)]}
 		score += evaluator.score_action(authoritative_snapshot, fire_attack_action, owner_player_id)
 	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX:
-		score *= float(maxi(get_reincarnation_round_count() - 1, 0))
+		score *= float(_get_repeated_fire_attack_count(get_reincarnation_round_count()))
 	return score + 1.0
 
 
