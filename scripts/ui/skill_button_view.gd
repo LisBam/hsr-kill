@@ -37,6 +37,12 @@ var skill_limit_description: String = ""
 ## 当前技能完整显示名副本；按钮正文只显示前两个字，统一信息框使用该字段显示完整名称。
 var _skill_display_name: String = ""
 
+## 当前技能是否为轮回技；悬浮信息框据此决定是否按轮回节切换字体颜色。
+var _is_reincarnation_skill: bool = false
+
+## 当前轮回节零基索引；局内从玩家公开快照读取，局外或状态缺失时默认为①对应的0。
+var _reincarnation_section_index: int = 0
+
 
 ## 初始化按钮尺寸、焦点、字体和点击信号。
 func _ready() -> void:
@@ -54,11 +60,13 @@ func _ready() -> void:
 ## 写入技能定义和运行时可用状态；技能定义来自 GameDatabase 的深拷贝。
 ## 剩余次数由可选参数传入，局内获得且受限的技能会在按钮第二行显示简写。
 ## 当前界面规范不在技能按钮正文展示次数；完整次数说明仅用于悬停标题，避免压缩文字影响按钮识别。
-func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "") -> void:
+func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "", reincarnation_state: Dictionary = {}) -> void:
 	skill_id = str(definition.get("id", ""))
 	is_skill_available = available
 	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
 	skill_limit_description = remaining_uses_description
+	_is_reincarnation_skill = bool(definition.get("reincarnation", false))
+	_reincarnation_section_index = maxi(int(reincarnation_state.get("section_index", 0)), 0)
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
 	var skill_name: String = str(definition.get("name", skill_id))
 	# 技能按钮短名称；固定截取前两个字符，完整名称改由统一信息框标题展示。
@@ -97,6 +105,8 @@ func _on_information_mouse_entered() -> void:
 	var information: Dictionary = {
 		"title":information_title,
 		"description":skill_description,
+		"reincarnation":_is_reincarnation_skill,
+		"reincarnation_section_index":_reincarnation_section_index,
 	}
 	information_requested.emit(information, get_global_rect())
 

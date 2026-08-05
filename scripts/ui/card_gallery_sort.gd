@@ -10,6 +10,7 @@ const CHARACTER_FACTION_ORDER: Array[String] = [
 	"beiluoboge",
 	"xianzhou",
 	"pinuokangni",
+	"wengfaluosi",
 ]
 
 ## 游戏牌主类型顺序；未知扩展类型排在三种正式类型之后。

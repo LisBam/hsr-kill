@@ -30,14 +30,31 @@ var out_of_game_skill: bool = false
 ## 当前技能的卖血价值；非负浮点数，默认0.0表示受到伤害不会为本技能创造额外收益，1.0等价于AI估值中的一张牌。
 var sell_blood_value: float = 0.0
 
+## 当前技能是否为限定技；限定技默认只有一次固有发动额度，复原武将牌技能后恢复。
+var limited: bool = false
+
+## 当前技能是否为觉醒技；觉醒技同时具有锁定技与限定技语义，满足条件时不得由玩家取消。
+var awakening: bool = false
+
+## 当前限定技或觉醒技已经消耗的固有发动次数；默认0，首次实际发动并公开记录时变为1。
+var _intrinsic_used_count: int = 0
+
+## 当前技能是否为轮回技；轮回进度由ReincarnationSkillService保存，不存放在本运行时实例中。
+var reincarnation: bool = false
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
 	_metadata = metadata.duplicate(true)
-	lock = bool(_metadata.get("lock", false))
-	_metadata["lock"] = lock
 	# 技能正文；“锁定技”位于正文中段时，从该标签开始的后段属于锁定技，前段仍按非锁定技处理。
 	var description: String = str(_metadata.get("description", ""))
+	awakening = bool(_metadata.get("awakening", false)) or description.contains("觉醒技")
+	limited = bool(_metadata.get("limited", false)) or description.contains("限定技") or awakening
+	# 觉醒技强制具有锁定语义；普通技能仍只读取显式lock配置。
+	lock = bool(_metadata.get("lock", false)) or awakening
+	_metadata["lock"] = lock
+	_metadata["limited"] = limited
+	_metadata["awakening"] = awakening
 	# 锁定技标签位置；索引大于0表示正文具有非锁定前段，索引为0则是完整锁定技。
 	var locked_label_index: int = description.find("锁定技")
 	half_locked = bool(_metadata.get("half_locked", not lock and locked_label_index > 0))
@@ -48,6 +65,14 @@ func _init(metadata: Dictionary = {}) -> void:
 	_metadata["out_of_game_skill"] = out_of_game_skill
 	sell_blood_value = maxf(float(_metadata.get("sell_blood_value", 0.0)), 0.0)
 	_metadata["sell_blood_value"] = sell_blood_value
+	reincarnation = bool(_metadata.get("reincarnation", false)) or description.begins_with("轮回技")
+	_metadata["reincarnation"] = reincarnation
+	if reincarnation:
+		# 轮回节总数；优先读取显式元数据，缺失时按正文中出现的最大带圈序号推导。
+		var section_count: int = maxi(int(_metadata.get("reincarnation_section_count", _infer_reincarnation_section_count(description))), 1)
+		_metadata["reincarnation_section_count"] = section_count
+		_metadata["reincarnation_has_explicit_sections"] = bool(_metadata.get("reincarnation_has_explicit_sections", _description_has_reincarnation_sections(description)))
+		_metadata["reincarnation_each_section_once_per_play_phase"] = bool(_metadata.get("reincarnation_each_section_once_per_play_phase", description.contains("出牌阶段每个轮回节限一次")))
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -72,6 +97,8 @@ func bind(match_host: Object, player_id: int) -> void:
 	# 当前技能所属角色；正式对局在安装技能前已应用武将，因此可以稳定捕获本次入场代次。
 	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
 	_bound_character_generation = owner.character_generation if owner != null else -1
+	if reincarnation and host != null and host.has_method("register_reincarnation_skill"):
+		host.call("register_reincarnation_skill", owner_player_id, get_id(), _metadata)
 
 
 ## 返回技能实例绑定的武将入场代次；规则续接只保存该整数，不保存技能对象引用。
@@ -118,6 +145,7 @@ func announce_activation(context: Dictionary = {}) -> void:
 	# 永久记录上下文副本；只允许基础可序列化值，不能把技能对象或界面节点交给日志、回放或表现层。
 	var activation_context: Dictionary = context.duplicate(true)
 	host.call("record_skill_activation", owner_player_id, get_id(), activation_context)
+	consume_intrinsic_use()
 	# 局内获得技能次数；固有技能会由控制器直接返回true且不写入任何额外状态。
 	if host.has_method("consume_acquired_skill_use"):
 		host.call("consume_acquired_skill_use", owner_player_id, get_id())
@@ -130,6 +158,57 @@ func announce_activation_for_player(activator_player_id: int, context: Dictionar
 	# 永久记录上下文副本；指定发动者仍须由控制器复核为存活在场角色，避免技能实例直接写入无效日志。
 	var activation_context: Dictionary = context.duplicate(true)
 	host.call("record_skill_activation", activator_player_id, get_id(), activation_context)
+	consume_intrinsic_use()
+
+
+## 返回限定技或觉醒技是否仍有固有发动额度；普通技能始终返回true。
+func has_available_intrinsic_use() -> bool:
+	return not limited or _intrinsic_used_count <= 0
+
+
+## 在技能首次实际发动时消耗限定额度；普通技能和已经消耗的限定技返回false。
+func consume_intrinsic_use() -> bool:
+	if not limited or _intrinsic_used_count > 0:
+		return false
+	_intrinsic_used_count = 1
+	return true
+
+
+## 复原限定技与觉醒技的固有发动额度；武将牌技能整体复原时由新实例自然回到同一状态。
+func restore_intrinsic_use() -> void:
+	_intrinsic_used_count = 0
+
+
+## 返回当前轮回技公开状态；普通技能或未绑定状态返回空字典。
+func get_reincarnation_state() -> Dictionary:
+	if not reincarnation or host == null or not host.has_method("get_reincarnation_skill_state"):
+		return {}
+	return host.call("get_reincarnation_skill_state", owner_player_id, get_id()) as Dictionary
+
+
+## 返回轮回技当前轮回数X；普通技能安全回退为初始值1。
+func get_reincarnation_round_count() -> int:
+	return maxi(int(get_reincarnation_state().get("round_count", 1)), 1)
+
+
+## 返回轮回技当前轮回节零基索引；①对应0，普通技能回退0。
+func get_reincarnation_section_index() -> int:
+	return maxi(int(get_reincarnation_state().get("section_index", 0)), 0)
+
+
+## 检查并开始一次轮回技发动；通用永劫与每轮回节阶段限次均在服务中统一复核。
+func begin_reincarnation_activation() -> bool:
+	return reincarnation and host != null and host.has_method("begin_reincarnation_skill_activation") and bool(host.call("begin_reincarnation_skill_activation", owner_player_id, get_id()))
+
+
+## 完成轮回技当前轮回节并推进状态；效果未实际成立时不得调用本入口。
+func complete_reincarnation_activation() -> bool:
+	return reincarnation and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_id()))
+
+
+## 返回当前轮回技是否未触及通用限次；技能自身条件仍应在具体can_activate或触发回调中判断。
+func can_activate_reincarnation() -> bool:
+	return reincarnation and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_id()))
 
 
 ## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
@@ -360,6 +439,11 @@ func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
 	return false
 
 
+## 判断持有者使用指定卡牌后是否不计入配置化次数限制；此规则不会帮助已经达到上限的牌通过使用前校验。
+func does_not_count_toward_play_limit(_card_definition: Dictionary) -> bool:
+	return false
+
+
 ## 返回当前技能对指定牌 play_limit 的额外次数加成；默认0，正值在配置基础上增加可使用次数，不修改历史统计。
 ## 例如【跋扈】对 slash 牌族返回1，使出牌阶段使用【杀】的次数上限+1。
 func get_play_count_limit_bonus(_card_definition: Dictionary) -> int:
@@ -544,3 +628,20 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	if out_of_game_skill:
 		result["allow_out_of_game_chooser"] = true
 	return result
+
+
+## 从技能正文中推导轮回节数量；支持①至⑩，未出现序号时按单轮回节处理。
+func _infer_reincarnation_section_count(description: String) -> int:
+	# 可识别的带圈序号；数组位置+1即对应轮回节数量。
+	var section_symbols: Array[String] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+	# 当前正文中出现的最大轮回节序号；默认1实现无显式序号的单轮回节语义。
+	var inferred_count: int = 1
+	for symbol_index: int in range(section_symbols.size()):
+		if description.contains(section_symbols[symbol_index]):
+			inferred_count = symbol_index + 1
+	return inferred_count
+
+
+## 判断技能正文是否显式包含至少一个带圈轮回节序号；无序号轮回技仍保留单节进度但界面不拆段。
+func _description_has_reincarnation_sections(description: String) -> bool:
+	return description.contains("①")

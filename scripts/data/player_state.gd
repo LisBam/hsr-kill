@@ -108,6 +108,9 @@ var temporary_skills: Dictionary = {}
 ## 当前通过机缘等局内永久来源获得的技能；键为技能 ID，值保存来源、每回合次数、总次数与已用次数，死亡前持续有效。
 var acquired_skills: Dictionary = {}
 
+## 当前所有轮回技的公开权威状态；键为技能ID，值保存轮回数、轮回节、永劫与通用限次，默认空字典由技能安装时建立。
+var reincarnation_skills: Dictionary = {}
+
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
@@ -152,6 +155,12 @@ var card_use_history: Dictionary = {}
 
 ## 当前出牌阶段使用牌统计；键为逻辑牌名，值为本阶段已经确认使用的次数，进入每个普通或额外出牌阶段时清空。
 var play_phase_card_use_history: Dictionary = {}
+
+## 当前回合不计入使用次数限制的牌统计；牌仍保留在完整使用历史中，仅合法性查询从限制计数中扣除本表。
+var card_use_limit_exempt_history: Dictionary = {}
+
+## 当前出牌阶段不计入使用次数限制的牌统计；进入每个普通或额外出牌阶段时与阶段使用历史同步清空。
+var play_phase_card_use_limit_exempt_history: Dictionary = {}
 
 ## 当前回合响应记录；每项保存响应事件 ID、逻辑牌和实体材料 UID。
 var response_history: Array[Dictionary] = []
@@ -245,12 +254,15 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 		player.wooden_ox_storage.append(CardInstance.from_dict(card_data_variant as Dictionary))
 	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
 	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
+	player.reincarnation_skills = (data.get("reincarnation_skills", {}) as Dictionary).duplicate(true)
 	for opportunity_id_variant: Variant in data.get("acquired_opportunity_ids", []) as Array:
 		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
 	player.hand_limit_bonus = int(data.get("hand_limit_bonus", 0))
 	player.mode_hand_limit_bonus = int(data.get("mode_hand_limit_bonus", 0))
 	player.card_use_history = (data.get("card_use_history", {}) as Dictionary).duplicate(true)
 	player.play_phase_card_use_history = (data.get("play_phase_card_use_history", {}) as Dictionary).duplicate(true)
+	player.card_use_limit_exempt_history = (data.get("card_use_limit_exempt_history", {}) as Dictionary).duplicate(true)
+	player.play_phase_card_use_limit_exempt_history = (data.get("play_phase_card_use_limit_exempt_history", {}) as Dictionary).duplicate(true)
 	for entry_variant: Variant in data.get("turn_history", []) as Array:
 		player.turn_history.append((entry_variant as Dictionary).duplicate(true))
 	for entry_variant: Variant in data.get("response_history", []) as Array:
@@ -429,12 +441,15 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
+		"reincarnation_skills": reincarnation_skills.duplicate(true),
 		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),
+		"card_use_limit_exempt_history": card_use_limit_exempt_history.duplicate(true),
+		"play_phase_card_use_limit_exempt_history": play_phase_card_use_limit_exempt_history.duplicate(true),
 		"response_history_count": response_history.size(),
 		"damage_history_count": damage_history.size(),
 		"total_damage_dealt": total_damage_dealt,

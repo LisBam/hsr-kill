@@ -119,6 +119,20 @@ func get_character(character_id: String) -> Dictionary:
 	return (characters.get(character_id, {}) as Dictionary).duplicate(true)
 
 
+## 返回允许进入普通选将、随机抽取与模式换将池的武将ID；特殊武将仅在显式包含时进入结果。
+func get_selectable_character_ids(include_special: bool = false) -> Array[String]:
+	# 可选武将结果；保留数据库扫描后的稳定键顺序，具体选将服务仍负责洗牌与候选排序。
+	var result: Array[String] = []
+	for character_id_variant: Variant in characters.keys():
+		# 当前武将稳定ID；用于读取特殊标记并写入纯字符串结果。
+		var character_id: String = str(character_id_variant)
+		# 当前武将静态定义；special=true表示只能由特定规则显式生成。
+		var character_definition: Dictionary = characters.get(character_id, {}) as Dictionary
+		if include_special or not bool(character_definition.get("special", false)):
+			result.append(character_id)
+	return result
+
+
 ## 返回武将的本地化显示名称；界面只能使用该入口显示名称，避免稳定英文 ID 泄漏到玩家可见区域。
 func resolve_character_name(character_id: String) -> String:
 	# 当前武将定义；从静态索引读取以取得配置的中文 display_name。

@@ -7,6 +7,7 @@
     {"id":"xinghelieshou","display_name":"星核猎手","short_name":"猎","color":"9a4d62"},
     {"id":"pinuokangni","display_name":"匹诺康尼","short_name":"匹","color":"d6ad45"},
     {"id":"xingjianhuanyv","display_name":"星间寰宇","short_name":"星","color":"c7c9ce"},
-    {"id":"yinhexvezhe","display_name":"银河学者","short_name":"学","color":"8a63b8"}
+    {"id":"yinhexvezhe","display_name":"银河学者","short_name":"学","color":"8a63b8"},
+    {"id":"wengfaluosi","display_name":"翁法罗斯","short_name":"翁","color":"b985d6"}
   ]
 }

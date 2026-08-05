@@ -625,10 +625,14 @@ func _request_character_information() -> void:
 		var skill_information_title: String = _get_skill_information_title(skill_id, skill_name)
 		# 当前技能完整描述；卡牌书名号按全局名称模式解析，其他原文保持不变。
 		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		# 当前技能轮回状态；公开快照是局内轮回节高亮的唯一数据来源，静态牌面缺失时回退①。
+		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
 		skill_information_lines.append("%s\n%s" % [skill_information_title, skill_description])
 		skill_description_sections.append({
 			"title":skill_information_title,
 			"description":skill_description,
+			"reincarnation":bool(skill_definition.get("reincarnation", false)),
+			"reincarnation_section_index":maxi(int(reincarnation_state.get("section_index", 0)), 0),
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
 	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"

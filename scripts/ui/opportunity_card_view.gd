@@ -123,6 +123,8 @@ func configure(card_definition: Dictionary, interactive: bool = true) -> void:
 			"title":"【%s】" % str(skill_definition.get("name", skill_id)),
 			"subtitle":"机缘可获得技能",
 			"description":GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。"))),
+			"reincarnation":bool(skill_definition.get("reincarnation", false)),
+			"reincarnation_section_index":0,
 		}
 	_apply_quality_style(str(card_definition.get("quality", "green")))
 	if not _interactive:
