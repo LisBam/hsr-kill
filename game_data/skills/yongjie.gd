@@ -23,6 +23,9 @@ const RETURN_HP: int = 2
 ## 非伤害牌转化的火【杀】稳定定义ID；主动与响应入口共用。
 const FIRE_SLASH_DEFINITION_ID: String = "sha_fire"
 
+## 永劫视为牌的隐藏规则标签稳定ID；牌面由视为名称横条显示，标签只提供无距离规则且不会重复显示文字。
+const HAND_VIEW_AS_MARK_TAG_ID: String = "yongjie_view_as"
+
 ## 返生后替换回的白厄武将稳定ID。
 const RETURN_CHARACTER_ID: String = "baie"
 
@@ -38,9 +41,9 @@ func _init() -> void:
 	super({
 		"id":"yongjie",
 		"name":"永劫",
-		"trigger":["active", "damageAfter", "dyingBegin"],
-		"enable":["phaseUse", "chooseToRespond"],
-		"ui_enabled":true,
+		"trigger":["gainAfter", "damageAfter", "dyingBegin"],
+		"enable":[],
+		"ui_enabled":false,
 		"lock":true,
 		"reincarnation":true,
 		"reincarnation_section_count":3,
@@ -50,13 +53,38 @@ func _init() -> void:
 
 
 ## 订阅持有者造成火焰伤害与进入濒死的锁定时机；主动转化由统一技能动作入口提供。
+## 当前规则不再开放主动转化入口；安装与gainAfter直接维护标准卡牌入口可见的持续手牌视为状态。
 func install() -> void:
+	subscribe_timing("gainAfter", _on_owner_gain_after, "player")
 	subscribe_timing("damageAfter", _on_fire_damage_after, "source")
 	subscribe_timing("dyingBegin", _on_owner_dying_begin, "player", 1000)
+	_refresh_locked_hand_view_as()
+
+
+## 卸载永劫时只清除本技能建立的手牌视为与隐藏距离标签；其他来源的手牌标签保持原样。
+func uninstall() -> void:
+	# 技能持有者；换形或复原时仍可从旧实例绑定的稳定玩家ID取得当前手牌。
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	# 是否实际恢复过至少一张手牌；只有变化时才需要刷新公开牌面。
+	var changed: bool = false
+	if owner != null:
+		for card: CardInstance in owner.hand:
+			if card.hand_view_as_source_skill_id == get_id():
+				card.clear_hand_view_as()
+				card.clear_hand_view_as_presentation()
+				changed = true
+			if card.remove_hand_mark_tag(HAND_VIEW_AS_MARK_TAG_ID):
+				changed = true
+	if changed and host != null and host.has_method("refresh_public_state_snapshot"):
+		host.call("refresh_public_state_snapshot")
+	super()
 
 
 ## 响应入口要求【杀】且存在非伤害手牌；主动入口要求自身出牌阶段并至少有一组合法材料目标。
 func can_activate(context: Dictionary = {}) -> bool:
+	# 永劫的视为牌属于锁定状态，不开放主动技能或响应技能按钮；普通卡牌入口直接使用已经视为火【杀】的实体。
+	if get_active_entries().is_empty():
+		return false
 	# 技能持有者；死亡或离场状态不开放主动与响应转化。
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner == null or not owner.alive or owner.out_of_game:
@@ -74,6 +102,8 @@ func can_activate(context: Dictionary = {}) -> bool:
 
 ## 主动把一张非伤害手牌当无距离火【杀】使用；AI可直接携带材料与目标，人类使用统一牌目标选择。
 func activate(context: Dictionary = {}) -> String:
+	if get_active_entries().is_empty():
+		return "【永劫】是锁定视为效果，请直接使用标记为火【杀】的手牌。"
 	# 动作材料UID；负数表示需要创建玩家选择。
 	var material_card_uid: int = int(context.get("material_card_uid", -1))
 	# 动作目标数组；标准火杀要求恰好一名其他角色。
@@ -120,7 +150,8 @@ func _execute_fire_slash_conversion(material_card_uid: int, target_ids: Array[in
 
 ## 判断一张自有实体牌能否在响应窗口通过永劫转化为火【杀】；只接受普通手牌中的非伤害牌。
 func can_convert_response_card(card: CardInstance, response_patterns: Array[String]) -> bool:
-	return card != null and card.zone == "hand" and card.owner_id == owner_player_id and _is_non_damage_definition(card.definition_id) and response_patterns.has("sha")
+	# 手牌已由锁定效果直接变为火【杀】，响应系统会按牌自身模式处理，不再创建永劫技能按钮。
+	return not get_active_entries().is_empty() and card != null and card.zone == "hand" and card.owner_id == owner_player_id and _is_non_damage_definition(card.definition_id) and response_patterns.has("sha")
 
 
 ## 返回永劫响应转化后的火【杀】定义；等待期间条件失效时返回空字符串。
@@ -131,6 +162,62 @@ func get_converted_response_definition_id(card: CardInstance, response_patterns:
 ## 非伤害手牌已经成功转化并响应后记录永劫发动；响应本身没有目标选择。
 func on_converted_response_consumed(card: CardInstance, response_pattern: String, virtual_definition_id: String) -> void:
 	announce_activation({"material_card_uid":card.uid if card != null else -1, "response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
+
+
+## 持有者获得普通手牌后立即应用永劫锁定视为；摸牌、交牌与获得牌统一经过gainAfter。
+func _on_owner_gain_after(event: RuleEvent) -> void:
+	if event == null:
+		return
+	# 当前持有者；获得时机结束后实体已经进入其普通手牌区。
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if owner == null:
+		return
+	# 是否至少有一张本次获得牌新增了永劫视为；统一刷新一次避免逐牌广播重复快照。
+	var changed: bool = false
+	for card_uid_variant: Variant in event.data.get("card_uids", []) as Array:
+		# 本次获得的实体牌；等待其他获得触发后仍按UID复核其当前区域。
+		var card: CardInstance = owner.find_hand_card(int(card_uid_variant))
+		if _apply_locked_hand_view_as(card):
+			changed = true
+	if changed and host != null and host.has_method("refresh_public_state_snapshot"):
+		host.call("refresh_public_state_snapshot")
+
+
+## 为安装技能时已经持有的全部普通手牌同步永劫视为；伤害牌保持原定义与原使用方式。
+func _refresh_locked_hand_view_as() -> void:
+	# 技能持有者；静态数据库实例没有宿主时不修改任何卡牌。
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if owner == null:
+		return
+	# 是否至少有一张手牌发生变化；批量结束后只发布一次公开状态。
+	var changed: bool = false
+	for card: CardInstance in owner.hand:
+		if _apply_locked_hand_view_as(card):
+			changed = true
+	if changed and host != null and host.has_method("refresh_public_state_snapshot"):
+		host.call("refresh_public_state_snapshot")
+
+
+## 将一张非伤害普通手牌持续视为火【杀】，并写入只作用于该实体的无距离规则标签。
+func _apply_locked_hand_view_as(card: CardInstance) -> bool:
+	if card == null or card.zone != "hand" or card.owner_id != owner_player_id:
+		return false
+	# 实体原始牌定义；已经被其他效果视为牌时仍按最初牌名判断其是否属于非伤害牌。
+	var original_definition_id: String = card.hand_view_as_original_definition_id if card.has_hand_view_as() else card.definition_id
+	if not _is_non_damage_definition(original_definition_id):
+		return false
+	# 本次是否新建或替换了视为定义；重复同步同一张牌保持幂等。
+	var changed: bool = false
+	if card.definition_id != FIRE_SLASH_DEFINITION_ID or card.hand_view_as_source_skill_id != get_id():
+		if not card.set_hand_view_as(FIRE_SLASH_DEFINITION_ID, get_id()):
+			return false
+		changed = true
+	# 隐藏规则标签；视为横条已经显示“火【杀】”，此处空label避免牌面出现重复文字。
+	var mark_data: Dictionary = {"id":HAND_VIEW_AS_MARK_TAG_ID, "label":"", "order":0, "source_skill_id":get_id(), "rule_overrides":{"ignore_distance_limit":true}}
+	if not card.hand_mark_tags.has(HAND_VIEW_AS_MARK_TAG_ID) or card.hand_mark_tags.get(HAND_VIEW_AS_MARK_TAG_ID, {}) != mark_data:
+		card.set_hand_mark_tag(HAND_VIEW_AS_MARK_TAG_ID, mark_data)
+		changed = true
+	return changed
 
 
 ## 持有者造成正数火焰伤害后强制执行当前轮回节，并在效果完成后推进。
@@ -227,6 +314,9 @@ func _is_non_damage_definition(definition_id: String) -> bool:
 
 ## 为AI枚举每张非伤害手牌与其无距离火【杀】合法目标组合。
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
+	# 锁定视为牌由普通use_card动作枚举，永劫自身不再生成use_skill动作。
+	if get_active_entries().is_empty():
+		return
 	if not can_activate():
 		return
 	# 可转化的非伤害手牌候选；每张牌将分别枚举目标。

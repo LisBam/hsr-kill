@@ -1679,7 +1679,11 @@ func submit_action(action: PlayerAction) -> bool:
 		if card.has_hand_view_as() and card.zone == "hand":
 			# 单材料数组；稳定UID同时用于失去牌、回放和最终弃牌区恢复原始实体。
 			var view_as_material_uids: Array[int] = [card.uid]
-			if not execute_virtual_card_use(action.actor_id, card.definition_id, view_as_material_uids, resolution_target_ids, ""):
+			# 手牌视为牌的实体标记规则；【永劫】等锁定视为效果只把明确登记的距离覆写传给逻辑代理。
+			var view_as_rule_overrides: Dictionary = {}
+			if card.has_hand_mark_rule("ignore_distance_limit"):
+				view_as_rule_overrides["ignore_distance_limit"] = true
+			if not execute_virtual_card_use(action.actor_id, card.definition_id, view_as_material_uids, resolution_target_ids, "", view_as_rule_overrides):
 				return _reject("手牌视为效果当前无法完成使用。")
 		else:
 			_execute_card_use(action.actor_id, card, resolution_target_ids, [], false, target_ids)
@@ -2050,6 +2054,9 @@ func has_pending_card_choice() -> bool:
 ## 返回出牌阶段是否仍有未完成的交互结算；包含临时选择与会创建下一段选择的技能流程间隔，避免星落等多步技能在弹窗间隔空窗期误开 chooseToUse。
 func has_pending_play_interaction() -> bool:
 	if has_pending_card_choice():
+		return true
+	# 连续虚拟用牌等技能后续队列仍属于当前主动技能；队列排空前不得提前重建普通chooseToUse。
+	if not _deferred_skill_settlements.is_empty():
 		return true
 	# 仅技能多步选牌间隔阻塞出牌窗口恢复；response_prompt 与 phase_transition 有各自恢复路径，不得因残留计时器卡住 chooseToUse。
 	return game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()
@@ -10935,7 +10942,8 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 		# 单材料转化的原牌面定义；表现层继续绘制材料实体，并以横条标明本次实际使用的逻辑牌名。
 		var presentation_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uids[0])
 		if presentation_material != null:
-			virtual_card.last_hand_view_as_original_definition_id = presentation_material.definition_id
+			# 已处于手牌视为状态的材料必须回溯其实体原名，否则代理会把逻辑牌误画成自己的原牌面。
+			virtual_card.last_hand_view_as_original_definition_id = presentation_material.hand_view_as_original_definition_id if presentation_material.has_hand_view_as() else presentation_material.definition_id
 			virtual_card.last_hand_view_as_definition_id = virtual_card_definition_id
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1

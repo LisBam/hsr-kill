@@ -138,6 +138,14 @@ func set_hand_mark_tag(tag_id: String, tag_data: Dictionary) -> bool:
 	return true
 
 
+## 移除当前手牌指定来源的通用标记标签；其他技能写入的标签保持不变，返回是否实际移除。
+func remove_hand_mark_tag(tag_id: String) -> bool:
+	if tag_id.is_empty() or not hand_mark_tags.has(tag_id):
+		return false
+	hand_mark_tags.erase(tag_id)
+	return true
+
+
 ## 清除当前手牌的全部通用标记标签；返回是否实际移除了至少一个标签。
 func clear_hand_mark_tags() -> bool:
 	if hand_mark_tags.is_empty():

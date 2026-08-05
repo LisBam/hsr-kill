@@ -208,6 +208,14 @@ func _test_shengbian_qixi_and_kansha() -> bool:
 	var kansha: SkillDefinition = _install_skill(0, "kansha")
 	if shengbian == null or kansha == null:
 		return _fail("kelvdela_skill_install")
+	# 当前阶段全部合法动作；无手牌时应至少包含升变对合法角色的免费军功分配动作。
+	var shengbian_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	# 标准基础AI策略；临时评分技能没有运行时宿主，必须只读权威快照仍能稳定选择升变。
+	var shengbian_ai_policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	# AI最终动作；升变具有正基础收益，当前没有更高价值动作时应基本每阶段主动发动。
+	var shengbian_ai_action: Dictionary = shengbian_ai_policy.choose_action(_controller.state.to_dict(0, true), shengbian_legal_actions)
+	if str(shengbian_ai_action.get("action_type", "")) != "use_skill" or str(shengbian_ai_action.get("skill_id", (shengbian_ai_action.get("payload", {}) as Dictionary).get("skill_id", ""))) != "shengbian":
+		return _fail("shengbian_ai_action=%s/%s" % [shengbian_ai_action, shengbian_legal_actions])
 	# 无军功友方进入重置分支，获得2枚军功并立即动态拥有奇袭；单节轮回推进至X=2。
 	if shengbian.activate({"target_ids":[2]}) != "":
 		return _fail("shengbian_initial_activate")
@@ -412,7 +420,7 @@ func _test_active_virtual_card_skills() -> bool:
 	# 天裁运行时实例；先外部推进到X=1的③，验证0张【火攻】仍会完成轮回。
 	var tiancai: SkillDefinition = _install_skill(0, "tiancai")
 	# X=1时③使用0张火攻；仍应完成当前节并进入X=2的下一轮①。
-	if tiancai == null or not _controller.enter_next_reincarnation_section(0, "tiancai") or not _controller.enter_next_reincarnation_section(0, "tiancai") or tiancai.activate({}) != "" or tiancai.get_reincarnation_round_count() != 2 or tiancai.get_reincarnation_section_index() != 0:
+	if tiancai == null or not _controller.enter_next_reincarnation_section(0, "tiancai") or not _controller.enter_next_reincarnation_section(0, "tiancai") or tiancai.activate({}) != "" or _controller.has_pending_card_choice() or _count_card_uses(0, "huogong") != 0 or tiancai.get_reincarnation_round_count() != 2 or tiancai.get_reincarnation_section_index() != 0:
 		return _fail("tiancai_zero_repeat=%s" % tiancai.get_reincarnation_state())
 	# X=2的②最多选择2名目标；两张火攻必须逐张完成后才进入③。
 	if not _controller.enter_next_reincarnation_section(0, "tiancai") or tiancai.activate({"target_ids":[1, 2]}) != "":
@@ -435,45 +443,73 @@ func _test_active_virtual_card_skills() -> bool:
 	shihun_owner.character_id = "kaesilanna"
 	shihun_owner.max_hp = 5
 	shihun_owner.hp = 5
-	# 弑魂①指定的1号其他角色；该角色将成为首张火【杀】使用者与后续反击目标。
-	var shihun_actor: PlayerState = _controller.state.get_player(1)
+	# 弑魂①指定的1号其他角色；该角色将成为第一张火【杀】使用者与后续反击目标。
+	var first_shihun_actor: PlayerState = _controller.state.get_player(1)
+	# 弑魂①指定的2号其他角色；用于证明同次发动的第二张火【杀】会在统一管线内继续结算。
+	var second_shihun_actor: PlayerState = _controller.state.get_player(2)
 	# 弑魂运行时实例；两个轮回节连续调用用于验证原目标保持。
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
-	if shihun == null or shihun.activate({"target_ids":[1]}) != "":
+	if shihun == null or shihun.activate({"target_ids":[1, 2]}) != "":
 		return _fail("shihun_incoming_start")
-	_controller._resume_deferred_skill_settlements()
-	if shihun_owner.hp != 4 or shihun.get_reincarnation_section_index() != 1 or _count_card_uses(1, "sha_fire") != 1:
-		return _fail("shihun_incoming=%d/%s/%d" % [shihun_owner.hp, shihun.get_reincarnation_state(), _count_card_uses(1, "sha_fire")])
-	# 反击前的原使用者体力；②完成后必须恰好减少1。
-	var shihun_actor_hp_before: int = shihun_actor.hp
+	# 一次统一结算管线调用必须排空两张依次使用的火【杀】，不能每张牌都依赖外部再次恢复。
+	_controller.resume_settlement_pipeline()
+	if shihun_owner.hp != 3 or shihun.get_reincarnation_section_index() != 1 or _count_card_uses(1, "sha_fire") != 1 or _count_card_uses(2, "sha_fire") != 1:
+		return _fail("shihun_incoming=%d/%s/%d/%d" % [shihun_owner.hp, shihun.get_reincarnation_state(), _count_card_uses(1, "sha_fire"), _count_card_uses(2, "sha_fire")])
+	# 反击前两名原使用者的体力；②是一张固定多目标火【杀】，两名目标都应各承受1点伤害。
+	var first_shihun_actor_hp_before: int = first_shihun_actor.hp
+	# 第二名原使用者的反击前体力；与第一名共同验证①保存的完整目标集合。
+	var second_shihun_actor_hp_before: int = second_shihun_actor.hp
 	if shihun.activate({}) != "":
 		return _fail("shihun_retaliation_start")
-	_controller._resume_deferred_skill_settlements()
-	if shihun_actor.hp != shihun_actor_hp_before - 1 or shihun.get_reincarnation_round_count() != 2 or shihun.get_reincarnation_section_index() != 0 or _count_card_uses(0, "sha_fire") != 1:
-		return _fail("shihun_retaliation=%d/%s/%d" % [shihun_actor.hp, shihun.get_reincarnation_state(), _count_card_uses(0, "sha_fire")])
+	_controller.resume_settlement_pipeline()
+	if first_shihun_actor.hp != first_shihun_actor_hp_before - 1 or second_shihun_actor.hp != second_shihun_actor_hp_before - 1 or shihun.get_reincarnation_round_count() != 2 or shihun.get_reincarnation_section_index() != 0 or _count_card_uses(0, "sha_fire") != 1:
+		return _fail("shihun_retaliation=%d/%d/%s/%d" % [first_shihun_actor.hp, second_shihun_actor.hp, shihun.get_reincarnation_state(), _count_card_uses(0, "sha_fire")])
 
-	_reset_state(2)
+	_reset_state(4)
 	_controller.state.match_id = ""
-	# 永劫主动转化持有者；当前出牌阶段尚未使用【杀】，因此只需要距离覆写即可合法提交。
+	# 永劫锁定视为持有者；当前出牌阶段尚未使用【杀】，可通过标准实体牌动作直接提交视为火【杀】。
 	var yongjie_owner: PlayerState = _controller.state.get_player(0)
 	yongjie_owner.character_id = "kaesilanna"
 	yongjie_owner.max_hp = 5
 	yongjie_owner.hp = 5
-	# 永劫火【杀】的敌方目标；没有【闪】时应当受到1点火焰伤害。
-	var yongjie_target: PlayerState = _controller.state.get_player(1)
-	# 作为永劫转化材料的红桃【闪】；【闪】的AI伤害标记为false，符合“非伤害牌”。
+	# 与持有者座距为2的目标；用于确认锁定视为牌自带无距离限制，而非依赖技能按钮传入覆写。
+	var yongjie_target: PlayerState = _controller.state.get_player(2)
+	# 永劫锁定视为的红桃【闪】；【闪】的AI伤害标记为false，安装技能后应立即在手牌中显示为火【杀】。
 	var non_damage_material: CardInstance = CardInstance.new("shan", "heart", 6)
 	non_damage_material.zone = "hand"
 	non_damage_material.owner_id = 0
 	yongjie_owner.hand.append(non_damage_material)
-	# 永劫运行时实例；同时提供主动使用与【杀】响应转化查询。
+	# 真实伤害牌样本；普通【杀】不属于永劫转换范围，应保持原定义且仍受攻击距离限制。
+	var damage_card: CardInstance = CardInstance.new("sha", "spade", 8)
+	damage_card.zone = "hand"
+	damage_card.owner_id = 0
+	yongjie_owner.hand.append(damage_card)
+	# 永劫运行时实例；只安装锁定视为状态，不应公开任何主动或响应技能按钮。
 	var yongjie: SkillDefinition = _install_skill(0, "yongjie")
+	# 手牌公开牌面数据；原牌名与实际视为牌名同时存在，界面据此绘制“视为火【杀】”横条标记。
+	var marked_card_snapshot: Dictionary = non_damage_material.to_dict()
+	# 永劫安装后的标准合法动作；视为牌应作为use_card出现，且能直接选择座距2目标。
+	var yongjie_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	# 是否找到视为牌直击远距离目标的标准动作；默认false，遍历后必须变为true。
+	var has_marked_fire_slash_action: bool = false
+	for legal_action: Dictionary in yongjie_legal_actions:
+		if str(legal_action.get("action_type", "")) == "use_card" and int(legal_action.get("card_uid", -1)) == non_damage_material.uid and (legal_action.get("target_ids", []) as Array).has(2):
+			has_marked_fire_slash_action = true
 	# 永劫火【杀】结算前的敌方体力；用于校验实际伤害与用牌生命周期。
 	var yongjie_target_hp_before: int = yongjie_target.hp
-	if yongjie == null or not yongjie.can_convert_response_card(non_damage_material, ["sha"]) or yongjie.get_converted_response_definition_id(non_damage_material, ["sha"]) != "sha_fire" or yongjie.activate({"material_card_uid":non_damage_material.uid, "target_ids":[1]}) != "":
-		return _fail("yongjie_conversion_start")
+	if yongjie == null or non_damage_material.definition_id != "sha_fire" or non_damage_material.hand_view_as_original_definition_id != "shan" or non_damage_material.hand_view_as_source_skill_id != "yongjie" or not non_damage_material.has_hand_mark_rule("ignore_distance_limit") or str(marked_card_snapshot.get("view_as_definition_id", "")) != "sha_fire" or damage_card.definition_id != "sha" or _controller.card_rules.validate_use(0, damage_card, [2]).is_empty() or _controller.get_active_skill_ids(0, "phaseUse").has("yongjie") or not has_marked_fire_slash_action:
+		return _fail("yongjie_locked_view_as=%s/%s/%s" % [marked_card_snapshot, damage_card.definition_id, yongjie_legal_actions])
+	# 标准出牌动作；玩家点击的是已标记手牌而不是永劫技能按钮，最终仍进入完整火【杀】生命周期。
+	if not _controller.submit_action(PlayerAction.new("use_card", 0, non_damage_material.uid, [2])):
+		return _fail("yongjie_locked_use_rejected")
 	if yongjie_target.hp != yongjie_target_hp_before - 1 or yongjie_owner.find_hand_card(non_damage_material.uid) != null or _count_card_uses(0, "sha_fire") != 1 or yongjie.get_reincarnation_section_index() != 1:
 		return _fail("yongjie_conversion=%d/%s/%d" % [yongjie_target.hp, yongjie.get_reincarnation_state(), _count_card_uses(0, "sha_fire")])
+	# 安装后新获得的非伤害牌；gainAfter应立即应用同一锁定视为与无距离规则。
+	var gained_non_damage_card: CardInstance = CardInstance.new("tao", "diamond", 9)
+	gained_non_damage_card.zone = "draw_pile"
+	_controller.state.draw_pile.append(gained_non_damage_card)
+	if _controller._move_card_with_timings(gained_non_damage_card, "hand", 0, "yongjie_gain_test") == null or gained_non_damage_card.definition_id != "sha_fire" or gained_non_damage_card.hand_view_as_original_definition_id != "tao" or not gained_non_damage_card.has_hand_mark_rule("ignore_distance_limit"):
+		return _fail("yongjie_gain_view_as=%s" % gained_non_damage_card.to_dict())
 	return true
 
 

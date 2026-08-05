@@ -20,6 +20,9 @@ const INITIAL_MILITARY_MERIT_COUNT: int = 2
 ## 轮回数X的最大有效值；数值5来自技能原文“且至多为5”。
 const MAX_ROUND_GAIN: int = 5
 
+## AI发动升变的固定基础收益；正值保证没有其他出牌机会时仍会执行每阶段一次的免费军功分配。
+const AI_ACTIVATION_BASE_VALUE: float = 1.0
+
 ## 当前出牌阶段是否已经成功发动；默认false，每个phaseUseBegin复原，额外发动不额外占用普通额度。
 var _used_this_play_phase: bool = false
 
@@ -167,16 +170,35 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var target_id: int = int(target_ids[0])
 	# 升变持有者对目标的阵营态度；正值表示军功增益应被鼓励，负值表示应被惩罚。
 	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	# 目标公开快照；AI评分实例没有规则宿主，只能从本次权威快照读取军功。
+	var target_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
 	# 已有军功目标享受明确优先级；X随轮回增长但最多按5枚估值。
-	var target_mark_count: int = _get_military_merit_count(target_id)
+	var target_mark_count: int = _get_snapshot_military_merit_count(target_snapshot)
+	# 技能持有者公开快照；轮回数必须读取真实局内状态，不能由无宿主AI实例回退为初始值1。
+	var owner_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	# 当前升变轮回数；缺失旧快照安全回退1，并继续遵守至多5枚的上限。
+	var round_gain: int = mini(maxi(int(((owner_snapshot.get("reincarnation_skills", {}) as Dictionary).get(get_id(), {}) as Dictionary).get("round_count", 1)), 1), MAX_ROUND_GAIN)
 	if target_mark_count > 0:
-		return attitude * (8.0 + float(mini(get_reincarnation_round_count(), MAX_ROUND_GAIN)))
+		return AI_ACTIVATION_BASE_VALUE + attitude * (8.0 + float(round_gain))
 	# 重置分支的全场军功净损益；移除敌方为正、移除友方为负，再叠加目标新获2枚的价值。
-	var score: float = attitude * 10.0
-	for field_player: PlayerState in host.state.players:
-		if field_player.alive and not field_player.out_of_game:
-			score -= evaluator.get_attitude(authoritative_snapshot, owner_player_id, field_player.player_id) * float(_get_military_merit_count(field_player.player_id))
+	var score: float = AI_ACTIVATION_BASE_VALUE + attitude * 10.0
+	for field_player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 场上角色公开快照；死亡与离场角色不属于升变清除军功的当前场面估值。
+		var field_player: Dictionary = field_player_variant as Dictionary
+		if bool(field_player.get("alive", false)) and not bool(field_player.get("out_of_game", false)):
+			# 场上角色稳定ID；身份态度与军功损益都围绕同一公开目标计算。
+			var field_player_id: int = int(field_player.get("player_id", -1))
+			score -= evaluator.get_attitude(authoritative_snapshot, owner_player_id, field_player_id) * float(_get_snapshot_military_merit_count(field_player))
 	return score
+
+
+## 从AI权威玩家快照读取军功数量；该纯函数不访问运行时技能宿主，可安全用于策略临时实例。
+func _get_snapshot_military_merit_count(player_snapshot: Dictionary) -> int:
+	# 玩家全部公开标记；军功不存在时按空字典处理。
+	var public_marks: Dictionary = player_snapshot.get("public_marks", {}) as Dictionary
+	# 军功公开标记数据；数量始终收敛到非负整数。
+	var military_merit_mark: Dictionary = public_marks.get(MILITARY_MERIT_MARK_ID, {}) as Dictionary
+	return maxi(int(military_merit_mark.get("count", 0)), 0)
 
 
 ## 把弱类型数组收敛为整数目标数组；动作、网络与回放输入共用该防御性转换。
