@@ -1,6 +1,6 @@
 extends Node
 
-## 无名杀兼容时机回归测试。验证225个目录名称、四主动入口、四角色过滤及核心生命周期的真实派发顺序。
+## 无名杀兼容时机回归测试。验证228个目录名称、四主动入口、四角色过滤及核心生命周期的真实派发顺序。
 
 ## 测试使用的权威控制器；按正式依赖结构装配，规则调用不会绕过统一时机服务。
 var _controller: MatchController
@@ -36,7 +36,7 @@ func _run() -> void:
 		return
 	if not _test_card_use_lifecycle_order():
 		return
-	print("RULE_TIMING_PASS catalog=225 active=4 roles=4 generation_snapshot=1 damage=13 move=20 card=12")
+	print("RULE_TIMING_PASS catalog=228 active=4 roles=4 generation_snapshot=1 damage=13 move=20 card=12")
 	get_tree().quit(0)
 
 
@@ -106,7 +106,7 @@ func _install_state() -> void:
 	_controller._started_phase_lifecycles.clear()
 
 
-## 验证目录严格包含225个不重复事件，且主动技能只接受四种标准发动入口。
+## 验证目录严格包含228个不重复事件，且主动技能只接受四种标准发动入口。
 func _test_catalog_and_active_entries() -> bool:
 	# 完整时机名称；目录函数必须返回可安全修改的新数组。
 	var timing_names: Array[String] = RuleTimingCatalog.get_all_timing_names()
@@ -116,7 +116,7 @@ func _test_catalog_and_active_entries() -> bool:
 		if unique_names.has(timing_name):
 			return _fail("duplicate_timing=%s" % timing_name)
 		unique_names[timing_name] = true
-	if timing_names.size() != 225 or unique_names.size() != 225:
+	if timing_names.size() != 228 or unique_names.size() != 228:
 		return _fail("catalog_count=%d/%d" % [timing_names.size(), unique_names.size()])
 	# 各分类实际数量；严格对应制作指南逐项列出的名称。
 	var category_sizes: Array[int] = [
@@ -131,8 +131,8 @@ func _test_catalog_and_active_entries() -> bool:
 		RuleTimingCatalog.REINCARNATION_TIMINGS.size(),
 		RuleTimingCatalog.MODE_TIMINGS.size(),
 	]
-	# 各分类预期数量；新增四个轮回生命周期时机后总和固定为225。
-	var expected_category_sizes: Array[int] = [54, 48, 13, 35, 33, 10, 14, 8, 4, 6]
+	# 各分类预期数量；判定区废除、恢复新增3个标准时机后总和固定为228。
+	var expected_category_sizes: Array[int] = [54, 48, 13, 35, 36, 10, 14, 8, 4, 6]
 	if category_sizes != expected_category_sizes:
 		return _fail("category_sizes=%s" % [category_sizes])
 	# 标准主动入口顺序；内容协议按出牌、使用、响应和选牌顺序保持稳定。

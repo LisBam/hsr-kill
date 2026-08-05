@@ -242,6 +242,9 @@ var timing_service: RuleTimingService
 ## 轮回技权威状态服务；集中维护轮回数、轮回节、永劫与通用限次，不执行具体技能效果。
 var reincarnation_skill_service: ReincarnationSkillService
 
+## 玩家区域废除服务；集中编排单装备栏、整个装备区与判定区的时机、弃牌和状态变更。
+var player_zone_abolition_service: PlayerZoneAbolitionService
+
 ## 纯查询修正管线；技能与装备只通过该管线修改合法性查询，不直接改写控制器状态。
 var modifier_pipeline: RuleModifierPipeline
 
@@ -1182,6 +1185,9 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 	if reincarnation_skill_service == null:
 		reincarnation_skill_service = ReincarnationSkillService.new()
 	reincarnation_skill_service.configure(self)
+	if player_zone_abolition_service == null:
+		player_zone_abolition_service = PlayerZoneAbolitionService.new()
+	player_zone_abolition_service.configure(self)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
 	_bind_card_movement_service()
@@ -3854,6 +3860,103 @@ func swap_player_character_cards(first_player_id: int, second_player_id: int, re
 	return true
 
 
+## 将一名角色的武将牌替换为指定武将；特殊武将只能通过本显式规则入口出现，身份、区域、标记及局内获得技能保持原归属。
+func replace_player_character_card(player_id: int, new_character_id: String, reason: String = "", preserve_runtime_max_hp_delta: bool = true) -> bool:
+	if state == null or state.game_over or new_character_id.is_empty():
+		return false
+	# 被替换角色；死亡、离场或尚未配置武将牌的角色不能在普通技能流程中换形态。
+	var player: PlayerState = state.get_player(player_id)
+	# 新武将静态定义；直接查完整数据库，因此special=true的定义只在本显式入口可用。
+	var new_character_definition: Dictionary = GameDatabase.get_character(new_character_id)
+	if player == null or not player.alive or player.out_of_game or player.character_id.is_empty() or new_character_definition.is_empty() or player.character_id == new_character_id:
+		return false
+	# 原武将定义与技能；只替换武将牌固有内容，不触碰模式、临时或局内获得来源。
+	var old_character_id: String = player.character_id
+	# 旧武将静态定义；提供旧基础体力上限与固有技能集合。
+	var old_character_definition: Dictionary = GameDatabase.get_character(old_character_id)
+	# 旧武将牌固有技能ID；换形时只卸载不再由任何来源保留的条目。
+	var old_native_skill_ids: Array = old_character_definition.get("skills", []) as Array
+	# 新武将牌固有技能ID；换形后以独立实例安装缺失条目。
+	var new_native_skill_ids: Array = new_character_definition.get("skills", []) as Array
+	# 旧武将牌基础上限；用于分离游戏过程中独立产生的体力上限修正。
+	var old_base_max_hp: int = maxi(int(old_character_definition.get("max_hp", 4)), 1)
+	# 新武将牌基础上限；特殊形态同样必须提供至少1点合法上限。
+	var new_base_max_hp: int = maxi(int(new_character_definition.get("max_hp", 4)), 1)
+	# 角色当前局内体力上限修正；preserve=false时形态直接采用新牌基础值。
+	var runtime_max_hp_delta: int = player.max_hp - old_base_max_hp if preserve_runtime_max_hp_delta else 0
+	# 替换前体力与上限；写入可回放历史并在新上限更低时派发体力收敛时机。
+	var previous_hp: int = player.hp
+	# 替换前的实际体力上限；用于记录换形历史并追溯运行时修正。
+	var previous_max_hp: int = player.max_hp
+	player.character_id = new_character_id
+	player.character_generation += 1
+	player.max_hp = maxi(new_base_max_hp + runtime_max_hp_delta, 1)
+	player.hp = mini(player.hp, player.max_hp)
+	_replace_native_character_skills(player, old_native_skill_ids, new_native_skill_ids)
+	if player.hp != previous_hp:
+		_emit_rule_timing("changeHp", player_id, -1, player_id, {"amount":previous_hp - player.hp, "hp":player.hp, "max_hp":player.max_hp, "reason":reason, "change_type":"character_card_replace_clamp"})
+	state.random_history.append({"kind":"character_card_replace", "reason":reason, "player_id":player_id, "old_character_id":old_character_id, "new_character_id":new_character_id, "old_max_hp":previous_max_hp, "new_max_hp":player.max_hp, "runtime_max_hp_delta":runtime_max_hp_delta})
+	add_log("%s的武将牌替换为【%s】。" % [format_player_state_log_name(player), GameDatabase.resolve_character_name(new_character_id)])
+	_emit_rule_timing("changeSkillsAfter", player_id, player_id, player_id, {"change_type":"replace_character_card", "old_skill_ids":old_native_skill_ids.duplicate(), "skill_ids":new_native_skill_ids.duplicate(), "reason":reason})
+	_emit_state()
+	return true
+
+
+## 同步设置角色整个装备区与判定区；整个装备区等价于全部五个基础装备栏，保留旧内容调用方的四参数用法。
+func set_player_zones_abolished(player_id: int, equipment_abolished: bool, judgment_abolished: bool, reason: String = "", source_player_id: int = -1) -> bool:
+	_ensure_player_zone_abolition_service()
+	# 区域服务的实际变更结果；两个区域都已是目标状态时不发送冗余快照。
+	var changed: bool = player_zone_abolition_service != null and player_zone_abolition_service.set_zones_abolished(player_id, equipment_abolished, judgment_abolished, reason, source_player_id)
+	if changed:
+		_emit_state()
+	return changed
+
+
+## 废除或恢复指定装备栏；栏位ID固定为weapon、armor、offensive_mount、defensive_mount与treasure。
+func set_player_equipment_slots_abolished(player_id: int, slots: Array, abolished: bool, reason: String = "", source_player_id: int = -1) -> bool:
+	_ensure_player_zone_abolition_service()
+	# 弱类型输入的栏位数组；网络、回放和动态技能上下文均在公开边界收窄为字符串数组。
+	var typed_slots: Array[String] = []
+	for slot_variant: Variant in slots:
+		typed_slots.append(str(slot_variant))
+	# 单栏服务的实际变更结果；输入重复或无效栏位不产生状态快照。
+	var changed: bool = player_zone_abolition_service != null and player_zone_abolition_service.set_equipment_slots_abolished(player_id, typed_slots, abolished, reason, source_player_id)
+	if changed:
+		_emit_state()
+	return changed
+
+
+## 废除或恢复指定角色的判定区；恢复只重新开放区域，不返还废除时离区的延时锦囊。
+func set_player_judgment_area_abolished(player_id: int, abolished: bool, reason: String = "", source_player_id: int = -1) -> bool:
+	_ensure_player_zone_abolition_service()
+	# 判定区服务的实际变更结果；幂等调用不发送冗余快照。
+	var changed: bool = player_zone_abolition_service != null and player_zone_abolition_service.set_judgment_area_abolished(player_id, abolished, reason, source_player_id)
+	if changed:
+		_emit_state()
+	return changed
+
+
+## 返回指定角色的某个装备栏是否已废除；只读查询可供技能、AI与测试共用。
+func is_player_equipment_slot_abolished(player_id: int, slot: String) -> bool:
+	# 待查询玩家；无效ID或未知栏位统一返回false。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	return player != null and player.is_equipment_slot_abolished(slot)
+
+
+## 返回指定角色按标准顺序排列的已废除装备栏ID副本。
+func get_player_abolished_equipment_slot_ids(player_id: int) -> Array[String]:
+	# 待查询玩家；无效ID返回空强类型数组。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	return player.get_abolished_equipment_slot_ids() if player != null else []
+
+
+## 确保区域废除服务绑定当前控制器；规则测试替换state后也能安全重用。
+func _ensure_player_zone_abolition_service() -> void:
+	if player_zone_abolition_service == null:
+		player_zone_abolition_service = PlayerZoneAbolitionService.new()
+	player_zone_abolition_service.configure(self)
+
+
 ## 仅替换一名角色的武将固有技能；对局中获得、临时和模式技能实例保持原归属与现有使用次数。
 func _replace_native_character_skills(player: PlayerState, old_native_skill_ids: Array, new_native_skill_ids: Array) -> void:
 	if player == null:
@@ -5695,14 +5798,23 @@ func _clear_pending_judgment_request() -> void:
 func equip_from_processing(player_id: int, card: CardInstance) -> void:
 	# 装备目标玩家；装备牌默认只能对自己使用。
 	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		_move_to_discard(card)
+		return
 	# 装备卡定义；slot 决定唯一装备槽。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 装备槽名称；配置表保证非空。
 	var slot: String = str(definition.get("slot", ""))
+	if player.is_equipment_slot_abolished(slot):
+		_move_to_discard(card)
+		return
 	if player.equipment.has(slot):
 		_discard_equipment_slot(player_id, slot, true)
 	_ensure_card_movement()
-	_move_card_with_timings(card, "equipment", player_id, "equip", state.current_event_id, slot)
+	# 装备实体的最终移动结果；前置时机取消或目标栏位在结算中被废除时不得安装持续效果。
+	var equipment_move: CardMoveEvent = _move_card_with_timings(card, "equipment", player_id, "equip", state.current_event_id, slot)
+	if equipment_move == null:
+		return
 	_install_card_runtime(card, player_id)
 	add_log("%s装备了%s。" % [format_player_state_log_name(player), format_card_log_name(card)])
 
@@ -5711,8 +5823,14 @@ func equip_from_processing(player_id: int, card: CardInstance) -> void:
 func place_delayed_trick(target_id: int, card: CardInstance) -> void:
 	# 延时锦囊目标；合法性层已保证其存活且判定区无同名牌。
 	var target: PlayerState = state.get_player(target_id)
+	if target == null or target.judgment_area_abolished:
+		_move_to_discard(card)
+		return
 	_ensure_card_movement()
-	_move_card_with_timings(card, "judgment", target_id, "add_judge", state.current_event_id)
+	# 延时锦囊的最终移动结果；前置时机取消或判定区在结算中被废除时不得记录虚假的进入日志。
+	var judgment_move: CardMoveEvent = _move_card_with_timings(card, "judgment", target_id, "add_judge", state.current_event_id)
+	if judgment_move == null:
+		return
 	add_log("%s的判定区加入了%s。" % [target.display_name, describe_card(card)])
 
 
@@ -6271,7 +6389,7 @@ func move_processing_card_to_equipment(player_id: int, card_uid: int, slot: Stri
 	# 目标角色与处理区实体；槽位冲突表示交换清空阶段尚未完成，不能覆盖现有牌。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	var card: CardInstance = _find_processing_card(card_uid)
-	if player == null or card == null or player.equipment.has(slot):
+	if player == null or card == null or player.is_equipment_slot_abolished(slot) or player.equipment.has(slot):
 		return false
 	_ensure_card_movement()
 	if _move_card_with_timings(card, "equipment", player_id, reason, state.current_event_id, slot) == null:
@@ -6660,10 +6778,34 @@ func get_card_original_name_length(definition_id: String) -> int:
 func discard_all_equipment(target_id: int, trigger_loss_effects: bool = true) -> void:
 	# 目标状态；复制键数组以允许循环中安全删除装备。
 	var target: PlayerState = state.get_player(target_id)
+	if target == null:
+		return
 	# 当前全部装备槽快照；后续删除不会影响遍历。
 	var slots: Array = target.equipment.keys().duplicate()
 	for slot_variant: Variant in slots:
 		_discard_equipment_slot(target_id, str(slot_variant), trigger_loss_effects)
+
+
+## 弃置指定装备栏中的实体牌并执行标准离区效果；空栏或无效玩家返回false。
+func discard_equipment_slot(player_id: int, slot: String, trigger_loss_effects: bool = true) -> bool:
+	# 装备栏所属玩家；服务只能处理当前真实存在的装备实体。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.equipment.has(slot):
+		return false
+	_discard_equipment_slot(player_id, slot, trigger_loss_effects)
+	return true
+
+
+## 将指定角色判定区内全部延时锦囊按当前顺序置入弃牌堆。
+func discard_all_judgment_area_cards(player_id: int) -> void:
+	# 判定区所属玩家；无效ID不产生任何移牌事件。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return
+	# 判定区实体副本；标准移动服务负责从原数组移除，前置时机取消时实体仍安全留在原区域而不会成为游离牌。
+	var delayed_cards: Array[CardInstance] = player.judgment_area.duplicate()
+	for delayed_card: CardInstance in delayed_cards:
+		_move_to_discard(delayed_card)
 
 
 ## 转移一个装备槽中的牌；借刀杀人使用该操作将武器交给来源角色手牌。
@@ -7683,7 +7825,7 @@ func transfer_equipment_with_attachments(from_id: int, to_id: int, slot: String,
 	# 原持有者与接收者；双方必须仍存活于当前状态。
 	var from_player: PlayerState = state.get_player(from_id)
 	var to_player: PlayerState = state.get_player(to_id)
-	if from_player == null or to_player == null or not from_player.equipment.has(slot) or attachment_zone.is_empty():
+	if from_player == null or to_player == null or to_player.is_equipment_slot_abolished(slot) or not from_player.equipment.has(slot) or attachment_zone.is_empty():
 		return false
 	if to_player.equipment.has(slot):
 		_discard_equipment_slot(to_id, slot, true)
@@ -8028,6 +8170,11 @@ func reset_reincarnation(player_id: int, skill_id: String) -> bool:
 ## 令轮回技进入永劫并锁定当前轮回节；重复进入无事发生，每回合限制从成功进入后开始计数。
 func enter_eternal_reincarnation_state(player_id: int, skill_id: String, per_turn_limit: int = 0) -> bool:
 	return reincarnation_skill_service != null and reincarnation_skill_service.enter_eternal_state(player_id, skill_id, per_turn_limit)
+
+
+## 解除轮回技的永劫状态；当前轮回数与轮回节保持不变，未处于永劫时无事发生。
+func exit_eternal_reincarnation_state(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.exit_eternal_state(player_id, skill_id)
 
 
 ## 轮回状态改变后的统一快照通知入口；状态服务无需知道离线、局域网与界面广播实现。
@@ -8480,6 +8627,17 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 	return result
 
 
+## 返回指定角色当前全部已安装技能稳定ID；结果只含字符串副本，技能可据此组合通用状态而不读取运行时实例。
+func get_installed_skill_ids(player_id: int) -> Array[String]:
+	# 已安装技能表；固有、模式、临时与局内获得技能均由同一容器维护。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	# 稳定ID结果；沿用安装字典顺序，调用方不得据此依赖运行时对象。
+	var result: Array[String] = []
+	for skill_id_variant: Variant in player_skills.keys():
+		result.append(str(skill_id_variant))
+	return result
+
+
 ## 返回主动技能的只读交互预览；界面与 AI 可查询，但所有提交仍由技能 can_activate 与 activate 权威复核。
 func get_skill_activation_preview(player_id: int, skill_id: String, context: Dictionary = {}) -> Dictionary:
 	# 当前技能实例；未安装技能没有预览内容。
@@ -8579,6 +8737,26 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	# 技能表现上下文副本；目标线等客户端表现只读取已经确认的稳定目标字段，不能持有或改写规则历史原字典。
 	var presentation_context: Dictionary = context.duplicate(true)
 	skill_activated.emit(player_id, skill_name, presentation_context)
+	# 实际发动时机；区别于主动按钮提交时的兼容skillAfter，触发技与选择恢复后的发动同样从本入口统一发布。
+	var skill_instance: SkillDefinition = get_skill_instance(player_id, skill_id)
+	# 实际发动的纯数据时机负载；包含原上下文、重复标记与当次唯一令牌。
+	var actual_timing_data: Dictionary = {
+		"skill_id":skill_id,
+		"context":context.duplicate(true),
+		"actual_activation":true,
+		"repeated_activation":bool(context.get("repeated_activation", false)),
+		"activation_repeat_token":skill_instance.get_last_activation_repeat_token() if skill_instance != null else -1,
+	}
+	_emit_rule_timing("skillAfter", player_id, player_id, -1, actual_timing_data)
+
+
+## 令指定技能按最近一次实际发动入口额外发动；角色代次与技能ID复核避免换将后的旧请求命中新实例。
+func repeat_skill_activation(player_id: int, skill_id: String, activation_context: Dictionary, activation_repeat_token: int, character_generation: int = -1) -> bool:
+	# 当前技能实例；必须仍属于原武将代次且处于可生效状态，重复发动不重新消耗主动按钮次数校验。
+	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
+	if skill == null or not skill.matches_character_generation(character_generation) or not skill.can_use_effect():
+		return false
+	return skill.repeat_activation(activation_context.duplicate(true), activation_repeat_token)
 
 
 ## 记录一件防具已经实际生效的表现事件；该入口只负责武将牌名称提示，不写入技能历史、不增加日志或修改装备状态。
@@ -10459,7 +10637,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 			if existing_delayed_card.definition_id == delayed_definition_id:
 				has_same_delayed_card = true
 				break
-		if not has_same_delayed_card:
+		if not candidate.judgment_area_abolished and not has_same_delayed_card:
 			_ensure_card_movement()
 			_move_card_with_timings(delayed_card, "judgment", candidate.player_id, "add_judge", state.current_event_id)
 			add_log("【%s】移动至%s的判定区。" % [delayed_name, format_player_state_log_name(candidate)])
@@ -10468,7 +10646,7 @@ func _pass_delayed_card(from_player_id: int, delayed_card: CardInstance) -> void
 		checked_count += 1
 	# 所有角色均不是合法目标时，延时锦囊回到原角色判定区，而不是进入弃牌堆。
 	var original_player: PlayerState = state.get_player(from_player_id)
-	if original_player != null and original_player.alive:
+	if original_player != null and original_player.alive and not original_player.judgment_area_abolished:
 		_ensure_card_movement()
 		_move_card_with_timings(delayed_card, "judgment", original_player.player_id, "add_judge", state.current_event_id)
 		add_log("没有其他合法目标，【%s】回到%s的判定区。" % [delayed_name, format_player_state_log_name(original_player)])
@@ -10735,15 +10913,17 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 	return true
 
 
-## 使用一张没有实体材料的虚拟牌；用于以体力等非牌资源为费用的“视为使用”技能。
-func execute_cardless_virtual_card_use(actor_id: int, virtual_card_definition_id: String, target_ids: Array[int], log_message: String = "", rule_overrides: Dictionary = {}) -> bool:
+## 使用一张没有实体材料的虚拟牌；用于以体力等非牌资源为费用的“视为使用”技能，virtual_storage可携带连续结算稳定标签。
+func execute_cardless_virtual_card_use(actor_id: int, virtual_card_definition_id: String, target_ids: Array[int], log_message: String = "", rule_overrides: Dictionary = {}, virtual_storage: Dictionary = {}) -> bool:
 	if state == null or state.game_over or virtual_card_definition_id.is_empty():
 		return false
 	# 无花色无点数代理牌；其只存在于本次CardUseEvent处理区生命周期，不会成为牌堆实体。
 	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, "none", 0)
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
+	# 经卡牌规则排序后的最终目标ID；后续用牌事件只消费该强类型数组。
 	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, virtual_card, target_ids)
+	# 本次无材料虚拟牌的规则覆写副本；加入无色事实后进行最终合法性复核。
 	var validated_rule_overrides: Dictionary = rule_overrides.duplicate(true)
 	validated_rule_overrides["card_color"] = "none"
 	if card_rules.validate_virtual_use(actor_id, virtual_card_definition_id, normalized_target_ids, validated_rule_overrides) != "":
@@ -10753,7 +10933,7 @@ func execute_cardless_virtual_card_use(actor_id: int, virtual_card_definition_id
 		return false
 	if not log_message.is_empty():
 		add_log(log_message)
-	_execute_card_use(actor_id, virtual_card, normalized_target_ids, [], true, target_ids)
+	_execute_card_use(actor_id, virtual_card, normalized_target_ids, [], true, target_ids, virtual_storage)
 	return true
 
 
@@ -13274,6 +13454,18 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 	_ensure_card_movement()
 	if card_movement == null:
 		return null
+	# 最终装备栏位；底层历史兼容约定会把空栏位视为宝物栏，因此废除校验、事件数据与实际移动必须使用同一解析结果。
+	var resolved_target_slot: String = "treasure" if to_zone == "equipment" and target_slot.is_empty() else target_slot
+	if to_zone in ["equipment", "judgment"]:
+		# 持续区域目标玩家；统一移牌边界作为规则预览与业务入口之后的最终防线。
+		var persistent_zone_target: PlayerState = state.get_player(target_player_id) if state != null else null
+		if persistent_zone_target == null:
+			return null
+		if to_zone == "equipment":
+			if not persistent_zone_target.is_valid_equipment_slot(resolved_target_slot) or persistent_zone_target.is_equipment_slot_abolished(resolved_target_slot):
+				return null
+		if to_zone == "judgment" and persistent_zone_target.judgment_area_abolished:
+			return null
 	# 手牌视为效果的清理边界；实体离开当前持有者手牌区前立即恢复原名，已经创建的虚拟使用牌或响应代理继续保存本次逻辑牌效。
 	if card.has_hand_view_as() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id):
 		_hand_view_as_turn_expiries.erase(card.uid)
@@ -13292,7 +13484,7 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		"source_player_id":source_player_id,
 		"target_player_id":target_player_id,
 		"reason":reason,
-		"target_slot":target_slot,
+		"target_slot":resolved_target_slot,
 	}
 	# 本次移动涉及的生命周期名称；同一移动可能同时属于失去牌、获得牌和弃置牌。
 	var lifecycle_names: Array[String] = []
@@ -13326,7 +13518,7 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 	if reset_hand_knowledge and to_zone == "hand":
 		_prepare_hidden_pile_gain(card, target_player_id)
 	# 实际区域移动；所有前置时机均通过后才修改权威状态和知识集合。
-	var move: CardMoveEvent = card_movement.move_card(card, to_zone, target_player_id, reason, event_id, target_slot, visible_to)
+	var move: CardMoveEvent = card_movement.move_card(card, to_zone, target_player_id, reason, event_id, resolved_target_slot, visible_to)
 	if move == null:
 		return null
 	# 手牌通用标记的实际离区边界；只有区域移动确实成功后才清除，取消或底层拒绝移动时继续保留鸣弦标签。

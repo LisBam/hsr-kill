@@ -185,6 +185,21 @@ func enter_eternal_state(player_id: int, skill_id: String, per_turn_limit: int =
 	return true
 
 
+## 退出永劫状态并解除当前轮回节锁定；轮回数、当前轮回节与已开始状态均保持不变，非永劫技能无事发生。
+func exit_eternal_state(player_id: int, skill_id: String) -> bool:
+	# 当前轮回状态；不存在或未处于永劫时不发送冗余快照，也不改写任何额度。
+	var skill_state: Dictionary = get_skill_state(player_id, skill_id)
+	if skill_state.is_empty() or not bool(skill_state.get("eternal", false)):
+		return false
+	skill_state["eternal"] = false
+	skill_state["eternal_per_turn_limit"] = 0
+	skill_state["eternal_turn_number"] = -1
+	skill_state["eternal_uses_this_turn"] = 0
+	_store_skill_state(player_id, skill_id, skill_state)
+	_notify_state_changed()
+	return true
+
+
 ## 每次进入任意普通或额外出牌阶段时清空该角色各轮回节的阶段发动记录。
 func on_play_phase_started(player_id: int) -> void:
 	# 技能持有者；无效角色没有需要重置的轮回阶段额度。

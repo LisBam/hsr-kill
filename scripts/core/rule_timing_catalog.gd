@@ -54,7 +54,7 @@ const CARD_MOVE_TIMINGS: Array[String] = [
 	"discardBefore", "discardBegin", "discardEnd", "discardAfter", "cardsDiscardEnd", "cardsDiscardAfter", "loseToDiscardpileAfter",
 	"drawBefore", "drawBegin", "drawEnd", "drawAfter", "drawCancelled",
 	"equipBefore", "equipEnd", "equipAfter", "disableEquipBefore", "disableEquipAfter", "enableEquipAfter",
-	"addJudgeBefore", "addJudgeEnd", "addJudgeAfter", "addToExpansionEnd", "addToExpansionAfter",
+	"addJudgeBefore", "addJudgeEnd", "addJudgeAfter", "disableJudgeBefore", "disableJudgeAfter", "enableJudgeAfter", "addToExpansionEnd", "addToExpansionAfter",
 ]
 
 ## 判定与拼点时机；当前未实现的玩法仍保留稳定名称供后续内容直接订阅。

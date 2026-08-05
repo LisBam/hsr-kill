@@ -27,6 +27,9 @@ extends Control
 ## 当前按判定顺序显示的牌名副本；数组顺序决定标记从左到右的排列顺序。
 var _card_names: Array[String] = []
 
+## 当前判定区是否已废除；true时在第一标记位绘制红色“废”占位，不伪造延时锦囊数据。
+var _abolished: bool = false
+
 
 ## 初始化透明输入和编辑器预览；组件不会遮断武将牌底部的目标点击。
 func _ready() -> void:
@@ -35,10 +38,23 @@ func _ready() -> void:
 	_refresh_markers()
 
 
-## 写入按结算顺序排列的判定牌显示名，并重建全部菱形标记。
-func configure(card_names: Array[String]) -> void:
+## 写入按结算顺序排列的判定牌显示名与废除状态，并重建全部菱形标记。
+func configure(card_names: Array[String], abolished: bool = false) -> void:
 	_card_names = card_names.duplicate()
+	_abolished = abolished
 	_refresh_markers()
+
+
+## 返回当前组件是否正在显示判定区废除占位；只读取最近公开快照。
+func is_abolished() -> bool:
+	return _abolished
+
+
+## 返回判定区废除占位的局部矩形；区域未废除时返回空矩形。
+func get_abolished_marker_rect() -> Rect2:
+	if not _abolished:
+		return Rect2()
+	return Rect2(Vector2(first_marker_left_margin, 0.0), Vector2.ONE * marker_size)
 
 
 ## 返回指定判定牌标记在本组件局部坐标系中的命中矩形；索引无效时返回空矩形，供外层统一悬停信息使用。
@@ -65,7 +81,13 @@ func _refresh_markers() -> void:
 	for child: Node in get_children():
 		remove_child(child)
 		child.queue_free()
-	for card_index: int in range(_card_names.size()):
+	# 实际绘制名称；显式保持Array[String]类型，废除状态只创建一个“废”标记，正常状态保留真实判定牌顺序。
+	var display_names: Array[String] = []
+	if _abolished:
+		display_names.append("废")
+	else:
+		display_names.append_array(_card_names)
+	for card_index: int in range(display_names.size()):
 		# 当前标记的左上角横坐标；牌名数组顺序直接对应从左到右的公开判定顺序。
 		var marker_x: float = first_marker_left_margin + float(card_index) * (marker_size + marker_gap)
 		# 当前菱形背景；正方形绕中心旋转45度后形成不会随文字长度变化的稳定标记。
@@ -78,7 +100,7 @@ func _refresh_markers() -> void:
 		diamond_panel.rotation = PI * 0.25
 		diamond_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		# 当前菱形样式；内边距清零，避免旋转后的外框尺寸被主题默认值扩大。
-		var diamond_style: StyleBoxFlat = BattleUIStyle.make_panel(marker_background_color, marker_border_color, 1, 1)
+		var diamond_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("zone_abolished_background") if _abolished else marker_background_color, BattleUIStyle.get_color("zone_abolished_border") if _abolished else marker_border_color, 1, 1)
 		diamond_style.content_margin_left = 0.0
 		diamond_style.content_margin_top = 0.0
 		diamond_style.content_margin_right = 0.0
@@ -90,16 +112,16 @@ func _refresh_markers() -> void:
 		initial_label.position = Vector2(marker_x, 0.0)
 		initial_label.size = Vector2.ONE * marker_size
 		initial_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		initial_label.text = _first_character(_card_names[card_index])
+		initial_label.text = _first_character(display_names[card_index])
 		initial_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		initial_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		initial_label.add_theme_font_size_override("font_size", marker_font_size)
-		initial_label.add_theme_color_override("font_color", marker_text_color)
+		initial_label.add_theme_color_override("font_color", BattleUIStyle.get_color("zone_abolished_text") if _abolished else marker_text_color)
 		initial_label.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("health_shadow"))
 		initial_label.add_theme_constant_override("shadow_offset_x", 1)
 		initial_label.add_theme_constant_override("shadow_offset_y", 1)
 		add_child(initial_label)
-	visible = not _card_names.is_empty()
+	visible = _abolished or not _card_names.is_empty()
 
 
 ## 返回牌名的首个字符；空名称使用问号，确保异常配置仍保留稳定标记尺寸。

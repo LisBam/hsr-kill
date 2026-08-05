@@ -66,6 +66,9 @@ const EQUIPMENT_SLOT_ICONS: Dictionary = {
 ## 当前本地装备快照；键为固定槽位 ID，值为裁剪后的实体牌字典。
 var _equipment: Dictionary = {}
 
+## 当前已废除装备栏的公开快照；键为固定栏位ID且值为true，废除占位不接收卡牌交互。
+var _abolished_slots: Dictionary = {}
+
 ## 当前木牛流马公开“粮”数量；默认0，只有宝物为木牛流马时附加到装备名后。
 var _wooden_ox_count: int = 0
 
@@ -95,14 +98,15 @@ func _ready() -> void:
 	_rebuild_rows()
 
 
-## 接收本地装备快照和当前桌面选择状态；输入均为值副本，组件不会持有可修改的权威对象引用。
-func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Array[int] = [], selected_uids: Array[int] = []) -> void:
+## 接收本地装备、废除栏位和当前桌面选择状态；输入均为值副本，组件不会持有可修改的权威对象引用。
+func configure(equipment: Dictionary, wooden_ox_count: int, candidate_uids: Array[int] = [], selected_uids: Array[int] = [], abolished_slots: Dictionary = {}) -> void:
 	# 本次完整配置签名；全局牌名模式参与缓存判断，切换名称后会强制刷新全部装备横条。
-	var next_configuration_signature: int = hash([equipment, wooden_ox_count, candidate_uids, selected_uids, GameSettings.card_name_mode, GameSettings.ui_style_id])
+	var next_configuration_signature: int = hash([equipment, wooden_ox_count, candidate_uids, selected_uids, abolished_slots, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
 	_equipment = equipment.duplicate(true)
+	_abolished_slots = abolished_slots.duplicate(true)
 	_wooden_ox_count = maxi(wooden_ox_count, 0)
 	_candidate_uids = candidate_uids.duplicate()
 	_selected_uids = selected_uids.duplicate()
@@ -116,8 +120,8 @@ func refresh_ui_style() -> void:
 	_rebuild_rows()
 
 
-## 返回指定槽位当前创建的装备横条；空槽返回 null，调用方可据此读取公开布局而不访问规则状态。
-## 当前可见空槽也会返回深色占位横条；只有尚未启用的宝物槽返回 null。
+## 返回指定槽位当前创建的装备横条；五个标准槽均返回实体按钮，未知槽位返回null。
+## 空槽使用深色占位，废除槽使用废除占位，调用方无需访问权威规则状态即可查询当前布局。
 func get_row(slot: String) -> Button:
 	return _rows_by_slot.get(slot) as Button
 
@@ -127,8 +131,12 @@ func is_slot_equipped(slot: String) -> bool:
 	return _equipment.has(slot)
 
 
-## 清理旧横条并按固定槽位顺序重建现有装备；没有装备的槽位不生成占位节点。
-## 参考图布局会为全部可见槽位生成深色空态；宝物槽仍按项目规则只在实际装备宝物时创建。
+## 返回指定装备栏当前是否以废除占位效果显示；仅读取最近一次公开快照。
+func is_slot_abolished(slot: String) -> bool:
+	return bool(_abolished_slots.get(slot, false))
+
+
+## 清理旧横条并按固定槽位顺序重建五个标准装备栏；实体装备、普通空槽与废除槽共享稳定位置。
 func _rebuild_rows() -> void:
 	information_dismissed.emit()
 	# 重建前各槽位的实际横坐标；新横条从该位置继续动画，保证可用、选中和复原状态之间不会瞬移。
@@ -156,8 +164,10 @@ func _rebuild_rows() -> void:
 	if not is_node_ready():
 		return
 	for slot: String in EQUIPMENT_SLOT_ORDER:
+		# 当前栏位是否已废除；废除占位优先于异常快照中同时出现的装备实体。
+		var is_abolished: bool = is_slot_abolished(slot)
 		# 当前槽位是否实际装备实体牌；空槽继续创建深色背景与类型图标，但不接受选择输入。
-		var is_equipped: bool = _equipment.has(slot)
+		var is_equipped: bool = _equipment.has(slot) and not is_abolished
 		# 当前槽位装备快照；只读取稳定 UID、定义 ID、花色和点数生成牌面横条。
 		var equipment_card: Dictionary = _equipment.get(slot, {}) as Dictionary
 		# 当前装备实体 UID；负数数据仍可展示，但不会进入可交互候选集合。
@@ -169,11 +179,11 @@ func _rebuild_rows() -> void:
 		if bool(card_definition.get("shows_attachment_count", false)):
 			equipment_name += "（%d）" % _wooden_ox_count
 		# 当前装备是否属于选择请求候选；候选向右移并接收点击，非候选保持禁用输入。
-		var is_candidate: bool = _candidate_uids.has(card_uid)
+		var is_candidate: bool = not is_abolished and _candidate_uids.has(card_uid)
 		# 当前装备是否已被临时选中；选中状态优先使用金色边框。
-		var is_selected: bool = _selected_uids.has(card_uid)
+		var is_selected: bool = not is_abolished and _selected_uids.has(card_uid)
 		# 单张装备横条按钮；按钮只承接点击，具体花色点数与牌名由子级富文本绘制。
-		var equipment_row: Button = _create_equipment_row(slot, equipment_card, card_definition, equipment_name, is_equipped, is_candidate, is_selected)
+		var equipment_row: Button = _create_equipment_row(slot, equipment_card, card_definition, equipment_name, is_equipped, is_candidate, is_selected, is_abolished)
 		equipment_row.pressed.connect(_on_equipment_row_pressed.bind(card_uid))
 		if is_equipped:
 			equipment_row.mouse_entered.connect(_on_equipment_information_entered.bind(slot, equipment_card, card_definition, equipment_name, equipment_row))
@@ -195,7 +205,7 @@ func _rebuild_rows() -> void:
 
 
 ## 创建单张叠放装备横条；样式与武将牌装备条共享浅色纸张、暗金边和花色点数表达。
-func _create_equipment_row(slot: String, equipment_card: Dictionary, card_definition: Dictionary, equipment_name: String, is_equipped: bool, is_candidate: bool, is_selected: bool) -> Button:
+func _create_equipment_row(slot: String, equipment_card: Dictionary, card_definition: Dictionary, equipment_name: String, is_equipped: bool, is_candidate: bool, is_selected: bool, is_abolished: bool) -> Button:
 	# 装备横条按钮；禁用状态仍使用正常纸张样式，只通过位置和描边表达候选状态。
 	var equipment_row: Button = Button.new()
 	equipment_row.focus_mode = Control.FOCUS_NONE
@@ -206,9 +216,9 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	# 装备横条普通描边宽度；候选或选中使用2像素，静态装备使用1像素。
 	var border_width: int = 2 if is_candidate or is_selected else 1
 	# 装备横条基础纸色；已装备槽使用参考图浅米色牌面，空槽使用深胡桃色背景。
-	var row_background_color: Color = BattleUIStyle.get_color("equipment_background") if is_equipped else BattleUIStyle.get_color("equipment_empty_background")
+	var row_background_color: Color = BattleUIStyle.get_color("zone_abolished_background") if is_abolished else (BattleUIStyle.get_color("equipment_background") if is_equipped else BattleUIStyle.get_color("equipment_empty_background"))
 	# 装备横条基础边框；候选与选中仍优先使用状态色，普通槽位使用低亮度暗金边。
-	var row_border_color: Color = border_color if is_candidate or is_selected else (BattleUIStyle.get_color("equipment_border") if is_equipped else BattleUIStyle.get_color("equipment_empty_border"))
+	var row_border_color: Color = BattleUIStyle.get_color("zone_abolished_border") if is_abolished else (border_color if is_candidate or is_selected else (BattleUIStyle.get_color("equipment_border") if is_equipped else BattleUIStyle.get_color("equipment_empty_border")))
 	# 装备横条普通样式；内容边距归零，富文本可完整使用按钮矩形。
 	var normal_style: StyleBoxFlat = _make_row_style(row_background_color, row_border_color, border_width)
 	# 装备横条悬停样式；只为可交互候选轻微提亮纸张，不改变横条尺寸。
@@ -232,7 +242,7 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	slot_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	slot_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	slot_icon.add_theme_font_size_override("font_size", 13)
-	slot_icon.add_theme_color_override("font_color", BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text"))
+	slot_icon.add_theme_color_override("font_color", BattleUIStyle.get_color("zone_abolished_text") if is_abolished else (BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text")))
 	equipment_row.add_child(slot_icon)
 	# 装备横条富文本；花色点数保留红黑色，槽位和牌名使用深褐色并居中显示。
 	var equipment_text: RichTextLabel = RichTextLabel.new()
@@ -246,12 +256,12 @@ func _create_equipment_row(slot: String, equipment_card: Dictionary, card_defini
 	equipment_text.scroll_active = false
 	equipment_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_text.add_theme_font_size_override("normal_font_size", equipment_font_size)
-	equipment_text.add_theme_color_override("default_color", BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text"))
+	equipment_text.add_theme_color_override("default_color", BattleUIStyle.get_color("zone_abolished_text") if is_abolished else (BattleUIStyle.get_color("equipment_text") if is_equipped else BattleUIStyle.get_color("equipment_empty_text")))
 	# 当前装备花色；红桃和方片使用朱红色，其余花色使用近黑色。
 	var suit: String = str(equipment_card.get("suit", "none"))
 	# 当前装备点数；A、J、Q、K使用标准牌面字符，无有效点数时保持空白。
 	var rank: int = int(equipment_card.get("rank", 0))
-	equipment_text.text = ("[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]) if is_equipped else ""
+	equipment_text.text = "[center]已废除[/center]" if is_abolished else (("[center][color=%s]%s%s[/color] %s[/center]" % [_suit_color(suit).to_html(false), _suit_symbol(suit), _rank_text(rank), equipment_name]) if is_equipped else "")
 	equipment_row.add_child(equipment_text)
 	return equipment_row
 
