@@ -1836,7 +1836,9 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
 			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
-			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")))
+			# 当前轮回技公开状态；普通技能获得空字典并保持单色说明。
+			var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state)
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -1864,7 +1866,9 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
-		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")))
+		# 当前轮回技公开状态；技能按钮只转发给统一说明视图，不读取运行时技能对象。
+		var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state)
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))

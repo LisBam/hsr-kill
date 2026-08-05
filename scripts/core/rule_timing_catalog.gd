@@ -75,6 +75,11 @@ const SKILL_TIMINGS: Array[String] = [
 	"logSkillBegin", "logSkill", "useSkillBegin", "useSkill", "useSkillAfter", "skillAfter", "triggerInvisible", "triggerAfter",
 ]
 
+## 轮回技进入与离开轮回、轮回节的标准生命周期时机；轮回服务统一派发，具体技能不得另造同义事件名。
+const REINCARNATION_TIMINGS: Array[String] = [
+	"reincarnationStart", "reincarnationEnd", "reincarnationSectionStart", "reincarnationSectionEnd",
+]
+
 ## 武将技能变化、移除武将牌、明置手牌、领袖状态和洗牌时机；没有对应规则时不会凭空派发。
 const MODE_TIMINGS: Array[String] = [
 	"changeSkillsAfter", "removeCharacterBefore", "removeCharacterEnd", "hideShownCardsAfter", "zhuUpdate", "washCard",
@@ -99,6 +104,7 @@ static func get_all_timing_names() -> Array[String]:
 	result.append_array(JUDGE_COMPARE_TIMINGS)
 	result.append_array(CHOICE_TIMINGS)
 	result.append_array(SKILL_TIMINGS)
+	result.append_array(REINCARNATION_TIMINGS)
 	result.append_array(MODE_TIMINGS)
 	return result
 

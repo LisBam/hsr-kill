@@ -239,6 +239,9 @@ var trigger_manager: TriggerManager
 ## 统一规则时机派发服务；负责普通订阅、四角色过滤、优先级与座次排序，不执行具体玩法效果。
 var timing_service: RuleTimingService
 
+## 轮回技权威状态服务；集中维护轮回数、轮回节、永劫与通用限次，不执行具体技能效果。
+var reincarnation_skill_service: ReincarnationSkillService
+
 ## 纯查询修正管线；技能与装备只通过该管线修改合法性查询，不直接改写控制器状态。
 var modifier_pipeline: RuleModifierPipeline
 
@@ -980,7 +983,7 @@ func get_match_start_validation_error(player_count: int = -1, mode_id: String = 
 		var wheel_candidate_total: int = GameSettings.wheel_duel_face_up_candidate_count + GameSettings.wheel_duel_face_down_candidate_count
 		if wheel_candidate_total < WheelDuelSelectionService.DRAFTED_CHARACTER_COUNT_PER_PLAYER * 2:
 			return "1v1车轮战的明置与暗置候选合计至少需要10名。"
-		if GameDatabase.characters.size() < wheel_candidate_total:
+		if GameDatabase.get_selectable_character_ids().size() < wheel_candidate_total:
 			return "当前武将数量不足，无法生成%d名不重复的车轮战候选武将。" % wheel_candidate_total
 	return ""
 
@@ -1110,9 +1113,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_record_runtime_event("identity.start", "mode", {"player_count":actual_player_count, "seed":resolved_match_seed, "mode":state.match_mode})
 	state.current_phase = "wheel_duel_selection" if actual_mode == IdentityRules.MODE_WHEEL_DUEL else "character_selection"
 	# 可用武将 ID；服务只持有字符串副本，不接触全局配置的可修改引用。
-	var available_character_ids: Array[String] = []
-	for character_id_variant: Variant in GameDatabase.characters.keys():
-		available_character_ids.append(str(character_id_variant))
+	var available_character_ids: Array[String] = GameDatabase.get_selectable_character_ids()
 	# 领袖技武将 ID；依据技能元数据自动识别，选将服务只接收纯字符串数组并保持与数据库解耦。
 	var leader_skill_character_ids: Array[String] = _get_leader_skill_character_ids(available_character_ids)
 	# 选将初始化错误；空字符串表示领袖候选已生成。
@@ -1178,6 +1179,9 @@ func _teardown_previous_match_runtime() -> void:
 func _rebuild_match_rule_services_and_root_event() -> void:
 	card_rules = CardRuleService.new(state, self)
 	player_mark_service = PlayerMarkService.new(state)
+	if reincarnation_skill_service == null:
+		reincarnation_skill_service = ReincarnationSkillService.new()
+	reincarnation_skill_service.configure(self)
 	effect_resolver = CardEffectResolver.new(self, state)
 	card_movement = CardMovementService.new(state)
 	_bind_card_movement_service()
@@ -3705,7 +3709,8 @@ func change_hujia(target_id: int, delta: int, source_id: int = -1, reason: Strin
 
 
 ## 增加或减少角色体力上限；模式或离场技可显式允许仍存活的离场目标，返回实际带符号变化量。
-func change_max_hp(target_id: int, delta: int, source_id: int = -1, reason: String = "", allow_out_of_game: bool = false) -> int:
+## resolve_dying为false仅供已经位于dyingBegin内部的效果使用，避免同一次濒死因上限变化递归创建第二条濒死流程。
+func change_max_hp(target_id: int, delta: int, source_id: int = -1, reason: String = "", allow_out_of_game: bool = false, resolve_dying: bool = true) -> int:
 	if state == null or state.game_over or delta == 0:
 		return 0
 	# 体力上限目标；死亡角色不通过普通内容端口改变上限。
@@ -3735,7 +3740,7 @@ func change_max_hp(target_id: int, delta: int, source_id: int = -1, reason: Stri
 	_emit_rule_timing("%sAfter" % base_name, target_id, source_id, target_id, result_data)
 	if target.hp != previous_hp:
 		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":previous_hp - target.hp, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"max_hp_clamp"})
-		if target.hp <= 0:
+		if target.hp <= 0 and resolve_dying:
 			_resolve_dying(target_id, -1)
 	return actual_amount if delta > 0 else -actual_amount
 
@@ -3888,6 +3893,42 @@ func _replace_native_character_skills(player: PlayerState, old_native_skill_ids:
 			retained_skill.bind(self, player.player_id)
 			retained_skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+
+
+## 复原一名角色武将牌上的全部固有技能；限定、觉醒、轮回、每回合与每出牌阶段次数均回到未发动状态。
+func restore_character_card_skills(player_id: int, reason: String = "") -> bool:
+	if state == null or state.game_over:
+		return false
+	# 待复原角色；角色不存在或尚未配置武将牌时没有可复原技能。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or player.character_id.is_empty():
+		return false
+	# 当前武将固有技能ID；模式、临时与局内获得技能不属于“武将牌上的技能”。
+	var native_skill_ids: Array = GameDatabase.get_character(player.character_id).get("skills", []) as Array
+	# 当前玩家全部技能实例；只替换固有技能对应键，其他来源实例和次数保持原状。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for native_skill_id_variant: Variant in native_skill_ids:
+		# 当前固有技能稳定ID；用于卸载旧实例并创建全新未使用实例。
+		var native_skill_id: String = str(native_skill_id_variant)
+		# 原技能实例；卸载会清理持续标记、时机订阅与纯查询修正器。
+		var previous_skill: SkillDefinition = player_skills.get(native_skill_id) as SkillDefinition
+		if previous_skill != null:
+			previous_skill.uninstall()
+		# 新技能实例；新建对象自然复原各技能脚本自行保存的回合、阶段与限定状态。
+		var restored_skill: SkillDefinition = GameDatabase.create_skill(native_skill_id)
+		if restored_skill == null or restored_skill.leader_skill and player.identity != "leader":
+			player_skills.erase(native_skill_id)
+			continue
+		if reincarnation_skill_service != null:
+			reincarnation_skill_service.reset_skill(player_id, native_skill_id, true, false)
+		restored_skill.bind(self, player_id)
+		player_skills[native_skill_id] = restored_skill
+		restored_skill.install()
+	skill_instances_by_player[player_id] = player_skills
+	# 技能变化时机只公开复原事实和稳定ID，不传递运行时技能对象。
+	_emit_rule_timing("changeSkillsAfter", player_id, player_id, player_id, {"change_type":"restore_character_card_skills", "skill_ids":native_skill_ids.duplicate(), "reason":reason})
+	_emit_state()
+	return true
 
 
 ## 将一名仍存活角色移出游戏；离场期间其不参与行动、距离、响应、普通技能与目标选择，回合自然尾部可关闭中断调度。
@@ -6979,6 +7020,9 @@ func _start_independent_extra_play_phase() -> void:
 	# 【杀】次数与阶段级用牌历史均按新的独立出牌阶段重新计算。
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
+	player.play_phase_card_use_limit_exempt_history.clear()
+	if reincarnation_skill_service != null:
+		reincarnation_skill_service.on_play_phase_started(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true, "independent_phase":true}, {}, int(_active_independent_play_phase.get("parent_event_id", -1)))
 	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1))):
 		_emit_rule_timing("phaseUseCancelled", player_id, source_id, player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)))
@@ -7941,6 +7985,56 @@ func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
 	return player_skills.get(skill_id) as SkillDefinition
 
 
+## 为技能安装流程登记轮回技静态配置；非轮回技与无效玩家由服务拒绝且不创建状态。
+func register_reincarnation_skill(player_id: int, skill_id: String, metadata: Dictionary) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.register_skill(player_id, skill_id, metadata)
+
+
+## 返回指定轮回技的公开权威状态深拷贝；界面、AI与技能公式读取同一份轮回进度。
+func get_reincarnation_skill_state(player_id: int, skill_id: String) -> Dictionary:
+	return reincarnation_skill_service.get_skill_state(player_id, skill_id) if reincarnation_skill_service != null else {}
+
+
+## 检查轮回技通用限次；具体技能条件仍由自身触发回调或can_activate负责。
+func can_activate_reincarnation_skill(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.can_activate(player_id, skill_id)
+
+
+## 开始一次轮回技效果；首次进入初始轮回节时由服务补发开始生命周期。
+func begin_reincarnation_skill_activation(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.begin_activation(player_id, skill_id)
+
+
+## 完成一次轮回技效果并推进到下一轮回节；最后一节和永劫状态自动进入下一轮回。
+func complete_reincarnation_skill_activation(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.complete_activation(player_id, skill_id)
+
+
+## 令指定轮回技进入下一个轮回节；永劫状态下保持当前节并增加轮回数。
+func enter_next_reincarnation_section(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.enter_next_section(player_id, skill_id)
+
+
+## 令指定轮回技直接进入下一轮回；普通状态回到①，永劫状态保持锁定轮回节。
+func enter_next_reincarnation(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.enter_next_round(player_id, skill_id)
+
+
+## 将轮回数重置为1并回到①；普通重置不解除永劫，完整技能复原会显式清除永劫。
+func reset_reincarnation(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.reset_skill(player_id, skill_id)
+
+
+## 令轮回技进入永劫并锁定当前轮回节；重复进入无事发生，每回合限制从成功进入后开始计数。
+func enter_eternal_reincarnation_state(player_id: int, skill_id: String, per_turn_limit: int = 0) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.enter_eternal_state(player_id, skill_id, per_turn_limit)
+
+
+## 轮回状态改变后的统一快照通知入口；状态服务无需知道离线、局域网与界面广播实现。
+func notify_reincarnation_state_changed() -> void:
+	_emit_state()
+
+
 ## 汇总指定玩家全部已安装技能的次数解除钩子；技能只读取卡牌定义，不修改使用历史。
 func skill_ignores_play_count_limit(player_id: int, card_definition: Dictionary) -> bool:
 	# 当前玩家技能实例表；临时技能与武将固有技能共用同一容器，因此会自然参与查询。
@@ -7949,6 +8043,18 @@ func skill_ignores_play_count_limit(player_id: int, card_definition: Dictionary)
 		# 当前技能实例；任一技能明确解除限制即可通过，不要求其他技能重复确认。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
 		if skill != null and skill.can_use_effect() and skill.ignores_play_count_limit(card_definition):
+			return true
+	return false
+
+
+## 汇总指定玩家全部已安装技能的“不计入使用次数限制”钩子；该语义不解除使用前已经达到的上限。
+func skill_card_use_does_not_count_toward_play_limit(player_id: int, card_definition: Dictionary) -> bool:
+	# 当前玩家技能实例表；固有、临时与局内获得技能使用同一纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；查询不得移动牌、创建选择或直接修改次数历史。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.can_use_effect() and skill.does_not_count_toward_play_limit(card_definition):
 			return true
 	return false
 
@@ -8323,6 +8429,10 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
 	if skill == null or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 		return false
+	if not skill.has_available_intrinsic_use():
+		return false
+	if skill.reincarnation and not skill.can_activate_reincarnation():
+		return false
 	if not can_use_acquired_skill(player_id, skill_id):
 		return false
 	# 当前响应候选声明的转化技能；候选已逐张通过can_convert_response_card权威校验，因此允许它在本次chooseToRespond中作为材料筛选入口出现。
@@ -8358,7 +8468,9 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；主动入口与自身规则条件必须同时满足。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null or not skill.can_use_effect() or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_id()):
+		if skill == null or not skill.can_use_effect() or not skill.has_available_intrinsic_use() or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_id()):
+			continue
+		if skill.reincarnation and not skill.can_activate_reincarnation():
 			continue
 		# 技能查询上下文；补充主动入口但不覆盖调用方其他可序列化参数。
 		var activation_context: Dictionary = context.duplicate(true)
@@ -8779,7 +8891,7 @@ func _get_preview_ai_character_id(player: PlayerState) -> String:
 	if not candidates.is_empty():
 		return candidates[0]
 	# 全局回退候选；候选为空时仍保证AI领袖拥有一张可公开的武将。
-	for character_id_variant: Variant in GameDatabase.characters.keys():
+	for character_id_variant: Variant in GameDatabase.get_selectable_character_ids():
 		var character_id: String = str(character_id_variant)
 		if character_id != player.character_id:
 			return character_id
@@ -8796,9 +8908,7 @@ func _begin_ai_character_adjustment() -> bool:
 		if ai_coordinator.is_ai_controlled(player.player_id):
 			ai_player_ids.append(player.player_id)
 	# 全部武将 ID；调整服务使用副本重新随机候选。
-	var available_character_ids: Array[String] = []
-	for character_id_variant: Variant in GameDatabase.characters.keys():
-		available_character_ids.append(str(character_id_variant))
+	var available_character_ids: Array[String] = GameDatabase.get_selectable_character_ids()
 	# 房主权威玩家；离线为本地真人，局域网房主同样使用已经绑定的本地玩家 ID。
 	var authority_player_id: int = local_human_player_id
 	ai_character_adjustment.begin(ai_player_ids, available_character_ids, _character_candidate_count, _custom_character_assignment_enabled, authority_player_id, _rng)
@@ -9493,6 +9603,7 @@ func _continue_turn_start(context: Dictionary) -> void:
 			_cards_used_this_turn_by_player.clear()
 			player.skipped_phases.clear()
 			player.card_use_history.clear()
+			player.card_use_limit_exempt_history.clear()
 			player.response_history.clear()
 			player.damage_history.clear()
 			player.skill_history.clear()
@@ -9792,6 +9903,9 @@ func _start_converted_main_phase_as_play(player_id: int, original_phase: String,
 	# 每个转换后的出牌阶段都是新的阶段，必须重新计算阶段限次与【杀】基础次数。
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
+	player.play_phase_card_use_limit_exempt_history.clear()
+	if reincarnation_skill_service != null:
+		reincarnation_skill_service.on_play_phase_started(player_id)
 	_active_converted_play_phase_context = {"player_id":player_id, "original_phase":original_phase, "return_point":return_point}
 	# 运行时事件明确记录阶段转换来源；extra_phase保持缺失，日志与监听者不会把它误认作额外阶段。
 	var phase_event_data: Dictionary = {"player_id":player_id, "transformed_from_phase":original_phase}
@@ -9827,6 +9941,9 @@ func _enter_play_phase(player_id: int) -> void:
 	# 普通出牌阶段拥有独立次数历史；本回合此前由其他流程记录的牌不会占用本阶段【杀】次数。
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
+	player.play_phase_card_use_limit_exempt_history.clear()
+	if reincarnation_skill_service != null:
+		reincarnation_skill_service.on_play_phase_started(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % format_player_state_log_name(player))
@@ -10773,10 +10890,15 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 		return
 	# 当前卡牌定义；次数统计和最终区域所有权均来自统一配置。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	# 本次牌是否不计入配置化次数限制；使用前已经通过基础上限校验，声明后仍保留完整使用事实。
+	var does_not_count_toward_play_limit: bool = skill_card_use_does_not_count_toward_play_limit(actor_id, definition)
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	_record_card_used_this_turn(actor_id, card.definition_id)
 	# 当前出牌阶段使用历史；只服务 phase 作用域限次查询，不替代完整回合使用记录。
 	actor.play_phase_card_use_history[card.definition_id] = int(actor.play_phase_card_use_history.get(card.definition_id, 0)) + 1
+	if does_not_count_toward_play_limit:
+		actor.card_use_limit_exempt_history[card.definition_id] = int(actor.card_use_limit_exempt_history.get(card.definition_id, 0)) + 1
+		actor.play_phase_card_use_limit_exempt_history[card.definition_id] = int(actor.play_phase_card_use_limit_exempt_history.get(card.definition_id, 0)) + 1
 	# 当前卡牌源码；牌族兼容统计与声明时触发由对应文件维护。
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if source_definition != null:
@@ -11438,6 +11560,9 @@ func _start_extra_play_phase(player_id: int) -> void:
 	player.slash_count = 0
 	# 阶段限次牌使用历史；额外阶段必须从空历史开始，回合级【酒】与完整用牌记录仍保留在 card_use_history。
 	player.play_phase_card_use_history.clear()
+	player.play_phase_card_use_limit_exempt_history.clear()
+	if reincarnation_skill_service != null:
+		reincarnation_skill_service.on_play_phase_started(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true}, {}, _current_turn_event_id)
 	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id):
 		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id)
@@ -12274,9 +12399,7 @@ func _complete_conquest_enemy_replacement(context: Dictionary) -> void:
 	# 本层新增的固定机缘；先写入全体敌方历史，再应用新武将以便体力与手牌上限在基础属性刷新时正确汇总。
 	var newly_awarded_fixed_opportunity_ids: Array[String] = conquest_mode.award_fixed_opportunities_through_current_level()
 	_record_conquest_enemy_opportunities(newly_awarded_fixed_opportunity_ids)
-	var character_ids: Array[String] = []
-	for character_id_variant: Variant in GameDatabase.characters.keys():
-		character_ids.append(str(character_id_variant))
+	var character_ids: Array[String] = GameDatabase.get_selectable_character_ids()
 	# 其他在场角色正在使用的武将；联机多人局的新敌人不与任何存活玩家或其他敌人重复武将。
 	var occupied_character_ids: Array[String] = []
 	for occupied_player: PlayerState in state.players:

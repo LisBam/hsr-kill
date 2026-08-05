@@ -204,8 +204,8 @@ var _information_character_view: PlayerTargetView
 ## 武将详情右侧当前创建的技能名称标签；主题刷新时统一恢复指定黄色。
 var _information_skill_name_labels: Array[Label] = []
 
-## 武将详情右侧当前创建的技能说明标签；主题刷新时同步当前主题次级文字颜色。
-var _information_skill_description_labels: Array[Label] = []
+## 武将详情右侧当前创建的技能说明视图；局外轮回技固定以初始①高亮并随主题重绘。
+var _information_skill_description_labels: Array[SkillDescriptionView] = []
 
 
 ## 初始化分类按钮、搜索、资料模态与全局表现信号；组件默认隐藏且不读取任何对局状态。
@@ -277,9 +277,9 @@ func refresh_ui_style() -> void:
 	for skill_name_label: Label in _information_skill_name_labels:
 		if skill_name_label != null and is_instance_valid(skill_name_label):
 			skill_name_label.add_theme_color_override("font_color", information_skill_name_color)
-	for skill_description_label: Label in _information_skill_description_labels:
+	for skill_description_label: SkillDescriptionView in _information_skill_description_labels:
 		if skill_description_label != null and is_instance_valid(skill_description_label):
-			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+			skill_description_label.refresh_ui_style()
 	BattleUIStyle.apply_interaction_button(_information_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	_apply_scroll_bar_style(_grid_scroll.get_v_scroll_bar())
 	_apply_scroll_bar_style(_information_scroll.get_v_scroll_bar())
@@ -651,11 +651,10 @@ func _show_character_information(character_id: String) -> void:
 		skill_entry.add_child(skill_name_label)
 		_information_skill_name_labels.append(skill_name_label)
 		# 当前技能说明标签；解析全局卡牌名称模式后自动换行，并使用主题次级文字色。
-		var skill_description_label: Label = Label.new()
-		skill_description_label.text = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
-		skill_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		skill_description_label.add_theme_font_size_override("font_size", 14)
-		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		var skill_description_label: SkillDescriptionView = SkillDescriptionView.new()
+		# 局外静态武将资料没有运行时状态；轮回数初始为1且当前轮回节固定从①开始。
+		skill_description_label.configure_description(GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。"))), bool(skill_definition.get("reincarnation", false)), 0)
+		skill_description_label.add_theme_font_size_override("normal_font_size", 14)
 		skill_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		skill_entry.add_child(skill_description_label)
 		_information_skill_description_labels.append(skill_description_label)

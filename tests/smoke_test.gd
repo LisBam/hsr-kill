@@ -180,9 +180,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；当前55个正式武将技能与3个模式技能共登记58个独立技能源码定义。
+	# 技能元数据数量；新增万敌与赛飞儿四项正式技能后，共登记62个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 58:
+	if skill_definition_count != 62:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -247,15 +247,15 @@ func _run() -> void:
 		printerr("SMOKE_FAIL yvkong_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 正式武将数量；当前28名角色均可参与选将与对局。
+	# 正式武将数量；新增万敌与赛飞儿后，当前30名角色均可参与选将与对局。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 28:
+	if character_definition_count != 30:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前28名武将仍共同使用7个独立势力主题。
+	# 势力展示元数据数量；新增翁法罗斯后，当前30名武将共同使用8个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
-	if faction_definition_count != 7:
+	if faction_definition_count != 8:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
 		get_tree().quit(1)
 		return

@@ -360,6 +360,8 @@ func _get_grouped_play_count(actor: PlayerState, definition: Dictionary) -> int:
 	var play_limit_scope: String = str(definition.get("play_limit_scope", "turn"))
 	# 当前作用域对应的使用历史；独立历史避免额外出牌阶段清空【杀】次数时破坏回合级统计。
 	var use_history: Dictionary = actor.play_phase_card_use_history if play_limit_scope == "phase" else actor.card_use_history
+	# 当前作用域中不计入限制的使用历史；这些牌仍存在于完整事实历史，只在本次上限查询中扣除。
+	var exempt_history: Dictionary = actor.play_phase_card_use_limit_exempt_history if play_limit_scope == "phase" else actor.card_use_limit_exempt_history
 	# 已使用次数；逐项读取历史中的牌定义，新增同组牌无需修改规则服务。
 	var used_count: int = 0
 	for used_definition_id_variant: Variant in use_history.keys():
@@ -368,8 +370,43 @@ func _get_grouped_play_count(actor: PlayerState, definition: Dictionary) -> int:
 		var used_definition: Dictionary = GameDatabase.get_card(used_definition_id)
 		var used_group: String = str(used_definition.get("play_limit_group", used_definition_id))
 		if used_group == play_limit_group:
+			used_count += int(use_history.get(used_definition_id, 0)) - int(exempt_history.get(used_definition_id, 0))
+	return maxi(used_count, 0)
+
+
+## 返回指定玩家当前计入配置化次数限制的同组用牌数；技能纯查询可复用且不会修改历史。
+func get_grouped_play_count(actor_id: int, definition: Dictionary) -> int:
+	# 查询玩家；无效ID或空定义没有任何已计入次数。
+	var actor: PlayerState = state.get_player(actor_id) if state != null else null
+	if actor == null or definition.is_empty():
+		return 0
+	return _get_grouped_play_count(actor, definition)
+
+
+## 返回指定玩家当前作用域内实际使用的同组卡牌数；不计入限制的牌仍属于已使用事实，因此不会从本查询扣除。
+func get_grouped_actual_play_count(actor_id: int, definition: Dictionary) -> int:
+	# 查询玩家；无效ID或空定义没有任何实际使用次数。
+	var actor: PlayerState = state.get_player(actor_id) if state != null else null
+	if actor == null or definition.is_empty():
+		return 0
+	# 当前计数组；同组属性牌共享“前X张”等实际使用序号，空组回退当前卡牌ID。
+	var play_limit_group: String = str(definition.get("play_limit_group", definition.get("id", "")))
+	# 当前限制作用域；实际使用序号与该牌的配置化次数作用域保持一致。
+	var play_limit_scope: String = str(definition.get("play_limit_scope", "turn"))
+	# 当前作用域对应的完整使用历史；本查询刻意不读取次数豁免历史。
+	var use_history: Dictionary = actor.play_phase_card_use_history if play_limit_scope == "phase" else actor.card_use_history
+	# 已实际使用次数；逐项读取同组牌定义，兼容普通、火与雷【杀】共享序号。
+	var used_count: int = 0
+	for used_definition_id_variant: Variant in use_history.keys():
+		# 历史卡牌定义ID；无效旧存档条目按自身ID分组，不会误计到其他牌族。
+		var used_definition_id: String = str(used_definition_id_variant)
+		# 历史卡牌静态定义；只读取配置化分组，不创建运行时卡牌对象。
+		var used_definition: Dictionary = GameDatabase.get_card(used_definition_id)
+		# 历史卡牌所属计数组；空配置回退自身稳定ID。
+		var used_group: String = str(used_definition.get("play_limit_group", used_definition_id))
+		if used_group == play_limit_group:
 			used_count += int(use_history.get(used_definition_id, 0))
-	return used_count
+	return maxi(used_count, 0)
 
 
 ## 检查玩家指定装备 ID 是否位于任意装备槽。

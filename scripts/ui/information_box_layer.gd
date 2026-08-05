@@ -27,6 +27,12 @@ signal character_details_visibility_changed(visible: bool)
 ## 目标旁信息框比例搜索的单次宽度步长；默认20像素在测量稳定性与尺寸精度之间取平衡，运行时通常无需动态修改。
 @export_range(4.0, 80.0, 1.0) var hover_panel_width_adjustment_step: float = 20.0
 
+## 目标旁信息框保持最小宽度时允许的可见字符总数；默认24个字符让短说明保持紧凑，运行时通常无需动态修改。
+@export_range(8, 80, 1) var hover_panel_compact_text_character_count: int = 24
+
+## 超出紧凑字符数后每个字符增加的目标宽度；默认1像素用于补偿RichTextLabel富文本高度延迟更新，运行时通常无需动态修改。
+@export_range(0.1, 4.0, 0.1) var hover_panel_width_per_extra_text_character: float = 1.0
+
 ## 目标旁信息框与悬停目标之间的间距；默认10像素避免浮层遮挡当前目标，运行时通常无需动态修改。
 @export_range(4.0, 32.0, 1.0) var hover_target_gap: float = 10.0
 
@@ -111,8 +117,8 @@ var _hover_title_label: Label
 ## 目标旁信息框副标题；显示花色点数、牌型、装备槽位或技能状态。
 var _hover_subtitle_label: Label
 
-## 目标旁信息框说明；自动换行展示完整规则文本。
-var _hover_description_label: Label
+## 目标旁信息框说明；自动换行展示完整规则文本，并支持轮回节分段字体颜色。
+var _hover_description_label: SkillDescriptionView
 
 ## 目标旁信息框说明容器；普通说明使用单个标签，武将资料可按技能拆分为强调名称与普通描述。
 var _hover_description_container: VBoxContainer
@@ -120,8 +126,8 @@ var _hover_description_container: VBoxContainer
 ## 当前武将悬停资料创建的技能名称标签；统一使用与右键详情技能名相同的主题强调色。
 var _hover_skill_name_labels: Array[Label] = []
 
-## 当前武将悬停资料创建的技能描述标签；主题切换时与普通说明共同刷新为次级文字色。
-var _hover_skill_description_labels: Array[Label] = []
+## 当前武将悬停资料创建的技能说明视图；主题切换时保留轮回节高亮状态并重绘颜色。
+var _hover_skill_description_labels: Array[SkillDescriptionView] = []
 
 ## 当前悬停内容异步布局的代次；每次替换或关闭内容都会递增，旧布局协程不得显示新请求或旧位置。
 var _hover_layout_generation: int = 0
@@ -339,7 +345,7 @@ func get_hover_subtitle_text() -> String:
 
 ## 返回目标旁信息框当前说明正文；供界面回归验证武将全部技能名称与描述。
 func get_hover_description_text() -> String:
-	return _hover_description_label.text if _hover_description_label != null else ""
+	return _hover_description_label.get_plain_description() if _hover_description_label != null else ""
 
 
 ## 返回居中武将详情当前是否可见；牌桌不应通过该查询推断暂停所有权。
@@ -610,11 +616,10 @@ func _build_hover_panel() -> void:
 	_hover_description_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hover_description_container.add_theme_constant_override("separation", 9)
 	hover_content.add_child(_hover_description_container)
-	_hover_description_label = Label.new()
+	_hover_description_label = SkillDescriptionView.new()
 	_hover_description_label.name = "Description"
 	_hover_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hover_description_label.add_theme_font_size_override("font_size", 14)
-	_hover_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_hover_description_label.add_theme_font_size_override("normal_font_size", 14)
 	_hover_description_container.add_child(_hover_description_label)
 
 
@@ -743,6 +748,13 @@ func _place_hover_panel(anchor_rect: Rect2, source_id: int, layout_generation: i
 	var estimated_content_area: float = maxf(measuring_width * measuring_height, 1.0)
 	# 初始目标宽度；以面积和首选比例开平方反推，使短、中、长说明自然获得不同宽度。
 	var desired_width: float = clampf(sqrt(estimated_content_area * preferred_aspect_ratio), minimum_width, maximum_width)
+	# 当前可见文本字符总数；富文本高度会延迟到下一布局帧更新，因此同时作为确定性的宽度下限输入。
+	var visible_text_character_count: int = _get_hover_visible_text_character_count()
+	# 超出紧凑阈值的字符数；短说明保持0，长说明按配置逐步扩宽。
+	var extra_text_character_count: int = maxi(visible_text_character_count - hover_panel_compact_text_character_count, 0)
+	# 基于字符量的目标宽度下限；仅补偿富文本延迟测量，不越过当前视口允许的最大宽度。
+	var text_length_width_floor: float = clampf(minimum_width + float(extra_text_character_count) * hover_panel_width_per_extra_text_character, minimum_width, maximum_width)
+	desired_width = maxf(desired_width, text_length_width_floor)
 	var content_height: float = _measure_hover_panel_content_height(desired_width)
 	# 宽度搜索步长；至少为1像素，避免检查器或旧场景异常值使循环停滞。
 	var width_step: float = maxf(hover_panel_width_adjustment_step, 1.0)
@@ -822,10 +834,30 @@ func _measure_hover_panel_content_height(panel_width: float) -> float:
 	return _hover_panel.size.y
 
 
+## 统计当前悬停资料实际可见的标题、副标题与说明字符数；结构化武将资料只计算逐技能分段，避免重复计算隐藏的合并正文。
+func _get_hover_visible_text_character_count() -> int:
+	# 可见字符总数；标题始终显示，副标题与正文按当前信息结构选择性累加。
+	var character_count: int = str(_hover_information.get("title", "")).length()
+	# 当前副标题；空文本不会创建可见行，但累加0不会影响结果。
+	var subtitle: String = str(_hover_information.get("subtitle", ""))
+	character_count += subtitle.length()
+	# 当前结构化技能说明；存在时普通合并正文隐藏，只统计每个实际显示的技能名称与说明。
+	var description_sections: Array = _hover_information.get("description_sections", []) as Array
+	if description_sections.is_empty():
+		character_count += str(_hover_information.get("description", "暂无说明。")).length()
+		return character_count
+	for section_variant: Variant in description_sections:
+		# 当前技能说明分段；异常值按空字典处理，不影响其他有效分段的布局。
+		var section: Dictionary = section_variant as Dictionary
+		character_count += str(section.get("title", "")).length()
+		character_count += str(section.get("description", "暂无说明。")).length()
+	return character_count
+
+
 ## 按当前信息结构重建悬停说明；武将资料将每个技能拆分为金色技能名和普通说明，其他来源继续使用单段正文。
 func _render_hover_description() -> void:
 	_clear_hover_description_sections()
-	_hover_description_label.text = str(_hover_information.get("description", "暂无说明。"))
+	_hover_description_label.configure_description(str(_hover_information.get("description", "暂无说明。")), bool(_hover_information.get("reincarnation", false)), int(_hover_information.get("reincarnation_section_index", 0)))
 	# 当前结构化说明分段；没有该可选字段时保持卡牌、装备与普通技能原有单标签展示。
 	var description_sections: Array = _hover_information.get("description_sections", []) as Array
 	_hover_description_label.visible = description_sections.is_empty()
@@ -847,12 +879,11 @@ func _render_hover_description() -> void:
 		section_container.add_child(section_title_label)
 		_hover_skill_name_labels.append(section_title_label)
 		# 当前技能描述标签；完整规则文本自然换行，颜色保持与右键详情说明一致。
-		var section_description_label: Label = Label.new()
+		var section_description_label: SkillDescriptionView = SkillDescriptionView.new()
 		section_description_label.name = "Description"
 		section_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		section_description_label.text = str(section.get("description", "暂无说明。"))
-		section_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		section_description_label.add_theme_font_size_override("font_size", 14)
+		section_description_label.configure_description(str(section.get("description", "暂无说明。")), bool(section.get("reincarnation", false)), int(section.get("reincarnation_section_index", 0)))
+		section_description_label.add_theme_font_size_override("normal_font_size", 14)
 		section_container.add_child(section_description_label)
 		_hover_skill_description_labels.append(section_description_label)
 
@@ -880,11 +911,11 @@ func _refresh_hover_text_styles() -> void:
 	var title_color: Color = BattleUIStyle.get_color("accent") if bool(_hover_information.get("title_emphasis", false)) else BattleUIStyle.get_color("text_primary")
 	_hover_title_label.add_theme_color_override("font_color", title_color)
 	_hover_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
-	_hover_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_hover_description_label.refresh_ui_style()
 	for skill_name_label: Label in _hover_skill_name_labels:
 		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
-	for skill_description_label: Label in _hover_skill_description_labels:
-		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	for skill_description_label: SkillDescriptionView in _hover_skill_description_labels:
+		skill_description_label.refresh_ui_style()
 
 
 ## 复用正式武将牌场景渲染详情左侧牌面；隐藏对局角标和公开装备以匹配选将领袖牌表现。
@@ -970,11 +1001,11 @@ func _render_character_skills() -> void:
 		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 		skill_entry.add_child(skill_name_label)
 		# 技能描述行；长文本允许自然换行，滚动框负责查看超出面板高度的全部内容。
-		var skill_description_label: Label = Label.new()
-		skill_description_label.text = skill_description
-		skill_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		skill_description_label.add_theme_font_size_override("font_size", 14)
-		skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		var skill_description_label: SkillDescriptionView = SkillDescriptionView.new()
+		# 当前轮回状态；右键详情使用玩家公开快照，局外静态资料自然回退①。
+		var reincarnation_state: Dictionary = (_character_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+		skill_description_label.configure_description(skill_description, bool(skill_definition.get("reincarnation", false)), int(reincarnation_state.get("section_index", 0)))
+		skill_description_label.add_theme_font_size_override("normal_font_size", 14)
 		skill_entry.add_child(skill_description_label)
 		_character_skill_entry_count += 1
 	_append_character_opportunity_section()
@@ -1088,9 +1119,10 @@ func _refresh_skill_entry_styles() -> void:
 			# 当前技能名称标签；条目创建顺序保证索引0始终为名称。
 			var skill_name_label: Label = entry_node.get_child(0) as Label
 			# 当前技能说明标签；条目创建顺序保证索引1始终为说明。
-			var skill_description_label: Label = entry_node.get_child(1) as Label
+			var skill_description_label: SkillDescriptionView = entry_node.get_child(1) as SkillDescriptionView
 			skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
-			skill_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+			if skill_description_label != null:
+				skill_description_label.refresh_ui_style()
 		elif entry_node is HSeparator and entry_node.has_meta("information_box_skill_separator"):
 			_apply_skill_separator_style(entry_node as HSeparator)
 		elif entry_node is VBoxContainer and entry_node.has_meta("information_box_opportunity_entry"):
