@@ -394,10 +394,17 @@ func _test_opportunity_card_hover() -> bool:
 	# 获得技能牌面布局；技能名必须独占一行并禁止自动换行，空间不足时由省略号策略裁剪而不能拆成两行。
 	var ordinary_description_label: Label = card_view.get_node("Margin/Content/DescriptionLabel") as Label
 	var skill_name_label: Label = card_view.get_node("Margin/Content/SkillDescriptionContent/SkillNameLabel") as Label
-	if ordinary_description_label.visible or not skill_name_label.visible or skill_name_label.text != "“机巧”" or skill_name_label.autowrap_mode != TextServer.AUTOWRAP_OFF or skill_name_label.text_overrun_behavior != TextServer.OVERRUN_TRIM_ELLIPSIS:
+	if ordinary_description_label.visible or ordinary_description_label.autowrap_mode != TextServer.AUTOWRAP_WORD_SMART or not skill_name_label.visible or skill_name_label.text != "“机巧”" or skill_name_label.autowrap_mode != TextServer.AUTOWRAP_OFF or skill_name_label.text_overrun_behavior != TextServer.OVERRUN_TRIM_ELLIPSIS:
 		get_tree().paused = false
 		card_view.queue_free()
-		return _fail("opportunity_skill_description_layout normal=%s skill=%s text=%s wrap=%s overrun=%s" % [ordinary_description_label.visible, skill_name_label.visible, skill_name_label.text, skill_name_label.autowrap_mode, skill_name_label.text_overrun_behavior])
+		return _fail("opportunity_skill_description_layout normal=%s normal_wrap=%s skill=%s text=%s wrap=%s overrun=%s" % [ordinary_description_label.visible, ordinary_description_label.autowrap_mode, skill_name_label.visible, skill_name_label.text, skill_name_label.autowrap_mode, skill_name_label.text_overrun_behavior])
+	# 无空格长文本模拟导出文本服务无法提供词边界的情况；WORD_SMART必须回退到字符边界而不得撑宽卡面。
+	card_view.configure({"id":"test_export_safe_autowrap", "quality":"green", "description":"ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ"}, true)
+	await get_tree().create_timer(0.04, true).timeout
+	if ordinary_description_label.get_line_count() <= 1 or card_view.size.x > card_view.card_size.x:
+		get_tree().paused = false
+		card_view.queue_free()
+		return _fail("opportunity_export_safe_autowrap lines=%d width=%.2f" % [ordinary_description_label.get_line_count(), card_view.size.x])
 	# 刷新全部机缘卡使用独立19像素正文；文案缩短后仍保留30%升级概率，且牌面复用时不得污染其他机缘的默认字号。
 	card_view.configure(OpportunityCatalog.get_card("red_refresh_opportunities"), true)
 	if not ordinary_description_label.visible or ordinary_description_label.text != "将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。" or ordinary_description_label.get_theme_font_size("font_size") != 19:
@@ -471,9 +478,11 @@ func _test_opportunity_card_hover() -> bool:
 	var skill_prefix_label: Label = second_choice_card.get_node("%SkillPrefixLabel") as Label
 	# 技能名称专用标签；该行禁止换行，悬停时也不得被重新压缩、移动或省略。
 	var choice_skill_name_label: Label = second_choice_card.get_node("%SkillNameLabel") as Label
-	if skill_content == null or skill_prefix_label == null or choice_skill_name_label == null or not skill_content.visible or not skill_prefix_label.visible or not choice_skill_name_label.visible:
+	# 技能名后缀标签；即使当前定义后缀为空，仍需保留与普通正文相同的导出安全换行策略。
+	var skill_suffix_label: Label = second_choice_card.get_node("%SkillSuffixLabel") as Label
+	if skill_content == null or skill_prefix_label == null or choice_skill_name_label == null or skill_suffix_label == null or not skill_content.visible or not skill_prefix_label.visible or not choice_skill_name_label.visible or skill_prefix_label.autowrap_mode != TextServer.AUTOWRAP_WORD_SMART or skill_suffix_label.autowrap_mode != TextServer.AUTOWRAP_WORD_SMART:
 		choice_panel.close()
-		return _fail("opportunity_skill_hover_layout_nodes")
+		return _fail("opportunity_skill_hover_layout_nodes prefix_wrap=%s suffix_wrap=%s" % [skill_prefix_label.autowrap_mode if skill_prefix_label != null else -1, skill_suffix_label.autowrap_mode if skill_suffix_label != null else -1])
 	# 悬停前技能布局容器位置；仅比较本地坐标，缩放本身不应影响该稳定排版坐标。
 	var skill_content_position: Vector2 = skill_content.position
 	# 悬停前技能布局容器尺寸；边框变化不得减少可用内容区宽高。

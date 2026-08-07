@@ -28,7 +28,7 @@ theme_override_font_sizes/font_size = 21
 text = "机缘描述"
 horizontal_alignment = 1
 vertical_alignment = 1
-autowrap_mode = 2
+autowrap_mode = 3
 mouse_filter = 2
 
 [node name="SkillDescriptionContent" type="VBoxContainer" parent="Margin/Content"]
@@ -45,7 +45,7 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 20
 horizontal_alignment = 1
 vertical_alignment = 1
-autowrap_mode = 2
+autowrap_mode = 3
 mouse_filter = 2
 
 [node name="SkillNameLabel" type="Label" parent="Margin/Content/SkillDescriptionContent"]
@@ -65,7 +65,7 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 20
 horizontal_alignment = 1
 vertical_alignment = 1
-autowrap_mode = 2
+autowrap_mode = 3
 mouse_filter = 2
 
 [node name="InputButton" type="Button" parent="."]
