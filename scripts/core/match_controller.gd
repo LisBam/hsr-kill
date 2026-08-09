@@ -7480,6 +7480,10 @@ func skip_current_main_phase(player_id: int, phase_name: String, reason: String 
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
 		return false
+	# 当前阶段 Begin 时机；阶段开始技能完成选择后决定跳过时，必须终止其尚未询问的同层处理器，防止旧时机跨越阶段边界恢复。
+	var phase_begin_timing_name: String = RuleTimingCatalog.get_main_phase_timing_name(phase_name, "Begin")
+	if trigger_manager != null and not phase_begin_timing_name.is_empty():
+		trigger_manager.cancel_matching_dispatches(phase_begin_timing_name, player_id, "phase_skipped")
 	player.skipped_phases[phase_name] = true
 	add_log("%s跳过%s。" % [format_player_state_log_name(player), {"judgment":"判定阶段", "draw":"摸牌阶段", "play":"出牌阶段", "discard":"弃牌阶段"}.get(phase_name, phase_name)])
 	match phase_name:

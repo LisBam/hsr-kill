@@ -16,6 +16,9 @@ var _handlers: Dictionary = {}
 ## 数组尾部是最内层时机，确保嵌套触发完成后再恢复外层座次询问。
 var _deferred_dispatches: Array[Dictionary] = []
 
+## 当前同步调用栈内正在派发的规则事件；用于流程边界立即终止尚未返回的旧时机，不承担事件排序或玩法状态职责。
+var _active_dispatch_events: Array[RuleEvent] = []
+
 
 ## 注册一个触发器。role 可取 player、source、target、global；first_do/last_do 控制分组顺序。
 func subscribe(event_name: String, owner: Object, callback: Callable, priority: int = 0, owner_player_id: int = -1, role: String = "global", first_do: bool = false, last_do: bool = false, condition: Callable = Callable()) -> int:
@@ -90,8 +93,33 @@ func arrange(event_name: String, start_player_id: int, seat_order: Array[int], e
 ## 执行已经排列的触发器；每个回调前重新检查 condition，支持前一项修改事件后停止后续触发。
 func dispatch(event: RuleEvent, start_player_id: int, seat_order: Array[int], pause_condition: Callable = Callable()) -> RuleEvent:
 	var arranged: Array[Dictionary] = arrange(event.name, start_player_id, seat_order, event)
+	_active_dispatch_events.append(event)
 	_dispatch_arranged(event, arranged, 0, pause_condition)
+	_active_dispatch_events.erase(event)
 	return event
+
+
+## 取消所有符合名称与角色的活动或暂停派发；用于阶段跳过等流程边界使旧时机立即失效，返回实际终止的唯一事件数量。
+func cancel_matching_dispatches(event_name: String, player_id: int = -1, reason: String = "cancelled") -> int:
+	# 已取消事件集合；同一事件会同时短暂存在于活动栈和暂停续列时，只统计并取消一次。
+	var cancelled_events: Array[RuleEvent] = []
+	for active_event: RuleEvent in _active_dispatch_events:
+		if active_event == null or active_event.is_terminal() or active_event.name != event_name:
+			continue
+		if player_id >= 0 and active_event.player_id != player_id:
+			continue
+		active_event.cancel(reason)
+		cancelled_events.append(active_event)
+	for deferred_dispatch: Dictionary in _deferred_dispatches:
+		# 暂停续列持有的原事件；事件终止后恢复器会安全丢弃其剩余处理器，不再创建过期选择。
+		var deferred_event: RuleEvent = deferred_dispatch.get("event") as RuleEvent
+		if deferred_event == null or deferred_event.is_terminal() or cancelled_events.has(deferred_event) or deferred_event.name != event_name:
+			continue
+		if player_id >= 0 and deferred_event.player_id != player_id:
+			continue
+		deferred_event.cancel(reason)
+		cancelled_events.append(deferred_event)
+	return cancelled_events.size()
 
 
 ## 从指定索引继续执行一组已排序触发器；某一触发器创建选择请求后保存后续项，避免后续技能被单一选择窗口静默吞掉。
