@@ -91,6 +91,14 @@ const ACTIVE_ENTRIES: Array[String] = ["phaseUse", "chooseToUse", "chooseToRespo
 ## 主要阶段的稳定内部名称；技能按此集合识别判定、摸牌、出牌与弃牌阶段，避免重复维护字符串白名单。
 const MAIN_PHASES: Array[String] = ["judgment", "draw", "play", "discard"]
 
+## 主要阶段内部名称到标准时机前缀的唯一映射；阶段流程、跳过逻辑与内容脚本不得分别拼写另一份同义表。
+const MAIN_PHASE_TIMING_PREFIXES: Dictionary = {
+	"judgment": "phaseJudge",
+	"draw": "phaseDraw",
+	"play": "phaseUse",
+	"discard": "phaseDiscard",
+}
+
 
 ## 返回全部标准监听时机的新数组；调用方修改返回值不会污染静态目录。
 static func get_all_timing_names() -> Array[String]:
@@ -122,3 +130,12 @@ static func has_active_entry(entry_name: String) -> bool:
 ## 判断内部阶段名是否属于主要阶段；空值、准备阶段与结束阶段均返回 false。
 static func is_main_phase(phase_name: String) -> bool:
 	return MAIN_PHASES.has(phase_name)
+
+
+## 返回主要阶段指定生命周期节点的标准时机名；未知阶段返回空字符串，suffix 通常为 Before、Begin、End、After 或 Skipped。
+static func get_main_phase_timing_name(phase_name: String, suffix: String) -> String:
+	# 当前阶段对应的稳定前缀；空值表示调用方传入了非主要阶段，不能构造伪时机。
+	var timing_prefix: String = str(MAIN_PHASE_TIMING_PREFIXES.get(phase_name, ""))
+	if timing_prefix.is_empty():
+		return ""
+	return "%s%s" % [timing_prefix, suffix]

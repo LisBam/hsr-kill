@@ -20,7 +20,7 @@ func _ready() -> void:
 	call_deferred("_run")
 
 
-## 依次验证跳过摸牌、跳过出牌、翻面跳回合和救援取消四条阶段恢复路径。
+## 依次验证跳过摸牌、跳过出牌、翻面跳回合、救援取消和阶段开始技能跳过后的旧时机失效路径。
 func _run() -> void:
 	_create_controller()
 	_test_skip_draw_after_deferred_negation()
@@ -33,6 +33,9 @@ func _run() -> void:
 	if _finished:
 		return
 	await _test_dying_cancel_progression()
+	if _finished:
+		return
+	_test_xianzou_skip_invalidates_feiyang_prompt()
 	if _finished:
 		return
 	# 失效 AI 任务令牌；让各场景已创建的短计时器自然结束后再释放控制器，避免测试退出时残留对象。
@@ -221,6 +224,60 @@ func _test_dying_cancel_progression() -> void:
 		_fail("dying_cancel_resume alive=%s current=%d phase=%s" % [game_state.players[0].alive, game_state.current_player_id, game_state.current_phase])
 
 
+## 验证弦奏跳过判定阶段后终止原 phaseJudgeBegin 续列，斗地主地主的飞扬不会越过阶段边界继续询问。
+func _test_xianzou_skip_invalidates_feiyang_prompt() -> void:
+	# 本场状态；0号玩家同时拥有武将技能弦奏与斗地主地主模式技能飞扬。
+	var game_state: GameState = _install_state()
+	# 弦奏重铸材料；梅花首次在本轮使用，满足判定阶段发动条件。
+	var recast_card: CardInstance = _add_card(game_state.players[0], "sha", "club", 6, "hand")
+	# 第一张保留手牌；与下一张共同满足飞扬原本的两张手牌费用条件，确保测试能识别错误询问。
+	_add_card(game_state.players[0], "shan", "heart", 7, "hand")
+	# 第二张保留手牌；弦奏重铸后玩家仍至少有两张手牌，飞扬条件不会因费用不足而自然消失。
+	_add_card(game_state.players[0], "tao", "spade", 8, "hand")
+	# 判定区延时锦囊；跳过判定后必须原样保留，使飞扬条件不会因判定区为空而自然消失。
+	var delayed_card: CardInstance = _add_card(game_state.players[0], "lebu", "diamond", 9, "judgment")
+	# 重铸补牌；保证弦奏完整完成实体移动与固定摸一张流程。
+	_add_draw_card(game_state, "sha", "diamond", 10)
+	# 正常摸牌阶段的第一张牌；取消摸牌阶段弦奏后应进入0号玩家手牌。
+	_add_draw_card(game_state, "shan", "club", 11)
+	# 正常摸牌阶段的第二张牌；与前一张共同保证阶段主体可以完成固定摸二张。
+	_add_draw_card(game_state, "tao", "heart", 12)
+	# 弦奏运行时实例；先安装以复现武将技能早于模式技能登记的正式顺序。
+	var xianzou: SkillDefinition = _install_runtime_skill(0, "xianzou")
+	# 飞扬运行时实例；后安装以保证它成为暂停的 phaseJudgeBegin 中尚未执行的下一处理器。
+	var feiyang: SkillDefinition = _install_runtime_skill(0, "feiyang")
+	if xianzou == null or feiyang == null:
+		_fail("xianzou_feiyang_skill_missing")
+		return
+	_controller._start_turn(0)
+	# 判定阶段首个询问必须属于弦奏；选择重铸后由通用跳过端口终止本次Begin事件。
+	var judgment_xianzou_request: Dictionary = _local_choice_request.duplicate(true)
+	var judgment_xianzou_context: Dictionary = judgment_xianzou_request.get("context", {}) as Dictionary
+	if str(judgment_xianzou_context.get("kind", "")) != "xianzou_recast" or str(judgment_xianzou_context.get("phase_name", "")) != "judgment":
+		_fail("xianzou_judgment_prompt=%s" % [judgment_xianzou_context])
+		return
+	if not _submit_local_choice(judgment_xianzou_request, [recast_card.uid], true):
+		return
+	# 跳过后的下一项合法询问属于摸牌阶段弦奏；若出现飞扬，说明旧判定Begin续列越过了阶段边界。
+	var draw_xianzou_request: Dictionary = _local_choice_request.duplicate(true)
+	var draw_xianzou_context: Dictionary = draw_xianzou_request.get("context", {}) as Dictionary
+	if str(draw_xianzou_context.get("kind", "")) != "xianzou_recast" or str(draw_xianzou_context.get("phase_name", "")) != "draw":
+		_fail("stale_judgment_prompt_after_skip=%s" % [draw_xianzou_context])
+		return
+	if not _submit_local_choice(draw_xianzou_request, [], false):
+		return
+	# 摸牌阶段完成后应进入出牌阶段弦奏询问；取消后才建立正常chooseToUse窗口。
+	var play_xianzou_request: Dictionary = _local_choice_request.duplicate(true)
+	var play_xianzou_context: Dictionary = play_xianzou_request.get("context", {}) as Dictionary
+	if str(play_xianzou_context.get("kind", "")) != "xianzou_recast" or str(play_xianzou_context.get("phase_name", "")) != "play":
+		_fail("xianzou_play_prompt=%s" % [play_xianzou_context])
+		return
+	if not _submit_local_choice(play_xianzou_request, [], false):
+		return
+	if game_state.current_phase != "play" or _controller.has_pending_card_choice() or not _controller._has_active_play_choice() or not bool(game_state.players[0].skipped_phases.get("judgment", false)) or not game_state.players[0].judgment_area.has(delayed_card):
+		_fail("xianzou_skip_flow_stalled phase=%s pending=%s skipped=%s" % [game_state.current_phase, _controller.has_pending_card_choice(), game_state.players[0].skipped_phases])
+
+
 ## 向指定玩家区域加入一张实体牌；测试只使用 hand 与 judgment 两种公开稳定区域。
 func _add_card(player: PlayerState, definition_id: String, suit: String, rank: int, zone: String) -> CardInstance:
 	# 新实体牌；所有权与区域在加入数组前完整写入，避免选择候选读取到默认牌堆状态。
@@ -253,6 +310,32 @@ func _submit_local_cancel(choice_request: Dictionary) -> bool:
 		return true
 	_fail("cancel_rejected request=%d" % int(choice_request.get("request_id", -1)))
 	return false
+
+
+## 提交当前本地请求的显式选择结果；测试用卡牌UID与确认状态完整复用正式统一动作协议。
+func _submit_local_choice(choice_request: Dictionary, selected_card_uids: Array[int], confirmed: bool) -> bool:
+	# 标准选择动作；请求ID来自捕获的权威快照，不能使用后续窗口覆盖后的编号。
+	var action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	action.payload = {"request_id":int(choice_request.get("request_id", -1)), "selected_card_uids":selected_card_uids.duplicate(), "confirmed":confirmed}
+	if _controller.submit_action(action):
+		return true
+	_fail("choice_rejected request=%d" % int(choice_request.get("request_id", -1)))
+	return false
+
+
+## 为指定玩家安装一个真实技能实例；触发订阅与正式对局保持一致，便于复现武将技能和模式技能的登记顺序。
+func _install_runtime_skill(player_id: int, skill_id: String) -> SkillDefinition:
+	# 新技能实例；自动目录缺失时返回null并由调用场景输出稳定失败标签。
+	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+	if skill == null:
+		return null
+	skill.bind(_controller, player_id)
+	# 玩家当前技能表；同一角色可按正式安装顺序追加武将技能和模式技能。
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(player_id, {}) as Dictionary
+	player_skills[skill_id] = skill
+	_controller.skill_instances_by_player[player_id] = player_skills
+	skill.install()
+	return skill
 
 
 ## 捕获属于0号本地玩家的统一选择请求；AI 请求不会覆盖等待断言的本地上下文。

@@ -35,6 +35,8 @@ func _ready() -> void:
 		return
 	if not _test_trigger_order():
 		return
+	if not _test_cancel_superseded_trigger_dispatch():
+		return
 	if not _test_nested_trigger_resume_order():
 		return
 	if not _test_rule_continuation_stack():
@@ -271,6 +273,49 @@ func _test_trigger_order() -> bool:
 	manager.dispatch(RuleEvent.new("damage"), 1, [0, 1, 2])
 	if order != ["first", "normal-seat1", "normal-seat0", "last"]:
 		return _fail("trigger_order=%s" % [order])
+	return true
+
+
+## 验证流程边界可以终止已暂停的旧时机，使剩余处理器不会在新阶段中恢复执行。
+func _test_cancel_superseded_trigger_dispatch() -> bool:
+	# 独立触发器管理器；本用例只验证事件失效边界，不依赖对局控制器状态。
+	var manager: TriggerManager = TriggerManager.new()
+	# 是否暂停当前派发；首个处理器执行后模拟可选技能建立等待窗口。
+	var paused: Array[bool] = [false]
+	# 实际执行顺序；被取消的第二处理器不得写入本数组。
+	var order: Array[String] = []
+	manager.subscribe("phaseJudgeBegin", self, func(_event: RuleEvent) -> void:
+		order.append("xianzou")
+		paused[0] = true
+	)
+	manager.subscribe("phaseJudgeBegin", self, func(_event: RuleEvent) -> void: order.append("feiyang"))
+	# 判定阶段开始事件；player_id为0，用于验证角色范围不会误取消其他角色的同名时机。
+	var phase_event: RuleEvent = RuleEvent.new("phaseJudgeBegin", 0, 0, {}, 0)
+	manager.dispatch(phase_event, 0, [0], func() -> bool: return paused[0])
+	if order != ["xianzou"] or not manager.has_deferred_dispatches():
+		return _fail("superseded_trigger_not_paused=%s" % [order])
+	if manager.cancel_matching_dispatches("phaseJudgeBegin", 0, "phase_skipped") != 1 or phase_event.termination_reason != "phase_skipped":
+		return _fail("superseded_trigger_not_cancelled")
+	paused[0] = false
+	manager.resume_deferred(func() -> bool: return paused[0])
+	if order != ["xianzou"] or manager.has_deferred_dispatches():
+		return _fail("superseded_trigger_resumed=%s" % [order])
+	# 同步活动事件管理器；用于覆盖无需选择、直接在Begin回调内跳过阶段的锁定效果路径。
+	var active_manager: TriggerManager = TriggerManager.new()
+	# 同步活动事件执行顺序；首个回调终止事件后第二处理器不得执行。
+	var active_order: Array[String] = []
+	# 核心边界返回的取消数量；同一活动事件必须只计数一次。
+	var active_cancelled_count: Array[int] = [0]
+	active_manager.subscribe("phaseDrawBegin", self, func(_event: RuleEvent) -> void:
+		active_order.append("skip")
+		active_cancelled_count[0] = active_manager.cancel_matching_dispatches("phaseDrawBegin", 0, "phase_skipped")
+	)
+	active_manager.subscribe("phaseDrawBegin", self, func(_event: RuleEvent) -> void: active_order.append("stale"))
+	# 同步摸牌阶段开始事件；不创建暂停请求，完全依赖活动派发栈完成失效。
+	var active_phase_event: RuleEvent = RuleEvent.new("phaseDrawBegin", 0, 0, {}, 0)
+	active_manager.dispatch(active_phase_event, 0, [0])
+	if active_order != ["skip"] or active_cancelled_count[0] != 1 or active_phase_event.termination_reason != "phase_skipped":
+		return _fail("active_superseded_trigger=%s count=%d" % [active_order, active_cancelled_count[0]])
 	return true
 
 

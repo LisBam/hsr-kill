@@ -41,7 +41,7 @@ func _run() -> void:
 	match_controller.randomize_local_human_seat = false
 	match_controller.ai_action_delay_seconds = TEST_AI_DELAY_SECONDS
 	# 主菜单启动边界不会自动创建对局；测试通过公开入口显式开始两人纯AI身份局。
-	if not match_controller.start_match(2, 19):
+	if not match_controller.start_match(2, 19, IdentityRules.MODE_IDENTITY):
 		_fail("start_ai_match")
 		return
 	# 等待纯 AI 完成选将并进入首个出牌阶段；上限只防御场景初始化异常，不依赖真实对局时长。

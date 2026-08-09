@@ -57,11 +57,11 @@ func _init(event_name: String = "", source: int = -1, target: int = -1, context:
 	data = context.duplicate(true)
 
 
-## 将事件标记为取消；高优先级处理器可阻止后续默认结算。
-func cancel() -> void:
+## 将事件标记为取消；高优先级处理器或流程边界可阻止后续默认结算，并写入稳定原因供诊断与回放使用。
+func cancel(reason: String = "cancelled") -> void:
 	cancelled = true
 	status = Status.CANCELLED
-	termination_reason = "cancelled"
+	termination_reason = reason
 
 
 ## 正常结束事件；不改变取消标记，兼容旧回调只读取 cancelled 的行为。
