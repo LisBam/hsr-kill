@@ -1,8 +1,8 @@
 extends Node
 
 ## 联机过关斩将（多玩家协作）专项回归测试。
-## 验证交替座次与身份、真人座位映射规则、逐玩家难度机缘与复活次数、投票/各自两种机缘选择、
-## 关卡奖励写入全体敌人、部分玩家阵亡不终局与全体玩家阵亡终局。
+## 验证交替座次与身份、真人座位映射规则、逐玩家难度机缘与复活次数、并行投票/各自两种机缘选择、
+## 全体敌方阵亡才推进关卡、关卡奖励写入全体敌人、部分玩家阵亡不终局与全体玩家阵亡终局。
 ## 本测试以离线权威控制器直接创建4角色（2玩家+2敌人）对局，网络传输层由既有LAN测试覆盖。
 
 ## 权威控制器；复用正式对局组件树验证多人选将、机缘投票、死亡与换将协作。
@@ -54,7 +54,7 @@ func _run() -> void:
 		_restore_settings()
 		return
 	_restore_settings()
-	print("CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+vote+individual+shared_enemy_awards+partial_death+next_level_revival+team_defeat")
+	print("CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+simultaneous_vote+vote_reveal+individual+all_enemies_level_clear+shared_enemy_awards+partial_death+next_level_revival+team_defeat")
 	get_tree().quit(0)
 
 
@@ -110,6 +110,15 @@ func _test_multi_participant_service() -> bool:
 		return _fail("per_player_difficulty_opportunities")
 	if service.get_player_revives_remaining(0) != 1 or service.get_player_revives_remaining(2) != 1:
 		return _fail("per_player_revives_initial")
+	# 本层完成条件；任一敌人仍存活时都不能清层，只有两名敌人全部标记阵亡后结果才为true。
+	players[1].alive = false
+	if service.is_current_level_cleared():
+		return _fail("single_enemy_defeat_must_not_clear_level")
+	players[3].alive = false
+	if not service.is_current_level_cleared():
+		return _fail("all_enemies_defeated_must_clear_level")
+	players[1].alive = true
+	players[3].alive = true
 	# 消耗玩家2的复活；玩家0的独立次数不得受影响，重复消耗同一玩家必须失败。
 	if not service.consume_player_revive(2) or service.get_player_revives_remaining(2) != 0 or service.get_player_revives_remaining(0) != 1 or service.consume_player_revive(2):
 		return _fail("per_player_revive_consume")
@@ -158,8 +167,10 @@ func _test_vote_match_flow() -> bool:
 		if str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
 			break
 		await get_tree().process_frame
-	# 开局机缘投票状态；两名玩家共同参与，投票标志公开且敌人不在参与名单中。
-	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or not bool(_controller.state.opportunity_state.get("vote_mode", false)) or _controller.state.opportunity_state.get("participant_ids", []) != [0, 2]:
+	# 并行投票专项把第二名玩家暂时从内置AI改为直接测试提交者；选将已经完成，后续每次投票均由辅助函数同时驱动两名参与者。
+	_controller.ai_coordinator.unregister_ai(2)
+	# 开局机缘投票状态；两名玩家同时拥有提交资格，不存在单一current_chooser_id，敌人不在参与名单中。
+	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or not bool(_controller.state.opportunity_state.get("vote_mode", false)) or _controller.state.opportunity_state.get("participant_ids", []) != [0, 2] or _controller.state.opportunity_state.get("pending_chooser_ids", []) != [0, 2] or int(_controller.state.opportunity_state.get("current_chooser_id", -2)) != -1:
 		return _fail("vote_initial_opportunity state=%s" % [_controller.state.opportunity_state])
 	# 四名武将互不重复；敌方候选生成必须排除全部玩家已确认武将。
 	var used_character_ids: Array[String] = []
@@ -184,20 +195,25 @@ func _test_vote_match_flow() -> bool:
 		return _fail("vote_shared_winner one=%s two=%s" % [vote_player_one.acquired_opportunity_ids, vote_player_two.acquired_opportunity_ids])
 	if _controller.state.current_player_id != 0:
 		return _fail("vote_first_turn")
-	# 玩家回合中击败敌人1；关卡提升后新增机缘必须同时写入两名敌人的公开历史。
+	# 玩家回合中先击败敌人1；仍有敌人2存活时关卡、机缘与换将均不得发生。
 	var first_enemy: PlayerState = _controller.state.get_player(1)
 	var second_enemy: PlayerState = _controller.state.get_player(3)
 	first_enemy.hp = 0
 	_controller._resolve_death(first_enemy.player_id, 0)
+	if _controller.conquest_mode.get_level() != 1 or first_enemy.alive or not second_enemy.alive or not _controller.state.opportunity_state.is_empty():
+		return _fail("single_enemy_defeat_advanced level=%d first_alive=%s second_alive=%s opportunity=%s" % [_controller.conquest_mode.get_level(), str(first_enemy.alive), str(second_enemy.alive), str(_controller.state.opportunity_state)])
+	# 本层最后一名敌人阵亡后才建立一次层结算；下一层必须整组换将并只发起一次全体机缘。
+	second_enemy.hp = 0
+	_controller._resolve_death(second_enemy.player_id, 0)
 	if not await _wait_for_stage_choosing():
 		return _fail("vote_replacement_opportunity_delay")
 	if _controller.conquest_mode.get_level() != 2 or not bool(_controller.state.opportunity_state.get("vote_mode", false)):
 		return _fail("vote_replacement_level")
-	# 全体敌人共享关卡奖励；第2关灰色初始手牌机缘必须同时出现在阵亡换将敌人与在场敌人的历史中。
+	# 全体敌人共享关卡奖励；第2关灰色初始手牌机缘必须同时出现在两名重新入场敌人的历史中。
 	if not first_enemy.acquired_opportunity_ids.has("gray_initial_hand_one") or not second_enemy.acquired_opportunity_ids.has("gray_initial_hand_one"):
 		return _fail("vote_shared_enemy_awards first=%s second=%s" % [first_enemy.acquired_opportunity_ids, second_enemy.acquired_opportunity_ids])
-	if not first_enemy.alive or first_enemy.character_id.is_empty():
-		return _fail("vote_enemy_replaced")
+	if not first_enemy.alive or not second_enemy.alive or first_enemy.character_id.is_empty() or second_enemy.character_id.is_empty() or first_enemy.character_id == second_enemy.character_id:
+		return _fail("vote_enemy_group_replaced first=%s second=%s" % [first_enemy.character_id, second_enemy.character_id])
 	if not await _submit_vote_and_wait([0, 2], "green_draw_two"):
 		return false
 	if _controller.state.current_player_id != 0:
@@ -214,9 +230,13 @@ func _test_vote_match_flow() -> bool:
 	_controller._resolve_death(doomed_player.player_id, 1)
 	if doomed_player.alive or _controller.state.game_over:
 		return _fail("vote_partial_death_continues")
-	# 再次击败敌人1推进到第3关；阵亡的玩家2必须在新一关开始时复活并回到游戏初始状态。
+	# 下一层仍需依次击败两名敌人；首名退场时保持第2关，末名退场后才进入第3关并复活玩家2。
 	first_enemy.hp = 0
 	_controller._resolve_death(first_enemy.player_id, 0)
+	if _controller.conquest_mode.get_level() != 2 or first_enemy.alive or not second_enemy.alive:
+		return _fail("second_level_partial_clear")
+	second_enemy.hp = 0
+	_controller._resolve_death(second_enemy.player_id, 0)
 	if not await _wait_for_stage_choosing():
 		return _fail("revival_level_opportunity_delay")
 	if _controller.conquest_mode.get_level() != 3:
@@ -279,8 +299,7 @@ func _test_individual_match_flow() -> bool:
 	return true
 
 
-## 把当前机缘候选固定为三张无目标摸牌卡（全体参与者共用同一覆盖）并提交真人一票，随后等待流程完全结束。
-## 投票模式下AI会在真人提交后立即投出自己的一票；各自选择模式下AI独立选择自己的候选。
+## 把当前机缘候选固定为三张无目标摸牌卡并完成当前选择流程；投票模式分别提交两名并行参与者并校验公开结果，各自选择保持逐人处理。
 func _submit_vote_and_wait(participant_ids: Array[int], human_card_id: String) -> bool:
 	if _controller == null or _controller.state == null or str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
 		return _fail("vote_submit_not_choosing")
@@ -295,12 +314,32 @@ func _submit_vote_and_wait(participant_ids: Array[int], human_card_id: String) -
 	for participant_id: int in participant_ids:
 		overridden_options[str(participant_id)] = [draw_two.duplicate(true), draw_three.duplicate(true), draw_five.duplicate(true)]
 	_controller.state.opportunity_state["options_by_player"] = overridden_options
-	# 真人投票动作；生产路径仅携带稳定机缘ID，具体定义仍由权威目录重新获取。
+	# 真人选择动作；生产路径仅携带稳定机缘ID，具体定义仍由权威目录重新获取。
 	var action: PlayerAction = PlayerAction.new("choose_opportunity", participant_ids[0])
 	action.payload = {"card_id":human_card_id}
 	if not _controller.submit_action(action):
 		return _fail("vote_submit_rejected")
-	for _frame_index: int in range(48):
+	if bool(_controller.state.opportunity_state.get("vote_mode", false)):
+		# 首票提交后第二名仍在同一选择阶段独立可投；不存在把第二人的资格切换为current_chooser_id的串行步骤。
+		if str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or _controller.state.opportunity_state.get("pending_chooser_ids", []) != [participant_ids[1]] or int(_controller.state.opportunity_state.get("current_chooser_id", -2)) != -1:
+			return _fail("vote_not_simultaneous_after_first state=%s" % [_controller.state.opportunity_state])
+		# 第二名参与者的权威选票；测试直接调用组件以避开该座位的内置AI来源门控，候选与重复提交校验仍走正式入口。
+		if not _controller.opportunity_system.submit_choice(participant_ids[1], "purple_draw_five"):
+			return _fail("vote_second_parallel_submit")
+		# 投票收齐后的公开阶段；所有观察者均能看到逐玩家票面与当选牌，而选择阶段从未公开具体票面。
+		if str(_controller.state.opportunity_state.get("stage", "")) != "revealing":
+			return _fail("vote_reveal_stage state=%s" % [_controller.state.opportunity_state])
+		# 公开投票结果；两名玩家各一票，映射顺序与参与名单保持一致。
+		var revealed_votes: Array = _controller.state.opportunity_state.get("revealed_votes", []) as Array
+		if revealed_votes.size() != 2 or int((revealed_votes[0] as Dictionary).get("player_id", -1)) != participant_ids[0] or str((revealed_votes[0] as Dictionary).get("card_id", "")) != human_card_id or int((revealed_votes[1] as Dictionary).get("player_id", -1)) != participant_ids[1] or str((revealed_votes[1] as Dictionary).get("card_id", "")) != "purple_draw_five":
+			return _fail("vote_reveal_mapping=%s" % [revealed_votes])
+		# 两名不同观察者的公开快照；候选仍按观察者裁剪，但revealed_votes必须完整且一致。
+		var first_viewer_opportunity: Dictionary = (_controller.state.to_dict(participant_ids[0], false).get("opportunity_state", {}) as Dictionary)
+		# 第二名观察者公开机缘快照；用于验证局域网各客户端接收同一公布结果。
+		var second_viewer_opportunity: Dictionary = (_controller.state.to_dict(participant_ids[1], false).get("opportunity_state", {}) as Dictionary)
+		if first_viewer_opportunity.get("revealed_votes", []) != revealed_votes or second_viewer_opportunity.get("revealed_votes", []) != revealed_votes:
+			return _fail("vote_reveal_not_public")
+	for _frame_index: int in range(180):
 		if _controller.state.opportunity_state.is_empty():
 			return true
 		await get_tree().process_frame
@@ -346,6 +385,8 @@ func _create_controller() -> void:
 	_controller.game_flow_interval_seconds = 0.0
 	_controller.conquest_enemy_replacement_opportunity_delay_seconds = 0.05
 	_controller.ai_action_delay_seconds = 0.0
+	# 投票结果公开等待；0.05秒足以让专项读取revealing快照，同时避免正式默认2秒拖慢无头回归。
+	_controller.opportunity_system.vote_reveal_duration_seconds = 0.05
 
 
 ## 恢复本测试修改的全局开局设置，保证其他无头测试与手动开局读取用户原有值。

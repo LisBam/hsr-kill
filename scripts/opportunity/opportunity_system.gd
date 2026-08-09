@@ -21,6 +21,9 @@ extends Node
 ## 红卡抽取权重；需求未给出第五项数值，默认补全为10并暴露在检查器中供主公直接调整。
 @export_range(0, 1000, 1) var red_weight: int = 10
 
+## 全体投票收齐后公开每名玩家票面与当选机缘的展示秒数；默认2秒，设为0可供无头测试跳过表现等待，运行时通常无需动态修改。
+@export_range(0.0, 10.0, 0.1) var vote_reveal_duration_seconds: float = 2.0
+
 ## 机缘刷新时各品质可提升到的下一档稳定ID；灰色对应需求中的白色，红色已经是最高品质因此没有下一档。
 const REFRESH_UPGRADE_QUALITY_BY_QUALITY: Dictionary = {"gray":"green", "green":"blue", "blue":"purple", "purple":"orange", "orange":"red"}
 
@@ -42,7 +45,7 @@ var _effect_resolver: OpportunityEffectResolver = OpportunityEffectResolver.new(
 ## 当前组件是否对本局启用；模式或测试可在开局时配置，禁用后所有钩子均无副作用。
 var _enabled: bool = false
 
-## 当前模式是否允许在普通回合开始与轮末自动触发全体机缘；过关斩将只使用明确时机的单人机缘，因此保持false。
+## 当前模式是否允许在普通回合开始与轮末自动触发全体机缘；过关斩将只使用明确的开局与层完成时机，因此保持false。
 var _automatic_triggers_enabled: bool = false
 
 ## 当前已经初始化概率状态的轮数；默认-1，进入新轮时更新并重置本轮触发标记。
@@ -80,6 +83,12 @@ var _next_effect_retry_scheduled: bool = false
 
 ## 当前流程是否为“投票选择”模式；true时全体参与者共享同一组候选，全部提交后按票数决出唯一当选机缘。
 var _vote_mode: bool = false
+
+## 当前投票流程是否已经登记延迟提交内置AI选票的帧回调；防止多名玩家连续提交时重复安排同一批AI决策。
+var _simultaneous_ai_vote_submission_scheduled: bool = false
+
+## 当前投票公开阶段的生命周期代号；新流程与关闭组件都会递增，使旧计时器回调不能推进已经失效的机缘状态。
+var _vote_reveal_generation: int = 0
 
 ## 机缘流程完成后的恢复类型；turn_start恢复回合开始游标，round_end恢复轮末到下一回合的阶段切换。
 var _resume_kind: String = ""
@@ -131,6 +140,8 @@ func shutdown() -> void:
 	_current_effect_waiting_for_barrier = false
 	_next_effect_retry_scheduled = false
 	_vote_mode = false
+	_simultaneous_ai_vote_submission_scheduled = false
+	_vote_reveal_generation += 1
 	_resume_kind = ""
 	_resume_context.clear()
 	_resume_phase = ""
@@ -202,7 +213,7 @@ func force_trigger_for_players(trigger_player_id: int, participant_ids: Array[in
 	return true
 
 
-## 按明确名单以“投票选择”触发机缘：全体参与者共享同一组三张候选，逐人投出一票。
+## 按明确名单以“投票选择”触发机缘：全体参与者共享同一组三张候选并同时获得投票资格，各自独立提交一票。
 ## 全部提交后取票数最高的机缘，平票时在同票机缘中随机；当选机缘写入每名存活参与者的公开历史并逐人结算。
 ## 单一参与者时投票结果必然是本人所投机缘，行为与各自选择完全一致。
 func force_trigger_vote_for_players(trigger_player_id: int, participant_ids: Array[int], resume_kind: String = "manual", resume_context: Dictionary = {}) -> bool:
@@ -229,11 +240,15 @@ func _filter_alive_participant_ids(participant_ids: Array[int]) -> Array[int]:
 	return result
 
 
-## 接受玩家、局域网客户端或回放提交的机缘卡ID；只有当前选择者自己的三张候选可以通过。
+## 接受玩家、局域网客户端或回放提交的机缘卡ID；各自选择只接受当前选择者，投票选择接受任一尚未投票的参与者。
 func submit_choice(player_id: int, card_id: String) -> bool:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
 		return false
-	if player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
+	if _vote_mode:
+		# 投票待提交集合；所有名单内玩家可并行提交，已经投过票的玩家会因不在集合中而被拒绝重复投票。
+		if not _selection_queue.has(player_id):
+			return false
+	elif player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
 		return false
 	# 当前角色私有候选；字符串键是权威状态的稳定形式，兼容JSON网络序列化。
 	var options_by_player: Dictionary = _state.opportunity_state.get("options_by_player", {}) as Dictionary
@@ -250,16 +265,20 @@ func submit_choice(player_id: int, card_id: String) -> bool:
 	if selected_card.is_empty():
 		return false
 	_record_player_choice(player_id, selected_card)
+	if _vote_mode:
+		_selection_queue.erase(player_id)
 	_advance_selection_queue()
 	return true
 
 
-## 为被托管、断线接管或停滞修复的玩家代选机缘卡；仅当组件活动、处于全体选择阶段且该玩家正是当前选择者时生效。
-## 代选复用与内置AI完全相同的估值入口，并经由submit_choice权威校验推进队列，不形成绕过校验的第二条写路径。
+## 为被托管、断线接管或停滞修复的玩家代选机缘卡；各自选择要求目标为当前选择者，投票选择允许任一尚未提交的目标独立代选。
+## 代选复用与内置AI完全相同的估值入口，并经由submit_choice权威校验推进状态，不形成绕过校验的第二条写路径。
 func choose_for_managed_player(player_id: int) -> bool:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
 		return false
-	if player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
+	if _vote_mode and not _selection_queue.has(player_id):
+		return false
+	if not _vote_mode and player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
 		return false
 	# 该玩家私有候选；估值与提交都只使用权威状态中的候选，不信任任何外部传入卡面。
 	var managed_player_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(player_id), []) as Array
@@ -417,6 +436,8 @@ func grant_random_unowned_opportunities(player_id: int, quality_id: String, requ
 func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, resume_context: Dictionary, requested_participant_ids: Array[int] = [], vote_mode: bool = false) -> void:
 	_triggered_this_round = true
 	_vote_mode = vote_mode
+	_simultaneous_ai_vote_submission_scheduled = false
+	_vote_reveal_generation += 1
 	_resume_kind = resume_kind
 	_resume_context = resume_context.duplicate(true)
 	_resume_phase = _state.current_phase
@@ -462,6 +483,7 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 		"vote_mode":vote_mode,
 		"participant_ids":participant_ids.duplicate(),
 		"chosen_player_ids":[],
+		"pending_chooser_ids":participant_ids.duplicate(),
 		"current_chooser_id":-1,
 		"current_resolver_id":-1,
 		"options_by_player":options_by_player,
@@ -475,8 +497,11 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 	_advance_selection_queue()
 
 
-## 推进全体选择队列；AI直接按机缘估值选牌，遇到真人或远端玩家时广播私有候选并等待动作。
+## 推进全体选择状态；投票模式同时开放所有未提交参与者并延迟驱动AI，各自选择模式继续按逆时针队列逐人处理。
 func _advance_selection_queue() -> void:
+	if _vote_mode:
+		_advance_simultaneous_vote_selection()
+		return
 	while not _selection_queue.is_empty():
 		# 当前选择者；队首顺序仅影响交互展示，效果仍要等全部选择完成后统一逆时针结算。
 		var chooser_id: int = _selection_queue.pop_front()
@@ -485,6 +510,7 @@ func _advance_selection_queue() -> void:
 		if chooser == null or not chooser.alive:
 			continue
 		_state.opportunity_state["current_chooser_id"] = chooser_id
+		_state.opportunity_state["pending_chooser_ids"] = [chooser_id]
 		# 离线控制全部角色时先切换权威操作者；该轻量入口不会广播完整快照，真正需要人类选择时再统一刷新。
 		_host.prepare_opportunity_chooser(chooser_id)
 		if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(chooser_id):
@@ -503,6 +529,59 @@ func _advance_selection_queue() -> void:
 	_finish_all_choices()
 
 
+## 同步公开全部尚未投票的参与者并在下一帧独立提交AI选票；真人之间不存在当前选择者或先后解锁关系。
+func _advance_simultaneous_vote_selection() -> void:
+	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
+		return
+	# 当前仍合法的待投玩家；流程暂停期间通常不会死亡，仍在此移除异常失效参与者以避免永久等待。
+	var pending_voter_ids: Array[int] = []
+	for pending_player_id: int in _selection_queue:
+		# 当前待投玩家状态；死亡或缺失角色不再保留投票资格。
+		var pending_player: PlayerState = _state.get_player(pending_player_id)
+		if pending_player != null and pending_player.alive:
+			pending_voter_ids.append(pending_player_id)
+	_selection_queue = pending_voter_ids
+	_state.opportunity_state["current_chooser_id"] = -1
+	_state.opportunity_state["pending_chooser_ids"] = _selection_queue.duplicate()
+	if _selection_queue.is_empty():
+		_finish_all_choices()
+		return
+	# 离线控制全部角色只有一个本地观察者；切到首名待投角色供同一屏幕逐个代管，权威待投集合仍同时开放且LAN不会切换观察者。
+	_host.prepare_opportunity_chooser(_selection_queue[0])
+	# AI投票延后一帧，使全部真人观察者先收到同一“可投票”状态；回调内仍逐票经过同一候选估值和待提交集合校验。
+	if not _simultaneous_ai_vote_submission_scheduled:
+		for pending_player_id: int in _selection_queue:
+			if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(pending_player_id):
+				_simultaneous_ai_vote_submission_scheduled = true
+				call_deferred("_submit_simultaneous_ai_votes", _vote_reveal_generation)
+				break
+	_host.refresh_state_snapshot()
+
+
+## 为当前投票中的全部内置AI分别估值并提交一票；提交顺序不控制真人资格，也不会公开尚未收齐的具体票面。
+func _submit_simultaneous_ai_votes(expected_generation: int) -> void:
+	_simultaneous_ai_vote_submission_scheduled = false
+	if expected_generation != _vote_reveal_generation or not is_active() or not _vote_mode or str(_state.opportunity_state.get("stage", "")) != "choosing":
+		return
+	# 本帧需要自动提交的AI名单；先复制待投集合，避免提交过程中修改正在遍历的数组。
+	var ai_voter_ids: Array[int] = []
+	for pending_player_id: int in _selection_queue:
+		if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(pending_player_id):
+			ai_voter_ids.append(pending_player_id)
+	for ai_voter_id: int in ai_voter_ids:
+		if not _selection_queue.has(ai_voter_id):
+			continue
+		# 当前AI私有候选；共享候选仍从该玩家自己的权威映射读取，不访问其他玩家私有快照。
+		var ai_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(ai_voter_id), []) as Array
+		# 当前AI估值结果；异常空候选由下一轮停滞修复处理，不伪造不存在的票面。
+		var ai_card: Dictionary = _choose_ai_card(ai_voter_id, ai_options)
+		if ai_card.is_empty():
+			continue
+		_record_player_choice(ai_voter_id, ai_card)
+		_selection_queue.erase(ai_voter_id)
+	_advance_simultaneous_vote_selection()
+
+
 ## 记录一名角色的最终机缘选择；公开状态只暴露已完成角色ID，不在其他观察者快照中公开卡面正文。
 func _record_player_choice(player_id: int, card_definition: Dictionary) -> void:
 	_selected_cards_by_player[str(player_id)] = card_definition.duplicate(true)
@@ -514,11 +593,34 @@ func _record_player_choice(player_id: int, card_definition: Dictionary) -> void:
 	_host.add_log("%s已完成机缘%s。" % [_host.format_player_log_name(player_id), "投票" if _vote_mode else "选择"])
 
 
-## 全体选择完成后释放全局暂停、关闭机缘卡弹窗并开始逆时针逐张结算。
-## 投票模式先按票数决出唯一当选机缘，再把它写入每名存活参与者的选择结果与公开历史。
+## 全体选择完成后进入明确的结果边界；投票先公开每人票面并等待展示，各自选择直接进入效果结算。
 func _finish_all_choices() -> void:
 	if _vote_mode:
 		_apply_vote_result()
+		_state.opportunity_state["current_chooser_id"] = -1
+		_state.opportunity_state["pending_chooser_ids"] = []
+		_state.opportunity_state["stage"] = "revealing"
+		_host.refresh_state_snapshot()
+		if vote_reveal_duration_seconds > 0.0 and is_inside_tree():
+			# 本次公开阶段代号；计时结束时用于拒绝重开或关闭组件前创建的旧回调。
+			var expected_generation: int = _vote_reveal_generation
+			get_tree().create_timer(vote_reveal_duration_seconds, true).timeout.connect(Callable(self, "_continue_after_vote_reveal").bind(expected_generation), Object.CONNECT_ONE_SHOT)
+			return
+	_begin_effect_resolution_after_choices()
+
+
+## 投票结果展示计时结束后进入效果结算；生命周期代号与阶段双重校验保证旧计时器不能恢复新对局。
+func _continue_after_vote_reveal(expected_generation: int) -> void:
+	if expected_generation != _vote_reveal_generation or not is_active() or str(_state.opportunity_state.get("stage", "")) != "revealing":
+		return
+	_begin_effect_resolution_after_choices()
+
+
+## 把最终机缘写入存活参与者历史，释放选择暂停并开始按既定顺序执行效果。
+func _begin_effect_resolution_after_choices() -> void:
+	if not is_active() or _state.game_over:
+		_finish_without_resume()
+		return
 	# 已获得机缘历史；全体选择完成后才公开写入，避免其他观察者在私有选择阶段反推出具体卡面。
 	for player_id_key: Variant in _selected_cards_by_player.keys():
 		# 选择者稳定ID；字典键使用字符串以兼容网络序列化。
@@ -532,6 +634,7 @@ func _finish_all_choices() -> void:
 		if not opportunity_id.is_empty():
 			player.acquired_opportunity_ids.append(opportunity_id)
 	_state.opportunity_state["current_chooser_id"] = -1
+	_state.opportunity_state["pending_chooser_ids"] = []
 	_state.opportunity_state["stage"] = "resolving"
 	if _selection_pause_token >= 0:
 		_host.release_gameplay_pause(_selection_pause_token)
@@ -576,7 +679,22 @@ func _apply_vote_result() -> void:
 	var winner_card: Dictionary = OpportunityCatalog.get_card(winner_card_id)
 	if winner_card.is_empty():
 		return
-	_state.random_history.append({"kind":"opportunity_vote_result", "vote_counts":vote_counts.duplicate(), "tied_card_ids":tied_card_ids.duplicate(), "winner_card_id":winner_card_id})
+	# 逐玩家公开票面；只在全部选票收齐后构建，选择阶段的普通观察者无法由本字段提前推断他人选择。
+	var revealed_votes: Array[Dictionary] = []
+	# 逐玩家投票ID映射；进入随机历史用于回放复核，键采用字符串兼容JSON网络序列化。
+	var vote_card_ids_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _state.opportunity_state.get("participant_ids", []) as Array:
+		# 当前投票参与者稳定ID；顺序沿用本次参与名单，所有客户端显示一致。
+		var participant_id: int = int(participant_id_variant)
+		# 当前玩家实际投出的机缘ID；从尚未覆盖为当选机缘的原始选择映射读取。
+		var voted_card_id: String = str((_selected_cards_by_player.get(str(participant_id), {}) as Dictionary).get("id", ""))
+		if voted_card_id.is_empty():
+			continue
+		revealed_votes.append({"player_id":participant_id, "card_id":voted_card_id})
+		vote_card_ids_by_player[str(participant_id)] = voted_card_id
+	_state.opportunity_state["revealed_votes"] = revealed_votes
+	_state.opportunity_state["winner_card_id"] = winner_card_id
+	_state.random_history.append({"kind":"opportunity_vote_result", "vote_counts":vote_counts.duplicate(), "vote_card_ids_by_player":vote_card_ids_by_player, "tied_card_ids":tied_card_ids.duplicate(), "winner_card_id":winner_card_id})
 	_host.add_log("机缘投票结束：以%d票当选——%s" % [highest_vote_count, str(winner_card.get("description", ""))] + ("（平票随机决出）" if tied_card_ids.size() > 1 else ""))
 	# 把当选机缘写入每名参与者的最终选择；随后的公开历史写入与逐人结算完全复用普通流程。
 	for participant_id: int in _resolution_queue:

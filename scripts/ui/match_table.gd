@@ -15,7 +15,7 @@ const AUTO_SELECTED_SELF_CARD_DEFINITION_IDS: Array[String] = ["tao", "jiu", "wu
 ## 统一信息框场景；手牌、装备、技能与武将牌共用该组件，不再创建 Godot 原生工具提示。
 const INFORMATION_BOX_LAYER_SCENE: PackedScene = preload("res://scenes/components/information_box_layer.tscn")
 
-## 全体机缘选择弹窗场景；只渲染本地观察者自己的三张私有候选并提交稳定机缘卡ID。
+## 全体机缘选择弹窗场景；选择时只渲染本地观察者的私有候选，投票收齐后渲染全员公开结果，并仅提交稳定机缘卡ID。
 const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/components/opportunity_choice_panel.tscn")
 
 ## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
@@ -1467,9 +1467,11 @@ func _get_local_player_display_name() -> String:
 func _refresh_opportunity_choice_panel() -> void:
 	if opportunity_choice_panel == null:
 		return
-	# 当前机缘交互快照；绝大多数普通状态广播不处于选择阶段，应直接关闭弹窗并跳过全体武将名解析。
+	# 当前机缘交互快照；绝大多数普通状态广播不处于选择或投票公开阶段，应直接关闭弹窗并跳过全体武将名解析。
 	var opportunity_snapshot: Dictionary = _snapshot.get("opportunity_state", {}) as Dictionary
-	if opportunity_snapshot.is_empty() or str(opportunity_snapshot.get("stage", "")) != "choosing":
+	# 当前机缘阶段；只有选择与投票公开需要角色名映射，效果结算阶段不占用模态界面。
+	var opportunity_stage: String = str(opportunity_snapshot.get("stage", ""))
+	if opportunity_snapshot.is_empty() or opportunity_stage not in ["choosing", "revealing"]:
 		opportunity_choice_panel.show_opportunity(opportunity_snapshot, match_controller.local_human_player_id, {})
 		return
 	# 玩家ID到公开显示名映射；弹窗等待文案使用当前武将名或玩家名，不读取私有身份。

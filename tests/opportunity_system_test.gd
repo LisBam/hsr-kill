@@ -500,6 +500,25 @@ func _test_opportunity_card_hover() -> bool:
 	if not skill_content.position.is_equal_approx(skill_content_position) or not skill_content.size.is_equal_approx(skill_content_size) or not skill_prefix_label.position.is_equal_approx(skill_prefix_position) or not skill_prefix_label.size.is_equal_approx(skill_prefix_size) or not choice_skill_name_label.position.is_equal_approx(skill_name_position) or not choice_skill_name_label.size.is_equal_approx(skill_name_size):
 		choice_panel.close()
 		return _fail("opportunity_skill_hover_layout content=%s/%s,%s/%s prefix=%s/%s,%s/%s name=%s/%s,%s/%s" % [skill_content.position, skill_content_position, skill_content.size, skill_content_size, skill_prefix_label.position, skill_prefix_position, skill_prefix_label.size, skill_prefix_size, choice_skill_name_label.position, skill_name_position, choice_skill_name_label.size, skill_name_size])
+	# 投票公开快照；收齐后所有观察者都应看到逐玩家票面与唯一当选牌，而不是继续显示可操作的三张候选。
+	var vote_reveal_snapshot: Dictionary = {
+		"active":true,
+		"stage":"revealing",
+		"vote_mode":true,
+		"revealed_votes":[{"player_id":0, "card_id":"green_draw_two"}, {"player_id":1, "card_id":"purple_draw_five"}],
+		"winner_card_id":"green_draw_two",
+	}
+	choice_panel.show_opportunity(vote_reveal_snapshot, 0, {0:"玩家甲", 1:"玩家乙"})
+	await get_tree().process_frame
+	# 投票公开状态文字；两名玩家名称、各自所投正文与当选正文都必须出现在同一份全员展示中。
+	var vote_reveal_text: String = (choice_panel.get_node("%StatusLabel") as Label).text
+	# 当选展示牌；公开阶段只保留一张不可交互结果牌，禁止再次提交机缘动作。
+	var winner_holder: Control = cards_row.get_child(0) as Control if cards_row.get_child_count() == 1 else null
+	# 当选机缘卡视图；输入按钮禁用用于验证结果展示不会误触发第二次投票。
+	var winner_view: OpportunityCardView = winner_holder.get_child(0) as OpportunityCardView if winner_holder != null and winner_holder.get_child_count() > 0 else null
+	if not vote_reveal_text.contains("玩家甲") or not vote_reveal_text.contains("玩家乙") or not vote_reveal_text.contains(str(OpportunityCatalog.get_card("green_draw_two").get("description", ""))) or not vote_reveal_text.contains(str(OpportunityCatalog.get_card("purple_draw_five").get("description", ""))) or winner_view == null or not (winner_view.get_node("%InputButton") as Button).disabled:
+		choice_panel.close()
+		return _fail("opportunity_vote_reveal_ui text=%s cards=%d" % [vote_reveal_text, cards_row.get_child_count()])
 	choice_panel.close()
 	return true
 
