@@ -1,8 +1,8 @@
 class_name ConquestModeService
 extends RefCounted
 
-## 过关斩将规则服务。该服务集中记录关卡授予的机缘、由机缘汇总入场效果并抽取技能机缘，不持有界面节点或阶段调度逻辑。
-## 单人模式为1名玩家对1名敌人；联机模式支持2至4名玩家与等量敌人，敌方关卡机缘历史全局唯一并由每名敌人共同享有。
+## 过关斩将规则服务。该服务集中记录关卡完成条件、关卡授予的机缘、由机缘汇总入场效果并抽取技能机缘，不持有界面节点或阶段调度逻辑。
+## 单人模式为1名玩家对1名敌人；联机模式支持2至4名玩家与等量敌人，只有本层全部敌人阵亡才完成关卡，敌方关卡机缘历史全局唯一并由每名敌人共同享有。
 
 ## 过关斩将的首关数值；玩家面对的第一名敌方武将始终处于第1关且不获得层数增强。
 const INITIAL_LEVEL: int = 1
@@ -299,7 +299,24 @@ func is_enemy(player_id: int) -> bool:
 	return player_id >= 0 and get_enemy_ids().has(player_id)
 
 
-## 在玩家击败敌方后提升一关；返回提升后的关卡数，供换将日志和敌方入场结算使用。
+## 返回当前层是否已经不存在存活敌人；缺失敌方实体视为状态损坏而非阵亡，避免异常存档直接越层。
+## 控制器只在死亡完整时机结束后读取本结果并建立层结算边界，单名敌人阵亡本身不再等同于关卡完成。
+func is_current_level_cleared() -> bool:
+	if _state == null:
+		return false
+	# 本局全部敌方稳定ID；空名单不构成合法关卡，不能被误判为已经清空。
+	var enemy_ids: Array[int] = get_enemy_ids()
+	if enemy_ids.is_empty():
+		return false
+	for enemy_id: int in enemy_ids:
+		# 当前敌方实体；仍存活或实体缺失都表示本层尚不能进入统一结算。
+		var enemy: PlayerState = _state.get_player(enemy_id)
+		if enemy == null or enemy.alive:
+			return false
+	return true
+
+
+## 在本层全部敌方阵亡后提升一关；返回提升后的关卡数，供整组敌方重新入场与关卡奖励结算使用。
 func advance_level() -> int:
 	if _state == null:
 		return INITIAL_LEVEL

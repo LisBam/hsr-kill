@@ -263,8 +263,8 @@ func _test_full_match_replacement_flow() -> bool:
 	var player_selection_snapshot: Dictionary = _controller.character_selection.to_dict(0)
 	if player_candidates.size() != GameSettings.DEFAULT_CONQUEST_CHARACTER_CANDIDATE_COUNT or not bool(player_selection_snapshot.get("allow_all_characters", false)) or bool(player_selection_snapshot.get("allow_custom_assignment", true)) or not (player_selection_snapshot.get("seat_options", []) as Array).is_empty() or not (player_selection_snapshot.get("identity_options", []) as Array).is_empty():
 		return _fail("conquest_character_selection_permissions")
-	# 玩家最终选择的武将；正式死亡时序继续使用固定种子下第一张随机候选，避免全武将技能差异污染其他专项断言。
-	var selected_player_character_id: String = player_candidates[0] if not player_candidates.is_empty() else ""
+	# 玩家最终选择的武将；全武将入口固定使用不会在清空测试手牌时创建强制选择的丹恒，避免候选池新增武将后污染死亡时序专项断言。
+	var selected_player_character_id: String = "dan_heng" if not GameDatabase.get_character("dan_heng").is_empty() else (player_candidates[0] if not player_candidates.is_empty() else "")
 	if selected_player_character_id.is_empty() or not _controller.select_character(0, selected_player_character_id):
 		return _fail("player_character_selection")
 	for _frame_index: int in range(12):
@@ -281,6 +281,9 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("initial_opportunity")
 	if _controller.state.current_player_id != player.player_id:
 		return _fail("player_first_turn")
+	# 玩家当前武将的固有技能ID；本专项只验证模式死亡边界，先卸载固有技能，避免其额外询问抢占下方固定【杀】流程。
+	var native_player_skill_ids: Array = GameDatabase.get_character(player.character_id).get("skills", []) as Array
+	_controller._replace_native_character_skills(player, native_player_skill_ids, [])
 	# 摄伏技能实例；优先复用随机武将自带实例，缺失时以局内获得技能安装，覆盖击杀后来源时机创建嵌套选择的卡死路径。
 	var player_sefu: SkillDefinition = _controller.get_skill_instance(player.player_id, "shefu")
 	if player_sefu == null and not _controller.grant_acquired_skill(player.player_id, "shefu", 0, 0, "conquest_test"):
