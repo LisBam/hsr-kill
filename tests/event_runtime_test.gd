@@ -45,6 +45,8 @@ func _ready() -> void:
 		return
 	if not _test_card_movement_and_virtual_card():
 		return
+	if not await _test_cooperative_drain_and_runaway_guard():
+		return
 	print("EVENT_RUNTIME_PASS order=%s history=%d" % [_execution_order, _scheduler.get_event_history().size()])
 	get_tree().quit(0)
 
@@ -414,6 +416,68 @@ func _test_card_movement_and_virtual_card() -> bool:
 	wuxie_state.add_response(1, {"card_uid":card.uid + 1})
 	if wuxie_state.state != 1 or wuxie_state.is_neutralized():
 		return _fail("wuxie_state=%s" % wuxie_state.to_dict())
+	return true
+
+
+## 验证大事件树达到单次预算后会主动让出主线程，并且无子事件、无暂停地永久redo会被局部熔断而不是卡死整个进程。
+func _test_cooperative_drain_and_runaway_guard() -> bool:
+	# 分帧调度器；4步预算让测试稳定跨帧，合法循环上限100确保10次有限redo不会触发熔断。
+	var cooperative_scheduler: EventScheduler = EventScheduler.new()
+	cooperative_scheduler.max_operations_per_drain = 4
+	cooperative_scheduler.max_repeated_step_executions = 100
+	add_child(cooperative_scheduler)
+	# 有限循环执行次数；数组引用允许匿名事件步骤在每次redo时累加同一计数。
+	var finite_execution_count: Array[int] = [0]
+	# 有限循环事件；前9次停留在步骤0，第10次正常结束，用于区分分帧让步和错误中断。
+	var finite_event: GameEvent = cooperative_scheduler.create_event("FiniteRedo", "test", [func(event: GameEvent, _runtime: EventScheduler) -> void:
+		finite_execution_count[0] += 1
+		if finite_execution_count[0] < 10:
+			event.redo()
+		else:
+			event.finish()
+	])
+	if not cooperative_scheduler.start(finite_event.event_id):
+		cooperative_scheduler.queue_free()
+		return _fail("cooperative_start")
+	# 首次同步调用只允许消费4步；剩余内容必须登记空闲帧续跑，证明主线程已经获得明确让步点。
+	if finite_execution_count[0] != 4 or finite_event.finalized or not cooperative_scheduler.has_pending_drain_continuation():
+		cooperative_scheduler.queue_free()
+		return _fail("cooperative_first_pass count=%d finalized=%s pending=%s" % [finite_execution_count[0], finite_event.finalized, cooperative_scheduler.has_pending_drain_continuation()])
+	# 分帧完成等待上限；8帧远高于本事件所需的3轮排空，避免测试依赖单一call_deferred调度细节。
+	for _finite_wait_frame: int in range(8):
+		if finite_event.finalized:
+			break
+		await get_tree().process_frame
+	if finite_execution_count[0] != 10 or not finite_event.finalized or finite_event.status != GameEvent.Status.FINISHED or not cooperative_scheduler.get_last_fault().is_empty():
+		cooperative_scheduler.queue_free()
+		return _fail("cooperative_completion count=%d event=%s fault=%s" % [finite_execution_count[0], finite_event.to_dict(), cooperative_scheduler.get_last_fault()])
+	cooperative_scheduler.queue_free()
+
+	# 失控调度器；6次上限配合4步预算保证第二个空闲帧内即可熔断，测试不会制造真实无限循环。
+	var runaway_scheduler: EventScheduler = EventScheduler.new()
+	runaway_scheduler.max_operations_per_drain = 4
+	runaway_scheduler.max_repeated_step_executions = 6
+	add_child(runaway_scheduler)
+	# 失控事件执行次数；步骤永远redo且没有子事件或暂停，必须由运行时保护中断。
+	var runaway_execution_count: Array[int] = [0]
+	# 失控事件；模拟扩展脚本忘记推进上下文或创建等待点的框架级卡死形态。
+	var runaway_event: GameEvent = runaway_scheduler.create_event("RunawayRedo", "test", [func(event: GameEvent, _runtime: EventScheduler) -> void:
+		runaway_execution_count[0] += 1
+		event.redo()
+	])
+	if not runaway_scheduler.start(runaway_event.event_id):
+		runaway_scheduler.queue_free()
+		return _fail("runaway_start")
+	for _runaway_wait_frame: int in range(8):
+		if runaway_event.finalized:
+			break
+		await get_tree().process_frame
+	# 熔断只结束当前事件；最终摘要必须明确aborted/runaway_step，并且执行次数保持有限。
+	var runaway_fault: Dictionary = runaway_scheduler.get_last_fault()
+	if not runaway_event.finalized or runaway_event.status != GameEvent.Status.ABORTED or runaway_event.termination_reason != "runaway_step" or str(runaway_fault.get("reason", "")) != "runaway_step" or runaway_execution_count[0] > 8:
+		runaway_scheduler.queue_free()
+		return _fail("runaway_guard count=%d event=%s fault=%s" % [runaway_execution_count[0], runaway_event.to_dict(), runaway_fault])
+	runaway_scheduler.queue_free()
 	return true
 
 

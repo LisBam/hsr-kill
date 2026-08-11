@@ -40,6 +40,12 @@ var _controller: MatchController
 ## 阶段延时回调是否已经执行；默认false，用于区分同步调用与计时到期。
 var _phase_transition_executed: bool = false
 
+## 阶段延时回调实际执行次数；重复恢复不得重置计时或让同一阶段出口执行两次，默认0。
+var _phase_transition_execution_count: int = 0
+
+## 冲突阶段回调是否曾执行；默认false，仍有效的首条转换必须阻止后来分支覆盖它。
+var _conflicting_phase_transition_executed: bool = false
+
 ## 人类响应牌提示是否已经发布；默认false，用于验证权威请求可先暂停而界面提示遵守流程间隔。
 var _response_prompt_published: bool = false
 
@@ -311,12 +317,20 @@ func _test_phase_transition_pacing() -> bool:
 	game_state.players.append(player)
 	_controller.state = game_state
 	_phase_transition_executed = false
+	_phase_transition_execution_count = 0
+	_conflicting_phase_transition_executed = false
 	_controller._schedule_phase_transition(0, "start", Callable(self, "_mark_phase_transition").bind(_controller))
+	# 完全重复的恢复；必须复用现有承诺，不能取消并从头计算等待时间。
+	_controller._schedule_phase_transition(0, "start", Callable(self, "_mark_phase_transition").bind(_controller))
+	# 同一阶段的冲突分支；最早已登记的正确出口必须保留，后来的不同回调不能覆盖它。
+	_controller._schedule_phase_transition(0, "start", Callable(self, "_mark_conflicting_phase_transition").bind(_controller))
+	# 已经过期的旧阶段恢复；登记前即时校验必须拒绝，尤其不能先取消仍有效的start转换。
+	_controller._schedule_phase_transition(0, "discard", Callable(self, "_mark_conflicting_phase_transition").bind(_controller))
 	if _phase_transition_executed or game_state.current_phase != "start" or not _controller.game_flow_pacer.has_pending("phase_transition"):
 		return _fail("phase_transition_started_early")
 	await get_tree().create_timer(POST_DEADLINE_OBSERVATION_SECONDS).timeout
-	if not _phase_transition_executed or game_state.current_phase != "judgment" or _controller.game_flow_pacer.has_pending("phase_transition"):
-		return _fail("phase_transition_not_completed")
+	if not _phase_transition_executed or _phase_transition_execution_count != 1 or _conflicting_phase_transition_executed or game_state.current_phase != "judgment" or _controller.game_flow_pacer.has_pending("phase_transition") or _controller.game_flow_transition_coordinator.get_rejected_transition_count() < 2:
+		return _fail("phase_transition_not_completed count=%d conflict=%s rejected=%d" % [_phase_transition_execution_count, _conflicting_phase_transition_executed, _controller.game_flow_transition_coordinator.get_rejected_transition_count()])
 	# 自动响应有效等待；AI独立值更小时仍必须使用全局流程间隔作为下限。
 	var effective_ai_delay: float = float(_controller.call("_get_effective_ai_response_delay_seconds"))
 	if not is_equal_approx(effective_ai_delay, TEST_FLOW_INTERVAL_SECONDS):
@@ -327,7 +341,14 @@ func _test_phase_transition_pacing() -> bool:
 ## 阶段测试回调；只修改测试状态，用于确认节奏组件没有承担任何规则决策。
 func _mark_phase_transition(controller: MatchController) -> void:
 	_phase_transition_executed = true
+	_phase_transition_execution_count += 1
 	controller.state.current_phase = "judgment"
+
+
+## 冲突阶段测试回调；协调器正确时永远不会执行，若执行则把阶段改成finish以暴露覆盖错误。
+func _mark_conflicting_phase_transition(controller: MatchController) -> void:
+	_conflicting_phase_transition_executed = true
+	controller.state.current_phase = "finish"
 
 
 ## 验证人类响应请求先暂停规则流程，并在游戏速度间隔到期后才向界面发布。

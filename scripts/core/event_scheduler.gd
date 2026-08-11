@@ -6,6 +6,12 @@ extends Node
 ## 已结束事件摘要热索引容量；4096项覆盖近期父子关联与规则查询，旧摘要仍可从完整事件历史按需恢复。
 const FINALIZED_EVENT_SNAPSHOT_CACHE_CAPACITY: int = 4096
 
+## 单次 drain 最多执行的调度操作数；默认256兼顾同步小事件的即时完成与复杂事件树的分帧让步，可在检查器中调整但通常无需运行时修改。
+@export_range(16, 4096, 16) var max_operations_per_drain: int = 256
+
+## 同一事件步骤在没有子事件、暂停或游标变化时允许连续重跑的最大次数；默认2048远高于合法目标遍历规模，用于熔断扩展内容的无等待死循环。
+@export_range(32, 65536, 32) var max_repeated_step_executions: int = 2048
+
 ## 事件开始信号；参数是只读摘要，UI、调试器和回放可以订阅而不会获得可变事件引用。
 signal event_started(event_data: Dictionary)
 
@@ -26,6 +32,9 @@ signal scheduler_idle()
 
 ## 因对局结束或重置中断事件时发送；所有仍等待的请求会先被标记为 aborted。
 signal scheduler_aborted(reason: String)
+
+## 事件运行时检测到无等待死循环时发送；参数包含事件摘要、稳定原因与重复次数，控制器可记录日志但不得重新执行故障步骤。
+signal event_faulted(fault_data: Dictionary)
 
 ## 下一条事件稳定 ID；从1开始，避免0与未登记值混淆。
 var _next_event_id: int = 1
@@ -63,6 +72,24 @@ var pause_registry: PauseRegistry = PauseRegistry.new()
 
 ## 当前是否正在排空事件栈；防止内容步骤内重复调用 drain 造成递归推进。
 var _draining: bool = false
+
+## 是否已经登记下一空闲帧继续排空；达到单次预算时为true，暂停、终局或显式排空都会使旧回调安全失效。
+var _deferred_drain_pending: bool = false
+
+## 延迟排空回调的单调令牌；每次登记或失效都会递增，旧帧回调不能接管较新的事件树状态。
+var _deferred_drain_token: int = 0
+
+## 最近一次无等待重跑的事件ID；-1表示当前没有连续重复步骤，事件或步骤变化时立即重置。
+var _repeated_step_event_id: int = -1
+
+## 最近一次无等待重跑的步骤下标；与事件ID共同组成熔断键，默认-1表示未记录。
+var _repeated_step_index: int = -1
+
+## 当前熔断键已经连续执行的次数；只有步骤游标不变且没有子事件或暂停时累加。
+var _repeated_step_execution_count: int = 0
+
+## 最近一次运行时故障的可序列化摘要；空字典表示本局尚未触发熔断，只供诊断与测试读取。
+var _last_fault: Dictionary = {}
 
 ## 是否要求下一轮排空时停止；对局结束会设置该标志并中断未完成事件。
 var _stop_requested: bool = false
@@ -160,17 +187,25 @@ func release_root(reason: String = "root_complete") -> bool:
 	return true
 
 
-## 排空事件栈直到全部结束、存在暂停 token 或遇到对局终止；内容步骤不会跨暂停推进。
+## 在单次操作预算内排空事件栈；全部结束、存在暂停 token 或遇到对局终止时立即停止，达到预算则延后一帧继续。
+## 小型同步事件通常在一次调用内完成；复杂事件树主动把执行权还给主循环，使输入、网络和停滞看门狗始终有运行机会。
 func drain() -> void:
 	if _draining:
 		return
+	# 显式排空接管当前工作；先让已经排队的旧帧回调失效，避免同一批事件被重复驱动。
+	_invalidate_deferred_drain()
 	_draining = true
-	while not _event_stack.is_empty() and not _stop_requested:
+	# 本次已执行操作数；每次处理一个栈状态或事件步骤计1次，达到配置上限后让步到下一空闲帧。
+	var operation_count: int = 0
+	# 本次操作预算；运行时脚本异常写入0或负数时仍至少执行1次，保证调度器可以自恢复。
+	var operation_budget: int = maxi(max_operations_per_drain, 1)
+	while not _event_stack.is_empty() and not _stop_requested and operation_count < operation_budget:
 		# 当前事件 ID；栈末尾永远是唯一允许执行内容的事件。
 		var current_event_id: int = _event_stack.back()
 		var event: GameEvent = _events.get(current_event_id) as GameEvent
 		if event == null:
 			_event_stack.pop_back()
+			operation_count += 1
 			continue
 		if pause_registry.has_active_for_stack(_event_stack):
 			event.status = GameEvent.Status.PAUSED
@@ -180,7 +215,11 @@ func drain() -> void:
 			event.status = GameEvent.Status.WAITING_CHILDREN
 			break
 		_process_event(event)
+		operation_count += 1
 	_draining = false
+	# 仍有可立即执行内容时只登记一次空闲帧续跑；暂停事件和空闲长期根不会制造无意义回调。
+	if _has_immediately_executable_work():
+		_schedule_deferred_drain()
 	if _event_stack.is_empty() and not _stop_requested:
 		scheduler_idle.emit()
 
@@ -223,6 +262,8 @@ func _process_event(event: GameEvent) -> void:
 				event.status = GameEvent.Status.RUNNING
 			if not event.body_finished:
 				event.consume_step_transition(executed_step)
+			# 无等待地停留在同一步会在旧同步循环中永久占住主线程；累计到上限后只中断当前故障事件，让父事件继续正常收尾。
+			_update_repeated_step_guard(event, executed_step)
 			_record_history("step", event)
 			event_step_executed.emit(event.to_dict())
 			return
@@ -236,6 +277,93 @@ func _process_event(event: GameEvent) -> void:
 		_event_stack.append(after_id)
 		return
 	_finalize_event(event)
+
+
+## 更新同一步无等待重跑计数；合法的子事件、选择暂停、终态或游标前进都会清零，只有真正的同步自旋才会触发熔断。
+func _update_repeated_step_guard(event: GameEvent, executed_step: int) -> void:
+	if event == null:
+		_reset_repeated_step_guard()
+		return
+	# 当前步骤是否在没有任何外部等待点的情况下再次指向自身；这是可形成单帧死循环的唯一计数条件。
+	var repeats_without_wait: bool = not event.body_finished \
+		and event.step == executed_step \
+		and event.next_event_ids.is_empty() \
+		and not pause_registry.has_active_for_event(event.event_id)
+	if not repeats_without_wait:
+		_reset_repeated_step_guard()
+		return
+	if _repeated_step_event_id == event.event_id and _repeated_step_index == executed_step:
+		_repeated_step_execution_count += 1
+	else:
+		_repeated_step_event_id = event.event_id
+		_repeated_step_index = executed_step
+		_repeated_step_execution_count = 1
+	if _repeated_step_execution_count <= maxi(max_repeated_step_executions, 1):
+		return
+	# 故障摘要；先写入事件结果并终止主体，再记录独立fault历史，保证回放和诊断都能定位具体事件与步骤。
+	var fault_reason: String = "runaway_step"
+	event.result["runtime_fault"] = {
+		"reason": fault_reason,
+		"step": executed_step,
+		"repeat_count": _repeated_step_execution_count,
+	}
+	event.abort(fault_reason)
+	_last_fault = {
+		"reason": fault_reason,
+		"event_id": event.event_id,
+		"event_name": event.name,
+		"step": executed_step,
+		"repeat_count": _repeated_step_execution_count,
+		"event": event.to_dict(),
+	}
+	_record_history("fault", event, {"fault":_last_fault.duplicate(true)})
+	event_faulted.emit(_last_fault.duplicate(true))
+	_reset_repeated_step_guard()
+
+
+## 清空同步自旋熔断键；下一次执行从新的事件步骤重新计数。
+func _reset_repeated_step_guard() -> void:
+	_repeated_step_event_id = -1
+	_repeated_step_index = -1
+	_repeated_step_execution_count = 0
+
+
+## 判断当前栈是否仍有无需等待即可推进的工作；暂停 token、终局停止和空闲长期根都返回false。
+func _has_immediately_executable_work() -> bool:
+	if _stop_requested or _event_stack.is_empty() or pause_registry.has_active_for_stack(_event_stack):
+		return false
+	# 当前栈顶事件；缺失对象仍需下一帧清理，因此视为可执行工作。
+	var event: GameEvent = _events.get(_event_stack.back()) as GameEvent
+	if event == null:
+		return true
+	# 长期根没有子事件、after或剩余内容时处于稳定空闲，不需要持续空转。
+	return not (event.held_open and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size())
+
+
+## 达到本轮预算后登记唯一空闲帧续跑；令牌确保显式排空、重置或终局能让旧回调自然失效。
+func _schedule_deferred_drain() -> void:
+	if _deferred_drain_pending:
+		return
+	_deferred_drain_pending = true
+	_deferred_drain_token += 1
+	# 当前续跑令牌；绑定到延迟回调后不再修改，后续显式drain会递增全局令牌使其失效。
+	var continuation_token: int = _deferred_drain_token
+	call_deferred("_continue_deferred_drain", continuation_token)
+
+
+## 执行仍为最新版本的空闲帧续跑；过期回调不读取或修改事件树。
+func _continue_deferred_drain(continuation_token: int) -> void:
+	if not _deferred_drain_pending or continuation_token != _deferred_drain_token:
+		return
+	_deferred_drain_pending = false
+	drain()
+
+
+## 使当前延迟排空登记失效；显式恢复、终局和重置均通过此入口避免旧回调重入。
+func _invalidate_deferred_drain() -> void:
+	if _deferred_drain_pending:
+		_deferred_drain_token += 1
+	_deferred_drain_pending = false
 
 
 ## 完成栈顶事件并把结果深拷贝回父事件；只在 after 队列已经清空时调用。
@@ -403,6 +531,8 @@ func abort_choice(request_id: int, reason: String = "choice_unresolvable") -> bo
 ## 中断全部事件、选择和暂停 token；对局结束后旧响应永远不能恢复已经失效的事件。
 func abort_all(reason: String = "game_over") -> void:
 	_stop_requested = true
+	_invalidate_deferred_drain()
+	_reset_repeated_step_guard()
 	for request_variant: Variant in _choice_requests.values():
 		# 当前等待请求；终止原因写回请求历史后再从索引删除。
 		var request: ChoiceRequest = request_variant as ChoiceRequest
@@ -508,6 +638,16 @@ func get_live_event_count() -> int:
 	return _events.size()
 
 
+## 返回是否已经安排下一空闲帧继续排空；诊断层可据此区分“主动分帧”与真正没有推进来源的停滞。
+func has_pending_drain_continuation() -> bool:
+	return _deferred_drain_pending
+
+
+## 返回最近一次运行时熔断摘要的深拷贝；调用方只能观察，不能修改调度器保存的故障记录。
+func get_last_fault() -> Dictionary:
+	return _last_fault.duplicate(true)
+
+
 ## 返回近期已结束事件热索引条目数；用于性能诊断，完整可查询事件数量仍由事件历史决定。
 func get_finalized_event_snapshot_cache_count() -> int:
 	return _finalized_event_snapshots.size()
@@ -564,6 +704,8 @@ func get_pending_choice_requests() -> Array[Dictionary]:
 func reset() -> void:
 	if not _events.is_empty() or not _choice_requests.is_empty():
 		abort_all("runtime_reset")
+	_invalidate_deferred_drain()
+	_reset_repeated_step_guard()
 	_next_event_id = 1
 	_next_request_id = 1
 	_events.clear()
@@ -577,6 +719,7 @@ func reset() -> void:
 	_root_lifecycle_token = -1
 	_stop_requested = false
 	_history_sequence = 0
+	_last_fault.clear()
 	pause_registry.reset()
 
 

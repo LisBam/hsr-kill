@@ -38,6 +38,9 @@ signal card_choice_requested(choice_data: Dictionary)
 ## 过关斩将整层敌方重新入场后的流程任务键；同一时刻最多允许一条等待机缘的预览任务。
 const CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY: String = "conquest_enemy_replacement_opportunity"
 
+## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
+const GAME_FLOW_TRANSITION_COORDINATOR_SCRIPT: Script = preload("res://scripts/core/game_flow_transition_coordinator.gd")
+
 ## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
 signal public_card_choice_display_changed(display_data: Dictionary)
 
@@ -222,6 +225,9 @@ var gameplay_pause_service: GameplayPauseService
 
 ## 对局流程节奏组件；只负责可取消计时，不读取规则状态或决定下一阶段。
 var game_flow_pacer: GameFlowPacer
+
+## 阶段转换协调组件；集中保证同一时刻只有一条有效阶段推进，迟到或重复恢复不能覆盖已登记任务。
+var game_flow_transition_coordinator: Node
 
 ## 过关斩将整层结算过渡是否正在等待弃牌表现、敌方重新入场或机缘选择；true 时阻止旧回合重新建立操作，表现层仍保持正常播放。
 var _conquest_replacement_transition_active: bool = false
@@ -486,6 +492,12 @@ func _ready() -> void:
 		game_flow_pacer = GameFlowPacer.new()
 		game_flow_pacer.name = "GameFlowPacer"
 		add_child(game_flow_pacer)
+	game_flow_transition_coordinator = get_node_or_null("GameFlowTransitionCoordinator")
+	if game_flow_transition_coordinator == null:
+		game_flow_transition_coordinator = GAME_FLOW_TRANSITION_COORDINATOR_SCRIPT.new()
+		game_flow_transition_coordinator.name = "GameFlowTransitionCoordinator"
+		add_child(game_flow_transition_coordinator)
+	game_flow_transition_coordinator.bind(game_flow_pacer)
 	event_scheduler = get_node_or_null("EventScheduler") as EventScheduler
 	if event_scheduler == null:
 		event_scheduler = EventScheduler.new()
@@ -561,6 +573,8 @@ func _connect_event_runtime() -> void:
 		event_scheduler.choice_requested.connect(_on_runtime_choice_requested)
 	if not event_scheduler.choice_resolved.is_connected(_on_runtime_choice_resolved):
 		event_scheduler.choice_resolved.connect(_on_runtime_choice_resolved)
+	if not event_scheduler.event_faulted.is_connected(_on_runtime_event_faulted):
+		event_scheduler.event_faulted.connect(_on_runtime_event_faulted)
 
 
 ## 申请一个对局级暂停令牌；调用方必须保存返回值，并只释放自己持有的令牌。
@@ -709,6 +723,7 @@ func _compose_stall_fingerprint() -> String:
 	parts.append(str(state.current_player_id))
 	if event_scheduler != null:
 		parts.append(str(event_scheduler.get_event_history_count()))
+		parts.append("drain:%s" % str(event_scheduler.has_pending_drain_continuation()))
 		# 待办请求指纹；修订号纳入其中，技能backup/restore等上下文切换同样视为推进。
 		for request_data: Dictionary in event_scheduler.get_pending_choice_requests():
 			parts.append("req:%d:%d:%d" % [int(request_data.get("request_id", -1)), int(request_data.get("actor_id", -1)), int(request_data.get("revision", 0))])
@@ -721,6 +736,9 @@ func _compose_stall_fingerprint() -> String:
 	parts.append("aisch:%d:%d" % [_scheduled_ai_drive_token, _scheduled_ai_choice_request_id])
 	if game_flow_pacer != null:
 		parts.append("pace:%s:%s" % [str(game_flow_pacer.has_any_pending()), str(game_flow_pacer.has_pending_skill_interval())])
+	if game_flow_transition_coordinator != null:
+		# 阶段转换语义键；同一个计时业务键下仍能区分当前承诺的是哪一局、哪一回合与哪一阶段。
+		parts.append("transition:%s" % str(game_flow_transition_coordinator.get_pending_snapshot()))
 	# 机缘进度指纹；阶段、待提交集合、结算者与已选人数变化都会更新，机缘内部并行推进不会被误判为停滞。
 	if not state.opportunity_state.is_empty():
 		parts.append("opp:%s:%s:%d:%d" % [str(state.opportunity_state.get("stage", "")), str(state.opportunity_state.get("pending_chooser_ids", [])), int(state.opportunity_state.get("current_resolver_id", -1)), (state.opportunity_state.get("chosen_player_ids", []) as Array).size()])
@@ -1166,6 +1184,8 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 ## 释放上一局全部运行时残留；普通开局与存档恢复开局共用本入口，保证两条路径的清理清单不彼此漂移。
 ## 包含流程计时器、机缘组件、过关斩将服务、技能与卡牌运行时实例、额外回合与阶段队列、规则续接和判定请求。
 func _teardown_previous_match_runtime() -> void:
+	if game_flow_transition_coordinator != null:
+		game_flow_transition_coordinator.cancel_pending("match_runtime_teardown")
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
 	_cancel_conquest_replacement_opportunity_preview()
@@ -1276,6 +1296,8 @@ func _reset_per_match_progress_state() -> void:
 
 ## 丢弃已进入初始化阶段但未能建立选将流程的半成品对局；失败后控制器恢复与首次进入主菜单相同的空状态。
 func _discard_failed_match_start() -> void:
+	if game_flow_transition_coordinator != null:
+		game_flow_transition_coordinator.cancel_pending("failed_match_start")
 	if game_flow_pacer != null:
 		game_flow_pacer.cancel_all()
 	_cancel_conquest_replacement_opportunity_preview()
@@ -9745,13 +9767,28 @@ func _schedule_phase_transition(player_id: int, expected_phase: String, callback
 		return
 	# 当前对局 ID；重新开局会更换该值，使旧计时任务即使恢复也不能进入新局阶段。
 	var expected_match_id: String = state.match_id
+	# 登记时即时复核上下文；迟到恢复若已不属于当前角色或阶段，不能先取消现有正确任务再留下一个必然失效的回调。
+	var validity_guard: Callable = Callable(self, "_is_phase_transition_context_current").bind(expected_match_id, player_id, expected_phase)
+	if not bool(validity_guard.call()):
+		return
 	_emit_state()
 	# 校验后的阶段回调；节奏组件不持有规则状态，只在到期后把控制权交还给控制器。
 	var guarded_callback: Callable = Callable(self, "_execute_scheduled_phase_transition").bind(expected_match_id, player_id, expected_phase, callback)
-	if game_flow_pacer == null:
+	if game_flow_transition_coordinator == null:
 		guarded_callback.call()
 		return
-	game_flow_pacer.schedule("phase_transition", game_flow_interval_seconds, guarded_callback)
+	# 转换语义键；同一对局、回合、角色、阶段与目标方法的重复恢复被视为同一意图，不会重置已经开始的等待时间。
+	var transition_key: String = "%s:%d:%d:%s:%s" % [expected_match_id, state.turn_number, player_id, expected_phase, callback.get_method()]
+	game_flow_transition_coordinator.schedule_transition(transition_key, game_flow_interval_seconds, validity_guard, guarded_callback)
+
+
+## 判断阶段转换上下文在当前权威状态中是否仍成立；协调器在登记与计时到期时复用同一纯查询守卫。
+func _is_phase_transition_context_current(expected_match_id: String, player_id: int, expected_phase: String) -> bool:
+	return state != null \
+		and not state.game_over \
+		and state.match_id == expected_match_id \
+		and state.current_player_id == player_id \
+		and state.current_phase == expected_phase
 
 
 ## 执行到期的阶段切换；任何终局、重开、角色变化或阶段变化都会让旧回调静默失效。
@@ -14581,6 +14618,18 @@ func _on_runtime_event_finished(event_data: Dictionary) -> void:
 	if state.current_event_id < 0:
 		state.current_event_id = _runtime_root_event_id
 	_append_runtime_history_record()
+
+
+## 记录事件运行时的无等待死循环熔断；故障事件已经被调度器中断，本入口只同步历史并向玩家给出长期可诊断日志。
+func _on_runtime_event_faulted(fault_data: Dictionary) -> void:
+	if state == null:
+		return
+	_append_runtime_history_record()
+	# 故障事件名称与步骤；日志不包含Callable或内部对象，联机客户端可沿既有日志复制通道看到相同保护结果。
+	var event_name: String = str(fault_data.get("event_name", "unknown"))
+	# 故障步骤下标；-1仅用于防御异常旧摘要，正常熔断始终提供实际步骤。
+	var event_step: int = int(fault_data.get("step", -1))
+	add_log("【流程保护】事件%s的步骤%d发生无等待循环，已中断该事件并继续父流程。" % [event_name, event_step])
 
 
 ## 运行时选择请求回调；保存完整权威摘要，GameState.to_dict 后续可按观察者继续裁剪候选。
