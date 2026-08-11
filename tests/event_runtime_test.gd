@@ -39,6 +39,10 @@ func _ready() -> void:
 		return
 	if not _test_nested_trigger_resume_order():
 		return
+	if not _test_trigger_dispatch_budget_and_recursion_guard():
+		return
+	if not _test_rule_event_bus_recursion_guard():
+		return
 	if not _test_rule_continuation_stack():
 		return
 	if not _test_modifier_pipeline():
@@ -348,6 +352,86 @@ func _test_nested_trigger_resume_order() -> bool:
 	manager.resume_deferred(func() -> bool: return paused[0])
 	if order != ["outer0", "inner0", "inner1", "outer1"] or manager.has_deferred_dispatches():
 		return _fail("nested_trigger_resume=%s" % [order])
+	return true
+
+
+## 验证大量同一时机技能会按稳定索引分片续接，且同事件重入与新事件递归只局部熔断而不会卡住调用栈。
+func _test_trigger_dispatch_budget_and_recursion_guard() -> bool:
+	# 分片触发器管理器；每次只允许执行2个处理器，使5个技能稳定跨越3次恢复。
+	var budgeted_manager: TriggerManager = TriggerManager.new()
+	budgeted_manager.max_handlers_per_slice = 2
+	# 分片订阅所有者；在全部续列完成前保持有效。
+	var budgeted_owner: RefCounted = RefCounted.new()
+	# 实际处理顺序；分片只允许停顿，不得重复、跳过或重排处理器。
+	var budgeted_order: Array[String] = []
+	budgeted_manager.subscribe("large_timing", budgeted_owner, func(_event: RuleEvent) -> void: budgeted_order.append("skill0"))
+	budgeted_manager.subscribe("large_timing", budgeted_owner, func(_event: RuleEvent) -> void: budgeted_order.append("skill1"))
+	budgeted_manager.subscribe("large_timing", budgeted_owner, func(_event: RuleEvent) -> void: budgeted_order.append("skill2"))
+	budgeted_manager.subscribe("large_timing", budgeted_owner, func(_event: RuleEvent) -> void: budgeted_order.append("skill3"))
+	budgeted_manager.subscribe("large_timing", budgeted_owner, func(_event: RuleEvent) -> void: budgeted_order.append("skill4"))
+	# 待分片派发事件；最后一条续列排空时应进入finished终态。
+	var budgeted_event: RuleEvent = RuleEvent.new("large_timing")
+	budgeted_manager.dispatch(budgeted_event, -1, [])
+	if budgeted_order != ["skill0", "skill1"] or budgeted_manager.get_deferred_dispatch_count() != 1:
+		return _fail("trigger_budget_first_slice order=%s deferred=%d" % [budgeted_order, budgeted_manager.get_deferred_dispatch_count()])
+	budgeted_manager.resume_next_deferred()
+	if budgeted_order != ["skill0", "skill1", "skill2", "skill3"] or budgeted_manager.get_deferred_dispatch_count() != 1:
+		return _fail("trigger_budget_second_slice order=%s deferred=%d" % [budgeted_order, budgeted_manager.get_deferred_dispatch_count()])
+	budgeted_manager.resume_next_deferred()
+	if budgeted_order != ["skill0", "skill1", "skill2", "skill3", "skill4"] or budgeted_manager.has_deferred_dispatches() or budgeted_event.status != RuleEvent.Status.FINISHED:
+		return _fail("trigger_budget_completion order=%s event=%s" % [budgeted_order, budgeted_event.to_dict()])
+
+	# 同对象重入管理器；回调尝试再次派发原RuleEvent，必须在第一次回调内立即熔断。
+	var reentrant_manager: TriggerManager = TriggerManager.new()
+	# 同对象重入订阅所有者；该引用保证回调不被生命周期过滤。
+	var reentrant_owner: RefCounted = RefCounted.new()
+	# 同对象回调执行次数；正确熔断后固定为1。
+	var reentrant_count: Array[int] = [0]
+	# 被重复派发的同一规则事件；熔断后终止原派发的其余处理器。
+	var reentrant_event: RuleEvent = RuleEvent.new("reentrant_timing")
+	reentrant_manager.subscribe("reentrant_timing", reentrant_owner, func(event: RuleEvent) -> void:
+		reentrant_count[0] += 1
+		reentrant_manager.dispatch(event, -1, [])
+	)
+	reentrant_manager.dispatch(reentrant_event, -1, [])
+	if reentrant_count[0] != 1 or reentrant_event.termination_reason != "trigger_reentrant_event" or str(reentrant_manager.get_last_fault().get("reason", "")) != "trigger_reentrant_event":
+		return _fail("trigger_reentrant_guard count=%d event=%s fault=%s" % [reentrant_count[0], reentrant_event.to_dict(), reentrant_manager.get_last_fault()])
+
+	# 新事件递归管理器；深度3使异常技能在创建第4层前稳定中止。
+	var recursive_manager: TriggerManager = TriggerManager.new()
+	recursive_manager.max_nested_dispatch_depth = 3
+	# 递归订阅所有者；在深度测试全过程保持有效。
+	var recursive_owner: RefCounted = RefCounted.new()
+	# 真正进入回调的层数；超限事件在回调之前取消，因此固定为3。
+	var recursive_count: Array[int] = [0]
+	recursive_manager.subscribe("recursive_timing", recursive_owner, func(_event: RuleEvent) -> void:
+		recursive_count[0] += 1
+		recursive_manager.dispatch(RuleEvent.new("recursive_timing"), -1, [])
+	)
+	recursive_manager.dispatch(RuleEvent.new("recursive_timing"), -1, [])
+	if recursive_count[0] != 3 or str(recursive_manager.get_last_fault().get("reason", "")) != "trigger_recursion_limit" or recursive_manager.get_fault_count() != 1:
+		return _fail("trigger_recursion_guard count=%d fault=%s" % [recursive_count[0], recursive_manager.get_last_fault()])
+	return true
+
+
+## 验证迁移期普通RuleEventBus也会拒绝同一事件对象重入，避免旧订阅在进入TriggerManager之前就卡死主线程。
+func _test_rule_event_bus_recursion_guard() -> bool:
+	# 独立普通事件总线；作为Node加入树中与正式控制器生命周期一致。
+	var event_bus: RuleEventBus = RuleEventBus.new()
+	add_child(event_bus)
+	# 普通总线回调执行次数；同对象重入只允许外层回调执行1次。
+	var callback_count: Array[int] = [0]
+	# 被重入的普通规则事件；终止原因应明确区分于有序触发器的对应保护。
+	var event: RuleEvent = RuleEvent.new("legacy_reentrant")
+	event_bus.subscribe("legacy_reentrant", self, func(received_event: RuleEvent) -> void:
+		callback_count[0] += 1
+		event_bus.dispatch(received_event)
+	)
+	event_bus.dispatch(event)
+	if callback_count[0] != 1 or event.termination_reason != "rule_bus_reentrant_event" or str(event_bus.get_last_fault().get("reason", "")) != "rule_bus_reentrant_event":
+		event_bus.queue_free()
+		return _fail("rule_bus_reentrant_guard count=%d event=%s fault=%s" % [callback_count[0], event.to_dict(), event_bus.get_last_fault()])
+	event_bus.queue_free()
 	return true
 
 
