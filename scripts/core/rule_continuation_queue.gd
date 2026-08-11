@@ -11,17 +11,22 @@ var _continuations: Array[Dictionary] = []
 
 
 ## 压入一条规则续接并返回稳定编号；空类型会被拒绝，调用方不能保存 Callable 或运行时对象。
-func push(continuation_type: String, context: Dictionary = {}) -> int:
+## scheduler_metadata只保存统一结算的因果链计数；普通内容入口保持空字典，不需要知道调度策略。
+func push(continuation_type: String, context: Dictionary = {}, scheduler_metadata: Dictionary = {}) -> int:
 	if continuation_type.is_empty():
 		return -1
 	# 当前续接稳定编号；父流程可在同步子事件完成后精确移除预先登记的保险续接点。
 	var continuation_id: int = _next_continuation_id
 	_next_continuation_id += 1
-	_continuations.append({
+	# 待保存续接记录；上下文与调度元数据均深复制，不与调用方共享容器。
+	var continuation: Dictionary = {
 		"continuation_id":continuation_id,
 		"continuation_type":continuation_type,
 		"context":context.duplicate(true),
-	})
+	}
+	if not scheduler_metadata.is_empty():
+		continuation["scheduler_metadata"] = scheduler_metadata.duplicate(true)
+	_continuations.append(continuation)
 	return continuation_id
 
 

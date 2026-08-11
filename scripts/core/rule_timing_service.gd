@@ -57,14 +57,14 @@ func dispatch(event: RuleEvent) -> RuleEvent:
 	return event
 
 
-## 在当前选择结算完成后恢复同一时机尚未询问的技能；返回 true 表示恢复过程中又创建了选择请求。
+## 恢复同一时机尚未执行的技能；返回 true 表示仍有选择、嵌套子时机或预算续列等待统一管线继续处理。
 func resume_deferred_dispatches() -> bool:
 	if trigger_manager == null:
 		return false
 	return trigger_manager.resume_deferred(trigger_pause_condition)
 
 
-## 只恢复最内层的一条暂停时机；判定等子流程可在父时机剩余处理器之前取得结算优先级。
+## 只恢复最内层的一条暂停或分片时机；判定等子流程可在父时机剩余处理器之前取得结算优先级。
 func resume_next_deferred_dispatch() -> bool:
 	if trigger_manager == null:
 		return false

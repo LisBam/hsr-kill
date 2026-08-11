@@ -8,6 +8,9 @@ signal log_added(message: String)
 signal action_rejected(message: String)
 signal match_finished(winner: String)
 
+## 统一结算局部故障信号；异常技能续列或时机递归只终止当前链路，详情供日志、测试与停滞诊断读取。
+signal settlement_faulted(fault_data: Dictionary)
+
 ## 统一牌面表现信号；使用牌、展示牌和判定牌都发送可序列化 CardPresentationEvent 快照。
 signal card_presentation_requested(presentation_data: Dictionary)
 
@@ -37,6 +40,28 @@ signal card_choice_requested(choice_data: Dictionary)
 
 ## 过关斩将整层敌方重新入场后的流程任务键；同一时刻最多允许一条等待机缘的预览任务。
 const CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY: String = "conquest_enemy_replacement_opportunity"
+
+## 统一结算管线允许的通用规则续接类型；字符串不在此表时于登记阶段局部拒绝，避免无处理分支的记录静默丢失。
+const RULE_CONTINUATION_TYPES: Array[String] = [
+	"skill_response",
+	"card_response",
+	"equipment_response",
+	"dying_response",
+	"dying_after_response",
+	"trick_negation_response",
+	"simultaneous_negation_response",
+	"damage_finalization",
+	"damage_after_result",
+	"turn_start",
+	"slash_flow",
+	"recast_draw",
+	"target_card_completion",
+	"round_end_restore",
+	"phase_after_completion",
+	"conquest_enemy_defeat",
+	"conquest_enemy_replacement",
+	"opportunity_resolution",
+]
 
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
 const GAME_FLOW_TRANSITION_COORDINATOR_SCRIPT: Script = preload("res://scripts/core/game_flow_transition_coordinator.gd")
@@ -100,6 +125,24 @@ signal conquest_exit_save_ready(save_data: Dictionary)
 
 ## 单帧统一结算管线最多恢复的后续步骤数；默认256防止异常扩展形成同步死循环，达到上限后会延后一帧继续且不会越过未完成事件。
 @export_range(16, 4096, 16) var max_settlement_steps_per_pass: int = 256
+
+## 每个同步分片最多检查的同一时机技能数；默认64保持常规时机同步完成，大型扩展则分片续接以避免主线程长时间占用。
+@export_range(8, 512, 8) var max_trigger_handlers_per_slice: int = 64
+
+## 同一调用栈允许的规则时机嵌套深度；默认32足以容纳伤害、濒死与响应链，超限时只熔断新的最内层事件。
+@export_range(8, 128, 8) var max_rule_timing_dispatch_depth: int = 32
+
+## 同一技能续结算链允许重复进入完全相同上下文的次数；默认16兼容有限重复效果，超限后丢弃异常新步骤。
+@export_range(2, 128, 1) var max_repeated_skill_settlement_steps: int = 16
+
+## 一条技能续结算因果链允许的最大步数；默认512高于标准牌堆规模，用于熔断不断改写上下文以规避重复检测的异常链。
+@export_range(64, 4096, 64) var max_skill_settlement_chain_steps: int = 512
+
+## 同一通用规则续接因果链允许重复执行完全相同类型与上下文的次数；默认16防止父流程自我入栈。
+@export_range(2, 128, 1) var max_repeated_rule_continuation_steps: int = 16
+
+## 一条通用规则续接因果链允许的最大步数；默认512允许有限批量响应与移牌，并阻止持续改写上下文的无限续接链。
+@export_range(64, 4096, 64) var max_rule_continuation_chain_steps: int = 512
 
 ## 每名玩家随机展示的可选武将数量；默认5，运行时无需动态修改，后续扩展武将库后可在检查器调整。
 @export_range(1, 20, 1) var character_candidate_count: int = 5
@@ -456,8 +499,44 @@ var _pending_dying_start_contexts: Array[Dictionary] = []
 ## 等待嵌套规则选择结束后继续的技能结算队列；仅保存技能 ID、持有者 ID 与可序列化上下文，不持有 Callable 或技能对象。
 var _deferred_skill_settlements: Array[Dictionary] = []
 
+## 下一条技能续结算的稳定编号；从1递增，重新开局时恢复为1。
+var _next_skill_settlement_id: int = 1
+
+## 当前正在恢复的技能续结算语义键；空字符串表示未处于continue_settlement回调内。
+var _active_skill_settlement_key: String = ""
+
+## 当前技能续结算因果链已访问的语义键次数；子步骤继承深拷贝，独立初始步骤互不影响。
+var _active_skill_settlement_visits: Dictionary = {}
+
+## 当前技能续结算因果链已执行的步数；初始步骤为1，子步骤逐一增加。
+var _active_skill_settlement_chain_steps: int = 0
+
+## 统一结算管线是否正在同步排空；true时的重入请求只登记唯一延后唤醒。
+var _settlement_pipeline_running: bool = false
+
+## 是否已经向场景树登记一次延后结算唤醒；同一时刻最多为true一次。
+var _settlement_resume_scheduled: bool = false
+
+## 结算延后唤醒代次；重新开局或拆除运行时时递增，使旧call_deferred回调自动失效。
+var _settlement_resume_generation: int = 1
+
+## 最近一次统一结算故障的可序列化摘要；空字典表示本局尚未发生局部熔断。
+var _last_settlement_fault: Dictionary = {}
+
+## 本局统一结算局部熔断的累计次数；仅供诊断与测试，不修改任何玩法数值。
+var _settlement_fault_count: int = 0
+
 ## 被嵌套选择中断的通用规则续接栈；响应、救援、重铸和父牌收尾只保存稳定类型与可序列化上下文。
 var _rule_continuations: RuleContinuationQueue = RuleContinuationQueue.new()
+
+## 当前正在恢复的通用规则续接语义键；空字符串表示未处于续接回调内。
+var _active_rule_continuation_key: String = ""
+
+## 当前通用规则续接因果链的语义键访问次数；新的独立父流程不继承旧记录。
+var _active_rule_continuation_visits: Dictionary = {}
+
+## 当前通用规则续接因果链已执行步数；子续接在父回调内登记时递增。
+var _active_rule_continuation_chain_steps: int = 0
 
 ## 当前全局回合内各角色已经“使用”过的逻辑牌定义；响应牌仅在规则明确视为使用时由对应流程登记。
 var _cards_used_this_turn_by_player: Dictionary = {}
@@ -475,6 +554,7 @@ var _last_action_rejection_message: String = ""
 ## 绑定场景中的解耦组件并初始化身份规则服务。
 func _ready() -> void:
 	event_bus = get_node("RuleEventBus") as RuleEventBus
+	_configure_rule_dispatch_guards()
 	ai_coordinator = get_node("AICoordinator") as AICoordinator
 	network_gateway = get_node("NetworkGateway") as NetworkGateway
 	opportunity_system = get_node_or_null("OpportunitySystem") as OpportunitySystem
@@ -732,6 +812,12 @@ func _compose_stall_fingerprint() -> String:
 			parts.append("tok:%d" % int(pause_token.get("token_id", -1)))
 	parts.append("cc:%d" % int(_pending_card_choice.get("request_id", -1)))
 	parts.append("neg:%d" % _pending_negation_choices.size())
+	# 统一结算队列指纹；队首稳定ID或类型变化都表示技能与父规则确实在推进。
+	var first_skill_settlement_id: int = int(_deferred_skill_settlements.front().get("settlement_id", -1)) if not _deferred_skill_settlements.is_empty() else -1
+	# 最内层通用续接类型；空栈使用空字符串，不为诊断制造伪记录。
+	var top_rule_continuation_type: String = str(_rule_continuations.peek().get("continuation_type", "")) if _rule_continuations.has_pending() else ""
+	parts.append("settle:%d:%d:%d:%s:%d:%s:%s" % [_deferred_skill_settlements.size(), first_skill_settlement_id, _rule_continuations.size(), top_rule_continuation_type, trigger_manager.get_deferred_dispatch_count() if trigger_manager != null else 0, str(_settlement_resume_scheduled), str(_settlement_pipeline_running)])
+	parts.append("settlement_faults:%d" % _settlement_fault_count)
 	# AI调度标记；软修复重排计时器同样属于对局被推动，使修复有效性判定与玩家提醒不漏掉重排类修复。
 	parts.append("aisch:%d:%d" % [_scheduled_ai_drive_token, _scheduled_ai_choice_request_id])
 	if game_flow_pacer != null:
@@ -787,6 +873,10 @@ func perform_stall_self_repair(repair_kind: String) -> Dictionary:
 	var restarted_negation_tasks: int = _redrive_pending_negation_ai_tasks()
 	if restarted_negation_tasks > 0:
 		actions.append("reschedule_negation_ai:%d" % restarted_negation_tasks)
+	# 软修复同步重驱已存在的触发、装备、规则或技能后续；唯一唤醒不会与原有回调并行。
+	if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
+		_schedule_settlement_pipeline_resume()
+		actions.append("redrive_settlement_pipeline")
 	# 软修复：机缘流程推进兜底；仅在完全没有待办请求时轻推，避免越过尚未回应的正常选择。
 	if opportunity_system != null and opportunity_system.is_active() and event_scheduler != null and event_scheduler.get_pending_choice_requests().is_empty() and not has_pending_card_choice():
 		# 当前机缘阶段；结算阶段安全重连帧推进回调，选择阶段的强制代选只属于硬修复。
@@ -1211,6 +1301,7 @@ func _teardown_previous_match_runtime() -> void:
 	_pending_dying_start_contexts.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_reset_settlement_runtime_guard()
 	_clear_pending_judgment_request()
 	_cards_used_this_turn_by_player.clear()
 
@@ -1232,6 +1323,7 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 	modifier_pipeline = RuleModifierPipeline.new()
 	rule_query = RuleQuery.new(state, card_rules, modifier_pipeline)
 	trigger_manager = TriggerManager.new()
+	_configure_rule_dispatch_guards()
 	if timing_service == null:
 		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
 	else:
@@ -1266,6 +1358,7 @@ func _reset_per_match_progress_state() -> void:
 	_deferred_skill_settlements.clear()
 	_pending_dying_start_contexts.clear()
 	_rule_continuations.reset()
+	_reset_settlement_runtime_guard()
 	_negation_round_sequence = 0
 	_resolved_card_choice_uids.clear()
 	_resolved_equipment_material_uids.clear()
@@ -1337,6 +1430,7 @@ func _discard_failed_match_start() -> void:
 	_ai_choice_submit_failures.clear()
 	_is_driving_character_selection = false
 	_rule_continuations.reset()
+	_reset_settlement_runtime_guard()
 	_clear_pending_judgment_request()
 	state = null
 
@@ -2118,6 +2212,72 @@ func resume_settlement_pipeline() -> void:
 	_resume_settlement_pipeline()
 	if event_scheduler != null:
 		event_scheduler.drain()
+
+
+## 登记唯一的延后结算唤醒；多个技能、时机或停滞修复同帧请求时只保留一个call_deferred。
+func _schedule_settlement_pipeline_resume() -> void:
+	if _settlement_resume_scheduled or state == null or state.game_over or not is_inside_tree():
+		return
+	_settlement_resume_scheduled = true
+	# 本次延后唤醒捕获的对局代次；重开或拆除后与当前值不等时直接失效。
+	var resume_generation: int = _settlement_resume_generation
+	call_deferred("_run_scheduled_settlement_pipeline_resume", resume_generation)
+
+
+## 执行已登记的延后结算唤醒；只有代次一致的唯一任务能重新进入管线。
+func _run_scheduled_settlement_pipeline_resume(resume_generation: int) -> void:
+	if resume_generation != _settlement_resume_generation:
+		return
+	_settlement_resume_scheduled = false
+	_resume_settlement_pipeline()
+
+
+## 使全部旧延后唤醒失效并重置技能续结算诊断；重新开局、放弃对局与半成品回滚共用。
+func _reset_settlement_runtime_guard() -> void:
+	_settlement_resume_generation += 1
+	_settlement_resume_scheduled = false
+	_settlement_pipeline_running = false
+	_next_skill_settlement_id = 1
+	_active_skill_settlement_key = ""
+	_active_skill_settlement_visits.clear()
+	_active_skill_settlement_chain_steps = 0
+	_active_rule_continuation_key = ""
+	_active_rule_continuation_visits.clear()
+	_active_rule_continuation_chain_steps = 0
+	_last_settlement_fault.clear()
+	_settlement_fault_count = 0
+
+
+## 返回最近一次统一结算局部熔断摘要；返回值为深拷贝，调试器不能改写真实运行时。
+func get_last_settlement_fault() -> Dictionary:
+	return _last_settlement_fault.duplicate(true)
+
+
+## 返回本局统一结算局部熔断次数；该数值会纳入停滞指纹，但不参与玩法计算。
+func get_settlement_fault_count() -> int:
+	return _settlement_fault_count
+
+
+## 记录一次统一结算局部熔断；详情合并当前阶段、队列与故障序号后发送只读信号。
+func _record_settlement_fault(reason: String, details: Dictionary = {}) -> void:
+	_settlement_fault_count += 1
+	# 故障摘要；基础字段先建立，业务详情只能追加稳定可序列化数据。
+	var fault_data: Dictionary = {
+		"reason":reason,
+		"fault_count":_settlement_fault_count,
+		"phase":state.current_phase if state != null else "",
+		"current_player_id":state.current_player_id if state != null else -1,
+		"deferred_skill_settlement_count":_deferred_skill_settlements.size(),
+		"rule_continuation_count":_rule_continuations.size(),
+		"trigger_dispatch_count":trigger_manager.get_deferred_dispatch_count() if trigger_manager != null else 0,
+	}
+	for detail_key_variant: Variant in details.keys():
+		# 当前详情键；统一转为字符串，保证网络、回放与JSON诊断具有相同形态。
+		var detail_key: String = str(detail_key_variant)
+		fault_data[detail_key] = details[detail_key_variant]
+	_last_settlement_fault = fault_data.duplicate(true)
+	settlement_faulted.emit(fault_data.duplicate(true))
+	add_log("【流程保护】已终止异常结算步骤（%s），对局继续运行。" % reason)
 
 
 ## 取消指定请求的延时响应提示任务；请求已提交、中断或关闭后必须立即释放，否则 GameFlowPacer 残留任务会让 has_pending_play_interaction 误判为仍在交互中。
@@ -10325,15 +10485,61 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 	var skill_character_generation: int = int(context.get("skill_character_generation", skill.get_bound_character_generation() if skill != null else -1))
 	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty() or skill == null or not skill.matches_character_generation(skill_character_generation) or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 		return false
-	_deferred_skill_settlements.append({"skill_owner_id":skill_owner_id, "skill_id":skill_id, "skill_character_generation":skill_character_generation, "context":context.duplicate(true)})
+	# 待保存上下文；深复制确保内容脚本后续改动原字典不会更改已排队步骤。
+	var settlement_context: Dictionary = context.duplicate(true)
+	# 当前续结算的语义键；持有者、技能、武将代次与排序JSON共同区分真实业务步骤。
+	var settlement_key: String = _build_skill_settlement_key(skill_owner_id, skill_id, skill_character_generation, settlement_context)
+	# 子步骤继承当前因果链访问记录；非continue_settlement中的独立登记从空记录开始。
+	var settlement_visits: Dictionary = _active_skill_settlement_visits.duplicate(true) if not _active_skill_settlement_key.is_empty() else {}
+	# 当前语义键在同一因果链中的新访问次数；独立的相同触发各自从1起算。
+	var repeated_visit_count: int = int(settlement_visits.get(settlement_key, 0)) + 1
+	settlement_visits[settlement_key] = repeated_visit_count
+	# 当前新步骤所在因果链深度；子步骤在正在执行的父步骤基础上加1。
+	var chain_step_count: int = _active_skill_settlement_chain_steps + 1 if not _active_skill_settlement_key.is_empty() else 1
+	if repeated_visit_count > maxi(max_repeated_skill_settlement_steps, 1):
+		_record_settlement_fault("skill_settlement_repeat_limit", {
+			"skill_owner_id":skill_owner_id,
+			"skill_id":skill_id,
+			"skill_character_generation":skill_character_generation,
+			"settlement_key":settlement_key,
+			"repeat_count":repeated_visit_count,
+			"chain_step_count":chain_step_count,
+		})
+		return false
+	if chain_step_count > maxi(max_skill_settlement_chain_steps, 1):
+		_record_settlement_fault("skill_settlement_chain_limit", {
+			"skill_owner_id":skill_owner_id,
+			"skill_id":skill_id,
+			"skill_character_generation":skill_character_generation,
+			"settlement_key":settlement_key,
+			"repeat_count":repeated_visit_count,
+			"chain_step_count":chain_step_count,
+		})
+		return false
+	# 本条续结算的稳定编号；日志和回归可用它区分完全相同的独立触发。
+	var settlement_id: int = _next_skill_settlement_id
+	_next_skill_settlement_id += 1
+	_deferred_skill_settlements.append({
+		"settlement_id":settlement_id,
+		"skill_owner_id":skill_owner_id,
+		"skill_id":skill_id,
+		"skill_character_generation":skill_character_generation,
+		"context":settlement_context,
+		"settlement_key":settlement_key,
+		"settlement_visits":settlement_visits,
+		"chain_step_count":chain_step_count,
+	})
+	# 同步入口忘记显式重驱时，唯一延后唤醒会补齐结算；已在管线内时当前while会自然取下一项。
+	if not _settlement_pipeline_running and not has_pending_card_choice():
+		_schedule_settlement_pipeline_resume()
 	return true
 
 
 ## 在没有活动选择时依次恢复技能结算；恢复函数再次创建选择时立即停下，下一次提交后继续同一队列。
-## 每次只恢复一项并保留原登记顺序；统一结算管线会在两项之间重新处理新触发、装备事件与规则续接。
-func _resume_deferred_skill_settlements() -> void:
+## 每次只恢复一项并保留原登记顺序；返回true表示确实消费了一条记录，包括已失效的过期技能。
+func _resume_deferred_skill_settlements() -> bool:
 	if state == null or state.game_over or has_pending_card_choice() or _deferred_skill_settlements.is_empty():
-		return
+		return false
 	# 当前结算项；先移出队列，技能需要再次等待时会显式登记新的后续上下文。
 	# 当前最早登记的技能后续；同层技能的“然后”效果保持原有先到先结算规则。
 	var settlement: Dictionary = _deferred_skill_settlements.pop_front() as Dictionary
@@ -10344,12 +10550,85 @@ func _resume_deferred_skill_settlements() -> void:
 	# 技能结算上下文；半锁定技后段可显式携带locked_skill_segment，普通异步技能在失效期间不再恢复。
 	var settlement_context: Dictionary = (settlement.get("context", {}) as Dictionary).duplicate(true)
 	if skill != null and skill.matches_character_generation(int(settlement.get("skill_character_generation", -1))) and skill.can_use_effect(bool(settlement_context.get("locked_skill_segment", false))):
-		skill.continue_settlement(settlement_context)
+		_active_skill_settlement_key = str(settlement.get("settlement_key", _build_skill_settlement_key(skill_owner_id, str(settlement.get("skill_id", "")), int(settlement.get("skill_character_generation", -1)), settlement_context)))
+		# 旧队列记录的默认访问表；只把当前语义键记为首次访问，不使用字面键替代动态值。
+		var default_settlement_visits: Dictionary = {}
+		default_settlement_visits[_active_skill_settlement_key] = 1
+		_active_skill_settlement_visits = (settlement.get("settlement_visits", default_settlement_visits) as Dictionary).duplicate(true)
+		_active_skill_settlement_chain_steps = maxi(int(settlement.get("chain_step_count", 1)), 1)
+		# 回调前的故障计数；若回调中的子步骤已因熔断被拒绝，不再将false重复记录为未识别上下文。
+		var fault_count_before_callback: int = _settlement_fault_count
+		# 技能是否识别并处理了该续结算上下文；false且未发生子步熔断表示内容约定错误。
+		var handled: bool = bool(skill.continue_settlement(settlement_context))
+		_active_skill_settlement_key = ""
+		_active_skill_settlement_visits.clear()
+		_active_skill_settlement_chain_steps = 0
+		if not handled and _settlement_fault_count == fault_count_before_callback:
+			_record_settlement_fault("skill_settlement_unhandled_context", {
+				"settlement_id":int(settlement.get("settlement_id", -1)),
+				"skill_owner_id":skill_owner_id,
+				"skill_id":str(settlement.get("skill_id", "")),
+				"skill_character_generation":int(settlement.get("skill_character_generation", -1)),
+				"settlement_key":str(settlement.get("settlement_key", "")),
+			})
+	return true
+
+
+## 构建技能续结算的稳定语义键；JSON默认排序字典键，不受调用方插入顺序影响。
+func _build_skill_settlement_key(skill_owner_id: int, skill_id: String, skill_character_generation: int, context: Dictionary) -> String:
+	# 上下文的标准JSON快照；续结算契约只允许基础值、数组与字典，因此可安全用于循环检测。
+	var serialized_context: String = JSON.stringify(context)
+	return "%d:%s:%d:%s" % [skill_owner_id, skill_id, skill_character_generation, serialized_context]
 
 
 ## 登记被嵌套选择中断的通用规则后半段；上下文必须只包含基础值、数组和字典。
 func _defer_rule_continuation(continuation_type: String, context: Dictionary) -> int:
-	return _rule_continuations.push(continuation_type, context)
+	if not RULE_CONTINUATION_TYPES.has(continuation_type):
+		_record_settlement_fault("unknown_rule_continuation_type", {"continuation_type":continuation_type})
+		return -1
+	# 当前续接语义键；类型与排序JSON共同区分父流程的具体恢复步骤。
+	var continuation_key: String = _build_rule_continuation_key(continuation_type, context)
+	# 子续接访问表；只有在正在恢复的父续接回调中登记时才继承。
+	var continuation_visits: Dictionary = _active_rule_continuation_visits.duplicate(true) if not _active_rule_continuation_key.is_empty() else {}
+	# 当前语义键在同一续接因果链中的新访问次数；独立续接从1起算。
+	var repeated_visit_count: int = int(continuation_visits.get(continuation_key, 0)) + 1
+	continuation_visits[continuation_key] = repeated_visit_count
+	# 当前子续接的因果链步数；父回调外的独立登记为1。
+	var chain_step_count: int = _active_rule_continuation_chain_steps + 1 if not _active_rule_continuation_key.is_empty() else 1
+	if repeated_visit_count > maxi(max_repeated_rule_continuation_steps, 1):
+		_record_settlement_fault("rule_continuation_repeat_limit", {
+			"continuation_type":continuation_type,
+			"continuation_key":continuation_key,
+			"repeat_count":repeated_visit_count,
+			"chain_step_count":chain_step_count,
+		})
+		return -1
+	if chain_step_count > maxi(max_rule_continuation_chain_steps, 1):
+		_record_settlement_fault("rule_continuation_chain_limit", {
+			"continuation_type":continuation_type,
+			"continuation_key":continuation_key,
+			"repeat_count":repeated_visit_count,
+			"chain_step_count":chain_step_count,
+		})
+		return -1
+	# 续接调度元数据；RuleContinuationQueue只负责深复制保存，不解释其中任何计数。
+	var scheduler_metadata: Dictionary = {
+		"continuation_key":continuation_key,
+		"continuation_visits":continuation_visits,
+		"chain_step_count":chain_step_count,
+	}
+	# 新规则续接稳定ID；负数表示数据队列拒绝该记录。
+	var continuation_id: int = _rule_continuations.push(continuation_type, context, scheduler_metadata)
+	if continuation_id >= 0 and not _settlement_pipeline_running and not has_pending_card_choice():
+		_schedule_settlement_pipeline_resume()
+	return continuation_id
+
+
+## 构建通用规则续接的稳定语义键；同类型同上下文在单条因果链中共享重复计数。
+func _build_rule_continuation_key(continuation_type: String, context: Dictionary) -> String:
+	# 续接上下文的标准JSON快照；契约禁止运行时对象，因此可直接用于语义键。
+	var serialized_context: String = JSON.stringify(context)
+	return "%s:%s" % [continuation_type, serialized_context]
 
 
 ## 为机缘效果登记嵌套选择后的稳定恢复点；上下文由机缘组件自身保存，通用栈只记录恢复类型。
@@ -10357,7 +10636,7 @@ func defer_opportunity_resolution() -> bool:
 	# 新续接记录ID；负数表示队列拒绝异常上下文。
 	var continuation_id: int = _defer_rule_continuation("opportunity_resolution", {})
 	if continuation_id >= 0 and not has_pending_card_choice():
-		call_deferred("_resume_settlement_pipeline")
+		_schedule_settlement_pipeline_resume()
 	return continuation_id >= 0
 
 
@@ -10414,6 +10693,14 @@ func _resume_next_rule_continuation() -> void:
 	var continuation_type: String = str(continuation.get("continuation_type", ""))
 	# 续接可序列化上下文；处理函数获得深拷贝，不能修改栈内历史记录。
 	var context: Dictionary = (continuation.get("context", {}) as Dictionary).duplicate(true)
+	# 当前续接的调度元数据；旧记录缺失时从当前语义键首次访问开始。
+	var scheduler_metadata: Dictionary = (continuation.get("scheduler_metadata", {}) as Dictionary).duplicate(true)
+	_active_rule_continuation_key = str(scheduler_metadata.get("continuation_key", _build_rule_continuation_key(continuation_type, context)))
+	# 旧续接默认访问表；动态语义键使用下标写入，子续接可正确继承。
+	var default_continuation_visits: Dictionary = {}
+	default_continuation_visits[_active_rule_continuation_key] = 1
+	_active_rule_continuation_visits = (scheduler_metadata.get("continuation_visits", default_continuation_visits) as Dictionary).duplicate(true)
+	_active_rule_continuation_chain_steps = maxi(int(scheduler_metadata.get("chain_step_count", 1)), 1)
 	match continuation_type:
 		"skill_response":
 			_continue_skill_response_after_barrier(context)
@@ -10452,10 +10739,30 @@ func _resume_next_rule_continuation() -> void:
 		"opportunity_resolution":
 			if opportunity_system != null:
 				opportunity_system.continue_after_barrier()
+		_:
+			_record_settlement_fault("unknown_rule_continuation_type", {"continuation_type":continuation_type})
+	_active_rule_continuation_key = ""
+	_active_rule_continuation_visits.clear()
+	_active_rule_continuation_chain_steps = 0
 
 
 ## 按触发、装备、规则后半段、技能后续的固定优先级排空当前结算，最后才恢复阶段或父牌游标。
 func _resume_settlement_pipeline() -> void:
+	# 技能回调内重新请求结算时不得递归进入同一管线；唯一延后唤醒会在当前调用栈退出后重试。
+	if _settlement_pipeline_running:
+		_schedule_settlement_pipeline_resume()
+		return
+	# 直接安全出口比已登记的空闲帧任务更早进入时，立即使旧任务代次失效，避免它在测试重置或下一业务状态中空跑。
+	if _settlement_resume_scheduled:
+		_settlement_resume_generation += 1
+		_settlement_resume_scheduled = false
+	_settlement_pipeline_running = true
+	_run_settlement_pipeline_pass()
+	_settlement_pipeline_running = false
+
+
+## 执行一次有步数预算的结算排空；本函数只由防重入包装器调用，内部可按规则边界提前返回。
+func _run_settlement_pipeline_pass() -> void:
 	if state == null or state.game_over:
 		return
 	# 换将过渡期唯一放行的续接：机缘效果嵌套选择结束后，栈顶的机缘续接必须弹出，否则换将完成回调永远不可达。
@@ -10512,7 +10819,7 @@ func _resume_settlement_pipeline() -> void:
 		break
 	# 达到单帧保护上限时仍有明确队列，下一帧只继续同一管线；未完成后续绝不交给阶段游标或父牌兼容入口。
 	if settlement_step_count >= max_settlement_steps_per_pass and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
-		call_deferred("_resume_settlement_pipeline")
+		_schedule_settlement_pipeline_resume()
 		return
 	if state != null and not state.game_over and not has_pending_card_choice() and not has_pending_judgment_request() and not _conquest_replacement_transition_active and (game_flow_pacer == null or not game_flow_pacer.has_pending_skill_interval()):
 		_try_resume_pending_finish_turn()
@@ -10521,7 +10828,7 @@ func _resume_settlement_pipeline() -> void:
 		_resume_interrupted_turn_flow()
 		# 阶段恢复可能刚刚完成额外弃牌阶段并暴露新的技能“然后”步骤；延后一帧再次排空，避免后续额外出牌阶段被嵌套询问吞掉。
 		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
-			call_deferred("_resume_settlement_pipeline")
+			_schedule_settlement_pipeline_resume()
 
 
 ## 完成当前最内层尚未收尾的逐目标卡牌生命周期；用于进入角色或模式边界前保证目标End/After时机不会被父事件推进吞掉。
@@ -14553,9 +14860,28 @@ func _dispatch_timing_service_event(event: RuleEvent) -> void:
 	var previous_initial_choice_request_id: int = _rule_timing_initial_choice_request_id
 	# 外层派发状态；嵌套时机返回后必须恢复，避免把后续非时机选择误识别为等待触发的技能。
 	var previous_dispatching_state: bool = _is_dispatching_rule_timing
+	# 派发前已存在的触发续列数；嵌套调用只同步排空自己新建的分片，不越过旧外层选择续列。
+	var deferred_dispatch_count_before: int = trigger_manager.get_deferred_dispatch_count() if trigger_manager != null else 0
 	_rule_timing_initial_choice_request_id = int(_pending_card_choice.get("request_id", -1))
 	_is_dispatching_rule_timing = true
 	timing_service.dispatch(event)
+	# 纯同步父牌效还不能在返回后跨帧保留调用栈；因此无选择的新分片必须在父逻辑继续前受控排空。
+	# 已创建真实选择时依然保留续列，由选择提交后的统一结算管线恢复。
+	var synchronous_resume_slice_count: int = 0
+	while trigger_manager != null and not has_pending_card_choice() and (trigger_manager.is_dispatch_deferred(event) or trigger_manager.get_deferred_dispatch_count() > deferred_dispatch_count_before):
+		if synchronous_resume_slice_count >= maxi(max_settlement_steps_per_pass, 1):
+			# 超限时终止的当前触发子树事件数；清空后父规则可按取消结果继续安全收尾。
+			var aborted_dispatch_count: int = trigger_manager.abort_all_deferred_dispatches("trigger_dispatch_slice_limit")
+			if not event.is_terminal():
+				event.cancel("trigger_dispatch_slice_limit")
+			_record_settlement_fault("trigger_dispatch_slice_limit", {
+				"event_name":event.name,
+				"resume_slice_count":synchronous_resume_slice_count,
+				"aborted_dispatch_count":aborted_dispatch_count,
+			})
+			break
+		synchronous_resume_slice_count += 1
+		timing_service.resume_next_deferred_dispatch()
 	_is_dispatching_rule_timing = previous_dispatching_state
 	_rule_timing_initial_choice_request_id = previous_initial_choice_request_id
 
@@ -14564,11 +14890,32 @@ func _dispatch_timing_service_event(event: RuleEvent) -> void:
 func _ensure_timing_service() -> void:
 	if trigger_manager == null:
 		trigger_manager = TriggerManager.new()
+	_configure_rule_dispatch_guards()
 	if timing_service == null:
 		timing_service = RuleTimingService.new(event_bus, trigger_manager, state)
 	else:
 		timing_service.configure(event_bus, trigger_manager, state)
 	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
+
+
+## 把检查器中的分片与递归上限同步给当前普通总线和有序触发器；重建或测试替换实例后也可重复调用。
+func _configure_rule_dispatch_guards() -> void:
+	if event_bus != null:
+		event_bus.max_nested_dispatch_depth = max_rule_timing_dispatch_depth
+		if not event_bus.dispatch_faulted.is_connected(_on_rule_dispatch_faulted):
+			event_bus.dispatch_faulted.connect(_on_rule_dispatch_faulted)
+	if trigger_manager != null:
+		trigger_manager.max_handlers_per_slice = max_trigger_handlers_per_slice
+		trigger_manager.max_nested_dispatch_depth = max_rule_timing_dispatch_depth
+		if not trigger_manager.dispatch_faulted.is_connected(_on_rule_dispatch_faulted):
+			trigger_manager.dispatch_faulted.connect(_on_rule_dispatch_faulted)
+
+
+## 接收普通总线或有序触发器的局部熔断；统一转成结算故障，不再触发任何规则时机。
+func _on_rule_dispatch_faulted(dispatch_fault: Dictionary) -> void:
+	# 派发层故障副本；嵌套字典保留原始reason、事件名与深度便于诊断。
+	var stable_dispatch_fault: Dictionary = dispatch_fault.duplicate(true)
+	_record_settlement_fault("rule_timing_dispatch_fault", {"dispatch_fault":stable_dispatch_fault})
 
 
 ## 判断当前有序触发是否应在本技能询问后暂停；派发前已存在的响应或选牌不会被误识别为新询问。

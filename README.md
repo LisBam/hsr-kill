@@ -63,7 +63,9 @@
 
 该测试还覆盖【星落】拒绝空目标，以及【追歼】仅以武将牌左上角提示呈现、不会写入公开标记，但会由提示中的来源ID驱动队友属性伤害集火优先级。
 
-运行 `res://tests/event_runtime_test.tscn` 可验证 `GameEvent` 父子事件、`next/after`、长期根事件不阻塞新子树、多通道暂停、`ChoiceRequest/ChoiceResponse` 旧响应拒绝、终止三态、触发排序、查询修正、虚拟牌、无懈交替和实体移牌知识；测试使用固定数据，不依赖图形界面。
+运行 `res://tests/event_runtime_test.tscn` 可验证 `GameEvent` 父子事件、`next/after`、长期根事件不阻塞新子树、多通道暂停、`ChoiceRequest/ChoiceResponse` 旧响应拒绝、终止三态、触发排序与分片、同一规则事件重入保护、新事件递归深度保护、查询修正、虚拟牌、无懈交替和实体移牌知识；测试使用固定数据，不依赖图形界面。
+
+运行 `res://tests/skill_settlement_runtime_test.tscn` 可验证同步父时机不会越过分片内层时机、相同上下文与变化上下文的技能自登记会分别被重复上限和因果链上限局部终止、通用规则续接受到重复/总链/类型白名单三层保护，以及重复空闲帧唤醒不会再次消费已完成步骤。
 
 运行 `res://tests/gameplay_pause_test.tscn` 可验证统一对局暂停接口会同时暂停场景树、事件运行时与 AI 延迟任务，暂停期间直接提交的 AI 动作也会被拒绝，释放令牌后 AI 从剩余等待时间继续运行。
 
