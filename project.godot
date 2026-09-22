@@ -21,6 +21,7 @@ config/icon="res://icon.svg"
 
 GameSettings="*res://scripts/autoload/game_settings.gd"
 GameDatabase="*res://scripts/autoload/game_database.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]
 
@@ -33,6 +34,10 @@ window/stretch/mode="canvas_items"
 [dotnet]
 
 project/assembly_name="HSR Kill"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
 
 [input_devices]
 
