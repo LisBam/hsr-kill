@@ -3,7 +3,7 @@
   "name": "00-bootstrap-guidelines",
   "title": "Bootstrap Guidelines",
   "description": "Fill in project development guidelines for AI agents",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "docs",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "LisBam",
   "assignee": "LisBam",
   "createdAt": "2026-09-22",
-  "completedAt": null,
+  "completedAt": "2026-09-23",
   "branch": null,
   "base_branch": null,
   "worktree_path": null,
@@ -21,9 +21,14 @@
   "children": [],
   "parent": null,
   "relatedFiles": [
-    ".trellis/spec/backend/",
-    ".trellis/spec/frontend/"
+    ".trellis/spec/index.md",
+    ".trellis/spec/project/",
+    ".trellis/spec/content/",
+    ".trellis/spec/core/",
+    ".trellis/spec/ui/",
+    ".trellis/spec/adapters/",
+    ".trellis/spec/guides/"
   ],
-  "notes": "First-time setup task created by trellis init (fullstack project)",
+  "notes": "首次安装 Trellis 时的 spec 初始化任务。2026-09-23 完成：删除不适用的 backend/frontend Web 模板，按 Godot/GDScript 项目真实分层重建为 project/content/core/ui/adapters + guides，并本地化共享思维指南。",
   "meta": {}
 }

@@ -21,42 +21,53 @@ the rest conversationally.
 
 ## Status (update the checkboxes as you complete each item)
 
-- [ ] Fill backend guidelines
-- [ ] Fill frontend guidelines
-- [ ] Add code examples
+- [x] 按项目真实分层重建 spec 结构（删除不适用的 backend / frontend 模板）
+- [x] 填写 5 个分层的指南（project / content / core / ui / adapters）
+- [x] 加入真实代码路径、真实命令与权威文档引用作为依据
+- [x] 本地化 `guides/` 共享思维指南，移除与本项目无关的模板内容
 
 ---
 
-## Spec files to populate
+## 完成记录（2026-09-23）
 
+本项目是 **Godot 4.6 / GDScript 单仓库项目**（主场景 `res://scenes/main.tscn`）。
+`trellis init` 生成的 `spec/backend` 与 `spec/frontend`（Web 前后端模板）完全不适用，
+因此**删除**并按其真实分层重建。
 
-### Backend guidelines
+Trellis 的 spec 定位是「注入给 AI 编码子代理的工程约定」，不是项目百科。
+项目已有 `docs/` 权威文档体系，因此 spec 只做**提炼与索引**，深度细节仍以 `docs/` 为准。
 
-| File | What to document |
-|------|------------------|
-| `.trellis/spec/backend/directory-structure.md` | Where different file types go (routes, services, utils) |
-| `.trellis/spec/backend/database-guidelines.md` | ORM, migrations, query patterns, naming conventions |
-| `.trellis/spec/backend/error-handling.md` | How errors are caught, logged, and returned |
-| `.trellis/spec/backend/logging-guidelines.md` | Log levels, format, what to log |
-| `.trellis/spec/backend/quality-guidelines.md` | Code review standards, testing requirements |
+### 实际落地结构
 
+| Spec 层 | 覆盖的真实目录 | 文件 |
+|---|---|---|
+| `project/` | 跨层全局约定 | `index.md`、`collaboration-rules.md`、`documentation-sync.md`、`verification.md` |
+| `content/` | `game_data/cards`、`skills`、`characters`、`data/decks.json` | `index.md`、`naming-and-directory.md`、`card-authoring.md`、`skill-authoring.md`、`content-ai.md` |
+| `core/` | `scripts/core`、`scripts/data`、`scripts/opportunity` | `index.md`、`layering-and-state.md`、`event-runtime-phases.md` |
+| `ui/` | `scripts/ui`、`scenes` | `index.md`、`component-patterns.md` |
+| `adapters/` | `scripts/ai`、`scripts/network`、`scripts/autoload`、`scripts/platform` | `index.md`、`ai-pipeline.md`、`network-layer.md`、`autoload-and-platform.md` |
+| `guides/` | 跨层思维指南（已本地化） | `index.md`、`code-reuse-thinking-guide.md`、`cross-layer-thinking-guide.md` |
 
-### Frontend guidelines
+另有 `.trellis/spec/index.md` 作为总导航：分层地图 + `docs/` 权威文档索引 + 禁读禁改清单 + 五条总纲原则。
 
-| File | What to document |
-|------|------------------|
-| `.trellis/spec/frontend/directory-structure.md` | Component/page/hook organization |
-| `.trellis/spec/frontend/component-guidelines.md` | Component patterns, props conventions |
-| `.trellis/spec/frontend/hook-guidelines.md` | Custom hook naming, patterns |
-| `.trellis/spec/frontend/state-management.md` | State library, patterns, what goes where |
-| `.trellis/spec/frontend/type-safety.md` | TypeScript conventions, type organization |
-| `.trellis/spec/frontend/quality-guidelines.md` | Linting, testing, accessibility |
+每个 `index.md` 均含 Trellis 约定的 **Pre-Development Checklist** 与 **Quality Check** 两节。
 
+### 素材来源（全部来自项目真实资产）
 
-### Thinking guides (already populated)
+`AGENTS.md`、`项目专属AGENTS.md`、`docs/架构说明.md`、`docs/内容制作指南.md`、
+`docs/游戏机制与玩法内容.md`、`docs/卡牌系统.md`、`docs/AI模块.md`、`docs/网络通信.md`、
+`docs/界面与交互.md`、`README.md`，以及 `scripts/`、`game_data/` 的真实目录与文件路径。
 
-`.trellis/spec/guides/` contains general thinking guides pre-filled with
-best practices. Customize only if something clearly doesn't fit this project.
+规则冲突时以 `docs/` 为准；spec 内的每条约定都指向真实文件或真实文档章节。
+
+### 验证
+
+```bash
+python ./.trellis/scripts/get_context.py --mode packages
+# → Spec layers: adapters, content, core, project, ui
+```
+
+`.trellis/spec/` 内已无任何模板占位符（`To fill` / `TODO: fill` / `placeholder` 均已清零）。
 
 ---
 
