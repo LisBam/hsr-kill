@@ -1,327 +1,127 @@
-# Cross-Layer Thinking Guide
+# 跨层思维指南
 
-> **Purpose**: Think through data flow across layers before implementing.
-
----
-
-## The Problem
-
-**Most bugs happen at layer boundaries**, not within layers.
-
-Common cross-layer bugs:
-
-- API returns format A, frontend expects format B
-- Database stores X, service transforms to Y, but loses data
-- Multiple layers implement the same logic differently
+> **目的**：实现跨层功能前，先把数据流想清楚。
+> 本指南已按《崩铁杀》项目本地化（原模板中的 TypeScript / CLI / 文档站内容与本项目无关，已移除）。
 
 ---
 
-## Before Implementing Cross-Layer Features
+## 为什么
 
-### Step 1: Map the Data Flow
+**大多数 bug 出现在层的边界上，而不是层内部。**
 
-Draw out how data moves:
-
-```
-Source → Transform → Store → Retrieve → Transform → Display
-```
-
-For each arrow, ask:
-
-- What format is the data in?
-- What could go wrong?
-- Who is responsible for validation?
-
-### Step 2: Identify Boundaries
-
-| Boundary              | Common Issues                     |
-| --------------------- | --------------------------------- |
-| API ↔ Service         | Type mismatches, missing fields   |
-| Service ↔ Database    | Format conversions, null handling |
-| Backend ↔ Frontend    | Serialization, date formats       |
-| Component ↔ Component | Props shape changes               |
-
-### Step 3: Define Contracts
-
-For each boundary:
-
-- What is the exact input format?
-- What is the exact output format?
-- What errors can occur?
+本项目的边界感尤其重要，因为同一份规则状态要同时服务**离线、LAN 房主、LAN 客户端、AI、回放**五个消费者。
 
 ---
 
-## Common Cross-Layer Mistakes
+## 一、本项目的真实数据流
 
-### Mistake 1: Implicit Format Assumptions
-
-**Bad**: Assuming date format without checking
-
-**Good**: Explicit format conversion at boundaries
-
-### Mistake 2: Scattered Validation
-
-**Bad**: Validating the same thing in multiple layers
-
-**Good**: Validate once at the entry point
-
-### Mistake 3: Leaky Abstractions
-
-**Bad**: Component knows about database schema
-
-**Good**: Each layer only knows its neighbors
-
-### Mistake 4: Every Consumer Parses The Same Payload
-
-**Bad**: A command reads JSONL events and casts fields inline:
-
-```typescript
-const thread = (ev as { thread?: string }).thread;
-const labels = (ev as { labels?: string[] }).labels;
+```text
+game_data/{cards,characters,skills} + data/decks.json
+        ↓  自动扫描 + 校验（GameDatabase）
+CardInstance / PlayerState / GameState
+        ↓
+PlayerAction / ChoiceRequest / ChoiceResponse        ← 所有操作来源统一入口
+        ↓
+MatchController → EventScheduler → 各规则服务
+        ↓
+观察者裁剪快照 + 表现事件
+   ↙            ↓              ↘
+ UI         AICoordinator     NetworkGateway        ← 三者都只读、都不得改写状态
 ```
 
-This looks local, but it means every consumer owns a private version of the
-event contract. The next field change will update one command and miss another.
+对每个箭头问三件事：
 
-**Good**: Decode once at the event boundary, then export typed projections:
-
-```typescript
-if (!isThreadEvent(ev)) return false;
-return ev.thread === filter.thread;
-```
-
-**Rule**: For append-only logs, JSON streams, RPC payloads, or config files,
-create one owner for:
-
-- event / payload type definitions
-- type guards and normalization from `unknown`
-- metadata projections used by UI commands
-- reducers that replay state from the source of truth
-
-Rendering code may format fields, but it must not redefine the payload contract.
+1. 数据此时是什么格式？
+2. 可能出什么问题？
+3. **谁负责校验？**
 
 ---
 
-## Checklist for Cross-Layer Features
+## 二、边界清单与常见问题
 
-Before implementation:
-
-- [ ] Mapped the complete data flow
-- [ ] Identified all layer boundaries
-- [ ] Defined format at each boundary
-- [ ] Decided where validation happens
-
-After implementation:
-
-- [ ] Tested with edge cases (null, empty, invalid)
-- [ ] Verified error handling at each boundary
-- [ ] Checked data survives round-trip
-- [ ] Checked that consumers import shared decoders / projections instead of
-      casting payload fields locally
-- [ ] Checked that derived state points back to the source event identifier
-      (`seq`, `id`, `version`) instead of inventing a second cursor
+| 边界 | 常见问题 |
+|---|---|
+| 内容层 ↔ `GameDatabase` | 命名非法、ID 重复、技能/势力/牌堆引用失效、把静态定义当运行时实例绑定 |
+| `GameState` ↔ 观察者快照 | **私有信息未裁剪**（身份、手牌、候选、随机种子） |
+| 规则层 ↔ UI | UI 直接读 `GameState`；UI 自行推算统计值；UI 绕过 `submit_action()` |
+| 规则层 ↔ AI | AI 直接改状态；AI 拿到非法动作；跨决策缓存快照 |
+| 规则层 ↔ 网络 | 客户端上传状态；actor 可伪造；快照未按观察者裁剪 |
+| 运行时 ↔ 存档/回放 | `context` 里放了 `Callable`/节点/`PlayerState`，导致序列化失败 |
+| UI ↔ 主题层 | 组件硬编码颜色常量，切换风格后不跟随 |
+| 内容层 ↔ 事件运行时 | 事件步骤无推进/终态/暂停点；直接写阶段字段 |
 
 ---
 
-## Cross-Platform Template Consistency
+## 三、常见跨层错误
 
-In Trellis, command templates (e.g., `record-session.md`) exist in **multiple platforms** with identical or near-identical content. This is a cross-layer boundary.
+### 错误 1：隐式格式假设
 
-### Checklist: After Modifying Any Command Template
+- **坏**：假设快照里一定有某个字段，直接下标取值。
+- **好**：在边界处显式检查；缺失时给出明确回退。
 
-- [ ] Find all platforms with the same command: `find src/templates/*/commands/trellis/ -name "<command>.*"`
-- [ ] Update all platform copies (Markdown `.md` and TOML `.toml`)
-- [ ] For Gemini TOML: adapt line continuations (`\\` vs `\`) and triple-quoted strings
-- [ ] Run `/trellis:check-cross-layer` to verify nothing was missed
+### 错误 2：校验散落多层
 
-**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, OpenCode, and Gemini — caught by cross-layer check.
+- **坏**：UI 校验一遍、技能校验一遍、控制器又校验一遍，规则各不相同。
+- **好**：**校验一次，在权威入口**。UI 只做"候选可点击性"的表现判断，最终以权威复核为准。
 
----
+> 例：装备界面的 `play_phase_interaction` 等字段只是界面提示，核心仍会调用装备源码的 `validate_play_phase_action()`。
 
-## Generated Runtime Template Upgrade Consistency
+### 错误 3：抽象泄漏
 
-Some generated files are both documentation and runtime input. In Trellis,
-`.trellis/workflow.md` is parsed by `get_context.py`, `workflow_phase.py`,
-SessionStart filters, and per-turn hooks. Template changes must be validated
-against both fresh init and upgrade paths.
+- **坏**：`card_view.gd` 知道 `GameState` 的结构；`basic_ai_policy.gd` 知道具体卡牌 ID。
+- **好**：每层只知道自己的邻居。UI 只知道快照；AI 只读元数据与合法动作。
 
-### Checklist: After Modifying A Runtime-Parsed Template
+### 错误 4：每个消费者各自解析同一份负载
 
-- [ ] Identify every runtime parser that reads the template, not just the file
-      writer that installs it
-- [ ] Check whether relevant syntax lives outside obvious managed regions
-      such as tag blocks
-- [ ] Verify fresh `init` output and a versioned `update` scenario that writes
-      the older `.trellis/.version`
-- [ ] Add an upgrade regression using an older pristine template fixture, then
-      assert the installed file reaches the current packaged shape
-- [ ] Update the backend spec that owns the runtime contract
+- **坏**：多个组件各自从快照/事件字典里掏字段并本地猜类型。
+- **好**：让数据的**所有者**提供稳定字段名与投影；新增展示需求先考虑补快照字段。
+
+### 错误 5：派生了第二份状态
+
+- **坏**：UI 自己维护一份"当前选中目标"，AI 自己维护一份"已暴露身份"。
+- **好**：权威端唯一持有；派生状态必须能指回权威来源（玩家 ID、实体 UID、事件 ID）。
 
 ---
 
-## Versioned Documentation Boundary
+## 四、新增字段 / 新增事件的跨层清单
 
-Versioned documentation is a cross-layer boundary: source paths, `docs.json`
-version routing, and the rendered version selector must all describe the same
-release line.
+当你要给状态、快照或事件加东西时，**必须逐个走完**：
 
-### Checklist: Before Editing Versioned Docs
+- [ ] 字段加在**权威侧**（`PlayerState` / `GameState` / `CardInstance`）。
+- [ ] 明确它是否需要进入**观察者快照**；若需要，确认**裁剪规则**（谁能看到）。
+- [ ] 明确它是否需要进入**权威存档 / 回放**；若需要，确认可序列化。
+- [ ] 同步所有读取方：UI 渲染、AI 估值、网络传输。
+- [ ] 若影响玩法或数值，同步 `docs/游戏机制与玩法内容.md`。
+- [ ] 补一个回归测试（尤其是可见性/裁剪类改动）。
 
-- [ ] Identify the target release line: stable, beta, or RC
-- [ ] Verify the edited MDX path matches that line:
-  - stable: `docs-site/{start,advanced,...}` and `docs-site/zh/{start,advanced,...}`
-  - beta: `docs-site/beta/**` and `docs-site/zh/beta/**`
-  - RC: `docs-site/rc/**` and `docs-site/zh/rc/**`
-- [ ] Verify `docs.json` navigation points the version label to the same paths
-- [ ] Grep the opposite tree for release-line-specific terms before committing
-- [ ] Treat beta content appearing under root release paths as a source-path bug,
-      not a rendering bug
-
-**Real-world example**: A beta-only task workflow change documented
-`prd.md` + `design.md` + `implement.md`, task-creation consent, and Codex
-mode banners under root `start/` and `advanced/` paths. The docs site then
-served 0.6 beta behavior under the Release selector. The fix was to restore root
-release docs, move the 0.6 content to `beta/` and `zh/beta/`, and add a grep
-audit for beta markers against the root release tree.
-
-**Real-world example**: Codex inline mode changed workflow platform markers from
-`[Codex]` / `[Kilo, Antigravity, Windsurf]` to `[codex-sub-agent]` /
-`[codex-inline, Kilo, Antigravity, Windsurf]`. Fresh init was correct, but
-`trellis update` only merged `[workflow-state:*]` blocks and preserved stale
-markers outside those blocks. Result: upgraded projects got new hook scripts
-but old workflow routing, so `get_context.py --mode phase --platform codex`
-could return empty Phase 2.1 detail.
+> 新增"可见但不应被所有人看到"的字段是最容易出事的一类改动——**必查 `to_dict(viewer_id, ...)` 的裁剪分支**。
 
 ---
 
-## Mode-Detection Probe Checklist
+## 五、检查清单
 
-When a CLI auto-detects a mode by probing a remote resource (e.g., checking if `index.json` exists to decide marketplace vs direct download):
+实现前：
 
-### Before implementing:
+- [ ] 画出了完整数据流
+- [ ] 识别了全部层边界
+- [ ] 定义了每个边界的格式与可见性
+- [ ] 决定了校验发生在哪一层（应为权威入口）
 
-- [ ] Probe runs in **ALL** code paths that use the result (interactive, `-y`, `--flag` combos)
-- [ ] 404 vs transient error are distinguished — don't treat both as "not found"
-- [ ] Transient errors **abort or retry**, never silently switch modes
-- [ ] Shared state (caches, prefetched data) is **reset** when context changes (e.g., user switches source)
-- [ ] **Shortcut paths** (e.g., `--template` skipping picker) must have the same error-handling quality as the probed path — check that downstream functions don't call catch-all wrappers
+实现后：
 
-### After implementing:
-
-- [ ] Trace every path from probe result to the mode-decision branch — no fallthrough
-- [ ] External format contracts (giget URI, raw URLs) are tested or at least documented as comments
-- [ ] Metadata reads consume a complete response or use a streaming parser — never parse a fixed-size prefix as full JSON
-- [ ] When reconstructing a composite identifier from parsed parts, verify **all** fields are included and in the **correct position** (e.g., `provider:repo/path#ref` not `provider:repo#ref/path`)
-- [ ] Verify that **action functions** called after a shortcut don't internally use the old catch-all fetch — they must use the probe-quality variant when error distinction matters
-
-**Real-world example**: Custom registry flow had 8 bugs across 3 review rounds: (1) probe only ran in interactive mode, (2) transient errors fell through to wrong mode, (3) giget URI had `#ref` in wrong position, (4) prefetched templates leaked across source switches, (5) `--template` shortcut bypassed probe but `downloadTemplateById` internally used catch-all `fetchTemplateIndex`, turning timeouts into "Template not found".
-
-**Real-world example**: Agent-session update hints fetched npm `latest` metadata with `response.read(4096)` and then parsed it as complete JSON. The `@mindfoldhq/trellis` package metadata exceeded 4 KB, so the JSON was truncated, parse failed silently, and the first session injection showed no update hint. Fix: read the complete response before parsing, and add a regression where `version` is followed by an 8 KB metadata tail.
+- [ ] 用边界情况测过（空快照、缺失字段、非法提交、断线）
+- [ ] 每个边界的错误处理已验证
+- [ ] 数据能完整往返（存档 → 读取；录制 → 重演；上行 → 权威 → 回放）
+- [ ] 消费者复用了共享投影，而不是各自本地解析
+- [ ] 派生状态能指回权威标识（玩家 ID / 实体 UID / 事件 ID），没有第二份游标
 
 ---
 
-## Cross-Platform Template Consistency
+## 六、什么时候该写流程文档
 
-In Trellis, command templates (e.g., `record-session.md`) exist in **multiple platforms** with identical or near-identical content. This is a cross-layer boundary.
+出现以下情况时，把流程写进 `docs/架构说明.md`：
 
-### Checklist: After Modifying Any Command Template
-
-- [ ] Find all platforms with the same command: `find src/templates/*/commands/trellis/ -name "<command>.*"`
-- [ ] Update all platform copies (Markdown `.md` and TOML `.toml`)
-- [ ] For Gemini TOML: adapt line continuations (`\\` vs `\`) and triple-quoted strings
-- [ ] Run `/trellis:check-cross-layer` to verify nothing was missed
-
-**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, OpenCode, and Gemini — caught by cross-layer check.
-
----
-
-## Generated Runtime Template Upgrade Consistency
-
-Some generated files are both documentation and runtime input. In Trellis,
-`.trellis/workflow.md` is parsed by `get_context.py`, `workflow_phase.py`,
-SessionStart filters, and per-turn hooks. Template changes must be validated
-against both fresh init and upgrade paths.
-
-### Checklist: After Modifying A Runtime-Parsed Template
-
-- [ ] Identify every runtime parser that reads the template, not just the file
-  writer that installs it
-- [ ] Check whether relevant syntax lives outside obvious managed regions
-  such as tag blocks
-- [ ] Verify fresh `init` output and a versioned `update` scenario that writes
-  the older `.trellis/.version`
-- [ ] Add an upgrade regression using an older pristine template fixture, then
-  assert the installed file reaches the current packaged shape
-- [ ] Update the backend spec that owns the runtime contract
-
-**Real-world example**: Codex inline mode changed workflow platform markers from
-`[Codex]` / `[Kilo, Antigravity, Windsurf]` to `[codex-sub-agent]` /
-`[codex-inline, Kilo, Antigravity, Windsurf]`. Fresh init was correct, but
-`trellis update` only merged `[workflow-state:*]` blocks and preserved stale
-markers outside those blocks. Result: upgraded projects got new hook scripts
-but old workflow routing, so `get_context.py --mode phase --platform codex`
-could return empty Phase 2.1 detail.
-
----
-
-## Mode-Detection Probe Checklist
-
-When a CLI auto-detects a mode by probing a remote resource (e.g., checking if `index.json` exists to decide marketplace vs direct download):
-
-### Before implementing:
-- [ ] Probe runs in **ALL** code paths that use the result (interactive, `-y`, `--flag` combos)
-- [ ] 404 vs transient error are distinguished — don't treat both as "not found"
-- [ ] Transient errors **abort or retry**, never silently switch modes
-- [ ] Shared state (caches, prefetched data) is **reset** when context changes (e.g., user switches source)
-- [ ] **Shortcut paths** (e.g., `--template` skipping picker) must have the same error-handling quality as the probed path — check that downstream functions don't call catch-all wrappers
-
-### After implementing:
-- [ ] Trace every path from probe result to the mode-decision branch — no fallthrough
-- [ ] External format contracts (giget URI, raw URLs) are tested or at least documented as comments
-- [ ] Metadata reads consume a complete response or use a streaming parser — never parse a fixed-size prefix as full JSON
-- [ ] When reconstructing a composite identifier from parsed parts, verify **all** fields are included and in the **correct position** (e.g., `provider:repo/path#ref` not `provider:repo#ref/path`)
-- [ ] Verify that **action functions** called after a shortcut don't internally use the old catch-all fetch — they must use the probe-quality variant when error distinction matters
-
-**Real-world example**: Custom registry flow had 8 bugs across 3 review rounds: (1) probe only ran in interactive mode, (2) transient errors fell through to wrong mode, (3) giget URI had `#ref` in wrong position, (4) prefetched templates leaked across source switches, (5) `--template` shortcut bypassed probe but `downloadTemplateById` internally used catch-all `fetchTemplateIndex`, turning timeouts into "Template not found".
-
-**Real-world example**: Agent-session update hints fetched npm `latest` metadata with `response.read(4096)` and then parsed it as complete JSON. The `@mindfoldhq/trellis` package metadata exceeded 4 KB, so the JSON was truncated, parse failed silently, and the first session injection showed no update hint. Fix: read the complete response before parsing, and add a regression where `version` is followed by an 8 KB metadata tail.
-
----
-
-## When to Create Flow Documentation
-
-Create detailed flow docs when:
-
-- Feature spans 3+ layers
-- Multiple teams are involved
-- Data format is complex
-- Feature has caused bugs before
-
----
-
-## Event Log / Projection Boundary
-
-Append-only logs are cross-layer contracts. A single event travels through:
-
-```
-CLI input → event writer → events.jsonl → reader → filter → reducer → display
-```
-
-### Checklist: After Adding A New Event Kind Or Field
-
-- [ ] Add the event kind to the central event taxonomy
-- [ ] Add a typed event variant or type guard at the event layer
-- [ ] Add normalization helpers for array/object fields that come from
-      user input or JSON
-- [ ] Keep `seq` / `id` assignment in the event writer only
-- [ ] Make filters and reducers consume the typed event guard, not local casts
-- [ ] Make display code consume reducer output or typed events, not raw JSON
-- [ ] Add at least one regression that proves history replay and live filtering
-      use the same filter model
-
-**Real-world example**: Thread channels added `kind: "thread"`, `description`,
-`context`, labels, and `lastSeq`. The first implementation replayed thread
-state correctly, but several commands still re-parsed event payload fields with
-local casts. The fix was to make the core event layer own `ThreadChannelEvent`
-and `isThreadEvent`, make `reduceChannelMetadata` the only channel metadata
-projection, and make `reduceThreads` the only thread replay reducer.
+- 功能跨越 3 层以上
+- 数据格式复杂
+- 这个功能以前出过 bug
+- 需要多人/多次任务协作完成

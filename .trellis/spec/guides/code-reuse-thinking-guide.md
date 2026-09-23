@@ -1,223 +1,115 @@
-# Code Reuse Thinking Guide
+# 复用优先思维指南
 
-> **Purpose**: Stop and think before creating new code - does it already exist?
-
----
-
-## The Problem
-
-**Duplicated code is the #1 source of inconsistency bugs.**
-
-When you copy-paste or rewrite existing logic:
-- Bug fixes don't propagate
-- Behavior diverges over time
-- Codebase becomes harder to understand
+> **目的**：写新代码前先停下来想——这东西是不是已经有了？
+> 本指南已按《崩铁杀》项目本地化（原模板中的 TypeScript / Trellis 自身内容与本项目无关，已移除）。
 
 ---
 
-## Before Writing New Code
+## 为什么
 
-### Step 1: Search First
+**重复代码是一致性 bug 的头号来源。**
+
+当你复制粘贴或重写既有逻辑：
+
+- 修 bug 时改动不会传播到副本
+- 行为随时间逐渐分叉
+- 代码库越来越难理解
+
+本项目对此尤其敏感：规则结算、快照裁剪、AI 估值都有**唯一权威实现**，一旦出现第二份，LAN 与离线、回放与实时就会产生分歧。
+
+---
+
+## 动手前：先搜索
 
 ```bash
-# Search for similar function names
-grep -r "functionName" .
+# 搜索相似的函数名
+grep -rn "函数名" scripts/ game_data/
 
-# Search for similar logic
-grep -r "keyword" .
+# 搜索相似逻辑的关键词
+grep -rn "关键词" scripts/ game_data/
+
+# 用 Trellis 工具搜索
+# （使用 grep 工具，模式同上）
 ```
 
-### Step 2: Ask These Questions
+明确本项目**已经存在的可复用资产**：
 
-| Question | If Yes... |
-|----------|-----------|
-| Does a similar function exist? | Use or extend it |
-| Is this pattern used elsewhere? | Follow the existing pattern |
-| Could this be a shared utility? | Create it in the right place |
-| Am I copying code from another file? | **STOP** - extract to shared |
+| 需求 | 应先检查 |
+|---|---|
+| 规则合法性查询（能否用牌、能否作为目标、是否在距离内） | `RuleQuery`、`RuleModifierPipeline`、`CardRuleService` |
+| 让玩家/其他角色做选择 | 技能基类的 `request_*_selection(...)` / `request_*_for_player(...)` 包装 |
+| 移动一张实体牌 | `CardMovementService`（**唯一移牌边界**） |
+| 派发/订阅规则时机 | `RuleTimingCatalog`（228 个稳定时机名）+ `subscribe_timing()` |
+| 暂停对局 | `GameplayPauseService` 令牌 |
+| 阶段推进 | `MatchController` 的标准阶段/额外阶段端口 |
+| AI 资源换算 | `NonameAIEvaluator.score_resource_change()` 与 `CARD_RESOURCE_VALUE` / `HP_RESOURCE_VALUE` / `RECAST_DRAW_VALUE` |
+| 界面配色与样式 | `BattleUIStyle`、`UIStyleRegistry` |
+| 显示说明/详情 | `InformationBoxLayer` |
+| 渲染一张牌 / 一名玩家 | `CardView`、`PlayerTargetView`（含 `all_cards_panel`、选将面板等复用） |
+| 排序图鉴内容 | `CardGallerySort` |
+| 座次与手牌布局 | `DecadeBattleLayout`、`DecadeHandContainer` |
 
 ---
 
-## Common Duplication Patterns
+## 常见重复模式（本项目实例）
 
-### Pattern 1: Copy-Paste Functions
+### 模式 1：复制结算逻辑而不是复用端口
 
-**Bad**: Copying a validation function to another file
+- **坏**：技能里自己写「先扣护盾再扣体力」。
+- **好**：调用控制器标准的 `damage(...)` / `lose_hp(...)` / `recover(...)`，让护盾、伤害事件、濒死、逐点时机全部走统一管线。
 
-**Good**: Extract to shared utilities, import where needed
+### 模式 2：新建 80% 相似的组件
 
-### Pattern 2: Similar Components
+- **坏**：为「所有卡牌」页面再写一套牌面渲染。
+- **好**：复用正式 `CardView` / `PlayerTargetView`（`all_cards_panel.gd` 就是范例）。
 
-**Bad**: Creating a new component that's 80% similar to existing
+### 模式 3：常量重复定义
 
-**Good**: Extend existing component with props/variants
+- **坏**：在技能文件里又写一遍「1 点体力 = 2 张牌」。
+- **好**：复用 `NonameAIEvaluator` 的公开资源常量。
 
-### Pattern 3: Repeated Constants
+同理适用于：主题颜色（必须经 `BattleUIStyle`）、像素规格（111×148 卡牌、148.35×197.8 武将牌）、界面动画时长。
 
-**Bad**: Defining the same constant in multiple files
+### 模式 4：同一快照字段被多处各自解析
 
-**Good**: Single source of truth, import everywhere
-
-### Pattern 4: Repeated Payload Field Extraction
-
-**Bad**: Multiple consumers cast the same JSON/event fields locally:
-
-```typescript
-const description = (ev as { description?: string }).description;
-const context = (ev as { context?: ContextEntry[] }).context;
-```
-
-This is duplicated contract logic even when the code is only two lines. Each
-consumer now has its own definition of what a valid payload means.
-
-**Good**: Put the decoder, type guard, or projection next to the data owner:
-
-```typescript
-if (isThreadEvent(ev)) {
-  renderThreadEvent(ev);
-}
-```
-
-**Rule**: If the same untyped payload field is read in 2+ places, create a
-shared type guard / normalizer / projection before adding a third reader.
+- **坏**：多个 UI 组件各自从快照字典里掏字段并猜类型。
+- **好**：让权威端在快照里给出稳定字段名与类型；**新增展示需求优先考虑补快照字段**，而不是在 UI 侧做兼容解析。
 
 ---
 
-## When to Abstract
+## 什么时候该抽象
 
-**Abstract when**:
-- Same code appears 3+ times
-- Logic is complex enough to have bugs
-- Multiple people might need this
+**该抽象**：
 
-**Don't abstract when**:
-- Only used once
-- Trivial one-liner
-- Abstraction would be more complex than duplication
+- 同一段代码出现 **3 次以上**
+- 逻辑复杂到可能藏 bug
+- 多人/多次任务都需要
 
----
+**不该抽象**：
 
-## After Batch Modifications
-
-When you've made similar changes to multiple files:
-
-1. **Review**: Did you catch all instances?
-2. **Search**: Run grep to find any missed
-3. **Consider**: Should this be abstracted?
-
-### Reducers Should Use Exhaustive Structure
-
-When state is derived from action-like values (`action`, `kind`, `status`,
-`phase`), prefer a reducer with one `switch` over scattered `if/else` updates.
-
-```typescript
-// BAD - action-specific state transitions are hard to audit
-if (action === "opened") { ... }
-else if (action === "comment") { ... }
-else if (action === "status") { ... }
-
-// GOOD - one reducer owns the transition table
-switch (event.action) {
-  case "opened":
-    ...
-    return;
-  case "comment":
-    ...
-    return;
-}
-```
-
-This matters when the event log is the source of truth. A reducer is the
-documented replay model; display code and commands should not duplicate pieces
-of that replay model.
+- 只用一次
+- 平凡的一行代码
+- 抽象本身比重复更复杂
 
 ---
 
-## Checklist Before Commit
+## 批量修改之后
 
-- [ ] Searched for existing similar code
-- [ ] No copy-pasted logic that should be shared
-- [ ] No repeated untyped payload field extraction outside a shared decoder
-- [ ] Constants defined in one place
-- [ ] Similar patterns follow same structure
-- [ ] Reducer/action transitions live in one reducer or command dispatcher
+对多个文件做了同类改动后：
 
----
+1. **复查**：改全了吗？
+2. **搜索**：`grep` 一遍，找漏网的
+3. **考虑**：这该不该抽象出来？
 
-## Gotcha: Python if/elif/else Exhaustive Check
-
-**Problem**: Python's if/elif/else chains have no compile-time exhaustive check. When you add a new value to a `Literal` type (e.g., `Platform`), existing if/elif/else chains silently fall through to `else` with wrong defaults.
-
-**Symptom**: New platform works partially — some methods return Claude defaults instead of platform-specific values. No error is raised.
-
-**Example** (`cli_adapter.py`):
-```python
-# BAD: "gemini" falls through to else, returns "claude"
-@property
-def cli_name(self) -> str:
-    if self.platform == "opencode":
-        return "opencode"
-    else:
-        return "claude"  # gemini silently gets "claude"!
-
-# GOOD: explicit branch for every platform
-@property
-def cli_name(self) -> str:
-    if self.platform == "opencode":
-        return "opencode"
-    elif self.platform == "gemini":
-        return "gemini"
-    else:
-        return "claude"
-```
-
-**Prevention**: When adding a new value to a Python `Literal` type, search for ALL if/elif/else chains that switch on that type and add explicit branches. Don't rely on `else` being correct for new values.
+> 本项目典型场景：改了结算管线的一处顺序，需要检查所有依赖该顺序的技能与卡牌文件。
 
 ---
 
-## Gotcha: Asymmetric Mechanisms Producing Same Output
+## 提交前检查清单
 
-**Problem**: When two different mechanisms must produce the same file set (e.g., recursive directory copy for init vs. manual `files.set()` for update), structural changes (renaming, moving, adding subdirectories) only propagate through the automatic mechanism. The manual one silently drifts.
-
-**Symptom**: Init works perfectly, but update creates files at wrong paths or misses files entirely.
-
-**Prevention**:
-- **Best**: Eliminate the asymmetry — have the manual path call the automatic one (e.g., `collectTemplateFiles()` calls `getAllScripts()` instead of maintaining its own list)
-- **If asymmetry is unavoidable**: Add a regression test that compares outputs from both mechanisms
-- When migrating directory structures, search for ALL code paths that reference the old structure
-
-**Real example**: `trellis update` had a manual `files.set()` list for 11 scripts that `getAllScripts()` already tracked. Fix: replaced the manual list with a `for..of getAllScripts()` loop. See `update.ts` refactor in v0.4.0-beta.3.
-
----
-
-## Template File Registration (Trellis-specific)
-
-When adding new files to `src/templates/trellis/scripts/`:
-
-**Single registration point**: `src/templates/trellis/index.ts`
-
-1. Add `export const xxxScript = readTemplate("scripts/path/file.py");`
-2. Add to `getAllScripts()` Map
-
-That's it. `commands/update.ts` uses `getAllScripts()` directly — no manual sync needed.
-
-**Why this matters**: Without registration in `getAllScripts()`, `trellis update` won't sync the file to user projects. Bug fixes and features won't propagate.
-
-**History**: Before v0.4.0-beta.3, `update.ts` had its own hand-maintained file list that frequently fell out of sync with `getAllScripts()`. This caused 11 Python files to be silently skipped during `trellis update`. The fix was to eliminate the duplicate list and use `getAllScripts()` as the single source of truth.
-
-### Quick Checklist for New Scripts
-
-```bash
-# After adding a new .py file, verify it's in getAllScripts():
-grep -l "newFileName" src/templates/trellis/index.ts  # Should match
-```
-
-### Template Sync Convention
-
-`.trellis/scripts/` (dogfooded) and `packages/cli/src/templates/trellis/scripts/` (template) must stay identical. After editing `.trellis/scripts/`, always sync:
-
-```bash
-rsync -av --delete --exclude='__pycache__' .trellis/scripts/ packages/cli/src/templates/trellis/scripts/
-```
-
-**Gotcha**: Running rsync with wrong source/destination paths can create nested garbage directories (e.g., `.trellis/scripts/packages/cli/...`). Always double-check paths before running.
+- [ ] 已搜索过既有相似实现（含 `docs/内容制作指南.md` 的机制库）
+- [ ] 没有应当共享却被复制粘贴的逻辑
+- [ ] 没有在第二处重复定义常量（资源换算、颜色、像素规格、时机名）
+- [ ] 没有在 UI/AI 侧重复实现规则结论
+- [ ] 相似的模式遵循相同结构
+- [ ] 新增可调数值已提取为顶部常量或 `@export`
