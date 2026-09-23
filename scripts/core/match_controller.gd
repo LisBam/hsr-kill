@@ -1752,6 +1752,12 @@ func submit_action(action: PlayerAction) -> bool:
 			# 多步技能在流程间隔等待下一段选牌时仍算交互未完成，不能在空窗期抢先打开出牌窗口。
 			if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
 				_begin_play_choice(state.current_player_id)
+				# 同步一次完成的主动技能（如【天裁】①这类不创建任何子选择的轮回节）只在此处重建出牌窗口，
+				# 而 activate_skill 内部的状态广播发生在本次重建之前；若不再补发一次，界面快照会停留在“无请求”状态，
+				# 使手牌、确定/取消与结束回合按钮全部失效（只能靠再次点击技能按钮被动恢复）。
+				# 只有确实新建了出牌请求才广播，阶段被规则取消或被流程间隔接管时沿用各自既有广播路径。
+				if _has_active_play_choice():
+					_emit_state()
 			# 主动技能分支会在通用动作尾部之前返回；统一续接入口负责调度同步技能后的下一次AI行动或技能子选择。
 			_ensure_ai_progress_after_resolution()
 			return activated

@@ -5,6 +5,9 @@ extends Node
 ## 本测试共用的权威对局控制器；每项用例通过正式规则服务和技能实例执行。
 var _controller: MatchController
 
+## 最近一次状态广播中的当前请求快照；界面只读取该字段决定是否开放手牌与出牌控件。
+var _last_broadcast_choice: Dictionary = {}
+
 
 ## 延迟一帧开始回归，确保GameDatabase已经完成目录扫描与静态校验。
 func _ready() -> void:
@@ -25,6 +28,8 @@ func _run() -> void:
 	if not _test_lunhui_and_yongjie_return():
 		return
 	if not _test_yongjie_wheel_and_tiancai():
+		return
+	if not _test_tiancai_play_choice_broadcast():
 		return
 	if not _test_active_virtual_card_skills():
 		return
@@ -391,6 +396,52 @@ func _test_yongjie_wheel_and_tiancai() -> bool:
 	if tiancai == null or tiancai.activate({}) != "" or owner.hp != 4 or tiancai.get_reincarnation_section_index() != 1 or tiancai.get_reincarnation_round_count() != 1:
 		return _fail("tiancai_self_fire=%d/%s" % [owner.hp, tiancai.get_reincarnation_state() if tiancai != null else {}])
 	return true
+
+
+## 校验回合内主动技能结算后，权威出牌窗口与界面可见请求同步恢复。
+## 【天裁】①是不创建任何子选择的同步轮回节：若只重建请求而不重新广播，界面快照会停在“无请求”状态，
+## 手牌、确定/取消与结束回合按钮会全部失效，只能靠再次点击技能按钮被动恢复。
+func _test_tiancai_play_choice_broadcast() -> bool:
+	_reset_state(3)
+	# 本用例需要真实出牌请求与界面广播；独立对局ID避免复用其他用例的根事件标识。
+	_controller.state.match_id = "omphalos-transform-play-choice"
+	# 天裁持有者；5点体力用于核对①的无来源1点火焰伤害。
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "kaesilanna"
+	owner.max_hp = 5
+	owner.hp = 5
+	# 天裁运行时实例；本用例只通过正式动作入口发动，不直接调用技能对象。
+	var tiancai: SkillDefinition = _install_skill(0, "tiancai")
+	if tiancai == null:
+		return _fail("tiancai_play_choice_install")
+	# 界面可见请求记录；每次广播覆盖为界面真正读取的 current_choice_request 字段。
+	_last_broadcast_choice = {}
+	_controller.state_changed.connect(_on_state_changed)
+	# 正式出牌窗口；主动技能必须先完成该请求，技能内部子选择才会接在它之后。
+	_controller.event_scheduler.reset()
+	_controller.call("_begin_play_choice", 0)
+	if not bool(_controller.call("_has_active_play_choice")):
+		return _fail("tiancai_play_choice_begin")
+	# 正式主动技能动作；payload 只携带稳定技能ID，与界面技能按钮提交完全一致。
+	var action: PlayerAction = PlayerAction.new("use_skill", 0)
+	action.payload = {"skill_id":"tiancai"}
+	if not _controller.submit_action(action):
+		return _fail("tiancai_play_choice_submit")
+	# 界面最后一次收到的请求类型；必须仍是本回合的 chooseToUse，界面才会重新开放手牌与操作按钮。
+	var broadcast_choice_type: String = str(_last_broadcast_choice.get("choice_type", ""))
+	# 广播中的请求行动者；非本人请求不会开放本地出牌控件。
+	var broadcast_actor_id: int = int(_last_broadcast_choice.get("actor_id", -1))
+	if owner.hp != 4 or tiancai.get_reincarnation_section_index() != 1 or not bool(_controller.call("_has_active_play_choice")) or broadcast_choice_type != "use" or broadcast_actor_id != 0:
+		return _fail("tiancai_play_choice=%d/%s/%s/%s/%d" % [owner.hp, tiancai.get_reincarnation_state(), _controller.call("_has_active_play_choice"), broadcast_choice_type, broadcast_actor_id])
+	_controller.state_changed.disconnect(_on_state_changed)
+	# 关闭本用例建立的出牌窗口，避免影响同文件后续用例的根事件栈。
+	_controller.call("_cancel_active_play_choice", "omphalos_transform_test")
+	return true
+
+
+## 记录最近一次状态广播中的当前请求；界面只读取该字段决定是否开放出牌控件。
+func _on_state_changed(snapshot: Dictionary) -> void:
+	_last_broadcast_choice = (snapshot.get("current_choice_request", {}) as Dictionary).duplicate(true)
 
 
 ## 校验天裁②/③、弑魂①/②与永劫非伤害牌转化都进入完整虚拟用牌生命周期。
