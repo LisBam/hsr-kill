@@ -55,6 +55,8 @@ func _ready() -> void:
 		return
 	if not _test_xingluo_requires_other_target():
 		return
+	if not _test_huanri_hostless_snapshot_coin_ai():
+		return
 	if not _test_sushang_guinaifen_skill_ai():
 		return
 	if not _test_renwang_shield_black_slash():
@@ -630,6 +632,38 @@ func _test_xingluo_requires_other_target() -> bool:
 	var activation_error: String = xingluo.activate({"target_ids":[]})
 	if activation_error.is_empty():
 		return _fail("xingluo_empty_target_accepted")
+	return true
+
+
+## 验证【换日】无宿主AI评分实例只从权威快照读取“币”数量；正式策略创建的评分实例不绑定规则宿主。
+func _test_huanri_hostless_snapshot_coin_ai() -> bool:
+	# 全身份公开快照；0号领袖、1号反贼、2号忠臣使敌友关系确定。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 换日持有者快照；武将改为赛飞儿并写入1枚公开“币”，模拟正式对局的公开标记。
+	var owner_snapshot: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+	owner_snapshot["character_id"] = "saifeier"
+	owner_snapshot["public_marks"] = {"bi":{"icon":"币", "name":"币", "description":"每枚“币”令赛飞儿的手牌上限+1。", "count":1, "source_player_id":-1}}
+	# 无宿主换日实例；AI策略只调用只读评分钩子，不会绑定MatchController宿主。
+	var huanri: SkillDefinition = GameDatabase.create_skill("huanri")
+	huanri.bind(null, 0)
+	# 独立评估器；只读取权威快照与身份关系，不持有对局状态引用。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 敌方目标动作；预计伤害等于快照中的“币”数量。
+	var enemy_action: Dictionary = {"target_ids":[1]}
+	# 友方目标动作；相同“币”数量落在友方应得到更低的收益。
+	var ally_action: Dictionary = {"target_ids":[2]}
+	# 1枚“币”时的两道评分；敌方为正收益、友方必须低于敌方。
+	var one_coin_enemy_score: float = huanri.score_ai_action(snapshot, enemy_action, evaluator)
+	var one_coin_ally_score: float = huanri.score_ai_action(snapshot, ally_action, evaluator)
+	if one_coin_enemy_score <= 0.0 or one_coin_ally_score >= one_coin_enemy_score:
+		return _fail("huanri_hostless_ai_target enemy=%.3f ally=%.3f" % [one_coin_enemy_score, one_coin_ally_score])
+	# 当前“币”公开标记；字典为引用类型，直接改写数量即可让后续评分读取新值。
+	var coin_mark: Dictionary = (owner_snapshot.get("public_marks", {}) as Dictionary).get("bi", {}) as Dictionary
+	coin_mark["count"] = 2
+	# 2枚“币”时的敌方评分；必须随公开标记数量增长，证明评分未回退读取运行时标记。
+	var two_coin_enemy_score: float = huanri.score_ai_action(snapshot, enemy_action, evaluator)
+	if two_coin_enemy_score <= one_coin_enemy_score:
+		return _fail("huanri_snapshot_coin_score one=%.3f two=%.3f" % [one_coin_enemy_score, two_coin_enemy_score])
 	return true
 
 

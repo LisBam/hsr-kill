@@ -82,8 +82,23 @@ func _on_phase_use_begin(_event: RuleEvent) -> void:
 
 
 ## 返回当前公开“币”数量；标记不存在时为0。
+## 该读取依赖规则宿主，只在运行时技能实例中可用；AI评分使用的临时实例没有宿主，评分路径必须改用 _get_snapshot_coin_count()。
 func _get_coin_count() -> int:
+	# 无宿主的安全回退；正式对局中技能实例始终由控制器绑定宿主，只有AI只读评分实例会走到此分支。
+	if host == null:
+		return 0
 	return maxi(int((host.call("get_player_mark", owner_player_id, COIN_MARK_ID) as Dictionary).get("count", 0)), 0)
+
+
+## 从AI权威快照读取“币”数量；该纯函数不访问运行时技能宿主，可安全用于策略临时实例。
+func _get_snapshot_coin_count(authoritative_snapshot: Dictionary, evaluator: Object) -> int:
+	# 技能持有者公开快照；快照缺失时按0枚处理，避免无币动作获得虚假收益。
+	var owner_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	# 持有者全部公开标记；“币”不存在时按空字典处理。
+	var public_marks: Dictionary = owner_snapshot.get("public_marks", {}) as Dictionary
+	# “币”公开标记数据；数量始终收敛到非负整数。
+	var coin_mark: Dictionary = public_marks.get(COIN_MARK_ID, {}) as Dictionary
+	return maxi(int(coin_mark.get("count", 0)), 0)
 
 
 ## 返回除持有者外全部存活在场角色；保持权威座次顺序供UI、AI与回放共用。
@@ -107,4 +122,6 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 		return -100.0
 	# 目标稳定ID；使用统一资源变化估值处理阵营、濒死与目标状态。
 	var target_id: int = int(target_ids[0])
-	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -_get_coin_count())
+	# 本次预计移除的“币”数量；AI评分实例没有规则宿主，只能从本次权威快照的公开标记读取。
+	var coin_count: int = _get_snapshot_coin_count(authoritative_snapshot, evaluator)
+	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -coin_count)
