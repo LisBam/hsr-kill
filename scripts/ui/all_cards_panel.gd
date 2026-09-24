@@ -336,7 +336,7 @@ func _rebuild_current_entries() -> void:
 
 
 ## 从全部已登记武将建立正式武将牌条目；按中文名排序，重名时再按稳定 ID 保证顺序可复现。
-## 补充：当前先按主公指定的势力顺序分组，再在同一势力内应用名称与稳定 ID 排序。
+## 补充：当前先按需求指定的势力顺序分组，再在同一势力内应用名称与稳定 ID 排序。
 func _build_character_entries() -> void:
 	# 全部武将稳定 ID；复制后排序，避免依赖数据库字典遍历顺序。
 	var character_ids: Array[String] = []
@@ -577,7 +577,7 @@ func _resolve_character_information(character_id: String) -> Dictionary:
 		return {}
 	# 当前势力定义；缺失时使用武将配置的原始势力标识作为维护回退。
 	var faction_definition: Dictionary = GameDatabase.get_faction(str(character_definition.get("faction", "")))
-	# 当前技能说明分段；每项保持技能名与唯一原文，不改写主公钦定描述。
+	# 当前技能说明分段；每项保持技能名与唯一原文，不改写需求钦定描述。
 	var skill_sections: Array[String] = []
 	for skill_id_variant: Variant in character_definition.get("skills", []) as Array:
 		# 当前技能稳定 ID；只用于查询静态技能定义。
@@ -716,7 +716,7 @@ func _resolve_game_card_information(card_id: String) -> Dictionary:
 	}
 
 
-## 生成机缘完整资料；品质与主公原始正文始终显示，授予技能时在后方补充该技能唯一说明。
+## 生成机缘完整资料；品质与原始正文始终显示，授予技能时在后方补充该技能唯一说明。
 func _resolve_opportunity_information(card_id: String) -> Dictionary:
 	# 当前机缘定义；空结果表示目录中不存在该稳定 ID。
 	var opportunity_definition: Dictionary = OpportunityCatalog.get_card(card_id)
@@ -847,7 +847,7 @@ func _sort_character_ids(left_character_id: String, right_character_id: String) 
 
 
 ## 按当前名称模式下的游戏牌名排序；同名逻辑牌以稳定 ID 排序。
-## 补充：共享排序器会先按基本、锦囊、装备分组，并在组内应用主公指定的细分类顺序。
+## 补充：共享排序器会先按基本、锦囊、装备分组，并在组内应用需求指定的细分类顺序。
 func _sort_game_card_ids(left_card_id: String, right_card_id: String) -> bool:
 	# 左侧游戏牌显示名；切换名称模式后重建列表会按新名称重新排序。
 	var left_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card(left_card_id))

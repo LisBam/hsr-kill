@@ -24,7 +24,7 @@ const AI_HAND_VALUE_CARD_CAP: int = 5
 const IDENTITY_TARGET_RESULT: float = 1.0
 
 
-## 写入技能静态信息；技能正文逐字保持主公提供的原文。
+## 写入技能静态信息；技能正文逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"xiangyin",

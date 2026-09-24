@@ -289,10 +289,10 @@ const DEFAULT_TEAM2V2_PLAYER_COUNT: int = 4
 ## 1v1车轮战默认人数；固定2人。
 const DEFAULT_WHEEL_DUEL_PLAYER_COUNT: int = 2
 
-## 1v1车轮战默认明置候选数量；主公指定为6名。
+## 1v1车轮战默认明置候选数量；需求指定为6名。
 const DEFAULT_WHEEL_DUEL_FACE_UP_CANDIDATE_COUNT: int = 6
 
-## 1v1车轮战默认暗置候选数量；主公指定为4名。
+## 1v1车轮战默认暗置候选数量；需求指定为4名。
 const DEFAULT_WHEEL_DUEL_FACE_DOWN_CANDIDATE_COUNT: int = 4
 
 ## 1v1车轮战单类候选允许的最小值；明置与暗置设置均不可低于3。

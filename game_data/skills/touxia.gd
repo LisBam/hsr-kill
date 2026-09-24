@@ -36,7 +36,7 @@ const AI_GAIN_CARD_VALUE_MULTIPLIER: float = 2.0
 const AI_DEFAULT_CARD_VALUE: float = 1.0
 
 
-## 写入触发技能静态信息；玩家可见描述严格保持主公提供的原文。
+## 写入触发技能静态信息；玩家可见描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"touxia",

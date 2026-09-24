@@ -27,7 +27,7 @@ var _tracked_turn_number: int = -1
 var _used_items_this_turn: Dictionary = {}
 
 
-## 写入锁定技静态信息；技能描述逐字保持主公提供的原文。
+## 写入锁定技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"fuhuo",

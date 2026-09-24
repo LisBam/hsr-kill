@@ -12,7 +12,7 @@ var _tracked_round_number: int = -1
 var _used_suits_this_round: Dictionary = {}
 
 
-## 写入触发技能静态信息；技能描述严格保持主公提供的原文。
+## 写入触发技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"xianzou",

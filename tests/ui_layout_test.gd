@@ -810,7 +810,7 @@ func _run() -> void:
 	var opportunity_details_snapshot: Dictionary = acquired_skill_details_snapshot.duplicate(true)
 	opportunity_details_snapshot["match_mode"] = IdentityRules.MODE_OPPORTUNITY_BRAWL
 	for opportunity_details_player_variant: Variant in opportunity_details_snapshot.get("players", []) as Array:
-		# 当前详情角色机缘历史；稳定ID由InformationBoxLayer从静态目录解析品质与主公钦定正文。
+		# 当前详情角色机缘历史；稳定ID由InformationBoxLayer从静态目录解析品质与需求钦定正文。
 		var opportunity_details_player: Dictionary = opportunity_details_player_variant as Dictionary
 		if int(opportunity_details_player.get("player_id", -1)) == 5:
 			opportunity_details_player["acquired_opportunity_ids"] = ["blue_skill_jiqiao", "gray_initial_hand_four"]

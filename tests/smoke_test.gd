@@ -238,22 +238,22 @@ func _run() -> void:
 		printerr("SMOKE_FAIL new_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 素裳与桂乃芬技能原文；逐项锁定主公钦定的标点、数值和语句顺序，避免后续重构改写玩家面板文本。
+	# 素裳与桂乃芬技能原文；逐项锁定需求钦定的标点、数值和语句顺序，避免后续重构改写玩家面板文本。
 	if str(GameDatabase.get_skill("jianshi").get("description", "")) != "当你使用【杀】造成伤害时，你可进行判定：若判定结果为红色，此伤害+1。" or str(GameDatabase.get_skill("shanqing").get("description", "")) != "你可将两张牌当【杀】使用，这些牌中的每种花色使此【杀】获得对应效果：红桃，造成伤害后回复等量的体力值；方块，使用时你摸一张牌；黑桃，此【杀】无距离限制；梅花，使用时你弃置目标的一张牌。每回合限一次。" or str(GameDatabase.get_skill("xifa").get("description", "")) != "一名角色进行判定前，你可观看牌堆顶的两张牌，然后将这些牌以任意顺序放回牌堆顶与牌堆底。" or str(GameDatabase.get_skill("touxia").get("description", "")) != "其他角色的回合结束时，你可进行判定，然后你可以获得弃牌堆中一张于此回合出牌阶段进入弃牌堆、且花色与判定结果相同的牌，然后当前回合的角色摸一张牌。每轮限一次。":
 		printerr("SMOKE_FAIL sushang_guinaifen_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 佩拉与玲可技能原文；逐字锁定主公指定的标点、数值和语句顺序。
+	# 佩拉与玲可技能原文；逐字锁定需求指定的标点、数值和语句顺序。
 	if str(GameDatabase.get_skill("zhuijian").get("description", "")) != "准备阶段，你可以弃置一张牌并选择一名其他角色，其下次受到的属性伤害+1直到你的下个回合开始。" or str(GameDatabase.get_skill("mice").get("description", "")) != "回合结束时，你可令一名其他角色执行一项：1.获得一个额外的出牌阶段；2.摸一张牌并获得一个额外的弃牌阶段。该阶段结束后，你执行另一项。" or str(GameDatabase.get_skill("kance").get("description", "")) != "出牌阶段限一次，你可以观看一名其他角色的手牌，然后选择并获得牌堆中的一张属性【杀】或【桃】。" or str(GameDatabase.get_skill("qiusheng").get("description", "")) != "锁定技，当你进入濒死状态时，若你有手牌，且手牌中没有【桃】或【酒】，你弃置所有手牌并将体力值回复至1点。":
 		printerr("SMOKE_FAIL peila_lingke_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 驭空技能原文；逐字锁定主公指定的标点、数值和语句顺序。
+	# 驭空技能原文；逐字锁定需求指定的标点、数值和语句顺序。
 	if str(GameDatabase.get_skill("mingxian").get("description", "")) != "出牌阶段限一次，你可令任意名与你距离为1以内的角色从牌堆中各获得一张【杀】，这些【杀】无距离限制直到离开其手牌区。" or str(GameDatabase.get_skill("zhufeng").get("description", "")) != "锁定技，当你受到或造成伤害后，你计算与其他角色的距离-1，若此时你与所有角色距离均为1，则改为摸一张牌。":
 		printerr("SMOKE_FAIL yvkong_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 停云技能原文；逐字锁定主公指定的标点、引号与语句顺序。
+	# 停云技能原文；逐字锁定需求指定的标点、引号与语句顺序。
 	if str(GameDatabase.get_skill("xiangyin").get("description", "")) != "限定技，出牌阶段，你可令一名未拥有“赐福”标记的角色获得“赐福”标记，拥有“赐福”标记的角色于一回合内使用的第一张【杀】无距离限制。" or str(GameDatabase.get_skill("guangfu").get("description", "")) != "限定技，出牌阶段，你可令一名角色摸一张牌。本回合结束时，若其有已发动的限定技，你复原其中一项限定技。":
 		printerr("SMOKE_FAIL tingyun_skill_descriptions")
 		get_tree().quit(1)

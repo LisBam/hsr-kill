@@ -21,7 +21,7 @@ const AI_SLASH_GAIN_VALUE: float = 1.0
 var _used_this_play_phase: bool = false
 
 
-## 写入主动技能静态信息；技能正文逐字保持主公提供的原文。
+## 写入主动技能静态信息；技能正文逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"mingxian",

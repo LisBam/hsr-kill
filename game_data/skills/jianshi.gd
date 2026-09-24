@@ -12,7 +12,7 @@ const AI_HOSTILE_ACTIVATION_SCORE: float = 100.0
 const AI_FAVORABLE_RESULT_VALUE: float = 2.0
 
 
-## 写入触发技能静态信息；玩家可见描述严格保持主公提供的原文。
+## 写入触发技能静态信息；玩家可见描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"jianshi",

@@ -75,7 +75,7 @@ func _validate_export_preset() -> bool:
 		return _fail("export_preset_load")
 	if str(export_config.get_value("preset.0", "platform", "")) != "Android":
 		return _fail("export_platform")
-	# Android包名；允许主公自行维护正式命名，但不得为空或继续使用Godot示例包名前缀。
+	# Android包名；允许自行维护正式命名，但不得为空或继续使用Godot示例包名前缀。
 	var package_name: String = str(export_config.get_value("preset.0.options", "package/unique_name", ""))
 	if package_name.is_empty() or package_name.begins_with("com.example"):
 		return _fail("package_name")

@@ -9,7 +9,7 @@ const MINGXIAN_SKILL: Script = preload("res://game_data/skills/mingxian.gd")
 const ZHUFENG_SKILL: Script = preload("res://game_data/skills/zhufeng.gd")
 
 
-## 写入驭空静态信息与技能组件引用；稳定ID严格使用主公指定的yvkong。
+## 写入驭空静态信息与技能组件引用；稳定ID严格使用需求指定的yvkong。
 func _init() -> void:
 	super({
 		"id":"yvkong",

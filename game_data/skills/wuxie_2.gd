@@ -15,7 +15,7 @@ const AI_HOSTILE_CONFIRM_SCORE: float = -20.0
 const AI_FRIENDLY_AOE_RECOVERY_COMPENSATION: float = 4.0
 
 
-## 写入技能静态信息；技能描述严格保持主公钦定原文。
+## 写入技能静态信息；技能描述严格保持需求钦定原文。
 func _init() -> void:
 	super({
 		"id":"wuxie_2",

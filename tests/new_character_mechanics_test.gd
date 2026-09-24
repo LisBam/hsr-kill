@@ -499,7 +499,7 @@ func _test_yvkong_mechanics_and_card_tags() -> bool:
 		"zhufeng":"锁定技，当你受到或造成伤害后，你计算与其他角色的距离-1，若此时你与所有角色距离均为1，则改为摸一张牌。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
-		# 当前驭空技能ID；数据库正文必须与主公原文完全相同。
+		# 当前驭空技能ID；数据库正文必须与需求原文完全相同。
 		var skill_id: String = str(skill_id_variant)
 		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
 			return _fail("yvkong_skill_description=%s" % skill_id)
@@ -2046,7 +2046,7 @@ func _test_hsr_character_metadata_and_rule_catalog() -> bool:
 		var character_definition: Dictionary = GameDatabase.get_character(character_id)
 		if str(character_definition.get("faction", "")) != str(expectation[0]) or str(character_definition.get("gender", "")) != str(expectation[1]) or int(character_definition.get("max_hp", 0)) != int(expectation[2]) or (character_definition.get("skills", []) as Array) != (expectation[3] as Array):
 			return _fail("hsr_character_metadata id=%s definition=%s" % [character_id, character_definition])
-	# 新势力展示资料期望；颜色固定为主公指定的金、淡灰与紫色十六进制值。
+	# 新势力展示资料期望；颜色固定为需求指定的金、淡灰与紫色十六进制值。
 	var expected_factions: Dictionary = {
 		"pinuokangni":["匹诺康尼", "匹", "d6ad45"],
 		"xingjianhuanyv":["星间寰宇", "星", "c7c9ce"],
@@ -2061,7 +2061,7 @@ func _test_hsr_character_metadata_and_rule_catalog() -> bool:
 		var faction_definition: Dictionary = GameDatabase.get_faction(faction_id)
 		if str(faction_definition.get("display_name", "")) != str(faction_expectation[0]) or str(faction_definition.get("short_name", "")) != str(faction_expectation[1]) or str(faction_definition.get("color", "")) != str(faction_expectation[2]):
 			return _fail("hsr_faction_metadata id=%s definition=%s" % [faction_id, faction_definition])
-	# 主公钦定的技能原文；逐项精确比较，防止玩家面板文字在后续重构中被改写。
+	# 需求钦定的技能原文；逐项精确比较，防止玩家面板文字在后续重构中被改写。
 	var expected_descriptions: Dictionary = {
 		"huanying":"锁定技，你的回合外，当你受到伤害后，你移出游戏直到本回合结束。",
 		"chuanchong":"出牌阶段限一次，你可将一张红桃/方块/黑桃/梅花手牌当【顺手牵羊】/【无中生有】/【过河拆桥】/【借刀杀人】使用。",
@@ -2671,7 +2671,7 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 	if not moze_player.out_of_game or bool(yingchu.get("_waiting_owner_turn_end")) or _controller.state.current_phase != "finish":
 		return _fail("yingchu_leave_again")
 
-	# 幽锋AI；敌方低生存角色必须高于友方角色，体现主公指定的脆皮和易受伤目标优先级。
+	# 幽锋AI；敌方低生存角色必须高于友方角色，体现需求指定的脆皮和易受伤目标优先级。
 	_reset_state(3)
 	_controller.state.get_player(0).character_id = "moze"
 	_controller.state.get_player(1).hp = 1
@@ -3055,7 +3055,7 @@ func _test_peila_lingke_metadata() -> bool:
 		return _fail("peila_metadata=%s" % peila)
 	if str(lingke.get("display_name", "")) != "玲可" or str(lingke.get("gender", "")) != "female" or str(lingke.get("faction", "")) != "beiluoboge" or int(lingke.get("max_hp", 0)) != 3 or (lingke.get("skills", []) as Array) != ["kance", "qiusheng"]:
 		return _fail("lingke_metadata=%s" % lingke)
-	# 主公钦定技能原文；任何标点、数值或语句顺序变化都必须由专项回归立即报告。
+	# 需求钦定技能原文；任何标点、数值或语句顺序变化都必须由专项回归立即报告。
 	var expected_descriptions: Dictionary = {
 		"zhuijian":"准备阶段，你可以弃置一张牌并选择一名其他角色，其下次受到的属性伤害+1直到你的下个回合开始。",
 		"mice":"回合结束时，你可令一名其他角色执行一项：1.获得一个额外的出牌阶段；2.摸一张牌并获得一个额外的弃牌阶段。该阶段结束后，你执行另一项。",
@@ -3063,7 +3063,7 @@ func _test_peila_lingke_metadata() -> bool:
 		"qiusheng":"锁定技，当你进入濒死状态时，若你有手牌，且手牌中没有【桃】或【酒】，你弃置所有手牌并将体力值回复至1点。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
-		# 当前技能稳定ID；数据库说明必须与主公原文逐字一致。
+		# 当前技能稳定ID；数据库说明必须与需求原文逐字一致。
 		var skill_id: String = str(skill_id_variant)
 		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
 			return _fail("peila_lingke_description=%s" % skill_id)

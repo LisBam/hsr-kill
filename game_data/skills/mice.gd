@@ -21,7 +21,7 @@ const AI_KNOWN_PLAYABLE_CARD_VALUE: float = 0.9
 const AI_FRIENDLY_HAND_DEFICIT_VALUE: float = 0.15
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"mice",
@@ -43,7 +43,7 @@ func _on_phase_end(_event: RuleEvent) -> void:
 	var target_ids: Array[int] = host.call("get_other_alive_player_ids", owner_player_id) as Array[int]
 	if target_ids.is_empty():
 		return
-	# 两项实际按钮；显示文本严格使用主公指定的“出牌阶段”“弃牌阶段”。
+	# 两项实际按钮；显示文本严格使用需求指定的“出牌阶段”“弃牌阶段”。
 	var options: Array[Dictionary] = [
 		{"id":PLAY_PHASE_OPTION_ID, "label":"出牌阶段"},
 		{"id":DISCARD_PHASE_OPTION_ID, "label":"弃牌阶段"},

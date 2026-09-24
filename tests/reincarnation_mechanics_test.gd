@@ -111,7 +111,7 @@ func _test_metadata_and_special_character_pool() -> bool:
 		return _fail("wandi_metadata=%s" % wandi)
 	if str(saifeier.get("display_name", "")) != "赛飞儿" or str(saifeier.get("gender", "")) != "female" or str(saifeier.get("faction", "")) != "wengfaluosi" or int(saifeier.get("max_hp", 0)) != 3 or saifeier.get("skills", []) != ["jvkou", "huanri"]:
 		return _fail("saifeier_metadata=%s" % saifeier)
-	# 主公指定的四项技能原文；任何字符、标点或X说明变化都应立即失败。
+	# 需求指定的四项技能原文；任何字符、标点或X说明变化都应立即失败。
 	var expected_descriptions: Dictionary = {
 		"xvechou":"轮回技，锁定技，当你进入濒死状态时，①你回复X点体力；②你减少1点体力上限并摸X张牌。（X为本技能的轮回数）",
 		"shishen":"锁定技，出牌阶段，你使用的前X张【杀】无距离与次数限制。当你使用【杀】指定目标时，你失去1点体力并令此【杀】伤害+1。",

@@ -12,7 +12,7 @@ const HP_LOSS_PER_TARGET: int = 1
 const DAMAGE_BONUS_PER_TARGET: int = 1
 
 
-## 写入锁定技静态信息；技能描述逐字保持主公提供的原文。
+## 写入锁定技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"shishen",
@@ -91,7 +91,7 @@ func _is_slash(card_definition: Dictionary) -> bool:
 	return str(card_definition.get("effect_id", "")) == "slash"
 
 
-## AI为弑神必定追加的目标伤害计入收益，但按主公要求不因失去体力而降低【杀】使用意愿。
+## AI为弑神必定追加的目标伤害计入收益，但按需求要求不因失去体力而降低【杀】使用意愿。
 func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dictionary, current_score: float, evaluator: Object) -> float:
 	# 当前动作卡牌定义；非【杀】不受弑神影响。
 	var card_definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))

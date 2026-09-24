@@ -6,7 +6,7 @@ extends SkillDefinition
 const IDENTITY_TARGET_RESULT: float = -0.8
 
 
-## 写入触发技能静态信息；技能描述严格保持主公提供的原文。
+## 写入触发技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"qianggong",

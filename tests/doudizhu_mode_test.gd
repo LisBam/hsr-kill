@@ -417,7 +417,7 @@ func _test_selection_menu_restart_random_assignment() -> bool:
 		if match_controller.state == null or str(match_controller.state.match_mode) != IdentityRules.MODE_DOUDIZHU or str(match_controller.state.current_phase) != "character_selection":
 			main_instance.queue_free()
 			return _fail("selection_restart_state_%d" % restart_index)
-		# 当前按钮重开后的玩家可见分配；连续组合相同就是主公复现问题本身。
+		# 当前按钮重开后的玩家可见分配；连续组合相同就是问题复现本身。
 		var current_assignment: String = _get_local_doudizhu_assignment(match_controller)
 		if current_assignment == previous_assignment:
 			main_instance.queue_free()

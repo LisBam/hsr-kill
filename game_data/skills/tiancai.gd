@@ -15,7 +15,7 @@ const REPEATED_FIRE_ATTACK_SECTION_INDEX: int = 2
 const FIRE_ATTACK_DEFINITION_ID: String = "huogong"
 
 
-## 写入三轮回节主动技能静态信息；技能描述逐字保持主公提供的原文。
+## 写入三轮回节主动技能静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"tiancai",

@@ -12,7 +12,7 @@ const MAX_HP_DRAW_SECTION_INDEX: int = 1
 const MAX_HP_LOSS: int = 1
 
 
-## 写入轮回锁定技静态信息；技能描述逐字保持主公提供的原文。
+## 写入轮回锁定技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"xvechou",

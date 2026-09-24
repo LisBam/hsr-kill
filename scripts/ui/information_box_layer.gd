@@ -1057,7 +1057,7 @@ func _append_character_opportunity_section() -> void:
 	for opportunity_id_variant: Variant in opportunity_ids:
 		# 当前机缘稳定ID；目录缺失时仍保留明确占位，便于内容维护者定位历史数据问题。
 		var opportunity_id: String = str(opportunity_id_variant)
-		# 当前机缘静态定义；正文保持目录中主公钦定原文，不在详情层重新解释效果。
+		# 当前机缘静态定义；正文保持目录中需求钦定原文，不在详情层重新解释效果。
 		var opportunity_definition: Dictionary = OpportunityCatalog.get_card(opportunity_id)
 		# 当前品质中文；灰色表示仅由关卡授予且不参与随机抽取，未知值只用于暴露内容配置错误。
 		var quality_name: String = str({"gray":"灰色", "green":"绿色", "blue":"蓝色", "purple":"紫色", "orange":"橙色", "red":"红色"}.get(str(opportunity_definition.get("quality", "")), "未知"))
@@ -1126,7 +1126,7 @@ func _refresh_skill_entry_styles() -> void:
 		elif entry_node is HSeparator and entry_node.has_meta("information_box_skill_separator"):
 			_apply_skill_separator_style(entry_node as HSeparator)
 		elif entry_node is VBoxContainer and entry_node.has_meta("information_box_opportunity_entry"):
-			# 机缘历史条目；索引0为品质标题，索引1为主公钦定规则正文。
+			# 机缘历史条目；索引0为品质标题，索引1为需求钦定规则正文。
 			var opportunity_name_label: Label = entry_node.get_child(0) as Label
 			var opportunity_description_label: Label = entry_node.get_child(1) as Label
 			opportunity_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
