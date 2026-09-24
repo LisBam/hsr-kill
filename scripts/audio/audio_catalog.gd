@@ -2,7 +2,7 @@ class_name AudioCatalog
 extends RefCounted
 
 ## 音频资源目录解析器。
-## 该组件是纯逻辑组件：只根据逻辑标识（技能ID、角色ID、卡牌ID、BGM场景）推导候选资源路径，
+## 该组件是纯逻辑组件：只根据逻辑标识（技能ID、角色ID、卡牌ID、性别、BGM场景）推导候选资源路径，
 ## 并负责音频流的加载与缓存；不持有任何节点、不播放、不读取对局状态，因此可被独立单元测试。
 ## 路径发现全部使用 ResourceLoader.exists() 探测，不使用 DirAccess 目录扫描：
 ## 导出包中音频资源的磁盘文件名会被改写为 .oggvorbisstr 等导入名，目录扫描结果不可靠。
@@ -11,11 +11,23 @@ extends RefCounted
 ## 技能音效目录；技能音效文件名以技能源码文件名（即技能ID）为基准。
 const SKILL_AUDIO_DIR: String = "res://game_data/skills/audio"
 
-## 卡牌音效目录；卡牌音效文件名由卡牌ID与名称体系后缀共同构成。
+## 卡牌音效目录；性别专属配音放在该目录的 male/female 子目录中，根目录保留不分性别的通用文件。
 const CARD_AUDIO_DIR: String = "res://game_data/cards/audio"
+
+## 卡牌音效的男声子目录名；与角色定义中的 gender 取值完全一致，因此可直接用于路径拼接。
+const CARD_GENDER_MALE: String = "male"
+
+## 卡牌音效的女声子目录名；与角色定义中的 gender 取值完全一致。
+const CARD_GENDER_FEMALE: String = "female"
+
+## 卡牌通用音效基名；任意卡牌在缺少性别专属与卡牌专属配音时的最终兜底，全部卡牌共用同一份。
+const CARD_DEFAULT_AUDIO_BASENAME: String = "default"
 
 ## 背景音乐目录；BGM按场景基名加可选序号构成候选池。
 const BGM_DIR: String = "res://game_data/BGM"
+
+## 背景音乐默认曲目的游戏内显示名；文件不带序号后缀时使用该名称。
+const BGM_DEFAULT_DISPLAY_NAME: String = "默认"
 
 ## 音频扩展名探测优先级；ogg体积最小且支持循环标记，wav与mp3作为兼容备选依次探测。
 const AUDIO_EXTENSIONS: Array[String] = ["ogg", "wav", "mp3"]
@@ -88,9 +100,17 @@ func resolve_skill_voice_pool(skill_id: String, character_id: String) -> Array[S
 
 
 ## 解析卡牌音效的最终候选池。
-## 查找顺序为名称体系回退：先取当前卡名显示模式对应的体系，缺失时回退另一体系。
+## 查找顺序为短路规则，任一级命中即返回，不再向下回退：
+## 一、<性别>/<卡牌ID>_<当前名称体系> 该性别的当前牌名配音；
+## 二、<性别>/<卡牌ID>_<另一名称体系> 该性别的另一套牌名配音；
+## 三、<性别>/<卡牌ID> 该性别的不分名称体系配音；
+## 四、<卡牌ID>_<当前名称体系> 不分性别的当前牌名配音；
+## 五、<卡牌ID>_<另一名称体系> 不分性别的另一套牌名配音；
+## 六、<卡牌ID> 不分性别的不分名称体系配音；
+## 七、default 全卡牌通用兜底音效。
+## 全部缺失时返回空数组，由调用方静默处理。
 ## 同一张牌的“使用”与“打出”共用同一份音效，因此本函数不需要动作模式参数。
-func resolve_card_voice_pool(card_id: String, current_name_system: String) -> Array[String]:
+func resolve_card_voice_pool(card_id: String, current_name_system: String, gender: String = "") -> Array[String]:
 	# 规范化卡牌ID；空ID无法构造路径，直接静默。
 	var normalized_card_id: String = card_id.strip_edges()
 	if normalized_card_id.is_empty():
@@ -99,13 +119,31 @@ func resolve_card_voice_pool(card_id: String, current_name_system: String) -> Ar
 	var primary_system: String = NAME_SYSTEM_ORIGINAL if current_name_system == NAME_SYSTEM_ORIGINAL else NAME_SYSTEM_CUSTOM
 	# 回退名称体系；当前体系缺失时改用另一套牌名的配音，实现双向回退。
 	var fallback_system: String = NAME_SYSTEM_CUSTOM if primary_system == NAME_SYSTEM_ORIGINAL else NAME_SYSTEM_ORIGINAL
-	for name_system: String in [primary_system, fallback_system]:
-		# 当前体系候选路径；命中即返回，保证“当前牌名配音优先”。
-		var resolved_path: String = _resolve_existing_path("%s/%s_%s" % [CARD_AUDIO_DIR, normalized_card_id, name_system])
+	# 性别子目录路径前缀；未指定或未登记的性别取值不参与拼接，直接跳过性别专属三级。
+	var normalized_gender: String = gender.strip_edges()
+	var gender_prefix: String = "%s/%s" % [CARD_AUDIO_DIR, normalized_gender] if _is_supported_gender(normalized_gender) else ""
+	# 候选基名清单；按“精确到笼统”排列，性别比名称体系更精确，因此性别层级整体优先。
+	var candidate_bases: Array[String] = []
+	if not gender_prefix.is_empty():
+		candidate_bases.append("%s/%s_%s" % [gender_prefix, normalized_card_id, primary_system])
+		candidate_bases.append("%s/%s_%s" % [gender_prefix, normalized_card_id, fallback_system])
+		candidate_bases.append("%s/%s" % [gender_prefix, normalized_card_id])
+	candidate_bases.append("%s/%s_%s" % [CARD_AUDIO_DIR, normalized_card_id, primary_system])
+	candidate_bases.append("%s/%s_%s" % [CARD_AUDIO_DIR, normalized_card_id, fallback_system])
+	candidate_bases.append("%s/%s" % [CARD_AUDIO_DIR, normalized_card_id])
+	for candidate_base: String in candidate_bases:
+		# 当前层级候选路径；命中即返回，保证更精确的配音优先于通用配音。
+		var resolved_path: String = _resolve_existing_path(candidate_base)
 		if not resolved_path.is_empty():
 			# 卡牌音效不使用多音效池；包成单元素池以复用统一返回结构。
 			var resolved_pool: Array[String] = [resolved_path]
 			return resolved_pool
+	# 通用兜底；全部专属与性别配音都缺失时，所有卡牌共用同一份音效，实现“每张牌都有声音”。
+	var default_path: String = _resolve_existing_path("%s/%s" % [CARD_AUDIO_DIR, CARD_DEFAULT_AUDIO_BASENAME])
+	if not default_path.is_empty():
+		# 兜底音效同样包成单元素池；调用方不需要区分兜底与专属。
+		var default_pool: Array[String] = [default_path]
+		return default_pool
 	return []
 
 
@@ -125,6 +163,26 @@ func resolve_bgm_pool(scene_id: String) -> Array[String]:
 	if not single_path.is_empty():
 		pool.append(single_path)
 	return pool
+
+
+## 解析BGM素材路径在游戏内的显示名称。
+## 文件名结构为 <场景>[_<序号>]：序号后缀只由数字构成，因此尾部不是纯数字时一律按该场景的默认曲目处理，
+## 显示为“默认”；尾部是数字时显示为“默认 <序号>”，使同一场景的多首候选曲目在界面与日志中可区分。
+## 该名称只用于展示，不参与播放决策与随机选曲。
+func get_bgm_display_name(bgm_path: String) -> String:
+	# 文件基名；去掉目录与扩展名后只保留场景标识与可选序号。
+	var base_name: String = bgm_path.get_file().get_basename()
+	if base_name.is_empty():
+		return BGM_DEFAULT_DISPLAY_NAME
+	# 序号前缀位置；从最后一个下划线处切分，场景标识自身含下划线时不会误判成序号。
+	var separator_index: int = base_name.rfind("_")
+	if separator_index < 0:
+		return BGM_DEFAULT_DISPLAY_NAME
+	# 候选序号文本；为空或不是纯数字都说明该文件是本场景的默认曲目。
+	var index_text: String = base_name.substr(separator_index + 1)
+	if index_text.is_empty() or not index_text.is_valid_int():
+		return BGM_DEFAULT_DISPLAY_NAME
+	return "%s %s" % [BGM_DEFAULT_DISPLAY_NAME, index_text]
 
 
 ## 加载音频流；路径为空、资源不存在或类型不符时返回 null，由调用方静默跳过播放。
@@ -159,6 +217,11 @@ func _collect_existing_pool(base_path: String) -> Array[String]:
 		if not resolved_path.is_empty():
 			pool.append(resolved_path)
 	return pool
+
+
+## 判定性别取值是否对应一个真实的卡牌音效子目录；未知性别不参与路径拼接。
+func _is_supported_gender(gender: String) -> bool:
+	return gender == CARD_GENDER_MALE or gender == CARD_GENDER_FEMALE
 
 
 ## 按扩展名优先级探测单个音频文件；返回首个存在的完整路径，全部不存在时返回空字符串。

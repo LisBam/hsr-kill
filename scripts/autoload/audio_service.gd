@@ -21,7 +21,7 @@ const MASTER_BUS_NAME: String = "Master"
 ## 语音表现请求类别：技能语音；负载需要 skill_id 与 character_id 两个字段。
 const VOICE_KIND_SKILL: String = "skill"
 
-## 语音表现请求类别：卡牌语音；负载需要 card_definition_id 字段。
+## 语音表现请求类别：卡牌语音；负载需要 card_definition_id、card_names、gender 与 play_mode 字段。
 const VOICE_KIND_CARD: String = "card"
 
 ## 全局设置自动加载路径；音频音量与静音开关的唯一持久化来源。
@@ -153,12 +153,14 @@ func _play_skill_voice(presentation_data: Dictionary) -> void:
 	_voice_player.play_pool(pool, _catalog, "skill:%s" % skill_id)
 
 
-## 播放卡牌语音；按当前卡名显示模式优先、另一名称体系回退的顺序解析候选。
+## 播放卡牌语音；按“性别专属 → 当前名称体系 → 另一名称体系 → 全卡牌通用兜底”的顺序解析候选。
 func _play_card_voice(presentation_data: Dictionary) -> void:
 	# 卡牌定义ID；虚拟牌（例如罡风转化的雷【杀】）传入的是实际结算的虚拟定义ID。
 	var card_definition_id: String = str(presentation_data.get("card_definition_id", ""))
-	# 候选池；空表示该牌在两套名称体系下均无配音，静默处理。
-	var pool: Array[String] = _catalog.resolve_card_voice_pool(card_definition_id, _get_current_card_name_system())
+	# 使用者性别；核心层已按发动者武将解析，未选将或未知性别时音频层跳过性别专属目录。
+	var gender: String = str(presentation_data.get("gender", ""))
+	# 候选池；空表示该牌在性别专属、两套名称体系与通用兜底下均无配音，静默处理。
+	var pool: Array[String] = _catalog.resolve_card_voice_pool(card_definition_id, _get_current_card_name_system(), gender)
 	if pool.is_empty():
 		_log_missing_audio("card", card_definition_id, "")
 		return
