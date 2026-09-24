@@ -57,6 +57,10 @@ var _last_activation_repeat_token: int = 0
 ## 当前是否正在执行额外发动；true时新记录会标记为重复发动，防止【奇袭】递归复制自身产生无限循环。
 var _repeat_activation_in_progress: bool = false
 
+## 内容层显式语音请求的引擎毫秒时间戳；0表示本次发动过程中尚未显式请求语音。
+## 核心层据此判断是否跳过默认自动播放：窗口内跳过，窗口外视为过期，避免“调用了却没真正发动”导致后续永久静音。
+var _explicit_voice_request_msec: int = 0
+
 
 ## 保存技能元数据；元数据只在脚本构造时写入，运行时状态应使用独立成员变量保存。
 func _init(metadata: Dictionary = {}) -> void:
@@ -180,6 +184,27 @@ func announce_activation_for_player(activator_player_id: int, context: Dictionar
 		activation_context["repeated_activation"] = true
 	host.call("record_skill_activation", activator_player_id, get_id(), activation_context)
 	consume_intrinsic_use()
+
+
+## 请求播放本技能本次发动的语音；技能源码可在效果代码中调用它以自定义播放时机。
+## 默认情况下核心统一出口已自动触发，重复调用不会导致重复发声。
+func play_voice() -> void:
+	if host == null or not host.has_method("request_skill_voice"):
+		return
+	# 记录显式请求时间戳；核心层会在抑制窗口内跳过本次自动播放，避免同一动作发出两次配音。
+	_explicit_voice_request_msec = Time.get_ticks_msec()
+	host.call("request_skill_voice", owner_player_id, get_id())
+
+
+## 消费一次显式语音请求标记；距离显式调用未超过给定窗口时返回true，由核心层跳过自动播放。
+## 窗口过期后标记自动失效，避免“调用了却没真正发动”导致后续发动被永久静音。
+func consume_explicit_voice_request(window_seconds: float) -> bool:
+	if _explicit_voice_request_msec <= 0:
+		return false
+	# 距显式请求的毫秒数；无论是否命中窗口标记都会清零，保证每次请求只被消费一次。
+	var elapsed_msec: int = Time.get_ticks_msec() - _explicit_voice_request_msec
+	_explicit_voice_request_msec = 0
+	return elapsed_msec >= 0 and elapsed_msec <= int(window_seconds * 1000.0)
 
 
 ## 返回限定技或觉醒技是否仍有固有发动额度；普通技能始终返回true。

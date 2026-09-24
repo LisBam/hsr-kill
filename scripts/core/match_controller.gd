@@ -32,6 +32,32 @@ signal skill_activated(player_id: int, skill_name: String, context: Dictionary)
 ## 防具实际生效表现信号；桌面复用武将牌中央提示显示防具名，不读取或修改装备实体与规则状态。
 signal equipment_activated(player_id: int, equipment_name: String, context: Dictionary)
 
+## 技能发动与卡牌使用、打出的统一音频表现信号；负载只含已公开数据（发动者、技能或牌定义、武将ID、两套牌名、动作模式）。
+## 音频表现层据此选择并播放语音；该负载可序列化并随联机表现事件广播，表现层不需要回读任何控制器状态。
+signal voice_presentation_requested(presentation_data: Dictionary)
+
+## 音频请求类别：技能发动语音；音频服务据此按“角色专属 → 通用”顺序解析候选文件。
+const VOICE_KIND_SKILL: String = "skill"
+
+## 音频请求类别：卡牌使用或打出语音；音频服务据此按“当前名称体系 → 另一名称体系”解析候选文件。
+const VOICE_KIND_CARD: String = "card"
+
+## 卡牌音频动作模式：使用；与打出共用同一份音效，该字段仅用于诊断与日志。
+const VOICE_PLAY_MODE_USE: String = "use"
+
+## 卡牌音频动作模式：打出（响应消耗）；牌源文件不会在打出流程中被回调，因此必须由核心统一出口触发。
+const VOICE_PLAY_MODE_RESPOND: String = "respond"
+
+## 技能显式播放抑制窗口（秒）；内容层在发动过程中调用 play_voice() 后，统一出口在该窗口内不再重复请求。
+## 默认3秒足以覆盖“点技能按钮 → 选择材料与目标 → 确认发动”的完整交互，又能在发动被取消后自然过期。
+const EXPLICIT_VOICE_SUPPRESS_WINDOW_SECONDS: float = 3.0
+
+## 音频请求去重表容量上限；达到上限后清空重建，避免长局中条目无限增长。
+const VOICE_REQUEST_TOKEN_CAPACITY: int = 512
+
+## 技能元数据手动接管取值；技能声明 voice_trigger 为该值时核心层不再自动触发语音，由技能源码自行决定时机。
+const VOICE_TRIGGER_MANUAL: String = "manual"
+
 ## 牌区转移数据中标识摸牌表现批次的私有键；只存在于瞬时信号副本，绝不写入 CardInstance、存档或回放状态。
 const DRAW_PRESENTATION_BATCH_ID_KEY: String = "_draw_presentation_batch_id"
 
@@ -436,6 +462,12 @@ var _play_choice_match_id: String = ""
 ## 当前对局牌面表现递增序号；每次使用、展示或判定递增，重新开局时归零。
 var _card_presentation_sequence: int = 0
 
+## 音频请求去重表；键为“类别|玩家|定义|事件令牌|动作模式”，命中即跳过重复请求，防止同一动作重复发声。
+var _voice_request_tokens: Dictionary = {}
+
+## 音频表现序号；每次音频请求自增一次，仅供表现层诊断与日志排序使用，不参与任何规则判定。
+var _voice_presentation_sequence: int = 0
+
 ## 当前判定区顺序流程代次；重新开局、换回合或重新启动判定链时递增，使旧计时器无法继续修改新状态。
 var _judgment_flow_token: int = 0
 
@@ -625,6 +657,8 @@ func _ready() -> void:
 		skill_activated.connect(_replicate_skill_activated_event)
 	if not equipment_activated.is_connected(_replicate_equipment_activated_event):
 		equipment_activated.connect(_replicate_equipment_activated_event)
+	if not voice_presentation_requested.is_connected(_replicate_voice_presentation_event):
+		voice_presentation_requested.connect(_replicate_voice_presentation_event)
 	if not public_card_choice_display_changed.is_connected(_replicate_public_card_choice_display_event):
 		public_card_choice_display_changed.connect(_replicate_public_card_choice_display_event)
 	if not match_finished.is_connected(_replicate_match_finished_event):
@@ -5191,6 +5225,8 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 		resolved_response_card.zone = consumed.zone
 	# 响应日志显示已经声明的逻辑牌名，弃牌堆中的实体快照仍展示恢复后的原始牌名。
 	add_log("%s打出了%s。" % [format_player_state_log_name(player), format_card_log_name(resolved_response_card)])
+	# 音频表现：响应牌打出成功后请求一次卡牌语音；打出流程不会回调牌源文件，因此必须在本统一出口触发。
+	request_card_voice(player_id, logical_definition_id, VOICE_PLAY_MODE_RESPOND)
 	_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
 	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
 	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
@@ -5272,6 +5308,8 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 		skill.on_converted_response_consumed(material_card, response_pattern, virtual_definition_id)
 		skill.announce_activation({"material_card_uid":material_card.uid, "response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
 		add_log("%s将一张牌当%s打出。" % [player.display_name, GameSettings.resolve_card_name(virtual_definition)])
+		# 音频表现：技能转化打出的响应牌同样按实际结算的虚拟牌定义请求语音。
+		request_card_voice(player_id, virtual_definition_id, VOICE_PLAY_MODE_RESPOND)
 		_notify_equipment_card_consumed(player_id, material_card, was_hand_card)
 		_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
 		_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
@@ -8963,6 +9001,96 @@ func _submit_cardless_skill_response_choice(player_id: int, skill_id: String) ->
 	return _submit_card_choice(action)
 
 
+## 请求播放一次技能发动语音。
+## 本端口是内容层显式调用与核心统一出口的共同入口：技能源码可在效果代码中调用它自定义播放时机。
+## 同一次发动内的重复请求会被去重表拦截，因此显式调用不会与默认触发重复发声。
+func request_skill_voice(player_id: int, skill_id: String) -> void:
+	if state == null or state.game_over or skill_id.is_empty():
+		return
+	# 去重键；技能以当前规则事件为令牌，同一次发动链路只允许请求一次语音。
+	var dedup_key: String = "%s|%d|%s|%d|%s" % [VOICE_KIND_SKILL, player_id, skill_id, state.current_event_id, ""]
+	if _is_duplicate_voice_request(dedup_key):
+		return
+	# 发动者武将ID；用于优先命中角色专属配音，同一技能被不同角色拥有时音色随之变化。
+	var character_id: String = _resolve_player_character_id(player_id)
+	# 只读表现负载；只包含已公开数据，可安全序列化并随联机表现事件广播。
+	var presentation_data: Dictionary = {
+		"kind": VOICE_KIND_SKILL,
+		"player_id": player_id,
+		"skill_id": skill_id,
+		"character_id": character_id,
+		"sequence": _voice_presentation_sequence,
+	}
+	_voice_presentation_sequence += 1
+	voice_presentation_requested.emit(presentation_data)
+
+
+## 请求播放一次卡牌使用或打出语音。
+## 本端口由核心统一出口调用（使用声明、响应消耗、技能转化响应），卡牌源码也可显式调用以自定义时机。
+## 同一张牌的“使用”与“打出”共用同一份音效，仅动作模式字段不同。
+func request_card_voice(player_id: int, card_definition_id: String, play_mode: String) -> void:
+	if state == null or state.game_over or card_definition_id.is_empty():
+		return
+	# 卡牌定义；同时提供两套牌名，音频层据当前卡名显示模式选择并回退另一体系。
+	var card_definition: Dictionary = GameDatabase.get_card(card_definition_id)
+	if card_definition.is_empty():
+		return
+	# 去重键；卡牌以当前规则事件与动作模式为令牌，同一张牌的使用与打出各自只请求一次。
+	var dedup_key: String = "%s|%d|%s|%d|%s" % [VOICE_KIND_CARD, player_id, card_definition_id, state.current_event_id, play_mode]
+	if _is_duplicate_voice_request(dedup_key):
+		return
+	# 两套牌名；音频层按当前卡名模式优先取用，缺失时回退另一体系。
+	var card_names: Dictionary = {
+		"custom": str(card_definition.get("custom_name", "")),
+		"original": str(card_definition.get("original_name", "")),
+	}
+	# 只读表现负载；不包含手牌归属、身份或随机种子等任何隐藏信息。
+	var presentation_data: Dictionary = {
+		"kind": VOICE_KIND_CARD,
+		"player_id": player_id,
+		"card_definition_id": card_definition_id,
+		"card_names": card_names,
+		"play_mode": play_mode,
+		"sequence": _voice_presentation_sequence,
+	}
+	_voice_presentation_sequence += 1
+	voice_presentation_requested.emit(presentation_data)
+
+
+## 技能发动的默认音频触发；内容层已显式播放或声明手动接管时跳过，保证不重复发声。
+func _request_auto_skill_voice(player_id: int, skill_id: String, skill_metadata: Dictionary) -> void:
+	# 内容层声明手动接管的技能不自动发声，由技能文件自行选择播放时机与条件。
+	if str(skill_metadata.get("voice_trigger", "")) == VOICE_TRIGGER_MANUAL:
+		return
+	# 技能实例；用于判断内容层是否已在本次发动过程中显式请求过语音。
+	var skill_instance: SkillDefinition = get_skill_instance(player_id, skill_id)
+	if skill_instance != null and skill_instance.consume_explicit_voice_request(EXPLICIT_VOICE_SUPPRESS_WINDOW_SECONDS):
+		return
+	request_skill_voice(player_id, skill_id)
+
+
+## 返回指定玩家的武将ID；玩家不存在或尚未选将时返回空字符串，音频层据此回退到通用音效。
+func _resolve_player_character_id(player_id: int) -> String:
+	if state == null:
+		return ""
+	# 目标玩家状态；已离场或从未创建时无法取得武将信息。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return ""
+	return str(player.character_id)
+
+
+## 记录并判断一次音频请求是否为重复；重复请求返回 true，由调用方直接丢弃。
+func _is_duplicate_voice_request(dedup_key: String) -> bool:
+	if _voice_request_tokens.has(dedup_key):
+		return true
+	# 容量保护；达到上限后清空重建，避免长局中条目无限增长。
+	if _voice_request_tokens.size() >= VOICE_REQUEST_TOKEN_CAPACITY:
+		_voice_request_tokens.clear()
+	_voice_request_tokens[dedup_key] = true
+	return false
+
+
 ## 写入一条实际成立的技能发动记录，并通知对局日志与桌面表现；内容技能只能通过本公开端口调用，不能直接改写历史数组。
 func record_skill_activation(player_id: int, skill_id: String, context: Dictionary = {}) -> void:
 	if state == null or state.game_over:
@@ -8973,6 +9101,8 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or (player.out_of_game and not bool(skill_metadata.get("out_of_game_skill", false))):
 		return
+	# 音频表现：技能实际发动成立时默认请求一次技能语音，覆盖主动技、触发技与领袖技的全部发动路径。
+	_request_auto_skill_voice(player_id, skill_id, skill_metadata)
 	# 技能名称；缺失时回退稳定 ID，保证日志与动画仍能定位来源。
 	# 当前日志说明：稳定ID只保存在结构化历史中，玩家可见名称缺失时统一显示中文“未知技能”。
 	var skill_name: String = format_skill_log_name(skill_id)
@@ -11522,6 +11652,8 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	# 分阶段指示线；普通牌返回空数组并继续使用实际目标单段表现。
 	var presentation_indicator_stages: Array[Dictionary] = source_definition.get_presentation_indicator_stages(actor_id, requested_presentation_target_ids, event.target_ids) if source_definition != null else []
 	_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer, presentation_indicator_stages)
+	# 音频表现：声明使用后请求一次卡牌语音；与“打出”共用同一份音效，虚拟牌按实际结算定义取音。
+	request_card_voice(actor_id, card.definition_id, VOICE_PLAY_MODE_USE)
 	# 兼容扩展事件；现有独立技能仍可监听 card_used，新的源码级技能应优先监听真实 useCard 时机子事件。
 	_dispatch_rule_event(RuleEvent.new("card_used", actor_id, event.target_ids[0] if not event.target_ids.is_empty() else -1, {"card_uid":card.uid, "card_id":card.definition_id, "target_ids":event.target_ids.duplicate()}))
 	card_use_context["declared"] = true
@@ -14366,6 +14498,8 @@ func _on_network_game_event_received(event_type: String, event_payload: Dictiona
 		skill_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("skill_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
 	elif event_type == "equipment_activated":
 		equipment_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("equipment_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
+	elif event_type == "voice_presentation":
+		voice_presentation_requested.emit((event_payload.get("presentation", {}) as Dictionary).duplicate(true))
 	elif event_type == "public_card_choice_display":
 		public_card_choice_display_changed.emit((event_payload.get("display", {}) as Dictionary).duplicate(true))
 	elif event_type == "match_finished":
@@ -14652,6 +14786,15 @@ func _replicate_card_presentation_event(presentation_data: Dictionary) -> void:
 	safe_card.erase("private_owner_id")
 	safe_presentation["card_data"] = safe_card
 	network_gateway.broadcast_game_event("card_presentation", {"presentation":safe_presentation})
+
+
+## 广播技能发动与卡牌使用、打出的语音表现；负载只含已公开数据，不泄露手牌归属、身份或随机种子。
+func _replicate_voice_presentation_event(presentation_data: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	# 可发送副本；音频负载本身不含任何隐藏知识，深复制后即可安全广播给全部客户端。
+	var safe_presentation: Dictionary = presentation_data.duplicate(true)
+	network_gateway.broadcast_game_event("voice_presentation", {"presentation":safe_presentation})
 
 
 ## 按观察者裁剪牌区移动表现；非当事人看到摸牌或私有手牌转移时只收到 UID 和统一牌背语义。
