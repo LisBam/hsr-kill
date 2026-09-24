@@ -302,6 +302,21 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 游戏速度滑条；修改后立即写入全局设置，不重置已经开始的计时任务。
 @onready var _game_speed_slider: HSlider = %MainMenuGameSpeedSlider
 
+## 背景音乐音量标签；显示当前BGM音量百分比，数值与实际总线音量始终一致。
+@onready var _bgm_volume_label: Label = %MainMenuBgmVolumeLabel
+
+## 背景音乐音量滑条；修改后立即写入全局设置，由音频服务实时刷新BGM总线。
+@onready var _bgm_volume_slider: HSlider = %MainMenuBgmVolumeSlider
+
+## 音效音量标签；显示当前卡牌与技能语音音量百分比。
+@onready var _sfx_volume_label: Label = %MainMenuSfxVolumeLabel
+
+## 音效音量滑条；修改后立即写入全局设置，由音频服务实时刷新SFX总线。
+@onready var _sfx_volume_slider: HSlider = %MainMenuSfxVolumeSlider
+
+## 全局静音复选框；开启后两条音频总线同时静音，已保存的音量数值保持不变。
+@onready var _audio_muted_check_box: CheckBox = %MainMenuAudioMutedCheckBox
+
 ## 下一局人数输入框；开始游戏时读取该控件，限制为标准身份局支持的2至10人范围。
 @onready var _player_count_input: SpinBox = %MainMenuPlayerCountInput
 
@@ -404,6 +419,19 @@ func _ready() -> void:
 	_game_speed_slider.step = GameSettings.GAME_SPEED_INTERVAL_STEP_SECONDS
 	_game_speed_slider.value = GameSettings.game_speed_interval_seconds
 	_game_speed_slider.value_changed.connect(_on_game_speed_changed)
+	_bgm_volume_slider.min_value = GameSettings.MIN_AUDIO_VOLUME
+	_bgm_volume_slider.max_value = GameSettings.MAX_AUDIO_VOLUME
+	_bgm_volume_slider.step = GameSettings.AUDIO_VOLUME_STEP
+	_bgm_volume_slider.value = GameSettings.bgm_volume
+	_bgm_volume_slider.value_changed.connect(_on_bgm_volume_slider_changed)
+	_sfx_volume_slider.min_value = GameSettings.MIN_AUDIO_VOLUME
+	_sfx_volume_slider.max_value = GameSettings.MAX_AUDIO_VOLUME
+	_sfx_volume_slider.step = GameSettings.AUDIO_VOLUME_STEP
+	_sfx_volume_slider.value = GameSettings.sfx_volume
+	_sfx_volume_slider.value_changed.connect(_on_sfx_volume_slider_changed)
+	_audio_muted_check_box.set_pressed_no_signal(GameSettings.audio_muted)
+	_audio_muted_check_box.toggled.connect(GameSettings.set_audio_muted)
+	_refresh_audio_volume_labels()
 	_populate_card_name_options()
 	_card_name_option.item_selected.connect(_on_card_name_selected)
 	_populate_ui_style_options()
@@ -656,6 +684,11 @@ func refresh_ui_style() -> void:
 	(%MainMenuPlayerCountLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_bgm_volume_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_sfx_volume_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_audio_muted_check_box.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_audio_muted_check_box.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_audio_muted_check_box.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
@@ -673,6 +706,8 @@ func refresh_ui_style() -> void:
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_apply_slider_style(_ai_response_delay_slider)
 	_apply_slider_style(_game_speed_slider)
+	_apply_slider_style(_bgm_volume_slider)
+	_apply_slider_style(_sfx_volume_slider)
 	_apply_spin_box_style(_player_count_input)
 	_apply_spin_box_style(_wheel_duel_face_up_candidate_input)
 	_apply_spin_box_style(_wheel_duel_face_down_candidate_input)
@@ -1951,6 +1986,28 @@ func _refresh_game_speed_text(interval_seconds: float) -> void:
 ## 将游戏速度滑条值写入全局设置；已开始的计时任务保持原时长以避免中途跳变。
 func _on_game_speed_changed(interval_seconds: float) -> void:
 	GameSettings.set_game_speed_interval_seconds(interval_seconds)
+
+
+## 同步音频音量控件显示；标签文本与滑条数值始终一致，避免显示与生效值脱节。
+func _refresh_audio_volume_labels() -> void:
+	if not is_node_ready():
+		return
+	_bgm_volume_slider.set_value_no_signal(GameSettings.bgm_volume)
+	_bgm_volume_label.text = "背景音乐音量：%d%%" % int(round(GameSettings.bgm_volume * 100.0))
+	_sfx_volume_slider.set_value_no_signal(GameSettings.sfx_volume)
+	_sfx_volume_label.text = "音效音量：%d%%" % int(round(GameSettings.sfx_volume * 100.0))
+
+
+## 将背景音乐音量滑条值写入全局设置；音频服务订阅该设置信号后立即刷新BGM总线。
+func _on_bgm_volume_slider_changed(volume_linear: float) -> void:
+	GameSettings.set_bgm_volume(volume_linear)
+	_refresh_audio_volume_labels()
+
+
+## 将音效音量滑条值写入全局设置；音频服务订阅该设置信号后立即刷新SFX总线。
+func _on_sfx_volume_slider_changed(volume_linear: float) -> void:
+	GameSettings.set_sfx_volume(volume_linear)
+	_refresh_audio_volume_labels()
 
 
 ## 下一局人数输入变化时写入全局持久化设置；已开始对局不会读取该值改变当前身份与座次。

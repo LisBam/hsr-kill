@@ -67,6 +67,15 @@ signal wheel_duel_face_up_candidate_count_changed(count: int)
 ## 1v1车轮战暗置候选数量变化信号；参数范围3至20，仅影响之后创建的新对局。
 signal wheel_duel_face_down_candidate_count_changed(count: int)
 
+## 背景音乐音量变化信号；音频服务订阅后即时应用新的BGM总线音量，不修改任何对局状态。
+signal bgm_volume_changed(volume_linear: float)
+
+## 音效与语音音量变化信号；音频服务订阅后即时应用新的音效总线音量，不修改任何对局状态。
+signal sfx_volume_changed(volume_linear: float)
+
+## 全局静音开关变化信号；音频服务订阅后同时静音背景音乐与音效两条总线，已保存的音量数值保持不变。
+signal audio_muted_changed(muted: bool)
+
 ## 卡牌名称显示模式；CUSTOM 展示《崩铁杀》名称，ORIGINAL 展示原版三国杀名称。
 enum NameMode {
 	CUSTOM,
@@ -198,6 +207,24 @@ const MAX_GAME_SPEED_INTERVAL_SECONDS: float = 1.0
 ## 游戏流程间隔的调节步长；默认0.1秒，与菜单滑条显示精度保持一致。
 ## 当前步长补充：流程间隔与AI响应等待统一使用0.05秒调节精度，避免设置入口出现不同档位。
 const GAME_SPEED_INTERVAL_STEP_SECONDS: float = 0.05
+
+## 音频音量允许的最小值；0表示完全静音，此时音频服务改用总线静音开关处理，避免向总线写入无效的负无穷分贝值。
+const MIN_AUDIO_VOLUME: float = 0.0
+
+## 音频音量允许的最大值；1表示原始音量，超过1会在总线上产生削波失真，因此不再向上开放。
+const MAX_AUDIO_VOLUME: float = 1.0
+
+## 音频音量的调节步长；默认0.05，与主菜单滑条的可感知档位保持一致，共21个稳定档位。
+const AUDIO_VOLUME_STEP: float = 0.05
+
+## 背景音乐默认音量；默认0.8，让BGM稳定位于卡牌语音与技能语音之下，避免掩盖配音。
+const DEFAULT_BGM_VOLUME: float = 0.8
+
+## 音效与语音默认音量；默认0.9，保证卡牌与技能语音在战斗音效中依然清晰可辨。
+const DEFAULT_SFX_VOLUME: float = 0.9
+
+## 全局静音开关默认值；默认关闭，保证首次进入游戏即可听到BGM与语音，不出现“无声”误判。
+const DEFAULT_AUDIO_MUTED: bool = false
 
 ## 联机玩家名称允许的最大 Unicode 字符数；20与局域网成员协议上限一致，运行时无需动态修改。
 const MAX_ONLINE_PLAYER_NAME_LENGTH: int = 20
@@ -368,6 +395,15 @@ var conquest_opportunity_choice_mode: String = DEFAULT_CONQUEST_OPPORTUNITY_CHOI
 ## 下一局离线对局是否由本机控制全部角色；默认关闭，联机房主与客户端均忽略该值。
 var control_all_characters_enabled: bool = false
 
+## 当前背景音乐音量；取值0.0至1.0，默认0.8，运行时可通过主菜单音频设置即时修改并写入存档。
+var bgm_volume: float = DEFAULT_BGM_VOLUME
+
+## 当前音效与卡牌、技能语音音量；取值0.0至1.0，默认0.9，运行时可通过主菜单音频设置即时修改并写入存档。
+var sfx_volume: float = DEFAULT_SFX_VOLUME
+
+## 当前是否静音全部音频；默认关闭，只影响音频总线的静音开关，不覆盖玩家保存的音量数值。
+var audio_muted: bool = DEFAULT_AUDIO_MUTED
+
 ## 当前实际读写的设置文件路径；默认使用用户目录，测试可在节点进入场景树前替换为独立临时路径。
 var _settings_file_path: String = SETTINGS_FILE_PATH
 
@@ -449,6 +485,39 @@ func set_game_speed_interval_seconds(interval_seconds: float) -> void:
 	game_speed_interval_seconds = clamped_interval_seconds
 	_queue_settings_save()
 	game_speed_changed.emit(game_speed_interval_seconds)
+
+
+## 设置背景音乐音量；范围外输入按滑条步长取整后写入存档，并通知音频服务刷新BGM总线增益。
+func set_bgm_volume(volume_linear: float) -> void:
+	# 限制后的音量；统一按滑条步长取整，保证菜单显示值与总线实际增益完全一致。
+	var clamped_volume: float = snappedf(clampf(volume_linear, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME), AUDIO_VOLUME_STEP)
+	if is_equal_approx(bgm_volume, clamped_volume):
+		return
+	bgm_volume = clamped_volume
+	_queue_settings_save()
+	bgm_volume_changed.emit(bgm_volume)
+
+
+## 设置音效与卡牌、技能语音音量；与背景音乐共用同一区间与步长，避免两个入口出现不同档位。
+func set_sfx_volume(volume_linear: float) -> void:
+	# 限制后的音量；统一按滑条步长取整，保证菜单显示值与总线实际增益完全一致。
+	var clamped_volume: float = snappedf(clampf(volume_linear, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME), AUDIO_VOLUME_STEP)
+	if is_equal_approx(sfx_volume, clamped_volume):
+		return
+	sfx_volume = clamped_volume
+	_queue_settings_save()
+	sfx_volume_changed.emit(sfx_volume)
+
+
+## 设置全局静音开关；该开关在音频总线上生效，保存的音量数值保持原样，取消静音后立即恢复。
+func set_audio_muted(muted: bool) -> void:
+	if audio_muted == muted:
+		return
+	audio_muted = muted
+	_queue_settings_save()
+	audio_muted_changed.emit(audio_muted)
+
+
 ## 设置全局 UI 风格；未知标识自动回退默认风格，并通知已连接的界面组件即时重绘。
 func set_ui_style(style_id: String) -> void:
 	# 已注册的风格标识；设置层只保存稳定 ID，不持有任何颜色字典或场景节点引用。
@@ -857,6 +926,12 @@ func _load_saved_settings() -> void:
 	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
+	# 已保存的背景音乐音量；旧存档缺少该字段时保留脚本默认0.8，并按滑条步长取整后写入内存。
+	bgm_volume = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "bgm_volume", bgm_volume)), MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME), AUDIO_VOLUME_STEP)
+	# 已保存的音效与语音音量；与背景音乐共用同一取值区间与步长，旧存档同样回退脚本默认0.9。
+	sfx_volume = snappedf(clampf(float(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "sfx_volume", sfx_volume)), MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME), AUDIO_VOLUME_STEP)
+	# 已保存的全局静音开关；旧存档缺少该字段时保持默认不静音，不会突然出现无声现象。
+	audio_muted = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "audio_muted", audio_muted))
 	online_player_name = normalize_online_player_name(str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)))
 	online_avatar_character_id = str(settings_file.get_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)).strip_edges()
 
@@ -939,6 +1014,9 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "bgm_volume", bgm_volume)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "sfx_volume", sfx_volume)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "audio_muted", audio_muted)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "player_name", online_player_name)
 	settings_file.set_value(ONLINE_SETTINGS_SECTION, "avatar_character_id", online_avatar_character_id)
 	last_save_error = settings_file.save(_settings_file_path)

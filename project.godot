@@ -21,6 +21,7 @@ config/icon="res://icon.svg"
 
 GameSettings="*res://scripts/autoload/game_settings.gd"
 GameDatabase="*res://scripts/autoload/game_database.gd"
+AudioService="*res://scripts/autoload/audio_service.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]

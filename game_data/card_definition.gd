@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 卡牌源码定义基类。每张具体卡牌脚本保存自身静态信息、同步效果与异步恢复入口，数据库仅负责自动发现和索引。
 
+## 卡牌语音动作模式：使用；与核心层 VOICE_PLAY_MODE_USE 取值保持一致，内容层因此无需依赖核心层常量。
+const VOICE_PLAY_MODE_USE: String = "use"
+
 ## 当前卡牌的完整静态元数据；由具体卡牌脚本在构造时一次性写入，运行时只通过深拷贝向外提供。
 var _metadata: Dictionary = {}
 
@@ -29,6 +32,16 @@ func get_metadata() -> Dictionary:
 ## 返回卡牌稳定逻辑 ID；该值必须在 game_data/cards 全目录中唯一。
 func get_id() -> String:
 	return str(_metadata.get("id", ""))
+
+
+## 请求播放本次使用或打出的卡牌语音；卡牌源码可在效果代码中调用它以自定义播放时机。
+## 默认已由核心统一出口在“声明使用”与“响应消耗”两处触发，因此牌源文件通常无需调用。
+func play_voice(actor_id: int = -1) -> void:
+	if runtime_host == null or not runtime_host.has_method("request_card_voice"):
+		return
+	# 使用者；未显式指定时回退到绑定运行时记录的持有者，保证装备与虚拟牌也能定位音源。
+	var user_id: int = actor_id if actor_id >= 0 else runtime_owner_player_id
+	runtime_host.call("request_card_voice", user_id, get_id(), VOICE_PLAY_MODE_USE)
 
 
 ## 返回卡牌文件声明的 AI 配置副本；通用策略可读取但不能修改数据库中的静态元数据。

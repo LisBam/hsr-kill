@@ -30,6 +30,7 @@
 [ext_resource type="Script" uid="uid://b8v06563qhwaj" path="res://scripts/opportunity/opportunity_system.gd" id="30_opportunity_system"]
 [ext_resource type="PackedScene" path="res://scenes/components/all_cards_panel.tscn" id="31_all_cards"]
 [ext_resource type="PackedScene" path="res://scenes/components/match_replay_panel.tscn" id="32_match_replay"]
+[ext_resource type="Script" uid="uid://b7yqio4k0kp5b" path="res://scripts/audio/game_audio_bridge.gd" id="33_audio_bridge"]
 
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
@@ -128,6 +129,9 @@ script = ExtResource("5_network")
 
 [node name="OpportunitySystem" type="Node" parent="MatchController" unique_id=985942915]
 script = ExtResource("30_opportunity_system")
+
+[node name="AudioBridge" type="Node" parent="." unique_id=1910423857]
+script = ExtResource("33_audio_bridge")
 
 [node name="Background" type="ColorRect" parent="." unique_id=617244583]
 layout_mode = 1
@@ -1989,6 +1993,50 @@ min_value = 0.1
 max_value = 1.0
 step = 0.05
 value = 0.30000000000000004
+
+[node name="MainMenuBgmVolumeLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200201]
+unique_name_in_owner = true
+layout_mode = 2
+text = "背景音乐音量：80%"
+
+[node name="MainMenuBgmVolumeSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200202]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+max_value = 1.0
+step = 0.05
+value = 0.8
+
+[node name="MainMenuSfxVolumeLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200203]
+unique_name_in_owner = true
+layout_mode = 2
+text = "音效音量：90%"
+
+[node name="MainMenuSfxVolumeSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200204]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+max_value = 1.0
+step = 0.05
+value = 0.9
+
+[node name="MainMenuAudioMutedCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200205]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "静音全部音频"
+
+[node name="SettingsCheckBoxIndicator" type="Control" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuAudioMutedCheckBox" unique_id=1903200206]
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 5.0
+offset_right = 22.0
+offset_bottom = 25.0
+mouse_filter = 2
+script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuPlayerCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=180229364]
 layout_mode = 2
