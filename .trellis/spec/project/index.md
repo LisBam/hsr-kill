@@ -13,7 +13,7 @@
 ## Pre-Development Checklist（开工前必读）
 
 - [ ] 确认本次改动属于哪一层（`content` / `core` / `ui` / `adapters`），去读该层 `index.md` 的清单。
-- [ ] 确认是否涉及「主公钦定的原文」——若涉及，原文一字不得改（见 [collaboration-rules.md](./collaboration-rules.md)）。
+- [ ] 确认是否涉及「需求钦定的原文」——若涉及，原文一字不得改（见 [collaboration-rules.md](./collaboration-rules.md)）。
 - [ ] 搜一遍既有实现再动手：同功能可能已有标准端口或共享组件（见 [`../guides/code-reuse-thinking-guide.md`](../guides/code-reuse-thinking-guide.md)）。
 - [ ] 确认本次改动需要同步哪些 `docs/` 文档（见 [documentation-sync.md](./documentation-sync.md) 的同步矩阵）。
 - [ ] 确认验证方式：至少要跑一个相关的 `res://tests/*.tscn`（见 [verification.md](./verification.md)）。

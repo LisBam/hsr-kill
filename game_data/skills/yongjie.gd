@@ -36,7 +36,7 @@ const REMOVED_ALLY_IDS_STATE_KEY: String = "baie_removed_ally_ids"
 const AI_MATERIAL_COST_WEIGHT: float = 0.45
 
 
-## 写入锁定轮回技静态信息；技能描述逐字保持主公提供的原文。
+## 写入锁定轮回技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"yongjie",

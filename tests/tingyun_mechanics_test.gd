@@ -89,13 +89,13 @@ func _install_skill(player_id: int, skill_id: String) -> SkillDefinition:
 	return skill
 
 
-## 校验停云资料、技能顺序与主公给出的两段技能原文，任何文字或标点变化都应立即失败。
+## 校验停云资料、技能顺序与需求给出的两段技能原文，任何文字或标点变化都应立即失败。
 func _test_metadata() -> bool:
 	# 停云静态定义；稳定ID、仙舟联盟、女性、3点体力与技能顺序必须保持一致。
 	var tingyun: Dictionary = GameDatabase.get_character("tingyun")
 	if str(tingyun.get("display_name", "")) != "停云" or str(tingyun.get("gender", "")) != "female" or str(tingyun.get("faction", "")) != "xianzhou" or int(tingyun.get("max_hp", 0)) != 3 or (tingyun.get("skills", []) as Array) != ["xiangyin", "guangfu"]:
 		return _fail("tingyun_metadata=%s" % tingyun)
-	# 技能原文映射；逐字保存主公给出的限定技描述。
+	# 技能原文映射；逐字保存需求给出的限定技描述。
 	var expected_descriptions: Dictionary = {
 		"xiangyin":"限定技，出牌阶段，你可令一名未拥有“赐福”标记的角色获得“赐福”标记，拥有“赐福”标记的角色于一回合内使用的第一张【杀】无距离限制。",
 		"guangfu":"限定技，出牌阶段，你可令一名角色摸一张牌。本回合结束时，若其有已发动的限定技，你复原其中一项限定技。",

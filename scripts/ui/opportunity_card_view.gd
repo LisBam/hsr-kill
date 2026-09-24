@@ -69,7 +69,7 @@ var _skill_information: Dictionary = {}
 ## 当前是否已经发出技能悬停资料；用于禁用或离树时只撤销真实存在的说明来源。
 var _skill_information_visible: bool = false
 
-## 卡面规则正文；只显示主公提供的机缘描述，不添加插画、标题或额外规则改写。
+## 卡面规则正文；只显示需求提供的机缘描述，不添加插画、标题或额外规则改写。
 @onready var _description_label: Label = %DescriptionLabel
 
 ## 获得技能机缘的专用文字容器；把技能名称从描述中拆出为独占一行，避免短技能名被自动换行拆断。

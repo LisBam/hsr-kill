@@ -21,7 +21,7 @@ const AI_TAO_WOUNDED_VALUE: float = 4.0
 var _used_this_play_phase: bool = false
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"kance",

@@ -66,7 +66,7 @@ func _run() -> void:
 func _verify_skill_pool_tiers() -> bool:
 	# 虚构存在集合；键为完整候选路径，值恒为true，模拟磁盘上真实存在的素材。
 	var existing_paths: Dictionary = {}
-	# 四级路径；按主公约定由具体到通用排列。
+	# 四级路径；由具体到通用排列。
 	var tier_one_path: String = "%s/%s_%s_2.ogg" % [AudioCatalog.SKILL_AUDIO_DIR, PROBE_SKILL_ID, PROBE_CHARACTER_ID]
 	var tier_two_path: String = "%s/%s_%s.ogg" % [AudioCatalog.SKILL_AUDIO_DIR, PROBE_SKILL_ID, PROBE_CHARACTER_ID]
 	var tier_three_path: String = "%s/%s_1.ogg" % [AudioCatalog.SKILL_AUDIO_DIR, PROBE_SKILL_ID]
@@ -196,7 +196,7 @@ func _verify_voice_player() -> bool:
 	if reused_player != first_player:
 		_fail("voice_player_reuse")
 		return false
-	# 并发申请；按主公钦定不设并发上限，必须新建第二个播放器而不是复用正在播放的实例。
+	# 并发申请；不设并发上限，必须新建第二个播放器而不是复用正在播放的实例。
 	var second_player: AudioStreamPlayer = voice_player._acquire_player()
 	if second_player == first_player or voice_player.get_active_voice_count() != 2:
 		_fail("voice_player_no_concurrency_cap")

@@ -6,7 +6,7 @@ extends SkillDefinition
 var _waiting_owner_turn_end: bool = false
 
 
-## 写入离场锁定技静态信息；技能描述严格保持主公钦定原文。
+## 写入离场锁定技静态信息；技能描述严格保持需求钦定原文。
 func _init() -> void:
 	super({
 		"id":"yingchu",

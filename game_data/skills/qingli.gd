@@ -9,7 +9,7 @@ const THUNDER_SLASH_DEFINITION_ID: String = "sha_thunder"
 const HP_COST: int = 1
 
 
-## 写入主动技能静态信息；技能描述严格保持主公提供的原文。
+## 写入主动技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"qingli",

@@ -145,11 +145,11 @@ func _test_catalog_and_weights() -> bool:
 	_controller.opportunity_system.purple_weight = 60
 	_controller.opportunity_system.orange_weight = 30
 	_controller.opportunity_system.red_weight = 10
-	# 关键原文卡；重复“获得获得”属于主公钦定正文，测试确保实现不会擅自润色。
+	# 关键原文卡；重复“获得获得”属于需求钦定正文，测试确保实现不会擅自润色。
 	var preserved_card: Dictionary = OpportunityCatalog.get_card("red_gain_sha_zaixian")
 	if str(preserved_card.get("description", "")) != "从牌堆或弃牌堆中获得三张【杀】并获得获得技能“再现”":
 		return _fail("preserved_description")
-	# 本批新增卡原文；逐项精确校验，防止自动补标点或改写主公定义。
+	# 本批新增卡原文；逐项精确校验，防止自动补标点或改写需求定义。
 	var new_descriptions: Dictionary = {
 		"green_discard_one_each":"弃置任意名角色区域内各一张牌",
 		"green_virtual_nanman":"视为使用一张【南蛮入侵】",
@@ -924,7 +924,7 @@ func _test_seat_swap_changes_next_player() -> bool:
 	var seat_player_ids: Array[int] = []
 	for player: PlayerState in _controller.state.players:
 		seat_player_ids.append(player.player_id)
-	# 当前角色0位于三号位，其顺时针下家应是原四号位角色3，完全匹配主公给出的示例。
+	# 当前角色0位于三号位，其顺时针下家应是原四号位角色3，完全匹配需求给出的示例。
 	var next_player: PlayerState = _controller.state.get_next_alive_player(0)
 	if seat_player_ids != [2, 1, 0, 3] or next_player == null or next_player.player_id != 3:
 		return _fail("seat_swap_order seats=%s next=%s" % [str(seat_player_ids), str(next_player.player_id if next_player != null else -1)])

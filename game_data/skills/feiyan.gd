@@ -24,7 +24,7 @@ var _resolving_feiyan_huogong: bool = false
 var _reward_resolved: bool = false
 
 
-## 写入技能静态信息；技能描述严格保持主公钦定原文。
+## 写入技能静态信息；技能描述严格保持需求钦定原文。
 func _init() -> void:
 	super({
 		"id":"feiyan",

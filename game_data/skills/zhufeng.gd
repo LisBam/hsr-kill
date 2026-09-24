@@ -15,7 +15,7 @@ const CORNER_TEXT_ORDER: int = 100
 var _distance_reduction_count: int = 0
 
 
-## 写入锁定技静态信息；技能正文逐字保持主公提供的原文。
+## 写入锁定技静态信息；技能正文逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"zhufeng",

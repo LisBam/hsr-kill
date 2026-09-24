@@ -30,7 +30,7 @@ var _recipient_player_id: int = -1
 var _activation_turn_number: int = -1
 
 
-## 写入技能静态信息；技能正文逐字保持主公提供的原文。
+## 写入技能静态信息；技能正文逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"guangfu",

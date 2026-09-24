@@ -15,7 +15,7 @@ const DEATH_DRAW_COUNT: int = 2
 const AI_DIRECT_HIT_VALUE: float = 2.5
 
 
-## 写入离场锁定技静态信息；技能描述严格保持主公钦定原文。
+## 写入离场锁定技静态信息；技能描述严格保持需求钦定原文。
 func _init() -> void:
 	super({
 		"id":"lvexi",

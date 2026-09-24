@@ -24,7 +24,7 @@ const COIN_MARK_DATA: Dictionary = {"icon":"币", "name":"币", "description":"�
 const AI_UNCONDITIONAL_CONFIRM_SCORE: float = 100.0
 
 
-## 写入轮回技静态信息；技能描述逐字保持主公提供的原文。
+## 写入轮回技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"jvkou",

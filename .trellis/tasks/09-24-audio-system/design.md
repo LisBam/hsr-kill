@@ -19,7 +19,7 @@
 ### 1.2 完整数据流
 
 ```
-内容层（技能/卡牌源码，主公可选写一行）
+内容层（技能/卡牌源码，可选写一行）
         │  play_voice()
         ▼
 技能文件 ──host──▶ MatchController.request_skill_voice(player_id, skill_id)   ┐
@@ -47,7 +47,7 @@ MatchController 组装只读负载（角色 id / 两套牌名 / 动作模式）
 | 组件 | 文件 | 唯一职责 | 依赖 |
 |---|---|---|---|
 | `AudioCatalog` | `scripts/audio/audio_catalog.gd` | **纯函数**：逻辑请求 → 候选资源路径链 → 命中路径 → `AudioStream`（带缓存）。不播放、不碰节点树 | 仅 `ResourceLoader` |
-| `AudioVoicePlayer` | `scripts/audio/audio_voice_player.gd` | 语音播放：播放器按需分配与回收、同键去重、池内随机且不连续重复（**不做并发限流** —— 主公钦定取消并发上限与最小重播间隔） | 受控于 `AudioService` |
+| `AudioVoicePlayer` | `scripts/audio/audio_voice_player.gd` | 语音播放：播放器按需分配与回收、同键去重、池内随机且不连续重复（**不做并发限流** —— 需求钦定取消并发上限与最小重播间隔） | 受控于 `AudioService` |
 | `AudioBgmPlayer` | `scripts/audio/audio_bgm_player.gd` | BGM：循环、淡入淡出、同场景幂等 | 受控于 `AudioService` |
 | `GameAudioBridge` | `scripts/audio/game_audio_bridge.gd` | **翻译**：订阅核心表现信号与主菜单可见性 → 调 `AudioService`；零播放逻辑 | 只连接信号 |
 | `AudioService` | `scripts/autoload/audio_service.gd` | **门面 + 总线**：组装三组件、确保 `BGM`/`SFX` 总线、订阅设置变化、暴露稳定接口 | `GameSettings` |
@@ -60,17 +60,17 @@ MatchController 组装只读负载（角色 id / 两套牌名 / 动作模式）
 res://game_data/
 ├── skills/
 │   ├── gangfeng.gd                    # 技能源码（技能 id = 文件名）
-│   └── audio/                         # ★ 技能音效（主公投放）
+│   └── audio/                         # ★ 技能音效（素材投放）
 │       ├── gangfeng.ogg               #   通用单音效
 │       ├── gangfeng_1.ogg … _8.ogg    #   通用多音效池（随机）
 │       ├── wangpai_qiong.ogg          #   穹专属单音效
 │       └── wangpai_qiong_1.ogg …      #   穹专属多音效池（随机，优先于通用）
 ├── cards/
 │   ├── sha.gd
-│   └── audio/                         # ★ 卡牌音效（主公投放）
+│   └── audio/                         # ★ 卡牌音效（素材投放）
 │       ├── sha_custom.ogg             #   崩铁杀牌名配音
 │       └── sha_original.ogg           #   三国杀牌名配音
-└── BGM/                               # ★ 背景音乐（主公投放）
+└── BGM/                               # ★ 背景音乐（素材投放）
     ├── menu.ogg   / menu_2.ogg …      #   主菜单（多曲随机）
     └── battle.ogg / battle_2.ogg …    #   战斗（多曲随机）
 ```
@@ -94,7 +94,7 @@ res://game_data/
 | 顺位 | 文件名模式 | 语义 |
 |---|---|---|
 | 1 | `<卡牌id>_<当前名称体系>` | 当前卡名模式对应体系（`custom` = 崩铁杀 / `original` = 三国杀） |
-| 2 | `<卡牌id>_<另一名称体系>` | 主公钦定的名称体系回退 |
+| 2 | `<卡牌id>_<另一名称体系>` | 需求钦定的名称体系回退 |
 | 3 | 全部缺失 | 不播放 |
 
 - 名称体系由表现层实时读取 `GameSettings.card_name_mode`（Autoload，非受禁对象），故局内切换卡名模式后音效立即跟随。
@@ -215,7 +215,7 @@ func play_voice(actor_id: int = -1) -> void
 
 - 总线 `BGM`、`SFX`，均 `send = "Master"`；采用**运行时确保存在**策略（`get_bus_index == -1` 时 `add_bus` + 命名 + 设置 send），不新增 `default_bus_layout.tres`。
 - 线性音量 → dB 用 `linear_to_db(clampf(v, 0, 1))`；`v <= 0` 时改走 `set_bus_mute(true)`（避免 `-inf` 触发无效值告警）。
-- 语音播放器**按需分配**：空闲池优先复用，池不足时新建 `AudioStreamPlayer`（`bus = "SFX"`），播放结束经 `finished` 信号回收到空闲池；**不设并发上限与最小重播间隔**（主公钦定），保证多张牌同时结算时各路音效都能同时播出。
+- 语音播放器**按需分配**：空闲池优先复用，池不足时新建 `AudioStreamPlayer`（`bus = "SFX"`），播放结束经 `finished` 信号回收到空闲池；**不设并发上限与最小重播间隔**（需求钦定），保证多张牌同时结算时各路音效都能同时播出。
 
 ---
 
@@ -264,8 +264,8 @@ func play_voice(actor_id: int = -1) -> void
 |---|---|---|---|
 | 触发点 | 统一出口默认触发 + 内容层可显式覆盖 | 逐个改 144 技能 + 92 卡牌 | 既有内容零改动生效、未来不漏写；仍保留内容层自定义时机能力 |
 | 「打出」接入 | 核心响应消耗出口 | 牌源文件回调 | 【闪】等纯响应牌不回调牌源文件，只能在核心出口覆盖 |
-| 音频目录 | `game_data/skills|cards/audio/`、`game_data/BGM/` | 统一 `res://audio/` | 主公钦定；已验证单层扫描与固定路径读取均不受影响 |
-| 音色维度 | 角色 id 专属文件（技能） | 性别分目录 | 主公钦定；角色专属比性别更精确 |
+| 音频目录 | `game_data/skills|cards/audio/`、`game_data/BGM/` | 统一 `res://audio/` | 需求钦定；已验证单层扫描与固定路径读取均不受影响 |
+| 音色维度 | 角色 id 专属文件（技能） | 性别分目录 | 需求钦定；角色专属比性别更精确 |
 | 目录发现 | 确定基名 + 序号 + 扩展名优先级探测 | `DirAccess` 扫描 | 导出包导入资源改名，扫描不可靠 |
 | 去重 | 事件令牌表 + 技能实例抑制窗口 | 纯布尔标记 | 跨事件场景下布尔标记会残留并误抑制 |
 | BGM 锚点 | `MainMenu.visibility_changed` | 在 `match_table.gd` 各分支插桩 | 覆盖全部路径、零侵入 5092 行协调器 |
@@ -282,7 +282,7 @@ func play_voice(actor_id: int = -1) -> void
 | 内容层基类改动影响全部内容 | 中 | 仅新增方法，不修改既有成员与签名 | `git checkout -- game_data/skill_definition.gd game_data/card_definition.gd` |
 | 新增文本控件导致字体色审计失败 | 中 | 纳入主题覆盖；跑 `font_color_audit_test` + `ui_layout_test` | 移除新增控件 |
 | `game_data/*/audio/`、`game_data/BGM/` 被内容扫描误读 | 低 | 已验证 `_list_gd_scripts` 单层且只收 `.gd`；`_load_decks`/`_load_factions` 读固定路径 | 删除目录 |
-| 多张牌同响应导致语音叠放 | 低 | 主公钦定不作限流；去重键仍保证同一请求不重复发声。若后续体验需要，可在 `AudioVoicePlayer` 追加可选的限流参数 | 调 `@export` |
+| 多张牌同响应导致语音叠放 | 低 | 需求钦定不作限流；去重键仍保证同一请求不重复发声。若后续体验需要，可在 `AudioVoicePlayer` 追加可选的限流参数 | 调 `@export` |
 | `linear_to_db(0)` 无效值告警 | 低 | 零音量走 `set_bus_mute` | 单文件回滚 |
 
 ---

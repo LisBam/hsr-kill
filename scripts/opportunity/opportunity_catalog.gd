@@ -16,7 +16,7 @@ const QUALITY_NAMES: Dictionary = {
 	"red":"红卡",
 }
 
-## 全部机缘卡定义；description字段逐字保留主公给出的原文，effect与参数只服务权威结算。
+## 全部机缘卡定义；description字段逐字保留需求给出的原文，effect与参数只服务权威结算。
 const CARD_DEFINITIONS: Array[Dictionary] = [
 	# 灰色机缘仅由过关斩将关卡授予；不在QUALITY_ORDER中，所以权重抽取与全零权重回退都不会选中。
 	# 补充：难度配置也可按稳定ID直接授予灰色机缘，但仍不会让其进入随机三选一。

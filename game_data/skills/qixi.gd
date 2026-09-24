@@ -15,7 +15,7 @@ const REPEAT_THRESHOLD: int = 6
 const RESET_MARK_COUNT: int = 1
 
 
-## 写入锁定技静态信息；技能描述逐字保持主公提供的原文。
+## 写入锁定技静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"qixi",

@@ -21,7 +21,7 @@ var _marked_target_id: int = -1
 var _reserved_damage_event_id: int = -1
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"zhuijian",
@@ -147,7 +147,7 @@ func _apply_mark(target_id: int) -> void:
 	_marked_target_id = target_id
 	_reserved_damage_event_id = -1
 	# 对局公开标记数据；AI与界面只读取此可序列化快照，不访问本技能实例的私有目标字段。
-	# 补充：主公已指定追歼不创建公开标记，保留上方历史说明以兼容旧存档阅读；本逻辑只设置下方武将牌提示。
+	# 补充：需求已指定追歼不创建公开标记，保留上方历史说明以兼容旧存档阅读；本逻辑只设置下方武将牌提示。
 	host.call("set_character_corner_text_entry", target_id, _get_corner_entry_id(), "追歼", CORNER_TEXT_ORDER)
 
 

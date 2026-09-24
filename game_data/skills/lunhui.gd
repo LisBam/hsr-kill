@@ -15,7 +15,7 @@ const TRANSFORM_CHARACTER_ID: String = "kaesilanna"
 const REMOVED_ALLY_IDS_STATE_KEY: String = "baie_removed_ally_ids"
 
 
-## 写入觉醒技静态信息；技能描述逐字保持主公提供的原文，基类自动赋予锁定与限定语义。
+## 写入觉醒技静态信息；技能描述逐字保持需求提供的原文，基类自动赋予锁定与限定语义。
 func _init() -> void:
 	super({
 		"id":"lunhui",

@@ -23,7 +23,7 @@ const AUDIO_EXTENSIONS: Array[String] = ["ogg", "wav", "mp3"]
 ## 多音效池允许的最大序号；序号从1开始，上限8足以覆盖同一配音的多套变体，同时限制无效探测次数。
 const MAX_POOL_SIZE: int = 8
 
-## 多音效池的首个序号；与主公约定一致，编号文件形如 gangfeng_1、gangfeng_2。
+## 多音效池的首个序号；与命名约定一致，编号文件形如 gangfeng_1、gangfeng_2。
 const FIRST_POOL_INDEX: int = 1
 
 ## 卡牌名称体系后缀：崩铁杀自定义牌名；与 GameSettings.NameMode.CUSTOM 语义一致。
@@ -46,7 +46,7 @@ var path_probe: Callable = Callable()
 
 
 ## 解析技能音效的最终候选池。
-## 查找顺序为主公钦定的四级短路规则：
+## 查找顺序为四级短路规则：
 ## 一、<技能ID>_<角色ID>_<序号> 角色专属多音效池；
 ## 二、<技能ID>_<角色ID> 角色专属单音效；
 ## 三、<技能ID>_<序号> 通用多音效池；
@@ -88,7 +88,7 @@ func resolve_skill_voice_pool(skill_id: String, character_id: String) -> Array[S
 
 
 ## 解析卡牌音效的最终候选池。
-## 查找顺序为主公钦定的名称体系回退：先取当前卡名显示模式对应的体系，缺失时回退另一体系。
+## 查找顺序为名称体系回退：先取当前卡名显示模式对应的体系，缺失时回退另一体系。
 ## 同一张牌的“使用”与“打出”共用同一份音效，因此本函数不需要动作模式参数。
 func resolve_card_voice_pool(card_id: String, current_name_system: String) -> Array[String]:
 	# 规范化卡牌ID；空ID无法构造路径，直接静默。

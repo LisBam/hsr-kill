@@ -6,7 +6,7 @@ extends SkillDefinition
 const GRANTED_SKILL_ID: String = "hupo"
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id": "tiebi",

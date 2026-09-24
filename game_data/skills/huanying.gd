@@ -6,7 +6,7 @@ extends SkillDefinition
 var _removed_turn_number: int = -1
 
 
-## 写入锁定技静态信息；技能描述严格保持主公提供的原文。
+## 写入锁定技静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"huanying",

@@ -3,7 +3,7 @@ extends RefCounted
 
 ## 主菜单静态卡牌画廊的共享排序规则。图鉴与联机形象选择共同调用本类，避免两个界面各自维护势力顺序并逐渐产生差异。
 
-## 主公指定的武将势力优先顺序；未列出的扩展势力统一排在这些势力之后，并继续按势力名称与稳定 ID 确定顺序。
+## 需求指定的武将势力优先顺序；未列出的扩展势力统一排在这些势力之后，并继续按势力名称与稳定 ID 确定顺序。
 const CHARACTER_FACTION_ORDER: Array[String] = [
 	"xingqionglieche",
 	"yinhexvezhe",
@@ -75,7 +75,7 @@ static func sort_character_ids(left_character_id: String, right_character_id: St
 
 ## 返回一个势力的排序优先级；未列出的扩展势力排在固定五势力之后。
 static func get_character_faction_rank(faction_id: String) -> int:
-	# 势力在主公指定顺序中的索引；未命中时为 -1。
+	# 势力在需求指定顺序中的索引；未命中时为 -1。
 	var faction_index: int = CHARACTER_FACTION_ORDER.find(faction_id)
 	return faction_index if faction_index >= 0 else CHARACTER_FACTION_ORDER.size()
 

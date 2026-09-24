@@ -124,7 +124,7 @@ func _test_metadata_and_special_pool() -> bool:
 		return _fail("baie_metadata=%s" % baie)
 	if str(kaesilanna.get("display_name", "")) != "卡厄斯兰那" or int(kaesilanna.get("max_hp", 0)) != 5 or not bool(kaesilanna.get("special", false)) or kaesilanna.get("skills", []) != ["tiancai", "shihun", "yongjie"]:
 		return _fail("kaesilanna_metadata=%s" % kaesilanna)
-	# 主公指定八项技能原文；任何字符、标点、数字或X说明变化都应立即失败。
+	# 需求指定八项技能原文；任何字符、标点、数字或X说明变化都应立即失败。
 	var expected_descriptions: Dictionary = {
 		"shengbian":"轮回技，出牌阶段限一次，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
 		"kansha":"轮回技，出牌阶段每个轮回节限一次，你可①弃置一张红色牌；②弃置一张黑色牌；③对一名其他角色造成1点伤害。",
@@ -136,7 +136,7 @@ func _test_metadata_and_special_pool() -> bool:
 		"yongjie":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③摸一张牌并退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
-		# 当前技能稳定ID；数据库原文必须与主公文本逐字相同。
+		# 当前技能稳定ID；数据库原文必须与需求文本逐字相同。
 		var skill_id: String = str(skill_id_variant)
 		if str(GameDatabase.get_skill(skill_id).get("description", "")) != str(expected_descriptions[skill_id]):
 			return _fail("skill_description=%s" % skill_id)

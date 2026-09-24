@@ -39,7 +39,7 @@ var _tracked_turn_number: int = -1
 var _used_this_turn: bool = false
 
 
-## 写入主动技能静态信息；玩家可见描述严格保持主公提供的原文。
+## 写入主动技能静态信息；玩家可见描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"shanqing",

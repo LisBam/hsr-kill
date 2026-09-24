@@ -65,7 +65,7 @@
 文件：`scripts/audio/audio_voice_player.gd`、`scripts/audio/audio_bgm_player.gd`（新增）
 
 - [ ] `AudioVoicePlayer`：
-  - `@export`：`avoid_immediate_repeat`（池内随机时不连续重复）。**不作并发限流** —— 主公钦定不要并发上限与最小重播间隔。
+  - `@export`：`avoid_immediate_repeat`（池内随机时不连续重复）。**不作并发限流** —— 需求钦定不要并发上限与最小重播间隔。
   - 播放器**按需分配**：空闲池优先复用，不足时新建 `AudioStreamPlayer`（`bus = "SFX"`），播放结束经 `finished` 信号回收到空闲池。
   - `play_stream(stream: AudioStream, dedup_key: String) -> bool`：同键去重后立即播放；返回是否实际播放。
   - `pick_random_candidate(candidates: Array[String], catalog: AudioCatalog) -> AudioStream`：池内随机且避免连续重复。

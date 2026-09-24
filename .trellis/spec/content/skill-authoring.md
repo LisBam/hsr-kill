@@ -1,7 +1,7 @@
 # 技能制作规范
 
 > 权威来源：`docs/内容制作指南.md`「技能制作」全书（运行方式、静态参数总表、生命周期函数、规则修正与虚拟牌、主动/被动示例）。
-> 铁律：玩家可见的技能描述文本必须与主公原文**逐字一致**（见 [`../project/collaboration-rules.md`](../project/collaboration-rules.md)）。
+> 铁律：玩家可见的技能描述文本必须与需求原文**逐字一致**（见 [`../project/collaboration-rules.md`](../project/collaboration-rules.md)）。
 
 ---
 
@@ -141,7 +141,7 @@ context["skill_owner_id"] = owner_player_id
 
 ## Quality Check
 
-- [ ] 玩家可见 `name` 与 `description` 与主公原文逐字一致。
+- [ ] 玩家可见 `name` 与 `description` 与需求原文逐字一致。
 - [ ] 静态参数齐全；锁定技显式 `lock=true`；半锁定技后段订阅显式 `locked_segment=true`。
 - [ ] `ui_enabled=true` 的技能已实现 `can_activate()` 与 `activate()`；`activate()` 成功返回空字符串。
 - [ ] 所有主动入口/查询/钩子都经 `can_use_effect()` 复核失效状态。

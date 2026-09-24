@@ -21,7 +21,7 @@ const AI_CONVERSION_GAIN_COST_OFFSET_WEIGHT: float = 1.0
 var _used_current_play_phase: bool = false
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id": "quanlei",

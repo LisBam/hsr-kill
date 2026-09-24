@@ -15,7 +15,7 @@ var _pending_restricted_target_ids: Dictionary = {}
 var _active_restricted_target_ids: Dictionary = {}
 
 
-## 写入技能静态信息；技能描述严格保持主公提供的原文。
+## 写入技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id": "pofeng",

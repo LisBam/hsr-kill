@@ -52,7 +52,7 @@ game_data/cards|skills|characters  →  GameDatabase  →  CardInstance / Player
 - [ ] 继承类型正确（卡牌 / 技能 / 武将分别继承对应基类）。
 - [ ] 卡牌必填 7 项字段齐全：`original_name`、`custom_name`、`type`、`subtype`、`effect_id`、`target_mode`、`description`。
 - [ ] `description` 完整写明发动时机、条件、次数、目标、费用与效果数值。
-- [ ] 玩家可见的技能描述文本与主公原文**逐字一致**。
+- [ ] 玩家可见的技能描述文本与需求原文**逐字一致**。
 - [ ] 正式技能已补配套 AI；`sample_only` 占位技能**未**伪造 AI。
 - [ ] 新卡已登记进 `data/decks.json`；新武将的技能引用有效。
 - [ ] `GameDatabase.validation_errors` 为空，可正常开局。

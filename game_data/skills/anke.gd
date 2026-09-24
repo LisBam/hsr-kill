@@ -30,7 +30,7 @@ var _tracked_round_number: int = -1
 var _uses_this_round: int = 0
 
 
-## 写入触发技能静态信息；技能描述严格保持主公提供的原文。
+## 写入触发技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"anke",
