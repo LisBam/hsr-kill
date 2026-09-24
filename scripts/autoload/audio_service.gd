@@ -153,19 +153,23 @@ func _play_skill_voice(presentation_data: Dictionary) -> void:
 	_voice_player.play_pool(pool, _catalog, "skill:%s" % skill_id)
 
 
-## 播放卡牌语音；按“性别专属 → 当前名称体系 → 另一名称体系 → 全卡牌通用兜底”的顺序解析候选。
+## 播放卡牌语音；基础伴随音效与专属牌名配音各播放一次，两层叠加而不是互相替代。
 func _play_card_voice(presentation_data: Dictionary) -> void:
 	# 卡牌定义ID；虚拟牌（例如罡风转化的雷【杀】）传入的是实际结算的虚拟定义ID。
 	var card_definition_id: String = str(presentation_data.get("card_definition_id", ""))
 	# 使用者性别；核心层已按发动者武将解析，未选将或未知性别时音频层跳过性别专属目录。
 	var gender: String = str(presentation_data.get("gender", ""))
-	# 候选池；空表示该牌在性别专属、两套名称体系与通用兜底下均无配音，静默处理。
-	var pool: Array[String] = _catalog.resolve_card_voice_pool(card_definition_id, _get_current_card_name_system(), gender)
-	if pool.is_empty():
+	# 播放路径；第一位是每一张牌都有的基础伴随音效，其后是该牌的专属配音（可能不存在）。
+	var paths: Array[String] = _catalog.resolve_card_voice_paths(card_definition_id, _get_current_card_name_system(), gender)
+	if paths.is_empty():
 		_log_missing_audio("card", card_definition_id, "")
 		return
-	# 池标识使用卡牌ID；“使用”与“打出”共用同一份音效。
-	_voice_player.play_pool(pool, _catalog, "card:%s" % card_definition_id)
+	# 逐条播放；播放器按需分配，因此两层音效会同时出声，后一层不会打断前一层。
+	for path: String in paths:
+		# 音频流；该层文件缺失或类型不符时返回 null，单独跳过这一层而不影响另一层。
+		var stream: AudioStream = _catalog.load_stream(path)
+		if stream != null:
+			_voice_player.play_stream(stream)
 
 
 ## 读取当前卡牌名称显示模式对应的名称体系后缀。

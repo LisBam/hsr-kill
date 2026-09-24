@@ -54,7 +54,7 @@ func _run() -> void:
 			return
 	if not await _verify_skill_pool_tiers():
 		return
-	if not _verify_card_pool_fallback():
+	if not _verify_card_voice_layers():
 		return
 	if not _verify_bgm_pool_merge():
 		return
@@ -111,57 +111,60 @@ func _verify_skill_pool_tiers() -> bool:
 	return true
 
 
-## 校验卡牌音效的性别专属优先级、名称体系回退与全卡牌通用兜底。
-func _verify_card_pool_fallback() -> bool:
-	# 虚构存在集合；同时投放性别专属、不分性别与通用兜底三层，用于验证优先级与回退方向。
+## 校验卡牌音效的两层叠加：基础伴随音效每张牌都有，专属牌名配音按性别与名称体系逐级命中。
+func _verify_card_voice_layers() -> bool:
+	# 虚构存在集合；先只投放基础伴随音效，用于确认它是与牌名无关的固定一层。
 	var existing_paths: Dictionary = {}
+	var default_path: String = "%s/%s.ogg" % [AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME]
 	var male_path: String = "%s/%s/%s.ogg" % [AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.CARD_GENDER_MALE, PROBE_CARD_ID]
 	var female_custom_path: String = "%s/%s/%s_%s.ogg" % [AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.CARD_GENDER_FEMALE, PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM]
 	var plain_custom_path: String = "%s/%s_%s.ogg" % [AudioCatalog.CARD_AUDIO_DIR, PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM]
-	var default_path: String = "%s/%s.ogg" % [AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME]
-	existing_paths[male_path] = true
 	existing_paths[default_path] = true
 	var catalog: AudioCatalog = AudioCatalog.new()
 	catalog.path_probe = func(candidate_path: String) -> bool: return existing_paths.has(candidate_path)
-	# 男声专属；使用者为男性时必须优先使用 male 子目录中的配音，而不是通用兜底。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [male_path], "card_gender_priority"):
+	# 只有基础音效；任意卡牌都必须拿到它，证明它不是“缺失专属时才用”的兜底而是固定伴随层。
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path], "card_base_always"):
 		return false
-	# 女声缺失；使用者为女性时该牌没有专属配音，必须回退到全卡牌通用兜底。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE), [default_path], "card_gender_missing_fallback"):
+	# 空卡牌ID；无法构造专属路径，但基础音效仍然播放。
+	if not _expect_pool(catalog.resolve_card_voice_paths("", AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path], "card_base_empty_id"):
 		return false
-	# 未指定性别；必须跳过性别专属目录直接命中通用兜底，保证未选将时也有声音。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, ""), [default_path], "card_no_gender_fallback"):
+	# 补入男声专属配音；男性使用者应同时播放基础音效与专属配音两层。
+	existing_paths[male_path] = true
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path, male_path], "card_male_two_layers"):
 		return false
-	# 未知性别取值；不得拼出无效子目录，同样回退通用兜底。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, "unknown"), [default_path], "card_unknown_gender_fallback"):
+	# 女性使用者没有专属配音；只播放基础音效，而不是整张牌静默。
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE), [default_path], "card_female_base_only"):
 		return false
-	# 补入女声的当前体系配音；女性使用者改用该专属文件，男性使用者不受影响。
+	# 未指定性别；跳过性别专属目录但保留基础音效。
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, ""), [default_path], "card_no_gender_base_only"):
+		return false
+	# 未知性别取值；不得拼出无效子目录，同样只保留基础音效。
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, "unknown"), [default_path], "card_unknown_gender_base_only"):
+		return false
+	# 补入女声当前体系配音；女性使用者改用该专属配音，男性使用者不受影响。
 	existing_paths[female_custom_path] = true
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE), [female_custom_path], "card_female_system_priority"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE), [default_path, female_custom_path], "card_female_two_layers"):
 		return false
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [male_path], "card_male_unaffected"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path, male_path], "card_male_unaffected"):
 		return false
-	# 名称体系回退；女性使用者请求原版牌名配音时该体系缺失，必须回退到同一性别下的自定义体系文件。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_ORIGINAL, AudioCatalog.CARD_GENDER_FEMALE), [female_custom_path], "card_gender_system_fallback"):
+	# 名称体系回退；请求原版牌名时该体系缺失，必须回退到同一性别下的自定义体系配音。
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_ORIGINAL, AudioCatalog.CARD_GENDER_FEMALE), [default_path, female_custom_path], "card_system_fallback"):
 		return false
-	# 性别层整体缺失；不分性别的当前体系文件仍然优先于通用兜底。
+	# 性别层整体缺失；不分性别的当前体系文件仍然优先于“只剩基础音效”。
 	existing_paths.erase(male_path)
 	existing_paths.erase(female_custom_path)
 	existing_paths[plain_custom_path] = true
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [plain_custom_path], "card_plain_system_priority"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path, plain_custom_path], "card_plain_two_layers"):
 		return false
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE), [plain_custom_path], "card_plain_shared"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_ORIGINAL, AudioCatalog.CARD_GENDER_FEMALE), [default_path, plain_custom_path], "card_plain_system_fallback"):
 		return false
-	# 名称体系回退；请求原版牌名时该体系缺失，必须回退到另一体系的不分性别文件。
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_ORIGINAL, AudioCatalog.CARD_GENDER_FEMALE), [plain_custom_path], "card_plain_system_fallback"):
-		return false
-	# 专属全部缺失；只要通用兜底存在就仍会发声，不会出现静默的牌。
+	# 专属层全部缺失；退回只播基础音效，仍然有声。
 	existing_paths.erase(plain_custom_path)
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path], "card_all_missing_uses_default"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [default_path], "card_base_only_again"):
 		return false
-	# 连通用兜底都不存在；返回空池由调用方静默处理。
+	# 基础音效也缺失；此时才是真正的空结果，由调用方静默处理。
 	existing_paths.erase(default_path)
-	if not _expect_pool(catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [], "card_missing"):
+	if not _expect_pool(catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE), [], "card_all_missing"):
 		return false
 	return true
 
@@ -203,29 +206,34 @@ func _verify_bgm_pool_merge() -> bool:
 ## 本函数走真实磁盘探测而非注入探测器，因此它是“素材已就位且可被引擎加载”的守门测试。
 func _verify_real_audio_assets() -> bool:
 	var catalog: AudioCatalog = AudioCatalog.new()
-	# 通用兜底音效；虚构卡牌必然回退到它，命中即证明 default 素材已真实投放。
-	var default_pool: Array[String] = catalog.resolve_card_voice_pool(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, "")
-	if default_pool.size() != 1 or not default_pool[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
-		_fail("real_card_default_audio=%s" % str(default_pool))
+	# 基础伴随音效；虚构卡牌也能拿到它，命中即证明 default 素材已真实投放。
+	var base_paths: Array[String] = catalog.resolve_card_voice_paths(PROBE_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
+	if base_paths.size() != 1 or not base_paths[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
+		_fail("real_card_default_audio=%s" % str(base_paths))
 		return false
-	# 男声【杀】；必须解析到 male 子目录下的真实文件。
-	var male_sha: Array[String] = catalog.resolve_card_voice_pool(PROBE_REAL_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
-	if male_sha.size() != 1 or not male_sha[0].contains("/%s/%s" % [AudioCatalog.CARD_GENDER_MALE, PROBE_REAL_CARD_ID]):
-		_fail("real_card_male_sha=%s" % str(male_sha))
+	# 男声【杀】；必须同时拿到基础伴随音效与 male 子目录下的专属配音两层。
+	var male_sha: Array[String] = catalog.resolve_card_voice_paths(PROBE_REAL_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
+	if male_sha.size() != 2 or not male_sha[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
+		_fail("real_card_male_sha_base=%s" % str(male_sha))
 		return false
-	# 女声【杀】；必须解析到 female 子目录下的真实文件，证明性别维度确实生效且两套配音互不串用。
-	var female_sha: Array[String] = catalog.resolve_card_voice_pool(PROBE_REAL_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE)
-	if female_sha.size() != 1 or not female_sha[0].contains("/%s/%s" % [AudioCatalog.CARD_GENDER_FEMALE, PROBE_REAL_CARD_ID]):
-		_fail("real_card_female_sha=%s" % str(female_sha))
+	if not male_sha[1].contains("/%s/%s" % [AudioCatalog.CARD_GENDER_MALE, PROBE_REAL_CARD_ID]):
+		_fail("real_card_male_sha_voice=%s" % str(male_sha))
 		return false
-	# 两个性别必须解析到不同文件；否则性别维度形同虚设。
-	if male_sha[0] == female_sha[0]:
-		_fail("real_card_gender_not_separated=%s" % male_sha[0])
+	# 女声【杀】；专属配音必须落在 female 子目录，且与男声指向不同文件，否则性别维度形同虚设。
+	var female_sha: Array[String] = catalog.resolve_card_voice_paths(PROBE_REAL_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE)
+	if female_sha.size() != 2:
+		_fail("real_card_female_sha_size=%s" % str(female_sha))
 		return false
-	# 未投放专属配音的卡牌；【桃】没有单独素材，必须回退到通用兜底而不是静默。
-	var tao_pool: Array[String] = catalog.resolve_card_voice_pool(PROBE_UNCOVERED_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE)
-	if tao_pool.size() != 1 or not tao_pool[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
-		_fail("real_card_uncovered_fallback=%s" % str(tao_pool))
+	if not female_sha[1].contains("/%s/%s" % [AudioCatalog.CARD_GENDER_FEMALE, PROBE_REAL_CARD_ID]):
+		_fail("real_card_female_sha_voice=%s" % str(female_sha))
+		return false
+	if female_sha[1] == male_sha[1]:
+		_fail("real_card_gender_not_separated=%s" % female_sha[1])
+		return false
+	# 没有专属配音的卡牌；只播放基础伴随音效，而不是整张牌静默。
+	var uncovered_paths: Array[String] = catalog.resolve_card_voice_paths(PROBE_UNCOVERED_CARD_ID, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_FEMALE)
+	if uncovered_paths.size() != 1 or not uncovered_paths[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
+		_fail("real_card_uncovered=%s" % str(uncovered_paths))
 		return false
 	# 战斗BGM；必须真实存在，且游戏内显示名为“默认”。
 	var bgm_pool: Array[String] = catalog.resolve_bgm_pool(AudioCatalog.BGM_SCENE_BATTLE)
@@ -513,7 +521,7 @@ func _verify_core_voice_channels() -> void:
 		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_SKILL:
 			auto_skill_request_count += 1
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_fallback=ok card_gender=ok real_assets=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
 	get_tree().quit(0)
 
 
