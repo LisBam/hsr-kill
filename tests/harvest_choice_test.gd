@@ -31,6 +31,11 @@ func _ready() -> void:
 
 ## 创建两人对局并在活动 chooseToUse 请求存在时插入五谷选择，复现请求序号交错场景。
 func _run() -> void:
+	# 本场景只测试战斗恢复；固定内存开局选项，不读取玩家上次保存的自选、全角色控制或手气卡偏好。
+	GameSettings.custom_character_assignment_enabled = false
+	GameSettings.control_all_characters_enabled = false
+	GameSettings.customize_ai_characters_enabled = false
+	GameSettings.mulligan_limit = 0
 	_controller = MatchController.new()
 	_controller.name = "MatchController"
 	# 规则事件总线；名称必须与控制器公开组件路径保持一致。
@@ -53,7 +58,7 @@ func _run() -> void:
 	# 请求序号专项只验证规则恢复，关闭阶段间表现等待以同步进入首个出牌阶段。
 	_controller.game_flow_interval_seconds = 0.0
 	_controller.ai_action_delay_seconds = 0.0
-	if not _controller.start_match(2, 7):
+	if not _controller.start_match(2, 7, "identity"):
 		_fail("start_match")
 		return
 	# 领袖候选；固定种子下本地0号玩家为当前唯一待确认的人类角色。

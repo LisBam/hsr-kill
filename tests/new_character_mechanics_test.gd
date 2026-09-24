@@ -1045,7 +1045,7 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 		return false
 	# 第二层请求上下文；只有【振旗】请求已经完整关闭后才能成为当前唯一选择。
 	var jiahu_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
-	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or _controller._rule_continuations.size() != 1:
+	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or _controller._rule_continuations.size() != 2:
 		_controller.log_added.disconnect(turn_log_callback)
 		return _fail("turn_start_jiahu_second context=%s continuations=%s" % [jiahu_choice_context, _controller._rule_continuations.to_array()])
 	# 选择第三名角色接受【加护】；技能结果完成后才允许准备阶段收尾并安排判定阶段。
@@ -1247,8 +1247,7 @@ func _test_character_card_link_overlay() -> bool:
 func _test_jiahu_and_bingfeng() -> bool:
 	_reset_state(2)
 	# 加护运行时技能；直接恢复标准目标选择以验证权威效果。
-	var jiahu: SkillDefinition = GameDatabase.create_skill("jiahu")
-	jiahu.bind(_controller, 0)
+	var jiahu: SkillDefinition = _install_single_skill(0, "jiahu")
 	# 加护目标响应；确认二号玩家为唯一目标。
 	var jiahu_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
 	jiahu_response.target_ids = [1]

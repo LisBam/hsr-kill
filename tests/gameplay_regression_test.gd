@@ -736,7 +736,7 @@ func _test_silver_moon_requires_activation_choice() -> bool:
 	# 当前回合0号角色是银月枪持有者的敌方目标；未打出闪后受到固定1点普通伤害。
 	var target: PlayerState = _controller.state.get_player(0)
 	if _silver_moon_request_count != 1 or target.hp != 3:
-		return _fail("silver_moon_result=%d:%d" % [_silver_moon_request_count, target.hp])
+		return _fail("silver_moon_result=%d:%d current=%d root=%d runtime_root=%d choice=%s fault=%s" % [_silver_moon_request_count, target.hp, _controller.state.current_player_id, _controller.event_scheduler.root_event_id, _controller._runtime_root_event_id, _controller._pending_card_choice, _controller.get_last_settlement_fault()])
 	return true
 
 

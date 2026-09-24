@@ -431,7 +431,9 @@ func _test_opportunity_card_hover() -> bool:
 	card_view.queue_free()
 	await get_tree().process_frame
 	# 正式机缘选择弹窗；三张卡必须由固定尺寸牌位承载，悬停缩放不能改变HBox对子项的排版。
-	var choice_panel: OpportunityChoicePanel = _main_instance.get_node("OpportunityChoicePanel") as OpportunityChoicePanel
+	var choice_panel: OpportunityChoicePanel = preload("res://scenes/components/opportunity_choice_panel.tscn").instantiate() as OpportunityChoicePanel
+	# 布局测试独占弹窗；运行中的对局快照不能在悬停计时期间重建本用例正在比较的牌位。
+	add_child(choice_panel)
 	# 三张固定候选；本地0号是当前选择者，因此弹窗会创建三个真实卡牌与三个牌位。
 	var choice_snapshot: Dictionary = {
 		"active":true,
@@ -520,6 +522,7 @@ func _test_opportunity_card_hover() -> bool:
 		choice_panel.close()
 		return _fail("opportunity_vote_reveal_ui text=%s cards=%d" % [vote_reveal_text, cards_row.get_child_count()])
 	choice_panel.close()
+	choice_panel.queue_free()
 	return true
 
 
