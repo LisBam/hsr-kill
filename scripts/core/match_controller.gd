@@ -9044,12 +9044,15 @@ func request_card_voice(player_id: int, card_definition_id: String, play_mode: S
 		"custom": str(card_definition.get("custom_name", "")),
 		"original": str(card_definition.get("original_name", "")),
 	}
+	# 使用者性别；音频层据此优先选用 male/female 子目录中的专属配音，未选将或未知性别时跳过该层。
+	var gender: String = get_player_gender(player_id)
 	# 只读表现负载；不包含手牌归属、身份或随机种子等任何隐藏信息。
 	var presentation_data: Dictionary = {
 		"kind": VOICE_KIND_CARD,
 		"player_id": player_id,
 		"card_definition_id": card_definition_id,
 		"card_names": card_names,
+		"gender": gender,
 		"play_mode": play_mode,
 		"sequence": _voice_presentation_sequence,
 	}
