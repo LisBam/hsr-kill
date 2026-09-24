@@ -21,6 +21,9 @@ var _next_registration_id: int = 1
 ## 以稳定事件名为键的触发器数组；数组内容通过 arrange 按角色座次重新排序。
 var _handlers: Dictionary = {}
 
+## 当前仍有效的订阅身份集合；排序快照可保留次序，但失去技能或卸载后不能再执行旧注册项。
+var _active_registration_ids: Dictionary = {}
+
 ## 因可选技能询问、嵌套子时机或单分片预算而暂停的有序触发续列；每项保存原事件、已排序处理器和下一项索引，确保同一时机按座次逐项询问。
 ## 数组尾部是最内层时机，确保嵌套触发完成后再恢复外层座次询问。
 var _deferred_dispatches: Array[Dictionary] = []
@@ -58,6 +61,7 @@ func subscribe(event_name: String, owner: Object, callback: Callable, priority: 
 	if not _handlers.has(event_name):
 		_handlers[event_name] = []
 	(_handlers[event_name] as Array).append(entry)
+	_active_registration_ids[int(entry["registration_id"])] = true
 	return int(entry["registration_id"])
 
 
@@ -71,6 +75,7 @@ func unsubscribe_owner(owner: Object) -> void:
 			# 当前触发器记录；无效 owner 也不再继续保留，防止长期累积。
 			var entry: Dictionary = entry_variant as Dictionary
 			if entry.get("owner") == owner or not is_instance_valid(entry.get("owner") as Object):
+				_active_registration_ids.erase(int(entry.get("registration_id", -1)))
 				continue
 			retained.append(entry)
 		_handlers[event_name] = retained
@@ -189,6 +194,9 @@ func _dispatch_arranged(event: RuleEvent, arranged: Array[Dictionary], start_ind
 		inspected_handler_count += 1
 		# 当前触发器记录；恢复时继续使用初次派发已经确定的座次与优先级顺序。
 		var entry: Dictionary = arranged[entry_index]
+		# 等待期间卸载后重新安装同一对象也会获得新注册ID，不能复活旧时机快照。
+		if not _active_registration_ids.has(int(entry.get("registration_id", -1))):
+			continue
 		# 当前处理器所有者；选择窗口期间卸载或释放后安全跳过过期快照。
 		var owner: Object = entry.get("owner") as Object
 		if not is_instance_valid(owner):

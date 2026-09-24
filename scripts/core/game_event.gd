@@ -21,6 +21,9 @@ var event_id: int = -1
 ## 父事件稳定 ID；根事件使用 -1，运行时禁止外部直接改写父子关系。
 var parent_id: int = -1
 
+## 父队列归属；默认next，after表示父事件取消时仍须保留的收尾，登记后不随出栈改变。
+var parent_queue: String = "next"
+
 ## 事件稳定名称；使用 phaseUse、useCard、damage 等可长期用于触发器和回放的名称。
 var name: String = ""
 

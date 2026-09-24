@@ -322,6 +322,8 @@ func _test_cancel_superseded_trigger_dispatch() -> bool:
 	active_manager.dispatch(active_phase_event, 0, [0])
 	if active_order != ["skip"] or active_cancelled_count[0] != 1 or active_phase_event.termination_reason != "phase_skipped":
 		return _fail("active_superseded_trigger=%s count=%d" % [active_order, active_cancelled_count[0]])
+	# 夹具匿名回调捕获了管理器自身；订阅结束时主动卸载，打断RefCounted到Callable再回到自身的环。
+	active_manager.unsubscribe_owner(self)
 	return true
 
 
@@ -352,6 +354,8 @@ func _test_nested_trigger_resume_order() -> bool:
 	manager.resume_deferred(func() -> bool: return paused[0])
 	if order != ["outer0", "inner0", "inner1", "outer1"] or manager.has_deferred_dispatches():
 		return _fail("nested_trigger_resume=%s" % [order])
+	# 嵌套测试的回调捕获manager；释放订阅使夹具对象在本用例结束时可被引用计数回收。
+	manager.unsubscribe_owner(owner)
 	return true
 
 
@@ -396,6 +400,8 @@ func _test_trigger_dispatch_budget_and_recursion_guard() -> bool:
 	reentrant_manager.dispatch(reentrant_event, -1, [])
 	if reentrant_count[0] != 1 or reentrant_event.termination_reason != "trigger_reentrant_event" or str(reentrant_manager.get_last_fault().get("reason", "")) != "trigger_reentrant_event":
 		return _fail("trigger_reentrant_guard count=%d event=%s fault=%s" % [reentrant_count[0], reentrant_event.to_dict(), reentrant_manager.get_last_fault()])
+	# 重入订阅只服务这一断言；及时解除回调对管理器的闭环引用，不把预期故障变成退出泄漏。
+	reentrant_manager.unsubscribe_owner(reentrant_owner)
 
 	# 新事件递归管理器；深度3使异常技能在创建第4层前稳定中止。
 	var recursive_manager: TriggerManager = TriggerManager.new()
@@ -411,6 +417,8 @@ func _test_trigger_dispatch_budget_and_recursion_guard() -> bool:
 	recursive_manager.dispatch(RuleEvent.new("recursive_timing"), -1, [])
 	if recursive_count[0] != 3 or str(recursive_manager.get_last_fault().get("reason", "")) != "trigger_recursion_limit" or recursive_manager.get_fault_count() != 1:
 		return _fail("trigger_recursion_guard count=%d fault=%s" % [recursive_count[0], recursive_manager.get_last_fault()])
+	# 递归模拟回调持有管理器；测试结束后解除订阅，正常内容技能则由uninstall承担同一职责。
+	recursive_manager.unsubscribe_owner(recursive_owner)
 	return true
 
 

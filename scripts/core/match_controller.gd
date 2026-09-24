@@ -69,6 +69,7 @@ const CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY: String = "conquest_enemy_replac
 
 ## 统一结算管线允许的通用规则续接类型；字符串不在此表时于登记阶段局部拒绝，避免无处理分支的记录静默丢失。
 const RULE_CONTINUATION_TYPES: Array[String] = [
+	"rule_sequence",
 	"skill_response",
 	"card_response",
 	"equipment_response",
@@ -435,6 +436,15 @@ var _hand_view_as_turn_expiries: Dictionary = {}
 ## 等待濒死流程完成后收尾的伤害上下文；键为受伤玩家 ID，值只保存伤害来源、数值、连环目标和事件 ID。
 var _pending_damage_finalizations: Dictionary = {}
 
+## 活动的可暂停步骤内容；键为单调序列ID，只有内存持有Callable，续接队列只保存ID与游标。
+var _rule_sequences: Dictionary = {}
+
+## 下一步骤序列身份；跨重开保持单调，旧选择不能命中新序列。
+var _next_rule_sequence_id: int = 1
+
+## 当前正在执行内容步骤的调用深度；同步AI应答只回写结果，不允许在回调返回前重入续接管线。
+var _rule_sequence_execution_depth: int = 0
+
 ## 已成功进入 Begin 的阶段生命周期集合；键为“玩家ID:阶段名”，防止跳过或取消阶段伪造 End 与 After。
 var _started_phase_lifecycles: Dictionary = {}
 
@@ -551,6 +561,9 @@ var _settlement_resume_scheduled: bool = false
 
 ## 结算延后唤醒代次；重新开局或拆除运行时时递增，使旧call_deferred回调自动失效。
 var _settlement_resume_generation: int = 1
+
+## 当前帧唤醒的唯一信号连接；默认空Callable，接管、重置或离树时主动断开，避免旧连接积累。
+var _settlement_resume_callback: Callable = Callable()
 
 ## 最近一次统一结算故障的可序列化摘要；空字典表示本局尚未发生局部熔断。
 var _last_settlement_fault: Dictionary = {}
@@ -2255,27 +2268,45 @@ func resume_settlement_pipeline() -> void:
 
 
 ## 登记唯一的延后结算唤醒；多个技能、时机或停滞修复同帧请求时只保留一个call_deferred。
+## 唤醒实际通过process_frame跨帧执行；直接接管和离树时释放连接，代次校验作为额外的过期回调保护。
 func _schedule_settlement_pipeline_resume() -> void:
 	if _settlement_resume_scheduled or state == null or state.game_over or not is_inside_tree():
 		return
 	_settlement_resume_scheduled = true
+	_settlement_resume_generation += 1
 	# 本次延后唤醒捕获的对局代次；重开或拆除后与当前值不等时直接失效。
 	var resume_generation: int = _settlement_resume_generation
-	call_deferred("_run_scheduled_settlement_pipeline_resume", resume_generation)
+	_settlement_resume_callback = _run_scheduled_settlement_pipeline_resume.bind(resume_generation)
+	get_tree().process_frame.connect(_settlement_resume_callback, CONNECT_ONE_SHOT)
 
 
 ## 执行已登记的延后结算唤醒；只有代次一致的唯一任务能重新进入管线。
 func _run_scheduled_settlement_pipeline_resume(resume_generation: int) -> void:
 	if resume_generation != _settlement_resume_generation:
 		return
-	_settlement_resume_scheduled = false
+	_invalidate_scheduled_settlement_resume()
 	_resume_settlement_pipeline()
+
+
+## 释放当前帧唤醒的信号所有权；显式恢复、重开和离树复用，不能仅清布尔值而留下活动连接。
+func _invalidate_scheduled_settlement_resume() -> void:
+	if is_inside_tree() and _settlement_resume_callback.is_valid() and get_tree().process_frame.is_connected(_settlement_resume_callback):
+		get_tree().process_frame.disconnect(_settlement_resume_callback)
+	_settlement_resume_callback = Callable()
+	_settlement_resume_generation += 1
+	_settlement_resume_scheduled = false
+
+
+## 节点离树后不再拥有对局帧唤醒；避免被释放的控制器留下绑定方法的延迟连接。
+func _exit_tree() -> void:
+	_invalidate_scheduled_settlement_resume()
 
 
 ## 使全部旧延后唤醒失效并重置技能续结算诊断；重新开局、放弃对局与半成品回滚共用。
 func _reset_settlement_runtime_guard() -> void:
-	_settlement_resume_generation += 1
-	_settlement_resume_scheduled = false
+	_rule_sequences.clear()
+	_rule_sequence_execution_depth = 0
+	_invalidate_scheduled_settlement_resume()
 	_settlement_pipeline_running = false
 	_next_skill_settlement_id = 1
 	_active_skill_settlement_key = ""
@@ -2347,7 +2378,8 @@ func _begin_play_choice(player_id: int) -> void:
 	if before_event != null and (before_event.cancelled or before_event.neutralized):
 		_end_play_phase(player_id)
 		return
-	var event: GameEvent = event_scheduler.create_event("chooseToUse", "choice", [], {"player_id":player_id, "phase":"play"}, _runtime_root_event_id)
+	# 持续出牌请求事件；挂到运行时当前根，缓存根ID可能因reset失效。
+	var event: GameEvent = event_scheduler.create_event("chooseToUse", "choice", [], {"player_id":player_id, "phase":"play"}, event_scheduler.root_event_id)
 	event.player_id = player_id
 	# 使用牌选择开始事件；在 ChoiceRequest 登记前派发，触发器可阻止本次窗口但不能伪造候选。
 	var begin_event: RuleEvent = _emit_rule_timing("chooseToUseBegin", player_id, player_id, -1, timing_data, event.event_id)
@@ -2645,7 +2677,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	# 选择父事件；规则效果内创建的响应必须挂到当前 content 子事件，阶段级选择则回退到长期根事件。
 	var choice_parent_event_id: int = event_scheduler.get_current_event_id()
 	if choice_parent_event_id < 0:
-		choice_parent_event_id = _runtime_root_event_id
+		# 调度器才是活动树的权威来源；重置后旧控制器摘要ID不能作为新请求父节点。
+		choice_parent_event_id = event_scheduler.root_event_id
 	# 调用方请求的稳定父事件；连续选择可复用原卡牌时机，避免把后续选择挂到已经解决的上一条选择事件。
 	var requested_choice_parent_event_id: int = int(context.get("choice_parent_event_id", -1))
 	# 被请求父事件的只读摘要；只有尚未终结的事件才能继续接收子选择，过期值安全回退当前事件。
@@ -3430,10 +3463,6 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		return _reject("事件运行时拒绝了已过期的选择结果。")
 	# 当前请求已经被事件运行时接受；清除此前的AI提交失败计数，后续新请求使用独立请求ID重新统计。
 	_ai_choice_submit_failures.erase(int(completed_choice.get("request_id", -1)))
-	# 选择完成时机；当前目录仅对 chooseToUse、chooseToRespond 和拼点等流程声明 After，普通选牌不会伪造不存在的事件。
-	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
-	if RuleTimingCatalog.has_timing(choice_after_name):
-		_emit_rule_timing(choice_after_name, action.actor_id, action.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "selected_control_id":selected_control_id, "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1)))
 	# 已提交的延时提示必须立刻失效，避免空窗残留阻塞出牌窗口恢复。
 	_cancel_paced_response_prompt(int(completed_choice.get("request_id", -1)))
 	_pending_card_choice.clear()
@@ -3444,8 +3473,17 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	_resolved_equipment_material_uids = equipment_material_uids.duplicate()
 	_resolved_response_skill_id = selected_response_skill_id
 	state.action_sequence += 1
+	# 步骤式选择不依赖人类/AI同步模式，结果始终写入所属序列的同一结果槽。
+	# 先让已提交窗口退出，再派发After；新技能请求不能被旧窗口拒绝或被随后clear抹掉。
+	if RuleTimingCatalog.has_timing("%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))):
+		run_rule_sequence([
+			Callable(self, "_emit_completed_choice_after").bind(completed_choice, runtime_response),
+			Callable(self, "_continue_completed_choice").bind(completed_choice, runtime_response, equipment_material_uids, selected_response_skill_id),
+		])
+	else:
+		# 普通选牌没有After子窗口，必须立即应用结果；正在等待本选择的外层判定不能被误认成本选择新建的子任务。
+		_continue_completed_choice(null, completed_choice, runtime_response, equipment_material_uids, selected_response_skill_id)
 	if bool(completed_choice.get("deferred", false)):
-		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, selected_uids, selected_target_ids, runtime_response.confirmed, selected_control_id)
 		# 同一时机的后续可选技能必须等当前技能效果与其可能创建的后续选择完成后再按座次询问。
 		# 所有被选择插入打断的触发、装备、规则后半段、技能与阶段统一从同一优先级管线恢复。
 		_resume_settlement_pipeline()
@@ -3464,6 +3502,25 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		# AI 出牌被响应或技能选择暂停后，原异步驱动已经结束；统一续接入口负责下一动作或新子选择。
 		_ensure_ai_progress_after_resolution()
 	return true
+
+
+## 派发已完成选择的After窗口；父响应结果等待该窗口及其子选择全部完成。
+func _emit_completed_choice_after(sequence: RuleStepSequence, completed_choice: Dictionary, runtime_response: ChoiceResponse) -> void:
+	# 选择完成时机；当前目录仅对 chooseToUse、chooseToRespond 和拼点等流程声明 After，普通选牌不会伪造不存在的事件。
+	var choice_after_name: String = "%sAfter" % str(completed_choice.get("choice_event_name", "chooseCard"))
+	if RuleTimingCatalog.has_timing(choice_after_name):
+		sequence.wait_for_timing(_emit_rule_timing(choice_after_name, runtime_response.actor_id, runtime_response.actor_id, -1, {"confirmed":runtime_response.confirmed, "selected_card_uids":runtime_response.card_ids.duplicate(), "selected_target_ids":runtime_response.target_ids.duplicate(), "selected_control_id":runtime_response.control_id, "kind":str((completed_choice.get("context", {}) as Dictionary).get("kind", ""))}, int(completed_choice.get("runtime_event_id", -1))))
+
+
+## 恢复已被权威接受的选择事实；嵌套选择不能覆盖父选择的牌、目标或装备费用槽。
+func _continue_completed_choice(_sequence: RuleStepSequence, completed_choice: Dictionary, runtime_response: ChoiceResponse, equipment_material_uids: Array[int], selected_response_skill_id: String) -> void:
+	_resolved_card_choice_uids = runtime_response.card_ids.duplicate()
+	_resolved_target_choice_ids = runtime_response.target_ids.duplicate()
+	_resolved_control_choice_id = runtime_response.control_id
+	_resolved_equipment_material_uids = equipment_material_uids.duplicate()
+	_resolved_response_skill_id = selected_response_skill_id
+	if bool(completed_choice.get("deferred", false)) or (completed_choice.get("context", {}) as Dictionary).has("rule_sequence_id"):
+		_continue_card_choice(completed_choice.get("context", {}) as Dictionary, runtime_response.card_ids, runtime_response.target_ids, runtime_response.confirmed, runtime_response.control_id)
 
 
 ## 校验请求上下文声明的固定合法牌组；未声明valid_card_combinations时保持全部数量合法组合可用。
@@ -3537,6 +3594,16 @@ func _is_allowed_target_combination(context: Dictionary, selected_target_ids: Ar
 
 ## 根据暂停上下文恢复具体效果；各分支只调用公开规则操作，不读取任何 UI 节点。
 func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selected_target_ids: Array[int] = [], confirmed: bool = true, selected_control_id: String = "") -> void:
+	# 步骤式内容使用自己的结果槽；仍走统一请求校验，只免去每个技能手写恢复分支。
+	if context.has("rule_sequence_id"):
+		# 原选择归属序列；失效或重开后没有对应对象时安全丢弃迟到结果。
+		var sequence: RuleStepSequence = _rule_sequences.get(int(context.get("rule_sequence_id", -1))) as RuleStepSequence
+		if sequence != null:
+			sequence.choice_response = ChoiceResponse.new(-1, -1, int(context.get("choice_chooser_id", -1)), confirmed)
+			sequence.choice_response.card_ids = selected_uids.duplicate()
+			sequence.choice_response.target_ids = selected_target_ids.duplicate()
+			sequence.choice_response.control_id = selected_control_id
+		return
 	# 选择用途；由创建请求的规则函数写入稳定字符串。
 	var choice_kind: String = str(context.get("kind", ""))
 	# 机缘组件自有选择恢复；只识别opportunity前缀上下文，避免与普通卡牌和技能选择产生硬编码关联。
@@ -4513,77 +4580,50 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		var source_context_key: String = str(source_context_key_variant)
 		if not timing_data.has(source_context_key):
 			timing_data[source_context_key] = source_context[source_context_key_variant]
-	var damage_before_event: RuleEvent = _emit_rule_timing("damageBefore", target_id, source_id, target_id, timing_data, damage_event_id)
-	if damage_before_event != null and (damage_before_event.cancelled or damage_before_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_before_event.data, damage_event_id)
-		return
-	var damage_begin_event: RuleEvent = _emit_rule_timing("damageBegin", target_id, source_id, target_id, damage_before_event.data if damage_before_event != null else timing_data, damage_event_id)
-	if damage_begin_event != null and (damage_begin_event.cancelled or damage_begin_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_event.data, damage_event_id)
-		return
-	var damage_begin_one_event: RuleEvent = _emit_rule_timing("damageBegin1", target_id, source_id, target_id, damage_begin_event.data if damage_begin_event != null else timing_data, damage_event_id)
-	if damage_begin_one_event != null and (damage_begin_one_event.cancelled or damage_begin_one_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_one_event.data, damage_event_id)
-		return
-	final_amount = maxi(int(damage_begin_one_event.data.get("amount", final_amount)) if damage_begin_one_event != null else final_amount, 0)
-	# 伤害修正上下文；装备源码只读取稳定规则字段，不依赖控制器内部局部变量。
-	var equipment_damage_context: Dictionary = {"source_id":source_id, "target_id":target_id, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer}
-	# 伤害来源状态；其武器可覆盖造成伤害修正钩子。
-	var equipment_damage_source: PlayerState = state.get_player(source_id) if source_id >= 0 else null
-	if equipment_damage_source != null:
-		# 来源武器定义；不存在武器或定义缺失时不修改伤害。
-		var source_weapon_definition: CardDefinition = get_equipment_definition(source_id, "weapon")
-		if source_weapon_definition != null:
-			final_amount = source_weapon_definition.modify_outgoing_damage(self, equipment_damage_source, target, equipment_damage_context, final_amount)
-	# 第二伤害修改窗口；发生在来源装备修正后、目标防具修正前。
-	# 第二伤害窗口数据；保留第一窗口与来源牌上下文，只用装备修正后的最终值覆盖amount。
-	var damage_begin_two_data: Dictionary = damage_begin_one_event.data.duplicate(true) if damage_begin_one_event != null else timing_data.duplicate(true)
-	damage_begin_two_data["amount"] = final_amount
-	var damage_begin_two_event: RuleEvent = _emit_rule_timing("damageBegin2", target_id, source_id, target_id, damage_begin_two_data, damage_event_id)
-	if damage_begin_two_event != null and (damage_begin_two_event.cancelled or damage_begin_two_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_two_event.data, damage_event_id)
-		return
-	final_amount = maxi(int(damage_begin_two_event.data.get("amount", final_amount)) if damage_begin_two_event != null else final_amount, 0)
-	# 第三伤害修改窗口；通常供受伤角色和防御技能在防具结算前修改。
-	# 第三伤害窗口数据；沿用第二窗口全部扩展字段并更新上一窗口确认后的amount。
-	var damage_begin_three_data: Dictionary = damage_begin_two_event.data.duplicate(true) if damage_begin_two_event != null else damage_begin_two_data.duplicate(true)
-	damage_begin_three_data["amount"] = final_amount
-	var damage_begin_three_event: RuleEvent = _emit_rule_timing("damageBegin3", target_id, source_id, target_id, damage_begin_three_data, damage_event_id)
-	if damage_begin_three_event != null and (damage_begin_three_event.cancelled or damage_begin_three_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_three_event.data, damage_event_id)
-		return
-	final_amount = maxi(int(damage_begin_three_event.data.get("amount", final_amount)) if damage_begin_three_event != null else final_amount, 0)
-	if not ignore_armor:
-		# 目标防具定义；具体伤害压缩或属性增伤由防具卡牌源码提供。
-		var target_armor_definition: CardDefinition = get_equipment_definition(target_id, "armor")
-		if target_armor_definition != null:
-			# 防具修正前的伤害；仅数值确实变化时才表现为本次防具生效，避免普通伤害重复提示。
-			var amount_before_armor: int = final_amount
-			final_amount = target_armor_definition.modify_incoming_damage(self, target, equipment_damage_context, final_amount)
-			if final_amount != amount_before_armor:
-				record_equipment_activation(target_id, target_armor_definition.get_id())
-	# 第四及最终伤害修改窗口；其结果直接进入旧 damage_before 兼容事件和实际扣减。
-	# 第四伤害窗口数据；保留制动等第三窗口写入的数据，并用防具修正后的amount进入最终修改阶段。
-	var damage_begin_four_data: Dictionary = damage_begin_three_event.data.duplicate(true) if damage_begin_three_event != null else damage_begin_three_data.duplicate(true)
-	damage_begin_four_data["amount"] = final_amount
-	var damage_begin_four_event: RuleEvent = _emit_rule_timing("damageBegin4", target_id, source_id, target_id, damage_begin_four_data, damage_event_id)
-	if damage_begin_four_event != null and (damage_begin_four_event.cancelled or damage_begin_four_event.neutralized):
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, damage_begin_four_event.data, damage_event_id)
-		return
-	final_amount = maxi(int(damage_begin_four_event.data.get("amount", final_amount)) if damage_begin_four_event != null else final_amount, 0)
+	# 伤害编排组件；独立窗口步骤使用已有规则续接栈，调用方仍通过同一damage入口。
+	var damage_resolution: DamageResolutionService = DamageResolutionService.new(self)
+	damage_resolution.resolve({
+		"source_id":source_id, "target_id":target_id,
+		"source_character_generation":source_character_generation, "target_character_generation":target_character_generation,
+		"amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id,
+		"chain_transfer":chain_transfer, "ignore_armor":ignore_armor, "damage_event_id":damage_event_id,
+		"timing_data":timing_data, "source_context":source_context.duplicate(true),
+	})
 
-	# 伤害前事件；处理器可修改 amount 或取消整次伤害。
-	var before_event: RuleEvent = RuleEvent.new("damage_before", source_id, target_id, {"amount":final_amount, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation})
-	_dispatch_rule_event(before_event)
-	if state.game_over or before_event.cancelled:
-		_emit_rule_timing("damageCancelled", target_id, source_id, target_id, before_event.data, damage_event_id)
-		return
-	final_amount = maxi(int(before_event.data.get("amount", final_amount)), 0)
+
+## 原子写入已通过全部修改窗口的伤害；本函数不派发可暂停时机，不承担选择或阶段推进。
+func _commit_prepared_damage(context: Dictionary) -> Dictionary:
+	# 已确认伤害上下文中的source_id；恢复仅按稳定值定位，不重复执行前置窗口。
+	var source_id: int = int(context.get("source_id", -1))
+	# 已确认伤害上下文中的target_id；恢复仅按稳定值定位，不重复执行前置窗口。
+	var target_id: int = int(context.get("target_id", -1))
+	# 已确认伤害上下文中的source_character_generation；恢复仅按稳定值定位，不重复执行前置窗口。
+	var source_character_generation: int = int(context.get("source_character_generation", -1))
+	# 已确认伤害上下文中的target_character_generation；恢复仅按稳定值定位，不重复执行前置窗口。
+	var target_character_generation: int = int(context.get("target_character_generation", -1))
+	# 已确认伤害上下文中的nature；恢复仅按稳定值定位，不重复执行前置窗口。
+	var nature: String = str(context.get("nature", "normal"))
+	# 已确认伤害上下文中的card_id；恢复仅按稳定值定位，不重复执行前置窗口。
+	var card_id: String = str(context.get("card_id", ""))
+	# 已确认伤害上下文中的card_user_id；恢复仅按稳定值定位，不重复执行前置窗口。
+	var card_user_id: int = int(context.get("card_user_id", -1))
+	# 已确认伤害上下文中的chain_transfer；恢复仅按稳定值定位，不重复执行前置窗口。
+	var chain_transfer: bool = bool(context.get("chain_transfer", false))
+	# 已确认伤害上下文中的damage_event_id；恢复仅按稳定值定位，不重复执行前置窗口。
+	var damage_event_id: int = int(context.get("damage_event_id", -1))
+	# 来源牌扩展上下文；保留父牌、实际使用者和逐目标规则参数。
+	var source_context: Dictionary = context.get("source_context", {}) as Dictionary
+	# 本次最终伤害值；已经通过全部可暂停修改窗口，负值仍按0处理。
+	var final_amount: int = maxi(int(context.get("amount", 0)), 0)
+	# 提交时目标；目标代次由编排组件在本函数前复核。
+	var target: PlayerState = state.get_player(target_id)
+	if target == null:
+		return {}
 	if final_amount == 0:
-		var zero_data: Dictionary = {"amount":0, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":0, "hp_lost":0, "hp":target.hp, "shield":target.shield, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation}
-		_emit_rule_timing("damageZero", target_id, source_id, target_id, zero_data, damage_event_id)
-		_finish_damage_timing({"source_id":source_id, "target_id":target_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation, "amount":0, "nature":nature, "card_id":card_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":0, "hp_lost":0, "chain_targets":[]})
-		return
+		# 零伤害事实；不扣盾、扣血或增加受伤次数，但仍保留标准零伤害尾部。
+		var zero_data: Dictionary = context.duplicate(true)
+		zero_data.merge({"amount":0, "shield_absorbed":0, "hp_lost":0, "hp":target.hp, "max_hp":target.max_hp, "shield":target.shield, "chain_targets":[]}, true)
+		return zero_data
 
 	# 伤害发生前是否处于连环状态；属性伤害需要基于该状态决定传导。
 	var should_chain: bool = nature != "normal" and target.chained and not chain_transfer
@@ -4596,28 +4636,20 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 			if player.alive and not player.out_of_game and player.chained and player.player_id != target_id:
 				chain_targets.append(player.player_id)
 
-	# 伤害发生前护盾值；只用于计算本次优先吸收量，不改变最终伤害事件本身的数值。
+	# 伤害结算前护盾值；异步等待后的当前值，不能覆盖期间合法增减。
 	var shield_before_damage: int = maxi(target.shield, 0)
 	# 本次由护盾吸收的伤害值；最多吸收到最终伤害值，护盾不会变成负数。
-	var shield_absorbed: int = mini(shield_before_damage, final_amount)
-	if shield_absorbed > 0:
-		# 护甲减少前时机；amount 表示本次将扣除的护甲值，取消后伤害全部穿透到体力。
-		var hujia_before_event: RuleEvent = _emit_rule_timing("changeHujiaBefore", target_id, source_id, target_id, {"amount":shield_absorbed, "old_hujia":shield_before_damage, "reason":"damage", "damage_event_id":damage_event_id, "change_type":"lose"}, damage_event_id)
-		if hujia_before_event != null and (hujia_before_event.cancelled or hujia_before_event.neutralized):
-			shield_absorbed = 0
-		else:
-			shield_absorbed = clampi(int(hujia_before_event.data.get("amount", shield_absorbed)) if hujia_before_event != null else shield_absorbed, 0, mini(shield_before_damage, final_amount))
+	var shield_absorbed: int = clampi(int(context.get("shield_absorbed", 0)), 0, mini(shield_before_damage, final_amount))
 	# 本次实际扣减的体力值；伤害剩余量为0时仍属于一次有效伤害并触发 damage_after。
 	var hp_lost: int = final_amount - shield_absorbed
 	target.shield = shield_before_damage - shield_absorbed
 	target.hp -= hp_lost
-	if shield_absorbed > 0:
-		_emit_rule_timing("changeHujiaAfter", target_id, source_id, target_id, {"amount":shield_absorbed, "hujia":target.shield, "reason":"damage", "damage_event_id":damage_event_id, "change_type":"lose"}, damage_event_id)
 	_record_runtime_event("damage", "damage", {"source_id":source_id, "target_id":target_id, "nature":nature}, {"amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "shield":target.shield, "hp":target.hp}, damage_event_id)
 	# 终局累计受伤值；护盾抵消的部分仍是有效伤害，和现有damage_taken_count的受伤语义保持一致。
 	target.total_damage_received += final_amount
 	target.damage_taken_count += 1
 	target.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
+	# 伤害来源；无来源伤害不累计任何角色的造成伤害统计。
 	var source_player: PlayerState = state.get_player(source_id)
 	# 终局累计造成伤害值；自伤仍属于来源角色造成的伤害，故不与目标是否相同绑定。
 	if source_player != null:
@@ -4637,16 +4669,11 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		var context_key: String = str(context_key_variant)
 		if not damage_result_data.has(context_key):
 			damage_result_data[context_key] = source_context[context_key_variant]
-	if hp_lost > 0:
-		_emit_rule_timing("changeHp", target_id, source_id, target_id, {"amount":hp_lost, "hp":target.hp, "max_hp":target.max_hp, "reason":card_id, "change_type":"damage", "damage_event_id":damage_event_id}, damage_event_id)
-	_emit_rule_timing("damage", target_id, source_id, target_id, damage_result_data, damage_event_id)
 	# 伤害实际成立后的可序列化上下文；标准damage时机可能产生装备或技能选择，后续旧事件、濒死与尾部必须原地恢复。
 	var post_result_context: Dictionary = {"post_result_stage":"damage_after", "source_id":source_id, "target_id":target_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation, "amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "hp":target.hp, "shield":target.shield, "chain_targets":chain_targets.duplicate(), "source_context":source_context.duplicate(true)}
-	# damage时机内的选择必须先完成全部同一时机处理器；不能提前发布damage_after、濒死或整条伤害尾部。
-	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("damage_after_result", post_result_context)
-		return
-	_continue_damage_after_result(post_result_context)
+	post_result_context.merge(damage_result_data, true)
+	post_result_context["max_hp"] = target.max_hp
+	return post_result_context
 
 
 ## 在标准damage时机及其嵌套选择完成后，按旧兼容事件、体力减少、濒死和伤害尾部的固定顺序继续。
@@ -5501,7 +5528,7 @@ func _register_simultaneous_negation_choice(responder_id: int, round_context: Di
 	# 当前询问文字；抵消状态决定本轮无懈将令原锦囊恢复还是无效。
 	var prompt: String = "是否使用【无懈可击】令锦囊对%s的效果%s？" % [target_name, "恢复生效" if bool(round_context.get("negated", false)) else "无效"]
 	# 当前选择事件；所有并行请求都挂在原锦囊 content 事件下，不形成按座次串行父子链。
-	var choice_event: GameEvent = event_scheduler.create_event("chooseToRespond", "choice", [], response_context, int(round_context.get("negation_parent_event_id", _runtime_root_event_id)))
+	var choice_event: GameEvent = event_scheduler.create_event("chooseToRespond", "choice", [], response_context, int(round_context.get("negation_parent_event_id", event_scheduler.root_event_id)))
 	choice_event.player_id = responder_id
 	# 当前运行时请求；0至1张且允许取消，候选已经在登记前确认非空。
 	var runtime_request: ChoiceRequest = ChoiceRequest.new(choice_event.event_id, responder_id, "respond", prompt)
@@ -10676,12 +10703,13 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 
 ## 在没有活动选择时依次恢复技能结算；恢复函数再次创建选择时立即停下，下一次提交后继续同一队列。
 ## 每次只恢复一项并保留原登记顺序；返回true表示确实消费了一条记录，包括已失效的过期技能。
-func _resume_deferred_skill_settlements() -> bool:
+func _resume_deferred_skill_settlements(settlement_index: int = 0) -> bool:
 	if state == null or state.game_over or has_pending_card_choice() or _deferred_skill_settlements.is_empty():
 		return false
 	# 当前结算项；先移出队列，技能需要再次等待时会显式登记新的后续上下文。
 	# 当前最早登记的技能后续；同层技能的“然后”效果保持原有先到先结算规则。
-	var settlement: Dictionary = _deferred_skill_settlements.pop_front() as Dictionary
+	var settlement: Dictionary = _deferred_skill_settlements[settlement_index] as Dictionary
+	_deferred_skill_settlements.remove_at(settlement_index)
 	# 技能持有者与稳定ID；等待期间失去技能时安全跳过旧结算，不调用失效对象。
 	var skill_owner_id: int = int(settlement.get("skill_owner_id", -1))
 	# 当前技能实例；每局每名角色唯一，重新开局已清空整个结算队列。
@@ -10812,6 +10840,120 @@ func _continue_slash_flow_after_barrier(continuation_context: Dictionary) -> voi
 		slash_effect.continue_after_sha_damage(rule_context)
 
 
+## 只等待本序列内部新建的判定；judgeBefore技能自身必须先于等待它的外层判定恢复。
+func _sequence_waits_for_child_judgment(sequence: RuleStepSequence) -> bool:
+	return has_pending_judgment_request() and int(_pending_judgment_request.get("request_id", -1)) != sequence.enclosing_judgment_request_id
+
+
+## 步骤式内容通过预登记续接持有父结算位置；具体技能只编写顺序步骤，不复制暂停与恢复分支。
+func run_rule_sequence(steps: Array[Callable], context: Dictionary = {}) -> int:
+	if state == null or state.game_over or steps.is_empty():
+		return -1
+	# 当前内容对象；只在本局持有Callable，不存入RuleContinuationQueue或快照。
+	var sequence: RuleStepSequence = RuleStepSequence.new(steps, context)
+	sequence.sequence_id = _next_rule_sequence_id
+	sequence.enclosing_judgment_request_id = int(_pending_judgment_request.get("request_id", -1))
+	_next_rule_sequence_id += 1
+	_rule_sequences[sequence.sequence_id] = sequence
+	_advance_rule_sequence(sequence.sequence_id)
+	return sequence.sequence_id
+
+
+## 推进一个序列至首个真实等待边界；每步之前登记父恢复点，子续接自然排在其上方。
+func _advance_rule_sequence(sequence_id: int) -> void:
+	_rule_sequence_execution_depth += 1
+	_run_rule_sequence_steps(sequence_id)
+	_rule_sequence_execution_depth = maxi(_rule_sequence_execution_depth - 1, 0)
+
+
+## 执行步骤主体；外层深度包装确保同步选择、触发回调和内容续接只有一个消费者。
+func _run_rule_sequence_steps(sequence_id: int) -> void:
+	# 当前序列；终局、重开和局部取消都可能使身份失效。
+	var sequence: RuleStepSequence = _rule_sequences.get(sequence_id) as RuleStepSequence
+	if sequence == null:
+		return
+	# 本轮执行步数；采用统一管线预算，合法长序列跨帧而不自旋。
+	var executed_steps: int = 0
+	while state != null and not state.game_over and executed_steps < maxi(max_settlement_steps_per_pass, 1):
+		if not _is_rule_sequence_owner_valid(sequence):
+			sequence.finish()
+		if sequence.finished:
+			_rule_sequences.erase(sequence_id)
+			return
+		# 父恢复记录；先登记再执行，嵌套伤害或技能产生的恢复点必须处于父记录上方。
+		var continuation_id: int = _defer_rule_continuation("rule_sequence", {"sequence_id":sequence_id, "step":sequence.step})
+		if continuation_id < 0:
+			_rule_sequences.erase(sequence_id)
+			return
+		sequence.skill_settlement_watermark = _next_skill_settlement_id
+		if not sequence.execute_next():
+			_record_settlement_fault("rule_sequence_invalid_step", {"sequence_id":sequence_id, "step":sequence.step})
+		executed_steps += 1
+		if state == null or state.game_over or not _rule_sequences.has(sequence_id):
+			_rule_continuations.remove(continuation_id)
+			_rule_sequences.erase(sequence_id)
+			return
+		# 已无剩余内容时释放空游标；本步创建的子选择、触发和旧规则续接仍由各自所有权独立等待。
+		if sequence.finished:
+			_rule_continuations.remove(continuation_id)
+			_rule_sequences.erase(sequence_id)
+			return
+		if _has_nested_settlement_barrier() or _sequence_waits_for_child_judgment(sequence) or (game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()):
+			return
+		if sequence.waiting_event != null and trigger_manager != null and trigger_manager.is_dispatch_deferred(sequence.waiting_event):
+			return
+		if int(_rule_continuations.peek().get("continuation_id", -1)) != continuation_id or _find_sequence_child_settlement(sequence) >= 0:
+			return
+		_rule_continuations.remove(continuation_id)
+	# 预算结束只保留下一步骤，不提前完成父操作。
+	if _rule_sequences.has(sequence_id):
+		_defer_rule_continuation("rule_sequence", {"sequence_id":sequence_id, "step":sequence.step})
+
+
+## 校验技能内容仍属于原武将实例；普通规则无skill_id时不附加技能有效性限制。
+func _is_rule_sequence_owner_valid(sequence: RuleStepSequence) -> bool:
+	# 可选技能身份；规则层伤害等序列无需绑定技能。
+	var skill_id: String = str(sequence.context.get("skill_id", ""))
+	if skill_id.is_empty():
+		return true
+	# 原技能实例；换将、卸载或失效后不得继续旧技能的剩余步骤。
+	var skill: SkillDefinition = get_skill_instance(int(sequence.context.get("skill_owner_id", -1)), skill_id)
+	return skill != null and skill.matches_character_generation(int(sequence.context.get("skill_character_generation", -1))) and skill.can_use_effect(bool(sequence.context.get("locked_skill_segment", false)))
+
+
+## 定位本步骤创建的技能后续；不让父规则的下一步越过子技能的“然后”。
+func _find_sequence_child_settlement(sequence: RuleStepSequence) -> int:
+	# 待恢复技能下标；原有队列顺序不变，仅提前处理属于当前子步骤的记录。
+	for settlement_index: int in range(_deferred_skill_settlements.size()):
+		if int(_deferred_skill_settlements[settlement_index].get("settlement_id", -1)) >= sequence.skill_settlement_watermark:
+			return settlement_index
+	return -1
+
+
+## 当前栈顶为已完成自身触发窗口的序列时，先完成该子内容再恢复外层触发队列。
+func _try_resume_ready_rule_sequence() -> bool:
+	if not _rule_continuations.has_pending() or not _queued_equipment_triggers.is_empty():
+		return false
+	# 最内层恢复记录；只接管步骤式内容，不改变旧规则续接之间的次序。
+	var continuation: Dictionary = _rule_continuations.peek()
+	if str(continuation.get("continuation_type", "")) != "rule_sequence":
+		return false
+	# 待恢复内容；旧局失效记录由正常出栈路径清除。
+	var sequence: RuleStepSequence = _rule_sequences.get(int((continuation.get("context", {}) as Dictionary).get("sequence_id", -1))) as RuleStepSequence
+	if sequence != null:
+		if _sequence_waits_for_child_judgment(sequence):
+			return false
+		if sequence.waiting_event != null and trigger_manager != null and trigger_manager.is_dispatch_deferred(sequence.waiting_event):
+			return false
+		# 子技能后续优先于本序列下一步骤；每次只执行一项，再由管线检查新选择。
+		var child_settlement_index: int = _find_sequence_child_settlement(sequence)
+		if child_settlement_index >= 0:
+			_resume_deferred_skill_settlements(child_settlement_index)
+			return true
+	_resume_next_rule_continuation()
+	return true
+
+
 ## 返回当前结算是否存在必须优先完成的选择或装备触发；父响应读取结果前必须等待该屏障清空。
 func _has_nested_settlement_barrier() -> bool:
 	return has_pending_card_choice() or not _queued_equipment_triggers.is_empty()
@@ -10841,6 +10983,8 @@ func _resume_next_rule_continuation() -> void:
 	_active_rule_continuation_visits = (scheduler_metadata.get("continuation_visits", default_continuation_visits) as Dictionary).duplicate(true)
 	_active_rule_continuation_chain_steps = maxi(int(scheduler_metadata.get("chain_step_count", 1)), 1)
 	match continuation_type:
+		"rule_sequence":
+			_advance_rule_sequence(int(context.get("sequence_id", -1)))
 		"skill_response":
 			_continue_skill_response_after_barrier(context)
 		"card_response":
@@ -10893,8 +11037,7 @@ func _resume_settlement_pipeline() -> void:
 		return
 	# 直接安全出口比已登记的空闲帧任务更早进入时，立即使旧任务代次失效，避免它在测试重置或下一业务状态中空跑。
 	if _settlement_resume_scheduled:
-		_settlement_resume_generation += 1
-		_settlement_resume_scheduled = false
+		_invalidate_scheduled_settlement_resume()
 	_settlement_pipeline_running = true
 	_run_settlement_pipeline_pass()
 	_settlement_pipeline_running = false
@@ -10902,7 +11045,7 @@ func _resume_settlement_pipeline() -> void:
 
 ## 执行一次有步数预算的结算排空；本函数只由防重入包装器调用，内部可按规则边界提前返回。
 func _run_settlement_pipeline_pass() -> void:
-	if state == null or state.game_over:
+	if state == null or state.game_over or _rule_sequence_execution_depth > 0:
 		return
 	# 换将过渡期唯一放行的续接：机缘效果嵌套选择结束后，栈顶的机缘续接必须弹出，否则换将完成回调永远不可达。
 	# 其余旧回合续接（斩杀连锁、伤害尾部等）仍等待换将边界完成后按正常门控恢复，不在过渡期越界执行。
@@ -10919,6 +11062,9 @@ func _run_settlement_pipeline_pass() -> void:
 	var settlement_step_count: int = 0
 	while state != null and not state.game_over and not has_pending_card_choice() and not _conquest_replacement_transition_active and (game_flow_pacer == null or not game_flow_pacer.has_pending_skill_interval()) and settlement_step_count < max_settlement_steps_per_pass:
 		settlement_step_count += 1
+		# 子序列已经完成自身时机时先恢复它，再回到触发该序列的外层时机剩余处理器。
+		if _try_resume_ready_rule_sequence():
+			continue
 		# 同一规则时机尚未询问的技能必须先完成，不能让原操作的后半段越过触发顺序。
 		_resume_deferred_rule_timing_dispatches()
 		if has_pending_card_choice() or state.game_over:
@@ -11339,32 +11485,19 @@ func _begin_card_target_lifecycle(card_uid: int, target_id: int, parent_event_id
 		return true
 	# 当前使用牌上下文与使用者；player 角色对应使用者，target 角色对应当前生效目标。
 	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
-	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	# 当前目标的时机数据；后续窗口读取前一窗口的最终修改。
 	var timing_data: Dictionary = _build_card_use_timing_data(card_uid, target_id)
-	var before_event: RuleEvent = _emit_rule_timing("useCardToBefore", actor_id, actor_id, target_id, timing_data, parent_event_id)
-	if before_event != null and (before_event.cancelled or before_event.neutralized):
-		_emit_rule_timing("useCardToCancelled", actor_id, actor_id, target_id, before_event.data, parent_event_id)
-		return false
-	var begin_event: RuleEvent = _emit_rule_timing("useCardToBegin", actor_id, actor_id, target_id, before_event.data if before_event != null else timing_data, parent_event_id)
-	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-		_emit_rule_timing("useCardToCancelled", actor_id, actor_id, target_id, begin_event.data, parent_event_id)
-		return false
 	# 当前牌定义；effect_id=slash 的三种【杀】共享专属时机。
 	var definition: Dictionary = GameDatabase.get_card(str(card_use_context.get("card_definition_id", "")))
+	# 本目标的生命周期窗口；数据声明次序，公共步骤负责逐个等待。
+	var timing_names: Array[String] = ["useCardToBefore", "useCardToBegin"]
 	if str(definition.get("effect_id", "")) == "slash":
-		var sha_before_event: RuleEvent = _emit_rule_timing("shaBefore", actor_id, actor_id, target_id, timing_data, parent_event_id)
-		if sha_before_event != null and (sha_before_event.cancelled or sha_before_event.neutralized):
-			_emit_rule_timing("shaCancelled", actor_id, actor_id, target_id, sha_before_event.data, parent_event_id)
-			return false
-		var sha_begin_event: RuleEvent = _emit_rule_timing("shaBegin", actor_id, actor_id, target_id, sha_before_event.data if sha_before_event != null else timing_data, parent_event_id)
-		if sha_begin_event != null and (sha_begin_event.cancelled or sha_begin_event.neutralized):
-			_emit_rule_timing("shaCancelled", actor_id, actor_id, target_id, sha_begin_event.data, parent_event_id)
-			return false
+		timing_names.append_array(["shaBefore", "shaBegin"])
 	resolution_context["target_lifecycle_started"] = true
 	resolution_context["target_lifecycle_finished"] = false
 	_active_card_resolutions[card_uid] = resolution_context
-	return true
-
+	_run_card_lifecycle_timings(card_uid, target_id, parent_event_id, timing_names, timing_data, true)
+	return not (_card_use_contexts.get(card_uid, {}) as Dictionary).get("excluded_target_ids", []).has(target_id)
 
 ## 完成一名目标的牌效生命周期；异步和同步路径共用标记，确保 useCardToEnd、After 与 shaEnd、After 只派发一次。
 func _finish_card_target_lifecycle(card_uid: int, target_id: int, parent_event_id: int) -> void:
@@ -11374,16 +11507,85 @@ func _finish_card_target_lifecycle(card_uid: int, target_id: int, parent_event_i
 		return
 	# 当前使用牌上下文与使用者；用于角色关系匹配和牌族判断。
 	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
-	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	# 当前目标的结束数据；尾部技能按固定次序逐项完成。
 	var timing_data: Dictionary = _build_card_use_timing_data(card_uid, target_id)
+	# 牌定义；杀族追加专属End与After，其余牌只使用公共逐目标窗口。
 	var definition: Dictionary = GameDatabase.get_card(str(card_use_context.get("card_definition_id", "")))
+	# 本目标的收尾窗口；先登记完成标记，防止嵌套结算重新进入同一尾部。
+	var timing_names: Array[String] = []
 	if str(definition.get("effect_id", "")) == "slash":
-		_emit_rule_timing("shaEnd", actor_id, actor_id, target_id, timing_data, parent_event_id)
-		_emit_rule_timing("shaAfter", actor_id, actor_id, target_id, timing_data, parent_event_id)
-	_emit_rule_timing("useCardToEnd", actor_id, actor_id, target_id, timing_data, parent_event_id)
-	_emit_rule_timing("useCardToAfter", actor_id, actor_id, target_id, timing_data, parent_event_id)
+		timing_names.append_array(["shaEnd", "shaAfter"])
+	timing_names.append_array(["useCardToEnd", "useCardToAfter"])
 	resolution_context["target_lifecycle_finished"] = true
 	_active_card_resolutions[card_uid] = resolution_context
+	_run_card_lifecycle_timings(card_uid, target_id, parent_event_id, timing_names, timing_data)
+
+## 把一个生命周期组展开为可暂停的内容步骤；每次时机结果读取都发生在其子结算结束后。
+func _run_card_lifecycle_timings(card_uid: int, target_id: int, parent_event_id: int, timing_names: Array[String], timing_data: Dictionary, cancel_body: bool = false) -> void:
+	# 声明式步骤；每个窗口单独派发，最后一项也必须读取异步取消结果。
+	var steps: Array[Callable] = []
+	# 当前生命周期时机名；声明顺序就是等待与发布顺序，不在恢复时重排。
+	for timing_name: String in timing_names:
+		steps.append(Callable(self, "_emit_card_lifecycle_step").bind(timing_name))
+	steps.append(_finish_card_lifecycle_step)
+	run_rule_sequence(steps, {"card_uid":card_uid, "target_id":target_id, "parent_event_id":parent_event_id, "timing_data":timing_data, "cancel_body":cancel_body})
+
+
+## 等待前一窗口后派发下一窗口；只读规则数据与稳定ID，不保存实体卡牌引用。
+func _emit_card_lifecycle_step(sequence: RuleStepSequence, timing_name: String) -> void:
+	if not _read_card_lifecycle_result(sequence):
+		return
+	# 当前使用牌上下文；清理后的旧序列没有权力重新创建时机。
+	var card_use_context: Dictionary = _card_use_contexts.get(int(sequence.context.get("card_uid", -1)), {}) as Dictionary
+	if card_use_context.is_empty():
+		sequence.finish()
+		return
+	# 使用者；全局窗口和目标窗口采用同一角色归属。
+	var actor_id: int = int(card_use_context.get("actor_id", -1))
+	sequence.wait_for_timing(_emit_rule_timing(timing_name, actor_id, actor_id, int(sequence.context.get("target_id", -1)), sequence.context.get("timing_data", {}) as Dictionary, int(sequence.context.get("parent_event_id", -1))))
+
+
+## 最后一个窗口同样需要等待后提交结果；不能因为没有下个窗口而遗漏取消。
+func _finish_card_lifecycle_step(sequence: RuleStepSequence) -> void:
+	_read_card_lifecycle_result(sequence)
+
+
+## 读取上一窗口最终数据；主体取消只排除对应范围，保留牌材料回收与取消通知。
+func _read_card_lifecycle_result(sequence: RuleStepSequence) -> bool:
+	# 原始规则窗口；首次步骤没有前置结果，直接继续。
+	var event: RuleEvent = sequence.waiting_event
+	if event == null:
+		return true
+	sequence.waiting_event = null
+	sequence.context["timing_data"] = event.data.duplicate(true)
+	if not bool(sequence.context.get("cancel_body", false)) or not (event.cancelled or event.neutralized):
+		return true
+	# 原牌身份；目标取消不能结束其他目标的效果。
+	var card_uid: int = int(sequence.context.get("card_uid", -1))
+	# 目标范围；负数代表整牌主体取消。
+	var target_id: int = int(sequence.context.get("target_id", -1))
+	# 暂停后重新读取的共享上下文；避免旧快照覆盖其他子技能的合法修改。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	sequence.finish()
+	if card_use_context.is_empty():
+		return false
+	if target_id < 0:
+		card_use_context["cancelled"] = true
+		card_use_context["cancel_reason"] = event.termination_reason
+	else:
+		# 当前已排除目标；重复取消只保留一次身份。
+		var excluded_target_ids: Array = card_use_context.get("excluded_target_ids", []) as Array
+		if not excluded_target_ids.has(target_id):
+			excluded_target_ids.append(target_id)
+		card_use_context["excluded_target_ids"] = excluded_target_ids
+		# 被取消目标不再派发成功End/After；取消通知仍可包含自己的子选择。
+		var resolution_context: Dictionary = _active_card_resolutions.get(card_uid, {}) as Dictionary
+		resolution_context["target_lifecycle_finished"] = true
+		_active_card_resolutions[card_uid] = resolution_context
+	_card_use_contexts[card_uid] = card_use_context
+	if target_id >= 0:
+		sequence.wait_for_timing(_emit_rule_timing("shaCancelled" if event.name.begins_with("sha") else "useCardToCancelled", event.player_id, event.source_id, target_id, event.data, int(sequence.context.get("parent_event_id", -1))))
+	return false
 
 
 ## 从无懈可击未抵消的当前目标重新进入效果；恢复键保证本次不会再次创建相同目标的无懈询问。
@@ -11723,18 +11925,9 @@ func _card_use_step_begin_lifecycle(event: GameEvent, _scheduler: EventScheduler
 		return
 	# 使用牌时机数据；与后续 useCard0 至 useCard 保持相同标准字段。
 	var timing_data: Dictionary = _build_card_use_timing_data(card_uid)
-	var before_event: RuleEvent = _emit_rule_timing("useCardBefore", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
-	if before_event != null and (before_event.cancelled or before_event.neutralized):
-		card_use_context["cancelled"] = true
-		card_use_context["cancel_reason"] = before_event.termination_reason
-	else:
-		var begin_event: RuleEvent = _emit_rule_timing("useCardBegin", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, before_event.data if before_event != null else timing_data, event.event_id)
-		if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-			card_use_context["cancelled"] = true
-			card_use_context["cancel_reason"] = begin_event.termination_reason
 	card_use_context["lifecycle_started"] = true
 	_card_use_contexts[card_uid] = card_use_context
-
+	_run_card_lifecycle_timings(card_uid, -1, event.event_id, ["useCardBefore", "useCardBegin"], timing_data, true)
 
 ## 安排 useCard0/useCard1/yingbian/useCard2/useCard 五组真实时机子事件。
 func _card_use_step_enqueue_use_timings(event: GameEvent, scheduler: EventScheduler) -> void:
@@ -11822,10 +12015,31 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 		"virtual_storage":(card_use_context.get("virtual_storage", {}) as Dictionary).duplicate(true),
 	}
 	# 同步规则事件；处理器仍使用 RuleEvent 端口，但生命周期、父子关系和暂停位置由当前 GameEvent 承载。
+	# 派发入口同步返回不代表处理器已全部结束；下方序列单独等待最终修改结果。
 	var rule_event: RuleEvent = RuleEvent.new(timing_name, int(card_use_context.get("actor_id", -1)), target_id, timing_data, int(card_use_context.get("actor_id", -1)))
 	rule_event.event_id = event.event_id
 	rule_event.parent_id = event.parent_id
+	# 时机派发与结果提交分为两步；可选技能尚未应答时不能提前复制目标或取消结果。
+	run_rule_sequence([
+		Callable(self, "_dispatch_card_rule_timing").bind(rule_event),
+		Callable(self, "_apply_card_rule_timing").bind(card_uid, target_id, event.event_id),
+	])
+
+
+## 派发使用牌修改窗口并保留原对象；结果步骤等待同一时机的全部触发器结束。
+func _dispatch_card_rule_timing(sequence: RuleStepSequence, rule_event: RuleEvent) -> void:
 	_dispatch_timing_service_event(rule_event)
+	sequence.wait_for_timing(rule_event)
+
+
+## 提交异步修改窗口的最终结果；只修改仍存在的用牌上下文与运行时事件。
+func _apply_card_rule_timing(sequence: RuleStepSequence, card_uid: int, target_id: int, event_id: int) -> void:
+	# 等待完成的原规则事件；包含所有处理器的最终修改与终止原因。
+	var rule_event: RuleEvent = sequence.waiting_event
+	# 重新取得的共享上下文；暂停期间原牌可能因终局或换将边界被清理。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if rule_event == null or card_use_context.is_empty():
+		return
 	# 派发后的实时共享上下文；同步技能可能通过控制器辅助接口直接追加排除或直击目标，不能被派发前复制出的RuleEvent旧数组覆盖。
 	var live_card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
 	# 触发器输出；目标数组以RuleEvent为准，排除与直击属于可叠加集合，需与同步辅助接口写入的实时结果稳定合并。
@@ -11844,11 +12058,7 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 			card_use_context["cancelled"] = true
 			card_use_context["cancel_reason"] = rule_event.termination_reason
 	_card_use_contexts[card_uid] = card_use_context
-	event.result = rule_event.to_dict()
-	if rule_event.cancelled:
-		event.cancel(rule_event.termination_reason)
-	elif rule_event.neutralized:
-		event.neutralize(rule_event.termination_reason)
+	event_scheduler.apply_rule_event_result(event_id, rule_event)
 
 
 ## 执行唯一 contentBefore 边界；整牌内容组件可通过共享 custom_args 读取前置触发器结果。
@@ -11972,6 +12182,11 @@ func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -
 		return
 	# 当前目标 ID；-1表示五谷、装备或延时锦囊等整牌内容。
 	var target_id: int = int(event.context.get("target_id", -1))
+	# 前置生命周期可能在本子事件排队期间异步取消；牌效执行前必须重新检查最终排除结果。
+	if target_id >= 0 and (card_use_context.get("excluded_target_ids", []) as Array).has(target_id):
+		_complete_active_card_target(card_uid)
+		event.cancel("target_lifecycle_cancelled")
+		return
 	if target_id < 0 and bool(card_use_context.get("content_complete", false)):
 		# 整牌异步效果已经由恢复回调完成；content 事件恢复时只读取最终区域，禁止再次执行亮牌、选择或其他一次性效果。
 		event.result = {"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(), "destination":str(card_use_context.get("destination", "discard"))}
@@ -12030,16 +12245,15 @@ func _card_use_step_finish_lifecycle(event: GameEvent, _scheduler: EventSchedule
 	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
 	if card_use_context.is_empty() or bool(card_use_context.get("lifecycle_finished", false)):
 		return
+	# 结束窗口数据；取消理由沿用前置窗口结果，材料收尾仍由CardUseEvent.after负责。
 	var timing_data: Dictionary = _build_card_use_timing_data(card_uid)
-	if bool(card_use_context.get("cancelled", false)):
-		timing_data["reason"] = str(card_use_context.get("cancel_reason", "cancelled"))
-		_emit_rule_timing("useCardCancelled", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
-	else:
-		_emit_rule_timing("useCardEnd", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
-		_emit_rule_timing("useCardAfter", int(card_use_context.get("actor_id", -1)), int(card_use_context.get("actor_id", -1)), -1, timing_data, event.event_id)
 	card_use_context["lifecycle_finished"] = true
 	_card_use_contexts[card_uid] = card_use_context
-
+	if bool(card_use_context.get("cancelled", false)):
+		timing_data["reason"] = str(card_use_context.get("cancel_reason", "cancelled"))
+		_run_card_lifecycle_timings(card_uid, -1, event.event_id, ["useCardCancelled"], timing_data)
+	else:
+		_run_card_lifecycle_timings(card_uid, -1, event.event_id, ["useCardEnd", "useCardAfter"], timing_data)
 
 ## CardUseEvent 主体最后一步：把默认弃牌放入 after 队列，其他终点只清理共享上下文。
 func _card_use_step_prepare_after(event: GameEvent, scheduler: EventScheduler) -> void:

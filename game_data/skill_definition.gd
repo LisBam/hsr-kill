@@ -718,6 +718,31 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	return result
 
 
+## 执行可暂停的顺序技能；每步接收RuleStepSequence，费用、子结算与后续只执行一次。
+func run_steps(steps: Array[Callable], context: Dictionary = {}) -> int:
+	if host == null or not can_use_effect(bool(context.get("locked_skill_segment", false))):
+		return -1
+	return int(host.call("run_rule_sequence", steps, _build_selection_context(context)))
+
+
+## 在步骤中选择目标；结果写入sequence.choice_response，下一步读取，无需重写continue_selection。
+func request_step_targets(sequence: RuleStepSequence, prompt: String, target_ids: Array[int], min_select: int = 1, max_select: int = 1, allow_cancel: bool = true, context: Dictionary = {}) -> void:
+	# 当前请求语义；kind仍保留给技能AI评分，额外身份只负责把结果路由回原序列。
+	var selection_context: Dictionary = context.duplicate(true)
+	selection_context["rule_sequence_id"] = sequence.sequence_id
+	sequence.choice_response = null
+	request_target_selection(prompt, target_ids, min_select, max_select, allow_cancel, selection_context)
+
+
+## 在步骤中选择牌；仍复用统一候选/数量/网络校验，取消结果由后续步骤自行决定是否finish。
+func request_step_cards(sequence: RuleStepSequence, title: String, prompt: String, candidates: Array[Dictionary], min_select: int, max_select: int, allow_cancel: bool, context: Dictionary = {}) -> void:
+	# 原技能AI上下文；保留kind及扩展字段，只追加结果归属。
+	var selection_context: Dictionary = context.duplicate(true)
+	selection_context["rule_sequence_id"] = sequence.sequence_id
+	sequence.choice_response = null
+	request_card_selection(title, prompt, candidates, min_select, max_select, allow_cancel, selection_context)
+
+
 ## 通过统一包装器执行技能时机回调，并在调用期间保存可序列化事件快照供announce_activation登记重放入口。
 func _dispatch_timing_callback(event: RuleEvent, callback: Callable) -> void:
 	if event == null or not callback.is_valid():

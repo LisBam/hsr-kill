@@ -25,6 +25,11 @@ func _ready() -> void:
 
 ## 创建两人对局，强制 AI 角色对本地玩家使用【杀】，并等待下一帧模拟真实点击【闪】。
 func _run() -> void:
+	# 本场景只测试战斗恢复；固定内存开局选项，不读取玩家上次保存的自选、全角色控制或手气卡偏好。
+	GameSettings.custom_character_assignment_enabled = false
+	GameSettings.control_all_characters_enabled = false
+	GameSettings.customize_ai_characters_enabled = false
+	GameSettings.mulligan_limit = 0
 	_controller = MatchController.new()
 	_controller.name = "MatchController"
 	# 规则事件总线；节点名称与正式控制器依赖路径保持一致。
@@ -47,7 +52,7 @@ func _run() -> void:
 	# AI 延迟；留出两帧完成本地响应，并在结束前等待失效计时器自然回收。
 	_controller.ai_action_delay_seconds = 0.05
 	_controller.card_choice_requested.connect(_on_card_choice_requested)
-	if not _controller.start_match(2, 7):
+	if not _controller.start_match(2, 7, "identity"):
 		_fail("start_match")
 		return
 	# 领袖候选；固定种子保证本地0号玩家完成唯一的人类选将，其他角色由 AI 同步完成。

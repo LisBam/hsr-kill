@@ -34,26 +34,53 @@ func _on_preparation_phase_begin(_event: RuleEvent) -> void:
 	var target_ids: Array[int] = _get_eligible_target_ids()
 	if target_ids.is_empty():
 		return
-	request_target_selection("【加护】请选择一名武将牌竖置且没有护盾的角色", target_ids, 0, 1, true, {"kind":"jiahu_target"})
+	run_steps([_choose_jiahu_target, _link_jiahu_target, _grant_jiahu_shield], {"target_ids":target_ids})
 
 
 ## 恢复加护目标选择；等待期间目标状态改变时直接跳过已不可执行的效果。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if str(context.get("kind", "")) != "jiahu_target" or response == null:
 		return false
-	if not response.confirmed or response.target_ids.size() != 1:
-		return true
+	# 兼容旧选择入口；两条入口共享内容步骤，不重复维护横置与护盾的结算分支。
+	run_steps([Callable(self, "_link_jiahu_target").bind(response), _grant_jiahu_shield])
+	return true
+
+
+## 第一步只创建目标请求；AI和真人都通过相同请求结果进入下一步。
+func _choose_jiahu_target(sequence: RuleStepSequence) -> void:
+	request_step_targets(sequence, "【加护】请选择一名武将牌竖置且没有护盾的角色", _get_eligible_target_ids(), 0, 1, true, {"kind":"jiahu_target"})
+
+
+## 第二步验证选择并横置目标；link时机产生的子选择必须完成后才进入护盾步骤。
+func _link_jiahu_target(sequence: RuleStepSequence, response: ChoiceResponse = null) -> void:
+	if response == null:
+		response = sequence.choice_response
+	if response == null or not response.confirmed or response.target_ids.size() != 1:
+		sequence.finish()
+		return
 	# 最终目标ID；必须仍然存活、竖置且护盾为0才执行顺序效果。
 	var target_id: int = response.target_ids[0]
 	if not _get_eligible_target_ids().has(target_id):
-		return true
+		sequence.finish()
+		return
+	sequence.context["target_id"] = target_id
+	sequence.context["target_character_generation"] = host.state.get_player(target_id).character_generation
 	if not bool(host.call("set_player_linked", target_id, true, owner_player_id, get_id())):
-		return true
+		sequence.finish()
+		return
 	announce_activation({"target_id":target_id})
+
+
+## 第三步提供护盾；目标换将或离场后不向同座位的新角色泄漏旧效果。
+func _grant_jiahu_shield(sequence: RuleStepSequence) -> void:
+	# 已确认目标ID；由横置步骤写入，不重新选择或重复发动技能。
+	var target_id: int = int(sequence.context.get("target_id", -1))
+	# 当前目标；体力存活和武将代次校验保证异步结果仍属于同一角色。
+	var target: PlayerState = host.state.get_player(target_id)
+	if target == null or not target.alive or target.out_of_game or target.character_generation != int(sequence.context.get("target_character_generation", -1)):
+		return
 	get_skill_player(target_id).shield(SHIELD_AMOUNT, get_owner_skill_player())
 	observe_identity_behavior([target_id], {"target_result":1.0})
-	return true
-
 
 ## 返回当前全部竖置、无护盾且在场存活的角色ID；座次顺序用于稳定交互与回放。
 func _get_eligible_target_ids() -> Array[int]:

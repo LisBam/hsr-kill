@@ -45,6 +45,9 @@ var _next_request_id: int = 1
 ## 尚未结束的完整事件对象索引；只有调度器内部持有可变引用，外部使用get_event_snapshot查询活动或归档摘要。
 var _events: Dictionary = {}
 
+## 活动父子所有权索引；包含已出next队列但仍在栈上等待的子事件，终结时移除，默认空。
+var _children_by_parent: Dictionary = {}
+
 ## 已结束事件ID到最终只读摘要的轻量索引；摘要与完成历史共享字典引用，不保留Callable、运行时上下文对象或完整GameEvent实例。
 ## 该索引只保存最近4096项；完整历史仍永久保留全部摘要，冷事件查询通过低频回退扫描恢复。
 var _finalized_event_snapshots: Dictionary = {}
@@ -79,6 +82,9 @@ var _deferred_drain_pending: bool = false
 ## 延迟排空回调的单调令牌；每次登记或失效都会递增，旧帧回调不能接管较新的事件树状态。
 var _deferred_drain_token: int = 0
 
+## 当前调度器持有的唯一帧信号连接；默认空Callable，显式接管、重置与离树时立即释放。
+var _deferred_drain_callback: Callable = Callable()
+
 ## 最近一次无等待重跑的事件ID；-1表示当前没有连续重复步骤，事件或步骤变化时立即重置。
 var _repeated_step_event_id: int = -1
 
@@ -109,6 +115,7 @@ func create_event(event_name: String, event_type: String = "rule", steps: Array[
 	event.event_id = _next_event_id
 	_next_event_id += 1
 	event.parent_id = parent_id
+	event.parent_queue = queue
 	event.event_type = event_type
 	_events[event.event_id] = event
 	if parent_id >= 0:
@@ -118,7 +125,16 @@ func create_event(event_name: String, event_type: String = "rule", steps: Array[
 			# 已归档父事件仍可作为外部选择或迁移记录的语义父级；它不再拥有待执行队列，子事件由调用方独立完成。
 			if not _has_finalized_event_snapshot(parent_id):
 				event.abort("missing_parent")
+				_finalize_event(event, false)
 		else:
+			# 父事件普通主体取消后拒绝追加新工作；after仍可登记，完整中断则拒绝所有子工作。
+			if parent.status == GameEvent.Status.ABORTED or (parent.body_finished and queue != "after" and parent.status != GameEvent.Status.FINISHED):
+				event.abort("parent_terminated")
+				_finalize_event(event, false)
+				return event
+			if not _children_by_parent.has(parent_id):
+				_children_by_parent[parent_id] = []
+			(_children_by_parent[parent_id] as Array).append(event.event_id)
 			if queue == "after":
 				parent.insert_after(event.event_id)
 			else:
@@ -200,6 +216,10 @@ func drain() -> void:
 	# 本次操作预算；运行时脚本异常写入0或负数时仍至少执行1次，保证调度器可以自恢复。
 	var operation_budget: int = maxi(max_operations_per_drain, 1)
 	while not _event_stack.is_empty() and not _stop_requested and operation_count < operation_budget:
+		# 取消必须先于暂停门控处理，否则被取消子事件的选择令牌会永久挡住父事件收尾。
+		_reconcile_terminated_stack()
+		if _event_stack.is_empty() or _stop_requested:
+			break
 		# 当前事件 ID；栈末尾永远是唯一允许执行内容的事件。
 		var current_event_id: int = _event_stack.back()
 		var event: GameEvent = _events.get(current_event_id) as GameEvent
@@ -208,10 +228,11 @@ func drain() -> void:
 			operation_count += 1
 			continue
 		if pause_registry.has_active_for_stack(_event_stack):
-			event.status = GameEvent.Status.PAUSED
+			if not event.body_finished:
+				event.status = GameEvent.Status.PAUSED
 			break
 		# 长期根事件没有待执行子事件时保持在栈底等待；该状态不是暂停，因此后续新建子事件仍可正常排空。
-		if event.held_open and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size():
+		if event.held_open and not event.body_finished and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size():
 			event.status = GameEvent.Status.WAITING_CHILDREN
 			break
 		_process_event(event)
@@ -236,7 +257,8 @@ func _process_event(event: GameEvent) -> void:
 		_record_history("start", event)
 		event_started.emit(event.to_dict())
 	if pause_registry.has_active_for_stack(_event_stack):
-		event.status = GameEvent.Status.PAUSED
+		if not event.body_finished:
+			event.status = GameEvent.Status.PAUSED
 		return
 	# 主体期间插入的子事件优先于后续内容步骤。
 	if not event.next_event_ids.is_empty():
@@ -245,7 +267,8 @@ func _process_event(event: GameEvent) -> void:
 		var child: GameEvent = _events.get(child_id) as GameEvent
 		if child == null or child.finalized:
 			return
-		event.status = GameEvent.Status.WAITING_CHILDREN
+		if not event.body_finished:
+			event.status = GameEvent.Status.WAITING_CHILDREN
 		_event_stack.append(child_id)
 		return
 	# 主体未结束时执行一个步骤；超出长度会自动 finish。
@@ -337,7 +360,7 @@ func _has_immediately_executable_work() -> bool:
 	if event == null:
 		return true
 	# 长期根没有子事件、after或剩余内容时处于稳定空闲，不需要持续空转。
-	return not (event.held_open and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size())
+	return not (event.held_open and not event.body_finished and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size())
 
 
 ## 达到本轮预算后登记唯一空闲帧续跑；令牌确保显式排空、重置或终局能让旧回调自然失效。
@@ -348,26 +371,39 @@ func _schedule_deferred_drain() -> void:
 	_deferred_drain_token += 1
 	# 当前续跑令牌；绑定到延迟回调后不再修改，后续显式drain会递增全局令牌使其失效。
 	var continuation_token: int = _deferred_drain_token
-	call_deferred("_continue_deferred_drain", continuation_token)
+	# call_deferred会在同一空闲帧持续排空；真实帧信号才能为输入、网络和渲染保留执行机会。
+	if is_inside_tree():
+		_deferred_drain_callback = _continue_deferred_drain.bind(continuation_token)
+		get_tree().process_frame.connect(_deferred_drain_callback, CONNECT_ONE_SHOT)
+	else:
+		call_deferred("_continue_deferred_drain", continuation_token)
 
 
 ## 执行仍为最新版本的空闲帧续跑；过期回调不读取或修改事件树。
 func _continue_deferred_drain(continuation_token: int) -> void:
 	if not _deferred_drain_pending or continuation_token != _deferred_drain_token:
 		return
-	_deferred_drain_pending = false
+	_invalidate_deferred_drain()
 	drain()
 
 
 ## 使当前延迟排空登记失效；显式恢复、终局和重置均通过此入口避免旧回调重入。
 func _invalidate_deferred_drain() -> void:
+	if is_inside_tree() and _deferred_drain_callback.is_valid() and get_tree().process_frame.is_connected(_deferred_drain_callback):
+		get_tree().process_frame.disconnect(_deferred_drain_callback)
+	_deferred_drain_callback = Callable()
 	if _deferred_drain_pending:
 		_deferred_drain_token += 1
 	_deferred_drain_pending = false
 
 
+## 离树即放弃帧唤醒所有权；不依赖对象析构或下一帧回调才清理信号连接。
+func _exit_tree() -> void:
+	_invalidate_deferred_drain()
+
+
 ## 完成栈顶事件并把结果深拷贝回父事件；只在 after 队列已经清空时调用。
-func _finalize_event(event: GameEvent) -> void:
+func _finalize_event(event: GameEvent, propagate_result: bool = true) -> void:
 	if event.finalized:
 		return
 	event.finalized = true
@@ -376,18 +412,79 @@ func _finalize_event(event: GameEvent) -> void:
 	# 最终事件摘要；信号仍发送独立副本，订阅者无法反向修改历史或归档。
 	var final_event_snapshot: Dictionary = final_record.get("event", {}) as Dictionary
 	_cache_finalized_event_snapshot(event.event_id, final_event_snapshot)
-	event_finished.emit(final_event_snapshot.duplicate(true))
-	if not _event_stack.is_empty() and _event_stack.back() == event.event_id:
-		_event_stack.pop_back()
+	_event_stack.erase(event.event_id)
 	if event.parent_id >= 0:
 		# 父事件对象；子事件结果通过标准字段复制，避免暴露子对象引用。
 		var parent: GameEvent = _events.get(event.parent_id) as GameEvent
 		if parent != null:
-			parent.result = event.result.duplicate(true)
-			if parent.status == GameEvent.Status.WAITING_CHILDREN:
+			parent.next_event_ids.erase(event.event_id)
+			parent.after_event_ids.erase(event.event_id)
+			if propagate_result:
+				parent.result = event.result.duplicate(true)
+			if not parent.body_finished and parent.status == GameEvent.Status.WAITING_CHILDREN:
 				parent.status = GameEvent.Status.RUNNING
+		if _children_by_parent.has(event.parent_id):
+			(_children_by_parent[event.parent_id] as Array).erase(event.event_id)
+			if (_children_by_parent[event.parent_id] as Array).is_empty():
+				_children_by_parent.erase(event.parent_id)
 	# 已完成事件的可调用步骤和可变上下文不再参与任何调度；归档摘要足以支持回放历史与get_event_snapshot查询。
 	_events.erase(event.event_id)
+	_children_by_parent.erase(event.event_id)
+	# 先提交出栈、父结果与索引，再通知外部；监听者建立新子树时不会挂到已完成事件。
+	event_finished.emit(final_event_snapshot.duplicate(true))
+
+
+## 在暂停检查前清理终止祖先的所有权；取消/中立化保留after，abort连同after一起中断。
+func _reconcile_terminated_stack() -> void:
+	# 栈快照；子树清理会从真实栈移除节点，遍历快照避免漏检祖先。
+	var stack_snapshot: Array[int] = _event_stack.duplicate()
+	# 当前祖先事件ID；顺序沿用栈快照，已被上层清理的ID在循环内跳过。
+	for event_id: int in stack_snapshot:
+		# 当前仍活动的祖先；先前子树清理已移除的节点直接跳过。
+		var event: GameEvent = _events.get(event_id) as GameEvent
+		if event == null or not event.body_finished:
+			continue
+		_abort_owned_choices(event, "event_terminated")
+		pause_registry.resolve_owner(event_id, "event_terminated")
+		if event.status not in [GameEvent.Status.CANCELLED, GameEvent.Status.NEUTRALIZED, GameEvent.Status.ABORTED]:
+			continue
+		# 直属子事件ID快照；队列已被GameEvent清空时仍可通过所有权索引找回。
+		var child_ids: Array = (_children_by_parent.get(event_id, []) as Array).duplicate()
+		# 当前直属子ID；按原归属区分普通内容与after收尾。
+		for child_id: int in child_ids:
+			# after归属在压栈后仍保持，因此不会误删已经开始执行的合法收尾。
+			var child: GameEvent = _events.get(child_id) as GameEvent
+			if child != null and (event.status == GameEvent.Status.ABORTED or child.parent_queue != "after"):
+				_abort_event_subtree(child, event.termination_reason)
+
+
+## 中断一棵拥有明确父子关系的活动子树；不调用drain，避免清理过程中重入规则内容。
+func _abort_event_subtree(event: GameEvent, reason: String) -> void:
+	if event == null or event.finalized:
+		return
+	event.abort(reason)
+	_abort_owned_choices(event, reason)
+	pause_registry.resolve_owner(event.event_id, reason)
+	# 子事件快照；先收回所有后代再回收父事件，保证无悬空选择与Callable引用。
+	var child_ids: Array = (_children_by_parent.get(event.event_id, []) as Array).duplicate()
+	# 后代事件ID；递归收回其自有请求后才释放父节点。
+	for child_id: int in child_ids:
+		_abort_event_subtree(_events.get(child_id) as GameEvent, reason)
+	_record_history("abort", event)
+	_finalize_event(event, false)
+
+
+## 取消指定所有者的未决请求；迟到提交由请求索引缺失自然拒绝，不产生虚假的确认结果。
+func _abort_owned_choices(event: GameEvent, reason: String) -> void:
+	# 请求ID快照；移除请求时不遍历可变字典视图。
+	var request_ids: Array = _choice_requests.keys()
+	# 候选请求ID；这里只处理当前事件拥有的未决请求。
+	for request_id: int in request_ids:
+		# 当前请求；只中断属于本事件的选择，不触碰同局其他并行响应者。
+		var request: ChoiceRequest = _choice_requests.get(request_id) as ChoiceRequest
+		if request != null and request.event_id == event.event_id:
+			request.abort(reason)
+			_choice_requests.erase(request_id)
 
 
 ## 创建并登记暂停 token；owner_event_id 默认使用当前事件，外部系统可传 -1 创建全局暂停。
@@ -454,7 +551,7 @@ func submit_choice(response: ChoiceResponse, defer_drain: bool = false) -> bool:
 	if not validation_error.is_empty():
 		return false
 	var event: GameEvent = _events.get(request.event_id) as GameEvent
-	if event == null or event.finalized or event.status == GameEvent.Status.ABORTED:
+	if event == null or event.finalized or event.is_terminal():
 		return false
 	request.resolve(response)
 	event.result = {"choice_request": request.to_dict(), "choice_response": response.to_dict()}
@@ -486,11 +583,12 @@ func timeout_choice(request_id: int, response: ChoiceResponse) -> bool:
 	var validation_error: String = request.validate_response(response)
 	if not validation_error.is_empty():
 		return false
+	# 超时所属活动事件；在修改请求和响应之前校验终态，避免托管复活已取消内容。
+	var event: GameEvent = _events.get(request.event_id) as GameEvent
+	if event == null or event.finalized or event.is_terminal():
+		return false
 	response.source = "timeout"
 	request.timeout(response)
-	var event: GameEvent = _events.get(request.event_id) as GameEvent
-	if event == null:
-		return false
 	event.result = {"choice_request": request.to_dict(), "choice_response": response.to_dict()}
 	var scheduled_event: bool = _event_stack.has(event.event_id)
 	if not scheduled_event:
@@ -518,11 +616,12 @@ func abort_choice(request_id: int, reason: String = "choice_unresolvable") -> bo
 	# 请求所属事件；无法恢复的选择子事件必须中断，父事件才能在暂停令牌释放后继续收尾。
 	var event: GameEvent = _events.get(request.event_id) as GameEvent
 	if event != null and not event.finalized:
-		event.abort(reason)
 		event.result = {"choice_request":request.to_dict(), "abort_reason":reason}
-		_record_history("abort", event, {"choice_request":request.to_dict()})
+		_abort_event_subtree(event, reason)
 	# 请求自己的暂停令牌；其他玩法、网络或动画暂停仍会继续阻止事件栈推进。
 	resume(request.pause_token_id, reason)
+	# 所有权清理可能已释放该token；仍须继续合法父流程，不能依赖再次resolve成功。
+	drain()
 	if event != null and not event.finalized and not _event_stack.has(event.event_id):
 		_finalize_event(event)
 	return true
@@ -540,9 +639,8 @@ func abort_all(reason: String = "game_over") -> void:
 	for event_variant: Variant in _events.values():
 		# 当前事件；根和子事件都进入 ABORTED，已完成事件保持原终态。
 		var event: GameEvent = event_variant as GameEvent
-		if event != null and not event.finalized and not event.is_terminal():
-			event.abort(reason)
-			_record_history("abort", event)
+		if event != null and not event.finalized:
+			_abort_event_subtree(event, reason)
 	_choice_requests.clear()
 	pause_registry.resolve_all(reason)
 	scheduler_aborted.emit(reason)
@@ -616,6 +714,20 @@ func get_current_event_id() -> int:
 ## 返回当前可变事件仅供调度器内部和调试器使用；普通规则模块应读取 get_event_snapshot。
 func get_current_event() -> GameEvent:
 	return _events.get(get_current_event_id()) as GameEvent
+
+
+## 将已完成的规则触发结果交回承载它的GameEvent；异步处理器全部结束后才发布最终修改和终态。
+func apply_rule_event_result(event_id: int, rule_event: RuleEvent) -> bool:
+	# 唯一活动承载事件；过期结果不能写回归档或新局事件。
+	var event: GameEvent = _events.get(event_id) as GameEvent
+	if event == null or event.finalized or rule_event == null:
+		return false
+	event.result = rule_event.to_dict()
+	if rule_event.cancelled:
+		event.cancel(rule_event.termination_reason)
+	elif rule_event.neutralized:
+		event.neutralize(rule_event.termination_reason)
+	return true
 
 
 ## 返回事件摘要快照；未知 ID 返回空字典，避免外部取得可变 GameEvent 引用。
@@ -706,9 +818,9 @@ func reset() -> void:
 		abort_all("runtime_reset")
 	_invalidate_deferred_drain()
 	_reset_repeated_step_guard()
-	_next_event_id = 1
-	_next_request_id = 1
+	# 稳定身份跨reset保持单调；旧局的迟到选择与暂停回调永远不能命中新局对象。
 	_events.clear()
+	_children_by_parent.clear()
 	_finalized_event_snapshots.clear()
 	_finalized_event_snapshot_id_ring.clear()
 	_finalized_event_snapshot_id_ring_cursor = 0
