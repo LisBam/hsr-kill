@@ -80,6 +80,15 @@ var _zhangba_material_uids: Array[int] = []
 ## 丈八响应请求是否同时公开了装备候选；默认false，收到正确候选后改为true。
 var _zhangba_response_has_equipment: bool = false
 
+## 青釭剑无视防具回归收到的【闪】响应请求数量；被无视的防具不应额外产生独立发动询问，因此固定为1。
+var _qinggang_armor_response_request_count: int = 0
+
+## 青釭剑无视防具回归中目标防具实体 UID；用于确认受无视的防具没有成为响应候选。
+var _qinggang_armor_uid: int = -1
+
+## 青釭剑无视防具回归中是否收到防具独立发动询问；正确规则下必须保持false。
+var _qinggang_armor_prompted_equipment: bool = false
+
 ## 八卦阵失败回归收到的【闪】响应请求数量；首次包含八卦阵，黑色判定后第二次只保留其他合法候选。
 var _bagua_response_request_count: int = 0
 
@@ -159,6 +168,8 @@ func _run() -> void:
 	if not await _test_bagua_failure_allows_hand_shan():
 		return
 	if not await _test_qinggang_ignores_tengjia():
+		return
+	if not await _test_qinggang_ignores_bagua_response():
 		return
 	if not await _test_qilin_damage_timing_runtime():
 		return
@@ -250,6 +261,9 @@ func _reset_state(player_count: int) -> void:
 	_bagua_hand_shan_uid = -1
 	_bagua_retry_has_hand_shan = false
 	_bagua_retry_excludes_bagua = false
+	_qinggang_armor_response_request_count = 0
+	_qinggang_armor_uid = -1
+	_qinggang_armor_prompted_equipment = false
 	_qilin_request_count = 0
 	_qilin_mount_uid = -1
 	_qilin_candidate_present = false
@@ -913,6 +927,35 @@ func _test_qinggang_ignores_tengjia() -> bool:
 	return true
 
 
+## 验证青釭剑无视防具时，目标防具不再提供【闪】响应入口（八卦阵不能被发动）。
+func _test_qinggang_ignores_bagua_response() -> bool:
+	_scenario = "qinggang_bagua"
+	_reset_state(2)
+	# 攻击者青釭剑；无视防具能力由武器源码钩子声明，不在【杀】组件中硬编码装备ID。
+	var qinggang_card: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	qinggang_card.zone = "equipment"
+	qinggang_card.owner_id = 0
+	_controller.state.get_player(0).equipment["weapon"] = qinggang_card
+	# 目标八卦阵；若防御方仍收到独立发动询问，说明防具响应入口没有遵循本次无视防具结论。
+	var bagua_card: CardInstance = CardInstance.new("bagua", "club", 2)
+	bagua_card.zone = "equipment"
+	bagua_card.owner_id = 1
+	_controller.state.get_player(1).equipment["armor"] = bagua_card
+	_qinggang_armor_uid = bagua_card.uid
+	# 判定牌固定为红色；一旦八卦阵被错误询问就会直接生成虚拟【闪】并阻止本次伤害，从而暴露该缺陷。
+	var red_judgment_card: CardInstance = CardInstance.new("tao", "heart", 9)
+	red_judgment_card.zone = "draw_pile"
+	_controller.state.draw_pile.append(red_judgment_card)
+	# 普通【杀】实体；测试响应处理器明确拒绝手牌响应，命中后应造成固定1点伤害。
+	var slash_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	_controller._execute_card_use(0, slash_card, [1])
+	if not await _wait_until_card_finalized(slash_card.uid):
+		return _fail("qinggang_bagua_timeout")
+	if _qinggang_armor_prompted_equipment or _qinggang_armor_response_request_count != 1 or _controller.state.get_player(1).hp != 3:
+		return _fail("qinggang_bagua prompts=%s requests=%d hp=%d" % [_qinggang_armor_prompted_equipment, _qinggang_armor_response_request_count, _controller.state.get_player(1).hp])
+	return true
+
+
 ## 验证麒麟弓通过装备运行时订阅真实damage时机，并在【杀】目标收尾前弃置坐骑。
 ## 当前断言说明：正式订阅已前移至shaDamage，测试额外要求坐骑选择发生在目标实际扣血之前。
 func _test_qilin_damage_timing_runtime() -> bool:
@@ -1178,6 +1221,13 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 			_bagua_retry_has_hand_shan = candidate_uids.has(_bagua_hand_shan_uid)
 			_bagua_retry_excludes_bagua = not candidate_uids.has(_bagua_uid)
 			selected_uids = [_bagua_hand_shan_uid]
+	elif _scenario == "qinggang_bagua" and kind == "slash_response":
+		_qinggang_armor_response_request_count += 1
+		# 当前响应候选；无视防具的【杀】只能保留普通手牌响应，受无视的防具实体不得出现在任何一次请求中。
+		for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+			if int((candidate_variant as Dictionary).get("uid", -1)) == _qinggang_armor_uid:
+				_qinggang_armor_prompted_equipment = true
+		selected_uids = []
 	elif _scenario in ["qinggang_armor", "qilin_damage"] and kind == "slash_response":
 		selected_uids = []
 	elif _scenario in ["qilin_mount", "qilin_damage"] and kind in ["qilin_mount", "qilin_damage"]:
