@@ -42,6 +42,39 @@ const VOICE_KIND_SKILL: String = "skill"
 ## 音频请求类别：卡牌使用或打出语音；音频服务据此按“当前名称体系 → 另一名称体系”解析候选文件。
 const VOICE_KIND_CARD: String = "card"
 
+## 音频请求类别：全局效果音；音频服务据此按固定效果标识解析通用素材。
+## 效果音覆盖体力增减、属性伤害、护甲承伤、连环与装备等与具体技能无关的规则事件。
+## 负载与技能、卡牌语音共用同一信号，因此表现层与联机广播链路不需要为效果音增加任何分支。
+const VOICE_KIND_EFFECT: String = "effect"
+
+## 效果音标识：回复体力；实际回复量大于0时发声。
+const EFFECT_RECOVER: String = "recover"
+
+## 效果音标识：失去体力；绕过护盾直接扣减体力时发声。
+const EFFECT_LOSE_HP: String = "loseHp"
+
+## 效果音标识：被横置（连环）；角色由未横置变为横置时发声。
+const EFFECT_LINK: String = "link"
+
+## 效果音标识：解除连环；角色由横置变为未横置时发声。
+const EFFECT_LINK_CLEAR: String = "link_clear"
+
+## 伤害效果音基础标识；未发生护甲承伤时使用，2点及以上伤害追加后缀2。
+const EFFECT_DAMAGE_BASE: String = "damage"
+
+## 伤害效果音基础标识（护甲承伤）；护盾实际吸收伤害时使用，与普通伤害音效区分。
+const EFFECT_HUJIA_DAMAGE_BASE: String = "hujia_damage"
+
+## 装备效果音标识表；键为本项目稳定的装备槽位ID，值为无名杀装备音效标识。
+## 武器、防具、进攻马、防御马与宝物各自使用独立音色，未登记槽位不发声。
+const EQUIPMENT_EFFECT_IDS: Dictionary = {
+	"weapon":"equip1",
+	"armor":"equip2",
+	"offensive_mount":"equip3",
+	"defensive_mount":"equip4",
+	"treasure":"equip5",
+}
+
 ## 卡牌音频动作模式：使用；与打出共用同一份音效，该字段仅用于诊断与日志。
 const VOICE_PLAY_MODE_USE: String = "use"
 
@@ -3963,6 +3996,9 @@ func recover(source_id: int, target_id: int, amount: int, reason: String = "", a
 	target.hp = mini(target.max_hp, target.hp + final_amount)
 	# 实际回复量；体力接近上限时小于请求值，结算统计和事件均必须使用这一数值。
 	var recovered_amount: int = target.hp - previous_hp
+	# 回复效果音；体力已满或被上限截断为0的无效回复不发声。
+	if recovered_amount > 0:
+		request_effect_voice(target_id, EFFECT_RECOVER)
 	# 回复来源角色；来源为自身时同样累计，来源缺失的系统回复不归属任何角色。
 	var recovery_source: PlayerState = state.get_player(source_id) if source_id >= 0 else null
 	if recovery_source != null and recovered_amount > 0:
@@ -4466,6 +4502,8 @@ func set_player_linked(target_id: int, linked: bool, source_id: int = -1, reason
 	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
 		return false
 	target.chained = linked
+	# 连环效果音；被横置与解除连环使用两套不同音效，与无名杀的连环音效语义一致。
+	request_effect_voice(target_id, EFFECT_LINK if linked else EFFECT_LINK_CLEAR)
 	var result_data: Dictionary = {"old_linked":not linked, "linked":linked, "reason":reason}
 	_emit_rule_timing("linkEnd", target_id, source_id, target_id, result_data)
 	_emit_rule_timing("linkAfter", target_id, source_id, target_id, result_data)
@@ -4526,6 +4564,8 @@ func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "", a
 	if final_amount == 0:
 		return 0
 	target.hp -= final_amount
+	# 失去体力效果音；final_amount已经过两次非正数校验，此处必定大于0，无需重复判空。
+	request_effect_voice(target_id, EFFECT_LOSE_HP)
 	# 失去体力父事件；与伤害事件使用不同类型，回放和技能触发不会混淆两种体力减少来源。
 	var lose_hp_event_id: int = _record_runtime_event("LoseHpEvent", "lose_hp", {"source_id":source_id, "target_id":target_id, "requested_amount":amount, "reason":reason}, {"amount":final_amount, "hp":target.hp})
 	add_log("%s失去%d点体力（%d/%d，护盾%d）。" % [format_player_state_log_name(target), final_amount, target.hp, target.max_hp, target.shield])
@@ -4656,6 +4696,8 @@ func _commit_prepared_damage(context: Dictionary) -> Dictionary:
 		source_player.damage_history.append({"event_id":damage_event_id, "source_id":source_id, "target_id":target_id, "amount":final_amount, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "nature":nature})
 	if target.chained and nature != "normal":
 		target.chained = false
+	# 受伤效果音；护盾实际吸收伤害时使用护甲音效，否则使用体力音效，并已按属性与伤害点数选好变体。
+	request_effect_voice(target_id, _resolve_damage_effect_id(nature, final_amount, shield_absorbed))
 	if shield_absorbed > 0:
 		add_log("%s受到%d点%s伤害，护盾抵消%d点（%d/%d，护盾%d）。" % [format_player_state_log_name(target), final_amount, _nature_text(nature), shield_absorbed, target.hp, target.max_hp, target.shield])
 	else:
@@ -6020,6 +6062,8 @@ func equip_from_processing(player_id: int, card: CardInstance) -> void:
 	if equipment_move == null:
 		return
 	_install_card_runtime(card, player_id)
+	# 装备效果音；按装备槽位选用武器、防具、进攻马、防御马与宝物五套音效之一，未登记槽位不发声。
+	request_effect_voice(player_id, _resolve_equipment_effect_id(slot))
 	add_log("%s装备了%s。" % [format_player_state_log_name(player), format_card_log_name(card)])
 
 
@@ -8948,6 +8992,48 @@ func request_card_voice(player_id: int, card_definition_id: String, play_mode: S
 	}
 	_voice_presentation_sequence += 1
 	voice_presentation_requested.emit(presentation_data)
+
+
+## 请求播放一次全局效果音。
+## 本端口与技能、卡牌语音共用同一条表现链路：单机本地播放，局域网由房主广播给全部客户端。
+## 效果音不区分角色与性别，负载因此只含效果标识本身，随联机表现事件广播不会泄露任何隐藏信息。
+func request_effect_voice(player_id: int, effect_id: String) -> void:
+	if state == null or state.game_over or effect_id.is_empty():
+		return
+	# 去重键；以当前规则事件为令牌，避免伤害续接恢复或嵌套结算对同一次事件重复发声。
+	var dedup_key: String = "%s|%d|%s|%d|%s" % [VOICE_KIND_EFFECT, player_id, effect_id, state.current_event_id, ""]
+	if _is_duplicate_voice_request(dedup_key):
+		return
+	# 只读表现负载；效果音是全局素材，因此不需要武将、牌名或性别字段。
+	var presentation_data: Dictionary = {
+		"kind": VOICE_KIND_EFFECT,
+		"player_id": player_id,
+		"effect_id": effect_id,
+		"sequence": _voice_presentation_sequence,
+	}
+	_voice_presentation_sequence += 1
+	voice_presentation_requested.emit(presentation_data)
+
+
+## 推导一次伤害对应的效果音标识；与无名杀的伤害音效命名规则逐项对齐。
+## 命名规则与无名杀保持一致：护盾实际吸收伤害时使用 hujia_damage 系列，否则使用 damage 系列；
+## 火与雷属性追加属性后缀，2点及以上伤害追加“2”后缀。
+## 项目只定义普通、火焰与雷电三种伤害属性，其余属性取值一律回退到基础音效，不会命中不存在的素材。
+func _resolve_damage_effect_id(nature: String, amount: int, shield_absorbed: int) -> String:
+	# 效果音基名；护盾参与吸收即视为护甲承受伤害，与无名杀的护甲语义完全对应。
+	var effect_id: String = EFFECT_HUJIA_DAMAGE_BASE if shield_absorbed > 0 else EFFECT_DAMAGE_BASE
+	# 属性后缀；只有火与雷两种属性拥有独立音色，其它属性共用基础音效。
+	if nature == "fire" or nature == "thunder":
+		effect_id += "_%s" % nature
+	# 点数后缀；2点及以上伤害使用加重的第二套音效，1点伤害使用基础音效。
+	if amount > 1:
+		effect_id += "2"
+	return effect_id
+
+
+## 推导装备槽位对应的效果音标识；未登记槽位返回空字符串，由请求端口直接跳过。
+func _resolve_equipment_effect_id(slot: String) -> String:
+	return str(EQUIPMENT_EFFECT_IDS.get(slot, ""))
 
 
 ## 技能发动的默认音频触发；内容层已显式播放或声明手动接管时跳过，保证不重复发声。

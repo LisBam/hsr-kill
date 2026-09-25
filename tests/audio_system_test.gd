@@ -26,6 +26,43 @@ const PROBE_UNCOVERED_CARD_ID: String = "tao"
 ## 属性【杀】卡牌 ID：火【杀】与雷【杀】；它们各自拥有独立的专属配音，不共用【杀】的素材。
 const PROBE_NATURE_SLASH_CARD_IDS: Array[String] = ["sha_fire", "sha_thunder"]
 
+## 已实装的效果音标识；与 game_data/audio/effect 下的素材文件名逐一对应。
+## 该清单是效果音迁移验收的权威快照：新增或删除效果音时必须同步维护，
+## 素材缺失会直接报出具体标识，而不是让对应规则事件在运行时静默无声。
+## 覆盖范围：普通与属性伤害、护甲承伤、体力回复、失去体力、连环与解除连环、五个装备槽位、终局胜负与平局。
+const REQUIRED_EFFECT_IDS: Array[String] = [
+	"damage", "damage2",
+	"damage_fire", "damage_fire2",
+	"damage_thunder", "damage_thunder2",
+	"hujia_damage", "hujia_damage2",
+	"hujia_damage_fire", "hujia_damage_fire2",
+	"hujia_damage_thunder", "hujia_damage_thunder2",
+	"recover", "loseHp",
+	"link", "link_clear",
+	"equip1", "equip2", "equip3", "equip4", "equip5",
+	"win", "lose", "tie",
+]
+
+## 刻意未投放素材的效果音标识；项目没有冰属性伤害、没有判定与掷道具玩法，
+## 因此这些标识必须解析为空字符串，绝不能回退到任何近似音效而播出与规则事件不符的声音。
+const ABSENT_EFFECT_IDS: Array[String] = ["damage_ice", "damage_male", "damage_female", "draw", "discard", "judge", "coin", "throw_egg1"]
+
+## 效果音标识推导用例；每项由“伤害属性、伤害点数、护盾实际吸收量、期望标识”组成。
+## 覆盖基础音、点数加重音、火与雷属性音以及护甲承伤四类组合，防止后缀拼接顺序被改错。
+const DAMAGE_EFFECT_CASES: Array[Array] = [
+	["normal", 1, 0, "damage"],
+	["normal", 3, 0, "damage2"],
+	["fire", 1, 0, "damage_fire"],
+	["fire", 2, 0, "damage_fire2"],
+	["thunder", 1, 0, "damage_thunder"],
+	["thunder", 4, 0, "damage_thunder2"],
+	["normal", 1, 1, "hujia_damage"],
+	["normal", 2, 2, "hujia_damage2"],
+	["fire", 1, 1, "hujia_damage_fire"],
+	["thunder", 5, 3, "hujia_damage_thunder2"],
+	["ice", 1, 0, "damage"],
+]
+
 ## 核心层自动触发用例最多等待的进程帧数；全 AI 对局在零延迟下会迅速出牌，通常在数十帧内即命中。
 const MAX_AUTOMATION_FRAMES: int = 600
 
@@ -50,8 +87,8 @@ func _ready() -> void:
 ## 依次执行全部音频系统断言；任一步失败立即以返回码1结束进程。
 func _run() -> void:
 	await get_tree().process_frame
-	# 音频目录约定；三个目录必须由项目预先创建，否则素材无处投放。
-	for audio_dir: String in [AudioCatalog.SKILL_AUDIO_DIR, AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.BGM_DIR]:
+	# 音频目录约定；四个目录必须由项目预先创建，否则素材无处投放。
+	for audio_dir: String in [AudioCatalog.SKILL_AUDIO_DIR, AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.EFFECT_AUDIO_DIR, AudioCatalog.BGM_DIR]:
 		if not DirAccess.dir_exists_absolute(audio_dir):
 			_fail("audio_directory_missing=%s" % audio_dir)
 			return
@@ -62,6 +99,8 @@ func _run() -> void:
 	if not _verify_bgm_pool_merge():
 		return
 	if not _verify_real_audio_assets():
+		return
+	if not _verify_effect_audio_assets():
 		return
 	if not _verify_extension_priority():
 		return
@@ -286,6 +325,32 @@ func _verify_audio_asset_names() -> bool:
 			if GameDatabase.get_card(base_name).is_empty():
 				_fail("real_audio_name_not_card_id=%s/%s" % [gender, entry])
 				return false
+	return true
+
+
+## 校验全局效果音素材已经就位、可被引擎加载，并且没有对应规则事件的效果音不会被误命中。
+## 效果音是全局唯一素材，既不区分性别与角色，也没有专属多音效池，因此这里逐个核对文件名与可加载性。
+func _verify_effect_audio_assets() -> bool:
+	var catalog: AudioCatalog = AudioCatalog.new()
+	for effect_id: String in REQUIRED_EFFECT_IDS:
+		# 解析结果；必须命中一个真实文件，否则说明该效果音的素材漏放或改了名字。
+		var resolved_path: String = catalog.resolve_effect_path(effect_id)
+		if resolved_path.is_empty():
+			_fail("real_effect_missing=%s" % effect_id)
+			return false
+		# 可加载性；文件存在但导入失败时同样播不出声音，必须与缺失一样视为失败。
+		if catalog.load_stream(resolved_path) == null:
+			_fail("real_effect_unloadable=%s" % resolved_path)
+			return false
+	# 未投放标识；解析器只按精确文件名探测，不会近似匹配到其它效果音。
+	for absent_effect_id: String in ABSENT_EFFECT_IDS:
+		if not catalog.resolve_effect_path(absent_effect_id).is_empty():
+			_fail("absent_effect_resolved=%s" % absent_effect_id)
+			return false
+	# 空标识；调用方没给出效果标识时必须返回空字符串，而不是命中目录本身。
+	if not catalog.resolve_effect_path("").is_empty():
+		_fail("empty_effect_resolved")
+		return false
 	return true
 
 
@@ -525,6 +590,44 @@ func _verify_core_voice_channels() -> void:
 		_fail("card_voice_respond_mode_count=%d" % captured_requests.size())
 		await _release_controller(controller)
 		return
+	# 效果音端口；手动请求一次应产生一条效果音类负载，负载只含效果标识而不携带任何角色信息。
+	captured_requests.clear()
+	controller.request_effect_voice(actor_id, MatchController.EFFECT_RECOVER)
+	if captured_requests.size() != 1:
+		_fail("effect_voice_port_count=%d" % captured_requests.size())
+		await _release_controller(controller)
+		return
+	# 效果音负载；类别与效果标识必须逐字保留，音频层据此定位 game_data/audio/effect 下的固定素材。
+	var effect_request: Dictionary = captured_requests[0]
+	if str(effect_request.get("kind", "")) != MatchController.VOICE_KIND_EFFECT or str(effect_request.get("effect_id", "")) != MatchController.EFFECT_RECOVER:
+		_fail("effect_voice_payload=%s" % [effect_request])
+		await _release_controller(controller)
+		return
+	# 去重；同一次规则事件内重复请求同一效果音必须被丢弃，防止伤害续接恢复时连播两次。
+	controller.request_effect_voice(actor_id, MatchController.EFFECT_RECOVER)
+	if captured_requests.size() != 1:
+		_fail("effect_voice_dedup_count=%d" % captured_requests.size())
+		await _release_controller(controller)
+		return
+	# 伤害标识推导；护甲承伤、属性后缀与点数后缀必须与无名杀命名约定逐项一致。
+	for damage_case: Array in DAMAGE_EFFECT_CASES:
+		# 期望标识；与游戏内投放的素材文件名完全同名。
+		var expected_effect_id: String = str(damage_case[3])
+		# 实际推导结果；只依赖伤害属性、点数与护盾实际吸收量三个公开输入。
+		var actual_effect_id: String = controller._resolve_damage_effect_id(str(damage_case[0]), int(damage_case[1]), int(damage_case[2]))
+		if actual_effect_id != expected_effect_id:
+			_fail("damage_effect_id=%s:%s" % [str(damage_case), actual_effect_id])
+			await _release_controller(controller)
+			return
+	# 装备标识推导；五个装备槽位各自对应一套音效，未登记槽位必须返回空字符串而不是回退到默认音效。
+	if controller._resolve_equipment_effect_id("weapon") != "equip1" or controller._resolve_equipment_effect_id("armor") != "equip2" or controller._resolve_equipment_effect_id("offensive_mount") != "equip3" or controller._resolve_equipment_effect_id("defensive_mount") != "equip4" or controller._resolve_equipment_effect_id("treasure") != "equip5":
+		_fail("equipment_effect_id_slots")
+		await _release_controller(controller)
+		return
+	if not controller._resolve_equipment_effect_id("unknown_slot").is_empty():
+		_fail("equipment_effect_id_unknown=%s" % controller._resolve_equipment_effect_id("unknown_slot"))
+		await _release_controller(controller)
+		return
 	# 技能统一出口；写入一条实际成立的发动记录后应自动产生技能类音频请求。
 	captured_requests.clear()
 	# 使用者武将定义；取其第一个已安装技能作为被测技能，缺失时退回通用锁定技。
@@ -563,8 +666,13 @@ func _verify_core_voice_channels() -> void:
 	for captured_request: Dictionary in captured_requests:
 		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_SKILL:
 			auto_skill_request_count += 1
+	# 自动触发的效果音请求数量；同样只作副证据，AI 全流程未造成伤害、回复体力或装备牌时不视为失败。
+	var auto_effect_request_count: int = 0
+	for captured_request: Dictionary in captured_requests:
+		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_EFFECT:
+			auto_effect_request_count += 1
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 effect_assets=%d real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d auto_effect=%d" % [REQUIRED_EFFECT_IDS.size(), auto_skill_request_count, auto_effect_request_count])
 	get_tree().quit(0)
 
 

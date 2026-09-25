@@ -24,6 +24,10 @@ const VOICE_KIND_SKILL: String = "skill"
 ## 语音表现请求类别：卡牌语音；负载需要 card_definition_id、card_names、gender 与 play_mode 字段。
 const VOICE_KIND_CARD: String = "card"
 
+## 语音表现请求类别：全局效果音；负载需要 effect_id 字段。
+## 效果音与技能、卡牌语音共用同一条表现链路，因此单机本地播放、局域网由房主广播的表现语义完全一致。
+const VOICE_KIND_EFFECT: String = "effect"
+
 ## 全局设置自动加载路径；音频音量与静音开关的唯一持久化来源。
 const GAME_SETTINGS_PATH: String = "/root/GameSettings"
 
@@ -65,6 +69,25 @@ func play_voice_presentation(presentation_data: Dictionary) -> void:
 		_play_skill_voice(presentation_data)
 	elif kind == VOICE_KIND_CARD:
 		_play_card_voice(presentation_data)
+	elif kind == VOICE_KIND_EFFECT:
+		_play_effect_voice(presentation_data)
+
+
+## 播放一次全局效果音；供界面层按本地视角发声（例如终局胜负）使用。
+## 该端口与核心层表现请求共用同一份解析与播放实现，区别只在于调用方：
+## 核心层请求会随联机表现事件广播给全部客户端，界面层请求只在本机发声。
+func play_effect(effect_id: String) -> void:
+	if _catalog == null or _voice_player == null:
+		return
+	# 素材路径；该效果没有投放素材时返回空字符串，此处静默跳过。
+	var effect_path: String = _catalog.resolve_effect_path(effect_id)
+	if effect_path.is_empty():
+		_log_missing_audio("effect", effect_id, "")
+		return
+	# 音频流；文件存在但类型不符时返回null，单独跳过而不影响其它音效。
+	var stream: AudioStream = _catalog.load_stream(effect_path)
+	if stream != null:
+		_voice_player.play_stream(stream)
 
 
 ## 请求播放指定场景的背景音乐；同一场景重复请求为幂等操作，不会重头播放。
@@ -170,6 +193,12 @@ func _play_card_voice(presentation_data: Dictionary) -> void:
 		var stream: AudioStream = _catalog.load_stream(path)
 		if stream != null:
 			_voice_player.play_stream(stream)
+
+
+## 播放核心层下发的效果音表现请求；负载字段与界面层 play_effect() 端口完全一致。
+## 效果音不区分角色与性别，因此不读取负载中的发动者字段，只取效果标识本身。
+func _play_effect_voice(presentation_data: Dictionary) -> void:
+	play_effect(str(presentation_data.get("effect_id", "")))
 
 
 ## 读取当前卡牌名称显示模式对应的名称体系后缀。
