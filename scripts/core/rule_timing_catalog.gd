@@ -7,8 +7,8 @@ extends RefCounted
 const GAME_PHASE_TIMINGS: Array[String] = [
 	"gameStart", "gameDrawBefore", "gameDrawBegin", "gameDrawAfter", "enterGame", "roundStart",
 	"phaseBefore", "phaseBeforeStart", "phaseBeforeEnd", "phaseBeginStart", "phaseBegin", "phaseChange", "phaseEnd", "phaseAfter", "phaseOver", "phaseCancelled",
-	"phaseZhunbeiBefore", "phaseZhunbeiBegin", "phaseZhunbeiEnd", "phaseZhunbeiCancelled", "phaseZhunbeiSkipped",
-	"phaseJudgeBefore", "phaseJudgeBegin", "phaseJudge", "phaseJudgeEnd", "phaseJudgeCancelled", "phaseJudgeSkipped",
+	"phaseZhunbeiBefore", "phaseZhunbeiBegin", "phaseZhunbei", "phaseZhunbeiEnd", "phaseZhunbeiAfter", "phaseZhunbeiCancelled", "phaseZhunbeiSkipped",
+	"phaseJudgeBefore", "phaseJudgeBegin", "phaseJudge", "phaseJudgeEnd", "phaseJudgeAfter", "phaseJudgeCancelled", "phaseJudgeSkipped",
 	"phaseDrawBefore", "phaseDrawBegin", "phaseDrawBegin1", "phaseDrawBegin2", "phaseDrawEnd", "phaseDrawAfter", "phaseDrawCancelled", "phaseDrawSkipped",
 	"phaseUseBefore", "phaseUseBegin", "phaseUseEnd", "phaseUseAfter", "phaseUseCancelled", "phaseUseSkipped",
 	"phaseDiscardBefore", "phaseDiscardBegin", "phaseDiscardEnd", "phaseDiscardAfter", "phaseDiscardCancelled", "phaseDiscardSkipped",
@@ -30,7 +30,7 @@ const CARD_RESPONSE_TIMINGS: Array[String] = [
 ## 伤害事件从最早拦截到最终完成的全部时机；Begin1 至 Begin4 必须严格按数组顺序派发。
 const DAMAGE_TIMINGS: Array[String] = [
 	"damageBefore", "damageBegin", "damageBegin1", "damageBegin2", "damageBegin3", "damageBegin4",
-	"damage", "damageZero", "damageSource", "damageEnd", "damageAfter", "damagePointAfter", "damageCancelled",
+	"damage", "damageZero", "damageSource", "damageEnd", "damageAfter", "damagePointBefore", "damagePointBegin", "damagePoint", "damagePointAfter", "damageCancelled",
 ]
 
 ## 体力、体力上限、护甲、濒死、死亡、连环和翻面时机；只定义名称，不限定具体技能效果。

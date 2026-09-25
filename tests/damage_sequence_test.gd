@@ -48,7 +48,7 @@ func _run() -> void:
 func _reset_controller() -> void:
 	if _controller != null:
 		_controller.free()
-	_controller = MatchController.new()
+	_controller = _create_controller()
 	# 总线；沿用正式规则订阅入口。
 	var event_bus: RuleEventBus = RuleEventBus.new()
 	event_bus.name = "RuleEventBus"
@@ -84,6 +84,11 @@ func _reset_controller() -> void:
 	_controller.event_scheduler.begin_root(root.event_id)
 	_controller._runtime_root_event_id = root.event_id
 	_paused_event = null
+
+
+## 控制器工厂；专项阶段测试可替换节奏出口，正式规则入口仍使用同一个控制器实现。
+func _create_controller() -> MatchController:
+	return MatchController.new()
 
 
 ## 在任意规则窗口创建真人选择；保存原RuleEvent供测试验证异步回写而不是局部副本。

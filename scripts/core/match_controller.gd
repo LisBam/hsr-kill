@@ -77,20 +77,23 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"dying_after_response",
 	"trick_negation_response",
 	"simultaneous_negation_response",
-	"damage_finalization",
 	"damage_after_result",
-	"turn_start",
 	"slash_flow",
 	"recast_draw",
 	"target_card_completion",
 	"round_end_restore",
-	"phase_after_completion",
 	"conquest_enemy_defeat",
 	"conquest_enemy_replacement",
 	"opportunity_resolution",
 ]
 
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
+## 阶段生命周期服务；前置与结束窗口由规则步骤持有唯一恢复点。
+const PHASE_LIFECYCLE_SERVICE_SCRIPT: Script = preload("res://scripts/core/phase_lifecycle_service.gd")
+
+## 回合开始内容组件；轮开始、翻面与准备阶段共享标准步骤协议。
+const TURN_START_SERVICE_SCRIPT: Script = preload("res://scripts/core/turn_start_service.gd")
+
 const GAME_FLOW_TRANSITION_COORDINATOR_SCRIPT: Script = preload("res://scripts/core/game_flow_transition_coordinator.gd")
 
 ## 公共选牌展示变化信号；五谷丰登等公开流程通过该信号让所有观察者持续看到固定牌位与领取归属。
@@ -448,6 +451,9 @@ var _rule_sequence_execution_depth: int = 0
 ## 已成功进入 Begin 的阶段生命周期集合；键为“玩家ID:阶段名”，防止跳过或取消阶段伪造 End 与 After。
 var _started_phase_lifecycles: Dictionary = {}
 
+## 技能插入阶段的单调身份；跨重置不复用，父序列按身份等待新子阶段，避免等待自己的外层阶段。
+var _next_inserted_phase_id: int = 1
+
 ## 等待当前响应子事件完成后询问的银月枪触发队列；每项保存持有者和黑色实体牌 UID，不持有界面或事件对象引用。
 var _queued_equipment_triggers: Array[Dictionary] = []
 
@@ -532,8 +538,6 @@ var _active_extra_discard_phase: Dictionary = {}
 ## 当前由技能插入、可属于非当前回合角色的独立额外出牌阶段；保存原回合展示与技能完成回调，空字典表示没有活动阶段。
 var _active_independent_play_phase: Dictionary = {}
 
-## 因结束阶段技能选择而暂停收尾的当前角色 ID；选择全部完成后从唯一尾部入口继续正常或额外回合轮转。
-var _pending_finish_turn_player_id: int = -1
 
 ## 因dyingBefore、dyingBegin或dying时机中的嵌套选择而暂停的濒死开始游标；数组尾部保存最内层流程，恢复时只读取稳定玩家ID与阶段数据。
 var _pending_dying_start_contexts: Array[Dictionary] = []
@@ -1344,7 +1348,6 @@ func _teardown_previous_match_runtime() -> void:
 	_active_converted_play_phase_context.clear()
 	_active_extra_discard_phase.clear()
 	_active_independent_play_phase.clear()
-	_pending_finish_turn_player_id = -1
 	_pending_dying_start_contexts.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
@@ -3489,11 +3492,6 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		_resume_settlement_pipeline()
 	# 没有卡牌内容 token 的阶段级选择也必须在结果应用后完成其选择事件并恢复父事件。
 	event_scheduler.drain()
-	# 结束阶段技能可能继续创建独立阶段、额外弃牌或技能“然后”步骤；全部排空后才清理回合状态并推进队列。
-	var pending_finish_player_before_resume: int = _pending_finish_turn_player_id
-	_try_resume_pending_finish_turn()
-	if pending_finish_player_before_resume >= 0 and _pending_finish_turn_player_id < 0:
-		return true
 	if bool(completed_choice.get("deferred", false)):
 		# 新的 chooseToUse 必须等原 CardUseEvent 及其后续目标全部排空后再创建，避免后续响应覆盖已经提前发布的出牌请求快照。
 		if not state.game_over and state.current_phase == "play" and not has_pending_play_interaction():
@@ -4728,120 +4726,9 @@ func _continue_damage_after_result(context: Dictionary) -> void:
 
 ## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；标准尾部结束后按最终伤害点数逐次派发damagePointAfter，再传导属性伤害。
 func _finish_damage_timing(context: Dictionary) -> void:
-	# 伤害来源、目标和父事件 ID；全部从保存上下文恢复，异步期间不会引用旧 PlayerState 对象。
-	# 伤害来源稳定 ID；来源时机与连环传导继续沿用原始伤害来源。
-	var source_id: int = int(context.get("source_id", -1))
-	# 伤害目标稳定 ID；来源、结束与受伤后时机都围绕同一名已受伤角色发布。
-	var target_id: int = int(context.get("target_id", -1))
-	# 父伤害事件稳定 ID；三个标准尾部时机共享该编号以维持同一事件链追踪。
-	var damage_event_id: int = int(context.get("damage_event_id", -1))
-	# 当前伤害尾部阶段；默认从来源时机开始，异步恢复时只执行尚未完成的后续阶段。
-	var finalization_stage: String = str(context.get("finalization_stage", "damageSource"))
-	# 统一尾部数据；来源触发与受伤者触发读取同一最终伤害、护甲吸收和体力减少值。
-	var timing_data: Dictionary = {
-		"amount":int(context.get("amount", 0)),
-		"shield_absorbed":int(context.get("shield_absorbed", 0)),
-		"hp_lost":int(context.get("hp_lost", 0)),
-		"nature":str(context.get("nature", "normal")),
-		"card_id":str(context.get("card_id", "")),
-		"card_user_id":int(context.get("card_user_id", source_id)),
-		"chain_transfer":bool(context.get("chain_transfer", false)),
-		"damage_event_id":damage_event_id,
-		"source_character_generation":int(context.get("source_character_generation", -1)),
-		"target_character_generation":int(context.get("target_character_generation", -1)),
-	}
-	# 来源牌扩展上下文；只补充不存在的键，最终伤害数值与角色代次始终以权威尾部字段为准。
-	var source_context: Dictionary = context.get("source_context", {}) as Dictionary
-	for source_context_key_variant: Variant in source_context.keys():
-		# 当前来源上下文字段名；【山倾】花色等纯数据可由 damageSource 技能读取。
-		var source_context_key: String = str(source_context_key_variant)
-		if not timing_data.has(source_context_key):
-			timing_data[source_context_key] = source_context[source_context_key_variant]
-	if finalization_stage == "damageSource":
-		_emit_rule_timing("damageSource", target_id, source_id, target_id, timing_data, damage_event_id)
-		finalization_stage = "damageEnd"
-		if state == null or state.game_over:
-			return
-		# 伤害来源时机产生的技能选择必须先完整结束；伤害End与After不能越过该时机并抢占选择窗口。
-		if _has_nested_settlement_barrier():
-			var source_resume_context: Dictionary = context.duplicate(true)
-			source_resume_context["finalization_stage"] = finalization_stage
-			_defer_rule_continuation("damage_finalization", source_resume_context)
-			return
-	if finalization_stage == "damageEnd":
-		_emit_rule_timing("damageEnd", target_id, source_id, target_id, timing_data, damage_event_id)
-		finalization_stage = "damageAfter"
-		if state == null or state.game_over:
-			return
-		# 伤害结束时机的嵌套操作与来源时机遵循相同屏障，完成后才进入最终伤害后时机。
-		if _has_nested_settlement_barrier():
-			var end_resume_context: Dictionary = context.duplicate(true)
-			end_resume_context["finalization_stage"] = finalization_stage
-			_defer_rule_continuation("damage_finalization", end_resume_context)
-			return
-	if finalization_stage == "damageAfter":
-		_emit_rule_timing("damageAfter", target_id, source_id, target_id, timing_data, damage_event_id)
-		finalization_stage = "damagePointAfter"
-		if state == null or state.game_over:
-			return
-		# 整次伤害后技能完成前不能进入逐点询问，避免两种语义的选择窗口相互覆盖。
-		if _has_nested_settlement_barrier():
-			var after_resume_context: Dictionary = context.duplicate(true)
-			after_resume_context["finalization_stage"] = finalization_stage
-			_defer_rule_continuation("damage_finalization", after_resume_context)
-			return
-	if finalization_stage == "damagePointAfter":
-		# 已经派发的伤害点数；从0开始保存，异步选择恢复后只继续尚未处理的点。
-		var damage_point_index: int = int(context.get("damage_point_index", 0))
-		# 本次最终伤害总点数；护盾吸收不减少“受到/造成1点伤害”的触发次数。
-		var damage_total_amount: int = maxi(int(context.get("amount", 0)), 0)
-		while damage_point_index < damage_total_amount:
-			# 单点时机数据；amount固定为1，并补充从1开始的索引和总点数供技能提示、日志与回放定位。
-			var damage_point_data: Dictionary = timing_data.duplicate(true)
-			damage_point_data["amount"] = 1
-			damage_point_data["damage_total_amount"] = damage_total_amount
-			damage_point_data["damage_point_index"] = damage_point_index + 1
-			_emit_rule_timing("damagePointAfter", target_id, source_id, target_id, damage_point_data, damage_event_id)
-			damage_point_index += 1
-			if state == null or state.game_over:
-				return
-			# 每个伤害点产生的可选技能必须完整处理后才询问下一点，确保“每1点伤害”严格连续发动或询问等量次。
-			if _has_nested_settlement_barrier():
-				var point_resume_context: Dictionary = context.duplicate(true)
-				point_resume_context["finalization_stage"] = "damagePointAfter"
-				point_resume_context["damage_point_index"] = damage_point_index
-				_defer_rule_continuation("damage_finalization", point_resume_context)
-				return
-		finalization_stage = "chain"
-	if state == null or state.game_over:
-		return
-	# 已完成连环目标数量；每个子伤害前预登记父续接，异步时按栈顺序先完成子伤害再回来处理下一名目标。
-	var chain_target_index: int = int(context.get("chain_target_index", 0))
-	# 连环目标快照；保持原伤害建立时的座次顺序，等待期间只重新校验存活与横置状态。
-	var chain_targets: Array = context.get("chain_targets", []) as Array
-	while chain_target_index < chain_targets.size():
-		# 传导前再次检查角色仍存活且横置，避免前序死亡结算改变有效目标。
-		var chained_target_id: int = int(chain_targets[chain_target_index])
-		# 当前连环目标状态；每轮重新按稳定 ID 读取，防止嵌套伤害后继续使用过期对象。
-		var chained_target: PlayerState = state.get_player(chained_target_id)
-		chain_target_index += 1
-		if chained_target == null or not chained_target.alive or chained_target.out_of_game or not chained_target.chained:
-			continue
-		# 父伤害剩余连环上下文；先压栈可保证子伤害产生的后续步骤位于其上方，子流程同步完成时再精确撤销。
-		var chain_resume_context: Dictionary = context.duplicate(true)
-		chain_resume_context["finalization_stage"] = "chain"
-		chain_resume_context["chain_target_index"] = chain_target_index
-		# 父伤害保险续接编号；异步子伤害保留该记录，同步完成则立即移除并继续本循环。
-		var chain_continuation_id: int = _defer_rule_continuation("damage_finalization", chain_resume_context)
-		# 连环伤害继续保留原来源牌扩展数据，使“此牌造成伤害后”类技能能识别同一张属性牌的传导伤害。
-		var chained_source_context: Dictionary = (context.get("source_context", {}) as Dictionary).duplicate(true)
-		chained_source_context["card_user_id"] = int(context.get("card_user_id", source_id))
-		damage(source_id, chained_target_id, int(context.get("amount", 0)), str(context.get("nature", "normal")), str(context.get("card_id", "")), true, false, chained_source_context)
-		if state == null or state.game_over:
-			return
-		if _has_nested_settlement_barrier():
-			return
-		_rule_continuations.remove(chain_continuation_id)
+	# 独立伤害编排服务；续接位置、窗口等待和子连环由同一个步骤协议持有。
+	var completion_service: DamageResolutionService = DamageResolutionService.new(self)
+	completion_service.finish_damage(context)
 
 
 ## 读取并移除指定濒死目标等待中的伤害尾部；重复调用安全返回且不会重复派发来源或连环事件。
@@ -7440,6 +7327,7 @@ func request_extra_play_phase(player_id: int, source_id: int, reason: String, co
 	# 原阶段索引；恢复后界面与阶段守卫继续使用原回合位置。
 	var original_phase_index: int = state.phase_index
 	_active_independent_play_phase = {
+		"phase_id":_next_inserted_phase_id,
 		"player_id":player_id,
 		"source_id":source_id,
 		"reason":reason,
@@ -7450,6 +7338,7 @@ func request_extra_play_phase(player_id: int, source_id: int, reason: String, co
 		"original_phase_index":original_phase_index,
 		"original_ai_action_count":_ai_actions_this_turn,
 	}
+	_next_inserted_phase_id += 1
 	# 新阶段使用独立AI行动额度；递增驱动令牌会令旧角色尚未执行的异步动作安全失效。
 	_ai_drive_token += 1
 	_ai_actions_this_turn = 0
@@ -7459,7 +7348,7 @@ func request_extra_play_phase(player_id: int, source_id: int, reason: String, co
 
 
 ## 建立独立额外出牌阶段的完整phaseUse生命周期，并复用普通出牌合法性、界面与AI入口。
-func _start_independent_extra_play_phase() -> void:
+func _start_independent_extra_play_phase(change_completed: bool = false) -> void:
 	if _active_independent_play_phase.is_empty() or state == null or state.game_over:
 		return
 	# 阶段角色ID；活动上下文是唯一来源，不能从原回合角色推断。
@@ -7473,7 +7362,9 @@ func _start_independent_extra_play_phase() -> void:
 	var source_id: int = int(_active_independent_play_phase.get("source_id", -1))
 	# 前一公开阶段；通常是发动者的结束阶段。
 	var previous_phase: String = state.current_phase
-	_emit_rule_timing("phaseChange", player_id, source_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)))
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, source_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)), Callable(self, "_start_independent_extra_play_phase").bind(true))
+		return
 	state.current_phase = "play"
 	state.phase_index = 3
 	# 【杀】次数与阶段级用牌历史均按新的独立出牌阶段重新计算。
@@ -7483,18 +7374,7 @@ func _start_independent_extra_play_phase() -> void:
 	if reincarnation_skill_service != null:
 		reincarnation_skill_service.on_play_phase_started(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true, "independent_phase":true}, {}, int(_active_independent_play_phase.get("parent_event_id", -1)))
-	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1))):
-		_emit_rule_timing("phaseUseCancelled", player_id, source_id, player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)))
-		_complete_active_independent_play_phase(true)
-		return
-	log_phase_begin("play", true)
-	# Begin时机创建的选择必须先完成，随后由统一阶段恢复入口建立chooseToUse。
-	if has_pending_card_choice():
-		return
-	_begin_play_choice(player_id)
-	_emit_state()
-	if ai_coordinator.is_ai_controlled(player_id):
-		_schedule_ai_action()
+	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)), Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_complete_active_independent_play_phase").bind(true))
 
 
 ## 完成或中断独立额外出牌阶段，恢复原回合展示并把控制权交回创建技能。
@@ -7535,7 +7415,6 @@ func _complete_active_independent_play_phase(interrupted: bool = false) -> void:
 	_emit_state()
 	# 技能回调可能登记“然后”步骤或下一项阶段；统一管线和回合尾部守卫会按顺序继续。
 	_resume_settlement_pipeline()
-	_try_resume_pending_finish_turn()
 	# 原回合角色在独立阶段期间死亡或离场时，恢复后必须从其真实回合中断入口推进。
 	var original_player: PlayerState = state.get_player(original_player_id) if state != null else null
 	if original_player != null and state.current_player_id == original_player_id and (not original_player.alive or original_player.out_of_game) and _active_independent_play_phase.is_empty():
@@ -7607,6 +7486,7 @@ func request_extra_discard_phase(player_id: int, source_id: int, reason: String,
 		return false
 	# 阶段完成上下文；技能归属使用独立字段，避免本阶段的系统弃牌选择被提前交给技能恢复入口。
 	_active_extra_discard_phase = {
+		"phase_id":_next_inserted_phase_id,
 		"player_id":player_id,
 		"source_id":source_id,
 		"reason":reason,
@@ -7614,26 +7494,28 @@ func request_extra_discard_phase(player_id: int, source_id: int, reason: String,
 		"completion_context":completion_context.duplicate(true),
 		"status":"begin_before",
 	}
-	# 额外弃牌阶段前时机；取消或中立化表示本阶段未能执行，顺序效果不会伪造阶段完成。
+	_next_inserted_phase_id += 1
+	# 额外阶段使用独立生命周期键，不覆盖相同角色尚在等待的普通弃牌阶段。
+	_active_extra_discard_phase["lifecycle_scope"] = ":extra:%d" % int(_active_extra_discard_phase.phase_id)
+	# 阶段前置参数；来源角色与原父事件完整保留。
 	var phase_data: Dictionary = {"turn_number":state.turn_number, "extra_phase":true, "reason":reason}
-	# 额外弃牌阶段前置事件；保留父事件关联并允许其他规则取消本次阶段插入。
-	var before_event: RuleEvent = _emit_rule_timing("phaseDiscardBefore", player_id, source_id, player_id, phase_data, int(_active_extra_discard_phase.get("parent_event_id", -1)))
-	if before_event != null and (before_event.cancelled or before_event.neutralized):
-		_active_extra_discard_phase.clear()
-		return false
-	_active_extra_discard_phase["status"] = "begin"
-	# 额外弃牌阶段开始事件；其触发技能全部恢复后才进入手牌上限计算。
-	var begin_event: RuleEvent = _emit_rule_timing("phaseDiscardBegin", player_id, source_id, player_id, before_event.data if before_event != null else phase_data, int(_active_extra_discard_phase.get("parent_event_id", -1)))
-	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-		_active_extra_discard_phase.clear()
-		return false
-	log_phase_begin("discard", true)
+	# 专属服务只负责窗口，主体仍使用统一的手牌上限与弃牌选择接口。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	return phase_service.begin("phaseDiscard", player_id, phase_data, int(_active_extra_discard_phase.get("parent_event_id", -1)), Callable(self, "_begin_active_extra_discard_body"), Callable(self, "_cancel_active_extra_discard_phase"), str(_active_extra_discard_phase.lifecycle_scope), source_id)
+
+
+## 额外弃牌Before和Begin均完成后才计算主体；不靠公开阶段恢复入口猜测。
+func _begin_active_extra_discard_body() -> void:
+	if _active_extra_discard_phase.is_empty():
+		return
 	_active_extra_discard_phase["status"] = "body"
-	# 阶段开始时触发的其他技能必须先完成自身连续选择，再计算本阶段的最终手牌上限。
-	if has_pending_card_choice():
-		return true
 	_continue_active_extra_discard_phase_body()
-	return true
+
+
+## 取消未进入主体的额外阶段；不发放以完整阶段为条件的技能收益。
+func _cancel_active_extra_discard_phase() -> void:
+	_active_extra_discard_phase.clear()
+	_resume_settlement_pipeline()
 
 
 ## 在额外弃牌阶段开始时机全部恢复后计算弃牌数量，并在需要时创建强制手牌选择。
@@ -7684,32 +7566,14 @@ func _continue_extra_discard_phase_choice(context: Dictionary, selected_uids: Ar
 
 ## 依次完成额外弃牌阶段的End与After；任一时机创建选择时保存状态并等待统一恢复入口继续。
 func _finish_active_extra_discard_phase() -> void:
-	if _active_extra_discard_phase.is_empty() or has_pending_card_choice():
+	if _active_extra_discard_phase.is_empty():
 		return
-	# 阶段公共数据；完成时机继续标记extra_phase，其他技能可区分普通弃牌阶段与插入阶段。
+	_active_extra_discard_phase["status"] = "ending"
+	# 阶段角色与独立实例范围；相同角色的普通阶段继续保留自己的生命周期。
 	var player_id: int = int(_active_extra_discard_phase.get("player_id", -1))
-	# 阶段来源角色；触发过滤中的source沿用最初创建额外阶段的效果来源。
-	var source_id: int = int(_active_extra_discard_phase.get("source_id", -1))
-	# 阶段父事件；伤害技能创建的额外阶段继续关联原事件链。
-	var parent_event_id: int = int(_active_extra_discard_phase.get("parent_event_id", -1))
-	# 阶段完成数据；所有时机共享同一数值与来源语义。
-	var phase_data: Dictionary = {"turn_number":state.turn_number, "extra_phase":true, "reason":str(_active_extra_discard_phase.get("reason", ""))}
-	# 阶段恢复状态；区分尚未发布结束时机与等待结束后时机恢复的路径。
-	var status: String = str(_active_extra_discard_phase.get("status", "body"))
-	if status not in ["finish_end", "finish_after"]:
-		_active_extra_discard_phase["status"] = "finish_end"
-		_emit_rule_timing("phaseDiscardEnd", player_id, source_id, player_id, phase_data, parent_event_id)
-		if has_pending_card_choice():
-			return
-	# After时机已经发布后，恢复入口只完成阶段，不得再次触发同一时机。
-	if str(_active_extra_discard_phase.get("status", "")) == "finish_after":
-		_complete_active_extra_discard_phase()
-		return
-	_active_extra_discard_phase["status"] = "finish_after"
-	_emit_rule_timing("phaseDiscardAfter", player_id, source_id, player_id, phase_data, parent_event_id)
-	if has_pending_card_choice():
-		return
-	_complete_active_extra_discard_phase()
+	# 统一收尾服务；结束窗口顺序、重复调用与预算让步不再由阶段单独实现。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	phase_service.complete("phaseDiscard", player_id, {"turn_number":state.turn_number, "extra_phase":true, "reason":str(_active_extra_discard_phase.get("reason", ""))}, int(_active_extra_discard_phase.get("parent_event_id", -1)), Callable(self, "_complete_active_extra_discard_phase"), str(_active_extra_discard_phase.get("lifecycle_scope", "")))
 
 
 ## 完成额外弃牌阶段并把控制权交回创建它的技能实例；阶段字典先清空以允许回调继续创建新阶段。
@@ -7731,7 +7595,6 @@ func _complete_active_extra_discard_phase() -> void:
 		skill.continue_extra_phase(completion_context)
 	# 回调可能登记下一项阶段或技能“然后”步骤；全部活动项排空后才允许结束阶段继续收尾。
 	_resume_settlement_pipeline()
-	_try_resume_pending_finish_turn()
 
 
 ## 结束当前出牌阶段；武将技能通过该公开端口实现“跳过出牌阶段”，不直接调用控制器私有流程。
@@ -10174,163 +10037,39 @@ func _start_turn(player_id: int) -> void:
 
 ## 按稳定阶段游标发布回合开始与准备阶段时机；任一时机插入选择后先保存直接后续，恢复时不会越过或重复发布其他时机。
 func _continue_turn_start(context: Dictionary) -> void:
-	if state == null or state.game_over:
-		return
-	# 新回合玩家稳定 ID；等待期间角色可能死亡或离场，每个步骤开始前都按编号重新校验。
+	# 回合开始内容组件；每个时机的恢复位置由RuleStepSequence持有。
+	var turn_service: RefCounted = TURN_START_SERVICE_SCRIPT.new(self)
+	turn_service.resolve(context)
+
+
+## 初始化新回合事实；只在轮开始子内容全部结束后执行一次，不发布可暂停时机。
+func _initialize_turn_context(context: Dictionary) -> void:
+	# 本回合角色ID；初始化前已经由回合内容组件校验。
 	var player_id: int = int(context.get("player_id", -1))
-	# 新回合玩家状态；无效或死亡角色不会继续获得准备阶段及后续行动窗口。
+	# 当前角色；这里只清理回合级事实，不持有跨选择的实体引用。
 	var player: PlayerState = state.get_player(player_id)
-	if player == null or not player.alive or player.out_of_game or state.current_player_id != player_id:
-		return
-	# 当前回合开始游标；每次发布时机前先读取，发布后立即写入下一步以保证恢复幂等。
-	var stage: String = str(context.get("stage", "round_start"))
-	while state != null and not state.game_over:
-		if stage == "round_start":
-			context["stage"] = "restore_round_players" if bool(context.get("starts_new_round", false)) else "initialize"
-			stage = str(context["stage"])
-			continue
-		if stage == "restore_round_players":
-			# 轮末限时离场恢复必须早于新轮roundStart；恢复时机产生的选择全部完成后才继续发布轮开始技能。
-			context["stage"] = "round_start_events"
-			_restore_round_limited_out_of_game_players(state.round_number)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "round_start_events"
-			continue
-		if stage == "round_start_events":
-			context["stage"] = "initialize"
-			_expire_temporary_skills_for_round(state.round_number)
-			_emit_rule_timing("roundStart", player_id, player_id, player_id, {"round_number":state.round_number})
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "initialize"
-			continue
-		if stage == "initialize":
-			# 当前回合运行时事件 ID；只在轮开始触发全部完成后创建一次，后续所有阶段时机共享该父事件。
-			var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
-			context["turn_event_id"] = turn_event_id
-			_current_turn_event_id = turn_event_id
-			# 全局回合用牌事实；每个新回合清空全部角色记录，供“本回合内其使用过某牌”的跨角色技能精确查询。
-			_cards_used_this_turn_by_player.clear()
-			player.skipped_phases.clear()
-			player.card_use_history.clear()
-			player.card_use_limit_exempt_history.clear()
-			player.response_history.clear()
-			player.damage_history.clear()
-			player.skill_history.clear()
-			player.ai_failed_card_target_ids.clear()
-			_notify_card_definitions_turn_started(player_id)
-			player.turn_history.append({"turn_number":state.turn_number, "round_number":state.round_number, "event_id":turn_event_id, "skipped_phases":[]})
-			state.current_phase = "start"
-			state.phase_index = 0
-			context["stage"] = "turn_begin_log"
-			stage = "turn_begin_log"
-			continue
-		if stage == "turn_begin_log":
-			# 回合开始日志必须先于所有回合开始技能与准备阶段日志；游标先前移，异步恢复不会重复输出分隔线。
-			context["stage"] = "phase_before"
-			add_log("————————")
-			add_log("%s的回合开始。" % format_player_state_log_name(player))
-			_dispatch_rule_event(RuleEvent.new("phase_start", player_id, player_id, {}))
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "phase_before"
-			continue
-		# 当前回合父事件 ID；initialize 之后固定存在，异常旧上下文回退到控制器当前记录。
-		var turn_event_id: int = int(context.get("turn_event_id", _current_turn_event_id))
-		if stage == "phase_before":
-			_record_runtime_event("phaseBefore", "phase", {"player_id":player_id}, {}, turn_event_id)
-			# 回合前事件结果；取消或中立化时只进入取消分支，不再发布本回合后续开始时机。
-			var phase_before_event: RuleEvent = _emit_rule_timing("phaseBefore", player_id, player_id, player_id, {"turn_number":state.turn_number, "round_number":state.round_number}, turn_event_id)
-			context["stage"] = "phase_cancelled" if phase_before_event != null and (phase_before_event.cancelled or phase_before_event.neutralized) else "face_down_check"
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = str(context["stage"])
-			continue
-		if stage == "face_down_check":
-			# 翻面状态只在完整回合真正进入前检查；phaseBefore是回合调度前置时机，翻面跳过不会进入phaseBegin及任何标准阶段。
-			if player.face_down:
-				context["stage"] = "face_down_finish"
-				turn_over_player(player_id, player_id, "turn_start_skip")
-				add_log("%s翻回正面并跳过本回合。" % format_player_state_log_name(player))
-				_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
-				_emit_rule_timing("phaseOver", player_id, player_id, player_id, {"reason":"face_down", "turn_number":state.turn_number}, turn_event_id)
-				if _has_nested_settlement_barrier():
-					_defer_rule_continuation("turn_start", context)
-					return
-				_complete_face_down_skipped_turn(player_id)
-				return
-			context["stage"] = "phase_before_start"
-			stage = "phase_before_start"
-			continue
-		if stage == "face_down_finish":
-			_complete_face_down_skipped_turn(player_id)
-			return
-		if stage == "phase_cancelled":
-			context["stage"] = "finish_cancelled"
-			_emit_rule_timing("phaseCancelled", player_id, player_id, player_id, {"reason":"phaseBefore", "turn_number":state.turn_number}, turn_event_id)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "finish_cancelled"
-			continue
-		if stage == "finish_cancelled":
-			_finish_turn(player_id)
-			return
-		if stage == "phase_before_start":
-			context["stage"] = "phase_before_end"
-			_emit_rule_timing("phaseBeforeStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "phase_before_end"
-			continue
-		if stage == "phase_before_end":
-			context["stage"] = "phase_begin_start"
-			_emit_rule_timing("phaseBeforeEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "phase_begin_start"
-			continue
-		if stage == "phase_begin_start":
-			context["stage"] = "phase_begin"
-			_emit_rule_timing("phaseBeginStart", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "phase_begin"
-			continue
-		if stage == "phase_begin":
-			_record_runtime_event("phaseBegin", "phase", {"player_id":player_id}, {}, turn_event_id)
-			context["stage"] = "preparation_begin"
-			_emit_rule_timing("phaseBegin", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "preparation_begin"
-			continue
-		if stage == "preparation_begin":
-			_record_runtime_event("phaseZhunbei", "phase", {"player_id":player_id}, {}, turn_event_id)
-			# 准备阶段是否成功进入；取消时机仍会发布公开取消事件，随后统一进入准备阶段收尾入口。
-			var preparation_started: bool = _begin_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, turn_event_id)
-			if not preparation_started:
-				_emit_rule_timing("phaseZhunbeiCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, turn_event_id)
-			context["stage"] = "preparation_complete"
-			# 准备阶段Begin中的技能可创建异步选择；等待提交时不能继续安排以start为前提的旧阶段切换。
-			if _has_nested_settlement_barrier():
-				_defer_rule_continuation("turn_start", context)
-				return
-			stage = "preparation_complete"
-			continue
-		if stage == "preparation_complete":
-			_continue_turn_after_preparation_phase(player_id)
-			return
-		return
+	# 当前回合运行时事件 ID；只在轮开始触发全部完成后创建一次，后续所有阶段时机共享该父事件。
+	var turn_event_id: int = _record_runtime_event("phase", "turn", {"player_id":player_id, "turn_number":state.turn_number, "round_number":state.round_number})
+	context["turn_event_id"] = turn_event_id
+	_current_turn_event_id = turn_event_id
+	# 全局回合用牌事实；每个新回合清空全部角色记录，供“本回合内其使用过某牌”的跨角色技能精确查询。
+	_cards_used_this_turn_by_player.clear()
+	player.skipped_phases.clear()
+	player.card_use_history.clear()
+	player.card_use_limit_exempt_history.clear()
+	player.response_history.clear()
+	player.damage_history.clear()
+	player.skill_history.clear()
+	player.ai_failed_card_target_ids.clear()
+	_notify_card_definitions_turn_started(player_id)
+	player.turn_history.append({"turn_number":state.turn_number, "round_number":state.round_number, "event_id":turn_event_id, "skipped_phases":[]})
+	state.current_phase = "start"
+	state.phase_index = 0
+
+
+## 准备阶段主体也是可订阅窗口；准备阶段Begin、主体、End、After按同一协议等待。
+func _run_preparation_phase_body(player_id: int) -> void:
+	_run_phase_notification("phaseZhunbei", player_id, {"turn_number":state.turn_number}, Callable(self, "_continue_turn_after_preparation_phase").bind(player_id))
 
 
 ## 完成准备阶段主体并安排判定阶段；选择窗口恢复后可再次调用，已完成主体不会重复派发开始事件。
@@ -10348,10 +10087,8 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 			_advance_after_current_player_death(player_id)
 		return
 	if _started_phase_lifecycles.has(lifecycle_key):
-		_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		# 准备阶段End或After也可创建选择；此时生命周期已经完成，恢复后只安排判定阶段。
-		if has_pending_card_choice():
-			return
+		_finish_phase_lifecycle("phaseZhunbei", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_continue_turn_after_preparation_phase").bind(player_id))
+		return
 	if state.game_over:
 		return
 	if not player.alive or player.out_of_game:
@@ -10372,7 +10109,7 @@ func _complete_face_down_skipped_turn(player_id: int) -> void:
 
 
 ## 进入当前角色的判定阶段；阶段主体可能被无懈、濒死或其他统一选择请求异步暂停。
-func _enter_judgment_phase(player_id: int) -> void:
+func _enter_judgment_phase(player_id: int, change_completed: bool = false) -> void:
 	# 当前回合玩家；阶段间隔期间死亡或离场时不再建立判定阶段。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
@@ -10384,7 +10121,9 @@ func _enter_judgment_phase(player_id: int) -> void:
 	if _is_main_phase_converted_to_play(player_id, "judgment"):
 		_start_converted_main_phase_as_play(player_id, "judgment", "draw")
 		return
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"start", "to_phase":"judgment"}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":"start", "to_phase":"judgment"}, _current_turn_event_id, Callable(self, "_enter_judgment_phase").bind(player_id, true))
+		return
 	state.current_phase = "judgment"
 	state.phase_index = 1
 	_record_runtime_event("phaseJudgeStage", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
@@ -10393,14 +10132,9 @@ func _enter_judgment_phase(player_id: int) -> void:
 		skip_current_main_phase(player_id, "judgment", "opportunity_permanent_skip")
 		return
 	if bool(player.skipped_phases.get("judgment", false)):
-		_emit_rule_timing("phaseJudgeSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_continue_turn_after_judgment(player_id)
+		_run_phase_notification("phaseJudgeSkipped", player_id, {"turn_number":state.turn_number}, Callable(self, "_continue_turn_after_judgment").bind(player_id))
 		return
-	if not _begin_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
-		_emit_rule_timing("phaseJudgeCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_continue_turn_after_judgment(player_id)
-		return
-	_process_judgment_area(player_id)
+	_begin_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_process_judgment_area").bind(player_id), Callable(self, "_continue_turn_after_judgment").bind(player_id))
 
 
 ## 从判定阶段结束处继续当前回合；异步无懈与濒死选择完成后也统一回到该入口。
@@ -10415,14 +10149,14 @@ func _continue_turn_after_judgment(player_id: int) -> void:
 		else:
 			_advance_after_current_player_death(player_id)
 		return
-	_finish_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	if has_pending_card_choice():
+	if _started_phase_lifecycles.has("%d:phaseJudge" % player_id):
+		_finish_phase_lifecycle("phaseJudge", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_continue_turn_after_judgment").bind(player_id))
 		return
 	_schedule_phase_transition(player_id, "judgment", Callable(self, "_enter_draw_phase").bind(player_id))
 
 
 ## 进入摸牌阶段并完成本阶段主体；结算结束后保留当前画面，再按游戏速度进入出牌阶段。
-func _enter_draw_phase(player_id: int) -> void:
+func _enter_draw_phase(player_id: int, change_completed: bool = false) -> void:
 	# 当前回合玩家；判定与阶段间隔期间都可能死亡，摸牌前必须重新读取存活状态。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
@@ -10436,7 +10170,9 @@ func _enter_draw_phase(player_id: int) -> void:
 		return
 	# 前一实际阶段；普通流程为judgment，阶段转换流程可能保持为play，事件必须反映真实公开阶段。
 	var previous_phase: String = state.current_phase
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"draw"}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"draw"}, _current_turn_event_id, Callable(self, "_enter_draw_phase").bind(player_id, true))
+		return
 	state.current_phase = "draw"
 	state.phase_index = 2
 	# 本阶段基础摸牌数；2v2 一号位的首个回合（全场 turn_number==1）只摸 1 张，其余默认 2。
@@ -10444,50 +10180,25 @@ func _enter_draw_phase(player_id: int) -> void:
 	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":base_draw_count}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("draw", false)):
 		add_log("%s跳过摸牌阶段。" % format_player_state_log_name(player))
-		_emit_rule_timing("phaseDrawSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	elif _begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":base_draw_count, "turn_number":state.turn_number}, _current_turn_event_id):
-		# phaseDrawBegin中的技能选择必须先完成；阶段主体通过独立幂等入口执行，恢复时不会重复摸牌。
-		if has_pending_card_choice():
-			return
-		_continue_turn_after_draw_phase_begin(player_id)
+		_run_phase_notification("phaseDrawSkipped", player_id, {"turn_number":state.turn_number}, Callable(self, "_after_draw_phase").bind(player_id))
 		return
-	else:
-		_emit_rule_timing("phaseDrawCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	if state.game_over:
-		return
-	if not player.alive:
-		_advance_after_current_player_death(player_id)
-		return
-	_schedule_phase_transition(player_id, "draw", Callable(self, "_enter_play_phase").bind(player_id))
+	_begin_phase_lifecycle("phaseDraw", player_id, {"draw_count":base_draw_count, "turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_continue_turn_after_draw_phase_begin").bind(player_id), Callable(self, "_after_draw_phase").bind(player_id))
 
 
 ## 完成摸牌阶段主体与结束时机；Begin或摸牌触发中的选择恢复后均从此入口继续且只摸一次。
 func _continue_turn_after_draw_phase_begin(player_id: int) -> void:
-	if state == null or state.game_over or has_pending_card_choice() or state.current_player_id != player_id or state.current_phase != "draw":
+	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "draw":
 		return
-	# 当前摸牌阶段生命周期；被技能跳过时记录已移除，本入口不会补造主体或结束时机。
-	var lifecycle_key: String = "%d:phaseDraw" % player_id
-	if not _started_phase_lifecycles.has(lifecycle_key):
+	# 摸牌阶段的数量窗口和主体共享同一服务，最终数量回读后只摸一次。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	phase_service.draw_phase(player_id, Callable(self, "_after_draw_phase").bind(player_id))
+
+
+## 摸牌阶段完整结束或跳过后安排唯一的出牌阶段后继。
+func _after_draw_phase(player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "draw":
 		return
-	var lifecycle_context: Dictionary = _started_phase_lifecycles.get(lifecycle_key, {}) as Dictionary
-	# 生命周期初始摸牌基数；优先读取进入阶段时写入的 draw_count，兼容旧上下文缺省 2。
-	var phase_base_draw_count: int = int(lifecycle_context.get("draw_count", _get_phase_draw_base_count(player_id)))
-	var draw_count: int = int(lifecycle_context.get("resolved_draw_count", phase_base_draw_count))
-	if not bool(lifecycle_context.get("body_complete", false)):
-		# 先写入主体完成标记再派发数量修改与摸牌，嵌套选择恢复时不会再次执行同一批摸牌。
-		lifecycle_context["body_complete"] = true
-		var draw_one_event: RuleEvent = _emit_rule_timing("phaseDrawBegin1", player_id, player_id, player_id, {"draw_count":phase_base_draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
-		draw_count = maxi(int(draw_one_event.data.get("draw_count", phase_base_draw_count)) if draw_one_event != null else phase_base_draw_count, 0)
-		var draw_two_event: RuleEvent = _emit_rule_timing("phaseDrawBegin2", player_id, player_id, player_id, {"draw_count":draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
-		draw_count = maxi(int(draw_two_event.data.get("draw_count", draw_count)) if draw_two_event != null else draw_count, 0)
-		lifecycle_context["resolved_draw_count"] = draw_count
-		_started_phase_lifecycles[lifecycle_key] = lifecycle_context
-		draw(player_id, draw_count)
-		if has_pending_card_choice():
-			return
-	_finish_phase_lifecycle("phaseDraw", player_id, {"draw_count":draw_count, "turn_number":state.turn_number}, _current_turn_event_id)
-	if has_pending_card_choice():
-		return
+	# 当前角色；所有前置、摸牌和结束技能完成后复核，死亡不能继续获得出牌阶段。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
 		if player != null and player.out_of_game:
@@ -10498,8 +10209,30 @@ func _continue_turn_after_draw_phase_begin(player_id: int) -> void:
 	_schedule_phase_transition(player_id, "draw", Callable(self, "_enter_play_phase").bind(player_id))
 
 
+## 标准、转换和额外出牌阶段共用主体入口；Begin完成后才建立操作请求。
+func _resume_play_phase_body(player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "play" or not _is_phase_lifecycle_body_active("phaseUse", player_id):
+		return
+	_begin_play_choice(player_id)
+	_emit_state()
+	if ai_coordinator.is_ai_controlled(player_id):
+		_schedule_ai_action()
+
+
+## 发布单个阶段通知并等待其子内容；调用方不再根据是否存在选牌猜测事件是否完成。
+func _run_phase_notification(timing_name: String, player_id: int, event_data: Dictionary, on_completed: Callable) -> void:
+	# 两步通知内容；回调只在本局持有，不写入上下文和快照。
+	var steps: Array[Callable] = [
+		func(sequence: RuleStepSequence) -> void: emit_sequence_timing(sequence, timing_name, player_id, player_id, player_id, event_data, _current_turn_event_id),
+		func(_sequence: RuleStepSequence) -> void:
+			if on_completed.is_valid():
+				on_completed.call(),
+	]
+	run_rule_sequence(steps)
+
+
 ## 把一个原主要阶段直接作为普通出牌阶段执行；结束后进入指定原阶段后继，不产生extra_phase标记或跳过时机。
-func _start_converted_main_phase_as_play(player_id: int, original_phase: String, return_point: String) -> void:
+func _start_converted_main_phase_as_play(player_id: int, original_phase: String, return_point: String, change_completed: bool = false) -> void:
 	# 转换阶段角色；阶段交界死亡或离场时不再建立新的出牌窗口。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
@@ -10510,7 +10243,9 @@ func _start_converted_main_phase_as_play(player_id: int, original_phase: String,
 		return
 	# 前一实际阶段；连续转换会形成play到play的阶段切换，但仍会完整结束并重新开始独立phaseUse生命周期。
 	var previous_phase: String = state.current_phase
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "transformed_from_phase":original_phase}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "transformed_from_phase":original_phase}, _current_turn_event_id, Callable(self, "_start_converted_main_phase_as_play").bind(player_id, original_phase, return_point, true))
+		return
 	state.current_phase = "play"
 	state.phase_index = 3
 	# 每个转换后的出牌阶段都是新的阶段，必须重新计算阶段限次与【杀】基础次数。
@@ -10523,21 +10258,11 @@ func _start_converted_main_phase_as_play(player_id: int, original_phase: String,
 	# 运行时事件明确记录阶段转换来源；extra_phase保持缺失，日志与监听者不会把它误认作额外阶段。
 	var phase_event_data: Dictionary = {"player_id":player_id, "transformed_from_phase":original_phase}
 	_record_runtime_event("phaseUse", "phase", phase_event_data, {}, _current_turn_event_id)
-	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "transformed_from_phase":original_phase}, _current_turn_event_id):
-		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number, "transformed_from_phase":original_phase}, _current_turn_event_id)
-		_end_play_phase(player_id, false)
-		return
-	# 转换阶段Begin中的技能与普通出牌阶段完全一致；全部恢复后才创建唯一chooseToUse请求。
-	if has_pending_card_choice():
-		return
-	_begin_play_choice(player_id)
-	_emit_state()
-	if ai_coordinator.is_ai_controlled(player_id):
-		_schedule_ai_action()
+	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "transformed_from_phase":original_phase}, _current_turn_event_id, Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_end_play_phase").bind(player_id, false))
 
 
 ## 进入出牌阶段并创建统一 chooseToUse 请求；普通阶段与额外阶段分别维护独立次数历史。
-func _enter_play_phase(player_id: int) -> void:
+func _enter_play_phase(player_id: int, change_completed: bool = false) -> void:
 	# 当前回合玩家；流程间隔到期时再次校验，避免已离场角色获得可操作窗口。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
@@ -10548,7 +10273,9 @@ func _enter_play_phase(player_id: int) -> void:
 		return
 	# 前一实际阶段；摸牌阶段被转换为出牌阶段时这里会形成play到play的独立阶段切换。
 	var previous_phase: String = state.current_phase
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play"}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play"}, _current_turn_event_id, Callable(self, "_enter_play_phase").bind(player_id, true))
+		return
 	state.current_phase = "play"
 	state.phase_index = 3
 	# 普通出牌阶段拥有独立次数历史；本回合此前由其他流程记录的牌不会占用本阶段【杀】次数。
@@ -10560,20 +10287,9 @@ func _enter_play_phase(player_id: int) -> void:
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % format_player_state_log_name(player))
-		_emit_rule_timing("phaseUseSkipped", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_end_play_phase(player_id, false, true)
+		_run_phase_notification("phaseUseSkipped", player_id, {"turn_number":state.turn_number}, Callable(self, "_end_play_phase").bind(player_id, false, true))
 		return
-	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
-		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_end_play_phase(player_id, false)
-		return
-	# phaseUseBegin中的技能选择必须先完整恢复；普通chooseToUse只能在Begin触发链完全结束后创建。
-	if has_pending_card_choice():
-		return
-	_begin_play_choice(player_id)
-	_emit_state()
-	if ai_coordinator.is_ai_controlled(player_id):
-		_schedule_ai_action()
+	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_end_play_phase").bind(player_id, false))
 
 
 ## 在延迟选择完成后恢复被暂停的回合阶段；当前仅判定阶段允许在阶段主体中插入异步选择。
@@ -10592,17 +10308,6 @@ func _resume_interrupted_turn_flow() -> void:
 		var dying_start_context: Dictionary = _pending_dying_start_contexts.pop_back() as Dictionary
 		_continue_dying_start(dying_start_context)
 		return
-	# 额外弃牌阶段是独立的嵌套阶段；其Begin、End或After时机被选择暂停后必须优先恢复。
-	if not _active_extra_discard_phase.is_empty():
-		# 当前额外弃牌阶段状态；body重新计算弃牌，完成状态则续接End、After或技能回调。
-		var extra_discard_status: String = str(_active_extra_discard_phase.get("status", "body"))
-		# discard_choice表示弃牌请求已建立但被中断（如AI重试耗尽或死亡应答者关闭）；主体入口幂等自愈，
-		# 会复核存活、重算弃牌数并重建请求，缺少该路由曾使中断后的额外弃牌阶段永久悬停。
-		if extra_discard_status in ["body", "discard_choice"]:
-			_continue_active_extra_discard_phase_body()
-		elif extra_discard_status in ["finish_end", "finish_after"]:
-			_finish_active_extra_discard_phase()
-		return
 	# 当前被濒死救援等嵌套选择暂停的逐目标卡牌；嵌套流程结束后先完成原目标，再恢复后续目标而不是提前开放出牌。
 	for parent_card_uid_variant: Variant in _active_card_resolutions.keys():
 		# 原卡牌实体 UID；同一时刻只有最内层一张活动牌会等待没有父 UID 的公共救援选择。
@@ -10619,18 +10324,6 @@ func _resume_interrupted_turn_flow() -> void:
 			_advance_after_current_player_out_of_game(current_player.player_id)
 		else:
 			_advance_after_current_player_death(current_player.player_id)
-		return
-	if state.current_phase == "start":
-		_continue_turn_after_preparation_phase(state.current_player_id)
-		return
-	if state.current_phase == "draw":
-		_continue_turn_after_draw_phase_begin(state.current_player_id)
-		return
-	if state.current_phase == "play":
-		# phaseUseEnd或After选择恢复时继续阶段结束游标；未登记生命周期的独立规则结算按仍在出牌阶段处理，不能误推进整回合。
-		if _started_phase_lifecycles.has("%d:phaseUse" % state.current_player_id) and not _is_phase_lifecycle_body_active("phaseUse", state.current_player_id):
-			_end_play_phase(state.current_player_id)
-		# phaseUseBegin或阶段主体内的选择由提交入口在父事件排空后重建chooseToUse；此处提前登记会把未发布请求留在运行时栈内。
 		return
 	if state.current_phase == "discard":
 		_continue_turn_after_discard_phase_begin(state.current_player_id)
@@ -10853,6 +10546,8 @@ func run_rule_sequence(steps: Array[Callable], context: Dictionary = {}) -> int:
 	var sequence: RuleStepSequence = RuleStepSequence.new(steps, context)
 	sequence.sequence_id = _next_rule_sequence_id
 	sequence.enclosing_judgment_request_id = int(_pending_judgment_request.get("request_id", -1))
+	sequence.enclosing_play_phase_id = int(_active_independent_play_phase.get("phase_id", -1))
+	sequence.enclosing_discard_phase_id = int(_active_extra_discard_phase.get("phase_id", -1))
 	_next_rule_sequence_id += 1
 	_rule_sequences[sequence.sequence_id] = sequence
 	_advance_rule_sequence(sequence.sequence_id)
@@ -10898,7 +10593,7 @@ func _run_rule_sequence_steps(sequence_id: int) -> void:
 			_rule_continuations.remove(continuation_id)
 			_rule_sequences.erase(sequence_id)
 			return
-		if _has_nested_settlement_barrier() or _sequence_waits_for_child_judgment(sequence) or (game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()):
+		if _has_nested_settlement_barrier() or _sequence_waits_for_child_judgment(sequence) or _sequence_waits_for_child_phase(sequence) or (game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()):
 			return
 		if sequence.waiting_event != null and trigger_manager != null and trigger_manager.is_dispatch_deferred(sequence.waiting_event):
 			return
@@ -10941,7 +10636,7 @@ func _try_resume_ready_rule_sequence() -> bool:
 	# 待恢复内容；旧局失效记录由正常出栈路径清除。
 	var sequence: RuleStepSequence = _rule_sequences.get(int((continuation.get("context", {}) as Dictionary).get("sequence_id", -1))) as RuleStepSequence
 	if sequence != null:
-		if _sequence_waits_for_child_judgment(sequence):
+		if _sequence_waits_for_child_judgment(sequence) or _sequence_waits_for_child_phase(sequence):
 			return false
 		if sequence.waiting_event != null and trigger_manager != null and trigger_manager.is_dispatch_deferred(sequence.waiting_event):
 			return false
@@ -10999,12 +10694,8 @@ func _resume_next_rule_continuation() -> void:
 			_continue_trick_negation_after_barrier(context)
 		"simultaneous_negation_response":
 			_continue_simultaneous_negation_after_barrier(context)
-		"damage_finalization":
-			_finish_damage_timing(context)
 		"damage_after_result":
 			_continue_damage_after_result(context)
-		"turn_start":
-			_continue_turn_start(context)
 		"slash_flow":
 			_continue_slash_flow_after_barrier(context)
 		"recast_draw":
@@ -11013,8 +10704,6 @@ func _resume_next_rule_continuation() -> void:
 			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
 		"round_end_restore":
 			_continue_round_end_after_restore(int(context.get("finished_player_id", -1)))
-		"phase_after_completion":
-			_continue_after_phase_after(int(context.get("finished_player_id", -1)))
 		"conquest_enemy_defeat":
 			_finish_conquest_enemy_defeat(context)
 		"conquest_enemy_replacement":
@@ -11065,6 +10754,9 @@ func _run_settlement_pipeline_pass() -> void:
 		# 子序列已经完成自身时机时先恢复它，再回到触发该序列的外层时机剩余处理器。
 		if _try_resume_ready_rule_sequence():
 			continue
+		# 栈顶父内容等待独立阶段时，只让该阶段自己的输入或子序列驱动；不能排空外层时机。
+		if _top_sequence_waits_for_child_phase():
+			return
 		# 同一规则时机尚未询问的技能必须先完成，不能让原操作的后半段越过触发顺序。
 		_resume_deferred_rule_timing_dispatches()
 		if has_pending_card_choice() or state.game_over:
@@ -11088,6 +10780,11 @@ func _run_settlement_pipeline_pass() -> void:
 		if _rule_continuations.has_pending():
 			# 当前最内层续接；过关斩将敌人退场与整层换将都是角色生命周期边界，必须让已经登记的技能“然后”步骤先结束。
 			var next_rule_continuation: Dictionary = _rule_continuations.peek()
+			# 触发续列刚在本轮完成时，仍须经过同一个子技能检查入口；不能直接弹出父序列跳过“然后”。
+			if str(next_rule_continuation.get("continuation_type", "")) == "rule_sequence":
+				if _try_resume_ready_rule_sequence():
+					continue
+				return
 			if str(next_rule_continuation.get("continuation_type", "")) in ["conquest_enemy_defeat", "conquest_enemy_replacement"]:
 				if not _deferred_skill_settlements.is_empty():
 					_resume_deferred_skill_settlements()
@@ -11107,7 +10804,6 @@ func _run_settlement_pipeline_pass() -> void:
 		_schedule_settlement_pipeline_resume()
 		return
 	if state != null and not state.game_over and not has_pending_card_choice() and not has_pending_judgment_request() and not _conquest_replacement_transition_active and (game_flow_pacer == null or not game_flow_pacer.has_pending_skill_interval()):
-		_try_resume_pending_finish_turn()
 		if state == null or state.game_over or has_pending_card_choice() or has_pending_judgment_request():
 			return
 		_resume_interrupted_turn_flow()
@@ -11142,68 +10838,18 @@ func _complete_innermost_active_card_target_lifecycle() -> bool:
 
 
 ## 派发一个标准阶段的 Before 与 Begin；任一时机取消或中立化时返回 false，由调用方决定跳过或终止阶段。
-func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int) -> bool:
-	# 阶段生命周期键；同一玩家同名阶段在一个回合内只会存在一条活动记录。
-	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
-	# 当前阶段数据；Before 的修改会传给 Begin，但不会反向污染调用方原字典。
-	var current_event_data: Dictionary = event_data.duplicate(true)
-	_started_phase_lifecycles.erase(lifecycle_key)
-	var before_name: String = "%sBefore" % base_name
-	if RuleTimingCatalog.has_timing(before_name):
-		var before_event: RuleEvent = _emit_rule_timing(before_name, player_id, player_id, player_id, current_event_data, parent_event_id)
-		if before_event != null and (before_event.cancelled or before_event.neutralized):
-			return false
-		if before_event != null:
-			current_event_data = before_event.data.duplicate(true)
-	var begin_name: String = "%sBegin" % base_name
-	if RuleTimingCatalog.has_timing(begin_name):
-		var begin_event: RuleEvent = _emit_rule_timing(begin_name, player_id, player_id, player_id, current_event_data, parent_event_id)
-		if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-			return false
-	# 活动生命周期上下文；status=body表示Before与Begin已经完成，阶段主体尚可执行，后续End/After会原地推进状态。
-	_started_phase_lifecycles[lifecycle_key] = {"status":"body", "event_data":current_event_data.duplicate(true), "parent_event_id":parent_event_id}
-	# 阶段开始对局日志；额外出牌阶段由 event_data.extra_phase 标记。
-	log_phase_begin(base_name, bool(current_event_data.get("extra_phase", false)))
-	return true
+func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int, on_started: Callable = Callable(), on_cancelled: Callable = Callable()) -> bool:
+	# 生命周期内容服务；只返回同步开始状态，异步流程使用明确后继，不猜测当前公开阶段。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	return phase_service.begin(base_name, player_id, event_data, parent_event_id, on_started, on_cancelled)
 
 
 ## 派发一个标准阶段的 End 与 After；目录没有对应后缀时自动跳过，不为引擎未定义的时机造名。
-func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int) -> void:
-	# 阶段生命周期键；未成功进入 Begin 的跳过或取消阶段不产生 End 与 After。
-	var lifecycle_key: String = "%d:%s" % [player_id, base_name]
-	if not _started_phase_lifecycles.has(lifecycle_key):
-		return
-	# 阶段恢复上下文；兼容旧测试直接写入true的状态，并以本次调用数据补齐永久可序列化字段。
-	var lifecycle_variant: Variant = _started_phase_lifecycles.get(lifecycle_key, {})
-	# 当前生命周期字典；旧布尔状态不参与强制类型转换，避免迁移期规则测试产生空对象访问。
-	var lifecycle_context: Dictionary = lifecycle_variant as Dictionary if lifecycle_variant is Dictionary else {}
-	if lifecycle_context.is_empty():
-		lifecycle_context = {"status":"body", "event_data":event_data.duplicate(true), "parent_event_id":parent_event_id}
-	# 完成时机数据；首次结束时保存，选择恢复后的后续调用继续使用同一份稳定数据。
-	var completion_data: Dictionary = (lifecycle_context.get("event_data", event_data) as Dictionary).duplicate(true)
-	# 完成时机父事件；恢复期间当前事件摘要可能变化，因此沿用首次保存的父事件。
-	var completion_parent_event_id: int = int(lifecycle_context.get("parent_event_id", parent_event_id))
-	# 当前完成游标；body尚未派发End，end_emitted等待After，after_emitted只需移除生命周期。
-	var status: String = str(lifecycle_context.get("status", "body"))
-	var end_name: String = "%sEnd" % base_name
-	if status == "body":
-		lifecycle_context["status"] = "end_emitted"
-		_started_phase_lifecycles[lifecycle_key] = lifecycle_context
-		if RuleTimingCatalog.has_timing(end_name):
-			_emit_rule_timing(end_name, player_id, player_id, player_id, completion_data, completion_parent_event_id)
-		if has_pending_card_choice():
-			return
-	var after_name: String = "%sAfter" % base_name
-	if str((_started_phase_lifecycles.get(lifecycle_key, lifecycle_context) as Dictionary).get("status", "")) == "end_emitted":
-		lifecycle_context["status"] = "after_emitted"
-		_started_phase_lifecycles[lifecycle_key] = lifecycle_context
-		if RuleTimingCatalog.has_timing(after_name):
-			_emit_rule_timing(after_name, player_id, player_id, player_id, completion_data, completion_parent_event_id)
-		if has_pending_card_choice():
-			return
-	# 阶段结束对局日志；仅在完整走完 End/After 后输出一次。
-	log_phase_end(base_name, bool(completion_data.get("extra_phase", false)))
-	_started_phase_lifecycles.erase(lifecycle_key)
+## 完成回调只在两个窗口全部子内容结束后调用，替代各阶段重复保存的结束游标。
+func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int, on_completed: Callable = Callable()) -> void:
+	# 阶段收尾服务；同名活动实例只允许一个ending序列。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	phase_service.complete(base_name, player_id, event_data, parent_event_id, on_completed)
 
 
 ## 返回指定阶段生命周期是否仍等待主体执行；End或After选择恢复时返回false，防止重复摸牌、弃牌或写入阶段日志。
@@ -12385,11 +12031,9 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true, hide_contr
 		_reject("当前不能结束出牌阶段。")
 		return
 	_ai_drive_token += 1
-	if complete_use_phase:
-		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		# phaseUseEnd或phaseUseAfter中的技能选择会暂停结束流程；恢复后由统一阶段续接入口再次进入本函数。
-		if has_pending_card_choice():
-			return
+	if complete_use_phase and _started_phase_lifecycles.has("%d:phaseUse" % player_id):
+		_finish_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_end_play_phase").bind(player_id, false, hide_controls_during_transition))
+		return
 	# 跳过阶段不应在流程延时内继续以 play 快照呈现，否则本地手牌与结束回合按钮会短暂闪现。
 	var transition_phase: String = "play"
 	if hide_controls_during_transition:
@@ -12438,11 +12082,13 @@ func _end_play_phase(player_id: int, complete_use_phase: bool = true, hide_contr
 
 
 ## 进入弃牌阶段并在需要时创建强制选牌请求；无需弃牌时仍保留一个阶段间隔再进入结束阶段。
-func _enter_discard_phase(player_id: int) -> void:
+func _enter_discard_phase(player_id: int, change_completed: bool = false) -> void:
 	if _is_main_phase_converted_to_play(player_id, "discard"):
 		_start_converted_main_phase_as_play(player_id, "discard", "finish")
 		return
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":"play", "to_phase":"discard"}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":"play", "to_phase":"discard"}, _current_turn_event_id, Callable(self, "_enter_discard_phase").bind(player_id, true))
+		return
 	state.current_phase = "discard"
 	state.phase_index = 4
 	_record_runtime_event("phaseDiscard", "phase", {"player_id":player_id})
@@ -12450,14 +12096,7 @@ func _enter_discard_phase(player_id: int) -> void:
 	if has_acquired_opportunity_permanent_phase_skip(player_id, "discard"):
 		skip_current_main_phase(player_id, "discard", "opportunity_permanent_skip")
 		return
-	if not _begin_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
-		_emit_rule_timing("phaseDiscardCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_finish_turn(player_id)
-		return
-	# 弃牌阶段Begin中的技能可创建异步选择；选择完成后由统一恢复入口重新进入阶段主体。
-	if has_pending_card_choice():
-		return
-	_continue_turn_after_discard_phase_begin(player_id)
+	_begin_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_continue_turn_after_discard_phase_begin").bind(player_id), Callable(self, "_finish_turn").bind(player_id))
 
 
 ## 完成弃牌阶段主体；Begin选择或阶段结束时机恢复后均从此入口安全续接，不会重复创建强制弃牌请求。
@@ -12499,7 +12138,7 @@ func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
 
 
 ## 为当前回合角色开始一个独立的额外出牌阶段；阶段次数、【杀】次数与技能阶段计数都从新阶段重新计算。
-func _start_extra_play_phase(player_id: int) -> void:
+func _start_extra_play_phase(player_id: int, change_completed: bool = false) -> void:
 	# 额外阶段角色；角色在阶段交界死亡时不再继续行动，统一交给死亡后的回合转交入口。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
@@ -12507,7 +12146,9 @@ func _start_extra_play_phase(player_id: int) -> void:
 		return
 	# 来源阶段；普通出牌阶段追加时为play，弃牌阶段插入时为discard。
 	var previous_phase: String = state.current_phase
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "extra_phase":true}, _current_turn_event_id)
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"play", "extra_phase":true}, _current_turn_event_id, Callable(self, "_start_extra_play_phase").bind(player_id, true))
+		return
 	state.current_phase = "play"
 	state.phase_index = 3
 	# 【杀】的基础限制按出牌阶段计算；额外出牌阶段必须恢复为0，不能沿用本回合前一阶段的次数。
@@ -12518,18 +12159,7 @@ func _start_extra_play_phase(player_id: int) -> void:
 	if reincarnation_skill_service != null:
 		reincarnation_skill_service.on_play_phase_started(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true}, {}, _current_turn_event_id)
-	if not _begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id):
-		_emit_rule_timing("phaseUseCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id)
-		_end_play_phase(player_id, false)
-		return
-	log_phase_begin("play", true)
-	# 额外阶段Begin中的技能选择与普通阶段使用相同暂停边界，不能并行创建chooseToUse请求。
-	if has_pending_card_choice():
-		return
-	_begin_play_choice(player_id)
-	_emit_state()
-	if ai_coordinator.is_ai_controlled(player_id):
-		_schedule_ai_action()
+	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id, Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_end_play_phase").bind(player_id, false))
 
 
 ## 恢复玩家提交的弃牌阶段选择；全部 UID 校验成功后结束当前回合。
@@ -12554,11 +12184,9 @@ func _finish_turn(player_id: int) -> void:
 	if state == null or state.game_over or state.current_player_id != player_id:
 		return
 	# 弃牌阶段先完整完成End与After；任一完成时机产生选择时保留生命周期游标等待恢复。
-	if state.current_phase == "discard":
-		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		if has_pending_card_choice():
-			return
-	# 弃牌阶段内已排队的额外出牌阶段在生命周期完整结束后依次执行。
+	if state.current_phase == "discard" and _started_phase_lifecycles.has("%d:phaseDiscard" % player_id):
+		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_finish_turn").bind(player_id))
+		return
 	var pending_extra_play_phases: int = int(_extra_play_phase_counts.get(player_id, 0))
 	if state.current_phase == "discard" and pending_extra_play_phases > 0:
 		_consume_extra_play_phase(player_id)
@@ -12568,48 +12196,35 @@ func _finish_turn(player_id: int) -> void:
 
 
 ## 进入结束阶段并派发完整结束时机；异步技能选择完成后从唯一尾部入口继续。
-func _enter_finish_phase(player_id: int) -> void:
+func _enter_finish_phase(player_id: int, change_completed: bool = false) -> void:
 	# 进入函数前的阶段；只有实际进入过弃牌阶段才派发其 End 与 After，翻面跳回合不会伪造弃牌结束。
 	var previous_phase: String = state.current_phase
-	if previous_phase == "discard":
-		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		# 弃牌阶段End或After技能必须先结算；恢复后_finish_turn会重新进入本入口且不会重复阶段主体。
-		if has_pending_card_choice():
-			return
-	_emit_rule_timing("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"finish"}, _current_turn_event_id)
+	if previous_phase == "discard" and _started_phase_lifecycles.has("%d:phaseDiscard" % player_id):
+		_finish_phase_lifecycle("phaseDiscard", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_enter_finish_phase").bind(player_id))
+		return
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, player_id, player_id, {"from_phase":previous_phase, "to_phase":"finish"}, _current_turn_event_id, Callable(self, "_enter_finish_phase").bind(player_id, true))
+		return
 	state.current_phase = "finish"
 	state.phase_index = 5
 	_record_runtime_event("phaseJieshu", "phase", {"player_id":player_id})
-	if _begin_phase_lifecycle("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id):
-		_emit_rule_timing("phaseJieshu", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-		_finish_phase_lifecycle("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	else:
-		_emit_rule_timing("phaseJieshuCancelled", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
+	_begin_phase_lifecycle("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_run_finish_phase_body").bind(player_id), Callable(self, "_run_finish_phase_tail").bind(player_id))
+
+
+## 结束阶段主体窗口完全结束后才派发End与After。
+func _run_finish_phase_body(player_id: int) -> void:
+	_run_phase_notification("phaseJieshu", player_id, {"turn_number":state.turn_number}, Callable(self, "_finish_phase_lifecycle").bind("phaseJieshu", player_id, {"turn_number":state.turn_number}, _current_turn_event_id, Callable(self, "_run_finish_phase_tail").bind(player_id)))
+
+
+## 完整结束阶段之后才发布回合结束窗口；旧兼容事件也各占一个等待步骤。
+func _run_finish_phase_tail(player_id: int) -> void:
 	_record_runtime_event("phaseEnd", "phase", {"player_id":player_id})
-	_emit_rule_timing("phaseEnd", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	_dispatch_rule_event(RuleEvent.new("phase_finish", player_id, player_id, {}))
-	if has_pending_card_choice() or not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty() or not _deferred_skill_settlements.is_empty():
-		_pending_finish_turn_player_id = player_id
-		return
+	_run_phase_notification("phaseEnd", player_id, {"turn_number":state.turn_number}, Callable(self, "_run_phase_notification").bind("phase_finish", player_id, {}, Callable(self, "_finish_phase_triggers_completed").bind(player_id)))
+
+
+## 独立插入阶段仍使用其正式完成接口；普通窗口无需额外恢复标记。
+func _finish_phase_triggers_completed(player_id: int) -> void:
 	_continue_after_finish_phase_triggers(player_id)
-
-
-## 在结束阶段技能创建的选择、独立阶段与延后结算全部排空后恢复唯一回合尾部入口。
-func _try_resume_pending_finish_turn() -> void:
-	if _pending_finish_turn_player_id < 0 or state == null or state.game_over:
-		return
-	if has_pending_card_choice() or has_pending_judgment_request() or not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty():
-		return
-	if not _deferred_skill_settlements.is_empty() or _rule_continuations.has_pending() or (trigger_manager != null and trigger_manager.has_deferred_dispatches()):
-		return
-	if game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval():
-		return
-	# 等待收尾的真实回合角色；独立阶段尚未恢复时current_player_id不会匹配，因此不能提前丢失该标记。
-	var finishing_player_id: int = _pending_finish_turn_player_id
-	if state.current_player_id != finishing_player_id:
-		return
-	_pending_finish_turn_player_id = -1
-	_continue_after_finish_phase_triggers(finishing_player_id)
 
 
 ## 在phaseEnd技能全部恢复后选择额外出牌阶段或正常回合尾部；phaseEnd只派发一次。
@@ -12638,12 +12253,7 @@ func _complete_finish_turn(player_id: int) -> void:
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
-	_emit_rule_timing("phaseAfter", player_id, player_id, player_id, {"turn_number":state.turn_number}, _current_turn_event_id)
-	# 回合后技能的选择、判定与结果停留必须完整结束后才能计算轮末和下一回合；续接只保存已结束角色ID，不重复派发phaseAfter。
-	if has_pending_card_choice() or has_pending_judgment_request() or (game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()):
-		_defer_rule_continuation("phase_after_completion", {"finished_player_id":player_id})
-		return
-	_continue_after_phase_after(player_id)
+	_run_phase_notification("phaseAfter", player_id, {"turn_number":state.turn_number}, Callable(self, "_continue_after_phase_after").bind(player_id))
 
 
 ## 在 phaseAfter 的全部技能与异步结果结束后计算轮末边界并安排下一回合；该入口不会重复发布回合结束时机。
@@ -13748,8 +13358,6 @@ func _is_conquest_settlement_quiescent() -> bool:
 	if trigger_manager != null and trigger_manager.has_deferred_dispatches():
 		return false
 	if not _pending_dying_start_contexts.is_empty() or not _pending_damage_finalizations.is_empty() or not _queued_equipment_triggers.is_empty():
-		return false
-	if _pending_finish_turn_player_id >= 0:
 		return false
 	if not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty():
 		return false
@@ -15197,6 +14805,16 @@ func emit_rule_timing(event_name: String, player_id: int = -1, source_id: int = 
 	return _emit_rule_timing(event_name, player_id, source_id, target_id, event_data, parent_id)
 
 
+## 步骤内容的时机入口；派发前登记原事件所有权，触发预算耗尽后可直接让出当前帧。
+## 下一步骤读取sequence.waiting_event的最终data；不要在本次调用后同步消费窗口结果。
+func emit_sequence_timing(sequence: RuleStepSequence, event_name: String, player_id: int = -1, source_id: int = -1, target_id: int = -1, event_data: Dictionary = {}, parent_id: int = -2) -> RuleEvent:
+	# 步骤拥有的原事件；不在玩法data中混入恢复标志。
+	var event: RuleEvent = RuleEvent.new(event_name, source_id, target_id, event_data, player_id)
+	event.step_owned = true
+	sequence.wait_for_timing(event)
+	return _dispatch_rule_event(event, parent_id)
+
+
 ## 控制器内部标准时机入口；公共内容端口与核心流程共用同一派发、排序和历史记录实现。
 func _emit_rule_timing(event_name: String, player_id: int = -1, source_id: int = -1, target_id: int = -1, event_data: Dictionary = {}, parent_id: int = -2) -> RuleEvent:
 	# 当前规则事件；构造函数深复制上下文，避免触发完成后仍被调用方修改。
@@ -15234,7 +14852,7 @@ func _dispatch_timing_service_event(event: RuleEvent) -> void:
 	# 纯同步父牌效还不能在返回后跨帧保留调用栈；因此无选择的新分片必须在父逻辑继续前受控排空。
 	# 已创建真实选择时依然保留续列，由选择提交后的统一结算管线恢复。
 	var synchronous_resume_slice_count: int = 0
-	while trigger_manager != null and not has_pending_card_choice() and (trigger_manager.is_dispatch_deferred(event) or trigger_manager.get_deferred_dispatch_count() > deferred_dispatch_count_before):
+	while not event.step_owned and trigger_manager != null and not has_pending_card_choice() and (trigger_manager.is_dispatch_deferred(event) or trigger_manager.get_deferred_dispatch_count() > deferred_dispatch_count_before):
 		if synchronous_resume_slice_count >= maxi(max_settlement_steps_per_pass, 1):
 			# 超限时终止的当前触发子树事件数；清空后父规则可按取消结果继续安全收尾。
 			var aborted_dispatch_count: int = trigger_manager.abort_all_deferred_dispatches("trigger_dispatch_slice_limit")
@@ -15745,3 +15363,33 @@ func _winner_text(winner: String) -> String:
 		"blue_team":"蓝方",
 		"red_team":"红方",
 	}.get(winner, winner)
+
+
+## 阶段切换通知完成后才修改公开阶段；选择期间发生跳过、死亡或换回合时旧切换不再生效。
+func _change_phase_then(timing_name: String, player_id: int, source_id: int, target_id: int, event_data: Dictionary, parent_event_id: int, on_completed: Callable) -> void:
+	# 切换起点身份；只允许原对局、原回合、原公开阶段继续，避免异步技能已经推进后重复推进。
+	var transition_context: Dictionary = {"match_id":state.match_id, "turn_number":state.turn_number, "phase":state.current_phase, "player_id":state.current_player_id}
+	# 显式两步；phaseChange是状态改变前的通知，实际入口在全部子内容结束后重新校验。
+	var steps: Array[Callable] = [
+		func(sequence: RuleStepSequence) -> void: emit_sequence_timing(sequence, timing_name, player_id, source_id, target_id, event_data, parent_event_id),
+		func(sequence: RuleStepSequence) -> void:
+			if state != null and not state.game_over and state.match_id == str(sequence.context.match_id) and state.turn_number == int(sequence.context.turn_number) and state.current_player_id == int(sequence.context.player_id) and state.current_phase == str(sequence.context.phase) and on_completed.is_valid():
+				on_completed.call(),
+	]
+	run_rule_sequence(steps, transition_context)
+
+
+## 子阶段按创建身份归属，不以当前公开phase或是否存在选牌猜测完成状态。
+func _sequence_waits_for_child_phase(sequence: RuleStepSequence) -> bool:
+	return (not _active_independent_play_phase.is_empty() and int(_active_independent_play_phase.get("phase_id", -1)) != sequence.enclosing_play_phase_id) or (not _active_extra_discard_phase.is_empty() and int(_active_extra_discard_phase.get("phase_id", -1)) != sequence.enclosing_discard_phase_id)
+
+
+## 只检查最内层父内容；子阶段中新建的规则序列已记录外层阶段身份，仍能正常推进。
+func _top_sequence_waits_for_child_phase() -> bool:
+	# 栈顶记录；旧类型续接继续由自己的正式完成入口处理。
+	var continuation: Dictionary = _rule_continuations.peek()
+	if str(continuation.get("continuation_type", "")) != "rule_sequence":
+		return false
+	# 当前步骤内容；失效序列由普通出栈路径回收，不形成永久屏障。
+	var sequence: RuleStepSequence = _rule_sequences.get(int((continuation.get("context", {}) as Dictionary).get("sequence_id", -1))) as RuleStepSequence
+	return sequence != null and _sequence_waits_for_child_phase(sequence)

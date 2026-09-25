@@ -205,7 +205,6 @@ func _reset_state(player_count: int) -> void:
 	_controller._pending_damage_finalizations.clear()
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
-	_controller._pending_finish_turn_player_id = -1
 	_controller._pending_dying_start_contexts.clear()
 	_controller._clear_pending_judgment_request()
 	_controller._judgment_flow_in_progress = false
@@ -1312,7 +1311,7 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 加护运行时技能；安装真实准备阶段订阅，确保测试经过与对局一致的Begin选择路径。
 	var jiahu: SkillDefinition = _install_single_skill(0, "jiahu")
 	# 准备阶段生命周期；加护应创建本地目标选择并把阶段临时标记为choice。
-	var preparation_started: bool = _controller._begin_phase_lifecycle("phaseZhunbei", 0, {"turn_number":_controller.state.turn_number}, -1)
+	var preparation_started: bool = _controller._begin_phase_lifecycle("phaseZhunbei", 0, {"turn_number":_controller.state.turn_number}, -1, Callable(_controller, "_run_preparation_phase_body").bind(0), Callable(_controller, "_continue_turn_after_preparation_phase").bind(0))
 	if jiahu == null or not preparation_started or not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
 		return _fail("jiahu_begin_choice skill=%s started=%s pending=%s phase=%s" % [jiahu, preparation_started, _controller.has_pending_card_choice(), _controller.state.current_phase])
 	# 自选自身响应；这是此前会让准备阶段无法继续、游戏卡死的路径。
@@ -1345,7 +1344,7 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	# 永屹运行时技能；安装真实弃牌阶段Begin订阅，确保确认响应经过统一恢复入口。
 	var yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
 	# 弃牌阶段生命周期；永屹应在Begin创建确认选择并暂停当前弃牌阶段。
-	var discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
+	var discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1, Callable(_controller, "_continue_turn_after_discard_phase_begin").bind(0), Callable(_controller, "_finish_turn").bind(0))
 	if yongyi == null or not discard_started or not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
 		return _fail("yongyi_begin_choice skill=%s started=%s pending=%s phase=%s" % [yongyi, discard_started, _controller.has_pending_card_choice(), _controller.state.current_phase])
 	# 确认发动第二段；自伤产生的伤害后分支必须先创建嵌套确认，不能提前摸牌或恢复阶段。
@@ -1385,7 +1384,7 @@ func _test_deferred_phase_choice_resumption() -> bool:
 	var confirmed_hand_count_before: int = confirmed_gepard.hand.size()
 	# 真实永屹实例；弃牌阶段Begin首先创建第二段确认。
 	var confirmed_yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
-	if confirmed_yongyi == null or not _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1):
+	if confirmed_yongyi == null or not _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1, Callable(_controller, "_continue_turn_after_discard_phase_begin").bind(0), Callable(_controller, "_finish_turn").bind(0)):
 		return _fail("yongyi_confirmed_nested_setup")
 	if not _submit_pending_choice(0, [], [], true):
 		return false
@@ -1820,7 +1819,7 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	# 真实运行时永屹技能；订阅弃牌阶段时机并生成标准确认请求。
 	var empty_hand_yongyi: SkillDefinition = _install_single_skill(0, "yongyi")
 	# 空手牌弃牌阶段生命周期；原文条件满足时仍要暂停并等待玩家确认。
-	var empty_hand_discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1)
+	var empty_hand_discard_started: bool = _controller._begin_phase_lifecycle("phaseDiscard", 0, {"turn_number":_controller.state.turn_number}, -1, Callable(_controller, "_continue_turn_after_discard_phase_begin").bind(0), Callable(_controller, "_finish_turn").bind(0))
 	if empty_hand_yongyi == null or not empty_hand_discard_started or not _controller.has_pending_card_choice():
 		return _fail("yongyi_empty_hand_choice skill=%s started=%s pending=%s" % [empty_hand_yongyi, empty_hand_discard_started, _controller.has_pending_card_choice()])
 	# 玩家明确确认；无可用牌不应阻止技能造成自伤，但后续摸牌必须等待伤害流程完成。
@@ -3203,12 +3202,12 @@ func _test_mice_extra_phase_sequences() -> bool:
 		_add_draw_pile_card("shan", "club", draw_rank)
 	mice = _install_single_skill(0, "mice")
 	_controller._enter_finish_phase(0)
-	if _controller._pending_finish_turn_player_id != 0 or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mice_target_option":
-		return _fail("mice_finish_pending pending=%d choice=%s" % [_controller._pending_finish_turn_player_id, _controller._pending_card_choice])
+	if _controller._rule_sequences.is_empty() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mice_target_option":
+		return _fail("mice_finish_pending pending=%d choice=%s" % [_controller._rule_sequences.size(), _controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [], false):
 		return false
-	if _controller._pending_finish_turn_player_id >= 0 or _controller.state.current_player_id != 1:
-		return _fail("mice_finish_resume pending=%d current=%d phase=%s" % [_controller._pending_finish_turn_player_id, _controller.state.current_player_id, _controller.state.current_phase])
+	if _controller.state.current_player_id != 1:
+		return _fail("mice_finish_resume pending=%d current=%d phase=%s" % [_controller._rule_sequences.size(), _controller.state.current_player_id, _controller.state.current_phase])
 	return true
 
 
