@@ -8936,6 +8936,11 @@ func request_card_voice(player_id: int, card_definition_id: String, play_mode: S
 	}
 	# 使用者性别；音频层据此优先选用 male/female 子目录中的专属配音，未选将或未知性别时跳过该层。
 	var gender: String = get_player_gender(player_id)
+	# 音效所用的卡牌ID；内容层声明了 voice_card_id 的同族卡牌（火【杀】、雷【杀】）与基础牌共用配音。
+	# 未声明时回退到自身ID，因此对绝大多数卡牌本字段与 card_definition_id 相同。
+	var voice_card_id: String = str(card_definition.get("voice_card_id", ""))
+	if voice_card_id.is_empty():
+		voice_card_id = card_definition_id
 	# 只读表现负载；不包含手牌归属、身份或随机种子等任何隐藏信息。
 	var presentation_data: Dictionary = {
 		"kind": VOICE_KIND_CARD,
@@ -8943,6 +8948,7 @@ func request_card_voice(player_id: int, card_definition_id: String, play_mode: S
 		"card_definition_id": card_definition_id,
 		"card_names": card_names,
 		"gender": gender,
+		"voice_card_id": voice_card_id,
 		"play_mode": play_mode,
 		"sequence": _voice_presentation_sequence,
 	}

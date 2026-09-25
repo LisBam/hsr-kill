@@ -20,8 +20,11 @@ const PROBE_CHARACTER_ID: String = "qiong"
 ## 真实卡牌 ID：已投放男声与女声专属配音的卡牌；用于确认性别维度在真实素材上生效。
 const PROBE_REAL_CARD_ID: String = "sha"
 
-## 真实卡牌 ID：没有投放专属配音的卡牌；用于确认它会回退到全卡牌通用兜底音效。
+## 真实卡牌 ID：没有投放专属配音的卡牌；用于确认它只播放基础伴随音效而不是整张牌静默。
 const PROBE_UNCOVERED_CARD_ID: String = "tao"
+
+## 同族卡牌 ID：火【杀】与雷【杀】；它们在内容层声明 voice_card_id 后共用【杀】的配音。
+const PROBE_ALIAS_CARD_IDS: Array[String] = ["sha_fire", "sha_thunder"]
 
 ## 核心层自动触发用例最多等待的进程帧数；全 AI 对局在零延迟下会迅速出牌，通常在数十帧内即命中。
 const MAX_AUTOMATION_FRAMES: int = 600
@@ -235,6 +238,25 @@ func _verify_real_audio_assets() -> bool:
 	if uncovered_paths.size() != 1 or not uncovered_paths[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
 		_fail("real_card_uncovered=%s" % str(uncovered_paths))
 		return false
+	# 同族卡牌共用音效；火【杀】与雷【杀】在内容层声明了 voice_card_id，必须解析到【杀】的那两层。
+	for alias_card_id: String in PROBE_ALIAS_CARD_IDS:
+		# 别名卡牌定义；缺失说明卡牌目录结构已变更，本用例的前提不再成立。
+		var alias_definition: Dictionary = GameDatabase.get_card(alias_card_id)
+		if alias_definition.is_empty():
+			_fail("real_alias_card_missing=%s" % alias_card_id)
+			return false
+		# 内容层声明的音效别名；必须指向【杀】，否则同族共用规则失效。
+		var alias_voice_card_id: String = str(alias_definition.get("voice_card_id", ""))
+		if alias_voice_card_id != PROBE_REAL_CARD_ID:
+			_fail("real_alias_voice_card_id=%s:%s" % [alias_card_id, alias_voice_card_id])
+			return false
+		# 别名解析结果；必须与【杀】本牌完全一致，含基础伴随音效与专属配音两层。
+		var alias_paths: Array[String] = catalog.resolve_card_voice_paths(alias_voice_card_id, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
+		if alias_paths != male_sha:
+			_fail("real_alias_voice_paths=%s:%s" % [alias_card_id, str(alias_paths)])
+			return false
+	if not _verify_audio_asset_names():
+		return false
 	# 战斗BGM；必须真实存在，且游戏内显示名为“默认”。
 	var bgm_pool: Array[String] = catalog.resolve_bgm_pool(AudioCatalog.BGM_SCENE_BATTLE)
 	if bgm_pool.is_empty():
@@ -243,6 +265,29 @@ func _verify_real_audio_assets() -> bool:
 	if catalog.get_bgm_display_name(bgm_pool[0]) != AudioCatalog.BGM_DEFAULT_DISPLAY_NAME:
 		_fail("real_bgm_battle_name=%s" % catalog.get_bgm_display_name(bgm_pool[0]))
 		return false
+	return true
+
+
+## 校验卡牌音频目录里的每一份素材都以“卡牌稳定ID”命名，而不是以卡牌源码文件名命名。
+## 这两种名字在多数卡牌上恰好相同，但在火【杀】这类牌上并不一致（源码文件名 huosha、稳定ID sha_fire），
+## 一旦用错，解析器就会找不到专属配音、只播基础伴随音效，而且不会报任何错误——因此必须逐一核对。
+func _verify_audio_asset_names() -> bool:
+	for gender: String in [AudioCatalog.CARD_GENDER_MALE, AudioCatalog.CARD_GENDER_FEMALE]:
+		# 当前性别子目录的绝对路径；目录缺失时后续断言无法成立。
+		var dir_path: String = "%s/%s" % [AudioCatalog.CARD_AUDIO_DIR, gender]
+		# 目录下的全部条目；包含导入产物，因此只挑出音频本体。
+		var entries: PackedStringArray = DirAccess.get_files_at(dir_path)
+		if entries.is_empty():
+			_fail("real_audio_dir_empty=%s" % dir_path)
+			return false
+		for entry: String in entries:
+			if not entry.ends_with(".mp3"):
+				continue
+			# 素材基名；必须能作为卡牌稳定ID查到定义，否则该配音永远不会被播放。
+			var base_name: String = entry.get_basename()
+			if GameDatabase.get_card(base_name).is_empty():
+				_fail("real_audio_name_not_card_id=%s/%s" % [gender, entry])
+				return false
 	return true
 
 
@@ -521,7 +566,7 @@ func _verify_core_voice_channels() -> void:
 		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_SKILL:
 			auto_skill_request_count += 1
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok asset_names=ok alias_voice=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
 	get_tree().quit(0)
 
 
