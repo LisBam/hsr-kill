@@ -36,8 +36,7 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 	for target_id: int in target_ids:
 		if resolver.is_resolution_stopped():
 			break
-		resolver.host.emit_rule_timing("taoBegin", actor_id, actor_id, target_id, {"card_uid":card.uid, "card_id":card.definition_id})
-		resolver.host.recover(actor_id, target_id, 1, card.definition_id)
+		_begin_recovery(resolver.host, actor_id, target_id, {"card_uid":card.uid, "card_id":card.definition_id})
 	return resolver.default_destination()
 
 
@@ -53,7 +52,32 @@ func resolve_dying_response(match_host: Object, responder_id: int, dying_player_
 	var target: PlayerState = match_host.state.get_player(dying_player_id)
 	if responder == null or target == null or not responder.alive or not target.alive:
 		return false
-	match_host.emit_rule_timing("taoBegin", responder_id, responder_id, dying_player_id, {"card_id":get_id(), "dying_response":true})
-	match_host.recover(responder_id, dying_player_id, 1, get_id())
+	_begin_recovery(match_host, responder_id, dying_player_id, {"card_id":get_id(), "dying_response":true})
 	match_host.add_log("%s对%s使用【桃】。" % [responder.display_name, target.display_name])
 	return true
+
+
+## 普通使用与求桃共用两步内容；taoBegin结束前不修改体力。
+func _begin_recovery(match_host: Object, actor_id: int, target_id: int, data: Dictionary) -> void:
+	# 原目标代次；等待中的换将不能把旧桃效果交给新武将。
+	var target: PlayerState = match_host.state.get_player(target_id)
+	if target == null:
+		return
+	# 每个可交互效果独占一步；回复内部仍由统一回复组件编排。
+	var steps: Array[Callable] = [_begin_timing.bind(match_host), _apply_recovery.bind(match_host)]
+	match_host.run_rule_sequence(steps, {"actor_id":actor_id, "target_id":target_id, "generation":target.character_generation, "data":data})
+
+
+## 保存原始时机对象；异步取消需要在后续步骤读取最终状态。
+func _begin_timing(sequence: RuleStepSequence, match_host: Object) -> void:
+	match_host.emit_sequence_timing(sequence, "taoBegin", int(sequence.context.actor_id), int(sequence.context.actor_id), int(sequence.context.target_id), sequence.context.data)
+
+
+## 前置取消只阻止效果，不撤销已使用的桃；合法目标固定回复1点。
+func _apply_recovery(sequence: RuleStepSequence, match_host: Object) -> void:
+	if sequence.waiting_event != null and (sequence.waiting_event.cancelled or sequence.waiting_event.neutralized):
+		return
+	# 重新读取目标实体；来源可已死亡，但效果不能作用于替换后的目标。
+	var target: PlayerState = match_host.state.get_player(int(sequence.context.target_id))
+	if target != null and target.character_generation == int(sequence.context.generation):
+		match_host.recover(int(sequence.context.actor_id), target.player_id, 1, get_id())

@@ -1736,12 +1736,12 @@ grow_vertical = 2
 
 [node name="SettingsVBox" type="VBoxContainer" parent="MainMenu/MainMenuSettingsPanel" unique_id=236641704]
 layout_mode = 2
-theme_override_constants/separation = 3
+theme_override_constants/separation = 0
 
 [node name="MainMenuSettingsTitle" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=168713084]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 20
 text = "设置"
 horizontal_alignment = 1
 
@@ -1761,7 +1761,7 @@ color = Color(0.75, 0.66, 0.42, 0.65)
 
 [node name="MainMenuCardNameRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1838510944]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuCardNameLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCardNameRow" unique_id=192563745]
 unique_name_in_owner = true
@@ -1772,13 +1772,13 @@ vertical_alignment = 1
 
 [node name="MainMenuCardNameOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCardNameRow" unique_id=1127143970]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 28)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
 [node name="MainMenuUiStyleRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=204379471]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuUiStyleLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuUiStyleRow" unique_id=148923598]
 unique_name_in_owner = true
@@ -1789,13 +1789,13 @@ vertical_alignment = 1
 
 [node name="MainMenuUiStyleOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuUiStyleRow" unique_id=164376350]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 28)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
 [node name="MainMenuAutoIdentityMarkingCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=170835435]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 button_pressed = true
@@ -1812,7 +1812,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuControlAllCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=973708916]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "控制所有角色"
@@ -1828,7 +1828,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuCustomCharacterAssignmentCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320011]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选全武将、座次与身份"
@@ -1844,7 +1844,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuCustomizeAiCharactersCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320012]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "自选所有AI的武将"
@@ -1861,7 +1861,7 @@ script = ExtResource("23_identity_indicator")
 [node name="MainMenuMulliganLimitRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320013]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuMulliganLimitLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuMulliganLimitRow" unique_id=190320014]
 unique_name_in_owner = true
@@ -1872,13 +1872,13 @@ vertical_alignment = 1
 
 [node name="MainMenuMulliganLimitOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuMulliganLimitRow" unique_id=190320015]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 28)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
 [node name="MainMenuAiUsesMulliganCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=190320016]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "AI使用手气卡"
@@ -1894,7 +1894,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuCharacterReplacementCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1193887918]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuCharacterReplacementCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow" unique_id=418029496]
 unique_name_in_owner = true
@@ -1905,13 +1905,13 @@ vertical_alignment = 1
 
 [node name="MainMenuCharacterReplacementCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow" unique_id=526646588]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 28)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
 [node name="MainMenuCharacterCandidateCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=113849462]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuCharacterCandidateCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow" unique_id=1103240660]
 unique_name_in_owner = true
@@ -1922,7 +1922,7 @@ vertical_alignment = 1
 
 [node name="MainMenuCharacterCandidateCountOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow" unique_id=793187536]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 28)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
@@ -1941,7 +1941,7 @@ vertical_alignment = 1
 
 [node name="MainMenuConquestDifficultyOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestDifficultyRow" unique_id=2026072303]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
@@ -1960,7 +1960,7 @@ vertical_alignment = 1
 
 [node name="MainMenuConquestOpportunityChoiceOption" type="OptionButton" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuConquestOpportunityChoiceRow" unique_id=2026072626]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(156, 34)
+custom_minimum_size = Vector2(156, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 
@@ -1971,7 +1971,7 @@ text = "AI响应速度：0.30秒"
 
 [node name="MainMenuAiResponseDelaySlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=555902079]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 22)
+custom_minimum_size = Vector2(0, 16)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 0.1
@@ -1986,7 +1986,7 @@ text = "游戏速度：0.30秒"
 
 [node name="MainMenuGameSpeedSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=685925191]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 22)
+custom_minimum_size = Vector2(0, 16)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 0.1
@@ -2001,7 +2001,7 @@ text = "背景音乐音量：80%"
 
 [node name="MainMenuBgmVolumeSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200202]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 22)
+custom_minimum_size = Vector2(0, 16)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 max_value = 1.0
@@ -2015,7 +2015,7 @@ text = "音效音量：90%"
 
 [node name="MainMenuSfxVolumeSlider" type="HSlider" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200204]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 22)
+custom_minimum_size = Vector2(0, 16)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 max_value = 1.0
@@ -2024,7 +2024,7 @@ value = 0.9
 
 [node name="MainMenuAudioMutedCheckBox" type="CheckBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=1903200205]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "静音全部音频"
@@ -2040,7 +2040,7 @@ script = ExtResource("23_identity_indicator")
 
 [node name="MainMenuPlayerCountRow" type="HBoxContainer" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=180229364]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 6
 
 [node name="MainMenuPlayerCountLabel" type="Label" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuPlayerCountRow" unique_id=783761082]
 unique_name_in_owner = true
@@ -2051,7 +2051,7 @@ vertical_alignment = 1
 
 [node name="MainMenuPlayerCountInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuPlayerCountRow" unique_id=132302109]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(108, 34)
+custom_minimum_size = Vector2(108, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 2.0
@@ -2071,7 +2071,7 @@ vertical_alignment = 1
 
 [node name="WheelDuelFaceUpCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow" unique_id=933723517]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(108, 34)
+custom_minimum_size = Vector2(108, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 3.0
@@ -2091,7 +2091,7 @@ vertical_alignment = 1
 
 [node name="WheelDuelFaceDownCandidateInput" type="SpinBox" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow" unique_id=1231435001]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(108, 34)
+custom_minimum_size = Vector2(108, 30)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 min_value = 3.0
@@ -2100,7 +2100,7 @@ value = 4.0
 
 [node name="MainMenuSettingsCloseButton" type="Button" parent="MainMenu/MainMenuSettingsPanel/SettingsVBox" unique_id=155077055]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
+custom_minimum_size = Vector2(0, 34)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "返回"

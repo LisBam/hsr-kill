@@ -12,15 +12,6 @@ var _host: MatchController
 ## 当前对局权威状态；解析器只读取角色与牌区，不直接修改数组或数值。
 var _state: GameState
 
-## 多目标伤害尚未结算的目标队列；顺序严格继承玩家选择顺序，空数组表示没有进行中的批量伤害。
-var _pending_damage_target_ids: Array[int] = []
-
-## 多目标伤害来源角色；默认-1，批量伤害完成后立即清空。
-var _pending_damage_source_id: int = -1
-
-## 多目标伤害单次固定点数；默认0，只有批量伤害流程活动时为正数。
-var _pending_damage_amount: int = 0
-
 ## 等待逐张交入机缘拥有者手牌的实体队列；每项只保存card_uid与receiver_id，区域在移动时重新复核。
 var _pending_transfer_entries: Array[Dictionary] = []
 
@@ -51,9 +42,6 @@ func configure(system: OpportunitySystem, host: MatchController, state: GameStat
 	_system = system
 	_host = host
 	_state = state
-	_pending_damage_target_ids.clear()
-	_pending_damage_source_id = -1
-	_pending_damage_amount = 0
 	_pending_transfer_entries.clear()
 	_pending_equipment_evacuation_entries.clear()
 	_pending_equipment_install_entries.clear()
@@ -248,9 +236,6 @@ func continue_after_barrier() -> bool:
 	if not _pending_discard_one_target_ids.is_empty() or _pending_discard_one_owner_id >= 0:
 		_process_next_discard_one_target()
 		return true
-	if not _pending_damage_target_ids.is_empty():
-		_resolve_next_pending_damage()
-		return true
 	if _pending_turn_over_resolution_active:
 		_process_pending_turn_overs()
 		return true
@@ -321,10 +306,15 @@ func _apply_target_effect(owner_player_id: int, card_definition: Dictionary, tar
 		_begin_transfer_cards(owner_player_id, _host.get_hand_card_uids(target_ids[0]), "opportunity_gain_all_hand")
 		return
 	if effect_id == "damage_targets":
-		_pending_damage_source_id = owner_player_id
-		_pending_damage_amount = int(card_definition.get("count", 0))
-		_pending_damage_target_ids = target_ids.duplicate()
-		_resolve_next_pending_damage()
+		# 玩家选择顺序和伤害值属于同一可暂停机缘序列；每个目标的完整伤害子树结束后才进入下一名。
+		var damage_context: Dictionary = {
+			"sequence_kind":"opportunity_damage_targets",
+			"source_id":owner_player_id,
+			"amount":int(card_definition.get("count", 0)),
+			"target_ids":target_ids.duplicate(),
+			"target_index":0,
+		}
+		_host.run_rule_sequence([_resolve_sequence_damage_target], damage_context)
 		return
 	if effect_id == "turn_over_target" and target_ids.size() == 1:
 		_begin_turn_over_targets(target_ids)
@@ -559,25 +549,23 @@ func _process_next_discard_one_target() -> void:
 	_system.complete_current_effect()
 
 
-## 依次处理多目标伤害；任一伤害产生濒死或技能选择时登记统一机缘续接，完成后再伤害下一名目标。
-func _resolve_next_pending_damage() -> void:
-	while not _pending_damage_target_ids.is_empty():
-		# 当前伤害目标；从队首取出以严格保留玩家点击顺序。
-		var target_id: int = _pending_damage_target_ids.pop_front()
-		# 当前目标状态；已死亡或离场目标直接跳过，不改变后续目标顺序。
-		var target: PlayerState = _state.get_player(target_id)
-		if target == null or not target.alive or target.out_of_game:
-			continue
-		# 外层恢复点；本名目标的伤害、濒死与技能续接完成后才处理队列中的下一名角色。
-		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		_host.damage(_pending_damage_source_id, target_id, _pending_damage_amount, "normal", "opportunity")
-		if _host.has_nested_settlement_barrier():
-			return
-		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
-	# 完成后的来源与伤害值清理；防止下一张普通机缘误认为仍在批量流程。
-	_pending_damage_source_id = -1
-	_pending_damage_amount = 0
-	_system.complete_current_effect()
+## 每次只处理一个目标；伤害子序列完成后统一调度器自然恢复本序列。
+func _resolve_sequence_damage_target(sequence: RuleStepSequence) -> void:
+	# 选择顺序；按原数组索引推进，暂停恢复不会再次伤害已完成目标。
+	var target_ids: Array = sequence.context.get("target_ids", []) as Array
+	var target_index: int = int(sequence.context.get("target_index", 0))
+	if target_index >= target_ids.size():
+		_system.complete_current_effect()
+		return
+	# 当前目标稳定ID；死亡或离场角色跳过后仍依照原选择顺序继续。
+	var target_id: int = int(target_ids[target_index])
+	sequence.context["target_index"] = target_index + 1
+	sequence.insert_steps([Callable(self, "_resolve_sequence_damage_target")])
+	# 目标当前状态；伤害结算前重新检查有效性。
+	var target: PlayerState = _host.state.get_player(target_id)
+	if target == null or not target.alive or target.out_of_game:
+		return
+	_host.damage(int(sequence.context.get("source_id", -1)), target_id, int(sequence.context.get("amount", 0)), "normal", "opportunity")
 
 
 ## 创建目标区域牌选择；AI直接选取稳定候选，人类通过正式卡牌选择面板查看牌背、装备与判定区。

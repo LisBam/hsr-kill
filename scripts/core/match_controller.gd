@@ -1,6 +1,9 @@
 class_name MatchController
 extends Node
 
+## 濒死开始与获救收尾组件；共用规则步骤调度，不单独维护恢复栈。
+const DYING_RESOLUTION_SERVICE_SCRIPT = preload("res://scripts/core/dying_resolution_service.gd")
+
 ## 标准身份局权威控制器。它编排阶段与动作，并把具体合法性、卡牌效果、AI 和网络交给独立组件。
 
 signal state_changed(snapshot: Dictionary)
@@ -106,14 +109,11 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"skill_response",
 	"card_response",
 	"equipment_response",
-	"dying_response",
-	"dying_after_response",
 	"trick_negation_response",
 	"simultaneous_negation_response",
-	"damage_after_result",
 	"slash_flow",
 	"recast_draw",
-	"target_card_completion",
+	"current_player_death",
 	"round_end_restore",
 	"conquest_enemy_defeat",
 	"conquest_enemy_replacement",
@@ -469,8 +469,6 @@ var _card_use_contexts: Dictionary = {}
 ## 需要在持有者下个回合结束时清理的手牌视为效果；键为实体UID，值保存持有者、来源技能与被标记的到期回合。
 var _hand_view_as_turn_expiries: Dictionary = {}
 
-## 等待濒死流程完成后收尾的伤害上下文；键为受伤玩家 ID，值只保存伤害来源、数值、连环目标和事件 ID。
-var _pending_damage_finalizations: Dictionary = {}
 
 ## 活动的可暂停步骤内容；键为单调序列ID，只有内存持有Callable，续接队列只保存ID与游标。
 var _rule_sequences: Dictionary = {}
@@ -570,11 +568,6 @@ var _active_extra_discard_phase: Dictionary = {}
 
 ## 当前由技能插入、可属于非当前回合角色的独立额外出牌阶段；保存原回合展示与技能完成回调，空字典表示没有活动阶段。
 var _active_independent_play_phase: Dictionary = {}
-
-
-## 因dyingBefore、dyingBegin或dying时机中的嵌套选择而暂停的濒死开始游标；数组尾部保存最内层流程，恢复时只读取稳定玩家ID与阶段数据。
-var _pending_dying_start_contexts: Array[Dictionary] = []
-
 ## 等待嵌套规则选择结束后继续的技能结算队列；仅保存技能 ID、持有者 ID 与可序列化上下文，不持有 Callable 或技能对象。
 var _deferred_skill_settlements: Array[Dictionary] = []
 
@@ -619,6 +612,9 @@ var _active_rule_continuation_visits: Dictionary = {}
 
 ## 当前通用规则续接因果链已执行步数；子续接在父回调内登记时递增。
 var _active_rule_continuation_chain_steps: int = 0
+
+## 已预约临时退出但仍等待结算管线排空的下一回合角色；-1表示没有挂起的边界重试。
+var _pending_conquest_boundary_player_id: int = -1
 
 ## 当前全局回合内各角色已经“使用”过的逻辑牌定义；响应牌仅在规则明确视为使用时由对应流程登记。
 var _cards_used_this_turn_by_player: Dictionary = {}
@@ -1381,7 +1377,6 @@ func _teardown_previous_match_runtime() -> void:
 	_active_converted_play_phase_context.clear()
 	_active_extra_discard_phase.clear()
 	_active_independent_play_phase.clear()
-	_pending_dying_start_contexts.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
 	_reset_settlement_runtime_guard()
@@ -1439,8 +1434,8 @@ func _reset_per_match_progress_state() -> void:
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
-	_pending_dying_start_contexts.clear()
 	_rule_continuations.reset()
+	_pending_conquest_boundary_player_id = -1
 	_reset_settlement_runtime_guard()
 	_negation_round_sequence = 0
 	_resolved_card_choice_uids.clear()
@@ -1450,7 +1445,6 @@ func _reset_per_match_progress_state() -> void:
 	_active_card_resolutions.clear()
 	_card_use_contexts.clear()
 	_hand_view_as_turn_expiries.clear()
-	_pending_damage_finalizations.clear()
 	_conquest_replacement_transition_active = false
 	_started_phase_lifecycles.clear()
 	_queued_equipment_triggers.clear()
@@ -2322,6 +2316,15 @@ func _run_scheduled_settlement_pipeline_resume(resume_generation: int) -> void:
 		return
 	_invalidate_scheduled_settlement_resume()
 	_resume_settlement_pipeline()
+	# 回合边界在结算管线排空前被暂缓时，排空后重新尝试同一边界；不创建新的回合或出牌窗口。
+	if _pending_conquest_boundary_player_id >= 0 and _conquest_temporary_exit_requested:
+		var boundary_player_id: int = _pending_conquest_boundary_player_id
+		if _try_capture_conquest_temporary_exit(boundary_player_id):
+			_pending_conquest_boundary_player_id = -1
+		elif _conquest_temporary_exit_requested:
+			_schedule_settlement_pipeline_resume()
+		else:
+			_pending_conquest_boundary_player_id = -1
 
 
 ## 释放当前帧唤醒的信号所有权；显式恢复、重开和离树复用，不能仅清布尔值而留下活动连接。
@@ -3907,112 +3910,22 @@ func describe_card(card: CardInstance) -> String:
 	return "%s%s %s" % [suit_text, rank_text, GameSettings.resolve_card_name(definition)]
 
 
-## 为指定玩家摸若干牌；牌堆不足时自动将弃牌堆洗回，离场技可通过allow_out_of_game显式允许离场持有者获得牌。
+## 为指定玩家摸若干牌；摸牌与获得牌前置窗口全部完成后才移动实体。
 func draw(player_id: int, count: int, announce: bool = true, allow_out_of_game: bool = false) -> void:
 	if state == null or state.game_over:
 		return
-	# 摸牌玩家状态；不存在或死亡玩家不会获得牌。
-	var player: PlayerState = state.get_player(player_id)
-	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game):
-		return
-	# 摸牌生命周期数据；触发器可在 Before 与 Begin 中修改 count，但不能直接取得牌堆实体引用。
-	var timing_data: Dictionary = {"count":maxi(count, 0), "reason":"draw"}
-	var before_event: RuleEvent = _emit_rule_timing("drawBefore", player_id, -1, player_id, timing_data)
-	if before_event != null and (before_event.cancelled or before_event.neutralized):
-		_emit_rule_timing("drawCancelled", player_id, -1, player_id, before_event.data)
-		return
-	var begin_event: RuleEvent = _emit_rule_timing("drawBegin", player_id, -1, player_id, before_event.data if before_event != null else timing_data)
-	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-		_emit_rule_timing("drawCancelled", player_id, -1, player_id, begin_event.data)
-		return
-	# 最终请求摸牌数；负数统一收敛为0，避免触发器制造反向移动。
-	var final_count: int = maxi(int(begin_event.data.get("count", count)) if begin_event != null else count, 0)
-	_ensure_card_movement()
-	# 上一层摸牌表现批次；嵌套摸牌结束后必须恢复它，保证外层剩余实体仍归入原批次。
-	var previous_draw_presentation_batch: Dictionary = _active_draw_presentation_batch
-	# 本次稳定表现批次序号；每次 draw() 独占一个编号，多张牌与多次摸牌不会被界面误合并。
-	_draw_presentation_batch_sequence += 1
-	# 当前批次公开元数据；只保留稳定编号与目标玩家，移牌信号会复制编号而不泄漏 CardInstance。
-	var draw_presentation_batch: Dictionary = {"batch_id":_draw_presentation_batch_sequence, "player_id":player_id}
-	_active_draw_presentation_batch = draw_presentation_batch
-	draw_presentation_batch_started.emit(int(draw_presentation_batch.get("batch_id", -1)), player_id)
-	# 实际摸牌数量；可能因牌堆与弃牌堆同时为空而少于请求值。
-	var drawn_count: int = 0
-	# 实际摸到的实体 UID；后置时机只公开稳定 ID，不暴露 CardInstance。
-	var drawn_card_uids: Array[int] = []
-	for _index: int in range(final_count):
-		if state.draw_pile.is_empty():
-			_reshuffle_discard_pile()
-		if state.draw_pile.is_empty():
-			_end_match_as_draw("deck_empty_draw")
-			break
-		# 从牌堆顶抽出的实体牌；数组末尾作为牌堆顶。
-		var card: CardInstance = state.draw_pile.back()
-		# 移动前区域；摸牌动画必须从桌面中心牌堆起飞。
-		# 该来源现由 CardMoveEvent 在权威移动前自动捕获，规则函数不再单独发出第二次表现信号。
-		if card_movement != null:
-			_move_card_with_timings(card, "hand", player_id, "draw", state.current_event_id, "", [player_id])
-		else:
-			state.draw_pile.pop_back()
-			card.zone = "hand"
-			card.owner_id = player_id
-			player.hand.append(card)
-		drawn_count += 1
-		drawn_card_uids.append(card.uid)
-	# 当前批次已经收集完毕；先通知界面排队播放，再恢复外层批次，drawEnd 中触发的新摸牌会自然进入下一批。
-	draw_presentation_batch_finished.emit(int(draw_presentation_batch.get("batch_id", -1)), player_id)
-	_active_draw_presentation_batch = previous_draw_presentation_batch
-	var result_data: Dictionary = {"count":drawn_count, "requested_count":final_count, "card_uids":drawn_card_uids, "reason":"draw"}
-	# 本次实际摸牌数；终局结算只统计真正从牌堆移入手牌的牌，不把被牌堆耗尽截断的请求计入。
-	player.total_cards_drawn += drawn_count
-	_emit_rule_timing("drawEnd", player_id, -1, player_id, result_data)
-	_emit_rule_timing("drawAfter", player_id, -1, player_id, result_data)
-	if announce and drawn_count > 0:
-		add_log("%s摸了%d张牌。" % [format_player_state_log_name(player), drawn_count])
+	# 当前摸牌内容服务；每次调用创建独立序列，嵌套摸牌不覆盖外层计数或表现批次。
+	var draw_service: RefCounted = preload("res://scripts/core/draw_resolution_service.gd").new(self)
+	draw_service.draw(player_id, count, announce, allow_out_of_game)
 
 
 ## 回复体力并限制在体力上限内；模式或离场技可通过allow_out_of_game显式允许仍存活的离场目标。
 func recover(source_id: int, target_id: int, amount: int, reason: String = "", allow_out_of_game: bool = false) -> void:
 	if state == null or state.game_over:
 		return
-	# 回复目标状态；死亡角色不能通过普通回复重新加入游戏。
-	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive or (target.out_of_game and not allow_out_of_game) or amount <= 0 or target.hp >= target.max_hp:
-		return
-	# 回复前时机；允许技能修改 amount 或取消本次回复，player 角色固定为回复目标。
-	var timing_data: Dictionary = {"amount":amount, "reason":reason, "hp":target.hp, "max_hp":target.max_hp}
-	var before_event: RuleEvent = _emit_rule_timing("recoverBefore", target_id, source_id, target_id, timing_data)
-	if before_event != null and (before_event.cancelled or before_event.neutralized):
-		return
-	var begin_event: RuleEvent = _emit_rule_timing("recoverBegin", target_id, source_id, target_id, before_event.data if before_event != null else timing_data)
-	if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
-		return
-	# 最终回复请求值；非正数表示触发器已经把本次回复降为无效果。
-	var final_amount: int = maxi(int(begin_event.data.get("amount", amount)) if begin_event != null else amount, 0)
-	if final_amount <= 0:
-		return
-	# 回复前体力；用于计算实际回复量并记录准确数值。
-	var previous_hp: int = target.hp
-	target.hp = mini(target.max_hp, target.hp + final_amount)
-	# 实际回复量；体力接近上限时小于请求值，结算统计和事件均必须使用这一数值。
-	var recovered_amount: int = target.hp - previous_hp
-	# 回复效果音；体力已满或被上限截断为0的无效回复不发声。
-	if recovered_amount > 0:
-		request_effect_voice(target_id, EFFECT_RECOVER)
-	# 回复来源角色；来源为自身时同样累计，来源缺失的系统回复不归属任何角色。
-	var recovery_source: PlayerState = state.get_player(source_id) if source_id >= 0 else null
-	if recovery_source != null and recovered_amount > 0:
-		recovery_source.total_healing_done += recovered_amount
-	_record_runtime_event("recover", "recover", {"source_id":source_id, "target_id":target_id, "requested_amount":final_amount, "reason":reason}, {"amount":recovered_amount, "hp":target.hp})
-	add_log("%s回复%d点体力（%d/%d）。" % [format_player_state_log_name(target), recovered_amount, target.hp, target.max_hp])
-	# 体力值实际变化时机；回复、伤害与失去体力共用 changeHp，并通过 change_type 区分来源。
-	var result_data: Dictionary = {"amount":recovered_amount, "hp":target.hp, "max_hp":target.max_hp, "reason":reason, "change_type":"recover"}
-	_emit_rule_timing("changeHp", target_id, source_id, target_id, result_data)
-	_emit_rule_timing("recoverEnd", target_id, source_id, target_id, result_data)
-	_emit_rule_timing("recoverAfter", target_id, source_id, target_id, result_data)
-	# 回复后事件；技能可读取来源、目标、实际回复值与原因牌。
-	var event: RuleEvent = RuleEvent.new("recover_after", source_id, target_id, {"amount": recovered_amount, "reason": reason})
-	_dispatch_rule_event(event)
+	# 独立回复内容；每次调用拥有自己的选择边界和最终事实。
+	var recovery_service: RefCounted = preload("res://scripts/core/recovery_resolution_service.gd").new(self)
+	recovery_service.recover(source_id, target_id, amount, reason, allow_out_of_game)
 
 
 ## 使指定角色获得护盾；护盾没有上限且只会在受到伤害时优先扣减，普通失去体力不会消耗护盾。
@@ -4709,78 +4622,13 @@ func _commit_prepared_damage(context: Dictionary) -> Dictionary:
 		var context_key: String = str(context_key_variant)
 		if not damage_result_data.has(context_key):
 			damage_result_data[context_key] = source_context[context_key_variant]
-	# 伤害实际成立后的可序列化上下文；标准damage时机可能产生装备或技能选择，后续旧事件、濒死与尾部必须原地恢复。
-	var post_result_context: Dictionary = {"post_result_stage":"damage_after", "source_id":source_id, "target_id":target_id, "source_character_generation":source_character_generation, "target_character_generation":target_character_generation, "amount":final_amount, "nature":nature, "card_id":card_id, "card_user_id":card_user_id, "chain_transfer":chain_transfer, "damage_event_id":damage_event_id, "shield_absorbed":shield_absorbed, "hp_lost":hp_lost, "hp":target.hp, "shield":target.shield, "chain_targets":chain_targets.duplicate(), "source_context":source_context.duplicate(true)}
-	post_result_context.merge(damage_result_data, true)
-	post_result_context["max_hp"] = target.max_hp
-	return post_result_context
-
-
-## 在标准damage时机及其嵌套选择完成后，按旧兼容事件、体力减少、濒死和伤害尾部的固定顺序继续。
-func _continue_damage_after_result(context: Dictionary) -> void:
-	# 伤害来源稳定 ID；等待期间只用编号重新定位角色，不能保留旧 PlayerState 对象。
-	var source_id: int = int(context.get("source_id", -1))
-	# 伤害目标稳定 ID；用于恢复兼容事件、体力减少、濒死与伤害尾部的同一目标。
-	var target_id: int = int(context.get("target_id", -1))
-	# 当前伤害后阶段；异步恢复只从尚未执行的步骤继续，避免重复发布兼容事件或体力减少事件。
-	var post_result_stage: String = str(context.get("post_result_stage", "damage_after"))
-	# 伤害后事件；在濒死前触发，允许技能依据已扣减体力进行处理。
-	if post_result_stage == "damage_after":
-		# 旧兼容伤害后事件；字段保持伤害实际成立时的快照，不受等待期间其他回复或护盾变化反向改写。
-		var after_event: RuleEvent = RuleEvent.new("damage_after", source_id, target_id, {"amount":int(context.get("amount", 0)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "shield":int(context.get("shield", 0)), "hp":int(context.get("hp", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "chain_transfer":bool(context.get("chain_transfer", false)), "source_character_generation":int(context.get("source_character_generation", -1)), "target_character_generation":int(context.get("target_character_generation", -1))})
-		_dispatch_rule_event(after_event)
-		post_result_stage = "hp_reduced"
-		if state == null or state.game_over:
-			return
-		# 兼容事件中的选择同样属于当前伤害子流程，完成后才发布通用体力减少事件。
-		if _has_nested_settlement_barrier():
-			var after_event_resume_context: Dictionary = context.duplicate(true)
-			after_event_resume_context["post_result_stage"] = post_result_stage
-			_defer_rule_continuation("damage_after_result", after_event_resume_context)
-			return
-	if post_result_stage == "hp_reduced" and int(context.get("hp_lost", 0)) > 0:
-		# 通用体力减少事件；只在伤害穿透护盾并实际扣减体力时派发，便于技能统一观察两类体力变化。
-		_dispatch_rule_event(RuleEvent.new("hp_reduced", source_id, target_id, {"amount":int(context.get("hp_lost", 0)), "hp":int(context.get("hp", 0)), "reduction_type":"damage", "damage_amount":int(context.get("amount", 0)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "event_id":int(context.get("damage_event_id", -1)), "source_character_generation":int(context.get("source_character_generation", -1)), "target_character_generation":int(context.get("target_character_generation", -1))}))
-	post_result_stage = "dying"
-	if state == null or state.game_over:
-		return
-	# 通用体力减少事件产生的技能选择必须先完成；濒死询问不能与其共享同一个活动选择槽。
-	if _has_nested_settlement_barrier():
-		var hp_reduced_resume_context: Dictionary = context.duplicate(true)
-		hp_reduced_resume_context["post_result_stage"] = post_result_stage
-		_defer_rule_continuation("damage_after_result", hp_reduced_resume_context)
-		return
-	# 伤害尾部上下文；濒死可能暂停，因此 damageSource、End、After 和连环必须保存到救援结束后执行。
-	var finalization_context: Dictionary = {"source_id":source_id, "target_id":target_id, "source_character_generation":int(context.get("source_character_generation", -1)), "target_character_generation":int(context.get("target_character_generation", -1)), "amount":int(context.get("amount", 0)), "nature":str(context.get("nature", "normal")), "card_id":str(context.get("card_id", "")), "card_user_id":int(context.get("card_user_id", source_id)), "chain_transfer":bool(context.get("chain_transfer", false)), "damage_event_id":int(context.get("damage_event_id", -1)), "shield_absorbed":int(context.get("shield_absorbed", 0)), "hp_lost":int(context.get("hp_lost", 0)), "chain_targets":(context.get("chain_targets", []) as Array).duplicate(), "source_context":(context.get("source_context", {}) as Dictionary).duplicate(true)}
-	# 最新伤害目标；damage或兼容事件等待期间可能已被其他嵌套效果回复、杀死或移出游戏。
-	var target: PlayerState = state.get_player(target_id)
-	if target == null:
-		_finish_damage_timing(finalization_context)
-		return
-	if target.hp <= 0:
-		_pending_damage_finalizations[target_id] = finalization_context
-		_resolve_dying(target_id, source_id)
-		if _pending_damage_finalizations.has(target_id) and not has_pending_card_choice():
-			_finish_pending_damage(target_id)
-		return
-	_finish_damage_timing(finalization_context)
-
-
-## 完成一条无需继续等待或已经结束濒死流程的伤害尾部；标准尾部结束后按最终伤害点数逐次派发damagePointAfter，再传导属性伤害。
-func _finish_damage_timing(context: Dictionary) -> void:
-	# 独立伤害编排服务；续接位置、窗口等待和子连环由同一个步骤协议持有。
-	var completion_service: DamageResolutionService = DamageResolutionService.new(self)
-	completion_service.finish_damage(context)
-
-
-## 读取并移除指定濒死目标等待中的伤害尾部；重复调用安全返回且不会重复派发来源或连环事件。
-func _finish_pending_damage(target_id: int) -> void:
-	if not _pending_damage_finalizations.has(target_id):
-		return
-	# 保存的伤害尾部；先移除再派发，防止尾部技能重入同一目标时重复读取旧上下文。
-	var context: Dictionary = _pending_damage_finalizations[target_id] as Dictionary
-	_pending_damage_finalizations.erase(target_id)
-	_finish_damage_timing(context)
+	# 已提交伤害结果；当前伤害序列持有后续时机、濒死和尾部，不额外写入恢复阶段标记。
+	damage_result_data["chain_targets"] = chain_targets.duplicate()
+	damage_result_data["source_context"] = source_context.duplicate(true)
+	damage_result_data["source_id"] = source_id
+	damage_result_data["target_id"] = target_id
+	damage_result_data["max_hp"] = target.max_hp
+	return damage_result_data
 
 
 ## 消耗一张符合响应模式的牌；八卦阵与丈八蛇矛的转化也通过该入口处理。
@@ -5048,15 +4896,22 @@ func _continue_card_response_after_barrier(continuation_context: Dictionary) -> 
 
 ## 应用一张已经完成移动的父牌响应结果；后续又产生选择时只续接目标完成，不重复执行牌效回调。
 func _continue_consumed_card_response(rule_context: Dictionary, response_card: CardInstance) -> void:
-	effect_resolver.continue_response(rule_context, response_card)
-	if not bool(rule_context.get("complete_parent_target_after_response", false)) or state.game_over:
-		return
-	# 待完成父牌实体 UID；响应效果期间产生的新触发必须先结算，之后只执行一次目标完成步骤。
-	var parent_card_uid: int = int(rule_context.get("parent_card_uid", -1))
-	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("target_card_completion", {"parent_card_uid":parent_card_uid})
-		return
-	_complete_active_card_target(parent_card_uid)
+	# 响应内容先登记父位置；子伤害没有选牌但仍有后续步骤时也不能提前发布目标After。
+	var steps: Array[Callable] = [_apply_consumed_card_response, _finish_consumed_card_response]
+	run_rule_sequence(steps, {"rule_context":rule_context.duplicate(true), "response_card":_serialize_optional_response_card(response_card)})
+
+
+## 已消费响应只执行一次；伤害、判定和技能等子流程在下一步骤前完成。
+func _apply_consumed_card_response(sequence: RuleStepSequence) -> void:
+	effect_resolver.continue_response(sequence.context.rule_context, _deserialize_optional_response_card(sequence.context.response_card))
+
+
+## 子内容全部结束后才完成父目标；取消、死亡与额外阶段不依靠全局无选择状态推测。
+func _finish_consumed_card_response(sequence: RuleStepSequence) -> void:
+	# 原父响应参数；包含目标是否由本入口收尾的显式契约。
+	var rule_context: Dictionary = sequence.context.rule_context
+	if bool(rule_context.get("complete_parent_target_after_response", false)):
+		_complete_active_card_target(int(rule_context.get("parent_card_uid", -1)))
 
 
 ## 在嵌套触发和装备事件完成后恢复无处理区父牌的装备响应结果。
@@ -6270,19 +6125,29 @@ func _take_selected_player_card(source_id: int, target_id: int, card_uid: int) -
 func _continue_target_card_choice(context: Dictionary, selected_uids: Array[int], is_steal: bool) -> void:
 	if selected_uids.is_empty():
 		return
+	# 先完成移动及其子技能，再推进父目标；完成步骤不通过全局有无选择推测。
+	var steps: Array[Callable] = [_apply_target_card_choice, _finish_target_card_choice]
+	run_rule_sequence(steps, {"rule_context":context, "selected_uids":selected_uids, "is_steal":is_steal})
+
+
+## 区域选择主体；恢复时由移动入口重新校验实体UID和所在区域。
+func _apply_target_card_choice(sequence: RuleStepSequence) -> void:
+	# 已接受的选择上下文；父牌、来源和目标均使用稳定ID。
+	var context: Dictionary = sequence.context.rule_context
 	# 来源角色 ID；顺手牵羊需要把牌交给该角色。
 	var source_id: int = int(context.get("source_id", -1))
 	# 目标角色 ID；所选 UID 必须仍位于其区域。
 	var target_id: int = int(context.get("target_id", -1))
-	if is_steal:
-		_take_selected_player_card(source_id, target_id, selected_uids[0])
+	if bool(sequence.context.is_steal):
+		_take_selected_player_card(source_id, target_id, int(sequence.context.selected_uids[0]))
 	else:
-		_discard_selected_player_card(target_id, selected_uids[0], source_id)
-	# 区域移动触发的技能与装备事件必须先结算；父锦囊目标完成步骤只登记一次稳定续接点。
-	var parent_card_uid: int = int(context.get("parent_card_uid", -1))
-	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("target_card_completion", {"parent_card_uid":parent_card_uid})
-		return
+		_discard_selected_player_card(target_id, int(sequence.context.selected_uids[0]), source_id)
+
+
+## 区域移动触发的技能与装备事件必须先结算；父锦囊目标完成步骤只登记一次稳定续接点。
+func _finish_target_card_choice(sequence: RuleStepSequence) -> void:
+	# 原父牌UID；完成入口会忽略已经失效的牌。
+	var parent_card_uid: int = int(sequence.context.rule_context.get("parent_card_uid", -1))
 	_complete_active_card_target(parent_card_uid)
 
 
@@ -10083,6 +9948,15 @@ func _start_turn(player_id: int) -> void:
 	# 已预约的过关斩将临时退出在干净回合边界优先生效；此时上一回合结算已完整结束，新回合尚未产生任何状态变化。
 	if _try_capture_conquest_temporary_exit(player_id):
 		return
+	if _conquest_temporary_exit_requested and state.current_phase == "finish":
+		# 结算续接仍在延后唤醒中；暂停进入新回合，待统一管线排空后重试同一边界。
+		_pending_conquest_boundary_player_id = player_id
+		_resume_settlement_pipeline()
+		if _try_capture_conquest_temporary_exit(player_id):
+			_pending_conquest_boundary_player_id = -1
+			return
+		_schedule_settlement_pipeline_resume()
+		return
 	# 上一回合残留的出牌选择；必须先从真实事件栈移除，新的阶段与 CardUseEvent 才能进入根事件。
 	_cancel_active_play_choice("turn_changed")
 	_started_phase_lifecycles.clear()
@@ -10388,12 +10262,6 @@ func _resume_interrupted_turn_flow() -> void:
 	# 已经登记阶段切换时当前阶段主体与后继均已确定；重复恢复会用同一业务键覆盖原任务，导致额外阶段被普通后继吞掉。
 	if game_flow_pacer != null and game_flow_pacer.has_pending("phase_transition"):
 		return
-	# 濒死开始时机中的技能顺序效果必须先于阶段、逐目标卡牌和普通回合游标恢复；最内层上下文按后进先出继续。
-	if not _pending_dying_start_contexts.is_empty():
-		# 当前待恢复濒死开始上下文；弹出后若再次产生选择会由恢复函数重新登记。
-		var dying_start_context: Dictionary = _pending_dying_start_contexts.pop_back() as Dictionary
-		_continue_dying_start(dying_start_context)
-		return
 	# 当前被濒死救援等嵌套选择暂停的逐目标卡牌；嵌套流程结束后先完成原目标，再恢复后续目标而不是提前开放出牌。
 	for parent_card_uid_variant: Variant in _active_card_resolutions.keys():
 		# 原卡牌实体 UID；同一时刻只有最内层一张活动牌会等待没有父 UID 的公共救援选择。
@@ -10528,6 +10396,14 @@ func _build_skill_settlement_key(skill_owner_id: int, skill_id: String, skill_ch
 
 
 ## 登记被嵌套选择中断的通用规则后半段；上下文必须只包含基础值、数组和字典。
+func defer_after_settlement(continuation_type: String, context: Dictionary) -> void:
+	# 当前合法续接；沿用统一类型与预算校验，仅把模式交接移到当前栈之后。
+	var continuation_id: int = _defer_rule_continuation(continuation_type, context)
+	if continuation_id >= 0:
+		_rule_continuations.move_after_current(continuation_id)
+
+
+## 建立受预算保护的规则后续，默认按子内容后进先出执行。
 func _defer_rule_continuation(continuation_type: String, context: Dictionary) -> int:
 	if not RULE_CONTINUATION_TYPES.has(continuation_type):
 		_record_settlement_fault("unknown_rule_continuation_type", {"continuation_type":continuation_type})
@@ -10772,22 +10648,17 @@ func _resume_next_rule_continuation() -> void:
 			_continue_card_response_after_barrier(context)
 		"equipment_response":
 			_continue_equipment_response_after_barrier(context)
-		"dying_response":
-			_continue_dying_response_after_barrier(context)
-		"dying_after_response":
-			_continue_dying_after_applied_response(context)
 		"trick_negation_response":
 			_continue_trick_negation_after_barrier(context)
 		"simultaneous_negation_response":
 			_continue_simultaneous_negation_after_barrier(context)
-		"damage_after_result":
-			_continue_damage_after_result(context)
 		"slash_flow":
 			_continue_slash_flow_after_barrier(context)
 		"recast_draw":
 			draw(int(context.get("player_id", -1)), 1)
-		"target_card_completion":
-			_complete_active_card_target(int(context.get("parent_card_uid", -1)))
+		"current_player_death":
+			if state.turn_number == int(context.get("turn_number", -1)):
+				_advance_after_current_player_death(int(context.get("player_id", -1)), int(context.get("generation", -1)))
 		"round_end_restore":
 			_continue_round_end_after_restore(int(context.get("finished_player_id", -1)))
 		"conquest_enemy_defeat":
@@ -10816,6 +10687,13 @@ func _resume_settlement_pipeline() -> void:
 	_settlement_pipeline_running = true
 	_run_settlement_pipeline_pass()
 	_settlement_pipeline_running = false
+	# 回合边界可能在本次管线入口之前被暂缓；只在最外层排空后重试，避免把中间阶段写成play_phase。
+	if _rule_sequence_execution_depth == 0 and _pending_conquest_boundary_player_id >= 0 and _conquest_temporary_exit_requested:
+		var boundary_player_id: int = _pending_conquest_boundary_player_id
+		if _try_capture_conquest_temporary_exit(boundary_player_id):
+			_pending_conquest_boundary_player_id = -1
+		elif _conquest_temporary_exit_requested:
+			_schedule_settlement_pipeline_resume()
 
 
 ## 执行一次有步数预算的结算排空；本函数只由防重入包装器调用，内部可按规则边界提前返回。
@@ -11607,6 +11485,21 @@ func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) 
 	var actor: PlayerState = state.get_player(actor_id)
 	# 待移动实体材料；默认从持有者手牌或木牛“粮”中按 UID 查找。
 	var card: CardInstance = actor.find_playable_card(card_uid) if actor != null else null
+	if not bool(event.context.get("virtual_proxy", false)):
+		if card == null:
+			event.cancel("material_not_playable")
+			return
+		# 真实材料的lose子事件持有独立暂停令牌；父CardUseEvent必须等待移牌时机与选择完整结束。
+		var pause_token_id: int = event_scheduler.pause_registry.acquire("card_move", event.event_id, "card_use_material")
+		var movement: CardMoveResolutionService = CardMoveResolutionService.new(self)
+		var move_steps: Array[Callable] = [
+			Callable(self, "_begin_card_use_material_move").bind(event, movement, card.uid),
+			Callable(self, "_finish_card_use_material_move").bind(event, movement),
+			Callable(self, "_release_card_use_material_move").bind(pause_token_id),
+		]
+		if run_rule_sequence(move_steps, {"sequence_kind":"card_use_material_move", "event_id":event.event_id, "card_uid":card.uid}) < 0:
+			event_scheduler.pause_registry.resolve(pause_token_id, "card_move_sequence_unavailable")
+		return
 	if bool(event.context.get("virtual_proxy", false)):
 		# 虚拟牌实体材料 UID；逻辑代理牌已经在事件开始前进入处理区，材料仍须由发动者拥有。
 		var material_card_uids: Array[int] = _int_array(event.context.get("material_card_uids", []) as Array)
@@ -11645,6 +11538,25 @@ func _execute_use_card_lose_event(event: GameEvent, _scheduler: EventScheduler) 
 		event.cancel("material_move_failed")
 		return
 	event.result = {"card_uids":[card.uid], "from_zone":move.from_zone, "to_zone":"processing", "move_id":move.move_id}
+
+
+## 开始实体卡牌材料的可暂停处理区移动；服务完成前不写入lose结果。
+func _begin_card_use_material_move(sequence: RuleStepSequence, event: GameEvent, movement: CardMoveResolutionService, card_uid: int) -> void:
+	movement.begin(sequence, card_uid, "processing", -1, "use", event.event_id)
+
+
+## 读取移牌结果并写入lose子事件；失败时取消父牌使用而不伪造processing状态。
+func _finish_card_use_material_move(_sequence: RuleStepSequence, event: GameEvent, movement: CardMoveResolutionService) -> void:
+	if bool(movement.result.get("success", false)):
+		event.result = {"card_uids":[int(movement.result.get("card_uid", -1))], "from_zone":str(movement.result.get("from_zone", "")), "to_zone":"processing", "move_id":int(movement.result.get("move_id", -1))}
+	else:
+		event.cancel("material_move_failed")
+
+
+## 释放lose子事件的移牌暂停令牌；事件调度器随后恢复CardUseEvent声明步骤。
+func _release_card_use_material_move(_sequence: RuleStepSequence, pause_token_id: int) -> void:
+	if event_scheduler != null:
+		event_scheduler.pause_registry.resolve(pause_token_id, "card_move_complete")
 
 
 ## 在牌进入处理区并完成声明后派发 useCardBefore 与 useCardBegin；取消会保留材料收尾但跳过后续牌效。
@@ -11923,30 +11835,78 @@ func _execute_card_content_event(event: GameEvent, _scheduler: EventScheduler) -
 		# 整牌异步效果已经由恢复回调完成；content 事件恢复时只读取最终区域，禁止再次执行亮牌、选择或其他一次性效果。
 		event.result = {"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(), "destination":str(card_use_context.get("destination", "discard"))}
 		return
-	# 本次内容返回的最终区域；pending 表示子事件必须等待现有恢复入口提交结果。
-	var destination: String = "discard"
-	if target_id >= 0 and _active_card_resolutions.has(card_uid):
-		# 当前逐目标效果上下文；包含杀伤害、属性、无视防具与卡牌专属共享数据。
-		var resolution_context: Dictionary = _active_card_resolutions[card_uid] as Dictionary
-		destination = effect_resolver.resolve_target(card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
-		if destination == "pending" or has_pending_card_choice():
-			return
-		_finish_card_target_lifecycle(card_uid, target_id, event.event_id)
-		resolution_context["current_target_id"] = -1
-		_active_card_resolutions[card_uid] = resolution_context
-		event.result = {"target_id":target_id, "destination":destination}
+	# 牌效中的回复、伤害、摸牌与选择会创建独立规则序列；暂停当前content事件直至这些子序列完成。
+	var pause_token_id: int = event_scheduler.pause_registry.acquire("card_content", event.event_id, "card_effect_children")
+	var steps: Array[Callable] = [
+		Callable(self, "_resolve_card_content_sequence").bind(event),
+		Callable(self, "_finish_card_content_sequence").bind(event),
+		Callable(self, "_release_card_content_sequence").bind(pause_token_id),
+	]
+	if run_rule_sequence(steps, {"sequence_kind":"card_content", "card_uid":card_uid, "target_id":target_id, "event_id":event.event_id}) < 0:
+		event_scheduler.pause_registry.resolve(pause_token_id, "card_content_sequence_unavailable")
+
+
+## 执行牌效主体；新建规则序列会先于下一个父内容步骤完成。
+func _resolve_card_content_sequence(sequence: RuleStepSequence, event: GameEvent) -> void:
+	# 原使用牌 UID；响应恢复与换将边界均通过稳定身份复核。
+	var card_uid: int = int(sequence.context.card_uid)
+	# 当前处理区实体；异步等待期间已离区时，不重新执行牌效。
+	var card: CardInstance = _find_processing_card(card_uid)
+	# 使用牌共享上下文；空上下文表示父牌生命周期已被终止清理。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card == null or card_use_context.is_empty():
+		event.cancel("processing_card_missing")
+		sequence.finish()
 		return
-	# 整牌内容；装备、延时锦囊和五谷等效果必须一次读取完整目标数组。
+	# 当前目标 ID；-1表示一次处理整张牌的完整目标数组。
+	var target_id: int = int(sequence.context.target_id)
+	if target_id >= 0 and _active_card_resolutions.has(card_uid):
+		# 当前逐目标参数；保存牌属性、伤害量和卡牌定义扩展上下文。
+		var resolution_context: Dictionary = _active_card_resolutions[card_uid] as Dictionary
+		sequence.context["destination"] = effect_resolver.resolve_target(card, int(resolution_context.get("actor_id", -1)), target_id, resolution_context)
+		return
+	# 整牌目标顺序；装备、延时牌与五谷等效果只执行一次。
 	var whole_targets: Array[int] = []
 	for target_id_variant: Variant in card_use_context.get("target_ids", []) as Array:
 		whole_targets.append(int(target_id_variant))
-	destination = effect_resolver.resolve(card, int(card_use_context.get("actor_id", -1)), whole_targets)
-	if destination == "pending" or has_pending_card_choice():
-		return
-	card_use_context["destination"] = destination
-	card_use_context["content_complete"] = true
-	_card_use_contexts[card_uid] = card_use_context
-	event.result = {"target_ids":whole_targets, "destination":destination}
+	sequence.context["whole_target_ids"] = whole_targets
+	sequence.context["destination"] = effect_resolver.resolve(card, int(card_use_context.get("actor_id", -1)), whole_targets)
+
+
+## 子牌效序列完成后提交content结果、目标生命周期及父事件暂停释放。
+func _finish_card_content_sequence(sequence: RuleStepSequence, event: GameEvent) -> void:
+	# 当前处理区牌；牌效可能在其子流程中已经由专用恢复入口完成整牌收尾。
+	var card_uid: int = int(sequence.context.card_uid)
+	# 当前目标 ID；逐目标After只由同步完整目标或响应恢复入口之一提交。
+	var target_id: int = int(sequence.context.target_id)
+	# 效果目的地；pending表示卡牌专用恢复入口仍负责目标完成。
+	var destination: String = str(sequence.context.get("destination", "discard"))
+	# 当前共享上下文；专用异步恢复可能已经写入最终目的地与完成标记。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if target_id >= 0:
+		if destination != "pending" and _active_card_resolutions.has(card_uid):
+			# 活动目标游标；生命周期完成后清除当前目标，父Use事件方可进入下一目标。
+			var resolution_context: Dictionary = _active_card_resolutions[card_uid] as Dictionary
+			_finish_card_target_lifecycle(card_uid, target_id, event.event_id)
+			resolution_context["current_target_id"] = -1
+			_active_card_resolutions[card_uid] = resolution_context
+		event.result = {"target_id":target_id, "destination":destination}
+	else:
+		# 整牌目标与最终区域；异步选择已提交结果时以共享上下文为权威。
+		var whole_targets: Array = card_use_context.get("target_ids", []) as Array
+		if bool(card_use_context.get("content_complete", false)):
+			destination = str(card_use_context.get("destination", destination))
+		elif destination != "pending":
+			card_use_context["destination"] = destination
+			card_use_context["content_complete"] = true
+			_card_use_contexts[card_uid] = card_use_context
+		event.result = {"target_ids":whole_targets.duplicate(), "destination":destination}
+
+
+## 所有牌效、目标After及其子技能都完成后释放content子事件。
+func _release_card_content_sequence(_sequence: RuleStepSequence, pause_token_id: int) -> void:
+	if event_scheduler != null and event_scheduler.pause_registry != null:
+		event_scheduler.pause_registry.resolve(pause_token_id, "card_effect_children_complete")
 
 
 ## 在全部 content 子事件完成后安排唯一 contentAfter，禁止响应恢复路径重复创建。
@@ -12468,7 +12428,13 @@ func _advance_after_current_player_death(dead_player_id: int, interrupted_charac
 		# 当前死亡角色；普通模式没有先换将，因此其最新代次就是被中断回合所属代次。
 		var dead_player: PlayerState = state.get_player(dead_player_id)
 		phase_over_character_generation = dead_player.character_generation if dead_player != null else -1
-	_emit_rule_timing("phaseOver", dead_player_id, dead_player_id, dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number, "player_character_generation":phase_over_character_generation, "source_character_generation":phase_over_character_generation, "target_character_generation":phase_over_character_generation}, _current_turn_event_id)
+	_run_phase_notification("phaseOver", dead_player_id, {"reason":"current_player_death", "turn_number":state.turn_number, "player_character_generation":phase_over_character_generation, "source_character_generation":phase_over_character_generation, "target_character_generation":phase_over_character_generation}, Callable(self, "_finish_death_turn_handoff").bind(dead_player_id))
+
+
+## phaseOver及其子内容完成后提交中断状态，再按额外回合规则转交。
+func _finish_death_turn_handoff(dead_player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != dead_player_id or state.current_phase == "dead":
+		return
 	_notify_card_definitions_turn_ended(dead_player_id, true)
 	# 死亡中断标志防止响应、阶段回调和动作收尾重复安排下一回合。
 	state.current_phase = "dead"
@@ -12509,206 +12475,44 @@ func _resolve_dying(target_id: int, killer_id: int, rescue_start_override: int =
 	# 濒死角色状态；可能需要多张桃才能将体力回复至1。
 	var target: PlayerState = state.get_player(target_id)
 	if target == null or not target.alive:
+		# 先前伤害窗口已经使目标失效时，仍由明确出口完成原伤害，不依靠无选择状态猜测。
 		return
 	# 已经恢复正体力的角色不再建立救援请求；若旧流程仍在队列中则统一完成脱离濒死结算。
 	if target.hp > 0:
 		if target.dying or state.dying_queue.has(target_id):
 			_finish_dying_rescue(target_id)
-		else:
-			_finish_pending_damage(target_id)
 		return
 	# 是否首次进入本次濒死流程；连续出桃与取消后的座次推进都复用同一流程，不重复创建回放事件。
 	var is_new_dying_flow: bool = not state.dying_queue.has(target_id)
 	if is_new_dying_flow:
 		# 首次濒死使用独立阶段游标；任一时机创建选择后先结束该技能完整顺序效果，再回来登记求桃流程。
-		_continue_dying_start({"stage":"before", "target_id":target_id, "killer_id":killer_id, "event_data":{"hp":target.hp, "required_recover":1 - target.hp}})
+		# 游标由通用RuleStepSequence持有，不再写入专用濒死恢复数组。
+		_continue_dying_start({"target_id":target_id, "killer_id":killer_id, "event_data":{"hp":target.hp, "required_recover":1 - target.hp}})
 		return
-	target.dying = true
-	# 当前轮救援询问起点；首次从当前回合角色开始，连续出桃时仍从刚才的响应者继续。
-	var rescue_start_player_id: int = state.current_player_id if rescue_start_override < 0 else rescue_start_override
-	# 当前轮已经完成询问的角色 ID；异步响应恢复时沿用，整个濒死流程不会清空全体名单开启第二轮。
-	var asked_rescuer_ids: Array[int] = already_asked_rescuer_ids.duplicate()
-	# 离场角色进入濒死后不建立求桃窗口；其立即进入死亡流程，并由死亡入口先执行标准返场。
-	if target.out_of_game:
-		state.dying_queue.erase(target_id)
-		_resolve_death(target_id, killer_id)
-		return
-	# 救援询问顺序；同一轮从指定起点按行动座次遍历，已完成询问的角色直接跳过。
-	var rescue_order: Array[PlayerState] = _get_alive_players_in_action_order(rescue_start_player_id)
-	for rescuer: PlayerState in rescue_order:
-		if not rescuer.alive or asked_rescuer_ids.has(rescuer.player_id):
-			continue
-		asked_rescuer_ids.append(rescuer.player_id)
-		# 当前救援者可用选项；每张卡牌源码自行声明响应模式与角色关系限制。
-		var dying_response_options: Array[Dictionary] = _get_dying_response_options(rescuer.player_id, target_id)
-		# 当前救援响应模式；同模式的不同扩展牌共享一个统一响应入口。
-		var response_patterns: Array[String] = []
-		# 玩家可见救援牌名；提示文本不在控制器维护具体卡牌白名单。
-		var response_names: Array[String] = []
-		for option: Dictionary in dying_response_options:
-			response_patterns.append(str(option.get("pattern", "")))
-			response_names.append("【%s】" % str(option.get("name", "救援牌")))
-		# 当前尚需回复的体力点数；现有救援牌均固定回复1点，因此数值也等于达到1点所需的牌数。
-		var required_recover: int = 1 - target.hp
-		# 救援响应上下文；已询问名单与所需回复数共同恢复同一个单轮流程，不创建全体第二轮询问。
-		var rescue_context: Dictionary = {"kind":"dying_response", "responder_id":rescuer.player_id, "target_id":target_id, "killer_id":killer_id, "rescue_start_id":rescue_start_player_id, "response_patterns":response_patterns.duplicate(), "asked_rescuer_ids":asked_rescuer_ids.duplicate(), "required_recover":required_recover}
-		# 救援提示；明确给出目标达到1点体力还需要的回复量和当前源码允许的牌名。
-		var rescue_prompt: String = "%s当前还需要回复%d点体力至1点，请选择是否使用%s。" % [_player_character_name(target), required_recover, "、".join(response_names) if not response_names.is_empty() else "救援牌"]
-		# 实际提交的救援牌；为空表示明确取消或当前没有合法候选。
-		var rescue_card: CardInstance = request_response_card_patterns(rescuer.player_id, response_patterns, rescue_prompt, rescue_context)
-		if has_pending_card_choice():
-			return
-		if rescue_card == null:
-			continue
-		_apply_dying_response_card(rescuer.player_id, target_id, rescue_card)
-		if target.hp >= 1:
-			_finish_dying_rescue(target_id)
-			return
-		# 同一响应者出牌后仍未救至1点时允许继续出牌；只移除该响应者，其他已询问角色仍保持完成状态。
-		asked_rescuer_ids.erase(rescuer.player_id)
-		_resolve_dying(target_id, killer_id, rescuer.player_id, asked_rescuer_ids)
-		return
-	state.dying_queue.erase(target_id)
-	_resolve_death(target_id, killer_id)
+	# 单轮救援由步骤服务保存座次与已消费牌，响应后的子结算完成后再检查体力。
+	var rescue_service: RefCounted = DYING_RESOLUTION_SERVICE_SCRIPT.new(self)
+	rescue_service.rescue(target_id, killer_id, rescue_start_override, already_asked_rescuer_ids)
 
 
 ## 从dyingBefore开始按稳定游标建立一次新濒死流程；嵌套选择期间不提前创建求桃请求或死亡结算。
 func _continue_dying_start(context: Dictionary) -> void:
 	if state == null or state.game_over:
 		return
-	# 濒死目标稳定ID；等待期间始终重新读取当前角色状态，不能保留旧PlayerState引用。
-	var target_id: int = int(context.get("target_id", -1))
-	# 伤害或效果来源稳定ID；无来源失去体力继续使用-1，不伪造击杀者。
-	var killer_id: int = int(context.get("killer_id", -1))
-	# 当前濒死目标；死亡、失效或已恢复角色直接收口原伤害尾部。
-	var target: PlayerState = state.get_player(target_id)
-	if target == null or not target.alive or target.hp > 0:
-		_finish_pending_damage(target_id)
-		return
-	# 当前开始游标；before、begin、register、rescue依次执行，恢复时不会重复已发布时机。
-	var stage: String = str(context.get("stage", "before"))
-	# 时机共享数据；处理器修改后的基础字段会跨暂停原样传入下一时机。
-	var event_data: Dictionary = (context.get("event_data", {"hp":target.hp, "required_recover":1 - target.hp}) as Dictionary).duplicate(true)
-	if stage == "before":
-		# 濒死前时机；取消标志只有在处理器同时修正角色状态时才会由上方状态检查真正终止流程。
-		var dying_before_event: RuleEvent = _emit_rule_timing("dyingBefore", target_id, killer_id, target_id, event_data)
-		event_data = dying_before_event.data.duplicate(true) if dying_before_event != null else event_data
-		context["stage"] = "begin"
-		context["event_data"] = event_data
-		if not target.alive or target.hp > 0:
-			_finish_pending_damage(target_id)
-			return
-		if _has_nested_settlement_barrier():
-			_pending_dying_start_contexts.append(context.duplicate(true))
-			return
-		stage = "begin"
-	if stage == "begin":
-		# 濒死开始时机；【求生】等技能可在此回复，若中途选牌则等待其全部后续完成再决定是否求桃。
-		var dying_begin_event: RuleEvent = _emit_rule_timing("dyingBegin", target_id, killer_id, target_id, event_data)
-		event_data = dying_begin_event.data.duplicate(true) if dying_begin_event != null else event_data
-		context["stage"] = "register"
-		context["event_data"] = event_data
-		if not target.alive or target.hp > 0:
-			_finish_pending_damage(target_id)
-			return
-		if _has_nested_settlement_barrier():
-			_pending_dying_start_contexts.append(context.duplicate(true))
-			return
-		stage = "register"
-	if stage == "register":
-		# 本次濒死父事件ID；只在全部Begin技能完成且目标仍未恢复时登记一次。
-		var dying_event_id: int = _record_runtime_event("dying", "dying", {"target_id":target_id, "source_id":killer_id})
-		state.dying_queue.append(target_id)
-		target.dying = true
-		_record_runtime_event("_save", "choice", {"target_id":target_id, "source_id":killer_id}, {}, dying_event_id)
-		context["stage"] = "rescue"
-		context["event_data"] = {"hp":target.hp, "required_recover":1 - target.hp, "dying_event_id":dying_event_id}
-		_emit_rule_timing("dying", target_id, killer_id, target_id, context["event_data"] as Dictionary, dying_event_id)
-		add_log("%s进入濒死状态，需要回复至1点体力。" % format_player_state_log_name(target))
-		_dispatch_rule_event(RuleEvent.new("dying_begin", killer_id, target_id, {"required_recover":1 - target.hp}))
-		if _has_nested_settlement_barrier():
-			_pending_dying_start_contexts.append(context.duplicate(true))
-			return
-	# 已登记的濒死流程通过原入口继续求桃；队列存在会阻止Before与Begin再次发布。
-	_resolve_dying(target_id, killer_id)
+	# 开始内容服务；原窗口结果与恢复位置由规则序列持有。
+	var dying_service: RefCounted = DYING_RESOLUTION_SERVICE_SCRIPT.new(self)
+	dying_service.begin(context)
 
 
 ## 恢复濒死救援响应；成功使用桃或酒后重新检查目标体力并继续同一救援轮。
 func _continue_dying_choice(context: Dictionary, selected_uids: Array[int]) -> void:
-	# 当前响应者；所选牌必须仍来自其牌源。
-	var responder_id: int = int(context.get("responder_id", -1))
-	# 濒死目标；回复与后续死亡判断都针对该稳定 ID。
-	var target_id: int = int(context.get("target_id", -1))
-	# 本次窗口允许的响应模式；其他角色只有桃，濒死者本人同时包含桃和酒。
-	var response_patterns: Array[String] = []
-	for response_pattern_variant: Variant in context.get("response_patterns", []) as Array:
-		# 当前允许模式；去重后交给实体牌消费入口复核。
-		var allowed_pattern: String = str(response_pattern_variant)
-		if not response_patterns.has(allowed_pattern):
-			response_patterns.append(allowed_pattern)
-	# 当前轮已经询问的救援者 ID；恢复后只继续尚未询问的座次，防止取消按钮看似无效。
-	var asked_rescuer_ids: Array[int] = []
-	for rescuer_id_variant: Variant in context.get("asked_rescuer_ids", []) as Array:
-		# 已询问救援者 ID；防御性去重，避免异常上下文产生重复跳过项。
-		var asked_rescuer_id: int = int(rescuer_id_variant)
-		if not asked_rescuer_ids.has(asked_rescuer_id):
-			asked_rescuer_ids.append(asked_rescuer_id)
-	# 实际救援响应牌；为空表示当前桃或酒请求被取消。
-	var response_card: CardInstance
-	if not selected_uids.is_empty():
-		response_card = _consume_response_card_uid_patterns(responder_id, selected_uids[0], response_patterns)
-	if response_card == null:
-		# 下一名存活救援者；本轮已经询问的角色会在恢复函数中跳过，不会再次弹出同一桃询问。
-		var next_rescuer: PlayerState = state.get_next_alive_player(responder_id)
-		_resolve_dying(target_id, int(context.get("killer_id", -1)), next_rescuer.player_id if next_rescuer != null else int(context.get("rescue_start_id", state.current_player_id)), asked_rescuer_ids)
+	# 响应对应的救援内容；重开或终局后原序列不存在时丢弃迟到输入。
+	var sequence: RuleStepSequence = _rule_sequences.get(int(context.get("rescue_sequence_id", -1))) as RuleStepSequence
+	if sequence == null:
 		return
-	# 响应牌失去时插入的技能与装备触发必须先完整结算；续接快照保证已消费的救援牌不会被再次移动。
-	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("dying_response", {"rule_context":context.duplicate(true), "response_card":_serialize_optional_response_card(response_card)})
-		return
-	_continue_consumed_dying_response(context, response_card)
-
-
-## 在失牌触发与装备事件完成后恢复已经消费的濒死救援牌。
-func _continue_dying_response_after_barrier(continuation_context: Dictionary) -> void:
-	# 原濒死响应上下文；包含响应者、目标、击杀来源、座次起点与已询问名单。
-	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
-	# 已完成消费的救援响应牌；只恢复逻辑牌数据，不再次从弃牌堆取出实体。
-	var response_card: CardInstance = _deserialize_optional_response_card(continuation_context.get("response_card", {}) as Dictionary)
-	if response_card != null:
-		_continue_consumed_dying_response(rule_context, response_card)
-
-
-## 应用一张已经消费的救援牌；回复后的触发仍可再次暂停，后续只检查濒死状态而不重复回复。
-func _continue_consumed_dying_response(context: Dictionary, response_card: CardInstance) -> void:
-	# 当前响应者；卡牌源码会再次复核其与濒死目标的救援关系。
-	var responder_id: int = int(context.get("responder_id", -1))
-	# 当前濒死目标；回复、继续询问和脱离濒死都使用同一稳定 ID。
-	var target_id: int = int(context.get("target_id", -1))
-	# 实际救援效果；由已消费实体牌的源码复核角色关系并应用回复。
-	_apply_dying_response_card(responder_id, target_id, response_card)
-	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("dying_after_response", context.duplicate(true))
-		return
-	_continue_dying_after_applied_response(context)
-
-
-## 在救援牌回复后的全部插入事件结束后重新读取体力，并继续同一求桃轮或完成脱离濒死。
-func _continue_dying_after_applied_response(context: Dictionary) -> void:
-	# 当前响应者；目标仍未达到1点时允许其继续使用下一张合法救援牌。
-	var responder_id: int = int(context.get("responder_id", -1))
-	# 当前濒死目标；等待期间可能已被其他触发救起、杀死或移出游戏。
-	var target_id: int = int(context.get("target_id", -1))
-	# 当前轮已询问角色；继续由同一响应者救援时只移除本人，其他角色保持已经问过。
-	var asked_rescuer_ids: Array[int] = _int_array(context.get("asked_rescuer_ids", []) as Array)
-	# 最新濒死目标状态；回复后依据当前体力决定继续救援或退出濒死队列。
-	var target: PlayerState = state.get_player(target_id)
-	if target != null and target.alive and target.hp <= 0:
-		# 当前响应者仍可继续出桃；只从已询问集合移除本人，其他角色在本轮内不会被重复询问。
-		asked_rescuer_ids.erase(responder_id)
-		_resolve_dying(target_id, int(context.get("killer_id", -1)), responder_id, asked_rescuer_ids)
-	elif target != null and target.alive:
-		_finish_dying_rescue(target_id)
+	sequence.context["selected_uids"] = selected_uids.duplicate()
+	sequence.context["response_context"] = context.duplicate(true)
+	sequence.context["material_uids"] = _resolved_equipment_material_uids.duplicate()
+	sequence.context["response_skill_id"] = _resolved_response_skill_id
 
 
 ## 返回当前响应者在指定濒死关系下可使用的全部救援响应模式与显示名。
@@ -12781,17 +12585,11 @@ func has_used_card_group_this_turn(player_id: int, card_group: String) -> bool:
 
 ## 在角色体力恢复至1点或以上时统一结算求桃流程；状态、事件与日志在同一入口完成，父级卡牌或阶段随后才能继续。
 func _finish_dying_rescue(target_id: int) -> void:
-	# 已脱离濒死的目标；异常丢失目标时仍清理队列，避免后续流程永久认为存在未结算濒死角色。
-	var target: PlayerState = state.get_player(target_id)
-	state.dying_queue.erase(target_id)
-	if target == null:
+	if state == null or state.game_over:
 		return
-	target.dying = false
-	_record_runtime_event("dyingAfter", "dying", {"target_id":target_id, "hp":target.hp, "rescued":true})
-	_emit_rule_timing("dyingAfter", target_id, target_id, target_id, {"hp":target.hp, "rescued":true})
-	_dispatch_rule_event(RuleEvent.new("dying_end", target_id, target_id, {"hp":target.hp, "rescued":true}))
-	add_log("%s脱离濒死状态，求桃流程结算完成。" % format_player_state_log_name(target))
-	_finish_pending_damage(target_id)
+	# 完成内容服务；先清理本次濒死事实，再依次等待After、旧通知和伤害收尾。
+	var dying_service: RefCounted = DYING_RESOLUTION_SERVICE_SCRIPT.new(self)
+	dying_service.finish(target_id)
 
 
 ## 返回从指定玩家开始的存活角色行动顺序；用于濒死救援等必须按当前行动顺序处理的公共结算。
@@ -12816,97 +12614,9 @@ func _get_alive_players_in_action_order(start_player_id: int) -> Array[PlayerSta
 
 ## 执行死亡、身份公开、区域清理、奖惩和胜负检查。
 func _resolve_death(victim_id: int, killer_id: int) -> void:
-	# 死亡角色状态；先标记死亡，避免清理白银狮子时错误回复。
-	var victim: PlayerState = state.get_player(victim_id)
-	if victim == null or not victim.alive:
-		_finish_pending_damage(victim_id)
-		return
-	# 离场角色必须先通过统一返场入口恢复在场状态，再派发死亡前、死亡开始及后续死亡时机。
-	if victim.out_of_game:
-		restore_player_to_game(victim_id, "death_before_resolution")
-	# 死亡前与开始时机；取消死亡要求对应技能自行修正体力或状态，控制器只停止本次死亡流程。
-	var die_before_event: RuleEvent = _emit_rule_timing("dieBefore", victim_id, killer_id, victim_id, {"hp":victim.hp})
-	if die_before_event != null and (die_before_event.cancelled or die_before_event.neutralized):
-		victim.dying = false
-		state.dying_queue.erase(victim_id)
-		_finish_pending_damage(victim_id)
-		return
-	var die_begin_event: RuleEvent = _emit_rule_timing("dieBegin", victim_id, killer_id, victim_id, die_before_event.data if die_before_event != null else {"hp":victim.hp})
-	if die_begin_event != null and (die_begin_event.cancelled or die_begin_event.neutralized):
-		victim.dying = false
-		state.dying_queue.erase(victim_id)
-		_finish_pending_damage(victim_id)
-		return
-	var death_event_id: int = _record_runtime_event("die", "death", {"victim_id":victim_id, "killer_id":killer_id})
-	state.dying_queue.erase(victim_id)
-	# 过关斩将中敌方逐名阵亡并离场，只有本层全部敌人阵亡才由模式流程统一换上下一层武将；玩家阵亡继续走真实死亡与终局流程。
-	# 补充：玩家仍有复活次数时，会先进入模式复活分支并拦截本次终局；次数耗尽后才继续上述真实死亡流程。
-	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_CONQUEST and conquest_mode != null:
-		if conquest_mode.can_revive_player(victim_id):
-			_resolve_conquest_player_revival(victim, killer_id, death_event_id)
-			return
-		if conquest_mode.is_enemy(victim_id):
-			_resolve_conquest_enemy_replacement(victim, killer_id, death_event_id)
-			return
-	# 车轮战前两名武将阵亡只淘汰当前武将并立即换上下一名；第三名阵亡才把玩家标记为真正死亡。
-	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_WHEEL_DUEL:
-		victim.wheel_duel_defeated_count += 1
-		if victim.wheel_duel_defeated_count < WheelDuelSelectionService.LINEUP_CHARACTER_COUNT_PER_PLAYER:
-			_resolve_wheel_duel_character_replacement(victim, killer_id, death_event_id)
-			return
-	victim.alive = false
-	victim.dying = false
-	victim.death_confirmed = true
-	victim.identity_revealed = true
-	_record_match_kill(killer_id, victim.player_id)
-	_emit_rule_timing("die", victim_id, killer_id, victim_id, {"hp":victim.hp, "death_event_id":death_event_id}, death_event_id)
-	add_log("%s死亡，身份为%s。" % [format_player_state_log_name(victim), _identity_text(victim.identity)])
-	# 亮出身份后立即检测胜负；若条件已满足，规则要求直接结束游戏，不再继续死亡弃牌与奖惩。
-	_check_game_over()
-	if state.game_over:
-		_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":true}, {}, death_event_id)
-		_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
-		_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":true, "death_event_id":death_event_id}, death_event_id)
-		if player_mark_service != null:
-			player_mark_service.clear_marks_for_dead_player(victim_id)
-		_finish_pending_damage(victim_id)
-		return
-	while not victim.hand.is_empty():
-		_move_to_discard(victim.hand.pop_back())
-	discard_all_equipment(victim_id, false)
-	while not victim.judgment_area.is_empty():
-		_move_to_discard(victim.judgment_area.pop_back())
-	# 击杀者状态；无来源伤害或击杀者已不存在时不执行奖惩。
-	var killer: PlayerState = state.get_player(killer_id)
-	# 身份规则返回的奖惩类型；控制器负责实际摸牌与弃牌移动。
-	var reward: String = identity_rules.get_death_reward(killer, victim, str(state.match_mode))
-	if reward == "teammate_draw":
-		# 2v2：队友死亡后（不论击杀者），存活队友各摸一张；击杀队友无额外惩罚。
-		for ally: PlayerState in state.players:
-			if ally == null or not ally.alive or ally.out_of_game:
-				continue
-			if ally.player_id == victim.player_id:
-				continue
-			if identity_rules.are_teammates(ally, victim, str(state.match_mode)):
-				draw(ally.player_id, 1)
-				add_log("%s因队友阵亡摸了1张牌。" % ally.display_name)
-	elif reward == "draw_three" and killer != null and killer.alive:
-		draw(killer.player_id, 3)
-	elif reward == "leader_penalty" and killer != null and killer.alive:
-		while not killer.hand.is_empty():
-			_move_to_discard(killer.hand.pop_back())
-		discard_all_equipment(killer.player_id, true)
-		add_log("领袖杀死忠臣，弃置全部手牌和装备。")
-	_check_game_over()
-	_record_runtime_event("dieAfter", "death", {"victim_id":victim_id, "game_over":state.game_over}, {}, death_event_id)
-	_emit_rule_timing("dieEnd", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
-	_emit_rule_timing("dieAfter", victim_id, killer_id, victim_id, {"game_over":state.game_over, "death_event_id":death_event_id}, death_event_id)
-	if player_mark_service != null:
-		player_mark_service.clear_marks_for_dead_player(victim_id)
-	_finish_pending_damage(victim_id)
-	# 无论死亡来自出牌、响应、阶段效果或异步续接，只要死者仍是当前回合角色就必须在死亡结算后立即转交回合。
-	if not state.game_over and state.current_player_id == victim_id:
-		_advance_after_current_player_death(victim_id)
+	# 死亡内容服务；所有前后时机都由原序列持有恢复位置。
+	var death_service: RefCounted = preload("res://scripts/core/death_resolution_service.gd").new(self)
+	death_service.begin(victim_id, killer_id)
 
 
 ## 为真实死亡或模式中的武将击败累计击杀；无来源伤害与自杀不归入任何角色的击杀数。
@@ -12917,126 +12627,6 @@ func _record_match_kill(killer_id: int, victim_id: int) -> void:
 	var killer: PlayerState = state.get_player(killer_id)
 	if killer != null:
 		killer.total_kill_count += 1
-
-
-## 结算过关斩将玩家复活：完成死亡时机后清空全部区域、回复至上限并摸四张牌，且不进入胜负检查。
-func _resolve_conquest_player_revival(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
-	if victim == null or state == null or conquest_mode == null or not conquest_mode.consume_player_revive(victim.player_id):
-		return
-	# 复活前剩余次数已经由服务扣除；死亡时机中的重入无法重复消耗同一次复活。联机局按稳定玩家ID查询本人独立次数。
-	var remaining_revives: int = conquest_mode.get_player_revives_remaining(victim.player_id)
-	victim.alive = false
-	victim.dying = false
-	victim.death_confirmed = true
-	victim.identity_revealed = true
-	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "conquest_revival":true, "remaining_revives":remaining_revives}, death_event_id)
-	add_log("%s死亡并触发复活，剩余复活次数%d。" % [format_player_state_log_name(victim), remaining_revives])
-	# 区域清理复用过关斩将统一入口；手牌、装备、判定区与木牛“粮”全部进入弃牌堆。
-	_discard_all_conquest_player_cards(victim)
-	victim.hp = victim.max_hp
-	victim.alive = true
-	victim.dying = false
-	victim.death_confirmed = false
-	draw(victim.player_id, ConquestModeService.REVIVAL_DRAW_COUNT)
-	add_log("%s体力回复至%d并摸%d张牌，继续游戏。" % [format_player_state_log_name(victim), victim.max_hp, ConquestModeService.REVIVAL_DRAW_COUNT])
-	# 死亡尾部明确标记为复活且game_over=false；监听者可以区分普通死亡，但不得再次触发身份胜负结算。
-	var revival_event_data: Dictionary = {"victim_id":victim.player_id, "game_over":false, "death_event_id":death_event_id, "conquest_revival":true, "remaining_revives":remaining_revives}
-	_record_runtime_event("dieAfter", "death", revival_event_data, {}, death_event_id)
-	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, revival_event_data, death_event_id)
-	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, revival_event_data, death_event_id)
-	if player_mark_service != null:
-		player_mark_service.clear_marks_for_dead_player(victim.player_id)
-	_finish_pending_damage(victim.player_id)
-	_resume_settlement_pipeline()
-	_emit_state()
-
-
-## 结算车轮战非末将阵亡：清空全部区域、换上下一名武将、补满体力并立即摸4张牌。
-func _resolve_wheel_duel_character_replacement(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
-	if victim == null or state == null:
-		return
-	# 当前阵亡武将名称；换将前保存用于永久日志，避免应用新武将后名称被覆盖。
-	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
-	# 当前阵亡武将代次；换将后的死亡尾部与回合中断仍只属于本旧武将。
-	var defeated_character_generation: int = victim.character_generation
-	_record_match_kill(killer_id, victim.player_id)
-	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "wheel_duel_replacement":true}, death_event_id)
-	add_log("%s的武将【%s】阵亡。" % [victim.display_name, defeated_character_name])
-	while not victim.hand.is_empty():
-		_move_to_discard(victim.hand.pop_back())
-	discard_all_equipment(victim.player_id, false)
-	while not victim.judgment_area.is_empty():
-		_move_to_discard(victim.judgment_area.pop_back())
-	victim.wheel_duel_lineup_index += 1
-	# 下一名出场武将ID；阵容固定3名且索引已由阵亡数量保护，不会越界。
-	var next_character_id: String = victim.wheel_duel_lineup[victim.wheel_duel_lineup_index]
-	_apply_character(victim, next_character_id, true)
-	_reinstall_character_skills_for_player(victim)
-	victim.hp = victim.max_hp
-	victim.shield = 0
-	victim.dying = false
-	victim.death_confirmed = false
-	victim.chained = false
-	victim.face_down = false
-	victim.skipped_phases.clear()
-	victim.slash_count = 0
-	victim.wine_used = false
-	victim.wine_bonus = 0
-	victim.wooden_ox_used = false
-	draw(victim.player_id, 4)
-	add_log("%s亮出下一名武将【%s】，体力补至%d并摸4张牌。" % [victim.display_name, GameDatabase.resolve_character_name(next_character_id), victim.max_hp])
-	_record_runtime_event("dieAfter", "death", {"victim_id":victim.player_id, "game_over":false, "wheel_duel_replacement":true, "next_character_id":next_character_id}, {}, death_event_id)
-	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true, "player_character_generation":defeated_character_generation, "target_character_generation":defeated_character_generation}, death_event_id)
-	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, {"game_over":false, "death_event_id":death_event_id, "wheel_duel_replacement":true, "player_character_generation":defeated_character_generation, "target_character_generation":defeated_character_generation}, death_event_id)
-	if player_mark_service != null:
-		player_mark_service.clear_marks_for_dead_player(victim.player_id)
-	_finish_pending_damage(victim.player_id)
-	# 当前行动玩家自己的武将阵亡时直接终止本回合；对方回合内阵亡则由原结算继续当前回合。
-	if state.current_player_id == victim.player_id and not state.game_over:
-		state.current_phase = "wheel_duel_replacing"
-		state.phase_index = -1
-		_advance_after_current_player_death(victim.player_id, defeated_character_generation)
-	else:
-		_emit_state()
-
-
-## 结算过关斩将敌方武将阵亡：清空该敌人区域并完成死亡时机；仅当本层全部敌人阵亡时登记整层换将，否则保持退场并继续原结算。
-func _resolve_conquest_enemy_replacement(victim: PlayerState, killer_id: int, death_event_id: int) -> void:
-	if victim == null or state == null or conquest_mode == null:
-		return
-	# 阵亡武将名称；换将前保存，避免日志在写入随机新武将后丢失本次击败对象。
-	var defeated_character_name: String = GameDatabase.resolve_character_name(victim.character_id)
-	_record_match_kill(killer_id, victim.player_id)
-	_emit_rule_timing("die", victim.player_id, killer_id, victim.player_id, {"hp":victim.hp, "death_event_id":death_event_id, "conquest_enemy_defeat":true}, death_event_id)
-	add_log("%s击败敌方武将【%s】。" % [format_player_log_name(killer_id), defeated_character_name])
-	# 旧武将从死亡时机结束起立即失效；随后伤害尾部只能被真正的伤害来源触发，不能被下一名入场武将继承为受伤时机。
-	victim.alive = false
-	victim.dying = false
-	victim.death_confirmed = true
-	victim.identity_revealed = true
-	_discard_all_conquest_player_cards(victim)
-	# 本层是否已经清空；必须在本次敌人标记死亡后由模式服务统一判断，不能把单个die事件直接解释为层完成。
-	var level_cleared: bool = conquest_mode.is_current_level_cleared()
-	# 死亡尾部公开数据；技能可明确区分普通敌人退场与最后一名敌人触发的整层结算。
-	var defeat_event_data: Dictionary = {"victim_id":victim.player_id, "game_over":false, "death_event_id":death_event_id, "conquest_enemy_defeat":true, "conquest_level_cleared":level_cleared, "conquest_replacement":level_cleared}
-	_record_runtime_event("dieAfter", "death", defeat_event_data, {}, death_event_id)
-	_emit_rule_timing("dieEnd", victim.player_id, killer_id, victim.player_id, defeat_event_data, death_event_id)
-	_emit_rule_timing("dieAfter", victim.player_id, killer_id, victim.player_id, defeat_event_data, death_event_id)
-	if player_mark_service != null:
-		player_mark_service.clear_marks_for_dead_player(victim.player_id)
-	# 死亡续接上下文；无论是否清层，都先等待旧伤害与目标End/After完整排空，再决定转交死亡回合或建立下一层边界。
-	var defeat_context: Dictionary = {"defeated_enemy_id":victim.player_id, "defeated_character_generation":victim.character_generation, "current_player_id":state.current_player_id, "level_cleared":level_cleared}
-	if level_cleared:
-		# 本层全部敌方稳定ID；下一层以整组为单位重新入场，关卡数与机缘只结算一次。
-		defeat_context["defeated_enemy_ids"] = conquest_mode.get_enemy_ids()
-		add_log("本层全部敌方均已阵亡，完成第%d关。" % conquest_mode.get_level())
-		_defer_rule_continuation("conquest_enemy_replacement", defeat_context)
-	else:
-		# 未清层时只结束当前敌人的生命周期；其座位保持死亡，其他敌人继续本层战斗。
-		add_log("本层仍有%d名敌方存活，关卡继续。" % _get_alive_conquest_enemy_ids().size())
-		_defer_rule_continuation("conquest_enemy_defeat", defeat_context)
-	_finish_pending_damage(victim.player_id)
-	_resume_settlement_pipeline()
 
 
 ## 在单名敌人的死亡与父级目标尾部全部完成后恢复原流程；若死者正处于自己的回合，则按普通死亡中断转交下名存活角色。
@@ -13443,7 +13033,7 @@ func _is_conquest_settlement_quiescent() -> bool:
 		return false
 	if trigger_manager != null and trigger_manager.has_deferred_dispatches():
 		return false
-	if not _pending_dying_start_contexts.is_empty() or not _pending_damage_finalizations.is_empty() or not _queued_equipment_triggers.is_empty():
+	if not _queued_equipment_triggers.is_empty():
 		return false
 	if not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty():
 		return false
@@ -13481,6 +13071,11 @@ func _try_capture_conquest_temporary_exit_at_play_idle() -> bool:
 		return false
 	if str(state.current_phase) != "play":
 		return false
+	# 阶段游标属于另一名角色时，当前play只是旧回合恢复中的表现状态，不能写成中间play_phase存档。
+	for lifecycle_key_variant: Variant in _started_phase_lifecycles.keys():
+		var lifecycle_key: String = str(lifecycle_key_variant)
+		if lifecycle_key.ends_with(":phaseUse") and int(lifecycle_key.get_slice(":", 0)) != state.current_player_id:
+			return false
 	# 多步技能间隔或已排队的阶段切换表示仍有流程在推进；保持预约等待其完成后的下一个空闲点。
 	if game_flow_pacer != null and (game_flow_pacer.has_pending_skill_interval() or game_flow_pacer.has_pending("phase_transition")):
 		return false
@@ -13900,8 +13495,8 @@ func _check_game_over() -> void:
 	_pending_card_choice.clear()
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
-	_pending_dying_start_contexts.clear()
 	_rule_continuations.reset()
+	_rule_sequences.clear()
 	_clear_pending_judgment_request()
 	state.public_card_choice_display.clear()
 	state.simultaneous_response_display.clear()
@@ -13930,6 +13525,7 @@ func _end_match_as_draw(reason: String) -> void:
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_rule_sequences.clear()
 	_clear_pending_judgment_request()
 	state.public_card_choice_display.clear()
 	state.simultaneous_response_display.clear()

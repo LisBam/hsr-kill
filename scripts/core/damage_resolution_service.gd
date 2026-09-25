@@ -288,9 +288,14 @@ func _finish_result(sequence: RuleStepSequence) -> void:
 	# 已提交结果；包含连环目标快照、武将代次和牌使用者等稳定字段。
 	var result: Dictionary = sequence.context.get("result", {}) as Dictionary
 	if int(result.get("amount", 0)) == 0:
-		_host.call("_finish_damage_timing", result)
+		_start_damage_tail(sequence, result)
 	else:
-		_host.call("_continue_damage_after_result", result)
+		sequence.insert_steps([
+			_emit_legacy_result.bind("damage_after"),
+			_emit_legacy_result.bind("hp_reduced"),
+			_resolve_result_dying,
+			_start_damage_tail_from_result,
+		])
 
 
 ## 统一装备上下文；读取最终属性而不泄露步骤对象。
@@ -305,16 +310,29 @@ func _emit(sequence: RuleStepSequence, timing_name: String, timing_data: Diction
 	return _host.emit_sequence_timing(sequence, timing_name, int(sequence.context.get("target_id", -1)), int(sequence.context.get("source_id", -1)), int(sequence.context.get("target_id", -1)), timing_data, int(sequence.context.get("damage_event_id", -1)))
 
 
-## 濒死结束后的固定尾部；每个窗口只发布一次，连环子伤害完成后才处理下一个目标。
-func finish_damage(context: Dictionary) -> void:
-	# 尾部上下文；沿用实际提交的快照，不受后续回复或护盾变化影响。
-	var completion_context: Dictionary = context.duplicate(true)
-	completion_context["completion_data"] = _build_completion_data(context)
-	completion_context["committed_point_index"] = 0
-	completion_context["chain_target_index"] = 0
-	# 标准尾部与逐点After各有自己的等待边界；不再手写阶段恢复字典。
-	var steps: Array[Callable] = [_emit_completion.bind("damageSource"), _emit_completion.bind("damageEnd"), _emit_completion.bind("damageAfter"), _start_point_after, _continue_chain]
-	_host.run_rule_sequence(steps, completion_context)
+## 把已经提交的伤害结果并入原伤害序列，再插入固定尾部，避免另建恢复边界。
+func _start_damage_tail_from_result(sequence: RuleStepSequence) -> void:
+	_start_damage_tail(sequence, sequence.context.get("result", {}) as Dictionary)
+
+
+## 初始化当前伤害序列的稳定尾部快照，并依序等待来源、结束、After、逐点After及连环子伤害。
+func _start_damage_tail(sequence: RuleStepSequence, result: Dictionary) -> void:
+	if result.is_empty():
+		sequence.finish()
+		return
+	# 权威伤害结果；尾部数据只合并提交事实，不覆盖当前步骤游标或共享对象。
+	for key_variant: Variant in result.keys():
+		sequence.context[str(key_variant)] = result[key_variant]
+	sequence.context["completion_data"] = _build_completion_data(result)
+	sequence.context["committed_point_index"] = 0
+	sequence.context["chain_target_index"] = 0
+	sequence.insert_steps([
+		_emit_completion.bind("damageSource"),
+		_emit_completion.bind("damageEnd"),
+		_emit_completion.bind("damageAfter"),
+		_start_point_after,
+		_continue_chain,
+	])
 
 
 ## 尾部字段构建保持原有来源上下文契约；扩展数据不得覆盖权威伤害事实。
@@ -374,3 +392,26 @@ func _continue_chain(sequence: RuleStepSequence) -> void:
 	var chained_source_context: Dictionary = (sequence.context.get("source_context", {}) as Dictionary).duplicate(true)
 	chained_source_context["card_user_id"] = int(sequence.context.get("card_user_id", sequence.context.get("source_id", -1)))
 	_host.damage(int(sequence.context.get("source_id", -1)), chained_target_id, int(sequence.context.get("amount", 0)), str(sequence.context.get("nature", "normal")), str(sequence.context.get("card_id", "")), true, false, chained_source_context)
+
+
+## 兼容事件也遵循逐窗口等待；字段保留已提交事实，不读取后续改变的体力。
+func _emit_legacy_result(sequence: RuleStepSequence, timing_name: String) -> void:
+	# 伤害事实副本；hp_reduced仅报告穿透护盾的实际体力减少。
+	var timing_data: Dictionary = (sequence.context.get("result", {}) as Dictionary).duplicate(true)
+	if timing_name == "hp_reduced":
+		if int(timing_data.get("hp_lost", 0)) <= 0:
+			return
+		timing_data["damage_amount"] = timing_data.get("amount", 0)
+		timing_data["amount"] = timing_data.get("hp_lost", 0)
+		timing_data["reduction_type"] = "damage"
+		timing_data["event_id"] = timing_data.get("damage_event_id", -1)
+	_emit(sequence, timing_name, timing_data)
+
+
+## 只有原武将仍存活且体力不足才进入救援；新武将不继承旧伤害的濒死检查。
+func _resolve_result_dying(sequence: RuleStepSequence) -> void:
+	# 每步重取当前武将；死亡和换将只结束救援需求，不丢弃已经成立的伤害通知。
+	var result: Dictionary = sequence.context.get("result", {}) as Dictionary
+	var target: PlayerState = _host.state.get_player(int(result.get("target_id", sequence.context.get("target_id", -1))))
+	if target != null and target.alive and target.hp <= 0 and target.character_generation == int(result.get("target_character_generation", -1)):
+		_host._resolve_dying(target.player_id, int(result.get("source_id", sequence.context.get("source_id", -1))))

@@ -82,3 +82,15 @@ func to_array() -> Array[Dictionary]:
 func reset() -> void:
 	_continuations.clear()
 	_next_continuation_id = 1
+
+
+## 将已登记内容安排在当前结算栈之后；适用于换将与回合交接，不影响普通子内容的后进先出。
+func move_after_current(continuation_id: int) -> void:
+	# 当前记录索引；按身份重排，不复制记录或重新增加因果预算。
+	for index: int in range(_continuations.size()):
+		if int(_continuations[index].get("continuation_id", -1)) == continuation_id:
+			# 同一续接记录；栈首最后执行，使父伤害与父牌先完成。
+			var continuation: Dictionary = _continuations[index]
+			_continuations.remove_at(index)
+			_continuations.push_front(continuation)
+			return
