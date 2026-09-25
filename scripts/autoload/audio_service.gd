@@ -157,14 +157,10 @@ func _play_skill_voice(presentation_data: Dictionary) -> void:
 func _play_card_voice(presentation_data: Dictionary) -> void:
 	# 卡牌定义ID；虚拟牌（例如罡风转化的雷【杀】）传入的是实际结算的虚拟定义ID。
 	var card_definition_id: String = str(presentation_data.get("card_definition_id", ""))
-	# 音效所用的卡牌ID；同族卡牌（火【杀】、雷【杀】）经内容层声明别名后与基础牌共用同一份配音。
-	var voice_card_id: String = str(presentation_data.get("voice_card_id", ""))
-	if voice_card_id.is_empty():
-		voice_card_id = card_definition_id
 	# 使用者性别；核心层已按发动者武将解析，未选将或未知性别时音频层跳过性别专属目录。
 	var gender: String = str(presentation_data.get("gender", ""))
 	# 播放路径；第一位是每一张牌都有的基础伴随音效，其后是该牌的专属配音（可能不存在）。
-	var paths: Array[String] = _catalog.resolve_card_voice_paths(voice_card_id, _get_current_card_name_system(), gender)
+	var paths: Array[String] = _catalog.resolve_card_voice_paths(card_definition_id, _get_current_card_name_system(), gender)
 	if paths.is_empty():
 		_log_missing_audio("card", card_definition_id, "")
 		return

@@ -23,8 +23,8 @@ const PROBE_REAL_CARD_ID: String = "sha"
 ## 真实卡牌 ID：没有投放专属配音的卡牌；用于确认它只播放基础伴随音效而不是整张牌静默。
 const PROBE_UNCOVERED_CARD_ID: String = "tao"
 
-## 同族卡牌 ID：火【杀】与雷【杀】；它们在内容层声明 voice_card_id 后共用【杀】的配音。
-const PROBE_ALIAS_CARD_IDS: Array[String] = ["sha_fire", "sha_thunder"]
+## 属性【杀】卡牌 ID：火【杀】与雷【杀】；它们各自拥有独立的专属配音，不共用【杀】的素材。
+const PROBE_NATURE_SLASH_CARD_IDS: Array[String] = ["sha_fire", "sha_thunder"]
 
 ## 核心层自动触发用例最多等待的进程帧数；全 AI 对局在零延迟下会迅速出牌，通常在数十帧内即命中。
 const MAX_AUTOMATION_FRAMES: int = 600
@@ -238,22 +238,20 @@ func _verify_real_audio_assets() -> bool:
 	if uncovered_paths.size() != 1 or not uncovered_paths[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
 		_fail("real_card_uncovered=%s" % str(uncovered_paths))
 		return false
-	# 同族卡牌共用音效；火【杀】与雷【杀】在内容层声明了 voice_card_id，必须解析到【杀】的那两层。
-	for alias_card_id: String in PROBE_ALIAS_CARD_IDS:
-		# 别名卡牌定义；缺失说明卡牌目录结构已变更，本用例的前提不再成立。
-		var alias_definition: Dictionary = GameDatabase.get_card(alias_card_id)
-		if alias_definition.is_empty():
-			_fail("real_alias_card_missing=%s" % alias_card_id)
+	# 属性【杀】各自拥有专属配音；火【杀】与雷【杀】必须解析到自己的素材，而不是共用【杀】的那一份。
+	for nature_card_id: String in PROBE_NATURE_SLASH_CARD_IDS:
+		# 该属性【杀】的男声播放路径；必须同样是基础伴随音效加专属配音两层。
+		var nature_paths: Array[String] = catalog.resolve_card_voice_paths(nature_card_id, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
+		if nature_paths.size() != 2 or not nature_paths[0].contains(AudioCatalog.CARD_DEFAULT_AUDIO_BASENAME):
+			_fail("real_nature_slash_layers=%s:%s" % [nature_card_id, str(nature_paths)])
 			return false
-		# 内容层声明的音效别名；必须指向【杀】，否则同族共用规则失效。
-		var alias_voice_card_id: String = str(alias_definition.get("voice_card_id", ""))
-		if alias_voice_card_id != PROBE_REAL_CARD_ID:
-			_fail("real_alias_voice_card_id=%s:%s" % [alias_card_id, alias_voice_card_id])
+		# 专属配音文件名必须就是本牌稳定ID，否则说明素材投放到了错误的名字上。
+		if not nature_paths[1].contains("/%s/%s" % [AudioCatalog.CARD_GENDER_MALE, nature_card_id]):
+			_fail("real_nature_slash_voice=%s:%s" % [nature_card_id, str(nature_paths)])
 			return false
-		# 别名解析结果；必须与【杀】本牌完全一致，含基础伴随音效与专属配音两层。
-		var alias_paths: Array[String] = catalog.resolve_card_voice_paths(alias_voice_card_id, AudioCatalog.NAME_SYSTEM_CUSTOM, AudioCatalog.CARD_GENDER_MALE)
-		if alias_paths != male_sha:
-			_fail("real_alias_voice_paths=%s:%s" % [alias_card_id, str(alias_paths)])
+		# 与【杀】本牌的配音必须是不同文件，否则属性【杀】的独立配音形同虚设。
+		if nature_paths[1] == male_sha[1]:
+			_fail("real_nature_slash_shares_sha=%s:%s" % [nature_card_id, nature_paths[1]])
 			return false
 	if not _verify_audio_asset_names():
 		return false
@@ -566,7 +564,7 @@ func _verify_core_voice_channels() -> void:
 		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_SKILL:
 			auto_skill_request_count += 1
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok asset_names=ok alias_voice=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d" % auto_skill_request_count)
 	get_tree().quit(0)
 
 

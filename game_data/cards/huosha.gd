@@ -8,8 +8,6 @@ func _init() -> void:
 	super({
 		"id": "sha_fire",
 		"rule_name": "杀",
-		# 音效别名：火【杀】在音频上共用【杀】的配音，不需要为火焰属性单独投放一套素材。
-		"voice_card_id": "sha",
 		"original_name": "火杀",
 		"custom_name": "火杀",
 		"type": "basic",
