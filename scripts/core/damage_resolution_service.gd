@@ -33,6 +33,7 @@ func resolve(context: Dictionary) -> void:
 		_emit_window.bind("damageBegin4"),
 		# 伤害前事件；处理器可修改 amount 或取消整次伤害。
 		_emit_window.bind("damage_before"),
+		_prepare_points,
 		# 伤害发生前护盾值；只用于计算本次优先吸收量，不改变最终伤害事件本身的数值。
 		_prepare_shield,
 		_commit,
@@ -41,9 +42,95 @@ func resolve(context: Dictionary) -> void:
 		_emit_result.bind("changeHp"),
 		# damage时机内的选择必须先完成全部同一时机处理器；不能提前发布damage_after、濒死或整条伤害尾部。
 		_emit_result.bind("damage"),
+		_start_committed_points,
 		_finish_result,
 	]
 	_host.run_rule_sequence(steps, context)
+
+
+## 展开整次伤害确认后的候选点；每点可独立阻止，整次伤害仍只扣血、统计和进入濒死一次。
+func _prepare_points(sequence: RuleStepSequence) -> void:
+	if not _read_window(sequence):
+		return
+	sequence.context["proposed_damage_amount"] = maxi(int(sequence.context.timing_data.get("amount", 0)), 0)
+	sequence.context["accepted_damage_points"] = 0
+	sequence.context["damage_point_index"] = 0
+	_insert_next_point(sequence)
+
+
+## 每次只展开一个候选点；长序列由统一帧预算让出执行权，不建立独立循环或恢复字典。
+func _insert_next_point(sequence: RuleStepSequence) -> void:
+	if not _validate_target(sequence):
+		return
+	if int(sequence.context.damage_point_index) >= int(sequence.context.proposed_damage_amount):
+		sequence.context.timing_data["amount"] = int(sequence.context.accepted_damage_points)
+		return
+	sequence.context["damage_point_index"] = int(sequence.context.damage_point_index) + 1
+	sequence.context["point_cancelled"] = false
+	# 单点上下文；总量在整次Begin窗口修改，这里amount只允许0或1。
+	var point_data: Dictionary = (sequence.context.timing_data as Dictionary).duplicate(true)
+	point_data["amount"] = 1
+	point_data["damage_point_index"] = int(sequence.context.damage_point_index)
+	point_data["damage_total_amount"] = int(sequence.context.proposed_damage_amount)
+	sequence.context["point_data"] = point_data
+	# 当前点的修改窗口及接受步骤；读取最终窗口结果后才决定是否计入总伤害。
+	var steps: Array[Callable] = [_emit_point_before.bind("damagePointBefore"), _emit_point_before.bind("damagePointBegin"), _accept_point, _insert_next_point]
+	sequence.insert_steps(steps)
+
+
+## 回读单点修改；取消仅阻止当前候选点，不取消整次伤害或其他点。
+func _read_point_window(sequence: RuleStepSequence) -> void:
+	if sequence.waiting_event == null:
+		return
+	# 原始单点窗口；所有处理器及其子内容完成后再读取取消和amount。
+	var point_event: RuleEvent = sequence.waiting_event
+	sequence.waiting_event = null
+	sequence.context["point_data"] = point_event.data.duplicate(true)
+	if point_event.cancelled or point_event.neutralized or int(point_event.data.get("amount", 1)) <= 0:
+		sequence.context["point_cancelled"] = true
+
+
+## 单点提交前窗口；每点Before完成后才进入Begin，取消的点不再发布Begin。
+func _emit_point_before(sequence: RuleStepSequence, timing_name: String) -> void:
+	_read_point_window(sequence)
+	if not _validate_target(sequence) or bool(sequence.context.get("point_cancelled", false)):
+		return
+	sequence.context.point_data["amount"] = 1
+	sequence.wait_for_timing(_emit(sequence, timing_name, sequence.context.point_data))
+
+
+## 接受当前点但不直接扣血；避免多点伤害被拆成多次受伤、濒死或连环。
+func _accept_point(sequence: RuleStepSequence) -> void:
+	_read_point_window(sequence)
+	if not bool(sequence.context.get("point_cancelled", false)):
+		sequence.context["accepted_damage_points"] = int(sequence.context.accepted_damage_points) + 1
+
+
+## 实际伤害成立后逐点通知；结果窗口中的取消不能撤销已经提交的体力和统计。
+func _start_committed_points(sequence: RuleStepSequence) -> void:
+	sequence.waiting_event = null
+	sequence.context["committed_point_index"] = 0
+	_emit_committed_point(sequence, "damagePoint", sequence.context.get("result", {}) as Dictionary)
+
+
+## 发布一个已成立的伤害点，追加后继步骤保留等待边界；After沿用整次伤害收尾后的原语义。
+func _emit_committed_point(sequence: RuleStepSequence, timing_name: String, timing_data: Dictionary) -> void:
+	# 已通知数量；每次派发前递增，恢复不会重复当前点。
+	var damage_point_index: int = int(sequence.context.get("committed_point_index", 0))
+	# 最终伤害总点数；护盾吸收不减少每点伤害的通知次数。
+	var damage_total_amount: int = maxi(int(timing_data.get("amount", 0)), 0)
+	if damage_point_index >= damage_total_amount:
+		return
+	sequence.context["committed_point_index"] = damage_point_index + 1
+	# 单点事实快照；保留整次护盾吸收与体力减少，amount固定为1。
+	var damage_point_data: Dictionary = timing_data.duplicate(true)
+	damage_point_data["amount"] = 1
+	damage_point_data["damage_total_amount"] = damage_total_amount
+	damage_point_data["damage_point_index"] = damage_point_index + 1
+	# 下一点在本点全部技能完成后运行；即使这是最后一点，也保留读取完成边界。
+	var steps: Array[Callable] = [_emit_committed_point.bind(timing_name, timing_data)]
+	sequence.insert_steps(steps)
+	sequence.wait_for_timing(_emit(sequence, timing_name, damage_point_data))
 
 
 ## 回读上一修改窗口；取消和目标代次失效在下一步骤入口统一收口。
@@ -215,4 +302,75 @@ func _equipment_context(sequence: RuleStepSequence) -> Dictionary:
 
 ## 用同一伤害父ID发布标准或兼容时机；不在组件内重新排序触发器。
 func _emit(sequence: RuleStepSequence, timing_name: String, timing_data: Dictionary) -> RuleEvent:
-	return _host.emit_rule_timing(timing_name, int(sequence.context.get("target_id", -1)), int(sequence.context.get("source_id", -1)), int(sequence.context.get("target_id", -1)), timing_data, int(sequence.context.get("damage_event_id", -1)))
+	return _host.emit_sequence_timing(sequence, timing_name, int(sequence.context.get("target_id", -1)), int(sequence.context.get("source_id", -1)), int(sequence.context.get("target_id", -1)), timing_data, int(sequence.context.get("damage_event_id", -1)))
+
+
+## 濒死结束后的固定尾部；每个窗口只发布一次，连环子伤害完成后才处理下一个目标。
+func finish_damage(context: Dictionary) -> void:
+	# 尾部上下文；沿用实际提交的快照，不受后续回复或护盾变化影响。
+	var completion_context: Dictionary = context.duplicate(true)
+	completion_context["completion_data"] = _build_completion_data(context)
+	completion_context["committed_point_index"] = 0
+	completion_context["chain_target_index"] = 0
+	# 标准尾部与逐点After各有自己的等待边界；不再手写阶段恢复字典。
+	var steps: Array[Callable] = [_emit_completion.bind("damageSource"), _emit_completion.bind("damageEnd"), _emit_completion.bind("damageAfter"), _start_point_after, _continue_chain]
+	_host.run_rule_sequence(steps, completion_context)
+
+
+## 尾部字段构建保持原有来源上下文契约；扩展数据不得覆盖权威伤害事实。
+func _build_completion_data(context: Dictionary) -> Dictionary:
+	# 统一尾部数据；来源触发与受伤者触发读取同一最终伤害、护甲吸收和体力减少值。
+	var timing_data: Dictionary = {
+		"amount":int(context.get("amount", 0)),
+		"shield_absorbed":int(context.get("shield_absorbed", 0)),
+		"hp_lost":int(context.get("hp_lost", 0)),
+		"nature":str(context.get("nature", "normal")),
+		"card_id":str(context.get("card_id", "")),
+		"card_user_id":int(context.get("card_user_id", int(context.get("source_id", -1)))),
+		"chain_transfer":bool(context.get("chain_transfer", false)),
+		"damage_event_id":int(context.get("damage_event_id", -1)),
+		"source_character_generation":int(context.get("source_character_generation", -1)),
+		"target_character_generation":int(context.get("target_character_generation", -1)),
+	}
+	# 来源牌扩展上下文；只补充不存在的键，最终伤害数值与角色代次始终以权威尾部字段为准。
+	var source_context: Dictionary = context.get("source_context", {}) as Dictionary
+	for source_context_key_variant: Variant in source_context.keys():
+		# 当前来源上下文字段名；【山倾】花色等纯数据可由 damageSource 技能读取。
+		var source_context_key: String = str(source_context_key_variant)
+		if not timing_data.has(source_context_key):
+			timing_data[source_context_key] = source_context[source_context_key_variant]
+	return timing_data
+
+
+## 整次伤害事实窗口；已提交伤害不因目标死亡而丢失其来源、结束和After通知。
+func _emit_completion(sequence: RuleStepSequence, timing_name: String) -> void:
+	sequence.wait_for_timing(_emit(sequence, timing_name, sequence.context.completion_data))
+
+
+## 每点After在整次伤害After之后展开，保留百折、命定等正式技能的订阅语义。
+func _start_point_after(sequence: RuleStepSequence) -> void:
+	_emit_committed_point(sequence, "damagePointAfter", sequence.context.completion_data)
+
+
+## 连环目标快照按座次逐一处理；通用序列预登记父步骤，子伤害自动先于下一目标。
+func _continue_chain(sequence: RuleStepSequence) -> void:
+	# 连环目标快照；保持原伤害建立时的座次顺序，等待期间只重新校验存活与横置状态。
+	var chain_targets: Array = sequence.context.get("chain_targets", []) as Array
+	# 已完成连环目标数量；每次仅消费一个目标，预算和等待交给统一调度器。
+	var chain_target_index: int = int(sequence.context.get("chain_target_index", 0))
+	if chain_target_index >= chain_targets.size():
+		return
+	sequence.context["chain_target_index"] = chain_target_index + 1
+	# 下一目标；先插入再执行子伤害，避免同步与异步路径使用不同循环。
+	var steps: Array[Callable] = [_continue_chain]
+	sequence.insert_steps(steps)
+	# 传导前再次检查角色仍存活且横置，避免前序死亡结算改变有效目标。
+	var chained_target_id: int = int(chain_targets[chain_target_index])
+	# 当前连环目标状态；每轮重新按稳定 ID 读取，防止嵌套伤害后继续使用过期对象。
+	var chained_target: PlayerState = _host.state.get_player(chained_target_id)
+	if chained_target == null or not chained_target.alive or chained_target.out_of_game or not chained_target.chained:
+		return
+	# 连环伤害继续保留原来源牌扩展数据，使“此牌造成伤害后”类技能能识别同一张属性牌的传导伤害。
+	var chained_source_context: Dictionary = (sequence.context.get("source_context", {}) as Dictionary).duplicate(true)
+	chained_source_context["card_user_id"] = int(sequence.context.get("card_user_id", sequence.context.get("source_id", -1)))
+	_host.damage(int(sequence.context.get("source_id", -1)), chained_target_id, int(sequence.context.get("amount", 0)), str(sequence.context.get("nature", "normal")), str(sequence.context.get("card_id", "")), true, false, chained_source_context)

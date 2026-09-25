@@ -47,6 +47,10 @@ var result: Dictionary = {}
 ## 终止原因；用于回放区分规则取消、无懈中立化和系统错误。
 var termination_reason: String = ""
 
+## 本窗口是否由规则步骤持有恢复位置；默认false保留同步接口，true允许触发批次跨帧而无需同栈强制排空。
+## 仅调度器设置，不属于玩法参数，也不进入回放和网络摘要。
+var step_owned: bool = false
+
 
 ## 创建规则事件并复制上下文，避免外部字典在事件结束后继续影响结果。
 func _init(event_name: String = "", source: int = -1, target: int = -1, context: Dictionary = {}, player: int = -1) -> void:

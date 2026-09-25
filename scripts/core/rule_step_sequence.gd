@@ -27,6 +27,12 @@ var skill_settlement_watermark: int = 0
 ## 创建内容时已存在的外层判定ID；默认-1，仅新判定才是本序列需要等待的子流程。
 var enclosing_judgment_request_id: int = -1
 
+## 创建序列时已存在的独立出牌阶段身份；仅等待之后插入的子阶段，不等待包含自己的外层阶段。
+var enclosing_play_phase_id: int = -1
+
+## 创建序列时已存在的额外弃牌阶段身份；子阶段结束恢复原内容，默认-1表示无外层阶段。
+var enclosing_discard_phase_id: int = -1
+
 ## 只在当前对局内存中存在的内容回调；每项接收本对象，不进入网络快照。
 var _steps: Array[Callable] = []
 
@@ -64,6 +70,21 @@ func execute_next() -> bool:
 ## 保存待完成修改窗口；下一步读取waiting_event.data而非派发时的早期快照。
 func wait_for_timing(event: RuleEvent) -> void:
 	waiting_event = event
+
+
+## 在当前步骤之后插入子步骤，按传入顺序执行；用于由运行时目标或伤害点数决定的内容。
+## 只能扩展尚未结束的序列；同一回调内多次调用时，后插入的批次先执行。
+func insert_steps(steps: Array[Callable]) -> void:
+	if finished:
+		return
+	# 插入偏移；保持调用方数组的先后顺序，不改变已完成步骤游标。
+	var offset: int = 0
+	# 新内容回调；动态加入的服务也需要强引用，选择等待期间不能提前析构。
+	for callback: Callable in steps:
+		_steps.insert(step + offset, callback)
+		offset += 1
+		if callback.is_valid() and callback.get_object() is RefCounted and not _step_owners.has(callback.get_object()):
+			_step_owners.append(callback.get_object() as RefCounted)
 
 
 ## 结束未执行步骤；当前子选择与收尾仍由统一管线负责。
