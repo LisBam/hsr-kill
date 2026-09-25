@@ -21,6 +21,18 @@ const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/compon
 ## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
 const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/components/game_settlement_panel.tscn")
 
+## 音频服务自动加载路径；终局胜负需要按本机视角发声，因此由表现层直接请求而不经过核心层广播。
+const AUDIO_SERVICE_PATH: String = "/root/AudioService"
+
+## 终局效果音标识：本机玩家属于权威胜者阵营。
+const MATCH_RESULT_EFFECT_WIN: String = "win"
+
+## 终局效果音标识：本机玩家不属于权威胜者阵营。
+const MATCH_RESULT_EFFECT_LOSE: String = "lose"
+
+## 终局效果音标识：牌堆与弃牌堆同时耗尽导致的中性平局。
+const MATCH_RESULT_EFFECT_TIE: String = "tie"
+
 ## 断线自动重连期间顶部横幅的常显秒数；默认3600秒远大于整个重连窗口，重连结束时由新的默认时长横幅覆盖淡出。
 const RECONNECT_NOTICE_HOLD_SECONDS: float = 3600.0
 
@@ -1201,7 +1213,17 @@ func _sync_game_settlement_panel() -> void:
 	if _settlement_auto_shown_match_id == match_id:
 		return
 	_settlement_auto_shown_match_id = match_id
+	# 终局效果音；胜负取决于本机玩家视角，因此不能走核心层广播链路，否则全部客户端会播出同一种结果。
+	_play_match_result_effect()
 	game_settlement_panel.show_settlement(_snapshot)
+
+
+## 播放本机终局效果音；音频服务缺失或该视角没有投放素材时静默跳过，不影响结算面板展示。
+func _play_match_result_effect() -> void:
+	var audio_service: Node = get_node_or_null(AUDIO_SERVICE_PATH)
+	if audio_service == null:
+		return
+	audio_service.play_effect(_resolve_match_result_effect_id())
 
 
 ## 响应结算面板关闭；自动展示标记刻意不清空，确保用户关闭后的同局快照不会立即重新打开。
@@ -4534,12 +4556,21 @@ func _get_post_match_result_text() -> String:
 	var winner: String = str(_snapshot.get("winner", ""))
 	if winner == "draw":
 		return "对局结算，游戏平局"
+	if _is_local_player_victory(winner):
+		return "对局结算，游戏胜利"
+	if not winner.is_empty():
+		return "对局结算，游戏失败"
+	return "对局结算"
+
+
+## 判定本机玩家是否属于权威胜者阵营；终局提示与终局音效共用同一判定，避免文字与音效互相矛盾。
+func _is_local_player_victory(winner: String) -> bool:
 	# 当前本地玩家公开身份；身份局终局阵营只由该稳定枚举判断，不依赖武将或座次。
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 当前本地身份；快照不完整时不能错误宣告胜负。
 	var local_identity: String = str(local_player.get("identity", ""))
 	# 当前阵营是否与权威胜者一致；领袖与忠臣共享胜利条件，反贼和内奸分别独立，斗地主地主/农民与 2v2 蓝/红各自对应胜方字段。
-	var is_victory: bool = (
+	return (
 		(winner == "leader_and_loyalists" and local_identity in ["leader", "loyalist"])
 		or (winner == "rebels" and local_identity == "rebel")
 		or (winner == "renegade" and local_identity == "renegade")
@@ -4548,11 +4579,20 @@ func _get_post_match_result_text() -> String:
 		or (winner == "blue_team" and local_identity == "blue")
 		or (winner == "red_team" and local_identity == "red")
 	)
-	if is_victory:
-		return "对局结算，游戏胜利"
-	if not winner.is_empty():
-		return "对局结算，游戏失败"
-	return "对局结算"
+
+
+## 推导本机视角的终局效果音标识；平局、胜利与失败各自使用独立音效，与本机终局提示完全一致。
+func _resolve_match_result_effect_id() -> String:
+	# 当前权威胜者阵营；与终局提示读取同一字段，保证两种表现不会出现分歧。
+	var winner: String = str(_snapshot.get("winner", ""))
+	if winner == "draw":
+		return MATCH_RESULT_EFFECT_TIE
+	if _is_local_player_victory(winner):
+		return MATCH_RESULT_EFFECT_WIN
+	# 胜者字段缺失说明快照不完整；此时不发声，避免把未知结果误报为失败。
+	if winner.is_empty():
+		return ""
+	return MATCH_RESULT_EFFECT_LOSE
 
 
 ## 刷新点击装备后的材料、目标和中央主按钮；交互规则全部读取当前装备定义元数据与核心预览。

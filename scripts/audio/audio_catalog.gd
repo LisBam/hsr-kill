@@ -24,6 +24,10 @@ const CARD_GENDER_FEMALE: String = "female"
 ## 它是叠加在专属牌名配音之下的固定一层，因此不是“缺失时才用”的兜底素材。
 const CARD_DEFAULT_AUDIO_BASENAME: String = "default"
 
+## 全局效果音目录；承载与具体技能、卡牌、角色无关的通用音效。
+## 目录内的文件名即效果标识本身，迁移自无名杀 audio/effect，因此解析时不做任何前缀或后缀推导。
+const EFFECT_AUDIO_DIR: String = "res://game_data/audio/effect"
+
 ## 背景音乐目录；BGM按场景基名加可选序号构成候选池。
 const BGM_DIR: String = "res://game_data/BGM"
 
@@ -140,6 +144,18 @@ func resolve_card_voice_paths(card_id: String, current_name_system: String, gend
 			resolved_paths.append(voice_path)
 			break
 	return resolved_paths
+
+
+## 解析一个全局效果音的素材路径。
+## 效果音是全局唯一素材：同一效果标识在全部对局、全部角色与全部牌上共用同一份音频，
+## 既不区分性别与角色，也没有专属多音效池，因此只按扩展名优先级探测 EFFECT_AUDIO_DIR/<效果标识>。
+## 返回空字符串表示该效果没有投放素材，由调用方静默跳过；本函数不做任何兜底或近似匹配。
+func resolve_effect_path(effect_id: String) -> String:
+	# 规范化效果标识；空标识无法构造任何候选路径，直接返回空字符串。
+	var normalized_effect_id: String = effect_id.strip_edges()
+	if normalized_effect_id.is_empty():
+		return ""
+	return _resolve_existing_path("%s/%s" % [EFFECT_AUDIO_DIR, normalized_effect_id])
 
 
 ## 解析指定场景的BGM候选池。
