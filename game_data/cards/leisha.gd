@@ -8,6 +8,8 @@ func _init() -> void:
 	super({
 		"id": "sha_thunder",
 		"rule_name": "杀",
+		# 音效别名：雷【杀】在音频上共用【杀】的配音，不需要为雷电属性单独投放一套素材。
+		"voice_card_id": "sha",
 		"original_name": "雷杀",
 		"custom_name": "雷杀",
 		"type": "basic",
