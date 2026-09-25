@@ -78,6 +78,10 @@ const EQUIPMENT_EFFECT_IDS: Dictionary = {
 	"treasure":"equip5",
 }
 
+## 防具类装备的稳定槽位ID列表；武器声明“无视防具”时，这些槽位提供的响应入口必须在同一次结算中整体停用。
+## 列表集中声明槽位名而不是具体防具ID，新增防具（八卦阵等提供响应的防具）无需修改响应候选逻辑。
+const ARMOR_EQUIPMENT_SLOTS: Array[String] = ["armor"]
+
 ## 卡牌音频动作模式：使用；与打出共用同一份音效，该字段仅用于诊断与日志。
 const VOICE_PLAY_MODE_USE: String = "use"
 
@@ -4661,16 +4665,18 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 		return null
 	# 同一响应时机已经失败的装备入口；判定型装备失败后不会在重开窗口中再次出现，其他手牌与装备仍正常保留。
 	var excluded_response_candidate_uids: Array[int] = _int_array(context.get("excluded_response_candidate_uids", []) as Array)
+	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
+	var response_context: Dictionary = context.duplicate(true)
+	# 本次结算整体停用的装备槽位；【杀】宣布无视防具后，目标防具提供的响应入口（如八卦阵）在本次响应的每次重试中都不得出现。
+	response_context["ignored_response_equipment_slots"] = _get_ignored_equipment_response_slots(response_context)
 	# 需要优先独立询问的装备候选；同一时机只取装备区稳定遍历顺序中的首个入口，取消或失败后通过排除集合继续寻找下一项。
-	var immediate_equipment_candidate: Dictionary = _get_immediate_equipment_response_candidate(player, allowed_patterns, excluded_response_candidate_uids)
+	var immediate_equipment_candidate: Dictionary = _get_immediate_equipment_response_candidate(player, allowed_patterns, excluded_response_candidate_uids, _read_ignored_equipment_slots(response_context))
 	# 可响应候选；手牌与木牛“粮”都按实际 UID 提供给本人，规则定义决定是否匹配响应模式。
 	var candidates: Array[Dictionary] = []
 	if not immediate_equipment_candidate.is_empty():
 		candidates.append(immediate_equipment_candidate)
 	else:
-		candidates = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids)
-	# 完整响应上下文；恢复回调使用同一模式集合校验实体牌，不能由客户端自行声明所选牌的响应类型。
-	var response_context: Dictionary = context.duplicate(true)
+		candidates = _build_response_choice_candidates(player, allowed_patterns, excluded_response_candidate_uids, _read_ignored_equipment_slots(response_context))
 	response_context["responder_id"] = player_id
 	response_context["response_patterns"] = allowed_patterns.duplicate()
 	response_context["response_prompt"] = prompt
@@ -4704,8 +4710,34 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	return resolved_response_card
 
 
+## 返回当前响应上下文需要整体停用的装备槽位；【杀】结算宣布无视防具时，目标防具提供的响应入口必须失效。
+func _get_ignored_equipment_response_slots(context: Dictionary) -> Array[String]:
+	# 无视防具结论；由发起本次响应的卡牌源码写入共享结算上下文，控制器只读取该只读语义标记。
+	if not bool(context.get("ignore_armor", false)):
+		return []
+	# 被停用的装备槽位；返回副本，调用方不能修改全局槽位声明。
+	return ARMOR_EQUIPMENT_SLOTS.duplicate()
+
+
+## 从响应上下文读取需要整体停用的装备槽位；缺失或格式异常时返回空数组，保持原有全部候选。
+func _read_ignored_equipment_slots(response_context: Dictionary) -> Array[String]:
+	return _string_array(response_context.get("ignored_response_equipment_slots", []) as Array)
+
+
+## 返回装备实体当前所在的装备槽名；不在任何槽位时返回空字符串。
+func _find_equipment_slot_for_card(player: PlayerState, equipment_card: CardInstance) -> String:
+	if player == null or equipment_card == null:
+		return ""
+	for equipment_slot_variant: Variant in player.equipment.keys():
+		# 当前槽位名与其实体；比较只依赖实体身份与稳定槽位名，不使用具体装备定义ID白名单。
+		var equipment_slot: String = str(equipment_slot_variant)
+		if player.equipment[equipment_slot] == equipment_card:
+			return equipment_slot
+	return ""
+
+
 ## 返回当前响应时机最先需要独立询问的装备候选；普通装备继续留在统一响应候选窗口中。
-func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int]) -> Dictionary:
+func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int], ignored_equipment_slots: Array[String] = []) -> Dictionary:
 	# 默认空候选；无存活角色、无装备或装备不支持当前模式时保持普通响应流程。
 	var result: Dictionary = {}
 	if player == null or not player.alive or player.out_of_game:
@@ -4714,6 +4746,9 @@ func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_pa
 		# 当前装备实体；同一响应时机已取消或判定失败的入口不能再次询问。
 		var equipment_card: CardInstance = equipment_variant as CardInstance
 		if equipment_card == null or excluded_card_uids.has(equipment_card.uid):
+			continue
+		# 当前装备所在槽位；被本次结算整体停用的槽位不建立独立询问。
+		if ignored_equipment_slots.has(_find_equipment_slot_for_card(player, equipment_card)):
 			continue
 		# 当前装备源码；只有同时支持本响应模式并声明优先询问时才建立独立窗口。
 		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
@@ -4727,7 +4762,7 @@ func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_pa
 
 
 ## 构造指定玩家在同一响应模式集合下的私有候选；普通逐人响应与无懈同时响应共用此入口。
-func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int] = []) -> Array[Dictionary]:
+func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Array[String], excluded_card_uids: Array[int] = [], ignored_equipment_slots: Array[String] = []) -> Array[Dictionary]:
 	# 可序列化候选结果；只包含响应者本人可见的实体牌与公开装备入口。
 	var candidates: Array[Dictionary] = []
 	if player == null or not player.alive or player.out_of_game:
@@ -4752,6 +4787,9 @@ func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Ar
 		# 当前装备实体；候选只作为发动入口，不会离开装备区。
 		var equipment_card: CardInstance = equipment_variant as CardInstance
 		if excluded_card_uids.has(equipment_card.uid):
+			continue
+		# 当前装备所在槽位；被本次结算整体停用的槽位不进入候选，避免无视防具时仍能发动防具响应。
+		if ignored_equipment_slots.has(_find_equipment_slot_for_card(player, equipment_card)):
 			continue
 		# 当前装备定义；定义钩子返回 true 时加入同一响应窗口。
 		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
@@ -4994,6 +5032,9 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 			continue
 		# 当前装备定义；不能提供本次模式时返回 null。
 		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
+		# 当前装备所在槽位；本次结算整体停用的槽位（无视防具时的防具响应）必须在提交阶段再次拒绝，防止迟到或伪造动作。
+		if _read_ignored_equipment_slots(response_context).has(_find_equipment_slot_for_card(player, equipment_card)):
+			return null
 		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player_id, response_patterns):
 			return equipment_definition.consume_equipment_response(self, player_id, card_uid, response_patterns, equipment_material_uids, response_context)
 		return _consume_skill_converted_response(player_id, equipment_card, response_patterns, response_skill_id)
@@ -5612,6 +5653,9 @@ func _get_equipment_response_definition(choice_data: Dictionary, selected_uid: i
 			continue
 		# 当前装备定义；再次调用候选钩子防止等待期间条件变化。
 		var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_card.definition_id)
+		# 当前装备所在槽位；本次结算整体停用的槽位不再是合法响应入口，迟到提交必须与候选阶段得到同一结论。
+		if _read_ignored_equipment_slots(choice_data.get("context", {}) as Dictionary).has(_find_equipment_slot_for_card(player, equipment_card)):
+			return null
 		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player.player_id, response_patterns):
 			return equipment_definition
 		return null
