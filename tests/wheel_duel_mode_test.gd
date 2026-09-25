@@ -2,6 +2,12 @@ extends Node
 
 ## 1v1车轮战回归测试。验证默认设置、122221抓将、暗将隐私、三将阵容、首回合摸牌与连续换将胜负。
 
+## 保留自动抓将和阶段流程；阵亡夹具自行驱动战斗，避免后台AI抢先打出牌。
+class ReplacementController extends MatchController:
+	## 开局和换将断言期间不安排普通出牌；响应与选将仍走正式入口。
+	func _schedule_ai_action() -> void:
+		pass
+
 ## 权威控制器；用于验证完整开局与死亡换将流程。
 var _controller: MatchController
 
@@ -211,7 +217,7 @@ func _test_full_ai_match_bootstrap_and_replacement() -> bool:
 
 ## 创建与正式场景一致的最小控制器组件树；本地玩家ID为-1使双方均由AI驱动。
 func _create_controller() -> void:
-	_controller = MatchController.new()
+	_controller = ReplacementController.new()
 	_controller.name = "MatchController"
 	var event_bus: RuleEventBus = RuleEventBus.new()
 	event_bus.name = "RuleEventBus"

@@ -187,6 +187,7 @@ func _reset_state(player_count: int) -> void:
 	_controller._pending_negation_choices.clear()
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
+	_controller._rule_sequences.clear()
 	_controller._hand_view_as_turn_expiries.clear()
 	_controller._active_extra_discard_phase.clear()
 	_controller._active_independent_play_phase.clear()
@@ -202,10 +203,8 @@ func _reset_state(player_count: int) -> void:
 	_controller._active_converted_play_phase_context.clear()
 	_controller._deferred_skill_settlements.clear()
 	_controller._rule_continuations.reset()
-	_controller._pending_damage_finalizations.clear()
 	_controller._cards_used_this_turn_by_player.clear()
 	_controller._started_phase_lifecycles.clear()
-	_controller._pending_dying_start_contexts.clear()
 	_controller._clear_pending_judgment_request()
 	_controller._judgment_flow_in_progress = false
 	_controller._judgment_resume_needs_result_pause = false
@@ -884,7 +883,10 @@ func _test_mingchen_last_hand_response_continuation() -> bool:
 	if not _submit_pending_choice(0, [dodge_card.uid], [], true):
 		return false
 	# 闪已移动但父杀尚未读取结果；冥谶选择和一条卡牌响应续接必须同时存在。
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or hanya.hp != 4 or _controller._rule_continuations.size() != 1:
+	var continuation_types: Array[String] = []
+	for continuation: Dictionary in _controller._rule_continuations.to_array():
+		continuation_types.append(str(continuation.get("continuation_type", "")))
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or hanya.hp != 4 or _controller._rule_continuations.size() != 2 or not continuation_types.has("card_response") or not continuation_types.has("rule_sequence"):
 		return _fail("mingchen_response_interrupted hp=%d continuations=%s" % [hanya.hp, _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -939,8 +941,11 @@ func _test_mingchen_guanshi_cost_continuation() -> bool:
 		return _fail("mingchen_guanshi_candidates=%s weapon=%d" % [guanshi_cost_candidate_uids, guanshi_card.uid])
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "guanshi_cost" or not _submit_pending_choice(0, [first_cost.uid, second_cost.uid], [], true):
 		return _fail("mingchen_guanshi_cost")
-	# 两张费用已弃置但伤害仍等待冥谶；栈内同时保留武器阶段与父目标收尾且目标体力尚未改变。
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or target.hp != 4 or _controller._rule_continuations.size() != 2:
+	# 两张费用已弃置但伤害仍等待冥谶；父CardUseEvent内容、武器阶段与父目标收尾各自保留续接，目标体力尚未改变。
+	var guanshi_continuation_types: Array[String] = []
+	for continuation: Dictionary in _controller._rule_continuations.to_array():
+		guanshi_continuation_types.append(str(continuation.get("continuation_type", "")))
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or target.hp != 4 or _controller._rule_continuations.size() < 2 or not guanshi_continuation_types.has("rule_sequence") or not guanshi_continuation_types.has("slash_flow"):
 		return _fail("mingchen_guanshi_interrupted hp=%d continuations=%s" % [target.hp, _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -3286,8 +3291,8 @@ func _test_qiusheng_dying_recovery() -> bool:
 	if qiusheng == null:
 		return _fail("qiusheng_missing")
 	_controller.damage(0, 1, 1, "normal", "sha")
-	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.is_empty() or not _controller.state.discard_pile.has(first_discarded_card) or not _controller.state.discard_pile.has(second_discarded_card) or _controller.has_pending_card_choice() or not _controller._pending_dying_start_contexts.is_empty():
-		return _fail("qiusheng_basic hp=%d alive=%s dying=%s hand=%s pending=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand, _controller._pending_card_choice])
+	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.is_empty() or not _controller.state.discard_pile.has(first_discarded_card) or not _controller.state.discard_pile.has(second_discarded_card) or _controller.has_pending_card_choice() or not _controller._rule_sequences.is_empty():
+		return _fail("qiusheng_basic hp=%d alive=%s dying=%s hand=%s discard=%s pending=%s seq=%s cont=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand, _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid), _controller._pending_card_choice, _controller._rule_sequences.keys(), _controller._rule_continuations.to_array()])
 
 	# 手牌含桃时求生不得发动；角色保持0点体力并进入标准求桃请求，全部原手牌仍在手中。
 	_reset_state(3)
@@ -3333,11 +3338,11 @@ func _test_qiusheng_dying_recovery() -> bool:
 	if qiusheng == null or mingchen == null:
 		return _fail("qiusheng_nested_skills")
 	_controller.damage(0, 1, 1, "normal", "sha")
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or lingke.hp != 0 or not lingke.alive or _controller._pending_dying_start_contexts.size() != 1 or _controller._deferred_skill_settlements.is_empty():
-		return _fail("qiusheng_nested_pause hp=%d alive=%s dying_context=%s settlements=%s choice=%s" % [lingke.hp, lingke.alive, _controller._pending_dying_start_contexts, _controller._deferred_skill_settlements, _controller._pending_card_choice])
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or lingke.hp != 0 or not lingke.alive or _controller._rule_sequences.is_empty() or _controller._deferred_skill_settlements.is_empty():
+		return _fail("qiusheng_nested_pause hp=%d alive=%s dying_context=%s settlements=%s choice=%s" % [lingke.hp, lingke.alive, _controller._rule_sequences, _controller._deferred_skill_settlements, _controller._pending_card_choice])
 	if not _submit_pending_choice(1, [], [1], true):
 		return false
-	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.has(nested_gain_card) or not _controller.state.discard_pile.has(nested_discard_card) or _controller.has_pending_card_choice() or not _controller._pending_dying_start_contexts.is_empty() or _controller._rule_continuations.has_pending():
+	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.has(nested_gain_card) or not _controller.state.discard_pile.has(nested_discard_card) or _controller.has_pending_card_choice() or not _controller._rule_sequences.is_empty() or _controller._rule_continuations.has_pending():
 		return _fail("qiusheng_nested_complete hp=%d alive=%s dying=%s hand=%s pending=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand.map(func(card: CardInstance) -> int: return card.uid), _controller._pending_card_choice])
 	return true
 

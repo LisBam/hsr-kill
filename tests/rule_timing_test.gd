@@ -102,7 +102,6 @@ func _install_state() -> void:
 	_controller._pending_negation_choices.clear()
 	_controller._active_card_resolutions.clear()
 	_controller._card_use_contexts.clear()
-	_controller._pending_damage_finalizations.clear()
 	_controller._started_phase_lifecycles.clear()
 
 

@@ -155,10 +155,10 @@ func _test_rule_continuation_registration_guards() -> bool:
 	_controller.max_repeated_rule_continuation_steps = 4
 	_controller.max_rule_continuation_chain_steps = 64
 	_faults.clear()
-	# 重复测试上下文；使用白名单内的turn_start类型，只验证调度元数据而不执行回合业务。
+	# 重复测试上下文；使用白名单内的rule_sequence类型，只验证调度元数据而不执行回合业务。
 	var repeat_context: Dictionary = {"player_id":0, "cursor":"repeat"}
 	# 当前重复步骤语义键；与控制器正式构造逻辑完全一致。
-	var repeat_key: String = _controller._build_rule_continuation_key("turn_start", repeat_context)
+	var repeat_key: String = _controller._build_rule_continuation_key("rule_sequence", repeat_context)
 	_controller._active_rule_continuation_key = repeat_key
 	# 父续接访问表；动态键写入4表示下一次相同步骤应成为第5次并被拒绝。
 	var repeat_visits: Dictionary = {}
@@ -166,7 +166,7 @@ func _test_rule_continuation_registration_guards() -> bool:
 	_controller._active_rule_continuation_visits = repeat_visits
 	_controller._active_rule_continuation_chain_steps = 4
 	# 重复保护返回值；负数表示异常步骤未进入续接栈。
-	var repeated_continuation_id: int = _controller._defer_rule_continuation("turn_start", repeat_context)
+	var repeated_continuation_id: int = _controller._defer_rule_continuation("rule_sequence", repeat_context)
 	# 重复保护故障摘要；必须精确记录第5次尝试。
 	var repeat_fault: Dictionary = _controller.get_last_settlement_fault()
 	if repeated_continuation_id >= 0 or _controller._rule_continuations.has_pending() or str(repeat_fault.get("reason", "")) != "rule_continuation_repeat_limit" or int(repeat_fault.get("repeat_count", -1)) != 5 or _faults.size() != 1:
@@ -182,7 +182,7 @@ func _test_rule_continuation_registration_guards() -> bool:
 	_controller._active_rule_continuation_visits = chain_visits
 	_controller._active_rule_continuation_chain_steps = 4
 	# 变化上下文续接ID；第5步超过测试配置的4步总链上限。
-	var chained_continuation_id: int = _controller._defer_rule_continuation("turn_start", {"player_id":0, "cursor":"changed"})
+	var chained_continuation_id: int = _controller._defer_rule_continuation("rule_sequence", {"player_id":0, "cursor":"changed"})
 	# 总链保护故障摘要；异常步骤同样不能进入队列。
 	var chain_fault: Dictionary = _controller.get_last_settlement_fault()
 	if chained_continuation_id >= 0 or _controller._rule_continuations.has_pending() or str(chain_fault.get("reason", "")) != "rule_continuation_chain_limit" or int(chain_fault.get("chain_step_count", -1)) != 5 or _faults.size() != 1:

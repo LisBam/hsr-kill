@@ -68,8 +68,6 @@ func _reset_state(player_count: int = 4) -> void:
 		_controller.state.players.append(player)
 	_controller._rebuild_match_rule_services_and_root_event()
 	_controller._pending_card_choice.clear()
-	_controller._pending_damage_finalizations.clear()
-	_controller._pending_dying_start_contexts.clear()
 	_controller._deferred_skill_settlements.clear()
 	_controller._cards_used_this_turn_by_player.clear()
 
