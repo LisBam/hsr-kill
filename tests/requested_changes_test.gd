@@ -14,6 +14,9 @@ var _borrow_slash_uid: int = -1
 ## 是否在 phaseUseBegin 同步调用栈中收到【行军】发动询问；默认 false。
 var _xingjun_begin_request_seen: bool = false
 
+## 是否在回合结束时收到【行军】额外回合目标询问；默认 false，用于确认跳过阶段后额外回合流程确实启动。
+var _xingjun_extra_turn_prompt_seen: bool = false
+
 ## 同一使用牌时机实际收到的可选技能询问顺序；用于验证从当前回合角色起按座次依次询问。
 var _same_timing_choice_kinds: Array[String] = []
 
@@ -67,6 +70,8 @@ func _run() -> void:
 	if not await _test_borrow_sword_weapon_transfer():
 		return
 	if not await _test_phase_use_begin_prompt():
+		return
+	if not await _test_phase_use_begin_skip():
 		return
 	print("REQUESTED_CHANGES_PASS")
 	get_tree().quit(0)
@@ -134,6 +139,7 @@ func _reset_state(player_count: int) -> void:
 	_controller.ai_coordinator._policies.clear()
 	_borrow_slash_uid = -1
 	_xingjun_begin_request_seen = false
+	_xingjun_extra_turn_prompt_seen = false
 	_same_timing_choice_kinds.clear()
 	_latest_state_snapshot.clear()
 	_captured_logs.clear()
@@ -623,6 +629,45 @@ func _test_phase_use_begin_prompt() -> bool:
 	return true
 
 
+## 验证【行军】在 Begin 询问中确认后确实跳过出牌阶段，并在回合结束时进入额外回合目标询问。
+## 回归目标：此前只有取消路径的用例；阶段收尾流程要求阶段主体已经开始，而 Begin 询问期间阶段仍处于
+## starting，从 Begin 调用栈内请求结束出牌阶段会被静默拒绝，表现为技能看似发动成功、出牌阶段却照常进行。
+func _test_phase_use_begin_skip() -> bool:
+	_scenario = "xingjun_skip"
+	_reset_state(2)
+	# 行军运行时实例；安装真实 phaseUseBegin 订阅，确保断言经过与对局一致的阶段 Begin 选择路径。
+	var xingjun: SkillDefinition = GameDatabase.create_skill("xingjun")
+	xingjun.bind(_controller, 0)
+	xingjun.install()
+	_controller.skill_instances_by_player = {0:{xingjun.get_id():xingjun}}
+	# 真实阶段入口；与正式回合流程一致地进入出牌阶段，并登记阶段主体与取消后继。
+	_controller._enter_play_phase(0, true)
+	# Begin 询问存在性；行军应把公开阶段临时置为choice并等待玩家确认。
+	if not _controller.has_pending_card_choice() or _controller.state.current_phase != "choice":
+		return _fail("xingjun_skip_begin pending=%s phase=%s" % [_controller.has_pending_card_choice(), _controller.state.current_phase])
+	# 等待确认与回合结束询问全部结束；超时说明阶段流程没有继续推进。
+	if not await _wait_until_no_card_choice():
+		return _fail("xingjun_skip_timeout pending=%s" % _pending_choice_kind())
+	# 公开跳过记录存在性；技能必须真的推进阶段，而不是只在自身标记里记成功。
+	var skip_logged: bool = _captured_logs.any(_log_contains_skip_play_phase)
+	# 跳过与额外回合双向断言；两者缺一都说明 Begin 确认路径再次失效。
+	if not skip_logged or not _xingjun_extra_turn_prompt_seen:
+		return _fail("xingjun_skip_result logged=%s extra_turn=%s logs=%s" % [skip_logged, _xingjun_extra_turn_prompt_seen, _captured_logs])
+	return true
+
+
+## 判断一条公开日志是否为跳过出牌阶段记录；供跳过断言与失败信息共用同一判定。
+func _log_contains_skip_play_phase(entry: String) -> bool:
+	return entry.contains("跳过出牌阶段")
+
+
+## 返回当前待处理选择的上下文类型；无待处理选择时返回none，便于失败信息直接定位卡住的选择。
+func _pending_choice_kind() -> String:
+	if _controller._pending_card_choice.is_empty():
+		return "none"
+	return str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "?"))
+
+
 ## 向指定玩家普通手牌区加入一张测试实体，并返回对象供规则校验与区域断言。
 func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: int) -> CardInstance:
 	# 新测试实体牌；区域与所有者字段必须和玩家手牌数组保持一致。
@@ -662,6 +707,12 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	elif _scenario == "xingjun_begin" and choice_kind == "xingjun_phase_use_begin":
 		_xingjun_begin_request_seen = true
 		confirmed = false
+	elif _scenario == "xingjun_skip" and choice_kind == "xingjun_phase_use_begin":
+		confirmed = true
+	elif _scenario == "xingjun_skip" and choice_kind == "xingjun_extra_turn":
+		_xingjun_extra_turn_prompt_seen = true
+		selected_target_ids = [1]
+		confirmed = true
 	elif _scenario == "opening_tiebi_privacy" and choice_kind == "tiebi_cost_target":
 		_hidden_hand_prompt_kinds.append(choice_kind)
 		confirmed = false
