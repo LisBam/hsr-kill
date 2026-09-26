@@ -47,6 +47,18 @@ func register_skill(player_id: int, skill_id: String, metadata: Dictionary) -> b
 	return true
 
 
+## 彻底移除指定技能的轮回权威状态；技能被卸载时调用，使该技能下次安装重新从①与轮回数1开始。
+## 与 reset_skill 的区别：本入口删除登记，之后 register_skill 会建立全新初始状态，不会保留任何旧进度。
+func clear_skill_state(player_id: int, skill_id: String) -> bool:
+	# 技能持有者；无效玩家没有可清理的轮回登记。
+	var player: PlayerState = _get_player(player_id)
+	if player == null or not player.reincarnation_skills.has(skill_id):
+		return false
+	player.reincarnation_skills.erase(skill_id)
+	_notify_state_changed()
+	return true
+
+
 ## 返回指定技能的轮回公开状态深拷贝；空字典表示技能没有登记为轮回技。
 func get_skill_state(player_id: int, skill_id: String) -> Dictionary:
 	# 技能持有者；查询失败时使用空字典，调用方无需判空玩家对象。
