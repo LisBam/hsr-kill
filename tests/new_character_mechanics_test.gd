@@ -102,6 +102,8 @@ func _run() -> void:
 		return
 	if not _test_misha_and_alan_skills():
 		return
+	if not _test_qianggong_real_slash_damage_bonus():
+		return
 	if not await _test_aisida_heita_xiluwa_skills():
 		return
 	if not await _test_moze_marks_and_out_of_game_skills():
@@ -2360,6 +2362,40 @@ func _test_misha_and_alan_skills() -> bool:
 	var weapon_context: Dictionary = _controller._card_use_contexts[9103] as Dictionary
 	if not (weapon_context.get("direct_hit_target_ids", []) as Array).has(1) or _controller.get_card_target_damage_bonus(9103, 1) != 1:
 		return _fail("qianggong_weapon context=%s" % [weapon_context])
+	return true
+
+
+## 验证【强攻】黑色增伤在真实用牌链路中生效：费用选牌属于异步恢复，
+## 其写入的逐目标伤害加值必须被随后的使用牌时机结果提交保留到伤害结算。
+func _test_qianggong_real_slash_damage_bonus() -> bool:
+	_reset_state(2)
+	_controller.game_flow_interval_seconds = 0.0
+	# 黑色费用牌；黑色分支只为当前目标增加1点伤害，不改变响应规则。
+	var black_cost: CardInstance = _add_hand_card(0, "shan", "spade", 9)
+	# 虚拟【杀】材料；使用统一虚拟牌入口触发完整useCard、useCardToTargeted与伤害内容。
+	var slash_material: CardInstance = _add_hand_card(0, "jiu", "club", 4)
+	# 强攻实例；必须在真实时机中创建费用请求，而不是预先写入共享上下文。
+	if _install_single_skill(0, "qianggong") == null:
+		return _fail("qianggong_real_missing")
+	# 强攻目标；无【闪】时应承受基础1点与强攻1点，共2点伤害。
+	var slash_target: PlayerState = _controller.state.get_player(1)
+	# 单材料虚拟【杀】；材料在结算开始时离开手牌，费用候选只剩黑色费用牌。
+	var material_uids: Array[int] = [slash_material.uid]
+	if not _controller.execute_virtual_card_use(0, "sha", material_uids, [1], "") or not _controller.has_pending_card_choice():
+		return _fail("qianggong_real_start pending=%s" % _controller._pending_card_choice)
+	# 费用请求契约；恢复必须走技能的统一选牌分支，而不是被当成步骤式序列选择。
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "qianggong_cost":
+		return _fail("qianggong_cost_request=%s" % _controller._pending_card_choice)
+	# 支付黑色费用；结算发生在时机结果提交之后，加值必须已经落到事件数据。
+	if not _submit_pending_choice(0, [black_cost.uid], [], true):
+		return false
+	# 黑色费用不提供直击；目标随后放弃【闪】并进入伤害结算。
+	if not _submit_pending_choice(1, [], [], false):
+		return false
+	# 最终事实；目标必须承受2点伤害，费用牌进入弃牌堆，且不再残留任何待处理选择。
+	var discarded_uids: Array = _controller.state.discard_pile.map(func(card: CardInstance) -> int: return card.uid)
+	if slash_target.hp != 2 or not _controller.state.discard_pile.has(black_cost) or _controller.has_pending_card_choice():
+		return _fail("qianggong_real_result hp=%d discard=%s pending=%s" % [slash_target.hp, discarded_uids, _controller._pending_card_choice])
 	return true
 
 
