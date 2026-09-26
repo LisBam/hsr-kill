@@ -20,11 +20,15 @@ func _run() -> void:
 		return
 	if not _test_shihun_stale_target_advances():
 		return
+	if not _test_shihun_retaliation_after_slash_used():
+		return
+	if not _test_shihun_retaliation_beyond_attack_range():
+		return
 	if not _test_lethal_self_harm_ai_veto():
 		return
 	if not _test_lethal_incoming_slash_ai_veto():
 		return
-	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+ai_veto")
+	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+ai_veto")
 	get_tree().quit(0)
 
 
@@ -138,6 +142,9 @@ func _test_tiancai_empty_section_advances() -> bool:
 
 ## 校验【弑魂】②在①指定的目标全部失效时仍可发动，并直接完成该节进入下一轮回。
 ## 回归目标：目标死亡、离场、超出距离或次数用尽都会让②永久不可发动。
+## 补充：目标死亡与离场属于永久失效，②按本节无内容直接推进；
+## 而“本阶段【杀】次数”与“到目标距离”是可由技能自身覆写解除的临时限制，
+## 现已由②的 rule_overrides 忽略，并由下面两个用例固定其行为。
 func _test_shihun_stale_target_advances() -> bool:
 	_reset_state(3)
 	var owner: PlayerState = _controller.state.get_player(0)
@@ -155,6 +162,60 @@ func _test_shihun_stale_target_advances() -> bool:
 	_controller.state.get_player(1).alive = false
 	if not shihun.can_activate() or shihun.activate({}) != "" or shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
 		return _fail("shihun_stale_section_two=%s" % shihun.get_reincarnation_state())
+	return true
+
+
+## 校验【弑魂】②在本阶段【杀】次数已用尽时仍能打出火【杀】。
+## 回归目标：【永劫】持续把持有者手牌视为火【杀】，玩家因此每阶段都会用掉【杀】基础次数；
+## 若②沿用标准【杀】的次数限制，②会在每一回合都只空推轮回节，界面上表现为“点击后没有任何效果”。
+func _test_shihun_retaliation_after_slash_used() -> bool:
+	_reset_state(3)
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "kaesilanna"
+	owner.max_hp = 5
+	owner.hp = 5
+	# 本阶段已使用一张同组【杀】；与 _get_grouped_play_count 读取的阶段历史保持一致。
+	owner.play_phase_card_use_history["sha_fire"] = 1
+	var shihun: SkillDefinition = _install_skill(0, "shihun")
+	if shihun == null or shihun.activate({"target_ids":[1]}) != "":
+		return _fail("shihun_slash_used_section_one_activate")
+	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
+	_controller.resume_settlement_pipeline()
+	if shihun.get_reincarnation_section_index() != 1:
+		return _fail("shihun_slash_used_section_one=%s" % shihun.get_reincarnation_state())
+	# ②的固定目标；必须真实承受反击火【杀】的1点火焰伤害。
+	var target: PlayerState = _controller.state.get_player(1)
+	if not shihun.can_activate() or shihun.activate({}) != "":
+		return _fail("shihun_slash_used_section_two_activate")
+	_controller.resume_settlement_pipeline()
+	if target.hp != 4 or shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
+		return _fail("shihun_slash_used_section_two=%d/%s" % [target.hp, shihun.get_reincarnation_state()])
+	return true
+
+
+## 校验【弑魂】②能对①指定过的远距离目标使用火【杀】。
+## 回归目标：①忽略距离，②若沿用标准【杀】的攻击范围限制，
+## ①指定的远处角色必然让②在同一回合内静默失效，与①的合法选择自相矛盾。
+func _test_shihun_retaliation_beyond_attack_range() -> bool:
+	_reset_state(4)
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "kaesilanna"
+	owner.max_hp = 5
+	owner.hp = 5
+	var shihun: SkillDefinition = _install_skill(0, "shihun")
+	# 2号与0号之间隔一名角色，距离为2，超出默认攻击范围1。
+	if shihun == null or shihun.activate({"target_ids":[2]}) != "":
+		return _fail("shihun_far_target_section_one_activate")
+	_controller.resume_settlement_pipeline()
+	if shihun.get_reincarnation_section_index() != 1:
+		return _fail("shihun_far_target_section_one=%s" % shihun.get_reincarnation_state())
+	# ②的固定目标；远距离目标同样必须承受1点火焰伤害。
+	var target: PlayerState = _controller.state.get_player(2)
+	if not shihun.can_activate() or shihun.activate({}) != "":
+		return _fail("shihun_far_target_section_two_activate")
+	_controller.resume_settlement_pipeline()
+	if target.hp != 4 or shihun.get_reincarnation_section_index() != 0:
+		return _fail("shihun_far_target_section_two=%d/%s" % [target.hp, shihun.get_reincarnation_state()])
 	return true
 
 
