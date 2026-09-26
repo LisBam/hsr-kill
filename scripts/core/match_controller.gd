@@ -4242,6 +4242,11 @@ func _replace_native_character_skills(player: PlayerState, old_native_skill_ids:
 		if old_skill != null:
 			old_skill.uninstall()
 		player_skills.erase(old_skill_id)
+		# 旧固有轮回技的权威进度；换形后该技能不再安装，必须清除登记。
+		# 否则技能脚本自身的运行时字段（例如“上次指定目标”）随实例一起销毁，而轮回节被保留，
+		# 会造成轮回节停在需要旧字段的分支且永久无法发动。
+		if reincarnation_skill_service != null:
+			reincarnation_skill_service.clear_skill_state(player.player_id, old_skill_id)
 	for new_skill_id_variant: Variant in new_native_skill_ids:
 		# 新武将固有技能ID；已有其他来源实例时直接复用，避免重复订阅同一技能。
 		var new_skill_id: String = str(new_skill_id_variant)
@@ -8307,6 +8312,12 @@ func enter_next_reincarnation(player_id: int, skill_id: String) -> bool:
 ## 将轮回数重置为1并回到①；普通重置不解除永劫，完整技能复原会显式清除永劫。
 func reset_reincarnation(player_id: int, skill_id: String) -> bool:
 	return reincarnation_skill_service != null and reincarnation_skill_service.reset_skill(player_id, skill_id)
+
+
+## 清除指定技能的轮回权威登记；武将牌换形卸载旧轮回技时调用，保证技能重新安装后从①与轮回数1开始。
+## 只清理进度登记，不触碰事件订阅、卡牌状态或其他技能，因此换形链不会继承旧形态的轮回节。
+func clear_reincarnation_skill_state(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.clear_skill_state(player_id, skill_id)
 
 
 ## 令轮回技进入永劫并锁定当前轮回节；重复进入无事发生，每回合限制从成功进入后开始计数。

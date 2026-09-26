@@ -14,6 +14,10 @@ const REPEATED_FIRE_ATTACK_SECTION_INDEX: int = 2
 ## 【火攻】卡牌稳定定义ID；全部视为使用均进入标准卡牌生命周期与响应流程。
 const FIRE_ATTACK_DEFINITION_ID: String = "huogong"
 
+## ①的自伤点数达到或超过持有者当前体力时的AI额外惩罚；避免AI以濒死返生为代价推进轮回。
+## 数值30.0远高于任何单步牌效收益，属于否决级惩罚，仅在自伤必然造成濒死时生效。
+const AI_LETHAL_SELF_HARM_PENALTY: float = 30.0
+
 
 ## 写入三轮回节主动技能静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
@@ -49,7 +53,9 @@ func can_activate(_context: Dictionary = {}) -> bool:
 		return true
 	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(round_count) == 0:
 		return true
-	return not _get_fire_attack_target_ids().is_empty()
+	# ②与③在没有任何合法火攻目标时仍然开放发动：本次发动不产生火攻并直接推进轮回节。
+	# 轮回技只能由自身发动推进，若此处返回false，全场无手牌时轮回会永久停在当前节。
+	return true
 
 
 ## 根据当前轮回节直接执行自伤、读取动作目标或创建目标选择。
@@ -72,6 +78,9 @@ func activate(context: Dictionary = {}) -> String:
 		return "" if _execute_fire_attack_section(section_index, round_count, target_ids) else "【天裁】的火攻目标已经失效。"
 	# 当前合法火攻目标；要求目标拥有手牌并通过标准来牌限制。
 	var legal_target_ids: Array[int] = _get_fire_attack_target_ids()
+	if legal_target_ids.is_empty():
+		# 本节无任何合法火攻目标；按“选中0名角色”直接完成并推进，避免轮回永久停滞。
+		return "" if _complete_empty_fire_attack_section(section_index, round_count) else "【天裁】的轮回状态已经失效。"
 	if section_index == MULTI_FIRE_ATTACK_SECTION_INDEX:
 		request_target_selection("【天裁】请选择火攻目标", legal_target_ids, 1, mini(round_count, legal_target_ids.size()), true, {"kind":"tiancai_targets", "section_index":section_index, "round_count":round_count})
 	else:
@@ -108,6 +117,16 @@ func _complete_zero_fire_attack_section(round_count: int) -> bool:
 	if get_reincarnation_section_index() != REPEATED_FIRE_ATTACK_SECTION_INDEX or _get_repeated_fire_attack_count(round_count) != 0 or not begin_reincarnation_activation():
 		return false
 	announce_activation({"section_number":REPEATED_FIRE_ATTACK_SECTION_INDEX + 1, "round_count":round_count, "target_ids":[], "fire_attack_count":0})
+	complete_reincarnation_activation()
+	return true
+
+
+## ②或③没有任何合法火攻目标时，把本节视为“选中0名角色”完成并推进到下一轮回节。
+## 该入口只处理“客观上无可指定目标”的交互缺口，不改变X数值、火攻张数、目标数量上限或伤害点数。
+func _complete_empty_fire_attack_section(section_index: int, round_count: int) -> bool:
+	if section_index != get_reincarnation_section_index() or round_count != get_reincarnation_round_count() or not begin_reincarnation_activation():
+		return false
+	announce_activation({"section_number":section_index + 1, "round_count":round_count, "target_ids":[], "fire_attack_count":0, "empty_section":true})
 	complete_reincarnation_activation()
 	return true
 
@@ -215,7 +234,15 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 动作中的目标数组；优先读顶层字段，缺失时兼容payload中的权威副本。
 	var target_ids: Array = action.get("target_ids", (action.get("payload", {}) as Dictionary).get("target_ids", [])) as Array
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX:
-		return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -get_reincarnation_round_count()) + 2.0
+		# 本节自伤点数；等于当前轮回数X，且无伤害来源。
+		var self_damage: int = get_reincarnation_round_count()
+		# 基础资源评分；1点体力按通用资源权重折算，并保留推进轮回的小额收益。
+		var self_damage_score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -self_damage) + 2.0
+		# 持有者当前体力；快照缺失或不为正时不施加致命惩罚，避免异常快照让AI完全放弃该技能。
+		var owner_hp: int = int(evaluator.get_player(authoritative_snapshot, owner_player_id).get("hp", 0))
+		if owner_hp > 0 and self_damage >= owner_hp:
+			self_damage_score -= AI_LETHAL_SELF_HARM_PENALTY
+		return self_damage_score
 	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(get_reincarnation_round_count()) == 0:
 		return 1.0
 	# 标准火攻动作基础值；②各目标各算一张，③对同一目标乘以X-1次。

@@ -11,6 +11,10 @@ const RETALIATION_FIRE_SLASH_SECTION_INDEX: int = 1
 ## 火【杀】稳定定义ID；普通与多目标反击均进入标准【杀】响应和伤害流程。
 const FIRE_SLASH_DEFINITION_ID: String = "sha_fire"
 
+## ①承受的火【杀】数量达到或超过持有者当前体力时的AI额外惩罚；避免AI以濒死返生为代价换取反击。
+## 卡厄斯兰那的手牌由【永劫】持续视为火【杀】，这些被令使用的火【杀】无法被【闪】响应，因此必须按必中计价。
+const AI_LETHAL_INCOMING_SLASH_PENALTY: float = 30.0
+
 ## 上一次实际发动弑魂所指定的目标ID；默认空数组，①完成后保存，②使用时目标保持不变。
 var _last_selected_target_ids: Array[int] = []
 
@@ -41,9 +45,9 @@ func can_activate(_context: Dictionary = {}) -> bool:
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner == null or not owner.alive or owner.out_of_game or host.state.current_player_id != owner_player_id or host.state.current_phase != "play" or not can_activate_reincarnation():
 		return false
-	if get_reincarnation_section_index() == INCOMING_FIRE_SLASH_SECTION_INDEX:
-		return not _get_incoming_slash_actor_ids().is_empty()
-	return _is_retaliation_target_set_legal(_last_selected_target_ids)
+	# ①无可指定角色或②上次目标不再合法时仍然开放发动：本次发动不产生火【杀】并直接推进轮回节。
+	# 轮回技只能由自身发动推进，若此处返回false，目标死亡、离场、超出距离或次数用尽都会让轮回永久停在当前节。
+	return true
 
 
 ## ①读取动作目标或创建任意多目标选择，②直接按上次目标执行固定反击。
@@ -53,13 +57,19 @@ func activate(context: Dictionary = {}) -> String:
 	# 当前轮回节；①动作可携带目标，②不允许改写上次目标集合。
 	var section_index: int = get_reincarnation_section_index()
 	if section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX:
-		return "" if _start_shihun_sequence(section_index, _last_selected_target_ids) else "【弑魂】上次指定目标已不合法。"
+		if _is_retaliation_target_set_legal(_last_selected_target_ids):
+			return "" if _start_shihun_sequence(section_index, _last_selected_target_ids) else "【弑魂】上次指定目标已不合法。"
+		# 上次目标已全部失效；本节无可执行内容，直接完成并推进，避免轮回永久停滞。
+		return "" if _complete_empty_shihun_section(section_index) else "【弑魂】的轮回状态已经失效。"
 	# 已提交①目标；奇袭额外发动会沿用原目标数组。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
 	if not target_ids.is_empty():
 		return "" if _start_shihun_sequence(section_index, target_ids) else "【弑魂】所选使用者已经失效。"
 	# 可令其视为用火杀的其他角色；直接效果忽略其当前阶段、次数与距离限制。
 	var actor_ids: Array[int] = _get_incoming_slash_actor_ids()
+	if actor_ids.is_empty():
+		# 场上已无其他可指定角色；本节无可执行内容，直接完成并推进。
+		return "" if _complete_empty_shihun_section(section_index) else "【弑魂】的轮回状态已经失效。"
 	request_target_selection("【弑魂】请选择火杀使用者", actor_ids, 1, actor_ids.size(), true, {"kind":"shihun_incoming_actors"})
 	return ""
 
@@ -76,6 +86,16 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 ## 优先处理连续虚拟牌恢复；其他上下文不是弑魂结算。
 func continue_settlement(context: Dictionary) -> bool:
 	return continue_virtual_card_sequence_settlement(context)
+
+
+## 当前轮回节没有任何可执行火【杀】时，记录一次实际发动并直接推进到下一轮回节。
+## ①无可指定角色与②上次目标全部失效共用该入口；不改变目标记录，因此②的记录会原样保留到下次①覆盖。
+func _complete_empty_shihun_section(section_index: int) -> bool:
+	if section_index != get_reincarnation_section_index() or not begin_reincarnation_activation():
+		return false
+	announce_activation({"section_number":section_index + 1, "round_count":get_reincarnation_round_count(), "target_ids":[], "virtual_card_count":0, "empty_section":true})
+	complete_reincarnation_activation()
+	return true
 
 
 ## 根据轮回节建立①多张独立火【杀】或②一张固定多目标火【杀】。
@@ -200,6 +220,11 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 			var target_id: int = int(target_id_variant)
 			score -= 4.0
 			score -= evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) * 0.8
+		# 持有者当前体力；快照缺失或不为正时不施加致命惩罚，避免异常快照让AI完全放弃该技能。
+		var owner_hp: int = int(evaluator.get_player(authoritative_snapshot, owner_player_id).get("hp", 0))
+		# ①的每名使用者各产生一张必中火【杀】，因此承受点数直接等于所选人数。
+		if owner_hp > 0 and target_ids.size() >= owner_hp:
+			score -= AI_LETHAL_INCOMING_SLASH_PENALTY
 		return score + 2.0
 	for target_id_variant: Variant in target_ids:
 		score += evaluator.score_resource_change(authoritative_snapshot, owner_player_id, int(target_id_variant), 0, -1)
