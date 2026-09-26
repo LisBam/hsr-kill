@@ -66,6 +66,8 @@ func _run() -> void:
 		return
 	if not await _test_character_card_link_overlay():
 		return
+	if not await _test_character_name_line_spacing():
+		return
 	if not _test_jiahu_and_bingfeng():
 		return
 	if not await _test_deferred_phase_choice_resumption():
@@ -1245,6 +1247,65 @@ func _test_character_card_link_overlay() -> bool:
 	if not is_zero_approx(player_view.rotation) or not player_view.position.is_equal_approx(upright_position) or bool(state_overlay.get("_is_chained")):
 		player_view.queue_free()
 		return _fail("upright_overlay_restore rotation=%s position=%s/%s chained=%s" % [player_view.rotation, player_view.position, upright_position, bool(state_overlay.get("_is_chained"))])
+	player_view.queue_free()
+	return true
+
+
+## 验证武将名超过四字时自动收紧竖排行距，同时保证行高不低于字号，相邻字不会相互覆盖。
+func _test_character_name_line_spacing() -> bool:
+	# 真实武将牌视图；加入场景树后读取正式场景的字体、字号与行距配置。
+	var player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	add_child(player_view)
+	await get_tree().process_frame
+	# 武将名竖排标签；名字文本与行距都由该标签承载。
+	var name_label: Label = player_view.get_node("CharacterName") as Label
+	if name_label == null:
+		player_view.queue_free()
+		return _fail("character_name_label missing")
+	# 竖条可用高度；整列名字必须完整显示在该高度内，不能溢出到牌面其他区域。
+	var available_height: float = name_label.size.y
+	# 主题默认行距；新实例尚未写入覆盖，此时读取的就是主题现值，短名必须始终沿用该值。
+	var default_line_spacing: int = name_label.get_theme_constant("line_spacing")
+	# 当前字体资源；行高基准必须来自真实主题，不能在测试里硬编码像素值。
+	var name_font: Font = name_label.get_theme_font("font")
+	# 当前字号；最小行高与覆盖判定都按该字号换算。
+	var name_font_size: int = name_label.get_theme_font_size("font_size")
+	if name_font == null or name_font_size <= 0:
+		player_view.queue_free()
+		return _fail("character_name_font font=%s size=%d" % [name_font, name_font_size])
+	# 自然行高；零额外行距时单字占用的像素高度，实际行高由它叠加行距得到。
+	var natural_line_height: float = float(name_font.get_height(name_font_size))
+	# 四字基准整列高度；按主题默认行距计算，是超过基准字数的名字需要收紧到的目标长度。
+	var reference_column_height: float = (natural_line_height + float(default_line_spacing)) * 4.0
+	# 竖排快照模板；只替换 character_id 即可切换被测武将名。
+	var snapshot: Dictionary = {"player_id":1, "display_name":"行距测试", "character_id":"bronya", "identity":"rebel", "hp":3, "max_hp":3, "shield":0, "alive":true, "chained":false, "face_down":false, "hand_count":0, "equipment":{}, "judgment_area":[], "wooden_ox_storage_count":0}
+	player_view.configure_snapshot(snapshot, GameDatabase.get_character("bronya"))
+	# 四字名行距；基准字数以内必须保持主题默认，不能被本功能提前收紧。
+	if name_label.has_theme_constant_override("line_spacing") or name_label.get_theme_constant("line_spacing") != default_line_spacing:
+		player_view.queue_free()
+		return _fail("short_name_spacing=%d default=%d override=%s" % [name_label.get_theme_constant("line_spacing"), default_line_spacing, name_label.has_theme_constant_override("line_spacing")])
+	snapshot["character_id"] = "kaesilanna"
+	player_view.configure_snapshot(snapshot, GameDatabase.get_character("kaesilanna"))
+	# 五字名行距；必须低于主题默认，表示竖排确实被缩短。
+	var compact_spacing: int = name_label.get_theme_constant("line_spacing")
+	# 五字名单行实际行高；自然行高叠加收紧后的行距。
+	var compact_line_height: float = natural_line_height + float(compact_spacing)
+	# 五字名整列高度；应收紧到四字基准附近，而不是继续线性增长。
+	var compact_column_height: float = compact_line_height * 5.0
+	if not name_label.has_theme_constant_override("line_spacing") or compact_spacing >= default_line_spacing or compact_line_height < float(name_font_size) or compact_column_height > available_height or compact_column_height > reference_column_height + float(name_font_size):
+		player_view.queue_free()
+		return _fail("long_name_spacing=%d default=%d line=%s/%d column=%s/%s available=%s" % [compact_spacing, default_line_spacing, compact_line_height, name_font_size, compact_column_height, reference_column_height, available_height])
+	# 超长名行距；直接按八字查询，确认收紧到下限后仍然保持最小行高。
+	var overflow_spacing: int = player_view._resolve_character_name_line_spacing(8, default_line_spacing)
+	# 超长名单行实际行高；必须仍然不低于字号，保证相邻字不会相互覆盖。
+	var overflow_line_height: float = natural_line_height + float(overflow_spacing)
+	if overflow_line_height < float(name_font_size):
+		player_view.queue_free()
+		return _fail("long_name_min_line=%s/%d spacing=%d" % [overflow_line_height, name_font_size, overflow_spacing])
+	# 八字整列高度；收紧到下限后仍不得溢出竖条。
+	if overflow_line_height * 8.0 > available_height:
+		player_view.queue_free()
+		return _fail("long_name_overflow=%s available=%s" % [overflow_line_height * 8.0, available_height])
 	player_view.queue_free()
 	return true
 

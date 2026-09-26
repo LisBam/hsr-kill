@@ -67,6 +67,15 @@ signal scroll_gesture_moved(relative: Vector2)
 ## 装备横条字体尺寸；默认9像素可在铺满武将插画宽度后完整显示花色、点数、牌名与木牛数量，运行时通常无需动态修改。
 @export_range(7, 14, 1) var equipment_row_font_size: int = 9
 
+## 武将名竖排的基准字数；默认4表示以四字名的整列高度作为视觉基准，更长的名字统一收紧到相近的整列高度，运行时通常无需动态修改。
+@export_range(2, 12, 1) var character_name_reference_length: int = 4
+
+## 武将名竖排开始收紧行距的字数；默认5表示四字以内保持默认行高，达到该字数后自动缩短行距，运行时通常无需动态修改。
+@export_range(2, 12, 1) var character_name_compact_threshold: int = 5
+
+## 武将名竖排允许的最小行高与字号之比；默认1.0保证行高不低于字号，且按当前字号等比换算，因此任何字数都不会被压缩到相邻字相互覆盖。
+@export_range(0.6, 1.5, 0.05) var character_name_min_line_height_ratio: float = 1.0
+
 ## 武将牌固定显示尺寸；默认148.35×197.8像素与编辑器3:4场景一致，运行时通常无需动态修改。
 ## 当前标准尺寸为148.35×197.8像素，通过只增宽武将插画与牌框实现精确3:4比例，信息控件尺寸保持不变。
 @export var card_size: Vector2 = Vector2(148.35, 197.8)
@@ -828,6 +837,35 @@ func _layout_equipment_rows() -> void:
 		equipment_row.size = Vector2(row_width, equipment_row_height)
 
 
+## 返回武将名竖排使用的行距；基准字数以内沿用主题默认，更长的名字按比例收紧且不低于可读下限。
+func _resolve_character_name_line_spacing(name_length: int, default_line_spacing: int) -> int:
+	if _character_name_label == null:
+		return default_line_spacing
+	# 当前字体资源；从标签主题读取，替换主题或字体后仍按真实字体计算行高。
+	var font: Font = _character_name_label.get_theme_font("font")
+	# 当前字号；缺失或非法时不做任何收紧，保持主题默认行距。
+	var font_size: int = _character_name_label.get_theme_font_size("font_size")
+	if font == null or font_size <= 0:
+		return default_line_spacing
+	# 自然行高；字体在零额外行距下占用的像素高度，是行高换算的基准。
+	var natural_line_height: float = float(font.get_height(font_size))
+	# 最小行高；行高不得低于该值，保证相邻字形的绘制区域不会被压到重叠。
+	var min_line_height: float = float(font_size) * character_name_min_line_height_ratio
+	# 可收紧余量；主题默认行高与最小行高的差值决定最多能收紧多少像素。
+	var allowed_reduction: float = natural_line_height + float(default_line_spacing) - min_line_height
+	# 未超过基准字数或没有可收紧余量时沿用主题默认行距。
+	if name_length < character_name_compact_threshold or allowed_reduction <= 0.0:
+		return default_line_spacing
+	# 基准整列高度；按主题默认行距计算基准字数的整列高度，作为长名收紧的目标长度。
+	var reference_column_height: float = float(character_name_reference_length) * (natural_line_height + float(default_line_spacing))
+	# 目标行高；把当前字数的整列高度压到基准整列高度，字数越多收紧越多。
+	var target_line_height: float = reference_column_height / float(name_length)
+	# 实际行高；夹在最小行高与主题默认行高之间，确保只收紧不放大且不会覆盖。
+	var resolved_line_height: float = clampf(target_line_height, min_line_height, natural_line_height + float(default_line_spacing))
+	# 行距；Label 的 line_spacing 以像素为单位叠加在自然行高上，负数表示收紧。
+	return int(round(resolved_line_height - natural_line_height))
+
+
 ## 根据公开快照更新牌面覆盖文字；缺少角色配置时仍保留稳定玩家名称与体力信息。
 func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	if _character_name_label == null:
@@ -855,6 +893,14 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 用于心形绘制的安全当前体力；限制在0至可视上限之间。
 	var safe_hp: int = clampi(hp, 0, max_hp)
 	_character_name_label.text = "\n".join(character_name.split(""))
+	# 先清除上一次的覆盖以读取主题默认行距；主题切换后基准整列高度必须按当前主题重新计算。
+	_character_name_label.remove_theme_constant_override("line_spacing")
+	# 主题默认行距；未写入覆盖时由主题决定，短名始终沿用该值而不被本功能改动。
+	var default_name_line_spacing: int = _character_name_label.get_theme_constant("line_spacing")
+	# 实际行距；超过基准字数的长名按比例收紧整列高度，最小行高保证相邻字不会相互覆盖。
+	var resolved_name_line_spacing: int = _resolve_character_name_line_spacing(character_name.length(), default_name_line_spacing)
+	if resolved_name_line_spacing != default_name_line_spacing:
+		_character_name_label.add_theme_constant_override("line_spacing", resolved_name_line_spacing)
 	_character_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_identity_badge_label.text = identity_text
 	_hover_player_name_label.text = str(_player_snapshot.get("display_name", "玩家"))
