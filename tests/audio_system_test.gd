@@ -433,6 +433,15 @@ func _verify_bgm_player() -> bool:
 	bgm_player.use_crossfade = false
 	add_child(bgm_player)
 	await get_tree().process_frame
+	# 暂停语义；记录面板、武将详情与机缘选择会申请对局暂停令牌冻结场景树，BGM 必须继续播放。
+	# 断言使用 can_process() 读取真实处理状态，而不是只比较枚举值，避免其他层级重新接管暂停模式后失效。
+	get_tree().paused = true
+	# 暂停期间节点是否仍被引擎处理；false 表示背景音乐与淡入淡出会随界面暂停一起中断。
+	var bgm_can_process_while_paused: bool = bgm_player.can_process()
+	get_tree().paused = false
+	if bgm_player.process_mode != Node.PROCESS_MODE_ALWAYS or not bgm_can_process_while_paused:
+		_fail("bgm_paused_process_mode=%d can_process=%s" % [bgm_player.process_mode, bgm_can_process_while_paused])
+		return false
 	# 初始状态；尚未播放任何场景BGM。
 	if not bgm_player.get_current_scene_id().is_empty():
 		_fail("bgm_initial_scene=%s" % bgm_player.get_current_scene_id())
