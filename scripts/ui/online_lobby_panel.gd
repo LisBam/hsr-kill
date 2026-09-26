@@ -150,6 +150,8 @@ func _ready() -> void:
 	GameSettings.ui_style_changed.connect(_on_ui_style_changed)
 	_populate_game_mode_options()
 	_game_mode_option.item_selected.connect(_on_game_mode_option_selected)
+	# 人数输入在键入时立即同步 Range 数值；房主保存设置只读取控件数值，不再解析内部文本。
+	_player_count_input.update_on_text_changed = true
 	refresh_ui_style()
 
 
@@ -354,7 +356,7 @@ func _open_settings() -> void:
 	_apply_player_count_limits_for_mode(game_mode_id)
 	# 规范化后的人数；斗地主夹到 3/5，身份局夹到 2–10，且不低于当前真人数。
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_snapshot.get("player_count", 2)))
-	_player_count_input.set_value_no_signal(float(normalized_count))
+	_apply_player_count_value(normalized_count)
 	_password_input.text = str(_snapshot.get("room_password", ""))
 	# 自选身份回填；开关状态来自权威快照，不支持位置身份的模式禁用该复选框。
 	_custom_identity_checkbox.set_pressed_no_signal(bool(_snapshot.get("custom_identity_enabled", false)))
@@ -382,10 +384,12 @@ func _close_settings() -> void:
 func _save_settings() -> void:
 	# 当前游戏模式稳定 ID；选项异常时回退身份模式，避免显示文本被当作协议值。
 	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
-	# 当前人数输入；编辑文本优先，0或非法值回退 SpinBox 已确认值。
+	# 当前人数输入；房主编辑文本优先，先按控件上下限收敛，避免陈旧文本越过当前模式的人数范围。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	# 最终人数候选；先按模式规范化，网络层仍会复核真人数下限。
-	var player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	# 控件已提交数值；文本非法时作为回退来源。
+	var value_player_count: int = int(_player_count_input.value)
+	# 最终人数候选；文本合法时按控件上下限收敛后采用，之后仍会按模式与真人数下限再规范化一次。
+	var player_count: int = clampi(typed_player_count, int(_player_count_input.min_value), int(_player_count_input.max_value)) if typed_player_count > 0 else value_player_count
 	player_count = _normalize_player_count_for_mode(game_mode_id, player_count)
 	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id))
 
@@ -538,8 +542,7 @@ func _on_game_mode_option_selected(_index: int) -> void:
 	_apply_player_count_limits_for_mode(game_mode_id)
 	_apply_custom_identity_availability_for_mode(game_mode_id)
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_player_count_input.value))
-	if int(_player_count_input.value) != normalized_count:
-		_player_count_input.set_value_no_signal(float(normalized_count))
+	_apply_player_count_value(normalized_count)
 
 
 ## 按模式启用或禁用自选身份复选框；过关斩将真人固定红方无位置身份，禁用时同步取消勾选。
@@ -549,6 +552,20 @@ func _apply_custom_identity_availability_for_mode(game_mode_id: String) -> void:
 	_custom_identity_checkbox.disabled = not supports_custom_identity
 	if not supports_custom_identity:
 		_custom_identity_checkbox.set_pressed_no_signal(false)
+
+
+## 把人数写入大厅设置控件并同步其显示文本；所有程序化写入人数都必须经过本入口。
+## SpinBox 的静默写入不会刷新内部 LineEdit 文本，若显示文本与数值脱节，
+## 房主会看到与实际生效值不同的数字，因此这里在写入数值后显式对齐文本。
+func _apply_player_count_value(player_count: int) -> void:
+	# 人数控件内部文本行；显示值必须与 Range 数值同步。
+	var count_line_edit: LineEdit = _player_count_input.get_line_edit()
+	if int(_player_count_input.value) != player_count:
+		_player_count_input.set_value_no_signal(float(player_count))
+	# 期望显示文本；使用固定写法避免浮点尾数差异。
+	var expected_text: String = str(player_count)
+	if count_line_edit != null and count_line_edit.text != expected_text:
+		count_line_edit.set_text(expected_text)
 
 
 ## 按大厅模式限制人数 SpinBox；身份 2–10 步长1，斗地主 3/5 步长2，2v2 固定 4 人，最小值不低于当前真人数。

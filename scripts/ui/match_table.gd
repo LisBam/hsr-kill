@@ -3237,6 +3237,12 @@ func _on_restart_requested(player_count: int) -> bool:
 		elif player_count != current_lan_player_count:
 			match_controller.action_rejected.emit("局域网房间内重新开始时不能改变游戏总人数。")
 			return false
+	# 离线过关斩将是否必须锁定角色总数；该模式的人数设置只有局域网大厅才表示“玩家数×2”，
+	# 离线单人游玩固定为1名本地玩家对1名敌人，因此任何调用方传入的更大角色数都在此收敛。
+	var offline_conquest_roles_locked: bool = match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE and GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_CONQUEST
+	if offline_conquest_roles_locked:
+		# 离线过关斩将最终角色总数；不读取菜单人数残值，避免单人局被扩大成多名玩家与多名敌人。
+		player_count = GameSettings.OFFLINE_CONQUEST_ROLE_COUNT
 	match_controller.default_player_count = player_count
 	_last_action_rejection_message = ""
 	# 开局前置校验错误；必须在清除旧日志、动画与选择表现前读取，拒绝时原对局可继续安全运行。

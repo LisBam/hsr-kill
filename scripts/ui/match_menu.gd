@@ -165,7 +165,7 @@ func _ready() -> void:
 	_conquest_exit_button.pressed.connect(_request_conquest_exit_toggle)
 	_main_menu_button.pressed.connect(_request_main_menu)
 	_apply_player_count_limits_for_mode(GameSettings.next_match_mode if GameSettings != null else "identity")
-	_player_count_input.set_value_no_signal(float(GameSettings.next_match_player_count if GameSettings != null else minimum_player_count))
+	_apply_player_count_value(GameSettings.next_match_player_count if GameSettings != null else minimum_player_count)
 	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
 	_player_count_input.update_on_text_changed = true
 	_player_count_input.value_changed.connect(_on_next_player_count_changed)
@@ -250,22 +250,41 @@ func _move_to_input_front() -> void:
 	_menu_button.move_to_front()
 
 
+## 把人数写入局内菜单控件并同步其显示文本；所有程序化写入人数都必须经过本入口。
+## SpinBox 的静默写入不会刷新内部 LineEdit 文本，而人数读取原先优先解析该文本，
+## 两者脱节会把场景初始值当成实际人数，因此这里在写入数值后显式对齐文本。
+func _apply_player_count_value(player_count: int) -> void:
+	# 人数控件内部文本行；显示值必须与 Range 数值同步。
+	var count_line_edit: LineEdit = _player_count_input.get_line_edit()
+	if int(_player_count_input.value) != player_count:
+		_player_count_input.set_value_no_signal(float(player_count))
+	# 期望显示文本；使用固定写法避免浮点尾数差异。
+	var expected_text: String = str(player_count)
+	if count_line_edit != null and count_line_edit.text != expected_text:
+		count_line_edit.set_text(expected_text)
+
+
 ## 设置下一局默认人数；桌面初始化时传入控制器检查器配置，之后由玩家在菜单中修改。
 func set_next_player_count(player_count: int) -> void:
 	# 按当前下一局模式规范化；无信号写 SpinBox，切断 value_changed → set_next → value 的无限递归。
 	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
 	var clamped_player_count: int = GameSettings.normalize_player_count_for_mode(mode_id, player_count) if GameSettings != null else clampi(player_count, minimum_player_count, maximum_player_count)
 	_apply_player_count_limits_for_mode(mode_id)
-	if int(_player_count_input.value) != clamped_player_count:
-		_player_count_input.set_value_no_signal(float(clamped_player_count))
+	_apply_player_count_value(clamped_player_count)
 	if GameSettings != null:
 		GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回菜单中设置的下一局人数；始终限制在标准身份局2至10人范围。
+## 补充：人数文本优先（保留玩家尚未失焦提交的键入值），但必须按控件当前上下限收敛，
+## 因为上下限已由模式人数规则表达（例如离线过关斩将固定为2），收敛可避免陈旧文本扩大参战人数。
 func get_next_player_count() -> int:
+	# 输入框当前文本；不能解析为人数时回退控件数值。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	# 控件已提交数值；文本非法时作为唯一回退来源。
+	var value_player_count: int = int(_player_count_input.value)
+	# 当前最终人数输入；文本合法时按控件上下限收敛后采用。
+	var resolved_player_count: int = clampi(typed_player_count, minimum_player_count, maximum_player_count) if typed_player_count > 0 else value_player_count
 	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
 	if GameSettings != null:
 		return GameSettings.normalize_player_count_for_mode(mode_id, resolved_player_count)
@@ -739,7 +758,7 @@ func _request_restart() -> void:
 		return
 	# 已确认的下一局人数；先写回输入框，使界面文本、Range 数值与重开参数保持一致。
 	var player_count: int = get_next_player_count()
-	_player_count_input.set_value_no_signal(float(player_count))
+	_apply_player_count_value(player_count)
 	GameSettings.set_next_match_player_count(player_count)
 	_menu_panel.visible = false
 	restart_requested.emit(player_count)
@@ -766,8 +785,8 @@ func set_conquest_exit_armed(armed: bool) -> void:
 func _on_next_player_count_changed(player_count: float) -> void:
 	var mode_id: String = GameSettings.next_match_mode if GameSettings != null else "identity"
 	var resolved_count: int = GameSettings.normalize_player_count_for_mode(mode_id, int(player_count)) if GameSettings != null else int(player_count)
-	if int(_player_count_input.value) != resolved_count:
-		_player_count_input.set_value_no_signal(float(resolved_count))
+	# 回写同时对齐显示文本；被收敛的数值必须立刻可见，避免局内重开使用与界面不一致的人数。
+	_apply_player_count_value(resolved_count)
 	if GameSettings != null:
 		GameSettings.set_next_match_player_count(resolved_count)
 
@@ -789,6 +808,14 @@ func _apply_player_count_limits_for_mode(mode_id: String) -> void:
 		_player_count_input.min_value = 3
 		_player_count_input.max_value = 5
 		_player_count_input.step = 2.0
+	elif normalized_mode == GameSettings.MATCH_MODE_CONQUEST if GameSettings != null else normalized_mode == "conquest":
+		# 离线过关斩将固定1名玩家对1名敌人；此处上下限同时是人数读取的收敛边界，
+		# 局域网大厅的“玩家数”（2至4）由联机大厅面板单独设置，不在局内菜单暴露。
+		minimum_player_count = GameSettings.OFFLINE_CONQUEST_ROLE_COUNT
+		maximum_player_count = GameSettings.OFFLINE_CONQUEST_ROLE_COUNT
+		_player_count_input.min_value = GameSettings.OFFLINE_CONQUEST_ROLE_COUNT
+		_player_count_input.max_value = GameSettings.OFFLINE_CONQUEST_ROLE_COUNT
+		_player_count_input.step = 1.0
 	else:
 		minimum_player_count = 2
 		maximum_player_count = 10
