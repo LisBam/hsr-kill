@@ -402,6 +402,8 @@ func _ready() -> void:
 	_player_count_input.max_value = maximum_player_count
 	_player_count_input.step = 1.0
 	_player_count_input.value = GameSettings.next_match_player_count
+	# 场景内的 SpinBox 可能保留了与脚本默认人数不一致的初始显示文本；这里统一对齐一次。
+	_apply_player_count_value(GameSettings.next_match_player_count)
 	# 当前人数输入提交策略；键入数值后立即同步 Range，防止按下开始游戏时读取焦点尚未提交的旧值。
 	_player_count_input.update_on_text_changed = true
 	_player_count_input.value_changed.connect(_on_next_player_count_changed)
@@ -535,24 +537,43 @@ func _input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
+## 把人数写入主菜单人数控件并同步其显示文本；所有程序化写入人数都必须经过本入口。
+## SpinBox 的静默写入不会刷新内部 LineEdit 的文本，而菜单读取原先优先解析该文本，
+## 一旦两者脱节就会把陈旧数字（例如场景默认的8）当成实际人数，过关斩将因此被扩大成多人对局。
+## 因此这里在写入数值后显式对齐文本，保证“显示文本 == 控件数值”这一不变量始终成立。
+func _apply_player_count_value(player_count: int) -> void:
+	# 人数控件内部文本行；显示值必须与 Range 数值同步，避免玩家看到与规则不符的数字。
+	var count_line_edit: LineEdit = _player_count_input.get_line_edit()
+	if int(_player_count_input.value) != player_count:
+		_player_count_input.set_value_no_signal(float(player_count))
+	# 期望显示文本；使用固定写法避免浮点尾数差异。
+	var expected_text: String = str(player_count)
+	if count_line_edit != null and count_line_edit.text != expected_text:
+		count_line_edit.set_text(expected_text)
+
+
 ## 将牌桌提供的下一局人数写入主菜单设置；人数保持限制在标准身份局的有效范围。
 func set_next_player_count(player_count: int) -> void:
 	# 按当前选中模式规范化人数；使用无信号写入避免与 GameSettings 信号形成无限递归。
 	var mode_id: String = _selected_match_mode
 	# 当前模式允许的规范人数；非法输入按各模式人数规则收敛到可保存范围。
 	var clamped_player_count: int = GameSettings.normalize_player_count_for_mode(mode_id, player_count) if GameSettings != null else clampi(player_count, minimum_player_count, maximum_player_count)
-	if int(_player_count_input.value) != clamped_player_count:
-		_player_count_input.set_value_no_signal(float(clamped_player_count))
+	_apply_player_count_value(clamped_player_count)
 	if GameSettings != null:
 		GameSettings.set_next_match_player_count(clamped_player_count)
 
 
 ## 返回设置面板当前指定的人数；优先读取仍在编辑中的文本，避免输入框失焦前的数据丢失。
+## 补充：文本必须先按控件当前上下限收敛再使用——场景初始值或历史静默写入可能留下陈旧数字，
+## 而模式人数范围正是由同一组上下限表达（过关斩将离线为2/2），因此收敛后的文本既保留
+## “未提交键入”语义，又不会让陈旧文本越过模式允许的人数范围。
 func get_next_player_count() -> int:
-	# 输入框当前文本；优先读取尚未因焦点切换而提交的键入内容。
+	# 输入框当前文本；不能解析为人数时回退控件数值。
 	var typed_player_count: int = _player_count_input.get_line_edit().text.to_int()
-	# 当前最终人数输入；空或不可解析文本回退 SpinBox 已提交数值。
-	var resolved_player_count: int = int(_player_count_input.value) if typed_player_count == 0 else typed_player_count
+	# 控件已提交数值；文本非法时作为唯一回退来源。
+	var value_player_count: int = int(_player_count_input.value)
+	# 当前最终人数输入；文本合法时按控件上下限收敛后采用。
+	var resolved_player_count: int = clampi(typed_player_count, minimum_player_count, maximum_player_count) if typed_player_count > 0 else value_player_count
 	if GameSettings != null:
 		return GameSettings.normalize_player_count_for_mode(_selected_match_mode, resolved_player_count)
 	return clampi(resolved_player_count, minimum_player_count, maximum_player_count)
@@ -980,7 +1001,11 @@ func _select_conquest_mode() -> void:
 	_player_count_input.min_value = 2
 	_player_count_input.max_value = 2
 	_player_count_input.step = 1.0
-	set_next_player_count(2)
+	# 离线过关斩将固定1名本地玩家对1名敌人（2个规则角色）；该模式的人数控件不表示“玩家数”，
+	# 联机玩家数由局域网大厅独立设置，并在开局边界换算为“玩家数×2”的规则角色总数。
+	# 此处只固定界面显示，不写回 GameSettings：通用人数槽属于身份模式等模式的偏好，
+	# 过关斩将的联机玩家数由 next_match_player_count_conquest 独立保存，两者都不应被本模式改写。
+	_apply_player_count_value(GameSettings.OFFLINE_CONQUEST_ROLE_COUNT)
 	_mode_title.text = "过关斩将"
 	_mode_description.text = "单人1人·联机2至4人·清空本层全部敌方后挑战下一关"
 	if _preview_mode_badge != null:
@@ -1308,7 +1333,7 @@ func _focus_match_replay_button() -> void:
 func _request_start_game() -> void:
 	# 已确认的下一局人数；写回控件使文本、Range 数值和发出的开局请求保持一致。
 	var player_count: int = get_next_player_count()
-	_player_count_input.value = player_count
+	_apply_player_count_value(player_count)
 	GameSettings.set_next_match_player_count(player_count)
 	_set_settings_visible(false)
 	_start_game_button.disabled = true
@@ -2014,8 +2039,8 @@ func _on_sfx_volume_slider_changed(volume_linear: float) -> void:
 func _on_next_player_count_changed(player_count: float) -> void:
 	# 按模式规范化；斗地主仅 3/5，身份局 2–10。无信号回写避免重复回调。
 	var resolved_count: int = GameSettings.normalize_player_count_for_mode(_selected_match_mode, int(player_count)) if GameSettings != null else int(player_count)
-	if int(_player_count_input.value) != resolved_count:
-		_player_count_input.set_value_no_signal(float(resolved_count))
+	# 回写同时对齐显示文本；被收敛的数值必须立刻可见，否则玩家会按旧数字判断开局人数。
+	_apply_player_count_value(resolved_count)
 	if GameSettings != null:
 		GameSettings.set_next_match_player_count(resolved_count)
 

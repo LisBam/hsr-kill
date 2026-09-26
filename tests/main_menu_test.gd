@@ -347,6 +347,11 @@ func _run() -> void:
 		_fail("conquest_difficulty_sync")
 		return
 	GameSettings.set_conquest_difficulty(GameSettings.DEFAULT_CONQUEST_DIFFICULTY)
+	# 过关斩将人数契约：离线单人固定1名玩家对1名敌人（2个规则角色），
+	# 控件显示文本必须与数值同步，且开局读取值不得被内部文本行的陈旧数字放大成联机语义的玩家数。
+	if int(player_count_input.value) != GameSettings.OFFLINE_CONQUEST_ROLE_COUNT or player_count_input.get_line_edit().text != str(GameSettings.OFFLINE_CONQUEST_ROLE_COUNT) or main_menu.get_next_player_count() != GameSettings.OFFLINE_CONQUEST_ROLE_COUNT:
+		_fail("conquest_offline_player_count")
+		return
 	# 过关斩将详情；按钮位于预览左上角，打开后正文必须包含复活与五档难度的完整开局效果。
 	if not mode_details_button.visible:
 		_fail("conquest_details_button_hidden")

@@ -310,6 +310,11 @@ const DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_CO
 ## 过关斩将默认人数；该值表示“玩家数”，默认2（联机默认2名玩家），离线单人开局仍按历史语义固定创建2个规则角色。
 const DEFAULT_CONQUEST_PLAYER_COUNT: int = 2
 
+## 离线过关斩将的固定规则角色总数；单人游玩恒为1名本地玩家对1名敌人。
+## 该常量是离线路径的唯一权威：菜单人数控件的玩家数语义只服务于局域网大厅，
+## 离线开局与离线重开都必须把角色总数收敛到本值，避免陈旧的菜单数值扩大参战角色。
+const OFFLINE_CONQUEST_ROLE_COUNT: int = 2
+
 ## 当前卡牌名称模式；默认使用《崩铁杀》自定义牌名，可在运行时安全切换为原版三国杀牌名。
 var card_name_mode: NameMode = NameMode.CUSTOM
 
@@ -594,8 +599,9 @@ func normalize_match_mode(mode_id: String) -> String:
 
 
 ## 将人数限制到指定模式合法范围；身份局 2–10，斗地主仅 3 或 5，2v2 固定 4。
-## 过关斩将保存“玩家数”而非规则角色总数：离线单人固定2（历史语义，菜单显示1人并创建2个角色），
-## 局域网联机允许2至4名玩家，规则角色总数在开局边界换算为玩家数的两倍。
+## 过关斩将保存“玩家数”而非规则角色总数：该字段只服务于局域网联机（允许2至4名玩家，
+## 规则角色总数在开局边界换算为玩家数的两倍）；离线单人同样固定为2，菜单人数也固定显示2，
+## 离线开局入口再用 OFFLINE_CONQUEST_ROLE_COUNT 锁定“1名本地玩家对1名敌人”的角色总数。
 func normalize_player_count_for_mode(mode_id: String, player_count: int) -> int:
 	var mode: String = normalize_match_mode(mode_id)
 	if mode == MATCH_MODE_DOUDIZHU:
