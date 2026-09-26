@@ -77,7 +77,7 @@
 
 运行 `res://tests/response_choice_test.tscn` 可验证 AI 使用【杀】后，本地玩家提交【闪】能够消费响应牌、收尾原【杀】、恢复 AI 出牌阶段并重新安排唯一后续任务。
 
-运行 `res://tests/gameplay_regression_test.tscn` 可验证真实 `CardUseEvent` 父子关系、五组使用时机、四组动态逐目标时机、`excluded/directHit/customArgs` 上下文、响应选择归属、唯一 `contentAfter`、`orderingDiscard/cardsDiscard` after 回收，以及无懈同时询问、八卦阵在普通【闪】窗口前独立即时询问并在黑色判定后恢复手牌响应、酒加值在【杀】开始与回合结束时立即发布零值快照、麒麟弓在目标扣血前建立坐骑选择、先响应结算、群体牌、普通濒死救援、离场濒死立即返场死亡和装备选择恢复。
+运行 `res://tests/gameplay_regression_test.tscn` 可验证真实 `CardUseEvent` 父子关系、五组使用时机、四组动态逐目标时机、`excluded/directHit/customArgs` 上下文、响应选择归属、唯一 `contentAfter`、`orderingDiscard/cardsDiscard` after 回收，以及无懈同时询问、八卦阵在普通【闪】窗口前独立即时询问并在黑色判定后恢复手牌响应、酒加值在【杀】开始与回合结束时立即发布零值快照、麒麟弓在目标扣血前建立坐骑选择、先响应结算、群体牌、普通濒死救援、离场濒死立即返场死亡、装备选择恢复，以及木牛流马“粮”中的装备牌与普通牌都能离开 `wooden_ox` 分区完成结算（装备类“粮”替换同槽旧装备并令其进入弃牌堆）。
 
 运行 `res://tests/requested_changes_test.tscn` 可验证横置状态重复切换、【铁壁】选择已横置角色并将其调整为竖直、普通与额外出牌阶段【杀】次数独立、【酒】回合次数不重置、【借刀杀人】使用时双目标与实际单目标时机分流、【铁索连环】自身/双目标 AI 与1v1固定重铸、普通 `chooseToUse` 隔离【传冲】和木牛流马材料候选、木牛储存出牌阶段不可用牌、AI刷新过期【传冲】请求、技能中文名与全体已知获得牌日志、【再现】与【军势】同一时机按座次续问、锁定技 `lock` 元数据、`phaseUseBegin` 即时询问、选将本人身份裁剪、选将完成后的起始手牌同步、无【闪】时【铁壁】【坚垒】隐私询问，以及【破风】下群体锦囊收敛为唯一合法目标。
 

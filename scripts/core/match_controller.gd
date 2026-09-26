@@ -6394,6 +6394,11 @@ func _find_card_location_by_uid(card_uid: int) -> Dictionary:
 		for card: CardInstance in player.hand:
 			if card.uid == card_uid:
 				return {"card":card, "zone":"hand", "owner_id":player.player_id, "slot":""}
+		# 木牛流马“粮”；与普通手牌同属可使用或打出的牌源，缺少该分支会让“粮”在标准移牌流程中找不到来源区域而静默失败。
+		# 区域名必须返回稳定标识 "wooden_ox"，与 CardMovementService 的区域读写、移牌生命周期 lose 判定保持同一字符串。
+		for card: CardInstance in player.wooden_ox_storage:
+			if card.uid == card_uid:
+				return {"card":card, "zone":"wooden_ox", "owner_id":player.player_id, "slot":""}
 		for card: CardInstance in player.judgment_area:
 			if card.uid == card_uid:
 				return {"card":card, "zone":"judgment", "owner_id":player.player_id, "slot":""}
