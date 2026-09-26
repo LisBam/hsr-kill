@@ -179,6 +179,10 @@ func _run() -> void:
 		return
 	if not _test_wooden_ox_storage_excluded_from_hand_limit():
 		return
+	if not _test_wooden_ox_stored_equipment_can_be_used():
+		return
+	if not _test_wooden_ox_stored_card_can_be_used():
+		return
 	if not _test_ai_delay_range():
 		return
 	if not _test_judgment_presentation_and_event_chain():
@@ -857,6 +861,65 @@ func _test_wooden_ox_storage_excluded_from_hand_limit() -> bool:
 	return true
 
 
+## 验证木牛流马“粮”中的装备牌可通过标准移牌流程使用：离开“粮”分区并替换装备区同槽旧装备。
+func _test_wooden_ox_stored_equipment_can_be_used() -> bool:
+	_scenario = "wooden_ox_equipment_use"
+	_reset_state(2)
+	# 装备区旧武器；被替换后必须按正常离区流程进入弃牌堆。
+	var old_weapon: CardInstance = _add_hand_card(0, "qinglong", "spade", 5)
+	_move_card_to_equipment(0, old_weapon, "weapon")
+	# 宝物槽木牛流马；提供“粮”分区，使用粮牌期间必须保持自身装备状态。
+	var wooden_ox: CardInstance = _add_hand_card(0, "muniu", "diamond", 5)
+	_move_card_to_equipment(0, wooden_ox, "treasure")
+	# 木牛“粮”中的武器；必须能按 wooden_ox 来源区域被权威位置查询找到。
+	var stored_weapon: CardInstance = CardInstance.new("zhuque", "heart", 3)
+	stored_weapon.zone = "wooden_ox"
+	stored_weapon.owner_id = 0
+	_controller.state.get_player(0).wooden_ox_storage.append(stored_weapon)
+	# 出牌选择依赖长期根事件；独立规则测试必须显式建立根事件后才能提交标准动作。
+	var root_event: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"scenario":_scenario})
+	_controller._runtime_root_event_id = root_event.event_id
+	_controller.event_scheduler.begin_root(root_event.event_id, true)
+	_controller.state.current_event_id = root_event.event_id
+	_controller._begin_play_choice(0)
+	if not _controller.submit_action(PlayerAction.new("use_card", 0, stored_weapon.uid, [0])):
+		return _fail("wooden_ox_equipment_use submit rejected")
+	# 结算后的玩家状态；粮牌离开 wooden_ox、进入武器槽，旧武器进入弃牌堆。
+	var player: PlayerState = _controller.state.get_player(0)
+	if player.wooden_ox_storage.has(stored_weapon) or player.equipment.get("weapon") != stored_weapon or player.equipment.get("treasure") != wooden_ox or not _controller.state.discard_pile.has(old_weapon) or not _controller.state.processing_area.is_empty():
+		return _fail("wooden_ox_equipment_use storage=%s equipment=%s discard=%s processing=%s" % [player.wooden_ox_storage, player.equipment, _card_uids(_controller.state.discard_pile), _card_uids(_controller.state.processing_area)])
+	return true
+
+
+## 验证木牛流马“粮”中的普通牌可以正常使用：粮牌进入处理区后按正常牌效结算并进入弃牌堆。
+func _test_wooden_ox_stored_card_can_be_used() -> bool:
+	_scenario = "wooden_ox_card_use"
+	_reset_state(2)
+	# 宝物槽木牛流马；提供“粮”分区。
+	var wooden_ox: CardInstance = _add_hand_card(0, "muniu", "diamond", 5)
+	_move_card_to_equipment(0, wooden_ox, "treasure")
+	# 使用者已受伤；使木牛“粮”中的【桃】成为当前唯一合法目标为自身的普通牌。
+	_controller.state.get_player(0).hp = 3
+	# 木牛“粮”中的普通牌；用于确认非装备粮牌同样能离开 wooden_ox 分区完成结算。
+	var stored_card: CardInstance = CardInstance.new("tao", "heart", 7)
+	stored_card.zone = "wooden_ox"
+	stored_card.owner_id = 0
+	_controller.state.get_player(0).wooden_ox_storage.append(stored_card)
+	# 长期根事件；让使用牌事件拥有稳定父事件。
+	var root_event: GameEvent = _controller.event_scheduler.create_event("RootGameEvent", "root", [], {"scenario":_scenario})
+	_controller._runtime_root_event_id = root_event.event_id
+	_controller.event_scheduler.begin_root(root_event.event_id, true)
+	_controller.state.current_event_id = root_event.event_id
+	_controller._begin_play_choice(0)
+	if not _controller.submit_action(PlayerAction.new("use_card", 0, stored_card.uid, [0])):
+		return _fail("wooden_ox_card_use submit rejected")
+	# 结算后的玩家状态；粮牌已离开 wooden_ox 并完成回复，木牛本身仍留在宝物槽。
+	var player: PlayerState = _controller.state.get_player(0)
+	if player.wooden_ox_storage.has(stored_card) or _controller.state.processing_area.has(stored_card) or player.equipment.get("treasure") != wooden_ox or player.hp != 4:
+		return _fail("wooden_ox_card_use hp=%d storage=%s processing=%s equipment=%s" % [player.hp, player.wooden_ox_storage, _card_uids(_controller.state.processing_area), player.equipment])
+	return true
+
+
 ## 验证 AI 响应滑条的全局范围、步长与默认值均与菜单契约一致。
 func _test_ai_delay_range() -> bool:
 	if not is_equal_approx(GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, 0.10):
@@ -1127,6 +1190,15 @@ func _add_hand_card(player_id: int, definition_id: String, suit: String, rank: i
 	card.owner_id = player_id
 	_controller.state.get_player(player_id).hand.append(card)
 	return card
+
+
+## 把测试实体从手牌移入指定装备槽，并同步实体自身区域与槽位归属。
+func _move_card_to_equipment(player_id: int, card: CardInstance, slot: String) -> void:
+	# 装备持有者；槽位写入与手牌移除必须作用于同一角色。
+	var player: PlayerState = _controller.state.get_player(player_id)
+	player.hand.erase(card)
+	card.zone = "equipment"
+	player.equipment[slot] = card
 
 
 ## 返回实体牌数组中的稳定 UID；失败信息使用该快照定位牌区所有权错误，不依赖对象默认字符串格式。
