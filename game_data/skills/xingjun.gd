@@ -90,7 +90,12 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if choice_kind == "xingjun_phase_use_begin":
 		if response.confirmed and not _skipped_play_phase_this_turn:
 			_skipped_play_phase_this_turn = true
-			if not bool(host.call("end_current_play_phase", owner_player_id)):
+			# 跳过阶段必须走统一的主要阶段跳过端口。响应提交时选择窗口已经关闭、公开阶段恢复为
+			# 出牌阶段，本端口才会被受理；它终止尚未询问的同层 Begin 处理器、写入公开跳过标记、
+			# 派发 phaseUseSkipped，并在不要求阶段主体完成的前提下推进阶段，与【弦奏】保持同一路径。
+			# 若改用 end_current_play_phase，结束请求会转入阶段服务的收尾流程，而该流程要求阶段主体
+			# 已经开始；Begin 询问期间状态仍是 starting，请求会被静默拒绝并让出牌阶段照常进行。
+			if not bool(host.call("skip_current_main_phase", owner_player_id, "play", get_id())):
 				_skipped_play_phase_this_turn = false
 			else:
 				announce_activation()
