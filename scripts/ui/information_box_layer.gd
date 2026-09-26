@@ -1013,16 +1013,28 @@ func _render_character_skills() -> void:
 	call_deferred("_refresh_character_skill_vertical_layout")
 
 
-## 返回右键武将详情中的技能标题；局内获得的受限技能只在标题后显示完整次数文案，避免改写技能原文。
+## 返回右键武将详情中的技能标题；轮回技先标注轮回数，局内获得的受限技能再显示完整次数文案，避免改写技能原文。
 func _get_character_skill_information_title(skill_id: String, skill_name: String) -> String:
 	# 默认技能详情标题；所有技能均使用统一书名号样式，保证右键详情与悬停资料语义一致。
 	var skill_information_title: String = "【%s】" % skill_name
+	# 技能名后的补充说明片段；轮回技固定先标注已轮回次数，次数文案始终排在其后，与悬停标题顺序一致。
+	var title_suffix_parts: Array[String] = []
+	# 技能静态定义；只用于判断该技能是否为轮回技，不读取技能运行时实例。
+	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+	if bool(skill_definition.get("reincarnation", false)):
+		# 当前技能轮回状态；从同一公开快照读取，局外静态资料或状态缺失时自然回退初始轮回数1。
+		var reincarnation_state: Dictionary = (_character_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+		# 当前轮回数；下限1保证未登记的轮回技仍显示稳定文本。
+		var reincarnation_round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
+		title_suffix_parts.append("本技能已轮回%d次" % reincarnation_round_count)
 	# 当前详情快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，详情组件不自行计算或扣减次数。
 	var remaining_uses_by_skill: Dictionary = _character_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
 	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
 	var remaining_uses_description: String = str(remaining_uses_by_skill.get(skill_id, ""))
 	if not remaining_uses_description.is_empty():
-		skill_information_title += "（%s）" % remaining_uses_description
+		title_suffix_parts.append(remaining_uses_description)
+	if not title_suffix_parts.is_empty():
+		skill_information_title += "（%s）" % "；".join(title_suffix_parts)
 	return skill_information_title
 
 

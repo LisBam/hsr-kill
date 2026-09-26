@@ -8,6 +8,9 @@ var _controller: MatchController
 ## 最近一次状态广播中的当前请求快照；界面只读取该字段决定是否开放手牌与出牌控件。
 var _last_broadcast_choice: Dictionary = {}
 
+## 最近一次技能按钮发出的悬停标题；供轮回技标题用例逐字校验片段内容与顺序。
+var _captured_skill_title: String = ""
+
 
 ## 延迟一帧开始回归，确保GameDatabase已经完成目录扫描与静态校验。
 func _ready() -> void:
@@ -28,6 +31,8 @@ func _run() -> void:
 	if not _test_lunhui_and_yongjie_return():
 		return
 	if not _test_yongjie_wheel_and_tiancai():
+		return
+	if not _test_reincarnation_title_round_count():
 		return
 	if not _test_tiancai_play_choice_broadcast():
 		return
@@ -379,11 +384,17 @@ func _test_yongjie_wheel_and_tiancai() -> bool:
 	var shihun_state: Dictionary = shihun.get_reincarnation_state()
 	if not bool(tiancai_state.get("eternal", false)) or int(tiancai_state.get("eternal_per_turn_limit", 0)) != 1 or not bool(shihun_state.get("eternal", false)) or yongjie.get_reincarnation_section_index() != 1:
 		return _fail("yongjie_enter_eternal=%s/%s/%s" % [tiancai_state, shihun_state, yongjie.get_reincarnation_state()])
+	# 进入永劫后的武将牌左上角提示；天裁与弑魂同时处于永劫仍只显示一条角色级提示。
+	if owner.character_corner_text != "永劫" or owner.character_corner_text_entries.size() != 1:
+		return _fail("yongjie_corner_text=%s/%s" % [owner.character_corner_text, owner.character_corner_text_entries])
 	# 第二与第三次火焰伤害各摸1张；③完成后退出所有其他轮回技永劫并进入下一轮回①。
 	_controller.emit_rule_timing("damageAfter", 1, 0, 1, {"amount":1, "nature":"fire", "damage_event_id":202})
 	_controller.emit_rule_timing("damageAfter", 1, 0, 1, {"amount":1, "nature":"fire", "damage_event_id":203})
 	if owner.hand.size() != 2 or bool(tiancai.get_reincarnation_state().get("eternal", true)) or bool(shihun.get_reincarnation_state().get("eternal", true)) or yongjie.get_reincarnation_round_count() != 2 or yongjie.get_reincarnation_section_index() != 0:
 		return _fail("yongjie_exit_eternal=%d/%s/%s/%s" % [owner.hand.size(), tiancai.get_reincarnation_state(), shihun.get_reincarnation_state(), yongjie.get_reincarnation_state()])
+	# 退出永劫后提示必须移除；角色不再处于永劫状态，武将牌左上角不残留“永劫”文本。
+	if not owner.character_corner_text.is_empty() or not owner.character_corner_text_entries.is_empty():
+		return _fail("yongjie_corner_text_exit=%s/%s" % [owner.character_corner_text, owner.character_corner_text_entries])
 	# 单独重置状态测试天裁①；无来源1点火焰伤害令体力5→4且进入②，不会被“造成伤害”来源规则误认。
 	_reset_state(2)
 	owner = _controller.state.get_player(0)
@@ -394,6 +405,65 @@ func _test_yongjie_wheel_and_tiancai() -> bool:
 	if tiancai == null or tiancai.activate({}) != "" or owner.hp != 4 or tiancai.get_reincarnation_section_index() != 1 or tiancai.get_reincarnation_round_count() != 1:
 		return _fail("tiancai_self_fire=%d/%s" % [owner.hp, tiancai.get_reincarnation_state() if tiancai != null else {}])
 	return true
+
+
+## 校验轮回技悬停标题在次数说明之前标注已轮回次数，普通技能标题保持原有格式。
+func _test_reincarnation_title_round_count() -> bool:
+	# 正式技能按钮组件；标题组装完全由该组件负责，无需创建完整牌桌。
+	var skill_button: SkillButtonView = SkillButtonView.new()
+	add_child(skill_button)
+	skill_button.information_requested.connect(_on_skill_information_requested)
+	# 轮回技定义；直接使用正式数据库元数据，避免在测试里复制技能名与文案。
+	var reincarnation_definition: Dictionary = GameDatabase.get_skill("tiancai")
+	# 轮回技显示名；标题断言按真实配置拼接，技能改名后测试自动跟随。
+	var reincarnation_name: String = str(reincarnation_definition.get("name", ""))
+	# 无局内次数限制的轮回技；标题只包含已轮回次数片段。
+	skill_button.configure(reincarnation_definition, false, "", {"round_count":3, "section_index":1})
+	skill_button._on_information_mouse_entered()
+	if _captured_skill_title != "【%s】（本技能已轮回3次）" % reincarnation_name:
+		skill_button.queue_free()
+		return _fail("reincarnation_title=%s" % _captured_skill_title)
+	# 同时带次数限制的轮回技；已轮回次数必须排在“每回合可发动”之前。
+	skill_button.configure(reincarnation_definition, false, "每回合可发动2次", {"round_count":3, "section_index":1})
+	skill_button._on_information_mouse_entered()
+	if _captured_skill_title != "【%s】（本技能已轮回3次；每回合可发动2次）" % reincarnation_name:
+		skill_button.queue_free()
+		return _fail("reincarnation_title_order=%s" % _captured_skill_title)
+	# 普通技能定义；标题必须保持原有格式，不得凭空出现轮回次数片段。
+	var normal_definition: Dictionary = GameDatabase.get_skill("yongyi")
+	# 普通技能显示名；用于拼接期望标题。
+	var normal_name: String = str(normal_definition.get("name", ""))
+	skill_button.configure(normal_definition, false, "每回合可发动2次", {})
+	skill_button._on_information_mouse_entered()
+	if _captured_skill_title != "【%s】（每回合可发动2次）" % normal_name:
+		skill_button.queue_free()
+		return _fail("normal_title=%s" % _captured_skill_title)
+	# 右键武将详情的技能标题；与悬停标题同构，必须使用相同的片段顺序。
+	var information_box: InformationBoxLayer = InformationBoxLayer.new()
+	add_child(information_box)
+	information_box._character_snapshot = {"reincarnation_skills":{"tiancai":{"round_count":3, "section_index":1}}, "acquired_skill_remaining_uses":{"tiancai":"每回合可发动2次"}}
+	# 轮回技详情标题；次数文案之前必须出现已轮回次数。
+	var detail_title: String = information_box._get_character_skill_information_title("tiancai", reincarnation_name)
+	if detail_title != "【%s】（本技能已轮回3次；每回合可发动2次）" % reincarnation_name:
+		information_box.queue_free()
+		skill_button.queue_free()
+		return _fail("reincarnation_detail_title=%s" % detail_title)
+	# 普通技能详情标题；不得凭空出现轮回次数片段。
+	information_box._character_snapshot = {"acquired_skill_remaining_uses":{"yongyi":"每回合可发动2次"}}
+	# 普通技能详情标题实际文本；用于失败时输出完整偏差。
+	var normal_detail_title: String = information_box._get_character_skill_information_title("yongyi", normal_name)
+	if normal_detail_title != "【%s】（每回合可发动2次）" % normal_name:
+		information_box.queue_free()
+		skill_button.queue_free()
+		return _fail("normal_detail_title=%s" % normal_detail_title)
+	information_box.queue_free()
+	skill_button.queue_free()
+	return true
+
+
+## 记录技能按钮发出的悬停标题；测试只读取标题文本，锚点矩形由牌桌信息框消费。
+func _on_skill_information_requested(information: Dictionary, _anchor_rect: Rect2) -> void:
+	_captured_skill_title = str(information.get("title", ""))
 
 
 ## 校验回合内主动技能结算后，权威出牌窗口与界面可见请求同步恢复。
