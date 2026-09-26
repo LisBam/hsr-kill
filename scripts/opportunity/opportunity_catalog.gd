@@ -45,6 +45,8 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"green_skill_xinghuo", "quality":"green", "description":"获得技能“星火”", "effect":"grant_skill", "skill_id":"xinghuo"},
 	{"id":"green_skill_xifa", "quality":"green", "description":"获得技能“戏法”", "effect":"grant_skill", "skill_id":"xifa"},
 	{"id":"green_skill_mingxian", "quality":"green", "description":"获得技能“鸣弦”", "effect":"grant_skill", "skill_id":"mingxian"},
+	# 停云固有技能【祥音】；限定技机缘，限定额度由 SkillDefinition 基类统一管理，赐福标记来源由技能源码写入。
+	{"id":"green_skill_xiangyin", "quality":"green", "description":"获得技能“祥音”", "effect":"grant_skill", "skill_id":"xiangyin"},
 
 	{"id":"blue_draw_three", "quality":"blue", "description":"摸三张牌。", "effect":"draw", "count":3},
 	{"id":"blue_max_hp_one", "quality":"blue", "description":"增加1点体力上限。", "effect":"max_hp", "count":1},
@@ -70,6 +72,8 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"blue_skill_jianshi", "quality":"blue", "description":"获得技能“剑势”", "effect":"grant_skill", "skill_id":"jianshi"},
 	{"id":"blue_skill_shanqing", "quality":"blue", "description":"获得每回合能发动三次的技能“山倾”", "effect":"grant_skill", "skill_id":"shanqing", "per_turn_limit":3},
 	{"id":"blue_skill_qinniang", "quality":"blue", "description":"获得技能“亲酿”", "effect":"grant_skill", "skill_id":"qinniang"},
+	# 赛飞儿固有技能【聚寇】；轮回技机缘，技能实例在 bind() 阶段自动登记轮回状态，目录无需重复声明轮回参数。
+	{"id":"blue_skill_jvkou", "quality":"blue", "description":"获得技能“聚寇”", "effect":"grant_skill", "skill_id":"jvkou"},
 
 	{"id":"purple_reduce_max_hp", "quality":"purple", "description":"令一名角色减少1点体力上限。", "effect":"max_hp_target", "count":-1},
 	{"id":"purple_draw_five", "quality":"purple", "description":"摸五张牌。", "effect":"draw", "count":5},
@@ -95,6 +99,8 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"purple_skill_mingding", "quality":"purple", "description":"获得技能“酩酊”", "effect":"grant_skill", "skill_id":"mingding"},
 	{"id":"purple_skill_zhufeng", "quality":"purple", "description":"获得每回合可发动三次的技能“逐风”", "effect":"grant_skill", "skill_id":"zhufeng", "per_turn_limit":3},
 	{"id":"purple_turn_over_target", "quality":"purple", "description":"将一名角色的武将牌翻面", "effect":"turn_over_target"},
+	# 停云固有技能【光覆】；限定技机缘，回合尾复原目标已发动限定技的候选与结算均由技能源码负责。
+	{"id":"purple_skill_guangfu", "quality":"purple", "description":"获得技能“光覆”", "effect":"grant_skill", "skill_id":"guangfu"},
 
 	{"id":"orange_draw_seven", "quality":"orange", "description":"摸七张牌。", "effect":"draw", "count":7},
 	{"id":"orange_draw_phase_one", "quality":"orange", "description":"摸牌阶段额外摸一张牌", "effect":"draw_phase_bonus", "count":1},
@@ -112,6 +118,8 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"orange_skill_xianzou", "quality":"orange", "description":"获得技能“弦奏”", "effect":"grant_skill", "skill_id":"xianzou"},
 	{"id":"orange_skip_discard_phase", "quality":"orange", "description":"永远跳过你的弃牌阶段", "effect":"skip_discard_phase", "count":1},
 	{"id":"orange_turn_over_all_others", "quality":"orange", "description":"将所有其他角色的武将牌翻面", "effect":"turn_over_all_others"},
+	# 万敌固有技能【血仇】；轮回锁定技机缘，仅在持有者进入濒死时自动触发，不新增主动技能按钮。
+	{"id":"orange_skill_xvechou", "quality":"orange", "description":"获得技能“血仇”", "effect":"grant_skill", "skill_id":"xvechou"},
 
 	{"id":"red_gain_types", "quality":"red", "description":"从牌堆或弃牌堆中获得所有类型的牌各4张。（基本牌、锦囊牌、装备牌）", "effect":"gain_group_cards", "group_kind":"type", "groups":["basic", "trick", "equipment"], "count":4},
 	{"id":"red_gain_suits_three", "quality":"red", "description":"从牌堆或弃牌堆中获得所有花色的牌各3张。", "effect":"gain_group_cards", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":3},
@@ -229,6 +237,7 @@ static func get_card_ids_by_quality(quality_id: String) -> Array[String]:
 	_ensure_catalog_indexes()
 	# 品质ID副本；只复制短字符串数组，不复制69张机缘的正文和效果字典。
 	# 补充：目录现已扩展至95张，返回路径仍只复制短字符串数组，不复制正文和效果字典。
+	# 补充：新增停云【祥音】【光覆】、赛飞儿【聚寇】与万敌【血仇】四项技能机缘后，目录共106张，返回路径仍只复制短字符串数组。
 	var result: Array[String] = []
 	for card_id_variant: Variant in _card_ids_by_quality.get(quality_id, []) as Array:
 		result.append(str(card_id_variant))

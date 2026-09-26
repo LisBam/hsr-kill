@@ -52,6 +52,8 @@ func _ready() -> void:
 		return
 	if not _test_acquired_skill_limits():
 		return
+	if not _test_new_skill_opportunity_grants():
+		return
 	_finish_success()
 
 
@@ -77,6 +79,11 @@ func _setup_test_state() -> void:
 	_controller.card_rules = CardRuleService.new(state, _controller)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, state)
 	_controller.skill_instances_by_player = {0:{}, 1:{}, 2:{}, 3:{}}
+	# 轮回技权威服务；真实对局由 _rebuild_match_rule_services_and_root_event() 创建并配置同一实例，
+	# 测试最小状态必须补上该组件，否则机缘授予轮回技时 register_reincarnation_skill() 会被 null 服务静默拒绝。
+	if _controller.reincarnation_skill_service == null:
+		_controller.reincarnation_skill_service = ReincarnationSkillService.new()
+	_controller.reincarnation_skill_service.configure(_controller)
 	# 固定随机源；候选内容可复现，但测试只依赖数量、合法ID与隐私裁剪。
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = 20260722
@@ -98,8 +105,9 @@ func _test_catalog_and_weights() -> bool:
 	# 补充：目录已扩展为100张；保留原注释用于说明灰色机缘的关卡归属，实际数量以本测试断言为准。
 	# 补充：新增角色技能与翻面机缘后，当前目录共100张，其中5张灰色卡不参与随机抽取。
 	# 补充：鸣弦与逐风技能机缘加入后，当前目录共102张，其中5张灰色卡不参与随机抽取。
+	# 补充：新增停云【祥音】【光覆】、赛飞儿【聚寇】与万敌【血仇】四项技能机缘后，当前目录共106张，其中5张灰色卡不参与随机抽取。
 	var cards: Array[Dictionary] = _controller.opportunity_system.get_card_catalog()
-	if cards.size() != 102 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
+	if cards.size() != 106 or not OpportunityCatalog.get_card("orange_skill_xingjun").is_empty():
 		return _fail("catalog_count %d" % cards.size())
 	# 索引查询隔离副本；调用方修改返回值后，再次查询必须仍得到静态目录原文。
 	var isolated_card_copy: Dictionary = OpportunityCatalog.get_card("green_draw_two")
@@ -120,6 +128,7 @@ func _test_catalog_and_weights() -> bool:
 	# 补充：目录现为100张；本段仍用于校验既有紫色、橙色稳定ID及摸牌阶段加成的兼容性。
 	# 补充：新增角色技能与翻面机缘后，蓝色、紫色与橙色目录分别扩展为24张、23张与16张。
 	# 补充：鸣弦与逐风技能机缘加入后，绿色与紫色目录分别扩展为19张与24张。
+	# 补充：新增四项武将技能机缘后，绿色、蓝色、紫色与橙色目录分别扩展为20张、25张、25张与17张。
 	var purple_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("purple")
 	# 橙色目录；新增的摸牌阶段加成应使橙色数量增加为11张。
 	var orange_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("orange")
@@ -129,7 +138,7 @@ func _test_catalog_and_weights() -> bool:
 	var red_cards: Array[Dictionary] = OpportunityCatalog.get_cards_by_quality("red")
 	# 橙色摸牌阶段机缘；正文与固定数值保持不变，只调整品质和稳定ID。
 	var orange_draw_phase_card: Dictionary = OpportunityCatalog.get_card("orange_draw_phase_one")
-	if green_cards.size() != 19 or blue_cards.size() != 24 or purple_cards.size() != 24 or orange_cards.size() != 16 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
+	if green_cards.size() != 20 or blue_cards.size() != 25 or purple_cards.size() != 25 or orange_cards.size() != 17 or red_cards.size() != 14 or not OpportunityCatalog.get_card("purple_draw_phase_one").is_empty() or str(orange_draw_phase_card.get("quality", "")) != "orange" or int(orange_draw_phase_card.get("count", 0)) != 1:
 		return _fail("catalog_quality_counts green=%d blue=%d purple=%d orange=%d red=%d card=%s" % [green_cards.size(), blue_cards.size(), purple_cards.size(), orange_cards.size(), red_cards.size(), orange_draw_phase_card])
 	# 全零权重回退抽取；即使正常五种权重都被检查器调为0，灰色也不能作为回退候选。
 	_controller.opportunity_system.green_weight = 0
@@ -207,6 +216,10 @@ func _test_catalog_and_weights() -> bool:
 		"orange_skip_discard_phase":"永远跳过你的弃牌阶段",
 		"red_refresh_opportunities":"将你的所有机缘刷新为同品质的新机缘，每个机缘有30%的概率刷新为更高级的机缘。",
 		"red_gain_three_unowned_orange":"随机获得三项你未拥有的橙色机缘",
+		"green_skill_xiangyin":"获得技能“祥音”",
+		"blue_skill_jvkou":"获得技能“聚寇”",
+		"purple_skill_guangfu":"获得技能“光覆”",
+		"orange_skill_xvechou":"获得技能“血仇”",
 	}
 	for card_id_variant: Variant in new_descriptions.keys():
 		# 当前新增卡ID与精确原文；目录缺失同样会得到空字符串并失败。
@@ -214,7 +227,7 @@ func _test_catalog_and_weights() -> bool:
 		if str(OpportunityCatalog.get_card(card_id).get("description", "")) != str(new_descriptions[card_id]):
 			return _fail("new_description_%s" % card_id)
 	# 新增技能机缘映射；技能稳定ID与每回合三次限制必须由目录直接声明，不能由中文名或文件名猜测。
-	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "green_skill_mingxian":"mingxian", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi", "blue_skill_qinniang":"qinniang", "purple_skill_baizhe":"baizhe", "purple_skill_mingding":"mingding", "purple_skill_zhufeng":"zhufeng"}
+	var expected_skill_ids: Dictionary = {"orange_skill_mice":"mice", "green_skill_zhuijian":"zhuijian", "green_skill_bingfeng":"bingfeng", "blue_skill_jiyu":"jiyu", "green_skill_xinghuo":"xinghuo", "blue_skill_tianzhui":"tianzhui", "purple_skill_huanfa":"huanfa", "orange_skill_mingchen":"mingchen", "orange_skill_xianzou":"xianzou", "blue_skill_anda":"anda", "green_skill_xifa":"xifa", "green_skill_mingxian":"mingxian", "blue_skill_touxia":"touxia", "purple_skill_kance":"kance", "blue_skill_qiusheng":"qiusheng", "blue_skill_quanlei":"quanlei", "blue_skill_jianshi":"jianshi", "blue_skill_shanqing":"shanqing", "purple_skill_xingqi":"xingqi", "blue_skill_qinniang":"qinniang", "purple_skill_baizhe":"baizhe", "purple_skill_mingding":"mingding", "purple_skill_zhufeng":"zhufeng", "green_skill_xiangyin":"xiangyin", "blue_skill_jvkou":"jvkou", "purple_skill_guangfu":"guangfu", "orange_skill_xvechou":"xvechou"}
 	for skill_card_id_variant: Variant in expected_skill_ids.keys():
 		# 当前技能机缘定义；所有普通技能卡必须使用统一grant_skill效果，供过关斩将与局内获得接口复用。
 		var skill_card_id: String = str(skill_card_id_variant)
@@ -993,6 +1006,51 @@ func _test_acquired_skill_limits() -> bool:
 	if not _controller.can_use_acquired_skill(0, "zhufeng"):
 		return _fail("zhufeng_turn_reset")
 	_controller.remove_acquired_skill(0, "zhufeng")
+	return true
+
+
+## 校验四项新增技能机缘经正式结算入口授予时的技能安装、限定额度与轮回状态。
+## 目录只声明 skill_id，因此本用例同时证明轮回技与限定技不需要在机缘定义里重复声明次数或轮回参数。
+func _test_new_skill_opportunity_grants() -> bool:
+	# 机缘拥有者；正式开局状态下必须存活才能接收“获得技能”机缘。
+	var owner: PlayerState = _controller.state.get_player(0)
+	if owner == null:
+		return _fail("new_skill_grant_owner")
+	# 拥有者体力；前序用例可能已经压低体力，这里恢复满体力以避免授权被存活校验拒绝。
+	owner.hp = owner.max_hp
+	# 本次新增技能机缘稳定ID；顺序与目录声明一致，逐张走与正式结算完全相同的解析入口。
+	var granted_card_ids: Array[String] = ["green_skill_xiangyin", "blue_skill_jvkou", "purple_skill_guangfu", "orange_skill_xvechou"]
+	for granted_card_id: String in granted_card_ids:
+		# 当前机缘定义；目录缺失时得到空字典，授权分支会因 skill_id 为空而安全失败。
+		var card_definition: Dictionary = OpportunityCatalog.get_card(granted_card_id)
+		if card_definition.is_empty():
+			return _fail("new_skill_grant_card_missing=%s" % granted_card_id)
+		# 正式结算入口；与全体选择完成后逐张结算机缘使用同一函数，不绕过解析器直接授予技能。
+		_controller.opportunity_system._effect_resolver.resolve_card(0, card_definition)
+		# 已安装技能稳定ID；授权必须真实创建运行时实例并登记获得来源，而不是只写机缘历史。
+		var granted_skill_id: String = str(card_definition.get("skill_id", ""))
+		if _controller.get_skill_instance(0, granted_skill_id) == null or str((owner.acquired_skills.get(granted_skill_id, {}) as Dictionary).get("source", "")) != "opportunity":
+			return _fail("new_skill_grant=%s" % granted_card_id)
+	# 限定技固有额度；【祥音】与【光覆】由技能基类管理额度，授予后必须各保留一次可发动机会。
+	for limited_skill_id: String in ["xiangyin", "guangfu"]:
+		# 当前限定技实例；实例缺失时无法校验额度，因此与额度断言合并。
+		var limited_skill: SkillDefinition = _controller.get_skill_instance(0, limited_skill_id)
+		if limited_skill == null or not limited_skill.has_available_intrinsic_use():
+			return _fail("new_skill_limited_ready=%s" % limited_skill_id)
+	# 轮回技公开状态；【聚寇】与【血仇】必须在 bind() 阶段自动登记轮回数1、当前节①且共2个轮回节。
+	for reincarnation_skill_id: String in ["jvkou", "xvechou"]:
+		# 当前轮回状态；两个技能各自独立一份进度，不共用任何条目。
+		var reincarnation_state: Dictionary = _controller.get_reincarnation_skill_state(0, reincarnation_skill_id)
+		if int(reincarnation_state.get("round_count", 0)) != 1 or int(reincarnation_state.get("section_index", -1)) != 0 or int(reincarnation_state.get("section_count", 0)) != 2:
+			return _fail("new_skill_reincarnation_state=%s/%s" % [reincarnation_skill_id, reincarnation_state])
+	# 清理；逐项经正式移除端口卸载运行时实例与时机订阅，避免【聚寇】的全局伤害订阅影响后续用例。
+	for granted_card_id: String in granted_card_ids:
+		# 当前待清理技能稳定ID；与安装时使用同一份目录来源，不重新拼写字符串。
+		var granted_skill_id: String = str(OpportunityCatalog.get_card(granted_card_id).get("skill_id", ""))
+		if not _controller.remove_acquired_skill(0, granted_skill_id) or _controller.get_skill_instance(0, granted_skill_id) != null or owner.acquired_skills.has(granted_skill_id):
+			return _fail("new_skill_grant_cleanup=%s" % granted_skill_id)
+	# 轮回进度是角色级状态，卸载技能实例不会自动清除；测试显式复位以保持与其他用例一致的起始条件。
+	owner.reincarnation_skills.clear()
 	return true
 
 
