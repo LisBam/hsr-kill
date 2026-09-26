@@ -53,7 +53,7 @@ func can_activate(_context: Dictionary = {}) -> bool:
 ## ①读取动作目标或创建任意多目标选择，②直接按上次目标执行固定反击。
 func activate(context: Dictionary = {}) -> String:
 	if not can_activate():
-		return "【弑魂】当前轮回节没有合法的火【杀】角色或固定目标。"
+		return _get_activation_block_message()
 	# 当前轮回节；①动作可携带目标，②不允许改写上次目标集合。
 	var section_index: int = get_reincarnation_section_index()
 	if section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX:
@@ -88,6 +88,18 @@ func continue_settlement(context: Dictionary) -> bool:
 	return continue_virtual_card_sequence_settlement(context)
 
 
+## 返回本次无法发动的准确原因；优先区分【永劫】每回合限次，
+## 避免玩家在永劫状态下只看到“没有合法目标”而误判为技能点击无效。
+func _get_activation_block_message() -> String:
+	# 当前轮回状态；缺失时回退为通用提示，不阻断技能的其他分支。
+	var skill_state: Dictionary = get_reincarnation_state()
+	# 永劫每回合发动上限；0表示处于永劫但未附加次数限制。
+	var eternal_limit: int = maxi(int(skill_state.get("eternal_per_turn_limit", 0)), 0)
+	if bool(skill_state.get("eternal", false)) and eternal_limit > 0 and int(skill_state.get("eternal_uses_this_turn", 0)) >= eternal_limit:
+		return "【弑魂】已处于【永劫】状态，本回合的发动次数已用尽（每回合限%d次）。" % eternal_limit
+	return "【弑魂】当前轮回节没有合法的火【杀】角色或固定目标。"
+
+
 ## 当前轮回节没有任何可执行火【杀】时，记录一次实际发动并直接推进到下一轮回节。
 ## ①无可指定角色与②上次目标全部失效共用该入口；不改变目标记录，因此②的记录会原样保留到下次①覆盖。
 func _complete_empty_shihun_section(section_index: int) -> bool:
@@ -118,7 +130,11 @@ func _start_shihun_sequence(section_index: int, target_ids: Array[int]) -> bool:
 			"actor_id":owner_player_id,
 			"definition_id":FIRE_SLASH_DEFINITION_ID,
 			"target_ids":target_ids.duplicate(),
-			"rule_overrides":{"maximum_target_count_bonus":maxi(target_ids.size() - 1, 0)},
+			# ②与①采用同一组“技能视为用牌不占实体额度”覆写：①可以指定任意距离的角色，
+			# ②必须能对①指定过的同一批目标使用火【杀】，否则①的合法选择会让②必然静默失效。
+			# 【永劫】把手牌非伤害牌持续视为火【杀】，持有者每阶段都会用尽【杀】次数，
+			# 若②仍受该次数与攻击范围限制，这一节将在实战中完全无法生效。
+			"rule_overrides":{"maximum_target_count_bonus":maxi(target_ids.size() - 1, 0), "ignore_play_count_limit":true, "ignore_distance_limit":true},
 			"virtual_storage":{"source_skill_id":get_id(), "shihun_section":section_index},
 		})
 	# 完成上下文；无论个别卡牌随后因状态变化跳过，整次技能仍按最初合法指定推进。
@@ -171,7 +187,11 @@ func _is_retaliation_target_set_legal(target_ids: Array[int]) -> bool:
 	if target_ids.is_empty():
 		return false
 	# 多目标上限加成；只扩展目标数量，不解除阶段次数、距离或目标技能限制。
-	var rule_overrides: Dictionary = {"maximum_target_count_bonus":maxi(target_ids.size() - 1, 0)}
+	# 补充（②实战有效性修复）：本阶段【杀】次数与到目标距离不再阻挡②。①已忽略阶段、次数与距离，
+	# 而②的目标恒为①指定过的同一批角色；若②仍受攻击范围限制，①指定远处角色就会让②永久失效，
+	# 且【永劫】使持有者每阶段用尽【杀】次数，②将在每一回合都被静默跳过。
+	# 目标存活、离场状态与目标技能限制继续由本函数保留，与 _start_shihun_sequence 的队列覆写保持完全一致。
+	var rule_overrides: Dictionary = {"maximum_target_count_bonus":maxi(target_ids.size() - 1, 0), "ignore_play_count_limit":true, "ignore_distance_limit":true}
 	return host.card_rules.validate_virtual_use(owner_player_id, FIRE_SLASH_DEFINITION_ID, target_ids, rule_overrides).is_empty()
 
 
