@@ -7729,6 +7729,8 @@ func add_card_target_damage_bonus(card_uid: int, target_id: int, amount: int, _r
 	custom_args[str(target_id)] = target_args
 	card_use_context["custom_args"] = custom_args
 	_card_use_contexts[card_uid] = card_use_context
+	# 同步落到仍在等待提交的用牌修改窗口；只写共享上下文会被随后的结果提交用派发前快照覆盖。
+	_publish_pending_custom_args(card_uid, str(target_id), "damage_bonus", amount)
 	return true
 
 
@@ -7738,6 +7740,51 @@ func get_card_target_damage_bonus(card_uid: int, target_id: int) -> int:
 	var custom_args: Dictionary = card_use_context.get("custom_args", {}) as Dictionary
 	var target_args: Dictionary = custom_args.get(str(target_id), {}) as Dictionary
 	return int(target_args.get("damage_bonus", 0))
+
+
+## 把异步恢复期间写入的每目标自定义参数同步到仍在等待提交的用牌修改窗口。
+## 使用牌时机的“派发”与“结果提交”是两个独立步骤：可选技能尚未应答时序列不会提交结果，
+## 技能在恢复回调里写入的实时数据必须同时落到该窗口的事件数据，否则提交时会用派发前
+## 快照整体覆盖共享上下文，技能效果静默失效。没有等待中的窗口时保持纯写入，不影响旧流程。
+func _publish_pending_custom_args(card_uid: int, target_key: String, argument_name: String, amount: int) -> void:
+	if amount == 0:
+		return
+	# 等待中的使用牌修改窗口；同一张牌同一时刻至多有一个窗口处于等待应答状态。
+	var pending_event: RuleEvent = _find_pending_card_timing_event(card_uid)
+	if pending_event == null:
+		return
+	# 事件侧每目标参数字典；与共享上下文使用同一套字符串目标键协议。
+	var custom_args: Dictionary = (pending_event.data.get("custom_args", {}) as Dictionary).duplicate(true)
+	var target_args: Dictionary = (custom_args.get(target_key, {}) as Dictionary).duplicate(true)
+	target_args[argument_name] = int(target_args.get(argument_name, 0)) + amount
+	custom_args[target_key] = target_args
+	pending_event.data["custom_args"] = custom_args
+
+
+## 返回当前正等待可选技能应答的使用牌修改窗口；没有等待中的窗口时返回null。
+## 只扫描续接中的步骤序列，不新增需要跨帧维护或进入快照的运行时状态。
+func _find_pending_card_timing_event(card_uid: int) -> RuleEvent:
+	# 最近创建的候选序列身份；嵌套窗口取最内层，确保数据落到真正等待应答的那一个。
+	var latest_sequence_id: int = -1
+	# 最近创建的候选窗口事件；未命中任何序列时为null，调用方据此跳过同步。
+	var latest_event: RuleEvent = null
+	for sequence_id_variant: Variant in _rule_sequences.keys():
+		# 当前序列身份；数值越大表示创建越晚。
+		var sequence_id: int = int(sequence_id_variant)
+		if sequence_id <= latest_sequence_id:
+			continue
+		# 当前序列；已结束或被取消的序列不持有等待窗口。
+		var sequence: RuleStepSequence = _rule_sequences[sequence_id] as RuleStepSequence
+		if sequence == null or sequence.waiting_event == null:
+			continue
+		# 事件数据契约；使用牌修改窗口固定携带卡牌UID与每目标自定义参数两组字段。
+		if int(sequence.waiting_event.data.get("card_uid", -1)) != card_uid:
+			continue
+		if not sequence.waiting_event.data.has("custom_args"):
+			continue
+		latest_sequence_id = sequence_id
+		latest_event = sequence.waiting_event
+	return latest_event
 
 
 ## 记录一张牌收到的一次直接响应及响应者；只累计直接以该牌为父对象的实际打出，不递归计算响应牌受到的反响应。
@@ -11731,9 +11778,11 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 
 
 ## 派发使用牌修改窗口并保留原对象；结果步骤等待同一时机的全部触发器结束。
+## 等待窗口必须在派发前登记：同步技能在派发过程中就会写入修改参数，只有此时窗口已可
+## 从当前序列查到，这些写入才能同步落到事件数据，而不被随后的结果提交用派发前快照覆盖。
 func _dispatch_card_rule_timing(sequence: RuleStepSequence, rule_event: RuleEvent) -> void:
-	_dispatch_timing_service_event(rule_event)
 	sequence.wait_for_timing(rule_event)
+	_dispatch_timing_service_event(rule_event)
 
 
 ## 提交异步修改窗口的最终结果；只修改仍存在的用牌上下文与运行时事件。

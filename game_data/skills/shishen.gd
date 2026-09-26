@@ -52,25 +52,12 @@ func _on_owner_slash_targeted(event: RuleEvent) -> void:
 	if parent_card_uid < 0 or target_id < 0:
 		return
 	announce_activation({"card_uid":parent_card_uid, "target_id":target_id, "hp_loss":HP_LOSS_PER_TARGET, "damage_bonus":DAMAGE_BONUS_PER_TARGET})
-	# 当前逐目标时机事件也保存同一伤害加值；真实CardUseEvent完成回写时不会再用派发前旧customArgs覆盖技能结果。
-	_write_event_target_damage_bonus(event, target_id, DAMAGE_BONUS_PER_TARGET)
+	# 伤害加值只经控制器端口登记一次；该端口会同时写入仍在等待提交的逐目标时机事件，
+	# 因此此处不再自行改写事件数据，避免同一加值被重复累加。
 	host.call("add_card_target_damage_bonus", parent_card_uid, target_id, DAMAGE_BONUS_PER_TARGET, get_id())
 	# 失去体力可能立即插入完整濒死流程；增伤已先绑定到原【杀】，濒死结束后才会继续本牌后续结算。
 	get_owner_skill_player().loseHp(HP_LOSS_PER_TARGET, get_owner_skill_player())
 	observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "respond_shan":true})
-
-
-## 把当前目标的伤害加值同步写入逐目标事件数据；控制器随后会将该副本合并回原CardUseEvent上下文。
-func _write_event_target_damage_bonus(event: RuleEvent, target_id: int, amount: int) -> void:
-	if event == null or target_id < 0 or amount == 0:
-		return
-	# 本张牌全部目标的自定义参数；字符串目标ID与控制器公开协议保持一致。
-	var custom_args: Dictionary = (event.data.get("custom_args", {}) as Dictionary).duplicate(true)
-	# 当前目标的独立参数；多目标【杀】不会把弑神加值扩散到其他目标。
-	var target_args: Dictionary = (custom_args.get(str(target_id), {}) as Dictionary).duplicate(true)
-	target_args["damage_bonus"] = int(target_args.get("damage_bonus", 0)) + amount
-	custom_args[str(target_id)] = target_args
-	event.data["custom_args"] = custom_args
 
 
 ## 判断当前【杀】是否仍位于本阶段前X张窗口；X读取血仇当前轮回数，缺失状态时安全回退1。
