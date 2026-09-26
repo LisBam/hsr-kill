@@ -52,6 +52,9 @@ var _is_reincarnation_skill: bool = false
 ## 当前轮回节零基索引；局内从玩家公开快照读取，局外或状态缺失时默认为①对应的0。
 var _reincarnation_section_index: int = 0
 
+## 当前轮回技已完成并进入的轮回数；局内从玩家公开快照读取，局外或状态缺失时默认为初始值1。
+var _reincarnation_round_count: int = 1
+
 ## 当前技能是否为限定技；true时按钮使用红色可发动、深红暂不可发动和深灰已发动三态视觉。
 var _is_limited_skill: bool = false
 
@@ -82,6 +85,7 @@ func configure(definition: Dictionary, available: bool = false, remaining_uses_d
 	skill_limit_description = remaining_uses_description
 	_is_reincarnation_skill = bool(definition.get("reincarnation", false))
 	_reincarnation_section_index = maxi(int(reincarnation_state.get("section_index", 0)), 0)
+	_reincarnation_round_count = maxi(int(reincarnation_state.get("round_count", 1)), 1)
 	_is_limited_skill = bool(definition.get("limited", false))
 	_is_limited_skill_used = _is_limited_skill and limited_skill_used
 	# 技能名称；缺失时使用稳定 ID，便于发现不完整配置。
@@ -116,9 +120,15 @@ func _on_information_mouse_entered() -> void:
 		return
 	# 统一技能信息；只展示技能名与描述原文，不展示接入状态等开发期调试文案。
 	# 当前受限技能把完整次数说明附在技能名后，规则原文始终保持不变。
-	var information_title: String = "【%s】" % _skill_display_name
+	# 技能名后的补充说明片段；轮回技固定先标注已轮回次数，次数限制说明始终排在其后。
+	var title_suffix_parts: Array[String] = []
+	if _is_reincarnation_skill:
+		title_suffix_parts.append("本技能已轮回%d次" % _reincarnation_round_count)
 	if not skill_limit_description.is_empty():
-		information_title += "（%s）" % skill_limit_description
+		title_suffix_parts.append(skill_limit_description)
+	var information_title: String = "【%s】" % _skill_display_name
+	if not title_suffix_parts.is_empty():
+		information_title += "（%s）" % "；".join(title_suffix_parts)
 	var information: Dictionary = {
 		"title":information_title,
 		"description":skill_description,

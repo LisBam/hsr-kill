@@ -3,6 +3,15 @@ extends RefCounted
 
 ## 轮回技权威状态服务。组件只维护轮回数、轮回节、永劫与通用限次，并通过控制器公开端口派发规则时机。
 
+## “永劫”在武将牌左上角公开文本中的稳定条目ID；永劫是角色级状态，每名角色只保留一个条目，不按技能拆分。
+const ETERNAL_CORNER_ENTRY_ID: String = "eternal"
+
+## “永劫”条目的排序值；与“酩酊”“追歼”同为50，保证状态类提示排在“逐风”“安可”等数值类提示之前。
+const ETERNAL_CORNER_TEXT_ORDER: int = 50
+
+## “永劫”条目固定显示文本；与技能名保持一致，不附加轮回数或具体技能名。
+const ETERNAL_CORNER_TEXT: String = "永劫"
+
 ## 当前绑定的对局控制器；服务只调用稳定规则端口，不直接持有界面节点或技能运行时实例。
 var _host: Object
 
@@ -10,6 +19,29 @@ var _host: Object
 ## 绑定当前对局控制器；每局创建新状态后重新配置，旧局状态不会泄漏到新局。
 func configure(match_host: Object) -> void:
 	_host = match_host
+
+
+## 按当前权威状态刷新角色武将牌左上角的“永劫”提示；任一轮回技处于永劫即显示，全部退出后移除。
+## 与“酩酊”“追歼”共用同一套条目端口，因此多个提示会由控制器按排序值合并成竖排文本。
+func _refresh_eternal_corner_text(player_id: int) -> void:
+	if _host == null or not _host.has_method("set_character_corner_text_entry") or not _host.has_method("remove_character_corner_text_entry"):
+		return
+	# 技能持有者；角色对象失效时不改写公开文本，避免制造孤立条目。
+	var player: PlayerState = _get_player(player_id)
+	if player == null:
+		return
+	# 是否存在处于永劫的轮回技；只要有一个技能锁定在永劫，该角色就显示同一个提示。
+	var has_eternal_skill: bool = false
+	for skill_state_variant: Variant in player.reincarnation_skills.values():
+		# 当前技能轮回状态；只读取永劫布尔值，不改写任何轮回进度。
+		var skill_state: Dictionary = skill_state_variant as Dictionary
+		if bool(skill_state.get("eternal", false)):
+			has_eternal_skill = true
+			break
+	if has_eternal_skill:
+		_host.call("set_character_corner_text_entry", player_id, ETERNAL_CORNER_ENTRY_ID, ETERNAL_CORNER_TEXT, ETERNAL_CORNER_TEXT_ORDER)
+	else:
+		_host.call("remove_character_corner_text_entry", player_id, ETERNAL_CORNER_ENTRY_ID)
 
 
 ## 为一个声明为轮回技的技能建立公开权威状态；重复注册只同步静态配置，不覆盖已有进度。
@@ -55,6 +87,8 @@ func clear_skill_state(player_id: int, skill_id: String) -> bool:
 	if player == null or not player.reincarnation_skills.has(skill_id):
 		return false
 	player.reincarnation_skills.erase(skill_id)
+	# 被卸载的技能可能正处于永劫；公开文本必须跟随权威状态一并清理。
+	_refresh_eternal_corner_text(player_id)
 	_notify_state_changed()
 	return true
 
@@ -178,6 +212,8 @@ func reset_skill(player_id: int, skill_id: String, clear_eternal: bool = false, 
 		_emit_lifecycle("reincarnationSectionStart", player_id, skill_id, skill_state)
 		skill_state["section_started"] = true
 	_store_skill_state(player_id, skill_id, skill_state)
+	# 复位可能清除了永劫；武将牌左上角提示与该技能的权威状态保持同步。
+	_refresh_eternal_corner_text(player_id)
 	_notify_state_changed()
 	return true
 
@@ -193,6 +229,8 @@ func enter_eternal_state(player_id: int, skill_id: String, per_turn_limit: int =
 	skill_state["eternal_turn_number"] = _get_turn_number()
 	skill_state["eternal_uses_this_turn"] = 0
 	_store_skill_state(player_id, skill_id, skill_state)
+	# 进入永劫后立即在武将牌左上角显示“永劫”提示。
+	_refresh_eternal_corner_text(player_id)
 	_notify_state_changed()
 	return true
 
@@ -208,6 +246,8 @@ func exit_eternal_state(player_id: int, skill_id: String) -> bool:
 	skill_state["eternal_turn_number"] = -1
 	skill_state["eternal_uses_this_turn"] = 0
 	_store_skill_state(player_id, skill_id, skill_state)
+	# 退出永劫后按剩余永劫技能重算提示；其他技能仍在永劫时提示继续保持。
+	_refresh_eternal_corner_text(player_id)
 	_notify_state_changed()
 	return true
 
