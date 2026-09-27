@@ -160,6 +160,22 @@ func _test_selection_panel_renders_hidden_candidates_and_lineup() -> bool:
 	if self_picked_view == null or opponent_picked_view == null or self_picked_view.is_interactable or opponent_picked_view.is_interactable or str((self_picked_view.get_node("CenterStatusMarker") as Label).text) != "我方选择" or str((opponent_picked_view.get_node("CenterStatusMarker") as Label).text) != "对方选择":
 		main_instance.queue_free()
 		return _fail("picked_candidate_markers")
+	# 未轮到本地抓将时的共享界面；双方使用同一个候选池，面板必须常驻可见，只有尚未被选走的槽位改为不可点击。
+	selection_panel.bind_snapshot({
+		"selection_kind":"wheel_duel",
+		"phase":WheelDuelSelectionService.PHASE_DRAFT,
+		"can_select":false,
+		"local_identity":"blue",
+		"pool_slots":pool_slots,
+		"remaining_picks_in_batch":1,
+	})
+	await get_tree().process_frame
+	var waiting_views: Dictionary = selection_panel.get("_candidate_views") as Dictionary
+	# 仍未归属任何一方的公共槽；未轮到时它保留完整牌面但不得接受点击，避免提交必然被规则层拒绝。
+	var waiting_open_view: PlayerTargetView = waiting_views.get("slot:2") as PlayerTargetView
+	if not selection_panel.visible or waiting_open_view == null or waiting_open_view.is_interactable or (selection_panel.get("_confirm_button") as Button).visible:
+		main_instance.queue_free()
+		return _fail("draft_shared_panel_waiting")
 	var drafted_ids: Array[String] = []
 	for index: int in range(5):
 		drafted_ids.append(str(available_ids[index]))
@@ -177,6 +193,27 @@ func _test_selection_panel_renders_hidden_candidates_and_lineup() -> bool:
 	if selected_lineup != drafted_ids.slice(0, 3):
 		main_instance.queue_free()
 		return _fail("lineup_click_order")
+	# 退出对局清理前置；恢复一份带归属标记的抓将快照，让“我方选择”“对方选择”文本真实存在于候选牌上。
+	selection_panel.bind_snapshot({
+		"selection_kind":"wheel_duel",
+		"phase":WheelDuelSelectionService.PHASE_DRAFT,
+		"can_select":true,
+		"local_identity":"blue",
+		"pool_slots":pool_slots,
+		"remaining_picks_in_batch":1,
+	})
+	await get_tree().process_frame
+	# 退出对局后的界面清理；主菜单可见时必须关闭选将遮罩并释放候选牌，否则车轮战标记文本会留在主菜单之上。
+	var main_menu_node: Node = main_instance.get("main_menu") as Node
+	if main_menu_node == null or not selection_panel.visible:
+		main_instance.queue_free()
+		return _fail("main_menu_reference")
+	main_menu_node.set("visible", true)
+	main_instance.call("_sync_match_menu_visibility")
+	await get_tree().process_frame
+	if selection_panel.visible or not (selection_panel.get("_candidate_views") as Dictionary).is_empty() or not (selection_panel.get("_snapshot") as Dictionary).is_empty():
+		main_instance.queue_free()
+		return _fail("selection_panel_cleared_on_return")
 	main_instance.queue_free()
 	await get_tree().process_frame
 	return true

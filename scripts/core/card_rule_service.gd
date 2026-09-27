@@ -294,6 +294,16 @@ func _get_entity_card_rule_overrides(card: CardInstance) -> Dictionary:
 	return result
 
 
+## 构建多材料虚拟牌的规则覆写；材料聚合颜色会覆盖调用方同名字段。
+## 同花色材料视为该花色，同色不同花色材料保留颜色但无花色，异色材料无色；
+## 因此两张黑色材料转化的【杀】无论黑桃还是梅花组合都会以 black 进入目标校验与预览。
+func build_material_rule_overrides(material_cards: Array[CardInstance], base_overrides: Dictionary = {}) -> Dictionary:
+	# 本次独立规则覆写；深复制避免向调用方字典或技能常量写回材料状态。
+	var result: Dictionary = base_overrides.duplicate(true)
+	result["card_color"] = str(VirtualCard.resolve_material_aggregate(material_cards).get("color", "none"))
+	return result
+
+
 ## 检查单个目标是否合法；卡牌专属组合规则只验证可在当前信息下确定的部分。
 func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int, all_target_ids: Array[int], rule_overrides: Dictionary = {}) -> String:
 	# 目标玩家状态；不存在或死亡的角色不是合法目标。

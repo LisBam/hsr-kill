@@ -72,7 +72,7 @@ func validate_equipment_response_materials(match_host: Object, player_id: int, e
 	return ""
 
 
-## 消耗两张丈八材料并返回一张无花色、无点数、无颜色的虚拟【杀】。
+## 消耗两张丈八材料并返回按材料聚合花色、无点数的虚拟【杀】。
 func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int], _response_context: Dictionary = {}) -> CardInstance:
 	if not response_patterns.has("sha"):
 		return null
@@ -91,16 +91,23 @@ func get_play_phase_action_types() -> Array[String]:
 
 
 ## 至少有2张普通手牌且存在合法【杀】目标时允许点击丈八蛇矛。
+## 每对材料按自身聚合颜色枚举目标，因此两张黑色手牌不能指向拥有【琥珀】的角色。
 func is_play_phase_action_available(match_host: Object, owner_id: int, equipment_card: CardInstance) -> bool:
 	# 装备持有者；木牛“粮”不计入两张材料。
 	var owner: PlayerState = match_host.state.get_player(owner_id)
 	if owner == null or owner.hand.size() < 2:
 		return false
-	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
-		# 单目标数组；显式类型用于满足规则服务的 Array[int] 边界。
-		var target_ids: Array[int] = [target_id]
-		if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids).is_empty():
-			return true
+	for first_index: int in range(owner.hand.size() - 1):
+		for second_index: int in range(first_index + 1, owner.hand.size()):
+			# 当前两张材料；聚合颜色决定本次虚拟【杀】能指定哪些来牌受限角色。
+			var material_cards: Array[CardInstance] = [owner.hand[first_index], owner.hand[second_index]]
+			# 当前组合规则覆写；同花色视为该花色，同色不同花色保留颜色，异色无色。
+			var rule_overrides: Dictionary = match_host.card_rules.build_material_rule_overrides(material_cards)
+			for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha", rule_overrides):
+				# 单目标数组；显式类型用于满足规则服务的 Array[int] 边界。
+				var target_ids: Array[int] = [target_id]
+				if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids, rule_overrides).is_empty():
+					return true
 	return false
 
 
@@ -114,7 +121,11 @@ func append_play_phase_actions(match_host: Object, owner_id: int, equipment_card
 		for second_index: int in range(first_index + 1, owner.hand.size()):
 			# 当前两张材料 UID；枚举全部不同组合，使 AI 能保留桃、闪等高价值牌。
 			var material_card_uids: Array[int] = [owner.hand[first_index].uid, owner.hand[second_index].uid]
-			for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+			# 当前组合的两张材料实体；聚合颜色只影响本次组合的合法目标与最终复核。
+			var material_cards: Array[CardInstance] = [owner.hand[first_index], owner.hand[second_index]]
+			# 当前组合规则覆写；黑色组合不能指向拥有【琥珀】的角色。
+			var rule_overrides: Dictionary = match_host.card_rules.build_material_rule_overrides(material_cards)
+			for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha", rule_overrides):
 				# 单目标虚拟【杀】；不应用方天画戟最后手牌修正。
 				var target_ids: Array[int] = [target_id]
 				# AI 动作；card_uid 指向丈八蛇矛实体，payload 保存两张材料。
@@ -142,10 +153,18 @@ func score_ai_play_phase_action(authoritative_snapshot: Dictionary, action: Dict
 
 
 ## 构造丈八蛇矛实际生成的普通【杀】代理动作；疾雨、星火等使用【杀】联动会由基础AI统一计入。
-func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
 	# 发动者ID；自定义装备动作与虚拟【杀】必须保持同一使用者。
 	var actor_id: int = int(action.get("actor_id", -1))
-	return {"action_type":"use_card", "actor_id":actor_id, "card_definition_id":"sha", "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+	# 两张材料原始花色；用于按 AI 私有快照推导本次虚拟【杀】聚合颜色。
+	var material_suits: Array[String] = []
+	for material_uid_variant: Variant in (action.get("payload", {}) as Dictionary).get("material_card_uids", []) as Array:
+		# 当前材料快照；评估器支持手牌与木牛“粮”材料。
+		var material_card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, actor_id, int(material_uid_variant))
+		material_suits.append(str(material_card.get("suit", "none")))
+	# 本次虚拟【杀】聚合颜色；黑色组合让通用评估器按黑色【杀】预判【琥珀】与颜色型防具。
+	var card_color: String = str(VirtualCard.resolve_suit_aggregate(material_suits).get("color", "none"))
+	return {"action_type":"use_card", "actor_id":actor_id, "card_definition_id":"sha", "card_color":card_color, "target_ids":(action.get("target_ids", []) as Array).duplicate()}
 
 
 ## 校验丈八主动使用：装备、两张材料、阶段次数、攻击范围和目标必须全部合法。
@@ -160,7 +179,11 @@ func validate_play_phase_action(match_host: Object, action: PlayerAction) -> Str
 	var material_error: String = validate_equipment_response_materials(match_host, action.actor_id, action.card_uid, material_card_uids)
 	if not material_error.is_empty():
 		return material_error
-	return match_host.card_rules.validate_virtual_use(action.actor_id, "sha", action.target_ids)
+	# 材料实体；两张手牌的花色决定本次虚拟【杀】的聚合颜色与来牌目标限制。
+	var material_cards: Array[CardInstance] = _get_hand_material_cards(match_host, action.actor_id, material_card_uids)
+	if material_cards.size() != material_card_uids.size():
+		return "丈八蛇矛的材料必须是当前仍在手牌区的实体牌。"
+	return match_host.card_rules.validate_virtual_use(action.actor_id, "sha", action.target_ids, match_host.card_rules.build_material_rule_overrides(material_cards))
 
 
 ## 执行丈八虚拟【杀】；逻辑代理进入处理区，两张材料在整张牌结算后弃置。
@@ -202,16 +225,39 @@ func get_play_phase_action_preview(match_host: Object, owner_id: int, equipment_
 	if not material_error.is_empty():
 		result["validation_error"] = material_error
 		return result
+	# 材料实体；预览必须与提交读取同一组聚合颜色，否则界面会显示提交必定失败的琥珀目标。
+	var material_cards: Array[CardInstance] = _get_hand_material_cards(match_host, owner_id, material_card_uids)
+	if material_cards.size() != material_card_uids.size():
+		result["validation_error"] = "丈八蛇矛的材料必须是当前仍在手牌区的实体牌。"
+		return result
+	# 当前组合规则覆写；两张材料聚合颜色决定本次虚拟【杀】的来牌目标限制。
+	var rule_overrides: Dictionary = match_host.card_rules.build_material_rule_overrides(material_cards)
 	# 当前完整目标校验；空字符串表示可提交。
-	var validation_error: String = match_host.card_rules.validate_virtual_use(owner_id, "sha", selected_target_ids)
+	var validation_error: String = match_host.card_rules.validate_virtual_use(owner_id, "sha", selected_target_ids, rule_overrides)
 	result["validation_error"] = validation_error
 	result["can_submit"] = validation_error.is_empty()
 	# 全部合法单目标候选；允许玩家直接切换目标。
 	var legal_target_ids: Array[int] = []
-	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha"):
+	for target_id: int in match_host.card_rules.list_legal_virtual_targets(owner_id, "sha", rule_overrides):
 		# 单目标数组；显式类型用于满足规则服务的 Array[int] 边界。
 		var target_ids: Array[int] = [target_id]
-		if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids).is_empty():
+		if match_host.card_rules.validate_virtual_use(owner_id, "sha", target_ids, rule_overrides).is_empty():
 			legal_target_ids.append(target_id)
 	result["legal_target_ids"] = legal_target_ids
+	return result
+
+
+## 按 UID 返回仍位于发动者普通手牌区的材料实体；缺失的 UID 会被跳过，调用方按数量差判断不合法。
+func _get_hand_material_cards(match_host: Object, player_id: int, material_card_uids: Array[int]) -> Array[CardInstance]:
+	# 材料实体结果；顺序与选择顺序一致，用于稳定聚合花色。
+	var result: Array[CardInstance] = []
+	# 发动者状态；不存在时无法提供任何材料。
+	var player: PlayerState = match_host.state.get_player(player_id)
+	if player == null:
+		return result
+	for material_card_uid: int in material_card_uids:
+		# 当前手牌实体；只承认仍在普通手牌区的材料，木牛“粮”不计入丈八费用。
+		var material_card: CardInstance = player.find_hand_card(material_card_uid)
+		if material_card != null:
+			result.append(material_card)
 	return result

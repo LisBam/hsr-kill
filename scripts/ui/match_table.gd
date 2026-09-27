@@ -1577,7 +1577,9 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		# 对局结束会中断尚未产生最终移牌的响应树；中央牌面改为正常停留淡出，避免终局后永久残留。
 		card_use_animation_layer.finish_pending_claimed_presentations()
 	_public_card_choice_display = (_snapshot.get("public_card_choice_display", {}) as Dictionary).duplicate()
-	if str(_snapshot.get("current_phase", "")) != "character_selection":
+	# 选将面板只在真正离开选将阶段时关闭；车轮战抓将阶段双方共享候选池，必须常驻。
+	# 若把车轮战阶段一并关闭，每次快照刷新都会清空并重建全部候选牌，界面闪烁且悬停状态被反复重置。
+	if str(_snapshot.get("current_phase", "")) not in ["character_selection", "wheel_duel_selection"]:
 		character_selection_panel.close()
 	# 当前运行时请求；用于清理已经完成或中断的旧内联/窗口状态，同时保留同步创建的新请求。
 	var runtime_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
@@ -3384,6 +3386,8 @@ func _on_main_menu_requested() -> void:
 		match_controller.network_gateway.leave_lan("")
 		match_controller.clear_remote_network_state()
 	card_selection_panel.close()
+	# 选将面板必须与选牌面板一同关闭：车轮战抓将中的候选牌带有“我方选择”“对方选择”中央标记，只隐藏不清理会把这些文本留在主菜单之上。
+	character_selection_panel.close()
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()
 	_modal_choice_request_id = -1
@@ -3403,6 +3407,10 @@ func _sync_match_menu_visibility() -> void:
 	# 主菜单可见是所有返回入口的最终界面边界；即使未来入口漏掉主动清理，也不能让终局模态继续覆盖主菜单。
 	if main_menu_visible:
 		_hide_game_settlement_panel_for_main_menu()
+		# 选将遮罩同样属于“覆盖主菜单”的局内浮层：任何返回入口漏掉主动关闭时，这里也必须收起它。
+		# 车轮战抓将候选牌携带“我方选择”“对方选择”文本，只隐藏遮罩不清理候选会把这些文本永久留在屏幕上。
+		if character_selection_panel != null and is_instance_valid(character_selection_panel):
+			character_selection_panel.close()
 	if match_menu == null or not is_instance_valid(match_menu):
 		return
 	if main_menu_visible and match_menu.is_menu_open():

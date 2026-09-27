@@ -1,6 +1,6 @@
 extends SkillDefinition
 
-## 【山倾】技能源码。持有者每回合可将两张自有牌组成无花色【杀】，并按材料花色集合获得四项独立效果。
+## 【山倾】技能源码。持有者每回合可将两张自有牌组成按材料花色与颜色聚合的【杀】，并按材料花色集合获得四项独立效果。
 
 ## 山倾生成的虚拟牌定义 ID；固定使用普通【杀】，伤害属性为 normal。
 const SLASH_DEFINITION_ID: String = "sha"
@@ -146,8 +146,8 @@ func _execute_shanqing(material_uids: Array[int], target_ids: Array[int]) -> boo
 		return false
 	# 去重后的花色集合；同花色多张材料只产生一次对应效果。
 	var suits: Array[String] = _get_unique_suits(material_cards)
-	# 虚拟牌规则覆写；黑桃材料使目标阶段和最终提交都忽略距离，其他规则保持普通【杀】。
-	var rule_overrides: Dictionary = _build_rule_overrides(suits)
+	# 虚拟牌规则覆写；黑桃材料使目标阶段和最终提交都忽略距离，颜色按两张材料聚合。
+	var rule_overrides: Dictionary = _build_rule_overrides(material_cards, suits)
 	if str(host.card_rules.validate_virtual_use(owner_player_id, SLASH_DEFINITION_ID, target_ids, rule_overrides)) != "":
 		return false
 	# 逻辑牌扩展存储；后续 useCard、目标与 damageSource 时机只读取该纯数据快照。
@@ -239,12 +239,14 @@ func _get_unique_suits(material_cards: Array[CardInstance]) -> Array[String]:
 	return result
 
 
-## 构造山倾虚拟【杀】的规则覆写；黑桃存在时开启无距离限制，多材料牌颜色固定为 none。
-func _build_rule_overrides(suits: Array[String]) -> Dictionary:
-	return {"ignore_distance_limit":suits.has("spade"), "card_color":"none"}
+## 构造山倾虚拟【杀】的规则覆写；黑桃存在时开启无距离限制，颜色按两张材料聚合。
+## 两张同花色材料视为该花色，同色不同花色材料视为该颜色无花色，异色材料视为无色；
+## 因此两张黑色牌（黑桃或梅花任意组合）转化的【杀】都会以 black 走通用来牌目标过滤。
+func _build_rule_overrides(material_cards: Array[CardInstance], suits: Array[String]) -> Dictionary:
+	return host.card_rules.build_material_rule_overrides(material_cards, {"ignore_distance_limit":suits.has("spade")})
 
 
-## 返回指定两张材料能够合法指定的全部【杀】目标；黑桃距离覆写在目标枚举时立即参与计算。
+## 返回指定两张材料能够合法指定的全部【杀】目标；黑桃距离覆写与聚合颜色在目标枚举时立即参与计算。
 func _list_legal_targets(material_uids: Array[int]) -> Array[int]:
 	# 当前两张材料；全部存在后才能读取真实花色构建规则覆写。
 	var material_cards: Array[CardInstance] = _get_material_cards(material_uids)
@@ -252,7 +254,7 @@ func _list_legal_targets(material_uids: Array[int]) -> Array[int]:
 		return []
 	# 去重花色集合；用于黑桃无距离目标枚举。
 	var suits: Array[String] = _get_unique_suits(material_cards)
-	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID, _build_rule_overrides(suits)) as Array[int]
+	return host.card_rules.list_legal_virtual_targets(owner_player_id, SLASH_DEFINITION_ID, _build_rule_overrides(material_cards, suits)) as Array[int]
 
 
 ## 枚举山倾复合选择窗口的合法材料组合、目标并集和材料组合专属目标映射。
@@ -354,10 +356,14 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 
 
 ## 构造山倾实际生成的普通【杀】代理动作；基础 AI 会继续应用卡牌本体和持有者其他技能的完整评分链。
-func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
+func build_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> Dictionary:
 	# 动作负载；标准主动动作把目标同时保存于顶层与 payload。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
-	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":SLASH_DEFINITION_ID, "card_color":"none", "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
+	# 两张材料 UID；用于按 AI 私有权威快照推导本次虚拟【杀】的聚合颜色。
+	var material_uids: Array[int] = _int_values(payload.get("material_card_uids", []) as Array)
+	# 本次虚拟【杀】聚合颜色；黑色材料转化让通用评估器按黑色【杀】预判【琥珀】与颜色型防具。
+	var card_color: String = str(VirtualCard.resolve_suit_aggregate(_get_snapshot_material_raw_suits(authoritative_snapshot, material_uids, evaluator)).get("color", "none"))
+	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":SLASH_DEFINITION_ID, "card_color":card_color, "target_ids":(action.get("target_ids", payload.get("target_ids", [])) as Array).duplicate()}
 
 
 ## 梅花弃牌选择优先目标区域内价值最高的牌；其他山倾步骤由直接 AI 动作或唯一合法目标处理。
@@ -394,6 +400,17 @@ func _get_snapshot_material_suits(authoritative_snapshot: Dictionary, material_u
 		if result.has(suit):
 			ordered_result.append(suit)
 	return ordered_result
+
+
+## 从 AI 权威快照读取两张材料的原始花色序列；保持材料顺序并保留无效花色，用于颜色聚合。
+func _get_snapshot_material_raw_suits(authoritative_snapshot: Dictionary, material_uids: Array[int], evaluator: Object) -> Array[String]:
+	# 原始花色结果；顺序与材料选择一致，无效花色交由聚合函数按无色处理。
+	var result: Array[String] = []
+	for material_uid: int in material_uids:
+		# 当前自有牌快照；评估器支持手牌、木牛“粮”与装备材料。
+		var card: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, material_uid)
+		result.append(str(card.get("suit", "none")))
+	return result
 
 
 ## 将弱类型数组转换为稳定整数数组；网络、AI 与本地选择统一使用相同转换规则。

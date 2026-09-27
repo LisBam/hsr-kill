@@ -378,7 +378,11 @@ func bind_snapshot(snapshot: Dictionary) -> void:
 		_selected_seat_number = int(snapshot.get("preview_seat_number", _selected_seat_number))
 		_selected_identity = str(snapshot.get("preview_identity", _selected_identity))
 	# 已确认、尚未轮到本地或仅等待其他玩家的阶段不显示空选将框，避免首任领袖确认后再次弹出无候选遮罩。
-	visible = bool(_snapshot.get("can_select", false)) and not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
+	# 车轮战抓将阶段是唯一例外：双方共享同一个公共候选池界面，必须常驻，未轮到本地时只读观察对方抓将。
+	# 该阶段“轮到谁”改由候选逐槽的可点击性表达，不再用整个面板的显隐表达，避免另一方界面凭空消失。
+	# 本地是否处于车轮战抓将阶段；该阶段面板常驻，未轮到时仍显示同一候选池与对方选择标记。
+	var is_wheel_duel_draft: bool = str(_snapshot.get("selection_kind", "initial")) == "wheel_duel" and str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_DRAFT
+	visible = (bool(_snapshot.get("can_select", false)) or is_wheel_duel_draft) and not str(_snapshot.get("phase", "")).is_empty() and str(_snapshot.get("phase", "")) != CharacterSelectionService.PHASE_COMPLETE
 	if not visible:
 		return
 	if str(_snapshot.get("selection_kind", "initial")) == "wheel_duel" and str(_snapshot.get("phase", "")) == WheelDuelSelectionService.PHASE_DRAFT:
@@ -758,8 +762,12 @@ func _render_wheel_duel_candidates() -> void:
 			"wooden_ox_storage_count":0,
 		}
 		character_view.configure_snapshot(candidate_snapshot, character_definition, false, faction_definition)
-		if selection_owner.is_empty():
+		if selection_owner.is_empty() and bool(_snapshot.get("can_select", false)):
 			character_view.pressed.connect(_select_candidate.bind(token))
+		elif selection_owner.is_empty():
+			# 车轮战抓将阶段未轮到本地时双方仍共享同一候选池：候选保留完整牌面但不接受点击。
+			# 未禁用会把必然被规则层“当前尚未轮到该玩家抓将”拒绝的空操作暴露给玩家。
+			character_view.set_interactable(false)
 		else:
 			character_view.set_interactable(false)
 			# 我方使用深绿色、对方使用深红色；统一黑色描边由武将牌中央状态接口提供。
