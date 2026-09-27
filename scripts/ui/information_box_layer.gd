@@ -860,7 +860,7 @@ func _get_hover_visible_text_character_count() -> int:
 ## 按当前信息结构重建悬停说明；武将资料将每个技能拆分为金色技能名和普通说明，其他来源继续使用单段正文。
 func _render_hover_description() -> void:
 	_clear_hover_description_sections()
-	_hover_description_label.configure_description(str(_hover_information.get("description", "暂无说明。")), bool(_hover_information.get("reincarnation", false)), int(_hover_information.get("reincarnation_section_index", 0)), int(_hover_information.get("reincarnation_round_count", 0)))
+	_hover_description_label.configure_description(str(_hover_information.get("description", "暂无说明。")), bool(_hover_information.get("reincarnation", false)), int(_hover_information.get("reincarnation_section_index", 0)))
 	# 当前结构化说明分段；没有该可选字段时保持卡牌、装备与普通技能原有单标签展示。
 	var description_sections: Array = _hover_information.get("description_sections", []) as Array
 	_hover_description_label.visible = description_sections.is_empty()
@@ -885,7 +885,7 @@ func _render_hover_description() -> void:
 		var section_description_label: SkillDescriptionView = SkillDescriptionView.new()
 		section_description_label.name = "Description"
 		section_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		section_description_label.configure_description(str(section.get("description", "暂无说明。")), bool(section.get("reincarnation", false)), int(section.get("reincarnation_section_index", 0)), int(section.get("reincarnation_round_count", 0)))
+		section_description_label.configure_description(str(section.get("description", "暂无说明。")), bool(section.get("reincarnation", false)), int(section.get("reincarnation_section_index", 0)))
 		section_description_label.add_theme_font_size_override("normal_font_size", 14)
 		section_container.add_child(section_description_label)
 		_hover_skill_description_labels.append(section_description_label)
@@ -1014,7 +1014,7 @@ func _render_character_skills() -> void:
 		var skill_description_label: SkillDescriptionView = SkillDescriptionView.new()
 		# 当前轮回状态；右键详情使用玩家公开快照，局外静态资料自然回退①。
 		var reincarnation_state: Dictionary = (_character_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-		skill_description_label.configure_description(skill_description, bool(skill_definition.get("reincarnation", false)), int(reincarnation_state.get("section_index", 0)), maxi(int(reincarnation_state.get("round_count", 1)), 1) if bool(skill_definition.get("reincarnation", false)) else 0)
+		skill_description_label.configure_description(skill_description, bool(skill_definition.get("reincarnation", false)), int(reincarnation_state.get("section_index", 0)))
 		skill_description_label.add_theme_font_size_override("normal_font_size", 14)
 		skill_entry.add_child(skill_description_label)
 		# 已释放的限定技与觉醒技；技能名与技能描述整块降低不透明度，被复原后随权威快照自动恢复完全不透明。
@@ -1039,7 +1039,7 @@ func _get_character_skill_information_title(skill_id: String, skill_name: String
 		var reincarnation_state: Dictionary = (_character_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
 		# 当前轮回数；下限1保证未登记的轮回技仍显示稳定文本。
 		var reincarnation_round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
-		title_suffix_parts.append("本技能已轮回%d次" % reincarnation_round_count)
+		title_suffix_parts.append("轮回%d" % reincarnation_round_count)
 	# 当前详情快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，详情组件不自行计算或扣减次数。
 	var remaining_uses_by_skill: Dictionary = _character_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
 	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
