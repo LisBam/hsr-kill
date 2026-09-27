@@ -447,11 +447,13 @@ func _test_opportunity_card_hover() -> bool:
 	var choice_panel: OpportunityChoicePanel = preload("res://scenes/components/opportunity_choice_panel.tscn").instantiate() as OpportunityChoicePanel
 	# 布局测试独占弹窗；运行中的对局快照不能在悬停计时期间重建本用例正在比较的牌位。
 	add_child(choice_panel)
-	# 三张固定候选；本地0号是当前选择者，因此弹窗会创建三个真实卡牌与三个牌位。
+	# 三张固定候选；本地0号位于权威待提交集合中，因此弹窗会创建三个真实卡牌与三个牌位。
+	# 同时选择下不再存在单一当前选择者，快照形态与真实运行一致：current_chooser_id 固定为 -1、资格只由待提交集合给出。
 	var choice_snapshot: Dictionary = {
 		"active":true,
 		"stage":"choosing",
-		"current_chooser_id":0,
+		"current_chooser_id":-1,
+		"pending_chooser_ids":[0],
 		"chosen_player_ids":[],
 		"options_by_player":{0:[OpportunityCatalog.get_card("green_draw_two"), OpportunityCatalog.get_card("blue_skill_jiqiao"), OpportunityCatalog.get_card("red_refresh_opportunities")]},
 	}
@@ -569,9 +571,25 @@ func _test_private_choice_and_counterclockwise_order() -> bool:
 	var viewer_options_by_player: Dictionary = viewer_opportunity.get("options_by_player", {}) as Dictionary
 	if viewer_options_by_player.size() != 1 or not viewer_options_by_player.has("0") or viewer_opportunity.has("selected_cards_by_player"):
 		return _fail("private_options %s" % str(viewer_opportunity))
-	# 依次模拟当前选择者提交其第一张合法候选；最后一次提交后状态进入resolving，但效果尚未在延迟帧执行。
+	# 同时选择契约；进入choosing时全部参与者一次性开放，不存在等待前一名玩家的单一当前选择者。
+	if int(_controller.state.opportunity_state.get("current_chooser_id", 0)) != -1 or _controller.state.opportunity_state.get("pending_chooser_ids", []) != participant_ids:
+		return _fail("simultaneous_selection_open %s" % [str(_controller.state.opportunity_state)])
+	# 首名参与者先提交；其余三名必须留在同一choosing阶段的待提交集合中，串行游标不得被重新写回。
+	var first_chooser_id: int = int(participant_ids[0])
+	var first_chooser_options: Array = options_by_player.get(str(first_chooser_id), []) as Array
+	var first_choice_action: PlayerAction = PlayerAction.new("choose_opportunity", first_chooser_id)
+	first_choice_action.payload = {"card_id":str((first_chooser_options[0] as Dictionary).get("id", ""))} if not first_chooser_options.is_empty() else {}
+	if first_chooser_options.is_empty() or not _controller.submit_action(first_choice_action):
+		return _fail("simultaneous_first_submit player=%d" % first_chooser_id)
+	# 首名提交后仍可独立提交的其余参与者；列表按原逆时针顺序保留，仅移除已经提交者。
+	var remaining_pending_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or remaining_pending_ids != participant_ids.slice(1) or int(_controller.state.opportunity_state.get("current_chooser_id", 0)) != -1:
+		return _fail("simultaneous_pending_after_first %s" % [str(_controller.state.opportunity_state)])
+	# 其余参与者同样逐名提交其第一张合法候选；最后一次提交后状态进入resolving，但效果尚未在延迟帧执行。
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		var chooser_options: Array = (options_by_player.get(str(chooser_id), []) as Array)
 		# 统一机缘动作；离场角色也必须通过MatchController提交入口，而不是只在组件内部绕过动作状态校验。
 		var choice_action: PlayerAction = PlayerAction.new("choose_opportunity", chooser_id)
@@ -622,9 +640,11 @@ func _test_target_effect_resolution_flow() -> bool:
 		var participant_id: int = int(participant_id_variant)
 		options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(selected_card_ids.get(participant_id, "green_hand_limit_one"))), fallback_blue.duplicate(true), fallback_purple.duplicate(true)]
 	_controller.state.opportunity_state["options_by_player"] = options_by_player
-	# 按当前选择者顺序提交指定第一张机缘；效果必须继续等到最后一人提交后才开始。
+	# 所有参与者同时开放提交，这里提交各自指定的第一张机缘；效果必须继续等到最后一人提交后才开始。
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(selected_card_ids.get(chooser_id, ""))):
 			return _fail("target_flow_submit player=%d" % chooser_id)
 	for _wait_request_frame: int in range(12):
@@ -680,7 +700,9 @@ func _test_new_effect_resolution_flow() -> bool:
 		options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
 	_controller.state.opportunity_state["options_by_player"] = options_by_player
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(selected_card_ids.get(chooser_id, ""))):
 			return _fail("new_effect_submit_%d" % chooser_id)
 	for _wait_request_frame: int in range(12):
@@ -723,7 +745,9 @@ func _test_new_effect_resolution_flow() -> bool:
 		virtual_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(virtual_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
 	_controller.state.opportunity_state["options_by_player"] = virtual_options_by_player
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(virtual_selected_card_ids.get(chooser_id, ""))):
 			return _fail("virtual_aoe_submit_%d" % chooser_id)
 	for _wait_virtual_frame: int in range(40):
@@ -766,8 +790,10 @@ func _test_turn_over_opportunity_resolution_flow() -> bool:
 		target_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(target_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
 	_controller.state.opportunity_state["options_by_player"] = target_options_by_player
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		# 当前选择者稳定ID；按机缘系统公布的逆时针顺序提交第一张候选。
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 当前待提交角色稳定ID；按机缘系统公布的逆时针参与顺序提交第一张候选。
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(target_selected_card_ids.get(chooser_id, ""))):
 			return _fail("turn_over_target_submit_%d" % chooser_id)
 	for _wait_target_request_frame: int in range(12):
@@ -807,8 +833,10 @@ func _test_turn_over_opportunity_resolution_flow() -> bool:
 		all_options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(all_selected_card_ids.get(participant_id, "green_hand_limit_one"))), OpportunityCatalog.get_card("blue_draw_three"), OpportunityCatalog.get_card("purple_draw_five")]
 	_controller.state.opportunity_state["options_by_player"] = all_options_by_player
 	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
-		# 当前选择者稳定ID；提交后由解析器自动进入无目标翻面队列。
-		var chooser_id: int = int(_controller.state.opportunity_state.get("current_chooser_id", -1))
+		# 当前待提交角色稳定ID；提交后由解析器自动进入无目标翻面队列。
+		# 同时选择下的权威待提交集合；逐次取剩余名单首项即可覆盖全部参与者，空集合时交由下方提交失败分支报错。
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
 		if not _controller.opportunity_system.submit_choice(chooser_id, str(all_selected_card_ids.get(chooser_id, ""))):
 			return _fail("turn_over_all_submit_%d" % chooser_id)
 	for _wait_all_finish_frame: int in range(24):

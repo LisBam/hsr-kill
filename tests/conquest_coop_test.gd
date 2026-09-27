@@ -284,13 +284,24 @@ func _test_individual_match_flow() -> bool:
 	# 各自选择状态；投票标志必须为false，两名玩家仍共同参与但各持私有候选。
 	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing" or bool(_controller.state.opportunity_state.get("vote_mode", true)) or _controller.state.opportunity_state.get("participant_ids", []) != [0, 2]:
 		return _fail("individual_initial_opportunity")
+	# 本地AI在本帧已经用自己抽到的候选完成估值，因此先留存它的候选ID集合，再覆盖候选注入真人选择。
+	# 同时在线的两名参与者不存在先后解锁关系，AI不会等待真人先选，测试也不能再依赖“真人先提交”的时序窗口。
+	var ai_option_ids: Array[String] = []
+	for ai_option_variant: Variant in ((_controller.state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(2), []) as Array):
+		ai_option_ids.append(str((ai_option_variant as Dictionary).get("id", "")))
+	if ai_option_ids.size() != 3:
+		return _fail("individual_ai_options=%s" % [ai_option_ids])
 	if not await _submit_vote_and_wait([0, 2], "green_draw_two"):
 		return false
-	# 各自结果；真人固定选绿色摸两张，AI按估值在覆盖候选中选择紫色摸五张，两份历史互不相同。
+	# 各自结果；真人固定选绿色摸两张，AI在本人候选中独立估值得出一张，两份历史互不相同也不互相覆盖。
 	var individual_player_one: PlayerState = _controller.state.get_player(0)
 	var individual_player_two: PlayerState = _controller.state.get_player(2)
-	if individual_player_one.acquired_opportunity_ids != ["green_draw_two"] or individual_player_two.acquired_opportunity_ids != ["purple_draw_five"]:
-		return _fail("individual_choices one=%s two=%s" % [individual_player_one.acquired_opportunity_ids, individual_player_two.acquired_opportunity_ids])
+	if individual_player_one.acquired_opportunity_ids != ["green_draw_two"]:
+		return _fail("individual_human_choice one=%s" % [individual_player_one.acquired_opportunity_ids])
+	if individual_player_two.acquired_opportunity_ids.size() != 1 or not ai_option_ids.has(str(individual_player_two.acquired_opportunity_ids[0])):
+		return _fail("individual_ai_choice two=%s options=%s" % [individual_player_two.acquired_opportunity_ids, ai_option_ids])
+	if individual_player_one.acquired_opportunity_ids == individual_player_two.acquired_opportunity_ids:
+		return _fail("individual_choices_shared one=%s two=%s" % [individual_player_one.acquired_opportunity_ids, individual_player_two.acquired_opportunity_ids])
 	if _controller.state.current_player_id != 0:
 		return _fail("individual_first_turn")
 	_controller.queue_free()
@@ -299,7 +310,7 @@ func _test_individual_match_flow() -> bool:
 	return true
 
 
-## 把当前机缘候选固定为三张无目标摸牌卡并完成当前选择流程；投票模式分别提交两名并行参与者并校验公开结果，各自选择保持逐人处理。
+## 把当前机缘候选固定为三张无目标摸牌卡并完成当前选择流程；投票与各自选择都同时开放全部参与者，区别只在候选是否共享与结果是否公开票面。
 func _submit_vote_and_wait(participant_ids: Array[int], human_card_id: String) -> bool:
 	if _controller == null or _controller.state == null or str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
 		return _fail("vote_submit_not_choosing")

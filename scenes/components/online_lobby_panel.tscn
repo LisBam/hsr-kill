@@ -303,6 +303,24 @@ layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "按位置绑定身份"
 
+[node name="FixedSeatRow" type="HBoxContainer" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="OnlineLobbyFixedSeatLabel" type="Label" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/FixedSeatRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "固定座位"
+vertical_alignment = 1
+
+[node name="OnlineLobbyFixedSeatCheckBox" type="CheckBox" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox/FixedSeatRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(190, 38)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "固定座位"
+
 [node name="SettingsSpacer" type="Control" parent="OnlineLobbySettingsPanel/SettingsMargin/SettingsVBox"]
 layout_mode = 2
 size_flags_vertical = 3

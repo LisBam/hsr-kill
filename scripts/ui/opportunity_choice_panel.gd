@@ -82,7 +82,7 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 	var local_options: Array = options_by_player.get(str(local_player_id), options_by_player.get(local_player_id, [])) as Array
 	# 已完成选择角色；用于让本地玩家确认自己的选择已经提交并进入等待。
 	var chosen_player_ids: Array = opportunity_snapshot.get("chosen_player_ids", []) as Array
-	# 尚可提交的参与者；投票模式包含全部未投玩家，各自选择模式仅包含当前选择者。
+	# 尚可提交的参与者；所有模式都包含全部未提交参与者，本地资格只由该集合决定。
 	var pending_chooser_ids: Array = opportunity_snapshot.get("pending_chooser_ids", []) as Array
 	# 当前是否为投票选择模式；投票时全体玩家共享同一组候选，状态文字改用投票语义。
 	var vote_mode: bool = bool(opportunity_snapshot.get("vote_mode", false))
@@ -95,8 +95,8 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 		return
 	_render_signature = signature
 	_clear_cards()
-	# 本地玩家当前是否拥有提交资格；投票不依赖current_chooser_id，各自选择仍只开放当前角色。
-	var local_can_choose: bool = (pending_chooser_ids.has(local_player_id) if vote_mode else current_chooser_id == local_player_id) and not chosen_player_ids.has(local_player_id)
+	# 本地玩家当前是否拥有提交资格；所有参与者同时开放，因此只按权威待提交集合判定，不再依赖单一当前选择者。
+	var local_can_choose: bool = pending_chooser_ids.has(local_player_id) and not chosen_player_ids.has(local_player_id)
 	if local_can_choose and not local_options.is_empty():
 		_status_label.text = "机缘投票时间：请把票投给一张机缘卡" if vote_mode else "选择机缘时间：请选择一张机缘卡"
 		for option_variant: Variant in local_options:
@@ -115,9 +115,14 @@ func show_opportunity(opportunity_snapshot: Dictionary, local_player_id: int, pl
 		var pending_voter_count: int = pending_chooser_ids.size()
 		_status_label.text = "你已完成投票，等待其余%d名玩家……" % pending_voter_count if chosen_player_ids.has(local_player_id) else "等待%d名玩家完成投票……" % pending_voter_count
 		return
-	# 当前等待角色名；缺失时回退“其他角色”，不暴露身份或私有候选。
-	var chooser_name: String = str(player_names.get(current_chooser_id, "其他角色"))
-	_status_label.text = "等待%s选择机缘……" % chooser_name
+	# 剩余待选人数；各自选择与投票一样同时开放提交，因此默认只显示进度，仅剩一名待选者时才点名等待角色。
+	var pending_chooser_count: int = pending_chooser_ids.size()
+	if pending_chooser_count == 1 and not chosen_player_ids.has(local_player_id):
+		# 当前等待角色名；缺失时回退“其他角色”，不暴露身份或私有候选。
+		var chooser_name: String = str(player_names.get(int(pending_chooser_ids[0]), "其他角色"))
+		_status_label.text = "等待%s选择机缘……" % chooser_name
+		return
+	_status_label.text = "你已完成选择，等待其余%d名玩家……" % pending_chooser_count if chosen_player_ids.has(local_player_id) else "等待%d名玩家完成选择……" % pending_chooser_count
 
 
 ## 展示全部玩家已经公开的投票与最终当选机缘；只消费revealing阶段快照，不读取选择阶段的权威私有映射。

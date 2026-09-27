@@ -839,12 +839,12 @@ func _on_main_menu_start_requested(player_count: int) -> void:
 		main_menu.confirm_game_started()
 
 
-## 接收连接入口创建房间意图；网关保存形象、密码、人数、模式与自选身份初始配置，成功后进入独立联机大厅。
-func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool) -> void:
+## 接收连接入口创建房间意图；网关保存形象、密码、人数、模式、自选身份与固定座位初始配置，成功后进入独立联机大厅。
+func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool, fixed_seat_enabled: bool) -> void:
 	# 建房结果；Godot Error 只用于程序判断，玩家可见文本由网关统一返回。
 	# 使用主菜单当前下一局模式；斗地主入口建房时自动创建斗地房间。
 	var game_mode_id: String = GameSettings.normalize_match_mode(GameSettings.next_match_mode) if GameSettings != null else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
-	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, game_mode_id, custom_identity_enabled)
+	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, game_mode_id, custom_identity_enabled, fixed_seat_enabled)
 	if host_error != OK:
 		lan_lobby_panel.show_error("创建局域网房间失败，请检查端口是否被占用。")
 
@@ -916,9 +916,9 @@ func _on_lan_lobby_kick_requested(peer_id: int) -> void:
 		online_lobby_panel.show_error(kick_error)
 
 
-## 房主保存模式、人数、密码与自选身份设置；网关校验真人下限并广播完整公共快照。
-func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool) -> void:
-	var settings_error: String = match_controller.network_gateway.update_lan_lobby_settings(game_mode_id, player_count, room_password, custom_identity_enabled)
+## 房主保存模式、人数、密码、自选身份与固定座位设置；网关校验真人下限并广播完整公共快照。
+func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool) -> void:
+	var settings_error: String = match_controller.network_gateway.update_lan_lobby_settings(game_mode_id, player_count, room_password, custom_identity_enabled, fixed_seat_enabled)
 	if not settings_error.is_empty():
 		online_lobby_panel.show_error(settings_error)
 		return

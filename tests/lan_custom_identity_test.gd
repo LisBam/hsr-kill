@@ -2,7 +2,8 @@ extends Node
 
 ## 联机大厅自选身份与1v1车轮战空位回归测试。
 ## 覆盖：车轮战大厅固定两个位置且拒绝越界换位；自选身份的位置身份表与徽记显示；
-## 2v2“上蓝下红”大厅布局到一/四、二/三成队座次的映射；开局按位置身份表固定分配身份。
+## 2v2“上蓝下红”大厅布局到一/四、二/三成队座次的映射；
+## 固定座位开关开启时按位置绑定座次、关闭时座位随机打乱，且身份始终跟随大厅位置而不跟随物理座次。
 
 ## 正式主场景资源；测试复用完整节点树，覆盖网关、联机大厅与权威控制器的真实链路。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
@@ -172,12 +173,38 @@ func _check_gateway_authority(gateway: NetworkGateway) -> bool:
 		return _fail("conquest_custom_identity_not_normalized")
 	if not gateway.update_lan_lobby_settings("identity", 8, "", true).is_empty():
 		return _fail("identity_custom_identity_reenable")
-	# 模拟一名已登记的远端成员占据八号位；自选身份下开局映射必须按位置直接绑定规则座次。
+	# 模拟一名已登记的远端成员占据八号位；固定座位开启时开局映射必须按位置直接绑定规则座次。
 	gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+	if not gateway.update_lan_lobby_settings("identity", 8, "", true, true).is_empty() or not gateway.is_lan_fixed_seat_enabled():
+		return _fail("identity_fixed_seat_settings_error")
 	if not gateway.prepare_lan_match_assignments(8).is_empty():
-		return _fail("identity_prepare_error")
+		return _fail("identity_fixed_seat_prepare_error")
 	if gateway.get_local_lan_player_id() != 0 or gateway.get_peer_id_for_player(7) != 99:
-		return _fail("identity_seat_binding local=%d" % gateway.get_local_lan_player_id())
+		return _fail("identity_fixed_seat_binding local=%d" % gateway.get_local_lan_player_id())
+	if not bool(gateway.get_lan_lobby_snapshot().get("fixed_seat_enabled", false)):
+		return _fail("identity_fixed_seat_snapshot_missing")
+	gateway.cancel_prepared_lan_match()
+	# 固定座位关闭时座位改为开局随机：真人占用的规则座次集合保持不变，但位置到座次的映射必须出现非标准排列。
+	if not gateway.update_lan_lobby_settings("identity", 8, "", true, false).is_empty() or gateway.is_lan_fixed_seat_enabled():
+		return _fail("identity_random_seat_settings_error")
+	# 映射采样次数；两名真人时每次有50%概率保持标准映射，24次全部相同的概率低于千万分之一，可稳定判定洗牌生效。
+	var random_seat_samples: int = 24
+	# 是否观察到非标准映射；出现任意一次即证明座位确实被随机打乱而不是仍按大厅位置固定。
+	var observed_shuffled_seat: bool = false
+	for _sample_index: int in range(random_seat_samples):
+		if not gateway.prepare_lan_match_assignments(8).is_empty():
+			return _fail("identity_random_seat_prepare_error")
+		# 本样本中房主占用的规则座次；随机后不再固定为0。
+		var local_seat: int = gateway.get_local_lan_player_id()
+		# 本样本中远端成员占用的规则座次；房主与远端必须各占一个且不能重合。
+		var remote_seat: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
+		if local_seat == remote_seat or not [0, 7].has(local_seat) or not [0, 7].has(remote_seat):
+			return _fail("identity_random_seat_binding local=%d remote=%d" % [local_seat, remote_seat])
+		if local_seat != 0:
+			observed_shuffled_seat = true
+		gateway.cancel_prepared_lan_match()
+	if not observed_shuffled_seat:
+		return _fail("identity_random_seat_never_shuffled")
 	gateway.cancel_prepared_lan_match()
 	# 2v2 自选身份映射；大厅三号位（下排红方首位）必须绑定规则二号位。
 	if not gateway.update_lan_lobby_settings("team2v2", 4, "", true).is_empty():
@@ -221,6 +248,25 @@ func _check_match_identity_assignment(gateway: NetworkGateway) -> bool:
 		return _fail("team2v2_match_start_failed")
 	if _identities_by_player_id(match_controller) != EXPECTED_TEAM2V2_MATCH:
 		return _fail("team2v2_match_identities=%s" % str(_identities_by_player_id(match_controller)))
+	# 固定座位关闭的随机座位开局；身份必须继续跟随大厅位置而不是跟随物理座次。
+	if not gateway.update_lan_lobby_settings("identity", 8, "", true, false).is_empty():
+		return _fail("slot_identity_settings_error")
+	gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+	if not gateway.prepare_lan_match_assignments(8).is_empty():
+		return _fail("slot_identity_prepare_error")
+	# 本局房主的稳定玩家ID；随机座位下它不再是固定的0，身份断言必须按该ID读取而不是按0读取。
+	var host_player_id: int = gateway.get_local_lan_player_id()
+	if not match_controller.start_match(8, 20260730, "identity"):
+		return _fail("slot_identity_match_start_failed")
+	# 按稳定玩家ID索引的身份表；房主占大厅位置0，无论被随机到哪个座次都必须拿到该位置的领袖身份。
+	var identities_by_seat: Array[String] = _identities_by_player_id(match_controller)
+	if host_player_id < 0 or host_player_id >= identities_by_seat.size() or identities_by_seat[host_player_id] != "leader":
+		return _fail("slot_identity_host_not_leader host=%d identities=%s" % [host_player_id, str(identities_by_seat)])
+	# 远端成员占大厅位置7，其座次上的身份必须是位置7对应的第八位身份，证明身份跟随位置而不跟随座位。
+	var remote_player_id: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
+	if remote_player_id < 0 or remote_player_id >= identities_by_seat.size() or identities_by_seat[remote_player_id] != EXPECTED_IDENTITY_8P[7]:
+		return _fail("slot_identity_remote_mismatch remote=%d identities=%s" % [remote_player_id, str(identities_by_seat)])
+	gateway.cancel_prepared_lan_match()
 	return true
 
 
