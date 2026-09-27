@@ -78,6 +78,9 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 单次信息框宽度搜索的最大迭代数；32次足以覆盖默认240至520像素范围，并防止异常检查器参数导致无界布局计算。
 const MAX_HOVER_WIDTH_SEARCH_ITERATIONS: int = 32
 
+## 已释放的限定技与觉醒技在武将悬停资料与右键武将详情中的整块不透明度；默认0.8使技能名与技能描述同时变淡且文字仍可辨认。
+const RELEASED_SKILL_CONTENT_ALPHA: float = 0.8
+
 ## 当前目标旁信息框对应的来源节点实例 ID；-1表示没有活动来源，旧来源离开时不能关闭新来源的信息。
 var _hover_source_id: int = -1
 
@@ -886,6 +889,10 @@ func _render_hover_description() -> void:
 		section_description_label.add_theme_font_size_override("normal_font_size", 14)
 		section_container.add_child(section_description_label)
 		_hover_skill_description_labels.append(section_description_label)
+		# 已释放的限定技与觉醒技；悬停资料同样把技能名与技能描述整块降低不透明度，与右键详情表现一致。
+		# 标记由 PlayerTargetView 依据同一权威快照字段写入，信息框不自行推断技能的释放状态。
+		if bool(section.get("intrinsic_use_consumed", false)):
+			section_container.modulate.a = RELEASED_SKILL_CONTENT_ALPHA
 
 
 ## 清理武将悬停资料创建的结构化技能标签；普通说明标签始终保留并在下一份内容中复用。
@@ -948,6 +955,9 @@ func _center_character_card() -> void:
 ## 按武将定义顺序重建右侧技能条目；每项固定先显示技能名，再显示完整技能描述。
 func _render_character_skills() -> void:
 	_clear_skill_entries()
+	# 已经释放固有额度的限定技与觉醒技集合；右键详情据此把整个技能条目显示为变淡状态。
+	# 该字段在 used_limited_skill_ids 基础上额外包含觉醒技，与技能按钮的已释放判断共用同一权威快照来源。
+	var intrinsic_use_consumed_ids: Array = _character_snapshot.get("used_intrinsic_use_skill_ids", []) as Array
 	# 武将可见技能ID数组；固有技能保持定义顺序，运行时临时技能随后追加且不重复。
 	var skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
 	for temporary_skill_id_variant: Variant in (_character_snapshot.get("temporary_skills", {}) as Dictionary).keys():
@@ -1007,6 +1017,9 @@ func _render_character_skills() -> void:
 		skill_description_label.configure_description(skill_description, bool(skill_definition.get("reincarnation", false)), int(reincarnation_state.get("section_index", 0)), maxi(int(reincarnation_state.get("round_count", 1)), 1) if bool(skill_definition.get("reincarnation", false)) else 0)
 		skill_description_label.add_theme_font_size_override("normal_font_size", 14)
 		skill_entry.add_child(skill_description_label)
+		# 已释放的限定技与觉醒技；技能名与技能描述整块降低不透明度，被复原后随权威快照自动恢复完全不透明。
+		if intrinsic_use_consumed_ids.has(skill_id):
+			skill_entry.modulate.a = RELEASED_SKILL_CONTENT_ALPHA
 		_character_skill_entry_count += 1
 	_append_character_opportunity_section()
 	_append_character_skill_bottom_spacer()
