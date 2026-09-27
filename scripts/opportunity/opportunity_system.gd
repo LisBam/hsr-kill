@@ -240,15 +240,13 @@ func _filter_alive_participant_ids(participant_ids: Array[int]) -> Array[int]:
 	return result
 
 
-## 接受玩家、局域网客户端或回放提交的机缘卡ID；各自选择只接受当前选择者，投票选择接受任一尚未投票的参与者。
+## 接受玩家、局域网客户端或回放提交的机缘卡ID；投票与各自选择都接受任一尚未提交的参与者，不存在先后解锁的当前选择者。
 func submit_choice(player_id: int, card_id: String) -> bool:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
 		return false
-	if _vote_mode:
-		# 投票待提交集合；所有名单内玩家可并行提交，已经投过票的玩家会因不在集合中而被拒绝重复投票。
-		if not _selection_queue.has(player_id):
-			return false
-	elif player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
+	# 待提交集合；所有名单内玩家可并行提交，已经提交过的玩家会因不在集合中而被拒绝重复提交。
+	# 投票与各自选择共用同一份同时开放集合：各自选择不再有逐个解锁的当前选择者，因此这里不再读取 current_chooser_id。
+	if not _selection_queue.has(player_id):
 		return false
 	# 当前角色私有候选；字符串键是权威状态的稳定形式，兼容JSON网络序列化。
 	var options_by_player: Dictionary = _state.opportunity_state.get("options_by_player", {}) as Dictionary
@@ -265,20 +263,17 @@ func submit_choice(player_id: int, card_id: String) -> bool:
 	if selected_card.is_empty():
 		return false
 	_record_player_choice(player_id, selected_card)
-	if _vote_mode:
-		_selection_queue.erase(player_id)
+	_selection_queue.erase(player_id)
 	_advance_selection_queue()
 	return true
 
 
-## 为被托管、断线接管或停滞修复的玩家代选机缘卡；各自选择要求目标为当前选择者，投票选择允许任一尚未提交的目标独立代选。
+## 为被托管、断线接管或停滞修复的玩家代选机缘卡；投票与各自选择都允许任一尚未提交的目标独立代选。
 ## 代选复用与内置AI完全相同的估值入口，并经由submit_choice权威校验推进状态，不形成绕过校验的第二条写路径。
 func choose_for_managed_player(player_id: int) -> bool:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
 		return false
-	if _vote_mode and not _selection_queue.has(player_id):
-		return false
-	if not _vote_mode and player_id != int(_state.opportunity_state.get("current_chooser_id", -1)):
+	if not _selection_queue.has(player_id):
 		return false
 	# 该玩家私有候选；估值与提交都只使用权威状态中的候选，不信任任何外部传入卡面。
 	var managed_player_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(player_id), []) as Array
@@ -497,68 +492,70 @@ func _begin_trigger(trigger_player_id: int, forced: bool, resume_kind: String, r
 	_advance_selection_queue()
 
 
-## 推进全体选择状态；投票模式同时开放所有未提交参与者并延迟驱动AI，各自选择模式继续按逆时针队列逐人处理。
+## 推进全体选择状态；所有参与者同时开放提交，不再存在逐个解锁的当前选择者。
+## 参与者逆时针顺序只决定效果结算顺序，不决定谁能先选；效果仍要等全部选择完成后统一逆时针结算。
+## 投票模式与各自选择的差别只在候选是否共享、结果是否公开票面：前者延迟驱动AI以先公开“可投票”状态，后者在同一调用栈内批量完成AI估值。
 func _advance_selection_queue() -> void:
-	if _vote_mode:
-		_advance_simultaneous_vote_selection()
-		return
-	while not _selection_queue.is_empty():
-		# 当前选择者；队首顺序仅影响交互展示，效果仍要等全部选择完成后统一逆时针结算。
-		var chooser_id: int = _selection_queue.pop_front()
-		# 当前选择者状态；死亡角色跳过，仍存活的离场角色继续参与机缘三选一。
-		var chooser: PlayerState = _state.get_player(chooser_id)
-		if chooser == null or not chooser.alive:
-			continue
-		_state.opportunity_state["current_chooser_id"] = chooser_id
-		_state.opportunity_state["pending_chooser_ids"] = [chooser_id]
-		# 离线控制全部角色时先切换权威操作者；该轻量入口不会广播完整快照，真正需要人类选择时再统一刷新。
-		_host.prepare_opportunity_chooser(chooser_id)
-		if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(chooser_id):
-			# AI私有候选；从权威映射读取，基础策略不接触其他角色的机缘牌面。
-			var options_by_player: Dictionary = _state.opportunity_state.get("options_by_player", {}) as Dictionary
-			# AI候选数组；每项均来自静态目录，不包含可执行Callable或运行时对象。
-			var ai_options: Array = options_by_player.get(str(chooser_id), []) as Array
-			# AI选择结果；空字典只可能来自异常空候选，此时跳过该角色避免死锁。
-			var ai_card: Dictionary = _choose_ai_card(chooser_id, ai_options)
-			if not ai_card.is_empty():
-				_record_player_choice(chooser_id, ai_card)
-			continue
-		# 只有实际需要本地或远端人类作答时才广播一次私有候选；连续AI选择不会触发无视觉价值的整局重绘。
-		_host.refresh_state_snapshot()
-		return
-	_finish_all_choices()
-
-
-## 同步公开全部尚未投票的参与者并在下一帧独立提交AI选票；真人之间不存在当前选择者或先后解锁关系。
-func _advance_simultaneous_vote_selection() -> void:
 	if not is_active() or str(_state.opportunity_state.get("stage", "")) != "choosing":
 		return
-	# 当前仍合法的待投玩家；流程暂停期间通常不会死亡，仍在此移除异常失效参与者以避免永久等待。
-	var pending_voter_ids: Array[int] = []
+	# 当前仍合法的待选玩家；死亡角色跳过，仍存活的离场角色继续参与机缘三选一。
+	var pending_chooser_ids: Array[int] = []
 	for pending_player_id: int in _selection_queue:
-		# 当前待投玩家状态；死亡或缺失角色不再保留投票资格。
-		var pending_player: PlayerState = _state.get_player(pending_player_id)
-		if pending_player != null and pending_player.alive:
-			pending_voter_ids.append(pending_player_id)
-	_selection_queue = pending_voter_ids
+		# 当前待选玩家状态；死亡或缺失角色不再保留选择资格，避免其余参与者永久等待。
+		var pending_chooser: PlayerState = _state.get_player(pending_player_id)
+		if pending_chooser != null and pending_chooser.alive:
+			pending_chooser_ids.append(pending_player_id)
+	_selection_queue = pending_chooser_ids
+	if _vote_mode:
+		_state.opportunity_state["current_chooser_id"] = -1
+		_state.opportunity_state["pending_chooser_ids"] = _selection_queue.duplicate()
+		if _selection_queue.is_empty():
+			_finish_all_choices()
+			return
+		# 离线控制全部角色只有一个本地观察者；切到首名待投角色供同一屏幕逐个代管，权威待投集合仍同时开放且LAN不会切换观察者。
+		_host.prepare_opportunity_chooser(_selection_queue[0])
+		# AI投票延后一帧，使全部真人观察者先收到同一“可投票”状态；回调内仍逐票经过同一候选估值和待提交集合校验。
+		if not _simultaneous_ai_vote_submission_scheduled:
+			for pending_player_id: int in _selection_queue:
+				if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(pending_player_id):
+					_simultaneous_ai_vote_submission_scheduled = true
+					call_deferred("_submit_simultaneous_ai_votes", _vote_reveal_generation)
+					break
+		_host.refresh_state_snapshot()
+		return
+	# 各自选择：在同一调用栈内连续完成全部内置AI的估值，不为每名AI广播一次无视觉价值的整局重绘。
+	# 遍历副本以便就地移除，使AI与真人提交共用同一份待提交集合语义。
+	for pending_player_id: int in _selection_queue.duplicate():
+		if _host.ai_coordinator == null or not _host.ai_coordinator.is_ai_controlled(pending_player_id):
+			continue
+		_try_submit_ai_choice(pending_player_id)
+		_selection_queue.erase(pending_player_id)
 	_state.opportunity_state["current_chooser_id"] = -1
 	_state.opportunity_state["pending_chooser_ids"] = _selection_queue.duplicate()
 	if _selection_queue.is_empty():
 		_finish_all_choices()
 		return
-	# 离线控制全部角色只有一个本地观察者；切到首名待投角色供同一屏幕逐个代管，权威待投集合仍同时开放且LAN不会切换观察者。
+	# 离线控制全部角色只有一个本地观察者；切到首名待选角色供同一屏幕逐个代管，权威待选集合仍同时开放且LAN不会切换观察者。
 	_host.prepare_opportunity_chooser(_selection_queue[0])
-	# AI投票延后一帧，使全部真人观察者先收到同一“可投票”状态；回调内仍逐票经过同一候选估值和待提交集合校验。
-	if not _simultaneous_ai_vote_submission_scheduled:
-		for pending_player_id: int in _selection_queue:
-			if _host.ai_coordinator != null and _host.ai_coordinator.is_ai_controlled(pending_player_id):
-				_simultaneous_ai_vote_submission_scheduled = true
-				call_deferred("_submit_simultaneous_ai_votes", _vote_reveal_generation)
-				break
+	# 其余待选者全部是真人；一次性广播同一份“可选择”状态，本地与远端真人之间不存在先后解锁关系。
 	_host.refresh_state_snapshot()
 
 
-## 为当前投票中的全部内置AI分别估值并提交一票；提交顺序不控制真人资格，也不会公开尚未收齐的具体票面。
+## 为单名内置AI估值并记录其机缘选择；投票与各自选择共用同一估值入口，不形成第二条写路径。
+func _try_submit_ai_choice(player_id: int) -> bool:
+	# 当前AI私有候选；从权威映射读取，基础策略不接触其他角色的机缘牌面。
+	var options_by_player: Dictionary = _state.opportunity_state.get("options_by_player", {}) as Dictionary
+	# AI候选数组；每项均来自静态目录，不包含可执行Callable或运行时对象。
+	var ai_options: Array = options_by_player.get(str(player_id), []) as Array
+	# AI选择结果；空字典只可能来自异常空候选，此时跳过该角色避免死锁，由停滞修复兜底。
+	var ai_card: Dictionary = _choose_ai_card(player_id, ai_options)
+	if ai_card.is_empty():
+		return false
+	_record_player_choice(player_id, ai_card)
+	return true
+
+
+## 为本次投票中的全部内置AI分别估值并提交一张；提交顺序不控制真人资格，也不会公开尚未收齐的具体票面。
 func _submit_simultaneous_ai_votes(expected_generation: int) -> void:
 	_simultaneous_ai_vote_submission_scheduled = false
 	if expected_generation != _vote_reveal_generation or not is_active() or not _vote_mode or str(_state.opportunity_state.get("stage", "")) != "choosing":
@@ -571,15 +568,11 @@ func _submit_simultaneous_ai_votes(expected_generation: int) -> void:
 	for ai_voter_id: int in ai_voter_ids:
 		if not _selection_queue.has(ai_voter_id):
 			continue
-		# 当前AI私有候选；共享候选仍从该玩家自己的权威映射读取，不访问其他玩家私有快照。
-		var ai_options: Array = (_state.opportunity_state.get("options_by_player", {}) as Dictionary).get(str(ai_voter_id), []) as Array
-		# 当前AI估值结果；异常空候选由下一轮停滞修复处理，不伪造不存在的票面。
-		var ai_card: Dictionary = _choose_ai_card(ai_voter_id, ai_options)
-		if ai_card.is_empty():
+		# 当前AI估值结果；空候选由下一轮停滞修复处理，因此此处保留其待投资格而不伪造票面。
+		if not _try_submit_ai_choice(ai_voter_id):
 			continue
-		_record_player_choice(ai_voter_id, ai_card)
 		_selection_queue.erase(ai_voter_id)
-	_advance_simultaneous_vote_selection()
+	_advance_selection_queue()
 
 
 ## 记录一名角色的最终机缘选择；公开状态只暴露已完成角色ID，不在其他观察者快照中公开卡面正文。

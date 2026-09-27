@@ -2,14 +2,21 @@ extends Node
 
 ## 局域网权威对局集成测试。房主运行完整 MatchController，客户端只消费裁剪快照并通过网络提交选将动作。
 
-## 双进程对局测试超时秒数；默认20秒覆盖数据扫描、选将、AI延迟关闭后的起始发牌与快照确认。
-const TEST_TIMEOUT_SECONDS: float = 20.0
+## 双进程对局测试超时秒数；默认30秒覆盖数据扫描、选将、AI延迟关闭后的起始发牌、快照确认，
+## 以及同一房间内重开新对局后客户端重新选将并再次确认快照的完整往返。
+const TEST_TIMEOUT_SECONDS: float = 30.0
 
 ## 测试对局总人数；2名真人加2名 AI 可同时覆盖真人映射、AI选将和私有手牌裁剪。
 const TEST_PLAYER_COUNT: int = 4
 
 ## 固定权威随机种子；保证身份、牌堆和候选生成可复现，客户端快照仍不得收到该数值。
 const TEST_RANDOM_SEED: int = 20260719
+
+## 首次开局的客户端快照确认动作类型；房主据此进入“同房重开”验证步骤。
+const INITIAL_ACK_ACTION_TYPE: String = "lan_snapshot_ack"
+
+## 同房重开后的客户端快照确认动作类型；房主收到即证明重播的开局绑定已经到达客户端。
+const RESTART_ACK_ACTION_TYPE: String = "lan_restart_ack"
 
 ## 完整权威或远端控制器；客户端实例不创建 GameState，只通过其网络适配入口驱动 UI 信号。
 @onready var _controller: MatchController = $MatchController
@@ -38,6 +45,21 @@ var _last_submitted_character_selection_phase: String = ""
 
 ## 客户端是否已经在收到起始手牌快照后发送确认动作；防止连续状态快照重复确认。
 var _client_snapshot_acknowledged: bool = false
+
+## 客户端已经确认过的对局 ID；仅用于诊断输出，不作为确认去重依据。
+var _client_acknowledged_match_id: String = ""
+
+## 客户端已经确认过的开局绑定序号；同房重开即使在同一秒内生成相同对局 ID 也能重新获得一次确认机会。
+var _acknowledged_match_start_count: int = 0
+
+## 客户端收到的开局绑定次数；同房重开必须让该计数从1增加到2，用于断言房主确实重播了开局绑定。
+var _match_start_count: int = 0
+
+## 房主触发同房重开后的新对局 ID；客户端确认该对局即证明重播发生在权威重开之后。
+var _host_restarted_match_id: String = ""
+
+## 房主是否已经发起过一次同房重开；防止确认链在重开后重复触发新的权威对局。
+var _host_restart_requested: bool = false
 
 ## 流程测试超时节点；随场景树释放，不保留等待中的异步函数状态。
 var _timeout_timer: Timer
@@ -139,7 +161,15 @@ func _on_match_started(local_player_id: int, player_count: int) -> void:
 	if player_count != TEST_PLAYER_COUNT or local_player_id < 0 or local_player_id >= TEST_PLAYER_COUNT:
 		_fail("invalid_assignment player_id=%d count=%d" % [local_player_id, player_count])
 		return
+	# 本次开局绑定序号；同房重开时房主会重播开局绑定，客户端必须收到第二次且保持同一稳定玩家 ID。
+	_match_start_count += 1
+	if _match_start_count > 1 and local_player_id != _local_player_id:
+		_fail("restart_assignment_changed first=%d second=%d" % [_local_player_id, local_player_id])
+		return
 	_local_player_id = local_player_id
+	# 同房重开进入新的选将阶段；复位提交去重状态，使两名真人能在第二局重新各提交一次候选。
+	_character_selection_submitted = false
+	_last_submitted_character_selection_phase = ""
 	if _is_client_process:
 		_controller.local_human_player_id = local_player_id
 
@@ -203,7 +233,9 @@ func _submit_optional_choice_cancel(cancel_action: PlayerAction) -> void:
 
 ## 客户端在选将完成后的状态快照中验证私有手牌、他人隐藏手牌和随机种子裁剪，然后发送确认动作。
 func _on_state_changed(snapshot: Dictionary) -> void:
-	if not _is_client_process or _client_snapshot_acknowledged or _local_player_id < 0 or str(snapshot.get("current_phase", "")) == "character_selection":
+	# 当前对局 ID；仅用于诊断输出，确认去重改用开局绑定序号，避免同一秒内重开得到相同对局 ID 时漏发确认。
+	var snapshot_match_id: String = str(snapshot.get("match_id", ""))
+	if not _is_client_process or _local_player_id < 0 or str(snapshot.get("current_phase", "")) == "character_selection" or _match_start_count <= _acknowledged_match_start_count:
 		return
 	# 本地玩家快照；必须包含与 hand_count 相等的完整牌面数组。
 	var local_player_snapshot: Dictionary = {}
@@ -227,8 +259,11 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 		_fail("random_seed_leaked")
 		return
 	_client_snapshot_acknowledged = true
+	_client_acknowledged_match_id = snapshot_match_id
+	_acknowledged_match_start_count = _match_start_count
 	# 快照确认动作；属于测试专用未知动作，权威规则会拒绝，但网关应先验证 actor 并让测试观察者收到同一上行包。
-	var acknowledgement: PlayerAction = PlayerAction.new("lan_snapshot_ack", _local_player_id)
+	# 同房重开使用独立动作类型，房主据此区分首次开局确认与重开后开局绑定重播确认。
+	var acknowledgement: PlayerAction = PlayerAction.new(RESTART_ACK_ACTION_TYPE if _match_start_count > 1 else INITIAL_ACK_ACTION_TYPE, _local_player_id)
 	acknowledgement.payload = {"hand_count":private_hand_count}
 	# 延迟到状态快照 RPC 回调结束后上行，避免嵌套 RPC 在同一调用栈中被 SceneMultiplayer 丢弃。
 	_submit_snapshot_acknowledgement.call_deferred(acknowledgement)
@@ -240,8 +275,11 @@ func _submit_snapshot_acknowledgement(acknowledgement: PlayerAction) -> void:
 
 
 ## 房主观察通过连接绑定校验的测试确认动作，并核对权威端确有同样数量的客户端手牌。
+## 首次确认后房主在同一房间内重开新对局，只有客户端再次确认新对局才视为开局绑定重播成功。
 func _on_gateway_command_received(command_data: Dictionary) -> void:
-	if _is_client_process or str(command_data.get("action_type", "")) != "lan_snapshot_ack":
+	# 当前上行动作类型；首次开局确认与同房重开确认共用绑定与手牌校验，但推进不同步骤。
+	var action_type: String = str(command_data.get("action_type", ""))
+	if _is_client_process or (action_type != INITIAL_ACK_ACTION_TYPE and action_type != RESTART_ACK_ACTION_TYPE):
 		return
 	# 当前远端发送者与绑定玩家；网关在发出信号前已拒绝任何 actor 不匹配包。
 	var sender_peer_id: int = _gateway.get_current_incoming_peer_id()
@@ -257,8 +295,27 @@ func _on_gateway_command_received(command_data: Dictionary) -> void:
 	if authoritative_player == null or authoritative_player.hand.size() != acknowledged_hand_count:
 		_fail("ack_hand_count_mismatch authoritative=%d client=%d" % [authoritative_player.hand.size() if authoritative_player != null else -1, acknowledged_hand_count])
 		return
-	_gateway.send_game_event_to_peer("lan_match_flow_complete", {"actor_id":actor_id, "hand_count":acknowledged_hand_count}, sender_peer_id)
-	print("LAN_MATCH_FLOW_PASS actor=%d hand_count=%d phase=%s" % [actor_id, acknowledged_hand_count, _controller.state.current_phase])
+	if action_type == INITIAL_ACK_ACTION_TYPE:
+		# 首次确认完成后触发同一 ENet 房间内的重开；重开必须重新广播开局绑定，使客户端重置表现幂等窗口。
+		if _host_restart_requested:
+			return
+		_host_restart_requested = true
+		if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED):
+			_fail("host_restart_start_failed")
+			return
+		if _controller.state == null or str(_controller.state.current_phase) != "character_selection":
+			_fail("host_restart_phase=%s" % [str(_controller.state.current_phase) if _controller.state != null else "none"])
+			return
+		_host_restarted_match_id = str(_controller.state.match_id)
+		_controller.replicate_current_state()
+		print("LAN_MATCH_FLOW_RESTART_SENT match_id=%s" % _host_restarted_match_id)
+		return
+	# 重开确认必须来自重开后的新对局；对局 ID 缺失说明房主并未真正重建权威对局。
+	if _host_restarted_match_id.is_empty() or str(_controller.state.match_id) != _host_restarted_match_id:
+		_fail("restart_ack_match_mismatch expected=%s actual=%s" % [_host_restarted_match_id, str(_controller.state.match_id)])
+		return
+	_gateway.send_game_event_to_peer("lan_match_flow_complete", {"actor_id":actor_id, "hand_count":acknowledged_hand_count, "match_start_count":_match_start_count}, sender_peer_id)
+	print("LAN_MATCH_FLOW_PASS actor=%d hand_count=%d phase=%s restart_match_id=%s" % [actor_id, acknowledged_hand_count, _controller.state.current_phase, _host_restarted_match_id])
 	_finish_host_after_delay()
 
 
@@ -269,7 +326,12 @@ func _on_game_event_received(event_type: String, event_payload: Dictionary) -> v
 	if int(event_payload.get("actor_id", -1)) != _local_player_id or int(event_payload.get("hand_count", -1)) < 4:
 		_fail("client_complete_mismatch=%s" % [event_payload])
 		return
-	print("LAN_MATCH_FLOW_CLIENT_PASS actor=%d" % _local_player_id)
+	# 房主记录的开局绑定次数；客户端必须同样收到两次，才能证明同房重开时开局绑定被重播。
+	var host_match_start_count: int = int(event_payload.get("match_start_count", -1))
+	if _match_start_count != 2 or host_match_start_count != _match_start_count:
+		_fail("client_restart_binding_missing client=%d host=%d" % [_match_start_count, host_match_start_count])
+		return
+	print("LAN_MATCH_FLOW_CLIENT_PASS actor=%d match_start_count=%d" % [_local_player_id, _match_start_count])
 	_finish_client_after_delay()
 
 
@@ -295,7 +357,8 @@ func _on_timeout() -> void:
 	# 当前选将子阶段；无活动服务时使用none，便于区分开局与对局阶段超时。
 	var selection_phase: String = _controller.character_selection.phase if _controller.character_selection != null else "none"
 	# 当前尚未确认玩家；只在测试失败输出，不修改服务内部数组。
-	var pending_player_ids: Array[int] = _controller.character_selection.get_pending_player_ids() if _controller.character_selection != null else []
+	# 客户端进程没有权威 GameState 与选将服务，服务端返回的是无类型数组，因此这里使用无类型容器接收，避免超时诊断自身抛出类型错误。
+	var pending_player_ids: Array = _controller.character_selection.get_pending_player_ids() if _controller.character_selection != null else []
 	_fail("timeout role=%s phase=%s selection=%s pending=%s" % ["client" if _is_client_process else "host", current_phase, selection_phase, pending_player_ids])
 
 

@@ -12,8 +12,8 @@ signal seat_change_requested(seat_index: int)
 ## 房主点击玩家悬停管理按钮时发出的踢出请求；参数为远端成员 ENet peer ID。
 signal kick_requested(peer_id: int)
 
-## 房主保存对局设置时发出的请求；参数依次为稳定模式 ID、总人数、房间密码与是否开启自选身份。
-signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool)
+## 房主保存对局设置时发出的请求；参数依次为稳定模式 ID、总人数、房间密码、是否开启自选身份与是否固定座位。
+signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool)
 
 ## 房主点击开始游戏时发出的请求；对局人数与模式已经由权威房间设置保存。
 signal start_match_requested()
@@ -104,6 +104,9 @@ const AVATAR_COMPONENT_SIZE: Vector2 = Vector2(148.35, 227.8)
 
 ## 自选身份开关；开启后每个大厅位置绑定固定身份并在右上角显示身份徽记，玩家通过换位自选身份。
 @onready var _custom_identity_checkbox: CheckBox = %OnlineLobbyCustomIdentityCheckBox
+
+## 固定座位开关；关闭时身份仍按大厅位置绑定，但物理座位在每次开局随机打乱，仅开启后才固定绑定座位。
+@onready var _fixed_seat_checkbox: CheckBox = %OnlineLobbyFixedSeatCheckBox
 
 ## 保存房间设置按钮；发出纯数据请求，成功与失败由牌桌协调器回传。
 @onready var _settings_save_button: Button = %OnlineLobbySettingsSaveButton
@@ -222,6 +225,11 @@ func refresh_ui_style() -> void:
 	_custom_identity_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_custom_identity_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_custom_identity_checkbox.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
+	(%OnlineLobbyFixedSeatLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_fixed_seat_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_fixed_seat_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_fixed_seat_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_fixed_seat_checkbox.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
 	# 大厅错误标签保持危险语义色；主题切换时即使正在显示错误也不会回退默认白字。
 	(%OnlineLobbyErrorLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	_apply_line_edit_style(_chat_input)
@@ -323,6 +331,8 @@ func _render_room_summary() -> void:
 	# 自选身份摘要；仅开启时追加，提示所有成员当前房间按位置绑定身份。
 	if bool(_snapshot.get("custom_identity_enabled", false)):
 		_room_summary_label.text += "  ｜  自选身份：开"
+		# 座位绑定摘要；只在自选身份下才有意义，明确区分“座位每局随机”与“座位按位置固定”，2v2 由模式规则强制固定。
+		_room_summary_label.text += "（座位固定）" if bool(_snapshot.get("fixed_seat_enabled", false)) else "（座位随机）"
 	(%OnlineLobbyErrorLabel as Label).visible = false
 
 
@@ -361,6 +371,8 @@ func _open_settings() -> void:
 	# 自选身份回填；开关状态来自权威快照，不支持位置身份的模式禁用该复选框。
 	_custom_identity_checkbox.set_pressed_no_signal(bool(_snapshot.get("custom_identity_enabled", false)))
 	_apply_custom_identity_availability_for_mode(game_mode_id)
+	# 固定座位回填；同样来自权威快照，只在自选身份开启时改变开局座位映射，关闭自选身份时保持可编辑但无效果。
+	_fixed_seat_checkbox.set_pressed_no_signal(bool(_snapshot.get("fixed_seat_enabled", false)))
 	_settings_backdrop.visible = true
 	_settings_panel.visible = true
 	_settings_panel.move_to_front()
@@ -391,7 +403,7 @@ func _save_settings() -> void:
 	# 最终人数候选；文本合法时按控件上下限收敛后采用，之后仍会按模式与真人数下限再规范化一次。
 	var player_count: int = clampi(typed_player_count, int(_player_count_input.min_value), int(_player_count_input.max_value)) if typed_player_count > 0 else value_player_count
 	player_count = _normalize_player_count_for_mode(game_mode_id, player_count)
-	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id))
+	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id), _fixed_seat_checkbox.button_pressed)
 
 
 ## 房主请求开始当前设置的对局；按钮暂时禁用直到成功开局或协调器回传错误。

@@ -1296,6 +1296,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"conquest_opportunity_choice_mode":GameSettings.conquest_opportunity_choice_mode,
 		"opportunity_system_enabled":opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode),
 		"lan_custom_identity_enabled":network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_custom_identity_enabled(),
+		"lan_fixed_seat_enabled":network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_fixed_seat_enabled(),
 	}
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode), opportunity_enabled_mode_ids.has(actual_mode))
@@ -1347,6 +1348,11 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	else:
 		var first_player_title: String = _identity_text(identity_rules.get_first_player_identity(state.match_mode))
 		add_log("选将开始：%s先从%d张普通随机候选及%d张领袖技固定候选中选择并亮出。" % [first_player_title, mini(_character_candidate_count, maxi(available_character_ids.size() - leader_skill_character_ids.size(), 0)), leader_skill_character_ids.size()])
+	# 同一局域网房间内的重开必须重新广播开局绑定：客户端上一局的表现幂等窗口与实体 UID 认领记录仍然保留，
+	# 而本局的牌面表现序号与卡牌实体 UID 都从1重新开始，只有客户端同步重置表现状态才能继续播放使用飞牌与目标指示线。
+	# 首次开局的 `_lan_match_active` 仍为 false，因此本分支只覆盖“房主在同一房间内再来一局”的重开路径。
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.rebroadcast_prepared_lan_match()
 	_emit_state()
 	if wheel_duel_selection != null:
 		_drive_ai_wheel_duel_selection()
@@ -1768,7 +1774,7 @@ func submit_action(action: PlayerAction) -> bool:
 		return _reject("敌方正在重新入场，请等待机缘选择。")
 	# 离场技选择许可；只接受当前权威请求中明确写入的同一选择者和请求ID，旧请求或伪造普通动作无法复用该例外。
 	var out_of_game_choice_allowed: bool = false
-	# 机缘选择属于模式级三选一；离场角色仍可提交，但候选ID与当前选择者继续由机缘组件权威复核。
+	# 机缘选择属于模式级三选一；离场角色仍可提交，但候选ID与待提交资格继续由机缘组件权威复核（全部参与者同时开放，不含先后顺序）。
 	if action.action_type == "choose_opportunity":
 		out_of_game_choice_allowed = true
 	if action.action_type in ["choose_cards", "choice_response"] and not _pending_card_choice.is_empty():
@@ -1994,7 +2000,7 @@ func _continue_auto_managed_player(player_id: int) -> void:
 		return
 	if _redrive_pre_game_ai_progress():
 		return
-	# 机缘全体选择期间接管；当前选择者正是该玩家时由机缘组件按AI估值代选，解除全局暂停等待。
+	# 机缘全体选择期间接管；该玩家仍在待提交集合中时由机缘组件按AI估值代选，解除全局暂停等待。
 	# 该分支缺失曾导致断线接管后选择队列永远停在已离线玩家、整个场景树保持暂停的确认卡死。
 	if opportunity_system != null and opportunity_system.choose_for_managed_player(player_id):
 		return
@@ -8113,7 +8119,12 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 	# 补充：斗地主现将身份数量池洗牌，确保每局由本局随机源重新决定哪名玩家成为地主。
 	# 联机自选身份锁定标志；开启时大厅位置身份表原样按座次生效，不洗牌也不做2v2蓝红互换。
 	var lan_custom_identity_enabled: bool = bool(state.match_options.get("lan_custom_identity_enabled", false))
+	# 联机固定座位锁定标志；只用于记录本局座位是否随大厅位置固定，不改变身份表内容。
+	var lan_fixed_seat_enabled: bool = bool(state.match_options.get("lan_fixed_seat_enabled", false))
 	var identities: Array[String] = identity_rules.get_distribution(player_count, match_mode)
+	# 自选身份下身份必须跟随大厅位置而不是跟随物理座次；座位随机开局时位置与座次不再一一对应，因此先按开局映射重排身份表。
+	if lan_custom_identity_enabled:
+		identities = _build_lan_slot_identity_distribution(match_mode, player_count, identities)
 	if match_mode == IdentityRules.MODE_TEAM2V2:
 		# 2v2：50% 概率整表互换蓝红，保持一号与四号同队、二号与三号同队；自选身份保持基准表使大厅蓝红选择生效。
 		if not lan_custom_identity_enabled:
@@ -8147,7 +8158,31 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 		state.players.append(player)
 		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
-	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id], "lan_custom_identity_enabled":lan_custom_identity_enabled})
+	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id], "lan_custom_identity_enabled":lan_custom_identity_enabled, "lan_fixed_seat_enabled":lan_fixed_seat_enabled})
+
+
+## 返回自选身份开局按规则座次排列的身份表；大厅位置身份写入真正占用该座位的玩家。
+## 固定座位下座位与大厅位置一一对应，结果与模式座次身份表完全一致；随机座位下身份继续跟随大厅位置而不跟随座位。
+func _build_lan_slot_identity_distribution(match_mode: String, player_count: int, fallback_identities: Array[String]) -> Array[String]:
+	# 大厅位置身份表；2v2 使用“上蓝下红”的大厅专属布局，其余模式沿用固定座次身份表。
+	var lobby_identities: Array[String] = identity_rules.get_lobby_slot_identities(match_mode, player_count)
+	if lobby_identities.is_empty():
+		return fallback_identities
+	# 本次开局的座位到大厅位置映射；非房主开局或映射缺失时为空，此时保持调用方传入的座次身份表。
+	var seat_lobby_slots: Array[int] = []
+	if network_gateway != null and network_gateway.is_lan_host():
+		seat_lobby_slots = network_gateway.get_lan_seat_lobby_slots()
+	# 映射尺寸必须与本次对局的角色总数一致才可使用；否则说明它属于上一局或另一种模式，整表回退到座次身份表以免身份错配。
+	if seat_lobby_slots.size() != player_count:
+		return fallback_identities
+	# 结果身份表；每个座次取“占用该座位成员的大厅位置”对应身份，未映射座位回退到自身座次身份。
+	var result: Array[String] = fallback_identities.duplicate()
+	for seat_index: int in range(result.size()):
+		# 当前座次占用者的大厅位置；-1表示该座位由 AI 补位，沿用该座次原有的身份。
+		var lobby_slot: int = seat_lobby_slots[seat_index]
+		if lobby_slot >= 0 and lobby_slot < lobby_identities.size():
+			result[seat_index] = lobby_identities[lobby_slot]
+	return result
 
 
 ## 避免自动斗地主连续两局向本地玩家展示完全相同的座次与身份；初次抽取仍来自本局随机源，只在命中上一局组合时从其他合法座次中随机改选。

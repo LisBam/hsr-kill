@@ -137,6 +137,13 @@ func supports_lobby_custom_identity(mode_id: String) -> bool:
 	return normalize_mode(mode_id) != MODE_CONQUEST
 
 
+## 返回模式是否强制固定大厅位置到规则座次（稳定玩家 ID）的绑定。
+## 2v2 的“一号/四号同队、二号/三号同队”同时决定队友距离与行动顺序，随机座位会让队友相邻并破坏成队几何，因此必须保持固定绑定；
+## 其余模式只要求身份按大厅位置绑定，物理座位可在开局时随机打乱。
+func requires_fixed_lobby_seat(mode_id: String) -> bool:
+	return normalize_mode(mode_id) == MODE_TEAM2V2
+
+
 ## 返回联机大厅自选身份时每个大厅位置对应的身份 ID；索引即大厅0起始位置，人数不支持时返回空数组。
 ## 2v2 使用“上排两蓝、下排两红”的大厅专属布局，其余模式直接沿用固定座次身份表（身份局一号位领袖、斗地主一号位地主等）。
 func get_lobby_slot_identities(mode_id: String, player_count: int) -> Array[String]:
