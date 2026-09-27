@@ -1896,6 +1896,8 @@ func submit_action(action: PlayerAction) -> bool:
 		# 本次身份观察配置；定义缺失时回退到卡牌元数据中的静态 AI 配置。
 		var identity_ai_profile: Dictionary = card_source_definition.get_identity_observation_ai_profile(identity_observation_snapshot, action.actor_id, resolution_target_ids) if card_source_definition != null else (GameDatabase.get_card(card.definition_id).get("ai", {}) as Dictionary)
 		ai_coordinator.observe_public_behavior(identity_observation_snapshot, action.actor_id, identity_ai_profile, resolution_target_ids, local_human_player_id)
+		# 同一公开行为同步给远端客户端；客户端在本地重放推断，因此非房主也能得到“自动标记身份”结果。
+		_broadcast_identity_behavior(action.actor_id, identity_ai_profile, resolution_target_ids)
 		# 手牌视为牌通过统一虚拟牌协议结算：实体离开手牌后恢复原名，已经声明的逻辑牌继续完成完整牌效与次数统计。
 		if card.has_hand_view_as() and card.zone == "hand":
 			# 单材料数组；稳定UID同时用于失去牌、回放和最终弃牌区恢复原始实体。
@@ -5239,6 +5241,8 @@ func _record_wuxie_chain_response(context: Dictionary, responder_id: int, counte
 	var response_subject_definition: Dictionary = GameDatabase.get_card(str(context.get("trick_id", "")))
 	# 成功打出的无懈可击公开行为；仅在原使用者已有暴露且响应者不是目标本人时形成身份线索。
 	ai_coordinator.observe_card_response(state.to_dict(-1, true), responder_id, GameDatabase.get_card(counter_card.definition_id), response_subject_definition, context, local_human_player_id)
+	# 同一公开响应行为同步给远端客户端；只下发公开结算方向，客户端本地重放以保持各自独立推断。
+	_broadcast_identity_response(responder_id, counter_card.definition_id, str(context.get("trick_id", "")), context)
 	# 当前无懈状态对象；按已有响应顺序重建，确保异步上下文与独立状态类使用同一奇偶规则。
 	var wuxie_state: WuxieChainState = WuxieChainState.new(int(context.get("root_event_id", state.current_event_id)))
 	for response_variant: Variant in response_results:
@@ -7055,6 +7059,8 @@ func observe_skill_identity_behavior(actor_id: int, target_ids: Array[int], ai_p
 	if state == null or ai_coordinator == null or state.get_player(actor_id) == null or ai_profile.is_empty():
 		return
 	ai_coordinator.observe_public_behavior(state.to_dict(-1, true), actor_id, ai_profile, target_ids, local_human_player_id)
+	# 技能公开行为同步给远端客户端；非房主发动的技能同样进入各客户端本地身份推断。
+	_broadcast_identity_behavior(actor_id, ai_profile, target_ids)
 
 
 ## 请求玩家决定是否发动一件仍在装备区的非锁定装备；选择装备实体表示发动，取消表示不发动且不消耗装备。
@@ -12658,6 +12664,8 @@ func _apply_dying_response_card(responder_id: int, dying_player_id: int, card: C
 		_record_card_used_this_turn(responder_id, card.definition_id)
 		# 救援目标行为；【桃】沿用自身正向 target_result，【酒】因目标为本人会被身份模型自动忽略。
 		ai_coordinator.observe_public_behavior(state.to_dict(-1, true), responder_id, definition.get_ai_profile(), [dying_player_id], local_human_player_id)
+		# 濒死救援公开行为同步给远端客户端；网络只承载救援目标与只读 AI 配置，不含任何手牌内容。
+		_broadcast_identity_behavior(responder_id, definition.get_ai_profile(), [dying_player_id])
 	return response_applied
 
 
@@ -14120,6 +14128,100 @@ func _on_network_game_event_received(event_type: String, event_payload: Dictiona
 		public_card_choice_display_changed.emit((event_payload.get("display", {}) as Dictionary).duplicate(true))
 	elif event_type == "match_finished":
 		match_finished.emit(str(event_payload.get("winner", "")))
+	elif event_type == "identity_behavior":
+		# 房主广播的公开目标行为；客户端用本地身份模型重放同一推断，网络只承载行为本身而非房主算好的标记结果。
+		_apply_replayed_identity_behavior(
+			int(event_payload.get("actor_id", -1)),
+			(event_payload.get("ai_profile", {}) as Dictionary).duplicate(true),
+			_int_array(event_payload.get("target_ids", []) as Array)
+		)
+	elif event_type == "identity_response":
+		# 房主广播的公开响应牌行为；上下文只含结算方向与相关角色，不含任何隐藏手牌或完整结算上下文。
+		_apply_replayed_identity_response(
+			int(event_payload.get("responder_id", -1)),
+			str(event_payload.get("card_definition_id", "")),
+			str(event_payload.get("trick_id", "")),
+			(event_payload.get("response_context", {}) as Dictionary).duplicate(true)
+		)
+
+
+## 构建公开目标行为的广播载荷；只含房主已算好的只读身份观察配置与实际目标，不含任何隐藏状态。
+func build_identity_behavior_payload(actor_id: int, ai_profile: Dictionary, target_ids: Array[int]) -> Dictionary:
+	# 行为玩家稳定 ID；客户端按该 ID 更新自己身份模型中的对应条目。
+	var behavior_actor_id: int = actor_id
+	# 身份观察配置副本；沿用房主按当时权威快照算好的只读 AI 配置，客户端不重新推导以保证两侧证据完全一致。
+	var behavior_ai_profile: Dictionary = ai_profile.duplicate(true)
+	# 实际公开目标数组副本；保持声明顺序，空数组表示该行为没有目标。
+	var behavior_target_ids: Array[int] = target_ids.duplicate()
+	return {
+		"actor_id":behavior_actor_id,
+		"ai_profile":behavior_ai_profile,
+		"target_ids":behavior_target_ids,
+	}
+
+
+## 构建公开响应牌行为的广播载荷；上下文只保留身份模型读取的三个公开键，避免整段结算上下文进入网络。
+func build_identity_response_payload(responder_id: int, card_definition_id: String, trick_id: String, response_context: Dictionary) -> Dictionary:
+	# 响应者稳定 ID；无懈可击的响应者即本次被观察的角色。
+	var response_responder_id: int = responder_id
+	# 响应牌定义 ID；客户端用本地同版本数据库解析该牌的模式与显式暴露值。
+	var response_card_definition_id: String = card_definition_id
+	# 原锦囊定义 ID；客户端据此还原该锦囊对目标的正负行为方向。
+	var response_trick_id: String = trick_id
+	# 公开响应上下文；只保留原锦囊使用者、当前目标与本次抵消方向，其余结算字段不下发。
+	var public_response_context: Dictionary = {
+		"source_id":int(response_context.get("source_id", -1)),
+		"target_id":int(response_context.get("target_id", -1)),
+		"negated":bool(response_context.get("negated", false)),
+	}
+	return {
+		"responder_id":response_responder_id,
+		"card_definition_id":response_card_definition_id,
+		"trick_id":response_trick_id,
+		"response_context":public_response_context,
+	}
+
+
+## 房主把一次公开目标行为广播给全部远端客户端；离线与 REMOTE 模式安全返回，本地观察不受影响。
+func _broadcast_identity_behavior(actor_id: int, ai_profile: Dictionary, target_ids: Array[int]) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	network_gateway.broadcast_game_event("identity_behavior", build_identity_behavior_payload(actor_id, ai_profile, target_ids))
+
+
+## 房主把一次公开响应牌行为广播给全部远端客户端；网络层只承载公开结算方向，不下发任何身份推断结果。
+func _broadcast_identity_response(responder_id: int, card_definition_id: String, trick_id: String, response_context: Dictionary) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	network_gateway.broadcast_game_event("identity_response", build_identity_response_payload(responder_id, card_definition_id, trick_id, response_context))
+
+
+## 客户端重放房主广播的公开目标行为；观察者固定为本地真人，因此本地玩家自己的行为与房主一致地不参与自动标记。
+func _apply_replayed_identity_behavior(actor_id: int, ai_profile: Dictionary, target_ids: Array[int]) -> void:
+	if ai_coordinator == null or actor_id < 0 or ai_profile.is_empty():
+		return
+	# 重放所用快照；客户端以最近一次房主快照作为身份模型的背景数据，两者都没有时不重放。
+	var observation_snapshot: Dictionary = state.to_dict(-1, true) if state != null else _remote_snapshot
+	if observation_snapshot.is_empty():
+		return
+	ai_coordinator.observe_public_behavior(observation_snapshot, actor_id, ai_profile, target_ids, local_human_player_id)
+
+
+## 客户端重放房主广播的公开响应牌行为；牌面与锦囊定义从客户端本地数据库解析，不依赖网络下发完整定义。
+func _apply_replayed_identity_response(responder_id: int, card_definition_id: String, trick_id: String, response_context: Dictionary) -> void:
+	if ai_coordinator == null or responder_id < 0 or card_definition_id.is_empty():
+		return
+	# 重放所用快照；与目标行为重放共用同一来源，保证两侧证据基于同一份对局数据。
+	var observation_snapshot: Dictionary = state.to_dict(-1, true) if state != null else _remote_snapshot
+	if observation_snapshot.is_empty():
+		return
+	# 响应牌静态定义；客户端与房主使用同版本内容数据库，可直接解析响应模式与显式暴露值。
+	var counter_card_definition: Dictionary = GameDatabase.get_card(card_definition_id)
+	# 原锦囊静态定义；用于把本次无懈的抵消结果还原为对目标的正负行为方向。
+	var response_subject_definition: Dictionary = GameDatabase.get_card(trick_id)
+	if counter_card_definition.is_empty() or response_subject_definition.is_empty():
+		return
+	ai_coordinator.observe_card_response(observation_snapshot, responder_id, counter_card_definition, response_subject_definition, response_context, local_human_player_id)
 
 
 ## 清理客户端远端快照；离开房间或房主断开时调用，避免返回主菜单后仍用旧对局数据判断交互。

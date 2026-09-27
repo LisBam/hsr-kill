@@ -96,6 +96,8 @@ AI 的直接资源变化统一通过 `NonameAIEvaluator.score_resource_change()`
 
 “自动标记身份”默认开启。`AICoordinator.get_identity_mark(player_id)` 只返回 `loyalist`、`rebel` 或空字符串，`identity_mark_changed` 只在公开行为令该值变化时通知界面；它不返回真实隐藏身份或可变模型。关闭设置只停止界面显示，公开行为观察与终结状态仍在本局持续记录，重新开启后立即恢复现有推断。手动标注与真实身份的显示优先级由界面负责，不能反向影响 AI 态度。
 
+联机对局中，房主在每次公开行为观察之后把**行为本身**广播为 `identity_behavior` 或 `identity_response` 事件：前者只含行为玩家稳定 ID、房主按当时权威快照算好的只读 `ai_profile` 与实际公开目标；后者只含响应者稳定 ID、响应牌与锦囊的定义 ID，以及 `source_id`、`target_id`、`negated` 三个公开键。非房主客户端收到后调用本地 `AICoordinator` 重放同一推断，观察者固定为客户端自己的 `local_human_player_id`，因此本地座位的行为与房主端一致地不参与自动标记。网络只承载公开行为，绝不下发房主算好的标记结果，隐藏手牌、私有候选与完整结算上下文都不进入这两个事件；每个客户端仍各自持有独立推断，关闭本地开关只影响本机显示。
+
 ### 4.4 身份局战略
 
 `IdentityStrategyEvaluator` 在通用牌效之外追加身份模式的全局思维：
