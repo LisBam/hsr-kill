@@ -457,7 +457,68 @@ func _test_reincarnation_title_round_count() -> bool:
 		skill_button.queue_free()
 		return _fail("normal_detail_title=%s" % normal_detail_title)
 	information_box.queue_free()
+	# 轮回技技能描写的轮回数提示；作为独立前置分段渲染，技能原文本身必须保持逐字不变。
+	var description_view: SkillDescriptionView = SkillDescriptionView.new()
+	add_child(description_view)
+	# 轮回技正文样本；含①用于确认前置分段不会打乱原文的轮回节分段索引。
+	var sample_description: String = "轮回技，出牌阶段，你可以①摸一张牌；②弃置一张牌。"
+	description_view.configure_description(sample_description, true, 0, 3)
+	# 渲染分段；第一段必须是轮回数提示，且原文内容不得被改写。
+	var rendered_segments: Array[Dictionary] = description_view.get_rendered_segments()
+	if rendered_segments.is_empty() or not str(rendered_segments[0].get("text", "")).begins_with("本技能已轮回3次") or description_view.get_plain_description() != sample_description:
+		description_view.queue_free()
+		skill_button.queue_free()
+		return _fail("reincarnation_description=%s/%s" % [rendered_segments, description_view.get_plain_description()])
+	# 未传入轮回数时不创建提示分段；普通技能与静态局外资料保持纯原文渲染。
+	description_view.configure_description(sample_description, true, 0, 0)
+	# 未传入轮回数时的首个分段；不得出现本功能追加的提示文本。
+	var optional_segments: Array[Dictionary] = description_view.get_rendered_segments()
+	if not optional_segments.is_empty() and str(optional_segments[0].get("text", "")).begins_with("本技能已轮回"):
+		description_view.queue_free()
+		skill_button.queue_free()
+		return _fail("reincarnation_description_optional=%s" % optional_segments)
+	description_view.queue_free()
+	# 限定技释放后的字体透明度；正文与禁用态文字都必须降到0.8。
+	skill_button.configure(GameDatabase.get_skill("mingding"), false, "", {}, true)
+	if not is_equal_approx(skill_button.get_theme_color("font_color").a, 0.8) or not is_equal_approx(skill_button.get_theme_color("font_disabled_color").a, 0.8):
+		skill_button.queue_free()
+		return _fail("used_limited_font_alpha=%s/%s" % [skill_button.get_theme_color("font_color"), skill_button.get_theme_color("font_disabled_color")])
+	# 技能被复原后字体必须回到完全不透明，与有限定技未发动状态一致。
+	skill_button.configure(GameDatabase.get_skill("mingding"), false, "", {}, false)
+	if not is_equal_approx(skill_button.get_theme_color("font_color").a, 1.0):
+		skill_button.queue_free()
+		return _fail("restored_limited_font_alpha=%s" % skill_button.get_theme_color("font_color"))
+	# 觉醒技定义；【轮回】属于觉醒技，释放后必须与限定技使用同一套变淡表现。
+	skill_button.configure(GameDatabase.get_skill("lunhui"), false, "", {}, true)
+	if not is_equal_approx(skill_button.get_theme_color("font_color").a, 0.8):
+		skill_button.queue_free()
+		return _fail("used_awakening_font_alpha=%s" % skill_button.get_theme_color("font_color"))
 	skill_button.queue_free()
+	# 已消耗固有额度的技能集合；觉醒技必须只进入包含觉醒技的查询，普通查询保持排除。
+	# 该差异是界面与【光覆】等复原入口共用同一数据源时的核心契约，不能为了按钮视觉而改变复原候选。
+	_reset_state(2)
+	var awakening_skill: SkillDefinition = _install_skill(0, "lunhui")
+	if awakening_skill == null or not awakening_skill.awakening:
+		return _fail("awakening_skill_install")
+	awakening_skill.consume_intrinsic_use()
+	# 普通限定技集合；觉醒技不属于【光覆】等复原入口的候选，该语义必须保持不变。
+	var limited_only_ids: Array[String] = _controller.get_used_limited_skill_ids(0)
+	# 含觉醒技的完整集合；技能按钮的已释放视觉读取该集合。
+	var intrinsic_use_ids: Array[String] = _controller.get_used_limited_skill_ids(0, true)
+	if limited_only_ids.has("lunhui") or not intrinsic_use_ids.has("lunhui"):
+		return _fail("used_intrinsic_use_ids=%s/%s" % [limited_only_ids, intrinsic_use_ids])
+	# 公开快照字段；必须存在并包含觉醒技，界面按钮只从快照读取该集合。
+	# 探测快照只放一个玩家条目，等价于正式广播时逐玩家写入的最小形状。
+	var snapshot_probe: Dictionary = {"players":[{"player_id":0}]}
+	_controller._append_limited_skill_usage_to_snapshot(snapshot_probe)
+	# 探测快照内的玩家条目；字段写入后必须可被界面按同一键名读取。
+	var probe_player: Dictionary = (snapshot_probe.get("players", []) as Array)[0] as Dictionary
+	# 快照中的普通限定技集合；继续排除觉醒技，保证复原入口候选不变。
+	var snapshot_limited_ids: Array = probe_player.get("used_limited_skill_ids", []) as Array
+	# 快照中的含觉醒技集合；技能按钮据此显示已释放状态。
+	var snapshot_intrinsic_ids: Array = probe_player.get("used_intrinsic_use_skill_ids", []) as Array
+	if snapshot_limited_ids.has("lunhui") or not snapshot_intrinsic_ids.has("lunhui"):
+		return _fail("used_intrinsic_use_snapshot=%s/%s" % [snapshot_limited_ids, snapshot_intrinsic_ids])
 	return true
 
 

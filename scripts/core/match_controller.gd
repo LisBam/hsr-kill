@@ -14794,6 +14794,9 @@ func _append_limited_skill_usage_to_snapshot(snapshot: Dictionary) -> void:
 		# 当前玩家ID；无效占位玩家获得空数组，不尝试读取运行时技能表。
 		var player_id: int = int(player_snapshot.get("player_id", -1))
 		player_snapshot["used_limited_skill_ids"] = get_used_limited_skill_ids(player_id) if player_id >= 0 else []
+		# 已消耗固有额度的全部技能ID；额外包含觉醒技，供技能按钮把觉醒技也显示为“已释放”变淡状态。
+		# 与 used_limited_skill_ids 分开维护：【光覆】等复原入口只处理普通限定技，不能因界面需要而改变其候选集合。
+		player_snapshot["used_intrinsic_use_skill_ids"] = get_used_limited_skill_ids(player_id, true) if player_id >= 0 else []
 
 
 ## 发出面向本地玩家的状态快照，并让网络网关保留公共同步入口。
