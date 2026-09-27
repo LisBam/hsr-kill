@@ -15,9 +15,6 @@ var _is_reincarnation: bool = false
 ## 当前轮回节零基索引；①对应0，越界值在绘制时收敛到现有分段范围。
 var _current_section_index: int = 0
 
-## 当前轮回技已轮回的轮回数；0表示不显示轮回数提示，非0时在正文之前独立渲染一行。
-var _reincarnation_round_count: int = 0
-
 ## 最近一次绘制得到的文本分段；每项保存text、section_index与current，供界面回归验证颜色语义。
 var _rendered_segments: Array[Dictionary] = []
 
@@ -34,12 +31,10 @@ func _ready() -> void:
 
 
 ## 写入技能说明与当前轮回节；原文保持逐字不变，静态局外资料默认传入①对应的0。
-## 轮回数提示以独立前置分段渲染，不写入 _source_description，因此技能描述原文始终逐字可读。
-func configure_description(description: String, is_reincarnation_skill: bool = false, current_section_index: int = 0, reincarnation_round_count: int = 0) -> void:
+func configure_description(description: String, is_reincarnation_skill: bool = false, current_section_index: int = 0) -> void:
 	_source_description = description
 	_is_reincarnation = is_reincarnation_skill
 	_current_section_index = maxi(current_section_index, 0)
-	_reincarnation_round_count = maxi(reincarnation_round_count, 0)
 	_render_description()
 
 
@@ -63,10 +58,6 @@ func refresh_ui_style() -> void:
 func _render_description() -> void:
 	clear()
 	_rendered_segments.clear()
-	# 轮回数提示分段；轮回技在正文之前独立显示，普通技能或未传入轮回数时不创建该段。
-	# 该分段不参与轮回节着色，因此正文的①至⑩分段索引与原文逐字内容都不受影响。
-	if _is_reincarnation and _reincarnation_round_count > 0:
-		_append_colored_segment("本技能已轮回%d次。\n" % _reincarnation_round_count, BattleUIStyle.get_color("text_secondary"), -1, false)
 	if _source_description.is_empty():
 		return
 	# 普通正文颜色；轮回技标签、触发条件、X说明和跨轮回节持续效果均使用该颜色。

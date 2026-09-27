@@ -648,7 +648,6 @@ func _request_character_information() -> void:
 			"description":skill_description,
 			"reincarnation":bool(skill_definition.get("reincarnation", false)),
 			"reincarnation_section_index":maxi(int(reincarnation_state.get("section_index", 0)), 0),
-			"reincarnation_round_count":maxi(int(reincarnation_state.get("round_count", 1)), 1),
 			"intrinsic_use_consumed":intrinsic_use_consumed_ids.has(skill_id),
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
@@ -678,7 +677,7 @@ func _get_skill_information_title(skill_id: String, skill_name: String) -> Strin
 		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
 		# 当前轮回数；下限1保证未登记的轮回技仍显示稳定文本。
 		var reincarnation_round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
-		title_suffix_parts.append("本技能已轮回%d次" % reincarnation_round_count)
+		title_suffix_parts.append("轮回%d" % reincarnation_round_count)
 	# 当前快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，视图不自行计算或扣减次数。
 	var remaining_uses_by_skill: Dictionary = _player_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
 	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
