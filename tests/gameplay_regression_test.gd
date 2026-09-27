@@ -757,7 +757,7 @@ func _test_silver_moon_requires_activation_choice() -> bool:
 	return true
 
 
-## 验证出牌阶段点击丈八蛇矛后可以选择两张普通手牌生成无花色虚拟【杀】，材料弃置且装备留在原槽位。
+## 验证出牌阶段点击丈八蛇矛后可以选择两张普通手牌生成红色无花色的虚拟【杀】，材料弃置且装备留在原槽位。
 func _test_zhangba_play_uses_two_materials() -> bool:
 	_scenario = "zhangba_play"
 	_reset_state(2)
@@ -769,7 +769,7 @@ func _test_zhangba_play_uses_two_materials() -> bool:
 	_zhangba_uid = zhangba.uid
 	# 第一张丈八材料；任意牌名均可作为普通手牌费用。
 	var first_material: CardInstance = _add_hand_card(0, "shan", "heart", 2)
-	# 第二张丈八材料；与第一张共同组成无花色、无点数的虚拟杀。
+	# 第二张丈八材料；与第一张花色不同但颜色一致，共同组成红色无花色、无点数的虚拟杀。
 	var second_material: CardInstance = _add_hand_card(0, "tao", "diamond", 3)
 	_zhangba_material_uids.assign([first_material.uid, second_material.uid])
 	_controller._begin_play_choice(0)
@@ -783,9 +783,9 @@ func _test_zhangba_play_uses_two_materials() -> bool:
 		return _fail("zhangba_play_submit")
 	if not await _wait_until_no_card_choice():
 		return _fail("zhangba_play_timeout")
-	# 虚拟杀结果；目标受到1点伤害，两张材料进入弃牌堆，丈八本身和处理区代理均保持正确终点。
+	# 虚拟杀结果；目标受到1点伤害，两张材料进入弃牌堆，丈八本身和处理区代理均保持正确终点；回放数据必须同时保留无花色与聚合出的红色。
 	var virtual_card_data: Dictionary = _last_presentation.get("card_data", {}) as Dictionary
-	if _controller.state.get_player(1).hp != 3 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(0).equipment.get("weapon") != zhangba or not _controller.state.processing_area.is_empty() or str(virtual_card_data.get("definition_id", "")) != "sha" or str(virtual_card_data.get("suit", "")) != "none" or int(virtual_card_data.get("rank", -1)) != 0:
+	if _controller.state.get_player(1).hp != 3 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(0).equipment.get("weapon") != zhangba or not _controller.state.processing_area.is_empty() or str(virtual_card_data.get("definition_id", "")) != "sha" or str(virtual_card_data.get("suit", "")) != "none" or int(virtual_card_data.get("rank", -1)) != 0 or str(virtual_card_data.get("color", "")) != "red" or str(virtual_card_data.get("color_override", "")) != "red":
 		return _fail("zhangba_play_result=%d/%s/%s" % [_controller.state.get_player(1).hp, _controller.state.processing_area, virtual_card_data])
 	return true
 

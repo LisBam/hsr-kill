@@ -16,6 +16,11 @@ var definition_id: String = ""
 ## 多张实体牌组成的无花色虚拟牌使用 none，避免错误继承任一材料牌颜色。
 var suit: String = "spade"
 
+## 虚拟牌聚合颜色覆写；空字符串表示颜色完全由 suit 推导，实体牌与单材料虚拟牌始终为空。
+## 多张材料花色不同但颜色一致时（例如红桃+方块），花色必须保持 none 却仍要表达红色，
+## 因此该字段是“红色无花色牌”“黑色无花色牌”的唯一表达入口，规则判定统一读取 get_color()。
+var color_override: String = ""
+
 ## 当前实体牌的点数；范围为1至13，其中1、11、12、13对应A、J、Q、K。
 ## 无点数虚拟牌使用0；规则判断不得把0视为任何实体牌点数。
 var rank: int = 1
@@ -72,6 +77,8 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	var card: CardInstance = CardInstance.new(str(data.get("definition_id", "")), str(data.get("suit", "spade")), int(data.get("rank", 1)), int(data.get("uid", -1)))
 	card.zone = str(data.get("zone", "draw_pile"))
 	card.owner_id = int(data.get("owner_id", -1))
+	# 多材料聚合颜色覆写；旧快照不含该字段时保持空值并回退按花色推导颜色。
+	card.color_override = str(data.get("color_override", ""))
 	card.known_to.clear()
 	for player_id_variant: Variant in data.get("known_to", []) as Array:
 		# 已知者稳定玩家 ID；异常类型统一转换为整数，重复项不会改变可见性语义。
@@ -88,11 +95,20 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	return card
 
 
-## 返回牌的颜色；红桃与方块为红色，黑桃与梅花为黑色，无花色虚拟牌返回 none。
+## 返回牌的颜色；优先读取多材料聚合颜色覆写，否则红桃与方块为红色、黑桃与梅花为黑色。
+## 无花色且无覆写的虚拟牌返回 none，表示既不是红色也不是黑色。
 func get_color() -> String:
-	if suit == "heart" or suit == "diamond":
+	if not color_override.is_empty():
+		return color_override
+	return color_of_suit(suit)
+
+
+## 按花色推导颜色；红桃与方块为红色，黑桃与梅花为黑色，其余（含 none）为无色。
+## 该纯函数同时供 CardInstance 与多材料聚合逻辑复用，避免颜色映射出现第二套实现。
+static func color_of_suit(card_suit: String) -> String:
+	if card_suit == "heart" or card_suit == "diamond":
 		return "red"
-	if suit == "spade" or suit == "club":
+	if card_suit == "spade" or card_suit == "club":
 		return "black"
 	return "none"
 
@@ -189,6 +205,7 @@ func to_dict() -> Dictionary:
 		"suit": suit,
 		"rank": rank,
 		"color": get_color(),
+		"color_override": color_override,
 		"zone": zone,
 		"owner_id": owner_id,
 		"known_to": known_to.duplicate(),

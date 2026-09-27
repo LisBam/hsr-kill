@@ -322,7 +322,8 @@ func _run() -> void:
 		printerr("SMOKE_FAIL ex_nihilo_target_mode")
 		get_tree().quit(1)
 		return
-	# 丈八蛇矛生成的多实体虚拟【杀】应为无色，不能错误触发仁王盾的黑色【杀】条件。
+	# 无花色且没有聚合颜色覆写的虚拟牌必须是无色牌，不能错误触发仁王盾的黑色【杀】条件；
+	# 丈八蛇矛等多材料转化的真实颜色由材料聚合结果通过 color_override 表达，不再固定为无色。
 	var colorless_virtual_slash: CardInstance = CardInstance.new("sha", "none", 0)
 	if colorless_virtual_slash.get_color() != "none":
 		printerr("SMOKE_FAIL virtual_slash_color=%s" % colorless_virtual_slash.get_color())
@@ -972,7 +973,7 @@ func _run() -> void:
 	_controller.add_child(ai_coordinator)
 	# 测试通信网关；保持离线模式，不接入外部网络。
 	var network_gateway: NetworkGateway = NetworkGateway.new()
-	if NetworkGateway.PROTOCOL_VERSION != 9:
+	if NetworkGateway.PROTOCOL_VERSION != 10:
 		printerr("SMOKE_FAIL protocol_version=%d" % NetworkGateway.PROTOCOL_VERSION)
 		get_tree().quit(1)
 		return

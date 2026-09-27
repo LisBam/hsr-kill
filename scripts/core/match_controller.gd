@@ -5677,15 +5677,22 @@ func _get_equipment_response_definition(choice_data: Dictionary, selected_uid: i
 	return null
 
 
-## 消耗若干已经由装备源码验证的普通手牌，并生成无花色、无点数的虚拟响应牌。
+## 消耗若干已经由装备源码验证的普通手牌，并生成按材料聚合花色与颜色的虚拟响应牌。
 func consume_virtual_equipment_response(player_id: int, equipment_uid: int, material_card_uids: Array[int], response_pattern: String, virtual_card_definition_id: String, log_message: String) -> CardInstance:
 	# 响应玩家；不存在或材料为空时不能生成虚拟牌。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or material_card_uids.is_empty() or response_pattern.is_empty() or virtual_card_definition_id.is_empty():
 		return null
+	# 参与响应的材料实体；移动前统一收集，用于推导本次虚拟牌的聚合花色与颜色。
+	var material_cards: Array[CardInstance] = []
 	for material_card_uid: int in material_card_uids:
-		if player.find_hand_card(material_card_uid) == null:
+		# 当前材料实体；不在普通手牌区时本次响应无效。
+		var material_card: CardInstance = player.find_hand_card(material_card_uid)
+		if material_card == null:
 			return null
+		material_cards.append(material_card)
+	# 材料聚合结果；同花色视为该花色，同色不同花色保留颜色但无花色，异色无色。
+	var material_aggregate: Dictionary = VirtualCard.resolve_material_aggregate(material_cards)
 	_ensure_card_movement()
 	# 响应事件；全部材料共享同一稳定父事件，便于回放还原顺序。
 	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "equipment_uid":equipment_uid, "material_card_uids":material_card_uids.duplicate()}, {"responded":true, "virtual":true})
@@ -5697,8 +5704,13 @@ func consume_virtual_equipment_response(player_id: int, equipment_uid: int, mate
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":equipment_uid})
 	if not log_message.is_empty():
 		add_log(log_message)
-	# 虚拟响应牌不继承任一材料花色、点数或颜色。
-	return CardInstance.new(virtual_card_definition_id, "none", 0)
+	# 虚拟响应牌不继承任一材料点数；花色与颜色按全部材料聚合，与主动使用虚拟牌保持同一语义。
+	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, str(material_aggregate.get("suit", "none")), 0)
+	# 聚合颜色覆写；只有“某色无花色”时才写入，花色已能表达颜色时保持空值。
+	var aggregated_color: String = str(material_aggregate.get("color", "none"))
+	if virtual_card.suit == "none" and aggregated_color != "none":
+		virtual_card.color_override = aggregated_color
+	return virtual_card
 
 
 ## 旧版自动响应实现的独立内部端口；当前规则不得直接调用，保留用于兼容扩展技能调试。
@@ -11387,15 +11399,17 @@ func _get_equipment_card_by_definition(player_id: int, definition_id: String) ->
 	return null
 
 
-## 创建一张虚拟牌并使用；单材料转化保留花色点数，多材料转化保持无花色无点数。
-## 可选规则覆写只表达技能的距离、次数或目标上限修正，材料真实颜色由本入口强制写入并参与最终目标校验。
+## 创建一张虚拟牌并使用；单材料转化继承材料花色点数，多材料转化按材料聚合花色与颜色。
+## 可选规则覆写只表达技能的距离、次数或目标上限修正，材料真实花色与颜色由本入口强制写入并参与最终目标校验。
 func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String, material_card_uids: Array[int], target_ids: Array[int], log_message: String, rule_overrides: Dictionary = {}, virtual_storage: Dictionary = {}) -> bool:
 	if virtual_card_definition_id.is_empty() or material_card_uids.is_empty():
 		return false
-	# 单材料转化牌的花色；默认none用于丈八蛇矛等多材料虚拟牌。
+	# 单材料转化牌的花色；多材料时改由材料聚合结果覆盖。
 	var virtual_suit: String = "none"
 	# 单材料转化牌的点数；默认0表示多材料虚拟牌没有可继承点数。
 	var virtual_rank: int = 0
+	# 多材料聚合颜色；空字符串表示颜色可直接由聚合花色推导，例如两张黑桃当【杀】。
+	var virtual_color_override: String = ""
 	if material_card_uids.size() == 1:
 		# 唯一材料牌；允许来自手牌、木牛“粮”或装备区，lose子事件仍会再次复核区域。
 		var single_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uids[0])
@@ -11403,8 +11417,24 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 			return false
 		virtual_suit = single_material.suit
 		virtual_rank = single_material.rank
+	else:
+		# 多材料牌实体；每张材料必须在创建代理前仍归使用者所有，否则无法确定本次真实花色与颜色。
+		var material_cards: Array[CardInstance] = []
+		for material_card_uid: int in material_card_uids:
+			# 当前材料实体；缺失即拒绝本次使用，避免按猜测颜色指定目标。
+			var material_card: CardInstance = _find_owned_virtual_material(actor_id, material_card_uid)
+			if material_card == null:
+				return false
+			material_cards.append(material_card)
+		# 材料聚合结果；同花色视为该花色，同色不同花色保留颜色但无花色，异色无色。
+		var material_aggregate: Dictionary = VirtualCard.resolve_material_aggregate(material_cards)
+		virtual_suit = str(material_aggregate.get("suit", "none"))
+		# 聚合颜色覆写；花色已能表达颜色时保持空字符串，只有“某色无花色”才写入。
+		if virtual_suit == "none" and str(material_aggregate.get("color", "none")) != "none":
+			virtual_color_override = str(material_aggregate.get("color", "none"))
 	# 逻辑代理实体；只在本次CardUseEvent的处理区生命周期内存在。
 	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, virtual_suit, virtual_rank)
+	virtual_card.color_override = virtual_color_override
 	if material_card_uids.size() == 1:
 		# 单材料转化的原牌面定义；表现层继续绘制材料实体，并以横条标明本次实际使用的逻辑牌名。
 		var presentation_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uids[0])
@@ -11487,6 +11517,8 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 	var declared_target_ids: Array[int] = requested_target_ids.duplicate() if not requested_target_ids.is_empty() else target_ids.duplicate()
 	# 本次使用的逻辑牌快照；后续视为牌与多材料牌可以复用完全相同的事件字段。
 	var virtual_card: VirtualCard = VirtualCard.new(card.definition_id, card.suit, card.rank, str(definition.get("nature", "normal")))
+	# 本次逻辑牌颜色；实体牌、单材料转化与多材料聚合牌统一读取代理实体颜色，回放可据此还原来牌颜色。
+	virtual_card.color = card.get_color()
 	# 本次逻辑牌扩展存储；仅允许基础可序列化值，技能可借此把多材料花色等规则数据传递到后续时机。
 	virtual_card.storage = virtual_storage.duplicate(true)
 	# 实体牌默认以自身作为唯一材料；无材料虚拟牌必须保持空数组，避免后续lose子事件把处理区代理误校验为发动者持有的费用牌。
