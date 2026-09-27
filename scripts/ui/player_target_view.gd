@@ -626,6 +626,9 @@ func _request_character_information() -> void:
 	var skill_information_lines: Array[String] = []
 	# 当前武将结构化技能分段；统一信息框据此把技能名绘制为与右键详情一致的金色，同时保持说明文字颜色不变。
 	var skill_description_sections: Array[Dictionary] = []
+	# 已经释放固有额度的限定技与觉醒技集合；分段据此标记该技能需要整块变淡，界面不自行推断释放状态。
+	# 该字段在 used_limited_skill_ids 基础上额外包含觉醒技，因此觉醒技释放后同样进入变淡表现。
+	var intrinsic_use_consumed_ids: Array = _player_snapshot.get("used_intrinsic_use_skill_ids", []) as Array
 	for skill_id_variant: Variant in visible_skill_ids:
 		# 当前技能稳定 ID；用于查询静态技能名称与说明，不读取运行时技能实例。
 		var skill_id: String = str(skill_id_variant)
@@ -646,6 +649,7 @@ func _request_character_information() -> void:
 			"reincarnation":bool(skill_definition.get("reincarnation", false)),
 			"reincarnation_section_index":maxi(int(reincarnation_state.get("section_index", 0)), 0),
 			"reincarnation_round_count":maxi(int(reincarnation_state.get("round_count", 1)), 1),
+			"intrinsic_use_consumed":intrinsic_use_consumed_ids.has(skill_id),
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
 	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"

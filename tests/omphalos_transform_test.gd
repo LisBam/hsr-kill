@@ -11,6 +11,9 @@ var _last_broadcast_choice: Dictionary = {}
 ## 最近一次技能按钮发出的悬停标题；供轮回技标题用例逐字校验片段内容与顺序。
 var _captured_skill_title: String = ""
 
+## 最近一次武将牌悬停资料中的技能分段；供已释放变淡用例读取 intrinsic_use_consumed 标记。
+var _captured_skill_sections: Array[Dictionary] = []
+
 
 ## 延迟一帧开始回归，确保GameDatabase已经完成目录扫描与静态校验。
 func _ready() -> void:
@@ -33,6 +36,8 @@ func _run() -> void:
 	if not _test_yongjie_wheel_and_tiancai():
 		return
 	if not _test_reincarnation_title_round_count():
+		return
+	if not _test_released_skill_content_dimming():
 		return
 	if not _test_tiancai_play_choice_broadcast():
 		return
@@ -520,6 +525,77 @@ func _test_reincarnation_title_round_count() -> bool:
 	if snapshot_limited_ids.has("lunhui") or not snapshot_intrinsic_ids.has("lunhui"):
 		return _fail("used_intrinsic_use_snapshot=%s/%s" % [snapshot_limited_ids, snapshot_intrinsic_ids])
 	return true
+
+
+## 校验武将悬停资料与右键武将详情把已释放的限定技与觉醒技整块显示为变淡，被复原时保持原亮度。
+func _test_released_skill_content_dimming() -> bool:
+	# 统一信息框实例；两处技能列表都由该组件渲染，测试直接驱动其渲染入口而不重建整个牌桌。
+	var information_box: InformationBoxLayer = InformationBoxLayer.new()
+	add_child(information_box)
+	# 悬停资料分段；intrinsic_use_consumed 由 PlayerTargetView 依据权威快照写入，这里直接构造两种状态。
+	information_box._hover_information = {"description_sections":[
+		{"title":"【轮回】", "description":"觉醒技，达到条件后发动。", "reincarnation":false, "reincarnation_section_index":0, "reincarnation_round_count":0, "intrinsic_use_consumed":true},
+		{"title":"【祥音】", "description":"限定技，出牌阶段发动。", "reincarnation":false, "reincarnation_section_index":0, "reincarnation_round_count":0, "intrinsic_use_consumed":false},
+	]}
+	information_box._render_hover_description()
+	if information_box._hover_skill_description_labels.size() != 2:
+		information_box.queue_free()
+		return _fail("hover_section_count=%d" % information_box._hover_skill_description_labels.size())
+	# 已释放技能与未释放技能的整块容器；技能名与技能描述共用同一个容器，因此一次断言覆盖两者。
+	var released_hover_container: Control = information_box._hover_skill_description_labels[0].get_parent() as Control
+	var normal_hover_container: Control = information_box._hover_skill_description_labels[1].get_parent() as Control
+	if not is_equal_approx(released_hover_container.modulate.a, 0.8) or not is_equal_approx(normal_hover_container.modulate.a, 1.0):
+		information_box.queue_free()
+		return _fail("hover_released_alpha=%.3f/%.3f" % [released_hover_container.modulate.a, normal_hover_container.modulate.a])
+	# 右键武将详情技能列表；觉醒技与限定技都通过同一快照字段判定已释放。
+	information_box._character_definition = {"skills":["lunhui", "yongyi"]}
+	information_box._character_snapshot = {"used_intrinsic_use_skill_ids":["lunhui"]}
+	information_box._render_character_skills()
+	# 右键详情技能条目；列表内只有技能条目带该元数据，分隔线与占位标签会被跳过。
+	var skill_entries: Array[Node] = []
+	for child: Node in information_box._character_skill_list.get_children():
+		if child.has_meta("information_box_skill_entry"):
+			skill_entries.append(child)
+	if skill_entries.size() != 2:
+		information_box.queue_free()
+		return _fail("character_skill_entry_count=%d" % skill_entries.size())
+	if not is_equal_approx((skill_entries[0] as Control).modulate.a, 0.8) or not is_equal_approx((skill_entries[1] as Control).modulate.a, 1.0):
+		information_box.queue_free()
+		return _fail("detail_released_alpha=%.3f/%.3f" % [(skill_entries[0] as Control).modulate.a, (skill_entries[1] as Control).modulate.a])
+	# 复原后的快照；已释放集合不再包含该觉醒技，条目必须恢复完全不透明。
+	information_box._character_snapshot = {"used_intrinsic_use_skill_ids":[]}
+	information_box._render_character_skills()
+	# 复原后的首个技能条目；亮度必须回到1.0。
+	var restored_entry: Control = null
+	for child: Node in information_box._character_skill_list.get_children():
+		if child.has_meta("information_box_skill_entry"):
+			restored_entry = child as Control
+			break
+	if restored_entry == null or not is_equal_approx(restored_entry.modulate.a, 1.0):
+		information_box.queue_free()
+		return _fail("detail_restored_alpha=%s" % (restored_entry.modulate.a if restored_entry != null else "missing"))
+	information_box.queue_free()
+	# 武将牌悬停资料的标记来源；PlayerTargetView 必须依据权威快照为每个技能写入 intrinsic_use_consumed。
+	# 信息框只消费该标记，因此这一层若漏传，悬停资料不会变淡但右键详情仍然正常。
+	# 必须实例化正式场景：该组件的插画、体力等子节点由 .tscn 提供，直接 new() 会缺少节点。
+	var target_view_scene: PackedScene = load("res://scenes/components/player_target_view.tscn") as PackedScene
+	var target_view: PlayerTargetView = target_view_scene.instantiate() as PlayerTargetView
+	add_child(target_view)
+	target_view.configure_snapshot({"character_id":"kaesilanna", "used_intrinsic_use_skill_ids":["lunhui"]}, {"skills":["lunhui", "yongyi"], "display_name":"测试武将"})
+	target_view.information_requested.connect(_on_character_information_requested)
+	target_view._request_character_information()
+	if _captured_skill_sections.size() != 2 or not bool(_captured_skill_sections[0].get("intrinsic_use_consumed", false)) or bool(_captured_skill_sections[1].get("intrinsic_use_consumed", true)):
+		target_view.queue_free()
+		return _fail("target_view_released_sections=%s" % str(_captured_skill_sections))
+	target_view.queue_free()
+	return true
+
+
+## 记录武将牌悬停资料中的技能分段；测试只读取 intrinsic_use_consumed 标记，锚点矩形被忽略。
+func _on_character_information_requested(information: Dictionary, _anchor_rect: Rect2) -> void:
+	_captured_skill_sections.clear()
+	for section_variant: Variant in information.get("description_sections", []) as Array:
+		_captured_skill_sections.append((section_variant as Dictionary).duplicate())
 
 
 ## 记录技能按钮发出的悬停标题；测试只读取标题文本，锚点矩形由牌桌信息框消费。
