@@ -1845,7 +1845,8 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	# 当前完整可见技能 ID；包含武将固有技能、模式技能与局内获得的临时技能。
 	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
 	# 当前已经发动的限定技ID；完全读取权威快照，不根据按钮禁用状态或本地历史自行推断。
-	var used_limited_skill_ids: Array = local_player.get("used_limited_skill_ids", []) as Array
+	# 补充：改读 used_intrinsic_use_skill_ids，该字段额外包含觉醒技，因此觉醒技消耗固有额度后同样进入本集合，按钮显示为已释放状态。
+	var used_limited_skill_ids: Array = local_player.get("used_intrinsic_use_skill_ids", []) as Array
 	# 可见技能列表签名；临时技能增减时即使武将与身份不变也必须重建按钮。
 	var skill_list_signature: String = ",".join(skill_ids)
 	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity and _rendered_skill_list_signature == skill_list_signature:

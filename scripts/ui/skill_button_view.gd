@@ -12,6 +12,9 @@ const LIMITED_SKILL_USED_BACKGROUND_DARKENING: float = 0.42
 ## 限定技已经发动后相对通用禁用描边的加深比例；默认0.25让深灰边框弱于未发动状态。
 const LIMITED_SKILL_USED_BORDER_DARKENING: float = 0.25
 
+## 限定技或觉醒技已经释放后的技能名字体不透明度；默认0.8使已释放技能明显变淡，同时保留可辨认的文字轮廓。
+const LIMITED_SKILL_USED_FONT_ALPHA: float = 0.8
+
 ## 技能按钮点击信号；参数为全项目稳定技能 ID。
 signal skill_requested(skill_id: String)
 
@@ -134,6 +137,7 @@ func _on_information_mouse_entered() -> void:
 		"description":skill_description,
 		"reincarnation":_is_reincarnation_skill,
 		"reincarnation_section_index":_reincarnation_section_index,
+		"reincarnation_round_count":_reincarnation_round_count,
 	}
 	information_requested.emit(information, get_global_rect())
 
@@ -173,9 +177,20 @@ func _refresh_visual_state() -> void:
 		border_color = BattleUIStyle.get_color("accent")
 	# 技能描边宽度；选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 3 if is_skill_selected else 1
-	add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if is_skill_available else disabled_font_color)
-	add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font") if is_skill_available else disabled_font_color)
-	add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("button_pressed_font") if is_skill_available else disabled_font_color)
+	# 技能按钮正文颜色；可发动使用主题主文字色，不可发动使用禁用文字色。
+	var normal_font_color: Color = BattleUIStyle.get_color("text_primary") if is_skill_available else disabled_font_color
+	# 悬停与按下文字色；不可发动时沿用同一禁用色，保证三种状态的表现一致。
+	var hover_font_color: Color = BattleUIStyle.get_color("button_hover_font") if is_skill_available else disabled_font_color
+	var pressed_font_color: Color = BattleUIStyle.get_color("button_pressed_font") if is_skill_available else disabled_font_color
+	# 限定技与觉醒技释放后字体整体变淡；只降低不透明度而不改变色相，技能被复原后同一入口自动恢复。
+	if _is_limited_skill_used:
+		normal_font_color.a = LIMITED_SKILL_USED_FONT_ALPHA
+		hover_font_color.a = LIMITED_SKILL_USED_FONT_ALPHA
+		pressed_font_color.a = LIMITED_SKILL_USED_FONT_ALPHA
+		disabled_font_color.a = LIMITED_SKILL_USED_FONT_ALPHA
+	add_theme_color_override("font_color", normal_font_color)
+	add_theme_color_override("font_hover_color", hover_font_color)
+	add_theme_color_override("font_pressed_color", pressed_font_color)
 	add_theme_color_override("font_disabled_color", disabled_font_color)
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))

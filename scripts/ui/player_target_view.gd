@@ -645,6 +645,7 @@ func _request_character_information() -> void:
 			"description":skill_description,
 			"reincarnation":bool(skill_definition.get("reincarnation", false)),
 			"reincarnation_section_index":maxi(int(reincarnation_state.get("section_index", 0)), 0),
+			"reincarnation_round_count":maxi(int(reincarnation_state.get("round_count", 1)), 1),
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
 	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"
@@ -660,16 +661,28 @@ func _request_character_information() -> void:
 	information_requested.emit(information, get_global_rect())
 
 
-## 返回武将资料中的技能标题；局内获得的受限技能只在标题后显示完整次数文案，避免改写技能原文。
+## 返回武将资料中的技能标题；轮回技先标注轮回数，局内获得的受限技能再显示完整次数文案，避免改写技能原文。
 func _get_skill_information_title(skill_id: String, skill_name: String) -> String:
 	# 默认技能资料标题；所有技能均使用统一书名号样式，保证悬停与右键详情视觉一致。
 	var skill_information_title: String = "【%s】" % skill_name
+	# 技能名后的补充说明片段；轮回技固定先标注已轮回次数，次数文案始终排在其后，与技能按钮悬停标题保持一致。
+	var title_suffix_parts: Array[String] = []
+	# 技能静态定义；只用于判断该技能是否为轮回技，不读取技能的运行时实例。
+	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+	if bool(skill_definition.get("reincarnation", false)):
+		# 当前技能轮回状态；与轮回节高亮共用同一公开快照字段，不新增数据来源。
+		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+		# 当前轮回数；下限1保证未登记的轮回技仍显示稳定文本。
+		var reincarnation_round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
+		title_suffix_parts.append("本技能已轮回%d次" % reincarnation_round_count)
 	# 当前快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，视图不自行计算或扣减次数。
 	var remaining_uses_by_skill: Dictionary = _player_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
 	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
 	var remaining_uses_description: String = str(remaining_uses_by_skill.get(skill_id, ""))
 	if not remaining_uses_description.is_empty():
-		skill_information_title += "（%s）" % remaining_uses_description
+		title_suffix_parts.append(remaining_uses_description)
+	if not title_suffix_parts.is_empty():
+		skill_information_title += "（%s）" % "；".join(title_suffix_parts)
 	return skill_information_title
 
 
