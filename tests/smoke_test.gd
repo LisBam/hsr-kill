@@ -180,9 +180,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；新增停云的祥音与光覆后，共登记72个独立技能源码定义。
+	# 技能元数据数量；登记停云的祥音与光覆、海瑟音的泛音与回涛后，共登记74个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 72:
+	if skill_definition_count != 74:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -258,13 +258,13 @@ func _run() -> void:
 		printerr("SMOKE_FAIL tingyun_skill_descriptions")
 		get_tree().quit(1)
 		return
-	# 武将定义数量；新增停云后，共登记34名角色定义。
+	# 武将定义数量；新增海瑟音后，共登记35名角色定义。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 34:
+	if character_definition_count != 35:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
-	# 势力展示元数据数量；当前34名武将定义共同使用8个独立势力主题。
+	# 势力展示元数据数量；当前35名武将定义共同使用8个独立势力主题。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 8:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)

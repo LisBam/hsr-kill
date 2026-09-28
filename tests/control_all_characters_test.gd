@@ -63,8 +63,23 @@ func _test_offline_controls_every_player() -> bool:
 	if _controller.state.current_phase == "character_selection":
 		return _fail("selection_stuck")
 	_controller.call("_emit_state")
+	# 部分武将的“游戏开始时”技能会立刻创建付费或指定目标的待处理选择（例如【铁壁】的费用目标）；
+	# 此时视角跟随该选择的回答者是全角色控制的设计行为，必须先逐一取消这些开局选择，
+	# 才能验证“视角交还给当前回合角色”这条规则本身。固定种子选将会随武将池变化而换人，因此不能假设开局没有技能选择。
+	var opening_settle_safety: int = 0
+	while not _controller._pending_card_choice.is_empty() and opening_settle_safety < 12:
+		opening_settle_safety += 1
+		if not _cancel_pending_choice():
+			# 开局选择上下文；取消失败时列出技能来源，便于定位不可取消的请求。
+			var stuck_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+			return _fail("opening_choice_settle kind=%s chooser=%d" % [str(stuck_context.get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1))])
+		_controller.call("_emit_state")
 	if _controller.state.current_player_id >= 0 and _controller.local_human_player_id != _controller.state.current_player_id:
-		return _fail("turn_view")
+		# 本局实际登场的武将；固定种子选将结果会随武将池变化，列出后便于定位差异来源。
+		var lineup: Array[String] = []
+		for lineup_player: PlayerState in _controller.state.players:
+			lineup.append("%d=%s" % [lineup_player.player_id, lineup_player.character_id])
+		return _fail("turn_view local=%d current=%d phase=%s turn=%d lineup=%s" % [_controller.local_human_player_id, _controller.state.current_player_id, str(_controller.state.current_phase), _controller.state.turn_number, str(lineup)])
 	# 构造另一名角色的技能/响应选择；显式请求发布前应立即切换到该角色视角。
 	var requested_player_id: int = _controller.state.players[1].player_id
 	if requested_player_id == _controller.local_human_player_id:
@@ -191,6 +206,19 @@ func _restore_settings() -> void:
 	GameSettings.set("_settings_file_path", _original_settings_file_path)
 	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_FILE_PATH))
+
+
+## 取消当前待处理选择；仅用于清理开局技能产生的临时请求，必须绑定创建时的请求编号与回答者，否则会被权威入口拒绝。
+func _cancel_pending_choice() -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return true
+	# 当前请求的稳定编号与回答者；同步续接可能立刻创建下一请求，提交必须锁定该编号。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	# 标准选择动作；取消时不携带任何牌或目标，仅声明不发动该技能。
+	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+	return _controller.submit_action(action)
 
 
 ## 失败出口；恢复设置后输出稳定错误标记并退出非零状态。

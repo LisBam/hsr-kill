@@ -394,6 +394,14 @@ const AUTOMATIC_MATCH_SEED_PROCESS_STEP: int = 8191
 ## 对局随机数生成器；牌堆、身份与武将选择统一使用，便于未来记录种子回放。
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
+## 弃置批次栈；每次面向规则的弃置动作占一层，用于把“一次弃置多张”的牌聚合成一个批次事件。
+## 每层键为 batch_id（稳定批次号）、player_id（本次弃置的主体角色）、reason（弃置原因）、card_uids（本批已进入弃牌堆的牌）。
+## 使用栈而非单变量，使批次内技能连锁产生的新弃置动作可以各自成批，不会污染外层批次。
+var _discard_batch_stack: Array[Dictionary] = []
+
+## 下一个弃置批次号；从1起单调递增，只用于事件载荷的稳定标识，规则逻辑不得依赖其具体数值。
+var _next_discard_batch_id: int = 1
+
 ## 自动开局种子自增序号；同一毫秒内连续重开时仍保证每局获得不同随机序列，避免斗地主座位与身份固定。
 var _automatic_match_seed_serial: int = 0
 
@@ -6057,11 +6065,14 @@ func get_opportunity_discard_candidates(source_id: int, target_id: int) -> Array
 
 ## 弃置目标区域内玩家明确选择的多张牌；每张独立复核位置与保护规则，返回实际弃置数量。
 func discard_selected_player_cards(target_id: int, selected_uids: Array[int], source_id: int = -1) -> int:
+	# 弃置批次；弃置主体是实际失去牌的目标角色，而不是下达弃置要求的来源角色。
+	_begin_discard_batch(target_id, "discard_selected_player_cards")
 	# 实际弃置数量；等待期间已经离区或新受保护的UID不会计入。
 	var discarded_count: int = 0
 	for selected_uid: int in selected_uids:
 		if _discard_selected_player_card(target_id, selected_uid, source_id):
 			discarded_count += 1
+	_end_discard_batch()
 	return discarded_count
 
 
@@ -6246,11 +6257,14 @@ func discard_all_hand_cards(player_id: int, source_id: int = -1, reason: String 
 	var hand_uids: Array[int] = []
 	for hand_card: CardInstance in player.hand:
 		hand_uids.append(hand_card.uid)
+	# 弃置批次；整批手牌共享一个批次事件，使“一次弃置多张”的技能能够整批判定黑红与花色等信息。
+	_begin_discard_batch(player_id, reason)
 	# 实际弃置数量；每张仍通过标准手牌弃置端口进入移动时机与弃牌堆。
 	var discarded_count: int = 0
 	for card_uid: int in hand_uids:
 		if discard_card_from_hand(player_id, card_uid):
 			discarded_count += 1
+	_end_discard_batch()
 	if discarded_count > 0:
 		add_log("%s因%s弃置了全部手牌。" % [format_player_state_log_name(player), format_log_reason(reason)])
 		if source_id >= 0:
@@ -6296,9 +6310,13 @@ func _discard_playable_card(player_id: int, card_uid: int) -> bool:
 
 ## 弃置玩家区域内至多指定数量的牌；选择顺序为手牌、装备、判定区。
 func discard_n_from_player(player_id: int, count: int) -> void:
+	# 弃置批次；整次“弃置至多N张”共享一个批次事件。必须无条件开启，嵌套弃置才能各自成批。
+	_begin_discard_batch(player_id, "discard_n_from_player")
 	for _index: int in range(maxi(count, 0)):
 		# 当前玩家状态；每次循环重新读取区域数量。
 		var player: PlayerState = state.get_player(player_id)
+		if player == null:
+			break
 		if not player.hand.is_empty():
 			discard_card_from_hand(player_id, player.hand[0].uid)
 		elif not player.equipment.is_empty():
@@ -6306,7 +6324,9 @@ func discard_n_from_player(player_id: int, count: int) -> void:
 		elif not player.judgment_area.is_empty():
 			_move_to_discard(player.judgment_area.pop_front())
 		else:
-			return
+			# 无可弃置区域时结束循环而不是直接返回，保证批次栈正常收尾。
+			break
+	_end_discard_batch()
 
 
 ## 返回玩家手牌、装备与判定区的可弃置牌总数。
@@ -6598,17 +6618,21 @@ func get_hand_equipment_card_count(player_id: int) -> int:
 
 ## 从玩家手牌区和装备区依次弃置至多指定数量的牌；不会错误弃置判定区中的延时锦囊。
 func discard_n_from_hand_equipment(player_id: int, count: int) -> void:
+	# 弃置批次；整次“从手牌与装备区弃置至多N张”共享一个批次事件。
+	_begin_discard_batch(player_id, "discard_n_from_hand_equipment")
 	for _index: int in range(maxi(count, 0)):
 		# 当前玩家状态；每次循环重新读取区域，保证装备离开效果结算后数量准确。
 		var player: PlayerState = state.get_player(player_id)
 		if player == null:
-			return
+			break
 		if not player.hand.is_empty():
 			discard_card_from_hand(player_id, player.hand[0].uid)
 		elif not player.equipment.is_empty():
 			_discard_equipment_slot(player_id, str(player.equipment.keys()[0]), true)
 		else:
-			return
+			# 两个区域都已空时结束循环而不是直接返回，保证批次栈正常收尾。
+			break
+	_end_discard_batch()
 
 
 ## 把一张普通手牌交给指定存活角色，并在进入其手牌区后赋予临时视为牌名；目标可以与来源相同。
@@ -7148,6 +7172,8 @@ func discard_selected_hand_cards(player_id: int, selected_uids: Array[int]) -> i
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null:
 		return 0
+	# 弃置批次；整批手牌共享一个批次事件，便于“一次弃置多张”类技能整批判定。
+	_begin_discard_batch(player_id, "discard_selected_hand_cards")
 	for selected_uid: int in selected_uids:
 		# 从手牌区取出实体；take_hand_card 保证不会误取装备。
 		var hand_card: CardInstance = player.take_hand_card(selected_uid)
@@ -7155,6 +7181,7 @@ func discard_selected_hand_cards(player_id: int, selected_uids: Array[int]) -> i
 			continue
 		_move_to_discard(hand_card)
 		discarded_count += 1
+	_end_discard_batch()
 	return discarded_count
 
 
@@ -7867,11 +7894,14 @@ func continue_card_after_preparation(parent_card_uid: int) -> void:
 
 ## 按稳定 UID 弃置玩家手牌区或装备区中被明确选择的牌；不存在或已移动的 UID 会安全跳过。
 func discard_selected_hand_equipment(player_id: int, selected_uids: Array[int]) -> int:
+	# 弃置批次；整批费用牌共享一个批次事件，便于“一次弃置多张”类技能整批判定。
+	_begin_discard_batch(player_id, "discard_selected_hand_equipment")
 	# 实际弃置数量；调用方据此判断装备费用是否完整支付。
 	var discarded_count: int = 0
 	for selected_uid: int in selected_uids:
 		if _discard_selected_player_card(player_id, selected_uid):
 			discarded_count += 1
+	_end_discard_batch()
 	return discarded_count
 
 
@@ -13722,6 +13752,43 @@ func _end_match_as_draw(reason: String) -> void:
 	_invalidate_lan_seat_reservations()
 
 
+## 开启一次弃置批次；批量弃置入口在循环外层调用，使整批牌共享同一个 cardsDiscardedBatchAfter 事件。
+## 批量入口必须无条件调用本函数（即使外层已有批次），嵌套弃置才能各自成批而不把内层牌计入外层。
+## 返回稳定批次号；调用方必须保证随后调用 _end_discard_batch() 收尾，包括提前跳出循环的路径。
+func _begin_discard_batch(player_id: int, reason: String) -> int:
+	# 当前批次号；先取自增计数器再登记，保证嵌套批次的内层编号与外层不同。
+	var batch_id: int = _next_discard_batch_id
+	_next_discard_batch_id += 1
+	_discard_batch_stack.append({
+		"batch_id":batch_id,
+		"player_id":player_id,
+		"reason":reason,
+		"card_uids":[],
+	})
+	return batch_id
+
+
+## 结束栈顶弃置批次；先弹出再派发，使批次事件内由技能连锁产生的新弃置动作自成新批次。
+func _end_discard_batch() -> void:
+	if _discard_batch_stack.is_empty():
+		return
+	# 已完成的批次；必须先从栈中移除，否则批次事件回调内的弃置会错误追加到本批。
+	var finished_batch: Dictionary = _discard_batch_stack.pop_back()
+	# 本批实际弃置的牌；空批次不派发，避免出现“发动了却没有牌可判定”的空事件。
+	var batch_card_uids: Array = finished_batch.get("card_uids", []) as Array
+	if batch_card_uids.is_empty():
+		return
+	# 本次弃置的主体角色；与其弃置的牌归属一致，供“当你弃置牌时”类技能按角色过滤。
+	var batch_player_id: int = int(finished_batch.get("player_id", -1))
+	_emit_rule_timing("cardsDiscardedBatchAfter", batch_player_id, batch_player_id, -1, {
+		"discard_batch_id":int(finished_batch.get("batch_id", -1)),
+		"card_uids":batch_card_uids.duplicate(),
+		"source_player_id":batch_player_id,
+		"reason":str(finished_batch.get("reason", "")),
+		"batch_size":batch_card_uids.size(),
+	}, state.current_event_id)
+
+
 ## 将闪电移至下一角色时、装备效果与其他规则共用的弃牌移动基础操作。
 ## related_event_id 为-2时沿用当前规则事件；显式传入父事件可把 cardsDiscard 关联到对应结算。
 func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
@@ -13736,6 +13803,12 @@ func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	var source_owner_id: int = card.owner_id
 	if source_owner_id >= 0 and source_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
 		add_log("%s弃置了%s。" % [format_player_log_name(source_owner_id), format_card_log_name(card)])
+	# 弃置批次主体；只有手牌、装备与木牛“粮”的离场属于“弃置牌”，判定区与公共区域只是置入弃牌堆，不参与批次判定。
+	var batch_player_id: int = source_owner_id if source_owner_id >= 0 and source_zone in ["hand", "equipment", "wooden_ox"] else -1
+	# 本次弃置是否自成一个批次；栈非空表示外层批量入口已经建立了更大的批次，此时只把本张计入该批次。
+	var owns_batch: bool = batch_player_id >= 0 and _discard_batch_stack.is_empty()
+	if owns_batch:
+		_begin_discard_batch(batch_player_id, "discard")
 	# 弃牌父事件；默认使用当前规则摘要，判定与直接使用牌会显式传入稳定父事件。
 	var discard_parent_event_id: int = _current_rule_parent_event_id() if related_event_id == -2 else related_event_id
 	# 弃牌事件；实体移动历史关联到该事件，等价表达 orderingDiscard 最终创建 cardsDiscard 的收尾关系。
@@ -13743,11 +13816,20 @@ func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	if card_movement != null:
 		var move: CardMoveEvent = _move_card_with_timings(card, "discard_pile", -1, "discard", discard_event_id)
 		if move == null:
+			# 移动被前置时机取消时牌并未离开原区域；隐式批次必须立即收尾，否则空批次会永久留在栈上吞掉后续弃置。
+			if owns_batch:
+				_end_discard_batch()
 			return
 	else:
 		card.zone = "discard_pile"
 		card.owner_id = -1
 		state.discard_pile.append(card)
+	# 计入当前批次；隐式批次同样登记，使单张弃置也产生一次批次事件，规则语义保持一致。
+	if batch_player_id >= 0 and not _discard_batch_stack.is_empty():
+		var batch_card_uids: Array = _discard_batch_stack[-1]["card_uids"] as Array
+		batch_card_uids.append(card.uid)
+	if owns_batch:
+		_end_discard_batch()
 
 
 ## 通过唯一移动服务执行实体区域变化，并在移动前后派发 lose、gain、discard、equip、addJudge 与处理区标准时机；隐藏定向获得只在全部前置时机通过后重置牌面知识。
