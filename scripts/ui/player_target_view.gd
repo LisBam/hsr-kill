@@ -890,30 +890,41 @@ func _rebuild_corner_stack(specs: Array[Dictionary]) -> void:
 		var badge: Control = _create_corner_badge(spec)
 		if badge == null:
 			continue
+		# 必须先入树、再写内容：两个角标组件都用 @onready 取内部子节点，入树前该引用仍是 null，
+		# 此时写入文本会抛出“Invalid assignment ... on a base object of type 'Nil'”，
+		# 且错误会沿状态广播栈一路上抛，打断正在结算的技能流程。
 		_corner_stack.add_child(badge)
+		_apply_corner_badge_spec(badge, spec)
 		badge.position = Vector2(0.0, offset_y)
 		# 让控件按自身内容取尺寸；按钮与文本角标都据此得到“随文本变化”的宽高，无需写死像素。
+		# 尺寸重算必须在写入文本之后，否则会按空文本取到过小的宽高。
 		badge.reset_size()
 		offset_y += badge.size.y + CORNER_STACK_SPACING
 
 
-## 按单条规格创建角标控件；带查看类型的条目创建为可点击按钮，其余创建为纯文本角标。
+## 按单条规格实例化角标控件；本方法只创建节点，内容统一由 _apply_corner_badge_spec 在入树后写入。
 func _create_corner_badge(spec: Dictionary) -> Control:
 	# 查看类型；非空表示该条目需要点击交互，因此使用按钮组件而不是纯文本角标。
+	if str(spec.get("view_kind", "")).is_empty():
+		return CORNER_TEXT_BADGE_SCENE.instantiate() as CharacterCornerTextBadge
+	return CORNER_ACTION_BADGE_SCENE.instantiate() as CharacterCornerActionBadge
+
+
+## 写入单条角标内容；带查看类型的条目配置为可点击按钮，其余写入纯文本角标。
+## 调用前提：badge 必须已经加入场景树，否则组件内部的 @onready 引用尚未成立。
+func _apply_corner_badge_spec(badge: Control, spec: Dictionary) -> void:
+	# 查看类型；非空表示该条目需要点击交互，因此按按钮组件配置信号。
 	var view_kind: String = str(spec.get("view_kind", ""))
 	var display_text: String = str(spec.get("text", ""))
 	if view_kind.is_empty():
-		var text_badge: CharacterCornerTextBadge = CORNER_TEXT_BADGE_SCENE.instantiate() as CharacterCornerTextBadge
-		if text_badge == null:
-			return null
-		text_badge.set_display_text(display_text)
-		return text_badge
-	var action_badge: CharacterCornerActionBadge = CORNER_ACTION_BADGE_SCENE.instantiate() as CharacterCornerActionBadge
-	if action_badge == null:
-		return null
-	action_badge.configure(str(spec.get("entry_id", "")), display_text, view_kind)
-	action_badge.action_pressed.connect(_on_corner_action_pressed)
-	return action_badge
+		var text_badge: CharacterCornerTextBadge = badge as CharacterCornerTextBadge
+		if text_badge != null:
+			text_badge.set_display_text(display_text)
+		return
+	var action_badge: CharacterCornerActionBadge = badge as CharacterCornerActionBadge
+	if action_badge != null:
+		action_badge.configure(str(spec.get("entry_id", "")), display_text, view_kind)
+		action_badge.action_pressed.connect(_on_corner_action_pressed)
 
 
 ## 角标按钮被按下；把角色ID、稳定来源标识与查看类型交回桌面，本视图不查询也不修改任何规则数据。
