@@ -11653,7 +11653,9 @@ func execute_cardless_virtual_card_use(actor_id: int, virtual_card_definition_id
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
 	# 经卡牌规则排序后的最终目标ID；后续用牌事件只消费该强类型数组。
-	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, virtual_card, target_ids)
+	# 规则覆写必须一并传入：视为牌的目标模式可能取自另一张牌的定义补丁，
+	# 若这里用未打补丁的定义展开，就会与紧随其后的合法性复核各用一套 target_mode 而互相否决。
+	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, virtual_card, target_ids, rule_overrides)
 	# 本次无材料虚拟牌的规则覆写副本；加入无色事实后进行最终合法性复核。
 	var validated_rule_overrides: Dictionary = rule_overrides.duplicate(true)
 	validated_rule_overrides["card_color"] = "none"

@@ -25,9 +25,10 @@ const PLAY_PHASE_LIMIT: int = 1
 ## 也不允许被【灵感】当作视为使用的牌名，此处再做一层防御性排除。
 const WUXIE_DEFINITION_ID: String = "wuxie"
 
-## 由整牌逻辑自行展开目标的模式；这两种模式不询问玩家，直接交给权威目标规范化。
-## 这样【南蛮入侵】等群体锦囊不会打到使用者自己，也不会被玩家拆成“只指定部分目标”。
-const SELF_EXPANDING_TARGET_MODES: Array[String] = ["all_others", "all_players"]
+## 由整牌逻辑自行决定目标的模式；这些模式不询问玩家，直接交给权威目标规范化。
+## 全体模式：【南蛮入侵】等群体锦囊不会打到使用者自己，也不会被玩家拆成“只指定部分目标”。
+## 自指模式：【无中生有】等牌自动以使用者为目标，玩家不需要再点一下自己。
+const AUTO_TARGET_MODES: Array[String] = ["all_others", "all_players", "self", "self_wounded"]
 
 ## 目标重定向补丁覆盖的定义字段；只覆盖目标规则，不触碰效果、次数与响应模式。
 const TARGET_RULE_FIELDS: Array[String] = ["target_mode", "min_targets", "max_targets", "distance_limit"]
@@ -112,6 +113,11 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		var effect_id: String = response.control_id
 		if not owner.recorded_card_names.has(effect_id):
 			return true
+		# 记录中若不存在其他可用牌名，原文的“另一张记录牌名”无从选择，
+		# 此时跳过第二步询问，直接按效果牌名自身的目标规则结算，避免出现无意义的确认。
+		if _get_effect_name_options(owner, [effect_id]).is_empty():
+			_begin_target_selection(effect_id, "")
+			return true
 		# 第二步：询问是否改按另一张记录牌名的目标结算。
 		request_card_selection("灵感", "是否令该牌的目标按另一张记录的牌名的牌结算？", [], 0, 0, true, {"kind":CHOICE_CONFIRM_RETARGET, "effect_id":effect_id, "ai_allow_confirm":true})
 		return true
@@ -159,9 +165,10 @@ func _begin_target_selection(effect_id: String, target_mode_id: String) -> void:
 	# 目标数量与模式必须与最终提交校验读取同一份定义，否则会出现“可选但提交被拒”。
 	var definition: Dictionary = _resolve_target_definition(effect_id, target_mode_id)
 	var target_mode: String = str(definition.get("target_mode", ""))
-	# 全体模式：目标由执行入口的 normalize_targets 统一展开，不询问玩家。
-	# 这既保证“所有其他角色”不会包含使用者自己，也避免群体锦囊被拆成“只指定部分目标”。
-	if SELF_EXPANDING_TARGET_MODES.has(target_mode):
+	# 自动决定目标的模式：目标由执行入口的 normalize_targets 统一展开，不询问玩家。
+	# 这既保证“所有其他角色”不会包含使用者自己，也避免群体锦囊被拆成“只指定部分目标”，
+	# 同时让【无中生有】这类自指牌自动选中使用者，不需要玩家再点一下自己。
+	if AUTO_TARGET_MODES.has(target_mode):
 		_execute_virtual_use(effect_id, target_mode_id, [])
 		return
 	# 非全体模式：只有存在合法目标才建立请求，避免空效果。

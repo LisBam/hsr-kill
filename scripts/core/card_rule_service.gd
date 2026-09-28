@@ -252,12 +252,17 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	return result
 
 
-## 把目标规范为规则行动顺序；全体模式自动展开，普通多目标按座次重排，借刀杀人保留两个目标的角色语义顺序。
-func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Array[int]) -> Array[int]:
-	# 卡牌定义；用于判断是否需要自动展开全体目标。
-	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	# 目标模式；全体模式会忽略请求数组并自动取得存活角色。
+## 把目标规范为规则行动顺序；自指与全体模式自动展开，普通多目标按座次重排，借刀杀人保留两个目标的角色语义顺序。
+## rule_overrides 中的定义补丁会参与判定，使“效果取甲牌、目标模式取乙牌”的虚拟牌在自动展开与后续校验两处读取同一个 target_mode。
+func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Array[int], rule_overrides: Dictionary = {}) -> Array[int]:
+	# 卡牌定义；携带定义补丁时使用合并后的定义，未携带时行为与改动前完全一致。
+	var definition: Dictionary = _resolve_definition(card.definition_id, rule_overrides)
+	# 目标模式；自指与全体模式会忽略请求数组并自动决定目标。
 	var target_mode: String = str(definition.get("target_mode", ""))
+	# 目标为使用者自身的模式；自动以使用者为唯一目标，玩家无需再点击自己。
+	# 【无中生有】【桃】等牌，以及“把其他牌当无中生有使用”的视为牌，都走这条路径。
+	if target_mode == "self" or target_mode == "self_wounded":
+		return [actor_id]
 	# 当前卡牌源码；拥有角色顺序语义的多目标牌可声明保留玩家提交顺序。
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if (source_definition != null and source_definition.preserves_requested_target_order()) or (target_mode != "all_players" and target_mode != "all_others" and requested_targets.size() <= 1):
