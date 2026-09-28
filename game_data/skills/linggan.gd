@@ -25,6 +25,10 @@ const PLAY_PHASE_LIMIT: int = 1
 ## 也不允许被【灵感】当作视为使用的牌名，此处再做一层防御性排除。
 const WUXIE_DEFINITION_ID: String = "wuxie"
 
+## 由整牌逻辑自行展开目标的模式；这两种模式不询问玩家，直接交给权威目标规范化。
+## 这样【南蛮入侵】等群体锦囊不会打到使用者自己，也不会被玩家拆成“只指定部分目标”。
+const SELF_EXPANDING_TARGET_MODES: Array[String] = ["all_others", "all_players"]
+
 ## 目标重定向补丁覆盖的定义字段；只覆盖目标规则，不触碰效果、次数与响应模式。
 const TARGET_RULE_FIELDS: Array[String] = ["target_mode", "min_targets", "max_targets", "distance_limit"]
 
@@ -73,6 +77,10 @@ func can_activate(_context: Dictionary = {}) -> bool:
 		return false
 	if _used_this_play_phase >= PLAY_PHASE_LIMIT:
 		return false
+	# 已存在待处理选择时不再开放入口；控制器会拒绝第二个请求，提前拦下可避免按钮空点。
+	# 该检查同时保证“选择过程中取消”之后按钮立即恢复可用。
+	if host.has_pending_card_choice():
+		return false
 	return not _get_effect_name_options(owner, []).is_empty()
 
 
@@ -88,7 +96,7 @@ func activate(_context: Dictionary = {}) -> String:
 	return ""
 
 
-## 分步恢复【灵感】的四个选择步骤；任何一步取消都直接结束且不留残留状态。
+## 分步恢复【灵感】的四个选择步骤；任何一步取消都不消耗次数、不移除记录。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response == null:
 		return false
@@ -98,7 +106,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if owner == null:
 		return true
 	if context_kind == CHOICE_PICK_EFFECT:
-		# 第一步取消：不消耗次数、不移除记录。
+		# 第一步取消：整体放弃，不消耗次数、不移除记录。
 		if not response.confirmed or response.control_id.is_empty():
 			return true
 		var effect_id: String = response.control_id
@@ -133,7 +141,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		_begin_target_selection(effect_id, target_mode_id)
 		return true
 	if context_kind == CHOICE_SELECT_TARGETS:
-		# 目标选择取消：次数已在此前消耗，记录保持不动，符合原文“结算完毕后移除”的前提。
+		# 目标选择取消：不消耗次数、不移除记录，玩家可以重新发动【灵感】。
 		if not response.confirmed:
 			return true
 		var final_effect_id: String = str(context.get("effect_id", ""))
@@ -143,32 +151,25 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return false
 
 
-## 建立目标选择请求；先做权威目标枚举，没有合法目标时不消耗次数也不移除记录。
+## 建立目标选择请求；全体模式直接交给整牌逻辑展开，其余模式走权威目标枚举。
 func _begin_target_selection(effect_id: String, target_mode_id: String) -> void:
 	if effect_id.is_empty():
 		return
-	# 权威目标枚举；必须与最终提交校验读取同一份覆写，否则会出现“可选但提交被拒”。
+	# 合并后的最终定义；目标模式可能已被另一张记录牌名覆写。
+	# 目标数量与模式必须与最终提交校验读取同一份定义，否则会出现“可选但提交被拒”。
+	var definition: Dictionary = _resolve_target_definition(effect_id, target_mode_id)
+	var target_mode: String = str(definition.get("target_mode", ""))
+	# 全体模式：目标由执行入口的 normalize_targets 统一展开，不询问玩家。
+	# 这既保证“所有其他角色”不会包含使用者自己，也避免群体锦囊被拆成“只指定部分目标”。
+	if SELF_EXPANDING_TARGET_MODES.has(target_mode):
+		_execute_virtual_use(effect_id, target_mode_id, [])
+		return
+	# 非全体模式：只有存在合法目标才建立请求，避免空效果。
 	var rule_overrides: Dictionary = _build_rule_overrides(effect_id, target_mode_id)
 	var legal_target_ids: Array[int] = host.card_rules.list_legal_virtual_targets(owner_player_id, effect_id, rule_overrides)
 	if legal_target_ids.is_empty():
 		return
-	# 次数消费时机；确认要进入目标选择即视为发动，取消目标选择不返还，避免反复试探记录内容。
-	_used_this_play_phase += 1
-	# 目标数量区间；取自权威校验使用的同一份定义，保证界面允许的数量与提交校验一致。
-	var definition: Dictionary = GameDatabase.get_card(effect_id)
-	var target_mode: String = str(definition.get("target_mode", ""))
-	var minimum_target_count: int = int(definition.get("min_targets", 0))
-	var maximum_target_count: int = int(definition.get("max_targets", 0))
-	if not target_mode_id.is_empty():
-		var patched_definition: Dictionary = _merge_target_rules(definition, target_mode_id)
-		target_mode = str(patched_definition.get("target_mode", ""))
-		minimum_target_count = int(patched_definition.get("min_targets", 0))
-		maximum_target_count = int(patched_definition.get("max_targets", 0))
-	# 全体模式由整牌逻辑自行决定目标数量；请求层面只要求至少选中一名可点击角色。
-	if target_mode == "all_others" or target_mode == "all_players":
-		minimum_target_count = 1
-		maximum_target_count = legal_target_ids.size()
-	request_target_selection("选择【灵感】视为使用的牌的目标", legal_target_ids, maxi(minimum_target_count, 1), maxi(maximum_target_count, 1), true, {"kind":CHOICE_SELECT_TARGETS, "effect_id":effect_id, "target_mode_id":target_mode_id})
+	request_target_selection("选择【灵感】视为使用的牌的目标", legal_target_ids, maxi(int(definition.get("min_targets", 0)), 1), maxi(int(definition.get("max_targets", 0)), 1), true, {"kind":CHOICE_SELECT_TARGETS, "effect_id":effect_id, "target_mode_id":target_mode_id})
 
 
 ## 执行视为使用；成功结算后按原文移除【解构】中记录的本次使用的牌名。
@@ -179,6 +180,9 @@ func _execute_virtual_use(effect_id: String, target_mode_id: String, target_ids:
 	var used: bool = bool(host.call("execute_cardless_virtual_card_use", owner_player_id, effect_id, target_ids, "", rule_overrides, {"source_skill_id":get_id()}))
 	if not used:
 		return
+	# 次数消费时机：只有“视为使用”真正成立才占用“出牌阶段限一次”额度。
+	# 放在这里而不是建立选择请求时，使任何一步取消（含目标选择取消）都不消耗次数。
+	_used_this_play_phase += 1
 	# 移除时机：该牌已进入结算流程后才摘除记录，避免结算中断导致记录提前丢失。
 	host.call("remove_recorded_card_name", owner_player_id, effect_id)
 	if not target_mode_id.is_empty() and target_mode_id != effect_id:
@@ -194,6 +198,14 @@ func _build_rule_overrides(effect_id: String, target_mode_id: String) -> Diction
 	if effect_definition.is_empty():
 		return EMPTY_OVERRIDES
 	return {"definition_patch":_build_target_rule_patch(effect_definition, target_mode_id)}
+
+
+## 返回效果牌名与目标牌名合并后的定义；目标牌名为空或与效果相同时返回效果牌自身定义。
+func _resolve_target_definition(effect_id: String, target_mode_id: String) -> Dictionary:
+	var effect_definition: Dictionary = GameDatabase.get_card(effect_id)
+	if target_mode_id.is_empty() or target_mode_id == effect_id:
+		return effect_definition
+	return _merge_target_rules(effect_definition, target_mode_id)
 
 
 ## 按目标模式牌名抽取目标规则补丁；只覆盖目标相关字段，效果与次数仍由效果牌名决定。

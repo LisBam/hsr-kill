@@ -607,9 +607,15 @@ func _request_character_information() -> void:
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
 	# 当前武将全部可见技能ID；固有技能 → 模式技能 → 运行时临时技能，均不重复。
-	var visible_skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
+	# 永久失去全部技能的角色不再展示任何技能条目：控制器已卸载全部实例并清空获得与临时技能记录，
+	# 界面若继续读武将静态定义，已失去的技能仍会出现在悬停信息与右键详情中。
+	var skills_permanently_removed: bool = bool(_player_snapshot.get("skills_permanently_removed", false))
+	var visible_skill_ids: Array = [] if skills_permanently_removed else (_character_definition.get("skills", []) as Array).duplicate()
 	for mode_skill_id_variant: Variant in (_player_snapshot.get("mode_skill_ids", []) as Array):
 		var mode_skill_id: String = str(mode_skill_id_variant)
+		# 永久失去技能同样覆盖模式技能：它们不再被装配，界面也不应继续列出。
+		if skills_permanently_removed:
+			continue
 		if not mode_skill_id.is_empty() and not visible_skill_ids.has(mode_skill_id):
 			visible_skill_ids.append(mode_skill_id)
 	for temporary_skill_id_variant: Variant in (_player_snapshot.get("temporary_skills", {}) as Dictionary).keys():
