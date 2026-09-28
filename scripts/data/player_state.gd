@@ -130,6 +130,11 @@ var reincarnation_skills: Dictionary = {}
 ## 由【留白】等效果写入；必须进入存档与公开快照，否则读档、换将或局内获得会让已失去的技能复活。
 var skills_permanently_removed: bool = false
 
+## 角色通过【解构】记录的牌名稳定ID列表；按记录先后排列、自动去重、跨回合保留。
+## 记录属于公开信息（【灵感】选择、【看破】条件判定与对手AI都要读取），因此保存稳定ID并写入
+## to_dict 的公开部分，而不是放进仅本人可见的 character_form_state；展示名由名称模式在读取时解析。
+var recorded_card_names: Array[String] = []
+
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
@@ -334,6 +339,9 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
 	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
 	player.skills_permanently_removed = bool(data.get("skills_permanently_removed", false))
+	# 记录的牌名稳定ID列表；保持存档顺序，读档后【灵感】与【看破】的候选集合必须与存档前一致。
+	for recorded_card_name_variant: Variant in data.get("recorded_card_names", []) as Array:
+		player.recorded_card_names.append(str(recorded_card_name_variant))
 	player.reincarnation_skills = (data.get("reincarnation_skills", {}) as Dictionary).duplicate(true)
 	for opportunity_id_variant: Variant in data.get("acquired_opportunity_ids", []) as Array:
 		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
@@ -536,6 +544,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"reincarnation_skills": reincarnation_skills.duplicate(true),
 		# 永久失去技能是不可逆的公开事实；界面与远端据此把该角色的技能栏画为空，读档也据此跳过装配。
 		"skills_permanently_removed": skills_permanently_removed,
+		# 记录牌名是公开信息；界面、对手AI与局域网观察者读取同一份稳定ID列表，展示名另由名称模式解析。
+		"recorded_card_names": recorded_card_names.duplicate(),
 		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,
