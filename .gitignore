@@ -13,3 +13,11 @@ addons/*
 # 源目录保留在本地供继续取用（其中还有本作尚未使用的候选素材），因此不进入版本库。
 # 目录内的 .gdignore 让 Godot 完全跳过它，避免重复导入与打进导出包。
 /无名杀音频文件/
+
+# Trellis 任务实例目录：单个任务的规划中间稿（prd/design/implement/task.json）只在本地保留，
+# 不进入版本库。武将、机制等内容的最终成果统一沉淀到 docs/ 永久文档，
+# 避免同一件事在仓库里出现第二份说法。
+# 下面两行放行早前已被跟踪的内容，保留其历史；新增任务一律不跟踪。
+/.trellis/tasks/*
+!/.trellis/tasks/archive/
+!/.trellis/tasks/09-24-audio-system/
