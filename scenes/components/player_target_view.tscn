@@ -275,14 +275,6 @@ text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="CharacterCornerStack" type="Control" parent="."]
-z_index = 31
-offset_left = 26.0
-offset_top = 20.0
-offset_right = 26.0
-offset_bottom = 20.0
-mouse_filter = 2
-
 [node name="HealthFrame" type="Control" parent="." unique_id=23280875]
 unique_name_in_owner = true
 z_index = 4
@@ -455,3 +447,11 @@ anchors_preset = 0
 offset_right = 148.35
 offset_bottom = 197.8
 script = ExtResource("2_input")
+
+[node name="CharacterCornerStack" type="Control" parent="."]
+z_index = 31
+offset_left = 26.0
+offset_top = 20.0
+offset_right = 26.0
+offset_bottom = 20.0
+mouse_filter = 2

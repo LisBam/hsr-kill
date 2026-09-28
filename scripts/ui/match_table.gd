@@ -3572,6 +3572,10 @@ func _open_recorded_card_names(player_id: int) -> void:
 		"card_names":recorded_card_names.duplicate(),
 	}
 	_refresh_card_selection_panel()
+	# 再延迟一帧刷新一次。本方法可能在同一帧的规则请求处理过程中被调用，此时 _modal_card_choice_request
+	# 还没被清空，_refresh_card_selection_panel 会让只读窗口为规则请求让位而不显示；而请求在同一帧稍后
+	# 结束后通常不会再有状态广播（对局静止时无广播），窗口就会一直不出现，表现为按钮“点了没反应”。
+	call_deferred("_refresh_card_selection_panel")
 
 
 ## 只读查看窗口被关闭；清空窗口数据并让面板按当前请求状态重新决定显示内容。
