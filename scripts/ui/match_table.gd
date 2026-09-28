@@ -1953,6 +1953,11 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []
+	# 永久失去全部技能的角色不再显示任何技能按钮，模式技能也一并隐藏。
+	# 该标记由【留白】等效果写入并进入公开快照，是界面判断“技能已被真实移除”的唯一依据；
+	# 若继续只读武将静态定义，已卸载的技能会继续占位并出现在悬停与右键详情里。
+	if bool(player_snapshot.get("skills_permanently_removed", false)):
+		return result
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
 		# 当前技能 ID 与元数据；缺失定义仍保留占位按钮，便于发现普通技能配置错误。
 		var skill_id: String = str(skill_id_variant)

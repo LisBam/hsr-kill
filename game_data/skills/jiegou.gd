@@ -2,11 +2,14 @@ extends SkillDefinition
 
 ## 【解构】技能源码。出牌阶段可重铸一张非延时锦囊牌，然后若该牌牌名未被记录则记录之。
 ## 记录写入持有者的公开容器，供【灵感】选择与【看破】条件判定读取。
+##
+## 可重铸与可记录是两个不同范围：【无懈可击】属于非延时锦囊，因此**可以被重铸**，
+## 但它是响应类锦囊而不是普通锦囊，**不能被记录**，从而不会进入【灵感】的视为使用候选。
 
-## 可记录的卡牌大类；只有锦囊牌可能被记录。
-const RECORDABLE_TYPE: String = "trick"
+## 可重铸的卡牌大类；只有锦囊牌。响应类锦囊同样满足本条件。
+const RECASTABLE_TYPE: String = "trick"
 
-## 可记录的锦囊子类；普通锦囊才可记录，无懈可击等响应类锦囊（counter）天然被排除。
+## 可记录的锦囊子类；只有普通锦囊进入记录容器，响应类锦囊（counter）被排除。
 const RECORDABLE_SUBTYPE: String = "normal"
 
 ## 选牌请求类别；用于在恢复回调中区分本技能自己的请求。
@@ -34,7 +37,7 @@ func _init() -> void:
 	})
 
 
-## 检查出牌阶段归属与可记录锦囊候选；原文没有次数上限，因此只判断候选是否存在。
+## 检查出牌阶段归属与可重铸锦囊候选；原文没有次数上限，因此只判断候选是否存在。
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场或非自身出牌阶段均不能发动。
 	var owner: PlayerState = get_owner_skill_player().get_state()
@@ -42,20 +45,20 @@ func can_activate(_context: Dictionary = {}) -> bool:
 		return false
 	if host.state.current_player_id != owner_player_id or host.state.current_phase != "play":
 		return false
-	return not _get_recordable_hand_uids(owner).is_empty()
+	return not _get_recastable_hand_uids(owner).is_empty()
 
 
-## 请求选择一张要重铸并记录的锦囊；重铸与记录都在恢复回调中完成。
+## 请求选择一张要重铸的锦囊；重铸与记录都在恢复回调中完成。
 func activate(_context: Dictionary = {}) -> String:
 	# 技能持有者；权威状态在异步选择期间可能变化，因此每次都要重新取得。
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner == null or not can_activate():
 		return "【解构】当前不满足发动条件。"
-	# 可记录手牌候选；只保留普通锦囊，避免玩家选中无法记录的牌后空耗一次操作。
-	var candidates: Array[Dictionary] = _get_recordable_hand_candidates(owner)
+	# 可重铸手牌候选；包含【无懈可击】等响应类锦囊，它们可以重铸但不能被记录。
+	var candidates: Array[Dictionary] = _get_recastable_hand_candidates(owner)
 	if candidates.is_empty():
-		return "【解构】当前没有可记录的非延时锦囊牌。"
-	request_card_selection("解构", "选择一张非延时锦囊牌重铸并记录其牌名", candidates, SELECT_COUNT, SELECT_COUNT, true, {"kind":CHOICE_KIND})
+		return "【解构】当前没有可重铸的非延时锦囊牌。"
+	request_card_selection("解构", "选择一张非延时锦囊牌重铸，若其牌名未被记录则记录之", candidates, SELECT_COUNT, SELECT_COUNT, true, {"kind":CHOICE_KIND})
 	return ""
 
 
@@ -72,16 +75,18 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 待重铸实体；必须先取到牌面定义，因为重铸成功后该牌会离开手牌区。
 	var target_card: CardInstance = owner.find_hand_card(response.card_ids[0])
-	if target_card == null or not _is_recordable_definition(target_card.definition_id):
+	if target_card == null or not _is_recastable_trick(target_card.definition_id):
 		return true
 	# 记录用的稳定牌名；在重铸前固化，避免重铸后实体易主或进入弃牌堆导致读不到定义。
 	var recorded_definition_id: String = target_card.definition_id
-	# 权威重铸端口；只接受普通手牌区实体，失败时同样不记录，保证“重铸”与“记录”严格成对。
+	# 权威重铸端口；只接受普通手牌区实体，失败时不产生任何后续效果。
 	if not bool(host.call("recast_hand_card", owner_player_id, response.card_ids[0])):
 		return true
-	# 记录牌名；已记录过的牌名由权威入口判定为重复，不重复写入。
-	host.call("record_card_name", owner_player_id, recorded_definition_id)
-	announce_activation({"card_definition_id":recorded_definition_id})
+	# 记录范围比可重铸范围更窄：只有普通锦囊进入记录容器。
+	# 【无懈可击】在这里被有意跳过——它可以被重铸，但不能被【灵感】视为使用。
+	if _is_recordable_definition(recorded_definition_id):
+		host.call("record_card_name", owner_player_id, recorded_definition_id)
+	announce_activation({"card_definition_id":recorded_definition_id, "recorded":_is_recordable_definition(recorded_definition_id)})
 	return true
 
 
@@ -112,13 +117,13 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	# 被重铸牌的保留价值；价值越低，换成一张未知牌的净收益越高。
 	var card_value: float = float(evaluator.call("get_owned_card_value_by_uid", authoritative_snapshot, owner_player_id, selected_uid)) if evaluator.has_method("get_owned_card_value_by_uid") else 0.0
 	var score: float = RECAST_AI_BASE - card_value
-	# 候选牌名是否尚未记录；通过请求候选上的 definition_id 读取，避免AI访问控制器。
+	# 候选牌名是否尚未记录；只有可记录牌名才享有该加成，响应类锦囊不会解锁【灵感】。
 	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
 		var candidate: Dictionary = candidate_variant as Dictionary
 		if int(candidate.get("uid", -1)) != selected_uid:
 			continue
 		var candidate_definition_id: String = _candidate_definition_id(candidate)
-		if not candidate_definition_id.is_empty() and not get_recorded_card_names_for_ai(authoritative_snapshot).has(candidate_definition_id):
+		if _is_recordable_definition(candidate_definition_id) and not get_recorded_card_names_for_ai(authoritative_snapshot).has(candidate_definition_id):
 			score += FIRST_RECORD_AI_BONUS
 		break
 	return maxf(score, 0.5)
@@ -138,37 +143,40 @@ func _candidate_definition_id(candidate: Dictionary) -> String:
 	return str((candidate.get("card_data", {}) as Dictionary).get("definition_id", ""))
 
 
-## 判断一个牌面定义是否属于可记录范围：非延时普通锦囊。
-func _is_recordable_definition(definition_id: String) -> bool:
-	# 牌面定义；未知或不存在的定义一律不可记录。
+## 判断是否可被【解构】重铸：非延时锦囊。【无懈可击】满足本条件。
+func _is_recastable_trick(definition_id: String) -> bool:
+	# 牌面定义；未知或不存在的定义一律不可重铸。
 	var definition: Dictionary = GameDatabase.get_card(definition_id)
 	if definition.is_empty():
 		return false
-	if str(definition.get("type", "")) != RECORDABLE_TYPE:
-		return false
-	# 普通锦囊才可记录：【无懈可击】等响应类锦囊（counter）与延时锦囊都被排除。
-	if str(definition.get("subtype", "")) != RECORDABLE_SUBTYPE:
+	if str(definition.get("type", "")) != RECASTABLE_TYPE:
 		return false
 	return not bool(definition.get("delayed", false))
 
 
-## 返回持有者手中可记录锦囊的实体UID；用于判断是否开放技能入口。
-func _get_recordable_hand_uids(owner: PlayerState) -> Array[int]:
-	# 可记录实体结果；顺序与手牌顺序一致，便于界面稳定展示。
+## 判断是否可被记录：先可重铸，再要求子类为普通锦囊，因此排除【无懈可击】等响应类锦囊。
+func _is_recordable_definition(definition_id: String) -> bool:
+	if not _is_recastable_trick(definition_id):
+		return false
+	return str(GameDatabase.get_card(definition_id).get("subtype", "")) == RECORDABLE_SUBTYPE
+
+
+## 返回持有者手中可重铸锦囊的实体UID；用于判断是否开放技能入口。
+func _get_recastable_hand_uids(owner: PlayerState) -> Array[int]:
+	# 可重铸实体结果；顺序与手牌顺序一致，便于界面稳定展示。
 	var result: Array[int] = []
 	for card: CardInstance in owner.hand:
-		if card != null and _is_recordable_definition(card.definition_id):
+		if card != null and _is_recastable_trick(card.definition_id):
 			result.append(card.uid)
 	return result
 
 
-## 返回持有者手中可记录锦囊的权威候选字典；额外附带 definition_id 供AI读取牌名。
-func _get_recordable_hand_candidates(owner: PlayerState) -> Array[Dictionary]:
+## 返回持有者手中可重铸锦囊的权威候选字典；额外附带 definition_id 供AI读取牌名。
+func _get_recastable_hand_candidates(owner: PlayerState) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for candidate_variant: Variant in host.call("get_hand_candidates", owner_player_id, owner_player_id) as Array:
 		var candidate: Dictionary = (candidate_variant as Dictionary).duplicate(true)
-		var candidate_definition_id: String = _candidate_definition_id(candidate)
-		if not _is_recordable_definition(candidate_definition_id):
+		if not _is_recastable_trick(_candidate_definition_id(candidate)):
 			continue
 		result.append(candidate)
 	return result

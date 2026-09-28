@@ -20,6 +20,8 @@ func _run() -> void:
 		return
 	if not _test_jiegou_records_normal_trick_only():
 		return
+	if not _test_jiegou_recast_wuxie_without_recording():
+		return
 	if not _test_jiegou_record_persists_across_turns():
 		return
 	if not _test_linggan_candidates_exclude_wuxie():
@@ -30,13 +32,15 @@ func _run() -> void:
 		return
 	if not _test_linggan_removes_used_names():
 		return
+	if not _test_linggan_self_expanding_target_mode():
+		return
 	if not _test_kanpo_negates_self_only():
 		return
 	if not _test_kanpo_preconditions():
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("DAHEITA_MECHANICS_PASS records=1 redirect=1 negate_self=1 wuxie_excluded=1 cancel_safe=1")
+	print("DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 cancel_safe=1 negate_self=1 wuxie_excluded=1")
 	get_tree().quit(0)
 
 
@@ -233,6 +237,34 @@ func _test_jiegou_records_normal_trick_only() -> bool:
 	return true
 
 
+## 校验【解构】可以重铸【无懈可击】但不记录它：响应类锦囊能被重铸，却不能用于使用或转换。
+func _test_jiegou_recast_wuxie_without_recording() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "jiegou") == null:
+		return _fail("wuxie_recast_install")
+	var wuxie_uid: int = _give_card(0, "wuxie", "heart", 5)
+	if not _controller.activate_skill(0, "jiegou", {"active_entry":"phaseUse"}):
+		return _fail("wuxie_recast_rejected")
+	# 无懈可击是非延时锦囊，因此必须出现在可重铸候选里。
+	var candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if candidates.size() != 1 or int((candidates[0] as Dictionary).get("uid", -1)) != wuxie_uid:
+		return _fail("wuxie_recast_candidates=%s" % str(candidates))
+	if not _submit_or_fail(0, [wuxie_uid], [], "", true, "wuxie_recast"):
+		return false
+	var owner: PlayerState = _controller.state.get_player(0)
+	# 重铸已生效，但记录容器必须保持为空：它不能被用于使用或转换。
+	if owner.find_hand_card(wuxie_uid) != null:
+		return _fail("wuxie_recast_not_moved")
+	if not owner.recorded_card_names.is_empty():
+		return _fail("wuxie_recast_recorded=%s" % str(owner.recorded_card_names))
+	# 记录为空时【灵感】不应开放任何发动入口。
+	if _install_skill(0, "linggan") == null:
+		return _fail("wuxie_recast_linggan_install")
+	if _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("wuxie_recast_linggan_enabled")
+	return true
+
+
 ## 校验记录跨回合保留，并且写入公开快照与存档往返。
 func _test_jiegou_record_persists_across_turns() -> bool:
 	_reset_state(3)
@@ -285,13 +317,14 @@ func _test_linggan_candidates_exclude_wuxie() -> bool:
 	return true
 
 
-## 校验【灵感】的取消语义：第一段取消不消耗次数、不移除记录，之后仍可正常发动。
+## 校验【灵感】的取消语义：任一步取消都不消耗次数、不移除记录，之后仍可再次发动。
 func _test_linggan_cancel_paths() -> bool:
 	_reset_state(3)
 	if _install_skill(0, "linggan") == null:
 		return _fail("cancel_install")
-	_set_recorded_names(0, ["nanman"])
-	# 第一段取消；应完全放弃本次发动。
+	# 效果牌名使用铁索连环（非全体模式）：只有非全体模式才会进入目标选择阶段，供后续取消检验。
+	_set_recorded_names(0, ["tiesuo"])
+	# 第一步取消；应完全放弃本次发动。
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("cancel_activate_rejected")
 	if not _submit_or_fail(0, [], [], "", false, "cancel_effect"):
@@ -300,20 +333,27 @@ func _test_linggan_cancel_paths() -> bool:
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("cancel_residual_request")
 	var owner: PlayerState = _controller.state.get_player(0)
-	if owner.recorded_card_names != ["nanman"]:
+	if owner.recorded_card_names != ["tiesuo"]:
 		return _fail("cancel_record_removed=%s" % str(owner.recorded_card_names))
 	# 次数未被消耗；同一出牌阶段仍可再次发动并走完全流程。
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("cancel_second_activate_rejected")
-	if not _submit_or_fail(0, [], [], "nanman", true, "cancel_second_effect"):
+	if not _submit_or_fail(0, [], [], "tiesuo", true, "cancel_second_effect"):
 		return false
-	# 第二段取消等价于“不重定向”，应继续进入目标选择而不是整体放弃。
+	# 第二步取消等价于“不重定向”，应继续进入目标选择而不是整体放弃。
 	if not _submit_or_fail(0, [], [], "", false, "cancel_retarget"):
 		return false
 	if _controller._pending_card_choice.is_empty():
 		return _fail("cancel_retarget_no_target_request")
-	# 此时已进入目标选择阶段；取消它不会被拒绝。
+	# 在目标选择阶段取消：不消耗次数、不移除记录。
 	if not _submit_or_fail(0, [], [], "", false, "cancel_targets"):
+		return false
+	if owner.recorded_card_names != ["tiesuo"]:
+		return _fail("cancel_targets_record_removed=%s" % str(owner.recorded_card_names))
+	# 关键回归：目标选择取消后必须仍能重新发动，而不是被误判为“本阶段已发动过”而永久失效。
+	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("cancel_targets_then_reactivate")
+	if not _submit_or_fail(0, [], [], "tiesuo", true, "cancel_third_effect"):
 		return false
 	return true
 
@@ -359,25 +399,51 @@ func _test_linggan_target_redirect() -> bool:
 	return true
 
 
-## 校验【灵感】只用一张牌名时只移除该牌名，且阶段次数仍被消耗。
+## 校验【灵感】只用一张牌名时只移除该牌名，未被使用的记录必须保留。
 func _test_linggan_removes_used_names() -> bool:
 	_reset_state(3)
 	if _install_skill(0, "linggan") == null:
 		return _fail("remove_install")
-	_set_recorded_names(0, ["nanman", "tiesuo"])
+	_set_recorded_names(0, ["tiesuo", "nanman"])
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("remove_activate_rejected")
-	if not _submit_or_fail(0, [], [], "nanman", true, "remove_effect"):
+	# 效果取铁索连环（非全体模式），并且不重定向，因此会进入目标选择。
+	if not _submit_or_fail(0, [], [], "tiesuo", true, "remove_effect"):
 		return false
-	# 第二段取消：不使用目标重定向。
 	if not _submit_or_fail(0, [], [], "", false, "remove_no_retarget"):
 		return false
 	if not _submit_or_fail(0, [], [1], "", true, "remove_targets"):
 		return false
 	# 只移除了使用过的牌名；未被使用的记录必须保留。
 	var owner: PlayerState = _controller.state.get_player(0)
-	if owner.recorded_card_names != ["tiesuo"]:
+	if owner.recorded_card_names != ["nanman"]:
 		return _fail("remove_used_names=%s" % str(owner.recorded_card_names))
+	return true
+
+
+## 校验【灵感】使用全体模式锦囊时直接结算：不询问目标，且目标由权威逻辑展开而不含使用者自己。
+func _test_linggan_self_expanding_target_mode() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "linggan") == null:
+		return _fail("expand_install")
+	_set_recorded_names(0, ["nanman"])
+	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("expand_activate_rejected")
+	if not _submit_or_fail(0, [], [], "nanman", true, "expand_effect"):
+		return false
+	# 第二步取消：不重定向。【南蛮入侵】是全体模式，应直接进入结算而不是请求玩家选择目标。
+	# 这条断言同时保证群体锦囊不会被拆成“只指定部分目标”，也不会把使用者自己算作目标。
+	if not _submit_or_fail(0, [], [], "", false, "expand_no_retarget"):
+		return false
+	var owner: PlayerState = _controller.state.get_player(0)
+	if owner.hp != 6:
+		return _fail("expand_self_damaged=%d" % owner.hp)
+	# 结算已开始：出现【杀】响应请求，且请求者不是使用者本人。
+	if _controller._pending_card_choice.is_empty():
+		return _fail("expand_no_response_request")
+	var responder_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	if responder_id == 0:
+		return _fail("expand_self_targeted=%d" % responder_id)
 	return true
 
 
