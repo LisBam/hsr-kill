@@ -126,6 +126,22 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
 
 
+## 计算【解构】发动动作本身的AI评分。
+## 基类的 score_ai_action 默认返回 0.0，若不覆盖，AI 会把该动作视为毫无价值而**永不发动**，
+## 表现为技能在整局中一次都不出现。这是本技能曾经完全不被 AI 使用的直接原因。
+## 原文没有次数上限，且技能设计口径为“几乎可以无脑重铸”，因此只要动作能进入评分
+## （说明 append_play_phase_actions 已用真实状态确认手中存在可重铸锦囊），就给出稳定正分。
+## 尚未建立记录时额外叠加记录加成，促使 AI 优先解锁【灵感】的牌名池。
+func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
+	if evaluator == null:
+		return 0.0
+	# 已记录牌名；记录为空说明尚未解锁任何【灵感】素材，此时给出更高的发动倾向。
+	var recorded_names: Array = get_recorded_card_names_for_ai(authoritative_snapshot)
+	if recorded_names.is_empty():
+		return RECAST_AI_BASE + FIRST_RECORD_AI_BONUS
+	return RECAST_AI_BASE
+
+
 ## 评估【解构】的选牌：重铸换牌是基础收益，首次记录新牌名额外加分。
 ## 按设计参考“几乎可以无脑重铸”：只要存在候选，评分必须严格为正，避免AI因保守而永不记录牌名。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:

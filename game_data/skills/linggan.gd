@@ -42,6 +42,11 @@ const AI_MULTITARGET_BONUS: float = 1.5
 ## AI对“把群体锦囊改成单体目标”的偏好系数；用于避免误伤队友时的保守选择。
 const AI_SINGLE_TARGET_RETREAT: float = 1.0
 
+## 发动【灵感】的基础AI评分；只要记录中存在可用于“视为使用”的牌名就给严格正分。
+## 基类 score_ai_action 默认返回 0.0，不覆盖会让AI判定本技能毫无价值而永不发动，
+## 使【解构】记录下来的牌名完全用不上。
+const AI_ACTIVATION_BASE: float = 2.0
+
 ## 当前出牌阶段已发动次数；进入每个出牌阶段复原，实现原文“出牌阶段限一次”。
 var _used_this_play_phase: int = 0
 
@@ -247,6 +252,36 @@ func _get_effect_name_options(owner: PlayerState, excluded_ids: Array) -> Array[
 		var label: String = GameSettings.resolve_card_name(definition)
 		options.append({"id":definition_id, "label":label})
 	return options
+
+
+## 计算【灵感】发动动作本身的AI评分。
+## 基类 score_ai_action 默认返回 0.0，不覆盖会让AI认为本技能毫无价值而永不发动，
+## 使【解构】记录的牌名全部闲置。记录中存在可用于“视为使用”的牌名时才给正分；
+## 【无懈可击】虽可被重铸但不能被记录，过滤口径与 _get_effect_name_options 保持一致。
+func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
+	if evaluator == null:
+		return 0.0
+	if _get_recorded_names_for_ai(authoritative_snapshot).is_empty():
+		return 0.0
+	return AI_ACTIVATION_BASE
+
+
+## 从权威快照读取持有者可用于【灵感】的记录牌名；AI钩子没有宿主，只能按稳定玩家ID在快照中定位自己。
+## 排除【无懈可击】的口径与 _get_effect_name_options 完全一致，避免AI按“存在候选”发动、实际却选不出效果。
+func _get_recorded_names_for_ai(authoritative_snapshot: Dictionary) -> Array:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		if int(player_snapshot.get("player_id", -1)) != owner_player_id:
+			continue
+		var usable_names: Array = []
+		for name_variant: Variant in player_snapshot.get("recorded_card_names", []) as Array:
+			# 当前记录牌名；响应类锦囊不参与“视为使用”，必须排除。
+			var definition_id: String = str(name_variant)
+			if definition_id == WUXIE_DEFINITION_ID:
+				continue
+			usable_names.append(definition_id)
+		return usable_names
+	return []
 
 
 ## 为AI枚举候选动作；本技能只提交一个空负载动作，具体选择交给后续选牌/选目标请求。
