@@ -34,13 +34,19 @@ func _run() -> void:
 		return
 	if not _test_linggan_self_expanding_target_mode():
 		return
+	if not _test_linggan_all_others_target_mode_on_self_effect():
+		return
+	if not _test_linggan_self_target_mode():
+		return
+	if not _test_linggan_single_name_skips_retarget_prompt():
+		return
 	if not _test_kanpo_negates_self_only():
 		return
 	if not _test_kanpo_preconditions():
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 cancel_safe=1 negate_self=1 wuxie_excluded=1")
+	print("DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 self_target=1 single_name=1 cancel_safe=1 negate_self=1 wuxie_excluded=1")
 	get_tree().quit(0)
 
 
@@ -298,22 +304,25 @@ func _test_linggan_candidates_exclude_wuxie() -> bool:
 	if _install_skill(0, "linggan") == null:
 		return _fail("wuxie_install")
 	# 人为把无懈可击写入记录；正常流程不会产生该记录，此处验证防御性排除。
-	_set_recorded_names(0, ["wuxie", "nanman"])
+	# 额外保留第三张记录牌名，使第二步确认确实存在：只剩被排除牌名时技能会跳过询问。
+	_set_recorded_names(0, ["wuxie", "nanman", "tiesuo"])
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("wuxie_activate_rejected")
-	# 第一段候选；只允许出现南蛮入侵。
+	# 第一段候选；只允许出现南蛮入侵与铁索连环，无懈可击必须被排除。
 	var options: Array = _controller._pending_card_choice.get("control_options", []) as Array
-	if options.size() != 1 or str((options[0] as Dictionary).get("id", "")) != "nanman":
+	if options.size() != 2:
 		return _fail("wuxie_first_options=%s" % str(options))
+	for option_variant: Variant in options:
+		if str((option_variant as Dictionary).get("id", "")) == "wuxie":
+			return _fail("wuxie_first_options=%s" % str(options))
 	if not _submit_or_fail(0, [], [], "nanman", true, "wuxie_pick_effect"):
 		return false
 	# 第二段确认重定向；确认后第三段候选同样不得出现无懈可击。
 	if not _submit_or_fail(0, [], [], "", true, "wuxie_confirm"):
 		return false
 	var second_options: Array = _controller._pending_card_choice.get("control_options", []) as Array
-	for option_variant: Variant in second_options:
-		if str((option_variant as Dictionary).get("id", "")) == "wuxie":
-			return _fail("wuxie_second_options=%s" % str(second_options))
+	if second_options.size() != 1 or str((second_options[0] as Dictionary).get("id", "")) != "tiesuo":
+		return _fail("wuxie_second_options=%s" % str(second_options))
 	return true
 
 
@@ -322,8 +331,9 @@ func _test_linggan_cancel_paths() -> bool:
 	_reset_state(3)
 	if _install_skill(0, "linggan") == null:
 		return _fail("cancel_install")
-	# 效果牌名使用铁索连环（非全体模式）：只有非全体模式才会进入目标选择阶段，供后续取消检验。
-	_set_recorded_names(0, ["tiesuo"])
+	# 记录两张牌名，使第二步询问确实存在：只有一张记录时技能会跳过询问直接结算。
+	# 效果牌名使用铁索连环（非全体、非自指），因此会进入目标选择阶段，供后续取消检验。
+	_set_recorded_names(0, ["tiesuo", "nanman"])
 	# 第一步取消；应完全放弃本次发动。
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("cancel_activate_rejected")
@@ -333,7 +343,7 @@ func _test_linggan_cancel_paths() -> bool:
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("cancel_residual_request")
 	var owner: PlayerState = _controller.state.get_player(0)
-	if owner.recorded_card_names != ["tiesuo"]:
+	if owner.recorded_card_names.size() != 2:
 		return _fail("cancel_record_removed=%s" % str(owner.recorded_card_names))
 	# 次数未被消耗；同一出牌阶段仍可再次发动并走完全流程。
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
@@ -348,7 +358,7 @@ func _test_linggan_cancel_paths() -> bool:
 	# 在目标选择阶段取消：不消耗次数、不移除记录。
 	if not _submit_or_fail(0, [], [], "", false, "cancel_targets"):
 		return false
-	if owner.recorded_card_names != ["tiesuo"]:
+	if owner.recorded_card_names.size() != 2:
 		return _fail("cancel_targets_record_removed=%s" % str(owner.recorded_card_names))
 	# 关键回归：目标选择取消后必须仍能重新发动，而不是被误判为“本阶段已发动过”而永久失效。
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
@@ -426,7 +436,8 @@ func _test_linggan_self_expanding_target_mode() -> bool:
 	_reset_state(3)
 	if _install_skill(0, "linggan") == null:
 		return _fail("expand_install")
-	_set_recorded_names(0, ["nanman"])
+	# 两张记录：保证第二步确认存在，从而验证“取消后仍直接结算全体模式”。
+	_set_recorded_names(0, ["nanman", "tiesuo"])
 	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
 		return _fail("expand_activate_rejected")
 	if not _submit_or_fail(0, [], [], "nanman", true, "expand_effect"):
@@ -444,6 +455,77 @@ func _test_linggan_self_expanding_target_mode() -> bool:
 	var responder_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
 	if responder_id == 0:
 		return _fail("expand_self_targeted=%d" % responder_id)
+	return true
+
+
+## 校验效果取【无中生有】、目标模式取【南蛮入侵】时，所有其他角色都成为目标并各自结算摸牌。
+func _test_linggan_all_others_target_mode_on_self_effect() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "linggan") == null:
+		return _fail("wuzhong_expand_install")
+	# 效果为自指的【无中生有】，目标模式改为全体的【南蛮入侵】：目标应由目标模式决定。
+	_set_recorded_names(0, ["wuzhong", "nanman"])
+	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("wuzhong_expand_rejected")
+	if not _submit_or_fail(0, [], [], "wuzhong", true, "wuzhong_expand_effect"):
+		return false
+	if not _submit_or_fail(0, [], [], "", true, "wuzhong_expand_confirm"):
+		return false
+	if not _submit_or_fail(0, [], [], "nanman", true, "wuzhong_expand_target_mode"):
+		return false
+	# 全体模式不请求目标选择，直接结算：两名其他角色各按【无中生有】摸2张，使用者自己不是目标。
+	var hand_counts: Array[int] = []
+	for player_id: int in range(3):
+		hand_counts.append(_controller.state.get_player(player_id).hand.size())
+	if hand_counts[0] != 0 or hand_counts[1] != 2 or hand_counts[2] != 2:
+		return _fail("wuzhong_expand_hands=%s" % str(hand_counts))
+	return true
+
+
+## 校验效果取【万箭齐发】、目标模式取【无中生有】时，视为使用了一张目标为自己的万箭齐发。
+func _test_linggan_self_target_mode() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "linggan") == null:
+		return _fail("self_target_install")
+	# 效果为全体的【万箭齐发】，目标模式改为自指的【无中生有】：只有使用者自己成为目标。
+	_set_recorded_names(0, ["wanjian", "wuzhong"])
+	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("self_target_rejected")
+	if not _submit_or_fail(0, [], [], "wanjian", true, "self_target_effect"):
+		return false
+	if not _submit_or_fail(0, [], [], "", true, "self_target_confirm"):
+		return false
+	if not _submit_or_fail(0, [], [], "wuzhong", true, "self_target_mode"):
+		return false
+	# 自指模式不请求目标选择：结算要求使用者自己对【万箭齐发】作出【闪】响应。
+	if _controller._pending_card_choice.is_empty():
+		return _fail("self_target_no_response_request")
+	var responder_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	if responder_id != 0:
+		return _fail("self_target_responder=%d" % responder_id)
+	return true
+
+
+## 校验记录中只有一张牌名时不再询问目标重定向，直接按该牌自身的目标规则结算。
+func _test_linggan_single_name_skips_retarget_prompt() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "linggan") == null:
+		return _fail("single_name_install")
+	_set_recorded_names(0, ["tiesuo"])
+	if not _controller.activate_skill(0, "linggan", {"active_entry":"phaseUse"}):
+		return _fail("single_name_rejected")
+	if not _submit_or_fail(0, [], [], "tiesuo", true, "single_name_effect"):
+		return false
+	# 没有第二张记录牌名可作目标模式，因此不应出现确认步骤，而应直接进入目标选择。
+	var context: Dictionary = _pending_context()
+	if str(context.get("kind", "")) != "linggan_select_targets":
+		return _fail("single_name_context=%s" % str(context))
+	if not _submit_or_fail(0, [], [1], "", true, "single_name_targets"):
+		return false
+	# 只有一张牌名被使用，结算后记录必须清空。
+	var owner: PlayerState = _controller.state.get_player(0)
+	if not owner.recorded_card_names.is_empty():
+		return _fail("single_name_records=%s" % str(owner.recorded_card_names))
 	return true
 
 
