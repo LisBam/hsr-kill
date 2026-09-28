@@ -310,10 +310,20 @@ func _test_full_match_replacement_flow() -> bool:
 		_controller._move_to_discard(player.hand.pop_back())
 	while not enemy.hand.is_empty():
 		_controller._move_to_discard(enemy.hand.pop_back())
+	# 回合开始类技能（例如【铁壁】）会创建可取消的费用目标询问并把阶段写成 "choice"；
+	# 固定种子选将会随武将池变化而换人，因此必须先结算这些技能选择，才能关闭旧请求并重建权威候选。
+	if not _settle_pending_skill_choices():
+		return _fail("opening_skill_choice_settle")
+	# 取消开局技能选择会放行被其中断的流程（例如回合开始的摸牌阶段），因此必须再清空一次手牌，
+	# 保证后续断言只统计本测试自己加入的实体牌；这些附带摸牌会随固定种子选将结果变化。
+	while not player.hand.is_empty():
+		_controller._move_to_discard(player.hand.pop_back())
 	# 初始回合可能已经建立空的chooseToUse；先关闭旧请求，加入测试实体后再建立包含它们的权威候选。
 	_controller._cancel_active_play_choice("conquest_test_setup")
 	# 本次真实击杀使用的【杀】；从普通手牌进入processing并走完整指定目标、响应、伤害与生命周期尾部。
-	var killing_slash: CardInstance = CardInstance.new("sha", "club", 7)
+	# 固定使用红色【杀】：敌方武将随固定种子变化，若其持有【铁壁】授予的【琥珀】，黑色【杀】会被直接拒绝；
+	# 本测试验证的是完整击杀链路而不是防具免疫，因此采用不会被【琥珀】拦截的红色【杀】。
+	var killing_slash: CardInstance = CardInstance.new("sha", "heart", 7)
 	killing_slash.zone = "hand"
 	killing_slash.owner_id = player.player_id
 	player.hand.append(killing_slash)
@@ -338,7 +348,13 @@ func _test_full_match_replacement_flow() -> bool:
 	# 标准用牌动作；先消费当前chooseToUse，再由正式CardUseEvent推进完整结算，避免测试绕过常驻出牌请求。
 	var killing_slash_action: PlayerAction = PlayerAction.new("use_card", player.player_id, killing_slash.uid, [enemy.player_id])
 	if not _controller.submit_action(killing_slash_action):
-		return _fail("conquest_slash_submit phase=%s play_choice=%s error=%s" % [_controller.state.current_phase, _controller._has_active_play_choice(), _controller._last_action_rejection_message])
+		# 待处理选择上下文；固定种子选将会随武将池变化而换人，开局技能子选择会令阶段停留在 "choice"。
+		var blocked_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+		# 本局实际登场武将；失败时列出便于定位差异来源。
+		var blocked_lineup: Array[String] = []
+		for blocked_player: PlayerState in _controller.state.players:
+			blocked_lineup.append("%d=%s" % [blocked_player.player_id, blocked_player.character_id])
+		return _fail("conquest_slash_submit phase=%s play_choice=%s error=%s pending=%s chooser=%d lineup=%s" % [_controller.state.current_phase, _controller._has_active_play_choice(), _controller._last_action_rejection_message, str(blocked_context.get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1)), str(blocked_lineup)])
 	# 再现费用请求；确认弃置恰好1张牌后才开始跟踪本次【杀】伤害。
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zaixian_discard" or not _submit_card_uid_choice(player.player_id, [zaixian_cost_card.uid], true):
 		return _fail("conquest_zaixian_cost pending=%s" % _controller._pending_card_choice)
@@ -361,7 +377,15 @@ func _test_full_match_replacement_flow() -> bool:
 		return false
 	# 目标生命周期尾部；摄伏获得1张牌后，【杀】的shaAfter还必须让再现再摸1张并登记1个额外出牌阶段，然后才能进入换将等待。
 	if player.hand.size() != 2 or int(_controller._extra_play_phase_counts.get(player.player_id, 0)) != 1:
-		return _fail("replacement_zaixian_tail hand=%d extra=%s" % [player.hand.size(), _controller._extra_play_phase_counts])
+		# 当前手牌定义ID；用于区分【再现】摸牌、【摄伏】获得与武将固有技能的额外来源。
+		var tail_hand_ids: Array[String] = []
+		for tail_card: CardInstance in player.hand:
+			tail_hand_ids.append(tail_card.definition_id)
+		# 本局实际登场武将；固定种子选将会随武将池变化而换人。
+		var tail_lineup: Array[String] = []
+		for tail_player: PlayerState in _controller.state.players:
+			tail_lineup.append("%d=%s" % [tail_player.player_id, tail_player.character_id])
+		return _fail("replacement_zaixian_tail hand=%d extra=%s cards=%s lineup=%s" % [player.hand.size(), _controller._extra_play_phase_counts, str(tail_hand_ids), str(tail_lineup)])
 	# 换将等待只阻止旧规则继续，不暂停场景树；弃置区域的飞牌动画必须能在此期间持续播放。
 	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller._conquest_replacement_settlement_pause_token < 0 or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.event_scheduler.pause_registry.has_active() or not _controller.state.opportunity_state.is_empty():
 		return _fail("replacement_opportunity_preview")
@@ -612,6 +636,30 @@ func _restore_settings() -> void:
 	GameSettings.set_conquest_character_candidate_count(_original_conquest_character_candidate_count)
 	GameSettings.set_conquest_character_replacement_count(_original_conquest_character_replacement_count)
 	GameSettings.set_conquest_difficulty(_original_conquest_difficulty)
+
+
+## 结算回合开始类技能创建的全部待处理选择；取消它们并把阶段恢复为出牌阶段。
+## 部分武将（例如持有【铁壁】的星穹旅伴）会在每回合开始创建可取消的费用目标询问，把阶段写成 "choice"，
+## 从而阻止常驻出牌询问建立。固定种子选将会随武将池变化而换人，测试不能假设开局没有这类请求。
+func _settle_pending_skill_choices() -> bool:
+	# 取消一个请求可能同步续接出下一个，因此按上限循环直到请求表清空。
+	for _attempt: int in range(16):
+		if _controller._pending_card_choice.is_empty():
+			break
+		# 当前请求稳定编号与回答者；取消动作必须绑定创建时的取值，否则会被权威入口拒绝。
+		var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+		var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+		# 标准选择动作；取消时不携带任何牌或目标。
+		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+		if not _controller.submit_action(action):
+			return false
+	if not _controller._pending_card_choice.is_empty():
+		return false
+	# 非出牌类子选择会把阶段写成 "choice"；取消后显式恢复到出牌阶段，后续才能重建常驻询问。
+	if _controller.state.current_phase == "choice":
+		_controller.state.current_phase = "play"
+	return true
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。

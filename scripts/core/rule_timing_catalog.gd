@@ -52,6 +52,9 @@ const CARD_MOVE_TIMINGS: Array[String] = [
 	"gainBefore", "gainBegin", "gainEnd", "gainAfter",
 	"loseBefore", "loseBegin", "loseEnd", "loseAfter", "loseAsyncEnd", "loseAsyncAfter",
 	"discardBefore", "discardBegin", "discardEnd", "discardAfter", "cardsDiscardEnd", "cardsDiscardAfter", "loseToDiscardpileAfter",
+	# 一次面向规则的弃置动作（弃置N张、弃至上限、技能要求弃牌）全部结算完成后派发一次；
+	# 载荷 card_uids 为整批牌，供“当你弃置牌时”类技能按一次动作整批判定，避免逐张事件无法表达“这些牌”。
+	"cardsDiscardedBatchAfter",
 	"drawBefore", "drawBegin", "drawEnd", "drawAfter", "drawCancelled",
 	"equipBefore", "equipEnd", "equipAfter", "disableEquipBefore", "disableEquipAfter", "enableEquipAfter",
 	"addJudgeBefore", "addJudgeEnd", "addJudgeAfter", "disableJudgeBefore", "disableJudgeAfter", "enableJudgeAfter", "addToExpansionEnd", "addToExpansionAfter",

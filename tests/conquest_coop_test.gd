@@ -196,6 +196,10 @@ func _test_vote_match_flow() -> bool:
 	if _controller.state.current_player_id != 0:
 		return _fail("vote_first_turn")
 	# 玩家回合中先击败敌人1；仍有敌人2存活时关卡、机缘与换将均不得发生。
+	# 回合开始类技能（例如【铁壁】）会留下待处理选择并把阶段写成 "choice"，使死亡结算无法推进；
+	# 固定种子选将会随武将池变化而换人，因此先结算这些技能选择再执行死亡。
+	if not _settle_pending_skill_choices():
+		return _fail("opening_skill_choice_settle")
 	var first_enemy: PlayerState = _controller.state.get_player(1)
 	var second_enemy: PlayerState = _controller.state.get_player(3)
 	first_enemy.hp = 0
@@ -410,6 +414,30 @@ func _restore_settings() -> void:
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。
+## 结算回合开始类技能创建的全部待处理选择；取消它们并把阶段恢复为出牌阶段。
+## 部分武将（例如持有【铁壁】的星穹旅伴）会在每回合开始创建可取消的费用目标询问，把阶段写成 "choice"，
+## 使死亡结算等后续流程无法推进。固定种子选将会随武将池变化而换人，测试不能假设开局没有这类请求。
+func _settle_pending_skill_choices() -> bool:
+	# 取消一个请求可能同步续接出下一个，因此按上限循环直到请求表清空。
+	for _attempt: int in range(16):
+		if _controller._pending_card_choice.is_empty():
+			break
+		# 当前请求稳定编号与回答者；取消动作必须绑定创建时的取值，否则会被权威入口拒绝。
+		var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+		var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+		# 标准选择动作；取消时不携带任何牌或目标。
+		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+		if not _controller.submit_action(action):
+			return false
+	if not _controller._pending_card_choice.is_empty():
+		return false
+	# 非出牌类子选择会把阶段写成 "choice"；取消后显式恢复到出牌阶段，后续才能重建常驻询问。
+	if _controller.state.current_phase == "choice":
+		_controller.state.current_phase = "play"
+	return true
+
+
 func _fail(reason: String) -> bool:
 	printerr("CONQUEST_COOP_FAIL %s" % reason)
 	if _controller != null:
