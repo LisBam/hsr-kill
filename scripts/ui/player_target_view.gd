@@ -177,6 +177,12 @@ var _artwork_texture: Texture2D
 ## 武将牌左上角角标区容器；按公开条目动态容纳文本角标与可点击按钮，只读取公开快照。
 ## 原实现为场景内单个 CharacterCornerTextBadge 节点；因需要在一张武将牌上同时显示多个角标与按钮，
 ## 改为容器加动态子项，并按条目排序值稳定排列。
+##
+## 【顺序约束】本节点在 player_target_view.tscn 中**必须位于 InputArea 之后**（即最后一项）。
+## Godot 的鼠标拾取 _gui_find_control_at_pos 是**逆序遍历子节点**，先检查最后一个兄弟；
+## InputArea 覆盖整张武将牌且 mouse_filter 为 STOP，若它排在角标区之后，点击会全部被它吞掉，
+## 按钮表现为“完全点不动”且不产生任何报错。此处 z_index 只决定绘制层级，**不参与**拾取排序，
+## 因此单靠调高 z_index 无法解决遮挡，必须依赖场景中的节点次序。
 @onready var _corner_stack: Control = $CharacterCornerStack
 
 ## 角标区当前结构签名；与上次相同时跳过子节点重建，避免高频快照刷新反复实例化控件。
