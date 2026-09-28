@@ -358,6 +358,22 @@ func _test_full_match_replacement_flow() -> bool:
 	# 再现费用请求；确认弃置恰好1张牌后才开始跟踪本次【杀】伤害。
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zaixian_discard" or not _submit_card_uid_choice(player.player_id, [zaixian_cost_card.uid], true):
 		return _fail("conquest_zaixian_cost pending=%s" % _controller._pending_card_choice)
+	# 敌方武将随固定种子与武将池变化，部分武将会在他人使用【杀】时插入可取消的确认请求：
+	# 例如持有【军势】的布洛妮娅会在本次结算中先询问是否令使用者摸牌，抢在【闪】响应之前。
+	# 因此不能假设下一个请求就是【闪】响应；先逐个取消非目标类别的请求，直到出现目标请求或请求表清空。
+	for _pre_response_attempt: int in range(8):
+		# 当前请求类别；已为目标类别或已无请求时立即停止取消。
+		var pre_response_kind: String = str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", ""))
+		if pre_response_kind == "slash_response" or _controller._pending_card_choice.is_empty():
+			break
+		# 待取消请求的稳定编号与回答者；取消动作必须绑定创建时的取值，否则会被权威入口拒绝。
+		var pre_response_request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+		var pre_response_chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+		# 标准选择动作；取消时不携带任何牌或目标。
+		var pre_response_cancel: PlayerAction = PlayerAction.new("choose_cards", pre_response_chooser_id)
+		pre_response_cancel.payload = {"request_id":pre_response_request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+		if not _controller.submit_action(pre_response_cancel):
+			break
 	# 猎杀目标的【闪】响应；敌方没有【闪】，仍按标准隐私询问明确放弃后再造成伤害。
 	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "slash_response" or not _submit_choice(enemy.player_id, [], false):
 		return _fail("conquest_slash_response")

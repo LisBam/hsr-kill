@@ -239,8 +239,15 @@ func _test_full_ai_match_bootstrap_and_replacement() -> bool:
 	if _controller.call("_get_phase_draw_base_count", red_player.player_id) != 1:
 		return _fail("first_turn_draw_penalty")
 	for defeated_index: int in range(2):
+		# 阵亡前先清空待处理请求：车轮战候选池随武将总数变化，当前出场武将可能带有需要弃牌的技能
+		# （例如【游锋】），残留的请求会阻塞 _resolve_death 的换将流程并让本次阵亡停留不结算。
+		if not _settle_pending_choice():
+			return _fail("replacement_pending_%d" % defeated_index)
 		red_player.hp = 0
 		_controller.call("_resolve_death", red_player.player_id, blue_player.player_id)
+		# 换将后的新武将同样可能创建请求；先清空再断言复活资源与阵容进度，避免请求残留影响后续轮次。
+		if not _settle_pending_choice():
+			return _fail("replacement_pending_after_%d" % defeated_index)
 		if not red_player.alive or red_player.wheel_duel_defeated_count != defeated_index + 1 or red_player.wheel_duel_lineup_index != defeated_index + 1:
 			return _fail("replacement_%d" % defeated_index)
 		if red_player.hp != red_player.max_hp or red_player.hand.size() < 4:
@@ -277,6 +284,46 @@ func _restore_settings() -> void:
 	GameSettings.set_wheel_duel_face_up_candidate_count(_original_face_up_count)
 	GameSettings.set_wheel_duel_face_down_candidate_count(_original_face_down_count)
 	GameSettings.set_next_match_mode(_original_mode)
+
+
+## 结算待处理选择请求；可取消的直接取消，必选的按最小需求量提交，直到请求表清空。
+## 车轮战候选池来自全部已登记武将，固定种子下的选将结果会随武将总数变化而换人，
+## 因此测试不能假设当前出场武将没有需要交互的技能。例如持有【幽锋】的貊泽会在回合开始
+## 创建 "allow_cancel=false" 的必选弃牌请求，残留的请求会阻塞后续直接调用的阵亡结算。
+## 取消或提交一个请求可能同步续接出下一个，故按上限循环。
+func _settle_pending_choice() -> bool:
+	for _attempt: int in range(16):
+		if _controller._pending_card_choice.is_empty():
+			break
+		# 当前请求稳定编号与回答者；取消或提交动作必须绑定创建时的取值，否则会被权威入口拒绝。
+		var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+		var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+		# 标准选择动作；是否携带牌与目标取决于该请求能否取消。
+		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		if bool(_controller._pending_card_choice.get("allow_cancel", false)):
+			action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+		else:
+			# 必选请求的最小需求量；不足量提交会被拒绝，因此候选不够时直接判定无法推进。
+			var min_card_select: int = int(_controller._pending_card_choice.get("min_card_select", 0))
+			var min_target_select: int = int(_controller._pending_card_choice.get("min_target_select", 0))
+			# 待提交牌UID；按候选顺序取足最小张数。
+			var picked_card_uids: Array = []
+			for candidate_variant: Variant in _controller._pending_card_choice.get("candidates", []) as Array:
+				if picked_card_uids.size() >= min_card_select:
+					break
+				picked_card_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
+			# 待提交目标ID；同样按最小个数取足。
+			var picked_target_ids: Array = []
+			for target_variant: Variant in _controller._pending_card_choice.get("target_ids", []) as Array:
+				if picked_target_ids.size() >= min_target_select:
+					break
+				picked_target_ids.append(int(target_variant))
+			if picked_card_uids.size() < min_card_select or picked_target_ids.size() < min_target_select:
+				return false
+			action.payload = {"request_id":request_id, "selected_card_uids":picked_card_uids, "selected_target_ids":picked_target_ids, "confirmed":true}
+		if not _controller.submit_action(action):
+			return false
+	return _controller._pending_card_choice.is_empty()
 
 
 ## 失败出口；输出稳定标记并以非零状态结束无头测试。
