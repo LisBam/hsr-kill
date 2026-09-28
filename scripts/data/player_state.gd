@@ -126,6 +126,10 @@ var acquired_skills: Dictionary = {}
 ## 当前所有轮回技的公开权威状态；键为技能ID，值保存轮回数、轮回节、永劫与通用限次，默认空字典由技能安装时建立。
 var reincarnation_skills: Dictionary = {}
 
+## 当前角色是否已在本局永久失去全部技能；true时所有装配路径都不再为其安装技能且不可恢复。
+## 由【留白】等效果写入；必须进入存档与公开快照，否则读档、换将或局内获得会让已失去的技能复活。
+var skills_permanently_removed: bool = false
+
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
@@ -329,6 +333,7 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 		player.wooden_ox_storage.append(CardInstance.from_dict(card_data_variant as Dictionary))
 	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
 	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
+	player.skills_permanently_removed = bool(data.get("skills_permanently_removed", false))
 	player.reincarnation_skills = (data.get("reincarnation_skills", {}) as Dictionary).duplicate(true)
 	for opportunity_id_variant: Variant in data.get("acquired_opportunity_ids", []) as Array:
 		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
@@ -529,6 +534,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
 		"reincarnation_skills": reincarnation_skills.duplicate(true),
+		# 永久失去技能是不可逆的公开事实；界面与远端据此把该角色的技能栏画为空，读档也据此跳过装配。
+		"skills_permanently_removed": skills_permanently_removed,
 		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,

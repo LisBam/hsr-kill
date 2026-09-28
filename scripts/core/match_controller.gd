@@ -6534,6 +6534,26 @@ func get_random_zone_card_uids_for_each_player(receiver_id: int, count_each: int
 	return result
 
 
+## 从候选集合中等概率取一项并写入随机历史；技能随机效果必须经此入口，禁止自建随机源或裸随机数。
+## 使用全局 _rng，保证固定种子下可复现、存档 rng_state 恢复后结果一致、联机各端判定统一。
+## 返回索引而非元素：调用方保留自己对候选数组的类型控制，异构候选无需统一返回值类型。
+## candidate_count 不大于0时返回-1，表示没有可选项，由调用方按“本次无效果”处理而不在此抛错。
+func pick_random_candidate_index(candidate_count: int, history_kind: String = "", history_data: Dictionary = {}) -> int:
+	if candidate_count <= 0:
+		return -1
+	# 权威随机索引；与区域内随机取牌共用同一套随机流，闭区间取值覆盖全部候选。
+	var picked_index: int = _rng.randi_range(0, candidate_count - 1)
+	# 随机历史条目；固定kind便于测试与复盘检索，候选规模与命中索引始终记录以支持复现。
+	var history_entry: Dictionary = {
+		"kind":(history_kind if not history_kind.is_empty() else "skill_random_pick"),
+		"candidate_count":candidate_count,
+		"picked_index":picked_index,
+	}
+	history_entry.merge(history_data, true)
+	state.random_history.append(history_entry)
+	return picked_index
+
+
 ## 将指定角色当前全部普通手牌持续视为同一牌名，实体离开该角色手牌区时由统一移动边界自动恢复原定义。
 func set_all_hand_cards_view_as(player_id: int, view_as_definition_id: String, source_id: String = "runtime", allow_out_of_game: bool = false) -> int:
 	# 目标角色；无效定义、死亡或未获许可的离场角色不修改任何实体牌。
@@ -8652,6 +8672,9 @@ func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int 
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or skill_id.is_empty():
 		return false
+	# 永久失去技能的角色不能再通过任何来源获得技能；该标记不可逆，必须早于任何装配动作拦截。
+	if player.skills_permanently_removed:
+		return false
 	# 当前技能实例表；固有、模式、临时与已获得技能共用同一运行时容器。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
 	if player_skills.has(skill_id):
@@ -9224,6 +9247,9 @@ func _resolve_active_entries(player_id: int, context: Dictionary) -> Array[Strin
 func _install_all_character_skills() -> void:
 	_uninstall_all_character_skills()
 	for player: PlayerState in state.players:
+		# 永久失去技能的角色不装配任何技能；标记来自【留白】等不可逆效果。
+		if player.skills_permanently_removed:
+			continue
 		# 当前武将定义；skills 数组由 CharacterDefinition 从直接引用的技能脚本自动生成。
 		var character: Dictionary = GameDatabase.get_character(player.character_id)
 		# 当前玩家技能实例表；不同玩家即使持有同一技能也不会共享次数、标记或临时状态。
@@ -9273,6 +9299,10 @@ func _reinstall_character_skills_for_player(player: PlayerState) -> void:
 		var previous_skill: SkillDefinition = skill_variant as SkillDefinition
 		if previous_skill != null:
 			previous_skill.uninstall()
+	skill_instances_by_player[player.player_id] = {}
+	# 永久失去技能的角色只卸载旧实例而不再装配；否则换将与车轮战重装都会让已失去的技能复活。
+	if player.skills_permanently_removed:
+		return
 	var player_skills: Dictionary = {}
 	var character: Dictionary = GameDatabase.get_character(player.character_id)
 	var skill_ids_to_install: Array[String] = []
@@ -9289,6 +9319,81 @@ func _reinstall_character_skills_for_player(player: PlayerState) -> void:
 		player_skills[skill_id] = skill
 		skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+
+
+## 本局永久移除指定角色的全部技能；写入不可逆标记，使后续所有装配路径都不再为其安装技能。
+## 端口职责：释放时机订阅 → 清空获得与临时技能记录 → 清空轮回公开状态 → 置标记 → 广播状态。
+## 标记进入公开快照与存档，因此读档、换将、车轮战重装与局内获得都不会让已失去的技能复活。
+func remove_all_skills_permanently(player_id: int, reason: String = "") -> bool:
+	# 目标角色；不存在或无效对局中没有可移除的技能。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return false
+	# 重复调用视为已达成目标；不再重复卸载与广播，避免同一回合内多次触发同一清算。
+	if player.skills_permanently_removed:
+		return true
+	# 当前技能实例表；逐个卸载以释放事件总线订阅，再从容器中移除该玩家的整条记录。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前待卸载技能；无效实例直接跳过，避免场景释放期间重复访问。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null:
+			skill.uninstall()
+	skill_instances_by_player.erase(player_id)
+	# 获得与临时技能记录；失去全部技能后这些记录不再有消费者，清空以免界面与AI读到幽灵技能。
+	player.acquired_skills.clear()
+	player.temporary_skills.clear()
+	# 轮回技公开状态；失去技能后不再保留轮回数、轮回节与永劫标记。
+	player.reincarnation_skills.clear()
+	player.skills_permanently_removed = true
+	add_log("%s永久失去了全部技能%s。" % [format_player_state_log_name(player), "（%s）" % reason if not reason.is_empty() else ""])
+	_emit_state()
+	return true
+
+
+## 重置指定角色除排除项以外的全部技能；复原限定技、出牌阶段限次、每回合限次、觉醒技与轮回进度。
+## 复用复原武将牌技能入口重建固有技能实例：新建实例天然归零各技能脚本自行保存的私有额度。
+## 排除项必须保留原实例：重建会把它自身的限定技标记一并清零，导致限定技可无限发动。
+## 局内获得技能的额度记录在 acquired_skills 中，不随实例重建复原，因此在此显式归零已用次数。
+## 返回值：被重置的固有技能数量，供测试断言与AI估值复用；排除项不计入。
+func reset_all_other_skills(player_id: int, exclude_skill_id: String = "") -> int:
+	# 目标角色；不存在或已永久失去技能的角色没有任何可重置内容。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or player.skills_permanently_removed:
+		return 0
+	# 排除项原实例；先取引用，复原结束后回填，保留其限定技与阶段额度等全部私有状态。
+	var current_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	var excluded_skill: SkillDefinition = current_skills.get(exclude_skill_id) as SkillDefinition
+	# 复原武将牌上的全部固有技能；该入口会卸载旧实例并新建未使用实例，同时重置对应轮回进度。
+	if not restore_character_card_skills(player_id, "reset_all_other_skills"):
+		return 0
+	# 复原后的技能表；排除项的新实例必须卸载后回填旧实例，否则两者会重复订阅同一时机。
+	var rebuilt_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	# 被重置的固有技能数量；排除项不计入，因为它没有被重置。
+	var reset_count: int = rebuilt_skills.size()
+	if excluded_skill != null:
+		var rebuilt_excluded: SkillDefinition = rebuilt_skills.get(exclude_skill_id) as SkillDefinition
+		rebuilt_skills[exclude_skill_id] = excluded_skill
+		if rebuilt_excluded != null and rebuilt_excluded != excluded_skill:
+			# 复原过程已经统一卸载了排除项的旧实例；此处卸载重建出的新实例并重新安装旧实例，
+			# 否则回填进来的旧实例不会持有任何时机订阅，其第二段延迟效果将永远不会执行。
+			rebuilt_excluded.uninstall()
+			excluded_skill.install()
+			reset_count -= 1
+	# 局内获得技能；额度定义与已用次数同存于 acquired_skills，复原实例不会清空这些计数，必须逐项归零。
+	for acquired_skill_id_variant: Variant in player.acquired_skills.keys():
+		# 当前获得技能稳定ID；仅改写已用次数与统计基准，保留来源与三类上限定义。
+		var acquired_skill_id: String = str(acquired_skill_id_variant)
+		var usage: Dictionary = (player.acquired_skills.get(acquired_skill_id, {}) as Dictionary).duplicate(true)
+		usage["uses_this_turn"] = 0
+		usage["uses_this_round"] = 0
+		usage["total_uses"] = 0
+		usage["tracked_turn_number"] = state.turn_number
+		usage["tracked_round_number"] = state.round_number
+		player.acquired_skills[acquired_skill_id] = usage
+	add_log("%s重置了除【%s】以外的全部技能。" % [format_player_state_log_name(player), format_skill_log_name(exclude_skill_id)])
+	_emit_state()
+	return reset_count
 
 
 ## 完成其他玩家同时选将、统一亮将、发4张起始手牌并由领袖开始首回合。
@@ -13622,6 +13727,9 @@ func resume_conquest_match(save_data: Dictionary) -> bool:
 ## 本入口不改写 acquired_skills 或 temporary_skills 记录，存档中的剩余次数与到期轮数保持原值。
 func _reinstall_saved_runtime_skills(player: PlayerState) -> void:
 	if player == null:
+		return
+	# 永久失去技能的角色不补装任何存档技能；否则读档会让已失去的技能复活。
+	if player.skills_permanently_removed:
 		return
 	# 当前玩家技能实例表；固有与模式技能在统一安装入口已经写入。
 	var player_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
