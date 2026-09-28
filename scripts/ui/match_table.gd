@@ -1564,7 +1564,6 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
 	_refresh_match_menu_authority_controls()
 	_player_snapshots_by_id.clear()
-	_recorded_names_view.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
 		var indexed_player: Dictionary = player_variant as Dictionary
@@ -3308,6 +3307,10 @@ func _reset_presentation_for_new_match() -> void:
 	_local_wooden_ox_display_order.clear()
 	_hand_order_match_id = ""
 	card_selection_panel.close()
+	# 记录牌名只读窗口随旧局丢弃；它不属于任何选择请求，因此必须在此显式清空，
+	# 否则新局仍会按旧数据重新打开一个查看窗口。注意不能放进 _on_state_changed：
+	# 出牌阶段每次状态广播都会清空，会让窗口在 AI 行动期间刚显示就被关闭。
+	_recorded_names_view.clear()
 	_public_card_choice_display.clear()
 	_inline_card_choice.clear()
 	_inline_selected_card_uids.clear()

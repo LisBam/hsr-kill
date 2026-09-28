@@ -650,6 +650,10 @@ func _test_ai_hooks_positive() -> bool:
 	var jiegou_score: float = jiegou.score_ai_choice(snapshot, jiegou_request, jiegou_action, evaluator)
 	if jiegou_score <= 0.0:
 		return _fail("ai_jiegou_score=%f" % jiegou_score)
+	# 【解构】发动动作评分；基类 score_ai_action 默认返回 0.0 会让AI判定本技能毫无价值而永不发动。
+	var jiegou_activate_score: float = jiegou.score_ai_action(snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"jiegou"}, evaluator)
+	if jiegou_activate_score <= 0.0:
+		return _fail("ai_jiegou_activate_score=%f" % jiegou_activate_score)
 	# 【灵感】选效果牌名评分。
 	var linggan: SkillDefinition = _controller.get_skill_instance(0, "linggan")
 	if linggan == null:
@@ -659,6 +663,10 @@ func _test_ai_hooks_positive() -> bool:
 	var linggan_score: float = linggan.score_ai_choice(snapshot, linggan_request, linggan_action, evaluator)
 	if linggan_score <= 0.0:
 		return _fail("ai_linggan_score=%f" % linggan_score)
+	# 【灵感】发动动作评分；同源问题，不覆盖基类默认0分则记录再多也不会被AI使用。
+	var linggan_activate_score: float = linggan.score_ai_action(snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"linggan"}, evaluator)
+	if linggan_activate_score <= 0.0:
+		return _fail("ai_linggan_activate_score=%f" % linggan_activate_score)
 	# 【灵感】目标模式重定向评分；单体效果改群体目标应获得额外加成。
 	var retarget_request: Dictionary = {"context":{"kind":"linggan_pick_target_mode", "effect_id":"tiesuo"}, "control_options":[{"id":"nanman", "label":"南蛮入侵"}]}
 	var retarget_action: Dictionary = {"payload":{"confirmed":true, "selected_control_id":"nanman"}}

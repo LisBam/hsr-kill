@@ -194,8 +194,8 @@ func modify_ai_card_action_score(authoritative_snapshot: Dictionary, action: Dic
 func modify_ai_incoming_card_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int, current_score: float, evaluator: Object) -> float
 ```
 
-- `score_ai_action()`：主动技能是否值得发动。
-- `score_ai_choice()`：技能创建的确认、选牌、选目标或牌目标组合如何选择。
+- `score_ai_action()`：主动技能是否值得发动。**基类默认返回 `0.0`**，因此任何实现 `append_play_phase_actions()` 的技能都**必须同时覆盖本方法**，否则AI会把该动作视为毫无价值而**永不发动**：技能会安静地在整局中一次都不出现，且不产生任何报错。这类遗漏只能靠“整局动作总数”之类的AI行为回归发现，技能自身的 `score_ai_choice()` 测试会全部通过。【解构】与【灵感】都曾因此完全不被AI使用——AI从不发动【解构】，就永远不会记录牌名，也就谈不上使用【灵感】。
+- `score_ai_choice()`：技能创建的确认、选牌、选目标或牌目标组合如何选择。它只在请求已经创建之后才生效，**不能**替代 `score_ai_action()`——不发动的技能永远走不到这一步。
 - `modify_ai_card_action_score()`：被动、锁定或触发技能如何改变持有者使用某张牌的价值。
 - `modify_ai_incoming_card_effect()`：目标当前技能如何改变其受到本牌后的预期结局；例如致命伤害会触发【求生】时，用“存活至1点体力并弃置全部手牌”替换普通击杀收益。评估器按目标固有、模式、临时与局内技能依次调用，同一技能ID只执行1次；属性连环中的每名传导目标也使用同一钩子。
 
