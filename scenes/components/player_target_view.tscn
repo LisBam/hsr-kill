@@ -5,7 +5,6 @@
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
 [ext_resource type="Script" uid="uid://c457efv3cv7c2" path="res://scripts/ui/damage_shake_feedback.gd" id="5_damage_feedback"]
-[ext_resource type="PackedScene" path="res://scenes/components/character_corner_text_badge.tscn" id="6_corner_text_badge"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -276,12 +275,13 @@ text = "列"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="CharacterCornerTextBadge" parent="." instance=ExtResource("6_corner_text_badge")]
-z_index = 5
+[node name="CharacterCornerStack" type="Control" parent="."]
+z_index = 31
 offset_left = 26.0
 offset_top = 20.0
 offset_right = 26.0
 offset_bottom = 20.0
+mouse_filter = 2
 
 [node name="HealthFrame" type="Control" parent="." unique_id=23280875]
 unique_name_in_owner = true

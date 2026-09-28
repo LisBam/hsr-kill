@@ -14917,14 +14917,17 @@ func _request_card_presentation(card: CardInstance, actor_id: int, target_ids: A
 
 
 ## 写入一项武将牌左上角公开文本；相同来源ID会原位更新，多个来源由控制器按排序值稳定合成。
-func set_character_corner_text_entry(player_id: int, entry_id: String, display_text: String, order: int = 0) -> bool:
+## view_kind 为空时表示纯文本角标，行为与既有实现完全一致；非空时表示该条目由表现层渲染为可点击按钮。
+## 按钮条目不参与 character_corner_text 文本合成，因此不会改变该字符串被AI评估与既有测试断言的取值集合。
+## 该参数只在状态层与快照间中性透传，控制器不解释其含义，具体打开哪种只读界面由表现层按映射决定。
+func set_character_corner_text_entry(player_id: int, entry_id: String, display_text: String, order: int = 0, view_kind: String = "") -> bool:
 	# 目标角色；无效角色或空来源ID不能建立无法清理的公开状态。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or entry_id.is_empty():
 		return false
 	if display_text.is_empty():
 		return remove_character_corner_text_entry(player_id, entry_id)
-	player.character_corner_text_entries[entry_id] = {"text":display_text, "order":order}
+	player.character_corner_text_entries[entry_id] = {"text":display_text, "order":order, "view_kind":view_kind}
 	_refresh_character_corner_text(player)
 	refresh_public_state_snapshot()
 	return true
@@ -14956,6 +14959,9 @@ func _refresh_character_corner_text(player: PlayerState) -> void:
 		# 当前显示文本；空文本不占用武将牌提示区域。
 		var display_text: String = str(entry_data.get("text", ""))
 		if display_text.is_empty():
+			continue
+		# 按钮条目只供表现层渲染可点击控件，不进入文本合成；旧存档条目没有view_kind字段，取默认空值走原路径。
+		if not str(entry_data.get("view_kind", "")).is_empty():
 			continue
 		# 当前排序记录；插入排序避免依赖闭包或运行时对象进入状态层。
 		var sortable_entry: Dictionary = {"entry_id":entry_id, "text":display_text, "order":int(entry_data.get("order", 0))}

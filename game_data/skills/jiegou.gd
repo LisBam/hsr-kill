@@ -24,6 +24,18 @@ const FIRST_RECORD_AI_BONUS: float = 2.0
 ## 重铸一次的基础AI收益；与通用重铸尺度保持一致，避免技能自造第二套估值标准。
 const RECAST_AI_BASE: float = 1.0
 
+## 查看已记录牌名的角标按钮条目ID；稳定来源标识保证重复声明时原位更新而不是叠加第二行。
+const CORNER_BUTTON_ENTRY_ID: String = "jiegou:recorded_names"
+
+## 角标按钮的显示文本；固定为技能名，玩家一眼可知该按钮由哪个技能提供。
+const CORNER_BUTTON_TEXT: String = "解构"
+
+## 角标按钮的排序值；排在“酩酊”“永劫”等状态提示(50)之后、“安可”等数值提示(100)之前。
+const CORNER_BUTTON_ORDER: int = 60
+
+## 角标按钮的中性类型标识；表现层据此决定打开哪种只读界面，技能与控制器都不解释其含义。
+const CORNER_BUTTON_VIEW_KIND: String = "recorded_card_names"
+
 
 ## 写入主动技静态信息；技能正文逐字保持设计原文。
 func _init() -> void:
@@ -86,8 +98,25 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 【无懈可击】在这里被有意跳过——它可以被重铸，但不能被【灵感】视为使用。
 	if _is_recordable_definition(recorded_definition_id):
 		host.call("record_card_name", owner_player_id, recorded_definition_id)
+		# 首次记录时在武将牌上声明查看按钮；条目常驻，是否渲染由表现层按“记录是否为空”决定，
+		# 因此清空记录的【看破】不需要知道【解构】的存在，两个技能保持互不引用。
+		_ensure_record_button_entry(owner)
 	announce_activation({"card_definition_id":recorded_definition_id, "recorded":_is_recordable_definition(recorded_definition_id)})
 	return true
+
+
+## 在武将牌左上角声明“查看已记录牌名”按钮条目；已存在时不重复写入，避免每次记录都触发一次公开快照广播。
+func _ensure_record_button_entry(owner: PlayerState) -> void:
+	# 技能持有者；缺失时无法定位角标归属，直接跳过。
+	if owner == null:
+		return
+	# 宿主角标端口；缺少端口时静默跳过，保持技能在无界面环境下仍可正常结算。
+	if host == null or not host.has_method("set_character_corner_text_entry"):
+		return
+	# 已存在的条目直接返回；按钮的显隐由记录容器是否为空决定，不依赖条目本身的增删。
+	if owner.character_corner_text_entries.has(CORNER_BUTTON_ENTRY_ID):
+		return
+	host.call("set_character_corner_text_entry", owner_player_id, CORNER_BUTTON_ENTRY_ID, CORNER_BUTTON_TEXT, CORNER_BUTTON_ORDER, CORNER_BUTTON_VIEW_KIND)
 
 
 ## 为AI枚举本技能在本出牌阶段的候选动作；具体重铸哪张牌由后续选牌请求决定。

@@ -596,11 +596,20 @@ func request_control_selection(title: String, prompt: String, options: Array[Dic
 
 
 ## 为指定角色创建单项文字选项请求；响应通过 ChoiceResponse.control_id 恢复，不借用取消或空选牌表达第二选项。
-func request_control_selection_for_player(chooser_id: int, title: String, prompt: String, options: Array[Dictionary], allow_cancel: bool, context: Dictionary = {}) -> String:
+## card_name_view 为真时，这些选项在界面上以隐藏花色点数的牌面呈现，由玩家点击牌面后确认提交；
+## 规则层收到的仍是一个普通的 control_id，因此 AI 选择、权威校验与网络提交全部沿用既有通道。
+func request_control_selection_for_player(chooser_id: int, title: String, prompt: String, options: Array[Dictionary], allow_cancel: bool, context: Dictionary = {}, card_name_view: bool = false) -> String:
 	if host == null or not host.has_method("request_control_choice"):
 		return ""
 	# 技能恢复上下文；跨角色选择仍绑定真实技能持有者，防止响应被选择者的同名技能实例误消费。
 	var skill_context: Dictionary = _build_selection_context(context)
+	# 牌面式呈现标记；只补充“以牌面显示哪些定义”，不改变选项 ID 集合本身，
+	# 因此界面与 AI 对同一批选项的理解不会出现第二份来源，牌面渲染失败时文字选项仍然可用。
+	if card_name_view:
+		var card_name_candidates: Array[String] = []
+		for option: Dictionary in options:
+			card_name_candidates.append(str(option.get("id", "")))
+		skill_context["card_name_candidates"] = card_name_candidates
 	skill_context["choice_chooser_id"] = chooser_id
 	return str(host.call("request_control_choice", chooser_id, title, prompt, options, allow_cancel, skill_context))
 
