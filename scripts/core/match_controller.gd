@@ -9351,6 +9351,54 @@ func remove_all_skills_permanently(player_id: int, reason: String = "") -> bool:
 	return true
 
 
+## 为指定角色记录一个牌名；已存在时不重复记录并返回 false，供技能区分“首次记录”与“重复记录”。
+## 记录按稳定牌ID保存并进入公开快照，因此展示名由名称模式在读取时解析，记录本身不受名称模式切换影响。
+func record_card_name(player_id: int, definition_id: String) -> bool:
+	# 目标角色；不存在时无处记录。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or definition_id.is_empty():
+		return false
+	# 已记录牌名保持幂等；重复重铸同一牌名不应产生第二条记录，也不重复广播状态。
+	if player.recorded_card_names.has(definition_id):
+		return false
+	player.recorded_card_names.append(definition_id)
+	# 记录日志使用当前名称模式下的显示名；牌名解析失败时回退为稳定ID，保证日志始终可读。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	var display_name: String = GameSettings.resolve_card_name(definition) if not definition.is_empty() else definition_id
+	add_log("%s记录了牌名%s。" % [format_player_state_log_name(player), display_name])
+	_emit_state()
+	return true
+
+
+## 移除指定角色已记录的一个牌名；不存在时返回 false，供【灵感】结算完毕与【看破】发动时调用。
+## 记录是公开信息，因此移除后必须广播状态，使界面与对手AI的候选集合立即同步收缩。
+func remove_recorded_card_name(player_id: int, definition_id: String) -> bool:
+	# 目标角色；不存在时无记录可移除。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or definition_id.is_empty():
+		return false
+	# 未记录该牌名；保持静默失败，调用方据此判断条件是否成立。
+	if not player.recorded_card_names.has(definition_id):
+		return false
+	player.recorded_card_names.erase(definition_id)
+	# 移除日志与记录日志对称，便于回放与排查时还原记录的完整生命周期。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	var display_name: String = GameSettings.resolve_card_name(definition) if not definition.is_empty() else definition_id
+	add_log("%s移除了记录的牌名%s。" % [format_player_state_log_name(player), display_name])
+	_emit_state()
+	return true
+
+
+## 返回指定角色当前记录的牌名列表副本；技能、界面与AI只需读取，禁止直接改写权威数组。
+func get_recorded_card_names(player_id: int) -> Array[String]:
+	# 目标角色；不存在时返回空数组，避免调用方额外判空。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		var empty_result: Array[String] = []
+		return empty_result
+	return player.recorded_card_names.duplicate()
+
+
 ## 重置指定角色除排除项以外的全部技能；复原限定技、出牌阶段限次、每回合限次、觉醒技与轮回进度。
 ## 复用复原武将牌技能入口重建固有技能实例：新建实例天然归零各技能脚本自行保存的私有额度。
 ## 排除项必须保留原实例：重建会把它自身的限定技标记一并清零，导致限定技可无限发动。

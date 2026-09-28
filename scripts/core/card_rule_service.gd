@@ -133,6 +133,22 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 	return ""
 
 
+## 解析虚拟牌定义；rule_overrides 可携带 definition_patch 按键覆写定义字段。
+## 用于“效果取甲牌、目标规则取乙牌”的通用目标重定向：补丁只做按键合并，不含任何牌名或技能特例，
+## 因此核心层不需要维护牌名白名单；调用方负责在目标枚举、提交校验与最终结算三处传入同一份覆写。
+func _resolve_definition(definition_id: String, rule_overrides: Dictionary) -> Dictionary:
+	# 基础定义；不存在时原样返回，由调用方沿用既有的“定义不存在”判定。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	# 定义补丁；未提供时不复制字典，保持普通虚拟牌零额外开销。
+	var definition_patch: Dictionary = rule_overrides.get("definition_patch", {}) as Dictionary
+	if definition.is_empty() or definition_patch.is_empty():
+		return definition
+	# 合并结果；深拷贝避免污染数据库中的静态定义，同键覆写使补丁优先。
+	var merged_definition: Dictionary = definition.duplicate(true)
+	merged_definition.merge(definition_patch, true)
+	return merged_definition
+
+
 ## 检查一张无实体牌面的虚拟牌是否可以在当前出牌阶段使用；材料与装备条件由创建虚拟牌的独立规则入口负责校验。
 ## 虚拟牌不会进入行动玩家的手牌或木牛牌源，因此本函数只复用阶段、次数、目标和距离规则，不执行实体来源检查或方天画戟最后手牌修正。
 func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Array[int], rule_overrides: Dictionary = {}) -> String:
@@ -146,7 +162,8 @@ func validate_virtual_use(actor_id: int, definition_id: String, target_ids: Arra
 	if (state.current_player_id != actor_id or state.current_phase != "play") and not ignore_phase_limit:
 		return "当前不是该玩家的出牌阶段。"
 	# 虚拟牌定义；丈八蛇矛当前固定生成普通【杀】，保留通用定义参数便于其他视为牌复用。
-	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	# 定义补丁允许调用方把目标规则替换为另一张牌的模式，效果仍由本定义决定。
+	var definition: Dictionary = _resolve_definition(definition_id, rule_overrides)
 	if definition.is_empty():
 		return "虚拟牌定义不存在。"
 	if str(definition.get("target_mode", "")) == "response_only":
@@ -186,8 +203,9 @@ func list_legal_virtual_targets(actor_id: int, definition_id: String, rule_overr
 	var result: Array[int] = []
 	# 虚拟牌使用者；目标规则需要读取其座次、装备和距离。
 	var actor: PlayerState = state.get_player(actor_id)
-	# 虚拟牌定义；当前丈八蛇矛使用普通【杀】定义。
-	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	# 虚拟牌定义；当前丈八蛇矛使用普通【杀】定义。目标重定向时读取合并补丁后的定义，
+	# 使目标枚举与 validate_virtual_use 读取同一套 target_mode 与数量限制。
+	var definition: Dictionary = _resolve_definition(definition_id, rule_overrides)
 	var allow_out_of_game_actor: bool = bool(rule_overrides.get("allow_out_of_game_actor", false))
 	if actor == null or not actor.alive or (actor.out_of_game and not allow_out_of_game_actor) or definition.is_empty():
 		return result
