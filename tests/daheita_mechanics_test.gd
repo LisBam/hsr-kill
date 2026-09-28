@@ -46,7 +46,9 @@ func _run() -> void:
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 self_target=1 single_name=1 cancel_safe=1 negate_self=1 wuxie_excluded=1")
+	if not _test_corner_record_button():
+		return
+	print("DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 self_target=1 single_name=1 cancel_safe=1 negate_self=1 wuxie_excluded=1 corner_button=1")
 	get_tree().quit(0)
 
 
@@ -131,6 +133,40 @@ func _give_card(player_id: int, definition_id: String, suit: String = "spade", r
 	card.zone = "hand"
 	player.hand.append(card)
 	return card.uid
+
+
+## 验证记录牌名角标按钮的条目契约：按钮可声明、可共存、且绝不参与既有文本合成。
+## 这是本次重构的核心不变量——character_corner_text 被AI评估与多个既有测试直接断言，
+## 因此按钮条目必须与文本合成完全隔离，否则所有既有角标断言都会连带回退。
+func _test_corner_record_button() -> bool:
+	_reset_state(2)
+	var player: PlayerState = _controller.state.get_player(0)
+	player.character_corner_text_entries.clear()
+	# 一条纯文本角标与一条按钮角标共存，模拟“酩酊”之类的状态提示与记录按钮同时出现。
+	if not _controller.set_character_corner_text_entry(0, "test:text", "提示", 50):
+		return _fail("corner_text_entry")
+	if not _controller.set_character_corner_text_entry(0, "test:button", "解构", 60, "recorded_card_names"):
+		return _fail("corner_button_entry")
+	# 合成文本只包含纯文本条目；按钮条目不得进入 character_corner_text。
+	if str(player.character_corner_text) != "提示":
+		return _fail("corner_text_compose=%s" % str(player.character_corner_text))
+	# 按钮条目仍完整保留在公开条目字典中，供表现层渲染可点击角标。
+	var button_entry: Dictionary = player.character_corner_text_entries.get("test:button", {}) as Dictionary
+	if str(button_entry.get("view_kind", "")) != "recorded_card_names":
+		return _fail("corner_button_view_kind")
+	if str(button_entry.get("text", "")) != "解构":
+		return _fail("corner_button_text")
+	if int(button_entry.get("order", -1)) != 60:
+		return _fail("corner_button_order")
+	# 清空记录后按钮条目仍保留：是否渲染由表现层按公开记录是否为空决定，
+	# 因此移除记录的【看破】不需要知道【解构】的存在，两个技能保持互不引用。
+	_set_recorded_names(0, [])
+	if not player.character_corner_text_entries.has("test:button"):
+		return _fail("corner_button_lifecycle")
+	# 还原构造的状态；后续用例不应看到本次测试写入的角标条目。
+	player.character_corner_text_entries.clear()
+	player.character_corner_text = ""
+	return true
 
 
 ## 手工写入玩家的记录牌名；测试用于跳过【解构】直接构造【灵感】与【看破】的前置条件。
