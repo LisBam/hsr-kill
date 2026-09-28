@@ -93,7 +93,7 @@ func activate(_context: Dictionary = {}) -> String:
 	var options: Array[Dictionary] = _get_effect_name_options(owner, [])
 	if options.is_empty():
 		return "【灵感】没有可用的记录牌名。"
-	request_control_selection_for_player(owner_player_id, "灵感", "选择一张记录的牌名作为视为使用的牌", options, true, {"kind":CHOICE_PICK_EFFECT})
+	request_control_selection_for_player(owner_player_id, "灵感", "选择一张记录的牌名作为视为使用的牌", options, true, {"kind":CHOICE_PICK_EFFECT}, true)
 	return ""
 
 
@@ -134,7 +134,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if options.is_empty():
 			_begin_target_selection(effect_definition_id, "")
 			return true
-		request_control_selection_for_player(owner_player_id, "灵感", "选择决定目标结算方式的记录牌名", options, true, {"kind":CHOICE_PICK_TARGET_MODE, "effect_id":effect_definition_id})
+		request_control_selection_for_player(owner_player_id, "灵感", "选择决定目标结算方式的记录牌名", options, true, {"kind":CHOICE_PICK_TARGET_MODE, "effect_id":effect_definition_id}, true)
 		return true
 	if context_kind == CHOICE_PICK_TARGET_MODE:
 		var effect_id: String = str(context.get("effect_id", ""))

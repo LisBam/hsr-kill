@@ -343,6 +343,10 @@ var _settlement_auto_shown_match_id: String = ""
 ## 当前快照按稳定玩家 ID 建立的只读索引；每次状态广播重建一次，避免同一帧多处线性扫描玩家数组。
 var _player_snapshots_by_id: Dictionary = {}
 
+## 记录牌名只读窗口数据；非空表示该窗口正被打开，它不参与任何规则请求，也不产生规则动作。
+## 数据由武将牌角标按钮按下时按当前公开快照构造，关闭时清空。
+var _recorded_names_view: Dictionary = {}
+
 ## 已读取的卡牌静态定义缓存；值只供界面读取，任何调用方都不得修改返回字典。
 var _card_definition_cache: Dictionary = {}
 
@@ -543,6 +547,7 @@ func _ready() -> void:
 	match_controller.equipment_activated.connect(_on_equipment_activated)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	card_selection_panel.control_submitted.connect(_on_control_choice_submitted)
+	card_selection_panel.read_only_view_closed.connect(_on_read_only_view_closed)
 	match_controller.public_card_choice_display_changed.connect(_on_public_card_choice_display_changed)
 	match_controller.character_selection_changed.connect(_on_character_selection_changed)
 	GameSettings.card_name_mode_changed.connect(_on_card_name_mode_changed)
@@ -605,6 +610,7 @@ func _ready() -> void:
 	equipment_label.information_requested.connect(_on_information_requested.bind(equipment_label))
 	equipment_label.information_dismissed.connect(_on_information_dismissed.bind(equipment_label))
 	local_player_card.pressed.connect(_on_self_target_pressed)
+	local_player_card.corner_action_pressed.connect(_on_corner_action_pressed)
 	local_player_card.details_requested.connect(_on_character_details_requested)
 	local_player_card.information_requested.connect(_on_information_requested.bind(local_player_card))
 	local_player_card.information_dismissed.connect(_on_information_dismissed.bind(local_player_card))
@@ -1558,6 +1564,7 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
 	_refresh_match_menu_authority_controls()
 	_player_snapshots_by_id.clear()
+	_recorded_names_view.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
 		var indexed_player: Dictionary = player_variant as Dictionary
@@ -1783,6 +1790,7 @@ func _render_players() -> void:
 			player_button.details_requested.connect(_on_character_details_requested)
 			player_button.information_requested.connect(_on_information_requested.bind(player_button))
 			player_button.information_dismissed.connect(_on_information_dismissed.bind(player_button))
+			player_button.corner_action_pressed.connect(_on_corner_action_pressed)
 		# 其他玩家独立座次标签；仅显示中文座次号，不属于武将牌自身节点树。
 		var player_seat_label: Label = player_seat_slot.get_node("Seat") as Label
 		# 当前按钮对应的稳定玩家 ID；通过 bind 传入回调。
@@ -3535,6 +3543,40 @@ func _on_card_choice_cancelled(request_id: int) -> void:
 		_refresh_card_selection_panel()
 
 
+## 武将牌角标按钮被按下；按中性查看类型打开对应的只读界面。
+## 桌面只做“查看类型到数据来源”的映射，不解释技能语义，因此新增查看类型不需要改武将牌组件。
+func _on_corner_action_pressed(player_id: int, _entry_id: String, view_kind: String) -> void:
+	if view_kind == "recorded_card_names":
+		_open_recorded_card_names(player_id)
+		return
+
+
+## 打开记录牌名只读窗口；数据取当前观察者裁剪快照中的公开记录字段，任何角色都能查看且只能查看。
+## 该窗口不进入规则请求通道，因此打开与关闭都不会产生任何规则动作，权威状态在前后完全一致。
+func _open_recorded_card_names(player_id: int) -> void:
+	# 目标角色公开快照；缺失时不打开窗口，避免显示一个无主的空面板。
+	var player_snapshot: Dictionary = _get_player_snapshot(player_id)
+	# 记录牌名列表；空数组按需求不显示按钮，这里再兜底一次，防止出现必然为空的窗口。
+	var recorded_card_names: Array = player_snapshot.get("recorded_card_names", []) as Array
+	if recorded_card_names.is_empty():
+		return
+	# 当前角色显示名；用于让观看者确认这是谁的记录，未知时退回通用标题。
+	var display_name: String = str(player_snapshot.get("display_name", ""))
+	var window_title: String = "记录的牌名" if display_name.is_empty() else "%s 的记录牌名" % display_name
+	_recorded_names_view = {
+		"title":window_title,
+		"prompt":"共记录了 %d 张牌名" % recorded_card_names.size(),
+		"card_names":recorded_card_names.duplicate(),
+	}
+	_refresh_card_selection_panel()
+
+
+## 只读查看窗口被关闭；清空窗口数据并让面板按当前请求状态重新决定显示内容。
+func _on_read_only_view_closed() -> void:
+	_recorded_names_view.clear()
+	_refresh_card_selection_panel()
+
+
 ## 把文字选项按钮提交转换为标准选择动作；具体费用与后续效果只由创建请求的技能恢复逻辑解释。
 func _on_control_choice_submitted(request_id: int, control_id: String) -> void:
 	# 统一文字选择动作；不携带牌或目标，避免选项协议与其他选择维度产生歧义。
@@ -3571,6 +3613,11 @@ func _refresh_card_selection_panel() -> void:
 		return
 	if not _modal_card_choice_request.is_empty():
 		card_selection_panel.show_request(_enrich_target_zone_card_choice_request(_modal_card_choice_request))
+		return
+	# 无任何规则请求时显示记录牌名只读窗口；它不属于请求，因此不参与上面的优先级比较。
+	# 一旦出现规则请求，上面的分支会接管窗口，避免只读窗口挡住玩家必须完成的选择。
+	if not _recorded_names_view.is_empty():
+		card_selection_panel.show_recorded_names(_recorded_names_view)
 		return
 	card_selection_panel.close()
 
@@ -3675,7 +3722,9 @@ func _enrich_public_card_choice_display(display_data: Dictionary) -> Dictionary:
 ## 判断选择请求是否能完全在本地手牌区或装备区完成；空候选的可取消响应也使用内联取消按钮。
 func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	# 文字控制项需要显示独立选项按钮，空候选不能误判为可在手牌区完成。
-	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control"]:
+	# 牌名候选同样没有实体手牌：它的 candidates 为空数组，若不排除，下方循环因“没有任何候选违反条件”
+	# 而直接返回 true，请求会被误判为内联，独立窗口不显示，表现为点击技能后毫无反应。
+	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control", "card_name"]:
 		return false
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))
@@ -3702,7 +3751,9 @@ func _is_inline_control_choice(choice_data: Dictionary) -> bool:
 	var choice_type: String = str(choice_data.get("choice_type", "card"))
 	# 需要同时展示私有牌面的控制请求使用独立窗口，避免手牌上方操作区遮住被观看内容。
 	var display_candidates: Array = ((choice_data.get("context", {}) as Dictionary).get("display_candidates", []) as Array)
-	return choice_type in ["control", "bool", "target_control"] and display_candidates.is_empty()
+	# 牌名候选需要以牌面形式呈现，同样必须使用独立窗口而不是手牌上方操作区。
+	var card_name_candidates: Array = ((choice_data.get("context", {}) as Dictionary).get("card_name_candidates", []) as Array)
+	return choice_type in ["control", "bool", "target_control"] and display_candidates.is_empty() and card_name_candidates.is_empty()
 
 
 ## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。

@@ -21,6 +21,9 @@ signal information_requested(information: Dictionary, anchor_rect: Rect2)
 ## 鼠标离开选择窗口内的牌面或窗口关闭时请求关闭统一信息框。
 signal information_dismissed
 
+## 只读查看窗口被关闭时发出；该窗口不属于选择请求，因此不能用 choice_cancelled 表达。
+signal read_only_view_closed
+
 ## 正式卡牌视图场景；正面候选和牌背候选都复用同一111×148像素组件。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -122,6 +125,10 @@ var _owner_labels_by_card_uid: Dictionary = {}
 
 ## 当前文字选项按钮集合；只用于主题刷新，请求切换或关闭时随动态内容一并清空。
 var _control_option_buttons: Array[Button] = []
+
+## 牌名候选的占位ID到卡牌定义ID映射；仅存在于本面板实例内，请求重建与关闭时清空。
+## 键是负数占位ID，值是稳定的卡牌定义ID；提交时据此换算，保证占位ID不会离开面板。
+var _name_candidates: Dictionary = {}
 
 ## 当前公共牌阵结构签名；牌位 UID 与牌面数据不变时复用现有节点，避免重复状态广播造成集中释放与重建。
 var _public_layout_signature: int = 0
@@ -245,20 +252,35 @@ func show_request(choice_request: Dictionary) -> void:
 	_owner_labels.clear()
 	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_name_candidates.clear()
 	_public_layout_signature = 0
 	_public_request_id = -1
 	_clear_container(_zone_container)
 	_restore_standard_zone_scroll_behavior()
+	_cancel_button.text = "不选择"
 	_title_label.text = str(_choice_request.get("title", "选择卡牌"))
 	_set_prompt_text(str(_choice_request.get("prompt", "请选择卡牌")), str(_choice_request.get("prompt_highlight", "")))
 	if str(_choice_request.get("choice_type", "card")) == "arrange":
 		_show_arrangement_request()
 		visible = true
 		return
+	# 牌名候选请求；候选项没有实体牌，界面按牌面渲染卡牌定义并隐藏花色点数，点击牌面即选中该项。
+	if str(_choice_request.get("choice_type", "card")) == "card_name":
+		_show_name_candidate_request(_choice_request.get("name_candidates", []) as Array)
+		visible = true
+		return
 	# 文字控制项请求；每个选项直接以独立按钮提交，底部确定按钮不重复制造二次确认。
 	if str(_choice_request.get("choice_type", "card")) in ["control", "bool"]:
 		# 控制请求可携带只读牌面；用于私下观看手牌后在同一窗口选择后续效果。
 		var control_display_candidates: Array = ((_choice_request.get("context", {}) as Dictionary).get("display_candidates", []) as Array)
+		# 牌名候选；同一批文字选项改以牌面呈现，玩家点击牌面后由确定按钮提交选中的 control 结果。
+		# 这里刻意不引入新的选择类型：规则层收到的仍然是合法 control_id，因此 AI 选择、
+		# 权威白名单校验与事件流程全部保持原样，界面只改变“选项长什么样、怎么被点中”。
+		var control_card_name_candidates: Array = ((_choice_request.get("context", {}) as Dictionary).get("card_name_candidates", []) as Array)
+		if not control_card_name_candidates.is_empty():
+			_show_name_candidate_request(control_card_name_candidates)
+			visible = true
+			return
 		_add_read_only_display_candidates(control_display_candidates)
 		_add_control_options(_choice_request.get("control_options", []) as Array)
 		_confirm_button.visible = false
@@ -442,6 +464,66 @@ func _refresh_public_action_row() -> void:
 	_cancel_button.visible = has_interactive_request and (bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0)
 
 
+## 显示记录牌名只读窗口；由武将牌角标按钮触发，所有角色都能查看且只能查看。
+## 该窗口不构造选择请求：不写入 _choice_request，也不进入 EventScheduler 的请求命名空间，
+## 因此打开与关闭都不会产生任何规则动作，权威状态在前后完全一致。
+## 记录的是牌名而不是实体牌，所以每张牌面都隐藏花色与点数，只显示牌名、类别与规则说明。
+func show_recorded_names(view_data: Dictionary) -> void:
+	_choice_request.clear()
+	_public_display.clear()
+	_selected_card_uids.clear()
+	_card_views.clear()
+	_selectable_card_uids.clear()
+	_section_labels.clear()
+	_owner_labels.clear()
+	_owner_labels_by_card_uid.clear()
+	_control_option_buttons.clear()
+	_name_candidates.clear()
+	_public_layout_signature = 0
+	_public_request_id = -1
+	_clear_container(_zone_container)
+	_restore_standard_zone_scroll_behavior()
+	_title_label.text = str(view_data.get("title", "记录的牌名"))
+	_set_prompt_text(str(view_data.get("prompt", "")), "")
+	# 候选牌面容器；沿用公共展示的四列牌阵，与【五谷丰登】的观看形式保持一致。
+	var card_row: GridContainer = GridContainer.new()
+	card_row.columns = PUBLIC_CARD_COLUMNS
+	card_row.add_theme_constant_override("h_separation", int(PUBLIC_CARD_GAP))
+	card_row.add_theme_constant_override("v_separation", int(PUBLIC_CARD_GAP))
+	card_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_zone_container.add_child(card_row)
+	# 记录中的卡牌定义ID列表；顺序即记录顺序，界面不重排，与记录容器的既有语义一致。
+	var card_names: Array = view_data.get("card_names", []) as Array
+	for index: int in range(card_names.size()):
+		# 当前记录的定义ID；空ID无法渲染牌面，直接跳过而不占用空牌位。
+		var definition_id: String = str(card_names[index])
+		if definition_id.is_empty():
+			continue
+		# 静态牌定义；缺失定义会让牌面名称与类别回退为占位内容，因此这里必须能取到。
+		var definition: Dictionary = GameDatabase.get_card(definition_id)
+		if definition.is_empty():
+			continue
+		# 只读牌面占位ID；从-1递减，保证 _card_views 每项有独立键而不会互相覆盖。
+		var placeholder_uid: int = -(index + 1)
+		# 牌面快照；记录的是牌名而不是实体牌，因此隐藏花色与点数。
+		var card_data: Dictionary = {
+			"uid":placeholder_uid,
+			"definition_id":definition_id,
+			"suit":"none",
+			"rank":0,
+			"hide_suit_rank":true,
+		}
+		# 只读展示牌保持完整亮度；selectable 传 false 使牌面不连接点击、也不进入可选集合。
+		var candidate: Dictionary = {"uid":placeholder_uid, "visible":true, "card_data":card_data, "read_only_full_brightness":true}
+		_add_card_slot(card_row, candidate, false, false, "", false)
+	# 纯只读窗口没有提交动作；只保留一个关闭按钮，且它不会发出任何规则取消。
+	_confirm_button.visible = false
+	_cancel_button.text = "关闭"
+	_cancel_button.visible = true
+	_action_row.visible = true
+	visible = true
+
+
 ## 关闭并清理当前选择请求；规则层提交成功或重新开局时调用。
 func close() -> void:
 	information_dismissed.emit()
@@ -455,6 +537,7 @@ func close() -> void:
 	_owner_labels.clear()
 	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_name_candidates.clear()
 	_public_layout_signature = 0
 	_public_request_id = -1
 	_arrangement_top_uids.clear()
@@ -677,7 +760,9 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		# 不可选的展示牌必须传入禁用暗置；公共牌被领取时改由复制虚影表达，不能叠加禁用暗置而失去归属可读性。
 		# 只读观看牌保持完整亮度；普通不可选保护牌仍使用禁用暗置，已领取公共牌继续由复制虚影表达。
 		var dim_when_disabled: bool = not taken and not bool(candidate.get("read_only_full_brightness", false))
-		card_view.configure(card_data, definition, false, selectable, dim_when_disabled)
+		# 牌名候选只在牌面上显示牌名相关内容；该标志由候选数据携带，普通实体牌候选不设置该字段。
+		var hide_suit_rank: bool = bool(card_data.get("hide_suit_rank", false))
+		card_view.configure(card_data, definition, false, selectable, dim_when_disabled, hide_suit_rank)
 	else:
 		card_view.configure_back(card_uid, selectable)
 	# 公共牌位即使首次以旁观状态创建，也预先连接点击信号；后续轮到本地玩家时只切换输入权限即可复用节点。
@@ -817,7 +902,63 @@ func _on_confirm_pressed() -> void:
 		ordered_uids.append_array(_arrangement_bottom_uids)
 		arrangement_submitted.emit(int(_choice_request.get("request_id", -1)), ordered_uids, _arrangement_top_uids.size())
 		return
+	# 牌名候选提交；把面板内部的占位ID换算回卡牌定义ID，规则层因此只会看到合法的 control_id。
+	# 占位ID必须在此处彻底丢弃，绝不能随响应进入规则状态或网络消息。
+	if not _name_candidates.is_empty():
+		for selected_uid: int in _selected_card_uids:
+			# 当前选中项的卡牌定义ID；查不到映射说明选择已失效，忽略而不提交空值。
+			var selected_definition_id: String = str(_name_candidates.get(selected_uid, ""))
+			if selected_definition_id.is_empty():
+				continue
+			control_submitted.emit(int(_choice_request.get("request_id", -1)), selected_definition_id)
+			return
+		return
 	choice_submitted.emit(int(_choice_request.get("request_id", -1)), _selected_card_uids.duplicate())
+
+
+## 初始化牌名候选界面；候选项是一组卡牌定义ID，每个定义渲染为一张只显示牌名相关内容的牌面。
+## 牌名没有实体牌也没有UID，因此这里为每项分配唯一负整数占位ID，仅用于面板内部的选中与刷新查找。
+## 占位ID不会出现在提交值里：确认时统一换算回卡牌定义ID，经既有 control 通道提交，
+## 复用了 ChoiceRequest 的 control_ids 白名单校验，因此规则层无需新增响应类型。
+func _show_name_candidate_request(name_candidates: Array) -> void:
+	_name_candidates.clear()
+	# 候选牌面容器；沿用公共展示的四列牌阵，玩家看到的形式与【五谷丰登】一致。
+	var card_row: GridContainer = GridContainer.new()
+	card_row.columns = PUBLIC_CARD_COLUMNS
+	card_row.add_theme_constant_override("h_separation", int(PUBLIC_CARD_GAP))
+	card_row.add_theme_constant_override("v_separation", int(PUBLIC_CARD_GAP))
+	card_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_zone_container.add_child(card_row)
+	for index: int in range(name_candidates.size()):
+		# 当前候选定义ID；空ID无法渲染牌面，直接跳过而不占用一个空牌位。
+		var definition_id: String = str(name_candidates[index])
+		if definition_id.is_empty():
+			continue
+		# 静态牌定义；缺失定义会让牌面名称与类别回退为占位内容，因此这里必须能取到。
+		var definition: Dictionary = GameDatabase.get_card(definition_id)
+		if definition.is_empty():
+			continue
+		# 占位ID；从-1开始逐项递减，保证每个候选在 _card_views 里有独立键而不会互相覆盖。
+		# 实体牌UID恒为正，因此负数不会与任何真实牌冲突。
+		var placeholder_uid: int = -(index + 1)
+		_name_candidates[placeholder_uid] = definition_id
+		_selectable_card_uids.append(placeholder_uid)
+		# 牌面快照；只填渲染所需字段，hide_suit_rank 让牌面只显示牌名相关内容。
+		var card_data: Dictionary = {
+			"uid":placeholder_uid,
+			"definition_id":definition_id,
+			"suit":"none",
+			"rank":0,
+			"hide_suit_rank":true,
+		}
+		var candidate: Dictionary = {"uid":placeholder_uid, "visible":true, "card_data":card_data}
+		_add_card_slot(card_row, candidate, true, false, "", false)
+	# 牌面式选择需要玩家明确确认；文字选项模式下隐藏的确定按钮必须在这里恢复显示。
+	_confirm_button.visible = true
+	_cancel_button.text = "不选择"
+	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false))
+	_action_row.visible = true
+	_refresh_selection_state()
 
 
 ## 提交一个文字控制项；请求 ID 与稳定选项 ID 会继续经过 MatchController 和 ChoiceRequest 双重校验。
@@ -826,7 +967,11 @@ func _on_control_option_pressed(control_id: String) -> void:
 
 
 ## 发出空选择作为明确放弃；组件不自行关闭，以提交成功后的状态为准。
+## 只读查看窗口没有选择请求，此时本按钮的语义是“关闭查看”，不会发出任何规则取消。
 func _on_cancel_pressed() -> void:
+	if _choice_request.is_empty():
+		read_only_view_closed.emit()
+		return
 	choice_cancelled.emit(int(_choice_request.get("request_id", -1)))
 
 

@@ -24,6 +24,26 @@ signal information_dismissed
 ## 武将牌位于可滚动候选列表时转发的拖动位移；外部界面按自身滚动方向解释该值。
 signal scroll_gesture_moved(relative: Vector2)
 
+## 角标按钮被按下时发出的信号；桌面据此打开对应的只读界面，本组件不查询任何规则数据。
+signal corner_action_pressed(player_id: int, entry_id: String, view_kind: String)
+
+## 文本角标场景；纯文本条目按此实例化，与控制器合成的文本角标保持同一视觉规格。
+const CORNER_TEXT_BADGE_SCENE: PackedScene = preload("res://scenes/components/character_corner_text_badge.tscn")
+
+## 按钮角标场景；带查看类型的条目按此实例化，点击后由桌面按查看类型打开只读界面。
+const CORNER_ACTION_BADGE_SCENE: PackedScene = preload("res://scenes/components/character_corner_action_badge.tscn")
+
+## 角标区元素之间的纵向间距；与既有角标的内边距处于同一视觉尺度，运行时通常无需修改。
+const CORNER_STACK_SPACING: float = 2.0
+
+## 查看类型到快照字段的映射；表现层按该字段是否为空决定按钮是否显示。
+## 键是中性的查看类型标识（由内容层声明），值是公开快照中决定该按钮可见性的数据字段名。
+## 记录牌名在为空时不显示按钮，避免玩家打开一个必然为空的面板；新增查看类型只需在此处补一行，
+## 无需在界面里按技能名写分支，从而保持“内容扩展不需要改界面”。
+const CORNER_VIEW_SOURCE_FIELDS: Dictionary = {
+	"recorded_card_names":"recorded_card_names",
+}
+
 ## 体力圆点字体尺寸；默认18像素让右下角生命信息更醒目，运行时通常无需动态修改。
 @export_range(10, 28, 1) var health_pip_font_size: int = 18
 
@@ -154,8 +174,13 @@ var _artwork_texture: Texture2D
 ## 势力圆形徽记；显示势力简称并使用数据配置的主题颜色，不参与身份或胜负判断。
 @onready var _faction_badge_label: Label = $FactionBadge
 
-## 武将牌左上角通用文本组件；位于势力徽记右下侧与武将名右侧，只读取公开快照文本。
-@onready var _corner_text_badge: CharacterCornerTextBadge = $CharacterCornerTextBadge
+## 武将牌左上角角标区容器；按公开条目动态容纳文本角标与可点击按钮，只读取公开快照。
+## 原实现为场景内单个 CharacterCornerTextBadge 节点；因需要在一张武将牌上同时显示多个角标与按钮，
+## 改为容器加动态子项，并按条目排序值稳定排列。
+@onready var _corner_stack: Control = $CharacterCornerStack
+
+## 角标区当前结构签名；与上次相同时跳过子节点重建，避免高频快照刷新反复实例化控件。
+var _corner_specs: Array[Dictionary] = []
 
 ## 纵向体力圆点容器；按体力上限生成圆点，当前体力使用绿色、已损失体力使用暗色。
 ## 当前容器位于独立 HealthFrame 边框内，并按从上往下的方向显示已损失体力。
@@ -445,6 +470,9 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("chained", false),
 		snapshot.get("face_down", false),
 		snapshot.get("character_corner_text", ""),
+		snapshot.get("character_corner_text_entries", {}),
+		snapshot.get("recorded_card_names", []),
+		snapshot.get("skills_permanently_removed", false),
 		snapshot.get("public_marks", {}),
 		snapshot.get("auto_managed", false),
 		snapshot.get("auto_managed_offline", false),
@@ -774,7 +802,7 @@ func _refresh_visual_state() -> void:
 	var snapshot_out_of_game: bool = bool(_player_snapshot.get("out_of_game", false))
 	_state_overlay.configure(snapshot_alive, bool(_player_snapshot.get("chained", false)), int(_player_snapshot.get("wine_bonus", 0)) > 0, snapshot_out_of_game)
 	_refresh_selected_marker()
-	_corner_text_badge.set_display_text(str(_player_snapshot.get("character_corner_text", "")))
+	_refresh_corner_entries()
 	_refresh_public_markers()
 
 
@@ -788,6 +816,103 @@ func _refresh_public_markers() -> void:
 	_public_markers_view.configure(public_marks, false)
 	_public_markers_view.position = Vector2(-_public_markers_view.size.x - public_marker_card_gap, public_marker_vertical_offset)
 	_public_markers_view.visible = _match_overlays_visible and _public_markers_visible and not public_marks.is_empty()
+
+
+## 按公开条目刷新武将牌左上角角标区；文本条目渲染为角标，带查看类型的条目渲染为可点击按钮。
+## 排序规则与控制器的文本合成保持一致：先按排序值升序，再按来源ID字典序，保证同一份数据得到稳定顺序。
+## 是否渲染按钮由 CORNER_VIEW_SOURCE_FIELDS 声明的公开数据字段是否为空决定，界面不做任何规则推导。
+func _refresh_corner_entries() -> void:
+	if not is_node_ready():
+		return
+	# 角标条目字典；旧存档可能没有该字段，取空字典后角标区保持为空。
+	var entries: Dictionary = _player_snapshot.get("character_corner_text_entries", {}) as Dictionary
+	# 技能被永久移除时不显示任何由技能声明的条目，与技能清单的裁剪规则保持一致；
+	# 否则玩家会看到一个属于“已经不存在”的技能留下的按钮。
+	if bool(_player_snapshot.get("skills_permanently_removed", false)):
+		entries = {}
+	# 排序键；以“排序值 + 来源ID”组成稳定复合键，避免在比较器里反复读取条目字典。
+	var sort_keys: Array = []
+	for entry_key: Variant in entries.keys():
+		# 当前条目数据；缺失时按空数据参与排序，后续统一跳过。
+		var entry_data: Dictionary = entries.get(entry_key, {}) as Dictionary
+		sort_keys.append({"id":str(entry_key), "order":int(entry_data.get("order", 0))})
+	sort_keys.sort_custom(func(first: Dictionary, second: Dictionary) -> bool:
+		if int(first["order"]) != int(second["order"]):
+			return int(first["order"]) < int(second["order"])
+		return str(first["id"]) < str(second["id"])
+	)
+	# 本次需要呈现的元素规格；文本内容相同的角标只保留一个，与控制器合成文本时的去重规则一致。
+	var specs: Array[Dictionary] = []
+	# 已占用的文本内容；仅对纯文本角标生效，按钮文本不参与去重，避免两个同名按钮被静默合并。
+	var used_texts: Dictionary = {}
+	for sort_key: Dictionary in sort_keys:
+		var entry_id: String = str(sort_key["id"])
+		var entry_data: Dictionary = entries.get(entry_id, {}) as Dictionary
+		# 显示文本与查看类型；两者都由内容层写入，界面只按原值渲染。
+		var display_text: String = str(entry_data.get("text", ""))
+		var view_kind: String = str(entry_data.get("view_kind", ""))
+		if display_text.is_empty():
+			continue
+		if view_kind.is_empty():
+			if used_texts.has(display_text):
+				continue
+			used_texts[display_text] = true
+		else:
+			# 按钮可见性条件；取值来自公开快照，界面只做“数据为空则不显示控件”的表现判断。
+			var source_field: String = str(CORNER_VIEW_SOURCE_FIELDS.get(view_kind, ""))
+			if source_field.is_empty():
+				continue
+			var source_value: Variant = _player_snapshot.get(source_field, null)
+			# 未知查看类型或空数据集合都不呈现按钮；数组为空时按钮不可见是需求约定的行为。
+			if not (source_value is Array) or (source_value as Array).is_empty():
+				continue
+		specs.append({"entry_id":entry_id, "text":display_text, "view_kind":view_kind})
+	_rebuild_corner_stack(specs)
+
+
+## 按元素规格重建角标区子节点；规格未变化时跳过重建，避免高频快照刷新时反复实例化控件。
+func _rebuild_corner_stack(specs: Array[Dictionary]) -> void:
+	if _corner_stack == null or specs == _corner_specs:
+		return
+	_corner_specs = specs.duplicate(true)
+	for child: Node in _corner_stack.get_children():
+		_corner_stack.remove_child(child)
+		child.queue_free()
+	# 纵向排版累计偏移；角标区使用零尺寸锚点，容器不会自动撑开，因此这里显式定位每个元素。
+	var offset_y: float = 0.0
+	for spec: Dictionary in specs:
+		var badge: Control = _create_corner_badge(spec)
+		if badge == null:
+			continue
+		_corner_stack.add_child(badge)
+		badge.position = Vector2(0.0, offset_y)
+		# 让控件按自身内容取尺寸；按钮与文本角标都据此得到“随文本变化”的宽高，无需写死像素。
+		badge.reset_size()
+		offset_y += badge.size.y + CORNER_STACK_SPACING
+
+
+## 按单条规格创建角标控件；带查看类型的条目创建为可点击按钮，其余创建为纯文本角标。
+func _create_corner_badge(spec: Dictionary) -> Control:
+	# 查看类型；非空表示该条目需要点击交互，因此使用按钮组件而不是纯文本角标。
+	var view_kind: String = str(spec.get("view_kind", ""))
+	var display_text: String = str(spec.get("text", ""))
+	if view_kind.is_empty():
+		var text_badge: CharacterCornerTextBadge = CORNER_TEXT_BADGE_SCENE.instantiate() as CharacterCornerTextBadge
+		if text_badge == null:
+			return null
+		text_badge.set_display_text(display_text)
+		return text_badge
+	var action_badge: CharacterCornerActionBadge = CORNER_ACTION_BADGE_SCENE.instantiate() as CharacterCornerActionBadge
+	if action_badge == null:
+		return null
+	action_badge.configure(str(spec.get("entry_id", "")), display_text, view_kind)
+	action_badge.action_pressed.connect(_on_corner_action_pressed)
+	return action_badge
+
+
+## 角标按钮被按下；把角色ID、稳定来源标识与查看类型交回桌面，本视图不查询也不修改任何规则数据。
+func _on_corner_action_pressed(entry_id: String, view_kind: String) -> void:
+	corner_action_pressed.emit(player_id, entry_id, view_kind)
 
 
 

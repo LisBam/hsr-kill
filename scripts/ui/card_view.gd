@@ -130,6 +130,11 @@ var _is_hovered: bool = false
 ## 该值只影响表现，不会让只读牌重新接收点击、悬停或拖拽输入。
 var _dim_when_disabled: bool = true
 
+## 是否隐藏花色与点数；默认隐藏关闭，牌名候选等“只有牌名没有实体牌”的展示场景会开启。
+## 开启时只隐藏左上角花色点数控件与说明副标题中的花色点数段，牌名、类别、插画与说明正文照常显示；
+## _suit_rank_text 仍照常计算，因此红色花色配色等既有判断逻辑无需分支。
+var _hide_suit_rank: bool = false
+
 ## 当前悬停缩放动画；新动画开始前会停止旧动画以避免连续进入离开产生抖动。
 var _hover_tween: Tween
 
@@ -218,9 +223,11 @@ func is_hovered_in_hand() -> bool:
 
 
 ## 写入牌面快照和定义；该方法不保存完整对局状态，可在每次快照重建时安全调用。
-func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool, dim_when_disabled: bool = true) -> void:
+func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, interactable: bool, dim_when_disabled: bool = true, hide_suit_rank: bool = false) -> void:
 	# 本次完整配置签名；包含全局名称模式，切换牌名后即使实体状态不变也会正确刷新。
-	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, dim_when_disabled, GameSettings.card_name_mode, GameSettings.ui_style_id])
+	# hide_suit_rank 必须并入签名：同一个 CardView 实例在“实体牌面”与“仅牌名”之间复用时，
+	# 签名不变会命中缓存而保留上一次的花色点数显示，这是不报错的隐蔽缺陷。
+	var next_configuration_signature: int = hash([card, definition, wooden_ox_card, interactable, dim_when_disabled, hide_suit_rank, GameSettings.card_name_mode, GameSettings.ui_style_id])
 	if _configuration_signature == next_configuration_signature:
 		return
 	_configuration_signature = next_configuration_signature
@@ -228,6 +235,7 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	is_wooden_ox_card = wooden_ox_card
 	is_interactable = interactable
 	_dim_when_disabled = dim_when_disabled
+	_hide_suit_rank = hide_suit_rank
 	is_face_down = false
 	# 当前实体牌的展示原始定义 ID；手牌视为状态与离手后的弃牌展示都通过该字段保留真实牌面。
 	var original_definition_id: String = str(card.get("presentation_original_definition_id", card.get("original_definition_id", "")))
@@ -435,6 +443,7 @@ func _refresh_card_content() -> void:
 	_artwork_placeholder.visible = _artwork_texture == null
 	_artwork_placeholder.text = "◇\n插画预留"
 	_corner_label.text = _suit_rank_text
+	_corner_label.visible = not _hide_suit_rank
 	_name_label.text = _display_name_text
 	_type_label.text = _card_type_text
 	_configure_view_as_banner_geometry()
@@ -595,7 +604,9 @@ func _refresh_card_back_style() -> void:
 func _on_mouse_entered() -> void:
 	if not is_face_down and not _card_definition.is_empty():
 		# 卡牌信息副标题；花色点数、木牛来源和细分类别保持与当前牌面显示一致。
-		var information_subtitle: String = "%s｜%s" % [_suit_rank_text, _card_type_text]
+		# 仅牌名展示时牌面没有花色点数，因此说明里也不出现花色点数占位字符。
+		var subtitle_prefix: String = _card_type_text if _hide_suit_rank else "%s｜%s" % [_suit_rank_text, _card_type_text]
+		var information_subtitle: String = subtitle_prefix
 		# 视为状态提示；原牌名保留在标题，额外标明当前实际按哪张逻辑牌结算。
 		if not _view_as_display_name_text.is_empty():
 			information_subtitle += "｜视为【%s】" % _view_as_display_name_text
