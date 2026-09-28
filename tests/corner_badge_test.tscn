@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cq1w2e3r4t5y6"]
+
+[ext_resource type="Script" path="res://tests/corner_badge_test.gd" id="1_test"]
+
+[node name="CornerBadgeTest" type="Node"]
+script = ExtResource("1_test")
