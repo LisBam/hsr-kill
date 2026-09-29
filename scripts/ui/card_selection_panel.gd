@@ -309,7 +309,9 @@ func show_request(choice_request: Dictionary) -> void:
 		(candidates_by_zone[zone] as Array).append(candidate)
 	for zone: String in ["hand", "equipment", "judgment", "processing", "discard_pile"]:
 		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
-	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0
+	# 取消按钮可见性只由 allow_cancel 决定；"可选0张（min_select=0）"表示可以不选目标，
+	# 但仍是必须提交的强制请求，与"允许取消整个请求"是两件事，不能据此放行取消按钮。
+	_cancel_button.visible = bool(_choice_request.get("allow_cancel", false))
 	_action_row.visible = true
 	_refresh_selection_state()
 	visible = true
@@ -461,7 +463,8 @@ func _refresh_public_action_row() -> void:
 	var has_interactive_request: bool = int(_choice_request.get("request_id", -1)) >= 0
 	_action_row.visible = has_interactive_request
 	_confirm_button.visible = true
-	_cancel_button.visible = has_interactive_request and (bool(_choice_request.get("allow_cancel", false)) or int(_choice_request.get("min_select", 0)) == 0)
+	# 取消按钮同样只由 allow_cancel 决定；min_select 不再参与可见性判定，理由见上方主窗口分支。
+	_cancel_button.visible = has_interactive_request and bool(_choice_request.get("allow_cancel", false))
 
 
 ## 显示记录牌名只读窗口；由武将牌角标按钮触发，所有角色都能查看且只能查看。

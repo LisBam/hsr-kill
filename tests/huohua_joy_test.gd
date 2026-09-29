@@ -170,8 +170,8 @@ func _test_haoxi_static_definition() -> bool:
 		return _fail("haoxi_missing")
 	if not haoxi.is_joy_skill() or haoxi.get_performance_number() != 144:
 		return _fail("haoxi_joy_params joy=%s number=%d" % [str(haoxi.is_joy_skill()), haoxi.get_performance_number()])
-	# 玩家可见正文；必须与需求原文逐字一致。
-	var expected_description: String = "欢愉技，参演编号144，你可弃置0-2名其他角色各一张随机手牌，然后从牌堆中获得X张基本牌。（X为2-本次选择的目标数）"
+	# 玩家可见正文；必须与需求原文逐字一致；欢愉技强制发动，因此原文不使用“可”。
+	var expected_description: String = "欢愉技，参演编号144，你弃置0-2名其他角色各一张随机手牌，然后从牌堆中获得X张基本牌。（X为2-本次选择的目标数）"
 	var description: String = str(GameDatabase.get_skill("haoxi").get("description", ""))
 	if description != expected_description:
 		return _fail("haoxi_description %s" % description)
@@ -216,6 +216,9 @@ func _test_haoxi_gains_basic_cards_by_target_count() -> bool:
 	haoxi.perform_joy_skill({})
 	if str(_controller._pending_card_choice.get("choice_type", "")) != "target":
 		return _fail("haoxi_target_request %s" % [_controller._pending_card_choice])
+	# 欢愉技强制发动：请求必须不可取消，因此界面不会出现取消按钮，玩家只能确认。
+	if bool(_controller._pending_card_choice.get("allow_cancel", true)):
+		return _fail("haoxi_request_cancellable %s" % [_controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [], true):
 		return false
 	if _controller.state.get_player(0).hand.size() != 2:

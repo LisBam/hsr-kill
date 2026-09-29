@@ -283,6 +283,11 @@ func _load_skills() -> void:
 			validation_errors.append("技能脚本无法载入：%s" % script_path)
 			continue
 		# 当前技能定义临时实例；只读取静态元数据，不绑定对局端口。
+		# 先确认脚本可实例化：存在解析错误的脚本调用 new() 会在运行时中断整个载入循环，
+		# 使其后按目录顺序排列的全部技能静默消失，只留下“武将引用了未知技能”这类误导性诊断。
+		if not skill_script.can_instantiate():
+			validation_errors.append("技能脚本存在解析错误，无法实例化：%s" % script_path)
+			continue
 		var definition: SkillDefinition = skill_script.new() as SkillDefinition
 		if definition == null:
 			validation_errors.append("技能脚本未继承 SkillDefinition：%s" % script_path)
@@ -328,6 +333,11 @@ func _load_characters() -> void:
 			validation_errors.append("武将脚本无法载入：%s" % script_path)
 			continue
 		# 当前武将定义对象；必须继承 CharacterDefinition 才能提供技能脚本引用。
+		# 与技能载入同一口径：解析失败或依赖技能载入失败的武将脚本无法实例化，
+		# 此时必须给出准确诊断，否则会被后续的“缺少 display_name”等派生错误掩盖真实原因。
+		if not character_script.can_instantiate():
+			validation_errors.append("武将脚本存在解析错误，无法实例化：%s" % script_path)
+			continue
 		var definition: CharacterDefinition = character_script.new() as CharacterDefinition
 		if definition == null:
 			validation_errors.append("武将脚本未继承 CharacterDefinition：%s" % script_path)

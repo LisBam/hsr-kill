@@ -12,6 +12,10 @@ const REINCARNATION_TAG: String = "轮回技"
 ## “欢愉技”标签正文；只用于GameDatabase加载期校验正文类型声明与joy_skill标签是否一致，运行期判定一律读取标签。
 const JOY_SKILL_TAG: String = "欢愉技"
 
+## 正文句末标点；类型声明属于正文开头的类型段，必定写在第一句结束之前。
+## 该上界用于把“类型段里声明自己”与“效果描述里引用他人技能”彻底分开。
+const DESCRIPTION_SENTENCE_END_PUNCTUATION: String = "。"
+
 ## 技能正文中表达“提及而非声明”的成对引号字符；中英文单双引号与中文书名号式引号全部计入。
 const DESCRIPTION_QUOTE_CHARS: String = "“”‘’「」『』\"'"
 
@@ -298,39 +302,40 @@ func declares_description_tag(tag: String) -> bool:
 	return description_declares_tag(str(_metadata.get("description", "")), tag)
 
 
-## 判断技能正文是否在“类型段”把自己声明为轮回技，即正文里第一次出现的“轮回技”后面紧跟逗号或句号。
+## 判断技能正文是否在“类型段”把自己声明为轮回技，即正文第一句内出现的“轮回技”后面紧跟逗号。
 ## 本函数只服务GameDatabase加载期的一致性校验：运行期的轮回技判定一律读取reincarnation标签，不读正文。
-## 之所以按“紧跟标点”而不是“包含”判定：引用他人轮回技的写法是“……轮回技进入下一个轮回时”“……该轮回技的轮回节数……”，
-## 这些位置的“轮回技”后面紧跟的是实词，而类型声明固定写作“轮回技，……”“锁定技，轮回技，……”。
+## 之所以按“紧跟逗号且位于第一句内”而不是“全文包含”判定：引用他人轮回技的写法是“……轮回技进入下一个轮回时”
+## “……该轮回技的轮回节数……”“……发动其欢愉技。”，这些位置出现在效果描述句中，后面跟的是实词或句号，
+## 而类型声明固定写作“轮回技，……”“锁定技，……”，必定位于正文第一句内且紧跟逗号。
 static func description_declares_reincarnation_type(description: String) -> bool:
-	if description.is_empty():
-		return false
-	# 正文中第一次出现轮回技标签的位置；-1表示正文完全不含该标签。
-	var found_index: int = description.find(REINCARNATION_TAG)
-	if found_index < 0:
-		return false
-	# 标签右邻字符；正文以标签结尾时为空字符串，此时不构成类型声明。
-	var right_index: int = found_index + REINCARNATION_TAG.length()
-	var right_char: String = description.substr(right_index, 1) if right_index < description.length() else ""
-	# 句读标点集合；同时接受中文与半角逗号，兼容内容脚本可能出现的半角写法。
-	return right_char == "，" or right_char == "。" or right_char == ","
+	return _description_declares_type_tag(description, REINCARNATION_TAG)
 
 
-## 判断技能正文是否在“类型段”把自己声明为欢愉技，即正文里第一次出现的“欢愉技”后面紧跟逗号或句号。
+## 判断技能正文是否在“类型段”把自己声明为欢愉技，即正文第一句内出现的“欢愉技”后面紧跟逗号。
 ## 本函数只服务GameDatabase加载期的一致性校验：运行期的欢愉技判定一律读取joy_skill标签，不读正文。
 ## 判定口径与description_declares_reincarnation_type完全一致，避免项目出现第二套正文类型解析规则。
 static func description_declares_joy_type(description: String) -> bool:
+	return _description_declares_type_tag(description, JOY_SKILL_TAG)
+
+
+## 判断正文是否在第一句内以指定类型标签声明自身；两个类型标签共用同一实现，保证口径唯一。
+static func _description_declares_type_tag(description: String, tag: String) -> bool:
 	if description.is_empty():
 		return false
-	# 正文中第一次出现欢愉技标签的位置；-1表示正文完全不含该标签。
-	var found_index: int = description.find(JOY_SKILL_TAG)
-	if found_index < 0:
+	# 第一句结束位置；-1表示正文只有一句，此时整段正文都可能属于类型段。
+	var sentence_end_index: int = description.find(DESCRIPTION_SENTENCE_END_PUNCTUATION)
+	# 类型段上界；位于上界之后的标签一律属于效果描述中的引用，不构成类型声明。
+	var type_segment_end_index: int = sentence_end_index if sentence_end_index >= 0 else description.length()
+	# 标签位置；正文完全不含该标签时直接排除。
+	var tag_index: int = description.find(tag)
+	if tag_index < 0 or tag_index >= type_segment_end_index:
 		return false
 	# 标签右邻字符；正文以标签结尾时为空字符串，此时不构成类型声明。
-	var right_index: int = found_index + JOY_SKILL_TAG.length()
+	var right_index: int = tag_index + tag.length()
 	var right_char: String = description.substr(right_index, 1) if right_index < description.length() else ""
-	# 句读标点集合；同时接受中文与半角逗号，兼容内容脚本可能出现的半角写法。
-	return right_char == "，" or right_char == "。" or right_char == ","
+	# 句读标点集合；只接受逗号，同时兼容中文与半角写法。
+	# 句号不能作为类型声明证据：“……发动其欢愉技。”这类引用同样以句号收尾，接受句号会把引用误判为类型声明。
+	return right_char == "，" or right_char == ","
 
 
 ## 复原本技能在本出牌阶段的发动额度，使其视为本回合未发动过；返回是否确实复原了约定额度字段。
@@ -613,6 +618,13 @@ func on_cardless_response_consumed(_response_pattern: String, _virtual_definitio
 ## 恢复由控制器完整执行的额外阶段；上下文只包含稳定玩家、技能与阶段来源数据，不持有运行时对象。
 func continue_extra_phase(_context: Dictionary) -> bool:
 	return false
+
+
+## 恢复由本技能请求、且已经完整结束的独立欢愉技演出；上下文只含稳定ID与可序列化基础值。
+## 只有以「令一名角色发动其欢愉技」或「触发一次额外阿哈时刻」方式驱动演出的技能需要覆盖本函数；
+## 覆盖方必须自行完成演出的后续收益，不得依赖阿哈时刻的回合开始恢复链路。
+func continue_joy_performance(_context: Dictionary) -> void:
+	pass
 
 
 ## 恢复因嵌套触发选择而暂停的技能后续结算；上下文只允许基础可序列化值，返回true表示已识别该步骤。

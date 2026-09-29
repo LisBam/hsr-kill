@@ -182,8 +182,9 @@ func _run() -> void:
 	skill_button_view.free()
 	# 技能元数据数量；登记大黑塔的解构、灵感与看破、白厄的薪继与刻律德菈的征服后，共登记82个独立技能源码定义。
 	# 新增欢愉派系火花的【好戏】与【连戏】后为84个；【好戏】是首个欢愉技，【连戏】是普通主动技能。
+	# 新增爻光的【凶星】【鸿运】以及星与穹共用的【咬它】【好活】【当赏】后为89个。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 84:
+	if skill_definition_count != 89:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -260,8 +261,9 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	# 武将定义数量；新增大黑塔后，共登记37名角色定义；新增欢愉派系火花后为38名。
+	# 新增爻光、星（欢愉派系）与穹（欢愉派系）后为41名。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 38:
+	if character_definition_count != 41:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
