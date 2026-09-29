@@ -24,7 +24,7 @@ func _init() -> void:
 		"response_pattern": "sha",
 		"recast": false,
 		"delayed": false,
-		"description": "出牌阶段限一次，对攻击范围内的一名其他角色使用。目标需打出【闪】，否则受到1点伤害。",
+		"description": "出牌阶段限一次，对攻击范围内的一名其他角色使用。目标需使用【闪】，否则受到1点伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "sha",

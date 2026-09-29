@@ -73,7 +73,9 @@ func validate_equipment_response_materials(match_host: Object, player_id: int, e
 
 
 ## 消耗两张丈八材料并返回按材料聚合花色、无点数的虚拟【杀】。
-func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int], _response_context: Dictionary = {}) -> CardInstance:
+## 动作类别由发起响应的窗口在 response_context 中声明：【决斗】【南蛮入侵】等窗口为“打出”，
+## 若后续出现要求“使用”【杀】的窗口，本入口会自动沿用同一份声明并在日志中使用对应动词。
+func consume_equipment_response(match_host: Object, player_id: int, equipment_uid: int, response_patterns: Array[String], material_card_uids: Array[int], response_context: Dictionary = {}) -> CardInstance:
 	if not response_patterns.has("sha"):
 		return null
 	# 材料校验结果；等待期间任一材料移动都会拒绝消费。
@@ -82,7 +84,9 @@ func consume_equipment_response(match_host: Object, player_id: int, equipment_ui
 		return null
 	# 响应玩家状态；用于生成永久语义日志。
 	var player: PlayerState = match_host.state.get_player(player_id)
-	return match_host.consume_virtual_equipment_response(player_id, equipment_uid, material_card_uids, "sha", "sha", "%s发动【丈八蛇矛】，将两张手牌当【杀】打出。" % player.display_name)
+	# 日志动词；与核心层 resolve_response_action 使用同一组动作类别，避免两处各写一份字符串。
+	var action_verb: String = "使用了" if match_host.resolve_response_action(response_context, response_patterns) == "use" else "打出了"
+	return match_host.consume_virtual_equipment_response(player_id, equipment_uid, material_card_uids, "sha", "sha", "%s发动【丈八蛇矛】，将两张手牌当【杀】%s。" % [player.display_name, action_verb], response_context)
 
 
 ## 丈八蛇矛注册的出牌阶段主动动作类型。

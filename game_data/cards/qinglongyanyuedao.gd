@@ -47,13 +47,16 @@ func on_slash_dodged(slash_effect: Object, context: Dictionary) -> bool:
 	var target: PlayerState = slash_effect.state.get_player(int(context.get("target_id", -1)))
 	if actor == null or target == null:
 		return true
-	slash_effect.host.add_log("%s打出【闪】抵消了【杀】。" % target.display_name)
+	# 文案固定使用“使用【闪】”：【闪】响应【杀】属于“使用”，不能写成“打出”。
+	slash_effect.host.add_log("%s使用了【闪】抵消了【杀】。" % target.display_name)
 	# 追击响应上下文；装备定义 ID 使异步恢复回到本文件。
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["kind"] = "qinglong_response"
 	response_context["responder_id"] = actor.player_id
 	response_context["equipment_definition_id"] = get_id()
 	response_context["complete_parent_target_after_response"] = true
+	# 动作类别为“打出”：追击【杀】不产生牌面效果，只用于继续发起一次新的【杀】。
+	response_context["response_action"] = CARD_ACTION_PLAY
 	# 追加打出的实体【杀】；空值表示放弃发动。
 	var follow_slash: CardInstance = slash_effect.host.request_response_card(actor.player_id, "sha", "是否发动【青龙偃月刀】继续打出【杀】？", response_context)
 	if slash_effect.host.has_pending_card_choice():

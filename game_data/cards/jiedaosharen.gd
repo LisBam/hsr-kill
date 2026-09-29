@@ -148,7 +148,8 @@ func _get_legal_slash_target_ids(rule_service: Object, weapon_holder_id: int) ->
 ## 要求持刀者打出【杀】；拒绝或无法响应时将其武器交给锦囊使用者。
 func _resolve_borrow_sword(resolver: Object, parent_card_uid: int, source_id: int, weapon_holder_id: int, victim_id: int) -> void:
 	# 借刀响应上下文；父牌 UID 使异步恢复重新定位本卡牌源码。
-	var response_context: Dictionary = {"kind":"borrow_sword_response", "parent_card_uid":parent_card_uid, "responder_id":weapon_holder_id, "source_id":source_id, "victim_id":victim_id, "complete_parent_target_after_response":true}
+	# 动作类别为“打出”：持刀者打出的【杀】只用于证明响应，不产生牌面效果，也不属于“弃置”。
+	var response_context: Dictionary = {"kind":"borrow_sword_response", "parent_card_uid":parent_card_uid, "responder_id":weapon_holder_id, "source_id":source_id, "victim_id":victim_id, "complete_parent_target_after_response":true, "response_action":CARD_ACTION_PLAY}
 	# 持刀者实际打出的【杀】；为空表示交出武器。
 	var slash: CardInstance = resolver.host.request_response_card(weapon_holder_id, "sha", "请响应借刀杀人并打出【杀】。", response_context)
 	if resolver.host.has_pending_card_choice() or resolver.is_resolution_stopped():

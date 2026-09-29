@@ -30,7 +30,8 @@ var target_player_id: int = -1
 ## 允许看到牌面的玩家 ID；空数组表示按实体牌公开/私密字段推断。
 var visible_to: Array[int] = []
 
-## 移牌原因；use、respond、gain、discard、equip、judge、wash 等使用稳定字符串。
+## 移牌原因；use、play、gain、discard、equip、judge、wash 等使用稳定字符串。
+## use 表示“使用”、play 表示“打出”，两者都是“原区域 → 处理区 → 弃牌堆”，与直接进入弃牌堆的 discard 严格区分。
 var reason: String = ""
 
 ## 目标装备槽；非装备移动为空字符串。
