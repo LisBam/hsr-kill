@@ -149,7 +149,9 @@ func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 		_fail("assignment_error=%s" % assignment_error)
 		return
 	_host_match_started = true
-	if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED):
+	# 显式锁定身份模式开局：本测试只关心联机选将与私有快照，若沿用玩家设置里的当前模式，
+	# 遇到斗地主（仅3/5人）或车轮战（固定2人）等模式时4人局会因人数校验失败而无法开局。
+	if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED, "identity"):
 		_fail("authoritative_start_failed")
 		return
 	_gateway.begin_prepared_lan_match()
@@ -161,11 +163,9 @@ func _on_match_started(local_player_id: int, player_count: int) -> void:
 	if player_count != TEST_PLAYER_COUNT or local_player_id < 0 or local_player_id >= TEST_PLAYER_COUNT:
 		_fail("invalid_assignment player_id=%d count=%d" % [local_player_id, player_count])
 		return
-	# 本次开局绑定序号；同房重开时房主会重播开局绑定，客户端必须收到第二次且保持同一稳定玩家 ID。
+	# 本次开局绑定序号；同房重开时房主会重播开局绑定，客户端必须收到第二次并重新绑定当前座位。
+	# 自选身份随机座位会在重开时重新洗牌，因此这里只要求座次合法（见上方范围校验），不再要求与上一局完全相同。
 	_match_start_count += 1
-	if _match_start_count > 1 and local_player_id != _local_player_id:
-		_fail("restart_assignment_changed first=%d second=%d" % [_local_player_id, local_player_id])
-		return
 	_local_player_id = local_player_id
 	# 同房重开进入新的选将阶段；复位提交去重状态，使两名真人能在第二局重新各提交一次候选。
 	_character_selection_submitted = false
@@ -258,6 +258,10 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	if snapshot.has("random_seed"):
 		_fail("random_seed_leaked")
 		return
+	# 本人待办请求清单；界面据此对账并行无懈窗口，字段缺失时只能退回会被其他玩家请求编号干扰的旧口径。
+	if not snapshot.has("local_pending_choice_request_ids") or not (snapshot.get("local_pending_choice_request_ids", []) is Array):
+		_fail("local_pending_choice_request_ids_missing")
+		return
 	_client_snapshot_acknowledged = true
 	_client_acknowledged_match_id = snapshot_match_id
 	_acknowledged_match_start_count = _match_start_count
@@ -300,7 +304,8 @@ func _on_gateway_command_received(command_data: Dictionary) -> void:
 		if _host_restart_requested:
 			return
 		_host_restart_requested = true
-		if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED):
+		# 重开同样显式锁定身份模式；理由与首次开局一致，避免玩家设置里的当前模式改变人数校验结果。
+		if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED, "identity"):
 			_fail("host_restart_start_failed")
 			return
 		if _controller.state == null or str(_controller.state.current_phase) != "character_selection":

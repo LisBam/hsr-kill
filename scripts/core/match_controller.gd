@@ -5748,6 +5748,28 @@ func _refresh_simultaneous_choice_snapshot() -> void:
 		}
 
 
+## 返回指定观察者本人仍在等待提交的全部请求 ID；普通兼容选择与同时无懈共用一个稳定清单。
+## 联机客户端按“本人当前请求”解释快照字段，而单槽位 current_choice_request 只能表达一条请求：
+## 并行无懈同时为多名玩家登记请求时，其他玩家的请求编号会覆盖该槽位，客户端据此对账就会把
+## 自己仍在等待的无懈窗口误判为已失效并清空，表现为询问一闪而过后既不能使用也无法放弃。
+## 因此这里按观察者投射本人请求清单，使界面只在权威端确实不再等待该请求时才关闭窗口。
+func _get_pending_choice_request_ids(viewer_id: int) -> Array[int]:
+	# 待办请求 ID 清单；只包含该观察者自己的请求，其他玩家的私有请求不进入本快照。
+	var request_ids: Array[int] = []
+	if viewer_id < 0:
+		return request_ids
+	# 普通兼容选择；单槽位权威副本只属于其实际选择者，其他观察者继续只读观察。
+	if not _pending_card_choice.is_empty() and int(_pending_card_choice.get("chooser_id", -1)) == viewer_id:
+		request_ids.append(int(_pending_card_choice.get("request_id", -1)))
+	# 同时无懈响应；同一轮可以为全部存活玩家并行登记，必须逐条比对本人才不会漏掉仍在等待的窗口。
+	for choice_variant: Variant in _pending_negation_choices.values():
+		# 当前私有请求；响应者不属于本观察者时不属于其待办清单。
+		var choice_data: Dictionary = choice_variant as Dictionary
+		if int(choice_data.get("chooser_id", -1)) == viewer_id:
+			request_ids.append(int(choice_data.get("request_id", -1)))
+	return request_ids
+
+
 ## 离线全角色控制中发布下一名仍待操作角色的无懈请求；普通离线与联机仍保持原并行发布语义。
 func _publish_next_control_all_negation_choice() -> void:
 	if not _control_all_characters_enabled or _pending_negation_choices.is_empty():
@@ -15442,6 +15464,8 @@ func _emit_state() -> void:
 	_append_limited_skill_usage_to_snapshot(local_snapshot)
 	# 本地手气卡私有状态；只包含本人的剩余张数与按钮权限。
 	local_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(local_human_player_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
+	# 本地待办请求清单；并行无懈会让本人同时拥有多条请求，界面据此对账而不是依赖单槽位请求编号。
+	local_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids(local_human_player_id)
 	state_changed.emit(local_snapshot)
 	# 本地选将类私有快照；初次选将与房主调整 AI 共用同一选将面板协议。
 	var local_selection_snapshot: Dictionary = _get_character_selection_snapshot(local_human_player_id)
@@ -15465,6 +15489,9 @@ func _emit_state() -> void:
 			remote_snapshot["character_selection"] = _get_character_selection_snapshot(viewer_id)
 			# 手气卡私有快照；每名远端玩家只接收自己的剩余张数和确认状态。
 			remote_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(viewer_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
+			# 观察者本人的待办请求清单；并行无懈的多条私有请求无法由单槽位 current_choice_request 表达，
+			# 缺少本字段时客户端会在随后的任一快照把仍在等待的无懈窗口误清并永久停在询问阶段。
+			remote_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids(viewer_id)
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
 
 

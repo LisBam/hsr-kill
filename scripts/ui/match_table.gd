@@ -463,6 +463,12 @@ var _current_operator_player_id: int = -1
 ## 当前同时处理规则操作的玩家 ID；无懈可击询问使用全体存活名单，不能根据候选牌数量裁剪。
 var _simultaneous_operator_player_ids: Array[int] = []
 
+## 最新权威快照确认的本人待办请求 ID 清单；并行无懈会同时存在多条，单槽位请求编号无法表达全部待办。
+var _local_pending_choice_request_ids: Array[int] = []
+
+## 最新快照是否携带本人待办请求清单字段；false 表示旧回放或纯界面测试快照，对账回落到单槽位请求编号。
+var _has_local_pending_choice_request_ids: bool = false
+
 ## 当前计时器绑定的对局 ID；对局 ID 变化时重置开始时间，避免重新开局继承旧时长。
 var _timed_match_id: String = ""
 
@@ -1617,11 +1623,20 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	var runtime_choice: Dictionary = _snapshot.get("current_choice_request", {}) as Dictionary
 	# 当前运行时请求 ID；无活动请求时为-1。
 	var runtime_request_id: int = int(runtime_choice.get("request_id", -1))
-	if not _inline_card_choice.is_empty() and int(_inline_card_choice.get("request_id", -2)) != runtime_request_id:
+	# 本人待办请求清单；并行无懈会同时等待多条请求，只有该清单才能完整表达本地窗口是否仍然有效。
+	_local_pending_choice_request_ids.clear()
+	_has_local_pending_choice_request_ids = _snapshot.has("local_pending_choice_request_ids")
+	if _has_local_pending_choice_request_ids:
+		for local_request_id_variant: Variant in _snapshot.get("local_pending_choice_request_ids", []) as Array:
+			# 当前本人待办请求 ID；无效负数不会参与任何窗口对账。
+			var local_request_id: int = int(local_request_id_variant)
+			if local_request_id >= 0 and not _local_pending_choice_request_ids.has(local_request_id):
+				_local_pending_choice_request_ids.append(local_request_id)
+	if not _inline_card_choice.is_empty() and not _is_local_request_still_pending(int(_inline_card_choice.get("request_id", -2)), runtime_request_id):
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
 		_active_response_skill_id = ""
-	if _modal_choice_request_id >= 0 and _modal_choice_request_id != runtime_request_id:
+	if _modal_choice_request_id >= 0 and not _is_local_request_still_pending(_modal_choice_request_id, runtime_request_id):
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
 	_current_operator_player_id = int(runtime_choice.get("actor_id", _snapshot.get("current_player_id", -1)))
@@ -3277,6 +3292,13 @@ func _on_restart_requested(player_count: int) -> bool:
 		elif player_count != current_lan_player_count:
 			match_controller.action_rejected.emit("局域网房间内重新开始时不能改变游戏总人数。")
 			return false
+		# 重新开始必须重新随机排布座位：在创建新对局前按大厅位置重建“真人→规则座次”映射并重新洗牌。
+		# 重开复用映射会让每局座位完全相同，且只置换真人座次时 2 名真人的相对顺序几乎不变，观感就是“座位没有随机”。
+		# 上一局已签发的会话令牌与掉线座位预约由网关按大厅位置迁移到新座位，断线重连的玩家身份不受重开影响。
+		var reassignment_error: String = match_controller.network_gateway.prepare_lan_match_assignments(current_lan_player_count, true)
+		if not reassignment_error.is_empty():
+			match_controller.action_rejected.emit(reassignment_error)
+			return false
 	# 离线过关斩将是否必须锁定角色总数；该模式的人数设置只有局域网大厅才表示“玩家数×2”，
 	# 离线单人游玩固定为1名本地玩家对1名敌人，因此任何调用方传入的更大角色数都在此收敛。
 	var offline_conquest_roles_locked: bool = match_controller.network_gateway.mode == NetworkGateway.Mode.OFFLINE and GameSettings != null and GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_CONQUEST
@@ -3655,6 +3677,17 @@ func _refresh_card_selection_panel() -> void:
 		card_selection_panel.show_recorded_names(_recorded_names_view)
 		return
 	card_selection_panel.close()
+
+
+## 判断一条本地窗口请求是否仍由权威端等待；联机快照优先读取本人待办清单，缺失该字段时回落到单槽位请求编号。
+## 并行无懈会同时为多名玩家登记请求，单槽位 current_choice_request 只能承载其中一条；
+## 若始终用该槽位判定，其他玩家请求到达时会把本地仍在等待的无懈窗口误清并永久停在询问阶段。
+func _is_local_request_still_pending(request_id: int, fallback_request_id: int) -> bool:
+	if request_id < 0:
+		return false
+	if _has_local_pending_choice_request_ids:
+		return _local_pending_choice_request_ids.has(request_id)
+	return request_id == fallback_request_id
 
 
 ## 为实际“选择角色区域内的牌”请求补充公开目标武将名；文字控制请求即使携带只读牌面也只负责观看，不能被改写为选牌提示。

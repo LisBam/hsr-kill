@@ -115,6 +115,25 @@ func _run() -> void:
 	if int(main_instance.get("_suppressed_group_trick_uid")) >= 0:
 		_fail("group_trick_toggle_cancelled")
 		return
+	# 联机并行无懈对账；单槽位请求编号此时被其他玩家占用，本人窗口必须依据待办请求清单继续保留。
+	# 旧行为会因编号不一致在快照到达时清空内联询问，表现为询问一闪而过、既不能使用也无从放弃的永久卡死。
+	var remote_parallel_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 999)
+	remote_parallel_snapshot["current_choice_request"] = {"request_id":999, "actor_id":1, "choice_type":"respond"}
+	remote_parallel_snapshot["local_pending_choice_request_ids"] = [111]
+	match_controller.state_changed.emit(remote_parallel_snapshot)
+	await get_tree().process_frame
+	if int((main_instance.get("_inline_card_choice") as Dictionary).get("request_id", -1)) != 111:
+		_fail("parallel_negation_snapshot_keeps_window")
+		return
+	# 权威端不再等待该请求时清空清单；本地窗口必须随之关闭，避免玩家对着已经失效的询问操作。
+	var expired_parallel_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 999)
+	expired_parallel_snapshot["current_choice_request"] = {"request_id":999, "actor_id":1, "choice_type":"respond"}
+	expired_parallel_snapshot["local_pending_choice_request_ids"] = []
+	match_controller.state_changed.emit(expired_parallel_snapshot)
+	await get_tree().process_frame
+	if not (main_instance.get("_inline_card_choice") as Dictionary).is_empty():
+		_fail("expired_negation_snapshot_closes_window")
+		return
 	# 强制弃牌请求；两张手牌都可选择，必须选满2张后确认才启用，取消按钮保持可见但禁用。
 	var discard_request: Dictionary = {
 		"request_id":12,
