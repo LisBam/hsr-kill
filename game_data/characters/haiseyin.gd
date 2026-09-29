@@ -12,7 +12,7 @@ const HUITAO_SKILL: Script = preload("res://game_data/skills/huitao.gd")
 ## 写入武将静态信息与技能代码引用。
 func _init() -> void:
 	super({
-		"id":"haishengyin",
+		"id":"haiseyin",
 		"display_name":"海瑟音",
 		"gender":"female",
 		"faction":"wengfaluosi",
