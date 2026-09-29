@@ -184,27 +184,69 @@ func _check_gateway_authority(gateway: NetworkGateway) -> bool:
 	if not bool(gateway.get_lan_lobby_snapshot().get("fixed_seat_enabled", false)):
 		return _fail("identity_fixed_seat_snapshot_missing")
 	gateway.cancel_prepared_lan_match()
-	# 固定座位关闭时座位改为开局随机：真人占用的规则座次集合保持不变，但位置到座次的映射必须出现非标准排列。
+	# 固定座位关闭时座位改为开局随机：整张“大厅位置→规则座次”映射被洗牌，真人可以落在任意座次，含原本由 AI 补位的位置。
 	if not gateway.update_lan_lobby_settings("identity", 8, "", true, false).is_empty() or gateway.is_lan_fixed_seat_enabled():
 		return _fail("identity_random_seat_settings_error")
-	# 映射采样次数；两名真人时每次有50%概率保持标准映射，24次全部相同的概率低于千万分之一，可稳定判定洗牌生效。
+	# 映射采样次数；房主每次有7/8概率离开一号位、6/8概率落入补位座次，24次全部相反的概率低于百万分之一，可稳定判定洗牌生效。
 	var random_seat_samples: int = 24
-	# 是否观察到非标准映射；出现任意一次即证明座位确实被随机打乱而不是仍按大厅位置固定。
+	# 是否观察到房主离开一号位；出现任意一次即证明座位确实被随机打乱而不是仍按大厅位置固定。
 	var observed_shuffled_seat: bool = false
+	# 是否观察到房主占用补位座次；证明洗牌覆盖整张映射，而不是只在真人之间置换座次（后者对2名真人只有2种结果）。
+	var observed_full_seat_shuffle: bool = false
 	for _sample_index: int in range(random_seat_samples):
 		if not gateway.prepare_lan_match_assignments(8).is_empty():
 			return _fail("identity_random_seat_prepare_error")
-		# 本样本中房主占用的规则座次；随机后不再固定为0。
+		# 本样本中房主占用的规则座次；随机后可以是0至7中的任意一个。
 		var local_seat: int = gateway.get_local_lan_player_id()
-		# 本样本中远端成员占用的规则座次；房主与远端必须各占一个且不能重合。
+		# 本样本中远端成员占用的规则座次；两名真人必须各占一个合法座次且不能重合。
 		var remote_seat: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
-		if local_seat == remote_seat or not [0, 7].has(local_seat) or not [0, 7].has(remote_seat):
+		if local_seat == remote_seat or local_seat < 0 or local_seat >= 8 or remote_seat < 0 or remote_seat >= 8:
 			return _fail("identity_random_seat_binding local=%d remote=%d" % [local_seat, remote_seat])
 		if local_seat != 0:
 			observed_shuffled_seat = true
+		if local_seat != 0 and local_seat != 7:
+			observed_full_seat_shuffle = true
 		gateway.cancel_prepared_lan_match()
-	if not observed_shuffled_seat:
-		return _fail("identity_random_seat_never_shuffled")
+	if not observed_shuffled_seat or not observed_full_seat_shuffle:
+		return _fail("identity_random_seat_never_shuffled shuffled=%s full=%s" % [str(observed_shuffled_seat), str(observed_full_seat_shuffle)])
+	gateway.cancel_prepared_lan_match()
+	# 同一房间内重新开始必须重新随机座位：对局进行中允许重建映射，在线真人的会话令牌按大厅位置搬到新座次。
+	gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+	if not gateway.prepare_lan_match_assignments(8).is_empty():
+		return _fail("restart_initial_prepare_error")
+	# 上一局的房主与远端座次；重开后两者都可能变化，令牌必须跟着人而不是跟着旧座次编号。
+	var previous_host_seat: int = gateway.get_local_lan_player_id()
+	var previous_remote_seat: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
+	# 上一局已签发的两枚会话令牌；分别属于房主与远端成员。
+	var previous_host_token: String = str(gateway.call("_ensure_lan_session_token", previous_host_seat))
+	var previous_remote_token: String = str(gateway.call("_ensure_lan_session_token", previous_remote_seat))
+	# 上一局由 AI 补位座次上遗留的“幽灵令牌”；模拟某名已掉线玩家的旧会话凭证。
+	# 该座次不再对应任何在线成员，重开时必须整体丢弃：否则它会在重连校验中被当成“迟到重连”并踢掉当前占用者。
+	var ghost_seat: int = 0
+	for candidate_seat: int in range(8):
+		if candidate_seat != previous_host_seat and candidate_seat != previous_remote_seat:
+			ghost_seat = candidate_seat
+			break
+	var ghost_token: String = str(gateway.call("_ensure_lan_session_token", ghost_seat))
+	# 对局进行中重新开始：映射必须重建，令牌按大厅位置搬到新座次。
+	gateway.set("_lan_match_active", true)
+	if not gateway.prepare_lan_match_assignments(8, true).is_empty():
+		return _fail("restart_reprepare_error")
+	# 重开后的令牌表；在线房主与远端的令牌必须搬到各自在新排列中的座次。
+	var restarted_host_seat: int = gateway.get_local_lan_player_id()
+	var restarted_remote_seat: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
+	var restarted_tokens: Dictionary = gateway.get("_lan_session_tokens_by_player") as Dictionary
+	if str(restarted_tokens.get(restarted_host_seat, "")) != previous_host_token:
+		return _fail("restart_token_not_migrated seat=%d previous=%d" % [restarted_host_seat, previous_host_seat])
+	if str(restarted_tokens.get(restarted_remote_seat, "")) != previous_remote_token:
+		return _fail("restart_remote_token_not_migrated seat=%d previous=%d" % [restarted_remote_seat, previous_remote_seat])
+	# 幽灵令牌必须被丢弃，且令牌总数必须等于当前真人数。
+	if restarted_tokens.size() != 2:
+		return _fail("restart_token_count=%d" % restarted_tokens.size())
+	for token_variant: Variant in restarted_tokens.values():
+		if str(token_variant) == ghost_token:
+			return _fail("restart_stale_token_kept seat=%d" % restarted_host_seat)
+	gateway.set("_lan_match_active", false)
 	gateway.cancel_prepared_lan_match()
 	# 2v2 自选身份映射；大厅三号位（下排红方首位）必须绑定规则二号位。
 	if not gateway.update_lan_lobby_settings("team2v2", 4, "", true).is_empty():
@@ -267,6 +309,22 @@ func _check_match_identity_assignment(gateway: NetworkGateway) -> bool:
 	if remote_player_id < 0 or remote_player_id >= identities_by_seat.size() or identities_by_seat[remote_player_id] != EXPECTED_IDENTITY_8P[7]:
 		return _fail("slot_identity_remote_mismatch remote=%d identities=%s" % [remote_player_id, str(identities_by_seat)])
 	gateway.cancel_prepared_lan_match()
+	# 局内“重新开始”接线校验：通过真实重开入口触发一次，确认入口确实重建了座位映射并由新对局采用。
+	# 该断言防止未来在重开路径上漏调网关的重建方法，从而再次出现“重新开始后座位一直不变”。
+	if GameSettings != null:
+		GameSettings.next_match_mode = GameSettings.MATCH_MODE_IDENTITY
+	gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+	if not gateway.prepare_lan_match_assignments(8).is_empty():
+		return _fail("restart_entry_prepare_error")
+	# 重开前的座位排列；重开后必须换成新的随机排列（8人局两次排列完全相同的概率为1/40320）。
+	var previous_seat_lobby_slots: Array[int] = gateway.get_lan_seat_lobby_slots()
+	# 进入对局中状态，使重开入口走“同房重开”分支；真实房间由大厅开局置位，这里直接模拟该权威状态。
+	gateway.set("_lan_match_active", true)
+	if not bool(_main_instance.call("_on_restart_requested", 8)):
+		return _fail("restart_entry_failed")
+	if gateway.get_lan_seat_lobby_slots() == previous_seat_lobby_slots:
+		return _fail("restart_entry_seat_not_reshuffled")
+	gateway.set("_lan_match_active", false)
 	return true
 
 

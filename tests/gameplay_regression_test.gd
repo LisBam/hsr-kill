@@ -307,6 +307,15 @@ func _test_simultaneous_wuxie_first_response_wins() -> bool:
 			earlier_request_id = int(request_data.get("request_id", -1))
 	if winning_request.is_empty() or earlier_request_id < 0:
 		return _fail("simultaneous_wuxie_requests=%s" % [_simultaneous_negation_requests])
+	# 观察者待办请求清单；每名玩家只能看到自己的请求编号，联机客户端据此判断本地无懈窗口是否仍然有效。
+	# 该清单缺失或混入他人编号时，客户端会在随后的任一快照把仍在等待的窗口误清，表现为询问一闪而过后永久卡住。
+	var viewer_two_request_ids: Array[int] = _controller._get_pending_choice_request_ids(2)
+	var viewer_zero_request_ids: Array[int] = _controller._get_pending_choice_request_ids(0)
+	if viewer_two_request_ids.size() != 1 or viewer_two_request_ids[0] != int(winning_request.get("request_id", -1)) or viewer_zero_request_ids.size() != 1 or viewer_zero_request_ids[0] != earlier_request_id:
+		return _fail("simultaneous_wuxie_viewer_request_ids=%s:%s" % [viewer_two_request_ids, viewer_zero_request_ids])
+	# 未持有无懈的观察者没有待办请求；空清单让客户端据此关闭已经失效的旧窗口。
+	if not _controller._get_pending_choice_request_ids(1).is_empty():
+		return _fail("simultaneous_wuxie_uninvolved_viewer_request_ids=%s" % [_controller._get_pending_choice_request_ids(1)])
 	# 先提交三号玩家的合法无懈；同轮一号玩家即使更早收到请求也不能再覆盖本次结果。
 	var winning_action: PlayerAction = PlayerAction.new("choose_cards", 2)
 	winning_action.payload = {"request_id":int(winning_request.get("request_id", -1)), "selected_card_uids":[winning_counter.uid]}

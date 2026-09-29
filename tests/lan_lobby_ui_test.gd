@@ -23,6 +23,9 @@ func _ready() -> void:
 	GameSettings.set_online_player_name("大厅测试房主")
 	GameSettings.set_online_avatar_character_id(TEST_AVATAR_CHARACTER_ID)
 	GameSettings.set_ui_style(UIStyleRegistry.DEFAULT_STYLE_ID)
+	# 显式锁定身份模式：本测试要验证2至8人的位置布局，若沿用玩家设置里的当前模式，
+	# 遇到斗地主（仅允许3或5人）时8人设置会被网关规范化，八人布局断言就失去意义。
+	GameSettings.next_match_mode = GameSettings.MATCH_MODE_IDENTITY
 	_main_instance = MAIN_SCENE.instantiate() as Control
 	get_tree().root.add_child.call_deferred(_main_instance)
 	await get_tree().process_frame

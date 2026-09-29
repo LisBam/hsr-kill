@@ -527,10 +527,20 @@ func get_lan_ipv4_addresses() -> Array[String]:
 
 
 ## 房主在权威开局前按大厅位置顺序绑定真人成员与稳定玩家 ID；空余 ID 由 MatchController 注册为 AI。
-func prepare_lan_match_assignments(player_count: int) -> String:
-	if not is_lan_host() or _lan_match_active:
+## for_match_restart 为 true 时表示“同一 ENet 房间内重新开始”：允许在对局进行中重建映射，
+## 并在重建前把在线真人的会话令牌按大厅位置搬到新座次，使每次重开都重新随机排布座位。
+func prepare_lan_match_assignments(player_count: int, for_match_restart: bool = false) -> String:
+	if not is_lan_host():
 		return "当前不是可开始对局的局域网房主。"
+	if _lan_match_active and not for_match_restart:
+		return "当前不是可开始对局的局域网房主。"
+	# 重开前本局的“座次→大厅位置”映射副本；只有重开需要它把在线真人的会话令牌搬到重新洗牌后的座次。
+	# 身份由大厅位置决定，令牌必须跟人走，因此迁移依据是位置而不是旧座次编号。
+	var previous_seat_lobby_slots: Array[int] = []
+	if for_match_restart:
+		previous_seat_lobby_slots = _seat_lobby_slot_indices.duplicate()
 	# 已登记真人成员数；尚未发送显示名的半连接 peer 不进入正式座次。
+	# 掉线玩家已在大厅成员表中移除，其座位在重开时同样交给 AI，因此这里只统计当前在线真人。
 	var human_count: int = _lobby_members.size()
 	if human_count < 2:
 		return "至少需要2名真人玩家才能开始局域网对局。"
@@ -557,6 +567,7 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 	# 大厅成员顺序；快照先提供稳定成员副本，再按玩家主动选择的位置排序，不依赖哈希顺序。
 	var lobby_snapshot: Dictionary = get_lan_lobby_snapshot()
 	# 大厅成员数组；成员顺序已经由快照固定，数量应与当前真人数量一致。
+	# 掉线成员已在断开回调中移出成员表，因此重开时他们与首次开局一样不占座次，其座位交给 AI 补位。
 	var members: Array = lobby_snapshot.get("members", []) as Array
 	members.sort_custom(func(first_member_variant: Variant, second_member_variant: Variant) -> bool:
 		# 两名大厅成员；换位只影响这里的初始真人映射顺序，不改变身份洗牌或领袖座次旋转。
@@ -566,13 +577,27 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 	)
 	# 本次开局实际使用的位置到座次映射；自选身份且不固定座位时替换为随机双射，其余情况保持模式标准映射。
 	var lobby_slot_seat_binding: Array[int] = lobby_slot_match_seats
+	# 本次开局是否真的对整张位置到座次映射做了随机洗牌；决定身份表是否需要按完整逆映射重排。
+	var lobby_seat_shuffled: bool = false
 	if custom_identity_active and _should_shuffle_lobby_seat_binding():
-		lobby_slot_seat_binding = _build_shuffled_lobby_slot_binding(members, lobby_slot_match_seats)
+		lobby_slot_seat_binding = _build_shuffled_lobby_slot_binding(lobby_slot_match_seats)
+		lobby_seat_shuffled = true
+	if for_match_restart:
+		# 先把在线真人的会话令牌搬到本次新座位，再重建映射；令牌跟人走，不能停留在旧座次编号上。
+		_migrate_lan_session_bindings_to_new_seats(previous_seat_lobby_slots, lobby_slot_seat_binding)
 	# 座位占用者的大厅位置；仅供权威控制器把位置身份写入实际占用该座位的玩家，非自选身份开局保持空数组。
 	_seat_lobby_slot_indices.clear()
 	if custom_identity_active:
 		_seat_lobby_slot_indices.resize(get_match_role_count_for_mode(_lobby_game_mode_id, player_count))
 		_seat_lobby_slot_indices.fill(-1)
+		if lobby_seat_shuffled:
+			# 整表洗牌后位置与座次不再一一对应，必须按完整逆映射填满每个座次：
+			# 未登记的座次（由 AI 补位）也要取到它在本排列中占用的大厅位置身份，否则会出现同一身份重复或缺失。
+			for lobby_slot_index: int in range(lobby_slot_seat_binding.size()):
+				# 当前大厅位置在本次排列中占用的规则座次；越界值防御性跳过，保持映射为双射。
+				var shuffled_seat_index: int = int(lobby_slot_seat_binding[lobby_slot_index])
+				if shuffled_seat_index >= 0 and shuffled_seat_index < _seat_lobby_slot_indices.size():
+					_seat_lobby_slot_indices[shuffled_seat_index] = lobby_slot_index
 	for member_index: int in range(members.size()):
 		# 当前大厅成员；显示名只用于权威玩家状态和日志，不参与网络权限判断。
 		var member: Dictionary = members[member_index] as Dictionary
@@ -587,7 +612,8 @@ func prepare_lan_match_assignments(player_count: int) -> String:
 			if member_seat_index >= 0 and member_seat_index < lobby_slot_seat_binding.size():
 				player_id = lobby_slot_seat_binding[member_seat_index]
 			# 记录座位与大厅位置的反向映射；随机座位时只有它能让身份继续跟着大厅位置走。
-			if player_id >= 0 and player_id < _seat_lobby_slot_indices.size() and member_seat_index >= 0:
+			# 整表洗牌时该映射已按完整逆映射填满，此处不再逐成员覆写，避免把 AI 补位座次重新留成未登记。
+			if not lobby_seat_shuffled and player_id >= 0 and player_id < _seat_lobby_slot_indices.size() and member_seat_index >= 0:
 				_seat_lobby_slot_indices[player_id] = member_seat_index
 		_peer_to_player_id[peer_id] = player_id
 		_player_to_peer_id[player_id] = peer_id
@@ -605,39 +631,51 @@ func _should_shuffle_lobby_seat_binding() -> bool:
 	return not _identity_rules.requires_fixed_lobby_seat(_lobby_game_mode_id)
 
 
-## 为自选身份且不固定座位的开局构造随机双射，使身份继续跟随大厅位置而物理座位每局重新洗牌。
-## 只有真人实际占用的位置参与洗牌，补位 AI 占用的规则座次集合因此保持不变；标准映射中未被占用的位置原样保留。
-func _build_shuffled_lobby_slot_binding(members: Array, lobby_slot_match_seats: Array[int]) -> Array[int]:
-	# 结果映射；先复制模式标准映射，再仅覆盖参与洗牌的真人位置。
+## 为自选身份且不固定座位的开局构造随机双射，使身份继续跟随大厅位置而物理座位每次开局重新洗牌。
+## 洗牌对象是**整张“大厅位置 → 规则座次”映射**：真人座次与 AI 补位座次一起重排，因此每名玩家可能落到任意座位，
+## 空位也会被其他人或 AI 占用，观感上才是真正的“重新排布座位”。只置换真人之间的座次时，2 名真人只有 2 种结果，
+## 相对顺序几乎不变（看起来只是整体反转或干脆没变），这正是“随机座位老是不随机”的直接原因。
+## 身份不参与洗牌：身份始终由大厅位置决定，重排只改变物理座次，因此同一大厅位置的玩家身份保持稳定。
+func _build_shuffled_lobby_slot_binding(lobby_slot_match_seats: Array[int]) -> Array[int]:
+	# 结果映射；先复制模式标准映射，再对整张映射做等概率随机排列。
 	var binding: Array[int] = lobby_slot_match_seats.duplicate()
-	# 真人占用的大厅位置列表；与占用的规则座次列表一一对应，洗牌后仍构成双射。
-	var occupied_slots: Array[int] = []
-	# 真人占用位置对应的规则座次列表；洗牌的就是这一份，因此不会把真人挤进 AI 补位座位。
-	var occupied_seats: Array[int] = []
-	for member_variant: Variant in members:
-		# 当前大厅成员；只读取位置字段，其余字段与座位分配无关。
-		var member: Dictionary = member_variant as Dictionary
-		# 当前成员的大厅位置；越界或重复位置直接跳过，避免破坏双射。
-		var member_seat_index: int = int(member.get("seat_index", -1))
-		if member_seat_index < 0 or member_seat_index >= lobby_slot_match_seats.size():
-			continue
-		if occupied_slots.has(member_seat_index):
-			continue
-		occupied_slots.append(member_seat_index)
-		occupied_seats.append(lobby_slot_match_seats[member_seat_index])
-	# 少于两名真人时没有可交换的座位，保持标准绑定，避免“洗牌”结果与不洗牌完全等价却消耗随机源。
-	if occupied_slots.size() < 2:
+	# 只有 1 个座位时不存在可交换目标，保持原映射，避免“洗牌”与不洗牌完全等价却消耗随机源。
+	if binding.size() < 2:
 		return binding
-	# 洗牌真人占用的规则座次；使用网关私有随机源，不消耗对局随机序列，因而不影响牌堆与身份洗牌的既有可复现性。
-	for shuffle_index: int in range(occupied_seats.size() - 1, 0, -1):
-		# 本次交换目标下标；包含自身，保证每个排列等概率。
+	# 洗牌整张位置到座次映射；使用网关私有随机源，不消耗对局随机序列，因而不影响牌堆与身份洗牌的既有可复现性。
+	for shuffle_index: int in range(binding.size() - 1, 0, -1):
+		# 本次交换目标下标；包含自身，保证每个排列等概率（Fisher-Yates 洗牌）。
 		var swap_index: int = _lobby_seat_shuffle_rng.randi_range(0, shuffle_index)
-		var carried_seat: int = occupied_seats[shuffle_index]
-		occupied_seats[shuffle_index] = occupied_seats[swap_index]
-		occupied_seats[swap_index] = carried_seat
-	for index: int in range(occupied_slots.size()):
-		binding[occupied_slots[index]] = occupied_seats[index]
+		var carried_seat: int = binding[shuffle_index]
+		binding[shuffle_index] = binding[swap_index]
+		binding[swap_index] = carried_seat
 	return binding
+
+
+## 把在线真人的会话令牌从上一局座次搬到重新洗牌后的新座次。
+## 令牌代表“某名真人”而不是“某个座位编号”，因此必须按大厅位置换算；掉线玩家的令牌则整体丢弃：
+## 他们在重开时已不在座次映射内，其旧座次可能已被别人占用，保留旧令牌会让重连路径接管并踢掉当前占用者。
+func _migrate_lan_session_bindings_to_new_seats(previous_seat_lobby_slots: Array[int], new_lobby_slot_match_seats: Array[int]) -> void:
+	if previous_seat_lobby_slots.is_empty() or new_lobby_slot_match_seats.is_empty():
+		return
+	# 迁移后的令牌表；按“在线成员的大厅位置”重建，未出现在其中的旧令牌全部作废。
+	var migrated_tokens: Dictionary = {}
+	for member_variant: Variant in _lobby_members.values():
+		# 当前在线成员；只读取大厅位置，位置即身份也是重开换算座次的唯一依据。
+		var member: Dictionary = member_variant as Dictionary
+		var lobby_slot: int = int(member.get("seat_index", -1))
+		if lobby_slot < 0 or lobby_slot >= new_lobby_slot_match_seats.size():
+			continue
+		# 该成员上一局占用的座次；旧映射中没有记录说明上一局尚未分配座次，无需迁移。
+		var previous_seat_index: int = previous_seat_lobby_slots.find(lobby_slot)
+		if previous_seat_index < 0:
+			continue
+		# 该成员已签发的令牌；房主或未参与上一局远端签发的座位没有令牌，跳过即可。
+		var session_token: String = str(_lan_session_tokens_by_player.get(previous_seat_index, ""))
+		if session_token.is_empty():
+			continue
+		migrated_tokens[int(new_lobby_slot_match_seats[lobby_slot])] = session_token
+	_lan_session_tokens_by_player = migrated_tokens
 
 
 ## 返回指定模式与大厅人数下真人可占用的稳定玩家 ID 序列；顺序即大厅位置从前到后的映射顺序。
