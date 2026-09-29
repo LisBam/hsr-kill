@@ -42,7 +42,9 @@ func _run() -> void:
 		return
 	if not _test_bagua_red_judgment_declares_action():
 		return
-	print("CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1 bagua=red")
+	if not _test_recast_is_neither_discard_nor_play():
+		return
+	print("CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1 bagua=red recast=none")
 	get_tree().quit(0)
 
 
@@ -310,6 +312,42 @@ func _test_bagua_red_judgment_declares_action() -> bool:
 	if play_virtual_shan == null or play_virtual_shan.definition_id != "shan":
 		return _fail("bagua_red_play_response=%s" % [play_virtual_shan])
 	if not _test_logged_with_verb("视为打出【闪】"):
+		return false
+	return true
+
+
+## 校验“重铸”既不构成使用、也不构成打出，更不构成弃置：牌只被置入弃牌堆，随后固定摸一张牌。
+## 重铸的来源区域同样是手牌，所以它是“物理移动与弃置完全相同、规则语义完全不同”的第四类动作，
+## 必须由调用方显式声明为非弃置动作，否则会派发 cardsDiscardedBatchAfter 并误触发【泛音】。
+func _test_recast_is_neither_discard_nor_play() -> bool:
+	_reset_state(2)
+	# 可重铸手牌；【铁索连环】在自身卡牌定义中把 recast 标记为 true，是唯一支持主动重铸的实体牌。
+	var recast_card: CardInstance = _give_hand_card(0, "tiesuo", "club", 12)
+	if recast_card == null:
+		return _fail("recast_card_missing")
+	# 重铸前的摸牌堆张数；重铸固定补摸一张牌，用于断言摸牌确实发生。
+	var draw_pile_count_before: int = _controller.state.draw_pile.size()
+	if not _controller.recast_hand_card(0, recast_card.uid):
+		return _fail("recast_rejected")
+	if not _controller.state.discard_pile.has(recast_card):
+		return _fail("recast_not_in_discard")
+	if _controller.state.get_player(0).find_hand_card(recast_card.uid) != null:
+		return _fail("recast_still_in_hand")
+	if _controller.state.draw_pile.size() != draw_pile_count_before - 1:
+		return _fail("recast_draw_pile=%d" % _controller.state.draw_pile.size())
+	if _controller.state.get_player(0).hand.size() != 1:
+		return _fail("recast_hand_size=%d" % _controller.state.get_player(0).hand.size())
+	# 核心断言：重铸不得产生弃置批次，否则【泛音】等“当你弃置牌时”类技能会被误触发。
+	if not _captured_batches.is_empty():
+		return _fail("recast_discard_batch=%s" % [_captured_batches])
+	# 重铸既不使用也不打出，两个主体时机都不得派发。
+	if not _captured_action_timings.is_empty():
+		return _fail("recast_action_timings=%s" % [_captured_action_timings])
+	# 公开日志必须只出现“重铸了”；额外写入的“弃置了”会让玩家误判本次牌张归属。
+	for log_text: String in _captured_logs:
+		if log_text.contains("弃置了"):
+			return _fail("recast_discard_log=%s" % log_text)
+	if not _test_logged_with_verb("重铸了"):
 		return false
 	return true
 
