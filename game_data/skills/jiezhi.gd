@@ -1,6 +1,7 @@
 extends SkillDefinition
 
 ## 【揭质】技能源码。每局游戏限两次，当持有者发动【逐虚】后，可对相同目标执行一次相同的效果。
+## 原目标为持有者本人时追加一段效果：重置持有者的全部技能（含本技能自身，因此每局额度随之复原）。
 ## 本技能不是限定技：额度由自身私有计数承载，与“每局一次”的限定技集合相互独立。
 
 ## 【逐虚】技能稳定ID；本技能只响应它的结算记录。
@@ -36,6 +37,12 @@ const CONTEXT_SECTION_INDEX: String = "section_index"
 ## 询问上下文中的目标字段名。
 const CONTEXT_TARGET_ID: String = "target_id"
 
+## 重置自身全部技能的AI基础加分；确保“目标为自己”在没有任何额度可复原时仍给出正收益。
+const SELF_RESET_BASE_VALUE: float = 1.0
+
+## 重置自身全部技能的AI估值系数；每复原一项已发动限定技计入的收益值，数值3.0沿用停云【光覆】的同类口径。
+const SELF_RESET_LIMIT_VALUE: float = 3.0
+
 ## 本局已发动次数；进入存档由通用技能状态采集自动保存，重置技能会随实例重建归零。
 var _used_count: int = 0
 
@@ -47,7 +54,7 @@ func _init() -> void:
 		"name":"揭质",
 		"trigger":"passive/useSkillAfter",
 		"ui_enabled":false,
-		"description":"每局游戏限两次，当你发动“逐虚”后，你可对相同目标执行一次相同的效果。",
+		"description":"每局游戏限两次，当你发动“逐虚”后，你可对相同目标执行一次相同的效果。若目标为你，你重置你的所有技能。",
 	})
 
 
@@ -112,7 +119,20 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		_repeat_random_discard(int(resolved.get("target_id", -1)))
 	else:
 		_repeat_random_damage(int(resolved.get("target_id", -1)))
+	# 附加效果：原目标为持有者本人时重置自己的全部技能。
+	# 顺序固定在重复效果之后，使“相同的效果”严格先结算再重置；重置会返回全新技能实例并卸载本实例，
+	# 因此这一步之后不得再读写任何实例成员，只允许返回值。
+	if int(resolved.get("target_id", -1)) == owner_player_id:
+		_reset_owner_all_skills()
 	return true
+
+
+## 目标为持有者本人时的附加效果：重置自己的全部技能。
+## 通过控制器端口 reset_all_skills 统一执行，本技能不自行遍历技能表，也不直接改写其他技能的私有额度。
+## 重置范围包含本技能自身，因此每局两次的额度会一并复原，与技能原文“重置你的所有技能”完全一致。
+func _reset_owner_all_skills() -> void:
+	announce_activation({"effect":"self_reset_all_skills", "target_id":owner_player_id})
+	host.call("reset_all_skills", owner_player_id, get_id())
 
 
 ## 读取【逐虚】最近一次结算记录；记录缺失时返回空字典。
@@ -162,6 +182,7 @@ func _get_zone_card_uids(target_id: int) -> Array[int]:
 
 
 ## AI评估揭质选择：确认发动时按“对同一目标再执行一次”的收益评分，留到对敌人释放②时收益最高。
+## 目标为持有者本人时还要叠加“重置自己全部技能”的收益，否则AI会永远放弃这一分支。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 动作负载；取消保持0分，不进入发动分支。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
@@ -172,8 +193,18 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_id: int = int(context.get(CONTEXT_TARGET_ID, -1))
 	if evaluator.get_player(authoritative_snapshot, target_id).is_empty():
 		return 0.0
+	# 重复效果自身的收益；两种节都先按统一资源函数取分，再按目标是否为持有者本人追加重置收益。
+	var repeat_score: float = 0.0
 	# 重复②的收益；对敌方为削弱、对友方为损失，方向由估值器按态度给出，基础加值保证合法动作得分为正。
 	if int(context.get(CONTEXT_SECTION_INDEX, SECTION_DISCARD)) == SECTION_DAMAGE:
-		return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -DAMAGE_AMOUNT) + 1.0
-	# 重复①的收益；额外弃置一张牌同样按“目标失去一张牌”换算。
-	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, -1, 0) + 1.0
+		repeat_score = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -DAMAGE_AMOUNT) + 1.0
+	else:
+		# 重复①的收益；额外弃置一张牌同样按“目标失去一张牌”换算。
+		repeat_score = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, -1, 0) + 1.0
+	# 目标为持有者本人；除重复效果外还会重置自己的全部技能，按快照中可复原的已发动限定技数量追加收益。
+	# 已用次数等私有额度不进入公开快照，因此沿用留白的可观测代理口径，只评估公开可见的限定技额度。
+	if target_id == owner_player_id:
+		var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+		var used_limited_count: float = float((owner.get("used_limited_skill_ids", []) as Array).size())
+		repeat_score += SELF_RESET_BASE_VALUE + SELF_RESET_LIMIT_VALUE * used_limited_count
+	return repeat_score

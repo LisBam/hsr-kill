@@ -9556,14 +9556,42 @@ func reset_all_other_skills(player_id: int, exclude_skill_id: String = "") -> in
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or player.skills_permanently_removed:
 		return 0
+	var reset_count: int = _rebuild_character_skills_and_zero_usage(player, exclude_skill_id, "reset_all_other_skills")
+	add_log("%s重置了除【%s】以外的全部技能。" % [format_player_state_log_name(player), format_skill_log_name(exclude_skill_id)])
+	_emit_state()
+	return reset_count
+
+
+## 重置指定角色的全部技能，不保留任何排除项；【揭质】以自身为目标重复【逐虚】效果时通过该端口发动。
+## 与 reset_all_other_skills 的唯一差异是不存在排除项：调用方技能自身的限定技、阶段额度与局内获得次数同样归零。
+## reason 只写入技能变化时机数据与日志，不参与规则判定；为空时回退为端口名，保证日志始终可读。
+## 返回值：被重置的固有技能数量，供测试断言与AI估值复用。
+func reset_all_skills(player_id: int, reason: String = "") -> int:
+	# 目标角色；不存在或已永久失去技能的角色没有任何可重置内容。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or player.skills_permanently_removed:
+		return 0
+	# 重置原因；缺省回退为端口名，使日志与技能变化时机始终带有可读来源。
+	var reset_reason: String = reason if not reason.is_empty() else "reset_all_skills"
+	var reset_count: int = _rebuild_character_skills_and_zero_usage(player, "", reset_reason)
+	add_log("%s重置了全部技能（%s）。" % [format_player_state_log_name(player), reset_reason])
+	_emit_state()
+	return reset_count
+
+
+## 两个重置端口共用的底层实现：重建固有技能实例，并把局内获得技能的已用次数与统计基准归零。
+## exclude_skill_id 非空时回填该技能的原实例，保留其限定技与阶段额度等全部私有状态；为空表示不保留任何技能。
+## reason 透传给复原武将牌技能入口，用于写入 changeSkillsAfter 时机数据。
+## 返回值：被重置的固有技能数量；排除项不计入，因为它没有被重置。
+func _rebuild_character_skills_and_zero_usage(player: PlayerState, exclude_skill_id: String, reason: String) -> int:
 	# 排除项原实例；先取引用，复原结束后回填，保留其限定技与阶段额度等全部私有状态。
-	var current_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	var current_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
 	var excluded_skill: SkillDefinition = current_skills.get(exclude_skill_id) as SkillDefinition
 	# 复原武将牌上的全部固有技能；该入口会卸载旧实例并新建未使用实例，同时重置对应轮回进度。
-	if not restore_character_card_skills(player_id, "reset_all_other_skills"):
+	if not restore_character_card_skills(player.player_id, reason):
 		return 0
 	# 复原后的技能表；排除项的新实例必须卸载后回填旧实例，否则两者会重复订阅同一时机。
-	var rebuilt_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	var rebuilt_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
 	# 被重置的固有技能数量；排除项不计入，因为它没有被重置。
 	var reset_count: int = rebuilt_skills.size()
 	if excluded_skill != null:
@@ -9586,8 +9614,6 @@ func reset_all_other_skills(player_id: int, exclude_skill_id: String = "") -> in
 		usage["tracked_turn_number"] = state.turn_number
 		usage["tracked_round_number"] = state.round_number
 		player.acquired_skills[acquired_skill_id] = usage
-	add_log("%s重置了除【%s】以外的全部技能。" % [format_player_state_log_name(player), format_skill_log_name(exclude_skill_id)])
-	_emit_state()
 	return reset_count
 
 
