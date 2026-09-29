@@ -302,7 +302,7 @@ func _test_expanded_character_metadata() -> bool:
 	# 六项技能说明；玩家可见文本必须逐字保持机制设计原文。
 	var expected_descriptions: Dictionary = {
 		"yaoli":"出牌阶段限一次，你可交给一名角色一张红色手牌，然后此牌视为【药】直到离开其手牌区。",
-		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
+		"huanfa":"一名角色的回合结束时，若本回合内其使用过【药】，你可令其摸一张牌并执行一个额外的出牌阶段。每轮限一次。",
 		"mingchen":"锁定技，当你于回合内失去最后的手牌后，你令一名角色从牌堆或弃牌堆中获得一张【无中生有】。若该角色不为你，你令其对其造成1点雷属性伤害，并令此技能失效直到回合结束。",
 		"lushi":"出牌阶段，你可弃置两张牌名字数相同的牌，然后摸一张牌。",
 		"huanyang":"锁定技，当你对距离为1以内的角色造成1点伤害时，你回复1点体力。",
@@ -310,7 +310,7 @@ func _test_expanded_character_metadata() -> bool:
 		"wuxie_2":"当你造成伤害后，你可令受到伤害的角色回复1点体力。",
 		"feiyan":"准备阶段，你可以视为使用一张【火攻】，若此牌造成伤害，你摸三张牌，且本回合内你的所有主要阶段都变为出牌阶段。",
 		"youfeng":"离场技，锁定技，每轮开始时，你弃置一名其他角色的一张牌并令其获得“猎物”标记，然后若你未处于离场状态，你离场；若你已处于离场状态，你失去1点体力。",
-		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸两张牌并返场。",
+		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸一张牌并返场。",
 		"yingchu":"离场技，锁定技，当你上家的回合结束时，若你处于离场状态，你返场；该回合结束时，你再次离场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
@@ -1157,7 +1157,7 @@ func _test_huanyang_and_sefu() -> bool:
 	return true
 
 
-## 验证焕发在phaseEnd选择中登记额外出牌阶段，并在该阶段结束后只完成一次回合尾部而不重复弃牌或卡死。
+## 验证焕发在phaseEnd选择中先令回合角色摸一张牌、再登记额外出牌阶段，并在该阶段结束后只完成一次回合尾部而不重复弃牌或卡死。
 func _test_huanfa_extra_play_phase_completion() -> bool:
 	_reset_state(2)
 	_controller.state.get_player(0).character_id = "natasha"
@@ -1171,11 +1171,18 @@ func _test_huanfa_extra_play_phase_completion() -> bool:
 	var next_draw_one: CardInstance = _add_draw_pile_card("sha", "club", 7)
 	# 下一角色摸牌二；与前一张共同避免空牌堆提前结束对局。
 	var next_draw_two: CardInstance = _add_draw_pile_card("shan", "diamond", 7)
+	# 焕发固定摸牌样本；最后加入使其位于牌堆顶，确认后必须恰好由本回合角色摸走这一张。
+	var huanfa_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 6)
+	# 确认前手牌数；用于证明焕发准确摸取1张而不是复用下一角色的摸牌。
+	var huanfa_hand_before: int = _controller.state.get_player(0).hand.size()
 	# 回合结束触发事件；焕发只读取当前回合角色与本回合用牌事实。
 	var phase_end_event: RuleEvent = RuleEvent.new("phaseEnd", 0, 0, {"turn_number":1})
 	huanfa.call("_on_any_phase_end", phase_end_event)
 	if not _controller.has_pending_card_choice() or not _submit_pending_choice(0, [], [], true):
 		return _fail("huanfa_confirm_choice")
+	# 原文“摸一张牌并执行一个额外的出牌阶段”；摸牌必须先于阶段进入执行。
+	if _controller.state.get_player(0).hand.size() != huanfa_hand_before + 1 or _controller.state.get_player(0).find_hand_card(huanfa_draw_card.uid) == null:
+		return _fail("huanfa_draw hand=%d" % _controller.state.get_player(0).hand.size())
 	# 回合结束插入阶段的后继队列；唯一合法去向是turn_complete，不能回到弃牌阶段。
 	var queued_return_points: Array = _controller._extra_play_phase_return_points.get(0, []) as Array
 	if int(_controller._extra_play_phase_counts.get(0, 0)) != 1 or queued_return_points != ["turn_complete"]:
@@ -2027,20 +2034,21 @@ func _test_new_skill_ai_rules() -> bool:
 	huanfa.bind(null, 0)
 	var huanfa_confirm_request: Dictionary = {"context":{"kind":"huanfa_confirm", "target_id":0}}
 	var no_opportunity_snapshot: Dictionary = _controller.state.to_dict(0, true)
-	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) >= 0.0:
+	# 原文新增“摸一张牌”后，即使目标没有出牌机会也拥有固定正收益，因此自身空手仍然值得发动。
+	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) <= 0.0:
 		return _fail("huanfa_ai_self_without_usable_card")
-	# 焕发正式选择策略；通用选择评分会额外提供微弱基础分，因此必须验证技能负分能让AI真正提交取消。
+	# 焕发正式选择策略；技能正分必须让基础策略真正提交确认而不是保留次数。
 	var huanfa_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
 	# 焕发取消动作；confirmed=false表示保留本轮技能次数。
 	var huanfa_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":7301, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
 	# 焕发确认动作；零材料选择依靠confirmed=true区分发动。
 	var huanfa_policy_confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":7301, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
-	# 自身无行动机会请求；完整技能归属字段使基础策略加载焕发专属评分器。
+	# 自身空手请求；完整技能归属字段使基础策略加载焕发专属评分器。
 	var huanfa_self_policy_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"huanfa_confirm", "target_id":0, "skill_id":"huanfa", "skill_owner_id":0, "ai_allow_confirm":true}}
 	var huanfa_self_policy_choice: Dictionary = huanfa_policy.choose_card_choice(no_opportunity_snapshot, huanfa_self_policy_request, [huanfa_pass_action, huanfa_policy_confirm_action])
-	if bool((huanfa_self_policy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+	if not bool((huanfa_self_policy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("huanfa_policy_self_without_usable_card=%s" % [huanfa_self_policy_choice])
-	# 敌方持有可用【杀】；即使额外阶段本身有行动空间，娜塔莎也不能把每轮一次技能交给敌方。
+	# 敌方持有可用【杀】；摸牌与额外阶段都只帮助敌方，娜塔莎必须保留每轮一次技能。
 	_add_hand_card(1, "sha", "spade", 9)
 	var enemy_opportunity_snapshot: Dictionary = _controller.state.to_dict(0, true)
 	var huanfa_enemy_policy_request: Dictionary = huanfa_self_policy_request.duplicate(true)
@@ -2048,13 +2056,15 @@ func _test_new_skill_ai_rules() -> bool:
 	var huanfa_enemy_policy_choice: Dictionary = huanfa_policy.choose_card_choice(enemy_opportunity_snapshot, huanfa_enemy_policy_request, [huanfa_pass_action, huanfa_policy_confirm_action])
 	if bool((huanfa_enemy_policy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("huanfa_policy_enemy=%s" % [huanfa_enemy_policy_choice])
-	# 忠臣空手时不应凭空获得额外阶段收益；加入一张可使用【杀】后才恢复正向发动价值。
+	# 忠臣空手时只获得“摸一张牌”的固定收益；加入一张可使用【杀】后额外阶段价值必须进一步提高总分。
 	huanfa_confirm_request["context"] = {"kind":"huanfa_confirm", "target_id":2}
-	if huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator) > 0.0:
+	# 空手忠臣的确认得分；只包含摸一张牌的基础资源收益。
+	var empty_friend_score: float = huanfa.score_ai_choice(no_opportunity_snapshot, huanfa_confirm_request, confirm_action, evaluator)
+	if empty_friend_score <= 0.0:
 		return _fail("huanfa_ai_empty_friend")
 	_add_hand_card(2, "sha", "spade", 7)
 	var friend_with_playable_card_snapshot: Dictionary = _controller.state.to_dict(0, true)
-	if huanfa.score_ai_choice(friend_with_playable_card_snapshot, huanfa_confirm_request, confirm_action, evaluator) <= 0.0:
+	if huanfa.score_ai_choice(friend_with_playable_card_snapshot, huanfa_confirm_request, confirm_action, evaluator) <= empty_friend_score:
 		return _fail("huanfa_ai_friend_with_playable_card")
 	# 冥谶静态AI；选择自身会保留同回合再次失去最后手牌后的发动空间，选择敌方会使技能失效至回合结束。
 	_reset_state(3)
@@ -2140,7 +2150,7 @@ func _test_hsr_character_metadata_and_rule_catalog() -> bool:
 		"xianzou":"每个主要阶段开始时，你可以重铸一张手牌并跳过该阶段，若为弃牌阶段，你将手牌数调整至X。每轮每种花色限一次。（X等于你的当前体力值。）",
 		"anke":"回合结束时，若本回合内有四种花色的牌进入过弃牌堆，你可执行一个额外的回合。每轮限三次。",
 		"youfeng":"离场技，锁定技，每轮开始时，你弃置一名其他角色的一张牌并令其获得“猎物”标记，然后若你未处于离场状态，你离场；若你已处于离场状态，你失去1点体力。",
-		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸两张牌并返场。",
+		"lvexi":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸一张牌并返场。",
 		"yingchu":"离场技，锁定技，当你上家的回合结束时，若你处于离场状态，你返场；该回合结束时，你再次离场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
@@ -2736,14 +2746,13 @@ func _test_moze_marks_and_out_of_game_skills() -> bool:
 	_controller.damage(3, 2, 1, "normal", "")
 	if moze_player.out_of_game or _controller.state.get_player(2).hp != hunt_hp_before_damage - 2:
 		return _fail("lvexi_follow_up owner_out=%s hp=%d/%d" % [moze_player.out_of_game, _controller.state.get_player(2).hp, hunt_hp_before_damage])
-	# 猎物死亡收益；离场中的貊泽可以先摸2张牌再返场，死亡目标的猎物标记随之清理。
+	# 猎物死亡收益；离场中的貊泽可以先摸1张牌再返场，死亡目标的猎物标记随之清理。
 	_controller.remove_player_from_game(0, "moze_test")
 	var death_draw_one: CardInstance = _add_draw_pile_card("shan", "diamond", 10)
-	var death_draw_two: CardInstance = _add_draw_pile_card("tao", "heart", 11)
 	_controller.state.get_player(2).alive = false
 	var hand_count_before_death_reward: int = moze_player.hand.size()
 	_controller._emit_rule_timing("dieAfter", 2, 3, 2, {"death_event_id":901})
-	if moze_player.out_of_game or moze_player.hand.size() != hand_count_before_death_reward + 2 or not moze_player.hand.has(death_draw_one) or not moze_player.hand.has(death_draw_two) or not _controller.get_player_mark(2, "liewu").is_empty():
+	if moze_player.out_of_game or moze_player.hand.size() != hand_count_before_death_reward + 1 or not moze_player.hand.has(death_draw_one) or not _controller.get_player_mark(2, "liewu").is_empty():
 		return _fail("lvexi_death_reward out=%s hand=%d/%d mark=%s" % [moze_player.out_of_game, moze_player.hand.size(), hand_count_before_death_reward, _controller.get_player_mark(2, "liewu")])
 
 	# 影出与上家；四号位离场后，貊泽的有效上家应跳过四号位并取三号位。
