@@ -24,11 +24,13 @@ func _run() -> void:
 		return
 	if not _test_shihun_retaliation_beyond_attack_range():
 		return
+	if not _test_shihun_retaliation_ignores_dead_target():
+		return
 	if not _test_lethal_self_harm_ai_veto():
 		return
 	if not _test_lethal_incoming_slash_ai_veto():
 		return
-	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+ai_veto")
+	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+skip_dead_target+ai_veto")
 	get_tree().quit(0)
 
 
@@ -216,6 +218,39 @@ func _test_shihun_retaliation_beyond_attack_range() -> bool:
 	_controller.resume_settlement_pipeline()
 	if target.hp != 4 or shihun.get_reincarnation_section_index() != 0:
 		return _fail("shihun_far_target_section_two=%d/%s" % [target.hp, shihun.get_reincarnation_state()])
+	return true
+
+
+## 校验【弑魂】②在①指定的一部分目标阵亡后，忽略该目标并对剩余目标使用火【杀】。
+## 回归目标：②原先要求整批目标同时合法，任一目标死亡就整节落到空节分支，
+## 玩家侧表现为“上次指定过两个人，其中一个死了，②就再也打不出反击”。
+func _test_shihun_retaliation_ignores_dead_target() -> bool:
+	_reset_state(4)
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "kaesilanna"
+	owner.max_hp = 5
+	owner.hp = 5
+	var shihun: SkillDefinition = _install_skill(0, "shihun")
+	# ①指定两名使用者；②的记录因此为[1, 2]，本次仅其中一名会失效。
+	if shihun == null or shihun.activate({"target_ids":[1, 2]}) != "":
+		return _fail("shihun_skip_dead_section_one_activate")
+	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
+	_controller.resume_settlement_pipeline()
+	if shihun.get_reincarnation_section_index() != 1:
+		return _fail("shihun_skip_dead_section_one=%s" % shihun.get_reincarnation_state())
+	# ①指定的2号使用者阵亡；②必须忽略它并继续对仍存活的1号反击。
+	_controller.state.get_player(2).alive = false
+	# 仍然存活的②目标；必须真实承受反击火【杀】的1点火焰伤害。
+	var live_target: PlayerState = _controller.state.get_player(1)
+	# 反击前体力；用于确认伤害确实来自②打出的火【杀】而不是其他结算。
+	var live_hp_before: int = live_target.hp
+	if not shihun.can_activate() or shihun.activate({}) != "":
+		return _fail("shihun_skip_dead_section_two_activate")
+	_controller.resume_settlement_pipeline()
+	if live_target.hp != live_hp_before - 1:
+		return _fail("shihun_skip_dead_section_two=%d/%d" % [live_target.hp, live_hp_before])
+	if shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
+		return _fail("shihun_skip_dead_advance=%s" % shihun.get_reincarnation_state())
 	return true
 
 
