@@ -9,6 +9,9 @@ const PLAY_PHASE_ONCE_TAG: String = "出牌阶段限一次"
 ## “轮回技”标签正文；只用于GameDatabase加载期校验正文类型声明与reincarnation标签是否一致，运行期判定一律读取标签。
 const REINCARNATION_TAG: String = "轮回技"
 
+## “欢愉技”标签正文；只用于GameDatabase加载期校验正文类型声明与joy_skill标签是否一致，运行期判定一律读取标签。
+const JOY_SKILL_TAG: String = "欢愉技"
+
 ## 技能正文中表达“提及而非声明”的成对引号字符；中英文单双引号与中文书名号式引号全部计入。
 const DESCRIPTION_QUOTE_CHARS: String = "“”‘’「」『』\"'"
 
@@ -55,6 +58,14 @@ var _intrinsic_used_count: int = 0
 
 ## 当前技能是否为轮回技；轮回进度由ReincarnationSkillService保存，不存放在本运行时实例中。
 var reincarnation: bool = false
+
+## 当前技能是否为欢愉技；true表示该技能由阿哈时刻按参演编号依次执行，不生成主动发动按钮。
+## 默认false，只有内容文件显式声明joy_skill标签才会成立，运行期不动态修改。
+var joy_skill: bool = false
+
+## 当前技能的参演编号；阿哈时刻按该值升序执行，编号相同时按当前回合位置起算的座次正序执行。
+## 非欢愉技固定为0；取值范围为非负整数，由内容文件显式声明，运行期不动态修改。
+var performance_number: int = 0
 
 ## 当前正在执行的触发时机回调；仅在统一订阅包装器调用期间有效，用于让“额外发动”重放同一技能入口。
 var _current_timing_callback: Callable = Callable()
@@ -109,6 +120,14 @@ func _init(metadata: Dictionary = {}) -> void:
 		_metadata["reincarnation_section_count"] = section_count
 		_metadata["reincarnation_has_explicit_sections"] = bool(_metadata.get("reincarnation_has_explicit_sections", _description_has_reincarnation_sections(description)))
 		_metadata["reincarnation_each_section_once_per_play_phase"] = bool(_metadata.get("reincarnation_each_section_once_per_play_phase", description.contains("出牌阶段每个轮回节限一次")))
+	# 欢愉技标签；与轮回技同一口径，只承认技能源码显式声明的元数据，不按正文推导。
+	# 理由：正文可能只是引用他人的欢愉技（例如“当一名角色的欢愉技执行时……”），按正文判定会把它误当成欢愉技；
+	# 全部欢愉技内容都必须写出该标签，标签与正文类型声明的一致性由GameDatabase加载校验保证。
+	joy_skill = bool(_metadata.get("joy_skill", false))
+	_metadata["joy_skill"] = joy_skill
+	# 参演编号；非欢愉技强制归零，负值收敛到0，避免内容笔误产生无法排序的负数排序键。
+	performance_number = maxi(int(_metadata.get("performance_number", 0)), 0) if joy_skill else 0
+	_metadata["performance_number"] = performance_number
 
 
 ## 返回技能元数据深拷贝，供武将引用校验、技能栏展示、网络与回放读取。
@@ -297,6 +316,23 @@ static func description_declares_reincarnation_type(description: String) -> bool
 	return right_char == "，" or right_char == "。" or right_char == ","
 
 
+## 判断技能正文是否在“类型段”把自己声明为欢愉技，即正文里第一次出现的“欢愉技”后面紧跟逗号或句号。
+## 本函数只服务GameDatabase加载期的一致性校验：运行期的欢愉技判定一律读取joy_skill标签，不读正文。
+## 判定口径与description_declares_reincarnation_type完全一致，避免项目出现第二套正文类型解析规则。
+static func description_declares_joy_type(description: String) -> bool:
+	if description.is_empty():
+		return false
+	# 正文中第一次出现欢愉技标签的位置；-1表示正文完全不含该标签。
+	var found_index: int = description.find(JOY_SKILL_TAG)
+	if found_index < 0:
+		return false
+	# 标签右邻字符；正文以标签结尾时为空字符串，此时不构成类型声明。
+	var right_index: int = found_index + JOY_SKILL_TAG.length()
+	var right_char: String = description.substr(right_index, 1) if right_index < description.length() else ""
+	# 句读标点集合；同时接受中文与半角逗号，兼容内容脚本可能出现的半角写法。
+	return right_char == "，" or right_char == "。" or right_char == ","
+
+
 ## 复原本技能在本出牌阶段的发动额度，使其视为本回合未发动过；返回是否确实复原了约定额度字段。
 ## 与 restore_limited_use 的区别：本入口只复原“出牌阶段限一次”，不改写限定次数、轮回进度、每回合次数与持续效果。
 ## 【奇袭】等内容通过“重置该技能阶段额度”表达原文“视为本回合未发动过此技能”。
@@ -386,6 +422,43 @@ func can_use_effect(locked_segment: bool = false) -> bool:
 	if owner == null or not owner.non_locked_skills_disabled:
 		return true
 	return lock or (half_locked and locked_segment)
+
+
+## 返回当前技能是否为欢愉技；阿哈时刻组件以此筛选参演技能，不读取正文。
+func is_joy_skill() -> bool:
+	return joy_skill
+
+
+## 返回当前技能的参演编号；非欢愉技返回0，调用方无需先做类型判断。
+func get_performance_number() -> int:
+	return performance_number
+
+
+## 无副作用判断当前欢愉技能否在本轮阿哈时刻执行。
+## 默认口径：技能为欢愉技、效果片段在当前失效状态下仍可用、持有者存活且未离场。
+func can_perform_joy_skill() -> bool:
+	if not joy_skill or not can_use_effect():
+		return false
+	# 未绑定权威端口时不做额外限制，保证数据库静态对象与独立内容测试可以直接调用本接口。
+	if host == null or host.get("state") == null:
+		return true
+	# 技能持有者权威状态；死亡或离场角色不参与阿哈时刻。
+	var owner: PlayerState = host.state.get_player(owner_player_id)
+	return owner != null and owner.alive and not owner.out_of_game
+
+
+## 欢愉技在阿哈时刻的执行入口；默认空实现，具体内容文件覆盖本函数。
+## 实现者必须在本技能全部效果（含嵌套结算）结束后调用finish_joy_skill_performance()，
+## 否则阿哈时刻队列会停在当前项，后续欢愉技不会执行。
+func perform_joy_skill(_context: Dictionary) -> void:
+	pass
+
+
+## 回报当前欢愉技已完整结束；内容文件在效果成立后调用，由阿哈时刻组件推进下一项参演技能。
+func finish_joy_skill_performance() -> void:
+	if host == null or not host.has_method("finish_joy_skill_performance"):
+		return
+	host.call("finish_joy_skill_performance", owner_player_id, get_id())
 
 
 ## 以技能持有者身份注册标准时机；role 决定匹配 player、source、target 或 global，成功返回稳定注册 ID。

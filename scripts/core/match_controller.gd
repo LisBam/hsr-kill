@@ -149,6 +149,7 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"conquest_enemy_defeat",
 	"conquest_enemy_replacement",
 	"opportunity_resolution",
+	"ahha_moment_resolution",
 ]
 
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
@@ -402,6 +403,9 @@ var card_use_event_service: CardUseEventService
 
 ## 可插拔机缘系统组件；负责全体三选一、私有候选、逆时针效果顺序与轮末保底触发。
 var opportunity_system: OpportunitySystem
+
+## 阿哈时刻系统组件；负责回合开始前的欢愉技触发判定、参演编号排序与串行演出推进。
+var ahha_moment_system: AhhaMomentSystem
 
 ## 对局停滞自修复看门狗组件；只通过控制器公开诊断与修复端口工作，检测阈值可在检查器中调整。
 var stall_watchdog: StallWatchdogService
@@ -682,6 +686,11 @@ func _ready() -> void:
 		opportunity_system = OpportunitySystem.new()
 		opportunity_system.name = "OpportunitySystem"
 		add_child(opportunity_system)
+	ahha_moment_system = get_node_or_null("AhhaMomentSystem") as AhhaMomentSystem
+	if ahha_moment_system == null:
+		ahha_moment_system = AhhaMomentSystem.new()
+		ahha_moment_system.name = "AhhaMomentSystem"
+		add_child(ahha_moment_system)
 	gameplay_pause_service = get_node_or_null("GameplayPauseService") as GameplayPauseService
 	if gameplay_pause_service == null:
 		gameplay_pause_service = GameplayPauseService.new()
@@ -1019,6 +1028,10 @@ func perform_stall_self_repair(repair_kind: String) -> Dictionary:
 				if opportunity_chooser_id >= 0 and not _is_answerable_human_actor(opportunity_chooser_id):
 					if opportunity_system.choose_for_managed_player(opportunity_chooser_id):
 						actions.append("opportunity_forced_choice:%d" % opportunity_chooser_id)
+	# 软修复：阿哈时刻推进兜底；只在已经完成某个欢愉技、仅等待嵌套结算屏障时轻推，避免越过仍在等待响应的技能。
+	if ahha_moment_system != null and ahha_moment_system.is_waiting_for_barrier() and event_scheduler != null and event_scheduler.get_pending_choice_requests().is_empty() and not has_pending_card_choice():
+		ahha_moment_system.continue_after_barrier()
+		actions.append("nudge_ahha_moment_resolution")
 	if repair_kind == "hard":
 		# 第二级硬修复：释放不可能再被解决的孤儿暂停令牌。
 		var released_tokens: Array[String] = _release_orphan_runtime_pause_tokens()
@@ -1338,6 +1351,9 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	}
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode), opportunity_enabled_mode_ids.has(actual_mode))
+	if ahha_moment_system != null:
+		# 阿哈时刻对所有模式生效；场上没有可执行欢愉技时组件在判定第一行即返回，因此不会改变任何现有对局的流程。
+		ahha_moment_system.configure(self, state, _rng, true)
 	_rebuild_match_rule_services_and_root_event()
 	character_selection = CharacterSelectionService.new()
 	wheel_duel_selection = WheelDuelSelectionService.new() if actual_mode == IdentityRules.MODE_WHEEL_DUEL else null
@@ -1409,6 +1425,8 @@ func _teardown_previous_match_runtime() -> void:
 	_cancel_conquest_replacement_opportunity_preview()
 	if opportunity_system != null:
 		opportunity_system.shutdown()
+	if ahha_moment_system != null:
+		ahha_moment_system.shutdown()
 	if conquest_mode != null:
 		conquest_mode.reset()
 	_uninstall_all_character_skills()
@@ -1524,6 +1542,8 @@ func _discard_failed_match_start() -> void:
 	_conquest_temporary_exit_requested = false
 	if opportunity_system != null:
 		opportunity_system.shutdown()
+	if ahha_moment_system != null:
+		ahha_moment_system.shutdown()
 	_uninstall_all_character_skills()
 	_uninstall_all_card_runtimes()
 	if event_scheduler != null:
@@ -10601,10 +10621,8 @@ func _start_turn(player_id: int) -> void:
 		state.round_number += 1
 	# 回合开始前机缘判定；此时上一回合已完整结束，本角色尚未产生任何回合事实。
 	# 触发通过时本函数立即返回，由 continue_after_opportunity 在机缘全部结算后回调 _begin_turn_after_opportunity。
-	var turn_start_context: Dictionary = {"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round}
-	if opportunity_system != null and opportunity_system.try_trigger_before_turn_start(turn_start_context, _current_turn_is_extra):
-		return
-	_begin_turn_after_opportunity(player_id, starts_new_round)
+	# 阿哈时刻紧随机缘之后判定：两者共用同一条回合开始前事件链，机缘结算完毕后仍会回到该链继续判定阿哈时刻。
+	_continue_turn_start_prelude(player_id, starts_new_round, true, true)
 
 
 ## 建立该角色的回合事实并推进回合开始游标；回合开始前的机缘已经结束或未触发后调用。
@@ -10623,6 +10641,42 @@ func _begin_turn_after_opportunity(player_id: int, starts_new_round: bool) -> vo
 	# 回合开始恢复上下文；回合内容组件据此在轮开始、准备阶段之间保持稳定游标，且不重复递增轮数或回合数。
 	var turn_start_context: Dictionary = {"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round}
 	_continue_turn_start(turn_start_context)
+
+
+## 回合开始前的统一事件链：机缘选择判定 → 阿哈时刻判定 → 建立回合事实。
+## 两个环节的先后顺序固定：机缘在前、阿哈时刻在后，与“阿哈时刻模仿机缘选择的触发时机”的需求口径一致。
+## allow_opportunity 与 allow_ahha 用于区分“首次进入回合开始”与“某个环节结算后恢复”，避免同一环节被重复判定。
+## 该链在任一步创建选择或演出后立即返回，由对应组件的恢复入口带着同一角色与本轮轮边界结论重新进入。
+func _continue_turn_start_prelude(player_id: int, starts_new_round: bool, allow_opportunity: bool, allow_ahha: bool) -> void:
+	if state == null or state.game_over:
+		return
+	# 待开始角色状态；前一个环节的效果可能已经令其死亡或离场，此时不再建立任何回合事实。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return
+	# 回合开始前上下文；两个环节共用同一份可序列化描述，恢复时由控制器按原角色重新组装。
+	var turn_start_context: Dictionary = {"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round}
+	if allow_opportunity and opportunity_system != null and opportunity_system.try_trigger_before_turn_start(turn_start_context, _current_turn_is_extra):
+		return
+	if allow_ahha and ahha_moment_system != null and ahha_moment_system.try_trigger_before_turn_start(turn_start_context, _current_turn_is_extra):
+		return
+	_begin_turn_after_opportunity(player_id, starts_new_round)
+
+
+## 在阿哈时刻全部欢愉技依次演出结束后恢复回合开始；组件不保存Callable或调用控制器私有游标。
+## 演出期间的伤害与结算可能已经改变该角色的存活状态与额外回合队列，因此恢复前必须重新校验。
+func continue_after_ahha_moment(player_id: int, starts_new_round: bool) -> void:
+	if state == null or state.game_over:
+		return
+	# 原定角色状态；演出效果可能已经令其死亡或离场，此时不再开始其回合。
+	var pending_player: PlayerState = state.get_player(player_id)
+	if pending_player == null or not pending_player.alive or pending_player.out_of_game:
+		_start_queued_or_normal_turn(state.current_player_id)
+		return
+	# 演出期间获得的额外回合在回合开始前立即执行；全部完成后才建立原定角色的回合事实。
+	if _resume_pending_turn_after_extra_turns(player_id, starts_new_round):
+		return
+	_begin_turn_after_opportunity(player_id, starts_new_round)
 
 
 ## 判断指定角色的本次回合是否会开启新的一轮；额外回合不得开启新轮，也不得递增 round_number。
@@ -11103,6 +11157,22 @@ func defer_opportunity_resolution() -> bool:
 	return continuation_id >= 0
 
 
+## 为阿哈时刻登记嵌套结算后的稳定恢复点；上下文由阿哈时刻组件自身保存，通用栈只记录恢复类型。
+func defer_ahha_moment_resolution() -> bool:
+	# 新续接记录ID；负数表示队列拒绝异常上下文。
+	var continuation_id: int = _defer_rule_continuation("ahha_moment_resolution", {})
+	if continuation_id >= 0 and not has_pending_card_choice():
+		_schedule_settlement_pipeline_resume()
+	return continuation_id >= 0
+
+
+## 转发欢愉技的演出结束回报；内容文件只调用技能基类入口，由基类经本方法回到阿哈时刻队列。
+func finish_joy_skill_performance(player_id: int, skill_id: String) -> bool:
+	if ahha_moment_system == null:
+		return false
+	return ahha_moment_system.finish_joy_skill_performance(player_id, skill_id)
+
+
 ## 在机缘即将执行可能产生嵌套选择的动作前预登记外层恢复点；返回ID供同步完成时撤销。
 func begin_opportunity_resolution_guard() -> int:
 	return _defer_rule_continuation("opportunity_resolution", {})
@@ -11296,7 +11366,7 @@ func _resume_next_rule_continuation() -> void:
 		"slash_flow":
 			_continue_slash_flow_after_barrier(context)
 		"recast_draw":
-			draw(int(context.get("player_id", -1)), 1)
+			draw(int(context.get("player_id", -1)), int(context.get("count", 1)))
 		"current_player_death":
 			if state.turn_number == int(context.get("turn_number", -1)):
 				_advance_after_current_player_death(int(context.get("player_id", -1)), int(context.get("generation", -1)))
@@ -11309,6 +11379,9 @@ func _resume_next_rule_continuation() -> void:
 		"opportunity_resolution":
 			if opportunity_system != null:
 				opportunity_system.continue_after_barrier()
+		"ahha_moment_resolution":
+			if ahha_moment_system != null:
+				ahha_moment_system.continue_after_barrier()
 		_:
 			_record_settlement_fault("unknown_rule_continuation_type", {"continuation_type":continuation_type})
 	_active_rule_continuation_key = ""
@@ -11343,8 +11416,11 @@ func _run_settlement_pipeline_pass() -> void:
 		return
 	# 换将过渡期唯一放行的续接：机缘效果嵌套选择结束后，栈顶的机缘续接必须弹出，否则换将完成回调永远不可达。
 	# 其余旧回合续接（斩杀连锁、伤害尾部等）仍等待换将边界完成后按正常门控恢复，不在过渡期越界执行。
+	# 阿哈时刻续接与机缘续接同一性质：它同样在等待嵌套结算结束，不放行会让回合开始流程永久停在换将边界。
 	if _conquest_replacement_transition_active:
-		if not has_pending_card_choice() and _rule_continuations.has_pending() and str(_rule_continuations.peek().get("continuation_type", "")) == "opportunity_resolution":
+		# 过渡期可放行的续接类型；只包含回合开始前事件链上的两个组件，不含其他旧回合续接。
+		var transition_resumable_types: Array[String] = ["opportunity_resolution", "ahha_moment_resolution"]
+		if not has_pending_card_choice() and _rule_continuations.has_pending() and transition_resumable_types.has(str(_rule_continuations.peek().get("continuation_type", ""))):
 			_resume_next_rule_continuation()
 		return
 	if has_pending_card_choice():
@@ -12713,30 +12789,60 @@ func _execute_recast(actor_id: int, card_uid: int) -> bool:
 
 ## 令指定角色重铸一张普通手牌；技能可重铸任意手牌，卡牌自身主动重铸仍由 _execute_recast 预先检查 recast 元数据。
 func recast_hand_card(player_id: int, card_uid: int) -> bool:
+	# 单张重铸包装；显式构造类型化数组，避免无类型字面量在类型化参数上产生隐式转换。
+	var card_uids: Array[int] = [card_uid]
+	return _recast_hand_cards_common(player_id, card_uids, true) > 0
+
+
+## 令指定角色一次重铸多张普通手牌：先把全部牌置入弃牌堆，再按实际重铸张数一次性补摸等量的牌。
+## 与逐张调用 recast_hand_card 的差别有两点：补摸是一次等量完成；日志只写一条“重铸了N张牌”。
+## 返回实际完成重铸的张数；无效角色或不在手牌中的项被跳过，全部无效时返回0。技能据此判断“本次重铸是否真的发生”。
+func recast_hand_cards(player_id: int, card_uids: Array[int]) -> int:
+	return _recast_hand_cards_common(player_id, card_uids, false)
+
+
+## 重铸的统一实现；single_card_log 为 true 时保持单张重铸既有的日志文本、返回值与补摸语义逐字不变。
+## 参数 card_uids 允许重复：同一实体在第一次移动后已不再是手牌，重复项自然被跳过，不会重复补摸。
+func _recast_hand_cards_common(player_id: int, card_uids: Array[int], single_card_log: bool) -> int:
 	if state == null or state.game_over:
-		return false
+		return 0
 	# 重铸角色；死亡、离场或不存在的角色不能移动手牌或获得补牌。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or player.out_of_game:
-		return false
-	# 被重铸实体；只接受普通手牌区，木牛“粮”、装备和判定牌均不会被 find_hand_card 返回。
-	var card: CardInstance = player.find_hand_card(card_uid)
-	if card == null:
-		return false
-	# 卡牌显示定义；日志名称遵循当前三国杀/崩铁名称设置，不暴露实体 UID。
-	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	player.take_hand_card(card.uid)
-	# 重铸不是“弃置”：该牌只是被置入弃牌堆，不构成一次弃置牌动作，也不派发 cardsDiscardedBatchAfter，
-	# 因此不会触发【泛音】等“当你弃置牌时”类效果，也不会额外写一条“弃置了”日志；
-	# 同一张牌同样不算“使用”或“打出”，所以这里不派发 useCard/respond，也不进入处理区。
-	_move_to_discard(card, -2, false)
-	add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_card_name(definition)])
-	# 重铸牌离开最后手牌时产生的技能或装备触发必须先完整结算，随后再执行固定摸1张牌。
+		return 0
+	# 实际完成重铸的实体张数；只有真正从手牌移出的牌才计入补摸数量。
+	var recast_count: int = 0
+	# 已处理实体UID；同一批中的重复项只处理一次。
+	var processed_uids: Dictionary = {}
+	for card_uid: int in card_uids:
+		if processed_uids.has(card_uid):
+			continue
+		processed_uids[card_uid] = true
+		# 被重铸实体；只接受普通手牌区，木牛“粮”、装备和判定牌均不会被 find_hand_card 返回。
+		var card: CardInstance = player.find_hand_card(card_uid)
+		if card == null:
+			continue
+		# 卡牌显示定义；日志名称遵循当前三国杀/崩铁名称设置，不暴露实体 UID。
+		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+		player.take_hand_card(card.uid)
+		# 重铸不是“弃置”：该牌只是被置入弃牌堆，不构成一次弃置牌动作，也不派发 cardsDiscardedBatchAfter，
+		# 因此不会触发【泛音】等“当你弃置牌时”类效果，也不会额外写一条“弃置了”日志；
+		# 同一张牌同样不算“使用”或“打出”，所以这里不派发 useCard/respond，也不进入处理区。
+		_move_to_discard(card, -2, false)
+		if single_card_log:
+			add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_card_name(definition)])
+		recast_count += 1
+	if recast_count <= 0:
+		return 0
+	if not single_card_log:
+		add_log("%s重铸了%d张牌。" % [format_player_state_log_name(player), recast_count])
+	# 重铸牌离开最后手牌时产生的技能或装备触发必须先完整结算，随后再执行固定补摸。
+	# 多张重铸同样先完成全部移牌再补摸，因此补摸张数随续接上下文传递，屏障清空后一次摸足。
 	if _has_nested_settlement_barrier():
-		_defer_rule_continuation("recast_draw", {"player_id":player_id})
-		return true
-	draw(player_id, 1)
-	return true
+		_defer_rule_continuation("recast_draw", {"player_id":player_id, "count":recast_count})
+		return recast_count
+	draw(player_id, recast_count)
+	return recast_count
 
 
 ## 结束出牌阶段；超过手牌上限时由当前角色自主选择足量手牌弃置。
@@ -13034,7 +13140,8 @@ func _start_queued_or_normal_turn(finished_player_id: int) -> void:
 			var pending_player_id: int = int(pending_context.get("player_id", -1))
 			var pending_player: PlayerState = state.get_player(pending_player_id) if pending_player_id >= 0 else null
 			if pending_player != null and pending_player.alive and not pending_player.out_of_game:
-				_begin_turn_after_opportunity(pending_player_id, bool(pending_context.get("starts_new_round", false)))
+				# 机缘排队期间的额外回合链已经结束；机缘不再重复判定，但仍需给阿哈时刻一次判定机会。
+				_continue_turn_start_prelude(pending_player_id, bool(pending_context.get("starts_new_round", false)), false, true)
 				return
 		var resume_player: PlayerState = state.get_player(resume_player_id) if resume_player_id >= 0 else null
 		if resume_player == null or not resume_player.alive or resume_player.out_of_game:
@@ -13085,7 +13192,8 @@ func continue_after_opportunity(resume_kind: String, context: Dictionary) -> voi
 		var starts_new_round: bool = bool(context.get("starts_new_round", false))
 		if _resume_pending_turn_after_extra_turns(pending_player_id, starts_new_round):
 			return
-		_begin_turn_after_opportunity(pending_player_id, starts_new_round)
+		# 机缘已经结算完毕，同一条回合开始前事件链继续判定阿哈时刻；此处不得重复判定机缘。
+		_continue_turn_start_prelude(pending_player_id, starts_new_round, false, true)
 		return
 	if resume_kind == "round_end":
 		# 完成轮末机缘的原回合角色；必须仍是当前结束阶段角色，旧流程恢复请求才有效。
