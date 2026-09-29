@@ -67,8 +67,8 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 		host.refresh_public_state_snapshot()
 	# 当前实体【杀】属性；允许 normal、fire 或 thunder。
 	var nature: String = str(GameDatabase.get_card(card.definition_id).get("nature", "normal"))
-	# 当前武器定义；锁定效果通过源码钩子声明是否忽略防具。
-	var weapon_definition: CardDefinition = host.get_equipment_definition(actor_id, "weapon")
+	# 当前武器定义；锁定效果通过源码钩子声明是否忽略防具。使用者阵亡后有效来源为-1，装备查询自然返回空。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(resolver.effective_source_id(actor_id), "weapon")
 	# 整张【杀】共享的无视防具状态；多目标结算期间保持不变。
 	var ignore_armor: bool = weapon_definition != null and weapon_definition.slash_ignores_armor()
 	for target_id: int in target_ids:
@@ -88,12 +88,16 @@ func resolve_target(card: CardInstance, actor_id: int, target_id: int, damage_am
 func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, damage_amount: int, nature: String, ignore_armor: bool, resolution_parent_card_uid: int = -1) -> void:
 	if resolver.is_resolution_stopped():
 		return
-	# 攻击者状态；不存在或死亡时不能继续发动武器。
+	# 攻击者状态；对象缺失或已经离场时不能继续发动武器，仍保持原有的中止语义。
 	var actor: PlayerState = state.get_player(actor_id)
 	# 目标状态；死亡或离场目标直接跳过本次结算。
 	var target: PlayerState = state.get_player(target_id)
-	if actor == null or not actor.alive or actor.out_of_game or target == null or not target.alive or target.out_of_game:
+	# 使用者阵亡不再中止【杀】：牌在使用声明时已经成立，仍按“无来源”完整结算当前目标的防具、【闪】与伤害流程；
+	# 只有使用者本身已不存在或已离场时才保持原中止语义，避免对不存在的事件来源继续派发时机。
+	if actor == null or actor.out_of_game or target == null or not target.alive or target.out_of_game:
 		return
+	# 本次【杀】的有效来源；使用者阵亡后为-1，武器钩子、shaDamage 时机与最终伤害都按无来源处理。
+	var source_id: int = resolver.effective_source_id(actor_id)
 	# 通用【杀】上下文；只保存可序列化字段，异步恢复时重新查询实体与装备。
 	# 当前使用牌对本目标的技能伤害加值；多目标【杀】按目标独立读取，不污染其他目标基础伤害。
 	var parent_card_uid: int = card.uid if resolution_parent_card_uid < 0 else resolution_parent_card_uid
@@ -106,6 +110,7 @@ func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, 
 		"slash_card_definition_id":card.definition_id,
 		"damage_card_target_count":maxi(slash_target_count, 1),
 		"actor_id":actor_id,
+		"source_id":source_id,
 		"target_id":target_id,
 		"base_damage_amount":maxi(damage_amount, 0),
 		"applied_target_damage_bonus":target_damage_bonus,
@@ -115,8 +120,8 @@ func resolve_external_target(card: CardInstance, actor_id: int, target_id: int, 
 	}
 	# 虚拟牌扩展存储；【山倾】等多材料【杀】通过该纯数据字段把花色效果传入伤害与目标时机。
 	context["virtual_storage"] = (host.call("get_card_virtual_storage", parent_card_uid) as Dictionary).duplicate(true) if host.has_method("get_card_virtual_storage") else {}
-	# 当前武器定义；每件武器自行判断是否在“指定目标后”接管流程。
-	var weapon_definition: CardDefinition = host.get_equipment_definition(actor_id, "weapon")
+	# 当前武器定义；每件武器自行判断是否在“指定目标后”接管流程。使用者阵亡后装备已随死亡弃置，因此自然不再触发武器效果。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(source_id, "weapon")
 	if state.processing_area.has(card) and weapon_definition != null and weapon_definition.on_slash_targeted(self, context):
 		return
 	continue_after_weapon_targeted(context)
@@ -131,7 +136,8 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 	if card == null or target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	# 当前攻击者武器；目标结算开始时再次读取，确保借刀【杀】与异步恢复都能正确应用青釭剑的无视防具能力。
-	var current_weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	# 使用者阵亡后本次【杀】的有效来源为-1，装备查询自然返回空，防具判定按无武器状态继续。
+	var current_weapon_definition: CardDefinition = host.get_equipment_definition(_context_source_id(context), "weapon")
 	if current_weapon_definition != null and current_weapon_definition.slash_ignores_armor():
 		context["ignore_armor"] = true
 	if not bool(context.get("ignore_armor", false)):
@@ -140,7 +146,7 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 		if armor_definition != null and armor_definition.blocks_slash(card, str(context.get("nature", "normal"))):
 			host.record_equipment_activation(target.player_id, armor_definition.get_id())
 			host.add_log("%s的防具令此【杀】无效。" % target.display_name)
-			host.emit_rule_timing("shaCancelled", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
+			host.emit_rule_timing("shaCancelled", _context_source_id(context), _context_source_id(context), target.player_id, context)
 			return
 	if host.has_method("is_card_target_direct_hit") and bool(host.is_card_target_direct_hit(int(context.get("parent_card_uid", -1)), target.player_id)):
 		_finish_slash_response(context, false)
@@ -165,13 +171,14 @@ func _finish_slash_response(context: Dictionary, dodged: bool) -> void:
 	var actor: PlayerState = state.get_player(int(context.get("actor_id", -1)))
 	# 目标状态；响应插入结算可能已经改变其存活状态。
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
-	if actor == null or not actor.alive or actor.out_of_game or target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
+	# 使用者阵亡不再中止后续武器与伤害流程；只有使用者对象缺失、已经离场或目标不再有效时才停止。
+	if actor == null or actor.out_of_game or target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	# 武器阶段上下文；dodged 可由贯石斧等装备在支付费用后改写。
 	var weapon_context: Dictionary = context.duplicate(true)
 	weapon_context["dodged"] = dodged
-	# 当前武器定义；装备文件自行决定是否暂停或替换后续流程。
-	var weapon_definition: CardDefinition = host.get_equipment_definition(actor.player_id, "weapon")
+	# 当前武器定义；装备文件自行决定是否暂停或替换后续流程。使用者阵亡后装备已弃置，因此不会触发武器效果。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(_context_source_id(context), "weapon")
 	if weapon_definition != null and weapon_definition.on_slash_dodged(self, weapon_context):
 		return
 	continue_after_weapon_dodged(weapon_context)
@@ -184,13 +191,14 @@ func continue_after_weapon_dodged(context: Dictionary) -> void:
 	if target == null or not target.alive or target.out_of_game or resolver.is_resolution_stopped():
 		return
 	if bool(context.get("dodged", false)):
-		host.emit_rule_timing("shaMiss", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
+		# 时机来源统一使用本次【杀】的有效来源；使用者阵亡后为-1，不影响【闪】本身的抵消事实。
+		host.emit_rule_timing("shaMiss", _context_source_id(context), _context_source_id(context), target.player_id, context)
 		# 文案固定使用“使用【闪】”：这是【闪】唯一合法的动作类别，日志不能把它写成“打出”。
 		host.add_log("%s使用了【闪】抵消了【杀】。" % target.display_name)
 		return
-	host.emit_rule_timing("shaHit", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
-	# 当前武器定义；寒冰剑等替代伤害效果在自身文件接管。
-	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	host.emit_rule_timing("shaHit", _context_source_id(context), _context_source_id(context), target.player_id, context)
+	# 当前武器定义；寒冰剑等替代伤害效果在自身文件接管。使用者阵亡后有效来源为-1，武器效果整体跳过。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(_context_source_id(context), "weapon")
 	if weapon_definition != null and weapon_definition.on_slash_before_damage(self, context):
 		return
 	continue_slash_damage(context)
@@ -214,7 +222,9 @@ func continue_slash_damage(context: Dictionary) -> void:
 	if card == null or resolver.is_resolution_stopped():
 		return
 	# 【杀】造成伤害前专属时机；取消或中立化时本次目标不进入通用伤害流程。
-	var damage_timing: RuleEvent = host.emit_rule_timing("shaDamage", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), int(context.get("target_id", -1)), context)
+	# 时机来源使用本次【杀】的有效来源：使用者阵亡后为-1，以来源身份为前提的技能不会再把死者的【杀】算作自己造成伤害。
+	var damage_source_id: int = _context_source_id(context)
+	var damage_timing: RuleEvent = host.emit_rule_timing("shaDamage", damage_source_id, damage_source_id, int(context.get("target_id", -1)), context)
 	if damage_timing != null and (damage_timing.cancelled or damage_timing.neutralized):
 		return
 	# 判定、选牌等可选技能必须在真正扣减体力前完成；恢复时会重新读取本目标最新技能伤害加值。
@@ -238,15 +248,19 @@ func continue_after_sha_damage(context: Dictionary) -> void:
 	context["applied_target_damage_bonus"] = current_target_damage_bonus
 	# 实际造成伤害的逻辑牌目标数；普通多目标【杀】保留整张牌的目标数，外部生成的单目标【杀】保持1。
 	context["damage_card_target_count"] = maxi(int(context.get("damage_card_target_count", 1)), 1)
-	host.damage(int(context.get("actor_id", -1)), int(context.get("target_id", -1)), final_damage_amount, str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), context)
+	# 伤害来源；使用者阵亡后为-1，本次伤害成为无来源伤害，不再计入阵亡角色的统计与击杀归属。
+	# card_user_id 仍保留原使用者：牌的使用事实不因来源阵亡而改变，只有伤害归属被清空。
+	var damage_context: Dictionary = context.duplicate(true)
+	damage_context["card_user_id"] = int(context.get("actor_id", -1))
+	host.damage(_context_source_id(context), int(context.get("target_id", -1)), final_damage_amount, str(context.get("nature", "normal")), card.definition_id, false, bool(context.get("ignore_armor", false)), damage_context)
 	if resolver.is_resolution_stopped():
 		return
 	# 伤害后的目标状态；死亡目标不再执行任何伤害后装备效果。
 	var target: PlayerState = state.get_player(int(context.get("target_id", -1)))
 	if target == null or not target.alive:
 		return
-	# 当前武器定义；伤害后的选择和处理全部由装备文件拥有。
-	var weapon_definition: CardDefinition = host.get_equipment_definition(int(context.get("actor_id", -1)), "weapon")
+	# 当前武器定义；伤害后的选择和处理全部由装备文件拥有。使用者阵亡后有效来源为-1，武器效果整体跳过。
+	var weapon_definition: CardDefinition = host.get_equipment_definition(_context_source_id(context), "weapon")
 	if weapon_definition != null and not weapon_definition.uses_damage_timing_trigger():
 		weapon_definition.on_slash_damage_finished(self, context)
 
@@ -272,6 +286,11 @@ func continue_choice(context: Dictionary, selected_uids: Array[int]) -> bool:
 	# 创建选择的装备定义；旧请求由装备文件自行复核实体 UID 与当前状态。
 	var equipment_definition: CardDefinition = GameDatabase.get_card_definition(equipment_definition_id)
 	return equipment_definition != null and equipment_definition.continue_slash_choice(self, context, selected_uids)
+
+
+## 返回本次【杀】上下文中的有效来源ID；使用者阵亡后由创建上下文时写入-1，缺失时回退到使用者ID。
+func _context_source_id(context: Dictionary) -> int:
+	return int(context.get("source_id", context.get("actor_id", -1)))
 
 
 ## 按稳定 UID 查找任意权威区域中的实体牌；异步【杀】可能已经作为响应牌进入弃牌堆。

@@ -4,6 +4,8 @@ extends CardDefinition
 
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
+## requires_actor_choice=true：目标展示手牌后必须由使用者本人决定是否弃置一张同花色手牌，
+## 使用者在结算前阵亡后无法代理该选择，本牌整体失效，展示与火焰伤害都不再发生。
 func _init() -> void:
 	super({
 		"id": "huogong",
@@ -24,6 +26,7 @@ func _init() -> void:
 		"description": "目标展示一张手牌，你可弃置一张同花色手牌并对其造成1点火焰伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
+		"requires_actor_choice": true,
 		"provided_response_pattern": "",
 		"ai": {"order":9.2, "value":[3.0, 1.0], "target_result":-1.15, "damage":true, "fire_damage":true, "nature_damage":true},
 		"ai_target_attitude": "hostile",
@@ -68,7 +71,8 @@ func _apply_shown_card(resolver: Object, context: Dictionary, shown_card_uid: in
 		return
 	# 火攻使用者状态；用于筛选同花色普通手牌。
 	var actor: PlayerState = resolver.state.get_player(actor_id)
-	if actor == null:
+	# 使用者在展示等待期间阵亡时本牌已经整体失效；不再创建弃牌询问，也不会造成火焰伤害。
+	if actor == null or not actor.alive:
 		return
 	# 同花色弃牌候选；木牛“粮”和装备不能作为火攻费用。
 	var discard_candidates: Array[Dictionary] = []
@@ -103,10 +107,15 @@ func _apply_discard(resolver: Object, context: Dictionary, selected_uids: Array[
 	if selected_uids.is_empty():
 		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
+	# 火攻使用者状态；等待弃牌选择期间阵亡时本牌已经整体失效，既不消费费用也不造成伤害。
+	var actor: PlayerState = resolver.state.get_player(actor_id)
+	if actor == null or not actor.alive:
+		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
+		return
 	# 火攻使用者 ID；所选费用必须仍位于其普通手牌区。
 	# 使用者ID已在失败目标记录前读取；此处继续用于查询实体费用牌。
 	# 当前所选手牌；等待期间移动或花色不符时支付失败。
-	var selected_card: CardInstance = resolver.state.get_player(actor_id).find_hand_card(selected_uids[0]) if resolver.state.get_player(actor_id) != null else null
+	var selected_card: CardInstance = actor.find_hand_card(selected_uids[0])
 	if selected_card == null or selected_card.suit != str(context.get("suit", "")):
 		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
