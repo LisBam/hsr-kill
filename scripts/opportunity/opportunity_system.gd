@@ -63,7 +63,7 @@ var _selection_queue: Array[int] = []
 ## 已选择机缘卡映射；键为角色ID字符串，值为完整静态卡定义副本，供后续逆时针结算。
 var _selected_cards_by_player: Dictionary = {}
 
-## 尚未结算机缘效果的角色队列；固定从触发时当前回合角色开始逆时针执行。
+## 尚未结算机缘效果的角色队列；固定从触发角色（即将开始回合的那名角色）开始逆时针执行。
 var _resolution_queue: Array[int] = []
 
 ## 当前正在结算机缘效果的角色ID；默认-1，异步目标选择期间保持稳定。
@@ -90,7 +90,7 @@ var _simultaneous_ai_vote_submission_scheduled: bool = false
 ## 当前投票公开阶段的生命周期代号；新流程与关闭组件都会递增，使旧计时器回调不能推进已经失效的机缘状态。
 var _vote_reveal_generation: int = 0
 
-## 机缘流程完成后的恢复类型；turn_start恢复回合开始游标，round_end恢复轮末到下一回合的阶段切换。
+## 机缘流程完成后的恢复类型；before_turn_start恢复尚未开始回合的角色，round_end恢复轮末到下一回合的阶段切换。
 var _resume_kind: String = ""
 
 ## 机缘流程完成后的可序列化恢复上下文；不保存Callable、节点或PlayerState引用。
@@ -159,8 +159,10 @@ func is_active() -> bool:
 	return _enabled and _state != null and not _state.opportunity_state.is_empty()
 
 
-## 在普通回合开始入口尝试触发机缘；返回true表示回合游标必须等待本次机缘完整结束。
-func try_trigger_at_turn_start(turn_context: Dictionary, is_extra_turn: bool) -> bool:
+## 在普通回合开始之前尝试触发机缘；返回true表示该角色的回合事实必须等待本次机缘完整结束。
+## 本入口位于回合事实之前：控制器调用时尚未把 current_player_id、turn_number 与回合开始初始化
+## 推进到该角色，因此本次机缘在规则上不处于任何角色的回合，该角色也尚未开始回合。
+func try_trigger_before_turn_start(turn_context: Dictionary, is_extra_turn: bool) -> bool:
 	if not _automatic_triggers_enabled or not _can_trigger_now() or is_extra_turn:
 		return false
 	# 当前轮数；控制器已在调用前完成新轮递增，因此首名角色与后续角色读取同一稳定值。
@@ -174,7 +176,7 @@ func try_trigger_at_turn_start(turn_context: Dictionary, is_extra_turn: bool) ->
 	_state.random_history.append({"kind":"opportunity_trigger_roll", "round_number":current_round_number, "player_id":int(turn_context.get("player_id", -1)), "probability":_round_trigger_probability, "roll":trigger_roll})
 	if trigger_roll >= _round_trigger_probability:
 		return false
-	_begin_trigger(int(turn_context.get("player_id", -1)), false, "turn_start", turn_context)
+	_begin_trigger(int(turn_context.get("player_id", -1)), false, "before_turn_start", turn_context)
 	return true
 
 
