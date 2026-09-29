@@ -12558,7 +12558,10 @@ func recast_hand_card(player_id: int, card_uid: int) -> bool:
 	# 卡牌显示定义；日志名称遵循当前三国杀/崩铁名称设置，不暴露实体 UID。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	player.take_hand_card(card.uid)
-	_move_to_discard(card)
+	# 重铸不是“弃置”：该牌只是被置入弃牌堆，不构成一次弃置牌动作，也不派发 cardsDiscardedBatchAfter，
+	# 因此不会触发【泛音】等“当你弃置牌时”类效果，也不会额外写一条“弃置了”日志；
+	# 同一张牌同样不算“使用”或“打出”，所以这里不派发 useCard/respond，也不进入处理区。
+	_move_to_discard(card, -2, false)
 	add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_card_name(definition)])
 	# 重铸牌离开最后手牌时产生的技能或装备触发必须先完整结算，随后再执行固定摸1张牌。
 	if _has_nested_settlement_barrier():
@@ -14079,7 +14082,10 @@ func _end_discard_batch() -> void:
 
 ## 将闪电移至下一角色时、装备效果与其他规则共用的弃牌移动基础操作。
 ## related_event_id 为-2时沿用当前规则事件；显式传入父事件可把 cardsDiscard 关联到对应结算。
-func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
+## counts_as_discard_action 声明本次移牌是否构成一次“弃置牌”动作。
+## 重铸等规则只是把牌置入弃牌堆：必须传 false，否则会多写一条“弃置了”日志并派发 cardsDiscardedBatchAfter，
+## 使该牌被误判为“弃置”并错误触发【泛音】等“当你弃置牌时”类效果。
+func _move_to_discard(card: CardInstance, related_event_id: int = -2, counts_as_discard_action: bool = true) -> void:
 	if card == null:
 		return
 	_ensure_card_movement()
@@ -14089,10 +14095,12 @@ func _move_to_discard(card: CardInstance, related_event_id: int = -2) -> void:
 	var source_zone: String = card.zone
 	# 弃置前持有者；仅玩家区域弃置写入单牌日志，处理区弃置通常已有使用/打出日志。
 	var source_owner_id: int = card.owner_id
-	if source_owner_id >= 0 and source_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
+	# 单牌弃置日志；只有构成“弃置牌”动作的移动才写，重铸等置入弃牌堆的规则已有自己的公开日志。
+	if counts_as_discard_action and source_owner_id >= 0 and source_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
 		add_log("%s弃置了%s。" % [format_player_log_name(source_owner_id), format_card_log_name(card)])
 	# 弃置批次主体；只有手牌、装备与木牛“粮”的离场属于“弃置牌”，判定区与公共区域只是置入弃牌堆，不参与批次判定。
-	var batch_player_id: int = source_owner_id if source_owner_id >= 0 and source_zone in ["hand", "equipment", "wooden_ox"] else -1
+	# 被声明为非弃置动作的移动（如重铸）即使来源是手牌同样不参与批次判定。
+	var batch_player_id: int = source_owner_id if counts_as_discard_action and source_owner_id >= 0 and source_zone in ["hand", "equipment", "wooden_ox"] else -1
 	# 本次弃置是否自成一个批次；栈非空表示外层批量入口已经建立了更大的批次，此时只把本张计入该批次。
 	var owns_batch: bool = batch_player_id >= 0 and _discard_batch_stack.is_empty()
 	if owns_batch:
