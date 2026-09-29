@@ -40,7 +40,9 @@ func _run() -> void:
 		return
 	if not _test_slash_declares_use_and_skips_discard_effects():
 		return
-	print("CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1")
+	if not _test_bagua_red_judgment_declares_action():
+		return
+	print("CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1 bagua=red")
 	get_tree().quit(0)
 
 
@@ -143,6 +145,11 @@ func _test_action_resolution_contract() -> bool:
 	# 空模式集合没有可推导依据，必须回落到“打出”而不是空字符串。
 	if _controller.resolve_response_action({}, []) != MatchController.CARD_ACTION_PLAY:
 		return _fail("empty_patterns")
+	# 动态调用的类型上下文；内容层通常以 Object 形参持有控制器，此时 GDScript 无法为字面量数组推断元素类型，
+	# 运行时收到的是无类型 Array。此处显式复现该调用形态，防止核心端口再次把形参收紧为 Array[String] 而在玩家侧崩溃。
+	var dynamic_host: Object = _controller
+	if dynamic_host.resolve_response_action({}, ["shan"]) != MatchController.CARD_ACTION_PLAY:
+		return _fail("dynamic_literal_patterns")
 	return true
 
 
@@ -267,6 +274,43 @@ func _test_pending_context_action(expected_action: String) -> bool:
 	var context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 	if str(context.get("response_action", "")) != expected_action:
 		return _fail("pending_action=%s expected=%s" % [context.get("response_action", ""), expected_action])
+	return true
+
+
+## 校验【八卦阵】红色判定成功时，内容层能够直接调用核心动作解析端口并得到正确动词。
+## 该路径此前是测试盲区：既有用例全部使用黑色判定，会在构造虚拟【闪】之前提前返回，
+## 因此内容层那次「以字面量数组调用核心端口」的真实调用从未执行过，
+## 形参与实参的数组元素类型不匹配只能在玩家真正判定出红色时才以运行时错误的形式爆发。
+func _test_bagua_red_judgment_declares_action() -> bool:
+	_reset_state(2)
+	# 八卦阵内容层定义；直接取源码对象以调用其判定成功入口，不经过完整的询问与异步续接流程。
+	var bagua_definition: CardDefinition = GameDatabase.get_card_definition("bagua")
+	if bagua_definition == null:
+		return _fail("bagua_definition_missing")
+	# 响应者；八卦阵日志只读取显示名与存活状态，使用0号玩家即可覆盖正式分支。
+	var responder: PlayerState = _controller.state.get_player(0)
+	if responder == null:
+		return _fail("bagua_responder_missing")
+	# 红色判定牌；八卦阵只在判定为红色时构造虚拟【闪】，黑色判定会在触碰核心端口之前提前返回。
+	var red_judgment_card: CardInstance = CardInstance.new("sha", "heart", 7)
+	# 使用型响应窗口上下文；模拟“成为【杀】的目标”这一声明。
+	var use_context: Dictionary = {"response_action":CardDefinition.CARD_ACTION_USE}
+	# 使用场景的虚拟响应牌；红色判定成功必须返回一张【闪】而不是 null。
+	var use_virtual_shan: CardInstance = bagua_definition._build_bagua_response(_controller, responder.player_id, red_judgment_card, use_context)
+	if use_virtual_shan == null or use_virtual_shan.definition_id != "shan":
+		return _fail("bagua_red_use_response=%s" % [use_virtual_shan])
+	if not _test_logged_with_verb("视为使用【闪】"):
+		return false
+	# 打出场景的日志基线；清空后单独断言，避免使用场景的记录掩盖动词错误。
+	_captured_logs.clear()
+	# 打出型响应窗口上下文；同一防具在同一张红色判定牌下必须改写成“打出”。
+	var play_context: Dictionary = {"response_action":CardDefinition.CARD_ACTION_PLAY}
+	# 打出场景的虚拟响应牌；判定结果与使用场景完全相同，只有日志动词不同。
+	var play_virtual_shan: CardInstance = bagua_definition._build_bagua_response(_controller, responder.player_id, red_judgment_card, play_context)
+	if play_virtual_shan == null or play_virtual_shan.definition_id != "shan":
+		return _fail("bagua_red_play_response=%s" % [play_virtual_shan])
+	if not _test_logged_with_verb("视为打出【闪】"):
+		return false
 	return true
 
 

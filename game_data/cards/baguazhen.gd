@@ -5,6 +5,10 @@ extends CardDefinition
 ## 红色判定成功对响应角色的基础 AI 价值；供改判定技能按阵营决定是否保留红色牌在牌堆顶。
 const AI_SUCCESS_RESULT_VALUE: float = 2.0
 
+## 判定成功后虚拟产出的响应模式；本防具只产出【闪】，该常量是内容层交给核心动作解析端口的唯一输入。
+## 必须声明为 Array[String]：核心端口虽然接受无类型数组，但显式类型可以让错误在编译期而不是运行时暴露。
+const PROVIDED_RESPONSE_PATTERNS: Array[String] = ["shan"]
+
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 func _init() -> void:
@@ -111,6 +115,6 @@ func _build_bagua_response(match_host: Object, player_id: int, judgment_card: Ca
 	if player == null or not player.alive:
 		return null
 	# 日志动词；与核心层 resolve_response_action 使用同一份契约，避免内容层自行猜测动作类别。
-	var action_verb: String = "使用" if match_host.resolve_response_action(response_context, ["shan"]) == CARD_ACTION_USE else "打出"
+	var action_verb: String = "使用" if match_host.resolve_response_action(response_context, PROVIDED_RESPONSE_PATTERNS) == CARD_ACTION_USE else "打出"
 	match_host.add_log("%s的【八卦阵】判定为红色，视为%s【闪】。" % [player.display_name, action_verb])
 	return CardInstance.new("shan", judgment_card.suit, judgment_card.rank)

@@ -5158,15 +5158,19 @@ func _get_provided_response_pattern(definition: Dictionary) -> String:
 ## 解析一次响应请求的卡牌动作类别；优先读取内容层在响应上下文中显式声明的 response_action。
 ## 未显式声明时按响应模式回落：【无懈可击】【桃】【酒】只有“使用”一种合法动作，
 ## 【杀】与【闪】既可能被使用也可能被打出，必须由发起响应的内容显式声明，缺省按“打出”处理。
-func resolve_response_action(response_context: Dictionary, response_patterns: Array[String]) -> String:
+## response_patterns 故意声明为无类型 Array：内容层会以 ["shan"] 这类字面量数组直接调用本端口，
+## 而 GDScript 的 Array[String] 形参在运行时拒绝无类型数组实参并抛错，因此这里只做逐元素字符串读取。
+func resolve_response_action(response_context: Dictionary, response_patterns: Array) -> String:
 	# 内容层显式声明；只接受两个稳定取值，非法值按未声明处理而不猜测语义。
 	var declared_action: String = str(response_context.get("response_action", ""))
 	if CARD_ACTIONS.has(declared_action):
 		return declared_action
 	# 模式集合推导结果；【桃】与【酒】共享救援窗口时要求全部模式同为“使用”才成立。
 	var deduced_action: String = ""
-	for response_pattern: String in response_patterns:
-		# 当前响应模式的默认动作；未登记模式（【杀】【闪】与扩展响应标签）一律按“打出”处理。
+	for pattern_variant: Variant in response_patterns:
+		# 当前响应模式；统一转为字符串后再查表，未登记模式（【杀】【闪】与扩展响应标签）一律按“打出”处理。
+		var response_pattern: String = str(pattern_variant)
+		# 当前响应模式的默认动作；缺失登记时回落到“打出”，保证未迁移内容行为不变。
 		var pattern_action: String = str(RESPONSE_PATTERN_ACTION_DEFAULTS.get(response_pattern, DEFAULT_RESPONSE_ACTION))
 		if deduced_action.is_empty():
 			deduced_action = pattern_action
