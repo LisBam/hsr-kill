@@ -1,0 +1,313 @@
+extends SkillDefinition
+
+## 【连戏】技能源码。出牌阶段限一次：把手牌中的所有基本牌一次性重铸，可重复至多七次，最后对一名其他角色造成Y点伤害。
+
+## 重铸流程的次数上限；原文“至多重铸七次”，达到上限后不再提供继续重铸选项。
+const MAX_RECAST_TIMES: int = 7
+
+## 伤害计算的除数；原文“Y为你本次重铸的次数/2，向下取整”。
+const DAMAGE_DIVISOR: int = 2
+
+## 重铸流程选择的请求种类；恢复时按该值分流。
+const RECAST_CHOICE_KIND: String = "lianxi_recast"
+
+## 伤害目标选择的请求种类；恢复时按该值分流。
+const TARGET_CHOICE_KIND: String = "lianxi_target"
+
+## 继续重铸的稳定控制选项ID；与结束选项互斥，界面与AI提交同一种控制ID。
+const RECAST_OPTION_ID: String = "recast"
+
+## 结束重铸并进入伤害步骤的稳定控制选项ID。
+const FINISH_OPTION_ID: String = "finish"
+
+## 当前出牌阶段是否已经成功发动；普通与额外出牌阶段分别限一次。
+var _used_current_play_phase: bool = false
+
+## AI：每点伤害按体力资源价值折算时的系数；伤害不是即时回复，因此略低于纯体力收益。
+const AI_DAMAGE_VALUE_RATIO: float = 0.85
+
+## AI：每一轮重铸的手牌质量折损；重铸虽等量补摸，但会失去基本牌的确定价值。
+const AI_RECAST_QUALITY_COST: float = NonameAIEvaluator.CARD_RESOURCE_VALUE * 0.35
+
+
+## 写入主动技能静态信息；技能描述严格保持需求提供的原文。
+func _init() -> void:
+	super({
+		"id":"lianxi",
+		"name":"连戏",
+		"trigger":"active",
+		"enable":["phaseUse"],
+		"ui_enabled":true,
+		"description":"出牌阶段限一次，你可以重铸你手牌中的所有基本牌，你可以重复此流程（至多重铸七次），最后对一名其他角色造成Y点伤害。（Y为你本次重铸的次数/2，向下取整）",
+	})
+
+
+## 每个出牌阶段开始时恢复发动额度。
+func install() -> void:
+	subscribe_timing("phaseUseBegin", _on_play_phase_begin, "player", 100)
+
+
+## 清空本阶段发动标记。
+func _on_play_phase_begin(_event: RuleEvent) -> void:
+	_used_current_play_phase = false
+
+
+## 仅在自己的出牌阶段、仍有额度且自己至少有一张基本牌时开放技能。
+## 手牌中没有基本牌时重铸不会发生任何事，因此不展示主动技能入口，避免出现空重铸窗口。
+func can_activate(_context: Dictionary = {}) -> bool:
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if not (host != null and not _used_current_play_phase and owner != null and owner.alive and not owner.out_of_game and host.state.current_player_id == owner_player_id and host.state.current_phase == "play"):
+		return false
+	return not _get_hand_basic_card_uids().is_empty()
+
+
+## 发动连戏；第一次窗口只提供“重铸所有基本牌”，确认后才开始计数与消耗阶段额度。
+func activate(context: Dictionary = {}) -> String:
+	# 直接动作选项；AI合法动作会直接给出重铸或结束的稳定控制ID。
+	var direct_option_id: String = str(context.get("control_id", context.get("option_id", "")))
+	# 直接动作目标；AI与调试入口可跳过交互窗口直接指定伤害目标。
+	var direct_target_id: int = int(context.get("target_id", -1))
+	if direct_option_id == RECAST_OPTION_ID:
+		return "" if _execute_recast_round(int(context.get("recast_count", 0))) else "【连戏】你的手牌中没有基本牌。"
+	if direct_option_id == FINISH_OPTION_ID:
+		return "" if _begin_damage_target_selection(int(context.get("recast_count", 0))) else "【连戏】当前没有可造成伤害的其他角色。"
+	if direct_target_id >= 0:
+		return "" if _execute_damage(direct_target_id, int(context.get("recast_count", 0))) else "【连戏】所选目标已经失效。"
+	if _get_hand_basic_card_uids().is_empty():
+		return "【连戏】你的手牌中没有基本牌。"
+	_request_recast_choice(0, true)
+	return ""
+
+
+## 恢复重铸流程选择或伤害目标选择。
+func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
+	if response == null:
+		return false
+	# 当前选择步骤；重铸流程与伤害目标分别恢复。
+	var choice_kind: String = str(context.get("kind", ""))
+	# 已完成的流程次数；由上下文携带，避免用可变字段跨选择追踪进度。
+	var recast_count: int = int(context.get("recast_count", 0))
+	if choice_kind == RECAST_CHOICE_KIND:
+		# 取消只可能出现在第一次窗口，表示不发动：不消耗阶段额度、不移动任何牌。
+		if not response.confirmed:
+			return true
+		if response.control_id == RECAST_OPTION_ID:
+			_execute_recast_round(recast_count)
+			return true
+		if response.control_id == FINISH_OPTION_ID:
+			_begin_damage_target_selection(recast_count)
+			return true
+		return true
+	if choice_kind == TARGET_CHOICE_KIND:
+		if response.confirmed and response.target_ids.size() == 1:
+			_execute_damage(response.target_ids[0], recast_count)
+		else:
+			# 目标失效或取消时仍要收尾，避免遗留未消费的演出窗口。
+			_finish_lianxi(recast_count, -1)
+		return true
+	return false
+
+
+## 建立重铸流程选择窗口；第一次允许取消（表示不发动），后续必须二选一。
+func _request_recast_choice(recast_count: int, allow_cancel: bool) -> void:
+	# 本轮可选控制项；仍有额度且手中还有基本牌时才提供“继续重铸”。
+	var options: Array[Dictionary] = []
+	if recast_count < MAX_RECAST_TIMES and not _get_hand_basic_card_uids().is_empty():
+		options.append({"id":RECAST_OPTION_ID, "label":"重铸所有基本牌"})
+	# 至少完成一次重铸后才提供结束选项，保证发动后必然产生一次真实重铸。
+	if recast_count > 0:
+		options.append({"id":FINISH_OPTION_ID, "label":"结束重铸并造成伤害"})
+	# 没有可执行选项时不创建空窗口，按已完成次数直接进入伤害步骤。
+	if options.is_empty():
+		_begin_damage_target_selection(recast_count)
+		return
+	var prompt: String = "请选择下一步" if recast_count <= 0 else "你已重铸%d次，请选择下一步" % recast_count
+	request_control_selection("连戏", prompt, options, allow_cancel, {"kind":RECAST_CHOICE_KIND, "recast_count":recast_count})
+
+
+## 执行一轮多张重铸：把当前全部基本牌一次置入弃牌堆并等量补摸，然后回到流程选择。
+## 使用多张重铸入口而不是逐张循环，才能真正表达“多张牌置入弃牌堆然后摸等量的牌”。
+func _execute_recast_round(recast_count: int) -> bool:
+	if host == null or host.get("state") == null or recast_count >= MAX_RECAST_TIMES:
+		return false
+	# 本轮重铸材料；只包含当前普通手牌区的基本牌，装备与判定牌不参与。
+	var basic_card_uids: Array[int] = _get_hand_basic_card_uids()
+	if basic_card_uids.is_empty():
+		_begin_damage_target_selection(recast_count)
+		return false
+	# 实际重铸张数；由多张重铸入口回报，实际为0时不累计流程次数，避免空转。
+	var recast_card_count: int = int(host.call("recast_hand_cards", owner_player_id, basic_card_uids))
+	if recast_card_count <= 0:
+		_begin_damage_target_selection(recast_count)
+		return false
+	# 首次真实重铸即消耗本阶段额度；此时技能效果已经开始，取消不再成立。
+	if recast_count <= 0:
+		_used_current_play_phase = true
+	_request_recast_choice(recast_count + 1, false)
+	return true
+
+
+## 进入最后一步：按已完成次数计算Y并选择一名其他角色；Y为0时不创建目标选择。
+func _begin_damage_target_selection(recast_count: int) -> bool:
+	# 伤害点数；原文“Y为你本次重铸的次数/2，向下取整”。
+	var damage_amount: int = _resolve_damage_amount(recast_count)
+	if damage_amount <= 0:
+		_finish_lianxi(recast_count, -1)
+		return true
+	# 可选其他角色；伤害目标不需要手牌，只要是存活在场的其他角色。
+	var target_ids: Array[int] = _get_damage_target_ids()
+	if target_ids.is_empty():
+		_finish_lianxi(recast_count, -1)
+		return false
+	request_target_selection("【连戏】请选择一名其他角色造成%d点伤害" % damage_amount, target_ids, 1, 1, true, {"kind":TARGET_CHOICE_KIND, "recast_count":recast_count})
+	return true
+
+
+## 结算最后的伤害；等待期间重算Y并复核目标，保证数值与目标都在提交时仍然合法。
+func _execute_damage(target_id: int, recast_count: int) -> bool:
+	# 伤害点数；与目标选择阶段使用同一算式，因此等待期间数值不会变化。
+	var damage_amount: int = _resolve_damage_amount(recast_count)
+	if damage_amount <= 0 or not _get_damage_target_ids().has(target_id):
+		_finish_lianxi(recast_count, -1)
+		return false
+	_finish_lianxi(recast_count, target_id)
+	host.call("damage", owner_player_id, target_id, damage_amount, "normal", get_id())
+	return true
+
+
+## 记录本次发动并收尾；未造成伤害时同样记录，便于复盘查看实际重铸次数。
+func _finish_lianxi(recast_count: int, damage_target_id: int) -> void:
+	announce_activation({"recast_times":recast_count, "damage":_resolve_damage_amount(recast_count), "damage_target_id":damage_target_id})
+
+
+## 计算Y：重铸次数除以2并向下取整；负数按0处理，避免异常上下文产生负伤害。
+func _resolve_damage_amount(recast_count: int) -> int:
+	return floori(float(maxi(recast_count, 0)) / float(DAMAGE_DIVISOR))
+
+
+## 返回持有者当前普通手牌区中全部基本牌的实体UID；保持手牌原顺序，便于回放稳定复现。
+func _get_hand_basic_card_uids() -> Array[int]:
+	# 材料结果；持有者无效时返回空数组，由调用方按“无材料”处理。
+	var card_uids: Array[int] = []
+	var owner: PlayerState = get_owner_skill_player().get_state()
+	if owner == null:
+		return card_uids
+	for card: CardInstance in owner.hand:
+		if _is_basic_card(card.definition_id):
+			card_uids.append(card.uid)
+	return card_uids
+
+
+## 判断卡牌定义是否属于基本牌；只读取静态类型，不读取当前牌名设置。
+func _is_basic_card(definition_id: String) -> bool:
+	return str(GameDatabase.get_card(definition_id).get("type", "")) == "basic"
+
+
+## 返回当前可作为伤害目标的其他角色稳定玩家ID；必须存活在场。
+func _get_damage_target_ids() -> Array[int]:
+	# 目标结果；保持权威座次顺序，界面与AI据此稳定展示同一份候选。
+	var target_ids: Array[int] = []
+	if host == null or host.get("state") == null:
+		return target_ids
+	for player: PlayerState in host.state.players:
+		if player.player_id != owner_player_id and player.alive and not player.out_of_game:
+			target_ids.append(player.player_id)
+	return target_ids
+
+
+## 为AI枚举连戏的发动动作；只给出第一次重铸动作，后续轮次由窗口选择继续决策。
+func append_play_phase_actions(result: Array[Dictionary]) -> void:
+	if not can_activate():
+		return
+	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "control_id":RECAST_OPTION_ID}})
+
+
+## 评估连戏的发动价值：预期伤害打在敌方身上才计收益，重铸本身等量补摸、只计质量折损。
+func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 动作负载；只接受第一次重铸的稳定选项，其余动作视为非法。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	if str(payload.get("control_id", "")) != RECAST_OPTION_ID:
+		return -20.0
+	# 本人快照；手牌数量决定可支撑的重铸轮数上限。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	if owner.is_empty():
+		return 0.0
+	# 手牌数量；每轮重铸消耗当前全部基本牌，手牌越多越可能支撑多轮。
+	var hand_count: int = maxi(int(owner.get("hand_count", 0)), 0)
+	# 预期重铸轮数；保守按“每轮至少消耗一张基本牌”估计，至少一轮、至多七轮。
+	var expected_recast_times: int = clampi(hand_count, 1, MAX_RECAST_TIMES)
+	# 预期伤害；与规则使用同一算式，保证AI对Y的理解与真实结算一致。
+	var expected_damage: int = _resolve_damage_amount(expected_recast_times)
+	if expected_damage <= 0:
+		return 0.0
+	# 最佳伤害目标价值；取全部敌对角色中对自身态度最负者，没有敌人时返回0不发动。
+	var best_target_value: float = 0.0
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前角色快照；跳过自己、已死亡与已离场角色。
+		var player: Dictionary = player_variant as Dictionary
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id == owner_player_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		best_target_value = maxf(best_target_value, maxf(-evaluator.get_attitude(authoritative_snapshot, owner_player_id, player_id), 0.0) / 5.0)
+	if best_target_value <= 0.0:
+		return 0.0
+	# 质量折损；重铸等量换牌，但会失去基本牌的确定价值，按预期轮数线性计入。
+	var recast_cost: float = float(expected_recast_times) * AI_RECAST_QUALITY_COST
+	return float(expected_damage) * NonameAIEvaluator.HP_RESOURCE_VALUE * AI_DAMAGE_VALUE_RATIO * best_target_value - recast_cost
+
+
+## 评估连戏的窗口与目标选择；继续重铸在Y将提高时优于立即结束，结束与目标按目标态度计分。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
+	# 请求上下文；重铸流程与伤害目标分别评分。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	# 动作负载；取消只出现在第一次窗口，等价于不发动。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 已完成流程次数；与规则上下文同名，保证AI与结算对“第几轮”的理解一致。
+	var recast_count: int = int(context.get("recast_count", 0))
+	var choice_kind: String = str(context.get("kind", ""))
+	if choice_kind == RECAST_CHOICE_KIND:
+		if not bool(payload.get("confirmed", false)):
+			return 0.0
+		var control_id: String = str(payload.get("selected_control_id", ""))
+		if control_id == RECAST_OPTION_ID:
+			# 继续重铸：只有当下一轮能把Y提高1时才值得再折损一次手牌质量。
+			var damage_gain: int = _resolve_damage_amount(recast_count + 1) - _resolve_damage_amount(recast_count)
+			return float(damage_gain) * NonameAIEvaluator.HP_RESOURCE_VALUE * AI_DAMAGE_VALUE_RATIO - AI_RECAST_QUALITY_COST
+		if control_id == FINISH_OPTION_ID:
+			# 立即结束：按当前Y取全部候选目标中的最高伤害收益。
+			return _estimate_finish_value(authoritative_snapshot, recast_count, evaluator)
+		return 0.0
+	if choice_kind == TARGET_CHOICE_KIND:
+		if not bool(payload.get("confirmed", false)):
+			return 0.0
+		# 已选目标；必须恰好一名其他角色。
+		var selected_targets: Array = payload.get("selected_target_ids", []) as Array
+		if selected_targets.size() != 1:
+			return -20.0
+		return _estimate_damage_value(authoritative_snapshot, int(selected_targets[0]), recast_count, evaluator)
+	return 0.0
+
+
+## 估算立即结束时的最佳伤害收益；遍历全部存活其他角色取最大值。
+func _estimate_finish_value(authoritative_snapshot: Dictionary, recast_count: int, evaluator: Object) -> float:
+	# 最佳收益；没有合法目标或Y为0时保持0分，交给取消分支兜底。
+	var best_value: float = 0.0
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前角色快照；跳过自己、已死亡与已离场角色。
+		var player: Dictionary = player_variant as Dictionary
+		var target_id: int = int(player.get("player_id", -1))
+		if target_id == owner_player_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		best_value = maxf(best_value, _estimate_damage_value(authoritative_snapshot, target_id, recast_count, evaluator))
+	return best_value
+
+
+## 估算对指定目标造成Y点伤害的收益；友方目标按负收益计入，避免AI把伤害打向队友。
+func _estimate_damage_value(authoritative_snapshot: Dictionary, target_id: int, recast_count: int, evaluator: Object) -> float:
+	# 伤害点数；与规则使用同一算式。
+	var damage_amount: int = _resolve_damage_amount(recast_count)
+	if damage_amount <= 0 or target_id == owner_player_id:
+		return 0.0
+	# 态度；范围约 ±5，除以5后作为伤害收益的强度系数，友方目标因此得到负分。
+	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
+	return float(damage_amount) * NonameAIEvaluator.HP_RESOURCE_VALUE * AI_DAMAGE_VALUE_RATIO * (-attitude / 5.0)

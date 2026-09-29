@@ -304,6 +304,17 @@ func _load_skills() -> void:
 				validation_errors.append("技能 %s 正文声明轮回技但未设置 reincarnation 标签。" % skill_id)
 			elif declares_reincarnation_tag and not declares_reincarnation_type:
 				validation_errors.append("技能 %s 设置了 reincarnation 标签但正文未在类型段声明轮回技。" % skill_id)
+			# 欢愉技标签声明结果；运行期全部欢愉技判定都以该标签为唯一来源。
+			var declares_joy_tag: bool = bool(skill_metadata.get("joy_skill", false))
+			# 正文类型声明结果；与轮回技同一口径，只看类型段是否把自身声明为欢愉技。
+			var declares_joy_type: bool = SkillDefinition.description_declares_joy_type(str(skill_metadata.get("description", "")))
+			if declares_joy_type and not declares_joy_tag:
+				validation_errors.append("技能 %s 正文声明欢愉技但未设置 joy_skill 标签。" % skill_id)
+			elif declares_joy_tag and not declares_joy_type:
+				validation_errors.append("技能 %s 设置了 joy_skill 标签但正文未在类型段声明欢愉技。" % skill_id)
+			elif declares_joy_tag and int(skill_metadata.get("performance_number", 0)) < 1:
+				# 参演编号是阿哈时刻的唯一排序键；缺失或非正数会让该技能无法稳定排序，必须在加载期拦住。
+				validation_errors.append("技能 %s 是欢愉技但未声明有效的 performance_number 参演编号。" % skill_id)
 			skills[skill_id] = skill_metadata
 			skill_scripts[skill_id] = skill_script
 
