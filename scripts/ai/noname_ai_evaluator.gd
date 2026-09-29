@@ -39,6 +39,12 @@ const LIGHTNING_NEGATION_UTILITY_MULTIPLIER: float = 0.10
 ## 目标本人已有充足响应资源时使用【无懈可击】的收益倍率；默认0.20优先让【杀】或【闪】承担本次锦囊响应。
 const SUFFICIENT_RESPONSE_NEGATION_UTILITY_MULTIPLIER: float = 0.20
 
+## 替他人抵消负面锦囊所需的最低目标态度；默认3.5要求目标属于响应者的明确队友。
+## 内奸制衡反贼、反贼结盟内奸、领袖笼络内奸以及低置信度身份标记推测出的“友方”态度上限只有3.0，
+## 这些角色并非响应者的同阵营队友；替它们令【乐不思蜀】【兵粮寸断】等锦囊失效属于纯粹的负面收益，
+## 因此保护性响应必须先跨过该门槛，不能只按“态度为正”就消耗稀缺的【无懈可击】。运行时无需动态修改。
+const PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD: float = 3.5
+
 ## 判定【决斗】响应资源充足所需的已知【杀】数量；默认2张用于覆盖至少一轮往返，避免仅持一张时被误判为稳定应对。
 const DUEL_SUFFICIENT_SHA_COUNT: int = 2
 
@@ -745,6 +751,17 @@ func score_negation(authoritative_snapshot: Dictionary, responder_id: int, conte
 		return -1.0
 	# 原效果从响应者视角的通用收益；所有普通、群体与延时锦囊都读取各自 AI 配置和动态钩子，正数表示希望它生效，负数表示希望它失效。
 	var effect_utility: float = _get_trick_effect_utility_for_negation(authoritative_snapshot, responder_id, target_id, context, trick_definition, trick_ai, trick_definition_instance)
+	# 响应者对目标的当前态度；同一数值既判断本次响应属于保护还是攻击，也用于弱正态度门槛。
+	var target_attitude: float = get_attitude(authoritative_snapshot, responder_id, target_id)
+	# 本次响应是否在为目标的利益服务；首轮抵消有害锦囊与反无懈恢复有益锦囊都属于“替目标挡灾”。
+	# 判定依据取自原效果的动态收益方向，因此延时锦囊的跳过阶段、普通锦囊的伤害与增益牌效共用同一口径。
+	var protects_target: bool = effect_utility > 0.0 if currently_negated else effect_utility < 0.0
+	# 保护性响应的明确队友门槛；目标不是响应者本人、态度为正但未达到该门槛时不为它消耗【无懈可击】。
+	# 弱正态度只来自阵营平衡博弈或低置信度身份标记，替这类角色抵消锦囊属于负面收益：
+	# 例如对敌人判定区的【乐不思蜀】【兵粮寸断】使用【无懈可击】只会令该锦囊失效，反而帮助敌方保留出牌与摸牌阶段。
+	# 攻击性响应（抵消敌方收益锦囊、反无懈恢复敌方受损效果）态度为负，不进入本分支，仍由后续通用收益判断。
+	if protects_target and target_id != responder_id and target_attitude > 0.0 and target_attitude < PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD:
+		return -1.0
 	# 下一张无懈造成的正向收益；首轮抵消负收益，反无懈则恢复正收益，并按统一态度尺度归一化。
 	var negation_utility: float = (effect_utility if currently_negated else -effect_utility) / ATTITUDE_SCALE
 	if negation_utility <= 0.0:
