@@ -1,9 +1,18 @@
 extends SkillDefinition
 
-## 【焕发】技能源码。任意角色回合结束时，若其本回合使用过【桃/药】，持有者可令其执行额外出牌阶段。
+## 【焕发】技能源码。任意角色回合结束时，若其本回合使用过【桃/药】，持有者可令其摸一张牌并执行额外出牌阶段。
 
 ## 当前轮是否已经成功发动；roundStart重置，确认但阶段登记失败时不消耗次数。
 var _used_this_round: bool = false
+
+## 发动成功时令目标固定摸取的牌数；数值1来自技能原文“摸一张牌”，修改会改变实际获得的牌数。
+const TARGET_DRAW_CARD_COUNT: int = 1
+
+## 令目标摸一张牌在AI估值中的固定资源价值；与通用卡牌资源值同源，保证“摸一张牌”在任何目标身上都有基础收益。
+const TARGET_DRAW_CARD_VALUE: float = NonameAIEvaluator.CARD_RESOURCE_VALUE
+
+## 身份态度到发动收益的换算除数；数值越大，相同态度下的摸牌与额外阶段收益估值越保守。
+const AI_ATTITUDE_DIVISOR: float = 5.0
 
 ## 额外出牌阶段的基础行动价值；默认1分只在目标存在可用手牌时加入，避免空手阶段凭空获得收益。
 const BASE_EXTRA_PLAY_PHASE_VALUE: float = 1.0
@@ -14,10 +23,7 @@ const HAND_CARD_EXTRA_PLAY_PHASE_VALUE: float = 0.7
 ## 手牌行动空间的最大附加值；默认3.5分避免高数量手牌无限抬高单次额外阶段收益。
 const MAX_HAND_CARD_EXTRA_PLAY_PHASE_VALUE: float = 3.5
 
-## 自身没有任何可用手牌或满足条件的主动技能时的确认评分；固定-20分确保可取消询问选择放弃。
-const SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE: float = -20.0
-
-## 非友方目标或任何没有实际行动机会的目标确认评分；固定-20分抵消通用选择的微弱基础正分。
+## 非友方或中立目标的确认评分；固定-20分抵消通用选择的微弱基础正分，避免把每轮一次的技能交给敌方。
 const INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE: float = -20.0
 
 
@@ -28,7 +34,7 @@ func _init() -> void:
 		"name": "焕发",
 		"trigger": "phaseEnd",
 		"ui_enabled": false,
-		"description": "一名角色的回合结束时，若本回合内其使用过【药】，你可令其执行一个额外的出牌阶段。每轮限一次。",
+		"description": "一名角色的回合结束时，若本回合内其使用过【药】，你可令其摸一张牌并执行一个额外的出牌阶段。每轮限一次。",
 	})
 
 
@@ -43,11 +49,11 @@ func _on_round_start(_event: RuleEvent) -> void:
 	_used_this_round = false
 
 
-## 检查回合角色本回合是否使用过【药】，并由娜塔莎决定是否给予额外出牌阶段。
+## 检查回合角色本回合是否使用过【药】，并由娜塔莎决定是否令其摸一张牌并获得额外出牌阶段。
 func _on_any_phase_end(event: RuleEvent) -> void:
 	if _used_this_round or not bool(host.call("has_used_card_this_turn", event.player_id, "tao")) or not bool(host.call("can_add_play_phase", event.player_id)):
 		return
-	request_card_selection("焕发", "是否令该角色执行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"huanfa_confirm", "target_id":event.player_id, "ai_allow_confirm":true})
+	request_card_selection("焕发", "是否令该角色摸一张牌并执行一个额外的出牌阶段？", [], 0, 0, true, {"kind":"huanfa_confirm", "target_id":event.player_id, "ai_allow_confirm":true})
 
 
 ## 恢复焕发确认；阶段成功进入显式队列后才消费每轮次数。
@@ -59,12 +65,14 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		var target_id: int = int(context.get("target_id", -1))
 		if get_skill_player(target_id).addPlayPhase():
 			_used_this_round = true
+			# 原文“摸一张牌并执行一个额外的出牌阶段”；阶段已进入排队，摸牌会在该阶段实际开始前完成。
+			host.call("draw", target_id, TARGET_DRAW_CARD_COUNT)
 			announce_activation({"target_id":target_id})
 			observe_identity_behavior([target_id], {"target_result":1.0})
 	return true
 
 
-## 评估当前角色的额外出牌收益，并在本轮后续存在更高价值持药友方时保留次数。
+## 评估令当前角色摸一张牌并获得额外出牌阶段的综合收益，并在本轮后续存在更高价值持药友方时保留次数。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 请求上下文；非焕发确认不改变通用选择评分。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -74,7 +82,7 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	if not bool(payload.get("confirmed", false)):
 		return 0.0
-	# 当前回合角色；额外阶段价值乘娜塔莎对其的当前可感知态度。
+	# 当前回合角色；摸牌与额外阶段价值都乘娜塔莎对其的当前可感知态度。
 	var target_id: int = int(context.get("target_id", -1))
 	# 当前目标的实际额外阶段机会；空手、仅响应牌或技能材料不满足时会返回0。
 	var extra_play_phase_value: float = _estimate_extra_play_phase_value(authoritative_snapshot, target_id)
@@ -82,11 +90,8 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 	if target_attitude <= 0.0:
 		return INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE
-	# 没有可用牌或满足条件技能的角色都必须明确取消；自身沿用专属常量，其他友方使用通用无效目标常量。
-	if is_zero_approx(extra_play_phase_value):
-		return SELF_NO_PLAY_PHASE_OPPORTUNITY_SCORE if target_id == owner_player_id else INVALID_EXTRA_PLAY_PHASE_TARGET_SCORE
-	# 当前发动收益；正值表示立即使用本轮额度比取消更有利。
-	var current_value: float = target_attitude / 5.0 * extra_play_phase_value
+	# 当前发动收益；原文的“摸一张牌”独立于出牌机会，因此空手友方同样拥有正收益。
+	var current_value: float = target_attitude / AI_ATTITUDE_DIVISOR * (TARGET_DRAW_CARD_VALUE + extra_play_phase_value)
 	# 后续保留价值；只考虑本轮尚未行动、手中明确拥有【药】且对娜塔莎友好的角色。
 	var future_value: float = _best_future_candidate_value(authoritative_snapshot, target_id, evaluator)
 	return current_value - future_value
@@ -116,7 +121,7 @@ func _best_future_candidate_value(authoritative_snapshot: Dictionary, current_ta
 		# 娜塔莎对当前后续角色的可感知态度；正值才保留技能额度。
 		var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, player_id)
 		if attitude > 0.0:
-			result = maxf(result, attitude / 5.0 * _estimate_extra_play_phase_value(authoritative_snapshot, player_id))
+			result = maxf(result, attitude / AI_ATTITUDE_DIVISOR * (TARGET_DRAW_CARD_VALUE + _estimate_extra_play_phase_value(authoritative_snapshot, player_id)))
 	return result
 
 

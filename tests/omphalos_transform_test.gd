@@ -134,14 +134,14 @@ func _test_metadata_and_special_pool() -> bool:
 		return _fail("kaesilanna_metadata=%s" % kaesilanna)
 	# 需求指定八项技能原文；任何字符、标点、数字或X说明变化都应立即失败。
 	var expected_descriptions: Dictionary = {
-		"shengbian":"轮回技，出牌阶段限一次，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
+		"shengbian":"轮回技，回合开始时，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记（至多获得至8枚）；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
 		"kansha":"轮回技，出牌阶段每个轮回节限一次，你可①弃置一张红色牌；②弃置一张黑色牌；③对一名其他角色造成1点伤害。",
-		"qixi":"锁定技，当你发动“出牌阶段限一次”或“轮回技”的技能后，若你的“军功”标记数少于6，你获得一枚“军功”标记；否则你将“军功”标记数移除至1，若此技能为“出牌阶段限一次”，则视为本回合未发动过此技能；若此技能为“轮回技”，则进入下一个轮回节。",
+		"qixi":"锁定技，当你发动“出牌阶段限一次”或“轮回技”的技能后，若你的“军功”标记数少于6，你获得一枚“军功”标记；否则你移除5枚“军功”，然后若此技能为“出牌阶段限一次”，则视为本回合未发动过此技能；若此技能为“轮回技”，则进入下一个轮回节。",
 		"fuhuo":"锁定技，每回合每项限一次，1.当你使用一张牌时，2.当你成为牌的目标时，3.当你受到伤害时，4.当你造成伤害时，若你的“火种”标记数小于12，你获得一枚“火种”标记，然后若你的手牌数小于5，你摸一张牌。",
-		"lunhui":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将所有其他角色的武将牌翻面，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
+		"lunhui":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
 		"tiancai":"轮回技，出牌阶段，你可①受到无伤害来源的X点火焰伤害；②视为对至多X名角色各使用一张【火攻】。③视为对一名角色依次使用X-1张【火攻】。（X为此技能的轮回数）",
 		"shihun":"轮回技，出牌阶段，你可①令任意名其他角色依次视为对你使用一张火【杀】；②视为使用一张目标为上次发动此技能所指定目标的火【杀】。",
-		"yongjie":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③摸一张牌并退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
+		"yongjie":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
 		# 当前技能稳定ID；数据库原文必须与需求文本逐字相同。
@@ -207,7 +207,7 @@ func _test_eternal_exit_and_zone_rules() -> bool:
 	return true
 
 
-## 校验升变的重置/增长、军功动态奇袭、奇袭的正文标签识别与阈值分支，并验证堪杀三节与阶段额度。
+## 校验升变的回合开始分配与军功累积、军功动态奇袭、奇袭的正文标签识别与移除5枚分支，并验证堪杀三节与阶段额度。
 func _test_shengbian_qixi_and_kansha() -> bool:
 	_reset_state(3)
 	# 刻律德菈状态与技能；0号领袖和2号忠臣为友方。
@@ -221,48 +221,55 @@ func _test_shengbian_qixi_and_kansha() -> bool:
 	var kansha: SkillDefinition = _install_skill(0, "kansha")
 	if shengbian == null or kansha == null:
 		return _fail("kelvdela_skill_install")
-	# 当前阶段全部合法动作；无手牌时应至少包含升变对合法角色的免费军功分配动作。
-	var shengbian_legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
-	# 标准基础AI策略；临时评分技能没有运行时宿主，必须只读权威快照仍能稳定选择升变。
-	var shengbian_ai_policy: BasicAIPolicy = BasicAIPolicy.new(0)
-	# AI最终动作；升变具有正基础收益，当前没有更高价值动作时应基本每阶段主动发动。
-	var shengbian_ai_action: Dictionary = shengbian_ai_policy.choose_action(_controller.state.to_dict(0, true), shengbian_legal_actions)
-	if str(shengbian_ai_action.get("action_type", "")) != "use_skill" or str(shengbian_ai_action.get("skill_id", (shengbian_ai_action.get("payload", {}) as Dictionary).get("skill_id", ""))) != "shengbian":
-		return _fail("shengbian_ai_action=%s/%s" % [shengbian_ai_action, shengbian_legal_actions])
+	# 改为回合开始触发后升变不再是出牌阶段主动技能；技能按钮列表必须不再包含它。
+	if _controller.get_active_skill_ids(0, "phaseUse").has("shengbian"):
+		return _fail("shengbian_active_entry=%s" % [_controller.get_active_skill_ids(0, "phaseUse")])
+	# AI目标选择评分器；身份已明置，0号领袖对2号忠臣为正态度、对1号反贼为负态度。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 无宿主评分技能；与基础策略加载的临时评分实例构造方式一致。
+	var scoring_shengbian: SkillDefinition = GameDatabase.create_skill("shengbian")
+	scoring_shengbian.bind(null, 0)
+	# 评分快照；目标选择评分必须只读权威快照，不能依赖运行时技能宿主。
+	var shengbian_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	# 回合开始目标询问的稳定评分上下文；与技能实际创建的请求字段保持一致。
+	var shengbian_ai_request: Dictionary = {"context":{"kind":"shengbian_target", "skill_id":"shengbian", "skill_owner_id":0}}
+	if scoring_shengbian.score_ai_choice(shengbian_snapshot, shengbian_ai_request, {"payload":{"confirmed":true, "selected_target_ids":[2]}}, evaluator) <= scoring_shengbian.score_ai_choice(shengbian_snapshot, shengbian_ai_request, {"payload":{"confirmed":true, "selected_target_ids":[1]}}, evaluator):
+		return _fail("shengbian_ai_target")
+	# 回合开始时时机；升变必须创建可选择任意在场角色的目标询问。
+	_controller._emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":1})
+	if str(_controller._pending_card_choice.get("choice_type", "")) != "target" or int(_controller._pending_card_choice.get("chooser_id", -1)) != 0:
+		return _fail("shengbian_turn_prompt=%s" % [_controller._pending_card_choice])
+	# 取消询问不消耗轮回进度也不授予军功；下一次回合开始会重新询问。
+	if not _submit_pending_choice(0, [], [], "", false) or shengbian.get_reincarnation_round_count() != 1 or not _controller.get_player_mark(2, "jungong").is_empty():
+		return _fail("shengbian_cancel=%s/%s" % [shengbian.get_reincarnation_state(), _controller.get_player_mark(2, "jungong")])
 	# 无军功友方进入重置分支，获得2枚军功并立即动态拥有奇袭；单节轮回推进至X=2。
-	if shengbian.activate({"target_ids":[2]}) != "":
-		return _fail("shengbian_initial_activate")
+	_controller.emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":2})
+	if not _submit_pending_choice(0, [], [2], "", true):
+		return _fail("shengbian_target=%s" % [_controller._pending_card_choice])
 	# 获得军功的2号友方；用于检查动态奇袭来源与标记数量。
 	var ally: PlayerState = _controller.state.get_player(2)
 	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 2 or _controller.get_skill_instance(2, "qixi") == null or str((ally.acquired_skills.get("qixi", {}) as Dictionary).get("source", "")) != "shengbian_jungong" or shengbian.get_reincarnation_round_count() != 2:
 		return _fail("shengbian_initial=%s/%s" % [_controller.get_player_mark(2, "jungong"), ally.acquired_skills])
-	# 新出牌阶段恢复普通额度；已有军功友方按X=2增加至4，不清除其他角色标记。
-	_controller.emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":1})
-	if shengbian.activate({"target_ids":[2]}) != "" or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 4:
+	# 已有军功友方按X=2增加至4，且不清除其他角色标记。
+	_controller.emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":3})
+	if not _submit_pending_choice(0, [], [2], "", true) or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 4:
 		return _fail("shengbian_growth=%s" % _controller.get_player_mark(2, "jungong"))
-	# 为友方安装升变并把军功调至6；本次原效果先按X=1加至7，奇袭再把标记移除至1并复原额度、额外推进一个轮回节。
-	_controller.state.current_player_id = 2
-	# 2号友方的升变实例；同时声明“轮回技”与“出牌阶段限一次”，是奇袭两个重置分支的共同样本。
-	var ally_shengbian: SkillDefinition = _install_skill(2, "shengbian")
-	_controller.change_player_mark_count(2, "jungong", 2, {"icon":"军", "name":"军功", "description":"测试军功"})
-	if ally_shengbian == null or ally_shengbian.activate({"target_ids":[2]}) != "":
-		return _fail("qixi_reset_setup")
-	# 续结算尚未恢复时升变仍处于本阶段已用状态；奇袭的“视为未发动”按约定在原技能结算之后才生效。
-	if ally_shengbian.can_activate():
-		return _fail("qixi_reset_premature")
-	_controller._resume_deferred_skill_settlements()
-	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 1 or ally_shengbian.get_reincarnation_round_count() != 3 or not ally_shengbian.can_activate():
-		return _fail("qixi_reset_result=%s/%s" % [_controller.get_player_mark(2, "jungong"), ally_shengbian.get_reincarnation_state()])
-	# 复原后的升变可立即再次发动：X=3令军功加至4，军功不足6因此奇袭只再积累一枚。
-	if ally_shengbian.activate({"target_ids":[2]}) != "" or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
-		return _fail("qixi_reuse=%s" % _controller.get_player_mark(2, "jungong"))
+	# 军功持有总数不设上限：目标已有7枚时按X=3增长为10枚，证明“至多获得至8枚”截断的是本次获得的X而不是持有总数。
+	_controller.change_player_mark_count(2, "jungong", 3, {"icon":"军", "name":"军功", "description":"测试军功"})
+	_controller.emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":4})
+	if not _submit_pending_choice(0, [], [2], "", true) or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 10:
+		return _fail("shengbian_accumulate=%s" % _controller.get_player_mark(2, "jungong"))
+	# 继续累积：X=4时增长为14枚，已有军功既不被上限截断也不被清空，动态奇袭保持存在。
+	_controller.emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":5})
+	if not _submit_pending_choice(0, [], [2], "", true) or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 14 or _controller.get_skill_instance(2, "qixi") == null:
+		return _fail("shengbian_full=%s" % _controller.get_player_mark(2, "jungong"))
 	# 正文识别必须屏蔽引号：奇袭自身正文里的两个标签都是引用，不会被当成它自己的技能类型。
 	var qixi_description: String = str(GameDatabase.get_skill("qixi").get("description", ""))
 	var shengbian_description: String = str(GameDatabase.get_skill("shengbian").get("description", ""))
 	if SkillDefinition.description_declares_tag(qixi_description, "出牌阶段限一次") or SkillDefinition.description_declares_tag(qixi_description, "轮回技"):
 		return _fail("qixi_quote_filter")
-	# “出牌阶段限一次”仍按正文声明识别：升变正文必须以声明形式包含该短语。
-	if not SkillDefinition.description_declares_tag(shengbian_description, "出牌阶段限一次"):
+	# 升变改为回合开始时触发后不再声明“出牌阶段限一次”；奇袭对它只保留“进入下一个轮回节”分支。
+	if SkillDefinition.description_declares_tag(shengbian_description, "出牌阶段限一次"):
 		return _fail("play_phase_once_detection")
 	# 轮回技改为读标签：升变带标签，奇袭（引号只是提及）与只引用他人轮回技的回涛都不带标签。
 	for labeled_skill_id: String in ["fanyin", "jvkou", "kansha", "shengbian", "shihun", "tiancai", "xvechou", "yongjie", "zhuxv"]:
@@ -276,12 +283,33 @@ func _test_shengbian_qixi_and_kansha() -> bool:
 		return _fail("reincarnation_type_detection")
 	# 不属于两类技能的实际发动不推进军功；行军正文只声明“出牌阶段开始时”。
 	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"xingjun", "actual_activation":true, "context":{}})
-	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 14:
 		return _fail("qixi_unrelated_skill=%s" % _controller.get_player_mark(2, "jungong"))
 	# 只引用他人轮回技的技能同样不推进军功：回涛既没有“出牌阶段限一次”正文声明，也没有轮回技标签。
 	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"huitao", "actual_activation":true, "context":{}})
-	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 14:
 		return _fail("qixi_reincarnation_reference=%s" % _controller.get_player_mark(2, "jungong"))
+	# 移除5枚后仍有剩余时奇袭保留：14枚军功发动一次轮回技后剩9枚。
+	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"kansha", "actual_activation":true, "context":{}})
+	_controller._resume_deferred_skill_settlements()
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 9 or _controller.get_skill_instance(2, "qixi") == null:
+		return _fail("qixi_reset_remaining=%s" % _controller.get_player_mark(2, "jungong"))
+	# 再次发动仍按固定5枚移除：9枚剩4枚，证明阈值分支是“移除5枚”而不是把标记调整到某个固定值。
+	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"kansha", "actual_activation":true, "context":{}})
+	_controller._resume_deferred_skill_settlements()
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 4 or _controller.get_skill_instance(2, "qixi") == null:
+		return _fail("qixi_reset_repeat=%s" % _controller.get_player_mark(2, "jungong"))
+	# 阈值6大于移除量5，因此该分支自身恒留下至少1枚：恰好6枚时移除5枚后剩1枚并继续保留奇袭。
+	_controller.change_player_mark_count(2, "jungong", 2, {"icon":"军", "name":"军功", "description":"测试军功"})
+	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"kansha", "actual_activation":true, "context":{}})
+	_controller._resume_deferred_skill_settlements()
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 1 or _controller.get_skill_instance(2, "qixi") == null:
+		return _fail("qixi_reset_threshold=%s" % _controller.get_player_mark(2, "jungong"))
+	# 军功被“移除场上所有的军功”整体清空时，持有者不再视为拥有奇袭，动态授予记录必须同步撤销。
+	_controller.change_player_mark_count(2, "jungong", 3, {"icon":"军", "name":"军功", "description":"测试军功"})
+	_controller.emit_rule_timing("phaseBefore", 0, 0, 0, {"turn_number":6})
+	if not _submit_pending_choice(0, [], [1], "", true) or not _controller.get_player_mark(2, "jungong").is_empty() or _controller.get_skill_instance(2, "qixi") != null:
+		return _fail("qixi_revoke=%s/%s" % [_controller.get_player_mark(2, "jungong"), ally.acquired_skills])
 	# 回到刻律德菈出牌阶段并准备一红一黑费用牌；堪杀应依次执行①②③。
 	_controller.state.current_player_id = 0
 	# 堪杀①的红色手牌费用；红桃2【闪】应当在发动后进入弃牌堆。
@@ -356,7 +384,7 @@ func _test_lunhui_and_yongjie_return() -> bool:
 	owner.hp = 2
 	# 白厄的负火实例；确保换形前固有技能组安装完整。
 	var fuhuo: SkillDefinition = _install_skill(0, "fuhuo")
-	# 白厄的轮回觉醒实例；负责触发区域废除、离场、翻面、换形和额外回合。
+	# 白厄的轮回觉醒实例；负责触发区域废除、友方离场、换形和额外回合。
 	var lunhui: SkillDefinition = _install_skill(0, "lunhui")
 	if fuhuo == null or lunhui == null:
 		return _fail("baie_skill_install")
@@ -375,10 +403,10 @@ func _test_lunhui_and_yongjie_return() -> bool:
 	preexisting_out_of_game_ally.out_of_game = true
 	_controller.change_player_mark_count(0, "huozhong", 12, {"icon":"火", "name":"火种", "description":"测试火种"})
 	_controller.emit_rule_timing("phaseAfter", 1, 1, 1, {"turn_number":1})
-	# 忠臣2因轮回离场且忠臣3保持既有离场，反贼1翻面；白厄变为5上限满体力特殊形态并排入额外回合。
+	# 忠臣2因轮回离场且忠臣3保持既有离场；原文已移除翻面效果，反贼1必须保持正面。
 	if owner.character_id != "kaesilanna" or owner.max_hp != 5 or owner.hp != 5 or not owner.equipment_area_abolished or not owner.judgment_area_abolished or not _controller.get_player_mark(0, "huozhong").is_empty():
 		return _fail("lunhui_owner=%s/%d/%d" % [owner.character_id, owner.max_hp, owner.hp])
-	if not _controller.state.get_player(2).out_of_game or not _controller.state.get_player(3).out_of_game or _controller.state.get_player(1).out_of_game or not _controller.state.get_player(1).face_down or not _controller._extra_turn_queue.has(0):
+	if not _controller.state.get_player(2).out_of_game or not _controller.state.get_player(3).out_of_game or _controller.state.get_player(1).out_of_game or _controller.state.get_player(1).face_down or not _controller._extra_turn_queue.has(0):
 		return _fail("lunhui_others")
 	if _controller.get_skill_instance(0, "yongjie") == null or _controller.get_skill_instance(0, "lunhui") != null:
 		return _fail("lunhui_skill_replace")
@@ -424,10 +452,10 @@ func _test_yongjie_wheel_and_tiancai() -> bool:
 	# 进入永劫后的武将牌左上角提示；天裁与弑魂同时处于永劫仍只显示一条角色级提示。
 	if owner.character_corner_text != "永劫" or owner.character_corner_text_entries.size() != 1:
 		return _fail("yongjie_corner_text=%s/%s" % [owner.character_corner_text, owner.character_corner_text_entries])
-	# 第二与第三次火焰伤害各摸1张；③完成后退出所有其他轮回技永劫并进入下一轮回①。
+	# 第二次火焰伤害摸1张；③不再摸牌，只退出所有其他轮回技永劫并进入下一轮回①。
 	_controller.emit_rule_timing("damageAfter", 1, 0, 1, {"amount":1, "nature":"fire", "damage_event_id":202})
 	_controller.emit_rule_timing("damageAfter", 1, 0, 1, {"amount":1, "nature":"fire", "damage_event_id":203})
-	if owner.hand.size() != 2 or bool(tiancai.get_reincarnation_state().get("eternal", true)) or bool(shihun.get_reincarnation_state().get("eternal", true)) or yongjie.get_reincarnation_round_count() != 2 or yongjie.get_reincarnation_section_index() != 0:
+	if owner.hand.size() != 1 or bool(tiancai.get_reincarnation_state().get("eternal", true)) or bool(shihun.get_reincarnation_state().get("eternal", true)) or yongjie.get_reincarnation_round_count() != 2 or yongjie.get_reincarnation_section_index() != 0:
 		return _fail("yongjie_exit_eternal=%d/%s/%s/%s" % [owner.hand.size(), tiancai.get_reincarnation_state(), shihun.get_reincarnation_state(), yongjie.get_reincarnation_state()])
 	# 退出永劫后提示必须移除；角色不再处于永劫状态，武将牌左上角不残留“永劫”文本。
 	if not owner.character_corner_text.is_empty() or not owner.character_corner_text_entries.is_empty():
@@ -772,6 +800,20 @@ func _count_card_uses(player_id: int, definition_id: String) -> int:
 	if player == null:
 		return 0
 	return int(player.card_use_history.get(definition_id, 0))
+
+
+## 提交当前统一选择请求；牌、目标、文字选项与取消状态完整走权威动作入口，用于驱动回合开始类技能的目标询问。
+func _submit_pending_choice(actor_id: int, card_ids: Array[int], target_ids: Array[int], control_id: String, confirmed: bool) -> bool:
+	if _controller._pending_card_choice.is_empty():
+		return _fail("missing_pending_choice actor=%d" % actor_id)
+	# 当前请求 ID；每次恢复可能同步创建下一请求，因此提交前只读取本窗口稳定编号。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	# 标准选择动作；全部维度都显式填写，避免测试依赖旧 confirmed 推断兼容逻辑。
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":card_ids.duplicate(), "selected_target_ids":target_ids.duplicate(), "selected_control_id":control_id, "confirmed":confirmed}
+	if not _controller.submit_action(action):
+		return _fail("choice_rejected actor=%d request=%d payload=%s" % [actor_id, request_id, action.payload])
+	return true
 
 
 ## 输出失败原因并以非零状态退出；返回false便于调用方立即终止后续断言。

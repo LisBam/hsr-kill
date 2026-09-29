@@ -1,6 +1,6 @@
 extends SkillDefinition
 
-## 【轮回】技能源码。任意角色回合结束后检查12枚火种，强制完成区域废除、友方离场、翻面、特殊换形态与额外回合。
+## 【轮回】技能源码。任意角色回合结束后检查12枚火种，强制完成区域废除、友方离场、特殊换形态与额外回合。
 
 ## “火种”公开标记稳定ID；达到觉醒阈值后移除全部数量。
 const FIRE_SEED_MARK_ID: String = "huozhong"
@@ -23,7 +23,7 @@ func _init() -> void:
 		"trigger":"phaseAfter",
 		"ui_enabled":false,
 		"awakening":true,
-		"description":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将所有其他角色的武将牌翻面，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
+		"description":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
 	})
 
 
@@ -51,10 +51,6 @@ func _on_any_turn_after(event: RuleEvent) -> void:
 	owner.character_form_state[REMOVED_ALLY_IDS_STATE_KEY] = removed_ally_ids.duplicate()
 	for ally_id: int in removed_ally_ids:
 		host.call("remove_player_from_game", ally_id, get_id(), false)
-	# 其他仍在场角色；已离场友方不再属于“所有其他角色”的翻面集合。
-	for other_player: PlayerState in host.state.players:
-		if other_player.player_id != owner_player_id and other_player.alive and not other_player.out_of_game:
-			host.call("turn_over_player", other_player.player_id, owner_player_id, get_id())
 	if not bool(host.call("replace_player_character_card", owner_player_id, TRANSFORM_CHARACTER_ID, get_id(), true)):
 		return
 	# 换形态后的同一角色状态；基础上限已经切换为卡厄斯兰那并保留局内独立修正。
