@@ -4,6 +4,8 @@ extends CardDefinition
 
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
+## requires_actor_choice=true：结算中必须由使用者本人选定目标区域内的一张牌，
+## 使用者在结算前阵亡后无法代理该选择，本牌整体失效且不移动任何牌。
 func _init() -> void:
 	super({
 		"id": "guohe",
@@ -24,6 +26,7 @@ func _init() -> void:
 		"description": "弃置一名其他角色区域里的一张牌。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
+		"requires_actor_choice": true,
 		"provided_response_pattern": "",
 		"ai": {"order":9.0, "value":5.0, "target_result":-1.5, "lose_card":true, "discard":true},
 		"ai_target_attitude": "hostile",

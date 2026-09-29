@@ -25,6 +25,8 @@ func resolve(card: CardInstance, actor_id: int, target_ids: Array[int]) -> Strin
 	if definition == null:
 		host.add_log("卡牌【%s】缺少源码定义，效果未执行。" % card.definition_id)
 		return "discard"
+	if invalidate_when_actor_dead(definition, actor_id):
+		return "discard"
 	return definition.resolve(self, card, actor_id, target_ids)
 
 
@@ -36,7 +38,29 @@ func resolve_target(card: CardInstance, actor_id: int, target_id: int, resolutio
 	var definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if definition == null:
 		return "discard"
+	if invalidate_when_actor_dead(definition, actor_id):
+		return "discard"
 	return definition.resolve_target(self, card, actor_id, target_id, resolution_context)
+
+
+## 解析本次牌效的有效来源角色ID；使用者阵亡后返回-1，牌效改按“无来源”继续结算。
+## 卡牌源码在派发以使用者为来源的时机或伤害前调用本入口，避免把阵亡角色继续当作来源。
+func effective_source_id(actor_id: int) -> int:
+	if host != null and host.has_method("resolve_card_effect_source_id"):
+		return int(host.call("resolve_card_effect_source_id", actor_id))
+	return actor_id
+
+
+## 判断本次牌效是否因使用者阵亡而整体失效；只有声明“结算中需要使用者本人选牌”的牌会失效。
+## 其余牌仍按无来源继续结算，因此本函数对它们始终返回 false，不改变原有牌效。
+func invalidate_when_actor_dead(definition: CardDefinition, actor_id: int) -> bool:
+	if definition == null or not definition.requires_actor_choice():
+		return false
+	if effective_source_id(actor_id) >= 0:
+		return false
+	# 失效事实日志；逐目标牌每个目标只记录一次，便于玩家理解为何本牌没有产生任何效果。
+	host.add_log("【%s】的使用者已经死亡，本牌效果失效。" % GameSettings.resolve_card_name(definition.get_metadata()))
+	return true
 
 
 ## 按父牌 UID 将普通选牌结果交回对应卡牌源码；调度器不识别任何具体卡牌或选择 kind。

@@ -174,6 +174,14 @@ func preserves_requested_target_order() -> bool:
 	return false
 
 
+## 返回本牌结算过程中是否必须由使用者本人继续选牌或指定响应。
+## 声明为 true 的牌（例如【过河拆桥】【顺手牵羊】【火攻】【借刀杀人】）在结算中会向使用者本人创建选择请求，
+## 使用者阵亡后这些环节无法由其他角色代理，因此整张牌直接失效，不再产生任何牌效；
+## 没有声明该字段的牌在使用者阵亡后仍按“无来源”正常结算，伤害来源统一记为-1。
+func requires_actor_choice() -> bool:
+	return bool(_metadata.get("requires_actor_choice", false))
+
+
 ## 返回真正进入本牌目标时机与逐目标结算的目标数组；默认与玩家声明完全一致，角色语义辅助目标可在卡牌文件中剥离。
 func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
 	return requested_target_ids.duplicate()

@@ -4,6 +4,8 @@ extends CardDefinition
 
 
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
+## requires_actor_choice=true：结算结果必须回到使用者本人（持刀者未打出【杀】时其武器交给使用者），
+## 使用者在结算前阵亡后无法承接武器或决定后续，本牌整体失效。
 func _init() -> void:
 	super({
 		"id": "jiedao",
@@ -24,6 +26,7 @@ func _init() -> void:
 		"description": "令一名装备武器的角色对合法目标使用【杀】，否则其将武器交给你。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
+		"requires_actor_choice": true,
 		"provided_response_pattern": "",
 		"ai": {"order":8.0, "value":2.0, "player_result":0.2, "target_result":-1.0, "gain":true, "use_sha":true},
 	})
@@ -159,10 +162,16 @@ func _resolve_borrow_sword(resolver: Object, parent_card_uid: int, source_id: in
 
 ## 应用【借刀杀人】响应结果；实体【杀】复用牌族组件的完整武器、防具和伤害流程。
 func _apply_borrow_sword_response(resolver: Object, context: Dictionary, slash: CardInstance) -> void:
+	# 借刀使用者（来源）ID；持刀者未打出【杀】时武器本应交给该角色。
+	var source_id: int = int(context.get("source_id", -1))
+	# 来源有效性复核；使用者在响应等待期间阵亡时本牌已经整体失效：
+	# 既不能把武器交给已经阵亡的角色，也不再继续强制【杀】的后续流程。
+	if resolver.effective_source_id(source_id) < 0:
+		return
 	# 持刀者 ID；其酒加值只在实际打出【杀】时消耗。
 	var weapon_holder_id: int = int(context.get("responder_id", -1))
 	if slash == null:
-		resolver.host.transfer_equipment(weapon_holder_id, int(context.get("source_id", -1)), "weapon")
+		resolver.host.transfer_equipment(weapon_holder_id, source_id, "weapon")
 		return
 	# 持刀者状态；用于读取并清空本回合下一张【杀】的酒加值。
 	var weapon_holder: PlayerState = resolver.state.get_player(weapon_holder_id)

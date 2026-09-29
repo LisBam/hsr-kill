@@ -4571,6 +4571,30 @@ func lose_hp(source_id: int, target_id: int, amount: int, reason: String = "", a
 	return final_amount
 
 
+## 解析牌效结算期间的有效来源角色ID；使用者仍存活时返回其稳定player_id，已经阵亡时返回-1表示无来源。
+## 设计意图：牌的使用事实在声明使用时已经成立，使用者在结算中途阵亡不应撤销整张牌，
+## 而是让后续伤害按“无来源”结算；需要使用者本人继续选牌或指定的牌由卡牌定义另行声明为整体失效。
+## 使用场景：卡牌源码在派发以使用者为来源的时机与伤害前调用，界面与测试可读取同一判定结果。
+func resolve_card_effect_source_id(actor_id: int) -> int:
+	# 使用者状态；不存在的座次同样视为没有可用来源。
+	var actor: PlayerState = state.get_player(actor_id) if state != null and actor_id >= 0 else null
+	if actor == null or not actor.alive:
+		return -1
+	return actor_id
+
+
+## 返回指定牌的使用者是否仍可作为本牌的来源继续结算；阵亡后依赖使用者的牌必须整体失效。
+func is_card_effect_actor_available(actor_id: int) -> bool:
+	return resolve_card_effect_source_id(actor_id) >= 0
+
+
+## 返回指定卡牌是否声明“结算中必须由使用者本人选牌或指定”；控制器据此判断使用者阵亡后整张牌是否失效。
+func requires_card_effect_actor(card_definition_id: String) -> bool:
+	# 当前卡牌源码定义；未注册或已失效的定义不声明任何依赖。
+	var definition: CardDefinition = GameDatabase.get_card_definition(card_definition_id)
+	return definition != null and definition.requires_actor_choice()
+
+
 ## 造成伤害并执行防具修正、濒死、死亡及属性连环传导。
 func damage(source_id: int, target_id: int, amount: int, nature: String = "normal", card_id: String = "", chain_transfer: bool = false, ignore_armor: bool = false, source_context: Dictionary = {}) -> void:
 	if state == null or state.game_over:
@@ -4581,12 +4605,19 @@ func damage(source_id: int, target_id: int, amount: int, nature: String = "norma
 		return
 	# 受伤武将入场代次；伤害异步等待期间即使同一座次换上新武将，尾部也只属于本次受伤的旧武将。
 	var target_character_generation: int = target.character_generation
+	# 造成伤害的牌实际使用者；默认等于伤害来源，决斗等“原使用者与最终伤害来源不同”的牌效必须通过source_context显式覆盖。
+	# 必须在来源降级之前读取：牌的使用事实在声明使用时即已成立，来源死亡只取消伤害归属，不改变“谁使用了这张牌”。
+	var card_user_id: int = int(source_context.get("card_user_id", source_id))
 	# 伤害来源角色；无来源伤害保持空值，不伪造来源武将代次。
 	var damage_source_player: PlayerState = state.get_player(source_id) if source_id >= 0 else null
+	# 来源死亡降级；伤害来源角色已经阵亡时本次伤害改为无来源，来源ID统一取-1。
+	# 设计意图：使用牌在声明时已经成立，来源在结算中途死亡不撤销牌效，只让本段伤害不再归属任何角色，
+	# 因此既不计入死者的累计造成伤害与击杀统计，也不会触发“你造成伤害后”这类以来源身份为前提的技能。
+	if damage_source_player != null and not damage_source_player.alive:
+		source_id = -1
+		damage_source_player = null
 	# 来源武将入场代次；-1表示无角色来源，来源技能只能响应与本代次一致的伤害尾部。
 	var source_character_generation: int = damage_source_player.character_generation if damage_source_player != null else -1
-	# 造成伤害的牌实际使用者；默认等于伤害来源，决斗等“原使用者与最终伤害来源不同”的牌效必须通过source_context显式覆盖。
-	var card_user_id: int = int(source_context.get("card_user_id", source_id))
 	# 最终伤害值；先应用武器增伤，再应用防具修正与事件处理器。
 	var final_amount: int = amount
 	# 造成伤害加成机缘；机缘历史是唯一来源，过关斩将与普通机缘模式都通过同一查询生效。
@@ -6394,6 +6425,10 @@ func _apply_target_card_choice(sequence: RuleStepSequence) -> void:
 	var source_id: int = int(context.get("source_id", -1))
 	# 目标角色 ID；所选 UID 必须仍位于其区域。
 	var target_id: int = int(context.get("target_id", -1))
+	# 来源有效性复核；等待选择期间来源阵亡时【过河拆桥】【顺手牵羊】已经整体失效，
+	# 既不能继续移动目标区域的牌，更不能把牌交给已经阵亡的角色；牌仍由后续步骤正常收尾进弃牌堆。
+	if resolve_card_effect_source_id(source_id) < 0:
+		return
 	if bool(sequence.context.is_steal):
 		_take_selected_player_card(source_id, target_id, int(sequence.context.selected_uids[0]))
 	else:
