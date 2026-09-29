@@ -7389,6 +7389,74 @@ func get_player_zone_candidates(viewer_id: int, target_id: int) -> Array[Diction
 	return _build_player_zone_candidates(viewer_id, target_id, true, true, true)
 
 
+## 返回全部存活在场角色装备区与判定区中的可弃置候选，即规则概念中的「场上」。
+## 「场上」只含装备区与判定区，不含手牌区；include_self 决定是否纳入来源角色自己的场地牌。
+## 候选沿用统一区域候选结构，实际移动仍必须调用 discard_selected_player_card() 复核保护规则。
+func get_field_card_candidates(viewer_id: int, include_self: bool = true) -> Array[Dictionary]:
+	# 场上候选结果；按权威座次顺序聚合，界面、AI与回放据此稳定复现。
+	var result: Array[Dictionary] = []
+	if state == null:
+		return result
+	for player: PlayerState in state.players:
+		if player == null or not player.alive or player.out_of_game:
+			continue
+		if not include_self and player.player_id == viewer_id:
+			continue
+		# 装备区候选；逐槽判断废除状态，已废除的栏位不产生候选，与区域废除语义保持一致。
+		for slot: String in PlayerState.EQUIPMENT_SLOT_ORDER:
+			if player.is_equipment_slot_abolished(slot):
+				continue
+			# 当前槽位装备实体；空槽位不产生候选。
+			var equipment_card: CardInstance = player.equipment.get(slot) as CardInstance
+			if equipment_card == null:
+				continue
+			if not can_discard_player_card(viewer_id, player.player_id, equipment_card, "equipment", slot):
+				continue
+			result.append(_serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, slot))
+		# 判定区候选；整区废除时该角色的判定区牌不进入场上。
+		if player.judgment_area_abolished:
+			continue
+		for judgment_card: CardInstance in player.judgment_area:
+			if judgment_card == null:
+				continue
+			if not can_discard_player_card(viewer_id, player.player_id, judgment_card, "judgment"):
+				continue
+			result.append(_serialize_choice_candidate(judgment_card, player.player_id, "judgment", true))
+	return result
+
+
+## 返回指定角色当前可执行的欢愉技稳定ID列表；按参演编号升序、技能稳定ID字典序排列。
+## 排序口径与阿哈时刻参演序列完全一致，"令其发动欢愉技"因此与常规演出选中同一优先级最高者。
+func get_joy_skill_ids(player_id: int) -> Array[String]:
+	# 欢愉技ID结果；角色不存在、已死亡、已离场或没有可执行欢愉技时返回空数组。
+	var result: Array[String] = []
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game:
+		return result
+	# 欢愉技条目；先收集编号与ID再排序，避免排序回调内反复查询技能实例。
+	var entries: Array[Dictionary] = []
+	# 当前角色技能实例表；与阿哈时刻读取同一索引，不额外缓存技能对象。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；非欢愉技、效果失效或持有者状态不满足时跳过，与参演筛选口径一致。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null or not skill.is_joy_skill() or not skill.can_perform_joy_skill():
+			continue
+		entries.append({"skill_id":skill.get_id(), "performance_number":skill.get_performance_number()})
+	entries.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		# 主排序键；编号越小优先级越高。
+		var left_number: int = int(left.get("performance_number", 0))
+		var right_number: int = int(right.get("performance_number", 0))
+		if left_number != right_number:
+			return left_number < right_number
+		# 次排序键；编号相同时按技能稳定ID字典序，保证结果与排序调用无关。
+		return str(left.get("skill_id", "")) < str(right.get("skill_id", ""))
+	)
+	for entry: Dictionary in entries:
+		result.append(str(entry.get("skill_id", "")))
+	return result
+
+
 ## 由来源角色弃置目标区域内指定UID的一张牌；成功返回true，装备保护与等待期间区域变化会在移动前再次校验。
 func discard_selected_player_card(source_player_id: int, target_player_id: int, card_uid: int) -> bool:
 	return _discard_selected_player_card(target_player_id, card_uid, source_player_id)
@@ -10677,6 +10745,41 @@ func continue_after_ahha_moment(player_id: int, starts_new_round: bool) -> void:
 	if _resume_pending_turn_after_extra_turns(player_id, starts_new_round):
 		return
 	_begin_turn_after_opportunity(player_id, starts_new_round)
+
+
+## 恢复由技能请求、已经完整结束的独立欢愉技演出；只把控制权交还发起技能。
+## 与 continue_after_ahha_moment 的区别：本入口不推进回合开始游标，也不重新建立回合事实，
+## 因为额外演出发生在回合开始窗口内部或回合进行中，回合归属并未改变。
+func continue_after_standalone_joy_performance(context: Dictionary) -> void:
+	# 发起技能归属角色与稳定技能ID；缺失时直接丢弃，避免把回调交给随机实例。
+	var skill_owner_id: int = int(context.get("skill_owner_id", -1))
+	var skill_id: String = str(context.get("skill_id", ""))
+	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty():
+		return
+	# 当前运行时技能实例；换将或技能重装后武将代次不一致时安全跳过，不再执行旧实例的后续。
+	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
+	if skill == null or not skill.matches_character_generation(int(context.get("skill_character_generation", -1))):
+		return
+	# 完成上下文副本；技能只读取稳定值，不得通过本字典改写调用方的运行时对象。
+	var stable_context: Dictionary = context.duplicate(true)
+	skill.continue_joy_performance(stable_context)
+	# 技能回调可能立即登记「然后」步骤或创建新选择；统一管线与停滞守卫会按既有顺序继续。
+	_resume_settlement_pipeline()
+
+
+## 令指定角色立即发动其指定欢愉技；独立于常规阿哈时刻队列，演出结束后回调发起技能。
+## 内容文件只经本端口访问阿哈时刻组件，不直接持有组件引用。
+func try_perform_single_joy_skill(player_id: int, skill_id: String, completion_context: Dictionary) -> bool:
+	if ahha_moment_system == null:
+		return false
+	return ahha_moment_system.try_perform_single_joy_skill(player_id, skill_id, completion_context)
+
+
+## 令指定角色立即触发一次额外阿哈时刻；跳过触发概率与本轮额度，演出结束后回调发起技能。
+func try_trigger_extra_moment(trigger_player_id: int, completion_context: Dictionary) -> bool:
+	if ahha_moment_system == null:
+		return false
+	return ahha_moment_system.try_trigger_extra_moment(trigger_player_id, completion_context)
 
 
 ## 判断指定角色的本次回合是否会开启新的一轮；额外回合不得开启新轮，也不得递增 round_number。

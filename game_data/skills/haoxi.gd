@@ -1,6 +1,7 @@
 extends SkillDefinition
 
 ## 【好戏】欢愉技源码。阿哈时刻按参演编号144驱动：先令至多两名其他角色各弃置一张随机手牌，再从摸牌堆中获得X张基本牌。
+## 补充：欢愉技一律强制发动，本技能不创建"是否发动"询问，目标选择窗口也不提供取消，选择0名目标即为合法结算。
 
 ## 可选其他角色数量下限；固定0，对应原文“0-2名”，此时X取2张基本牌。
 const MIN_TARGET_COUNT: int = 0
@@ -13,6 +14,11 @@ const BASIC_DRAW_BASE: int = 2
 
 ## 目标选择请求种类；恢复时按该值分流到结算入口。
 const TARGET_CHOICE_KIND: String = "haoxi_targets"
+
+## 目标选择窗口是否允许取消；固定false，对应"强制发动、没有取消按钮"的口径。
+## 该值为false时界面不会显示取消按钮，玩家只能通过"不选任何角色直接确定"表达0名目标，
+## 因此 allow_cancel 不能复用为"可以少选"的语义。
+const ALLOW_TARGET_CANCEL: bool = false
 
 ## 随机弃置手牌的随机历史种类；固定kind便于测试与复盘检索，与获得牌分开记录。
 const RANDOM_DISCARD_HISTORY_KIND: String = "haoxi_random_hand_discard"
@@ -35,7 +41,7 @@ func _init() -> void:
 		"trigger":"passive",
 		"joy_skill":true,
 		"performance_number":144,
-		"description":"欢愉技，参演编号144，你可弃置0-2名其他角色各一张随机手牌，然后从牌堆中获得X张基本牌。（X为2-本次选择的目标数）",
+		"description":"欢愉技，参演编号144，你弃置0-2名其他角色各一张随机手牌，然后从牌堆中获得X张基本牌。（X为2-本次选择的目标数）",
 	})
 
 
@@ -54,16 +60,16 @@ func perform_joy_skill(context: Dictionary) -> void:
 		# 没有可弃置目标时直接按X=2结算，保证技能仍然完整演出而不是被静默跳过。
 		_execute_haoxi([])
 		return
-	request_target_selection("【好戏】请选择0至2名其他角色各弃置一张随机手牌", candidate_target_ids, MIN_TARGET_COUNT, mini(MAX_TARGET_COUNT, candidate_target_ids.size()), true, {"kind":TARGET_CHOICE_KIND})
+	request_target_selection("【好戏】请选择0至2名其他角色各弃置一张随机手牌", candidate_target_ids, MIN_TARGET_COUNT, mini(MAX_TARGET_COUNT, candidate_target_ids.size()), ALLOW_TARGET_CANCEL, {"kind":TARGET_CHOICE_KIND})
 
 
-## 恢复目标选择；未确认表示放弃弃置，按0名目标结算并继续获得基本牌。
+## 恢复目标选择；窗口不可取消，因此正常路径必定收到已确认响应，未确认分支只兜底异常或回放输入。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response == null:
 		return false
 	if str(context.get("kind", "")) != TARGET_CHOICE_KIND:
 		return false
-	# 已确认目标列表；未确认时为空，对应X取最大值。
+	# 已确认目标列表；异常输入按0名目标处理，对应X取最大值，不会中断本次强制演出。
 	var selected_target_ids: Array[int] = []
 	if response.confirmed:
 		selected_target_ids = response.target_ids

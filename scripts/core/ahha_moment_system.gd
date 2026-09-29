@@ -10,6 +10,10 @@ const TRIGGER_HISTORY_KIND: String = "ahha_moment_trigger_roll"
 ## 阿哈时刻开始的公开日志模板；%d 为本轮实际参演技能数量，数量为0时不会触发本流程。
 const LOG_TRIGGER_TEMPLATE: String = "阿哈时刻：%d项欢愉技依次演出。"
 
+## 技能请求的额外阿哈时刻开始的公开日志模板；%d 为本场实际参演技能数量。
+## 独立模板用于把「技能请求的额外演出」与「回合开始概率触发的常规演出」在日志中区分开，便于复盘与测试核对。
+const LOG_EXTRA_TRIGGER_TEMPLATE: String = "额外阿哈时刻：%d项欢愉技依次演出。"
+
 ## 单次同步推进允许连续执行的参演技能数上限；超过后退回下一帧推进，避免异常内容形成深递归调用栈。
 const MAX_SYNCHRONOUS_ADVANCES: int = 64
 
@@ -56,6 +60,11 @@ var _next_performance_scheduled: bool = false
 ## 本次同步推进已连续执行的参演技能数；达到上限后退回下一帧推进。
 var _synchronous_advance_count: int = 0
 
+## 技能请求演出的完成上下文；空字典表示当前队列是回合开始概率触发的常规阿哈时刻。
+## 非空时 _complete_all_performances() 改为回调发起技能，绝不调用 continue_after_ahha_moment，
+## 避免额外演出结束时重复推进回合开始游标；只保存可序列化基础值，不持有技能实例或节点。
+var _standalone_context: Dictionary = {}
+
 
 ## 让阿哈时刻在场景树暂停期间仍能由帧回调推进队列，保证联机选择后的恢复不被冻结。
 func _ready() -> void:
@@ -80,6 +89,7 @@ func shutdown() -> void:
 	_waiting_for_barrier = false
 	_resume_player_id = -1
 	_resume_starts_new_round = false
+	_standalone_context.clear()
 	_next_performance_scheduled = false
 	_synchronous_advance_count = 0
 	_tracked_round_number = -1
@@ -106,6 +116,11 @@ func get_round_trigger_probability() -> float:
 ## 返回本轮是否已经触发过阿哈时刻；只读诊断接口，供测试与调试复核每轮额度。
 func has_triggered_this_round() -> bool:
 	return _triggered_this_round
+
+
+## 返回当前演出是否由技能请求（而非回合开始概率触发）；只读诊断接口，不参与任何规则判定。
+func is_standalone_performance() -> bool:
+	return is_active() and not _standalone_context.is_empty()
 
 
 ## 在普通回合开始之前尝试触发阿哈时刻；返回true表示该角色的回合事实必须等待本次演出完整结束。
@@ -141,6 +156,58 @@ func try_trigger_before_turn_start(turn_context: Dictionary, is_extra_turn: bool
 	_host.add_log(LOG_TRIGGER_TEMPLATE % _performance_queue.size())
 	_advance_to_next_valid_entry()
 	return true
+
+
+## 令指定角色立即发动其指定欢愉技；独立于阿哈时刻的概率判定与本轮额度，演出结束后回调请求技能。
+## 返回true表示已建立队列并由本组件驱动演出；返回false表示条件不足，请求方必须自行按失败分支收尾。
+func try_perform_single_joy_skill(player_id: int, skill_id: String, completion_context: Dictionary) -> bool:
+	if not _can_start_requested_performance():
+		return false
+	# 演出技能实例；必须当前确实可执行，否则不建立队列，避免请求方永久等待一个不会到来的回调。
+	var skill: SkillDefinition = _host.get_skill_instance(player_id, skill_id) as SkillDefinition
+	if skill == null or not skill.is_joy_skill() or not skill.can_perform_joy_skill():
+		return false
+	# 单项参演项；沿用常规队列的字段形状，使技能侧拿到的演出上下文与阿哈时刻完全同构。
+	var entry: Dictionary = {"player_id":player_id, "skill_id":skill_id, "performance_number":skill.get_performance_number(), "seat_order":0}
+	# 显式声明为 Array[Dictionary]：直接传 [entry] 这类无类型字面量会因形参类型收窄而得到空数组，
+	# 演出随后会“零参演”地静默完成，请求方永远等不到 continue_joy_performance 回调。
+	var entries: Array[Dictionary] = [entry]
+	_start_requested_performance(entries, player_id, completion_context)
+	return true
+
+
+## 立即触发一次额外阿哈时刻；跳过触发概率判定与本轮额度，演出结束后回调请求技能。
+## 返回true表示已建立队列；返回false表示条件不足或场上没有可执行欢愉技。
+func try_trigger_extra_moment(trigger_player_id: int, completion_context: Dictionary) -> bool:
+	if not _can_start_requested_performance():
+		return false
+	# 参演序列；为空表示场上当前没有任何可执行欢愉技，此时直接拒绝。
+	# 与常规入口保持同一口径：跳过时不得消耗随机数、不得写随机历史、不得占用本轮额度。
+	var performance_order: Array[Dictionary] = build_performance_order(trigger_player_id)
+	if performance_order.is_empty():
+		return false
+	_start_requested_performance(performance_order, trigger_player_id, completion_context)
+	_host.add_log(LOG_EXTRA_TRIGGER_TEMPLATE % performance_order.size())
+	return true
+
+
+## 技能请求演出的公共前置判定；未启用、终局、无权威端口或已有演出在推进时统一拒绝。
+## 有意不复用 _can_trigger_now()：请求方演出不受本轮额度限制，但同样不得与进行中的演出重叠。
+func _can_start_requested_performance() -> bool:
+	return _enabled and _host != null and _state != null and not _state.game_over and not is_active()
+
+
+## 建立一次由技能请求的演出队列；只保存可序列化基础值，并固化完成上下文供演出结束后回调请求技能。
+func _start_requested_performance(entries: Array[Dictionary], requester_player_id: int, completion_context: Dictionary) -> void:
+	_performance_queue = entries
+	_active_index = -1
+	_waiting_for_barrier = false
+	_synchronous_advance_count = 0
+	# 演出者上下文中的发起角色；额外演出不恢复回合开始，因此不写 _resume_starts_new_round。
+	_resume_player_id = requester_player_id
+	_resume_starts_new_round = false
+	_standalone_context = completion_context.duplicate(true)
+	_advance_to_next_valid_entry()
 
 
 ## 构建阿哈时刻的欢愉技执行序列；纯查询，不修改任何状态，执行与测试共用同一排序结果。
@@ -278,17 +345,24 @@ func _complete_current_performance() -> void:
 	_advance_to_next_valid_entry()
 
 
-## 全部参演技能结束后清空组件状态并交还回合开始流程。
+## 全部参演技能结束后清空组件状态，并按本次演出来源交还控制权。
+## 常规演出交还回合开始流程；技能请求的额外演出只回调发起技能，绝不推进回合开始游标。
 func _complete_all_performances() -> void:
 	# 恢复信息副本；先清空组件状态，恢复阶段若立即触发新流程不会与旧队列混淆。
 	var resume_player_id: int = _resume_player_id
 	var resume_starts_new_round: bool = _resume_starts_new_round
+	# 请求方演出完成上下文副本；非空表示本次演出由技能请求，结束后只能回调该技能。
+	var standalone_context: Dictionary = _standalone_context.duplicate(true)
 	_performance_queue.clear()
 	_active_index = -1
 	_waiting_for_barrier = false
 	_resume_player_id = -1
 	_resume_starts_new_round = false
+	_standalone_context.clear()
 	_synchronous_advance_count = 0
+	if not standalone_context.is_empty():
+		_host.continue_after_standalone_joy_performance(standalone_context)
+		return
 	_host.continue_after_ahha_moment(resume_player_id, resume_starts_new_round)
 
 

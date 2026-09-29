@@ -139,6 +139,10 @@ func _test_description_type_detection() -> bool:
 	# 引用他人欢愉技；标签后紧跟实词，不构成类型声明。
 	if SkillDefinition.description_declares_joy_type("锁定技，当一名角色的欢愉技执行时，你摸一张牌。"):
 		return _fail("joy_type_referenced")
+	# 引用他人欢愉技且以句号收尾；句号不能作为类型声明证据，
+	# 否则“令一名角色发动其欢愉技。”这类正文会被误判为欢愉技，加载期直接拦下合法技能。
+	if SkillDefinition.description_declares_joy_type("每种花色限一次，你的回合开始前，你可以弃置一张手牌，然后令一名角色发动其欢愉技。若其没有欢愉技，则令其执行一个额外的出牌阶段。"):
+		return _fail("joy_type_referenced_sentence")
 	# 标签位于正文末尾；不构成类型声明。
 	if SkillDefinition.description_declares_joy_type("锁定技，本技能视为欢愉技"):
 		return _fail("joy_type_trailing")

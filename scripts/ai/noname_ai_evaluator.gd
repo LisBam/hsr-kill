@@ -144,6 +144,10 @@ var identity_strategy: IdentityStrategyEvaluator
 ## 缓存内容只允许读取，卡牌规则或技能 AI 不得向其中写入任何临时评分字段；运行时无需动态修改。
 var _card_definition_cache: Dictionary = {}
 
+## 已统计的武将欢愉技数量缓存；键为武将稳定ID，值为该武将声明的欢愉技数量。
+## 同为静态元数据缓存：一次决策内多次比较双方欢愉技数量时不再重复读取武将与其技能定义。
+var _character_joy_skill_count_cache: Dictionary = {}
+
 ## 当前一次出牌决策的完整合法动作副本；卡牌专属AI只可查询实际可执行后续，不得据手牌猜测已超次数的动作。
 var _current_legal_actions: Array[Dictionary] = []
 
@@ -1153,6 +1157,51 @@ func get_threat(authoritative_snapshot: Dictionary, viewer_id: int, target_id: i
 	return identity_strategy.get_threat(authoritative_snapshot, viewer_id, target_id)
 
 
+## 统计观察者本方或敌对一方当前拥有的欢愉技总数；供技能 AI 比较双方欢愉技数量差。
+##
+## 本方包含观察者自己与态度非负的其他存活在场角色，敌对一方只统计态度为负的角色，
+## 态度为0的中立角色不计入任何一方。武将未明置时按0计——AI不从隐藏信息推断技能构成。
+func get_side_joy_skill_count(authoritative_snapshot: Dictionary, viewer_id: int, allied: bool) -> int:
+	# 欢愉技总数结果。
+	var total_count: int = 0
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；死亡或离场角色不再提供欢愉技。
+		var player: Dictionary = player_variant as Dictionary
+		var other_id: int = int(player.get("player_id", -1))
+		if other_id < 0 or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		# 阵营筛选；观察者自己恒属于本方，其余角色按公开态度正负划分。
+		if other_id == viewer_id:
+			if not allied:
+				continue
+		else:
+			# 当前角色对观察者的态度；正值友方，负值敌方。
+			var attitude: float = get_attitude(authoritative_snapshot, viewer_id, other_id)
+			if allied and attitude < 0.0:
+				continue
+			if not allied and attitude >= 0.0:
+				continue
+		total_count += _get_cached_character_joy_skill_count(str(player.get("character_id", "")))
+	return total_count
+
+
+## 返回某个已明置武将声明的欢愉技数量；结果按武将ID缓存，不重复深拷贝技能定义。
+## 武将ID为空（未明置或对当前视角不可见）时返回0。
+func _get_cached_character_joy_skill_count(character_id: String) -> int:
+	if character_id.is_empty():
+		return 0
+	if not _character_joy_skill_count_cache.has(character_id):
+		# 武将声明的技能ID列表；静态元数据，与对局状态无关。
+		var character_definition: Dictionary = GameDatabase.get_character(character_id)
+		# 欢愉技数量；只读取技能定义中的 joy_skill 标签，不读取正文文本。
+		var joy_skill_count: int = 0
+		for skill_id_variant: Variant in character_definition.get("skills", []) as Array:
+			if bool(GameDatabase.get_skill(str(skill_id_variant)).get("joy_skill", false)):
+				joy_skill_count += 1
+		_character_joy_skill_count_cache[character_id] = joy_skill_count
+	return int(_character_joy_skill_count_cache.get(character_id, 0))
+
+
 ## 返回当前领袖危险度；技能 AI 可在救援、保护或集火逻辑中复用。
 func get_leader_danger(authoritative_snapshot: Dictionary) -> float:
 	return identity_strategy.get_leader_danger(authoritative_snapshot)
@@ -1286,6 +1335,20 @@ func _score_equipment_action(authoritative_snapshot: Dictionary, actor_id: int, 
 	# 白银狮子换装回复；装备新防具会令旧防具离区，受伤时的1点回复应增加友方自身换装收益。
 	var baiyin_replacement_recovery_value: float = score_baiyin_equipment_loss_recovery(authoritative_snapshot, actor_id, actor_id, old_equipment)
 	return new_value - old_value + baiyin_replacement_recovery_value + order * ORDER_WEIGHT
+
+
+## 返回指定卡牌是否为延时锦囊；供技能 AI 按标签判断弃置价值，不匹配具体牌名。
+## 运行期类别一律读取卡牌定义的 type 与 delayed 字段，与核心的延时锦囊判定保持同一口径。
+func is_delayed_trick_definition(definition_id: String) -> bool:
+	# 卡牌静态定义；使用评估器私有缓存，避免同一决策内重复深拷贝。
+	var definition: Dictionary = _get_cached_card_definition(definition_id)
+	return str(definition.get("type", "")) == "trick" and bool(definition.get("delayed", false))
+
+
+## 返回指定武将是否拥有至少一项欢愉技；供技能 AI 判断“令其发动欢愉技”是否成立。
+## 静态元数据查询，未明置武将与空ID一律按没有欢愉技处理。
+func character_has_joy_skill(character_id: String) -> bool:
+	return _get_cached_character_joy_skill_count(character_id) > 0
 
 
 ## 返回评估器内部缓存的卡牌静态定义；空 ID 返回空字典，命中后不再向数据库申请新的深拷贝。
