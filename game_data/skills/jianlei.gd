@@ -31,7 +31,7 @@ func _on_any_targeted(event: RuleEvent) -> void:
 		return
 	# 普通手牌区【闪】候选；空候选仍会创建只能取消的隐私保护询问。
 	var shan_candidates: Array[Dictionary] = _get_hand_shan_candidates()
-	request_card_selection("坚垒", "是否弃置一张【闪】保护该角色？", shan_candidates, 1, 1, true, {"kind":"jianlei_cost", "target_id":target_id, "card_uid":card_uid})
+	request_card_selection("坚垒", "是否弃置一张【闪】并令此【杀】无效？", shan_candidates, 1, 1, true, {"kind":"jianlei_cost", "target_id":target_id, "card_uid":card_uid})
 
 
 ## 恢复坚垒费用选择；等待期间距离、目标、牌色或费用失效时不执行任何效果。

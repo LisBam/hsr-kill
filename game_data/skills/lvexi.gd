@@ -8,8 +8,8 @@ const HUNT_MARK_ID: String = "liewu"
 ## 猎物受伤后追加的普通伤害值；固定为1，与技能原文一致。
 const FOLLOW_UP_DAMAGE: int = 1
 
-## 猎物死亡后摸牌数；固定为2，与技能原文一致。
-const DEATH_DRAW_COUNT: int = 2
+## 猎物死亡后摸牌数；固定为1，与技能原文一致。
+const DEATH_DRAW_COUNT: int = 1
 
 ## AI对猎物目标不可响应价值的基础加分；只调整用牌优先级，不改变规则效果。
 const AI_DIRECT_HIT_VALUE: float = 2.5
@@ -24,7 +24,7 @@ func _init() -> void:
 		"ui_enabled":false,
 		"lock":true,
 		"out_of_game_skill":true,
-		"description":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸两张牌并返场。",
+		"description":"离场技，锁定技，你计算与拥有“猎物”标记的角色距离为1，且其不可响应你使用的牌。当拥有“猎物”标记的角色受到伤害后，若你处于离场状态，你返场并对其造成1点伤害。当拥有“猎物”标记的角色死亡时，你摸一张牌并返场。",
 	})
 
 

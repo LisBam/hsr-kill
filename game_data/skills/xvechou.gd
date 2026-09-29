@@ -5,7 +5,7 @@ extends SkillDefinition
 ## 回复效果所在的①轮回节零基索引；固定0对应玩家可见的①。
 const RECOVER_SECTION_INDEX: int = 0
 
-## 减少体力上限并摸牌效果所在的②轮回节零基索引；固定1对应玩家可见的②。
+## 减少体力上限效果所在的②轮回节零基索引；固定1对应玩家可见的②。
 const MAX_HP_DRAW_SECTION_INDEX: int = 1
 
 ## ②轮回节固定减少的体力上限；数值1来自技能原文，修改时必须同步玩法文档。
@@ -23,7 +23,7 @@ func _init() -> void:
 		"reincarnation":true,
 		"reincarnation_section_count":2,
 		"reincarnation_has_explicit_sections":true,
-		"description":"轮回技，锁定技，当你进入濒死状态时，①你回复X点体力；②你减少1点体力上限并摸X张牌。（X为本技能的轮回数）",
+		"description":"轮回技，锁定技，当你进入濒死状态时，①你回复X点体力；②你减少1点体力上限。（X为本技能的轮回数）",
 	})
 
 
@@ -49,7 +49,6 @@ func _on_owner_dying_begin(_event: RuleEvent) -> void:
 		announce_activation({"round_count":round_count, "section_number":section_index + 1, "max_hp_loss":MAX_HP_LOSS, "draw_count":round_count})
 		# 当前已经位于dyingBegin；关闭体力上限端口的重复濒死入口，让外层流程在本技能完成后继续统一求救。
 		host.call("change_max_hp", owner_player_id, -MAX_HP_LOSS, owner_player_id, get_id(), false, false)
-		host.call("draw", owner_player_id, round_count)
 	complete_reincarnation_activation()
 
 

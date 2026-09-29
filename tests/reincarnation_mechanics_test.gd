@@ -111,7 +111,7 @@ func _test_metadata_and_special_character_pool() -> bool:
 		return _fail("saifeier_metadata=%s" % saifeier)
 	# 需求指定的四项技能原文；任何字符、标点或X说明变化都应立即失败。
 	var expected_descriptions: Dictionary = {
-		"xvechou":"轮回技，锁定技，当你进入濒死状态时，①你回复X点体力；②你减少1点体力上限并摸X张牌。（X为本技能的轮回数）",
+		"xvechou":"轮回技，锁定技，当你进入濒死状态时，①你回复X点体力；②你减少1点体力上限。（X为本技能的轮回数）",
 		"shishen":"锁定技，出牌阶段，你使用的前X张【杀】无距离与次数限制。当你使用【杀】指定目标时，你失去1点体力并令此【杀】伤害+1。",
 		"jvkou":"轮回技，一名角色于其回合内首次造成伤害后，其可令你①摸一张牌；②获得一枚“币”标记。你每有一枚“币”标记，你的手牌上限便+1。",
 		"huanri":"出牌阶段限一次，你可移除你的所有“币”并对一名其他角色造成等量点伤害。",
@@ -216,10 +216,10 @@ func _test_xvechou_shishen_and_restore() -> bool:
 	if owner.hp != 1 or int(first_state.get("round_count", 0)) != 1 or int(first_state.get("section_index", -1)) != 1:
 		return _fail("xvechou_section_one=%s/%s" % [owner.hp, first_state])
 	owner.hp = 0
-	# ②减少1点上限并摸X=1张，随后回到①且轮回数增加到2；不得递归进入第二条濒死流程。
+	# ②减少1点上限，随后回到①且轮回数增加到2；不得递归进入第二条濒死流程。
 	_controller.emit_rule_timing("dyingBegin", 0, -1, 0, {"hp":0, "required_recover":1})
 	var second_state: Dictionary = _controller.get_reincarnation_skill_state(0, "xvechou")
-	if owner.max_hp != 4 or owner.hand.size() != 1 or int(second_state.get("round_count", 0)) != 2 or int(second_state.get("section_index", -1)) != 0:
+	if owner.max_hp != 4 or owner.hand.size() != 0 or int(second_state.get("round_count", 0)) != 2 or int(second_state.get("section_index", -1)) != 0:
 		return _fail("xvechou_section_two=%s/%s/%s" % [owner.max_hp, owner.hand.size(), second_state])
 	# X=2时前两张【杀】均解除距离与次数限制，第三张开始恢复基础规则。
 	var slash_definition: Dictionary = GameDatabase.get_card("sha")
