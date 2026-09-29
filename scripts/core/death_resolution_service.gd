@@ -95,6 +95,11 @@ func _commit(sequence: RuleStepSequence) -> void:
 		victim.identity_revealed = true
 	if str(sequence.context.mode) != "revival":
 		_host._record_match_kill(killer_id, victim.player_id)
+		# 音频表现：死亡事实成立时请求一次武将阵亡语音。
+		# 触发点放在事实提交之后、die时机派发之前：被前置窗口取消的死亡不会走到这里，因此不会误播；
+		# 复活模式并未真正阵亡（角色返场并回满体力），因此同样不发声。
+		# 武将ID使用死亡时的原武将，保证模式换将后仍为阵亡者本人的音色。
+		_host.request_die_voice(victim.player_id, victim.character_id)
 	_emit(sequence, "die")
 
 

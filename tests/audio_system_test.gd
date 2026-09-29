@@ -4,6 +4,7 @@ extends Node
 ## 大部分断言使用内存探测器与内存音频流，素材缺失时依然稳定通过；最后一个用例改为探测真实磁盘文件，
 ## 用于确认实际投放的音频素材已经就位并能被引擎加载。
 ## 路径解析使用虚构路径，绝不读写磁盘；只有核心层触发用例会真实开局，以覆盖“AI 自动出牌即发声”的完整链路。
+## 武将阵亡语音同样用虚构路径校验回退链：项目尚未为每名武将投放阵亡语音，因此不要求真实素材存在。
 
 ## 虚构技能 ID；与任何真实技能源码文件名都不重合，避免与正式素材产生歧义。
 const PROBE_SKILL_ID: String = "_audio_probe_skill"
@@ -66,6 +67,9 @@ const DAMAGE_EFFECT_CASES: Array[Array] = [
 ## 核心层自动触发用例最多等待的进程帧数；全 AI 对局在零延迟下会迅速出牌，通常在数十帧内即命中。
 const MAX_AUTOMATION_FRAMES: int = 600
 
+## 阵亡自动触发用例最多等待的进程帧数；死亡结算由事件运行时逐帧推进，需要额外等待其事实提交。
+const DEATH_SETTLE_MAX_FRAMES: int = 240
+
 ## 避免连续重复的抽样次数；次数足够多以暴露随机实现退化为固定取值的缺陷。
 const REPEAT_AVOIDANCE_SAMPLES: int = 30
 
@@ -87,12 +91,14 @@ func _ready() -> void:
 ## 依次执行全部音频系统断言；任一步失败立即以返回码1结束进程。
 func _run() -> void:
 	await get_tree().process_frame
-	# 音频目录约定；四个目录必须由项目预先创建，否则素材无处投放。
-	for audio_dir: String in [AudioCatalog.SKILL_AUDIO_DIR, AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.EFFECT_AUDIO_DIR, AudioCatalog.BGM_DIR]:
+	# 音频目录约定；五个目录必须由项目预先创建，否则素材无处投放。
+	for audio_dir: String in [AudioCatalog.SKILL_AUDIO_DIR, AudioCatalog.CARD_AUDIO_DIR, AudioCatalog.CHARACTER_DIE_AUDIO_DIR, AudioCatalog.EFFECT_AUDIO_DIR, AudioCatalog.BGM_DIR]:
 		if not DirAccess.dir_exists_absolute(audio_dir):
 			_fail("audio_directory_missing=%s" % audio_dir)
 			return
 	if not await _verify_skill_pool_tiers():
+		return
+	if not _verify_die_voice_pool():
 		return
 	if not _verify_card_voice_layers():
 		return
@@ -149,6 +155,35 @@ func _verify_skill_pool_tiers() -> bool:
 	# 未指定角色；必须跳过专属两级直接命中通用单音效，保证未选将时也有配音。
 	existing_paths[tier_four_path] = true
 	if not _expect_pool(catalog.resolve_skill_voice_pool(PROBE_SKILL_ID, ""), [tier_four_path], "skill_no_character_fallback"):
+		return false
+	return true
+
+
+## 校验武将阵亡语音的两级短路顺序；阵亡语音按武将ID命名，多音效池优先于单音效且没有通用兜底。
+func _verify_die_voice_pool() -> bool:
+	# 虚构存在集合；键为完整候选路径，值恒为true，模拟磁盘上真实存在的素材。
+	var existing_paths: Dictionary = {}
+	# 两级路径；由具体到唯一。
+	var die_pool_path: String = "%s/%s_1.ogg" % [AudioCatalog.CHARACTER_DIE_AUDIO_DIR, PROBE_CHARACTER_ID]
+	var die_single_path: String = "%s/%s.ogg" % [AudioCatalog.CHARACTER_DIE_AUDIO_DIR, PROBE_CHARACTER_ID]
+	existing_paths[die_pool_path] = true
+	existing_paths[die_single_path] = true
+	# 解析器实例；注入内存探测器后完全不访问磁盘。
+	var catalog: AudioCatalog = AudioCatalog.new()
+	catalog.path_probe = func(candidate_path: String) -> bool: return existing_paths.has(candidate_path)
+	# 多音效池存在时优先；即使同名单音效同时存在也不与池混播，避免随机性失真。
+	if not _expect_pool(catalog.resolve_character_die_voice_pool(PROBE_CHARACTER_ID), [die_pool_path], "die_pool_before_single"):
+		return false
+	# 池缺失后回退该武将的单音效；此时阵亡语音仍然存在，不会静默。
+	existing_paths.erase(die_pool_path)
+	if not _expect_pool(catalog.resolve_character_die_voice_pool(PROBE_CHARACTER_ID), [die_single_path], "die_single_fallback"):
+		return false
+	# 该武将没有投放素材；阵亡语音没有通用兜底层，必须返回空池而不是借用技能音效或其他武将素材。
+	existing_paths.erase(die_single_path)
+	if not _expect_pool(catalog.resolve_character_die_voice_pool(PROBE_CHARACTER_ID), [], "die_missing_silent"):
+		return false
+	# 空武将ID；未选将或武将未知时无法构造路径，同样返回空池。
+	if not _expect_pool(catalog.resolve_character_die_voice_pool(""), [], "die_empty_character"):
 		return false
 	return true
 
@@ -618,6 +653,33 @@ func _verify_core_voice_channels() -> void:
 		_fail("effect_voice_dedup_count=%d" % captured_requests.size())
 		await _release_controller(controller)
 		return
+	# 阵亡语音端口；手动请求一次应产生一条阵亡类负载，负载只含玩家与武将ID。
+	captured_requests.clear()
+	# 阵亡武将ID；取当前武将显式传入，用于验证负载字段与去重键都按武将区分。
+	var die_character_id: String = str(controller.state.players[0].character_id)
+	controller.request_die_voice(actor_id, die_character_id)
+	if captured_requests.size() != 1:
+		_fail("die_voice_port_count=%d" % captured_requests.size())
+		await _release_controller(controller)
+		return
+	# 阵亡语音负载；类别与武将ID必须逐字保留，音频层据此定位 game_data/characters/audio/die 下的专属素材。
+	var die_request: Dictionary = captured_requests[0]
+	if str(die_request.get("kind", "")) != MatchController.VOICE_KIND_DIE or str(die_request.get("character_id", "")) != die_character_id:
+		_fail("die_voice_payload=%s" % [die_request])
+		await _release_controller(controller)
+		return
+	# 不传武将ID；控制器必须回退解析该玩家的当前武将，且结果与显式传参完全相同，因此本次请求被去重丢弃。
+	controller.request_die_voice(actor_id)
+	if captured_requests.size() != 1:
+		_fail("die_voice_character_fallback_count=%d" % captured_requests.size())
+		await _release_controller(controller)
+		return
+	# 未知玩家且未给出武将ID；解析不出任何武将时必须静默拒绝，而不是发出带空武将ID的无效负载。
+	controller.request_die_voice(-1, "")
+	if captured_requests.size() != 1:
+		_fail("die_voice_unknown_player_count=%d" % captured_requests.size())
+		await _release_controller(controller)
+		return
 	# 伤害标识推导；护甲承伤、属性后缀与点数后缀必须与无名杀命名约定逐项一致。
 	for damage_case: Array in DAMAGE_EFFECT_CASES:
 		# 期望标识；与游戏内投放的素材文件名完全同名。
@@ -680,8 +742,42 @@ func _verify_core_voice_channels() -> void:
 	for captured_request: Dictionary in captured_requests:
 		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_EFFECT:
 			auto_effect_request_count += 1
+	# 自动触发的阵亡语音请求数量；同样只作副证据，测试对局在观察窗口内无人阵亡时不视为失败。
+	var auto_die_request_count: int = 0
+	for captured_request: Dictionary in captured_requests:
+		if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_DIE:
+			auto_die_request_count += 1
+	# 阵亡自动触发；从存活角色中选一名制造确定的阵亡，覆盖“死亡内容组件 → 控制器端口 → 表现信号”的完整链路。
+	# 该断言只在未终局时构造：终局状态下核心层会停止发布表现请求，属于协议约定而不是缺陷。
+	captured_requests.clear()
+	# 阵亡角色；按座次取一名仍存活且已选定武将的角色，避免选中观察窗口内已经阵亡的座次。
+	var victim: PlayerState = _pick_living_character_player(controller, actor_id) if not controller.state.game_over else null
+	if victim != null:
+		var victim_id: int = victim.player_id
+		var victim_character_id: String = str(victim.character_id)
+		victim.hp = 0
+		controller._resolve_death(victim_id, actor_id)
+		# 死亡结算由事件运行时逐帧推进；等待到阵亡请求出现为止，终局或超出帧数上限时停止等待。
+		for frame_index: int in range(DEATH_SETTLE_MAX_FRAMES):
+			if _has_voice_request_of_kind(captured_requests, MatchController.VOICE_KIND_DIE) or controller.state.game_over:
+				break
+			await get_tree().process_frame
+		# 阵亡请求；必须由死亡结算自身发出，且携带死亡时的原武将ID。
+		var death_request_found: bool = false
+		for captured_request: Dictionary in captured_requests:
+			if str(captured_request.get("kind", "")) == MatchController.VOICE_KIND_DIE and int(captured_request.get("player_id", -1)) == victim_id and str(captured_request.get("character_id", "")) == victim_character_id:
+				death_request_found = true
+		if not death_request_found:
+			_fail("die_voice_auto_trigger=%s" % [captured_requests])
+			await _release_controller(controller)
+			return
+	elif auto_die_request_count <= 0:
+		# 观察窗口内既无人阵亡、也构造不出确定的阵亡；此时按失败处理，避免该断言被静默跳过。
+		_fail("die_voice_auto_trigger_unavailable")
+		await _release_controller(controller)
+		return
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 card_layers=2 effect_assets=%d real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d auto_effect=%d" % [REQUIRED_EFFECT_IDS.size(), auto_skill_request_count, auto_effect_request_count])
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 die_tiers=2 card_layers=2 effect_assets=%d real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d auto_effect=%d auto_die=%d" % [REQUIRED_EFFECT_IDS.size(), auto_skill_request_count, auto_effect_request_count, auto_die_request_count])
 	get_tree().quit(0)
 
 
@@ -694,6 +790,18 @@ func _release_controller(controller: MatchController) -> void:
 	controller.ai_coordinator._policies.clear()
 	get_tree().root.remove_child(controller)
 	controller.free()
+
+
+## 从对局中挑出一名仍存活、仍在场且已选定武将的角色；按座次顺序取第一个，全部不满足时返回 null。
+## 阵亡自动触发用例通过它取得确定的死者，避免选中观察窗口内已经阵亡或被移出游戏的座次。
+func _pick_living_character_player(controller: MatchController, exclude_player_id: int) -> PlayerState:
+	for candidate: PlayerState in controller.state.players:
+		if candidate == null or not candidate.alive or candidate.out_of_game:
+			continue
+		if candidate.player_id == exclude_player_id or str(candidate.character_id).is_empty():
+			continue
+		return candidate
+	return null
 
 
 ## 判断已收集的语音请求中是否存在指定类别的负载；用于对局自动触发用例的等待条件与断言。

@@ -24,6 +24,11 @@ const CARD_GENDER_FEMALE: String = "female"
 ## 它是叠加在专属牌名配音之下的固定一层，因此不是“缺失时才用”的兜底素材。
 const CARD_DEFAULT_AUDIO_BASENAME: String = "default"
 
+## 武将阵亡语音目录；文件名以武将源码文件名（即武将稳定ID）为基准，例如希儿为 xier.mp3。
+## 它与技能音效目录分开：阵亡语音表达的是“这名武将阵亡了”，与具体技能无关，
+## 因此既不参与技能音效的四级短路，也没有跨武将共用的通用兜底层。
+const CHARACTER_DIE_AUDIO_DIR: String = "res://game_data/characters/audio/die"
+
 ## 全局效果音目录；承载与具体技能、卡牌、角色无关的通用音效。
 ## 目录内的文件名即效果标识本身，迁移自无名杀 audio/effect，因此解析时不做任何前缀或后缀推导。
 const EFFECT_AUDIO_DIR: String = "res://game_data/audio/effect"
@@ -144,6 +149,33 @@ func resolve_card_voice_paths(card_id: String, current_name_system: String, gend
 			resolved_paths.append(voice_path)
 			break
 	return resolved_paths
+
+
+## 解析一名武将阵亡时应当播放的候选语音池。
+## 查找顺序为两级短路规则：
+## 一、<武将ID>_<序号> 多音效池；
+## 二、<武将ID> 单音效。
+## 任一级命中即返回，不再向下回退；全部缺失时返回空数组，由调用方静默处理。
+## 与技能音效不同，阵亡语音没有通用兜底层：某名武将没有投放素材时保持静默，
+## 避免全部武将共用一句与自身身份不符的台词。
+func resolve_character_die_voice_pool(character_id: String) -> Array[String]:
+	# 规范化武将ID；空ID无法构造任何路径，直接返回空池（未选将的场合由此静默）。
+	var normalized_character_id: String = character_id.strip_edges()
+	if normalized_character_id.is_empty():
+		return []
+	# 阵亡语音基名；武将ID直接作为文件名，与武将源码文件名保持同一命名主体。
+	var die_base: String = "%s/%s" % [CHARACTER_DIE_AUDIO_DIR, normalized_character_id]
+	# 多音效池；非空即命中，池内随机由播放组件负责。
+	var die_pool: Array[String] = _collect_existing_pool(die_base)
+	if not die_pool.is_empty():
+		return die_pool
+	# 单音效；多套变体缺失时才回退到该武将唯一的一句阵亡语音。
+	var die_single: String = _resolve_existing_path(die_base)
+	if not die_single.is_empty():
+		# 单音效包成单元素池；与多音效池统一返回类型，便于播放组件复用同一个随机入口。
+		var die_single_pool: Array[String] = [die_single]
+		return die_single_pool
+	return []
 
 
 ## 解析一个全局效果音的素材路径。

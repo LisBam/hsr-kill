@@ -28,6 +28,11 @@ const VOICE_KIND_CARD: String = "card"
 ## 效果音与技能、卡牌语音共用同一条表现链路，因此单机本地播放、局域网由房主广播的表现语义完全一致。
 const VOICE_KIND_EFFECT: String = "effect"
 
+## 语音表现请求类别：武将阵亡语音；负载需要 character_id 字段。
+## 阵亡是武将级事件而不是技能级事件，因此单独成类；它与技能语音一样按角色专属路径解析素材，
+## 并复用同一条表现链路与联机广播通道。
+const VOICE_KIND_DIE: String = "die"
+
 ## 全局设置自动加载路径；音频音量与静音开关的唯一持久化来源。
 const GAME_SETTINGS_PATH: String = "/root/GameSettings"
 
@@ -71,6 +76,8 @@ func play_voice_presentation(presentation_data: Dictionary) -> void:
 		_play_card_voice(presentation_data)
 	elif kind == VOICE_KIND_EFFECT:
 		_play_effect_voice(presentation_data)
+	elif kind == VOICE_KIND_DIE:
+		_play_character_die_voice(presentation_data)
 
 
 ## 播放一次全局效果音；供界面层按本地视角发声（例如终局胜负）使用。
@@ -199,6 +206,20 @@ func _play_card_voice(presentation_data: Dictionary) -> void:
 ## 效果音不区分角色与性别，因此不读取负载中的发动者字段，只取效果标识本身。
 func _play_effect_voice(presentation_data: Dictionary) -> void:
 	play_effect(str(presentation_data.get("effect_id", "")))
+
+
+## 播放武将阵亡语音；素材按阵亡者的武将ID在 game_data/characters/audio/die 下解析。
+## 与技能语音的差别只有查找层级：阵亡语音只按武将身份定位素材，没有通用兜底层。
+func _play_character_die_voice(presentation_data: Dictionary) -> void:
+	# 阵亡武将ID；与武将源码文件名一致，是阵亡语音的命名基准。
+	var character_id: String = str(presentation_data.get("character_id", ""))
+	# 候选池；空表示该武将尚未投放阵亡语音，静默处理。
+	var pool: Array[String] = _catalog.resolve_character_die_voice_pool(character_id)
+	if pool.is_empty():
+		_log_missing_audio("die", character_id, "")
+		return
+	# 池标识使用武将ID；同一武将的多套阵亡语音共享“避免连续重复”的记录。
+	_voice_player.play_pool(pool, _catalog, "die:%s" % character_id)
 
 
 ## 读取当前卡牌名称显示模式对应的名称体系后缀。
