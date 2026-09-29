@@ -25,7 +25,7 @@ func _run() -> void:
 		return
 	if not _test_huitao_thresholds():
 		return
-	print("HAISHENGYIN_MECHANICS_PASS batch=1 sections=4 black_first=1 huitao_min=3")
+	print("HAISEYIN_MECHANICS_PASS batch=1 sections=4 black_first=1 huitao_min=3")
 	get_tree().quit(0)
 
 
@@ -54,7 +54,7 @@ func _create_controller() -> void:
 func _reset_state(player_count: int) -> void:
 	_controller._uninstall_all_character_skills()
 	_controller.state = GameState.new()
-	_controller.state.match_id = "haishengyin-mechanics"
+	_controller.state.match_id = "haiseyin-mechanics"
 	_controller.state.match_mode = IdentityRules.MODE_IDENTITY
 	_controller.state.turn_number = 1
 	_controller.state.round_number = 1
@@ -95,9 +95,9 @@ func _install_skill(player_id: int, skill_id: String) -> SkillDefinition:
 ## 校验武将资料、两条技能原文与泛音的四轮回节半锁定元数据。
 func _test_metadata_and_descriptions() -> bool:
 	# 海瑟音静态定义；性别、势力、体力与技能顺序必须与设计一致。
-	var haishengyin: Dictionary = GameDatabase.get_character("haishengyin")
-	if str(haishengyin.get("display_name", "")) != "海瑟音" or str(haishengyin.get("gender", "")) != "female" or str(haishengyin.get("faction", "")) != "wengfaluosi" or int(haishengyin.get("max_hp", 0)) != 4 or haishengyin.get("skills", []) != ["fanyin", "huitao"]:
-		return _fail("character_metadata=%s" % haishengyin)
+	var haiseyin: Dictionary = GameDatabase.get_character("haiseyin")
+	if str(haiseyin.get("display_name", "")) != "海瑟音" or str(haiseyin.get("gender", "")) != "female" or str(haiseyin.get("faction", "")) != "wengfaluosi" or int(haiseyin.get("max_hp", 0)) != 4 or haiseyin.get("skills", []) != ["fanyin", "huitao"]:
+		return _fail("character_metadata=%s" % haiseyin)
 	# 需求指定的两条技能原文；任何字符、标点或带圈序号变化都应立即失败。
 	var expected_descriptions: Dictionary = {
 		"fanyin":"轮回技，出牌阶段，你可弃置一张①黑桃②红桃③梅花④方块牌。锁定技，当你弃置牌时，若这些牌中有黑色牌，你令一名角色弃置一张手牌；若这些牌中有红色牌，你摸一张牌。",
@@ -266,6 +266,6 @@ func _submit_confirm(actor_id: int, confirmed: bool) -> bool:
 
 ## 输出失败原因并以非零状态结束当前无头测试。
 func _fail(reason: String) -> bool:
-	printerr("HAISHENGYIN_FAIL %s" % reason)
+	printerr("HAISEYIN_FAIL %s" % reason)
 	get_tree().quit(1)
 	return false
