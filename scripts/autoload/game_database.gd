@@ -294,7 +294,17 @@ func _load_skills() -> void:
 		elif skill_scripts.has(skill_id):
 			validation_errors.append("技能 ID 重复：%s" % skill_id)
 		else:
-			skills[skill_id] = definition.get_metadata()
+			# 当前技能元数据深拷贝；标签校验与登记共用同一份数据，避免二次构造技能实例。
+			var skill_metadata: Dictionary = definition.get_metadata()
+			# 正文类型声明结果；只用于校验，不参与任何运行期判定。
+			var declares_reincarnation_type: bool = SkillDefinition.description_declares_reincarnation_type(str(skill_metadata.get("description", "")))
+			# 轮回技标签声明结果；运行期全部轮回技判定都以该标签为唯一来源。
+			var declares_reincarnation_tag: bool = bool(skill_metadata.get("reincarnation", false))
+			if declares_reincarnation_type and not declares_reincarnation_tag:
+				validation_errors.append("技能 %s 正文声明轮回技但未设置 reincarnation 标签。" % skill_id)
+			elif declares_reincarnation_tag and not declares_reincarnation_type:
+				validation_errors.append("技能 %s 设置了 reincarnation 标签但正文未在类型段声明轮回技。" % skill_id)
+			skills[skill_id] = skill_metadata
 			skill_scripts[skill_id] = skill_script
 
 

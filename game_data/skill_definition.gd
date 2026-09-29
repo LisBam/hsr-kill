@@ -3,6 +3,20 @@ extends RefCounted
 
 ## 武将技能源码定义基类。技能文件同时承载元数据、事件订阅与主动发动逻辑，不依赖集中技能注册表。
 
+## “出牌阶段限一次”技能标签正文；【奇袭】等按正文声明识别该类技能，引号内提及不计入。
+const PLAY_PHASE_ONCE_TAG: String = "出牌阶段限一次"
+
+## “轮回技”标签正文；只用于GameDatabase加载期校验正文类型声明与reincarnation标签是否一致，运行期判定一律读取标签。
+const REINCARNATION_TAG: String = "轮回技"
+
+## 技能正文中表达“提及而非声明”的成对引号字符；中英文单双引号与中文书名号式引号全部计入。
+const DESCRIPTION_QUOTE_CHARS: String = "“”‘’「」『』\"'"
+
+## “出牌阶段限一次”类技能使用的阶段额度字段名；按声明顺序依次尝试，命中即复原。
+## 字段语义约定：布尔表示本阶段是否已发动，整数表示本阶段已发动次数。
+## 两个命名均为项目历史约定（前者用于多数技能，后者用于【传冲】【全垒】【星落】），此处统一登记以免逐技能重复实现复原入口。
+const PLAY_PHASE_USAGE_FIELDS: Array[String] = ["_used_this_play_phase", "_used_current_play_phase"]
+
 ## 当前技能的完整静态元数据；由具体技能脚本构造并在数据库建立索引时读取。
 var _metadata: Dictionary = {}
 
@@ -54,7 +68,7 @@ var _last_activation_repeat_descriptor: Dictionary = {}
 ## 最近一次公开发动的递增令牌；初始0表示尚未发动，用于避免延迟重放命中后续另一场发动。
 var _last_activation_repeat_token: int = 0
 
-## 当前是否正在执行额外发动；true时新记录会标记为重复发动，防止【奇袭】递归复制自身产生无限循环。
+## 当前是否正在执行额外发动；true时新记录会标记为重复发动，避免额外发动在同一因果链中反复触发自身。
 var _repeat_activation_in_progress: bool = false
 
 ## 内容层显式语音请求的引擎毫秒时间戳；0表示本次发动过程中尚未显式请求语音。
@@ -84,7 +98,10 @@ func _init(metadata: Dictionary = {}) -> void:
 	_metadata["out_of_game_skill"] = out_of_game_skill
 	sell_blood_value = maxf(float(_metadata.get("sell_blood_value", 0.0)), 0.0)
 	_metadata["sell_blood_value"] = sell_blood_value
-	reincarnation = bool(_metadata.get("reincarnation", false)) or description.begins_with("轮回技")
+	# 轮回技标签；只承认技能源码显式声明的元数据，不再从正文推导。
+	# 理由：正文可能只是引用他人的轮回技（例如【回涛】“当一名角色的轮回技进入下一个轮回时……”），按正文判定会把它误当成轮回技；
+	# 全部轮回技内容都必须写出该标签，标签与正文类型声明的一致性由GameDatabase加载校验保证。
+	reincarnation = bool(_metadata.get("reincarnation", false))
 	_metadata["reincarnation"] = reincarnation
 	if reincarnation:
 		# 轮回节总数；优先读取显式元数据，缺失时按正文中出现的最大带圈序号推导。
@@ -229,6 +246,79 @@ func restore_intrinsic_use() -> void:
 ## 本入口只复原限定技次数，不重置轮回、每回合、每轮、每阶段状态，也不清除已经生效的持续效果。
 func restore_limited_use() -> void:
 	restore_intrinsic_use()
+
+
+## 判断一段技能正文是否以“声明”形式包含指定标签；被引号包裹的提及（如【奇袭】正文里的“轮回技”）不计入。
+## 纯函数且不依赖任何运行时状态，因此技能源码、AI评分实例与内容测试可以共用同一套识别规则。
+static func description_declares_tag(description: String, tag: String) -> bool:
+	if description.is_empty() or tag.is_empty():
+		return false
+	# 本段正文内的检索游标；逐次向后推进，保证同一标签的多次出现都被检查。
+	var search_index: int = 0
+	while search_index <= description.length() - tag.length():
+		# 当前命中位置；-1表示剩余正文不再包含该标签。
+		var found_index: int = description.find(tag, search_index)
+		if found_index < 0:
+			return false
+		# 标签左邻字符；位于正文开头时为空字符串，视为没有任何引用语境。
+		var left_char: String = description.substr(found_index - 1, 1) if found_index > 0 else ""
+		# 标签右邻字符；位于正文末尾时为空字符串。
+		var right_index: int = found_index + tag.length()
+		var right_char: String = description.substr(right_index, 1) if right_index < description.length() else ""
+		# 左右任一侧被引号包裹即判定为“提及”；空字符串必须显式排除，String.contains("") 恒为真。
+		var quoted_by_left: bool = not left_char.is_empty() and DESCRIPTION_QUOTE_CHARS.contains(left_char)
+		var quoted_by_right: bool = not right_char.is_empty() and DESCRIPTION_QUOTE_CHARS.contains(right_char)
+		if not quoted_by_left and not quoted_by_right:
+			return true
+		search_index = right_index
+	return false
+
+
+## 返回本技能正文是否以声明形式包含指定标签；供技能自身条件判断与内容测试复用。
+func declares_description_tag(tag: String) -> bool:
+	return description_declares_tag(str(_metadata.get("description", "")), tag)
+
+
+## 判断技能正文是否在“类型段”把自己声明为轮回技，即正文里第一次出现的“轮回技”后面紧跟逗号或句号。
+## 本函数只服务GameDatabase加载期的一致性校验：运行期的轮回技判定一律读取reincarnation标签，不读正文。
+## 之所以按“紧跟标点”而不是“包含”判定：引用他人轮回技的写法是“……轮回技进入下一个轮回时”“……该轮回技的轮回节数……”，
+## 这些位置的“轮回技”后面紧跟的是实词，而类型声明固定写作“轮回技，……”“锁定技，轮回技，……”。
+static func description_declares_reincarnation_type(description: String) -> bool:
+	if description.is_empty():
+		return false
+	# 正文中第一次出现轮回技标签的位置；-1表示正文完全不含该标签。
+	var found_index: int = description.find(REINCARNATION_TAG)
+	if found_index < 0:
+		return false
+	# 标签右邻字符；正文以标签结尾时为空字符串，此时不构成类型声明。
+	var right_index: int = found_index + REINCARNATION_TAG.length()
+	var right_char: String = description.substr(right_index, 1) if right_index < description.length() else ""
+	# 句读标点集合；同时接受中文与半角逗号，兼容内容脚本可能出现的半角写法。
+	return right_char == "，" or right_char == "。" or right_char == ","
+
+
+## 复原本技能在本出牌阶段的发动额度，使其视为本回合未发动过；返回是否确实复原了约定额度字段。
+## 与 restore_limited_use 的区别：本入口只复原“出牌阶段限一次”，不改写限定次数、轮回进度、每回合次数与持续效果。
+## 【奇袭】等内容通过“重置该技能阶段额度”表达原文“视为本回合未发动过此技能”。
+func reset_play_phase_usage() -> bool:
+	# 本技能脚本声明的变量名集合；按统一命名约定定位阶段额度字段，避免对具体技能硬编码。
+	var script_variable_names: Dictionary = {}
+	for property: Dictionary in get_property_list():
+		if (int(property.get("usage", 0)) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
+			continue
+		script_variable_names[str(property.get("name", ""))] = true
+	for field_name: String in PLAY_PHASE_USAGE_FIELDS:
+		if not script_variable_names.has(field_name):
+			continue
+		# 当前阶段额度；布尔字段按“是否已发动”复原，整数字段按“已发动次数”归零。
+		var current_usage: Variant = get(field_name)
+		if current_usage is bool:
+			set(field_name, false)
+			return true
+		if current_usage is int:
+			set(field_name, 0)
+			return true
+	return false
 
 
 ## 返回当前轮回技公开状态；普通技能或未绑定状态返回空字典。

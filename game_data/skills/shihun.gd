@@ -61,7 +61,7 @@ func activate(context: Dictionary = {}) -> String:
 			return "" if _start_shihun_sequence(section_index, _last_selected_target_ids) else "【弑魂】上次指定目标已不合法。"
 		# 上次目标已全部失效；本节无可执行内容，直接完成并推进，避免轮回永久停滞。
 		return "" if _complete_empty_shihun_section(section_index) else "【弑魂】的轮回状态已经失效。"
-	# 已提交①目标；奇袭额外发动会沿用原目标数组。
+	# 已提交①目标；AI、局域网与回放均沿用同一目标数组。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
 	if not target_ids.is_empty():
 		return "" if _start_shihun_sequence(section_index, target_ids) else "【弑魂】所选使用者已经失效。"
@@ -144,7 +144,7 @@ func _start_shihun_sequence(section_index: int, target_ids: Array[int]) -> bool:
 
 ## 连续火【杀】全部结束后保存上次目标、记录整次发动并推进轮回节。
 func on_virtual_card_sequence_completed(context: Dictionary) -> void:
-	# 实际指定目标副本；①保存使用者，②保持同一固定集合供下一次记录与奇袭重放。
+	# 实际指定目标副本；①保存使用者，②保持同一固定集合供下一次记录与重放。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
 	_last_selected_target_ids = target_ids.duplicate()
 	announce_activation({"section_number":int(context.get("section_index", 0)) + 1, "round_count":int(context.get("round_count", 1)), "target_ids":target_ids.duplicate(), "virtual_card_count":int(context.get("virtual_card_count", 0))})

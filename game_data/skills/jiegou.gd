@@ -36,6 +36,31 @@ const CORNER_BUTTON_ORDER: int = 60
 ## 角标按钮的中性类型标识；表现层据此决定打开哪种只读界面，技能与控制器都不解释其含义。
 const CORNER_BUTTON_VIEW_KIND: String = "recorded_card_names"
 
+## 【无懈可击】的稳定牌名ID；它可被重铸但不会被记录，因此不参与“扩充记录池”的发动判定。
+const WUXIE_DEFINITION_ID: String = "wuxie"
+
+## 确认重铸一张“可记录锦囊”的收益；必须显著高于任何单张手牌的保留价值。
+## 通用选牌评分对手牌费用按“选中牌面价值”的负数计分（见 NonameAIEvaluator.score_choice_action），
+## 而取消动作恒为0分，因此技能给出的加分若小于牌面价值，AI 就会选择取消。
+## 取消既不消耗次数也不移动任何牌，AI 便会在同一出牌阶段反复“发动→取消”，
+## 直到撞上 max_ai_actions_per_turn 被强制结束回合——这正是“AI大黑塔把自己卡住”的直接原因。
+const RECAST_COMMIT_REWARD: float = 100.0
+
+## 尚未记录牌名的排序加分；只在多个候选之间排出先后，不改变“必定完成一次重铸”的结论。
+const UNRECORDED_NAME_ORDER_BONUS: float = 10.0
+
+## 不可记录锦囊（当前只有【无懈可击】）的确认分；仍保持为正分，用于兜底防止空转。
+## 发动判定已排除这类牌名，正常流程不会选中它；一旦因为协议异常仍被询问，AI 也必须完成一次真实重铸。
+const UNRECORDABLE_COMMIT_REWARD: float = 5.0
+
+## 【解构】的发动优先分；用于落实“先重铸尚未记录的锦囊，再考虑直接使用锦囊”的出牌口径。
+## 通用用牌评分由 `player_result + 出牌顺序×0.12 - 牌面价值×0.08 + 逐目标收益` 组成，
+## 其中目标收益上限为个位数，因此整条用牌评分不超过十分量级；这里取一个明显更高的固定值，
+## 使AI在手中仍有“尚未被记录的可记录锦囊”时始终优先完成一次重铸，而不是先把锦囊打出去。
+## 该分值不会造成死循环：每次重铸都真实消耗一张锦囊并记录牌名（确认分恒为正），
+## 当手中不再有符合条件的锦囊时本技能评分立即回到0，AI随即恢复正常出牌。
+const RECAST_PRIORITY_AI_SCORE: float = 50.0
+
 
 ## 写入主动技静态信息；技能正文逐字保持设计原文。
 func _init() -> void:
@@ -132,18 +157,31 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 ## 原文没有次数上限，且技能设计口径为“几乎可以无脑重铸”，因此只要动作能进入评分
 ## （说明 append_play_phase_actions 已用真实状态确认手中存在可重铸锦囊），就给出稳定正分。
 ## 尚未建立记录时额外叠加记录加成，促使 AI 优先解锁【灵感】的牌名池。
+## 口径补充：只有手中确实存在“尚未被记录、且不是【无懈可击】”的可重铸锦囊时才给出正分。
+## 【无懈可击】重铸后不会进入记录容器，为它消耗一次出牌动作属于纯亏，因此 AI 不发动；
+## 手中只剩已记录牌名时同样不发动，避免把还有使用价值的锦囊无脑换掉。
+## 出牌优先级补充：满足条件时在评分上叠加 RECAST_PRIORITY_AI_SCORE，
+## 使【解构】排在任何一次直接使用锦囊之前——先把牌名记进容器扩充【灵感】素材，再谈出牌。
 func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
 	if evaluator == null:
+		return 0.0
+	# 尚未记录的可重铸锦囊牌名；为空说明本次发动不会带来任何新素材，直接保持0分。
+	if _get_unrecorded_recastable_hand_names_for_ai(authoritative_snapshot).is_empty():
 		return 0.0
 	# 已记录牌名；记录为空说明尚未解锁任何【灵感】素材，此时给出更高的发动倾向。
 	var recorded_names: Array = get_recorded_card_names_for_ai(authoritative_snapshot)
 	if recorded_names.is_empty():
-		return RECAST_AI_BASE + FIRST_RECORD_AI_BONUS
-	return RECAST_AI_BASE
+		return RECAST_PRIORITY_AI_SCORE + RECAST_AI_BASE + FIRST_RECORD_AI_BONUS
+	return RECAST_PRIORITY_AI_SCORE + RECAST_AI_BASE
 
 
 ## 评估【解构】的选牌：重铸换牌是基础收益，首次记录新牌名额外加分。
 ## 按设计参考“几乎可以无脑重铸”：只要存在候选，评分必须严格为正，避免AI因保守而永不记录牌名。
+## 口径补充：上面的“基础收益 - 牌面价值”尺度会被通用选牌评分的手牌费用再次抵消，
+## 实测中【南蛮入侵】这类高面值锦囊的确认分仍为负数，AI 于是选择取消并触发上文所述的死循环。
+## 因此本节改为“无脑重铸”口径：确认动作一律给出显著高于任何手牌价值的保底分，
+## 牌名是否已记录只作为候选之间的排序依据——未记录的可记录锦囊最高，已记录其次，
+## 【无懈可击】等不可记录锦囊最低但仍为正分（保证AI一旦发动必然完成一次真实重铸）。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	if evaluator == null:
 		return 0.0
@@ -159,19 +197,46 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	if selected_uids.is_empty():
 		return 0.0
 	var selected_uid: int = int(selected_uids[0])
-	# 被重铸牌的保留价值；价值越低，换成一张未知牌的净收益越高。
-	var card_value: float = float(evaluator.call("get_owned_card_value_by_uid", authoritative_snapshot, owner_player_id, selected_uid)) if evaluator.has_method("get_owned_card_value_by_uid") else 0.0
-	var score: float = RECAST_AI_BASE - card_value
 	# 候选牌名是否尚未记录；只有可记录牌名才享有该加成，响应类锦囊不会解锁【灵感】。
 	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
 		var candidate: Dictionary = candidate_variant as Dictionary
 		if int(candidate.get("uid", -1)) != selected_uid:
 			continue
 		var candidate_definition_id: String = _candidate_definition_id(candidate)
-		if _is_recordable_definition(candidate_definition_id) and not get_recorded_card_names_for_ai(authoritative_snapshot).has(candidate_definition_id):
-			score += FIRST_RECORD_AI_BONUS
-		break
-	return maxf(score, 0.5)
+		if not _is_recordable_definition(candidate_definition_id):
+			return UNRECORDABLE_COMMIT_REWARD
+		if get_recorded_card_names_for_ai(authoritative_snapshot).has(candidate_definition_id):
+			return RECAST_COMMIT_REWARD
+		return RECAST_COMMIT_REWARD + UNRECORDED_NAME_ORDER_BONUS
+	# 候选缺失（协议异常或牌已离手）时仍给出保底正分，确保AI一旦发动就必然完成一次真实重铸。
+	return UNRECORDABLE_COMMIT_REWARD
+
+
+## 从权威快照读取技能持有者手中“尚未被记录、且可以被【解构】重铸并记录”的锦囊牌名。
+## 【无懈可击】虽可重铸，但子类不是普通锦囊、永远不会进入记录容器，因此在这里被显式排除：
+## 重铸它不会扩充【灵感】的牌名池，不属于本技能的发动收益来源。
+func _get_unrecorded_recastable_hand_names_for_ai(authoritative_snapshot: Dictionary) -> Array:
+	# 已记录牌名；重复记录同一牌名不会带来任何新素材，因此已经在记录中的牌名不参与本判定。
+	var recorded_names: Array = get_recorded_card_names_for_ai(authoritative_snapshot)
+	# 结果集合；沿用快照手牌顺序，保持AI枚举稳定，不引入任何随机化。
+	var result: Array = []
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		if int(player_snapshot.get("player_id", -1)) != owner_player_id:
+			continue
+		for card_variant: Variant in player_snapshot.get("hand", []) as Array:
+			# 当前手牌实体；AI只读取公开与本人可见的牌名，不猜测牌面以外的信息。
+			var card_snapshot: Dictionary = card_variant as Dictionary
+			var definition_id: String = str(card_snapshot.get("definition_id", ""))
+			if definition_id == WUXIE_DEFINITION_ID:
+				continue
+			if not _is_recordable_definition(definition_id):
+				continue
+			if recorded_names.has(definition_id):
+				continue
+			if not result.has(definition_id):
+				result.append(definition_id)
+	return result
 
 
 ## 从权威快照读取技能持有者已记录的牌名；AI钩子没有宿主，只能通过快照判断记录状态。

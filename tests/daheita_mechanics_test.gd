@@ -2,7 +2,7 @@ extends Node
 
 ## 大黑塔【解构】【灵感】【看破】专项回归。覆盖武将元数据与三条技能原文、记录容器的去重与跨回合保留、
 ## 无懈可击的双向排除、灵感三段选择的取消语义、目标模式重定向、结算后移除记录、看破的仅对本人无效，
-## 以及三条技能的AI钩子必须产出正分。
+## 以及三条技能的AI钩子必须产出正分（含【灵感】读取数组型 ai.value 时的具体取值）。
 
 ## 本测试共用的权威对局控制器；全部机制通过正式服务与技能端口执行。
 var _controller: MatchController
@@ -39,6 +39,8 @@ func _run() -> void:
 	if not _test_linggan_self_target_mode():
 		return
 	if not _test_linggan_single_name_skips_retarget_prompt():
+		return
+	if not _test_linggan_array_ai_value_scoring():
 		return
 	if not _test_kanpo_negates_self_only():
 		return
@@ -565,6 +567,40 @@ func _test_linggan_single_name_skips_retarget_prompt() -> bool:
 	return true
 
 
+## 校验【灵感】读取“数组型 ai.value”牌名时的取值口径。
+## ai.value 允许按同名牌持有数量写成递减数组（【杀】【闪】【火攻】【无懈可击】等都是如此），
+## 而 GDScript 对 Array 调用 float() 会抛 “Nonexistent 'float' constructor” 运行时错误，
+## 该错误会让评分函数整体失败、技能再也产不出任何AI动作（表现为AI回合静止且难以定位）。
+## 因此这里直接断言具体数值：只断言“评分大于0”是不够的——返回值被上层叠加项抬高后仍可能为正而掩盖故障。
+func _test_linggan_array_ai_value_scoring() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "linggan") == null:
+		return _fail("array_value_install")
+	# 待安装技能实例即运行时实例；取值只依赖卡牌静态定义，不需要额外构造对局状态。
+	var linggan: SkillDefinition = _controller.get_skill_instance(0, "linggan")
+	if linggan == null:
+		return _fail("array_value_missing")
+	# 数组型 value 的取值必须等于首项：数组语义是“按同名牌数量递减”，而【灵感】是视为使用、不消耗手牌。
+	# 注意键必须是稳定牌名ID：【无懈可击】的文件名为 wuxiekeji.gd，但ID是 wuxie。
+	var array_expectations: Dictionary = {"huogong":3.0, "sha":5.0, "shan":7.0, "wuxie":6.0}
+	for definition_id_variant: Variant in array_expectations.keys():
+		# 当前牌名定义ID；键即稳定牌名ID。
+		var definition_id: String = str(definition_id_variant)
+		# 期望牌面价值；取自数组首项。
+		var expected_value: float = float(array_expectations[definition_id_variant])
+		# 实际牌面价值；回归时会退化成0，直接暴露。
+		var actual_value: float = linggan._score_definition_name(definition_id)
+		if not is_equal_approx(actual_value, expected_value):
+			return _fail("array_value_%s=%f(expected %f)" % [definition_id, actual_value, expected_value])
+	# 标量 value 的对照：必须原样返回，确保判型没有把单值分支改坏。
+	if not is_equal_approx(linggan._score_definition_name("juedou"), 5.5):
+		return _fail("scalar_value=%f" % linggan._score_definition_name("juedou"))
+	# 未知牌名必须保持0分哨兵，保证“定义缺失”与“配置有误”都不会被当成有价值的组合。
+	if not is_equal_approx(linggan._score_definition_name("__no_such_card__"), 0.0):
+		return _fail("unknown_value=%f" % linggan._score_definition_name("__no_such_card__"))
+	return true
+
+
 ## 校验【看破】令锦囊仅对持有者本人无效，不影响同牌的其他目标。
 func _test_kanpo_negates_self_only() -> bool:
 	_reset_state(3)
@@ -637,6 +673,8 @@ func _test_ai_hooks_positive() -> bool:
 	_set_recorded_names(0, ["nanman", "tiesuo"])
 	# 手牌；解构需要一个可记录的锦囊候选。
 	var nanman_uid: int = _give_card(0, "nanman", "spade", 1)
+	# 第二张锦囊用于验证“尚未记录”的候选才能触发AI发动；【南蛮入侵】此时已经躺在记录容器里。
+	var wuzhong_uid: int = _give_card(0, "wuzhong", "spade", 2)
 	# 权威快照；与正式AI入口一致，必须先补写限定技用量字段。
 	var snapshot: Dictionary = _controller.state.to_dict(0, true)
 	_controller._append_limited_skill_usage_to_snapshot(snapshot)
@@ -654,6 +692,25 @@ func _test_ai_hooks_positive() -> bool:
 	var jiegou_activate_score: float = jiegou.score_ai_action(snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"jiegou"}, evaluator)
 	if jiegou_activate_score <= 0.0:
 		return _fail("ai_jiegou_activate_score=%f" % jiegou_activate_score)
+	# 【解构】无收益候选时不得发动：手中只剩已记录牌名与【无懈可击】时发动分必须为0。
+	# 该断言同时覆盖“AI一旦发动就必然完成一次真实重铸”的口径——评分若为0，AI不会进入“发动→取消”的空转循环。
+	_set_recorded_names(0, ["nanman", "tiesuo", "wuzhong"])
+	_give_card(0, "wuxie", "spade", 3)
+	# 手牌变化后必须重新取快照；AI评分只读取传入的权威快照。
+	var jiegou_idle_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(jiegou_idle_snapshot)
+	if jiegou.score_ai_action(jiegou_idle_snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"jiegou"}, evaluator) > 0.0:
+		return _fail("ai_jiegou_unrecorded_only")
+	# 【解构】确认重铸必须给出严格正分，且【无懈可击】这类不可记录锦囊仍保留正分兜底。
+	# 取消动作恒为0分，若确认分不高于它，AI会选择取消并让技能原地空转。
+	var wuxie_candidate: Dictionary = {"uid":nanman_uid, "card_data":{"definition_id":"wuxie"}}
+	var wuxie_request: Dictionary = {"context":{"kind":"jiegou_recast"}, "candidates":[wuxie_candidate]}
+	var wuxie_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[nanman_uid]}}
+	if jiegou.score_ai_choice(snapshot, wuxie_request, wuxie_action, evaluator) <= 0.0:
+		return _fail("ai_jiegou_wuxie_commit")
+	# 【解构】无懈可击兜底分必须低于可记录锦囊，保证AI优先重铸能扩充记录池的牌名。
+	if jiegou.score_ai_choice(snapshot, wuxie_request, wuxie_action, evaluator) >= jiegou_score:
+		return _fail("ai_jiegou_order")
 	# 【灵感】选效果牌名评分。
 	var linggan: SkillDefinition = _controller.get_skill_instance(0, "linggan")
 	if linggan == null:
@@ -682,6 +739,88 @@ func _test_ai_hooks_positive() -> bool:
 	var kanpo_score: float = kanpo.score_ai_choice(snapshot, kanpo_request, kanpo_action, evaluator)
 	if kanpo_score <= 0.0:
 		return _fail("ai_kanpo_score=%f" % kanpo_score)
+	# 【灵感】没有任何可结算组合时不得发动：把其他角色设为已阵亡，all_others 效果将没有合法目标。
+	# 该断言覆盖“AI不会反复选中一个建立目标请求前就静默返回的组合”这一防卡死口径。
+	_controller.state.get_player(1).alive = false
+	_controller.state.get_player(2).alive = false
+	_set_recorded_names(0, ["nanman"])
+	# 存活状态变化后必须重新取快照，AI评分只读取传入的权威快照。
+	var linggan_solo_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(linggan_solo_snapshot)
+	if linggan.score_ai_action(linggan_solo_snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"linggan"}, evaluator) > 0.0:
+		return _fail("ai_linggan_infeasible")
+	# 还原阵亡状态；后续断言仍需要完整的三人局面。
+	_controller.state.get_player(1).alive = true
+	_controller.state.get_player(2).alive = true
+	# 【解构】必须优先于“直接使用锦囊”：发动分要高于同一张手牌在通用评分中的使用分，
+	# 否则AI会先把锦囊打出去，永远轮不到重铸扩池。
+	var trick_use_score: float = evaluator.score_action(snapshot, {"action_type":"use_card", "actor_id":0, "card_uid":wuzhong_uid, "card_definition_id":"wuzhong", "target_ids":[]}, 0)
+	if jiegou_activate_score <= trick_use_score:
+		return _fail("ai_jiegou_priority=%f/%f" % [jiegou_activate_score, trick_use_score])
+	# 【灵感】目标选择必须按效果方向与敌我关系计价：
+	# 【铁索连环】这类“对目标不利”的效果不得打给自己或队友，且两名敌人要高于一名敌人。
+	# 通用选择评分只读首个目标的态度、且不乘效果方向，会把这类效果判给态度最高的使用者自己。
+	_set_recorded_names(0, ["tiesuo"])
+	_controller.state.get_player(2).identity = "rebel"
+	# 身份变化后必须重新取快照；AI评分只读取传入的权威快照。
+	var target_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(target_snapshot)
+	var target_request: Dictionary = {"context":{"kind":"linggan_select_targets", "effect_id":"tiesuo", "target_mode_id":""}}
+	var self_target_score: float = linggan.score_ai_choice(target_snapshot, target_request, {"payload":{"confirmed":true, "selected_target_ids":[0]}}, evaluator)
+	var one_enemy_target_score: float = linggan.score_ai_choice(target_snapshot, target_request, {"payload":{"confirmed":true, "selected_target_ids":[1]}}, evaluator)
+	var two_enemy_target_score: float = linggan.score_ai_choice(target_snapshot, target_request, {"payload":{"confirmed":true, "selected_target_ids":[1, 2]}}, evaluator)
+	if self_target_score >= one_enemy_target_score or one_enemy_target_score >= two_enemy_target_score:
+		return _fail("ai_linggan_target_pick self=%f one=%f two=%f" % [self_target_score, one_enemy_target_score, two_enemy_target_score])
+	# 还原身份；后续断言仍按三人局默认身份。
+	_controller.state.get_player(2).identity = "loyalist"
+	# 【灵感】二段不优于单段时必须主动取消：通用评分给“已确认”动作的兜底分是 +0.1、给“取消”是 0.0，
+	# 因此技能只有给出负分，取消才会真正胜出；只返回0会让二段被无条件启用。
+	_set_recorded_names(0, ["tiesuo"])
+	# 记录变化后必须重新取快照；此时没有任何伙伴牌名可作为二段目标模式。
+	var decline_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(decline_snapshot)
+	var decline_request: Dictionary = {"context":{"kind":"linggan_confirm_retarget", "effect_id":"tiesuo"}, "control_options":[]}
+	if linggan.score_ai_choice(decline_snapshot, decline_request, {"payload":{"confirmed":true}}, evaluator) >= 0.0:
+		return _fail("ai_linggan_retarget_decline")
+	# 【灵感】对目标不利的效果不得因为“目标变少”而加分：
+	# 【铁索连环】的效果配上一张单目标牌名的目标模式必须低于它自身的单段收益，
+	# 否则AI会把【铁索连环】拆成“只横置一名角色”来用。
+	_set_recorded_names(0, ["tiesuo", "juedou"])
+	# 记录变化后必须重新取快照；AI评分只读取传入的权威快照。
+	var narrowed_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(narrowed_snapshot)
+	var single_effect_request: Dictionary = {"context":{"kind":"linggan_pick_effect"}, "control_options":[{"id":"tiesuo", "label":"铁索连环"}]}
+	var single_effect_score: float = linggan.score_ai_choice(narrowed_snapshot, single_effect_request, {"payload":{"confirmed":true, "selected_control_id":"tiesuo"}}, evaluator)
+	var narrowed_mode_request: Dictionary = {"context":{"kind":"linggan_pick_target_mode", "effect_id":"tiesuo"}, "control_options":[{"id":"juedou", "label":"决斗"}]}
+	var narrowed_mode_score: float = linggan.score_ai_choice(narrowed_snapshot, narrowed_mode_request, {"payload":{"confirmed":true, "selected_control_id":"juedou"}}, evaluator)
+	if narrowed_mode_score >= single_effect_score:
+		return _fail("ai_linggan_narrowed_target=%f/%f" % [narrowed_mode_score, single_effect_score])
+	# 【灵感】对目标不利的牵牌、拆牌类效果把目标规模扩大同样是正面收益：
+	# 【顺手牵羊】配【南蛮入侵】的目标规则必须被判为“二段严格优于单段”（给出确认分而不是取消分），
+	# 且“覆盖所有其他角色”的收益要高于“只覆盖两名角色”——获得队友的牌不构成负收益，
+	# 对手越多、能牵到的牌越多，因此目标规模应当单调递增计价。
+	_set_recorded_names(0, ["shunshou", "tiesuo", "nanman"])
+	# 追加第四名敌方角色；三人局里“覆盖所有其他角色”与“覆盖两名角色”规模相同，无法体现梯度。
+	var extra_player: PlayerState = PlayerState.new(3, "第四名玩家")
+	extra_player.identity = "rebel"
+	extra_player.identity_revealed = true
+	extra_player.max_hp = 6
+	extra_player.hp = 6
+	extra_player.hand.append(CardInstance.new("shan", "heart", 1))
+	_controller.state.players.append(extra_player)
+	# 角色列表变化后必须重新取快照；AI评分只读取传入的权威快照。
+	var scale_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(scale_snapshot)
+	var steal_retarget_request: Dictionary = {"context":{"kind":"linggan_confirm_retarget", "effect_id":"shunshou"}, "control_options":[{"id":"nanman", "label":"南蛮入侵"}]}
+	if linggan.score_ai_choice(scale_snapshot, steal_retarget_request, {"payload":{"confirmed":true}}, evaluator) <= 0.0:
+		return _fail("ai_linggan_steal_expand")
+	var scale_request: Dictionary = {"context":{"kind":"linggan_pick_target_mode", "effect_id":"shunshou"}, "control_options":[{"id":"tiesuo", "label":"铁索连环"}, {"id":"nanman", "label":"南蛮入侵"}]}
+	var pair_two_score: float = linggan.score_ai_choice(scale_snapshot, scale_request, {"payload":{"confirmed":true, "selected_control_id":"tiesuo"}}, evaluator)
+	var pair_all_score: float = linggan.score_ai_choice(scale_snapshot, scale_request, {"payload":{"confirmed":true, "selected_control_id":"nanman"}}, evaluator)
+	if pair_all_score <= pair_two_score:
+		return _fail("ai_linggan_target_scale=%f/%f" % [pair_two_score, pair_all_score])
+	# 移除临时追加的第四名角色，避免影响同一测试内后续可能的状态读取。
+	_controller.state.players.pop_back()
 	return true
 
 
