@@ -14,7 +14,8 @@ func _init() -> void:
 	})
 
 
-## 订阅持有者的使用与打出时机；普通锦囊走useCard，无懈可击等响应锦囊走respond。
+## 订阅持有者的使用与打出时机；锦囊被“使用”时走 useCard（含【无懈可击】这类响应锦囊），被“打出”时才走 respond。
+## 两者互斥：同一张锦囊不会同时派发 useCard 与 respond，因此不会重复触发本技能。
 func install() -> void:
 	subscribe_timing("useCard", _on_owner_used_card, "source")
 	subscribe_timing("respond", _on_owner_used_card, "source")

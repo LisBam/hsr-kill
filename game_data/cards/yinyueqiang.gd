@@ -99,6 +99,8 @@ func _activate(match_host: Object, context: Dictionary) -> void:
 	response_context["kind"] = "equipment_response"
 	response_context["responder_id"] = target.player_id
 	response_context["equipment_definition_id"] = get_id()
+	# 动作类别为“打出”：技能原文明确要求“打出【闪】”，该【闪】不产生抵消【杀】的牌面效果，也不属于“弃置”。
+	response_context["response_action"] = CARD_ACTION_PLAY
 	# 目标实际打出的【闪】；为空可能表示放弃或等待选择。
 	var response_card: CardInstance = match_host.request_response_card(target.player_id, "shan", "是否打出【闪】响应银月枪？", response_context)
 	if match_host.has_pending_card_choice():

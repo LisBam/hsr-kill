@@ -163,7 +163,7 @@ func _next_rescuer(sequence: RuleStepSequence) -> void:
 		for option: Dictionary in _host._get_dying_response_options(responder_id, target.player_id):
 			response_patterns.append(str(option.get("pattern", "")))
 			response_names.append("【%s】" % str(option.get("name", "救援牌")))
-		var rescue_context: Dictionary = {"kind":"dying_response", "rescue_sequence_id":sequence.sequence_id, "responder_id":responder_id, "target_id":target.player_id, "killer_id":sequence.context.killer_id, "rescue_start_id":sequence.context.rescue_start_id, "response_patterns":response_patterns, "asked_rescuer_ids":sequence.context.asked_ids.duplicate(), "required_recover":1 - target.hp}
+		var rescue_context: Dictionary = {"kind":"dying_response", "rescue_sequence_id":sequence.sequence_id, "responder_id":responder_id, "target_id":target.player_id, "killer_id":sequence.context.killer_id, "rescue_start_id":sequence.context.rescue_start_id, "response_patterns":response_patterns, "asked_rescuer_ids":sequence.context.asked_ids.duplicate(), "required_recover":1 - target.hp, "response_action":"use"}
 		sequence.context["response_context"] = rescue_context
 		# 顺序固定为询问、消费、回复、再检查；失牌和回复的触发分别等待。
 		var steps: Array[Callable] = [_consume_rescue, _apply_rescue, _after_rescue, _next_rescuer]

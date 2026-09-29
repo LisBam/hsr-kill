@@ -100,12 +100,6 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("1_ui")
-local_hand_indicator_margin = null
-local_hand_gain_entry_margin = null
-local_hand_gain_duration = null
-local_player_card_bottom_margin = null
-local_judgment_zone_left_offset = null
-match_controller_path = null
 
 [node name="AndroidBackAdapter" type="Node" parent="." unique_id=1095651785]
 unique_name_in_owner = true

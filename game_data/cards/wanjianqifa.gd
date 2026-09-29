@@ -50,7 +50,8 @@ func _resolve_aoe(resolver: Object, card: CardInstance, actor_id: int, target_id
 			resolver.host.add_log("%s的防具令锦囊无效。" % target.display_name)
 			continue
 		# 群体响应上下文；异步选择通过父牌 UID 回到本卡牌源码。
-		var response_context: Dictionary = {"kind":"aoe_response", "responder_id":target_id, "actor_id":actor_id, "pattern":response_pattern, "card_definition_id":card.definition_id, "parent_card_uid":card.uid, "complete_parent_target_after_response":true}
+		# 动作类别为“打出”：响应群体锦囊的【闪】只用于证明响应，不产生牌面效果，也不属于“弃置”。
+		var response_context: Dictionary = {"kind":"aoe_response", "responder_id":target_id, "actor_id":actor_id, "pattern":response_pattern, "card_definition_id":card.definition_id, "parent_card_uid":card.uid, "complete_parent_target_after_response":true, "response_action":CARD_ACTION_PLAY}
 		# 目标响应实体；为空时承受固定1点普通伤害。
 		var response_card: CardInstance = resolver.host.request_response_card(target_id, response_pattern, "请选择是否响应群体锦囊。", response_context)
 		if resolver.host.has_pending_card_choice():

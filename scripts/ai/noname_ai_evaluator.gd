@@ -45,7 +45,7 @@ const DUEL_SUFFICIENT_SHA_COUNT: int = 2
 ## 面对【制动】角色且拼杀资源明显劣势时继续打出【杀】的基础评分；默认-4分使非致命场景优先停止响应。
 const ZHIDONG_DUEL_DECLINE_SCORE: float = -4.0
 
-## 面对【制动】与贯石斧可支付强制命中时打出【闪】的基础评分；默认-5分优先保留无效防御牌。
+## 面对【制动】与贯石斧可支付强制命中时使用【闪】的基础评分；默认-5分优先保留无效防御牌。
 const ZHIDONG_FORCED_HIT_DODGE_DECLINE_SCORE: float = -5.0
 
 ## 判定与【制动】角色拼杀时“自身【杀】较少”的最大已知数量；默认1张表示只剩当前响应资源。

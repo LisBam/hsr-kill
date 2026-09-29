@@ -3,6 +3,10 @@ extends RefCounted
 
 ## 【杀】牌族共享流程组件。这里只规定目标、武器钩子、防具、【闪】和伤害的通用顺序，不包含任何具体装备 ID。
 
+## 卡牌动作类别：使用；与 CardDefinition.CARD_ACTION_USE 及核心层同名常量取值严格一致。
+## 本组件不是 CardDefinition 子类，因此不能继承该常量，必须在此处显式复用同一稳定取值。
+const CARD_ACTION_USE: String = "use"
+
 ## 当前卡牌效果调度器；负责生命周期判断与父牌源码恢复。
 var resolver: CardEffectResolver
 
@@ -145,8 +149,11 @@ func continue_after_weapon_targeted(context: Dictionary) -> void:
 	var response_context: Dictionary = context.duplicate(true)
 	response_context["kind"] = "slash_response"
 	response_context["complete_parent_target_after_response"] = true
-	# 目标实际打出的【闪】；为空可能表示放弃或正在等待玩家选择。
-	var response_card: CardInstance = host.request_response_card(target.player_id, "shan", "是否打出【闪】响应【杀】？", response_context)
+	# 动作类别固定为“使用”：成为【杀】的目标时使用【闪】抵消该【杀】。
+	# 这不是“打出”（牌产生了抵消效果），更不是“弃置”，因此不会触发【泛音】等“当你弃置牌时”类效果。
+	response_context["response_action"] = CARD_ACTION_USE
+	# 目标实际使用的【闪】；为空可能表示放弃或正在等待玩家选择。
+	var response_card: CardInstance = host.request_response_card(target.player_id, "shan", "是否使用【闪】响应【杀】？", response_context)
 	if resolver.is_resolution_stopped() or host.has_pending_card_choice():
 		return
 	_finish_slash_response(response_context, response_card != null)
@@ -178,7 +185,8 @@ func continue_after_weapon_dodged(context: Dictionary) -> void:
 		return
 	if bool(context.get("dodged", false)):
 		host.emit_rule_timing("shaMiss", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
-		host.add_log("%s打出【闪】抵消了【杀】。" % target.display_name)
+		# 文案固定使用“使用【闪】”：这是【闪】唯一合法的动作类别，日志不能把它写成“打出”。
+		host.add_log("%s使用了【闪】抵消了【杀】。" % target.display_name)
 		return
 	host.emit_rule_timing("shaHit", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), target.player_id, context)
 	# 当前武器定义；寒冰剑等替代伤害效果在自身文件接管。

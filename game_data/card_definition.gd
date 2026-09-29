@@ -6,6 +6,16 @@ extends RefCounted
 ## 卡牌语音动作模式：使用；与核心层 VOICE_PLAY_MODE_USE 取值保持一致，内容层因此无需依赖核心层常量。
 const VOICE_PLAY_MODE_USE: String = "use"
 
+## 卡牌动作类别：使用。与核心层 CARD_ACTION_USE 取值保持一致。
+## 牌进入处理区并产生牌面效果，例如成为【杀】的目标时使用【闪】抵消该【杀】。
+## “使用”既不是“打出”也不是“弃置”：牌经处理区进入弃牌堆，不会触发任何“弃置牌”效果。
+const CARD_ACTION_USE: String = "use"
+
+## 卡牌动作类别：打出。与核心层 CARD_ACTION_PLAY 取值保持一致。
+## 牌进入处理区但不产生牌面效果，例如响应【决斗】【南蛮入侵】打出的【杀】、响应【万箭齐发】打出的【闪】。
+## “打出”同样不是“弃置”：牌经处理区进入弃牌堆，不会触发任何“弃置牌”效果。
+const CARD_ACTION_PLAY: String = "play"
+
 ## 当前卡牌的完整静态元数据；由具体卡牌脚本在构造时一次性写入，运行时只通过深拷贝向外提供。
 var _metadata: Dictionary = {}
 
@@ -307,7 +317,7 @@ func on_slash_targeted(_slash_effect: Object, _context: Dictionary) -> bool:
 	return false
 
 
-## 在目标打出【闪】后执行武器专属效果；context.dodged 表示当前是否仍被【闪】抵消。
+## 在目标使用【闪】抵消【杀】后执行武器专属效果；context.dodged 表示当前是否仍被【闪】抵消。
 ## 返回 true 表示武器已接管或暂停流程；需要继续时调用 slash_effect.continue_after_weapon_dodged()。
 func on_slash_dodged(_slash_effect: Object, _context: Dictionary) -> bool:
 	return false

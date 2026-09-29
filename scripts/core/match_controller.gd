@@ -88,6 +88,28 @@ const VOICE_PLAY_MODE_USE: String = "use"
 ## 卡牌音频动作模式：打出（响应消耗）；牌源文件不会在打出流程中被回调，因此必须由核心统一出口触发。
 const VOICE_PLAY_MODE_RESPOND: String = "respond"
 
+## 卡牌动作类别：使用。牌进入处理区并产生牌面效果，例如成为【杀】的目标时使用【闪】抵消该【杀】、濒死时使用【桃】救援、使用【无懈可击】抵消锦囊。
+## “使用”既不是“打出”也不是“弃置”：牌离开手牌区时先进入处理区再进入弃牌堆，不构成一次“弃置牌”动作，因此不派发 cardsDiscardedBatchAfter。
+const CARD_ACTION_USE: String = "use"
+
+## 卡牌动作类别：打出。牌进入处理区但不产生牌面效果，例如响应【决斗】【南蛮入侵】打出的【杀】、响应【万箭齐发】打出的【闪】。
+## “打出”同样不是“弃置”：牌经过处理区进入弃牌堆，不构成一次“弃置牌”动作，不派发 cardsDiscardedBatchAfter。
+const CARD_ACTION_PLAY: String = "play"
+
+## 全部合法卡牌动作类别；内容层声明 response_action 时只允许使用这两个稳定取值。
+const CARD_ACTIONS: Array[String] = [CARD_ACTION_USE, CARD_ACTION_PLAY]
+
+## 响应请求缺省动作类别；调用方未在响应上下文中声明 response_action 时按“打出”处理，保持未迁移内容的既有语义。
+const DEFAULT_RESPONSE_ACTION: String = CARD_ACTION_PLAY
+
+## 响应模式唯一确定的动作类别；【无懈可击】【桃】【酒】只有“使用”一种合法动作。
+## 【杀】与【闪】既可能被使用也可能被打出，因此不在本表登记，必须由发起响应的内容显式声明。
+const RESPONSE_PATTERN_ACTION_DEFAULTS: Dictionary = {
+	"wuxie":CARD_ACTION_USE,
+	"tao":CARD_ACTION_USE,
+	"jiu":CARD_ACTION_USE,
+}
+
 ## 技能显式播放抑制窗口（秒）；内容层在发动过程中调用 play_voice() 后，统一出口在该窗口内不再重复请求。
 ## 默认3秒足以覆盖“点技能按钮 → 选择材料与目标 → 确认发动”的完整交互，又能在发动被取消后自然过期。
 const EXPLICIT_VOICE_SUPPRESS_WINDOW_SECONDS: float = 3.0
@@ -4834,7 +4856,7 @@ func _consume_response_choice_with_retry(context: Dictionary, selected_uids: Arr
 	var cardless_definition_id: String = str(context.get("selected_cardless_response_definition_id", ""))
 	if not cardless_skill_id.is_empty() and not cardless_definition_id.is_empty():
 		# 无材料响应结果；成功生成虚拟响应牌后与实体牌一致累计一次直接响应。
-		var cardless_response: CardInstance = _consume_cardless_skill_response(responder_id, cardless_skill_id, cardless_definition_id, response_patterns)
+		var cardless_response: CardInstance = _consume_cardless_skill_response(responder_id, cardless_skill_id, cardless_definition_id, response_patterns, context)
 		if cardless_response != null:
 			_record_direct_response_from_context(context)
 		return cardless_response
@@ -4876,8 +4898,8 @@ func _retry_response_after_equipment_attempt(context: Dictionary, responder_id: 
 	return request_response_card_patterns(responder_id, response_patterns, response_prompt, retry_context)
 
 
-## 执行一次已经支付费用的无材料技能响应；完整派发respond时机并返回虚拟牌代理供父效果读取。
-func _consume_cardless_skill_response(player_id: int, skill_id: String, definition_id: String, response_patterns: Array[String]) -> CardInstance:
+## 执行一次已经支付费用的无材料技能响应；按动作类别派发 useCard 或 respond 时机并返回虚拟牌代理供父效果读取。
+func _consume_cardless_skill_response(player_id: int, skill_id: String, definition_id: String, response_patterns: Array[String], response_context: Dictionary = {}) -> CardInstance:
 	# 响应者与技能实例；离场、死亡或等待期间失去技能都会令旧响应失效。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
@@ -4888,7 +4910,9 @@ func _consume_cardless_skill_response(player_id: int, skill_id: String, definiti
 	var response_pattern: String = _get_provided_response_pattern(definition)
 	if definition.is_empty() or not response_patterns.has(response_pattern) or skill.get_cardless_response_definition_id(response_patterns) != definition_id:
 		return null
-	var timing_data: Dictionary = {"card_uid":-1, "card_id":definition_id, "response_pattern":response_pattern, "skill_id":skill_id, "virtual":true, "cardless":true}
+	# 无材料响应采用的卡牌动作类别；与实体响应牌读取同一套声明，确保日志、时机与语音一致。
+	var response_action: String = resolve_response_action(response_context, response_patterns)
+	var timing_data: Dictionary = {"card_uid":-1, "card_id":definition_id, "response_pattern":response_pattern, "response_action":response_action, "skill_id":skill_id, "virtual":true, "cardless":true}
 	var respond_before_event: RuleEvent = _emit_rule_timing("respondBefore", player_id, player_id, -1, timing_data)
 	if respond_before_event != null and (respond_before_event.cancelled or respond_before_event.neutralized):
 		return null
@@ -4896,15 +4920,20 @@ func _consume_cardless_skill_response(player_id: int, skill_id: String, definiti
 	if respond_begin_event != null and (respond_begin_event.cancelled or respond_begin_event.neutralized):
 		return null
 	# 无材料响应父事件；material_card_uids为空明确表达技能只支付了自身规则费用。
-	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "skill_id":skill_id, "material_card_uids":[]}, {"responded":true, "virtual":true, "cardless":true, "card_id":definition_id})
+	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "skill_id":skill_id, "material_card_uids":[], "response_action":response_action}, {"responded":true, "virtual":true, "cardless":true, "card_id":definition_id, "response_action":response_action})
 	timing_data["respond_event_id"] = respond_event_id
-	_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
-	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[], "skill_id":skill_id, "virtual_card_id":definition_id})
+	# 主体时机按动作类别分派；无材料技能响应同样区分“使用”与“打出”。
+	_emit_rule_timing(_get_card_action_main_timing(response_action), player_id, player_id, -1, timing_data, respond_event_id)
+	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[], "skill_id":skill_id, "virtual_card_id":definition_id, "response_action":response_action})
 	skill.on_cardless_response_consumed(response_pattern, definition_id)
 	skill.announce_activation({"response_pattern":response_pattern, "virtual_card_id":definition_id})
-	add_log("%s通过【%s】视为打出%s。" % [player.display_name, format_skill_log_name(skill_id), GameSettings.resolve_card_name(definition)])
-	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
-	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
+	add_log("%s通过【%s】视为%s%s。" % [player.display_name, format_skill_log_name(skill_id), _get_card_action_verb(response_action), GameSettings.resolve_card_name(definition)])
+	# 尾部时机与实体响应牌保持同一分派规则。
+	if response_action == CARD_ACTION_USE:
+		_emit_rule_timing("useCardAfter", player_id, player_id, -1, timing_data, respond_event_id)
+	else:
+		_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
+		_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
 	return CardInstance.new(definition_id, "none", 0)
 
 
@@ -5040,11 +5069,14 @@ func _consume_response_card_uid(player_id: int, card_uid: int, response_pattern:
 
 
 ## 按候选响应模式集合消耗一张实体牌；用于【桃】与【酒】等共享时机但牌名不同的单一询问窗口。
+## 本入口严格区分“使用”与“打出”：两者都经处理区进入弃牌堆，都不构成一次“弃置牌”动作。
 func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response_patterns: Array[String], equipment_material_uids: Array[int] = [], response_skill_id: String = "", response_context: Dictionary = {}) -> CardInstance:
 	# 响应玩家；请求等待期间其牌区可能被插入结算改变，因此必须重新查询。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null:
 		return null
+	# 本次响应的卡牌动作类别；内容层显式声明优先，否则按响应模式取牌自身唯一合法的动作，最后回落到“打出”。
+	var response_action: String = resolve_response_action(response_context, response_patterns)
 	# 装备响应入口；装备文件负责复核模式、实体 UID、材料并返回虚拟响应牌。
 	for equipment_variant: Variant in player.equipment.values():
 		# 当前装备实体；只允许选择仍在装备区的同一 UID。
@@ -5058,7 +5090,7 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 			return null
 		if equipment_definition != null and equipment_definition.can_offer_equipment_response(self, player_id, response_patterns):
 			return equipment_definition.consume_equipment_response(self, player_id, card_uid, response_patterns, equipment_material_uids, response_context)
-		return _consume_skill_converted_response(player_id, equipment_card, response_patterns, response_skill_id)
+		return _consume_skill_converted_response(player_id, equipment_card, response_patterns, response_skill_id, response_context)
 	# 被选响应牌；只能来自当前仍可使用的牌源。
 	var card: CardInstance = player.find_playable_card(card_uid)
 	if card == null:
@@ -5068,9 +5100,10 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 	# 实体牌实际响应模式；日志与历史必须记录牌自身能提供的模式，不能把普通锦囊的受响应字段当作无懈牌能力。
 	var response_pattern: String = _get_provided_response_pattern(definition)
 	if not response_patterns.has(response_pattern):
-		return _consume_skill_converted_response(player_id, card, response_patterns, response_skill_id)
+		return _consume_skill_converted_response(player_id, card, response_patterns, response_skill_id, response_context)
 	# 响应牌生命周期数据；player 与 source 都是响应者，父级牌或选择用途保留在 response_pattern 中。
-	var timing_data: Dictionary = {"card_uid":card.uid, "card_id":card.definition_id, "response_pattern":response_pattern}
+	# response_action 让技能、回放与表现层能区分本次是“使用”还是“打出”，两者的实体移动语义相同而时机不同。
+	var timing_data: Dictionary = {"card_uid":card.uid, "card_id":card.definition_id, "response_pattern":response_pattern, "response_action":response_action}
 	var respond_before_event: RuleEvent = _emit_rule_timing("respondBefore", player_id, player_id, -1, timing_data)
 	if respond_before_event != null and (respond_before_event.cancelled or respond_before_event.neutralized):
 		return null
@@ -5085,11 +5118,16 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 	var was_hand_view_as: bool = card.has_hand_view_as()
 	# 实际消耗牌；take_playable_card 同时支持普通手牌与木牛“粮”。
 	var consumed: CardInstance = player.take_playable_card(card.uid)
-	_move_to_discard(consumed)
-	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "card_uid":consumed.uid}, {"responded":true})
+	# 响应父事件；使用与打出共用同一稳定事件名，动作类别写入载荷供技能与回放读取。
+	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "card_uid":consumed.uid, "response_action":response_action}, {"responded":true, "response_action":response_action})
+	# 实体回收；这里必须走“使用与打出”的经处理区路径，不能调用弃置入口。
+	# 直接弃置会让响应牌与“弃置牌”共用同一条移动路径并计入弃置批次，
+	# 使【闪】等响应被误判为“弃置”并错误触发【泛音】等“当你弃置牌时”类效果。
+	_move_played_card_to_discard(consumed, response_action, respond_event_id, player_id)
 	timing_data["respond_event_id"] = respond_event_id
-	_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
-	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":consumed.uid})
+	# 主体时机；使用派发 useCard，打出派发 respond，两者语义互斥且不会同时派发。
+	_emit_rule_timing(_get_card_action_main_timing(response_action), player_id, player_id, -1, timing_data, respond_event_id)
+	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":consumed.uid, "response_action":response_action})
 	# 响应结果对象；普通牌直接沿用实体，手牌视为牌使用逻辑代理以继续正确执行【桃】等后续效果。
 	var resolved_response_card: CardInstance = consumed
 	if was_hand_view_as:
@@ -5097,12 +5135,17 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 		resolved_response_card.uid = consumed.uid
 		resolved_response_card.zone = consumed.zone
 	# 响应日志显示已经声明的逻辑牌名，弃牌堆中的实体快照仍展示恢复后的原始牌名。
-	add_log("%s打出了%s。" % [format_player_state_log_name(player), format_card_log_name(resolved_response_card)])
-	# 音频表现：响应牌打出成功后请求一次卡牌语音；打出流程不会回调牌源文件，因此必须在本统一出口触发。
-	request_card_voice(player_id, logical_definition_id, VOICE_PLAY_MODE_RESPOND)
+	# 使用与打出的日志动词不同，日志是玩家理解“这张牌算使用还是打出”的唯一公开依据。
+	add_log(_build_card_action_log(player, resolved_response_card, response_action))
+	# 音频表现：响应牌结算成功后请求一次卡牌语音；响应流程不会回调牌源文件，因此必须在本统一出口触发。
+	request_card_voice(player_id, logical_definition_id, _get_card_action_voice_mode(response_action))
 	_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
-	_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
-	_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
+	# 尾部时机同样按动作类别分派；使用型响应以 useCardAfter 收尾，打出型响应保留 respondEnd 与 respondAfter。
+	if response_action == CARD_ACTION_USE:
+		_emit_rule_timing("useCardAfter", player_id, player_id, -1, timing_data, respond_event_id)
+	else:
+		_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
+		_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
 	return resolved_response_card
 
 
@@ -5110,6 +5153,69 @@ func _consume_response_card_uid_patterns(player_id: int, card_uid: int, response
 func _get_provided_response_pattern(definition: Dictionary) -> String:
 	# 卡牌文件显式提供的响应模式；新增响应牌不需要登记牌效兼容映射。
 	return str(definition.get("provided_response_pattern", ""))
+
+
+## 解析一次响应请求的卡牌动作类别；优先读取内容层在响应上下文中显式声明的 response_action。
+## 未显式声明时按响应模式回落：【无懈可击】【桃】【酒】只有“使用”一种合法动作，
+## 【杀】与【闪】既可能被使用也可能被打出，必须由发起响应的内容显式声明，缺省按“打出”处理。
+func resolve_response_action(response_context: Dictionary, response_patterns: Array[String]) -> String:
+	# 内容层显式声明；只接受两个稳定取值，非法值按未声明处理而不猜测语义。
+	var declared_action: String = str(response_context.get("response_action", ""))
+	if CARD_ACTIONS.has(declared_action):
+		return declared_action
+	# 模式集合推导结果；【桃】与【酒】共享救援窗口时要求全部模式同为“使用”才成立。
+	var deduced_action: String = ""
+	for response_pattern: String in response_patterns:
+		# 当前响应模式的默认动作；未登记模式（【杀】【闪】与扩展响应标签）一律按“打出”处理。
+		var pattern_action: String = str(RESPONSE_PATTERN_ACTION_DEFAULTS.get(response_pattern, DEFAULT_RESPONSE_ACTION))
+		if deduced_action.is_empty():
+			deduced_action = pattern_action
+		elif deduced_action != pattern_action:
+			return DEFAULT_RESPONSE_ACTION
+	return deduced_action if not deduced_action.is_empty() else DEFAULT_RESPONSE_ACTION
+
+
+## 返回一次卡牌动作对应的主体时机名；使用走 useCard，打出走 respond，两者互斥且不会同时派发。
+func _get_card_action_main_timing(action: String) -> String:
+	return "useCard" if action == CARD_ACTION_USE else "respond"
+
+
+## 返回一次卡牌动作对应的音频动作模式；两种动作共用同一份音效，该字段只影响解析与诊断。
+func _get_card_action_voice_mode(action: String) -> String:
+	return VOICE_PLAY_MODE_USE if action == CARD_ACTION_USE else VOICE_PLAY_MODE_RESPOND
+
+
+## 构造一次使用或打出的公开日志；动词由动作类别决定，实体牌名沿用统一牌名格式化。
+func _build_card_action_log(player: PlayerState, card: CardInstance, action: String) -> String:
+	return "%s%s%s。" % [format_player_state_log_name(player), _get_card_action_verb(action), format_card_log_name(card)]
+
+
+## 返回动作类别对应的中文动词；日志是玩家判断“这张牌算使用还是打出”的唯一公开依据。
+func _get_card_action_verb(action: String) -> String:
+	return "使用了" if action == CARD_ACTION_USE else "打出了"
+
+
+## 把已经离开原牌源的使用牌或打出牌经处理区送入弃牌堆。
+## 使用与打出都必须先公开进入处理区，这是它们与“弃置”唯一可靠的规则边界：
+## 弃置批次只认手牌、装备与木牛“粮”三种来源，处理区收尾天然不构成一次“弃置牌”动作，
+## 因此不会派发 cardsDiscardedBatchAfter，也就不会触发【泛音】等“当你弃置牌时”类效果。
+## actor_id 是本次使用或打出的角色，只用于牌面表现事件，不参与规则判定。
+## 返回是否完成回收；处理区前置时机取消时返回 false（实体此时不再位于任何权威区域，与取消一次使用牌的处理一致）。
+func _move_played_card_to_discard(card: CardInstance, action: String, parent_event_id: int, actor_id: int) -> bool:
+	if card == null:
+		return false
+	_ensure_card_movement()
+	# 处理区落点；移动原因使用动作类别，回放与移牌历史可据此区分“使用”和“打出”。
+	if _move_card_with_timings(card, "processing", -1, action, parent_event_id) == null:
+		return false
+	# 使用与打出的牌面表现认领；必须在处理区收尾之前发出，这是本函数第二条不可调换的顺序约束。
+	# 表现层只承认由 useCard 表现认领过的处理区实体：未经认领的 processing -> discard_pile 增量会被判定为虚拟材料收尾并创建 0 张牌面，
+	# 导致响应牌完全没有飞牌动画。响应牌没有目标角色，因此只播放“从响应者锚点飞向中央展示区”的整牌动画。
+	_request_card_presentation(card, actor_id, [], "useCard", parent_event_id, true)
+	# 处理区收尾；此处复用统一弃置入口，使 cardsDiscard 事件、公共区可见性与主动使用牌完全一致。
+	# 由于实体此刻已经在处理区，弃置入口不会把它计入任何弃置批次——这正是本函数存在的唯一理由。
+	_move_to_discard(card, parent_event_id)
+	return card.zone == "discard_pile"
 
 
 ## 判断玩家的一张当前拥有牌能否由任一已安装技能转化为本次响应；技能只声明合法性，不移动实体牌。
@@ -5132,9 +5238,12 @@ func _get_response_conversion_skill_id(player_id: int, card: CardInstance, respo
 
 
 ## 通过首个仍合法的武将技能消耗一张材料牌并生成虚拟响应牌；等待期间条件失效时不移动材料。
-func _consume_skill_converted_response(player_id: int, material_card: CardInstance, response_patterns: Array[String], response_skill_id: String = "") -> CardInstance:
+## 技能转化的响应同样区分“使用”与“打出”，材料经处理区进入弃牌堆，不构成一次“弃置牌”动作。
+func _consume_skill_converted_response(player_id: int, material_card: CardInstance, response_patterns: Array[String], response_skill_id: String = "", response_context: Dictionary = {}) -> CardInstance:
 	if material_card == null or response_skill_id.is_empty():
 		return null
+	# 转化响应采用的卡牌动作类别；与实体响应牌读取同一套声明，保证日志、时机与语音完全一致。
+	var response_action: String = resolve_response_action(response_context, response_patterns)
 	# 当前玩家的运行时技能表；安装顺序决定多个转化技能同时可用时的稳定优先级。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
 	for skill_variant: Variant in player_skills.values():
@@ -5151,7 +5260,7 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 		if virtual_definition.is_empty() or not response_patterns.has(response_pattern):
 			continue
 		# 响应生命周期数据；逻辑牌名使用转化结果，材料 UID 继续保证移动、回放与迟到提交可追踪。
-		var timing_data: Dictionary = {"card_uid":material_card.uid, "card_id":virtual_definition_id, "material_card_id":material_card.definition_id, "response_pattern":response_pattern, "skill_id":skill.get_id(), "virtual":true}
+		var timing_data: Dictionary = {"card_uid":material_card.uid, "card_id":virtual_definition_id, "material_card_id":material_card.definition_id, "response_pattern":response_pattern, "response_action":response_action, "skill_id":skill.get_id(), "virtual":true}
 		# 响应前置时机事件；取消或中立化时保留原材料区域并终止本次转化。
 		var respond_before_event: RuleEvent = _emit_rule_timing("respondBefore", player_id, player_id, -1, timing_data)
 		if respond_before_event != null and (respond_before_event.cancelled or respond_before_event.neutralized):
@@ -5167,25 +5276,31 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 		var was_hand_card: bool = player != null and player.hand.has(material_card)
 		# 材料原本是否位于装备区；成功移出后必须卸载持续效果并执行白银狮子、木牛流马等离区规则。
 		var was_equipment_card: bool = player != null and player.equipment.values().has(material_card)
-		# 虚拟响应父事件；材料先进入处理区再进入弃牌堆，与普通响应牌保持相同公开移动语义。
-		var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "skill_id":skill.get_id(), "material_card_uids":[material_card.uid]}, {"responded":true, "virtual":true, "card_id":virtual_definition_id})
+		# 虚拟响应父事件；材料先进入处理区再进入弃牌堆，与实体响应牌保持相同公开移动语义。
+		var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "skill_id":skill.get_id(), "material_card_uids":[material_card.uid], "response_action":response_action}, {"responded":true, "virtual":true, "card_id":virtual_definition_id, "response_action":response_action})
 		_ensure_card_movement()
-		if _move_card_with_timings(material_card, "processing", -1, "respond", respond_event_id) == null:
+		if _move_card_with_timings(material_card, "processing", -1, response_action, respond_event_id) == null:
 			return null
 		if was_equipment_card:
 			_on_equipment_lost(player, material_card, true)
-		_move_card_with_timings(material_card, "discard_pile", -1, "respond", respond_event_id)
+		# 处理区收尾；此时实体来源已经是处理区，复用统一弃置入口不会产生弃置批次，收益是与主动使用牌完全一致的 cardsDiscard 收尾事件。
+		_move_to_discard(material_card, respond_event_id)
 		timing_data["respond_event_id"] = respond_event_id
-		_emit_rule_timing("respond", player_id, player_id, -1, timing_data, respond_event_id)
-		player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[material_card.uid], "skill_id":skill.get_id(), "virtual_card_id":virtual_definition_id})
+		# 主体时机按动作类别分派；使用走 useCard，打出走 respond。
+		_emit_rule_timing(_get_card_action_main_timing(response_action), player_id, player_id, -1, timing_data, respond_event_id)
+		player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":[material_card.uid], "skill_id":skill.get_id(), "virtual_card_id":virtual_definition_id, "response_action":response_action})
 		skill.on_converted_response_consumed(material_card, response_pattern, virtual_definition_id)
 		skill.announce_activation({"material_card_uid":material_card.uid, "response_pattern":response_pattern, "virtual_card_id":virtual_definition_id})
-		add_log("%s将一张牌当%s打出。" % [player.display_name, GameSettings.resolve_card_name(virtual_definition)])
-		# 音频表现：技能转化打出的响应牌同样按实际结算的虚拟牌定义请求语音。
-		request_card_voice(player_id, virtual_definition_id, VOICE_PLAY_MODE_RESPOND)
+		add_log("%s将一张牌当%s%s。" % [player.display_name, GameSettings.resolve_card_name(virtual_definition), _get_card_action_verb(response_action)])
+		# 音频表现：技能转化的响应牌同样按实际结算的虚拟牌定义请求语音。
+		request_card_voice(player_id, virtual_definition_id, _get_card_action_voice_mode(response_action))
 		_notify_equipment_card_consumed(player_id, material_card, was_hand_card)
-		_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
-		_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
+		# 尾部时机与实体响应牌保持同一分派规则。
+		if response_action == CARD_ACTION_USE:
+			_emit_rule_timing("useCardAfter", player_id, player_id, -1, timing_data, respond_event_id)
+		else:
+			_emit_rule_timing("respondEnd", player_id, player_id, -1, timing_data, respond_event_id)
+			_emit_rule_timing("respondAfter", player_id, player_id, -1, timing_data, respond_event_id)
 		# 单材料转化保留原花色和点数，使颜色、防具与后续牌面查询遵循实体材料属性。
 		return CardInstance.new(virtual_definition_id, material_card.suit, material_card.rank)
 	return null
@@ -5686,11 +5801,14 @@ func _get_equipment_response_definition(choice_data: Dictionary, selected_uid: i
 
 
 ## 消耗若干已经由装备源码验证的普通手牌，并生成按材料聚合花色与颜色的虚拟响应牌。
-func consume_virtual_equipment_response(player_id: int, equipment_uid: int, material_card_uids: Array[int], response_pattern: String, virtual_card_definition_id: String, log_message: String) -> CardInstance:
+## 装备转化的响应同样区分“使用”与“打出”，材料经处理区进入弃牌堆，不构成一次“弃置牌”动作。
+func consume_virtual_equipment_response(player_id: int, equipment_uid: int, material_card_uids: Array[int], response_pattern: String, virtual_card_definition_id: String, log_message: String, response_context: Dictionary = {}) -> CardInstance:
 	# 响应玩家；不存在或材料为空时不能生成虚拟牌。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or material_card_uids.is_empty() or response_pattern.is_empty() or virtual_card_definition_id.is_empty():
 		return null
+	# 装备转化响应采用的卡牌动作类别；八卦阵、丈八蛇矛等入口随所在响应窗口一起声明。
+	var response_action: String = resolve_response_action(response_context, [response_pattern])
 	# 参与响应的材料实体；移动前统一收集，用于推导本次虚拟牌的聚合花色与颜色。
 	var material_cards: Array[CardInstance] = []
 	for material_card_uid: int in material_card_uids:
@@ -5703,13 +5821,16 @@ func consume_virtual_equipment_response(player_id: int, equipment_uid: int, mate
 	var material_aggregate: Dictionary = VirtualCard.resolve_material_aggregate(material_cards)
 	_ensure_card_movement()
 	# 响应事件；全部材料共享同一稳定父事件，便于回放还原顺序。
-	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "equipment_uid":equipment_uid, "material_card_uids":material_card_uids.duplicate()}, {"responded":true, "virtual":true})
+	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "equipment_uid":equipment_uid, "material_card_uids":material_card_uids.duplicate(), "response_action":response_action}, {"responded":true, "virtual":true, "response_action":response_action})
 	for material_card_uid: int in material_card_uids:
 		# 当前材料；装备源码已验证来自普通手牌，移动前仍需重新查询防止旧选择。
 		var material_card: CardInstance = player.find_hand_card(material_card_uid)
-		_move_card_with_timings(material_card, "processing", -1, "respond", respond_event_id)
-		_move_card_with_timings(material_card, "discard_pile", -1, "respond", respond_event_id)
-	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":equipment_uid})
+		_move_card_with_timings(material_card, "processing", -1, response_action, respond_event_id)
+		# 处理区收尾；全部材料共享同一父事件，复用统一弃置入口不会把它们计入弃置批次。
+		_move_to_discard(material_card, respond_event_id)
+	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":equipment_uid, "response_action":response_action})
+	# 主体时机按动作类别分派，使装备转化的响应与实体响应牌对外表现完全一致。
+	_emit_rule_timing(_get_card_action_main_timing(response_action), player_id, player_id, -1, {"card_uid":-1, "card_id":virtual_card_definition_id, "response_pattern":response_pattern, "response_action":response_action, "equipment_uid":equipment_uid, "material_card_uids":material_card_uids.duplicate(), "virtual":true, "respond_event_id":respond_event_id}, respond_event_id)
 	if not log_message.is_empty():
 		add_log(log_message)
 	# 虚拟响应牌不继承任一材料点数；花色与颜色按全部材料聚合，与主动使用虚拟牌保持同一语义。
@@ -5735,10 +5856,13 @@ func _consume_response_card_automatic(player_id: int, response_pattern: String) 
 		if _get_provided_response_pattern(definition) == response_pattern:
 			# 是否为真实手牌；【银月枪】只能由回合外使用或打出的黑色手牌触发，木牛“粮”不算手牌。
 			var was_hand_card: bool = player.hand.has(card)
-			# 从手牌移出的响应牌；随后直接进入弃牌堆。
+			# 本次兼容响应的动作类别；同样按响应模式推导，【无懈可击】【桃】【酒】会被识别为“使用”。
+			var response_action: String = resolve_response_action({}, [response_pattern])
+			# 从手牌移出的响应牌；随后经处理区进入弃牌堆，与正式响应入口保持同一移动语义。
 			var consumed: CardInstance = player.take_playable_card(card.uid)
-			_move_to_discard(consumed)
-			add_log("%s打出了%s。" % [player.display_name, describe_card(consumed)])
+			_move_played_card_to_discard(consumed, response_action, state.current_event_id, player_id)
+			# 兼容入口沿用 describe_card 的旧日志格式，只在动词上区分“使用”与“打出”。
+			add_log("%s%s%s。" % [player.display_name, _get_card_action_verb(response_action), describe_card(consumed)])
 			_notify_equipment_card_consumed(player.player_id, consumed, was_hand_card)
 			return consumed
 
@@ -5798,6 +5922,8 @@ func resolve_trick_negation(source_id: int, target_id: int, trick_id: String, co
 		"response_index":0,
 		"wuxie_response_results":[],
 		"root_event_id":state.current_event_id,
+		# 动作类别显式声明为“使用”：【无懈可击】只有“使用”一种合法动作，不是“打出”也不是“弃置”。
+		"response_action":CARD_ACTION_USE,
 	}
 	for context_key_variant: Variant in continuation_context.keys():
 		# 附加上下文字段名；仅复制可序列化阶段信息，不覆盖当前无懈响应的核心归属字段。
