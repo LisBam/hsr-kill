@@ -1089,6 +1089,36 @@ func _test_wuxie_decision() -> bool:
 	var surplus_guohe_choice: Dictionary = _policy.choose_card_choice(snapshot, enemy_guohe_request, [pass_action, use_action])
 	if not bool((surplus_guohe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("wuxie_surplus_copy=%s" % [surplus_guohe_choice])
+	# 弱正态度门槛；保护他人免受负面锦囊影响时必须达到明确队友态度，避免替敌人判定区的延时锦囊消耗【无懈可击】。
+	# 五人标准身份局；两名反贼与内奸并存，可同时覆盖“策略性盟友”与“同阵营队友”两种态度量级。
+	var strategy_snapshot: Dictionary = _build_strategy_snapshot(true)
+	# 反贼一号与反贼二号的手牌；各持有两张【无懈可击】，确保资源充足时旧口径会为3.0弱正态度确认响应。
+	(strategy_snapshot.get("players", []) as Array)[1]["hand"] = [_card(611, "wuxie", 1), _card(612, "wuxie", 1)]
+	(strategy_snapshot.get("players", []) as Array)[1]["hand_count"] = 2
+	(strategy_snapshot.get("players", []) as Array)[4]["hand"] = [_card(641, "wuxie", 4), _card(642, "wuxie", 4)]
+	(strategy_snapshot.get("players", []) as Array)[4]["hand_count"] = 2
+	# 反贼一号视角策略；只读取同一份权威快照，不共享领袖策略的身份观察数据。
+	var rebel_policy: BasicAIPolicy = BasicAIPolicy.new(1, IdentityAIModel.new())
+	# 反贼对内奸的真实态度为3.0；该数值由反贼数量与忠臣数量共同决定，属于局势平衡形成的策略性盟友而非同阵营队友。
+	var weak_ally_candidate: Dictionary = _candidate(611, "wuxie", 1)
+	var weak_ally_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[weak_ally_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"lebu", "source_id":-1, "target_id":3, "negated":false}}
+	# 弱正态度目标的放弃动作；弱态度不足以替内奸判定区的【乐不思蜀】消耗无懈可击。
+	var weak_ally_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":1, "payload":{"request_id":1, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 弱正态度目标的确认动作；旧口径会把该动作判为0.72正收益并错误消耗一张【无懈可击】。
+	var weak_ally_use_action: Dictionary = {"action_type":"choose_cards", "actor_id":1, "payload":{"request_id":1, "selected_card_uids":[611], "selected_target_ids":[], "confirmed":true}}
+	var weak_ally_choice: Dictionary = rebel_policy.choose_card_choice(strategy_snapshot, weak_ally_request, [weak_ally_pass_action, weak_ally_use_action])
+	if bool((weak_ally_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_weak_ally_negation=%s" % [weak_ally_choice])
+	# 同阵营保护不受门槛影响；另一名反贼对判定区反贼的态度为5.0，仍须使用【无懈可击】抵消【乐不思蜀】。
+	var teammate_policy: BasicAIPolicy = BasicAIPolicy.new(4, IdentityAIModel.new())
+	var teammate_candidate: Dictionary = _candidate(641, "wuxie", 4)
+	var teammate_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":1, "candidates":[teammate_candidate], "context":{"kind":"trick_negation", "response_patterns":["wuxie"], "trick_id":"lebu", "source_id":-1, "target_id":1, "negated":false}}
+	# 队友保护动作；态度达到明确队友门槛时必须继续保护同阵营目标。
+	var teammate_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":4, "payload":{"request_id":1, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var teammate_use_action: Dictionary = {"action_type":"choose_cards", "actor_id":4, "payload":{"request_id":1, "selected_card_uids":[641], "selected_target_ids":[], "confirmed":true}}
+	var teammate_choice: Dictionary = teammate_policy.choose_card_choice(strategy_snapshot, teammate_request, [teammate_pass_action, teammate_use_action])
+	if not bool((teammate_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("wuxie_teammate_protection=%s" % [teammate_choice])
 	return true
 
 
