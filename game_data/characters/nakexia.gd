@@ -17,7 +17,7 @@ func _init() -> void:
 	super({
 		"id": "nakexia",
 		"display_name": "那刻夏",
-		"gender": "female",
+		"gender": "male",
 		"faction": "wengfaluosi",
 		"max_hp": 3,
 		"description": "以随机削弱与随机伤害推进轮回，用重置换取本回合末尾的技能枯竭。",

@@ -48,7 +48,7 @@ func _init() -> void:
 		"reincarnation":true,
 		"reincarnation_section_count":3,
 		"reincarnation_has_explicit_sections":true,
-		"description":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③摸一张牌并退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
+		"description":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
 	})
 
 
@@ -234,7 +234,6 @@ func _on_fire_damage_after(event: RuleEvent) -> void:
 	elif section_index == DRAW_SECTION_INDEX:
 		host.call("draw", owner_player_id, DRAW_COUNT)
 	elif section_index == DRAW_AND_EXIT_ETERNAL_SECTION_INDEX:
-		host.call("draw", owner_player_id, DRAW_COUNT)
 		for skill_id: String in affected_skill_ids:
 			host.call("exit_eternal_reincarnation_state", owner_player_id, skill_id)
 	announce_activation({"section_number":section_index + 1, "round_count":get_reincarnation_round_count(), "damage_event_id":int(event.data.get("damage_event_id", -1)), "affected_skill_ids":affected_skill_ids.duplicate(), "draw_count":DRAW_COUNT if section_index in [DRAW_SECTION_INDEX, DRAW_AND_EXIT_ETERNAL_SECTION_INDEX] else 0})

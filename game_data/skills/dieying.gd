@@ -19,7 +19,7 @@ func _init() -> void:
 		"name": "蝶影",
 		"trigger": "phaseEnd",
 		"ui_enabled": false,
-		"description": "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本阶段内进入弃牌堆的【杀】数，X至多为5。）",
+		"description": "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本回合内进入弃牌堆的【杀】数，X至多为5。）",
 	})
 
 
