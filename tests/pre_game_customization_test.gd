@@ -418,7 +418,12 @@ func _test_character_selection_panel_layout() -> bool:
 	selection_panel.bind_snapshot(initial_leader_all_character_snapshot)
 	await get_tree().process_frame
 	selection_panel.call("_toggle_all_characters")
-	if not all_characters_button.visible or (selection_panel.call("_get_displayed_candidate_ids") as Array) != (initial_leader_all_character_snapshot.get("all_character_ids", []) as Array):
+	# “所有武将”展示顺序期望值；面板必须与主菜单“所有武将牌”图鉴共用同一势力排序规则。
+	var expected_all_character_ids: Array[String] = []
+	for character_id_variant: Variant in initial_leader_all_character_snapshot.get("all_character_ids", []) as Array:
+		expected_all_character_ids.append(str(character_id_variant))
+	expected_all_character_ids.sort_custom(CardGallerySort.sort_character_ids)
+	if not all_characters_button.visible or (selection_panel.call("_get_displayed_candidate_ids") as Array) != expected_all_character_ids:
 		main_instance.queue_free()
 		return _fail("initial_leader_all_characters_available")
 	selection_panel.close()
