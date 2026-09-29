@@ -79,6 +79,8 @@ func _ready() -> void:
 		return
 	if not _test_linghang_recast_choice():
 		return
+	if not _test_omphalos_leader_skill_ai():
+		return
 	if not _test_active_skill_payload():
 		return
 	if not _test_peila_lingke_skill_ai():
@@ -1228,6 +1230,61 @@ func _test_leader_skill_confirmation() -> bool:
 	var linghang_enemy_choice: Dictionary = _policy.choose_card_choice(snapshot, linghang_request, [pass_action, confirm_action])
 	if bool((linghang_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("linghang_enemy=%s" % [linghang_enemy_choice])
+	return true
+
+
+## 验证翁法罗斯两项领袖技的AI接入：【薪继】确认按受伤角色对领袖的态度决定，【征服】按改写后的击杀奖惩重估致命伤害。
+func _test_omphalos_leader_skill_ai() -> bool:
+	# 全身份公开快照；0号领袖、1号反贼与2号忠臣分别用于验证友方确认、敌方拒绝与致命伤害估值。
+	var snapshot: Dictionary = _build_snapshot(true)
+	var players: Array = snapshot.get("players", []) as Array
+	(players[0] as Dictionary)["character_id"] = "baie"
+	# 受伤忠臣的确认请求；选择者是受伤角色2号本人，技能持有者仍是领袖0。
+	var xinji_request: Dictionary = {"allow_cancel":true, "min_card_select":0, "max_card_select":0, "candidates":[], "context":{"kind":"xinji_confirm", "skill_id":"xinji", "skill_owner_id":0, "victim_id":2, "ai_allow_confirm":true}}
+	var ally_policy: BasicAIPolicy = BasicAIPolicy.new(2, IdentityAIModel.new())
+	# 友方确认与取消动作；是否发动完全由技能AI钩子的态度结论决定。
+	var ally_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":7, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var ally_confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":7, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
+	var ally_choice: Dictionary = ally_policy.choose_card_choice(snapshot, xinji_request, [ally_pass_action, ally_confirm_action])
+	if not bool((ally_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("xinji_ally=%s" % [ally_choice])
+	# 反贼1号作为受伤角色面对领袖0；敌方必须取消，不能因为零材料确认的默认分而误发动。
+	var enemy_request: Dictionary = xinji_request.duplicate(true)
+	(enemy_request.get("context", {}) as Dictionary)["victim_id"] = 1
+	var enemy_policy: BasicAIPolicy = BasicAIPolicy.new(1, IdentityAIModel.new())
+	var enemy_pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":1, "payload":{"request_id":8, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var enemy_confirm_action: Dictionary = {"action_type":"choose_cards", "actor_id":1, "payload":{"request_id":8, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true}}
+	var enemy_choice: Dictionary = enemy_policy.choose_card_choice(snapshot, enemy_request, [enemy_pass_action, enemy_confirm_action])
+	if bool((enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("xinji_enemy=%s" % [enemy_choice])
+	# 【征服】致命伤害估值：1血0牌的翁法罗斯忠臣属于可牺牲队友，领袖刻律德菈应把“四张牌”视为净收益。
+	var strategy: IdentityStrategyEvaluator = IdentityStrategyEvaluator.new(IdentityAIModel.new())
+	(players[0] as Dictionary)["character_id"] = "xier"
+	(players[2] as Dictionary)["character_id"] = "kelvdela"
+	(players[2] as Dictionary)["hp"] = 1
+	# 目标手牌清空；零手牌是“没有后续行动价值”的必要条件之一。
+	(players[2] as Dictionary)["hand"] = []
+	(players[2] as Dictionary)["hand_count"] = 0
+	# 当前行动者为领袖本人；2号距离下次行动还有2个座次，满足“行动靠后”。
+	snapshot["current_player_id"] = 0
+	# 基准评分；武将换成没有击杀奖惩改写能力的希儿，得到纯身份规则结论。
+	var baseline_score: float = strategy.score_lethal_damage_consequence(snapshot, 0, 2)
+	(players[0] as Dictionary)["character_id"] = "kelvdela"
+	var rewarded_score: float = strategy.score_lethal_damage_consequence(snapshot, 0, 2)
+	if rewarded_score <= baseline_score or rewarded_score <= 0.0:
+		return _fail("zhengfu_ai_reward baseline=%.2f rewarded=%.2f" % [baseline_score, rewarded_score])
+	# 目标马上就能行动；同一改写下牺牲价值下降，评分必须低于“行动靠后”场景。
+	snapshot["current_player_id"] = 1
+	var early_score: float = strategy.score_lethal_damage_consequence(snapshot, 0, 2)
+	if early_score >= rewarded_score:
+		return _fail("zhengfu_ai_late_action early=%.2f late=%.2f" % [early_score, rewarded_score])
+	# 目标持有资源且体力充足；四张牌不足以弥补同阵营减员，评分必须仍为负。
+	(players[2] as Dictionary)["hp"] = 4
+	(players[2] as Dictionary)["hand"] = [_card(401, "shan", 2), _card(402, "sha", 2)]
+	(players[2] as Dictionary)["hand_count"] = 2
+	var resource_score: float = strategy.score_lethal_damage_consequence(snapshot, 0, 2)
+	if resource_score >= 0.0:
+		return _fail("zhengfu_ai_resource=%.2f" % resource_score)
 	return true
 
 

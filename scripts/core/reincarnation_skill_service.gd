@@ -102,6 +102,24 @@ func get_skill_state(player_id: int, skill_id: String) -> Dictionary:
 	return (player.reincarnation_skills.get(skill_id, {}) as Dictionary).duplicate(true)
 
 
+## 返回指定角色当前已登记的全部轮回技稳定ID副本；角色无效或尚无轮回技时返回空数组。
+## 外部推进技能（例如“令其所有轮回技进入下一个轮回”）据此遍历目标角色的全部轮回技，
+## 无需自行读取 PlayerState.reincarnation_skills，保证“哪些技能算轮回技”只有一份权威来源。
+func list_skill_ids(player_id: int) -> Array[String]:
+	# 已登记轮回技ID；保持字典插入顺序，使同一局面下多次列举得到稳定顺序。
+	var result: Array[String] = []
+	# 技能持有者；无效玩家没有任何可列举的轮回技。
+	var player: PlayerState = _get_player(player_id)
+	if player == null:
+		return result
+	for skill_id_variant: Variant in player.reincarnation_skills.keys():
+		# 当前轮回技稳定ID；空值不会进入外部推进候选。
+		var skill_id: String = str(skill_id_variant)
+		if not skill_id.is_empty():
+			result.append(skill_id)
+	return result
+
+
 ## 返回当前轮回数；轮回技尚未登记时按初始值1处理，便于技能公式安全回退。
 func get_round_count(player_id: int, skill_id: String) -> int:
 	return maxi(int(get_skill_state(player_id, skill_id).get("round_count", 1)), 1)

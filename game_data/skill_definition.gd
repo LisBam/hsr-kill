@@ -612,6 +612,19 @@ func modify_ai_incoming_card_effect(_authoritative_snapshot: Dictionary, _actor_
 	return current_score
 
 
+## 复核并改写本技能持有者击杀其他角色时的击杀奖惩类型；返回空字符串表示保留身份规则的基础奖惩。
+## victim_snapshot只包含可序列化公开字段（player_id、character_id、identity、alive），技能据此不得读取隐藏信息。
+## 覆写方返回任意非空类型字符串即整体覆盖基础结论，同一击杀者的多个技能按武将声明顺序依次复核。
+func modify_death_reward(_victim_snapshot: Dictionary, _base_reward: String) -> String:
+	return ""
+
+
+## 修正本技能持有者即将击杀目标时的身份局后果评分；默认保持通用奖惩估值。
+## 技能通过该钩子表达“击杀奖惩被本技能改写”造成的决策变化，只改写评分，不执行死亡、摸牌或弃牌。
+func modify_ai_lethal_damage_consequence(_authoritative_snapshot: Dictionary, _actor_id: int, _target_id: int, current_score: float, _evaluator: Object) -> float:
+	return current_score
+
+
 ## 判断持有者是否因本技能解除指定卡牌的配置化使用次数限制；默认不修改任何卡牌次数。
 func ignores_play_count_limit(_card_definition: Dictionary) -> bool:
 	return false

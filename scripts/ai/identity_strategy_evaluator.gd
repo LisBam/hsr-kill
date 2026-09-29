@@ -241,7 +241,52 @@ func score_lethal_damage_consequence(authoritative_snapshot: Dictionary, actor_i
 		var discarded_resource_count: int = hand_count + equipment_count
 		# 主公误杀忠臣除固定阵营损失外，还按实际会弃置的全部手牌与装备追加高额惩罚。
 		score -= LEADER_KILL_LOYALIST_BASE_PENALTY + float(discarded_resource_count) * LEADER_KILL_LOYALIST_RESOURCE_PENALTY
-	return score
+	# 行动者技能的击杀奖惩改写；声明“击杀奖惩改为摸X张牌”类效果的角色必须按改写后的规则重估本次击杀。
+	return _modify_lethal_consequence_by_actor_skills(authoritative_snapshot, actor_id, target_id, score)
+
+
+## 依次应用行动者全部技能的击杀后果修正；技能只读取公开快照并返回新评分，不执行任何规则效果。
+## 技能顺序与基础AI其他技能链保持一致：固有技能按武将声明顺序在前，模式与运行时技能在后，同一技能ID只执行一次。
+func _modify_lethal_consequence_by_actor_skills(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, current_score: float) -> float:
+	# 行动者快照；对象缺失时不进入任何技能钩子，直接保留通用结论。
+	var actor: Dictionary = identity_model.get_player(authoritative_snapshot, actor_id)
+	if actor.is_empty():
+		return current_score
+	# 行动者全部技能ID；用于让不同来源的改写钩子共享同一顺序口径。
+	var skill_ids: Array[String] = []
+	# 行动者武将定义；未亮将时读不到固有技能，因此改写只在武将已公开时生效，不会泄露隐藏信息。
+	var character: Dictionary = GameDatabase.get_character(str(actor.get("character_id", "")))
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前固有技能ID；空值与重复值不会进入改写链。
+		var native_skill_id: String = str(skill_id_variant)
+		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
+			skill_ids.append(native_skill_id)
+	for mode_skill_id_variant: Variant in actor.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项钩子。
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
+			skill_ids.append(mode_skill_id)
+	for runtime_skill_map_variant: Variant in [actor.get("temporary_skills", {}), actor.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键为稳定技能ID，值不参与静态AI钩子。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for runtime_skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；已存在的同名固有技能不会重复改写。
+			var runtime_skill_id: String = str(runtime_skill_id_variant)
+			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
+				skill_ids.append(runtime_skill_id)
+	# 当前累计评分；每项技能只读取快照与上一项结果。
+	var result: float = current_score
+	for current_skill_id: String in skill_ids:
+		# 无运行时状态的技能实例；只调用纯AI钩子，不安装时机、不创建选择也不修改对局。
+		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		if skill == null:
+			continue
+		# 领袖技只在使用者身份确为领袖时参与估值；非领袖不会借用武将静态列表中的领袖能力。
+		if skill.leader_skill and str(actor.get("identity", "")) != "leader":
+			continue
+		skill.bind(null, actor_id)
+		result = skill.modify_ai_lethal_damage_consequence(authoritative_snapshot, actor_id, target_id, result, self)
+	return result
 
 
 ## 判断两个已确认身份是否属于同一阵营；主公与忠臣共享阵营，反贼只与反贼共享阵营，内奸不视为彼此队友。
@@ -345,6 +390,26 @@ func _get_turn_distance(authoritative_snapshot: Dictionary, target_id: int) -> i
 	if current_index < 0 or target_index < 0 or alive_player_ids.is_empty():
 		return 0
 	return posmod(target_index - current_index, alive_player_ids.size())
+
+
+## 返回指定玩家的只读快照；技能AI钩子按统一端口读取玩家，不必各自遍历快照数组。
+func get_player(authoritative_snapshot: Dictionary, player_id: int) -> Dictionary:
+	return identity_model.get_player(authoritative_snapshot, player_id)
+
+
+## 返回观察者对目标的当前可感知态度；转发身份模型结论，供技能AI钩子复用同一份态度口径。
+func get_attitude(authoritative_snapshot: Dictionary, from_player_id: int, to_player_id: int) -> float:
+	return identity_model.get_attitude(authoritative_snapshot, from_player_id, to_player_id)
+
+
+## 返回目标的感知身份；技能AI钩子据此判断阵营，禁止直接读取隐藏的真实身份。
+func get_perceived_identity(authoritative_snapshot: Dictionary, player_id: int) -> String:
+	return identity_model.get_perceived_identity(authoritative_snapshot, player_id)
+
+
+## 返回从当前行动者到目标下个回合经过的存活座次数；技能AI据此判断目标是否“行动靠后”。
+func get_turn_distance(authoritative_snapshot: Dictionary, target_id: int) -> int:
+	return _get_turn_distance(authoritative_snapshot, target_id)
 
 
 ## 返回目标对观察者阵营的综合威胁；状态、伤害牌、武器和目标身份共同参与。

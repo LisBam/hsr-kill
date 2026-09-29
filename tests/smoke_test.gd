@@ -180,9 +180,9 @@ func _run() -> void:
 		return
 	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
 	skill_button_view.free()
-	# 技能元数据数量；登记大黑塔的解构、灵感与看破后，共登记80个独立技能源码定义。
+	# 技能元数据数量；登记大黑塔的解构、灵感与看破、白厄的薪继与刻律德菈的征服后，共登记82个独立技能源码定义。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 80:
+	if skill_definition_count != 82:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return

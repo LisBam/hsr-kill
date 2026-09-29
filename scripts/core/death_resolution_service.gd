@@ -1,6 +1,13 @@
+class_name DeathResolutionService
 extends RefCounted
 
 ## 死亡内容组件；前置修改、事实提交、区域清理、奖惩和尾部各自拥有可暂停步骤。
+
+## “摸四张牌”类击杀奖惩的稳定类型字符串；技能改写击杀奖惩时返回该值，死亡结算据此执行摸牌。
+const KILL_REWARD_DRAW_FOUR_TYPE: String = "draw_four"
+
+## “摸四张牌”类击杀奖惩的固定摸牌数；数值4来自内容原文，修改会同时改变所有声明该奖惩类型的技能强度。
+const KILL_REWARD_DRAW_FOUR_COUNT: int = 4
 
 ## 权威控制器；只在当前对局持有，不把节点引用写进玩法上下文。
 var _host: Object
@@ -212,8 +219,8 @@ func _mode_effect(sequence: RuleStepSequence) -> void:
 		"normal":
 			# 击杀者状态；无来源伤害或击杀者已不存在时不执行奖惩。
 			var killer: PlayerState = _host.state.get_player(killer_id)
-			# 身份规则返回的奖惩类型；控制器负责实际摸牌与弃牌移动。
-			var reward: String = _host.identity_rules.get_death_reward(killer, victim, str(_host.state.match_mode))
+			# 本次击杀的最终奖惩类型；身份规则给出基础结论，击杀者技能仍可通过统一端口整体覆盖。
+			var reward: String = _host.resolve_death_reward(killer_id, victim.player_id, str(_host.state.match_mode))
 			if reward == "teammate_draw":
 				# 2v2：队友死亡后（不论击杀者），存活队友各摸一张；击杀队友无额外惩罚。
 				for ally: PlayerState in _host.state.players:
@@ -226,6 +233,9 @@ func _mode_effect(sequence: RuleStepSequence) -> void:
 						_host.add_log("%s因队友阵亡摸了1张牌。" % ally.display_name)
 			elif reward == "draw_three" and killer != null and killer.alive:
 				_host.draw(killer.player_id, 3)
+			elif reward == KILL_REWARD_DRAW_FOUR_TYPE and killer != null and killer.alive:
+				# 技能改写后的四张牌奖惩；固定摸4张，不叠加身份规则原有的三张或弃置全部牌。
+				_host.draw(killer.player_id, KILL_REWARD_DRAW_FOUR_COUNT)
 			elif reward == "leader_penalty" and killer != null and killer.alive:
 				while not killer.hand.is_empty():
 					_host._move_to_discard(killer.hand.pop_back())

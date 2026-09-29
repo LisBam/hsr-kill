@@ -291,7 +291,9 @@ func evaluate_winner(state: GameState) -> String:
 	return _evaluate_identity_winner(state)
 
 
-## 返回死亡奖惩类型，由控制器执行具体移动：draw_three、leader_penalty、teammate_draw 或空字符串。
+## 返回身份规则的基础死亡奖惩类型，由控制器执行具体移动：draw_three、leader_penalty、teammate_draw 或空字符串。
+## 本接口只给出未经技能改写的原始结论；实际死亡结算统一走 MatchController.resolve_death_reward，
+## 击杀者技能可在该端口整体覆盖本结果（例如改为 draw_four），因此内容技能不要直接调用本函数推导最终奖惩。
 ## 斗地主没有身份局的击杀反贼摸三与主公误杀忠臣惩罚。
 ## 2v2 击杀任何人（含队友）均无击杀奖惩；队友死亡后由存活队友各摸一张，类型为 teammate_draw。
 func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String = MODE_IDENTITY) -> String:

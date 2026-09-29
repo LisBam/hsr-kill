@@ -43,6 +43,10 @@ func _run() -> void:
 		return
 	if not _test_active_virtual_card_skills():
 		return
+	if not _test_xinji_first_damage_advance():
+		return
+	if not _test_zhengfu_kill_rewards():
+		return
 	print("OMPHALOS_TRANSFORM_PASS")
 	get_tree().quit(0)
 
@@ -118,27 +122,29 @@ func _add_draw_cards(count: int) -> void:
 		_controller.state.draw_pile.append(card)
 
 
-## 校验三名武将、八项技能精确原文与卡厄斯兰那的特殊抽取过滤。
+## 校验三名武将、十项技能精确原文与卡厄斯兰那的特殊抽取过滤。
 func _test_metadata_and_special_pool() -> bool:
-	# 刻律德菈定义；女性、3上限、翁法罗斯与双技能顺序必须稳定。
+	# 刻律德菈定义；女性、3上限、翁法罗斯与三技能顺序必须稳定。
 	var kelvdela: Dictionary = GameDatabase.get_character("kelvdela")
-	# 白厄定义；男性、4上限与负火/轮回顺序必须稳定。
+	# 白厄定义；男性、4上限与负火/轮回/薪继顺序必须稳定。
 	var baie: Dictionary = GameDatabase.get_character("baie")
 	# 卡厄斯兰那定义；男性、5上限、三技能与special=true必须稳定。
 	var kaesilanna: Dictionary = GameDatabase.get_character("kaesilanna")
-	if str(kelvdela.get("display_name", "")) != "刻律德菈" or str(kelvdela.get("gender", "")) != "female" or str(kelvdela.get("faction", "")) != "wengfaluosi" or int(kelvdela.get("max_hp", 0)) != 3 or kelvdela.get("skills", []) != ["shengbian", "kansha"]:
+	if str(kelvdela.get("display_name", "")) != "刻律德菈" or str(kelvdela.get("gender", "")) != "female" or str(kelvdela.get("faction", "")) != "wengfaluosi" or int(kelvdela.get("max_hp", 0)) != 3 or kelvdela.get("skills", []) != ["shengbian", "kansha", "zhengfu"]:
 		return _fail("kelvdela_metadata=%s" % kelvdela)
-	if str(baie.get("display_name", "")) != "白厄" or str(baie.get("gender", "")) != "male" or int(baie.get("max_hp", 0)) != 4 or baie.get("skills", []) != ["fuhuo", "lunhui"]:
+	if str(baie.get("display_name", "")) != "白厄" or str(baie.get("gender", "")) != "male" or int(baie.get("max_hp", 0)) != 4 or baie.get("skills", []) != ["fuhuo", "lunhui", "xinji"]:
 		return _fail("baie_metadata=%s" % baie)
 	if str(kaesilanna.get("display_name", "")) != "卡厄斯兰那" or int(kaesilanna.get("max_hp", 0)) != 5 or not bool(kaesilanna.get("special", false)) or kaesilanna.get("skills", []) != ["tiancai", "shihun", "yongjie"]:
 		return _fail("kaesilanna_metadata=%s" % kaesilanna)
-	# 需求指定八项技能原文；任何字符、标点、数字或X说明变化都应立即失败。
+	# 需求指定十项技能原文；任何字符、标点、数字或X说明变化都应立即失败。
 	var expected_descriptions: Dictionary = {
 		"shengbian":"轮回技，回合开始时，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记（至多获得至8枚）；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
 		"kansha":"轮回技，出牌阶段每个轮回节限一次，你可①弃置一张红色牌；②弃置一张黑色牌；③对一名其他角色造成1点伤害。",
+		"zhengfu":"领袖技，锁定技，当你击杀其他角色时，你回复1点体力，然后若其势力不为“翁法罗斯”，所有“翁法罗斯”势力的角色的轮回技进入下一个轮回节；否则，你的击杀奖惩改为摸四张牌。",
 		"qixi":"锁定技，当你发动“出牌阶段限一次”或“轮回技”的技能后，若你的“军功”标记数少于6，你获得一枚“军功”标记；否则你移除5枚“军功”，然后若此技能为“出牌阶段限一次”，则视为本回合未发动过此技能；若此技能为“轮回技”，则进入下一个轮回节。",
 		"fuhuo":"锁定技，每回合每项限一次，1.当你使用一张牌时，2.当你成为牌的目标时，3.当你受到伤害时，4.当你造成伤害时，若你的“火种”标记数小于12，你获得一枚“火种”标记，然后若你的手牌数小于5，你摸一张牌。",
 		"lunhui":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
+		"xinji":"领袖技，当一名“翁法罗斯”势力的其他角色首次受到伤害后，其可令你获得一枚“火种”标记，然后你令其所有轮回技进入下一个轮回。",
 		"tiancai":"轮回技，出牌阶段，你可①受到无伤害来源的X点火焰伤害；②视为对至多X名角色各使用一张【火攻】。③视为对一名角色依次使用X-1张【火攻】。（X为此技能的轮回数）",
 		"shihun":"轮回技，出牌阶段，你可①令任意名其他角色依次视为对你使用一张火【杀】；②视为使用一张目标为上次发动此技能所指定目标的火【杀】。",
 		"yongjie":"锁定技，轮回技，你手牌中的非伤害牌均视为无距离限制的火【杀】。当你造成火焰伤害后，①你令你的所有其他轮回技进入每回合限一次的永劫状态；②摸一张牌；③退出所有其他轮回技的永劫状态。当你体力值不大于0时，你将体力值回复至2点，恢复装备区与判定区，将武将牌替换为“白厄”，并复原武将牌上的技能，然后所有友方角色返场。",
@@ -370,6 +376,99 @@ func _test_fuhuo_independent_limits() -> bool:
 	_controller.emit_rule_timing("useCard", 0, 0, -1, {"card_id":"shan", "card_uid":107})
 	if int(_controller.get_player_mark(0, "huozhong").get("count", 0)) != 12 or owner.hand.size() != hand_count_before:
 		return _fail("fuhuo_cap")
+	return true
+
+
+## 校验【薪继】仅在翁法罗斯其他角色本局首次受伤时询问，并把该角色的全部轮回技推进一个完整轮回。
+func _test_xinji_first_damage_advance() -> bool:
+	_reset_state(4)
+	# 白厄（0号领袖）持有薪继；2号与3号都是可推进的翁法罗斯轮回技角色。
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "baie"
+	owner.max_hp = 4
+	owner.hp = 4
+	for ally_id: int in [2, 3]:
+		# 当前盟方角色；换成刻律德菈以获得三节轮回技。
+		var ally: PlayerState = _controller.state.get_player(ally_id)
+		ally.character_id = "kelvdela"
+		ally.max_hp = 3
+		ally.hp = 3
+	# 2号用于取消分支、3号用于确认分支的堪杀实例；轮回节索引可以区分两者是否被推进。
+	var cancelled_skill: SkillDefinition = _install_skill(2, "kansha")
+	var advanced_skill: SkillDefinition = _install_skill(3, "kansha")
+	# 白厄的薪继实例；领袖身份由测试直接提供，正式对局中由核心按identity安装。
+	var xinji: SkillDefinition = _install_skill(0, "xinji")
+	if xinji == null or cancelled_skill == null or advanced_skill == null:
+		return _fail("xinji_install")
+	# 2号先推进一个轮回节；让“取消发动不推进”的断言拥有与初始状态不同的可区分基准。
+	if not _controller.enter_next_reincarnation_section(2, "kansha") or cancelled_skill.get_reincarnation_section_index() != 1:
+		return _fail("xinji_setup_section=%d" % cancelled_skill.get_reincarnation_section_index())
+	# 2号本局首次受伤：选择权在受伤角色手上，请求的chooser必须是2号本人。
+	_controller.emit_rule_timing("damageAfter", 2, 1, 2, {"amount":1, "nature":"normal", "damage_event_id":201})
+	if int(_controller._pending_card_choice.get("chooser_id", -1)) != 2:
+		return _fail("xinji_chooser=%s" % _controller._pending_card_choice)
+	# 取消发动：不给予火种，也不推进任何轮回技，2号必须仍停在②。
+	if not _submit_pending_choice(2, [], [], "", false):
+		return false
+	if not _controller.get_player_mark(0, "huozhong").is_empty() or cancelled_skill.get_reincarnation_section_index() != 1 or cancelled_skill.get_reincarnation_round_count() != 1:
+		return _fail("xinji_cancel=%s/%d/%d" % [_controller.get_player_mark(0, "huozhong"), cancelled_skill.get_reincarnation_round_count(), cancelled_skill.get_reincarnation_section_index()])
+	# 同一角色再次受伤不再询问：本局首次机会已经消耗，无论上次是否实际发动。
+	_controller.emit_rule_timing("damageAfter", 2, 1, 2, {"amount":1, "nature":"normal", "damage_event_id":202})
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("xinji_second_damage=%s" % _controller._pending_card_choice)
+	# 3号本局首次受伤并确认发动：白厄获得1枚火种，3号全部轮回技进入下一个轮回（轮回数+1并回到①）。
+	_controller.emit_rule_timing("damageAfter", 3, 1, 3, {"amount":1, "nature":"normal", "damage_event_id":203})
+	if not _submit_pending_choice(3, [], [], "", true):
+		return false
+	if int(_controller.get_player_mark(0, "huozhong").get("count", 0)) != 1 or advanced_skill.get_reincarnation_round_count() != 2 or advanced_skill.get_reincarnation_section_index() != 0:
+		return _fail("xinji_confirm=%s/%d/%d" % [_controller.get_player_mark(0, "huozhong"), advanced_skill.get_reincarnation_round_count(), advanced_skill.get_reincarnation_section_index()])
+	# 非翁法罗斯势力角色首次受伤不满足原文条件，也不产生任何询问。
+	_controller.state.get_player(1).character_id = "bronya"
+	_controller.emit_rule_timing("damageAfter", 1, 2, 1, {"amount":1, "nature":"normal", "damage_event_id":204})
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("xinji_foreign_faction=%s" % _controller._pending_card_choice)
+	# “本局首次”记录保存在持有者私有形态状态中：随权威存档往返，且非本势力角色不会被误记。
+	var triggered_ids: Array = owner.character_form_state.get("xinji_triggered_player_ids", []) as Array
+	if not triggered_ids.has(2) or not triggered_ids.has(3) or triggered_ids.has(1):
+		return _fail("xinji_record=%s" % [triggered_ids])
+	return true
+
+
+## 校验【征服】的击杀回复体力、全场轮回节推进与“击杀奖惩改为摸四张牌”两项势力分支。
+func _test_zhengfu_kill_rewards() -> bool:
+	_reset_state(4)
+	_add_draw_cards(16)
+	# 刻律德菈（0号领袖）持有征服；1号反贼为贝洛伯格角色，2号忠臣为翁法罗斯轮回技角色。
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "kelvdela"
+	owner.max_hp = 3
+	owner.hp = 2
+	# 非翁法罗斯被击杀者；用于验证“推进轮回节”分支与未被改写的击杀反贼摸三张。
+	var foreign_victim: PlayerState = _controller.state.get_player(1)
+	foreign_victim.character_id = "bronya"
+	# 翁法罗斯被击杀者；用于验证“击杀奖惩改为摸四张牌”分支。
+	var faction_victim: PlayerState = _controller.state.get_player(2)
+	faction_victim.character_id = "kelvdela"
+	# 3号内奸保持翁法罗斯势力且不持有轮回技；击杀反贼后对局不会因为反贼全灭而立即结束。
+	_controller.state.get_player(3).identity = "renegade"
+	# 2号的三节轮回技；只用于验证“进入下一个轮回节”而不是进入下一轮回。
+	var kansha: SkillDefinition = _install_skill(2, "kansha")
+	# 刻律德菈的征服实例；锁定技不创建任何确认请求，满足条件即自动结算。
+	var zhengfu: SkillDefinition = _install_skill(0, "zhengfu")
+	if zhengfu == null or kansha == null:
+		return _fail("zhengfu_install")
+	# 击杀非翁法罗斯反贼：回复1点体力、推进全场翁法罗斯轮回节，并保留身份规则原有的摸三张奖惩。
+	foreign_victim.hp = 0
+	_controller._resolve_death(1, 0)
+	if owner.hp != 3 or owner.hand.size() != 3 or kansha.get_reincarnation_section_index() != 1 or kansha.get_reincarnation_round_count() != 1:
+		return _fail("zhengfu_foreign=%d/%d/%d" % [owner.hp, owner.hand.size(), kansha.get_reincarnation_section_index()])
+	# 击杀翁法罗斯忠臣：基础奖惩原本是领袖误杀忠臣的弃置全部牌，本技能把它整体替换为摸四张牌。
+	if _controller.resolve_death_reward(0, 2) != "draw_four":
+		return _fail("zhengfu_reward=%s" % _controller.resolve_death_reward(0, 2))
+	faction_victim.hp = 0
+	_controller._resolve_death(2, 0)
+	if owner.hand.size() != 7:
+		return _fail("zhengfu_own_faction_reward=%d" % owner.hand.size())
 	return true
 
 
