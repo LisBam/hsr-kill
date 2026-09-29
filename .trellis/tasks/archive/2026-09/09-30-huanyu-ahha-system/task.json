@@ -1,0 +1,30 @@
+{
+  "id": "huanyu-ahha-system",
+  "name": "huanyu-ahha-system",
+  "title": "欢愉派系与阿哈时刻体系",
+  "description": "新增欢愉势力、阿哈时刻触发时机、欢愉技（参演编号）机制、多张重铸机制与武将火花（好戏/连戏）",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-09-30",
+  "completedAt": "2026-09-30",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-30-ahha-joy-mechanic",
+    "09-30-multi-recast-mechanic",
+    "09-30-huohua-character"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
