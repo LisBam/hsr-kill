@@ -805,8 +805,22 @@ func _render_wheel_duel_candidates() -> void:
 ## 返回当前需要展示的候选武将；“所有武将”开启时使用静态全量列表，否则使用本次随机候选。
 func _get_displayed_candidate_ids() -> Array:
 	if _showing_all_characters and bool(_snapshot.get("allow_all_characters", false)):
-		return (_snapshot.get("all_character_ids", []) as Array).duplicate()
+		return _get_sorted_all_character_ids()
 	return (_snapshot.get("local_candidates", []) as Array).duplicate()
+
+
+## 返回按图鉴势力顺序排列的全量武将稳定 ID；只改变“所有武将”页面的展示顺序，不影响权威快照内容。
+## 说明：主菜单“所有卡牌”的“所有武将牌”与联机形象列表共用 CardGallerySort，本入口复用同一排序器，
+## 保证三个界面的势力优先顺序（星穹列车、银河学者、贝洛伯格、仙舟联盟、匹诺康尼、翁法罗斯）长期一致。
+## 注意：随机候选分支不调用本函数，普通选将仍完整保留服务下发的随机顺序与首任领袖固定前缀。
+func _get_sorted_all_character_ids() -> Array:
+	# 权威快照下发的全量武将稳定 ID；先复制再排序，避免修改快照数据本身。
+	var character_ids: Array[String] = []
+	for character_id_variant: Variant in _snapshot.get("all_character_ids", []) as Array:
+		character_ids.append(str(character_id_variant))
+	# 势力分组排序；未列出的扩展势力由共享排序器统一排在指定势力之后。
+	character_ids.sort_custom(CardGallerySort.sort_character_ids)
+	return character_ids
 
 
 ## 渲染“所有武将”入口以及自选座次、身份按钮；AI 调整选将只显示全部武将入口。
