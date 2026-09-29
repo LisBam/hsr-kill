@@ -1,7 +1,7 @@
 extends Node
 
 ## 那刻夏【逐虚】【揭质】【留白】专项回归。覆盖武将元数据与三条技能原文、两节轮回随机效果、
-## 阶段限两次、揭质同目标重复、留白的重置与永久失去，以及永久失去标记的存档往返与装配守卫。
+## 阶段限两次、揭质同目标重复与自我目标重置、留白的重置与永久失去，以及永久失去标记的存档往返与装配守卫。
 
 ## 本测试共用的权威对局控制器；全部机制通过正式服务与技能端口执行。
 var _controller: MatchController
@@ -23,6 +23,8 @@ func _run() -> void:
 		return
 	if not _test_jiezhi_repeats_same_target():
 		return
+	if not _test_jiezhi_self_target_resets_skills():
+		return
 	if not _test_liubai_reset_keeps_self():
 		return
 	if not _test_liubai_permanent_skill_loss():
@@ -33,7 +35,7 @@ func _run() -> void:
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 reset_keep_self=1 permanent_loss=1")
+	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 permanent_loss=1")
 	get_tree().quit(0)
 
 
@@ -146,7 +148,7 @@ func _test_metadata_and_descriptions() -> bool:
 	# 需求指定的三条技能原文；任何字符、标点或带圈序号变化都应立即失败。
 	var expected_descriptions: Dictionary = {
 		"zhuxv":"轮回技，出牌阶段限两次，你可①弃置随机一名有牌的角色随机一张牌；②对随机一名角色造成1点伤害。",
-		"jiezhi":"每局游戏限两次，当你发动“逐虚”后，你可对相同目标执行一次相同的效果。",
+		"jiezhi":"每局游戏限两次，当你发动“逐虚”后，你可对相同目标执行一次相同的效果。若目标为你，你重置你的所有技能。",
 		"liubai":"限定技，出牌阶段，你可重置所有其他技能。本回合结束时，你失去所有技能。",
 	}
 	for skill_id_variant: Variant in expected_descriptions.keys():
@@ -267,6 +269,71 @@ func _test_jiezhi_repeats_same_target() -> bool:
 		return _fail("jiezhi_fourth_zhuxv_rejected")
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("jiezhi_over_limit_entry")
+	return true
+
+
+## 校验揭质在目标为持有者本人时追加“重置你的所有技能”，目标为他人时不得产生任何重置。
+func _test_jiezhi_self_target_resets_skills() -> bool:
+	_reset_state(3)
+	if not _install_nakexia_skills(0):
+		return _fail("self_reset_install")
+	# 对照分支：只给玩家1发牌，逐虚①的随机目标因此必为他人，确认揭质后逐虚进度必须原样保留。
+	_give_hand_cards(1, 2)
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("self_reset_other_zhuxv_rejected")
+	if not _submit_confirm(0, true):
+		return false
+	var other_target_zhuxv: SkillDefinition = _controller.get_skill_instance(0, "zhuxv")
+	if int(other_target_zhuxv._used_this_play_phase) != 1 or other_target_zhuxv.get_reincarnation_section_index() != 1:
+		return _fail("self_reset_other_target used=%d section=%d" % [int(other_target_zhuxv._used_this_play_phase), other_target_zhuxv.get_reincarnation_section_index()])
+	# 自我目标分支：重新开始一局，只给持有者自己发牌，使逐虚①的唯一可能目标就是本人。
+	_reset_state(3)
+	if not _install_nakexia_skills(0):
+		return _fail("self_reset_reinstall")
+	# 先消耗限定技【留白】的额度：揭质的重置范围包含限定技，复原结果必须可观测。
+	if not _controller.activate_skill(0, "liubai", {"active_entry":"phaseUse"}):
+		return _fail("self_reset_liubai_rejected")
+	var used_liubai: SkillDefinition = _controller.get_skill_instance(0, "liubai")
+	if used_liubai == null or used_liubai.has_available_intrinsic_use():
+		return _fail("self_reset_liubai_not_consumed")
+	_give_hand_cards(0, 2)
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("self_reset_zhuxv_rejected")
+	# 揭质入口；目标必须记录为持有者自己，否则后续断言无法证明重置分支被执行。
+	var self_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(self_context.get("kind", "")) != "jiezhi_confirm" or int(self_context.get("target_id", -1)) != 0:
+		return _fail("self_reset_entry=%s" % self_context)
+	# 重置前的可观测进度；逐虚已经消耗一次阶段额度，手牌数为重复效果提供对照基准。
+	var before_zhuxv: SkillDefinition = _controller.get_skill_instance(0, "zhuxv")
+	var before_hand_count: int = _controller.state.get_player(0).hand.size()
+	if int(before_zhuxv._used_this_play_phase) != 1:
+		return _fail("self_reset_pre_usage=%d" % int(before_zhuxv._used_this_play_phase))
+	if not _submit_confirm(0, true):
+		return false
+	# 重复效果仍然先结算：目标区域恰好再减少一张牌，且顺序在重置之前。
+	if _controller.state.get_player(0).hand.size() != before_hand_count - 1:
+		return _fail("self_reset_repeat_zone=%d->%d" % [before_hand_count, _controller.state.get_player(0).hand.size()])
+	# 重置成果一：逐虚换成全新实例，阶段额度、轮回节与轮回数全部归零。
+	var reset_zhuxv: SkillDefinition = _controller.get_skill_instance(0, "zhuxv")
+	if reset_zhuxv == null or reset_zhuxv == before_zhuxv or int(reset_zhuxv._used_this_play_phase) != 0 or reset_zhuxv.get_reincarnation_section_index() != 0 or reset_zhuxv.get_reincarnation_round_count() != 1:
+		return _fail("self_reset_zhuxv_state=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 重置成果二：重置范围包含揭质自身，因此每局两次的额度同样归零（未实现重置时此处会残留1次）。
+	var reset_jiezhi: SkillDefinition = _controller.get_skill_instance(0, "jiezhi")
+	if reset_jiezhi == null or int(reset_jiezhi._used_count) != 0:
+		return _fail("self_reset_jiezhi_usage=%d" % (int(reset_jiezhi._used_count) if reset_jiezhi != null else -1))
+	# 重置成果三：限定技【留白】的固有额度一并复原，证明重置范围覆盖限定技而不只是普通技能；
+	# 这与【留白】自身“必须排除自己”的口径不同，因为揭质重置的是“你的所有技能”。
+	var reset_liubai: SkillDefinition = _controller.get_skill_instance(0, "liubai")
+	if reset_liubai == null or reset_liubai == used_liubai or not reset_liubai.has_available_intrinsic_use():
+		return _fail("self_reset_liubai_usage")
+	# 额度复原必须可观测：重置后的逐虚能再次发动两次，而不是只剩一次。
+	_give_hand_cards(0, 2)
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("self_reset_zhuxv_not_restored")
+	if not _submit_confirm(0, false):
+		return false
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("self_reset_zhuxv_second_rejected")
 	return true
 
 

@@ -230,17 +230,26 @@ func _test_chain_targets_and_ai() -> bool:
 	# 还原星火触发场景的初始竖置状态；该断言只验证AI决策，不应改变后续状态切换用例。
 	_controller.state.get_player(1).chained = false
 	_controller.state.get_player(2).chained = false
-	# 星火运行时技能；同一唯一目标连续触发两次应先横置再竖置。
+	# 星火运行时技能；唯一竖置目标在第一次触发时被横置，已横置目标不再触发任何状态变化。
 	var xinghuo: SkillDefinition = GameDatabase.create_skill("xinghuo")
 	xinghuo.bind(_controller, 0)
-	# 星火触发事件；铁索属于锦囊牌且目标数组只有二号玩家。
+	# 星火触发事件；铁索是任意“使用牌”，目标数组只有二号玩家且其武将牌当前竖置。
 	var targeted_event: RuleEvent = RuleEvent.new("useCardToTargeted", 0, 1, {"card_id":"tiesuo", "target_id":1, "target_ids":[1]}, 0)
 	xinghuo.call("_on_owner_card_targeted", targeted_event)
 	if not _controller.state.get_player(1).chained:
 		return _fail("first_relink_not_horizontal")
 	xinghuo.call("_on_owner_card_targeted", targeted_event)
-	if _controller.state.get_player(1).chained:
-		return _fail("second_relink_not_vertical")
+	if not _controller.state.get_player(1).chained:
+		return _fail("second_relink_not_kept_chained")
+	# 牌类型不再限制：以【无中生有】这类自指牌为唯一目标时同样触发，姬子横置自己并摸1张牌。
+	_controller.state.get_player(1).chained = false
+	_controller.state.get_player(0).chained = false
+	var self_draw_card: CardInstance = _add_draw_pile_card("tao", "heart", 5)
+	var hand_before_self: int = _controller.state.get_player(0).hand.size()
+	var self_target_event: RuleEvent = RuleEvent.new("useCardToTargeted", 0, 0, {"card_id":"wuzhong", "target_id":0, "target_ids":[0]}, 0)
+	xinghuo.call("_on_owner_card_targeted", self_target_event)
+	if not _controller.state.get_player(0).chained or _controller.state.get_player(0).hand.size() != hand_before_self + 1 or not _controller.state.get_player(0).hand.has(self_draw_card):
+		return _fail("self_target_relink=%s hand=%d->%d" % [_controller.state.get_player(0).chained, hand_before_self, _controller.state.get_player(0).hand.size()])
 	return true
 
 
