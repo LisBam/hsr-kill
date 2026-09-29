@@ -8643,6 +8643,17 @@ func get_reincarnation_skill_state(player_id: int, skill_id: String) -> Dictiona
 	return reincarnation_skill_service.get_skill_state(player_id, skill_id) if reincarnation_skill_service != null else {}
 
 
+## 返回指定角色当前已登记的全部轮回技稳定ID副本；技能据此表达“令其所有轮回技进入下一个轮回（节）”。
+## 该接口不筛选技能来源，固有、模式、局内获得与临时轮回技只要登记过就会一并返回。
+func list_reincarnation_skill_ids(player_id: int) -> Array[String]:
+	# 已登记轮回技ID；无轮回服务时返回空数组，调用方无需额外判空。
+	var result: Array[String] = []
+	if reincarnation_skill_service == null:
+		return result
+	result.assign(reincarnation_skill_service.list_skill_ids(player_id))
+	return result
+
+
 ## 检查轮回技通用限次；具体技能条件仍由自身触发回调或can_activate负责。
 func can_activate_reincarnation_skill(player_id: int, skill_id: String) -> bool:
 	return reincarnation_skill_service != null and reincarnation_skill_service.can_activate(player_id, skill_id)
@@ -13263,6 +13274,46 @@ func _record_match_kill(killer_id: int, victim_id: int) -> void:
 	var killer: PlayerState = state.get_player(killer_id)
 	if killer != null:
 		killer.total_kill_count += 1
+
+
+## 返回一次击杀的最终死亡奖惩类型；先取身份规则的基础结论，再依次交给击杀者的技能实例复核改写。
+## killer_id为伤害来源（无来源伤害为负值），victim_id为本次阵亡角色，mode_id为空时读取当前对局模式。
+## 返回值语义与 IdentityRules.get_death_reward 一致，并额外接受技能声明的扩展类型（例如 draw_four）；
+## 具体摸牌与弃牌仍由死亡结算组件统一执行，技能不得自行移动牌。
+func resolve_death_reward(killer_id: int, victim_id: int, mode_id: String = "") -> String:
+	if state == null:
+		return ""
+	# 阵亡角色权威状态；对象不存在时不产生任何奖惩。
+	var victim: PlayerState = state.get_player(victim_id)
+	if victim == null:
+		return ""
+	# 击杀来源角色；无来源伤害沿用身份规则的空奖惩结论。
+	var killer: PlayerState = state.get_player(killer_id)
+	# 本次模式ID；空值回退当前模式，避免每个调用方重复读取对局状态。
+	var resolved_mode: String = mode_id if not mode_id.is_empty() else str(state.match_mode)
+	# 身份规则基础奖惩；技能只能在该结论之上做整体覆盖。
+	var reward: String = identity_rules.get_death_reward(killer, victim, resolved_mode)
+	if killer == null:
+		return reward
+	# 阵亡者可序列化快照；字段均为规则层已掌握的稳定事实，不得转交AI评分或写入界面。
+	var victim_snapshot: Dictionary = {
+		"player_id":victim.player_id,
+		"character_id":victim.character_id,
+		"identity":victim.identity,
+		"alive":victim.alive,
+	}
+	# 击杀者全部技能实例；按武将声明顺序逐项复核，后声明的技能可以覆盖先前结论。
+	var killer_skills: Dictionary = skill_instances_by_player.get(killer.player_id, {}) as Dictionary
+	for skill_variant: Variant in killer_skills.values():
+		# 当前技能实例；空实例不参与改写。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null:
+			continue
+		# 技能改写结果；空字符串表示保留当前结论。
+		var overridden_reward: String = skill.modify_death_reward(victim_snapshot, reward)
+		if not overridden_reward.is_empty():
+			reward = overridden_reward
+	return reward
 
 
 ## 在单名敌人的死亡与父级目标尾部全部完成后恢复原流程；若死者正处于自己的回合，则按普通死亡中断转交下名存活角色。

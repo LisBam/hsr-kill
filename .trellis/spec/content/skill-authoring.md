@@ -67,6 +67,13 @@ uninstall()
 
 - 普通技能持有者**死亡、离场或状态缺失后不再接收新时机**。
 - 只负责移除旧持续效果的到期或死亡清理可传 `maintenance=true`，但**不得借此在失效期间产生新收益**。
+- “本局一次”或跨回合的私有记忆必须写入持有者的 `PlayerState.character_form_state`（随权威存档往返、不进入公开快照），不能只放在技能实例字段里：技能实例会在复原武将牌、技能重装与读档后被重建，实例字段会静默丢失。
+
+### 规则结果改写钩子
+
+- `modify_death_reward(victim_snapshot, base_reward)`：改写**击杀奖惩**。返回空字符串表示不改写；返回非空稳定类型字符串即**整体替换**身份规则结论，由 `MatchController.resolve_death_reward()` 统一结算，基础奖惩与改写结果**不叠加**。被击杀者快照固定含 `player_id`、`character_id`、`identity`、`alive`；技能不得自行摸牌、弃牌或直接修改 `PlayerState`。
+- 新增奖惩类型时把稳定字符串与固定数值集中声明在 `DeathResolutionService`（当前 `KILL_REWARD_DRAW_FOUR_TYPE` / `KILL_REWARD_DRAW_FOUR_COUNT`），技能只引用常量，**不得在技能内重复写数值**。
+- 规则改写与 AI 预估必须共用同一份判定条件：规则侧用 `modify_death_reward()`，AI 侧用 `modify_ai_lethal_damage_consequence(snapshot, actor_id, target_id, current_score, evaluator)`，后者只读快照、只返回修正分，不得执行规则效果。
 
 ---
 
@@ -136,6 +143,7 @@ context["skill_owner_id"] = owner_player_id
 
 - 需要连续使用多张**无材料虚拟牌**的技能，继承 `SequentialVirtualSkillDefinition`（`game_data/sequential_virtual_skill_definition.gd`），它只保存可序列化队列与活动项，在 `useCardAfter`/`useCardCancelled` 后逐张继续。
 - 轮回技状态由 `ReincarnationSkillService` 统一维护（轮回数、轮回节、永劫、每回合次数、每节出牌阶段次数），技能文件**不自行维护第二份进度**。
+- 需要推进**其他角色**的轮回技时，先调用 `MatchController.list_reincarnation_skill_ids(player_id)` 取得稳定 ID 数组，再逐个调用 `enter_next_reincarnation()`（下一个**轮回**，轮回数 `+1` 并回到①）或 `enter_next_reincarnation_section()`（下一个**轮回节**，末节完成后自动进入下一轮回）；**不得遍历 `PlayerState.reincarnation_skills`**，也不得混用两种语义。
 
 ---
 

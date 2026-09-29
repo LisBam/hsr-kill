@@ -8,6 +8,9 @@ const SHENGBIAN_SKILL: Script = preload("res://game_data/skills/shengbian.gd")
 ## 【堪杀】技能脚本；负责三轮回节费用、伤害与每节阶段限次。
 const KANSHA_SKILL: Script = preload("res://game_data/skills/kansha.gd")
 
+## 【征服】技能脚本；负责击杀回复、全场翁法罗斯轮回节推进与击杀奖惩改写。
+const ZHENGFU_SKILL: Script = preload("res://game_data/skills/zhengfu.gd")
+
 
 ## 写入刻律德菈的稳定资料、3点体力上限与技能组件顺序。
 func _init() -> void:
@@ -18,4 +21,4 @@ func _init() -> void:
 		"faction":"wengfaluosi",
 		"max_hp":3,
 		"description":"翁法罗斯的统御者，以升变授予军功与奇袭，并通过堪杀轮转红黑费用与伤害。",
-	}, [SHENGBIAN_SKILL, KANSHA_SKILL])
+	}, [SHENGBIAN_SKILL, KANSHA_SKILL, ZHENGFU_SKILL])
