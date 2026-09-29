@@ -127,7 +127,7 @@ const CARD_DEFINITIONS: Array[Dictionary] = [
 	{"id":"red_gain_suits_feiyan", "quality":"red", "description":"从牌堆或弃牌堆中获得每种花色的牌各一张并获得技能“飞焰”", "effect":"gain_group_and_skill", "group_kind":"suit", "groups":["spade", "heart", "club", "diamond"], "count":1, "skill_id":"feiyan"},
 	{"id":"red_gain_sha_zaixian", "quality":"red", "description":"从牌堆或弃牌堆中获得三张【杀】并获得获得技能“再现”", "effect":"gain_group_and_skill", "group_kind":"rule_name", "groups":["杀"], "count":3, "skill_id":"zaixian"},
 	{"id":"red_gain_sha_pofeng", "quality":"red", "description":"从牌堆或弃牌堆中获得三张【杀】并获得获得技能“破风”", "effect":"gain_group_and_skill", "group_kind":"rule_name", "groups":["杀"], "count":3, "skill_id":"pofeng"},
-	{"id":"red_three_extra_turns", "quality":"red", "description":"本回合结束后获得三个额外回合。", "effect":"extra_turns", "count":3},
+	{"id":"red_three_extra_turns", "quality":"red", "description":"获得三个额外回合。", "effect":"extra_turns", "count":3},
 	{"id":"red_all_hand_view_as_wuzhong", "quality":"red", "description":"所有手牌视为【无中生有】直到离开你的手牌区", "effect":"view_all_hand_as", "definition_id":"wuzhong"},
 	{"id":"red_gain_all_equipment", "quality":"red", "description":"获得牌堆与弃牌堆与场上的所有装备牌", "effect":"gain_all_equipment"},
 	{"id":"red_gain_random_three_each", "quality":"red", "description":"获得每名角色区域内的随机三张牌", "effect":"gain_random_zone_cards_each", "count":3},

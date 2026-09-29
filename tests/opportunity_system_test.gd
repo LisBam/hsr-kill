@@ -54,6 +54,8 @@ func _ready() -> void:
 		return
 	if not _test_new_skill_opportunity_grants():
 		return
+	if not await _test_before_turn_start_trigger_and_immediate_extra_turns():
+		return
 	_finish_success()
 
 
@@ -1079,6 +1081,68 @@ func _test_new_skill_opportunity_grants() -> bool:
 			return _fail("new_skill_grant_cleanup=%s" % granted_skill_id)
 	# 轮回进度是角色级状态，卸载技能实例不会自动清除；测试显式复位以保持与其他用例一致的起始条件。
 	owner.reincarnation_skills.clear()
+	return true
+
+
+## 校验机缘的触发与生效时机位于回合事实之前：判定与选择期间当前角色与回合数都不属于待开始角色。
+## 同时校验“获得三个额外回合”在该角色回合开始之前立即执行，而不是等到其回合结束后才排队。
+func _test_before_turn_start_trigger_and_immediate_extra_turns() -> bool:
+	# 上一名已结束回合的角色；回合开始前的机缘发生在该角色回合结束之后。
+	var previous_player_id: int = 3
+	# 待开始回合的角色；本用例验证其回合要在额外回合全部完成后才真正开始。
+	var pending_player_id: int = 0
+	_controller.state.game_over = false
+	_controller.state.current_player_id = previous_player_id
+	_controller.state.current_phase = "finish"
+	_controller.state.round_number = 1
+	_controller.state.turn_number = 7
+	_controller._current_turn_is_extra = false
+	_controller._extra_turn_queue.clear()
+	_controller._extra_turn_resume_player_ids.clear()
+	_controller._pending_turn_start_context.clear()
+	# 必定触发的概率状态；轮号与控制器递增后的期望值一致，因此组件不会重新初始化本轮概率。
+	_controller.opportunity_system._tracked_round_number = _controller.state.round_number + 1
+	_controller.opportunity_system._triggered_this_round = false
+	_controller.opportunity_system._round_trigger_probability = 1.0
+	# 走正式回合入口；触发点必须早于该角色的回合事实，因此当前角色与回合数都不得变化。
+	_controller._start_turn(pending_player_id)
+	if str(_controller.state.opportunity_state.get("stage", "")) != "choosing":
+		return _fail("before_turn_start_not_triggered")
+	if _controller.state.current_player_id != previous_player_id or _controller.state.turn_number != 7:
+		return _fail("before_turn_start_turn_facts current=%d turn=%d" % [_controller.state.current_player_id, _controller.state.turn_number])
+	# 固定候选；待开始角色选择“获得三个额外回合”，其余角色选择无目标安全机缘。
+	var fallback_blue: Dictionary = OpportunityCatalog.get_card("blue_draw_three")
+	var fallback_purple: Dictionary = OpportunityCatalog.get_card("purple_draw_five")
+	var selected_card_ids: Dictionary = {pending_player_id:"red_three_extra_turns", 3:"green_hand_limit_one", 2:"green_hand_limit_one", 1:"green_hand_limit_one"}
+	var options_by_player: Dictionary = {}
+	for participant_id_variant: Variant in _controller.state.opportunity_state.get("participant_ids", []) as Array:
+		var participant_id: int = int(participant_id_variant)
+		options_by_player[str(participant_id)] = [OpportunityCatalog.get_card(str(selected_card_ids.get(participant_id, "green_hand_limit_one"))), fallback_blue.duplicate(true), fallback_purple.duplicate(true)]
+	_controller.state.opportunity_state["options_by_player"] = options_by_player
+	while str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
+		var pending_chooser_ids: Array = _controller.state.opportunity_state.get("pending_chooser_ids", []) as Array
+		var chooser_id: int = int(pending_chooser_ids[0]) if not pending_chooser_ids.is_empty() else -1
+		if not _controller.opportunity_system.submit_choice(chooser_id, str(selected_card_ids.get(chooser_id, ""))):
+			return _fail("before_turn_start_submit player=%d" % chooser_id)
+	# 等待效果结算完成；额外回合必须在同一恢复点立即开始，而不是等到该角色回合结束。
+	for _wait_frame: int in range(12):
+		if _controller.state.opportunity_state.is_empty():
+			break
+		await get_tree().process_frame
+	if not _controller.state.opportunity_state.is_empty():
+		return _fail("before_turn_start_not_finished")
+	if not _controller._current_turn_is_extra or _controller.state.current_player_id != pending_player_id:
+		return _fail("extra_turns_not_immediate current=%d extra=%s" % [_controller.state.current_player_id, str(_controller._current_turn_is_extra)])
+	# 三个额外回合中第一个已经开始执行，队列只剩两个；待开始角色的回合上下文仍在等待恢复。
+	if _controller._extra_turn_queue.size() != 2 or _controller._pending_turn_start_context.is_empty():
+		return _fail("extra_turns_queue=%d pending=%s" % [_controller._extra_turn_queue.size(), str(_controller._pending_turn_start_context)])
+	# 清理；清空额外回合链并恢复稳定状态，避免收尾阶段继续推进完整额外回合流程。
+	_controller._extra_turn_queue.clear()
+	_controller._extra_turn_resume_player_ids.clear()
+	_controller._pending_turn_start_context.clear()
+	_controller._current_turn_is_extra = false
+	for reset_player_id: int in [1, 2, 3]:
+		_controller.state.get_player(reset_player_id).hand_limit_bonus = 0
 	return true
 
 

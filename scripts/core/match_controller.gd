@@ -581,6 +581,9 @@ var _extra_turn_queue: Array[int] = []
 ## 额外回合结束后需要恢复的原行动角色栈；最外层记录原当前角色的正常下家。
 var _extra_turn_resume_player_ids: Array[int] = []
 
+## 回合开始前机缘立即执行额外回合时待恢复的待开始回合上下文；键为玩家ID与starts_new_round，空字典表示额外回合链结束后恢复正常下家。
+var _pending_turn_start_context: Dictionary = {}
+
 ## 当前回合是否属于额外回合；用于阻止额外回合结束时错误按该角色座次推进正常轮转。
 var _current_turn_is_extra: bool = false
 
@@ -1413,6 +1416,7 @@ func _teardown_previous_match_runtime() -> void:
 	_conquest_temporary_exit_requested = false
 	_extra_turn_queue.clear()
 	_extra_turn_resume_player_ids.clear()
+	_pending_turn_start_context.clear()
 	_current_turn_is_extra = false
 	_extra_play_phase_counts.clear()
 	_extra_play_phase_returns_to_finish.clear()
@@ -10559,7 +10563,7 @@ func _execute_scheduled_phase_transition(expected_match_id: String, player_id: i
 		callback.call()
 
 
-## 开始指定玩家的回合，完成开始阶段后通过节奏组件进入判定阶段。
+## 开始指定玩家的回合；回合开始前的机缘判定先于该角色的一切回合事实。
 func _start_turn(player_id: int) -> void:
 	if state.game_over:
 		return
@@ -10580,7 +10584,7 @@ func _start_turn(player_id: int) -> void:
 	_started_phase_lifecycles.clear()
 	_main_phase_play_conversions.clear()
 	_active_converted_play_phase_context.clear()
-	# 新回合玩家状态；死亡玩家会由调用方提前跳过。
+	# 新回合玩家状态；死亡玩家会由调用方提前跳过，该角色在回合开始前机缘中死亡时同样不再开始回合。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive:
 		return
@@ -10590,27 +10594,46 @@ func _start_turn(player_id: int) -> void:
 	_judgment_flow_in_progress = false
 	_judgment_resume_needs_result_pause = false
 	_clear_pending_judgment_request()
+	# 本回合是否开启新轮：仅普通回合可开新轮，额外回合即使落在一号位也不得递增 round_number 或再发 roundStart。
+	# 轮锚点取座次数组中第一名存活且未离场的角色（一号位死亡时顺延），时机顺序保持 roundStart 早于该角色的回合开始初始化。
+	var starts_new_round: bool = _will_start_new_round(player_id)
+	if starts_new_round:
+		state.round_number += 1
+	# 回合开始前机缘判定；此时上一回合已完整结束，本角色尚未产生任何回合事实。
+	# 触发通过时本函数立即返回，由 continue_after_opportunity 在机缘全部结算后回调 _begin_turn_after_opportunity。
+	var turn_start_context: Dictionary = {"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round}
+	if opportunity_system != null and opportunity_system.try_trigger_before_turn_start(turn_start_context, _current_turn_is_extra):
+		return
+	_begin_turn_after_opportunity(player_id, starts_new_round)
+
+
+## 建立该角色的回合事实并推进回合开始游标；回合开始前的机缘已经结束或未触发后调用。
+## starts_new_round 由回合开始前的轮边界判定给出，机缘结算期间的座次或存活变化不得改变本次轮递增结果。
+func _begin_turn_after_opportunity(player_id: int, starts_new_round: bool) -> void:
+	if state == null or state.game_over:
+		return
+	# 回合开始玩家状态；机缘效果可能已经令其死亡或离场，调用方负责在进入本入口前完成跳过。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive:
+		return
 	state.current_player_id = player_id
 	state.turn_number += 1
 	# 锁定“直到其下个回合结束”的手牌视为效果；本回合内新建立的效果不会被本次回合尾提前清理。
 	_arm_hand_view_as_expiries_for_turn(player_id)
-	# 本回合是否开启新轮：仅普通回合可开新轮，额外回合即使落在一号位也不得递增 round_number 或再发 roundStart。
-	# 轮锚点取座次数组中第一名存活且未离场的角色（一号位死亡时顺延），时机顺序保持 roundStart 早于该角色的回合开始初始化。
-	var starts_new_round: bool = false
-	if not _current_turn_is_extra:
-		var round_anchor_player: PlayerState = null
-		for candidate_player: PlayerState in state.players:
-			if candidate_player != null and candidate_player.alive and not candidate_player.out_of_game:
-				round_anchor_player = candidate_player
-				break
-		starts_new_round = round_anchor_player != null and round_anchor_player.player_id == player_id
-	if starts_new_round:
-		state.round_number += 1
-	# 回合开始恢复上下文；机缘弹窗完成后使用同一游标继续，避免重复递增轮数或回合数。
+	# 回合开始恢复上下文；回合内容组件据此在轮开始、准备阶段之间保持稳定游标，且不重复递增轮数或回合数。
 	var turn_start_context: Dictionary = {"stage":"round_start", "player_id":player_id, "starts_new_round":starts_new_round}
-	if opportunity_system != null and opportunity_system.try_trigger_at_turn_start(turn_start_context, _current_turn_is_extra):
-		return
 	_continue_turn_start(turn_start_context)
+
+
+## 判断指定角色的本次回合是否会开启新的一轮；额外回合不得开启新轮，也不得递增 round_number。
+func _will_start_new_round(player_id: int) -> bool:
+	if _current_turn_is_extra:
+		return false
+	# 轮锚点取座次数组中第一名存活且未离场的角色（一号位死亡时顺延）。
+	for candidate_player: PlayerState in state.players:
+		if candidate_player != null and candidate_player.alive and not candidate_player.out_of_game:
+			return candidate_player.player_id == player_id
+	return false
 
 
 ## 按稳定阶段游标发布回合开始与准备阶段时机；任一时机插入选择后先保存直接后续，恢复时不会越过或重复发布其他时机。
@@ -13003,6 +13026,16 @@ func _start_queued_or_normal_turn(finished_player_id: int) -> void:
 		# 额外回合链的恢复角色；栈为空时防御性回退到当前角色的正常下家。
 		var resume_player_id: int = _extra_turn_resume_player_ids.pop_back() if not _extra_turn_resume_player_ids.is_empty() else -1
 		_current_turn_is_extra = not _extra_turn_resume_player_ids.is_empty()
+		# 回合开始前机缘排队的额外回合链结束：恢复原定角色的回合，不重复轮递增与回合开始前机缘判定。
+		if not _current_turn_is_extra and not _pending_turn_start_context.is_empty():
+			# 待开始回合上下文副本；先清空字段，续接若立即触发新流程不会与旧上下文混淆。
+			var pending_context: Dictionary = _pending_turn_start_context.duplicate()
+			_pending_turn_start_context.clear()
+			var pending_player_id: int = int(pending_context.get("player_id", -1))
+			var pending_player: PlayerState = state.get_player(pending_player_id) if pending_player_id >= 0 else null
+			if pending_player != null and pending_player.alive and not pending_player.out_of_game:
+				_begin_turn_after_opportunity(pending_player_id, bool(pending_context.get("starts_new_round", false)))
+				return
 		var resume_player: PlayerState = state.get_player(resume_player_id) if resume_player_id >= 0 else null
 		if resume_player == null or not resume_player.alive or resume_player.out_of_game:
 			resume_player = state.get_next_alive_player(resume_player_id if resume_player_id >= 0 else finished_player_id)
@@ -13013,17 +13046,46 @@ func _start_queued_or_normal_turn(finished_player_id: int) -> void:
 		_start_turn(normal_next_player.player_id)
 
 
+## 回合开始前机缘结束后立即执行机缘期间获得的额外回合；返回true表示流程已交给额外回合链，
+## 该链最外层结束时按同一待开始角色继续建立回合事实，而不是恢复某名已结束角色的正常下家。
+func _resume_pending_turn_after_extra_turns(pending_player_id: int, starts_new_round: bool) -> bool:
+	# 待恢复的待开始回合上下文；只有仍处于额外回合链中才会被读取，恢复后立即清空。
+	_pending_turn_start_context = {"player_id":pending_player_id, "starts_new_round":starts_new_round}
+	while not _extra_turn_queue.is_empty():
+		# 队首额外回合角色；等待期间死亡或离场时直接跳过，不影响后续队列。
+		var extra_player_id: int = _extra_turn_queue.pop_front()
+		var extra_player: PlayerState = state.get_player(extra_player_id)
+		if extra_player == null or not extra_player.alive or extra_player.out_of_game:
+			continue
+		if not _current_turn_is_extra:
+			_extra_turn_resume_player_ids.append(pending_player_id)
+		_current_turn_is_extra = true
+		_start_turn(extra_player_id)
+		return true
+	# 队列中没有可执行的额外回合；待开始回合由调用方直接建立。
+	_pending_turn_start_context.clear()
+	return false
+
+
 ## 在机缘全体选择与逆时针效果全部完成后恢复原有权威流程；组件不保存Callable或调用控制器私有游标。
 func continue_after_opportunity(resume_kind: String, context: Dictionary) -> void:
 	if state == null or state.game_over:
 		return
-	if resume_kind == "turn_start":
-		# 回合开始机缘令当前回合角色离场时，全部机缘结算后才统一中断其本回合。
-		var current_player: PlayerState = state.get_player(state.current_player_id)
-		if current_player != null and current_player.out_of_game:
-			_advance_after_current_player_out_of_game(current_player.player_id)
+	if resume_kind == "before_turn_start":
+		# 回合开始前机缘的原定角色；该角色的回合事实尚未建立，此处才真正开始其回合。
+		var pending_player_id: int = int(context.get("player_id", -1))
+		if pending_player_id < 0:
 			return
-		_continue_turn_start(context.duplicate(true))
+		# 机缘效果可能已经令该角色死亡或离场；此时不再开始其回合，直接按上一名角色的正常下家继续。
+		var pending_player: PlayerState = state.get_player(pending_player_id)
+		if pending_player == null or not pending_player.alive or pending_player.out_of_game:
+			_start_queued_or_normal_turn(state.current_player_id)
+			return
+		# 机缘期间获得的额外回合在回合开始前立即执行；全部完成后才建立原定角色的回合事实。
+		var starts_new_round: bool = bool(context.get("starts_new_round", false))
+		if _resume_pending_turn_after_extra_turns(pending_player_id, starts_new_round):
+			return
+		_begin_turn_after_opportunity(pending_player_id, starts_new_round)
 		return
 	if resume_kind == "round_end":
 		# 完成轮末机缘的原回合角色；必须仍是当前结束阶段角色，旧流程恢复请求才有效。
