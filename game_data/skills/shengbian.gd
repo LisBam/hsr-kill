@@ -23,6 +23,12 @@ const MAX_ROUND_GAIN: int = 5
 ## AI发动升变的固定基础收益；正值保证没有其他出牌机会时仍会执行每阶段一次的免费军功分配。
 const AI_ACTIVATION_BASE_VALUE: float = 1.0
 
+## 目标每个“出牌阶段限一次”或“轮回技”技能带来的军功优先价值；这类技能每次发动都会推进军功积累，因此军功应先给能反复触发【奇袭】的角色。
+const AI_MATCHED_SKILL_TARGET_VALUE: float = 2.5
+
+## 军功优先价值的封顶技能条目数；超过3项后收益不再随技能数量线性增长，避免评分被技能条数完全支配。
+const AI_MATCHED_SKILL_MAX_COUNT: int = 3
+
 ## 当前出牌阶段是否已经成功发动；默认false，每个phaseUseBegin复原，额外发动不额外占用普通额度。
 var _used_this_play_phase: bool = false
 
@@ -56,7 +62,7 @@ func can_activate(_context: Dictionary = {}) -> bool:
 
 ## 直接动作携带唯一目标时立即执行，否则创建统一单目标选择请求。
 func activate(context: Dictionary = {}) -> String:
-	# 已提交目标数组；AI、网络与奇袭重放均使用相同字段。
+	# 已提交目标数组；直接动作、AI枚举、网络提交与通用额外发动重放都使用同一字段。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
 	if target_ids.size() == 1:
 		return "" if _execute_shengbian(target_ids[0], bool(context.get("repeated_activation", false))) else "【升变】的目标、阶段次数或轮回状态已经失效。"
@@ -103,7 +109,7 @@ func _build_military_merit_mark_data() -> Dictionary:
 	return mark_data
 
 
-## 判断奇袭额外发动时仍处于自身出牌阶段且轮回通用额度可用；普通阶段限次由额外发动明确绕过。
+## 判断额外发动时仍处于自身出牌阶段且轮回通用额度可用；普通阶段限次由额外发动明确绕过。
 func _can_repeat_now() -> bool:
 	# 技能持有者；额外发动也不能跨越死亡、离场或阶段结束边界。
 	var owner: PlayerState = get_owner_skill_player().get_state()
@@ -160,7 +166,7 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id]}})
 
 
-## AI优先强化已有军功的友方；无标记分支会综合全场军功清空损益后再选择新持有者。
+## AI优先强化已有军功的友方，并优先把军功分配给具备“出牌阶段限一次”或“轮回技”的角色；无标记分支会综合全场军功清空损益后再选择新持有者。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 动作目标；升变必须且只能指定一名角色。
 	var target_ids: Array = action.get("target_ids", []) as Array
@@ -170,8 +176,10 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var target_id: int = int(target_ids[0])
 	# 升变持有者对目标的阵营态度；正值表示军功增益应被鼓励，负值表示应被惩罚。
 	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
-	# 目标公开快照；AI评分实例没有规则宿主，只能从本次权威快照读取军功。
+	# 目标公开快照；AI评分实例没有规则宿主，只能从本次权威快照读取军功与技能来源。
 	var target_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	# 目标能从【奇袭】获得收益的技能价值；随阵营态度缩放，敌方因军功变强时该价值转为惩罚。
+	var target_merit_value: float = _score_snapshot_merit_trigger_skills(target_snapshot)
 	# 已有军功目标享受明确优先级；X随轮回增长但最多按5枚估值。
 	var target_mark_count: int = _get_snapshot_military_merit_count(target_snapshot)
 	# 技能持有者公开快照；轮回数必须读取真实局内状态，不能由无宿主AI实例回退为初始值1。
@@ -179,9 +187,9 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	# 当前升变轮回数；缺失旧快照安全回退1，并继续遵守至多5枚的上限。
 	var round_gain: int = mini(maxi(int(((owner_snapshot.get("reincarnation_skills", {}) as Dictionary).get(get_id(), {}) as Dictionary).get("round_count", 1)), 1), MAX_ROUND_GAIN)
 	if target_mark_count > 0:
-		return AI_ACTIVATION_BASE_VALUE + attitude * (8.0 + float(round_gain))
+		return AI_ACTIVATION_BASE_VALUE + attitude * (8.0 + float(round_gain) + target_merit_value)
 	# 重置分支的全场军功净损益；移除敌方为正、移除友方为负，再叠加目标新获2枚的价值。
-	var score: float = AI_ACTIVATION_BASE_VALUE + attitude * 10.0
+	var score: float = AI_ACTIVATION_BASE_VALUE + attitude * (10.0 + target_merit_value)
 	for field_player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 场上角色公开快照；死亡与离场角色不属于升变清除军功的当前场面估值。
 		var field_player: Dictionary = field_player_variant as Dictionary
@@ -190,6 +198,50 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 			var field_player_id: int = int(field_player.get("player_id", -1))
 			score -= evaluator.get_attitude(authoritative_snapshot, owner_player_id, field_player_id) * float(_get_snapshot_military_merit_count(field_player))
 	return score
+
+
+## 评估目标角色因拥有“出牌阶段限一次”或“轮回技”技能而配得上优先获得军功的程度。
+## 轮回技只读技能源码声明的标签，“出牌阶段限一次”按正文声明识别，与【奇袭】的规则层判定完全同源。
+func _score_snapshot_merit_trigger_skills(target_snapshot: Dictionary) -> float:
+	# 永久失去技能的角色不再拥有任何技能；武将未亮明时仍可读取公开的运行时技能记录。
+	if bool(target_snapshot.get("skills_permanently_removed", false)):
+		return 0.0
+	# 目标全部技能ID；顺序与基础AI其他估值入口一致：固有、模式、临时、局内获得，并按稳定ID去重。
+	var skill_ids: Array[String] = []
+	for skill_id_variant: Variant in (GameDatabase.get_character(str(target_snapshot.get("character_id", ""))).get("skills", []) as Array):
+		# 当前固有技能ID；空值与重复项不进入统计。
+		var native_skill_id: String = str(skill_id_variant)
+		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
+			skill_ids.append(native_skill_id)
+	for mode_skill_id_variant: Variant in target_snapshot.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；飞扬、跋扈等模式技能同样可能声明两类标签。
+		var mode_skill_id: String = str(mode_skill_id_variant)
+		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
+			skill_ids.append(mode_skill_id)
+	for runtime_skill_map_variant: Variant in [target_snapshot.get("temporary_skills", {}), target_snapshot.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键为稳定技能ID，值只保存来源与次数状态。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；与固有技能同名时只统计一次。
+			var runtime_skill_id: String = str(skill_id_variant)
+			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
+				skill_ids.append(runtime_skill_id)
+	# 命中两类标签的技能条目数；达到封顶后立即停止查询，避免多余的内容库访问。
+	var matched_count: int = 0
+	for skill_id: String in skill_ids:
+		# 当前技能静态元数据；未登记技能不参与统计。
+		var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+		if skill_metadata.is_empty():
+			continue
+		# 当前技能正文；“出牌阶段限一次”按正文声明识别，引号内提及不计入。
+		var description: String = str(skill_metadata.get("description", ""))
+		# 当前技能是否为轮回技；只读技能源码声明的轮回技标签，与【奇袭】的规则层判定口径一致。
+		var is_reincarnation_skill: bool = bool(skill_metadata.get("reincarnation", false))
+		if description_declares_tag(description, PLAY_PHASE_ONCE_TAG) or is_reincarnation_skill:
+			matched_count += 1
+			if matched_count >= AI_MATCHED_SKILL_MAX_COUNT:
+				break
+	return float(matched_count) * AI_MATCHED_SKILL_TARGET_VALUE
 
 
 ## 从AI权威玩家快照读取军功数量；该纯函数不访问运行时技能宿主，可安全用于策略临时实例。

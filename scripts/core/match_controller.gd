@@ -4381,6 +4381,23 @@ func restore_limited_skill_use(player_id: int, skill_id: String, reason: String 
 	return true
 
 
+## 复原一名角色指定技能在本出牌阶段的发动额度，使其视为本回合未发动过；【奇袭】等内容通过该端口调用。
+## 与复原限定技、重置全部技能不同：本入口只改写该技能自己的阶段额度，不触碰限定次数、轮回进度、其他技能与持续效果。
+## 技能没有约定阶段额度字段时返回false，调用方无需区分“无该字段”与“复原失败”，两者都表示本次没有任何额度被改写。
+func reset_skill_play_phase_usage(player_id: int, skill_id: String) -> bool:
+	if state == null or state.game_over or skill_id.is_empty():
+		return false
+	# 目标技能实例；失去技能、换将或异常ID不会改写任何其他角色的同名技能。
+	var skill: SkillDefinition = get_skill_instance(player_id, skill_id)
+	if skill == null or not skill.matches_character_generation() or not skill.can_use_effect():
+		return false
+	if not skill.reset_play_phase_usage():
+		return false
+	# 阶段额度属于界面按钮可用性来源；复原后必须重建公开快照，否则技能按钮仍显示为已用完。
+	_emit_state()
+	return true
+
+
 ## 将一名仍存活角色移出游戏；离场期间其不参与行动、距离、响应、普通技能与目标选择，回合自然尾部可关闭中断调度。
 func remove_player_from_game(player_id: int, reason: String = "", interrupt_current_turn: bool = true) -> bool:
 	if state == null or state.game_over:

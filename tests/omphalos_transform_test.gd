@@ -136,7 +136,7 @@ func _test_metadata_and_special_pool() -> bool:
 	var expected_descriptions: Dictionary = {
 		"shengbian":"轮回技，出牌阶段限一次，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
 		"kansha":"轮回技，出牌阶段每个轮回节限一次，你可①弃置一张红色牌；②弃置一张黑色牌；③对一名其他角色造成1点伤害。",
-		"qixi":"锁定技，当你发动非限定技、觉醒技、锁定技的技能后，若你的“军功”标记数少于6，你获得一枚“军功”标记；否则你将“军功”标记数移除至1，然后额外发动一次所发动的技能，若该技能有目标，则保持目标不变。",
+		"qixi":"锁定技，当你发动“出牌阶段限一次”或“轮回技”的技能后，若你的“军功”标记数少于6，你获得一枚“军功”标记；否则你将“军功”标记数移除至1，若此技能为“出牌阶段限一次”，则视为本回合未发动过此技能；若此技能为“轮回技”，则进入下一个轮回节。",
 		"fuhuo":"锁定技，每回合每项限一次，1.当你使用一张牌时，2.当你成为牌的目标时，3.当你受到伤害时，4.当你造成伤害时，若你的“火种”标记数小于12，你获得一枚“火种”标记，然后若你的手牌数小于5，你摸一张牌。",
 		"lunhui":"觉醒技，一名角色回合结束时，若拥有的“火种”不少于12，你移除所有“火种”，废除装备区与判定区，令所有友方角色离场，将所有其他角色的武将牌翻面，将你的武将牌替换为“卡厄斯兰那”，将体力值回复至体力上限，然后进行一个额外回合。",
 		"tiancai":"轮回技，出牌阶段，你可①受到无伤害来源的X点火焰伤害；②视为对至多X名角色各使用一张【火攻】。③视为对一名角色依次使用X-1张【火攻】。（X为此技能的轮回数）",
@@ -207,7 +207,7 @@ func _test_eternal_exit_and_zone_rules() -> bool:
 	return true
 
 
-## 校验升变的重置/增长、军功动态奇袭和目标保持重演，并验证堪杀三节与阶段额度。
+## 校验升变的重置/增长、军功动态奇袭、奇袭的正文标签识别与阈值分支，并验证堪杀三节与阶段额度。
 func _test_shengbian_qixi_and_kansha() -> bool:
 	_reset_state(3)
 	# 刻律德菈状态与技能；0号领袖和2号忠臣为友方。
@@ -240,16 +240,48 @@ func _test_shengbian_qixi_and_kansha() -> bool:
 	_controller.emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":1})
 	if shengbian.activate({"target_ids":[2]}) != "" or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 4:
 		return _fail("shengbian_growth=%s" % _controller.get_player_mark(2, "jungong"))
-	# 为友方安装可重演的升变并把军功调至6；本次原效果加1后奇袭重置至1，再保持目标额外发动并以X=2加至3。
+	# 为友方安装升变并把军功调至6；本次原效果先按X=1加至7，奇袭再把标记移除至1并复原额度、额外推进一个轮回节。
 	_controller.state.current_player_id = 2
-	# 2号友方的升变实例；作为【奇袭】通用额外发动和原目标保持样本。
+	# 2号友方的升变实例；同时声明“轮回技”与“出牌阶段限一次”，是奇袭两个重置分支的共同样本。
 	var ally_shengbian: SkillDefinition = _install_skill(2, "shengbian")
 	_controller.change_player_mark_count(2, "jungong", 2, {"icon":"军", "name":"军功", "description":"测试军功"})
 	if ally_shengbian == null or ally_shengbian.activate({"target_ids":[2]}) != "":
-		return _fail("qixi_repeat_setup")
+		return _fail("qixi_reset_setup")
+	# 续结算尚未恢复时升变仍处于本阶段已用状态；奇袭的“视为未发动”按约定在原技能结算之后才生效。
+	if ally_shengbian.can_activate():
+		return _fail("qixi_reset_premature")
 	_controller._resume_deferred_skill_settlements()
-	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 3 or ally_shengbian.get_reincarnation_round_count() != 3:
-		return _fail("qixi_repeat_result=%s/%s" % [_controller.get_player_mark(2, "jungong"), ally_shengbian.get_reincarnation_state()])
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 1 or ally_shengbian.get_reincarnation_round_count() != 3 or not ally_shengbian.can_activate():
+		return _fail("qixi_reset_result=%s/%s" % [_controller.get_player_mark(2, "jungong"), ally_shengbian.get_reincarnation_state()])
+	# 复原后的升变可立即再次发动：X=3令军功加至4，军功不足6因此奇袭只再积累一枚。
+	if ally_shengbian.activate({"target_ids":[2]}) != "" or int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
+		return _fail("qixi_reuse=%s" % _controller.get_player_mark(2, "jungong"))
+	# 正文识别必须屏蔽引号：奇袭自身正文里的两个标签都是引用，不会被当成它自己的技能类型。
+	var qixi_description: String = str(GameDatabase.get_skill("qixi").get("description", ""))
+	var shengbian_description: String = str(GameDatabase.get_skill("shengbian").get("description", ""))
+	if SkillDefinition.description_declares_tag(qixi_description, "出牌阶段限一次") or SkillDefinition.description_declares_tag(qixi_description, "轮回技"):
+		return _fail("qixi_quote_filter")
+	# “出牌阶段限一次”仍按正文声明识别：升变正文必须以声明形式包含该短语。
+	if not SkillDefinition.description_declares_tag(shengbian_description, "出牌阶段限一次"):
+		return _fail("play_phase_once_detection")
+	# 轮回技改为读标签：升变带标签，奇袭（引号只是提及）与只引用他人轮回技的回涛都不带标签。
+	for labeled_skill_id: String in ["fanyin", "jvkou", "kansha", "shengbian", "shihun", "tiancai", "xvechou", "yongjie", "zhuxv"]:
+		if not bool(GameDatabase.get_skill(labeled_skill_id).get("reincarnation", false)):
+			return _fail("reincarnation_tag_missing=%s" % labeled_skill_id)
+	for unlabeled_skill_id: String in ["qixi", "huitao"]:
+		if bool(GameDatabase.get_skill(unlabeled_skill_id).get("reincarnation", false)):
+			return _fail("reincarnation_tag_unexpected=%s" % unlabeled_skill_id)
+	# 正文类型声明与标签必须一致；回涛的正文只是提及他人轮回技，按紧跟标点的规则不计为类型声明。
+	if not SkillDefinition.description_declares_reincarnation_type(shengbian_description) or SkillDefinition.description_declares_reincarnation_type(str(GameDatabase.get_skill("huitao").get("description", ""))) or SkillDefinition.description_declares_reincarnation_type(qixi_description):
+		return _fail("reincarnation_type_detection")
+	# 不属于两类技能的实际发动不推进军功；行军正文只声明“出牌阶段开始时”。
+	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"xingjun", "actual_activation":true, "context":{}})
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
+		return _fail("qixi_unrelated_skill=%s" % _controller.get_player_mark(2, "jungong"))
+	# 只引用他人轮回技的技能同样不推进军功：回涛既没有“出牌阶段限一次”正文声明，也没有轮回技标签。
+	_controller.emit_rule_timing("skillAfter", 2, 2, -1, {"skill_id":"huitao", "actual_activation":true, "context":{}})
+	if int(_controller.get_player_mark(2, "jungong").get("count", 0)) != 5:
+		return _fail("qixi_reincarnation_reference=%s" % _controller.get_player_mark(2, "jungong"))
 	# 回到刻律德菈出牌阶段并准备一红一黑费用牌；堪杀应依次执行①②③。
 	_controller.state.current_player_id = 0
 	# 堪杀①的红色手牌费用；红桃2【闪】应当在发动后进入弃牌堆。

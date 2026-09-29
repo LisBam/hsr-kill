@@ -143,7 +143,7 @@ func _execute_fire_attack_section(section_index: int, round_count: int, target_i
 	else:
 		for _attack_index: int in range(_get_repeated_fire_attack_count(round_count)):
 			entries.append(_build_fire_attack_entry(target_ids[0]))
-	# 完成上下文；目标副本供公开发动日志、奇袭目标保持与轮回推进使用。
+	# 完成上下文；目标副本供公开发动日志与轮回推进使用。
 	var completion_context: Dictionary = {"section_index":section_index, "round_count":round_count, "target_ids":target_ids.duplicate(), "fire_attack_count":entries.size()}
 	return start_cardless_virtual_card_sequence(entries, completion_context)
 
