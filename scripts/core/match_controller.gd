@@ -50,6 +50,11 @@ const VOICE_KIND_CARD: String = "card"
 ## 负载与技能、卡牌语音共用同一信号，因此表现层与联机广播链路不需要为效果音增加任何分支。
 const VOICE_KIND_EFFECT: String = "effect"
 
+## 音频请求类别：武将阵亡语音；音频服务据此按阵亡武将ID解析角色专属素材。
+## 阵亡是武将级事件而不是技能级事件，因此单独成类；负载与技能、卡牌、效果音共用同一信号，
+## 表现层与联机广播链路不需要为它增加任何分支。
+const VOICE_KIND_DIE: String = "die"
+
 ## 效果音标识：回复体力；实际回复量大于0时发声。
 const EFFECT_RECOVER: String = "recover"
 
@@ -9234,6 +9239,35 @@ func request_effect_voice(player_id: int, effect_id: String) -> void:
 		"kind": VOICE_KIND_EFFECT,
 		"player_id": player_id,
 		"effect_id": effect_id,
+		"sequence": _voice_presentation_sequence,
+	}
+	_voice_presentation_sequence += 1
+	voice_presentation_requested.emit(presentation_data)
+
+
+## 请求播放一次武将阵亡语音。
+## 本端口是死亡内容服务的统一出口：死亡事实成立时按阵亡者的武将ID请求一次发音。
+## 负载只含玩家与武将ID，二者在死亡结算中均已公开，因此可随联机表现事件安全广播。
+## character_id 留空时按该玩家当前武将回退，使“只传玩家”的调用同样可用。
+func request_die_voice(player_id: int, character_id: String = "") -> void:
+	if state == null or state.game_over:
+		return
+	# 阵亡武将ID；优先采用调用方给出的死亡时武将，避免等待期间换将后取到新武将的音色。
+	var resolved_character_id: String = character_id.strip_edges()
+	if resolved_character_id.is_empty():
+		resolved_character_id = _resolve_player_character_id(player_id)
+	if resolved_character_id.is_empty():
+		return
+	# 去重键；同一事件内同一名武将只允许请求一次阵亡语音。
+	# 武将ID参与去重，因此车轮战等模式中同一玩家先后阵亡的不同武将各自都能发声。
+	var dedup_key: String = "%s|%d|%s|%d|%s" % [VOICE_KIND_DIE, player_id, resolved_character_id, state.current_event_id, ""]
+	if _is_duplicate_voice_request(dedup_key):
+		return
+	# 只读表现负载；不包含手牌归属、身份或随机种子等任何隐藏信息。
+	var presentation_data: Dictionary = {
+		"kind": VOICE_KIND_DIE,
+		"player_id": player_id,
+		"character_id": resolved_character_id,
 		"sequence": _voice_presentation_sequence,
 	}
 	_voice_presentation_sequence += 1
