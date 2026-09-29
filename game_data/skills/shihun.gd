@@ -1,6 +1,8 @@
 extends "res://game_data/sequential_virtual_skill_definition.gd"
 
 ## 【弑魂】技能源码。①令所选其他角色依次对持有者使用火【杀】，②由持有者以一张火【杀】固定反击上次所选目标。
+## ②执行的恒为上次目标中仍然合法的那一批：其中已经阵亡、离场或被目标技能限制挡下的角色被忽略，
+## 只有整批全部失效时才按空节推进轮回，避免个别目标死亡让整个②轮回节静默作废。
 
 ## 其他角色依次对持有者使用火【杀】所在的①轮回节零基索引。
 const INCOMING_FIRE_SLASH_SECTION_INDEX: int = 0
@@ -15,7 +17,8 @@ const FIRE_SLASH_DEFINITION_ID: String = "sha_fire"
 ## 卡厄斯兰那的手牌由【永劫】持续视为火【杀】，这些被令使用的火【杀】无法被【闪】响应，因此必须按必中计价。
 const AI_LETHAL_INCOMING_SLASH_PENALTY: float = 30.0
 
-## 上一次实际发动弑魂所指定的目标ID；默认空数组，①完成后保存，②使用时目标保持不变。
+## 上一次实际发动弑魂所指定的目标ID；默认空数组，①完成后保存，②使用时取其仍然合法的子集。
+## 该记录只由①改写：②执行的是过滤后的子集，若也让它覆盖记录，反击一次后记录就会悄悄收缩。
 var _last_selected_target_ids: Array[int] = []
 
 
@@ -57,8 +60,11 @@ func activate(context: Dictionary = {}) -> String:
 	# 当前轮回节；①动作可携带目标，②不允许改写上次目标集合。
 	var section_index: int = get_reincarnation_section_index()
 	if section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX:
-		if _is_retaliation_target_set_legal(_last_selected_target_ids):
-			return "" if _start_shihun_sequence(section_index, _last_selected_target_ids) else "【弑魂】上次指定目标已不合法。"
+		# 本次②的实际反击目标；①指定后已经阵亡、离场或被目标技能限制挡下的角色被忽略，
+		# 其余仍然合法的角色照常作为同一张火【杀】的目标，避免个别目标失效就整节作废。
+		var retaliation_target_ids: Array[int] = _get_retaliation_target_ids()
+		if not retaliation_target_ids.is_empty():
+			return "" if _start_shihun_sequence(section_index, retaliation_target_ids) else "【弑魂】上次指定目标已不合法。"
 		# 上次目标已全部失效；本节无可执行内容，直接完成并推进，避免轮回永久停滞。
 		return "" if _complete_empty_shihun_section(section_index) else "【弑魂】的轮回状态已经失效。"
 	# 已提交①目标；AI、局域网与回放均沿用同一目标数组。
@@ -144,14 +150,17 @@ func _start_shihun_sequence(section_index: int, target_ids: Array[int]) -> bool:
 
 ## 连续火【杀】全部结束后保存上次目标、记录整次发动并推进轮回节。
 func on_virtual_card_sequence_completed(context: Dictionary) -> void:
-	# 实际指定目标副本；①保存使用者，②保持同一固定集合供下一次记录与重放。
+	# 实际指定目标副本；①保存使用者，②使用的是①记录的合法子集。
 	var target_ids: Array[int] = _int_array(context.get("target_ids", []) as Array)
-	_last_selected_target_ids = target_ids.duplicate()
+	# 只有①会改写“上次发动此技能所指定目标”。②执行的是①记录去掉失效角色后的子集，
+	# 若让②也覆盖记录，反击一次后记录就会悄悄收缩，原文的“上次指定目标”随之失真。
+	if int(context.get("section_index", 0)) == INCOMING_FIRE_SLASH_SECTION_INDEX:
+		_last_selected_target_ids = target_ids.duplicate()
 	announce_activation({"section_number":int(context.get("section_index", 0)) + 1, "round_count":int(context.get("round_count", 1)), "target_ids":target_ids.duplicate(), "virtual_card_count":int(context.get("virtual_card_count", 0))})
 	complete_reincarnation_activation()
 
 
-## 复核①使用者互不重复且仍可对持有者视为用火杀，或②目标完全等于上次集合并通过标准火杀规则。
+## 复核①使用者互不重复且仍可对持有者视为用火杀，或②目标等于上次记录中仍然合法的那一批。
 func _validate_section_targets(section_index: int, target_ids: Array[int]) -> bool:
 	if section_index == INCOMING_FIRE_SLASH_SECTION_INDEX:
 		if target_ids.is_empty():
@@ -165,7 +174,9 @@ func _validate_section_targets(section_index: int, target_ids: Array[int]) -> bo
 				return false
 			seen_actor_ids[actor_id] = true
 		return true
-	return section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX and target_ids == _last_selected_target_ids and _is_retaliation_target_set_legal(target_ids)
+	# ②只执行“上次目标中仍然合法的那一批”：与 activate()、AI 动作枚举共用同一过滤入口，
+	# 因此①指定的角色阵亡后②仍对其余目标成立，只有全部失效才由 activate() 落到空节分支。
+	return section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX and not target_ids.is_empty() and target_ids == _get_retaliation_target_ids()
 
 
 ## 返回当前可被①指定的其他角色；每名角色均以忽略阶段、次数与距离的无材料火杀单独复核。
@@ -179,6 +190,21 @@ func _get_incoming_slash_actor_ids() -> Array[int]:
 	for player: PlayerState in host.state.players:
 		if player.player_id != owner_player_id and player.alive and not player.out_of_game and host.card_rules.validate_virtual_use(player.player_id, FIRE_SLASH_DEFINITION_ID, owner_target_ids, rule_overrides).is_empty():
 			result.append(player.player_id)
+	return result
+
+
+## 返回②在上次指定目标中仍然合法的那一批；保持①记录的有序座次顺序，供整张火【杀】使用。
+## 设计意图：①指定的角色可能在两次发动之间阵亡、离场或被目标技能限制失效，②不应因此整节作废，
+## 而应以剩余仍合法的角色继续反击；只有全部失效时才由调用方按空节推进轮回。
+func _get_retaliation_target_ids() -> Array[int]:
+	# 仍然合法的目标结果；逐目标单独复核，未通过者直接从本次反击集合中剔除。
+	var result: Array[int] = []
+	for target_id: int in _last_selected_target_ids:
+		# 单目标数组；显式收窄为整数数组，与卡牌规则服务的强类型参数保持一致。
+		var single_target_ids: Array[int] = [target_id]
+		# 复用②整集合的同一套判据；长度为1时目标数加成自动为0，等价于单目标火【杀】的标准校验。
+		if _is_retaliation_target_set_legal(single_target_ids):
+			result.append(target_id)
 	return result
 
 
@@ -200,7 +226,9 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
 		return
 	if get_reincarnation_section_index() == RETALIATION_FIRE_SLASH_SECTION_INDEX:
-		result.append(_make_skill_action(_last_selected_target_ids))
+		# ②的AI动作恒为“上次目标中仍然合法的那一批”；全部失效时仍生成空目标动作，
+		# 由评分端的空目标否决决定是否放弃，与玩家侧的空节推进保持同一目标口径。
+		result.append(_make_skill_action(_get_retaliation_target_ids()))
 		return
 	# ①合法使用者；全部非空组合允许AI在承受伤害风险与后续反击收益间选择人数。
 	var actor_ids: Array[int] = _get_incoming_slash_actor_ids()
