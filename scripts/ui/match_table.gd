@@ -490,6 +490,11 @@ var _equipment_action_material_uids: Array[int] = []
 ## 当前客户端为未知玩家身份保存的本地标注；键为稳定玩家 ID，值为忠臣、反贼或内奸身份 ID。
 var _identity_marks: Dictionary = {}
 
+## 当前本地身份标注所归属的对局 ID；默认空字符串表示尚未建立归属。
+## 它只用于识别“新的一局”，值变化即清空上一局的手动标注；同一对局（含联机断线重连）内不清理，
+## 因为联机客户端的牌桌节点跨局常驻，本地标注不会随场景重建自动消失。
+var _identity_marks_match_id: String = ""
+
 ## 身份标注弹出菜单当前对应的玩家 ID；默认-1表示没有等待选择的身份徽记。
 var _identity_mark_target_id: int = -1
 
@@ -827,6 +832,25 @@ func _on_automatic_identity_mark_changed(player_id: int, _identity_mark: String)
 	var player_view: PlayerTargetView = _player_views.get(player_id) as PlayerTargetView
 	if player_view != null and is_instance_valid(player_view):
 		player_view.set_identity_mark(_resolve_display_identity_mark(player_id))
+
+
+## 按当前公开快照的对局 ID 收敛身份标注的对局归属；对局 ID 变化即视为进入新的一局并整体清空本地身份推测。
+## 手动标注只存在于本地内存，重开对局时玩家 ID 会被复用，因此必须显式按对局边界清理，
+## 否则联机客户端（牌桌节点跨局常驻，不经过 _reset_presentation_for_new_match）会继续显示上一局的身份推测。
+## 联机断线重连沿用同一 match_id，因此重连回到原对局时玩家自己已有的标注与推断都会被完整保留。
+func _sync_identity_marks_match_scope() -> void:
+	# 当前快照对局 ID；空字符串用于界面预览与规则测试，与初始值相同因此不会产生多余的清理动作。
+	var match_id: String = str(_snapshot.get("match_id", ""))
+	if match_id == _identity_marks_match_id:
+		return
+	_identity_marks_match_id = match_id
+	_identity_marks.clear()
+	# 未提交的身份标注菜单随旧局一并丢弃；目标玩家 ID 在新局指向另一名角色，继续保留会误标。
+	_identity_mark_target_id = -1
+	# 共享身份模型同样按对局边界丢弃上一局的公开行为推断：模型只在观察行为或主动同步时才按 match_id 自清，
+	# 而联机客户端在新局第一次出牌前不会同步，不重置会让复用座次的武将牌继续显示上一局的忠反推测。
+	if match_controller != null and match_controller.ai_coordinator != null:
+		match_controller.ai_coordinator.reset_identity_observations()
 
 
 ## 接收主菜单的身份局开局请求；主菜单关闭后才清理旧表现并创建新的权威对局状态。
@@ -1559,6 +1583,8 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
 	_snapshot = snapshot
+	# 新对局检测必须先于武将牌渲染执行；否则复用座次的联机客户端会先把上一局的身份标注与忠反推断重新画到新一局的身份徽记上。
+	_sync_identity_marks_match_scope()
 	match_menu.set_match_mode(str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity")))
 	# 临时退出预约状态同步；权威端在预约、取消或存档生效时都会广播快照，按钮文字始终跟随真实状态。
 	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
@@ -3326,6 +3352,8 @@ func _reset_presentation_for_new_match() -> void:
 	_presented_discard_card_uids.clear()
 	_identity_marks.clear()
 	_identity_mark_target_id = -1
+	# 本地标注的对局归属同步归零；下一份快照会按新 match_id 重新建立归属，避免旧局 ID 被误判为同一局。
+	_identity_marks_match_id = ""
 	_suppressed_group_trick_uid = -1
 
 

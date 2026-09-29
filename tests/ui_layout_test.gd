@@ -948,6 +948,28 @@ func _run() -> void:
 	# 恢复默认自动标记设置，避免本用例后续菜单和重复渲染检查继承关闭状态。
 	auto_identity_marking_checkbox.button_pressed = true
 	await get_tree().process_frame
+	# 本地身份标注的对局归属；联机客户端牌桌跨局常驻，同一对局必须保留标注、换局必须整体清空。
+	var scoped_identity_snapshot: Dictionary = _make_ten_player_snapshot()
+	scoped_identity_snapshot["match_id"] = "ui-identity-mark-scoped"
+	# 先由牌桌建立本对局归属；随后写入的标注才属于该对局，避免首次归属切换把标注本身清掉。
+	match_controller.state_changed.emit(scoped_identity_snapshot)
+	await get_tree().process_frame
+	main_instance.call("_on_identity_badge_pressed", 5)
+	main_instance.call("_on_identity_mark_selected", 1)
+	match_controller.state_changed.emit(scoped_identity_snapshot)
+	await get_tree().process_frame
+	# 同局重复快照；match_id 未变化时必须继续显示玩家自己的反贼标注。
+	if marked_identity_badge.text != "反" or str((main_instance.get("_identity_marks") as Dictionary).get(5, "")) != "rebel":
+		_fail("identity_mark_same_match_kept:%s" % marked_identity_badge.text)
+		return
+	# 新对局快照；match_id 变化后旧标注必须整体丢弃并让复用座次恢复未知身份。
+	var next_match_identity_snapshot: Dictionary = _make_ten_player_snapshot()
+	next_match_identity_snapshot["match_id"] = "ui-identity-mark-next-match"
+	match_controller.state_changed.emit(next_match_identity_snapshot)
+	await get_tree().process_frame
+	if marked_identity_badge.text != "?" or (main_instance.get("_identity_marks") as Dictionary).has(5):
+		_fail("identity_mark_next_match_cleared:%s" % marked_identity_badge.text)
+		return
 	# 首次渲染的玩家 ID 到座位节点实例 ID；重复快照后用于确认没有整桌释放重建。
 	var opponent_instance_ids: Dictionary = {}
 	for player_id_variant: Variant in player_views.keys():
