@@ -1,6 +1,7 @@
 extends SkillDefinition
 
-## 【升变】技能源码。持有者每个回合开始时选择一名角色增长或重置“军功”，并通过局内获得技能接口动态赋予【奇袭】。
+## 【升变】技能源码。持有者每个回合开始时选择一名角色增长或重置全场“军功”，并通过局内获得技能接口动态赋予【奇袭】。
+## 本技能不是轮回技：它每次发动只做一次军功分配，自身没有轮回节与轮回数，也不受轮回通用限次约束。
 
 ## “军功”公开标记稳定ID；奇袭按相同ID读取阈值。
 const MILITARY_MERIT_MARK_ID: String = "jungong"
@@ -14,14 +15,13 @@ const DERIVED_SKILL_ID: String = "qixi"
 ## 动态奇袭获得记录的来源ID；与其他技能来源区分，避免清除军功时误卸载固有或其他来源技能。
 const DERIVED_SKILL_SOURCE: String = "shengbian_jungong"
 
-## 无“军功”目标重置后固定获得的标记数；数值2来自技能原文。
-const INITIAL_MILITARY_MERIT_COUNT: int = 2
+## 单次发动给予目标的“军功”枚数上限；数值2来自技能原文“令其获得2枚‘军功’标记”。
+## 这是本次给予量（而非持有量）的上限，实际给予量还要受目标持有总数上限约束。
+const MILITARY_MERIT_GAIN_PER_ACTIVATION: int = 2
 
-## 轮回数X的最大有效值；数值5来自技能原文“且至多为5”。
-const MAX_ROUND_GAIN: int = 5
-
-## 增长分支单次实际获得的“军功”枚数上限；数值8来自技能原文“至多获得至8枚”，按X本身的截断实现，角色持有总数不设上限。
-const MAX_MILITARY_MERIT_COUNT: int = 8
+## 目标“军功”持有总数上限；数值8来自技能原文“至多获得至8枚”。
+## 它截断的是目标**持有总数**：已有7枚时本次只给1枚，已有8枚时本次给0枚但仍算合法发动并写日志。
+const MILITARY_MERIT_TOTAL_CAP: int = 8
 
 ## 目标选择请求的稳定种类标识；请求创建、AI评分与选择恢复共用同一键值，防止旧响应进入其他分支。
 const TARGET_SELECTION_KIND: String = "shengbian_target"
@@ -42,41 +42,39 @@ const AI_MATCHED_SKILL_TARGET_VALUE: float = 2.5
 const AI_MATCHED_SKILL_MAX_COUNT: int = 3
 
 
-## 写入单轮回节触发技能静态信息；技能描述逐字保持需求提供的原文。
+## 写入技能静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"shengbian",
 		"name":"升变",
 		"trigger":"phaseBefore",
 		"ui_enabled":false,
-		"reincarnation":true,
-		"reincarnation_section_count":1,
-		"reincarnation_has_explicit_sections":false,
-		"description":"轮回技，回合开始时，你可选择一名角色，若其有“军功”标记，你令其获得X枚“军功”标记（至多获得至8枚）；若其没有“军功”标记，你移除场上所有的“军功”标记，并令其获得2枚“军功”标记。拥有“军功”标记的角色视为拥有技能“奇袭”。（X为此技能的轮回数且至多为5）",
+		"description":"回合开始时，你可选择一名角色，若其没有“军功”标记，你移除场上所有的“军功”标记。然后令其获得2枚“军功”标记（至多获得至8枚）。拥有“军功”标记的角色视为拥有技能“奇袭”。",
 	})
 
 
 ## 订阅持有者自己的回合开始时时机；普通回合与额外回合都会各自提供一次询问机会。
+## 时机本身即“每回合一次”，因此本技能不再依赖轮回通用限次。
 func install() -> void:
 	subscribe_timing("phaseBefore", _on_turn_begin, "player")
 
 
-## 回合开始时创建目标询问；持有者失效、轮回通用限次耗尽或场上没有合法角色时不创建无效询问。
+## 回合开始时创建目标询问；持有者失效、非自身回合或场上没有合法角色时不创建无效询问。
 func _on_turn_begin(_event: RuleEvent) -> void:
 	if not _can_offer_activation():
 		return
 	request_target_selection("【升变】请选择获得军功的角色", _get_target_ids(), 1, 1, true, {"kind":TARGET_SELECTION_KIND})
 
 
-## 返回当前是否开放回合开始的军功分配；死亡、离场、非自身回合与轮回通用限次耗尽都会关闭该窗口。
-## 该判断同时服务询问创建与选择恢复：等待目标期间状态失效时本次发动整体放弃，且不推进轮回。
+## 返回当前是否开放回合开始的军功分配；死亡、离场、非自身回合都会关闭该窗口。
+## 该判断同时服务询问创建与选择恢复：等待目标期间状态失效时本次发动整体放弃。
 func _can_offer_activation() -> bool:
 	# 技能持有者；死亡或离场角色不能发动技能。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	return owner != null and owner.alive and not owner.out_of_game and host.state.current_player_id == owner_player_id and can_activate_reincarnation() and not _get_target_ids().is_empty()
+	return owner != null and owner.alive and not owner.out_of_game and host.state.current_player_id == owner_player_id and not _get_target_ids().is_empty()
 
 
-## 恢复目标选择；取消不消耗轮回额度也不推进轮回。
+## 恢复目标选择；取消不产生任何标记变化。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if str(context.get("kind", "")) != TARGET_SELECTION_KIND or response == null:
 		return false
@@ -85,26 +83,24 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return true
 
 
-## 最终复核并执行增长或全场重置分支；条件在等待目标期间失效时安全放弃。
+## 最终复核并执行“空场重置 + 给予军功”的分支；条件在等待目标期间失效时安全放弃。
 func _execute_shengbian(target_id: int) -> bool:
-	if not _can_offer_activation() or not _get_target_ids().has(target_id) or not begin_reincarnation_activation():
+	if not _can_offer_activation() or not _get_target_ids().has(target_id):
 		return false
-	# 目标当前军功数；正数进入增长分支，0进入全场重置分支。
+	# 目标当前军功数；为0时才触发“移除场上所有的军功标记”的前置分支。
 	var target_mark_count: int = _get_military_merit_count(target_id)
-	# 本次轮回数X；效果快照至多取5，推进发生后才会增加下一次使用的轮回数。
-	var round_gain: int = mini(get_reincarnation_round_count(), MAX_ROUND_GAIN)
-	# 本次实际获得的军功数；原文“至多获得至8枚”截断的是本次获得的X，角色持有总数可以持续累积。
-	var actual_gain: int = 0
-	if target_mark_count > 0:
-		actual_gain = mini(round_gain, MAX_MILITARY_MERIT_COUNT)
-		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, actual_gain, _build_military_merit_mark_data())
-	else:
+	# 本次是否清空了全场军功；公开日志与AI评分都按该事实区分两种分支。
+	var reset_field: bool = target_mark_count <= 0
+	if reset_field:
 		_remove_all_field_military_merit()
-		actual_gain = INITIAL_MILITARY_MERIT_COUNT
-		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, INITIAL_MILITARY_MERIT_COUNT, _build_military_merit_mark_data())
+	# 清场后目标的剩余军功数；清场分支下目标必然为0，非清场分支下等于原数量。
+	var remaining_count: int = _get_military_merit_count(target_id)
+	# 本次实际获得的军功数；“至多获得至8枚”截断的是持有总数，因此已接近上限时只给一部分甚至给0。
+	var actual_gain: int = clampi(MILITARY_MERIT_TOTAL_CAP - remaining_count, 0, MILITARY_MERIT_GAIN_PER_ACTIVATION)
+	if actual_gain > 0:
+		host.call("change_player_mark_count", target_id, MILITARY_MERIT_MARK_ID, actual_gain, _build_military_merit_mark_data())
 	_ensure_derived_skill(target_id)
-	announce_activation({"target_id":target_id, "target_ids":[target_id], "round_count":get_reincarnation_round_count(), "military_merit_before":target_mark_count, "military_merit_gain":actual_gain, "reset_field":target_mark_count <= 0})
-	complete_reincarnation_activation()
+	announce_activation({"target_id":target_id, "target_ids":[target_id], "military_merit_before":target_mark_count, "military_merit_gain":actual_gain, "military_merit_after":remaining_count + actual_gain, "reset_field":reset_field})
 	return true
 
 
@@ -175,17 +171,18 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var target_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
 	# 目标能从【奇袭】获得收益的技能价值；随阵营态度缩放，敌方因军功变强时该价值转为惩罚。
 	var target_merit_value: float = _score_snapshot_merit_trigger_skills(target_snapshot)
-	# 已有军功目标享受明确优先级；X随轮回增长但最多按5枚估值。
+	# 目标当前军功持有量；0进入“清空全场再给予”分支，正数进入“继续积累”分支。
 	var target_mark_count: int = _get_snapshot_military_merit_count(target_snapshot)
-	# 技能持有者公开快照；轮回数必须读取真实局内状态，不能由无宿主AI实例回退为初始值1。
-	var owner_snapshot: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
-	# 当前升变轮回数；缺失旧快照安全回退1，并继续遵守至多5枚的上限。
-	var round_gain: int = mini(maxi(int(((owner_snapshot.get("reincarnation_skills", {}) as Dictionary).get(get_id(), {}) as Dictionary).get("round_count", 1)), 1), MAX_ROUND_GAIN)
 	if target_mark_count > 0:
-		# 增长分支；原文“至多获得至8枚”按X截断，已有军功的积累不会被清空，因此目标原有军功越多越值得继续投入。
-		var actual_gain: int = mini(round_gain, MAX_MILITARY_MERIT_COUNT)
+		# 本次实际给予量；“至多获得至8枚”截断持有总数，已持有8枚时本次给予0枚。
+		var actual_gain: int = clampi(MILITARY_MERIT_TOTAL_CAP - target_mark_count, 0, MILITARY_MERIT_GAIN_PER_ACTIVATION)
+		if actual_gain <= 0:
+			# 已满8枚的目标本次没有任何真实收益：返回0分与“取消”持平，
+			# 让严格大于阈值的确认判定自然失败，避免AI在无收益目标上反复发动升变。
+			return 0.0
+		# 继续积累分支：已有军功不会被清空，且目标原有军功越多离【奇袭】重置越近。
 		return AI_ACTIVATION_BASE_VALUE + attitude * (AI_EXISTING_MERIT_BASE_VALUE + float(actual_gain) + target_merit_value)
-	# 重置分支的全场军功净损益；移除敌方为正、移除友方为负，再叠加目标新获2枚的价值。
+	# 清场分支的全场军功净损益；移除敌方为正、移除友方为负，再叠加目标新获2枚的价值。
 	var score: float = AI_ACTIVATION_BASE_VALUE + attitude * (AI_RESET_MERIT_BASE_VALUE + target_merit_value)
 	for field_player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 场上角色公开快照；死亡与离场角色不属于升变清除军功的当前场面估值。
