@@ -31,7 +31,9 @@ func _run() -> void:
 		return
 	if not _test_lianxi_requires_basic_card():
 		return
-	print("HUOHUA_JOY_PASS faction=huanyu hp=3 haoxi=144 lianxi_recast=7")
+	if not _test_lianxi_cancel_does_not_activate():
+		return
+	print("HUOHUA_JOY_PASS faction=huanyu hp=3 haoxi=144 lianxi_recast=9")
 	get_tree().quit(0)
 
 
@@ -191,12 +193,19 @@ func _test_lianxi_static_definition() -> bool:
 	if lianxi.is_joy_skill() or lianxi.get_performance_number() != 0:
 		return _fail("lianxi_joy_params joy=%s number=%d" % [str(lianxi.is_joy_skill()), lianxi.get_performance_number()])
 	# 玩家可见正文；必须与需求原文逐字一致。
-	var expected_description: String = "出牌阶段限一次，你可以重铸你手牌中的所有基本牌，你可以重复此流程（至多重铸七次），最后对一名其他角色造成Y点伤害。（Y为你本次重铸的次数/2，向下取整）"
+	var expected_description: String = "出牌阶段开始时，你可以重铸你手牌中的所有基本牌，你可以重复此流程（至多重铸九次），最后对一名其他角色造成Y点伤害。（Y为你本次重铸的次数/3，向下取整）"
 	var description: String = str(GameDatabase.get_skill("lianxi").get("description", ""))
 	if description != expected_description:
 		return _fail("lianxi_description %s" % description)
-	if not lianxi.declares_description_tag(SkillDefinition.PLAY_PHASE_ONCE_TAG):
-		return _fail("lianxi_play_phase_once_tag")
+	# 改写为“出牌阶段开始时”后不再是出牌阶段限一次技能；旧标签必须消失，否则阶段额度复原逻辑会误判。
+	if lianxi.declares_description_tag(SkillDefinition.PLAY_PHASE_ONCE_TAG):
+		return _fail("lianxi_still_play_phase_once_tag")
+	# 权威入口改为阶段 Begin 询问；技能不得再提供主动按钮，否则同一效果会出现两条发动路径。
+	if lianxi.can_activate():
+		return _fail("lianxi_can_activate_should_be_false")
+	# 旧主动入口必须显式拒绝调用方，而不是默许一次空发动。
+	if lianxi.activate().is_empty():
+		return _fail("lianxi_activate_should_be_rejected")
 	return true
 
 
@@ -277,7 +286,7 @@ func _test_haoxi_discards_random_hand_cards() -> bool:
 	return true
 
 
-## 校验【连戏】的完整链路：一轮重铸全部基本牌并等量补摸，重复七次后按Y=3造成伤害。
+## 校验【连戏】的完整链路：出牌阶段开始时询问，一轮重铸全部基本牌并等量补摸，重复九次后按Y=3造成伤害。
 func _test_lianxi_recast_times_and_damage() -> bool:
 	_reset_state(2)
 	_controller.state.get_player(0).character_id = "huohua"
@@ -286,22 +295,26 @@ func _test_lianxi_recast_times_and_damage() -> bool:
 	_add_hand_card(0, "shan", "heart", 3)
 	_add_hand_card(0, "tao", "club", 5)
 	_add_hand_card(0, "jiu", "diamond", 9)
-	# 摸牌堆；七轮重铸各补摸四张，因此至少需要 28 张实体牌。
-	for draw_rank: int in range(1, 33):
+	# 摸牌堆；九轮重铸各补摸四张，因此至少需要 36 张实体牌。
+	for draw_rank: int in range(1, 41):
 		_add_draw_pile_card("shan", "club", draw_rank % 13 + 1)
 	var lianxi: SkillDefinition = _install_single_skill(0, "lianxi")
-	if lianxi == null or not lianxi.can_activate():
-		return _fail("lianxi_can_activate")
-	if not lianxi.activate().is_empty():
-		return _fail("lianxi_activate")
+	if lianxi == null:
+		return _fail("lianxi_missing")
+	# 阶段开始技能不开放主动入口；询问必须在阶段 Begin 时机到达时才创建，此前不能有任何窗口。
+	if lianxi.can_activate() or lianxi.activate().is_empty():
+		return _fail("lianxi_active_entry_still_open can_activate=%s" % str(lianxi.can_activate()))
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("lianxi_prompt_before_phase_begin %s" % [_controller._pending_card_choice])
+	_controller._emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number, "player_id":0, "phase":"play"})
 	# 第1次窗口只提供“重铸所有基本牌”，避免0次重铸就结束的白发动路径。
 	var first_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
 	if str(first_choice.get("choice_type", "")) != "control" or str((first_choice.get("context", {}) as Dictionary).get("kind", "")) != "lianxi_recast":
 		return _fail("lianxi_recast_request %s" % [first_choice])
 	if (first_choice.get("control_options", []) as Array).size() != 1:
 		return _fail("lianxi_first_options %s" % [first_choice.get("control_options", [])])
-	# 连续重铸七次；每轮都先确认窗口仍是重铸流程，再提交“重铸所有基本牌”。
-	for recast_index: int in range(7):
+	# 连续重铸九次；每轮都先确认窗口仍是重铸流程，再提交“重铸所有基本牌”。
+	for recast_index: int in range(9):
 		if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "lianxi_recast":
 			return _fail("lianxi_recast_window index=%d choice=%s" % [recast_index, _controller._pending_card_choice])
 		# 重铸前手牌张数；重铸是等量换牌，因此张数必须保持不变。
@@ -310,7 +323,7 @@ func _test_lianxi_recast_times_and_damage() -> bool:
 			return false
 		if _controller.state.get_player(0).hand.size() != hand_count_before:
 			return _fail("lianxi_hand_count index=%d before=%d after=%d" % [recast_index, hand_count_before, _controller.state.get_player(0).hand.size()])
-	# 七次用尽后窗口只剩“结束重铸并造成伤害”。
+	# 九次用尽后窗口只剩“结束重铸并造成伤害”。
 	var final_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
 	var final_options: Array = final_choice.get("control_options", []) as Array
 	if final_options.size() != 1 or str((final_options[0] as Dictionary).get("id", "")) != "finish":
@@ -321,26 +334,50 @@ func _test_lianxi_recast_times_and_damage() -> bool:
 		return _fail("lianxi_target_request %s" % [_controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [1], true):
 		return false
-	# Y = 7 / 2 向下取整 = 3；目标从4点体力降到1点。
+	# Y = 9 / 3 向下取整 = 3；目标从4点体力降到1点。
 	if _controller.state.get_player(1).hp != 1:
 		return _fail("lianxi_damage hp=%d" % _controller.state.get_player(1).hp)
 	return true
 
 
-## 校验【连戏】在手牌没有基本牌时不开放入口，也不会创建空重铸窗口。
+## 校验【连戏】在手牌没有基本牌时不创建阶段 Begin 询问，也不提供任何主动入口。
 func _test_lianxi_requires_basic_card() -> bool:
 	_reset_state(2)
 	_controller.state.get_player(0).character_id = "huohua"
-	# 只有锦囊牌；重铸不会发生任何事，因此技能入口必须保持关闭。
+	# 只有锦囊牌；重铸不会发生任何事，因此阶段开始时必须完全不询问。
 	_add_hand_card(0, "wuxie", "club", 9)
 	var lianxi: SkillDefinition = _install_single_skill(0, "lianxi")
 	if lianxi == null:
 		return _fail("lianxi_missing")
 	if lianxi.can_activate():
 		return _fail("lianxi_activate_without_basic")
-	var rejection: String = lianxi.activate()
-	if rejection.is_empty() or _controller._pending_card_choice.size() > 0:
-		return _fail("lianxi_activate_without_basic_message %s pending=%s" % [rejection, _controller._pending_card_choice])
+	_controller._emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number, "player_id":0, "phase":"play"})
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("lianxi_prompt_without_basic %s" % [_controller._pending_card_choice])
+	return true
+
+
+## 校验【连戏】在阶段 Begin 询问中被取消时不发动：不移动任何牌、不留下后续窗口。
+func _test_lianxi_cancel_does_not_activate() -> bool:
+	_reset_state(2)
+	_controller.state.get_player(0).character_id = "huohua"
+	# 唯一一张基本牌；取消后它必须原样留在手牌里。
+	var basic_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	var lianxi: SkillDefinition = _install_single_skill(0, "lianxi")
+	if lianxi == null:
+		return _fail("lianxi_missing")
+	_controller._emit_rule_timing("phaseUseBegin", 0, 0, 0, {"turn_number":_controller.state.turn_number, "player_id":0, "phase":"play"})
+	if _controller._pending_card_choice.is_empty():
+		return _fail("lianxi_cancel_no_prompt")
+	# 第一次窗口必须允许取消，否则玩家没有任何方式表达“不发动”。
+	if not bool(_controller._pending_card_choice.get("allow_cancel", false)):
+		return _fail("lianxi_first_window_not_cancellable %s" % [_controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [], false):
+		return false
+	if not _controller.state.get_player(0).hand.has(basic_card):
+		return _fail("lianxi_cancel_moved_card")
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("lianxi_cancel_left_window %s" % [_controller._pending_card_choice])
 	return true
 
 

@@ -187,8 +187,12 @@ func _run() -> void:
 	# 新增欢愉派系火花的【好戏】与【连戏】后为84个；【好戏】是首个欢愉技，【连戏】是普通主动技能。
 	# 新增爻光的【凶星】【鸿运】以及星与穹共用的【咬它】【好活】【当赏】后为89个。
 	# 新增星际和平公司真珠的【补缀】【鉴映】后为91个；【补缀】是第二个欢愉技，参演编号104。
+	# 新增丹恒·腾荒的【同袍】后为92个；【同袍】是四节顺序推进的轮回技。
+	# 新增丹恒·腾荒的【岳峙】后为93个；【岳峙】是接管多目标牌的限定技。
+	# 新增瓦尔特的【断界】后为94个；【断界】是每次发动后删除最后一项的主动技能。
+	# 新增彦卿的【遥击】与【凌霜】后为96个；两者分别负责最远目标解限与【杀】的翻面附加效果。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 91:
+	if skill_definition_count != 96:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -266,8 +270,11 @@ func _run() -> void:
 		return
 	# 武将定义数量；新增大黑塔后，共登记37名角色定义；新增欢愉派系火花后为38名。
 	# 新增爻光、星（欢愉派系）与穹（欢愉派系）后为41名。新增真珠后为42名。
+	# 新增丹恒·腾荒（翁法罗斯）后为43名；腾荒与同名丹恒通过稳定ID区分。
+	# 新增瓦尔特（星穹列车）后为44名。
+	# 新增彦卿（仙舟联盟）后为45名。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 42:
+	if character_definition_count != 45:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

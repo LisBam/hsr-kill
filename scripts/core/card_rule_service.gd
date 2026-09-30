@@ -366,7 +366,12 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 
 	# 距离限制；攻击范围与距离1均在此统一计算。
 	var distance_limit: String = str(definition.get("distance_limit", "none"))
+	# 无目标距离解除；按牌整体生效，任一技能命中即视为该牌对所有目标都忽略距离限制。
 	var ignore_distance_limit: bool = bool(rule_overrides.get("ignore_distance_limit", false)) or _skill_ignores_card_distance_limit(actor.player_id, definition)
+	# 带目标距离解除；只对当前目标生效，用于“同一张牌只对部分目标解限”的技能（例如【遥击】只对最远角色）。
+	# 单独成一个判断而不并入上一行：两种解限的适用面不同，合并后无法从表达式看出是哪一种在起作用。
+	if not ignore_distance_limit and _skill_ignores_card_distance_limit_to_target(actor.player_id, definition, target_id):
+		ignore_distance_limit = true
 	if not ignore_distance_limit and distance_limit == "attack_range" and calculate_distance(actor.player_id, target_id) > get_attack_range(actor.player_id):
 		return "目标不在攻击范围内。"
 	if not ignore_distance_limit and distance_limit == "one" and calculate_distance(actor.player_id, target_id) > 1:
@@ -499,3 +504,12 @@ func _skill_ignores_card_distance_limit(actor_id: int, definition: Dictionary) -
 	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_ignores_card_distance_limit"):
 		return false
 	return bool(skill_rule_provider.call("skill_ignores_card_distance_limit", actor_id, definition))
+
+
+## 汇总行动玩家当前技能提供的“指定牌对指定目标”距离解除规则；查询失败时保持卡牌基础限制。
+## 目标参数是本钩子存在的唯一理由：同一张牌只有部分目标可以解除距离（例如【遥击】只对最远的角色生效），
+## 无目标版本无法表达这种差异。本函数与 _skill_ignores_card_distance_limit 并列，两者取“或”。
+func _skill_ignores_card_distance_limit_to_target(actor_id: int, definition: Dictionary, target_id: int) -> bool:
+	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_ignores_card_distance_limit_to_target"):
+		return false
+	return bool(skill_rule_provider.call("skill_ignores_card_distance_limit_to_target", actor_id, definition, target_id))
