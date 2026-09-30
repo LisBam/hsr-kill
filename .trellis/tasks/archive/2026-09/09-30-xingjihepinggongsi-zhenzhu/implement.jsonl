@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容层新增势力、武将与技能的必填字段、命名与解耦检查清单"}
+{"file": ".trellis/spec/core/index.md", "reason": "核心层时机目录扩展与控制器端口的编写规范"}
+{"file": ".trellis/spec/ui/index.md", "reason": "表现为只读快照消费方，牌面与横条渲染规范"}
+{"file": ".trellis/tasks/09-30-xingjihepinggongsi-zhenzhu/design.md", "reason": "本次技术设计与决策依据"}
