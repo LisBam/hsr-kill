@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "质量验证与测试运行要求"}
+{"file": ".trellis/spec/adapters/ai-pipeline.md", "reason": "校验AI决策链未被破坏"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验修复落在可复用层而非技能特例"}

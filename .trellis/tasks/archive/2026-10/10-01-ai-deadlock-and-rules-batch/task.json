@@ -1,0 +1,32 @@
+{
+  "id": "ai-deadlock-and-rules-batch",
+  "name": "ai-deadlock-and-rules-batch",
+  "title": "鉴映AI卡死与堪杀奇袭卡死等五项修复",
+  "description": "汇总五项相互独立的改动：修复鉴映AI在自身回合的发动-取消死循环、修复秘策额外出牌节点下堪杀触发奇袭导致的对局卡死、按新原文改写升变正文与结算、改造木牛流马为先存牌再询问转移且上限5张、参考无名杀优化铁索连环与重铸的AI决策。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-01",
+  "completedAt": "2026-10-01",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-01-jianying-ai-deadlock",
+    "10-01-kancha-qixi-freeze",
+    "10-01-shengbian-rewrite",
+    "10-01-muniu-liuma-flow",
+    "10-01-tiesuo-lianhuan-ai"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
