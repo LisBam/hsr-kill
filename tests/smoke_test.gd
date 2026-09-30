@@ -611,7 +611,7 @@ func _run() -> void:
 	# 编辑器武将牌预览；座次不属于牌面节点树，体力容器预置三绿一暗四枚圆点以呈现标准3/4体力。
 	# 编辑器插画槽；原生尺寸为141.35×190.8像素，只扩展插画宽度以形成3:4武将牌。
 	var preview_artwork: TextureRect = player_card_template.get_node("Artwork") as TextureRect
-	# 编辑器武将名竖条；缩小至22像素宽，避免占据过多插画区域。
+	# 编辑器武将名竖条；缩小至22像素宽，避免占据过多插画区域；运行时按单字生成子标签以压缩间隔号“·”的行高。
 	var preview_character_name: Label = player_card_template.get_node("CharacterName") as Label
 	# 编辑器势力徽记；缩小至26×26像素，保留识别所需的最小尺寸。
 	var preview_faction_badge: Label = player_card_template.get_node("FactionBadge") as Label

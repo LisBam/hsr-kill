@@ -1319,50 +1319,64 @@ func _test_character_card_link_overlay() -> bool:
 	return true
 
 
-## 验证武将名超过四字时自动收紧竖排行距，同时保证行高不低于字号，相邻字不会相互覆盖。
+## 验证武将名竖排的行距联动与间隔号压缩：超过四字自动收紧行距、行高不低于字号，间隔号使用更小字号与更矮行高。
 func _test_character_name_line_spacing() -> bool:
-	# 真实武将牌视图；加入场景树后读取正式场景的字体、字号与行距配置。
+	# 真实武将牌视图；加入场景树后读取正式场景的字体、字号与竖条几何。
 	var player_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	add_child(player_view)
 	await get_tree().process_frame
-	# 武将名竖排标签；名字文本与行距都由该标签承载。
+	# 武将名竖条容器；只提供背景样式、主题字体与可用高度，文字由逐行子标签绘制。
 	var name_label: Label = player_view.get_node("CharacterName") as Label
 	if name_label == null:
 		player_view.queue_free()
 		return _fail("character_name_label missing")
 	# 竖条可用高度；整列名字必须完整显示在该高度内，不能溢出到牌面其他区域。
 	var available_height: float = name_label.size.y
-	# 主题默认行距；新实例尚未写入覆盖，此时读取的就是主题现值，短名必须始终沿用该值。
-	var default_line_spacing: int = name_label.get_theme_constant("line_spacing")
+	# 基准行距；来自导出参数，基准字数以内必须原样沿用。
+	var default_line_spacing: int = player_view.character_name_line_spacing
 	# 当前字体资源；行高基准必须来自真实主题，不能在测试里硬编码像素值。
 	var name_font: Font = name_label.get_theme_font("font")
-	# 当前字号；最小行高与覆盖判定都按该字号换算。
+	# 当前字号；最小行高与行高换算都按该字号计算。
 	var name_font_size: int = name_label.get_theme_font_size("font_size")
 	if name_font == null or name_font_size <= 0:
 		player_view.queue_free()
 		return _fail("character_name_font font=%s size=%d" % [name_font, name_font_size])
-	# 自然行高；零额外行距时单字占用的像素高度，实际行高由它叠加行距得到。
+	# 自然行高；零额外行距时单字占用的像素高度，普通行高由它叠加收紧后的行距得到。
 	var natural_line_height: float = float(name_font.get_height(name_font_size))
-	# 四字基准整列高度；按主题默认行距计算，是超过基准字数的名字需要收紧到的目标长度。
+	# 四字基准整列高度；按基准行距计算，是超过基准字数的名字需要收紧到的目标长度。
 	var reference_column_height: float = (natural_line_height + float(default_line_spacing)) * 4.0
 	# 竖排快照模板；只替换 character_id 即可切换被测武将名。
 	var snapshot: Dictionary = {"player_id":1, "display_name":"行距测试", "character_id":"bronya", "identity":"rebel", "hp":3, "max_hp":3, "shield":0, "alive":true, "chained":false, "face_down":false, "hand_count":0, "equipment":{}, "judgment_area":[], "wooden_ox_storage_count":0}
 	player_view.configure_snapshot(snapshot, GameDatabase.get_character("bronya"))
-	# 四字名行距；基准字数以内必须保持主题默认，不能被本功能提前收紧。
-	if name_label.has_theme_constant_override("line_spacing") or name_label.get_theme_constant("line_spacing") != default_line_spacing:
+	# 四字名：逐行标签必须与字符一一对应，行高等于自然行高加基准行距，且容器自身不承载文字。
+	var short_name_lines: Array = player_view._character_name_line_labels
+	if short_name_lines.size() != 4 or not name_label.text.is_empty():
 		player_view.queue_free()
-		return _fail("short_name_spacing=%d default=%d override=%s" % [name_label.get_theme_constant("line_spacing"), default_line_spacing, name_label.has_theme_constant_override("line_spacing")])
+		return _fail("short_name_lines=%d container_text=%s" % [short_name_lines.size(), name_label.text])
+	for short_line_variant: Variant in short_name_lines:
+		# 当前单字行；基准字数以内不得提前收紧行距。
+		var short_line: Label = short_line_variant as Label
+		if not is_equal_approx(short_line.size.y, natural_line_height + float(default_line_spacing)):
+			player_view.queue_free()
+			return _fail("short_name_line_height=%s expected=%s" % [short_line.size.y, natural_line_height + float(default_line_spacing)])
 	snapshot["character_id"] = "kaesilanna"
 	player_view.configure_snapshot(snapshot, GameDatabase.get_character("kaesilanna"))
-	# 五字名行距；必须低于主题默认，表示竖排确实被缩短。
-	var compact_spacing: int = name_label.get_theme_constant("line_spacing")
+	# 五字名行距；必须低于基准行距，表示竖排确实被缩短。
+	var compact_spacing: int = player_view._resolve_character_name_line_spacing(5, default_line_spacing)
 	# 五字名单行实际行高；自然行高叠加收紧后的行距。
 	var compact_line_height: float = natural_line_height + float(compact_spacing)
 	# 五字名整列高度；应收紧到四字基准附近，而不是继续线性增长。
 	var compact_column_height: float = compact_line_height * 5.0
-	if not name_label.has_theme_constant_override("line_spacing") or compact_spacing >= default_line_spacing or compact_line_height < float(name_font_size) or compact_column_height > available_height or compact_column_height > reference_column_height + float(name_font_size):
+	if compact_spacing >= default_line_spacing or compact_line_height < float(name_font_size) or compact_column_height > available_height or compact_column_height > reference_column_height + float(name_font_size):
 		player_view.queue_free()
 		return _fail("long_name_spacing=%d default=%d line=%s/%d column=%s/%s available=%s" % [compact_spacing, default_line_spacing, compact_line_height, name_font_size, compact_column_height, reference_column_height, available_height])
+	# 逐行标签行高必须与该收紧结果一致，证明实际排版使用了同一行距。
+	for compact_line_variant: Variant in player_view._character_name_line_labels:
+		# 当前单字行；五字名每行都必须等于收紧后的行高。
+		var compact_line: Label = compact_line_variant as Label
+		if not is_equal_approx(compact_line.size.y, compact_line_height):
+			player_view.queue_free()
+			return _fail("long_name_line_height=%s expected=%s" % [compact_line.size.y, compact_line_height])
 	# 超长名行距；直接按八字查询，确认收紧到下限后仍然保持最小行高。
 	var overflow_spacing: int = player_view._resolve_character_name_line_spacing(8, default_line_spacing)
 	# 超长名单行实际行高；必须仍然不低于字号，保证相邻字不会相互覆盖。
@@ -1374,6 +1388,35 @@ func _test_character_name_line_spacing() -> bool:
 	if overflow_line_height * 8.0 > available_height:
 		player_view.queue_free()
 		return _fail("long_name_overflow=%s available=%s" % [overflow_line_height * 8.0, available_height])
+	# 带间隔号的武将名；竖排必须把“·”单独排版为更小字号与更矮行高，压缩它与前后字的纵向距离。
+	snapshot["character_id"] = "danheng_tenghuang"
+	player_view.configure_snapshot(snapshot, GameDatabase.get_character("danheng_tenghuang"))
+	# 间隔号行与普通行；间隔号行必须使用导出参数中的更小字号，且严格比普通行更矮。
+	var separator_lines: Array = player_view._character_name_line_labels
+	var separator_line_label: Label = null
+	var normal_line_height: float = 0.0
+	var separator_line_height: float = 0.0
+	# 整列高度；用于确认间隔号行确实压缩了“丹恒·腾荒”的总高度。
+	var separator_column_height: float = 0.0
+	for separator_line_variant: Variant in separator_lines:
+		# 当前单字行；命中间隔号集合的行按更小字号与更矮行高统计。
+		var separator_line: Label = separator_line_variant as Label
+		separator_column_height += separator_line.size.y
+		if player_view.is_character_name_separator(separator_line.text):
+			separator_line_label = separator_line
+			separator_line_height = separator_line.size.y
+		else:
+			normal_line_height = separator_line.size.y
+	if separator_lines.size() != 5 or separator_line_label == null or not is_equal_approx(normal_line_height, natural_line_height + float(player_view._resolve_character_name_line_spacing(5, default_line_spacing))):
+		player_view.queue_free()
+		return _fail("separator_lines=%d separator=%s normal_height=%s" % [separator_lines.size(), separator_line_label != null, normal_line_height])
+	if separator_line_label.get_theme_font_size("font_size") != player_view.character_name_separator_font_size or player_view.character_name_separator_font_size >= name_font_size or separator_line_height >= normal_line_height:
+		player_view.queue_free()
+		return _fail("separator_compact label_size=%d separator_size=%d name_size=%d line=%s/%s" % [separator_line_label.get_theme_font_size("font_size"), player_view.character_name_separator_font_size, name_font_size, separator_line_height, normal_line_height])
+	# 整列高度对照；间隔号行比普通行更矮，因此整列必须小于“五字全为普通字”的高度。
+	if separator_column_height >= normal_line_height * 5.0:
+		player_view.queue_free()
+		return _fail("separator_column=%s full=%s" % [separator_column_height, normal_line_height * 5.0])
 	player_view.queue_free()
 	return true
 

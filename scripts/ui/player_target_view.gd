@@ -96,6 +96,19 @@ const CORNER_VIEW_SOURCE_FIELDS: Dictionary = {
 ## 武将名竖排允许的最小行高与字号之比；默认1.0保证行高不低于字号，且按当前字号等比换算，因此任何字数都不会被压缩到相邻字相互覆盖。
 @export_range(0.6, 1.5, 0.05) var character_name_min_line_height_ratio: float = 1.0
 
+## 武将名竖排的字符行距；默认3像素沿用旧版 Label 主题默认值，是四字基准整列高度的计算基准，运行时通常无需动态修改。
+@export_range(0, 24, 1) var character_name_line_spacing: int = 3
+
+## 间隔号在竖排中独占一行的显示字号；默认5像素远小于武将名字号，可压缩“·”所在行的行高，让间隔号与前后的字更靠近，运行时通常无需动态修改。
+## 调小该值可进一步收紧“丹恒·腾荒”中“·”的占位；调大到武将名字号则恢复与普通字相同的行高。
+@export_range(2, 24, 1) var character_name_separator_font_size: int = 5
+
+## 间隔号行的额外行距；默认1像素保证缩小字号后的“·”不会与相邻字重叠，运行时通常无需动态修改。
+@export_range(-4, 12, 1) var character_name_separator_line_spacing: int = 1
+
+## 视为间隔号的字符集合；竖排逐字排版时命中项按较小字号与独立行高渲染，新增其他间隔号写法只需在此追加字符。
+@export var character_name_separator_characters: String = "·・•‧∙⋅"
+
 ## 武将牌固定显示尺寸；默认148.35×197.8像素与编辑器3:4场景一致，运行时通常无需动态修改。
 ## 当前标准尺寸为148.35×197.8像素，通过只增宽武将插画与牌框实现精确3:4比例，信息控件尺寸保持不变。
 @export var card_size: Vector2 = Vector2(148.35, 197.8)
@@ -157,7 +170,13 @@ var _artwork_texture: Texture2D
 
 ## 武将名覆盖层；参考无名杀把角色名固定在牌面底部，避免状态文本随长度改变牌面尺寸。
 ## 当前参考图格式将该覆盖层调整到牌面左侧，并把武将名按单字逐行竖排显示。
+## 该节点只提供竖条背景样式、主题字体与可用高度，实际文字由逐行子 Label 承担：
+## 这样才能给间隔号“·”单独使用更小字号与独立行高，压缩它与前后字的距离（Label/RichTextLabel 的整段行高无法逐行改变）。
 @onready var _character_name_label: Label = $CharacterName
+
+## 武将名逐行竖排生成的单字标签；每次刷新整体重建，间隔号行使用更小字号与独立行高。
+## 这些标签只负责绘制单个字符，鼠标输入由武将牌的透明输入区域统一处理。
+var _character_name_line_labels: Array[Label] = []
 
 ## 身份徽记覆盖层；公开身份显示在牌面右上角，未知身份使用问号徽记。
 @onready var _identity_badge_label: Label = $IdentityBadge
@@ -1012,13 +1031,14 @@ func _layout_equipment_rows() -> void:
 		equipment_row.size = Vector2(row_width, equipment_row_height)
 
 
-## 返回武将名竖排使用的行距；基准字数以内沿用主题默认，更长的名字按比例收紧且不低于可读下限。
+## 返回武将名竖排使用的行距；基准字数以内沿用基准行距，更长的名字按比例收紧且不低于可读下限。
+## 行距由可检查器调整的 character_name_line_spacing 提供，不再读取容器 Label 的主题行距，因此主题切换不会改变竖排基准。
 func _resolve_character_name_line_spacing(name_length: int, default_line_spacing: int) -> int:
 	if _character_name_label == null:
 		return default_line_spacing
-	# 当前字体资源；从标签主题读取，替换主题或字体后仍按真实字体计算行高。
+	# 当前字体资源；从竖条容器读取，替换主题或字体后仍按真实字体计算行高。
 	var font: Font = _character_name_label.get_theme_font("font")
-	# 当前字号；缺失或非法时不做任何收紧，保持主题默认行距。
+	# 当前字号；缺失或非法时不做任何收紧，保持基准行距。
 	var font_size: int = _character_name_label.get_theme_font_size("font_size")
 	if font == null or font_size <= 0:
 		return default_line_spacing
@@ -1026,19 +1046,103 @@ func _resolve_character_name_line_spacing(name_length: int, default_line_spacing
 	var natural_line_height: float = float(font.get_height(font_size))
 	# 最小行高；行高不得低于该值，保证相邻字形的绘制区域不会被压到重叠。
 	var min_line_height: float = float(font_size) * character_name_min_line_height_ratio
-	# 可收紧余量；主题默认行高与最小行高的差值决定最多能收紧多少像素。
+	# 可收紧余量；基准行高与最小行高的差值决定最多能收紧多少像素。
 	var allowed_reduction: float = natural_line_height + float(default_line_spacing) - min_line_height
-	# 未超过基准字数或没有可收紧余量时沿用主题默认行距。
+	# 未超过基准字数或没有可收紧余量时沿用基准行距。
 	if name_length < character_name_compact_threshold or allowed_reduction <= 0.0:
 		return default_line_spacing
-	# 基准整列高度；按主题默认行距计算基准字数的整列高度，作为长名收紧的目标长度。
+	# 基准整列高度；按基准行距计算基准字数的整列高度，作为长名收紧的目标长度。
 	var reference_column_height: float = float(character_name_reference_length) * (natural_line_height + float(default_line_spacing))
 	# 目标行高；把当前字数的整列高度压到基准整列高度，字数越多收紧越多。
 	var target_line_height: float = reference_column_height / float(name_length)
-	# 实际行高；夹在最小行高与主题默认行高之间，确保只收紧不放大且不会覆盖。
+	# 实际行高；夹在最小行高与基准行高之间，确保只收紧不放大且不会覆盖。
 	var resolved_line_height: float = clampf(target_line_height, min_line_height, natural_line_height + float(default_line_spacing))
-	# 行距；Label 的 line_spacing 以像素为单位叠加在自然行高上，负数表示收紧。
+	# 行距；以像素为单位叠加在自然行高上，负数表示收紧。
 	return int(round(resolved_line_height - natural_line_height))
+
+
+## 判断一个字符是否属于间隔号集合；命中项按更小字号和独立行高单独占一行。
+func is_character_name_separator(character: String) -> bool:
+	return not character.is_empty() and character_name_separator_characters.contains(character)
+
+
+## 返回单个竖排字符需要的行高；普通字按收紧后的行距计算，间隔号按更小字号与独立行距计算。
+func _resolve_character_name_line_height(character: String, font: Font, font_size: int, resolved_line_spacing: int) -> float:
+	# 最小行高约束；所有字符都必须保证绘制区域不会与相邻字重叠。
+	var min_line_height: float = float(font_size) * character_name_min_line_height_ratio
+	if is_character_name_separator(character):
+		# 间隔号字号；夹在1与武将名字号之间，避免配置错误产生不可见或反而更大的间隔号。
+		var separator_font_size: int = clampi(character_name_separator_font_size, 1, font_size)
+		# 间隔号行高；按小字号自身的字体高度加独立行距，从而比普通行更矮。
+		var separator_line_height: float = float(font.get_height(separator_font_size)) + float(character_name_separator_line_spacing)
+		return maxf(separator_line_height, 1.0)
+	return maxf(float(font.get_height(font_size)) + float(resolved_line_spacing), min_line_height)
+
+
+## 重建武将名竖排；每个字符独占一行并整体垂直居中，间隔号使用更小字号与更矮的行高贴近前后字。
+## 容器 Label 自身的文本会被清空，只保留竖条背景样式；主题字体、字号、阴影与配色全部从容器读取，保持视觉契约不变。
+func _refresh_character_name_lines(character_name: String) -> void:
+	if _character_name_label == null:
+		return
+	# 清空上一次的动态行；先出树再释放，避免同一帧内新旧两套字重叠绘制。
+	for line_label: Label in _character_name_line_labels:
+		if is_instance_valid(line_label):
+			_character_name_label.remove_child(line_label)
+			line_label.queue_free()
+	_character_name_line_labels.clear()
+	_character_name_label.text = ""
+	if character_name.is_empty():
+		return
+	# 容器主题字体与字号；竖排尺寸、阴影与行高基准全部由它们推导。
+	var font: Font = _character_name_label.get_theme_font("font")
+	# 容器主题字号；非法配置时不绘制任何字，保持牌面稳定。
+	var font_size: int = _character_name_label.get_theme_font_size("font_size")
+	if font == null or font_size <= 0:
+		return
+	# 逐字行距；超过基准字数的长名在这里完成收紧，间隔号行不参与该收紧计算。
+	var resolved_line_spacing: int = _resolve_character_name_line_spacing(character_name.length(), character_name_line_spacing)
+	# 逐字字符列表与对应行高；两次遍历都使用同一顺序，保证行位置与字符一一对应。
+	var characters: Array[String] = []
+	var line_heights: Array[float] = []
+	# 整列总高度；用于把竖排名字整体垂直居中到22×93像素的竖条内。
+	var total_height: float = 0.0
+	for character: String in character_name.split(""):
+		characters.append(character)
+		# 当前行高；普通字与间隔号使用不同字号和行距。
+		var line_height: float = _resolve_character_name_line_height(character, font, font_size, resolved_line_spacing)
+		line_heights.append(line_height)
+		total_height += line_height
+	# 逐行绘制起点；整列高于竖条时从顶部开始，避免名字被裁掉上半部分。
+	var current_y: float = maxf((_character_name_label.size.y - total_height) * 0.5, 0.0)
+	# 文字配色；与其他覆盖层共用主题主文字色。
+	var name_color: Color = BattleUIStyle.get_color("text_primary")
+	# 阴影参数；沿用容器 Label 的主题覆盖，保持与旧版竖排完全一致的描边观感。
+	var shadow_color: Color = _character_name_label.get_theme_color("font_shadow_color")
+	var shadow_offset_x: int = _character_name_label.get_theme_constant("shadow_offset_x")
+	var shadow_offset_y: int = _character_name_label.get_theme_constant("shadow_offset_y")
+	for index: int in range(characters.size()):
+		# 当前字符；间隔号会写入更小的字号。
+		var character: String = characters[index]
+		var is_separator: bool = is_character_name_separator(character)
+		# 当前单字标签；只绘制一个字符并水平居中在竖条宽度内。
+		var line_label: Label = Label.new()
+		line_label.text = character
+		line_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		line_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		line_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line_label.add_theme_font_override("font", font)
+		line_label.add_theme_font_size_override("font_size", clampi(character_name_separator_font_size, 1, font_size) if is_separator else font_size)
+		line_label.add_theme_color_override("font_color", name_color)
+		line_label.add_theme_color_override("font_shadow_color", shadow_color)
+		line_label.add_theme_constant_override("shadow_offset_x", shadow_offset_x)
+		line_label.add_theme_constant_override("shadow_offset_y", shadow_offset_y)
+		# 先按最终字体与字号入树，再写入位置与行高：
+		# Control.size 会被“最小尺寸”钳制，而 Label 的最小尺寸由当前字体度量决定，顺序颠倒会得到默认字体的错误行高。
+		_character_name_label.add_child(line_label)
+		line_label.position = Vector2(0.0, current_y)
+		line_label.size = Vector2(_character_name_label.size.x, line_heights[index])
+		_character_name_line_labels.append(line_label)
+		current_y += line_heights[index]
 
 
 ## 根据公开快照更新牌面覆盖文字；缺少角色配置时仍保留稳定玩家名称与体力信息。
@@ -1067,16 +1171,9 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	var shield: int = maxi(int(_player_snapshot.get("shield", 0)), 0)
 	# 用于心形绘制的安全当前体力；限制在0至可视上限之间。
 	var safe_hp: int = clampi(hp, 0, max_hp)
-	_character_name_label.text = "\n".join(character_name.split(""))
-	# 先清除上一次的覆盖以读取主题默认行距；主题切换后基准整列高度必须按当前主题重新计算。
-	_character_name_label.remove_theme_constant_override("line_spacing")
-	# 主题默认行距；未写入覆盖时由主题决定，短名始终沿用该值而不被本功能改动。
-	var default_name_line_spacing: int = _character_name_label.get_theme_constant("line_spacing")
-	# 实际行距；超过基准字数的长名按比例收紧整列高度，最小行高保证相邻字不会相互覆盖。
-	var resolved_name_line_spacing: int = _resolve_character_name_line_spacing(character_name.length(), default_name_line_spacing)
-	if resolved_name_line_spacing != default_name_line_spacing:
-		_character_name_label.add_theme_constant_override("line_spacing", resolved_name_line_spacing)
-	_character_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	# 武将名竖排；逐字生成单字标签，间隔号使用更小字号与更矮行高贴近前后字。
+	# 容器 Label 自身的文字始终为空，文字配色与阴影由 _refresh_character_name_lines() 写入每一行。
+	_refresh_character_name_lines(character_name)
 	_identity_badge_label.text = identity_text
 	_hover_player_name_label.text = str(_player_snapshot.get("display_name", "玩家"))
 	_hover_player_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))

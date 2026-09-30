@@ -24,7 +24,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": false,
-		"description": "所有已受伤角色依次回复1点体力。",
+		"description": "所有角色依次回复1点体力。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
 		"provided_response_pattern": "",
@@ -35,21 +35,29 @@ func _init() -> void:
 
 
 ## 执行【桃园结义】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
+## 目标为全部存活角色：满体力角色同样是本牌目标（照常进入目标时机与表现），但它不会产生任何体力变化，
+## 因此也不为它创建【无懈可击】询问链——无懈只服务于“确实会改变结果”的回复，满血目标被询问无懈没有规则意义。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
 	for target_id: int in target_ids:
+		if resolver.is_resolution_stopped():
+			break
+		# 当前目标是否仍需回复；满体力、已死亡与已离场角色都不进入无懈链与回复流程。
+		if not _needs_recovery(resolver, target_id):
+			continue
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
 		resolver.host.recover(actor_id, target_id, 1, card.definition_id)
 	return resolver.default_destination()
 
 
-## 过滤满体力角色的实际结算目标；满体力目标不会回复，也不再创建无懈链和逐目标事件，从而降低多人局结算卡顿。
-func validate_target_selection(_rule_service: Object, _actor: PlayerState, target_id: int, _all_target_ids: Array[int]) -> String:
-	# 当前目标；全体目标规范化阶段会逐名调用本接口，缺失对象由通用规则继续处理。
-	var target: PlayerState = _rule_service.state.get_player(target_id) if _rule_service != null else null
-	if target != null and target.hp >= target.max_hp:
-		return "目标未受伤。"
-	return ""
+## 判断一个已进入本牌目标的角色是否仍需回复；满体力角色虽然仍是合法目标，但不产生任何结算。
+## 该判定只影响无懈链与回复本身，不参与目标合法性筛选，因此满血角色仍会保留在目标数组与目标时机中。
+func _needs_recovery(resolver: Object, target_id: int) -> bool:
+	# 当前目标权威状态；死亡或离场角色不创建无懈窗口，避免对已经无效的目标产生问询。
+	var target: PlayerState = resolver.state.get_player(target_id)
+	if target == null or not target.alive or target.out_of_game:
+		return false
+	return target.hp < target.max_hp
 
 
 ## 当场上没有任何受伤角色时压低主动使用评分；避免AI消耗无实际效果的群体回复牌。
