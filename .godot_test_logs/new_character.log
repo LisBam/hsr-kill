@@ -1,5 +1,0 @@
-Godot Engine v4.6.3.stable.mono.official.7d41c59c4 - https://godotengine.org
-
-NEW_CHARACTER_MECHANICS_PASS
-WARNING: ObjectDB instances leaked at exit (run with --verbose for details).
-   at: cleanup (core/object/object.cpp:2663)
