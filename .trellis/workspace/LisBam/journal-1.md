@@ -91,3 +91,40 @@
 
 - 换将替换真珠时未到期记录会随实例卸载丢失，仍属已知边界；需要跨换将保留时改用 character_form_state
 - 欢愉技参演编号与视为牌复制口径已写入 spec，后续新增内容按同一口径实现
+
+
+## Session 3: 新增主演机制与白露、刃两名武将
+<!-- trellis-session: v=2 fp=12af57958e813fc5 -->
+
+**Date**: 2026-09-30
+**Task**: 新增主演机制与白露、刃两名武将
+**Branch**: `master`
+
+### Summary
+
+实现「主演」全局唯一状态与座次相邻查询，新增白露（悬壶/生息）、刃（万死/支离）两名武将与四条技能的规则及完整 AI，星核猎手改为黑紫配色，并补齐专项回归与文档。
+
+### Main Changes
+
+- 新增 StarringRoleService 保证主演全局唯一并复用酩酊同款角标
+- 新增 GameState 座次相邻查询与三个技能纯查询钩子
+- 新增白露【悬壶】【生息】与刃【万死】【支离】及配套 AI
+- 调整星核猎手势力主题色为黑紫色
+- 新增专项回归用例覆盖设计文档全部 23 条验收断言
+- 同步内容制作指南、游戏机制与玩法内容、AI 模块等文档
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97c87fc` | 新增主演机制与白露、刃两名武将 |
+
+### Testing
+
+- [OK] 全量 71 个 headless 测试场景 0 失败
+- [OK] smoke_test / ai_policy_test / new_character_mechanics_test / phase_progression_test / corner_badge_test / zhuyan_zhili_test 全部通过
+- [OK] 四条技能 description 与需求原文逐字比对一致
+
+### Status
+
+[OK] **Completed**
