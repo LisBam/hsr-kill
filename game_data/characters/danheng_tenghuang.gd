@@ -12,7 +12,7 @@ const YUEZHI_SKILL: Script = preload("res://game_data/skills/yuezhi.gd")
 ## 写入武将静态信息与技能代码引用。
 func _init() -> void:
 	super({
-		"id": "danheng_tenhuang",
+		"id": "danheng_tenghuang",
 		"display_name": "丹恒·腾荒",
 		"gender": "male",
 		"faction": "wengfaluosi",
