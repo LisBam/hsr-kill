@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容层新增势力、武将与技能的必填字段、命名与解耦检查清单"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "技能静态参数、生命周期函数、选择恢复、锁定技与额外阶段的强制契约"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "四个新技能必须同文件维护配套 AI，且规则与 AI 预估必须共用同一份判定条件"}
+{"file": ".trellis/spec/core/index.md", "reason": "核心层新增服务、控制器端口与纯查询钩子的编写规范"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "useCard 整牌时机、phaseAfter 回合尾部时机与可暂停恢复的不变量"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "主演状态与技能私有状态的存放层、单向依赖与快照边界"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "内容制作指南、游戏机制与玩法内容、AI模块 三份文档的强制同步范围"}
+{"file": ".trellis/spec/project/collaboration-rules.md", "reason": "技能描述原文逐字不可改、补全逻辑需单独告知"}
+{"file": ".trellis/tasks/09-30-zhuyan-zhili/design.md", "reason": "本次技术设计与决策依据"}

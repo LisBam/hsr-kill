@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/project/index.md", "reason": "项目级验证与回归口径"}
+{"file": ".trellis/spec/project/verification.md", "reason": "质量门与回归判定标准"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "主演状态与目标改写跨越核心层、内容层、UI 与 AI 的数据流检查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复核相邻查询、角标通道与资源换算是否复用既有接口而非另起一套"}
+{"file": "docs/战斗框架回归说明.md", "reason": "headless 回归的判定标准与命令模板"}
