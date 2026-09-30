@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-09-23
+- **Total Sessions**: 2
+- **Last Active**: 2026-09-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~47 | Active |
+| `journal-1.md` | ~93 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-09-30 | 新增星际和平公司势力、武将真珠、真实轮末时机与牌面复制视为 | `9deeb35`, `8faaf4f` | `master` |
 | 1 | 2026-09-23 | 重建 Trellis 项目规范分层 | `e5fdb33` | `master` |
 <!-- @@@/auto:session-history -->
 

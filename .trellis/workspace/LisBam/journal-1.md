@@ -45,3 +45,49 @@
 ### Next Steps
 
 - 后续编码任务按 trellis-before-dev 读取对应分层规范
+
+
+## Session 2: 新增星际和平公司势力、武将真珠、真实轮末时机与牌面复制视为
+<!-- trellis-session: v=2 fp=f81ebc9fe992b86b -->
+
+**Date**: 2026-09-30
+**Task**: 新增星际和平公司势力、武将真珠、真实轮末时机与牌面复制视为
+**Branch**: `master`
+
+### Summary
+
+登记星际和平公司势力（铜色、简称“司”）与武将真珠（女性、3点体力），新增【补缀】（欢愉技104，轮末扣盾）与【鉴映】（出牌阶段限一次，连花色点数一起视为）；为此新增真实轮末时机 roundEnd 与可暂停的轮末步骤序列、手牌牌面复制视为端口，并修正固有技能持有者死亡后收不到维护时机的核心缺陷。36 项广域回归与新增专项全部通过，文档与 .trellis/spec 已同步。
+
+### Main Changes
+
+- 新增 game_data/factions.json 的星际和平公司（xingjihepinggongsi/司/b87333）
+- 新增武将 zhenzhu.gd（女性、3点基础体力、技能顺序【补缀】【鉴映】）
+- 新增技能 buzhui.gd：欢愉技104，可选0至3名目标各获得1点护盾，roundEnd 逐条失去1点护盾
+- 新增技能 jianying.gd：出牌阶段限一次的三段展示与连花色点数视为流程
+- 新增 roundEnd 时机（目录236）与轮末步骤序列，并区分 round_end_restore / round_end_after_restore 两种续接
+- 新增 CardInstance.set_hand_view_as_with_face 与控制器端口，表现为横幅显示花色点数加视为牌名
+- 修正 skill_definition.gd 的获得技能额度检查误拦截固有技能死亡后清理的问题
+- 新增 tests/zhenzhu_mechanics_test（10个场景），同步 rule_timing、smoke、conquest_coop、gameplay_regression 断言
+- 同步内容制作指南、游戏机制与玩法内容、战斗框架回归说明、README 与五份 .trellis/spec 规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9deeb35` | 新增星际和平公司势力、武将真珠、真实轮末时机与牌面复制视为机制 |
+| `8faaf4f` | 同步真珠机制、轮末时机与视为牌复制的文档与项目规范 |
+
+### Testing
+
+- [OK] [OK] zhenzhu_mechanics PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as round_end=sequential
+- [OK] [OK] 35项广域回归加 zhenzhu_mechanics 共 36/36 退出码 0，日志无 ERROR/SCRIPT ERROR/FAIL
+- [OK] [OK] 补充复跑 ui_layout、virtual_card_color、phase_sequence、card_back_overlay 全部 PASS
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 换将替换真珠时未到期记录会随实例卸载丢失，仍属已知边界；需要跨换将保留时改用 character_form_state
+- 欢愉技参演编号与视为牌复制口径已写入 spec，后续新增内容按同一口径实现
