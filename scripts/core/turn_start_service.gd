@@ -120,7 +120,8 @@ func _finish_cancelled(sequence: RuleStepSequence) -> void:
 	_host._finish_turn(int(sequence.context.player_id))
 
 
-## 翻面跳过后只进入回合尾部，不补造准备或结束阶段。
+## 翻面跳过后只推进回合轮转，不补造准备或结束阶段，也不派发回合尾 phaseAfter。
+## 统一规则：翻面本质是跳过一整个回合，该回合没有回合开始与回合结束，因此任何“本回合结束”类清理都不得在这里发生。
 func _finish_face_down(sequence: RuleStepSequence) -> void:
 	_host._complete_face_down_skipped_turn(int(sequence.context.player_id))
 

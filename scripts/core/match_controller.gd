@@ -527,6 +527,7 @@ var _active_card_resolutions: Dictionary = {}
 var _card_use_contexts: Dictionary = {}
 
 ## 需要在持有者下个回合结束时清理的手牌视为效果；键为实体UID，值保存持有者、来源技能与被标记的到期回合。
+## 到期回合只在该持有者真正进入六阶段的回合结束时消费；翻面被跳过的回合没有回合结束，效果顺延到下一个真实回合。
 var _hand_view_as_turn_expiries: Dictionary = {}
 
 
@@ -7027,6 +7028,7 @@ func transfer_hand_or_self_equipment_card_as_until_next_turn_end(from_id: int, t
 
 
 ## 在一名角色进入回合时锁定其待到期手牌视为效果；本回合内新获得的同类效果会等待再下一个回合。
+## 被翻面跳过的回合同样会锁定回合号，但该回合没有回合结束，因此清理顺延到其下一个真正结束的回合。
 func _arm_hand_view_as_expiries_for_turn(player_id: int) -> void:
 	for card_uid_variant: Variant in _hand_view_as_turn_expiries.keys():
 		# 当前实体UID；作为到期记录与权威牌实体的稳定关联键。
@@ -7039,16 +7041,22 @@ func _arm_hand_view_as_expiries_for_turn(player_id: int) -> void:
 		_hand_view_as_turn_expiries[card_uid] = expiry
 
 
-## 在持有者回合结束时清理已经锁定到本回合的手牌视为效果；牌已离区时仅移除陈旧记录。
+## 在持有者真正结束的回合清理已经锁定到期的手牌视为效果；牌已离区时仅移除陈旧记录。
+## 锁定回合号可能早于当前回合：持有者的那一次回合被翻面跳过时没有回合结束，
+## 按统一规则效果顺延到其下一个真正结束的回合，因此这里消费“锁定回合不晚于当前回合”的记录。
 func _expire_hand_view_as_effects_for_turn(player_id: int) -> void:
 	# 是否实际恢复过手牌定义；只有牌面发生变化时才需要额外广播状态。
 	var changed: bool = false
 	for card_uid_variant: Variant in _hand_view_as_turn_expiries.keys():
 		# 当前实体UID；字典遍历期间使用键副本，可安全删除已处理记录。
 		var card_uid: int = int(card_uid_variant)
-		# 当前到期数据；持有者与锁定回合必须同时匹配才执行恢复。
+		# 当前到期数据；必须先匹配持有者，再看锁定回合号。
 		var expiry: Dictionary = _hand_view_as_turn_expiries.get(card_uid_variant, {}) as Dictionary
-		if int(expiry.get("holder_id", -1)) != player_id or int(expiry.get("expire_turn_number", -1)) != state.turn_number:
+		if int(expiry.get("holder_id", -1)) != player_id:
+			continue
+		# 已锁定的到期回合号；-1 表示效果建立后尚未经过持有者的回合开始，必须留到下一次。
+		var expire_turn_number: int = int(expiry.get("expire_turn_number", -1))
+		if expire_turn_number < 0 or expire_turn_number > state.turn_number:
 			continue
 		# 到期效果持有者；回合结束时重新取得权威角色状态。
 		var player: PlayerState = state.get_player(player_id)
@@ -11190,12 +11198,21 @@ func _continue_turn_after_preparation_phase(player_id: int) -> void:
 	_schedule_phase_transition(player_id, "start", Callable(self, "_enter_judgment_phase").bind(player_id))
 
 
-## 完成因背面朝上而跳过的完整回合；不伪造准备、判定、摸牌、出牌、弃牌或结束阶段，只保留统一回合后与下家轮转。
+## 完成因背面朝上而跳过的完整回合；该回合没有回合开始与回合结束阶段，因此只推进回合轮转。
+## 统一规则：翻面本质是跳过一整个回合，不伪造准备、判定、摸牌、出牌、弃牌或结束阶段，
+## 也不执行任何“回合结束”收尾（手牌临时牌名到期、卡牌定义的回合结束清理），更不派发 phaseAfter；
+## 只有真正进入六阶段的回合才存在回合结束，内容层因此可以放心用 phaseAfter / phaseJieshu 表达“本回合结束/你的回合结束”。
 func _complete_face_down_skipped_turn(player_id: int) -> void:
 	if state == null or state.game_over or state.current_player_id != player_id:
 		return
-	# 直接复用已完成阶段后的回合尾部；该入口只清理回合持续状态、派发phaseAfter并计算下一回合，不会补发任何阶段主体。
-	_complete_finish_turn(player_id)
+	state.current_phase = "finish"
+	state.phase_index = 5
+	# 本回合主要阶段转换属于阶段流程产物；跳过回合同样不保留，避免残留影响该角色的下一个真实回合。
+	_main_phase_play_conversions.erase(player_id)
+	if int(_active_converted_play_phase_context.get("player_id", -1)) == player_id:
+		_active_converted_play_phase_context.clear()
+	# 直接进入回合轮转判定：跳过回合没有任何 phaseAfter 子内容，因此无需经过可暂停的阶段通知序列。
+	_continue_after_phase_after(player_id)
 
 
 ## 进入当前角色的判定阶段；阶段主体可能被无懈、濒死或其他统一选择请求异步暂停。
@@ -13509,7 +13526,7 @@ func _complete_finish_turn(player_id: int) -> void:
 	_main_phase_play_conversions.erase(player_id)
 	if int(_active_converted_play_phase_context.get("player_id", -1)) == player_id:
 		_active_converted_play_phase_context.clear()
-	# 清理在本回合开始时已经锁定到期的手牌视为效果；翻面跳过回合也属于该角色下个回合结束。
+	# 清理在本回合开始时已经锁定到期的手牌视为效果；本入口只服务真正进入六阶段的回合，翻面跳过的回合不经过这里。
 	_expire_hand_view_as_effects_for_turn(player_id)
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
