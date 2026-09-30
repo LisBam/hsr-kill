@@ -79,7 +79,7 @@
 
 ## 四、时机派发与触发排序
 
-- `RuleTimingCatalog` 是**无状态时机目录**：集中保存 **228** 个不重复监听事件、**4** 个主动技能入口，以及 `judgment/draw/play/discard` → `phaseJudge/phaseUse/...` 的唯一主要阶段时机前缀映射。它不做派发，只提供名称校验与稳定分类顺序。
+- `RuleTimingCatalog` 是**无状态时机目录**：集中保存 **236** 个不重复监听事件、**4** 个主动技能入口，以及 `judgment/draw/play/discard` → `phaseJudge/phaseUse/...` 的唯一主要阶段时机前缀映射。它不做派发，只提供名称校验与稳定分类顺序。`GAME_PHASE_TIMINGS` 的数组顺序即规则流程顺序，`roundEnd` 固定紧邻 `roundStart` 之前。
 - `RuleTimingService` 是标准时机派发组件：先调用兼容 `RuleEventBus`，再依据当前状态的存活座次把事件交给独立 `TriggerManager`，最后完成事件；**不执行任何具体牌效、伤害、移动或阶段逻辑**。
 - `TriggerManager` 排序规则：先按 `player/source/target/global` 过滤技能持有者与 `RuleEvent` 角色关系，再按 `firstDo`/`lastDo` → 技能优先级 → 起始座次 → 注册顺序排列，并在执行前**重新检查所有者生命周期与动态条件**。
 - **同一时机内部始终沿用初次排列**；回调内又创建暂停时机时，续列按**最内层优先**恢复。
@@ -142,6 +142,33 @@ roundStart → phaseBefore → 翻面检查 → phaseBeforeStart → phaseBefore
 
 ---
 
+## 八、轮末边界游标（roundEnd）
+
+普通回合结束、且行动顺序轮转**回到本轮轮锚点**时进入真实轮末边界；额外回合不进入。控制器用一个可暂停的 `run_rule_sequence` 依次执行：
+
+```text
+roundEnd（派发时机）
+  → _restore_round_limited_out_of_game_players(round_number + 1)（恢复“直到本轮结束”的离场角色）
+  → _continue_round_end_after_restore()（轮末机缘与下一回合安排）
+```
+
+**契约**：
+
+| 项目 | 约定 |
+|---|---|
+| 派发入口 | `emit_sequence_timing(sequence, "roundEnd", finished_player_id, finished_player_id, finished_player_id, {...})`，因此处理者创建选择时整条轮末序列会等待其结算 |
+| 事件数据 | `{round_number, finished_player_id, turn_number}`；`round_number` 是**刚结束**的那一轮（递增发生在下一次 `_start_turn`） |
+| 每轮次数 | 每个真实轮末**恰好一次**；额外回合与“同轮内的额外出牌阶段”都不派发 |
+| 顺序 | `roundEnd` **严格早于**下一轮的 `roundStart`；轮末机缘（机会/机缘结算）在恢复离场角色之后 |
+| 续接类型 | 屏障出现在派发 `roundEnd` 之前 → `round_end_restore`（恢复后从 `_begin_round_end_boundary` 重新进入，**不得跳过** `roundEnd`）；屏障出现在恢复之后 → `round_end_after_restore`（直接进入 `_continue_round_end_after_restore`，**不得重复派发**） |
+| 过期保护 | 两步都先校验 `state.current_player_id == finished_player_id`；等待期间换人结束回合时旧序列直接 `finish()` 且不改座次 |
+
+> **内容作者要点**：需要“本轮结束才到期”的持续效果（如【补缀】发放的护盾），在 `install()` 中订阅 `roundEnd` 并用 `role="global"`；**不要把到期挂在下一轮 `roundStart`**（那会把“本轮”悄悄变成“下一轮”，并让额外回合语义出错）。同时注册 `maintenance=true` 并覆盖 `can_trigger_while_owner_inactive(event) -> true`，才能让持有者阵亡后仍完成一次清理。
+
+> **Warning**：`roundEnd` 里创建的选择会真正暂停轮末流程；恢复后**不要**重新发一遍时机（见「常见错误」表）。
+
+---
+
 ## 常见错误
 
 | 错误 | 后果 |
@@ -153,3 +180,6 @@ roundStart → phaseBefore → 翻面检查 → phaseBeforeStart → phaseBefore
 | 技能自建续接队列 | 绕过白名单与熔断保护，可能无限递归 |
 | 把异步选择后的恢复写成"重新发一遍时机" | 已完成时机被重复派发，技能多次结算 |
 | 用「跳过三阶段 + 补三个额外出牌阶段」实现四阶段转出牌 | 派发了不该有的跳过时机；应调用 `convert_current_turn_main_phases_to_play()` |
+| 把「本轮结束」的到期效果挂到下一轮 `roundStart` | 语义从“本轮”漂移到“下一轮”，额外回合与读档恢复都会算错；应订阅 `roundEnd` |
+| `round_end_restore` 与 `round_end_after_restore` 混用 | 前者跳过 `roundEnd` 会让轮末时机整轮丢失，后者重复派发会让到期效果结算两次 |
+| 在 `roundEnd` 处理者里假设“轮数已经递增” | `round_number` 此时仍是刚结束的那一轮，判定下一轮请用 `round_number + 1` |

@@ -39,7 +39,9 @@ grep -rn "关键词" scripts/ game_data/
 | 规则合法性查询（能否用牌、能否作为目标、是否在距离内） | `RuleQuery`、`RuleModifierPipeline`、`CardRuleService` |
 | 让玩家/其他角色做选择 | 技能基类的 `request_*_selection(...)` / `request_*_for_player(...)` 包装 |
 | 移动一张实体牌 | `CardMovementService`（**唯一移牌边界**） |
-| 派发/订阅规则时机 | `RuleTimingCatalog`（228 个稳定时机名）+ `subscribe_timing()` |
+| 派发/订阅规则时机 | `RuleTimingCatalog`（236 个稳定时机名，含真实轮末 `roundEnd`）+ `subscribe_timing()` |
+| 「本轮结束」类到期效果 | 订阅 `roundEnd`（不要挂下一轮 `roundStart`） |
+| 手牌视为（换名 / 连花色点数一起换） | `MatchController.set_hand_cards_view_as(...)` / `set_hand_card_view_as_with_face(...)` |
 | 暂停对局 | `GameplayPauseService` 令牌 |
 | 阶段推进 | `MatchController` 的标准阶段/额外阶段端口 |
 | AI 资源换算 | `NonameAIEvaluator.score_resource_change()` 与 `CARD_RESOURCE_VALUE` / `HP_RESOURCE_VALUE` / `RECAST_DRAW_VALUE` |

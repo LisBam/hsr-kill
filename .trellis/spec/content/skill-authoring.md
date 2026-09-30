@@ -52,7 +52,7 @@ uninstall()
 |---|---|---|
 | `_init()` | 必填 | 调用 `super({...})` 写入技能元数据 |
 | `bind(match_host, player_id)` | 通常**不得**覆盖 | 系统自动绑定 `host` 与 `owner_player_id` |
-| `subscribe_timing(event_name, callback, role="player", priority=0, first_do=false, last_do=false, condition=Callable(), locked_segment=false, maintenance=false)` | 被动技能 | 以持有者身份订阅 228 个标准时机，自动绑定 `self` 与 `owner_player_id`，并把内容条件与持有者有效性条件组合；失败返回 `-1` |
+| `subscribe_timing(event_name, callback, role="player", priority=0, first_do=false, last_do=false, condition=Callable(), locked_segment=false, maintenance=false)` | 被动技能 | 以持有者身份订阅 236 个标准时机，自动绑定 `self` 与 `owner_player_id`，并把内容条件与持有者有效性条件组合；失败返回 `-1` |
 | `install()` | 被动技能需要 | 订阅事件、触发器或查询修正 |
 | `uninstall()` | 有自定义注册时需要 | 先清理修正管线，再 `super.uninstall()` 清理事件订阅 |
 | `can_activate(context)` | 主动技能需要 | **无副作用**检查当前是否可发动，返回 `bool` |
@@ -68,6 +68,54 @@ uninstall()
 - 普通技能持有者**死亡、离场或状态缺失后不再接收新时机**。
 - 只负责移除旧持续效果的到期或死亡清理可传 `maintenance=true`，但**不得借此在失效期间产生新收益**。
 - “本局一次”或跨回合的私有记忆必须写入持有者的 `PlayerState.character_form_state`（随权威存档往返、不进入公开快照），不能只放在技能实例字段里：技能实例会在复原武将牌、技能重装与读档后被重建，实例字段会静默丢失。
+- 持有者有效性检查的**固定顺序**是：武将代次匹配 → （持有者存活且在场，或 `can_trigger_while_owner_inactive(event)` 返回 `true`，或 `out_of_game_skill` 覆盖）→ `can_use_effect()`（`maintenance=true` 时跳过）→ **仅当技能位于 `player.acquired_skills` 时才检查局内获得技能额度** → 内容自定义条件。因此固有技能的死亡后清理不会被“获得技能额度”挡住；反之，**局内获得的技能**（额度来自 `acquired_skills`）即使覆盖了死亡放行也会被额度检查拒绝。
+
+---
+
+## 三之二、按“真实轮末”到期的持续效果
+
+“本轮结束时……”类效果（例：【补缀】发放的护盾在轮末失去）必须订阅真实轮末时机 `roundEnd`，不要挂在下一轮 `roundStart`：
+
+```gdscript
+func install() -> void:
+	super.install()
+	# 轮末到期：只做清理，不产生新收益，因此 maintenance=true 并放行持有者死亡后的这一条清理。
+	subscribe_timing("roundEnd", _on_round_end, "global", 0, false, false, Callable(), false, true)
+
+func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
+	return true
+
+func _on_round_end(event: RuleEvent) -> void:
+	# 事件数据里的 round_number 是刚结束的那一轮；本端只消费“小于等于结束轮数”的记录，
+	# 后续轮次的记录保留到对应轮末再结算，因此同一轮多次发放会逐条叠加。
+	var ending_round_number: int = int(event.data.get("round_number", host.state.round_number))
+	...
+```
+
+约定：
+
+- 发放时按 `{round_number, target_ids}` 逐条登记**自己实例内**的记录；`round_number` 取当时的 `host.state.round_number`。
+- 清理统一走权威端口（`who.loseShield(count, source)` 等），由端口负责拒绝已死亡、已离场或没有对应资源的角色；“目标已失效”不需要技能自己判断。
+- 到期只做**移除**：不接受目标、不读取玩家选择、不写新的收益，这样才符合 `maintenance=true` 的约束。
+- 换将（技能实例被卸载）会丢失实例内尚未消费的记录；这是既有边界，需要跨换将保留时改用 `character_form_state`。
+
+---
+
+## 三之三、手牌视为：换名与换牌面
+
+| 端口 | 语义 | 表现 |
+|---|---|---|
+| `MatchController.set_hand_cards_view_as(...)` / `set_hand_card_view_as_until_next_turn_end(...)` | 只把牌名视为另一张牌，**花色点数保持实体原值** | 牌名与说明改成视为牌名，角标仍是实体花色点数 |
+| `MatchController.set_hand_card_view_as_with_face(player_id, card_uid, view_as_definition_id, suit, rank, source_id="runtime") -> bool` | 牌名 + **花色 + 点数**一起视为（例：【鉴映】） | 横幅显示“花色符号 + 点数 + 视为牌名”，牌角与插画保留实体原样 |
+| `MatchController.reveal_hand_card(player_id, card_uid, reason)` | 只把这张牌标记为对全体公开，用于“展示”类技能 | — |
+
+契约与边界：
+
+- `set_hand_card_view_as_with_face` 只在牌**位于该角色普通手牌区**（`CardInstance.zone == "hand"`）时生效；牌名必须能在 `GameDatabase.get_card()` 中解析，花色必须是 `is_valid_suit()` 的四种之一，点数必须是 `is_valid_rank()` 的 `1..13`；任一不满足都**零副作用返回 `false`**。
+- 端口只负责写入视为、写日志与 `_emit_state()`；**发动次数、时机、目标与“B 是否为装备牌”等全部规则属于调用方技能**，不要在控制器里判断。
+- 复制牌面意味着**颜色判定、材料花色聚合、点数比较**都会读到视为后的值（例如黑桃2 → 红桃12 后，它是一张红色、点数为12 的牌）；这是有意为之，不要为“原牌面”再补一套并行字段。
+- 表现层从快照读取：`presentation_original_suit/rank` 是实体牌角（离手后为空，表现层回退到实体 `suit/rank`），`view_as_suit/rank/definition_id` 是视为牌面，离手后仍保留以解释“曾视为”。
+- 需要“先展示 A、再选择并展示 B、最后才视为”的技能，必须把三段拆成 `run_steps([...])`/多个 `continue_selection` 轮次：展示动作不能与选择动作在同一轮里合并，否则会出现“两张牌同时公开”。
 
 ### 规则结果改写钩子
 
@@ -158,4 +206,6 @@ context["skill_owner_id"] = owner_player_id
 - [ ] 令他人选择的场景使用 `*_for_player()` 包装，未把选择错误交给持有者。
 - [ ] 效果实际成立时才调用 `announce_activation()`；带目标时写入了 `target_id`/`target_ids`。
 - [ ] 正式技能已补配套 AI（见 [content-ai.md](./content-ai.md)）；`sample_only` 未伪造 AI。
+- [ ] 「本轮结束」类到期效果订阅的是 `roundEnd`，且只做移除（`maintenance=true` + `can_trigger_while_owner_inactive`）。
+- [ ] 复制牌面的视为使用 `set_hand_card_view_as_with_face()`；「先展示、再选择、最后生效」已拆成独立轮次（不会同时公开两张牌）。
 - [ ] `docs/内容制作指南.md` 与《游戏机制与玩法内容》已同步新接口、规则与全部数值。
