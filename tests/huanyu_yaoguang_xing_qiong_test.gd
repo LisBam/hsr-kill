@@ -36,6 +36,8 @@ func _run() -> void:
 		return
 	if not _test_yaota_drives_joy_skill():
 		return
+	if not _test_yaota_drives_all_owned_joy_skills():
+		return
 	if not _test_yaota_falls_back_to_extra_play_phase():
 		return
 	if not _test_hongyun_extra_moment():
@@ -279,11 +281,11 @@ func _test_xiongxing_stacking_and_badge() -> bool:
 	var target: PlayerState = _controller.state.get_player(1)
 	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 1 or target.character_corner_text != "凶星":
 		return _fail("xiongxing_first_stack state=%s text=%s" % [target.character_form_state, target.character_corner_text])
-	# 第二次发动叠加到两层；角标改为“凶星x2”。
+	# 第二次发动叠加到两层；角标改为“凶星2”。
 	xiongxing.perform_joy_skill({})
 	if not _submit_pending_choice(0, [], [1], true):
 		return false
-	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 2 or target.character_corner_text != "凶星x2":
+	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 2 or target.character_corner_text != "凶星2":
 		return _fail("xiongxing_second_stack state=%s text=%s" % [target.character_form_state, target.character_corner_text])
 	# 一次1点普通伤害被提升到3点；成立后清空全部层数与角标。
 	_controller.damage(0, 1, 1, "normal", "sha")
@@ -415,6 +417,49 @@ func _test_yaota_drives_joy_skill() -> bool:
 	return true
 
 
+## 校验【咬它】按参演编号顺序依次发动目标的全部欢愉技，而不是只发动排序第一项。
+func _test_yaota_drives_all_owned_joy_skills() -> bool:
+	_reset_state(3)
+	_controller.state.get_player(0).character_id = "xing_huanyv"
+	# 目标同时持有【好活】与【当赏】；两者参演编号同为120、座次也相同，因此按技能稳定ID字典序依次演出。
+	var cost: CardInstance = _add_hand_card(0, "sha", "spade", 9)
+	var haohuo: SkillDefinition = _install_single_skill(2, "haohuo")
+	var dangshang: SkillDefinition = _install_single_skill(2, "dangshang")
+	if haohuo == null or dangshang == null or not haohuo.is_joy_skill() or not dangshang.is_joy_skill():
+		return _fail("yaota_all_owned_static")
+	# 查询口径；两个参演编号相同的欢愉技都必须出现在可执行列表里。
+	var target_joy_skill_ids: Array[String] = _controller.get_joy_skill_ids(2)
+	if target_joy_skill_ids != ["dangshang", "haohuo"]:
+		return _fail("yaota_all_owned_ids %s" % [target_joy_skill_ids])
+	# 【好活】需要一张可弃置的场上牌，【当赏】需要摸牌堆至少有一张牌。
+	_add_equipment_card(1, "weapon", "qinggang")
+	_add_draw_pile_card("shan", "heart", 2)
+	var yaota: SkillDefinition = _install_single_skill(0, "yaota")
+	_trigger_turn_before(yaota, 0, 1)
+	if not _submit_pending_choice(0, [cost.uid], [2], true):
+		return false
+	# 首个演出项；参演编号相同时按技能稳定ID字典序，"dangshang" 先于 "haohuo"。
+	var first_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((first_request.get("context", {}) as Dictionary).get("kind", "")) != "dangshang_target":
+		return _fail("yaota_all_owned_first %s" % [first_request])
+	if not _submit_pending_choice(2, [], [1], true):
+		return false
+	# 第二项必须紧接着演出；若仍只驱动首项，这里不会有任何待响应选择。
+	var second_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((second_request.get("context", {}) as Dictionary).get("kind", "")) != "haohuo_card":
+		return _fail("yaota_all_owned_second %s" % [second_request])
+	# 场上候选；本用例只有玩家1武器区的一张装备牌，直接取首项提交。
+	var equipment_uid: int = int(((second_request.get("candidates", []) as Array)[0] as Dictionary).get("uid", -1))
+	if equipment_uid < 0 or not _submit_pending_choice(2, [equipment_uid], [], true):
+		return false
+	# 两项演出全部结束；咬它不推进回合开始游标，因此不会残留待响应选择或活动演出。
+	if _controller.has_pending_card_choice() or _controller.ahha_moment_system.is_active():
+		return _fail("yaota_all_owned_complete pending=%s active=%s" % [_controller._pending_card_choice, _controller.ahha_moment_system.is_active()])
+	if _controller.state.get_player(1).equipment.has("weapon"):
+		return _fail("yaota_all_owned_discard")
+	return true
+
+
 ## 校验【咬它】对没有可执行欢愉技的目标改为给予一个额外的出牌阶段。
 func _test_yaota_falls_back_to_extra_play_phase() -> bool:
 	_reset_state(3)
@@ -467,6 +512,15 @@ func _test_hongyun_extra_moment() -> bool:
 	_trigger_turn_before(hongyun, 0, 1)
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("hongyun_round_limit pending=%s" % [_controller._pending_card_choice])
+	# 额外演出不占用本轮常规阿哈时刻额度：演出结束后常规触发入口仍然可用，并且能真正触发一次。
+	if _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("hongyun_extra_moment_consumed_quota")
+	_controller.ahha_moment_system._tracked_round_number = _controller.state.round_number
+	_controller.ahha_moment_system._round_trigger_probability = 1.0
+	if not _controller.ahha_moment_system.try_trigger_before_turn_start({"player_id":0, "starts_new_round":false}, false):
+		return _fail("hongyun_extra_moment_blocked_regular")
+	if not _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("hongyun_regular_not_claimed")
 	return true
 
 

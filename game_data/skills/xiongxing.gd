@@ -2,7 +2,7 @@ extends SkillDefinition
 
 ## 【凶星】欢愉技源码。阿哈时刻按参演编号116强制驱动：令一名角色下次受到的伤害+1；
 ## 若该角色为持有者本人，则改为同时提供一次“防止下次体力上限减少”。
-## 效果可叠加：层数按目标身上的总层数聚合，角标在2层及以上显示为“凶星xN”。
+## 效果可叠加：层数按目标身上的总层数聚合，角标在2层及以上直接显示为“凶星N”（层数紧跟在名称后，不加任何分隔符）。
 
 ## 目标身上“下次受伤+N”累计层数在 character_form_state 中的稳定键名。
 ## 该字段随权威存档往返、不进入公开快照；改名会使旧存档中的层数失效，必须保持稳定。
@@ -28,10 +28,7 @@ const CORNER_ENTRY_ID: String = "xiongxing"
 ## 角标基础文本；1层时显示该文本。
 const CORNER_TEXT_BASE: String = "凶星"
 
-## 角标多层后缀前缀；达到多层阈值后显示为“凶星xN”。
-const CORNER_TEXT_STACK_PREFIX: String = "x"
-
-## 角标显示层数后缀的最小层数；固定2，对应“大于等于2层时才显示x”。
+## 角标显示层数后缀的最小层数；固定2，对应“大于等于2层时才显示层数”。
 const CORNER_TEXT_STACK_DISPLAY_MIN: int = 2
 
 ## 凶星文本在武将牌左上角组合条目中的排序值；50与【酩酊】【追歼】同档，使短期受击提示优先于回合统计文本。
@@ -270,17 +267,17 @@ func _set_max_hp_guard(guard_count: int) -> void:
 	owner_player.character_form_state[MAX_HP_GUARD_STATE_KEY] = guard_count
 
 
-## 按层数刷新指定角色武将牌左上角的凶星文本；1层显示“凶星”，多层显示“凶星xN”，0层移除条目。
+## 按层数刷新指定角色武将牌左上角的凶星文本；1层显示“凶星”，多层显示“凶星N”（层数直接跟随名称），0层移除条目。
 func _refresh_corner_text(target_id: int, stacks: int) -> void:
 	if host == null or not host.has_method("set_character_corner_text_entry") or not host.has_method("remove_character_corner_text_entry"):
 		return
 	if stacks <= 0:
 		host.call("remove_character_corner_text_entry", target_id, CORNER_ENTRY_ID)
 		return
-	# 显示文本；低于多层阈值时只显示基础文本，达到阈值后追加层数后缀。
+	# 显示文本；低于多层阈值时只显示基础文本，达到阈值后直接把层数接在名称后面。
 	var display_text: String = CORNER_TEXT_BASE
 	if stacks >= CORNER_TEXT_STACK_DISPLAY_MIN:
-		display_text = "%s%s%d" % [CORNER_TEXT_BASE, CORNER_TEXT_STACK_PREFIX, stacks]
+		display_text = "%s%d" % [CORNER_TEXT_BASE, stacks]
 	host.call("set_character_corner_text_entry", target_id, CORNER_ENTRY_ID, display_text, CORNER_TEXT_ORDER)
 
 
