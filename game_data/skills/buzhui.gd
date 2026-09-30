@@ -1,10 +1,12 @@
 extends SkillDefinition
 
 ## 【补缀】欢愉技源码。阿哈时刻按参演编号104驱动：指定至多三名角色各获得1点护盾，这些护盾在持有者的下一个回合结束时各失去1点。
-## 到期使用持有者本人的标准回合尾时机 phaseAfter（role="player"，见 RuleTimingCatalog），不是轮末 roundEnd，也不是内容层自造事件：
+## 到期使用持有者本人的结束阶段时机 phaseJieshu（role="player"，见 RuleTimingCatalog），不是轮末 roundEnd，也不是内容层自造事件：
 ## 演出时先记下当时的权威回合序号，只有当前回合序号严格大于登记值时才代表“你的下一个回合”已经走到末尾，
-## 因此同一回合内的演出不会当回合到期，别人回合的回合尾也不会让它提前到期，额外回合与被翻面跳过的回合同样算持有者的一个回合。
-## 持有者死亡或离场后，技能不再接收任何回合尾时机（本技能因此不覆盖 can_trigger_while_owner_inactive），护盾按原文保留、不再到期。
+## 因此同一回合内的演出不会当回合到期，别人回合的结束阶段也不会让它提前到期。
+## 翻面被跳过的回合在 phaseBefore 翻回正面后直接跳过整个回合、不进入准备至结束阶段，因此它不存在“回合结束”，不会让护盾到期；
+## 这与【酩酊】用 phaseBegin 表达“下一个实际回合开始”是同一条统一规则：只有真正进入六阶段的回合才算一个回合。
+## 持有者死亡或离场后，技能不再接收任何结束阶段时机（本技能因此不覆盖 can_trigger_while_owner_inactive），护盾按原文保留、不再到期。
 ## 补充：欢愉技一律强制发动，本技能不创建“是否发动”询问，目标选择窗口也不提供取消，选择0名目标即为合法结算。
 
 ## 阿哈时刻参演编号；与静态定义 performance_number 共用同一常量，避免两处数值分叉。
@@ -64,11 +66,12 @@ func _init() -> void:
 	})
 
 
-## 订阅持有者本人的回合尾时机；护盾到期属于已经发放的持续效果，只随持有者自己的回合推进。
-## 不使用 global 订阅：护盾绑定“你的下一个回合”，其他角色的回合尾不得让它提前到期；
-## 该时机同时覆盖普通回合尾、额外回合尾与背面朝上被跳过的回合尾，三者都会经由控制器统一回合尾入口派发。
+## 订阅持有者本人的结束阶段时机；护盾到期属于已经发放的持续效果，只随持有者自己的回合推进。
+## 不使用 global 订阅：护盾绑定“你的下一个回合”，其他角色的结束阶段不得让它提前到期。
+## 必须用 phaseJieshu 而不是回合尾 phaseAfter：翻面被跳过的回合同样会经过控制器的统一回合尾入口（phaseAfter），
+## 但它按统一规则跳过准备至结束阶段、不存在“回合结束”，不能成为护盾的到期点。
 func install() -> void:
-	subscribe_timing("phaseAfter", _on_owner_turn_end, "player")
+	subscribe_timing("phaseJieshu", _on_owner_end_phase, "player")
 
 
 ## 阿哈时刻的唯一执行入口：先选择0至3名角色，再统一发放护盾并登记到期扣盾记录。
@@ -126,11 +129,11 @@ func _execute_buzhui(selected_target_ids: Array[int]) -> void:
 	finish_joy_skill_performance()
 
 
-## 登记一条到期扣盾记录；回合序号取当前权威回合序号，代表本记录发生在该回合的回合尾之前。
+## 登记一条到期扣盾记录；回合序号取当前权威回合序号，代表本记录发生在该回合的结束阶段之前。
 func _register_shield_expiry_record(granted_target_ids: Array[int]) -> void:
 	# 当前权威回合序号；补缀总在某个回合开始前的阿哈时刻（或轮末补触发的阿哈时刻）演出，
-	# 因此该值通常是上一个已结束回合的序号：持有者自己的下一个回合开始时序号才会递增，其回合尾即可消费本记录。
-	# 若演出发生在持有者自己的回合进行中（由其他技能驱动的演出），该值就是本回合序号，本回合尾按等号条件保留，留到下一个回合尾。
+	# 因此该值通常是上一个已结束回合的序号：持有者自己的下一个回合开始时序号才会递增，其结束阶段即可消费本记录。
+	# 若演出发生在持有者自己的回合进行中（由其他技能驱动的演出），该值就是本回合序号，本回合结束阶段按等号条件保留，留到下一个结束阶段。
 	var current_turn_number: int = int(host.state.turn_number) if host != null and host.get("state") != null else 0
 	_shield_expiry_records.append({
 		"granted_turn_number":current_turn_number,
@@ -138,14 +141,15 @@ func _register_shield_expiry_record(granted_target_ids: Array[int]) -> void:
 	})
 
 
-## 持有者回合尾清理：让登记在此前回合的护盾记录各失去1点护盾；死亡、离场或护盾为0的目标由权威端口自然跳过。
-## 同一回合内留下的记录（登记序号不小于当前回合序号）属于“你的这个回合”，必须留到持有者的下一个回合尾。
-func _on_owner_turn_end(event: RuleEvent) -> void:
+## 持有者结束阶段清理：让登记在此前回合的护盾记录各失去1点护盾；死亡、离场或护盾为0的目标由权威端口自然跳过。
+## 同一回合内留下的记录（登记序号不小于当前回合序号）属于“你的这个回合”，必须留到持有者的下一个回合结束阶段。
+## 只订阅结束阶段：翻面被跳过的回合不进入六阶段，因此不会提前消费记录。
+func _on_owner_end_phase(event: RuleEvent) -> void:
 	if event == null:
 		return
 	# 当前回合序号；事件数据优先，异常缺失时回退当前权威回合序号，保证清理不会因为载荷缺失而整条丢失。
 	var current_turn_number: int = int(event.data.get("turn_number", host.state.turn_number))
-	# 尚未到期的记录；登记序号更大的记录属于持有者尚未走完的回合，必须保留到那时再结算。
+	# 尚未到期的记录；登记序号不小于当前回合序号的记录属于持有者尚未走完的回合，必须保留到那时再结算。
 	var remaining_records: Array = []
 	for record_variant: Variant in _shield_expiry_records:
 		# 当前到期记录；结构异常时直接丢弃，避免污染后续回合。
