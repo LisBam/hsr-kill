@@ -524,6 +524,48 @@ func _get_effective_armor_definition(authoritative_snapshot: Dictionary, actor_i
 	return GameDatabase.get_card_definition(str(armor.get("definition_id", "")))
 
 
+## 返回指定玩家公开防具的当前卡牌定义；不存在公开防具、玩家缺失或防具ID未登记时返回 null。
+## 该查询只读权威快照中公开的装备区，不窥探任何角色的隐藏手牌，供需要“目标能否承受某属性”的卡牌与技能复用。
+func get_public_armor_definition(authoritative_snapshot: Dictionary, player_id: int) -> CardDefinition:
+	# 当前玩家快照；缺失时没有任何防具能力可读。
+	var player: Dictionary = get_player(authoritative_snapshot, player_id)
+	if player.is_empty():
+		return null
+	# 公开防具快照；空槽返回空字典并自然跳过后继查询。
+	var armor: Dictionary = (player.get("equipment", {}) as Dictionary).get("armor", {}) as Dictionary
+	return GameDatabase.get_card_definition(str(armor.get("definition_id", "")))
+
+
+## 返回指定玩家当前能够实际承受的属性伤害类型集合；AI 只读存活状态与公开防具的能力钩子。
+## 判定口径：防具把该属性的预期伤害倍率压到0表示完全免除该属性伤害（例如未来的“免疫火焰伤害”类防具）；
+## 当前项目没有任何防具或技能完全免除火焰/雷电伤害（【藤甲】放大火焰、白银狮子封顶），
+## 因此存活在场角色的结果恒为 ["fire", "thunder"]，保留该查询是为了让新增属性免疫内容无需修改调用方即可生效。
+func get_capable_damage_natures(authoritative_snapshot: Dictionary, player_id: int) -> Array[String]:
+	# 当前玩家快照；死亡或离场角色不再构成伤害承受者。
+	var player: Dictionary = get_player(authoritative_snapshot, player_id)
+	if player.is_empty() or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+		return []
+	# 公开防具定义；无防具时两种属性伤害全部可承受。
+	var armor_definition: CardDefinition = get_public_armor_definition(authoritative_snapshot, player_id)
+	if armor_definition == null:
+		return ["fire", "thunder"]
+	# 可承受属性；逐属性读取防具声明的预期伤害倍率，0表示该属性伤害被完全免除。
+	var capable_natures: Array[String] = []
+	for nature: String in ["fire", "thunder"]:
+		if armor_definition.get_ai_incoming_damage_multiplier(nature) > 0.0:
+			capable_natures.append(nature)
+	return capable_natures
+
+
+## 返回指定玩家对某个伤害属性的公开防具倍率；1.0表示无修正，大于1表示该属性伤害被放大，0表示完全免除。
+func get_incoming_damage_multiplier(authoritative_snapshot: Dictionary, player_id: int, nature: String) -> float:
+	# 公开防具定义；无防具时按无修正处理。
+	var armor_definition: CardDefinition = get_public_armor_definition(authoritative_snapshot, player_id)
+	if armor_definition == null:
+		return 1.0
+	return maxf(armor_definition.get_ai_incoming_damage_multiplier(nature), 0.0)
+
+
 ## 计算统一选择请求中的默认动作评分；卡牌与技能文件可在此结果上实现专属判断。
 func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, actor_id: int) -> float:
 	# 动作负载；选择请求的牌与目标均保存在标准 payload 中。

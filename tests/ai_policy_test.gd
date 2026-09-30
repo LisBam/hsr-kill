@@ -47,6 +47,14 @@ func _ready() -> void:
 		return
 	if not _test_tiesuo_prefers_recast_when_use_value_is_low():
 		return
+	if not _test_tiesuo_requires_second_elemental_target():
+		return
+	if not _test_tiesuo_rejects_lone_enemy_link():
+		return
+	if not _test_tiesuo_keeps_lone_linked_ally():
+		return
+	if not _test_tiesuo_fire_armor_amplifies_link_value():
+		return
 	if not _test_wooden_ox_transfer_target_ai():
 		return
 	if not _test_quanlei_slash_material_priority():
@@ -523,6 +531,159 @@ func _test_tiesuo_prefers_recast_when_use_value_is_low() -> bool:
 	var chosen: Dictionary = policy.choose_action(snapshot, [use_action, recast_action])
 	if str(chosen.get("action_type", "")) != "recast_card" or int(chosen.get("card_uid", -1)) != 450:
 		return _fail("tiesuo_low_value_recast=%s" % chosen)
+	return true
+
+
+## 验证【铁索连环】的传导门槛：场上可承受属性伤害的角色不足2名时，横置无法把伤害传导给第二人，AI 必须改为重铸。
+## 用例把使用者本人设为唯一可承受属性伤害的角色并已横置：解除自己的横置在正常情况下是明确正收益，
+## 只有全局传导门槛生效时才会被压到重铸之下，因此该断言能够唯一地归因到门槛本身。
+func _test_tiesuo_requires_second_elemental_target() -> bool:
+	# 三人公开身份快照；随后把另外两名角色置为阵亡，制造“全场只剩使用者1人可承受属性伤害”的残局。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 快照玩家数组；座次0为使用者，座次1与2为被置为阵亡的角色。
+	var players: Array = snapshot.get("players", []) as Array
+	for index: int in [1, 2]:
+		# 当前阵亡角色；死亡角色不再是属性伤害的传导对象。
+		var player: Dictionary = players[index] as Dictionary
+		player["alive"] = false
+	# 使用者手牌；使用与重铸必须引用同一张铁索连环实体。
+	var actor: Dictionary = players[0] as Dictionary
+	actor["hand"] = [_card(450, "tiesuo", 0)]
+	actor["hand_count"] = 1
+	# 使用者本人已横置；解除自己的横置本身是正收益，用于把门槛的否决效果单独暴露出来。
+	actor["chained"] = true
+	# 使用动作；目标是使用者本人，本次效果为解除横置。
+	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[0], "payload":{}}
+	# 同实体重铸动作；作为传导门槛命中后的唯一正收益选择。
+	var recast_action: Dictionary = {"action_type":"recast_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[], "payload":{}}
+	# 独立策略；评分上下文按快照缓存，必须与当前快照一一对应。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 使用动作分；传导门槛命中时固定返回“重铸分减去0.15使用优势差”。
+	var use_score: float = policy._score_action(snapshot, use_action)
+	# 重铸基准分；同一张牌的换牌收益。
+	var recast_score: float = policy._score_action(snapshot, recast_action)
+	if not is_equal_approx(use_score, recast_score - 0.15):
+		return _fail("tiesuo_elemental_gate use=%.3f recast=%.3f" % [use_score, recast_score])
+	if use_score >= recast_score:
+		return _fail("tiesuo_elemental_gate_not_suppressed use=%.3f recast=%.3f" % [use_score, recast_score])
+	# 决策层复核；必须改为重铸而不是解除自己的横置。
+	var decision_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 最终选择；门槛生效时使用动作严格低于同牌重铸。
+	var chosen: Dictionary = decision_policy.choose_action(snapshot, [use_action, recast_action])
+	if str(chosen.get("action_type", "")) != "recast_card":
+		return _fail("tiesuo_elemental_gate_choice=%s" % chosen)
+	return true
+
+
+## 验证【铁索连环】移植无名杀的敌方横置否决：敌方不足2名且仍有未横置敌人时不再横置敌人，敌方达到2名后才允许横置。
+func _test_tiesuo_rejects_lone_enemy_link() -> bool:
+	# 三人公开身份快照；领袖0的敌方只有未横置反贼1，友方只有忠臣2，构成“敌方不足2名”的否决前提。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 快照玩家数组；座次0为使用者、1为唯一敌方、2为友方。
+	var players: Array = snapshot.get("players", []) as Array
+	# 使用者手牌；使用与重铸必须引用同一张铁索连环实体。
+	var actor: Dictionary = players[0] as Dictionary
+	actor["hand"] = [_card(450, "tiesuo", 0)]
+	actor["hand_count"] = 1
+	# 单目标使用动作；目标为尚未横置的唯一敌方。
+	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[1], "payload":{}}
+	# 同实体重铸动作；被否决时必须是实际被选中的动作。
+	var recast_action: Dictionary = {"action_type":"recast_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[], "payload":{}}
+	# 独立策略；避免其他场景留下的身份暴露历史改变本次敌我判断。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 最终选择；只有一名敌人时横置它不产生传导价值，必须重铸。
+	var chosen: Dictionary = policy.choose_action(snapshot, [use_action, recast_action])
+	if str(chosen.get("action_type", "")) != "recast_card":
+		return _fail("tiesuo_lone_enemy_link=%s" % chosen)
+	# 正面对照；把忠臣2改判为第二名公开反贼，敌方达到2名后同一次横置必须重新成为正收益。
+	var second_enemy: Dictionary = players[2] as Dictionary
+	second_enemy["identity"] = "rebel"
+	second_enemy["identity_revealed"] = true
+	# 正面对照策略；敌我判断已改变，必须重新创建评分上下文。
+	var widened_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 正面对照选择；必须使用铁索连环横置反贼1。
+	var widened_choice: Dictionary = widened_policy.choose_action(snapshot, [use_action, recast_action])
+	if str(widened_choice.get("action_type", "")) != "use_card" or (widened_choice.get("target_ids", []) as Array) != [1]:
+		return _fail("tiesuo_two_enemy_link=%s" % widened_choice)
+	return true
+
+
+## 验证【铁索连环】移植无名杀的友方导体保护：只有一名友方且其已横置时不解除横置，友方达到2名后才解除。
+func _test_tiesuo_keeps_lone_linked_ally() -> bool:
+	# 三人公开身份快照；领袖0只有忠臣2一名友方，反贼1仍处于未横置状态。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 快照玩家数组；座次0为使用者、1为敌方、2为唯一友方。
+	var players: Array = snapshot.get("players", []) as Array
+	# 使用者手牌；使用与重铸必须引用同一张铁索连环实体。
+	var actor: Dictionary = players[0] as Dictionary
+	actor["hand"] = [_card(450, "tiesuo", 0)]
+	actor["hand_count"] = 1
+	# 已横置友方；解除它会让领袖失去场上唯一的属性伤害导体。
+	(players[2] as Dictionary)["chained"] = true
+	# 单目标使用动作；目标为已横置的唯一友方，本次效果是解除横置。
+	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[2], "payload":{}}
+	# 同实体重铸动作；被否决时必须是实际被选中的动作。
+	var recast_action: Dictionary = {"action_type":"recast_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[], "payload":{}}
+	# 独立策略；避免其他场景留下的身份暴露历史改变本次敌我判断。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 最终选择；保留唯一友方导体的收益高于解除它的即时收益，必须重铸。
+	var chosen: Dictionary = policy.choose_action(snapshot, [use_action, recast_action])
+	if str(chosen.get("action_type", "")) != "recast_card":
+		return _fail("tiesuo_lone_linked_ally=%s" % chosen)
+	# 正面对照；把反贼1改判为第二名公开忠臣，友方达到2名后解除横置必须重新成为正收益。
+	var second_ally: Dictionary = players[1] as Dictionary
+	second_ally["identity"] = "loyalist"
+	second_ally["identity_revealed"] = true
+	# 正面对照策略；敌我判断已改变，必须重新创建评分上下文。
+	var widened_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 正面对照选择；必须使用铁索连环解除忠臣2的横置。
+	var widened_choice: Dictionary = widened_policy.choose_action(snapshot, [use_action, recast_action])
+	if str(widened_choice.get("action_type", "")) != "use_card" or (widened_choice.get("target_ids", []) as Array) != [2]:
+		return _fail("tiesuo_two_ally_unlink=%s" % widened_choice)
+	return true
+
+
+## 验证【铁索连环】移植无名杀的属性放大口径：目标公开防具放大火焰伤害时，横置该目标的收益必须同步提高。
+## 对照口径：白银狮子不改变任何属性伤害倍率、只提供与藤甲同等的防具公开威胁权重，
+## 因此“藤甲分 − 白银狮子分”只可能是火焰倍率本身造成的差额，公开防具带来的威胁加成已被抵消。
+func _test_tiesuo_fire_armor_amplifies_link_value() -> bool:
+	# 同时承载对照防具与放大防具的两份快照；除目标防具定义外其余字段完全一致。
+	var armored_snapshot: Dictionary = _build_strategy_snapshot(true)
+	var neutral_snapshot: Dictionary = _build_strategy_snapshot(true)
+	for snapshot: Dictionary in [armored_snapshot, neutral_snapshot]:
+		# 使用者手牌；使用与重铸必须引用同一张铁索连环实体。
+		var actor: Dictionary = (snapshot.get("players", []) as Array)[0] as Dictionary
+		actor["hand"] = [_card(450, "tiesuo", 0)]
+		actor["hand_count"] = 1
+	# 火焰放大防具；【藤甲】在自身源码中声明火焰伤害倍率2.0，卡牌文件不硬编码该防具 ID。
+	((armored_snapshot.get("players", []) as Array)[1] as Dictionary)["equipment"] = {"armor":{"definition_id":"tengjia", "uid":601, "zone":"equipment", "owner_id":1}}
+	# 对照防具；白银狮子只封顶伤害，不提供任何属性倍率，作为“仅增加公开防具威胁”的基线。
+	((neutral_snapshot.get("players", []) as Array)[1] as Dictionary)["equipment"] = {"armor":{"definition_id":"baiyinshizi", "uid":602, "zone":"equipment", "owner_id":1}}
+	# 单目标使用动作；目标为尚未横置的反贼1，两份快照共用同一动作定义。
+	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[1], "payload":{}}
+	# 对照策略；评分上下文按快照缓存，两份快照必须各自使用独立实例。
+	var neutral_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 对照动作分；只有公开防具威胁参与，横置分量仍按基础幅度计算。
+	var neutral_score: float = neutral_policy._score_action(neutral_snapshot, use_action)
+	# 放大策略；公开装备已改变，必须重新创建评分上下文。
+	var armored_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 公开防具倍率查询；卡牌文件通过该查询读取属性放大口径，不判断具体防具 ID。
+	if not is_equal_approx(armored_policy.evaluator.get_incoming_damage_multiplier(armored_snapshot, 1, "fire"), 2.0):
+		return _fail("tiesuo_fire_amplification_query=%s" % [armored_policy.evaluator.get_incoming_damage_multiplier(armored_snapshot, 1, "fire")])
+	# 放大后的动作分；目标横置分量由 0.5 提高到 1.0。
+	var armored_score: float = armored_policy._score_action(armored_snapshot, use_action)
+	# 预期差额；敌方态度为 -4.0，横置分量幅度提高 0.5，因此提升 0.5 × 4 ÷ 5 = 0.4。
+	var expected_delta: float = 0.4
+	if not is_equal_approx(armored_score - neutral_score, expected_delta):
+		return _fail("tiesuo_fire_amplification_delta armored=%.4f neutral=%.4f" % [armored_score, neutral_score])
+	# 决策层复核；放大后的横置必须仍是实际被选中的动作。
+	var decision_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 同实体重铸动作；作为使用动作的直接替代项。
+	var recast_action: Dictionary = {"action_type":"recast_card", "actor_id":0, "card_uid":450, "card_definition_id":"tiesuo", "target_ids":[], "payload":{}}
+	# 最终选择；必须使用铁索连环横置带【藤甲】的反贼1。
+	var chosen: Dictionary = decision_policy.choose_action(armored_snapshot, [use_action, recast_action])
+	if str(chosen.get("action_type", "")) != "use_card" or (chosen.get("target_ids", []) as Array) != [1]:
+		return _fail("tiesuo_armor_choice=%s" % chosen)
 	return true
 
 
