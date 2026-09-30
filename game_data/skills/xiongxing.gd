@@ -1,38 +1,21 @@
 extends SkillDefinition
 
 ## 【凶星】欢愉技源码。阿哈时刻按参演编号116强制驱动：令一名角色下次受到的伤害+1；
-## 若该角色为持有者本人，则改为同时提供一次“防止下次体力上限减少”。
+## 若该角色为你，则改为同时提供一次“防止下次体力上限减少”。
 ## 效果可叠加：层数按目标身上的总层数聚合，角标在2层及以上直接显示为“凶星N”（层数紧跟在名称后，不加任何分隔符）。
-
-## 目标身上“下次受伤+N”累计层数在 character_form_state 中的稳定键名。
-## 该字段随权威存档往返、不进入公开快照；改名会使旧存档中的层数失效，必须保持稳定。
-const DAMAGE_STACK_STATE_KEY: String = "xiongxing_damage_stacks"
-
-## 持有者自选凶星时提供的“防止下次体力上限减少”剩余次数键名；只写入持有者自己的 character_form_state。
-const MAX_HP_GUARD_STATE_KEY: String = "xiongxing_max_hp_guard"
+##
+## 分工：层数与伤害结算由“角色持续效果”承载（game_data/effects/xiongxingshanghai.gd），因为它属于被施加的角色；
+## 本技能只负责选择目标、叠加层数，以及持有者自选时提供的“防止下次体力上限减少”。
+## 这样爻光阵亡、换将或被“非锁定技失效”压制都不会撤回已经挂在目标身上的伤害+1。
 
 ## 单次发动叠加的层数；固定1层，与原文“下次受到的伤害+1”一致。
 const STACK_PER_PERFORMANCE: int = 1
 
-## 单层凶星提供的伤害加成；固定1点，多层时累加为“下次受到的伤害+N”。
-const DAMAGE_BONUS_PER_STACK: int = 1
+## 持有者自选凶星时提供的“防止下次体力上限减少”剩余次数键名；只写入持有者自己的 character_form_state。
+const MAX_HP_GUARD_STATE_KEY: String = "xiongxing_max_hp_guard"
 
-## 目标身上“已预留加成、尚未结算”的伤害事件ID键名。
-## 该标记按目标存放而不是写进伤害事件的 data：伤害各修改窗口的 data 不保证是同一份字典，
-## 而按目标存放还能让多名义光共享同一份预留状态，避免同一伤害被重复加成。
-const RESERVED_EVENT_STATE_KEY: String = "xiongxing_reserved_damage_event_id"
-
-## 角标条目ID；不带来源玩家后缀，因为层数已按目标聚合，同一目标只需要一条凶星文本。
-const CORNER_ENTRY_ID: String = "xiongxing"
-
-## 角标基础文本；1层时显示该文本。
-const CORNER_TEXT_BASE: String = "凶星"
-
-## 角标显示层数后缀的最小层数；固定2，对应“大于等于2层时才显示层数”。
-const CORNER_TEXT_STACK_DISPLAY_MIN: int = 2
-
-## 凶星文本在武将牌左上角组合条目中的排序值；50与【酩酊】【追歼】同档，使短期受击提示优先于回合统计文本。
-const CORNER_TEXT_ORDER: int = 50
+## 承载凶星伤害加成的角色持续效果 ID；必须与 game_data/effects/xiongxingshanghai.gd 的 EFFECT_ID 完全一致。
+const DAMAGE_EFFECT_ID: String = "xiongxingshanghai"
 
 ## 目标选择请求种类；恢复时按该值分流到结算入口。
 const TARGET_CHOICE_KIND: String = "xiongxing_target"
@@ -76,21 +59,20 @@ func _init() -> void:
 	})
 
 
-## 订阅伤害修改、伤害结果、体力上限减少与死亡清理；层数只由 character_form_state 与武将牌角标表达。
+## 订阅体力上限保护与持有者自身的死亡清理。
+## 补充：伤害结算订阅已移交角色持续效果实例，本技能不再响应任何伤害时机；
+## 因此爻光是否存活、是否换将、是否处于“非锁定技失效”都与已经施加的层数无关。
 func install() -> void:
-	subscribe_timing("damageBegin3", _on_damage_begin_three, "global")
-	subscribe_timing("damage", _on_damage_happened, "global")
-	subscribe_timing("damageCancelled", _on_damage_not_happened, "global")
-	subscribe_timing("damageZero", _on_damage_not_happened, "global")
 	subscribe_timing("loseMaxHpBefore", _on_lose_max_hp_before, "target")
-	subscribe_timing("dieAfter", _on_player_died, "global")
-	# 读档或技能重装后按权威层数自愈本人角标；目标身上的角标随存档恢复，无需在此重建。
-	_refresh_corner_text(owner_player_id, _get_damage_stacks(owner_player_id))
+	# 持有者阵亡后仍要清掉自身残留的上限保护；这是纯清理动作，因此标记 maintenance，
+	# 使它不受“非锁定技失效”影响，同时也不会在失效期间产生任何新收益。
+	subscribe_timing("dieAfter", _on_player_died, "global", 0, false, false, Callable(), false, true)
 
 
-## 卸载技能时按当前真实层数刷新本人角标，不误删其他爻光施加在同一角色上的层数提示。
+## 卸载技能时不再刷新或清除本人角标：层数与角标已由角色持续效果实例独立维护，
+## 换将或失去技能都不会撤回已经施加的凶星。
+## 原实现在此按本人当前层数刷新角标以避免误删其他爻光的提示，该职责现已随层数一并移交效果实例。
 func uninstall() -> void:
-	_refresh_corner_text(owner_player_id, _get_damage_stacks(owner_player_id))
 	super()
 
 
@@ -139,9 +121,15 @@ func _execute_xiongxing(selected_target_ids: Array[int]) -> void:
 	if target_id < 0:
 		finish_joy_skill_performance()
 		return
-	# 叠加后的层数；先读后写，保证多名爻光施加同一目标时层数正确累加而不是互相覆盖。
-	var next_stacks: int = _get_damage_stacks(target_id) + STACK_PER_PERFORMANCE
-	_set_damage_stacks(target_id, next_stacks)
+	# 凶星层数由角色持续效果实例承载：先确保目标身上存在该效果，再交给它叠加层数。
+	# 该实例的生命周期只取决于目标，因此持有者随后阵亡、换将或被“非锁定技失效”压制都不会让层数停止结算。
+	var damage_effect: PlayerEffect = null
+	if host != null and host.has_method("install_player_effect"):
+		damage_effect = host.call("install_player_effect", target_id, DAMAGE_EFFECT_ID) as PlayerEffect
+	# 叠加后的层数；由效果实例统一读写，保证多名爻光施加同一目标时层数正确累加而不是互相覆盖。
+	var next_stacks: int = 0
+	if damage_effect != null:
+		next_stacks = damage_effect.add_stacks(STACK_PER_PERFORMANCE)
 	# 自选附加效果提供的上限保护次数；只有目标为持有者本人时累加，其他角色不获得该保护。
 	var guard_count: int = 0
 	if target_id == owner_player_id:
@@ -149,60 +137,6 @@ func _execute_xiongxing(selected_target_ids: Array[int]) -> void:
 		_set_max_hp_guard(guard_count)
 	announce_activation({"target_id":target_id, "stacks":next_stacks, "max_hp_guard_count":guard_count})
 	finish_joy_skill_performance()
-
-
-## 在第三伤害修改窗口把目标身上的全部凶星层数一次性计入本次伤害；层数在伤害实际成立时才消费。
-func _on_damage_begin_three(event: RuleEvent) -> void:
-	# 本次伤害目标；角色不存在时无从读取层数与预留状态。
-	var target: PlayerState = _get_player(event.target_id)
-	if target == null:
-		return
-	# 目标身上的层数；为0表示该目标当前没有凶星，直接跳过。
-	var stacks: int = _get_damage_stacks(event.target_id)
-	if stacks <= 0:
-		return
-	# 当前伤害事件ID；缺失时无法做幂等保护，宁可不加成也不冒重复加成的风险。
-	var damage_event_id: int = int(event.data.get("damage_event_id", -1))
-	if damage_event_id < 0:
-		return
-	# 预留幂等；目标身上已有任何未结算预留时不再加成。
-	# 该判断同时覆盖两种重复来源：多名义光针对同一伤害的重复加成，以及外层伤害内部嵌套出的新伤害。
-	if int(target.character_form_state.get(RESERVED_EVENT_STATE_KEY, -1)) >= 0:
-		return
-	target.character_form_state[RESERVED_EVENT_STATE_KEY] = damage_event_id
-	event.data["amount"] = maxi(int(event.data.get("amount", 0)), 0) + stacks * DAMAGE_BONUS_PER_STACK
-
-
-## 伤害实际成立时消费目标身上的全部层数；凶星的每一层都作用于“下一次”，因此一次性清空。
-func _on_damage_happened(event: RuleEvent) -> void:
-	# 只有本次伤害确实由凶星加成过才允许消费层数，否则会把无关伤害的层数一并清掉。
-	if not _release_reservation(event.target_id, int(event.data.get("damage_event_id", -1))):
-		return
-	_set_damage_stacks(event.target_id, 0)
-
-
-## 伤害被取消或最终归零时只释放事件占用；层数继续保留给下一次真正成立的伤害。
-func _on_damage_not_happened(event: RuleEvent) -> void:
-	_release_reservation(event.target_id, int(event.data.get("damage_event_id", -1)))
-
-
-## 释放指定角色身上的预留标记；返回本次调用是否确实清除了与给定伤害事件对应的预留。
-## 该返回值同时充当“本次伤害是否由凶星加成过”的凭据，并让多名爻光共享的消费动作只成功一次。
-func _release_reservation(target_id: int, damage_event_id: int) -> bool:
-	var target: PlayerState = _get_player(target_id)
-	if target == null or damage_event_id < 0:
-		return false
-	if int(target.character_form_state.get(RESERVED_EVENT_STATE_KEY, -1)) != damage_event_id:
-		return false
-	target.character_form_state.erase(RESERVED_EVENT_STATE_KEY)
-	return true
-
-
-## 无条件清除指定角色身上的预留标记；角色死亡后残留的预留不再具有任何意义。
-func _clear_reservation(target_id: int) -> void:
-	var target: PlayerState = _get_player(target_id)
-	if target != null:
-		target.character_form_state.erase(RESERVED_EVENT_STATE_KEY)
 
 
 ## 在体力上限减少的最早窗口防止之；只对持有者本人生效，并消耗全部保护次数。
@@ -217,35 +151,21 @@ func _on_lose_max_hp_before(event: RuleEvent) -> void:
 	event.cancel("xiongxing_max_hp_guard")
 
 
-## 角色死亡后清除其身上的层数与自选保护额度；层数已按目标聚合，无法也不应追溯具体来源。
+## 持有者阵亡后清除自身的上限保护额度；上限保护是爻光自己的收益，随持有者死亡失去意义。
+## 层数与预留标记不在这里处理：它们属于被施加的角色，由该角色身上的效果实例自行清理。
 func _on_player_died(event: RuleEvent) -> void:
-	_set_damage_stacks(event.player_id, 0)
-	# 死亡角色身上的预留标记同样失去意义；残留会让后续同名伤害事件ID被误判为已加成。
-	_clear_reservation(event.player_id)
 	if event.player_id == owner_player_id:
 		_set_max_hp_guard(0)
 
 
-## 返回目标身上当前的凶星层数；角色不存在或未记录时返回0。
-func _get_damage_stacks(target_id: int) -> int:
-	var target: PlayerState = _get_player(target_id)
-	if target == null:
-		return 0
-	return maxi(int(target.character_form_state.get(DAMAGE_STACK_STATE_KEY, 0)), 0)
-
-
-## 写入目标身上的凶星层数并同步刷新其角标；层数不大于0时删除键并移除角标。
-func _set_damage_stacks(target_id: int, stacks: int) -> void:
-	var target: PlayerState = _get_player(target_id)
-	if target == null:
-		return
-	# 规范化层数；负数统一按0处理，避免异常输入产生“负层数”导致加伤异常。
-	var normalized_stacks: int = maxi(stacks, 0)
-	if normalized_stacks <= 0:
-		target.character_form_state.erase(DAMAGE_STACK_STATE_KEY)
-	else:
-		target.character_form_state[DAMAGE_STACK_STATE_KEY] = normalized_stacks
-	_refresh_corner_text(target_id, normalized_stacks)
+## 覆盖基类的持有者有效性校验：爻光阵亡后仍需执行一次自身清理，清掉残留的上限保护额度。
+## 放行范围严格限定为 dieAfter，且该回调只删除已经失效的状态、不产生任何新收益；
+## 伤害结算刻意不在这里放行——它已由挂在目标身上的角色持续效果独立承担，与爻光是否存活无关，
+## 因此不需要（也不应该）让死亡的爻光重新接收任何伤害时机。
+func can_trigger_while_owner_inactive(event: RuleEvent) -> bool:
+	if event == null:
+		return false
+	return event.name == "dieAfter"
 
 
 ## 返回持有者当前剩余的“防止下次体力上限减少”次数；未记录时返回0。
@@ -265,20 +185,6 @@ func _set_max_hp_guard(guard_count: int) -> void:
 		owner_player.character_form_state.erase(MAX_HP_GUARD_STATE_KEY)
 		return
 	owner_player.character_form_state[MAX_HP_GUARD_STATE_KEY] = guard_count
-
-
-## 按层数刷新指定角色武将牌左上角的凶星文本；1层显示“凶星”，多层显示“凶星N”（层数直接跟随名称），0层移除条目。
-func _refresh_corner_text(target_id: int, stacks: int) -> void:
-	if host == null or not host.has_method("set_character_corner_text_entry") or not host.has_method("remove_character_corner_text_entry"):
-		return
-	if stacks <= 0:
-		host.call("remove_character_corner_text_entry", target_id, CORNER_ENTRY_ID)
-		return
-	# 显示文本；低于多层阈值时只显示基础文本，达到阈值后直接把层数接在名称后面。
-	var display_text: String = CORNER_TEXT_BASE
-	if stacks >= CORNER_TEXT_STACK_DISPLAY_MIN:
-		display_text = "%s%d" % [CORNER_TEXT_BASE, stacks]
-	host.call("set_character_corner_text_entry", target_id, CORNER_ENTRY_ID, display_text, CORNER_TEXT_ORDER)
 
 
 ## 返回全部存活且未离场角色的稳定玩家ID；含持有者本人，顺序保持权威座次。

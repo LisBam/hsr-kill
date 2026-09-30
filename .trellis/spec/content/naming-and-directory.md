@@ -10,12 +10,15 @@
 |---|---|---|
 | 卡牌 | `game_data/cards` | `CardDefinition` |
 | 技能 | `game_data/skills` | `SkillDefinition` |
+| 角色持续效果 | `game_data/effects` | `PlayerEffect` |
 | 武将 | `game_data/characters` | `CharacterDefinition` |
 | 武将插画 | `game_data/characters/image` | 与武将源码**同名**的 PNG 或 JPG |
 | 势力 | `game_data/factions.json` | JSON 展示数据 |
 | 实体牌堆 | `data/decks.json` | JSON 实体牌数据 |
 
-三个基类分别位于 `game_data/card_definition.gd`、`game_data/skill_definition.gd`、`game_data/character_definition.gd`。
+四个基类分别位于 `game_data/card_definition.gd`、`game_data/skill_definition.gd`、`game_data/player_effect.gd`、`game_data/character_definition.gd`。
+
+**技能与角色持续效果的边界**（放错目录会导致效果静默停止）：效果一旦施加就属于**被施加的角色**。技能实例会随施放者阵亡、换将（`_reinstall_character_skills_for_player()` 整体卸载）或被“非锁定技失效”压制而停止接收时机，因此“已经挂在目标身上、之后必须继续结算”的机制必须写成 `PlayerEffect`；只有施放者本人才能受益、且随其消失失去意义的效果继续留在技能里。
 
 补充基类：`game_data/sequential_virtual_skill_definition.gd`（`SequentialVirtualSkillDefinition`，需要连续使用多张无材料虚拟牌的技能）、`game_data/skill_player.gd`（`SkillPlayer`，技能的 `who/source` 角色操作对象）。
 
@@ -53,7 +56,7 @@
 
 ## 三、GameDatabase 扫描与校验
 
-`GameDatabase` 是自动加载的静态内容仓库，`_ready()` 时调用 `reload_all()`：清空全部索引，按**技能 → 卡牌 → 武将 → 牌堆 → 势力**顺序重载并校验。
+`GameDatabase` 是自动加载的静态内容仓库，`_ready()` 时调用 `reload_all()`：清空全部索引，按**技能 → 角色持续效果 → 卡牌 → 武将 → 牌堆 → 势力**顺序重载并校验。
 
 ### 目录扫描会检查
 

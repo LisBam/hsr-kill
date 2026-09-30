@@ -58,7 +58,7 @@ uninstall()
 | `can_activate(context)` | 主动技能需要 | **无副作用**检查当前是否可发动，返回 `bool` |
 | `activate(context)` | 主动技能需要 | 执行效果；成功返回**空字符串**，失败返回玩家可见错误文本 |
 | `can_use_effect(locked_segment=false)` | 主动入口/查询/钩子统一使用 | 返回当前效果片段能否在「非锁定技失效」期间生效。完整锁定技恒 `true`；半锁定技仅当参数为 `true` 时保留锁定后段；其他非锁定效果返回 `false` |
-| `can_trigger_while_owner_inactive(event)` | 仅死亡/离场后仍需触发的特殊技能 | 默认 `false`；不得为普通全局技关闭统一生存校验 |
+| `can_trigger_while_owner_inactive(event)` | 仅死亡/离场后仍需触发的特殊技能 | 默认 `false`；不得为普通全局技关闭统一生存校验。两种合法用途：**持续效果的到期清理**（例：【补缀】）与**仅由持有者本人承担、必须在失效后补做的清理**（例：【凶星】阵亡后清掉自己的上限保护额度）。放行范围必须收敛到真正需要的时机，禁止 `return true`。**已经挂在目标身上的持续效果不要用它实现**：技能实例还会被换将整体卸载，放行覆盖救不了换将场景，应改用 `PlayerEffect` |
 | `announce_activation(context={})` | 效果**实际成立**时调用 | 写入 `skill_history`、对局日志并触发牌面提示；指定角色时 `context` 必须写 `target_id` 或按序列写 `target_ids`。**不得在取消、未支付费用或执行失败时调用** |
 | `announce_activation_for_player(activator_player_id, context={})` | 跨角色发动时 | 同上传记归属到实际支付费用/执行效果的角色 |
 | `observe_identity_behavior(target_ids, ai_profile)` | 有公开可选目标效果时 | 上报身份观察；只更新 AI 观察，不执行效果 |
@@ -97,7 +97,7 @@ func _on_round_end(event: RuleEvent) -> void:
 - 发放时按 `{round_number, target_ids}` 逐条登记**自己实例内**的记录；`round_number` 取当时的 `host.state.round_number`。
 - 清理统一走权威端口（`who.loseShield(count, source)` 等），由端口负责拒绝已死亡、已离场或没有对应资源的角色；“目标已失效”不需要技能自己判断。
 - 到期只做**移除**：不接受目标、不读取玩家选择、不写新的收益，这样才符合 `maintenance=true` 的约束。
-- 换将（技能实例被卸载）会丢失实例内尚未消费的记录；这是既有边界，需要跨换将保留时改用 `character_form_state`。
+- 换将（技能实例被卸载）会丢失实例内尚未消费的记录；这是既有边界。需要跨换将（以及跨施放者阵亡、跨“非锁定技失效”）保留时，状态写进目标的 `character_form_state`，并把**结算者**改写成 `PlayerEffect`（见下一节）。
 
 ---
 
@@ -122,6 +122,25 @@ func _on_round_end(event: RuleEvent) -> void:
 - `modify_death_reward(victim_snapshot, base_reward)`：改写**击杀奖惩**。返回空字符串表示不改写；返回非空稳定类型字符串即**整体替换**身份规则结论，由 `MatchController.resolve_death_reward()` 统一结算，基础奖惩与改写结果**不叠加**。被击杀者快照固定含 `player_id`、`character_id`、`identity`、`alive`；技能不得自行摸牌、弃牌或直接修改 `PlayerState`。
 - 新增奖惩类型时把稳定字符串与固定数值集中声明在 `DeathResolutionService`（当前 `KILL_REWARD_DRAW_FOUR_TYPE` / `KILL_REWARD_DRAW_FOUR_COUNT`），技能只引用常量，**不得在技能内重复写数值**。
 - 规则改写与 AI 预估必须共用同一份判定条件：规则侧用 `modify_death_reward()`，AI 侧用 `modify_ai_lethal_damage_consequence(snapshot, actor_id, target_id, current_score, evaluator)`，后者只读快照、只返回修正分，不得执行规则效果。
+
+---
+
+## 三之四、跨换将的持续效果：`PlayerEffect`
+
+判断标准只有一句：**这个效果在施放它的技能实例消失之后，是否还必须继续生效？**
+
+技能实例会在三种情况下停止工作，这正是效果必须独立存在的三种理由：施放者阵亡（统一生存校验不再放行）、施放者换将（`_reinstall_character_skills_for_player()` 整体卸载旧实例）、施放者被“非锁定技失效”压制（该检查对技能订阅生效）。
+
+是 → 写成 `game_data/effects/<拼音>.gd` 的 `PlayerEffect` 子类：
+
+- `get_id()` 与文件名一致；`install_effect()` 订阅时机（基类已登记承载者死亡回收，**不要覆盖 `install()`**）。
+- `has_persisted_state(player)` 必须实现为纯只读查询，对局开始与存档恢复按它重建实例；重建只看角色自己的 `character_form_state`，**不要求施放者仍在场**。
+- 持久状态写在**承载角色**的 `character_form_state`；实例由 `PlayerEffectService` 持有强引用，内容侧**不得**只把实例放在局部变量里（会被回收，订阅随之失效）。
+- 技能侧用 `host.call("install_player_effect", target_id, EFFECT_ID)` 取得（已存在则复用）实例，再把数值交给它累加。
+
+否 → 留在技能里即可（例：【凶星】自己那一次“防止体力上限减少”随爻光消失而失去意义）。
+
+完整接口、状态与角标规范见 `docs/内容制作指南.md`「角色持续效果制作」。
 
 ---
 
@@ -207,5 +226,6 @@ context["skill_owner_id"] = owner_player_id
 - [ ] 效果实际成立时才调用 `announce_activation()`；带目标时写入了 `target_id`/`target_ids`。
 - [ ] 正式技能已补配套 AI（见 [content-ai.md](./content-ai.md)）；`sample_only` 未伪造 AI。
 - [ ] 「本轮结束」类到期效果订阅的是 `roundEnd`，且只做移除（`maintenance=true` + `can_trigger_while_owner_inactive`）。
+- [ ] 跨施放者阵亡/换将/非锁定技失效仍需结算的效果已写成 `PlayerEffect`（并实现 `has_persisted_state()`），而不是靠技能订阅或放行覆盖硬撑。
 - [ ] 复制牌面的视为使用 `set_hand_card_view_as_with_face()`；「先展示、再选择、最后生效」已拆成独立轮次（不会同时公开两张牌）。
 - [ ] `docs/内容制作指南.md` 与《游戏机制与玩法内容》已同步新接口、规则与全部数值。

@@ -28,6 +28,12 @@ func _run() -> void:
 		return
 	if not _test_xiongxing_self_max_hp_guard():
 		return
+	if not _test_xiongxing_survives_owner_death():
+		return
+	if not _test_xiongxing_survives_owner_character_replacement():
+		return
+	if not _test_xiongxing_ignores_non_locked_skill_disable():
+		return
 	if not _test_dangshang_draws_one_card():
 		return
 	if not _test_haohuo_discards_field_card():
@@ -317,6 +323,103 @@ func _test_xiongxing_self_max_hp_guard() -> bool:
 	var second_applied: int = _controller.change_max_hp(0, -1, 1, "test")
 	if second_applied == 0 or owner.max_hp != 3:
 		return _fail("xiongxing_guard_consumed applied=%d max_hp=%d" % [second_applied, owner.max_hp])
+	return true
+
+
+## 校验【凶星】层数在技能持有者阵亡后依旧生效；层数按目标身上的持续效果结算，与来源是否存活无关。
+## 场景取四名角色并让爻光以外仍存活的同阵营角色留场，避免领袖死亡立即终局打断后续伤害结算。
+func _test_xiongxing_survives_owner_death() -> bool:
+	_reset_state(4)
+	_controller.state.get_player(0).character_id = "yaoguang"
+	_controller.state.get_player(0).identity = "rebel"
+	_controller.state.get_player(1).identity = "leader"
+	_controller.state.get_player(2).identity = "loyalist"
+	_controller.state.get_player(3).identity = "rebel"
+	var xiongxing: SkillDefinition = _install_single_skill(0, "xiongxing")
+	if xiongxing == null:
+		return _fail("xiongxing_owner_death_static")
+	xiongxing.perform_joy_skill({})
+	if not _submit_pending_choice(0, [], [1], true):
+		return false
+	# 目标身上的层数；持有者仍存活时应为1层。
+	var target: PlayerState = _controller.state.get_player(1)
+	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 1:
+		return _fail("xiongxing_owner_death_first_stack %s" % [target.character_form_state])
+	# 技能持有者阵亡；层数挂在目标身上，不随来源死亡撤回。
+	_controller._resolve_death(0, -1)
+	if _controller.state.get_player(0).alive or _controller.state.game_over:
+		return _fail("xiongxing_owner_death_resolution alive=%s game_over=%s" % [_controller.state.get_player(0).alive, _controller.state.game_over])
+	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 1 or target.character_corner_text != "凶星":
+		return _fail("xiongxing_owner_death_stack_kept state=%s text=%s" % [target.character_form_state, target.character_corner_text])
+	# 持有者已死亡，目标的1点伤害仍应被凶星提升到2点，并在伤害成立后一次性清空层数。
+	_controller.damage(2, 1, 1, "normal", "sha")
+	if target.hp != 2 or int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 0 or not target.character_corner_text.is_empty():
+		return _fail("xiongxing_owner_death_bonus hp=%d state=%s text=%s" % [target.hp, target.character_form_state, target.character_corner_text])
+	# 层数已消费；下一次伤害恢复基础值。
+	_controller.damage(2, 1, 1, "normal", "sha")
+	if target.hp != 1:
+		return _fail("xiongxing_owner_death_after_consume hp=%d" % target.hp)
+	return true
+
+
+## 校验【凶星】层数在技能持有者换将后依旧生效；层数属于被施加的角色，换将不会撤回它。
+## 场景让爻光换成另一名武将并整体重装技能，确认旧技能实例被卸载后伤害加成仍由目标身上的持续效果结算。
+func _test_xiongxing_survives_owner_character_replacement() -> bool:
+	_reset_state(4)
+	_controller.state.get_player(0).character_id = "yaoguang"
+	_controller.state.get_player(0).identity = "rebel"
+	_controller.state.get_player(1).identity = "leader"
+	_controller.state.get_player(2).identity = "loyalist"
+	_controller.state.get_player(3).identity = "rebel"
+	var xiongxing: SkillDefinition = _install_single_skill(0, "xiongxing")
+	if xiongxing == null:
+		return _fail("xiongxing_replacement_static")
+	xiongxing.perform_joy_skill({})
+	if not _submit_pending_choice(0, [], [1], true):
+		return false
+	# 目标身上的层数；换将前应为1层。
+	var target: PlayerState = _controller.state.get_player(1)
+	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 1:
+		return _fail("xiongxing_replacement_first_stack %s" % [target.character_form_state])
+	# 换将：爻光改成另一名武将并整体重装技能，旧技能实例连同其全部订阅一起被卸载。
+	var owner: PlayerState = _controller.state.get_player(0)
+	owner.character_id = "qiong_huanyv"
+	_controller._reinstall_character_skills_for_player(owner)
+	if (_controller.skill_instances_by_player.get(0, {}) as Dictionary).has("xiongxing"):
+		return _fail("xiongxing_replacement_skill_still_installed %s" % [_controller.skill_instances_by_player.get(0, {})])
+	if int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 1 or target.character_corner_text != "凶星":
+		return _fail("xiongxing_replacement_stack_kept state=%s text=%s" % [target.character_form_state, target.character_corner_text])
+	# 施加者已经换将，目标的1点伤害仍应被凶星提升到2点，并在伤害成立后一次性清空层数。
+	_controller.damage(2, 1, 1, "normal", "sha")
+	if target.hp != 2 or int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 0 or not target.character_corner_text.is_empty():
+		return _fail("xiongxing_replacement_bonus hp=%d state=%s text=%s" % [target.hp, target.character_form_state, target.character_corner_text])
+	return true
+
+
+## 校验【凶星】层数在施加者被“非锁定技失效”压制时依旧生效。
+## 失效只作用于爻光自己的技能发动与订阅，已经挂在目标身上的层数不属于技能，因此必须继续结算。
+func _test_xiongxing_ignores_non_locked_skill_disable() -> bool:
+	_reset_state(4)
+	_controller.state.get_player(0).character_id = "yaoguang"
+	_controller.state.get_player(0).identity = "rebel"
+	_controller.state.get_player(1).identity = "leader"
+	_controller.state.get_player(2).identity = "loyalist"
+	_controller.state.get_player(3).identity = "rebel"
+	var xiongxing: SkillDefinition = _install_single_skill(0, "xiongxing")
+	if xiongxing == null:
+		return _fail("xiongxing_disable_static")
+	xiongxing.perform_joy_skill({})
+	if not _submit_pending_choice(0, [], [1], true):
+		return false
+	if int(_controller.state.get_player(1).character_form_state.get("xiongxing_damage_stacks", 0)) != 1:
+		return _fail("xiongxing_disable_first_stack %s" % [_controller.state.get_player(1).character_form_state])
+	# 施加者进入“非锁定技失效”；该状态只压制技能本身，不影响已经挂上的持续效果。
+	if not _controller.set_non_locked_skills_disabled(0, true, "test:disable", 1, "专项测试"):
+		return _fail("xiongxing_disable_state_not_applied")
+	var target: PlayerState = _controller.state.get_player(1)
+	_controller.damage(2, 1, 1, "normal", "sha")
+	if target.hp != 2 or int(target.character_form_state.get("xiongxing_damage_stacks", 0)) != 0 or not target.character_corner_text.is_empty():
+		return _fail("xiongxing_disable_bonus hp=%d state=%s text=%s" % [target.hp, target.character_form_state, target.character_corner_text])
 	return true
 
 

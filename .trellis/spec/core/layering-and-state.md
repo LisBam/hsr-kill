@@ -73,6 +73,7 @@
 | 组件 | 职责（不做什么） |
 |---|---|
 | `PlayerMarkService` | 公开标记规范化、数量限制、全场唯一转移、死亡清理；不读 UI/AI/具体技能 ID |
+| `PlayerEffectService` | 角色持续效果实例托管（创建/复用、按角色持久状态重建、移除与整局清空）；**不读具体技能或效果 ID、不决定何时施加效果** |
 | `ReincarnationSkillService` | 轮回数、轮回节、永劫与次数；**不执行具体技能效果、不持有技能实例** |
 | `PlayerZoneAbolitionService` | 装备栏与判定区废除；**不读卡牌定义、技能 ID、AI 或界面节点** |
 | `GameplayPauseService` | 对局级令牌暂停；首个申请者暂停，最后一个释放者恢复 |

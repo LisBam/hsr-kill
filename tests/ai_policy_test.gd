@@ -89,6 +89,8 @@ func _ready() -> void:
 		return
 	if not _test_low_value_discard():
 		return
+	if not _test_keep_tao_for_teammate():
+		return
 	print("AI_POLICY_PASS cards=%d" % GameDatabase.cards.size())
 	get_tree().quit(0)
 
@@ -1493,6 +1495,122 @@ func _test_low_value_discard() -> bool:
 	var chosen: Dictionary = _policy.choose_card_choice(snapshot, request, actions)
 	if (chosen.get("payload", {}) as Dictionary).get("selected_card_uids", []) != [302, 303]:
 		return _fail("low_value_discard=%s" % [chosen])
+	return true
+
+
+## 校验【桃】的留桃口径：出牌阶段只有在“存在比我更危险的铁杆队友”或“友方领袖残血”时才保留，
+## 其余情况（没有队友、自己濒死、队友健康）都应照常回复自己。判定来自无名杀【桃】的 target_use。
+func _test_keep_tao_for_teammate() -> bool:
+	# 场景一：领袖自己3点体力，两名忠臣各1点体力；危险度累计达到4点，必须留桃。
+	if not _expect_tao_decision([
+			{"identity":"leader", "hp":3, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+		], false, "dangerous_teammates"):
+		return false
+	# 场景二：队友全部健康；没有救援需求，正常吃桃回复自己。
+	if not _expect_tao_decision([
+			{"identity":"leader", "hp":3, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"loyalist", "hp":4, "max_hp":4},
+		], true, "healthy_teammates"):
+		return false
+	# 场景三：场上只有敌人；没有队友时留桃毫无意义，正常回复自己。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+			{"identity":"loyalist", "hp":4, "max_hp":4},
+		], true, "no_teammate"):
+		return false
+	# 场景四：自己只剩1点体力；先确保自己不被击杀，即使队友同样危险也先吃桃。
+	if not _expect_tao_decision([
+			{"identity":"leader", "hp":1, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+		], true, "self_critical"):
+		return false
+	# 场景五：自己是忠臣且友方领袖只剩2点体力；领袖阵亡即终局，必须留桃。
+	if not _expect_tao_decision([
+			{"identity":"loyalist", "hp":3, "max_hp":4},
+			{"identity":"leader", "hp":2, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+		], false, "endangered_leader"):
+		return false
+	# 场景六：领袖自己只剩2点体力；领袖自保优先，即使队友残血也先回复自己。
+	if not _expect_tao_decision([
+			{"identity":"leader", "hp":2, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+		], true, "leader_self_preservation"):
+		return false
+	# 场景七：自己带两张桃（桃数大于体力的一半）；为只差1点体力的铁杆队友留桃。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":2},
+			{"identity":"rebel", "hp":2, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], false, "abundant_tao_keeps"):
+		return false
+	# 场景八：自己只有一张桃（桃数不超过体力的一半）；同样的队友残血，但先保证自己不被击杀。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":1},
+			{"identity":"rebel", "hp":2, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], true, "scarce_tao_self_first"):
+		return false
+	return true
+
+
+## 按给定座次构造留桃判定快照；每项只声明身份与体力，行动者固定为0号并携带一张【桃】。
+func _build_keep_tao_snapshot(players_spec: Array) -> Dictionary:
+	# 快照玩家数组；保持传入顺序即权威座次。
+	var players: Array = []
+	for index: int in range(players_spec.size()):
+		# 当前座次声明；缺失字段使用满体力领袖以外的中性默认值。
+		var spec: Dictionary = players_spec[index] as Dictionary
+		# 行动者手牌数量声明；只对0号生效，用于覆盖“桃充裕”与“桃稀缺”两种保留分降级分支。
+		var tao_count: int = int(spec.get("tao", 1)) if index == 0 else 0
+		# 行动者手牌；0号按声明数量放入实体【桃】，其余角色保持空手牌。
+		var hand: Array = []
+		for tao_index: int in range(tao_count):
+			hand.append(_card(901 + tao_index, "tao", 0))
+		players.append({
+			"player_id":index,
+			"identity":str(spec.get("identity", "rebel")),
+			"identity_revealed":true,
+			"alive":true,
+			"out_of_game":false,
+			"hp":int(spec.get("hp", 4)),
+			"max_hp":int(spec.get("max_hp", 4)),
+			"hand_count":hand.size(),
+			"hand":hand,
+			"equipment":{},
+			"judgment_area":[],
+			"wooden_ox_storage":[],
+			"chained":false,
+			"character_id":"xier",
+		})
+	return {"match_id":"ai_keep_tao_test", "players":players}
+
+
+## 校验一次【桃】自愈动作的最终评分是否符合期望；expected_usable 为 true 表示期望AI吃桃。
+func _expect_tao_decision(players_spec: Array, expected_usable: bool, label: String) -> bool:
+	# 判定快照；0号行动者已受伤，因此【桃】在规则上是合法动作。
+	var snapshot: Dictionary = _build_keep_tao_snapshot(players_spec)
+	# 标准出牌阶段动作；字段与控制器生成的合法动作保持一致。
+	var action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":901, "card_definition_id":"tao", "target_ids":[0], "payload":{}}
+	_policy.identity_model.begin_evaluation(snapshot)
+	# 通用基础分；包含身份态度、回复收益与保留价值。
+	var base_score: float = _policy.evaluator.score_action(snapshot, action, 0)
+	# 最终评分；叠加【桃】自身的留桃修正后再判定。
+	var score: float = GameDatabase.get_card_definition("tao").modify_ai_action_score(snapshot, action, base_score, _policy.evaluator)
+	_policy.identity_model.end_evaluation()
+	# 策略层以“分数严格大于0”作为执行动作的门槛，因此正分等价于AI会吃掉这张桃。
+	var usable: bool = score > 0.0
+	if usable != expected_usable:
+		return _fail("keep_tao_%s score=%.3f base=%.3f usable=%s" % [label, score, base_score, usable])
 	return true
 
 

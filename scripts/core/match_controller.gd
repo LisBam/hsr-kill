@@ -360,6 +360,11 @@ var skill_instances_by_player: Dictionary = {}
 ## 当前对局按实体牌 UID 索引的持续卡牌实例；装备离开区域或重新开局时会精确卸载对应事件订阅。
 var card_runtime_instances: Dictionary = {}
 
+## 当前对局按“承载角色ID → 效果ID → PlayerEffect”索引的角色持续效果实例。
+## 与 card_runtime_instances 同构：实例由控制器托管并持有强引用，生命周期只看承载角色，
+## 因此施加效果的技能实例阵亡、换将或被非锁定技失效压制都不会让效果停止结算。
+var player_effect_service: PlayerEffectService
+
 ## 事件树运行时；统一管理根事件、子事件、after 队列、选择暂停和回放历史。
 var event_scheduler: EventScheduler
 
@@ -1441,6 +1446,7 @@ func _teardown_previous_match_runtime() -> void:
 		conquest_mode.reset()
 	_uninstall_all_character_skills()
 	_uninstall_all_card_runtimes()
+	_uninstall_all_player_effects()
 	_conquest_temporary_exit_requested = false
 	_extra_turn_queue.clear()
 	_extra_turn_resume_player_ids.clear()
@@ -1466,6 +1472,12 @@ func _teardown_previous_match_runtime() -> void:
 func _rebuild_match_rule_services_and_root_event() -> void:
 	card_rules = CardRuleService.new(state, self)
 	player_mark_service = PlayerMarkService.new(state)
+	# 角色持续效果服务随规则服务一起重建；效果实例本身由角色身上的持久状态决定，因此重建不丢失任何效果。
+	if player_effect_service == null:
+		player_effect_service = PlayerEffectService.new(state)
+	else:
+		player_effect_service.state = state
+	player_effect_service.configure(self)
 	if reincarnation_skill_service == null:
 		reincarnation_skill_service = ReincarnationSkillService.new()
 	reincarnation_skill_service.configure(self)
@@ -1490,6 +1502,7 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 	timing_service.set_trigger_pause_condition(Callable(self, "_should_pause_rule_timing_dispatch"))
 	skill_instances_by_player.clear()
 	card_runtime_instances.clear()
+	_uninstall_all_player_effects()
 	event_scheduler.reset()
 	_gameplay_event_pause_token = -1
 	_conquest_replacement_settlement_pause_token = -1
@@ -1501,6 +1514,10 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 		_gameplay_event_pause_token = event_scheduler.pause_registry.acquire("gameplay", -1, "gameplay_pause_interface")
 	state.current_event_id = _runtime_root_event_id
 	state.event_history = event_scheduler.get_event_history_reference_copy()
+	# 角色持续效果按角色自己的持久状态重建；存档恢复开局与普通开局共用本入口，
+	# 因此施加者已经换将或已失去技能时，挂在目标身上的效果依旧会被完整恢复。
+	if player_effect_service != null:
+		player_effect_service.restore_effects()
 
 
 ## 重置所有按局清零的进度、AI 调度与请求字段；普通开局与存档恢复开局共用本入口。
@@ -1560,6 +1577,7 @@ func _discard_failed_match_start() -> void:
 		ahha_moment_system.shutdown()
 	_uninstall_all_character_skills()
 	_uninstall_all_card_runtimes()
+	_uninstall_all_player_effects()
 	if event_scheduler != null:
 		event_scheduler.reset()
 	ai_coordinator._policies.clear()
@@ -1575,6 +1593,7 @@ func _discard_failed_match_start() -> void:
 	starting_hand_mulligan = null
 	card_rules = null
 	player_mark_service = null
+	player_effect_service = null
 	effect_resolver = null
 	card_movement = null
 	modifier_pipeline = null
@@ -8612,6 +8631,58 @@ func _uninstall_all_card_runtimes() -> void:
 		if runtime != null:
 			runtime.uninstall_runtime()
 	card_runtime_instances.clear()
+
+
+## 返回当前对局的角色持续效果服务；缺失时按当前权威状态惰性创建。
+## 惰性创建让手工装配控制器的最小状态（测试、回放与调试入口）不需要额外补组件，
+## 也不会与正式开局路径重复创建：两条路径都只在服务为空时建立一次实例。
+func _ensure_player_effect_service() -> PlayerEffectService:
+	if player_effect_service == null:
+		player_effect_service = PlayerEffectService.new(state)
+	else:
+		# 权威状态可能已被整体替换；服务必须始终指向当前对局状态，否则读档重建会读到旧角色。
+		player_effect_service.state = state
+	player_effect_service.configure(self)
+	return player_effect_service
+
+
+## 为一名承载角色创建或复用一个持续效果实例；具体托管与生命周期由角色持续效果服务负责。
+## 内容侧只传入效果 ID，因此新增效果不需要修改本控制器；返回 null 表示该效果 ID 未登记。
+func install_player_effect(player_id: int, effect_id: String) -> PlayerEffect:
+	return _ensure_player_effect_service().install_effect(player_id, effect_id)
+
+
+## 移除一名角色身上的指定效果实例；承载者死亡、效果自然结束或重新开局时调用。
+func remove_player_effect(player_id: int, effect_id: String) -> void:
+	if player_effect_service == null:
+		return
+	player_effect_service.remove_effect(player_id, effect_id)
+
+
+## 返回一名角色身上的指定效果实例；不存在时返回 null，调用方据此决定是否创建。
+func get_player_effect(player_id: int, effect_id: String) -> PlayerEffect:
+	if player_effect_service == null:
+		return null
+	return player_effect_service.get_effect(player_id, effect_id)
+
+
+## 判断一名角色身上是否存在指定效果实例；供技能快速查询自己施加过的持续效果。
+func has_player_effect(player_id: int, effect_id: String) -> bool:
+	return get_player_effect(player_id, effect_id) != null
+
+
+## 移除一名角色身上的全部效果实例；角色死亡或需要完整清空某角色状态时调用。
+func clear_player_effects(player_id: int) -> void:
+	if player_effect_service == null:
+		return
+	player_effect_service.clear_player_effects(player_id)
+
+
+## 卸载上一局全部角色持续效果实例；必须在替换事件总线或状态前释放订阅。
+func _uninstall_all_player_effects() -> void:
+	if player_effect_service == null:
+		return
+	player_effect_service.reset()
 
 
 ## 创建玩家并随机分配身份；武将、体力与技能相关状态统一在选将完成后初始化。
