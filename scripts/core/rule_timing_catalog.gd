@@ -4,8 +4,9 @@ extends RefCounted
 ## 无名杀兼容时机目录。这里只保存稳定事件名与主动入口，不执行任何玩法效果或持有对局状态。
 
 ## 游戏、回合与六个标准阶段的全部已知监听时机；数组顺序按规则流程排列，修改会影响文档与测试中的标准顺序。
+## roundEnd 是真实轮末时机：普通回合结束且轮转回到轮锚点时派发一次，先于 roundStart，额外回合不派发。
 const GAME_PHASE_TIMINGS: Array[String] = [
-	"gameStart", "gameDrawBefore", "gameDrawBegin", "gameDrawAfter", "enterGame", "roundStart",
+	"gameStart", "gameDrawBefore", "gameDrawBegin", "gameDrawAfter", "enterGame", "roundEnd", "roundStart",
 	"phaseBefore", "phaseBeforeStart", "phaseBeforeEnd", "phaseBeginStart", "phaseBegin", "phaseChange", "phaseEnd", "phaseAfter", "phaseOver", "phaseCancelled",
 	"phaseZhunbeiBefore", "phaseZhunbeiBegin", "phaseZhunbei", "phaseZhunbeiEnd", "phaseZhunbeiAfter", "phaseZhunbeiCancelled", "phaseZhunbeiSkipped",
 	"phaseJudgeBefore", "phaseJudgeBegin", "phaseJudge", "phaseJudgeEnd", "phaseJudgeAfter", "phaseJudgeCancelled", "phaseJudgeSkipped",

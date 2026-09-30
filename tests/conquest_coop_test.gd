@@ -161,8 +161,10 @@ func _test_vote_match_flow() -> bool:
 		return _fail("vote_enemy_selection_locked")
 	# 本地真人玩家选将；AI玩家2与两名敌人随后由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if player_candidates.is_empty() or not _controller.select_character(0, player_candidates[0]):
-		return _fail("vote_player_selection")
+	# 首个未被AI玩家2占用的候选；固定种子下的候选列表可能已被该AI占用首项。
+	var human_character_id: String = _pick_available_human_character_id(0)
+	if player_candidates.is_empty() or human_character_id.is_empty() or not _controller.select_character(0, human_character_id):
+		return _fail("vote_player_selection candidates=%s free=%s" % [player_candidates, human_character_id])
 	for _frame_index: int in range(40):
 		if str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
 			break
@@ -279,8 +281,10 @@ func _test_individual_match_flow() -> bool:
 	if not _controller.start_match(4, 20260727, IdentityRules.MODE_CONQUEST):
 		return _fail("individual_start_match")
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if player_candidates.is_empty() or not _controller.select_character(0, player_candidates[0]):
-		return _fail("individual_player_selection")
+	# 首个未被AI玩家2占用的候选；固定种子下的候选列表可能已被该AI占用首项。
+	var human_character_id: String = _pick_available_human_character_id(0)
+	if player_candidates.is_empty() or human_character_id.is_empty() or not _controller.select_character(0, human_character_id):
+		return _fail("individual_player_selection candidates=%s free=%s" % [player_candidates, human_character_id])
 	for _frame_index: int in range(40):
 		if str(_controller.state.opportunity_state.get("stage", "")) == "choosing":
 			break
@@ -402,6 +406,29 @@ func _create_controller() -> void:
 	_controller.ai_action_delay_seconds = 0.0
 	# 投票结果公开等待；0.05秒足以让专项读取revealing快照，同时避免正式默认2秒拖慢无头回归。
 	_controller.opportunity_system.vote_reveal_duration_seconds = 0.05
+
+
+## 返回本地真人玩家首个仍未被其他玩家选走的候选武将ID；全部候选都被占用时返回空字符串。
+## 玩家2固定为内置AI并会立即自动确认武将，固定种子选将会随武将池变化而换人，
+## 因此真人候选列表的首项可能已经被该AI占用，测试不能盲目提交 candidates[0]。
+func _pick_available_human_character_id(human_player_id: int) -> String:
+	# 人类玩家本次随机候选；为空表示选将阶段尚未开放。
+	var candidates: Array[String] = _controller.character_selection.get_candidates(human_player_id)
+	if candidates.is_empty():
+		return ""
+	# 其他玩家已经确认的武将；选将服务会拒绝重复占用同一武将。
+	var taken_character_ids: Array[String] = []
+	for seated_player: PlayerState in _controller.state.players:
+		if seated_player.player_id == human_player_id:
+			continue
+		# 当前座次已确认武将；尚未确认时为空字符串。
+		var seated_character_id: String = _controller.character_selection.get_selection(seated_player.player_id)
+		if not seated_character_id.is_empty():
+			taken_character_ids.append(seated_character_id)
+	for candidate_id: String in candidates:
+		if not taken_character_ids.has(candidate_id):
+			return candidate_id
+	return ""
 
 
 ## 恢复本测试修改的全局开局设置，保证其他无头测试与手动开局读取用户原有值。

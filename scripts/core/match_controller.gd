@@ -146,6 +146,7 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"recast_draw",
 	"current_player_death",
 	"round_end_restore",
+	"round_end_after_restore",
 	"conquest_enemy_defeat",
 	"conquest_enemy_replacement",
 	"opportunity_resolution",
@@ -6804,6 +6805,27 @@ func set_all_hand_cards_view_as(player_id: int, view_as_definition_id: String, s
 	return affected_count
 
 
+## 将指定角色的一张普通手牌持续视为指定牌名，并在同一视为中复制该牌的花色与点数；实体离开该角色手牌区时自动恢复。
+## 与 set_all_hand_cards_view_as 的差别只在牌面：本入口用于“连花色点数一起视为”，覆写后的花色点数会被全部既有规则读取点直接读到。
+## 本端口只负责写入视为与记录日志，不判断发动次数、时机或目标合法性，这些规则属于调用方技能内容。
+func set_hand_card_view_as_with_face(player_id: int, card_uid: int, view_as_definition_id: String, suit: String, rank: int, source_id: String = "runtime") -> bool:
+	# 目标持有者；死亡或离场角色不能获得新的手牌视为，避免效果落在已失效的座位上。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 逻辑牌定义；不存在的牌名不允许写入，避免产生无法解析的实体牌名。
+	if GameDatabase.get_card(view_as_definition_id).is_empty():
+		return false
+	# 目标实体牌；必须仍位于该角色的普通手牌区，装备区与木牛“粮”不属于手牌区。
+	var card: CardInstance = player.find_hand_card(card_uid)
+	if card == null or not card.set_hand_view_as_with_face(view_as_definition_id, suit, rank, source_id):
+		return false
+	# 日志文本复用统一实体牌描述；describe_card 读取的正是覆写后的逻辑牌名与逻辑花色点数。
+	add_log("%s的一张手牌视为%s，直到离开其手牌区。" % [format_player_state_log_name(player), describe_card(card)])
+	_emit_state()
+	return true
+
+
 ## 为指定持有者的一张普通手牌写入通用标记标签；标签不改变牌名，并在实体离开当前手牌区时自动清除。
 func set_hand_card_mark_tag(holder_id: int, card_uid: int, tag_id: String, tag_data: Dictionary) -> bool:
 	# 当前手牌持有者；死亡、离场或不存在的角色不能获得新的手牌标记。
@@ -11474,6 +11496,10 @@ func _resume_next_rule_continuation() -> void:
 			if state.turn_number == int(context.get("turn_number", -1)):
 				_advance_after_current_player_death(int(context.get("player_id", -1)), int(context.get("generation", -1)))
 		"round_end_restore":
+			# roundEnd 尚未派发时被延后的轮末边界：恢复后必须从 roundEnd 步骤重新进入。
+			_begin_round_end_boundary(int(context.get("finished_player_id", -1)))
+		"round_end_after_restore":
+			# roundEnd 已经派发、限时离场恢复之后才出现的屏障：直接进入轮末机缘，不重复派发 roundEnd。
 			_continue_round_end_after_restore(int(context.get("finished_player_id", -1)))
 		"conquest_enemy_defeat":
 			_finish_conquest_enemy_defeat(context)
@@ -13197,14 +13223,58 @@ func _continue_after_phase_after(player_id: int) -> void:
 	# 普通轮末边界；额外回合不会重复触发轮末机缘保底。
 	var is_round_boundary: bool = not _current_turn_is_extra and round_anchor_player != null and normal_next_player != null and normal_next_player.player_id == round_anchor_player.player_id
 	if is_round_boundary:
-		# “直到本轮结束”的角色在轮末机缘和下一轮下家计算之前返回，确保恢复后的完整座次参与后续模式规则。
-		_restore_round_limited_out_of_game_players(state.round_number + 1)
+		# 轮末边界统一交给步骤序列：roundEnd 时机 → “直到本轮结束”恢复 → 轮末机缘。
+		# 该分支原有的嵌套结算屏障延后语义保持不变，只是延后恢复后从 roundEnd 步骤重新进入。
 		if _has_nested_settlement_barrier():
 			_defer_rule_continuation("round_end_restore", {"finished_player_id":player_id})
 			return
-		_continue_round_end_after_restore(player_id)
+		_begin_round_end_boundary(player_id)
 		return
 	_schedule_phase_transition(player_id, "finish", Callable(self, "_start_queued_or_normal_turn").bind(player_id))
+
+
+## 进入真实轮末边界：先派发 roundEnd 时机，再恢复“直到本轮结束”的离场角色，最后进入轮末机缘。
+## 三个步骤共享同一条可暂停序列，因此 roundEnd 处理者创建选择时，后续恢复与机缘都会等待其结算完成且只执行一次。
+func _begin_round_end_boundary(finished_player_id: int) -> void:
+	if state == null or state.game_over or state.current_player_id != finished_player_id:
+		return
+	var steps: Array[Callable] = [_emit_round_end_timing, _restore_round_limited_players, _complete_round_end_boundary]
+	run_rule_sequence(steps, {"finished_player_id":finished_player_id})
+
+
+## 轮末第一步：派发 roundEnd 标准时机；事件数据固定携带结束轮数与结束回合角色，供内容层独立使用。
+## 此时 state.round_number 尚未递增（递增发生在下一回合的 _start_turn），因此该值就是刚刚结束的那一轮。
+func _emit_round_end_timing(sequence: RuleStepSequence) -> void:
+	# 本次轮末的结束角色；等待期间一旦换人结束回合，旧序列不再继续派发。
+	var finished_player_id: int = int(sequence.context.get("finished_player_id", -1))
+	if state == null or state.game_over or state.current_player_id != finished_player_id:
+		sequence.finish()
+		return
+	sequence.wait_for_timing(emit_sequence_timing(sequence, "roundEnd", finished_player_id, finished_player_id, finished_player_id, {
+		"round_number":state.round_number,
+		"finished_player_id":finished_player_id,
+		"turn_number":state.turn_number,
+	}))
+
+
+## 轮末第二步：恢复全部“直到本轮结束”的限时离场角色；恢复过程若产生嵌套结算屏障则改用轮末后恢复类型续接。
+func _restore_round_limited_players(sequence: RuleStepSequence) -> void:
+	# 本次轮末的结束角色；与第一步保持同一守卫，避免过期序列改动座次。
+	var finished_player_id: int = int(sequence.context.get("finished_player_id", -1))
+	if state == null or state.game_over or state.current_player_id != finished_player_id:
+		sequence.finish()
+		return
+	# “直到本轮结束”的角色在轮末机缘和下一轮下家计算之前返回，确保恢复后的完整座次参与后续模式规则。
+	_restore_round_limited_out_of_game_players(state.round_number + 1)
+	if _has_nested_settlement_barrier():
+		_defer_rule_continuation("round_end_after_restore", {"finished_player_id":finished_player_id})
+		sequence.finish()
+		return
+
+
+## 轮末第三步：离场角色全部恢复后触发轮末机缘，并按恢复后的座次安排下一回合。
+func _complete_round_end_boundary(sequence: RuleStepSequence) -> void:
+	_continue_round_end_after_restore(int(sequence.context.get("finished_player_id", -1)))
 
 
 ## 轮末限时离场角色全部返回后触发轮末机缘并按恢复后的座次进入下一轮。

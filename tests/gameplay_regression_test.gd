@@ -2,6 +2,15 @@ extends Node
 
 ## 本轮玩法回归测试。验证逐目标无懈、群体锦囊续算、濒死桃酒同窗、朱雀羽扇选择和木牛重铸边界。
 
+## 延时锦囊表现序列的等待上限（毫秒）；满负载顺序回归时单帧调度可能超过固定等待预算，因此按条件等待并以本上限兜底。
+const DELAYED_JUDGMENT_SETTLE_TIMEOUT_MSEC: int = 2000
+
+## 延时锦囊表现序列的期望条数；两张延时锦囊各贡献“延时锦囊展示”与“判定结果展示”一条。
+const EXPECTED_DELAYED_JUDGMENT_PRESENTATION_COUNT: int = 4
+
+## 延时锦囊表现序列的单次轮询间隔（秒）；与测试配置的0.02秒节拍一致，只用于缩短轮询空转。
+const DELAYED_JUDGMENT_POLL_INTERVAL_SECONDS: float = 0.02
+
 ## 测试使用的权威控制器；按正式依赖结构装配，所有选择仍通过标准 PlayerAction 提交。
 var _controller: MatchController
 
@@ -1177,7 +1186,13 @@ func _test_delayed_judgment_presentation_sequence() -> bool:
 	if _presentation_history.size() != 1 or str(_presentation_history[0].get("event_name", "")) != "delayedJudge" or int((_presentation_history[0].get("card_data", {}) as Dictionary).get("uid", -1)) != indulgence.uid or not _controller.state.get_player(0).judgment_area.has(supply_shortage):
 		return _fail("delayed_judgment_immediate=%s" % [_presentation_history])
 	# 四段0.02秒节拍加调度余量；完成后应进入正常出牌阶段并保留严格交替的四次表现。
-	await get_tree().create_timer(0.12).timeout
+	# 这里按条件等待而不是固定0.12秒：顺序跑完数十个场景后再执行本测试时，单帧调度可能超过固定预算，
+	# 会使已经正确推进的流程被判失败；等待上限保留兜底，真正缺少表现或阶段不推进时仍会以实际观测值失败。
+	var settle_deadline_msec: int = Time.get_ticks_msec() + DELAYED_JUDGMENT_SETTLE_TIMEOUT_MSEC
+	while _presentation_history.size() < EXPECTED_DELAYED_JUDGMENT_PRESENTATION_COUNT and Time.get_ticks_msec() < settle_deadline_msec:
+		await get_tree().create_timer(DELAYED_JUDGMENT_POLL_INTERVAL_SECONDS).timeout
+	while _controller.state.current_phase != "play" and Time.get_ticks_msec() < settle_deadline_msec:
+		await get_tree().create_timer(DELAYED_JUDGMENT_POLL_INTERVAL_SECONDS).timeout
 	var presentation_keys: Array[String] = []
 	for presentation: Dictionary in _presentation_history:
 		# 单次表现键；稳定事件名与实体 UID 共同排除同一判定牌被重复展示。

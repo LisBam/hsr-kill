@@ -100,12 +100,14 @@ var _uses_legacy_non_hand_selection_position: bool = false
 var _artwork_texture: Texture2D
 
 ## 待显示的花色点数字符串；默认与场景编辑器的黑桃7预览一致，configure 会在运行时覆盖。
+## 该文本始终描述**实体牌面**：复制型视为生效时读取快照中的实体花色点数，逻辑牌面只出现在视为横条上。
 var _suit_rank_text: String = "♠7"
 
 ## 待显示的卡牌名称；默认使用场景编辑器示例名称，绑定实体牌后按全局名称模式覆盖。
 var _display_name_text: String = "杀"
 
-## 待显示的视为牌名称；空字符串表示实体牌没有临时视为效果，横条保持隐藏。
+## 待显示的视为牌文本；空字符串表示实体牌没有临时视为效果，横条保持隐藏。
+## 复制型视为会在牌名前缀上逻辑花色与点数（例如“♥A 桃”），普通换名视为只显示逻辑牌名。
 var _view_as_display_name_text: String = ""
 
 ## 当前实体手牌的通用标记标签数组；按order与稳定ID排序，离手快照通常为空。
@@ -263,13 +265,22 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 			var view_as_definition: Dictionary = GameDatabase.get_card(view_as_definition_id) if not view_as_definition_id.is_empty() else definition
 			_view_as_display_name_text = GameSettings.resolve_card_display_name(view_as_definition)
 			_view_as_card_definition = view_as_definition.duplicate(true)
+			# 视为逻辑花色；只有“连同花色点数一起视为”的复制型视为才非空，普通换名视为保持空值。
+			var view_as_suit: String = str(card.get("view_as_suit", ""))
+			if not view_as_suit.is_empty():
+				# 横条文本；按“花色＋点数＋视为牌名”输出，让玩家一眼看出该牌当前被当作哪张实体牌使用。
+				_view_as_display_name_text = "%s%s %s" % [_suit_symbol(view_as_suit), _rank_text(int(card.get("view_as_rank", 0))), _view_as_display_name_text]
 	_card_definition = visual_definition
 	if _view_as_card_definition.is_empty():
 		_view_as_card_definition = definition.duplicate(true)
+	# 实体牌面花色；复制型视为生效时角标必须保持实体原值，为空表示当前没有牌面复制。
+	var presentation_suit: String = str(card.get("presentation_original_suit", ""))
+	# 实体牌面点数；与实体牌面花色成对出现，牌面复制缺失时回退当前快照点数。
+	var presentation_rank: int = int(card.get("presentation_original_rank", 0))
 	# 花色文本；红色花色使用单独字体色，黑色花色保持深褐色。
-	var suit_text: String = _suit_symbol(str(card.get("suit", "")))
+	var suit_text: String = _suit_symbol(presentation_suit if not presentation_suit.is_empty() else str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。
-	var rank_text: String = _rank_text(int(card.get("rank", 0)))
+	var rank_text: String = _rank_text(presentation_rank if not presentation_suit.is_empty() else int(card.get("rank", 0)))
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
 	var display_name: String = GameSettings.resolve_card_display_name(visual_definition)
 	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。

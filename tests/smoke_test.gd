@@ -67,6 +67,9 @@ const EXPECTED_CUSTOM_CARD_NAMES: Dictionary = {
 ## 烟雾测试最多等待的进程帧数；达到上限仍未发现运行时错误也会输出阶段状态。
 const MAX_FRAMES: int = 1200
 
+## 等待开局选择自动结算的最大帧数；零延迟配置下 AI 只需数帧即可答完回合开始窗口里的技能询问。
+const OPENING_SETTLE_MAX_FRAMES: int = 60
+
 ## 测试用对局控制器；在 _initialize 中按正式场景的组件结构装配。
 var _controller: MatchController
 
@@ -183,8 +186,9 @@ func _run() -> void:
 	# 技能元数据数量；登记大黑塔的解构、灵感与看破、白厄的薪继与刻律德菈的征服后，共登记82个独立技能源码定义。
 	# 新增欢愉派系火花的【好戏】与【连戏】后为84个；【好戏】是首个欢愉技，【连戏】是普通主动技能。
 	# 新增爻光的【凶星】【鸿运】以及星与穹共用的【咬它】【好活】【当赏】后为89个。
+	# 新增星际和平公司真珠的【补缀】【鉴映】后为91个；【补缀】是第二个欢愉技，参演编号104。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 89:
+	if skill_definition_count != 91:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -261,15 +265,16 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	# 武将定义数量；新增大黑塔后，共登记37名角色定义；新增欢愉派系火花后为38名。
-	# 新增爻光、星（欢愉派系）与穹（欢愉派系）后为41名。
+	# 新增爻光、星（欢愉派系）与穹（欢愉派系）后为41名。新增真珠后为42名。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 41:
+	if character_definition_count != 42:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
 	# 势力展示元数据数量；当前35名武将定义共同使用8个独立势力主题；新增欢愉势力后为9个。
+	# 新增星际和平公司后为10个；新势力使用铜色b87333与简称“司”。
 	var faction_definition_count: int = GameDatabase.factions.size()
-	if faction_definition_count != 9:
+	if faction_definition_count != 10:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
 		get_tree().quit(1)
 		return
@@ -1255,6 +1260,10 @@ func _run() -> void:
 	var four_player_leader: PlayerState = _controller._find_player_by_identity("leader")
 	# 四人局领袖武将基础体力；应与实际上限完全一致。
 	var four_player_leader_base_hp: int = int(GameDatabase.get_character(four_player_leader.character_id).get("max_hp", 4))
+	if not await _settle_opening_choices():
+		printerr("SMOKE_FAIL first_turn_opening_choice current=%d pending=%s" % [_controller.state.current_player_id, _controller._pending_card_choice])
+		get_tree().quit(1)
+		return
 	if _controller.state.current_player_id != four_player_leader.player_id or _controller.state.turn_number != 1 or four_player_leader.max_hp != four_player_leader_base_hp:
 		printerr("SMOKE_FAIL first_turn seat=%d turn=%d" % [_controller.state.current_player_id + 1, _controller.state.turn_number])
 		get_tree().quit(1)
@@ -1289,6 +1298,10 @@ func _run() -> void:
 	var five_player_leader: PlayerState = _controller._find_player_by_identity("leader")
 	# 五人局领袖武将基础体力；实际上限应比该值高1点。
 	var five_player_leader_base_hp: int = int(GameDatabase.get_character(five_player_leader.character_id).get("max_hp", 4))
+	if not await _settle_opening_choices():
+		printerr("SMOKE_FAIL five_player_opening_choice current=%d pending=%s" % [_controller.state.current_player_id, _controller._pending_card_choice])
+		get_tree().quit(1)
+		return
 	if _controller.state.current_player_id != five_player_leader.player_id or five_player_leader.max_hp != five_player_leader_base_hp + 1:
 		printerr("SMOKE_FAIL leader_hp_bonus seat=%d hp=%d base=%d" % [five_player_leader.player_id + 1, five_player_leader.max_hp, five_player_leader_base_hp])
 		get_tree().quit(1)
@@ -1300,6 +1313,18 @@ func _run() -> void:
 			await _finish_success("SMOKE_PASS game_over winner=%s actions=%d frames=%d" % [_controller.state.winner, _controller.state.action_sequence, frame_index])
 			return
 	await _finish_success("SMOKE_PASS running phase=%s turn=%d actions=%d" % [_controller.state.current_phase, _controller.state.turn_number, _controller.state.action_sequence])
+
+
+## 等待开局回合开始窗口自动结算完成；返回false表示超时后仍存在待处理选择或首回合尚未开始。
+## 部分武将技能会在回合开始/游戏开始时立即创建选择（例如爻光的【凶星】），而固定种子选将会随武将池变化而换人，
+## 因此不能假设 start_match 返回时首回合已经同步开始：必须先让零延迟 AI 自行答完这些开局选择。
+func _settle_opening_choices() -> bool:
+	# 已等待帧数；达到上限即判定开局选择无法自动结算。
+	var waited_frames: int = 0
+	while waited_frames < OPENING_SETTLE_MAX_FRAMES and (_controller.state.current_player_id < 0 or not _controller._pending_card_choice.is_empty()):
+		waited_frames += 1
+		await get_tree().process_frame
+	return _controller.state.current_player_id >= 0 and _controller._pending_card_choice.is_empty()
 
 
 ## 输出成功结果并释放纯 AI 测试控制器；额外等待一帧让零延迟 AI 计时器完成断连，避免测试退出时残留 SceneTreeTimer。
