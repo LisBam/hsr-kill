@@ -1,7 +1,10 @@
 extends SkillDefinition
 
-## 【补缀】欢愉技源码。阿哈时刻按参演编号104驱动：指定至多三名角色各获得1点护盾，这些护盾在本轮结束时各失去1点。
-## 本轮结束使用真实标准时机 roundEnd（见 RuleTimingCatalog），不是“下一轮开始时”清理，也不是内容层自造事件。
+## 【补缀】欢愉技源码。阿哈时刻按参演编号104驱动：指定至多三名角色各获得1点护盾，这些护盾在持有者的下一个回合结束时各失去1点。
+## 到期使用持有者本人的标准回合尾时机 phaseAfter（role="player"，见 RuleTimingCatalog），不是轮末 roundEnd，也不是内容层自造事件：
+## 演出时先记下当时的权威回合序号，只有当前回合序号严格大于登记值时才代表“你的下一个回合”已经走到末尾，
+## 因此同一回合内的演出不会当回合到期，别人回合的回合尾也不会让它提前到期，额外回合与被翻面跳过的回合同样算持有者的一个回合。
+## 持有者死亡或离场后，技能不再接收任何回合尾时机（本技能因此不覆盖 can_trigger_while_owner_inactive），护盾按原文保留、不再到期。
 ## 补充：欢愉技一律强制发动，本技能不创建“是否发动”询问，目标选择窗口也不提供取消，选择0名目标即为合法结算。
 
 ## 阿哈时刻参演编号；与静态定义 performance_number 共用同一常量，避免两处数值分叉。
@@ -16,7 +19,7 @@ const MAX_TARGET_COUNT: int = 3
 ## 每名被指定角色获得的护盾数；固定1点，与原文“各获得1点护盾”一致。
 const SHIELD_GRANT_AMOUNT: int = 1
 
-## 每名被指定角色在轮末失去的护盾数；固定1点，与原文“各失去1点护盾”一致。
+## 每名被指定角色在持有者下一个回合结束时失去的护盾数；固定1点，与原文“各失去1点护盾”一致。
 const SHIELD_LOSS_AMOUNT: int = 1
 
 ## 目标选择请求种类；恢复时按该值分流到结算入口。
@@ -27,7 +30,7 @@ const TARGET_CHOICE_KIND: String = "buzhui_targets"
 ## 因此 allow_cancel 不能复用为“可以少选”的语义。
 const ALLOW_TARGET_CANCEL: bool = false
 
-## AI：友方获得1点护盾的基础收益；低于【加护】的常驻护盾估值，因为本轮结束时护盾必然消失。
+## AI：友方获得1点护盾的基础收益；低于【加护】的常驻护盾估值，因为护盾会在持有者下一个回合结束时消失。
 const AI_FRIENDLY_SHIELD_VALUE: float = 1.6
 
 ## AI：目标每点已损失体力追加的优先级；用于“队友多时优先血量较少的友方”。
@@ -39,12 +42,14 @@ const AI_SELF_SHIELD_DISCOUNT: float = 0.85
 ## AI：敌方获得1点护盾的负收益；负值保证AI在只有敌方可选时主动提交0名目标。
 const AI_HOSTILE_SHIELD_VALUE: float = -1.2
 
-## 本次演出已实际登记到轮末扣盾的角色ID；同一次演出内重复选择同一角色只登记一次。
+## 本次演出已实际登记到到期扣盾的角色ID；同一次演出内重复选择同一角色只登记一次。
 var _recorded_target_ids: Array[int] = []
 
-## 本轮各次演出的轮末扣盾记录；每项为 {"round_number":int, "target_ids":Array[int]}。
-## 只保存基础值，便于网络快照与回放恢复；同轮多次演出会留下多条记录，轮末逐条各扣1点护盾。
-var _round_end_shield_records: Array = []
+## 尚未到期的护盾记录；每项为 {"granted_turn_number":int, "target_ids":Array[int]}。
+## granted_turn_number 是演出发生时的权威回合序号：持有者之后遇到的、序号更大的第一个回合尾才会整条消费，
+## 因此同一次演出只扣一次，而同一回合内多次演出会各留一条记录、到期时逐条各扣1点护盾。
+## 只保存基础值，便于网络快照与回放恢复。
+var _shield_expiry_records: Array = []
 
 
 ## 写入欢愉技静态信息；技能描述严格保持需求提供的原文。
@@ -55,22 +60,18 @@ func _init() -> void:
 		"trigger":"passive",
 		"joy_skill":true,
 		"performance_number":PERFORMANCE_NUMBER,
-		"description":"欢愉技，参演编号104，指定至多三名角色，这些角色各获得1点护盾。本轮结束时，这些角色各失去1点护盾。",
+		"description":"欢愉技，参演编号104，指定至多三名角色，这些角色各获得1点护盾。你的下一个回合结束时，这些角色各失去1点护盾。",
 	})
 
 
-## 订阅真实轮末时机；maintenance只跳过“非锁定技失效”检查，用于持续效果的到期清理。
+## 订阅持有者本人的回合尾时机；护盾到期属于已经发放的持续效果，只随持有者自己的回合推进。
+## 不使用 global 订阅：护盾绑定“你的下一个回合”，其他角色的回合尾不得让它提前到期；
+## 该时机同时覆盖普通回合尾、额外回合尾与背面朝上被跳过的回合尾，三者都会经由控制器统一回合尾入口派发。
 func install() -> void:
-	subscribe_timing("roundEnd", _on_round_end, "global", 0, false, false, Callable(), false, true)
+	subscribe_timing("phaseAfter", _on_owner_turn_end, "player")
 
 
-## 护盾的轮末到期属于已经生效的持续效果清理，不因技能持有者中途阵亡而失效。
-## 本技能只订阅 roundEnd，因此该覆盖不会让死亡持有者接收任何其他时机或产生新收益。
-func can_trigger_while_owner_inactive(_event: RuleEvent) -> bool:
-	return true
-
-
-## 阿哈时刻的唯一执行入口：先选择0至3名角色，再统一发放护盾并登记轮末扣盾。
+## 阿哈时刻的唯一执行入口：先选择0至3名角色，再统一发放护盾并登记到期扣盾记录。
 func perform_joy_skill(context: Dictionary) -> void:
 	# 直接动作目标；由调试或回放入口显式给出时跳过选择窗口，正常演出路径不携带该字段。
 	if context.has("target_ids"):
@@ -102,9 +103,9 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return true
 
 
-## 结算补缀：向全部有效目标各发放1点护盾，并按本轮登记一条轮末扣盾记录，最后回报演出结束。
+## 结算补缀：向全部有效目标各发放1点护盾，并登记一条到期扣盾记录，最后回报演出结束。
 func _execute_buzhui(selected_target_ids: Array[int]) -> void:
-	# 本次演出实际获得护盾的角色；等待期间死亡、离场的目标由护盾端口拒绝，不写入轮末记录。
+	# 本次演出实际获得护盾的角色；等待期间死亡、离场的目标由护盾端口拒绝，不写入到期记录。
 	var granted_target_ids: Array[int] = []
 	# 本次演出的去重结果；同一次演出内重复点名同一角色只应发放并登记一次。
 	_recorded_target_ids.clear()
@@ -116,7 +117,7 @@ func _execute_buzhui(selected_target_ids: Array[int]) -> void:
 		if get_skill_player(target_id).shield(SHIELD_GRANT_AMOUNT, get_owner_skill_player()) > 0:
 			granted_target_ids.append(target_id)
 	if not granted_target_ids.is_empty():
-		_register_round_end_record(granted_target_ids)
+		_register_shield_expiry_record(granted_target_ids)
 	announce_activation({
 		"target_ids":selected_target_ids.duplicate(),
 		"shielded_target_ids":granted_target_ids.duplicate(),
@@ -125,34 +126,37 @@ func _execute_buzhui(selected_target_ids: Array[int]) -> void:
 	finish_joy_skill_performance()
 
 
-## 登记一条轮末扣盾记录；轮数取当前权威轮数，轮末按“小于等于结束轮数”消费。
-func _register_round_end_record(granted_target_ids: Array[int]) -> void:
-	# 当前权威轮数；补缀总在回合开始前的阿哈时刻演出，因此该值就是本次护盾应当到期的轮数。
-	var current_round_number: int = int(host.state.round_number) if host != null and host.get("state") != null else 0
-	_round_end_shield_records.append({
-		"round_number":current_round_number,
+## 登记一条到期扣盾记录；回合序号取当前权威回合序号，代表本记录发生在该回合的回合尾之前。
+func _register_shield_expiry_record(granted_target_ids: Array[int]) -> void:
+	# 当前权威回合序号；补缀总在某个回合开始前的阿哈时刻（或轮末补触发的阿哈时刻）演出，
+	# 因此该值通常是上一个已结束回合的序号：持有者自己的下一个回合开始时序号才会递增，其回合尾即可消费本记录。
+	# 若演出发生在持有者自己的回合进行中（由其他技能驱动的演出），该值就是本回合序号，本回合尾按等号条件保留，留到下一个回合尾。
+	var current_turn_number: int = int(host.state.turn_number) if host != null and host.get("state") != null else 0
+	_shield_expiry_records.append({
+		"granted_turn_number":current_turn_number,
 		"target_ids":granted_target_ids.duplicate(),
 	})
 
 
-## 轮末清理：让本轮全部被指定角色各失去1点护盾；死亡、离场或护盾为0的目标由权威端口自然跳过。
-func _on_round_end(event: RuleEvent) -> void:
+## 持有者回合尾清理：让登记在此前回合的护盾记录各失去1点护盾；死亡、离场或护盾为0的目标由权威端口自然跳过。
+## 同一回合内留下的记录（登记序号不小于当前回合序号）属于“你的这个回合”，必须留到持有者的下一个回合尾。
+func _on_owner_turn_end(event: RuleEvent) -> void:
 	if event == null:
 		return
-	# 结束轮数；事件数据优先，异常缺失时回退当前权威轮数，保证清理不会因为载荷缺失而整轮丢失。
-	var ending_round_number: int = int(event.data.get("round_number", host.state.round_number))
-	# 尚未消费的记录；轮数更大的记录属于后续轮次，必须保留到对应轮末再结算。
+	# 当前回合序号；事件数据优先，异常缺失时回退当前权威回合序号，保证清理不会因为载荷缺失而整条丢失。
+	var current_turn_number: int = int(event.data.get("turn_number", host.state.turn_number))
+	# 尚未到期的记录；登记序号更大的记录属于持有者尚未走完的回合，必须保留到那时再结算。
 	var remaining_records: Array = []
-	for record_variant: Variant in _round_end_shield_records:
-		# 当前到期记录；结构异常时直接丢弃，避免污染后续轮次。
+	for record_variant: Variant in _shield_expiry_records:
+		# 当前到期记录；结构异常时直接丢弃，避免污染后续回合。
 		var record: Dictionary = record_variant as Dictionary
-		if int(record.get("round_number", 0)) > ending_round_number:
+		if int(record.get("granted_turn_number", 0)) >= current_turn_number:
 			remaining_records.append(record)
 			continue
 		for target_variant: Variant in record.get("target_ids", []) as Array:
 			# 目标稳定玩家ID；护盾扣减端口负责拒绝已死亡、已离场或没有护盾的角色。
 			get_skill_player(int(target_variant)).loseShield(SHIELD_LOSS_AMOUNT, get_owner_skill_player())
-	_round_end_shield_records = remaining_records
+	_shield_expiry_records = remaining_records
 
 
 ## 返回当前全部可作为目标的角色ID；必须存活且未离场，“一名角色”包含技能持有者本人。

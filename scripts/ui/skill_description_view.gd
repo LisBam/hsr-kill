@@ -12,6 +12,11 @@ const STRIKE_OPEN_TAG: String = "[s]"
 ## 删除线标记的结束标记；必须与开始标记成对出现，未闭合的开始标记延伸到所在分段末尾。
 const STRIKE_CLOSE_TAG: String = "[/s]"
 
+## 被划掉片段的颜色语义键；使用主题危险色让“已失效”的原文一眼可见，
+## 而不是与正文同色的细删线（正文次级色在深色面板上几乎看不出划线）。
+## 该颜色在每次重绘时读取，因此切换主题后由 refresh_ui_style 自动跟随。
+const STRIKE_COLOR_KEY: String = "danger"
+
 ## 当前完整技能说明原文；只用于重绘和测试查询，任何分段都不会改写该字符串。
 var _source_description: String = ""
 
@@ -27,6 +32,10 @@ var _rendered_segments: Array[Dictionary] = []
 ## 最近一次绘制实际写入控件的可见纯文本；删除线标记已剥离，与分段元数据互补，
 ## 供界面回归验证“标记被解析成删除线而不是被当成普通文字画出来”。
 var _rendered_visible_text: String = ""
+
+## 最近一次绘制中被删除线划掉的片段颜色；每项为 "#rrggbbaa"，
+## 供界面回归验证被划掉的原文确实使用了醒目色，而不是与正文同色的默认细线。
+var _rendered_strike_colors: Array[String] = []
 
 
 ## 初始化自动换行与内容自适应；该视图只展示文字，不接收鼠标或滚动输入。
@@ -63,6 +72,11 @@ func get_rendered_visible_text() -> String:
 	return _rendered_visible_text
 
 
+## 返回最近一次绘制中被删除线划掉的片段颜色；没有被划掉的片段时为空数组。
+func get_rendered_strike_colors() -> Array[String]:
+	return _rendered_strike_colors.duplicate()
+
+
 ## 按当前活动主题重绘全部分段颜色；技能文本和轮回状态保持不变。
 func refresh_ui_style() -> void:
 	add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
@@ -74,6 +88,7 @@ func _render_description() -> void:
 	clear()
 	_rendered_segments.clear()
 	_rendered_visible_text = ""
+	_rendered_strike_colors.clear()
 	if _source_description.is_empty():
 		return
 	# 普通正文颜色；轮回技标签、触发条件、X说明和跨轮回节持续效果均使用该颜色。
@@ -156,14 +171,27 @@ func _append_text_with_strike(segment_text: String) -> void:
 		var content_start: int = open_index + STRIKE_OPEN_TAG.length()
 		var close_index: int = segment_text.find(STRIKE_CLOSE_TAG, content_start)
 		if close_index < 0:
-			push_strikethrough()
-			_append_visible_text(segment_text.substr(content_start))
-			pop()
+			_append_struck_text(segment_text.substr(content_start))
 			return
-		push_strikethrough()
-		_append_visible_text(segment_text.substr(content_start, close_index - content_start))
-		pop()
+		_append_struck_text(segment_text.substr(content_start, close_index - content_start))
 		cursor = close_index + STRIKE_CLOSE_TAG.length()
+
+
+## 追加一段被删除线划掉的可见文本。
+## 被划掉的片段改用主题危险色绘制：富文本的删除线使用当前文字颜色描线，
+## 因此改颜色能让文字与划线同时从正文次级色里跳出来，解决“划线细、颜色接近背景、看不出被划掉”的问题。
+## 颜色每次重绘时重新读取，主题切换后无需额外刷新入口；片段颜色同时记入可测试元数据。
+func _append_struck_text(struck_text: String) -> void:
+	if struck_text.is_empty():
+		return
+	# 被划片段颜色；取自当前活动主题，缺键时回退为危险色常量，保证任何主题下划线都清晰可见。
+	var strike_color: Color = BattleUIStyle.get_color(STRIKE_COLOR_KEY, BattleUIStyle.DANGER_COLOR)
+	push_color(strike_color)
+	push_strikethrough()
+	_append_visible_text(struck_text)
+	pop()
+	pop()
+	_rendered_strike_colors.append(strike_color.to_html(true))
 
 
 ## 追加一段可见文本并同步记录纯文本镜像；所有可见文字都必须经由此入口写入，标记不得进入镜像。

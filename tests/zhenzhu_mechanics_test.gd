@@ -1,10 +1,10 @@
 extends Node
 
 ## 【真珠】与星际和平公司专项回归测试：校验势力元数据、武将定义、两项技能的静态正文，
-## 以及【补缀】的真实轮末扣盾链路与【鉴映】连花色、点数一起视为的完整选择链路。
+## 以及【补缀】在持有者下一个回合结束时的扣盾链路与【鉴映】连花色、点数一起视为的完整选择链路。
 
 ## 【补缀】玩家可见正文；与需求原文逐字一致，任何标点或顺序变化都会被本测试拒绝。
-const BUZHUI_DESCRIPTION: String = "欢愉技，参演编号104，指定至多三名角色，这些角色各获得1点护盾。本轮结束时，这些角色各失去1点护盾。"
+const BUZHUI_DESCRIPTION: String = "欢愉技，参演编号104，指定至多三名角色，这些角色各获得1点护盾。你的下一个回合结束时，这些角色各失去1点护盾。"
 
 ## 【鉴映】玩家可见正文；与需求原文逐字一致。
 const JIANYING_DESCRIPTION: String = "出牌阶段限一次，你可以展示你的一张手牌A，然后展示一名有护盾的角色的一张手牌B，若B不为装备牌，则A视为B直到离开你的手牌区。"
@@ -85,7 +85,7 @@ func _run() -> void:
 		return
 	if not _test_round_end_timing_boundary():
 		return
-	print("ZHENZHU_MECHANICS_PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as round_end=sequential")
+	print("ZHENZHU_MECHANICS_PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as turn_end_expiry=owner_next_turn")
 	get_tree().quit(0)
 
 
@@ -254,7 +254,8 @@ func _test_jianying_static_definition() -> bool:
 	return true
 
 
-## 校验【补缀】完整链路：选择0至3名角色、各得1点护盾、同轮可多次演出、轮末各失去对应点数。
+## 校验【补缀】完整链路：选择0至3名角色、各得1点护盾、同一回合可多次演出，
+## 护盾只在持有者的下一个回合尾各失去对应点数，同一回合尾与其他人回合尾都不会让它提前到期。
 func _test_buzhui_grants_and_expires_shields() -> bool:
 	_reset_state(4)
 	_controller.state.get_player(0).character_id = "zhenzhu"
@@ -271,27 +272,39 @@ func _test_buzhui_grants_and_expires_shields() -> bool:
 			return _fail("buzhui_first_grant target=%d shield=%d" % [target_id, _controller.state.get_player(target_id).shield])
 	if _controller.state.get_player(3).shield != 0:
 		return _fail("buzhui_untargeted_shield=%d" % _controller.state.get_player(3).shield)
-	# 第二次演出：同一轮内重复指定两名角色，护盾叠加，轮末必须逐次扣减。
+	# 第二次演出：同一回合内重复指定两名角色，护盾叠加，到期时必须逐条扣减。
 	buzhui.perform_joy_skill({"target_ids":[0, 1]})
 	if _controller.state.get_player(0).shield != 2 or _controller.state.get_player(1).shield != 2 or _controller.state.get_player(2).shield != 1:
 		return _fail("buzhui_second_grant %d/%d/%d" % [_controller.state.get_player(0).shield, _controller.state.get_player(1).shield, _controller.state.get_player(2).shield])
-	# 轮末扣盾记录；两条演出记录都必须在轮末被消费前保留。
-	var records: Array = buzhui.get("_round_end_shield_records") as Array
+	# 尚未到期的护盾记录；两条演出记录都必须在到期消费前保留。
+	var records: Array = buzhui.get("_shield_expiry_records") as Array
 	if records.size() != 2 or (records[0].get("target_ids", []) as Array).size() != BUZHUI_RECORD_TARGET_COUNT:
 		return _fail("buzhui_records %s" % [records])
-	# 三号位在轮末前死亡；已死亡角色不再接受护盾扣减，也不应影响其他目标结算。
+	# 演出发生在持有者自己的这个回合内，因此本回合的回合尾不是“你的下一个回合”，护盾必须保留。
+	_emit_owner_turn_end(0, _controller.state.turn_number)
+	if _controller.state.get_player(0).shield != 2 or _controller.state.get_player(1).shield != 2 or _controller.state.get_player(2).shield != 1:
+		return _fail("buzhui_same_turn_expiry %d/%d/%d" % [_controller.state.get_player(0).shield, _controller.state.get_player(1).shield, _controller.state.get_player(2).shield])
+	# 其他角色的回合尾：护盾绑定“你的下一个回合”，不得被别人的回合尾提前扣掉。
+	_controller.state.turn_number += 1
+	_emit_owner_turn_end(1, _controller.state.turn_number)
+	if _controller.state.get_player(0).shield != 2 or _controller.state.get_player(1).shield != 2 or _controller.state.get_player(2).shield != 1:
+		return _fail("buzhui_other_turn_expiry %d/%d/%d" % [_controller.state.get_player(0).shield, _controller.state.get_player(1).shield, _controller.state.get_player(2).shield])
+	# 三号位在到期前死亡；已死亡角色不再接受护盾扣减，也不应影响其他目标结算。
 	_controller.state.get_player(2).alive = false
-	_controller._emit_rule_timing("roundEnd", 2, -1, 2, {"round_number":_controller.state.round_number, "finished_player_id":2})
+	# 持有者的下一个回合尾：回合序号大于登记值，两条记录逐条各扣1点护盾。
+	_controller.state.turn_number += 1
+	_emit_owner_turn_end(0, _controller.state.turn_number)
 	if _controller.state.get_player(0).shield != 0 or _controller.state.get_player(1).shield != 0:
-		return _fail("buzhui_round_end_lose %d/%d" % [_controller.state.get_player(0).shield, _controller.state.get_player(1).shield])
+		return _fail("buzhui_next_turn_end_lose %d/%d" % [_controller.state.get_player(0).shield, _controller.state.get_player(1).shield])
 	if _controller.state.get_player(2).shield != 1:
 		return _fail("buzhui_dead_target_skipped=%d" % _controller.state.get_player(2).shield)
-	# 记录已被消费；同一轮重复结算不会再次扣盾。
-	if not (buzhui.get("_round_end_shield_records") as Array).is_empty():
-		return _fail("buzhui_records_not_consumed %s" % [buzhui.get("_round_end_shield_records")])
+	# 记录已被消费；同一个回合尾再次派发也不会二次扣盾。
+	if not (buzhui.get("_shield_expiry_records") as Array).is_empty():
+		return _fail("buzhui_records_not_consumed %s" % [buzhui.get("_shield_expiry_records")])
+	_emit_owner_turn_end(0, _controller.state.turn_number)
 	if _controller.state.get_player(0).shield != 0:
 		return _fail("buzhui_double_settlement")
-	# 技能持有者阵亡后，已经发放的护盾仍必须在本轮结束时到期。
+	# 技能持有者阵亡后不会再有“你的下一个回合”，已发放的护盾按原文保留、不再到期。
 	_reset_state(3)
 	_controller.state.get_player(0).character_id = "zhenzhu"
 	buzhui = _install_single_skill(0, "buzhui")
@@ -299,10 +312,38 @@ func _test_buzhui_grants_and_expires_shields() -> bool:
 		return _fail("buzhui_missing_reinstall")
 	buzhui.perform_joy_skill({"target_ids":[1]})
 	_controller.state.get_player(0).alive = false
-	_controller._emit_rule_timing("roundEnd", 1, -1, 1, {"round_number":_controller.state.round_number, "finished_player_id":1})
+	_controller.state.turn_number += 2
+	_emit_owner_turn_end(0, _controller.state.turn_number)
+	if _controller.state.get_player(1).shield != 1:
+		return _fail("buzhui_owner_dead_keeps_shield=%d" % _controller.state.get_player(1).shield)
+	# 记录同样保留：死亡持有者不会再有回合尾，因此这条记录永远不会被消费。
+	if (buzhui.get("_shield_expiry_records") as Array).size() != 1:
+		return _fail("buzhui_owner_dead_records %s" % [buzhui.get("_shield_expiry_records")])
+	# 真实回合尾入口：控制器在持有者本人回合尾派发 phaseAfter 并携带当前回合序号，技能据此扣盾，
+	# 而不是只在测试手工派发的时机上成立。
+	_reset_state(3, "finish")
+	_controller.state.get_player(0).character_id = "zhenzhu"
+	buzhui = _install_single_skill(0, "buzhui")
+	if buzhui == null:
+		return _fail("buzhui_missing_real_turn_end")
+	buzhui.perform_joy_skill({"target_ids":[1]})
+	# 持有者的下一个回合：权威回合序号前进后，由真实回合尾入口结束该回合。
+	_controller.state.turn_number += 1
+	_controller.state.current_player_id = 0
+	_controller._complete_finish_turn(0)
 	if _controller.state.get_player(1).shield != 0:
-		return _fail("buzhui_owner_dead_expiry=%d" % _controller.state.get_player(1).shield)
+		return _fail("buzhui_real_turn_end_expiry=%d" % _controller.state.get_player(1).shield)
+	if not (buzhui.get("_shield_expiry_records") as Array).is_empty():
+		return _fail("buzhui_real_turn_end_records %s" % [buzhui.get("_shield_expiry_records")])
+	# 收尾：更换对局ID使刚刚安排的回合切换失效，避免测试退出前在最小状态上开始真实回合。
+	_controller.state.match_id = "zhenzhu-mechanics-closed"
 	return true
+
+
+## 派发一次指定角色的标准回合尾时机；护盾到期只依赖持有者本人的 phaseAfter（role="player"）。
+## 回合序号显式传入，使“同一个回合”与“下一个回合”的边界不依赖测试状态的自增顺序。
+func _emit_owner_turn_end(player_id: int, turn_number: int) -> void:
+	_controller._emit_rule_timing("phaseAfter", player_id, -1, player_id, {"player_id":player_id, "phase":"finish", "turn_number":turn_number})
 
 
 ## 校验【补缀】目标窗口契约：不可取消、下限0上限3，选择0名角色是合法结算且不产生任何记录。
@@ -324,8 +365,8 @@ func _test_buzhui_zero_targets_is_legal() -> bool:
 	for player: PlayerState in _controller.state.players:
 		if player.shield != 0:
 			return _fail("buzhui_zero_target_shield player=%d shield=%d" % [player.player_id, player.shield])
-	if not (buzhui.get("_round_end_shield_records") as Array).is_empty():
-		return _fail("buzhui_zero_target_records %s" % [buzhui.get("_round_end_shield_records")])
+	if not (buzhui.get("_shield_expiry_records") as Array).is_empty():
+		return _fail("buzhui_zero_target_records %s" % [buzhui.get("_shield_expiry_records")])
 	# 演出必须已经结束：没有残留请求，且可以立即开始下一次演出。
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("buzhui_zero_target_pending %s" % [_controller._pending_card_choice])
