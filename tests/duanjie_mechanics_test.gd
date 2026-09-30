@@ -157,6 +157,9 @@ func _test_duanjie_dynamic_description() -> bool:
 		return _fail("duanjie_dynamic_view_leaked_marker=%s" % visible_text)
 	if not visible_text.contains("4.将一名武将牌正面向上的角色翻至背面"):
 		return _fail("duanjie_dynamic_view_text_missing=%s" % visible_text)
+	# 被划掉的选项必须使用主题醒目色渲染：与正文同色的细划线在深色面板上几乎看不出被划掉。
+	if description_view.get_rendered_strike_colors() != [BattleUIStyle.get_color("danger").to_html(true)]:
+		return _fail("duanjie_dynamic_view_strike_color=%s" % [description_view.get_rendered_strike_colors()])
 	description_view.queue_free()
 	# 复原武将牌后清除覆盖，资料回到完整四项原文。
 	_emit_change_skills("restore_character_card_skills", ["duanjie"])
