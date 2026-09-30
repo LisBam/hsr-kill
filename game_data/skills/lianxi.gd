@@ -97,15 +97,15 @@ func _request_recast_choice(recast_count: int, allow_cancel: bool) -> void:
 	# 本轮可选控制项；仍有额度且手中还有基本牌时才提供“继续重铸”。
 	var options: Array[Dictionary] = []
 	if recast_count < MAX_RECAST_TIMES and not _get_hand_basic_card_uids().is_empty():
-		options.append({"id":RECAST_OPTION_ID, "label":"重铸所有基本牌"})
+		options.append({"id":RECAST_OPTION_ID, "label":"重铸"})
 	# 至少完成一次重铸后才提供结束选项，保证发动后必然产生一次真实重铸。
 	if recast_count > 0:
-		options.append({"id":FINISH_OPTION_ID, "label":"结束重铸并造成伤害"})
+		options.append({"id":FINISH_OPTION_ID, "label":"结束"})
 	# 没有可执行选项时不创建空窗口，按已完成次数直接进入伤害步骤。
 	if options.is_empty():
 		_begin_damage_target_selection(recast_count)
 		return
-	var prompt: String = "请选择下一步" if recast_count <= 0 else "你已重铸%d次，请选择下一步" % recast_count
+	var prompt: String = "【连戏】是否重置手牌中的所有基本牌？" if recast_count <= 0 else "你已重铸%d次，是否继续发动？" % recast_count
 	request_control_selection("连戏", prompt, options, allow_cancel, {"kind":RECAST_CHOICE_KIND, "recast_count":recast_count})
 
 
