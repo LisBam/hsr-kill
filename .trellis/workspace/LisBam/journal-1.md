@@ -128,3 +128,38 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: 调整【好活】弃置逻辑与防具无效攻击的AI收益口径
+<!-- trellis-session: v=2 fp=41691c179edbba86 -->
+
+**Date**: 2026-09-30
+**Task**: 调整【好活】弃置逻辑与防具无效攻击的AI收益口径
+**Branch**: `master`
+
+### Summary
+
+【好活】改为先选场上（判定区或装备区）有牌的角色、再弃置其场上的一张牌；被【藤甲】与【仁王盾】完全无效的攻击目标收益由0改为明确负值。
+
+### Main Changes
+
+- 【好活】弃置场上牌改为两步交互：第一步选择场上有牌的角色，第二步弃置该角色场上的一张牌
+- 新增场上可弃置角色与单角色场上候选两个核心端口，并抽取共用候选构建入口
+- 新增 ARMOR_VOID_TARGET_PENALTY 负收益常量并替换防具完全无效目标的0收益
+- 同步内容制作指南、AI模块、游戏机制与玩法内容、卡牌系统、界面与交互与README
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a7e33e` | 调整【好活】弃置逻辑与防具无效攻击的AI收益口径 |
+
+### Testing
+
+- [OK] AI_POLICY_PASS cards=46；HUANYU_YAOGUANG_XING_QIONG_PASS
+- [OK] 40余项相关回归场景（战斗、伤害、时机、技能结算、机会系统、欢愉与阿哈时刻）全部通过
+- [OK] git diff --check 通过
+
+### Status
+
+[OK] **Completed**
