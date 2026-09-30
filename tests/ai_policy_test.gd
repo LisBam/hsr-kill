@@ -47,6 +47,8 @@ func _ready() -> void:
 		return
 	if not _test_tiesuo_prefers_recast_when_use_value_is_low():
 		return
+	if not _test_wooden_ox_transfer_target_ai():
+		return
 	if not _test_quanlei_slash_material_priority():
 		return
 	if not _test_conversion_virtual_card_skill_synergy():
@@ -521,6 +523,30 @@ func _test_tiesuo_prefers_recast_when_use_value_is_low() -> bool:
 	var chosen: Dictionary = policy.choose_action(snapshot, [use_action, recast_action])
 	if str(chosen.get("action_type", "")) != "recast_card" or int(chosen.get("card_uid", -1)) != 450:
 		return _fail("tiesuo_low_value_recast=%s" % chosen)
+	return true
+
+
+## 验证【木牛流马】第二段转移询问的 AI 决策：整体交给友方为正收益，交给敌方为负收益，AI 必须完成决策而不是只走取消。
+func _test_wooden_ox_transfer_target_ai() -> bool:
+	# 全身份公开快照；0为领袖、1为反贼、2为忠臣，敌我态度稳定且不依赖随机数。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 使用者随装备一起转移的“粮”数量；数量直接参与转移估值。
+	(snapshot.get("players", []) as Array)[0]["wooden_ox_storage_count"] = 3
+	# 第二段转移请求；上下文键值与控制器创建请求时完全一致，保证能定位到木牛卡牌源码。
+	var request: Dictionary = {"request_id":580, "choice_type":"target", "allow_cancel":true, "min_select":1, "max_select":1, "min_target_select":1, "max_target_select":1, "target_ids":[1, 2], "candidates":[], "context":{"kind":"wooden_ox_transfer", "equipment_definition_id":"muniu", "choice_chooser_id":0}}
+	# 取消动作；宝物留在原装备区，作为零收益基准项。
+	var cancel_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"confirmed":false, "selected_target_ids":[]}}
+	# 送给反贼；领袖的资产流入敌方，必须为负收益。
+	var enemy_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"confirmed":true, "selected_target_ids":[1]}}
+	# 送给忠臣；装备与“粮”继续留在己方阵营，必须为正收益。
+	var friend_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"confirmed":true, "selected_target_ids":[2]}}
+	# 独立策略；避免其他场景留下的身份暴露历史改变本次敌我判断。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	# 最终选择；必须确认转移给忠臣2。
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, request, [cancel_action, enemy_action, friend_action])
+	var chosen_targets: Array = (chosen.get("payload", {}) as Dictionary).get("selected_target_ids", []) as Array
+	if chosen_targets != [2]:
+		return _fail("wooden_ox_transfer_ai=%s" % chosen)
 	return true
 
 

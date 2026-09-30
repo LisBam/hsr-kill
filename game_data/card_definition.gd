@@ -427,6 +427,24 @@ func execute_play_phase_action(_match_host: Object, _action: PlayerAction) -> bo
 	return false
 
 
+## 声明主动动作执行后是否还要追加第二段独立选择；返回空字典表示该装备只有一段交互。
+##
+## 数组字段与语义：`prompt` 为界面提示（统一目标询问标题固定为“选择目标”），`target_ids` 为合法候选，
+## `min_targets`/`max_targets` 为确认所需的目标数量范围（`min_targets = 1` 表示必须选中一名角色才能确认，
+## `0` 表示可直接确认），`allow_cancel` 决定是否提供“取消”分支，`context` 为第二段选择恢复时原样回传的上下文。
+## 控制器只在第一段动作真正执行成功后才会请求第二段，因此两段之间天然存在先后顺序，不会同帧合并。
+func get_play_phase_follow_up_request(_match_host: Object, _action: PlayerAction) -> Dictionary:
+	return {}
+
+
+## 恢复装备主动动作声明的第二段独立选择；context 与创建请求时写入的上下文一致。
+##
+## 与 `continue_equipment_choice()` 的区别：本入口同时携带选牌与选目标结果，供需要“再选一名角色”
+## 的两段式主动装备使用；两份钩子互不替代，装备可以只实现其中一份。返回 true 表示已经处理该响应。
+func continue_equipment_selection(_match_host: Object, _context: Dictionary, _response: ChoiceResponse) -> bool:
+	return false
+
+
 ## 返回装备主动动作的只读预览；字段应兼容普通卡牌预览的目标与确认信息。
 func get_play_phase_action_preview(_match_host: Object, _owner_id: int, _equipment_uid: int, _payload: Dictionary, _selected_target_ids: Array[int]) -> Dictionary:
 	return {}

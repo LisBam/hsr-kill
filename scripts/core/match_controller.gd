@@ -2024,6 +2024,8 @@ func submit_action(action: PlayerAction) -> bool:
 	elif active_equipment_definition != null:
 		if not active_equipment_definition.execute_play_phase_action(self, action):
 			return false
+		# 两段式装备主动动作：第一段状态已经落定，这里再创建第二段独立询问。
+		_open_equipment_follow_up_choice(active_equipment_definition, action)
 	else:
 		return _reject("未知行为类型：%s" % action.action_type)
 
@@ -2046,6 +2048,38 @@ func submit_action(action: PlayerAction) -> bool:
 	_emit_state()
 	_ensure_ai_progress_after_resolution()
 	return true
+
+
+## 创建装备主动动作声明的第二段独立选择；装备未声明后续段时安全返回。
+##
+## 第二段是第一段**执行成功之后**才创建的独立请求，因此两段之间不存在同一次提交同时携带材料与目标的情况。
+## 只有“再选一名角色”这种必须携带目标的后续段才走本入口，其他装备的响应与选牌恢复仍使用各自既有钩子。
+func _open_equipment_follow_up_choice(equipment_definition: CardDefinition, action: PlayerAction) -> void:
+	# 装备声明的后续请求描述；空字典表示该装备只有一段交互。
+	var follow_up: Dictionary = equipment_definition.get_play_phase_follow_up_request(self, action)
+	if follow_up.is_empty():
+		return
+	# 已有待处理选择或当前处于嵌套结算屏障内时不叠加请求；第一段存入结果仍然有效，只跳过第二段询问。
+	if has_pending_card_choice() or _has_nested_settlement_barrier():
+		return
+	# 合法候选目标；没有任何候选时不创建无法完成的空请求。
+	var target_ids: Array[int] = _int_array(follow_up.get("target_ids", []) as Array)
+	if target_ids.is_empty():
+		return
+	# 第二段选择上下文；装备定义 ID 供统一选牌评分定位内容脚本，选择者 ID 供恢复入口复核归属。
+	var follow_up_context: Dictionary = (follow_up.get("context", {}) as Dictionary).duplicate(true)
+	follow_up_context["equipment_definition_id"] = equipment_definition.get_id()
+	follow_up_context["choice_chooser_id"] = action.actor_id
+	# 第二段目标请求；确认必须选中合法目标，取消表示放弃本段并结束本次发动。
+	request_target_choice(
+		action.actor_id,
+		str(follow_up.get("prompt", "请选择目标")),
+		target_ids,
+		int(follow_up.get("min_targets", 1)),
+		int(follow_up.get("max_targets", 1)),
+		bool(follow_up.get("allow_cancel", true)),
+		follow_up_context,
+	)
 
 
 ## 返回指定玩家是否已进入托管；该查询只读取权威状态，供动作权限与测试使用。
@@ -3748,6 +3782,16 @@ func _is_allowed_target_combination(context: Dictionary, selected_target_ids: Ar
 	return false
 
 
+## 把统一选择结果打包成装备第二段钩子需要的 ChoiceResponse；只做数据搬运，不判定任何规则。
+func _build_equipment_choice_response(context: Dictionary, selected_uids: Array[int], selected_target_ids: Array[int], confirmed: bool, selected_control_id: String) -> ChoiceResponse:
+	# 选择者 ID；创建请求时由控制器写入，缺失时回退 -1 让内容层自行放弃。
+	var response: ChoiceResponse = ChoiceResponse.new(-1, -1, int(context.get("choice_chooser_id", -1)), confirmed)
+	response.card_ids = selected_uids.duplicate()
+	response.target_ids = selected_target_ids.duplicate()
+	response.control_id = selected_control_id
+	return response
+
+
 ## 根据暂停上下文恢复具体效果；各分支只调用公开规则操作，不读取任何 UI 节点。
 func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selected_target_ids: Array[int] = [], confirmed: bool = true, selected_control_id: String = "") -> void:
 	# 步骤式内容使用自己的结果槽；仍走统一请求校验，只免去每个技能手写恢复分支。
@@ -3852,6 +3896,8 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 					return
 				if equipment_definition.continue_equipment_response(self, context, response_card):
 					return
+			elif equipment_definition.continue_equipment_selection(self, context, _build_equipment_choice_response(context, selected_uids, selected_target_ids, confirmed, selected_control_id)):
+				return
 			elif equipment_definition.continue_equipment_choice(self, context, selected_uids):
 				return
 	if choice_kind == "discard_phase":
@@ -15818,23 +15864,16 @@ func _get_remote_equipment_action_preview(player_id: int, equipment_uid: int, pa
 		"max_targets":1,
 		"description":str(definition.get("description", "")),
 	}
-	# 木牛流马的可选转移目标不会加入 AI 合法动作枚举；客户端可从公开存活快照生成提示，房主仍会最终校验。
+	# 木牛流马的第一段只有材料选择；转移目标改由存入成功后的独立询问决定，因此本段不提供任何目标。
 	if action_type == "store_wooden_ox" and not matching_actions.is_empty():
-		# 可选转移目标列表；只包含本地玩家以外仍存活的公开角色。
-		var optional_target_ids: Array[int] = []
-		for player_variant: Variant in _remote_snapshot.get("players", []) as Array:
-			# 当前公开玩家快照；只读取稳定 ID 与存活状态，不访问任何隐藏牌面。
-			var player_snapshot: Dictionary = player_variant as Dictionary
-			# 当前候选玩家稳定 ID；无效值 -1 不会通过其他玩家及存活条件。
-			var target_id: int = int(player_snapshot.get("player_id", -1))
-			if target_id != player_id and bool(player_snapshot.get("alive", true)):
-				optional_target_ids.append(target_id)
 		result["card_found"] = material_card_uids.size() == required_material_count
-		result["can_submit"] = selected_target_ids.is_empty() or (selected_target_ids.size() == 1 and optional_target_ids.has(selected_target_ids[0]))
-		result["validation_error"] = "" if bool(result["can_submit"]) else "木牛流马的转移目标不合法。"
-		result["legal_target_ids"] = optional_target_ids
-		result["target_mode"] = "optional_single_other"
+		result["can_submit"] = bool(result["card_found"])
+		result["validation_error"] = "" if bool(result["can_submit"]) else "请选择一张要存入木牛流马的手牌。"
+		result["confirm_prompt"] = "确定后将这张手牌扣置为“粮”"
+		result["legal_target_ids"] = []
+		result["target_mode"] = "none"
 		result["min_targets"] = 0
+		result["max_targets"] = 0
 		return result
 	# 普通装备动作；使用完整合法动作目标数组执行前缀与精确匹配。
 	var legal_target_ids: Array[int] = []
