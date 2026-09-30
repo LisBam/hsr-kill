@@ -55,6 +55,20 @@ var last_hand_view_as_original_definition_id: String = ""
 ## 最近一次离开手牌时的视为逻辑定义ID；仅供处理区与弃牌堆展示保留本次视为牌名，不参与后续规则判定。
 var last_hand_view_as_definition_id: String = ""
 
+## 当前手牌视为复制牌面前的原实体花色；空字符串表示本次视为只换牌名、不复制花色与点数。
+## 该字段只在复制型视为生效期间非空，离开手牌区后会立刻恢复实体花色并清空。
+var hand_view_as_original_suit: String = ""
+
+## 当前手牌视为复制牌面前的原实体点数；0表示本次视为只换牌名、不复制花色与点数。
+## 与 hand_view_as_original_suit 成对出现，恢复牌面时必须同时使用两者。
+var hand_view_as_original_rank: int = 0
+
+## 最近一次离开手牌时的视为逻辑花色；仅供处理区与弃牌堆展示保留本次视为牌面，不参与规则判定。
+var last_hand_view_as_suit: String = ""
+
+## 最近一次离开手牌时的视为逻辑点数；0表示最近一次视为没有复制牌面。
+var last_hand_view_as_rank: int = 0
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 ## existing_uid 仅供网络快照、回放与规则续接恢复既有实体；默认-1会生成全新递增编号，运行时通常不动态指定。
@@ -92,6 +106,12 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	card.hand_mark_tags = (data.get("hand_mark_tags", {}) as Dictionary).duplicate(true)
 	card.last_hand_view_as_original_definition_id = str(data.get("presentation_original_definition_id", ""))
 	card.last_hand_view_as_definition_id = str(data.get("view_as_definition_id", ""))
+	# 复制型视为的实体牌面快照；旧快照不含该字段时保持空值，表现为普通换名视为。
+	card.hand_view_as_original_suit = str(data.get("presentation_original_suit", ""))
+	card.hand_view_as_original_rank = int(data.get("presentation_original_rank", 0))
+	# 视为逻辑牌面；手牌中与当前快照花色点数一致，离手后表示最近一次已结束的视为牌面。
+	card.last_hand_view_as_suit = str(data.get("view_as_suit", ""))
+	card.last_hand_view_as_rank = int(data.get("view_as_rank", 0))
 	return card
 
 
@@ -131,11 +151,51 @@ func clear_hand_view_as() -> String:
 	# 离手展示来源；弃牌与处理区仍需保留原实体与本次视为牌名，规则定义本身会立刻恢复。
 	last_hand_view_as_original_definition_id = hand_view_as_original_definition_id
 	last_hand_view_as_definition_id = previous_view_as_definition_id
+	# 离手展示牌面；只有复制型视为才保留本次逻辑花色点数，普通换名视为必须清空以免伪造花色。
+	last_hand_view_as_suit = suit if not hand_view_as_original_suit.is_empty() else ""
+	last_hand_view_as_rank = rank if not hand_view_as_original_suit.is_empty() else 0
 	if not hand_view_as_original_definition_id.is_empty():
 		definition_id = hand_view_as_original_definition_id
+	# 实体牌面恢复；花色与点数必须同时回到视为前快照，避免只恢复其一产生不存在的实体牌。
+	if not hand_view_as_original_suit.is_empty():
+		suit = hand_view_as_original_suit
+		rank = hand_view_as_original_rank
 	hand_view_as_original_definition_id = ""
+	hand_view_as_original_suit = ""
+	hand_view_as_original_rank = 0
 	hand_view_as_source_skill_id = ""
 	return previous_view_as_definition_id
+
+
+## 将当前手牌临时视为指定逻辑牌，并同时复制该牌的花色与点数；重复赋予时保留最初的实体牌名与实体牌面。
+## 与 set_hand_view_as 的差别只在于花色点数是否跟随逻辑牌：普通转化技能只换牌名，本入口用于“连同花色点数一起视为”。
+## 花色点数覆写后，所有既有规则读取点（颜色筛选、花色判定、拼点与材料聚合）都会读到逻辑牌面，无需改动读取方。
+func set_hand_view_as_with_face(view_as_definition_id: String, view_as_suit: String, view_as_rank: int, source_skill_id: String) -> bool:
+	if zone != "hand" or view_as_definition_id.is_empty():
+		return false
+	if not is_valid_suit(view_as_suit) or not is_valid_rank(view_as_rank):
+		return false
+	if hand_view_as_original_definition_id.is_empty():
+		hand_view_as_original_definition_id = definition_id
+	# 实体牌面快照；已经处于复制型视为时保持最初快照，连续视为不会把上一次的逻辑牌面误当成实体牌面。
+	if hand_view_as_original_suit.is_empty():
+		hand_view_as_original_suit = suit
+		hand_view_as_original_rank = rank
+	definition_id = view_as_definition_id
+	suit = view_as_suit
+	rank = view_as_rank
+	hand_view_as_source_skill_id = source_skill_id
+	return true
+
+
+## 判定一个花色字符串是否属于可以参与视为牌面复制的四种实体花色；无花色虚拟牌不参与复制。
+static func is_valid_suit(card_suit: String) -> bool:
+	return card_suit == "spade" or card_suit == "heart" or card_suit == "club" or card_suit == "diamond"
+
+
+## 判定一个点数是否属于可以参与视为牌面复制的1至13范围；0与越界值都表示无实体牌面点数。
+static func is_valid_rank(card_rank: int) -> bool:
+	return card_rank >= 1 and card_rank <= 13
 
 
 ## 返回当前实体是否拥有尚未清理的手牌视为效果；区域移动组件只通过本查询决定是否恢复真实牌名。
@@ -188,6 +248,9 @@ func has_hand_mark_rule(rule_name: String) -> bool:
 func clear_hand_view_as_presentation() -> void:
 	last_hand_view_as_original_definition_id = ""
 	last_hand_view_as_definition_id = ""
+	# 视为牌面展示来源；与视为牌名同步清理，避免公共区域继续显示已经失效的花色点数。
+	last_hand_view_as_suit = ""
+	last_hand_view_as_rank = 0
 
 
 ## 序列化为网络安全字典；不包含任何对象引用或可执行回调。
@@ -198,6 +261,16 @@ func to_dict() -> Dictionary:
 	var presentation_original_definition_id: String = hand_view_as_original_definition_id if not hand_view_as_original_definition_id.is_empty() else last_hand_view_as_original_definition_id
 	# 展示视为定义 ID；手牌中直接使用当前逻辑定义，离手后读取最近一次已结束的视为记录。
 	var view_as_definition_id: String = definition_id if not hand_view_as_original_definition_id.is_empty() else last_hand_view_as_definition_id
+	# 展示实体花色；复制型视为生效时非空，供表现层保留实体原角标，普通换名视为保持空值。
+	# 刻意不回填 last_hand_view_as_suit：离开手牌区时 suit/rank 已经恢复为实体原值，表现层回退读取的正是同一份实体牌面，
+	# 只有需要继续解释“曾视为”的 view_as_suit/rank 才保留最近一次记录。
+	var presentation_original_suit: String = hand_view_as_original_suit
+	# 展示实体点数；与展示实体花色成对出现，0表示本次视为没有复制牌面。
+	var presentation_original_rank: int = hand_view_as_original_rank if not hand_view_as_original_suit.is_empty() else 0
+	# 视为逻辑花色；手牌中读取当前复制值，离手后读取最近一次已结束的视为牌面。
+	var view_as_suit: String = suit if not hand_view_as_original_suit.is_empty() else last_hand_view_as_suit
+	# 视为逻辑点数；与视为逻辑花色成对出现，0表示本次视为没有复制牌面。
+	var view_as_rank: int = rank if not hand_view_as_original_suit.is_empty() else last_hand_view_as_rank
 	return {
 		"uid": uid,
 		"definition_id": definition_id,
@@ -215,4 +288,8 @@ func to_dict() -> Dictionary:
 		"hand_mark_tags": hand_mark_tags.duplicate(true),
 		"presentation_original_definition_id": presentation_original_definition_id,
 		"view_as_definition_id": view_as_definition_id,
+		"presentation_original_suit": presentation_original_suit,
+		"presentation_original_rank": presentation_original_rank,
+		"view_as_suit": view_as_suit,
+		"view_as_rank": view_as_rank,
 	}

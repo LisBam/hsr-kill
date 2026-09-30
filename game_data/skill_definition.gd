@@ -509,8 +509,12 @@ func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, sub
 	if not maintenance and not can_use_effect(locked_segment):
 		return false
 	# 局内获得技能的每回合或总次数限制；额度耗尽后不再接收新的触发时机。
-	if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, get_id())):
-		return false
+	# 固有技能不持有获得技能额度，必须跳过本检查：控制器对死亡角色的获得技能额度一律返回0，
+	# 若对所有技能统一检查，已由 can_trigger_while_owner_inactive 放行的“死亡后清理持续效果”仍会永远收不到时机。
+	var owner_has_acquired_skill: bool = owner != null and owner.acquired_skills.has(get_id())
+	if owner == null or owner_has_acquired_skill:
+		if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, get_id())):
+			return false
 	return not custom_condition.is_valid() or bool(custom_condition.call(event))
 
 

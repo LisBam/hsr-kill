@@ -9,6 +9,7 @@
     {"id":"xingjianhuanyv","display_name":"星间寰宇","short_name":"星","color":"c7c9ce"},
     {"id":"yinhexvezhe","display_name":"银河学者","short_name":"学","color":"8a63b8"},
     {"id":"wengfaluosi","display_name":"翁法罗斯","short_name":"翁","color":"b985d6"},
-    {"id":"huanyu","display_name":"欢愉","short_name":"欢","color":"e0673c"}
+    {"id":"huanyu","display_name":"欢愉","short_name":"欢","color":"e0673c"},
+    {"id":"xingjihepinggongsi","display_name":"星际和平公司","short_name":"司","color":"b87333"}
   ]
 }
