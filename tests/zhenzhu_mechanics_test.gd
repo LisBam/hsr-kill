@@ -81,6 +81,8 @@ func _run() -> void:
 		return
 	if not _test_ai_scoring_directions():
 		return
+	if not _test_jianying_ai_self_upgrade_condition():
+		return
 	if not _test_round_end_timing_boundary():
 		return
 	print("ZHENZHU_MECHANICS_PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as round_end=sequential")
@@ -503,10 +505,39 @@ func _test_ai_scoring_directions() -> bool:
 	var rich_material_score: float = jianying.score_ai_choice(snapshot, {"candidates":[{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}}], "context":{"kind":"jianying_material"}}, {"payload":{"confirmed":true, "selected_card_uids":[102]}}, evaluator)
 	if cheap_material_score <= rich_material_score:
 		return _fail("jianying_ai_material cheap=%f rich=%f" % [cheap_material_score, rich_material_score])
+	# 回归：材料段确认分必须为正；为负时AI会判定“取消更优”，
+	# 于是一个出牌阶段内反复“发动→取消”，表现为AI回合停滞。
+	if cheap_material_score <= 0.0:
+		return _fail("jianying_ai_material_nonpositive cheap=%f" % cheap_material_score)
 	# 主动发动：自身有护盾且手牌存在价值差时为正分。
 	var action_score: float = jianying.score_ai_action(snapshot, {"action_type":"use_skill", "actor_id":0, "skill_id":"jianying"}, evaluator)
 	if action_score <= 0.0:
 		return _fail("jianying_ai_action=%f" % action_score)
+	return true
+
+
+## 校验【鉴映】AI 的自选条件：只有「自己有护盾且手牌存在明显高低价值差」时才把展示目标放在自己身上。
+## 缺少高低价值差时自选只会公开自己的手牌却换不到更高价值的牌，因此必须让位给敌人或队友。
+func _test_jianying_ai_self_upgrade_condition() -> bool:
+	# 权威快照；自身两张手牌同为【桃】，最高最低价值差为0，不构成升级对。
+	var snapshot: Dictionary = {
+		"match_id":"jianying_ai_flat_hand",
+		"players":[
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"tao", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
+			{"player_id":1, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "shield":1, "hand_count":1, "hand":[{"uid":201, "definition_id":"shan", "owner_id":1, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
+		],
+	}
+	# 统一AI估值器；技能评分只依赖快照与估值接口，不访问控制器。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	var jianying: SkillDefinition = GameDatabase.create_skill("jianying")
+	if jianying == null:
+		return _fail("jianying_ai_flat_missing")
+	jianying.bind(null, 0)
+	var self_score: float = jianying.score_ai_choice(snapshot, {"context":{"kind":"jianying_shield_target"}}, {"payload":{"confirmed":true, "selected_target_ids":[0]}}, evaluator)
+	var hostile_score: float = jianying.score_ai_choice(snapshot, {"context":{"kind":"jianying_shield_target"}}, {"payload":{"confirmed":true, "selected_target_ids":[1]}}, evaluator)
+	# 自身仍有护盾，但手牌没有价值差；此时对敌发动才是更优选择。
+	if self_score >= hostile_score:
+		return _fail("jianying_ai_flat_self=%f hostile=%f" % [self_score, hostile_score])
 	return true
 
 

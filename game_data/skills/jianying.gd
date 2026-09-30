@@ -46,6 +46,10 @@ const AI_MATERIAL_COST_MULTIPLIER: float = 0.3
 ## AI：判定“手牌中存在明显高低价值差”的阈值；达到该差值才认为自身升级确实成立。
 const AI_VALUE_GAP_THRESHOLD: float = 2.0
 
+## AI：不满足“自身升级”条件时选择自己的评分；负值使AI在无法形成升级对时不把展示目标放在自己身上。
+## 该值只用于目标段排序，不改变任何规则状态；改大会让AI更坚决地避开自选。
+const AI_SELF_TARGET_FALLBACK_SCORE: float = -3.0
+
 ## AI：B 与 A 是同一张实体牌时的拒绝分；视为自己没有意义，AI不应主动选择。
 const AI_SELF_CARD_PENALTY: float = 6.0
 
@@ -246,20 +250,56 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[], "payload":{"skill_id":get_id()}})
 
 
-## 评估鉴映的主动发动；自身有护盾时收益确定，之后扣除最低价值手牌的材料机会成本。
+## 评估鉴映的主动发动；按当前局势的毛收益扣除最低价值手牌的材料机会成本。
 ## 本函数在AI评估期间不持有host，因此只读取权威快照与估值接口。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	if str(action.get("action_type", "")) != "use_skill":
 		return 0.0
 	# 技能持有者快照；用于读取自身护盾与手牌。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
-	# 基础收益；自身有护盾时可以把确定的最低价值手牌换成最高价值手牌，否则只能赌对手的不可见手牌。
-	var gross_value: float = AI_HOSTILE_TARGET_VALUE
-	if int(owner.get("shield", 0)) >= MIN_SHIELD_FOR_TARGET:
-		# 自身手牌的最高最低价值差；差值不足时升级并不成立，本次发动只剩公开信息，价值按友方目标处理。
-		gross_value = AI_SELF_UPGRADE_TARGET_VALUE if _get_hand_value_gap(authoritative_snapshot, owner, evaluator) >= AI_VALUE_GAP_THRESHOLD else AI_FRIENDLY_TARGET_VALUE
 	# 材料机会成本；材料在技能内部选择，因此用当前手牌最低保留价值代表最可能支付的成本。
-	return gross_value - _get_cheapest_hand_value(authoritative_snapshot, owner, evaluator) * AI_MATERIAL_COST_MULTIPLIER
+	return _get_gross_action_value(authoritative_snapshot, owner, evaluator) - _get_cheapest_hand_value(authoritative_snapshot, owner, evaluator) * AI_MATERIAL_COST_MULTIPLIER
+
+
+## 返回一次发动在当前局势下可预期取得的毛收益；不含材料成本，供主动动作评分与材料段评分共用。
+##
+## 该函数是“动作层认为值得发动”与“选择层愿意确认”保持同一口径的唯一来源：
+## 两处都用本值减去按同一倍率折算的材料成本，因此不会出现“提议发动却立刻取消”的自相矛盾，
+## 也就不会让AI在同一出牌阶段反复进入本技能再取消，从而避免回合推进停滞。
+func _get_gross_action_value(authoritative_snapshot: Dictionary, owner: Dictionary, evaluator: Object) -> float:
+	# 自身升级分支：自己有护盾且手牌存在明显高低价值差，可把最低价值牌换成最高价值牌，收益完全确定。
+	if _can_self_upgrade(authoritative_snapshot, owner, evaluator):
+		return AI_SELF_UPGRADE_TARGET_VALUE
+	# 对敌分支：存在有护盾且有手牌的敌人时，仍可从其不可见手牌中博取一次收益。
+	if _has_available_hostile_target(authoritative_snapshot, evaluator):
+		return AI_HOSTILE_TARGET_VALUE
+	# 兜底分支：只能对队友展示手牌，收益最低且附带信息外泄。
+	return AI_FRIENDLY_TARGET_VALUE
+
+
+## 判断是否满足“自身升级”条件：自己当前有护盾，且手牌中存在达到阈值的高低价值差。
+## 两者必须同时成立，否则自选只会公开自己的手牌却换不到更高价值的牌。
+func _can_self_upgrade(authoritative_snapshot: Dictionary, owner: Dictionary, evaluator: Object) -> bool:
+	if int(owner.get("shield", 0)) < MIN_SHIELD_FOR_TARGET:
+		return false
+	return _get_hand_value_gap(authoritative_snapshot, owner, evaluator) >= AI_VALUE_GAP_THRESHOLD
+
+
+## 判断场上是否存在“有护盾且有普通手牌”的敌对角色；这是第二收益档的成立条件。
+## 候选口径与技能自身的目标候选保持一致：护盾不低于下限、普通手牌非空、存活且未离场。
+func _has_available_hostile_target(authoritative_snapshot: Dictionary, evaluator: Object) -> bool:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；自身、已死亡、已离场或缺少护盾/手牌的角色都不构成合法来源。
+		var player: Dictionary = player_variant as Dictionary
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id < 0 or player_id == owner_player_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		if int(player.get("shield", 0)) < MIN_SHIELD_FOR_TARGET or int(player.get("hand_count", 0)) <= 0:
+			continue
+		# 敌对态度；非负值表示友方或中立，不作为“对敌发动”的依据。
+		if float(evaluator.get_attitude(authoritative_snapshot, owner_player_id, player_id)) < 0.0:
+			return true
+	return false
 
 
 ## 返回快照手牌中的最低保留价值；空手牌返回0，表示没有可用材料。
@@ -299,6 +339,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 
 
 ## 评估材料段选择：优先选择保留价值最低的手牌作为A。
+##
+## 评分口径必须与主动动作评分一致：都按“毛收益 − 材料价值 × 成本倍率”计算。
+## 若这里只返回“−材料价值”，则最低价值牌也常为负分，而取消恒为0分，
+## AI 会被判定为“取消更优”，于是每次发动都在第一步退出，进而在出牌阶段反复发起同一技能，表现为回合停滞。
 func _score_ai_material_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 动作负载；未确认表示取消发动，不消耗次数也不展示任何牌，按0分处理。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
@@ -308,11 +352,15 @@ func _score_ai_material_choice(authoritative_snapshot: Dictionary, choice_reques
 	var selected_cards: Array = payload.get("selected_card_uids", []) as Array
 	if selected_cards.size() != CARD_SELECT_COUNT:
 		return -AI_SELF_CARD_PENALTY
-	# 所选材料价值；数值越低越适合作为转化材料，因此直接取负值作为评分。
-	return -evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id)
+	# 技能持有者快照；用于取得本次发动的毛收益。
+	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+	# 所选材料的保留价值；候选之间的相对排序完全由它决定，价值越低越优先作为A。
+	var material_value: float = float(evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(selected_cards[0]), owner_player_id))
+	# 确认评分；与主动动作评分使用同一算式，因此“动作层愿意发动”时最低价值牌必然取得正分并被确认。
+	return _get_gross_action_value(authoritative_snapshot, owner, evaluator) - material_value * AI_MATERIAL_COST_MULTIPLIER
 
 
-## 评估角色段选择：自身有护盾优先自己，否则优先敌人，最后才是队友。
+## 评估角色段选择：自身满足“升级对”条件时优先自己，否则优先敌人，最后才是队友。
 func _score_ai_target_choice(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 动作负载；窗口不可取消，未确认按无效动作拒绝。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
@@ -324,10 +372,11 @@ func _score_ai_target_choice(authoritative_snapshot: Dictionary, action: Diction
 		return -AI_SELF_CARD_PENALTY
 	# 目标角色ID与当前态度；正值友方、负值敌方。
 	var target_id: int = int(selected_targets[0])
-	# 技能持有者自身护盾；自身有护盾时选择自己可以确保B来自可见手牌。
+	# 技能持有者自身护盾与手牌价值差；两者共同决定自选是否真的能形成升级对。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
 	if target_id == owner_player_id:
-		return AI_SELF_UPGRADE_TARGET_VALUE if int(owner.get("shield", 0)) >= MIN_SHIELD_FOR_TARGET else 0.0
+		# 自选成立条件：自己有护盾且手牌存在明显高低价值差；否则压低自选分，让敌人或队友胜出。
+		return AI_SELF_UPGRADE_TARGET_VALUE if _can_self_upgrade(authoritative_snapshot, owner, evaluator) else AI_SELF_TARGET_FALLBACK_SCORE
 	if evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) < 0.0:
 		return AI_HOSTILE_TARGET_VALUE
 	return AI_FRIENDLY_TARGET_VALUE

@@ -134,11 +134,13 @@ func continue_settlement(context: Dictionary) -> bool:
 ## 判定使用“当前可执行”而非“是否拥有”：被非锁定技失效压制的欢愉技无法演出，
 ## 按原文的收益目的应改走额外阶段分支，否则本次发动将没有任何实际效果。
 func _dispatch_yaota_effect(target_id: int) -> void:
-	# 目标当前可执行的欢愉技；已按参演编号升序、技能ID字典序排列，因此首项即最高优先级。
+	# 目标当前可执行的欢愉技；已按参演编号升序、技能ID字典序排列，用于判定走哪条分支。
 	var joy_skill_ids: Array[String] = host.call("get_joy_skill_ids", target_id) as Array[String]
 	if not joy_skill_ids.is_empty():
-		# 有欢愉技分支；演出不询问是否发动，由阿哈时刻组件直接驱动。
-		host.call("try_perform_single_joy_skill", target_id, joy_skill_ids[0], _build_completion_context(JOY_COMPLETION_KIND, target_id))
+		# 有欢愉技分支；演出不询问是否发动，由阿哈时刻组件按同一排序口径依次驱动其全部欢愉技。
+		# 「全部」而不是「排序第一项」：目标的每个欢愉技都是一次独立演出，
+		# 参演编号相同的多个欢愉技也必须全部执行，否则本次发动会漏掉其中一部分收益。
+		host.call("try_perform_all_owned_joy_skills", target_id, _build_completion_context(JOY_COMPLETION_KIND, target_id))
 		return
 	# 没有欢愉技分支；按原文令其执行一个额外的出牌阶段。
 	_request_extra_play_phase(target_id)

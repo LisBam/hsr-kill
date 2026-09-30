@@ -66,6 +66,12 @@ func _ready() -> void:
 		return
 	if not await _test_serial_performance_end_to_end():
 		return
+	if not _test_round_end_fallback_trigger():
+		return
+	if not _test_round_end_boundary_after_opportunity():
+		return
+	if not _test_round_quota_single_trigger_per_round():
+		return
 	_finish_success()
 
 
@@ -316,6 +322,124 @@ func _test_serial_performance_end_to_end() -> bool:
 	# 等待演出后创建的选择请求完成入场，避免收尾阶段残留待办请求。
 	for _wait_frame: int in range(4):
 		await get_tree().process_frame
+	return true
+
+
+## 校验轮末强制补触发：整轮所有普通回合开始前的检定都未通过时，本轮额度在轮末兜底使用，保证每轮必定触发一次。
+## 该口径与机缘选择的「整轮未触发则轮末强制触发」完全一致，并且同样不消耗随机数、不写随机历史。
+func _test_round_end_fallback_trigger() -> bool:
+	_performance_log.clear()
+	_clear_joy_skills()
+	# 轮末补触发沿用常规参演序列；只装一项以保持断言简洁。
+	_install_joy_skills({1:[["test_joy_a", 144]]})
+	_controller.state.game_over = false
+	_controller.state.current_player_id = 2
+	_controller.state.current_phase = "finish"
+	_controller.state.round_number = 41
+	# 概率为0，模拟整轮每一名角色回合开始前的检定都没有通过。
+	_controller.ahha_moment_system._tracked_round_number = 41
+	_controller.ahha_moment_system._triggered_this_round = false
+	_controller.ahha_moment_system._round_trigger_probability = 0.0
+	if _controller.ahha_moment_system.try_trigger_before_turn_start({"player_id":0, "starts_new_round":true}, false):
+		return _fail("round_end_fallback_premature")
+	if _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("round_end_fallback_claimed_early")
+	# 随机源状态与随机历史长度快照；轮末补触发是「未触发」结果的收尾动作，必须两者都不变。
+	var rng_state_before: int = _rng.state
+	var history_size_before: int = _controller.state.random_history.size()
+	if not _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_end_fallback_not_triggered")
+	if _performance_log != ["1:test_joy_a"]:
+		return _fail("round_end_fallback_log %s" % str(_performance_log))
+	if _rng.state != rng_state_before or _controller.state.random_history.size() != history_size_before:
+		return _fail("round_end_fallback_consumed_random")
+	if not _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("round_end_fallback_round_not_claimed")
+	if _controller.ahha_moment_system.is_active():
+		return _fail("round_end_fallback_still_active")
+	# 每轮至多一次；同一轮的第二次补触发必须被拒绝。
+	if _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_end_fallback_triggered_twice")
+	# 空候选分支：本轮末没有任何可执行欢愉技时不触发，也不额外占用额度。
+	# 轮号刻意与已跟踪轮号不同，模拟进入新轮，组件才会重新初始化本轮额度。
+	_clear_joy_skills()
+	_controller.state.round_number = 42
+	_controller.ahha_moment_system._tracked_round_number = 41
+	if _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_end_fallback_empty_triggered")
+	if _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("round_end_fallback_empty_claimed")
+	return true
+
+
+## 校验真实轮末边界的环节顺序：机缘轮末保底已接管时，阿哈时刻仍会在同一次轮末补触发。
+## 两个环节在轮末与回合开始前使用同一顺序（机缘在前、阿哈时刻在后），且各自只占用自己的轮次额度。
+func _test_round_end_boundary_after_opportunity() -> bool:
+	_performance_log.clear()
+	_clear_joy_skills()
+	_install_joy_skills({0:[["test_joy_a", 144]]})
+	_controller.state.game_over = false
+	_controller.state.current_player_id = 2
+	_controller.state.current_phase = "finish"
+	_controller.state.round_number = 51
+	# 机缘已在本轮末触发过；其额度被占用，因此再次进入轮末边界只会继续尝试阿哈时刻。
+	_controller.opportunity_system._tracked_round_number = 51
+	_controller.opportunity_system._triggered_this_round = true
+	_controller.opportunity_system._round_trigger_probability = 0.0
+	# 阿哈时刻本轮回合开始前全部未触发；概率置0模拟该情况，保底仍必须补触发。
+	_controller.ahha_moment_system._tracked_round_number = 51
+	_controller.ahha_moment_system._triggered_this_round = false
+	_controller.ahha_moment_system._round_trigger_probability = 0.0
+	# 随机源状态与随机历史长度快照；两个环节都已无掷骰空间，必须逐位不变。
+	var rng_state_before: int = _rng.state
+	var history_size_before: int = _controller.state.random_history.size()
+	_controller._continue_round_end_after_restore(2)
+	if _performance_log != ["0:test_joy_a"]:
+		return _fail("round_end_boundary_log %s" % str(_performance_log))
+	if _rng.state != rng_state_before or _controller.state.random_history.size() != history_size_before:
+		return _fail("round_end_boundary_consumed_random")
+	if not _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("round_end_boundary_not_claimed")
+	return true
+
+
+## 校验“每轮至多一次常规阿哈时刻”的额度约束。
+## 回合开始前的概率触发与轮末保底**共用同一份额度**，因此两者任意一个先成立都会挡住另一个；
+## 额度只在轮号变化时重置，所以跨轮后重新可用；技能请求的额外演出既不占用额度、也不受额度限制。
+func _test_round_quota_single_trigger_per_round() -> bool:
+	_performance_log.clear()
+	_clear_joy_skills()
+	_install_joy_skills({1:[["test_joy_a", 144]]})
+	_controller.state.game_over = false
+	_controller.state.current_player_id = 2
+	_controller.state.current_phase = "finish"
+	_controller.state.round_number = 61
+	# 第61轮：回合开始前的检定必定通过，先由该入口占用本轮额度。
+	_controller.ahha_moment_system._tracked_round_number = 61
+	_controller.ahha_moment_system._triggered_this_round = false
+	_controller.ahha_moment_system._round_trigger_probability = 1.0
+	if not _controller.ahha_moment_system.try_trigger_before_turn_start({"player_id":0, "starts_new_round":true}, false):
+		return _fail("round_quota_first_trigger")
+	# 同一轮内另一名角色的回合开始前：额度已用尽，不得再次触发。
+	if _controller.ahha_moment_system.try_trigger_before_turn_start({"player_id":1, "starts_new_round":false}, false):
+		return _fail("round_quota_second_turn_start")
+	# 同一轮的轮末保底：与回合开始前共用额度，同样必须被拒绝。
+	if _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_quota_round_end_after_turn_start")
+	# 技能请求的额外演出不占用该额度，演完后额度仍保持“已占用”而不是被改写。
+	if not _controller.ahha_moment_system.try_trigger_extra_moment(0, {"kind":"round_quota_extra", "skill_owner_id":0, "skill_id":"test", "skill_character_generation":-1}):
+		return _fail("round_quota_extra_moment")
+	if _controller.ahha_moment_system.is_active() or not _controller.ahha_moment_system.has_triggered_this_round():
+		return _fail("round_quota_extra_moment_state active=%s claimed=%s" % [str(_controller.ahha_moment_system.is_active()), str(_controller.ahha_moment_system.has_triggered_this_round())])
+	# 第62轮：轮号变化才重置额度，轮末保底重新可用。
+	_controller.state.round_number = 62
+	if not _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_quota_next_round_fallback")
+	# 新一轮内反向组合：保底先成立后，该轮的回合开始前入口同样必须被拒绝。
+	if _controller.ahha_moment_system.try_trigger_before_turn_start({"player_id":0, "starts_new_round":false}, false):
+		return _fail("round_quota_turn_start_after_fallback")
+	if _controller.ahha_moment_system.try_trigger_at_round_end(2):
+		return _fail("round_quota_next_round_twice")
 	return true
 
 

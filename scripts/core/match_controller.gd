@@ -10797,6 +10797,14 @@ func try_perform_single_joy_skill(player_id: int, skill_id: String, completion_c
 	return ahha_moment_system.try_perform_single_joy_skill(player_id, skill_id, completion_context)
 
 
+## 令指定角色按参演编号顺序依次发动其全部可执行欢愉技；独立于常规阿哈时刻队列，演出结束后回调发起技能。
+## 内容文件只经本端口访问阿哈时刻组件，排序口径由组件统一维护，内容层不得自行拼装演出队列。
+func try_perform_all_owned_joy_skills(player_id: int, completion_context: Dictionary) -> bool:
+	if ahha_moment_system == null:
+		return false
+	return ahha_moment_system.try_perform_all_owned_joy_skills(player_id, completion_context)
+
+
 ## 令指定角色立即触发一次额外阿哈时刻；跳过触发概率与本轮额度，演出结束后回调发起技能。
 func try_trigger_extra_moment(trigger_player_id: int, completion_context: Dictionary) -> bool:
 	if ahha_moment_system == null:
@@ -13277,11 +13285,28 @@ func _complete_round_end_boundary(sequence: RuleStepSequence) -> void:
 	_continue_round_end_after_restore(int(sequence.context.get("finished_player_id", -1)))
 
 
-## 轮末限时离场角色全部返回后触发轮末机缘并按恢复后的座次进入下一轮。
+## 轮末限时离场角色全部返回后触发轮末机缘与轮末阿哈时刻补触发，并按恢复后的座次进入下一轮。
+## 两个环节的先后顺序与回合开始前完全一致：机缘在前、阿哈时刻在后，因此同一套触发口径在两处保持同构。
+## 本入口也是“轮末机缘结算完毕”的恢复出口（continue_after_opportunity 的 round_end 分支会回到这里）：
+## 此时机缘的轮次额度已被占用，因此第二次进入只会继续尝试阿哈时刻保底，不会重复触发机缘。
 func _continue_round_end_after_restore(finished_player_id: int) -> void:
 	if state == null or state.game_over or state.current_player_id != finished_player_id:
 		return
 	if opportunity_system != null and opportunity_system.try_trigger_at_round_end(finished_player_id):
+		return
+	# 整轮所有普通回合开始前的检定都没有通过时，本轮阿哈时刻额度在轮末兜底使用；
+	# 该分支与机缘同样是「每轮必定触发一次」的保底，演出结束后经 continue_after_round_end_ahha_moment 回到本流程。
+	if ahha_moment_system != null and ahha_moment_system.try_trigger_at_round_end(finished_player_id):
+		return
+	_schedule_phase_transition(finished_player_id, "finish", Callable(self, "_start_queued_or_normal_turn").bind(finished_player_id))
+
+
+## 在轮末补触发的阿哈时刻全部演出结束后恢复轮末流程；与机缘轮末恢复使用同一收尾动作。
+## 只接受仍停在轮末结束阶段的原回合角色：演出期间的换人、终局或阶段推进都会让本回调过期并被丢弃。
+func continue_after_round_end_ahha_moment(finished_player_id: int) -> void:
+	if state == null or state.game_over:
+		return
+	if state.current_player_id != finished_player_id or state.current_phase != "finish":
 		return
 	_schedule_phase_transition(finished_player_id, "finish", Callable(self, "_start_queued_or_normal_turn").bind(finished_player_id))
 
@@ -13372,7 +13397,9 @@ func continue_after_opportunity(resume_kind: String, context: Dictionary) -> voi
 		# 完成轮末机缘的原回合角色；必须仍是当前结束阶段角色，旧流程恢复请求才有效。
 		var finished_player_id: int = int(context.get("finished_player_id", -1))
 		if state.current_player_id == finished_player_id and state.current_phase == "finish":
-			_schedule_phase_transition(finished_player_id, "finish", Callable(self, "_start_queued_or_normal_turn").bind(finished_player_id))
+			# 轮末机缘已经结算完毕，继续判定轮末阿哈时刻保底，保持“机缘在前、阿哈时刻在后”的同一顺序。
+			# 机缘已在轮末占用自己的轮次额度，因此该入口只会尝试阿哈时刻，不会重复触发机缘。
+			_continue_round_end_after_restore(finished_player_id)
 		return
 	if resume_kind == "conquest_initial_opportunity":
 		# 开局机缘完成后才建立玩家的第一回合，保证玩家固定先手且不会在选择期间提前推进AI。
