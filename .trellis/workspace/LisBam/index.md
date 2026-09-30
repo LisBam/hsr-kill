@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-09-30
+- **Total Sessions**: 5
+- **Last Active**: 2026-10-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~165 | Active |
+| `journal-1.md` | ~187 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-10-01 | 重构【凶星】为角色持续效果并新增【桃】留桃AI | `4275829` | `master` |
 | 4 | 2026-09-30 | 调整【好活】弃置逻辑与防具无效攻击的AI收益口径 | `0a7e33e` | `master` |
 | 3 | 2026-09-30 | 新增主演机制与白露、刃两名武将 | `97c87fc` | `master` |
 | 2 | 2026-09-30 | 新增星际和平公司势力、武将真珠、真实轮末时机与牌面复制视为 | `9deeb35`, `8faaf4f` | `master` |
