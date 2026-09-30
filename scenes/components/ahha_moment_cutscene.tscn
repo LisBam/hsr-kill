@@ -1,0 +1,31 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/ahha_moment_cutscene.gd" id="1_cutscene"]
+[ext_resource type="Shader" path="res://assets/shaders/chroma_key_alpha.gdshader" id="2_chroma_key"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_chroma_key"]
+shader = ExtResource("2_chroma_key")
+
+[node name="AhhaMomentCutscene" type="Control"]
+process_mode = 3
+visible = false
+z_index = 120
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_cutscene")
+
+[node name="Video" type="VideoStreamPlayer" parent="."]
+material = SubResource("ShaderMaterial_chroma_key")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand = true

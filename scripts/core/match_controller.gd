@@ -43,6 +43,10 @@ signal equipment_activated(player_id: int, equipment_name: String, context: Dict
 ## 音频表现层据此选择并播放语音；该负载可序列化并随联机表现事件广播，表现层不需要回读任何控制器状态。
 signal voice_presentation_requested(presentation_data: Dictionary)
 
+## 阿哈时刻开始演出信号；表现层据此播放过场动画等本地演出。
+## 与其它表现信号同为纯通知：控制器不等待订阅者，也不把任何表现结果写回规则流程。
+signal ahha_moment_started(performance_count: int, source: String)
+
 ## 音频请求类别：技能发动语音；音频服务据此按“角色专属 → 通用”顺序解析候选文件。
 const VOICE_KIND_SKILL: String = "skill"
 
@@ -704,6 +708,9 @@ func _ready() -> void:
 		ahha_moment_system = AhhaMomentSystem.new()
 		ahha_moment_system.name = "AhhaMomentSystem"
 		add_child(ahha_moment_system)
+	# 阿哈时刻开始事件只转发给表现层；连接一次即可，组件在重新开局时不会重建。
+	if not ahha_moment_system.moment_started.is_connected(_on_ahha_moment_started):
+		ahha_moment_system.moment_started.connect(_on_ahha_moment_started)
 	gameplay_pause_service = get_node_or_null("GameplayPauseService") as GameplayPauseService
 	if gameplay_pause_service == null:
 		gameplay_pause_service = GameplayPauseService.new()
@@ -11099,6 +11106,12 @@ func try_trigger_extra_moment(trigger_player_id: int, completion_context: Dictio
 	if ahha_moment_system == null:
 		return false
 	return ahha_moment_system.try_trigger_extra_moment(trigger_player_id, completion_context)
+
+
+## 转发阿哈时刻开始事件。表现层只订阅该信号播放过场动画等本地演出，规则流程不做任何等待。
+## performance_count 为本场参演欢愉技数量；source 取 AhhaMomentSystem 的公开来源常量，供表现层按来源分流。
+func _on_ahha_moment_started(performance_count: int, source: String) -> void:
+	ahha_moment_started.emit(performance_count, source)
 
 
 ## 判断指定角色的本次回合是否会开启新的一轮；额外回合不得开启新轮，也不得递增 round_number。

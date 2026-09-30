@@ -21,6 +21,9 @@ const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/compon
 ## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
 const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/components/game_settlement_panel.tscn")
 
+## 阿哈时刻过场动画场景；订阅控制器的阿哈时刻开始信号后播放绿幕过场视频，不参与任何规则结算。
+const AHHA_MOMENT_CUTSCENE_SCENE: PackedScene = preload("res://scenes/components/ahha_moment_cutscene.tscn")
+
 ## 音频服务自动加载路径；终局胜负需要按本机视角发声，因此由表现层直接请求而不经过核心层广播。
 const AUDIO_SERVICE_PATH: String = "/root/AudioService"
 
@@ -238,6 +241,9 @@ var game_settlement_panel: GameSettlementPanel
 
 ## 局内聊天窗口组件；由局内菜单“聊天”按钮切换显隐，消息权威登记与广播由 NetworkGateway 负责。
 var match_chat_panel: MatchChatPanel
+
+## 阿哈时刻过场动画组件；只订阅控制器的阿哈时刻开始信号播放绿幕视频，规则流程不等待其播放结果。
+var ahha_moment_cutscene: AhhaMomentCutscene
 
 ## 按发言者稳定玩家 ID 复用的头顶聊天气泡；键为玩家 ID，值为 ChatBubbleView，新消息复用同一气泡节点。
 var _chat_bubbles: Dictionary = {}
@@ -538,6 +544,7 @@ func _ready() -> void:
 	_create_opportunity_choice_panel()
 	_create_game_settlement_panel()
 	_create_match_chat_panel()
+	_create_ahha_moment_cutscene()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -1229,6 +1236,26 @@ func _create_match_chat_panel() -> void:
 	add_child(match_chat_panel)
 	match_chat_panel.chat_submitted.connect(_on_match_chat_submitted)
 	match_chat_panel.close_requested.connect(_on_match_chat_close_requested)
+
+
+## 创建阿哈时刻过场动画组件并订阅控制器的演出开始信号。
+## 组件只做本地表现：牌桌不读取它的任何状态，播放失败也不会影响阿哈时刻的规则结算。
+func _create_ahha_moment_cutscene() -> void:
+	ahha_moment_cutscene = AHHA_MOMENT_CUTSCENE_SCENE.instantiate() as AhhaMomentCutscene
+	ahha_moment_cutscene.name = "AhhaMomentCutscene"
+	add_child(ahha_moment_cutscene)
+	# 暂停服务由桌面注入；只有组件自身的“播放期间暂停对局”开关开启时才会申请令牌。
+	ahha_moment_cutscene.set_pause_service(match_controller.gameplay_pause_service)
+	match_controller.ahha_moment_started.connect(_on_ahha_moment_started)
+
+
+## 阿哈时刻开始：播放过场动画并立即返回，牌桌不等待播放结果。
+## performance_count 为本场参演欢愉技数量（当前表现不读取，保留给后续扩展的负载）；
+## source 为 AhhaMomentSystem 的公开来源常量，由组件按来源开关决定是否播放。
+func _on_ahha_moment_started(_performance_count: int, source: String) -> void:
+	if ahha_moment_cutscene == null or not is_instance_valid(ahha_moment_cutscene):
+		return
+	ahha_moment_cutscene.play_cutscene(source)
 
 
 ## 同步终局结算面板的自动展示状态；同一局只首次自动展示，用户关闭后不会被重复状态广播打断。
@@ -3343,6 +3370,9 @@ func _on_restart_requested(player_count: int) -> bool:
 
 ## 清空上一局残留的全部本地表现与临时交互状态；普通重开与存档恢复开局共用本入口。
 func _reset_presentation_for_new_match() -> void:
+	# 过场动画先于其它表现清理：它可能正持有对局暂停令牌，不释放会让新局一开始就停住。
+	if ahha_moment_cutscene != null and is_instance_valid(ahha_moment_cutscene):
+		ahha_moment_cutscene.stop_cutscene()
 	if information_box != null and is_instance_valid(information_box):
 		information_box.close_character_details()
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):

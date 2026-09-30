@@ -22,6 +22,21 @@ const LOG_ROUND_END_TRIGGER_TEMPLATE: String = "阿哈时刻（轮末补触发�
 ## 单次同步推进允许连续执行的参演技能数上限；超过后退回下一帧推进，避免异常内容形成深递归调用栈。
 const MAX_SYNCHRONOUS_ADVANCES: int = 64
 
+## 演出来源标识：回合开始前的常规概率触发。
+## 来源只用于表现层分流，规则层不为任何来源改变演出内容或排序。
+const SOURCE_TURN_START: String = "turn_start"
+
+## 演出来源标识：整轮所有回合开始前都未触发时的轮末保底触发。
+const SOURCE_ROUND_END: String = "round_end"
+
+## 演出来源标识：技能请求的额外阿哈时刻（例如【鸿运】），不占用本轮常规额度。
+const SOURCE_EXTRA_MOMENT: String = "extra_moment"
+
+
+## 阿哈时刻开始演出时发出。表现层据此播放过场动画等本地演出；
+## 该信号是纯通知，规则流程不等待任何订阅者，也不读取订阅者的返回值。
+signal moment_started(performance_count: int, source: String)
+
 
 ## 当前权威对局控制器；组件只调用其公开端口，不直接改变体力、牌区、技能或座次数组。
 var _host: MatchController
@@ -177,6 +192,8 @@ func try_trigger_before_turn_start(turn_context: Dictionary, is_extra_turn: bool
 	_resume_at_round_end = false
 	_round_end_finished_player_id = -1
 	_host.add_log(LOG_TRIGGER_TEMPLATE % _performance_queue.size())
+	# 演出开始通知；表现层据此播放过场动画，组件继续同步推进首项欢愉技，不等待任何表现回调。
+	moment_started.emit(_performance_queue.size(), SOURCE_TURN_START)
 	_advance_to_next_valid_entry()
 	return true
 
@@ -211,6 +228,8 @@ func try_trigger_at_round_end(finished_player_id: int) -> bool:
 	_resume_at_round_end = true
 	_round_end_finished_player_id = finished_player_id
 	_host.add_log(LOG_ROUND_END_TRIGGER_TEMPLATE % _performance_queue.size())
+	# 演出开始通知；轮末保底与回合开始前共用同一信号，来源由第三个参数区分。
+	moment_started.emit(_performance_queue.size(), SOURCE_ROUND_END)
 	_advance_to_next_valid_entry()
 	return true
 
@@ -284,6 +303,8 @@ func try_trigger_extra_moment(trigger_player_id: int, completion_context: Dictio
 		return false
 	_start_requested_performance(performance_order, trigger_player_id, completion_context)
 	_host.add_log(LOG_EXTRA_TRIGGER_TEMPLATE % performance_order.size())
+	# 演出开始通知；额外演出与常规演出共用同一信号，来源由第三个参数区分。
+	moment_started.emit(performance_order.size(), SOURCE_EXTRA_MOMENT)
 	return true
 
 
