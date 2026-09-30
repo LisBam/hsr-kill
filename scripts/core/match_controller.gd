@@ -32,6 +32,10 @@ signal card_animation_ownership_reset_requested(card_uid: int)
 ## 技能实际发动表现信号；桌面根据玩家、技能名和已确认的可序列化上下文显示提示与目标线，不读取或修改技能运行时。
 signal skill_activated(player_id: int, skill_name: String, context: Dictionary)
 
+## 技能目标指示器表现信号；技能在任意时机声明“本次效果指向这些角色”时发送。
+## 桌面据此从来源角色位置向每名目标绘制一次性指示线，不读取或修改任何规则状态，也不要求技能曾经发动过。
+signal skill_target_indicated(source_player_id: int, target_player_ids: Array[int])
+
 ## 防具实际生效表现信号；桌面复用武将牌中央提示显示防具名，不读取或修改装备实体与规则状态。
 signal equipment_activated(player_id: int, equipment_name: String, context: Dictionary)
 
@@ -756,6 +760,8 @@ func _ready() -> void:
 		card_animation_ownership_reset_requested.connect(_replicate_card_animation_reset_event)
 	if not skill_activated.is_connected(_replicate_skill_activated_event):
 		skill_activated.connect(_replicate_skill_activated_event)
+	if not skill_target_indicated.is_connected(_replicate_skill_target_indicated_event):
+		skill_target_indicated.connect(_replicate_skill_target_indicated_event)
 	if not equipment_activated.is_connected(_replicate_equipment_activated_event):
 		equipment_activated.connect(_replicate_equipment_activated_event)
 	if not voice_presentation_requested.is_connected(_replicate_voice_presentation_event):
@@ -2227,11 +2233,18 @@ func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Ar
 	var target_mode: String = str(definition.get("target_mode", ""))
 	# 规范化目标；全体目标牌由规则服务按存活座次自动展开。
 	var normalized_targets: Array[int] = card_rules.normalize_targets(player_id, card, selected_target_ids)
+	# 玩家提交目标的校验快照；必须在技能改写之前留存。
+	# 目标改写由技能在整牌时机自动施加，可能改变目标数量（【支离】把“唯一目标的【杀】”改写为原目标的相邻角色，
+	# 三人及以上局面会变成两名目标），这类改写不是玩家做出的选择，也不改变“玩家选择本身是否合法”。
+	# 若用改写后的目标去校验，单目标【杀】会因超出 max_targets=1 被判为“目标数量不符合卡牌规则”，
+	# 使确认按钮永久不可点击；而真实提交路径 _prevalidate_play_action 校验的正是改写前的目标，
+	# 因此预览必须与提交路径使用同一份目标，才能保证预览与结算口径完全一致。
+	var submitted_targets: Array[int] = normalized_targets.duplicate()
 	# 技能目标改写预览；【支离】等技能会在整牌时机把目标整体改写，此处让界面提前看到真实目标。
 	# 预览与真实结算使用同一份判定条件；被改写掉的原目标不再是本牌目标，因此不再显示其目标指示。
 	normalized_targets = preview_skill_card_use_targets(player_id, definition, normalized_targets)
 	# 当前完整组合的规则校验结果；空字符串表示确认按钮可以提交。
-	var validation_error: String = card_rules.validate_use(player_id, card, normalized_targets)
+	var validation_error: String = card_rules.validate_use(player_id, card, submitted_targets)
 	# 下一步合法候选目标；候选会结合已有目标顺序验证当前卡牌的完整目标组合。
 	var legal_target_ids: Array[int] = []
 	for candidate: PlayerState in state.players:
@@ -9690,6 +9703,32 @@ func _is_duplicate_voice_request(dedup_key: String) -> bool:
 	return false
 
 
+## 请求桌面把目标指示器指向指定角色；技能可独立调用，不依赖发动提示与日志。
+## 与 record_skill_activation 完全解耦：本端口只发布表现信号，不写日志、不发语音、不消耗技能次数，
+## 也不创建或修改任何规则事件，因此技能可以在效果真正指向新目标的任意时刻调用它。
+## 典型用法是目标改写完成后重新指示：#技能改写发生在“使用牌声明之后”，出牌时的原始指向线已经按旧目标播放。
+## 来源与目标都必须是当前桌面存在的稳定玩家ID；找不到座位的角色由桌面跳过对应线段，不影响其余目标。
+## 返回值：发布成功返回true；对局已结束或来源角色无效时返回false且不产生副作用。
+func show_skill_target_indicator(source_player_id: int, target_player_ids: Array[int]) -> bool:
+	if state == null or state.game_over:
+		return false
+	if state.get_player(source_player_id) == null:
+		return false
+	# 规范化目标数组；负数与重复ID不构成可绘制角色目标，同时剔除来源自己以外的无效角色。
+	var stable_target_ids: Array[int] = []
+	for target_variant: Variant in target_player_ids:
+		var target_id: int = int(target_variant)
+		if target_id < 0 or stable_target_ids.has(target_id):
+			continue
+		if state.get_player(target_id) == null:
+			continue
+		stable_target_ids.append(target_id)
+	if stable_target_ids.is_empty():
+		return false
+	skill_target_indicated.emit(source_player_id, stable_target_ids)
+	return true
+
+
 ## 写入一条实际成立的技能发动记录，并通知对局日志与桌面表现；内容技能只能通过本公开端口调用，不能直接改写历史数组。
 func record_skill_activation(player_id: int, skill_id: String, context: Dictionary = {}) -> void:
 	if state == null or state.game_over:
@@ -15301,6 +15340,8 @@ func _on_network_game_event_received(event_type: String, event_payload: Dictiona
 		card_animation_ownership_reset_requested.emit(int(event_payload.get("card_uid", -1)))
 	elif event_type == "skill_activated":
 		skill_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("skill_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
+	elif event_type == "skill_target_indicated":
+		skill_target_indicated.emit(int(event_payload.get("source_player_id", -1)), _int_array(event_payload.get("target_player_ids", []) as Array))
 	elif event_type == "equipment_activated":
 		equipment_activated.emit(int(event_payload.get("player_id", -1)), str(event_payload.get("equipment_name", "")), (event_payload.get("context", {}) as Dictionary).duplicate(true))
 	elif event_type == "voice_presentation":
@@ -15746,6 +15787,13 @@ func _replicate_skill_activated_event(player_id: int, skill_name: String, contex
 		network_gateway.broadcast_game_event("skill_activated", {"player_id":player_id, "skill_name":skill_name, "context":context.duplicate(true)})
 
 
+## 广播技能目标指示器请求；只发送来源与目标稳定ID，客户端自行解析座位锚点与绘制样式。
+## 规则只在本机权威端推进，因此技能改写目标时客户端不会重跑同一段代码，必须依赖本广播才能看到同一指向。
+func _replicate_skill_target_indicated_event(source_player_id: int, target_player_ids: Array[int]) -> void:
+	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
+		network_gateway.broadcast_game_event("skill_target_indicated", {"source_player_id":source_player_id, "target_player_ids":target_player_ids.duplicate()})
+
+
 ## 广播已经实际生效的装备提示；不发送装备运行时实例或触发订阅。
 func _replicate_equipment_activated_event(player_id: int, equipment_name: String, context: Dictionary) -> void:
 	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
@@ -15807,6 +15855,25 @@ func get_starring_role_player_id() -> int:
 ## 判断指定角色当前是否为「主演」；纯查询端口，供技能条件与AI评估共用同一口径。
 func is_starring_role(player_id: int) -> bool:
 	return starring_role_service != null and starring_role_service.is_starring(player_id)
+
+
+## 写入一名角色某个技能的动态显示描述；供技能把运行时进度反映到资料里显示的效果正文。
+## 数据落在 PlayerState.dynamic_skill_descriptions 并随观察者快照下发，因此悬停武将资料、右键武将详情与技能按钮
+## 三处显示同源；技能不得直接改 GameDatabase 的静态元数据，静态原文始终是“初始值”。
+## description 传空字符串表示清除覆盖，界面回退静态元数据描述（技能复原时据此回到完整原文）。
+## 描述文本可以使用成对的删除线标记（与 SkillDescriptionView 的解析标记同一对常量）把已经失效的原文片段划掉。
+## 返回值：目标角色存在且技能ID非空时返回true；清除一个本就不存在的覆盖同样返回true（幂等）。
+func set_skill_display_description(player_id: int, skill_id: String, description: String) -> bool:
+	# 目标角色；无效角色或空技能ID不能建立无法清理的公开状态。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or skill_id.is_empty():
+		return false
+	if description.is_empty():
+		player.dynamic_skill_descriptions.erase(skill_id)
+	else:
+		player.dynamic_skill_descriptions[skill_id] = description
+	refresh_public_state_snapshot()
+	return true
 
 
 ## 写入一项武将牌左上角公开文本；相同来源ID会原位更新，多个来源由控制器按排序值稳定合成。

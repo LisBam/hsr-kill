@@ -17,6 +17,6 @@ func _init() -> void:
 		"display_name":"刃",
 		"gender":"male",
 		"faction":"xinghelieshou",
-		"max_hp":4,
+		"max_hp":5,
 		"description":"以【万死】在濒死边缘换取主演身份与额外回合，并用【支离】把【杀】扩散到目标的两侧相邻角色。",
 	}, [WANSI_SKILL, ZHILI_SKILL])

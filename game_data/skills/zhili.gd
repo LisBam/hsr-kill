@@ -99,7 +99,10 @@ func _on_owner_slash_used(event: RuleEvent) -> void:
 	var neighbor_ids: Array[int] = _get_seat_neighbor_ids(sole_target_id)
 	# 相邻角色为空时保留原目标继续结算；代价仍然无条件支付。
 	if not neighbor_ids.is_empty():
-		host.call("replace_card_use_targets", card_uid, neighbor_ids, get_id())
+		# 改写经权威端口提交，并按改写后的真实目标重新指示一次。
+		# 出牌时播放的原始指向线是按改写前的旧目标绘制的，不重新指示会让玩家看到的箭头与实际结算对象不一致。
+		if bool(host.call("replace_card_use_targets", card_uid, neighbor_ids, get_id())):
+			indicate_targets(neighbor_ids)
 	_rewritten_card_uids.append(card_uid)
 	_pending_hp_cost_card_uids.append(card_uid)
 	announce_activation({"card_uid":card_uid, "original_target_id":sole_target_id, "rewritten_target_ids":neighbor_ids.duplicate()})
@@ -187,10 +190,39 @@ func _score_self_hp_cost(authoritative_snapshot: Dictionary, evaluator: Object) 
 
 
 ## 返回指定角色在存活环座次上的相邻角色ID数组；无相邻者或目标无效时返回空数组。
+## 结果按“从持有者开始的行动顺序”重排：结算顺序以使用者为起点，而相邻关系的天然顺序以**原目标**为起点
+## （下家在前、上家在后），两者在以原目标为起点的场景下恰好一致，其余场景会颠倒。
+## 例如4人局0号用【杀】指定1号，邻居集合为{2号, 0号}：以1号为起点是[2号, 0号]，
+## 以使用者0号为起点才是[0号, 2号]；不重排会让持有者自己的伤害排在队友之后结算。
 func _get_seat_neighbor_ids(player_id: int) -> Array[int]:
 	if host == null or host.get("state") == null:
 		return []
-	return host.state.get_seat_neighbor_player_ids(player_id) as Array[int]
+	return _sort_by_action_order(host.state.get_seat_neighbor_player_ids(player_id) as Array[int])
+
+
+## 按“从持有者开始的行动顺序”重排一组角色ID；无效座次或缺失权威状态时返回原数组副本。
+## 只做顺序调整，不增删成员：未被行动顺序覆盖的ID（例如等待期间已经离场的角色）一律原序追加，避免目标丢失。
+func _sort_by_action_order(player_ids: Array[int]) -> Array[int]:
+	if player_ids.size() <= 1 or host == null or host.get("state") == null:
+		return player_ids.duplicate()
+	# 重排结果；按持有者起算的环形行动顺序逐个收集。
+	var result: Array[int] = []
+	# 当前遍历角色；从持有者本人开始，因为他同样可能出现在改写后的目标里。
+	var current_id: int = owner_player_id
+	# 环形遍历一圈即可覆盖全部存活角色，邻居数量至多为二，因此不需要额外的排序数据结构。
+	for _step: int in range(host.state.players.size()):
+		if player_ids.has(current_id) and not result.has(current_id):
+			result.append(current_id)
+		# 下一名存活角色；权威查询返回角色对象，缺失时保持当前游标以避免死循环。
+		var next_player: PlayerState = host.state.get_next_alive_player(current_id)
+		if next_player == null:
+			break
+		current_id = next_player.player_id
+	# 未被行动顺序覆盖的成员原序追加；正常局不会出现，只用于异常座次下的防御。
+	for player_id: int in player_ids:
+		if not result.has(player_id):
+			result.append(player_id)
+	return result
 
 
 ## 从只读快照计算指定角色的相邻角色ID；AI侧不复用权威状态，只能读取快照公开字段。

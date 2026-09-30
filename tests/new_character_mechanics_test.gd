@@ -38,6 +38,8 @@ func _run() -> void:
 		return
 	if not _test_feiyan_preparation_phase_virtual_use():
 		return
+	if not _test_feiyan_self_fire_attack_ai_discard():
+		return
 	if not await _test_feiyan_main_phase_conversion():
 		return
 	if not _test_named_card_gain_and_hand_view_as():
@@ -646,6 +648,65 @@ func _test_feiyan_preparation_phase_virtual_use() -> bool:
 		return _fail("feiyan_runtime_virtual_use_not_consumed")
 	if not _controller.has_pending_card_choice():
 		return _fail("feiyan_runtime_virtual_use_did_not_start_huogong")
+	return true
+
+
+## 校验【飞焰】对自己使用【火攻】的完整AI链路：虚拟牌必须携带命中联动奖励，【火攻】在该奖励存在且
+## 使用者对自己使用时必须让AI确认弃牌。缺少这条链路时火攻不造成伤害，飞焰的摸三张牌与本回合
+## 主要阶段转换永远不会触发，玩家看到的就是“飞焰自伤不弃牌”。
+func _test_feiyan_self_fire_attack_ai_discard() -> bool:
+	_reset_state(2)
+	_controller.state.current_phase = "preparation"
+	_controller.state.current_player_id = 0
+	# 虎克本人；持有【飞焰】与【无邪】，是该自伤链路的唯一使用者。
+	var huke: PlayerState = _controller.state.get_player(0)
+	huke.character_id = "huke"
+	# 未满体力；【无邪】能把这点自伤回复回来，本次弃牌的收益因此更高。
+	huke.hp = maxi(huke.max_hp - 1, 1)
+	# 展示与弃置都只操作使用者自己的手牌，因此一张手牌即可完成命中。
+	var hand_card: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+	var feiyan: SkillDefinition = _install_single_skill(0, "feiyan")
+	if feiyan == null:
+		return _fail("feiyan_missing")
+	# 已确认的自目标响应；飞焰允许把自己作为火攻目标。
+	var response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
+	response.target_ids = [0]
+	if not feiyan.continue_selection({"kind":"feiyan_target"}, response):
+		return _fail("feiyan_self_target_not_consumed")
+	if not _controller.has_pending_card_choice():
+		return _fail("feiyan_self_target_no_huogong")
+	# 本次虚拟火攻的扩展存储；必须携带正数命中联动奖励，否则火攻只会看到统一评分的自伤惩罚。
+	var reward_value: float = 0.0
+	for context_variant: Variant in _controller._card_use_contexts.values():
+		var storage: Dictionary = ((context_variant as Dictionary).get("virtual_storage", {}) as Dictionary)
+		reward_value = maxf(reward_value, float(storage.get("hit_reward_value", 0.0)))
+	if reward_value <= 0.0:
+		return _fail("feiyan_virtual_storage_missing")
+	# 展示阶段；展示自己的手牌后进入同花色弃牌窗口。
+	if not _submit_pending_choice(0, [hand_card.uid], [], true):
+		return false
+	if not _controller.has_pending_card_choice():
+		return _fail("feiyan_self_target_no_discard_window")
+	var discard_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var discard_context: Dictionary = discard_request.get("context", {}) as Dictionary
+	if str(discard_context.get("kind", "")) != "fire_attack_discard" or int(discard_context.get("actor_id", -1)) != 0 or int(discard_context.get("target_id", -1)) != 0:
+		return _fail("feiyan_self_target_discard_context=%s" % [discard_context])
+	# 奖励必须原样带到弃牌请求；否则火攻的专属评分无法判断这次自伤是否值得。
+	if float(discard_context.get("hit_reward_value", 0.0)) <= 0.0:
+		return _fail("feiyan_discard_reward_missing=%s" % [discard_context])
+	# 完整AI决策；必须确认弃牌而不是取消，火攻才会造成伤害并触发飞焰奖励。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var discard_actions: Array[Dictionary] = _controller._build_card_choice_actions(discard_request)
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, discard_request, discard_actions)
+	if not bool((chosen.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("feiyan_self_fire_attack_cancelled chosen=%s" % [chosen])
+	# 对照：抹掉联动奖励后同一请求必须被取消，证明改动只影响带奖励的自伤场景。
+	var plain_request: Dictionary = discard_request.duplicate(true)
+	(plain_request["context"] as Dictionary).erase("hit_reward_value")
+	var plain_chosen: Dictionary = policy.choose_card_choice(snapshot, plain_request, _controller._build_card_choice_actions(plain_request))
+	if bool((plain_chosen.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("feiyan_plain_self_damage_confirmed")
 	return true
 
 

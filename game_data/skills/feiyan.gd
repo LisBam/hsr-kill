@@ -14,6 +14,22 @@ const AI_SELF_TARGET_SCORE: float = 18.0
 ## AI发动飞焰的基础收益；体现摸3张牌和四段出牌阶段带来的高行动价值。
 const AI_ACTIVATION_VALUE: float = 12.0
 
+## 本回合被【飞焰】转换为普通出牌阶段的主要阶段数量；判定、摸牌、正常出牌、弃牌四个阶段各一次，
+## 修改时必须同步技能效果描述与玩法文档中的阶段转换说明。
+const MAIN_PHASE_CONVERT_COUNT: int = 4
+
+## AI：单个普通出牌阶段的行动价值；与项目其他“额外一个出牌阶段”类效果的估值同档。
+const AI_PLAY_PHASE_VALUE: float = 1.2
+
+## virtual_storage 中“命中联动奖励”的稳定键名；【火攻】按同一键名读取本次命中能换回的联动收益，
+## 两处必须保持一致，否则视为使用【火攻】的技能无法参与自身弃牌伤害的收益判断。
+const VIRTUAL_STORAGE_HIT_REWARD_KEY: String = "hit_reward_value"
+
+## AI：飞焰命中一次的真实联动奖励估值 = 摸3张牌 + 四个普通出牌阶段的行动价值。
+## 该值经 virtual_storage 随虚拟【火攻】传递，使【火攻】在“使用者对自己使用”时按联动收益评分，
+## 而不是只看到通用层的自伤惩罚；修改摸牌数或阶段转换数量时必须同步本式。
+const AI_HIT_REWARD_VALUE: float = DRAW_COUNT * NonameAIEvaluator.CARD_RESOURCE_VALUE + MAIN_PHASE_CONVERT_COUNT * AI_PLAY_PHASE_VALUE
+
 ## 准备阶段虚拟使用火攻的规则覆写；只解除出牌阶段限制，不跳过目标、距离或次数校验。
 const VIRTUAL_RULE_OVERRIDES: Dictionary = {"ignore_phase_limit":true}
 
@@ -65,7 +81,11 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var target_ids: Array[int] = [target_id]
 	_resolving_feiyan_huogong = true
 	_reward_resolved = false
-	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", target_ids, "虎克发动【飞焰】，视为使用【火攻】。", VIRTUAL_RULE_OVERRIDES)):
+	# 本次虚拟火攻的扩展存储；携带来源技能与“命中即可换回的联动奖励”，随逻辑牌生命周期一起传递。
+	# 【火攻】在结算与AI评分时读取该键，从而在使用者对自己使用火攻时按真实联动收益决策，
+	# 而不是只看到统一评分给出的自伤惩罚；实体火攻没有扩展存储，行为完全不受影响。
+	var virtual_storage: Dictionary = {"source_skill_id":get_id(), VIRTUAL_STORAGE_HIT_REWARD_KEY:AI_HIT_REWARD_VALUE}
+	if not bool(host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", target_ids, "虎克发动【飞焰】，视为使用【火攻】。", VIRTUAL_RULE_OVERRIDES, virtual_storage)):
 		_resolving_feiyan_huogong = false
 		return true
 	announce_activation({"target_id":target_id})

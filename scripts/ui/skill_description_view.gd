@@ -6,6 +6,12 @@ extends RichTextLabel
 ## 可识别的轮回节序号；数组索引与轮回状态中的零基section_index完全一致。
 const SECTION_SYMBOLS: Array[String] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
 
+## 删除线标记的开始标记；技能用它把已经失效的原文片段划掉（例如【断界】已被删除的选项）。
+const STRIKE_OPEN_TAG: String = "[s]"
+
+## 删除线标记的结束标记；必须与开始标记成对出现，未闭合的开始标记延伸到所在分段末尾。
+const STRIKE_CLOSE_TAG: String = "[/s]"
+
 ## 当前完整技能说明原文；只用于重绘和测试查询，任何分段都不会改写该字符串。
 var _source_description: String = ""
 
@@ -17,6 +23,10 @@ var _current_section_index: int = 0
 
 ## 最近一次绘制得到的文本分段；每项保存text、section_index与current，供界面回归验证颜色语义。
 var _rendered_segments: Array[Dictionary] = []
+
+## 最近一次绘制实际写入控件的可见纯文本；删除线标记已剥离，与分段元数据互补，
+## 供界面回归验证“标记被解析成删除线而不是被当成普通文字画出来”。
+var _rendered_visible_text: String = ""
 
 
 ## 初始化自动换行与内容自适应；该视图只展示文字，不接收鼠标或滚动输入。
@@ -48,6 +58,11 @@ func get_rendered_segments() -> Array[Dictionary]:
 	return _rendered_segments.duplicate(true)
 
 
+## 返回最近一次绘制实际写入控件的可见纯文本；删除线标记已剥离，未渲染时为空字符串。
+func get_rendered_visible_text() -> String:
+	return _rendered_visible_text
+
+
 ## 按当前活动主题重绘全部分段颜色；技能文本和轮回状态保持不变。
 func refresh_ui_style() -> void:
 	add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
@@ -58,6 +73,7 @@ func refresh_ui_style() -> void:
 func _render_description() -> void:
 	clear()
 	_rendered_segments.clear()
+	_rendered_visible_text = ""
 	if _source_description.is_empty():
 		return
 	# 普通正文颜色；轮回技标签、触发条件、X说明和跨轮回节持续效果均使用该颜色。
@@ -117,6 +133,42 @@ func _append_colored_segment(segment_text: String, color: Color, section_index: 
 	if segment_text.is_empty():
 		return
 	push_color(color)
-	add_text(segment_text)
+	_append_text_with_strike(segment_text)
 	pop()
 	_rendered_segments.append({"text":segment_text, "section_index":section_index, "current":is_current, "color":color.to_html(true)})
+
+
+## 按删除线标记切分并逐段追加文本；标记本身不进入可见文本，返回的分段元数据仍保留原始标记。
+## 不使用 BBCode：本视图显式关闭 bbcode_enabled，add_text 不会解析任何标签，因此这里自行解析这一对标记——
+## 既能画出删除线，又不会让其他技能描述里出现的方括号被误当成富文本标签。
+func _append_text_with_strike(segment_text: String) -> void:
+	# 尚未追加的起始位置；每次处理完一对标记后指向结束标记之后。
+	var cursor: int = 0
+	while cursor < segment_text.length():
+		# 当前起始标记位置；没有剩余标记时直接追加尾部普通文本并结束。
+		var open_index: int = segment_text.find(STRIKE_OPEN_TAG, cursor)
+		if open_index < 0:
+			_append_visible_text(segment_text.substr(cursor))
+			return
+		if open_index > cursor:
+			_append_visible_text(segment_text.substr(cursor, open_index - cursor))
+		# 起始标记之后的正文起点；找不到结束标记时按“延伸到分段末尾”处理，保证标记不丢失也不吞掉后续文本。
+		var content_start: int = open_index + STRIKE_OPEN_TAG.length()
+		var close_index: int = segment_text.find(STRIKE_CLOSE_TAG, content_start)
+		if close_index < 0:
+			push_strikethrough()
+			_append_visible_text(segment_text.substr(content_start))
+			pop()
+			return
+		push_strikethrough()
+		_append_visible_text(segment_text.substr(content_start, close_index - content_start))
+		pop()
+		cursor = close_index + STRIKE_CLOSE_TAG.length()
+
+
+## 追加一段可见文本并同步记录纯文本镜像；所有可见文字都必须经由此入口写入，标记不得进入镜像。
+func _append_visible_text(visible_text: String) -> void:
+	if visible_text.is_empty():
+		return
+	add_text(visible_text)
+	_rendered_visible_text += visible_text

@@ -33,6 +33,8 @@ func _run() -> void:
 		return
 	if not _test_tongpao_sections_exhaust_after_four():
 		return
+	if not _test_tongpao_ai_section_and_zone_scoring():
+		return
 	print("TONGPAO_MECHANICS_PASS sections=4 shield=1 self_damage=1")
 	get_tree().quit(0)
 
@@ -335,6 +337,87 @@ func _test_tongpao_sections_exhaust_after_four() -> bool:
 	# 额度用尽后必须显式拒绝，而不是静默接受一次空发动。
 	if tongpao.activate().is_empty():
 		return _fail("tongpao_exhausted_activate_accepted")
+	return true
+
+
+## 校验AI评分在只读技能实例（host为null）下的三条关键口径：节号取自动作负载、区域识别只读快照、
+## 拆解他人区域的选牌必须给出正分。三者同时失效会造成线上卡死：AI把④的动作按①自伤定价并选中它，
+## 提交后在④第二步的选牌窗口因收益符号相反而取消，轮回节不推进、额度不消耗，
+## 同一个动作被无限重复提交，界面持续停在“AI思考”而无法继续。
+func _test_tongpao_ai_section_and_zone_scoring() -> bool:
+	_reset_state(3)
+	# 敌方手牌与判定区牌；④的候选需要同时覆盖手牌与判定区两种区域权重。
+	var enemy_hand_card: CardInstance = _add_hand_card(1, "wuxie", "club", 9)
+	var enemy_judgment_card: CardInstance = CardInstance.new("lebusishu", "heart", 5)
+	enemy_judgment_card.zone = "judgment"
+	enemy_judgment_card.owner_id = 1
+	_controller.state.get_player(1).judgment_area.append(enemy_judgment_card)
+	var tongpao: SkillDefinition = _install_single_skill(0, "tongpao")
+	if tongpao == null:
+		return _fail("tongpao_missing")
+	# 前三个轮回节用护盾与直接参数快速通过；持有者没有手牌，③走空节推进。
+	_controller.state.get_player(0).shield = 1
+	if not tongpao.activate().is_empty() or not tongpao.activate({"target_ids":[1]}).is_empty():
+		return _fail("tongpao_ai_section_advance")
+	if not tongpao.activate().is_empty() or tongpao.get_reincarnation_section_index() != 3:
+		return _fail("tongpao_ai_section_three index=%d" % tongpao.get_reincarnation_section_index())
+	# AI合法动作；每个动作都必须自带枚举时的真实节号，评分才有机会与当前节一致。
+	var actions: Array[Dictionary] = []
+	tongpao.append_play_phase_actions(actions)
+	if actions.size() != 1 or int((actions[0].get("payload", {}) as Dictionary).get("reincarnation_section", -1)) != 3:
+		return _fail("tongpao_ai_section_payload=%s" % [actions])
+	# 只读评分实例；与 basic_ai_policy 完全一致地用 bind(null, player_id) 建立，host 为 null。
+	var scoring_skill: SkillDefinition = GameDatabase.create_skill("tongpao")
+	scoring_skill.bind(null, 0)
+	# 权威快照与评估器；AI评分只允许读取公开快照。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	# ④的动作必须按④定价（对敌方目标为正收益），而不是按①自伤定价（没有需要护盾的队友时为-100）。
+	var section_four_score: float = scoring_skill.score_ai_action(snapshot, actions[0], evaluator)
+	if section_four_score <= 0.0:
+		return _fail("tongpao_ai_section_four_score=%f" % section_four_score)
+	# 对照：把同一个动作标成①后评分必须改变，证明节号确实取自动作负载而不是运行时轮回状态。
+	var mislabeled_action: Dictionary = actions[0].duplicate(true)
+	(mislabeled_action["payload"] as Dictionary)["reincarnation_section"] = 0
+	if is_equal_approx(section_four_score, scoring_skill.score_ai_action(snapshot, mislabeled_action, evaluator)):
+		return _fail("tongpao_ai_section_ignored four=%f" % section_four_score)
+	# 区域识别；判定区的牌必须识别为judgment，不能因为读不到运行时状态而退化成hand。
+	if str(scoring_skill.call("_resolve_card_zone", snapshot, 1, enemy_judgment_card.uid, evaluator)) != "judgment":
+		return _fail("tongpao_ai_zone_resolve")
+	if not bool(scoring_skill.call("_has_judgment_card", snapshot, 1, evaluator)):
+		return _fail("tongpao_ai_judgment_detect")
+	# 进入④第二步的选牌窗口；请求必须声明“选中即收益”的语义供统一评分使用。
+	if not tongpao.activate({"target_ids":[1]}).is_empty():
+		return _fail("tongpao_ai_section_four_activate")
+	var zone_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((zone_request.get("context", {}) as Dictionary).get("ai_choice_card_semantics", "")) != "discard_target":
+		return _fail("tongpao_ai_zone_semantics=%s" % [zone_request.get("context", {})])
+	# 完整AI决策路径；与前缀动作完全一致地经过统一评分、技能专属评分与可取消阈值。
+	var legal_actions: Array[Dictionary] = _controller._build_card_choice_actions(zone_request)
+	if legal_actions.size() < 2:
+		return _fail("tongpao_ai_zone_actions=%d" % legal_actions.size())
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, zone_request, legal_actions)
+	if not bool((chosen.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("tongpao_ai_zone_cancelled chosen=%s" % [chosen])
+	# 选中的必须是暗手牌；判定区候选在声明语义后按“替敌人解除延时锦囊”取负，AI不得选择它。
+	var chosen_uids: Array = (chosen.get("payload", {}) as Dictionary).get("selected_card_uids", []) as Array
+	if chosen_uids != [enemy_hand_card.uid]:
+		return _fail("tongpao_ai_zone_chosen=%s" % [chosen_uids])
+	# 对照场景：只保留暗手牌候选并去掉语义声明，通用层会回到“自己支付费用”的负分口径，AI必须取消。
+	# 判定区候选在此被排除，因为通用层对“敌方判定区”的既有取值恰好被取反成正分，
+	# 这与本次修复无关，会把对照结论掩盖掉。
+	var undeclared_request: Dictionary = zone_request.duplicate(true)
+	(undeclared_request["context"] as Dictionary).erase("ai_choice_card_semantics")
+	var hand_only_candidates: Array = []
+	for candidate_variant: Variant in undeclared_request.get("candidates", []) as Array:
+		if str((candidate_variant as Dictionary).get("zone", "")) != "judgment":
+			hand_only_candidates.append(candidate_variant)
+	undeclared_request["candidates"] = hand_only_candidates
+	var undeclared_actions: Array[Dictionary] = _controller._build_card_choice_actions(undeclared_request)
+	var undeclared_chosen: Dictionary = policy.choose_card_choice(snapshot, undeclared_request, undeclared_actions)
+	if bool((undeclared_chosen.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("tongpao_ai_zone_undeclared_confirmed chosen=%s" % [undeclared_chosen])
 	return true
 
 

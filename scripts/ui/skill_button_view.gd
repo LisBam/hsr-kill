@@ -78,10 +78,12 @@ func _ready() -> void:
 ## 写入技能定义和运行时可用状态；技能定义来自 GameDatabase 的深拷贝。
 ## 剩余次数由可选参数传入，局内获得且受限的技能会在按钮第二行显示简写。
 ## 当前界面规范不在技能按钮正文展示次数；完整次数说明仅用于悬停标题，避免压缩文字影响按钮识别。
-func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "", reincarnation_state: Dictionary = {}, limited_skill_used: bool = false) -> void:
+## dynamic_description 是权威快照下发的动态显示描述（例如【断界】已被删除的选项带删除线）；
+## 传空字符串时回退静态元数据原文，因此普通技能与本次改动前的悬停提示逐字一致。
+func configure(definition: Dictionary, available: bool = false, remaining_uses_description: String = "", reincarnation_state: Dictionary = {}, limited_skill_used: bool = false, dynamic_description: String = "") -> void:
 	skill_id = str(definition.get("id", ""))
 	is_skill_available = available
-	skill_description = GameDatabase.resolve_card_names_in_text(str(definition.get("description", "暂无技能说明。")))
+	skill_description = GameDatabase.resolve_card_names_in_text(dynamic_description if not dynamic_description.is_empty() else str(definition.get("description", "暂无技能说明。")))
 	skill_limit_description = remaining_uses_description
 	_is_reincarnation_skill = bool(definition.get("reincarnation", false))
 	_reincarnation_section_index = maxi(int(reincarnation_state.get("section_index", 0)), 0)

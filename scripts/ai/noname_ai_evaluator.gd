@@ -565,6 +565,12 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	if choice_kind in ["discard_target", "steal_target", "harvest"]:
 		# 操作他人区域或领取公共牌时优先选择已知价值最高的牌；隐藏手牌只按统一未知价值比较。
 		return selected_value
+	# 技能显式声明的选牌语义；与上一条白名单同义，用于“选择种类由技能自定义、但选中即为收益”的请求。
+	# 该字段完全可选：只有声明它的请求才反转符号方向，其余请求继续走下方“自己支付费用”的默认口径，
+	# 因此既有技能与卡牌的选牌评分完全不受影响。缺少这一入口时，拆解他人区域的技能会被误判成自己付费，
+	# 对任何候选都得到负分并一律取消，使该技能的选牌窗口永远无法完成。
+	if str(context.get("ai_choice_card_semantics", "")) in ["discard_target", "steal_target", "harvest"]:
+		return selected_value
 	if choice_kind == "fire_attack_show":
 		# 火攻目标必须展示手牌时优先公开自身最低价值牌，减少后续同花色弃牌信息收益。
 		return -selected_value

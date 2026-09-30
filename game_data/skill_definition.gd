@@ -213,6 +213,18 @@ func announce_activation(context: Dictionary = {}) -> void:
 		host.call("consume_acquired_skill_use", owner_player_id, get_id())
 
 
+## 请求目标指示器指向指定角色；供技能在效果实际指向某组目标时独立调用。
+## 与 announce_activation 完全解耦：本方法只画线，不写日志、不发语音、不消耗技能次数，也不创建任何规则事件。
+## 典型用法是目标改写完成后重新指示——改写发生在“使用牌声明之后”，此时出牌时的原始指向线已经按旧目标播放过。
+## source_player_id 为指示线起点角色，省略时取技能持有者本人；跨角色效果可显式指定真正的效果来源。
+func indicate_targets(target_player_ids: Array[int], source_player_id: int = -1) -> void:
+	if host == null or not host.has_method("show_skill_target_indicator"):
+		return
+	# 指示线起点；负数表示“未指定”，此时归属技能持有者。
+	var indicator_source_id: int = owner_player_id if source_player_id < 0 else source_player_id
+	host.call("show_skill_target_indicator", indicator_source_id, target_player_ids.duplicate())
+
+
 ## 记录一次由指定角色实际支付费用或执行效果的技能发动；领袖技可用此入口将提示与日志归属到本回合发动者。
 func announce_activation_for_player(activator_player_id: int, context: Dictionary = {}) -> void:
 	if host == null or not host.has_method("record_skill_activation"):

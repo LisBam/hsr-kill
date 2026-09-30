@@ -17,6 +17,21 @@ const OPTION_TURN_FACE_DOWN: String = "4"
 ## 初始选项总数；数值4来自技能原文的四项操作。
 const INITIAL_OPTION_COUNT: int = 4
 
+## 选项在原文描述中的出现顺序；与稳定选项ID一一对应，用于在原文里定位每项对应的文字片段。
+const OPTION_DISPLAY_ORDER: Array[String] = [OPTION_LINK_TARGET, OPTION_UNLINK_TARGET, OPTION_TURN_FACE_UP, OPTION_TURN_FACE_DOWN]
+
+## 动态描述中用于划掉已删除选项的删除线起始标记；与 SkillDescriptionView 解析的标记保持同一对字面量。
+const STRIKE_OPEN_TAG: String = "[s]"
+
+## 动态描述中用于划掉已删除选项的删除线结束标记；必须与起始标记成对出现。
+const STRIKE_CLOSE_TAG: String = "[/s]"
+
+## 原文中分隔相邻选项的分隔符；用于确定每个选项文字片段的结束边界，分隔符本身不划掉。
+const OPTION_SEPARATOR: String = "；"
+
+## 原文中描述正文的结束符号；最后一项选项以此结束。
+const DESCRIPTION_END_MARK: String = "。"
+
 ## 已删除选项记录在 character_form_state 中的稳定键名。
 ## 该键随权威存档往返、不进入公开快照；键“缺失”即代表尚未删除任何选项，因此安装时无需写入初值。
 const REMAINING_OPTIONS_STATE_KEY: String = "duanjie_remaining_options"
@@ -57,9 +72,11 @@ func _init() -> void:
 
 
 ## 订阅出牌阶段开始与武将牌技能变更；后者用于让「复原武将牌上的技能」清零已删除的选项。
+## 安装时同步刷新一次显示描述：读档恢复的进度也必须立刻反映到资料里的删除线，而不是等到下次发动。
 func install() -> void:
 	subscribe_timing("phaseUseBegin", _on_play_phase_begin, "player", 100)
 	subscribe_timing("changeSkillsAfter", _on_change_skills_after, "player")
+	_refresh_display_description()
 
 
 ## 每个出牌阶段开始时恢复本阶段的发动额度。
@@ -79,6 +96,8 @@ func _on_change_skills_after(event: RuleEvent) -> void:
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner != null:
 		owner.character_form_state.erase(REMAINING_OPTIONS_STATE_KEY)
+		# 选项已经复原，显示描述同步回到完整原文（清除覆盖，界面重新读取静态元数据）。
+		_refresh_display_description()
 
 
 ## 仅在自己的出牌阶段、仍有额度且至少有一项存在合法目标时开放技能。
@@ -202,6 +221,69 @@ func _delete_last_option() -> void:
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if owner != null:
 		owner.character_form_state[REMAINING_OPTIONS_STATE_KEY] = remaining
+		# 进度已经落到权威状态，同步刷新公开显示描述，让资料里的被删项立即带删除线。
+		_refresh_display_description()
+
+
+## 卸载技能时清除动态描述覆盖，避免换将或失去技能后旧进度继续影响资料显示。
+func uninstall() -> void:
+	if host != null and host.has_method("set_skill_display_description"):
+		host.call("set_skill_display_description", owner_player_id, get_id(), "")
+	super()
+
+
+## 按当前剩余选项构建显示描述；已删除的选项原文用删除线标记包住，其余文字逐字保持静态原文。
+## 静态元数据始终是唯一初始来源：未删除任何选项时返回原文本身，因此安装后、复原后都不写入任何覆盖。
+func _build_display_description() -> String:
+	# 静态原文；技能显示正文的初始来源，任何情况下都不被改写。
+	var base_description: String = str(GameDatabase.get_skill(get_id()).get("description", ""))
+	if base_description.is_empty():
+		return base_description
+	# 当前剩余选项；仍是完整四项时无需任何标记，直接返回原文。
+	var remaining_options: Array[String] = _get_remaining_options()
+	if remaining_options.size() >= INITIAL_OPTION_COUNT:
+		return base_description
+	# 逐项重写结果；每项以“序号.”开头，到下一个选项分隔符或正文结束符为止。
+	var result: String = ""
+	# 尚未追加的原文位置；每次处理完一项后指向该项片段的结束位置。
+	var cursor: int = 0
+	for option_id: String in OPTION_DISPLAY_ORDER:
+		# 当前选项在原文中的起始位置；原文缺少该项时停止重写，剩余文字原样追加。
+		var marker_index: int = base_description.find("%s." % option_id, cursor)
+		if marker_index < 0:
+			break
+		result += base_description.substr(cursor, marker_index - cursor)
+		# 当前选项片段结束位置；分隔符本身留在片段之外，因此不会把分隔符一起划掉。
+		var fragment_end: int = _find_option_fragment_end(base_description, marker_index)
+		var fragment_text: String = base_description.substr(marker_index, fragment_end - marker_index)
+		result += fragment_text if remaining_options.has(option_id) else (STRIKE_OPEN_TAG + fragment_text + STRIKE_CLOSE_TAG)
+		cursor = fragment_end
+	result += base_description.substr(cursor)
+	return result
+
+
+## 返回从指定选项起始位置开始的片段结束位置；优先取最近的选项分隔符，本项是最后一项时取正文结束符。
+func _find_option_fragment_end(description: String, fragment_start: int) -> int:
+	# 最近的选项分隔符与正文结束符；两者都取本项之后的首个位置，因此不会误取到上一项的分隔符。
+	var separator_index: int = description.find(OPTION_SEPARATOR, fragment_start)
+	var end_mark_index: int = description.find(DESCRIPTION_END_MARK, fragment_start)
+	if separator_index < 0:
+		return end_mark_index if end_mark_index >= 0 else description.length()
+	if end_mark_index >= 0 and end_mark_index < separator_index:
+		return end_mark_index
+	return separator_index
+
+
+## 把当前进度写入技能动态描述端口；悬停武将资料、右键武将详情与技能按钮据此划掉已删除的选项。
+## 显示文本与静态原文完全一致时传入空字符串，清除覆盖并让快照回到“没有动态描述”的初始形态。
+## 宿主缺失（AI只读实例）时安全跳过：评分不依赖显示文本。
+func _refresh_display_description() -> void:
+	if host == null or not host.has_method("set_skill_display_description"):
+		return
+	# 当前应当显示的描述；与静态原文比较后决定写入覆盖还是清除覆盖。
+	var display_description: String = _build_display_description()
+	var base_description: String = str(GameDatabase.get_skill(get_id()).get("description", ""))
+	host.call("set_skill_display_description", owner_player_id, get_id(), "" if display_description == base_description else display_description)
 
 
 ## 返回四项操作的初始顺序；每次调用都新建数组，避免调用方误改共享常量引用。
