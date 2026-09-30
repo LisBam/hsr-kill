@@ -39,6 +39,17 @@ const AI_BODYGUARD_RATIO: float = 0.9
 ## AI：正收益多目标牌的收益折算系数；剥夺敌方收益的同时自己还会重复获得X次。
 const AI_BENEFICIAL_RATIO: float = 0.8
 
+## 【五谷丰登】卡牌稳定定义ID；任意角色使用该牌时 AI 都无条件发动接管，不受使用者阵营限制。
+## 注意：该 ID 取自卡牌文件的 id 字段（"wugu"），与文件名 wugufengdeng.gd 不同，改动前必须核对卡牌资料。
+const WUGU_CARD_ID: String = "wugu"
+
+## 询问上下文中的“牌的使用者”字段名；AI 据此判断该牌是否由队友使用。
+## 该字段在创建询问时写入，使 AI 评分不必回查对局状态即可还原使用者阵营。
+const CONTEXT_SOURCE_ID: String = "source_id"
+
+## 无脑发动【五谷丰登】接管时的固定高分；确保该分支不受其他可选动作影响而必然被选中。
+const AI_UNCONDITIONAL_CONFIRM_SCORE: float = 100.0
+
 
 ## 写入限定技静态信息；技能描述逐字保持需求提供的原文。
 ## 正文含“限定技”，基类据此自动标记 limited，无需额外声明。
@@ -92,7 +103,7 @@ func _on_card_used(event: RuleEvent) -> void:
 	# 目标已经是“持有者本人重复X次”，说明改写已经生效，不需要再次询问。
 	if _is_sole_owner_targets(target_ids):
 		return
-	request_card_selection("岳峙", "是否发动【岳峙】成为该牌的唯一目标？", [], 0, 0, true, {"kind":BECOME_SOLE_TARGET_CHOICE_KIND, "card_uid":card_uid, "original_target_count":target_ids.size(), "original_target_ids":_int_array(target_ids), "card_definition_id":str(event.data.get("card_id", "")), "ai_allow_confirm":true})
+	request_card_selection("岳峙", "是否发动【岳峙】成为该牌的唯一目标？", [], 0, 0, true, {"kind":BECOME_SOLE_TARGET_CHOICE_KIND, "card_uid":card_uid, "original_target_count":target_ids.size(), "original_target_ids":_int_array(target_ids), "card_definition_id":str(event.data.get("card_id", "")), CONTEXT_SOURCE_ID:event.source_id, "ai_allow_confirm":true})
 
 
 ## 恢复接管确认；确认后把目标数组整体替换为持有者的X次重复并开启结算期守卫。
@@ -196,6 +207,7 @@ func _int_array(values: Array) -> Array[int]:
 
 
 ## 评估接管收益；伤害类牌替残血队友挡伤，正收益牌剥夺敌方收益，其余情况不发动。
+## 使用者阵营参与决策：队友使用的非【五谷丰登】牌一律不发动，避免把队友的收益整体转移到自己身上。
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 请求上下文；原目标与牌定义都来自询问时的快照。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -211,8 +223,20 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var resolve_times: int = maxi(int(context.get("original_target_count", 0)), 0)
 	if resolve_times < MINIMUM_TARGET_COUNT or original_target_ids.is_empty():
 		return 0.0
+	# 牌定义ID；同时用于【五谷丰登】的无条件分支与牌效元数据查询。
+	var card_definition_id: String = str(context.get("card_definition_id", ""))
+	# 【五谷丰登】无条件发动：该牌对每名角色都是纯正收益，任意角色（含队友与自己）使用时接管都不会伤及己方。
+	# 该分支位于队友保护之前，因此队友使用【五谷丰登】仍然是“无脑发动”。
+	if card_definition_id == WUGU_CARD_ID:
+		return AI_UNCONDITIONAL_CONFIRM_SCORE
+	# 牌的使用者；缺失时视为未知来源，继续按原收益方向评分而不额外拦截。
+	var card_source_id: int = int(context.get(CONTEXT_SOURCE_ID, -1))
+	# 队友保护：接管会把该牌的全部效果集中到自己身上，队友原本的收益因此被剥夺；
+	# 使用者是队友（态度为正）且不是本人时直接不发动。本人使用的牌仍按牌效方向正常评分。
+	if card_source_id >= 0 and card_source_id != owner_player_id and evaluator.get_attitude(authoritative_snapshot, owner_player_id, card_source_id) > 0.0:
+		return 0.0
 	# 牌效元数据；伤害类与正收益类的收益方向完全相反，不能共用同一套折算。
-	var card_definition: Dictionary = GameDatabase.get_card(str(context.get("card_definition_id", "")))
+	var card_definition: Dictionary = GameDatabase.get_card(card_definition_id)
 	if card_definition.is_empty():
 		return 0.0
 	var card_ai: Dictionary = card_definition.get("ai", {}) as Dictionary

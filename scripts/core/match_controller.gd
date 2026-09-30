@@ -8748,7 +8748,16 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 		state.players.append(player)
 		if not is_human_player:
 			ai_coordinator.register_basic_ai(index)
-	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id], "lan_custom_identity_enabled":lan_custom_identity_enabled, "lan_fixed_seat_enabled":lan_fixed_seat_enabled})
+	# 斗地主：洗牌后的身份数量池只决定“哪些玩家成为地主”，座次必须按模式固定身份表重排，
+	# 因此这里在创建玩家之后立即把地主排到一号位（五人局另排到三号位），保证选将快照与最终座次完全一致。
+	# 重排只调整数组顺序，不改变任何玩家的稳定 player_id 与身份，因此牌面、网络与回放归属保持稳定。
+	if match_mode == IdentityRules.MODE_DOUDIZHU:
+		_reorder_doudizhu_players_by_seat_identity()
+	# 座次顺序快照；斗地主重排后数组下标即最终座次，其他模式与创建顺序一致，供回放与诊断区分“稳定ID”与“座次”。
+	var seat_player_ids: Array[int] = []
+	for seated_player: PlayerState in state.players:
+		seat_player_ids.append(seated_player.player_id)
+	state.random_history.append({"kind":"identity_distribution", "mode":match_mode, "identities":identities.duplicate(), "seat_player_ids":seat_player_ids, "local_human_player_id":local_human_player_id, "human_player_ids":lan_human_player_ids.duplicate() if not lan_human_player_ids.is_empty() else [local_human_player_id], "lan_custom_identity_enabled":lan_custom_identity_enabled, "lan_fixed_seat_enabled":lan_fixed_seat_enabled})
 
 
 ## 返回自选身份开局按规则座次排列的身份表；大厅位置身份写入真正占用该座位的玩家。
@@ -8775,31 +8784,50 @@ func _build_lan_slot_identity_distribution(match_mode: String, player_count: int
 	return result
 
 
-## 避免自动斗地主连续两局向本地玩家展示完全相同的座次与身份；初次抽取仍来自本局随机源，只在命中上一局组合时从其他合法座次中随机改选。
+## 避免自动斗地主连续两局向本地玩家展示完全相同的座次与身份；初次抽取仍来自本局随机源，只在命中上一局组合时改选地主玩家。
+## 座次由“地主固定一号位（五人局另占三号位）”的固定身份表决定，因此本地玩家可见组合必须按重排后的座次索引与身份共同判定，
+## 不能再用玩家创建索引代替座次，否则重排后可能出现相邻两局实际展示相同却被判定为不同的漏判。
 func _avoid_repeated_automatic_doudizhu_local_assignment(identities: Array[String]) -> void:
 	if network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
 		return
 	if not randomize_local_human_seat or local_human_player_id < 0 or local_human_player_id >= identities.size() or identities.is_empty():
 		return
-	# 本次随机抽取对应的本地身份；与座次共同构成玩家在选将标题中实际观察到的开局分配。
+	# 本局重排后的座次顺序；空数组表示身份池与模式身份表不兼容，此时不做任何去重改写。
+	var seat_order: Array[int] = _resolve_doudizhu_seat_order(identities)
+	if seat_order.is_empty():
+		return
+	# 本地玩家的可见座次索引与身份；两者共同构成玩家在选将标题与牌桌上实际观察到的开局分配。
+	var current_seat_index: int = seat_order.find(local_human_player_id)
 	var current_local_identity: String = identities[local_human_player_id]
-	if local_human_player_id == _last_automatic_doudizhu_local_seat_index and current_local_identity == _last_automatic_doudizhu_local_identity:
-		# 身份与上一局不同的其他座次；优先从这里随机选择，使重复命中时座次和身份都产生可见变化。
-		var different_identity_seat_indices: Array[int] = []
-		# 任意其他座次；仅在异常身份表没有另一种身份时作为稳定兜底，仍保证座次不会连续重复。
-		var other_seat_indices: Array[int] = []
-		for seat_index: int in range(identities.size()):
-			if seat_index == _last_automatic_doudizhu_local_seat_index:
+	if current_seat_index == _last_automatic_doudizhu_local_seat_index and current_local_identity == _last_automatic_doudizhu_local_identity:
+		# 首名地主在身份池中的下标；改写方式固定为“把它与另一名农民互换”，因此地主名额与其数量池始终一致。
+		var first_landlord_index: int = identities.find("landlord")
+		# 可与之互换的农民下标；先用本局随机源打乱，保证同一显式种子下改写结果仍可复现。
+		var swap_candidates: Array[int] = []
+		if first_landlord_index >= 0:
+			for index: int in range(identities.size()):
+				if index != first_landlord_index:
+					swap_candidates.append(index)
+			_shuffle_array(swap_candidates)
+		for swap_index: int in swap_candidates:
+			# 试算用身份池副本；只有确实产生不同可见组合时才写回原数组，避免把“换了个地主但玩家看到的完全一样”当成已去重。
+			var candidate_identities: Array[String] = identities.duplicate()
+			var swapped_identity: String = candidate_identities[swap_index]
+			candidate_identities[swap_index] = candidate_identities[first_landlord_index]
+			candidate_identities[first_landlord_index] = swapped_identity
+			var candidate_seat_order: Array[int] = _resolve_doudizhu_seat_order(candidate_identities)
+			if candidate_seat_order.is_empty():
 				continue
-			other_seat_indices.append(seat_index)
-			if identities[seat_index] != _last_automatic_doudizhu_local_identity:
-				different_identity_seat_indices.append(seat_index)
-		# 最终候选座次数组；标准三人和五人身份表始终存在不同身份座次，兜底只保护未来自定义分布。
-		var replacement_seat_indices: Array[int] = different_identity_seat_indices if not different_identity_seat_indices.is_empty() else other_seat_indices
-		if not replacement_seat_indices.is_empty():
-			local_human_player_id = replacement_seat_indices[_rng.randi_range(0, replacement_seat_indices.size() - 1)]
-			current_local_identity = identities[local_human_player_id]
-	_last_automatic_doudizhu_local_seat_index = local_human_player_id
+			var candidate_seat_index: int = candidate_seat_order.find(local_human_player_id)
+			var candidate_identity: String = candidate_identities[local_human_player_id]
+			if candidate_seat_index == _last_automatic_doudizhu_local_seat_index and candidate_identity == _last_automatic_doudizhu_local_identity:
+				continue
+			for index: int in range(identities.size()):
+				identities[index] = candidate_identities[index]
+			current_seat_index = candidate_seat_index
+			current_local_identity = candidate_identity
+			break
+	_last_automatic_doudizhu_local_seat_index = current_seat_index
 	_last_automatic_doudizhu_local_identity = current_local_identity
 
 
@@ -10665,11 +10693,62 @@ func _refresh_starting_hand(player_id: int, is_ai: bool) -> bool:
 	return player.hand.size() == redeal_count
 
 
+## 按斗地主模式固定座次身份表重排玩家数组，使地主固定一号位（五人局另固定三号位）。
+## 本局随机源只决定“哪些玩家成为地主”，座次由身份表决定；本函数不改变任何玩家的身份，只改变其占用座次。
+## 幂等：数组已经按身份表排列时结果不变，因此创建玩家与选将完成后重复调用都安全。
+func _reorder_doudizhu_players_by_seat_identity() -> void:
+	if state == null or state.players.size() < 2:
+		return
+	# 当前玩家身份序列；索引为数组下标，值取自玩家状态而非静态表，因此本函数只做重排不重写身份。
+	var seat_identity_pool: Array[String] = []
+	for seated_player: PlayerState in state.players:
+		seat_identity_pool.append(seated_player.identity)
+	# 目标座次顺序；身份数量与模式身份表不一致时返回空数组，此时整体放弃重排以免写出半成品座次。
+	var seat_order: Array[int] = _resolve_doudizhu_seat_order(seat_identity_pool)
+	if seat_order.is_empty():
+		return
+	# 重排结果；按目标座次顺序回收原玩家对象，player_id 与身份字段原样保留。
+	var ordered_players: Array[PlayerState] = []
+	for player_index: int in seat_order:
+		ordered_players.append(state.players[player_index])
+	state.players = ordered_players
+
+
+## 计算斗地主“地主固定一号位（五人局另占三号位）”重排后的座次顺序，返回“座次索引 → 玩家数组下标”。
+## 与 _reorder_doudizhu_players_by_seat_identity 共用同一套贪心规则，供重排发生前的跨局去重预判复用。
+func _resolve_doudizhu_seat_order(seat_identity_pool: Array[String]) -> Array[int]:
+	if seat_identity_pool.is_empty():
+		return []
+	# 座次身份模板；索引即座次索引，值为该座次应当持有的身份。
+	var seat_template: Array[String] = identity_rules.get_distribution(seat_identity_pool.size(), IdentityRules.MODE_DOUDIZHU)
+	if seat_template.size() != seat_identity_pool.size():
+		return []
+	# 尚未排座的玩家数组下标；逐座次取走第一名身份匹配者，使地主一定落在模板为地主的座次上。
+	var remaining_indices: Array[int] = []
+	for index: int in range(seat_identity_pool.size()):
+		remaining_indices.append(index)
+	# 座次顺序结果；模板中任一身份无人匹配时返回空数组，表示身份池与模板不兼容。
+	var ordered_indices: Array[int] = []
+	for seat_identity: String in seat_template:
+		# 当前座次匹配到的候选下标；-1表示剩余玩家中已没有该身份。
+		var matched_position: int = -1
+		for position: int in range(remaining_indices.size()):
+			if seat_identity_pool[remaining_indices[position]] == seat_identity:
+				matched_position = position
+				break
+		if matched_position < 0:
+			return []
+		ordered_indices.append(remaining_indices[matched_position])
+		remaining_indices.remove_at(matched_position)
+	return ordered_indices
+
+
 ## 以领袖为数组首位旋转普通身份局玩家，保留稳定 player_id 供网络、回放和实体牌所有权使用。
 func _reorder_players_from_leader() -> void:
-	# 斗地主的身份池已经按本局随机源洗牌；保留创建时的物理座次，避免把随机地主旋转回一号位而使画面恒为固定身份顺序。
-	# 首回合仍由 _complete_pre_game_start 按地主身份单独寻找，不依赖玩家数组第一位。
+	# 斗地主：身份池洗牌只决定“哪些玩家成为地主”，座次必须按模式固定身份表排列，即地主固定一号位（五人局另占三号位）。
+	# 本入口与创建玩家时的重排共用同一函数，重复调用保持幂等，不会把地主再次移出一号位。
 	if identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_DOUDIZHU:
+		_reorder_doudizhu_players_by_seat_identity()
 		_refresh_player_display_names_for_current_seats()
 		return
 	# 首任公开身份；普通身份局为领袖，非斗地主模式继续沿用领袖一号位的既有规则。

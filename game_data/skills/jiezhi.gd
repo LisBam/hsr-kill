@@ -31,6 +31,9 @@ const EQUIPMENT_SLOTS: Array[String] = ["weapon", "armor", "offensive_mount", "d
 ## 确认询问业务类型；确认后执行重复效果，取消不消耗次数。
 const CONFIRM_KIND: String = "jiezhi_confirm"
 
+## 延迟重建确认入口的续结算类型；用于【逐虚】的伤害触发嵌套询问、统一请求槽被占用时把入口推迟到嵌套结算之后。
+const DEFERRED_CONFIRM_KIND: String = "jiezhi_open_confirm"
+
 ## 询问上下文中的节编号字段名；AI估值从请求上下文读取而无法访问武将私有数据。
 const CONTEXT_SECTION_INDEX: String = "section_index"
 
@@ -64,6 +67,8 @@ func install() -> void:
 
 
 ## 当持有者发动【逐虚】后创建确认询问；目标已不合法或额度用尽时不开放入口。
+## 【逐虚】②的伤害可能触发【聚寇】【永屹】等嵌套询问，此时统一请求槽已被占用，
+## 直接创建询问会被静默拒绝并让玩家永久失去本次入口，因此改为登记技能后续、等嵌套结算全部结束后重建询问。
 func _on_skill_after(event: RuleEvent) -> void:
 	if str(event.data.get("skill_id", "")) != SOURCE_SKILL_ID:
 		return
@@ -71,9 +76,30 @@ func _on_skill_after(event: RuleEvent) -> void:
 	var resolved: Dictionary = _get_last_resolved()
 	if resolved.is_empty() or not can_repeat(resolved):
 		return
+	# 嵌套结算屏障；存在待处理选择或待派发的装备触发时不能立即创建询问。
+	# 该判断必须排在 can_repeat 之后：额度用尽或目标失效时不登记任何排队记录，避免无意义地占用续结算队列。
+	if bool(host.call("has_nested_settlement_barrier")):
+		defer_settlement({"kind":DEFERRED_CONFIRM_KIND})
+		return
+	_open_confirm_request(resolved)
+
+
+## 创建揭质确认询问；节编号与目标一并写入上下文，使AI估值不必访问仅本人可见的武将私有数据。
+func _open_confirm_request(resolved: Dictionary) -> void:
 	# 空候选确认询问：本技能的效果完全由结算记录决定，玩家只需回答“是否发动”。
-	# 节编号与目标一并写入上下文，使AI估值不必访问仅本人可见的武将私有数据。
 	request_card_selection("揭质", "是否发动【揭质】对相同目标重复一次？", [], 0, 0, true, {"kind":CONFIRM_KIND, CONTEXT_SECTION_INDEX:int(resolved.get("section_index", SECTION_DISCARD)), CONTEXT_TARGET_ID:int(resolved.get("target_id", -1)), "ai_allow_confirm":true})
+
+
+## 在嵌套结算全部结束后重建确认询问；等待期间记录可能已被新一轮逐虚覆盖、回合已结束或额度已用尽，因此必须重新复核。
+func continue_settlement(context: Dictionary) -> bool:
+	if str(context.get("kind", "")) != DEFERRED_CONFIRM_KIND:
+		return false
+	# 最新结算记录；复核不通过时静默结束，既不创建入口也不消耗每局额度。
+	var resolved: Dictionary = _get_last_resolved()
+	if resolved.is_empty() or not can_repeat(resolved):
+		return true
+	_open_confirm_request(resolved)
+	return true
 
 
 ## 复核重复发动条件：额度、回合归属、武将代次与目标合法性全部成立才开放入口。

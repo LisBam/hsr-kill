@@ -23,6 +23,8 @@ func _run() -> void:
 		return
 	if not _test_jiezhi_repeats_same_target():
 		return
+	if not _test_jiezhi_survives_nested_trigger_choice():
+		return
 	if not _test_jiezhi_self_target_resets_skills():
 		return
 	if not _test_liubai_reset_keeps_self():
@@ -35,7 +37,7 @@ func _run() -> void:
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 permanent_loss=1")
+	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 permanent_loss=1 nested_trigger_entry=1")
 	get_tree().quit(0)
 
 
@@ -270,6 +272,50 @@ func _test_jiezhi_repeats_same_target() -> bool:
 		return _fail("jiezhi_fourth_zhuxv_rejected")
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("jiezhi_over_limit_entry")
+	return true
+
+
+## 校验【逐虚】的伤害触发嵌套询问时不会吞掉【揭质】入口：先由【聚寇】占用统一请求槽，聚寇确认结束后揭质询问必须重新出现。
+## 该用例直接覆盖“发动逐虚触发聚寇、永屹等效果后失去揭质询问”的回归。
+func _test_jiezhi_survives_nested_trigger_choice() -> bool:
+	_reset_state(3)
+	if not _install_nakexia_skills(0):
+		return _fail("nested_install")
+	# 【聚寇】由二号位持有；逐虚②的伤害来源是那刻夏本人，因此伤害后时机由伤害来源决定是否发动聚寇。
+	if _install_skill(1, "jvkou") == null:
+		return _fail("nested_jvkou_install")
+	_give_hand_cards(1, 3)
+	# 第一次逐虚走①弃置节：没有嵌套询问，揭质入口应当立即出现；直接取消以免消耗每局额度。
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("nested_first_zhuxv_rejected")
+	var first_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(first_context.get("kind", "")) != "jiezhi_confirm":
+		return _fail("nested_first_entry=%s" % [first_context])
+	if not _submit_confirm(0, false):
+		return false
+	# 第二次逐虚走②伤害节：伤害触发【聚寇】的零材料确认，统一请求槽被占用，揭质入口必须改为排队等待而不是被静默丢弃。
+	if not _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
+		return _fail("nested_second_zhuxv_rejected")
+	var nested_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(nested_context.get("kind", "")) != "jvkou_confirm":
+		return _fail("nested_barrier_entry=%s" % [nested_context])
+	# 确认聚寇：嵌套选择结束后统一结算管线必须重建揭质入口，且仍然指向②的伤害节与同一目标。
+	# 这一条是回归的直接现象：修复前该询问会被静默丢弃，确认聚寇后左栏不会再出现揭质。
+	if not _submit_confirm(0, true):
+		return false
+	var restored_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if str(restored_context.get("kind", "")) != "jiezhi_confirm":
+		return _fail("nested_jiezhi_entry_lost=%s" % [restored_context])
+	if int(restored_context.get("section_index", -1)) != 1 or int(restored_context.get("target_id", -1)) < 0:
+		return _fail("nested_jiezhi_context=%s" % [restored_context])
+	if not _controller._deferred_skill_settlements.is_empty():
+		return _fail("nested_deferred_not_drained=%d" % _controller._deferred_skill_settlements.size())
+	# 取消该入口：揭质本身不产生副作用，取消后不消耗每局额度，状态回到可继续推进的状态。
+	if not _submit_confirm(0, false):
+		return false
+	var jiezhi: SkillDefinition = _controller.get_skill_instance(0, "jiezhi")
+	if jiezhi == null or int(jiezhi._used_count) != 0:
+		return _fail("nested_jiezhi_used=%d" % (int(jiezhi._used_count) if jiezhi != null else -1))
 	return true
 
 
