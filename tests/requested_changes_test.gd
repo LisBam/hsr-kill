@@ -11,6 +11,12 @@ var _scenario: String = ""
 ## 借刀杀人测试中持刀者用于响应的【杀】实体 UID；默认-1表示尚未创建。
 var _borrow_slash_uid: int = -1
 
+## 借刀杀人测试中被【杀】者用于响应的【闪】实体 UID；默认-1表示尚未创建。
+var _borrow_shan_uid: int = -1
+
+## 【桃园结义】专项场景中实际收到无懈询问的目标 ID；用于验证满体力目标不创建无懈链。
+var _taoyuan_negation_target_ids: Array[int] = []
+
 ## 是否在 phaseUseBegin 同步调用栈中收到【行军】发动询问；默认 false。
 var _xingjun_begin_request_seen: bool = false
 
@@ -63,11 +69,15 @@ func _run() -> void:
 		return
 	if not _test_restricted_group_trick_targets():
 		return
+	if not await _test_taoyuan_full_health_skips_negation():
+		return
 	if not await _test_same_timing_skill_prompt_order():
 		return
 	if not await _test_borrow_sword_target_semantics():
 		return
 	if not await _test_borrow_sword_weapon_transfer():
+		return
+	if not await _test_borrow_sword_dodged_weapon_kept():
 		return
 	if not await _test_phase_use_begin_prompt():
 		return
@@ -504,14 +514,13 @@ func _test_restricted_group_trick_targets() -> bool:
 	pofeng.set("_active_restricted_target_ids", {1:true})
 	_controller.skill_instances_by_player = {0:{"pofeng":pofeng}}
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
-	# 桃园结义只把已受伤角色纳入实际目标；令破风允许的二号玩家受伤，才能同时验证两张群体锦囊的目标收敛。
-	_controller.state.get_player(1).hp = 3
-	# 两张全体目标锦囊；五谷与桃园都应自动得到唯一合法目标，并继续进入合法动作列表。
+	# 桃园结义的目标是全体存活角色：满体力角色同样是合法目标，是否回复由通用回复组件按体力上限判定。
+	# 因此这里不再让二号玩家受伤，“满血仍可作为目标”与“破风限制收敛为唯一合法目标”由同一断言覆盖。
 	var harvest: CardInstance = _add_hand_card(0, "wugu", "heart", 3)
 	var peach_garden: CardInstance = _add_hand_card(0, "taoyuan", "heart", 1)
 	var harvest_targets: Array[int] = _controller.card_rules.normalize_targets(0, harvest, [])
 	var peach_garden_targets: Array[int] = _controller.card_rules.normalize_targets(0, peach_garden, [])
-	if harvest_targets != [1] or peach_garden_targets != [1] or not _controller.card_rules.validate_use(0, harvest, harvest_targets).is_empty() or not _controller.card_rules.validate_use(0, peach_garden, peach_garden_targets).is_empty():
+	if harvest_targets != [1] or peach_garden_targets != [1] or not _controller.card_rules.validate_use(0, harvest, harvest_targets).is_empty() or not _controller.card_rules.validate_use(0, peach_garden, peach_garden_targets).is_empty() or _controller.state.get_player(1).hp < _controller.state.get_player(1).max_hp:
 		return _fail("restricted_group_targets harvest=%s peach=%s" % [harvest_targets, peach_garden_targets])
 	# 合法动作中的目标声明保持空数组；真正使用时仍由规则层按当前限制自动展开唯一目标。
 	var legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
@@ -521,6 +530,37 @@ func _test_restricted_group_trick_targets() -> bool:
 			legal_group_card_uids.append(int(action.get("card_uid", -1)))
 	if not legal_group_card_uids.has(harvest.uid) or not legal_group_card_uids.has(peach_garden.uid):
 		return _fail("restricted_group_actions=%s" % [legal_actions])
+	return true
+
+
+## 验证【桃园结义】的目标是全体存活角色（含满体力角色），但满体力目标不创建【无懈可击】询问。
+func _test_taoyuan_full_health_skips_negation() -> bool:
+	_scenario = "taoyuan_full_health_negation"
+	_reset_state(3)
+	# 三号玩家体力配置；一号使用者与三号玩家受伤，二号玩家保持满体力，覆盖同一张牌内的两种目标。
+	_controller.state.get_player(0).hp = 3
+	_controller.state.get_player(1).hp = 4
+	_controller.state.get_player(2).hp = 3
+	# 桃园结义实体与无懈可击持有者；没有无懈候选的玩家不会产生可观察的询问窗口。
+	var taoyuan: CardInstance = _add_hand_card(0, "taoyuan", "heart", 1)
+	_add_hand_card(0, "wuxie", "spade", 11)
+	# 规则层自动展开的实际目标；满体力的二号玩家必须仍在目标数组内。
+	var declared_targets: Array[int] = _controller.card_rules.normalize_targets(0, taoyuan, [])
+	if declared_targets != [0, 1, 2]:
+		return _fail("taoyuan_full_health_targets=%s" % [declared_targets])
+	_taoyuan_negation_target_ids.clear()
+	_controller._execute_card_use(0, taoyuan, declared_targets)
+	if not await _wait_until_card_finalized(taoyuan.uid):
+		return _fail("taoyuan_full_health_timeout")
+	# 无懈询问目标；只应出现确实会回复的零号与二号玩家，满体力的二号玩家不在此列。
+	if _taoyuan_negation_target_ids != [0, 2]:
+		return _fail("taoyuan_negation_targets=%s" % [_taoyuan_negation_target_ids])
+	# 回复结果；两名受伤角色回到满体力，满体力角色保持原值。
+	var first_player: PlayerState = _controller.state.get_player(0)
+	var full_health_player: PlayerState = _controller.state.get_player(1)
+	var third_player: PlayerState = _controller.state.get_player(2)
+	if first_player.hp != 4 or full_health_player.hp != 4 or third_player.hp != 4:
+		return _fail("taoyuan_full_health_result %d/%d/%d" % [first_player.hp, full_health_player.hp, third_player.hp])
 	return true
 
 
@@ -591,6 +631,33 @@ func _test_borrow_sword_target_semantics() -> bool:
 	var indicator_stages: Array[Dictionary] = GameDatabase.get_card_definition("jiedao").get_presentation_indicator_stages(0, [1, 2], [1])
 	if indicator_stages != [{"actor_id":0, "target_ids":[1]}, {"actor_id":1, "target_ids":[2]}]:
 		return _fail("borrow_indicator_stages=%s" % [indicator_stages])
+	return true
+
+
+## 验证持刀者按借刀要求打出【杀】后武器仍留在其装备区；即使该【杀】被【闪】抵消也不转移武器。
+func _test_borrow_sword_dodged_weapon_kept() -> bool:
+	_scenario = "borrow_sword_dodged"
+	_reset_state(3)
+	# 持刀者武器；响应【杀】后必须仍然装备在持刀者身上，绝不进入锦囊使用者手牌。
+	var weapon: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	weapon.zone = "equipment"
+	weapon.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = weapon
+	# 持刀者响应牌与被【杀】者的响应牌；两名角色都由测试选择处理器提交真实选择动作。
+	var slash: CardInstance = _add_hand_card(1, "sha", "spade", 7)
+	_borrow_slash_uid = slash.uid
+	var shan: CardInstance = _add_hand_card(2, "shan", "heart", 2)
+	_borrow_shan_uid = shan.uid
+	# 借刀杀人实体；完整声明“持刀者、被【杀】者”，牌效只对持刀者进入目标时机。
+	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	_controller._execute_card_use(0, borrow_sword, [1], [], false, [1, 2])
+	if not await _wait_until_card_finalized(borrow_sword.uid):
+		return _fail("borrow_sword_dodged_timeout")
+	# 结算结果；武器保留、被【杀】者满体力未受伤、【闪】已被消费。
+	var source: PlayerState = _controller.state.get_player(0)
+	var victim: PlayerState = _controller.state.get_player(2)
+	if _controller.state.get_player(1).get_weapon() != weapon or weapon.owner_id != 1 or weapon.zone != "equipment" or source.hand.has(weapon) or victim.hp != victim.max_hp or victim.find_hand_card(shan.uid) != null:
+		return _fail("borrow_sword_dodged weapon=%s holder_weapon=%s source_hand=%s victim_hp=%d/%d shan_in_hand=%s" % [weapon.to_dict(), _controller.state.get_player(1).get_weapon(), source.hand.size(), victim.hp, victim.max_hp, victim.find_hand_card(shan.uid) != null])
 	return true
 
 
@@ -704,6 +771,16 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if _scenario == "borrow_sword" and choice_kind == "borrow_sword_response":
 		selected_uids = [_borrow_slash_uid]
 		confirmed = true
+	elif _scenario == "borrow_sword_dodged" and choice_kind == "borrow_sword_response":
+		selected_uids = [_borrow_slash_uid]
+		confirmed = true
+	elif _scenario == "borrow_sword_dodged" and choice_kind == "slash_response":
+		selected_uids = [_borrow_shan_uid]
+		confirmed = true
+	elif _scenario == "taoyuan_full_health_negation" and choice_kind == "trick_negation":
+		# 无懈询问目标；记录权威目标 ID 后明确取消，验证满体力角色不会出现在询问列表里。
+		_taoyuan_negation_target_ids.append(int(context.get("target_id", -1)))
+		confirmed = false
 	elif _scenario == "borrow_sword_transfer" and choice_kind == "borrow_sword_response":
 		confirmed = false
 	elif _scenario == "borrow_sword" and choice_kind == "slash_response":
