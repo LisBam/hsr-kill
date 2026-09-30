@@ -157,9 +157,21 @@ func _test_duanjie_dynamic_description() -> bool:
 		return _fail("duanjie_dynamic_view_leaked_marker=%s" % visible_text)
 	if not visible_text.contains("4.将一名武将牌正面向上的角色翻至背面"):
 		return _fail("duanjie_dynamic_view_text_missing=%s" % visible_text)
-	# 被划掉的选项必须使用主题醒目色渲染：与正文同色的细划线在深色面板上几乎看不出被划掉。
-	if description_view.get_rendered_strike_colors() != [BattleUIStyle.get_color("danger").to_html(true)]:
-		return _fail("duanjie_dynamic_view_strike_color=%s" % [description_view.get_rendered_strike_colors()])
+	# 删除线不再依赖字体内置细线：被划片段必须登记成区间，并改用自绘的加粗线。
+	# 内置 push_strikethrough 的粗细由字体度量决定、引擎不提供加粗接口，因此这里同时断言：
+	# ①区间正好覆盖被删选项；②区间颜色仍是正文段落色（不改成醒目色）；③自绘线宽大于内置细线。
+	var strike_ranges: Array[Dictionary] = description_view.get_rendered_strike_ranges()
+	if strike_ranges.size() != 1:
+		return _fail("duanjie_dynamic_view_strike_ranges=%s" % [strike_ranges])
+	# 区间在可见文本中的实际内容；必须与静态原文里被划掉的那一项逐字一致。
+	var strike_start: int = int(strike_ranges[0].get("start", -1))
+	var strike_end: int = int(strike_ranges[0].get("end", -1))
+	if strike_start < 0 or strike_end <= strike_start or visible_text.substr(strike_start, strike_end - strike_start) != "4.将一名武将牌正面向上的角色翻至背面":
+		return _fail("duanjie_dynamic_view_strike_span=%s text=%s" % [strike_ranges, visible_text])
+	if str(strike_ranges[0].get("color", "")) != BattleUIStyle.get_color("text_secondary").to_html(true):
+		return _fail("duanjie_dynamic_view_strike_color=%s" % [strike_ranges])
+	if description_view.get_strike_thickness() <= 1.0:
+		return _fail("duanjie_dynamic_view_strike_thickness=%f" % description_view.get_strike_thickness())
 	description_view.queue_free()
 	# 复原武将牌后清除覆盖，资料回到完整四项原文。
 	_emit_change_skills("restore_character_card_skills", ["duanjie"])
