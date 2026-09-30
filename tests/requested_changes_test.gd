@@ -57,7 +57,7 @@ func _run() -> void:
 		return
 	if not _test_play_choice_candidate_separation():
 		return
-	if not _test_wooden_ox_stores_unusable_card():
+	if not await _test_wooden_ox_stores_unusable_card():
 		return
 	if not _test_ai_chuanchong_stale_choice_refresh():
 		return
@@ -317,6 +317,7 @@ func _test_play_choice_candidate_separation() -> bool:
 
 
 ## 验证木牛可储存普通出牌阶段不可使用的响应牌，且该材料在未点击木牛时始终不属于普通用牌候选。
+## 两段式交互下，第一段确定后会留下独立的转移询问，本场景等待统一处理器取消该询问。
 func _test_wooden_ox_stores_unusable_card() -> bool:
 	_scenario = "wooden_ox_unusable_storage"
 	_reset_state(2)
@@ -344,7 +345,17 @@ func _test_wooden_ox_stores_unusable_card() -> bool:
 	var owner: PlayerState = _controller.state.get_player(0)
 	if owner.find_hand_card(response_only_card.uid) != null or not owner.wooden_ox_storage.has(response_only_card) or response_only_card.zone != "wooden_ox":
 		return _fail("wooden_ox_storage_result hand=%d storage=%d zone=%s" % [owner.hand.size(), owner.wooden_ox_storage.size(), response_only_card.zone])
-	_controller._cancel_active_play_choice("requested_changes_wooden_ox_complete")
+	# 两段式交互；第一段确定后必须留下独立的转移询问，而不是同帧完成转移。
+	var follow_up: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((follow_up.get("context", {}) as Dictionary).get("kind", "")) != "wooden_ox_transfer" or str(follow_up.get("prompt", "")) != "是否将此装备移动给其他角色？":
+		return _fail("wooden_ox_follow_up=%s" % [follow_up])
+	if owner.equipment.get("treasure") != wooden_ox:
+		return _fail("wooden_ox_moved_before_prompt")
+	# 取消第二段；统一请求处理器会在下一帧提交取消，宝物必须继续留在原装备区。
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if _controller.has_pending_card_choice() or owner.equipment.get("treasure") != wooden_ox or not owner.wooden_ox_storage.has(response_only_card):
+		return _fail("wooden_ox_follow_up_cancel pending=%s treasure=%s" % [_controller.has_pending_card_choice(), owner.equipment.get("treasure")])
 	return true
 
 
@@ -804,6 +815,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		confirmed = false
 	elif _scenario == "jianlei_privacy" and choice_kind == "jianlei_cost":
 		_hidden_hand_prompt_kinds.append(choice_kind)
+		confirmed = false
+	elif _scenario == "wooden_ox_unusable_storage" and choice_kind == "wooden_ox_transfer":
+		# 木牛第二段转移询问；本场景只验证第一段存粮，第二段统一取消。
 		confirmed = false
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, choice_kind])

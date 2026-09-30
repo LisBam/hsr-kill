@@ -192,6 +192,12 @@ func _run() -> void:
 		return
 	if not _test_wooden_ox_stored_card_can_be_used():
 		return
+	if not _test_wooden_ox_transfer_cancel_keeps_equipment():
+		return
+	if not _test_wooden_ox_transfer_confirm_moves_attachments():
+		return
+	if not _test_wooden_ox_storage_capacity_limit():
+		return
 	if not _test_ai_delay_range():
 		return
 	if not _test_judgment_presentation_and_event_chain():
@@ -938,6 +944,150 @@ func _test_wooden_ox_stored_card_can_be_used() -> bool:
 	return true
 
 
+## 验证木牛流马两段式交互的取消分支：第一段确定后不移动宝物，第二段取消后宝物与全部“粮”保持原状。
+func _test_wooden_ox_transfer_cancel_keeps_equipment() -> bool:
+	_scenario = "wooden_ox_transfer_cancel"
+	_reset_state(3)
+	# 第一段材料；确定后必须离开普通手牌进入“粮”。
+	var stored_card: CardInstance = _add_hand_card(0, "shan", "heart", 3)
+	# 备用材料；保留手牌数量，避免“无牌可存”掩盖第二段流程问题。
+	_add_hand_card(0, "sha", "spade", 4)
+	# 木牛实体；装备在0号玩家宝物槽，第二段取消时不能移动。
+	var wooden_ox: CardInstance = CardInstance.new("muniu", "diamond", 5)
+	wooden_ox.zone = "equipment"
+	wooden_ox.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = wooden_ox
+	# 第一段动作；不携带任何目标，只有材料本身参与本次提交。
+	_controller._begin_play_choice(0)
+	var store_action: PlayerAction = PlayerAction.new("store_wooden_ox", 0, stored_card.uid, [])
+	store_action.payload = {"material_card_uids":[stored_card.uid], "equipment_uid":wooden_ox.uid}
+	if not _controller.submit_action(store_action):
+		return _fail("wooden_ox_transfer_cancel store rejected")
+	# 第一段结果；材料已进入“粮”，但宝物必须仍在原角色装备区，证明两段确实分离。
+	if not _controller.state.get_player(0).wooden_ox_storage.has(stored_card) or _controller.state.get_player(0).equipment.get("treasure") != wooden_ox:
+		return _fail("wooden_ox_transfer_cancel first_step_moved=%s" % [wooden_ox.zone])
+	# 第二段请求；必须是独立的目标询问，提示与候选均由装备源码声明。
+	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var context: Dictionary = request.get("context", {}) as Dictionary
+	if str(request.get("choice_type", "")) != "target" or str(request.get("prompt", "")) != "是否将此装备移动给其他角色？" or str(context.get("kind", "")) != "wooden_ox_transfer":
+		return _fail("wooden_ox_transfer_cancel request=%s" % [request])
+	if (request.get("target_ids", []) as Array) != [1, 2] or int(request.get("min_target_select", -1)) != 1 or not bool(request.get("allow_cancel", false)):
+		return _fail("wooden_ox_transfer_cancel targets=%s" % [request.get("target_ids", [])])
+	# 取消第二段；不移动任何实体，装备与“粮”都必须保持第一段结束时的状态。
+	_submit_choice(int(request.get("request_id", -1)), 0, [], [], [], false)
+	var owner: PlayerState = _controller.state.get_player(0)
+	if owner.equipment.get("treasure") != wooden_ox or not owner.wooden_ox_storage.has(stored_card) or not _controller.state.get_player(1).wooden_ox_storage.is_empty():
+		return _fail("wooden_ox_transfer_cancel moved_on_cancel treasure=%s storage=%d" % [owner.equipment.get("treasure"), owner.wooden_ox_storage.size()])
+	if not _controller.state.discard_pile.is_empty():
+		return _fail("wooden_ox_transfer_cancel discard_on_cancel=%s" % [_card_uids(_controller.state.discard_pile)])
+	return true
+
+
+## 验证木牛流马两段式交互的确认分支：第二段选定其他角色后宝物与全部“粮”整体转移且不触发离区弃置。
+func _test_wooden_ox_transfer_confirm_moves_attachments() -> bool:
+	_scenario = "wooden_ox_transfer_confirm"
+	_reset_state(3)
+	# 既有“粮”；与本次新存入的材料一起整体转移，验证存量不被落下。
+	var legacy_card: CardInstance = CardInstance.new("tao", "heart", 9)
+	legacy_card.zone = "wooden_ox"
+	legacy_card.owner_id = 0
+	# 第一段材料；确认转移后必须与既有“粮”一起到达目标。
+	var stored_card: CardInstance = _add_hand_card(0, "shan", "heart", 3)
+	_add_hand_card(0, "sha", "spade", 4)
+	# 木牛实体；装备在0号玩家宝物槽。
+	var wooden_ox: CardInstance = CardInstance.new("muniu", "diamond", 5)
+	wooden_ox.zone = "equipment"
+	wooden_ox.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = wooden_ox
+	_controller.state.get_player(0).wooden_ox_storage.append(legacy_card)
+	# 第一段动作；仍然不携带目标。
+	_controller._begin_play_choice(0)
+	var store_action: PlayerAction = PlayerAction.new("store_wooden_ox", 0, stored_card.uid, [])
+	store_action.payload = {"material_card_uids":[stored_card.uid], "equipment_uid":wooden_ox.uid}
+	if not _controller.submit_action(store_action):
+		return _fail("wooden_ox_transfer_confirm store rejected")
+	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((request.get("context", {}) as Dictionary).get("kind", "")) != "wooden_ox_transfer":
+		return _fail("wooden_ox_transfer_confirm request=%s" % [request])
+	# 确认转移给1号玩家；目标必须同时收到宝物与两张“粮”。
+	_submit_choice(int(request.get("request_id", -1)), 0, [], [1], [], true)
+	# 转移后状态；原持有者清空木牛区与宝物槽，接收方整体接管。
+	var owner: PlayerState = _controller.state.get_player(0)
+	var target: PlayerState = _controller.state.get_player(1)
+	if owner.equipment.has("treasure") or not owner.wooden_ox_storage.is_empty():
+		return _fail("wooden_ox_transfer_confirm source treasure=%s storage=%d" % [owner.equipment.get("treasure"), owner.wooden_ox_storage.size()])
+	if target.equipment.get("treasure") != wooden_ox or wooden_ox.owner_id != 1:
+		return _fail("wooden_ox_transfer_confirm target_equipment=%s" % [target.equipment.get("treasure")])
+	if not target.wooden_ox_storage.has(stored_card) or not target.wooden_ox_storage.has(legacy_card) or target.wooden_ox_storage.size() != 2:
+		return _fail("wooden_ox_transfer_confirm target_storage=%s" % [_card_uids(target.wooden_ox_storage)])
+	# 离区弃置；整体转移不是失去装备，两张“粮”都不得进入弃牌堆。
+	if _controller.state.discard_pile.has(stored_card) or _controller.state.discard_pile.has(legacy_card):
+		return _fail("wooden_ox_transfer_confirm discarded_on_move")
+	return true
+
+
+## 验证“粮”的5张容量上限：4张时仍可发动并在存入后刚好达到上限，之后入口关闭且规则校验拒绝超限。
+func _test_wooden_ox_storage_capacity_limit() -> bool:
+	_scenario = "wooden_ox_capacity"
+	_reset_state(3)
+	# 木牛定义；容量边界同时体现在可点击入口、AI动作枚举与权威校验三处。
+	var wooden_ox_definition: CardDefinition = GameDatabase.get_card_definition("muniu")
+	# 木牛实体；装备在0号玩家宝物槽。
+	var wooden_ox: CardInstance = CardInstance.new("muniu", "diamond", 5)
+	wooden_ox.zone = "equipment"
+	wooden_ox.owner_id = 0
+	_controller.state.get_player(0).equipment["treasure"] = wooden_ox
+	# 既有4张“粮”；距离上限还差一张。
+	var owner: PlayerState = _controller.state.get_player(0)
+	for index: int in range(4):
+		# 当前既有“粮”；花色与点数只用于形成不同实体，不参与容量判定。
+		var stored_card: CardInstance = CardInstance.new("tao", "heart", index + 1)
+		stored_card.zone = "wooden_ox"
+		stored_card.owner_id = 0
+		owner.wooden_ox_storage.append(stored_card)
+	# 第5张材料；先进入手牌，使“能否继续存粮”只受容量而非手牌数量影响。
+	var fifth_card: CardInstance = _add_hand_card(0, "shan", "heart", 6)
+	# 4张时仍可发动；可点击入口与AI动作枚举都必须包含木牛。
+	if not _controller.get_play_phase_equipment_action_uids(0).has(wooden_ox.uid):
+		return _fail("wooden_ox_capacity available_at_4=false")
+	if not _has_wooden_ox_store_action(0, wooden_ox):
+		return _fail("wooden_ox_capacity ai_action_at_4=false")
+	# 第5张；存入后刚好达到上限。
+	_controller._begin_play_choice(0)
+	var store_action: PlayerAction = PlayerAction.new("store_wooden_ox", 0, fifth_card.uid, [])
+	store_action.payload = {"material_card_uids":[fifth_card.uid], "equipment_uid":wooden_ox.uid}
+	if not _controller.submit_action(store_action) or owner.wooden_ox_storage.size() != 5:
+		return _fail("wooden_ox_capacity fifth_store size=%d" % owner.wooden_ox_storage.size())
+	# 第五次存入同样会打开第二段转移询问；先取消，让容量断言在干净状态下进行。
+	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if not request.is_empty():
+		_submit_choice(int(request.get("request_id", -1)), 0, [], [], [], false)
+	# 新回合重置发动次数后，唯一阻止继续存粮的原因必须是容量上限。
+	owner.wooden_ox_used = false
+	_add_hand_card(0, "sha", "spade", 7)
+	if _controller.get_play_phase_equipment_action_uids(0).has(wooden_ox.uid):
+		return _fail("wooden_ox_capacity available_at_5=true")
+	if _has_wooden_ox_store_action(0, wooden_ox):
+		return _fail("wooden_ox_capacity ai_action_at_5=true")
+	# 权威校验；第6张必须被明确拒绝，且拒绝原因是容量而不是其他条件。
+	_controller._begin_play_choice(0)
+	var sixth_card: CardInstance = _controller.state.get_player(0).hand[0]
+	var overflow_action: PlayerAction = PlayerAction.new("store_wooden_ox", 0, sixth_card.uid, [])
+	if not str(wooden_ox_definition.validate_play_phase_action(_controller, overflow_action)).contains("上限"):
+		return _fail("wooden_ox_capacity validation=%s" % wooden_ox_definition.validate_play_phase_action(_controller, overflow_action))
+	if _controller.submit_action(overflow_action):
+		return _fail("wooden_ox_capacity sixth_store_accepted")
+	return true
+
+
+## 返回当前玩家合法动作中是否存在木牛存粮动作；用于容量边界与AI枚举断言。
+func _has_wooden_ox_store_action(player_id: int, _wooden_ox: CardInstance) -> bool:
+	for legal_action: Dictionary in _controller.get_legal_actions(player_id):
+		if str(legal_action.get("action_type", "")) == "store_wooden_ox" and int(legal_action.get("actor_id", -1)) == player_id:
+			return true
+	return false
+
+
 ## 验证 AI 响应滑条的全局范围、步长与默认值均与菜单契约一致。
 func _test_ai_delay_range() -> bool:
 	if not is_equal_approx(GameSettings.MIN_AI_RESPONSE_DELAY_SECONDS, 0.10):
@@ -1336,10 +1486,18 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 			candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
 		_qilin_candidate_present = candidate_uids.has(_qilin_mount_uid)
 		selected_uids = [_qilin_mount_uid]
+	elif kind == "wooden_ox_transfer":
+		# 木牛流马第二段转移询问；两个新增场景自行同步提交确认或取消，避免延迟提交与断言竞争。
+		return
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, kind])
 		return
-	call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), selected_uids, material_card_uids)
+	call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), selected_uids, _empty_target_ids(), material_card_uids)
+
+
+## 返回强类型空目标数组；延迟调用必须传入 Array[int]，不能传无类型字面量。
+func _empty_target_ids() -> Array[int]:
+	return []
 
 
 ## 捕获最新统一牌面表现事件；测试只读取深拷贝，不持有规则层可变对象。
@@ -1357,12 +1515,13 @@ func _on_card_transfer_requested(card_data: Dictionary, _source_player_id: int, 
 
 
 ## 提交已捕获请求的标准选牌动作；请求 ID 与选择者均沿用只读请求快照。
-func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int], material_card_uids: Array[int] = []) -> void:
+## selected_target_ids 与 confirmed 供目标类请求（如木牛流马第二段转移询问）使用，普通选牌请求保持默认值。
+func _submit_choice(request_id: int, chooser_id: int, selected_uids: Array[int], selected_target_ids: Array[int] = [], material_card_uids: Array[int] = [], confirmed: bool = true) -> void:
 	if _failed:
 		return
 	# 标准选牌动作；规则层仍会复核请求归属、候选 UID、数量与实体当前区域。
 	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "material_card_uids":material_card_uids.duplicate()}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "material_card_uids":material_card_uids.duplicate(), "confirmed":confirmed}
 	if not _controller.submit_action(action):
 		_fail("submit_choice=%s:%d" % [_scenario, request_id])
 

@@ -4817,7 +4817,10 @@ func _refresh_equipment_action_text() -> void:
 		# 纯界面预览回退；没有权威对局状态的场景测试只验证材料交互，不替代正式规则校验。
 		_card_use_preview = {"can_submit":_equipment_action_material_uids.size() == required_material_count, "legal_target_ids":[], "max_targets":int(definition.get("preview_max_targets", 0))}
 	selection_label.text = "%s｜材料%d/%d｜目标：%s" % [equipment_name, _equipment_action_material_uids.size(), required_material_count, target_name]
-	interaction_guide_label.text = "请确认当前操作" if bool(_card_use_preview.get("can_submit", false)) else ("请选择目标" if _equipment_action_material_uids.size() == required_material_count else "请选择手牌材料")
+	# 确认提示；装备源码可通过 confirm_prompt 声明本段确定后的效果，没有声明时沿用通用文案。
+	# 两段式装备（如木牛流马）的第一段没有目标，因此不能再显示“请选择目标”。
+	var equipment_confirm_prompt: String = str(_card_use_preview.get("confirm_prompt", "请确认当前操作"))
+	interaction_guide_label.text = equipment_confirm_prompt if bool(_card_use_preview.get("can_submit", false)) else ("请选择目标" if int(_card_use_preview.get("max_targets", 0)) > 0 else "请选择手牌材料")
 	use_button.disabled = not bool(_card_use_preview.get("can_submit", false))
 	_refresh_component_states()
 
