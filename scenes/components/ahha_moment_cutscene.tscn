@@ -1,16 +1,20 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene format=3 uid="uid://cgpy00yr77n8d"]
 
-[ext_resource type="Script" path="res://scripts/ui/ahha_moment_cutscene.gd" id="1_cutscene"]
-[ext_resource type="Shader" path="res://assets/shaders/chroma_key_alpha.gdshader" id="2_chroma_key"]
+[ext_resource type="Script" uid="uid://mdjhnjv5x1tx" path="res://scripts/ui/ahha_moment_cutscene.gd" id="1_cutscene"]
+[ext_resource type="Shader" uid="uid://dgjsop0qfcmx1" path="res://assets/shaders/chroma_key_alpha.gdshader" id="2_chroma_key"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_chroma_key"]
 shader = ExtResource("2_chroma_key")
+shader_parameter/key_color = Color(0, 1, 0, 1)
+shader_parameter/similarity = 0.3
+shader_parameter/smoothness = 0.12
+shader_parameter/spill_suppression = 1.0
 
-[node name="AhhaMomentCutscene" type="Control"]
+[node name="AhhaMomentCutscene" type="Control" unique_id=1532742207]
 process_mode = 3
 visible = false
 z_index = 120
-layout_mode = 1
+layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -18,8 +22,9 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("1_cutscene")
+fade_out_seconds = 0.15
 
-[node name="Video" type="VideoStreamPlayer" parent="."]
+[node name="Video" type="VideoStreamPlayer" parent="." unique_id=1094797455]
 material = SubResource("ShaderMaterial_chroma_key")
 layout_mode = 1
 anchors_preset = 15
