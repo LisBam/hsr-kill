@@ -724,6 +724,26 @@ func does_not_count_toward_play_limit(_card_definition: Dictionary) -> bool:
 	return false
 
 
+## 判断持有者的这张手牌是否不计入其手牌上限；默认全部手牌都计入。
+## 只影响弃牌阶段的溢出张数计算，不改变 PlayerState.get_hand_limit() 的返回值，
+## 也不移动牌、不改变牌面，因此界面与AI读到的手牌上限数值保持既有语义。
+func does_not_count_toward_hand_limit(_card: CardInstance, _card_definition: Dictionary) -> bool:
+	return false
+
+
+## 判断本技能是否令持有者成为其自身使用指定卡牌的合法目标；默认 false 保持既有规则。
+## 返回 true 时，持有者使用该牌既可以指定自己为目标，也不会因“自己到自己的距离”被距离限制拒绝。
+func allows_self_as_card_target(_card_definition: Dictionary) -> bool:
+	return false
+
+
+## 预览持有者使用指定卡牌时最终生效的目标数组；默认原样返回，表示本技能不改写目标。
+## 只做纯查询：不得移动牌、消耗次数、创建选择或写入任何上下文。
+## 用法：把该牌的整牌时机改写结果提前告知只读预览，使界面显示的真实目标与规则结算一致。
+func preview_card_use_targets(_card_definition: Dictionary, target_ids: Array[int]) -> Array[int]:
+	return target_ids
+
+
 ## 返回当前技能对指定牌 play_limit 的额外次数加成；默认0，正值在配置基础上增加可使用次数，不修改历史统计。
 ## 例如【跋扈】对 slash 牌族返回1，使出牌阶段使用【杀】的次数上限+1。
 func get_play_count_limit_bonus(_card_definition: Dictionary) -> int:

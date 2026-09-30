@@ -283,7 +283,8 @@ func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Arr
 			var player: PlayerState = state.players[(actor_index + seat_offset) % state.players.size()]
 			if not player.alive or player.out_of_game:
 				continue
-			if target_mode == "all_others" and player.player_id == actor_id:
+			# all_others 默认跳过使用者自己；声明“自己是合法目标”的技能（【支离】）在此保留自己。
+			if target_mode == "all_others" and player.player_id == actor_id and not _skill_allows_self_as_card_target(actor_id, definition):
 				continue
 			# 当前目标合法性；使用单目标数组检查独立资格，使【破风】等限制只移除不允许的角色，而不让一个非法角色否决整张群体锦囊。
 			var target_error: String = _validate_target(actor, definition, player.player_id, [player.player_id], _get_entity_card_rule_overrides(card)) if actor != null else "行动玩家不存在。"
@@ -351,7 +352,10 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 			return source_error
 		if source_definition.preserves_requested_target_order() and all_target_ids.size() > 1:
 			return ""
-	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder"] and target_id == actor.player_id:
+	# 自身目标豁免；【支离】等声明“自己是自己使用该牌的合法目标”的技能在此统一放行。
+	# 该判定在模式检查与距离限制处共用同一结果，避免两处结论不一致。
+	var self_target_allowed: bool = target_id == actor.player_id and _skill_allows_self_as_card_target(actor.player_id, definition)
+	if target_mode in ["single_other", "single_other_with_cards", "weapon_holder"] and target_id == actor.player_id and not self_target_allowed:
 		return "该卡牌不能以自己为目标。"
 	if target_mode in ["self", "self_wounded"] and target_id != actor.player_id:
 		return "该卡牌只能以自己为目标。"
@@ -368,6 +372,11 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 	var distance_limit: String = str(definition.get("distance_limit", "none"))
 	# 无目标距离解除；按牌整体生效，任一技能命中即视为该牌对所有目标都忽略距离限制。
 	var ignore_distance_limit: bool = bool(rule_overrides.get("ignore_distance_limit", false)) or _skill_ignores_card_distance_limit(actor.player_id, definition)
+	# 自身目标距离豁免；【支离】等技能已在上方声明自己是合法目标，此处把距离限制整体视为已满足。
+	# 自己到自己的距离恒为0，但attack_range与距离1限制都会与“目标必须是其他角色”的默认前提冲突，
+	# 因此统一放宽，而不是只放宽某一个上限值。
+	if not ignore_distance_limit and self_target_allowed:
+		ignore_distance_limit = true
 	# 带目标距离解除；只对当前目标生效，用于“同一张牌只对部分目标解限”的技能（例如【遥击】只对最远角色）。
 	# 单独成一个判断而不并入上一行：两种解限的适用面不同，合并后无法从表达式看出是哪一种在起作用。
 	if not ignore_distance_limit and _skill_ignores_card_distance_limit_to_target(actor.player_id, definition, target_id):
@@ -513,3 +522,12 @@ func _skill_ignores_card_distance_limit_to_target(actor_id: int, definition: Dic
 	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_ignores_card_distance_limit_to_target"):
 		return false
 	return bool(skill_rule_provider.call("skill_ignores_card_distance_limit_to_target", actor_id, definition, target_id))
+
+
+## 汇总行动玩家当前技能提供的“自己是合法目标”规则；查询失败时保持“不能指定自己”的默认前提。
+## 本钩子只在目标恰好等于使用者本人时被询问，因此不改变任何以其他角色为目标的既有校验路径。
+func _skill_allows_self_as_card_target(actor_id: int, definition: Dictionary) -> bool:
+	if skill_rule_provider == null or not skill_rule_provider.has_method("skill_allows_self_as_card_target"):
+		return false
+	return bool(skill_rule_provider.call("skill_allows_self_as_card_target", actor_id, definition))
+

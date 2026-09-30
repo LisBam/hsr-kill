@@ -387,6 +387,9 @@ var timing_service: RuleTimingService
 ## 轮回技权威状态服务；集中维护轮回数、轮回节、永劫与通用限次，不执行具体技能效果。
 var reincarnation_skill_service: ReincarnationSkillService
 
+## 主演权威状态服务；集中维护“场上至多一名主演”的不变量与主演角标，不执行具体技能效果。
+var starring_role_service: StarringRoleService
+
 ## 玩家区域废除服务；集中编排单装备栏、整个装备区与判定区的时机、弃牌和状态变更。
 var player_zone_abolition_service: PlayerZoneAbolitionService
 
@@ -1460,6 +1463,10 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 	if reincarnation_skill_service == null:
 		reincarnation_skill_service = ReincarnationSkillService.new()
 	reincarnation_skill_service.configure(self)
+	# 主演服务随规则服务一起重建；主演状态本身保存在角色角标条目中，因此重建不丢失任何主演事实。
+	if starring_role_service == null:
+		starring_role_service = StarringRoleService.new()
+	starring_role_service.configure(self)
 	if player_zone_abolition_service == null:
 		player_zone_abolition_service = PlayerZoneAbolitionService.new()
 	player_zone_abolition_service.configure(self)
@@ -2220,6 +2227,9 @@ func get_card_use_preview(player_id: int, card_uid: int, selected_target_ids: Ar
 	var target_mode: String = str(definition.get("target_mode", ""))
 	# 规范化目标；全体目标牌由规则服务按存活座次自动展开。
 	var normalized_targets: Array[int] = card_rules.normalize_targets(player_id, card, selected_target_ids)
+	# 技能目标改写预览；【支离】等技能会在整牌时机把目标整体改写，此处让界面提前看到真实目标。
+	# 预览与真实结算使用同一份判定条件；被改写掉的原目标不再是本牌目标，因此不再显示其目标指示。
+	normalized_targets = preview_skill_card_use_targets(player_id, definition, normalized_targets)
 	# 当前完整组合的规则校验结果；空字符串表示确认按钮可以提交。
 	var validation_error: String = card_rules.validate_use(player_id, card, normalized_targets)
 	# 下一步合法候选目标；候选会结合已有目标顺序验证当前卡牌的完整目标组合。
@@ -7886,8 +7896,10 @@ func _continue_active_extra_discard_phase_body() -> void:
 	if player == null or not player.alive or player.out_of_game:
 		_finish_active_extra_discard_phase()
 		return
-	# 最终弃牌数量；额外弃牌阶段与普通弃牌阶段共用“手牌数减手牌上限”规则。
-	var discard_count: int = maxi(player.hand.size() - player.get_hand_limit(), 0)
+	# 计入上限的手牌张数；被技能声明为“不计入手牌上限”的牌先从总数中扣除（【悬壶】的【桃】）。
+	var counted_hand_size: int = maxi(player.hand.size() - count_hand_limit_exempt_cards(player_id), 0)
+	# 最终弃牌数量；额外弃牌阶段与普通弃牌阶段共用“计入上限的手牌数减手牌上限”规则。
+	var discard_count: int = maxi(counted_hand_size - player.get_hand_limit(), 0)
 	if discard_count <= 0:
 		_finish_active_extra_discard_phase()
 		return
@@ -8942,6 +8954,65 @@ func skill_ignores_card_distance_limit_to_target(player_id: int, card_definition
 		if skill != null and skill.can_use_effect() and skill.ignores_card_distance_limit_to_target(card_definition, target_id):
 			return true
 	return false
+
+
+## 汇总指定玩家全部已安装技能提供的“自己是自己使用某张牌的合法目标”规则；任一技能生效即可指定自己。
+## 该入口与两个距离解除入口并列但语义不同：距离解除放宽的是“能打多远”，本入口放宽的是
+## “使用者本人是否可以进入目标集合”，因此全体目标牌自动展开时也由本入口决定是否保留使用者自己。
+func skill_allows_self_as_card_target(player_id: int, card_definition: Dictionary) -> bool:
+	# 当前玩家技能实例表；固有、模式与临时技能共用同一纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；本钩子不得移动牌、消耗次数或创建选择。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.can_use_effect() and skill.allows_self_as_card_target(card_definition):
+			return true
+	return false
+
+
+## 统计指定角色手牌中“不计入手牌上限”的实体牌数量；只在两个弃牌阶段计算溢出张数时使用。
+## 判定来源是持有者全部已安装技能的纯查询钩子，因此同一套规则在普通弃牌阶段与额外弃牌阶段完全一致。
+## 本函数不移动牌、不改变牌面，也不修改 PlayerState.get_hand_limit()，
+## 因此界面与AI读取的手牌上限数值保持既有语义，只有“实际需要弃置的张数”被相应减少。
+func count_hand_limit_exempt_cards(player_id: int) -> int:
+	# 目标角色；无效角色没有手牌可统计。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return 0
+	# 当前角色的已安装技能表；为空时全部手牌都计入上限，函数退化为零成本查询。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	if player_skills.is_empty():
+		return 0
+	# 不计入上限的手牌张数；逐张独立判定，同一角色的多个技能可以各自豁免不同的牌。
+	var exempt_count: int = 0
+	for card: CardInstance in player.hand:
+		# 当前手牌的静态定义；未知定义不享受任何豁免，避免异常数据意外放宽上限。
+		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+		# 豁免范围按持有者全部技能逐层检查；不叠加重复计数，任一技能命中即计入一次。
+		for skill_variant: Variant in player_skills.values():
+			var skill: SkillDefinition = skill_variant as SkillDefinition
+			if skill == null or not skill.can_use_effect():
+				continue
+			if skill.does_not_count_toward_hand_limit(card, definition):
+				exempt_count += 1
+				break
+	return exempt_count
+
+
+## 汇总指定玩家全部已安装技能对某张牌的目标改写预览；按技能安装顺序串联，前一项结果作为后一项输入。
+## 该入口为只读查询：只让界面在提交前看到与规则结算一致的最终目标，不写入任何用牌上下文。
+## 真实的目标改写发生在整牌 useCard 时机并经 replace_card_use_targets 端口提交，两者必须使用同一份判定条件。
+func preview_skill_card_use_targets(player_id: int, card_definition: Dictionary, target_ids: Array[int]) -> Array[int]:
+	# 串联改写结果；初始为规范化目标，逐技能应用预览改写。
+	var preview_target_ids: Array[int] = target_ids.duplicate()
+	# 当前玩家技能实例表；固有、模式与临时技能共用同一纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；预览钩子不得移动牌、消耗次数或创建选择。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.can_use_effect():
+			preview_target_ids = skill.preview_card_use_targets(card_definition, preview_target_ids)
+	return preview_target_ids
 
 
 ## 汇总指定来源角色全部技能对某名目标的最终距离修正；技能按安装顺序串联，返回值最低为1。
@@ -13142,8 +13213,10 @@ func _continue_turn_after_discard_phase_begin(player_id: int) -> void:
 	if player == null or not player.alive:
 		_advance_after_current_player_death(player_id)
 		return
+	# 计入上限的手牌张数；被技能声明为“不计入手牌上限”的牌先从总数中扣除（【悬壶】的【桃】）。
+	var counted_hand_size: int = maxi(player.hand.size() - count_hand_limit_exempt_cards(player_id), 0)
 	# 需要弃置的手牌数；体力为负时手牌上限按0处理。
-	var discard_count: int = maxi(player.hand.size() - player.get_hand_limit(), 0)
+	var discard_count: int = maxi(counted_hand_size - player.get_hand_limit(), 0)
 	if discard_count > 0:
 		# 自身手牌候选；选择者就是牌的所有者，因此全部展示正面。
 		var candidates: Array[Dictionary] = _build_player_zone_candidates(player_id, player_id, true, false, false)
@@ -15675,6 +15748,25 @@ func _request_card_presentation(card: CardInstance, actor_id: int, target_ids: A
 		indicator_stages
 	)
 	card_presentation_requested.emit(presentation.to_dict())
+
+
+## 令指定角色成为「主演」；技能侧的唯一入口，由主演服务保证“场上至多一名主演”。
+## 本端口只转发，不解释主演的玩法含义；成为主演后公开文本通道会立即广播新快照，
+## 因此全部观察者（其他玩家界面与AI快照）都能在同一帧看到主演角标的变化。
+## 返回值：主演服务缺失或目标角色不存在、已死亡、已离场时返回false，且不改变任何主演状态。
+func set_starring_role(player_id: int) -> bool:
+	return starring_role_service != null and starring_role_service.set_starring(player_id)
+
+
+## 返回当前「主演」的稳定玩家ID；场上没有主演或主演服务缺失时返回-1。
+## 该查询对所有内容与AI都只读且无副作用，不刷新快照。
+func get_starring_role_player_id() -> int:
+	return starring_role_service.get_starring_player_id() if starring_role_service != null else -1
+
+
+## 判断指定角色当前是否为「主演」；纯查询端口，供技能条件与AI评估共用同一口径。
+func is_starring_role(player_id: int) -> bool:
+	return starring_role_service != null and starring_role_service.is_starring(player_id)
 
 
 ## 写入一项武将牌左上角公开文本；相同来源ID会原位更新，多个来源由控制器按排序值稳定合成。

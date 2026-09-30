@@ -136,6 +136,29 @@ func get_next_alive_player(player_id: int) -> PlayerState:
 	return null
 
 
+## 返回指定玩家座次两侧的相邻角色；在存活且未离场角色组成的环形座次上取其左右各一名。
+## 相邻的规则含义是“座次紧邻”，死亡或离场角色会被跳过并顺延到下一位存活者，
+## 因此本查询与 CardRuleService.calculate_distance() 的距离1判定完全同源，内容与AI可共用同一口径。
+## 结果去重：存活角色不足3名时左右相邻者指向同一名角色，此时只返回一次。
+## 结果顺序固定为“下家方向在前、上家方向在后”，保证网络、回放与AI的确定性。
+func get_seat_neighbor_player_ids(player_id: int) -> Array[int]:
+	# 相邻角色结果数组；无目标或无人相邻时保持为空。
+	var result: Array[int] = []
+	# 目标角色；死亡、离场或不存在时没有任何有效相邻关系。
+	var target: PlayerState = get_player(player_id)
+	if target == null or not target.alive or target.out_of_game:
+		return result
+	# 下家方向相邻者；全场仅一人时返回其自身，此处按“结果不得等于目标本人”剔除。
+	var next_player: PlayerState = get_next_alive_player(player_id)
+	if next_player != null and next_player.player_id != player_id:
+		result.append(next_player.player_id)
+	# 上家方向相邻者；与下家相同表示存活角色不足3名，去重后不再追加。
+	var previous_player: PlayerState = get_previous_alive_player(player_id)
+	if previous_player != null and previous_player.player_id != player_id and not result.has(previous_player.player_id):
+		result.append(previous_player.player_id)
+	return result
+
+
 ## 返回指定玩家之前的上一名存活且未离场玩家；按座次向前环形查找，全场仅一名在场角色时返回其自身。
 func get_previous_alive_player(player_id: int) -> PlayerState:
 	if players.is_empty():

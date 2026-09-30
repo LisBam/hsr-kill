@@ -129,6 +129,9 @@ func _after_die(sequence: RuleStepSequence) -> void:
 				_host.emit_rule_timing("dieAfter", victim.player_id, int(sequence.context.killer_id), victim.player_id, sequence.context.event_data, int(sequence.context.death_event_id))
 				if _host.player_mark_service != null:
 					_host.player_mark_service.clear_marks_for_dead_player(victim.player_id)
+				# 「主演」是角色级唯一状态，阵亡后必须立即空缺；与公开标记同一位置清理，避免死者继续占据主演身份。
+				if _host.starring_role_service != null:
+					_host.starring_role_service.clear_starring(victim.player_id)
 				sequence.finish()
 		"revival":
 			_host.add_log("%s死亡并触发复活，剩余复活次数%d。" % [_host.format_player_state_log_name(victim), int(sequence.context.event_data.remaining_revives)])
@@ -291,6 +294,9 @@ func _cleanup(sequence: RuleStepSequence) -> void:
 		return
 	if _host.player_mark_service != null:
 		_host.player_mark_service.clear_marks_for_dead_player(victim.player_id)
+	# 「主演」是角色级唯一状态，阵亡或换将后必须立即空缺；本步骤覆盖全部对局模式，因此复活与换将也不会继承旧主演。
+	if _host.starring_role_service != null:
+		_host.starring_role_service.clear_starring(victim.player_id)
 	match str(sequence.context.mode):
 		"normal":
 			if _host.state.current_player_id == victim.player_id:
