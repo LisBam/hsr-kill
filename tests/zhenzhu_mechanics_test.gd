@@ -330,7 +330,7 @@ func _test_buzhui_grants_and_expires_shields() -> bool:
 	buzhui = _install_single_skill(0, "buzhui")
 	if buzhui == null:
 		return _fail("buzhui_missing_face_down_skip")
-	# 真实跳过流程实际派发的时机计数；用于证明该回合只有回合尾、没有结束阶段。
+	# 真实跳过流程实际派发的时机计数；用于证明该回合既没有开始阶段、也没有结束阶段与回合尾。
 	_face_down_skip_timing_counts.clear()
 	_controller.trigger_manager.subscribe("phaseAfter", self, _on_face_down_skip_timing.bind("phaseAfter"), 0, -1, "global")
 	_controller.trigger_manager.subscribe("phaseJieshu", self, _on_face_down_skip_timing.bind("phaseJieshu"), 0, -1, "global")
@@ -342,8 +342,9 @@ func _test_buzhui_grants_and_expires_shields() -> bool:
 	_controller._complete_face_down_skipped_turn(0)
 	if int(_face_down_skip_timing_counts.get("phaseJieshu", 0)) != 0:
 		return _fail("buzhui_face_down_skip_end_phase_dispatched %s" % [_face_down_skip_timing_counts])
-	if int(_face_down_skip_timing_counts.get("phaseAfter", 0)) < 1:
-		return _fail("buzhui_face_down_skip_tail_missing %s" % [_face_down_skip_timing_counts])
+	# 统一规则：跳过一整个回合既没有开始阶段也没有结束阶段，因此回合尾 phaseAfter 同样不得派发。
+	if int(_face_down_skip_timing_counts.get("phaseAfter", 0)) != 0:
+		return _fail("buzhui_face_down_skip_tail_dispatched %s" % [_face_down_skip_timing_counts])
 	if _controller.state.get_player(1).shield != 1:
 		return _fail("buzhui_face_down_skip_expiry=%d" % _controller.state.get_player(1).shield)
 	if (buzhui.get("_shield_expiry_records") as Array).size() != 1:
