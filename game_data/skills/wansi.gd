@@ -31,6 +31,11 @@ var _used_this_turn: bool = false
 ## 已登记但尚未执行的“本回合结束后”回合号；等于当前回合号时表示本回合结束后需要兑现。
 var _pending_turn_number: int = NO_PENDING_TURN
 
+## 已登记但尚未执行的“本回合结束后”所属回合角色ID；与回合号一起唯一确定登记的那个回合。
+## 本技能可能在**他人回合**受伤（这是最常见的触发方式：被对手打到1点体力），
+## 因此必须记录登记时的回合角色，而不能假设“本回合”就是持有者自己的回合。
+var _pending_turn_player_id: int = NO_PENDING_TURN
+
 
 ## 写入技能静态信息；玩家可见描述严格保持需求提供的原文。
 func _init() -> void:
@@ -44,9 +49,12 @@ func _init() -> void:
 
 ## 订阅持有者受到伤害之后与本回合结束之后两个时机。
 ## damageAfter 负责条件判定与意愿确认，phaseAfter 负责兑现“成为主演 + 额外回合”。
+## phaseAfter 必须使用 global 关系：原文的“本回合”是**受伤当时所在的那个回合**，
+## 而持有者绝大多数是在他人回合被打到1点体力；若只订阅持有者自己的回合（role="player"），
+## 那次登记在对手回合结束时收不到任何时机，而等到自己回合时回合号早已变化，两段效果永远不会兑现。
 func install() -> void:
 	subscribe_timing("damageAfter", _on_owner_damaged, "target")
-	subscribe_timing("phaseAfter", _on_owner_turn_finished, "player")
+	subscribe_timing("phaseAfter", _on_owner_turn_finished, "global")
 
 
 ## 持有者受到伤害后体力恰为1时请求发动确认；不满足条件或本回合额度已用时完全不询问。
@@ -62,7 +70,7 @@ func _on_owner_damaged(_event: RuleEvent) -> void:
 	if owner.hp != REQUIRED_HP:
 		return
 	# 确认选项；只有一项，取消即表示本次不发动。
-	var options: Array[Dictionary] = [{"id":CONFIRM_OPTION_ID, "label":"发动【万死】"}]
+	var options: Array[Dictionary] = [{"id":CONFIRM_OPTION_ID, "label":"确定"}]
 	# 选择上下文；只保存可序列化字段，本回合结束时据此复核是否仍然有效。
 	var choice_context: Dictionary = {"kind":CHOICE_KIND, "turn_number":_get_turn_number()}
 	request_control_selection("万死", "【万死】是否于本回合结束后成为“主演”并执行一个额外的回合？", options, true, choice_context)
@@ -78,21 +86,25 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 等待期间本回合额度可能已被消耗；此时本次确认按未发动处理。
 	if _used_this_turn:
 		return true
-	# 登记待执行回合号；只有与当前回合号一致时才会在本回合结束后兑现。
+	# 登记待执行回合号与回合角色；只有“登记的那个回合”真正结束时才会兑现。
 	var turn_number: int = _get_turn_number()
 	_used_this_turn = true
 	_pending_turn_number = turn_number
+	_pending_turn_player_id = _get_turn_player_id()
 	announce_activation({"turn_number":turn_number})
 	return true
 
 
-## 持有者本回合完全结束之后兑现两段效果：先成为「主演」，再执行一个额外的完整回合。
+## 登记的那个回合完全结束之后兑现两段效果：先成为「主演」，再执行一个额外的完整回合。
+## 匹配条件是“登记的回合角色 + 登记的回合号”，因此自己回合受伤与对手回合受伤都能在正确的回合尾兑现；
+## 只按持有者自己的回合匹配会让对手回合的登记永远落空，只按回合号匹配则会在交换座位后误兑现到别的角色身上。
 ## 额外回合由权威端口按既有队列执行（addPhase），结束后自动恢复正常行动顺序，本技能不参与调度。
 func _on_owner_turn_finished(event: RuleEvent) -> void:
-	if event.player_id != owner_player_id or _pending_turn_number != _get_turn_number():
+	if _pending_turn_player_id != event.player_id or _pending_turn_number != _get_turn_number():
 		return
 	# 先清除待执行标记；无论后续两步是否成功，本回合的登记都只兑现一次。
 	_pending_turn_number = NO_PENDING_TURN
+	_pending_turn_player_id = NO_PENDING_TURN
 	# 持有者权威状态；等待期间死亡或离场时两段效果均不执行。
 	var owner: PlayerState = _get_owner()
 	if owner == null or not owner.alive or owner.out_of_game:
@@ -145,3 +157,11 @@ func _get_turn_number() -> int:
 	if host == null or host.get("state") == null:
 		return 0
 	return int(host.state.turn_number)
+
+
+## 返回当前回合角色ID；未开始对局时回退 NO_PENDING_TURN，与回合号哨兵保持同一“没有有效回合”语义。
+## 受伤当刻调用：对手回合受伤时该值是对手，因此登记可以精确绑定到那个回合的结束时机。
+func _get_turn_player_id() -> int:
+	if host == null or host.get("state") == null:
+		return NO_PENDING_TURN
+	return int(host.state.current_player_id)

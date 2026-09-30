@@ -678,8 +678,9 @@ func _request_character_information() -> void:
 		var skill_name: String = str(skill_definition.get("name", skill_id))
 		# 当前技能资料标题；受限的局内获得技能在技能名后追加完整次数文案，技能描述原文不插入次数状态。
 		var skill_information_title: String = _get_skill_information_title(skill_id, skill_name)
-		# 当前技能完整描述；卡牌书名号按全局名称模式解析，其他原文保持不变。
-		var skill_description: String = GameDatabase.resolve_card_names_in_text(str(skill_definition.get("description", "技能元数据尚未登记。")))
+		# 当前技能完整描述；优先使用公开快照下发的动态描述（例如【断界】已被删除的选项带删除线），
+		# 快照没有覆盖时回退静态元数据原文；卡牌书名号按全局名称模式解析，其他原文保持不变。
+		var skill_description: String = GameDatabase.resolve_card_names_in_text(_resolve_skill_description(skill_id, skill_definition))
 		# 当前技能轮回状态；公开快照是局内轮回节高亮的唯一数据来源，静态牌面缺失时回退①。
 		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
 		skill_information_lines.append("%s\n%s" % [skill_information_title, skill_description])
@@ -702,6 +703,15 @@ func _request_character_information() -> void:
 		"description_sections":skill_description_sections,
 	}
 	information_requested.emit(information, get_global_rect())
+
+
+## 返回技能在当前对局中的显示描述；公开快照的 dynamic_skill_descriptions 是唯一动态来源。
+## 该字段只包含“当前进度与静态原文不同”的技能（例如【断界】已被删除的选项需要划掉），
+## 因此普通技能依旧逐字显示静态元数据描述；技能自身不得改写 GameDatabase 的静态原文。
+func _resolve_skill_description(skill_id: String, skill_definition: Dictionary) -> String:
+	# 快照下发的动态描述覆盖；缺失该可选字段时自然回退静态原文。
+	var dynamic_descriptions: Dictionary = _player_snapshot.get("dynamic_skill_descriptions", {}) as Dictionary
+	return str(dynamic_descriptions.get(skill_id, skill_definition.get("description", "技能元数据尚未登记。")))
 
 
 ## 返回武将资料中的技能标题；轮回技先标注轮回数，局内获得的受限技能再显示完整次数文案，避免改写技能原文。

@@ -8,6 +8,10 @@ var _controller: MatchController
 ## 测试是否已失败；true时停止后续断言并以1结束进程。
 var _failed: bool = false
 
+## 技能目标指示器请求记录；每项为 {"source_player_id": int, "target_player_ids": Array[int]}。
+## 只保存已经发布的公开ID，用于断言【支离】改写后确实重新指示了真实目标。
+var _indicator_requests: Array[Dictionary] = []
+
 
 ## 延迟一帧执行全部断言，确保GameDatabase已完成新武将与技能目录扫描。
 func _ready() -> void:
@@ -71,6 +75,13 @@ func _create_controller() -> void:
 	_controller.add_child(network_gateway)
 	add_child(_controller)
 	_controller.local_human_player_id = 0
+	# 目标指示器表现监听；技能改写目标后必须重新请求指向新目标，界面才不会再显示改写前的旧箭头。
+	_controller.skill_target_indicated.connect(_on_skill_target_indicated)
+
+
+## 记录一次技能目标指示器请求；只保存来源与目标稳定ID，供改写顺序与来源断言读取。
+func _on_skill_target_indicated(source_player_id: int, target_player_ids: Array[int]) -> void:
+	_indicator_requests.append({"source_player_id":source_player_id, "target_player_ids":target_player_ids.duplicate()})
 
 
 ## 为当前单项测试创建最小权威状态；一号领袖、二号反贼、三号及以后忠臣使AI态度确定。
@@ -301,6 +312,10 @@ func _test_shengxi_choice_and_accumulation() -> bool:
 	var shengxi: SkillDefinition = _install_single_skill(0, "shengxi")
 	if shengxi == null:
 		return _fail("shengxi_missing")
+	# 武将牌角标；【生息】安装当刻就必须显示当前X，与【酩酊】【逐风】共用同一条公开文本通道。
+	# 条目ID固定为“shengxi:持有者ID”，保证多名持有者各自维护独立角标。
+	if str((bailu.character_corner_text_entries.get("shengxi:0", {}) as Dictionary).get("text", "")) != "生息 1":
+		return _fail("shengxi_corner_initial=%s" % bailu.character_corner_text_entries)
 	# 摸牌候选；使用基本牌后技能创建二选一。
 	var basic_card: CardInstance = _add_hand_card(0, "sha", "spade", 5)
 	var draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 2)
@@ -325,6 +340,9 @@ func _test_shengxi_choice_and_accumulation() -> bool:
 	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	if int(bailu.character_form_state.get("shengxi_accumulated_x", 1)) != 2:
 		return _fail("shengxi_x_not_accumulated=%d" % int(bailu.character_form_state.get("shengxi_accumulated_x", 1)))
+	# 角标必须随X累加同步刷新，不能停在上一个轮回的旧文本。
+	if str((bailu.character_corner_text_entries.get("shengxi:0", {}) as Dictionary).get("text", "")) != "生息 2":
+		return _fail("shengxi_corner_accumulated=%s" % bailu.character_corner_text_entries)
 	if int(bailu.character_form_state.get("shengxi_uses_this_turn", 0)) != 1:
 		return _fail("shengxi_uses_reset=%d" % int(bailu.character_form_state.get("shengxi_uses_this_turn", 0)))
 	# 新回合额度刷新为2次；第一次发动选择“摸一张牌”应立即摸到牌堆顶。
@@ -349,13 +367,32 @@ func _test_shengxi_choice_and_accumulation() -> bool:
 	_controller._emit_rule_timing("useCard", 0, 1, -1, {"card_uid":-1, "card_id":"wuxie", "target_ids":[0]})
 	if _controller.has_pending_card_choice():
 		return _fail("shengxi_non_basic_triggered=%s" % _controller._pending_card_choice)
+	# 他人回合里打出的基本牌：登记必须绑定“使用基本牌时所在的那个回合”，
+	# 因此那笔X+1要在**那个回合**结束时兑现，而不是被推迟到白露自己的回合结束。
+	_controller.state.turn_number += 1
+	_controller.state.current_player_id = 1
+	_controller._emit_rule_timing("useCard", 0, 0, -1, {"card_uid":basic_card.uid, "card_id":"shan", "target_ids":[]})
+	if not _controller.has_pending_card_choice():
+		return _fail("shengxi_other_turn_choice_missing")
+	if not _submit_pending_choice(0, [], [], true, "shengxi_increase"):
+		return false
+	if int(bailu.character_form_state.get("shengxi_accumulated_x", 1)) != 2:
+		return _fail("shengxi_other_turn_x_changed_early=%d" % int(bailu.character_form_state.get("shengxi_accumulated_x", 1)))
+	# 持有者自己的回合结束不兑现他人回合的登记：两笔待累加按回合角色分桶，互不串台、也不会被提前吃掉。
+	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
+	if int(bailu.character_form_state.get("shengxi_accumulated_x", 1)) != 2:
+		return _fail("shengxi_other_turn_settled_by_owner=%d" % int(bailu.character_form_state.get("shengxi_accumulated_x", 1)))
+	# 登记所属的1号回合结束：X 在这里才从2变为3。
+	_controller._emit_rule_timing("phaseAfter", 1, 1, 1, {"turn_number":_controller.state.turn_number})
+	if int(bailu.character_form_state.get("shengxi_accumulated_x", 1)) != 3:
+		return _fail("shengxi_other_turn_not_accumulated=%d" % int(bailu.character_form_state.get("shengxi_accumulated_x", 1)))
 	return true
 
 
 ## 刃静态资料、技能顺序与两段玩家可见技能原文保持稳定。
 func _test_ren_metadata() -> bool:
 	var ren: Dictionary = GameDatabase.get_character("ren")
-	if str(ren.get("display_name", "")) != "刃" or str(ren.get("gender", "")) != "male" or str(ren.get("faction", "")) != "xinghelieshou" or int(ren.get("max_hp", 0)) != 4 or (ren.get("skills", []) as Array) != ["wansi", "zhili"]:
+	if str(ren.get("display_name", "")) != "刃" or str(ren.get("gender", "")) != "male" or str(ren.get("faction", "")) != "xinghelieshou" or int(ren.get("max_hp", 0)) != 5 or (ren.get("skills", []) as Array) != ["wansi", "zhili"]:
 		return _fail("ren_metadata=%s" % ren)
 	# 星核猎手势力配色；本次需求把主题色改为黑紫色。
 	if str(GameDatabase.get_faction("xinghelieshou").get("color", "")) != "5b3a7d" or str(GameDatabase.get_faction("xinghelieshou").get("short_name", "")) != "猎":
@@ -401,13 +438,28 @@ func _test_zhili_target_rewrite() -> bool:
 	# 在权威层登记一次用牌上下文；整牌 useCard 时机经该UID定位到改写对象。
 	var card_uid: int = slash_card.uid
 	_controller._card_use_contexts[card_uid] = {"actor_id":0, "card_definition_id":"sha", "target_ids":[1]}
-	# 唯一目标为1号位；其存活环相邻角色按“下家在前、上家在后”给出2号位与0号位（0号位即持有者自己）。
+	# 清空上一场景遗留的指示器记录，确保下面读取到的是本次改写产生的请求。
+	_indicator_requests.clear()
+	# 唯一目标为1号位；其存活环相邻角色集合为{2号位, 0号位}（2号位是1号位的下家，0号位是其上家，即持有者自己）。
+	# 结算顺序以使用者为起点，因此改写结果按行动顺序重排为[0号位, 2号位]，持有者自己的伤害先结算。
 	_controller._emit_rule_timing("useCard", 0, 0, -1, {"card_uid":card_uid, "card_id":"sha", "target_ids":[1]})
 	var rewritten_targets: Array = (_controller._card_use_contexts[card_uid] as Dictionary).get("target_ids", []) as Array
-	if rewritten_targets != [2, 0]:
+	if rewritten_targets != [0, 2]:
 		return _fail("zhili_rewrite=%s" % [rewritten_targets])
 	if str((_controller._card_use_contexts[card_uid] as Dictionary).get("targets_replaced_reason", "")) != "zhili":
 		return _fail("zhili_rewrite_reason=%s" % (_controller._card_use_contexts[card_uid] as Dictionary))
+	# 改写后必须重新请求目标指示器；出牌时播放的原始箭头指向的是旧目标1号位，不重新指示会与实际结算对象不一致。
+	if _indicator_requests.size() != 1:
+		return _fail("zhili_indicator_count=%s" % [_indicator_requests])
+	# 本次指示器请求；来源是持有者本人，目标是改写后的真实结算目标。
+	var indicator_request: Dictionary = _indicator_requests[0]
+	if (indicator_request.get("target_player_ids", []) as Array) != [0, 2] or int(indicator_request.get("source_player_id", -1)) != 0:
+		return _fail("zhili_indicator_request=%s" % [indicator_request])
+	# 目标全部无效时端口不发布表现；否则联机端会收到一条没有终点的空指示线。
+	if _controller.show_skill_target_indicator(0, [99]):
+		return _fail("zhili_indicator_invalid_target")
+	if not _controller.show_skill_target_indicator(0, [2]):
+		return _fail("zhili_indicator_valid_target")
 	# 改写后的目标集合包含持有者自己；原文明确允许该情形。
 	if not rewritten_targets.has(0):
 		return _fail("zhili_rewrite_self_missing=%s" % [rewritten_targets])
@@ -423,6 +475,15 @@ func _test_zhili_target_rewrite() -> bool:
 	_controller._emit_rule_timing("useCard", 0, 0, -1, {"card_uid":trick_card.uid, "card_id":"shunshou", "target_ids":[1]})
 	if ((_controller._card_use_contexts[trick_card.uid] as Dictionary).get("target_ids", []) as Array) != [1]:
 		return _fail("zhili_rewrite_non_slash=%s" % (_controller._card_use_contexts[trick_card.uid] as Dictionary))
+	# 界面预览提交口径：改写后的目标只是结算目标，不改变玩家选择的目标数量。
+	# 【杀】的 max_targets 为1，若用改写结果（这里是两名相邻角色）反向校验玩家选择，
+	# 确认按钮会因“目标数量不符合卡牌规则”而永久不可点击，表现为【刃】点【杀】后选谁都点不了确定。
+	var rewrite_preview: Dictionary = _controller.get_card_use_preview(0, slash_card.uid, [1])
+	if not bool(rewrite_preview.get("can_submit", false)) or not str(rewrite_preview.get("validation_error", "")).is_empty():
+		return _fail("zhili_preview_submit=%s" % rewrite_preview)
+	# 确认按钮可用的同时，预览仍必须把改写后的真实结算目标交给界面显示。
+	if ((rewrite_preview.get("normalized_target_ids", []) as Array)) != [0, 2]:
+		return _fail("zhili_preview_targets=%s" % rewrite_preview)
 	return true
 
 
@@ -519,6 +580,32 @@ func _test_wansi_extra_turn() -> bool:
 	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	if not _controller._extra_turn_queue.is_empty():
 		return _fail("wansi_double_settlement queue=%s" % _controller._extra_turn_queue)
+	# 他人回合受伤：这是本技能最常见的触发方式（被对手打到1点体力）。
+	# 登记必须绑定“受伤所在的那个回合”，因此该回合结束时同样要兑现两段效果；
+	# 若只订阅持有者自己的回合，这里的登记在对手回合结束收不到时机、等到自己回合时回合号又已变化，永远不会兑现。
+	_reset_state(3)
+	var other_turn_ren: PlayerState = _controller.state.get_player(0)
+	other_turn_ren.character_id = "ren"
+	# 体力先设为2：本次1点伤害把它打到恰好1点，既满足触发条件又不会进入濒死询问。
+	other_turn_ren.hp = 2
+	_install_single_skill(0, "wansi")
+	# 当前回合角色改为1号，模拟“对手的回合里刃被打到1点体力”。
+	_controller.state.current_player_id = 1
+	_controller.damage(1, 0, 1, "normal", "sha")
+	if other_turn_ren.hp != 1 or not _controller.has_pending_card_choice():
+		return _fail("wansi_other_turn_confirm_missing hp=%d pending=%s" % [other_turn_ren.hp, _controller._pending_card_choice])
+	if not _submit_pending_choice(0, [], [], true, "wansi_confirm_yes"):
+		return false
+	# 与登记回合无关的第三个角色回合结束时不兑现，避免退化成“随便谁的回合结束都生效”。
+	_controller._emit_rule_timing("phaseAfter", 2, 2, 2, {"turn_number":_controller.state.turn_number})
+	if _controller.get_starring_role_player_id() != -1 or not _controller._extra_turn_queue.is_empty():
+		return _fail("wansi_unrelated_turn_settled starring=%d queue=%s" % [_controller.get_starring_role_player_id(), _controller._extra_turn_queue])
+	# 该登记所属的1号回合结束：必须在这里兑现，而不是等到0号自己的回合。
+	_controller._emit_rule_timing("phaseAfter", 1, 1, 1, {"turn_number":_controller.state.turn_number})
+	if _controller.get_starring_role_player_id() != 0:
+		return _fail("wansi_other_turn_not_starring=%d" % _controller.get_starring_role_player_id())
+	if not _controller._extra_turn_queue.has(0):
+		return _fail("wansi_other_turn_no_extra_turn queue=%s" % _controller._extra_turn_queue)
 	return true
 
 

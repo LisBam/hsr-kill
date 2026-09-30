@@ -255,7 +255,7 @@ func _run() -> void:
 		printerr("SMOKE_FAIL bailu_stats")
 		get_tree().quit(1)
 		return
-	if int(ren_definition.get("max_hp", 0)) != 4 or str(ren_definition.get("faction", "")) != "xinghelieshou" or str(ren_definition.get("gender", "")) != "male" or ren_definition.get("skills", []) != ["wansi", "zhili"]:
+	if int(ren_definition.get("max_hp", 0)) != 5 or str(ren_definition.get("faction", "")) != "xinghelieshou" or str(ren_definition.get("gender", "")) != "male" or ren_definition.get("skills", []) != ["wansi", "zhili"]:
 		printerr("SMOKE_FAIL ren_stats")
 		get_tree().quit(1)
 		return

@@ -64,6 +64,11 @@ const AI_ZONE_WEIGHT_EQUIPMENT: float = 1.1
 ## AI：④第二步的手牌区权重；单张手牌的信息与用途都最不确定，权重最低。
 const AI_ZONE_WEIGHT_HAND: float = 0.7
 
+## ④第二步选牌请求声明的选牌语义；统一选择评分据此把“选中的牌”理解为拆解他人区域的收益，
+## 而不是自己支付出去的代价。取值与统一评估器既有的“操作他人区域”语义同名，两处必须保持一致。
+## 缺少该声明时，通用层会按牌面价值取负，AI 会对任何目标都给出负分并取消，轮回节因此无法推进。
+const AI_CARD_SEMANTICS_DISCARD_TARGET: String = "discard_target"
+
 
 ## 写入四轮回节主动技能静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
@@ -223,7 +228,7 @@ func _begin_zone_card_selection(target_id: int) -> bool:
 	var candidates: Array[Dictionary] = _get_zone_card_candidates(target_id)
 	if candidates.is_empty():
 		return _complete_empty_section(DISCARD_ZONE_SECTION_INDEX)
-	request_card_selection("同袍", "请选择要弃置的牌", candidates, DISCARD_ZONE_COUNT, DISCARD_ZONE_COUNT, true, {"kind":DISCARD_ZONE_CARD_CHOICE_KIND, "target_id":target_id})
+	request_card_selection("同袍", "请选择要弃置的牌", candidates, DISCARD_ZONE_COUNT, DISCARD_ZONE_COUNT, true, {"kind":DISCARD_ZONE_CARD_CHOICE_KIND, "target_id":target_id, "ai_choice_card_semantics":AI_CARD_SEMANTICS_DISCARD_TARGET})
 	return true
 
 
@@ -281,41 +286,46 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	# 当前轮回节；各节枚举各自的动作形态。
 	var section_index: int = get_reincarnation_section_index()
 	if section_index == DAMAGE_SELF_SECTION_INDEX:
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "confirm_self":true}})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "confirm_self":true, "reincarnation_section":section_index}})
 		return
 	if section_index == SHIELD_SECTION_INDEX:
 		# ②候选角色；没有其他存活角色时只枚举空节推进动作。
 		var shield_target_ids: Array[int] = _get_shield_target_ids()
 		if shield_target_ids.is_empty():
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
+			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "reincarnation_section":section_index}})
 			return
 		for target_id: int in shield_target_ids:
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id]}})
+			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id], "reincarnation_section":section_index}})
 		return
 	if section_index == DISCARD_HAND_SECTION_INDEX:
 		# ③候选费用牌；没有手牌时只枚举空节推进动作。
 		var hand_candidates: Array[Dictionary] = _get_hand_card_candidates()
 		if hand_candidates.is_empty():
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
+			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "reincarnation_section":section_index}})
 			return
 		for candidate: Dictionary in hand_candidates:
 			# 当前费用牌UID；动作只携带稳定ID，不持有牌对象。
 			var card_uid: int = int(candidate.get("uid", -1))
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "card_uid":card_uid, "payload":{"skill_id":get_id(), "card_uid":card_uid}})
+			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "card_uid":card_uid, "payload":{"skill_id":get_id(), "card_uid":card_uid, "reincarnation_section":section_index}})
 		return
 	# ④第一步只枚举角色；具体弃哪张牌由第二步窗口的 score_ai_choice 决定。
 	var zone_target_ids: Array[int] = _get_zone_target_ids()
 	if zone_target_ids.is_empty():
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "reincarnation_section":section_index}})
 		return
 	for target_id: int in zone_target_ids:
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id]}})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id], "reincarnation_section":section_index}})
 
 
 ## 评估同袍当前轮回节动作的价值；各节的收益口径不同，分别交由对应的评分函数处理。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 当前轮回节；评分时动作来自同一帧合法枚举，不修改轮回状态。
-	var section_index: int = get_reincarnation_section_index()
+	# 当前轮回节；直接取枚举该动作时写入的节号，而不是运行时轮回状态。
+	# AI评分运行在 host 为 null 的只读技能实例上（basic_ai_policy 以 bind(null, player_id) 建立评分实例），
+	# 该路径下 get_reincarnation_section_index() 恒返回0（①自伤节），会让②③④的动作全部被按①定价。
+	# 后果是AI选出一个与当前节不匹配的动作：它提交后停在④第二步的选牌窗口，因收益口径错误而取消，
+	# 轮回节不推进、额度不消耗，同一个动作被反复提交，表现为AI长时间“思考”而游戏无法继续。
+	# 动作负载里的节号由 append_play_phase_actions 在枚举时写入，是同一帧内与合法动作完全对应的稳定事实。
+	var section_index: int = int((action.get("payload", {}) as Dictionary).get("reincarnation_section", DAMAGE_SELF_SECTION_INDEX))
 	if section_index == DAMAGE_SELF_SECTION_INDEX:
 		return _score_self_damage(authoritative_snapshot, evaluator)
 	if section_index == SHIELD_SECTION_INDEX:
@@ -395,7 +405,7 @@ func _score_zone_target(authoritative_snapshot: Dictionary, target_id: int, eval
 	if attitude < 0.0:
 		return (-attitude / 5.0) * AI_ZONE_WEIGHT_HAND
 	# 队友方向；只有其判定区存在延时锦囊时才值得协助解围。
-	if _has_judgment_card(target_id):
+	if _has_judgment_card(authoritative_snapshot, target_id, evaluator):
 		return AI_ALLY_JUDGMENT_RESCUE_VALUE
 	return -AI_ZONE_WEIGHT_HAND
 
@@ -405,7 +415,7 @@ func _score_zone_card(authoritative_snapshot: Dictionary, target_id: int, card_u
 	if target_id < 0 or card_uid < 0:
 		return -20.0
 	# 牌所在区域；不同区域对目标的影响差异很大。
-	var zone: String = _resolve_card_zone(target_id, card_uid)
+	var zone: String = _resolve_card_zone(authoritative_snapshot, target_id, card_uid, evaluator)
 	# 区域权重；判定区牌直接决定目标的下个回合，因此权重最高。
 	var zone_weight: float = AI_ZONE_WEIGHT_JUDGMENT if zone == "judgment" else (AI_ZONE_WEIGHT_EQUIPMENT if zone == "equipment" else AI_ZONE_WEIGHT_HAND)
 	# 态度；对敌人弃牌是正收益，态度越负收益越高。
@@ -442,28 +452,37 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 
 
 ## 判断指定角色的判定区是否存在牌；判定区只可能存放延时锦囊，因此非空即视为需要解围。
-func _has_judgment_card(target_id: int) -> bool:
-	var target: PlayerState = get_skill_player(target_id).get_state()
-	return target != null and not target.judgment_area.is_empty()
+## 只读权威快照，不通过 get_skill_player 访问运行时状态：AI评分使用 host 为 null 的只读技能实例，
+## 该路径下运行时状态恒不可用，会让“队友判定区需要解围”这条唯一给队友正收益的分支永远不可达。
+func _has_judgment_card(authoritative_snapshot: Dictionary, target_id: int, evaluator: Object) -> bool:
+	# 目标公开快照；判定区是所有玩家可见的公共信息，任何观察者都能读到同一份内容。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	return not target.is_empty() and not (target.get("judgment_area", []) as Array).is_empty()
 
 
 ## 解析一张牌当前所在的区域；供④的区域权重评分使用，找不到时按手牌处理。
-func _resolve_card_zone(target_id: int, card_uid: int) -> String:
-	var target: PlayerState = get_skill_player(target_id).get_state()
-	if target == null:
+## 与 _has_judgment_card 同理：判定区与装备区都是公开信息，必须从快照读取而不是运行时状态。
+func _resolve_card_zone(authoritative_snapshot: Dictionary, target_id: int, card_uid: int, evaluator: Object) -> String:
+	# 目标公开快照；对手的手牌在快照中只保留数量，因此暗手牌会自然落回“hand”默认分支。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	if target.is_empty():
 		return "hand"
-	if _contains_card_uid(target.judgment_area, card_uid):
+	if _snapshot_contains_card_uid(target.get("judgment_area", []) as Array, card_uid):
 		return "judgment"
 	# 装备区是按装备槽位索引的字典，必须遍历取值而不能当作数组处理。
-	for equipped_card: CardInstance in target.equipment.values():
-		if equipped_card.uid == card_uid:
+	for card_variant: Variant in (target.get("equipment", {}) as Dictionary).values():
+		# 当前装备实体快照；只按稳定UID比对，不依赖槽位名称。
+		var equipped_card: Dictionary = card_variant as Dictionary
+		if int(equipped_card.get("uid", -1)) == card_uid:
 			return "equipment"
 	return "hand"
 
 
-## 判断实体牌数组是否包含指定UID；只读查询，不移动任何牌。
-func _contains_card_uid(cards: Array[CardInstance], card_uid: int) -> bool:
-	for card: CardInstance in cards:
-		if card.uid == card_uid:
+## 判断实体牌快照数组是否包含指定UID；只读查询，不移动任何牌。
+## 原先直接遍历 CardInstance 数组的等价查询已由本函数取代：AI评分只能拿到可序列化快照，
+## 运行时牌对象在该路径下不可用，保留两套查询会重新引入“规则层与AI层口径不一致”的风险。
+func _snapshot_contains_card_uid(cards: Array, card_uid: int) -> bool:
+	for card_variant: Variant in cards:
+		if int((card_variant as Dictionary).get("uid", -1)) == card_uid:
 			return true
 	return false

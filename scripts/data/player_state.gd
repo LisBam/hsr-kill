@@ -72,6 +72,11 @@ var character_corner_text: String = ""
 ## 武将牌左上角公开文本条目；键为稳定来源ID，值保存文本与排序值，由控制器合成为character_corner_text以允许多个技能同时显示。
 var character_corner_text_entries: Dictionary = {}
 
+## 技能动态显示描述覆盖；键为技能稳定ID，值为该技能当前应显示的完整说明正文，可含删除线标记。
+## 与 character_form_state 的关键区别是本字段属于**公开事实**：它随观察者快照下发，悬停武将资料、右键武将详情与技能按钮据此显示技能正文。
+## 只保存“当前进度与静态原文不同”的技能；未包含的技能由界面回退静态元数据描述，因此普通技能不需要写入任何内容。
+var dynamic_skill_descriptions: Dictionary = {}
+
 ## 当前角色持有的公开标记；键为稳定标记ID，值包含单字图标、名称、说明、数量与来源角色，全部观察者均可见。
 var public_marks: Dictionary = {}
 
@@ -309,6 +314,7 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.non_locked_skill_disable_sources = (data.get("non_locked_skill_disable_sources", {}) as Dictionary).duplicate(true)
 	player.character_corner_text = str(data.get("character_corner_text", ""))
 	player.character_corner_text_entries = (data.get("character_corner_text_entries", {}) as Dictionary).duplicate(true)
+	player.dynamic_skill_descriptions = (data.get("dynamic_skill_descriptions", {}) as Dictionary).duplicate(true)
 	player.public_marks = (data.get("public_marks", {}) as Dictionary).duplicate(true)
 	player.auto_managed = bool(data.get("auto_managed", false))
 	player.auto_managed_offline = false
@@ -525,6 +531,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"non_locked_skill_disable_sources": non_locked_skill_disable_sources.duplicate(true),
 		"character_corner_text": character_corner_text,
 		"character_corner_text_entries": character_corner_text_entries.duplicate(true),
+		"dynamic_skill_descriptions": dynamic_skill_descriptions.duplicate(true),
 		"public_marks": public_marks.duplicate(true),
 		"auto_managed": auto_managed,
 		"auto_managed_offline": auto_managed_offline,

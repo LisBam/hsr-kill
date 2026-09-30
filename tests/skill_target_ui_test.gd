@@ -87,6 +87,49 @@ func _run() -> void:
 	if not has_activation_target_indicator:
 		_fail("target_activation_indicator")
 		return
+	# 独立目标指示器表现；技能可以在不发动、不写日志的情况下请求指向一组新目标。
+	# 本用例只注入裁剪快照而没有权威对局状态，因此直接发布表现信号验证界面链路；
+	# 端口侧的目标过滤与返回值由带真实对局状态的规则测试覆盖。
+	# 先清空上一条发动线，避免把残留表现误判成本次新画的线段。
+	animation_layer.clear_presentations()
+	# 目标数组必须显式声明为 Array[int]：信号参数带类型，未类型化的字面量会因类型不符而无法送达界面。
+	var indicator_targets: Array[int] = [1]
+	match_controller.skill_target_indicated.emit(0, indicator_targets)
+	await get_tree().process_frame
+	var has_standalone_indicator: bool = false
+	for standalone_key_variant: Variant in animation_layer._line_presentations.keys():
+		# 当前表现键；正式动态线使用正数递增序号，负数预览键不属于本端口。
+		var standalone_key: int = int(standalone_key_variant)
+		var standalone_presentation: Dictionary = animation_layer._line_presentations[standalone_key] as Dictionary
+		if standalone_key >= 0 and (standalone_presentation.get("target_positions", []) as Array).size() == 1:
+			has_standalone_indicator = true
+			break
+	if not has_standalone_indicator:
+		_fail("standalone_target_indicator_missing")
+		return
+	# 不可取消的0至2名目标请求；【好戏】等强制发动的技能用“不选任何角色”表达原文的0名目标。
+	# 此时确定按钮必须可用，否则这次强制发动没有任何可提交的结果，玩家会卡在选择窗口。
+	var zero_target_request: Dictionary = {
+		"request_id":25,
+		"chooser_id":0,
+		"choice_type":"target",
+		"title":"好戏",
+		"prompt":"请选择0至2名其他角色各弃置一张随机手牌",
+		"candidates":[],
+		"target_ids":[1],
+		"min_select":0,
+		"max_select":2,
+		"min_card_select":0,
+		"max_card_select":0,
+		"min_target_select":0,
+		"max_target_select":2,
+		"allow_cancel":false,
+		"context":{"kind":"ui_zero_target_test", "skill_id":"ui_zero_target_test", "skill_owner_id":0},
+	}
+	main_instance.call("_on_card_choice_requested", zero_target_request)
+	if target_view.is_target_selected or confirm_button.disabled or cancel_button.disabled == false:
+		_fail("zero_target_confirm selected=%s confirm=%s cancel=%s" % [str(target_view.is_target_selected), str(confirm_button.disabled), str(cancel_button.disabled)])
+		return
 	# 牌目标组合请求；选择材料后目标仍由同一武将牌交互，并满足两个维度后才允许确认。
 	# 本地材料候选；保持与正式 card_choice_requested 快照结构一致。
 	var candidate: Dictionary = {"uid":801, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":material_card.duplicate(true)}

@@ -555,6 +555,7 @@ func _ready() -> void:
 	match_controller.draw_presentation_batch_finished.connect(_on_draw_presentation_batch_finished)
 	match_controller.card_animation_ownership_reset_requested.connect(_on_card_animation_ownership_reset_requested)
 	match_controller.skill_activated.connect(_on_skill_activated)
+	match_controller.skill_target_indicated.connect(_on_skill_target_indicated)
 	match_controller.equipment_activated.connect(_on_equipment_activated)
 	match_controller.card_choice_requested.connect(_on_card_choice_requested)
 	card_selection_panel.control_submitted.connect(_on_control_choice_submitted)
@@ -1914,7 +1915,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
 			# 当前轮回技公开状态；普通技能获得空字典并保持单色说明。
 			var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id))
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id), _resolve_skill_dynamic_description(local_player, skill_id))
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -1944,7 +1945,7 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		# 当前轮回技公开状态；技能按钮只转发给统一说明视图，不读取运行时技能对象。
 		var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id))
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id), _resolve_skill_dynamic_description(local_player, skill_id))
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
@@ -1952,6 +1953,15 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		skill_button_container.add_child(skill_button)
 		_skill_views[skill_id] = skill_button
 	_layout_local_skill_area(skill_ids.size())
+
+
+## 返回技能在指定玩家公开快照中的动态显示描述；快照的 dynamic_skill_descriptions 是唯一数据来源。
+## 该字段只包含“当前进度与静态原文不同”的技能（例如【断界】已被删除的选项需要划掉），
+## 因此普通技能返回空字符串，技能按钮据此回退 GameDatabase 的静态原文。
+func _resolve_skill_dynamic_description(player_snapshot: Dictionary, skill_id: String) -> String:
+	# 快照下发的动态描述覆盖；缺失该可选字段时返回空字符串表示“没有覆盖”。
+	var dynamic_descriptions: Dictionary = player_snapshot.get("dynamic_skill_descriptions", {}) as Dictionary
+	return str(dynamic_descriptions.get(skill_id, ""))
 
 
 ## 返回局内获得技能在当前快照中的剩余额度；总共、每回合与每轮限制均独立显示，0表示该维度无限制。
@@ -4138,24 +4148,35 @@ func _show_character_card_activation(player_id: int, activation_name: String, co
 	activation_tween.tween_callback(activation_label.queue_free)
 
 
-## 在技能实际发动时播放已确认目标的动态指示线；选择阶段只保留目标描边，避免把尚未确认的候选误表现为已发动。
-func _play_skill_activation_target_indicator(activator_player_id: int, context: Dictionary) -> void:
+## 在技能独立请求目标指示器时播放一次性指向线；请求可以被技能在任意时机发出，因此本入口不收拢任何状态。
+func _on_skill_target_indicated(source_player_id: int, target_player_ids: Array[int]) -> void:
+	_play_target_indicator_line(source_player_id, target_player_ids)
+
+
+## 从来源角色锚点向给定目标逐个取锚点并播放技能指示线；与技能发动提示共用同一绘制入口与样式参数。
+## 锚点缺失的角色只跳过自己那条线段，其余目标仍正常显示，避免座位尚未建立时整条指示线消失。
+func _play_target_indicator_line(source_player_id: int, target_player_ids: Array[int]) -> void:
 	if card_use_animation_layer == null:
 		return
-	# 发动者锚点；缺失座位时不回退到桌面中央，避免为技能伪造来源方向。
-	var source_anchor_result: Dictionary = _try_get_player_indicator_position(activator_player_id)
+	# 来源锚点；缺失时不回退到桌面中央，避免为技能伪造来源方向。
+	var source_anchor_result: Dictionary = _try_get_player_indicator_position(source_player_id)
 	if not bool(source_anchor_result.get("valid", false)):
 		return
-	# 已确认技能目标；只读取发动记录上下文，不能从当前候选或仍可点击的武将牌反推。
-	var target_ids: Array[int] = _get_skill_activation_target_ids(context)
+	# 目标锚点集合；保持请求顺序，使多目标指示线的绘制次序稳定可复现。
 	var target_positions: Array[Vector2] = []
-	for target_id: int in target_ids:
-		# 当前目标锚点；目标刚离场或座位尚未建立时跳过对应线段，其他合法目标仍正常显示。
+	for target_id: int in target_player_ids:
+		# 当前目标锚点；目标刚离场或座位尚未建立时跳过对应线段。
 		var target_anchor_result: Dictionary = _try_get_player_indicator_position(target_id)
 		if bool(target_anchor_result.get("valid", false)):
 			target_positions.append(target_anchor_result.get("position", Vector2.ZERO) as Vector2)
 	if not target_positions.is_empty():
 		card_use_animation_layer.play_skill_target_indicator(source_anchor_result.get("position", Vector2.ZERO) as Vector2, target_positions)
+
+
+## 在技能实际发动时播放已确认目标的动态指示线；选择阶段只保留目标描边，避免把尚未确认的候选误表现为已发动。
+func _play_skill_activation_target_indicator(activator_player_id: int, context: Dictionary) -> void:
+	# 已确认技能目标；只读取发动记录上下文，不能从当前候选或仍可点击的武将牌反推。
+	_play_target_indicator_line(activator_player_id, _get_skill_activation_target_ids(context))
 
 
 ## 从技能实际发动上下文提取稳定目标 ID；优先使用通用target_id/target_ids，并兼容现有支援技能的受益者字段。
@@ -4796,9 +4817,12 @@ func _refresh_inline_choice_text() -> void:
 	# 当前目标选择数量；只属于界面临时状态，不修改权威请求快照。
 	var selected_target_count: int = _selected_target_ids.size()
 	# 确认按钮的卡牌下限；可取消的普通选牌仍要求至少选1张，空结果必须通过“取消”表达。
-	var confirm_minimum_card_count: int = maxi(minimum_card_count, 1) if choice_type in ["card", "respond", "discard"] and maximum_card_count > 0 else minimum_card_count
+	# 补充：不可取消的请求没有“取消”可以表达空结果，因此不能抬高下限，否则0张这一合法选择无处提交。
+	var confirm_minimum_card_count: int = maxi(minimum_card_count, 1) if choice_type in ["card", "respond", "discard"] and maximum_card_count > 0 and bool(_inline_card_choice.get("allow_cancel", false)) else minimum_card_count
 	# 确认按钮的目标下限；可取消的纯选目标同样要求至少选1名，避免空确认与取消语义混淆。
-	var confirm_minimum_target_count: int = maxi(minimum_target_count, 1) if choice_type == "target" and maximum_target_count > 0 else minimum_target_count
+	# 补充：不可取消的请求必须允许0名目标直接确定——【好戏】等强制发动的技能用“不选任何角色”表达原文的0名目标，
+	# 抬高下限会让确定按钮永久禁用，玩家既无法按原文结算0名目标，也无法推进这次强制发动。
+	var confirm_minimum_target_count: int = maxi(minimum_target_count, 1) if choice_type == "target" and maximum_target_count > 0 and bool(_inline_card_choice.get("allow_cancel", false)) else minimum_target_count
 	# 内联询问只保留具体规则提示与操作按钮；通用标题、已选数量和范围摘要不重复显示。
 	selection_label.text = ""
 	selection_label.visible = false

@@ -20,6 +20,8 @@ func _run() -> void:
 	_create_controller()
 	if not _test_duanjie_static_definition():
 		return
+	if not _test_duanjie_dynamic_description():
+		return
 	if not _test_duanjie_first_activation_removes_last_option():
 		return
 	if not _test_duanjie_options_exhaust_after_four_activations():
@@ -121,6 +123,46 @@ func _begin_new_play_phase() -> void:
 ## 派发一次武将牌技能变更时机；change_type 决定本技能是否应该清空已删除的选项。
 func _emit_change_skills(change_type: String, skill_ids: Array) -> void:
 	_controller._emit_rule_timing("changeSkillsAfter", 0, 0, 0, {"change_type":change_type, "skill_ids":skill_ids.duplicate()})
+
+
+## 校验【断界】的删除进度会同步到技能的显示描述：被删除的选项原文带删除线标记，
+## 未删除的选项与其余原文逐字保持静态原文，复原后覆盖被清除并回到完整四项。
+## 同时校验显示视图把标记解析成删除线，而不是把标记本身当成普通文字画出来。
+func _test_duanjie_dynamic_description() -> bool:
+	_reset_state(3)
+	var duanjie: SkillDefinition = _install_single_skill(0, "duanjie")
+	if duanjie == null:
+		return _fail("duanjie_missing")
+	# 未删除任何选项时不写入覆盖，快照保持“没有动态描述”的初始形态。
+	if not (_controller.state.get_player(0).dynamic_skill_descriptions as Dictionary).is_empty():
+		return _fail("duanjie_initial_override=%s" % _controller.state.get_player(0).dynamic_skill_descriptions)
+	# 首次发动删除④：④的原文片段应被删除线标记包住，①到③原样保留。
+	if not duanjie.activate({"option_id":"4", "target_ids":[1]}).is_empty():
+		return _fail("duanjie_dynamic_activate_option4")
+	var dynamic_description: String = str((_controller.state.get_player(0).dynamic_skill_descriptions as Dictionary).get("duanjie", ""))
+	if not dynamic_description.contains("[s]4.将一名武将牌正面向上的角色翻至背面[/s]。"):
+		return _fail("duanjie_dynamic_strike_missing=%s" % dynamic_description)
+	if not dynamic_description.contains("3.将一名武将牌背面向上的角色翻至正面；"):
+		return _fail("duanjie_dynamic_kept_option_missing=%s" % dynamic_description)
+	# 公开快照是界面唯一数据来源：悬停资料、右键详情与技能按钮都只读该字段。
+	var snapshot: Dictionary = _controller.state.get_player(0).to_dict(-1, false)
+	if str((snapshot.get("dynamic_skill_descriptions", {}) as Dictionary).get("duanjie", "")) != dynamic_description:
+		return _fail("duanjie_dynamic_snapshot_missing=%s" % [snapshot.get("dynamic_skill_descriptions", {})])
+	# 显示视图必须解析标记：可见纯文本里不能残留标记字面量，同时被划掉的选项文字仍然可见。
+	var description_view: SkillDescriptionView = SkillDescriptionView.new()
+	add_child(description_view)
+	description_view.configure_description(dynamic_description)
+	var visible_text: String = description_view.get_rendered_visible_text()
+	if visible_text.contains("[s]") or visible_text.contains("[/s]"):
+		return _fail("duanjie_dynamic_view_leaked_marker=%s" % visible_text)
+	if not visible_text.contains("4.将一名武将牌正面向上的角色翻至背面"):
+		return _fail("duanjie_dynamic_view_text_missing=%s" % visible_text)
+	description_view.queue_free()
+	# 复原武将牌后清除覆盖，资料回到完整四项原文。
+	_emit_change_skills("restore_character_card_skills", ["duanjie"])
+	if not (_controller.state.get_player(0).dynamic_skill_descriptions as Dictionary).is_empty():
+		return _fail("duanjie_restore_override_leaked=%s" % _controller.state.get_player(0).dynamic_skill_descriptions)
+	return true
 
 
 ## 校验【断界】的静态定义：玩家可见正文逐字一致且是出牌阶段主动技能。

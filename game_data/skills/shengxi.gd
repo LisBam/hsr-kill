@@ -43,9 +43,17 @@ const AI_DRAW_OPTION_VALUE: float = NonameAIEvaluator.CARD_RESOURCE_VALUE
 ## AI 判断“X已经足够支撑本回合剩余用牌”的手牌密度下限；X超过手牌数时摸牌收益更高。
 const AI_INCREASE_PREFER_HAND_DIVISOR: float = 1.0
 
-## 本回合结束时需要累加到X上的待生效次数；只在本技能实例内累计，回合结束后一次性结算。
+## 生息文本在武将牌左上角组合条目中的排序值；固定100，与【逐风】【安可】等数值类提示同层级，
+## 使「生息 X」排在【酩酊】【追歼】【永劫】【凶星】等角色状态类提示（排序值50）之后。
+## 修改该值会改变同一武将牌上多条提示同时存在时的竖排顺序，运行时不应动态调整。
+const CORNER_TEXT_ORDER: int = 100
+
+## 本回合结束时需要累加到X上的待生效次数；键为**登记时所在回合的角色ID**，值为该回合的待累加次数。
+## 用按回合分桶的字典而不是单个计数，是因为持有者可能在**不同角色的回合**里各登记一笔
+## （最典型的是在别人回合打出【闪】【桃】这类基本牌）；每一笔都必须在自己所属的那个回合结束时兑现，
+## 若合并成一个计数，先结束的那个回合会把另一个回合的待累加一起提前吃掉。
 ## 换将或重装技能会丢弃该值：此时“本回合结束后”的窗口已随旧实例生命周期失效。
-var _pending_increase_count: int = 0
+var _pending_increase_by_turn: Dictionary = {}
 
 
 ## 写入技能静态信息；玩家可见描述严格保持需求提供的原文。
@@ -60,9 +68,25 @@ func _init() -> void:
 
 ## 订阅整牌用牌时机与回合结束之后时机；前者判定是否创建二选一，后者兑现待累加的X。
 ## useCard 是整牌时机，每条用牌只派发一次，因此无需额外的按牌幂等集合。
+## phaseAfter 必须使用 global 关系：原文的“本回合结束后”指**使用基本牌时所在的那个回合**，
+## 而持有者完全可能在他人回合里打出【闪】【桃】等基本牌；若只订阅持有者自己的回合（role="player"），
+## 那一笔累加会被一直推迟到自己回合结束，导致本回合内后续用牌读到偏小的X，
+## 也和“每回合额度按全局回合号刷新”的口径自相矛盾（额度已经按任何人的回合刷新，累加却只认自己的回合）。
 func install() -> void:
 	subscribe_timing("useCard", _on_owner_card_used, "source")
-	subscribe_timing("phaseAfter", _on_owner_turn_finished, "player")
+	subscribe_timing("phaseAfter", _on_owner_turn_finished, "global")
+	# 武将牌左上角角标；只要持有本技能就必须显示当前X，因此安装当刻即写入初始值「生息 1」。
+	_refresh_corner_text()
+
+
+## 卸载技能时移除生息自己的公开文本条目；其他技能与状态类角标由各自的来源ID独立维护。
+## 与 install() 成对出现，保证换将、失去技能或重装技能后不会残留过期的X角标。
+func uninstall() -> void:
+	# 待累加记录随实例一起作废：技能已经不在场，之后任何回合结束都不应再改这个角色的X。
+	_pending_increase_by_turn.clear()
+	if host != null and host.has_method("remove_character_corner_text_entry"):
+		host.call("remove_character_corner_text_entry", owner_player_id, _get_corner_entry_id())
+	super()
 
 
 ## 持有者使用基本牌时按剩余额度创建二选一；额度耗尽或牌不是基本牌时不询问。
@@ -111,20 +135,27 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		# 标准摸牌端口；与其他摸牌技能共用同一权威入口，因此在牌堆耗尽时会走统一的洗牌与重开逻辑。
 		host.call("draw", owner_player_id, DRAW_OPTION_CARD_COUNT)
 		return true
-	# 累加X只在回合完全结束后生效；本回合已消耗的额度不会因此返还。
-	_pending_increase_count += INCREASE_AMOUNT_PER_ACTIVATION
+	# 累加X只在“登记时所在的那个回合”完全结束后生效；本回合已消耗的额度不会因此返还。
+	# 按回合角色ID分桶，因此他人回合里打出的基本牌会在那个回合结束时兑现，不会被推迟到自己回合。
+	var pending_turn_player_id: int = _get_turn_player_id()
+	_pending_increase_by_turn[pending_turn_player_id] = int(_pending_increase_by_turn.get(pending_turn_player_id, 0)) + INCREASE_AMOUNT_PER_ACTIVATION
 	return true
 
 
-## 持有者本回合完全结束之后兑现待累加的X；只写数值，不创建选择、不摸牌、不发布用牌事件。
+## 登记的那一笔所属回合完全结束之后兑现待累加的X；只写数值，不创建选择、不摸牌、不发布用牌事件。
+## 只兑现“结束回合同属一个角色”的那一桶，因此他人回合与自己回合的登记互不干扰、也不会被提前结算。
 func _on_owner_turn_finished(event: RuleEvent) -> void:
-	if event.player_id != owner_player_id or _pending_increase_count <= 0:
+	if not _pending_increase_by_turn.has(event.player_id):
 		return
-	# 本次实际累加次数；先取后清，保证同一次结算只兑现一遍。
-	var increase_count: int = _pending_increase_count
-	_pending_increase_count = 0
+	# 本次实际累加次数；先取后清，保证同一个回合的登记只兑现一遍。
+	var increase_count: int = int(_pending_increase_by_turn.get(event.player_id, 0))
+	_pending_increase_by_turn.erase(event.player_id)
+	if increase_count <= 0:
+		return
 	var next_x: int = _get_accumulated_x() + increase_count
 	_set_accumulated_x(next_x)
+	# X 是角标显示的唯一数值来源；累加成功后必须立即刷新，避免角标停在上一回合的旧值。
+	_refresh_corner_text()
 	announce_activation({"increase_count":increase_count, "accumulated_x":next_x})
 
 
@@ -200,6 +231,21 @@ func _set_accumulated_x(value: int) -> void:
 	owner.character_form_state[ACCUMULATED_X_STATE_KEY] = maxi(value, 0)
 
 
+## 按当前累计X刷新武将牌左上角角标；与【酩酊】共用同一套公开文本通道，由控制器按排序值合成竖排提示。
+## 与【逐风】的差异：逐风在0次时隐藏条目，而本技能的X初始为1、只增不减，因此不存在需要隐藏的状态，
+## 只要技能实例存活就始终显示完整文本「生息 X」。
+## 宿主角标端口缺失时静默跳过，保证纯规则环境（无界面测试）仍可正常结算技能效果。
+func _refresh_corner_text() -> void:
+	if host == null or not host.has_method("set_character_corner_text_entry"):
+		return
+	host.call("set_character_corner_text_entry", owner_player_id, _get_corner_entry_id(), "生息 %d" % _get_accumulated_x(), CORNER_TEXT_ORDER)
+
+
+## 返回本技能实例的稳定武将牌文本条目ID；玩家ID让多名持有【生息】的角色各自维护独立条目。
+func _get_corner_entry_id() -> String:
+	return "shengxi:%d" % owner_player_id
+
+
 ## 返回本回合已发动次数；角色不存在时返回0。
 func _get_uses_this_turn() -> int:
 	# 技能持有者；角色不存在时视为没有消耗过额度。
@@ -230,3 +276,11 @@ func _get_turn_number() -> int:
 	if host == null or host.get("state") == null:
 		return 0
 	return int(host.state.turn_number)
+
+
+## 返回当前回合角色ID；未开始对局时回退 UNSYNCED_TURN_NUMBER，与回合号哨兵保持同一“没有有效回合”语义。
+## 使用基本牌当刻调用：他人回合里打出的响应基本牌会登记为该回合角色的桶，从而在那个回合结束时兑现。
+func _get_turn_player_id() -> int:
+	if host == null or host.get("state") == null:
+		return UNSYNCED_TURN_NUMBER
+	return int(host.state.current_player_id)
