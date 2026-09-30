@@ -7434,26 +7434,66 @@ func get_field_card_candidates(viewer_id: int, include_self: bool = true) -> Arr
 			continue
 		if not include_self and player.player_id == viewer_id:
 			continue
-		# 装备区候选；逐槽判断废除状态，已废除的栏位不产生候选，与区域废除语义保持一致。
-		for slot: String in PlayerState.EQUIPMENT_SLOT_ORDER:
-			if player.is_equipment_slot_abolished(slot):
-				continue
-			# 当前槽位装备实体；空槽位不产生候选。
-			var equipment_card: CardInstance = player.equipment.get(slot) as CardInstance
-			if equipment_card == null:
-				continue
-			if not can_discard_player_card(viewer_id, player.player_id, equipment_card, "equipment", slot):
-				continue
-			result.append(_serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, slot))
-		# 判定区候选；整区废除时该角色的判定区牌不进入场上。
-		if player.judgment_area_abolished:
+		# 当前角色场上候选；与单角色查询共用同一构建入口，两处顺序与过滤口径永远一致。
+		result.append_array(_build_field_card_candidates(viewer_id, player))
+	return result
+
+
+## 返回指定角色装备区与判定区中的可弃置候选，即该角色自己的「场上」；手牌区不参与。
+## 供“先选择一名场上有牌的角色，再弃置其场上的一张牌”的两步技能使用；实际移动仍走权威弃置端口。
+func get_player_field_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	# 目标角色；无效角色没有任何场上候选。
+	var target: PlayerState = state.get_player(target_id) if state != null else null
+	if target == null:
+		return [] as Array[Dictionary]
+	return _build_field_card_candidates(viewer_id, target)
+
+
+## 返回全部存活在场角色中「场上」至少有一张可弃置牌的角色ID。
+## 这是两步技能第一步的角色候选：只把装备区或判定区有牌的角色列为可选，避免玩家选中必然空过的目标。
+## include_self 决定是否纳入来源角色自己；顺序保持权威座次，界面、AI与回放据此稳定复现。
+func get_field_card_owner_ids(viewer_id: int, include_self: bool = true) -> Array[int]:
+	# 角色ID结果；同一角色只会出现一次，且只在确实有可弃置场上牌时写入。
+	var result: Array[int] = []
+	if state == null:
+		return result
+	for player: PlayerState in state.players:
+		if player == null or not player.alive or player.out_of_game:
 			continue
-		for judgment_card: CardInstance in player.judgment_area:
-			if judgment_card == null:
-				continue
-			if not can_discard_player_card(viewer_id, player.player_id, judgment_card, "judgment"):
-				continue
-			result.append(_serialize_choice_candidate(judgment_card, player.player_id, "judgment", true))
+		if not include_self and player.player_id == viewer_id:
+			continue
+		# 当前角色场上候选；为空表示该角色的场上没有任何可弃置的牌。
+		if _build_field_card_candidates(viewer_id, player).is_empty():
+			continue
+		result.append(player.player_id)
+	return result
+
+
+## 构建一名角色「场上」的可弃置候选；装备区在前、判定区在后，与统一区域候选顺序语义保持一致。
+## 已废除的装备栏位与已废除的判定区不产生候选，受目标保护技能拒绝的牌同样被剔除。
+func _build_field_card_candidates(viewer_id: int, player: PlayerState) -> Array[Dictionary]:
+	# 场上候选结果；只读查询，不移动任何牌。
+	var result: Array[Dictionary] = []
+	# 装备区候选；逐槽判断废除状态，已废除的栏位不产生候选，与区域废除语义保持一致。
+	for slot: String in PlayerState.EQUIPMENT_SLOT_ORDER:
+		if player.is_equipment_slot_abolished(slot):
+			continue
+		# 当前槽位装备实体；空槽位不产生候选。
+		var equipment_card: CardInstance = player.equipment.get(slot) as CardInstance
+		if equipment_card == null:
+			continue
+		if not can_discard_player_card(viewer_id, player.player_id, equipment_card, "equipment", slot):
+			continue
+		result.append(_serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, slot))
+	# 判定区候选；整区废除时该角色的判定区牌不进入场上。
+	if player.judgment_area_abolished:
+		return result
+	for judgment_card: CardInstance in player.judgment_area:
+		if judgment_card == null:
+			continue
+		if not can_discard_player_card(viewer_id, player.player_id, judgment_card, "judgment"):
+			continue
+		result.append(_serialize_choice_candidate(judgment_card, player.player_id, "judgment", true))
 	return result
 
 

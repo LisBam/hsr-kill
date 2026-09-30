@@ -809,6 +809,21 @@ func _test_renwang_shield_black_slash() -> bool:
 	var fire_score_without_tengjia: float = fire_evaluator.score_action(no_armor_snapshot, fire_slash_action, 0)
 	if fire_score_with_tengjia <= fire_score_without_tengjia:
 		return _fail("tengjia_fire_value with=%.2f without=%.2f" % [fire_score_with_tengjia, fire_score_without_tengjia])
+	# 负收益口径；被防具完全无效的目标收益必须严格小于0，而不是0，否则纯出牌顺序分仍会误导AI消耗无效牌。
+	var penalty_evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 普通【杀】静态定义与AI配置；测试直接复用评估器内部使用的同一份卡牌数据。
+	var slash_definition: Dictionary = GameDatabase.get_card("sha")
+	# 普通【杀】的AI配置；target_result 表示命中敌方时的目标方向收益。
+	var slash_profile: Dictionary = penalty_evaluator.get_card_ai_profile(slash_definition)
+	# 藤甲目标；普通【杀】属于被完全拦截的属性，收益必须为负。
+	var tengjia_target_penalty: float = penalty_evaluator.score_target_effect(snapshot, 0, 1, slash_definition, slash_profile, float(slash_profile.get("target_result", 0.0)), "", 1)
+	if tengjia_target_penalty >= 0.0:
+		return _fail("tengjia_normal_target_penalty=%.3f" % tengjia_target_penalty)
+	# 仁王盾目标；黑色【杀】属于被完全拦截的颜色，收益同样必须为负。
+	(snapshot.get("players", []) as Array)[1]["equipment"] = {"armor":_card(806, "renwang", 1)}
+	var renwang_target_penalty: float = penalty_evaluator.score_target_effect(snapshot, 0, 1, slash_definition, slash_profile, float(slash_profile.get("target_result", 0.0)), "black", 1)
+	if renwang_target_penalty >= 0.0:
+		return _fail("renwang_black_target_penalty=%.3f" % renwang_target_penalty)
 	return true
 
 
