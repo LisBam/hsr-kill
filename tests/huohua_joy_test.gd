@@ -151,9 +151,9 @@ func _submit_pending_choice(actor_id: int, selected_card_uids: Array[int], selec
 
 ## 校验欢愉势力元数据与火花的武将定义；势力颜色、性别、体力与技能顺序必须逐项稳定。
 func _test_huanyu_faction_and_huohua_metadata() -> bool:
-	# 欢愉势力元数据；需求指定颜色为橙红色，展示名与简称逐字锁定。
+	# 欢愉势力元数据；需求指定颜色为橙红色，展示名已按「修改欢愉派系显示名称」定为“欢愉派系”，简称与颜色逐字锁定。
 	var faction: Dictionary = GameDatabase.get_faction("huanyu")
-	if str(faction.get("display_name", "")) != "欢愉" or str(faction.get("short_name", "")) != "欢" or str(faction.get("color", "")) != "e0673c":
+	if str(faction.get("display_name", "")) != "欢愉派系" or str(faction.get("short_name", "")) != "欢" or str(faction.get("color", "")) != "e0673c":
 		return _fail("huanyu_faction %s" % [faction])
 	# 火花武将定义；欢愉派系女性、3点基础体力、两项技能按声明顺序登记。
 	var huohua: Dictionary = GameDatabase.get_character("huohua")
