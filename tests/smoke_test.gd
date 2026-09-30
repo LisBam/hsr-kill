@@ -191,8 +191,10 @@ func _run() -> void:
 	# 新增丹恒·腾荒的【岳峙】后为93个；【岳峙】是接管多目标牌的限定技。
 	# 新增瓦尔特的【断界】后为94个；【断界】是每次发动后删除最后一项的主动技能。
 	# 新增彦卿的【遥击】与【凌霜】后为96个；两者分别负责最远目标解限与【杀】的翻面附加效果。
+	# 新增白露的【悬壶】【生息】与刃的【万死】【支离】后为100个；【悬壶】是手牌上限豁免类锁定技，
+	# 【生息】是永久累积额度的用牌联动技，【万死】是按回合结束后兑现的额外回合技，【支离】是目标改写类锁定技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 96:
+	if skill_definition_count != 100:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -228,6 +230,10 @@ func _run() -> void:
 	var yvkong_definition: Dictionary = GameDatabase.get_character("yvkong")
 	# 停云武将定义；用于校验仙舟联盟势力、女性性别、3点基础体力与双限定技顺序。
 	var tingyun_definition: Dictionary = GameDatabase.get_character("tingyun")
+	# 白露武将定义；用于校验仙舟联盟势力、女性性别、3点基础体力与技能顺序。
+	var bailu_definition: Dictionary = GameDatabase.get_character("bailu")
+	# 刃武将定义；用于校验星核猎手势力、男性性别、4点基础体力与技能顺序。
+	var ren_definition: Dictionary = GameDatabase.get_character("ren")
 	if int(xier_definition.get("max_hp", 0)) != 4 or str(xier_definition.get("faction", "")) != "beiluoboge" or int(jizi_definition.get("max_hp", 0)) != 3 or int(march_definition.get("max_hp", 0)) != 3 or str(march_definition.get("faction", "")) != "xingqionglieche" or int(gepard_definition.get("max_hp", 0)) != 4 or str(gepard_definition.get("faction", "")) != "beiluoboge" or int(dan_heng_definition.get("max_hp", 0)) != 4 or int(xing_definition.get("max_hp", 0)) != 4 or int(qiong_definition.get("max_hp", 0)) != 4 or int(xing_preservation_definition.get("max_hp", 0)) != 4 or int(qiong_preservation_definition.get("max_hp", 0)) != 4 or int(sampo_definition.get("max_hp", 0)) != 4 or str(sampo_definition.get("faction", "")) != "beiluoboge" or int(sushang_definition.get("max_hp", 0)) != 4 or str(sushang_definition.get("faction", "")) != "xianzhou" or str(sushang_definition.get("gender", "")) != "female" or sushang_definition.get("skills", []) != ["jianshi", "shanqing"] or int(guinaifen_definition.get("max_hp", 0)) != 3 or str(guinaifen_definition.get("faction", "")) != "xianzhou" or str(guinaifen_definition.get("gender", "")) != "female" or guinaifen_definition.get("skills", []) != ["xifa", "touxia"]:
 		printerr("SMOKE_FAIL new_character_stats")
 		get_tree().quit(1)
@@ -242,6 +248,15 @@ func _run() -> void:
 		return
 	if int(tingyun_definition.get("max_hp", 0)) != 3 or str(tingyun_definition.get("faction", "")) != "xianzhou" or str(tingyun_definition.get("gender", "")) != "female" or tingyun_definition.get("skills", []) != ["xiangyin", "guangfu"]:
 		printerr("SMOKE_FAIL tingyun_stats")
+		get_tree().quit(1)
+		return
+	# 白露与刃武将静态信息；逐字校验体力、势力、性别与技能顺序。
+	if int(bailu_definition.get("max_hp", 0)) != 3 or str(bailu_definition.get("faction", "")) != "xianzhou" or str(bailu_definition.get("gender", "")) != "female" or bailu_definition.get("skills", []) != ["xuanhu", "shengxi"]:
+		printerr("SMOKE_FAIL bailu_stats")
+		get_tree().quit(1)
+		return
+	if int(ren_definition.get("max_hp", 0)) != 4 or str(ren_definition.get("faction", "")) != "xinghelieshou" or str(ren_definition.get("gender", "")) != "male" or ren_definition.get("skills", []) != ["wansi", "zhili"]:
+		printerr("SMOKE_FAIL ren_stats")
 		get_tree().quit(1)
 		return
 	if str(GameDatabase.get_skill("xingjun").get("description", "")) != "出牌阶段开始时，你可以跳过该阶段。若如此做，本回合结束时，你可令一名其他角色执行一个额外的回合。" or str(GameDatabase.get_skill("dieying").get("description", "")) != "回合结束时，你可以摸X张牌，然后弃置等量的牌。（X为本回合内进入弃牌堆的【杀】数，X至多为5。）" or str(GameDatabase.get_skill("tianzhui").get("description", "")) != "出牌阶段限一次，你可以弃置一张锦囊牌或将自身横置的武将牌竖置，然后对一名横置的角色造成1点火属性伤害。" or str(GameDatabase.get_skill("zhenqi").get("description", "")) != "领袖技，“贝洛伯格”势力的角色的回合开始时，其可弃置一张手牌/失去1点体力，然后你令另一名“贝洛伯格”势力的角色摸一张牌/回复1点体力。" or str(GameDatabase.get_skill("linghang").get("description", "")) != "领袖技，“星穹列车”势力的角色使一名角色横置时，你可对其发动此技能，然后其可重铸一张手牌。每回合限一次。" or str(GameDatabase.get_skill("jiahu").get("description", "")) != "准备阶段，你可以横置一名武将牌竖置且没有护盾的角色，并令其获得1点护盾。" or str(GameDatabase.get_skill("bingfeng").get("description", "")) != "当你使用牌指定唯一目标时，你可选择一项：1.将目标的武将牌调整为竖直；2.弃置目标一张手牌。然后若该角色不为你，你令此牌无效。每回合每名角色限一次。" or str(GameDatabase.get_skill("yongyi").get("description", "")) != "当你的体力值受到伤害后，你可以进行一个额外的弃牌阶段，然后获得1点护盾。每回合限一次，弃牌阶段开始时，你可以对自己造成1点伤害并摸一张牌，然后进行一个额外的出牌阶段。" or str(GameDatabase.get_skill("gangfeng").get("description", "")) != "你可将黑色牌当雷【杀】使用或打出。" or str(GameDatabase.get_skill("jiyu").get("description", "")) != "当你使用【杀】指定目标时，你可令目标角色调整至横置状态，然后令目标角色选择：1.其不可使用【闪】响应此【杀】；2.令你横置你攻击范围内的另一名角色。" or str(GameDatabase.get_skill("wangpai").get("description", "")) != "锁定技，你使用【杀】无次数限制。" or str(GameDatabase.get_skill("anda").get("description", "")) != "你可将一张牌当无距离限制的火【杀】使用或打出，每回合限一次。" or str(GameDatabase.get_skill("quanlei").get("description", "")) != "出牌阶段限一次，你可将一张手牌当目标上限+1的雷【杀】使用。" or str(GameDatabase.get_skill("hupo").get("description", "")) != "锁定技，你无法成为黑色【杀】的目标。" or str(GameDatabase.get_skill("tiebi").get("description", "")) != "每轮开始时，你可弃置一张【闪】并横置一名其他角色，其获得技能“琥珀”直到本轮结束。" or str(GameDatabase.get_skill("jianlei").get("description", "")) != "当一名距离为1的其他角色成为黑色【杀】的目标时，你可弃置一张【闪】并横置该角色，然后令此【杀】无效。" or str(GameDatabase.get_skill("pofeng").get("description", "")) != "结束阶段，若你于本回合内使用【杀】指定过目标，你可以弃置一张手牌并进行一个额外的回合，本回合内你使用牌仅可指定你本回合内使用【杀】指定过的角色为目标。每轮限一次。":
@@ -263,6 +278,16 @@ func _run() -> void:
 		printerr("SMOKE_FAIL yvkong_skill_descriptions")
 		get_tree().quit(1)
 		return
+	# 白露技能原文；逐字锁定需求指定的全角括号、数值与语句顺序。
+	if str(GameDatabase.get_skill("xuanhu").get("description", "")) != "锁定技，你的【桃】不计入手牌上限。当一名角色死亡后，你从牌堆中获得一张【桃】。" or str(GameDatabase.get_skill("shengxi").get("description", "")) != "每回合限X次，当你使用基本牌时，你可摸1张牌，或令本回合结束后X+1。（X初始为1）":
+		printerr("SMOKE_FAIL bailu_skill_descriptions")
+		get_tree().quit(1)
+		return
+	# 刃技能原文；逐字锁定需求指定的全角引号、数值与语句顺序。
+	if str(GameDatabase.get_skill("wansi").get("description", "")) != "每回合限一次，当你受到伤害后，若你的体力值为1，你可于本回合结束后成为“主演”并执行一个额外的回合。" or str(GameDatabase.get_skill("zhili").get("description", "")) != "锁定技，你是你自己使用【杀】的合法目标。当“主演”使用【杀】造成伤害时，其回复1点体力。当你使用【杀】指定唯一目标时，你令此【杀】的目标改为与目标角色相邻的角色，此【杀】结算完毕后，你失去1点体力。":
+		printerr("SMOKE_FAIL ren_skill_descriptions")
+		get_tree().quit(1)
+		return
 	# 停云技能原文；逐字锁定需求指定的标点、引号与语句顺序。
 	if str(GameDatabase.get_skill("xiangyin").get("description", "")) != "限定技，出牌阶段，你可令一名未拥有“赐福”标记的角色获得“赐福”标记，拥有“赐福”标记的角色于一回合内使用的第一张【杀】无距离限制。" or str(GameDatabase.get_skill("guangfu").get("description", "")) != "限定技，出牌阶段，你可令一名角色摸一张牌。本回合结束时，若其有已发动的限定技，你复原其中一项限定技。":
 		printerr("SMOKE_FAIL tingyun_skill_descriptions")
@@ -273,8 +298,9 @@ func _run() -> void:
 	# 新增丹恒·腾荒（翁法罗斯）后为43名；腾荒与同名丹恒通过稳定ID区分。
 	# 新增瓦尔特（星穹列车）后为44名。
 	# 新增彦卿（仙舟联盟）后为45名。
+	# 新增白露（仙舟联盟）与刃（星核猎手）后为47名；两名新武将各自引用本次新增的两个技能。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 45:
+	if character_definition_count != 47:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

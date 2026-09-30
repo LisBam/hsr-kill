@@ -138,6 +138,11 @@ func _test_exit_and_resume_flow() -> bool:
 	# 高额护盾；后续敌方AI回合中的任何伤害都不能让玩家进入濒死，保证乙阶段边界存档必然到来。
 	player.shield = 99
 	_controller.conquest_exit_save_ready.connect(_on_conquest_save_ready)
+	# 敌方在场防护；固定种子选将会随武将池变化而换人，若换到离场型武将（例如貊泽的【幽锋】每轮开始时离场），
+	# 敌方回合会被整体跳过，本测试依赖的“敌方回合开始前边界存档”就永远不会到来。因此先把敌人拉回游戏。
+	var initial_enemy: PlayerState = _controller.state.get_player(1)
+	if initial_enemy != null and initial_enemy.out_of_game and not _controller.restore_player_to_game(initial_enemy.player_id, "conquest_save_test"):
+		return _fail("enemy_out_of_game_restore")
 	# 回合开始类技能（例如【铁壁】）会创建可取消的费用目标询问并把阶段写成 "choice"，从而阻止常驻出牌询问建立；
 	# 固定种子选将会随武将池变化而换人，因此先结算这些技能选择，再等待出牌询问。
 	if not _settle_pending_skill_choices():
@@ -264,7 +269,7 @@ func _test_exit_and_resume_flow() -> bool:
 		if _captured_save.is_empty():
 			_answer_pending_player_choice()
 		return not _captured_save.is_empty()):
-		return _fail("deferred_capture_missing phase=%s player=%d" % [_controller.state.current_phase, _controller.state.current_player_id])
+		return _fail("deferred_capture_missing phase=%s player=%d pending_kind=%s chooser=%d candidates=%d controls=%d targets=%d lineup=%s" % [_controller.state.current_phase, _controller.state.current_player_id, str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1)), (_controller._pending_card_choice.get("candidates", []) as Array).size(), (_controller._pending_card_choice.get("control_options", []) as Array).size(), (_controller._pending_card_choice.get("target_ids", []) as Array).size(), _describe_lineup()])
 	# 乙边界断言；玩家回合完整结算后，下一回合正是尚未开始的敌方回合。
 	if str(_captured_save.get("resume_kind", "")) != "turn_start" or int(_captured_save.get("next_turn_player_id", -1)) != 1:
 		return _fail("deferred_capture_shape kind=%s next=%d" % [_captured_save.get("resume_kind", ""), int(_captured_save.get("next_turn_player_id", -1))])
@@ -340,12 +345,19 @@ func _answer_pending_player_choice() -> void:
 	decline_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
 	if _controller.submit_action(decline_action):
 		return
-	# 强制请求回退；五谷丰登等必选请求提交首个候选实体。
-	var candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
-	if candidates.is_empty():
-		return
+	# 强制窗口回退；五谷丰登的弃牌、貊泽【幽锋】的费用、海瑟音【泛音】的目标窗口以及弃牌阶段都不可取消，
+	# 因此按权威窗口下发的首个合法候选做“牌 + 目标 + 文字选项”三者一并确认。
+	# 同一请求可能是“选牌”“选目标”或“牌与目标组合”三种形态之一，空字段由权威入口自行忽略；
+	# 需要恰好 N 张牌的请求必须一次提交足够张数，否则窗口会因数量不足而继续保留，等待流程将一直空转。
+	var min_select: int = int(_controller._pending_card_choice.get("min_card_select", _controller._pending_card_choice.get("min_select", 0)))
+	var forced_card_uids: Array[int] = []
+	# 权威窗口下发的候选牌集合；手牌候选在暗置时仍带稳定uid，可直接用于强制提交。
+	var candidate_cards: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if not candidate_cards.is_empty():
+		for candidate_index: int in range(mini(maxi(min_select, 1), candidate_cards.size())):
+			forced_card_uids.append(int((candidate_cards[candidate_index] as Dictionary).get("uid", -1)))
 	var forced_action: PlayerAction = PlayerAction.new("choose_cards", 0)
-	forced_action.payload = {"request_id":request_id, "selected_card_uids":[int((candidates[0] as Dictionary).get("uid", -1))], "selected_target_ids":[], "confirmed":true}
+	forced_action.payload = {"request_id":request_id, "selected_card_uids":forced_card_uids, "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
 	_controller.submit_action(forced_action)
 
 
@@ -433,7 +445,14 @@ func _settle_pending_skill_choices() -> bool:
 		# 标准选择动作；取消时不携带任何牌或目标。
 		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
-		if not _controller.submit_action(action):
+		if _controller.submit_action(action):
+			continue
+		# 不可取消的强制窗口（例如貊泽【幽锋】每轮开始时必须弃置一名其他角色的一张牌）：
+		# 按请求自身下发的首个合法候选确认；牌、目标与文字选项三者一并提交，
+		# 因为同一请求可能是“选牌”“选目标”或“牌与目标组合”三种形态之一，多余字段由权威入口自行忽略。
+		var forced_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		forced_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_card_uids(), "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
+		if not _controller.submit_action(forced_action):
 			return false
 	if not _controller._pending_card_choice.is_empty():
 		return false
@@ -441,6 +460,37 @@ func _settle_pending_skill_choices() -> bool:
 	if _controller.state.current_phase == "choice":
 		_controller.state.current_phase = "play"
 	return true
+
+
+## 当前待处理选择的首个候选实体牌；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_card_uids() -> Array:
+	# 权威窗口下发的候选牌集合；手牌候选在暗置时仍带稳定uid，可直接用于强制提交。
+	var candidate_cards: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	return [int((candidate_cards[0] as Dictionary).get("uid", -1))] if not candidate_cards.is_empty() else []
+
+
+## 当前待处理选择的首个候选目标；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_target_ids() -> Array:
+	# 权威窗口下发的候选目标集合。
+	var candidate_target_ids: Array = _controller._pending_card_choice.get("target_ids", []) as Array
+	return [int(candidate_target_ids[0])] if not candidate_target_ids.is_empty() else []
+
+
+## 当前待处理选择的首个候选文字选项稳定ID；没有候选时返回空字符串。
+func _first_candidate_control_id() -> String:
+	# 权威窗口下发的候选文字选项集合。
+	var candidate_controls: Array = _controller._pending_card_choice.get("control_options", []) as Array
+	return str((candidate_controls[0] as Dictionary).get("id", "")) if not candidate_controls.is_empty() else ""
+
+
+## 本局实际登场武将与离场状态；断言失败时列出便于定位固定种子换人带来的差异。
+func _describe_lineup() -> String:
+	var lineup: Array[String] = []
+	if _controller == null or _controller.state == null:
+		return ""
+	for lineup_player: PlayerState in _controller.state.players:
+		lineup.append("%d=%s/oog=%s/alive=%s" % [lineup_player.player_id, lineup_player.character_id, str(lineup_player.out_of_game), str(lineup_player.alive)])
+	return str(lineup)
 
 
 func _fail(reason: String) -> bool:

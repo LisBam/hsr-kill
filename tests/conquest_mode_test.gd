@@ -314,6 +314,11 @@ func _test_full_match_replacement_flow() -> bool:
 	# 固定种子选将会随武将池变化而换人，因此必须先结算这些技能选择，才能关闭旧请求并重建权威候选。
 	if not _settle_pending_skill_choices():
 		return _fail("opening_skill_choice_settle")
+	# 敌方在场防护；固定种子选将会随武将池变化而换人，若换到离场型武将（例如貊泽的【幽锋】每轮开始时离场），
+	# 【杀】就无法指定该目标，本测试验证的完整击杀链路会直接失去前提。返场本身可能再次创建技能选择，因此随后再结算一次。
+	if enemy.out_of_game:
+		if not _controller.restore_player_to_game(enemy.player_id, "conquest_test") or not _settle_pending_skill_choices():
+			return _fail("enemy_out_of_game_restore")
 	# 取消开局技能选择会放行被其中断的流程（例如回合开始的摸牌阶段），因此必须再清空一次手牌，
 	# 保证后续断言只统计本测试自己加入的实体牌；这些附带摸牌会随固定种子选将结果变化。
 	while not player.hand.is_empty():
@@ -682,10 +687,12 @@ func _settle_pending_skill_choices() -> bool:
 		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
 		if _controller.submit_action(action):
 			continue
-		# 不可取消的强制窗口（例如爻光的【凶星】是强制发动的欢愉技，演出时弹出目标窗口）：
-		# 此时按请求自身下发的首个合法候选确认；候选只取自权威窗口，不额外探测任何隐藏信息。
+		# 不可取消的强制窗口（例如貊泽【幽锋】每轮开始时必须弃置一名其他角色的一张牌，
+		# 或爻光的【凶星】是强制发动的欢愉技演出）：按请求自身下发的首个合法候选确认。
+		# 候选只取自权威窗口，不额外探测任何隐藏信息；牌、目标与文字选项三者一并提交，
+		# 因为同一请求可能是“选牌”“选目标”或“牌与目标组合”三种形态之一，多余字段由权威入口自行忽略。
 		var forced_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
-		forced_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
+		forced_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_card_uids(), "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
 		if not _controller.submit_action(forced_action):
 			return false
 	if not _controller._pending_card_choice.is_empty():
@@ -694,6 +701,13 @@ func _settle_pending_skill_choices() -> bool:
 	if _controller.state.current_phase == "choice":
 		_controller.state.current_phase = "play"
 	return true
+
+
+## 当前待处理选择的首个候选实体牌；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_card_uids() -> Array:
+	# 权威窗口下发的候选牌集合；手牌候选在暗置时仍带稳定uid，可直接用于强制提交。
+	var candidate_cards: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	return [int((candidate_cards[0] as Dictionary).get("uid", -1))] if not candidate_cards.is_empty() else []
 
 
 ## 当前待处理选择的首个候选目标；没有候选时返回空数组，由权威入口按窗口类型校验。

@@ -197,11 +197,19 @@ func _test_vote_match_flow() -> bool:
 		return _fail("vote_shared_winner one=%s two=%s" % [vote_player_one.acquired_opportunity_ids, vote_player_two.acquired_opportunity_ids])
 	if _controller.state.current_player_id != 0:
 		return _fail("vote_first_turn")
+	# 敌方在场防护；固定种子选将会随武将池变化而换人，若换到离场型武将（例如貊泽的【幽锋】每轮开始时离场），
+	# 回合开始类技能的目标窗口就没有任何合法候选而无法结算。本测试验证模式规则本体，因此先把全部敌人拉回游戏。
+	var restored_enemy_count: int = 0
+	for coop_player: PlayerState in _controller.state.players:
+		if coop_player.identity == "blue" and coop_player.out_of_game:
+			if not _controller.restore_player_to_game(coop_player.player_id, "conquest_coop_test"):
+				return _fail("enemy_out_of_game_restore player=%d" % coop_player.player_id)
+			restored_enemy_count += 1
 	# 玩家回合中先击败敌人1；仍有敌人2存活时关卡、机缘与换将均不得发生。
 	# 回合开始类技能（例如【铁壁】）会留下待处理选择并把阶段写成 "choice"，使死亡结算无法推进；
 	# 固定种子选将会随武将池变化而换人，因此先结算这些技能选择再执行死亡。
 	if not _settle_pending_skill_choices():
-		return _fail("opening_skill_choice_settle")
+		return _fail("opening_skill_choice_settle restored_enemies=%d phase=%s pending_kind=%s chooser=%d candidates=%d controls=%d lineup=%s" % [restored_enemy_count, _controller.state.current_phase, str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1)), (_controller._pending_card_choice.get("candidates", []) as Array).size(), (_controller._pending_card_choice.get("control_options", []) as Array).size(), _describe_lineup()])
 	var first_enemy: PlayerState = _controller.state.get_player(1)
 	var second_enemy: PlayerState = _controller.state.get_player(3)
 	first_enemy.hp = 0
@@ -455,7 +463,15 @@ func _settle_pending_skill_choices() -> bool:
 		# 标准选择动作；取消时不携带任何牌或目标。
 		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
-		if not _controller.submit_action(action):
+		if _controller.submit_action(action):
+			continue
+		# 不可取消的强制窗口（例如貊泽【幽锋】每轮开始时必须弃置一名其他角色的一张牌，
+		# 或爻光的【凶星】是强制发动的欢愉技演出）：按请求自身下发的首个合法候选确认。
+		# 候选只取自权威窗口，不额外探测任何隐藏信息；牌、目标与文字选项三者一并提交，
+		# 因为同一请求可能是“选牌”“选目标”或“牌与目标组合”三种形态之一，多余字段由权威入口自行忽略。
+		var forced_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		forced_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_card_uids(), "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
+		if not _controller.submit_action(forced_action):
 			return false
 	if not _controller._pending_card_choice.is_empty():
 		return false
@@ -463,6 +479,37 @@ func _settle_pending_skill_choices() -> bool:
 	if _controller.state.current_phase == "choice":
 		_controller.state.current_phase = "play"
 	return true
+
+
+## 当前待处理选择的首个候选实体牌；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_card_uids() -> Array:
+	# 权威窗口下发的候选牌集合；手牌候选在暗置时仍带稳定uid，可直接用于强制提交。
+	var candidate_cards: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	return [int((candidate_cards[0] as Dictionary).get("uid", -1))] if not candidate_cards.is_empty() else []
+
+
+## 当前待处理选择的首个候选目标；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_target_ids() -> Array:
+	# 权威窗口下发的候选目标集合。
+	var candidate_target_ids: Array = _controller._pending_card_choice.get("target_ids", []) as Array
+	return [int(candidate_target_ids[0])] if not candidate_target_ids.is_empty() else []
+
+
+## 当前待处理选择的首个候选文字选项稳定ID；没有候选时返回空字符串。
+func _first_candidate_control_id() -> String:
+	# 权威窗口下发的候选文字选项集合。
+	var candidate_controls: Array = _controller._pending_card_choice.get("control_options", []) as Array
+	return str((candidate_controls[0] as Dictionary).get("id", "")) if not candidate_controls.is_empty() else ""
+
+
+## 本局实际登场武将与离场状态；断言失败时列出便于定位固定种子换人带来的差异。
+func _describe_lineup() -> String:
+	var lineup: Array[String] = []
+	if _controller == null or _controller.state == null:
+		return ""
+	for lineup_player: PlayerState in _controller.state.players:
+		lineup.append("%d=%s/oog=%s/alive=%s" % [lineup_player.player_id, lineup_player.character_id, str(lineup_player.out_of_game), str(lineup_player.alive)])
+	return str(lineup)
 
 
 func _fail(reason: String) -> bool:
