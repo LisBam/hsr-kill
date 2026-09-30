@@ -31,7 +31,9 @@ func _run() -> void:
 		return
 	if not _test_yuezhi_guard_cleared_after_card():
 		return
-	print("YUEZHI_MECHANICS_PASS limited=true resolve_times=3 guard=first_only")
+	if not _test_yuezhi_ai_source_rule():
+		return
+	print("YUEZHI_MECHANICS_PASS limited=true resolve_times=3 guard=first_only ai_source_rule=1")
 	get_tree().quit(0)
 
 
@@ -302,6 +304,63 @@ func _test_yuezhi_guard_cleared_after_card() -> bool:
 	if _controller.state.get_player(0).hp != 2:
 		return _fail("yuezhi_guard_leaked hp=%d" % _controller.state.get_player(0).hp)
 	return true
+
+
+## 校验【岳峙】的 AI 使用者规则：队友使用的非【五谷丰登】牌一律不发动，任意角色使用【五谷丰登】时无条件发动。
+## 第一段用真实用牌验证询问上下文确实携带使用者与牌定义；第二段固定同一份上下文只改使用者，直接对比评分方向。
+func _test_yuezhi_ai_source_rule() -> bool:
+	# 真实用牌段：二号位忠臣使用【桃园结义】，询问上下文必须写入使用者与牌定义，供AI判断阵营。
+	_reset_state(3)
+	var yuezhi: SkillDefinition = _install_single_skill(0, "yuezhi")
+	if yuezhi == null:
+		return _fail("yuezhi_missing_ai_source")
+	var taoyuan_card: CardInstance = _add_hand_card(2, "taoyuan", "heart", 1)
+	_controller._execute_card_use(2, taoyuan_card, [0, 1, 2])
+	if not _has_yuezhi_prompt():
+		return _fail("yuezhi_ai_source_no_prompt")
+	var prompted_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+	if int(prompted_context.get("source_id", -1)) != 2:
+		return _fail("yuezhi_ai_source_field=%s" % [prompted_context])
+	if str(prompted_context.get("card_definition_id", "")) != "taoyuan":
+		return _fail("yuezhi_ai_source_card=%s" % [prompted_context])
+	# 评分段：五人局中一号领袖持有岳峙、二至四号忠臣残血为队友、五号反贼为敌。
+	_reset_state(5)
+	_controller.state.get_player(1).identity = "loyalist"
+	_controller.state.get_player(4).identity = "rebel"
+	for teammate_id: int in [1, 2, 3]:
+		_controller.state.get_player(teammate_id).hp = 1
+	yuezhi = _install_single_skill(0, "yuezhi")
+	if yuezhi == null:
+		return _fail("yuezhi_missing_ai_scoring")
+	# 固定的伤害牌接管上下文；【万箭齐发】的目标已排除使用者本人，仅替换使用者即可对比敌我两种来源。
+	var damage_target_ids: Array[int] = [0, 1, 2, 3]
+	# 敌方（五号反贼）使用伤害牌：接管可替三名残血队友挡伤，评分必须为正分，证明拦截只针对队友。
+	var enemy_context: Dictionary = {"kind":"yuezhi_become_sole_target", "card_uid":90001, "original_target_count":4, "original_target_ids":damage_target_ids, "card_definition_id":"wanjian", "source_id":4}
+	# 队友（二号忠臣）使用同一张牌：接管会把队友的收益整体转走，评分必须为0，即取消发动。
+	var teammate_context: Dictionary = {"kind":"yuezhi_become_sole_target", "card_uid":90002, "original_target_count":4, "original_target_ids":damage_target_ids, "card_definition_id":"wanjian", "source_id":2}
+	if _score_yuezhi_confirm(enemy_context) <= 0.0:
+		return _fail("yuezhi_ai_enemy_score=%f" % _score_yuezhi_confirm(enemy_context))
+	if not is_zero_approx(_score_yuezhi_confirm(teammate_context)):
+		return _fail("yuezhi_ai_teammate_score=%f" % _score_yuezhi_confirm(teammate_context))
+	# 【五谷丰登】段：敌方与队友使用时都必须无条件确认，且评分高于任何普通牌接管收益。
+	var wugu_context: Dictionary = {"kind":"yuezhi_become_sole_target", "card_uid":90003, "original_target_count":4, "original_target_ids":damage_target_ids, "card_definition_id":"wugu", "source_id":4}
+	var teammate_wugu_context: Dictionary = {"kind":"yuezhi_become_sole_target", "card_uid":90004, "original_target_count":4, "original_target_ids":damage_target_ids, "card_definition_id":"wugu", "source_id":2}
+	if _score_yuezhi_confirm(wugu_context) <= 0.0 or _score_yuezhi_confirm(teammate_wugu_context) <= 0.0:
+		return _fail("yuezhi_ai_wugu_score=%f/%f" % [_score_yuezhi_confirm(wugu_context), _score_yuezhi_confirm(teammate_wugu_context)])
+	if _score_yuezhi_confirm(teammate_wugu_context) <= _score_yuezhi_confirm(enemy_context):
+		return _fail("yuezhi_ai_wugu_not_unconditional=%f" % _score_yuezhi_confirm(teammate_wugu_context))
+	return true
+
+
+## 用正式AI估值器对给定【岳峙】接管上下文中的“确认发动”动作评分；只读权威快照，不改变对局状态。
+func _score_yuezhi_confirm(prompt_context: Dictionary) -> float:
+	# 当前岳峙实例；缺失时返回0便于调用方直接失败退出。
+	var yuezhi: SkillDefinition = _controller.get_skill_instance(0, "yuezhi")
+	if yuezhi == null:
+		return 0.0
+	# 权威AI快照；技能AI钩子只允许读取该快照与估值器实例。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	return yuezhi.score_ai_choice(snapshot, {"context":prompt_context}, {"payload":{"confirmed":true}}, NonameAIEvaluator.new())
 
 
 ## 记录首个失败原因并以1结束测试进程；返回false便于调用方立即退出。
