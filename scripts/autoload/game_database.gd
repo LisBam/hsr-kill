@@ -18,6 +18,11 @@ const CHARACTER_IMAGE_EXTENSIONS: Array[String] = ["png", "jpg"]
 ## 技能源码目录；每个 `.gd` 文件必须实例化为 SkillDefinition，运行时会为每名持有者创建独立实例。
 const SKILLS_DIRECTORY: String = "res://game_data/skills"
 
+## 角色持续效果源码目录；每个 `.gd` 文件必须实例化为 PlayerEffect，并提供全项目唯一 ID。
+## 效果与技能分属不同目录，因为二者生命周期不同：技能实例跟随持有者武将，
+## 而效果实例挂在被施加的角色身上，施加者阵亡、换将或被非锁定技失效压制都不应撤回它。
+const PLAYER_EFFECTS_DIRECTORY: String = "res://game_data/effects"
+
 ## 牌堆配置文件路径；牌堆条目只保存花色、点数与稳定卡牌 ID，不重复保存卡牌规则。
 const DECKS_PATH: String = "res://data/decks.json"
 
@@ -60,6 +65,12 @@ var skills: Dictionary = {}
 ## 以技能 ID 为键的技能脚本资源索引；每局会通过 create_skill 创建互不共享状态的运行时实例。
 var skill_scripts: Dictionary = {}
 
+## 以效果 ID 为键的角色持续效果元数据索引；界面与工具链只读取该字典的深拷贝。
+var player_effects: Dictionary = {}
+
+## 以效果 ID 为键的效果脚本资源索引；对局开始时按角色身上的持久状态重建实例。
+var player_effect_scripts: Dictionary = {}
+
 ## 最近一次载入产生的错误列表；为空表示全部源码定义、牌堆和势力引用均可安全使用。
 var validation_errors: Array[String] = []
 
@@ -83,8 +94,11 @@ func reload_all() -> bool:
 	factions.clear()
 	skills.clear()
 	skill_scripts.clear()
+	player_effects.clear()
+	player_effect_scripts.clear()
 
 	_load_skills()
+	_load_player_effects()
 	_load_cards()
 	_load_characters()
 	_load_decks()
@@ -239,11 +253,64 @@ func create_skill(skill_id: String) -> SkillDefinition:
 	return skill_script.new() as SkillDefinition
 
 
+## 为一个承载角色创建独立效果实例；实例尚未绑定角色，也不会自动订阅规则事件。
+## 与 create_skill 同构：这里只负责按 ID 造对象，生命周期与订阅完全由控制器托管。
+func create_player_effect(effect_id: String) -> PlayerEffect:
+	# 效果脚本资源；不存在时返回 null，让调用方按统一配置错误处理。
+	var effect_script: Script = player_effect_scripts.get(effect_id) as Script
+	if effect_script == null:
+		return null
+	return effect_script.new() as PlayerEffect
+
+
+## 返回指定效果的元数据深拷贝，空结果表示效果 ID 未登记。
+func get_player_effect(effect_id: String) -> Dictionary:
+	return (player_effects.get(effect_id, {}) as Dictionary).duplicate(true)
+
+
+## 返回全部已登记效果 ID；顺序继承目录扫描结果，保证读档重建按稳定顺序执行。
+func get_player_effect_ids() -> Array[String]:
+	# 稳定结果；按目录排序后的注册顺序返回，便于测试与诊断复现同一顺序。
+	var result: Array[String] = []
+	for effect_id_variant: Variant in player_effects.keys():
+		result.append(str(effect_id_variant))
+	return result
+
+
 ## 返回指定牌堆中的紧凑实体牌条目；每项格式为 [花色, 点数, 卡牌ID]。
 func get_deck_cards(deck_id: String) -> Array:
 	# 指定牌堆定义；不存在时使用空字典保证查询安全。
 	var deck_definition: Dictionary = decks.get(deck_id, {}) as Dictionary
 	return (deck_definition.get("cards", []) as Array).duplicate(true)
+
+
+## 扫描并登记全部角色持续效果源码；效果实例挂在角色身上，因此只登记脚本与元数据，不建立持有者索引。
+func _load_player_effects() -> void:
+	for script_path: String in _list_gd_scripts(PLAYER_EFFECTS_DIRECTORY):
+		# 当前效果脚本资源；对局开始时会由该资源为需要它的角色创建独立实例。
+		var effect_script: Script = _load_content_script(script_path)
+		if effect_script == null:
+			validation_errors.append("角色效果脚本无法载入：%s" % script_path)
+			continue
+		# 先确认脚本可实例化：存在解析错误的脚本调用 new() 会在运行时中断整个载入循环，
+		# 使其余效果静默消失，只留下“读档后效果不再结算”这类难以定位的表现。
+		if not effect_script.can_instantiate():
+			validation_errors.append("角色效果脚本存在解析错误，无法实例化：%s" % script_path)
+			continue
+		# 当前效果定义临时实例；只读取静态元数据，不绑定对局端口、不订阅任何时机。
+		var definition: PlayerEffect = effect_script.new() as PlayerEffect
+		if definition == null:
+			validation_errors.append("角色效果脚本未继承 PlayerEffect：%s" % script_path)
+			continue
+		# 当前效果唯一 ID；空 ID 或重复 ID 会让读档重建无法确定具体脚本。
+		var effect_id: String = definition.get_id()
+		if effect_id.is_empty():
+			validation_errors.append("角色效果脚本存在空 ID：%s" % script_path)
+		elif player_effect_scripts.has(effect_id):
+			validation_errors.append("角色效果 ID 重复：%s" % effect_id)
+		else:
+			player_effects[effect_id] = definition.get_metadata()
+			player_effect_scripts[effect_id] = effect_script
 
 
 ## 扫描并登记全部卡牌源码；文件名只用于维护定位，稳定逻辑 ID 始终读取脚本元数据。
