@@ -11569,6 +11569,8 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 		"chain_step_count":chain_step_count,
 	})
 	# 同步入口忘记显式重驱时，唯一延后唤醒会补齐结算；已在管线内时当前while会自然取下一项。
+	# 注意“已在管线内”并不保证当次循环一定能消费到本项：排空可能因为独立子阶段或待选请求提前返回，
+	# 且管线入口会作废旧唤醒，因此活跃性由 _resume_settlement_pipeline() 末尾的待办复查统一兜底。
 	if not _settlement_pipeline_running and not has_pending_card_choice():
 		_schedule_settlement_pipeline_resume()
 	return true
@@ -11936,6 +11938,12 @@ func _resume_settlement_pipeline() -> void:
 	_settlement_pipeline_running = true
 	_run_settlement_pipeline_pass()
 	_settlement_pipeline_running = false
+	# 活跃性保证：本轮入口已经作废旧的唯一延后唤醒，而本次同步排空可能因为独立子阶段、待选请求或待判定
+	# 门控提前返回且一项都没有消费。此时若队列仍有明确待办，就必须立刻重新登记唤醒；
+	# 否则“管线内登记延后结算不自行登记唤醒”与“本轮入口作废旧唤醒”会叠加成永久滞留，
+	# 表现为额外出牌阶段内技能“然后”步骤不结算、后续阶段无法推进。
+	if _has_unresolved_settlement_work():
+		_schedule_settlement_pipeline_resume()
 	# 回合边界可能在本次管线入口之前被暂缓；只在最外层排空后重试，避免把中间阶段写成play_phase。
 	if _rule_sequence_execution_depth == 0 and _pending_conquest_boundary_player_id >= 0 and _conquest_temporary_exit_requested:
 		var boundary_player_id: int = _pending_conquest_boundary_player_id
@@ -11943,6 +11951,21 @@ func _resume_settlement_pipeline() -> void:
 			_pending_conquest_boundary_player_id = -1
 		elif _conquest_temporary_exit_requested:
 			_schedule_settlement_pipeline_resume()
+
+
+## 判断统一结算管线是否仍有必须由延后唤醒补齐的待办；供活跃性保证决定是否重新登记唤醒。
+##
+## 待选请求与待判定各自拥有明确的“收到响应后重驱管线”入口，等待它们期间由响应路径负责恢复，
+## 因此这两种阻塞存在时返回false，避免人类思考期间出现每帧空跑的唤醒。
+## 其余队列（技能“然后”步骤、规则续接、装备排队触发、触发管理器的延后派发）都只能靠唤醒推进。
+func _has_unresolved_settlement_work() -> bool:
+	if state == null or state.game_over:
+		return false
+	if has_pending_card_choice() or has_pending_judgment_request():
+		return false
+	if not _deferred_skill_settlements.is_empty() or _rule_continuations.has_pending() or not _queued_equipment_triggers.is_empty():
+		return true
+	return trigger_manager != null and trigger_manager.has_deferred_dispatches()
 
 
 ## 执行一次有步数预算的结算排空；本函数只由防重入包装器调用，内部可按规则边界提前返回。

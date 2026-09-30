@@ -540,6 +540,15 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	var choice_kind: String = str(context.get("kind", ""))
 	if not confirmed:
 		return 0.0
+	# 技能全权评分标志；由创建请求的技能在上下文中显式写入 true。
+	# 语义：本请求的收益已由该技能自己的 score_ai_choice 完整表达，通用层不得再叠加任何牌值成本或语义修正，
+	# 只需保留上方“未确认按0分”的取消基准。
+	# 缺少该入口时，通用层“自己选中的牌即为自己支付的费用”口径会与技能自有收益重复计费：
+	# 技能提出的正收益动作在确认时被同额牌值扣成负分，而取消恒为0分，AI 于是每次发动都在第一步取消，
+	# 进而在整个出牌阶段反复进入同一技能，表现为回合停滞。
+	# 该字段完全可选：只有显式声明它的请求才跳过通用评分，其余请求继续走下方原有全部分支。
+	if bool(context.get("ai_choice_skill_scored", false)):
+		return 0.0
 	# 选牌资源总价值；费用与弃牌倾向选择最低价值，获得牌与展示选择可由专属卡牌调整。
 	var selected_value: float = 0.0
 	for selected_uid_variant: Variant in selected_card_uids:

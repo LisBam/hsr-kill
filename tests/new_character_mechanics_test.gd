@@ -130,6 +130,8 @@ func _run() -> void:
 		return
 	if not _test_mice_extra_phase_sequences():
 		return
+	if not await _test_mice_kancha_qixi_settlement_liveness():
+		return
 	if not await _test_kance_private_view_and_draw_pile_gain():
 		return
 	if not _test_qiusheng_dying_recovery():
@@ -3423,6 +3425,97 @@ func _test_mice_extra_phase_sequences() -> bool:
 		return false
 	if _controller.state.current_player_id != 1:
 		return _fail("mice_finish_resume pending=%d current=%d phase=%s" % [_controller._rule_sequences.size(), _controller.state.current_player_id, _controller.state.current_phase])
+	return true
+
+
+## 验证秘策额外出牌阶段内发动堪杀触发奇袭时，奇袭的“然后”步骤会被统一结算管线排空并真实推进轮回节。
+##
+## 覆盖用户实际遭遇的链路：素材提供者把额外出牌阶段交给持有“军功”的角色后，该角色发动堪杀，奇袭据此
+## 扣除军功并登记“进入下一个轮回节”的“然后”步骤。延后队列的唤醒活跃性由
+## `tests/skill_settlement_runtime_test.gd` 的 `_test_resume_wakeup_liveness_after_early_return()` 单独校验，
+## 本用例负责端到端结果：队列在若干帧内自行排空、轮回节真实推进（含回绕进入第2轮）、额外出牌阶段结束后
+## 控制权与阶段回到秘策持有者的结束阶段。
+## 两种奇袭轮回节都必须覆盖：①红牌节（轮回节0→1）与②黑牌节（轮回节1→2 后由奇袭推进到0并进入第2轮）。
+func _test_mice_kancha_qixi_settlement_liveness() -> bool:
+	# 军功标记元数据；source_skill_id 必须与授予方一致，奇袭据此识别军功来源。
+	var merit_mark_data: Dictionary = {"icon":"军", "name":"军功", "description":"回归用军功", "source_skill_id":"shengbian"}
+	# 期望的最终轮回节；场景0从0开始（堪杀推进到1、奇袭推进到2），场景1从1开始（堪杀推进到2、奇袭回绕到0）。
+	var expected_sections: Array[int] = [2, 0]
+	for scenario_index: int in range(expected_sections.size()):
+		_reset_state(3)
+		# 轮回技服务；本测试文件其余场景不涉及轮回技，_reset_state 不创建它，因此按需补建并绑定当前控制器。
+		if _controller.reincarnation_skill_service == null:
+			_controller.reincarnation_skill_service = ReincarnationSkillService.new()
+		_controller.reincarnation_skill_service.configure(_controller)
+		_controller.game_flow_interval_seconds = 0.0
+		_controller.state.current_phase = "finish"
+		_controller.state.phase_index = 5
+		_controller.state.get_player(0).character_id = "peila"
+		_controller.state.get_player(1).character_id = "kelvdela"
+		# 秘策持有者；其phaseEnd触发复合选择，把额外出牌阶段交给2号刻律德菈。
+		var mice: SkillDefinition = _install_single_skill(0, "mice")
+		_install_single_skill(1, "shengbian")
+		# 堪杀与奇袭；奇袭是军功持有者的派生技能，必须作为独立实例安装才能触发skillAfter。
+		var kansha: SkillDefinition = _install_single_skill(1, "kansha")
+		_install_single_skill(1, "qixi")
+		if mice == null or kansha == null:
+			return _fail("mice_kancha_qixi_skill_missing scenario=%d" % scenario_index)
+		# 堪杀当前轮回节需要的弃置材料；场景0是①红牌节，场景1是②黑牌节。
+		_add_hand_card(1, "shan", "heart" if scenario_index == 0 else "club", 5)
+		_controller.reincarnation_skill_service.on_play_phase_started(1)
+		# 场景1预先把堪杀推进到②黑牌节；进入额外出牌阶段本身会重置本阶段额度，因此必须在阶段开始前推进。
+		if scenario_index == 1:
+			_controller.enter_next_reincarnation_section(1, "kansha")
+		_controller.change_player_mark_count(1, "jungong", 6, merit_mark_data)
+		mice.call("_on_phase_end", RuleEvent.new("phaseEnd", 0, 0, {"turn_number":_controller.state.turn_number}))
+		if not _submit_pending_choice(0, [], [1], true, "play_phase"):
+			return false
+		if int(_controller._active_independent_play_phase.get("player_id", -1)) != 1:
+			return _fail("mice_kancha_qixi_extra_play scenario=%d active=%s" % [scenario_index, _controller._active_independent_play_phase])
+		_controller._begin_play_choice(1)
+		# 额外出牌阶段的合法动作；取其中的堪杀入口提交，模拟AI或玩家在该节点发动技能。
+		var kansha_action: Dictionary = {}
+		for action: Dictionary in _controller.get_legal_actions(1):
+			if str(action.get("skill_id", (action.get("payload", {}) as Dictionary).get("skill_id", ""))) == "kansha":
+				kansha_action = action
+				break
+		if kansha_action.is_empty():
+			return _fail("mice_kancha_qixi_action_missing scenario=%d" % scenario_index)
+		if not _controller._submit_ai_action(PlayerAction.from_dict(kansha_action)):
+			return _fail("mice_kancha_qixi_submit_rejected scenario=%d" % scenario_index)
+		# 结清堪杀自身创建的弃置或伤害选择；奇袭的“然后”步骤在此期间被登记为延后结算。
+		var guard: int = 0
+		while not _controller._pending_card_choice.is_empty() and guard < 6:
+			guard += 1
+			var pending: Dictionary = _controller._pending_card_choice.duplicate(true)
+			var pending_context: Dictionary = pending.get("context", {}) as Dictionary
+			var chooser_id: int = int(pending.get("chooser_id", -1))
+			if str(pending_context.get("kind", "")) == "kansha_discard":
+				var candidates: Array = pending.get("candidates", []) as Array
+				if not _submit_pending_choice(chooser_id, [int((candidates[0] as Dictionary).get("uid", -1))], [], true):
+					return false
+			elif str(pending_context.get("kind", "")) == "kansha_damage":
+				if not _submit_pending_choice(chooser_id, [], [int((pending.get("target_ids", []) as Array)[0])], true):
+					return false
+			else:
+				return _fail("mice_kancha_qixi_unexpected_choice scenario=%d pending=%s" % [scenario_index, pending])
+		# 让出若干帧：延后结算只能靠唯一唤醒推进，因此必须在不手工调用管线的前提下自行排空。
+		for frame_index: int in range(8):
+			await get_tree().process_frame
+		if not _controller._deferred_skill_settlements.is_empty():
+			return _fail("mice_kancha_qixi_deferred_stuck scenario=%d deferred=%s scheduled=%s running=%s" % [scenario_index, _controller._deferred_skill_settlements, _controller._settlement_resume_scheduled, _controller._settlement_pipeline_running])
+		# 奇袭的重置分支必须真实推进堪杀的轮回节，否则军功被扣却没有任何后续收益。
+		if kansha.get_reincarnation_section_index() != expected_sections[scenario_index]:
+			return _fail("mice_kancha_qixi_section scenario=%d section=%d expected=%d" % [scenario_index, kansha.get_reincarnation_section_index(), expected_sections[scenario_index]])
+		if int(_controller.get_player_mark(1, "jungong").get("count", 0)) != 1:
+			return _fail("mice_kancha_qixi_merit scenario=%d merit=%d" % [scenario_index, int(_controller.get_player_mark(1, "jungong").get("count", 0))])
+		# 额外出牌阶段结束；控制权与阶段必须回到秘策持有者的结束阶段，不能被卡在子阶段等待状态。
+		if not _controller.end_current_play_phase(1):
+			return _fail("mice_kancha_qixi_end_rejected scenario=%d" % scenario_index)
+		for frame_index: int in range(8):
+			await get_tree().process_frame
+		if not _controller._active_independent_play_phase.is_empty() or _controller.state.current_player_id != 0 or not _controller._deferred_skill_settlements.is_empty():
+			return _fail("mice_kancha_qixi_restore scenario=%d active=%s current=%d deferred=%d" % [scenario_index, _controller._active_independent_play_phase, _controller.state.current_player_id, _controller._deferred_skill_settlements.size()])
 	return true
 
 
