@@ -245,8 +245,9 @@ var _faction_definition: Dictionary = {}
 ## 当前武将静态定义副本；只供右键详情与主题刷新读取技能列表、名称和插画路径。
 var _character_definition: Dictionary = {}
 
-## 装备槽的固定显示顺序；保证武器、防具、进攻坐骑、防御坐骑和宝物在所有客户端一致排列。
-const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
+## 装备槽的固定显示顺序；保证武器、防具、防御坐骑、进攻坐骑和宝物在所有客户端一致排列。
+## 该顺序只影响武将牌装备横条的纵向位置，与装备区稳定槽位ID、距离修正和废除判定无关。
+const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "defensive_mount", "offensive_mount", "treasure"]
 
 ## 装备槽中文名称；统一信息框使用该映射说明当前悬停装备所属区域。
 const EQUIPMENT_SLOT_NAMES: Dictionary = {
@@ -995,7 +996,7 @@ func _layout_equipment_rows() -> void:
 	# 装备条目可用宽度；由场景内公开区提示宽度推导，使静态场景继续作为信息层几何的唯一来源。
 	# 当前可用宽度严格等于武将插画宽度。
 	var row_width: float = _artwork_rect.size.x
-	# 当前参与布局的固定槽位数；武器至防御坐骑始终保留4个位置，宝物只在实际装备后加入第五个位置。
+	# 当前参与布局的固定槽位数；武器、防具与两种坐骑始终保留4个位置，宝物只在实际装备后加入第五个位置。
 	var visible_slot_count: int = 5 if (_player_snapshot.get("equipment", {}) as Dictionary).has("treasure") else 4
 	# 全部固定槽位总高度；相邻横条轻微覆盖1像素，空槽不绘制横条但继续占用对应位置。
 	var rows_height: float = equipment_row_height + float(visible_slot_count - 1) * (equipment_row_height - 1.0)

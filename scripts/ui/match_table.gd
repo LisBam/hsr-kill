@@ -2533,6 +2533,8 @@ func _cancel_active_hand_drag() -> void:
 
 
 ## 返回左下装备区的固定槽位文本；其他玩家装备仍直接显示在其武将牌状态中。
+## 文本顺序与本地装备栏、武将牌装备条保持一致（武器、防具、防御坐骑、进攻坐骑、宝物）；
+## 当前界面已由 EquipmentStackView 直接绘制牌面，本函数保留为同一顺序的纯文本摘要出口。
 func _format_local_equipment(player: Dictionary) -> String:
 	# 本地装备字典；键为weapon、armor、坐骑和treasure等稳定槽位 ID。
 	var equipment: Dictionary = player.get("equipment", {}) as Dictionary
@@ -2556,7 +2558,7 @@ func _format_local_equipment(player: Dictionary) -> String:
 			# 装备公开附属牌数；0张时仍显示，避免把无存牌误解为数量信息缺失。
 			var wooden_ox_count: int = int(player.get("wooden_ox_storage_count", 0))
 			treasure_name += "（%d）" % wooden_ox_count
-	return "⚔ 武器　%s\n🛡 防具　%s\n- 进攻　%s\n+ 防御　%s\n◇ 宝物　%s" % [weapon_name, armor_name, offensive_mount_name, defensive_mount_name, treasure_name]
+	return "⚔ 武器　%s\n🛡 防具　%s\n+ 防御　%s\n- 进攻　%s\n◇ 宝物　%s" % [weapon_name, armor_name, defensive_mount_name, offensive_mount_name, treasure_name]
 
 
 ## 把本地公开装备快照写入独立堆叠组件；候选与选中 UID 只来自当前本地内联请求。
