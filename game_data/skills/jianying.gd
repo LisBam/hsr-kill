@@ -56,6 +56,9 @@ const AI_SELF_CARD_PENALTY: float = 6.0
 ## AI：向他人展示手牌属于信息外泄，身份行为观察取轻微负值；不改变任何规则状态。
 const AI_REVEAL_TARGET_RESULT: float = -0.4
 
+## 本技能选择请求的通用层转义标志键；置位后通用选择评分不再叠加牌值成本，收益完全由本文件表达。
+const AI_CHOICE_SKILL_SCORED_KEY: String = "ai_choice_skill_scored"
+
 ## 本出牌阶段是否已经发动鉴映；普通与额外出牌阶段分别拥有独立的一次额度。
 var _used_this_play_phase: bool = false
 
@@ -118,8 +121,10 @@ func activate(context: Dictionary = {}) -> String:
 
 
 ## 第一步：选择自己的一张手牌A；未确认前可以取消，取消不消耗本阶段次数。
+## 上下文声明 AI_CHOICE_SKILL_SCORED_KEY：本段收益已由 _score_ai_material_choice 用与主动动作评分相同的算式表达，
+## 通用层不得再把材料牌值当作自付费用重复扣一次，否则“动作层愿意发动”会被扣成取消更优，AI 将反复发动再取消。
 func _choose_material(sequence: RuleStepSequence) -> void:
-	request_step_cards(sequence, "鉴映", "请选择你的一张手牌A", _get_owner_hand_candidates(), CARD_SELECT_COUNT, CARD_SELECT_COUNT, ALLOW_CANCEL_MATERIAL, {"kind":CARD_CHOICE_KIND_MATERIAL})
+	request_step_cards(sequence, "鉴映", "请选择你的一张手牌A", _get_owner_hand_candidates(), CARD_SELECT_COUNT, CARD_SELECT_COUNT, ALLOW_CANCEL_MATERIAL, {"kind":CARD_CHOICE_KIND_MATERIAL, AI_CHOICE_SKILL_SCORED_KEY:true})
 
 
 ## 第二步：确认后立即公开展示A并消费本阶段次数；取消或牌已失效则技能直接结束。
@@ -155,6 +160,8 @@ func _choose_shield_target(sequence: RuleStepSequence) -> void:
 
 
 ## 第四步：由技能持有者从所选角色的手牌中选择B；目标不是自己时候选按观察者裁剪为不可见牌面。
+## 上下文同样声明 AI_CHOICE_SKILL_SCORED_KEY：本段收益是“把A视为B”的所得，来源为自己时应取最高价值牌，
+## 通用层的“选中即支付”口径会把同一张牌的价值反向扣一次，使高低价值牌总分相同、AI 只能随机挑牌。
 func _choose_revealed_card(sequence: RuleStepSequence) -> void:
 	# 目标选择结果；结构异常或目标已经失效时直接收尾，不建立视为。
 	var response: ChoiceResponse = sequence.choice_response
@@ -172,7 +179,7 @@ func _choose_revealed_card(sequence: RuleStepSequence) -> void:
 	if candidates.is_empty():
 		sequence.finish()
 		return
-	request_step_cards(sequence, "鉴映", "请选择该角色的一张手牌B", candidates, CARD_SELECT_COUNT, CARD_SELECT_COUNT, ALLOW_CANCEL_AFTER_REVEAL, {"kind":CARD_CHOICE_KIND_REVEAL, "target_id":target_id})
+	request_step_cards(sequence, "鉴映", "请选择该角色的一张手牌B", candidates, CARD_SELECT_COUNT, CARD_SELECT_COUNT, ALLOW_CANCEL_AFTER_REVEAL, {"kind":CARD_CHOICE_KIND_REVEAL, "target_id":target_id, AI_CHOICE_SKILL_SCORED_KEY:true})
 
 
 ## 第五步：展示B并建立视为；B是装备牌、或B就是A本体时只展示不建立视为。
@@ -341,8 +348,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 ## 评估材料段选择：优先选择保留价值最低的手牌作为A。
 ##
 ## 评分口径必须与主动动作评分一致：都按“毛收益 − 材料价值 × 成本倍率”计算。
-## 若这里只返回“−材料价值”，则最低价值牌也常为负分，而取消恒为0分，
-## AI 会被判定为“取消更优”，于是每次发动都在第一步退出，进而在出牌阶段反复发起同一技能，表现为回合停滞。
+## 本段请求同时声明了 AI_CHOICE_SKILL_SCORED_KEY，因此本函数返回值就是该确认动作的**总分**：
+## 材料价值只在这里按成本倍率计入一次，通用层不再重复扣费。
+## 于是“动作层评分 > 0（即毛收益 > 最低手牌价值 × 倍率）”时，选择最低价值牌的确认分必然 > 0，
+## AI 不会再因为“确认被扣成负分、取消恒为0分”而反复发动又取消，回合推进因此不再停滞。
 func _score_ai_material_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 动作负载；未确认表示取消发动，不消耗次数也不展示任何牌，按0分处理。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary

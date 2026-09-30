@@ -87,6 +87,8 @@ func _run() -> void:
 		return
 	if not _test_jianying_ai_self_upgrade_condition():
 		return
+	if not _test_jianying_ai_material_confirmation_via_policy():
+		return
 	if not _test_round_end_timing_boundary():
 		return
 	print("ZHENZHU_MECHANICS_PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as end_phase_expiry=owner_next_turn face_down_skip=no_expiry")
@@ -617,6 +619,53 @@ func _test_jianying_ai_self_upgrade_condition() -> bool:
 	# 自身仍有护盾，但手牌没有价值差；此时对敌发动才是更优选择。
 	if self_score >= hostile_score:
 		return _fail("jianying_ai_flat_self=%f hostile=%f" % [self_score, hostile_score])
+	return true
+
+
+## 校验【鉴映】AI 在完整基础策略评分链下的材料步决策：选择最低价值手牌并确认，而不是取消。
+##
+## 该用例必须经由 BasicAIPolicy 而不是直接调用技能的 score_ai_choice：
+## “通用选择评分把已选牌当作自付费用再扣一次”这一缺陷只出现在两层评分相加之后，
+## 只断言技能分无法拦住它，因此这里同时校验完整决策结果与通用层的贡献值。
+func _test_jianying_ai_material_confirmation_via_policy() -> bool:
+	# 权威快照；自身有护盾且手牌存在明显价值差，构成“低价值A换高价值B”的升级对。
+	var snapshot: Dictionary = {
+		"match_id":"jianying_ai_policy_snapshot",
+		"players":[
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
+			{"player_id":1, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "shield":1, "hand_count":1, "hand":[{"uid":201, "definition_id":"shan", "owner_id":1, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
+		],
+	}
+	# 技能持有者的基础策略；同一实例只服务一座次，与正式AI驱动使用同一入口。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	# 材料段请求；结构必须与技能真实创建的请求一致，包含技能ID与通用层转义标志。
+	var request: Dictionary = {
+		"kind":"jianying_material",
+		"allow_cancel":true,
+		"min_card_select":1,
+		"max_card_select":1,
+		"context":{"kind":"jianying_material", "skill_id":"jianying", "ai_choice_skill_scored":true},
+		"candidates":[
+			{"uid":101, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}},
+			{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}},
+		],
+	}
+	# 合法动作；取消在前，逐张确认在后，与控制器枚举顺序保持一致。
+	var cancel_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var cheap_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[101], "selected_target_ids":[], "confirmed":true}}
+	var rich_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[102], "selected_target_ids":[], "confirmed":true}}
+	var legal_actions: Array[Dictionary] = [cancel_action, cheap_action, rich_action]
+	# 通用层贡献值；声明了全权评分标志的请求必须为0，否则同一张牌的价值会被扣除两次。
+	var generic_score: float = policy.evaluator.score_choice_action(snapshot, request, cheap_action, 0)
+	if not is_zero_approx(generic_score):
+		return _fail("jianying_ai_material_generic=%f" % generic_score)
+	# 完整决策；必须确认最低价值的【闪】，既不能取消，也不能挑走【桃】。
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, request, legal_actions)
+	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
+	if not bool(chosen_payload.get("confirmed", false)):
+		return _fail("jianying_ai_material_cancelled")
+	if (chosen_payload.get("selected_card_uids", []) as Array) != [101]:
+		return _fail("jianying_ai_material_pick=%s" % str(chosen_payload.get("selected_card_uids", [])))
 	return true
 
 

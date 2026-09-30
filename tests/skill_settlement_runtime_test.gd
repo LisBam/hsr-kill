@@ -30,6 +30,8 @@ func _run() -> void:
 		return
 	if not await _test_changing_context_chain_guard():
 		return
+	if not await _test_resume_wakeup_liveness_after_early_return():
+		return
 	if not _test_rule_continuation_registration_guards():
 		return
 	print("SKILL_SETTLEMENT_RUNTIME_PASS faults=%d" % _faults.size())
@@ -146,6 +148,37 @@ func _test_changing_context_chain_guard() -> bool:
 	await get_tree().process_frame
 	if _controller._settlement_resume_scheduled or int(_skill.get("resume_count")) != 4:
 		return _fail("changing_loop_stale_resume scheduled=%s count=%d" % [_controller._settlement_resume_scheduled, int(_skill.get("resume_count"))])
+	return true
+
+
+## 验证统一结算管线的唤醒活跃性保证：入口作废旧唤醒后，若同步排空没有消费任何待办，必须重新登记唯一唤醒。
+##
+## 真实危险组合是“技能在管线运行中登记“然后”步骤（此时按设计不自行登记唤醒）+ 本次同步排空提前返回”，
+## 本用例用规则序列深度门控复现“提前返回且一项都没消费”这一步，从而只校验兜底本身是否生效。
+func _test_resume_wakeup_liveness_after_early_return() -> bool:
+	_controller._reset_settlement_runtime_guard()
+	_controller.max_settlement_steps_per_pass = 16
+	_skill.set("resume_count", 0)
+	_faults.clear()
+	# 首条登记发生在管线之外，技能因此自行登记了唯一唤醒。
+	if not _skill.defer_settlement({"kind":"liveness_gate"}):
+		return _fail("liveness_initial_defer")
+	if not _controller._settlement_resume_scheduled:
+		return _fail("liveness_initial_schedule_missing")
+	# 模拟入口次序：先作废旧唤醒，再同步排空；深度门控让本次排空在消费前立即返回。
+	_controller._invalidate_scheduled_settlement_resume()
+	_controller._rule_sequence_execution_depth += 1
+	_controller.resume_settlement_pipeline()
+	_controller._rule_sequence_execution_depth -= 1
+	# 队列仍有待办且当前没有任何门控在等待外部输入，因此必须重新登记唯一唤醒。
+	if _controller._deferred_skill_settlements.is_empty():
+		return _fail("liveness_queue_unexpectedly_drained")
+	if not _controller._settlement_resume_scheduled:
+		return _fail("liveness_wakeup_missing deferred=%s" % [_controller._deferred_skill_settlements])
+	# 放行后唯一唤醒必须真正把队列排空，且不留下陈旧的已调度标记。
+	await get_tree().process_frame
+	if not _controller._deferred_skill_settlements.is_empty() or _controller._settlement_resume_scheduled:
+		return _fail("liveness_not_drained deferred=%s scheduled=%s" % [_controller._deferred_skill_settlements, _controller._settlement_resume_scheduled])
 	return true
 
 
