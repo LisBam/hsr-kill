@@ -8136,6 +8136,60 @@ func get_card_target_damage_bonus(card_uid: int, target_id: int) -> int:
 	return int(target_args.get("damage_bonus", 0))
 
 
+## 替换一次正在结算的用牌的目标数组；供技能在异步恢复后把目标改写落到权威结算。
+## 目标数组允许包含重复项：重复项表示该牌对该角色结算多次，与 normalize_targets 的保留重复项语义一致，
+## 因此本入口不做去重，是否去重由技能按自身牌面语义决定。
+## 同时写共享上下文与等待窗口，缺一不可：只写共享上下文会被提交时的派发前快照整体覆盖。
+## 返回值：找到对应的活动用牌上下文并写入时返回true；牌已结算完毕或不存在时返回false且不产生副作用。
+func replace_card_use_targets(card_uid: int, target_ids: Array[int], reason: String = "") -> bool:
+	# 当前用牌共享上下文；牌不在结算中时静默失败，由调用方技能自行决定是否提示。
+	var card_use_context: Dictionary = _card_use_contexts.get(card_uid, {}) as Dictionary
+	if card_use_context.is_empty():
+		return false
+	# 替换后的目标数组；保持调用方给出的顺序与重复项，控制器不额外排序或归一化。
+	var replaced_target_ids: Array[int] = target_ids.duplicate()
+	card_use_context["target_ids"] = replaced_target_ids
+	# 改写来源标记；只作可追溯数据，不参与任何规则判定，供回放与测试断言确认改写由哪个技能发起。
+	card_use_context["targets_replaced_reason"] = reason
+	_card_use_contexts[card_uid] = card_use_context
+	# 同步落到仍在等待提交的用牌修改窗口；只写共享上下文会被随后的结果提交用派发前快照覆盖。
+	_publish_pending_target_ids(card_uid, replaced_target_ids)
+	return true
+
+
+## 为一名角色的一次用牌补记“不计入使用次数限制”的豁免历史；供技能在使用牌声明之后追加豁免。
+## 与声明步骤（_card_use_step_declare）的写入口径完全一致：整局与出牌阶段两份豁免历史同时递增，
+## 因此次数查询的净计数“使用 - 豁免”会减少，已经达到上限的牌族重新变为可用，无需改动任何校验分支。
+## 只改次数统计，不修改已经发生的使用事实，不移动牌、不创建选择，也不广播状态快照。
+## 幂等性由调用方技能负责：同一次用牌重复调用会重复豁免，使该牌族的可使用次数被额外放宽。
+## 返回值：目标角色不存在或牌定义为空时返回false。
+func mark_card_use_limit_exempt(player_id: int, card_definition_id: String) -> bool:
+	if state == null or card_definition_id.is_empty():
+		return false
+	# 目标角色；不存在时没有任何次数历史可以追加。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return false
+	# 整局使用次数豁免；与声明步骤写入同一字段，保证历史口径完全一致。
+	player.card_use_limit_exempt_history[card_definition_id] = int(player.card_use_limit_exempt_history.get(card_definition_id, 0)) + 1
+	# 出牌阶段使用次数豁免；两份历史必须同时递增，否则整局限次与阶段限次会出现不一致的净计数。
+	player.play_phase_card_use_limit_exempt_history[card_definition_id] = int(player.play_phase_card_use_limit_exempt_history.get(card_definition_id, 0)) + 1
+	return true
+
+
+## 把异步恢复期间写入的目标改写同步到仍在等待提交的用牌修改窗口。
+## 与 _publish_pending_custom_args 同一原因：使用牌时机的“派发”与“结果提交”是两个独立步骤，
+## 技能在恢复回调里改写的目标必须同时落到该窗口的事件数据，否则提交时会用派发前快照整体覆盖共享上下文。
+## 没有等待中的窗口时保持纯写入，不影响旧流程。
+func _publish_pending_target_ids(card_uid: int, target_ids: Array[int]) -> void:
+	# 等待中的使用牌修改窗口；同一张牌同一时刻至多有一个窗口处于等待应答状态。
+	var pending_event: RuleEvent = _find_pending_card_timing_event(card_uid)
+	if pending_event == null:
+		return
+	# 事件侧目标数组；与共享上下文使用同一份“保留重复项”协议。
+	pending_event.data["target_ids"] = target_ids.duplicate()
+
+
 ## 把异步恢复期间写入的每目标自定义参数同步到仍在等待提交的用牌修改窗口。
 ## 使用牌时机的“派发”与“结果提交”是两个独立步骤：可选技能尚未应答时序列不会提交结果，
 ## 技能在恢复回调里写入的实时数据必须同时落到该窗口的事件数据，否则提交时会用派发前
@@ -8873,6 +8927,20 @@ func skill_ignores_card_distance_limit(player_id: int, card_definition: Dictiona
 	var card_group: String = str(card_definition.get("play_limit_group", card_definition.get("id", "")))
 	if player_mark_service != null and player_mark_service.allows_first_group_use_to_ignore_distance(player_id, card_definition) and not has_used_card_group_this_turn(player_id, card_group):
 		return true
+	return false
+
+
+## 汇总指定玩家全部已安装技能对“某张牌指向某名目标”的距离解除钩子；任一技能生效即可忽略该目标上的距离限制。
+## 与 skill_ignores_card_distance_limit 的分工：本入口携带目标ID；只看最远目标的技能必须走这里，
+## 走无目标版本会让同一张牌对所有角色一并解限。两个入口并列取“或”，互不覆盖。
+func skill_ignores_card_distance_limit_to_target(player_id: int, card_definition: Dictionary, target_id: int) -> bool:
+	# 当前玩家技能实例表；与无目标版本共用同一纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；距离钩子不得移动牌、消耗次数或创建选择。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.can_use_effect() and skill.ignores_card_distance_limit_to_target(card_definition, target_id):
+			return true
 	return false
 
 

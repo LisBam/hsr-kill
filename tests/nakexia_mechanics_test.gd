@@ -142,8 +142,9 @@ func _count_all_zone_cards(player_id: int) -> int:
 ## 校验武将资料、三条技能原文与逐虚的两节轮回元数据。
 func _test_metadata_and_descriptions() -> bool:
 	# 那刻夏静态定义；性别、势力、体力与技能顺序必须与设计一致。
+	# 性别为男性：该数值已在“同步若干技能的描述文本与效果数值”中调整，本断言随之同步。
 	var nakexia: Dictionary = GameDatabase.get_character("nakexia")
-	if str(nakexia.get("display_name", "")) != "那刻夏" or str(nakexia.get("gender", "")) != "female" or str(nakexia.get("faction", "")) != "wengfaluosi" or int(nakexia.get("max_hp", 0)) != 3 or nakexia.get("skills", []) != ["zhuxv", "jiezhi", "liubai"]:
+	if str(nakexia.get("display_name", "")) != "那刻夏" or str(nakexia.get("gender", "")) != "male" or str(nakexia.get("faction", "")) != "wengfaluosi" or int(nakexia.get("max_hp", 0)) != 3 or nakexia.get("skills", []) != ["zhuxv", "jiezhi", "liubai"]:
 		return _fail("character_metadata=%s" % nakexia)
 	# 需求指定的三条技能原文；任何字符、标点或带圈序号变化都应立即失败。
 	var expected_descriptions: Dictionary = {

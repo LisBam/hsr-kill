@@ -69,7 +69,10 @@ func _test_offline_controls_every_player() -> bool:
 	var opening_settle_safety: int = 0
 	while not _controller._pending_card_choice.is_empty() and opening_settle_safety < 12:
 		opening_settle_safety += 1
-		if not _cancel_pending_choice():
+		# 优先取消。强制发动的欢愉技（例如【当赏】【好活】的目标窗口）没有取消入口，
+		# 此时按请求下发的首个合法候选确认，否则开局清理会永远卡在不可取消的请求上；
+		# 候选只取自请求自身的候选集合，不额外探测任何隐藏信息。
+		if not _cancel_pending_choice() and not _confirm_pending_choice():
 			# 开局选择上下文；取消失败时列出技能来源，便于定位不可取消的请求。
 			var stuck_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 			return _fail("opening_choice_settle kind=%s chooser=%d" % [str(stuck_context.get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1))])
@@ -218,6 +221,32 @@ func _cancel_pending_choice() -> bool:
 	# 标准选择动作；取消时不携带任何牌或目标，仅声明不发动该技能。
 	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+	return _controller.submit_action(action)
+
+
+## 确认当前待处理选择；仅用于清理开局技能产生的**不可取消**请求（如强制发动的欢愉技目标窗口）。
+## 候选一律取自请求自身下发到权威窗口的 `target_ids` 与 `control_options`，因此不会读到隐藏信息。
+func _confirm_pending_choice() -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return true
+	# 当前请求的稳定编号与回答者；同步续接可能立刻创建下一请求，提交必须锁定该编号。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	# 首个合法目标；目标窗口用它与最小目标数共同满足确认条件。
+	var selected_target_ids: Array[int] = []
+	# 权威窗口下发的候选目标；至少存在一个时取首个。
+	var candidate_target_ids: Array = _controller._pending_card_choice.get("target_ids", []) as Array
+	if not candidate_target_ids.is_empty():
+		selected_target_ids.append(int(candidate_target_ids[0]))
+	# 首个合法文字选项；文字选项窗口用它与最小选项数共同满足确认条件。
+	var selected_control_id: String = ""
+	# 权威窗口下发的候选文字选项；至少存在一个时取首个。
+	var candidate_controls: Array = _controller._pending_card_choice.get("control_options", []) as Array
+	if not candidate_controls.is_empty():
+		selected_control_id = str((candidate_controls[0] as Dictionary).get("id", ""))
+	# 标准选择动作；目标与文字选项各自可能为空，由权威入口按窗口类型校验。
+	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":selected_target_ids, "selected_control_id":selected_control_id, "confirmed":true}
 	return _controller.submit_action(action)
 
 

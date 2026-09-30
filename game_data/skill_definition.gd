@@ -735,6 +735,14 @@ func ignores_card_distance_limit(_card_definition: Dictionary) -> bool:
 	return false
 
 
+## 判断技能是否令指定卡牌对指定目标忽略距离限制；默认保持卡牌自身的攻击范围、距离1或特殊距离规则。
+## 与 ignores_card_distance_limit 的分工：本钩子额外接收目标ID，只用于“同一张牌对不同目标结论不同”的技能
+## （例如【遥击】只对距离最远的角色解除【杀】的距离限制）。不需要区分目标时继续使用无目标版本。
+## 两者是并列的独立通道，任一返回true都表示该目标上的距离限制被解除，互不覆盖。
+func ignores_card_distance_limit_to_target(_card_definition: Dictionary, _target_id: int) -> bool:
+	return false
+
+
 ## 修正持有者到指定目标的最终距离；默认保持坐骑与座次计算结果，返回值必须收敛为0以上整数。
 func modify_distance_to_target(_target_id: int, current_distance: int) -> int:
 	return current_distance

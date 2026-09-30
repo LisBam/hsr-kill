@@ -1,12 +1,12 @@
 extends SkillDefinition
 
-## 【连戏】技能源码。出牌阶段限一次：把手牌中的所有基本牌一次性重铸，可重复至多七次，最后对一名其他角色造成Y点伤害。
+## 【连戏】技能源码。出牌阶段开始时：把手牌中的所有基本牌一次性重铸，可重复至多九次，最后对一名其他角色造成Y点伤害。
 
-## 重铸流程的次数上限；原文“至多重铸七次”，达到上限后不再提供继续重铸选项。
-const MAX_RECAST_TIMES: int = 7
+## 重铸流程的次数上限；原文“至多重铸九次”，达到上限后不再提供继续重铸选项。
+const MAX_RECAST_TIMES: int = 9
 
-## 伤害计算的除数；原文“Y为你本次重铸的次数/2，向下取整”。
-const DAMAGE_DIVISOR: int = 2
+## 伤害计算的除数；原文“Y为你本次重铸的次数/3，向下取整”。
+const DAMAGE_DIVISOR: int = 3
 
 ## 重铸流程选择的请求种类；恢复时按该值分流。
 const RECAST_CHOICE_KIND: String = "lianxi_recast"
@@ -20,9 +20,6 @@ const RECAST_OPTION_ID: String = "recast"
 ## 结束重铸并进入伤害步骤的稳定控制选项ID。
 const FINISH_OPTION_ID: String = "finish"
 
-## 当前出牌阶段是否已经成功发动；普通与额外出牌阶段分别限一次。
-var _used_current_play_phase: bool = false
-
 ## AI：每点伤害按体力资源价值折算时的系数；伤害不是即时回复，因此略低于纯体力收益。
 const AI_DAMAGE_VALUE_RATIO: float = 0.85
 
@@ -30,53 +27,40 @@ const AI_DAMAGE_VALUE_RATIO: float = 0.85
 const AI_RECAST_QUALITY_COST: float = NonameAIEvaluator.CARD_RESOURCE_VALUE * 0.35
 
 
-## 写入主动技能静态信息；技能描述严格保持需求提供的原文。
+## 写入阶段开始技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
 	super({
 		"id":"lianxi",
 		"name":"连戏",
-		"trigger":"active",
+		"trigger":"phaseUseBegin",
 		"enable":["phaseUse"],
-		"ui_enabled":true,
-		"description":"出牌阶段限一次，你可以重铸你手牌中的所有基本牌，你可以重复此流程（至多重铸七次），最后对一名其他角色造成Y点伤害。（Y为你本次重铸的次数/2，向下取整）",
+		"ui_enabled":false,
+		"description":"出牌阶段开始时，你可以重铸你手牌中的所有基本牌，你可以重复此流程（至多重铸九次），最后对一名其他角色造成Y点伤害。（Y为你本次重铸的次数/3，向下取整）",
 	})
 
 
-## 每个出牌阶段开始时恢复发动额度。
+## 订阅出牌阶段 Begin；技能的权威入口只有该时机创建的询问，不再提供主动按钮。
 func install() -> void:
 	subscribe_timing("phaseUseBegin", _on_play_phase_begin, "player", 100)
 
 
-## 清空本阶段发动标记。
+## 出牌阶段进入 Begin 时创建发动询问。
+## 手牌中没有基本牌时重铸不会发生任何事，因此不创建空窗口，与改动前的入口关闭口径一致。
+## 每个出牌阶段（含额外出牌阶段）都重新询问：原文时机是“出牌阶段开始时”，不是“限一次”。
 func _on_play_phase_begin(_event: RuleEvent) -> void:
-	_used_current_play_phase = false
-
-
-## 仅在自己的出牌阶段、仍有额度且自己至少有一张基本牌时开放技能。
-## 手牌中没有基本牌时重铸不会发生任何事，因此不展示主动技能入口，避免出现空重铸窗口。
-func can_activate(_context: Dictionary = {}) -> bool:
-	var owner: PlayerState = get_owner_skill_player().get_state()
-	if not (host != null and not _used_current_play_phase and owner != null and owner.alive and not owner.out_of_game and host.state.current_player_id == owner_player_id and host.state.current_phase == "play"):
-		return false
-	return not _get_hand_basic_card_uids().is_empty()
-
-
-## 发动连戏；第一次窗口只提供“重铸所有基本牌”，确认后才开始计数与消耗阶段额度。
-func activate(context: Dictionary = {}) -> String:
-	# 直接动作选项；AI合法动作会直接给出重铸或结束的稳定控制ID。
-	var direct_option_id: String = str(context.get("control_id", context.get("option_id", "")))
-	# 直接动作目标；AI与调试入口可跳过交互窗口直接指定伤害目标。
-	var direct_target_id: int = int(context.get("target_id", -1))
-	if direct_option_id == RECAST_OPTION_ID:
-		return "" if _execute_recast_round(int(context.get("recast_count", 0))) else "【连戏】你的手牌中没有基本牌。"
-	if direct_option_id == FINISH_OPTION_ID:
-		return "" if _begin_damage_target_selection(int(context.get("recast_count", 0))) else "【连戏】当前没有可造成伤害的其他角色。"
-	if direct_target_id >= 0:
-		return "" if _execute_damage(direct_target_id, int(context.get("recast_count", 0))) else "【连戏】所选目标已经失效。"
 	if _get_hand_basic_card_uids().is_empty():
-		return "【连戏】你的手牌中没有基本牌。"
+		return
 	_request_recast_choice(0, true)
-	return ""
+
+
+## 阶段开始技能不通过常规主动按钮发动；权威询问只由 phaseUseBegin 回调创建。
+func can_activate(_context: Dictionary = {}) -> bool:
+	return false
+
+
+## 旧主动入口保持不可用；Begin 询问与后续每一轮重铸都由 continue_selection 处理。
+func activate(_context: Dictionary = {}) -> String:
+	return "【连戏】只能在出牌阶段开始时发动。"
 
 
 ## 恢复重铸流程选择或伤害目标选择。
@@ -140,9 +124,7 @@ func _execute_recast_round(recast_count: int) -> bool:
 	if recast_card_count <= 0:
 		_begin_damage_target_selection(recast_count)
 		return false
-	# 首次真实重铸即消耗本阶段额度；此时技能效果已经开始，取消不再成立。
-	if recast_count <= 0:
-		_used_current_play_phase = true
+	# 真实重铸完成后取消不再成立；这一点由下一轮窗口的 allow_cancel=false 保证，无需额外的额度标记。
 	_request_recast_choice(recast_count + 1, false)
 	return true
 
@@ -215,45 +197,9 @@ func _get_damage_target_ids() -> Array[int]:
 	return target_ids
 
 
-## 为AI枚举连戏的发动动作；只给出第一次重铸动作，后续轮次由窗口选择继续决策。
-func append_play_phase_actions(result: Array[Dictionary]) -> void:
-	if not can_activate():
-		return
-	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "control_id":RECAST_OPTION_ID}})
-
-
-## 评估连戏的发动价值：预期伤害打在敌方身上才计收益，重铸本身等量补摸、只计质量折损。
-func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 动作负载；只接受第一次重铸的稳定选项，其余动作视为非法。
-	var payload: Dictionary = action.get("payload", {}) as Dictionary
-	if str(payload.get("control_id", "")) != RECAST_OPTION_ID:
-		return -20.0
-	# 本人快照；手牌数量决定可支撑的重铸轮数上限。
-	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
-	if owner.is_empty():
-		return 0.0
-	# 手牌数量；每轮重铸消耗当前全部基本牌，手牌越多越可能支撑多轮。
-	var hand_count: int = maxi(int(owner.get("hand_count", 0)), 0)
-	# 预期重铸轮数；保守按“每轮至少消耗一张基本牌”估计，至少一轮、至多七轮。
-	var expected_recast_times: int = clampi(hand_count, 1, MAX_RECAST_TIMES)
-	# 预期伤害；与规则使用同一算式，保证AI对Y的理解与真实结算一致。
-	var expected_damage: int = _resolve_damage_amount(expected_recast_times)
-	if expected_damage <= 0:
-		return 0.0
-	# 最佳伤害目标价值；取全部敌对角色中对自身态度最负者，没有敌人时返回0不发动。
-	var best_target_value: float = 0.0
-	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
-		# 当前角色快照；跳过自己、已死亡与已离场角色。
-		var player: Dictionary = player_variant as Dictionary
-		var player_id: int = int(player.get("player_id", -1))
-		if player_id == owner_player_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
-			continue
-		best_target_value = maxf(best_target_value, maxf(-evaluator.get_attitude(authoritative_snapshot, owner_player_id, player_id), 0.0) / 5.0)
-	if best_target_value <= 0.0:
-		return 0.0
-	# 质量折损；重铸等量换牌，但会失去基本牌的确定价值，按预期轮数线性计入。
-	var recast_cost: float = float(expected_recast_times) * AI_RECAST_QUALITY_COST
-	return float(expected_damage) * NonameAIEvaluator.HP_RESOURCE_VALUE * AI_DAMAGE_VALUE_RATIO * best_target_value - recast_cost
+## 常规出牌阶段不追加技能动作；AI 与玩家都在 Begin 询问中使用同一 ChoiceResponse。
+func append_play_phase_actions(_result: Array[Dictionary]) -> void:
+	pass
 
 
 ## 评估连戏的窗口与目标选择；继续重铸在Y将提高时优于立即结束，结束与目标按目标态度计分。

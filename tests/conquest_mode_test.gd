@@ -466,8 +466,18 @@ func _test_full_match_replacement_flow() -> bool:
 			return _fail("enemy_turn_replacement_skill_missing=%s" % rewarded_skill_id)
 	if not await _choose_safe_opportunity(player.player_id):
 		return _fail("enemy_turn_replacement_choice")
+	# 新敌人可能持有会在回合内立即创建选择的技能（例如爻光的【凶星】是强制发动的欢愉技，演出时弹出目标窗口）；
+	# 这些窗口没有取消入口，且本测试是手工推进死亡流程、AI 驱动未接管，因此必须先逐一结算，
+	# 才能验证“行动权交回玩家”这条规则本身。换将结果会随武将库变化而换人，不能假设新敌人没有这类技能。
+	if not _settle_pending_skill_choices():
+		return _fail("enemy_turn_pending_choice_settle")
 	if _controller.state.current_player_id != player.player_id:
-		return _fail("enemy_turn_handoff")
+		# 回合交接失败时的现场信息：当前行动者、阶段、待处理选择与双方武将。
+		# 换将结果会随武将库变化而换人，列出武将便于快速定位差异来源。
+		var handoff_lineup: Array[String] = []
+		for handoff_player: PlayerState in _controller.state.players:
+			handoff_lineup.append("%d=%s" % [handoff_player.player_id, handoff_player.character_id])
+		return _fail("enemy_turn_handoff current=%d phase=%s pending=%s lineup=%s" % [_controller.state.current_player_id, str(_controller.state.current_phase), str(_controller._pending_card_choice.get("context", {})), str(handoff_lineup)])
 	# 玩家死亡；本模式不允许玩家换将，必须立刻结束对局并由蓝方AI获胜。
 	# 补充：本断言先人工授予一次复活，验证其拦截首次终局；次数耗尽后的第二次死亡仍执行上述终局规则。
 	# 玩家复活机缘；正式难度五没有开局次数，本段显式追加同一灰色机缘并写入权威剩余次数以覆盖死亡拦截。
@@ -656,7 +666,9 @@ func _restore_settings() -> void:
 
 ## 结算回合开始类技能创建的全部待处理选择；取消它们并把阶段恢复为出牌阶段。
 ## 部分武将（例如持有【铁壁】的星穹旅伴）会在每回合开始创建可取消的费用目标询问，把阶段写成 "choice"，
-## 从而阻止常驻出牌询问建立。固定种子选将会随武将池变化而换人，测试不能假设开局没有这类请求。
+## 从而阻止常驻出牌询问建立。另有部分是**强制发动**的技能（例如爻光的【凶星】欢愉技目标窗口），
+## 这类窗口没有取消入口，此时按请求自身下发的首个合法候选确认，否则清理会永远卡住。
+## 固定种子选将会随武将池变化而换人，测试不能假设开局没有这类请求。
 func _settle_pending_skill_choices() -> bool:
 	# 取消一个请求可能同步续接出下一个，因此按上限循环直到请求表清空。
 	for _attempt: int in range(16):
@@ -668,7 +680,13 @@ func _settle_pending_skill_choices() -> bool:
 		# 标准选择动作；取消时不携带任何牌或目标。
 		var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 		action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
-		if not _controller.submit_action(action):
+		if _controller.submit_action(action):
+			continue
+		# 不可取消的强制窗口（例如爻光的【凶星】是强制发动的欢愉技，演出时弹出目标窗口）：
+		# 此时按请求自身下发的首个合法候选确认；候选只取自权威窗口，不额外探测任何隐藏信息。
+		var forced_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		forced_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
+		if not _controller.submit_action(forced_action):
 			return false
 	if not _controller._pending_card_choice.is_empty():
 		return false
@@ -676,6 +694,20 @@ func _settle_pending_skill_choices() -> bool:
 	if _controller.state.current_phase == "choice":
 		_controller.state.current_phase = "play"
 	return true
+
+
+## 当前待处理选择的首个候选目标；没有候选时返回空数组，由权威入口按窗口类型校验。
+func _first_candidate_target_ids() -> Array:
+	# 权威窗口下发的候选目标集合。
+	var candidate_target_ids: Array = _controller._pending_card_choice.get("target_ids", []) as Array
+	return [int(candidate_target_ids[0])] if not candidate_target_ids.is_empty() else []
+
+
+## 当前待处理选择的首个候选文字选项稳定ID；没有候选时返回空字符串。
+func _first_candidate_control_id() -> String:
+	# 权威窗口下发的候选文字选项集合。
+	var candidate_controls: Array = _controller._pending_card_choice.get("control_options", []) as Array
+	return str((candidate_controls[0] as Dictionary).get("id", "")) if not candidate_controls.is_empty() else ""
 
 
 ## 失败出口；打印稳定标记并释放临时控制器后以非零状态结束测试。
