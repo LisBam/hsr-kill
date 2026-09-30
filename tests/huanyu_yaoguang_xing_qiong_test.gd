@@ -339,7 +339,8 @@ func _test_dangshang_draws_one_card() -> bool:
 	return true
 
 
-## 校验【好活】弃置场上的一张牌；判定区与装备区都属于“场上”，手牌区不属于。
+## 校验【好活】的两步弃置：先选择一名场上（判定区或装备区）有牌的角色，再弃置其场上的一张牌。
+## “场上”包含判定区与装备区，手牌区不属于场上，因此也不会让只有手牌的玩家进入角色候选。
 func _test_haohuo_discards_field_card() -> bool:
 	_reset_state(3)
 	_controller.state.get_player(0).character_id = "xing_huanyv"
@@ -351,8 +352,15 @@ func _test_haohuo_discards_field_card() -> bool:
 	if haohuo == null or not haohuo.is_joy_skill() or haohuo.get_performance_number() != 120:
 		return _fail("haohuo_static")
 	haohuo.perform_joy_skill({})
+	# 第一步角色候选；只有装备区或判定区有牌的玩家1进入候选，玩家2与仅有手牌的玩家都不满足条件。
+	var target_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str(target_request.get("choice_type", "")) != "target" or bool(target_request.get("allow_cancel", true)) or (target_request.get("target_ids", []) as Array) != [1]:
+		return _fail("haohuo_target_candidates %s" % [target_request])
+	if not _submit_pending_choice(0, [], [1], true):
+		return false
+	# 第二步：所选角色的场上候选；必须同时包含判定区与装备区牌，且排除手牌。
 	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
-	# 候选UID集合；必须同时包含判定区与装备区牌，且排除手牌。
+	# 候选UID集合；两步式交互的第二步只展示所选角色自己的场上牌。
 	var candidate_uids: Array[int] = []
 	for candidate_variant: Variant in request.get("candidates", []) as Array:
 		candidate_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
@@ -446,10 +454,16 @@ func _test_yaota_drives_all_owned_joy_skills() -> bool:
 		return false
 	# 第二项必须紧接着演出；若仍只驱动首项，这里不会有任何待响应选择。
 	var second_request: Dictionary = _controller._pending_card_choice.duplicate(true)
-	if str((second_request.get("context", {}) as Dictionary).get("kind", "")) != "haohuo_card":
+	if str((second_request.get("context", {}) as Dictionary).get("kind", "")) != "haohuo_target":
 		return _fail("yaota_all_owned_second %s" % [second_request])
-	# 场上候选；本用例只有玩家1武器区的一张装备牌，直接取首项提交。
-	var equipment_uid: int = int(((second_request.get("candidates", []) as Array)[0] as Dictionary).get("uid", -1))
+	# 好活第一步：本用例只有玩家1的武器区存在场上牌，因此角色候选唯一。
+	if (second_request.get("target_ids", []) as Array) != [1] or not _submit_pending_choice(2, [], [1], true):
+		return false
+	# 好活第二步：所选角色的场上候选；本用例只有玩家1武器区的一张装备牌，直接取首项提交。
+	var field_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str((field_request.get("context", {}) as Dictionary).get("kind", "")) != "haohuo_card":
+		return _fail("yaota_all_owned_field %s" % [field_request])
+	var equipment_uid: int = int(((field_request.get("candidates", []) as Array)[0] as Dictionary).get("uid", -1))
 	if equipment_uid < 0 or not _submit_pending_choice(2, [equipment_uid], [], true):
 		return false
 	# 两项演出全部结束；咬它不推进回合开始游标，因此不会残留待响应选择或活动演出。

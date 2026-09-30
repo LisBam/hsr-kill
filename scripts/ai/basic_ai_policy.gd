@@ -219,6 +219,7 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 	for skill: SkillDefinition in _decision_card_modifier_skills:
 		score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
 	# 防具完全拦截所有目标时，先保留已计算的卡牌与技能联动收益，再排除纯出牌顺序带来的伪正分。
+	# 被拦截目标的自身收益已由评估器按 ARMOR_VOID_TARGET_PENALTY 计为明确负值，本段只负责兜底。
 	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
 		# 当前逻辑牌定义；未知牌没有顺序偏好，按0处理以避免异常动作获得豁免。
 		var action_definition: Dictionary = _get_cached_card_definition(str(action.get("card_definition_id", "")))
@@ -244,7 +245,7 @@ func _score_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: D
 	# 使用者全部有效技能；转化牌实际使用后会触发的被动联动必须与实体牌使用保持一致。
 	for skill: SkillDefinition in _decision_card_modifier_skills:
 		score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
-	# 防具完全拦截时移除纯出牌顺序造成的伪收益；仍允许星火等独立技能收益保留该动作。
+	# 防具完全拦截时移除纯出牌顺序造成的伪收益；被无效目标自身已是负收益，星火等独立技能收益仍可保留该动作。
 	if _is_slash_fully_blocked_by_armor(authoritative_snapshot, action):
 		# 当前虚拟牌静态定义；用于读取只承担排序作用的order字段。
 		var action_definition: Dictionary = _get_cached_card_definition(str(action.get("card_definition_id", "")))
@@ -258,6 +259,8 @@ func _score_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: D
 
 
 ## 判断一项【杀】动作是否会被所有已选目标的防具完全拦截；只读取公开装备和自身完整手牌快照，不修改实体牌或规则状态。
+## 被完全拦截的目标自身收益已由评估器按负值计入（普通【杀】对【藤甲】、黑色【杀】对【仁王盾】），
+## 本查询负责在“全部目标都被拦截”时再排除纯 order 排序分，避免AI仅因出牌顺序分而消耗一张完全无效的牌。
 ## 同一查询也覆盖防具明确声明完全拦截的伤害类群体锦囊。
 func _is_slash_fully_blocked_by_armor(authoritative_snapshot: Dictionary, action: Dictionary) -> bool:
 	# 当前逻辑牌定义；只有共享 slash 牌族才需要检查防具的【杀】拦截钩子。

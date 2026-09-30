@@ -111,6 +111,15 @@ const BAGUA_DAMAGE_MULTIPLIER: float = 0.65
 ## 1点体力目标拥有已知救命牌时的预期击杀倍率；仍保留压低救援资源的收益。
 const SURVIVAL_CARD_DAMAGE_MULTIPLIER: float = 0.7
 
+## 防具完全无效一次攻击时的目标收益；默认-0.5，等于半张牌的资源价值。
+## 为什么必须是负数而不是0：被【藤甲】【仁王盾】拦下的攻击既没有产生任何牌效，又实际消耗了使用者的牌与出牌机会。
+## 若按0处理，纯出牌顺序分（order）会让AI误以为该动作仍有正向收益，从而在多目标混战中继续为被无效的目标付费。
+## 取值幅度必须小于“一张低价值牌的资源成本 + 技能联动收益”，以便【星火】这类牌本身无效但技能有独立正收益的动作
+## 仍能通过完整评分保留下来（领袖黑色【杀】打【仁王盾】目标触发【星火】横置时总收益约 +0.1）；
+## 而没有任何技能联动的单纯攻击会落到0以下，被策略层按纯负收益动作丢弃。
+## 无视防具的效果（如【青釭剑】）在 _get_effective_armor_definition() 中已提前返回空防具，不受本惩罚影响。
+const ARMOR_VOID_TARGET_PENALTY: float = -0.5
+
 ## 横置角色受到传导伤害时的自身风险倍率；默认1.5使行动者已横置时主动使用属性伤害明显降权但不一概禁止技能联动。
 const CHAINED_SELF_DAMAGE_RISK_MULTIPLIER: float = 1.5
 
@@ -307,10 +316,12 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		var card_definition_id: String = str(definition.get("id", ""))
 		# 当前伤害属性；普通【杀】会被藤甲拦截，火焰伤害则提高预期收益。
 		var nature: String = str(definition.get("nature", "normal"))
+		# 防具完全无效的攻击按明确负收益计算，而不是0：普通【杀】对【藤甲】、黑色【杀】对【仁王盾】
+		# 以及被【藤甲】拦截的【南蛮入侵】【万箭齐发】都属于“白白消耗一张牌”，必须让AI看到净损失。
 		if str(definition.get("effect_id", "")) == "slash" and armor_definition.blocks_slash_by_color(card_color, nature):
-			return 0.0
+			return ARMOR_VOID_TARGET_PENALTY
 		if armor_definition.blocks_aoe(card_definition_id):
-			return 0.0
+			return ARMOR_VOID_TARGET_PENALTY
 	# 目标状态倍率；复制无名杀 get.effect 对低体力、少手牌目标的威胁放大思想。
 	var status_multiplier: float = 1.0
 	if bool(ai_profile.get("recover", false)) and int(target.get("hp", 0)) >= int(target.get("max_hp", 0)):
