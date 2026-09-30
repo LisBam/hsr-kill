@@ -45,6 +45,10 @@ signal cutscene_finished()
 ## 淡出时长（秒）。默认 0.30 避免播完瞬间消失显得突兀；设为 0 表示立即隐藏。
 @export_range(0.0, 2.0, 0.01) var fade_out_seconds: float = 0.30
 
+## 淡出结束时的画面缩放倍率。0 表示画面一边变淡一边收拢到中心直至消失，1 表示只淡出不做缩放。
+## 缩放与淡出共用 fade_out_seconds 作为时长，因此两者严格同时开始、同时结束。
+@export_range(0.0, 1.0, 0.01) var fade_out_scale: float = 0.0
+
 ## 播放音量（分贝）。0 为素材原始音量，-80 等效静音；只影响本次播放，不修改音频总线。
 @export_range(-80.0, 24.0, 0.5) var volume_db: float = 0.0
 
@@ -89,11 +93,19 @@ func _ready() -> void:
 	z_index = CUTSCENE_Z_INDEX
 	visible = false
 	modulate.a = 0.0
+	# 缩放中心跟随控件尺寸：不设置时缩放以左上角为原点，画面会往左上角缩而不是往画面中心收。
+	resized.connect(_update_pivot_offset)
+	_update_pivot_offset()
 	_video_player = get_node_or_null(VIDEO_NODE_NAME) as VideoStreamPlayer
 	if _video_player == null:
 		return
 	_video_player.finished.connect(_on_video_finished)
 	_apply_chroma_key_parameters()
+
+
+## 把缩放中心更新为控件中心。全屏过场在窗口尺寸变化后仍要保持「从画面中心收拢」的观感。
+func _update_pivot_offset() -> void:
+	pivot_offset = size * 0.5
 
 
 ## 退出场景树时释放暂停令牌；返回主菜单或关闭场景不会残留全局暂停。
@@ -125,6 +137,9 @@ func play_cutscene(source: String) -> bool:
 	_video_player.play()
 	_playing = true
 	visible = true
+	# 复位上一轮淡出留下的缩放与透明度；否则第二次播放会从缩小状态直接出现。
+	scale = Vector2.ONE
+	_update_pivot_offset()
 	modulate.a = 0.0
 	if fade_in_seconds <= 0.0:
 		modulate.a = 1.0
@@ -142,6 +157,8 @@ func stop_cutscene() -> void:
 	_playing = false
 	visible = false
 	modulate.a = 0.0
+	# 缩放复位，保证下一次播放从完整尺寸开始而不是继承上次被中断的缩小状态。
+	scale = Vector2.ONE
 	_release_pause()
 
 
@@ -150,7 +167,7 @@ func is_cutscene_playing() -> bool:
 	return _playing
 
 
-## 视频播完后的收尾：淡出并隐藏，淡出结束后才释放暂停令牌，玩家不会看到动画消失瞬间的对局跳变。
+## 视频播完后的收尾：一边淡出一边收拢，结束后才释放暂停令牌，玩家不会看到动画消失瞬间的对局跳变。
 func _on_video_finished() -> void:
 	if not _playing:
 		return
@@ -159,17 +176,22 @@ func _on_video_finished() -> void:
 	if fade_out_seconds <= 0.0:
 		visible = false
 		modulate.a = 0.0
+		scale = Vector2.ONE
 		_release_pause()
 		cutscene_finished.emit()
 		return
 	_fade_tween = create_tween()
 	_fade_tween.tween_property(self, "modulate:a", 0.0, fade_out_seconds)
+	# 缩放与淡出并行且共用同一时长：画面一边变透明一边收拢到中心，两者严格同时结束。
+	_fade_tween.parallel().tween_property(self, "scale", Vector2.ONE * fade_out_scale, fade_out_seconds)
 	_fade_tween.finished.connect(_on_fade_out_finished)
 
 
-## 淡出补间结束：隐藏节点、恢复对局并广播过场结束。
+## 淡出补间结束：隐藏节点、复位缩放、恢复对局并广播过场结束。
 func _on_fade_out_finished() -> void:
 	visible = false
+	# 缩放复位放在隐藏之后：下一轮播放不需要依赖 play_cutscene 的复位也能从完整尺寸开始。
+	scale = Vector2.ONE
 	_release_pause()
 	cutscene_finished.emit()
 
@@ -196,6 +218,10 @@ func _resolve_stream() -> VideoStream:
 
 
 ## 把检查器中的键控参数写入视频材质。着色器缺失时保留场景内原材质，材质也不存在时不做任何修改。
+##
+## 参数优先级：根节点上的四个 @export 是抠像参数的**唯一权威来源**。
+## 场景里 Video 节点的材质同样能在检查器中改到同名参数，但那些值会在运行时被本方法覆盖，
+## 因此调参请一律改根节点，不要改材质，否则会出现「改了没反应」。
 func _apply_chroma_key_parameters() -> void:
 	if _video_player == null:
 		return
