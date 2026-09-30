@@ -217,7 +217,7 @@ func _run() -> void:
 	var empty_armor_row: Button = equipment_stack.get_row("armor")
 	# 空进攻坐骑横条；与防具空槽使用相同固定高度和3像素间距。
 	var empty_offensive_mount_row: Button = equipment_stack.get_row("offensive_mount")
-	# 非候选防御坐骑横条；应保持基础横坐标并位于第四个固定槽位。
+	# 非候选防御坐骑横条；应保持基础横坐标并位于第三个固定槽位。
 	var defensive_mount_row: Button = equipment_stack.get_row("defensive_mount")
 	# 装备与空槽样式；已装备牌面必须明显亮于深色空槽背景。
 	var weapon_style: StyleBoxFlat = weapon_row.get_theme_stylebox("disabled") as StyleBoxFlat
@@ -233,7 +233,7 @@ func _run() -> void:
 		_fail("equipment_candidate_animation_start:%s" % animated_candidate_shift)
 		return
 	await _wait_for_equipment_animation(equipment_stack)
-	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or empty_treasure_row == null or not is_equal_approx(equipment_stack.size.x, 150.0) or not is_equal_approx(equipment_stack.size.y, 148.0) or not is_equal_approx(weapon_row.size.y, adaptive_equipment_row_height) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - weapon_row.position.y, equipment_row_pitch * 3.0) or not is_equal_approx(empty_treasure_row.position.y - weapon_row.position.y, equipment_row_pitch * 4.0) or equipment_stack.is_slot_equipped("armor") or equipment_stack.is_slot_equipped("treasure") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or not empty_treasure_row.disabled or int(equipment_stack.get("_visible_slot_count")) != 5:
+	if selection_panel.visible or weapon_row == null or empty_armor_row == null or empty_offensive_mount_row == null or defensive_mount_row == null or empty_treasure_row == null or not is_equal_approx(equipment_stack.size.x, 150.0) or not is_equal_approx(equipment_stack.size.y, 148.0) or not is_equal_approx(weapon_row.size.y, adaptive_equipment_row_height) or not is_equal_approx(weapon_row.position.x, equipment_stack.selectable_shift_distance) or not is_zero_approx(defensive_mount_row.position.x) or not is_equal_approx(empty_armor_row.position.y - weapon_row.position.y, equipment_row_pitch) or not is_equal_approx(defensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch) or not is_equal_approx(empty_offensive_mount_row.position.y - empty_armor_row.position.y, equipment_row_pitch * 2.0) or not is_equal_approx(empty_treasure_row.position.y - weapon_row.position.y, equipment_row_pitch * 4.0) or equipment_stack.is_slot_equipped("armor") or equipment_stack.is_slot_equipped("treasure") or not equipment_stack.is_slot_equipped("weapon") or weapon_style.bg_color.get_luminance() - empty_armor_style.bg_color.get_luminance() < 0.35 or not empty_armor_row.disabled or empty_armor_row.mouse_filter != Control.MOUSE_FILTER_IGNORE or not empty_treasure_row.disabled or int(equipment_stack.get("_visible_slot_count")) != 5:
 		_fail("equipment_inline_layout")
 		return
 	main_instance.call("_on_equipment_pressed", 7004)
@@ -276,7 +276,7 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 五槽布局中的宝物横条；实际装备后由深色空槽变为浅色牌面。
 	var treasure_row: Button = equipment_stack.get_row("treasure")
-	# 五槽布局中的防御坐骑横条；宝物牌面变化不能影响固定第四槽位置。
+	# 五槽布局中的防御坐骑横条；宝物牌面变化不能影响固定第三槽位置。
 	var defensive_mount_row_with_treasure: Button = equipment_stack.get_row("defensive_mount")
 	if treasure_row == null or int(equipment_stack.get("_visible_slot_count")) != 5 or not is_equal_approx(defensive_mount_row_with_treasure.position.y, defensive_mount_y_without_treasure) or treasure_row.position.y <= defensive_mount_row_with_treasure.position.y or not equipment_stack.is_slot_equipped("treasure"):
 		_fail("equipment_treasure_layout")

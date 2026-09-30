@@ -454,15 +454,15 @@ func _run() -> void:
 	var local_adaptive_equipment_row_height: float = local_equipment_label.size.y / 5.0
 	# 当前五槽节距；无覆盖且无间距时严格等于单槽高度。
 	var local_equipment_row_pitch: float = local_adaptive_equipment_row_height - local_equipment_label.equipment_row_overlap + local_equipment_label.equipment_row_gap
-	# 本地空进攻坐骑横条；五槽常驻布局中必须保留第三个等高槽位。
+	# 本地空进攻坐骑横条；五槽常驻布局中必须保留第四个等高槽位。
 	var local_offensive_mount_row: Button = local_equipment_label.get_row("offensive_mount")
-	# 本地空防御坐骑横条；五槽常驻布局中必须保留第四个等高槽位。
+	# 本地空防御坐骑横条；五槽常驻布局中必须保留第三个等高槽位。
 	var local_defensive_mount_row: Button = local_equipment_label.get_row("defensive_mount")
 	if local_weapon_row == null or local_treasure_row == null or local_empty_armor_row == null or local_offensive_mount_row == null or local_defensive_mount_row == null:
 		_fail("local_equipment_rows_missing")
 		return
-	# 当前五个固定装备槽；数组顺序用于逐段验证相邻空隙完全一致。
-	var local_equipment_rows: Array[Button] = [local_weapon_row, local_empty_armor_row, local_offensive_mount_row, local_defensive_mount_row, local_treasure_row]
+	# 当前五个固定装备槽；数组按装备栏自上而下的固定显示顺序排列，用于逐段验证相邻空隙完全一致。
+	var local_equipment_rows: Array[Button] = [local_weapon_row, local_empty_armor_row, local_defensive_mount_row, local_offensive_mount_row, local_treasure_row]
 	# 当前相邻装备槽的实际空隙；全部四段都必须等于组件统一配置值。
 	var local_equipment_gaps_are_equal: bool = true
 	for equipment_row_index: int in range(local_equipment_rows.size() - 1):

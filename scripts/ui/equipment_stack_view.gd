@@ -43,7 +43,9 @@ signal information_dismissed
 
 ## 固定装备槽顺序；前四槽始终参与位置计算，宝物槽只在实际装备宝物时加入布局。
 ## 第一视角装备栏常态保留全部五槽，宝物空槽与其他空槽使用相同深色类型占位。
-const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
+## 界面自上而下依次显示武器、防具、防御坐骑（距离+1）、进攻坐骑（距离-1）与宝物；
+## 该常量只决定槽位在装备栏中的纵向位置，装备区稳定槽位ID、距离修正与废除判定仍按各槽位自身规则生效。
+const EQUIPMENT_SLOT_ORDER: Array[String] = ["weapon", "armor", "defensive_mount", "offensive_mount", "treasure"]
 
 ## 装备槽中文名称；横条直接标明槽位，空槽不创建占位文字但仍保留对应纵向位置。
 const EQUIPMENT_SLOT_NAMES: Dictionary = {
