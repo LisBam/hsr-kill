@@ -161,6 +161,18 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"ahha_moment_resolution",
 ]
 
+## 回合操控登记的空值哨兵；与 PlayerState.turn_input_delegate_id 的默认值同源，禁止在别处重复写字面量 -1。
+const TURN_INPUT_DELEGATE_NONE = -1
+
+## 局域网下操控登记无法建立授权通道时的显式降级原因字符串；写入故障诊断与日志便于回溯，不允许静默失效。
+const TURN_INPUT_DELEGATE_LAN_REASON = "lan_turn_control_degraded"
+
+## 观察者快照顶层承载「该观察者被授权代提交的 actor 列表」的字段名；只在被授权观察者的专属快照中出现。
+const SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY = "turn_input_controlled_actor_ids"
+
+## 定向代操控快照顶层标记字段名；值为被观察者 actor 的 player_id，客户端据此区分普通快照与代理权重快照。
+const SNAPSHOT_DELEGATED_VIEWER_ID_KEY = "turn_input_delegated_viewer_id"
+
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
 ## 阶段生命周期服务；前置与结束窗口由规则步骤持有唯一恢复点。
 const PHASE_LIFECYCLE_SERVICE_SCRIPT: Script = preload("res://scripts/core/phase_lifecycle_service.gd")
@@ -343,8 +355,45 @@ var _control_all_characters_enabled: bool = false
 ## 离线对局最初由玩家控制的稳定角色ID；关闭全角色控制时恢复该第一视角。
 var _primary_offline_human_player_id: int = -1
 
+## 回合操控登记的过程性回合索引；键为被操控者稳定 player_id，值为 {turn_player_id, turn_number}。
+## 权威事实始终是 PlayerState.turn_input_delegate_id，本字典只是因为字段本身无法表达“登记发生在哪个回合”
+## 而存在的匹配数据（性质同 _extra_turn_queue），只用于跨回合安全到期：无关角色的回合结束不得清除别人的登记。
+## 它不进观察者快照、不进权威存档、不进回放；存档恢复后为空时以“当前回合结束无条件清除”为安全回退，
+## 只可能提前一轮到期，不会产生永久残留。修改它的匹配条件会直接影响到期时点，必须与登记写入点成对维护。
+var _turn_input_delegation_turns: Dictionary = {}
+
+## 局域网客户端最近一次收到的“本机被授权代提交的 actor 列表”只读缓存；来源是快照顶层授权字段。
+## 它只用于客户端判断一次上行是否属于本机的代理提交，不写任何规则状态、不参与权威判定；
+## 离线或未获授权时恒为空数组，此时客户端行为与改动前完全一致（只能操作绑定玩家自己）。
+var _lan_proxy_actor_ids: Array[int] = []
+
+## 最近一次操控登记在局域网下无法建立代理授权通道时的诊断原因；空字符串表示未发生降级。
+## 只用于故障诊断与自动化测试断言，不参与任何规则判定；重新登记成功时清除。
+var _turn_input_delegator_diagnostic_reason: String = ""
+
+## 局域网客户端在协议层绑定的稳定玩家 ID；由 match_start 绑定写入，全程不随界面视角变化。
+## 它与 local_human_player_id 的分工是：本字段回答“我在网络协议里是谁”（peer 授权、快照路由、上行 actor 归属），
+## local_human_player_id 回答“本机界面当前在操作谁”（离线由“控制所有角色”改写，局域网由代理快照改写）。
+## 网关与房主的授权复核必须使用本字段，否则操控者在代替被操控者期间会被误判为越权。
+var _lan_bound_player_id: int = -1
+
 ## 全角色控制当前临时接管的非主视角角色ID；负数表示没有额外角色被人工接管。
 var _offline_manually_controlled_player_id: int = -1
+
+## 离线第一视角是否正由回合操控登记接管；true 表示 local_human_player_id 当前是被操控者而不是本机真人。
+## 离线接管会改写 local_human_player_id，因此必须用本标志区分“已接管”与“仍是本人”，
+## 否则登记清除后无法把界面交还给操控者本人，且重复接管会把操控者自己误判成被操控者。
+var _offline_delegated_view_active: bool = false
+
+## 接管前的本机真人稳定 player_id；仅在 _offline_delegated_view_active 为 true 期间有意义。
+## 归还第一视角时以它为唯一依据，因此它必须与 _offline_delegated_view_active 成对写入与清除。
+var _offline_delegated_viewer_id: int = -1
+
+## 离线对局中“本机真人是谁”的权威影子值；与 local_human_player_id 的区别是本字段**从不被回合操控接管改写**。
+## 必要性：离线接管与“控制所有角色”都会改写 local_human_player_id，若直接用它判断操控者身份，
+## 接管发生的第一帧之后就会把被操控者误判成操控者，导致代理提交被误拒、清理后无法归位。
+## 写入规则：主真人与“控制所有角色”的切换路径同步更新它（两者都改变“谁在操作本机”），接管路径不更新。
+var _offline_human_identity_id: int = -1
 
 ## 本局1v1车轮战明置候选数量；开局时从房主设置锁定，默认6且范围3至20。
 var _wheel_duel_face_up_candidate_count: int = 6
@@ -940,11 +989,21 @@ func _is_answerable_human_actor(player_id: int) -> bool:
 		return false
 	if player.auto_managed:
 		return false
+	# 回合操控代理：被操控者的操作由操控者提供，因此该座位是否“可作答”取决于操控者座位。
+	# 这里与正式动作提交、房主授权复核共用同一个代理解析入口，避免“能提交却被判无人认领而强制托管”。
+	var submitter_id: int = _resolve_turn_input_submitter(player_id)
+	if submitter_id != player_id:
+		if ai_coordinator != null and ai_coordinator.is_ai_controlled(submitter_id):
+			return false
+		# 操控者座位；操控者自身死亡或离场时代理不成立，回落到被操控者本人的可作答判定。
+		var submitter_player: PlayerState = state.get_player(submitter_id)
+		if submitter_player == null or not submitter_player.alive or submitter_player.out_of_game or submitter_player.auto_managed:
+			return false
 	# 该座位必须真的绑定一个人类界面：既非AI又不属于任何真人视角的“无人认领”座位没有任何人能作答，
 	# 其待办必须交给停滞修复而不是当成人类思考无限等待。
 	if network_gateway != null and network_gateway.is_lan_host():
-		return player_id == local_human_player_id or network_gateway.get_peer_id_for_player(player_id) > NetworkGateway.SERVER_PEER_ID
-	return player_id == local_human_player_id or _control_all_characters_enabled
+		return submitter_id == _bound_local_player_id() or network_gateway.get_peer_id_for_player(submitter_id) > NetworkGateway.SERVER_PEER_ID
+	return submitter_id == _bound_local_player_id() or _control_all_characters_enabled
 
 
 ## 组合当前对局进度指纹；只读取稳定可序列化字段，任何事件推进、动作提交或窗口变化都会改变结果。
@@ -1332,6 +1391,9 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		local_human_player_id = 0
 	else:
 		_assign_local_human_player_seat(actual_player_count)
+	# 本局的协议身份基线；离线恒等于本地座次，房主恒等于大厅映射座位。
+	# 局域网客户端的绑定值由 _bind_lan_bound_player_id() 在开局绑定时写入。
+	_lan_bound_player_id = local_human_player_id
 	CardInstance._next_uid = 1
 	state = GameState.new()
 	state.match_id = "%d-%d" % [Time.get_unix_time_from_system(), _rng.randi()]
@@ -1388,6 +1450,10 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 	_create_players(actual_player_count, uses_automatic_match_seed)
 	# 最终离线主操作者；自动斗地主防重复可能在创建玩家前改选本地座次，控制归属必须以调整后的稳定ID为准。
 	_primary_offline_human_player_id = local_human_player_id
+	# 本机真人身份影子值随本局主真人建立；它与 local_human_player_id 只在回合操控接管期间发生分歧。
+	_offline_human_identity_id = local_human_player_id
+	_offline_delegated_view_active = false
+	_offline_delegated_viewer_id = -1
 	if conquest_mode != null and state.players.size() >= 2 and state.players.size() % 2 == 0:
 		# 过关斩将按“玩家1、敌人1、玩家2、敌人2……”交替建位：偶数座次索引为红方玩家，奇数为蓝方敌人。
 		# 关卡状态在选将前建立，后续初始机缘与换将均复用稳定ID；单人局退化为一号位玩家对二号位敌人。
@@ -1568,6 +1634,15 @@ func _reset_per_match_progress_state() -> void:
 	_clear_pending_judgment_request()
 	ai_coordinator._policies.clear()
 	_ai_submission_depth_by_player.clear()
+	# 回合操控登记的跨局清理：登记事实随玩家状态一同重建，过程索引、降级诊断与客户端代理授权缓存都必须归零，
+	# 否则上一局的授权列表会残留到新一局，让本机在新局开局即持有不应有的代理权。
+	_turn_input_delegation_turns.clear()
+	_turn_input_delegator_diagnostic_reason = ""
+	_lan_proxy_actor_ids.clear()
+	_offline_delegated_view_active = false
+	_offline_delegated_viewer_id = -1
+	if network_gateway != null and network_gateway.is_lan_host():
+		_rebuild_lan_proxy_authorizations()
 
 
 ## 丢弃已进入初始化阶段但未能建立选将流程的半成品对局；失败后控制器恢复与首次进入主菜单相同的空状态。
@@ -1856,17 +1931,31 @@ func _is_conquest_replacement_opportunity_action_allowed(action: PlayerAction) -
 
 
 ## 接受来自人类、AI 或网络的统一行为指令；返回是否通过规则校验并执行。
-func submit_action(action: PlayerAction) -> bool:
+## submitter_player_id 表示本次提交的动作提供者稳定ID；小于0时按本机协议身份解析（全部界面与AI路径都走该默认值）。
+## 显式传入只用于两种场景：①网络入口已由 peer 反查出真实提供者；②自动化测试需要模拟“被操控者本人提交”。
+## 它**不改变**动作的 actor 归属：actor_id 仍然是动作执行者，本参数只参与输入锁定与授权判定。
+func submit_action(action: PlayerAction, submitter_player_id: int = -1) -> bool:
 	if action == null:
 		return _reject("提交的玩家操作为空。")
 	# 局域网客户端不持有权威状态；所有本地 UI 操作只上行给房主，并由房主使用同一函数再次完整校验。
 	if network_gateway != null and network_gateway.is_lan_client():
 		if not network_gateway.is_lan_match_active():
 			return _reject("局域网对局尚未开始。")
-		if action.actor_id != local_human_player_id:
+		# 客户端默认只能提交所绑定玩家的操作；仅当本机是某个被操控者的操控者时，
+		# 才允许以该被操控者的 actor 代其上行。授权列表由房主随定向快照下发，客户端不得自行推断；
+		# 自身身份必须用协议绑定值而不是 local_human_player_id——后者在代理期间已被改写为被操控者。
+		var bound_player_id: int = _bound_local_player_id()
+		if action.actor_id != bound_player_id and not _lan_proxy_actor_ids.has(action.actor_id):
 			return _reject("客户端只能提交当前连接所绑定玩家的操作。")
 		network_gateway.send_command(action)
 		return true
+	# 房主侧代理提交的第二道防线：即便网关放行了封包，规则层仍要求提交 peer 确实是该 actor 的合法操控者。
+	# 离线、房主本机提交与**控制器内部AI提交**恒为通过，因此本分支不改变任何既有行为；
+	# 内部AI没有 peer，若对它也做 peer 复核，会把它自己的选将与出牌全部误判为越权而整体停滞。
+	if network_gateway != null and network_gateway.is_lan_host() \
+		and not _is_internal_ai_submission(action.actor_id) \
+		and not _is_lan_proxy_submission_authorized(action):
+		return _reject("网络操作玩家与当前连接绑定不一致。")
 	if state == null or state.game_over:
 		return _reject("当前没有可操作的进行中对局。")
 	# 过关斩将换将过渡只允许随后创建的机缘选择提交；旧回合遗留的出牌按钮或 AI 动作不能越过死亡结算继续执行。
@@ -1891,6 +1980,16 @@ func submit_action(action: PlayerAction) -> bool:
 		return _reject("当前角色已移出游戏，不能执行操作。")
 	if action.action_type == "set_auto_managed":
 		return _submit_auto_management_change(action)
+	# 回合操控输入锁定：被操控者本人不得提交任何操作，其操作只能由操控者以同一 actor 提供。
+	# 判定用独立字段 turn_input_delegate_id 而不是 auto_managed——后者语义是“AI 代打”并会注册 AI 策略，两者不可混用。
+	# 该 actor 由内置AI控制时整体跳过本判定：此时输入来源是基础AI，与“谁在操控本回合”无关，
+	# 而AI的提交权限由既有的托管/内部来源规则单独负责，不能被本机制额外收紧。
+	# 非AI情形下的合法性一律由唯一的代理解析入口给出，因此同时覆盖离线（本机真人代打）、
+	# 局域网房主（远端操控者的 peer 已在入口复核）与内部 AI 三种来源，不写第二份判断。
+	if ai_coordinator != null and not ai_coordinator.is_ai_controlled(action.actor_id) \
+		and not _is_authorized_turn_input_caller(action.actor_id, submitter_player_id) \
+		and not _is_internal_ai_submission(action.actor_id):
+		return _reject("当前回合正由其他角色操控，你不能进行操作。")
 	# 托管玩家仍由 AI 通过同一动作入口执行；真人、本地脚本或远端封包不能在托管期间抢占操作。
 	if _is_player_auto_managed(action.actor_id) and not _is_internal_ai_submission(action.actor_id):
 		return _reject("当前玩家正在托管中，暂时不能进行操作。")
@@ -3145,6 +3244,38 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	if not fallback_action_data.is_empty() and _submit_ai_action(PlayerAction.from_dict(fallback_action_data)):
 		return
 	_handle_failed_ai_choice_submission(request_id, chooser_id)
+
+
+## 返回当前待办选择在规则层生成的合法兼容动作；空数组表示当前没有可提交的选择窗口。
+## 该只读查询供自动化测试与诊断工具在不猜测窗口类型的前提下驱动一个必然合法的选择结果，
+## 它只转发现有枚举入口，不新增任何合法性口径，也不写任何状态。
+func get_pending_choice_legal_actions() -> Array[Dictionary]:
+	if _pending_card_choice.is_empty():
+		return [] as Array[Dictionary]
+	return _build_card_choice_actions(_pending_card_choice)
+
+
+## 从规则层合法动作中提交首个可确认结果；成功时返回true，没有可确认动作时为false。
+## 仅供自动化测试与诊断使用：它保证提交内容一定来自规则层枚举，避免测试自行拼装负载而误判窗口类型。
+## 选择者由内置AI控制时改经内部AI提交通道，因为该座位的操作只能由它的AI提供（回合操控登记同样按此口径锁定）。
+func submit_first_legal_pending_choice() -> bool:
+	# 当前选择者；无效ID没有可提交对象。
+	var chooser_id: int = int(_pending_card_choice.get("chooser_id", -1))
+	if chooser_id < 0:
+		return false
+	# 该座位是否由内置AI控制；决定提交必须走哪一条权限通道。
+	var chooser_is_ai: bool = ai_coordinator != null and ai_coordinator.is_ai_controlled(chooser_id)
+	for action_data: Dictionary in get_pending_choice_legal_actions():
+		# 该合法动作的负载；确认标志位于 payload 内部，与标准 choose_cards 协议一致。
+		var payload: Dictionary = action_data.get("payload", {}) as Dictionary
+		if not bool(payload.get("confirmed", false)):
+			continue
+		if chooser_is_ai:
+			if _submit_ai_action(PlayerAction.from_dict(action_data)):
+				return true
+		elif submit_action(PlayerAction.from_dict(action_data)):
+			return true
+	return false
 
 
 ## 从规则层生成的合法选择中构建保守回退动作；可取消请求优先取消，强制请求选择稳定枚举中的首个确认结果。
@@ -13678,6 +13809,10 @@ func _complete_finish_turn(player_id: int) -> void:
 	_expire_hand_view_as_effects_for_turn(player_id)
 	# 通知全部卡牌定义清理其回合持续状态；控制器不识别具体卡牌变量。
 	_notify_card_definitions_turn_ended(player_id, false)
+	# 回合操控到期：被操控者的本回合到此结束，登记必须自动清除（不依赖任何调用方显式撤销）。
+	# 匹配条件为“登记时的回合角色 + 回合号”同时成立，因此无关角色的回合结束不会误清除别的登记；
+	# 翻面被跳过的回合不派发 phaseAfter，其登记改由下一个真实回合结束清除（跳过回合不存在回合结束语义）。
+	_clear_turn_input_delegation(player_id, player_id, state.turn_number)
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
 	_run_phase_notification("phaseAfter", player_id, {"turn_number":state.turn_number}, Callable(self, "_continue_after_phase_after").bind(player_id))
 
@@ -15543,6 +15678,20 @@ func _on_network_snapshot_received(snapshot_data: Dictionary) -> void:
 	if network_gateway == null or not network_gateway.is_lan_client():
 		return
 	_remote_snapshot = snapshot_data.duplicate(true)
+	# 本机被授权代提交的 actor 列表；房主在该 peer 的专属快照里下发，缺席等价于空列表（与改动前行为一致）。
+	# 它只服务客户端的提交与请求放行判定，不写任何规则状态。
+	_lan_proxy_actor_ids.clear()
+	for actor_id_variant: Variant in _remote_snapshot.get(SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY, []) as Array:
+		_lan_proxy_actor_ids.append(int(actor_id_variant))
+	_remote_snapshot.erase(SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY)
+	# 定向代操控快照把本机操作对象改写为被操控者：快照本身就是以该 actor 为观察者裁剪的（含其手牌与技能栏），
+	# 因此界面全量跟随 local_human_player_id 即可正确显示被操控者的第一视角，界面无需新增任何接口。
+	# 协议身份 _lan_bound_player_id 保持不变，代理授权与逐 peer 快照路由因此仍然成立。
+	var delegated_viewer_id: int = int(_remote_snapshot.get(SNAPSHOT_DELEGATED_VIEWER_ID_KEY, -1))
+	_remote_snapshot.erase(SNAPSHOT_DELEGATED_VIEWER_ID_KEY)
+	if _lan_bound_player_id >= 0:
+		# 代理快照切到被操控者；普通快照则交还协议绑定的自身视角（操控结束后的归位路径）。
+		local_human_player_id = delegated_viewer_id if delegated_viewer_id >= 0 else _lan_bound_player_id
 	# 选将私有快照；房主把它嵌入同一可靠状态包，避免候选与公共 GameState 分两次到达造成界面闪烁。
 	var selection_snapshot: Dictionary = (_remote_snapshot.get("character_selection", {}) as Dictionary).duplicate(true)
 	_remote_snapshot.erase("character_selection")
@@ -15556,9 +15705,15 @@ func _on_network_snapshot_received(snapshot_data: Dictionary) -> void:
 func _on_network_choice_request_received(request_data: Dictionary) -> void:
 	if network_gateway == null or not network_gateway.is_lan_client():
 		return
-	# 请求选择者；兼容 UI 请求使用 chooser_id，通用 ChoiceRequest 使用 actor_id，二者均必须等于本地绑定玩家。
+	# 请求选择者；兼容 UI 请求使用 chooser_id，通用 ChoiceRequest 使用 actor_id。
 	var chooser_id: int = int(request_data.get("chooser_id", request_data.get("actor_id", -1)))
-	if chooser_id != local_human_player_id:
+	# 默认只接受本人请求；本机是某被操控者的操控者时，房主会把该被操控者的请求定向到本连接，
+	# 此时同样放行，否则被操控者的响应窗口会永久悬停（只有授权列表来自房主，客户端不得自行推断）。
+	# 未携带 chooser_id 的兼容请求保持既有行为直接发出，由界面按请求自身的归属字段继续判定。
+	if int(request_data.get("chooser_id", request_data.get("actor_id", -1))) < 0:
+		card_choice_requested.emit(request_data.duplicate(true))
+		return
+	if chooser_id != _bound_local_player_id() and not _lan_proxy_actor_ids.has(chooser_id):
 		return
 	card_choice_requested.emit(request_data.duplicate(true))
 
@@ -15727,6 +15882,9 @@ func _on_lan_match_peer_disconnected(player_id: int, display_name: String) -> vo
 		return
 	if player.auto_managed and player.auto_managed_offline:
 		return
+	# 掉线者既可能是操控者（其代打权立即失效，被操控者回落为本人）也可能是被操控者（登记一并清除）。
+	# 清理排在托管设置之前，避免“登记已失效但仍被认为由掉线玩家操控”的中间态被快照广播出去。
+	_clear_turn_input_delegation_for_player(player_id)
 	_set_player_auto_management(player_id, true, true)
 	add_log("%s已断开连接，由 AI 接管后续操作。" % display_name)
 
@@ -15739,9 +15897,14 @@ func _on_lan_match_peer_reconnected(player_id: int, display_name: String) -> voi
 	# 重连玩家的权威状态；玩家缺失、终局或未处于托管时不修改任何规则字段，仅补发快照让客户端界面自行恢复。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or state.game_over or not player.auto_managed:
+		# 未处于托管的正常重连也必须重发授权表：网关在掉线时已回收该 peer 的全部代理权。
+		_rebuild_lan_proxy_authorizations()
 		replicate_current_state()
 		return
 	_set_player_auto_management(player_id, false, false)
+	# 重连只按当前权威登记表重新下发代理授权，**不**恢复掉线时已清除的登记：
+	# 登记属于“本回合由谁操控”的规则事实，跨断线自动续存会让过期授权重新生效。
+	_rebuild_lan_proxy_authorizations()
 	add_log("%s已重新连接，恢复手动操作。" % display_name)
 
 
@@ -16099,6 +16262,309 @@ func is_starring_role(player_id: int) -> bool:
 	return starring_role_service != null and starring_role_service.is_starring(player_id)
 
 
+## 建立「被操控者的本回合由操控者执行」的权威登记。
+## 该端口只表达“谁提供输入”，不改变回合归属、不推进阶段、不解释任何具体牌或技能的含义；
+## 调用方（例如延时锦囊判定为梅花时的牌效）负责决定何时登记，本机制不认识「主演」等任何内容概念。
+## 前置条件（任一不满足即返回false且**不产生任何副作用**）：
+## ① 两名角色均存在、存活且未移出游戏；② 不允许自己操控自己（禁止自环）；
+## ③ 被操控者必须是当前回合角色（本回合才有“由别人代打”的语义）；
+## ④ 操控者本人当前不得正在被他人操控（禁止链式操控）。
+## 幂等与顶替：重复登记同一对返回true且不产生第二条事实；同一被操控者换一名操控者时按“唯一操控者”口径顶替。
+## 输入来源：离线且操控者是本机真人时注销被操控者的基础AI并由真人代打，否则保持该座位由基础AI提供输入；
+## 局域网下额外向网络网关下发代理授权，无法建立授权通道时按 TURN_INPUT_DELEGATE_LAN_REASON 显式降级。
+## 返回值：登记成功（含幂等重复登记）为true；前置条件失败为false。
+func begin_turn_input_delegation(controlled_player_id: int, controller_player_id: int) -> bool:
+	if state == null or state.game_over or controlled_player_id < 0 or controller_player_id < 0:
+		return false
+	# 被操控者与操控者的权威状态；缺失、已死亡或已离场都不能建立登记。
+	var controlled_player: PlayerState = state.get_player(controlled_player_id)
+	var controller_player: PlayerState = state.get_player(controller_player_id)
+	if controlled_player == null or controller_player == null:
+		return false
+	if not controlled_player.alive or controlled_player.out_of_game or not controller_player.alive or controller_player.out_of_game:
+		return false
+	if controlled_player_id == controller_player_id:
+		return false
+	if state.current_player_id != controlled_player_id:
+		return false
+	# 禁止链式操控：操控者本人若正被他人操控，其输入归属已经不确定，不能再替第三人提供输入。
+	if controller_player.turn_input_delegate_id != TURN_INPUT_DELEGATE_NONE:
+		return false
+	# 幂等：已登记同一对时不重建任何状态，直接返回成功。
+	if controlled_player.turn_input_delegate_id == controller_player_id:
+		return true
+	# 顶替：同一被操控者同一时刻至多一名操控者，旧操控者的授权表在写入新登记后统一重建。
+	controlled_player.turn_input_delegate_id = controller_player_id
+	_turn_input_delegation_turns[controlled_player_id] = {
+		"turn_player_id": state.current_player_id,
+		"turn_number": state.turn_number,
+	}
+	# 按操控者性质同步被操控者的输入来源：本机真人代打则注销其基础AI，其余情形保留该座位自己的输入通道。
+	_sync_controlled_player_input_source(controlled_player_id, controller_player_id)
+	# 重新登记成功后先清除上一次的降级诊断，再由本次授权结果决定是否重新写入。
+	_turn_input_delegator_diagnostic_reason = ""
+	# 局域网需要把「哪个 peer 可以代哪个 actor 提交」下发给网关，作为封包入口的第一道防线。
+	# 授权通道建立不了时按显式降级处理：规则事实仍然成立（本回合确实由该操控者负责），
+	# 但输入改由基础AI提供，并把该座位的真人输入通道让给AI，避免出现“谁都不能提交”的停滞。
+	if _is_lan_authority_session() and not _install_lan_proxy_authorization(controller_player_id):
+		_turn_input_delegator_diagnostic_reason = TURN_INPUT_DELEGATE_LAN_REASON
+		_apply_degraded_ai_input_source(controlled_player_id)
+		add_log("局域网代理授权不可用，该回合改由基础 AI 执行。")
+	refresh_public_state_snapshot()
+	return true
+
+
+## 撤销操控登记；controlled_player_id 小于0表示清除全场全部登记。
+## 撤销与「第一视角归还」「代理授权回收」在同一处完成，避免出现“登记已清、视角或授权仍停在别人身上”的悬空状态。
+## 返回值：至少清除了一条有效登记时为true；无可清除内容时为false。
+func end_turn_input_delegation(controlled_player_id: int = -1) -> bool:
+	if state == null:
+		return false
+	if controlled_player_id >= 0:
+		# 单条撤销不做回合匹配：显式撤销语义就是“立刻结束”，调用方已明确知道自己在撤销哪一条。
+		return _clear_turn_input_delegation(controlled_player_id, TURN_INPUT_DELEGATE_NONE, TURN_INPUT_DELEGATE_NONE)
+	# 全场清除；清除后统一归还第一视角并回收全部代理授权。
+	var cleared_any: bool = false
+	for player: PlayerState in state.players:
+		if player != null and player.turn_input_delegate_id != TURN_INPUT_DELEGATE_NONE:
+			player.turn_input_delegate_id = TURN_INPUT_DELEGATE_NONE
+			_turn_input_delegation_turns.erase(player.player_id)
+			_sync_controlled_player_input_source(player.player_id, TURN_INPUT_DELEGATE_NONE)
+			cleared_any = true
+	if not cleared_any:
+		return false
+	_rebuild_lan_proxy_authorizations()
+	_restore_offline_view_after_delegation()
+	refresh_public_state_snapshot()
+	return true
+
+
+## 返回被操控者的操控者稳定ID；无登记、角色无效或对局不存在时返回 -1。纯查询，不写任何状态。
+func get_turn_input_delegate_id(controlled_player_id: int) -> int:
+	if state == null or controlled_player_id < 0:
+		return TURN_INPUT_DELEGATE_NONE
+	var player: PlayerState = state.get_player(controlled_player_id)
+	return player.turn_input_delegate_id if player != null else TURN_INPUT_DELEGATE_NONE
+
+
+## 判断指定角色当前是否正被他人操控。纯查询端口，供技能条件、界面表现与AI评估共用同一口径。
+func is_turn_input_delegated(controlled_player_id: int) -> bool:
+	return get_turn_input_delegate_id(controlled_player_id) != TURN_INPUT_DELEGATE_NONE
+
+
+## 返回指定 actor 当前是否被规则锁定操作（正被他人操控，本人不得提交）。纯查询，不写状态。
+## 本判定**不复用** PlayerState.auto_managed：后者的语义是“基础AI代打”并会注册AI策略，
+## 与本机制的“真人代打”语义不可混用，否则会出现真人与AI争抢同一 actor 的提交。
+func _is_turn_input_locked(actor_id: int) -> bool:
+	return is_turn_input_delegated(actor_id)
+
+
+## 返回本次提交的调用方是否为该 actor 的**合法输入提供者**；用于输入锁定，允许代理而拒绝本人。
+## 作用域严格限定于局域网客户端会话：只有客户端存在“本机绑定身份 vs 本机当前操作对象”的分歧，
+## 因此本判定只负责拦住“已把视角切给被操控者、却又用被操控者自己的身份上行”的越权提交。
+## 局域网房主与离线会话由既有的网关 peer 复核与本地座次判定负责，本函数一律返回 true 以保持既有行为不变
+## （离线界面、AI、技能续接都可能替其它座位提交选择，额外收紧会破坏这些正式路径）。
+## submitter_player_id 为动作提供者；小于0时按本机协议身份解析（界面与内部AI路径的标准写法）。
+func _is_authorized_turn_input_caller(actor_id: int, submitter_player_id: int = -1) -> bool:
+	if network_gateway == null or not network_gateway.is_lan_client():
+		return true
+	var effective_submitter_id: int = submitter_player_id if submitter_player_id >= 0 else _bound_local_player_id()
+	return _resolve_turn_input_submitter(actor_id) == effective_submitter_id
+
+
+## 解析「谁有权提供该角色的操作」；无代理时返回该角色本人。
+## 该函数是三处权限判定（正式回合动作提交、可作答人类判定、局域网房主授权复核）的**唯一代理解析入口**，
+## 任何新增的权限判定都必须走它，禁止各写一份内联判断，否则会出现“能取到动作却提交被拒”或反向缺陷。
+## 返回值：合法提交者的稳定 player_id；角色无效或无登记时返回 actor_id 本身。
+func _resolve_turn_input_submitter(actor_id: int) -> int:
+	var delegate_id: int = get_turn_input_delegate_id(actor_id)
+	return delegate_id if delegate_id != TURN_INPUT_DELEGATE_NONE else actor_id
+
+
+## 绑定局域网客户端的协议身份；由开局绑定入口调用，之后不再随界面视角变化。
+## 房主与离线不调用它（其协议身份就是本地座次），因此本地授权复核仍按 local_human_player_id 判定。
+func _bind_lan_bound_player_id(player_id: int) -> void:
+	_lan_bound_player_id = player_id
+
+
+## 返回本连接在协议与授权语义上代表的稳定玩家 ID。
+## 离线与局域网房主返回 local_human_player_id：这两者的协议身份与本地座次恒等，允许“控制所有角色”改写它。
+## 局域网客户端返回开局绑定值 _lan_bound_player_id：该值不随代理视角变化，是上行归属与代理授权的唯一依据。
+## 方向性说明：代理提交授权、上行归属与可作答判定必须用本函数；界面呈现与动作构造用 local_human_player_id，
+## 后者在局域网操控期间会被代理快照改写为被操控者，二者不可互换（互换即产生越权或界面错人）。
+func _bound_local_player_id() -> int:
+	if network_gateway != null and network_gateway.is_lan_client() and _lan_bound_player_id >= 0:
+		return _lan_bound_player_id
+	# 离线：优先使用“本机真人是谁”的影子值；未开局或手工装配的控制器没有影子值时回落到本地座次，
+	# 保证任何未经过正式 start_match 的调用方都不会得到一个无效身份（-1 会被误判成“非法提交者”）。
+	if network_gateway == null or network_gateway.mode != NetworkGateway.Mode.LAN:
+		return _offline_human_identity_id if _offline_human_identity_id >= 0 else local_human_player_id
+	return local_human_player_id
+
+
+## 清除指定被操控者的操控登记，并在需要时归还第一视角与回收代理授权。
+## turn_player_id 与 turn_number 用于跨回合安全匹配：只有“登记时所在的那个回合角色 + 回合号”同时成立才到期，
+## 因此无关角色的回合结束不会误清除别的登记（与【万死】等既有时机的双重匹配口径一致）。
+## 传 TURN_INPUT_DELEGATE_NONE 表示无条件清除（显式撤销路径使用）。
+## 返回值：确实清除了登记时为true。
+func _clear_turn_input_delegation(controlled_player_id: int, turn_player_id: int = TURN_INPUT_DELEGATE_NONE, turn_number: int = TURN_INPUT_DELEGATE_NONE) -> bool:
+	if state == null or controlled_player_id < 0:
+		return false
+	# 被操控者权威状态；角色缺失时清除残留索引即可，登记事实本身已无承载对象。
+	var controlled_player: PlayerState = state.get_player(controlled_player_id)
+	if controlled_player == null:
+		_turn_input_delegation_turns.erase(controlled_player_id)
+		return false
+	if controlled_player.turn_input_delegate_id == TURN_INPUT_DELEGATE_NONE:
+		_turn_input_delegation_turns.erase(controlled_player_id)
+		return false
+	# 跨回合安全匹配；索引缺失（例如从存档恢复）时按安全回退处理：当前回合结束时无条件清除该登记，
+	# 只可能比“真实登记的回合”提前一轮到期，不会产生永久残留。
+	var needs_turn_match: bool = turn_player_id != TURN_INPUT_DELEGATE_NONE or turn_number != TURN_INPUT_DELEGATE_NONE
+	var delegation_turn: Dictionary = _turn_input_delegation_turns.get(controlled_player_id, {}) as Dictionary
+	if needs_turn_match and not delegation_turn.is_empty():
+		if turn_player_id != TURN_INPUT_DELEGATE_NONE and int(delegation_turn.get("turn_player_id", TURN_INPUT_DELEGATE_NONE)) != turn_player_id:
+			return false
+		if turn_number != TURN_INPUT_DELEGATE_NONE and int(delegation_turn.get("turn_number", TURN_INPUT_DELEGATE_NONE)) != turn_number:
+			return false
+	controlled_player.turn_input_delegate_id = TURN_INPUT_DELEGATE_NONE
+	_turn_input_delegation_turns.erase(controlled_player_id)
+	_sync_controlled_player_input_source(controlled_player_id, TURN_INPUT_DELEGATE_NONE)
+	_rebuild_lan_proxy_authorizations()
+	_restore_offline_view_after_delegation()
+	refresh_public_state_snapshot()
+	return true
+
+
+## 按当前权威登记表整体重建网络网关的代理授权表。
+## 授权表只有这一个写点：登记写入与登记清除各调用一次，禁止其他位置直接改网关授权，
+## 否则会出现“登记已撤销但仍能代理提交”的越权缺陷（对应设计风险 RK6）。
+func _rebuild_lan_proxy_authorizations() -> void:
+	if network_gateway == null:
+		return
+	# 当前全部授权项；键为操控者 player_id，值为该操控者被授权代提交的 actor 列表。
+	var authorized_actors_by_controller: Dictionary = {}
+	if state != null:
+		for player: PlayerState in state.players:
+			if player == null or player.turn_input_delegate_id == TURN_INPUT_DELEGATE_NONE:
+				continue
+			var controller_id: int = player.turn_input_delegate_id
+			if not authorized_actors_by_controller.has(controller_id):
+				authorized_actors_by_controller[controller_id] = [] as Array[int]
+			(authorized_actors_by_controller[controller_id] as Array[int]).append(player.player_id)
+	# 逐 peer 下发；房主本机（SERVER_PEER_ID）不参与 peer 授权，其提交由本地身份校验覆盖。
+	for peer_id_variant: Variant in network_gateway.get_remote_player_assignments().keys():
+		var peer_id: int = int(peer_id_variant)
+		var viewer_id: int = network_gateway.get_remote_player_assignments().get(peer_id, -1)
+		var actor_ids: Array[int] = authorized_actors_by_controller.get(viewer_id, [] as Array[int]) as Array[int]
+		network_gateway.set_lan_proxy_actor_ids(peer_id, actor_ids.duplicate())
+
+
+## 为一个操控者安装局域网代理授权；返回是否成功建立授权通道。
+## 授权条件不足时必须返回false，由调用方按 TURN_INPUT_DELEGATE_LAN_REASON 显式降级为基础AI代打，
+## 不允许静默失效（否则被操控者的回合会既没有真人输入也没有AI输入而永久停滞）。
+func _install_lan_proxy_authorization(controller_player_id: int) -> bool:
+	if network_gateway == null:
+		return false
+	# 操控者是房主本机时无需 peer 授权：其提交走本地路径，由 _is_lan_proxy_submission_authorized 的房主分支校验。
+	if controller_player_id == _bound_local_player_id() and network_gateway.is_lan_host():
+		return true
+	# 操控者对应的远端 peer；无效映射说明该操控者不在线，无法接收代理权。
+	var controller_peer_id: int = network_gateway.get_peer_id_for_player(controller_player_id)
+	if controller_peer_id <= NetworkGateway.SERVER_PEER_ID:
+		_turn_input_delegator_diagnostic_reason = TURN_INPUT_DELEGATE_LAN_REASON
+		return false
+	_rebuild_lan_proxy_authorizations()
+	return true
+
+
+## 判断当前会话是否属于「有房主权威的局域网对局」；离线程与联机客户端都不做代理授权下发。
+func _is_lan_authority_session() -> bool:
+	return network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active()
+
+
+## 返回本次网络动作是否由「actor 的合法输入提供者」所对应的 peer 发出；房主侧代理提交的第二道防线。
+## 第一道防线在网关封包入口（peer 是否被登记为任何 actor 的代理，防止伪造封包越权）；
+## 本函数把“发送者身份”与“该 actor 的合法提交者”对齐，因此它同时承担两件事：
+## ① 代理授权正确性；② **回合操控的输入锁定**——被操控者的操作只能由操控者提供，被操控者本人以自己身份上行会被拒绝。
+## 安全要点：本判定**只在发送者仍是有效远端真人时**才生效。命令回流信号可能在同一帧内进一步触发房主本机的
+## 后续动作（例如房主收到客人提交后立即自行重开新局），此时网关的“当前发送者”仍停留在此前那个 peer 上；
+## 若不校验 peer 有效性，那些房主本机动作会被误判成该远端 peer 的越权提交并整体拒绝（表现为重开后房主选将卡死）。
+## 返回值：离线、房主本机提交、发送者已不是有效远端真人，或发送者确为该 actor 的合法提交者时为true。
+func _is_lan_proxy_submission_authorized(action: PlayerAction) -> bool:
+	if action == null or network_gateway == null or not network_gateway.is_lan_host():
+		return true
+	# 当前远端发送 peer；SERVER_PEER_ID 表示房主本机直接提交。
+	var incoming_peer_id: int = network_gateway.get_current_incoming_peer_id()
+	if incoming_peer_id <= NetworkGateway.SERVER_PEER_ID:
+		return action.actor_id == _bound_local_player_id()
+	# 发送者对应的在线稳定玩家 ID；无法反查说明该 peer 已被替换或断开，本次提交不再属于它。
+	var sender_player_id: int = int(network_gateway.get_remote_player_assignments().get(incoming_peer_id, -1))
+	if sender_player_id < 0:
+		return true
+	# 核心判定：发送者必须恰好是该 actor 的合法提交者（未登记代理时即 actor 本人）。
+	return _resolve_turn_input_submitter(action.actor_id) == sender_player_id
+
+
+## 把被操控座的输入来源切换为基础AI；仅在操控登记无法建立真人输入通道（局域网显式降级）时调用。
+## 该座位的真人输入通道必须同时让出：否则被操控者仍会以为自己能提交，而实际提交会被输入锁定拒绝，
+## 表现为该回合既没有真人输入也没有AI输入而永久停滞。本函数只改输入来源，不改任何规则事实与到期语义。
+func _apply_degraded_ai_input_source(controlled_player_id: int) -> void:
+	if ai_coordinator == null:
+		return
+	if not ai_coordinator.is_ai_controlled(controlled_player_id):
+		ai_coordinator.register_basic_ai(controlled_player_id)
+
+
+## 同步被操控者的输入来源：操控者是本机真人时注销其基础AI（改用真人输入），其余情形只在**该座位本来就没有
+## 人类输入通道**时才补注册基础AI。本函数只做「谁能提交」的输入源同步，不改任何规则事实，也不决定何时登记或到期。
+## 关键约束：局域网对局中的每个真人座位都有自己的上行通道，此时**不得**再为它注册基础AI——
+## 否则AI会与真人争抢同一 actor 的提交，表现为该座位的输入被AI抢占、真人提交被判越权而整局停滞。
+func _sync_controlled_player_input_source(controlled_player_id: int, controller_player_id: int) -> void:
+	if ai_coordinator == null or state == null:
+		return
+	var controlled_player: PlayerState = state.get_player(controlled_player_id)
+	if controlled_player == null:
+		return
+	if controller_player_id == _bound_local_player_id() and not _control_all_characters_enabled:
+		# 由本机真人代打：注销基础AI并解除托管，避免真人与AI同时向同一 actor 提交。
+		ai_coordinator.unregister_ai(controlled_player_id)
+		_set_player_auto_management(controlled_player_id, false, false)
+		return
+	# 该座位已经有人类输入通道（在线的局域网真人）时不注册AI：它自己能提交，登记只改变“由谁提供输入”的判定。
+	var has_human_channel: bool = network_gateway != null and network_gateway.is_lan_host() \
+		and network_gateway.is_lan_match_active() \
+		and network_gateway.get_peer_id_for_player(controlled_player_id) > NetworkGateway.SERVER_PEER_ID
+	if has_human_channel:
+		return
+	# 其余情形（操控者是AI、或座位当前无人认领）：该座位仍需基础AI提供输入，确保回合不会无人推进。
+	if not ai_coordinator.is_ai_controlled(controlled_player_id):
+		ai_coordinator.register_basic_ai(controlled_player_id)
+
+
+## 登记被清除后归还第一视角：离线把本地观察者交还给操控者本人，联机只需广播新的授权表。
+func _restore_offline_view_after_delegation() -> void:
+	if network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return
+	if state == null or state.game_over:
+		return
+	# 归还目标：接管前的本机真人；没有接管记录时回落到主真人与当前回合角色。
+	if _offline_delegated_view_active and _offline_human_identity_id >= 0:
+		var return_target_id: int = _offline_human_identity_id
+		_offline_delegated_view_active = false
+		_offline_delegated_viewer_id = -1
+		_set_offline_manual_control_player(return_target_id)
+	_prepare_offline_controlled_view()
+	# 废弃接管期间创建的旧AI等待任务，并使用新令牌重新安排当前选择或出牌动作；
+	# 该收尾序列与关闭“控制所有角色”时的归还路径同源，缺少任一步都会留下悬停的无懈窗口或无人推进的回合。
+	_ai_drive_token += 1
+	_scheduled_ai_drive_token = -1
+	_scheduled_ai_choice_request_id = -1
+	_redrive_pending_negation_ai_tasks()
+	_republish_manual_player_choice(local_human_player_id)
+	_ensure_ai_progress_after_resolution()
+
+
 ## 写入一名角色某个技能的动态显示描述；供技能把运行时进度反映到资料里显示的效果正文。
 ## 数据落在 PlayerState.dynamic_skill_descriptions 并随观察者快照下发，因此悬停武将资料、右键武将详情与技能按钮
 ## 三处显示同源；技能不得直接改 GameDatabase 的静态元数据，静态原文始终是“初始值”。
@@ -16417,9 +16883,13 @@ func _append_limited_skill_usage_to_snapshot(snapshot: Dictionary) -> void:
 
 
 ## 发出面向本地玩家的状态快照，并让网络网关保留公共同步入口。
+## 本入口同时是「远端提交上下文」的边界：一旦进入状态广播，后续任何动作都属于本机界面产生的动作，
+## 不能继续继承上一个远端客人的 peer 身份（否则房主在收到客人提交后立即重开新局时，自己的选将会被误判成越权）。
 func _emit_state() -> void:
 	if state == null:
 		return
+	if network_gateway != null:
+		network_gateway.clear_current_incoming_peer()
 	_prepare_offline_controlled_view()
 	# 正常运行时历史由事件信号逐条增量同步；只有计数失配才执行全量校准，避免长对局每次界面刷新都复制完整回放。
 	if event_scheduler != null and state.event_history.size() != event_scheduler.get_event_history_count():
@@ -16448,6 +16918,10 @@ func _emit_state() -> void:
 			var remote_snapshot: Dictionary = state.to_dict(viewer_id, false)
 			_append_limited_skill_usage_to_snapshot(remote_snapshot)
 			remote_snapshot.erase("random_seed")
+			# 该观察者被授权代提交的 actor 列表；操控者据此才能以被操控者的 actor 上行。
+			# 未获授权的观察者得到空数组，其快照与改动前逐字节等价（不存在新增信息泄漏面）。
+			var controlled_actor_ids: Array[int] = _get_controlled_actor_ids_for_controller(viewer_id)
+			remote_snapshot[SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY] = controlled_actor_ids.duplicate()
 			# 本地合法动作；只发送给实际行动玩家，用于客户端无状态预览，最终提交仍由房主重新校验。
 			remote_snapshot["local_legal_actions"] = get_legal_actions(viewer_id) if state.current_phase == "play" and state.current_player_id == viewer_id else []
 			# 选将私有快照；候选仅进入对应观察者的定向状态包，其他玩家只能看到公开确认状态。
@@ -16456,16 +16930,76 @@ func _emit_state() -> void:
 			remote_snapshot["starting_hand_mulligan"] = starting_hand_mulligan.to_dict(viewer_id) if state.current_phase == "starting_hand_mulligan" and starting_hand_mulligan != null else {}
 			# 观察者本人的待办请求清单；并行无懈的多条私有请求无法由单槽位 current_choice_request 表达，
 			# 缺少本字段时客户端会在随后的任一快照把仍在等待的无懈窗口误清并永久停在询问阶段。
-			remote_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids(viewer_id)
+			# 操控者的清单包含其被授权 actor 的待办，否则代打期间被操控者的响应窗口不会出现在操控者界面上。
+			remote_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids_for_controller(viewer_id)
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
+			# 代操控权重快照：以被操控者为观察者裁剪后定向发给其操控者，使操控者能看到被操控者的完整手牌与技能栏。
+			# 只发给操控者本人，且列表为空时不生成任何额外封包（授权缺失即逐字节回退到改动前行为）。
+			for controlled_actor_id: int in controlled_actor_ids:
+				var delegated_snapshot: Dictionary = state.to_dict(controlled_actor_id, false)
+				_append_limited_skill_usage_to_snapshot(delegated_snapshot)
+				delegated_snapshot.erase("random_seed")
+				delegated_snapshot[SNAPSHOT_DELEGATED_VIEWER_ID_KEY] = controlled_actor_id
+				# 被操控者视角下的合法动作与待办；操控者替他打牌与作答都依赖这两项。
+				delegated_snapshot["local_legal_actions"] = get_legal_actions(controlled_actor_id) if state.current_phase == "play" and state.current_player_id == controlled_actor_id else []
+				delegated_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids(controlled_actor_id)
+				network_gateway.send_snapshot_to_peer(delegated_snapshot, peer_id)
+
+
+## 清除与指定角色相关的全部操控登记；死者的两种角色都要覆盖。
+## ①该角色作为被操控者：撤销其本回合登记；②该角色作为操控者：撤销以其为操控者的全部登记（操控回落为本人）。
+## 返回值：确实清除了至少一条登记时为true。
+func _clear_turn_input_delegation_for_player(player_id: int) -> bool:
+	if state == null or player_id < 0:
+		return false
+	var controlled_actor_ids: Array[int] = _get_controlled_actor_ids_for_controller(player_id)
+	controlled_actor_ids.append(player_id)
+	var cleared_any: bool = false
+	for controlled_actor_id: int in controlled_actor_ids:
+		if _clear_turn_input_delegation(controlled_actor_id):
+			cleared_any = true
+	return cleared_any
+
+
+## 返回指定操控者当前被授权代提交的 actor 列表；无授权时返回空数组。纯查询，不写状态。
+func _get_controlled_actor_ids_for_controller(controller_player_id: int) -> Array[int]:
+	var result: Array[int] = []
+	if state == null or controller_player_id < 0:
+		return result
+	for player: PlayerState in state.players:
+		if player != null and player.turn_input_delegate_id == controller_player_id:
+			result.append(player.player_id)
+	return result
+
+
+## 返回指定观察者应收到的待办选择请求清单；操控者的清单额外并入其被授权 actor 的待办。
+## 合并后操控者界面才能同时处理自己的响应与被操控者的响应，避免代打期间被操控者的窗口悬停。
+func _get_pending_choice_request_ids_for_controller(controller_player_id: int) -> Array[int]:
+	var result: Array[int] = _get_pending_choice_request_ids(controller_player_id)
+	for controlled_actor_id: int in _get_controlled_actor_ids_for_controller(controller_player_id):
+		for request_id: int in _get_pending_choice_request_ids(controlled_actor_id):
+			if not result.has(request_id):
+				result.append(request_id)
+	return result
 
 
 ## 在离线“控制所有角色”模式中选择当前需要操作的角色，并把唯一第一视角切换到该稳定玩家ID。
 ## 选将、车轮战抓将与手气卡属于开局配置阶段，始终保持原真人与内置AI控制，不参与动态接管。
 func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
-	if not _control_all_characters_enabled or state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+	if state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
 		return false
 	if state.current_phase in ["character_selection", "wheel_duel_selection", "starting_hand_mulligan", "ai_character_adjustment", "game_start"]:
+		return false
+	# 回合操控优先：登记是规则事实，其优先级高于“控制所有角色”这一本地设置。
+	# 因此本机是当前回合角色的操控者时，第一视角无条件落在被操控者身上，即使该设置关闭也生效。
+	var delegated_viewer_id: int = _resolve_delegated_viewer_id()
+	if delegated_viewer_id >= 0:
+		# 接管前先记住本机真人；重复接管时不覆盖已保存值，保证整个操控期间归位目标稳定。
+		if not _offline_delegated_view_active:
+			_offline_delegated_viewer_id = local_human_player_id
+			_offline_delegated_view_active = true
+		return _set_offline_manual_control_player(delegated_viewer_id)
+	if not _control_all_characters_enabled:
 		return false
 	# 目标第一视角玩家ID；显式选择请求优先，避免响应者与当前回合角色不同时界面仍停留在旧角色。
 	var target_player_id: int = explicit_player_id
@@ -16493,6 +17027,34 @@ func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 	return _set_offline_manual_control_player(target_player_id)
 
 
+## 返回离线对局中“因回合操控登记而必须接管”的被操控者 player_id；无需接管时返回 -1。纯查询，不写状态。
+## 判定条件三者同时成立：当前回合角色正被他人操控、操控者就是本机真人、且该被操控者当前仍然可显示。
+## 该函数是离线第一视角归属的**唯一代理解析入口**，`_prepare_offline_controlled_view` 只调用它，不重复判定。
+## 关键：识别“本机真人是谁”必须用 _offline_delegated_view_active 判别，因为接管本身已经改写了 local_human_player_id；
+## 直接拿它比较会把接管后的被操控者误判成操控者，使接管从第二帧起失效并导致界面卡在被操控者视角。
+func _resolve_delegated_viewer_id() -> int:
+	if state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return -1
+	# 当前回合角色；被操控者必然是它（登记前置条件保证），因此只需查询它一条。
+	var controlled_player_id: int = state.current_player_id
+	if controlled_player_id < 0:
+		return -1
+	var delegate_id: int = get_turn_input_delegate_id(controlled_player_id)
+	if delegate_id == TURN_INPUT_DELEGATE_NONE:
+		return -1
+	# 本机真人的协议身份：未接管时读取当前本地座次，已接管时沿用接管前的操控者ID，
+	# 保证同一登记在整个回合内稳定解析出同一视角（重复调用 _emit_state 不会让视角漂移）。
+	var local_human_identity: int = _offline_human_identity_id if _offline_human_identity_id >= 0 else _bound_local_player_id()
+	# 只有本机真人担任操控者时才接管第一视角；操控者是AI时该座位仍由基础AI推进，界面不应跟着换人。
+	if delegate_id != local_human_identity:
+		return -1
+	# 被操控者必须仍然可显示；死亡或离场后由清理路径移除登记，此处只做安全兜底。
+	var controlled_player: PlayerState = state.get_player(controlled_player_id)
+	if controlled_player == null or not controlled_player.alive or controlled_player.out_of_game:
+		return -1
+	return controlled_player_id
+
+
 ## 切换全角色控制当前接管者；上一名非主角色恢复基础AI，新目标停止AI并成为本地第一视角。
 func _set_offline_manual_control_player(target_player_id: int) -> bool:
 	if state == null or target_player_id < 0:
@@ -16506,6 +17068,10 @@ func _set_offline_manual_control_player(target_player_id: int) -> bool:
 		ai_coordinator.unregister_ai(target_player_id)
 		_offline_manually_controlled_player_id = target_player_id
 	local_human_player_id = target_player_id
+	# 本机真人身份影子值：只在“谁在操作本机”真的改变时同步（主真人与全角色控制切换），
+	# 回合操控接管的调用不改变它，否则接管第一帧之后就无法再识别谁是操控者。
+	if not _offline_delegated_view_active and network_gateway != null and network_gateway.mode == NetworkGateway.Mode.OFFLINE:
+		_offline_human_identity_id = target_player_id
 	return previous_viewer_id != local_human_player_id
 
 

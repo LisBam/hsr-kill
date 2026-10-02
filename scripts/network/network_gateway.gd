@@ -213,6 +213,11 @@ var _last_incoming_sequence_by_peer: Dictionary = {}
 ## 当前正在同步分发封包的远端 peer_id；控制器可在 command_received 回调栈内读取以定向返回拒绝原因。
 var _current_incoming_peer_id: int = 0
 
+## 远端 peer 到「被授权代提交 actor 集合」的映射；键为 peer_id，值为 actor 稳定 player_id 的字典（值固定为true）。
+## 由权威控制器（MatchController）在回合操控登记建立与撤销时整体下发，网关**只做集合查询、不持有任何规则语义**，
+## 因此本字段不引入网络层对规则层的反向依赖。掉线时清空对应项，重连由控制器重新下发。
+var _peer_proxy_actor_ids: Dictionary = {}
+
 ## 当前局域网房间是否已经进入对局；开局后拒绝新成员加入，已有成员掉线则交给规则层托管。
 var _lan_match_active: bool = false
 
@@ -356,7 +361,15 @@ func is_lan_match_active() -> bool:
 	return _lan_match_active
 
 
+## 清除“当前正在投递的远端 peer”上下文；只在同步分发栈确实退出或身份判定完成时调用。
+## 必要性：分发栈内的接收方可能在同一帧把控制权交回本机（例如房主收到客人提交后立刻自行重开新局），
+## 此后本机产生的动作会读取到上一个客人的 peer 并把本机提交误判成远端越权。清空后本机动作重新按“无来源”处理。
+func clear_current_incoming_peer() -> void:
+	_current_incoming_peer_id = 0
+
+
 ## 返回当前正在投递命令的远端 peer_id；只能在 command_received 或 choice_response_received 同步回调内使用。
+## 注意：接收方一旦进入新的状态广播（`_emit_state`），该上下文即被清空，后续本机动作不会继承上一个客人的身份。
 func get_current_incoming_peer_id() -> int:
 	return _current_incoming_peer_id
 
@@ -782,6 +795,33 @@ func get_remote_player_assignments() -> Dictionary:
 	return result
 
 
+## 下发某远端 peer 被授权代提交的 actor 集合；传空数组表示回收该 peer 的全部代理权。
+## 唯一调用方是权威控制器的操控登记写入与清除路径；网关不判断授权是否合理，只保存并查询该集合。
+## 本接口是「网络层只读规则状态」边界的例外形式：控制器把结论推给网关，网关不反向读取规则状态。
+func set_lan_proxy_actor_ids(peer_id: int, actor_ids: Array[int]) -> void:
+	if peer_id <= SERVER_PEER_ID:
+		return
+	if actor_ids.is_empty():
+		_peer_proxy_actor_ids.erase(peer_id)
+		return
+	# 该 peer 的授权集合；以 actor_id 为键便于常量时间查询，值固定为true只表达“已授权”。
+	var authorized_actors: Dictionary = {}
+	for actor_id: int in actor_ids:
+		if actor_id >= 0:
+			authorized_actors[actor_id] = true
+	_peer_proxy_actor_ids[peer_id] = authorized_actors
+
+
+## 查询某远端 peer 是否被授权代提交指定 actor；纯查询，供封包入口做第一道防线。
+## 返回值：授权表中存在该 (peer, actor) 组合时为true；房主本机 peer 恒为false（其提交由本地身份覆盖）。
+func is_lan_proxy_actor_authorized(peer_id: int, actor_id: int) -> bool:
+	if peer_id <= SERVER_PEER_ID or actor_id < 0:
+		return false
+	# 该 peer 的授权集合；该 peer 无任何授权时直接判定未授权。
+	var authorized_actors: Dictionary = _peer_proxy_actor_ids.get(peer_id, {}) as Dictionary
+	return bool(authorized_actors.get(actor_id, false))
+
+
 ## 返回客户端当前是否处于断线自动重连流程；界面与测试据此展示或断言重连状态，不暴露内部重试计数。
 func is_lan_reconnecting() -> bool:
 	return _reconnecting
@@ -966,6 +1006,9 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	_lobby_members.erase(peer_id)
 	_last_incoming_sequence_by_peer.erase(peer_id)
 	_peer_to_player_id.erase(peer_id)
+	# 掉线即回收该 peer 的全部代提交授权；重连后由权威控制器按当时的登记表重新下发，
+	# 因此不存在“旧连接遗留授权被新连接继承”的越权窗口。
+	_peer_proxy_actor_ids.erase(peer_id)
 	if player_id >= 0:
 		_player_to_peer_id.erase(player_id)
 	if _lan_match_active and player_id >= 0:
@@ -1155,7 +1198,10 @@ func _receive_lan_packet(packet: Dictionary, sender_peer_id: int) -> void:
 		if message_type in ["command", "choice_response"]:
 			# 权威分配的玩家 ID；任何 actor_id 不匹配的封包都在进入 MatchController 前拒绝。
 			var assigned_player_id: int = int(_peer_to_player_id.get(sender_peer_id, -1))
-			if int(payload.get("actor_id", -1)) != assigned_player_id:
+			# 封包声明的 actor；允许等于连接绑定玩家（本人操作），或等于该 peer 已被授权的代提交 actor。
+			var packet_actor_id: int = int(payload.get("actor_id", -1))
+			if packet_actor_id != assigned_player_id and not is_lan_proxy_actor_authorized(sender_peer_id, packet_actor_id):
+				# 拒绝文本保持不变：客户端旧版本依赖该字符串给出“网络操作玩家与当前连接绑定不一致”的提示。
 				send_game_event_to_peer("action_rejected", {"message":"网络操作玩家与当前连接绑定不一致。"}, sender_peer_id)
 				return
 			_current_incoming_peer_id = sender_peer_id
@@ -1296,6 +1342,8 @@ func _supersede_stale_lan_connection(rejoin_token: String) -> Dictionary:
 		_peer_to_player_id.erase(stale_peer_id)
 		_player_to_peer_id.erase(player_id)
 		_last_incoming_sequence_by_peer.erase(stale_peer_id)
+		# 被顶替的旧连接同样回收代提交授权，避免已被替换的连接继续持有代理权。
+		_peer_proxy_actor_ids.erase(stale_peer_id)
 		if not _rejected_lobby_peer_ids.has(stale_peer_id):
 			_rejected_lobby_peer_ids.append(stale_peer_id)
 		if _enet_peer != null and _enet_peer.get_peer(stale_peer_id) != null:

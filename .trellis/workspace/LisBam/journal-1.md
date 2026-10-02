@@ -185,3 +185,48 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 新增回合操控机制（本回合由xx操控）与局域网代理提交协议
+<!-- trellis-session: v=2 fp=8c41d7a02e93b5f6 -->
+
+**Date**: 2026-07-26
+**Task**: `.trellis/tasks/10-02-turn-control-mechanism/`（父任务 `10-02-kafuka-new-mechanics` 的子任务）
+**Branch**: `master`
+
+### Summary
+
+实现《崩铁杀》卡芙卡需求的三个新机制中的第一个——**「本回合由xx操控」**：操控者接管被操控者的本回合操作权，被操控者只能旁观，操控结束后操控者回到原来的角色。按需求方改判，局域网一并交付**完整代理提交协议**（不做基础 AI 降级）。
+
+**规则事实**：新增 `PlayerState.turn_input_delegate_id`（`-1` = 本人；`>= 0` = 由该 `player_id` 操控）。它是唯一权威、公开可序列化，因此观察者快照、AI 快照、权威存档与回放四条通道自动往返，沿用「主演」的既有口径。
+
+**端口与判定**：`begin/end_turn_input_delegation()` 与两个只读查询；五条前置校验（存在且在场地、禁止自环、被操控者必须是当前回合角色、禁止链式操控、幂等/顶替）任一失败零副作用。**唯一代理解析入口** `_resolve_turn_input_submitter()` 被输入锁定、可作答判定与房主授权复核三处共用。
+
+**到期与清理**：被操控者回合结束（`phaseAfter` 派发前）自动到期，用「回合角色 + 回合号」双重匹配保证无关角色回合结束不误清除；翻面被跳过的回合没有回合结束语义，改由下一个真实回合清除；死亡/离场在与 `clear_starring` 同处清理。
+
+**第一视角**：离线复用 `_set_offline_manual_control_player()`（不新增第二套实现），优先级高于「控制所有角色」；新增离线影子值 `_offline_human_identity_id` 承载「本机真人是谁」，与会被改写的 `local_human_player_id` 分离。
+
+**局域网协议**：新增按观察者裁剪的 `turn_input_controlled_actor_ids`、控制器单向下发给网关的代理授权表（网关零规则语义）、以被操控者为观察者的定向权重快照、掉线即清登记与授权、重连只重发授权表、授权不可用时显式降级（`lan_turn_control_degraded`）。`PROTOCOL_VERSION` 不提升（纯增量，旧客户端安全退化）。
+
+**验证过程中修复的七个真实缺陷**（详见 `临时反馈文档.md`）：输入锁定作用域过宽、接管擦除本机真人身份、`_bound_local_player_id()` 离线误用 LAN 绑定值、锁定函数漏接提交入口、房主复核误拒内部 AI 提交、过期发送者上下文被本机动作继承、被操控座位重复注册 AI 抢占真人输入通道。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (pending) | 见本批次回复中的 Git 提交描述 |
+
+### Testing
+
+- [OK] `TURN_CONTROL_PASS begin_guard+idempotence+proxy_submit+input_lock+answerable+expiry+cleanup+snapshot+view_takeover`
+- [OK] `LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+disconnect+reconnect+degradation`
+- [OK] `SMOKE_PASS game_over winner=renegade actions=267`
+- [OK] `CONTROL_ALL_CHARACTERS_PASS` / `ZHUYAN_ZHILI_PASS` / `PHASE_PROGRESSION_PASS` / `GAMEPLAY_REGRESSION_PASS`
+- [OK] `LAN_NETWORK_PASS` / `LAN_MATCH_FLOW_PASS` / `LAN_RECONNECT_PASS` / `LAN_KICK_REJOIN_PASS` / `MATCH_REPLAY_PASS`
+- [OK] `UI_LAYOUT_PASS` / `AI_POLICY_PASS` / `PERFORMANCE_AND_PACING_PASS` / `STALL_WATCHDOG_PASS` / `AUTO_MANAGEMENT_PASS` / `EVENT_RUNTIME_PASS` / `SKILL_SETTLEMENT_RUNTIME_PASS`
+- [OK] 内容侧 `NEW_CHARACTER_MECHANICS_PASS` / `TINGYUN_MECHANICS_PASS` / `ZHENZHU_MECHANICS_PASS`
+- [OK] 合计 22 个测试场景全部 PASS，`GameDatabase.validation_errors` 为空
+
+### Status
+
+[OK] **In Progress**（实现与验证完成；待提交与归档）

@@ -1002,6 +1002,8 @@ func _on_lan_connection_state_changed(is_connected: bool, message: String) -> vo
 func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 	if match_controller.network_gateway.is_lan_client():
 		match_controller.local_human_player_id = local_player_id
+		# 协议身份绑定：之后即使因回合操控切换到被操控者视角，上行归属与代理授权仍按本绑定值判定。
+		match_controller.call("_bind_lan_bound_player_id", local_player_id)
 		match_controller.clear_remote_network_state()
 		match_log_panel.clear_entries()
 		card_use_animation_layer.clear_presentations()

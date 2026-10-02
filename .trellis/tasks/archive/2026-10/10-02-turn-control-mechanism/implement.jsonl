@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/project/index.md", "reason": "跨层全局约定：协作口吻、注释规范、文档同步、验证方式（开工前必读）"}
+{"file": ".trellis/spec/project/collaboration-rules.md", "reason": "注释与命名规范、原文不可变铁律"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "改代码必须同步的文档清单与《游戏机制与玩法内容》数值记录口径"}
+{"file": ".trellis/spec/project/verification.md", "reason": "测试运行方式、数据校验边界、内容增长后的测试稳定性约定"}
+{"file": ".trellis/spec/core/index.md", "reason": "权威规则层职责与开工前检查清单"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "单向依赖、状态结构与快照可见性、移牌唯一边界"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "事件运行时步骤契约、暂停令牌、阶段推进端口"}
+{"file": ".trellis/spec/adapters/network-layer.md", "reason": "三种网络模式、房主权威模型、actor 防伪、定向私有快照、断线重连"}
+{"file": ".trellis/spec/adapters/ai-pipeline.md", "reason": "AI 注册/注销链路与四层架构（本机制只复用不新增策略）"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "界面只渲染快照并提交动作，不得直接改写 GameState"}
