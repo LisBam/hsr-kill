@@ -80,6 +80,13 @@ var dynamic_skill_descriptions: Dictionary = {}
 ## 当前角色持有的公开标记；键为稳定标记ID，值包含单字图标、名称、说明、数量与来源角色，全部观察者均可见。
 var public_marks: Dictionary = {}
 
+## 本角色本回合的操作由谁提供；-1 表示由本人操作，大于等于0 时为操控者的稳定 player_id。
+## 取值只允许 -1 或合法玩家 ID，默认 -1 表示无操控登记。该字段是「本回合由xx操控」的**唯一权威事实**：
+## 只允许经 MatchController.begin_turn_input_delegation() / end_turn_input_delegation() 写入，内容层与界面只读。
+## 它属于公开信息（所有观察者都需要显示谁正在被谁操控），因此写入 to_dict 的公开部分并进入权威存档；
+## 修改它会让被操控者的输入锁定、第一视角归属与代理提交授权三处判定同时改变。
+var turn_input_delegate_id: int = -1
+
 ## 当前是否由基础 AI 代替真人执行操作；默认 false，仅在真人主动托管或联机掉线后由权威控制器写入，并会同步到所有观察者。
 var auto_managed: bool = false
 
@@ -316,6 +323,8 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.character_corner_text_entries = (data.get("character_corner_text_entries", {}) as Dictionary).duplicate(true)
 	player.dynamic_skill_descriptions = (data.get("dynamic_skill_descriptions", {}) as Dictionary).duplicate(true)
 	player.public_marks = (data.get("public_marks", {}) as Dictionary).duplicate(true)
+	# 操控登记按权威口径恢复；旧存档缺少该键时按 -1（无登记）处理，语义安全。
+	player.turn_input_delegate_id = int(data.get("turn_input_delegate_id", -1))
 	player.auto_managed = bool(data.get("auto_managed", false))
 	player.auto_managed_offline = false
 	player.wine_used = bool(data.get("wine_used", false))
@@ -533,6 +542,7 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"character_corner_text_entries": character_corner_text_entries.duplicate(true),
 		"dynamic_skill_descriptions": dynamic_skill_descriptions.duplicate(true),
 		"public_marks": public_marks.duplicate(true),
+		"turn_input_delegate_id": turn_input_delegate_id,
 		"auto_managed": auto_managed,
 		"auto_managed_offline": auto_managed_offline,
 		"wine_used": wine_used,

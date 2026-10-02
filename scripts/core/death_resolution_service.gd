@@ -297,6 +297,9 @@ func _cleanup(sequence: RuleStepSequence) -> void:
 	# 「主演」是角色级唯一状态，阵亡或换将后必须立即空缺；本步骤覆盖全部对局模式，因此复活与换将也不会继承旧主演。
 	if _host.starring_role_service != null:
 		_host.starring_role_service.clear_starring(victim.player_id)
+	# 回合操控登记：死者既可能是被操控者（撤销其登记），也可能是操控者（撤销以他为操控者的全部登记）。
+	# 本步骤在全部对局模式下都会执行，因此阵亡、复活与换将都不会让死者继续持有操控权或继续被他人操控。
+	_host._clear_turn_input_delegation_for_player(victim.player_id)
 	match str(sequence.context.mode):
 		"normal":
 			if _host.state.current_player_id == victim.player_id:
