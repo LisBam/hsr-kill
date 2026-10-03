@@ -1,7 +1,7 @@
 extends Node
 
 ## 卡芙卡与【言灵】【游丝】专项回归。
-## 覆盖四个层次：内容口径（卡牌/技能/武将原文与数值）、【言灵】两段（开局洗入三张专属牌、任意角色使用延时锦囊时摸牌并成为主演）、
+## 覆盖四个层次：内容口径（卡牌/技能/武将原文与数值）、【言灵】两段（开局洗入五张专属牌、任意角色使用延时锦囊时摸牌并成为主演）、
 ## 【游丝】两段（秘密置牌与私有事实、回合结束时观看并获得一张牌）、以及配套 AI（救援判定区、敌方回放低价值牌、被发动者的出牌压力）。
 ##
 ## 全部断言都通过正式公开端口完成：不直接改写牌堆顺序、不直接移动牌，也不读取技能实例字段。
@@ -24,13 +24,13 @@ const KAFUKA_CHARACTER_ID: String = "kafuka"
 const YANLING_CARD_DESCRIPTION: String = "判定结果为梅花时，若场上有“主演”，本回合由“主演”操控。"
 
 ## 【言灵】技能玩家可见描述原文；必须与需求提供文本逐字一致。
-const YANLING_SKILL_DESCRIPTION: String = "锁定技，游戏开始时，你往牌堆中随机加入三张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。"
+const YANLING_SKILL_DESCRIPTION: String = "锁定技，游戏开始时，你往牌堆中随机加入五张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。"
 
 ## 【游丝】技能玩家可见描述原文；必须与需求提供文本逐字一致。
 const YOUSI_SKILL_DESCRIPTION: String = "其他角色的回合开始时，你可以将一张手牌置于牌堆顶的第一张或第二张（其他角色不可知）。若如此做，本回合结束时，若其手牌中有此牌，你观看并获得其一张牌。"
 
-## 开局应洗入的【言灵】张数；与需求原文「随机加入三张【言灵】」一致。
-const EXPECTED_INSERT_COUNT: int = 3
+## 开局应洗入的【言灵】张数；与需求原文「随机加入五张【言灵】」一致。
+const EXPECTED_INSERT_COUNT: int = 5
 
 ## 专属牌自带牌面：梅花。花色取值域与 CardInstance.suit 一致。
 const EXPECTED_CARD_SUIT: String = "club"
@@ -364,7 +364,7 @@ func _test_content_metadata() -> bool:
 	return true
 
 
-## 【言灵】第一段：游戏开始时机派发后，牌堆恰好增加三张【言灵】，牌面恒为梅花K，位次随机且逐条写入随机历史。
+## 【言灵】第一段：游戏开始时机派发后，牌堆恰好增加五张【言灵】，牌面恒为梅花K，位次随机且逐条写入随机历史。
 ## 同一场景同时验证「游戏开始时也算一次真实发动」：必须有技能历史记录、公开日志与发动表现，而不是静默改写牌堆。
 func _test_yanling_game_start_insertion() -> bool:
 	_reset_state(3)
@@ -382,7 +382,7 @@ func _test_yanling_game_start_insertion() -> bool:
 		captured_log_messages.append(log_message))
 	# 发动前的技能历史长度；本时机必须恰好追加一条记录。
 	var activation_history_before: int = _controller.state.get_player(0).skill_history.size()
-	# 开局前的牌堆长度与随机历史长度；两者都必须恰好增加3，多一张或少一张都说明洗入次数错误。
+	# 开局前的牌堆长度与随机历史长度；两者都必须恰好增加5，多一张或少一张都说明洗入次数错误。
 	var pile_size_before: int = _controller.state.draw_pile.size()
 	var history_before: int = _controller.state.random_history.size()
 	_controller._emit_rule_timing("gameStart", -1, -1, -1, {"player_count":3})
@@ -432,7 +432,7 @@ func _test_yanling_game_start_insertion() -> bool:
 
 ## 「游戏开始时」的时机口径：它派发在起始手牌与手气卡全部结束之后、第一轮开始之前。
 ## 断言方式是跑一遍真实开局：手气卡阶段里牌堆不得出现任何【言灵】（因此刷新手气卡也刷不到），
-## 手气卡全部确认完毕之后牌堆必须恰好出现三张，并且该时机派发时手气卡阶段已经关闭。
+## 手气卡全部确认完毕之后牌堆必须恰好出现五张，并且该时机派发时手气卡阶段已经关闭。
 ## 本场景用手气卡次数为1的真人座位驱动刷新，AI 座位由内置逻辑自行确认保留。
 func _test_game_start_timing_after_mulligan() -> bool:
 	# 设置隔离：手气卡张数会写盘，必须指向独立临时文件，避免污染开发者本机的正式设置。
@@ -506,7 +506,7 @@ func _test_game_start_timing_after_mulligan() -> bool:
 	# 派发瞬间手气卡服务必须已经停止等待：这条断言就是“游戏开始时在手气卡之后”的权威证据。
 	if mulligan_still_active_at_game_start != [false]:
 		return _fail("timing_mulligan_active_at_game_start=%s" % str(mulligan_still_active_at_game_start))
-	# 手气卡结束之后：牌堆恰好增加三张【言灵】，它们因此只可能被首轮及以后的摸牌抽到。
+	# 手气卡结束之后：牌堆恰好增加五张【言灵】，它们因此只可能被首轮及以后的摸牌抽到。
 	if _count_yanling_in_draw_pile() != EXPECTED_INSERT_COUNT:
 		return _fail("yanling_after_mulligan=%d" % _count_yanling_in_draw_pile())
 	# 同一次发动同样进入技能历史：真实开局路径与前面的手动派发路径必须产生完全一致的记录。
