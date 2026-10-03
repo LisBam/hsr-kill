@@ -469,10 +469,20 @@ func _test_yousi_placement_private_fact() -> bool:
 		return _fail("yousi_pressure=%f" % _controller.get_ai_hand_pressure(2))
 	if not is_equal_approx(_controller.get_ai_hand_pressure(1), 0.0) or not is_equal_approx(_controller.get_ai_hand_pressure(0), 0.0):
 		return _fail("yousi_pressure_leaked others=%f/%f" % [_controller.get_ai_hand_pressure(1), _controller.get_ai_hand_pressure(0)])
+	# 读档可重建性：宿主的重建探测用的是**未绑定 host** 的实例 + 承载角色自身状态，
+	# 因此这里按同一口径断言“状态写在承载角色身上且不依赖 host”，否则读档后压力会静默消失。
+	var pressure_probe: PlayerEffect = GameDatabase.create_player_effect(PRESSURE_EFFECT_ID)
+	if pressure_probe == null or not pressure_probe.has_persisted_state(_controller.state.get_player(2)):
+		return _fail("yousi_pressure_not_restorable")
+	if pressure_probe.has_persisted_state(_controller.state.get_player(1)):
+		return _fail("yousi_pressure_restorable_on_wrong_player")
 	# 回合结束时效果自行到期；这里直接按权威端口移除后再确认，避免依赖完整回合尾部编排。
 	_remove_pressure_effect(2)
 	if not is_equal_approx(_controller.get_ai_hand_pressure(2), 0.0):
 		return _fail("yousi_pressure_not_removed=%f" % _controller.get_ai_hand_pressure(2))
+	# 移除后持久状态必须一并清除，否则读档会把上一回合的压力错误地复活。
+	if pressure_probe.has_persisted_state(_controller.state.get_player(2)):
+		return _fail("yousi_pressure_state_not_cleared")
 	return true
 
 
