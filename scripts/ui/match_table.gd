@@ -2048,14 +2048,15 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []
-	# 永久失去全部技能的角色不再显示任何技能按钮，模式技能也一并隐藏。
-	# 该标记由【留白】等效果写入并进入公开快照，是界面判断“技能已被真实移除”的唯一依据；
+	# 永久失去技能名单；名单内的技能不再显示按钮，模式技能与之后新获得的技能不受影响。
+	# 该名单由【留白】等效果写入并进入公开快照，是界面判断“某个技能已被真实移除”的唯一依据；
 	# 若继续只读武将静态定义，已卸载的技能会继续占位并出现在悬停与右键详情里。
-	if bool(player_snapshot.get("skills_permanently_removed", false)):
-		return result
+	var permanently_removed_skill_ids: Array = player_snapshot.get("permanently_removed_skill_ids", []) as Array
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
 		# 当前技能 ID 与元数据；缺失定义仍保留占位按钮，便于发现普通技能配置错误。
 		var skill_id: String = str(skill_id_variant)
+		if permanently_removed_skill_ids.has(skill_id):
+			continue
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		if bool(skill_definition.get("leader_skill", false)) and identity != "leader":
 			continue
@@ -2067,6 +2068,9 @@ func _get_visible_skill_ids(character: Dictionary, identity: String, player_snap
 		mode_skill_ids = IdentityRules.new().get_mode_skill_ids(identity, match_mode)
 	for mode_skill_id_variant: Variant in mode_skill_ids:
 		var mode_skill_id: String = str(mode_skill_id_variant)
+		# 已被永久失去的模式技能同样不显示；否则技能栏会留下一个点不动的空按钮。
+		if permanently_removed_skill_ids.has(mode_skill_id):
+			continue
 		if not mode_skill_id.is_empty() and not result.has(mode_skill_id):
 			result.append(mode_skill_id)
 	# 局内临时技能；例如【铁壁】授予的【琥珀】，必须显示在主视角技能栏。
