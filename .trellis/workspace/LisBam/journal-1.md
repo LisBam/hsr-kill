@@ -290,3 +290,67 @@
 - 技能【言灵】开场布三张牌 = 调用 `create_and_insert_card_into_draw_pile("yanling", "", 0, 1)` 三次；技能【游丝】直接调用 `request_hand_card_pile_position()` 与 `place_hand_card_on_draw_pile_top()`
 - 后续 AI 必须按 `项目专属AGENTS.md` 2.3 扩展**通用**决策逻辑并写明扩展范围，不能只写需求提示里的那一条分支
 
+
+## Session 8: 新增卡牌【言灵】、武将卡芙卡与技能【言灵】【游丝】
+<!-- trellis-session: v=2 fp=kafuka-yanling-card-character-skills -->
+
+**Date**: 2026-10-04
+**Task**: `.trellis/tasks/archive/2026-10/10-02-yanling-card/` 与 `.trellis/tasks/archive/2026-10/10-02-kafuka-character-and-skills/`（父任务 `10-02-kafuka-new-mechanics` 的最后两个子任务）
+**Branch**: `master`
+
+### Summary
+
+交付卡芙卡需求链的**最后三段内容**，父任务的四个子任务至此全部归档：①专属卡牌【言灵】（梅花K 延时锦囊，判定为梅花且场上有「主演」时本回合由主演操控）；②武将卡芙卡（星核猎手/女/体力上限 3）与技能【言灵】（锁定技：`gameStart` 随机布三张牌、任意角色使用延时锦囊牌时摸 1 张并成为主演）；③技能【游丝】（其他角色回合开始秘密置牌、该回合结束按其手牌判定二段收益）与两段配套 AI。
+
+### Main Changes
+
+- 新增 `game_data/cards/yanling.gd`：`trick`/`delayed`/`exclusive`、自带牌面梅花K、判定三条件、AI 硬门槛（队友 `6.0` / 拒绝 `-100.0` / 非最近敌人 `-100.0`）
+- 新增 `game_data/characters/kafuka.gd`：星核猎手、女、体力上限 `3`、技能顺序【言灵】【游丝】
+- 新增 `game_data/skills/yanling.gd`：`subscribe_timing("gameStart"|"useCard", …, "global")`；入堆 3 次且位次为 `DRAW_PILE_POSITION_RANDOM`；延时锦囊识别用 `type=="trick" and delayed==true`
+- 新增 `game_data/skills/yousi.gd`：`phaseBefore`/`phaseAfter` 均 `role="global"`；置牌 → 私有事实 → 压力效果；二段按 `turn_player_id + turn_number` 双重匹配、**先无条件清事实**、候选为明示手牌 + 装备区（不含判定区）
+- 新增 `game_data/effects/yousi_pressure.gd`：`get_ai_hand_pressure() = 3.0`，随承载角色本回合结束自行移除；持久状态写在**承载角色自己**的 `character_form_state`（`yousi_pressure_active`）
+- 新增通用 AI 压力通道：`PlayerEffect.get_ai_hand_pressure()`（基类 `0.0`）→ `PlayerEffectService` 求和 → `MatchController.get_ai_hand_pressure()` → `AICoordinator.request_action(..., hand_pressure)` → `BasicAIPolicy.set_hand_pressure()/`_get_hand_pressure_bonus()`（只给消耗自己手牌的动作加分，一次决策后清零）
+- 新增 `NonameAIEvaluator.get_starring_player_id()` 与 `should_dump_hand_against_starring()`：只用公开角标与态度，不读隐藏信息
+- 新增 `tests/kafuka_mechanics_test.gd/.tscn`（7 个阶段标记、看门狗 20 秒）
+- 修复 `tests/conquest_coop_test.gd` 的座位敏感性：新增 `_settle_pending_resolution_choice()` 在机缘解析期间结算无人驱动的窗口；超时诊断补充 `pending_kind/pending_chooser/lineup/hp`
+- 同步 `docs/内容制作指南.md`、`docs/游戏机制与玩法内容.md`、`docs/卡牌系统.md`、`docs/AI模块.md`、`docs/界面与交互.md`、`README.md`、`.trellis/spec/content/`（index/skill-authoring/content-ai）与 `临时反馈文档.md`
+
+### Key Decisions
+
+- **延时锦囊不写牌名白名单**：判定口径为 `type == "trick"` 且 `delayed == true`，未来新增的延时锦囊自动纳入，符合内容自包含规范。
+- **两种时机都必须 `role="global"`**：`gameStart` 的 `player_id` 恒为 `-1`（`role="player"` 静默收不到）；「一名角色」「其他角色」原文本就跨角色。
+- **【游丝】的私有事实不复用 `character_form_state`**：其序列化条件是 `reveal_private`，而 AI 快照是 `to_dict(该AI, true)`，复用会让每个 AI 读到秘密。
+- **「其他AI」提示降级为公开门槛下的标量倾向**：字面实现要求 AI 知道牌堆顶两张，与同一需求里的「其他角色不可知」直接冲突，且 AI 评估器是纯快照函数；改为「消耗自己手牌加分」并由公开主演角标 + 态度设门槛。
+- **两个位次在常规分支同分**：AI 评分必须确定性（否则回放不可复现），随机性交给既有枚举顺序。
+- **压力效果的持久状态必须写在承载角色自己身上**：宿主重建探测用的是**未绑定 host** 的实例（`GameDatabase.create_player_effect()` 不 `bind()`），因此 `has_persisted_state(player)` 只能读传进来的那个角色的状态。初版依赖 `host` 读取**卡芙卡**的置牌事实，导致该函数在真实调用路径上恒为 `false`（读档后压力静默消失），已修复并补断言。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `585c8f6` | 新增卡牌【言灵】、武将卡芙卡与技能【言灵】【游丝】（24 项，含两段技能与 AI、压力通道、专项测试、文档同步、子任务归档与协作测试修复） |
+| （本次） | 修复游丝压力效果读档探测恒判无状态、持久状态改写到承载角色自身、补充可重建与清除断言 |
+
+### Testing
+
+- [OK] `KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure`
+- [OK] `SMOKE_PASS`（卡牌 47 / 技能 102 / 武将 48）/ `AI_POLICY_PASS cards=47`
+- [OK] `EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS` / `ZHUYAN_ZHILI_PASS` / `TURN_CONTROL_PASS` / `LAN_TURN_CONTROL_PASS`
+- [OK] `GAMEPLAY_REGRESSION_PASS` / `NEW_CHARACTER_MECHANICS_PASS` / `CARD_ACTION_SEMANTICS_PASS` / `MAIN_MENU_PASS`
+- [OK] `PHASE_PROGRESSION_PASS` / `RULE_TIMING_PASS catalog=236` / `DRAW_SEQUENCE_PASS` / `OPPORTUNITY_SYSTEM_PASS`
+- [OK] `MATCH_REPLAY_PASS` / `PERFORMANCE_AND_PACING_PASS` / `STALL_WATCHDOG_PASS`
+- [OK] `CONQUEST_COOP_PASS`（修复前因新增第 48 名武将改变固定种子座位而超时；已在未改动的 HEAD 基线工作树确认基线通过）
+- [OK] 六个新增/改动脚本 `--check-only` 全部零错误
+- [OK] 反事实验证：把 `yousi_pressure.has_persisted_state()` 改成恒 `false` → `KAFUKA_FAIL yousi_pressure_not_restorable`（改动已还原并重跑通过）
+- [OK] `CONQUEST_SAVE_PASS` / `CONQUEST_MODE_PASS` / `WHEEL_DUEL_MODE_PASS` / `CONQUEST_SINGLE_PLAYER_PASS`
+- [KNOWN] `audio_system_test` → `AUDIO_SYSTEM_FAIL card_voice_auto_respond_missing=87`：**既有缺陷**，在未改动的 HEAD 基线工作树同样复现同一数字
+
+### Status
+
+[OK] **Completed**（已提交并归档至 `.trellis/tasks/archive/2026-10/10-02-yanling-card/` 与 `…/10-02-kafuka-character-and-skills/`）
+
+### Next Steps
+
+- 父任务 `10-02-kafuka-new-mechanics` 的四个子任务全部归档，跨子任务验收标准全部勾选
+- 可选后续：卡芙卡插画与技能/阵亡语音素材；`tests/audio_system_test.gd` 的既有失败（`card_voice_auto_respond_missing`）
+
