@@ -173,6 +173,14 @@ const TOP_INFO_PRIMARY_FONT_SIZE: int = 16
 ## 当前默认0.24秒以匹配加快后的摸牌节奏；同一正式手牌入场逻辑也服务于其他获得牌，从而保持本地手牌反馈一致。
 @export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.24
 
+## 虚拟手牌替换请求期间真实手牌向左离场、可选牌向右离场的持续时间。
+## 默认0.24秒与摸牌入场保持一致，使“手牌换成可选牌再换回来”的往复节奏读起来是同一个动作，运行时可按主题调整。
+@export_range(0.1, 1.5, 0.01) var local_hand_exit_duration: float = 0.24
+
+## 手牌离场时越过可视手牌区边缘的额外距离；默认24像素与 local_hand_gain_entry_margin 左右对称。
+## 该距离保证离场牌完全离开滚动区裁剪范围，运行时通常无需修改。
+@export_range(0.0, 96.0, 1.0) var local_hand_exit_margin: float = 24.0
+
 ## 主视角武将牌与客户区底边之间的垂直留白；默认0像素为十人局右侧下方座位腾出完整的垂直安全区，运行时通常无需动态修改。
 @export_range(0.0, 96.0, 1.0) var local_player_card_bottom_margin: float = 0.0
 
@@ -411,6 +419,25 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 
 ## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
 var _local_hand_gain_tweens: Dictionary = {}
+
+## 当前虚拟手牌替换模式是否已经生效；为 true 时手牌区显示的是技能请求声明的可选虚拟牌而不是真实手牌。
+var _virtual_hand_choice_active: bool = false
+
+## 虚拟手牌入场序列是否仍在播放真实手牌离场动画；期间禁止重新对账手牌，避免打断离场补间。
+var _virtual_hand_entry_playing: bool = false
+
+## 虚拟手牌离场序列是否已经启动；防止连续快照刷新重复播放同一段离场动画。
+var _virtual_hand_exit_playing: bool = false
+
+## 当前显示的虚拟手牌占位 UID 到卡牌视图映射；只保存界面节点，虚拟牌不会写入权威对局状态。
+## 同一批节点同时登记在 _card_views 中，以复用统一的选中描边、悬停与入场动画链路。
+var _virtual_hand_views: Dictionary = {}
+
+## 当前正在向左离场的真实手牌补间；补间对象由整批手牌共享，重新开局时统一停止。
+var _local_hand_exit_tween: Tween
+
+## 当前正在向右离场的虚拟手牌补间；补间对象由整批虚拟牌共享，重新开局时统一停止。
+var _virtual_hand_exit_tween: Tween
 
 ## 当前等待批次完成的摸牌表现数据；键为控制器分配的稳定批次 ID，值保存目标玩家和按牌堆顺序到达的瞬时牌面副本。
 var _draw_presentation_batches: Dictionary = {}
@@ -2274,6 +2301,9 @@ func _is_inline_response_skill_available(skill_id: String) -> bool:
 
 ## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
 func _render_local_hand() -> void:
+	# 虚拟手牌替换请求：手牌区整体切换为技能声明的可选虚拟牌，真实手牌先向左离场，请求结束后再摸牌式回归。
+	if _refresh_virtual_hand_choice_mode():
+		return
 	# 当前快照所属对局 ID；新对局必须放弃上一局仅在客户端保存的手牌排列。
 	var current_match_id: String = str(_snapshot.get("match_id", ""))
 	if current_match_id != _hand_order_match_id:
@@ -2380,6 +2410,240 @@ func _create_local_hand_card_view(card_uid: int) -> CardView:
 	card_view.information_dismissed.connect(_on_information_dismissed.bind(card_view))
 	hand_container.add_child(card_view)
 	return card_view
+
+
+## 统一维护「虚拟手牌替换」模式状态机；返回 true 表示手牌区已由本模式接管，调用方不得再渲染真实手牌。
+##
+## 本模式把真实手牌临时换成技能声明的可选虚拟牌：进入时真实手牌向左离场，可选牌以摸牌动画进入；
+## 玩家像使用真实手牌一样选中一张并点击目标后确认；请求结束时可选牌向右离场，真实手牌再以摸牌动画回归。
+## 虚拟牌只是选择介质，从未真正加入手牌，规则效果仍由技能自行结算。
+##
+## 三条走向：请求仍是虚拟手牌请求 → 保证虚拟牌显示在手牌区；请求已结束 → 播放离场并交回真实手牌；
+## 与虚拟手牌无关 → 返回 false，由调用方按原有逻辑渲染真实手牌。
+func _refresh_virtual_hand_choice_mode() -> bool:
+	if _is_virtual_hand_request(_inline_card_choice):
+		_begin_virtual_hand_entry()
+		if _virtual_hand_choice_active:
+			# 快照刷新期间技能可能重新枚举候选，因此每次都对账一次虚拟牌集合。
+			_render_virtual_hand_choice()
+		return true
+	if _virtual_hand_choice_active or _virtual_hand_exit_playing:
+		return _begin_virtual_hand_exit()
+	return false
+
+
+## 判断一个选择请求是否为虚拟手牌替换请求；稳定标记由技能侧请求端口写入，界面不按标题或候选数量猜测规则。
+func _is_virtual_hand_request(choice_data: Dictionary) -> bool:
+	if choice_data.is_empty():
+		return false
+	return bool((choice_data.get("context", {}) as Dictionary).get("virtual_hand", false))
+
+
+## 提取请求中的虚拟候选；只保留显式带 virtual_hand 标记的条目，避免把混入的真实牌当作虚拟牌渲染。
+func _get_virtual_hand_candidates(choice_data: Dictionary) -> Array[Dictionary]:
+	# 虚拟候选结果；顺序沿用请求声明顺序，也就是手牌区从左到右的显示顺序。
+	var result: Array[Dictionary] = []
+	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
+		# 当前候选快照；标记缺失时属于普通实体牌候选，交由原手牌区逻辑处理。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if bool(candidate.get("virtual_hand", false)):
+			result.append(candidate)
+	return result
+
+
+## 确保虚拟手牌模式已经进入；首次调用时先播放真实手牌向左离场动画，动画结束后再生成虚拟候选。
+func _begin_virtual_hand_entry() -> void:
+	if _virtual_hand_choice_active or _virtual_hand_entry_playing:
+		return
+	# 当前仍在手牌容器中显示的真实手牌；它们整体向左离场，让出整个手牌区。
+	var exiting_views: Array[CardView] = []
+	var exiting_uids: Array[int] = []
+	for card_uid_variant: Variant in _card_views.keys():
+		# 当前手牌实体 UID 与视图；只有真正停留在手牌容器里的节点参与离场。
+		var card_uid: int = int(card_uid_variant)
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			continue
+		exiting_views.append(card_view)
+		exiting_uids.append(card_uid)
+	if exiting_views.is_empty():
+		# 手牌区本就为空；直接进入虚拟手牌模式，不播放空的离场动画。
+		_virtual_hand_choice_active = true
+		return
+	_virtual_hand_entry_playing = true
+	_play_virtual_hand_entry_sequence(exiting_views, exiting_uids)
+
+
+## 播放真实手牌向左离场动画，随后把手牌区交给虚拟候选。
+##
+## 等待使用定时器而不是补间 finished 信号：离场补间可能在重新开局时被强制停止，而定时器仍会恢复执行，
+## 因此播放标记一定会被清空，不会把界面卡在“正在离场”的中间状态。
+func _play_virtual_hand_entry_sequence(exiting_views: Array[CardView], exiting_uids: Array[int]) -> void:
+	# 离场补间；全部真实手牌并行左移并淡出，使“手牌退场”读起来是一次整体动作。
+	_local_hand_exit_tween = create_tween()
+	_local_hand_exit_tween.set_parallel(true)
+	_local_hand_exit_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	for card_view: CardView in exiting_views:
+		_local_hand_exit_tween.tween_property(card_view, "hand_entry_offset", _get_hand_exit_offset(card_view, true), local_hand_exit_duration)
+		_local_hand_exit_tween.tween_property(card_view, "modulate:a", 0.0, local_hand_exit_duration)
+	await get_tree().create_timer(local_hand_exit_duration).timeout
+	_virtual_hand_entry_playing = false
+	# 离场期间可能已经重新开局；逐项校验后只释放仍登记在映射中的旧节点。
+	for card_uid: int in exiting_uids:
+		_release_local_hand_view(card_uid)
+	# 请求可能在离场动画期间结束（例如取消或技能条件失效）；此时不再生成虚拟牌，直接交回真实手牌。
+	if not _is_virtual_hand_request(_inline_card_choice):
+		_render_local_hand()
+		return
+	_virtual_hand_choice_active = true
+	_render_virtual_hand_choice()
+
+
+## 结束虚拟手牌模式：先播放虚拟候选向右离场动画，再交回真实手牌。
+##
+## 返回 true 表示手牌区仍由本模式接管（离场动画进行中，调用方应停止渲染）；返回 false 表示模式已同步清理完毕，
+## 调用方可以在同一次调用里继续渲染真实手牌。补间被 kill 时不会发出 finished，因此同步收尾分支必须存在。
+func _begin_virtual_hand_exit() -> bool:
+	if _virtual_hand_exit_playing:
+		return true
+	if _virtual_hand_views.is_empty():
+		_finish_virtual_hand_choice()
+		return false
+	_virtual_hand_exit_playing = true
+	# 离场补间；虚拟候选整体向右移出并淡出，与入场方向一致，读起来是“收起这次临时选择”。
+	_virtual_hand_exit_tween = create_tween()
+	_virtual_hand_exit_tween.set_parallel(true)
+	_virtual_hand_exit_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	for candidate_uid_variant: Variant in _virtual_hand_views.keys():
+		# 当前虚拟牌节点；节点可能已被重新开局释放，缺失时跳过。
+		var card_view: CardView = _virtual_hand_views.get(candidate_uid_variant) as CardView
+		if card_view == null or not is_instance_valid(card_view):
+			continue
+		_virtual_hand_exit_tween.tween_property(card_view, "hand_entry_offset", _get_hand_exit_offset(card_view, false), local_hand_exit_duration)
+		_virtual_hand_exit_tween.tween_property(card_view, "modulate:a", 0.0, local_hand_exit_duration)
+	_virtual_hand_exit_tween.finished.connect(_on_virtual_hand_exit_animation_finished)
+	return true
+
+
+## 虚拟候选离场动画结束；释放可选牌并以摸牌动画恢复真实手牌。
+func _on_virtual_hand_exit_animation_finished() -> void:
+	_virtual_hand_exit_playing = false
+	_finish_virtual_hand_choice()
+	_render_local_hand()
+
+
+## 释放全部虚拟候选并把真实手牌标记为待入场；调用后手牌区不再属于虚拟手牌模式。
+func _finish_virtual_hand_choice() -> void:
+	for candidate_uid_variant: Variant in _virtual_hand_views.keys():
+		_release_virtual_hand_view(int(candidate_uid_variant))
+	_virtual_hand_views.clear()
+	_virtual_hand_choice_active = false
+	_virtual_hand_exit_playing = false
+	# 真实手牌回归沿用获得牌入场链路：把当前快照中的手牌标记为待入场，
+	# 下一步重新对账会重建这些节点并从手牌区右侧像摸牌一样进入，而不是瞬间出现。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	for returning_card_variant: Variant in (local_player.get("hand", []) as Array) + (local_player.get("wooden_ox_storage", []) as Array):
+		# 当前回归手牌 UID；无效 UID 不会进入待入场集合。
+		var returning_uid: int = int((returning_card_variant as Dictionary).get("uid", -1))
+		if returning_uid >= 0:
+			_pending_local_hand_gain_uids[returning_uid] = true
+
+
+## 把手牌区渲染为当前请求声明的虚拟候选；与真实手牌对账同构，但牌面固定隐藏花色与点数。
+func _render_virtual_hand_choice() -> void:
+	var candidates: Array[Dictionary] = _get_virtual_hand_candidates(_inline_card_choice)
+	# 当前请求允许交互的候选 UID；虚拟牌与真实牌共用同一份权威候选集合。
+	var inline_candidate_uids: Array[int] = _get_inline_candidate_uids()
+	# 本轮对账后的虚拟牌映射；只包含本次请求仍然声明的占位 UID。
+	var next_views: Dictionary = {}
+	# 当前按请求顺序排列的虚拟牌节点；对账完成后统一调整子节点顺序。
+	var ordered_views: Array[CardView] = []
+	for candidate: Dictionary in candidates:
+		# 当前虚拟候选；牌面固定取自 card_data，占位 UID 是复用节点的唯一身份。
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+		var definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
+		var card_view: CardView = _virtual_hand_views.get(candidate_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			card_view = _create_virtual_hand_card_view(candidate_uid)
+		# 虚拟牌没有花色也没有点数（视为使用的牌本身不带这两项），因此 hide_suit_rank 固定为 true。
+		card_view.configure(card_data, definition, false, inline_candidate_uids.has(candidate_uid), true, true)
+		card_view.modulate.a = 1.0
+		next_views[candidate_uid] = card_view
+		ordered_views.append(card_view)
+	# 释放已经不在本次请求中的虚拟牌；请求被替换时不会残留上一批可选牌。
+	for existing_uid_variant: Variant in _virtual_hand_views.keys():
+		var existing_uid: int = int(existing_uid_variant)
+		if not next_views.has(existing_uid):
+			_release_virtual_hand_view(existing_uid)
+	_virtual_hand_views = next_views
+	for card_index: int in range(ordered_views.size()):
+		if ordered_views[card_index].get_index() != card_index:
+			hand_container.move_child(ordered_views[card_index], card_index)
+	hand_container.layout_cards_now()
+	# 新生成的虚拟牌以摸牌动画进入手牌区；已在场的牌偏移已归零，不会重复播放。
+	_start_pending_local_hand_gain_animations()
+
+
+## 创建一张虚拟候选卡牌视图；虚拟牌只是选择介质，因此不连接手牌拖拽排序信号。
+func _create_virtual_hand_card_view(candidate_uid: int) -> CardView:
+	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	card_view.visible = true
+	card_view.pressed.connect(_on_card_pressed.bind(candidate_uid))
+	hand_container.add_child(card_view)
+	_card_views[candidate_uid] = card_view
+	# 新节点需要一次入场动画；沿用获得牌待入场集合，使虚拟牌与真实摸牌的表现完全一致。
+	_pending_local_hand_gain_uids[candidate_uid] = true
+	return card_view
+
+
+## 释放一张虚拟候选视图；同时从统一手牌映射中移除，避免占位 UID 在后续对账里被当作真实牌。
+func _release_virtual_hand_view(candidate_uid: int) -> void:
+	_virtual_hand_views.erase(candidate_uid)
+	_release_local_hand_view(candidate_uid)
+
+
+## 从手牌容器与统一映射中释放一张手牌视图；真实手牌与虚拟牌共用，保证两套节点生命周期完全一致。
+func _release_local_hand_view(card_uid: int) -> void:
+	# 先停止该 UID 可能仍在运行的入场补间；此时映射仍在，取消逻辑可以安全地归零运行时偏移。
+	_cancel_local_hand_gain_animation(card_uid)
+	var card_view: CardView = _card_views.get(card_uid) as CardView
+	_card_views.erase(card_uid)
+	if card_view == null or not is_instance_valid(card_view):
+		return
+	if card_view.get_parent() == hand_container:
+		hand_container.remove_child(card_view)
+	card_view.queue_free()
+
+
+## 返回一张手牌向手牌区左/右外侧离场时使用的运行时偏移量；单位与 hand_entry_offset 一致。
+##
+## 距离取可视滚动区宽度加一张牌宽：从当前布局位置出发一定移出滚动区裁剪范围；配合同时播放的淡出，
+## 即使手牌区已经横向滚动，离场也一定会彻底消失在对应的那一侧。
+func _get_hand_exit_offset(card_view: CardView, from_left_side: bool) -> Vector2:
+	var exit_distance: float = hand_scroll.size.x + card_view.get_card_size().x + local_hand_exit_margin
+	return Vector2(-exit_distance if from_left_side else exit_distance, 0.0)
+
+
+## 停止仍在播放的两类手牌离场补间；补间被 kill 不会发出 finished，因此调用方必须自行清理模式状态。
+func _kill_hand_exit_tweens() -> void:
+	if _local_hand_exit_tween != null and _local_hand_exit_tween.is_valid():
+		_local_hand_exit_tween.kill()
+	_local_hand_exit_tween = null
+	if _virtual_hand_exit_tween != null and _virtual_hand_exit_tween.is_valid():
+		_virtual_hand_exit_tween.kill()
+	_virtual_hand_exit_tween = null
+
+
+## 丢弃全部虚拟手牌状态；重新开局或换将边界调用，避免旧局的占位 UID 残留在新对局手牌区。
+func _clear_virtual_hand_choice() -> void:
+	_kill_hand_exit_tweens()
+	_virtual_hand_entry_playing = false
+	_virtual_hand_exit_playing = false
+	_virtual_hand_choice_active = false
+	for candidate_uid_variant: Variant in _virtual_hand_views.keys():
+		_release_virtual_hand_view(int(candidate_uid_variant))
+	_virtual_hand_views.clear()
 
 
 ## 按本地保存的 UID 顺序整理同一手牌分区；离开分区的旧 UID 会移除，新进入的实体按权威快照追加。
@@ -3412,6 +3676,8 @@ func _reset_presentation_for_new_match() -> void:
 	# 未收齐的摸牌表现批次随旧局丢弃；新局与回放重演的批次 ID 从干净容器开始，不继承旧填充。
 	_draw_presentation_batches.clear()
 	_clear_local_hand_gain_animations()
+	# 虚拟手牌替换状态随旧局丢弃；否则新局可能残留上一局的占位 UID 与离场补间。
+	_clear_virtual_hand_choice()
 	_local_hand_display_order.clear()
 	_local_wooden_ox_display_order.clear()
 	_hand_order_match_id = ""
@@ -3862,7 +4128,8 @@ func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	for candidate_variant: Variant in choice_data.get("candidates", []) as Array:
 		# 当前候选快照；区域与所有者共同决定其是否已经显示在本地手牌或装备组件中。
 		var candidate: Dictionary = candidate_variant as Dictionary
-		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox", "equipment"]:
+		# 虚拟手牌候选同样显示在手牌区（由 _render_virtual_hand_choice 接管该区域），因此与手牌同级参与内联判定。
+		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) not in ["hand", "wooden_ox", "equipment", "virtual_hand"]:
 			return false
 	return true
 
