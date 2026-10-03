@@ -108,7 +108,18 @@
 - `RuleModifierPipeline` 是独立于触发器的**纯查询修正链**，供 card/target enabled、usable、respondable、in-range 查询使用。
 - `MatchController.get_card_use_preview()` 是 UI 使用的只读查询边界，返回可提交性、合法候选、规范化目标、目标模式、修正后的目标数与说明文本——**不返回 `GameState`/`PlayerState`/`CardInstance` 对象引用**。
 - `MatchController.get_match_start_validation_error()` 是开局前**不修改任何状态**的只读校验边界。
-- **用牌禁令（`validate_card_action_permission`）属于这条纯查询链**：内容层声明“这张实体牌此刻能不能使用/打出”（返回空串即允许），核心层只在**两个必经之路**咨询——①`CardRuleService.validate_use()`（早于目标校验，因此被禁的牌不进任何目标枚举、界面候选与 AI 合法动作）②响应窗口候选构造（被禁的手牌不进任何响应窗口）。区域限制（例如“手牌中的”）由内容层自己按 `card.zone` 判断，**核心层不维护牌名或区域白名单**；技能提供者缺失（脱离对局的纯规则构造）时视为没有任何禁令。
+- **用牌禁令（`validate_card_action_permission`）属于这条纯查询链**：内容层声明“这张实体牌此刻能不能使用/打出”（返回空串即允许），核心层只在**三个必经之路**咨询——①`CardRuleService.validate_use()`（早于目标校验）②`CardRuleService.list_legal_targets()`（目标枚举：整张牌被否决时直接返回空数组，否则界面会先给出可点击的目标、选完才发现无法确认，表现为“不可使用却仍能指定目标”）③响应窗口候选构造（被禁的手牌不进任何响应窗口）。区域限制（例如“手牌中的”）由内容层自己按 `card.zone` 判断，**核心层不维护牌名或区域白名单**；技能提供者缺失（脱离对局的纯规则构造）时视为没有任何禁令。虚拟牌路径（`list_legal_virtual_targets()`）**刻意不咨询**该钩子：禁令语义是“手牌中的牌不能使用”，虚拟牌是否受限由技能自己的钩子按区域判断，核心层不维护区域白名单。
+
+---
+
+## 七、可插拔组件的生命周期：`configure()` 是唯一装配入口
+
+`OpportunitySystem`、`AhhaMomentSystem` 一类可插拔组件都遵守同一套契约：
+
+- 装配只有一个入口：`configure(controller, state, rng, ...)`；它内部**先调用自身 `shutdown()`** 再重新绑定，因此重复调用是幂等的、安全的。
+- `shutdown()` 会把内部开关置回关闭（例如 `_enabled = false`）并解绑旧对局状态，是**拆解**动作。
+- 因此**任何“拆掉旧运行时再重建对局”的路径都必须把全部组件重新 `configure()` 一遍**，恢复存档（`resume_conquest_match()`）与新开局（`start_match()`）都算。`_teardown_previous_match_runtime()` 会对组件调用 `shutdown()`，漏配的组件在**本局剩余全程**静默失效，而且**不会有任何报错**——典型症状是“新开局一切正常、点了『继续上次游戏』之后某项全局机制整局都不触发”。
+
 
 ---
 
@@ -122,5 +133,8 @@
 | 绕过 `CardMovementService` 直接搬牌 | `card_moved` 增量缺失，表现层漏牌/重牌 |
 | 把"存活"与"在场"混为一谈 | 离场角色被错误判死或错误计入胜负 |
 | 技能直接改写牌区数组清除临时牌名 | 破坏 UID/花色/区域历史，回放与网络异常 |
-| 把“不能用/不能打某张牌”写进界面或技能自己的牌名白名单 | 界面拦住了但 AI、联机校验、响应窗口漏过；应走 `validate_card_action_permission()` 纯查询钩子，由核心层在两个消费点统一咨询 |
+| 把“不能用/不能打某张牌”写进界面或技能自己的牌名白名单 | 界面拦住了但 AI、联机校验、响应窗口漏过；应走 `validate_card_action_permission()` 纯查询钩子，由核心层在三个消费点统一咨询 |
+| 用牌禁令只拦 `validate_use()` 与响应候选、不拦 `list_legal_targets()` | 牌在规则上不可使用，界面却仍高亮并允许点击目标；玩家能选目标、无法确认，需逐个消费点核对 |
+| 恢复存档/重开局后只重建 `GameState`，忘记重新 `configure()` 可插拔组件 | `shutdown()` 已把组件关掉且不报错，该机制在整局里静默失效（换局开局正常，只有恢复路径出问题），极难从症状反推 |
+
 | 核心层为某条规则维护牌名/区域白名单 | 内容层无法独立扩展，新增一张牌就要改核心；内容判定应由内容层声明事实 |

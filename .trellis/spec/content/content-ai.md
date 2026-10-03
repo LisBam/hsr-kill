@@ -114,6 +114,15 @@ func get_identity_observation_target_result(authoritative_snapshot: Dictionary, 
 
 **不得在技能文件重复声明换算比例。**
 
+### 五之二、选择请求评分的三条硬约定
+
+技能通过 `score_ai_choice()` 修正 `choice_request` 时，必须遵守：
+
+1. **通用层与技能层不得重复又反向地表达同一份收益。** 通用层对“纯选目标”请求默认给出 `get_attitude() / ATTITUDE_SCALE` 的目标态度项；若技能自己再用 `score_resource_change()` 表达同一个弃牌/夺牌收益（该方法内部也已乘态度），两项符号相反、量级接近，三层相加后敌方/友方/自己几乎同分，AI 退化成按权威候选枚举顺序取第一个（典型症状：**永远对队友发动**）。此时必须把技能自己的选择请求上下文标记为 `context.ai_choice_skill_scored = true`（可通过技能内常量声明该键，例如 `fanyin.gd` 的 `BLACK_TARGET_AI_CHOICE_SKILL_SCORED_KEY`），通用层随即只保留“未确认 = `0` 分”的取消基准。**只有“技能自评已覆盖该请求全部收益”时才可声明**，否则通用层的目标态度、防具与生存修正会被一并跳过。
+2. **“持有者自己支付体力”的代价要用资源常量手算，不要用 `score_resource_change(from, to, value, ...)`。** 该端口在 `from == to`（自己就是资源承受者）时按自身态度把代价**翻倍**，因此 `-HP_COST` 会被算成 `-2 × HP_COST × HP_RESOURCE_VALUE`：`1` 点体力从 `2.0` 变成 `4.0`，足以把“指定自己再靠技能改写打到两名敌人”这类正收益动作压成负分（【支离】在斗地主里因此永远不指定自己）。正确写法是 `-float(HP_COST) * NonameAIEvaluator.HP_RESOURCE_VALUE`，并在注释里写明为什么绕开该端口（`zhili.gd` 的 `_score_self_hp_cost()`）。
+3. **虚拟手牌候选必须逐张代理评分，不能等同分。** “视为使用某张牌”的选择请求里，每张候选牌的收益应当按照它自己的牌面 AI 配置（`order`/`player_result`/`target_result`）与逐目标收益比较：把这些字段装进一个 `action_type = "use_card"` 的**代理动作**交给统一评估端口 `score_action()`，再补两项修正——①加回 `get_card_value_by_id() × CARD_COST_WEIGHT`（`score_action()` 会按“消耗这张牌”扣一次保留价值，而虚拟牌只是选择介质，持有者不会真的失去它）；②真正更强的牌面（例如【杀】）只作为并列打破项加一个小常量。边界：代理评分复用牌面 AI 配置与 `score_target_effect()`，但不经过卡牌的 `modify_ai_action_score()` 与持有者技能的 `modify_ai_card_action_score()`（那两者挂在 `BasicAIPolicy` 的 `use_skill` 虚拟差分链路上，选择请求走的是 `score_choice_action` 链路）。
+
+
 ---
 
 ## 六、通用评分中的既有数值（改动需谨慎）
@@ -149,6 +158,8 @@ func get_identity_observation_target_result(authoritative_snapshot: Dictionary, 
 - [ ] 正式技能的规则与 AI 都在同一 `game_data/skills/*.gd` 文件。
 - [ ] `sample_only` 占位技能未编写可执行 AI。
 - [ ] 改变牌数/体力的评分复用了 `score_resource_change()` 与公开资源常量。
+- [ ] 技能自评已覆盖整条选择请求时声明了 `context.ai_choice_skill_scored = true`，未让通用层叠加同向/反向的第二份收益。
+- [ ] “持有者自己支付体力”的代价用 `HP_COST × HP_RESOURCE_VALUE` 手算，未用 `score_resource_change(from == to)` 触发自我翻倍。
 - [ ] 专属钩子只做**纯查询**修正，未修改对局状态或其他角色的隐藏手牌。
 - [ ] AI 改动未影响其他武将/卡牌的既有决策。
 - [ ] 已补全通用决策逻辑（不止实现需求中明示的分支），并说明补全内容及其作用域。
