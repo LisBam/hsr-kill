@@ -30,6 +30,14 @@ const BLACK_TARGET_KIND: String = "fanyin_black_target"
 ## 锁定后段黑色效果中由目标本人选择弃置手牌的业务类型。
 const BLACK_DISCARD_KIND: String = "fanyin_black_discard"
 
+## 黑色目标选择请求的通用层转义标志键；置位后通用选择评分不再叠加“普通选目标”的目标态度。
+##
+## 必须置位的原因：本技能已在 score_ai_choice 中用 score_resource_change 表达了同一个弃牌收益，
+## 而该方法内部已经乘过一次目标态度；通用层若再按“普通选目标”叠加一次 +态度/ATTITUDE_SCALE，
+## 两层符号相反、数值相等，会令友方、敌方与自己的总分完全相等，
+## AI 于是退化为按权威候选枚举顺序取第一个目标（通常是队友）。
+const BLACK_TARGET_AI_CHOICE_SKILL_SCORED_KEY: String = "ai_choice_skill_scored"
+
 ## 正在等待后续结算的弃置批次；键为权威批次号，值记录该批次是否还欠一次红色摸牌。
 ## 使用字典按键定位而非单个变量：黑色效果引发的弃置会同步产生新批次，两层批次必须各自完成互不覆盖。
 var _pending_batches: Dictionary = {}
@@ -151,7 +159,9 @@ func _on_cards_discarded_batch(event: RuleEvent) -> void:
 	var batch_id: int = int(event.data.get("discard_batch_id", -1))
 	_pending_batches[batch_id] = {"has_red":has_red}
 	if has_black and not _get_black_target_ids().is_empty():
-		request_target_selection("【泛音】请选择一名角色弃置一张手牌", _get_black_target_ids(), 1, 1, false, {"kind":BLACK_TARGET_KIND, "batch_id":batch_id})
+		# 目标请求上下文；除批次归属外必须声明“收益已由本技能完整表达”，
+		# 否则通用层会再叠加一次目标态度，与 score_ai_choice 的资源变化评分相消，使 AI 只会选中座次最靠前的角色。
+		request_target_selection("【泛音】请选择一名角色弃置一张手牌", _get_black_target_ids(), 1, 1, false, {"kind":BLACK_TARGET_KIND, "batch_id":batch_id, BLACK_TARGET_AI_CHOICE_SKILL_SCORED_KEY:true})
 		return
 	_finish_batch(batch_id)
 
