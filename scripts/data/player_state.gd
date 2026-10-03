@@ -151,6 +151,12 @@ var reincarnation_skills: Dictionary = {}
 ## to_dict 的公开部分，而不是放进仅本人可见的 character_form_state；展示名由名称模式在读取时解析。
 var recorded_card_names: Array[String] = []
 
+## 各技能按自身语义记录的“已以此法使用过的牌名”公开容器；键为稳定技能ID，值为牌名稳定ID数组。
+## 与 recorded_card_names 分开保存：【解构】【灵感】【看破】共用后者，语义不可混用。
+## 该事实属于公开信息（技能展示文本、对手AI与局域网观察者都要读取），因此保存在公开字段并写入
+## to_dict 的公开部分，而不是放进仅本人可见的 character_form_state。
+var skill_used_card_names: Dictionary = {}
+
 ## 本局已经获得过的机缘卡稳定ID历史；按获得顺序保存并允许重复，用于机缘模式武将详情长期展示。
 var acquired_opportunity_ids: Array[String] = []
 
@@ -362,6 +368,8 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	# 记录的牌名稳定ID列表；保持存档顺序，读档后【灵感】与【看破】的候选集合必须与存档前一致。
 	for recorded_card_name_variant: Variant in data.get("recorded_card_names", []) as Array:
 		player.recorded_card_names.append(str(recorded_card_name_variant))
+	# 各技能“已以此法使用过的牌名”；旧存档缺少该键时按空字典处理，语义安全（视同尚未以此法使用过任何牌）。
+	player.skill_used_card_names = (data.get("skill_used_card_names", {}) as Dictionary).duplicate(true)
 	player.reincarnation_skills = (data.get("reincarnation_skills", {}) as Dictionary).duplicate(true)
 	for opportunity_id_variant: Variant in data.get("acquired_opportunity_ids", []) as Array:
 		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
@@ -567,6 +575,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"reincarnation_skills": reincarnation_skills.duplicate(true),
 		# 记录牌名是公开信息；界面、对手AI与局域网观察者读取同一份稳定ID列表，展示名另由名称模式解析。
 		"recorded_card_names": recorded_card_names.duplicate(),
+		# 各技能“已以此法使用过的牌名”同样是公开信息；键为技能ID，值为稳定牌名ID数组。
+		"skill_used_card_names": skill_used_card_names.duplicate(true),
 		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,

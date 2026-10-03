@@ -3,6 +3,10 @@ extends RefCounted
 
 ## 卡牌使用合法性服务。只读取状态与配置，不执行效果或移动卡牌，可被 UI、AI 和服务器共同调用。
 
+## 卡牌动作类别：使用；与 MatchController.CARD_ACTION_USE 取值保持一致。
+## 核心层组件之间不互相引用常量，避免为读取一个动作名建立双向依赖。
+const CARD_ACTION_USE: String = "use"
+
 ## 当前权威对局状态引用；由对局控制器创建服务时注入。
 var state: GameState
 
@@ -102,6 +106,13 @@ func validate_use(actor_id: int, card: CardInstance, target_ids: Array[int]) -> 
 		return "卡牌定义不存在。"
 	if str(definition.get("target_mode", "")) == "response_only":
 		return "该卡牌只能在响应窗口中使用。"
+	# 用牌禁令（技能纯查询）；返回非空表示整张牌不可使用，与目标无关，因此必须早于任何目标与次数判定。
+	# 木牛流马“粮”等非手牌牌源是否受限由技能自身在钩子内按牌的所在区域决定，核心层不维护区域白名单。
+	# 无技能提供者时（脱离对局的纯规则测试）视为没有任何用牌禁令，保持规则服务可独立构造。
+	if skill_rule_provider != null and skill_rule_provider.has_method("validate_skill_card_action_permission"):
+		var action_permission_error: String = str(skill_rule_provider.call("validate_skill_card_action_permission", actor.player_id, card, CARD_ACTION_USE))
+		if not action_permission_error.is_empty():
+			return action_permission_error
 
 	# 当前武器定义；卡牌源码可声明解除特定牌的阶段使用次数限制。
 	var use_limit_weapon_definition: CardDefinition = _get_equipment_definition(actor, "weapon")
