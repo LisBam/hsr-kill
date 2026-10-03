@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~540 | Active |
+| `journal-1.md` | ~566 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-10-04 | 青雀武将与三技能交付（含【自摸】不限次修正与虚拟手牌界面回归） | `a77a763`, `40b9dbf`, `a901e94`, `50b9d97`, `ef9da4c`, `ac7eae2`, `5e0cb79` | `master` |
 | 10 | 2026-10-04 | 留白改为一次性失去当前技能并新增通用失去技能端口 | `4aca7ce`, `cb7ceb9`, `509fb39`, `59862ec` | `master` |
 | 9 | 2026-10-04 | 更正游戏开始时时机、位次询问内联交互与按技能ID名单清算永久失去 | `c3e567a`, `27922e6`, `631f149`, `6db5420`, `89bbe80` | `master` |
 | 8 | 2026-10-04 | 新增卡牌【言灵】、武将卡芙卡与技能【言灵】【游丝】 | `585c8f6`, `c069d39`, `cb39afb` | `master` |
