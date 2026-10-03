@@ -22,8 +22,16 @@ const INSERT_POSITION: int = MatchController.DRAW_PILE_POSITION_RANDOM
 ## 第二段触发时持有者摸牌的张数；与原文「你摸一张牌」一致。
 const TRIGGER_DRAW_COUNT: int = 1
 
-## 游戏开始时机的稳定名称；该时机在发牌之前派发，因此加入的三张牌会与整副牌堆一起参与初始洗牌。
+## 游戏开始时机的稳定名称。
+## 该时机的权威定义是「游戏正式开始时」：全部起始手牌与手气卡流程都已经结束，第一轮尚未开始。
+## 因此本技能加入牌堆的三张牌不会参与任何一次手气卡重发，玩家无法用手气卡刷到【言灵】。
 const GAME_START_TIMING: String = "gameStart"
+
+## 发动公告中声明的入堆张数键名；只用于复盘与界面提示，不参与任何规则判定。
+const ACTIVATION_INSERT_COUNT_KEY: String = "insert_count"
+
+## 发动公告中声明的入堆位次键名；写入的是位次取值（0 表示权威随机位次），同样只用于复盘。
+const ACTIVATION_INSERT_POSITION_KEY: String = "insert_position"
 
 ## 用牌整牌时机的稳定名称；role="global" 表示任意角色使用牌都会进入本回调。
 const CARD_USED_TIMING: String = "useCard"
@@ -57,11 +65,16 @@ func install() -> void:
 
 
 ## 游戏开始时把三张专属牌【言灵】随机洗入摸牌堆。
-## 逐张调用权威入堆端口而不是一次性批量：端口只负责“确定性地插入一张”，张数与时机由本技能决定，
+## 顺序有硬性要求：先按统一入口宣告本次发动（写入技能历史、公开日志与发动表现，与主动技、触发技完全同构），
+## 再逐张调用权威入堆端口。也就是说「游戏开始时」同样算一次真实的技能发动，可复盘、有发动提示，
+## 而不是一次静默的牌堆改写；反过来，先入堆再宣告会让复盘把三张牌的加入时刻记在发动之前。
+## 逐张调用入堆端口而不是一次性批量：端口只负责“确定性地插入一张”，张数与时机由本技能决定，
 ## 因此三张牌各自独立抽取位次与牌面，也就更接近「随机加入」的语义；每张牌位次独立也是可复现的（随机历史逐条记录）。
 func _on_game_start(_event: RuleEvent) -> void:
 	if host == null or not host.has_method("create_and_insert_card_into_draw_pile"):
 		return
+	# 发动公告；键名与取值都是基础可序列化值，界面与回放可以直接读取张数与位次口径。
+	announce_activation({ACTIVATION_INSERT_COUNT_KEY:INSERT_COUNT, ACTIVATION_INSERT_POSITION_KEY:INSERT_POSITION})
 	for _index: int in range(INSERT_COUNT):
 		# 牌面留空：专属牌的牌面由卡牌文件自带（梅花K），端口会在调用方未给牌面时读取它，而不是随机花色点数。
 		host.call("create_and_insert_card_into_draw_pile", CARD_DEFINITION_ID, "", 0, INSERT_POSITION)
