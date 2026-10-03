@@ -80,6 +80,8 @@
 ## 四、时机派发与触发排序
 
 - `RuleTimingCatalog` 是**无状态时机目录**：集中保存 **236** 个不重复监听事件、**4** 个主动技能入口，以及 `judgment/draw/play/discard` → `phaseJudge/phaseUse/...` 的唯一主要阶段时机前缀映射。它不做派发，只提供名称校验与稳定分类顺序。`GAME_PHASE_TIMINGS` 的数组顺序即规则流程顺序，`roundEnd` 固定紧邻 `roundStart` 之前。
+  - **`gameStart` 的位置是「正式开局时刻」**：`enterGame → gameDrawBefore → gameDrawBegin → gameDrawAfter → gameStart → roundEnd → roundStart`，其中 `gameStart` 由 `MatchController._complete_pre_game_start()` 在**起始手牌与手气卡全部结束之后、第一轮之前**唯一派发（普通开局与手气卡结束共用这一出口）。因此要区分「开局配置阶段」与「正式开局」：希望可能被手气卡刷到的效果、或任何依赖起始手牌的配置，都必须发生在 `gameStart` **之前**；在 `gameStart` 里加入牌堆的牌**不可能进入任何一次手气卡重发**。
+  - `gameStart` 同样是一次**正式技能发动**：内容应走 `announce_activation()`（写入 `skill_history`、公开日志与 `skillAfter` 时机），不得静默改写状态；并且 `context` 会成为公开快照字段，**不得放入牌面、位次等隐藏信息**。
 - `RuleTimingService` 是标准时机派发组件：先调用兼容 `RuleEventBus`，再依据当前状态的存活座次把事件交给独立 `TriggerManager`，最后完成事件；**不执行任何具体牌效、伤害、移动或阶段逻辑**。
 - `TriggerManager` 排序规则：先按 `player/source/target/global` 过滤技能持有者与 `RuleEvent` 角色关系，再按 `firstDo`/`lastDo` → 技能优先级 → 起始座次 → 注册顺序排列，并在执行前**重新检查所有者生命周期与动态条件**。
 - **同一时机内部始终沿用初次排列**；回调内又创建暂停时机时，续列按**最内层优先**恢复。
