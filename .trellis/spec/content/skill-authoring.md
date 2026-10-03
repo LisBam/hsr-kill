@@ -147,6 +147,28 @@ func _on_round_end(event: RuleEvent) -> void:
 
 ---
 
+## 三之五、用牌禁令与虚拟手牌选择
+
+两条面向“内容自定义用牌规则”的基类端口，都遵守“内容声明事实、核心层统一校验”的边界。
+
+**`validate_card_action_permission(card, definition, card_action) -> String`**（用牌禁令纯查询钩子）
+
+- 返回空字符串表示允许，非空即**玩家可见的拒绝原因**；`card_action` 取 `CardDefinition.CARD_ACTION_USE`（使用）或 `CardDefinition.CARD_ACTION_PLAY`（打出），**不要手写 `"use"` / `"play"` 字面量**。
+- **纯查询**：不得消费次数、移动牌、创建选择或写入任何状态——同一张牌可能被多个技能依次否决，也可能在“只问一下”的场合被调用。
+- 区域与牌类判断都在**内容层**完成（例如只封锁 `card.zone == "hand"` 且 `type` 属于 `basic`/`trick` 的牌）；核心层只聚合全部已安装技能的返回值，**不维护牌名或区域白名单**。
+- 生效范围由核心层的两个消费点决定：使用前校验与响应窗口候选。因此被禁的牌不会出现在任何目标枚举、界面候选、AI 合法动作或响应窗口里。
+
+**`request_virtual_hand_card_target_selection(title, prompt, entries, min_targets, max_targets, allow_cancel, context) -> Dictionary`**（虚拟手牌：视为使用一张牌并同时指定目标）
+
+- `entries` 每项为 `{"definition_id", "label", "target_combinations": Array[Array[int]], "auto_target_ids"?: Array[int]}`；`target_combinations` 是**该牌合法目标组合的完整枚举**（有序），`auto_target_ids` 用于“目标由规则唯一确定”的模式。
+- **占位牌号由端口生成与回译**（`VIRTUAL_HAND_CANDIDATE_UID_BASE = 1000000000 + 序号`，回译表写入 `context.virtual_hand_definition_ids_by_uid`）：技能侧不得自行计算占位 UID，也不得假设它等于任何真实牌 UID。
+- 候选 `zone` 为 `virtual_hand`、`card_data.suit` 为 `"none"`、`rank` 为 `0`——**视为使用的牌没有花色与点数**，这个事实写在请求负载里，界面、AI 与联机读的是同一份。
+- 请求仍走既有 `choice_type = card_target` 协议：控制器按“提交集合 ⊆ 候选集合”和每张牌的目标组合权威复核，**不需要新增协议分支**；技能侧恢复时用回译表把占位牌号翻回真实 `definition_id`，再调 `execute_cardless_virtual_card_use()` 结算。
+- 候选必须**每次呈现都重新枚举**并按规则查询过滤为“此刻确实存在合法目标”，提交后再复核一次；失败（含目标已消失）时回到重新选牌，**不得**建立空目标请求。
+- 摸牌与次数消费只能发生在 `activate()` 一次：取消只是重新选牌，不得重新摸牌或重复抢次数。
+
+---
+
 ## 四、主动技能
 
 - `enable` 声明入口；`phaseUse` 是出牌阶段主动发动入口。

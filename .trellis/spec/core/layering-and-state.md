@@ -108,6 +108,7 @@
 - `RuleModifierPipeline` 是独立于触发器的**纯查询修正链**，供 card/target enabled、usable、respondable、in-range 查询使用。
 - `MatchController.get_card_use_preview()` 是 UI 使用的只读查询边界，返回可提交性、合法候选、规范化目标、目标模式、修正后的目标数与说明文本——**不返回 `GameState`/`PlayerState`/`CardInstance` 对象引用**。
 - `MatchController.get_match_start_validation_error()` 是开局前**不修改任何状态**的只读校验边界。
+- **用牌禁令（`validate_card_action_permission`）属于这条纯查询链**：内容层声明“这张实体牌此刻能不能使用/打出”（返回空串即允许），核心层只在**两个必经之路**咨询——①`CardRuleService.validate_use()`（早于目标校验，因此被禁的牌不进任何目标枚举、界面候选与 AI 合法动作）②响应窗口候选构造（被禁的手牌不进任何响应窗口）。区域限制（例如“手牌中的”）由内容层自己按 `card.zone` 判断，**核心层不维护牌名或区域白名单**；技能提供者缺失（脱离对局的纯规则构造）时视为没有任何禁令。
 
 ---
 
@@ -121,3 +122,5 @@
 | 绕过 `CardMovementService` 直接搬牌 | `card_moved` 增量缺失，表现层漏牌/重牌 |
 | 把"存活"与"在场"混为一谈 | 离场角色被错误判死或错误计入胜负 |
 | 技能直接改写牌区数组清除临时牌名 | 破坏 UID/花色/区域历史，回放与网络异常 |
+| 把“不能用/不能打某张牌”写进界面或技能自己的牌名白名单 | 界面拦住了但 AI、联机校验、响应窗口漏过；应走 `validate_card_action_permission()` 纯查询钩子，由核心层在两个消费点统一咨询 |
+| 核心层为某条规则维护牌名/区域白名单 | 内容层无法独立扩展，新增一张牌就要改核心；内容判定应由内容层声明事实 |

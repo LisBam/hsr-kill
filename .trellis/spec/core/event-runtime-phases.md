@@ -185,3 +185,4 @@ roundEnd（派发时机）
 | 把「本轮结束」的到期效果挂到下一轮 `roundStart` | 语义从“本轮”漂移到“下一轮”，额外回合与读档恢复都会算错；应订阅 `roundEnd` |
 | `round_end_restore` 与 `round_end_after_restore` 混用 | 前者跳过 `roundEnd` 会让轮末时机整轮丢失，后者重复派发会让到期效果结算两次 |
 | 在 `roundEnd` 处理者里假设“轮数已经递增” | `round_number` 此时仍是刚结束的那一轮，判定下一轮请用 `round_number + 1` |
+| 从既有调用点反推 `_emit_rule_timing(...)` 的参数顺序 | 签名是 `(event_name, player_id, source_id, target_id, event_data, parent_id)`；参考调用点若参数取值相同（如 `1, 0, 1`）会掩盖顺序错误，技能按 `role = "target"` 订阅时表现为**回调静默不执行**，看起来像技能逻辑没生效 |
