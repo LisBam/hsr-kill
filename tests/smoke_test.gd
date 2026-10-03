@@ -196,8 +196,10 @@ func _run() -> void:
 	# 新增白露的【悬壶】【生息】与刃的【万死】【支离】后为100个；【悬壶】是手牌上限豁免类锁定技，
 	# 【生息】是永久累积额度的用牌联动技，【万死】是按回合结束后兑现的额外回合技，【支离】是目标改写类锁定技。
 	# 新增卡芙卡的【言灵】【游丝】后为102个；【言灵】是开局洗入专属牌的锁定技，【游丝】是私有置牌并跨回合兑现的技能。
+	# 新增青雀的【独弈】【弃和】【自摸】后为105个；【独弈】【弃和】是限制用牌与抵消伤害牌的锁定技，
+	# 【自摸】是用虚拟手牌选择“视为使用”的主动技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 102:
+	if skill_definition_count != 105:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -303,8 +305,9 @@ func _run() -> void:
 	# 新增彦卿（仙舟联盟）后为45名。
 	# 新增白露（仙舟联盟）与刃（星核猎手）后为47名；两名新武将各自引用本次新增的两个技能。
 	# 新增卡芙卡（星核猎手）后为48名；她引用【言灵】与【游丝】。
+	# 新增青雀（仙舟联盟，3体力）后为49名；她引用【独弈】【弃和】【自摸】。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 48:
+	if character_definition_count != 49:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
