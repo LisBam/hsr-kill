@@ -498,8 +498,8 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("character_corner_text", ""),
 		snapshot.get("character_corner_text_entries", {}),
 		snapshot.get("recorded_card_names", []),
-		# 永久失去技能名单；它是技能栏与悬停信息逐项裁剪的唯一依据，因此必须参与画面变更检测。
-		snapshot.get("permanently_removed_skill_ids", []),
+		# 当前实际安装的技能ID；它是技能栏与悬停信息裁剪的唯一依据，因此必须参与画面变更检测。
+		snapshot.get("installed_skill_ids", []),
 		snapshot.get("public_marks", {}),
 		snapshot.get("auto_managed", false),
 		snapshot.get("auto_managed_offline", false),
@@ -662,18 +662,22 @@ func _request_character_information() -> void:
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
 	# 当前武将全部可见技能ID；固有技能 → 模式技能 → 运行时临时技能，均不重复。
-	# 已被永久失去的技能逐个从列表中剔除：控制器不会再装配它们，界面若继续读武将静态定义，
-	# 已失去的技能仍会出现在悬停信息与右键详情中；而之后新获得且不在名单内的技能必须照常展示。
-	var permanently_removed_skill_ids: Array = _player_snapshot.get("permanently_removed_skill_ids", []) as Array
+	# 判定依据是快照中**实际安装**的技能ID：失去技能（如【留白】）会卸载实例，列表随之收缩，
+	# 已失去的技能不再出现在悬停信息与右键详情中；之后新获得的技能会立刻出现在列表里，照常展示。
+	# 快照缺少该字段时（旧回放、手动构造的预览快照）不做裁剪。
+	var filter_by_installed: bool = _player_snapshot.has("installed_skill_ids")
+	var installed_skill_ids: Array = _player_snapshot.get("installed_skill_ids", []) as Array
 	var visible_skill_ids: Array = []
 	for native_skill_id_variant: Variant in (_character_definition.get("skills", []) as Array):
 		var native_skill_id: String = str(native_skill_id_variant)
-		if not permanently_removed_skill_ids.has(native_skill_id):
-			visible_skill_ids.append(native_skill_id)
+		# 缺失定义的技能属于配置错误，保留显示以便被发现，因此不参与“已安装”裁剪。
+		if filter_by_installed and not GameDatabase.get_skill(native_skill_id).is_empty() and not installed_skill_ids.has(native_skill_id):
+			continue
+		visible_skill_ids.append(native_skill_id)
 	for mode_skill_id_variant: Variant in (_player_snapshot.get("mode_skill_ids", []) as Array):
 		var mode_skill_id: String = str(mode_skill_id_variant)
-		# 永久失去名单同样覆盖模式技能：它们不再被装配，界面也不应继续列出。
-		if permanently_removed_skill_ids.has(mode_skill_id):
+		# 已失去的模式技能同样不再被装配，界面也不应继续列出。
+		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
 			continue
 		if not mode_skill_id.is_empty() and not visible_skill_ids.has(mode_skill_id):
 			visible_skill_ids.append(mode_skill_id)

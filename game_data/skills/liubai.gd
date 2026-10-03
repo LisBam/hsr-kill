@@ -1,7 +1,8 @@
 extends SkillDefinition
 
-## 【留白】技能源码。限定技：发动时重置所有其他技能，并在本回合结束时永久失去全部技能。
+## 【留白】技能源码。限定技：发动时重置所有其他技能，并在本回合结束时失去全部技能。
 ## 两段效果分属两个时机：重置立即生效，失去技能按原文推迟到本回合结束。
+## “失去”只是一次性移除当时身上的技能，不记录任何名单：之后通过机缘卡等来源新获得的技能照常安装与发动。
 
 ## 失去技能时写入日志的原因标识；该文本只用于权威日志，不参与规则判定。
 const CLEAR_REASON: String = "留白"
@@ -13,7 +14,7 @@ var _clear_turn_number: int = -1
 ## 每复原一项已发动限定技计入的收益值；数值3.0来自停云【光覆】的同类估值口径。
 const LIMIT_RESET_VALUE: float = 3.0
 
-## 永久失去全部技能的代价系数；每项还持有的技能扣减一分，使AI在收益不足时保持克制。
+## 失去全部技能时的代价系数；每项还持有的技能扣减一分，使AI在收益不足时保持克制。
 const SKILL_LOSS_COST: float = 1.0
 
 
@@ -50,7 +51,7 @@ func can_activate(_context: Dictionary = {}) -> bool:
 	return _clear_turn_number != host.state.turn_number
 
 
-## 发动第一段效果：立即重置所有其他技能，并登记本回合结束时的永久失去。
+## 发动第一段效果：立即重置所有其他技能，并登记本回合结束时的失去技能清算。
 func activate(_context: Dictionary = {}) -> String:
 	if not can_activate():
 		return "【留白】当前不满足发动条件。"
@@ -68,7 +69,7 @@ func _on_phase_end(_event: RuleEvent) -> void:
 		return
 	# 先清空登记再执行移除：移除过程会卸载本技能实例自身，登记必须先失效以防御重入。
 	_clear_turn_number = -1
-	host.call("remove_all_skills_permanently", owner_player_id, CLEAR_REASON)
+	host.call("remove_all_skills", owner_player_id, CLEAR_REASON)
 
 
 ## 为AI枚举本技能在出牌阶段的候选动作；重置与失去都是无参数效果，因此只提交一个空负载动作。
@@ -78,7 +79,7 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
 
 
-## AI评估留白的发动收益：重置额度带来后续收益，但永久失去全部技能代价极大，因此只在收益明显时发动。
+## AI评估留白的发动收益：重置额度带来后续收益，但失去全部技能代价极大，因此只在收益明显时发动。
 ## AI钩子没有host，只能读取权威快照与估值器；本技能按“重置了多少已消耗额度”估算收益。
 func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
 	# 持有者快照；缺失时不给分，避免无效动作进入AI候选。
@@ -89,5 +90,5 @@ func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, ev
 	var used_limited_count: float = float((owner.get("used_limited_skill_ids", []) as Array).size())
 	# 已进入轮回的技数量；轮回进度被重置后需要重新累积，因此计入负向调整。
 	var reincarnation_count: float = float((owner.get("reincarnation_skills", {}) as Dictionary).size())
-	# 收益扣减永久失去全部技能的代价；扣除项高于重置收益时AI不会选择发动。
+	# 收益扣减失去全部技能的代价；扣除项高于重置收益时AI不会选择发动。
 	return LIMIT_RESET_VALUE * used_limited_count - SKILL_LOSS_COST * (reincarnation_count + 1.0)

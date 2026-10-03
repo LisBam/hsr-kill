@@ -1,8 +1,8 @@
 extends Node
 
 ## 那刻夏【逐虚】【揭质】【留白】专项回归。覆盖武将元数据与三条技能原文、两节轮回随机效果、
-## 阶段限两次、揭质同目标重复与自我目标重置、留白的重置与永久失去清算（按技能ID逐个记入名单，
-## 之后新获得的技能不受影响），以及名单的存档往返、旧存档兼容与五条装配守卫。
+## 阶段限两次、揭质同目标重复与自我目标重置、留白的重置与一次性失去全部技能（只移除当时身上的技能、
+## 不写任何名单、之后新获得的技能照常安装与发动），以及失去技能后的装配路径、公开快照收敛与存档往返。
 
 ## 本测试共用的权威对局控制器；全部机制通过正式服务与技能端口执行。
 var _controller: MatchController
@@ -30,15 +30,15 @@ func _run() -> void:
 		return
 	if not _test_liubai_reset_keeps_self():
 		return
-	if not _test_liubai_permanent_skill_loss():
+	if not _test_liubai_one_shot_skill_loss():
 		return
-	if not _test_permanent_loss_guards_install_paths():
+	if not _test_skill_loss_leaves_install_paths_intact():
 		return
-	if not _test_save_roundtrip_permanent_loss():
+	if not _test_save_roundtrip_skill_loss():
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 permanent_loss=2 permanent_new_skill=1 nested_trigger_entry=1")
+	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 nested_trigger_entry=1")
 	get_tree().quit(0)
 
 
@@ -426,110 +426,130 @@ func _test_liubai_reset_keeps_self() -> bool:
 	return true
 
 
-## 校验本回合结束时永久失去清算那一刻拥有的全部技能，且新获得的技能不受影响。
-func _test_liubai_permanent_skill_loss() -> bool:
+## 校验本回合结束时失去那一刻拥有的全部技能；失去是一次性事实，之后新获得的技能不受任何影响。
+func _test_liubai_one_shot_skill_loss() -> bool:
 	_reset_state(3)
 	if not _install_nakexia_skills(0):
-		return _fail("permanent_install")
+		return _fail("one_shot_install")
 	if not _controller.activate_skill(0, "liubai", {"active_entry":"phaseUse"}):
-		return _fail("permanent_liubai_rejected")
+		return _fail("one_shot_liubai_rejected")
 	# 回合尚未结束时技能仍然可用；这一步同时确认“失去”确实被推迟。
 	if _controller.get_installed_skill_ids(0).is_empty():
-		return _fail("permanent_lost_too_early")
-	# 清算前记录角色确实拥有的技能ID；名单必须与这份快照逐项一致。
+		return _fail("one_shot_lost_too_early")
+	# 清算前记录角色确实拥有的技能ID；这份快照必须与清算后的安装集合互补。
 	var owned_skill_ids: Array[String] = _controller.get_installed_skill_ids(0)
 	# 触发持有者结束阶段；第二段效果必须执行。
 	_controller._emit_rule_timing("phaseEnd", 0, 0, -1, {"player_id":0, "phase":"play"})
-	var player: PlayerState = _controller.state.get_player(0)
-	# 清算名单；必须逐个记下清算那一刻拥有的技能，而不是只记一个整体标记。
+	# 失去的粒度是“实际安装的技能”：清算后一个都不剩，且逐个都能确认实例已被卸载。
 	for owned_skill_id: String in owned_skill_ids:
-		if not player.has_permanently_removed_skill(owned_skill_id):
-			return _fail("permanent_list_missing=%s/%s" % [owned_skill_id, str(player.permanently_removed_skill_ids)])
+		if _controller.get_skill_instance(0, owned_skill_id) != null:
+			return _fail("one_shot_instance_kept=%s" % owned_skill_id)
+		if _controller.activate_skill(0, owned_skill_id, {"active_entry":"phaseUse"}):
+			return _fail("one_shot_skill_usable=%s" % owned_skill_id)
 	if not _controller.get_installed_skill_ids(0).is_empty():
-		return _fail("permanent_skills_remain=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 清单是逐项判定：名单内的技能不能通过局内获得重新装配，但名单之外的新技能必须照常安装并可发动。
-	if _controller.grant_acquired_skill(0, "zhuxv", 0, 0, "nakexia_test", true):
-		return _fail("permanent_lost_skill_regranted")
+		return _fail("one_shot_skills_remain=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 公开快照必须同步收敛：界面据此把技能从悬停资料与右键详情里剔除。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(snapshot)
+	var owner_snapshot: Dictionary = _get_snapshot_player(snapshot, 0)
+	if not (owner_snapshot.get("installed_skill_ids", []) as Array).is_empty():
+		return _fail("one_shot_snapshot_not_pruned=%s" % str(owner_snapshot.get("installed_skill_ids", [])))
+	# 失去不留下任何名单：之后通过机缘等来源新获得的技能照常安装、可选、可发动。
 	if not _controller.grant_acquired_skill(0, "fanyin", 0, 0, "nakexia_test", true):
-		return _fail("permanent_new_skill_blocked")
+		return _fail("one_shot_new_skill_blocked")
 	if not _controller.get_installed_skill_ids(0).has("fanyin"):
-		return _fail("permanent_new_skill_not_installed=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 不可逆：再次触发结束阶段不得抛错，已失去的旧技能保持失去，而之后新获得的技能仍被正常清空与重装。
+		return _fail("one_shot_new_skill_not_installed=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 同一个技能在失去之后重新获得也必须成功：没有名单，就没有“永久回不来”这回事。
+	if not _controller.grant_acquired_skill(0, "zhuxv", 0, 0, "nakexia_test", true):
+		return _fail("one_shot_lost_skill_not_regrantable")
+	if not _controller.get_installed_skill_ids(0).has("zhuxv"):
+		return _fail("one_shot_regranted_not_installed=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 再次触发结束阶段时，若本回合已无新登记则不再清算；随后新登记一次，清算只作用于当时身上的技能。
 	_controller._emit_rule_timing("phaseEnd", 0, 0, -1, {"player_id":0, "phase":""})
-	for owned_skill_id: String in owned_skill_ids:
-		if not _controller.state.get_player(0).has_permanently_removed_skill(owned_skill_id):
-			return _fail("permanent_list_cleared=%s" % owned_skill_id)
-	# 失去技能后角色不能再发动任何名单内的技能。
-	if _controller.activate_skill(0, "zhuxv", {"active_entry":"phaseUse"}):
-		return _fail("permanent_skill_usable")
+	if not _controller.get_installed_skill_ids(0).has("zhuxv"):
+		return _fail("one_shot_stale_clear_triggered=%s" % str(_controller.get_installed_skill_ids(0)))
+	if not _controller.remove_skill(0, "zhuxv", "nakexia_test"):
+		return _fail("one_shot_remove_skill_rejected")
+	if _controller.get_installed_skill_ids(0).has("zhuxv"):
+		return _fail("one_shot_remove_skill_installed")
+	# 通用接口对“本来就没有的技能”返回 false，不产生任何副作用。
+	if _controller.remove_skill(0, "zhuxv", "nakexia_test"):
+		return _fail("one_shot_remove_missing_skill")
 	return true
 
 
-## 校验永久失去名单逐项拦截四条装配路径，并放行名单之外的技能。
-func _test_permanent_loss_guards_install_paths() -> bool:
+## 校验失去技能不影响任何后续装配路径：换将、复原武将牌、局内获得与存档补装都按当前状态正常安装。
+func _test_skill_loss_leaves_install_paths_intact() -> bool:
 	_reset_state(3)
-	# 直接按那刻夏的固有技能构造名单，模拟一次已经完成的清算。
+	# 模拟一次已经完成的清算：三个固有技能全部被移除，且不留下任何记录。
 	var player: PlayerState = _controller.state.get_player(0)
 	player.character_id = "nakexia"
-	for native_skill_id: String in ["zhuxv", "jiezhi", "liubai"]:
-		player.mark_skill_permanently_removed(native_skill_id)
-	# 路径一：批量安装武将技能；名单内的三个固有技能都不再装配。
 	_controller._install_all_character_skills()
+	if not _controller.remove_all_skills(0, "nakexia_test"):
+		return _fail("loss_paths_remove_all")
 	if not _controller.get_installed_skill_ids(0).is_empty():
-		return _fail("guard_install_all=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 路径二：换将重装；同样按名单逐项拦截。
+		return _fail("loss_paths_install_all=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 路径一：换将重装按新武将完整装配，不需要任何名单放行。
 	_controller._reinstall_character_skills_for_player(player)
-	if not _controller.get_installed_skill_ids(0).is_empty():
-		return _fail("guard_reinstall=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 路径三：局内获得技能；名单内的固有技能被拒，名单之外的新技能放行。
-	if _controller.grant_acquired_skill(0, "zhuxv", 0, 0, "nakexia_test", true):
-		return _fail("guard_grant_lost_skill")
+	if _controller.get_installed_skill_ids(0) != ["zhuxv", "jiezhi", "liubai"]:
+		return _fail("loss_paths_reinstall=%s" % str(_controller.get_installed_skill_ids(0)))
+	if not _controller.remove_all_skills(0, "nakexia_test"):
+		return _fail("loss_paths_remove_all_again")
+	# 路径二：局内获得技能照常装配并可发动。
 	if not _controller.grant_acquired_skill(0, "fanyin", 0, 0, "nakexia_test", true):
-		return _fail("guard_grant_new_blocked")
-	# 路径四：存档补装；伪造两条获得技能记录，只有名单之外的那条会装配，名单之内的仍被拦截。
+		return _fail("loss_paths_grant_blocked")
+	# 路径三：存档补装按记录补装运行时技能，同样不受历史失去影响。
 	player.acquired_skills["zhuxv"] = {"source":"nakexia_test", "per_turn_limit":0, "per_round_limit":0, "total_limit":0, "tracked_turn_number":1, "tracked_round_number":1, "uses_this_turn":0, "uses_this_round":0, "total_uses":0}
 	_controller._reinstall_saved_runtime_skills(player)
-	if _controller.get_installed_skill_ids(0) != ["fanyin"]:
-		return _fail("guard_saved_runtime=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 路径五：复原武将牌技能；名单内的固有技能不会被复原装回来，名单外的获得技能保持原状。
+	if _controller.get_installed_skill_ids(0) != ["fanyin", "zhuxv"]:
+		return _fail("loss_paths_saved_runtime=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 路径四：复原武将牌技能把固有技能装回来，这正是“被动获得技能”的合法来源。
 	_controller.restore_character_card_skills(0, "nakexia_test")
-	if _controller.get_installed_skill_ids(0) != ["fanyin"]:
-		return _fail("guard_restore=%s" % str(_controller.get_installed_skill_ids(0)))
-	# 对照：未被标记的玩家仍可正常安装，证明守卫按名单逐项生效而不是整体拦截。
+	if not _controller.get_installed_skill_ids(0).has("jiezhi"):
+		return _fail("loss_paths_restore=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 对照：其他玩家不受任何影响；读档裁剪只对被记录玩家生效。
 	_controller.state.get_player(1).character_id = "nakexia"
-	_controller._install_all_character_skills()
+	_controller._install_all_character_skills({1:["zhuxv", "jiezhi", "liubai"]})
 	if _controller.get_installed_skill_ids(1).is_empty():
-		return _fail("guard_blocks_others")
+		return _fail("loss_paths_blocks_others")
 	return true
 
 
-## 校验永久失去名单进入公开快照并可在存档往返后恢复，同时兼容旧存档的整体标记。
-func _test_save_roundtrip_permanent_loss() -> bool:
+## 校验失去技能在存档往返后保持：存档记录**实际安装的技能集合**，读档据此装配，而不是记录任何黑名单。
+func _test_save_roundtrip_skill_loss() -> bool:
 	_reset_state(2)
+	# 玩家一为那刻夏并完整安装，玩家二保持默认；随后只让玩家一失去全部技能。
 	var player: PlayerState = _controller.state.get_player(0)
-	player.mark_skill_permanently_removed("zhuxv")
-	player.skills_permanently_removed = true
-	# 公开快照；界面与局域网据此逐个划掉名单内的技能。
-	var snapshot: Dictionary = player.to_dict()
-	var snapshot_skill_ids: Array = snapshot.get("permanently_removed_skill_ids", []) as Array
-	if snapshot_skill_ids.size() != 1 or str(snapshot_skill_ids[0]) != "zhuxv":
-		return _fail("snapshot_missing_list=%s" % str(snapshot_skill_ids))
-	# 存档往返；名单必须在 from_dict 后逐项保持。
-	var restored: PlayerState = PlayerState.from_authoritative_dict(snapshot)
-	if restored == null or not restored.has_permanently_removed_skill("zhuxv") or restored.permanently_removed_skill_ids.size() != 1:
-		return _fail("roundtrip_list_lost=%s" % str(restored.permanently_removed_skill_ids if restored != null else []))
-	# 缺键兼容；不含名单字段的旧存档按空名单恢复，不会凭空失去技能。
-	var legacy_snapshot: Dictionary = snapshot.duplicate(true)
-	legacy_snapshot.erase("permanently_removed_skill_ids")
-	var legacy_restored: PlayerState = PlayerState.from_authoritative_dict(legacy_snapshot)
-	if legacy_restored == null or not legacy_restored.permanently_removed_skill_ids.is_empty():
-		return _fail("legacy_snapshot_list=%s" % str(legacy_restored.permanently_removed_skill_ids if legacy_restored != null else []))
-	if not legacy_restored.skills_permanently_removed:
-		return _fail("legacy_snapshot_flag_lost")
-	# 默认值；未标记的角色不得被误判为已失去技能。
-	var fresh: PlayerState = PlayerState.new(9, "对照玩家")
-	if fresh.skills_permanently_removed or not fresh.permanently_removed_skill_ids.is_empty():
-		return _fail("default_flag_true")
+	player.character_id = "nakexia"
+	_controller._install_all_character_skills()
+	if not _controller.remove_all_skills(0, "nakexia_test"):
+		return _fail("roundtrip_remove_all")
+	# 存档字段：记录玩家一此刻的实际技能集合（空集合），玩家二不受影响。
+	var saved_installed_skill_ids_by_player: Dictionary = {}
+	for saved_player: PlayerState in _controller.state.players:
+		saved_installed_skill_ids_by_player[saved_player.player_id] = _controller.get_installed_skill_ids(saved_player.player_id)
+	if not (saved_installed_skill_ids_by_player[0] as Array).is_empty():
+		return _fail("roundtrip_saved_not_empty=%s" % str(saved_installed_skill_ids_by_player[0]))
+	# 读档装配：只按存档记录的实际技能集合安装，失去的技能不会因读档复活。
+	_controller._install_all_character_skills(saved_installed_skill_ids_by_player)
+	if not _controller.get_installed_skill_ids(0).is_empty():
+		return _fail("roundtrip_skills_revived=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 旧存档没有该字段：按武将完整装配，与改动前的行为逐字节一致。
+	_controller._install_all_character_skills()
+	if _controller.get_installed_skill_ids(0) != ["zhuxv", "jiezhi", "liubai"]:
+		return _fail("roundtrip_legacy_install=%s" % str(_controller.get_installed_skill_ids(0)))
+	# 公开快照里不再存在任何“永久失去名单”字段；界面只按实际安装集合收敛。
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(snapshot)
+	var owner_snapshot: Dictionary = _get_snapshot_player(snapshot, 0)
+	if owner_snapshot.has("permanently_removed_skill_ids") or owner_snapshot.has("skills_permanently_removed"):
+		return _fail("roundtrip_legacy_field_present")
+	# 失去技能后重新构建快照：实际安装集合收敛为空，界面据此把技能从悬停资料与右键详情中剔除。
+	if not _controller.remove_all_skills(0, "nakexia_test"):
+		return _fail("roundtrip_remove_all_again")
+	_controller._append_limited_skill_usage_to_snapshot(snapshot)
+	if not (_get_snapshot_player(snapshot, 0).get("installed_skill_ids", []) as Array).is_empty():
+		return _fail("roundtrip_snapshot_not_pruned=%s" % str(_get_snapshot_player(snapshot, 0).get("installed_skill_ids", [])))
 	return true
 
 
@@ -601,6 +621,16 @@ func _submit_choice(actor_id: int, target_ids: Array[int], confirmed: bool) -> b
 ## 为当前零材料确认请求提交确认或取消；揭质与留白的确认共用该入口。
 func _submit_confirm(actor_id: int, confirmed: bool) -> bool:
 	return _submit_choice(actor_id, [], confirmed)
+
+
+## 从观察者快照中取出指定玩家的条目；找不到时返回空字典，供断言直接读取公开字段。
+func _get_snapshot_player(snapshot: Dictionary, player_id: int) -> Dictionary:
+	for player_variant: Variant in snapshot.get("players", []) as Array:
+		# 当前玩家条目；按稳定 player_id 匹配，避免依赖数组顺序。
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		if int(player_snapshot.get("player_id", -1)) == player_id:
+			return player_snapshot
+	return {}
 
 
 ## 输出失败原因并以非零状态结束当前无头测试。

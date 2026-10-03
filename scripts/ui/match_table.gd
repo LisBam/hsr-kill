@@ -2045,19 +2045,22 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 
 
 ## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。
+## 判定依据是快照中的实际安装技能ID：失去技能（如【留白】）会卸载实例，该列表随之收缩，界面无需任何名单即可收敛。
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []
-	# 永久失去技能名单；名单内的技能不再显示按钮，模式技能与之后新获得的技能不受影响。
-	# 该名单由【留白】等效果写入并进入公开快照，是界面判断“某个技能已被真实移除”的唯一依据；
-	# 若继续只读武将静态定义，已卸载的技能会继续占位并出现在悬停与右键详情里。
-	var permanently_removed_skill_ids: Array = player_snapshot.get("permanently_removed_skill_ids", []) as Array
+	# 当前实际安装的技能ID；这是“某个技能现在是否还在这名角色身上”的唯一依据。
+	# 界面若继续只读武将静态定义，已被卸载的技能会继续占位并出现在悬停与右键详情里。
+	# 快照缺少该字段时（旧回放、手动构造的预览快照）不做裁剪，保持与改动前逐字节一致。
+	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
+	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
 	for skill_id_variant: Variant in character.get("skills", []) as Array:
 		# 当前技能 ID 与元数据；缺失定义仍保留占位按钮，便于发现普通技能配置错误。
 		var skill_id: String = str(skill_id_variant)
-		if permanently_removed_skill_ids.has(skill_id):
-			continue
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		# 缺失定义属于配置错误，必须继续显示以便被发现，因此不参与“已安装”裁剪。
+		if filter_by_installed and not skill_definition.is_empty() and not installed_skill_ids.has(skill_id):
+			continue
 		if bool(skill_definition.get("leader_skill", false)) and identity != "leader":
 			continue
 		result.append(skill_id)
@@ -2068,8 +2071,8 @@ func _get_visible_skill_ids(character: Dictionary, identity: String, player_snap
 		mode_skill_ids = IdentityRules.new().get_mode_skill_ids(identity, match_mode)
 	for mode_skill_id_variant: Variant in mode_skill_ids:
 		var mode_skill_id: String = str(mode_skill_id_variant)
-		# 已被永久失去的模式技能同样不显示；否则技能栏会留下一个点不动的空按钮。
-		if permanently_removed_skill_ids.has(mode_skill_id):
+		# 已失去的模式技能同样不显示；否则技能栏会留下一个点不动的空按钮。
+		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
 			continue
 		if not mode_skill_id.is_empty() and not result.has(mode_skill_id):
 			result.append(mode_skill_id)
