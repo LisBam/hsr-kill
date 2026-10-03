@@ -122,11 +122,13 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 
 ## 验证卡牌专属字段的读取口径，以及「没有任何牌堆引用专属牌」的内容不变量。
 ## 断言要点：
-## ① 缺省元数据一律为 false，因此既有卡牌行为完全不变；
-## ② 显式声明 exclusive 的定义返回 true；
-## ③ 任何牌堆条目都不得引用一张 exclusive 牌（专属牌只能由技能在运行时加入游戏）。
+## ① 静态元数据与语义读取入口逐字一致，不存在绕过元数据的第二条口径；
+## ② 非专属牌一律为 false，因此既有卡牌行为完全不变；
+## ③ 专属牌必须自带合法牌面声明——它没有牌堆条目，牌面只能来自卡牌文件；
+## ④ 任何牌堆条目都不得引用一张 exclusive 牌（专属牌只能由技能在运行时加入游戏）。
 func _test_exclusive_card_field_and_deck_disjointness() -> bool:
-	# 既有卡牌全部非专属；逐条核对数据库中的静态元数据与语义读取入口。
+	# 数据库中全部专属牌 ID；本用例不白名单具体牌名，只断言读取口径与两条不变量。
+	var exclusive_definition_ids: Array[String] = []
 	for card_id_variant: Variant in GameDatabase.cards.keys():
 		# 当前卡牌稳定 ID；用于读取静态元数据与定义对象。
 		var card_id: String = str(card_id_variant)
@@ -134,10 +136,19 @@ func _test_exclusive_card_field_and_deck_disjointness() -> bool:
 		var card_definition: CardDefinition = GameDatabase.get_card_definition(card_id)
 		if card_definition == null:
 			return _fail("card_definition_missing id=%s" % card_id)
-		if bool(GameDatabase.get_card(card_id).get("exclusive", false)):
-			return _fail("existing_card_unexpectedly_exclusive id=%s" % card_id)
-		if card_definition.is_exclusive():
-			return _fail("existing_card_is_exclusive id=%s" % card_id)
+		# 静态元数据；与语义读取入口必须给出同一答案。
+		var definition_metadata: Dictionary = GameDatabase.get_card(card_id)
+		if bool(definition_metadata.get("exclusive", false)) != card_definition.is_exclusive():
+			return _fail("exclusive_reader_mismatch id=%s" % card_id)
+		if not card_definition.is_exclusive():
+			continue
+		exclusive_definition_ids.append(card_id)
+		# 专属牌自带牌面；缺少或非法时入堆端口只能退回权威随机牌面，与内容声明的牌面不符。
+		if not CardInstance.is_valid_suit(str(definition_metadata.get("suit", ""))) or not CardInstance.is_valid_rank(int(definition_metadata.get("rank", 0))):
+			return _fail("exclusive_card_without_declared_face id=%s suit=%s rank=%d" % [card_id, str(definition_metadata.get("suit", "")), int(definition_metadata.get("rank", 0))])
+	# 至少存在一张专属牌；否则下面的“牌堆反向不变量”会退化成空断言而失去意义。
+	if exclusive_definition_ids.is_empty():
+		return _fail("no_exclusive_card_registered")
 	# 探针定义；直接构造目标基类，验证 exclusive 为真时的读取结果与 false 严格对称。
 	var probe_definition: CardDefinition = CardDefinition.new({
 		"id":"probe_exclusive_definition",
@@ -207,12 +218,14 @@ func _test_insert_card_into_draw_pile() -> bool:
 		return _fail("empty_definition_should_fail")
 	if _controller.create_and_insert_card_into_draw_pile("probe_definition_not_in_database", "spade", 1, 1) != -1:
 		return _fail("unknown_definition_should_fail")
-	if _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 1, 0) != -1:
-		return _fail("position_zero_should_fail")
+	if _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 1, -1) != -1:
+		return _fail("position_negative_should_fail")
 	if _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 1, 3) != -1:
 		return _fail("position_three_should_fail")
 	if _controller.state.draw_pile.size() != baseline_pile_size or _controller.state.card_move_history.size() != baseline_history_size:
 		return _fail("failed_insert_produced_side_effect")
+	if _controller.state.random_history.size() != baseline_random_count:
+		return _fail("failed_insert_wrote_random_history")
 	# 显式牌面入堆；位置 2 应插在距数组末尾 1 个元素处（数组末尾为顶）。
 	var second_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "heart", 7, 2)
 	if second_uid < 0:
@@ -292,6 +305,95 @@ func _test_insert_card_into_draw_pile() -> bool:
 	# 结算本次摸牌可能产生的选择窗口，避免影响后续用例的提交。
 	if not await _settle_pending_choices():
 		return false
+	# 卡牌自带牌面；专属牌没有牌堆条目，调用方省略牌面时必须落到卡牌文件声明的花色点数，而不是随机值。
+	if not await _test_definition_declared_face_default():
+		return false
+	# 洗入位次；position=0 表示由权威随机源在整副牌堆中均匀选位，必须记账且必须落在合法下标区间内。
+	if not await _test_random_position_insert():
+		return false
+	return true
+
+
+## 验证「调用方省略牌面 → 卡牌定义自带牌面」这一优先级，不依赖任何具体专属牌是否已制作。
+func _test_definition_declared_face_default() -> bool:
+	# 探针定义；花色点数写进静态元数据，模拟专属牌“牌面来自卡牌文件”的唯一来源。
+	var probe_card_id: String = "probe_declared_face_card"
+	GameDatabase.cards[probe_card_id] = {
+		"id":probe_card_id,
+		"original_name":"探针",
+		"custom_name":"探针",
+		"type":"trick",
+		"subtype":"delayed",
+		"effect_id":"probe_declared_face_effect",
+		"target_mode":"self",
+		"description":"探针定义，仅用于验证自带牌面优先级。",
+		"exclusive":true,
+		"suit":"diamond",
+		"rank":11,
+	}
+	GameDatabase.card_definitions[probe_card_id] = CardDefinition.new(GameDatabase.cards[probe_card_id])
+	# 随机历史基线；自带牌面不消耗权威随机源，因此本次入堆不得新增随机记账。
+	var baseline_random_count: int = _controller.state.random_history.size()
+	var declared_uid: int = _controller.create_and_insert_card_into_draw_pile(probe_card_id, "", 0, 1)
+	if declared_uid < 0:
+		return _fail("declared_face_insert_rejected")
+	# 实际实体；必须复现定义声明的花色点数。
+	var declared_instance: CardInstance = null
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		if draw_card.uid == declared_uid:
+			declared_instance = draw_card
+			break
+	if declared_instance == null:
+		return _fail("declared_face_card_missing")
+	if declared_instance.suit != "diamond" or declared_instance.rank != 11:
+		return _fail("declared_face_not_used suit=%s rank=%d" % [declared_instance.suit, declared_instance.rank])
+	if _controller.state.random_history.size() != baseline_random_count:
+		return _fail("declared_face_wrote_random_history")
+	# 显式牌面优先级最高；调用方给出合法牌面时必须覆盖定义声明。
+	var explicit_uid: int = _controller.create_and_insert_card_into_draw_pile(probe_card_id, "spade", 2, 1)
+	if explicit_uid < 0:
+		return _fail("explicit_face_over_declared_rejected")
+	# 显式牌面实体；用于核对覆盖结果。
+	var explicit_instance: CardInstance = null
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		if draw_card.uid == explicit_uid:
+			explicit_instance = draw_card
+			break
+	if explicit_instance == null or explicit_instance.suit != "spade" or explicit_instance.rank != 2:
+		return _fail("explicit_face_priority_broken")
+	# 探针清理；数据库是全局单例，残留条目会污染后续用例与验证结论。
+	GameDatabase.cards.erase(probe_card_id)
+	GameDatabase.card_definitions.erase(probe_card_id)
+	return true
+
+
+## 验证洗入位次：位次由权威随机源在 [1, 牌堆张数+1] 内选取，写入随机历史，且落点与记录的位次一致。
+func _test_random_position_insert() -> bool:
+	# 牌堆张数；洗入上界是本值 +1，因此抽到的位次必须落在 1..size+1。
+	var pile_size: int = _controller.state.draw_pile.size()
+	var baseline_random_count: int = _controller.state.random_history.size()
+	var baseline_history_size: int = _controller.state.card_move_history.size()
+	var shuffled_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "heart", 5, 0)
+	if shuffled_uid < 0:
+		return _fail("random_position_insert_rejected")
+	if _controller.state.draw_pile.size() != pile_size + 1:
+		return _fail("random_position_did_not_grow_pile")
+	# 随机记账；洗入位次取决于当时的牌堆张数，因此必须与牌面随机一样写入历史才能复现。
+	if _controller.state.random_history.size() != baseline_random_count + 1:
+		return _fail("random_position_missing_history")
+	var history_entry: Dictionary = _controller.state.random_history.back() as Dictionary
+	if str(history_entry.get("kind", "")) != "exclusive_card_insert":
+		return _fail("random_position_history_kind=%s" % str(history_entry.get("kind", "")))
+	# 记账位次；既是可复现凭据，也用于反推实际落点。
+	var recorded_position: int = int(history_entry.get("position", -1))
+	if recorded_position < 1 or recorded_position > pile_size + 1:
+		return _fail("random_position_out_of_range position=%d pile=%d" % [recorded_position, pile_size])
+	# 实际下标；位次 N 对应「距数组末尾 N-1 个元素」，与置牌端口共用同一换算口径。
+	var expected_index: int = _controller.state.draw_pile.size() - recorded_position
+	if _controller.state.draw_pile[expected_index].uid != shuffled_uid:
+		return _fail("random_position_index_mismatch position=%d index=%d" % [recorded_position, expected_index])
+	if _controller.state.card_move_history.size() != baseline_history_size + 1:
+		return _fail("random_position_move_history_count")
 	return true
 
 
@@ -458,6 +560,9 @@ func _test_position_request_protocol() -> bool:
 	if chooser_id < 0:
 		return _fail("no_chooser_with_two_hand_cards")
 	# 询问前的待办状态；用于核对询问结束后窗口被正确清空。
+	# 先清空累计窗口：对手 AI 在前序步骤中可能已经用出锦囊并打开反制链。
+	if not await _settle_pending_choices():
+		return false
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("pending_choice_before_request")
 	# 正式端口调用；本用例的询问对象是本机真人，因此请求进入异步等待，返回值必须是“未确认”。
@@ -465,7 +570,14 @@ func _test_position_request_protocol() -> bool:
 	if bool(immediate_result.get("confirmed", true)) or int(immediate_result.get("card_uid", 0)) != -1 or int(immediate_result.get("position", -1)) != 0:
 		return _fail("deferred_request_should_not_confirm %s" % str(immediate_result))
 	if _controller._pending_card_choice.is_empty():
-		return _fail("position_request_not_published")
+		# 诊断字段；请求被拒绝的原因只可能来自控制器入口的前置校验或时机取消，因此逐项打印当前归属状态。
+		return _fail("position_request_not_published negation=%s game_over=%s chooser_alive=%s hand=%d local_human=%d" % [
+			str(_controller._pending_negation_choices),
+			str(_controller.state.game_over),
+			str(_controller.state.get_player(chooser_id).alive if _controller.state.get_player(chooser_id) != null else false),
+			_controller.state.get_player(chooser_id).hand.size() if _controller.state.get_player(chooser_id) != null else -1,
+			_controller.local_human_player_id,
+		])
 	# 请求快照；后续面板渲染与非法提交都基于同一份权威请求。
 	var pending_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
 	if str(pending_choice.get("choice_type", "")) != "card_position":
@@ -535,6 +647,10 @@ func _test_panel_three_option_usability() -> bool:
 	var chooser_id: int = _find_player_with_hand_cards(1)
 	if chooser_id < 0:
 		return _fail("no_panel_chooser")
+	# 先清空累计窗口：对手 AI 在前序步骤中可能已经用出锦囊并留下反制链或响应窗口，
+	# 而权威入口会拒绝“已有待办请求”时新建的位次请求，导致本用例看到空窗口。
+	if not await _settle_pending_choices():
+		return false
 	# 构造一条独立的位次询问；直接复用正式端口，保证面板看到的是真实请求形状。
 	var immediate_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
 	if bool(immediate_result.get("confirmed", true)):
@@ -609,9 +725,12 @@ func _test_panel_three_option_usability() -> bool:
 		return _fail("cancel_emitted_position_confirmation")
 	# 清理面板与本次询问，避免影响退出前的状态。
 	panel.queue_free()
+	# 清理：面板只发出意图、绝不自行结算，因此这里按**当前真实待办窗口**统一清空，
+	# 而不是继续使用本用例开头捕获的旧快照——与对手 AI 并发推进时，该请求随时可能已被回应或被后续窗口替换。
 	if not _controller._pending_card_choice.is_empty():
-		if not _submit_position_choice(panel_request, [], "", false):
-			return _fail("cannot_cancel_panel_request")
+		if not await _settle_pending_choices():
+			return false
+	return true
 	if not await _settle_pending_choices():
 		return false
 	return true
@@ -709,16 +828,39 @@ func _confirm_pending_choice() -> bool:
 
 
 ## 结算当前全部待办选择；用于把上一步骤可能产生的窗口清空，避免后续用例被拦截。
+## 同时覆盖【无懈可击】并行响应窗口：本用例不验证锦囊反制链，但对手 AI 在推进过程中随时可能使用锦囊，
+## 残留的反制窗口会让 controller.request_card_choice 直接拒绝后续全部权威请求，因此必须一并按“不使用无懈”清空。
 func _settle_pending_choices() -> bool:
 	var safety: int = 0
-	while _controller != null and not _controller._pending_card_choice.is_empty() and safety < 24:
+	while _controller != null and (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()) and safety < 48:
 		safety += 1
+		if not _controller._pending_negation_choices.is_empty():
+			_cancel_pending_negation_requests()
+			await get_tree().process_frame
+			continue
 		if not _cancel_pending_choice() and not _confirm_pending_choice():
 			return _fail("settle_pending_choices_stuck")
 		await get_tree().process_frame
-	if _controller != null and not _controller._pending_card_choice.is_empty():
+	if _controller != null and (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()):
 		return _fail("settle_pending_choices_exhausted")
 	return true
+
+
+## 逐个取消当前全部待办的【无懈可击】请求；空选牌列表即“不使用无懈”，由控制器按既有响应协议继续该轮。
+## 不在此处 await：调用方负责在下一帧重新读取待办表，因为取消一个响应者后可能立刻出现下一名响应者。
+func _cancel_pending_negation_requests() -> void:
+	if _controller == null:
+		return
+	for request_id_variant: Variant in _controller._pending_negation_choices.keys().duplicate():
+		# 当前反制请求；chooser_id 是唯一有权提交该请求的角色。
+		var request_data: Dictionary = _controller._pending_negation_choices.get(request_id_variant, {}) as Dictionary
+		var chooser_id: int = int(request_data.get("chooser_id", -1))
+		if chooser_id < 0:
+			continue
+		# 放弃动作；载荷携带请求ID与空选牌列表，表示该响应者不使用【无懈可击】。
+		var cancel_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+		cancel_action.payload = {"request_id":int(request_id_variant), "selected_card_uids":[]}
+		_controller.submit_action(cancel_action)
 
 
 ## 启动一局可操作的对局，并把开局选将与开局技能选择全部结算干净。

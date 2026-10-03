@@ -41,6 +41,13 @@ var _decision_choice_skill: SkillDefinition = null
 ## 当前是否已经准备选择动作评分上下文；默认 false，防止直接评分路径遗漏技能 AI 钩子。
 var _choice_scoring_context_prepared: bool = false
 
+## 本次出牌决策的手牌消耗倾向值；由核心在请求动作前按角色身上的持续效果写入。
+## 语义：非负标量，0 表示完全不改变决策（默认值，也是全部既有调用者的行为）。
+## 作用方式：只加在“消耗自己手牌”的用牌/重铸动作上，相当于抵消这类动作固有的保牌机会成本；
+## 出牌阶段的结束动作不加分，因此本值只表达“更愿意把手牌打出去”，不会凭空产生新动作。
+## 使用完毕后由 choose_action 重置为默认值，避免一次决策的倾向泄漏到下一次。
+var hand_pressure: float = 0.0
+
 
 ## 创建指定座次的基础策略；同一策略实例只服务一名玩家，但身份模型可由多个策略共享。
 func _init(controlled_player_id: int, shared_identity_model: IdentityAIModel = null) -> void:
@@ -49,11 +56,19 @@ func _init(controlled_player_id: int, shared_identity_model: IdentityAIModel = n
 	evaluator = NonameAIEvaluator.new(identity_model)
 
 
+## 写入本次出牌决策的手牌消耗倾向值；核心在每次请求动作前调用，人类策略不调用时保持0.0。
+## 只写字段、不做任何运算，因此可以被测试直接调用以对比“有倾向/无倾向”的决策差异。
+func set_hand_pressure(value: float) -> void:
+	hand_pressure = maxf(value, 0.0)
+
+
 ## 从核心提供的合法动作中选择一项；动作评分由卡牌 AI 数据、身份态度和技能文件钩子共同决定。
 func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
 	if legal_actions.is_empty():
 		identity_model.end_evaluation()
 		identity_model.synchronize(authoritative_snapshot)
+		# 倾向值只对一次决策有效；空动作集合也必须在返回前清零。
+		hand_pressure = 0.0
 		return {"action_type":"end_play", "actor_id":player_id}
 	identity_model.begin_evaluation(authoritative_snapshot)
 	# 当前合法动作上下文；卡牌专属AI据此识别阶段次数、目标与防具校验后仍可执行的真实后续动作。
@@ -63,7 +78,7 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	var preliminary_scored_actions: Array[Dictionary] = []
 	for action: Dictionary in legal_actions:
 		# 当前动作的完整直接评分；包含卡牌、装备和已安装技能的全部只读修正。
-		var score: float = _score_action(authoritative_snapshot, action)
+		var score: float = _score_action(authoritative_snapshot, action) + _get_hand_pressure_bonus(authoritative_snapshot, action)
 		preliminary_scored_actions.append({"action":action.duplicate(true), "score":score})
 	# 首轮评分上下文；只有在此之后，连续行动牌才允许读取其他合法动作的真实完整分数。
 	evaluator.set_current_legal_action_scores(preliminary_scored_actions)
@@ -74,7 +89,7 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	for action: Dictionary in legal_actions:
 		# 当前合法动作的综合效用；具体牌与技能只能修正分数，不能绕过合法动作集合。
 		# 连续行动牌会基于首轮完整评分修正自身链路收益，仍只能在同一合法动作集合中竞争。
-		var score: float = _score_action(authoritative_snapshot, action)
+		var score: float = _score_action(authoritative_snapshot, action) + _get_hand_pressure_bonus(authoritative_snapshot, action)
 		if score > best_score:
 			best_score = score
 			best_action = action
@@ -85,6 +100,8 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 	_clear_action_scoring_context()
 	evaluator.clear_current_legal_actions()
 	identity_model.end_evaluation()
+	# 倾向值只对本次决策有效；显式清零，防止下一名角色或下一次决策沿用同一次施加的旧值。
+	hand_pressure = 0.0
 	return result
 
 
@@ -163,6 +180,27 @@ func choose_low_value_card_uids(authoritative_snapshot: Dictionary, candidate_ui
 		result.append(sorted_uids[index])
 	identity_model.end_evaluation()
 	return result
+
+
+## 计算手牌消耗倾向对当前动作的加分；只加在真正消耗自己手牌的动作上。
+## 主动技能（use_skill）与结束出牌阶段（end_play）都不加分：前者的材料成本由技能自身评分负责，
+## 后者根本不是消耗动作，给它加分会让“多留牌”与“把牌打出去”得到同等待遇，违背本机制的意图。
+## 倾向值只在“确实存在被他人获得手牌的风险”时生效：若当前主演是本方队友，被拿走一张牌不构成损失，
+## 此处必须返回0，否则 AI 会在完全不需要的时候白白打空手牌。风险判定由评估器统一给出。
+func _get_hand_pressure_bonus(authoritative_snapshot: Dictionary, action: Dictionary) -> float:
+	if hand_pressure <= 0.0:
+		return 0.0
+	if not evaluator.should_dump_hand_against_starring(authoritative_snapshot, player_id):
+		return 0.0
+	# 动作类型；标准用牌与重铸都会把手牌移出。
+	var action_type: String = str(action.get("action_type", ""))
+	if action_type == "use_card" or action_type == "recast_card":
+		return hand_pressure
+	# 装备提供的自定义出牌动作（木牛流马、丈八蛇矛等）同样以手牌为材料，
+	# 它们没有固定的类型名，因此以“动作携带具体手牌 UID”作为统一判据。
+	if action_type != "use_skill" and int(action.get("card_uid", -1)) >= 0:
+		return hand_pressure
+	return 0.0
 
 
 ## 依据无名杀式牌效与技能钩子计算出牌阶段动作价值。

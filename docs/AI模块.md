@@ -416,5 +416,23 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 - **专属锦囊牌不进任何牌堆**，因此 AI 的牌堆推算与摸牌预期**不需要**任何分支：专属牌不会出现在初始牌堆、不会进入洗牌与重排，AI 也不会为它预留牌位或调整牌堆计数。牌堆只在以下三种情况被 AI 感知：开局牌堆张数、`draw_pile_count` 公开字段、以及真实的摸牌结果。专属牌由技能在运行时加入后，其张数变化自然进入 `draw_pile_count`，AI 照常按公开张数推算，无需知道牌面。
 - **`card_position` 位次询问的 AI 可提交性**（纯机制，不含策略）：`_build_card_choice_actions()` 为「每张候选手牌 × 每个位次」各生成一个确认动作，取消动作由既有 `allow_cancel` 分支统一生成，因此合法动作数为 `候选牌数 × 2 + 1`。该枚举的**唯一目的**是让请求在纯 AI 对局中不因「无合法动作」而被直接拒绝——若枚举为空，`request_card_choice()` 会拒绝整个请求，表现为窗口永久挂住。
 - **被放置的事实对 AI 不可见**：私有置牌事实（`PlayerState.private_pile_placement`）的序列化条件**只是「观察者就是本人」**，因此**任何** AI 快照（包括 `reveal_private=true` 的 AI 快照）都读不到其他角色的置牌事实；权威公开观察快照（`viewer_id = -1`）同样读不到。AI 因此无法、也**不得**通过快照、公共日志、移牌历史或表现事件反查「谁把哪张牌放在了牌堆第几位」。AI 只能观察到公开事实：牌堆张数的变化。
-- **本任务不新增 AI 评分**：具体哪个技能在什么时机发起位次询问、以及其二段效果如何与 AI 策略交互，属后续内容子任务；届时新增的策略必须按 `项目专属AGENTS.md` 2.3 的要求扩展**通用**决策逻辑，并写明扩展了哪条通用逻辑及其作用范围，而不是只写提示里那一条分支。
+- **本任务所在的机制底座不新增 AI 评分**：本节只交付端口与交互。使用它的具体技能（卡芙卡【游丝】）已在其后的「卡芙卡与【言灵】【游丝】的 AI 口径」一节补齐，新增策略按 `项目专属AGENTS.md` 2.3 的要求扩展的是**通用**决策逻辑（见该节的「通用出牌压力」），不是只写提示里那一条分支。
+
+## 卡芙卡与【言灵】【游丝】的 AI 口径（2026-10-03）
+
+内容层的规则见《游戏机制与玩法内容》的「卡芙卡与【言灵】【游丝】」；本节只记录 AI 侧入口、数值与通用性。
+
+- **【言灵】卡牌的唯一 AI 入口是 `modify_ai_action_score()`**，口径是硬门槛而不是权重：主演为**队友**时基础分 `AI_ALLY_STARRING_VALUE = 6.0`；主演为**敌人或不存在**时取 `AI_REFUSE_SCORE = -100.0`；目标不是「距离主演回合最近的敌人」时取 `AI_NON_NEAREST_TARGET_SCORE = -100.0`。判定 AI 上下文里「目标保住本回合操作权」的安全结果值 `AI_TARGET_SAFE_RESULT_VALUE = 4.0` 与【乐不思蜀】【兵粮寸断】同档，供通用改判定 AI 直接比较。本牌不新增任何 AI 状态。
+- **【游丝】第一段的评分入口是 `score_ai_choice()`**（按 `choice_request.context.kind == "yousi_placement"` 路由）：取消 `0.0`；救援分支要求本回合角色是自己的队友（态度严格大于 `AI_ALLY_ATTITUDE_LOWER_BOUND = 0.0`）**且**其判定区**第一张**延时锦囊是【乐不思蜀】（需红桃）或【兵粮寸断】（需梅花），只有花色正确**且**位次为牌堆顶第一张才得 `AI_MITIGATION_SCORE = 8.0`，其余组合 `-100.0`；常规分支为 `AI_ENEMY_TURN_BASE_SCORE / (1.0 + 手牌价值 × AI_PLACED_CARD_VALUE_DISCOUNT)`（基础 `3.0`、折扣 `1.0`），手牌越便宜分越高。非法组合（牌数不为 `1`、位次非法、牌不可见）一律 `AI_REFUSE_SCORE = -100.0`。
+  - **两个位次在常规分支同分**：需求配套 AI 原文是「随机放第一或第二张」，而 AI 评分必须确定（否则回放不可复现），因此实现把两个位次视为完全等价，把随机性交给既有合法动作枚举顺序，**不引入第二个随机源**。
+- **【游丝】第二段的评分入口是同一个 `score_ai_choice()`**（`kind == "yousi_gain"`）：无条件纯收益，所有合法选牌与确认同得 `AI_GAIN_SCORE = 20.0`，取消 `0.0`。
+- **通用出牌压力（被发动者的「其他AI」提示）**：需求要求被发动【游丝】的 AI 在主演不是队友时尽量把手牌用出去，避免被主演获得。实现**没有**让它去读牌堆顶前两张——那与「其他角色不可知」直接冲突。真正的做法是一条**与快照无关的标量压力**，通道为：
+  | 层 | 成员 | 说明 |
+  |---|---|---|
+  | 内容层 | `PlayerEffect.get_ai_hand_pressure() -> float`（基类默认 `0.0`） | 角色持续效果可声明“本回合更愿意消耗手牌”的倾向；`game_data/effects/yousi_pressure.gd` 返回 `AI_HAND_PRESSURE = 3.0` |
+  | 服务层 | `PlayerEffectService.get_ai_hand_pressure(player_id)` | 求和该玩家身上全部效果的压力值 |
+  | 权威层 | `MatchController.get_ai_hand_pressure(player_id)` | 供 `_request_ai_action()` 转发；它**不进入任何快照，也不写入存档** |
+  | AI 层 | `AICoordinator.request_action(..., hand_pressure)` → `BasicAIPolicy.set_hand_pressure()` → `_get_hand_pressure_bonus()` | 对**消耗自己手牌的动作**（`use_card`／`recast_card`，以及其他带 `card_uid` 的动作）加该分值；`end_play` 等不消耗手牌的动作不加分；一次决策结束后自动清零，避免倾向泄漏到下一名角色 |
+- **压力的公开信息门槛**：`NonameAIEvaluator.should_dump_hand_against_starring(snapshot, player_id)` 与 `NonameAIEvaluator.get_starring_player_id(snapshot)` 只读**公开快照**——主演的载体是武将牌左上角的公开提示条目（`StarringRoleService.CORNER_ENTRY_ID`），因此 AI 不需要任何隐藏通道。压力仅在「主演存在、不是行为者本人、且行为者对主演的态度低于明确队友门槛 `PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD`（与【无懈可击】保护性响应复用同一阈值）」时生效；主演是队友或场上没有主演时**完全不生效**。
+- **兼容性**：基类默认 `0.0`、协调器参数默认 `0.0`、策略初值 `0.0`，因此这条通道对既有内容与既有 AI 行为**逐字零影响**；它只改变决策权重，不改变手牌数、摸牌结果、判定结果或任何真实规则数值。
 

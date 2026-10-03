@@ -888,6 +888,27 @@ func request_pile_arrangement(title: String, prompt: String, candidates: Array[D
 	return host.call("request_card_choice", owner_player_id, title, prompt, candidates, candidates.size(), candidates.size(), false, skill_context) as Array[int]
 
 
+## 为技能持有者创建「先选一张手牌、再选牌堆顶第一张或第二张」的组合请求；返回本轮的同步结果（延迟路径为空数组）。
+## 选择类型为 "card_position"，界面因此渲染「牌堆顶第一张 / 牌堆顶第二张 / 取消」三个按钮，且未恰好选中一张手牌时前两项不可用。
+## 响应通过 continue_selection() 恢复：response.card_ids 恰有一张手牌，response.control_id 为位次选项或取消。
+## 与控制器自用端口 MatchController.request_hand_card_pile_position() 的分工：
+## 该端口返回结算后的字典，只在"当次调用内就能拿到结果"的同步场景可用；
+## 技能需要的是延迟恢复（界面或 AI 在后续帧提交），因此必须走 request_card_choice 并要求上下文携带技能归属，
+## 而两条路径的协议字段（选择类型、三个选项、取消声明、数量范围）统一由 build_card_position_context() 提供，不存在第二份。
+func request_hand_card_pile_position(title: String, prompt: String, allow_cancel: bool, context: Dictionary = {}) -> Array[int]:
+	if host == null or not host.has_method("request_card_choice") or not host.has_method("build_card_position_context"):
+		return []
+	# 技能恢复上下文；稳定技能 ID 与持有者 ID 由基类统一写入，具体技能只保存自身步骤参数。
+	var skill_context: Dictionary = _build_selection_context(context)
+	# 协议字段；由控制器的唯一来源补齐，技能侧不得自行拼装选项 ID 或数量范围。
+	skill_context = host.call("build_card_position_context", skill_context) as Dictionary
+	skill_context["choice_chooser_id"] = owner_player_id
+	# 候选；放置的是持有者**自己的手牌**，因此观看者与目标都是持有者本人。
+	var candidates: Array[Dictionary] = host.call("get_hand_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
+	return host.call("request_card_choice", owner_player_id, title, prompt, candidates, 1, 1, allow_cancel, skill_context) as Array[int]
+
+
+
 ## 按稳定UID查找技能持有者当前拥有的转化材料；支持手牌、木牛“粮”与装备区，不移动实体牌。
 func get_owned_conversion_material_card(card_uid: int) -> CardInstance:
 	# 技能持有者权威状态；未绑定或角色无效时没有任何可用材料。

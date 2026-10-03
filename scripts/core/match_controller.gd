@@ -181,6 +181,20 @@ const DRAW_PILE_POSITION_TOP: int = 1
 ## 实现上等价于插入到「距数组末尾 1 个元素」的位置；位次与数组下标的换算只允许在本文件与移动服务内进行。
 const DRAW_PILE_POSITION_SECOND: int = 2
 
+## 摸牌堆位次：洗入牌堆的任意位次。
+## 语义是「由权威随机源在整副牌堆中均匀选一个位次」，供「随机加入N张」类效果使用；
+## 它与 1/2 这类**明确位次**不同：明确位次由内容指定，本值由规则层现场抽取。
+## 之所以必须是规则层抽取而不是内容层自行随机：只有本文件持有本局唯一随机源 `_rng`，
+## 而存档恢复与回放重演都依赖 `state.random_history` 复现同一结果（内容层禁止使用非权威随机源）。
+const DRAW_PILE_POSITION_RANDOM: int = 0
+
+## 卡牌元数据中声明自身花色的键名；只有**不进入任何牌堆配置**的专属牌需要它。
+## 普通牌的牌面来自 data/decks.json 的紧凑条目，专属牌没有牌堆条目，因此花色点数必须由卡牌文件自带。
+const CARD_METADATA_KEY_SUIT: String = "suit"
+
+## 卡牌元数据中声明自身点数的键名；与 CARD_METADATA_KEY_SUIT 成对使用，含义与取值域完全一致。
+const CARD_METADATA_KEY_RANK: String = "rank"
+
 ## 「按定义造牌入堆」端口在调用方未给出合法花色时使用的权威随机花色池；顺序固定，保证同一种子得到同一张牌。
 ## 只影响“随机加入”类效果的牌面取值，不参与规则判定；改动它会让同一随机种子生成的历史回放牌面发生变化。
 const DRAW_PILE_INSERT_SUIT_POOL: Array[String] = ["spade", "heart", "club", "diamond"]
@@ -7850,6 +7864,19 @@ func get_private_hand_view_candidates(viewer_id: int, target_id: int) -> Array[D
 	return result
 
 
+## 返回「目标角色的完整手牌牌面 + 其装备区」的候选；供「观看其手牌，并在其明置的手牌与装备区中选择一张获得」类效果使用。
+## 与 get_player_zone_candidates 的区别有两点，都是本端口存在的理由：
+## ① 手牌按**完整牌面**发送（观看语义），而通用区域候选对其他角色只发牌背；
+## ② 明确**排除判定区**：延时锦囊不属于该角色"拥有的牌"，把它列进获得候选会与「获得其一张牌」的描述不符。
+## 实现上直接复用既有的「私有手牌」与「区域候选」两个构建入口，因此装备槽顺序与手牌序列化格式都只有一处来源。
+func get_private_hand_and_equipment_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
+	# 候选结果；先取完整手牌牌面，再追加仅含装备区的区域候选。
+	var result: Array[Dictionary] = get_private_hand_view_candidates(viewer_id, target_id)
+	result.append_array(_build_player_zone_candidates(viewer_id, target_id, false, true, false))
+	return result
+
+
+
 ## 返回目标判定区中的选牌候选；viewer_id 保留与其他区域候选 API 一致，判定区牌默认公开。
 func get_judgment_candidates(viewer_id: int, target_id: int) -> Array[Dictionary]:
 	return _build_player_zone_candidates(viewer_id, target_id, false, false, true)
@@ -8754,12 +8781,23 @@ func _is_valid_draw_pile_position(position: int) -> bool:
 	return position == DRAW_PILE_POSITION_TOP or position == DRAW_PILE_POSITION_SECOND
 
 
+## 判断一个位次值能否作为「按定义造牌入堆」的目标位次。
+## 与置牌端口共用的 _is_valid_draw_pile_position 相比，本判定额外接受 DRAW_PILE_POSITION_RANDOM：
+## 置牌端口服务的是玩家明确选择的「第一张/第二张」，而造牌入堆端口还要服务「随机洗入」类效果。
+## 两个判定各自独立而不是互相放宽，避免「随机位次」这种只对造牌有意义的取值泄漏进玩家交互与私有事实。
+func _is_valid_draw_pile_insert_position(position: int) -> bool:
+	return position == DRAW_PILE_POSITION_RANDOM or _is_valid_draw_pile_position(position)
+
+
 ## 按卡牌定义创建一张实体牌并按位次加入摸牌堆；返回新实体牌的 UID，失败返回 -1 且不产生任何副作用。
 ## 适用场景：专属锦囊牌（卡牌元数据 `exclusive: true`）等正常情况下**不加入游戏**、
 ## 只有被其他角色的技能或其他情况触发时才会按要求加入游戏的内容。
-## suit/rank 缺省或非法时改用本局权威随机源 `_rng` 取一组花色与点数，并把结果写入 `state.random_history`；
-## 因此“随机加入三张”在存档恢复与回放重演时会得到同一组牌面（调用方禁止自行使用非权威随机源）。
-## position 与 place_hand_card_on_draw_pile_top 共用同一套位次常量：1 = 牌堆顶第一张（最先被摸到），2 = 第二张。
+## 牌面取值优先级（自上而下，先命中者生效）：
+## ① 调用方显式给出的合法 suit/rank；② 卡牌定义自带的 `suit`/`rank` 元数据；
+## ③ 本局权威随机源 `_rng` 现场抽取。第③档结果与位次随机都会写入 `state.random_history`，
+## 因此「随机加入三张」在存档恢复与回放重演时会得到同一组牌面与同一组位次（调用方禁止自行使用非权威随机源）。
+## position 取值：DRAW_PILE_POSITION_TOP（1，牌堆顶第一张，最先被摸到）、DRAW_PILE_POSITION_SECOND（2，第二张），
+## 或 DRAW_PILE_POSITION_RANDOM（0，由权威随机源在整副牌堆中均匀选一个位次）。
 ## 本端口只做「一次确定性地插入一张牌」，**不内置**「随机加入 N 张」的批量语义；插入几张、何时插入由调用方决定。
 func create_and_insert_card_into_draw_pile(definition_id: String, suit: String = "", rank: int = 0, position: int = DRAW_PILE_POSITION_TOP) -> int:
 	# 对局前置；终局后不再允许任何内容向牌堆注入新实体，避免影响已经结算的胜负与已发出的快照。
@@ -8768,38 +8806,50 @@ func create_and_insert_card_into_draw_pile(definition_id: String, suit: String =
 	# 定义前置；定义不存在时不能造出无法查询牌面与类别的实体牌。
 	if definition_id.is_empty() or GameDatabase.get_card_definition(definition_id) == null:
 		return -1
-	# 位次前置；与置牌端口共用同一判定，非法位次必须零副作用地失败。
-	if not _is_valid_draw_pile_position(position):
+	# 位次前置；非法位次必须零副作用地失败，且判定必须发生在任何随机数消费之前。
+	if not _is_valid_draw_pile_insert_position(position):
 		return -1
-	# 最终牌面；调用方给出的花色点数不完整或不合法时整体改用权威随机，避免产生半随机的不一致牌面。
+	# 卡牌定义副本；只用于读取卡牌自带牌面，不参与任何规则判定。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	# 最终牌面；调用方给出的花色点数不完整或不合法时整体改用同一来源，避免产生半随机的不一致牌面。
 	var resolved_suit: String = suit
 	var resolved_rank: int = rank
-	# 本次是否动用了权威随机源；只有动用时才写随机历史，使显式指定的牌面也能被复盘核对。
+	if not CardInstance.is_valid_suit(resolved_suit) or not CardInstance.is_valid_rank(resolved_rank):
+		# 卡牌自带牌面；专属牌没有牌堆条目，其花色点数由卡牌文件自己声明，属于该牌的内在属性。
+		resolved_suit = str(definition.get(CARD_METADATA_KEY_SUIT, ""))
+		resolved_rank = int(definition.get(CARD_METADATA_KEY_RANK, 0))
+	# 本次是否动用了权威随机源取牌面；只有动用时才写随机历史，使显式指定的牌面也能被复盘核对。
 	var used_authoritative_random: bool = false
 	if not CardInstance.is_valid_suit(resolved_suit) or not CardInstance.is_valid_rank(resolved_rank):
 		resolved_suit = DRAW_PILE_INSERT_SUIT_POOL[_rng.randi_range(0, DRAW_PILE_INSERT_SUIT_POOL.size() - 1)]
 		resolved_rank = _rng.randi_range(DRAW_PILE_INSERT_RANK_MIN, DRAW_PILE_INSERT_RANK_MAX)
 		used_authoritative_random = true
+	# 本次是否动用了权威随机源取位次；洗入结果取决于抽牌时的牌堆张数，因此同样必须记账。
+	var used_random_position: bool = position == DRAW_PILE_POSITION_RANDOM
+	# 最终位次；洗入时在「牌堆顶第一张（1）」到「牌堆最底一张的下一位（size + 1）」之间均匀取值。
+	# 上界取 size + 1 而不是 size，是为了让新牌也能落到牌堆最底部，保证每个位次被选中的概率相同。
+	var resolved_position: int = _rng.randi_range(DRAW_PILE_POSITION_TOP, state.draw_pile.size() + 1) if used_random_position else position
 	# 新实体牌；此时它还不属于任何区域，所以必须走移动服务的「尚无区域的新牌」入口而不是 move_card
 	# （后者对「来源区域等于目标区域且持有者未变」的重复请求会拒绝，新牌默认 zone 就是 draw_pile）。
 	var inserted_card: CardInstance = CardInstance.new(definition_id, resolved_suit, resolved_rank)
 	_ensure_card_movement()
 	if card_movement == null:
 		return -1
-	if used_authoritative_random:
+	if used_authoritative_random or used_random_position:
 		# 随机记账；字段与既有 arrange_draw_pile_cards 的写法一致，只保存可序列化数据。
 		state.random_history.append({
 			"kind":EXCLUSIVE_CARD_INSERT_REASON,
 			"definition_id":definition_id,
 			"suit":resolved_suit,
 			"rank":resolved_rank,
-			"position":position,
+			"position":resolved_position,
 		})
 	# 位次落位；移动服务负责产生恰好一条 card_moved 增量与一条移牌历史。
-	if card_movement.insert_new_card_into_draw_pile(inserted_card, position, EXCLUSIVE_CARD_INSERT_REASON, state.current_event_id) == null:
+	if card_movement.insert_new_card_into_draw_pile(inserted_card, resolved_position, EXCLUSIVE_CARD_INSERT_REASON, state.current_event_id) == null:
 		return -1
 	_emit_state()
 	return inserted_card.uid
+
 
 
 ## 写入一条「其他角色不可知」的置牌事实；成功返回 true。
@@ -8900,25 +8950,13 @@ func _build_pile_slot_control_options() -> Array[Dictionary]:
 	]
 
 
-## 构建指定玩家自己的手牌候选；不含装备区、判定区与木牛「粮」，也绝不会包含其他角色的任何牌。
-func _build_own_hand_candidates(player_id: int) -> Array[Dictionary]:
-	# 手牌候选结果；角色不存在时返回空数组，由选择协议按“无可选项但可取消”处理。
-	var result: Array[Dictionary] = []
-	var player: PlayerState = state.get_player(player_id) if state != null else null
-	if player == null:
-		return result
-	for hand_card: CardInstance in player.hand:
-		result.append(_serialize_choice_candidate(hand_card, player_id, "hand", true))
-	return result
-
-
-## 创建「先选一张手牌、再选牌堆位次」的组合请求；返回值形状固定为 `{confirmed, card_uid, position}`。
-## 位次选项固定三项，稳定 ID 见 PILE_SLOT_OPTION_*；只有选择了一张手牌才能确认前两项，取消始终可用。
-## 候选只包含发起者自己的手牌，其他角色的手牌不会进入候选。
-## 本入口是既有统一选择协议（ChoiceRequest）的组合使用，不引入第二套选择框架，也不新增归还逻辑。
-## allow_cancel 与 context 为可选补充参数：context 用于携带调用技能的 `kind` 与恢复上下文（须保持纯可序列化）。
-func request_hand_card_pile_position(player_id: int, title: String, prompt: String, allow_cancel: bool = true, context: Dictionary = {}) -> Dictionary:
-	# 组合选择上下文；选择类型、三个文字选项与取消选项声明由本包装接口统一写入，调用方只维护业务 kind。
+## 构建「一张手牌 + 一个牌堆位次」组合请求的完整协议字段；返回可直接交给 request_card_choice 的上下文。
+## 本函数是 card_position 协议的**唯一来源**：选择类型、三个文字选项、取消选项声明与两个维度的数量范围都只在这里写入，
+## 因此控制器自用端口（request_hand_card_pile_position）与技能侧包装（SkillDefinition.request_hand_card_pile_position）
+## 不会各自维护一份协议字段，也就不会出现「两处选项集合不一致」这类分叉。
+## 入参 context 中的业务字段（kind、技能恢复参数等）原样保留；同名协议字段由本函数覆盖，调用方不得自行预写。
+func build_card_position_context(context: Dictionary = {}) -> Dictionary:
+	# 协议上下文；深拷贝保证调用方的字典不会被本函数写入。
 	var position_context: Dictionary = context.duplicate(true)
 	position_context["choice_type_override"] = CARD_POSITION_CHOICE_TYPE
 	position_context["control_options"] = _build_pile_slot_control_options()
@@ -8927,7 +8965,20 @@ func request_hand_card_pile_position(player_id: int, title: String, prompt: Stri
 	position_context["max_card_select"] = 1
 	position_context["min_target_select"] = 0
 	position_context["max_target_select"] = 0
-	request_card_choice(player_id, title, prompt, _build_own_hand_candidates(player_id), 1, 1, allow_cancel, position_context)
+	return position_context
+
+
+## 创建「先选一张手牌、再选牌堆位次」的组合请求；返回值形状固定为 `{confirmed, card_uid, position}`。
+## 位次选项固定三项，稳定 ID 见 PILE_SLOT_OPTION_*；只有选择了一张手牌才能确认前两项，取消始终可用。
+## 候选只包含发起者自己的手牌，其他角色的手牌不会进入候选。
+## 本入口是既有统一选择协议（ChoiceRequest）的组合使用，不引入第二套选择框架，也不新增归还逻辑。
+## 适用场景：调用方**不需要**延迟恢复（纯规则测试、AI 直接提交、无界面结算）；
+## 需要拿到延迟恢复结果的技能请改用 SkillDefinition.request_hand_card_pile_position()，它复用同一份协议上下文。
+## allow_cancel 与 context 为可选补充参数：context 用于携带调用技能的 `kind` 与恢复上下文（须保持纯可序列化）。
+func request_hand_card_pile_position(player_id: int, title: String, prompt: String, allow_cancel: bool = true, context: Dictionary = {}) -> Dictionary:
+	# 组合选择上下文；协议字段统一由 build_card_position_context 写入，本端口不重复拼装。
+	var position_context: Dictionary = build_card_position_context(context)
+	request_card_choice(player_id, title, prompt, get_hand_candidates(player_id, player_id), 1, 1, allow_cancel, position_context)
 	# 提交结果映射；服务器与纯规则测试会在本调用内完成结算，界面与 AI 的异步路径在恢复阶段读取同一份结果槽。
 	var resolved_position: int = 0
 	if _resolved_control_choice_id == PILE_SLOT_OPTION_TOP:
@@ -8941,6 +8992,7 @@ func request_hand_card_pile_position(player_id: int, title: String, prompt: Stri
 		"card_uid":resolved_card_uid,
 		"position":resolved_position,
 	}
+
 
 
 ## 将角色普通手牌数调整至指定值；不足时摸牌，超出时由该角色选择并弃置差额。
@@ -9130,6 +9182,15 @@ func get_player_effect(player_id: int, effect_id: String) -> PlayerEffect:
 ## 判断一名角色身上是否存在指定效果实例；供技能快速查询自己施加过的持续效果。
 func has_player_effect(player_id: int, effect_id: String) -> bool:
 	return get_player_effect(player_id, effect_id) != null
+
+
+## 汇总指定角色身上全部效果声明的 AI 手牌压力；没有效果时返回0.0。
+## 本端口是「效果影响 AI 倾向」的唯一出口：它只返回一个标量，因此既不会把隐藏事实带进任何快照，
+## 也不会让 AI 层认识任何具体效果 ID。AI 决策在请求动作前调用它，并把结果交给策略作为本次决策的倾向值。
+func get_ai_hand_pressure(player_id: int) -> float:
+	if player_effect_service == null:
+		return 0.0
+	return player_effect_service.get_ai_hand_pressure(player_id)
 
 
 ## 移除一名角色身上的全部效果实例；角色死亡或需要完整清空某角色状态时调用。
@@ -15848,7 +15909,9 @@ func _run_ai_after_delay(token: int) -> void:
 	var full_snapshot: Dictionary = state.to_dict(player_id, true)
 	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# 策略返回的动作数据；随后恢复为标准 PlayerAction 并再次校验。
-	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions)
+	# 额外传入本回合该角色的手牌消耗倾向值：它由角色身上的持续效果声明，
+	# 只影响本次评分（数值越大越愿意把手牌打出去），不进入快照、不改变任何合法动作集合。
+	var action_data: Dictionary = ai_coordinator.request_action(player_id, full_snapshot, legal_actions, get_ai_hand_pressure(player_id))
 	# AI动作可能因延迟期间的状态变化被权威入口拒绝；失败后仍须回到统一续接出口，最终受每阶段动作上限约束。
 	if not _submit_ai_action(PlayerAction.from_dict(action_data)):
 		_ensure_ai_progress_after_resolution()
