@@ -185,8 +185,12 @@ func _score_single_slash_target(authoritative_snapshot: Dictionary, target_id: i
 
 
 ## 返回持有者失去1点体力的AI估值；使用统一资源换算端口，不重复声明体力与牌的折算比例。
-func _score_self_hp_cost(authoritative_snapshot: Dictionary, evaluator: Object) -> float:
-	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -HP_COST)
+## 修正说明：资源变化的“目标”就是持有者本人，而 score_resource_change 内部会再乘一次对目标的态度；
+## 自己对自己的态度恒为满值（10/ATTITUDE_SCALE = 2），会把1点体力的代价放大一倍（-4.0而非文档声明的 -HP_RESOURCE_VALUE=-2.0），
+## 使斗地主等低收益场景下“指定自己再改判给相邻敌人”的净分被压成负数，AI 因而不出这张【杀】。
+## 因此这里直接按统一资源常量计价：1点体力 = HP_RESOURCE_VALUE，与文档口径和其余内容层技能一致。
+func _score_self_hp_cost(_authoritative_snapshot: Dictionary, _evaluator: Object) -> float:
+	return -float(HP_COST) * NonameAIEvaluator.HP_RESOURCE_VALUE
 
 
 ## 返回指定角色在存活环座次上的相邻角色ID数组；无相邻者或目标无效时返回空数组。

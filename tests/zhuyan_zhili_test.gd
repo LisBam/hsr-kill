@@ -53,6 +53,8 @@ func _run() -> void:
 		return
 	if not _test_ai_no_idle_loop():
 		return
+	if not _test_zhili_ai_self_target_in_doudizhu():
+		return
 	print("ZHUYAN_ZHILI_PASS")
 	get_tree().quit(0)
 
@@ -704,6 +706,53 @@ func _test_ai_no_idle_loop() -> bool:
 	var confirm_when_stale: float = wansi.score_ai_choice(stale_snapshot, wansi_request, wansi_confirm_action, evaluator)
 	if confirm_when_stale >= 0.0:
 		return _fail("ai_wansi_stale_score=%f" % confirm_when_stale)
+	return true
+
+
+## 【支离】斗地主AI 口径：3人局里地主的两个邻居都是农民，指定自己出手正好“只打敌人”，
+## 因此该动作的净分必须严格为正；修复前自身1点体力被“自己对自己的满态度”放大成2点体力的代价，
+## 净分被压成负数，AI 因而不出这张【杀】，玩家看到的就是“刃不会用【杀】指定自己来打敌人”。
+func _test_zhili_ai_self_target_in_doudizhu() -> bool:
+	_reset_state(3)
+	# 斗地主身份：一号位地主、其余两名农民；地主对两名农民全部为敌方态度。
+	for player_id: int in range(3):
+		# 当前角色；身份改写后必须保持“已公开”，否则身份推断衰减会让态度不确定。
+		var player: PlayerState = _controller.state.get_player(player_id)
+		player.identity = "landlord" if player_id == 0 else "peasant"
+		player.identity_revealed = true
+	_controller.state.match_mode = IdentityRules.MODE_DOUDIZHU
+	var zhili: SkillDefinition = _install_single_skill(0, "zhili")
+	if zhili == null:
+		return _fail("zhili_ai_missing")
+	# 评分用权威快照与评估器；与基础AI读取同一套公开字段。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(snapshot)
+	# 指定自己的【杀】；3人局的相邻角色是两名农民，改写后正好只命中敌人。
+	var self_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_definition_id":"sha", "card_color":"spade", "target_ids":[0]}
+	# 通用层对原目标（自己）的评分；技能钩子按改写后的真实目标做精确替换。
+	var self_base_score: float = evaluator.score_action(snapshot, self_action, 0)
+	var self_score: float = zhili.modify_ai_card_action_score(snapshot, self_action, self_base_score, evaluator)
+	if self_score <= 0.0:
+		return _fail("zhili_ai_self_score=%f base=%f" % [self_score, self_base_score])
+	# 指定一名农民的【杀】；3人局的相邻角色是地主自己与另一名农民，会把自身伤害也算进来，必须劣于指定自己。
+	var peasant_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_definition_id":"sha", "card_color":"spade", "target_ids":[1]}
+	var peasant_score: float = zhili.modify_ai_card_action_score(snapshot, peasant_action, evaluator.score_action(snapshot, peasant_action, 0), evaluator)
+	if self_score <= peasant_score:
+		return _fail("zhili_ai_self_preference self=%f peasant=%f" % [self_score, peasant_score])
+	# 代价口径：自身1点体力必须恰好按 HP_RESOURCE_VALUE 计一次，不能因为“自己对自己的态度”再翻倍。
+	# 逐步分解与实现同源，锁定的是换算口径而非某个具体数值，改黑箱公式时测试会同步失败。
+	var slash_definition: Dictionary = GameDatabase.get_card("sha")
+	# 【杀】的卡牌AI配置；目标收益必须由统一评估端口给出，不能在测试里另立比例。
+	var ai_profile: Dictionary = evaluator.get_card_ai_profile(slash_definition)
+	var target_result: float = float(ai_profile.get("target_result", 0.0))
+	var expected_score: float = self_base_score
+	expected_score -= evaluator.score_target_effect(snapshot, 0, 0, slash_definition, ai_profile, target_result, "spade")
+	expected_score += evaluator.score_target_effect(snapshot, 0, 1, slash_definition, ai_profile, target_result, "spade")
+	expected_score += evaluator.score_target_effect(snapshot, 0, 2, slash_definition, ai_profile, target_result, "spade")
+	expected_score -= NonameAIEvaluator.HP_RESOURCE_VALUE
+	if not is_equal_approx(self_score, expected_score):
+		return _fail("zhili_ai_hp_cost score=%f expected=%f" % [self_score, expected_score])
 	return true
 
 
