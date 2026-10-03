@@ -618,6 +618,7 @@ func _ready() -> void:
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
 	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
 	card_selection_panel.arrangement_submitted.connect(_on_pile_arrangement_submitted)
+	card_selection_panel.position_submitted.connect(_on_card_position_submitted)
 	card_selection_panel.information_requested.connect(_on_information_requested.bind(card_selection_panel))
 	card_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(card_selection_panel))
 	use_button.pressed.connect(_on_use_pressed)
@@ -3629,6 +3630,24 @@ func _on_pile_arrangement_submitted(request_id: int, ordered_card_uids: Array[in
 		_refresh_card_selection_panel()
 
 
+## 把「一张手牌 + 一个牌堆位次」的确认转换为标准选择动作；两项都会在权威端再次校验。
+## 与排序请求的区别只在语义：这里同时提交一张实体牌和一个位次选项，协议字段完全一致。
+func _on_card_position_submitted(request_id: int, selected_card_uids: Array[int], control_id: String) -> void:
+	# 位次放置动作；手牌 UID 与位次选项同时送达，缺任一项都会被 _submit_card_choice 整条拒绝。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {
+		"request_id":request_id,
+		"selected_card_uids":selected_card_uids.duplicate(),
+		"selected_target_ids":[],
+		"selected_control_id":control_id,
+		"confirmed":true,
+	}
+	if match_controller.submit_action(action) and _modal_choice_request_id == request_id:
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_refresh_card_selection_panel()
+
+
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
 func _on_card_choice_cancelled(request_id: int) -> void:
 	# 明确取消响应；confirmed=false 与空卡牌数组共同表达放弃，不会被强制选择的最小数量误推断为确认。
@@ -3836,7 +3855,9 @@ func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	# 文字控制项需要显示独立选项按钮，空候选不能误判为可在手牌区完成。
 	# 牌名候选同样没有实体手牌：它的 candidates 为空数组，若不排除，下方循环因“没有任何候选违反条件”
 	# 而直接返回 true，请求会被误判为内联，独立窗口不显示，表现为点击技能后毫无反应。
-	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control", "card_name"]:
+	# 牌堆位次询问（card_position）同样必须使用独立窗口：它要在手牌候选之外再显示三个位次按钮，
+	# 且内联路径无法表达“未选牌时位次按钮不可确认”，因此这里必须显式排除。
+	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control", "card_name", "card_position"]:
 		return false
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))

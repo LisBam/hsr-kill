@@ -56,6 +56,9 @@ const GENDER_NAMES: Dictionary = {
 	"unknown":"未知",
 }
 
+## 专属锦囊牌的玩家可见标识；只在卡牌元数据 `exclusive` 为真时前置到分类文本，非专属牌完全不受影响。
+const EXCLUSIVE_CARD_TAG_NAME: String = "专属"
+
 ## 武将牌在图鉴网格中的显示比例；默认0.72与联机形象选择一致，运行时只影响浏览密度。
 @export_range(0.5, 1.0, 0.01) var character_card_scale: float = 0.72
 
@@ -864,6 +867,8 @@ func _sort_game_card_ids(left_card_id: String, right_card_id: String) -> bool:
 	return left_name < right_name
 
 ## 返回游戏牌类型与子类型的组合文本；未知值保留原始标识，避免扩展内容在资料页失去分类。
+## 专属锦囊牌（元数据 `exclusive: true`）额外前置「专属」标识：它不属于任何牌堆配置，
+## 只有被其他角色的技能或其他情况触发时才会按要求加入游戏；图鉴必须能把它与可从牌堆摸到的常规牌区分开。
 func _resolve_card_type_name(card_definition: Dictionary) -> String:
 	# 当前主类型稳定 ID；用于映射基本、锦囊或装备。
 	var card_type: String = str(card_definition.get("type", ""))
@@ -873,7 +878,12 @@ func _resolve_card_type_name(card_definition: Dictionary) -> String:
 	var type_name: String = str(CARD_TYPE_NAMES.get(card_type, card_type))
 	# 当前子类型玩家可见名称；未知且非空时回退原始标识。
 	var subtype_name: String = str(CARD_SUBTYPE_NAMES.get(card_subtype, card_subtype))
-	return type_name if subtype_name.is_empty() else "%s · %s" % [type_name, subtype_name]
+	# 组合后的分类文本；子类型为空时只保留主类型，避免出现悬空分隔符。
+	var resolved_type_name: String = type_name if subtype_name.is_empty() else "%s · %s" % [type_name, subtype_name]
+	# 专属标识；该字段同时进入资料页副标题与搜索文本，因此玩家可以直接搜索「专属」定位这类牌。
+	if bool(card_definition.get("exclusive", false)):
+		return "%s · %s" % [EXCLUSIVE_CARD_TAG_NAME, resolved_type_name]
+	return resolved_type_name
 
 
 ## 返回武将性别玩家可见文本；未知扩展值统一回退“未知”。

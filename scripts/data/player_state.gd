@@ -87,6 +87,14 @@ var public_marks: Dictionary = {}
 ## 修改它会让被操控者的输入锁定、第一视角归属与代理提交授权三处判定同时改变。
 var turn_input_delegate_id: int = -1
 
+## 本角色最近一次「其他角色不可知」的置牌事实；空字典表示当前没有这类事实。
+## 键固定为 card_uid（被放置的实体牌 UID）、position（牌堆位次，1 或 2）、turn_player_id（放置时的回合角色）、
+## turn_number（放置时的回合号）；后两项供技能在本回合结束时做「回合角色 + 回合号」双重匹配。
+## 默认空字典表示没有待结算的置牌。它属于**私有事实**：只有使用者本人与权威端可见，
+## 其他观察者、AI 快照与回放都读不到；只允许经 MatchController.set/clear_private_pile_placement() 写入。
+## 修改它会让「游丝」类技能的二段效果判定与读档恢复结果同时改变。
+var private_pile_placement: Dictionary = {}
+
 ## 当前是否由基础 AI 代替真人执行操作；默认 false，仅在真人主动托管或联机掉线后由权威控制器写入，并会同步到所有观察者。
 var auto_managed: bool = false
 
@@ -325,6 +333,8 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 	player.public_marks = (data.get("public_marks", {}) as Dictionary).duplicate(true)
 	# 操控登记按权威口径恢复；旧存档缺少该键时按 -1（无登记）处理，语义安全。
 	player.turn_input_delegate_id = int(data.get("turn_input_delegate_id", -1))
+	# 「其他角色不可知」的置牌事实按权威口径恢复；旧存档缺少该键时按空字典（无待结算事实）处理。
+	player.private_pile_placement = (data.get("private_pile_placement", {}) as Dictionary).duplicate(true)
 	player.auto_managed = bool(data.get("auto_managed", false))
 	player.auto_managed_offline = false
 	player.wine_used = bool(data.get("wine_used", false))
@@ -517,7 +527,8 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 	# 规范化后的整区废除结论；只在五个基础栏位全部废除时公开为true。
 	var serialized_equipment_area_abolished: bool = abolished_equipment_slots_data.size() == EQUIPMENT_SLOT_ORDER.size()
 
-	return {
+	# 序列化结果；先装配全部公开与私有字段，最后再按可见性补入私有置牌事实。
+	var result: Dictionary = {
 		"player_id": player_id,
 		"display_name": display_name,
 		"character_id": character_id if character_revealed or viewer_id == player_id or reveal_private else "",
@@ -587,3 +598,16 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"skill_history": skill_history.duplicate(true),
 		"skill_history_count": skill_history.size(),
 	}
+	# 「其他角色不可知」的置牌事实：只有使用者本人能读到，因此判定条件同时要求「观察者就是本人」与「权威全量序列化」。
+	# 刻意不采用单独的 reveal_private：AI 快照统一是 to_dict(该AI的player_id, true)，只用 reveal_private 判定会让
+	# 每一个 AI 都读到其他角色的置牌事实，直接违背来源需求原文的「其他角色不可知」。
+	# 刻意不采用单独的 viewer_id == player_id：本地广播快照是 to_dict(本机真人, false)，而该快照会被整体录制进回放，
+	# 只用观察者判定会把置牌事实写进回放文件，违背原文的「不出现在对局记录中」。
+	# 因此两个条件缺一不可：存档流程 to_dict(本人的player_id, true) 与技能侧权威读取都能拿到，
+	# 而本地广播、局域网定向快照（均为 reveal_private=false）与权威公开观察快照（viewer_id = -1）都拿不到。
+	# 技能结算不依赖本方法：权威端统一走 MatchController.get_private_pile_placement() 直接读取实体字段。
+	# 仅在非空时写入该键：这样在没有任何置牌事实时，其他观察者拿到的快照形状与新增本字段之前逐字节相同。
+	if reveal_private and viewer_id == player_id:
+		if not private_pile_placement.is_empty():
+			result["private_pile_placement"] = private_pile_placement.duplicate(true)
+	return result

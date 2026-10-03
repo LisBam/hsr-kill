@@ -29,6 +29,7 @@ game_data/cards|skills|characters  →  GameDatabase  →  CardInstance / Player
 - [ ] 文件名与稳定 `id` 使用完整小写拼音（见 [naming-and-directory.md](./naming-and-directory.md)）。
 - [ ] 卡牌：效果直接写在卡牌文件；技能：规则与配套 AI 都写在技能文件。
 - [ ] 新增卡牌后确认已加入 `data/decks.json` 牌堆。
+  - **例外：专属锦囊牌**（元数据 `"exclusive": true`）**正常情况不加入游戏中**，只有被其他角色的技能或其他情况触发时才会按要求加入游戏，因此**不得**写入任何牌堆；`GameDatabase._validate_decks()` 只做「牌堆 → 卡牌」单向校验，未入牌堆不报错。判定入口：`CardDefinition.is_exclusive()`。详见 `docs/内容制作指南.md`「专属锦囊牌」一节。
 - [ ] 核对必填字段齐全（数据库强制 7 项 + 规则完整性字段）。
 - [ ] 所有魔法数字提取为带注释的常量或 `@export` 变量。
 
@@ -54,7 +55,7 @@ game_data/cards|skills|characters  →  GameDatabase  →  CardInstance / Player
 - [ ] `description` 完整写明发动时机、条件、次数、目标、费用与效果数值。
 - [ ] 玩家可见的技能描述文本与需求原文**逐字一致**。
 - [ ] 正式技能已补配套 AI；`sample_only` 占位技能**未**伪造 AI。
-- [ ] 新卡已登记进 `data/decks.json`；新武将的技能引用有效。
+- [ ] 新卡已登记进 `data/decks.json`；新武将的技能引用有效（**专属锦囊牌例外**：`"exclusive": true` 的牌不进任何牌堆，只能由技能在运行时加入游戏）。
 - [ ] `GameDatabase.validation_errors` 为空，可正常开局。
 - [ ] 已同步 `docs/内容制作指南.md`、`docs/卡牌系统.md`、`docs/游戏机制与玩法内容.md`（涉数值）。
 

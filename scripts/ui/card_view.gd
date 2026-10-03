@@ -284,7 +284,8 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
 	var display_name: String = GameSettings.resolve_card_display_name(visual_definition)
 	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。
-	var type_text: String = _type_text(str(visual_definition.get("type", "")), str(visual_definition.get("subtype", "")))
+	# 专属锦囊牌额外带上「专属」前缀：它不属于任何牌堆，牌面必须能直接看出这一点。
+	var type_text: String = _type_text(str(visual_definition.get("type", "")), str(visual_definition.get("subtype", "")), bool(visual_definition.get("exclusive", false)))
 	_suit_rank_text = "%s%s" % [suit_text, rank_text]
 	_display_name_text = display_name
 	_card_type_text = "%s%s" % ["粮 · " if is_wooden_ox_card else "", type_text]
@@ -704,13 +705,16 @@ func _rank_text(rank: int) -> String:
 
 
 ## 将配置类别与装备子类型转换为中文标签；装备牌直接显示实际槽位类别，避免牌面底部重复显示笼统父类型。
-func _type_text(card_type: String, card_subtype: String = "") -> String:
+## is_exclusive 为真时前置「专属」标识：专属牌正常情况不加入游戏，只有被技能或其他情况触发时才会加入。
+func _type_text(card_type: String, card_subtype: String = "", is_exclusive: bool = false) -> String:
+	# 专属前缀；非专属牌保持空字符串，因此既有牌面文本逐字不变。
+	var exclusive_prefix: String = "专属 · " if is_exclusive else ""
 	if card_type == "equipment":
-		return {
+		return "%s%s" % [exclusive_prefix, {
 			"weapon":"武器牌",
 			"armor":"防具牌",
 			"offensive_mount":"进攻坐骑牌",
 			"defensive_mount":"防御坐骑牌",
 			"treasure":"宝物牌",
-		}.get(card_subtype, "装备牌")
-	return {"basic":"基本牌", "trick":"锦囊牌"}.get(card_type, "卡牌")
+		}.get(card_subtype, "装备牌")]
+	return "%s%s" % [exclusive_prefix, {"basic":"基本牌", "trick":"锦囊牌"}.get(card_type, "卡牌")]

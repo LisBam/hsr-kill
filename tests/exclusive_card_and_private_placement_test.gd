@@ -1,0 +1,815 @@
+extends Node
+
+## 专属锦囊牌与不可知置牌机制专项回归。
+## 逐条覆盖两个机制底座：卡牌专属字段与校验口径、按定义造实体牌入堆、隐藏事实的私有承载与广播边界、
+## 牌堆位次置牌端口、位次询问的三选项交互协议，以及「未选牌时位次不可确认」的界面可用性。
+## 本用例不认识任何具体卡牌或技能，全部断言都通过通用端口与通用快照字段完成。
+
+## 测试专用设置文件；本用例修改的持久化偏好不会写入玩家正式配置。
+const TEST_SETTINGS_FILE_PATH: String = "user://exclusive_card_private_placement_test_settings.cfg"
+
+## 测试使用的玩家数量；3 人局足以覆盖“其他观察者与 AI 快照都拿不到私有事实”的多观察者断言。
+const TEST_PLAYER_COUNT: int = 3
+
+## 用于插入牌堆的稳定卡牌定义 ID；必须是数据库中真实存在的普通牌，避免依赖尚未制作的内容。
+const PROBE_DEFINITION_ID: String = "sha"
+
+## 位次询问协议中的三个稳定选项 ID；与规则层常量逐字一致，任一处漂移都会让本用例失败。
+const OPTION_TOP_ID: String = "pile_slot_1"
+
+## 位次询问的第二个稳定选项 ID：置于牌堆顶第二张。
+const OPTION_SECOND_ID: String = "pile_slot_2"
+
+## 位次询问的取消选项 ID；它不能作为“已确认”的位次提交。
+const OPTION_CANCEL_ID: String = "cancel"
+
+## 位次询问的玩家可见标签；与来源需求原文「牌堆顶第一张 / 牌堆顶第二张 / 取消」逐字一致。
+const OPTION_TOP_LABEL: String = "牌堆顶第一张"
+
+## 位次询问的第二个玩家可见标签。
+const OPTION_SECOND_LABEL: String = "牌堆顶第二张"
+
+## 位次询问的取消按钮玩家可见标签。
+const OPTION_CANCEL_LABEL: String = "取消"
+
+## 私有置牌事实的键名；与 MatchController 常量逐字一致，用于逐字段断言落盘内容。
+const PRIVATE_KEY_CARD_UID: String = "card_uid"
+
+## 私有置牌事实的位次键名。
+const PRIVATE_KEY_POSITION: String = "position"
+
+## 私有置牌事实的回合角色键名。
+const PRIVATE_KEY_TURN_PLAYER_ID: String = "turn_player_id"
+
+## 私有置牌事实的回合号键名。
+const PRIVATE_KEY_TURN_NUMBER: String = "turn_number"
+
+## 测试前设置文件路径；结束时恢复，禁止污染玩家正式配置。
+var _original_settings_file_path: String = "user://game_settings.cfg"
+
+## 测试前“控制所有角色”设置；结束时恢复进入测试前实际读取到的值，而不是固定恢复默认值。
+var _original_control_all_characters_enabled: bool = false
+
+## 测试使用的权威控制器；按正式子组件名称装配。
+var _controller: MatchController
+
+## 本次已发出的公共日志文本；用于断言秘密放置不写对局记录。
+var _captured_logs: Array[String] = []
+
+## 本次已发出的卡牌区域表现事件；用于断言秘密放置不产生公开表现。
+var _captured_transfers: Array[Dictionary] = []
+
+
+## 延迟执行，确保自动加载与全局类完成初始化。
+func _ready() -> void:
+	call_deferred("_run")
+
+
+## 依次验证内容口径、入堆端口、私有事实、置牌端口、选择协议与界面可用性。
+func _run() -> void:
+	_begin_settings_isolation()
+	_log_progress("card_field")
+	if not _test_exclusive_card_field_and_deck_disjointness():
+		return
+	_log_progress("database_validation")
+	if not _test_game_database_validation_is_clean():
+		return
+	if not await _start_playable_match():
+		return
+	# 公共日志与表现事件的可观测出口；两者都只在正式规则动作中发出，用于对比秘密放置前后的差值。
+	_controller.log_added.connect(_on_log_added)
+	_controller.card_transfer_requested.connect(_on_card_transfer_requested)
+	_log_progress("insert_pile")
+	if not await _test_insert_card_into_draw_pile():
+		return
+	_log_progress("private_fact")
+	if not await _test_private_pile_placement_fact():
+		return
+	_log_progress("broadcast_boundary")
+	if not await _test_secret_placement_broadcast_boundary():
+		return
+	_log_progress("position_protocol")
+	if not await _test_position_request_protocol():
+		return
+	_log_progress("panel_usability")
+	if not await _test_panel_three_option_usability():
+		return
+	_restore_settings()
+	print("EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+panel_usability")
+	get_tree().quit(0)
+
+
+## 输出阶段进度；失败时用于定位停滞在哪个用例，不参与任何断言，也不影响 PASS 判定。
+func _log_progress(stage: String) -> void:
+	print("EXCLUSIVE_CARD_STAGE %s" % stage)
+
+
+## 捕获公共日志；只统计条数，不参与规则状态。
+func _on_log_added(message: String) -> void:
+	_captured_logs.append(message)
+
+
+## 捕获公开表现事件；秘密放置必须一条都不产生。
+func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> void:
+	_captured_transfers.append({
+		"card_data":card_data.duplicate(true),
+		"source_player_id":source_player_id,
+		"source_zone":source_zone,
+		"target_player_id":target_player_id,
+		"target_zone":target_zone,
+	})
+
+
+## 验证卡牌专属字段的读取口径，以及「没有任何牌堆引用专属牌」的内容不变量。
+## 断言要点：
+## ① 缺省元数据一律为 false，因此既有卡牌行为完全不变；
+## ② 显式声明 exclusive 的定义返回 true；
+## ③ 任何牌堆条目都不得引用一张 exclusive 牌（专属牌只能由技能在运行时加入游戏）。
+func _test_exclusive_card_field_and_deck_disjointness() -> bool:
+	# 既有卡牌全部非专属；逐条核对数据库中的静态元数据与语义读取入口。
+	for card_id_variant: Variant in GameDatabase.cards.keys():
+		# 当前卡牌稳定 ID；用于读取静态元数据与定义对象。
+		var card_id: String = str(card_id_variant)
+		# 当前卡牌定义对象；缺失时说明数据库索引与定义表不同步。
+		var card_definition: CardDefinition = GameDatabase.get_card_definition(card_id)
+		if card_definition == null:
+			return _fail("card_definition_missing id=%s" % card_id)
+		if bool(GameDatabase.get_card(card_id).get("exclusive", false)):
+			return _fail("existing_card_unexpectedly_exclusive id=%s" % card_id)
+		if card_definition.is_exclusive():
+			return _fail("existing_card_is_exclusive id=%s" % card_id)
+	# 探针定义；直接构造目标基类，验证 exclusive 为真时的读取结果与 false 严格对称。
+	var probe_definition: CardDefinition = CardDefinition.new({
+		"id":"probe_exclusive_definition",
+		"original_name":"探针",
+		"custom_name":"探针",
+		"type":"trick",
+		"subtype":"delayed",
+		"effect_id":"probe_exclusive_effect",
+		"target_mode":"self",
+		"description":"探针定义，仅用于验证专属字段读取口径。",
+		"exclusive":true,
+	})
+	if not probe_definition.is_exclusive():
+		return _fail("probe_definition_not_exclusive")
+	# 缺省探针；完全没有 exclusive 键时必须回退 false。
+	var default_probe: CardDefinition = CardDefinition.new({"id":"probe_default_definition"})
+	if default_probe.is_exclusive():
+		return _fail("default_probe_should_not_be_exclusive")
+	# 牌堆反向不变量；任何牌堆都不得引用 exclusive 牌，否则专属牌会被常规洗牌带入游戏。
+	for deck_id_variant: Variant in GameDatabase.decks.keys():
+		# 当前牌堆稳定 ID；用于定位违规条目。
+		var deck_id: String = str(deck_id_variant)
+		for card_row_variant: Variant in GameDatabase.get_deck_cards(deck_id):
+			# 当前紧凑牌堆条目；标准格式为 [花色, 点数, 卡牌ID]。
+			var card_row: Array = card_row_variant as Array
+			if card_row.size() < 3:
+				continue
+			# 当前条目引用的卡牌定义 ID。
+			var deck_definition_id: String = str(card_row[2])
+			# 当前定义对象；查不到时不属于本断言范围（由数据库自身的引用校验负责）。
+			var deck_definition: CardDefinition = GameDatabase.get_card_definition(deck_definition_id)
+			if deck_definition != null and deck_definition.is_exclusive():
+				return _fail("exclusive_card_referenced_by_deck deck=%s card=%s" % [deck_id, deck_definition_id])
+	return true
+
+
+## 验证数据库静态校验结果为干净；同时确认“卡牌定义存在但不被任何牌堆引用”不是错误。
+func _test_game_database_validation_is_clean() -> bool:
+	if not GameDatabase.validation_errors.is_empty():
+		return _fail("validation_errors=%s" % str(GameDatabase.validation_errors))
+	# 未被任何牌堆引用的卡牌集合；生产先例证明这类牌存在且合法，因此本机制无需放宽任何现有校验。
+	# 该断言的作用是：一旦未来有提交为“专属牌必须入堆”新增反向校验，本用例会立刻失败并暴露口径冲突。
+	var referenced_definition_ids: Dictionary = {}
+	for deck_id_variant: Variant in GameDatabase.decks.keys():
+		for card_row_variant: Variant in GameDatabase.get_deck_cards(str(deck_id_variant)):
+			var card_row: Array = card_row_variant as Array
+			if card_row.size() >= 3:
+				referenced_definition_ids[str(card_row[2])] = true
+	# 未被引用的定义数量；为 0 时说明反向口径未被验证，但不算失败（内容可能恰好全部入堆）。
+	var unreferenced_count: int = 0
+	for card_id_variant: Variant in GameDatabase.cards.keys():
+		if not referenced_definition_ids.has(str(card_id_variant)):
+			unreferenced_count += 1
+	if unreferenced_count > 0 and not GameDatabase.validation_errors.is_empty():
+		return _fail("unreferenced_card_reported_as_error count=%d" % unreferenced_count)
+	return true
+
+
+## 验证「按卡牌定义创建实体牌并按位次加入摸牌堆」端口的全部前置校验、位次语义与增量口径。
+func _test_insert_card_into_draw_pile() -> bool:
+	# 基线；入堆前牌堆与移牌历史长度，用于断言“恰好一条”增量。
+	var baseline_pile_size: int = _controller.state.draw_pile.size()
+	var baseline_history_size: int = _controller.state.card_move_history.size()
+	var baseline_random_count: int = _controller.state.random_history.size()
+	# 非法输入必须零副作用；逐条核对数量与返回值。
+	if _controller.create_and_insert_card_into_draw_pile("", "spade", 1, 1) != -1:
+		return _fail("empty_definition_should_fail")
+	if _controller.create_and_insert_card_into_draw_pile("probe_definition_not_in_database", "spade", 1, 1) != -1:
+		return _fail("unknown_definition_should_fail")
+	if _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 1, 0) != -1:
+		return _fail("position_zero_should_fail")
+	if _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 1, 3) != -1:
+		return _fail("position_three_should_fail")
+	if _controller.state.draw_pile.size() != baseline_pile_size or _controller.state.card_move_history.size() != baseline_history_size:
+		return _fail("failed_insert_produced_side_effect")
+	# 显式牌面入堆；位置 2 应插在距数组末尾 1 个元素处（数组末尾为顶）。
+	var second_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "heart", 7, 2)
+	if second_uid < 0:
+		return _fail("explicit_insert_position_two_rejected")
+	if _controller.state.draw_pile.size() != baseline_pile_size + 1:
+		return _fail("insert_did_not_grow_pile")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 2].uid != second_uid:
+		return _fail("position_two_index_mismatch")
+	# 显式牌面不得写随机历史；只有缺省牌面才动用权威随机源。
+	if _controller.state.random_history.size() != baseline_random_count:
+		return _fail("explicit_insert_wrote_random_history")
+	# 实体可被数据库解析；牌面即调用方给出的花色点数。
+	var inserted_instance: CardInstance = _controller.state.draw_pile[_controller.state.draw_pile.size() - 2]
+	if inserted_instance.definition_id != PROBE_DEFINITION_ID or inserted_instance.suit != "heart" or inserted_instance.rank != 7:
+		return _fail("inserted_card_face_mismatch id=%s suit=%s rank=%d" % [inserted_instance.definition_id, inserted_instance.suit, inserted_instance.rank])
+	if GameDatabase.get_card(inserted_instance.definition_id).is_empty():
+		return _fail("inserted_card_definition_unresolvable")
+	# 位置 1 应成为牌堆最新顶（数组末尾）；位次语义是“放置那一刻从顶往下数”，
+	# 因此原本的顶牌被整体下压一位，而不是每张牌各自记住固定位次。
+	var previous_top_uid: int = _controller.state.draw_pile.back().uid
+	var top_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "club", 9, 1)
+	if top_uid < 0:
+		return _fail("explicit_insert_position_one_rejected")
+	if _controller.state.draw_pile.back().uid != top_uid:
+		return _fail("position_one_is_not_pile_top")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 2].uid != previous_top_uid:
+		return _fail("previous_top_not_pushed_down")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 3].uid != second_uid:
+		return _fail("position_two_shifted_by_top_insert")
+	# 缺省牌面；必须使用权威随机源并写入随机历史，使存档与回放可以复现同一组牌面。
+	var random_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID)
+	if random_uid < 0:
+		return _fail("random_face_insert_rejected")
+	# 随机结果实体；用于核对花色点数取值域与记账条数。
+	var random_instance: CardInstance = null
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		if draw_card.uid == random_uid:
+			random_instance = draw_card
+			break
+	if random_instance == null:
+		return _fail("random_inserted_card_missing")
+	if not CardInstance.is_valid_suit(random_instance.suit) or not CardInstance.is_valid_rank(random_instance.rank):
+		return _fail("random_face_out_of_range suit=%s rank=%d" % [random_instance.suit, random_instance.rank])
+	if _controller.state.random_history.size() != baseline_random_count + 1:
+		return _fail("random_insert_missing_history")
+	if str((_controller.state.random_history.back() as Dictionary).get("kind", "")) != "exclusive_card_insert":
+		return _fail("random_history_kind_mismatch")
+	# 增量口径；两次成功入堆必须各产生恰好一条移牌历史，且目标区域都是摸牌堆。
+	if _controller.state.card_move_history.size() != baseline_history_size + 3:
+		return _fail("move_history_count=%d" % (_controller.state.card_move_history.size() - baseline_history_size))
+	for history_index: int in range(baseline_history_size, _controller.state.card_move_history.size()):
+		# 当前移牌摘要；入堆的来源区域必须是空字符串（新牌此前不属于任何区域）。
+		var move_data: Dictionary = _controller.state.card_move_history[history_index]
+		if str(move_data.get("to_zone", "")) != "draw_pile" or str(move_data.get("from_zone", "")) != "":
+			return _fail("move_history_zone_mismatch to=%s from=%s" % [str(move_data.get("to_zone", "")), str(move_data.get("from_zone", ""))])
+	# 位次方向必须与真实摸牌顺序一致；连续摸两张，断言先摸到“位置 1”、再摸到“位置 2”。
+	# 为了让顺序可观测，先把牌堆顶两位替换为本次专门插入的两张：位置 1 后插，位置 2 先插。
+	var draw_probe_top_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "spade", 13, 1)
+	var draw_probe_second_uid: int = _controller.create_and_insert_card_into_draw_pile(PROBE_DEFINITION_ID, "diamond", 12, 2)
+	if draw_probe_top_uid < 0 or draw_probe_second_uid < 0:
+		return _fail("draw_probe_insert_rejected")
+	if _controller.state.draw_pile.back().uid != draw_probe_top_uid or _controller.state.draw_pile[_controller.state.draw_pile.size() - 2].uid != draw_probe_second_uid:
+		return _fail("draw_probe_layout_mismatch")
+	# 真实摸牌；摸牌服务固定取数组末尾，因此顺序必须与位次语义一致。
+	var draw_baseline_history: int = _controller.state.card_move_history.size()
+	_controller.draw(0, 2, false)
+	await get_tree().process_frame
+	# 本次摸牌产生的进入手牌顺序；按移牌历史读取，不依赖界面快照。
+	var drawn_uids: Array[int] = []
+	for history_index: int in range(draw_baseline_history, _controller.state.card_move_history.size()):
+		var move_data: Dictionary = _controller.state.card_move_history[history_index]
+		if str(move_data.get("to_zone", "")) == "hand":
+			for card_uid_variant: Variant in move_data.get("card_ids", []) as Array:
+				drawn_uids.append(int(card_uid_variant))
+	if drawn_uids.size() < 2 or drawn_uids[0] != draw_probe_top_uid or drawn_uids[1] != draw_probe_second_uid:
+		return _fail("draw_order_mismatch drawn=%s expect=[%d,%d]" % [str(drawn_uids), draw_probe_top_uid, draw_probe_second_uid])
+	# 结算本次摸牌可能产生的选择窗口，避免影响后续用例的提交。
+	if not await _settle_pending_choices():
+		return false
+	return true
+
+
+## 验证私有置牌事实的可见性裁剪、存档往返、非法写入与清除口径。
+func _test_private_pile_placement_fact() -> bool:
+	# 持有者与两名旁观者；至少需要一名旁观者用于验证“其他角色不可知”。
+	var owner_id: int = 0
+	var other_id: int = _find_other_alive_player(owner_id)
+	if other_id < 0:
+		return _fail("no_other_player_for_privacy")
+	# 先清除残留，保证后续断言只观察本次写入。
+	_controller.clear_private_pile_placement(owner_id)
+	# 非法写入必须零副作用。
+	if _controller.set_private_pile_placement(-1, 100, 1, 0, 1):
+		return _fail("negative_player_should_fail")
+	if _controller.set_private_pile_placement(9999, 100, 1, 0, 1):
+		return _fail("unknown_player_should_fail")
+	if _controller.set_private_pile_placement(owner_id, -1, 1, 0, 1):
+		return _fail("negative_card_uid_should_fail")
+	if _controller.set_private_pile_placement(owner_id, 100, 3, 0, 1):
+		return _fail("invalid_position_should_fail")
+	if not _controller.get_private_pile_placement(owner_id).is_empty():
+		return _fail("failed_write_left_fact")
+	# 合法写入；四个键齐全且取值与入参一致。
+	var turn_number: int = _controller.state.turn_number
+	if not _controller.set_private_pile_placement(owner_id, 4242, 2, owner_id, turn_number):
+		return _fail("legal_private_fact_rejected")
+	var fact: Dictionary = _controller.get_private_pile_placement(owner_id)
+	if int(fact.get(PRIVATE_KEY_CARD_UID, -1)) != 4242 or int(fact.get(PRIVATE_KEY_POSITION, 0)) != 2:
+		return _fail("private_fact_payload_mismatch %s" % str(fact))
+	if int(fact.get(PRIVATE_KEY_TURN_PLAYER_ID, -1)) != owner_id or int(fact.get(PRIVATE_KEY_TURN_NUMBER, -1)) != turn_number:
+		return _fail("private_fact_turn_payload_mismatch %s" % str(fact))
+	# 可见性裁剪：只有持有者的「权威全量序列化」能读到该键；其余三条通道都读不到。
+	# 本地广播快照是 to_dict(本机真人, false)，它会整体进入回放录制，因此必须不含该键。
+	var owner_public_snapshot: Dictionary = _controller.state.get_player(owner_id).to_dict(owner_id, false)
+	if owner_public_snapshot.has("private_pile_placement"):
+		return _fail("owner_broadcast_snapshot_leaked_private_fact")
+	var other_public_snapshot: Dictionary = _controller.state.get_player(other_id).to_dict(other_id, false)
+	if other_public_snapshot.has("private_pile_placement"):
+		return _fail("other_public_snapshot_leaked_private_fact")
+	if _controller.state.get_player(owner_id).to_dict(other_id, false).has("private_pile_placement"):
+		return _fail("other_viewer_snapshot_leaked_private_fact")
+	# AI 快照口径：它使用 reveal_private=true，但对非持有者仍不得包含该事实。
+	# 这是本机制最容易泄露的一条通道：所有AI快照都是 to_dict(该AI的player_id, true)，
+	# 若序列化条件采用 reveal_private，则每个AI都会读到别人的置牌事实。
+	if _controller.state.get_player(owner_id).to_dict(other_id, true).has("private_pile_placement"):
+		return _fail("ai_snapshot_for_other_player_leaked_private_fact")
+	if not _controller.state.get_player(owner_id).to_dict(owner_id, true).has("private_pile_placement"):
+		return _fail("owner_private_snapshot_missing_fact")
+	# 权威公开观察快照（viewer_id = -1）同样不含该事实；权威端读取事实只能走 get_private_pile_placement()。
+	if _controller.state.get_player(owner_id).to_dict(-1, true).has("private_pile_placement"):
+		return _fail("authority_public_snapshot_leaked_private_fact")
+	# 权威存档往返；存档流程固定使用 to_dict(本人的player_id, true)，因此恢复后事实必须逐字段一致。
+	var authoritative_data: Dictionary = _controller.state.get_player(owner_id).to_dict(owner_id, true)
+	var restored_player: PlayerState = PlayerState.from_authoritative_dict(authoritative_data)
+	if int(restored_player.private_pile_placement.get(PRIVATE_KEY_CARD_UID, -1)) != 4242 or int(restored_player.private_pile_placement.get(PRIVATE_KEY_POSITION, 0)) != 2:
+		return _fail("authoritative_round_trip_lost_fact %s" % str(restored_player.private_pile_placement))
+	# 旧存档兼容；缺少该键时按空字典恢复，不得抛错或残留字段。
+	var legacy_data: Dictionary = authoritative_data.duplicate(true)
+	legacy_data.erase("private_pile_placement")
+	var legacy_player: PlayerState = PlayerState.from_authoritative_dict(legacy_data)
+	if not legacy_player.private_pile_placement.is_empty():
+		return _fail("legacy_save_should_restore_empty_fact")
+	# 清除口径；第一次返回 true，第二次因已无事实而返回 false。
+	if not _controller.clear_private_pile_placement(owner_id):
+		return _fail("clear_private_fact_rejected")
+	if _controller.clear_private_pile_placement(owner_id):
+		return _fail("second_clear_should_return_false")
+	if not _controller.get_private_pile_placement(owner_id).is_empty():
+		return _fail("private_fact_survived_clear")
+	return true
+
+
+## 验证秘密置牌的四条公开通道（日志 / 表现事件 / 快照 / 移牌历史）边界与位次落地结果。
+func _test_secret_placement_broadcast_boundary() -> bool:
+	# 持牌者；必须拥有至少一张手牌才能执行秘密放置。
+	var owner_id: int = _find_player_with_hand_cards(1)
+	if owner_id < 0:
+		return _fail("no_player_with_hand_cards")
+	# 被放置的实体；取该玩家手牌中的第一张，只使用稳定 UID。
+	var placed_card: CardInstance = _controller.state.get_player(owner_id).hand[0]
+	var placed_uid: int = placed_card.uid
+	var baseline_hand_size: int = _controller.state.get_player(owner_id).hand.size()
+	var baseline_pile_size: int = _controller.state.draw_pile.size()
+	var baseline_history_size: int = _controller.state.card_move_history.size()
+	var baseline_log_count: int = _captured_logs.size()
+	var baseline_transfer_count: int = _captured_transfers.size()
+	# 非法输入必须零副作用。
+	if _controller.place_hand_card_on_draw_pile_top(owner_id, placed_uid, 0):
+		return _fail("placement_position_zero_should_fail")
+	if _controller.place_hand_card_on_draw_pile_top(owner_id, placed_uid, 3):
+		return _fail("placement_position_three_should_fail")
+	if _controller.place_hand_card_on_draw_pile_top(9999, placed_uid, 1):
+		return _fail("placement_unknown_player_should_fail")
+	if _controller.place_hand_card_on_draw_pile_top(owner_id, 987654321, 1):
+		return _fail("placement_unknown_card_should_fail")
+	if _controller.state.get_player(owner_id).hand.size() != baseline_hand_size or _controller.state.draw_pile.size() != baseline_pile_size:
+		return _fail("failed_placement_produced_side_effect")
+	# 合法放置到位次 2；手牌 -1、牌堆 +1，且实体确实位于“牌堆顶第二张”。
+	if not _controller.place_hand_card_on_draw_pile_top(owner_id, placed_uid, 2):
+		return _fail("legal_placement_rejected")
+	if _controller.state.get_player(owner_id).hand.size() != baseline_hand_size - 1:
+		return _fail("placement_did_not_remove_hand_card")
+	if _controller.state.draw_pile.size() != baseline_pile_size + 1:
+		return _fail("placement_did_not_grow_pile")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 2].uid != placed_uid:
+		return _fail("placement_position_two_index_mismatch")
+	# 移牌历史恰好一条，且原因与来源区域可核对。
+	if _controller.state.card_move_history.size() != baseline_history_size + 1:
+		return _fail("placement_move_history_count=%d" % (_controller.state.card_move_history.size() - baseline_history_size))
+	var placement_move: Dictionary = _controller.state.card_move_history.back()
+	if str(placement_move.get("to_zone", "")) != "draw_pile" or str(placement_move.get("from_zone", "")) != "hand":
+		return _fail("placement_move_zone_mismatch %s" % str(placement_move))
+	if str(placement_move.get("reason", "")) != "secret_pile_placement":
+		return _fail("placement_reason_mismatch %s" % str(placement_move.get("reason", "")))
+	# 广播边界①：不写公共日志（对局记录）。
+	if _captured_logs.size() != baseline_log_count:
+		return _fail("placement_wrote_public_log %s" % str(_captured_logs.slice(baseline_log_count)))
+	# 广播边界②：不产生公开表现事件（目标区域不是手牌或弃牌堆）。
+	if _captured_transfers.size() != baseline_transfer_count:
+		return _fail("placement_emitted_public_transfer")
+	# 广播边界③：牌面知识被彻底清除，其他角色无法从 known_to 推断这张牌去了哪里。
+	# 通过移牌历史取回实体；牌仍在牌堆，因此直接扫描牌堆定位。
+	var relocated_card: CardInstance = null
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		if draw_card.uid == placed_uid:
+			relocated_card = draw_card
+			break
+	if relocated_card == null:
+		return _fail("placed_card_not_in_draw_pile")
+	if not relocated_card.known_to.is_empty() or relocated_card.shown:
+		return _fail("placed_card_knowledge_not_cleared known_to=%s shown=%s" % [str(relocated_card.known_to), str(relocated_card.shown)])
+	# 广播边界④：任何观察者的快照都不含该牌 UID；牌堆牌面在所有快照中都不可见。
+	# 判据只取“承载实体身份的 uid 字段”，避免用裸数值匹配时被血量、手牌数等同值整数误报。
+	for player: PlayerState in _controller.state.players:
+		# 当前观察者的普通快照；序列化后收集其中出现的全部实体 UID。
+		var viewer_snapshot: Dictionary = _controller.state.to_dict(player.player_id, false)
+		var visible_card_uids: Dictionary = {}
+		_collect_snapshot_card_uids(viewer_snapshot, visible_card_uids)
+		if visible_card_uids.has(placed_uid):
+			return _fail("placed_card_uid_leaked_in_snapshot viewer=%d" % player.player_id)
+	# 位次落地结果用真实牌堆顺序验证；同时把位次 1 也覆盖一次。
+	# 位次是“放置那一刻从顶往下数”的相对位次，因此新的顶牌会把此前所有牌整体下压一位。
+	var previous_top_uid: int = _controller.state.draw_pile.back().uid
+	var second_probe: CardInstance = _controller.state.get_player(owner_id).hand[0]
+	if not _controller.place_hand_card_on_draw_pile_top(owner_id, second_probe.uid, 1):
+		return _fail("second_placement_rejected")
+	if _controller.state.draw_pile.back().uid != second_probe.uid:
+		return _fail("second_placement_is_not_pile_top")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 2].uid != previous_top_uid:
+		return _fail("placement_previous_top_not_pushed_down")
+	if _controller.state.draw_pile[_controller.state.draw_pile.size() - 3].uid != placed_uid:
+		return _fail("first_placement_not_pushed_to_third")
+	# 秘密放置同样不写日志；两次放置的日志差值为 0。
+	if _captured_logs.size() != baseline_log_count:
+		return _fail("second_placement_wrote_public_log")
+	return true
+
+
+## 验证位次询问的三个稳定选项、候选范围，以及伪造提交被整条拒绝、合法提交被接受。
+func _test_position_request_protocol() -> bool:
+	# 询问对象；必须拥有至少两张手牌，便于构造“多选一张”的非法提交。
+	var chooser_id: int = _find_player_with_hand_cards(2)
+	if chooser_id < 0:
+		return _fail("no_chooser_with_two_hand_cards")
+	# 询问前的待办状态；用于核对询问结束后窗口被正确清空。
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("pending_choice_before_request")
+	# 正式端口调用；本用例的询问对象是本机真人，因此请求进入异步等待，返回值必须是“未确认”。
+	var immediate_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "你可以将一张手牌置于牌堆顶的第一张或第二张。")
+	if bool(immediate_result.get("confirmed", true)) or int(immediate_result.get("card_uid", 0)) != -1 or int(immediate_result.get("position", -1)) != 0:
+		return _fail("deferred_request_should_not_confirm %s" % str(immediate_result))
+	if _controller._pending_card_choice.is_empty():
+		return _fail("position_request_not_published")
+	# 请求快照；后续面板渲染与非法提交都基于同一份权威请求。
+	var pending_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	if str(pending_choice.get("choice_type", "")) != "card_position":
+		return _fail("choice_type=%s" % str(pending_choice.get("choice_type", "")))
+	if int(pending_choice.get("min_card_select", 0)) != 1 or int(pending_choice.get("max_card_select", 0)) != 1:
+		return _fail("card_select_range_mismatch min=%d max=%d" % [int(pending_choice.get("min_card_select", 0)), int(pending_choice.get("max_card_select", 0))])
+	# 选项数量、ID 与标签必须与来源需求原文逐字一致，且顺序固定。
+	var control_options: Array = pending_choice.get("control_options", []) as Array
+	if control_options.size() != 3:
+		return _fail("control_option_count=%d" % control_options.size())
+	if str((control_options[0] as Dictionary).get("id", "")) != OPTION_TOP_ID or str((control_options[0] as Dictionary).get("label", "")) != OPTION_TOP_LABEL:
+		return _fail("option_zero_mismatch %s" % str(control_options[0]))
+	if str((control_options[1] as Dictionary).get("id", "")) != OPTION_SECOND_ID or str((control_options[1] as Dictionary).get("label", "")) != OPTION_SECOND_LABEL:
+		return _fail("option_one_mismatch %s" % str(control_options[1]))
+	if str((control_options[2] as Dictionary).get("id", "")) != OPTION_CANCEL_ID or str((control_options[2] as Dictionary).get("label", "")) != OPTION_CANCEL_LABEL:
+		return _fail("option_two_mismatch %s" % str(control_options[2]))
+	# 候选只包含询问者自己的手牌；其他角色的手牌绝不会进入候选。
+	var candidates: Array = pending_choice.get("candidates", []) as Array
+	if candidates.size() != _controller.state.get_player(chooser_id).hand.size():
+		return _fail("candidate_count=%d hand=%d" % [candidates.size(), _controller.state.get_player(chooser_id).hand.size()])
+	for candidate_variant: Variant in candidates:
+		# 当前候选快照；区域与持有者必须同时属于询问者本人。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("owner_id", -1)) != chooser_id or str(candidate.get("zone", "")) != "hand":
+			return _fail("candidate_outside_own_hand %s" % str(candidate))
+	# 规则层必须为 AI 与网络提供可提交动作；否则请求会在创建时被拒绝或让 AI 永久挂住。
+	var legal_actions: Array[Dictionary] = _controller.get_pending_choice_legal_actions()
+	var expected_action_count: int = candidates.size() * 2 + 1
+	if legal_actions.size() != expected_action_count:
+		return _fail("legal_action_count=%d expect=%d" % [legal_actions.size(), expected_action_count])
+	# 伪造提交①：不属于本次候选的牌 + 合法位次。
+	if _submit_position_choice(pending_choice, [991199], OPTION_SECOND_ID, true):
+		return _fail("forged_card_should_be_rejected")
+	# 伪造提交②：合法牌 + cancel 作为已确认位次。
+	if _submit_position_choice(pending_choice, [int((candidates[0] as Dictionary).get("uid", -1))], OPTION_CANCEL_ID, true):
+		return _fail("cancel_as_confirmed_position_should_be_rejected")
+	# 伪造提交③：合法牌 + 空位次。
+	if _submit_position_choice(pending_choice, [int((candidates[0] as Dictionary).get("uid", -1))], "", true):
+		return _fail("missing_position_should_be_rejected")
+	# 伪造提交④：两张手牌 + 合法位次（描述要求恰好一张）。
+	var two_card_uids: Array[int] = []
+	for candidate_index: int in range(2):
+		two_card_uids.append(int((candidates[candidate_index] as Dictionary).get("uid", -1)))
+	if _submit_position_choice(pending_choice, two_card_uids, OPTION_SECOND_ID, true):
+		return _fail("two_cards_should_be_rejected")
+	# 非法提交不得吞掉窗口；仍必须保持同一请求可继续提交。
+	if _controller._pending_card_choice.is_empty():
+		return _fail("rejected_submission_dropped_request")
+	# 合法提交；选中一张手牌 + 牌堆顶第二张。
+	var chosen_uid: int = int((candidates[0] as Dictionary).get("uid", -1))
+	if not _submit_position_choice(pending_choice, [chosen_uid], OPTION_SECOND_ID, true):
+		return _fail("legal_position_submission_rejected")
+	if _controller._resolved_control_choice_id != OPTION_SECOND_ID:
+		return _fail("resolved_control_id=%s" % _controller._resolved_control_choice_id)
+	if _controller._resolved_card_choice_uids.size() != 1 or _controller._resolved_card_choice_uids[0] != chosen_uid:
+		return _fail("resolved_card_uids=%s" % str(_controller._resolved_card_choice_uids))
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("accepted_submission_left_pending_request")
+	if not await _settle_pending_choices():
+		return false
+	return true
+
+
+## 验证位次询问窗口恰好提供三个按钮，且未选中手牌时两个位次按钮不可点击、取消可用。
+func _test_panel_three_option_usability() -> bool:
+	# 询问对象；使用第一名持牌角色，避免依赖具体武将。
+	var chooser_id: int = _find_player_with_hand_cards(1)
+	if chooser_id < 0:
+		return _fail("no_panel_chooser")
+	# 构造一条独立的位次询问；直接复用正式端口，保证面板看到的是真实请求形状。
+	var immediate_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
+	if bool(immediate_result.get("confirmed", true)):
+		return _fail("panel_request_should_be_deferred")
+	if _controller._pending_card_choice.is_empty():
+		return _fail("panel_request_not_published")
+	# 面板快照；面板是纯表现组件，只消费该只读字典。
+	var panel_request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var first_candidate_uid: int = int(((panel_request.get("candidates", []) as Array)[0] as Dictionary).get("uid", -1))
+	var request_id: int = int(panel_request.get("request_id", -1))
+	# 独立实例化选择面板；它自行构建全部子节点，因此不需要主场景。
+	var panel_scene: PackedScene = load("res://scenes/components/card_selection_panel.tscn") as PackedScene
+	if panel_scene == null:
+		return _fail("card_selection_panel_scene_missing")
+	var panel: CardSelectionPanel = panel_scene.instantiate() as CardSelectionPanel
+	add_child(panel)
+	await get_tree().process_frame
+	# 收集面板发出的确认与取消意图；面板不得自行改动规则状态。
+	var submitted_payloads: Array[Dictionary] = []
+	var cancelled_request_ids: Array[int] = []
+	panel.position_submitted.connect(func(submitted_request_id: int, selected_card_uids: Array[int], control_id: String) -> void:
+		submitted_payloads.append({"request_id":submitted_request_id, "card_uids":selected_card_uids.duplicate(), "control_id":control_id})
+	)
+	panel.choice_cancelled.connect(func(cancelled_request_id: int) -> void:
+		cancelled_request_ids.append(cancelled_request_id)
+	)
+	panel.show_request(panel_request)
+	await get_tree().process_frame
+	# 三个按钮；两个位次按钮加一个取消按钮，不多不少。
+	var position_buttons: Array = panel.get("_position_option_buttons") as Array
+	var cancel_button: Button = panel.get("_position_cancel_button") as Button
+	if position_buttons.size() != 2 or cancel_button == null:
+		return _fail("panel_button_count position=%d cancel=%s" % [position_buttons.size(), str(cancel_button != null)])
+	if str((position_buttons[0] as Button).text) != OPTION_TOP_LABEL or str((position_buttons[1] as Button).text) != OPTION_SECOND_LABEL:
+		return _fail("panel_position_labels=%s/%s" % [str((position_buttons[0] as Button).text), str((position_buttons[1] as Button).text)])
+	if cancel_button.text != OPTION_CANCEL_LABEL:
+		return _fail("panel_cancel_label=%s" % cancel_button.text)
+	# 未选中任何手牌时：两个位次按钮必须不可点击，取消按钮必须可用。
+	if not (position_buttons[0] as Button).disabled or not (position_buttons[1] as Button).disabled:
+		return _fail("position_buttons_should_start_disabled")
+	if cancel_button.disabled:
+		return _fail("cancel_button_should_always_be_enabled")
+	# 点击位次按钮但不选手牌；面板必须忽略，不发出任何确认意图。
+	(position_buttons[1] as Button).pressed.emit()
+	await get_tree().process_frame
+	if not submitted_payloads.is_empty():
+		return _fail("position_submitted_without_card_selection")
+	# 选中恰好一张手牌后：两个位次按钮必须可用。
+	var selected_uids: Array[int] = [first_candidate_uid]
+	panel.set("_selected_card_uids", selected_uids)
+	panel.call("_refresh_selection_state")
+	await get_tree().process_frame
+	if (position_buttons[0] as Button).disabled or (position_buttons[1] as Button).disabled:
+		return _fail("position_buttons_should_enable_after_selection")
+	# 点击「牌堆顶第二张」；必须发出带请求序号、手牌 UID 与稳定选项 ID 的确认意图。
+	(position_buttons[1] as Button).pressed.emit()
+	await get_tree().process_frame
+	if submitted_payloads.size() != 1:
+		return _fail("position_submitted_count=%d" % submitted_payloads.size())
+	var submitted: Dictionary = submitted_payloads[0]
+	if int(submitted.get("request_id", -1)) != request_id or str(submitted.get("control_id", "")) != OPTION_SECOND_ID:
+		return _fail("position_submitted_payload=%s" % str(submitted))
+	var submitted_uids: Array = submitted.get("card_uids", []) as Array
+	if submitted_uids.size() != 1 or int(submitted_uids[0]) != first_candidate_uid:
+		return _fail("position_submitted_uids=%s" % str(submitted_uids))
+	# 点击取消；必须走通用取消通道，并且不携带任何位次。
+	cancel_button.pressed.emit()
+	await get_tree().process_frame
+	if cancelled_request_ids.size() != 1 or cancelled_request_ids[0] != request_id:
+		return _fail("cancel_intent=%s" % str(cancelled_request_ids))
+	if submitted_payloads.size() != 1:
+		return _fail("cancel_emitted_position_confirmation")
+	# 清理面板与本次询问，避免影响退出前的状态。
+	panel.queue_free()
+	if not _controller._pending_card_choice.is_empty():
+		if not _submit_position_choice(panel_request, [], "", false):
+			return _fail("cannot_cancel_panel_request")
+	if not await _settle_pending_choices():
+		return false
+	return true
+
+
+## 构造并提交一次位次询问动作；返回是否被权威入口接受。
+func _submit_position_choice(pending_choice: Dictionary, selected_card_uids: Array[int], control_id: String, confirmed: bool) -> bool:
+	# 请求序号与回答者；两者都必须与当前窗口一致，否则会被前置校验拒绝而无法验证目标规则。
+	var request_id: int = int(pending_choice.get("request_id", -1))
+	var chooser_id: int = int(pending_choice.get("chooser_id", -1))
+	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	action.payload = {
+		"request_id":request_id,
+		"selected_card_uids":selected_card_uids.duplicate(),
+		"selected_target_ids":[],
+		"selected_control_id":control_id,
+		"confirmed":confirmed,
+	}
+	return _controller.submit_action(action)
+
+
+## 递归收集快照中所有承载实体牌身份的 UID 字段值，写入 out_uids 集合。
+## 只接受键名以 uid 结尾（或恰好等于 uid）的整数值：这样既覆盖手牌、装备、判定区等全部牌区，
+## 也不会把血量、手牌数、回合号等同值整数误判成“某张牌出现在快照里”。
+func _collect_snapshot_card_uids(value: Variant, out_uids: Dictionary) -> void:
+	if value is Dictionary:
+		for key_variant: Variant in (value as Dictionary).keys():
+			# 当前键名；只按名字判定是否为实体身份字段。
+			var key_name: String = str(key_variant).to_lower()
+			# 当前值；只可能是标量或容器，两种情况都要继续下钻。
+			var child_value: Variant = (value as Dictionary)[key_variant]
+			if key_name == "uid" or key_name.ends_with("_uid") or key_name.ends_with("_uids"):
+				if child_value is Array:
+					for uid_variant: Variant in child_value as Array:
+						if uid_variant is int or uid_variant is float:
+							out_uids[int(uid_variant)] = true
+				elif child_value is int or child_value is float:
+					out_uids[int(child_value)] = true
+			_collect_snapshot_card_uids(child_value, out_uids)
+		return
+	if value is Array:
+		for item_variant: Variant in value as Array:
+			_collect_snapshot_card_uids(item_variant, out_uids)
+
+
+## 返回一名手牌数不少于指定值且仍然存活的玩家 ID；找不到时返回 -1。
+func _find_player_with_hand_cards(minimum_hand_size: int) -> int:
+	if _controller == null or _controller.state == null:
+		return -1
+	for player: PlayerState in _controller.state.players:
+		if player.alive and not player.out_of_game and player.hand.size() >= minimum_hand_size:
+			return player.player_id
+	return -1
+
+
+## 返回除指定角色外的一名存活玩家 ID；找不到时返回 -1。
+func _find_other_alive_player(excluded_player_id: int) -> int:
+	if _controller == null or _controller.state == null:
+		return -1
+	for player: PlayerState in _controller.state.players:
+		if player.alive and not player.out_of_game and player.player_id != excluded_player_id:
+			return player.player_id
+	return -1
+
+
+## 取消当前待处理选择；必须绑定创建时的请求编号与回答者，否则会被权威入口拒绝。
+func _cancel_pending_choice() -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return true
+	# 请求序号与回答者；两者都取自权威窗口本身。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+	return _controller.submit_action(action)
+
+
+## 确认当前待处理选择；候选一律取自规则层自己生成的合法动作，因此不会读到隐藏信息，
+## 也不会因窗口类型（选牌、选目标、组合选择、文字选项）不同而构造出无法通过校验的负载。
+func _confirm_pending_choice() -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return true
+	if bool(_controller.submit_first_legal_pending_choice()):
+		return true
+	# 规则层没有给出任何可确认动作时，按请求字段做保守回退（仅用于诊断，不作为常规路径）。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	var selected_target_ids: Array[int] = []
+	var candidate_target_ids: Array = _controller._pending_card_choice.get("target_ids", []) as Array
+	if not candidate_target_ids.is_empty():
+		selected_target_ids.append(int(candidate_target_ids[0]))
+	var action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":selected_target_ids, "confirmed":true}
+	return _controller.submit_action(action)
+
+
+## 结算当前全部待办选择；用于把上一步骤可能产生的窗口清空，避免后续用例被拦截。
+func _settle_pending_choices() -> bool:
+	var safety: int = 0
+	while _controller != null and not _controller._pending_card_choice.is_empty() and safety < 24:
+		safety += 1
+		if not _cancel_pending_choice() and not _confirm_pending_choice():
+			return _fail("settle_pending_choices_stuck")
+		await get_tree().process_frame
+	if _controller != null and not _controller._pending_card_choice.is_empty():
+		return _fail("settle_pending_choices_exhausted")
+	return true
+
+
+## 启动一局可操作的对局，并把开局选将与开局技能选择全部结算干净。
+## 固定种子选将会随武将池变化而换人，因此不假设任何具体武将或开局是否产生技能选择。
+func _start_playable_match() -> bool:
+	_create_controller()
+	GameSettings.set_control_all_characters_enabled(false)
+	GameSettings.set_custom_character_assignment_enabled(false)
+	GameSettings.set_customize_ai_characters_enabled(false)
+	GameSettings.set_mulligan_limit(0)
+	if not _controller.start_match(TEST_PLAYER_COUNT, 20261002, IdentityRules.MODE_IDENTITY):
+		return _fail("start_match")
+	# 选将阶段：本地真人按候选顺序提交，其余座位由内置AI推进。
+	var selection_safety: int = 0
+	while _controller.state.current_phase == "character_selection" and selection_safety < 24:
+		selection_safety += 1
+		if _controller.character_selection.get_pending_player_ids().has(0):
+			var candidates: Array[String] = _controller.character_selection.get_candidates(0)
+			if candidates.is_empty() or not _controller.select_character(0, candidates[0]):
+				return _fail("selection_submit")
+		await get_tree().process_frame
+	if _controller.state.current_phase == "character_selection":
+		return _fail("selection_stuck")
+	# 开局技能选择：优先取消；不可取消的强制窗口按规则层下发的首个合法候选确认，避免开局清理永久卡住。
+	var opening_safety: int = 0
+	while not _controller._pending_card_choice.is_empty() and opening_safety < 24:
+		opening_safety += 1
+		if not _cancel_pending_choice() and not _confirm_pending_choice():
+			return _fail("opening_choice_settle kind=%s chooser=%d" % [str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1))])
+		await get_tree().process_frame
+	# 推进到首个出牌阶段；回合开始时机可能再次创建选择，同样按统一出口结算。
+	var turn_safety: int = 0
+	while _controller.state.current_phase != "play" and turn_safety < 160:
+		turn_safety += 1
+		if not _controller._pending_card_choice.is_empty():
+			if not _cancel_pending_choice() and not _confirm_pending_choice():
+				return _fail("turn_choice_settle phase=%s" % str(_controller.state.current_phase))
+		_controller.call("_emit_state")
+		_controller.call("_ensure_ai_progress_after_resolution")
+		await get_tree().process_frame
+	if _controller.state.current_phase != "play":
+		return _fail("play_phase_not_reached phase=%s turn=%d" % [str(_controller.state.current_phase), _controller.state.turn_number])
+	# 相位期间的响应窗口同样需要结算，否则随后的提交会被待办窗口拦截。
+	if not await _settle_pending_choices():
+		return false
+	return true
+
+
+## 创建指定网络模式的最小正式控制器组件树。
+func _create_controller() -> void:
+	if _controller != null and is_instance_valid(_controller):
+		remove_child(_controller)
+		_controller.free()
+	_controller = MatchController.new()
+	_controller.name = "MatchController"
+	var event_bus: RuleEventBus = RuleEventBus.new()
+	event_bus.name = "RuleEventBus"
+	_controller.add_child(event_bus)
+	var ai_coordinator: AICoordinator = AICoordinator.new()
+	ai_coordinator.name = "AICoordinator"
+	_controller.add_child(ai_coordinator)
+	var network_gateway: NetworkGateway = NetworkGateway.new()
+	network_gateway.name = "NetworkGateway"
+	network_gateway.mode = NetworkGateway.Mode.OFFLINE
+	_controller.add_child(network_gateway)
+	add_child(_controller)
+	_controller.local_human_player_id = 0
+	_controller.randomize_local_human_seat = false
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
+
+
+## 把本用例全部设置写入切换后的独立临时文件，并保存需要恢复的正式状态。
+func _begin_settings_isolation() -> void:
+	_original_settings_file_path = GameSettings.get_settings_file_path()
+	_original_control_all_characters_enabled = GameSettings.control_all_characters_enabled
+	GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
+
+
+## 恢复设置、清空临时写盘并删除测试文件。
+func _restore_settings() -> void:
+	GameSettings.set_control_all_characters_enabled(_original_control_all_characters_enabled)
+	GameSettings.flush_pending_settings()
+	GameSettings.set("_settings_file_path", _original_settings_file_path)
+	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_FILE_PATH))
+
+
+## 失败出口；恢复设置后输出稳定错误标记并退出非零状态。
+func _fail(reason: String) -> bool:
+	_restore_settings()
+	printerr("EXCLUSIVE_CARD_FAIL %s" % reason)
+	get_tree().quit(1)
+	return false
