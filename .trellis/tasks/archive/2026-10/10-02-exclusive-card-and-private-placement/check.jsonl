@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "完成前自检：测试运行、PASS 标记判定、数据校验边界"}
+{"file": ".trellis/spec/core/index.md", "reason": "核心层 Quality Check 清单"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "状态可见性防线与常见错误表"}
+{"file": ".trellis/spec/content/index.md", "reason": "内容层 Quality Check 与禁止模式"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "字体色覆盖测试与新增文本控件要求"}
+{"file": ".trellis/spec/guides/index.md", "reason": "跨层思维指南与 AI 交叉评审误报核对规则"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步完整性核对"}

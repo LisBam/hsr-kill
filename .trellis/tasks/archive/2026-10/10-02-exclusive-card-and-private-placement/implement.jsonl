@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容源码层职责、开工前清单、禁止模式（不得在核心加牌名白名单）"}
+{"file": ".trellis/spec/content/card-authoring.md", "reason": "卡牌模板、必填字段、关键字段语义、效果实现硬约束（含 4.5 强类型数组高频错误）"}
+{"file": ".trellis/spec/content/naming-and-directory.md", "reason": "目录职责、GameDatabase 扫描与校验边界、查询返回值的拷贝语义"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "单向依赖、状态结构与快照可见性、唯一移牌边界、常见错误表"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "事件运行时步骤契约、暂停与续接、时机派发与触发排序"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "界面组件分工、无状态表现组件、主题与布局约定"}
+{"file": ".trellis/spec/project/verification.md", "reason": "测试运行方式、数据校验边界、内容增长后的测试稳定性约定"}
+{"file": ".trellis/spec/project/collaboration-rules.md", "reason": "注释与命名规范、原文不可变铁律、新机制处理流程"}
