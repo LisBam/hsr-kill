@@ -35,7 +35,7 @@
 | G9 | 「完全不写日志」的既有先例 | 有。牌堆重排与私有观看全程不写日志 | `arrange_draw_pile_cards()` `:8647-8674`（只写 `random_history` + `_emit_state`）、`get_top_draw_card_candidates()` `:8609-8622`；技能侧 `xifa.gd:73-85` |
 | G10 | 牌堆牌面是否会进快照 | **不会**，任何快照只发 `draw_pile_count`；`reveal_private=true` 也读不到牌堆牌面 | `game_state.gd:240-272`（`:249` 仅 count） |
 | G11 | `character_form_state` 的可见性 | **仅 `reveal_private`**：持有者自己的普通快照拿不到，AI 快照反而全量拿到 | `player_state.gd:526`；AI 用 `to_dict(id, true)`：`match_controller.gd:3046,3230,5867,15579` |
-| G12 | 「本人可见 + 可存档」的正确先例 | `wheel_duel_lineup` 的序列化条件是 `reveal_private or viewer_id == player_id`，但它**不进存档**（`from_authoritative_dict` 无该字段），所以新字段需自己补恢复行 | `player_state.gd:583-584`；`from_authoritative_dict` `:301-384` |
+| G12 | 「本人可见 + 可存档」的正确先例 | `wheel_duel_lineup` 的序列化条件是 `reveal_private or viewer_id == player_id`，但 `from_authoritative_dict` 里**没有**该字段的恢复行（它不进存档），所以新字段必须自己补恢复行 | `player_state.gd:594`；`from_authoritative_dict` `:301-384` |
 | G13 | 手牌 → 牌堆是否会产生公开表现 | **不会**。`_on_card_moved` 在目标区域不是 `hand`/`discard_pile` 时直接 return | `match_controller.gd:15404-15418`（`:15410`） |
 | G14 | 组合选择（牌 + 文字按钮）是否被支持 | **不支持**。`choice_type="card"` 携带 `control_id` 被直接拒绝；界面只在 `control`/`bool` 时渲染按钮 | `match_controller.gd:3653-3662`；`card_selection_panel.gd:273-290`、`_add_control_options` `:695-717` |
 | G15 | 唯一正式的组合先例 | `arrange`（牌 + `top_count_*` 文字选项）：构造 `skill_definition.gd:876-888`、校验 `match_controller.gd:3681-3695`、界面 `card_selection_panel.gd:263-266`、AI `match_controller.gd:3365-3378` | 同上 |
@@ -116,13 +116,13 @@
 
 ### 阶段 H：文档（R8）
 
-- [ ] H1 `docs/内容制作指南.md`：新增「专属锦囊牌」一节（字段、校验口径、入堆端口签名与返回值、使用约束）+「其他角色不可知」一节（私有承载口径、广播边界、置牌端口签名、位次语义、交互请求用法）；卡牌字段总表补 `exclusive`。
-- [ ] H2 `docs/游戏机制与玩法内容.md`：两个新概念的完整定义 + 全部具体数值（位次取值 1/2、默认值、无概率、无消耗；入堆端口缺省时的权威随机口径）。
-- [ ] H3 `docs/卡牌系统.md`：专属牌不走 `data/decks.json` 的数据流差异（引 `shuiyanqijun` 为先例）；运行时入堆后的数据流。
-- [ ] H4 `docs/界面与交互.md`：位次询问窗口的三个选项与「必须先选一张手牌」的可用性规则；图鉴对专属牌的显示。
-- [ ] H5 `docs/AI模块.md`：只写「本任务不新增 AI 策略；被放置事实对 AI 不可见」这一边界。
-- [ ] H6 `README.md`：「自动校验」章节新增专项测试入口。
-- [ ] H7 `临时反馈文档.md`：追加「学习反馈摘要」+「Git 提交描述」（分钟级时间戳）。
+- [x] H1 `docs/内容制作指南.md`：新增「专属锦囊牌」一节（字段、校验口径、入堆端口签名与返回值、使用约束）+「其他角色不可知」一节（私有承载口径、广播边界、置牌端口签名、位次语义、交互请求用法）；卡牌字段总表补 `exclusive`。
+- [x] H2 `docs/游戏机制与玩法内容.md`：两个新概念的完整定义 + 全部具体数值（位次取值 1/2、默认值、无概率、无消耗；入堆端口缺省时的权威随机口径）。
+- [x] H3 `docs/卡牌系统.md`：专属牌不走 `data/decks.json` 的数据流差异（引 `shuiyanqijun` 为先例）；运行时入堆后的数据流。
+- [x] H4 `docs/界面与交互.md`：位次询问窗口的三个选项与「必须先选一张手牌」的可用性规则；图鉴对专属牌的显示。
+- [x] H5 `docs/AI模块.md`：只写「本任务不新增 AI 策略；被放置事实对 AI 不可见」这一边界。
+- [x] H6 `README.md`：「自动校验」章节新增专项测试入口。
+- [x] H7 `临时反馈文档.md`：追加「学习反馈摘要」+「Git 提交描述」（分钟级时间戳）。
 
 ### 阶段 I：专项测试（R9）
 
