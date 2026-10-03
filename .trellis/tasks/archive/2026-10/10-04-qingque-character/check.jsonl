@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "完成前自检：测试运行方式、PASS 判定标准与固定种子内容增长的历史事故表"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步强制清单：机制/卡牌/界面/README 的对应文档"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "锁定技标签与 lock 字段一致性、持有者有效性检查顺序、次数消费时机"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "AI 中性断言：钩子默认放行/默认 0.0 时既有行为逐字不变"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "核心层不得出现具体技能ID或牌名白名单；公开字段的存档往返要求"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "新增时机数据键不得改变既有派发顺序与回写集合"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层改动的消费点收敛检查：一个验证入口覆盖多个调用方"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用既有端口（弃置批次、随机源、阶段跳过、候选协议）而非新建"}

@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容源码层职责、开工前清单与可复用端口优先原则"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "技能静态参数、时机订阅 role 选择、锁定技不创建询问、生命周期函数与动态额度写法"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "内容文件必须自带配套 AI；主动技三钩子与被动来牌估值的分工"}
+{"file": ".trellis/spec/content/card-authoring.md", "reason": "卡牌静态参数必填字段；新增 is_damage 字段的落位与既有一致性口径"}
+{"file": ".trellis/spec/content/naming-and-directory.md", "reason": "技能/武将文件名必须为小写拼音，插画自动发现路径约定"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "状态可见性防线：公开事实进快照、私有事实只对本人可见；skill_used_card_names 的公开性论证"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "为牌时机派发顺序、逐目标生命周期与 exclude_card_target 的生效点"}
+{"file": ".trellis/spec/adapters/ai-pipeline.md", "reason": "AI 评分使用数据库新建静态实例、只读权威快照的约束"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "内联文字选项与牌面式选牌的既有交互协议"}
+{"file": ".trellis/tasks/10-04-qingque-character/design.md", "reason": "本任务全部新增端口签名、时序与 AI 数值口径"}
