@@ -39,6 +39,8 @@ func _run() -> void:
 		return
 	if not _test_zimo_ai_and_locked_skill_uncertainty():
 		return
+	if not _test_zimo_ordered_pair_candidate_pool():
+		return
 	print("QINGQUE_MECHANICS_PASS")
 	get_tree().quit(0)
 
@@ -195,6 +197,15 @@ func _test_duyi_card_action_permission() -> bool:
 	_controller.state.get_player(0).wooden_ox_storage.append(stored)
 	if _controller.card_rules.validate_use(0, stored, [1]).contains("独弈"):
 		return _fail("duyi_wooden_ox_blocked")
+	# 目标列表同样是禁令的一部分：不可使用的牌必须一张目标都不提供，
+	# 否则界面会先高亮可点击的目标，玩家选完才发现无法确认，表现成“不可使用却仍能指定目标”。
+	var tied_card: CardInstance = _add_hand_card(0, "tiesuo", "club", 9)
+	if not _controller.card_rules.list_legal_targets(0, tied_card).is_empty():
+		return _fail("duyi_targets_not_blocked=%s" % str(_controller.card_rules.list_legal_targets(0, tied_card)))
+	# 对照：同一张【铁索连环】在不被禁令限制时必须有合法目标，证明上面的空数组来自禁令而不是牌本身无目标。
+	var unrestrained_card: CardInstance = _add_hand_card(1, "tiesuo", "club", 10)
+	if _controller.card_rules.list_legal_targets(1, unrestrained_card).is_empty():
+		return _fail("duyi_targets_control_empty")
 	return true
 
 
@@ -467,6 +478,24 @@ func _test_zimo_ai_and_locked_skill_uncertainty() -> bool:
 	var cancel_action: Dictionary = {"payload":{"confirmed":false, "selected_card_uids":[]}}
 	if zimo.score_ai_choice(snapshot, card_choice_request, card_action, evaluator) <= zimo.score_ai_choice(snapshot, card_choice_request, cancel_action, evaluator):
 		return _fail("zimo_ai_card_choice")
+	# 【自摸】候选的目标维度：同一张【杀】打敌人必须严格优于打队友。
+	# 修复前技能层只给固定常量、通用层又只按“选中牌本身的保留价值”扣分，两个目标因此恒等，
+	# AI 只能取枚举顺序里的第一项，表现为一直对最友好的角色使用【杀】。
+	var slash_choice_request: Dictionary = {"context":{"kind":"zimo_pick_effect", "virtual_hand_definition_ids_by_uid":{str(SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE):"sha"}}, "candidates":[]}
+	# 打敌人（一号位反贼）与打队友（二号位忠臣）的两条完整提交；牌名与选中牌完全相同，只有目标不同。
+	var enemy_slash_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE], "selected_target_ids":[1]}}
+	var ally_slash_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE], "selected_target_ids":[2]}}
+	var enemy_slash_score: float = zimo.score_ai_choice(snapshot, slash_choice_request, enemy_slash_action, evaluator)
+	var ally_slash_score: float = zimo.score_ai_choice(snapshot, slash_choice_request, ally_slash_action, evaluator)
+	if enemy_slash_score <= ally_slash_score:
+		return _fail("zimo_ai_target_choice enemy=%f ally=%f" % [enemy_slash_score, ally_slash_score])
+	# 选牌维度：同一目标下，能带来摸牌收益的【无中生有】必须优于只能造成伤害的【杀】之外的低收益牌。
+	# 两条提交都保留同一张占位牌，差异只来自牌面AI配置，验证代理评分确实读取了每张牌自己的收益。
+	var sha_score: float = zimo.score_ai_choice(snapshot, slash_choice_request, enemy_slash_action, evaluator)
+	var wuzhong_choice_request: Dictionary = {"context":{"kind":"zimo_pick_effect", "virtual_hand_definition_ids_by_uid":{str(SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE):"wuzhong"}}, "candidates":[]}
+	var wuzhong_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE], "selected_target_ids":[0]}}
+	if zimo.score_ai_choice(snapshot, wuzhong_choice_request, wuzhong_action, evaluator) <= sha_score:
+		return _fail("zimo_ai_card_choice_by_name sha=%f wuzhong=%f" % [sha_score, zimo.score_ai_choice(snapshot, wuzhong_choice_request, wuzhong_action, evaluator)])
 	var suit_choice_request: Dictionary = {"context":{"kind":"zimo_pick_suit", "suit_card_counts":{"spade":1, "heart":4}}, "candidates":[]}
 	var single_suit_action: Dictionary = {"payload":{"confirmed":true, "selected_control_id":"spade"}}
 	var many_suit_action: Dictionary = {"payload":{"confirmed":true, "selected_control_id":"heart"}}
@@ -509,6 +538,59 @@ func _test_zimo_ai_and_locked_skill_uncertainty() -> bool:
 		return _fail("duyi_ai_other_target")
 	if spade_card == null or heart_card == null or club_card == null:
 		return _fail("zimo_ai_cards")
+	return true
+
+
+## 校验【自摸】分支A的候选池：有序双目标牌必须用全体角色试算组合，不能复用单目标候选列表。
+##
+## 【借刀杀人】两个位置的约束完全不同：第一名必须是“持武器的其他角色”，第二名必须是“该持刀者攻击范围内的角色”。
+## 旧实现把 list_legal_virtual_targets 的单元素试算结果同时当作两个位置的候选，于是：
+## 没有武器的角色永远进不了第二个位置（本应可以成为被【杀】者）；
+## 有武器但当前找不到合法受害者的角色也永远无法成为第一名。
+## 在只有一名持武器角色的局面里，这两个缺陷叠加会把候选组合直接压成空数组，
+## 表现为【自摸】的候选列表里根本没有【借刀杀人】。
+func _test_zimo_ordered_pair_candidate_pool() -> bool:
+	_reset_state(3)
+	# 持有者手牌两种花色（少于4），必然走分支A；花色数不足时不会因为没有锦囊候选而整支跳过。
+	_add_hand_card(0, "sha", "spade", 1)
+	_add_hand_card(0, "shan", "heart", 2)
+	if _install_skill(0, "zimo") == null:
+		return _fail("zimo_pool_install")
+	# 一号位是全场唯一持武器角色；持有者与二号位都没有武器，只可能充当第二个位置。
+	var weapon_card: CardInstance = CardInstance.new("qinggang", "spade", 3)
+	weapon_card.zone = "equipment"
+	weapon_card.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = weapon_card
+	# 分支A先摸一张牌；牌堆留一张保证摸牌结算本身不因空堆中断。
+	_add_draw_pile_card("tao", "club", 4)
+	if not _activate_skill(0, "zimo"):
+		return false
+	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
+	var jiedao_uid: int = _find_virtual_candidate_uid(request, "jiedao")
+	if jiedao_uid < 0:
+		return _fail("zimo_pool_jiedao_missing candidates=%s" % str(request.get("candidates", [])))
+	# 请求声明的组合表；界面与AI读取同一份可序列化数据，断言它而不是在测试里重算，才能验证真实链路。
+	var combinations: Dictionary = (request.get("context", {}) as Dictionary).get("target_combinations_by_card_id", {}) as Dictionary
+	var jiedao_combinations: Array = combinations.get(str(jiedao_uid), []) as Array
+	if not jiedao_combinations.has([1, 0]) or not jiedao_combinations.has([1, 2]):
+		return _fail("zimo_pool_jiedao_combinations=%s" % str(jiedao_combinations))
+	# 组合必须恰好两条：只有一号位能当持刀者，无武器角色不会因为自身没武器而被排除在第二个位置之外。
+	if jiedao_combinations.size() != 2:
+		return _fail("zimo_pool_jiedao_extra=%s" % str(jiedao_combinations))
+	# 单目标牌继续使用单元素候选列表：持有者自己永远不能成为自己【杀】的目标。
+	var sha_uid: int = _find_virtual_candidate_uid(request, "sha")
+	if sha_uid < 0:
+		return _fail("zimo_pool_sha_missing")
+	var sha_combinations: Array = combinations.get(str(sha_uid), []) as Array
+	if not sha_combinations.has([1]) or not sha_combinations.has([2]) or sha_combinations.has([0]):
+		return _fail("zimo_pool_sha_combinations=%s" % str(sha_combinations))
+	# 取消语义与界面契约：取消仍然是一个合法响应（表示重新选牌），但请求必须声明隐藏取消按钮。
+	if not bool(request.get("allow_cancel", false)):
+		return _fail("zimo_pool_allow_cancel=%s" % str(request.get("allow_cancel", false)))
+	if not bool((request.get("context", {}) as Dictionary).get("hide_cancel_button", false)):
+		return _fail("zimo_pool_hide_cancel=%s" % str(request.get("context", {})))
+	if not bool((request.get("context", {}) as Dictionary).get("ai_choice_skill_scored", false)):
+		return _fail("zimo_pool_skill_scored=%s" % str(request.get("context", {})))
 	return true
 
 
