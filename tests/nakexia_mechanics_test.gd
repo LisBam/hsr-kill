@@ -7,6 +7,9 @@ extends Node
 ## 本测试共用的权威对局控制器；全部机制通过正式服务与技能端口执行。
 var _controller: MatchController
 
+## 最近一次悬停武将资料的技能标题集合；只保存标题文本，不保存信息框节点。
+var _captured_skill_section_titles: Array[String] = []
+
 
 ## 延迟一帧开始回归，确保 GameDatabase 已完成目录扫描和静态校验。
 func _ready() -> void:
@@ -36,9 +39,11 @@ func _run() -> void:
 		return
 	if not _test_save_roundtrip_skill_loss():
 		return
+	if not _test_ui_filter_follows_installed_skills():
+		return
 	if not _test_ai_hooks_positive():
 		return
-	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 nested_trigger_entry=1")
+	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 nested_trigger_entry=1")
 	get_tree().quit(0)
 
 
@@ -621,6 +626,64 @@ func _submit_choice(actor_id: int, target_ids: Array[int], confirmed: bool) -> b
 ## 为当前零材料确认请求提交确认或取消；揭质与留白的确认共用该入口。
 func _submit_confirm(actor_id: int, confirmed: bool) -> bool:
 	return _submit_choice(actor_id, [], confirmed)
+
+
+## 校验界面的悬停资料与右键详情按实际安装集合裁剪：失去后不再出现，重新获得后立即恢复。
+func _test_ui_filter_follows_installed_skills() -> bool:
+	var character: Dictionary = GameDatabase.get_character("nakexia")
+	# 技能栏过滤；只依赖脚本，不需要节点就绪状态。
+	var table_script: Script = load("res://scripts/ui/match_table.gd") as Script
+	var table: Node = table_script.new() as Node
+	# 完整安装：三个固有技能全部可见。
+	var full_ids: Array = table.call("_get_visible_skill_ids", character, "rebel", {"installed_skill_ids":["zhuxv", "jiezhi", "liubai"]}) as Array
+	# 失去全部技能：技能栏一个按钮都不留。
+	var lost_ids: Array = table.call("_get_visible_skill_ids", character, "rebel", {"installed_skill_ids":[]}) as Array
+	# 失去后重新获得【逐虚】：只有它重新出现。
+	var regranted_ids: Array = table.call("_get_visible_skill_ids", character, "rebel", {"installed_skill_ids":["zhuxv"]}) as Array
+	# 旧快照缺少该字段时不做裁剪，与改动前的行为逐字节一致。
+	var legacy_ids: Array = table.call("_get_visible_skill_ids", character, "rebel", {}) as Array
+	table.free()
+	if not (full_ids.has("zhuxv") and full_ids.has("jiezhi") and full_ids.has("liubai")):
+		return _fail("ui_filter_full=%s" % str(full_ids))
+	if not lost_ids.is_empty():
+		return _fail("ui_filter_lost=%s" % str(lost_ids))
+	if not regranted_ids.has("zhuxv") or regranted_ids.has("jiezhi") or regranted_ids.has("liubai"):
+		return _fail("ui_filter_regranted=%s" % str(regranted_ids))
+	if not (legacy_ids.has("zhuxv") and legacy_ids.has("jiezhi") and legacy_ids.has("liubai")):
+		return _fail("ui_filter_legacy=%s" % str(legacy_ids))
+	# 悬停武将资料与右键武将详情共用同一份技能分段；必须实例化正式场景，其子节点由 .tscn 提供。
+	var target_view_scene: PackedScene = load("res://scenes/components/player_target_view.tscn") as PackedScene
+	var target_view: PlayerTargetView = target_view_scene.instantiate() as PlayerTargetView
+	add_child(target_view)
+	target_view.information_requested.connect(_on_character_information_requested)
+	# 完整安装：三个技能的悬停分段都在。
+	target_view.configure_snapshot({"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv", "jiezhi", "liubai"]}, character)
+	target_view._request_character_information()
+	if not (_has_captured_skill_title("逐虚") and _has_captured_skill_title("揭质") and _has_captured_skill_title("留白")):
+		target_view.queue_free()
+		return _fail("info_filter_full=%s" % str(_captured_skill_section_titles))
+	# 失去全部技能后重新获得【逐虚】：悬停分段只剩逐虚，已失去的【揭质】【留白】不再出现。
+	target_view.configure_snapshot({"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv"]}, character)
+	target_view._request_character_information()
+	target_view.queue_free()
+	if not _has_captured_skill_title("逐虚") or _has_captured_skill_title("揭质") or _has_captured_skill_title("留白"):
+		return _fail("info_filter_lost=%s" % str(_captured_skill_section_titles))
+	return true
+
+
+## 判断最近一次悬停资料里是否存在含指定技能名的分段；标题可能带轮回数或次数后缀，因此按包含匹配。
+func _has_captured_skill_title(skill_name: String) -> bool:
+	for captured_title: String in _captured_skill_section_titles:
+		if captured_title.contains(skill_name):
+			return true
+	return false
+
+
+## 记录武将悬停资料中的技能名集合；锚点矩形与正文由其他用例覆盖。
+func _on_character_information_requested(information: Dictionary, _anchor_rect: Rect2) -> void:
+	_captured_skill_section_titles.clear()
+	for section_variant: Variant in information.get("description_sections", []) as Array:
+		_captured_skill_section_titles.append(str((section_variant as Dictionary).get("title", "")))
 
 
 ## 从观察者快照中取出指定玩家的条目；找不到时返回空字典，供断言直接读取公开字段。
