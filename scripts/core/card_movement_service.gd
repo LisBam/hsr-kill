@@ -224,6 +224,8 @@ func _add_to_zone(card: CardInstance, zone: String, owner_id: int, target_slot: 
 		elif zone == "wooden_ox":
 			owner.wooden_ox_storage.append(card)
 		elif zone == "judgment":
+			# 判定区只追加不插入：数组保持**置入顺序**，界面因此按进入先后从左到右显示。
+			# 结算顺序是它的逆序（最后置入者先判定），由 match_controller 的判定流程取数组末项实现，此处不得改为插入到首位。
 			owner.judgment_area.append(card)
 		elif zone == "equipment":
 			owner.equipment[target_slot if not target_slot.is_empty() else "treasure"] = card
