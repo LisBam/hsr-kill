@@ -21,6 +21,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": false,
+		"is_damage": true,
 		"description": "目标与你轮流打出【杀】，首先未打出者受到另一方造成的1点伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",

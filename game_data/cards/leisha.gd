@@ -25,6 +25,7 @@ func _init() -> void:
 		"response_pattern": "sha",
 		"recast": false,
 		"delayed": false,
+		"is_damage": true,
 		"description": "【杀】的一种，造成的伤害为雷电伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",

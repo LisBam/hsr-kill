@@ -24,6 +24,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": true,
+		"is_damage": true,
 		"description": "判定结果为黑桃2至9时受到3点无来源雷电伤害，否则移动到下一名合法角色的判定区。",
 		"resolution_mode": "whole",
 		"final_zone": "judgment",

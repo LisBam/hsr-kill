@@ -192,6 +192,15 @@ func is_exclusive() -> bool:
 	return bool(_metadata.get("exclusive", false))
 
 
+## 返回本牌是否为「伤害牌」：使用此牌时，其自身效果会对目标造成伤害。
+## 判定只读元数据键 `is_damage`，缺省为 false，因此新增卡牌默认不是伤害牌，既有卡牌行为完全不变。
+## 该入口是「成为伤害牌目标」类内容（例如【弃和】）的唯一判定依据，内容层禁止另建牌名白名单。
+## 口径说明：只按**牌自身的使用效果**判定，因此装备牌（即使其装备效果会造成伤害）不是伤害牌；
+## 延时锦囊【闪电】在判定结算时造成伤害，属于伤害牌，与本入口的“使用者使用它”语义一致。
+func is_damage_card() -> bool:
+	return bool(_metadata.get("is_damage", false))
+
+
 ## 返回真正进入本牌目标时机与逐目标结算的目标数组；默认与玩家声明完全一致，角色语义辅助目标可在卡牌文件中剥离。
 func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
 	return requested_target_ids.duplicate()

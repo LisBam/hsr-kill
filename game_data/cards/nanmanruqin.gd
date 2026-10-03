@@ -21,6 +21,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": false,
+		"is_damage": true,
 		"description": "所有其他角色依次打出【杀】，否则受到你造成的1点伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",

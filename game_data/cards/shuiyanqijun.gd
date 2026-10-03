@@ -21,6 +21,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": false,
+		"is_damage": true,
 		"description": "目标选择弃置装备区所有牌，或受到你造成的1点伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",

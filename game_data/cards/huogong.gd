@@ -43,6 +43,7 @@ func _init() -> void:
 		"response_pattern": "wuxie",
 		"recast": false,
 		"delayed": false,
+		"is_damage": true,
 		"description": "目标展示一张手牌，你可弃置一张同花色手牌并对其造成1点火焰伤害。",
 		"resolution_mode": "per_target",
 		"final_zone": "discard",
