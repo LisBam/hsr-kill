@@ -484,7 +484,7 @@
 
 - [OK] 定向子集 17 个场景全部 PASS（`.godot_test_logs/skill_loss_subset.txt`）：omphalos_transform / tingyun / daheita / kafuka / reincarnation / conquest_save（含 `resume_skills`）/ conquest_single_player / corner_badge / leader_skill / skill_target_ui / ui_layout / match_replay / new_character_mechanics / rule_timing / lan_match_flow / ai_policy / smoke
 - [OK] `NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 nested_trigger_entry=1`
-- [OK] 全量 82 个场景连跑（`.godot_test_logs/full_regression_one_shot.txt`）
+- [OK] 全量 82 个测试场景连跑（`.godot_test_logs/full_regression_one_shot.txt`）：**82/82 全部通过、零 `_FAIL`**（81 条 `_PASS` + `ANDROID_ADAPTATION_TEST_OK`），含整批连跑中偶发失败的 `audio_system_test` 本次 `AUDIO_SYSTEM_PASS`
 - [OK] 界面断言覆盖需求第四条：真实 `PlayerTargetView` 实例在 `installed_skill_ids` 不含某技能时不再输出该技能分段，重新获得后立即恢复
 
 ### Status

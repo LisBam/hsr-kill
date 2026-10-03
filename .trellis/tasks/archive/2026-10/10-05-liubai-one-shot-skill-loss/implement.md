@@ -43,7 +43,7 @@
 - 定向子集 17 个场景全部 PASS（`.godot_test_logs/skill_loss_subset.txt`）：`omphalos_transform`、`tingyun_mechanics`、`daheita_mechanics`、`kafuka_mechanics`、`reincarnation_mechanics`、`conquest_save`（含 `resume_skills`）、`conquest_single_player`、`corner_badge`、`leader_skill`、`skill_target_ui`、`ui_layout`、`match_replay`、`new_character_mechanics`、`rule_timing`、`lan_match_flow`、`ai_policy`、`smoke`
 - 专项复跑：`NAKEXIA_MECHANICS_PASS … one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3`
 - 界面断言直接覆盖需求第四条：`PlayerTargetView` 实例化真实场景后，`installed_skill_ids` 不含的技能不出现在 `description_sections` 中，重新获得后立即恢复
-- 全量 82 个场景连跑：`.godot_test_logs/full_regression_one_shot.txt`
+- 全量 82 个测试场景连跑（`.godot_test_logs/full_regression_one_shot.txt`）：**82/82 全部通过、零 `_FAIL`**，81 条 `_PASS` 标记 + 1 条 `ANDROID_ADAPTATION_TEST_OK`，其中包含整批连跑中偶发失败的 `audio_system_test`（本次 `AUDIO_SYSTEM_PASS`）
 - 文档同步：`docs/游戏机制与玩法内容.md`、`docs/架构说明.md`、`docs/界面与交互.md`、`docs/内容制作指南.md`、`docs/AI模块.md`、`README.md`；规范同步：`.trellis/spec/guides/code-reuse-thinking-guide.md`（模式 5 重写为“不要把一次性移除写成需要长期维护的持久状态”）、`.trellis/spec/core/layering-and-state.md`
 
 ## 五、遗留
