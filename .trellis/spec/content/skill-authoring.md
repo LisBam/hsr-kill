@@ -70,6 +70,7 @@ uninstall()
 - “本局一次”或跨回合的私有记忆必须写入持有者的 `PlayerState.character_form_state`（随权威存档往返、不进入公开快照），不能只放在技能实例字段里：技能实例会在复原武将牌、技能重装与读档后被重建，实例字段会静默丢失。
   - **唯一例外 · 需要“只有本人可读”的私有事实**：`character_form_state` 的序列化条件是 `reveal_private`，而**全部 AI 快照都是 `to_dict(该AI的player_id, true)`**，因此写进它的事实会被每个 AI 读到。需要「其他角色不可知」时必须改用**专用字段 + 更严条件 `reveal_private and viewer_id == player_id`**（现有实现：`PlayerState.private_pile_placement` 与端口 `set/get/clear_private_pile_placement()`）。反过来，只用 `viewer_id == player_id` 也不行：本地广播快照 `to_dict(local_human_player_id, false)` 会被整体录制进回放，事实会因此写进回放文件。
 - **`role` 的选择按“事件里有没有你的 player_id”决定**：`role="player"`/`"source"`/`"target"` 都是拿事件的对应 ID 与持有者比对，因此**在事件里恒为 `-1` 的时机只能用 `role="global"`**。典型是 `gameStart`（全局派发为 `_emit_rule_timing("gameStart", -1, -1, -1, {...})`）与「其他角色的回合开始/结束」这类**由持有者之外的回合角色触发**的时机；写成 `role="player"` 会静默收不到任何事件（订阅成功但永不回调，没有报错）。
+  - **`gameStart` 的时间位置是「正式开局时刻」**：它在起始手牌与手气卡之后、第一轮之前派发（`MatchController._complete_pre_game_start()`），顺序为 `enterGame → gameDrawBefore → gameDrawBegin → 起始手牌 → gameDrawAfter → 手气卡 → gameStart → roundStart`。因此在 `gameStart` 里往牌堆加入的牌**不会进入任何一次手气卡重发**；反过来，任何希望“可能被手气卡刷到”的效果都不能放在这个时机。该时机同样是一次正式技能发动，内容应调用 `announce_activation()` 写入发动记录与提示，且**不得把隐藏信息（牌面、位次等）放进它的 `context`**——`context` 会写进公开快照字段 `skill_history`。
 - 持有者有效性检查的**固定顺序**是：武将代次匹配 → （持有者存活且在场，或 `can_trigger_while_owner_inactive(event)` 返回 `true`，或 `out_of_game_skill` 覆盖）→ `can_use_effect()`（`maintenance=true` 时跳过）→ **仅当技能位于 `player.acquired_skills` 时才检查局内获得技能额度** → 内容自定义条件。因此固有技能的死亡后清理不会被“获得技能额度”挡住；反之，**局内获得的技能**（额度来自 `acquired_skills`）即使覆盖了死亡放行也会被额度检查拒绝。
 
 ---
