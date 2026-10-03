@@ -2,7 +2,7 @@ extends Node
 
 ## 专属锦囊牌与不可知置牌机制专项回归。
 ## 逐条覆盖两个机制底座：卡牌专属字段与校验口径、按定义造实体牌入堆、隐藏事实的私有承载与广播边界、
-## 牌堆位次置牌端口、位次询问的三选项交互协议，以及「未选牌时位次不可确认」的界面可用性。
+## 牌堆位次置牌端口、位次询问的三选项交互协议，以及「未选牌时位次不可确认」的操作区内联可用性。
 ## 本用例不认识任何具体卡牌或技能，全部断言都通过通用端口与通用快照字段完成。
 
 ## 测试专用设置文件；本用例修改的持久化偏好不会写入玩家正式配置。
@@ -43,6 +43,21 @@ const PRIVATE_KEY_TURN_PLAYER_ID: String = "turn_player_id"
 
 ## 私有置牌事实的回合号键名。
 const PRIVATE_KEY_TURN_NUMBER: String = "turn_number"
+
+## 位次询问的选择类型标识；与规则层 MatchController.CARD_POSITION_CHOICE_TYPE 逐字一致。
+const INLINE_CHOICE_TYPE: String = "card_position"
+
+## 正式桌面操作行的场景路径；内联询问的三个按钮都渲染在这一行里。
+const ACTION_ROW_PATH: String = "InteractionPanel/InteractionVBox/ActionRow"
+
+## 规则层声明的取消选项被渲染成的通用取消按钮路径；位次询问不得再生成该按钮，否则玩家会看到两个取消。
+const INLINE_CANCEL_BUTTON_PATH: String = "InteractionPanel/InteractionVBox/ActionRow/InlineControlCancelButton"
+
+## 位次询问在操作行中允许出现的可见按钮数量；两项位次加一项取消，不多不少。
+const INLINE_ACTION_BUTTON_COUNT: int = 3
+
+## 正式主场景初始化所需的稳定等待帧数；覆盖主菜单遮罩与局内控件的一次完整布局。
+const UI_SETTLE_FRAME_COUNT: int = 4
 
 ## 测试前设置文件路径；结束时恢复，禁止污染玩家正式配置。
 var _original_settings_file_path: String = "user://game_settings.cfg"
@@ -91,11 +106,11 @@ func _run() -> void:
 	_log_progress("position_protocol")
 	if not await _test_position_request_protocol():
 		return
-	_log_progress("panel_usability")
-	if not await _test_panel_three_option_usability():
+	_log_progress("inline_usability")
+	if not await _test_inline_three_option_usability():
 		return
 	_restore_settings()
-	print("EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+panel_usability")
+	print("EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+inline_usability")
 	get_tree().quit(0)
 
 
@@ -641,99 +656,166 @@ func _test_position_request_protocol() -> bool:
 	return true
 
 
-## 验证位次询问窗口恰好提供三个按钮，且未选中手牌时两个位次按钮不可点击、取消可用。
-func _test_panel_three_option_usability() -> bool:
-	# 询问对象；使用第一名持牌角色，避免依赖具体武将。
-	var chooser_id: int = _find_player_with_hand_cards(1)
-	if chooser_id < 0:
-		return _fail("no_panel_chooser")
-	# 先清空累计窗口：对手 AI 在前序步骤中可能已经用出锦囊并留下反制链或响应窗口，
-	# 而权威入口会拒绝“已有待办请求”时新建的位次请求，导致本用例看到空窗口。
+## 验证位次询问在正式桌面上以「手牌区选牌 + 操作区询问按钮」的方式呈现，不再打开任何独立窗口。
+## 可见按钮恰好三个，顺序为「牌堆顶第一张 / 牌堆顶第二张 / 取消」；
+## 未选中恰好一张手牌时前两项不可点击、取消始终可点击；选中一张后前两项转为可点击。
+## 最后分别点击一次取消与一次第二张位次，核对权威结果槽收到的是放弃与“恰好一张牌 + 第二位次”。
+func _test_inline_three_option_usability() -> bool:
+	# 询问对象；正式桌面只把属于本机真人座位的请求渲染成内联询问，因此固定使用本地人类座位。
+	var chooser_id: int = int(_controller.local_human_player_id)
+	# 询问者状态；为null说明本用例尚未建立可交互对局。
+	var chooser: PlayerState = _controller.state.get_player(chooser_id) if _controller.state != null and chooser_id >= 0 else null
+	if chooser == null or not chooser.alive:
+		return _fail("inline_chooser_missing id=%d" % chooser_id)
+	# 询问者手牌数量；至少两张才能既验证“未选牌不可确认”又验证“选中一张后可确认”。
+	if chooser.hand.size() < 2:
+		return _fail("inline_chooser_hand=%d" % chooser.hand.size())
+	# 询问前清空累计窗口：权威入口会拒绝“已有待办请求”时新建的位次请求。
 	if not await _settle_pending_choices():
 		return false
-	# 构造一条独立的位次询问；直接复用正式端口，保证面板看到的是真实请求形状。
-	var immediate_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
-	if bool(immediate_result.get("confirmed", true)):
-		return _fail("panel_request_should_be_deferred")
-	if _controller._pending_card_choice.is_empty():
-		return _fail("panel_request_not_published")
-	# 面板快照；面板是纯表现组件，只消费该只读字典。
-	var panel_request: Dictionary = _controller._pending_card_choice.duplicate(true)
-	var first_candidate_uid: int = int(((panel_request.get("candidates", []) as Array)[0] as Dictionary).get("uid", -1))
-	var request_id: int = int(panel_request.get("request_id", -1))
-	# 独立实例化选择面板；它自行构建全部子节点，因此不需要主场景。
-	var panel_scene: PackedScene = load("res://scenes/components/card_selection_panel.tscn") as PackedScene
-	if panel_scene == null:
-		return _fail("card_selection_panel_scene_missing")
-	var panel: CardSelectionPanel = panel_scene.instantiate() as CardSelectionPanel
-	add_child(panel)
+	# 私有置牌事实与牌堆张数基线；界面整段交互只提交意图，两者都不允许发生变化。
+	_controller.clear_private_pile_placement(chooser_id)
+	var baseline_pile_size: int = _controller.state.draw_pile.size()
+	# 正式主场景；内联询问必须覆盖玩家实际运行的桌面、手牌区与操作按钮。
+	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
+	if main_scene == null:
+		return _fail("main_scene_missing")
+	var main_instance: Control = main_scene.instantiate() as Control
+	add_child(main_instance)
+	# 主场景自带控制器；非法1人配置阻止自动开局与AI计时器，本用例随后把界面整体改接真实权威控制器。
+	var ui_controller: MatchController = main_instance.get_node("MatchController") as MatchController
+	ui_controller.default_player_count = 1
+	ui_controller.local_human_player_id = chooser_id
+	ui_controller.randomize_local_human_seat = false
+	for _frame_index: int in range(UI_SETTLE_FRAME_COUNT):
+		await get_tree().process_frame
+	# 启动主菜单遮罩；本用例注入局内询问，因此显式关闭遮罩以恢复局内控件。
+	(main_instance.get_node("%MainMenu") as MainMenu).visible = false
 	await get_tree().process_frame
-	# 收集面板发出的确认与取消意图；面板不得自行改动规则状态。
-	var submitted_payloads: Array[Dictionary] = []
-	var cancelled_request_ids: Array[int] = []
-	panel.position_submitted.connect(func(submitted_request_id: int, selected_card_uids: Array[int], control_id: String) -> void:
-		submitted_payloads.append({"request_id":submitted_request_id, "card_uids":selected_card_uids.duplicate(), "control_id":control_id})
-	)
-	panel.choice_cancelled.connect(func(cancelled_request_id: int) -> void:
-		cancelled_request_ids.append(cancelled_request_id)
-	)
-	panel.show_request(panel_request)
+	# 界面接线：请求发布、状态广播与动作提交三条链路全部指向已经建立的权威控制器。
+	# 这样断言覆盖的是完整回路（真实请求 → 内联渲染 → 真实按钮 → 权威结果槽），而不是只测一次渲染。
+	main_instance.set("match_controller", _controller)
+	_controller.state_changed.connect(Callable(main_instance, "_on_state_changed"))
+	_controller.card_choice_requested.connect(Callable(main_instance, "_on_card_choice_requested"))
+	_controller.call("_emit_state")
 	await get_tree().process_frame
-	# 三个按钮；两个位次按钮加一个取消按钮，不多不少。
-	var position_buttons: Array = panel.get("_position_option_buttons") as Array
-	var cancel_button: Button = panel.get("_position_cancel_button") as Button
-	if position_buttons.size() != 2 or cancel_button == null:
-		return _fail("panel_button_count position=%d cancel=%s" % [position_buttons.size(), str(cancel_button != null)])
-	if str((position_buttons[0] as Button).text) != OPTION_TOP_LABEL or str((position_buttons[1] as Button).text) != OPTION_SECOND_LABEL:
-		return _fail("panel_position_labels=%s/%s" % [str((position_buttons[0] as Button).text), str((position_buttons[1] as Button).text)])
-	if cancel_button.text != OPTION_CANCEL_LABEL:
-		return _fail("panel_cancel_label=%s" % cancel_button.text)
-	# 未选中任何手牌时：两个位次按钮必须不可点击，取消按钮必须可用。
-	if not (position_buttons[0] as Button).disabled or not (position_buttons[1] as Button).disabled:
-		return _fail("position_buttons_should_start_disabled")
-	if cancel_button.disabled:
-		return _fail("cancel_button_should_always_be_enabled")
-	# 点击位次按钮但不选手牌；面板必须忽略，不发出任何确认意图。
-	(position_buttons[1] as Button).pressed.emit()
+	# 正式桌面接线与等待帧期间，真实对局可能已经为本地玩家打开了响应窗口；正式端口会拒绝“已有待办请求”时新建的位次请求。
+	# 因此这里在创建询问前再清空一次累计窗口，且清空后不再等待任何帧，确保询问创建不会被新窗口抢先拦截。
+	if not await _settle_pending_choices():
+		return false
+	# 首次询问；询问对象是本机真人，因此请求必然异步等待界面操作而不是当场结算。
+	var request_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
+	if bool(request_result.get("confirmed", true)) or _controller._pending_card_choice.is_empty() or str(_controller._pending_card_choice.get("choice_type", "")) != INLINE_CHOICE_TYPE:
+		return _fail("inline_request_not_published result=%s pending=%s" % [str(request_result), str(_controller._pending_card_choice.get("choice_type", ""))])
 	await get_tree().process_frame
-	if not submitted_payloads.is_empty():
-		return _fail("position_submitted_without_card_selection")
-	# 选中恰好一张手牌后：两个位次按钮必须可用。
-	var selected_uids: Array[int] = [first_candidate_uid]
-	panel.set("_selected_card_uids", selected_uids)
-	panel.call("_refresh_selection_state")
+	# 正式桌面节点；独立选牌窗口、操作面板与两个复用按钮。
+	var card_selection_panel: CardSelectionPanel = main_instance.get_node("CardSelectionPanel") as CardSelectionPanel
+	var interaction_panel: PanelContainer = main_instance.get_node("InteractionPanel") as PanelContainer
+	var use_button: Button = main_instance.get_node("%UseButton") as Button
+	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
+	# 独立窗口必须保持关闭；位次询问完全复用桌面内联交互。
+	if card_selection_panel.visible or not interaction_panel.visible:
+		return _fail("inline_window_state panel=%s interaction=%s" % [str(card_selection_panel.visible), str(interaction_panel.visible)])
+	# 操作行可见按钮；询问期间只允许出现三个，避免通用取消按钮与声明的取消选项重复。
+	var visible_action_buttons: Array[Button] = _get_visible_action_row_buttons(main_instance)
+	if visible_action_buttons.size() != INLINE_ACTION_BUTTON_COUNT:
+		return _fail("inline_button_count=%d names=%s" % [visible_action_buttons.size(), str(_get_button_texts(visible_action_buttons))])
+	if use_button.text != OPTION_TOP_LABEL or cancel_button.text != OPTION_SECOND_LABEL:
+		return _fail("inline_option_labels=%s/%s" % [use_button.text, cancel_button.text])
+	# 第三项由声明的取消选项渲染；同一操作行不允许再出现通用取消按钮。
+	var declared_cancel_button: Button = _get_inline_extra_option_button(main_instance, 0)
+	if main_instance.get_node_or_null(INLINE_CANCEL_BUTTON_PATH) != null:
+		return _fail("inline_duplicated_cancel_button")
+	if declared_cancel_button == null or declared_cancel_button.text != OPTION_CANCEL_LABEL:
+		return _fail("inline_third_option=%s" % str(declared_cancel_button))
+	# 未选中手牌：两个位次按钮必须不可点击，取消选项必须可点击。
+	if not use_button.disabled or not cancel_button.disabled or declared_cancel_button.disabled:
+		return _fail("inline_initial_disabled top=%s second=%s cancel=%s" % [str(use_button.disabled), str(cancel_button.disabled), str(declared_cancel_button.disabled)])
+	# 候选手牌；取自权威请求，界面不自行推导可选项。
+	var candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	if candidates.size() < 2:
+		return _fail("inline_candidate_count=%d" % candidates.size())
+	var chosen_uid: int = int((candidates[0] as Dictionary).get("uid", -1))
+	if chosen_uid < 0:
+		return _fail("inline_candidate_uid_missing")
+	# 在手牌区选中一张手牌；两个位次按钮必须立即解除禁用，取消选项保持可点击。
+	main_instance.call("_on_card_pressed", chosen_uid)
 	await get_tree().process_frame
-	if (position_buttons[0] as Button).disabled or (position_buttons[1] as Button).disabled:
-		return _fail("position_buttons_should_enable_after_selection")
-	# 点击「牌堆顶第二张」；必须发出带请求序号、手牌 UID 与稳定选项 ID 的确认意图。
-	(position_buttons[1] as Button).pressed.emit()
-	await get_tree().process_frame
-	if submitted_payloads.size() != 1:
-		return _fail("position_submitted_count=%d" % submitted_payloads.size())
-	var submitted: Dictionary = submitted_payloads[0]
-	if int(submitted.get("request_id", -1)) != request_id or str(submitted.get("control_id", "")) != OPTION_SECOND_ID:
-		return _fail("position_submitted_payload=%s" % str(submitted))
-	var submitted_uids: Array = submitted.get("card_uids", []) as Array
-	if submitted_uids.size() != 1 or int(submitted_uids[0]) != first_candidate_uid:
-		return _fail("position_submitted_uids=%s" % str(submitted_uids))
-	# 点击取消；必须走通用取消通道，并且不携带任何位次。
-	cancel_button.pressed.emit()
-	await get_tree().process_frame
-	if cancelled_request_ids.size() != 1 or cancelled_request_ids[0] != request_id:
-		return _fail("cancel_intent=%s" % str(cancelled_request_ids))
-	if submitted_payloads.size() != 1:
-		return _fail("cancel_emitted_position_confirmation")
-	# 清理面板与本次询问，避免影响退出前的状态。
-	panel.queue_free()
-	# 清理：面板只发出意图、绝不自行结算，因此这里按**当前真实待办窗口**统一清空，
-	# 而不是继续使用本用例开头捕获的旧快照——与对手 AI 并发推进时，该请求随时可能已被回应或被后续窗口替换。
+	declared_cancel_button = _get_inline_extra_option_button(main_instance, 0)
+	if use_button.disabled or cancel_button.disabled or declared_cancel_button == null or declared_cancel_button.disabled:
+		return _fail("inline_selected_disabled top=%s second=%s cancel=%s" % [str(use_button.disabled), str(cancel_button.disabled), str(declared_cancel_button == null or declared_cancel_button.disabled)])
+	# 点击取消选项；必须提交 confirmed=false 的空选择，既不放置手牌也不产生私有事实。
+	declared_cancel_button.pressed.emit()
+	# 提交在点击瞬间同步完成：此刻结果槽必须正好是本次放弃的形态，且询问窗口已经关闭。
+	# 后续帧里真实对局可能立刻打开新的响应窗口，因此“窗口已关闭”的断言必须放在这里而不是等待一帧之后。
 	if not _controller._pending_card_choice.is_empty():
-		if not await _settle_pending_choices():
-			return false
-	return true
+		return _fail("inline_cancel_left_pending_request")
+	# 取消提交的是声明的取消选项本身，并保持 confirmed=false、不携带任何手牌；权威端据此把本次放置视为未发生。
+	if _controller._resolved_control_choice_id != OPTION_CANCEL_ID or not _controller._resolved_card_choice_uids.is_empty():
+		return _fail("inline_cancel_resolved_choice control=%s uids=%s" % [_controller._resolved_control_choice_id, str(_controller._resolved_card_choice_uids)])
+	await get_tree().process_frame
+	# 界面只提交意图：放弃不放置手牌，也不产生私有事实或改变牌堆张数。
+	if not _controller.get_private_pile_placement(chooser_id).is_empty() or _controller.state.draw_pile.size() != baseline_pile_size:
+		return _fail("inline_cancel_touched_pile")
+	# 第二次询问；这次确认「牌堆顶第二张」，用于验证手牌维度确实随确认一起送达权威端。
+	# 同样先清空窗口再立即创建请求，避免真实对局在等待帧里先打开响应窗口。
 	if not await _settle_pending_choices():
 		return false
+	var confirm_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
+	if bool(confirm_result.get("confirmed", true)) or _controller._pending_card_choice.is_empty() or str(_controller._pending_card_choice.get("choice_type", "")) != INLINE_CHOICE_TYPE:
+		return _fail("inline_second_request_not_published result=%s pending=%s" % [str(confirm_result), str(_controller._pending_card_choice.get("choice_type", ""))])
+	await get_tree().process_frame
+	var second_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
+	var second_uid: int = int((second_candidates[0] as Dictionary).get("uid", -1))
+	if second_uid < 0:
+		return _fail("inline_second_candidate_missing")
+	main_instance.call("_on_card_pressed", second_uid)
+	await get_tree().process_frame
+	# 原取消位置上的按钮此时承担「牌堆顶第二张」；点击它即确认第二位次。
+	cancel_button.pressed.emit()
+	# 与取消同理：确认结果槽必须在点击瞬间读取，避免后续帧里新请求覆盖结果。
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("inline_confirm_left_pending_request")
+	if _controller._resolved_control_choice_id != OPTION_SECOND_ID:
+		return _fail("inline_confirm_control=%s" % _controller._resolved_control_choice_id)
+	if _controller._resolved_card_choice_uids.size() != 1 or int(_controller._resolved_card_choice_uids[0]) != second_uid:
+		return _fail("inline_confirm_uids=%s expected=%d" % [str(_controller._resolved_card_choice_uids), second_uid])
+	await get_tree().process_frame
+	# 界面只提交意图：确认动作同样不得自行移动手牌或写入私有事实。
+	if not _controller.get_private_pile_placement(chooser_id).is_empty() or _controller.state.draw_pile.size() != baseline_pile_size:
+		return _fail("inline_ui_moved_cards_without_authority")
+	# 清理；先断开界面与权威控制器的信号接线，再释放主场景，避免退出阶段继续渲染。
+	_controller.state_changed.disconnect(Callable(main_instance, "_on_state_changed"))
+	_controller.card_choice_requested.disconnect(Callable(main_instance, "_on_card_choice_requested"))
+	remove_child(main_instance)
+	main_instance.free()
+	await get_tree().process_frame
 	return true
+
+
+## 返回正式桌面操作行中当前可见的按钮；内联询问期间的可见数量即玩家看到的询问按钮数量。
+func _get_visible_action_row_buttons(main_instance: Control) -> Array[Button]:
+	# 可见按钮结果；按场景中的实际顺序收集，顺序与玩家从左到右看到的一致。
+	var result: Array[Button] = []
+	var action_row: HBoxContainer = main_instance.get_node(ACTION_ROW_PATH) as HBoxContainer
+	for child: Node in action_row.get_children():
+		if child is Button and (child as Button).visible:
+			result.append(child as Button)
+	return result
+
+
+## 返回内联询问追加的第 index 个文字选项按钮；请求刷新会重建这些按钮，因此每次断言都必须重新查找。
+func _get_inline_extra_option_button(main_instance: Control, option_index: int) -> Button:
+	return main_instance.get_node_or_null("%s/InlineControlOptionButton_%d" % [ACTION_ROW_PATH, option_index]) as Button
+
+
+## 汇总按钮文本；仅用于失败诊断，帮助区分“按钮缺失”和“标签漂移”两类原因。
+func _get_button_texts(buttons: Array[Button]) -> Array[String]:
+	# 文本结果；顺序与传入按钮一致。
+	var result: Array[String] = []
+	for button: Button in buttons:
+		result.append(button.text)
+	return result
 
 
 ## 构造并提交一次位次询问动作；返回是否被权威入口接受。
