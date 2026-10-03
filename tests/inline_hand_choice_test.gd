@@ -259,6 +259,26 @@ func _run() -> void:
 	if not (main_instance.get("_inline_selected_card_uids") as Array).has(7004) or confirm_button.disabled:
 		_fail("equipment_trigger_auto_select")
 		return
+	# 延迟手牌重渲染不得覆盖询问按钮态：虚拟候选离场动画结束等回调会在询问仍然有效时再渲染一次手牌，
+	# 若无条件把确定按钮写回禁用，玩家就会遇到“装备已自动选中却点不动确定”，
+	# 必须先点一次取消选中、再点一次重新选中才能提交。
+	main_instance.call("_render_local_hand")
+	if confirm_button.disabled or not (main_instance.get("_inline_selected_card_uids") as Array).has(7004) or not cancel_button.visible:
+		_fail("equipment_trigger_state_after_hand_rerender confirm=%s cancel=%s" % [str(confirm_button.disabled), str(cancel_button.visible)])
+		return
+	# 取消按钮表现声明：请求声明“本窗口没有可放弃的出口”时取消按钮必须直接暗置，
+	# 而不是留下一个可见可按却什么也不发生的按钮（例如【自摸】发动后已经摸牌，取消只会重新打开同一询问）。
+	# 断言后重新提交同一装备询问，使后续场景读到的按钮态与插入本段之前完全一致。
+	var hide_cancel_request: Dictionary = equipment_trigger_request.duplicate(true)
+	hide_cancel_request["context"] = {"kind":"equipment_trigger", "equipment_uid":7004, "hide_cancel_button":true}
+	main_instance.call("_on_card_choice_requested", hide_cancel_request)
+	if cancel_button.visible or confirm_button.disabled:
+		_fail("hide_cancel_button_state visible=%s confirm=%s" % [str(cancel_button.visible), str(confirm_button.disabled)])
+		return
+	main_instance.call("_on_card_choice_requested", equipment_trigger_request)
+	if not cancel_button.visible or confirm_button.disabled:
+		_fail("cancel_button_restore visible=%s confirm=%s" % [str(cancel_button.visible), str(confirm_button.disabled)])
+		return
 	await _wait_for_equipment_animation(equipment_stack)
 	if not is_equal_approx((equipment_stack.get_row("weapon") as Button).position.x, equipment_stack.selectable_shift_distance + equipment_stack.selected_shift_distance):
 		_fail("equipment_trigger_selected_shift")

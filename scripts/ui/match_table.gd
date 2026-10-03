@@ -2388,11 +2388,15 @@ func _render_local_hand() -> void:
 			hand_container.move_child(ordered_card_views[card_index], card_index)
 	hand_container.layout_cards_now()
 	_start_pending_local_hand_gain_animations()
-	use_button.disabled = true
+	# 内联询问期间的按钮态由询问刷新函数唯一维护；本函数不得回写普通出牌态。
+	# 缺少本守卫时，延迟执行的手牌重渲染（例如虚拟候选离场动画结束回调）会覆盖刚刚建立的询问按钮，
+	# 表现为“确定点不动、取消也不见”，玩家必须先在装备区点一次取消选中再点一次选中才能继续。
+	if _inline_card_choice.is_empty():
+		use_button.disabled = true
+		%CancelButton.visible = false
+		%CancelButton.disabled = false
 	recast_button.disabled = not can_act
 	end_play_button.disabled = not can_act
-	%CancelButton.visible = false
-	%CancelButton.disabled = false
 	recast_button.visible = false
 
 
@@ -5155,7 +5159,13 @@ func _refresh_inline_choice_text() -> void:
 	interaction_panel.visible = true
 	use_button.text = "确定"
 	use_button.disabled = selected_count < confirm_minimum_card_count or selected_count > maximum_card_count or selected_target_count < confirm_minimum_target_count or selected_target_count > maximum_target_count
-	%CancelButton.visible = true
+	# 取消按钮的可见性与可用性分别由请求声明，两者语义不同、不得混用：
+	# allow_cancel 是**规则**声明，表示“取消是否是一个合法提交”；语义上不可取消但仍需要玩家从两个候选中择一的请求
+	# （例如强制弃牌）保留“可见但禁用”的取消按钮，用禁用态表达这次选择无法跳过。
+	# context.hide_cancel_button 是**表现**声明，由内容层在“本请求根本没有可放弃的出口”时显式置位，
+	# 界面据此直接暗置按钮。缺少这条入口时，这类请求只能发 allow_cancel=true，
+	# 于是取消按钮既可见又可按，点了却只会重新打开同一个询问，表现为“按了没有任何反应”。
+	%CancelButton.visible = not bool((_inline_card_choice.get("context", {}) as Dictionary).get("hide_cancel_button", false))
 	%CancelButton.disabled = not bool(_inline_card_choice.get("allow_cancel", false))
 	end_play_button.visible = false
 	_refresh_component_states()
