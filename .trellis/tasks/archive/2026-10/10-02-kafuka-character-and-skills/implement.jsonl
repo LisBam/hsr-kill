@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容源码层职责、开工前清单、专属牌例外与运行时入堆口径"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "技能静态参数、生命周期、时机订阅 role 选择、私有记忆承载例外"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "内容文件必须自带配套 AI；与快照无关的通用倾向通道"}
+{"file": ".trellis/spec/content/card-authoring.md", "reason": "延时锦囊判定入口与卡牌必填字段"}
+{"file": ".trellis/tasks/archive/2026-10/10-02-exclusive-card-and-private-placement/design.md", "reason": "私有置牌事实与位次询问协议签名"}
+{"file": ".trellis/tasks/archive/2026-10/10-02-turn-control-mechanism/design.md", "reason": "回合操控端口签名"}
+{"file": ".trellis/tasks/archive/2026-10/10-02-yanling-card/design.md", "reason": "卡牌【言灵】的判定与 AI 口径"}

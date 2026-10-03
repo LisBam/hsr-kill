@@ -30,6 +30,7 @@ game_data/cards|skills|characters  →  GameDatabase  →  CardInstance / Player
 - [ ] 卡牌：效果直接写在卡牌文件；技能：规则与配套 AI 都写在技能文件。
 - [ ] 新增卡牌后确认已加入 `data/decks.json` 牌堆。
   - **例外：专属锦囊牌**（元数据 `"exclusive": true`）**正常情况不加入游戏中**，只有被其他角色的技能或其他情况触发时才会按要求加入游戏，因此**不得**写入任何牌堆；`GameDatabase._validate_decks()` 只做「牌堆 → 卡牌」单向校验，未入牌堆不报错。判定入口：`CardDefinition.is_exclusive()`。详见 `docs/内容制作指南.md`「专属锦囊牌」一节。
+  - 专属牌**没有牌堆条目，因此必须自己在卡牌文件里声明 `suit` / `rank`**（现有实现：【言灵】= 梅花K）。运行时入堆端口 `MatchController.create_and_insert_card_into_draw_pile(definition_id, suit := "", rank := 0, position := 1) -> int` 的牌面优先级是「调用方显式牌面 → 定义自带牌面 → 权威随机花色点数」，`position` 传 `0`（`DRAW_PILE_POSITION_RANDOM`）表示由权威随机源在 `1..当前牌堆张数+1` 内均匀选位并记入随机历史，这是实现「随机加入 N 张」的唯一方式（技能按次数逐张调用，端口不内置批量语义）。
 - [ ] 核对必填字段齐全（数据库强制 7 项 + 规则完整性字段）。
 - [ ] 所有魔法数字提取为带注释的常量或 `@export` 变量。
 

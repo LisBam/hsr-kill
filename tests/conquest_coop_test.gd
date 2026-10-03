@@ -369,8 +369,10 @@ func _submit_vote_and_wait(participant_ids: Array[int], human_card_id: String) -
 	for _frame_index: int in range(180):
 		if _controller.state.opportunity_state.is_empty():
 			return true
+		_settle_pending_resolution_choice()
 		await get_tree().process_frame
-	return _fail("vote_resolution_timeout state=%s" % [_controller.state.opportunity_state])
+	# 超时诊断：固定种子选将会随武将池变化而换人，除机缘状态外同时列出登场阵容、体力与待处理窗口类型，便于定位换人带来的差异。
+	return _fail("vote_resolution_timeout phase=%s pending_kind=%s pending_chooser=%d lineup=%s hp=%s state=%s" % [_controller.state.current_phase, str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1)), _describe_lineup(), str(_controller.state.players.map(func(resolution_player: PlayerState) -> int: return resolution_player.hp)), _controller.state.opportunity_state])
 
 
 ## 等待敌方换将展示时间结束并进入机缘选择；测试根节点保持暂停可运行。
@@ -437,6 +439,29 @@ func _pick_available_human_character_id(human_player_id: int) -> String:
 		if not taken_character_ids.has(candidate_id):
 			return candidate_id
 	return ""
+
+
+## 结算机缘解析期间出现的待处理窗口，让解析得以推进。
+## 机缘解析在存在待处理选择时会整体等待（`OpportunitySystem._resolve_next_effect()` 的 `has_pending_card_choice()` 分支），
+## 而本测试只驱动“提交机缘选择”，不驱动选将之后的车轮战窗口：真人座位没有内置AI，
+## 投票专项还会主动 `unregister_ai(2)`，因此任何落在这些座位上的窗口都会让解析永久停住。
+## 固定种子选将会随武将池变化而换人，机缘牌效也可能因此在首轮就打出致死伤害并追问濒死救援，
+## 测试不能假设解析期间不会出现这类窗口；这里按窗口自身下发的候选取消（不可取消的窗口再用首个合法候选确认）。
+## **不改写 `current_phase`**：机缘解析期间阶段是 `"choice"`，强行改成出牌阶段会破坏 `resume_phase = "opportunity"` 的续接。
+func _settle_pending_resolution_choice() -> void:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return
+	# 当前请求稳定编号与回答者；取消动作必须绑定创建时的取值，否则会被权威入口拒绝。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	var cancel_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	cancel_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+	if _controller.submit_action(cancel_action):
+		return
+	# 不可取消的强制窗口；按请求自身下发的首个合法候选确认，候选只取自权威窗口。
+	var forced_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+	forced_action.payload = {"request_id":request_id, "selected_card_uids":_first_candidate_card_uids(), "selected_target_ids":_first_candidate_target_ids(), "selected_control_id":_first_candidate_control_id(), "confirmed":true}
+	_controller.submit_action(forced_action)
 
 
 ## 恢复本测试修改的全局开局设置，保证其他无头测试与手动开局读取用户原有值。

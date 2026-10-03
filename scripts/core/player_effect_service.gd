@@ -109,6 +109,24 @@ func has_effect(player_id: int, effect_id: String) -> bool:
 	return get_effect(player_id, effect_id) != null
 
 
+## 汇总一名角色身上全部效果声明的 AI 手牌压力；没有效果或全部为0时返回0.0。
+## 本查询是纯只读的：不创建实例、不修改状态、不发布快照，因此可以被 AI 决策在任意时刻安全调用。
+## 多个效果同时存在时求和，使“多个原因都希望该角色少留牌”自然叠加，而不需要在服务里维护优先级表。
+func get_ai_hand_pressure(player_id: int) -> float:
+	# 该角色的效果表；没有效果时压力为0，AI 行为与不存在本机制时逐字一致。
+	var effects: Dictionary = _effects_by_player.get(player_id, {}) as Dictionary
+	if effects.is_empty():
+		return 0.0
+	# 压力合计；逐个效果读取自身声明，服务不识别任何具体效果 ID。
+	var total_pressure: float = 0.0
+	for effect_variant: Variant in effects.values():
+		# 当前效果实例；无效实例跳过，避免场景释放期间的瞬时状态影响决策。
+		var effect: PlayerEffect = effect_variant as PlayerEffect
+		if effect != null:
+			total_pressure += effect.get_ai_hand_pressure()
+	return total_pressure
+
+
 ## 移除一名角色身上的全部效果实例；角色需要完整清空自身持续效果时调用。
 func clear_player_effects(player_id: int) -> void:
 	# 该角色的效果表副本；先复制再逐个移除，避免遍历期间修改原字典。

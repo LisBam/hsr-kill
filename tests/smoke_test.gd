@@ -14,7 +14,7 @@ const PLAYER_SEAT_SLOT_SCENE: PackedScene = preload("res://scenes/components/pla
 ## 正式卡牌场景；测试验证根节点是 Node2D 且保留111×148的3:4实体牌尺寸。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
-## 全部卡牌稳定 ID 对应的《崩铁杀》显示名称；名称调整必须保持46项完整映射且不改变逻辑 ID。
+## 全部卡牌稳定 ID 对应的《崩铁杀》显示名称；名称调整必须保持47项完整映射且不改变逻辑 ID。
 const EXPECTED_CUSTOM_CARD_NAMES: Dictionary = {
 	"bagua":"穷观阵",
 	"baiyin":"光能盾牌",
@@ -57,6 +57,7 @@ const EXPECTED_CUSTOM_CARD_NAMES: Dictionary = {
 	"wuxie":"运演否证",
 	"wuzhong":"无中生有",
 	"yinyue":"击云",
+	"yanling":"言灵",
 	"zhangba":"银河球棒",
 	"zhuahuang":"爪黄飞电",
 	"zhuge":"火力风暴潮",
@@ -110,9 +111,10 @@ func _run() -> void:
 		printerr("SMOKE_FAIL deck_count=%d" % deck_count)
 		get_tree().quit(1)
 		return
-	# 卡牌定义数量；补齐【银月枪】后当前规则表应登记46种配置 ID。
+	# 卡牌定义数量；补齐【银月枪】并新增专属锦囊牌【言灵】后，当前规则表应登记47种配置 ID。
+	# 注意：专属锦囊牌虽然不进入任何牌堆，但仍是一种卡牌定义，因此同样计入本数量。
 	var definition_count: int = GameDatabase.cards.size()
-	if definition_count != 46:
+	if definition_count != 47:
 		printerr("SMOKE_FAIL card_definitions=%d" % definition_count)
 		get_tree().quit(1)
 		return
@@ -138,7 +140,7 @@ func _run() -> void:
 		printerr("SMOKE_FAIL default_card_name=%s" % GameSettings.resolve_card_name(GameDatabase.get_card("sha")))
 		get_tree().quit(1)
 		return
-	# 《崩铁杀》名称完整映射；逐项校验全部46种定义，防止单张卡牌仍保留旧名或误改稳定 ID。
+	# 《崩铁杀》名称完整映射；逐项校验全部47种定义，防止单张卡牌仍保留旧名或误改稳定 ID。
 	if EXPECTED_CUSTOM_CARD_NAMES.size() != definition_count:
 		printerr("SMOKE_FAIL custom_card_name_count=%d" % EXPECTED_CUSTOM_CARD_NAMES.size())
 		get_tree().quit(1)
@@ -193,8 +195,9 @@ func _run() -> void:
 	# 新增彦卿的【遥击】与【凌霜】后为96个；两者分别负责最远目标解限与【杀】的翻面附加效果。
 	# 新增白露的【悬壶】【生息】与刃的【万死】【支离】后为100个；【悬壶】是手牌上限豁免类锁定技，
 	# 【生息】是永久累积额度的用牌联动技，【万死】是按回合结束后兑现的额外回合技，【支离】是目标改写类锁定技。
+	# 新增卡芙卡的【言灵】【游丝】后为102个；【言灵】是开局洗入专属牌的锁定技，【游丝】是私有置牌并跨回合兑现的技能。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 100:
+	if skill_definition_count != 102:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -299,8 +302,9 @@ func _run() -> void:
 	# 新增瓦尔特（星穹列车）后为44名。
 	# 新增彦卿（仙舟联盟）后为45名。
 	# 新增白露（仙舟联盟）与刃（星核猎手）后为47名；两名新武将各自引用本次新增的两个技能。
+	# 新增卡芙卡（星核猎手）后为48名；她引用【言灵】与【游丝】。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 47:
+	if character_definition_count != 48:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

@@ -394,6 +394,31 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 	return result
 
 
+## 返回公开快照中的当前「主演」玩家 ID；没有任何角色携带主演条目时返回 -1。
+## 主演是**公开状态**（载体是武将牌左上角提示条目），因此这里只读取公开快照，
+## 不需要、也不允许任何隐藏信息通道；与【言灵】【游丝】的具体技能实现完全解耦。
+func get_starring_player_id(authoritative_snapshot: Dictionary) -> int:
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前角色公开快照；旧快照缺少条目字段时按非主演处理。
+		var player: Dictionary = player_variant as Dictionary
+		# 当前角色公开提示条目集合；键为稳定来源ID。
+		var entries: Dictionary = player.get("character_corner_text_entries", {}) as Dictionary
+		if entries.has(StarringRoleService.CORNER_ENTRY_ID):
+			return int(player.get("player_id", -1))
+	return -1
+
+
+## 判断指定角色是否需要防备“本回合结束时手牌被当前主演获得”。
+## 判据：主演存在、不是自己、且不是自己的明确队友。主演是自己人时不需要防备——牌被队友拿走不算损失。
+## 明确队友的门槛复用【无懈可击】保护性响应的同一阈值，避免两处对“队友”给出不同标准。
+func should_dump_hand_against_starring(authoritative_snapshot: Dictionary, player_id: int) -> bool:
+	# 当前主演ID；场上没有主演时不存在“被主演获得手牌”的风险。
+	var starring_player_id: int = get_starring_player_id(authoritative_snapshot)
+	if starring_player_id < 0 or starring_player_id == player_id:
+		return false
+	return get_attitude(authoritative_snapshot, player_id, starring_player_id) < PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD
+
+
 ## 计算友方追歼公开标记带来的属性伤害集火收益；每个有效友方来源对应其实际可触发的一次+1伤害。
 ## 补充：当前从武将牌左上角提示的来源条目读取，不读取或依赖`public_marks`。
 func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor_id: int, target: Dictionary) -> float:

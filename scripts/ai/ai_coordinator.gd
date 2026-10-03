@@ -29,11 +29,14 @@ func is_ai_controlled(player_id: int) -> bool:
 
 
 ## 请求 AI 从合法动作中选择一项；始终返回可序列化字典。
-func request_action(player_id: int, authoritative_snapshot: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
+## hand_pressure 是核心按角色身上的持续效果算出的手牌消耗倾向值，只影响本次决策；
+## 默认0.0使未传入该值的既有调用者与测试行为逐字不变。
+func request_action(player_id: int, authoritative_snapshot: Dictionary, legal_actions: Array[Dictionary], hand_pressure: float = 0.0) -> Dictionary:
 	# 指定玩家的策略对象；不存在时直接返回结束阶段，避免核心停滞。
 	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
 	if policy == null:
 		return {"action_type": "end_play", "actor_id": player_id}
+	policy.set_hand_pressure(hand_pressure)
 	return policy.choose_action(authoritative_snapshot, legal_actions)
 
 

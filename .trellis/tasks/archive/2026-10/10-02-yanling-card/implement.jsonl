@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容源码层职责、开工前清单、专属牌例外与牌面声明口径"}
+{"file": ".trellis/spec/content/card-authoring.md", "reason": "卡牌模板、必填字段、类别语义、延时锦囊判定入口"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "内容文件必须自带配套 AI：卡牌 ai 字典与 modify_ai_action_score 钩子"}
+{"file": ".trellis/tasks/archive/2026-10/10-02-exclusive-card-and-private-placement/design.md", "reason": "专属牌字段与运行时入堆端口签名、位次语义"}
+{"file": ".trellis/tasks/archive/2026-10/10-02-turn-control-mechanism/design.md", "reason": "回合操控端口签名与调用口径"}

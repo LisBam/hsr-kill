@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "完成前自检：测试运行与 PASS 标记判定"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "状态可见性防线：私有事实只对本人可见"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "AI 中性断言：默认压力 0.0 时既有行为逐字不变"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "持有者有效性检查顺序与 role 选择"}

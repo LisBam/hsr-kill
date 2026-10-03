@@ -81,6 +81,23 @@ func get_identity_observation_target_result(authoritative_snapshot: Dictionary, 
 
 技能侧对应入口：`append_play_phase_actions(result)` 追加 `action_type=use_skill` 的合法动作。
 
+### 四之二、与快照无关的“倾向”：`get_ai_hand_pressure()`
+
+当需求要求 AI「本回合内更愿意把某类动作做出去」，而该倾向的依据是**其他角色不可知**的隐藏信息时，不要在评分器里伪造那部分信息——`NonameAIEvaluator` 是**纯函数、不持有宿主引用**的快照评分器，读不到牌堆牌面，也不允许读。正确做法是把需求降级成一条**公开信息门槛下的标量倾向**，走既有四层通道：
+
+| 层 | 成员 | 职责 |
+|---|---|---|
+| 内容层 | `PlayerEffect.get_ai_hand_pressure() -> float`（基类默认 `0.0`） | 挂在**被影响角色**身上的持续效果声明倾向强度 |
+| 服务层 | `PlayerEffectService.get_ai_hand_pressure(player_id)` | 求和该角色身上全部效果的压力值 |
+| 权威层 | `MatchController.get_ai_hand_pressure(player_id)` | 转发给 AI 协调器；**不进入快照、不写入存档** |
+| AI 层 | `AICoordinator.request_action(..., hand_pressure)` → `BasicAIPolicy.set_hand_pressure()` → `_get_hand_pressure_bonus()` | 对**消耗自己手牌**的动作加分，一次决策后自动清零 |
+
+约定：
+
+- 内容侧只写效果类与数值常量；**不得**把倾向写进 `BasicAIPolicy` 的牌名分支。
+- 门槛必须只用公开信息（当前实现为公开角标里的「主演」+ 态度队友门槛），且倾向**只能在门槛成立时**由 `AICoordinator` 传入，否则需求会退化成“AI 读取隐藏信息”。
+- 基类默认值、参数默认值与策略初值都必须保持 `0.0`，这样新通道对既有内容与既有 AI 行为**逐字零影响**；`tests/kafuka_mechanics_test.tscn` 断言了这条中性。
+
 ---
 
 ## 五、统一资源换算（禁止重复声明比例）
