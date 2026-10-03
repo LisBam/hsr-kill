@@ -5206,6 +5206,10 @@ func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Ar
 	for card: CardInstance in player.get_playable_cards():
 		if excluded_card_uids.has(card.uid):
 			continue
+		# 打出禁令（技能纯查询）；被否决的牌不进入任何响应窗口，因此真人界面、AI 响应与联机验证读取同一份候选。
+		# 核心层不按区域预筛：木牛流马牌源是否可用由技能钩子自行按牌的所在区域决定。
+		if not validate_skill_card_action_permission(player.player_id, card, CARD_ACTION_PLAY).is_empty():
+			continue
 		# 当前候选定义；普通杀与属性杀可共享 sha 响应模式。
 		var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 		# 实体牌是否可直接响应；可直接响应时不要求额外点击转化技能。
@@ -9797,6 +9801,29 @@ func validate_skill_card_target_selection(player_id: int, card_definition: Dicti
 	return ""
 
 
+## 汇总指定角色全部已安装技能对“能否使用或打出这张实体牌”的限制；空字符串表示允许。
+## 与 validate_skill_card_target_selection 并列但语义不同：本入口在目标筛选之前生效，回答“这张牌本身能不能用”，
+## 因此被禁止的牌不会进入任何目标枚举、界面候选、AI 合法动作或响应窗口。
+## 纯查询：不消费技能次数、不移动牌、不创建选择，因此可被界面预览与 AI 估值反复调用。
+func validate_skill_card_action_permission(player_id: int, card: CardInstance, card_action: String) -> String:
+	# 无效实体牌不产生限制；调用方负责在牌不存在时给出自己的拒绝原因。
+	if card == null:
+		return ""
+	# 当前玩家技能实例表；遍历顺序与武将技能栏、临时技能安装顺序一致，保证拒绝原因稳定可复现。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	# 当前牌面定义；牌堆校验正常时不应为空，仍保留防御性空定义供技能按自身口径处理。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；非锁定技失效期间被禁用的技能不再限制用牌。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill == null or not skill.can_use_effect():
+			continue
+		var validation_error: String = skill.validate_card_action_permission(card, definition, card_action)
+		if not validation_error.is_empty():
+			return validation_error
+	return ""
+
+
 ## 汇总目标角色全部已安装技能的来牌目标限制；用于黑色【杀】免疫等无需触发选择的规则。
 func validate_incoming_skill_card_target_selection(target_id: int, actor_id: int, card_definition: Dictionary, card_color: String) -> String:
 	# 目标角色技能实例表；临时授予的【琥珀】与固有技能使用相同查询路径。
@@ -10591,6 +10618,8 @@ func remove_all_skills(player_id: int, reason: String = "") -> bool:
 	# 记录牌名由【解构】等技能产生，武将牌上的“查看记录”按钮据此判定是否可点，因此必须与技能一并清空。
 	player.reincarnation_skills.clear()
 	player.recorded_card_names.clear()
+	# 技能已用牌名同理：技能已被移除，其私有历史不再有读者，保留会让复原后的同名技能误认为已经用过。
+	player.skill_used_card_names.clear()
 	add_log("%s失去了全部技能%s。" % [format_player_state_log_name(player), "（%s）" % reason if not reason.is_empty() else ""])
 	_emit_state()
 	return true
@@ -10642,6 +10671,59 @@ func get_recorded_card_names(player_id: int) -> Array[String]:
 		var empty_result: Array[String] = []
 		return empty_result
 	return player.recorded_card_names.duplicate()
+
+
+## 为一个技能登记一条“已以此法使用过的牌名”；重复登记保持幂等并返回 false，供技能区分首次登记。
+## 与 record_card_name 分开保存：容器键为技能ID，因此不同技能可以各自维护互不干扰的牌名集合，
+## 【解构】【灵感】【看破】共用的 recorded_card_names 语义不会被污染。
+## 该事实进入公开快照（技能展示、对手AI与局域网观察者读取同一份数据），登记成功后才广播状态。
+func add_skill_used_card_name(player_id: int, skill_id: String, definition_id: String) -> bool:
+	# 目标角色；不存在时无处登记。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or skill_id.is_empty() or definition_id.is_empty():
+		return false
+	# 当前技能已用牌名数组；按技能ID懒建，未使用过的技能不占用快照空间。
+	var used_names: Array = _get_skill_used_card_names_array(player, skill_id)
+	if used_names.has(definition_id):
+		return false
+	used_names.append(definition_id)
+	player.skill_used_card_names[skill_id] = used_names
+	_emit_state()
+	return true
+
+
+## 返回指定技能已经以此法使用过的牌名列表副本；未登记、角色或技能无效时返回空数组。
+func get_skill_used_card_names(player_id: int, skill_id: String) -> Array[String]:
+	# 强类型返回结果；字典内部保存无类型数组以兼容存档往返，边界处统一转换为稳定类型。
+	var result: Array[String] = []
+	# 目标角色；不存在时返回空数组，避免调用方额外判空。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or skill_id.is_empty():
+		return result
+	for name_variant: Variant in _get_skill_used_card_names_array(player, skill_id):
+		result.append(str(name_variant))
+	return result
+
+
+## 清空指定角色全部技能的“已以此法使用过的牌名”；供复原武将牌与换将边界调用。
+## 与 recorded_card_names 一起清理，避免复原后仍有技能认为某个牌名已经用过。
+func clear_skill_used_card_names(player_id: int) -> void:
+	# 目标角色；不存在或本就为空时无需清理与广播。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or player.skill_used_card_names.is_empty():
+		return
+	player.skill_used_card_names.clear()
+	_emit_state()
+
+
+## 读取指定角色某技能的已用牌名权威数组；不存在时按技能ID建立空数组并写回字典，调用方可直接 append。
+func _get_skill_used_card_names_array(player: PlayerState, skill_id: String) -> Array:
+	if player.skill_used_card_names.has(skill_id):
+		return player.skill_used_card_names[skill_id] as Array
+	# 新登记的技能；先写回字典再返回，保证调用方的 append 直接作用于权威状态而不是临时数组。
+	var created: Array = []
+	player.skill_used_card_names[skill_id] = created
+	return created
 
 
 ## 重置指定角色除排除项以外的全部技能；复原限定技、出牌阶段限次、每回合限次、觉醒技与轮回进度。
@@ -12903,6 +12985,10 @@ func _build_card_use_timing_data(card_uid: int, target_id: int = -1) -> Dictiona
 	return {
 		"card_uid":card_uid,
 		"card_id":str(card_use_context.get("card_definition_id", "")),
+		# 逻辑牌花色与颜色；供“成为某花色/颜色牌的目标”类内容读取，例如【弃和】比较来牌花色与手牌花色。
+		# 取值按多材料聚合结果：同花色材料取该花色，多花色同色材料取颜色且花色为 none，无材料虚拟牌两者均为 none。
+		"card_suit":str(card_use_context.get("card_suit", "none")),
+		"card_color":str(card_use_context.get("card_color", "none")),
 		"target_id":target_id,
 		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
 		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
@@ -13239,6 +13325,10 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"event_id":use_event.event_id,
 		"actor_id":actor_id,
 		"card_definition_id":card.definition_id,
+		# 逻辑牌花色与颜色；写入后由 _build_card_use_timing_data 导出到全部为牌时机，
+		# 使“成为某花色/颜色牌的目标”类技能无需在处理区反查实体牌，也不受多材料转化与无材料虚拟牌差别影响。
+		"card_suit":virtual_card.suit,
+		"card_color":virtual_card.color,
 		"target_ids":target_ids.duplicate(),
 		"requested_target_ids":declared_target_ids.duplicate(),
 		"excluded_target_ids":[],
@@ -13506,6 +13596,9 @@ func _execute_card_use_timing_event(event: GameEvent, _scheduler: EventScheduler
 	var timing_data: Dictionary = {
 		"card_uid":card_uid,
 		"card_id":str(card_use_context.get("card_definition_id", "")),
+		# 逻辑牌花色与颜色；与 _build_card_use_timing_data 保持同名同义，逐目标时机与使用牌时机读取同一份事实。
+		"card_suit":str(card_use_context.get("card_suit", "none")),
+		"card_color":str(card_use_context.get("card_color", "none")),
 		"target_ids":(card_use_context.get("target_ids", []) as Array).duplicate(),
 		"excluded_target_ids":(card_use_context.get("excluded_target_ids", []) as Array).duplicate(),
 		"direct_hit_target_ids":(card_use_context.get("direct_hit_target_ids", []) as Array).duplicate(),

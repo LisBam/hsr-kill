@@ -795,6 +795,20 @@ func validate_incoming_card_target_selection(_actor_id: int, _card_definition: D
 	return ""
 
 
+## 校验技能持有者当前能否**使用或打出**一张实体牌；空字符串表示允许，非空文本会作为统一拒绝原因。
+##
+## 与 `validate_card_target_selection()` 的分工：本入口回答「这张牌本身能不能用」，因此对整张牌生效、与目标无关；
+## 后者回答「这张牌能不能打给某个目标」，只在目标筛选阶段生效。被本入口否决的牌不会进入任何目标枚举、
+## 界面候选、AI 合法动作或响应窗口。
+##
+## 参数：`card` 为待判定的实体牌（已保证位于持有者手牌或木牛流马牌源）；`card_definition` 为其静态定义；
+## `card_action` 取核心层稳定动作名 `CARD_ACTION_USE`（使用）或 `CARD_ACTION_PLAY`（打出）。
+## 约束：纯查询——不得消费次数、移动牌、创建选择、写日志或修改任何状态；不得在此读取或写入运行时成员变量。
+## 缺省不限制任何牌，因此既有技能与卡牌行为完全不变。
+func validate_card_action_permission(_card: CardInstance, _card_definition: Dictionary, _card_action: String) -> String:
+	return ""
+
+
 ## 返回主动技能的只读交互预览；不得在本函数中消耗资源、创建选择或修改对局状态。
 func get_activation_preview(_context: Dictionary = {}) -> Dictionary:
 	return {}
@@ -871,6 +885,98 @@ func request_card_target_selection(title: String, prompt: String, candidates: Ar
 	# 技能恢复上下文；可在 context.target_ids_by_card_id 中提供实体牌到合法目标的组合映射。
 	var skill_context: Dictionary = _build_selection_context(context)
 	return host.call("request_card_target_choice", owner_player_id, title, prompt, candidates, target_ids, min_cards, max_cards, min_targets, max_targets, allow_cancel, skill_context) as Dictionary
+
+
+## 虚拟手牌请求的候选占位 UID 基址；取值远高于任何实体牌 UID 增长空间。
+##
+## 占位 UID 必须满足两条约束：一是出现在本次请求的候选数组中，才能通过“选择结果必须属于本次候选”
+## 的权威校验；二是永远不与真实实体牌 UID 重合，否则界面可能把虚拟牌当成真实牌处理。
+## 技能按条目序号累加本基址即可得到稳定占位 UID，本地、AI 与网络三端构造结果完全一致。
+const VIRTUAL_HAND_CANDIDATE_UID_BASE: int = 1000000000
+
+
+## 为技能持有者创建“临时把手牌区换成可选虚拟牌”的选牌并选目标请求。
+##
+## 与 request_card_target_selection 的区别：候选不是本人真实拥有的牌，而是本方法按 `entries` 生成的
+## **可视化**可选牌。界面收到本请求后会把真实手牌向左移出手牌区，再让这些可选牌以摸牌动画进入手牌区；
+## 玩家可以像使用真实手牌一样选中其中一张并点击目标，最后按确定提交。请求结束后可选牌向右离场，
+## 真实手牌以摸牌动画回归。这些牌只是选择介质，技能不会因此真正获得牌，规则效果仍由技能自行结算。
+##
+## 虚拟牌没有花色与点数（视为使用的牌本身也不带花色点数），因此界面固定不显示这两项。
+##
+## 参数：`entries` 每项为
+## `{"definition_id": 稳定牌名ID, "label": 可选展示名, "target_combinations": 完整目标组合数组, "auto_target_ids": 规则自动目标}`，
+## 数组顺序即手牌区显示顺序；`min_targets`/`max_targets` 为目标数量范围；`allow_cancel` 决定能否取消。
+## 目标相关字段由本方法统一翻译成占位 UID 键：调用方不需要、也不应该自行推算占位 UID，
+## 因此“技能侧候选顺序”与“界面显示顺序”永远一致。
+## 恢复时用 `response.card_ids[0]` 作为占位 UID，从 `context.virtual_hand_definition_ids_by_uid` 反查牌名。
+## 返回同步测试结果字典；正式对局中结果通过 `continue_selection(context, response)` 异步返回。
+func request_virtual_hand_card_target_selection(title: String, prompt: String, entries: Array[Dictionary], min_targets: int, max_targets: int, allow_cancel: bool, context: Dictionary = {}) -> Dictionary:
+	# 虚拟候选、占位UID到牌名映射与每张虚拟牌的目标规则；全部在本次调用内一次生成，避免调用方重复计算。
+	var candidates: Array[Dictionary] = []
+	var definition_ids_by_uid: Dictionary = {}
+	var target_combinations_by_card_id: Dictionary = {}
+	var auto_target_ids_by_card_id: Dictionary = {}
+	# 请求级目标并集；材料尚未选中时供界面预览高亮，选中某张牌后由组合映射收紧。
+	var target_ids: Array[int] = []
+	for entry_index: int in range(entries.size()):
+		# 当前虚拟牌条目；缺少稳定牌名ID的条目既无法渲染也无法使用，直接跳过而不是生成空牌面。
+		var entry: Dictionary = entries[entry_index]
+		var definition_id: String = str(entry.get("definition_id", ""))
+		if definition_id.is_empty():
+			continue
+		# 当前占位UID；同一请求内唯一，且不与任何真实实体牌冲突。
+		var candidate_uid: int = VIRTUAL_HAND_CANDIDATE_UID_BASE + entry_index
+		# 当前牌面定义；取不到定义时仍保留条目，界面会退化为只显示占位文本而不是报错。
+		var definition: Dictionary = GameDatabase.get_card(definition_id)
+		candidates.append({
+			"uid":candidate_uid,
+			"owner_id":owner_player_id,
+			"zone":"virtual_hand",
+			"slot":"",
+			"visible":true,
+			"virtual_hand":true,
+			"label":str(entry.get("label", GameSettings.resolve_card_name(definition))),
+			# 虚拟牌面快照；花色固定 none、点数固定0，界面因此天然无法显示错误的实体牌信息。
+			"card_data":{
+				"uid":candidate_uid,
+				"definition_id":definition_id,
+				"suit":"none",
+				"rank":0,
+				"zone":"virtual_hand",
+				"owner_id":owner_player_id,
+			},
+		})
+		definition_ids_by_uid[str(candidate_uid)] = definition_id
+		# 当前虚拟牌的完整目标组合；键为占位UID字符串，与真实选牌请求的组合映射语义完全一致。
+		var target_combinations: Array = entry.get("target_combinations", []) as Array
+		if not target_combinations.is_empty():
+			target_combinations_by_card_id[str(candidate_uid)] = target_combinations.duplicate(true)
+		# 当前虚拟牌的规则自动目标；例如【无中生有】预填使用者本人，玩家不必再点一次自己。
+		var auto_target_ids: Array = entry.get("auto_target_ids", []) as Array
+		if not auto_target_ids.is_empty():
+			auto_target_ids_by_card_id[str(candidate_uid)] = auto_target_ids.duplicate()
+		# 请求级目标并集；去重后保持首次出现顺序，选中某张牌后仍由各自的组合映射收紧。
+		for combination_variant: Variant in target_combinations:
+			for target_variant: Variant in combination_variant as Array:
+				var combination_target_id: int = int(target_variant)
+				if not target_ids.has(combination_target_id):
+					target_ids.append(combination_target_id)
+		for target_variant: Variant in auto_target_ids:
+			var auto_target_id: int = int(target_variant)
+			if not target_ids.has(auto_target_id):
+				target_ids.append(auto_target_id)
+	# 没有任何可点选目标时不建立请求：目标数下限无法被满足，UI只会显示一个无法确认的空界面。
+	if candidates.is_empty() or target_ids.is_empty():
+		return {}
+	# 请求上下文；虚拟手牌标记供界面识别并接管手牌区，映射供技能恢复所选牌名而不依赖任何运行时成员。
+	var request_context: Dictionary = context.duplicate(true)
+	request_context["virtual_hand"] = true
+	request_context["virtual_hand_definition_ids_by_uid"] = definition_ids_by_uid
+	request_context["target_combinations_by_card_id"] = target_combinations_by_card_id
+	request_context["auto_target_ids_by_card_id"] = auto_target_ids_by_card_id
+	# 牌数固定为“恰好一张”：一张虚拟牌代表一次视为使用，选择多张没有规则含义。
+	return request_card_target_selection(title, prompt, candidates, target_ids, 1, 1, min_targets, max_targets, allow_cancel, request_context)
 
 
 ## 为技能持有者创建牌堆顶/底双行排序请求；响应 card_ids 保存从左到右顺序，control_id 保存牌堆顶行数量。
