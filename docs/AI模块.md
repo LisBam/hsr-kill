@@ -436,3 +436,26 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 - **压力的公开信息门槛**：`NonameAIEvaluator.should_dump_hand_against_starring(snapshot, player_id)` 与 `NonameAIEvaluator.get_starring_player_id(snapshot)` 只读**公开快照**——主演的载体是武将牌左上角的公开提示条目（`StarringRoleService.CORNER_ENTRY_ID`），因此 AI 不需要任何隐藏通道。压力仅在「主演存在、不是行为者本人、且行为者对主演的态度低于明确队友门槛 `PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD`（与【无懈可击】保护性响应复用同一阈值）」时生效；主演是队友或场上没有主演时**完全不生效**。
 - **兼容性**：基类默认 `0.0`、协调器参数默认 `0.0`、策略初值 `0.0`，因此这条通道对既有内容与既有 AI 行为**逐字零影响**；它只改变决策权重，不改变手牌数、摸牌结果、判定结果或任何真实规则数值。
 
+## 青雀与【独弈】【弃和】【自摸】的 AI 口径（2026-10-04）
+
+内容层的规则见《游戏机制与玩法内容》的「青雀与【独弈】【弃和】【自摸】」；本节只记录 AI 侧入口、数值与通用性。
+
+- **【自摸】的四个入口**（全部在 `game_data/skills/zimo.gd`）：
+  | 入口 | 口径 |
+  |---|---|
+  | `append_play_phase_actions()` | `can_activate()` 成立时追加 `1` 个无参数 `use_skill` 动作。需求口径是“回合内满足条件无脑发动”，因此不做花色分布权衡；**基础状态不限次**（原文没有“出牌阶段限一次”），所以 AI 会在同一次决策中反复看到这个动作，直到候选普通锦囊逐个用尽、花色数达到 `4` 而转入分支二（此后计数被改写后的上限 `2` 拦截）或不再存在带合法目标的候选项。AI 侧不自设上限，只由统一的“每回合 AI 动作数上限”兜底 |
+  | `score_ai_action()` | `AI_ACTION_BASE = 20.0`：固定正分，高于普通用牌的排序分，保证 AI 不会因为“看不出收益”而放弃发动 |
+  | `score_ai_choice()`（`kind = "zimo_pick_effect"`） | 确认提交 `AI_COMMIT_REWARD = 100.0`；选中【杀】再 `+ AI_SLASH_BONUS = 0.5`（【杀】能直接造成伤害）；取消 `0.0`。取消分恒为 `0.0` 是**硬要求**：若确认分不高于它，AI 会一直“发动 → 取消”空转 |
+  | `score_ai_choice()`（`kind = "zimo_pick_suit"`） | `AI_COMMIT_REWARD(100.0) - 该花色手牌数 × AI_SUIT_DISCARD_PENALTY(0.6)`：张数越少的花色分越高（弃置机会成本更低）；取消 `0.0` |
+- **选牌与选花色都是“可取消但必须确认”的请求**：取消动作由统一枚举自动生成（`payload.confirmed = false`），技能只需保证确认分严格大于取消分。选花色的张数信息由技能写入请求上下文 `context.suit_card_counts`（只对持有者可见的选择请求），AI **不读对局状态**，只读该请求上下文。
+- **【弃和】的入口是 `modify_ai_incoming_card_effect()`**（被动来牌估值，基类默认返回原分）：
+  - 只在「来牌是伤害牌」（`definition.is_damage_card()`）且「目标就是持有者本人」时生效；其他目标或非伤害牌逐字返回原分。
+  - 持有者手牌数 `N` 张时，“至少一张与来牌同花色”的概率按均匀分布 `1-(1-1/4)^N` 估算（`SUIT_MATCH_CHANCE_PER_CARD = 0.25`），命中时整张牌对该目标的价值归零（`AI_NEGATE_CERTAINTY = 1.0`）：新分 `= 原分 × (1 - 命中概率)`。`N=1/2/4` 时分别衰减到 `0.75/0.5625/0.3164` 倍；`N = 0` 时不变。
+  - 该钩子**只读权威快照**（`evaluator.get_player(snapshot, target_id).hand_count`，公开信息），不访问 `host`、不读运行时变量，因此可以在**纯函数式**的 AI 评估路径（目标侧技能以 `skill.bind(null, target_id)` 绑定的临时实例）里安全调用。
+- **【独弈】的入口同样是 `modify_ai_incoming_card_effect()`**：
+  - 只在「目标就是持有者本人」且「来牌标签 `respond_shan == true`」（即需要目标打出【闪】才能避免伤害）时生效；其他目标或无需响应的牌逐字返回原分。
+  - 倍率 `AI_NO_RESPONSE_MULTIPLIER = 1.4`：持有者**无法打出手牌【闪】**，因此这类牌对它的命中价值显著提高，AI 会更积极地用【杀】集火它，同时**不会**把它当成能替别人挡刀的响应资源。
+  - 本条与【弃和】的衰减方向相反，两者叠加时按调用顺序依次生效（先放大命中价值，再按被抵消概率衰减），因此对青雀使用【杀】的最终估值仍高于对同体力、同手牌数的普通角色。
+- **通用性**：【独弈】不提供主动动作，因此**没有** `append_play_phase_actions()` 分支；两个锁定技都只通过来牌估值参与决策，不影响自身的出牌选择。
+- **这一批内容不新增任何 AI 状态**：没有新的快照字段、没有新的策略开关、没有新的随机源（【自摸】的花色挑选张数、选牌收益、来牌估值全部是确定性标量），因此固定种子的回放与 AI 决策可复现。
+
