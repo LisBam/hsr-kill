@@ -6,6 +6,7 @@ extends Node
 ##
 ## 全部断言都通过正式公开端口完成：不直接改写牌堆顺序、不直接移动牌，也不读取技能实例字段。
 ## 唯一使用内部接口的地方是「驱动时机」：专项场景不经过完整开局与回合轮转，因此需要显式派发 gameStart / phaseBefore / phaseAfter。
+## 最后一个场景例外：它必须验证「游戏开始时」相对手气卡的先后位置，因此真的跑一遍完整开局流程。
 
 ## 专属锦囊牌【言灵】的稳定定义 ID；与卡牌源码 id 字段逐字一致。
 const YANLING_CARD_ID: String = "yanling"
@@ -70,11 +71,29 @@ const OPTION_SECOND_ID: String = "pile_slot_2"
 ## 取值刻意偏短：本用例完全同步执行，一旦出现运行时错误会立即停止脚本，此时只有看门狗能把进程拉回失败出口。
 const WATCHDOG_SECONDS: float = 20.0
 
+## 完整开局场景的玩家数量；3人身份局与其它专项用例保持一致，AI 推进速度最快。
+const PRE_GAME_PLAYER_COUNT: int = 3
+
+## 完整开局场景的随机种子；固定取值保证选将与AI决策可复现。
+const PRE_GAME_RANDOM_SEED: int = 20261004
+
+## 完整开局场景使用的手气卡张数；必须大于0，否则“手气卡阶段必然先于游戏开始时结束”这一断言就没有意义。
+const PRE_GAME_MULLIGAN_LIMIT: int = 1
+
+## 测试专用设置文件路径；手气卡张数会写盘，指向独立文件可避免污染开发者本机的正式设置。
+const TEST_SETTINGS_FILE_PATH: String = "user://kafuka_mechanics_test_settings.cfg"
+
 ## 权威控制器；所有状态变化仍通过正式公开端口执行。
 var _controller: MatchController
 
 ## 测试是否已失败；true时停止后续断言并以1结束进程。
 var _failed: bool = false
+
+## 是否已经把设置写盘路径切换到测试专用文件；只有为true时才需要在退出前恢复。
+var _settings_isolated: bool = false
+
+## 正式设置文件路径；隔离开始时保存，恢复时原样写回。
+var _original_settings_file_path: String = ""
 
 
 ## 延迟一帧执行全部断言，确保 GameDatabase 已完成新卡牌、新技能与新武将的目录扫描。
@@ -117,7 +136,11 @@ func _run() -> void:
 	_log_progress("aiPressure")
 	if not _test_ai_pressure_mechanism():
 		return
-	print("KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure")
+	# 完整开局流程放在最后：它会替换控制器并离开最小状态，避免影响前面全部场景。
+	_log_progress("gameStartTiming")
+	if not await _test_game_start_timing_after_mulligan():
+		return
+	print("KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure+gameStartTimingAfterMulligan")
 	get_tree().quit(0)
 
 
@@ -127,7 +150,11 @@ func _log_progress(stage: String) -> void:
 
 
 ## 创建与正式场景同类型的控制器、事件总线、AI协调器与离线网关。
+## 已存在控制器时先释放：最后一个场景需要从零开始跑一遍完整开局，不能复用残留的规则状态与时机订阅。
 func _create_controller() -> void:
+	if _controller != null and is_instance_valid(_controller):
+		remove_child(_controller)
+		_controller.free()
 	_controller = MatchController.new()
 	_controller.name = "MatchController"
 	# 规则事件总线；全部技能时机都经它派发。
@@ -141,9 +168,15 @@ func _create_controller() -> void:
 	# 离线网关；动作提交与正式单机模式保持相同来源语义。
 	var network_gateway: NetworkGateway = NetworkGateway.new()
 	network_gateway.name = "NetworkGateway"
+	network_gateway.mode = NetworkGateway.Mode.OFFLINE
 	_controller.add_child(network_gateway)
 	add_child(_controller)
 	_controller.local_human_player_id = 0
+	# 固定本地真人座次：完整开局场景必须稳定地把真人座位交给测试驱动，随机座次会让选将提交落到AI身上。
+	_controller.randomize_local_human_seat = false
+	# 流程间隔与AI思考延迟归零；测试全部按帧推进，不依赖墙钟等待。
+	_controller.game_flow_interval_seconds = 0.0
+	_controller.ai_action_delay_seconds = 0.0
 
 
 ## 为当前场景创建最小权威状态；与正式开局共用同一批子组件，但只保留规则断言必需的字段。
@@ -332,16 +365,45 @@ func _test_content_metadata() -> bool:
 
 
 ## 【言灵】第一段：游戏开始时机派发后，牌堆恰好增加三张【言灵】，牌面恒为梅花K，位次随机且逐条写入随机历史。
+## 同一场景同时验证「游戏开始时也算一次真实发动」：必须有技能历史记录、公开日志与发动表现，而不是静默改写牌堆。
 func _test_yanling_game_start_insertion() -> bool:
 	_reset_state(3)
 	_add_draw_pile_card("sha", "spade", 3)
 	_add_draw_pile_card("shan", "heart", 4)
 	if _install_single_skill(0, YANLING_SKILL_ID) == null:
 		return _fail("yanling_skill_install")
+	# 发动表现与公开日志采集；两者都是公开出口，分别对应界面的发动提示与玩家可见日志。
+	var activated_skill_names: Array[String] = []
+	var captured_log_messages: Array[String] = []
+	_controller.skill_activated.connect(func(activated_player_id: int, activated_skill_name: String, _context: Dictionary) -> void:
+		if activated_player_id == 0:
+			activated_skill_names.append(activated_skill_name))
+	_controller.log_added.connect(func(log_message: String) -> void:
+		captured_log_messages.append(log_message))
+	# 发动前的技能历史长度；本时机必须恰好追加一条记录。
+	var activation_history_before: int = _controller.state.get_player(0).skill_history.size()
 	# 开局前的牌堆长度与随机历史长度；两者都必须恰好增加3，多一张或少一张都说明洗入次数错误。
 	var pile_size_before: int = _controller.state.draw_pile.size()
 	var history_before: int = _controller.state.random_history.size()
 	_controller._emit_rule_timing("gameStart", -1, -1, -1, {"player_count":3})
+	# 发动记录：技能历史恰好新增一条【言灵】，且携带本次入堆的张数口径，供复盘与界面提示读取。
+	var activation_history: Array = _controller.state.get_player(0).skill_history
+	if activation_history.size() != activation_history_before + 1:
+		return _fail("yanling_activation_history=%d" % (activation_history.size() - activation_history_before))
+	# 最新一条发动记录；字段名与控制器写入结构一致。
+	var activation_record: Dictionary = activation_history[activation_history.size() - 1] as Dictionary
+	if str(activation_record.get("skill_id", "")) != YANLING_SKILL_ID or int((activation_record.get("context", {}) as Dictionary).get("insert_count", 0)) != EXPECTED_INSERT_COUNT:
+		return _fail("yanling_activation_record=%s" % str(activation_record))
+	# 发动提示：界面据此播放技能名提示，必须恰好一次且名称是玩家可见名。
+	if activated_skill_names != ["言灵"]:
+		return _fail("yanling_activation_signal=%s" % str(activated_skill_names))
+	# 公开日志：玩家视角必须能看到“发动了【言灵】”这一行。
+	var activation_log_found: bool = false
+	for log_message: String in captured_log_messages:
+		if log_message.contains("发动了【言灵】"):
+			activation_log_found = true
+	if not activation_log_found:
+		return _fail("yanling_activation_log=%s" % str(captured_log_messages))
 	if _controller.state.draw_pile.size() != pile_size_before + EXPECTED_INSERT_COUNT:
 		return _fail("yanling_insert_count=%d" % (_controller.state.draw_pile.size() - pile_size_before))
 	if _controller.state.random_history.size() != history_before + EXPECTED_INSERT_COUNT:
@@ -366,6 +428,126 @@ func _test_yanling_game_start_insertion() -> bool:
 		if recorded_position < 1 or recorded_position > _controller.state.draw_pile.size():
 			return _fail("yanling_history_position=%d" % recorded_position)
 	return true
+
+
+## 「游戏开始时」的时机口径：它派发在起始手牌与手气卡全部结束之后、第一轮开始之前。
+## 断言方式是跑一遍真实开局：手气卡阶段里牌堆不得出现任何【言灵】（因此刷新手气卡也刷不到），
+## 手气卡全部确认完毕之后牌堆必须恰好出现三张，并且该时机派发时手气卡阶段已经关闭。
+## 本场景用手气卡次数为1的真人座位驱动刷新，AI 座位由内置逻辑自行确认保留。
+func _test_game_start_timing_after_mulligan() -> bool:
+	# 设置隔离：手气卡张数会写盘，必须指向独立临时文件，避免污染开发者本机的正式设置。
+	_begin_settings_isolation()
+	# 关闭全部自选与改将入口：只保留随机选将与真人手气卡这两条本场景需要的路径。
+	GameSettings.set_control_all_characters_enabled(false)
+	GameSettings.set_custom_character_assignment_enabled(false)
+	GameSettings.set_customize_ai_characters_enabled(false)
+	GameSettings.set_mulligan_limit(PRE_GAME_MULLIGAN_LIMIT)
+	_create_controller()
+	if not _controller.start_match(PRE_GAME_PLAYER_COUNT, PRE_GAME_RANDOM_SEED, IdentityRules.MODE_IDENTITY):
+		return _fail("timing_start_match")
+	# 游戏开始时机的派发现场；记录派发瞬间的阶段名与手气卡服务是否仍在等待玩家，用于证明先后顺序。
+	var game_start_phases: Array[String] = []
+	var mulligan_still_active_at_game_start: Array[bool] = []
+	_controller.trigger_manager.subscribe("gameStart", self, func(_event: RuleEvent) -> void:
+		game_start_phases.append(str(_controller.state.current_phase))
+		mulligan_still_active_at_game_start.append(_controller.starting_hand_mulligan != null and _controller.starting_hand_mulligan.active), 0, -1, "global")
+	# 选将阶段：本地真人按候选顺序提交，其余座位由内置AI自动推进。
+	var selection_safety: int = 0
+	while _controller.state.current_phase == "character_selection" and selection_safety < 32:
+		selection_safety += 1
+		if _controller.character_selection.get_pending_player_ids().has(0):
+			var candidates: Array[String] = _controller.character_selection.get_candidates(0)
+			if candidates.is_empty() or not _controller.select_character(0, candidates[0]):
+				return _fail("timing_selection_submit")
+		await get_tree().process_frame
+	if _controller.state.current_phase != "starting_hand_mulligan":
+		return _fail("timing_mulligan_phase=%s" % str(_controller.state.current_phase))
+	# 手气卡阶段已经开始；此时此刻才装入【言灵】，模拟“开局前就已经拥有该技能”的持有者。
+	# 该技能从此刻起一直存在，直到手气卡结束后的游戏开始时才会派发，因此本节验证的正是用户要求的时机位置。
+	if _install_single_skill(0, YANLING_SKILL_ID) == null:
+		return _fail("timing_skill_install")
+	# 刷新手气卡之前：牌堆里不得有任何【言灵】，否则玩家可能直接摸到它。
+	if _count_yanling_in_draw_pile() != 0:
+		return _fail("yanling_in_pile_before_mulligan=%d" % _count_yanling_in_draw_pile())
+	# 手气卡推进：真人先用掉本次刷新，再确认保留；刷新后的手牌同样不得包含【言灵】。
+	var refresh_used: bool = false
+	var mulligan_safety: int = 0
+	while _controller.state.current_phase == "starting_hand_mulligan" and mulligan_safety < 24:
+		mulligan_safety += 1
+		var local_mulligan_state: Dictionary = _controller.starting_hand_mulligan.to_dict(0)
+		if not refresh_used and bool(local_mulligan_state.get("can_refresh", false)):
+			refresh_used = true
+			# 手气卡刷新动作；只携带动作名，刷新目标由权威层按动作发起者确定。
+			var refresh_action: PlayerAction = PlayerAction.new("mulligan_refresh", 0)
+			if not _controller.submit_action(refresh_action):
+				return _fail("timing_mulligan_refresh")
+			for hand_card: CardInstance in _controller.state.get_player(0).hand:
+				if hand_card.definition_id == YANLING_CARD_ID:
+					return _fail("yanling_dealt_by_mulligan_refresh")
+			if _count_yanling_in_draw_pile() != 0:
+				return _fail("yanling_in_pile_during_mulligan=%d" % _count_yanling_in_draw_pile())
+			continue
+		if bool(local_mulligan_state.get("can_choose", false)):
+			# 手气卡确认动作；全部玩家确认后权威层才推进到游戏开始时机。
+			var finish_action: PlayerAction = PlayerAction.new("mulligan_finish", 0)
+			if not _controller.submit_action(finish_action):
+				return _fail("timing_mulligan_finish")
+		else:
+			# 真人已经确认，若仍在等待则说明还有AI座位没有完成；按正式开局驱动逻辑推进它们。
+			_controller._drive_ai_starting_hand_mulligan()
+		await get_tree().process_frame
+	if _controller.state.current_phase == "starting_hand_mulligan":
+		return _fail("timing_mulligan_stuck")
+	if not refresh_used:
+		return _fail("timing_refresh_never_used remaining=%d" % int(_controller.starting_hand_mulligan.to_dict(0).get("remaining", -1)))
+	# 游戏开始时已经派发：必须恰好一次，且派发瞬间仍处于 game_start 阶段。
+	if game_start_phases.size() != 1 or game_start_phases[0] != "game_start":
+		return _fail("timing_game_start_phases=%s" % str(game_start_phases))
+	# 派发瞬间手气卡服务必须已经停止等待：这条断言就是“游戏开始时在手气卡之后”的权威证据。
+	if mulligan_still_active_at_game_start != [false]:
+		return _fail("timing_mulligan_active_at_game_start=%s" % str(mulligan_still_active_at_game_start))
+	# 手气卡结束之后：牌堆恰好增加三张【言灵】，它们因此只可能被首轮及以后的摸牌抽到。
+	if _count_yanling_in_draw_pile() != EXPECTED_INSERT_COUNT:
+		return _fail("yanling_after_mulligan=%d" % _count_yanling_in_draw_pile())
+	# 同一次发动同样进入技能历史：真实开局路径与前面的手动派发路径必须产生完全一致的记录。
+	var timing_activation_found: bool = false
+	for history_entry_variant: Variant in _controller.state.get_player(0).skill_history:
+		# 当前历史条目；只核对技能ID，具体键值结构由前一个场景逐字段断言。
+		var history_entry: Dictionary = history_entry_variant as Dictionary
+		if str(history_entry.get("skill_id", "")) == YANLING_SKILL_ID:
+			timing_activation_found = true
+	if not timing_activation_found:
+		return _fail("timing_activation_missing")
+	_restore_settings()
+	return true
+
+
+## 统计当前公共牌堆中【言灵】的实体张数；只读牌堆，不修改任何区域。
+func _count_yanling_in_draw_pile() -> int:
+	# 命中张数；逐张比较卡牌定义ID。
+	var count: int = 0
+	for draw_card: CardInstance in _controller.state.draw_pile:
+		if draw_card.definition_id == YANLING_CARD_ID:
+			count += 1
+	return count
+
+
+## 把设置写盘路径切换到测试专用文件；必须先保存正式路径才能原样恢复。
+func _begin_settings_isolation() -> void:
+	_original_settings_file_path = GameSettings.get_settings_file_path()
+	GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
+	_settings_isolated = true
+
+
+## 恢复正式设置写盘路径并删除测试文件；在未隔离时安全地什么都不做。
+func _restore_settings() -> void:
+	if not _settings_isolated:
+		return
+	_settings_isolated = false
+	GameSettings.flush_pending_settings()
+	GameSettings.set("_settings_file_path", _original_settings_file_path)
+	if FileAccess.file_exists(TEST_SETTINGS_FILE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS_FILE_PATH))
 
 
 ## 【言灵】第二段：任意角色使用延时锦囊牌时，持有者摸一张牌并成为「主演」；非延时锦囊不触发。
@@ -678,6 +860,8 @@ func _fail(message: String) -> bool:
 	if _failed:
 		return false
 	_failed = true
+	# 失败也是一种退出路径：先把设置写盘路径恢复，避免开发者的正式设置被测试文件覆盖。
+	_restore_settings()
 	printerr("KAFUKA_FAIL %s" % message)
 	get_tree().quit(1)
 	return false

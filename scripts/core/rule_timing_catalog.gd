@@ -5,8 +5,10 @@ extends RefCounted
 
 ## 游戏、回合与六个标准阶段的全部已知监听时机；数组顺序按规则流程排列，修改会影响文档与测试中的标准顺序。
 ## roundEnd 是真实轮末时机：普通回合结束且轮转回到轮锚点时派发一次，先于 roundStart，额外回合不派发。
+## gameStart 的位置就是它的权威定义：起始手牌与手气卡流程全部结束之后、第一轮开始之前派发，
+## 因此该时机的内容（例如往牌堆加入专属牌）不会参与任何一次手气卡重发。
 const GAME_PHASE_TIMINGS: Array[String] = [
-	"gameStart", "gameDrawBefore", "gameDrawBegin", "gameDrawAfter", "enterGame", "roundEnd", "roundStart",
+	"enterGame", "gameDrawBefore", "gameDrawBegin", "gameDrawAfter", "gameStart", "roundEnd", "roundStart",
 	"phaseBefore", "phaseBeforeStart", "phaseBeforeEnd", "phaseBeginStart", "phaseBegin", "phaseChange", "phaseEnd", "phaseAfter", "phaseOver", "phaseCancelled",
 	"phaseZhunbeiBefore", "phaseZhunbeiBegin", "phaseZhunbei", "phaseZhunbeiEnd", "phaseZhunbeiAfter", "phaseZhunbeiCancelled", "phaseZhunbeiSkipped",
 	"phaseJudgeBefore", "phaseJudgeBegin", "phaseJudge", "phaseJudgeEnd", "phaseJudgeAfter", "phaseJudgeCancelled", "phaseJudgeSkipped",
