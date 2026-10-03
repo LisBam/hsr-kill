@@ -23,6 +23,8 @@ func _run() -> void:
 		return
 	if not _test_fanyin_black_then_red():
 		return
+	if not _test_fanyin_ai_black_target():
+		return
 	if not _test_huitao_thresholds():
 		return
 	print("HAISEYIN_MECHANICS_PASS batch=1 sections=4 black_first=1 huitao_min=3")
@@ -145,6 +147,44 @@ func _test_discard_batch_aggregation() -> bool:
 ## 记录一次批次事件的数据快照；只读取规则事件提供的稳定字段。
 func _capture_discard_batch(event: RuleEvent) -> void:
 	_captured_batches.append((event.data as Dictionary).duplicate(true))
+
+
+## 校验【泛音】黑色效果目标的AI选择：通用层不得再叠加一次目标态度，否则两层评分相消，AI 只会选中座次最靠前的角色。
+##
+## 通用层对“纯选目标”请求默认返回 get_attitude/ATTITUDE_SCALE，而技能层用 score_resource_change 表达“让目标弃一张牌”；
+## 两者符号相反且量级接近时，敌方与友方会得到几乎相同的总分，AI 于是退化成“取枚举顺序第一项”。
+## 因此请求上下文显式声明 ai_choice_skill_scored，由技能层独自决定收益。
+func _test_fanyin_ai_black_target() -> bool:
+	_reset_state(3)
+	if _install_skill(0, "fanyin") == null:
+		return _fail("fanyin_ai_install")
+	# 两名潜在目标都必须有手牌，才会进入黑色效果的合法目标列表。
+	for target_id: int in [1, 2]:
+		# 当前目标的手牌；黑色效果要求“令一名角色弃置一张手牌”。
+		var hand_card: CardInstance = CardInstance.new("shan", "club", 4)
+		hand_card.owner_id = target_id
+		hand_card.zone = "hand"
+		_controller.state.get_player(target_id).hand.append(hand_card)
+	# 泛音技能实例；本场景只使用它的离线评分入口，不做真实结算。
+	var fanyin: SkillDefinition = _controller.get_skill_instance(0, "fanyin")
+	# 评分用权威快照与评估器；与基础AI读取同一套公开字段。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	var snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(snapshot)
+	# 请求上下文；与技能实际建立的黑色目标请求保持同一形状（kind + 全权评分标志）。
+	var request: Dictionary = {"min_card_select":0, "max_card_select":0, "context":{"kind":"fanyin_black_target", "batch_id":1, "ai_choice_skill_scored":true}}
+	# 敌方（一号位反贼）与友方（二号位忠臣）的两条确认提交；只有目标不同。
+	var enemy_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[1]}}
+	var ally_action: Dictionary = {"payload":{"confirmed":true, "selected_target_ids":[2]}}
+	# 通用层贡献；声明全权评分后必须恒为0，不再叠加目标态度。
+	if not is_zero_approx(evaluator.score_choice_action(snapshot, request, enemy_action, 0)):
+		return _fail("fanyin_ai_generic_layer=%f" % evaluator.score_choice_action(snapshot, request, enemy_action, 0))
+	# AI总分 = 通用层 + 技能层；两层相消时两者恒等，AI 只能取座次最靠前的角色。
+	var enemy_total: float = evaluator.score_choice_action(snapshot, request, enemy_action, 0) + fanyin.score_ai_choice(snapshot, request, enemy_action, evaluator)
+	var ally_total: float = evaluator.score_choice_action(snapshot, request, ally_action, 0) + fanyin.score_ai_choice(snapshot, request, ally_action, evaluator)
+	if enemy_total <= ally_total:
+		return _fail("fanyin_ai_black_target enemy=%f ally=%f" % [enemy_total, ally_total])
+	return true
 
 
 ## 校验同一批次同时含黑红时先执行黑色效果，再执行红色效果。
