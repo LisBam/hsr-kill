@@ -12,6 +12,9 @@ signal choice_cancelled(request_id: int)
 ## 用户选择文字控制项时发出请求序号与稳定选项 ID；组件不解释该选项对应的技能效果。
 signal control_submitted(request_id: int, control_id: String)
 
+## 用户在牌堆位次询问中确认「一张手牌 + 一个位次」时发出；组件只转发稳定选项 ID，不解释位次语义。
+signal position_submitted(request_id: int, selected_card_uids: Array[int], control_id: String)
+
 ## 用户确认牌堆双行排序时发出完整UID顺序与牌堆顶行数量；组件不直接改写权威牌堆。
 signal arrangement_submitted(request_id: int, ordered_card_uids: Array[int], top_count: int)
 
@@ -69,6 +72,10 @@ const PUBLIC_PANEL_HORIZONTAL_PADDING: float = 36.0
 ## 公共展示窗口允许的最大高度；默认620像素可完整容纳最多10人时的三行牌，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var public_panel_max_height: float = 620.0
 
+## 牌堆位次询问的选择类型标识；取值必须与规则层 MatchController.CARD_POSITION_CHOICE_TYPE 逐字一致。
+## 组件只按该类型选择渲染分支，不读取任何规则状态，因此该字符串是本组件唯一需要与规则层对齐的契约。
+const CARD_POSITION_CHOICE_TYPE: String = "card_position"
+
 ## 目标武将名在区域选牌提示中的强调颜色；固定暖金色使目标归属在所有主题下保持可辨认，运行时通常无需动态修改。
 const TARGET_CHARACTER_NAME_COLOR: Color = Color("e4c84f")
 
@@ -125,6 +132,12 @@ var _owner_labels_by_card_uid: Dictionary = {}
 
 ## 当前文字选项按钮集合；只用于主题刷新，请求切换或关闭时随动态内容一并清空。
 var _control_option_buttons: Array[Button] = []
+
+## 牌堆位次询问的两个位次按钮；未恰好选中一张手牌时整体置灰，取消按钮不在此集合内。
+var _position_option_buttons: Array[Button] = []
+
+## 牌堆位次询问的取消按钮；始终可用，提交 confirmed=false 放弃本次放置；非位次请求时为空。
+var _position_cancel_button: Button = null
 
 ## 牌名候选的占位ID到卡牌定义ID映射；仅存在于本面板实例内，请求重建与关闭时清空。
 ## 键是负数占位ID，值是稳定的卡牌定义ID；提交时据此换算，保证占位ID不会离开面板。
@@ -252,6 +265,8 @@ func show_request(choice_request: Dictionary) -> void:
 	_owner_labels.clear()
 	_owner_labels_by_card_uid.clear()
 	_control_option_buttons.clear()
+	_position_option_buttons.clear()
+	_position_cancel_button = null
 	_name_candidates.clear()
 	_public_layout_signature = 0
 	_public_request_id = -1
@@ -267,6 +282,11 @@ func show_request(choice_request: Dictionary) -> void:
 	# 牌名候选请求；候选项没有实体牌，界面按牌面渲染卡牌定义并隐藏花色点数，点击牌面即选中该项。
 	if str(_choice_request.get("choice_type", "card")) == "card_name":
 		_show_name_candidate_request(_choice_request.get("name_candidates", []) as Array)
+		visible = true
+		return
+	# 牌堆位次询问；先在手牌区选一张手牌，再点两个位次按钮之一，取消按钮始终可用。
+	if str(_choice_request.get("choice_type", "card")) == CARD_POSITION_CHOICE_TYPE:
+		_show_card_position_request()
 		visible = true
 		return
 	# 文字控制项请求；每个选项直接以独立按钮提交，底部确定按钮不重复制造二次确认。
@@ -717,6 +737,69 @@ func _add_control_options(options: Array) -> void:
 		_control_option_buttons.append(option_button)
 
 
+## 初始化「先选一张手牌、再选牌堆位次」的询问窗口。
+## 与普通选牌共用同一手牌候选区：候选只来自请求快照，其他角色的手牌不会出现在本窗口。
+## 三个位次按钮全部来自请求的 control_options；未恰好选中一张手牌时两个位次按钮不可点击，
+## 取消按钮不受选择数量影响，从而满足「只有选择了一张手牌才能选前两个选项」。
+func _show_card_position_request() -> void:
+	# 按区域聚合的候选；位次询问的候选只会有 hand，其余键保留通用性以便后续扩展。
+	var candidates_by_zone: Dictionary = {"hand":[], "equipment":[], "judgment":[], "processing":[], "discard_pile":[]}
+	for candidate_variant: Variant in _choice_request.get("candidates", []) as Array:
+		# 当前候选；只有请求明确给出的候选才加入可点击集合。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		if candidate_uid >= 0 and not _selectable_card_uids.has(candidate_uid):
+			_selectable_card_uids.append(candidate_uid)
+		# 当前候选区域；未知区域统一归入展示区，避免候选丢失。
+		var zone: String = str(candidate.get("zone", "hand"))
+		if not candidates_by_zone.has(zone):
+			candidates_by_zone[zone] = []
+		(candidates_by_zone[zone] as Array).append(candidate)
+	for zone: String in ["hand", "equipment", "judgment", "processing", "discard_pile"]:
+		_add_zone_row(zone, candidates_by_zone.get(zone, []) as Array)
+	_add_position_options(_choice_request.get("control_options", []) as Array)
+	# 位次按钮本身就是提交入口；底部确定按钮在本类型下没有语义，必须隐藏以免产生无位次的确认动作。
+	_confirm_button.visible = false
+	# 取消选项已经渲染为第三个按钮，底部放弃按钮不再重复显示，保证窗口中恰好只有三个按钮。
+	_cancel_button.visible = false
+	_action_row.visible = false
+	_refresh_selection_state()
+
+
+## 创建牌堆位次按钮列；三个选项全部来自请求，界面不按硬编码 ID 判断语义。
+## 规则层通过上下文键声明哪一个选项等同「取消」：该选项发出通用取消信号，其余选项发出位次确认信号。
+func _add_position_options(options: Array) -> void:
+	# 取消选项稳定 ID；取自请求上下文，缺失时该请求不提供独立取消按钮（仅剩通用取消通道）。
+	var cancel_option_id: String = str((_choice_request.get("context", {}) as Dictionary).get("control_cancel_option_id", ""))
+	# 位次按钮列；固定宽度与间距，避免不同文本长度改变窗口或相邻按钮位置。
+	var option_column: VBoxContainer = VBoxContainer.new()
+	option_column.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	option_column.add_theme_constant_override("separation", 10)
+	_zone_container.add_child(option_column)
+	for option_variant: Variant in options:
+		# 当前文字选项；缺失稳定 ID 或标签的异常数据不生成不可提交按钮。
+		var option: Dictionary = option_variant as Dictionary
+		var option_id: String = str(option.get("id", ""))
+		var option_label: String = str(option.get("label", ""))
+		if option_id.is_empty() or option_label.is_empty():
+			continue
+		# 当前选项按钮；固定280×44像素，长文本按控件宽度截断并保留完整工具提示。
+		var option_button: Button = Button.new()
+		option_button.text = option_label
+		option_button.tooltip_text = option_label
+		option_button.custom_minimum_size = Vector2(280.0, 44.0)
+		option_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		BattleUIStyle.apply_interaction_button(option_button)
+		if not cancel_option_id.is_empty() and option_id == cancel_option_id:
+			# 取消选项；始终可用，走与通用放弃完全相同的空选择提交路径。
+			option_button.pressed.connect(_on_position_cancel_pressed)
+			_position_cancel_button = option_button
+		else:
+			option_button.pressed.connect(_on_position_option_pressed.bind(option_id))
+			_position_option_buttons.append(option_button)
+		option_column.add_child(option_button)
+
+
 ## 为公共选牌展示创建固定牌位；已领取牌继续显示复制虚影，并在牌底标明领取者武将名。
 func _add_public_card_row(display_slots: Array) -> void:
 	if display_slots.is_empty():
@@ -851,6 +934,16 @@ func _refresh_selection_state() -> void:
 	if str(_choice_request.get("choice_type", "")) == "arrange":
 		_confirm_button.disabled = _arrangement_top_uids.size() + _arrangement_bottom_uids.size() != _arrangement_candidates_by_uid.size()
 		return
+	# 牌堆位次询问；两个位次按钮只在恰好选中一张手牌时可点击，取消按钮的可用性不受此影响。
+	if str(_choice_request.get("choice_type", "")) == CARD_POSITION_CHOICE_TYPE:
+		var position_buttons_enabled: bool = _selected_card_uids.size() == 1
+		for position_button: Button in _position_option_buttons:
+			position_button.disabled = not position_buttons_enabled
+		# 取消按钮始终可用；显式重新启用，避免同一面板被复用时残留上一轮的禁用状态。
+		if _position_cancel_button != null:
+			_position_cancel_button.disabled = false
+		_confirm_button.disabled = true
+		return
 	var min_select: int = int(_choice_request.get("min_select", 0))
 	var max_select: int = int(_choice_request.get("max_select", 0))
 	_confirm_button.disabled = _selected_card_uids.size() < min_select or _selected_card_uids.size() > max_select
@@ -967,6 +1060,19 @@ func _show_name_candidate_request(name_candidates: Array) -> void:
 ## 提交一个文字控制项；请求 ID 与稳定选项 ID 会继续经过 MatchController 和 ChoiceRequest 双重校验。
 func _on_control_option_pressed(control_id: String) -> void:
 	control_submitted.emit(int(_choice_request.get("request_id", -1)), control_id)
+
+
+## 提交一次牌堆位次放置；请求序号、手牌 UID 与位次选项都会在权威端再次校验。
+## 未恰好选中一张手牌时按钮本身已被置灰，这里的复核只是防御性保护，不改变任何可用性结论。
+func _on_position_option_pressed(control_id: String) -> void:
+	if _selected_card_uids.size() != 1:
+		return
+	position_submitted.emit(int(_choice_request.get("request_id", -1)), _selected_card_uids.duplicate(), control_id)
+
+
+## 放弃一次牌堆位次放置；复用通用取消通道，提交没有任何选项的空选择。
+func _on_position_cancel_pressed() -> void:
+	_on_cancel_pressed()
 
 
 ## 发出空选择作为明确放弃；组件不自行关闭，以提交成功后的状态为准。

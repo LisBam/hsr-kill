@@ -182,6 +182,16 @@ func requires_actor_choice() -> bool:
 	return bool(_metadata.get("requires_actor_choice", false))
 
 
+## 返回本牌是否为「专属锦囊牌」：专属牌正常情况**不加入游戏**，只有被其他角色的技能或其他情况触发时，
+## 才会按要求加入游戏（例如由技能在“游戏开始时”把它放进摸牌堆）。
+## 判定只读元数据键 `exclusive`，缺省为 false，因此既有卡牌行为完全不变。
+## 该标志不影响牌的规则语义（仍按 `type`/`subtype`/`target_mode` 走同一条结算链路），只用于：
+## ① 内容校验与自动化测试断言「专属牌不得出现在任何牌堆配置中」；
+## ② 图鉴与牌面显示专属标识，使玩家能看出它不属于常规牌堆。
+func is_exclusive() -> bool:
+	return bool(_metadata.get("exclusive", false))
+
+
 ## 返回真正进入本牌目标时机与逐目标结算的目标数组；默认与玩家声明完全一致，角色语义辅助目标可在卡牌文件中剥离。
 func get_resolution_target_ids(requested_target_ids: Array[int]) -> Array[int]:
 	return requested_target_ids.duplicate()

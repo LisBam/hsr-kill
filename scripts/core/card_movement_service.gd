@@ -198,9 +198,19 @@ func _remove_from_zone(card: CardInstance, zone: String, owner_id: int) -> void:
 
 
 ## 把实体牌追加到目标区域；装备槽由调用方指定，空槽默认使用 treasure 以保持可逆记录。
+## 摸牌堆支持“按位次插入”：`target_slot` 传 `@N`（N 为位次，含义见 MatchController 的
+## DRAW_PILE_POSITION_* 常量）时插入到该位次；不传或传其它值时保持既有的“追加到牌堆顶”行为。
+## 之所以复用 `target_slot` 而不是新增参数：既有调用点全部不传该参数，因此新增能力不会改变任何既有行为。
 func _add_to_zone(card: CardInstance, zone: String, owner_id: int, target_slot: String) -> void:
 	if zone == "draw_pile":
-		state.draw_pile.append(card)
+		var pile_position: int = _parse_draw_pile_position(target_slot)
+		if pile_position <= 1:
+			# 位次 1（或未指定位次）就是既有的“追加到数组末尾 = 牌堆顶”。
+			state.draw_pile.append(card)
+		else:
+			# 位次 N：数组末尾为顶，因此插到距末尾 N-1 个元素的位置之前。
+			var insert_index: int = maxi(state.draw_pile.size() - (pile_position - 1), 0)
+			state.draw_pile.insert(insert_index, card)
 	elif zone == "discard_pile":
 		state.discard_pile.append(card)
 	elif zone == "processing":
@@ -217,6 +227,47 @@ func _add_to_zone(card: CardInstance, zone: String, owner_id: int, target_slot: 
 			owner.judgment_area.append(card)
 		elif zone == "equipment":
 			owner.equipment[target_slot if not target_slot.is_empty() else "treasure"] = card
+
+
+## 解析「牌堆位次」槽位标记；不是 `@N` 形式时返回 0，表示调用方没有指定位次。
+## 标记格式固定为 `@` + 十进制位次，位次从 1 开始；非法或负数一律按 0（未指定位次）处理。
+func _parse_draw_pile_position(target_slot: String) -> int:
+	if not target_slot.begins_with("@") or target_slot.length() < 2:
+		return 0
+	var position_text: String = target_slot.substr(1)
+	if not position_text.is_valid_int():
+		return 0
+	var position: int = position_text.to_int()
+	return position if position >= 1 else 0
+
+
+## 把一张**尚不属于任何区域**的新实体牌按位次放入摸牌堆，并返回移牌记录；失败返回 null。
+## 与 move_card 的差别只有一个：本入口接受“还没有区域”的新牌（按定义刚创建的牌），
+## 因此它不能走 move_card 的“必须已存在于某个区域”前置校验。
+## `position` 为 1 表示牌堆顶第一张、2 表示第二张（数组末尾为顶）。
+func insert_new_card_into_draw_pile(card: CardInstance, position: int, reason: String = "insert", event_id: int = -1) -> CardMoveEvent:
+	if state == null or card == null or position < 1:
+		return null
+	# 新牌落位；此时牌还没有区域，因此没有“来源区域”可移除。
+	card.zone = "draw_pile"
+	card.owner_id = -1
+	_add_to_zone(card, "draw_pile", -1, "@%d" % position)
+	_update_knowledge(card, "draw_pile", -1, [] as Array[int])
+	card.clear_hand_view_as_presentation()
+	# 移牌事件；字段口径与 move_card 完全一致，保证表现层、回放与网络收到同一种增量。
+	var move: CardMoveEvent = CardMoveEvent.new([card.uid], "", "draw_pile", -1, -1, reason)
+	move.move_id = _next_move_id
+	_next_move_id += 1
+	move.event_id = event_id
+	move.target_slot = "@%d" % position
+	move.turn_number = state.turn_number
+	move.turn_player_id = state.current_player_id
+	move.phase = state.current_phase
+	var move_data: Dictionary = move.to_dict()
+	state.card_move_history.append(move_data)
+	_index_play_discard_move(move_data)
+	card_moved.emit(move_data, card.to_dict())
+	return move
 
 
 ## 更新实体牌的公开、私有和已知者信息；牌堆洗牌时清理弃牌区的临时知识由调用方控制。

@@ -173,6 +173,58 @@ const SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY = "turn_input_controlled_actor_ids"
 ## 定向代操控快照顶层标记字段名；值为被观察者 actor 的 player_id，客户端据此区分普通快照与代理权重快照。
 const SNAPSHOT_DELEGATED_VIEWER_ID_KEY = "turn_input_delegated_viewer_id"
 
+## 摸牌堆位次：牌堆顶第一张，摸牌时**最先**被摸到。
+## 牌堆数组约定「末尾为顶」（见 GameState.draw_pile 注释），因此位次 1 等价于追加到数组末尾。
+const DRAW_PILE_POSITION_TOP: int = 1
+
+## 摸牌堆位次：牌堆顶第二张，摸牌时第二个被摸到。
+## 实现上等价于插入到「距数组末尾 1 个元素」的位置；位次与数组下标的换算只允许在本文件与移动服务内进行。
+const DRAW_PILE_POSITION_SECOND: int = 2
+
+## 「按定义造牌入堆」端口在调用方未给出合法花色时使用的权威随机花色池；顺序固定，保证同一种子得到同一张牌。
+## 只影响“随机加入”类效果的牌面取值，不参与规则判定；改动它会让同一随机种子生成的历史回放牌面发生变化。
+const DRAW_PILE_INSERT_SUIT_POOL: Array[String] = ["spade", "heart", "club", "diamond"]
+
+## 「按定义造牌入堆」端口在调用方未给出合法点数时使用的权威随机点数下界；实体牌点数从 1（A）开始。
+const DRAW_PILE_INSERT_RANK_MIN: int = 1
+
+## 「按定义造牌入堆」端口在调用方未给出合法点数时使用的权威随机点数上界；13 对应 K，与实体牌点数取值域一致。
+const DRAW_PILE_INSERT_RANK_MAX: int = 13
+
+## 位次询问的稳定文字选项 ID：置于牌堆顶第一张。
+const PILE_SLOT_OPTION_TOP: String = "pile_slot_1"
+
+## 位次询问的稳定文字选项 ID：置于牌堆顶第二张。
+const PILE_SLOT_OPTION_SECOND: String = "pile_slot_2"
+
+## 位次询问的稳定文字选项 ID：取消本次放置。
+const PILE_SLOT_OPTION_CANCEL: String = "cancel"
+
+## 位次询问使用的选择类型标识；该类型是唯一允许「一张牌 + 一个文字选项」同框提交的额外类型。
+const CARD_POSITION_CHOICE_TYPE: String = "card_position"
+
+## 组合选择上下文键：声明哪一个文字选项在界面语义上等同于「取消」。
+## 界面组件因此不需要认识任何具体选项 ID；取值缺失时该请求不提供独立的取消选项按钮。
+const CONTEXT_KEY_CONTROL_CANCEL_OPTION_ID: String = "control_cancel_option_id"
+
+## 位次放置动作写入移牌历史的稳定原因字符串；它不进公共日志，仅用于权威历史与回放核对。
+const SECRET_PILE_PLACEMENT_REASON: String = "secret_pile_placement"
+
+## 「按定义造牌入堆」动作写入移牌历史与随机历史的稳定原因字符串。
+const EXCLUSIVE_CARD_INSERT_REASON: String = "exclusive_card_insert"
+
+## 私有置牌事实的键名；键集合固定，禁止在别处另起键名。
+const PRIVATE_PLACEMENT_KEY_CARD_UID: String = "card_uid"
+
+## 私有置牌事实的键名：牌堆位次（1 或 2）。
+const PRIVATE_PLACEMENT_KEY_POSITION: String = "position"
+
+## 私有置牌事实的键名：放置时的回合角色稳定 ID；供技能做「回合角色 + 回合号」双重匹配。
+const PRIVATE_PLACEMENT_KEY_TURN_PLAYER_ID: String = "turn_player_id"
+
+## 私有置牌事实的键名：放置时的回合号；与回合角色共同构成跨回合安全匹配条件。
+const PRIVATE_PLACEMENT_KEY_TURN_NUMBER: String = "turn_number"
+
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
 ## 阶段生命周期服务；前置与结束窗口由规则步骤持有唯一恢复点。
 const PHASE_LIFECYCLE_SERVICE_SCRIPT: Script = preload("res://scripts/core/phase_lifecycle_service.gd")
@@ -3404,6 +3456,20 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 			control_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":option_id, "confirmed":true}
 			result.append(control_action.to_dict())
 		return result
+	if choice_type == CARD_POSITION_CHOICE_TYPE:
+		# 位次组合请求；每张手牌 × 两个位次各生成一个确认动作，取消动作已在上方 allow_cancel 分支统一生成。
+		# 必须生成合法动作：请求在创建时会用本函数自检“是否存在任何可提交动作”，
+		# 枚举为空会被直接拒绝，表现为界面点技能毫无反应、AI 的请求永久挂住。
+		for candidate_variant: Variant in candidates:
+			# 当前手牌候选；只读取稳定 UID，具体合法性仍由 _submit_card_choice 复核。
+			var position_candidate_uid: int = int((candidate_variant as Dictionary).get("uid", -1))
+			if position_candidate_uid < 0:
+				continue
+			for pile_slot_option_id: String in [PILE_SLOT_OPTION_TOP, PILE_SLOT_OPTION_SECOND]:
+				var position_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+				position_action.payload = {"request_id":request_id, "selected_card_uids":[position_candidate_uid], "selected_target_ids":[], "selected_control_id":pile_slot_option_id, "confirmed":true}
+				result.append(position_action.to_dict())
+		return result
 	if choice_type == "respond":
 		# 无材料响应技能作为独立确认动作进入同一AI候选集合；费用与牌型在提交阶段再次权威校验。
 		var response_context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -3658,7 +3724,7 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	var candidate_control_ids: Array[String] = []
 	for option_variant: Variant in _pending_card_choice.get("control_options", []) as Array:
 		candidate_control_ids.append(str((option_variant as Dictionary).get("id", "")))
-	if not selected_control_id.is_empty() and (choice_type not in ["control", "bool", "target_control", "arrange"] or not candidate_control_ids.has(selected_control_id)):
+	if not selected_control_id.is_empty() and (choice_type not in ["control", "bool", "target_control", "arrange", CARD_POSITION_CHOICE_TYPE] or not candidate_control_ids.has(selected_control_id)):
 		return _reject("选择中包含无效文字选项。")
 	# 卡牌与目标的独立数量范围；普通选牌的兼容字段继续映射到卡牌维度。
 	var min_select: int = int(_pending_card_choice.get("min_card_select", _pending_card_choice.get("min_select", 0)))
@@ -3685,6 +3751,14 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 		var arrangement_top_count: int = int(selected_control_id.trim_prefix("top_count_"))
 		if arrangement_top_count < 0 or arrangement_top_count > selected_uids.size():
 			return _reject("牌堆排序的牌堆顶行数量无效。")
+	if confirmed and choice_type == CARD_POSITION_CHOICE_TYPE:
+		# 位次放置必须同时提交「恰好一张手牌 + 一个有效位次」；两者任一不合法都整条拒绝。
+		# 取消只能通过 confirmed = false 表达，因此不接受 PILE_SLOT_OPTION_CANCEL 作为已确认位次，
+		# 否则会出现“既确认了放置又声明取消”的自相矛盾请求。
+		if selected_uids.size() != 1:
+			return _reject("牌堆位次放置必须选择恰好一张手牌。")
+		if selected_control_id != PILE_SLOT_OPTION_TOP and selected_control_id != PILE_SLOT_OPTION_SECOND:
+			return _reject("牌堆位次放置必须选择一个有效的牌堆位次。")
 	# 文字控制项的数量已在上方按 control_id 校验；不能再把其空实体牌数组误判为“选择的牌数不足”。
 	if confirmed and choice_type not in ["control", "bool", "target_control"] and selected_uids.size() < min_select:
 		return _reject("选择的牌数不足。")
@@ -8672,6 +8746,201 @@ func arrange_draw_pile_cards(ordered_uids: Array[int], top_count: int, reason: S
 	state.random_history.append({"kind":reason, "ordered_card_uids":ordered_uids.duplicate(), "top_count":top_count})
 	_emit_state()
 	return true
+
+
+## 判断一个位次值是否为受支持的摸牌堆位次；只有 1（牌堆顶第一张）与 2（第二张）合法。
+## 位次语义与「数组末尾为顶」的既有约定绑定，因此本判定是入堆端口与置牌端口共用的唯一前置校验。
+func _is_valid_draw_pile_position(position: int) -> bool:
+	return position == DRAW_PILE_POSITION_TOP or position == DRAW_PILE_POSITION_SECOND
+
+
+## 按卡牌定义创建一张实体牌并按位次加入摸牌堆；返回新实体牌的 UID，失败返回 -1 且不产生任何副作用。
+## 适用场景：专属锦囊牌（卡牌元数据 `exclusive: true`）等正常情况下**不加入游戏**、
+## 只有被其他角色的技能或其他情况触发时才会按要求加入游戏的内容。
+## suit/rank 缺省或非法时改用本局权威随机源 `_rng` 取一组花色与点数，并把结果写入 `state.random_history`；
+## 因此“随机加入三张”在存档恢复与回放重演时会得到同一组牌面（调用方禁止自行使用非权威随机源）。
+## position 与 place_hand_card_on_draw_pile_top 共用同一套位次常量：1 = 牌堆顶第一张（最先被摸到），2 = 第二张。
+## 本端口只做「一次确定性地插入一张牌」，**不内置**「随机加入 N 张」的批量语义；插入几张、何时插入由调用方决定。
+func create_and_insert_card_into_draw_pile(definition_id: String, suit: String = "", rank: int = 0, position: int = DRAW_PILE_POSITION_TOP) -> int:
+	# 对局前置；终局后不再允许任何内容向牌堆注入新实体，避免影响已经结算的胜负与已发出的快照。
+	if state == null or state.game_over:
+		return -1
+	# 定义前置；定义不存在时不能造出无法查询牌面与类别的实体牌。
+	if definition_id.is_empty() or GameDatabase.get_card_definition(definition_id) == null:
+		return -1
+	# 位次前置；与置牌端口共用同一判定，非法位次必须零副作用地失败。
+	if not _is_valid_draw_pile_position(position):
+		return -1
+	# 最终牌面；调用方给出的花色点数不完整或不合法时整体改用权威随机，避免产生半随机的不一致牌面。
+	var resolved_suit: String = suit
+	var resolved_rank: int = rank
+	# 本次是否动用了权威随机源；只有动用时才写随机历史，使显式指定的牌面也能被复盘核对。
+	var used_authoritative_random: bool = false
+	if not CardInstance.is_valid_suit(resolved_suit) or not CardInstance.is_valid_rank(resolved_rank):
+		resolved_suit = DRAW_PILE_INSERT_SUIT_POOL[_rng.randi_range(0, DRAW_PILE_INSERT_SUIT_POOL.size() - 1)]
+		resolved_rank = _rng.randi_range(DRAW_PILE_INSERT_RANK_MIN, DRAW_PILE_INSERT_RANK_MAX)
+		used_authoritative_random = true
+	# 新实体牌；此时它还不属于任何区域，所以必须走移动服务的「尚无区域的新牌」入口而不是 move_card
+	# （后者对「来源区域等于目标区域且持有者未变」的重复请求会拒绝，新牌默认 zone 就是 draw_pile）。
+	var inserted_card: CardInstance = CardInstance.new(definition_id, resolved_suit, resolved_rank)
+	_ensure_card_movement()
+	if card_movement == null:
+		return -1
+	if used_authoritative_random:
+		# 随机记账；字段与既有 arrange_draw_pile_cards 的写法一致，只保存可序列化数据。
+		state.random_history.append({
+			"kind":EXCLUSIVE_CARD_INSERT_REASON,
+			"definition_id":definition_id,
+			"suit":resolved_suit,
+			"rank":resolved_rank,
+			"position":position,
+		})
+	# 位次落位；移动服务负责产生恰好一条 card_moved 增量与一条移牌历史。
+	if card_movement.insert_new_card_into_draw_pile(inserted_card, position, EXCLUSIVE_CARD_INSERT_REASON, state.current_event_id) == null:
+		return -1
+	_emit_state()
+	return inserted_card.uid
+
+
+## 写入一条「其他角色不可知」的置牌事实；成功返回 true。
+## 该字段是私有事实的**唯一写点**：只有使用者本人与权威快照能读到它，其他观察者、AI 快照与回放都读不到。
+## turn_player_id / turn_number 记录放置发生时所在的回合角色与全局回合号，供技能在本回合结束时做双重匹配，
+## 避免跨回合把过期事实误判成本回合的置牌（与【万死】等既有时机的双重匹配口径一致）。
+func set_private_pile_placement(player_id: int, card_uid: int, position: int, turn_player_id: int, turn_number: int) -> bool:
+	if state == null or player_id < 0 or card_uid < 0 or not _is_valid_draw_pile_position(position):
+		return false
+	# 事实持有者；角色不存在时不写任何残留。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return false
+	player.private_pile_placement = {
+		PRIVATE_PLACEMENT_KEY_CARD_UID:card_uid,
+		PRIVATE_PLACEMENT_KEY_POSITION:position,
+		PRIVATE_PLACEMENT_KEY_TURN_PLAYER_ID:turn_player_id,
+		PRIVATE_PLACEMENT_KEY_TURN_NUMBER:turn_number,
+	}
+	# 私有事实不写日志、不派发公开时机；只刷新快照，且只有本人能读到新增内容。
+	_emit_state()
+	return true
+
+
+## 返回指定角色当前待结算的置牌事实副本；没有事实时返回空字典。
+## 本端口只供权威侧（技能结算、存档、回放）读取，不得把结果转发给其他观察者的界面或 AI。
+func get_private_pile_placement(player_id: int) -> Dictionary:
+	if state == null or player_id < 0:
+		return {}
+	# 事实持有者；角色不存在时按“没有事实”处理。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return {}
+	return player.private_pile_placement.duplicate(true)
+
+
+## 清除指定角色的置牌事实；确实清除了至少一条事实时返回 true。
+func clear_private_pile_placement(player_id: int) -> bool:
+	if state == null or player_id < 0:
+		return false
+	# 事实持有者；角色不存在或本来就没有事实时不做无意义广播。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or player.private_pile_placement.is_empty():
+		return false
+	player.private_pile_placement = {}
+	_emit_state()
+	return true
+
+
+## 把指定玩家的一张**手牌**置于摸牌堆顶第一张或第二张；成功返回 true。
+## 位次语义：position = 1 表示牌堆顶第一张（随后摸牌时最先被摸到），2 表示第二张。
+## 本端口服务「其他角色不可知」：放置过程**不写公共日志、不派发 lose/gain 等公开时机、不产生公开表现事件**。
+## 因此它刻意绕过 `_move_card_with_timings` 而直接调用唯一移牌边界（与 `_refresh_starting_hand` 的既有做法一致）：
+## 否则「某人的手牌离区、原因是 X」会被派发给全部技能，其他角色即可据此推断出放置事实。
+func place_hand_card_on_draw_pile_top(player_id: int, card_uid: int, position: int) -> bool:
+	if state == null or state.game_over:
+		return false
+	if not _is_valid_draw_pile_position(position):
+		return false
+	# 持有者前置；死亡或离场角色不能再秘密置牌。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 目标实体；必须确实是该玩家的**手牌**，装备区、判定区与木牛「粮」都不接受。
+	var placed_card: CardInstance = null
+	for hand_card: CardInstance in player.hand:
+		if hand_card.uid == card_uid:
+			placed_card = hand_card
+			break
+	if placed_card == null:
+		return false
+	_ensure_card_movement()
+	if card_movement == null:
+		return false
+	# 隐秘化处理；必须先清掉这张牌现有的牌面知识与手牌残留，否则它进入牌堆后仍带着「谁知道它」的痕迹。
+	# 对应设计中的残余泄露面：_update_knowledge 对 draw_pile 不清理 known_to，手牌视为与标记也不会自动清理。
+	placed_card.shown = false
+	placed_card.known_to.clear()
+	placed_card.private_owner_id = -1
+	if placed_card.has_hand_view_as():
+		placed_card.clear_hand_view_as()
+	placed_card.clear_hand_view_as_presentation()
+	placed_card.clear_hand_mark_tags()
+	# 位次落位；位次标记复用与入堆端口完全相同的 `@N` 口径，禁止在别处另写字面量。
+	if card_movement.move_card(placed_card, "draw_pile", -1, SECRET_PILE_PLACEMENT_REASON, state.current_event_id, "@%d" % position) == null:
+		return false
+	_emit_state()
+	return true
+
+
+## 构建位次询问的三个稳定文字选项；顺序固定为「牌堆顶第一张 / 牌堆顶第二张 / 取消」，与玩家可见描述逐字一致。
+## 选项 ID 是权威校验依据，标签只用于界面呈现；三者都必须存在，否则「取消始终可用」无法表达。
+func _build_pile_slot_control_options() -> Array[Dictionary]:
+	return [
+		{"id":PILE_SLOT_OPTION_TOP, "label":"牌堆顶第一张"},
+		{"id":PILE_SLOT_OPTION_SECOND, "label":"牌堆顶第二张"},
+		{"id":PILE_SLOT_OPTION_CANCEL, "label":"取消"},
+	]
+
+
+## 构建指定玩家自己的手牌候选；不含装备区、判定区与木牛「粮」，也绝不会包含其他角色的任何牌。
+func _build_own_hand_candidates(player_id: int) -> Array[Dictionary]:
+	# 手牌候选结果；角色不存在时返回空数组，由选择协议按“无可选项但可取消”处理。
+	var result: Array[Dictionary] = []
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return result
+	for hand_card: CardInstance in player.hand:
+		result.append(_serialize_choice_candidate(hand_card, player_id, "hand", true))
+	return result
+
+
+## 创建「先选一张手牌、再选牌堆位次」的组合请求；返回值形状固定为 `{confirmed, card_uid, position}`。
+## 位次选项固定三项，稳定 ID 见 PILE_SLOT_OPTION_*；只有选择了一张手牌才能确认前两项，取消始终可用。
+## 候选只包含发起者自己的手牌，其他角色的手牌不会进入候选。
+## 本入口是既有统一选择协议（ChoiceRequest）的组合使用，不引入第二套选择框架，也不新增归还逻辑。
+## allow_cancel 与 context 为可选补充参数：context 用于携带调用技能的 `kind` 与恢复上下文（须保持纯可序列化）。
+func request_hand_card_pile_position(player_id: int, title: String, prompt: String, allow_cancel: bool = true, context: Dictionary = {}) -> Dictionary:
+	# 组合选择上下文；选择类型、三个文字选项与取消选项声明由本包装接口统一写入，调用方只维护业务 kind。
+	var position_context: Dictionary = context.duplicate(true)
+	position_context["choice_type_override"] = CARD_POSITION_CHOICE_TYPE
+	position_context["control_options"] = _build_pile_slot_control_options()
+	position_context[CONTEXT_KEY_CONTROL_CANCEL_OPTION_ID] = PILE_SLOT_OPTION_CANCEL
+	position_context["min_card_select"] = 1
+	position_context["max_card_select"] = 1
+	position_context["min_target_select"] = 0
+	position_context["max_target_select"] = 0
+	request_card_choice(player_id, title, prompt, _build_own_hand_candidates(player_id), 1, 1, allow_cancel, position_context)
+	# 提交结果映射；服务器与纯规则测试会在本调用内完成结算，界面与 AI 的异步路径在恢复阶段读取同一份结果槽。
+	var resolved_position: int = 0
+	if _resolved_control_choice_id == PILE_SLOT_OPTION_TOP:
+		resolved_position = DRAW_PILE_POSITION_TOP
+	elif _resolved_control_choice_id == PILE_SLOT_OPTION_SECOND:
+		resolved_position = DRAW_PILE_POSITION_SECOND
+	# 本轮结算选中的手牌 UID；没有恰好选中一张牌时为 -1，表示本次放置未被确认。
+	var resolved_card_uid: int = int(_resolved_card_choice_uids[0]) if _resolved_card_choice_uids.size() == 1 else -1
+	return {
+		"confirmed":resolved_position > 0 and resolved_card_uid >= 0,
+		"card_uid":resolved_card_uid,
+		"position":resolved_position,
+	}
 
 
 ## 将角色普通手牌数调整至指定值；不足时摸牌，超出时由该角色选择并弃置差额。
