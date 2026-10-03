@@ -77,6 +77,26 @@ const AI_SUIT_DISCARD_PENALTY: float = 0.6
 ## AI对【杀】的额外偏好；【杀】能直接造成伤害，其他条件相同时优先选择。
 const AI_SLASH_BONUS: float = 0.5
 
+## 分支A选择请求的通用层转义标志键；置位后通用选择评分不再按“自己选中的牌即自己支付的费用”扣分。
+##
+## 必须置位的原因：虚拟候选的 min_card_select 为1，通用层会因此在目标评分分支之前直接返回
+## “所选牌保留价值的负值”，把只是选择介质的虚拟牌当成真实付出的成本，且永远不评估目标。
+## 置位后本请求的收益完全由 score_ai_choice 表达。
+const AI_CHOICE_SKILL_SCORED_KEY: String = "ai_choice_skill_scored"
+
+## 代理用牌动作的动作类型；虚拟牌按“使用牌”交给统一评估端口，与手牌走同一套牌效口径。
+const VIRTUAL_USE_ACTION_TYPE: String = "use_card"
+
+## 代理用牌动作的颜色；虚拟牌没有花色点数，因此固定none，不伪造成某一颜色去骗取防具豁免。
+const VIRTUAL_CARD_COLOR: String = "none"
+
+## 请求上下文里的取消按钮隐藏声明键；置位后界面直接暗置取消按钮，而不是留下一个“可见可按但点了没反应”的入口。
+##
+## 分支A一旦发动就已经摸过牌，取消只会被 _continue_effect_selection 重新打开同一询问，
+## 因此这个窗口在语义上不存在“放弃”出口：规则层用 allow_cancel=false 表达“取消不是合法提交”，
+## 本声明进一步要求界面不要绘制这个无效入口。
+const HIDE_CANCEL_BUTTON_KEY: String = "hide_cancel_button"
+
 ## 当前出牌阶段已经发动的次数；进入每个出牌阶段时归零，基础状态不作为拦截条件，只有本回合完成过分支B后才与改写后的上限比较。
 var _used_this_play_phase: int = 0
 
@@ -199,7 +219,13 @@ func _reopen_effect_selection() -> void:
 		_refresh_display_description()
 		return
 	# 目标数量范围：单目标牌为1，【借刀杀人】等需要至少两名目标的牌由各自组合映射精确约束。
-	request_virtual_hand_card_target_selection(SELECTION_TITLE, SELECTION_PROMPT, entries, selection_data.get("min_targets", 1), selection_data.get("max_targets", 1), true, {"kind":CHOICE_PICK_EFFECT})
+	# allow_cancel 保持 true：取消在本技能里是一个**有定义**的响应——它表示“重新选牌”，规则层照此重开同一询问，
+	# 既不重新摸牌也不额外计次，因此规则层必须继续接受它（网络端提交空响应也不会让流程失控）。
+	# 但界面上这个按钮对玩家毫无意义（点它只会看到同一个窗口再次出现），
+	# 因此额外声明 HIDE_CANCEL_BUTTON_KEY 让界面直接暗置它，而不是留下“可见可按但点了没反应”的无效入口。
+	# 上下文声明 ai_choice_skill_scored：本请求的收益完全由 score_ai_choice 表达，
+	# 通用层不得再按虚拟牌的“保留价值”扣一次费用，否则同一张牌会被两层以相反符号重复计价。
+	request_virtual_hand_card_target_selection(SELECTION_TITLE, SELECTION_PROMPT, entries, selection_data.get("min_targets", 1), selection_data.get("max_targets", 1), true, {"kind":CHOICE_PICK_EFFECT, AI_CHOICE_SKILL_SCORED_KEY:true, HIDE_CANCEL_BUTTON_KEY:true})
 
 
 ## 建立分支A的候选数据；返回条目数组与请求级目标数量范围，候选与目标都由权威规则枚举产生。
@@ -272,26 +298,48 @@ func _collect_target_combinations(definition_id: String, definition: Dictionary)
 		var auto_target_ids: Array[int] = []
 		auto_target_ids.assign(legal_target_ids)
 		return [auto_target_ids]
-	return _enumerate_target_combinations(definition_id, legal_target_ids, maxi(int(definition.get("max_targets", 1)), 1))
+	# 目标上限；单目标牌只需要单元素组合，多目标牌必须改用全体角色候选池（理由见 _enumerate_target_combinations）。
+	var maximum_target_count: int = maxi(int(definition.get("max_targets", 1)), 1)
+	if maximum_target_count < 2:
+		return _enumerate_target_combinations(definition_id, legal_target_ids, maximum_target_count)
+	return _enumerate_target_combinations(definition_id, _get_seat_order_player_ids(), maximum_target_count)
 
 
 ## 按目标上限枚举完整有序组合，并逐条用权威虚拟牌校验筛选；借刀杀人等双目标牌因此只会生成双元素组合。
-func _enumerate_target_combinations(definition_id: String, legal_target_ids: Array[int], maximum_target_count: int) -> Array:
+##
+## 候选池不可复用单目标候选列表：list_legal_virtual_targets 是用**单元素数组**逐角色试算出来的，
+## 对【借刀杀人】这类“有序双目标”牌，它只保留“自己以外的持武器角色”，把这同一个池子同时当作
+## 第一个位置和第二个位置的候选，会同时漏掉两类合法组合——第二个位置的无武器角色（本应可以被杀），
+## 以及没有任何合法第二目标的持武器角色（本应可以成为借刀对象）。
+## 因此这里改用全体在场角色作为池子，由每个位置上的 validate_virtual_use 权威校验逐条回答“这条组合是否真的合法”。
+func _enumerate_target_combinations(definition_id: String, candidate_target_ids: Array[int], maximum_target_count: int) -> Array:
 	# 完整目标组合结果；每条组合都必须能通过 validate_virtual_use 的完整校验。
 	var result: Array = []
-	for target_id: int in legal_target_ids:
+	for target_id: int in candidate_target_ids:
 		var single_combination: Array[int] = [target_id]
 		if host.card_rules.validate_virtual_use(owner_player_id, definition_id, single_combination).is_empty():
 			result.append(single_combination)
 	if maximum_target_count < 2:
 		return result
-	for first_target_id: int in legal_target_ids:
-		for second_target_id: int in legal_target_ids:
+	for first_target_id: int in candidate_target_ids:
+		for second_target_id: int in candidate_target_ids:
 			if first_target_id == second_target_id:
 				continue
 			var pair_combination: Array[int] = [first_target_id, second_target_id]
 			if host.card_rules.validate_virtual_use(owner_player_id, definition_id, pair_combination).is_empty():
 				result.append(pair_combination)
+	return result
+
+
+## 返回全体仍在对局中的角色 ID；顺序沿用核心层座次顺序，使枚举结果在本地、AI与网络三端完全一致。
+func _get_seat_order_player_ids() -> Array[int]:
+	# 角色 ID 结果；脱离对局的纯规则测试没有权威状态时返回空数组，调用方自然得到空组合。
+	var result: Array[int] = []
+	if host == null or host.state == null:
+		return result
+	for player: PlayerState in host.state.players:
+		if player != null and player.alive and not player.out_of_game:
+			result.append(player.player_id)
 	return result
 
 
@@ -416,8 +464,12 @@ func score_ai_action(_authoritative_snapshot: Dictionary, _action: Dictionary, _
 	return AI_ACTION_BASE
 
 
-## 本技能选择的AI评分；确认提交固定高于取消，花色选项优先弃置张数最少的花色。
-func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, _evaluator: Object) -> float:
+## 本技能选择的AI评分；花色选项优先弃置张数最少的花色，虚拟牌则按“使用牌”的完整牌效与目标收益评估。
+##
+## 关键口径：分支A不能给所有候选一个固定常量——那样每张牌、每条目标组合都同分，
+## AI 只能取权威枚举顺序的第一项（座次最靠前的角色），表现为总是对最友好的角色使用【杀】。
+## 因此这里把所选虚拟牌翻译成一次代理用牌动作，交给统一评估端口比较牌面收益与目标收益。
+func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	# 当前选择请求上下文；非本技能创建的请求不参与评分。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
 	var choice_kind: String = str(context.get("kind", ""))
@@ -434,7 +486,7 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		# 花色到张数的映射由请求上下文提供，AI只读取公开选择信息，不访问对局状态。
 		var suit_card_counts: Dictionary = context.get("suit_card_counts", {}) as Dictionary
 		return AI_COMMIT_REWARD - float(int(suit_card_counts.get(suit, 0))) * AI_SUIT_DISCARD_PENALTY
-	# 选牌并选目标：优先选择能直接造成伤害的【杀】，其余效果按固定收益处理。
+	# 选牌并选目标：把所选虚拟牌当成一次真实的“使用牌”评分。
 	var selected_card_uids: Array = payload.get("selected_card_uids", []) as Array
 	if selected_card_uids.size() != 1:
 		return 0.0
@@ -442,4 +494,19 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var definition_id: String = str((context.get("virtual_hand_definition_ids_by_uid", {}) as Dictionary).get(str(int(selected_card_uids[0])), ""))
 	if definition_id.is_empty():
 		return 0.0
-	return AI_COMMIT_REWARD + (AI_SLASH_BONUS if definition_id == SLASH_DEFINITION_ID else 0.0)
+	# 本次选择的目标数组；自动目标牌由核心层在执行时统一展开，此处沿用请求给出的组合。
+	var selected_target_ids: Array = payload.get("selected_target_ids", []) as Array
+	# 代理用牌动作；只提供牌名、颜色与目标三项评估所需字段，颜色固定none因为虚拟牌没有花色点数。
+	var proxy_action: Dictionary = {"action_type":VIRTUAL_USE_ACTION_TYPE, "actor_id":owner_player_id, "card_definition_id":definition_id, "card_color":VIRTUAL_CARD_COLOR, "target_ids":selected_target_ids.duplicate()}
+	# 代理评分；包含牌面AI配置（order/player_result/target_result）、目标身份态度与状态倍率、防具与连环等完整牌效。
+	var proxy_score: float = evaluator.score_action(authoritative_snapshot, proxy_action, owner_player_id)
+	# 幻影费用加回：score_action 会按“消耗这张牌的保留价值”扣一次牌值，
+	# 但【自摸】的虚拟牌只是选择介质、持有者并不会真的失去那张牌，因此把这份费用原额加回，
+	# 否则该扣费会反向偏爱价值最低的【杀】。
+	proxy_score += evaluator.get_card_value_by_id(definition_id, authoritative_snapshot, owner_player_id) * NonameAIEvaluator.CARD_COST_WEIGHT
+	# 【杀】的固定偏好退化为并列打破项：只有在牌效与目标收益完全相同时才让【杀】胜出。
+	if definition_id == SLASH_DEFINITION_ID:
+		proxy_score += AI_SLASH_BONUS
+	# 确认基线：取消会被 _continue_effect_selection 解释为“重开同一询问”，
+	# 因此确认分必须严格高于取消的0分，否则AI会在同一处反复取消，表现为出牌阶段停滞。
+	return AI_COMMIT_REWARD + proxy_score

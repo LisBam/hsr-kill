@@ -245,6 +245,14 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	var result: Array[int] = []
 	if card == null:
 		return result
+	# 用牌禁令（技能纯查询）；与 validate_use 读取同一聚合端口，返回非空表示整张牌不可使用。
+	# 必须在这里咨询：禁令与选择哪名目标无关，只拦提交校验会让界面先给出可点击的目标，
+	# 玩家选完目标才发现无法确认，表现成“不可使用却仍能指定目标”。
+	# 虚拟牌路径（list_legal_virtual_targets）刻意不咨询本钩子：禁令语义是“手牌中的牌不能使用”，
+	# 虚拟牌并不在手牌区，是否受限由技能自己的钩子按区域判断，核心层不维护区域白名单。
+	if skill_rule_provider != null and skill_rule_provider.has_method("validate_skill_card_action_permission"):
+		if not str(skill_rule_provider.call("validate_skill_card_action_permission", actor_id, card, CARD_ACTION_USE)).is_empty():
+			return result
 	# 卡牌定义；不存在时不提供任何目标。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 目标模式；全体与特殊双目标牌由调用方进一步组合。
@@ -377,7 +385,11 @@ func _validate_target(actor: PlayerState, definition: Dictionary, target_id: int
 	if target_mode == "single_with_hand" and target.hand.is_empty():
 		return "目标没有手牌。"
 	if target_mode == "weapon_holder" and target.get_weapon() == null:
-		return "首个目标没有装备武器。"
+		# 该模式要求“首个目标装备武器”；只有当前目标确实位于首位时本结论才成立。
+		# 否则会给出与实际位置不符的原因（例如逐候选枚举把无武器角色放在第二位时，
+		# 会把“第二名没有装备武器”误报成“首个目标没有装备武器”），影响诊断而不影响通过与否。
+		if all_target_ids.is_empty() or int(all_target_ids[0]) == target_id:
+			return "首个目标没有装备武器。"
 
 	# 距离限制；攻击范围与距离1均在此统一计算。
 	var distance_limit: String = str(definition.get("distance_limit", "none"))
