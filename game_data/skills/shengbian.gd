@@ -197,20 +197,29 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 ## 评估目标角色因拥有“出牌阶段限一次”或“轮回技”技能而配得上优先获得军功的程度。
 ## 轮回技只读技能源码声明的标签，“出牌阶段限一次”按正文声明识别，与【奇袭】的规则层判定完全同源。
 func _score_snapshot_merit_trigger_skills(target_snapshot: Dictionary) -> float:
-	# 已被永久失去的技能不再计入军功估值；名单之外的技能（含武将未亮明时仍可读取的运行时技能记录）照常参与。
-	var permanently_removed_skill_ids: Array = target_snapshot.get("permanently_removed_skill_ids", []) as Array
+	# 目标当前实际安装的技能ID；失去技能（如【留白】）会卸载实例，因此这里天然只统计“现在还在身上”的技能。
+	# 快照缺少该字段时不做裁剪（旧快照与手动构造的测试快照保持完整技能列表）。
+	var installed_skill_ids: Array = target_snapshot.get("installed_skill_ids", []) as Array
+	# 是否按实际安装集合裁剪；只有权威快照会下发该字段。
+	var filter_by_installed: bool = target_snapshot.has("installed_skill_ids")
 	# 目标全部技能ID；顺序与基础AI其他估值入口一致：固有、模式、临时、局内获得，并按稳定ID去重。
 	var skill_ids: Array[String] = []
 	for skill_id_variant: Variant in (GameDatabase.get_character(str(target_snapshot.get("character_id", ""))).get("skills", []) as Array):
-		# 当前固有技能ID；空值与重复项不进入统计。
+		# 当前固有技能ID；空值、已被失去与重复项不进入统计。
 		var native_skill_id: String = str(skill_id_variant)
-		if not native_skill_id.is_empty() and not permanently_removed_skill_ids.has(native_skill_id) and not skill_ids.has(native_skill_id):
-			skill_ids.append(native_skill_id)
+		if native_skill_id.is_empty() or skill_ids.has(native_skill_id):
+			continue
+		if filter_by_installed and not installed_skill_ids.has(native_skill_id):
+			continue
+		skill_ids.append(native_skill_id)
 	for mode_skill_id_variant: Variant in target_snapshot.get("mode_skill_ids", []) as Array:
 		# 当前模式技能ID；飞扬、跋扈等模式技能同样可能声明两类标签。
 		var mode_skill_id: String = str(mode_skill_id_variant)
-		if not mode_skill_id.is_empty() and not permanently_removed_skill_ids.has(mode_skill_id) and not skill_ids.has(mode_skill_id):
-			skill_ids.append(mode_skill_id)
+		if mode_skill_id.is_empty() or skill_ids.has(mode_skill_id):
+			continue
+		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
+			continue
+		skill_ids.append(mode_skill_id)
 	for runtime_skill_map_variant: Variant in [target_snapshot.get("temporary_skills", {}), target_snapshot.get("acquired_skills", {})]:
 		# 当前运行时技能映射；键为稳定技能ID，值只保存来源与次数状态。
 		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
