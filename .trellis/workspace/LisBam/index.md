@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~432 | Active |
+| `journal-1.md` | ~540 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-10-04 | 留白改为一次性失去当前技能并新增通用失去技能端口 | `4aca7ce`, `cb7ceb9`, `509fb39`, `59862ec` | `master` |
 | 9 | 2026-10-04 | 更正游戏开始时时机、位次询问内联交互与按技能ID名单清算永久失去 | `c3e567a`, `27922e6`, `631f149`, `6db5420`, `89bbe80` | `master` |
 | 8 | 2026-10-04 | 新增卡牌【言灵】、武将卡芙卡与技能【言灵】【游丝】 | `585c8f6`, `c069d39`, `cb39afb` | `master` |
 | 7 | 2026-10-03 | 新增专属锦囊牌与不可知置牌机制 | `a0b68f1` | `master` |

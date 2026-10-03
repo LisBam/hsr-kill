@@ -440,3 +440,59 @@
 ### Next Steps
 
 - 可选后续：卡芙卡技能与阵亡语音素材；为 card_position 之外的文字选项询问补充内联可用性断言
+
+
+## Session 10: 留白改为一次性失去当前技能并新增通用失去技能端口
+<!-- trellis-session: v=2 fp=liubai-one-shot-skill-loss -->
+
+**Date**: 2026-10-04
+**Task**: `.trellis/tasks/archive/2026-10/10-05-liubai-one-shot-skill-loss/`（父任务 `10-04-kafuka-followup-fixes`）
+**Branch**: `master`
+
+### Summary
+
+按需求方复审意见，把 `10-04` 交付的「按技能ID名单永久失去」**整体替换**为「只失去当前持有的技能、一次性生效、不做后期维护」：状态层不再保存任何“已失去技能”的字段，规则层新增通用端口 `remove_skill()`（失去某个技能）与 `remove_all_skills()`（失去所有技能），界面改为按公开快照的**实际安装集合** `installed_skill_ids` 收敛，使失去的技能立即从技能栏、悬停武将资料与右键武将详情三处消失，而重新获得的技能立即恢复显示。
+
+### Main Changes
+
+- `scripts/data/player_state.gd`：删除 `permanently_removed_skill_ids` 与 `skills_permanently_removed` 两个字段、它们的 `to_dict`／`from_authoritative_dict` 往返，以及 `mark_skill_permanently_removed()`／`has_permanently_removed_skill()` 两个端口
+- `scripts/core/match_controller.gd`：`remove_all_skills_permanently()` → 通用 `remove_skill(player_id, skill_id, reason)` + 批量 `remove_all_skills(player_id, reason)`；五条装配路径（批量安装、换将重装、局内获得、存档补装、复原武将牌技能）删除全部按技能ID的拦截与旧布尔迁移；`_install_all_character_skills()` 改为接收 `saved_installed_skill_ids_by_player`；`_append_limited_skill_usage_to_snapshot()` 补充 `installed_skill_ids`；`_build_conquest_save_data()` 写出该字段、读档循环组装参数
+- `game_data/skills/liubai.gd`：结束阶段改调 `remove_all_skills()`；`game_data/skills/shengbian.gd`：军功估值改读 `installed_skill_ids`
+- `scripts/ui/match_table.gd` 与 `scripts/ui/player_target_view.gd`：技能栏、悬停资料与右键详情改为按 `installed_skill_ids` 裁剪；缺字段时不裁剪，缺失定义的技能保留占位
+- `tests/nakexia_mechanics_test.gd`：三个阶段重写为一次性失去／装配路径不受影响／存档按实际集合装配，并新增界面收敛用例（真实 `PlayerTargetView` 场景 + `description_sections` 断言）与 `_get_snapshot_player()` 辅助
+- 文档六篇（玩法内容、架构说明、界面与交互、内容制作指南、AI 模块、README）与规范两篇（复用指南模式 5、核心规范快照字段）同步
+
+### Key Decisions
+
+- **移除之后不需要“记得它曾经存在”**：既然失去后重新获得同一技能完全合法，就不该引入名单——凡是需要长期维护、且“漏查一次就出错”的派生状态都是未来的 bug 来源。原先的名单把「五条装配路径都要记得查」这一义务散布到核心层五处，现在这五处全部回归“按来源正常装配”。
+- **界面收敛改读派生视图而不是“谁被拉黑过”**：`installed_skill_ids` 由 `get_installed_skill_ids()` 从技能实例表派生，随每次广播下发；东西没了列表自然变短，新东西进来列表自然变长，方向性错误从结构上不可能发生。
+- **存档落的是当前状态，不是历史禁令**：存档写 `installed_skill_ids`、读档只装集合内技能，因此读档不会撤销【留白】的代价；缺该字段的旧存档读作“无记录 → 完整装配”，与改动前逐字节一致。
+- **端口命名去掉 `_permanently`**：原 `remove_all_skills_permanently()` 的名字与新契约（可重新获得）直接矛盾，改名 `remove_all_skills()` 并在文档中写明“失去是一次性事实”。
+- **不合并 `remove_acquired_skill()`**：后者只清“获得记录”，当固有/模式/临时来源仍提供同一技能时**保留实例**（用于次数额度到期），职责与“把技能拿走”不同，因此保留两个端口并在规范中写明分工。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4aca7ce` | 1. 移除玩家状态的永久失去技能ID名单字段与两个名单读写端口 2. 新增失去技能的通用端口与失去全部技能的批量端口 3. 移除五条技能装配路径的永久失去名单拦截与旧布尔标记迁移 4. 新增公开快照的实际安装技能ID字段 5. 新增过关斩将存档的实际安装技能集合并按集合装配 6. 调整留白第二段为调用失去全部技能的批量端口 7. 调整升变的军功估值改为按实际安装技能集合统计 8. 调整本地技能栏按实际安装技能集合裁剪 9. 调整其他玩家悬停资料与右键详情按实际安装技能集合裁剪 10. 重写那刻夏留白专项回归为一次性失去与重新获得语义 11. 移除永久失去名单的快照、存档与迁移断言，新增实际安装集合断言 |
+| `cb7ceb9` | 1. 同步玩法内容文档的留白一次性失去技能口径与通用失去技能接口 2. 同步玩法内容文档的界面收敛依据与存档实际技能集合说明 3. 同步架构说明的失去技能端口、装配路径与快照派生字段 4. 同步界面文档的按实际安装技能集合收敛口径 5. 同步内容制作指南的失去技能通用端口与批量端口说明 6. 同步 AI 模块文档的军功估值按实际安装技能集合统计 7. 同步 README 的那刻夏回归测试说明 |
+| `509fb39` | 1. 重写复用指南的一次性移除反例为不引入持久名单 2. 补充核心规范的实际安装技能派生字段与失去技能端口约束 |
+| `59862ec` | 1. 新增技能栏按实际安装集合裁剪的回归断言 2. 新增悬停武将资料与右键详情不显示已失去技能的回归断言 3. 新增缺少实际安装集合字段时保持完整列表的兼容断言 |
+| （本次） | 1. 记录留白一次性失去技能修正的任务记录与会话日志 |
+
+### Testing
+
+- [OK] 定向子集 17 个场景全部 PASS（`.godot_test_logs/skill_loss_subset.txt`）：omphalos_transform / tingyun / daheita / kafuka / reincarnation / conquest_save（含 `resume_skills`）/ conquest_single_player / corner_badge / leader_skill / skill_target_ui / ui_layout / match_replay / new_character_mechanics / rule_timing / lan_match_flow / ai_policy / smoke
+- [OK] `NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 nested_trigger_entry=1`
+- [OK] 全量 82 个场景连跑（`.godot_test_logs/full_regression_one_shot.txt`）
+- [OK] 界面断言覆盖需求第四条：真实 `PlayerTargetView` 实例在 `installed_skill_ids` 不含某技能时不再输出该技能分段，重新获得后立即恢复
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 后续任何“失去技能”类效果直接调用 `remove_skill()` / `remove_all_skills()`，不要各自实现卸载流程
+- 旧存档中的 `permanently_removed_skill_ids` 字段被静默忽略（需求方明确不做后期维护），如需回溯历史表现请查本任务记录
+
