@@ -59,6 +59,15 @@ const INLINE_ACTION_BUTTON_COUNT: int = 3
 ## 正式主场景初始化所需的稳定等待帧数；覆盖主菜单遮罩与局内控件的一次完整布局。
 const UI_SETTLE_FRAME_COUNT: int = 4
 
+## 单轮清空的迭代上限；一次清空最多处理这么多次询问，超过即判定为无法收敛。
+const SETTLE_ITERATION_LIMIT: int = 48
+
+## 清空后的观察帧数；用来等待上一步确认动作的延迟牌效落地，避免调用方读到落后的牌堆基线。
+const SETTLE_OBSERVE_FRAME_COUNT: int = 2
+
+## 清空的最大轮数；观察帧内又出现新窗口时进入下一轮，超过该轮数即判定为无法收敛。
+const SETTLE_DRAIN_ROUND_COUNT: int = 4
+
 ## 测试前设置文件路径；结束时恢复，禁止污染玩家正式配置。
 var _original_settings_file_path: String = "user://game_settings.cfg"
 
@@ -73,6 +82,12 @@ var _captured_logs: Array[String] = []
 
 ## 本次已发出的卡牌区域表现事件；用于断言秘密放置不产生公开表现。
 var _captured_transfers: Array[Dictionary] = []
+
+## 上一次清场时处理过的请求签名（标题 + 回答者）；用于识别“取消后又被同一技能重新询问”的请求。
+var _settle_last_signature: String = ""
+
+## 同一请求签名连续出现的次数；第二次起改为确认，避免“可反复取消且取消即重新询问”的技能把清场循环钉死。
+var _settle_signature_repeats: int = 0
 
 
 ## 延迟执行，确保自动加载与全局类完成初始化。
@@ -703,6 +718,10 @@ func _test_inline_three_option_usability() -> bool:
 	# 因此这里在创建询问前再清空一次累计窗口，且清空后不再等待任何帧，确保询问创建不会被新窗口抢先拦截。
 	if not await _settle_pending_choices():
 		return false
+	# 清场可能让后台真实对局结算牌效（例如重铸型技能会真实摸牌），因此基线必须在清场之后重新读取：
+	# 这样后续断言只覆盖“界面内联交互本身不得移动牌堆或写入私有事实”，不会把清场自身的结算误判成界面副作用。
+	_controller.clear_private_pile_placement(chooser_id)
+	baseline_pile_size = _controller.state.draw_pile.size()
 	# 首次询问；询问对象是本机真人，因此请求必然异步等待界面操作而不是当场结算。
 	var request_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
 	if bool(request_result.get("confirmed", true)) or _controller._pending_card_choice.is_empty() or str(_controller._pending_card_choice.get("choice_type", "")) != INLINE_CHOICE_TYPE:
@@ -761,6 +780,9 @@ func _test_inline_three_option_usability() -> bool:
 	# 同样先清空窗口再立即创建请求，避免真实对局在等待帧里先打开响应窗口。
 	if not await _settle_pending_choices():
 		return false
+	# 与首次询问同理：第二次清场同样可能结算后台牌效，因此再次刷新私有事实与牌堆基线。
+	_controller.clear_private_pile_placement(chooser_id)
+	baseline_pile_size = _controller.state.draw_pile.size()
 	var confirm_result: Dictionary = _controller.request_hand_card_pile_position(chooser_id, "游丝", "请选择一张手牌与一个牌堆位次。")
 	if bool(confirm_result.get("confirmed", true)) or _controller._pending_card_choice.is_empty() or str(_controller._pending_card_choice.get("choice_type", "")) != INLINE_CHOICE_TYPE:
 		return _fail("inline_second_request_not_published result=%s pending=%s" % [str(confirm_result), str(_controller._pending_card_choice.get("choice_type", ""))])
@@ -783,7 +805,7 @@ func _test_inline_three_option_usability() -> bool:
 	await get_tree().process_frame
 	# 界面只提交意图：确认动作同样不得自行移动手牌或写入私有事实。
 	if not _controller.get_private_pile_placement(chooser_id).is_empty() or _controller.state.draw_pile.size() != baseline_pile_size:
-		return _fail("inline_ui_moved_cards_without_authority")
+		return _fail("inline_ui_moved_cards_without_authority placement=%s pile=%d baseline=%d" % [str(_controller.get_private_pile_placement(chooser_id)), _controller.state.draw_pile.size(), baseline_pile_size])
 	# 清理；先断开界面与权威控制器的信号接线，再释放主场景，避免退出阶段继续渲染。
 	_controller.state_changed.disconnect(Callable(main_instance, "_on_state_changed"))
 	_controller.card_choice_requested.disconnect(Callable(main_instance, "_on_card_choice_requested"))
@@ -912,20 +934,42 @@ func _confirm_pending_choice() -> bool:
 ## 结算当前全部待办选择；用于把上一步骤可能产生的窗口清空，避免后续用例被拦截。
 ## 同时覆盖【无懈可击】并行响应窗口：本用例不验证锦囊反制链，但对手 AI 在推进过程中随时可能使用锦囊，
 ## 残留的反制窗口会让 controller.request_card_choice 直接拒绝后续全部权威请求，因此必须一并按“不使用无懈”清空。
+## 清场策略默认先取消；但存在“取消即重新询问”的内容（例如无次数上限的重铸型技能），只取消会让循环永不收敛，
+## 因此同一签名（标题 + 回答者）连续出现第二次时改用确认，保证清场在任何武将池下都能终止。
+## 确认动作的牌效（例如重铸会真实摸牌）可能延迟到后续帧才落地，因此清空后还要再观察若干帧，
+## 只有连续多帧都没有新窗口才算真正清空，否则调用方读到的牌堆基线会落后于仍在落地中的结算。
 func _settle_pending_choices() -> bool:
-	var safety: int = 0
-	while _controller != null and (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()) and safety < 48:
-		safety += 1
-		if not _controller._pending_negation_choices.is_empty():
-			_cancel_pending_negation_requests()
+	for _drain_round: int in range(SETTLE_DRAIN_ROUND_COUNT):
+		var safety: int = 0
+		while _controller != null and (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()) and safety < SETTLE_ITERATION_LIMIT:
+			safety += 1
+			if not _controller._pending_negation_choices.is_empty():
+				_cancel_pending_negation_requests()
+				await get_tree().process_frame
+				continue
+			# 当前请求签名；标题与回答者共同标识“同一类询问”，不读取任何隐藏信息。
+			var signature: String = "%s|%d" % [str(_controller._pending_card_choice.get("title", "")), int(_controller._pending_card_choice.get("chooser_id", -1))]
+			if signature == _settle_last_signature:
+				_settle_signature_repeats += 1
+			else:
+				_settle_last_signature = signature
+				_settle_signature_repeats = 0
+			# 首次出现先尝试取消；同一签名再次出现时直接确认。
+			var settled: bool = _confirm_pending_choice() if _settle_signature_repeats > 0 else _cancel_pending_choice()
+			if not settled:
+				settled = _confirm_pending_choice()
+			if not settled:
+				return _fail("settle_pending_choices_stuck")
 			await get_tree().process_frame
+		if _controller == null or (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()):
+			return _fail("settle_pending_choices_exhausted")
+		# 观察帧；让上一步确认动作的延迟牌效落地，若期间又出现窗口则进入下一轮清空。
+		for _settle_frame: int in range(SETTLE_OBSERVE_FRAME_COUNT):
+			await get_tree().process_frame
+		if _controller == null or (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()):
 			continue
-		if not _cancel_pending_choice() and not _confirm_pending_choice():
-			return _fail("settle_pending_choices_stuck")
-		await get_tree().process_frame
-	if _controller != null and (not _controller._pending_card_choice.is_empty() or not _controller._pending_negation_choices.is_empty()):
-		return _fail("settle_pending_choices_exhausted")
-	return true
+		return true
+	return _fail("settle_pending_choices_exhausted")
 
 
 ## 逐个取消当前全部待办的【无懈可击】请求；空选牌列表即“不使用无懈”，由控制器按既有响应协议继续该轮。
