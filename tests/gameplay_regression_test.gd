@@ -1298,6 +1298,8 @@ func _test_judgment_presentation_and_event_chain() -> bool:
 
 
 ## 验证判定区按“延时锦囊、该牌判定结果、下一张延时锦囊、下一张判定结果”逐张展示，启动调用不会瞬间结算全部牌。
+## 顺序口径：判定区数组是**置入顺序**，判定阶段按“后来居上”先结算**最后置入**的那张，因此本用例先置入乐不思蜀、
+## 后置入兵粮寸断，期望兵粮寸断先被判定——这正是本次修复要锁定的行为。
 func _test_delayed_judgment_presentation_sequence() -> bool:
 	_scenario = "delayed_judgment_sequence"
 	_reset_state(2)
@@ -1305,12 +1307,12 @@ func _test_delayed_judgment_presentation_sequence() -> bool:
 	_controller.delayed_judgment_result_pause_seconds = 0.02
 	_controller.state.current_phase = "judgment"
 	_controller.state.phase_index = 1
-	# 第一张延时锦囊；红桃判定成功后不跳过出牌阶段。
+	# 先置入的延时锦囊；红桃判定成功后不跳过出牌阶段。置入更早，因此**后**被判定。
 	var indulgence: CardInstance = CardInstance.new("lebu", "heart", 6)
 	indulgence.zone = "judgment"
 	indulgence.owner_id = 0
 	_controller.state.get_player(0).judgment_area.append(indulgence)
-	# 第二张延时锦囊；梅花判定成功后不跳过摸牌阶段。
+	# 后置入的延时锦囊；梅花判定成功后不跳过摸牌阶段。置入最晚，因此**先**被判定。
 	var supply_shortage: CardInstance = CardInstance.new("bingliang", "club", 4)
 	supply_shortage.zone = "judgment"
 	supply_shortage.owner_id = 0
@@ -1323,17 +1325,19 @@ func _test_delayed_judgment_presentation_sequence() -> bool:
 	var draw_two: CardInstance = CardInstance.new("shan", "diamond", 9)
 	draw_two.zone = "draw_pile"
 	_controller.state.draw_pile.append(draw_two)
-	# 第二张延时锦囊的判定牌；梅花使兵粮寸断判定成功。
-	var supply_judgment: CardInstance = CardInstance.new("tao", "club", 7)
-	supply_judgment.zone = "draw_pile"
-	_controller.state.draw_pile.append(supply_judgment)
-	# 第一张延时锦囊的判定牌；数组末尾为牌堆顶，红桃先供乐不思蜀使用。
+	# 后被判定那张（乐不思蜀）的判定牌；红桃使乐不思蜀判定成功，故不能跳过出牌阶段。
+	# 判定取牌固定从数组末尾（牌堆顶）取走，因此它必须先入列、留在更深处。
 	var indulgence_judgment: CardInstance = CardInstance.new("tao", "heart", 6)
 	indulgence_judgment.zone = "draw_pile"
 	_controller.state.draw_pile.append(indulgence_judgment)
+	# 先被判定那张（兵粮寸断）的判定牌；梅花使兵粮寸断判定成功，故不能跳过摸牌阶段。
+	# 它必须比另一张判定牌更晚入列，才能成为牌堆顶被最先判定者取走。
+	var supply_judgment: CardInstance = CardInstance.new("tao", "club", 7)
+	supply_judgment.zone = "draw_pile"
+	_controller.state.draw_pile.append(supply_judgment)
 	_controller._process_judgment_area(0)
-	# 启动调用只允许第一张延时锦囊进入展示；判定牌和第二张延时锦囊必须等待各自配置间隔。
-	if _presentation_history.size() != 1 or str(_presentation_history[0].get("event_name", "")) != "delayedJudge" or int((_presentation_history[0].get("card_data", {}) as Dictionary).get("uid", -1)) != indulgence.uid or not _controller.state.get_player(0).judgment_area.has(supply_shortage):
+	# 启动调用只允许“最后置入”的延时锦囊进入展示；其判定牌与更早置入的那张必须等待各自配置间隔。
+	if _presentation_history.size() != 1 or str(_presentation_history[0].get("event_name", "")) != "delayedJudge" or int((_presentation_history[0].get("card_data", {}) as Dictionary).get("uid", -1)) != supply_shortage.uid or not _controller.state.get_player(0).judgment_area.has(indulgence):
 		return _fail("delayed_judgment_immediate=%s" % [_presentation_history])
 	# 四段0.02秒节拍加调度余量；完成后应进入正常出牌阶段并保留严格交替的四次表现。
 	# 这里按条件等待而不是固定0.12秒：顺序跑完数十个场景后再执行本测试时，单帧调度可能超过固定预算，
@@ -1348,7 +1352,9 @@ func _test_delayed_judgment_presentation_sequence() -> bool:
 		# 单次表现键；稳定事件名与实体 UID 共同排除同一判定牌被重复展示。
 		var card_data: Dictionary = presentation.get("card_data", {}) as Dictionary
 		presentation_keys.append("%s:%d" % [str(presentation.get("event_name", "")), int(card_data.get("uid", -1))])
-	var expected_keys: Array[String] = ["delayedJudge:%d" % indulgence.uid, "judge:%d" % indulgence_judgment.uid, "delayedJudge:%d" % supply_shortage.uid, "judge:%d" % supply_judgment.uid]
+	# 期望顺序 = 置入顺序的逆序：兵粮寸断（后置入）先判定并先消耗牌堆顶的梅花判定牌，
+	# 乐不思蜀（先置入）后判定并消耗其下的红桃判定牌。
+	var expected_keys: Array[String] = ["delayedJudge:%d" % supply_shortage.uid, "judge:%d" % supply_judgment.uid, "delayedJudge:%d" % indulgence.uid, "judge:%d" % indulgence_judgment.uid]
 	if presentation_keys != expected_keys or _controller.state.current_phase != "play" or not _controller.state.get_player(0).judgment_area.is_empty() or not _controller.state.discard_pile.has(indulgence) or not _controller.state.discard_pile.has(supply_shortage):
 		return _fail("delayed_judgment_sequence=%s phase=%s" % [presentation_keys, _controller.state.current_phase])
 	_controller.delayed_judgment_preview_seconds = 1.00

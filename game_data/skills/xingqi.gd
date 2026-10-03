@@ -123,7 +123,9 @@ func _build_ai_arrangement(candidates: Array[Dictionary]) -> Dictionary:
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	var safe_judgment_uid: int = -1
 	if owner != null and not owner.judgment_area.is_empty():
-		var delayed_id: String = owner.judgment_area.front().definition_id
+		# 下一个将被判定的延时锦囊；判定区数组是置入顺序，而判定阶段“后来居上”取最后置入的那张，
+		# 因此必须读末项：读首项会为错误的那张牌去找安全判定牌，AI 排序随之失效。
+		var delayed_id: String = owner.judgment_area.back().definition_id
 		for candidate: Dictionary in ordered_candidates:
 			if _is_safe_judgment_card(candidate, delayed_id):
 				safe_judgment_uid = int(candidate.get("uid", -1))

@@ -12754,7 +12754,11 @@ func _process_judgment_area(player_id: int) -> void:
 	_run_judgment_area_sequence(player_id, flow_token)
 
 
-## 按进入判定区的顺序推进延时锦囊展示、无懈、判定与结果停留；异步选择出现时保留剩余数组等待统一阶段恢复入口继续。
+## 按“后来居上”的判定顺序推进延时锦囊展示、无懈、判定与结果停留；异步选择出现时保留剩余数组等待统一阶段恢复入口继续。
+##
+## 顺序口径：PlayerState.judgment_area 始终是**置入顺序**（card_movement_service 追加到数组尾，界面因此天然从左到右按置入先后显示），
+## 而官方规则要求“进行其中**最后置入**其判定区里的那张延时类锦囊牌的结算”，即后进入判定区的牌先被判定。
+## 因此本流程取数组**末项**：数组尾 = 最后置入 = 最先判定，与界面显示顺序互为逆序，两者不可混用。
 func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 	# 从响应选择恢复时的结果停留；上一张牌已经在恢复回调中完成效果，先等待再展示下一张。
 	if _judgment_resume_needs_result_pause:
@@ -12766,8 +12770,8 @@ func _run_judgment_area_sequence(player_id: int, flow_token: int) -> void:
 	# 判定玩家状态；每轮重新读取判定区，确保闪电传递和插入移动不会让旧数组重复结算。
 	var player: PlayerState = state.get_player(player_id)
 	while player != null and player.alive and not state.game_over and not has_pending_card_choice() and not has_pending_judgment_request() and not player.judgment_area.is_empty():
-		# 当前延时锦囊；始终取判定区数组首项，完整离区后下一项才会成为新的处理对象。
-		var delayed_card: CardInstance = player.judgment_area.front()
+		# 当前延时锦囊；取判定区数组末项（最后置入 = 最先判定），完整离区后更早置入的那张才会成为新的处理对象。
+		var delayed_card: CardInstance = player.judgment_area.back()
 		# 当前延时锦囊判定事件；展示、无懈与实际判定都关联本回合判定阶段，回放可以恢复严格顺序。
 		var delayed_event_id: int = _record_runtime_event("delayedJudge", "judgment", {"player_id":player_id, "card_uid":delayed_card.uid, "card_id":delayed_card.definition_id}, {}, _current_turn_event_id)
 		_emit_rule_timing("phaseJudge", player_id, player_id, player_id, {"card_uid":delayed_card.uid, "card_id":delayed_card.definition_id}, delayed_event_id)

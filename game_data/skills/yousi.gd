@@ -306,7 +306,8 @@ func _score_placement_choice(authoritative_snapshot: Dictionary, context: Dictio
 
 
 ## 解析“本回合角色是否需要被救援”以及需要放上的花色；不需要救援时返回空字符串。
-## 判定顺序严格按目标判定区数组的先后：判定阶段按该顺序逐张结算，因此只有**第一张**延时锦囊能被牌堆顶第一张改写。
+## 判定顺序按“后来居上”：判定区数组是**置入顺序**，而最先被判定的是**最后置入**的那张延时锦囊；
+## 牌堆顶第一张只能改写最先被判定的那张，因此这里只读取数组末项，不遍历。
 ## 只识别两种会跳过阶段的延时锦囊：【乐不思蜀】需要红桃、【兵粮寸断】需要梅花。
 func _resolve_mitigation_suit(authoritative_snapshot: Dictionary, turn_player_id: int, evaluator: Object) -> String:
 	if turn_player_id < 0:
@@ -318,19 +319,19 @@ func _resolve_mitigation_suit(authoritative_snapshot: Dictionary, turn_player_id
 	# 只有自己人才值得花一张关键花色的手牌去救；敌方的判定失效不构成本方收益。
 	if evaluator.get_attitude(authoritative_snapshot, owner_player_id, turn_player_id) <= AI_ALLY_ATTITUDE_LOWER_BOUND:
 		return ""
-	# 判定区数组；顺序即结算顺序。
+	# 判定区数组；顺序为置入顺序，最先被判定的是最后一项。
 	var judgment_area: Array = turn_player.get("judgment_area", []) as Array
-	for judgment_variant: Variant in judgment_area:
-		# 当前判定牌公开快照；只看定义 ID，不读取任何隐藏信息。
-		var judgment_card: Dictionary = judgment_variant as Dictionary
-		# 当前延时锦囊定义 ID。
-		var definition_id: String = str(judgment_card.get("definition_id", ""))
-		if definition_id == LEBU_DEFINITION_ID:
-			return SUIT_FOR_LEBU_MITIGATION
-		if definition_id == BINGLIANG_DEFINITION_ID:
-			return SUIT_FOR_BINGLIANG_MITIGATION
-		# 第一张不是这两种牌时，牌堆顶第一张无法改变它的结果，救援目标就不再成立。
+	if judgment_area.is_empty():
 		return ""
+	# 最先被判定的延时锦囊公开快照；只看定义 ID，不读取任何隐藏信息。
+	var judgment_card: Dictionary = judgment_area[judgment_area.size() - 1] as Dictionary
+	# 当前延时锦囊定义 ID。
+	var definition_id: String = str(judgment_card.get("definition_id", ""))
+	if definition_id == LEBU_DEFINITION_ID:
+		return SUIT_FOR_LEBU_MITIGATION
+	if definition_id == BINGLIANG_DEFINITION_ID:
+		return SUIT_FOR_BINGLIANG_MITIGATION
+	# 最先被判定的不是这两种牌时，牌堆顶第一张无法改变它的结果，救援目标就不再成立。
 	return ""
 
 
