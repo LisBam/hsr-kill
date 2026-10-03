@@ -8803,7 +8803,7 @@ func _is_valid_draw_pile_insert_position(position: int) -> bool:
 ## 牌面取值优先级（自上而下，先命中者生效）：
 ## ① 调用方显式给出的合法 suit/rank；② 卡牌定义自带的 `suit`/`rank` 元数据；
 ## ③ 本局权威随机源 `_rng` 现场抽取。第③档结果与位次随机都会写入 `state.random_history`，
-## 因此「随机加入三张」在存档恢复与回放重演时会得到同一组牌面与同一组位次（调用方禁止自行使用非权威随机源）。
+## 因此「随机加入五张」在存档恢复与回放重演时会得到同一组牌面与同一组位次（调用方禁止自行使用非权威随机源）。
 ## position 取值：DRAW_PILE_POSITION_TOP（1，牌堆顶第一张，最先被摸到）、DRAW_PILE_POSITION_SECOND（2，第二张），
 ## 或 DRAW_PILE_POSITION_RANDOM（0，由权威随机源在整副牌堆中均匀选一个位次）。
 ## 本端口只做「一次确定性地插入一张牌」，**不内置**「随机加入 N 张」的批量语义；插入几张、何时插入由调用方决定。
@@ -11017,7 +11017,7 @@ func _begin_starting_hand_mulligan() -> bool:
 func _complete_pre_game_start() -> void:
 	state.pre_game_setup.clear()
 	# 游戏开始时机的权威派发点：此时起始手牌已经发完、手气卡阶段已经全部结束，且第一轮尚未开始。
-	# 该时机的内容（例如【言灵】往牌堆加入三张专属牌）因此不会参与任何一次手气卡重发，
+	# 该时机的内容（例如【言灵】往牌堆加入五张专属牌）因此不会参与任何一次手气卡重发，
 	# 玩家也就无法用手气卡刷到「本该在开局之后才进入牌堆」的牌。
 	# 派发期间阶段回到 game_start：本时机仍属于开局配置阶段，保持真人与内置AI控制，不参与动态接管。
 	state.current_phase = "game_start"
