@@ -33,19 +33,36 @@
 | 文件 | 改动 |
 |---|---|
 | `scripts/core/match_controller.gd` | `_complete_pre_game_start()` 成为 `gameStart` 的唯一派发点（起始手牌与手气卡之后、第一轮之前） |
-| `game_data/skills/yanling.gd` | 先 `announce_activation({"insert_count":3, "insert_position":0})` 再逐张插牌 |
+| `game_data/skills/yanling.gd` | 先 `announce_activation({"insert_count":5, "insert_position":0})` 再逐张插牌 |
 | `scripts/core/rule_timing_catalog.gd` | `gameStart` 顺序后移到 `gameDrawAfter` 之后 |
 | `tests/kafuka_mechanics_test.gd` | 新增 `gameStartTimingAfterMulligan` 阶段 |
 
-## 四、验证
+## 四、追加 · 【言灵】开局张数由三张改为五张
+
+需求方在本轮末尾把 `INSERT_COUNT` 由 `3` 改为 `5`（同时把玩家可见描述改为「随机加入五张【言灵】」），因此把全链路口径统一为五张：
+
+| 文件 | 改动 |
+|---|---|
+| `game_data/skills/yanling.gd` | `INSERT_COUNT = 5`、技能描述「五张」、六处注释中的张数口径 |
+| `game_data/characters/kafuka.gd` | 武将简介「开局把五张专属锦囊洗入牌堆」与两处注释 |
+| `tests/kafuka_mechanics_test.gd` | `EXPECTED_INSERT_COUNT = 5`、`YANLING_SKILL_DESCRIPTION` 五张、四处注释 |
+| `scripts/core/match_controller.gd` | 造牌入堆端口与游戏开始派发点的两处注释口径 |
+| `docs/游戏机制与玩法内容.md` | 武将速览、端口举实例、技能描述原文、第一段小标题、加入张数表、时机口径、发动记录共 7 处 |
+| `docs/内容制作指南.md` | 【言灵】行（`insert_count":5`、逐张调用5次、5张各自独立抽位次、这五张牌）与端口随机口径举例 |
+| `README.md` | 卡芙卡专项测试说明（5 次、`5` 张、五个 UID、五条随机历史） |
+
+未改动：`docs/卡牌系统.md` 与 `docs/界面与交互.md` 只描述【言灵】的判定效果与「无交互」，不含张数口径；`.trellis/tasks/archive/2026-10/10-02-*` 的历史 PRD／design 保留当时的需求原文「三张」，作为归档记录不再回改。
+
+## 五、验证
 
 - 全量 82 个测试场景连跑（`.godot_test_logs/full_regression_item12.txt`）：除 `audio_system_test` 在整批连跑中偶发失败外，其余全部 PASS；该用例随后单独连跑 2 次均为 `AUDIO_SYSTEM_PASS`，且本批次未改动任何音频文件
 - `android_adaptation_test` 使用独立成功标记，单独运行输出 `ANDROID_ADAPTATION_TEST_OK`
 - 关键场景复跑：`NAKEXIA_MECHANICS_PASS`（含 `permanent_loss=2 permanent_new_skill=1`）、`EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS`（含 `inline_usability`）、`KAFUKA_MECHANICS_PASS`（含 `gameStartTimingAfterMulligan`）、`RULE_TIMING_PASS catalog=236`、`PRE_GAME_CUSTOMIZATION_PASS`
 - 反事实验证：把 `grant_acquired_skill()` 的守卫改回整体布尔量 → `NAKEXIA_FAIL permanent_new_skill_blocked`，改动已还原
 - 文档同步：`docs/界面与交互.md`、`docs/游戏机制与玩法内容.md`、`docs/内容制作指南.md`、`docs/架构说明.md`、`README.md`、`.trellis/spec/content/skill-authoring.md`、`.trellis/spec/guides/code-reuse-thinking-guide.md`
+- 张数改为五张后复跑：`KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure+gameStartTimingAfterMulligan`
 
-## 五、遗留
+## 六、遗留
 
 - 卡芙卡的技能/阵亡语音素材仍缺（与旧布尔量无关的既有事项）
 - 其他文字选项询问（`control` / `bool` / `target_control`）尚未补充「未满足手牌维度时按钮禁用」的专项断言

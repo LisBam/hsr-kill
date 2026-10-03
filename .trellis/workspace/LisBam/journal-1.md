@@ -401,6 +401,11 @@
 - **旧布尔量双写不双读**：新存档同时写出名单与布尔量，旧版本读到新存档时按「全部失去」降级；新代码只按名单判定，避免两套真相
 - **时机名字与派发位置互为定义**：把顺序常量、技能注释、玩法文档与回归断言一起对齐，防止「文档说发牌前、代码已到发牌后」的漂移
 
+#### 追加 · 【言灵】开局张数由三张改为五张
+
+- 需求方在本轮末尾把 `INSERT_COUNT` 改为 `5` 并同步玩家可见描述「随机加入五张【言灵】」，因此把全链路口径统一为五张：技能源码（含六处注释）、武将简介、专项回归（`EXPECTED_INSERT_COUNT` 与描述原文）、控制器两处注释、玩法文档 7 处、制作指南 2 处、README 测试说明
+- `.trellis/tasks/archive/2026-10/10-02-*` 的历史 PRD／design 保留当时的需求原文「三张」，作为归档记录不回改
+
 
 ### Git Commits
 
@@ -421,6 +426,7 @@
 - [OK] RULE_TIMING_PASS catalog=236 active=4 roles=4 / PRE_GAME_CUSTOMIZATION_PASS / SMOKE_PASS / AI_POLICY_PASS cards=47
 - [OK] 反事实验证：把 grant_acquired_skill() 的守卫改回整体布尔量 → NAKEXIA_FAIL permanent_new_skill_blocked（已还原并重跑通过）
 - [KNOWN] audio_system_test 在整批连跑中偶发 AUDIO_SYSTEM_FAIL card_voice_auto_respond_missing=128；随后单独连跑 2 次均为 AUDIO_SYSTEM_PASS，且本批次未改动任何音频文件，属既有时序敏感用例
+- [OK] 张数改为五张后复跑 KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure+gameStartTimingAfterMulligan
 
 ### Status
 
