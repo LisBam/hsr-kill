@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-10-01
+- **Total Sessions**: 9
+- **Last Active**: 2026-10-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~187 | Active |
+| `journal-1.md` | ~432 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,10 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-10-04 | 更正游戏开始时时机、位次询问内联交互与按技能ID名单清算永久失去 | `c3e567a`, `27922e6`, `631f149`, `6db5420`, `89bbe80` | `master` |
+| 8 | 2026-10-04 | 新增卡牌【言灵】、武将卡芙卡与技能【言灵】【游丝】 | `585c8f6`, `c069d39`, `cb39afb` | `master` |
+| 7 | 2026-10-03 | 新增专属锦囊牌与不可知置牌机制 | `a0b68f1` | `master` |
+| 6 | 2026-07-26 | 新增回合操控机制（本回合由xx操控）与局域网代理提交协议 | `14e110c` | `master` |
 | 5 | 2026-10-01 | 重构【凶星】为角色持续效果并新增【桃】留桃AI | `4275829` | `master` |
 | 4 | 2026-09-30 | 调整【好活】弃置逻辑与防具无效攻击的AI收益口径 | `0a7e33e` | `master` |
 | 3 | 2026-09-30 | 新增主演机制与白露、刃两名武将 | `97c87fc` | `master` |

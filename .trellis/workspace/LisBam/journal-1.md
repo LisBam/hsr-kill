@@ -354,3 +354,78 @@
 - 父任务 `10-02-kafuka-new-mechanics` 的四个子任务全部归档，跨子任务验收标准全部勾选
 - 可选后续：卡芙卡插画与技能/阵亡语音素材；`tests/audio_system_test.gd` 的既有失败（`card_voice_auto_respond_missing`）
 
+
+## Session 9: 更正游戏开始时时机、位次询问内联交互与按技能ID名单清算永久失去
+<!-- trellis-session: v=2 fp=055ab2cc48d324e7 -->
+
+**Date**: 2026-10-04
+**Task**: `.trellis/tasks/archive/2026-10/10-04-kafuka-followup-fixes/`（父任务 `10-02-kafuka-new-mechanics` 的三个收口修正）
+**Branch**: `master`
+
+### Summary
+
+处理卡芙卡内容交付后的三条收口意见：把牌堆位次询问从独立窗口改为操作区内联交互；把【留白】的「失去所有技能」从整体开关改为按技能ID名单清算，使清算后新获得的技能不受影响；把「游戏开始时」更正为手气卡之后、第一轮之前的正式开局时刻并补上发动记录与提示。
+
+### Main Changes
+
+本批次处理需求方在卡芙卡内容交付后提出的三条收口意见，任务记录见 `.trellis/tasks/archive/2026-10/10-04-kafuka-followup-fixes/`。
+
+#### 需求一 · 位次询问改用操作区内联交互
+
+- `choice_type = "card_position"` 不再打开 `CardSelectionPanel` 独立窗口，改由 `_is_inline_control_choice()` 接管，与【咬它】同形态：手牌候选在牌手区点亮，三个选项渲染为操作行按钮
+- 前两项复用 `%UseButton` / `%CancelButton`，第三项由 `_append_inline_control_option_button()` 追加；请求已声明取消选项（上下文键 `control_cancel_option_id`）时不再追加 `InlineControlCancelButton`，可见按钮恰好三个
+- 新增 `_is_inline_control_card_selection_ready()` / `_get_inline_control_cancel_option_id()` / `_is_inline_control_option_submittable()`：取消选项恒可提交，其余选项需同时满足手牌维度与目标维度，界面不硬编码任何选项 ID
+- 移除 `CardSelectionPanel` 的 `position_submitted` 信号、位次按钮集合、`_show_card_position_request()`／`_add_position_options()`／两个位次回调与 `card_position` 渲染分支（净删 106 行）
+- 重写 `tests/exclusive_card_and_private_placement_test.gd` 的界面阶段为内联断言（面板不可见、操作行恰好三个按钮、未选牌时位次按钮禁用、取消不写入任何状态、确认携带手牌与位次）
+
+#### 需求二 · 永久失去改为按技能ID名单清算
+
+- `PlayerState` 新增 `permanently_removed_skill_ids` 与 `mark_skill_permanently_removed()` / `has_permanently_removed_skill()` 两个薄端口并进入 `to_dict`；旧布尔 `skills_permanently_removed` 保留为迁移与旧版本降级标记，规则判定不再读取
+- `remove_all_skills_permanently()` 先在卸载与清空前快照「此刻确实拥有的技能ID」（技能实例表 ∪ 获得技能 ∪ 临时技能，稳定ID去重），逐个记名单；无技能可失去时返回 `false`，不重复写日志与广播；清算时一并清空 `recorded_card_names`
+- 五条装配路径逐项拦截：批量安装、换将重装、局内获得、存档补装、复原武将牌技能；两个重置端口不再整体拦截（名单内固有技能由复原路径逐项过滤，名单外新技能仍正常归零额度）
+- 旧存档迁移：读档后首次装配时若「布尔为真且名单为空」，把该角色此刻本应安装的技能补记进名单
+- 界面按名单逐项剔除：`MatchTable._get_visible_skill_ids()` 与 `PlayerTargetView._request_character_information()` 改为读名单；武将牌角标不再按整体标记清空（角标不携带技能归属，主演／凶星条目与技能无关）
+- `game_data/skills/shengbian.gd` 的军功触发评分改为读名单逐项过滤
+
+#### 需求三 · 「游戏开始时」更正为正式开局时刻
+
+- `MatchController._complete_pre_game_start()` 成为 `gameStart` 的唯一派发点：起始手牌与手气卡全部结束之后、第一轮之前，派发期间阶段回到 `game_start`，完成后切到 `round_start`
+- `game_data/skills/yanling.gd` 改为**先** `announce_activation({"insert_count":3, "insert_position":0})`（写技能历史、公开提示与 `skillAfter` 时机）**再**逐张插牌；`insert_position` 是位次口径（`0` = 权威随机位次），公开字段不泄露真实落点
+- `RuleTimingCatalog` 的开局时机顺序调整为 `enterGame → gameDrawBefore → gameDrawBegin → gameDrawAfter → gameStart → roundEnd → roundStart`
+- `tests/kafuka_mechanics_test.gd` 新增 `gameStartTimingAfterMulligan` 阶段：断言游戏开始时机的派发在起始手牌与手气卡之后，且手气卡刷新不可能刷到三张专属牌
+
+#### 关键决策
+
+- **位次询问复用内联分流而不是新写交互**：该询问的选项是纯文字，正好落在「文字选项 + 操作行按钮」分支的适用条件内；改一个 `in [...]` 列表与三个小判定函数，比新增一套交互组件更符合低耦合
+- **「失去技能」的状态用名单而非开关**：开关只能表达「这个角色以后不能再有技能」，与需求「这些技能回不来、以后新得的照常」不符；名单同时解决界面整体清空技能栏与角标的连带损伤
+- **旧布尔量双写不双读**：新存档同时写出名单与布尔量，旧版本读到新存档时按「全部失去」降级；新代码只按名单判定，避免两套真相
+- **时机名字与派发位置互为定义**：把顺序常量、技能注释、玩法文档与回归断言一起对齐，防止「文档说发牌前、代码已到发牌后」的漂移
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3e567a` | 1. 修正「游戏开始时」的派发位置为起始手牌与手气卡之后、第一轮之前的正式开局时刻 2. 调整公开时机目录中开始时机与开局时机的排列顺序 3. 新增【言灵】开局布牌的发动公告与发动记录 4. 新增开局布牌先宣告发动再逐张插牌的顺序约束说明 5. 新增开局时机排在手气卡之后与手气卡无法刷到专属牌的回归断言 |
+| `27922e6` | 1. 调整牌堆位次询问的分流判定为操作区内联询问 2. 新增内联文字选项的手牌维度可用性判定 3. 新增请求声明的取消选项识别与取消提交语义 4. 新增内联分支的额外选项按钮与取消按钮去重规则 5. 移除选牌面板的位次询问分支、位次按钮集合与提交信号 6. 调整位次询问技能端口的注释为内联交互口径 7. 重写位次询问的界面回归为内联形态断言 |
+| `631f149` | 1. 新增玩家状态的永久失去技能ID名单字段与读写端口 2. 调整永久失去清算为逐项快照并逐个记入技能ID名单 3. 调整五条技能装配路径为按名单逐项拦截 4. 移除两个重置端口对永久失去角色的整体拦截 5. 新增旧存档布尔标记到技能ID名单的迁移 6. 调整界面技能栏与武将信息为按名单逐项剔除技能 7. 调整武将牌角标不再按整体标记清空 8. 调整升变军功评分按名单逐项过滤技能 9. 新增技能清算时一并清空技能产生的记录牌名 10. 新增永久失去名单的清算、新获得技能不受影响、存档往返与五条装配守卫断言 |
+| `6db5420` | 1. 同步界面文档的位次询问内联交互与技能失去后的界面收敛口径 2. 同步玩法内容文档的开局顺序、言灵发动记录与留白永久失去名单口径 3. 同步内容制作指南的位次询问界面用法、言灵与游丝条目与时机目录顺序 4. 同步架构说明的永久失去名单状态位置与界面收敛责任划分 5. 同步内容规范的游戏开始时时机位置与发动公告约束 6. 同步复用指南的逐项移除与整体开关反例 7. 同步 README 的那刻夏回归测试说明 |
+| `89bbe80` | 1. 补充武将卡芙卡的立绘与缩略图资源 2. 补充卡芙卡立绘资源的导入配置 |
+
+### Testing
+
+- [OK] 全量 82 个测试场景连跑：仅 audio_system_test 在整批连跑中偶发失败，其余全部 PASS
+- [OK] NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 permanent_loss=2 permanent_new_skill=1 nested_trigger_entry=1
+- [OK] EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+inline_usability
+- [OK] KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure+gameStartTimingAfterMulligan
+- [OK] RULE_TIMING_PASS catalog=236 active=4 roles=4 / PRE_GAME_CUSTOMIZATION_PASS / SMOKE_PASS / AI_POLICY_PASS cards=47
+- [OK] 反事实验证：把 grant_acquired_skill() 的守卫改回整体布尔量 → NAKEXIA_FAIL permanent_new_skill_blocked（已还原并重跑通过）
+- [KNOWN] audio_system_test 在整批连跑中偶发 AUDIO_SYSTEM_FAIL card_voice_auto_respond_missing=128；随后单独连跑 2 次均为 AUDIO_SYSTEM_PASS，且本批次未改动任何音频文件，属既有时序敏感用例
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 可选后续：卡芙卡技能与阵亡语音素材；为 card_position 之外的文字选项询问补充内联可用性断言
