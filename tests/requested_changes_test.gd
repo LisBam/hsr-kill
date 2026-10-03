@@ -11,6 +11,10 @@ var _scenario: String = ""
 ## 借刀杀人测试中持刀者用于响应的【杀】实体 UID；默认-1表示尚未创建。
 var _borrow_slash_uid: int = -1
 
+## 借刀杀人场景中该【杀】触发“使用”时机的记录；每项为 {"source_id": int, "response_action": String}。
+## 借刀杀人声明的响应动作是“使用”，因此必须派发 useCard 而不是 respond。
+var _borrow_use_timing_records: Array[Dictionary] = []
+
 ## 借刀杀人测试中被【杀】者用于响应的【闪】实体 UID；默认-1表示尚未创建。
 var _borrow_shan_uid: int = -1
 
@@ -602,6 +606,13 @@ func _test_same_timing_skill_prompt_order() -> bool:
 	return true
 
 
+## 记录借刀杀人场景中持刀者【杀】的 useCard 时机；其他牌的 useCard 不进入记录。
+func _probe_borrow_slash_use_timing(event: RuleEvent) -> void:
+	if int(event.data.get("card_uid", -1)) != _borrow_slash_uid:
+		return
+	_borrow_use_timing_records.append({"source_id":event.source_id, "response_action":str(event.data.get("response_action", ""))})
+
+
 ## 验证【借刀杀人】使用时必须按“持刀者、被【杀】者”声明两个目标，而实际本牌目标时机只保留持刀者。
 func _test_borrow_sword_target_semantics() -> bool:
 	_scenario = "borrow_sword"
@@ -616,6 +627,10 @@ func _test_borrow_sword_target_semantics() -> bool:
 	_borrow_slash_uid = slash.uid
 	# 借刀杀人实体；使用时必须同时声明持刀者与其需要使用【杀】的对象。
 	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	# 使用时机探针；只记录本次持刀者【杀】的 useCard 派发，忽略借刀锦囊自身的同名单时机。
+	# 内容层按“使用”声明的响应必须派发 useCard，否则【生息】等“当你使用【杀】时”的技能会静默失效。
+	_borrow_use_timing_records.clear()
+	_controller.trigger_manager.subscribe("useCard", self, _probe_borrow_slash_use_timing, 0, -1, "global")
 	if _controller.card_rules.validate_use(0, borrow_sword, [1]).is_empty() or not _controller.card_rules.validate_use(0, borrow_sword, [1, 2]).is_empty():
 		return _fail("borrow_target_count one=%s two=%s" % [_controller.card_rules.validate_use(0, borrow_sword, [1]), _controller.card_rules.validate_use(0, borrow_sword, [1, 2])])
 	# 真实结算目标与完整声明目标；直接调用内部入口时必须显式传入两套数组，正式 submit_action 会自动完成此分流。
@@ -638,6 +653,10 @@ func _test_borrow_sword_target_semantics() -> bool:
 			break
 	if victim_was_card_target:
 		return _fail("borrow_victim_entered_card_targets")
+	# 使用时机；本次【杀】必须恰好派发一次 useCard，来源是持刀者本人，且动作类别为“使用”。
+	# 派发成 respond 会让所有“当你使用【杀】时”的技能在借刀路径上全部失效。
+	if _borrow_use_timing_records.size() != 1 or int((_borrow_use_timing_records[0] as Dictionary).get("source_id", -1)) != 1 or str((_borrow_use_timing_records[0] as Dictionary).get("response_action", "")) != MatchController.CARD_ACTION_USE:
+		return _fail("borrow_slash_use_timing=%s" % [_borrow_use_timing_records])
 	# 借刀表现分段；第一段从使用者指向持刀者，第二段从持刀者指向被要求出【杀】者。
 	var indicator_stages: Array[Dictionary] = GameDatabase.get_card_definition("jiedao").get_presentation_indicator_stages(0, [1, 2], [1])
 	if indicator_stages != [{"actor_id":0, "target_ids":[1]}, {"actor_id":1, "target_ids":[2]}]:

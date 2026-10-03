@@ -148,13 +148,21 @@ func _get_legal_slash_target_ids(rule_service: Object, weapon_holder_id: int) ->
 	return result
 
 
-## 要求持刀者打出【杀】；拒绝或无法响应时将其武器交给锦囊使用者。
+## 要求持刀者使用【杀】；拒绝或无法响应时将其武器交给锦囊使用者。
+## 补充：原文效果是“令其对你指定的另一名角色使用一张【杀】”，因此这里的【杀】属于**使用**而不是打出，
+## 响应上下文声明 CARD_ACTION_USE，主体时机为 useCard；本行早期写作“打出”是动作类别修正前的旧口径。
 func _resolve_borrow_sword(resolver: Object, parent_card_uid: int, source_id: int, weapon_holder_id: int, victim_id: int) -> void:
 	# 借刀响应上下文；父牌 UID 使异步恢复重新定位本卡牌源码。
-	# 动作类别为“打出”：持刀者打出的【杀】只用于证明响应，不产生牌面效果，也不属于“弃置”。
-	var response_context: Dictionary = {"kind":"borrow_sword_response", "parent_card_uid":parent_card_uid, "responder_id":weapon_holder_id, "source_id":source_id, "victim_id":victim_id, "complete_parent_target_after_response":true, "response_action":CARD_ACTION_PLAY}
-	# 持刀者实际打出的【杀】；为空表示交出武器。
-	var slash: CardInstance = resolver.host.request_response_card(weapon_holder_id, "sha", "请响应借刀杀人并打出【杀】。", response_context)
+	# 动作类别为“使用”：持刀者被本牌要求“对合法目标使用【杀】”，这段【杀】因此必须与手动使用走同一条整牌时机链路。
+	# 补充修正：原实现声明为 CARD_ACTION_PLAY（打出），控制器只派发 respond/respondEnd/respondAfter，
+	# 使【生息】等订阅“使用”时机的技能对借刀【杀】完全不触发；修正后由 _get_card_action_main_timing() 派发 useCard/useCardAfter。
+	# 该改动不改变这张【杀】的最终去向与弃置批次归属：实体回收统一走 _move_played_card_to_discard，
+	# 该函数对 USE 与 PLAY 的处理完全同构，只把动作名写入移牌原因，因此不会把这张【杀】变成“弃置”而误触发弃置类技能。
+	var response_context: Dictionary = {"kind":"borrow_sword_response", "parent_card_uid":parent_card_uid, "responder_id":weapon_holder_id, "source_id":source_id, "victim_id":victim_id, "complete_parent_target_after_response":true, "response_action":CARD_ACTION_USE}
+	# 持刀者实际提供的【杀】；为空表示交出武器。
+	# 补充：该【杀】按动作类别属于“使用”，因此本行旧文案“打出”仅指“提供响应牌”这一动作，不代表规则上的打出。
+	# 响应询问文案与动作类别保持一致：这段【杀】是“使用”，不是“打出”。
+	var slash: CardInstance = resolver.host.request_response_card(weapon_holder_id, "sha", "请响应借刀杀人并使用【杀】。", response_context)
 	if resolver.host.has_pending_card_choice() or resolver.is_resolution_stopped():
 		return
 	_apply_borrow_sword_response(resolver, response_context, slash)
@@ -162,13 +170,14 @@ func _resolve_borrow_sword(resolver: Object, parent_card_uid: int, source_id: in
 
 ## 应用【借刀杀人】响应结果；实体【杀】复用牌族组件的完整武器、防具和伤害流程。
 func _apply_borrow_sword_response(resolver: Object, context: Dictionary, slash: CardInstance) -> void:
-	# 借刀使用者（来源）ID；持刀者未打出【杀】时武器本应交给该角色。
+	# 借刀使用者（来源）ID；持刀者未提供【杀】时武器本应交给该角色。
+	# 补充：判据是“持刀者有没有交出一张【杀】”，与这张【杀】按“使用”还是“打出”记账无关。
 	var source_id: int = int(context.get("source_id", -1))
 	# 来源有效性复核；使用者在响应等待期间阵亡时本牌已经整体失效：
 	# 既不能把武器交给已经阵亡的角色，也不再继续强制【杀】的后续流程。
 	if resolver.effective_source_id(source_id) < 0:
 		return
-	# 持刀者 ID；其酒加值只在实际打出【杀】时消耗。
+	# 持刀者 ID；其酒加值只在实际提供【杀】时消耗。
 	var weapon_holder_id: int = int(context.get("responder_id", -1))
 	if slash == null:
 		resolver.host.transfer_equipment(weapon_holder_id, source_id, "weapon")
