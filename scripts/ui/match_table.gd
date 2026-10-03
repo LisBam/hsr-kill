@@ -48,6 +48,14 @@ const ACTION_BUTTON_SEPARATION: int = 28
 ## 【振旗】三项内联选择按钮的最小尺寸；默认104×42像素，保证三个按钮能在原操作区中并列显示。
 const ZHENQI_ACTION_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(104.0, 42.0)
 
+## 牌堆位次询问的选择类型标识；与 MatchController.CARD_POSITION_CHOICE_TYPE 逐字一致。
+## 该类型同时具备「手牌维度」与「文字选项维度」，因此由内联控制询问入口接管，而不是打开独立窗口。
+const CARD_POSITION_CHOICE_TYPE: String = "card_position"
+
+## 组合选择上下文键：声明哪一个文字选项在界面语义上等同于「取消」。
+## 与 MatchController.CONTEXT_KEY_CONTROL_CANCEL_OPTION_ID 逐字一致；界面因此不需要认识任何具体选项 ID。
+const CONTEXT_KEY_CONTROL_CANCEL_OPTION_ID: String = "control_cancel_option_id"
+
 ## 技能发动名称的字体尺寸；默认28像素使短技能名能在武将牌插画中心清晰辨认，运行时无需动态修改。
 const SKILL_ACTIVATION_FONT_SIZE: int = 28
 
@@ -618,7 +626,6 @@ func _ready() -> void:
 	card_selection_panel.choice_submitted.connect(_on_card_choice_submitted)
 	card_selection_panel.choice_cancelled.connect(_on_card_choice_cancelled)
 	card_selection_panel.arrangement_submitted.connect(_on_pile_arrangement_submitted)
-	card_selection_panel.position_submitted.connect(_on_card_position_submitted)
 	card_selection_panel.information_requested.connect(_on_information_requested.bind(card_selection_panel))
 	card_selection_panel.information_dismissed.connect(_on_information_dismissed.bind(card_selection_panel))
 	use_button.pressed.connect(_on_use_pressed)
@@ -3167,7 +3174,9 @@ func _on_cancel_pressed() -> void:
 			_submit_inline_control_choice("lose_hp")
 			return
 		if _is_inline_control_choice(_inline_card_choice):
-			if not _inline_control_secondary_option_id.is_empty():
+			# 第二项此刻确实可提交时才代替取消；未满足目标或手牌维度时，本按键回退为真正的放弃语义。
+			# 这条回退对牌堆位次询问尤其重要：未选牌时「牌堆顶第二张」不可提交，右键与Esc必须仍能取消本次放置。
+			if not _inline_control_secondary_option_id.is_empty() and _is_inline_control_option_submittable(_inline_control_secondary_option_id):
 				_submit_inline_control_choice(_inline_control_secondary_option_id)
 			elif bool(_inline_card_choice.get("allow_cancel", false)):
 				_submit_inline_control_choice("", false)
@@ -3630,24 +3639,6 @@ func _on_pile_arrangement_submitted(request_id: int, ordered_card_uids: Array[in
 		_refresh_card_selection_panel()
 
 
-## 把「一张手牌 + 一个牌堆位次」的确认转换为标准选择动作；两项都会在权威端再次校验。
-## 与排序请求的区别只在语义：这里同时提交一张实体牌和一个位次选项，协议字段完全一致。
-func _on_card_position_submitted(request_id: int, selected_card_uids: Array[int], control_id: String) -> void:
-	# 位次放置动作；手牌 UID 与位次选项同时送达，缺任一项都会被 _submit_card_choice 整条拒绝。
-	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
-	action.payload = {
-		"request_id":request_id,
-		"selected_card_uids":selected_card_uids.duplicate(),
-		"selected_target_ids":[],
-		"selected_control_id":control_id,
-		"confirmed":true,
-	}
-	if match_controller.submit_action(action) and _modal_choice_request_id == request_id:
-		_modal_choice_request_id = -1
-		_modal_card_choice_request.clear()
-		_refresh_card_selection_panel()
-
-
 ## 将“放弃”转换为空 UID 的标准选择动作；能否放弃仍由当前请求数量约束决定。
 func _on_card_choice_cancelled(request_id: int) -> void:
 	# 明确取消响应；confirmed=false 与空卡牌数组共同表达放弃，不会被强制选择的最小数量误推断为确认。
@@ -3855,8 +3846,8 @@ func _is_inline_hand_choice(choice_data: Dictionary) -> bool:
 	# 文字控制项需要显示独立选项按钮，空候选不能误判为可在手牌区完成。
 	# 牌名候选同样没有实体手牌：它的 candidates 为空数组，若不排除，下方循环因“没有任何候选违反条件”
 	# 而直接返回 true，请求会被误判为内联，独立窗口不显示，表现为点击技能后毫无反应。
-	# 牌堆位次询问（card_position）同样必须使用独立窗口：它要在手牌候选之外再显示三个位次按钮，
-	# 且内联路径无法表达“未选牌时位次按钮不可确认”，因此这里必须显式排除。
+	# 牌堆位次询问（card_position）同样不属于「纯手牌选择」：它还要在操作区显示三个位次按钮，
+	# 因此这里保持排除，由 _is_inline_control_choice 接管；它照样会在手牌区里选牌，但按钮来自文字选项维度。
 	if str(choice_data.get("choice_type", "card")) in ["control", "bool", "target_control", "card_name", "card_position"]:
 		return false
 	# 请求选择者 ID；所有候选必须属于该玩家，不能把他人区域牌错误放入本地手牌交互。
@@ -3879,6 +3870,8 @@ func _is_inline_zhenqi_cost_choice(choice_data: Dictionary) -> bool:
 
 
 ## 判断文字互斥选项是否应复用手牌上方操作区；所有技能控制询问统一使用此入口，不再创建额外遮罩窗口。
+## 牌堆位次询问（card_position）也走本入口：它的手牌维度由内联手牌区承担，文字选项维度就是三个位次按钮，
+## 因此与【咬它】等组合询问保持完全相同的交互形态——手牌区选牌、操作区点询问按钮，不再弹出独立窗口。
 func _is_inline_control_choice(choice_data: Dictionary) -> bool:
 	# 当前选择类型；control 与 bool 都由稳定选项数组表达，其他选择仍按牌区或独立窗口规则处理。
 	var choice_type: String = str(choice_data.get("choice_type", "card"))
@@ -3886,7 +3879,7 @@ func _is_inline_control_choice(choice_data: Dictionary) -> bool:
 	var display_candidates: Array = ((choice_data.get("context", {}) as Dictionary).get("display_candidates", []) as Array)
 	# 牌名候选需要以牌面形式呈现，同样必须使用独立窗口而不是手牌上方操作区。
 	var card_name_candidates: Array = ((choice_data.get("context", {}) as Dictionary).get("card_name_candidates", []) as Array)
-	return choice_type in ["control", "bool", "target_control"] and display_candidates.is_empty() and card_name_candidates.is_empty()
+	return choice_type in ["control", "bool", "target_control", CARD_POSITION_CHOICE_TYPE] and display_candidates.is_empty() and card_name_candidates.is_empty()
 
 
 ## 返回当前内联请求允许选择的实体 UID；空请求返回空数组，使全部手牌与装备保持不可选并仅允许取消。
@@ -4935,8 +4928,8 @@ func _refresh_inline_control_choice_text() -> void:
 		control_options.append({"id":option_id, "label":str(option.get("label", option_id))})
 	# 当前是否允许放弃；取消必须提交 confirmed=false，不能伪造成任一实际技能分支。
 	var allow_cancel: bool = bool(_inline_card_choice.get("allow_cancel", false))
-	# 当前目标维度是否满足；普通控制请求始终为true，复合请求必须先选择规定数量的武将。
-	var target_selection_ready: bool = _is_inline_target_control_selection_ready()
+	# 规则声明的取消选项ID；非空时该选项本身就是放弃入口，界面不再追加重复的取消按钮。
+	var declared_cancel_option_id: String = _get_inline_control_cancel_option_id()
 	selection_label.text = ""
 	selection_label.visible = false
 	interaction_guide_label.text = str(_inline_card_choice.get("prompt", "请选择一项"))
@@ -4945,10 +4938,11 @@ func _refresh_inline_control_choice_text() -> void:
 	# 原确定按钮；始终承担第一项文字选项，保持所有常见二选一询问的固定视觉位置。
 	use_button.visible = not control_options.is_empty()
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	use_button.disabled = control_options.is_empty() or not target_selection_ready
+	use_button.disabled = true
 	if not control_options.is_empty():
 		_inline_control_primary_option_id = str((control_options[0] as Dictionary).get("id", ""))
 		use_button.text = str((control_options[0] as Dictionary).get("label", _inline_control_primary_option_id))
+		use_button.disabled = not _is_inline_control_option_submittable(_inline_control_primary_option_id)
 	# 原取消按钮；存在第二项时承担第二项，否则保留为真正取消入口。
 	var cancel_button: Button = %CancelButton
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
@@ -4956,7 +4950,7 @@ func _refresh_inline_control_choice_text() -> void:
 		_inline_control_secondary_option_id = str((control_options[1] as Dictionary).get("id", ""))
 		cancel_button.visible = true
 		cancel_button.text = str((control_options[1] as Dictionary).get("label", _inline_control_secondary_option_id))
-		cancel_button.disabled = _inline_control_secondary_option_id.is_empty() or not target_selection_ready
+		cancel_button.disabled = _inline_control_secondary_option_id.is_empty() or not _is_inline_control_option_submittable(_inline_control_secondary_option_id)
 	elif allow_cancel:
 		cancel_button.visible = true
 		cancel_button.text = "取消"
@@ -4967,14 +4961,45 @@ func _refresh_inline_control_choice_text() -> void:
 	for option_index: int in range(2, control_options.size()):
 		var extra_option: Dictionary = control_options[option_index] as Dictionary
 		_append_inline_control_option_button(str(extra_option.get("id", "")), str(extra_option.get("label", "")))
-		# 新建的实际选项按钮；复合请求未选满目标时保持禁用，真正取消按钮不受该条件影响。
+		# 新建的实际选项按钮；声明为取消的选项始终可点，其余选项必须同时满足目标与手牌维度。
 		var extra_option_button: Button = _inline_control_extra_option_buttons.back() if not _inline_control_extra_option_buttons.is_empty() else null
 		if extra_option_button != null:
-			extra_option_button.disabled = not target_selection_ready
+			extra_option_button.disabled = not _is_inline_control_option_submittable(str(extra_option.get("id", "")))
 	# 两项及以上选项且允许放弃时，额外追加真正取消按钮，避免原第二位置既承担选项又丢失放弃语义。
-	if allow_cancel and control_options.size() >= 2:
+	# 例外：请求已经声明了取消选项时，那个选项就是放弃入口，再追加一个“取消”会让玩家看到两个功能相同的按钮。
+	if allow_cancel and control_options.size() >= 2 and declared_cancel_option_id.is_empty():
 		_append_inline_control_cancel_button()
 	_refresh_component_states()
+
+
+## 判断文字选项询问的手牌维度是否已经满足；未声明手牌数量范围的控制请求直接返回true。
+## 牌堆位次询问通过 min_card_select/max_card_select 声明「恰好一张手牌」，因此两位次按钮在未选牌时保持禁用。
+func _is_inline_control_card_selection_ready() -> bool:
+	# 手牌维度最少数量；0表示本请求没有手牌要求，例如所有普通控制询问。
+	var minimum_card_count: int = int(_inline_card_choice.get("min_card_select", 0))
+	# 手牌维度最多数量；缺失时回退为下限，保证“无要求”时上下限同为0。
+	var maximum_card_count: int = int(_inline_card_choice.get("max_card_select", minimum_card_count))
+	if minimum_card_count <= 0 and maximum_card_count <= 0:
+		return true
+	# 当前已选手牌数量；只读界面临时数组，不修改权威请求。
+	var selected_card_count: int = _inline_selected_card_uids.size()
+	return selected_card_count >= minimum_card_count and selected_card_count <= maximum_card_count
+
+
+## 返回当前控制请求声明的「取消」选项 ID；未声明时返回空字符串。
+## 界面因此不需要认识任何具体选项 ID，只按规则层声明的语义把该选项当作放弃入口。
+func _get_inline_control_cancel_option_id() -> String:
+	return str((_inline_card_choice.get("context", {}) as Dictionary).get(CONTEXT_KEY_CONTROL_CANCEL_OPTION_ID, ""))
+
+
+## 判断当前控制请求的某个文字选项此刻是否可以提交。
+## 声明为取消的选项永远可以提交（放弃不应被选择数量阻塞），其余选项必须同时满足目标与手牌维度。
+func _is_inline_control_option_submittable(option_id: String) -> bool:
+	if option_id.is_empty():
+		return false
+	if option_id == _get_inline_control_cancel_option_id():
+		return true
+	return _is_inline_target_control_selection_ready() and _is_inline_control_card_selection_ready()
 
 
 ## 判断当前文字选项请求的目标维度是否已经满足；非target_control请求没有目标要求并直接返回true。
@@ -5028,9 +5053,14 @@ func _clear_inline_control_extra_option_buttons() -> void:
 
 
 ## 提交动态追加的文字选项；提交前仍确认当前请求属于通用内联控制询问，防止旧按钮迟到触发新请求。
+## 规则声明为「取消」的选项走放弃语义（confirmed=false），其余选项都是实际技能分支。
 func _on_inline_control_extra_option_pressed(option_id: String) -> void:
-	if _is_inline_control_choice(_inline_card_choice):
-		_submit_inline_control_choice(option_id)
+	if not _is_inline_control_choice(_inline_card_choice):
+		return
+	if not option_id.is_empty() and option_id == _get_inline_control_cancel_option_id():
+		_submit_inline_control_choice(option_id, false)
+		return
+	_submit_inline_control_choice(option_id)
 
 
 ## 提交通用内联文字询问的明确放弃；与右键和Esc保持完全相同的confirmed=false语义。
@@ -5052,7 +5082,13 @@ func _submit_inline_control_choice(control_id: String, confirmed: bool = true) -
 	if confirmed and str(_inline_card_choice.get("choice_type", "")) == "target_control":
 		for selected_target_id: int in _selected_target_ids:
 			selected_target_ids.append(selected_target_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":selected_target_ids, "selected_control_id":control_id, "confirmed":confirmed}
+	# 组合请求的手牌维度；只有牌堆位次询问同时提交一张手牌与一个文字选项，取消时两者都必须为空。
+	# 强类型手牌结果；与目标维度同理，先构造再写入载荷，避免弱类型数组触发校验失败。
+	var selected_card_uids: Array[int] = []
+	if confirmed and str(_inline_card_choice.get("choice_type", "")) == CARD_POSITION_CHOICE_TYPE:
+		for selected_card_uid: int in _inline_selected_card_uids:
+			selected_card_uids.append(selected_card_uid)
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids, "selected_target_ids":selected_target_ids, "selected_control_id":control_id, "confirmed":confirmed}
 	if not match_controller.submit_action(action):
 		return
 	if int(_inline_card_choice.get("request_id", -2)) == request_id:

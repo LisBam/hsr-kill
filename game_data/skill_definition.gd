@@ -889,7 +889,8 @@ func request_pile_arrangement(title: String, prompt: String, candidates: Array[D
 
 
 ## 为技能持有者创建「先选一张手牌、再选牌堆顶第一张或第二张」的组合请求；返回本轮的同步结果（延迟路径为空数组）。
-## 选择类型为 "card_position"，界面因此渲染「牌堆顶第一张 / 牌堆顶第二张 / 取消」三个按钮，且未恰好选中一张手牌时前两项不可用。
+## 选择类型为 "card_position"，界面因此按【咬它】那类组合询问的内联形态渲染：手牌候选在手牌区点亮，
+## 「牌堆顶第一张 / 牌堆顶第二张 / 取消」三个选项渲染为操作行按钮，且未恰好选中一张手牌时前两项不可用。
 ## 响应通过 continue_selection() 恢复：response.card_ids 恰有一张手牌，response.control_id 为位次选项或取消。
 ## 与控制器自用端口 MatchController.request_hand_card_pile_position() 的分工：
 ## 该端口返回结算后的字典，只在"当次调用内就能拿到结果"的同步场景可用；
