@@ -214,7 +214,7 @@
 
 | Hash | Message |
 |------|---------|
-| (pending) | 见本批次回复中的 Git 提交描述 |
+| `14e110c` | 新增回合操控机制、局域网代理提交协议与专项回归测试 |
 
 ### Testing
 
@@ -229,4 +229,64 @@
 
 ### Status
 
-[OK] **In Progress**（实现与验证完成；待提交与归档）
+[OK] **Completed**（已提交并归档至 `.trellis/tasks/archive/2026-10/10-02-turn-control-mechanism/`）
+
+
+## Session 7: 新增专属锦囊牌与不可知置牌机制
+<!-- trellis-session: v=2 fp=kafuka-exclusive-card-private-placement -->
+
+**Date**: 2026-10-03
+**Task**: `.trellis/tasks/10-02-exclusive-card-and-private-placement/`（父任务 `10-02-kafuka-new-mechanics` 的子任务）
+**Branch**: `master`
+
+### Summary
+
+交付卡芙卡需求的另两个机制底座（**不含任何卡牌、技能或武将**）：①**专属锦囊牌**——「正常情况不加入游戏中，只有被其他角色的技能或其他情况触发时才会按要求加入游戏」；②**「其他角色不可知」与牌堆位次置牌**——「只有使用者知道，不出现在对局记录中，其他角色不知道」，含「把一张手牌置于牌堆顶第一张或第二张」的权威端口与三选项交互。
+
+### Main Changes
+
+- 新增 `CardDefinition.is_exclusive()`：只读 `_metadata["exclusive"]` 的纯查询，缺省 `false`，既有 46 张牌行为逐字节不变
+- 新增 `MatchController.create_and_insert_card_into_draw_pile()`：按定义造实体牌并按位次入堆，返回新 UID，五类非法输入零副作用；牌面缺省时用权威随机源并写 `random_history`
+- 新增 `CardMovementService.insert_new_card_into_draw_pile()` 与 `@N` 位次解析（`_parse_draw_pile_position`），默认路径仍是原 `append()`，既有 5 处 `draw_pile` 写入点行为不变
+- 新增 `PlayerState.private_pile_placement` 私有事实字段 + `from_authoritative_dict` 恢复 + 可见性裁剪
+- 新增 `set/get/clear_private_pile_placement()` 唯一写点端口与 `place_hand_card_on_draw_pile_top()` 秘密置牌端口（不写日志、不产生公开表现、清空牌面知识残留）
+- 新增 `card_position` 选择类型、三个稳定选项与 UI 位次询问窗口（恰好三个按钮，未选牌时位次按钮不可用）
+- 新增 `_build_card_choice_actions()` 的 `card_position` 分支（合法动作数 = 候选牌数 × 2 + 1）
+- 新增图鉴与牌面的专属牌标识，并在内容规范中补专属牌例外
+- 新增 `tests/exclusive_card_and_private_placement_test`（7 个阶段标记，覆盖 AC1–AC17）
+- 同步内容制作指南、游戏机制与玩法内容、卡牌系统、界面与交互、AI 模块、README
+
+### Key Decisions
+
+- **可见性条件收紧为 `reveal_private and viewer_id == player_id`**：只用 `reveal_private` 会让每个 AI 读到别人的置牌事实（AI 快照是 `to_dict(该AI, true)`）；只用 `viewer_id == player_id` 会把事实写进回放（本地广播快照 `to_dict(本机真人, false)` 被整体录制）。两个条件缺一不可。
+- **不新增 `type` 取值表达专属**：核心多处按 `type == "trick"` 分支，新增 `type` 会让专属牌整体漏掉；改用可选元数据键，零分支改动。
+- **不新增第二套选择框架**：位次询问复用 `ChoiceRequest`，取消角色由请求上下文键 `control_cancel_option_id` 声明，界面不硬编码选项 ID。
+- **不回用 `_move_card_with_timings()`**：避免把「手牌离区 + reason」派发给所有技能而泄露秘密放置。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a0b68f1` | 新增专属锦囊牌机制与不可知置牌机制（23 项，含端口、交互、图鉴标识、专项测试与六份文档同步） |
+
+### Testing
+
+- [OK] `EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+panel_usability`
+- [OK] `SMOKE_PASS` / `GAMEPLAY_REGRESSION_PASS wuxie=1 aoe=1 dying=1 taoyuan=2 zhuque=1 yinyue=1 zhangba=2 judge=2`
+- [OK] `EVENT_RUNTIME_PASS` / `SKILL_SETTLEMENT_RUNTIME_PASS faults=1` / `PHASE_PROGRESSION_PASS` / `TURN_CONTROL_PASS`
+- [OK] `LAN_TURN_CONTROL_PASS` / `LAN_NETWORK_PASS` / `LAN_MATCH_FLOW_PASS` / `MATCH_REPLAY_PASS`
+- [OK] `CARD_ACTION_SEMANTICS_PASS` / `INLINE_HAND_CHOICE_PASS` / `ZONE_ABOLITION_PASS` / `DAHEITA_MECHANICS_PASS`
+- [OK] `UI_LAYOUT_PASS viewport=(1152.0, 648.0)` / `FONT_COLOR_AUDIT_PASS` / `CORNER_BADGE_PASS` / `CARD_BACK_OVERLAY_PASS` / `VIRTUAL_CARD_COLOR_PASS` / `MAIN_MENU_PASS`
+- [OK] `AI_POLICY_PASS cards=46` / `ZHUYAN_ZHILI_PASS` / `NEW_CHARACTER_MECHANICS_PASS` / `PERFORMANCE_AND_PACING_PASS` / `GAME_SETTINGS_PERSISTENCE_PASS`
+- [OK] `GameDatabase.validation_errors` 为空；脚本零 WARNING
+
+### Status
+
+[OK] **Completed**（已提交并归档至 `.trellis/tasks/archive/2026-10/10-02-exclusive-card-and-private-placement/`）
+
+### Next Steps
+
+- 剩余内容子任务（尚未创建）：卡牌【言灵】（梅花K 延时锦囊·专属）、武将卡芙卡、技能【言灵】与【游丝】及其配套 AI
+- 技能【言灵】开场布三张牌 = 调用 `create_and_insert_card_into_draw_pile("yanling", "", 0, 1)` 三次；技能【游丝】直接调用 `request_hand_card_pile_position()` 与 `place_hand_card_on_draw_pile_top()`
+- 后续 AI 必须按 `项目专属AGENTS.md` 2.3 扩展**通用**决策逻辑并写明扩展范围，不能只写需求提示里的那一条分支
+
