@@ -197,20 +197,19 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 ## 评估目标角色因拥有“出牌阶段限一次”或“轮回技”技能而配得上优先获得军功的程度。
 ## 轮回技只读技能源码声明的标签，“出牌阶段限一次”按正文声明识别，与【奇袭】的规则层判定完全同源。
 func _score_snapshot_merit_trigger_skills(target_snapshot: Dictionary) -> float:
-	# 永久失去技能的角色不再拥有任何技能；武将未亮明时仍可读取公开的运行时技能记录。
-	if bool(target_snapshot.get("skills_permanently_removed", false)):
-		return 0.0
+	# 已被永久失去的技能不再计入军功估值；名单之外的技能（含武将未亮明时仍可读取的运行时技能记录）照常参与。
+	var permanently_removed_skill_ids: Array = target_snapshot.get("permanently_removed_skill_ids", []) as Array
 	# 目标全部技能ID；顺序与基础AI其他估值入口一致：固有、模式、临时、局内获得，并按稳定ID去重。
 	var skill_ids: Array[String] = []
 	for skill_id_variant: Variant in (GameDatabase.get_character(str(target_snapshot.get("character_id", ""))).get("skills", []) as Array):
 		# 当前固有技能ID；空值与重复项不进入统计。
 		var native_skill_id: String = str(skill_id_variant)
-		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
+		if not native_skill_id.is_empty() and not permanently_removed_skill_ids.has(native_skill_id) and not skill_ids.has(native_skill_id):
 			skill_ids.append(native_skill_id)
 	for mode_skill_id_variant: Variant in target_snapshot.get("mode_skill_ids", []) as Array:
 		# 当前模式技能ID；飞扬、跋扈等模式技能同样可能声明两类标签。
 		var mode_skill_id: String = str(mode_skill_id_variant)
-		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
+		if not mode_skill_id.is_empty() and not permanently_removed_skill_ids.has(mode_skill_id) and not skill_ids.has(mode_skill_id):
 			skill_ids.append(mode_skill_id)
 	for runtime_skill_map_variant: Variant in [target_snapshot.get("temporary_skills", {}), target_snapshot.get("acquired_skills", {})]:
 		# 当前运行时技能映射；键为稳定技能ID，值只保存来源与次数状态。

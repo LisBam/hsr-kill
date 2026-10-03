@@ -146,8 +146,14 @@ var acquired_skills: Dictionary = {}
 ## 当前所有轮回技的公开权威状态；键为技能ID，值保存轮回数、轮回节、永劫与通用限次，默认空字典由技能安装时建立。
 var reincarnation_skills: Dictionary = {}
 
-## 当前角色是否已在本局永久失去全部技能；true时所有装配路径都不再为其安装技能且不可恢复。
-## 由【留白】等效果写入；必须进入存档与公开快照，否则读档、换将或局内获得会让已失去的技能复活。
+## 本局已永久失去的技能稳定ID名单；由【留白】等效果把“清算那一刻确实拥有的技能”逐个记入。
+## 名单内的技能不会被任何装配路径重新安装（含读档、换将、复原武将牌与局内获得），名单外的技能完全不受影响：
+## 因此“失去全部技能”只是一次性清算，之后通过机缘卡等来源新获得的技能照常安装与发动。
+var permanently_removed_skill_ids: Array[String] = []
+
+## 旧存档兼容标记：旧版本只有一个布尔字段，只能表达“曾经永久失去全部技能”，无法表达具体是哪些技能。
+## 读档时若只见到该字段为 true，则保留为 true，由装配路径在首次安装前把该角色此刻本应拥有的技能补记进名单（见 _install_all_character_skills）。
+## 新存档同时保存两个字段，旧版本据此继续按“全部失去”降级处理；规则判定一律以 permanently_removed_skill_ids 为准。
 var skills_permanently_removed: bool = false
 
 ## 角色通过【解构】记录的牌名稳定ID列表；按记录先后排列、自动去重、跨回合保留。
@@ -363,6 +369,9 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 		player.wooden_ox_storage.append(CardInstance.from_dict(card_data_variant as Dictionary))
 	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
 	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
+	# 永久失去技能的名单；缺键按空名单恢复，使旧版本存档与不含该字段的公开快照都不会凭空失去技能。
+	for permanently_removed_skill_id_variant: Variant in data.get("permanently_removed_skill_ids", []) as Array:
+		player.mark_skill_permanently_removed(str(permanently_removed_skill_id_variant))
 	player.skills_permanently_removed = bool(data.get("skills_permanently_removed", false))
 	# 记录的牌名稳定ID列表；保持存档顺序，读档后【灵感】与【看破】的候选集合必须与存档前一致。
 	for recorded_card_name_variant: Variant in data.get("recorded_card_names", []) as Array:
@@ -407,6 +416,22 @@ func get_armor() -> CardInstance:
 ## 返回手牌上限。基础规则等于当前体力值，再叠加局内永久加成，最终最低为0。
 func get_hand_limit() -> int:
 	return maxi(hp + hand_limit_bonus + mode_hand_limit_bonus, 0)
+
+
+## 把一项技能永久记入失去名单；重复记入保持幂等并返回false，便于调用方统计本次新增数量。
+## 名单是唯一判定依据，因此“失去全部技能”与旧存档迁移都必须经本方法写入，禁止各调用点自行拼接名单。
+func mark_skill_permanently_removed(skill_id: String) -> bool:
+	if skill_id.is_empty() or permanently_removed_skill_ids.has(skill_id):
+		return false
+	permanently_removed_skill_ids.append(skill_id)
+	return true
+
+
+## 查询一项技能是否已被永久失去；空ID一律返回false，避免调用方因缺省值把整条装配路径误判为已失去。
+func has_permanently_removed_skill(skill_id: String) -> bool:
+	if skill_id.is_empty():
+		return false
+	return permanently_removed_skill_ids.has(skill_id)
 
 
 ## 按实体牌 UID 查找手牌；未找到时返回 null。
@@ -570,7 +595,9 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
 		"reincarnation_skills": reincarnation_skills.duplicate(true),
-		# 永久失去技能是不可逆的公开事实；界面与远端据此把该角色的技能栏画为空，读档也据此跳过装配。
+		# 永久失去技能是不可逆的公开事实；界面与远端据此在技能栏里逐个划掉名单内的技能，读档也据此跳过装配。
+		"permanently_removed_skill_ids": permanently_removed_skill_ids.duplicate(),
+		# 旧版本只认识这个布尔字段；按“本局是否发生过永久清算”写入，使旧版本仍能按“全部失去”降级处理。
 		"skills_permanently_removed": skills_permanently_removed,
 		# 记录牌名是公开信息；界面、对手AI与局域网观察者读取同一份稳定ID列表，展示名另由名称模式解析。
 		"recorded_card_names": recorded_card_names.duplicate(),

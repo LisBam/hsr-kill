@@ -498,7 +498,8 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("character_corner_text", ""),
 		snapshot.get("character_corner_text_entries", {}),
 		snapshot.get("recorded_card_names", []),
-		snapshot.get("skills_permanently_removed", false),
+		# 永久失去技能名单；它是技能栏与悬停信息逐项裁剪的唯一依据，因此必须参与画面变更检测。
+		snapshot.get("permanently_removed_skill_ids", []),
 		snapshot.get("public_marks", {}),
 		snapshot.get("auto_managed", false),
 		snapshot.get("auto_managed_offline", false),
@@ -661,14 +662,18 @@ func _request_character_information() -> void:
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
 	# 当前武将全部可见技能ID；固有技能 → 模式技能 → 运行时临时技能，均不重复。
-	# 永久失去全部技能的角色不再展示任何技能条目：控制器已卸载全部实例并清空获得与临时技能记录，
-	# 界面若继续读武将静态定义，已失去的技能仍会出现在悬停信息与右键详情中。
-	var skills_permanently_removed: bool = bool(_player_snapshot.get("skills_permanently_removed", false))
-	var visible_skill_ids: Array = [] if skills_permanently_removed else (_character_definition.get("skills", []) as Array).duplicate()
+	# 已被永久失去的技能逐个从列表中剔除：控制器不会再装配它们，界面若继续读武将静态定义，
+	# 已失去的技能仍会出现在悬停信息与右键详情中；而之后新获得且不在名单内的技能必须照常展示。
+	var permanently_removed_skill_ids: Array = _player_snapshot.get("permanently_removed_skill_ids", []) as Array
+	var visible_skill_ids: Array = []
+	for native_skill_id_variant: Variant in (_character_definition.get("skills", []) as Array):
+		var native_skill_id: String = str(native_skill_id_variant)
+		if not permanently_removed_skill_ids.has(native_skill_id):
+			visible_skill_ids.append(native_skill_id)
 	for mode_skill_id_variant: Variant in (_player_snapshot.get("mode_skill_ids", []) as Array):
 		var mode_skill_id: String = str(mode_skill_id_variant)
-		# 永久失去技能同样覆盖模式技能：它们不再被装配，界面也不应继续列出。
-		if skills_permanently_removed:
+		# 永久失去名单同样覆盖模式技能：它们不再被装配，界面也不应继续列出。
+		if permanently_removed_skill_ids.has(mode_skill_id):
 			continue
 		if not mode_skill_id.is_empty() and not visible_skill_ids.has(mode_skill_id):
 			visible_skill_ids.append(mode_skill_id)
@@ -861,11 +866,10 @@ func _refresh_corner_entries() -> void:
 	if not is_node_ready():
 		return
 	# 角标条目字典；旧存档可能没有该字段，取空字典后角标区保持为空。
+	# 这里不再按“是否永久失去技能”整体清空：角标并不携带技能归属，主演、凶星等效果声明的条目与技能无关，
+	# 一刀切会把它们一起抹掉。技能声明的条目由各技能在卸载时自行移除，技能产生的记录也随清算一并清空，
+	# 因此“失去技能后角标仍在”的残留由规则层消除，界面只负责按公开数据渲染。
 	var entries: Dictionary = _player_snapshot.get("character_corner_text_entries", {}) as Dictionary
-	# 技能被永久移除时不显示任何由技能声明的条目，与技能清单的裁剪规则保持一致；
-	# 否则玩家会看到一个属于“已经不存在”的技能留下的按钮。
-	if bool(_player_snapshot.get("skills_permanently_removed", false)):
-		entries = {}
 	# 排序键；以“排序值 + 来源ID”组成稳定复合键，避免在比较器里反复读取条目字典。
 	var sort_keys: Array = []
 	for entry_key: Variant in entries.keys():
