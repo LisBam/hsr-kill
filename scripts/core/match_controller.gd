@@ -15480,6 +15480,13 @@ func resume_conquest_match(save_data: Dictionary) -> bool:
 	state.match_options = saved_options
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, true, false)
+	# 阿哈时刻组件与请机会组件同等对待，必须在恢复流程里重配一次：
+	# 上方 _teardown_previous_match_runtime() 会调用本组件的 shutdown()，把 _enabled 置为 false 并解绑旧对局状态；
+	# 若恢复路径不重新 configure，本局剩余全程都会卡在 _can_trigger_now() 的 _enabled 门禁上，
+	# 表现为“场上明明有欢愉技却整轮都不触发阿哈时刻”。
+	# 参数与普通开局保持一致（enabled 固定 true，代表该组件对所有模式生效）。
+	if ahha_moment_system != null:
+		ahha_moment_system.configure(self, state, _rng, true)
 	_rebuild_match_rule_services_and_root_event()
 	character_selection = CharacterSelectionService.new()
 	wheel_duel_selection = null

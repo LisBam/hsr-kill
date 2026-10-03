@@ -208,6 +208,10 @@ func _test_exit_and_resume_flow() -> bool:
 		return _fail("resume_play_phase turn=%d/%d phase=%s player=%d" % [_controller.state.turn_number, expected_turn_number, _controller.state.current_phase, _controller.state.current_player_id])
 	if not _controller._has_active_play_choice():
 		return _fail("resume_play_choice_missing")
+	# 阿哈时刻组件：拆解旧对局运行时会调用它的 shutdown()（把 _enabled 置为 false 并解绑旧状态），
+	# 恢复流程必须像请机会组件一样重新 configure 一次，否则本局剩余全程都不会触发阿哈时刻。
+	if not _controller.ahha_moment_system._enabled or _controller.ahha_moment_system._state != _controller.state:
+		return _fail("resume_ahha_moment enabled=%s" % str(_controller.ahha_moment_system._enabled))
 	# 恢复后的双方角色；武将、体力、护盾与机缘历史必须与存档一致。
 	var resumed_player: PlayerState = _controller.state.get_player(0)
 	var resumed_enemy: PlayerState = _controller.state.get_player(1)
