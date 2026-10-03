@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "质量门：测试场景与 PASS 判据"}
+{"file": ".trellis/spec/project/collaboration-rules.md", "reason": "协作规则：注释/文档/交付规范"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "复核核心层是否出现特例分支或牌名白名单"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复核是否复用既有端口而非新增重复实现"}

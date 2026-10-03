@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "核心层单一权威与单向依赖：本次改动涉及 match_controller 与 card_rule_service"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "时机派发：借刀杀人所用之杀的动作类别决定 useCard/respond 时机"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "技能文件规范：泛音/自摸/支离的 AI 钩子与选择请求写法"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "内容层 AI 评分口径与 ai_choice_skill_scored 转义入口"}
+{"file": ".trellis/spec/content/card-authoring.md", "reason": "卡牌源码规范：借刀杀人响应动作声明"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "界面层：内联询问按钮态的唯一维护者"}
+{"file": ".trellis/spec/adapters/ai-pipeline.md", "reason": "AI 决策流水线：通用层+技能层+卡牌层的叠加关系"}
+{"file": ".trellis/spec/project/verification.md", "reason": "验证与测试门禁"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层思考：判定顺序/目标枚举的权威点定位"}
