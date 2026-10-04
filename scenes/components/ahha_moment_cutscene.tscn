@@ -23,6 +23,7 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("1_cutscene")
 fade_out_seconds = 0.15
+pause_gameplay_while_playing = true
 
 [node name="Video" type="VideoStreamPlayer" parent="." unique_id=1094797455]
 material = SubResource("ShaderMaterial_chroma_key")
