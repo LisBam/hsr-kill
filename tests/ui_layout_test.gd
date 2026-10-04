@@ -1215,6 +1215,20 @@ func _run() -> void:
 	if (main_instance.get("_card_views") as Dictionary).get(90003).get_instance_id() != gained_card_instance_id:
 		_fail("local_gain_entity_recreated")
 		return
+	# 明暗镜像：飞行期间正式节点被重配为可用（明亮）后，同一张牌的飞行牌面必须同步明亮。
+	# 若不镜像，飞行牌面会一直保持禁用压暗，落地后正式亮牌显露，玩家就会看到一次亮度跳变。
+	var gain_definition: Dictionary = main_instance.call("_get_cached_card_definition", "tao") as Dictionary
+	var gain_flight_dim_before_mirror: bool = gain_flight_card.is_content_dimmed()
+	gained_hand_card.configure(gained_card_data, gain_definition, false, true)
+	main_instance.call("_sync_local_hand_gain_flight_appearance", 90003, gained_hand_card)
+	# 镜像结果；两张牌面的插画调制色必须一致，且飞行牌面仍保持不可点击。
+	var gain_mirror_ok: bool = gain_flight_dim_before_mirror and not gain_flight_card.is_content_dimmed() and (gain_flight_card.get("_artwork_rect") as Control).modulate.is_equal_approx((gained_hand_card.get("_artwork_rect") as Control).modulate) and not gain_flight_card.is_interactable
+	# 还原测试态；后续悬停与信息框断言依赖这张牌仍处于不可用状态，镜像断言不得留下副作用。
+	gained_hand_card.configure(gained_card_data, gain_definition, false, false)
+	main_instance.call("_sync_local_hand_gain_flight_appearance", 90003, gained_hand_card)
+	if not gain_mirror_ok:
+		_fail("local_gain_appearance_mirror before=%s flight_dim=%s hand_dim=%s flight_interactable=%s" % [gain_flight_dim_before_mirror, gain_flight_card.is_content_dimmed(), gained_hand_card.is_content_dimmed(), gain_flight_card.is_interactable])
+		return
 	# 飞行落地帧；飞行牌面必须精确停在正式手牌节点的最终槽位中心，随后正式节点在同一位置现身，不再有第二段滑动。
 	await get_tree().create_timer(0.2).timeout
 	# 正式手牌节点落地位置；起点保持偏移已归零，因此这个位置就是它的稳定槽位。
@@ -1229,6 +1243,10 @@ func _run() -> void:
 	var gain_landed_center: Vector2 = gain_flight_card.global_position + gain_flight_card.get_card_size() * 0.5
 	if not is_instance_valid(gain_flight_card) or not gain_landed_center.is_equal_approx(gained_slot_center):
 		_fail("local_gain_flight_target:%s expected=%s" % [gain_landed_center, gained_slot_center])
+		return
+	# 落地交接：飞行牌面必须已经隐去，画面里只剩正式手牌节点，避免两张牌重叠产生亮度与描边差异。
+	if gain_flight_card.visible:
+		_fail("local_gain_flight_visible_after_landing")
 		return
 	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.01
@@ -1465,6 +1483,13 @@ func _run() -> void:
 	if continuity_batch_first_slot.is_equal_approx(continuity_batch_second_slot) or continuity_batch_landed.size() != 2 or continuity_batch_matched != 2:
 		_fail("batch_draw_flight_targets:%s expected=%s/%s" % [continuity_batch_landed, continuity_batch_first_slot, continuity_batch_second_slot])
 		return
+	# 落地交接：批次飞行牌面必须全部隐去，画面里只剩各自的正式手牌节点，避免重叠产生亮度差异或挡住点击。
+	for continuity_hidden_variant: Variant in animation_layer._transfer_cards.values():
+		# 当前批次飞行牌面；落地后仍可见说明交接没有完成。
+		var continuity_hidden_card: CardView = continuity_hidden_variant as CardView
+		if continuity_hidden_card != null and continuity_hidden_card.visible:
+			_fail("batch_draw_flight_hidden:%s" % [continuity_hidden_card])
+			return
 	animation_layer.draw_flight_duration = 0.01
 	animation_layer.draw_hold_duration = 0.01
 	# 批次落地与落位完成后的状态；门闸、待起飞批次与飞行牌都必须清空，两张正式节点稳定在自己的槽位。

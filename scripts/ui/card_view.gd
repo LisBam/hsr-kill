@@ -329,6 +329,25 @@ func configure_back(entity_uid: int, interactable: bool) -> void:
 	_refresh_visual_state()
 
 
+## 返回当前牌面内容是否正按“禁用”外观压暗；只描述观感，与交互权限无关。
+##
+## 表现牌面（例如飞向手牌的获得牌）需要在落地前就与它将要变成的正式手牌外观一致，
+## 因此需要一个只读入口让调用方取到正式节点当前的明暗状态，而不是自行推断阶段与候选。
+func is_content_dimmed() -> bool:
+	return not is_interactable and _dim_when_disabled
+
+
+## 只切换牌面内容的禁用压暗外观，不改变交互权限、UID、输入区域与牌面数据。
+##
+## 与 configure 的 dim_when_disabled 参数分开的原因：表现牌面必须保持不可点击（否则飞行中的牌会被玩家点到），
+## 但仍要显示与正式手牌相同的明暗；把“观感”和“输入权限”拆成两条路径才能同时满足。
+func set_content_dimmed(dimmed: bool) -> void:
+	if _dim_when_disabled == dimmed:
+		return
+	_dim_when_disabled = dimmed
+	_refresh_visual_state()
+
+
 ## 按当前活动 UI 风格重绘卡牌纸张、类别条与状态边框；实体 UID、选中状态和输入权限保持不变。
 func refresh_ui_style() -> void:
 	if not _card_definition.is_empty():
