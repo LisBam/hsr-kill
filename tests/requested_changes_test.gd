@@ -83,6 +83,12 @@ func _run() -> void:
 		return
 	if not await _test_borrow_sword_dodged_weapon_kept():
 		return
+	if not await _test_borrow_sword_amber_blocks_black_slash():
+		return
+	if not await _test_borrow_sword_amber_allows_red_slash():
+		return
+	if not _test_borrow_sword_declaration_incoming_restriction():
+		return
 	if not await _test_phase_use_begin_prompt():
 		return
 	if not await _test_phase_use_begin_skip():
@@ -712,6 +718,162 @@ func _test_borrow_sword_weapon_transfer() -> bool:
 	return true
 
 
+## 验证【借刀杀人】要求持刀者使用的【杀】同样受“不可指定目标”类来牌限制约束（本次修复的核心缺陷）。
+## 覆盖点一：声明期只有无色的抽象【杀】，【琥珀】必然通过，因此声明组合 [1, 2] 必须合法；
+## 覆盖点二：持刀者交出实体黑色【杀】之后，确认阶段的真实牌复核必须拒绝该目标——
+## 不造成伤害、不消耗酒加值，并按无名杀语义把武器交给借刀杀人使用者，同时写出可诊断的拒绝原因。
+## 该用例因此同时锁定“声明与确认之间目标变非法必须被拒”，不允许只在声明期判一次就放行。
+func _test_borrow_sword_amber_blocks_black_slash() -> bool:
+	_scenario = "borrow_sword_amber"
+	_reset_state(3)
+	# 规则服务必须带技能提供者；【琥珀】的来牌限制由控制器聚合，缺少提供者时全部技能钩子会被静默跳过。
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 持刀者武器；攻击范围覆盖三人局中其余两名角色，使唯一能阻止强制【杀】的原因只剩【琥珀】。
+	var weapon: CardInstance = _equip_borrow_sword_weapon(1)
+	# 被【杀】者的【琥珀】；临时安装即可，与武将固有技能走同一条来牌限制查询路径。
+	if _install_skill_on_player(2, "hupo") == null:
+		return _fail("borrow_sword_amber_install")
+	# 持刀者的酒加值；复核失败时这张【杀】并未真正使用，因此加值必须原样保留到下一张真实【杀】。
+	_controller.state.get_player(1).wine_bonus = 1
+	# 持刀者唯一的响应牌是黑色【杀】；不存在“换一张红杀”的规避空间，复核必须直接阻止结算。
+	var slash: CardInstance = _add_hand_card(1, "sha", "spade", 7)
+	_borrow_slash_uid = slash.uid
+	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	# 声明期判据；颜色型限制在声明期只有无色抽象【杀】，组合必须仍然合法，否则本用例覆盖不到确认阶段的复核。
+	if not _controller.card_rules.validate_use(0, borrow_sword, [1, 2]).is_empty():
+		return _fail("borrow_sword_amber_declaration=%s" % [_controller.card_rules.validate_use(0, borrow_sword, [1, 2])])
+	_controller._execute_card_use(0, borrow_sword, [1], [], false, [1, 2])
+	if not await _wait_until_card_finalized(borrow_sword.uid):
+		return _fail("borrow_sword_amber_timeout")
+	# 结算结果；被【杀】者满体力未受伤、武器进入借刀使用者手牌、持刀者装备区已空。
+	var victim: PlayerState = _controller.state.get_player(2)
+	var source: PlayerState = _controller.state.get_player(0)
+	if victim.hp != victim.max_hp or _controller.state.get_player(1).equipment.has("weapon") or not source.hand.has(weapon) or weapon.zone != "hand" or weapon.owner_id != 0:
+		return _fail("borrow_sword_amber hp=%d holder_equipment=%s weapon=%s" % [victim.hp, _controller.state.get_player(1).equipment, weapon.to_dict()])
+	# 酒加值未被消耗；复核发生在酒加值读取之前，被拒绝的【杀】不得让持刀者白白失去本回合的【酒】收益。
+	if _controller.state.get_player(1).wine_bonus != 1:
+		return _fail("borrow_sword_amber_wine=%d" % _controller.state.get_player(1).wine_bonus)
+	# 诊断日志；必须包含【琥珀】给出的原始拒绝原因，玩家与回放才能看出武器为何被交出。
+	if not _captured_logs.any(_log_contains_amber_target_block):
+		return _fail("borrow_sword_amber_logs=%s" % [_captured_logs])
+	return true
+
+
+## 验证红色【杀】不受【琥珀】约束：同一声明组合下强制【杀】照常结算并造成1点伤害，武器保留在持刀者装备区。
+## 与黑色【杀】用例成对，锁定“复核只拒绝真实颜色确实命中的限制”，避免复核过宽把合法强制用牌一并拦下。
+func _test_borrow_sword_amber_allows_red_slash() -> bool:
+	_scenario = "borrow_sword_amber_red"
+	_reset_state(3)
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	# 持刀者武器；红色【杀】用例同样需要持刀者装备武器才能成为借刀第一目标。
+	_equip_borrow_sword_weapon(1)
+	if _install_skill_on_player(2, "hupo") == null:
+		return _fail("borrow_sword_amber_red_install")
+	# 持刀者的红色【杀】；红色不满足【琥珀】的黑色条件，复核必须放行并进入完整【杀】结算。
+	var slash: CardInstance = _add_hand_card(1, "sha", "heart", 7)
+	_borrow_slash_uid = slash.uid
+	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	_controller._execute_card_use(0, borrow_sword, [1], [], false, [1, 2])
+	if not await _wait_until_card_finalized(borrow_sword.uid):
+		return _fail("borrow_sword_amber_red_timeout")
+	# 结算结果；被【杀】者受到1点普通伤害、武器保留在持刀者装备区、该【杀】已被消费。
+	var victim: PlayerState = _controller.state.get_player(2)
+	if victim.hp != victim.max_hp - 1 or _controller.state.get_player(1).get_weapon() == null or _controller.state.get_player(1).find_hand_card(slash.uid) != null:
+		return _fail("borrow_sword_amber_red hp=%d holder_weapon=%s" % [victim.hp, _controller.state.get_player(1).get_weapon()])
+	if _captured_logs.any(_log_contains_amber_target_block):
+		return _fail("borrow_sword_amber_red_logs=%s" % [_captured_logs])
+	return true
+
+
+## 验证与颜色无关的来牌限制在【借刀杀人】声明期即被排除，玩家与 AI 都不可能选中非法组合。
+## 与【琥珀】用例共同覆盖两层：颜色无关的限制在声明期生效（对应无名杀 filterAddedTarget 语义），
+## 颜色相关的限制只能等真实牌到手后由 _apply_borrow_sword_response() 的复核生效。
+## 同时锁定 CardRuleService 权威查询对“非当前行动者”的持刀者仍然返回真实目标，而不是因阶段闸门恒为空。
+func _test_borrow_sword_declaration_incoming_restriction() -> bool:
+	_scenario = "borrow_sword_declaration_restriction"
+	_reset_state(3)
+	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
+	_equip_borrow_sword_weapon(1)
+	# 颜色无关的来牌限制；三号玩家不能成为任何【杀】的目标，与【杀】的颜色无关。
+	if _install_slash_guard_skill(2) == null:
+		return _fail("borrow_sword_declaration_guard_install")
+	var borrow_sword: CardInstance = _add_hand_card(0, "jiedao", "club", 12)
+	# 权威目标资格枚举；持刀者不是当前行动者，被限制的三号玩家必须从合法【杀】目标中消失而零号玩家仍保留。
+	var legal_slash_targets: Array[int] = _controller.card_rules.list_legal_targets_for_definition(1, "sha", {"ignore_phase_limit":true, "ignore_play_count_limit":true})
+	if legal_slash_targets.has(2) or not legal_slash_targets.has(0):
+		return _fail("borrow_sword_declaration_targets=%s" % [legal_slash_targets])
+	# 声明期整牌校验；第二个目标非法的组合必须被直接拒绝。
+	if _controller.card_rules.validate_use(0, borrow_sword, [1, 2]).is_empty():
+		return _fail("borrow_sword_declaration_allowed")
+	# 对照断言；无该限制的零号玩家仍可作为被【杀】者，证明拒绝来自来牌限制而不是整张牌被整体否决。
+	if not _controller.card_rules.validate_use(0, borrow_sword, [1, 0]).is_empty():
+		return _fail("borrow_sword_declaration_control=%s" % [_controller.card_rules.validate_use(0, borrow_sword, [1, 0])])
+	return true
+
+
+## 为指定玩家装备一张测试用【青釭剑】；攻击范围覆盖三人局，使借刀第二目标的唯一变因只剩来牌限制。
+func _equip_borrow_sword_weapon(player_id: int) -> CardInstance:
+	# 测试武器实体；区域与所有者必须与其所在装备槽保持一致，否则武器源码与移牌校验会拒绝。
+	var weapon: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	weapon.zone = "equipment"
+	weapon.owner_id = player_id
+	_controller.state.get_player(player_id).equipment["weapon"] = weapon
+	return weapon
+
+
+## 为指定玩家安装一个正式技能目录中的技能实例；返回null表示技能目录缺失。
+func _install_skill_on_player(player_id: int, skill_id: String) -> SkillDefinition:
+	# 技能运行时实例；测试不复制技能源码，保证与正式对局读取同一份实现。
+	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+	if skill == null:
+		return null
+	skill.bind(_controller, player_id)
+	# 当前玩家已安装技能表；追加而不覆盖本场景其他技能。
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(player_id, {}) as Dictionary
+	player_skills[skill_id] = skill
+	_controller.skill_instances_by_player[player_id] = player_skills
+	# 时机订阅；【琥珀】除声明期纯查询外还有目标时机的第二层，两层互不替代。
+	skill.install()
+	return skill
+
+
+## 安装本文件末尾定义的测试专用“颜色无关来牌限制”技能；不进正式技能目录，避免污染正式内容与技能清单校验。
+func _install_slash_guard_skill(player_id: int) -> SkillDefinition:
+	# 测试技能实例；与正式技能走同一条来牌限制聚合入口，因此能真实验证声明期筛选。
+	var skill: SkillDefinition = ColorAgnosticSlashGuard.new()
+	skill.bind(_controller, player_id)
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(player_id, {}) as Dictionary
+	player_skills[skill.get_id()] = skill
+	_controller.skill_instances_by_player[player_id] = player_skills
+	skill.install()
+	return skill
+
+
+## 判断一条公开日志是否包含【琥珀】的原始拒绝原因；供借刀强制【杀】的复核断言复用同一判定。
+func _log_contains_amber_target_block(entry: String) -> bool:
+	return entry.contains("【琥珀】令该角色无法成为黑色【杀】的目标。")
+
+
+## 测试专用“颜色无关来牌限制”技能：持有者不能成为任何【杀】的目标，且判定不读取牌的颜色。
+## 类体定义在测试文件内而不写入正式技能目录：正式内容不得为单个用例新增技能，也不应影响技能清单校验。
+class ColorAgnosticSlashGuard extends SkillDefinition:
+	## 写入测试技能元数据；本技能只实现纯查询来牌限制，不订阅任何时机入口。
+	func _init() -> void:
+		super({
+			"id":"test_color_agnostic_slash_guard",
+			"name":"测试来牌限制",
+			"trigger":"",
+			"lock":true,
+			"description":"测试用：持有者无法成为任何【杀】的目标。",
+		})
+
+	## 与颜色无关地拒绝【杀】目标；与【琥珀】不同，本限制不依赖 card_color，因此声明期就必须生效。
+	func validate_incoming_card_target_selection(_actor_id: int, card_definition: Dictionary, _card_color: String) -> String:
+		if str(card_definition.get("effect_id", "")) == "slash":
+			return "测试来牌限制令该角色无法成为【杀】的目标。"
+		return ""
+
+
 ## 验证“出牌阶段开始时”技能在 phaseUseBegin 派发期间立即创建询问，而非等待常规出牌请求。
 func _test_phase_use_begin_prompt() -> bool:
 	_scenario = "xingjun_begin"
@@ -804,6 +966,17 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	elif _scenario == "borrow_sword_dodged" and choice_kind == "borrow_sword_response":
 		selected_uids = [_borrow_slash_uid]
 		confirmed = true
+	elif _scenario == "borrow_sword_amber" and choice_kind == "borrow_sword_response":
+		# 黑色【杀】+【琥珀】场景；持刀者如实交出这张黑色【杀】，由确认阶段的真实牌复核决定结果。
+		selected_uids = [_borrow_slash_uid]
+		confirmed = true
+	elif _scenario == "borrow_sword_amber_red" and choice_kind == "borrow_sword_response":
+		# 红色【杀】+【琥珀】场景；真实颜色不命中限制，复核必须放行。
+		selected_uids = [_borrow_slash_uid]
+		confirmed = true
+	elif _scenario == "borrow_sword_amber_red" and choice_kind == "slash_response":
+		# 被【杀】者放弃【闪】；与既有借刀用例同口径，用于断言伤害确实成立。
+		confirmed = false
 	elif _scenario == "borrow_sword_dodged" and choice_kind == "slash_response":
 		selected_uids = [_borrow_shan_uid]
 		confirmed = true

@@ -44,6 +44,8 @@ func _run() -> void:
 		return
 	if not _test_recast_is_neither_discard_nor_play():
 		return
+	if not _test_target_legality_query_contract():
+		return
 	print("CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1 bagua=red recast=none")
 	get_tree().quit(0)
 
@@ -419,6 +421,42 @@ func _test_response_history_action(player_id: int, expected_action: String) -> b
 	var latest: Dictionary = player.response_history.back() as Dictionary
 	if str(latest.get("response_action", "")) != expected_action:
 		return _fail("response_history_action=%s" % latest)
+	return true
+
+
+## 校验使用牌目标资格的权威查询契约：只回答“能否作为这张牌的目标”，与出牌阶段、当前行动者、持牌区域无关。
+## 这组断言锁定【借刀杀人】修复所依赖的两条核心性质：
+## 1. 非当前行动者的持刀者同样能拿到真实合法目标，而整牌入口 validate_virtual_use 会因阶段闸门整体拒绝；
+## 2. 真实实体牌的复核必须按单元素目标数组判定，否则【借刀杀人】使用的【杀】会因角色顺序语义短路掉全部来牌限制。
+func _test_target_legality_query_contract() -> bool:
+	_reset_state(3)
+	# 持刀者武器；攻击范围覆盖三人局，使合法【杀】目标只剩距离与来牌限制两个变因。
+	var weapon: CardInstance = CardInstance.new("qinggang", "spade", 6)
+	weapon.zone = "equipment"
+	weapon.owner_id = 1
+	_controller.state.get_player(1).equipment["weapon"] = weapon
+	# 被【杀】者的【琥珀】；来牌限制只拒绝黑色【杀】，因此红色实体牌必须仍有资格。
+	if _install_skill(2, "hupo") == null:
+		return _fail("target_legality_install_hupo")
+	# 阶段与行动者无关性；当前行动者是零号玩家，一号持刀者仍必须得到真实合法目标。
+	var holder_targets: Array[int] = _controller.card_rules.list_legal_targets_for_definition(1, "sha", {"ignore_phase_limit":true, "ignore_play_count_limit":true})
+	if holder_targets != [0, 2]:
+		return _fail("target_legality_holder_targets=%s" % [holder_targets])
+	# 对照断言；同一角色走整牌虚拟牌入口时被阶段闸门整体拒绝，这正是必须新增阶段无关查询的唯一理由。
+	if _controller.card_rules.validate_virtual_use(1, "sha", [0]).is_empty():
+		return _fail("target_legality_virtual_use_unexpected")
+	# 单目标资格查询；未知颜色时颜色型限制按未命中处理，与“声明期只有无色的抽象【杀】”保持一致。
+	if not _controller.card_rules.validate_target_only(1, "sha", 0).is_empty() or not _controller.card_rules.validate_target_only(1, "sha", 2).is_empty():
+		return _fail("target_legality_only holder=%s victim=%s" % [_controller.card_rules.validate_target_only(1, "sha", 0), _controller.card_rules.validate_target_only(1, "sha", 2)])
+	# 真实实体牌复核；黑色【杀】被【琥珀】拒绝、红色【杀】放行，拒绝原因必须原样透出给调用方与日志。
+	var black_slash: CardInstance = _give_hand_card(1, "sha", "spade", 7)
+	var red_slash: CardInstance = _give_hand_card(1, "sha", "heart", 7)
+	var black_error: String = _controller.card_rules.validate_entity_card_target(1, black_slash, 2)
+	if not black_error.contains("【琥珀】令该角色无法成为黑色【杀】的目标。") or not _controller.card_rules.validate_entity_card_target(1, red_slash, 2).is_empty():
+		return _fail("target_legality_entity black=%s red=%s" % [black_error, _controller.card_rules.validate_entity_card_target(1, red_slash, 2)])
+	# 目标模式不得因放宽阶段限制而放宽；持刀者本人仍然不是自己【杀】的合法目标。
+	if _controller.card_rules.validate_entity_card_target(1, black_slash, 1).is_empty():
+		return _fail("target_legality_self")
 	return true
 
 
