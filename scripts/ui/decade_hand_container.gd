@@ -27,6 +27,10 @@ extends Container
 ## 有牌离场或插入时，其余手牌在该时长内从原槽位滑向新槽位；设为极小值即退化为原来的瞬间跳位。
 @export_range(0.05, 0.8, 0.01) var relayout_animation_seconds: float = 0.18
 
+## 拖拽排序松手后的落位过渡时长；默认0.18秒与整理过渡保持一致，运行时可由主题调整。
+## 松手时该牌从鼠标释放点滑向它的稳定槽位；设为极小值即退化为原来的瞬间跳位。
+@export_range(0.05, 0.8, 0.01) var drag_settle_seconds: float = 0.18
+
 ## 最近一次已应用的结构布局签名；默认-1强制首次布局，重复快照只有结构或交互状态变化时才重新计算位置。
 var _layout_signature: int = -1
 
@@ -39,6 +43,10 @@ var _slot_positions: Dictionary = {}
 
 ## 卡牌实例 ID 到整理过渡补间的映射；同一张牌同时只保留一条补间，槽位再次变化时先终止旧补间。
 var _relayout_tweens: Dictionary = {}
+
+## 卡牌实例 ID 到拖拽释放点左上角的映射；释放点是鼠标松开那一帧该牌在容器内的坐标。
+## 松手后的第一次布局会把它换算成 hand_layout_offset 的绝对起点并补间归零；牌离场或清场时与槽位记录一并清理。
+var _settle_start_positions: Dictionary = {}
 
 ## 连接父级尺寸变化并请求首次布局；父级通常是只启用横向滚动的 ScrollContainer。
 func _ready() -> void:
@@ -59,6 +67,7 @@ func _exit_tree() -> void:
 			relayout_tween.kill()
 	_relayout_tweens.clear()
 	_slot_positions.clear()
+	_settle_start_positions.clear()
 
 
 ## 在 Godot 容器排序通知中重新计算全部卡牌位置。
@@ -91,6 +100,16 @@ func end_card_relayout_transition(card: CardView) -> void:
 	card.hand_layout_offset = Vector2.ZERO
 
 
+## 登记一次拖拽落位过渡的起点；必须在鼠标松开那一帧、且在任何重新布局之前调用。
+## 传入释放点的容器坐标（通常就是被拖牌当前的 position）；松手后的第一次布局会据此写入绝对起始偏移，
+## 使牌面在松手帧仍停在鼠标松开的位置，再滑向稳定槽位，而不是瞬间跳位。
+## 只记录起点、不在此处换算偏移，是因为重排后的最终槽位要等下一次布局才知道。
+func begin_card_settle(card: CardView, release_position: Vector2) -> void:
+	if card == null or not is_instance_valid(card):
+		return
+	_settle_start_positions[card.get_instance_id()] = release_position
+
+
 ## 按参考实现的 updateHand 算法排列手牌：空间足够时完整展开，不足时等距覆盖，达到最小露出宽度后允许横向滚动。
 func _layout_cards() -> void:
 	# 当前参与布局的可见卡牌；卡牌根节点统一为 Node2D，不依赖按钮或 Control 布局属性。
@@ -107,6 +126,9 @@ func _layout_cards() -> void:
 	# 当前写入签名的卡牌节点；节点身份、顺序和交互状态共同决定现有结构布局能否继续复用。
 	for card: CardView in cards:
 		layout_signature_data.append([card.get_instance_id(), card.is_card_selected, card.is_hovered_in_hand(), card.is_hand_dragging(), card.hover_scale])
+	# 待消费的拖拽落位释放点数量；它同样是本轮位置写法的输入之一。
+	# 若它不参与签名，松手帧可能因为其他字段与上一帧完全相同而跳过布局，牌面就会停在鼠标松开的位置而不会滑向槽位。
+	layout_signature_data.append(_settle_start_positions.size())
 	# 本次结构布局签名；相同结果表示现有位置仍有效，入场与选中 Tween 会通过自身偏移属性继续移动原节点。
 	var next_layout_signature: int = hash(layout_signature_data)
 	if _layout_signature == next_layout_signature:
@@ -177,7 +199,16 @@ func _layout_cards() -> void:
 		_slot_positions[card.get_instance_id()] = slot_position
 		# 当前卡牌位置；布局位置叠加入场偏移、选中动画偏移和整理过渡偏移，重排不会打断任一独立表现。
 		if not hand_dragging:
-			card.position = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset + card.hand_selection_offset + card.hand_layout_offset
+			# 当前卡牌的基准位置；等于布局位置叠加入场与选中偏移，不含整理／落位过渡偏移。
+			# 拖拽落位过渡以它为基准反推“从释放点到槽位”的绝对起始偏移，因此必须先算基准再消费释放点。
+			var base_position: Vector2 = Vector2(current_card_x - hover_width_compensation, maxf(desired_card_y, 0.0)) + card.hand_entry_offset + card.hand_selection_offset
+			# 本帧待消费的拖拽释放点；缺失表示这张牌不是刚被松手的牌。
+			var settle_release_position: Variant = _settle_start_positions.get(card.get_instance_id())
+			if settle_release_position != null:
+				# 释放点只消费一次；随后由落位补间独占 hand_layout_offset，连续布局不会重复叠加。
+				_settle_start_positions.erase(card.get_instance_id())
+				_start_settle_transition(card, settle_release_position as Vector2, base_position)
+			card.position = base_position + card.hand_layout_offset
 			card.z_index = CardView.HOVER_Z_INDEX if hovered else (cards.size() + card_index if selected else card_index)
 		current_card_x += card_step
 
@@ -186,11 +217,25 @@ func _layout_cards() -> void:
 ## 传入的是不含悬停补偿的槽位坐标，保证悬停与整理两种表现互不干扰。
 func _start_relayout_transition(card: CardView, previous_slot: Vector2, next_slot: Vector2) -> void:
 	card.hand_layout_offset += previous_slot - next_slot
+	_start_layout_offset_tween(card, relayout_animation_seconds)
+
+
+## 启动一次拖拽落位过渡；偏移按释放点绝对写入，因此松手帧牌面仍停在鼠标松开的位置再滑向槽位。
+## 释放点与基准位置都必须是容器坐标，且基准位置不含任何过渡偏移，二者之差就是本帧的起始偏移。
+func _start_settle_transition(card: CardView, release_position: Vector2, base_position: Vector2) -> void:
+	card.hand_layout_offset = release_position - base_position
+	_start_layout_offset_tween(card, drag_settle_seconds)
+
+
+## 启动一次过渡补间并登记索引；整理过渡与拖拽落位过渡共用同一条补间创建路径，
+## 保证同一张牌同时最多只有一条会写入 position 的过渡补间。
+## 统一先终止旧补间，使后启动的落位过渡覆盖同帧的整理过渡——松手后的位置真值是释放点。
+func _start_layout_offset_tween(card: CardView, duration: float) -> void:
 	_kill_relayout_tween(card.get_instance_id())
-	# 整理过渡补间；与入场、选中补间同构，只驱动本属性归零，槽位真值仍由每次布局绝对写入。
+	# 过渡补间；与入场、选中补间同构，只驱动本属性归零，槽位真值仍由每次布局绝对写入。
 	var relayout_tween: Tween = create_tween()
 	relayout_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	relayout_tween.tween_property(card, "hand_layout_offset", Vector2.ZERO, relayout_animation_seconds)
+	relayout_tween.tween_property(card, "hand_layout_offset", Vector2.ZERO, duration)
 	_relayout_tweens[card.get_instance_id()] = relayout_tween
 
 
@@ -212,4 +257,6 @@ func _clear_departed_card_layout_records(present_card_ids: Dictionary) -> void:
 			continue
 		_slot_positions.erase(card_instance_id)
 		_kill_relayout_tween(card_instance_id)
+		# 离场牌未消费的释放点同样清理；实例 ID 被新节点复用时不得继承别人的拖拽位置。
+		_settle_start_positions.erase(card_instance_id)
 
