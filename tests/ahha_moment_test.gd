@@ -9,6 +9,26 @@ const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 ## 测试用参演技能ID前缀；与正式内容ID隔离，避免与数据库既有技能重名。
 const TEST_SKILL_PREFIX: String = "test_joy_"
 
+## 过场动画自然播完（含淡出）的等待上限毫秒数；精简版过场约1.7秒，这里留足余量避免慢机器假失败。
+## 等待本身走帧推进与条件判定，该常量只作为“永不满足”时的兜底上限。
+const CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS: int = 15000
+
+## 复核“视频没有被本组件自己申请的暂停冻结”所需的观察帧数；20帧足以让解码位置产生明显前进。
+const VIDEO_PROGRESS_OBSERVATION_FRAMES: int = 20
+
+## 超时兜底用例使用的暂停令牌上限（秒）。取值范围下界为1.0，且必须显著小于过场视频时长（约1.7秒），
+## 这样“视频自然结束之前令牌就已经被释放”本身就是兜底计时确实生效的直接证据。
+const TIMEOUT_PROBE_PAUSE_SECONDS: float = 1.0
+
+## 超时兜底用例中“令牌必须仍然持有且过场仍在播放”的观察时刻（毫秒）；取上限时长的一半，同时远离两个边界。
+const TIMEOUT_PROBE_HOLD_OBSERVATION_MILLISECONDS: int = 600
+
+## 过场令牌正常释放后等待“迟到兜底回调”的毫秒数；必须大于 TIMEOUT_PROBE_PAUSE_SECONDS 对应的毫秒数。
+const STALE_WATCHDOG_OBSERVATION_MILLISECONDS: int = 1400
+
+## 本地待办守卫用例使用的伪请求ID；只需一个稳定的非负整数，不参与任何真实规则请求。
+const PENDING_CHOICE_PROBE_REQUEST_ID: int = 4242
+
 ## 本次测试主场景实例；完成后显式释放，避免跨测试保留暂停令牌或全局信号连接。
 var _main_instance: Control
 
@@ -20,6 +40,18 @@ var _performance_log: Array[String] = []
 
 ## 本次测试使用的固定随机源；由组件持有，测试通过其state确认跳过分支未消耗随机数。
 var _rng: RandomNumberGenerator
+
+## 模拟联机角色前的网关通信模式；用例结束必须原样恢复，避免影响同一进程内的后续用例。
+var _saved_gateway_mode: int = NetworkGateway.Mode.OFFLINE
+
+## 模拟联机角色前的网关会话角色；用例结束必须原样恢复。
+var _saved_gateway_role: int = NetworkGateway.LanRole.NONE
+
+## 模拟联机角色前的网关连接标记；用例结束必须原样恢复。
+var _saved_gateway_connected: bool = true
+
+## 模拟联机角色前的“对局已开始”标记；用例结束必须原样恢复。
+var _saved_gateway_match_active: bool = false
 
 
 ## 测试用欢愉技；只记录执行顺序并同步回报结束，不读写任何牌区、体力或阶段状态。
@@ -71,6 +103,28 @@ func _ready() -> void:
 	if not _test_round_end_boundary_after_opportunity():
 		return
 	if not _test_round_quota_single_trigger_per_round():
+		return
+	if not await _test_offline_cutscene_pauses_and_releases():
+		return
+	if not await _test_lan_host_cutscene_pauses():
+		return
+	if not await _test_lan_client_event_plays_and_pauses():
+		return
+	if not await _test_client_pending_choice_guard_skips_pause():
+		return
+	if not await _test_network_client_pause_grey_switch():
+		return
+	if not await _test_unknown_network_event_degrades_safely():
+		return
+	if not await _test_cutscene_pause_timeout_watchdog():
+		return
+	if not await _test_stale_watchdog_keeps_foreign_pause():
+		return
+	if not await _test_match_finished_stops_cutscene():
+		return
+	if not await _test_replay_playback_does_not_pause():
+		return
+	if not await _test_lan_session_closed_stops_cutscene():
 		return
 	_finish_success()
 
@@ -449,6 +503,160 @@ func _clear_joy_skills() -> void:
 		_controller.skill_instances_by_player[player.player_id] = {}
 
 
+## 返回本场景中桌面创建的阿哈时刻过场组件；缺失时返回null，由调用方按失败处理。
+func _cutscene() -> AhhaMomentCutscene:
+	return _main_instance.get("ahha_moment_cutscene") as AhhaMomentCutscene
+
+
+## 返回过场组件内的视频播放节点；用于复核视频是否在被自己造成的暂停中继续解码。
+func _cutscene_video() -> VideoStreamPlayer:
+	# 当前过场组件；缺失时无法取得视频节点。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return null
+	return cutscene.get_node_or_null(AhhaMomentCutscene.VIDEO_NODE_NAME) as VideoStreamPlayer
+
+
+## 返回暂停服务当前的活动原因副本；用于断言过场令牌是否仍然存在。
+func _active_pause_reasons() -> Array[String]:
+	return _controller.gameplay_pause_service.get_active_reasons()
+
+
+## 停止过场并清空它可能持有的暂停令牌；每个用例的开始与结束都调用，保证用例之间互不影响。
+func _stop_cutscene_safely() -> void:
+	# 当前过场组件；缺失时无需清理。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return
+	cutscene.stop_cutscene()
+
+
+## 清空桌面上的本地待办选择请求痕迹，使“允许暂停”这一前置条件成立。
+##
+## 必要性：本测试的对局状态是手工构造的最小状态，回合推进会为本地角色产生与真实阿哈时刻无关的待办请求，
+## 而“本机存在待办请求时不得暂停”本身是正式规则。因此验证“正常情况下应当暂停”之前必须先让前置条件
+## 回到“没有待办”；待办守卫自身由 _test_client_pending_choice_guard_skips_pause 单独验证。
+func _clear_local_pending_choice_state() -> void:
+	# 待办请求ID列表；数组是引用类型，取出引用后清空即可改写桌面持有的同一份数据。
+	var pending_request_ids: Array = _main_instance.get("_local_pending_choice_request_ids") as Array
+	pending_request_ids.clear()
+	# 内联询问字典；同样按引用清空，避免类型收窄导致的赋值错误。
+	var inline_choice: Dictionary = _main_instance.get("_inline_card_choice") as Dictionary
+	inline_choice.clear()
+	_main_instance.set("_has_local_pending_choice_request_ids", false)
+	_main_instance.set("_modal_choice_request_id", -1)
+
+
+## 在桌面上登记一条伪本地待办请求，模拟“客户端正持有响应窗口”这一危险状态。
+func _mark_local_pending_choice() -> void:
+	# 待办请求ID列表；追加伪请求ID即等价于权威端仍然等待本机作答。
+	var pending_request_ids: Array = _main_instance.get("_local_pending_choice_request_ids") as Array
+	pending_request_ids.append(PENDING_CHOICE_PROBE_REQUEST_ID)
+	_main_instance.set("_has_local_pending_choice_request_ids", true)
+
+
+## 把网关临时切到「已连接的局域网客户端」角色。只改写三个公开角色字段，不建立真实连接、不伪造封包。
+## 目的：在不派生第二个Godot进程的前提下复核“收到房主表现事件后播放并暂停”的客户端链路。
+func _enter_simulated_lan_client() -> void:
+	_save_gateway_role()
+	# 当前网关；模拟只写公开角色字段，不触碰连接与会话内部状态。
+	var gateway: NetworkGateway = _controller.network_gateway
+	gateway.mode = NetworkGateway.Mode.LAN
+	gateway.lan_role = NetworkGateway.LanRole.CLIENT
+	gateway.connected = true
+
+
+## 把网关临时切到「已连接的局域网房主」角色，并标记对局已开始。
+func _enter_simulated_lan_host() -> void:
+	_save_gateway_role()
+	# 当前网关；房主角色决定 is_lan_host() 与 is_lan_match_active() 的返回值。
+	var gateway: NetworkGateway = _controller.network_gateway
+	gateway.mode = NetworkGateway.Mode.LAN
+	gateway.lan_role = NetworkGateway.LanRole.HOST
+	gateway.connected = true
+	gateway.set("_lan_match_active", true)
+
+
+## 保存网关当前角色，供 _restore_gateway_role 逐字段还原。
+func _save_gateway_role() -> void:
+	# 当前网关；保存前先确认组件存在，避免测试初始化异常时二次报错。
+	var gateway: NetworkGateway = _controller.network_gateway
+	_saved_gateway_mode = gateway.mode
+	_saved_gateway_role = gateway.lan_role
+	_saved_gateway_connected = gateway.connected
+	_saved_gateway_match_active = gateway.is_lan_match_active()
+
+
+## 还原网关角色；未发生模拟时同样安全，恢复的是保存下来的原值。
+func _restore_gateway_role() -> void:
+	# 当前网关；逐字段还原，保证同一进程内后续用例看到的仍是离线模式。
+	var gateway: NetworkGateway = _controller.network_gateway
+	gateway.mode = _saved_gateway_mode
+	gateway.lan_role = _saved_gateway_role
+	gateway.connected = _saved_gateway_connected
+	gateway.set("_lan_match_active", _saved_gateway_match_active)
+
+
+## 等待条件成立；等待走帧推进，超时返回false由调用方按失败处理，不使用固定墙钟休眠。
+func _wait_until(condition: Callable, timeout_milliseconds: int) -> bool:
+	# 兜底截止时刻；只作为“永不满足”时的上限，不作为等待策略本身。
+	var deadline_msec: int = Time.get_ticks_msec() + timeout_milliseconds
+	while Time.get_ticks_msec() < deadline_msec:
+		if bool(condition.call()):
+			return true
+		await get_tree().process_frame
+	return bool(condition.call())
+
+
+## 推进若干帧；测试节点始终处理，因此场景树暂停期间同样可以推进并观察表现层状态。
+func _advance_frames(frame_count: int) -> void:
+	for _frame_index: int in range(frame_count):
+		await get_tree().process_frame
+
+
+## 校验离线（局域网房主同构）过场期间的暂停与播完立即恢复，并证明视频没有被自己造成的暂停冻结。
+func _test_offline_cutscene_pauses_and_releases() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件与视频节点；任一缺失说明桌面装配被破坏，直接失败。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	var video: VideoStreamPlayer = _cutscene_video()
+	if cutscene == null or video == null:
+		return _fail("cutscene_component_missing")
+	# 根节点必须保持 PROCESS_MODE_ALWAYS：它是“视频在自己造成的暂停下仍继续播放”的唯一依据，禁止改动。
+	if cutscene.process_mode != Node.PROCESS_MODE_ALWAYS:
+		return _fail("cutscene_root_process_mode_changed %d" % cutscene.process_mode)
+	# 场景覆盖：正式牌桌必须由 .tscn 打开暂停开关，脚本默认值保持最保守的false。
+	if not cutscene.pause_gameplay_while_playing:
+		return _fail("cutscene_pause_switch_disabled")
+	if get_tree().paused:
+		return _fail("tree_already_paused_before_cutscene")
+	# 正式表现入口：控制器信号与真实阿哈时刻完全同一条链路。
+	_controller.ahha_moment_started.emit(2, AhhaMomentSystem.SOURCE_TURN_START)
+	if not cutscene.is_pause_held():
+		return _fail("offline_cutscene_no_pause_token")
+	if not get_tree().paused or not _controller.is_gameplay_paused():
+		return _fail("offline_cutscene_tree_not_paused")
+	if not _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("offline_cutscene_reason_missing %s" % str(_active_pause_reasons()))
+	# 视频完整性：根节点为 PROCESS_MODE_ALWAYS，因此解码进度必须在暂停期间继续前进。
+	var position_before: float = video.stream_position
+	await _advance_frames(VIDEO_PROGRESS_OBSERVATION_FRAMES)
+	if video.stream_position <= position_before:
+		return _fail("cutscene_video_frozen_by_own_pause %.3f/%.3f" % [position_before, video.stream_position])
+	if not cutscene.is_cutscene_playing():
+		return _fail("cutscene_stopped_too_early")
+	# 自然播完（含淡出结束）后必须立即恢复：等待条件成立，超时上限只防御解码挂死。
+	var released: bool = await _wait_until(func() -> bool: return not cutscene.is_pause_held(), CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	if not released:
+		return _fail("offline_cutscene_pause_not_released")
+	if get_tree().paused or _controller.is_gameplay_paused():
+		return _fail("offline_cutscene_tree_still_paused")
+	if _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("offline_cutscene_reason_residual %s" % str(_active_pause_reasons()))
+	return true
+
+
 ## 按“角色ID → [[技能ID, 参演编号], ...]”安装测试欢愉技；技能实例绑定真实控制器与持有者。
 func _install_joy_skills(skill_specs: Dictionary) -> void:
 	for player_id_variant: Variant in skill_specs.keys():
@@ -463,8 +671,307 @@ func _install_joy_skills(skill_specs: Dictionary) -> void:
 		_controller.skill_instances_by_player[player_id] = player_skills
 
 
+## 局域网房主：行为必须与离线一致，房主自己也要停。
+func _test_lan_host_cutscene_pauses() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；报告缺失时直接失败，避免后续断言读到null。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("host_cutscene_component_missing")
+	_enter_simulated_lan_host()
+	# 探针接线复核：房主不是客户端，因此客户端灰开关不应影响它。
+	if _main_instance.call("_is_local_network_client"):
+		_restore_gateway_role()
+		return _fail("host_probe_reported_client")
+	_controller.ahha_moment_started.emit(1, AhhaMomentSystem.SOURCE_ROUND_END)
+	if not cutscene.is_pause_held() or not get_tree().paused:
+		_restore_gateway_role()
+		return _fail("host_cutscene_no_pause")
+	if not _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		_restore_gateway_role()
+		return _fail("host_cutscene_reason_missing %s" % str(_active_pause_reasons()))
+	# 房主广播只发送表现，不改变本机暂停归属：原因列表必须恰好只有过场这一项。
+	if _active_pause_reasons().size() != 1:
+		_restore_gateway_role()
+		return _fail("host_cutscene_extra_reasons %s" % str(_active_pause_reasons()))
+	_stop_cutscene_safely()
+	if cutscene.is_pause_held() or get_tree().paused or _controller.is_gameplay_paused():
+		_restore_gateway_role()
+		return _fail("host_cutscene_stop_not_released")
+	_restore_gateway_role()
+	return true
+
+
+## 局域网客户端收到房主表现事件后播放过场并暂停本机；同时确认客户端没有因此运行任何规则。
+func _test_lan_client_event_plays_and_pauses() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；缺失时后续断言无法成立。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("client_cutscene_component_missing")
+	# 协议事件名冻结：改名必须同步客户端白名单，因此这里显式锁定线上字符串。
+	if MatchController.PRESENTATION_EVENT_AHHA_MOMENT_STARTED != "ahha_moment_started":
+		return _fail("presentation_event_name_changed %s" % MatchController.PRESENTATION_EVENT_AHHA_MOMENT_STARTED)
+	_enter_simulated_lan_client()
+	if not _main_instance.call("_is_local_network_client"):
+		_restore_gateway_role()
+		return _fail("client_probe_not_detected")
+	# 客户端不跑规则的前置状态：真实客户端从不 configure AhhaMomentSystem，这里用 shutdown 复现同一状态。
+	_controller.ahha_moment_system.shutdown()
+	# 随机历史长度快照；收到表现事件不得消耗任何随机数。
+	var random_history_size_before: int = _controller.state.random_history.size()
+	_controller._on_network_game_event_received(MatchController.PRESENTATION_EVENT_AHHA_MOMENT_STARTED, {
+		"performance_count":3,
+		"source":AhhaMomentSystem.SOURCE_TURN_START,
+	})
+	if not cutscene.is_cutscene_playing():
+		_restore_gateway_role()
+		return _fail("client_event_not_played")
+	if not cutscene.is_pause_held() or not get_tree().paused:
+		_restore_gateway_role()
+		return _fail("client_event_no_pause")
+	if not _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		_restore_gateway_role()
+		return _fail("client_event_reason_missing %s" % str(_active_pause_reasons()))
+	# 客户端未运行任何规则：规则组件仍处于未启用状态，也没有消耗随机数、没有演出队列。
+	if _controller.ahha_moment_system.get("_enabled"):
+		_restore_gateway_role()
+		return _fail("client_ahha_system_enabled")
+	if _controller.ahha_moment_system.is_active():
+		_restore_gateway_role()
+		return _fail("client_ahha_queue_active")
+	if _controller.state.random_history.size() != random_history_size_before:
+		_restore_gateway_role()
+		return _fail("client_event_consumed_random")
+	# 播完（含淡出）必须恢复：客户端暂停同样由组件自身生命周期负责。
+	var released: bool = await _wait_until(func() -> bool: return not cutscene.is_pause_held(), CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	_restore_gateway_role()
+	if not released:
+		return _fail("client_pause_not_released")
+	if get_tree().paused or _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("client_pause_residual %s" % str(_active_pause_reasons()))
+	return true
+
+
+## 客户端待办守卫：本机仍有待办选择请求时收到阿哈事件只播放、不暂停（防真死锁）。
+func _test_client_pending_choice_guard_skips_pause() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；缺失时无法复核播放状态。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("pending_guard_cutscene_missing")
+	_enter_simulated_lan_client()
+	# 危险前置：本机正持有响应窗口，此时若冻结场景树就会让权威端一直等待真人输入。
+	_mark_local_pending_choice()
+	_controller.ahha_moment_system.shutdown()
+	_controller._on_network_game_event_received(MatchController.PRESENTATION_EVENT_AHHA_MOMENT_STARTED, {
+		"performance_count":1,
+		"source":AhhaMomentSystem.SOURCE_EXTRA_MOMENT,
+	})
+	if not cutscene.is_cutscene_playing():
+		_restore_gateway_role()
+		return _fail("pending_guard_not_played")
+	if cutscene.is_pause_held() or get_tree().paused or _controller.is_gameplay_paused():
+		_restore_gateway_role()
+		return _fail("pending_guard_paused_anyway")
+	if _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		_restore_gateway_role()
+		return _fail("pending_guard_reason_residual %s" % str(_active_pause_reasons()))
+	# 播完仍必须正常收场：跳过暂停不影响过场自身的播放与结束。
+	var finished: bool = await _wait_until(func() -> bool: return not cutscene.is_cutscene_playing(), CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	_restore_gateway_role()
+	if not finished:
+		return _fail("pending_guard_cutscene_never_finished")
+	_clear_local_pending_choice_state()
+	if get_tree().paused:
+		return _fail("pending_guard_tree_still_paused")
+	return true
+
+
+## 客户端暂停灰开关：allow_pause_on_network_client 为假时客户端只播放、不暂停。
+func _test_network_client_pause_grey_switch() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；灰开关写在组件上，因此必须对它写入。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("grey_switch_cutscene_missing")
+	_enter_simulated_lan_client()
+	cutscene.allow_pause_on_network_client = false
+	_controller.ahha_moment_started.emit(1, AhhaMomentSystem.SOURCE_TURN_START)
+	var played_without_pause: bool = cutscene.is_cutscene_playing() and not cutscene.is_pause_held() and not get_tree().paused
+	cutscene.allow_pause_on_network_client = true
+	_stop_cutscene_safely()
+	_restore_gateway_role()
+	if not played_without_pause:
+		return _fail("grey_switch_paused_client")
+	return true
+
+
+## 未知网络事件安全降级：闭式白名单之外的任何事件都必须被静默忽略，且不存在暂停类事件。
+func _test_unknown_network_event_degrades_safely() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；用于确认未知事件没有意外触发演出或暂停。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("unknown_event_cutscene_missing")
+	_enter_simulated_lan_client()
+	# 暂停语义不得进入网络协议：即便伪造同名事件，客户端也必须完全忽略。
+	_controller._on_network_game_event_received("pause_started", {"reason":"ahha_moment_cutscene"})
+	_controller._on_network_game_event_received("pause_released", {})
+	_controller._on_network_game_event_received("ahha_moment_unknown", {"performance_count":1})
+	var degraded_safely: bool = not cutscene.is_cutscene_playing() and not cutscene.is_pause_held() and not get_tree().paused
+	_restore_gateway_role()
+	if not degraded_safely:
+		return _fail("unknown_event_had_side_effect")
+	return true
+
+
+## 超时兜底：令牌持有上限到点后强制结束过场并释放令牌，且必须早于视频自然结束。
+func _test_cutscene_pause_timeout_watchdog() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件与视频节点；两者共同支撑“兜底早于自然结束”的判定。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	var video: VideoStreamPlayer = _cutscene_video()
+	if cutscene == null or video == null:
+		return _fail("timeout_cutscene_missing")
+	# 缩短令牌上限，使兜底在视频自然结束之前必然到期；用例结束再还原为脚本默认值。
+	cutscene.max_pause_seconds = TIMEOUT_PROBE_PAUSE_SECONDS
+	# 本次观察起点；用于判定释放究竟来自兜底还是来自视频自然结束。
+	var started_msec: int = Time.get_ticks_msec()
+	cutscene.play_cutscene(AhhaMomentSystem.SOURCE_TURN_START)
+	if not cutscene.is_pause_held():
+		cutscene.max_pause_seconds = 30.0
+		return _fail("timeout_cutscene_no_pause")
+	# 中途复核：上限到点之前令牌仍在、过场仍在播放，证明释放不是视频自然结束造成的。
+	var hold_observed: bool = await _wait_until(func() -> bool: return Time.get_ticks_msec() - started_msec >= TIMEOUT_PROBE_HOLD_OBSERVATION_MILLISECONDS, CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	if not hold_observed or not cutscene.is_pause_held() or not cutscene.is_cutscene_playing():
+		cutscene.max_pause_seconds = 30.0
+		return _fail("timeout_probe_released_before_deadline")
+	# 超过上限后必须由兜底强制收场：令牌被释放、过场停止、场景树恢复。
+	var released: bool = await _wait_until(func() -> bool: return not cutscene.is_pause_held(), CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	# 令牌释放时刻相对申请起点的毫秒数；必须小于视频自然结束所需时间才能证明兜底生效。
+	var released_after_msec: int = Time.get_ticks_msec() - started_msec
+	# 视频自然结束所需毫秒数（时长+淡出）；兜底必须在它之前完成，否则本用例无法区分两条释放路径。
+	var natural_release_msec: int = int((video.get_stream_length() + cutscene.fade_out_seconds) * 1000.0)
+	cutscene.max_pause_seconds = 30.0
+	if not released:
+		return _fail("timeout_watchdog_not_fired")
+	if released_after_msec >= natural_release_msec:
+		return _fail("timeout_watchdog_too_late %d/%d" % [released_after_msec, natural_release_msec])
+	if cutscene.is_cutscene_playing() or get_tree().paused or _controller.is_gameplay_paused():
+		return _fail("timeout_watchdog_state_residual")
+	if _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("timeout_watchdog_reason_residual %s" % str(_active_pause_reasons()))
+	return true
+
+
+## 迟到的兜底回调不得影响其他暂停所有者：过场令牌正常释放后，外部令牌必须原样保留。
+func _test_stale_watchdog_keeps_foreign_pause() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；先申请再立即释放，制造一个“已过期但尚未到点”的兜底计时器。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("stale_watchdog_cutscene_missing")
+	cutscene.max_pause_seconds = TIMEOUT_PROBE_PAUSE_SECONDS
+	cutscene.call("_acquire_pause", true)
+	if not cutscene.is_pause_held():
+		cutscene.max_pause_seconds = 30.0
+		return _fail("stale_watchdog_acquire_failed")
+	_stop_cutscene_safely()
+	if cutscene.is_pause_held():
+		cutscene.max_pause_seconds = 30.0
+		return _fail("stale_watchdog_release_failed")
+	# 外部暂停所有者；模拟另一个界面入口在同一次过场之后申请了暂停。
+	var foreign_token: int = _controller.acquire_gameplay_pause("ahha_test_foreign_pause")
+	if foreign_token < 0 or not get_tree().paused:
+		cutscene.max_pause_seconds = 30.0
+		return _fail("stale_watchdog_foreign_pause_failed")
+	# 等待超过过场令牌原本的上限：过期回调若仍生效，就会误释放或误结束这段外部暂停。
+	await _wait_until(func() -> bool: return Time.get_ticks_msec() >= STALE_WATCHDOG_OBSERVATION_MILLISECONDS, CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
+	var foreign_pause_kept: bool = get_tree().paused and not cutscene.is_pause_held() and _active_pause_reasons().has("ahha_test_foreign_pause")
+	_controller.release_gameplay_pause(foreign_token)
+	cutscene.max_pause_seconds = 30.0
+	if not foreign_pause_kept:
+		return _fail("stale_watchdog_touched_foreign_pause %s" % str(_active_pause_reasons()))
+	if get_tree().paused:
+		return _fail("stale_watchdog_foreign_release_failed")
+	return true
+
+
+## 终局兜底：收到 match_finished 后过场必须结束且不残留过场暂停令牌。
+func _test_match_finished_stops_cutscene() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；终局兜底由桌面订阅同一信号，因此断言组件状态即可。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("match_finished_cutscene_missing")
+	_controller.ahha_moment_started.emit(1, AhhaMomentSystem.SOURCE_TURN_START)
+	if not cutscene.is_pause_held():
+		return _fail("match_finished_setup_no_pause")
+	_controller.match_finished.emit("leader")
+	if cutscene.is_pause_held() or cutscene.is_cutscene_playing():
+		return _fail("match_finished_cutscene_not_stopped")
+	if get_tree().paused or _controller.is_gameplay_paused():
+		return _fail("match_finished_pause_residual")
+	if _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("match_finished_reason_residual %s" % str(_active_pause_reasons()))
+	return true
+
+
+## 回放重演期不申请暂停：重演只播放画面，不冻结任何真实规则。
+func _test_replay_playback_does_not_pause() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；回放标记由桌面持有，本用例直接改写同一字段复核接线。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("replay_cutscene_missing")
+	_main_instance.set("_replay_session_active", true)
+	_controller.ahha_moment_started.emit(1, AhhaMomentSystem.SOURCE_TURN_START)
+	# 回放期必须“播放但不暂停”。
+	var played_without_pause: bool = cutscene.is_cutscene_playing() and not cutscene.is_pause_held() and not get_tree().paused
+	_main_instance.set("_replay_session_active", false)
+	_stop_cutscene_safely()
+	if not played_without_pause:
+		return _fail("replay_paused_gameplay")
+	return true
+
+
+## 联机会话关闭兜底：收到 lan_session_closed 后过场必须结束且不残留过场暂停令牌。
+## 本用例会触发桌面的整套联机收场流程，因此固定排在全部过场用例之后执行。
+func _test_lan_session_closed_stops_cutscene() -> bool:
+	_stop_cutscene_safely()
+	_clear_local_pending_choice_state()
+	# 当前过场组件；断线兜底同样由桌面订阅信号。
+	var cutscene: AhhaMomentCutscene = _cutscene()
+	if cutscene == null:
+		return _fail("lan_closed_cutscene_missing")
+	_controller.ahha_moment_started.emit(1, AhhaMomentSystem.SOURCE_EXTRA_MOMENT)
+	if not cutscene.is_pause_held():
+		return _fail("lan_closed_setup_no_pause")
+	_controller.network_gateway.lan_session_closed.emit("测试断线兜底")
+	if cutscene.is_pause_held() or cutscene.is_cutscene_playing():
+		return _fail("lan_closed_cutscene_not_stopped")
+	if get_tree().paused or _controller.is_gameplay_paused():
+		return _fail("lan_closed_pause_residual")
+	if _active_pause_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		return _fail("lan_closed_reason_residual %s" % str(_active_pause_reasons()))
+	return true
+
+
 ## 输出失败原因并退出；返回false便于调用方立即终止后续断言。
 func _fail(reason: String) -> bool:
+	# 兜底收场：任何用例失败都可能停在“过场持有暂停令牌”的状态，必须先释放再退出。
+	_stop_cutscene_safely()
+	_restore_gateway_role()
 	_controller.ahha_moment_system.shutdown()
 	print("AHHA_MOMENT_FAIL %s" % reason)
 	get_tree().quit(1)

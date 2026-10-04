@@ -56,6 +56,9 @@ func _run() -> void:
 	if not match_controller.ai_coordinator.is_ai_controlled(ai_player_id):
 		_fail("current_player_not_ai")
 		return
+	# 阿哈时刻过场令牌与其他暂停所有者的互不干扰回归；必须在捕获动作序号之前完成，保证该序号仍代表“未暂停”。
+	if not await _verify_cutscene_token_interplay(main_instance, match_controller):
+		return
 	# 暂停前动作序号；观察窗口内任何 AI 选择、出牌或结束阶段都会改变该值。
 	var action_sequence_before_pause: int = match_controller.state.action_sequence
 	# 测试持有的暂停令牌；只通过公开接口申请，模拟“记录”按钮的实际调用方式。
@@ -95,6 +98,51 @@ func _run() -> void:
 	await get_tree().process_frame
 	print("GAMEPLAY_PAUSE_PASS before=%d after=%d" % [action_sequence_before_pause, action_sequence_after_resume])
 	get_tree().quit(0)
+
+
+## 复核阿哈时刻过场组件与统一暂停服务的令牌互不干扰语义：
+## 过场只能释放自己持有的令牌，其他所有者的令牌必须原样保留；释放顺序任意，最后一个令牌释放后才恢复场景树。
+func _verify_cutscene_token_interplay(match_table: Control, match_controller: MatchController) -> bool:
+	# 桌面创建的过场组件；缺失或暂停开关未由场景覆盖时说明装配被破坏，直接失败。
+	var cutscene: AhhaMomentCutscene = match_table.get("ahha_moment_cutscene") as AhhaMomentCutscene
+	if cutscene == null:
+		_fail("cutscene_component_missing")
+		return false
+	if not cutscene.pause_gameplay_while_playing:
+		_fail("cutscene_pause_switch_disabled")
+		return false
+	# 过场播放期间必须持有自己的令牌并暂停整局。
+	cutscene.play_cutscene(AhhaMomentSystem.SOURCE_TURN_START)
+	if not cutscene.is_pause_held() or not get_tree().paused or not match_controller.is_gameplay_paused():
+		_fail("cutscene_pause_not_active")
+		return false
+	if not match_controller.gameplay_pause_service.get_active_reasons().has(AhhaMomentCutscene.PAUSE_REASON):
+		_fail("cutscene_pause_reason_missing")
+		return false
+	# 另一个暂停所有者；模拟过场播放期间另有界面入口申请暂停。
+	var foreign_token: int = match_controller.acquire_gameplay_pause("gameplay_pause_interplay")
+	if foreign_token < 0 or not get_tree().paused:
+		_fail("interplay_foreign_acquire_failed")
+		return false
+	# 过场先释放：外部令牌仍在，因此整局必须保持暂停，且过场原因必须消失。
+	cutscene.stop_cutscene()
+	var reasons_after_cutscene: Array[String] = match_controller.gameplay_pause_service.get_active_reasons()
+	if not get_tree().paused or cutscene.is_pause_held():
+		_fail("interplay_released_foreign_pause")
+		return false
+	if reasons_after_cutscene.has(AhhaMomentCutscene.PAUSE_REASON) or not reasons_after_cutscene.has("gameplay_pause_interplay"):
+		_fail("interplay_reasons_after_cutscene %s" % str(reasons_after_cutscene))
+		return false
+	# 最后一个令牌释放后必须恢复；测试按帧推进等待，不使用固定墙钟休眠。
+	if not match_controller.release_gameplay_pause(foreign_token):
+		_fail("interplay_foreign_release_failed")
+		return false
+	for _wait_frame: int in range(4):
+		await get_tree().process_frame
+	if get_tree().paused or match_controller.is_gameplay_paused():
+		_fail("interplay_tree_still_paused")
+		return false
+	return true
 
 
 ## 输出稳定失败原因并以非零状态退出，便于命令行与持续集成定位。

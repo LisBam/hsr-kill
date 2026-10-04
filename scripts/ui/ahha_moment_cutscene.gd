@@ -14,6 +14,11 @@ const CUTSCENE_STREAM_PATH: String = "res://game_data/video/阿哈时刻-精简.
 ## 过场动画的绘制层级。120 高于牌桌、飞牌、技能提示与角色资料，
 ## 低于卡牌选择窗口（150）、结算面板（220）与局内菜单（500），
 ## 因此动画播放期间弹出的选择窗口与菜单仍然完整可见、可操作。
+##
+## 补充：绘制层级与输入可达性是两件独立的事。上面的结论只说明“窗口画在过场之上、不会被遮挡”，
+## 不代表它在过场期间可以被点击：一旦 pause_gameplay_while_playing 生效，场景树暂停会同时冻结
+## 所有非 PROCESS_MODE_ALWAYS 的牌桌控件，窗口虽然完整可见却点不动。该差异由暂停语义造成，
+## 与层级无关，因此这里保留原层级结论，只补充暂停期间的输入边界说明。
 const CUTSCENE_Z_INDEX: int = 120
 
 ## 申请对局暂停时使用的稳定原因文本；暂停令牌诊断与调试日志据此识别本次暂停来自过场动画。
@@ -54,7 +59,19 @@ signal cutscene_finished()
 
 ## 播放期间是否暂停对局。开启后牌桌与 AI 整体停止推进，动画结束后自动恢复，
 ## 适合被当作正式过场观看；关闭时动画只作为叠加演出，规则照常结算。
+## 注意：本脚本的默认值保持最保守的 false，任何复用本组件的场景都不会默认停游戏；
+## 需要暂停的正式牌桌由 res://scenes/components/ahha_moment_cutscene.tscn 覆盖为 true。
 @export var pause_gameplay_while_playing: bool = false
+
+## 过场暂停令牌的持有上限（秒）。取值范围 1.0~120.0，默认 30.0：远大于任何一段过场视频的实际时长，
+## 因此正常运行绝不会触发；它只防御“视频解码挂死 / 视频结束信号永不触发”这一类异常，
+## 超时后强制结束过场并释放令牌，避免整局被永久冻结。运行时不需要动态修改（测试可临时调小以验证兜底）。
+@export_range(1.0, 120.0, 1.0) var max_pause_seconds: float = 30.0
+
+## 是否允许本机处于「当局的局域网客户端」时申请暂停令牌。默认 true：客户端收到房主广播的
+## 阿哈时刻表现事件后，与离线端、房主一样暂停本机表现；设为 false 可灰度关闭客户端暂停
+## （只影响暂停，过场动画照常播放）。运行时不需要动态修改。
+@export var allow_pause_on_network_client: bool = true
 
 ## 色度键控的钥匙色。绿幕视频保持默认纯绿，蓝幕素材改为纯蓝即可完成抠像。
 @export var chroma_key_color: Color = Color(0.0, 1.0, 0.0, 1.0)
@@ -80,6 +97,23 @@ var _pause_service: GameplayPauseService
 
 ## 当前持有的对局暂停令牌。-1 表示没有暂停对局，避免重复申请或重复释放。
 var _pause_token: int = -1
+
+## 当前暂停令牌的申请时刻（Time.get_ticks_msec()）。-1 表示没有持有令牌；
+## 与 max_pause_seconds 一起构成超时兜底判定，并让诊断日志能报出令牌的实际持有时长。
+var _pause_started_msec: int = -1
+
+## 暂停超时兜底计时器的代数（从 0 开始，每次申请或释放令牌都递增）。
+## 超时回调携带自己启动时的代数，只有代数仍然一致才认定为“当前令牌确实超时”，
+## 从而保证上一段过场的迟到回调不会打断（甚至结束）之后新一段过场的暂停。
+var _pause_watchdog_generation: int = 0
+
+## 本机是否为「当局局域网客户端」的只读探针，由桌面注入；未注入时按“非客户端”处理。
+## 必须是探针而不是布尔值：联机模式可能在组件创建之后才建立，缓存创建瞬间的结果会永远读到离线态。
+var _network_client_probe: Callable = Callable()
+
+## 本机是否存在待办选择请求的只读探针，由桌面注入；未注入时按“没有待办”处理。
+## 待办存在时不得申请暂停：被冻结的响应窗口会让权威端一直等待真人输入，形成整局真死锁。
+var _pending_choice_probe: Callable = Callable()
 
 ## 当前淡入淡出补间。播放新动画前先终止旧补间，避免上一段淡出把新动画一起隐藏。
 var _fade_tween: Tween
@@ -118,9 +152,22 @@ func set_pause_service(service: GameplayPauseService) -> void:
 	_pause_service = service
 
 
+## 注入「本机当前是否为当局局域网客户端」的只读探针。桌面在创建组件后调用一次即可，
+## 组件在每次申请暂停前实时求值，因此不持有网络层引用、也不关心网络模式如何变化。
+func set_network_client_probe(probe: Callable) -> void:
+	_network_client_probe = probe
+
+
+## 注入「本机当前是否存在待办选择请求」的只读探针。桌面在创建组件后调用一次即可。
+## 组件只在申请暂停前查询一次结论，不读取牌桌的请求列表，保持表现组件与牌桌状态解耦。
+func set_pending_choice_probe(probe: Callable) -> void:
+	_pending_choice_probe = probe
+
+
 ## 按触发来源播放过场动画；返回 true 表示本次确实开始播放。
 ## 来源被关闭、视频资源缺失或组件缺少播放节点时返回 false，调用方不需要任何补偿。
-func play_cutscene(source: String) -> bool:
+## allow_pause 为 false 时只播放动画、绝不申请暂停令牌：回放重演等“没有真实规则要停”的路径据此关闭暂停。
+func play_cutscene(source: String, allow_pause: bool = true) -> bool:
 	if not _is_source_enabled(source):
 		return false
 	# 本次播放使用的视频；缺失时直接放弃播放，规则流程不受影响。
@@ -129,7 +176,7 @@ func play_cutscene(source: String) -> bool:
 		return false
 	_kill_fade_tween()
 	# 暂停在播放真正开始时申请；被拒绝的播放请求不会留下无法释放的令牌。
-	_acquire_pause()
+	_acquire_pause(allow_pause)
 	_video_player.stream = stream
 	_video_player.volume_db = volume_db
 	# 重复触发时从头重播：先停止旧播放，避免上一段的残帧与新动画叠加。
@@ -165,6 +212,12 @@ func stop_cutscene() -> void:
 ## 返回当前是否正在播放过场动画。只读诊断接口，供测试复核播放状态，不参与任何规则判定。
 func is_cutscene_playing() -> bool:
 	return _playing
+
+
+## 返回当前是否已持有对局暂停令牌。只读诊断接口，供测试与调试复核“暂停是否真的由本组件持有”，
+## 不参与任何规则判定，也不改变令牌状态。
+func is_pause_held() -> bool:
+	return _pause_token >= 0
 
 
 ## 视频播完后的收尾：一边淡出一边收拢，结束后才释放暂停令牌，玩家不会看到动画消失瞬间的对局跳变。
@@ -241,14 +294,83 @@ func _apply_chroma_key_parameters() -> void:
 
 
 ## 按开关申请一次对局暂停。未开启暂停、没有注入服务或已经持有时都不重复申请。
-func _acquire_pause() -> void:
-	if not pause_gameplay_while_playing or _pause_service == null or _pause_token >= 0:
+## allow_pause 为 false 表示本次播放明确禁止申请暂停（回放重演等纯表现路径）。
+func _acquire_pause(allow_pause: bool = true) -> void:
+	if not allow_pause or not pause_gameplay_while_playing or _pause_service == null or _pause_token >= 0:
+		return
+	# 本机上下文守卫；被拒绝时只跳过暂停，过场动画继续播放。
+	if not _can_pause_in_current_context():
 		return
 	_pause_token = _pause_service.acquire_pause(PAUSE_REASON)
+	if _pause_token < 0:
+		return
+	# 令牌申请时刻；超时兜底与诊断日志共用该起点。
+	_pause_started_msec = Time.get_ticks_msec()
+	_start_pause_watchdog()
+
+
+## 判断本机当前是否允许申请暂停令牌。返回 false 时过场照常播放，只是不冻结对局。
+func _can_pause_in_current_context() -> bool:
+	# 客户端暂停灰开关：只关掉局域网客户端的暂停能力，不影响它的过场播放。
+	if not allow_pause_on_network_client and _is_network_client():
+		# 诊断日志；灰开关是显式配置，被跳过时必须能从日志看出原因，避免对外表现为“随机不暂停”。
+		print("[AhhaMomentCutscene] allow_pause_on_network_client=false 且本机为局域网客户端，本次只播放过场、不暂停对局。")
+		return false
+	# 真死锁防护：本机还有待办选择请求时不得暂停。此时响应窗口正等待玩家输入，
+	# 一旦冻结，权威端会一直认为“正在等待真人输入”而抑制停滞自修复，整局无法继续。
+	if _has_local_pending_choice():
+		# 诊断日志；该守卫对本机所有角色生效，是“过场播了却没暂停”的唯一可能原因，必须可追溯。
+		print("[AhhaMomentCutscene] 本机仍有待办选择请求，为避免响应窗口被冻结成真死锁，本次只播放过场、不暂停对局。")
+		return false
+	return true
+
+
+## 查询本机当前是否为当局局域网客户端；探针缺失或返回非布尔值时按“非客户端”处理。
+func _is_network_client() -> bool:
+	if not _network_client_probe.is_valid():
+		return false
+	return bool(_network_client_probe.call())
+
+
+## 查询本机当前是否存在待办选择请求；探针缺失或返回非布尔值时按“没有待办”处理。
+func _has_local_pending_choice() -> bool:
+	if not _pending_choice_probe.is_valid():
+		return false
+	return bool(_pending_choice_probe.call())
+
+
+## 启动暂停超时兜底计时器。计时源必须始终处理（process_always = true）且不受全局时间缩放影响：
+## 普通 Timer 会被本组件自己申请的暂停冻结，超时回调永不触发，安全网本身反而变成永久卡死的成因。
+func _start_pause_watchdog() -> void:
+	# 当前场景树；组件尚未入树时无法计时，此时交由调用方的显式出口释放令牌。
+	var scene_tree: SceneTree = get_tree()
+	if scene_tree == null:
+		return
+	_pause_watchdog_generation += 1
+	# 本次超时回调所属代数；回调只在代数未被后续申请或释放改写时才认定为仍然有效。
+	var generation: int = _pause_watchdog_generation
+	# 始终处理且忽略时间缩放的场景树计时器：前两个布尔参数分别为 process_always 与 process_in_physics，
+	# 第四个 ignore_time_scale 为 true，保证即使全局时间缩放被置零，兜底计时依然会到期。
+	var watchdog: SceneTreeTimer = scene_tree.create_timer(max_pause_seconds, true, false, true)
+	watchdog.timeout.connect(_on_pause_watchdog_timeout.bind(generation))
+
+
+## 暂停超时兜底回调：令牌持有超过 max_pause_seconds 时强制结束过场并释放令牌。
+## 只有代数仍然一致且令牌确实仍被本组件持有才会收场，因此正常播完后的迟到回调不会误伤新一段过场。
+func _on_pause_watchdog_timeout(generation: int) -> void:
+	if generation != _pause_watchdog_generation or _pause_token < 0:
+		return
+	# 令牌实际持有时长（毫秒）；诊断日志据此区分“正常播完”与“兜底强制收场”。
+	var held_msec: int = Time.get_ticks_msec() - _pause_started_msec
+	print("[AhhaMomentCutscene] 过场暂停已超过 max_pause_seconds=%.1f 秒（实际持有 %d 毫秒），强制结束过场并释放暂停令牌。" % [max_pause_seconds, held_msec])
+	stop_cutscene()
 
 
 ## 释放组件自己持有的暂停令牌。未持有令牌时不做任何事，重复调用安全。
 func _release_pause() -> void:
+	# 先让超时兜底失效并清空计时起点：无论本次是否真的持有令牌，都不允许旧回调作用到下一段过场。
+	_pause_watchdog_generation += 1
+	_pause_started_msec = -1
 	if _pause_token < 0:
 		return
 	if _pause_service != null:

@@ -1283,7 +1283,45 @@ func _create_ahha_moment_cutscene() -> void:
 	add_child(ahha_moment_cutscene)
 	# 暂停服务由桌面注入；只有组件自身的“播放期间暂停对局”开关开启时才会申请令牌。
 	ahha_moment_cutscene.set_pause_service(match_controller.gameplay_pause_service)
+	# 两个只读探针同样由桌面提供：组件据此判断“能不能停”，但不读取网络模式或牌桌请求列表。
+	# 必须用探针而不是布尔快照：联机模式在组件创建之后才建立，牌桌的待办请求也会随快照实时变化。
+	ahha_moment_cutscene.set_network_client_probe(Callable(self, "_is_local_network_client"))
+	ahha_moment_cutscene.set_pending_choice_probe(Callable(self, "_has_local_pending_choice_request"))
+	# 终局与联机会话关闭兜底：这两种收场都不会再走组件的播放出口，必须由桌面显式结束过场，
+	# 否则过场持有的暂停令牌会残留到主菜单，整局界面保持冻结。
+	match_controller.match_finished.connect(_on_match_finished_for_ahha_cutscene)
+	match_controller.network_gateway.lan_session_closed.connect(_on_lan_session_closed_for_ahha_cutscene)
 	match_controller.ahha_moment_started.connect(_on_ahha_moment_started)
+
+
+## 供过场组件查询「本机当前是否为当局局域网客户端」的只读探针；只读网络模式，不修改任何状态。
+func _is_local_network_client() -> bool:
+	if match_controller == null or match_controller.network_gateway == null:
+		return false
+	return match_controller.network_gateway.is_lan_client()
+
+
+## 供过场组件查询「本机当前是否存在待办选择请求」的只读探针；判定素材与询问渲染使用同一份列表，
+## 因此不会出现“界面认为有请求、探针认为没有”的分叉。
+func _has_local_pending_choice_request() -> bool:
+	# 快照清单：权威端下发的本人待办请求 ID 列表，并行无懈等多条请求也能完整表达。
+	if _has_local_pending_choice_request_ids and not _local_pending_choice_request_ids.is_empty():
+		return true
+	# 本地询问槽位：请求到达与下一次快照之间存在时间差，清单可能尚未刷新，
+	# 此时以界面正在显示或已建立的询问为准，保证“正在等待玩家作答”永远能被探针看到。
+	return _modal_choice_request_id >= 0 or not _inline_card_choice.is_empty()
+
+
+## 整局结束时结束过场动画；终局后不再有新的演出，残留的暂停令牌会让终局界面无法操作。
+func _on_match_finished_for_ahha_cutscene(_winner: String) -> void:
+	if ahha_moment_cutscene != null and is_instance_valid(ahha_moment_cutscene):
+		ahha_moment_cutscene.stop_cutscene()
+
+
+## 联机会话意外关闭时结束过场动画；随后不再有快照与表现事件，过场也永远等不到视频结束。
+func _on_lan_session_closed_for_ahha_cutscene(_message: String) -> void:
+	if ahha_moment_cutscene != null and is_instance_valid(ahha_moment_cutscene):
+		ahha_moment_cutscene.stop_cutscene()
 
 
 ## 阿哈时刻开始：播放过场动画并立即返回，牌桌不等待播放结果。
@@ -1292,7 +1330,8 @@ func _create_ahha_moment_cutscene() -> void:
 func _on_ahha_moment_started(_performance_count: int, source: String) -> void:
 	if ahha_moment_cutscene == null or not is_instance_valid(ahha_moment_cutscene):
 		return
-	ahha_moment_cutscene.play_cutscene(source)
+	# 回放重演期间只播放画面、不申请暂停：重演里没有真实规则需要冻结，暂停只会把回放播放器一起卡住。
+	ahha_moment_cutscene.play_cutscene(source, not _replay_session_active)
 
 
 ## 同步终局结算面板的自动展示状态；同一局只首次自动展示，用户关闭后不会被重复状态广播打断。
