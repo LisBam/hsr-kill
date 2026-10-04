@@ -92,5 +92,7 @@
 - [ ] 新增上行封包保留了 actor 防伪与序号去重。
 - [ ] 会话释放仍遵循「先脱离 SceneMultiplayer，再关闭 peer」顺序。
 - [ ] 新增聊天类数据未混入规则协议。
+- [ ] 跨端表现事件只同步**事实**、不同步**命令**：房主广播「发生了什么」（例如 `ahha_moment_started` 表示阿哈时刻演出开始），各端自行决定如何表现（是否暂停本机）；**不得**新增 `pause_started` / `pause_released` 这类把本机暂停状态写进协议的封包。
+- [ ] 新增 `game_event` 表现事件已同时加入 `MatchController._on_network_game_event_received()` 的**闭式 `elif` 白名单**。该链**没有 `else` 兜底**，漏加即客户端静默忽略（旧客户端遇新事件的安全降级），因此事件名常量与白名单分支必须成对出现；改名必须提升 `protocol_version` 并同步文档。
 - [ ] 已跑对应 `lan_*` 测试；涉双进程用例时确认本机 UDP 回环可用。
 - [ ] `docs/网络通信.md` 已同步。

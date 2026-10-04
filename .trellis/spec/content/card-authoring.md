@@ -168,6 +168,25 @@ host.call("execute_cardless_virtual_card_use", owner_player_id, "huogong", targe
 
 ---
 
+### 6. 执行牌效的路径必须经过权威目标校验
+
+「使用牌不可被指定为目标」只有**一条**权威链路：`SkillDefinition.validate_incoming_card_target_selection(actor_id, card_definition, card_color)` → `MatchController.validate_incoming_skill_card_target_selection()` → `CardRuleService._validate_target()`。`validate_use()`、`validate_virtual_use()`、`list_legal_targets()`、`list_legal_virtual_targets()` 四条正常用牌链路全部走它，**核心层不维护任何牌名或技能白名单**。
+
+因此新增任何「会实际执行某张牌牌效」的路径时（强制用牌、代理用牌、二次结算等），必须先回答：**这条路径经过权威目标校验了吗？** 只靠「存活 + 非自身 + 距离」自行拼装目标判据，会静默绕过全部卡牌目标模式、使用者技能目标限制与目标持有技能的来牌限制（【琥珀】等），且这类漏洞**只在特定内容组合下才暴露**。
+
+强制用牌（发起者与执行者不是同一角色，执行者往往也不是当前行动者，例如【借刀杀人】要求持刀者使用的【杀】）必须使用专用的阶段无关端口，**不得**改用 `validate_use()`（阶段、持牌区域与次数三道闸门会全部误报）：
+
+- 声明期枚举：`card_rules.list_legal_targets_for_definition(执行者, "sha", {"ignore_phase_limit":true, "ignore_play_count_limit":true})`。
+- 单目标资格：`card_rules.validate_target_only(actor_id, definition_id, target_id, rule_overrides)`。
+- 真实牌到手后复核：`card_rules.validate_entity_card_target(执行者, 实体牌, 目标)`，颜色强制取实体牌自身颜色，调用方**不能覆盖颜色**。
+
+**两个必须记住的边界**：
+
+1. **任何目标复核都必须传单元素目标数组**。`_validate_target()` 在牌源码 `preserves_requested_target_order()` 返回 `true`（【借刀杀人】等）且目标数组长度大于 1 时**直接判定通过**；带整组目标复核等于让被指定的角色绕过全部来牌限制。
+2. **限制要按「判定所需信息何时可得」分层**：颜色无关的限制在声明期即可排除该角色；颜色相关的限制（【琥珀】只拒绝黑色【杀】）在声明期只有无色的抽象牌，必然通过，必须在执行者交出真实牌之后复跑一次。无名杀的 `filterAddedTarget` + `game.Check.target` 正是这个分层。
+
+---
+
 ## Quality Check
 
 - [ ] `_init()` 中的静态字段齐全，且已写 `ai` 字典（见 [content-ai.md](./content-ai.md)）。
