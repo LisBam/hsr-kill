@@ -58,6 +58,10 @@ const CARD_MOVE_TIMINGS: Array[String] = [
 	# 一次面向规则的弃置动作（弃置N张、弃至上限、技能要求弃牌）全部结算完成后派发一次；
 	# 载荷 card_uids 为整批牌，供“当你弃置牌时”类技能按一次动作整批判定，避免逐张事件无法表达“这些牌”。
 	"cardsDiscardedBatchAfter",
+	# 一次面向规则的获得动作（摸牌、技能一次给多张、单张获得）全部结算完成后派发一次；
+	# 载荷 card_uids 为整批牌、batch_size 为张数，供“当你一次性获得至少两张牌时”类技能整批判定。
+	# 与 cardsDiscardedBatchAfter 对称：单张获得同样派发一次（batch_size 为1），批次边界由核心层给出而不由内容层猜测。
+	"cardsGainedBatchAfter",
 	"drawBefore", "drawBegin", "drawEnd", "drawAfter", "drawCancelled",
 	"equipBefore", "equipEnd", "equipAfter", "disableEquipBefore", "disableEquipAfter", "enableEquipAfter",
 	"addJudgeBefore", "addJudgeEnd", "addJudgeAfter", "disableJudgeBefore", "disableJudgeAfter", "enableJudgeAfter", "addToExpansionEnd", "addToExpansionAfter",

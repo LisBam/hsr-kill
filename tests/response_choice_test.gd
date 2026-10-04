@@ -68,7 +68,12 @@ func _run() -> void:
 	if leader_candidates.is_empty() or not _controller.select_character(0, selected_leader_character_id):
 		_fail("select_leader")
 		return
-	await get_tree().process_frame
+	# 本专项不测试武将技能；在流程推进前卸载全部固有技能，避免随机选中的武将（含 AI 对手）
+	# 在开局或阶段开始时创建自动询问，把初始阶段断言与后续【闪】响应窗口错位。
+	_controller._uninstall_all_character_skills()
+	# 卸载技能不会撤销“已经建立”的询问；这类询问由 AI 在 ai_action_delay_seconds 之后自行作答，
+	# 因此必须等待超过该延迟，不能只等一帧就断言阶段。
+	await get_tree().create_timer(_controller.ai_action_delay_seconds * 3.0).timeout
 	if _controller.state.current_phase != "play":
 		_fail("initial_phase=%s" % _controller.state.current_phase)
 		return

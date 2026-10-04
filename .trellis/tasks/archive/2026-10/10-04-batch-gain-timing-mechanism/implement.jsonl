@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/core/index.md", "reason": "核心层规范：批次语义与移牌管线的归属"}
+{"file": ".trellis/spec/core/layering-and-state.md", "reason": "分层与状态：瞬态字段不入档的约束"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "事件运行时与阶段：时机派发与序列等待"}
+{"file": ".trellis/spec/project/verification.md", "reason": "验证要求与测试运行方式"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步清单"}

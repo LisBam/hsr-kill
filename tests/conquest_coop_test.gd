@@ -256,6 +256,8 @@ func _test_vote_match_flow() -> bool:
 	if _controller.conquest_mode.get_level() != 3:
 		return _fail("revival_level_advance")
 	# 复活后的初始状态；存活、机缘历史与获得技能清空、体力回到武将基础上限（难度五无额外增益）、起始手牌4张。
+	# 换将后新入场的敌人可能持有会询问“是否弃置整批牌”的技能（例如砂金的【风口】），但这类询问必须由技能自己
+	# 延后到结算边界才创建，因此不会阻塞紧随换将的复活摸牌；此处不再额外代答任何请求，故障会直接暴露在下方断言。
 	var revived_base_max_hp: int = maxi(int(GameDatabase.get_character(doomed_player.character_id).get("max_hp", 4)), 1)
 	if not doomed_player.alive or not doomed_player.acquired_opportunity_ids.is_empty() or not doomed_player.acquired_skills.is_empty() or _controller.get_skill_instance(doomed_player.player_id, "gongku") != null:
 		return _fail("revival_initial_history alive=%s opportunities=%s" % [doomed_player.alive, doomed_player.acquired_opportunity_ids])

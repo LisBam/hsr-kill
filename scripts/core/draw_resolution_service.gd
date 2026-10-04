@@ -91,6 +91,10 @@ func _prepare_batch(sequence: RuleStepSequence) -> void:
 	var batch: Dictionary = {"batch_id":_host._draw_presentation_batch_sequence, "player_id":int(sequence.context.player_id)}
 	_host._active_draw_presentation_batch = batch
 	sequence.context["batch_started"] = true
+	# 获得批次作用域；同一次摸牌的全部牌共享一个 cardsGainedBatchAfter 事件。
+	# 必须在这里开启而不是在 draw() 入口：_prepare_batch 之前的所有取消与无效目标路径都不该建立批次。
+	_host._begin_gain_batch(int(sequence.context.player_id), "draw")
+	sequence.context["gain_batch_started"] = true
 	_host.draw_presentation_batch_started.emit(int(batch.batch_id), int(batch.player_id))
 	sequence.insert_steps([_draw_next_card, _draw_end, _draw_after, _finish_batch])
 
@@ -163,6 +167,8 @@ func _draw_card_commit(sequence: RuleStepSequence) -> void:
 		sequence.context["gain_cancelled"] = true
 		return
 	sequence.context.drawn_uids.append(card.uid)
+	# 计入获得批次；摸牌绕过统一移牌管线直接调用移牌服务，因此必须在此显式登记同一批次的成员。
+	_host._register_gain_into_batch(card.uid)
 	sequence.context["current_move_id"] = move.move_id
 
 
@@ -197,6 +203,11 @@ func _draw_after(sequence: RuleStepSequence) -> void:
 
 ## 事实通知全部完成后结束表现批次并恢复嵌套批次。
 func _finish_batch(sequence: RuleStepSequence) -> void:
+	# 获得批次收尾；幂等标志保证牌堆耗尽路径与正常收尾路径都只关闭一次。
+	# 先于表现批次关闭，使 cardsGainedBatchAfter 在 drawEnd/drawAfter 之后、表现收尾之前派发。
+	if bool(sequence.context.get("gain_batch_started", false)):
+		sequence.context["gain_batch_started"] = false
+		_host._end_gain_batch()
 	if bool(sequence.context.batch_started):
 		# 当前批次；完成信号发出时仍能读取本批ID。
 		var batch: Dictionary = _host._active_draw_presentation_batch as Dictionary

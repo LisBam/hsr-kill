@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容层分层与铁律：静态数据 + 规则与AI同文件"}
+{"file": ".trellis/spec/content/skill-authoring.md", "reason": "技能撰写契约：时机订阅、选择协议、上下文纯度"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "内容配套AI规范：钩子、保底分与评分复用"}
+{"file": ".trellis/spec/content/naming-and-directory.md", "reason": "文件命名与目录位置"}
+{"file": ".trellis/spec/project/verification.md", "reason": "验证要求与测试运行方式"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步清单"}

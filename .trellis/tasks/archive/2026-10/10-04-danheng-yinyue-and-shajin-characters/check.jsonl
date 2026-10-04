@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/content/index.md", "reason": "内容层质量门禁"}
+{"file": ".trellis/spec/content/content-ai.md", "reason": "配套AI的验收清单"}
+{"file": ".trellis/spec/project/verification.md", "reason": "验收命令与完成定义"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步验收"}

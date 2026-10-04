@@ -1,0 +1,30 @@
+{
+  "id": "danheng-yinyue-and-shajin-characters",
+  "name": "danheng-yinyue-and-shajin-characters",
+  "title": "丹恒·饮月与砂金新武将（含批量获得时机机制）",
+  "description": "新增武将丹恒·饮月（仙舟联盟·男·体力4，技能伏辰/濯世）与砂金（星际和平公司·男·体力3，技能筹码/盲注/风口），并新增核心机制「批量获得时机」以支撑风口第一段。含配套AI、测试与文档同步。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-04",
+  "completedAt": "2026-10-04",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-04-batch-gain-timing-mechanism",
+    "10-04-danheng-yinyue-character-and-skills",
+    "10-04-shajin-character-and-skills"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
