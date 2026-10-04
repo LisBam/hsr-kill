@@ -3,6 +3,18 @@ extends CardDefinition
 ## 【借刀杀人】卡牌源码。静态信息与效果入口均在本文件维护，目录扫描会自动完成注册。
 
 
+## 强制【杀】使用的卡牌定义ID；声明期的目标资格查询与持刀者真实提供【杀】后的目标复核读取同一份稳定值，
+## 取值必须与【杀】卡牌文件（`game_data/cards/sha.gd`）的静态 `id` 保持一致，取值范围为非空卡牌定义ID。
+## 修改影响：改动本常量会让本牌强制要求另一种牌型，属于牌面规则变更，必须同步卡牌文档与全部借刀用例。
+const SLASH_DEFINITION_ID: String = "sha"
+
+## 声明期合法【杀】目标查询使用的纯数据覆写；两个键都是核心层已有的公开覆写，不引入任何新语义。
+## ignore_phase_limit：与虚拟牌查询保持同一口径，声明期持刀者可能不是当前行动者；
+## ignore_play_count_limit：声明期只回答“是否存在合法目标”，阶段次数必须留到真实用牌时判定。
+## 取值范围为布尔字典，默认值即本常量；修改影响：去掉任一项都会让声明期判据与正常用牌链路口径不一致。
+const LEGAL_SLASH_TARGET_QUERY_OVERRIDES: Dictionary = {"ignore_phase_limit":true, "ignore_play_count_limit":true}
+
+
 ## 写入卡牌名称、类别、目标规则、数值、说明与区域语义。
 ## requires_actor_choice=true：结算结果必须回到使用者本人（持刀者未打出【杀】时其武器交给使用者），
 ## 使用者在结算前阵亡后无法承接武器或决定后续，本牌整体失效。
@@ -137,14 +149,24 @@ func modify_ai_negation_effect_utility(authoritative_snapshot: Dictionary, respo
 
 
 ## 返回持刀者攻击范围内的全部其他存活角色；自身永远不是其【杀】的合法目标。
+## 补充：本函数已退化为 CardRuleService 权威目标资格查询的纯包装，不再自行拼装“存活+非自身+攻击范围”三条件。
+## 原实现只做距离与存活判断，绕过了项目既有的通用目标合法性契约（卡牌目标模式、使用者技能目标限制、
+## 目标持有技能的来牌限制），因此【琥珀】这类“不可指定目标”的规则在借刀声明期完全失效；
+## 改为复用同一条权威查询后，此类限制对“借刀要求使用的【杀】”与正常使用【杀】完全一致，
+## 且核心层不需要任何牌名或技能白名单。
+## 语义与无名杀 `multicheck` / `filterAddedTarget` 对齐：声明期只查目标资格与攻击范围，不查使用次数。
+## 颜色型限制（【琥珀】只拒绝黑色【杀】）在声明期必然通过：此刻只有无色的抽象【杀】，
+## 真实颜色要等持刀者交出实体牌之后才可判定，由 _apply_borrow_sword_response() 中的强制复核负责。
 func _get_legal_slash_target_ids(rule_service: Object, weapon_holder_id: int) -> Array[int]:
 	# 合法【杀】目标结果；规则服务无效时保持空数组，调用方会安全转入交出武器分支。
 	var result: Array[int] = []
 	if rule_service == null or rule_service.state == null:
 		return result
-	for player: PlayerState in rule_service.state.players:
-		if player.alive and player.player_id != weapon_holder_id and rule_service.calculate_distance(weapon_holder_id, player.player_id) <= rule_service.get_attack_range(weapon_holder_id):
-			result.append(player.player_id)
+	# 权威查询返回的无类型数组；动态调用下不能直接当作 Array[int] 外泄，逐项转 int 后再写入结果。
+	var legal_targets: Array = rule_service.list_legal_targets_for_definition(weapon_holder_id, SLASH_DEFINITION_ID, LEGAL_SLASH_TARGET_QUERY_OVERRIDES)
+	for legal_target_variant: Variant in legal_targets:
+		# 当前合法被【杀】者ID；转换后维持本函数的 Array[int] 返回契约。
+		result.append(int(legal_target_variant))
 	return result
 
 
@@ -180,6 +202,21 @@ func _apply_borrow_sword_response(resolver: Object, context: Dictionary, slash: 
 	# 持刀者 ID；其酒加值只在实际提供【杀】时消耗。
 	var weapon_holder_id: int = int(context.get("responder_id", -1))
 	if slash == null:
+		resolver.host.transfer_equipment(weapon_holder_id, source_id, "weapon")
+		return
+	# 本次强制【杀】的已声明被【杀】者ID；声明期已固定，此处只读取，不再创建任何目标选择。
+	var victim_id: int = int(context.get("victim_id", -1))
+	# 真实牌目标资格复核结果；空字符串表示这张【杀】确实可以指定被【杀】者。
+	# 补充：这是颜色型来牌限制（【琥珀】只拒绝黑色【杀】）唯一能生效的时机——声明期只有无色的抽象【杀】，
+	# 真实颜色要等持刀者交出这张实体牌之后才可判定，与无名杀在目标选择阶段用 `game.Check.target` 复跑一致。
+	# 复核入口刻意传单元素目标数组：二元组会命中 CardRuleService._validate_target 针对
+	# preserves_requested_target_order() 的提前返回，使被【杀】者重新绕过全部来牌限制，正是本次修复的缺陷本身。
+	var target_legality_error: String = resolver.host.card_rules.validate_entity_card_target(weapon_holder_id, slash, victim_id)
+	if not target_legality_error.is_empty():
+		# 复核失败：本次强制【杀】不成立，不造成伤害，也不消耗持刀者的酒加值（该【杀】并未真正使用）。
+		# 按无名杀 result.bool == false 的语义回落到“持刀者将武器交给借刀杀人使用者”分支。
+		# 该【杀】的实体已由响应窗口按“使用”完成消费与回收，此处不得再次移动，避免同一张牌被回收两次。
+		resolver.host.add_log("借刀杀人：%s无法对%s使用%s，%s" % [resolver.host.format_player_log_name(weapon_holder_id), resolver.host.format_player_log_name(victim_id), resolver.host.format_card_log_name(slash), target_legality_error])
 		resolver.host.transfer_equipment(weapon_holder_id, source_id, "weapon")
 		return
 	# 持刀者状态；用于读取并清空本回合下一张【杀】的酒加值。

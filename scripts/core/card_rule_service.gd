@@ -271,6 +271,77 @@ func list_legal_targets(actor_id: int, card: CardInstance) -> Array[int]:
 	return result
 
 
+## 检查单个目标是否具备资格，返回空字符串表示可以，否则返回可直接显示的原因。
+## 合同（本端口存在的唯一理由）：只回答“这个角色能否作为这张牌的合法目标”，因此
+## **不检查出牌阶段、不检查是否当前行动者、不检查牌的持有区域、不检查配置化使用次数，也不咨询用牌禁令钩子**。
+## 需要这些整体约束的调用方仍应使用 validate_use / validate_virtual_use；本端口只解决“资格”这一个问题。
+## 逐目标判定复用 _validate_target，因此存活与离场、target_mode、distance_limit、卡牌专属目标组合规则、
+## 使用者技能目标限制与目标持有技能的来牌限制（【琥珀】等“不可指定目标”类）都与正常用牌读取同一份权威实现。
+## rule_overrides 中的 card_color 决定颜色型来牌限制，缺失时按 none 处理；定义补丁 definition_patch 同样生效。
+## 调用方注意：目标数量、重复目标与多目标组合语义不在本查询范围内，多目标牌必须逐目标各调用一次。
+func validate_target_only(actor_id: int, definition_id: String, target_id: int, rule_overrides: Dictionary = {}) -> String:
+	# 目标所属牌的使用者状态；无效使用者不能产生任何合法目标。
+	var actor: PlayerState = state.get_player(actor_id) if state != null else null
+	# 是否允许已离场但仍存活的使用者；与虚拟牌查询共用同一覆写，普通内容不得开放该字段。
+	var allow_out_of_game_actor: bool = bool(rule_overrides.get("allow_out_of_game_actor", false))
+	if actor == null or not actor.alive or (actor.out_of_game and not allow_out_of_game_actor):
+		return "行动玩家不存在、已经死亡或已移出游戏。"
+	# 目标规则定义；携带 definition_patch 时使用合并后的定义，与目标枚举读取同一份 target_mode 与数量限制。
+	var definition: Dictionary = _resolve_definition(definition_id, rule_overrides)
+	if definition.is_empty():
+		return "卡牌定义不存在。"
+	# 单元素目标数组；刻意不复用调用方可能已含多目标的数组，避免命中 preserves_requested_target_order() 的提前返回，
+	# 使“不可指定目标”类来牌限制在每一位目标上都必须独立成立，而不是被整张牌的角色顺序语义整体短路。
+	return _validate_target(actor, definition, target_id, [target_id], rule_overrides)
+
+
+## 返回指定使用者在这张牌定义上当前具备资格的全部目标；逐目标判定与 validate_target_only 完全同源。
+## 合同：与出牌阶段、当前行动者身份、持牌区域和使用次数无关，因此“非当前行动者”的强制用牌（【借刀杀人】
+## 要求持刀者使用的【杀】）可以直接复用；与 validate_use / list_legal_targets 的差别正是少了阶段、行动者、
+## 持牌区域、次数与用牌禁令这五道整牌闸门。
+## 调用方仍应按项目既有契约显式传入 pure-data 覆写（例如 {"ignore_phase_limit":true}）：本查询自身不含阶段闸门，
+## 该覆写使这条链路与 validate_virtual_use / list_legal_virtual_targets 读取同一份语义，避免同一调用点在两处得到不同结论。
+## 本查询不咨询用牌禁令钩子（那是“整张牌能不能用”，与目标资格无关），也不做目标数量与重复目标校验。
+func list_legal_targets_for_definition(actor_id: int, definition_id: String, rule_overrides: Dictionary = {}) -> Array[int]:
+	# 合法目标结果；使用者或定义无效时保持空数组，调用方据此安全转入各自的“没有合法目标”分支。
+	var result: Array[int] = []
+	# 使用者状态；死亡与离场角色不能枚举任何目标。
+	var actor: PlayerState = state.get_player(actor_id) if state != null else null
+	# 目标规则定义；definition_patch 与 validate_target_only 读取同一份合并结果。
+	var definition: Dictionary = _resolve_definition(definition_id, rule_overrides)
+	# 是否允许已离场但仍存活的使用者；与 validate_target_only 共用同一覆写键。
+	var allow_out_of_game_actor: bool = bool(rule_overrides.get("allow_out_of_game_actor", false))
+	if actor == null or not actor.alive or (actor.out_of_game and not allow_out_of_game_actor) or definition.is_empty():
+		return result
+	for target: PlayerState in state.players:
+		# 当前候选目标；只对存活且在场的角色做单目标资格判定，全部限制仍由 _validate_target 统一给出。
+		if target.alive and not target.out_of_game and _validate_target(actor, definition, target.player_id, [target.player_id], rule_overrides).is_empty():
+			result.append(target.player_id)
+	return result
+
+
+## 对一张已经存在的实体牌复核“它能否指定该角色”；供强制用牌在真实牌到手之后判定颜色相关的来牌限制。
+## 合同：颜色一律取实体牌自身的 get_color()（含转化牌的聚合颜色与手牌标记覆写），调用方不能覆写颜色，
+## 因此不存在“伪造颜色绕过【琥珀】”的入口；这与 validate_use 内部使用的 _get_entity_card_rule_overrides() 是同一份覆写。
+## 同样与出牌阶段、当前行动者、持牌区域和使用次数无关：强制【杀】的持刀者不是当前行动者，且该牌此刻常常已在处理区，
+## 所以本端口绝不能改用 validate_use（它的阶段、持牌区域与次数三道闸门都会误报）。
+## 调用方注意：仍然只回答“这一位目标”的资格，多目标牌必须逐目标各调用一次。
+func validate_entity_card_target(actor_id: int, card: CardInstance, target_id: int) -> String:
+	# 实体牌存在性；缺失时无法回答任何目标资格。
+	if card == null:
+		return "指定卡牌不存在。"
+	# 用牌来源状态；已死亡或已移出游戏的角色不能成为用牌来源。
+	var actor: PlayerState = state.get_player(actor_id) if state != null else null
+	if actor == null or not actor.alive or actor.out_of_game:
+		return "行动玩家不存在、已经死亡或已移出游戏。"
+	# 卡牌定义；牌堆校验正常时不应为空，仍保留防御性检查。
+	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
+	if definition.is_empty():
+		return "卡牌定义不存在。"
+	# 单元素目标数组；与 validate_target_only 同一理由，必须绕开 preserves_requested_target_order() 对多目标数组的短路。
+	return _validate_target(actor, definition, target_id, [target_id], _get_entity_card_rule_overrides(card))
+
+
 ## 把目标规范为规则行动顺序；自指与全体模式自动展开，普通多目标按座次重排，借刀杀人保留两个目标的角色语义顺序。
 ## rule_overrides 中的定义补丁会参与判定，使“效果取甲牌、目标模式取乙牌”的虚拟牌在自动展开与后续校验两处读取同一个 target_mode。
 func normalize_targets(actor_id: int, card: CardInstance, requested_targets: Array[int], rule_overrides: Dictionary = {}) -> Array[int]:
