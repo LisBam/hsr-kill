@@ -1261,11 +1261,18 @@ func _run() -> void:
 	var drawn_local_player: Dictionary = (drawn_snapshot.get("players", []) as Array)[4] as Dictionary
 	drawn_local_player["hand"] = [gained_card_data, drawn_card_data]
 	drawn_local_player["hand_count"] = 2
+	# 牌背判定入口口径；进入本机手牌区的牌一律正面，其他观察者不可见的私有牌面仍必须是牌背。
+	if bool(main_instance.call("_should_show_card_back", -1, "draw_pile", 4, "hand")) or bool(main_instance.call("_should_show_card_back", 5, "hand", 4, "hand")) or bool(main_instance.call("_should_show_card_back", 4, "hand", 4, "hand")):
+		_fail("local_hand_gain_card_back_rule")
+		return
+	if not bool(main_instance.call("_should_show_card_back", 5, "hand", 6, "hand")) or not bool(main_instance.call("_should_show_card_back", -1, "draw_pile", 5, "hand")):
+		_fail("observer_hidden_card_back_rule")
+		return
 	main_instance.call("_on_card_transfer_requested", drawn_card_data, -1, "draw_pile", 4, "hand")
-	# 登记阶段；牌堆来源的飞行起点是中央公共锚点，且摸牌信息不公开，因此飞行牌面必须是牌背。
+	# 登记阶段；牌堆来源的飞行起点是中央公共锚点；进入本机手牌区的牌直接显示正面，不再以牌背飞入手牌区。
 	var drawn_gate: Dictionary = (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).get(90006, {}) as Dictionary
 	var drawn_flight_card: CardView = drawn_gate.get("card") as CardView
-	if drawn_gate.is_empty() or bool(drawn_gate.get("started", false)) or drawn_flight_card == null or not drawn_flight_card.is_face_down or not animation_layer._transfer_cards.is_empty():
+	if drawn_gate.is_empty() or bool(drawn_gate.get("started", false)) or drawn_flight_card == null or drawn_flight_card.is_face_down or not animation_layer._transfer_cards.is_empty():
 		_fail("local_draw_flight_registered gate=%s back=%s" % [drawn_gate, drawn_flight_card.is_face_down if drawn_flight_card != null else "null"])
 		return
 	# 飞行起点必须落在手牌区之外；若起点已经位于手牌区内，玩家会看到牌凭空出现在手牌里再被飞一次。
@@ -1436,6 +1443,13 @@ func _run() -> void:
 	if animation_layer._transfer_cards.size() != 2 or continuity_batch_card == null or continuity_batch_second_card == null or continuity_batch_card.hand_entry_offset.is_zero_approx() or continuity_batch_second_card.hand_entry_offset.is_zero_approx() or hand_container.get_global_rect().has_point(continuity_batch_origin_global):
 		_fail("batch_draw_gated transfers=%d offsets=%s/%s" % [animation_layer._transfer_cards.size(), continuity_batch_card.hand_entry_offset, continuity_batch_second_card.hand_entry_offset])
 		return
+	# 本机批次飞行牌面；进入本机手牌区的牌必须全部是正面，不得再有牌背飞入。
+	for continuity_batch_view_variant: Variant in animation_layer._transfer_cards.values():
+		# 当前批次飞行牌面；牌背会让玩家看到落地瞬间的翻面突变。
+		var continuity_batch_view: CardView = continuity_batch_view_variant as CardView
+		if continuity_batch_view == null or continuity_batch_view.is_face_down:
+			_fail("batch_draw_face_down:%s" % [continuity_batch_view])
+			return
 	# 落地帧；两张牌背必须分别停在两张正式节点各自的槽位中心，证明存在逐张落点而不是整组居中。
 	await get_tree().create_timer(0.2).timeout
 	var continuity_batch_first_slot: Vector2 = continuity_batch_card.global_position + continuity_batch_card.get_card_size() * 0.5
