@@ -2453,6 +2453,9 @@ func _render_local_hand() -> void:
 		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
 			card_view = _create_local_hand_card_view(card_uid)
 		card_view.configure(card, definition, wooden_ox_card, card_interactable)
+		# 外观镜像：正式节点每次重配后都要把明暗同步给同一张牌正在进行的飞行牌面；
+		# 放在这里是因为飞行可能跨越多次快照，只有每次重配都同步才能保证落地交接时两者完全一致。
+		_sync_local_hand_gain_flight_appearance(card_uid, card_view)
 		next_card_views[card_uid] = card_view
 		ordered_card_views.append(card_view)
 	_card_views = next_card_views
@@ -4958,6 +4961,23 @@ func _forget_taken_over_hand_card(card_uid: int, card_view: CardView) -> void:
 	_card_views.erase(card_uid)
 
 
+## 把正式手牌节点的明暗同步到同一张牌正在进行的获得牌飞行牌面上；每次快照重配正式节点后调用。
+##
+## 正式节点落地后就是玩家最终看到的那张牌：若飞行牌面一直保持默认的禁用压暗，而正式节点是可用状态（明亮），
+## 玩家会在牌刚进入手牌区之后看到一次亮度跳变（飞行牌面淡出、底下亮牌显露）。
+## 同步只写观感，不改变飞行牌面的输入权限与 UID，因此飞行中的牌仍然不可点击。
+func _sync_local_hand_gain_flight_appearance(card_uid: int, card_view: CardView) -> void:
+	# 当前门闸记录；本机区域之间移动、普通对账都不会登记门闸，此时没有飞行牌面需要同步。
+	var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid, {}) as Dictionary
+	if gate.is_empty():
+		return
+	# 当前门闸记录的飞行牌面；已被清场释放时跳过，正式节点仍会正常落位。
+	var flight_card_variant: Variant = gate.get("card", null)
+	if not (flight_card_variant is CardView) or not is_instance_valid(flight_card_variant):
+		return
+	(flight_card_variant as CardView).set_content_dimmed(card_view.is_content_dimmed())
+
+
 ## 登记一次本机获得牌的前置飞行；返回 true 表示已经登记门闸并需要等待落地回调解除。
 ##
 ## 只有“来源不是本机自己的区域”的获得才需要前置飞行：本机区域之间的移动没有可见来源，
@@ -5012,9 +5032,16 @@ func _release_local_hand_gain_flight_gates(card_uids: Array) -> void:
 	for card_uid_variant: Variant in card_uids:
 		# 当前解闸实体 UID；迟到或已清理的 UID 不会误触发落位。
 		var card_uid: int = int(card_uid_variant)
+		# 当前门闸记录；解闸前先取出飞行牌面，落地帧要立即隐去它，只留下正式手牌节点。
+		var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid, {}) as Dictionary
 		if _local_hand_gain_flight_gates.erase(card_uid):
 			released_any = true
 			released_uids.append(card_uid)
+			# 飞行牌面与正式节点此刻停在同一个槽位；立即隐去飞行牌面，避免两张牌重叠产生亮度与描边差异，
+			# 也避免看不见的上层牌面继续拦截鼠标、挡住刚落地的手牌点击。
+			var landed_card_variant: Variant = gate.get("card", null)
+			if landed_card_variant is CardView and is_instance_valid(landed_card_variant):
+				(landed_card_variant as CardView).visible = false
 	if released_any:
 		_finish_local_hand_gain_holds(released_uids)
 
