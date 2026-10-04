@@ -401,6 +401,13 @@ func complete_reincarnation_activation() -> bool:
 	return reincarnation and matches_character_generation() and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_id()))
 
 
+## 复位一次“已 begin 但效果未成立”的轮回技发动；不登记额度、不推进轮回节。
+## 与 complete_reincarnation_activation 配对使用：费用支付或目标校验失败的分支必须先复位，
+## 否则 begin 时捕获的“本次发动归属轮回节”会残留，并被下一次无关的 complete 误登记为已用额度。
+func cancel_reincarnation_activation() -> bool:
+	return reincarnation and matches_character_generation() and host != null and host.has_method("cancel_reincarnation_skill_activation") and bool(host.call("cancel_reincarnation_skill_activation", owner_player_id, get_id()))
+
+
 ## 返回当前轮回技是否未触及通用限次；技能自身条件仍应在具体can_activate或触发回调中判断。
 func can_activate_reincarnation() -> bool:
 	return reincarnation and matches_character_generation() and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_id()))

@@ -27,6 +27,8 @@ func _run() -> void:
 		return
 	if not _test_awakening_and_one_section_reincarnation():
 		return
+	if not _test_reincarnation_section_quota_accounting():
+		return
 	if not _test_xvechou_shishen_and_restore():
 		return
 	if not _test_play_limit_semantics():
@@ -179,6 +181,165 @@ func _test_awakening_and_one_section_reincarnation() -> bool:
 ## 记录正式轮回生命周期事件名；回调不修改事件，保证测试只观察服务派发顺序。
 func _capture_reincarnation_lifecycle(event: RuleEvent) -> void:
 	_reincarnation_lifecycle_events.append(event.name)
+
+
+## 校验“出牌阶段每个轮回节限一次”的额度记账契约（design §3.2 全部七行口径）。
+##
+## 覆盖四个独立缺陷面，全部经正式服务端口与真实技能效果驱动，生产代码不白名单任何技能ID：
+## A. 效果内部的外部推进（【征服】在堪杀③伤害内同步把轮回技推进一节）不得改写“本次发动归属节”；
+## B. 同一出牌阶段再次循环到同一个轮回节必须被拒绝，而不是可以第二次发动；
+## C. 嵌套选择窗口（公开阶段临时为choice）内完成的发动仍必须登记额度；
+## D. 阶段入口重置与实例号失效两道防线；以及 cancel_activation 不消费额度。
+func _test_reincarnation_section_quota_accounting() -> bool:
+	# ---- A/B：真实【征服】外部推进发生在③伤害结算内 ----
+	_reset_state(3)
+	# 空对局ID：无人持有救援牌时同步跳过响应界面，使阵营推进在本次伤害内同步完成。
+	_controller.state.match_id = ""
+	# 技能持有者刻律德菈；属于翁法罗斯势力，其领袖技【征服】会推进全部翁法罗斯角色的轮回技。
+	var quota_owner: PlayerState = _controller.state.get_player(0)
+	quota_owner.character_id = "kelvdela"
+	# 被击杀者必须是**非**翁法罗斯角色，才会走“推进全体轮回节”分支；置于1点体力使③直接致命。
+	var quota_victim: PlayerState = _controller.state.get_player(2)
+	quota_victim.character_id = "natasha"
+	quota_victim.hp = 1
+	# 另一名存活角色；③在后续复核中需要至少一名存活目标，因此显式断言它仍然存活。
+	var quota_bystander: PlayerState = _controller.state.get_player(1)
+	quota_bystander.character_id = "natasha"
+	if not quota_bystander.alive:
+		return _fail("section_quota_bystander_dead")
+	# 堪杀实例；③直接携带伤害目标，伤害在 complete_reincarnation_activation 之前执行。
+	var quota_kansha: SkillDefinition = _install_skill(0, "kansha")
+	# 征服实例；订阅die时机，只在持有者是伤害来源且被击杀者真实阵亡时结算。
+	_install_skill(0, "zhengfu")
+	if quota_kansha == null:
+		return _fail("section_quota_kansha_install")
+	if str((GameDatabase.get_character("kelvdela") as Dictionary).get("faction", "")) != "wengfaluosi" or str((GameDatabase.get_character("natasha") as Dictionary).get("faction", "")) == "wengfaluosi":
+		return _fail("section_quota_faction_precondition")
+	# 推进到③；推进本身不得清空额度，因此这里同时是“推进不清空额度”契约的隐式前提。
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	if quota_kansha.get_reincarnation_section_index() != 2:
+		return _fail("section_quota_setup=%s" % quota_kansha.get_reincarnation_state())
+	if quota_kansha.activate({"target_ids":[2]}) != "" or quota_victim.alive or not quota_victim.death_confirmed:
+		return _fail("section_quota_activate=%s/%s" % [quota_kansha.get_reincarnation_state(), quota_victim.alive])
+	# 本次实际发动的归属节必须是③（零基2）；效果内被【征服】推进后的节不得被登记为本次发动。
+	var quota_state_a: Dictionary = _controller.get_reincarnation_skill_state(0, "kansha")
+	if (quota_state_a.get("used_sections_this_play_phase", []) as Array) != [2]:
+		return _fail("section_quota_used_sections=%s" % quota_state_a)
+	# 精确的推进轨迹：征服在伤害内把最后一节③推进到轮回2的①，随后完成入口再从①推进到②。
+	if int(quota_state_a.get("round_count", 0)) != 2 or int(quota_state_a.get("section_index", -1)) != 1:
+		return _fail("section_quota_conquest_advance=%s" % quota_state_a)
+	# 死亡结算可能已经推进阶段；这里回到出牌阶段语境以复核“同一阶段内不得重复发动同一节”。
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "play"
+	# 再推进一节即回到③；③已经用过，必须被“每个轮回节限一次”拒绝。
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	if quota_kansha.get_reincarnation_section_index() != 2 or quota_kansha.can_activate():
+		return _fail("section_quota_repeat_damage_section=%s" % quota_kansha.get_reincarnation_state())
+
+	# ---- ①②各一次后，跨轮回回到已用过的①仍不可发动 ----
+	# 让堪杀回到①；③所在轮回已结束，因此再推进一次即进入下一轮回的①。
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	if quota_kansha.get_reincarnation_section_index() != 0:
+		return _fail("section_quota_back_to_first=%s" % quota_kansha.get_reincarnation_state())
+	quota_owner.hand.clear()
+	# 两张红色费用牌；第二张保证“①被拒绝”只可能来自额度，而不是缺少费用。
+	var quota_red_first: CardInstance = CardInstance.new("shan", "diamond", 3)
+	quota_red_first.zone = "hand"
+	quota_red_first.owner_id = 0
+	quota_owner.hand.append(quota_red_first)
+	# 备用红色费用牌；用于证明①被封锁不是因为无牌可弃。
+	var quota_red_spare: CardInstance = CardInstance.new("shan", "heart", 4)
+	quota_red_spare.zone = "hand"
+	quota_red_spare.owner_id = 0
+	quota_owner.hand.append(quota_red_spare)
+	if quota_kansha.activate({"card_uid":quota_red_first.uid}) != "":
+		return _fail("section_quota_first_section_activate")
+	# ①与③的额度按节独立累计，且跨节累加在同一出牌阶段内保持。
+	var quota_used_after_first: Array = quota_kansha.get_reincarnation_state().get("used_sections_this_play_phase", []) as Array
+	if quota_used_after_first.size() != 2 or not quota_used_after_first.has(0) or not quota_used_after_first.has(2):
+		return _fail("section_quota_first_section_used=%s" % quota_kansha.get_reincarnation_state())
+	# 连续推进两节后进入下一轮回并回到①；已用过的①必须仍然不可发动。
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	_controller.enter_next_reincarnation_section(0, "kansha")
+	if quota_kansha.get_reincarnation_section_index() != 0 or quota_kansha.can_activate():
+		return _fail("section_quota_reused_first_section=%s" % quota_kansha.get_reincarnation_state())
+
+	# ---- 阶段入口重置：控制器唯一入口必须清空额度并颁发新实例号 ----
+	var quota_scope_before: int = _controller.get_play_phase_scope_id()
+	_controller._note_play_phase_entered(0)
+	if _controller.get_play_phase_scope_id() != quota_scope_before + 1:
+		return _fail("section_quota_scope_sequence=%d/%d" % [quota_scope_before, _controller.get_play_phase_scope_id()])
+	if (quota_kansha.get_reincarnation_state().get("used_sections_this_play_phase", []) as Array) != []:
+		return _fail("section_quota_entry_clears=%s" % quota_kansha.get_reincarnation_state())
+	if not quota_kansha.can_activate_reincarnation():
+		return _fail("section_quota_entry_reopens=%s" % quota_kansha.get_reincarnation_state())
+
+	# ---- C：嵌套选择窗口内完成的发动仍必须登记额度 ----
+	_reset_state(3)
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "play"
+	# 堪杀实例；①在没有直接费用UID时会创建真实的选牌请求，把公开阶段临时写成choice。
+	var quota_nested_kansha: SkillDefinition = _install_skill(0, "kansha")
+	if quota_nested_kansha == null:
+		return _fail("section_quota_nested_install")
+	# 真实红色手牌；①的费用候选。
+	var quota_nested_red: CardInstance = CardInstance.new("shan", "diamond", 5)
+	quota_nested_red.zone = "hand"
+	quota_nested_red.owner_id = 0
+	_controller.state.get_player(0).hand.append(quota_nested_red)
+	if quota_nested_kansha.activate({}) != "" or str(_controller.state.current_phase) != "choice" or _controller._pending_card_choice.is_empty():
+		return _fail("section_quota_nested_request=%s" % _controller._pending_card_choice)
+	# 真实规则阶段必须由控制器端口从选择窗口背后读出，而不是比较临时公开阶段。
+	if not _controller.is_play_phase_of(0):
+		return _fail("section_quota_nested_port phase=%s choice=%s" % [_controller.state.current_phase, _controller._pending_card_choice])
+	# 嵌套选择窗口内完成发动的轮回技；使用独立测试定义，避免依赖任何具体技能的发动条件。
+	var quota_nested_skill: SkillDefinition = SkillDefinition.new({"id":"nested_quota_test", "reincarnation":true, "reincarnation_section_count":1, "reincarnation_has_explicit_sections":false, "reincarnation_each_section_once_per_play_phase":true, "description":"轮回技，出牌阶段每个轮回节限一次，①你摸一张牌。"})
+	quota_nested_skill.bind(_controller, 0)
+	if not quota_nested_skill.begin_reincarnation_activation() or not quota_nested_skill.complete_reincarnation_activation():
+		return _fail("section_quota_nested_activation=%s" % quota_nested_skill.get_reincarnation_state())
+	if (quota_nested_skill.get_reincarnation_state().get("used_sections_this_play_phase", []) as Array) != [0]:
+		return _fail("section_quota_nested_used=%s" % quota_nested_skill.get_reincarnation_state())
+	if quota_nested_skill.can_activate_reincarnation():
+		return _fail("section_quota_nested_not_consumed=%s" % quota_nested_skill.get_reincarnation_state())
+	# 关闭嵌套请求，避免残留待办影响后续断言。
+	_controller._pending_card_choice.clear()
+	_controller.state.current_phase = "play"
+
+	# ---- D：实例号错配的第二道防线 + cancel_activation 不消费额度 ----
+	_controller._note_play_phase_entered(0)
+	if not quota_nested_skill.begin_reincarnation_activation() or not quota_nested_skill.complete_reincarnation_activation():
+		return _fail("section_quota_scope_activation")
+	if quota_nested_skill.can_activate_reincarnation():
+		return _fail("section_quota_scope_not_consumed=%s" % quota_nested_skill.get_reincarnation_state())
+	# 模拟“某个阶段入口漏调唯一重置入口”：只递增实例号，不通知服务；旧额度必须自动失效。
+	_controller._play_phase_scope_sequence += 1
+	if not quota_nested_skill.can_activate_reincarnation():
+		return _fail("section_quota_scope_mismatch=%s" % quota_nested_skill.get_reincarnation_state())
+	# cancel_activation 只复位归属快照：未真正成立的发动不得占用任何轮回节额度。
+	_controller._note_play_phase_entered(0)
+	if not quota_nested_skill.begin_reincarnation_activation():
+		return _fail("section_quota_cancel_begin")
+	if not quota_nested_skill.cancel_reincarnation_activation():
+		return _fail("section_quota_cancel_port")
+	if (quota_nested_skill.get_reincarnation_state().get("used_sections_this_play_phase", []) as Array) != [] or not quota_nested_skill.can_activate_reincarnation():
+		return _fail("section_quota_cancel_consumed=%s" % quota_nested_skill.get_reincarnation_state())
+	# 被取消的归属不得被后续无关的 complete 误登记：完成一次真实发动时只登记真实归属节。
+	if not quota_nested_skill.begin_reincarnation_activation() or not quota_nested_skill.complete_reincarnation_activation():
+		return _fail("section_quota_after_cancel_activation")
+	if (quota_nested_skill.get_reincarnation_state().get("used_sections_this_play_phase", []) as Array) != [0]:
+		return _fail("section_quota_after_cancel_used=%s" % quota_nested_skill.get_reincarnation_state())
+
+	# ---- 阶段实例号随存档回合流一并存取 ----
+	# 存档回合流快照；写出后再读回，实例号游标不得丢失或回退。
+	var quota_turn_flow: Dictionary = (_controller._build_conquest_save_data("play_phase", 0).get("turn_flow", {}) as Dictionary)
+	if int(quota_turn_flow.get("play_phase_scope_sequence", -1)) != _controller.get_play_phase_scope_id():
+		return _fail("section_quota_save_scope=%s" % quota_turn_flow)
+	_controller._play_phase_scope_sequence = 0
+	_controller._restore_conquest_turn_flow_state(quota_turn_flow)
+	if _controller.get_play_phase_scope_id() != int(quota_turn_flow.get("play_phase_scope_sequence", -1)):
+		return _fail("section_quota_restore_scope=%d" % _controller.get_play_phase_scope_id())
+	return true
 
 
 ## 记录弑神真实【杀】的目标、濒死与牌效时机；shaBefore额外读取控制器共享伤害参数。

@@ -12,6 +12,16 @@ const ETERNAL_CORNER_TEXT_ORDER: int = 50
 ## “永劫”条目固定显示文本；与技能名保持一致，不附加轮回数或具体技能名。
 const ETERNAL_CORNER_TEXT: String = "永劫"
 
+## “本次发动归属轮回节”的未设置哨兵值；-1 表示当前没有待完成的发动，任何非负值都是有效的零基轮回节索引。
+## 引入原因：效果执行期间可能发生轮回节外部推进（例如伤害经【征服】改写节索引），事后重读实时索引会记错节，
+## 因此必须在发动开始前捕获归属节并在完成时消费这一捕获值；哨兵只表示“没有捕获”，不会与合法的 0（①）混淆。
+const PENDING_SECTION_NONE: int = -1
+
+## “出牌阶段实例号”的未设置哨兵值；0 表示调用方未提供实例号（无头单测或旧调用方），此时不做实例号失效校验。
+## 引入原因：额度重置原先只依赖“记得调用阶段入口”，漏调即泄漏；实例号让旧额度在没有新入口调用时也能自动失效。
+## 取值含义：0 = 未设置；>= 1 = 控制器在进入任意出牌阶段时递增颁发的真实实例号。默认 0 是为了保持既有直接调用语义。
+const PLAY_PHASE_SCOPE_UNSET: int = 0
+
 ## 当前绑定的对局控制器；服务只调用稳定规则端口，不直接持有界面节点或技能运行时实例。
 var _host: Object
 
@@ -69,6 +79,10 @@ func register_skill(player_id: int, skill_id: String, metadata: Dictionary) -> b
 			"eternal_uses_this_turn":0,
 			"each_section_once_per_play_phase":bool(metadata.get("reincarnation_each_section_once_per_play_phase", false)),
 			"used_sections_this_play_phase":[],
+			# 本次发动的归属轮回节索引；PENDING_SECTION_NONE 表示没有待完成发动，由 begin_activation 捕获、complete_activation 消费。
+			"pending_activation_section_index":PENDING_SECTION_NONE,
+			# 额度所属的出牌阶段实例号；PLAY_PHASE_SCOPE_UNSET 表示旧存档或旧调用方，此时不做实例号失效校验。
+			"play_phase_scope_id":PLAY_PHASE_SCOPE_UNSET,
 		}
 	else:
 		skill_state["section_count"] = section_count
@@ -143,7 +157,8 @@ func can_activate(player_id: int, skill_id: String) -> bool:
 		return false
 	if bool(skill_state.get("each_section_once_per_play_phase", false)) and _is_owner_play_phase(player_id):
 		# 本出牌阶段已经发动过的轮回节索引；不同轮回节分别拥有一次额度。
-		var used_sections: Array = skill_state.get("used_sections_this_play_phase", []) as Array
+		# 必须经 _effective_used_sections 读取：阶段实例号错配时旧额度自动失效，避免漏调阶段入口造成跨阶段泄漏。
+		var used_sections: Array = _effective_used_sections(skill_state)
 		if used_sections.has(int(skill_state.get("section_index", 0))):
 			return false
 	_store_skill_state(player_id, skill_id, skill_state)
@@ -156,7 +171,23 @@ func begin_activation(player_id: int, skill_id: String) -> bool:
 		return false
 	# 当前轮回状态；can_activate 已完成缺失与限次校验。
 	var skill_state: Dictionary = get_skill_state(player_id, skill_id)
+	# 本次发动归属的轮回节索引；必须在效果执行前捕获。
+	# 效果内部的伤害可同步触发外部推进（例如【征服】令全部轮回技进入下一个轮回节），
+	# 事后重读 section_index 会把已经推进后的节登记为“本次发动”，导致真正的节漏登记、另一个节被误封锁。
+	skill_state["pending_activation_section_index"] = maxi(int(skill_state.get("section_index", 0)), 0)
 	_ensure_current_section_started(player_id, skill_id, skill_state)
+	_store_skill_state(player_id, skill_id, skill_state)
+	return true
+
+
+## 复位一次“已标记开始但效果未真正生效”的轮回技发动；不登记任何额度，避免陈旧归属被后续无关的 complete 误消费。
+## 使用场景：技能已通过 begin_reincarnation_activation 但费用支付或目标校验失败（例如【堪杀】弃牌失败分支）。
+func cancel_activation(player_id: int, skill_id: String) -> bool:
+	# 当前轮回状态；未登记技能没有可复位的待完成发动。
+	var skill_state: Dictionary = get_skill_state(player_id, skill_id)
+	if skill_state.is_empty():
+		return false
+	skill_state["pending_activation_section_index"] = PENDING_SECTION_NONE
 	_store_skill_state(player_id, skill_id, skill_state)
 	return true
 
@@ -270,8 +301,9 @@ func exit_eternal_state(player_id: int, skill_id: String) -> bool:
 	return true
 
 
-## 每次进入任意普通或额外出牌阶段时清空该角色各轮回节的阶段发动记录。
-func on_play_phase_started(player_id: int) -> void:
+## 每次进入任意普通或额外出牌阶段时清空该角色各轮回节的阶段发动记录，并记下本次阶段的实例号。
+## scope_id 为 PLAY_PHASE_SCOPE_UNSET 时保持既有“调用即清空、不做实例号校验”的语义，供无头单测与旧调用方直接使用。
+func on_play_phase_started(player_id: int, scope_id: int = PLAY_PHASE_SCOPE_UNSET) -> void:
 	# 技能持有者；无效角色没有需要重置的轮回阶段额度。
 	var player: PlayerState = _get_player(player_id)
 	if player == null:
@@ -282,6 +314,10 @@ func on_play_phase_started(player_id: int) -> void:
 		# 当前技能状态；只清空出牌阶段额度，轮回数与永劫计数保持不变。
 		var skill_state: Dictionary = player.reincarnation_skills.get(skill_id, {}) as Dictionary
 		skill_state["used_sections_this_play_phase"] = []
+		# 额度归属更新为新阶段；实例号错配时 _effective_used_sections 会再次惰性清空，形成第二道防线。
+		skill_state["play_phase_scope_id"] = scope_id
+		# 新阶段开始后，上一阶段尚未完成的发动归属已经失效，不能污染新阶段的额度记账。
+		skill_state["pending_activation_section_index"] = PENDING_SECTION_NONE
 		player.reincarnation_skills[skill_id] = skill_state
 
 
@@ -338,12 +374,18 @@ func _consume_activation_limits(player_id: int, skill_state: Dictionary) -> void
 		skill_state["eternal_uses_this_turn"] = int(skill_state.get("eternal_uses_this_turn", 0)) + 1
 	if bool(skill_state.get("each_section_once_per_play_phase", false)) and _is_owner_play_phase(player_id):
 		# 本阶段已用轮回节集合；数组保存零基索引并保证不重复。
-		var used_sections: Array = (skill_state.get("used_sections_this_play_phase", []) as Array).duplicate()
-		# 本次实际发动的轮回节索引；推进发生前记录，因此准确归属于效果段。
-		var section_index: int = int(skill_state.get("section_index", 0))
+		# 经 _effective_used_sections 读取，使跨出牌阶段的旧额度在写入前先被判定失效。
+		var used_sections: Array = _effective_used_sections(skill_state).duplicate()
+		# 本次实际发动的轮回节索引；优先使用 begin_activation 捕获的归属值，因此不受效果内部推进改写 section_index 的影响。
+		var section_index: int = int(skill_state.get("pending_activation_section_index", PENDING_SECTION_NONE))
+		if section_index == PENDING_SECTION_NONE:
+			# 兼容旧存档与未经过 begin_activation 的旧调用方；此时没有归属快照，只能回退读取实时索引。
+			section_index = maxi(int(skill_state.get("section_index", 0)), 0)
 		if not used_sections.has(section_index):
 			used_sections.append(section_index)
 		skill_state["used_sections_this_play_phase"] = used_sections
+	# 一次发动只能被消费一次；无论是否属于限次技能都复位捕获，防止陈旧归属被下一次无关 complete 误登记。
+	skill_state["pending_activation_section_index"] = PENDING_SECTION_NONE
 
 
 ## 跨全局回合时惰性重置永劫发动计数；进入永劫前的发动不会写入该计数。
@@ -359,7 +401,32 @@ func _sync_eternal_turn_counter(skill_state: Dictionary) -> void:
 
 ## 判断当前是否为技能持有者自己的出牌阶段；阶段外触发不占用“出牌阶段每个轮回节限一次”。
 func _is_owner_play_phase(player_id: int) -> bool:
-	return _host != null and _host.get("state") != null and _host.state.current_player_id == player_id and str(_host.state.current_phase) == "play"
+	if _host == null or _host.get("state") == null:
+		return false
+	# 优先使用控制器端口读取“选择窗口背后的真实规则阶段”：嵌套选择期间公开阶段会被临时写成choice，
+	# 直接比较裸 stage 会让整条额度登记被跳过（等于免费多发动一次）。
+	if _host.has_method("is_play_phase_of"):
+		return bool(_host.call("is_play_phase_of", player_id))
+	return _host.state.current_player_id == player_id and str(_host.state.current_phase) == "play"
+
+
+## 返回控制器当前颁发的出牌阶段实例号；控制器未提供该端口时回退未设置值，使无头单测保持旧的“不做实例号校验”语义。
+func _current_play_phase_scope() -> int:
+	return int(_host.call("get_play_phase_scope_id")) if _host != null and _host.has_method("get_play_phase_scope_id") else PLAY_PHASE_SCOPE_UNSET
+
+
+## 返回本出牌阶段仍然有效的“已用轮回节”集合；阶段实例号错配时按空额度处理并惰性清空。
+## 这样即便某个阶段入口忘记调用 on_play_phase_started，旧阶段的额度也不会泄漏到新阶段（重置从“必须记得调用”变为结构性保证）。
+func _effective_used_sections(skill_state: Dictionary) -> Array:
+	# 当前控制器出牌阶段实例号；PLAY_PHASE_SCOPE_UNSET 表示本次调用不参与实例号校验。
+	var current_scope: int = _current_play_phase_scope()
+	# 本技能记录额度时的阶段实例号；旧存档缺字段时按未设置处理，与控制器未设置值一致，因此不会误清空。
+	var stored_scope: int = int(skill_state.get("play_phase_scope_id", PLAY_PHASE_SCOPE_UNSET))
+	if current_scope != PLAY_PHASE_SCOPE_UNSET and stored_scope != current_scope:
+		skill_state["used_sections_this_play_phase"] = []
+		skill_state["play_phase_scope_id"] = current_scope
+		return []
+	return (skill_state.get("used_sections_this_play_phase", []) as Array).duplicate()
 
 
 ## 返回当前全局回合号；服务不自行维护第二套回合计数。
