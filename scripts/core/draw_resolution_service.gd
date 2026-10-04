@@ -93,8 +93,11 @@ func _prepare_batch(sequence: RuleStepSequence) -> void:
 	sequence.context["batch_started"] = true
 	# 获得批次作用域；同一次摸牌的全部牌共享一个 cardsGainedBatchAfter 事件。
 	# 必须在这里开启而不是在 draw() 入口：_prepare_batch 之前的所有取消与无效目标路径都不该建立批次。
-	_host._begin_gain_batch(int(sequence.context.player_id), "draw")
-	sequence.context["gain_batch_started"] = true
+	# 开局前分发起始手牌期间不建立获得批次：那是开局前的准备行为而不是对局内的获得，
+	# 若建立批次会让「当你获得牌时」类技能（例如【风口】）在手气卡阶段之前弹出询问并占住阶段。
+	if not bool(_host._before_match_start_deal_active):
+		_host._begin_gain_batch(int(sequence.context.player_id), "draw")
+		sequence.context["gain_batch_started"] = true
 	_host.draw_presentation_batch_started.emit(int(batch.batch_id), int(batch.player_id))
 	sequence.insert_steps([_draw_next_card, _draw_end, _draw_after, _finish_batch])
 
@@ -168,7 +171,9 @@ func _draw_card_commit(sequence: RuleStepSequence) -> void:
 		return
 	sequence.context.drawn_uids.append(card.uid)
 	# 计入获得批次；摸牌绕过统一移牌管线直接调用移牌服务，因此必须在此显式登记同一批次的成员。
-	_host._register_gain_into_batch(card.uid)
+	# 开局前分发起始手牌期间没有开启批次，此处同样不登记，避免误挂到外层批次上。
+	if not bool(_host._before_match_start_deal_active):
+		_host._register_gain_into_batch(card.uid)
 	sequence.context["current_move_id"] = move.move_id
 
 

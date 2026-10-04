@@ -410,6 +410,11 @@ var _starting_hand_count: int = 4
 ## 本局 gameDraw 前后时机是否允许实际发放起始手牌；手气卡与最终日志都复用该结果。
 var _starting_cards_were_dealt: bool = true
 
+## 开局前起始手牌分发窗口；为真时进入手牌的移动**不构成“获得牌”动作**，因此不登记也不派发 `cardsGainedBatchAfter`。
+## 起始手牌是开局前的准备行为而不是对局内的获得，技能不应被它触发；手气卡刷新本来就绕过统一移牌管线，无需本标记。
+## 只影响获得批次，不影响 `gain` / `gainAfter` 等既有时机，因此既有“获得牌时”类技能的逐牌口径保持不变。
+var _before_match_start_deal_active: bool = false
+
 ## 本局是否启用全武将、座次与身份自选；开局时从房主设置复制，之后不随菜单变化。
 var _custom_character_assignment_enabled: bool = false
 
@@ -1705,6 +1710,8 @@ func _rebuild_match_rule_services_and_root_event() -> void:
 ## 该函数不接触 state 的玩家或牌区数据，只保证控制器的每局私有游标从干净状态开始。
 func _reset_per_match_progress_state() -> void:
 	_starting_hand_count = 4
+	# 开局前分发窗口；每局开始时必须回到“不在分发中”，否则整局都不会产生获得批次。
+	_before_match_start_deal_active = false
 	_ai_drive_token += 1
 	_scheduled_ai_drive_token = -1
 	_scheduled_ai_choice_request_id = -1
@@ -11147,12 +11154,17 @@ func _continue_game_start_after_character_adjustment() -> void:
 	if should_deal_starting_cards:
 		# 2v2：四号位初始手牌 +1；其他模式与各座次统一使用 starting_hand_count。
 		var is_team2v2_start: bool = identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_TEAM2V2
+		# 开局前分发窗口：起始手牌是开局前的准备行为，不能被“当你获得牌时”类技能（如【风口】）当成一次获得。
+		# 若在这里触发询问，控制器会进入“等待选择”并把阶段改成 choice，手气卡阶段随即失效（提示“当前不在手气卡阶段”）。
+		# 循环结束立刻恢复标记，因此随后 gameStart 时机的技能摸牌（例如【筹码】）照常构成获得批次。
+		_before_match_start_deal_active = true
 		for seat_index: int in range(state.players.size()):
 			# 当前座次玩家；seat_index 0 为一号位，3 为四号位。
 			var seated_player: PlayerState = state.players[seat_index]
 			# 当前角色实际起始手牌数；难度灰色机缘与2v2四号位加值在统一基础数量上累加。
 			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0) + get_acquired_opportunity_effect_total(seated_player.player_id, "initial_hand_bonus")
 			draw(seated_player.player_id, seat_hand_count, false)
+		_before_match_start_deal_active = false
 		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size(), "team2v2_seat4_bonus":1 if is_team2v2_start else 0}
 		_record_runtime_event("gameDraw", "draw", game_draw_result_data)
 		_emit_rule_timing("gameDrawAfter", -1, -1, -1, game_draw_result_data)
@@ -15969,7 +15981,8 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		if to_zone == "judgment" and persistent_zone_target.judgment_area_abolished:
 			return null
 	# 本次移动是否构成一次“获得牌”动作；只有进入玩家手牌区才参与获得批次，公共区域与无主手牌不参与。
-	var counts_as_gain_action: bool = to_zone == "hand" and target_player_id >= 0
+	# 开局前分发起始手牌期间进入手牌的移动不属于对局内的获得，因此同样不参与批次（见 `_before_match_start_deal_active`）。
+	var counts_as_gain_action: bool = to_zone == "hand" and target_player_id >= 0 and not _before_match_start_deal_active
 	# 本次获得是否自成一个批次；栈非空表示外层批量入口已经建立了更大的批次，此时只把本张计入该批次。
 	# 判定必须早于任何前置时机：批次作用域在移动前就生效，前置时机内部连锁产生的获得才会被正确归类。
 	var owns_gain_batch: bool = counts_as_gain_action and _gain_batch_stack.is_empty()
