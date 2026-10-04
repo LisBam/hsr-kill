@@ -73,6 +73,10 @@ func _ready() -> void:
 		return
 	if not _test_friendly_chain_damage_response():
 		return
+	if not _test_ally_slash_dodge_requires_sell_blood_skill():
+		return
+	if not _test_lianxi_ai_always_recasts():
+		return
 	if not _test_wine_slash_defense():
 		return
 	if not _test_wine_action_value_and_baiyin_damage_cap():
@@ -1044,6 +1048,118 @@ func _test_friendly_chain_damage_response() -> bool:
 	var unchained_enemy_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
 	if not bool((unchained_enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
 		return _fail("friendly_chain_damage_should_dodge=%s" % unchained_enemy_choice)
+	return true
+
+
+## 验证AI只在自己拥有卖血技能时才放弃对友方【杀】的【闪】；无卖血技能、敌方来源、身份未暴露与范围伤害均保持常规闪避。
+## 本用例同时锁定“无致命保护”口径：即使本次伤害足以造成濒死，满足友方与卖血两条时仍然放弃【闪】。
+func _test_ally_slash_dodge_requires_sell_blood_skill() -> bool:
+	# 公开三人快照；领袖0对忠臣2使用普通【杀】，1号反贼为旁观者。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 忠臣响应策略；独立身份模型避免前序测试的暴露历史影响本次友敌判断。
+	var loyalist_policy: BasicAIPolicy = BasicAIPolicy.new(2, IdentityAIModel.new())
+	# 可取消的【闪】响应请求；上下文保留真实伤害来源与伤害值，字段与【杀】响应流程一致。
+	var response_request: Dictionary = {
+		"allow_cancel":true,
+		"min_card_select":0,
+		"max_card_select":1,
+		"candidates":[_candidate(901, "shan", 2)],
+		"context":{"kind":"slash_response", "response_patterns":["shan"], "actor_id":0, "target_id":2, "damage_amount":1, "slash_card_definition_id":"sha"},
+	}
+	# 两种标准选择动作；确认会消耗【闪】，取消会让友方的【杀】命中自己。
+	var pass_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":901, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	var dodge_action: Dictionary = {"action_type":"choose_cards", "actor_id":2, "payload":{"request_id":901, "selected_card_uids":[901], "selected_target_ids":[], "confirmed":true}}
+	# 无卖血技能的忠臣；虽有友方来源，但这次受伤无法转化为任何收益，必须照常打出【闪】。
+	var plain_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
+	if not bool((plain_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("ally_slash_dodge_without_sell_blood=%s" % plain_choice)
+	# 授予【百折】；该技能声明 sell_blood_value 为1.0，使这次受伤转化为收益。使用真实快照字段而非私有注入。
+	(snapshot.get("players", []) as Array)[2]["mode_skill_ids"] = ["baizhe"]
+	var sell_blood_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
+	if bool((sell_blood_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("ally_slash_dodge_with_sell_blood=%s" % sell_blood_choice)
+	# 致命伤害同样不出【闪】；用户明确要求去掉致命保护，因此这里不得因为濒死而改回确认。
+	# 复制请求与快照；只降低忠臣体力并提高本次伤害，使其远低于承伤量。
+	var lethal_snapshot: Dictionary = snapshot.duplicate(true)
+	(lethal_snapshot.get("players", []) as Array)[2]["hp"] = 1
+	var lethal_request: Dictionary = response_request.duplicate(true)
+	(lethal_request.get("context", {}) as Dictionary)["damage_amount"] = 3
+	var lethal_choice: Dictionary = loyalist_policy.choose_card_choice(lethal_snapshot, lethal_request, [pass_action, dodge_action])
+	if bool((lethal_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("ally_slash_dodge_lethal_still_passes=%s" % lethal_choice)
+	# 敌方来源不套用友方信任策略；保留【百折】但把来源改为未暴露身份的反贼。
+	(snapshot.get("players", []) as Array)[2]["hp"] = 4
+	var enemy_request: Dictionary = response_request.duplicate(true)
+	(enemy_request.get("context", {}) as Dictionary)["actor_id"] = 1
+	var enemy_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, enemy_request, [pass_action, dodge_action])
+	if not bool((enemy_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("enemy_slash_dodge_with_sell_blood=%s" % enemy_choice)
+	# 身份未暴露的来源态度不为正；同一【百折】响应者面对未做身份暴露的快照必须恢复常规闪避。
+	var hidden_snapshot: Dictionary = _build_snapshot(false)
+	(hidden_snapshot.get("players", []) as Array)[2]["mode_skill_ids"] = ["baizhe"]
+	# 独立身份模型；避免公开快照已建立的暴露历史把未暴露来源重新判为可识别友方。
+	var hidden_policy: BasicAIPolicy = BasicAIPolicy.new(2, IdentityAIModel.new())
+	var hidden_choice: Dictionary = hidden_policy.choose_card_choice(hidden_snapshot, enemy_request, [pass_action, dodge_action])
+	if not bool((hidden_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("hidden_source_slash_dodge=%s" % hidden_choice)
+	# 范围伤害响应不受本策略影响；万箭齐发即使来自友方也照常打出【闪】。
+	var aoe_request: Dictionary = response_request.duplicate(true)
+	(aoe_request.get("context", {}) as Dictionary)["kind"] = "aoe_response"
+	var aoe_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, aoe_request, [pass_action, dodge_action])
+	if not bool((aoe_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("aoe_response_unaffected=%s" % aoe_choice)
+	# 装备响应同样不受影响；银月枪等装备响应有自己的来源与目标关系。
+	var equipment_request: Dictionary = response_request.duplicate(true)
+	(equipment_request.get("context", {}) as Dictionary)["kind"] = "equipment_response"
+	var equipment_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, equipment_request, [pass_action, dodge_action])
+	if not bool((equipment_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("equipment_response_unaffected=%s" % equipment_choice)
+	return true
+
+
+## 验证【连戏】的AI会无条件发动，并在窗口仍提供“重铸”时一直重铸到上限，而不是因为Y不提高就取消或提前结束。
+## 旧实现下“取消”恒为0分而“重铸”恒为-0.35分，导致AI从不发动连戏；本用例锁定修复后的相对顺序。
+func _test_lianxi_ai_always_recasts() -> bool:
+	# 全身份公开快照；连戏评分只读取稳定持有者ID与目标态度。
+	var snapshot: Dictionary = _build_snapshot(true)
+	# 连戏技能实例；直接核对无条件重铸分，防止后续调整把取消动作重新变成最优。
+	var lianxi: SkillDefinition = GameDatabase.create_skill("lianxi")
+	lianxi.bind(null, 0)
+	# 独立评估器；连戏只读取目标态度，不需要运行时对局宿主。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 第一次窗口请求；recast_count为0时窗口只提供“重铸”，取消等价于完全不发动。
+	var first_request: Dictionary = {"request_id":601, "choice_type":"card", "allow_cancel":true, "min_select":0, "max_select":1, "min_card_select":0, "max_card_select":1, "candidates":[], "context":{"kind":"lianxi_recast", "skill_id":"lianxi", "skill_owner_id":0, "recast_count":0}}
+	# 取消动作；通用可取消选择的0分基线，旧实现下正是它被选中。
+	var cancel_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":601, "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}}
+	# 确认重铸动作；选择“重铸”控制项后应获得无条件高分。
+	var recast_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":601, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true, "selected_control_id":"recast"}}
+	# 结束动作；按当前Y结算，Y低于上限时收益远低于无条件继续重铸。
+	var finish_action: Dictionary = {"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":601, "selected_card_uids":[], "selected_target_ids":[], "confirmed":true, "selected_control_id":"finish"}}
+	# 第一次窗口分数对比；重铸必须严格高于取消，否则AI会继续不发动连戏。
+	var cancel_score: float = lianxi.score_ai_choice(snapshot, first_request, cancel_action, evaluator)
+	var recast_score: float = lianxi.score_ai_choice(snapshot, first_request, recast_action, evaluator)
+	if recast_score <= cancel_score:
+		return _fail("lianxi_first_window_not_activated recast=%.3f cancel=%.3f" % [recast_score, cancel_score])
+	# 策略层选择；第一次窗口必须确认发动而不是取消。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
+	var chosen: Dictionary = policy.choose_card_choice(snapshot, first_request, [cancel_action, recast_action])
+	if not bool((chosen.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("lianxi_ai_cancelled=%s" % chosen)
+	# 中段窗口；recast_count为1至8且手中仍有基本牌时窗口同时提供两个控制项，重铸必须始终更优。
+	for recast_count: int in range(1, 9):
+		# 当前轮次请求；只替换重铸次数，其余字段与第一次窗口保持一致。
+		var mid_request: Dictionary = first_request.duplicate(true)
+		(mid_request.get("context", {}) as Dictionary)["recast_count"] = recast_count
+		var mid_recast_score: float = lianxi.score_ai_choice(snapshot, mid_request, recast_action, evaluator)
+		var mid_finish_score: float = lianxi.score_ai_choice(snapshot, mid_request, finish_action, evaluator)
+		if mid_recast_score <= mid_finish_score:
+			return _fail("lianxi_stops_early count=%d recast=%.3f finish=%.3f" % [recast_count, mid_recast_score, mid_finish_score])
+	# 到达重铸上限后的窗口；只提供“结束”，此时必须正常进入伤害目标选择并保留正伤害收益。
+	var final_request: Dictionary = first_request.duplicate(true)
+	(final_request.get("context", {}) as Dictionary)["recast_count"] = 9
+	var final_finish_score: float = lianxi.score_ai_choice(snapshot, final_request, finish_action, evaluator)
+	if final_finish_score <= 0.0:
+		return _fail("lianxi_final_finish_score=%.3f" % final_finish_score)
 	return true
 
 

@@ -102,6 +102,12 @@ const WINE_SLASH_EXTRA_DAMAGE_EFFECT_MULTIPLIER: float = 2.0
 ## 友方属性伤害可传导至全部横置敌人时放弃【闪】的响应修正；固定8.0分，足以使AI保留响应牌并让连环伤害结算。
 const FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE: float = 8.0
 
+## 已确认友方对其使用【杀】且响应者本人拥有卖血技能时放弃【闪】的响应评分；取保命收益的相反数，
+## 使该分支稳定低于取消动作的0分，策略层必然选择不响应。运行时无需动态修改。
+## 注意：本判定不设致命保护（用户明确要求）。即使本次【杀】致命，只要“来源为已确认友方”与“响应者本人有卖血技能”
+## 同时成立，AI 仍会放弃【闪】——即 AI 可能主动放弃自救以触发卖血收益。修改该常量会同时改变这两个分支的相对顺序。
+const ALLY_SELL_BLOOD_SLASH_DODGE_DECLINE_SCORE: float = -RESPONSE_SURVIVAL_VALUE
+
 ## 目标已知拥有所需响应牌时的预期命中倍率；保留少量消耗响应资源的收益。
 const KNOWN_RESPONSE_DAMAGE_MULTIPLIER: float = 0.35
 
@@ -705,6 +711,9 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 		if _should_decline_response_for_friendly_chain_damage(authoritative_snapshot, actor_id, context, response_patterns):
 			# 友方属性伤害会经本人传导到全部横置敌人；此时使用【闪】会阻断更高总收益，故把确认响应压到取消动作以下。
 			return response_survival_value - FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE - selected_value * CARD_COST_WEIGHT
+		if _should_decline_dodge_against_ally_sell_blood_slash(authoritative_snapshot, actor_id, context, response_patterns):
+			# 自身卖血技能可以把这次友方伤害转化为收益，因此把确认响应压到取消动作以下。
+			return ALLY_SELL_BLOOD_SLASH_DODGE_DECLINE_SCORE - selected_value * CARD_COST_WEIGHT
 		return response_survival_value - selected_value * CARD_COST_WEIGHT
 	# 普通选目标默认按友方收益排序；专属技能通常会覆盖该分数。
 	if not selected_target_ids.is_empty():
@@ -774,13 +783,82 @@ func _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot: Di
 func _snapshot_player_has_skill(player: Dictionary, skill_id: String) -> bool:
 	if player.is_empty() or skill_id.is_empty():
 		return false
+	return _collect_snapshot_skill_ids(player).has(skill_id)
+
+
+## 收集玩家快照的全部技能ID并去重；技能枚举口径的唯一来源，供“是否持有技能”与“卖血价值累计”共用。
+## 枚举顺序固定为 固有 → 模式 → 临时 → 局内获得，与 _modify_incoming_card_effect_by_target_skills 的估值顺序保持一致，
+## 使同一个技能在两条链路上不会因顺序差异产生不同的去重结果。
+func _collect_snapshot_skill_ids(player: Dictionary) -> Array[String]:
+	# 技能ID结果；空快照返回空数组，调用方按“无技能”处理。
+	var skill_ids: Array[String] = []
+	if player.is_empty():
+		return skill_ids
 	# 当前武将固有技能；CharacterDefinition自动生成稳定技能ID数组。
 	var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
-	if (character.get("skills", []) as Array).has(skill_id):
-		return true
-	if (player.get("mode_skill_ids", []) as Array).has(skill_id):
-		return true
-	return (player.get("temporary_skills", {}) as Dictionary).has(skill_id) or (player.get("acquired_skills", {}) as Dictionary).has(skill_id)
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前固有技能ID；空值与重复值不会进入结果。
+		var native_skill_id: String = str(skill_id_variant)
+		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
+			skill_ids.append(native_skill_id)
+	for skill_id_variant: Variant in player.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项。
+		var mode_skill_id: String = str(skill_id_variant)
+		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
+			skill_ids.append(mode_skill_id)
+	# 运行时技能映射列表；键为稳定技能ID，值（来源、剩余次数等）与本查询无关。
+	for runtime_skill_map_variant: Variant in [player.get("temporary_skills", {}), player.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键为稳定技能ID，值（来源、剩余次数等）与静态AI钩子无关。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；已存在的同名技能不会重复加入。
+			var runtime_skill_id: String = str(skill_id_variant)
+			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
+				skill_ids.append(runtime_skill_id)
+	return skill_ids
+
+
+## 返回玩家快照全部技能的累计卖血价值；只按公开稳定技能ID读取静态元数据，不读取运行时技能对象与隐藏信息。
+## 这是“响应者本人是否值得主动吃下伤害”的唯一判据：任何按技能ID白名单的判断都违反内容可扩展性要求，
+## 新增卖血技能只需在自身文件声明 sell_blood_value，无需改动本函数或调用方。
+func get_snapshot_sell_blood_value(player: Dictionary) -> float:
+	# 累计卖血价值；无技能或全部技能价值为0时返回0.0，调用方按“非卖血角色”处理。
+	var total_value: float = 0.0
+	for current_skill_id: String in _collect_snapshot_skill_ids(player):
+		# 无运行时状态的技能实例；只读取静态元数据，不安装时机或修改对局。
+		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		if skill == null:
+			continue
+		total_value += skill.get_sell_blood_value()
+	return total_value
+
+
+## 判断是否应放弃对友方【杀】的【闪】；只在响应者本人拥有卖血技能且来源为已确认友方时成立。
+## 本判定不设致命保护（用户明确要求）：即使本次【杀】致命，满足上述两条时同样放弃【闪】，
+## 因此实现中不得读取体力与护盾做保护性判断——AI 会主动放弃自救以触发卖血收益，这是有意为之的设计。
+## 有意不覆盖范围伤害响应（aoe_response）与装备响应（equipment_response）：这两类的伤害来源与目标关系不同，
+## 不套用本策略；也不覆盖友方属性连环，那一路由 _should_decline_response_for_friendly_chain_damage 单独处理且优先级更高。
+func _should_decline_dodge_against_ally_sell_blood_slash(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary, response_patterns: Array) -> bool:
+	# 当前响应模式；只有【闪】能直接阻断即将命中的【杀】，其他响应不套用本策略。
+	if not response_patterns.has("shan"):
+		return false
+	# 请求种类；只覆盖普通【杀】的目标响应，范围伤害与装备响应有意排除。
+	if str(context.get("kind", "")) != "slash_response":
+		return false
+	# 伤害来源；与友方连环分支共用同一读法，【杀】使用actor_id，同类卡牌可能只提供source_id。
+	var source_id: int = int(context.get("actor_id", context.get("source_id", -1)))
+	# 来源合法性；无效来源或自己指向自己时不套用友方信任策略。
+	if source_id < 0 or source_id == responder_id:
+		return false
+	# 来源态度；只有正态度（已确认友方）才值得让这次伤害命中自己，未暴露身份的0态度保持常规闪避。
+	if get_attitude(authoritative_snapshot, responder_id, source_id) <= 0.0:
+		return false
+	# 当前响应者快照；用于读取其全部技能并累计卖血价值。
+	var responder: Dictionary = get_player(authoritative_snapshot, responder_id)
+	if responder.is_empty():
+		return false
+	# 响应者卖血价值；为0表示这次受伤无法转化成任何收益，此时仍按常规闪避保护自己。
+	return get_snapshot_sell_blood_value(responder) > 0.0
 
 
 ## 判断是否应让友方属性伤害命中自己以传导至全部横置敌人；只影响需要【闪】的可取消响应，不改变伤害或连环规则。

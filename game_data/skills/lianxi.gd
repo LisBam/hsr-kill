@@ -26,6 +26,10 @@ const AI_DAMAGE_VALUE_RATIO: float = 0.85
 ## AI：每一轮重铸的手牌质量折损；重铸虽等量补摸，但会失去基本牌的确定价值。
 const AI_RECAST_QUALITY_COST: float = NonameAIEvaluator.CARD_RESOURCE_VALUE * 0.35
 
+## AI：继续重铸的无条件基础分；远高于任何伤害收益与取消动作的0分，确保只要窗口仍提供“重铸”就一定继续。运行时无需动态修改。
+## 取值参照项目既有“无脑发动”写法（【星启】的 AI_ALWAYS_ACTIVATE_SCORE = 10000.0），保证不会被其它技能新增的正收益项反超。
+const AI_UNCONDITIONAL_RECAST_SCORE: float = 10000.0
+
 
 ## 写入阶段开始技能静态信息；技能描述严格保持需求提供的原文。
 func _init() -> void:
@@ -216,9 +220,10 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 			return 0.0
 		var control_id: String = str(payload.get("selected_control_id", ""))
 		if control_id == RECAST_OPTION_ID:
-			# 继续重铸：只有当下一轮能把Y提高1时才值得再折损一次手牌质量。
-			var damage_gain: int = _resolve_damage_amount(recast_count + 1) - _resolve_damage_amount(recast_count)
-			return float(damage_gain) * NonameAIEvaluator.HP_RESOURCE_VALUE * AI_DAMAGE_VALUE_RATIO - AI_RECAST_QUALITY_COST
+			# 无条件继续重铸：只要窗口仍提供“重铸”就必须继续，直到重铸次数上限或手中不再有基本牌。
+			# 只有达到 MAX_RECAST_TIMES 或手中无基本牌时窗口才会撤掉“重铸”选项，此时才由结束分支收尾。
+			# 手牌质量折损只作为同分排序修正保留，不再作为“是否继续”的判据，因此 AI 的发动率不再受 Y 是否提高影响。
+			return AI_UNCONDITIONAL_RECAST_SCORE - AI_RECAST_QUALITY_COST
 		if control_id == FINISH_OPTION_ID:
 			# 立即结束：按当前Y取全部候选目标中的最高伤害收益。
 			return _estimate_finish_value(authoritative_snapshot, recast_count, evaluator)
