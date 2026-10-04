@@ -59,12 +59,6 @@ const SELECTION_PROMPT: String = "请选择视为使用的牌，并为其指定�
 ## 分支B的请求提示；明确弃置范围是该花色的全部手牌。
 const SUIT_PROMPT: String = "请选择要弃置全部手牌的花色"
 
-## 已使用牌名展示的前缀；存在本局记录时追加到技能描述末尾。
-const USED_NAMES_PREFIX: String = "（已以此法使用："
-
-## 已使用牌名展示的后缀。
-const USED_NAMES_SUFFIX: String = "）"
-
 ## AI主动发动评分；取值足够大，使AI在自己出牌阶段满足条件时稳定选择发动。
 const AI_ACTION_BASE: float = 20.0
 
@@ -433,19 +427,12 @@ func _resolve_virtual_definition_id(context: Dictionary, candidate_uid: int) -> 
 
 
 ## 刷新技能描述中的已使用牌名展示；没有记录时还原为基础描述，避免残留上一局的旧文本。
+## 现已不再向技能描述追加任何“已以此法使用”后缀：技能正文始终为静态原文，本函数只负责清除历史版本可能残留在存档里的覆盖文本。
 func _refresh_display_description() -> void:
 	if host == null or not host.has_method("set_skill_display_description"):
 		return
-	# 本局已以此法使用过的普通锦囊牌名；【杀】不写入名单，因此不会出现在提示中。
-	var used_names: Array = host.call("get_skill_used_card_names", owner_player_id, get_id()) as Array
-	if used_names.is_empty():
-		host.call("set_skill_display_description", owner_player_id, get_id(), "")
-		return
-	# 展示用的中文牌名列表；顺序沿用记录顺序，玩家可以据此判断还剩哪些锦囊可用。
-	var display_names: Array[String] = []
-	for used_name_variant: Variant in used_names:
-		display_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(used_name_variant))))
-	host.call("set_skill_display_description", owner_player_id, get_id(), "%s%s%s%s" % [str(get_metadata().get("description", "")), USED_NAMES_PREFIX, "、".join(display_names), USED_NAMES_SUFFIX])
+	# 清空覆盖文本；界面随即回退 GameDatabase 的静态描述，正文后不再拼接任何动态内容。
+	host.call("set_skill_display_description", owner_player_id, get_id(), "")
 
 
 ## 为AI枚举本技能在当前出牌阶段的候选动作；只要 can_activate 成立就提供一个无参数技能动作。
