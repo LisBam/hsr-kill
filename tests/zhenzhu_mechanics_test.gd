@@ -554,7 +554,7 @@ func _test_ai_scoring_directions() -> bool:
 	var snapshot: Dictionary = {
 		"match_id":"zhenzhu_ai_snapshot",
 		"players":[
-			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"wuzhong", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
 			{"player_id":1, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "shield":1, "hand_count":1, "hand":[{"uid":201, "definition_id":"shan", "owner_id":1, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
 			{"player_id":2, "identity":"loyalist", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":1, "max_hp":4, "shield":0, "hand_count":0, "hand":[], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"himeko"},
 		],
@@ -582,8 +582,10 @@ func _test_ai_scoring_directions() -> bool:
 	if self_target_score <= hostile_target_score or hostile_target_score <= friendly_target_score:
 		return _fail("jianying_ai_targets self=%f hostile=%f friendly=%f" % [self_target_score, hostile_target_score, friendly_target_score])
 	# 材料段：低价值手牌的评分必须高于高价值手牌。
+	# 高价值样本使用【无中生有】（静态保留价值9.2）而不是【桃】：【桃】的保留价值已改为随队友危险度动态浮动，
+	# 本快照中残血忠臣会令它落到7.0并与【闪】同值，无法再表达“明显高低价值差”。
 	var cheap_material_score: float = jianying.score_ai_choice(snapshot, {"candidates":[{"uid":101, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}}], "context":{"kind":"jianying_material"}}, {"payload":{"confirmed":true, "selected_card_uids":[101]}}, evaluator)
-	var rich_material_score: float = jianying.score_ai_choice(snapshot, {"candidates":[{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}}], "context":{"kind":"jianying_material"}}, {"payload":{"confirmed":true, "selected_card_uids":[102]}}, evaluator)
+	var rich_material_score: float = jianying.score_ai_choice(snapshot, {"candidates":[{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"wuzhong", "owner_id":0, "zone":"hand"}}], "context":{"kind":"jianying_material"}}, {"payload":{"confirmed":true, "selected_card_uids":[102]}}, evaluator)
 	if cheap_material_score <= rich_material_score:
 		return _fail("jianying_ai_material cheap=%f rich=%f" % [cheap_material_score, rich_material_score])
 	# 回归：材料段确认分必须为正；为负时AI会判定“取消更优”，
@@ -629,10 +631,12 @@ func _test_jianying_ai_self_upgrade_condition() -> bool:
 ## 只断言技能分无法拦住它，因此这里同时校验完整决策结果与通用层的贡献值。
 func _test_jianying_ai_material_confirmation_via_policy() -> bool:
 	# 权威快照；自身有护盾且手牌存在明显价值差，构成“低价值A换高价值B”的升级对。
+	# 高价值样本为【无中生有】（静态保留价值9.2）：【桃】的保留价值已改为随队友危险度动态浮动，
+	# 在存在残血或待救角色时不再稳定高于【闪】，无法作为“固定高价值”样本。
 	var snapshot: Dictionary = {
 		"match_id":"jianying_ai_policy_snapshot",
 		"players":[
-			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
+			{"player_id":0, "identity":"leader", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":3, "shield":1, "hand_count":2, "hand":[{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}, {"uid":102, "definition_id":"wuzhong", "owner_id":0, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"zhenzhu"},
 			{"player_id":1, "identity":"rebel", "identity_revealed":true, "alive":true, "out_of_game":false, "hp":3, "max_hp":4, "shield":1, "hand_count":1, "hand":[{"uid":201, "definition_id":"shan", "owner_id":1, "zone":"hand"}], "equipment":{}, "judgment_area":[], "wooden_ox_storage":[], "chained":false, "character_id":"gepard"},
 		],
 	}
@@ -647,7 +651,7 @@ func _test_jianying_ai_material_confirmation_via_policy() -> bool:
 		"context":{"kind":"jianying_material", "skill_id":"jianying", "ai_choice_skill_scored":true},
 		"candidates":[
 			{"uid":101, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":101, "definition_id":"shan", "owner_id":0, "zone":"hand"}},
-			{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"tao", "owner_id":0, "zone":"hand"}},
+			{"uid":102, "owner_id":0, "zone":"hand", "slot":"", "visible":true, "card_data":{"uid":102, "definition_id":"wuzhong", "owner_id":0, "zone":"hand"}},
 		],
 	}
 	# 合法动作；取消在前，逐张确认在后，与控制器枚举顺序保持一致。
@@ -660,6 +664,7 @@ func _test_jianying_ai_material_confirmation_via_policy() -> bool:
 	if not is_zero_approx(generic_score):
 		return _fail("jianying_ai_material_generic=%f" % generic_score)
 	# 完整决策；必须确认最低价值的【闪】，既不能取消，也不能挑走【桃】。
+	# 补充：本用例的高价值样本牌现为【无中生有】（原为【桃】），断言意图不变——确认低价值材料、不取消、不挑走高价值牌。
 	var chosen: Dictionary = policy.choose_card_choice(snapshot, request, legal_actions)
 	var chosen_payload: Dictionary = chosen.get("payload", {}) as Dictionary
 	if not bool(chosen_payload.get("confirmed", false)):
