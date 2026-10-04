@@ -159,6 +159,10 @@ var identity_strategy: IdentityStrategyEvaluator
 ## 缓存内容只允许读取，卡牌规则或技能 AI 不得向其中写入任何临时评分字段；运行时无需动态修改。
 var _card_definition_cache: Dictionary = {}
 
+## 已读取的卡牌源码缓存；键为卡牌稳定ID，值为数据库中的 CardDefinition 源码对象，用于调用动态保留价值钩子。
+## 只保存对象引用，不复制也不改写源码内部状态；动态价值必须由源码自行依据权威快照计算，缓存本身不代表价值。
+var _card_script_cache: Dictionary = {}
+
 ## 已统计的武将欢愉技数量缓存；键为武将稳定ID，值为该武将声明的欢愉技数量。
 ## 同为静态元数据缓存：一次决策内多次比较双方欢愉技数量时不再重复读取武将与其技能定义。
 var _character_joy_skill_count_cache: Dictionary = {}
@@ -1078,6 +1082,11 @@ func get_card_value_by_id(card_id: String, authoritative_snapshot: Dictionary, o
 		result = float(configured_value)
 	if card_id == "shan" and get_known_response_count(authoritative_snapshot, owner_id, "shan") == 1:
 		result += _get_wine_slash_dodge_reserve_bonus(authoritative_snapshot, owner_id)
+	# 卡牌专属动态保留价值；没有覆盖该钩子的内容文件原样返回，静态数值语义与新增前逐字节一致。
+	# 该值同时服务留牌、弃牌与用牌机会成本，因此【桃】等救命牌可以随队友体力状态改变“舍不舍得用”的结论。
+	var dynamic_value_definition: CardDefinition = _get_cached_card_script(card_id)
+	if dynamic_value_definition != null:
+		result = dynamic_value_definition.modify_ai_hand_value(authoritative_snapshot, owner_id, result, self)
 	return result
 
 
@@ -1256,6 +1265,14 @@ func _get_action_card_color(authoritative_snapshot: Dictionary, actor_id: int, a
 ## 返回身份模型计算的当前态度；技能文件通过该公开只读接口复用身份判断。
 func get_attitude(authoritative_snapshot: Dictionary, from_player_id: int, to_player_id: int) -> float:
 	return identity_model.get_attitude(authoritative_snapshot, from_player_id, to_player_id)
+
+
+## 返回身份模型计算的真实阵营态度；不做身份暴露度衰减，只有“不产生任何可见行为的保留决策”才允许使用。
+## 语义：等于无名杀 get.realAttitude，用真实身份反映“谁真的是我的队友”，取值区间与 get_attitude 相同。
+## 使用约束：任何会影响目标选择、伤害、救援去向等可被真人观察到的决策都必须继续使用 get_attitude，
+## 否则隐藏身份的 AI 会表现出“未卜先知”的不合理行为；本接口只服务留牌、弃牌等纯自利保留判断。
+func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, to_player_id: int) -> float:
+	return identity_model.get_real_attitude(authoritative_snapshot, from_player_id, to_player_id)
 
 
 ## 返回指定玩家状态快照；技能 AI 只读体力、连环、手牌数与公开装备等序列化字段。
@@ -1530,3 +1547,13 @@ func _get_cached_card_definition(card_id: String) -> Dictionary:
 	if not _card_definition_cache.has(card_id):
 		_card_definition_cache[card_id] = GameDatabase.get_card(card_id)
 	return _card_definition_cache.get(card_id, {}) as Dictionary
+
+
+## 返回评估器内部缓存的卡牌源码对象；空ID或未注册牌返回 null，命中后不再重复向数据库申请。
+## 只用于调用内容文件提供的只读 AI 钩子；返回值是可被其他调用方共享的源码引用，禁止写入任何对局状态。
+func _get_cached_card_script(card_id: String) -> CardDefinition:
+	if card_id.is_empty():
+		return null
+	if not _card_script_cache.has(card_id):
+		_card_script_cache[card_id] = GameDatabase.get_card_definition(card_id)
+	return _card_script_cache.get(card_id, null) as CardDefinition

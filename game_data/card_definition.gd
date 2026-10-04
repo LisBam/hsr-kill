@@ -96,6 +96,15 @@ func modify_ai_action_score(_authoritative_snapshot: Dictionary, _action: Dictio
 	return current_score
 
 
+## 修正本卡在指定持有者手中的动态保留价值；默认原样返回静态 ai.value，内容文件可结合当前场面重算。
+## 对应无名杀 `ai.value` / `ai.basic.value` 允许写成函数的写法：同一张牌在不同体力与不同队友状态下价值不同。
+## 语义：返回值表示“这张牌留在我手上值多少分”（0至10分档，越大越舍不得丢、用牌机会成本越高）。
+## 调用方：NonameAIEvaluator.get_card_value_by_id 在解析完静态数值与既有特例修正后调用，覆盖实现必须返回最终价值。
+## 约束：纯只读查询，不得修改权威快照，也不得依赖调用顺序；未覆盖本入口的卡牌行为与新增前完全一致。
+func modify_ai_hand_value(_authoritative_snapshot: Dictionary, _owner_id: int, current_value: float, _evaluator: Object) -> float:
+	return current_value
+
+
 ## 修正 AI 对本锦囊当前生效结果的收益判断；复杂锦囊可结合来源、目标和阵营关系覆盖静态 target_result。
 ## 返回值为原效果从响应者视角产生的效用，正数表示希望锦囊生效，负数表示希望锦囊被抵消。
 func modify_ai_negation_effect_utility(_authoritative_snapshot: Dictionary, _responder_id: int, _context: Dictionary, current_utility: float, _evaluator: Object) -> float:

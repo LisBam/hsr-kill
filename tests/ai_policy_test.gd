@@ -105,6 +105,8 @@ func _ready() -> void:
 		return
 	if not _test_keep_tao_for_teammate():
 		return
+	if not _test_tao_dynamic_hand_value():
+		return
 	print("AI_POLICY_PASS cards=%d" % GameDatabase.cards.size())
 	get_tree().quit(0)
 
@@ -1863,6 +1865,106 @@ func _test_keep_tao_for_teammate() -> bool:
 			{"identity":"leader", "hp":4, "max_hp":4},
 		], true, "scarce_tao_self_first"):
 		return false
+	# 场景九：身份全部未公开（身份局开局只有领袖公开）；隐藏的反贼队友同样必须被识别，不能因为暴露度为0就吃掉救命牌。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":2, "revealed":false},
+			{"identity":"rebel", "hp":2, "max_hp":4, "revealed":false},
+			{"identity":"leader", "hp":4, "max_hp":4, "revealed":true},
+		], false, "hidden_rebel_teammate"):
+		return false
+	# 场景十：隐藏身份的忠臣面对公开的残血领袖；领袖存亡优先，即使自己身份未公开也要留桃。
+	if not _expect_tao_decision([
+			{"identity":"loyalist", "hp":3, "max_hp":4, "tao":1, "revealed":false},
+			{"identity":"leader", "hp":2, "max_hp":4, "revealed":true},
+			{"identity":"rebel", "hp":4, "max_hp":4, "revealed":false},
+		], false, "hidden_loyalist_endangered_leader"):
+		return false
+	# 场景十一：手上的【桃】已经超过手牌上限；弃牌阶段反正要丢掉一张，先吃掉才是最优。
+	# 对应无名杀 `needsToDiscard(0, taos.includes)` 的提前返回。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":6},
+			{"identity":"rebel", "hp":1, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], true, "tao_exceeds_hand_limit"):
+		return false
+	# 场景十二：手牌溢出2张珍贵牌（2张桃与3张【无中生有】，上限为3）；对应无名杀 `nd === 2` 分支，先自愈。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":2, "fillers":["wuzhong", "wuzhong", "wuzhong"]},
+			{"identity":"rebel", "hp":1, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], true, "hand_overflow_declines_keep"):
+		return false
+	# 场景十三：同样的队友危险度但没有手牌溢出（2张桃与1张【无中生有】）；证明留桃结论确实由溢出分支改变。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":2, "fillers":["wuzhong"]},
+			{"identity":"rebel", "hp":1, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], false, "no_overflow_keeps_tao"):
+		return false
+	# 场景十四：溢出1张珍贵牌且桃并不稀缺（2张桃与2张【无中生有】，体力3点、上限3）；此时保留分从0起步，
+	# 且 `2 × 桃数 ≤ 体力` 不成立，因此无名杀会**完全跳过**队友危险度累加并直接吃掉这张桃——对应 `keep = nd ? 0 : 2` 与 `if (keep && ...)`。
+	if not _expect_tao_decision([
+			{"identity":"rebel", "hp":3, "max_hp":4, "tao":2, "fillers":["wuzhong", "wuzhong"]},
+			{"identity":"rebel", "hp":1, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], true, "single_overflow_skips_ally_bonus"):
+		return false
+	return true
+
+
+## 校验【桃】的动态保留价值：队友越可能被救活，这张桃留在手上越值钱；敌人与路人不会抬高价值。
+## 数值来自无名杀 standard.js 中【桃】的 ai.basic.useful，是“AI 愿意为队友留桃”的通用价值来源。
+func _test_tao_dynamic_hand_value() -> bool:
+	# 场景一：全场健康；没有任何人能被我救，这张桃只值无人待救档7.2分。
+	if not _expect_tao_hand_value([
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], 7.2, "idle_value"):
+		return false
+	# 场景二：两名反贼队友都只剩2点体力；两名待救对象命中多人危险档，价值升到8分。
+	if not _expect_tao_hand_value([
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"rebel", "hp":2, "max_hp":4},
+			{"identity":"rebel", "hp":2, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], 8.0, "multi_danger_value"):
+		return false
+	# 场景三：身份未公开时同样成立；真实阵营识别不依赖暴露度。
+	if not _expect_tao_hand_value([
+			{"identity":"rebel", "hp":4, "max_hp":4, "revealed":false},
+			{"identity":"rebel", "hp":2, "max_hp":4, "revealed":false},
+			{"identity":"rebel", "hp":2, "max_hp":4, "revealed":false},
+			{"identity":"leader", "hp":4, "max_hp":4, "revealed":true},
+		], 8.0, "hidden_multi_danger_value"):
+		return false
+	# 场景四：只有敌人残血；敌人待救不会抬高我方救命牌的价值，仍为无人待救档。
+	if not _expect_tao_hand_value([
+			{"identity":"rebel", "hp":4, "max_hp":4},
+			{"identity":"leader", "hp":1, "max_hp":4},
+			{"identity":"loyalist", "hp":1, "max_hp":4},
+		], 7.2, "enemy_danger_ignored"):
+		return false
+	# 场景五：自己只剩2点体力且无人待救；按自身危险度抬高价值（7 + |0.5 - 0.5| = 7.0）。
+	if not _expect_tao_hand_value([
+			{"identity":"rebel", "hp":2, "max_hp":4},
+			{"identity":"leader", "hp":4, "max_hp":4},
+		], 7.0, "self_wounded_value"):
+		return false
+	return true
+
+
+## 校验【桃】在某份快照中的动态保留价值是否符合期望；只比对数值，不执行任何牌效。
+func _expect_tao_hand_value(players_spec: Array, expected_value: float, label: String) -> bool:
+	# 判定快照；与留桃判定共用同一构造，保证两处读取完全相同的字段。
+	var snapshot: Dictionary = _build_keep_tao_snapshot(players_spec)
+	# 身份评估上下文；与真实决策路径一致，避免动态价值在缺少评估上下文时读到不同结果。
+	_policy.identity_model.begin_evaluation(snapshot)
+	# 实际动态价值；评估器内部会调用【桃】自己的 modify_ai_hand_value 钩子。
+	var value: float = _policy.evaluator.get_card_value_by_id("tao", snapshot, 0)
+	_policy.identity_model.end_evaluation()
+	if not is_equal_approx(value, expected_value):
+		return _fail("tao_hand_value_%s value=%.3f expected=%.3f" % [label, value, expected_value])
 	return true
 
 
@@ -1879,10 +1981,15 @@ func _build_keep_tao_snapshot(players_spec: Array) -> Dictionary:
 		var hand: Array = []
 		for tao_index: int in range(tao_count):
 			hand.append(_card(901 + tao_index, "tao", 0))
+		# 行动者额外填充牌声明；只对0号生效，用于构造手牌溢出与珍贵牌数量场景。
+		var fillers: Array = spec.get("fillers", []) as Array
+		# 行动者额外填充牌；UID从950起，与【桃】的901起互不冲突。
+		for filler_index: int in range(fillers.size()):
+			hand.append(_card(950 + filler_index, str(fillers[filler_index]), 0))
 		players.append({
 			"player_id":index,
 			"identity":str(spec.get("identity", "rebel")),
-			"identity_revealed":true,
+			"identity_revealed":bool(spec.get("revealed", true)),
 			"alive":true,
 			"out_of_game":false,
 			"hp":int(spec.get("hp", 4)),

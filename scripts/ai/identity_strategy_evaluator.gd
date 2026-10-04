@@ -108,6 +108,13 @@ const LOW_HP_RESCUE_RESERVE_PENALTY: float = 3.0
 ## 濒死友方没有手牌时的救援降权；缺少可立即转化为行动的资源时降低【桃】的长期收益。
 const EMPTY_HAND_RESCUE_PENALTY: float = 2.5
 
+## 判定“既非队友也非仇敌”的态度绝对值上界；对应无名杀【桃】濒死分支的 `Math.abs(get.attitude(player, target)) < 1`。
+## 语义：态度落在该区间说明救援既不能积累阵营收益，也不会改变敌人数量，出牌纯属浪费资源。
+const NEUTRAL_RESCUE_ATTITUDE_THRESHOLD: float = 1.0
+
+## 关系不明的非领袖目标被救时的固定拒绝分；严格小于0即可让通用选择层放弃出牌并保留救援牌。
+const NEUTRAL_TARGET_RESCUE_DECLINE_SCORE: float = -1.0
+
 ## 濒死友方距离其下个回合每多等待一名角色的降权；从第二个等待座次开始累计。
 const RESCUE_TURN_DISTANCE_PENALTY: float = 0.75
 
@@ -331,6 +338,11 @@ func score_rescue(authoritative_snapshot: Dictionary, responder_id: int, dying_p
 	var alive_count: int = identity_model.get_alive_player_count(authoritative_snapshot)
 	# 当前隐藏身份态度；未暴露角色不会仅凭真实身份无条件获救。
 	var attitude: float = identity_model.get_attitude(authoritative_snapshot, responder_id, dying_player_id)
+	# 关系不明的非领袖目标拦截；对应无名杀【桃】濒死分支的 `Math.abs(get.attitude(player, target)) < 1 → return 0`。
+	# 语义：态度绝对值为0说明既不是队友也不是仇敌，救他既不积累阵营收益也不改变敌人数量，因此保留救援牌。
+	# 领袖不走该分支：领袖身份公开且存亡直接决定对局，其救援价值由下方身份奖励与惩罚独立表达。
+	if absf(attitude) < NEUTRAL_RESCUE_ATTITUDE_THRESHOLD and dying_identity != "leader":
+		return NEUTRAL_TARGET_RESCUE_DECLINE_SCORE
 	# 基础救援收益；达到1点还需回复越多，单张救援对最终存活的边际价值略降低。
 	var score: float = attitude + BASE_RESCUE_VALUE - float(maxi(required_recover - 1, 0)) * EXTRA_RECOVER_PENALTY
 	# 明确友方的行动转化能力；敌对与未知角色不借此重复降权，领袖等战略奖励仍在后续独立计算。
