@@ -15,7 +15,7 @@ func _init() -> void:
 		"id": "qiong_cunhu",
 		"display_name": "穹",
 		"gender": "male",
-		"faction": "xingqionglieche",
+		"faction": "beiluoboge",
 		"max_hp": 4,
 		"description": "免疫黑色【杀】的目标指定，并能保护距离1的其他角色。",
 	}, [HUPO_SKILL, JIANLEI_SKILL])
