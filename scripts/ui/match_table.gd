@@ -167,10 +167,12 @@ const TOP_INFO_PRIMARY_FONT_SIZE: int = 16
 @export_range(0.0, 48.0, 1.0) var local_hand_indicator_margin: float = 8.0
 
 ## 本地获得牌动画起点距离手牌区右边缘的额外间距；默认24像素让新牌从区域外清晰进入，运行时可按主题调整。
+## 真实获得牌已改为从真实来源直飞最终槽位，本参数现在只服务虚拟手牌候选与虚拟牌回归的右侧入场表现。
 @export_range(0.0, 96.0, 1.0) var local_hand_gain_entry_margin: float = 24.0
 
 ## 本地正式获得牌从右侧进入手牌布局的持续时间；默认0.42秒与通用飞牌节奏一致，可在检查器中独立调整。
 ## 当前默认0.24秒以匹配加快后的摸牌节奏；同一正式手牌入场逻辑也服务于其他获得牌，从而保持本地手牌反馈一致。
+## 真实获得牌已改为从真实来源直飞最终槽位、落地即到位，本参数现在只服务虚拟手牌候选与虚拟牌回归的右侧入场表现。
 @export_range(0.1, 1.5, 0.01) var local_hand_gain_duration: float = 0.24
 
 ## 虚拟手牌替换请求期间真实手牌向左离场、可选牌向右离场的持续时间。
@@ -420,12 +422,20 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 ## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
 var _local_hand_gain_tweens: Dictionary = {}
 
-## 本机获得牌的前置飞行门闸；键为实体 UID，值为该牌当前的前置飞行牌面（未知时为 true）。
-## 门闸存在期间，对应正式手牌节点必须停留在手牌区右侧入场点，不得提前滑入或出现在最终槽位。
-## 门闸正常只由飞行落地回调解除，因此检查器里调整飞行时长不会破坏“飞行落地 → 手牌滑入”的两段衔接；
-## 保存飞行牌面是为了让保持阶段能识别“飞行牌已消失但回调不会再来”的异常情况并自动补齐解闸，
+## 本机获得牌的前置飞行门闸；键为实体 UID，值为该牌本次飞行的记录字典。
+## 记录字段：card=本次飞行使用的牌面（自愈判定用，牌面已释放说明落地回调不会再来）；
+## origin=飞行起点（动画层坐标）；started=飞行是否已经起飞；batch=所属摸牌批次 ID（-1 表示单张获得）。
+## 门闸存在期间，对应正式手牌节点必须停留在本次飞行的起点——该点位于手牌滚动区之外因而被裁剪不可见，
+## 于是玩家看到的是一张牌从来源连续飞向槽位，而不是“先出现在槽位再被飞入一次”。
+## 门闸正常只由飞行落地回调解除：落地那一帧节点直接出现在自己的槽位，不再有第二段滑动；
+## 保持飞行牌面是为了让保持阶段能识别“飞行牌已消失但回调不会再来”的异常情况并自动补齐解闸，
 ## 重新开局、牌离开手牌区或飞行被清理时也会一并清除，避免残留门闸让手牌永远停在屏幕外。
 var _local_hand_gain_flight_gates: Dictionary = {}
+
+## 已登记但尚未起飞的本机摸牌批次；键为控制器分配的批次 ID，值为该批未起飞成员的牌面映射与飞行起点。
+## 逐张结构为 {"views_by_uid":{实体 UID:牌面}, "origin":飞行起点}；成员起飞或离场后逐个摘除。
+## 之所以延后起飞：批次完成信号早于权威快照，只有快照布局之后才知道这批牌各自的手牌槽位。
+var _pending_local_draw_batches: Dictionary = {}
 
 ## 当前虚拟手牌替换模式是否已经生效；为 true 时手牌区显示的是技能请求声明的可选虚拟牌而不是真实手牌。
 var _virtual_hand_choice_active: bool = false
@@ -2451,8 +2461,10 @@ func _render_local_hand() -> void:
 		if ordered_card_views[card_index].get_index() != card_index:
 			hand_container.move_child(ordered_card_views[card_index], card_index)
 	hand_container.layout_cards_now()
-	# 门闸保持必须在布局之后：先把仍等待前置飞行的获得牌固定在右侧入场点，再启动已经可以入场的牌。
+	# 顺序不可调换：先把仍等待飞行的获得牌按在飞行起点，再让槽位已经可用的获得牌起飞（飞行终点取刚刚写好的槽位）。
 	_hold_gated_local_hand_entries()
+	_start_pending_local_hand_gain_flights()
+	# 虚拟手牌候选与虚拟牌回归仍使用“从右侧滑入”的入场表现，与真实获得牌的直飞最终槽位互不影响。
 	_start_pending_local_hand_gain_animations()
 	# 内联询问期间的按钮态由询问刷新函数唯一维护；本函数不得回写普通出牌态。
 	# 缺少本守卫时，延迟执行的手牌重渲染（例如虚拟候选离场动画结束回调）会覆盖刚刚建立的询问按钮，
@@ -2828,9 +2840,14 @@ func _on_hand_drag_finished(source_card_uid: int, pointer_global_position: Vecto
 	var target_card_uid: int = _find_hand_drag_target_at_position(source_card_uid, source_zone, pointer_global_position)
 	# 原实体牌面；必须先退出跟随状态，后续重排才会重新接管其位置和层级。
 	var source_view: CardView = _card_views.get(source_card_uid) as CardView
+	# 鼠标松开那一帧的释放点（容器坐标）；必须在退出跟随与任何重排之前取得，
+	# 否则拖拽位置会先被布局写回槽位，落位过渡就失去了起点。
+	var release_position: Vector2 = source_view.position if source_view != null and is_instance_valid(source_view) else Vector2.ZERO
 	_active_hand_drag_card_uid = -1
 	if source_view != null and is_instance_valid(source_view):
 		source_view.end_hand_drag()
+		# 登记拖拽落位过渡起点；下一次布局会把该牌先留在释放点，再用 drag_settle_seconds 滑向稳定槽位。
+		hand_container.begin_card_settle(source_view, release_position)
 	if target_card_uid < 0:
 		hand_container.layout_cards_now()
 		return
@@ -4705,28 +4722,48 @@ func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void
 	var draw_start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	# 本批整体中心；动画层以此中心对称铺开多张牌，单张时保持原有的目标锚点。
 	var draw_target_position: Vector2 = target_anchor_result.get("position", Vector2.ZERO) as Vector2
+	# 当前批次是否属于本机玩家；本机批次的牌背要飞向各自最终槽位，必须先等快照布局算出槽位再起飞。
+	var is_local_draw_batch: bool = player_id == match_controller.local_human_player_id
 	# 当前批次的正式牌背节点；摸牌信息默认不公开，所有观察者均只看到同款背面并由权威快照决定实际手牌显示。
 	var draw_card_views: Array[CardView] = []
-	# 本批属于本机玩家的摸牌实体 UID；用于在牌背落地后再让正式手牌节点从右侧滑入。
+	# 本批属于本机玩家的摸牌实体 UID；用于在牌背落地后再让正式手牌节点出现在各自槽位。
 	var drawn_local_card_uids: Array = []
 	for card_data_variant: Variant in drawn_card_data:
 		# 当前摸到实体的瞬时牌面副本；只读取 UID 配置牌背，不把私有牌面正面泄露给其他观察者。
 		var card_data: Dictionary = card_data_variant as Dictionary
-		# 当前摸到实体的稳定 UID；本机摸牌需要按该 UID 登记手牌入场与门闸。
+		# 当前摸到实体的稳定 UID；本机摸牌需要按该 UID 登记手牌飞行与门闸。
 		var drawn_card_uid: int = int(card_data.get("uid", -1))
 		var draw_card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		draw_card_view.visible = false
 		draw_card_view.configure_back(drawn_card_uid, false)
 		draw_card_views.append(draw_card_view)
-		if player_id == match_controller.local_human_player_id:
+		if is_local_draw_batch:
 			drawn_local_card_uids.append(drawn_card_uid)
-			# 本机摸牌的手牌入场登记；批次信号带走了逐张转移信号，只有在此登记待入场并加门闸，
-			# 正式手牌节点才会以“从右侧向左滑入”的方式加入手牌区，而不是直接出现在最终槽位。
-			# 门闸值保存本张牌背牌面自身，使保持阶段能在牌背异常消失时自愈解闸。
+			# 本机摸牌的手牌飞行登记；批次完成信号早于权威快照，因此这里只登记门闸与飞行起点，
+			# 真正的起飞由 _start_pending_local_hand_gain_flights 在快照布局之后完成，终点是每张牌自己的槽位。
+			# 门闸值保存本张牌背牌面，使保持阶段能在牌背异常消失时自愈解闸。
 			if drawn_card_uid >= 0:
-				_pending_local_hand_gain_uids[drawn_card_uid] = true
-				_local_hand_gain_flight_gates[drawn_card_uid] = draw_card_view
+				_local_hand_gain_flight_gates[drawn_card_uid] = {"card":draw_card_view, "origin":draw_start_position, "started":false, "batch":batch_id}
+	if is_local_draw_batch:
+		# 本机摸牌批次延后起飞；同批成员共用同一个牌堆起点，落点在快照到达后逐张解析。
+		_pending_local_draw_batches[batch_id] = {"views_by_uid":_build_card_view_uid_lookup(draw_card_views, drawn_local_card_uids), "origin":draw_start_position}
+		_start_pending_local_hand_gain_flights()
+		return
 	card_use_animation_layer.play_draw_transfer_batch(draw_card_views, draw_start_position, draw_target_position, _release_local_hand_gain_flight_gates.bind(drawn_local_card_uids))
+
+
+## 按本批摸牌顺序把牌面节点与其实体 UID 配对；待起飞批次据此在快照到达后逐张解析最终落点。
+## 无效 UID 或已释放节点不进入结果，保证待起飞成员始终可以被安全地起飞或释放。
+func _build_card_view_uid_lookup(card_views: Array[CardView], card_uids: Array) -> Dictionary:
+	# 实体 UID 到牌面节点的映射；键值顺序同时保留了牌堆摸取顺序。
+	var view_lookup: Dictionary = {}
+	for card_index: int in range(mini(card_views.size(), card_uids.size())):
+		# 当前成员 UID；无效 UID 不登记，避免待起飞批次里出现无法解闸的成员。
+		var card_uid: int = int(card_uids[card_index])
+		if card_uid < 0:
+			continue
+		view_lookup[card_uid] = card_views[card_index]
+	return view_lookup
 
 
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
@@ -4791,13 +4828,13 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	if target_zone != "discard_pile":
 		# 实体已经进入新的规则区域；上一轮弃牌移动的待消费与已消费所有权到此失效，未来普通弃置或再次使用可重新播放。
 		card_use_animation_layer.release_consumed_discard_claim(card_uid)
-	# 本地摸牌与其他获得都使用手牌容器中的正式实体视图；先登记 UID，收到包含该牌的快照后再让同一节点从右侧进入。
+	# 本地摸牌与其他获得都使用手牌容器中的正式实体视图；先登记飞行起点与门闸，
+	# 收到包含该牌的快照、算出该牌自己的最终槽位之后才真正起飞，使牌从真实来源直接飞向它的槽位。
 	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand"
 	if is_local_gain:
-		_pending_local_hand_gain_uids[card_uid] = true
-		# 前置飞行段；非牌堆来源先播放“真实来源 → 手牌区右侧入场点”，并由落地回调解除手牌入场门闸。
+		# 前置飞行段；来源是本机自己的区域时没有可见的飞行起点，只保留正式节点的正常对账。
 		_play_local_hand_gain_flight(card_uid, card_data, source_player_id, source_zone)
-		_start_pending_local_hand_gain_animations()
+		_start_pending_local_hand_gain_flights()
 		return
 	# 转移来源；本机手牌与装备区取实体牌真实位置，其他来源沿用玩家武将牌或中央公共锚点。
 	var transfer_origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
@@ -4912,61 +4949,186 @@ func _forget_taken_over_hand_card(card_uid: int, card_view: CardView) -> void:
 	_card_views.erase(card_uid)
 
 
-## 播放一次本机获得牌的前置飞行段；返回 true 表示已经登记门闸并需要等待落地回调解除。
+## 登记一次本机获得牌的前置飞行；返回 true 表示已经登记门闸并需要等待落地回调解除。
 ##
-## 只有“来源不是本机自己的区域、且不是牌堆摸牌”的获得才需要前置飞行：
-## 牌堆摸牌已经由 play_draw_transfer_batch 播放整批牌背飞行，另建第二段飞行只会重复表现同一张牌；
-## 本机区域之间的移动没有可见来源，直接走手牌入场即可。
-## 飞行落点与正式手牌节点的右侧入场点取同一个坐标，因此落地帧与滑入首帧严格衔接，不会出现牌已到手中又被重新飞入。
+## 只有“来源不是本机自己的区域”的获得才需要前置飞行：本机区域之间的移动没有可见来源，
+## 直接由手牌容器的槽位整理过渡表达即可，不再从右侧滑入。
+## 本方法只登记起点与门闸、不在此处起飞：飞行终点必须是该牌在手牌区的最终槽位，
+## 而槽位要等包含该牌的权威快照完成布局，因此真正的起飞统一交给 _start_pending_local_hand_gain_flights()。
+## 若该牌此刻正显示在中央展示队列中（例如获得别人刚打出的【杀】），这里直接取走那张牌面本身继续飞行，
+## 而不是新建第二张牌面，避免出现“牌飞进手里、原牌还留在中央”的复制观感。
 func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_player_id: int, source_zone: String) -> bool:
-	if source_zone == "draw_pile" or source_player_id == match_controller.local_human_player_id:
+	if source_player_id == match_controller.local_human_player_id:
 		return false
-	if source_player_id < 0 and source_zone in ["hand", "wooden_ox", "equipment", "processing"]:
+	if source_player_id < 0 and source_zone in ["hand", "wooden_ox", "equipment"]:
 		# 缺少来源玩家的本机私有区域移动没有可解析的真实来源，放弃前置飞行而不是伪造中央起点。
+		# “processing”不属于私有区域：它对应中央处理区，公共锚点即其真实来源，因此必须保留飞行能力。
 		return false
-	# 来源解析；无法解析时放弃前置飞行，正式手牌节点仍会正常从右侧滑入，不会留下停在屏幕上的孤立牌面。
-	var origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
-	if not bool(origin_result.get("valid", false)):
-		return false
-	# 前置飞行起点；命中本机正式手牌时等于该牌槽位中心，其余来源为武将牌锚点或公共锚点。
-	var flight_start_position: Vector2 = origin_result.get("position", Vector2.ZERO) as Vector2
-	# 前置飞行终点；与正式手牌节点使用同一右侧入场点，保证两段表现首尾衔接。
-	var flight_target_position: Vector2 = _global_to_animation_position(_get_local_hand_gain_start_global_position(hand_container.card_size))
-	# 飞行牌面；获得牌在本机视角按统一牌背规则显示，牌堆方向仍为牌背，其余来源显示正面。
-	var flight_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-	flight_card.visible = false
-	if _should_show_card_back(source_player_id, source_zone, match_controller.local_human_player_id, "hand"):
-		flight_card.configure_back(card_uid, false)
+	# 中央展示队列里同 UID 的正式牌面；命中时它就是本次飞行的牌面，飞行从它当前所在位置开始。
+	var flight_card: CardView = card_use_animation_layer.take_over_active_card(card_uid)
+	# 前置飞行起点；命中展示牌面时等于它当前所在位置，其余来源取统一的来源解析结果。
+	var flight_start_position: Vector2 = Vector2.ZERO
+	if flight_card != null:
+		flight_start_position = flight_card.position + flight_card.get_card_size() * 0.5
 	else:
-		var flight_definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
-		flight_card.configure(card_data, flight_definition, false, false)
-	card_use_animation_layer.add_child(flight_card)
-	flight_card.position = flight_start_position - flight_card.get_card_size() * 0.5
-	# 手牌入场门闸；必须在启动飞行之前登记，保证随后到达的快照不会让正式手牌节点抢先出现在槽位。
-	# 值保存飞行牌面自身，使保持阶段能在飞行牌异常消失时自愈解闸。
-	_local_hand_gain_flight_gates[card_uid] = flight_card
-	card_use_animation_layer.play_transfer(flight_card, flight_start_position, flight_target_position, "", _release_local_hand_gain_flight_gates.bind([card_uid]))
+		# 来源解析；无法解析时放弃前置飞行，正式手牌节点会在快照后直接出现在自己的槽位，不会留下停在屏幕上的孤立牌面。
+		var origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
+		if not bool(origin_result.get("valid", false)):
+			return false
+		# 前置飞行起点；命中本机正式手牌时等于该牌槽位中心，其余来源为武将牌锚点或公共锚点。
+		flight_start_position = origin_result.get("position", Vector2.ZERO) as Vector2
+		# 飞行牌面；获得牌在本机视角按统一牌背规则显示，牌堆方向仍为牌背，其余来源显示正面。
+		flight_card = CARD_VIEW_SCENE.instantiate() as CardView
+		flight_card.visible = false
+		if _should_show_card_back(source_player_id, source_zone, match_controller.local_human_player_id, "hand"):
+			flight_card.configure_back(card_uid, false)
+		else:
+			var flight_definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
+			flight_card.configure(card_data, flight_definition, false, false)
+		card_use_animation_layer.add_child(flight_card)
+		flight_card.position = flight_start_position - flight_card.get_card_size() * 0.5
+	# 手牌飞行门闸；必须在快照之前登记，保证正式手牌节点先被按在飞行起点，而不是提前出现在槽位。
+	# started=false 表示尚未起飞：起飞需要等快照布局算出该牌的最终槽位；batch=-1 表示这是一次单张获得飞行。
+	_local_hand_gain_flight_gates[card_uid] = {"card":flight_card, "origin":flight_start_position, "started":false, "batch":-1}
 	return true
 
 
-## 解除一批本机获得牌的前置飞行门闸并立即尝试启动手牌入场；由飞行落地回调触发。
+## 解除一批本机获得牌的前置飞行门闸并让对应正式手牌节点落在各自槽位；由飞行落地回调触发。
 ## 单张获得与整批摸牌共用同一入口，避免为“批次解闸”再维护第二套逻辑。
 func _release_local_hand_gain_flight_gates(card_uids: Array) -> void:
-	# 本次是否真的解除了门闸；没有任何门闸变化时不必重新尝试启动入场。
+	# 本次是否真的解除了门闸；没有任何门闸变化时不必重新落位。
 	var released_any: bool = false
+	# 本次真正解除门闸的实体 UID；用于精确收尾对应节点的起点保持偏移。
+	var released_uids: Array = []
 	for card_uid_variant: Variant in card_uids:
-		# 当前解闸实体 UID；迟到或已清理的 UID 不会误触发入场。
-		if _local_hand_gain_flight_gates.erase(int(card_uid_variant)):
+		# 当前解闸实体 UID；迟到或已清理的 UID 不会误触发落位。
+		var card_uid: int = int(card_uid_variant)
+		if _local_hand_gain_flight_gates.erase(card_uid):
 			released_any = true
+			released_uids.append(card_uid)
 	if released_any:
-		_start_pending_local_hand_gain_animations()
+		_finish_local_hand_gain_holds(released_uids)
 
 
-## 把仍被前置飞行门闸挡住的本机获得牌固定在右侧入场点；在每次快照手牌布局之后调用。
-## 门闸期间这些牌既不能出现在最终槽位，也不能提前播放入场补间，
-## 否则玩家会先看到牌已经躺进手牌区，随后又被重新飞入一次。
+## 结束一批获得牌的起点保持，让它们立即出现在各自槽位；落地帧一次性收尾，不产生第二段滑动。
+## 飞行牌面此刻正好停在槽位中心，正式节点同帧出现在同一位置，玩家看到的是同一张牌连续到位。
+func _finish_local_hand_gain_holds(card_uids: Array) -> void:
+	# 本次是否有节点真正改动了偏移；没有任何节点需要收尾时不必重新布局。
+	var changed_any: bool = false
+	for card_uid_variant: Variant in card_uids:
+		# 当前需要落位的实体 UID；牌已离开手牌时只跳过，不影响其他成员。
+		var card_uid: int = int(card_uid_variant)
+		# 当前正式手牌节点；已被动画层接管或已释放的节点不再由本函数写入位置。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			continue
+		if not card_view.hand_entry_offset.is_zero_approx():
+			card_view.hand_entry_offset = Vector2.ZERO
+			changed_any = true
+	if changed_any:
+		hand_container.layout_cards_now()
+
+
+## 启动所有已经可以起飞的本机获得牌飞行；在每次快照手牌布局之后调用，此时每张牌的最终槽位才存在。
+##
+## 单张获得与整批摸牌共用本入口：整批摸牌一次播放同批牌背并逐张抵达各自槽位，单张获得则播放自己的飞行。
+## 尚未进入快照的牌保留待起飞登记；门闸已被清理（该牌离开手牌区）的成员在此丢弃并释放其人未播放的牌面，
+## 绝不留下停在屏幕上的孤立牌面，也绝不让门闸永远等不到落地回调。
+func _start_pending_local_hand_gain_flights() -> void:
+	for batch_id_variant: Variant in _pending_local_draw_batches.keys():
+		# 当前待起飞批次 ID 与数据；批次可能已被取消，缺失时跳过。
+		var batch_id: int = int(batch_id_variant)
+		var draw_batch: Dictionary = _pending_local_draw_batches.get(batch_id, {}) as Dictionary
+		if draw_batch.is_empty():
+			continue
+		# 本批飞行起点；同批全部牌面共用一个牌堆起点，因此逐张落点只改终点。
+		var batch_origin: Vector2 = draw_batch.get("origin", Vector2.ZERO) as Vector2
+		# 本批仍未起飞的成员映射；起飞或丢弃后逐个摘除，避免后续快照重复播放。
+		var batch_views: Dictionary = (draw_batch.get("views_by_uid", {}) as Dictionary).duplicate()
+		# 本帧可播放的成员；三组数组下标严格对应同一批牌。
+		var flight_views: Array[CardView] = []
+		var flight_targets: Array[Vector2] = []
+		var flight_uids: Array = []
+		for card_uid_variant: Variant in batch_views.keys():
+			# 当前批次成员 UID；门闸缺失说明这张牌已经离开手牌区，本批不再需要播放它。
+			var card_uid: int = int(card_uid_variant)
+			if not _local_hand_gain_flight_gates.has(card_uid):
+				# 未加入动画层的牌面必须在此释放；否则会留下永远不播放的孤立节点。
+				var dropped_view: CardView = batch_views.get(card_uid_variant) as CardView
+				if dropped_view != null and is_instance_valid(dropped_view):
+					dropped_view.queue_free()
+				batch_views.erase(card_uid_variant)
+				continue
+			# 当前正式手牌节点；还没有进入快照时保留成员，等下一次对账再判断。
+			var card_view: CardView = _card_views.get(card_uid) as CardView
+			if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+				continue
+			flight_views.append(batch_views[card_uid_variant] as CardView)
+			flight_targets.append(_get_local_hand_card_slot_center(card_view))
+			flight_uids.append(card_uid)
+		if flight_views.is_empty():
+			# 本帧没有成员可以起飞；写回清理结果后继续等待下一次快照。
+			if batch_views.is_empty():
+				_pending_local_draw_batches.erase(batch_id)
+			else:
+				draw_batch["views_by_uid"] = batch_views
+				_pending_local_draw_batches[batch_id] = draw_batch
+			continue
+		for flight_uid_variant: Variant in flight_uids:
+			# 起飞即置位；同一门闸不会因为后续快照再启动第二段飞行。
+			var gate: Dictionary = _local_hand_gain_flight_gates.get(flight_uid_variant, {}) as Dictionary
+			if not gate.is_empty():
+				gate["started"] = true
+				_local_hand_gain_flight_gates[flight_uid_variant] = gate
+			batch_views.erase(flight_uid_variant)
+		if batch_views.is_empty():
+			_pending_local_draw_batches.erase(batch_id)
+		else:
+			draw_batch["views_by_uid"] = batch_views
+			_pending_local_draw_batches[batch_id] = draw_batch
+		# 逐张落点的整批摸牌；同批仍共用一条批次补间、同帧起飞，只是各自飞向自己的手牌槽位。
+		card_use_animation_layer.play_draw_transfer_batch(flight_views, batch_origin, batch_origin, _release_local_hand_gain_flight_gates.bind(flight_uids), flight_targets)
+	for card_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
+		# 当前单张获得门闸 UID；整批摸牌的门闸由上面的批次分支统一处理。
+		var card_uid: int = int(card_uid_variant)
+		var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid_variant, {}) as Dictionary
+		if gate.is_empty() or bool(gate.get("started", false)) or int(gate.get("batch", -1)) >= 0:
+			continue
+		# 当前正式手牌节点；还没有进入快照时保留门闸，等下一次对账再起飞。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			continue
+		var flight_card_variant: Variant = gate.get("card", null)
+		if not is_instance_valid(flight_card_variant):
+			# 飞行牌面已被清场释放；直接解闸让正式节点落位，绝不留下永远等不到回调的门闸。
+			_release_local_hand_gain_flight_gates([card_uid])
+			continue
+		gate["started"] = true
+		_local_hand_gain_flight_gates[card_uid] = gate
+		# 飞行终点是该牌自己的最终槽位；落地回调解闸后正式节点就出现在同一个位置。
+		card_use_animation_layer.play_transfer(flight_card_variant as CardView, gate.get("origin", Vector2.ZERO) as Vector2, _get_local_hand_card_slot_center(card_view), "", _release_local_hand_gain_flight_gates.bind([card_uid]))
+	# 起飞后立即把正式节点按在飞行起点；本函数可能在保持阶段之前被调用（先起飞再登记 started），
+	# 若不在此补一次保持，刚起飞的牌会在本帧以槽位位置闪现，正是需要消除的“先出现在手牌区”观感。
+	_hold_gated_local_hand_entries()
+
+
+## 返回一张正式手牌节点最终槽位中心的动画层坐标；所有获得牌飞行的终点都必须经此取值。
+## 稳定槽位真值来自容器本次布局写入的 position：扣除入场、选中与整理三类运行时偏移后即为槽位左上角，
+## 因此飞行终点不会跟随其他独立表现漂移，也不需要任何调用方自行估算坐标。
+func _get_local_hand_card_slot_center(card_view: CardView) -> Vector2:
+	# 稳定槽位左上角的容器坐标；三类偏移都必须剔除。
+	var slot_local_position: Vector2 = card_view.position - card_view.hand_entry_offset - card_view.hand_selection_offset - card_view.hand_layout_offset
+	# 槽位中心的全局坐标；容器变换包含画布缩放、手牌滚动与窗口适配。
+	var slot_global_position: Vector2 = hand_container.get_global_transform() * (slot_local_position + card_view.get_card_size() * 0.5)
+	return _global_to_animation_position(slot_global_position)
+
+
+## 把仍被前置飞行门闸挡住的本机获得牌固定在本次飞行的起点；在每次快照手牌布局之后调用。
+##
+## 门闸期间这些牌不能出现在最终槽位，否则玩家会先看到牌已经躺进手牌区，随后又被重新飞入一次；
+## 而起点位于手牌滚动区之外，节点会被滚动容器裁剪，因此在玩家看来它仍在来源处。
 ## 本方法同时承担门闸的最后一道兜底：飞行牌面已被动画层释放说明落地回调不会再触发，
-## 此时立即补齐解闸并启动入场，避免任何异常清场路径把牌永久留在可视手牌区之外。
+## 此时立即补齐解闸并让牌落位，避免任何异常清场路径把牌永久留在可视手牌区之外。
 func _hold_gated_local_hand_entries() -> void:
 	if _local_hand_gain_flight_gates.is_empty():
 		return
@@ -4975,26 +5137,43 @@ func _hold_gated_local_hand_entries() -> void:
 	for card_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
 		# 当前仍被门闸挡住的实体 UID；尚未出现在快照中的牌本轮没有节点可保持。
 		var card_uid: int = int(card_uid_variant)
-		# 当前门闸记录的前置飞行牌面；值不是对象时无法判断存活，按正常门闸继续等待落地回调。
-		var gate_flight_variant: Variant = _local_hand_gain_flight_gates[card_uid_variant]
+		# 当前门闸记录；结构异常时按正常门闸继续等待落地回调。
+		var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid_variant, {}) as Dictionary
+		if gate.is_empty():
+			continue
+		# 当前门闸记录的飞行牌面；牌面已被释放说明落地回调不会再来。
+		var gate_flight_variant: Variant = gate.get("card", null)
 		if gate_flight_variant is CardView and not is_instance_valid(gate_flight_variant):
 			stale_gate_uids.append(card_uid)
 			continue
-		# 当前正式手牌节点；只在它已经进入手牌容器后才需要保持右侧入场位置。
+		if not bool(gate.get("started", false)):
+			# 尚未起飞：位置仍由来源处与快照的自然顺序决定，本函数不写入任何偏移。
+			continue
+		# 当前正式手牌节点；只在它已经进入手牌容器后才需要保持在飞行起点。
 		var card_view: CardView = _card_views.get(card_uid) as CardView
 		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
 			continue
-		if _local_hand_gain_tweens.has(card_uid):
-			# 门闸解除后入场补间已经接管位置，本函数不得再写入偏移覆盖它。
-			continue
-		# 右侧入场偏移；与入场补间共用同一落点公式，解闸后补间从当前位置继续滑入而不会跳变。
-		card_view.hand_entry_offset = _get_local_hand_gain_entry_offset(card_view, card_view.position - card_view.hand_entry_offset)
+		# 起点保持偏移；与飞行起点取同一坐标，解闸后节点正好出现在飞行牌面抵达的槽位。
+		card_view.hand_entry_offset = _get_local_hand_gain_origin_offset(card_view, gate.get("origin", Vector2.ZERO) as Vector2)
 	if stale_gate_uids.is_empty():
 		return
 	_release_local_hand_gain_flight_gates(stale_gate_uids)
 
 
-## 返回指定正式手牌节点在容器坐标下的右侧入场偏移量；门闸保持与入场补间共享同一落点公式。
+## 返回正式手牌节点在飞行期间被按在飞行起点所需的偏移量；单位与 hand_entry_offset 一致。
+## 传入的起点是动画层坐标下的牌面中心，必须经真实变换链转成容器坐标，兼容画布缩放与手牌滚动。
+func _get_local_hand_gain_origin_offset(card_view: CardView, origin_position: Vector2) -> Vector2:
+	# 飞行起点的全局坐标；动画层坐标经真实变换转回全局。
+	var origin_global_position: Vector2 = card_use_animation_layer.get_global_transform() * origin_position
+	# 飞行起点左上角的容器坐标；CardView 的 Node2D 原点位于牌面左上角。
+	var origin_local_position: Vector2 = hand_container.get_global_transform().affine_inverse() * origin_global_position - card_view.get_card_size() * 0.5
+	# 稳定槽位左上角的容器坐标；扣除三类运行时偏移，保证按住位置只由槽位与飞行起点决定。
+	var slot_local_position: Vector2 = card_view.position - card_view.hand_entry_offset - card_view.hand_selection_offset - card_view.hand_layout_offset
+	return origin_local_position - slot_local_position
+
+
+## 返回指定正式手牌节点在容器坐标下的右侧入场偏移量；入场补间与虚拟牌离场序列共享同一落点公式。
+## 真实获得牌的门闸保持已改为按各自飞行起点计算，不再使用本函数。
 func _get_local_hand_gain_entry_offset(card_view: CardView, target_position: Vector2) -> Vector2:
 	# 右侧入场中心全局坐标；固定从当前可视滚动区外侧进入，不受超宽内容区域影响。
 	var start_global_center: Vector2 = _get_local_hand_gain_start_global_position(card_view.get_card_size())
@@ -5099,7 +5278,9 @@ func _on_local_hand_gain_animation_finished(card_uid: int, card_instance_id: int
 ## 取消指定实体的本地获得动画；用于牌在入场途中被使用、离开手牌或重新开局的情况。
 func _cancel_local_hand_gain_animation(card_uid: int) -> void:
 	_pending_local_hand_gain_uids.erase(card_uid)
-	# 前置飞行门闸同时撤销；该牌的入场不会再等待一段已经被取消的飞行。
+	# 前置飞行门闸同时撤销；该牌的落位不会再等待一段已经被取消的飞行。
+	# 尚未起飞的飞行牌面与待起飞批次登记由本调用一并回收，避免留下永不播放的孤立牌面。
+	_cancel_pending_local_hand_gain_flight(card_uid)
 	_local_hand_gain_flight_gates.erase(card_uid)
 	# 当前实体正在运行的入场补间；停止后从索引移除，防止旧完成回调修改后续状态。
 	var gain_tween: Tween = _local_hand_gain_tweens.get(card_uid) as Tween
@@ -5115,7 +5296,35 @@ func _cancel_local_hand_gain_animation(card_uid: int) -> void:
 	var card_view: CardView = card_view_variant as CardView
 	if card_view.get_parent() == hand_container:
 		card_view.hand_entry_offset = Vector2.ZERO
+		# 起点保持偏移与整理偏移同样必须归零：被取消的获得牌不该继续停在来源处或旧槽位。
+		card_view.hand_layout_offset = Vector2.ZERO
 		hand_container.layout_cards_now()
+
+
+## 撤销一张牌尚未起飞的前置飞行；已经起飞的牌面不改动，它由动画层在落地淡出后自行释放。
+## 未起飞的飞行牌面既没有交给动画层播放过、也不会再被播放，因此必须在此释放，并从待起飞摸牌批次中摘除。
+func _cancel_pending_local_hand_gain_flight(card_uid: int) -> void:
+	# 当前门闸记录；缺失表示这张牌没有等待中的飞行。
+	var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid, {}) as Dictionary
+	if gate.is_empty():
+		return
+	if not bool(gate.get("started", false)):
+		var gate_flight_variant: Variant = gate.get("card", null)
+		if is_instance_valid(gate_flight_variant):
+			(gate_flight_variant as CardView).queue_free()
+	for batch_id_variant: Variant in _pending_local_draw_batches.keys():
+		# 当前待起飞批次；只处理包含该 UID 的批次，其余批次保持原样等待快照。
+		var batch_id: int = int(batch_id_variant)
+		var draw_batch: Dictionary = _pending_local_draw_batches.get(batch_id, {}) as Dictionary
+		var batch_views: Dictionary = draw_batch.get("views_by_uid", {}) as Dictionary
+		if not batch_views.has(card_uid):
+			continue
+		batch_views.erase(card_uid)
+		if batch_views.is_empty():
+			_pending_local_draw_batches.erase(batch_id)
+			continue
+		draw_batch["views_by_uid"] = batch_views
+		_pending_local_draw_batches[batch_id] = draw_batch
 
 
 ## 清空全部本地正式手牌入场任务；重新开局时调用，避免旧局补间继续写入新桌面。
@@ -5136,8 +5345,26 @@ func _clear_local_hand_gain_animations() -> void:
 			card_view.hand_entry_offset = Vector2.ZERO
 	_pending_local_hand_gain_uids.clear()
 	_local_hand_gain_tweens.clear()
-	# 前置飞行门闸属于同一批表现生命周期；与补间一起清空，否则新局的获得牌会永远停在屏幕外。
+	# 待起飞的本机摸牌批次；成员牌面从未交给动画层播放，必须在此释放，否则会留下永远不播放的孤立节点。
+	for batch_id_variant: Variant in _pending_local_draw_batches.keys():
+		# 当前待起飞批次；只读取成员映射，缺失时安全跳过。
+		var draw_batch: Dictionary = _pending_local_draw_batches.get(batch_id_variant, {}) as Dictionary
+		for batch_view_variant: Variant in (draw_batch.get("views_by_uid", {}) as Dictionary).values():
+			if is_instance_valid(batch_view_variant):
+				(batch_view_variant as CardView).queue_free()
+	_pending_local_draw_batches.clear()
+	# 前置飞行门闸属于同一批表现生命周期；未起飞的飞行牌面与门闸一起清空，否则新局的获得牌会永远停在屏幕外。
+	for gate_variant: Variant in _local_hand_gain_flight_gates.values():
+		# 当前门闸记录；已起飞的牌面由动画层清场统一释放，这里只处理从未播放的牌面。
+		var gate: Dictionary = gate_variant as Dictionary
+		if gate.is_empty() or bool(gate.get("started", false)):
+			continue
+		var gate_card_variant: Variant = gate.get("card", null)
+		if is_instance_valid(gate_card_variant):
+			(gate_card_variant as CardView).queue_free()
 	_local_hand_gain_flight_gates.clear()
+	# 清场后偏移已归零但 position 里仍保留着上一次写入的保持位置，必须重新布局一次让仍在容器中的手牌回到自己的槽位。
+	hand_container.layout_cards_now()
 
 
 ## 将全局画布坐标转换为动画层局部坐标；使用完整逆变换以兼容父节点位移、缩放与后续视口适配。

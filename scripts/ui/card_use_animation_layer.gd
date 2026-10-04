@@ -393,8 +393,10 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 
 
 ## 立即播放一次完整摸牌批次；同批牌从同一牌堆起点同时飞向以目标锚点为中心的横向组合，不等待其他玩家或其他 draw() 调用的批次结束。
-## 可选落地回调在本批全部牌面飞行结束时触发一次，供调用方让本机正式手牌节点在牌背落地后才从右侧滑入。
-func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vector2, target_position: Vector2, on_flight_finished: Callable = Callable()) -> void:
+## 可选落地回调在本批全部牌面飞行结束时触发一次，供调用方让本机正式手牌节点在牌背落地后才进入手牌区。
+## 可选 card_targets 与牌面数量一致时，第 i 张牌改为飞向第 i 个落点（本机摸牌使用各自的最终手牌槽位），
+## 不再按 draw_batch_card_spacing 围绕目标锚点铺开；为空或数量不一致时保持整组居中，兼容所有单锚点调用方。
+func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vector2, target_position: Vector2, on_flight_finished: Callable = Callable(), card_targets: Array[Vector2] = []) -> void:
 	# 当前可播放的正式牌面；空、已释放节点不创建无内容动画任务。
 	var valid_card_views: Array[CardView] = []
 	for card_view: CardView in card_views:
@@ -410,13 +412,15 @@ func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vecto
 		return
 	# 当前批次 ID；仅用于表现补间管理，绝不写入权威实体、快照或回放。
 	_draw_transfer_batch_sequence += 1
-	_play_draw_transfer_batch(_draw_transfer_batch_sequence, valid_card_views, start_position, target_position, on_flight_finished)
+	_play_draw_transfer_batch(_draw_transfer_batch_sequence, valid_card_views, start_position, target_position, on_flight_finished, card_targets)
 
 
 ## 播放一个独立摸牌批次；本方法可被多个调用并行执行，每个批次只管理自己的卡牌与补间。
-func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch_start_position: Vector2, batch_target_position: Vector2, on_flight_finished: Callable = Callable()) -> void:
+func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch_start_position: Vector2, batch_target_position: Vector2, on_flight_finished: Callable = Callable(), card_targets: Array[Vector2] = []) -> void:
 	# 当前动画代次；重开清场后旧协程不再访问或启动新局的任何表现任务。
 	var batch_generation: int = _presentation_generation
+	# 本批是否逐张指定落点；数量一致才生效，避免调用方传入不匹配数组时出现落点错位或缺牌。
+	var use_card_targets: bool = card_targets.size() == draw_cards.size()
 	# 同批飞行补间；所有牌的位置与缩放并行开始，绝不使用逐张延时。
 	var flight_tween: Tween = create_tween().set_parallel(true)
 	_draw_transfer_batch_tweens[batch_id] = flight_tween
@@ -426,13 +430,15 @@ func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch
 		var draw_card_size: Vector2 = draw_card.get_card_size()
 		# 当前牌相对整组中心的横向偏移；首尾绝对值相等，保证二张及以上时整体仍严格居中。
 		var centered_offset_x: float = (float(card_index) - float(draw_cards.size() - 1) * 0.5) * draw_batch_card_spacing
+		# 当前牌的落点中心；逐张指定时使用它自己的槽位中心，否则围绕目标锚点对称铺开。
+		var card_target_position: Vector2 = card_targets[card_index] if use_card_targets else batch_target_position + Vector2(centered_offset_x, 0.0)
 		draw_card.position = batch_start_position - draw_card_size * 0.5
 		draw_card.rotation = 0.0
 		draw_card.scale = Vector2.ONE * 0.82
 		draw_card.modulate = Color.WHITE
 		draw_card.z_index = 90 + card_index
 		draw_card.visible = true
-		flight_tween.tween_property(draw_card, "position", batch_target_position + Vector2(centered_offset_x, 0.0) - draw_card_size * 0.5, draw_flight_duration)
+		flight_tween.tween_property(draw_card, "position", card_target_position - draw_card_size * 0.5, draw_flight_duration)
 		flight_tween.tween_property(draw_card, "scale", Vector2.ONE * animated_card_scale, draw_flight_duration)
 	await flight_tween.finished
 	if batch_generation != _presentation_generation:
@@ -483,6 +489,26 @@ func has_active_card_uid(card_uid: int) -> bool:
 		if active_card != null and is_instance_valid(active_card) and active_card.card_uid == card_uid:
 			return true
 	return false
+
+
+## 从中央展示队列取走指定实体的正式牌面，并把它交给调用方继续驱动；返回 null 表示该牌当前没有中央牌面。
+## 用于“获得一张此刻正显示在中央的牌”：接管后队列其余成员立即补位，该节点不再被队列淡出释放，
+## 调用方可以直接从它当前所在位置把它飞入新区域，从而表现为这张牌被拿走，而不是在中央复制一张。
+func take_over_active_card(card_uid: int) -> CardView:
+	if card_uid < 0:
+		return null
+	# 当前命中的中央牌面；同一 UID 在同一时刻最多只有一张正式牌面，首个命中即为真值。
+	var taken_card: CardView = null
+	for active_card: CardView in _active_cards:
+		if active_card != null and is_instance_valid(active_card) and active_card.card_uid == card_uid:
+			taken_card = active_card
+			break
+	if taken_card == null:
+		return null
+	_detach_presented_card(taken_card)
+	# 队列成员补位；被取走的牌不再占位，剩余牌面在 queue_reflow_duration 内滑向新的对称位置。
+	_reflow_active_cards(queue_reflow_duration)
+	return taken_card
 
 
 ## 消费一次由使用或判定表现接管的真实弃牌移动；返回true时调用方不得再创建第二张转移牌。
@@ -809,16 +835,30 @@ func _remove_animated_card() -> void:
 func _remove_presented_card(card_view: CardView) -> void:
 	if card_view == null or not is_instance_valid(card_view):
 		return
+	_detach_presented_card(card_view)
+	card_view.queue_free()
+
+
+## 把指定正式牌面从中央展示队列的全部索引与补间中摘除，但不释放节点；节点由调用方决定释放还是接管。
+## 提前摘除时统一终止生命周期与移动补间，防止完成回调重新把失效节点加入淡出队列、或队列补位继续写入节点的位置。
+func _detach_presented_card(card_view: CardView) -> void:
+	if card_view == null or not is_instance_valid(card_view):
+		return
 	# 当前淡出卡牌实例 ID；作为全部动画索引的稳定清理键。
 	var card_instance_id: int = card_view.get_instance_id()
 	# 当前牌面生命周期补间；提前移除牌面时一并终止，防止完成回调重新把失效节点加入淡出队列。
 	var lifecycle_tween: Tween = _card_lifecycle_tweens.get(card_instance_id) as Tween
 	if lifecycle_tween != null and lifecycle_tween.is_valid():
 		lifecycle_tween.kill()
+	# 当前牌面移动补间；接管方会自行驱动位置，旧补位补间必须立即停止，否则会与飞行动画争用坐标。
+	var motion_tween: Tween = _motion_tweens.get(card_instance_id) as Tween
+	if motion_tween != null and motion_tween.is_valid():
+		motion_tween.kill()
+	# 已排入淡出等待队列的牌面同样要摘除；否则接管后仍会被淡出流程释放。
+	_fade_queue.erase(card_view)
 	_active_cards.erase(card_view)
 	_motion_tweens.erase(card_instance_id)
 	_card_lifecycle_tweens.erase(card_instance_id)
 	_card_presentation_started_msec.erase(card_instance_id)
 	_discard_claim_card_instance_ids.erase(card_view.card_uid)
 	_card_sequences.erase(card_instance_id)
-	card_view.queue_free()
