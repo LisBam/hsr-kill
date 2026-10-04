@@ -4724,24 +4724,29 @@ func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void
 	var draw_target_position: Vector2 = target_anchor_result.get("position", Vector2.ZERO) as Vector2
 	# 当前批次是否属于本机玩家；本机批次的牌背要飞向各自最终槽位，必须先等快照布局算出槽位再起飞。
 	var is_local_draw_batch: bool = player_id == match_controller.local_human_player_id
-	# 当前批次的正式牌背节点；摸牌信息默认不公开，所有观察者均只看到同款背面并由权威快照决定实际手牌显示。
+	# 当前批次的正式牌面节点；本机批次直接显示正面，其他观察者不可见私有手牌、只显示同款牌背并由权威快照决定实际手牌显示。
 	var draw_card_views: Array[CardView] = []
-	# 本批属于本机玩家的摸牌实体 UID；用于在牌背落地后再让正式手牌节点出现在各自槽位。
+	# 本批属于本机玩家的摸牌实体 UID；用于在牌面落地后再让正式手牌节点出现在各自槽位。
 	var drawn_local_card_uids: Array = []
 	for card_data_variant: Variant in drawn_card_data:
-		# 当前摸到实体的瞬时牌面副本；只读取 UID 配置牌背，不把私有牌面正面泄露给其他观察者。
+		# 当前摸到实体的瞬时牌面副本；本机批次读取正面配置，其他观察者只读取 UID 配置牌背，不泄露私有牌面。
 		var card_data: Dictionary = card_data_variant as Dictionary
 		# 当前摸到实体的稳定 UID；本机摸牌需要按该 UID 登记手牌飞行与门闸。
 		var drawn_card_uid: int = int(card_data.get("uid", -1))
 		var draw_card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		draw_card_view.visible = false
-		draw_card_view.configure_back(drawn_card_uid, false)
+		if is_local_draw_batch:
+			# 本机摸到的牌落地后一定会正面显示在自己的手牌区，因此飞行途中直接使用正面，避免落地瞬间翻面。
+			draw_card_view.configure(card_data, _get_cached_card_definition(str(card_data.get("definition_id", ""))), false, false)
+		else:
+			# 其他观察者看不清本批具体牌面，只按 UID 配置统一牌背。
+			draw_card_view.configure_back(drawn_card_uid, false)
 		draw_card_views.append(draw_card_view)
 		if is_local_draw_batch:
 			drawn_local_card_uids.append(drawn_card_uid)
 			# 本机摸牌的手牌飞行登记；批次完成信号早于权威快照，因此这里只登记门闸与飞行起点，
 			# 真正的起飞由 _start_pending_local_hand_gain_flights 在快照布局之后完成，终点是每张牌自己的槽位。
-			# 门闸值保存本张牌背牌面，使保持阶段能在牌背异常消失时自愈解闸。
+			# 门闸值保存本张牌面，使保持阶段能在牌面异常消失时自愈解闸。
 			if drawn_card_uid >= 0:
 				_local_hand_gain_flight_gates[drawn_card_uid] = {"card":draw_card_view, "origin":draw_start_position, "started":false, "batch":batch_id}
 	if is_local_draw_batch:
@@ -4881,15 +4886,19 @@ func _on_card_animation_ownership_reset_requested(card_uid: int) -> void:
 
 ## 判断一次牌区转移是否只能显示牌背；这是全项目唯一的牌背判定入口，所有表现路径必须共用它。
 ##
-## 判定口径：牌堆方向对所有观察者隐藏；手牌与木牛方向只对“既不是来源本人、也不是目标本人”的观察者隐藏；
+## 判定口径：进入本机手牌区的牌一律显示正面（该牌落地后就是本人可见的手牌，途中显示牌背会出现落地瞬间的翻面突变）；
+## 牌堆方向对除本机手牌目标之外的所有观察者隐藏；手牌与木牛方向只对“既不是来源本人、也不是目标本人”的观察者隐藏；
 ## 进入弃牌堆属于公开信息，以及展示牌、装备区、判定区等公开区域一律显示正面。
 ## 集中到一处的原因：本机获得、他人获得和纯展示三条路径曾经各写一份类似的布尔表达式，
 ## 任何一处漏改都会把其他观察者不可见的私有牌面公开成正面。
 func _should_show_card_back(source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> bool:
-	if source_zone == "draw_pile":
-		return true
 	# 本机玩家 ID；手牌与木牛方向只对旁观者隐藏，来源本人和目标本人始终能看到牌面。
 	var local_player_id: int = match_controller.local_human_player_id
+	if target_player_id == local_player_id and target_zone == "hand":
+		# 本机手牌目标的正面判定必须排在牌堆判定之前，否则本机摸牌会以牌背飞入手牌区。
+		return false
+	if source_zone == "draw_pile":
+		return true
 	return source_zone in ["hand", "wooden_ox"] and source_player_id != local_player_id and target_player_id != local_player_id and target_zone != "discard_pile"
 
 
