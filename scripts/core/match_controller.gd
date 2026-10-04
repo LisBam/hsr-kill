@@ -11773,17 +11773,39 @@ func _schedule_phase_transition(player_id: int, expected_phase: String, callback
 
 
 ## 判断阶段转换上下文在当前权威状态中是否仍成立；协调器在登记与计时到期时复用同一纯查询守卫。
+## 公开选择会把 `state.current_phase` 临时改写为 `choice`，因此“阶段名不等于期望阶段”并不必然代表推进失效：
+## 只要这次改写来自一个恢复阶段正是期望阶段的待处理选择，本次推进的上下文就依然成立（见 `_is_phase_transition_hijacked_by_choice`）。
 func _is_phase_transition_context_current(expected_match_id: String, player_id: int, expected_phase: String) -> bool:
 	return state != null \
 		and not state.game_over \
 		and state.match_id == expected_match_id \
 		and state.current_player_id == player_id \
-		and state.current_phase == expected_phase
+		and (state.current_phase == expected_phase or _is_phase_transition_hijacked_by_choice(player_id, expected_phase))
+
+
+## 判断一次待执行阶段转换是否只是被公开选择临时占用了阶段名。
+##
+## 询问期间控制器把阶段写成 `choice` 以便界面显示选择面板，回答后再由选择记录里的 `resume_phase` 恢复原阶段。
+## 若转换到期时把这个临时阶段名当作“上下文已失效”而丢弃，回答之后阶段虽然被恢复成期望阶段，
+## 却已经没有任何计时任务推动它，对局就会永久停在该阶段（表现为开局询问技能后无法继续）。
+## 因此这里把「同一角色 + 阶段名被选择占用 + 该选择的恢复阶段正是本次期望阶段」识别为“暂时不可执行”，
+## 由调用方改为重新登记同一条推进，等询问结束后照常到期执行。
+func _is_phase_transition_hijacked_by_choice(player_id: int, expected_phase: String) -> bool:
+	if state == null or state.current_player_id != player_id or state.current_phase != "choice":
+		return false
+	if not has_pending_card_choice():
+		return false
+	return str(_pending_card_choice.get("resume_phase", "")) == expected_phase
 
 
 ## 执行到期的阶段切换；任何终局、重开、角色变化或阶段变化都会让旧回调静默失效。
 func _execute_scheduled_phase_transition(expected_match_id: String, player_id: int, expected_phase: String, callback: Callable) -> void:
 	if state == null or state.game_over or state.match_id != expected_match_id:
+		return
+	# 阶段名被询问临时占用时既不能执行（执行结果会被回答时的阶段恢复覆盖而丢失，形成永久停顿），
+	# 也不能丢弃（丢弃后没有任何任务会再次推动该阶段），只能重新登记同一条推进并继续等待。
+	if _is_phase_transition_hijacked_by_choice(player_id, expected_phase):
+		_schedule_phase_transition(player_id, expected_phase, callback)
 		return
 	if state.current_player_id != player_id or state.current_phase != expected_phase:
 		return
