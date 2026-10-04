@@ -4,8 +4,11 @@ extends SkillDefinition
 ##
 ## 第一段（被动、可选）：当你一次性获得至少两张牌时，你可以弃置这些牌。
 ##   由核心的批量获得时机 `cardsGainedBatchAfter` 提供「一次性」的批次边界；候选精确限定为
-##   本批次的牌且 min = max = 批次张数，因此「这些牌」不可能被替换成手牌里的其他牌。
+##   本批次的牌，**不需要玩家逐张选择**：请求的最小与最大选择数都是0，玩家只需要点一次确认
+##   就把整批牌弃置（候选仍然下发，用于展示这批牌并对 AI 保留价值计价）。
 ##   取消表示放弃本次机会，不产生任何记录。
+##   **开局摸牌同样计入**：【筹码】的锁定技摸牌也是一次性获得，因此不做任何阶段过滤，
+##   只要核心给出 `batch_size >= 2` 的批次就开放本次机会。
 ##
 ## 第二段（主动、出牌阶段、不限次）：你可以获得一名其他角色的随机一张手牌，
 ##   你此前每发动一次第一段便重复一次该流程，然后你失去该技能。
@@ -22,13 +25,12 @@ extends SkillDefinition
 const HAND_ZONE_NAME: String = "hand"
 ## 第一段要求的最小批量张数；单张获得不构成「一次性获得至少两张牌」。
 const MIN_BATCH_SIZE: int = 2
-## 开局配置阶段的阶段名；`gameStart` 时机就在该阶段派发。
-##
-## 【筹码】的锁定技摸牌发生在 `game_start` 阶段，属于武将初始化而不是对局中的「一次性获得」：
-## 此时玩家刚确认完起手牌、还没有任何局面信息，若在这里弹出「是否弃置整批牌」，
-## 玩家只能在完全未知的情况下决定，而且开局流程会停在选择界面等一个毫无信息量的答案。
-## 因此本技能显式跳过该阶段的批次，与核心「起手换牌不构成获得批次」的口径保持一致。
-const GAME_START_PHASE_NAME: String = "game_start"
+## 第一段确认按钮的最小选择数；0表示玩家不需要选择任何牌，点确认即表示「是，弃置整批」。
+const CLAUSE1_MIN_SELECT: int = 0
+## 第一段确认按钮的最大选择数；0表示候选牌只用于展示与 AI 计价，玩家无法逐张挑选。
+const CLAUSE1_MAX_SELECT: int = 0
+## 零选择确认的 AI 放行标记；核心默认不会为「不需要选牌」的请求生成确认动作，必须由内容显式声明。
+const AI_ALLOW_CONFIRM_KEY: String = "ai_allow_confirm"
 ## 第一段发动次数在 character_form_state 中的稳定键名；随存档持久化，不使用实例字段。
 const CLAUSE1_COUNT_KEY: String = "fengkou_clause1_count"
 ## 第二段的基础重复次数；「获得一名其他角色的随机一张手牌」至少执行一次。
@@ -67,8 +69,8 @@ const ACTIVATION_REPEAT_KEY: String = "repeat_total"
 const SKILL_LOST_REASON: String = "fengkou_active"
 ## 第二段的请求提示文本；说明本次会连续获得几张牌。
 const CLAUSE2_PROMPT: String = "请选择一名其他角色，你获得其随机一张手牌"
-## 第一段的请求提示文本；说明必须弃置整批牌才能积累次数。
-const CLAUSE1_PROMPT: String = "你可以弃置这批刚获得的牌，为【风口】积累一次发动次数"
+## 第一段的请求提示文本；说明点确认即弃置整批牌、点取消即放弃本次机会。
+const CLAUSE1_PROMPT: String = "确认即弃置这批刚获得的牌（为【风口】积累一次发动次数），取消则本批次不弃置"
 ## 确认提交的保底分；远高于任何单张牌面收益，使「是否继续」只由真实收益的小数部分决定。
 const AI_STEP_COMMIT_REWARD: float = 100.0
 ## 第一段每积累一次的期望价值；等价于「将来多偷一张牌」的折算收益。
@@ -143,8 +145,12 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 请求种类；未识别时交回控制器继续查找其他技能。
 	var kind: String = str(context.get(CHOICE_KIND_KEY, ""))
 	if kind == CHOICE_CLAUSE1:
+		# 确认即「弃置整批」，实际要弃置的牌来自请求上下文，而不是本次提交的选牌（提交恒为空）。
+		var batch_uids: Array[int] = []
+		for uid_variant: Variant in context.get(BATCH_UIDS_KEY, []) as Array:
+			batch_uids.append(int(uid_variant))
 		if response != null and response.confirmed:
-			_apply_clause1_discard(response.card_ids)
+			_apply_clause1_discard(batch_uids)
 		_queue_defer_registered = false
 		_process_batch_queue()
 		return true
@@ -176,9 +182,6 @@ func _on_cards_gained_batch(event: RuleEvent) -> void:
 	if int(event.data.get("receiver_player_id", -1)) != owner_player_id:
 		return
 	if int(event.data.get("batch_size", 0)) < MIN_BATCH_SIZE:
-		return
-	# 开局配置阶段的批次不计入：该阶段只有【筹码】的锁定技摸牌，属于武将初始化而不是对局中的获得。
-	if str(host.state.current_phase) == GAME_START_PHASE_NAME:
 		return
 	# 本批次牌的 UID 副本；批次事件可能携带其他键，这里只保留第一段真正需要的成员。
 	var batch_uids: Array[int] = []
@@ -213,20 +216,19 @@ func _process_batch_queue() -> void:
 	_begin_clause1(_batch_queue.pop_front())
 
 
-## 建立第一段的请求；候选精确限定为本批次仍在持有者手牌或装备区中的牌。
+## 建立第一段的请求；候选精确限定为本批次仍在持有者手牌或装备区中的牌，但玩家不需要挑选它们。
 func _begin_clause1(batch_uids: Array[int]) -> void:
 	# 本批次中当前仍可被弃置的候选；等待期间被其他效果移走的牌自动退出。
 	var candidates: Array[Dictionary] = _collect_batch_candidates(batch_uids)
 	if candidates.is_empty():
 		_process_batch_queue()
 		return
-	# 必须整批弃置：min 与 max 都等于候选张数，因此玩家无法只弃置其中一部分。
-	var required_count: int = candidates.size()
-	var selected_uids: Array[int] = request_card_selection("风口", CLAUSE1_PROMPT, candidates, required_count, required_count, true, {CHOICE_KIND_KEY:CHOICE_CLAUSE1, BATCH_UIDS_KEY:batch_uids.duplicate()})
-	# 同步规则测试路径：没有待处理请求说明结果已经同步返回。
+	# 零选择确认：min 与 max 都是0，因此候选只承担「展示这批牌」与「让 AI 按牌面价值计价」两件事，
+	# 玩家点一次确认就表示「是，弃置整批」。ai_allow_confirm 让核心为 AI 生成同一个确认动作。
+	var _selected_uids: Array[int] = request_card_selection("风口", CLAUSE1_PROMPT, candidates, CLAUSE1_MIN_SELECT, CLAUSE1_MAX_SELECT, true, {CHOICE_KIND_KEY:CHOICE_CLAUSE1, BATCH_UIDS_KEY:batch_uids.duplicate(), AI_ALLOW_CONFIRM_KEY:true})
+	# 同步规则测试路径：没有待处理请求说明结果已经同步返回。零选择请求用空数组同时表示「确认」与「取消」，
+	# 因此这条回退路径按未发动处理；真实对局与带AI的对局都会创建待处理请求，走 continue_selection 恢复。
 	if not host.has_pending_card_choice():
-		if selected_uids.size() == required_count:
-			_apply_clause1_discard(selected_uids)
 		_queue_defer_registered = false
 		_process_batch_queue()
 
@@ -395,8 +397,9 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 		if not confirmed:
 			return 0.0
 		# 本批次弃置的牌对持有者的保留价值总和；批次越大总费用越高。
+		# 本请求是零选择确认，因此费用牌必须从上下文里的批次成员读取，不能读本次提交的空选牌数组。
 		var batch_cost: float = 0.0
-		for uid_variant: Variant in payload.get("selected_card_uids", []) as Array:
+		for uid_variant: Variant in (choice_request.get("context", {}) as Dictionary).get(BATCH_UIDS_KEY, []) as Array:
 			batch_cost += float(evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(uid_variant), owner_player_id))
 		# 净收益；一次发动只积累一次次数，因此整批牌越贵越应该放弃。
 		var batch_net: float = AI_CLAUSE1_SETUP_VALUE - batch_cost * AI_COST_WEIGHT

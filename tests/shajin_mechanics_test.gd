@@ -27,7 +27,7 @@ func _run() -> void:
 		return
 	if not _test_mangzhu_two_colours_shield_and_draw():
 		return
-	if not _test_mangzhu_second_candidates_exclude_first_colour():
+	if not _test_mangzhu_rejects_same_colour_pair():
 		return
 	if not _test_mangzhu_single_colour_shield_only():
 		return
@@ -35,11 +35,13 @@ func _run() -> void:
 		return
 	if not _test_mangzhu_cancel_first_pick_is_free():
 		return
+	if not await _test_fengkou_triggers_from_chouma_game_start_draw():
+		return
 	if not await _test_fengkou_clause1_discards_whole_batch():
 		return
 	if not _test_fengkou_clause1_ignores_single_gain():
 		return
-	if not await _test_fengkou_clause1_skips_game_start_window():
+	if not await _test_fengkou_clause1_triggers_in_game_start_window():
 		return
 	if not await _test_fengkou_clause2_repeats_and_loses_skill():
 		return
@@ -242,11 +244,12 @@ func _test_chouma_reads_max_hp() -> bool:
 
 
 ## 【盲注】两种颜色都弃置且两种颜色都摸到：获得1点护盾并额外摸两张牌。
+## 一次请求内点选两张异色牌，因此这里连续提交两张牌的 UID。
 func _test_mangzhu_two_colours_shield_and_draw() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "mangzhu") == null:
 		return _fail("mangzhu_install")
-	# 费用：手牌两张红色、两张黑色，装备区一张黑色；第二张候选必须只含黑色。
+	# 费用：手牌两张红色、两张黑色，装备区一张黑色；一次多选最多两张且必须异色。
 	var red_hand: CardInstance = _add_hand(0, "sha", "heart", 3)
 	var black_hand: CardInstance = _add_hand(0, "sha", "spade", 7)
 	_add_hand(0, "shan", "diamond", 5)
@@ -258,67 +261,88 @@ func _test_mangzhu_two_colours_shield_and_draw() -> bool:
 	_controller.state.current_phase = "draw"
 	_controller.state.current_player_id = 0
 	_controller._emit_rule_timing("phaseDrawBegin", 0, -1, 0, {}, -1)
-	if _pending_kind() != "mangzhu_pick_first":
-		return _fail("mangzhu_first_kind=%s" % _pending_kind())
-	# 第一张选红色手牌。
-	if not _submit_choice(0, [red_hand.uid], [], true):
+	if _pending_kind() != "mangzhu_pick":
+		return _fail("mangzhu_pick_kind=%s" % _pending_kind())
+	# 一次提交两张异色牌：一红一黑。
+	if not _submit_choice(0, [red_hand.uid, black_hand.uid], [], true):
 		return false
 	if _controller.state.get_player(0).find_hand_card(red_hand.uid) != null:
 		return _fail("mangzhu_first_not_discarded")
-	if _pending_kind() != "mangzhu_pick_second":
-		return _fail("mangzhu_second_kind=%s" % _pending_kind())
-	# 第二张选黑色手牌。
-	if not _submit_choice(0, [black_hand.uid], [], true):
-		return false
 	if _controller.state.get_player(0).find_hand_card(black_hand.uid) != null:
 		return _fail("mangzhu_second_not_discarded")
+	# 未点选的异色牌与装备区牌都必须留在原处。
 	if _controller.state.get_player(0).equipment.get("armor", null) != black_armor:
 		return _fail("mangzhu_equipment_moved")
+	if _controller.state.get_player(0).hand.size() != 2:
+		return _fail("mangzhu_cost_hand=%d" % _controller.state.get_player(0).hand.size())
 	# 本阶段内摸到红、黑各一张；两张都必须在结算前落入手牌区。
 	_simulate_gain(0, "sha", "heart", 11)
 	_simulate_gain(0, "sha", "club", 12)
-	# 结算前手牌：初始4张去掉弃置的2张，再加入获得的2张。
-	if _controller.state.get_player(0).hand.size() != 4:
-		return _fail("mangzhu_pre_end_hand=%d" % _controller.state.get_player(0).hand.size())
 	_emit_draw_phase_end()
 	if _controller.state.get_player(0).shield != 1:
 		return _fail("mangzhu_shield=%d" % _controller.state.get_player(0).shield)
+	# 结算后手牌：初始4张去掉弃置的2张，再加入获得的2张与【盲注】额外摸到的2张。
 	if _controller.state.get_player(0).hand.size() != 6:
 		return _fail("mangzhu_draw_hand=%d" % _controller.state.get_player(0).hand.size())
 	return true
 
 
-## 【盲注】第二张请求的候选必须排除第一张的颜色，使「颜色不同」成为构造性质。
-func _test_mangzhu_second_candidates_exclude_first_colour() -> bool:
+## 【盲注】一次多选的颜色互斥由权威组合表表达：同色两张不构成合法组合，异色两张才合法。
+func _test_mangzhu_rejects_same_colour_pair() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "mangzhu") == null:
 		return _fail("mangzhu_candidate_install")
-	# 两张红色与两张黑色；第一张选红之后，第二张候选应只剩黑色。
+	# 两张红色与两张黑色；组合表里只允许「单张」与「一红一黑」。
 	var red_first: CardInstance = _add_hand(0, "sha", "heart", 3)
-	_add_hand(0, "shan", "diamond", 5)
+	var red_second: CardInstance = _add_hand(0, "shan", "diamond", 5)
 	var black_first: CardInstance = _add_hand(0, "sha", "spade", 7)
-	_add_hand(0, "shan", "club", 9)
+	var black_second: CardInstance = _add_hand(0, "shan", "club", 9)
+	# UID 到颜色映射；用于独立校验权威组合表里的两张组合确实异色。
+	var colour_by_uid: Dictionary = {
+		red_first.uid:"red", red_second.uid:"red",
+		black_first.uid:"black", black_second.uid:"black",
+	}
 	_controller.state.current_phase = "draw"
 	_controller.state.current_player_id = 0
 	_controller._emit_rule_timing("phaseDrawBegin", 0, -1, 0, {}, -1)
-	# 第一张候选必须包含全部四张有颜色的牌。
+	if _pending_kind() != "mangzhu_pick":
+		return _fail("mangzhu_combo_kind=%s" % _pending_kind())
+	# 候选必须包含全部四张有颜色的牌，且请求允许一次选两张。
 	if (_controller._pending_card_choice.get("candidates", []) as Array).size() != 4:
-		return _fail("mangzhu_first_candidates=%d" % (_controller._pending_card_choice.get("candidates", []) as Array).size())
+		return _fail("mangzhu_combo_candidates=%d" % (_controller._pending_card_choice.get("candidates", []) as Array).size())
+	if int(_controller._pending_card_choice.get("max_card_select", 0)) != 2:
+		return _fail("mangzhu_combo_max=%d" % int(_controller._pending_card_choice.get("max_card_select", 0)))
+	# 权威组合表：1个空组合 + 4个单张 + 4个异色两张（两张红 × 两张黑）；界面据此压暗同色候选。
+	var valid_combinations: Array = (_controller._pending_card_choice.get("context", {}) as Dictionary).get("valid_card_combinations", []) as Array
+	if valid_combinations.size() != 9:
+		return _fail("mangzhu_combo_table=%d" % valid_combinations.size())
+	for combination_variant: Variant in valid_combinations:
+		# 当前组合；两张时必须异色，一张时必须是有颜色的候选。
+		var combination: Array = combination_variant as Array
+		if combination.size() == 2:
+			var first_colour: String = str(colour_by_uid.get(int(combination[0]), ""))
+			var second_colour: String = str(colour_by_uid.get(int(combination[1]), ""))
+			if first_colour.is_empty() or second_colour.is_empty() or first_colour == second_colour:
+				return _fail("mangzhu_combo_pair=%s" % str(combination))
+		elif combination.size() > 2:
+			return _fail("mangzhu_combo_size=%d" % combination.size())
+	# 同色两张必须被权威校验拒绝，且请求保持未决（等待重新提交）。
+	if _try_submit_choice(0, [red_first.uid, red_second.uid], [], true):
+		return _fail("mangzhu_combo_accepted_same_colour")
+	if _pending_kind() != "mangzhu_pick":
+		return _fail("mangzhu_combo_lost_request=%s" % _pending_kind())
+	# 单张仍然合法；提交后按已发动处理。
 	if not _submit_choice(0, [red_first.uid], [], true):
 		return false
-	if _pending_kind() != "mangzhu_pick_second":
-		return _fail("mangzhu_candidate_kind=%s" % _pending_kind())
-	# 第二张候选：只能是黑色，且不得包含刚被弃置的红色牌。
-	var second_candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
-	if second_candidates.size() != 2:
-		return _fail("mangzhu_second_candidates=%d" % second_candidates.size())
-	for candidate_variant: Variant in second_candidates:
-		var card_data: Dictionary = ((candidate_variant as Dictionary).get("card_data", {}) as Dictionary)
-		if CardInstance.color_of_suit(str(card_data.get("suit", ""))) != "black":
-			return _fail("mangzhu_second_colour=%s" % str(card_data))
-	# 收尾：取消第二张，避免留下待处理请求影响后续场景。
-	if not _submit_choice(0, [], [], false):
-		return false
+	if _controller.state.get_player(0).find_hand_card(red_first.uid) != null:
+		return _fail("mangzhu_combo_single_not_discarded")
+	# 收尾：本阶段内没有获得同色牌，结算不产生任何效果。
+	_emit_draw_phase_end()
+	if _controller.state.get_player(0).shield != 0:
+		return _fail("mangzhu_combo_shield=%d" % _controller.state.get_player(0).shield)
+	# 本场景共加入4张牌，只弃置了1张。
+	if _controller.state.get_player(0).hand.size() != 3:
+		return _fail("mangzhu_combo_hand=%d" % _controller.state.get_player(0).hand.size())
 	return true
 
 
@@ -335,9 +359,6 @@ func _test_mangzhu_single_colour_shield_only() -> bool:
 	_controller._emit_rule_timing("phaseDrawBegin", 0, -1, 0, {}, -1)
 	if not _submit_choice(0, [red_card.uid], [], true):
 		return false
-	# 第二张取消：本次只弃置了一张红色。
-	if not _submit_choice(0, [], [], false):
-		return false
 	if not _controller._pending_card_choice.is_empty():
 		return _fail("mangzhu_single_pending_left")
 	# 只摸到红色。
@@ -353,7 +374,7 @@ func _test_mangzhu_single_colour_shield_only() -> bool:
 	return true
 
 
-## 【盲注】两种颜色都弃置但只摸到黑色：没有重合颜色，护盾与摸牌都不发生。
+## 【盲注】弃置的颜色与阶段内获得的颜色完全不重合：护盾与摸牌都不发生。
 func _test_mangzhu_no_common_colour() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "mangzhu") == null:
@@ -364,9 +385,8 @@ func _test_mangzhu_no_common_colour() -> bool:
 	_controller.state.current_phase = "draw"
 	_controller.state.current_player_id = 0
 	_controller._emit_rule_timing("phaseDrawBegin", 0, -1, 0, {}, -1)
+	# 只弃置红色一张；黑色那张留在手里作为对照。
 	if not _submit_choice(0, [red_card.uid], [], true):
-		return false
-	if not _submit_choice(0, [], [], false):
 		return false
 	# 只摸到黑色，与弃置的红色不重合。
 	_simulate_gain(0, "sha", "club", 11)
@@ -378,7 +398,7 @@ func _test_mangzhu_no_common_colour() -> bool:
 	return true
 
 
-## 【盲注】第一张就取消：不弃置任何牌、不产生记录，阶段结束也没有任何效果。
+## 【盲注】直接取消：不弃置任何牌、不产生记录，阶段结束也没有任何效果。
 func _test_mangzhu_cancel_first_pick_is_free() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "mangzhu") == null:
@@ -389,7 +409,7 @@ func _test_mangzhu_cancel_first_pick_is_free() -> bool:
 	_controller.state.current_phase = "draw"
 	_controller.state.current_player_id = 0
 	_controller._emit_rule_timing("phaseDrawBegin", 0, -1, 0, {}, -1)
-	if _pending_kind() != "mangzhu_pick_first":
+	if _pending_kind() != "mangzhu_pick":
 		return _fail("mangzhu_cancel_kind=%s" % _pending_kind())
 	if not _submit_choice(0, [], [], false):
 		return false
@@ -405,7 +425,37 @@ func _test_mangzhu_cancel_first_pick_is_free() -> bool:
 	return true
 
 
-## 【风口】第一段：一次获得两张牌时可以选择弃置整批；确认后两者都进弃牌堆并累加一次计数。
+## 【风口】与【筹码】联动：开局锁定技的摸X张牌同样是一次性获得，必须能触发第一段。
+func _test_fengkou_triggers_from_chouma_game_start_draw() -> bool:
+	_reset_state(2)
+	if _install_skill(0, "chouma") == null:
+		return _fail("fengkou_chouma_chouma_install")
+	if _install_skill(0, "fengkou") == null:
+		return _fail("fengkou_chouma_fengkou_install")
+	_fill_draw_pile(12)
+	# 开局配置阶段派发 gameStart：【筹码】摸 3 张（X == 体力上限3），构成 batch_size == 3 的批次。
+	_controller.state.current_phase = "game_start"
+	_controller._emit_rule_timing("gameStart", -1, -1, -1, {}, -1)
+	if _controller.state.get_player(0).hand.size() != 3:
+		return _fail("fengkou_chouma_draw=%d" % _controller.state.get_player(0).hand.size())
+	if not await _await_clause1_choice():
+		return _fail("fengkou_chouma_missing")
+	if _pending_kind() != "fengkou_clause1":
+		return _fail("fengkou_chouma_kind=%s" % _pending_kind())
+	# 批次候选必须精确等于【筹码】刚摸到的三张牌。
+	if (_controller._pending_card_choice.get("candidates", []) as Array).size() != 3:
+		return _fail("fengkou_chouma_candidates=%d" % (_controller._pending_card_choice.get("candidates", []) as Array).size())
+	if not _submit_choice(0, [], [], true):
+		return false
+	if not _controller.state.get_player(0).hand.is_empty():
+		return _fail("fengkou_chouma_hand=%d" % _controller.state.get_player(0).hand.size())
+	if int(_controller.state.get_player(0).character_form_state.get("fengkou_clause1_count", 0)) != 1:
+		return _fail("fengkou_chouma_count")
+	return true
+
+
+## 【风口】第一段：一次获得两张牌时可以选择弃置整批；点确认即整批进弃牌堆并累加一次计数。
+## 请求本身是零选择确认：min == max == 0，玩家不需要（也不能）逐张挑选。
 func _test_fengkou_clause1_discards_whole_batch() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "fengkou") == null:
@@ -417,11 +467,11 @@ func _test_fengkou_clause1_discards_whole_batch() -> bool:
 		return _fail("fengkou_clause1_missing")
 	if _pending_kind() != "fengkou_clause1":
 		return _fail("fengkou_clause1_kind=%s" % _pending_kind())
-	# 候选必须精确等于本批次的两张牌，且 min == max == 2，玩家无法只弃置其中一张。
+	# 候选必须精确等于本批次的两张牌，且 min == max == 0，玩家只需点确认。
 	var candidates: Array = _controller._pending_card_choice.get("candidates", []) as Array
 	if candidates.size() != 2:
 		return _fail("fengkou_clause1_candidates=%d" % candidates.size())
-	if int(_controller._pending_card_choice.get("min_card_select", -1)) != 2 or int(_controller._pending_card_choice.get("max_card_select", -1)) != 2:
+	if int(_controller._pending_card_choice.get("min_card_select", -1)) != 0 or int(_controller._pending_card_choice.get("max_card_select", -1)) != 0:
 		return _fail("fengkou_clause1_bounds=%d/%d" % [int(_controller._pending_card_choice.get("min_card_select", -1)), int(_controller._pending_card_choice.get("max_card_select", -1))])
 	# 两张牌都必须仍在持有者手牌中，证明候选来自本批次而不是其他手牌。
 	var batch_uids: Array[int] = []
@@ -430,7 +480,8 @@ func _test_fengkou_clause1_discards_whole_batch() -> bool:
 	for card_uid: int in batch_uids:
 		if _controller.state.get_player(0).find_hand_card(card_uid) == null:
 			return _fail("fengkou_clause1_candidate_not_in_hand uid=%d" % card_uid)
-	if not _submit_choice(0, batch_uids, [], true):
+	# 零选择确认：不带任何选牌提交。
+	if not _submit_choice(0, [], [], true):
 		return false
 	if not _controller.state.get_player(0).hand.is_empty():
 		return _fail("fengkou_clause1_hand=%d" % _controller.state.get_player(0).hand.size())
@@ -458,28 +509,34 @@ func _test_fengkou_clause1_ignores_single_gain() -> bool:
 	return true
 
 
-## 【风口】第一段：开局配置阶段的批量获得不计入，避免开局流程停在毫无信息量的选择上。
-func _test_fengkou_clause1_skips_game_start_window() -> bool:
+## 【风口】第一段：开局配置阶段的批量获得同样触发，因为【筹码】的开局摸牌也是「一次性获得至少两张牌」。
+func _test_fengkou_clause1_triggers_in_game_start_window() -> bool:
 	_reset_state(2)
 	if _install_skill(0, "fengkou") == null:
 		return _fail("fengkou_game_start_install")
 	_fill_draw_pile(6)
-	# 开局配置阶段：只有【筹码】的锁定技摸牌会发生在这里，属于武将初始化。
+	# 开局配置阶段：只有【筹码】的锁定技摸牌会发生在这里，它同样是一次性获得，必须开放本次机会。
 	_controller.state.current_phase = "game_start"
-	_controller.draw(0, 2)
-	if not _controller._pending_card_choice.is_empty():
-		return _fail("fengkou_game_start_pending=%s" % _pending_kind())
-	if int(_controller.state.get_player(0).character_form_state.get("fengkou_clause1_count", 0)) != 0:
-		return _fail("fengkou_game_start_count")
-	# 同样的两张牌在正常回合内获得时必须照常触发，证明过滤只针对开局窗口。
-	_controller.state.current_phase = "play"
 	_controller.draw(0, 2)
 	if not await _await_clause1_choice():
 		return _fail("fengkou_game_start_missing")
 	if _pending_kind() != "fengkou_clause1":
-		return _fail("fengkou_game_start_regression=%s" % _pending_kind())
+		return _fail("fengkou_game_start_kind=%s" % _pending_kind())
+	# 零选择确认：整批两张都进弃牌堆并累加一次计数。
+	if not _submit_choice(0, [], [], true):
+		return false
+	if not _controller.state.get_player(0).hand.is_empty():
+		return _fail("fengkou_game_start_hand=%d" % _controller.state.get_player(0).hand.size())
+	if int(_controller.state.get_player(0).character_form_state.get("fengkou_clause1_count", 0)) != 1:
+		return _fail("fengkou_game_start_count")
+	# 取消时不产生任何记录，证明这次机会是可选的而不是强制的。
+	_controller.draw(0, 2)
+	if not await _await_clause1_choice():
+		return _fail("fengkou_game_start_cancel_missing")
 	if not _submit_choice(0, [], [], false):
 		return false
+	if int(_controller.state.get_player(0).character_form_state.get("fengkou_clause1_count", 0)) != 1:
+		return _fail("fengkou_game_start_cancel_count")
 	return true
 
 
@@ -498,7 +555,10 @@ func _test_fengkou_clause2_repeats_and_loses_skill() -> bool:
 	var setup_uids: Array[int] = []
 	for candidate_variant: Variant in _controller._pending_card_choice.get("candidates", []) as Array:
 		setup_uids.append(int((candidate_variant as Dictionary).get("uid", -1)))
-	if not _submit_choice(0, setup_uids, [], true):
+	if setup_uids.size() != 2:
+		return _fail("fengkou_clause2_setup_candidates=%d" % setup_uids.size())
+	# 零选择确认：不带任何选牌提交，整批两张都进弃牌堆。
+	if not _submit_choice(0, [], [], true):
 		return false
 	# 目标准备三张手牌；重复2次后应剩1张。
 	_add_hand(1, "sha", "spade", 2)
@@ -575,22 +635,23 @@ func _test_fengkou_ai_scores() -> bool:
 	var snapshot: Dictionary = _controller.state.to_dict(0, true)
 	_controller._append_limited_skill_usage_to_snapshot(snapshot)
 	# 第一段请求；candidates 必须给出，否则 get_choice_card_value 会退回未知资源的固定值，评分口径与实战不一致。
-	var clause1_request: Dictionary = {"candidates":_controller.get_hand_candidates(0, 0), "min_card_select":1, "max_card_select":1, "context":{"kind":"fengkou_clause1"}}
-	var cheap_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[cheap_slash.uid]}}
+	# 批次成员由 context.batch_uids 提供：真实请求是零选择确认，提交里没有选牌。
+	var cheap_context: Dictionary = {"kind":"fengkou_clause1", "batch_uids":[cheap_slash.uid]}
+	var clause1_request: Dictionary = {"candidates":_controller.get_hand_candidates(0, 0), "min_card_select":0, "max_card_select":0, "context":cheap_context}
+	var cheap_action: Dictionary = {"payload":{"confirmed":true}}
 	# 便宜的单张批次：积累一次次数的价值高于弃置这张牌，判为应当确认。
 	if fengkou.score_ai_choice(snapshot, clause1_request, cheap_action, evaluator) <= 0.0:
 		return _fail("fengkou_ai_clause1_cheap=%f" % fengkou.score_ai_choice(snapshot, clause1_request, cheap_action, evaluator))
 	# 取消必须是0分基准，不能为负，否则AI会拒绝一切可选的第一段。
 	if not is_zero_approx(fengkou.score_ai_choice(snapshot, clause1_request, {"payload":{"confirmed":false}}, evaluator)):
 		return _fail("fengkou_ai_clause1_cancel")
-	# 整批都很贵时应放弃：把候选换成一批高价值手牌后重新评分。
+	# 整批都很贵时应放弃：把批次换成两张高价值手牌后重新评分。
 	var expensive_uid: int = _add_hand(0, "sha", "heart", 1).uid
-	var expensive_request: Dictionary = {"candidates":_controller.get_hand_candidates(0, 0), "min_card_select":1, "max_card_select":1, "context":{"kind":"fengkou_clause1"}}
-	var expensive_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[expensive_uid]}}
-	# 单张仍可能为正；改用整批（两张）验证「批次越大越容易放弃」的边界。
-	var batch_action: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[cheap_slash.uid, expensive_uid]}}
-	if fengkou.score_ai_choice(snapshot, expensive_request, batch_action, evaluator) >= 0.0:
-		return _fail("fengkou_ai_clause1_batch=%f" % fengkou.score_ai_choice(snapshot, expensive_request, batch_action, evaluator))
+	var expensive_context: Dictionary = {"kind":"fengkou_clause1", "batch_uids":[cheap_slash.uid, expensive_uid]}
+	var expensive_request: Dictionary = {"candidates":_controller.get_hand_candidates(0, 0), "min_card_select":0, "max_card_select":0, "context":expensive_context}
+	# 单张批次仍可能为正（1.75 点资源略低于 2.0）；改用两张批次验证「批次越大越容易放弃」的边界。
+	if fengkou.score_ai_choice(snapshot, expensive_request, {"payload":{"confirmed":true}}, evaluator) >= 0.0:
+		return _fail("fengkou_ai_clause1_batch=%f" % fengkou.score_ai_choice(snapshot, expensive_request, {"payload":{"confirmed":true}}, evaluator))
 	# 第二段：累计不足 AI_MIN_REPEAT_COUNT 时发动入口为0分，避免为一张牌永久失去技能。
 	_controller.state.get_player(0).character_form_state["fengkou_clause1_count"] = 0
 	_controller.state.current_phase = "play"
@@ -623,6 +684,17 @@ func _submit_choice(actor_id: int, card_uids: Array[int], target_ids: Array[int]
 	if not _controller.submit_action(action):
 		return _fail("choice_rejected kind=%s" % _pending_kind())
 	return true
+
+
+## 提交一个预期会被权威校验拒绝的选择，返回控制器的实际接受结果；不产生失败标记，供「非法提交必须被拒」的场景使用。
+func _try_submit_choice(actor_id: int, card_uids: Array[int], target_ids: Array[int], confirmed: bool) -> bool:
+	if _controller == null or _controller._pending_card_choice.is_empty():
+		return false
+	# 当前请求稳定编号；被拒绝时请求保持未决，编号不变。
+	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
+	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":card_uids.duplicate(), "selected_target_ids":target_ids.duplicate(), "confirmed":confirmed}
+	return _controller.submit_action(action)
 
 
 ## 输出失败原因并以非零状态结束当前无头测试。

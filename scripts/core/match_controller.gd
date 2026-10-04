@@ -3667,6 +3667,10 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 			var optional_combinations: Array = []
 			_collect_card_uid_combinations(candidates, selection_count, 0, [], optional_combinations, remaining_capacity)
 			for selected_uids: Array in optional_combinations:
+				# 请求声明的权威合法组合表；可选多选同样必须遵守，否则AI会拿到提交时必然被拒的动作。
+				# 未声明该表的请求保持全部数量合法组合可用（寒冰剑等既有可选多选行为不变）。
+				if not _is_allowed_card_combination(choice_request.get("context", {}) as Dictionary, _int_array(selected_uids)):
+					continue
 				var optional_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
 				optional_action.payload = {"request_id":request_id, "selected_card_uids":selected_uids.duplicate(), "selected_target_ids":_first_target_ids(target_ids, min_target_select), "confirmed":true}
 				result.append(optional_action.to_dict())
