@@ -420,6 +420,13 @@ var _pending_local_hand_gain_uids: Dictionary = {}
 ## 正在从手牌区右侧进入的正式手牌 UID 到补间映射；快照刷新复用同一节点，不会创建或销毁替代牌面。
 var _local_hand_gain_tweens: Dictionary = {}
 
+## 本机获得牌的前置飞行门闸；键为实体 UID，值为该牌当前的前置飞行牌面（未知时为 true）。
+## 门闸存在期间，对应正式手牌节点必须停留在手牌区右侧入场点，不得提前滑入或出现在最终槽位。
+## 门闸正常只由飞行落地回调解除，因此检查器里调整飞行时长不会破坏“飞行落地 → 手牌滑入”的两段衔接；
+## 保存飞行牌面是为了让保持阶段能识别“飞行牌已消失但回调不会再来”的异常情况并自动补齐解闸，
+## 重新开局、牌离开手牌区或飞行被清理时也会一并清除，避免残留门闸让手牌永远停在屏幕外。
+var _local_hand_gain_flight_gates: Dictionary = {}
+
 ## 当前虚拟手牌替换模式是否已经生效；为 true 时手牌区显示的是技能请求声明的可选虚拟牌而不是真实手牌。
 var _virtual_hand_choice_active: bool = false
 
@@ -1042,6 +1049,9 @@ func _on_lan_match_started(local_player_id: int, player_count: int) -> void:
 		match_controller.clear_remote_network_state()
 		match_log_panel.clear_entries()
 		card_use_animation_layer.clear_presentations()
+		# 旧绑定的手牌入场补间与前置飞行门闸随表现清场一并丢弃；
+		# 飞行补间被清场终止后落地回调不会再触发，若不在此清空门闸，新绑定的获得牌会永远停在手牌区右侧之外。
+		_clear_local_hand_gain_animations()
 		card_selection_panel.close()
 		_inline_card_choice.clear()
 		_inline_selected_card_uids.clear()
@@ -2389,8 +2399,14 @@ func _render_local_hand() -> void:
 		if desired_uid_lookup.has(existing_uid):
 			continue
 		_cancel_local_hand_gain_animation(existing_uid)
+		# 当前旧卡牌视图原始值；映射理论上不残留已释放节点，但一旦残留，
+		# 对已释放对象做 CardView 强制转换会直接中止本函数，使整轮手牌对账被静默跳过，
+		# 因此这里先按 Variant 校验有效性再转换。
+		var existing_view_variant: Variant = _card_views.get(existing_uid)
+		if not is_instance_valid(existing_view_variant):
+			continue
 		# 当前旧卡牌视图；只有仍位于手牌容器的节点才由本方法释放。
-		var existing_view: CardView = _card_views.get(existing_uid) as CardView
+		var existing_view: CardView = existing_view_variant as CardView
 		if existing_view != null and is_instance_valid(existing_view) and existing_view.get_parent() == hand_container:
 			hand_container.remove_child(existing_view)
 			existing_view.queue_free()
@@ -2398,6 +2414,10 @@ func _render_local_hand() -> void:
 	for pending_uid_variant: Variant in _pending_local_hand_gain_uids.keys():
 		if not desired_uid_lookup.has(int(pending_uid_variant)):
 			_pending_local_hand_gain_uids.erase(pending_uid_variant)
+	# 不在最新快照中的前置飞行门闸；该牌已经离开手牌区，门闸不会再有落地回调来解除。
+	for gated_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
+		if not desired_uid_lookup.has(int(gated_uid_variant)):
+			_local_hand_gain_flight_gates.erase(gated_uid_variant)
 	# 本轮对账后的 UID 到正式视图映射；只包含当前快照仍属于本人牌区的节点。
 	var next_card_views: Dictionary = {}
 	# 当前按快照顺序排列的正式手牌节点；对账完成后统一调整子节点顺序并计算最终落点。
@@ -2413,8 +2433,13 @@ func _render_local_hand() -> void:
 		var wooden_ox_card: bool = bool(entry.get("wooden_ox_card", false))
 		# 当前手牌是否允许交互；响应与普通出牌均以权威请求候选为准，不能只按阶段整体启用。
 		var card_interactable: bool = equipment_material_candidate_uids.has(card_uid) if not _active_equipment_action.is_empty() else (inline_candidate_uids.has(card_uid) if has_inline_choice else can_act and play_candidate_uids.has(card_uid))
+		# 当前正式手牌视图原始值；被动画层接管的节点会在接管点同步移出映射，
+		# 这里仍先校验有效性再转换，避免任何残留的已释放对象中止整轮手牌对账。
+		var card_view_variant: Variant = _card_views.get(card_uid)
+		if not is_instance_valid(card_view_variant):
+			card_view_variant = null
 		# 当前正式手牌视图；优先复用同 UID 节点，缺失或不在手牌容器时才创建新节点。
-		var card_view: CardView = _card_views.get(card_uid) as CardView
+		var card_view: CardView = card_view_variant as CardView
 		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
 			card_view = _create_local_hand_card_view(card_uid)
 		card_view.configure(card, definition, wooden_ox_card, card_interactable)
@@ -2426,6 +2451,8 @@ func _render_local_hand() -> void:
 		if ordered_card_views[card_index].get_index() != card_index:
 			hand_container.move_child(ordered_card_views[card_index], card_index)
 	hand_container.layout_cards_now()
+	# 门闸保持必须在布局之后：先把仍等待前置飞行的获得牌固定在右侧入场点，再启动已经可以入场的牌。
+	_hold_gated_local_hand_entries()
 	_start_pending_local_hand_gain_animations()
 	# 内联询问期间的按钮态由询问刷新函数唯一维护；本函数不得回写普通出牌态。
 	# 缺少本守卫时，延迟执行的手牌重渲染（例如虚拟候选离场动画结束回调）会覆盖刚刚建立的询问按钮，
@@ -4643,7 +4670,8 @@ func _on_card_presentation_requested(presentation_data: Dictionary) -> void:
 		animated_card.visible = false
 		animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
-		animated_card.position = start_position - animated_card.get_card_size() * 0.5
+		# 展示副本的牌面起点；本机手牌或装备区的牌被展示时取该牌真实所在位置，因此不会从手牌区中心凭空出现。
+		animated_card.position = _resolve_presentation_card_position(card_uid, actor_id, str(presentation_data.get("source_zone", card_data.get("zone", ""))), start_position) - animated_card.get_card_size() * 0.5
 	card_use_animation_layer.play_card(animated_card, start_position, discard_position, target_positions, owns_discard_transfer, indicator_stages)
 
 
@@ -4679,14 +4707,26 @@ func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void
 	var draw_target_position: Vector2 = target_anchor_result.get("position", Vector2.ZERO) as Vector2
 	# 当前批次的正式牌背节点；摸牌信息默认不公开，所有观察者均只看到同款背面并由权威快照决定实际手牌显示。
 	var draw_card_views: Array[CardView] = []
+	# 本批属于本机玩家的摸牌实体 UID；用于在牌背落地后再让正式手牌节点从右侧滑入。
+	var drawn_local_card_uids: Array = []
 	for card_data_variant: Variant in drawn_card_data:
 		# 当前摸到实体的瞬时牌面副本；只读取 UID 配置牌背，不把私有牌面正面泄露给其他观察者。
 		var card_data: Dictionary = card_data_variant as Dictionary
+		# 当前摸到实体的稳定 UID；本机摸牌需要按该 UID 登记手牌入场与门闸。
+		var drawn_card_uid: int = int(card_data.get("uid", -1))
 		var draw_card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 		draw_card_view.visible = false
-		draw_card_view.configure_back(int(card_data.get("uid", -1)), false)
+		draw_card_view.configure_back(drawn_card_uid, false)
 		draw_card_views.append(draw_card_view)
-	card_use_animation_layer.play_draw_transfer_batch(draw_card_views, draw_start_position, draw_target_position)
+		if player_id == match_controller.local_human_player_id:
+			drawn_local_card_uids.append(drawn_card_uid)
+			# 本机摸牌的手牌入场登记；批次信号带走了逐张转移信号，只有在此登记待入场并加门闸，
+			# 正式手牌节点才会以“从右侧向左滑入”的方式加入手牌区，而不是直接出现在最终槽位。
+			# 门闸值保存本张牌背牌面自身，使保持阶段能在牌背异常消失时自愈解闸。
+			if drawn_card_uid >= 0:
+				_pending_local_hand_gain_uids[drawn_card_uid] = true
+				_local_hand_gain_flight_gates[drawn_card_uid] = draw_card_view
+	card_use_animation_layer.play_draw_transfer_batch(draw_card_views, draw_start_position, draw_target_position, _release_local_hand_gain_flight_gates.bind(drawn_local_card_uids))
 
 
 ## 接收统一牌区移动事件；摸牌、获得、响应和展示牌弃置都从实际来源锚点移动。
@@ -4722,6 +4762,32 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 		# 处理区牌必须由 useCard、delayedJudge 或 judge 表现明确认领；未认领增量多为虚拟材料收尾，不能在中央锚点凭空合成牌面。
 		if source_zone == "processing":
 			return
+		# 离场来源；本机手牌与装备区直接取该牌真实所在位置，其他来源沿用玩家武将牌或中央公共锚点。
+		var discard_origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
+		if not bool(discard_origin_result.get("valid", false)):
+			return
+		# 弃置飞行起点；命中本机正式手牌时等于该牌当前槽位中心，因此接管后不会出现位置跳变。
+		var discard_start_position: Vector2 = discard_origin_result.get("position", Vector2.ZERO) as Vector2
+		# 中央弃牌落点；所有离场牌最终都收敛到队列中的同一片区域。
+		var discard_target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
+		# 可接管的正式手牌节点；存在时直接交给动画层，弃置表现从牌面原位置连续开始而不是先消失再从锚点生成。
+		var discarded_card: CardView = discard_origin_result.get("card_view") as CardView
+		# 被接管的正式手牌节点立即退出手牌映射，之后它的生命周期完全由动画层负责。
+		_forget_taken_over_hand_card(card_uid, discarded_card)
+		if discarded_card == null:
+			# 新建表现牌；装备区、其他角色与公共区域的牌没有可接管的正式手牌节点，必须按来源矩形单独创建。
+			discarded_card = CARD_VIEW_SCENE.instantiate() as CardView
+			discarded_card.visible = false
+			if _should_show_card_back(source_player_id, source_zone, target_player_id, target_zone):
+				discarded_card.configure_back(card_uid, false)
+			else:
+				var discarded_definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
+				discarded_card.configure(card_data, discarded_definition, false, false)
+			card_use_animation_layer.add_child(discarded_card)
+			discarded_card.position = discard_start_position - discarded_card.get_card_size() * 0.5
+		# 弃置牌与展示手牌共用中央完整牌面队列；同一帧的多张牌按信号顺序一次性展示并成批淡出。
+		card_use_animation_layer.play_card(discarded_card, discard_start_position, discard_target_position, [])
+		return
 	if target_zone != "discard_pile":
 		# 实体已经进入新的规则区域；上一轮弃牌移动的待消费与已消费所有权到此失效，未来普通弃置或再次使用可重新播放。
 		card_use_animation_layer.release_consumed_discard_claim(card_uid)
@@ -4729,16 +4795,16 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	var is_local_gain: bool = target_player_id == match_controller.local_human_player_id and target_zone == "hand"
 	if is_local_gain:
 		_pending_local_hand_gain_uids[card_uid] = true
+		# 前置飞行段；非牌堆来源先播放“真实来源 → 手牌区右侧入场点”，并由落地回调解除手牌入场门闸。
+		_play_local_hand_gain_flight(card_uid, card_data, source_player_id, source_zone)
 		_start_pending_local_hand_gain_animations()
 		return
-	# 动画起点；牌堆、处理区、展示区和弃牌堆都以桌面中心为公共锚点。
-	var start_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
-	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
-		# 当前来源玩家锚点；座位不存在时不把牌错误地放到中央公共锚点。
-		var source_anchor_result: Dictionary = _try_get_player_indicator_position(source_player_id)
-		if not bool(source_anchor_result.get("valid", false)):
-			return
-		start_position = source_anchor_result.get("position", start_position) as Vector2
+	# 转移来源；本机手牌与装备区取实体牌真实位置，其他来源沿用玩家武将牌或中央公共锚点。
+	var transfer_origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
+	if not bool(transfer_origin_result.get("valid", false)):
+		return
+	# 动画起点；命中本机正式手牌时等于该牌当前槽位中心，接管后由动画层保留全局变换继续飞行。
+	var start_position: Vector2 = transfer_origin_result.get("position", Vector2.ZERO) as Vector2
 	# 动画终点；进入角色手牌时移动到其武将锚点，本地主视角的非摸牌获得已由正式手牌节点分支提前处理。
 	var target_position: Vector2 = _global_to_animation_position(discard_pile_panel.get_global_rect().get_center())
 	if target_player_id >= 0 and target_zone in ["hand", "equipment", "judgment", "wooden_ox"]:
@@ -4747,22 +4813,23 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 		if not bool(target_anchor_result.get("valid", false)):
 			return
 		target_position = target_anchor_result.get("position", target_position) as Vector2
-	# 牌面可见性；牌堆摸牌和其他角色不可见手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
-	var show_card_back: bool = source_zone == "draw_pile" or (source_zone in ["hand", "wooden_ox"] and source_player_id != match_controller.local_human_player_id and target_player_id != match_controller.local_human_player_id and target_zone != "discard_pile")
-	# 转移牌节点；所有表现仍复用正式 CardView，不创建简化标签。
-	var animated_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-	animated_card.visible = false
-	if show_card_back:
-		animated_card.configure_back(card_uid, false)
-	else:
-		var definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
-		animated_card.configure(card_data, definition, false, false)
-	card_use_animation_layer.add_child(animated_card)
-	if target_zone == "discard_pile":
-		# 弃置牌与展示手牌共用中央完整牌面队列；同一帧的多张牌按信号顺序一次性展示并成批淡出。
+	# 牌面可见性；牌堆摸牌和其他观察者不可见的手牌转移只显示统一牌背，公开弃牌与公开区域显示正面。
+	var show_card_back: bool = _should_show_card_back(source_player_id, source_zone, target_player_id, target_zone)
+	# 转移牌节点；优先接管本机仍在手牌容器中的正式节点，使被他人取走的牌从它真实所在位置起飞。
+	var animated_card: CardView = transfer_origin_result.get("card_view") as CardView
+	# 被接管的正式手牌节点立即退出手牌映射，之后它的生命周期完全由动画层负责。
+	_forget_taken_over_hand_card(card_uid, animated_card)
+	if animated_card == null:
+		# 表现牌面；所有表现仍复用正式 CardView，不创建简化标签。
+		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
+		animated_card.visible = false
+		if show_card_back:
+			animated_card.configure_back(card_uid, false)
+		else:
+			var definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
+			animated_card.configure(card_data, definition, false, false)
+		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
-		card_use_animation_layer.play_card(animated_card, start_position, target_position, [])
-		return
 	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
 	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
 	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
@@ -4773,6 +4840,184 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 func _on_card_animation_ownership_reset_requested(card_uid: int) -> void:
 	_record_replay_presentation({"e":"ownership_reset", "card_uid":card_uid})
 	card_use_animation_layer.release_consumed_discard_claim(card_uid)
+
+
+## 判断一次牌区转移是否只能显示牌背；这是全项目唯一的牌背判定入口，所有表现路径必须共用它。
+##
+## 判定口径：牌堆方向对所有观察者隐藏；手牌与木牛方向只对“既不是来源本人、也不是目标本人”的观察者隐藏；
+## 进入弃牌堆属于公开信息，以及展示牌、装备区、判定区等公开区域一律显示正面。
+## 集中到一处的原因：本机获得、他人获得和纯展示三条路径曾经各写一份类似的布尔表达式，
+## 任何一处漏改都会把其他观察者不可见的私有牌面公开成正面。
+func _should_show_card_back(source_player_id: int, source_zone: String, target_player_id: int, target_zone: String) -> bool:
+	if source_zone == "draw_pile":
+		return true
+	# 本机玩家 ID；手牌与木牛方向只对旁观者隐藏，来源本人和目标本人始终能看到牌面。
+	var local_player_id: int = match_controller.local_human_player_id
+	return source_zone in ["hand", "wooden_ox"] and source_player_id != local_player_id and target_player_id != local_player_id and target_zone != "discard_pile"
+
+
+## 统一解析一张牌离场瞬间的真实来源位置与可接管节点；所有离场、被取走和被展示的表现都必须经此入口取起点。
+##
+## 解析优先级（顺序即优先级；不得在其他函数里重写这套判断，否则同一种语义会分裂出第二套位置规则）：
+## 1. 本机手牌区／木牛区的正式 CardView：直接返回该节点，调用方让动画层接管它，飞行从真实槽位连续开始。
+## 2. 本机装备区的装备横条：装备行不是 CardView，只返回槽位矩形，由调用方新建表现牌面。
+## 3. 其他角色：返回其武将牌锚点；本机看不到对方具体牌位，不得伪造位置。
+## 4. 公共区域（牌堆、处理区、展示区、弃牌堆）：返回中央弃牌锚点。
+##
+## 返回 valid=false 时调用方必须放弃本次表现，不能用中央锚点顶替玩家来源。
+## 返回 position 为动画层局部坐标下的牌面中心；返回 global_rect 为来源屏幕矩形；
+## 返回 card_view 仅在命中本机正式手牌节点时非空，调用方可直接把它交给动画层接管。
+##
+## 命中正式手牌节点时本函数会先收尾该牌未完成的入场与整理表现，使接管严格从它当前稳定槽位开始，
+## 且不会与仍在对 position 写入的旧补间争用坐标。
+func _try_take_card_origin(card_uid: int, source_player_id: int, source_zone: String) -> Dictionary:
+	if source_zone in ["hand", "wooden_ox"] and source_player_id == match_controller.local_human_player_id:
+		# 当前正式手牌节点；只有仍挂在手牌容器中时才可被动画层接管，UID 映射里可能残留已经离开的引用。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view != null and is_instance_valid(card_view) and card_view.get_parent() == hand_container:
+			# 先结束尚未播完的入场动画：它的补间会持续写入入场偏移，必须在新表现接管前停止。
+			_cancel_local_hand_gain_animation(card_uid)
+			# 再结束整理过渡：残留偏移会让飞牌起点偏离槽位，且旧补间会继续争用同一个 position。
+			hand_container.end_card_relayout_transition(card_view)
+			# 当前手牌全局矩形；CardView 的 Node2D 原点位于牌面左上角，选中抬升已包含在矩形里。
+			var hand_card_rect: Rect2 = card_view.get_global_rect()
+			return {"valid":true, "position":_global_to_animation_position(hand_card_rect.get_center()), "global_rect":hand_card_rect, "card_view":card_view}
+	if source_zone == "equipment" and source_player_id == match_controller.local_human_player_id:
+		# 当前装备槽矩形查询；装备横条缺失时按“查不到”处理，不用武将牌锚点顶替它的真实槽位。
+		var equipment_slot_result: Dictionary = equipment_label.find_card_global_rect(card_uid)
+		if bool(equipment_slot_result.get("valid", false)):
+			var equipment_rect: Rect2 = equipment_slot_result.get("rect", Rect2()) as Rect2
+			return {"valid":true, "position":_global_to_animation_position(equipment_rect.get_center()), "global_rect":equipment_rect, "card_view":null}
+	if source_player_id >= 0 and source_zone not in ["draw_pile", "processing", "discard_pile"]:
+		# 当前来源玩家锚点；座位尚未建立时整个表现放弃，避免牌面错误出现在窗口中上部。
+		var source_anchor_result: Dictionary = _try_get_player_indicator_position(source_player_id)
+		if not bool(source_anchor_result.get("valid", false)):
+			return {"valid":false, "position":Vector2.ZERO, "global_rect":Rect2(), "card_view":null}
+		return {"valid":true, "position":source_anchor_result.get("position", Vector2.ZERO) as Vector2, "global_rect":Rect2(), "card_view":null}
+	# 公共锚点；牌堆、处理区、展示区和弃牌堆都以中央弃牌区中心为公共来源。
+	return {"valid":true, "position":_global_to_animation_position(discard_pile_panel.get_global_rect().get_center()), "global_rect":Rect2(), "card_view":null}
+
+
+## 把已由动画层接管的正式手牌节点从手牌 UID 映射中移除。
+##
+## 「_card_views」的语义是“当前仍由手牌区拥有的正式手牌节点”；一旦节点被出牌或转移动画接管，
+## 它的位置、可见性和生命周期都改由动画层决定，映射必须同步遗忘该实体。
+## 若不遗忘，动画层稍后释放该节点时映射会残留已释放对象，而后续快照对账、选中态刷新等路径
+## 都会对映射值做 CardView 强制转换，对已释放对象转换会直接中止当前函数，
+## 表现为整轮手牌渲染被静默跳过（既不释放旧牌也不计算新槽位）。
+func _forget_taken_over_hand_card(card_uid: int, card_view: CardView) -> void:
+	# 只有映射当前确实指向这个被接管节点时才移除，避免误删同一 UID 之后重新建立的手牌节点。
+	if card_view == null or _card_views.get(card_uid) != card_view:
+		return
+	_card_views.erase(card_uid)
+
+
+## 播放一次本机获得牌的前置飞行段；返回 true 表示已经登记门闸并需要等待落地回调解除。
+##
+## 只有“来源不是本机自己的区域、且不是牌堆摸牌”的获得才需要前置飞行：
+## 牌堆摸牌已经由 play_draw_transfer_batch 播放整批牌背飞行，另建第二段飞行只会重复表现同一张牌；
+## 本机区域之间的移动没有可见来源，直接走手牌入场即可。
+## 飞行落点与正式手牌节点的右侧入场点取同一个坐标，因此落地帧与滑入首帧严格衔接，不会出现牌已到手中又被重新飞入。
+func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_player_id: int, source_zone: String) -> bool:
+	if source_zone == "draw_pile" or source_player_id == match_controller.local_human_player_id:
+		return false
+	if source_player_id < 0 and source_zone in ["hand", "wooden_ox", "equipment", "processing"]:
+		# 缺少来源玩家的本机私有区域移动没有可解析的真实来源，放弃前置飞行而不是伪造中央起点。
+		return false
+	# 来源解析；无法解析时放弃前置飞行，正式手牌节点仍会正常从右侧滑入，不会留下停在屏幕上的孤立牌面。
+	var origin_result: Dictionary = _try_take_card_origin(card_uid, source_player_id, source_zone)
+	if not bool(origin_result.get("valid", false)):
+		return false
+	# 前置飞行起点；命中本机正式手牌时等于该牌槽位中心，其余来源为武将牌锚点或公共锚点。
+	var flight_start_position: Vector2 = origin_result.get("position", Vector2.ZERO) as Vector2
+	# 前置飞行终点；与正式手牌节点使用同一右侧入场点，保证两段表现首尾衔接。
+	var flight_target_position: Vector2 = _global_to_animation_position(_get_local_hand_gain_start_global_position(hand_container.card_size))
+	# 飞行牌面；获得牌在本机视角按统一牌背规则显示，牌堆方向仍为牌背，其余来源显示正面。
+	var flight_card: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	flight_card.visible = false
+	if _should_show_card_back(source_player_id, source_zone, match_controller.local_human_player_id, "hand"):
+		flight_card.configure_back(card_uid, false)
+	else:
+		var flight_definition: Dictionary = _get_cached_card_definition(str(card_data.get("definition_id", "")))
+		flight_card.configure(card_data, flight_definition, false, false)
+	card_use_animation_layer.add_child(flight_card)
+	flight_card.position = flight_start_position - flight_card.get_card_size() * 0.5
+	# 手牌入场门闸；必须在启动飞行之前登记，保证随后到达的快照不会让正式手牌节点抢先出现在槽位。
+	# 值保存飞行牌面自身，使保持阶段能在飞行牌异常消失时自愈解闸。
+	_local_hand_gain_flight_gates[card_uid] = flight_card
+	card_use_animation_layer.play_transfer(flight_card, flight_start_position, flight_target_position, "", _release_local_hand_gain_flight_gates.bind([card_uid]))
+	return true
+
+
+## 解除一批本机获得牌的前置飞行门闸并立即尝试启动手牌入场；由飞行落地回调触发。
+## 单张获得与整批摸牌共用同一入口，避免为“批次解闸”再维护第二套逻辑。
+func _release_local_hand_gain_flight_gates(card_uids: Array) -> void:
+	# 本次是否真的解除了门闸；没有任何门闸变化时不必重新尝试启动入场。
+	var released_any: bool = false
+	for card_uid_variant: Variant in card_uids:
+		# 当前解闸实体 UID；迟到或已清理的 UID 不会误触发入场。
+		if _local_hand_gain_flight_gates.erase(int(card_uid_variant)):
+			released_any = true
+	if released_any:
+		_start_pending_local_hand_gain_animations()
+
+
+## 把仍被前置飞行门闸挡住的本机获得牌固定在右侧入场点；在每次快照手牌布局之后调用。
+## 门闸期间这些牌既不能出现在最终槽位，也不能提前播放入场补间，
+## 否则玩家会先看到牌已经躺进手牌区，随后又被重新飞入一次。
+## 本方法同时承担门闸的最后一道兜底：飞行牌面已被动画层释放说明落地回调不会再触发，
+## 此时立即补齐解闸并启动入场，避免任何异常清场路径把牌永久留在可视手牌区之外。
+func _hold_gated_local_hand_entries() -> void:
+	if _local_hand_gain_flight_gates.is_empty():
+		return
+	# 本轮需要兜底解除的门闸 UID；先收集再删除，禁止在遍历字典期间直接修改它。
+	var stale_gate_uids: Array[int] = []
+	for card_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
+		# 当前仍被门闸挡住的实体 UID；尚未出现在快照中的牌本轮没有节点可保持。
+		var card_uid: int = int(card_uid_variant)
+		# 当前门闸记录的前置飞行牌面；值不是对象时无法判断存活，按正常门闸继续等待落地回调。
+		var gate_flight_variant: Variant = _local_hand_gain_flight_gates[card_uid_variant]
+		if gate_flight_variant is CardView and not is_instance_valid(gate_flight_variant):
+			stale_gate_uids.append(card_uid)
+			continue
+		# 当前正式手牌节点；只在它已经进入手牌容器后才需要保持右侧入场位置。
+		var card_view: CardView = _card_views.get(card_uid) as CardView
+		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
+			continue
+		if _local_hand_gain_tweens.has(card_uid):
+			# 门闸解除后入场补间已经接管位置，本函数不得再写入偏移覆盖它。
+			continue
+		# 右侧入场偏移；与入场补间共用同一落点公式，解闸后补间从当前位置继续滑入而不会跳变。
+		card_view.hand_entry_offset = _get_local_hand_gain_entry_offset(card_view, card_view.position - card_view.hand_entry_offset)
+	if stale_gate_uids.is_empty():
+		return
+	_release_local_hand_gain_flight_gates(stale_gate_uids)
+
+
+## 返回指定正式手牌节点在容器坐标下的右侧入场偏移量；门闸保持与入场补间共享同一落点公式。
+func _get_local_hand_gain_entry_offset(card_view: CardView, target_position: Vector2) -> Vector2:
+	# 右侧入场中心全局坐标；固定从当前可视滚动区外侧进入，不受超宽内容区域影响。
+	var start_global_center: Vector2 = _get_local_hand_gain_start_global_position(card_view.get_card_size())
+	# 右侧入场左上角全局坐标；CardView 的 Node2D 原点位于牌面左上角。
+	var start_global_position: Vector2 = start_global_center - card_view.get_card_size() * 0.5
+	# 右侧入场左上角容器坐标；完整逆变换兼容画布缩放、滚动区位置和窗口适配。
+	var start_local_position: Vector2 = hand_container.get_global_transform().affine_inverse() * start_global_position
+	return start_local_position - target_position
+
+
+## 返回一次展示表现中牌面副本的起飞中心；本机手牌或装备区的牌被展示时使用它真实所在的位置。
+##
+## 展示表现自带声明的来源区域，因此这里只在来源属于本机私有牌区时改写起点；
+## 处理区、牌堆、展示区和弃牌堆的来源语义完全由调用方传入的统一玩家锚点表达，
+## 若在此按公共锚点覆盖，反而会让使用牌从桌面中心凭空出现。
+func _resolve_presentation_card_position(card_uid: int, actor_id: int, source_zone: String, fallback_position: Vector2) -> Vector2:
+	if source_zone not in ["hand", "wooden_ox", "equipment"]:
+		return fallback_position
+	# 精确来源查询；只能命中本机自己的牌，其他玩家仍返回其武将牌锚点，与 fallback 完全一致。
+	var origin_result: Dictionary = _try_take_card_origin(card_uid, actor_id, source_zone)
+	if not bool(origin_result.get("valid", false)):
+		return fallback_position
+	return origin_result.get("position", fallback_position) as Vector2
 
 
 ## 返回指定玩家的目标指示锚点；本地玩家使用手牌区上方中心，其他玩家使用武将牌中心。
@@ -4814,6 +5059,9 @@ func _start_pending_local_hand_gain_animations() -> void:
 		if _local_hand_gain_tweens.has(card_uid):
 			_pending_local_hand_gain_uids.erase(card_uid)
 			continue
+		if _local_hand_gain_flight_gates.has(card_uid):
+			# 前置飞行尚未落地；保留待入场登记，等落地回调再次调用本函数，绝不能提前滑入。
+			continue
 		# 当前正式手牌节点；只有已经由快照对账加入手牌容器后才能计算最终布局落点。
 		var card_view: CardView = _card_views.get(card_uid) as CardView
 		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
@@ -4827,13 +5075,8 @@ func _start_local_hand_gain_animation(card_uid: int, card_view: CardView) -> voi
 	hand_container.layout_cards_now()
 	# 正式手牌的最终布局位置；扣除可能残留的入场偏移后作为本次补间的零点。
 	var target_position: Vector2 = card_view.position - card_view.hand_entry_offset
-	# 右侧入场中心全局坐标；固定从当前可视滚动区外侧进入，不受超宽内容区域影响。
-	var start_global_center: Vector2 = _get_local_hand_gain_start_global_position(card_view.get_card_size())
-	# 右侧入场左上角全局坐标；CardView 的 Node2D 原点位于牌面左上角。
-	var start_global_position: Vector2 = start_global_center - card_view.get_card_size() * 0.5
-	# 右侧入场左上角容器坐标；完整逆变换兼容画布缩放、滚动区位置和窗口适配。
-	var start_local_position: Vector2 = hand_container.get_global_transform().affine_inverse() * start_global_position
-	card_view.hand_entry_offset = start_local_position - target_position
+	# 右侧入场偏移；与门闸保持阶段共用同一落点公式，两处不得各写一套坐标换算。
+	card_view.hand_entry_offset = _get_local_hand_gain_entry_offset(card_view, target_position)
 	# 正式手牌入场补间；只驱动运行时偏移归零，容器仍持续拥有并布局同一个实体 UID 节点。
 	var gain_tween: Tween = create_tween()
 	gain_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -4856,14 +5099,21 @@ func _on_local_hand_gain_animation_finished(card_uid: int, card_instance_id: int
 ## 取消指定实体的本地获得动画；用于牌在入场途中被使用、离开手牌或重新开局的情况。
 func _cancel_local_hand_gain_animation(card_uid: int) -> void:
 	_pending_local_hand_gain_uids.erase(card_uid)
+	# 前置飞行门闸同时撤销；该牌的入场不会再等待一段已经被取消的飞行。
+	_local_hand_gain_flight_gates.erase(card_uid)
 	# 当前实体正在运行的入场补间；停止后从索引移除，防止旧完成回调修改后续状态。
 	var gain_tween: Tween = _local_hand_gain_tweens.get(card_uid) as Tween
 	if gain_tween != null and gain_tween.is_valid():
 		gain_tween.kill()
 	_local_hand_gain_tweens.erase(card_uid)
+	# 当前正式手牌节点原始值；被动画层接管并释放的节点可能仍被调用方按 UID 传入，
+	# 先按 Variant 校验有效性，避免对已释放对象强制转换中止调用方（例如整轮手牌对账）。
+	var card_view_variant: Variant = _card_views.get(card_uid)
+	if not is_instance_valid(card_view_variant):
+		return
 	# 当前正式手牌节点；仍位于手牌容器时清除剩余偏移，使后续出牌从真实布局位置开始。
-	var card_view: CardView = _card_views.get(card_uid) as CardView
-	if card_view != null and is_instance_valid(card_view) and card_view.get_parent() == hand_container:
+	var card_view: CardView = card_view_variant as CardView
+	if card_view.get_parent() == hand_container:
 		card_view.hand_entry_offset = Vector2.ZERO
 		hand_container.layout_cards_now()
 
@@ -4876,12 +5126,18 @@ func _clear_local_hand_gain_animations() -> void:
 		if gain_tween != null and gain_tween.is_valid():
 			gain_tween.kill()
 	for card_view_variant: Variant in _card_views.values():
+		# 映射值有效性预检；理论上映射不残留已释放节点，但清场路径必须容忍异常值，
+		# 否则对已释放对象强制转换会中止本函数，导致门闸与补间索引无法清空。
+		if not is_instance_valid(card_view_variant):
+			continue
 		# 当前正式手牌节点；清场前归零运行时偏移，避免复用时继承旧局位置。
 		var card_view: CardView = card_view_variant as CardView
 		if card_view != null and is_instance_valid(card_view) and card_view.get_parent() == hand_container:
 			card_view.hand_entry_offset = Vector2.ZERO
 	_pending_local_hand_gain_uids.clear()
 	_local_hand_gain_tweens.clear()
+	# 前置飞行门闸属于同一批表现生命周期；与补间一起清空，否则新局的获得牌会永远停在屏幕外。
+	_local_hand_gain_flight_gates.clear()
 
 
 ## 将全局画布坐标转换为动画层局部坐标；使用完整逆变换以兼容父节点位移、缩放与后续视口适配。
@@ -5515,6 +5771,9 @@ func _refresh_component_states() -> void:
 		var card_uid: int = int(card_uid_variant)
 		# 当前选中状态；装备材料、内联多选与普通出牌按当前互斥模式读取各自唯一临时数组。
 		var card_selected: bool = _equipment_action_material_uids.has(card_uid) if not _active_equipment_action.is_empty() else (_inline_selected_card_uids.has(card_uid) if not _inline_card_choice.is_empty() else card_uid == _selected_card_uid)
+		# 映射值有效性预检；被动画层接管的节点不参与选中态刷新，也不能对已释放对象做强制转换。
+		if not is_instance_valid(_card_views.get(card_uid)):
+			continue
 		(_card_views[card_uid] as CardView).set_selected_state(card_selected)
 	# 本地装备堆叠组件；与手牌同步候选位移和选中描边，不创建第二套选择状态。
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
