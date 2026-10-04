@@ -575,6 +575,15 @@ var _discard_batch_stack: Array[Dictionary] = []
 ## 下一个弃置批次号；从1起单调递增，只用于事件载荷的稳定标识，规则逻辑不得依赖其具体数值。
 var _next_discard_batch_id: int = 1
 
+## 获得批次栈；每次面向规则的获得动作占一层，用于把“一次获得多张”的牌聚合成一个批次事件。
+## 每层键为 batch_id（稳定批次号）、player_id（本次获得的主体角色）、reason（获得原因）、card_uids（本批已进入手牌的牌）。
+## 与 _discard_batch_stack 对称：使用栈而非单变量，使批次内技能连锁产生的新获得动作可以各自成批，不会污染外层批次。
+## 该字段是纯瞬态结算状态，不进入观察者快照，也不进入权威存档。
+var _gain_batch_stack: Array[Dictionary] = []
+
+## 下一个获得批次号；从1起单调递增，与弃置批次号彼此独立，只用于事件载荷的稳定标识。
+var _next_gain_batch_id: int = 1
+
 ## 自动开局种子自增序号；同一毫秒内连续重开时仍保证每局获得不同随机序列，避免斗地主座位与身份固定。
 var _automatic_match_seed_serial: int = 0
 
@@ -6873,9 +6882,15 @@ func gain_all_hand_cards(receiver_id: int, target_id: int, reason: String = "gai
 		hand_uids.append(hand_card.uid)
 	# 实际获得数量；等待期间已经离开目标手牌区的实体安全跳过。
 	var gained_count: int = 0
+	# 无牌可拿时不开启批次，避免产生空事件并保持批次栈的开关配对。
+	if hand_uids.is_empty():
+		return 0
+	# 批量获得作用域；“获得其全部手牌”是一次动作，整批共享一个 cardsGainedBatchAfter 事件。
+	_begin_gain_batch(receiver_id, reason)
 	for card_uid: int in hand_uids:
 		if _take_selected_player_card(receiver_id, target_id, card_uid):
 			gained_count += 1
+	_end_gain_batch()
 	if gained_count > 0:
 		add_log("%s因%s获得了%s的全部手牌。" % [format_player_state_log_name(receiver), format_log_reason(reason), format_player_state_log_name(target)])
 	return gained_count
@@ -7414,6 +7429,8 @@ func gain_group_cards_from_draw_or_discard(player_id: int, group_kind: String, g
 		return 0
 	# 实际获得总数；每个分组独立计数，便于牌堆不足时保留准确结果。
 	var gained_count: int = 0
+	# 批量获得作用域；“一次获得每组指定数量”是一次动作，整批共享一个 cardsGainedBatchAfter 事件。
+	_begin_gain_batch(player_id, reason)
 	for group_variant: Variant in groups:
 		# 当前分组值；type使用basic/trick/equipment，suit使用四花色，rule_name使用稳定原版规则名。
 		var group_value: String = str(group_variant)
@@ -7428,6 +7445,7 @@ func gain_group_cards_from_draw_or_discard(player_id: int, group_kind: String, g
 			_ensure_card_movement()
 			if _move_card_with_timings(matched_card, "hand", player_id, reason, state.current_event_id, "", [player_id], true) != null:
 				gained_count += 1
+	_end_gain_batch()
 	if gained_count > 0:
 		add_log("%s从牌堆或弃牌堆获得了%d张牌。" % [format_player_state_log_name(player), gained_count])
 	return gained_count
@@ -7482,6 +7500,8 @@ func gain_same_name_length_cards_from_draw_or_discard(player_id: int, requested_
 		return 0
 	# 实际获得数量；先从摸牌堆顶部向下取，摸牌堆不足再从弃牌堆顶部向下补足，始终保持同一结算名字数。
 	var gained_count: int = 0
+	# 批量获得作用域；“一次获得指定数量的同字数牌”是一次动作，整批共享一个 cardsGainedBatchAfter 事件。
+	_begin_gain_batch(player_id, reason)
 	for card_zone: Array[CardInstance] in [state.draw_pile, state.discard_pile]:
 		while gained_count < requested_count:
 			# 当前区域最顶端的同字数实体；未命中时切换下一牌区，绝不移动无关牌。
@@ -7492,6 +7512,7 @@ func gain_same_name_length_cards_from_draw_or_discard(player_id: int, requested_
 			_ensure_card_movement()
 			if _move_card_with_timings(matched_card, "hand", player_id, reason, state.current_event_id, "", [player_id], true) != null:
 				gained_count += 1
+	_end_gain_batch()
 	if gained_count > 0:
 		add_log("%s从牌堆或弃牌堆获得了%d张牌。" % [format_player_state_log_name(player), gained_count])
 	return gained_count
@@ -15829,6 +15850,53 @@ func _end_discard_batch() -> void:
 	}, state.current_event_id)
 
 
+## 开启一次获得批次；批量获得入口在循环外层调用，使整批牌共享同一个 cardsGainedBatchAfter 事件。
+## 批量入口必须无条件调用本函数（即使外层已有批次），嵌套获得才能各自成批而不把内层牌计入外层。
+## 返回稳定批次号；调用方必须保证随后调用 _end_gain_batch() 收尾，包括提前跳出循环的路径。
+func _begin_gain_batch(player_id: int, reason: String) -> int:
+	# 当前批次号；先取自增计数器再登记，保证嵌套批次的内层编号与外层不同。
+	var batch_id: int = _next_gain_batch_id
+	_next_gain_batch_id += 1
+	_gain_batch_stack.append({
+		"batch_id":batch_id,
+		"player_id":player_id,
+		"reason":reason,
+		"card_uids":[],
+	})
+	return batch_id
+
+
+## 把一张已成功进入手牌的实体登记到栈顶获得批次；当前不在任何批次内时不做任何事。
+## 登记点是获得批次的唯一入口：统一移牌管线与摸牌服务都只调用本函数，避免两处各写一份追加逻辑。
+func _register_gain_into_batch(card_uid: int) -> void:
+	if card_uid < 0 or _gain_batch_stack.is_empty():
+		return
+	# 栈顶批次；登记顺序即牌实际进入手牌的顺序，UI、AI与回放据此稳定复现。
+	var batch_card_uids: Array = _gain_batch_stack[-1]["card_uids"] as Array
+	batch_card_uids.append(card_uid)
+
+
+## 结束栈顶获得批次；先弹出再派发，使批次事件内由技能连锁产生的新获得动作自成新批次。
+func _end_gain_batch() -> void:
+	if _gain_batch_stack.is_empty():
+		return
+	# 已完成的批次；必须先从栈中移除，否则批次事件回调内的获得会错误追加到本批。
+	var finished_batch: Dictionary = _gain_batch_stack.pop_back()
+	# 本批实际获得的牌；空批次不派发，避免出现“发动了却没有牌可判定”的空事件。
+	var batch_card_uids: Array = finished_batch.get("card_uids", []) as Array
+	if batch_card_uids.is_empty():
+		return
+	# 本次获得的主体角色；与其获得牌的角色一致，供“当你获得牌时”类技能按角色过滤。
+	var batch_player_id: int = int(finished_batch.get("player_id", -1))
+	_emit_rule_timing("cardsGainedBatchAfter", batch_player_id, batch_player_id, -1, {
+		"gain_batch_id":int(finished_batch.get("batch_id", -1)),
+		"card_uids":batch_card_uids.duplicate(),
+		"receiver_player_id":batch_player_id,
+		"reason":str(finished_batch.get("reason", "")),
+		"batch_size":batch_card_uids.size(),
+	}, state.current_event_id)
+
+
 ## 将闪电移至下一角色时、装备效果与其他规则共用的弃牌移动基础操作。
 ## related_event_id 为-2时沿用当前规则事件；显式传入父事件可把 cardsDiscard 关联到对应结算。
 ## counts_as_discard_action 声明本次移牌是否构成一次“弃置牌”动作。
@@ -15896,6 +15964,13 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 				return null
 		if to_zone == "judgment" and persistent_zone_target.judgment_area_abolished:
 			return null
+	# 本次移动是否构成一次“获得牌”动作；只有进入玩家手牌区才参与获得批次，公共区域与无主手牌不参与。
+	var counts_as_gain_action: bool = to_zone == "hand" and target_player_id >= 0
+	# 本次获得是否自成一个批次；栈非空表示外层批量入口已经建立了更大的批次，此时只把本张计入该批次。
+	# 判定必须早于任何前置时机：批次作用域在移动前就生效，前置时机内部连锁产生的获得才会被正确归类。
+	var owns_gain_batch: bool = counts_as_gain_action and _gain_batch_stack.is_empty()
+	if owns_gain_batch:
+		_begin_gain_batch(target_player_id, reason)
 	# 手牌视为效果的清理边界；实体离开当前持有者手牌区前立即恢复原名，已经创建的虚拟使用牌或响应代理继续保存本次逻辑牌效。
 	if card.has_hand_view_as() and (card.zone != "hand" or to_zone != "hand" or target_player_id != card.owner_id):
 		_hand_view_as_turn_expiries.erase(card.uid)
@@ -15936,6 +16011,9 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		if RuleTimingCatalog.has_timing(before_name):
 			var before_event: RuleEvent = _emit_rule_timing(before_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
 			if before_event != null and (before_event.cancelled or before_event.neutralized):
+				# 移动被前置时机取消时牌并未进入手牌；隐式批次必须立即收尾，否则空批次会永久留在栈上吞掉后续获得。
+				if owns_gain_batch:
+					_end_gain_batch()
 				return null
 	for lifecycle_name: String in lifecycle_names:
 		# 生命周期主要角色；与 Before 保持一致，确保 player 角色订阅不会在同一移动中漂移。
@@ -15944,6 +16022,9 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		if RuleTimingCatalog.has_timing(begin_name):
 			var begin_event: RuleEvent = _emit_rule_timing(begin_name, lifecycle_player_id, source_player_id, target_player_id, timing_data, event_id)
 			if begin_event != null and (begin_event.cancelled or begin_event.neutralized):
+				# 与 Before 取消同理：牌未进入手牌，隐式批次必须立即收尾。
+				if owns_gain_batch:
+					_end_gain_batch()
 				return null
 	if reset_hand_knowledge and to_zone == "hand":
 		_prepare_hidden_pile_gain(card, target_player_id)
@@ -15972,6 +16053,12 @@ func _move_card_with_timings(card: CardInstance, to_zone: String, target_player_
 		_emit_rule_timing("cardsDiscardAfter", source_player_id, source_player_id, target_player_id, timing_data, event_id)
 		if source_player_id >= 0:
 			_emit_rule_timing("loseToDiscardpileAfter", source_player_id, source_player_id, source_player_id, timing_data, event_id)
+	# 计入获得批次；隐式批次同样登记，使单张获得也产生一次批次事件，规则语义与弃置批次保持一致。
+	# 登记点放在全部后置时机之后，使事件顺序恒为 gainAfter → cardsGainedBatchAfter。
+	if counts_as_gain_action:
+		_register_gain_into_batch(card.uid)
+		if owns_gain_batch:
+			_end_gain_batch()
 	return move
 
 

@@ -198,8 +198,12 @@ func _run() -> void:
 	# 新增卡芙卡的【言灵】【游丝】后为102个；【言灵】是开局洗入专属牌的锁定技，【游丝】是私有置牌并跨回合兑现的技能。
 	# 新增青雀的【独弈】【弃和】【自摸】后为105个；【独弈】【弃和】是限制用牌与抵消伤害牌的锁定技，
 	# 【自摸】是用虚拟手牌选择“视为使用”的主动技。
+	# 新增丹恒·饮月的【伏辰】【濯世】后为107个；【伏辰】是获得他人“打出”的【杀】的全局锁定技，
+	# 【濯世】是三段弃置基本牌换取拆牌与雷电伤害的阶段技。
+	# 新增砂金的【筹码】【盲注】【风口】后为110个；【筹码】是开局按体力上限摸牌并提升手牌上限的锁定技，
+	# 【盲注】是用两种颜色叠护盾与摸牌的阶段技，【风口】是批量获得时机与主动夺牌并失去自身的主动技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 105:
+	if skill_definition_count != 110:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -306,8 +310,10 @@ func _run() -> void:
 	# 新增白露（仙舟联盟）与刃（星核猎手）后为47名；两名新武将各自引用本次新增的两个技能。
 	# 新增卡芙卡（星核猎手）后为48名；她引用【言灵】与【游丝】。
 	# 新增青雀（仙舟联盟，3体力）后为49名；她引用【独弈】【弃和】【自摸】。
+	# 新增丹恒·饮月（仙舟联盟，4体力）后为50名；他与同势力的丹恒通过稳定ID区分，引用【伏辰】【濯世】。
+	# 新增砂金（星际和平公司，3体力）后为51名；他引用【筹码】【盲注】【风口】。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 49:
+	if character_definition_count != 51:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

@@ -74,7 +74,13 @@ func _run() -> void:
 	if leader_candidates.is_empty() or not _controller.select_character(0, selected_leader_character_id):
 		_fail("select_leader")
 		return
-	await get_tree().process_frame
+	# 随机选中的武将（含 AI 对手）可能在开局创建自己的选择请求（例如某个「选择目标」询问）；
+	# AI 的作答由 ai_action_delay_seconds 的计时器在后续空闲帧派发，因此必须轮询到流程稳定为止，
+	# 不能只等一帧就断言阶段。轮询次数有上界，真正的流程卡死仍然会失败。
+	for _settle_index: int in range(8):
+		if _controller.state.current_phase == "play" and not _controller.has_pending_card_choice():
+			break
+		await get_tree().process_frame
 	if _controller.state.current_phase != "play":
 		_fail("play_phase=%s" % _controller.state.current_phase)
 		return
@@ -177,10 +183,16 @@ func _on_public_card_choice_display_changed(display_data: Dictionary) -> void:
 		return
 	if str(display_data.get("kind", "")) != "harvest":
 		return
-	# 固定公共牌位；两人五谷从开始到结束都应保留最初亮出的2个位置。
+	# 固定公共牌位；【五谷丰登】的展示牌数等于结算开始时的合法目标数（`target_mode = "all_players"`），
+	# 因此必须按“存活且在场”的角色数动态计算，不能写死为2：
+	# 离场技角色（例如貊泽的【幽锋】会在首轮开始时让持有者离场）会让合法目标数少于座位数。
+	var expected_slot_count: int = 0
+	for seated_player: PlayerState in _controller.state.players:
+		if seated_player.alive and not seated_player.out_of_game:
+			expected_slot_count += 1
 	var display_slots: Array = display_data.get("slots", []) as Array
-	if display_slots.size() != 2:
-		_fail("public_slot_count=%d" % display_slots.size())
+	if display_slots.size() != expected_slot_count:
+		_fail("public_slot_count=%d/%d" % [display_slots.size(), expected_slot_count])
 		return
 	# 当前快照已领取牌位数量；初始应为0，本地选择完成后至少出现1个归属。
 	var taken_count: int = 0
