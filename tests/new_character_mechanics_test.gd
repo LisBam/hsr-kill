@@ -11,6 +11,10 @@ const CARD_SELECTION_PANEL_SCENE: PackedScene = preload("res://scenes/components
 ## 正式实体牌场景；用于验证视为标签与鸣弦手牌标记同时存在时并排居中显示。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
+## 真实时序额外出牌阶段用例等待结算的帧预算；延后结算只能靠每帧唯一唤醒推进，
+## 超出该预算即判定活锁失败，保证卡死类缺陷以“有限帧内失败”而不是无界阻塞的形式暴露。
+const EXTRA_PHASE_SETTLEMENT_FRAME_BUDGET: int = 90
+
 ## 每个机制场景共用的权威对局控制器；所有状态变化仍通过正式公开端口执行。
 var _controller: MatchController
 
@@ -131,6 +135,8 @@ func _run() -> void:
 	if not _test_mice_extra_phase_sequences():
 		return
 	if not await _test_mice_kancha_qixi_settlement_liveness():
+		return
+	if not await _test_yaota_extra_phase_kansha_qixi_real_timing():
 		return
 	if not await _test_kance_private_view_and_draw_pile_gain():
 		return
@@ -3516,6 +3522,115 @@ func _test_mice_kancha_qixi_settlement_liveness() -> bool:
 			await get_tree().process_frame
 		if not _controller._active_independent_play_phase.is_empty() or _controller.state.current_player_id != 0 or not _controller._deferred_skill_settlements.is_empty():
 			return _fail("mice_kancha_qixi_restore scenario=%d active=%s current=%d deferred=%d" % [scenario_index, _controller._active_independent_play_phase, _controller.state.current_player_id, _controller._deferred_skill_settlements.size()])
+	return true
+
+
+## 验证【咬它】经真实回合开始序列授予刻律德菈的独立额外出牌阶段内，堪杀触发奇袭“然后”步骤时不再活锁。
+##
+## 与 `_test_mice_kancha_qixi_settlement_liveness` 的区别（后者为单元级假阴性）：该用例直接调用秘策的
+## phaseEnd 回调，外层不存在规则序列，`_top_sequence_waits_for_child_phase()` 恒为假，因此“子阶段屏障”
+## 从未成立，卡死根因不会被覆盖。本用例必须让额外出牌阶段产生于**真实回合开始序列内部**
+## （`_start_turn` → `turn_start_service` → phaseBefore 派发【咬它】），使屏障真实成立后再提交堪杀③。
+##
+## 断言链：①延后结算队列在有限帧内排空；②`has_pending_play_interaction()` 最终为假；③出牌窗口被重建
+## （`_has_active_play_choice()` 为真，可用真实 end_play 动作结束额外阶段）；④轮回节/军功有明确推进即
+## 可观察进展；⑤结束后控制权与阶段交还原回合角色。两种军功局面用于判别根因：
+## 军功 6 进入奇袭重置分支并登记延后结算（修复前必卡），军功 5 只积累一枚（修复前后都不卡）。
+func _test_yaota_extra_phase_kansha_qixi_real_timing() -> bool:
+	# 军功初始数量；6 达到奇袭重置阈值（进入 defer_settlement 分支），5 只走积累分支作为对照。
+	var merit_scenarios: Array[int] = [6, 5]
+	# 期望的堪杀最终轮回节索引；军功6时堪杀③自行推进到轮回2①、奇袭再推进一节到②；
+	# 军功5时只有堪杀自己的推进，停在轮回2①。该差异同时证明“跨节”推进确实发生。
+	var expected_final_sections: Array[int] = [1, 0]
+	for scenario_index: int in range(merit_scenarios.size()):
+		# 本局面使用的军功初始值；用于推导期望的最终军功数量。
+		var merit_before: int = merit_scenarios[scenario_index]
+		_reset_state(3)
+		# 轮回技服务；本测试文件其余场景不涉及轮回技，按需补建并绑定当前控制器。
+		if _controller.reincarnation_skill_service == null:
+			_controller.reincarnation_skill_service = ReincarnationSkillService.new()
+		_controller.reincarnation_skill_service.configure(_controller)
+		# 阶段切换立即执行，使本用例可以在有限帧内观察完整恢复链。
+		_controller.game_flow_interval_seconds = 0.0
+		# 回合角色星/穹持有【咬它】；受益人刻律德菈持有【堪杀】与【奇袭】。
+		_controller.state.get_player(0).character_id = "qiong_huanyv"
+		_controller.state.get_player(1).character_id = "kelvdela"
+		# 【咬它】实例；由真实 phaseBefore 时机派发，不使用直接回调。
+		var yaota: SkillDefinition = _install_single_skill(0, "yaota")
+		# 军功来源技能；奇袭据此识别“拥有军功的角色视为拥有奇袭”。
+		_install_single_skill(1, "shengbian")
+		# 【堪杀】实例；③直接携带伤害目标，因此不产生中间弃牌窗口（比①②更严苛）。
+		var kansha: SkillDefinition = _install_single_skill(1, "kansha")
+		# 【奇袭】实例；军功达阈值时通过 defer_settlement 登记“进入下一个轮回节”的然后步骤。
+		_install_single_skill(1, "qixi")
+		if yaota == null or kansha == null:
+			return _fail("yaota_real_timing_skill_missing scenario=%d" % scenario_index)
+		# 【咬它】的费用牌；原文费用为弃置一张手牌，花色决定整局额度。
+		var cost_card: CardInstance = _add_hand_card(0, "sha", "club", 7)
+		# 把堪杀推进到③（零基索引2）；推进本身不得清空出牌阶段额度，因此必须在阶段入口之后另行校验。
+		_controller.enter_next_reincarnation_section(1, "kansha")
+		_controller.enter_next_reincarnation_section(1, "kansha")
+		if kansha.get_reincarnation_section_index() != 2:
+			return _fail("yaota_real_timing_section_setup scenario=%d state=%s" % [scenario_index, kansha.get_reincarnation_state()])
+		# 军功初始数量；标记来源与授予方一致，奇袭才能读取到该标记。
+		_controller.change_player_mark_count(1, "jungong", merit_before, {"icon":"军", "name":"军功", "description":"回归用军功", "source_skill_id":"shengbian"})
+		# 真实回合开始入口：先走机缘/阿哈时刻前置，再由 turn_start_service 建立回合开始规则序列并派发 phaseBefore。
+		_controller._start_turn(0)
+		# 第一层请求上下文；必须是【咬它】的费用+目标组合选择。
+		var yaota_request_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
+		if str(yaota_request_context.get("kind", "")) != "yaota_cost_target":
+			return _fail("yaota_real_timing_request scenario=%d request=%s" % [scenario_index, _controller._pending_card_choice])
+		# 目标1（刻律德菈）没有任何欢愉技，因此【咬它】改为令其执行一个额外的出牌阶段。
+		if not _submit_pending_choice(0, [cost_card.uid], [1], true):
+			return false
+		# 独立额外出牌阶段已经建立，且阶段角色切换为受益人。
+		if int(_controller._active_independent_play_phase.get("player_id", -1)) != 1 or _controller.state.current_player_id != 1 or _controller.state.current_phase != "play":
+			return _fail("yaota_real_timing_extra_phase scenario=%d active=%s phase=%s/%d" % [scenario_index, _controller._active_independent_play_phase, _controller.state.current_phase, _controller.state.current_player_id])
+		# 真实时序屏障：外层回合开始序列尚未完成，且它的 enclosing_play_phase_id 属于额外出牌阶段之前。
+		# 这正是单元级假阴性用例缺失的死锁前提，必须先断言它成立，否则本用例退化为与旧用例同等的强度。
+		if not _controller._top_sequence_waits_for_child_phase():
+			return _fail("yaota_real_timing_barrier_missing scenario=%d continuations=%s" % [scenario_index, _controller._rule_continuations.to_array()])
+		# 额外出牌阶段的出牌窗口必须已经建立，玩家/AI 才有机会继续行动。
+		if not _controller._has_active_play_choice():
+			return _fail("yaota_real_timing_no_play_choice scenario=%d" % scenario_index)
+		# 结算前进度观测基准；用于断言本次操作产生了明确可观察进展。
+		var action_sequence_before: int = _controller.state.action_sequence
+		# 堪杀③动作；目标2为另一名存活角色，伤害量为固定1。
+		var kansha_action: PlayerAction = PlayerAction.from_dict({
+			"action_type":"use_skill",
+			"actor_id":1,
+			"target_ids":[2],
+			"payload":{"skill_id":"kansha", "target_ids":[2]},
+		})
+		if not _controller._submit_ai_action(kansha_action):
+			return _fail("yaota_real_timing_kansha_rejected scenario=%d pending=%s" % [scenario_index, _controller._pending_card_choice])
+		# 延后结算只能通过每帧唯一唤醒推进；用有限帧预算等待，绝不做无界阻塞等待。
+		var settled: bool = false
+		for frame_index: int in range(EXTRA_PHASE_SETTLEMENT_FRAME_BUDGET):
+			await get_tree().process_frame
+			if _controller._deferred_skill_settlements.is_empty() and not _controller.has_pending_play_interaction() and _controller._has_active_play_choice() and not _controller._active_independent_play_phase.is_empty():
+				settled = true
+				break
+		if not settled:
+			return _fail("yaota_real_timing_livelock scenario=%d deferred=%d pending_interaction=%s active_play_choice=%s active_phase=%s barrier=%s continuations=%s" % [scenario_index, _controller._deferred_skill_settlements.size(), _controller.has_pending_play_interaction(), _controller._has_active_play_choice(), _controller._active_independent_play_phase, _controller._top_sequence_waits_for_child_phase(), _controller._rule_continuations.to_array()])
+		# 可观察进展：动作序号必须前进，且堪杀轮回节确实推进到期望位置。
+		if _controller.state.action_sequence <= action_sequence_before or kansha.get_reincarnation_section_index() != expected_final_sections[scenario_index]:
+			return _fail("yaota_real_timing_progress scenario=%d action=%d/%d state=%s" % [scenario_index, action_sequence_before, _controller.state.action_sequence, kansha.get_reincarnation_state()])
+		# 军功记账：阈值局面移除5枚（6→1），对照局面只积累一枚（5→6）。
+		var expected_merit: int = merit_before - 5 if merit_before >= 6 else merit_before + 1
+		if int(_controller.get_player_mark(1, "jungong").get("count", 0)) != expected_merit:
+			return _fail("yaota_real_timing_merit scenario=%d merit=%s expected=%d" % [scenario_index, _controller.get_player_mark(1, "jungong"), expected_merit])
+		# 结束额外阶段：必须走真实 end_play 动作，证明被重建的出牌窗口确实可交互。
+		if not _controller.submit_action(PlayerAction.new("end_play", 1)):
+			return _fail("yaota_real_timing_end_play_rejected scenario=%d pending=%s" % [scenario_index, _controller._pending_card_choice])
+		var restored: bool = false
+		for frame_index: int in range(EXTRA_PHASE_SETTLEMENT_FRAME_BUDGET):
+			await get_tree().process_frame
+			if _controller._active_independent_play_phase.is_empty() and _controller.state.current_player_id == 0 and _controller._deferred_skill_settlements.is_empty():
+				restored = true
+				break
+		if not restored:
+			return _fail("yaota_real_timing_restore scenario=%d active=%s current=%d phase=%s deferred=%d" % [scenario_index, _controller._active_independent_play_phase, _controller.state.current_player_id, _controller.state.current_phase, _controller._deferred_skill_settlements.size()])
 	return true
 
 

@@ -47,6 +47,11 @@ signal voice_presentation_requested(presentation_data: Dictionary)
 ## 与其它表现信号同为纯通知：控制器不等待订阅者，也不把任何表现结果写回规则流程。
 signal ahha_moment_started(performance_count: int, source: String)
 
+## 表现事件名：阿哈时刻演出开始。它是线上事件名字符串，同时是客户端表现事件白名单的匹配键。
+## 契约：负载只含已公开的参演数量与来源常量，不含任何隐藏知识；一旦发布即属协议，
+## 改名必须同步客户端白名单并走 PROTOCOL_VERSION 变更，不得只改一侧。
+const PRESENTATION_EVENT_AHHA_MOMENT_STARTED: String = "ahha_moment_started"
+
 ## 音频请求类别：技能发动语音；音频服务据此按“角色专属 → 通用”顺序解析候选文件。
 const VOICE_KIND_SKILL: String = "skill"
 
@@ -307,6 +312,11 @@ signal conquest_exit_save_ready(save_data: Dictionary)
 
 ## 单帧统一结算管线最多恢复的后续步骤数；默认256防止异常扩展形成同步死循环，达到上限后会延后一帧继续且不会越过未完成事件。
 @export_range(16, 4096, 16) var max_settlement_steps_per_pass: int = 256
+
+## 子阶段屏障早退前，单次管线最多消费的“归属当前独立额外出牌阶段”的延后结算条目数；默认8。
+## 用途：防止某个技能在然后步骤里重新登记同阶段条目形成自旋；达到上限后由既有唯一延后唤醒在下一帧继续，不丢条目。
+## 是否需要运行时动态修改：通常不需要，仅在排查异常扩展内容时才临时调大。
+@export_range(1, 64, 1) var max_phase_scoped_settlement_drains_per_pass: int = 8
 
 ## 每个同步分片最多检查的同一时机技能数；默认64保持常规时机同步完成，大型扩展则分片续接以避免主线程长时间占用。
 @export_range(8, 512, 8) var max_trigger_handlers_per_slice: int = 64
@@ -747,6 +757,11 @@ var _active_extra_discard_phase: Dictionary = {}
 
 ## 当前由技能插入、可属于非当前回合角色的独立额外出牌阶段；保存原回合展示与技能完成回调，空字典表示没有活动阶段。
 var _active_independent_play_phase: Dictionary = {}
+
+## 出牌阶段实例号；每次进入任意（普通 / 转换 / 排队额外 / 独立额外）出牌阶段由 _note_play_phase_entered 递增。
+## 取值含义：0 表示尚未进入过任何出牌阶段；>= 1 为当前阶段实例号。它让轮回节额度拥有身份，旧阶段额度在新阶段自动失效。
+## 需要随存档存取（turn_flow），否则读档后计数器归零会让既有额度被误判为新阶段而清空。
+var _play_phase_scope_sequence: int = 0
 ## 等待嵌套规则选择结束后继续的技能结算队列；仅保存技能 ID、持有者 ID 与可序列化上下文，不持有 Callable 或技能对象。
 var _deferred_skill_settlements: Array[Dictionary] = []
 
@@ -898,6 +913,8 @@ func _ready() -> void:
 		public_card_choice_display_changed.connect(_replicate_public_card_choice_display_event)
 	if not match_finished.is_connected(_replicate_match_finished_event):
 		match_finished.connect(_replicate_match_finished_event)
+	if not ahha_moment_started.is_connected(_replicate_ahha_moment_started_event):
+		ahha_moment_started.connect(_replicate_ahha_moment_started_event)
 	if not GameSettings.ai_response_delay_changed.is_connected(_on_ai_response_delay_changed):
 		GameSettings.ai_response_delay_changed.connect(_on_ai_response_delay_changed)
 	if not GameSettings.game_speed_changed.is_connected(_on_game_speed_changed):
@@ -1001,10 +1018,25 @@ func get_stall_diagnostics() -> Dictionary:
 				break
 	if not monitorable:
 		return {"monitorable": false, "waiting_for_human": false, "fingerprint": ""}
+	# 活动独立额外出牌阶段实例号；无独立阶段时为 -1，用于区分“屏障由哪个子阶段持有”。
+	var diagnostics_active_play_phase_id: int = int(_active_independent_play_phase.get("phase_id", -1))
+	# 续接栈顶规则序列记录的外层阶段身份；-1表示该序列不属于任何独立额外出牌阶段。
+	# 只有“屏障成立 + 阶段归属延后条目数量大于0”同时出现才是本次修复针对的活锁前兆，因此三个值必须一起暴露。
+	var diagnostics_top_sequence_phase_id: int = -1
+	var diagnostics_top_continuation: Dictionary = _rule_continuations.peek()
+	if str(diagnostics_top_continuation.get("continuation_type", "")) == "rule_sequence":
+		# 栈顶规则序列对象；已失效序列不参与诊断，避免输出过期阶段身份。
+		var diagnostics_sequence: RuleStepSequence = _rule_sequences.get(int((diagnostics_top_continuation.get("context", {}) as Dictionary).get("sequence_id", -1))) as RuleStepSequence
+		if diagnostics_sequence != null:
+			diagnostics_top_sequence_phase_id = int(diagnostics_sequence.enclosing_play_phase_id)
 	return {
 		"monitorable": true,
 		"waiting_for_human": is_waiting_for_human_input(),
 		"fingerprint": _compose_stall_fingerprint(),
+		# 屏障与阶段归属延后结算的只读诊断三元组；本函数只读，绝不写入故障计数或修改任何队列。
+		"active_independent_play_phase_id": diagnostics_active_play_phase_id,
+		"top_sequence_enclosing_play_phase_id": diagnostics_top_sequence_phase_id,
+		"phase_scoped_deferred_settlement_count": _count_phase_scoped_deferred_settlements(diagnostics_active_play_phase_id),
 	}
 
 
@@ -1694,6 +1726,8 @@ func _reset_per_match_progress_state() -> void:
 	_card_presentation_sequence = 0
 	_draw_presentation_batch_sequence = 0
 	_active_draw_presentation_batch.clear()
+	# 出牌阶段实例号属于每局私有游标；重开一局必须归零，避免上一局的阶段身份被新一局误认为“本阶段”。
+	_play_phase_scope_sequence = 0
 	_judgment_flow_token += 1
 	_judgment_flow_in_progress = false
 	_judgment_resume_needs_result_pause = false
@@ -8107,8 +8141,8 @@ func _start_independent_extra_play_phase(change_completed: bool = false) -> void
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
 	player.play_phase_card_use_limit_exempt_history.clear()
-	if reincarnation_skill_service != null:
-		reincarnation_skill_service.on_play_phase_started(player_id)
+	# 独立额外出牌阶段同样是新的阶段实例；唯一的阶段重置入口负责清空轮回节额度并颁发实例号。
+	_note_play_phase_entered(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true, "independent_phase":true}, {}, int(_active_independent_play_phase.get("parent_event_id", -1)))
 	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true, "independent_phase":true}, int(_active_independent_play_phase.get("parent_event_id", -1)), Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_complete_active_independent_play_phase").bind(true))
 
@@ -8167,6 +8201,25 @@ func _get_effective_rule_phase() -> String:
 	if state.current_phase == "choice" and not _pending_card_choice.is_empty():
 		return str(_pending_card_choice.get("resume_phase", ""))
 	return state.current_phase
+
+
+## 判断当前是否为指定玩家自己的出牌阶段；读取选择窗口背后的真实规则阶段。
+## 供轮回技额度登记等业务代码使用：嵌套选择期间公开阶段会临时写成choice，裸比较会整条漏记额度。
+func is_play_phase_of(player_id: int) -> bool:
+	return state != null and state.current_player_id == player_id and _get_effective_rule_phase() == "play"
+
+
+## 返回当前出牌阶段实例号；仅供状态服务判断既有额度是否仍属于本阶段，不参与任何结算顺序。
+func get_play_phase_scope_id() -> int:
+	return _play_phase_scope_sequence
+
+
+## 进入任意出牌阶段时唯一的重置入口；所有阶段入口只能调用本函数，不得直接调用轮回状态服务。
+## 递增实例号后再交给服务：即使某个阶段入口漏调本函数，实例号错配也会让旧额度自动失效。
+func _note_play_phase_entered(player_id: int) -> void:
+	_play_phase_scope_sequence += 1
+	if reincarnation_skill_service != null:
+		reincarnation_skill_service.on_play_phase_started(player_id, _play_phase_scope_sequence)
 
 
 ## 根据额外阶段的插入位置确定结束后继；额外出牌阶段内继续插入时继承当前活动阶段的既定后继。
@@ -9525,6 +9578,12 @@ func begin_reincarnation_skill_activation(player_id: int, skill_id: String) -> b
 ## 完成一次轮回技效果并推进到下一轮回节；最后一节和永劫状态自动进入下一轮回。
 func complete_reincarnation_skill_activation(player_id: int, skill_id: String) -> bool:
 	return reincarnation_skill_service != null and reincarnation_skill_service.complete_activation(player_id, skill_id)
+
+
+## 复位一次已经 begin 但效果未真正生效的轮回技发动；不登记额度、不推进轮回节。
+## 供技能在费用支付或目标校验失败时补偿调用，避免陈旧的“本次发动归属节”被后续无关的 complete 误登记。
+func cancel_reincarnation_skill_activation(player_id: int, skill_id: String) -> bool:
+	return reincarnation_skill_service != null and reincarnation_skill_service.cancel_activation(player_id, skill_id)
 
 
 ## 令指定轮回技进入下一个轮回节；永劫状态下保持当前节并增加轮回数。
@@ -12077,8 +12136,8 @@ func _start_converted_main_phase_as_play(player_id: int, original_phase: String,
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
 	player.play_phase_card_use_limit_exempt_history.clear()
-	if reincarnation_skill_service != null:
-		reincarnation_skill_service.on_play_phase_started(player_id)
+	# 转换得到的出牌阶段同样是新的阶段实例；唯一的阶段重置入口负责清空轮回节额度并颁发实例号。
+	_note_play_phase_entered(player_id)
 	_active_converted_play_phase_context = {"player_id":player_id, "original_phase":original_phase, "return_point":return_point}
 	# 运行时事件明确记录阶段转换来源；extra_phase保持缺失，日志与监听者不会把它误认作额外阶段。
 	var phase_event_data: Dictionary = {"player_id":player_id, "transformed_from_phase":original_phase}
@@ -12107,8 +12166,8 @@ func _enter_play_phase(player_id: int, change_completed: bool = false) -> void:
 	player.slash_count = 0
 	player.play_phase_card_use_history.clear()
 	player.play_phase_card_use_limit_exempt_history.clear()
-	if reincarnation_skill_service != null:
-		reincarnation_skill_service.on_play_phase_started(player_id)
+	# 普通出牌阶段是新的阶段实例；唯一的阶段重置入口负责清空轮回节额度并颁发实例号。
+	_note_play_phase_entered(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id}, {}, _current_turn_event_id)
 	if bool(player.skipped_phases.get("play", false)):
 		add_log("%s跳过出牌阶段。" % format_player_state_log_name(player))
@@ -12206,6 +12265,10 @@ func defer_skill_settlement(skill_owner_id: int, skill_id: String, context: Dict
 		"settlement_key":settlement_key,
 		"settlement_visits":settlement_visits,
 		"chain_step_count":chain_step_count,
+		# 本条延后结算归属的独立额外出牌阶段实例号；-1表示登记时不处于独立额外出牌阶段。
+		# 引入原因：子阶段屏障会挡住外层规则续接，若无法区分“属于当前子阶段自己的然后步骤”与“父序列遗留条目”，
+		# 子阶段的延后结算将永远排在屏障之后而无法被消费，形成零进展活锁。
+		"registered_play_phase_id":int(_active_independent_play_phase.get("phase_id", -1)),
 	})
 	# 同步入口忘记显式重驱时，唯一延后唤醒会补齐结算；已在管线内时当前while会自然取下一项。
 	# 注意“已在管线内”并不保证当次循环一定能消费到本项：排空可能因为独立子阶段或待选请求提前返回，
@@ -12634,6 +12697,34 @@ func _run_settlement_pipeline_pass() -> void:
 			continue
 		# 栈顶父内容等待独立阶段时，只让该阶段自己的输入或子序列驱动；不能排空外层时机。
 		if _top_sequence_waits_for_child_phase():
+			# 子阶段自己的技能“然后”步骤仍必须由子阶段驱动排空：外层规则续接继续被屏障挡住，
+			# 但阶段归属等于当前活动独立阶段的延后条目必须在早退之前消费，否则它们永远排在屏障之后。
+			# 只处理“归属等于当前阶段实例号”的条目，-1（父序列遗留）一律不动，因此不改变外层时机顺序。
+			var phase_scoped_settlement_drains: int = 0
+			while phase_scoped_settlement_drains < maxi(max_phase_scoped_settlement_drains_per_pass, 1):
+				# 当前活动独立阶段实例号；空字典表示屏障来自额外弃牌阶段等其它子阶段。
+				var active_phase_id: int = int(_active_independent_play_phase.get("phase_id", -1))
+				if active_phase_id < 0:
+					break
+				# 待消费的阶段归属延后条目下标；没有匹配时结束排空。
+				var phase_scoped_index: int = _find_phase_scoped_deferred_settlement_index(active_phase_id)
+				if phase_scoped_index < 0:
+					break
+				if not _resume_deferred_skill_settlements(phase_scoped_index):
+					break
+				phase_scoped_settlement_drains += 1
+			if phase_scoped_settlement_drains > 0:
+				# 排空后 has_pending_play_interaction() 自然转假，此时必须按与正常出牌阶段完全相同的方式恢复出牌窗口；
+				# 这里复用既有的“空闲出牌窗口重建”入口，不新增任何独立阶段专用推进或专用结算队列。
+				resume_play_phase_choice()
+			# 达到排空上限后仍然残留阶段归属条目，说明某个内容在同阶段内不断重新登记同一步骤；
+			# 记录一次可诊断的局部熔断，让这类异常不再表现为无法解释的随机卡死。
+			if phase_scoped_settlement_drains >= maxi(max_phase_scoped_settlement_drains_per_pass, 1) and _has_phase_scoped_deferred_settlement(int(_active_independent_play_phase.get("phase_id", -1))):
+				_record_settlement_fault("phase_scoped_settlement_drain_limit", {
+					"active_independent_play_phase_id":int(_active_independent_play_phase.get("phase_id", -1)),
+					"phase_scoped_deferred_settlement_count":_count_phase_scoped_deferred_settlements(int(_active_independent_play_phase.get("phase_id", -1))),
+					"drain_count":phase_scoped_settlement_drains,
+				})
 			return
 		# 同一规则时机尚未询问的技能必须先完成，不能让原操作的后半段越过触发顺序。
 		_resume_deferred_rule_timing_dispatches()
@@ -14190,8 +14281,8 @@ func _start_extra_play_phase(player_id: int, change_completed: bool = false) -> 
 	# 阶段限次牌使用历史；额外阶段必须从空历史开始，回合级【酒】与完整用牌记录仍保留在 card_use_history。
 	player.play_phase_card_use_history.clear()
 	player.play_phase_card_use_limit_exempt_history.clear()
-	if reincarnation_skill_service != null:
-		reincarnation_skill_service.on_play_phase_started(player_id)
+	# 排队额外出牌阶段是新的阶段实例；唯一的阶段重置入口负责清空轮回节额度并颁发实例号。
+	_note_play_phase_entered(player_id)
 	_record_runtime_event("phaseUse", "phase", {"player_id":player_id, "extra_phase":true}, {}, _current_turn_event_id)
 	_begin_phase_lifecycle("phaseUse", player_id, {"turn_number":state.turn_number, "extra_phase":true}, _current_turn_event_id, Callable(self, "_resume_play_phase_body").bind(player_id), Callable(self, "_end_play_phase").bind(player_id, false))
 
@@ -15295,6 +15386,7 @@ func _build_conquest_save_data(resume_kind: String, acting_player_id: int) -> Di
 			"active_converted_play_phase_context": _active_converted_play_phase_context.duplicate(true),
 			"started_phase_lifecycles": _started_phase_lifecycles.duplicate(true),
 			"cards_used_this_turn_by_player": _cards_used_this_turn_by_player.duplicate(true),
+			"play_phase_scope_sequence": _play_phase_scope_sequence,
 		},
 		"players": players_data,
 		"draw_pile": draw_pile_data,
@@ -15544,6 +15636,9 @@ func resume_conquest_match(save_data: Dictionary) -> bool:
 		state.current_player_id = acting_player_id
 		state.current_phase = "play"
 		state.phase_index = int(save_data.get("phase_index", 3))
+		# 读档进入出牌阶段同样是一次阶段入口：必须清空轮回节额度并颁发新的实例号。
+		# 原先该分支直接写 current_phase = "play" 而不重置，会让上一会话的额度被沿用，造成“过度限制”。
+		_note_play_phase_entered(acting_player_id)
 		# 新的回合运行时父事件；旧事件ID属于上一次会话，恢复的阶段生命周期End/After改挂到本事件。
 		_current_turn_event_id = _record_runtime_event("phase", "turn", {"player_id":acting_player_id, "turn_number":state.turn_number, "round_number":state.round_number, "resumed_from_save":true})
 		_remap_restored_phase_lifecycle_parents(_current_turn_event_id)
@@ -15608,6 +15703,8 @@ func _restore_conquest_turn_flow_state(turn_flow: Dictionary) -> void:
 	_active_converted_play_phase_context = (turn_flow.get("active_converted_play_phase_context", {}) as Dictionary).duplicate(true)
 	_started_phase_lifecycles = (turn_flow.get("started_phase_lifecycles", {}) as Dictionary).duplicate(true)
 	_cards_used_this_turn_by_player = _to_int_keyed_dictionary(turn_flow.get("cards_used_this_turn_by_player", {}) as Dictionary)
+	# 出牌阶段实例号随存档恢复；缺失（旧存档）按0处理，服务侧随即由首个阶段入口重新颁发，不会误清空。
+	_play_phase_scope_sequence = maxi(int(turn_flow.get("play_phase_scope_sequence", 0)), 0)
 
 
 ## 把任意来源字典的键统一转换为整数玩家ID；容器值深复制，标量值原样保留。
@@ -16249,6 +16346,10 @@ func _on_network_game_event_received(event_type: String, event_payload: Dictiona
 		public_card_choice_display_changed.emit((event_payload.get("display", {}) as Dictionary).duplicate(true))
 	elif event_type == "match_finished":
 		match_finished.emit(str(event_payload.get("winner", "")))
+	elif event_type == PRESENTATION_EVENT_AHHA_MOMENT_STARTED:
+		# 房主广播的阿哈时刻演出开始；复用既有表现信号交给表现层播放过场，
+		# 客户端不因此重建规则对象、不配置 AhhaMomentSystem，也不执行任何概率判定与欢愉技队列。
+		ahha_moment_started.emit(int(event_payload.get("performance_count", 0)), str(event_payload.get("source", "")))
 	elif event_type == "identity_behavior":
 		# 房主广播的公开目标行为；客户端用本地身份模型重放同一推断，网络只承载行为本身而非房主算好的标记结果。
 		_apply_replayed_identity_behavior(
@@ -16710,6 +16811,20 @@ func _replicate_public_card_choice_display_event(display_data: Dictionary) -> vo
 func _replicate_match_finished_event(winner: String) -> void:
 	if network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_match_active():
 		network_gateway.broadcast_game_event("match_finished", {"winner":winner})
+
+
+## 广播阿哈时刻演出开始；客户端据此播放同一次过场动画并自行决定是否暂停本机表现。
+## 与其它 _replicate_* 一致，只在本机是房主且对局活跃时发送，离线与客户端模式零副作用。
+## 不做去重：单次性由 AhhaMomentSystem 的本轮额度保证，重复广播本身就是“重播”语义。
+## 只广播表现，不含暂停指令：客户端是“因为自己收到表现事件而自行暂停”，不是被远端命令暂停。
+func _replicate_ahha_moment_started_event(performance_count: int, source: String) -> void:
+	if network_gateway == null or not network_gateway.is_lan_host() or not network_gateway.is_lan_match_active():
+		return
+	# 可发送负载；参演数量与来源常量都取自系统公开常量，本身不含任何隐藏知识，无需裁剪。
+	network_gateway.broadcast_game_event(PRESENTATION_EVENT_AHHA_MOMENT_STARTED, {
+		"performance_count":performance_count,
+		"source":source,
+	})
 
 
 ## 返回当前规则调用可关联的父事件 ID；无有效摘要时回退到长期对局根事件。
@@ -17875,3 +17990,37 @@ func _top_sequence_waits_for_child_phase() -> bool:
 	# 当前步骤内容；失效序列由普通出栈路径回收，不形成永久屏障。
 	var sequence: RuleStepSequence = _rule_sequences.get(int((continuation.get("context", {}) as Dictionary).get("sequence_id", -1))) as RuleStepSequence
 	return sequence != null and _sequence_waits_for_child_phase(sequence)
+
+
+## 返回是否存在归属指定独立额外出牌阶段实例的延后结算条目；纯查询，不修改任何队列。
+##
+## 语义：条目在 defer_skill_settlement 时记录登记瞬间活动的独立阶段实例号，
+## 因此 phase_id 相等即表示“该然后步骤属于这个子阶段自己”，与父序列遗留的 -1 条目严格区分。
+## 传入 -1 或负数时始终返回 false：父序列遗留条目不属于任何子阶段，只能由外层时机正常排空。
+func _has_phase_scoped_deferred_settlement(phase_id: int) -> bool:
+	return _find_phase_scoped_deferred_settlement_index(phase_id) >= 0
+
+
+## 返回首个归属指定独立额外出牌阶段实例的延后结算条目下标；无匹配时返回 -1。
+##
+## 纯查询：不弹出、不修改队列顺序，调用方仍通过既有 _resume_deferred_skill_settlements(index) 消费。
+## 只返回第一个匹配项是为了保持原登记顺序，并与既有“每次只恢复一项”的排空契约一致。
+func _find_phase_scoped_deferred_settlement_index(phase_id: int) -> int:
+	if phase_id < 0:
+		return -1
+	for settlement_index: int in range(_deferred_skill_settlements.size()):
+		if int(_deferred_skill_settlements[settlement_index].get("registered_play_phase_id", -1)) == phase_id:
+			return settlement_index
+	return -1
+
+
+## 统计归属指定独立额外出牌阶段实例的延后结算条目数量；仅用于诊断输出与故障详情，不修改队列。
+func _count_phase_scoped_deferred_settlements(phase_id: int) -> int:
+	if phase_id < 0:
+		return 0
+	# 命中计数；逐项按键读取，缺字段的旧记录按 -1 处理，因此永远不会被计入任何真实阶段。
+	var matched_count: int = 0
+	for settlement: Dictionary in _deferred_skill_settlements:
+		if int(settlement.get("registered_play_phase_id", -1)) == phase_id:
+			matched_count += 1
+	return matched_count
