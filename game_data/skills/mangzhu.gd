@@ -5,9 +5,10 @@ extends SkillDefinition
 ## 若有至少两种颜色相同，你摸两张牌。
 ##
 ## 三条实现要点：
-## 1) **两次单选而不是一次多选**：第二张的候选集合由「颜色与第一张不同」直接构造，
-##    因此「颜色不同」是候选集合的构造性质，而不是提交后校验的规则。玩家与 AI
-##    都不可能选出非法组合，也就不存在「非法提交→重问」的循环。
+## 1) **一次多选，颜色互斥由权威组合表表达**：本技能把「所有单张」与「所有异色两张组合」
+##    预先枚举进 `context.valid_card_combinations`，玩家因此可以一次点选两张牌，
+##    而界面上会依据同一张表把「与已选牌同色」的候选项压暗并停止接收点击；
+##    控制器提交时再用同一张表复核。因此「颜色不同」既不需要分两次操作，也不可能被绕过。
 ## 2) **获得的颜色只在摸牌阶段内累计**：用 `turn_number` + `current_phase == "draw"`
 ##    双条件过滤 `gainAfter`。获得类时机的 `player_id` 就是获得方，配合 `role="player"`
 ##    天然只命中砂金自己的获得，无需再按玩家 ID 过滤。
@@ -20,7 +21,7 @@ const DRAW_PHASE_NAME: String = "draw"
 const HAND_ZONE_NAME: String = "hand"
 ## 无色牌的稳定标识；无色牌既不能作为费用，也不能让颜色重合，因此两侧都跳过。
 const COLORLESS: String = "colorless"
-## 颜色去重后的最大种数；本项目只有红、黑两色，因此两次单选即可穷尽。
+## 颜色去重后的最大种数；本项目只有红、黑两色，因此一次最多点选两张异色牌即可穷尽。
 const MAX_DISTINCT_COLOURS: int = 2
 ## 每有一种颜色重合获得的护盾点数。
 const SHIELD_PER_COMMON_COLOUR: int = 1
@@ -28,18 +29,16 @@ const SHIELD_PER_COMMON_COLOUR: int = 1
 const DRAW_ON_BOTH_COLOURS: int = 2
 ## 「至少两种颜色相同」的阈值；用于区分只有1种重合与2种都重合。
 const BOTH_COLOURS_COMMON_COUNT: int = 2
-## 第一张牌的请求种类；恢复回调据此识别步骤。
-const CHOICE_KIND_FIRST: String = "mangzhu_pick_first"
-## 第二张牌的请求种类；恢复回调据此识别步骤。
-const CHOICE_KIND_SECOND: String = "mangzhu_pick_second"
+## 本次弃牌请求的种类；恢复回调据此识别步骤。
+const CHOICE_KIND_PICK: String = "mangzhu_pick"
 ## 请求与延迟上下文中共用的种类键名。
 const CHOICE_KIND_KEY: String = "kind"
-## 第一张弃置发生于嵌套结算期间时的延迟种类；嵌套选择收尾后重建第一张请求。
-const DEFER_BEGIN_FIRST_PICK: String = "mangzhu_defer_first_pick"
-## 第一张弃置引发嵌套结算时的延迟种类；嵌套选择收尾后再重建第二张请求。
-const DEFER_BEGIN_SECOND_PICK: String = "mangzhu_defer_second_pick"
-## 延迟上下文中携带「第一张牌颜色」的键名；第二张候选必须与它不同。
-const FIRST_COLOUR_KEY: String = "first_colour"
+## 摸牌阶段开始时的选择窗口遇到嵌套结算时的延迟种类；嵌套收尾后重建同一条请求。
+const DEFER_BEGIN_PICK: String = "mangzhu_defer_begin_pick"
+## 权威合法组合表在请求上下文中的键名；核心的界面与提交校验都读取该键。
+const VALID_COMBINATIONS_KEY: String = "valid_card_combinations"
+## 请求允许的最小选择张数；0表示允许「什么都不选就确认」，该确认按未发动处理（可取消窗口用取消表示放弃）。
+const MIN_SELECT: int = 0
 ## 发动公告中「重合颜色」的键名；取值为颜色字符串数组，便于界面与回放展示。
 const ACTIVATION_COMMON_KEY: String = "common_colours"
 ## 发动公告中「护盾点数」的键名。
@@ -52,16 +51,14 @@ const UNBOUND_TURN_NUMBER: int = -1
 const EQUIPMENT_SLOTS: Array[String] = ["weapon", "armor", "offensive_mount", "defensive_mount", "treasure"]
 ## 玩家选择的标题；与技能名一致，便于在同一界面里区分多个技能请求。
 const SKILL_TITLE: String = "盲注"
-## 第一张牌的提示文本；明确说明可以取消。
-const FIRST_PROMPT: String = "你可以弃置一张牌（弃置这些牌与本次摸牌同色的部分将换取护盾与摸牌），或取消"
-## 第二张牌的提示文本；说明第二张必须是另一种颜色。
-const SECOND_PROMPT: String = "你可以再弃置一张颜色不同的牌，或取消"
+## 选择窗口的提示文本；说明一次可以选最多两张异色牌，也可以取消放弃本次机会。
+const PICK_PROMPT: String = "你可以一次选出一至两张颜色不同的牌弃置（与本次摸牌同色的部分将换取护盾与摸牌），或取消"
 ## 确认提交的保底分；远高于任何单张牌面收益，使「是否弃牌」只由真实收益的小数部分决定。
 const AI_STEP_COMMIT_REWARD: float = 100.0
-## 第一张牌的建色价值；等价于「换来一次结算机会」的期望收益，约等于1点护盾。
+## 弃置一种颜色的建色价值；等价于「换来一次结算机会」的期望收益，约等于1点护盾。
 const AI_DISCARD_SETUP_VALUE: float = 1.2
-## 第二张牌的建色价值倍率；补齐两种颜色后，摸到的任意一张牌都必然与其中一种重合，
-## 因此第二张牌的边际价值明显高于第一张。
+## 弃置两种颜色的建色价值倍率；补齐两种颜色后，摸到的任意一张牌都必然与其中一种重合，
+## 因此第二种颜色的边际价值明显高于第一种。
 const AI_SECOND_COLOUR_BONUS: float = 2.0
 ## 费用牌保留价值的权重；避免为了小额收益弃置关键的【桃】或【闪】。
 const AI_COST_WEIGHT: float = 0.35
@@ -96,7 +93,7 @@ func install() -> void:
 	subscribe_timing("phaseDrawCancelled", _on_phase_draw_aborted, "player")
 
 
-## 摸牌阶段开始：重置本次记录，然后在存在可弃置牌时开放第一张请求。
+## 摸牌阶段开始：重置本次记录，然后在存在可弃置牌时开放选择窗口。
 func _on_phase_draw_begin(_event: RuleEvent) -> void:
 	if _owner_ready() == null:
 		return
@@ -104,12 +101,12 @@ func _on_phase_draw_begin(_event: RuleEvent) -> void:
 	if int(host.state.current_player_id) != owner_player_id or str(host.state.current_phase) != DRAW_PHASE_NAME:
 		return
 	_reset_phase_state()
-	if _collect_discard_candidates("").is_empty():
+	if _collect_discard_candidates().is_empty():
 		return
 	if host.has_nested_settlement_barrier():
-		defer_settlement({CHOICE_KIND_KEY:DEFER_BEGIN_FIRST_PICK})
+		defer_settlement({CHOICE_KIND_KEY:DEFER_BEGIN_PICK})
 		return
-	_begin_first_pick()
+	_begin_pick()
 
 
 ## 累计本阶段内获得的颜色；只有真实弃置过、且仍在同一回合的摸牌阶段内才记录。
@@ -148,86 +145,96 @@ func _on_phase_draw_aborted(_event: RuleEvent) -> void:
 	_reset_phase_state()
 
 
-## 恢复由本技能创建的选择；两步共用同一回调，按种类分派。
+## 恢复由本技能创建的选择；本技能只有一个选择窗口，按种类分派。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 请求种类；不是本技能的步骤时交回控制器继续查找其他技能。
 	var kind: String = str(context.get(CHOICE_KIND_KEY, ""))
-	if kind == CHOICE_KIND_FIRST:
+	if kind == CHOICE_KIND_PICK:
 		if response != null and response.confirmed:
-			_apply_first_pick(response.card_ids)
-		return true
-	if kind == CHOICE_KIND_SECOND:
-		if response != null and response.confirmed:
-			_apply_second_pick(response.card_ids)
+			_apply_pick(response.card_ids)
 		return true
 	return false
 
 
-## 恢复因嵌套结算暂停的步骤；两步各自独立命名，避免恢复时走错后续步骤。
+## 恢复因嵌套结算暂停的步骤；重新建立同一条选择窗口。
 func continue_settlement(context: Dictionary) -> bool:
 	# 延迟种类；未识别时交回控制器。
 	var kind: String = str(context.get(CHOICE_KIND_KEY, ""))
-	if kind == DEFER_BEGIN_FIRST_PICK:
-		_begin_first_pick()
-		return true
-	if kind == DEFER_BEGIN_SECOND_PICK:
-		_begin_second_pick(str(context.get(FIRST_COLOUR_KEY, "")))
+	if kind == DEFER_BEGIN_PICK:
+		_begin_pick()
 		return true
 	return false
 
 
-## 建立第一张牌的请求；候选为持有者手牌与装备区中所有有颜色的牌。
-func _begin_first_pick() -> void:
-	var candidates: Array[Dictionary] = _collect_discard_candidates("")
+## 建立本次选择窗口；候选为持有者手牌与装备区中所有有颜色的牌，一次最多选两张异色牌。
+func _begin_pick() -> void:
+	# 全部可弃置候选；顺序沿用核心的手牌区、装备区顺序。
+	var candidates: Array[Dictionary] = _collect_discard_candidates()
 	if candidates.is_empty():
 		return
-	var selected: Array[int] = request_card_selection(SKILL_TITLE, FIRST_PROMPT, candidates, 1, 1, true, {CHOICE_KIND_KEY:CHOICE_KIND_FIRST})
+	# 权威合法组合表；界面据此压暗同色候选，控制器据此复核提交。
+	var valid_combinations: Array = _build_valid_combinations(candidates)
+	var selected: Array[int] = request_card_selection(SKILL_TITLE, PICK_PROMPT, candidates, MIN_SELECT, MAX_DISTINCT_COLOURS, true, {CHOICE_KIND_KEY:CHOICE_KIND_PICK, VALID_COMBINATIONS_KEY:valid_combinations})
 	# 无正式对局 ID 的同步规则测试不会通过 continue_selection 回调，需在此直接应用返回结果。
 	if not host.has_pending_card_choice():
-		_apply_first_pick(selected)
+		_apply_pick(selected)
 
 
-## 处理第一张牌的选择结果：弃置成功后记录颜色，并在还有另一种颜色可弃时建立第二张请求。
-func _apply_first_pick(selected_uids: Array[int]) -> void:
-	if selected_uids.size() != 1:
+## 处理本次选择结果：按点选顺序逐张弃置并记录实际弃置成功的颜色。
+## 一张都没选（空确认）或全部弃置失败时按未发动处理，不产生任何记录。
+func _apply_pick(selected_uids: Array[int]) -> void:
+	if selected_uids.is_empty() or host == null:
 		return
-	# 实际弃置的牌的颜色；弃置失败（牌已离开区域）时为空，本次不产生记录。
-	var colour: String = _discard_one_card(selected_uids[0])
-	if colour.is_empty():
+	# 实际弃置成功的颜色；单张失败不影响其余牌，因此逐张调用统一弃置端口。
+	var discarded_colours: Array[String] = []
+	for card_uid: int in selected_uids:
+		# 本张牌的颜色；弃置失败时为空串，不写入记录。
+		var colour: String = _discard_one_card(card_uid)
+		if colour.is_empty():
+			continue
+		if not discarded_colours.has(colour):
+			discarded_colours.append(colour)
+	if discarded_colours.is_empty():
 		return
 	_active = true
-	if not _discarded_colours.has(colour):
-		_discarded_colours.append(colour)
-	# 弃置可能触发「当你弃置牌时」类技能并创建嵌套选择；此时不能立刻占用统一请求槽。
-	if host.has_nested_settlement_barrier():
-		defer_settlement({CHOICE_KIND_KEY:DEFER_BEGIN_SECOND_PICK, FIRST_COLOUR_KEY:colour})
-		return
-	_begin_second_pick(colour)
+	for colour: String in discarded_colours:
+		if not _discarded_colours.has(colour):
+			_discarded_colours.append(colour)
 
 
-## 建立第二张牌的请求；候选只保留颜色与第一张不同的牌，使「颜色不同」成为候选集合的构造性质。
-func _begin_second_pick(first_colour: String) -> void:
-	if _discarded_colours.size() >= MAX_DISTINCT_COLOURS:
-		return
-	var candidates: Array[Dictionary] = _collect_discard_candidates(first_colour)
-	if candidates.is_empty():
-		return
-	var selected: Array[int] = request_card_selection(SKILL_TITLE, SECOND_PROMPT, candidates, 1, 1, true, {CHOICE_KIND_KEY:CHOICE_KIND_SECOND, FIRST_COLOUR_KEY:first_colour})
-	# 同步规则测试路径：没有待处理请求说明结果已经同步返回。
-	if not host.has_pending_card_choice():
-		_apply_second_pick(selected)
-
-
-## 处理第二张牌的选择结果；取消或不合法时保留「只弃置了一张」的记录。
-func _apply_second_pick(selected_uids: Array[int]) -> void:
-	if selected_uids.size() != 1:
-		return
-	# 实际弃置的牌的颜色；空值表示牌已离开区域。
-	var colour: String = _discard_one_card(selected_uids[0])
-	if colour.is_empty():
-		return
-	if not _discarded_colours.has(colour):
-		_discarded_colours.append(colour)
+## 枚举权威合法组合：任意单张，以及任意两张异色牌；额外包含空组合，使「什么都不选就确认」
+## 通过提交校验并按未发动处理，而不是弹出难以理解的组合非法提示。
+func _build_valid_combinations(candidates: Array[Dictionary]) -> Array:
+	# 最终组合表；每项都是 UID 数组。
+	var result: Array = []
+	# 空组合；对应「确认但没有选择任何牌」。
+	result.append([])
+	# 每张候选的颜色；与候选同序，供两两组合时比较。
+	var colour_by_uid: Dictionary = {}
+	for candidate: Dictionary in candidates:
+		# 当前候选 UID；非法 UID 不进入组合表，避免生成永远无法提交的组合。
+		var card_uid: int = int(candidate.get("uid", -1))
+		if card_uid < 0:
+			continue
+		colour_by_uid[card_uid] = _candidate_colour(candidate)
+		result.append([card_uid])
+	for first_index: int in range(candidates.size()):
+		# 组合中的第一张候选；方向固定为「下标小的在前」，保证组合表不出现重复项。
+		var first_uid: int = int((candidates[first_index] as Dictionary).get("uid", -1))
+		if first_uid < 0:
+			continue
+		for second_index: int in range(first_index + 1, candidates.size()):
+			# 组合中的第二张候选；两张颜色相同则不构成合法组合。
+			var second_uid: int = int((candidates[second_index] as Dictionary).get("uid", -1))
+			if second_uid < 0:
+				continue
+			# 两张牌的颜色；任一为空说明牌已离开区域，不生成组合。
+			var first_colour: String = str(colour_by_uid.get(first_uid, ""))
+			var second_colour: String = str(colour_by_uid.get(second_uid, ""))
+			if first_colour.is_empty() or second_colour.is_empty() or first_colour == second_colour:
+				continue
+			result.append([first_uid, second_uid])
+	return result
 
 
 ## 按重合颜色结算护盾与摸牌；没有重合颜色时本次不产生任何效果。
@@ -257,8 +264,8 @@ func _reset_phase_state() -> void:
 	_gained_colours.clear()
 
 
-## 收集可以作为费用的候选；excluded_colour 非空时排除该颜色的牌，用于构造「颜色不同」的第二张候选。
-func _collect_discard_candidates(excluded_colour: String) -> Array[Dictionary]:
+## 收集可以作为费用的候选；无色牌不能参与「颜色不同」的构造，因此直接跳过。
+func _collect_discard_candidates() -> Array[Dictionary]:
 	# 最终候选；顺序沿用核心的手牌区、装备区顺序。
 	var result: Array[Dictionary] = []
 	if host == null:
@@ -266,11 +273,9 @@ func _collect_discard_candidates(excluded_colour: String) -> Array[Dictionary]:
 	# 持有者自己的手牌与装备区；本技能只弃置自己的牌，因此查看者与目标都是持有者。
 	var raw_candidates: Array[Dictionary] = host.call("get_hand_equipment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
 	for candidate: Dictionary in raw_candidates:
-		# 当前候选的颜色；无色牌不能参与「颜色不同」的构造，因此直接跳过。
+		# 当前候选的颜色；无色牌不参与组合枚举，也不下发为候选。
 		var colour: String = _candidate_colour(candidate)
 		if colour.is_empty() or colour == COLORLESS:
-			continue
-		if not excluded_colour.is_empty() and colour == excluded_colour:
 			continue
 		result.append(candidate)
 	return result
@@ -332,29 +337,51 @@ func _owner_ready() -> PlayerState:
 func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, action: Dictionary, evaluator: Object) -> float:
 	if evaluator == null:
 		return 0.0
-	# 请求种类；只有本技能的两个步骤参与评分，其他请求交回通用评分。
+	# 请求种类；只有本技能的选择窗口参与评分，其他请求交回通用评分。
 	var kind: String = str((choice_request.get("context", {}) as Dictionary).get(CHOICE_KIND_KEY, ""))
-	if kind != CHOICE_KIND_FIRST and kind != CHOICE_KIND_SECOND:
+	if kind != CHOICE_KIND_PICK:
 		return 0.0
 	# 动作载荷；取消是合法选择，按0分交回通用比较。
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	if not bool(payload.get("confirmed", false)):
 		return 0.0
-	# 本次选中的牌；数量恒为1，空数组表示协议异常，按不发动处理。
+	# 本次选中的牌；空数组表示「空确认」，按未发动处理并交回通用评分。
 	var selected_uids: Array = payload.get("selected_card_uids", []) as Array
 	if selected_uids.is_empty():
 		return 0.0
+	# 权威合法组合表；核心只会为合法组合生成动作，这里再校验一次以防上层伪造。
+	var valid_combinations: Array = (choice_request.get("context", {}) as Dictionary).get(VALID_COMBINATIONS_KEY, []) as Array
+	if not _is_valid_selection(valid_combinations, selected_uids):
+		return -AI_DECLINE_PENALTY
 	# 本步弃置的牌对持有者的保留价值总和。
 	var cost_value: float = 0.0
 	for uid_variant: Variant in selected_uids:
 		cost_value += float(evaluator.get_choice_card_value(authoritative_snapshot, choice_request, int(uid_variant), owner_player_id))
-	# 本步的建色价值；第二张牌补齐两种颜色后，摸到的任意一张牌都必然与其中一种重合，因此价值更高。
-	var setup_value: float = AI_DISCARD_SETUP_VALUE if kind == CHOICE_KIND_FIRST else AI_DISCARD_SETUP_VALUE * AI_SECOND_COLOUR_BONUS
-	# 净收益；为负说明这张牌比本次建色价值更贵，应当取消。
+	# 本步的建色价值；一次弃置两种颜色时摸到的牌必然与其中一种重合，因此价值更高。
+	var setup_value: float = AI_DISCARD_SETUP_VALUE if selected_uids.size() < MAX_DISTINCT_COLOURS else AI_DISCARD_SETUP_VALUE * AI_SECOND_COLOUR_BONUS
+	# 净收益；为负说明这些牌比本次建色价值更贵，应当取消。
 	var net_value: float = setup_value - cost_value * AI_COST_WEIGHT
 	if net_value <= 0.0:
 		return -AI_DECLINE_PENALTY
 	return AI_STEP_COMMIT_REWARD + net_value
+
+
+## 判断一组提交的 UID 是否精确等于组合表中的某一项；排序后比较，点击顺序不影响结论。
+func _is_valid_selection(valid_combinations: Array, selected_uids: Array) -> bool:
+	# 提交集合的排序副本；与组合表逐项精确比较。
+	var normalized_selected: Array[int] = []
+	for uid_variant: Variant in selected_uids:
+		normalized_selected.append(int(uid_variant))
+	normalized_selected.sort()
+	for combination_variant: Variant in valid_combinations:
+		# 当前组合的排序副本；UID 数量不同时不可能相等。
+		var normalized_combination: Array[int] = []
+		for uid_variant: Variant in combination_variant as Array:
+			normalized_combination.append(int(uid_variant))
+		normalized_combination.sort()
+		if normalized_combination == normalized_selected:
+			return true
+	return false
 
 
 ## 计算基础 AI 对一次结算的价值；本技能是被动触发，没有主动入口，因此主动动作恒为0分。
