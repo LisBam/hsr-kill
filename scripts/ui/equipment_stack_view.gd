@@ -133,6 +133,24 @@ func is_slot_equipped(slot: String) -> bool:
 	return _equipment.has(slot)
 
 
+## 返回指定实体 UID 当前所在装备槽的屏幕矩形；未装备、快照缺失或横条尚未建立时返回 valid=false。
+## 返回字典而不是裸 Rect2，避免用零矩形同时表达“装备栏左上角”与“查询失败”。
+## 调用方据此让离开装备区的实体牌从它真实所在的槽位起飞，而不是从武将牌或手牌区锚点凭空生成；
+## 该查询只读取最近一次公开快照与自身表现节点，不访问权威规则状态。
+func find_card_global_rect(card_uid: int) -> Dictionary:
+	for slot: String in EQUIPMENT_SLOT_ORDER:
+		# 当前槽位装备快照；空槽返回空字典，绝不能与负数或缺失的实体 UID 相等。
+		var equipment_card: Dictionary = _equipment.get(slot, {}) as Dictionary
+		if equipment_card.is_empty() or int(equipment_card.get("uid", -1)) != card_uid:
+			continue
+		# 当前槽位横条；配置变化期间可能尚未加入场景树，缺失时按“查不到”处理而不是回退到其他槽位。
+		var row: Button = _rows_by_slot.get(slot) as Button
+		if row == null or not is_instance_valid(row):
+			return {"valid":false, "rect":Rect2()}
+		return {"valid":true, "rect":row.get_global_rect()}
+	return {"valid":false, "rect":Rect2()}
+
+
 ## 返回指定装备栏当前是否以废除占位效果显示；仅读取最近一次公开快照。
 func is_slot_abolished(slot: String) -> bool:
 	return bool(_abolished_slots.get(slot, false))

@@ -1178,6 +1178,17 @@ func _run() -> void:
 	gained_local_player["hand"] = [gained_card_data]
 	gained_local_player["hand_count"] = 1
 	main_instance.call("_on_card_transfer_requested", gained_card_data, 5, "hand", 4, "hand")
+	# 前置飞行牌；非牌堆来源的本机获得必须先播放“真实来源 → 手牌区右侧入场点”，不得直接出现在手牌槽位。
+	if animation_layer._transfer_cards.size() != 1 or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(90003):
+		_fail("local_gain_flight flight=%d gates=%s" % [animation_layer._transfer_cards.size(), main_instance.get("_local_hand_gain_flight_gates")])
+		return
+	# 前置飞行牌面；起点必须是来源六号位的武将牌锚点，而不是统一的本地手牌区中心。
+	var gain_flight_card: CardView = animation_layer._transfer_cards.values()[0] as CardView
+	# 六号位期望来源锚点；与前面已验证的武将牌中心使用同一动画坐标空间。
+	var expected_gain_flight_start: Vector2 = main_instance.call("_get_player_indicator_position", 5) as Vector2
+	if not (gain_flight_card.position + gain_flight_card.get_card_size() * 0.5).is_equal_approx(expected_gain_flight_start):
+		_fail("local_gain_flight_origin:%s expected=%s" % [gain_flight_card.position + gain_flight_card.get_card_size() * 0.5, expected_gain_flight_start])
+		return
 	main_instance.call("_on_state_changed", gained_snapshot)
 	# 正式手牌视图映射；获得牌必须直接登记在当前手牌 UID 映射中。
 	var gained_card_views: Dictionary = main_instance.get("_card_views") as Dictionary
@@ -1189,8 +1200,9 @@ func _run() -> void:
 	var expected_gain_start_position: Vector2 = expected_gain_start_center - gained_hand_card.get_card_size() * 0.5
 	# 获得牌正式实例 ID；再次刷新相同快照后必须保持不变，证明没有重建临时替代节点。
 	var gained_card_instance_id: int = gained_hand_card.get_instance_id()
-	if gained_hand_card.get_parent() != hand_container or gained_hand_card.is_face_down or not gained_hand_card.global_position.is_equal_approx(expected_gain_start_position) or not (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003) or not animation_layer._transfer_cards.is_empty():
-		_fail("local_gain_entity parent=%s position=%s expected=%s back=%s transfers=%s" % [gained_hand_card.get_parent(), gained_hand_card.global_position, expected_gain_start_position, gained_hand_card.is_face_down, animation_layer._transfer_cards])
+	# 门闸期间的正式手牌节点；必须停在右侧入场点且尚未登记入场补间，否则会出现“先躺进手牌区又被重新飞入”的错位。
+	if gained_hand_card.get_parent() != hand_container or gained_hand_card.is_face_down or not gained_hand_card.global_position.is_equal_approx(expected_gain_start_position) or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003):
+		_fail("local_gain_gated parent=%s position=%s expected=%s back=%s" % [gained_hand_card.get_parent(), gained_hand_card.global_position, expected_gain_start_position, gained_hand_card.is_face_down])
 		return
 	# 动画中重复收到同一快照；正式手牌节点必须继续复用，补间不能因界面刷新被销毁。
 	main_instance.call("_on_state_changed", gained_snapshot)
@@ -1198,10 +1210,10 @@ func _run() -> void:
 		_fail("local_gain_entity_recreated")
 		return
 	await get_tree().create_timer(0.6).timeout
-	# 动画完成后的正式手牌节点；仍位于手牌容器、偏移归零且不再登记入场补间。
+	# 动画完成后的正式手牌节点；仍位于手牌容器、偏移归零、前置飞行牌已释放且门闸已解除。
 	gained_hand_card = (main_instance.get("_card_views") as Dictionary).get(90003) as CardView
-	if gained_hand_card.get_parent() != hand_container or not gained_hand_card.hand_entry_offset.is_zero_approx() or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003):
-		_fail("local_gain_entity_finish parent=%s offset=%s" % [gained_hand_card.get_parent(), gained_hand_card.hand_entry_offset])
+	if gained_hand_card.get_parent() != hand_container or not gained_hand_card.hand_entry_offset.is_zero_approx() or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90003) or not animation_layer._transfer_cards.is_empty() or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).is_empty():
+		_fail("local_gain_entity_finish parent=%s offset=%s transfers=%d gates=%s" % [gained_hand_card.get_parent(), gained_hand_card.hand_entry_offset, animation_layer._transfer_cards.size(), main_instance.get("_local_hand_gain_flight_gates")])
 		return
 	gained_hand_card.call("_on_mouse_entered")
 	await get_tree().process_frame
@@ -1331,6 +1343,125 @@ func _run() -> void:
 		_fail("reconcile_missing_final_move:%s" % [animation_layer._active_cards])
 		return
 	animation_layer.clear_presentations()
+	# ===== 卡牌交互动画连续性 =====
+	# 本地装备栏组件；装备区离场表现需要按实体 UID 查询它真实所在槽位的屏幕矩形。
+	var continuity_equipment_label: EquipmentStackView = main_instance.get_node("%EquipmentStack") as EquipmentStackView
+	# 手牌容器公开参数；整理过渡与槽位断言都以此为准，避免在测试里重复硬编码布局常量。
+	# 手牌整理过渡时长；等待它收敛后再取稳定槽位作为基准。
+	var continuity_relayout_seconds: float = float(hand_container.get("relayout_animation_seconds"))
+	# 手牌左侧安全边距；离场后存活的唯一手牌必须回到左侧第一个槽位。
+	var continuity_first_slot_x: float = float(hand_container.get("horizontal_padding"))
+	# 真实对局摸牌走 draw() 批次路径；该路径必须同样登记手牌入场并加门闸，否则新摸到的牌会直接出现在手牌槽位。
+	var continuity_batch_id: int = 4242
+	var continuity_batch_card_data: Dictionary = {"uid":90011, "definition_id":"shan", "suit":"club", "rank":4, "zone":"hand", "owner_id":4}
+	main_instance.call("_on_draw_presentation_batch_started", continuity_batch_id, 4)
+	# 批次内逐张转移信号；带批次标记的牌堆到手牌移动不单独播放，只填充批次。
+	var continuity_batch_move_data: Dictionary = continuity_batch_card_data.duplicate(true)
+	continuity_batch_move_data[MatchController.DRAW_PRESENTATION_BATCH_ID_KEY] = continuity_batch_id
+	main_instance.call("_on_card_transfer_requested", continuity_batch_move_data, -1, "draw_pile", 4, "hand")
+	if (main_instance.get("_pending_local_hand_gain_uids") as Dictionary).has(90011) or not animation_layer._transfer_cards.is_empty():
+		_fail("batch_draw_collected_early:%s/%s" % [main_instance.get("_pending_local_hand_gain_uids"), animation_layer._transfer_cards.size()])
+		return
+	main_instance.call("_on_draw_presentation_batch_finished", continuity_batch_id, 4)
+	# 批次摸牌登记结果；正式手牌节点必须等到本批牌背落地后才从右侧滑入。
+	if not (main_instance.get("_pending_local_hand_gain_uids") as Dictionary).has(90011) or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(90011) or animation_layer._transfer_cards.size() != 1:
+		_fail("batch_draw_registration pending=%s gates=%s transfers=%d" % [main_instance.get("_pending_local_hand_gain_uids"), main_instance.get("_local_hand_gain_flight_gates"), animation_layer._transfer_cards.size()])
+		return
+	# 包含批次摸牌的最新快照；正式手牌节点在门闸期间必须停在右侧入场点且没有入场补间。
+	var continuity_batch_snapshot: Dictionary = drawn_snapshot.duplicate(true)
+	var continuity_batch_player: Dictionary = (continuity_batch_snapshot.get("players", []) as Array)[4] as Dictionary
+	continuity_batch_player["hand"] = [gained_card_data, drawn_card_data, continuity_batch_card_data]
+	continuity_batch_player["hand_count"] = 3
+	main_instance.call("_on_state_changed", continuity_batch_snapshot)
+	# 批次摸到的正式手牌节点；必须与后续交互复用同一实例。
+	var continuity_batch_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90011) as CardView
+	# 批次摸牌期望全局入口；与单张获得共用同一右侧入场点公式。
+	var continuity_batch_start_position: Vector2 = (main_instance.call("_get_local_hand_gain_start_global_position", continuity_batch_card.get_card_size()) as Vector2) - continuity_batch_card.get_card_size() * 0.5
+	if continuity_batch_card.get_parent() != hand_container or not continuity_batch_card.global_position.is_equal_approx(continuity_batch_start_position) or (main_instance.get("_local_hand_gain_tweens") as Dictionary).has(90011):
+		_fail("batch_draw_gated position=%s expected=%s" % [continuity_batch_card.global_position, continuity_batch_start_position])
+		return
+	# 批次落地与入场完成后的状态；门闸解除且正式节点稳定在自己的槽位。
+	await get_tree().create_timer(0.6).timeout
+	if not continuity_batch_card.hand_entry_offset.is_zero_approx() or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).is_empty() or not animation_layer._transfer_cards.is_empty():
+		_fail("batch_draw_finish offset=%s gates=%s transfers=%d" % [continuity_batch_card.hand_entry_offset, main_instance.get("_local_hand_gain_flight_gates"), animation_layer._transfer_cards.size()])
+		return
+	# 悬停不触发整理过渡；悬停补偿不属于槽位，任何手牌都不得因悬停获得过渡偏移。
+	var continuity_first_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90003) as CardView
+	var continuity_second_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90006) as CardView
+	if continuity_first_card == null or continuity_second_card == null:
+		_fail("continuity_setup:%s" % (main_instance.get("_card_views") as Dictionary).keys())
+		return
+	continuity_first_card.call("_on_mouse_entered")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not continuity_first_card.hand_layout_offset.is_zero_approx() or not continuity_second_card.hand_layout_offset.is_zero_approx():
+		_fail("hover_layout_transition:%s/%s" % [continuity_first_card.hand_layout_offset, continuity_second_card.hand_layout_offset])
+		return
+	continuity_first_card.call("_on_mouse_exited")
+	# 等待0.12秒悬停缩放补间结束；后面的展示起点断言要求牌面恰好处于未缩放的稳定外形。
+	await get_tree().create_timer(0.15).timeout
+	# 展示本机手牌；展示副本必须从该牌在手牌区的真实位置起飞，而不是从手牌区中心锚点凭空出现。
+	var continuity_shown_rect: Rect2 = continuity_first_card.get_global_rect()
+	# 展示牌快照；实体仍留在手牌区，因此不得接管未来真正进入弃牌堆的移动。
+	var continuity_shown_card_data: Dictionary = {"uid":90003, "definition_id":"tao", "suit":"heart", "rank":3, "zone":"hand", "owner_id":4}
+	var continuity_shown_presentation: Dictionary = {"presentation_id":21, "event_id":21, "event_name":"showCards", "card_data":continuity_shown_card_data, "actor_id":4, "target_ids":[], "source_zone":"hand", "owns_discard_transfer":false}
+	main_instance.call("_on_card_presentation_requested", continuity_shown_presentation)
+	# 展示副本；必须是独立实例，且起点等于被展示手牌的真实中心。
+	var continuity_shown_copy: CardView = animation_layer._active_cards[0] as CardView
+	if animation_layer._active_cards.size() != 1 or continuity_shown_copy == continuity_first_card or not (continuity_shown_copy.global_position + continuity_shown_copy.get_card_size() * 0.5).is_equal_approx(continuity_shown_rect.get_center()):
+		_fail("local_show_cards_origin:%s expected=%s" % [continuity_shown_copy.global_position, continuity_shown_rect.get_center()])
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
+	# 本机手牌被弃置；必须直接接管手牌容器中的正式节点，从它真实所在的槽位连续飞向弃牌堆。
+	var continuity_live_card: CardView = continuity_batch_card
+	var continuity_live_rect: Rect2 = continuity_live_card.get_global_rect()
+	# 弃置后的实体快照；同一 UID 只切换规则区域，实体身份保持不变。
+	var continuity_live_discard_data: Dictionary = {"uid":90011, "definition_id":"shan", "suit":"club", "rank":4, "zone":"discard_pile", "owner_id":-1}
+	main_instance.call("_on_card_transfer_requested", continuity_live_discard_data, 4, "hand", -1, "discard_pile")
+	if continuity_live_card.get_parent() != animation_layer or not animation_layer._active_cards.has(continuity_live_card) or not continuity_live_card.global_position.is_equal_approx(continuity_live_rect.position):
+		_fail("local_hand_discard_origin parent=%s position=%s expected=%s" % [continuity_live_card.get_parent(), continuity_live_card.global_position, continuity_live_rect.position])
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
+	# 本机装备区被弃置；飞牌起点必须是该装备槽的屏幕矩形中心，而不是武将牌或手牌区锚点。
+	var continuity_equipment_uid: int = 94000
+	var continuity_equipment_slot_result: Dictionary = continuity_equipment_label.find_card_global_rect(continuity_equipment_uid)
+	if not bool(continuity_equipment_slot_result.get("valid", false)):
+		_fail("equipment_slot_lookup:%s" % continuity_equipment_slot_result)
+		return
+	# 装备槽屏幕矩形；飞牌起点的唯一来源。
+	var continuity_equipment_rect: Rect2 = continuity_equipment_slot_result.get("rect", Rect2()) as Rect2
+	var continuity_equipment_discard_data: Dictionary = {"uid":continuity_equipment_uid, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"discard_pile", "owner_id":-1}
+	main_instance.call("_on_card_transfer_requested", continuity_equipment_discard_data, 4, "equipment", -1, "discard_pile")
+	if animation_layer._active_cards.size() != 1:
+		_fail("equipment_discard_missing:%d" % animation_layer._active_cards.size())
+		return
+	# 装备区离场牌面；起点中心必须与槽位矩形中心完全一致。
+	var continuity_equipment_card: CardView = animation_layer._active_cards[0] as CardView
+	if not (continuity_equipment_card.global_position + continuity_equipment_card.get_card_size() * 0.5).is_equal_approx(continuity_equipment_rect.get_center()):
+		_fail("equipment_discard_origin:%s expected=%s" % [continuity_equipment_card.global_position + continuity_equipment_card.get_card_size() * 0.5, continuity_equipment_rect.get_center()])
+		return
+	animation_layer.clear_presentations()
+	await get_tree().create_timer(0.03).timeout
+	# 手牌离场后的整理过渡；离场牌右侧的存活手牌必须从原槽位平滑滑向新槽位，而不是瞬间跳位。
+	var continuity_slide_start_position: Vector2 = continuity_second_card.position
+	var continuity_relayout_snapshot: Dictionary = drawn_snapshot.duplicate(true)
+	var continuity_relayout_player: Dictionary = (continuity_relayout_snapshot.get("players", []) as Array)[4] as Dictionary
+	continuity_relayout_player["hand"] = [drawn_card_data]
+	continuity_relayout_player["hand_count"] = 1
+	# 被移出手牌区的节点实例 ID；它的槽位记录必须在同一轮布局后被清理。
+	var continuity_departed_instance_id: int = continuity_first_card.get_instance_id()
+	main_instance.call("_on_state_changed", continuity_relayout_snapshot)
+	await get_tree().process_frame
+	if continuity_second_card.hand_layout_offset.is_zero_approx() or continuity_second_card.position.is_equal_approx(continuity_slide_start_position) or (hand_container.get("_slot_positions") as Dictionary).has(continuity_departed_instance_id):
+		_fail("hand_relayout_transition offset=%s position=%s" % [continuity_second_card.hand_layout_offset, continuity_second_card.position])
+		return
+	# 整理过渡收敛后的最终状态；偏移必须归零并停在左侧第一个槽位。
+	await get_tree().create_timer(continuity_relayout_seconds + 0.15).timeout
+	if not continuity_second_card.hand_layout_offset.is_zero_approx() or not is_equal_approx(continuity_second_card.position.x, continuity_first_slot_x):
+		_fail("hand_relayout_finish offset=%s position=%s" % [continuity_second_card.hand_layout_offset, continuity_second_card.position])
+		return
 	# 单目标交互状态；本地五号位持有一张决斗，其他存活角色都是可替换目标。
 	var single_target_state: GameState = _make_single_target_state()
 	match_controller.state = single_target_state

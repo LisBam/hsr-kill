@@ -320,7 +320,9 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 
 
 ## 播放一次牌区转移表现；可选堆叠键只调整临时牌面落点，所有调用均立即开始飞行。
-func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2, draw_stack_key: String = "") -> void:
+## 可选落地回调在牌面恰好抵达落点的那一帧触发一次，供调用方把后续表现（例如本机正式手牌节点从右侧滑入）
+## 精确对齐本次落地瞬间；因此飞行与后续停留被拆成两条补间。不传回调时两段顺序播放，总时长与视觉完全不变。
+func play_transfer(card_view: CardView, start_position: Vector2, target_position: Vector2, draw_stack_key: String = "", on_flight_finished: Callable = Callable()) -> void:
 	if card_view == null:
 		return
 	# 转移牌面；始终由动画层持有，完成后释放而不返回任何界面容器。
@@ -358,16 +360,28 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 	# 最终堆叠位置；第一张落在玩家锚点，后续牌按固定向量依次压叠显示。
 	var stacked_target_position: Vector2 = target_position - transfer_card.get_card_size() * 0.5 + draw_stack_offset * float(stack_index)
 	# 移动补间；无论是否存在同组转移牌都立即开始，避免没有批次信号的摸牌退化为逐张等待。
-	var transfer_tween: Tween = create_tween()
-	transfer_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	transfer_tween.tween_property(transfer_card, "position", stacked_target_position, transfer_flight_duration)
-	transfer_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, transfer_flight_duration)
-	transfer_tween.tween_interval(transfer_hold_duration)
-	transfer_tween.tween_property(transfer_card, "modulate:a", 0.0, transfer_fade_duration)
-	_transfer_tweens[transfer_card_instance_id] = transfer_tween
-	await transfer_tween.finished
+	var flight_tween: Tween = create_tween()
+	flight_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	flight_tween.tween_property(transfer_card, "position", stacked_target_position, transfer_flight_duration)
+	flight_tween.parallel().tween_property(transfer_card, "scale", Vector2.ONE * animated_card_scale, transfer_flight_duration)
+	_transfer_tweens[transfer_card_instance_id] = flight_tween
+	await flight_tween.finished
 	if transfer_generation != _presentation_generation:
 		# 旧局转移牌面；清场时已隐藏，补间正常结束后才在此释放，避免补间写入已释放节点。
+		if is_instance_valid(transfer_card):
+			transfer_card.queue_free()
+		return
+	if on_flight_finished.is_valid():
+		# 落地通知；牌面此刻已位于目标落点，调用方可以安全地按最终位置启动后续表现。
+		on_flight_finished.call()
+	# 抵达后的停留与淡出补间；与飞行分离，使“落地”成为调用方可观察的明确时刻，节奏与原单条补间完全一致。
+	var settle_tween: Tween = create_tween()
+	settle_tween.tween_interval(transfer_hold_duration)
+	settle_tween.tween_property(transfer_card, "modulate:a", 0.0, transfer_fade_duration)
+	_transfer_tweens[transfer_card_instance_id] = settle_tween
+	await settle_tween.finished
+	if transfer_generation != _presentation_generation:
+		# 旧局转移牌面；清场时已隐藏，第二条补间结束后同样只释放节点，不修改新局索引。
 		if is_instance_valid(transfer_card):
 			transfer_card.queue_free()
 		return
@@ -379,7 +393,8 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 
 
 ## 立即播放一次完整摸牌批次；同批牌从同一牌堆起点同时飞向以目标锚点为中心的横向组合，不等待其他玩家或其他 draw() 调用的批次结束。
-func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vector2, target_position: Vector2) -> void:
+## 可选落地回调在本批全部牌面飞行结束时触发一次，供调用方让本机正式手牌节点在牌背落地后才从右侧滑入。
+func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vector2, target_position: Vector2, on_flight_finished: Callable = Callable()) -> void:
 	# 当前可播放的正式牌面；空、已释放节点不创建无内容动画任务。
 	var valid_card_views: Array[CardView] = []
 	for card_view: CardView in card_views:
@@ -395,11 +410,11 @@ func play_draw_transfer_batch(card_views: Array[CardView], start_position: Vecto
 		return
 	# 当前批次 ID；仅用于表现补间管理，绝不写入权威实体、快照或回放。
 	_draw_transfer_batch_sequence += 1
-	_play_draw_transfer_batch(_draw_transfer_batch_sequence, valid_card_views, start_position, target_position)
+	_play_draw_transfer_batch(_draw_transfer_batch_sequence, valid_card_views, start_position, target_position, on_flight_finished)
 
 
 ## 播放一个独立摸牌批次；本方法可被多个调用并行执行，每个批次只管理自己的卡牌与补间。
-func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch_start_position: Vector2, batch_target_position: Vector2) -> void:
+func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch_start_position: Vector2, batch_target_position: Vector2, on_flight_finished: Callable = Callable()) -> void:
 	# 当前动画代次；重开清场后旧协程不再访问或启动新局的任何表现任务。
 	var batch_generation: int = _presentation_generation
 	# 同批飞行补间；所有牌的位置与缩放并行开始，绝不使用逐张延时。
@@ -422,6 +437,9 @@ func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch
 	await flight_tween.finished
 	if batch_generation != _presentation_generation:
 		return
+	if on_flight_finished.is_valid():
+		# 本批落地通知；整组牌背同时抵达落点后才触发一次，同批绝不重复通知。
+		on_flight_finished.call()
 	# 同批停留补间；整组同时停留，确保玩家能辨认这是一次多张摸牌而不是多次独立摸牌。
 	var hold_tween: Tween = create_tween()
 	_draw_transfer_batch_tweens[batch_id] = hold_tween

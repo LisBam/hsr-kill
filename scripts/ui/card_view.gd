@@ -90,6 +90,15 @@ var hand_selection_offset: Vector2 = Vector2.ZERO:
 		position += value - hand_selection_offset
 		hand_selection_offset = value
 
+## 正式手牌的整理过渡偏移；容器在槽位变化时用于把该牌暂时留在原槽位，取值范围为任意二维向量（通常为负的横向步长）。
+## 默认零向量表示该牌已经稳定在自身槽位；与 hand_entry_offset、hand_selection_offset 同构，写入的是差值而不是绝对值，
+## 因此三者可以在同一帧叠加而不互相覆盖。该属性只由 DecadeHandContainer 写入并补间归零，
+## 其他容器一律不读不写；擅自写入会让手牌的最终位置偏离布局结果。
+var hand_layout_offset: Vector2 = Vector2.ZERO:
+	set(value):
+		position += value - hand_layout_offset
+		hand_layout_offset = value
+
 ## 卡牌未选中时的原始布局纵坐标；非手牌容器使用它恢复选择抬升。
 var _base_position_y: float = 0.0
 
