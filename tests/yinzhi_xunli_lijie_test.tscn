@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/yinzhi_xunli_lijie_test.gd" id="1_yinzhi"]
+
+[node name="YinzhiXunliLijieTest" type="Node"]
+script = ExtResource("1_yinzhi")
