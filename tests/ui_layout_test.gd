@@ -1445,12 +1445,33 @@ func _run() -> void:
 	if not continuity_pending_batches.has(continuity_batch_id) or not continuity_batch_gates.has(90011) or not continuity_batch_gates.has(90012) or not animation_layer._transfer_cards.is_empty():
 		_fail("batch_draw_registration pending=%s gates=%s transfers=%d" % [continuity_pending_batches, continuity_batch_gates, animation_layer._transfer_cards.size()])
 		return
+	# 对照组：额外登记一批「不会再出现在任何快照里」的摸牌，UID 不出现在后续快照中，
+	# 用于验证真正离开手牌的飞行仍然必须被撤销，而不是被本次修复改成永远等待。
+	var continuity_orphan_batch_id: int = 4243
+	var continuity_orphan_card_uid: int = 90013
+	main_instance.call("_on_draw_presentation_batch_started", continuity_orphan_batch_id, 4)
+	var continuity_orphan_move_data: Dictionary = {"uid":90013, "definition_id":"shan", "suit":"heart", "rank":6, "zone":"hand", "owner_id":4}
+	continuity_orphan_move_data[MatchController.DRAW_PRESENTATION_BATCH_ID_KEY] = continuity_orphan_batch_id
+	main_instance.call("_on_card_transfer_requested", continuity_orphan_move_data, -1, "draw_pile", 4, "hand")
+	main_instance.call("_on_draw_presentation_batch_finished", continuity_orphan_batch_id, 4)
+	# 旧快照对账：转移信号先于权威快照到达，而询问界面等入口会在同一帧用上一份快照重新对账手牌。
+	# 【风口】等「一次性获得多张牌后立刻询问」的技能正是这条时序的真实触发者：询问出现时快照还没包含刚摸到的牌，
+	# 但门闸与待起飞批次绝不能被当成「牌已离开手牌」清掉，否则整批飞行被丢弃——玩家看到的就是摸牌跳过动画直接进手牌。
+	main_instance.call("_render_local_hand")
+	if not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(90011) or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(90012) or not (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(continuity_orphan_card_uid) or not (main_instance.get("_pending_local_draw_batches") as Dictionary).has(continuity_batch_id):
+		_fail("batch_draw_stale_snapshot_cancelled gates=%s pending=%s" % [main_instance.get("_local_hand_gain_flight_gates"), main_instance.get("_pending_local_draw_batches")])
+		return
 	# 包含批次摸牌的最新快照；两张正式手牌节点在门闸期间都必须被按在牌堆起点，而不是出现在自己的槽位。
 	var continuity_batch_snapshot: Dictionary = drawn_snapshot.duplicate(true)
 	var continuity_batch_player: Dictionary = (continuity_batch_snapshot.get("players", []) as Array)[4] as Dictionary
 	continuity_batch_player["hand"] = [gained_card_data, drawn_card_data, continuity_batch_card_data, continuity_batch_second_card_data]
 	continuity_batch_player["hand_count"] = 4
 	main_instance.call("_on_state_changed", continuity_batch_snapshot)
+	# 真正离手的牌：本快照已经晚于孤儿批次的登记且不含该 UID，门闸与它的待起飞批次必须被撤销，
+	# 否则会留下永远不播放、也不会被落地回调解除的孤立飞行牌面。
+	if (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(continuity_orphan_card_uid) or (main_instance.get("_pending_local_draw_batches") as Dictionary).has(continuity_orphan_batch_id):
+		_fail("batch_draw_orphan_survived gates=%s pending=%s" % [main_instance.get("_local_hand_gain_flight_gates"), main_instance.get("_pending_local_draw_batches")])
+		return
 	# 批次摸到的正式手牌节点；必须与后续交互复用同一实例。
 	var continuity_batch_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90011) as CardView
 	var continuity_batch_second_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90012) as CardView

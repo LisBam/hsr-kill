@@ -425,13 +425,19 @@ var _local_hand_gain_tweens: Dictionary = {}
 
 ## 本机获得牌的前置飞行门闸；键为实体 UID，值为该牌本次飞行的记录字典。
 ## 记录字段：card=本次飞行使用的牌面（自愈判定用，牌面已释放说明落地回调不会再来）；
-## origin=飞行起点（动画层坐标）；started=飞行是否已经起飞；batch=所属摸牌批次 ID（-1 表示单张获得）。
+## origin=飞行起点（动画层坐标）；started=飞行是否已经起飞；batch=所属摸牌批次 ID（-1 表示单张获得）；
+## snapshot_generation=登记该门闸时已生效的快照代次（用于区分“尚未进入快照”与“已经离开手牌”）。
 ## 门闸存在期间，对应正式手牌节点必须停留在本次飞行的起点——该点位于手牌滚动区之外因而被裁剪不可见，
 ## 于是玩家看到的是一张牌从来源连续飞向槽位，而不是“先出现在槽位再被飞入一次”。
 ## 门闸正常只由飞行落地回调解除：落地那一帧节点直接出现在自己的槽位，不再有第二段滑动；
 ## 保持飞行牌面是为了让保持阶段能识别“飞行牌已消失但回调不会再来”的异常情况并自动补齐解闸，
 ## 重新开局、牌离开手牌区或飞行被清理时也会一并清除，避免残留门闸让手牌永远停在屏幕外。
 var _local_hand_gain_flight_gates: Dictionary = {}
+
+## 本地手牌快照代次；每收到一次本地快照自增一次，供门闸判断对账所用快照是否已经晚于本次飞行登记。
+## 存在原因：转移信号先于权威快照到达，而询问界面等入口会在同一帧用**旧快照**重新对账手牌；
+## 若把“旧快照里没有这张牌”当成“这张牌已经离开手牌”，正在等待起飞的飞行就会被误取消（表现为摸牌跳过动画直接进手牌）。
+var _local_hand_snapshot_generation: int = 0
 
 ## 已登记但尚未起飞的本机摸牌批次；键为控制器分配的批次 ID，值为该批未起飞成员的牌面映射与飞行起点。
 ## 逐张结构为 {"views_by_uid":{实体 UID:牌面}, "origin":飞行起点}；成员起飞或离场后逐个摘除。
@@ -1714,6 +1720,8 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	var damaged_player_ids: Array[int] = _update_player_hp_snapshot(snapshot)
 	# 控制器每次广播都会新建完整序列化快照，桌面在本次广播后只读保存，避免再次复制整棵玩家与手牌数据。
 	_snapshot = snapshot
+	# 快照代次递增；必须紧随快照替换，使随后登记的门闸知道“当前快照是否已经包含本次移动”。
+	_local_hand_snapshot_generation += 1
 	# 新对局检测必须先于武将牌渲染执行；否则复用座次的联机客户端会先把上一局的身份标注与忠反推断重新画到新一局的身份徽记上。
 	_sync_identity_marks_match_scope()
 	match_menu.set_match_mode(str(_snapshot.get("match_mode", GameSettings.next_match_mode if GameSettings != null else "identity")))
@@ -2426,9 +2434,18 @@ func _render_local_hand() -> void:
 		if not desired_uid_lookup.has(int(pending_uid_variant)):
 			_pending_local_hand_gain_uids.erase(pending_uid_variant)
 	# 不在最新快照中的前置飞行门闸；该牌已经离开手牌区，门闸不会再有落地回调来解除。
+	# 但「当前快照没有这张牌」只有在快照确实晚于门闸登记时才等价于「已经离开手牌」：
+	# 转移信号先于权威快照到达，而询问界面等入口会在同一帧用旧快照重新对账手牌，
+	# 若此时按“不在快照中”直接删门闸，正在等待起飞的获得牌飞行会被整批丢弃，
+	# 玩家看到的就是「摸牌跳过动画、牌直接出现在手牌区」（例如持有【风口】时摸牌后的第一段询问）。
 	for gated_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
-		if not desired_uid_lookup.has(int(gated_uid_variant)):
-			_local_hand_gain_flight_gates.erase(gated_uid_variant)
+		if desired_uid_lookup.has(int(gated_uid_variant)):
+			continue
+		# 当前门闸记录；登记之后还没有任何更新的快照到达时保留门闸，继续等待它出现。
+		var gated_flight: Dictionary = _local_hand_gain_flight_gates.get(gated_uid_variant, {}) as Dictionary
+		if int(gated_flight.get("snapshot_generation", _local_hand_snapshot_generation)) >= _local_hand_snapshot_generation:
+			continue
+		_local_hand_gain_flight_gates.erase(gated_uid_variant)
 	# 本轮对账后的 UID 到正式视图映射；只包含当前快照仍属于本人牌区的节点。
 	var next_card_views: Dictionary = {}
 	# 当前按快照顺序排列的正式手牌节点；对账完成后统一调整子节点顺序并计算最终落点。
@@ -4752,7 +4769,7 @@ func _on_draw_presentation_batch_finished(batch_id: int, player_id: int) -> void
 			# 真正的起飞由 _start_pending_local_hand_gain_flights 在快照布局之后完成，终点是每张牌自己的槽位。
 			# 门闸值保存本张牌面，使保持阶段能在牌面异常消失时自愈解闸。
 			if drawn_card_uid >= 0:
-				_local_hand_gain_flight_gates[drawn_card_uid] = {"card":draw_card_view, "origin":draw_start_position, "started":false, "batch":batch_id}
+				_local_hand_gain_flight_gates[drawn_card_uid] = {"card":draw_card_view, "origin":draw_start_position, "started":false, "batch":batch_id, "snapshot_generation":_local_hand_snapshot_generation}
 	if is_local_draw_batch:
 		# 本机摸牌批次延后起飞；同批成员共用同一个牌堆起点，落点在快照到达后逐张解析。
 		_pending_local_draw_batches[batch_id] = {"views_by_uid":_build_card_view_uid_lookup(draw_card_views, drawn_local_card_uids), "origin":draw_start_position}
@@ -5019,7 +5036,8 @@ func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_p
 		flight_card.position = flight_start_position - flight_card.get_card_size() * 0.5
 	# 手牌飞行门闸；必须在快照之前登记，保证正式手牌节点先被按在飞行起点，而不是提前出现在槽位。
 	# started=false 表示尚未起飞：起飞需要等快照布局算出该牌的最终槽位；batch=-1 表示这是一次单张获得飞行。
-	_local_hand_gain_flight_gates[card_uid] = {"card":flight_card, "origin":flight_start_position, "started":false, "batch":-1}
+	# snapshot_generation 记录登记时已生效的快照代次，供对账区分“快照还没包含这张牌”与“这张牌已经离开手牌”。
+	_local_hand_gain_flight_gates[card_uid] = {"card":flight_card, "origin":flight_start_position, "started":false, "batch":-1, "snapshot_generation":_local_hand_snapshot_generation}
 	return true
 
 
