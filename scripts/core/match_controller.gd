@@ -11788,34 +11788,42 @@ func _make_conquest_seat_display_name(seat_index: int, is_human_player: bool) ->
 	return "[AI]敌人%d" % side_ordinal
 
 
+## 判断此刻内置 AI 是否必须让真人先完成选将；判定只由**阶段性质**与**实时控制权**共同决定。
+## 放在控制器是因为它是唯一同时持有选将服务与AI协调器的地方；把AI概念放进规则服务会破坏分层。
+## 判定条件全项目只有这一处实现，避免「进入前」与「循环内」两份条件漂移。
+func _should_defer_ai_character_selection() -> bool:
+	if character_selection == null or ai_coordinator == null:
+		# 协调器缺失时无法判定控制权，此时宁可少等也不可卡死；注意这与「协调器存在但策略表为空」不同，
+		# 后者表示该座位确实不由内置AI控制（生产环境即真人或网络玩家），必须继续等待。
+		return false
+	# 只有「多名玩家同时选将」阶段与最终自选阶段需要等待；领袖阶段与已完成阶段直接放行。
+	if not character_selection.is_simultaneous_selection_phase() and character_selection.phase != CharacterSelectionService.PHASE_CUSTOM:
+		return false
+	# 待确认集合中存在不由内置AI控制的座位时，该座位需要真人输入，AI必须等待。
+	# 由于创建玩家时只为非真人座位注册AI，这里的「非AI待确认者」必然恰好是需要真人输入的座位，不会死锁。
+	for pending_player_id: int in character_selection.get_pending_player_ids():
+		if not ai_coordinator.is_ai_controlled(pending_player_id):
+			return true
+	return false
+
+
 ## 让内置 AI 在当前选将阶段从自己的候选中确认首张；所有 AI 仍通过同一 select_character 校验入口。
 func _drive_ai_character_selection() -> void:
 	if is_gameplay_paused() or _is_driving_character_selection or character_selection == null or character_selection.phase == CharacterSelectionService.PHASE_COMPLETE:
 		return
 	# 自选模式优先等待全部真人确认，避免 AI 抢占真人希望选择的座次与身份名额。
 	# 斗地主全员同时选将也使用同一等待策略（阶段为 PHASE_OTHERS，而非身份局 PHASE_CUSTOM）。
-	if character_selection.custom_assignment_enabled and (
-		character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
-		or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
-	):
-		for pending_player_id: int in character_selection.get_pending_player_ids():
-			if not ai_coordinator.is_ai_controlled(pending_player_id):
-				return
+	# 补充：等待判据不再由自选座次身份开关决定，而只由阶段性质与实时控制权决定——
+	# 该开关关闭时身份局同样处于「多名玩家同时选将」阶段，AI 提前确认会把武将变成「已被其他玩家选择」。
+	if _should_defer_ai_character_selection():
+		return
 	_is_driving_character_selection = true
 	while character_selection.phase != CharacterSelectionService.PHASE_COMPLETE:
 		# 自选阶段每轮都重新检查真人完成状态；首任领袖由 AI 确认后可能在同一循环内刚进入该阶段。
 		# 斗地主同时选将同样需等待真人，防止 AI 先占座次/身份导致五人局卡死。
-		if character_selection.custom_assignment_enabled and (
-			character_selection.phase == CharacterSelectionService.PHASE_CUSTOM
-			or (character_selection.uses_simultaneous_selection() and character_selection.phase == CharacterSelectionService.PHASE_OTHERS)
-		):
-			var waiting_for_human: bool = false
-			for pending_custom_player_id: int in character_selection.get_pending_player_ids():
-				if not ai_coordinator.is_ai_controlled(pending_custom_player_id):
-					waiting_for_human = true
-					break
-			if waiting_for_human:
-				break
+		# 补充：每轮复用同一门禁函数，避免「进入前」与「循环内」两份条件各自演化而漂移。
+		if _should_defer_ai_character_selection():
+			break
 		# 当前轮是否提交了至少一项 AI 选择；没有进展表示正在等待人类或网络玩家。
 		var made_progress: bool = false
 		# 当前待确认玩家副本；每轮结束后重新获取，安全覆盖领袖到其他玩家的阶段切换。
