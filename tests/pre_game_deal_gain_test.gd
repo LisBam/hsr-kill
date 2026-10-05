@@ -35,6 +35,11 @@ const CLAUSE1_KIND: String = "fengkou_clause1"
 ## 等待【风口】第一段询问出现的最长墙钟时间；需覆盖无关询问的AI响应延迟与阶段节奏。
 ## 【巡礼】的三段额外阶段（含AI逐步行动）会先于父序列延后条目被消费，因此这里按“数十个AI动作”取余量。
 const CLAUSE1_WAIT_SECONDS: float = 60.0
+## 回答【风口】第一段后，等待首回合可选询问全部落定的最长帧数；按“数十个AI动作”取余量。
+## 首回合角色的武将由随机抽将决定，可能同时持有【要踏】等回合开始可选技能并生成其自己的可选成本询问：
+## AI 持有者的询问由控制器自行作答，本地真人持有者的询问由本用例按“不发动”作答。
+## 用帧数而非累计墙钟时间设上限：帧预算在任何帧率与暂停状态下都必定终止。
+const PENDING_CHOICE_SETTLE_FRAMES: int = 9000
 
 ## 被测控制器；本用例会替换为整局控制器以跑真实开局。
 var _controller: MatchController
@@ -175,8 +180,24 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 		await get_tree().process_frame
 	if _executed_transition_count == 0:
 		return _fail("turn_transition_never_executed confirmed=%s phase=%s pending=%s" % [str(confirmed), str(_controller.state.current_phase), str(_controller.has_pending_card_choice())])
+	# 首回合角色的武将由随机抽将决定，可能持有【要踏】等回合开始可选技能，回答【风口】之后会生成它自己的
+	# 可选成本询问：AI 持有者由控制器自行作答，本地真人持有者由本用例按“不发动”作答。
+	# 因此这里按条件等待询问落定，而不是瞬时断言“没有任何询问”；
+	# 真正要守住的“阶段推进已执行”由上方 transition_executed 计数独立保证，不会被本等待放松。
+	var settle_wait: int = 0
+	while _controller.has_pending_card_choice() and settle_wait < PENDING_CHOICE_SETTLE_FRAMES:
+		# 当前待处理询问；只读其归属与纯量字段，用于给本地真人自己的可选询问作答。
+		var settle_choice: Dictionary = _controller._pending_card_choice
+		if int(settle_choice.get("chooser_id", -1)) == _controller.local_human_player_id:
+			# 可选技能询问：按“放弃发动”作答，不选任何手牌与目标，不消耗任何资源。
+			var decline_action: PlayerAction = PlayerAction.new("choose_cards", _controller.local_human_player_id)
+			decline_action.payload = {"request_id":int(settle_choice.get("request_id", -1)), "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+			if not _controller.submit_action(decline_action):
+				return _fail("pending_choice_decline_rejected kind=%s" % str(settle_choice.get("context", {}).get("kind", "")))
+		settle_wait += 1
+		await get_tree().process_frame
 	if _controller.has_pending_card_choice():
-		return _fail("pending_choice_left kind=%s" % str(_controller._pending_card_choice.get("context", {}).get("kind", "")))
+		return _fail("pending_choice_left kind=%s chooser=%d" % [str(_controller._pending_card_choice.get("context", {}).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1))])
 	# 首回合必须已经真正开始：阶段离开开局前与询问阶段，且已经确定当前行动角色。
 	# 首回合角色由身份/座次规则决定，不一定是本地真人所在座次，因此只校验「已经开始」而不写死玩家 ID。
 	if str(_controller.state.current_phase) in ["", "game_start", "starting_hand_mulligan", "character_selection", "choice", "round_start"]:

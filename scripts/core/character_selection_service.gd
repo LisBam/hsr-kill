@@ -439,6 +439,7 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
 		return ""
 	# 斗地主、2v2与过关斩将：座次与身份已在创建玩家时固定，不再旋转。
+	# 补充：身份局等领袖优先模式同样已在创建玩家后按首任身份旋转过数组，因此此处数组顺序即最终座次顺序。
 	_initial_leader_player_id = -1
 	for player_index: int in range(_player_ids.size()):
 		_initial_seats_by_player[_player_ids[player_index]] = player_index + 1

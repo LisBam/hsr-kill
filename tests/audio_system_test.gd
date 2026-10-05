@@ -67,7 +67,9 @@ const DAMAGE_EFFECT_CASES: Array[Array] = [
 ]
 
 ## 核心层自动触发用例最多等待的进程帧数；全 AI 对局在零延迟下会迅速出牌，通常在数十帧内即命中。
-const MAX_AUTOMATION_FRAMES: int = 600
+## 补充：首回合角色的随机武将与座次同源改动相关，同一固定种子下的出牌顺序会随之变化，
+## 「响应打出」可能要到更晚的回合才首次出现，因此帧预算按“足以推进到第一次响应”取。
+const MAX_AUTOMATION_FRAMES: int = 2400
 
 ## 阵亡自动触发用例最多等待的进程帧数；死亡结算由事件运行时逐帧推进，需要额外等待其事实提交。
 const DEATH_SETTLE_MAX_FRAMES: int = 240
@@ -847,7 +849,7 @@ func _verify_core_voice_channels() -> void:
 		return
 	# 自动触发的打出请求；响应牌消耗出口必须同样发声，否则【闪】等响应牌会静默。
 	if not _has_voice_play_mode(captured_requests, MatchController.VOICE_PLAY_MODE_RESPOND):
-		_fail("card_voice_auto_respond_missing=%d" % captured_requests.size())
+		_fail("card_voice_auto_respond_missing=%d pending=%s pchooser=%d pkind=%s local=%d phase=%s" % [captured_requests.size(), str(controller.has_pending_card_choice()), int(controller._pending_card_choice.get("chooser_id", -1)), str(controller._pending_card_choice.get("context", {}).get("kind", "")), controller.local_human_player_id, str(controller.state.current_phase)])
 		await _release_controller(controller)
 		return
 	# 自动触发的技能请求数量；作为副证据记录，AI 未发动技能时不视为失败。
