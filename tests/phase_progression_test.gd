@@ -172,6 +172,7 @@ func _test_skip_play_after_deferred_negation() -> void:
 
 
 ## 验证翻面角色翻回正面后跳过整回合，并直接为下一名存活角色建立出牌请求。
+## 统一规则：被跳过的回合没有回合开始，因此任何回合开始时机都不得在该回合派发；本用例同时锁定该顺序。
 func _test_face_down_turn_progression() -> void:
 	# 本场状态；0号玩家以背面状态开始回合。
 	var game_state: GameState = _install_state()
@@ -180,7 +181,15 @@ func _test_face_down_turn_progression() -> void:
 	var next_draw_one: CardInstance = _add_draw_card(game_state, "sha", "spade", 2)
 	# 下一回合第二张摸牌；保证阶段推进不会因空牌堆提前终局。
 	var next_draw_two: CardInstance = _add_draw_card(game_state, "shan", "heart", 2)
+	# 回合开始时机计数；按时机名累计派发次数，用于区分“被跳过的回合”和“下家真实回合”。
+	var turn_start_timing_counts: Dictionary = {}
+	# 四个具有代表性的回合开始时机；phase_start 是旧兼容时机，其余三项覆盖回合前窗口与准备阶段开始。
+	for timing_name: String in ["phase_start", "phaseBefore", "phaseBeforeStart", "phaseBegin"]:
+		_controller.trigger_manager.subscribe(timing_name, self, _on_turn_start_timing.bind(timing_name, turn_start_timing_counts), 0, -1, "global")
 	_controller._start_turn(0)
+	# 被跳过的回合（回合号1）不得派发任何一项；因此四项计数只应来自下家的真实回合（回合号2），各恰好一次。
+	if int(turn_start_timing_counts.get("phase_start", 0)) != 1 or int(turn_start_timing_counts.get("phaseBefore", 0)) != 1 or int(turn_start_timing_counts.get("phaseBeforeStart", 0)) != 1 or int(turn_start_timing_counts.get("phaseBegin", 0)) != 1:
+		_fail("face_down_turn_start_timings=%s" % [turn_start_timing_counts])
 	if game_state.players[0].face_down or game_state.current_player_id != 1 or game_state.current_phase != "play" or game_state.turn_number != 2 or not _controller._has_active_play_choice() or game_state.players[1].find_hand_card(next_draw_one.uid) == null or game_state.players[1].find_hand_card(next_draw_two.uid) == null:
 		_fail("face_down_resume current=%d phase=%s" % [game_state.current_player_id, game_state.current_phase])
 
@@ -342,6 +351,11 @@ func _install_runtime_skill(player_id: int, skill_id: String) -> SkillDefinition
 func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	if int(choice_data.get("chooser_id", -1)) == 0:
 		_local_choice_request = choice_data.duplicate(true)
+
+
+## 累计回合开始时机的派发次数；计数表由调用方持有，回调只做自增，避免测试订阅改变规则顺序。
+func _on_turn_start_timing(_event: RuleEvent, timing_name: String, counts: Dictionary) -> void:
+	counts[timing_name] = int(counts.get(timing_name, 0)) + 1
 
 
 ## 输出稳定失败原因并以非0状态退出，便于命令行定位具体阶段恢复断言。

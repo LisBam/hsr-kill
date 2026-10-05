@@ -14,7 +14,13 @@ func _init(host: Object) -> void:
 ## 每个固定窗口独占一步；取消分支只终止未发生的回合内容，不重复初始化或输出日志。
 func resolve(context: Dictionary) -> void:
 	# 回合内容；轮开始只在真实新轮执行，其余步骤沿用当前玩法顺序。
-	var steps: Array[Callable] = [_restore_round_players, _emit_round_start, _initialize, _log_begin, _emit_turn_window.bind("phaseBefore"), _check_face_down, _emit_turn_window.bind("phaseBeforeStart"), _emit_turn_window.bind("phaseBeforeEnd"), _emit_turn_window.bind("phaseBeginStart"), _emit_turn_window.bind("phaseBegin"), _begin_preparation]
+	# 背面朝上判定必须排在**全部回合开始时机的之前**：翻面跳过的是整个回合（回合开始到回合结束），
+	# 被跳过的回合不存在回合开始，因此回合分隔日志、旧兼容 phase_start 与 phaseBefore…phaseBegin 一律不得派发；
+	# 否则全局“回合开始时”技能（如【巡礼】）会在一个根本不存在的回合里照常触发。
+	# 轮级步骤（限时离场恢复、临时技能到期与 roundStart）仍留在判定之前：它们属于“轮”，不属于被跳过的那个回合，
+	# 若把它们推迟到判定之后，新轮恰好落在跳过回合时整轮效果会永久丢失。
+	# 反面情形同样受保护：非背面角色在本步只是空跑一次读取，不改变任何原有时机顺序。
+	var steps: Array[Callable] = [_restore_round_players, _emit_round_start, _initialize, _check_face_down, _log_begin, _emit_turn_window.bind("phaseBefore"), _emit_turn_window.bind("phaseBeforeStart"), _emit_turn_window.bind("phaseBeforeEnd"), _emit_turn_window.bind("phaseBeginStart"), _emit_turn_window.bind("phaseBegin"), _begin_preparation]
 	_host.run_rule_sequence(steps, context)
 
 
@@ -87,6 +93,7 @@ func _emit_turn_window(sequence: RuleStepSequence, timing_name: String) -> void:
 
 
 ## 背面朝上跳过整个回合；翻面、取消与Over分成独立步骤，后一个通知不得抢跑。
+## 本步是回合开始窗口的第一个内容步骤（轮级事实已完成）：跳过分支一旦成立，本回合不再派发任何回合开始时机。
 func _check_face_down(sequence: RuleStepSequence) -> void:
 	if not _read_turn_window(sequence):
 		return

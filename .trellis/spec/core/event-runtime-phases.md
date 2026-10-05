@@ -138,13 +138,15 @@
 `_continue_turn_start()` 按**稳定回合开始游标**逐段发布：
 
 ```text
-roundStart → phaseBefore → 翻面检查 → phaseBeforeStart → phaseBeforeEnd → phaseBeginStart → phaseBegin → phaseZhunbei
+roundStart → 翻面检查 → 回合分隔日志与 phase_start → phaseBefore → phaseBeforeStart → phaseBeforeEnd → phaseBeginStart → phaseBegin → phaseZhunbei
 ```
 
 - 任一步创建选择时压入下一步，完成当前时机及其剩余处理器后才恢复。
 - 因此【振旗】等回合前选择必须**完整结束后**才会进入【加护】等准备阶段选择，两者**不能共享或覆盖同一选择窗口**。
-- `phaseBefore` 完成后若角色背面向上：翻回正面并**直接跳过整个回合**，不发布 `phaseBegin`、不运行六阶段主体。
-- 只有依赖**实际回合开始**的效果才能在下一次真正进入 `phaseBegin` 时到期。
+- **翻面检查必须排在全部回合开始时机之前**：翻面跳过的是整个回合（回合开始到回合结束），被跳过的回合没有回合开始，因此连回合分隔日志、旧兼容 `phase_start` 与 `phaseBefore…phaseBegin` 都不派发，任何全局“回合开始时”技能（如【巡礼】）都**不会**在一个不存在的回合里被询问。
+- 轮级步骤（限时离场恢复、临时技能到期与 `roundStart`）仍排在翻面检查**之前**：它们属于“轮”而不属于被跳过的那个回合，一并后移会让“新轮恰好落在跳过回合”时的整轮效果永久丢失。
+- 翻面成立时：先执行 `enforce_face_down_lock()` 兜底纠正，再翻回正面并**直接跳过整个回合**，不发布 `phaseBegin`、不运行六阶段主体、不派发回合尾 `phaseAfter`。
+- 只有依赖**实际回合开始**的效果才能在下一次真正进入 `phaseBegin` 时到期；持有者在跳过回合中的 `phaseBefore` 技能（如【鸿运】【遥塔】）与该回合同样不触发。
 
 ---
 
