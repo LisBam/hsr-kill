@@ -628,3 +628,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 修复获得中央展示牌时跳过弃牌堆直接飞向获得者
+<!-- trellis-session: v=2 fp=46ec50360e3d52a0 -->
+
+**Date**: 2026-10-06
+**Task**: 修复获得中央展示牌时跳过弃牌堆直接飞向获得者
+**Branch**: `master`
+
+### Summary
+
+回退【伏辰】获得中央展示牌时当帧接管牌面的旧表现，改为两段连续飞行：先在中央弃牌队列落位，再由同一牌面实例飞向获得者（本机飞向手牌槽位、其他视角飞向获得者武将牌锚点）。新增 CardUseAnimationLayer.request_active_card_landing/cancel_active_card_landing 作为唯一落位通知接口，以位置补间截止时刻为唯一判据；门闸新增 awaiting_landing 阶段并在取消、清场、离手三条路径上同步撤销等待。重写 ui_layout_test 接管用例并新增其他视角与取消路径断言，全量回归 10 个用例通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e80cd34` | 修复获得中央展示牌时跳过弃牌堆直接飞向获得者的问题 |
+
+### Status
+
+[OK] **Completed**

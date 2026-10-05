@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-10-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~630 | Active |
+| `journal-1.md` | ~652 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-10-06 | 修复获得中央展示牌时跳过弃牌堆直接飞向获得者 | `e80cd34` | `master` |
 | 14 | 2026-10-06 | 新增游戏模式「胜者为王」 | `6af35a0` | `master` |
 | 12 | 2026-10-04 | 优化卡牌交互动画连续性 | `61f2a2f` | `master` |
 | 11 | 2026-10-04 | 青雀武将与三技能交付（含【自摸】不限次修正与虚拟手牌界面回归） | `a77a763`, `40b9dbf`, `a901e94`, `50b9d97`, `ef9da4c`, `ac7eae2`, `5e0cb79` | `master` |
