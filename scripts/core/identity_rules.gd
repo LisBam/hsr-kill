@@ -21,6 +21,31 @@ const MODE_OPPORTUNITY_BRAWL: String = "opportunity_brawl"
 ## 过关斩将模式稳定ID；固定一名本地玩家先手对战一名会随关卡无限重生的敌方AI。
 const MODE_CONQUEST: String = "conquest"
 
+## 胜者为王模式稳定ID；2至10人全员内奸，各自以击杀其余全部角色为唯一获胜条件，最后存活者获胜。
+const MODE_WINNER_TAKES_ALL: String = "winner_takes_all"
+
+## 胜者为王模式的获胜方 ID；与身份局阵营字符串区分开，避免终局表现按身份比对时把全员判为胜利。
+const WINNER_TAKES_ALL_WINNER_ID: String = "last_survivor"
+
+## 胜者为王模式全员固定身份；该模式不生成领袖与反贼，所有玩家身份数组由此单一常量填充。
+const WINNER_TAKES_ALL_IDENTITY: String = "renegade"
+
+## 座次补偿的手牌档位跨度；每连续三个座次共享同一档追加手牌，即 1、2、3 号 +0，4、5、6 号 +1，以此类推。
+## 修改该值会同时改变分档边界与最高档数值，必须同步更新模式详情文案、文档与回归用例中的期望数组。
+const SEAT_COMPENSATION_HAND_BONUS_SEAT_GROUP_SIZE: int = 3
+
+## 座次补偿的体力上限第一档起始座次；该座次及以后追加低档体力上限，用于补足后排起手劣势。
+const SEAT_COMPENSATION_HP_BONUS_FIRST_SEAT: int = 5
+
+## 座次补偿的体力上限第二档起始座次；该座次及以后追加高档体力上限。
+const SEAT_COMPENSATION_HP_BONUS_SECOND_SEAT: int = 9
+
+## 座次补偿的体力上限低档增量；座次达到第一档阈值但未达第二档阈值时使用。
+const SEAT_COMPENSATION_HP_BONUS_LOW_TIER: int = 1
+
+## 座次补偿的体力上限高档增量；座次达到第二档阈值时使用。
+const SEAT_COMPENSATION_HP_BONUS_HIGH_TIER: int = 2
+
 ## 2至10人标准身份配置；数组索引等于人数，空项表示不支持的人数。
 const IDENTITY_DISTRIBUTIONS: Dictionary = {
 	2: ["leader", "rebel"],
@@ -67,6 +92,8 @@ func normalize_mode(mode_id: String) -> String:
 		return MODE_OPPORTUNITY_BRAWL
 	if mode_id == MODE_CONQUEST:
 		return MODE_CONQUEST
+	if mode_id == MODE_WINNER_TAKES_ALL:
+		return MODE_WINNER_TAKES_ALL
 	return MODE_IDENTITY
 
 
@@ -118,6 +145,11 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 		raw = TEAM2V2_DISTRIBUTION_BASE.duplicate() if player_count == 4 else []
 	elif mode == MODE_WHEEL_DUEL:
 		raw = ["red", "blue"] if player_count == 2 else []
+	elif mode == MODE_WINNER_TAKES_ALL:
+		# 胜者为王：2至10人全部为内奸；身份数组同质，因此洗牌与固定座次两种取用方式等价。
+		if get_supported_player_counts(MODE_WINNER_TAKES_ALL).has(player_count):
+			for _seat_index: int in range(player_count):
+				raw.append(WINNER_TAKES_ALL_IDENTITY)
 	elif mode == MODE_CONQUEST:
 		# 过关斩将按“玩家1、敌人1、玩家2、敌人2……”交替行动；偶数座次索引为红方玩家，奇数为蓝方敌人。
 		if get_supported_player_counts(MODE_CONQUEST).has(player_count):
@@ -133,8 +165,9 @@ func get_distribution(player_count: int, mode_id: String = MODE_IDENTITY) -> Arr
 
 
 ## 返回模式是否支持联机大厅自选身份；身份局、斗地主、2v2、机缘大乱斗与1v1车轮战按位置绑定身份，过关斩将真人固定红方无可选身份。
+## 胜者为王全员同为内奸，不存在可选身份，因此与过关斩将一样不放开自选身份。
 func supports_lobby_custom_identity(mode_id: String) -> bool:
-	return normalize_mode(mode_id) != MODE_CONQUEST
+	return normalize_mode(mode_id) != MODE_CONQUEST and normalize_mode(mode_id) != MODE_WINNER_TAKES_ALL
 
 
 ## 返回模式是否强制固定大厅位置到规则座次（稳定玩家 ID）的绑定。
@@ -173,15 +206,16 @@ func get_lobby_slot_match_seats(mode_id: String, player_count: int) -> Array[int
 func get_first_player_identity(mode_id: String) -> String:
 	if normalize_mode(mode_id) == MODE_DOUDIZHU:
 		return "landlord"
-	if normalize_mode(mode_id) == MODE_TEAM2V2 or normalize_mode(mode_id) == MODE_WHEEL_DUEL or normalize_mode(mode_id) == MODE_CONQUEST:
+	if normalize_mode(mode_id) == MODE_TEAM2V2 or normalize_mode(mode_id) == MODE_WHEEL_DUEL or normalize_mode(mode_id) == MODE_CONQUEST or normalize_mode(mode_id) == MODE_WINNER_TAKES_ALL:
 		return ""
 	return "leader"
 
 
 ## 返回模式是否固定按一号位开始首回合；2v2 固定 true，其他模式 false（由首任身份决定）。
+## 胜者为王全体身份相同且无首任身份，因此同样固定由一号位先手，保证座次补偿的开局座次与行动顺序一致。
 func starts_from_first_seat(mode_id: String) -> bool:
 	var mode: String = normalize_mode(mode_id)
-	return mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST
+	return mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST or mode == MODE_WINNER_TAKES_ALL
 
 
 ## 返回 2v2 是否应对基准身份表进行蓝红互换；coin_flip 为 true 时一号/四号变为红方，二号/三号变为蓝方。
@@ -197,19 +231,21 @@ func get_team2v2_distribution(swap_colors: bool) -> Array[String]:
 
 
 ## 返回身份是否在开局时公开；标准身份局仅领袖公开，斗地主与 2v2 全部身份明置（阵营对战无需隐藏）。
+## 胜者为王全员同为内奸，隐藏不产生任何信息量，因此同样全部明置。
 func is_identity_public_at_start(identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	var mode: String = normalize_mode(mode_id)
-	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
+	if mode == MODE_DOUDIZHU or mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST or mode == MODE_WINNER_TAKES_ALL:
 		return not identity.is_empty()
 	return identity == "leader"
 
 
 ## 返回模式授予的额外体力上限；斗地主地主固定 +1，身份局领袖仅在不少于 5 人时 +1；2v2 不加体力。
+## 胜者为王不使用身份驱动的体力加值，其座次补偿由 get_seat_compensation_max_hp_bonus 单独承担，此处恒为 0。
 func get_opening_max_hp_bonus(identity: String, player_count: int, mode_id: String = MODE_IDENTITY) -> int:
 	var mode: String = normalize_mode(mode_id)
 	if mode == MODE_DOUDIZHU:
 		return 1 if identity == "landlord" else 0
-	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST:
+	if mode == MODE_TEAM2V2 or mode == MODE_WHEEL_DUEL or mode == MODE_CONQUEST or mode == MODE_WINNER_TAKES_ALL:
 		return 0
 	return 1 if identity == "leader" and player_count >= 5 else 0
 
@@ -232,10 +268,13 @@ func get_mode_skill_ids(identity: String, mode_id: String = MODE_IDENTITY) -> Ar
 ## 身份局：主公与忠臣互为队友，反贼与反贼互为队友，内奸没有任何队友（含两个内奸之间）。
 ## 斗地主：地主与地主互为队友，农民与农民互为队友。
 ## 2v2：蓝方与蓝方互为队友，红方与红方互为队友。
+## 胜者为王：全员同为内奸，任意两人之间都不互为队友，因此直接返回 false。
 func are_identities_teammates(from_identity: String, to_identity: String, mode_id: String = MODE_IDENTITY) -> bool:
 	if from_identity.is_empty() or to_identity.is_empty():
 		return false
 	var mode: String = normalize_mode(mode_id)
+	if mode == MODE_WINNER_TAKES_ALL:
+		return false
 	if mode == MODE_DOUDIZHU:
 		if from_identity == "landlord" and to_identity == "landlord":
 			return true
@@ -288,6 +327,8 @@ func evaluate_winner(state: GameState) -> String:
 		return _evaluate_wheel_duel_winner(state)
 	if mode == MODE_CONQUEST:
 		return _evaluate_conquest_winner(state)
+	if mode == MODE_WINNER_TAKES_ALL:
+		return _evaluate_winner_takes_all_winner(state)
 	return _evaluate_identity_winner(state)
 
 
@@ -296,6 +337,7 @@ func evaluate_winner(state: GameState) -> String:
 ## 击杀者技能可在该端口整体覆盖本结果（例如改为 draw_four），因此内容技能不要直接调用本函数推导最终奖惩。
 ## 斗地主没有身份局的击杀反贼摸三与主公误杀忠臣惩罚。
 ## 2v2 击杀任何人（含队友）均无击杀奖惩；队友死亡后由存活队友各摸一张，类型为 teammate_draw。
+## 胜者为王全员互为敌人，任意有效击杀统一为 draw_three（击杀者摸三张）；无来源死亡仍返回空串。
 func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String = MODE_IDENTITY) -> String:
 	if victim == null:
 		return ""
@@ -308,6 +350,8 @@ func get_death_reward(killer: PlayerState, victim: PlayerState, mode_id: String 
 		return ""
 	if killer == null:
 		return ""
+	if mode == MODE_WINNER_TAKES_ALL:
+		return "draw_three"
 	if victim.identity == "rebel":
 		return "draw_three"
 	if killer.identity == "leader" and victim.identity == "loyalist":
@@ -429,6 +473,45 @@ func _evaluate_conquest_winner(state: GameState) -> String:
 	if enemy_alive_count == 0:
 		return "red_team"
 	return ""
+
+
+## 胜者为王胜负：仅剩一名存活玩家时该玩家获胜，无人存活时为平局，仍有两人及以上存活则对局继续。
+## 不复用身份局判定：本模式没有领袖，身份局分支会在找不到领袖时直接判反贼获胜。
+func _evaluate_winner_takes_all_winner(state: GameState) -> String:
+	# 存活玩家数量；离场不算死亡，与身份局胜负统计口径保持一致。
+	var alive_count: int = 0
+	for player: PlayerState in state.players:
+		if player.alive:
+			alive_count += 1
+	if alive_count == 1:
+		return WINNER_TAKES_ALL_WINNER_ID
+	if alive_count == 0:
+		return "draw"
+	return ""
+
+
+## 返回胜者为王座次补偿追加的初始手牌数；非本模式、未开启补偿或座次非法时返回 0。
+## seat_number 为一号位起的规则座次（1..10）；每连续三个座次共享同一档，即 1、2、3 号 +0，4、5、6 号 +1，7、8、9 号 +2，10 号 +3。
+func get_seat_compensation_hand_bonus(mode_id: String, seat_number: int, enabled: bool) -> int:
+	if not enabled or seat_number < 1:
+		return 0
+	if normalize_mode(mode_id) != MODE_WINNER_TAKES_ALL:
+		return 0
+	return (seat_number - 1) / SEAT_COMPENSATION_HAND_BONUS_SEAT_GROUP_SIZE
+
+
+## 返回胜者为王座次补偿追加的体力上限；非本模式、未开启补偿或座次非法时返回 0。
+## seat_number 为一号位起的规则座次（1..10）：1至4号 +0，5至8号 +1，9号及以后 +2。
+func get_seat_compensation_max_hp_bonus(mode_id: String, seat_number: int, enabled: bool) -> int:
+	if not enabled or seat_number < 1:
+		return 0
+	if normalize_mode(mode_id) != MODE_WINNER_TAKES_ALL:
+		return 0
+	if seat_number >= SEAT_COMPENSATION_HP_BONUS_SECOND_SEAT:
+		return SEAT_COMPENSATION_HP_BONUS_HIGH_TIER
+	if seat_number >= SEAT_COMPENSATION_HP_BONUS_FIRST_SEAT:
+		return SEAT_COMPENSATION_HP_BONUS_LOW_TIER
+	return 0
 
 
 ## 查找指定身份的首名玩家；身份不存在时返回 null。

@@ -942,12 +942,12 @@ func _on_main_menu_start_requested(player_count: int) -> void:
 		main_menu.confirm_game_started()
 
 
-## 接收连接入口创建房间意图；网关保存形象、密码、人数、模式、自选身份与固定座位初始配置，成功后进入独立联机大厅。
-func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool, fixed_seat_enabled: bool) -> void:
+## 接收连接入口创建房间意图；网关保存形象、密码、人数、模式、自选身份、固定座位与座次补偿初始配置，成功后进入独立联机大厅。
+func _on_lan_host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool, fixed_seat_enabled: bool, seat_compensation_enabled: bool) -> void:
 	# 建房结果；Godot Error 只用于程序判断，玩家可见文本由网关统一返回。
 	# 使用主菜单当前下一局模式；斗地主入口建房时自动创建斗地房间。
 	var game_mode_id: String = GameSettings.normalize_match_mode(GameSettings.next_match_mode) if GameSettings != null else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
-	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, game_mode_id, custom_identity_enabled, fixed_seat_enabled)
+	var host_error: Error = match_controller.network_gateway.host_lan(display_name, port, avatar_character_id, room_password, player_count, game_mode_id, custom_identity_enabled, fixed_seat_enabled, seat_compensation_enabled)
 	if host_error != OK:
 		lan_lobby_panel.show_error("创建局域网房间失败，请检查端口是否被占用。")
 
@@ -1019,9 +1019,9 @@ func _on_lan_lobby_kick_requested(peer_id: int) -> void:
 		online_lobby_panel.show_error(kick_error)
 
 
-## 房主保存模式、人数、密码、自选身份与固定座位设置；网关校验真人下限并广播完整公共快照。
-func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool) -> void:
-	var settings_error: String = match_controller.network_gateway.update_lan_lobby_settings(game_mode_id, player_count, room_password, custom_identity_enabled, fixed_seat_enabled)
+## 房主保存模式、人数、密码、自选身份、固定座位与座次补偿设置；网关校验真人下限并广播完整公共快照。
+func _on_lan_lobby_settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool, seat_compensation_enabled: bool) -> void:
+	var settings_error: String = match_controller.network_gateway.update_lan_lobby_settings(game_mode_id, player_count, room_password, custom_identity_enabled, fixed_seat_enabled, seat_compensation_enabled)
 	if not settings_error.is_empty():
 		online_lobby_panel.show_error(settings_error)
 		return
@@ -5634,6 +5634,9 @@ func _get_post_match_result_text() -> String:
 
 ## 判定本机玩家是否属于权威胜者阵营；终局提示与终局音效共用同一判定，避免文字与音效互相矛盾。
 func _is_local_player_victory(winner: String) -> bool:
+	# 胜者为王：全员同为内奸，身份字段无法区分胜负，只能按"本地玩家是否唯一存活"判定。
+	if winner == IdentityRules.WINNER_TAKES_ALL_WINNER_ID:
+		return _is_local_player_sole_survivor()
 	# 当前本地玩家公开身份；身份局终局阵营只由该稳定枚举判断，不依赖武将或座次。
 	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
 	# 当前本地身份；快照不完整时不能错误宣告胜负。
@@ -5648,6 +5651,23 @@ func _is_local_player_victory(winner: String) -> bool:
 		or (winner == "blue_team" and local_identity == "blue")
 		or (winner == "red_team" and local_identity == "red")
 	)
+
+
+## 判定本地玩家是否为场上唯一存活者；只读公开的 alive 字段，不推算任何隐藏信息。
+func _is_local_player_sole_survivor() -> bool:
+	# 存活玩家数量；离场仍算存活，与权威胜负统计口径保持一致。
+	var alive_count: int = 0
+	# 本地玩家是否存活；快照缺少本地玩家时保持 false，避免误报胜利。
+	var local_alive: bool = false
+	for player_variant: Variant in _snapshot.get("players", []) as Array:
+		# 当前玩家快照；无效条目直接跳过。
+		var player: Dictionary = player_variant as Dictionary
+		if not bool(player.get("alive", false)):
+			continue
+		alive_count += 1
+		if int(player.get("player_id", -1)) == match_controller.local_human_player_id:
+			local_alive = true
+	return local_alive and alive_count == 1
 
 
 ## 推导本机视角的终局效果音标识；平局、胜利与失败各自使用独立音效，与本机终局提示完全一致。

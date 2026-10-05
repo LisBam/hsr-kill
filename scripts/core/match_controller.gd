@@ -1460,6 +1460,43 @@ func _resolve_match_mode(mode_id: String = "") -> String:
 	return identity_rules.normalize_mode(raw_mode)
 
 
+## 解析本局座次补偿开关并锁定到 state.match_options；仅胜者为王使用该选项，其余模式恒为 false。
+## 局域网房主以房间开关为权威（客户端由房主快照覆盖），离线与客户端回退到本地持久化设置。
+func _resolve_seat_compensation_enabled(mode_id: String) -> bool:
+	if identity_rules.normalize_mode(mode_id) != IdentityRules.MODE_WINNER_TAKES_ALL:
+		return false
+	if network_gateway != null and network_gateway.is_lan_host():
+		return network_gateway.is_lan_seat_compensation_enabled()
+	return GameSettings != null and GameSettings.seat_compensation_enabled
+
+
+## 返回本局锁定的座次补偿开关；菜单在开局后的修改只作用于下一局，不会改变进行中的对局。
+func is_seat_compensation_enabled() -> bool:
+	if state == null:
+		return false
+	return bool(state.match_options.get("seat_compensation_enabled", false))
+
+
+## 返回指定玩家在本局的规则座次（1起始）；玩家不属于本局时返回 0。
+## 座次索引在创建玩家时排定、开局前只按首任身份旋转一次，此后本局不再变动，因此可作为座次补偿的稳定依据。
+func get_player_seat_number(player: PlayerState) -> int:
+	if state == null or player == null:
+		return 0
+	# 当前物理座次下标；-1 表示该玩家不属于本局。
+	var seat_index: int = state.players.find(player)
+	return seat_index + 1 if seat_index >= 0 else 0
+
+
+## 返回指定零起始座次在本局应追加的座次补偿初始手牌数；非胜者为王或未开启补偿时返回 0。
+func _get_seat_compensation_hand_bonus_for_seat(seat_index: int) -> int:
+	return identity_rules.get_seat_compensation_hand_bonus(str(state.match_mode), seat_index + 1, is_seat_compensation_enabled())
+
+
+## 返回指定玩家在本局应追加的座次补偿体力上限；非胜者为王或未开启补偿时返回 0。
+func _get_seat_compensation_max_hp_bonus(player: PlayerState) -> int:
+	return identity_rules.get_seat_compensation_max_hp_bonus(str(state.match_mode), get_player_seat_number(player), is_seat_compensation_enabled())
+
+
 ## 解析本局唯一随机种子；显式非零值保持可复现，自动值混合跨进程系统时间、进程内单调时间、进程号与重开序号。
 func _resolve_match_seed(requested_seed: int) -> int:
 	if requested_seed != 0:
@@ -1550,6 +1587,7 @@ func start_match(player_count: int = -1, seed: int = 0, mode_id: String = "") ->
 		"opportunity_system_enabled":opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode),
 		"lan_custom_identity_enabled":network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_custom_identity_enabled(),
 		"lan_fixed_seat_enabled":network_gateway != null and network_gateway.is_lan_host() and network_gateway.is_lan_fixed_seat_enabled(),
+		"seat_compensation_enabled":_resolve_seat_compensation_enabled(actual_mode),
 	}
 	if opportunity_system != null:
 		opportunity_system.configure(self, state, _rng, opportunity_enabled_mode_ids.has(actual_mode) or opportunity_manual_mode_ids.has(actual_mode), opportunity_enabled_mode_ids.has(actual_mode))
@@ -9652,7 +9690,9 @@ func _refresh_pre_game_character_stats(player: PlayerState) -> void:
 	var character: Dictionary = GameDatabase.get_character(player.character_id)
 	# 模式开局体力上限加值；身份局领袖在不少于5人时+1，斗地主地主固定+1。
 	var opening_max_hp_bonus: int = identity_rules.get_opening_max_hp_bonus(player.identity, state.players.size(), str(state.match_mode))
-	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + opening_max_hp_bonus
+	# 座次补偿体力上限加值；仅胜者为王在开启补偿后按开局座次追加：1至4号+0，5至8号+1，9号及以后+2。
+	var seat_compensation_hp_bonus: int = _get_seat_compensation_max_hp_bonus(player)
+	player.max_hp = maxi(int(character.get("max_hp", 4)), 1) + opening_max_hp_bonus + seat_compensation_hp_bonus
 	# 过关斩将敌方的体力与手牌上限从已获得关卡机缘重新汇总；其他角色不写模式专属字段。
 	# 补充：玩家难度体力机缘不写模式专属字段，而在后续通用机缘历史入口单独计算。
 	if conquest_mode != null and conquest_mode.is_enemy(player.player_id):
@@ -11409,7 +11449,7 @@ func _continue_game_start_after_character_adjustment() -> void:
 		else:
 			starting_hand_count = maxi(int(game_draw_begin_event.data.get("cards_per_player", starting_hand_count)) if game_draw_begin_event != null else starting_hand_count, 0)
 	if should_deal_starting_cards:
-		# 2v2：四号位初始手牌 +1；其他模式与各座次统一使用 starting_hand_count。
+		# 2v2：四号位初始手牌 +1；胜者为王：按开局座次追加座次补偿手牌；其他模式与各座次统一使用 starting_hand_count。
 		var is_team2v2_start: bool = identity_rules.normalize_mode(str(state.match_mode)) == IdentityRules.MODE_TEAM2V2
 		# 开局前分发窗口：起始手牌是开局前的准备行为，不能被“当你获得牌时”类技能（如【风口】）当成一次获得。
 		# 若在这里触发询问，控制器会进入“等待选择”并把阶段改成 choice，手气卡阶段随即失效（提示“当前不在手气卡阶段”）。
@@ -11418,8 +11458,8 @@ func _continue_game_start_after_character_adjustment() -> void:
 		for seat_index: int in range(state.players.size()):
 			# 当前座次玩家；seat_index 0 为一号位，3 为四号位。
 			var seated_player: PlayerState = state.players[seat_index]
-			# 当前角色实际起始手牌数；难度灰色机缘与2v2四号位加值在统一基础数量上累加。
-			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0) + get_acquired_opportunity_effect_total(seated_player.player_id, "initial_hand_bonus")
+			# 当前角色实际起始手牌数；座次补偿、难度灰色机缘与2v2四号位加值在统一基础数量上累加。
+			var seat_hand_count: int = starting_hand_count + (1 if is_team2v2_start and seat_index == 3 else 0) + _get_seat_compensation_hand_bonus_for_seat(seat_index) + get_acquired_opportunity_effect_total(seated_player.player_id, "initial_hand_bonus")
 			draw(seated_player.player_id, seat_hand_count, false)
 		_before_match_start_deal_active = false
 		var game_draw_result_data: Dictionary = {"cards_per_player":starting_hand_count, "player_count":state.players.size(), "team2v2_seat4_bonus":1 if is_team2v2_start else 0}
@@ -11483,6 +11523,9 @@ func _complete_pre_game_start() -> void:
 		add_log("对局开始：%d名玩家，牌堆%d张，每名玩家起始手牌%d张。" % [state.players.size(), state.draw_pile.size(), _starting_hand_count])
 	else:
 		add_log("对局开始：%d名玩家，起始手牌分发被规则取消。" % state.players.size())
+	# 座次补偿生效摘要；不扩展 gameDraw 运行时事件结构，避免影响既有回放兼容性。
+	if _starting_cards_were_dealt and is_seat_compensation_enabled():
+		add_log("座次补偿已生效：初始手牌按座次每三人递增1张，5至8号体力上限+1，9号及以后体力上限+2。")
 	# 首回合可能在roundStart立即创建技能询问；开始回合前必须先同步最终座次与起始手牌，保证本地内联候选已经存在于牌桌快照中。
 	_emit_state()
 	if conquest_mode != null and opportunity_system != null:
@@ -18362,6 +18405,8 @@ func _winner_text(winner: String) -> String:
 		"peasants":"农民",
 		"blue_team":"蓝方",
 		"red_team":"红方",
+		# 胜者为王：只有一名存活者时胜出，使用独立获胜 ID，避免与身份局内奸阵营混淆。
+		"last_survivor":"最后的胜者",
 	}.get(winner, winner)
 
 

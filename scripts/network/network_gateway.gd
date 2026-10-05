@@ -58,7 +58,8 @@ enum LanRole {
 ## 版本8在版本7基础上新增对局内聊天 match_chat 消息类型（客户端上行与房主中继下行共用）。
 ## 版本9在版本8基础上移除大厅聊天与对局聊天条目的 time_text 字段（聊天界面不再显示时间）。
 ## 版本10在版本9基础上向大厅公共快照新增 fixed_seat_enabled 固定座位开关字段，并调整自选身份只绑定身份而不固定物理座位。
-const PROTOCOL_VERSION: int = 10
+## 版本11在版本10基础上向大厅公共快照新增 seat_compensation_enabled 座次补偿开关字段（胜者为王模式专用）。
+const PROTOCOL_VERSION: int = 11
 
 ## Godot ENet 服务器固定使用的网络对等体 ID；客户端所有上行封包只能发送给该 ID。
 const SERVER_PEER_ID: int = 1
@@ -110,6 +111,7 @@ const LOBBY_GAME_MODE_OPTIONS: Array[Dictionary] = [
 	{"id":"wheel_duel", "display_name":"1v1车轮战"},
 	{"id":"opportunity_brawl", "display_name":"机缘大乱斗"},
 	{"id":"conquest", "display_name":"过关斩将"},
+	{"id":"winner_takes_all", "display_name":"胜者为王"},
 ]
 
 ## 局域网默认端口；7000避开系统保留端口并方便开发环境记忆，可在创建或加入房间时覆盖。
@@ -165,6 +167,9 @@ var _lobby_custom_identity_enabled: bool = false
 
 ## 当前房间是否固定绑定大厅位置与规则座次；关闭时身份仍按大厅位置绑定，但物理座位在每次开局重新随机打乱。
 var _lobby_fixed_seat_enabled: bool = false
+
+## 当前房间是否开启座次补偿；仅胜者为王模式读取，开启后按开局座次追加初始手牌与体力上限。
+var _lobby_seat_compensation_enabled: bool = false
 
 ## 本次开局的座位占用者大厅位置；索引为稳定玩家ID，值为占用该座位成员的大厅位置，仅自选身份开局填充。
 ## 权威控制器据此把大厅位置身份写入真正占用该座位的玩家，使身份跟人走而物理座位保持随机。
@@ -266,7 +271,7 @@ func set_mode(new_mode: Mode) -> void:
 
 
 ## 创建局域网 ENet 房间；成功后本机成为大厅房主，并应用联机形象、密码、人数与模式初始配置。
-func host_lan(display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "", player_count: int = 2, game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID, custom_identity_enabled: bool = false, fixed_seat_enabled: bool = false) -> Error:
+func host_lan(display_name: String, port: int = -1, avatar_character_id: String = "", room_password: String = "", player_count: int = 2, game_mode_id: String = DEFAULT_LOBBY_GAME_MODE_ID, custom_identity_enabled: bool = false, fixed_seat_enabled: bool = false, seat_compensation_enabled: bool = false) -> Error:
 	leave_lan("")
 	_bind_multiplayer_signals()
 	# 实际监听端口；无效输入回退检查器默认值，避免 ENet 接收越界端口。
@@ -295,6 +300,8 @@ func host_lan(display_name: String, port: int = -1, avatar_character_id: String 
 	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
 	# 房间初始固定座位开关；只影响自选身份下的座位是否随开局随机，关闭后身份仍按大厅位置绑定。
 	_lobby_fixed_seat_enabled = fixed_seat_enabled
+	# 房间初始座次补偿开关；仅胜者为王读取，其余模式即使开启也不会产生任何数值影响。
+	_lobby_seat_compensation_enabled = seat_compensation_enabled
 	_lobby_members[SERVER_PEER_ID] = _make_lobby_member(SERVER_PEER_ID, _local_display_name, _local_avatar_character_id, true, 0, 0)
 	connection_state_changed.emit(true, "局域网房间已创建，等待其他玩家加入。")
 	_emit_lobby_state()
@@ -404,6 +411,7 @@ func get_lan_lobby_snapshot(include_host_private_settings: bool = false) -> Dict
 		"game_mode_id":_lobby_game_mode_id,
 		"custom_identity_enabled":_lobby_custom_identity_enabled,
 		"fixed_seat_enabled":_lobby_fixed_seat_enabled,
+		"seat_compensation_enabled":_lobby_seat_compensation_enabled,
 		"has_password":_lobby_password_enabled,
 		"chat_history":_lobby_chat_history.duplicate(true),
 	}
@@ -427,14 +435,19 @@ func is_lan_fixed_seat_enabled() -> bool:
 	return mode == Mode.LAN and _lobby_fixed_seat_enabled
 
 
+## 返回当前局域网房间是否开启座次补偿；仅胜者为王模式读取，客户端只通过房主快照获得该值。
+func is_lan_seat_compensation_enabled() -> bool:
+	return mode == Mode.LAN and _lobby_seat_compensation_enabled
+
+
 ## 返回本次开局的座位到大厅位置映射；索引为稳定玩家ID，值为占用该座位成员的大厅位置，未映射座位为-1。
 ## 只有自选身份开局会填充该映射，权威控制器据此把大厅位置身份写入真正占用该座位的玩家。
 func get_lan_seat_lobby_slots() -> Array[int]:
 	return _seat_lobby_slot_indices.duplicate()
 
 
-## 房主更新大厅游戏模式、总人数、密码、自选身份与固定座位开关；人数不得少于当前真人数，成功后立即广播全员。
-func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool = false, fixed_seat_enabled: bool = false) -> String:
+## 房主更新大厅游戏模式、总人数、密码、自选身份、固定座位与座次补偿开关；人数不得少于当前真人数，成功后立即广播全员。
+func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool = false, fixed_seat_enabled: bool = false, seat_compensation_enabled: bool = false) -> String:
 	if not is_lan_host() or _lan_match_active:
 		return "当前不是可修改设置的局域网房主。"
 	# 规范化后的游戏模式 ID；当前未知模式回退身份模式，保证开始按钮不会请求不存在的规则。
@@ -451,6 +464,8 @@ func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_pas
 	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
 	# 固定座位开关随设置一并更新；关闭时身份仍按位置绑定，物理座位在开局随机，2v2 由模式规则单独强制固定。
 	_lobby_fixed_seat_enabled = fixed_seat_enabled
+	# 座次补偿开关随设置一并更新；仅胜者为王读取，其他模式的规则函数会忽略该值。
+	_lobby_seat_compensation_enabled = seat_compensation_enabled
 	_normalize_lobby_member_seats()
 	_emit_lobby_state()
 	return ""
@@ -1387,6 +1402,8 @@ func _apply_remote_lobby_state(snapshot: Dictionary) -> void:
 	_lobby_custom_identity_enabled = bool(snapshot.get("custom_identity_enabled", false))
 	# 客户端同步房主权威固定座位开关；只影响大厅设置摘要，座位映射仍由房主在开局时权威决定。
 	_lobby_fixed_seat_enabled = bool(snapshot.get("fixed_seat_enabled", false))
+	# 客户端同步房主权威座次补偿开关；座位补偿数值只在胜者为王开局时由控制器读取。
+	_lobby_seat_compensation_enabled = bool(snapshot.get("seat_compensation_enabled", false))
 	_lobby_password_enabled = bool(snapshot.get("has_password", false))
 	_lobby_chat_history.clear()
 	for chat_variant: Variant in snapshot.get("chat_history", []) as Array:
@@ -1678,10 +1695,10 @@ func _normalize_lobby_game_mode_id(game_mode_id: String) -> String:
 	return DEFAULT_LOBBY_GAME_MODE_ID
 
 
-## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主、2v2与1v1车轮战。
+## 判断大厅模式是否已具备完整开局规则；当前支持标准身份局、斗地主、2v2、1v1车轮战、机缘大乱斗、过关斩将与胜者为王。
 func _is_lobby_game_mode_playable(game_mode_id: String) -> bool:
 	var normalized_mode: String = _normalize_lobby_game_mode_id(game_mode_id)
-	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2" or normalized_mode == "wheel_duel" or normalized_mode == "opportunity_brawl" or normalized_mode == "conquest"
+	return normalized_mode == DEFAULT_LOBBY_GAME_MODE_ID or normalized_mode == "doudizhu" or normalized_mode == "team2v2" or normalized_mode == "wheel_duel" or normalized_mode == "opportunity_brawl" or normalized_mode == "conquest" or normalized_mode == "winner_takes_all"
 
 
 ## 按大厅模式规范化总人数；身份模式 2–10，斗地主仅 3 或 5，2v2 固定 4。
@@ -1741,6 +1758,8 @@ func _set_offline_state() -> void:
 	_lobby_custom_identity_enabled = false
 	# 固定座位开关随会话释放复原；下一次建房由创建入口显式写入。
 	_lobby_fixed_seat_enabled = false
+	# 座次补偿开关随会话释放复原；下一次建房由创建入口显式写入。
+	_lobby_seat_compensation_enabled = false
 	# 座位到大厅位置映射属于单次开局的临时数据；会话释放后清空，避免下一次开局误用旧位置。
 	_seat_lobby_slot_indices.clear()
 	_lobby_chat_history.clear()

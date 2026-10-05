@@ -94,6 +94,10 @@ const MODE_DETAILS_BY_MODE: Dictionary = {
 		"title":"过关斩将模式详情",
 		"description":"离线为1名玩家对战1名AI，联机为2至4名玩家对战等量AI，玩家方先手。开局玩家方选择1次机缘；清空本层全部敌方武将后，敌方会弃置全部区域牌、统一提升关卡、随机换将并获得累计强化，随后玩家方再选择1次机缘。拥有复活次数时，玩家死亡会弃置区域内所有牌、将体力回复至体力上限并摸4张牌，随后继续游戏。\n\n难度一：增加2点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1；复活次数+1。\n难度二：增加1点体力上限；摸牌阶段额外摸一张牌；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。\n难度三：增加1点体力上限；初始手牌数+2；出牌阶段使用【杀】的次数上限+1。\n难度四：初始手牌数+1；出牌阶段使用【杀】的次数上限+1。\n难度五：无额外增益。",
 	},
+	GameSettings.MATCH_MODE_WINNER_TAKES_ALL:{
+		"title":"胜者为王模式详情",
+		"description":"支持2—10人。所有玩家的身份均为内奸并于开局公开，获胜目标是击杀除自己以外的所有角色；任意玩家击杀其他角色后均摸3张牌。一号位先手，各座次在整局中固定不轮转。当场上只剩一名存活角色时该角色获胜；若出现无人存活的情况则判为平局。\n\n座次补偿（默认关闭，可在主菜单、联机大厅房间设置与局内菜单中开启）：开启后按开局座次为靠后的玩家追加初始手牌与体力上限，用来缓解后置位先手劣势。\n初始手牌：1号、2号、3号+0；4号、5号、6号+1；7号、8号、9号+2；10号+3。\n体力上限：1号至4号+0；5号至8号+1；9号及以后+2。\n补偿只在本模式生效，关闭开关或选择其他模式时不会有任何数值影响。",
+	},
 }
 
 ## 当前主菜单选中的下一局模式稳定 ID；与 GameSettings.next_match_mode 同步。
@@ -159,6 +163,12 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 左侧过关斩将模式按钮指示条；选中时显示主题强调色。
 @onready var _conquest_mode_card_indicator: ColorRect = %ConquestModeIndicator
+
+## 左侧胜者为王模式卡片按钮；全员内奸互为敌人，按座次补偿可开启。
+@onready var _winner_takes_all_mode_button: Button = %WinnerTakesAllModeButton
+
+## 左侧胜者为王模式按钮指示条；选中时显示主题强调色。
+@onready var _winner_takes_all_mode_card_indicator: ColorRect = %WinnerTakesAllModeIndicator
 
 ## 预览右上角模式摘要板；使用局部主题底板保证标题不会被明亮角色原画吞没。
 @onready var _mode_summary_panel: PanelContainer = %MainMenuModeSummaryPanel
@@ -254,6 +264,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 ## 房主调整全部 AI 武将开关；初次选将完成后决定是否插入开局前调整阶段。
 @onready var _customize_ai_characters_checkbox: CheckBox = %MainMenuCustomizeAiCharactersCheckBox
 
+## 座次补偿开关；仅胜者为王模式显示，开启后按开局座次追加初始手牌与体力上限。
+@onready var _seat_compensation_checkbox: CheckBox = %MainMenuSeatCompensationCheckBox
+
 ## 手气卡数量下拉框；选项元数据保存0至5、10或-1，不依赖显示文字解析张数。
 @onready var _mulligan_limit_option: OptionButton = %MainMenuMulliganLimitOption
 
@@ -283,6 +296,9 @@ var _selected_match_mode: String = GameSettings.MATCH_MODE_IDENTITY if GameSetti
 
 ## 普通模式AI武将调整控件；车轮战抓将阶段由专属服务处理时隐藏。
 @onready var _customize_ai_characters_row: Control = _customize_ai_characters_checkbox
+
+## 座次补偿设置行；只有胜者为王模式显示，隐藏时不占设置面板布局高度。
+@onready var _seat_compensation_row: Control = _seat_compensation_checkbox
 
 ## 普通模式换将卡整行；车轮战改用固定公共候选池，不显示该设置。
 @onready var _character_replacement_count_row: Control = _character_replacement_count_option.get_parent() as Control
@@ -382,6 +398,7 @@ func _ready() -> void:
 	_wheel_duel_mode_button.pressed.connect(_select_wheel_duel_mode)
 	_opportunity_brawl_mode_button.pressed.connect(_select_opportunity_brawl_mode)
 	_conquest_mode_button.pressed.connect(_select_conquest_mode)
+	_winner_takes_all_mode_button.pressed.connect(_select_winner_takes_all_mode)
 	_online_settings_button.pressed.connect(_open_online_settings)
 	_all_cards_button.pressed.connect(_open_all_cards)
 	if _match_replay_button != null:
@@ -450,6 +467,8 @@ func _ready() -> void:
 	_custom_character_assignment_checkbox.toggled.connect(GameSettings.set_custom_character_assignment_enabled)
 	_customize_ai_characters_checkbox.set_pressed_no_signal(GameSettings.customize_ai_characters_enabled)
 	_customize_ai_characters_checkbox.toggled.connect(GameSettings.set_customize_ai_characters_enabled)
+	_seat_compensation_checkbox.set_pressed_no_signal(GameSettings.seat_compensation_enabled)
+	_seat_compensation_checkbox.toggled.connect(GameSettings.set_seat_compensation_enabled)
 	_populate_mulligan_limit_options()
 	_mulligan_limit_option.item_selected.connect(_on_mulligan_limit_selected)
 	_ai_uses_mulligan_checkbox.set_pressed_no_signal(GameSettings.ai_uses_mulligan_enabled)
@@ -466,6 +485,7 @@ func _ready() -> void:
 	GameSettings.control_all_characters_changed.connect(_control_all_characters_checkbox.set_pressed_no_signal)
 	GameSettings.custom_character_assignment_changed.connect(_custom_character_assignment_checkbox.set_pressed_no_signal)
 	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
+	GameSettings.seat_compensation_changed.connect(_seat_compensation_checkbox.set_pressed_no_signal)
 	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
 	GameSettings.ai_uses_mulligan_changed.connect(_ai_uses_mulligan_checkbox.set_pressed_no_signal)
 	GameSettings.character_replacement_count_changed.connect(_refresh_active_character_replacement_count_selection)
@@ -623,6 +643,7 @@ func refresh_ui_style() -> void:
 	_wheel_duel_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_opportunity_brawl_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	_conquest_mode_card_indicator.color = BattleUIStyle.get_color("accent")
+	_winner_takes_all_mode_card_indicator.color = BattleUIStyle.get_color("accent")
 	(%TopNavigationDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.48)
 	(%MainMenuSettingsDivider as ColorRect).color = Color(BattleUIStyle.get_color("border"), 0.62)
 	_refresh_top_navigation_page_style()
@@ -632,6 +653,7 @@ func refresh_ui_style() -> void:
 	_apply_mode_button_style(_wheel_duel_mode_button)
 	_apply_mode_button_style(_opportunity_brawl_mode_button)
 	_apply_mode_button_style(_conquest_mode_button)
+	_apply_mode_button_style(_winner_takes_all_mode_button)
 	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("accent"), false)
 	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
@@ -672,6 +694,8 @@ func refresh_ui_style() -> void:
 	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%ConquestModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%ConquestModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%WinnerTakesAllModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	(%WinnerTakesAllModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -722,6 +746,9 @@ func refresh_ui_style() -> void:
 	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_seat_compensation_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
@@ -766,6 +793,8 @@ func _restore_selected_match_mode() -> void:
 		_select_opportunity_brawl_mode()
 	elif restored_mode == GameSettings.MATCH_MODE_CONQUEST:
 		_select_conquest_mode()
+	elif restored_mode == GameSettings.MATCH_MODE_WINNER_TAKES_ALL:
+		_select_winner_takes_all_mode()
 	else:
 		_select_identity_mode()
 
@@ -803,12 +832,14 @@ func _select_identity_mode() -> void:
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
 	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = false
 	_mode_card_indicator.visible = true
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
 	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _identity_mode_button)
@@ -850,12 +881,14 @@ func _select_doudizhu_mode() -> void:
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
 	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = true
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
 	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _doudizhu_mode_button)
@@ -897,12 +930,14 @@ func _select_team2v2_mode() -> void:
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = false
 	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = true
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = false
 	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _team2v2_mode_button)
@@ -935,12 +970,14 @@ func _select_wheel_duel_mode() -> void:
 	_wheel_duel_mode_button.button_pressed = true
 	_opportunity_brawl_mode_button.button_pressed = false
 	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = true
 	_opportunity_brawl_mode_card_indicator.visible = false
 	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(true)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _wheel_duel_mode_button)
@@ -975,12 +1012,14 @@ func _select_opportunity_brawl_mode() -> void:
 	_wheel_duel_mode_button.button_pressed = false
 	_opportunity_brawl_mode_button.button_pressed = true
 	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = false
 	_mode_card_indicator.visible = false
 	_doudizhu_mode_card_indicator.visible = false
 	_team2v2_mode_card_indicator.visible = false
 	_wheel_duel_mode_card_indicator.visible = false
 	_opportunity_brawl_mode_card_indicator.visible = true
 	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = false
 	_set_wheel_duel_settings_visible(false)
 	_show_status(MODE_READY_STATUS_TEXT, false)
 	call_deferred("_ensure_mode_button_visible", _opportunity_brawl_mode_button)
@@ -1028,6 +1067,51 @@ func _select_conquest_mode() -> void:
 	call_deferred("_ensure_mode_button_visible", _conquest_mode_button)
 
 
+## 选中胜者为王模式；全员同为内奸且互为敌人，保留标准身份局的选将与人数设置，并额外显示座次补偿开关。
+func _select_winner_takes_all_mode() -> void:
+	if _online_settings_panel.visible:
+		_close_online_settings(false)
+	if _all_cards_panel.visible:
+		_close_all_cards(false)
+	if _is_match_replay_page_visible():
+		_close_match_replay(false)
+	_selected_match_mode = GameSettings.MATCH_MODE_WINNER_TAKES_ALL
+	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_WINNER_TAKES_ALL)
+	# 人数范围与身份模式一致；本模式支持2至10人，并使用独立的模式人数槽。
+	minimum_player_count = GameSettings.MIN_NEXT_MATCH_PLAYER_COUNT
+	maximum_player_count = GameSettings.MAX_NEXT_MATCH_PLAYER_COUNT
+	_player_count_input.min_value = minimum_player_count
+	_player_count_input.max_value = maximum_player_count
+	_player_count_input.step = 1.0
+	# 本模式上次保存的人数；首次运行时回退通用人数槽当前值。
+	var stored_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_WINNER_TAKES_ALL)
+	set_next_player_count(stored_count)
+	_mode_title.text = "胜者为王"
+	_mode_description.text = "全员内奸 · %d—%d人 · 击杀其他所有角色者获胜" % [minimum_player_count, maximum_player_count]
+	# 预览左上角模式徽章与身份模式一样不展示。
+	if _preview_mode_badge != null:
+		_preview_mode_badge.visible = false
+	_set_top_navigation_page(false)
+	_identity_mode_button.button_pressed = false
+	_doudizhu_mode_button.button_pressed = false
+	_team2v2_mode_button.button_pressed = false
+	_wheel_duel_mode_button.button_pressed = false
+	_opportunity_brawl_mode_button.button_pressed = false
+	_conquest_mode_button.button_pressed = false
+	_winner_takes_all_mode_button.button_pressed = true
+	_mode_card_indicator.visible = false
+	_doudizhu_mode_card_indicator.visible = false
+	_team2v2_mode_card_indicator.visible = false
+	_wheel_duel_mode_card_indicator.visible = false
+	_opportunity_brawl_mode_card_indicator.visible = false
+	_conquest_mode_card_indicator.visible = false
+	_winner_takes_all_mode_card_indicator.visible = true
+	# 布局与身份模式一致：保留通用选将与人数设置行，只额外显示座次补偿开关。
+	_set_wheel_duel_settings_visible(false)
+	_show_status(MODE_READY_STATUS_TEXT, false)
+	call_deferred("_ensure_mode_button_visible", _winner_takes_all_mode_button)
+
+
 ## 控制车轮战专属设置行显隐；隐藏时不占VBox布局高度，过关斩将保留独立随机选将牌数设置。
 func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	# 过关斩将与车轮战一样都是固定2人，但仅过关斩将保留独立的随机选将牌数设置。
@@ -1049,6 +1133,8 @@ func _set_wheel_duel_settings_visible(visible_state: bool) -> void:
 	_conquest_opportunity_choice_row.visible = is_conquest
 	_auto_identity_marking_checkbox.visible = not visible_state
 	_player_count_row.visible = not visible_state
+	# 座次补偿只属于胜者为王；其他任何模式都必须隐藏该行，避免玩家以为开关会作用于当前模式。
+	_seat_compensation_row.visible = _selected_match_mode == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
 	_refresh_active_character_replacement_count_selection()
 	_refresh_active_character_candidate_count_selection()
 	_refresh_mode_details_button()

@@ -193,6 +193,27 @@ size_flags_horizontal = 3
 mouse_default_cursor_shape = 2
 text = "开启后大厅位置固定决定对局座位（默认每次开局随机打乱座位）"
 
+[node name="SeatCompensationRow" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SeatCompensationLabel" type="Label" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/SeatCompensationRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 38)
+layout_mode = 2
+text = "座次补偿"
+vertical_alignment = 1
+
+[node name="LanSeatCompensationCheckBox" type="CheckBox" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm/SeatCompensationRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_default_cursor_shape = 2
+text = "开启后按开局座次追加初始手牌与体力上限（仅胜者为王，创建房间时生效）"
+
 [node name="ConnectionButtons" type="HBoxContainer" parent="LanLobbyFrame/LobbyMargin/LobbyVBox/LanConnectionForm"]
 layout_mode = 2
 theme_override_constants/separation = 12

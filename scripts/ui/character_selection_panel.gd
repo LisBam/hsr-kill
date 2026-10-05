@@ -875,6 +875,9 @@ func _render_custom_assignment_controls() -> void:
 		var identity: String = str(identity_option.get("id", ""))
 		var is_doudizhu_identity: bool = identity == "landlord" or identity == "peasant"
 		var is_team2v2_identity: bool = identity == "blue" or identity == "red"
+		# 胜者为王：全员固定内奸，身份选择行只保留内奸，避免出现与模式无关的主公/忠臣/反贼按钮。
+		if selection_mode == "winner_takes_all" and identity != "renegade":
+			continue
 		if selection_mode == "doudizhu" and not is_doudizhu_identity:
 			continue
 		if selection_mode == "team2v2" and not is_team2v2_identity:
@@ -928,6 +931,9 @@ func _get_first_seat_identity_id() -> String:
 	if selection_mode == "doudizhu":
 		return "landlord"
 	if selection_mode == "team2v2":
+		return ""
+	if selection_mode == "winner_takes_all":
+		# 胜者为王没有主公，一号位只承担先选职责，不绑定首任身份。
 		return ""
 	return "leader"
 

@@ -13,7 +13,7 @@ signal seat_change_requested(seat_index: int)
 signal kick_requested(peer_id: int)
 
 ## 房主保存对局设置时发出的请求；参数依次为稳定模式 ID、总人数、房间密码、是否开启自选身份与是否固定座位。
-signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool)
+signal settings_update_requested(game_mode_id: String, player_count: int, room_password: String, custom_identity_enabled: bool, fixed_seat_enabled: bool, seat_compensation_enabled: bool)
 
 ## 房主点击开始游戏时发出的请求；对局人数与模式已经由权威房间设置保存。
 signal start_match_requested()
@@ -107,6 +107,12 @@ const AVATAR_COMPONENT_SIZE: Vector2 = Vector2(148.35, 227.8)
 
 ## 固定座位开关；关闭时身份仍按大厅位置绑定，但物理座位在每次开局随机打乱，仅开启后才固定绑定座位。
 @onready var _fixed_seat_checkbox: CheckBox = %OnlineLobbyFixedSeatCheckBox
+
+## 座次补偿开关；仅胜者为王模式显示，开启后按开局座次追加初始手牌与体力上限。
+@onready var _seat_compensation_checkbox: CheckBox = %OnlineLobbySeatCompensationCheckBox
+
+## 座次补偿设置行；非胜者为王模式隐藏，避免被误解为通用房间设置。
+@onready var _seat_compensation_row: Control = %SeatCompensationRow
 
 ## 保存房间设置按钮；发出纯数据请求，成功与失败由牌桌协调器回传。
 @onready var _settings_save_button: Button = %OnlineLobbySettingsSaveButton
@@ -230,6 +236,11 @@ func refresh_ui_style() -> void:
 	_fixed_seat_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_fixed_seat_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
 	_fixed_seat_checkbox.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
+	(%OnlineLobbySeatCompensationLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_seat_compensation_checkbox.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
 	# 大厅错误标签保持危险语义色；主题切换时即使正在显示错误也不会回退默认白字。
 	(%OnlineLobbyErrorLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	_apply_line_edit_style(_chat_input)
@@ -373,6 +384,9 @@ func _open_settings() -> void:
 	_apply_custom_identity_availability_for_mode(game_mode_id)
 	# 固定座位回填；同样来自权威快照，只在自选身份开启时改变开局座位映射，关闭自选身份时保持可编辑但无效果。
 	_fixed_seat_checkbox.set_pressed_no_signal(bool(_snapshot.get("fixed_seat_enabled", false)))
+	# 座次补偿回填；来自权威快照，并只在胜者为王模式下显示该行。
+	_seat_compensation_checkbox.set_pressed_no_signal(bool(_snapshot.get("seat_compensation_enabled", false)))
+	_apply_seat_compensation_availability_for_mode(game_mode_id)
 	_settings_backdrop.visible = true
 	_settings_panel.visible = true
 	_settings_panel.move_to_front()
@@ -403,7 +417,7 @@ func _save_settings() -> void:
 	# 最终人数候选；文本合法时按控件上下限收敛后采用，之后仍会按模式与真人数下限再规范化一次。
 	var player_count: int = clampi(typed_player_count, int(_player_count_input.min_value), int(_player_count_input.max_value)) if typed_player_count > 0 else value_player_count
 	player_count = _normalize_player_count_for_mode(game_mode_id, player_count)
-	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id), _fixed_seat_checkbox.button_pressed)
+	settings_update_requested.emit(game_mode_id, player_count, _password_input.text, _custom_identity_checkbox.button_pressed and _identity_rules.supports_lobby_custom_identity(game_mode_id), _fixed_seat_checkbox.button_pressed, _seat_compensation_checkbox.button_pressed and _seat_compensation_row.visible)
 
 
 ## 房主请求开始当前设置的对局；按钮暂时禁用直到成功开局或协调器回传错误。
@@ -553,8 +567,14 @@ func _on_game_mode_option_selected(_index: int) -> void:
 	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
 	_apply_player_count_limits_for_mode(game_mode_id)
 	_apply_custom_identity_availability_for_mode(game_mode_id)
+	_apply_seat_compensation_availability_for_mode(game_mode_id)
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_player_count_input.value))
 	_apply_player_count_value(normalized_count)
+
+
+## 按模式显示或隐藏座次补偿设置行；该开关只属于胜者为王，其他模式隐藏且不参与提交。
+func _apply_seat_compensation_availability_for_mode(game_mode_id: String) -> void:
+	_seat_compensation_row.visible = game_mode_id == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
 
 
 ## 按模式启用或禁用自选身份复选框；过关斩将真人固定红方无位置身份，禁用时同步取消勾选。
