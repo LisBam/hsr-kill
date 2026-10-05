@@ -48,9 +48,14 @@ func _run() -> void:
 	if not _test_randomized_landlord_assignment():
 		_restore_settings()
 		return
-	if not await _test_selection_menu_restart_random_assignment():
-		_restore_settings()
-		return
+	# 跨局座次缓存必须在自选开关的两个取值下都成立：关闭是既有回归保护，开启才覆盖真实缺陷路径。
+	for restart_custom_enabled: bool in [false, true]:
+		if not await _test_selection_menu_restart_random_assignment(restart_custom_enabled):
+			_restore_settings()
+			return
+	# 恢复 `_run()` 开头设定的自选关闭基线，避免影响后续子用例的期望值。
+	if GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(false)
 	if not await _test_three_player_match_bootstrap():
 		_restore_settings()
 		return
@@ -378,9 +383,12 @@ func _test_randomized_landlord_assignment() -> bool:
 
 
 ## 按玩家实际复现路径验证斗地主选将阶段菜单重开；每次点击“按设置重新开局”后，界面标题与权威状态都必须切换到新的本地身份座次组合。
-func _test_selection_menu_restart_random_assignment() -> bool:
+func _test_selection_menu_restart_random_assignment(custom_enabled: bool) -> bool:
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
 	GameSettings.set_next_match_player_count(3)
+	# 自选座次身份开关；关闭时面板不接管座次缓存，开启时面板会把首次随机座次缓存为标题与确认载荷的来源。
+	if GameSettings.has_method("set_custom_character_assignment_enabled"):
+		GameSettings.set_custom_character_assignment_enabled(custom_enabled)
 	# 正式主场景资源；复现必须经过主菜单、选将面板和局内菜单的真实信号连接。
 	var main_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	if main_scene == null:
@@ -413,6 +421,11 @@ func _test_selection_menu_restart_random_assignment() -> bool:
 	if not _selection_title_matches_local_assignment(selection_panel, match_controller):
 		main_instance.queue_free()
 		return _fail("selection_restart_initial_title=%s assignment=%s" % [selection_panel.get_title_plain_text(), previous_assignment])
+	# 面板座次缓存必须与本局权威座次一致；否则标题与确认载荷都会沿用上一局的座次。
+	var initial_cache_mismatch: String = _selection_seat_cache_mismatch(selection_panel, match_controller)
+	if not initial_cache_mismatch.is_empty():
+		main_instance.queue_free()
+		return _fail("selection_restart_initial_cache=%s custom=%s" % [initial_cache_mismatch, str(custom_enabled)])
 	for restart_index: int in range(8):
 		menu_button.pressed.emit()
 		await get_tree().process_frame
@@ -433,6 +446,11 @@ func _test_selection_menu_restart_random_assignment() -> bool:
 		if not _selection_title_matches_local_assignment(selection_panel, match_controller):
 			main_instance.queue_free()
 			return _fail("selection_restart_title_%d=%s assignment=%s" % [restart_index, selection_panel.get_title_plain_text(), current_assignment])
+		# 每次重开后同样校验面板座次缓存；跨局残留会在这里稳定复现，而不是只在标题上偶发。
+		var restart_cache_mismatch: String = _selection_seat_cache_mismatch(selection_panel, match_controller)
+		if not restart_cache_mismatch.is_empty():
+			main_instance.queue_free()
+			return _fail("selection_restart_cache_%d=%s custom=%s" % [restart_index, restart_cache_mismatch, str(custom_enabled)])
 		previous_assignment = current_assignment
 	main_instance.queue_free()
 	await get_tree().process_frame
@@ -468,6 +486,28 @@ func _selection_title_matches_local_assignment(selection_panel: CharacterSelecti
 	# 选将标题纯文本；不读取富文本颜色标签，避免主题变化影响内容断言。
 	var title_text: String = selection_panel.get_title_plain_text()
 	return title_text.contains("你的身份为：%s" % local_identity_name) and title_text.contains("你的座次为%d号位" % local_seat_number)
+
+
+## 返回选将面板座次缓存与权威座次不一致的诊断文本；一致或无需展示时返回空字符串。
+## 面板 `_selected_seat_number` 同时是标题与确认载荷的来源，且取值优先级高于快照权威字段，
+## 因此它只允许取 -1（交由快照字段提供展示值）或等于当前权威座次；出现其它值即为上一局的跨局残留。
+func _selection_seat_cache_mismatch(selection_panel: CharacterSelectionPanel, match_controller: MatchController) -> String:
+	if selection_panel == null or match_controller == null or match_controller.state == null:
+		return "selection_panel_or_state_missing"
+	# 面板当前是否可见；不可见时不展示座次，缓存值不构成玩家可见的不一致。
+	if not selection_panel.visible:
+		return ""
+	# 当前本地玩家；稳定ID只用于定位玩家对象，不直接当作座次输出。
+	var local_player: PlayerState = match_controller.state.get_player(match_controller.local_human_player_id)
+	if local_player == null:
+		return "local_player_missing"
+	# 权威座次号；斗地主座次与物理座次数组一致，数组下标加1后与界面“N号位”对应。
+	var authoritative_seat_number: int = match_controller.state.players.find(local_player) + 1
+	# 面板缓存的本地座次；-1 表示未接管，展示值由快照的预览/初始座次字段提供。
+	var cached_seat_number: int = int(selection_panel._selected_seat_number)
+	if cached_seat_number == -1 or cached_seat_number == authoritative_seat_number:
+		return ""
+	return "cached_seat=%d authoritative_seat=%d title=%s" % [cached_seat_number, authoritative_seat_number, selection_panel.get_title_plain_text()]
 
 
 ## 斗地主选将完成后全员必须有 character_id；覆盖无自选/自选与 3/5 人，防止再出现“未选武将”。
