@@ -13,6 +13,13 @@ const LARGE_RNG_STATE_SAMPLE: int = 6917529027641081855
 ## 等待存档信号或阶段推进的统一超时毫秒数；覆盖敌方完整AI回合与无头计时器调度余量。
 const WAIT_TIMEOUT_MILLISECONDS: int = 20000
 
+## 判定“弃牌阶段被技能整体接管”的技能时机关键词。
+##
+## 本测试需要**人工弃牌询问进行中**这一非空闲时机，而形如【独弈】的锁定技会在弃牌阶段开始时
+## 自动弃置手牌并跳过该阶段，使询问永远不出现。固定种子选将会随武将池扩充而换人，
+## 因此这里按技能声明的时机元数据（而不是写死武将或技能 ID）挑选本地武将。
+const AUTO_DISCARD_TRIGGER_KEYWORD: String = "phaseDiscardBegin"
+
 ## 权威控制器；复用正式对局组件树验证临时退出、边界存档与恢复流程。
 var _controller: MatchController
 
@@ -117,8 +124,10 @@ func _test_exit_and_resume_flow() -> bool:
 		return _fail("start_match")
 	# 本地玩家候选；过关斩将固定一号位为真人，二号位AI由控制器自动确认。
 	var player_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	if player_candidates.is_empty() or not _controller.select_character(0, player_candidates[0]):
-		return _fail("player_character_selection")
+	# 本地武将；优先取“弃牌阶段仍需人工选择”的候选，避免锁定技接管弃牌阶段抽掉本测试的前置条件。
+	var local_character_id: String = _pick_manual_discard_candidate(player_candidates)
+	if local_character_id.is_empty() or not _controller.select_character(0, local_character_id):
+		return _fail("player_character_selection candidates=%s" % [player_candidates])
 	# 等待开局机缘三选一建立；难度一的开局机缘只写入历史，不产生额外选择。
 	if not await _wait_until(func() -> bool:
 		return str(_controller.state.opportunity_state.get("stage", "")) == "choosing"):
@@ -255,7 +264,11 @@ func _test_exit_and_resume_flow() -> bool:
 	if not _controller.submit_action(end_play_action):
 		return _fail("end_play_submit")
 	if not _controller.has_pending_card_choice() or int(_controller._pending_card_choice.get("chooser_id", -1)) != 0:
-		return _fail("discard_prompt_missing phase=%s" % _controller.state.current_phase)
+		# 失败诊断；列出实际登场武将与当前推进状态，便于区分“武将换人”与“核心推进缺陷”。
+		var discard_diagnostics: Dictionary = _controller.get_stall_diagnostics()
+		discard_diagnostics["extra_play_phase_counts"] = _controller._extra_play_phase_counts.duplicate(true)
+		discard_diagnostics["pacer_skill_interval"] = _controller.game_flow_pacer.has_pending_skill_interval() if _controller.game_flow_pacer != null else false
+		return _fail("discard_prompt_missing phase=%s lineup=%s diagnostics=%s" % [_controller.state.current_phase, _describe_lineup(), str(discard_diagnostics)])
 	if not _controller.request_conquest_temporary_exit() or not _controller.is_conquest_temporary_exit_requested() or not _captured_save.is_empty():
 		return _fail("deferred_exit_request")
 	# 预约取消与再预约；存档生效前玩家可以反悔，重复预约保持同一挂起状态。
@@ -487,8 +500,32 @@ func _first_candidate_control_id() -> String:
 	return str((candidate_controls[0] as Dictionary).get("id", "")) if not candidate_controls.is_empty() else ""
 
 
+## 从候选武将中挑出一名弃牌阶段仍由人工选择的武将；全部候选都被技能接管时回退首个候选。
+##
+## 仅依据技能静态元数据里的时机声明判定，不写死任何武将或技能 ID：武将池扩充后只需重新随机，
+## 不会因为“轮到某个自动弃牌的武将”而让本测试误报核心缺陷。
+func _pick_manual_discard_candidate(candidates: Array[String]) -> String:
+	for candidate_id: String in candidates:
+		if _character_requires_manual_discard(candidate_id):
+			return candidate_id
+	return candidates[0] if not candidates.is_empty() else ""
+
+
+## 判断一名武将的弃牌阶段是否需要人工选择手牌；任一技能声明了弃牌阶段开始时机即视为被接管。
+func _character_requires_manual_discard(character_id: String) -> bool:
+	# 武将静态元数据；缺失时按“需要人工选择”处理，让选将失败暴露为原始错误而不是静默换人。
+	var character: Dictionary = GameDatabase.get_character(character_id)
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前技能静态元数据；trigger字段声明该技能挂接的时机，例如 "passive/phaseDiscardBegin"。
+		var skill_metadata: Dictionary = GameDatabase.get_skill(str(skill_id_variant))
+		if str(skill_metadata.get("trigger", "")).contains(AUTO_DISCARD_TRIGGER_KEYWORD):
+			return false
+	return true
+
+
 ## 本局实际登场武将与离场状态；断言失败时列出便于定位固定种子换人带来的差异。
 func _describe_lineup() -> String:
+	# 座次登场信息；按玩家ID顺序拼接，便于直接与候选列表对照。
 	var lineup: Array[String] = []
 	if _controller == null or _controller.state == null:
 		return ""

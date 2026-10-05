@@ -24,9 +24,17 @@ const EXPECTED_STARTING_HAND: int = 4
 ## 触发【风口】第一段所需的最小批次张数；【筹码】的 X 取体力上限，必须不小于该值才能验证联动。
 const MIN_TRIGGERING_BATCH: int = 2
 ## 看门狗秒数；超时以失败结束，避免流程停滞时测试进程永远挂起。
-const WATCHDOG_SECONDS: float = 60.0
+## 随机座次可能包含会插入额外阶段的武将（例如【巡礼】的三段额外出牌阶段由AI逐步行动），
+## 因此上限按“两遍完整开局 + 数十个AI动作”取值，仍远小于人工排查一次卡死所需的时间。
+const WATCHDOG_SECONDS: float = 180.0
 ## 提交询问回答后，等待一次阶段推进被执行的最长墙钟时间；阶段节奏默认0.3秒，因此留出数倍余量。
-const TRANSITION_PROGRESS_TIMEOUT_SECONDS: float = 6.0
+## 随机座次可能让其他武将（例如【巡礼】的三段额外阶段）排在本次推进之前，因此余量按“数十个AI动作”取。
+const TRANSITION_PROGRESS_TIMEOUT_SECONDS: float = 30.0
+## 【风口】第一段询问的业务种类；按种类等待，避免把其他技能的询问误当成本次断言目标。
+const CLAUSE1_KIND: String = "fengkou_clause1"
+## 等待【风口】第一段询问出现的最长墙钟时间；需覆盖无关询问的AI响应延迟与阶段节奏。
+## 【巡礼】的三段额外阶段（含AI逐步行动）会先于父序列延后条目被消费，因此这里按“数十个AI动作”取余量。
+const CLAUSE1_WAIT_SECONDS: float = 60.0
 
 ## 被测控制器；本用例会替换为整局控制器以跑真实开局。
 var _controller: MatchController
@@ -40,6 +48,10 @@ var _settings_isolated: bool = false
 var _original_settings_file_path: String = ""
 ## 提交询问回答之后被执行到的阶段推进次数；只用于证明首回合没有停在原阶段。
 var _executed_transition_count: int = 0
+## 本场景出现过的选择请求轨迹；失败信息据此区分「请求从未创建」与「请求已创建但被丢弃」。
+var _choice_kind_history: Array[String] = []
+## 本次开局额外安装【巡礼】的座次；-1表示没有可用AI座次，活跃性回归因此未覆盖。
+var _xunli_barrier_seat: int = -1
 
 
 ## 延迟一帧执行断言，确保 GameDatabase 完成目录扫描；同时安装看门狗兜底。
@@ -72,7 +84,7 @@ func _run() -> void:
 	for confirmed: bool in [true, false]:
 		if not await _run_pre_game_scenario(confirmed):
 			return
-	print("PRE_GAME_DEAL_PASS deal=no_batch mulligan=clean chouma=4 fengkou=triggered confirm=progress cancel=progress")
+	print("PRE_GAME_DEAL_PASS deal=no_batch mulligan=clean chouma=4 fengkou=triggered xunli=%d confirm=progress cancel=progress" % _xunli_barrier_seat)
 	_restore_settings()
 	get_tree().quit(0)
 
@@ -80,6 +92,8 @@ func _run() -> void:
 ## 跑一遍真实开局并在【风口】第一段询问处按指定方式作答；返回false表示本场景已经报告失败。
 func _run_pre_game_scenario(confirmed: bool) -> bool:
 	_skills_installed_for_deal = false
+	_xunli_barrier_seat = -1
+	_choice_kind_history.clear()
 	_create_controller()
 	if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED, IdentityRules.MODE_IDENTITY):
 		return _fail("start_match")
@@ -98,6 +112,9 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 	# 断言一：起始手牌已经发完，但整段分发没有触发任何获得类询问。
 	if not _skills_installed_for_deal:
 		return _fail("game_draw_before_not_reached")
+	# 活跃性回归的前置条件：【巡礼】必须已经装到某个AI座次，否则本局不存在独立额外阶段，回归会静默失效。
+	if _xunli_barrier_seat < 0:
+		return _fail("xunli_barrier_seat_unavailable")
 	if _controller.state.current_phase != "starting_hand_mulligan":
 		return _fail("mulligan_phase=%s" % str(_controller.state.current_phase))
 	if _controller.state.get_player(0).hand.size() != EXPECTED_STARTING_HAND:
@@ -134,7 +151,7 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 	if _controller.state.get_player(0).hand.size() != EXPECTED_STARTING_HAND + chouma_draw:
 		return _fail("chouma_hand=%d expected=%d" % [_controller.state.get_player(0).hand.size(), EXPECTED_STARTING_HAND + chouma_draw])
 	if not await _await_clause1_choice():
-		return _fail("chouma_never_triggered_fengkou phase=%s pending=%s" % [str(_controller.state.current_phase), str(_controller.has_pending_card_choice())])
+		return _fail("chouma_never_triggered_fengkou phase=%s pending=%s %s" % [str(_controller.state.current_phase), str(_controller.has_pending_card_choice()), _describe_choice_trace()])
 	if str(_controller._pending_card_choice.get("context", {}).get("kind", "")) != "fengkou_clause1":
 		return _fail("pending_kind=%s" % str(_controller._pending_card_choice.get("context", {}).get("kind", "")))
 	# 复现真实时序：真人在询问面板上停留的时间必然长于阶段节奏间隔，因此这里必须等一次以上节奏间隔再作答。
@@ -185,15 +202,94 @@ func _install_deal_window_skills() -> void:
 		return _fail("chouma_install")
 	if _install_single_skill(0, "fengkou") == null:
 		return _fail("fengkou_install")
+	_install_xunli_for_parent_barrier()
+
+
+## 在同一次开局里额外安装【巡礼】，固定覆盖「父序列延后条目 + 独立额外阶段」的活跃性回归。
+##
+## 该缺陷只在“外层序列登记的延后结算（本用例是【风口】在 `gameStart` 登记的条目）与独立额外出牌阶段同时存在”
+## 时出现：屏障把父条目挡在子阶段之外，若父条目仍被当作「当前出牌阶段仍有未完成交互」，
+## 子阶段的AI动作就永远不会被安排（延后队列恒非空、出牌窗口在、但没有任何计时任务），对局永久挂起。
+## 随机选将是否抽到银枝会随武将池变化，只靠随机座次会让这条回归悄悄失去覆盖，
+## 因此在**非银枝的AI座次**上显式安装【巡礼】，使该组合每次开局都成立；
+## 本地真人座次（0号位）不安装，保证手气卡与手牌算术仍由真人路径驱动。
+func _install_xunli_for_parent_barrier() -> void:
+	for player: PlayerState in _controller.state.players:
+		if player.player_id == 0 or str(player.character_id) == "yinzhi":
+			continue
+		if _install_single_skill(player.player_id, "xunli") != null:
+			_xunli_barrier_seat = player.player_id
+		return
 
 
 ## 等待【风口】第一段的延后询问出现；本技能一律把询问推迟到结算边界，因此必须让出进程帧。
+##
+## 本用例的座次武将是随机候选，因此同一时刻可能先出现**其他武将的无关询问**（例如【巡礼】在任意角色
+## 回合开始时的发动确认）。它们与【风口】共用同一个待处理选择槽，且本用例刻意保留正式阶段节奏，
+## 因此这里必须按请求种类等待，而不是见到任意待处理选择就返回。
+## 属于本地真人坐席的无关询问题按取消作答：本用例只关心【风口】的批次口径，不希望其他技能的三段额外
+## 阶段改变手牌数量，从而让断言四的手牌算术保持稳定。
 func _await_clause1_choice() -> bool:
-	for _attempt: int in range(12):
+	# 已等待的墙钟时间；按真实时间而不是固定帧数等待，兼容AI响应延迟与阶段节奏。
+	var waited: float = 0.0
+	while waited < CLAUSE1_WAIT_SECONDS:
 		if _controller.has_pending_card_choice():
-			return true
+			if _get_pending_choice_kind() == CLAUSE1_KIND:
+				return true
+			if int(_controller._pending_card_choice.get("chooser_id", -1)) == 0:
+				_cancel_local_pending_choice()
+		waited += get_process_delta_time()
 		await get_tree().process_frame
-	return _controller.has_pending_card_choice()
+	return _get_pending_choice_kind() == CLAUSE1_KIND
+
+
+## 汇总等待期间的请求轨迹与结算队列状态；只在失败信息里使用，便于直接定位是“没创建”还是“被丢弃”。
+func _describe_choice_trace() -> String:
+	# 规则续接栈类型列表；栈顶即当前被屏障或子阶段挡住的外层续接。
+	var continuation_types: Array[String] = []
+	for item: Dictionary in _controller._rule_continuations.to_array():
+		continuation_types.append(str(item.get("continuation_type", "")))
+	# 延后结算队列摘要；用于确认【风口】的条目是否仍在队列里等待。
+	var deferred_summary: Array[String] = []
+	for item: Dictionary in _controller._deferred_skill_settlements:
+		deferred_summary.append("%s:%s" % [str(item.get("skill_id", "")), str((item.get("context", {}) as Dictionary).get("kind", ""))])
+	# 座次摘要；确认随机选将结果与手牌数量。
+	var seats: Array[String] = []
+	for player: PlayerState in _controller.state.players:
+		seats.append("%d=%s/hp%d/hand%d" % [player.player_id, str(player.character_id), player.hp, player.hand.size()])
+	return "history=%s deferred=%s cont=%s depth=%d indep_play=%s cur=%d/%s play_interaction=%s active_play_choice=%s pacer_any=%s ai_ctl=%s seats=%s" % [
+		str(_choice_kind_history),
+		str(deferred_summary),
+		str(continuation_types),
+		_controller._rule_sequence_execution_depth,
+		str(_controller._active_independent_play_phase.get("phase_id", -1)),
+		_controller.state.current_player_id,
+		str(_controller.state.current_phase),
+		str(_controller.has_pending_play_interaction()),
+		str(_controller._has_active_play_choice()),
+		str(_controller.game_flow_pacer.has_any_pending()) if _controller.game_flow_pacer != null else "no_pacer",
+		str(_controller.ai_coordinator.is_ai_controlled(2)),
+		str(seats),
+	]
+
+
+## 记录一条选择请求轨迹；每名玩家每次决策都会经过 card_choice_requested。
+func _on_card_choice_requested(choice_data: Dictionary) -> void:
+	_choice_kind_history.append("%s@%d" % [str((choice_data.get("context", {}) as Dictionary).get("kind", "")), int(choice_data.get("chooser_id", -1))])
+
+
+## 返回当前待处理选择的业务种类；没有待处理选择时返回空串。
+func _get_pending_choice_kind() -> String:
+	if not _controller.has_pending_card_choice():
+		return ""
+	return str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", ""))
+
+
+## 以本地真人身份取消当前待处理选择；取消只用于放行被占用的选择槽，不改变任何规则数值。
+func _cancel_local_pending_choice() -> void:
+	var action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	action.payload = {"request_id":int(_controller._pending_card_choice.get("request_id", -1)), "selected_card_uids":[], "selected_target_ids":[], "confirmed":false}
+	_controller.submit_action(action)
 
 
 ## 为指定玩家安装一个运行时技能实例；测试需要通过真实时机订阅复现完整流程。
@@ -230,6 +326,8 @@ func _create_controller() -> void:
 	_controller.add_child(network_gateway)
 	add_child(_controller)
 	_controller.local_human_player_id = 0
+	# 请求轨迹；失败信息用它定位「请求从未创建」与「请求已创建但被丢弃」两类不同缺陷。
+	_controller.card_choice_requested.connect(_on_card_choice_requested)
 	# 固定本地真人座次；随机座次会让选将与手气卡提交落到 AI 身上。
 	_controller.randomize_local_human_seat = false
 	# 阶段节奏保持正式默认值：本用例要复现的是「阶段推进计时到期时阶段名正被询问占用」的真实卡死，
