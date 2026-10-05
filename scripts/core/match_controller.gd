@@ -17576,13 +17576,15 @@ func _apply_degraded_ai_input_source(controlled_player_id: int) -> void:
 ## 人类输入通道**时才补注册基础AI。本函数只做「谁能提交」的输入源同步，不改任何规则事实，也不决定何时登记或到期。
 ## 关键约束：局域网对局中的每个真人座位都有自己的上行通道，此时**不得**再为它注册基础AI——
 ## 否则AI会与真人争抢同一 actor 的提交，表现为该座位的输入被AI抢占、真人提交被判越权而整局停滞。
+## 判定不读 `_control_all_characters_enabled`：登记已经表明该 actor 由本机真人负责，无论该本地设置是否开启，
+## 都必须释放它的基础AI。否则“设置开启 + 有操控登记”时视角一旦跳到操控者，被操控者就会同时被AI接管。
 func _sync_controlled_player_input_source(controlled_player_id: int, controller_player_id: int) -> void:
 	if ai_coordinator == null or state == null:
 		return
 	var controlled_player: PlayerState = state.get_player(controlled_player_id)
 	if controlled_player == null:
 		return
-	if controller_player_id == _bound_local_player_id() and not _control_all_characters_enabled:
+	if controller_player_id == _bound_local_player_id():
 		# 由本机真人代打：注销基础AI并解除托管，避免真人与AI同时向同一 actor 提交。
 		ai_coordinator.unregister_ai(controlled_player_id)
 		_set_player_auto_management(controlled_player_id, false, false)
@@ -17996,7 +17998,15 @@ func _emit_state() -> void:
 			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
 			# 代操控权重快照：以被操控者为观察者裁剪后定向发给其操控者，使操控者能看到被操控者的完整手牌与技能栏。
 			# 只发给操控者本人，且列表为空时不生成任何额外封包（授权缺失即逐字节回退到改动前行为）。
+			# 代操控视角目标（操控者同时操作本体与被操控者）：目标由唯一解析入口给出，在 {操控者, 被操控者} 内跟随当前待办请求。
+			# 目标是操控者本人时**不下发**代理快照——上面那份普通快照已经表达了同一视角（观察者即操控者），
+			# 若仍下发以被操控者为观察者的快照，客户端 local_human_player_id 会被改写回被操控者，
+			# 使 chooser_id == 操控者 的响应窗口（例如被操控者用【杀】指向操控者时的【闪】）在界面上被静默丢弃。
+			# 授权列表 turn_input_controlled_actor_ids 已在上面照常下发，因此操控者以被操控者 actor 代提交的权限不受影响。
+			var delegated_view_target_id: int = _resolve_delegated_operator_id(viewer_id)
 			for controlled_actor_id: int in controlled_actor_ids:
+				if controlled_actor_id != delegated_view_target_id:
+					continue
 				var delegated_snapshot: Dictionary = state.to_dict(controlled_actor_id, false)
 				_append_limited_skill_usage_to_snapshot(delegated_snapshot)
 				delegated_snapshot.erase("random_seed")
@@ -18046,14 +18056,21 @@ func _get_pending_choice_request_ids_for_controller(controller_player_id: int) -
 
 ## 在离线“控制所有角色”模式中选择当前需要操作的角色，并把唯一第一视角切换到该稳定玩家ID。
 ## 选将、车轮战抓将与手气卡属于开局配置阶段，始终保持原真人与内置AI控制，不参与动态接管。
+## 补充（回合操控补全）：本函数同时是**回合操控接管**的唯一落点；两种接管模式共用同一个“谁最需要输入”的提示解析，
+## 因此新增任何“需要某人作答”的请求类型时只需扩展 `_resolve_pending_operator_hint()` 一处，不会出现两条链路漂移。
 func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 	if state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
 		return false
 	if state.current_phase in ["character_selection", "wheel_duel_selection", "starting_hand_mulligan", "ai_character_adjustment", "game_start"]:
 		return false
+	# 当前最需要玩家输入的角色提示；两种接管模式共用同一排序，禁止各自内联判断（否则必然出现“能取到动作却看不到窗口”的分歧）。
+	var requested_operator_id: int = _resolve_pending_operator_hint(explicit_player_id)
 	# 回合操控优先：登记是规则事实，其优先级高于“控制所有角色”这一本地设置。
 	# 因此本机是当前回合角色的操控者时，第一视角无条件落在被操控者身上，即使该设置关闭也生效。
-	var delegated_viewer_id: int = _resolve_delegated_viewer_id()
+	# 修正（操控者同时操作本体与被操控者）：“无条件落在被操控者身上”只在**没有属于操控者本人的待办请求**时成立；
+	# 一旦当前最需要输入的角色就是操控者本人（例如被操控者用【杀】指向操控者、要求操控者出【闪】），
+	# 第一视角必须交还给操控者，否则该响应窗口既无真人输入也无AI输入，被操控者的回合会永久悬停。
+	var delegated_viewer_id: int = _resolve_delegated_viewer_id(requested_operator_id)
 	if delegated_viewer_id >= 0:
 		# 接管前先记住本机真人；重复接管时不覆盖已保存值，保证整个操控期间归位目标稳定。
 		if not _offline_delegated_view_active:
@@ -18062,6 +18079,26 @@ func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 		return _set_offline_manual_control_player(delegated_viewer_id)
 	if not _control_all_characters_enabled:
 		return false
+	# 目标第一视角玩家ID；直接使用上面已经解析好的提示，保证与回合操控分支的优先级完全同源。
+	var target_player_id: int = requested_operator_id
+	var target_player: PlayerState = state.get_player(target_player_id)
+	if target_player == null or not target_player.alive or target_player.out_of_game:
+		return false
+	return _set_offline_manual_control_player(target_player_id)
+
+
+## 返回当前“最需要玩家输入”的角色 player_id 提示；无任何待办时回落到当前回合角色。纯查询，不写状态。
+## 优先级与既有“控制所有角色”链路逐条一致（本条链是本项目唯一的操作者排序实现，新增请求类型只在此处扩展）：
+## ① 显式请求者（响应窗口与技能续接在发布请求时显式传入）；
+## ② 机缘选择者（并行投票没有单一选择者时回退首名待投玩家，控制全部角色仍可在一个本地界面依次代管所有票）；
+## ③ 普通待办选牌 `_pending_card_choice` 的选择者；
+## ④ 并行无懈 `_pending_negation_choices` 的首个选择者；
+## ⑤ 当前回合角色。
+## 关键：本函数只回答“谁最需要输入”，**不判断该角色是否由本机操作**；归属过滤由调用方完成，
+## 因此回合操控分支可以复用它来在 {操控者, 被操控者} 之间二选一，而不需要第二份排序。
+func _resolve_pending_operator_hint(explicit_player_id: int = -1) -> int:
+	if state == null:
+		return -1
 	# 目标第一视角玩家ID；显式选择请求优先，避免响应者与当前回合角色不同时界面仍停留在旧角色。
 	var target_player_id: int = explicit_player_id
 	if target_player_id < 0 and str(state.opportunity_state.get("stage", "")) == "choosing":
@@ -18082,18 +18119,70 @@ func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 				break
 	if target_player_id < 0:
 		target_player_id = state.current_player_id
-	var target_player: PlayerState = state.get_player(target_player_id)
-	if target_player == null or not target_player.alive or target_player.out_of_game:
+	return target_player_id
+
+
+## 返回指定角色当前是否可以作为第一视角目标（存在、存活且未离场）。纯查询，不写状态。
+## 死亡或离场的角色不能成为第一视角：其登记由清理路径移除，本判定只做安全兜底。
+func _is_viewable_actor(player_id: int) -> bool:
+	if state == null or player_id < 0:
 		return false
-	return _set_offline_manual_control_player(target_player_id)
+	var player: PlayerState = state.get_player(player_id)
+	return player != null and player.alive and not player.out_of_game
 
 
-## 返回离线对局中“因回合操控登记而必须接管”的被操控者 player_id；无需接管时返回 -1。纯查询，不写状态。
-## 判定条件三者同时成立：当前回合角色正被他人操控、操控者就是本机真人、且该被操控者当前仍然可显示。
+## 返回指定角色当前是否“由本机真人代打”（其操控者就是本机真人）。纯查询，不写状态。
+## 必要性：操控期间本机真人会把自己的第一视角在操控者与被操控者之间来回切换，
+## 任何“切走的角色就交还基础AI”的既有逻辑都必须先用本判定排除仍由本机真人负责的角色，
+## 否则会出现真人与基础AI同时向同一 actor 提交（表现为被操控者的回合被AI抢走）。
+## 识别“本机真人是谁”必须用从不被接管改写的影子值 `_offline_human_identity_id`，
+## 不能直接读 `local_human_player_id`——后者在接管期间就是被操控者，会让判定恒为假。
+func _is_delegated_to_local_human(player_id: int) -> bool:
+	if state == null or player_id < 0:
+		return false
+	var delegate_id: int = get_turn_input_delegate_id(player_id)
+	if delegate_id == TURN_INPUT_DELEGATE_NONE:
+		return false
+	var local_human_identity: int = _offline_human_identity_id if _offline_human_identity_id >= 0 else _bound_local_player_id()
+	return delegate_id == local_human_identity
+
+
+## 返回指定操控者在“同时操作自己与被操控者”语义下**当前真正需要提供输入**的角色 player_id；无需代理视角时返回 -1。
+## 语义来源（需求原文）：操控者是同时操控自己原来的角色和被操控角色的，可以参考设置中的“控制所有角色”。
+## 因此操控期间的操作目标是一个**两人集合 {操控者, 被操控者}**，本函数按当前待办请求在这两人之间二选一：
+## ① 当前最需要输入的角色就是操控者本人且其可显示 → 返回操控者（被操控者打向操控者时的响应窗口靠这一条交还视角）；
+## ② 当前最需要输入的角色是某个被操控者且其可显示 → 返回该被操控者（并行无懈等场景下可能同时存在多条待办）；
+## ③ 其余情形（无待办、或待办落在集合外的第三人身上）→ 返回首个可显示的被操控者，即本回合的归属者。
+## 集合外的第三人**不得**成为代理视角目标：它的输入由自己的基础AI提供，交给操控者会同时抢走被操控者的操作入口。
+## 本函数是离线第一视角与局域网定向代理快照的**唯一操作者解析入口**，两条通道必须共用它，禁止各自内联判断。
+func _resolve_delegated_operator_id(controller_player_id: int, explicit_player_id: int = -1) -> int:
+	if state == null or controller_player_id < 0:
+		return -1
+	# 该操控者当前被授权代提交的全部 actor；为空表示它没有任何操控登记，本机制完全不介入。
+	var controlled_actor_ids: Array[int] = _get_controlled_actor_ids_for_controller(controller_player_id)
+	if controlled_actor_ids.is_empty():
+		return -1
+	# 当前最需要输入的角色提示；排序由唯一实现给出，本函数只做归属过滤。
+	var requested_operator_id: int = _resolve_pending_operator_hint(explicit_player_id)
+	if requested_operator_id == controller_player_id and _is_viewable_actor(controller_player_id):
+		return controller_player_id
+	if controlled_actor_ids.has(requested_operator_id) and _is_viewable_actor(requested_operator_id):
+		return requested_operator_id
+	# 回落到本回合归属者；登记前置条件保证被操控者必然是当前回合角色，正常情况下首项即它。
+	for controlled_actor_id: int in controlled_actor_ids:
+		if _is_viewable_actor(controlled_actor_id):
+			return controlled_actor_id
+	return -1
+
+
+## 返回离线对局中“因回合操控登记而必须接管”的角色 player_id；无需接管时返回 -1。纯查询，不写状态。
+## 判定条件三者同时成立：当前回合角色正被他人操控、操控者就是本机真人、且接管目标当前仍然可显示。
 ## 该函数是离线第一视角归属的**唯一代理解析入口**，`_prepare_offline_controlled_view` 只调用它，不重复判定。
 ## 关键：识别“本机真人是谁”必须用 _offline_delegated_view_active 判别，因为接管本身已经改写了 local_human_player_id；
 ## 直接拿它比较会把接管后的被操控者误判成操控者，使接管从第二帧起失效并导致界面卡在被操控者视角。
-func _resolve_delegated_viewer_id() -> int:
+## explicit_player_id 是当前最需要输入的角色提示，由调用方经 `_resolve_pending_operator_hint()` 给出；
+## 本函数把它转交 `_resolve_delegated_operator_id()`，使操控者本人也能成为接管目标（操控者同时操作本体与被操控者）。
+func _resolve_delegated_viewer_id(explicit_player_id: int = -1) -> int:
 	if state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
 		return -1
 	# 当前回合角色；被操控者必然是它（登记前置条件保证），因此只需查询它一条。
@@ -18109,21 +18198,22 @@ func _resolve_delegated_viewer_id() -> int:
 	# 只有本机真人担任操控者时才接管第一视角；操控者是AI时该座位仍由基础AI推进，界面不应跟着换人。
 	if delegate_id != local_human_identity:
 		return -1
-	# 被操控者必须仍然可显示；死亡或离场后由清理路径移除登记，此处只做安全兜底。
-	var controlled_player: PlayerState = state.get_player(controlled_player_id)
-	if controlled_player == null or not controlled_player.alive or controlled_player.out_of_game:
-		return -1
-	return controlled_player_id
+	# 接管目标在 {操控者, 被操控者} 内由待办请求决定；两者都不可显示时返回 -1（死亡或离场后由清理路径移除登记）。
+	return _resolve_delegated_operator_id(local_human_identity, explicit_player_id)
 
 
 ## 切换全角色控制当前接管者；上一名非主角色恢复基础AI，新目标停止AI并成为本地第一视角。
+## 例外（回合操控）：仍由本机真人代打的角色**不交还基础AI**。操控期间本机真人会在操控者与被操控者之间来回切换第一视角
+## （被操控者打向操控者时视角要跳回操控者作答），若每次切走都把被操控者交还给基础AI，
+## 就会出现真人与基础AI同时向同一 actor 提交，表现为被操控者的回合被AI抢走。
 func _set_offline_manual_control_player(target_player_id: int) -> bool:
 	if state == null or target_player_id < 0:
 		return false
 	# 切换前第一视角；返回值只表达界面是否需要立即重发快照。
 	var previous_viewer_id: int = local_human_player_id
 	if _offline_manually_controlled_player_id >= 0 and _offline_manually_controlled_player_id != _primary_offline_human_player_id and _offline_manually_controlled_player_id != target_player_id:
-		ai_coordinator.register_basic_ai(_offline_manually_controlled_player_id)
+		if not _is_delegated_to_local_human(_offline_manually_controlled_player_id):
+			ai_coordinator.register_basic_ai(_offline_manually_controlled_player_id)
 	_offline_manually_controlled_player_id = -1
 	if target_player_id != _primary_offline_human_player_id:
 		ai_coordinator.unregister_ai(target_player_id)
