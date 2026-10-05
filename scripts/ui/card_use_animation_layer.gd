@@ -147,6 +147,17 @@ var _seen_presentation_id_ring_cursor: int = 0
 ## 本局已经登记的最高非负表现ID；默认-1表示尚无记录，用于在旧ID离开窗口后继续拒绝远古重发。
 var _highest_seen_presentation_id: int = -1
 
+## 牌面实例 ID 到「当前位置补间预计结束毫秒时间」的映射；每次创建位置补间都刷新。
+## 它是「该牌是否已经飞抵队列落位」的唯一判据：补间结束信号只负责触发通知，
+## 而本时间戳负责回答“通知来晚了没有”，从而覆盖“补间刚好在本帧结束、信号已经错过”的边界。
+var _motion_deadlines: Dictionary = {}
+
+## 等待「中央牌面飞抵队列落位」通知的实体 UID 到回调的映射；键固定为稳定 UID。
+## 用 UID 而不是实例 ID 作键的理由：同一实体在同一时刻最多只有一张中央牌面，
+## 而调用方（桌面）本身按 UID 管理获得牌门闸，取消等待时可以直接用门闸里的 UID 完成，
+## 不需要再维护一份“实例 ID 到 UID”的反查映射。
+var _pending_active_card_landings: Dictionary = {}
+
 
 ## 进入场景树时应用检查器配置的稳定绘制层级，独立实例与正式场景保持一致。
 func _ready() -> void:
@@ -500,32 +511,120 @@ func _remove_draw_transfer_card(draw_stack_key: String, transfer_card_instance_i
 		_draw_transfer_stacks[draw_stack_key] = draw_stack
 
 
-## 返回指定实体 UID 是否已经由使用牌队列接管；区域移动层据此避免同一牌重复实例化到目标处。
-func has_active_card_uid(card_uid: int) -> bool:
+## 返回中央展示队列中指定实体的正式牌面；返回null表示该牌当前没有中央牌面。
+## 同一 UID 在同一时刻最多只有一张正式牌面，首个命中即为真值；本函数是全层唯一的队列查牌入口。
+func _find_active_card(card_uid: int) -> CardView:
+	if card_uid < 0:
+		return null
 	for active_card: CardView in _active_cards:
 		if active_card != null and is_instance_valid(active_card) and active_card.card_uid == card_uid:
-			return true
-	return false
+			return active_card
+	return null
+
+
+## 返回指定实体 UID 是否已经由使用牌队列接管；区域移动层据此避免同一牌重复实例化到目标处。
+func has_active_card_uid(card_uid: int) -> bool:
+	return _find_active_card(card_uid) != null
+
+
+## 申请在该实体当前中央牌面「飞抵弃牌队列落位」时收到一次通知；这是全项目唯一的中央牌面落位判定入口。
+##
+## 返回 {"accepted":bool, "position":Vector2}：
+## accepted=false 表示该 UID 此刻没有中央牌面，调用方必须退回原有的“立即解析来源并新建表现牌面”路径；
+## accepted=true 表示已登记通知，position 是该牌此刻的牌面中心（本层局部坐标），
+## 调用方用它作为等待期间的起点保持位置，使正式手牌节点停在手牌滚动区之外被裁剪、不会提前出现在最终槽位。
+##
+## 设计意图：一张牌“是否已经落到弃牌队列”只有本层知道（位置补间由本层驱动），
+## 因此判定必须收敛在这里；调用方只消费通知，不得自行轮询计时或推算队列坐标。
+## 通知只报告“已落位”这一事实，不在本层内部摘牌——是否取走由调用方决定，
+## 这样等待被取消时牌面自然留在队列里，继续按原有停留与淡出节奏收尾。
+func request_active_card_landing(card_uid: int, on_landed: Callable) -> Dictionary:
+	# 当前命中的中央牌面；没有命中说明该牌此刻并不在中央展示队列中。
+	var presented_card: CardView = _find_active_card(card_uid)
+	if presented_card == null or not on_landed.is_valid():
+		return {"accepted":false, "position":Vector2.ZERO}
+	_pending_active_card_landings[card_uid] = on_landed
+	# 该牌此刻的牌面中心；等待期间调用方把正式手牌节点按在这里，避免它先出现在最终槽位。
+	var presented_center: Vector2 = presented_card.position + presented_card.get_card_size() * 0.5
+	_bind_active_card_landing(presented_card)
+	return {"accepted":true, "position":presented_center}
+
+
+## 撤销一次尚未触发的落位通知；返回true表示确实撤销了一条等待登记。
+## 调用方在取消本次获得表现、或该牌已经离开手牌区时调用：迟到的通知会取走一张已经无主的牌面，必须在源头拦掉。
+## 本入口只删除等待登记，不释放节点；牌面仍归中央展示队列，按原有停留与淡出节奏收尾。
+func cancel_active_card_landing(card_uid: int) -> bool:
+	return _pending_active_card_landings.erase(card_uid)
 
 
 ## 从中央展示队列取走指定实体的正式牌面，并把它交给调用方继续驱动；返回 null 表示该牌当前没有中央牌面。
 ## 用于“获得一张此刻正显示在中央的牌”：接管后队列其余成员立即补位，该节点不再被队列淡出释放，
 ## 调用方可以直接从它当前所在位置把它飞入新区域，从而表现为这张牌被拿走，而不是在中央复制一张。
 func take_over_active_card(card_uid: int) -> CardView:
-	if card_uid < 0:
-		return null
 	# 当前命中的中央牌面；同一 UID 在同一时刻最多只有一张正式牌面，首个命中即为真值。
-	var taken_card: CardView = null
-	for active_card: CardView in _active_cards:
-		if active_card != null and is_instance_valid(active_card) and active_card.card_uid == card_uid:
-			taken_card = active_card
-			break
+	var taken_card: CardView = _find_active_card(card_uid)
 	if taken_card == null:
 		return null
 	_detach_presented_card(taken_card)
 	# 队列成员补位；被取走的牌不再占位，剩余牌面在 queue_reflow_duration 内滑向新的对称位置。
 	_reflow_active_cards(queue_reflow_duration)
 	return taken_card
+
+
+## 把一次等待中的落位通知挂到该牌当前的位置补间上；牌已经落位时当帧直接完成通知。
+## 必须在每次创建位置补间后重新调用：队列补位会替换同一张牌的补间，落位必须跟随最新那条补间结束，
+## 否则等待方会一直等一条已被终止的旧补间，永远收不到通知。
+func _bind_active_card_landing(card_view: CardView) -> void:
+	if card_view == null or not is_instance_valid(card_view):
+		return
+	if not _pending_active_card_landings.has(card_view.card_uid):
+		return
+	# 当前牌面的实例 ID；移动补间映射的稳定键，也是通知回调的入参。
+	var card_instance_id: int = card_view.get_instance_id()
+	# 当前位置补间的预计结束毫秒时间；已经过去说明该牌此刻就停在队列槽位上，必须立即通知，
+	# 否则“补间刚好在本帧结束”时信号已经错过，等待方将永远等不到回调。
+	var deadline_msec: int = int(_motion_deadlines.get(card_instance_id, 0))
+	if Time.get_ticks_msec() >= deadline_msec:
+		_complete_active_card_landing(card_instance_id)
+		return
+	# 当前位置补间；仍然有效时把通知挂在它的结束信号上，补间结束即落位。
+	var motion_tween: Tween = _motion_tweens.get(card_instance_id) as Tween
+	if motion_tween != null and motion_tween.is_valid():
+		motion_tween.finished.connect(_on_active_card_motion_finished.bind(card_instance_id), CONNECT_ONE_SHOT)
+		return
+	# 补间已被外部终止且时间戳尚未到期：按已落位处理，保证通知一定会到达，不让等待方挂死。
+	_complete_active_card_landing(card_instance_id)
+
+
+## 位置补间结束回调；只把实例 ID 转发给统一落位入口，使“补间结束”与“时间戳到期”两条路径共用同一套判定。
+func _on_active_card_motion_finished(card_instance_id: int) -> void:
+	_complete_active_card_landing(card_instance_id)
+
+
+## 完成一次等待中的落位通知；牌面已经离开队列时静默返回。
+## 通知只报告落位事实，不在此摘牌：调用方（桌面）决定是否立刻取走，
+## 未被取走的牌面继续由队列的停留与淡出流程接管。
+##
+## 回调统一延迟到本帧空闲阶段执行：落位可能发生在补间推进过程中（甚至发生在申请当帧），
+## 同步回调会让调用方在“刚登记完等待”与“还没登记等待”之间看到不一致的中间态；
+## 延迟一帧空闲既不影响观感（同帧内完成），也让调用方的登记与回调严格分处两步。
+func _complete_active_card_landing(card_instance_id: int) -> void:
+	# 当前仍存活的中央牌面；节点已释放或已被取走时不再通知。
+	var presented_card: CardView = instance_from_id(card_instance_id) as CardView
+	if presented_card == null or not is_instance_valid(presented_card) or not _active_cards.has(presented_card):
+		return
+	_notify_active_card_landing(presented_card.card_uid)
+
+
+## 触发一次已登记的落位回调并注销登记；没有登记时什么都不做。
+## 除了“补间结束”之外，“牌面离开队列”也必须经此注销：调用方等的是“这张牌在队列里的去向已经确定”，
+## 若离开队列时只是悄悄删掉登记，等待方会永远等不到回调，正式手牌节点会被永久按在屏幕之外。
+func _notify_active_card_landing(card_uid: int) -> void:
+	if not _pending_active_card_landings.has(card_uid):
+		return
+	var on_landed: Callable = _pending_active_card_landings[card_uid]
+	_pending_active_card_landings.erase(card_uid)
+	on_landed.call_deferred()
 
 
 ## 消费一次由使用或判定表现接管的真实弃牌移动；返回true时调用方不得再创建第二张转移牌。
@@ -614,6 +713,9 @@ func clear_presentations() -> void:
 	_draw_transfer_batch_sequence = 0
 	_fade_queue.clear()
 	_motion_tweens.clear()
+	# 上一局的落位等待登记与补间期限一并清空；旧回调不得在新桌面上取走任何牌面。
+	_motion_deadlines.clear()
+	_pending_active_card_landings.clear()
 	_card_lifecycle_tweens.clear()
 	_discard_claim_card_instance_ids.clear()
 	_card_presentation_started_msec.clear()
@@ -751,6 +853,10 @@ func _start_card_motion(card_view: CardView, target_position: Vector2, duration:
 	motion_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	motion_tween.tween_property(card_view, "position", target_position, duration)
 	_motion_tweens[card_instance_id] = motion_tween
+	# 本次飞行的预计落点时刻；落位判定以它为准，因此每次创建补间都必须刷新，使它始终描述最新一次飞行。
+	_motion_deadlines[card_instance_id] = Time.get_ticks_msec() + int(duration * MILLISECONDS_PER_SECOND)
+	# 队列补位会替换同一张牌的移动补间；等待中的落位通知必须重新挂到最新那条补间上，否则会永远等不到回调。
+	_bind_active_card_landing(card_view)
 	return motion_tween
 
 
@@ -876,6 +982,10 @@ func _detach_presented_card(card_view: CardView) -> void:
 	_fade_queue.erase(card_view)
 	_active_cards.erase(card_view)
 	_motion_tweens.erase(card_instance_id)
+	# 牌面已经离开队列，它的落位通知不可能再成立；等待登记必须在此注销并通知等待方，
+	# 让等待方解闸落位，而不是留下一个永远等不到回调的门闸把牌按在屏幕之外。
+	_notify_active_card_landing(card_view.card_uid)
+	_motion_deadlines.erase(card_instance_id)
 	_card_lifecycle_tweens.erase(card_instance_id)
 	_card_presentation_started_msec.erase(card_instance_id)
 	_discard_claim_card_instance_ids.erase(card_view.card_uid)
