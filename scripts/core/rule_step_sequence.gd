@@ -33,6 +33,9 @@ var enclosing_play_phase_id: int = -1
 ## 创建序列时已存在的额外弃牌阶段身份；子阶段结束恢复原内容，默认-1表示无外层阶段。
 var enclosing_discard_phase_id: int = -1
 
+## 创建序列时已存在的独立额外摸牌阶段身份；仅等待之后插入的子阶段，不等待包含自己的外层阶段。
+var enclosing_extra_draw_phase_id: int = -1
+
 ## 只在当前对局内存中存在的内容回调；每项接收本对象，不进入网络快照。
 var _steps: Array[Callable] = []
 
