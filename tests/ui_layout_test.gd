@@ -1599,9 +1599,11 @@ func _run() -> void:
 	if not continuity_second_card.hand_layout_offset.is_zero_approx() or not is_equal_approx(continuity_second_card.position.x, continuity_first_slot_x):
 		_fail("hand_relayout_finish offset=%s position=%s" % [continuity_second_card.hand_layout_offset, continuity_second_card.position])
 		return
-	# ===== 获得正在中央展示中的牌 =====
+	# ===== 获得正在中央展示中的牌：先落入弃牌堆队列，再从中央区飞向获得者 =====
+	# 展示飞行放慢到可观测；保证获得信号到达时这张牌仍在飞向中央弃牌队列的途中，
+	# 这正是生产环境里“打出响应牌后立刻被【伏辰】获得”的真实时序。
+	animation_layer.card_flight_duration = 0.12
 	# 展示停留时长放大；保证两张展示牌在整个用例期间既不会淡出也不会被释放。
-	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 5.0
 	# 队列补位时长压到一帧级别；便于在一次等待后读取稳定位置。
 	animation_layer.queue_reflow_duration = 0.01
@@ -1617,47 +1619,65 @@ func _run() -> void:
 	if animation_layer._active_cards.size() != 2:
 		_fail("takeover_setup:%s" % [animation_layer._active_cards])
 		return
-	# 等待队列入场动画完成；只有落位之后读取的中心才是队列真实轴心与真实取走起点。
-	await get_tree().create_timer(0.05).timeout
+	# 只等一帧让队列节点完成创建；此时两张牌都还在飞向中央队列的途中，尚未落位。
+	await get_tree().process_frame
 	# 被获得的展示牌与旁牌节点；两张牌同队列共存。
 	var continuity_takeover_card: CardView = animation_layer._active_cards[0] as CardView
 	var continuity_neighbor_card: CardView = animation_layer._active_cards[1] as CardView
-	# 取走前的队列轴心；两张牌以弃牌中心为轴对称铺开，因此两者中心的水平中点就是队列轴心。
-	var continuity_queue_center_x: float = (continuity_takeover_card.position.x + continuity_neighbor_card.position.x) * 0.5 + continuity_takeover_card.get_card_size().x * 0.5
-	# 取走前的牌面中心；它必须成为本次飞行的起点，玩家看到的是同一张牌被拿走。
-	var continuity_takeover_center: Vector2 = continuity_takeover_card.global_position + continuity_takeover_card.get_card_size() * 0.5
-	# 取走前的牌面实例 ID；接管必须是同一实例继续飞行，而不是新建替代牌面。
+	# 落位前的牌面实例 ID；第二段飞行必须是同一实例继续飞，而不是新建替代牌面。
 	var continuity_takeover_instance_id: int = continuity_takeover_card.get_instance_id()
 	# 本机获得这张正在展示的牌；目标区域是本机手牌。
 	var continuity_takeover_hand_data: Dictionary = continuity_takeover_card_data.duplicate(true)
 	continuity_takeover_hand_data["zone"] = "hand"
 	continuity_takeover_hand_data["owner_id"] = 4
 	main_instance.call("_on_card_transfer_requested", continuity_takeover_hand_data, -1, "processing", 4, "hand")
-	# 接管结果；必须是同一张牌面离开展示队列继续飞行，而不是新建一张牌并把原牌留在中央。
+	# 第一段仍在进行：这张牌必须还留在中央展示队列里，本次获得只是登记了“等它落位之后再取走”。
 	var continuity_takeover_gate: Dictionary = (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).get(90013, {}) as Dictionary
-	var continuity_takeover_flight: CardView = continuity_takeover_gate.get("card") as CardView
-	if animation_layer._active_cards.has(continuity_takeover_card) or animation_layer._active_cards.size() != 1 or continuity_takeover_gate.is_empty() or continuity_takeover_flight == null or continuity_takeover_flight.get_instance_id() != continuity_takeover_instance_id or not (continuity_takeover_gate.get("origin", Vector2.ZERO) as Vector2).is_equal_approx(continuity_takeover_center):
-		_fail("takeover_reuse gate=%s queue=%d" % [continuity_takeover_gate, animation_layer._active_cards.size()])
+	# 申请落位时记录的等待起点；必须等于该牌此刻的中央牌面中心，等待期间正式手牌节点会被按在这里（手牌区之外，被裁剪）。
+	var continuity_takeover_hold_origin: Vector2 = continuity_takeover_gate.get("origin", Vector2.ZERO) as Vector2
+	# 该牌此刻的中央牌面中心；与等待起点取同一坐标，否则等待期间的正式节点会以别的位置闪现。
+	var continuity_takeover_current_center: Vector2 = continuity_takeover_card.global_position + continuity_takeover_card.get_card_size() * 0.5
+	if not animation_layer._active_cards.has(continuity_takeover_card) or not animation_layer._transfer_cards.is_empty() or continuity_takeover_gate.is_empty() or not bool(continuity_takeover_gate.get("awaiting_landing", false)) or bool(continuity_takeover_gate.get("started", false)) or continuity_takeover_gate.get("card") != null or not continuity_takeover_hold_origin.is_equal_approx(continuity_takeover_current_center):
+		_fail("takeover_awaiting_landing gate=%s queue=%d transfers=%d" % [continuity_takeover_gate, animation_layer._active_cards.size(), animation_layer._transfer_cards.size()])
 		return
-	# 队列补位结果；剩余旁牌必须重新居中于原来的队列轴心。
-	await get_tree().create_timer(0.05).timeout
-	if not is_equal_approx(continuity_neighbor_card.position.x + continuity_neighbor_card.get_card_size().x * 0.5, continuity_queue_center_x):
-		_fail("takeover_queue_reflow:%s expected=%s" % [continuity_neighbor_card.position.x + continuity_neighbor_card.get_card_size().x * 0.5, continuity_queue_center_x])
-		return
-	# 包含被接管牌的快照；快照布局之后飞行才起飞，终点是该牌自己的手牌槽位。
+	# 等待落位期间先到达的权威快照：正式手牌节点必须被按在等待起点，不能提前出现在最终槽位。
 	var continuity_takeover_snapshot: Dictionary = drawn_snapshot.duplicate(true)
 	var continuity_takeover_player: Dictionary = (continuity_takeover_snapshot.get("players", []) as Array)[4] as Dictionary
 	continuity_takeover_player["hand"] = [drawn_card_data, continuity_takeover_hand_data]
 	continuity_takeover_player["hand_count"] = 2
 	main_instance.call("_on_state_changed", continuity_takeover_snapshot)
-	# 被接管牌的正式手牌节点；门闸期间必须被按在中央展示位置（手牌区之外）。
+	# 被获得的牌的正式手牌节点；门闸期间它必须停在中央展示位置（手牌滚动区之外、被裁剪）。
 	var continuity_takeover_hand_card: CardView = (main_instance.get("_card_views") as Dictionary).get(90013) as CardView
+	if continuity_takeover_hand_card == null:
+		_fail("takeover_awaiting_hold_missing")
+		return
+	# 等待期间的期望保持位置；CardView 的 Node2D 原点位于牌面左上角。
+	var continuity_takeover_hold_position: Vector2 = continuity_takeover_hold_origin - continuity_takeover_hand_card.get_card_size() * 0.5
+	if continuity_takeover_hand_card.hand_entry_offset.is_zero_approx() or not continuity_takeover_hand_card.global_position.is_equal_approx(continuity_takeover_hold_position):
+		_fail("takeover_awaiting_hold position=%s expected=%s offset=%s" % [continuity_takeover_hand_card.global_position, continuity_takeover_hold_position, continuity_takeover_hand_card.hand_entry_offset])
+		return
+	# 第一段飞行落位后，落位通知在本帧空闲阶段取走同一张牌面；这里读到的就是队列落位后的真实中心。
+	await get_tree().create_timer(animation_layer.card_flight_duration + 0.05).timeout
+	await get_tree().process_frame
 	continuity_takeover_gate = (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).get(90013, {}) as Dictionary
-	if continuity_takeover_hand_card == null or not bool(continuity_takeover_gate.get("started", false)) or not continuity_takeover_hand_card.global_position.is_equal_approx(continuity_takeover_center - continuity_takeover_hand_card.get_card_size() * 0.5):
+	var continuity_takeover_flight: CardView = continuity_takeover_gate.get("card") as CardView
+	# 落位后的队列槽位中心；两张牌时队首以弃牌中心为轴向左偏移半个间距，第二段飞行必须从这里开始。
+	var continuity_landed_slot: Vector2 = Vector2(animation_layer._discard_center.x - animation_layer.discard_queue_spacing * 0.5, animation_layer._discard_center.y)
+	if animation_layer._active_cards.has(continuity_takeover_card) or animation_layer._active_cards.size() != 1 or continuity_takeover_gate.is_empty() or bool(continuity_takeover_gate.get("awaiting_landing", false)) or continuity_takeover_flight == null or continuity_takeover_flight.get_instance_id() != continuity_takeover_instance_id or not (continuity_takeover_gate.get("origin", Vector2.ZERO) as Vector2).is_equal_approx(continuity_landed_slot):
+		_fail("takeover_reuse gate=%s queue=%d" % [continuity_takeover_gate, animation_layer._active_cards.size()])
+		return
+	# 队列补位结果；剩余旁牌必须重新以弃牌队列轴心居中。
+	await get_tree().create_timer(0.05).timeout
+	if not is_equal_approx(continuity_neighbor_card.position.x + continuity_neighbor_card.get_card_size().x * 0.5, animation_layer._discard_center.x):
+		_fail("takeover_queue_reflow:%s expected=%s" % [continuity_neighbor_card.position.x + continuity_neighbor_card.get_card_size().x * 0.5, animation_layer._discard_center.x])
+		return
+	# 第二段飞行已经起飞；正式手牌节点仍被按在新的飞行起点，终点是该牌自己的手牌槽位。
+	continuity_takeover_gate = (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).get(90013, {}) as Dictionary
+	if not bool(continuity_takeover_gate.get("started", false)) or animation_layer._transfer_cards.size() != 1 or continuity_takeover_hand_card.get_parent() != hand_container or not continuity_takeover_hand_card.global_position.is_equal_approx(continuity_landed_slot - continuity_takeover_hand_card.get_card_size() * 0.5):
 		_fail("takeover_gated hand=%s gate=%s" % [continuity_takeover_hand_card, continuity_takeover_gate])
 		return
 	# 飞行落点与正式节点现身位置必须完全一致；证明这次飞行的终点就是该牌自己的手牌槽位。
-	await get_tree().create_timer(0.05).timeout
+	await get_tree().create_timer(animation_layer.card_flight_duration + 0.05).timeout
 	# 被接管牌面的实际落点；它仍处于停留阶段，因此可以直接读取。
 	var continuity_takeover_landed: Vector2 = continuity_takeover_flight.global_position + continuity_takeover_flight.get_card_size() * 0.5
 	# 正式手牌节点现身位置；落地后起点保持偏移已归零。
@@ -1665,8 +1685,73 @@ func _run() -> void:
 	if not continuity_takeover_hand_card.hand_entry_offset.is_zero_approx() or not continuity_takeover_landed.is_equal_approx(continuity_takeover_slot):
 		_fail("takeover_landing:%s expected=%s offset=%s" % [continuity_takeover_landed, continuity_takeover_slot, continuity_takeover_hand_card.hand_entry_offset])
 		return
+	# ===== 其他角色获得中央展示牌：同样先落位、再飞向获得者武将牌，且不出现第二张同 UID 牌面 =====
+	# 展示事件；这张牌先按正常出牌动画飞入中央队列并落位。
+	var continuity_other_card_data: Dictionary = {"uid":90015, "definition_id":"sha", "suit":"club", "rank":9, "zone":"processing", "owner_id":-1}
+	var continuity_other_presentation: Dictionary = {"presentation_id":43, "event_id":43, "event_name":"useCard", "card_data":continuity_other_card_data, "actor_id":5, "target_ids":[], "source_zone":"processing", "owns_discard_transfer":false}
+	main_instance.call("_on_card_presentation_requested", continuity_other_presentation)
+	# 等待落位；之后读取的中心就是队列真实位置，也是第二段飞行的起点。
+	await get_tree().create_timer(animation_layer.card_flight_duration + 0.05).timeout
+	if animation_layer._active_cards.size() != 2:
+		_fail("other_takeover_setup:%s" % [animation_layer._active_cards])
+		return
+	# 被其他角色获得的展示牌；它与旁牌同处中央队列，因此必须按 UID 查找而不是按队列下标取。
+	var continuity_other_card: CardView = null
+	for continuity_queue_card: CardView in animation_layer._active_cards:
+		if continuity_queue_card.card_uid == 90015:
+			continuity_other_card = continuity_queue_card
+			break
+	if continuity_other_card == null:
+		_fail("other_takeover_missing")
+		return
+	var continuity_other_instance_id: int = continuity_other_card.get_instance_id()
+	# 其他角色获得前的队列牌面数量；取走后必须少一张，证明牌确实离开了弃牌堆队列。
+	var continuity_other_queue_size: int = animation_layer._active_cards.size()
+	# 其他角色获得这张展示牌；目标区域是六号位角色的手牌。
+	main_instance.call("_on_card_transfer_requested", continuity_other_card_data, -1, "discard_pile", 6, "hand")
+	# 申请当帧不得新建第二张牌面：中央队列里仍是同一张牌，区域转移队列为空。
+	if not animation_layer._active_cards.has(continuity_other_card) or not animation_layer._transfer_cards.is_empty():
+		_fail("other_takeover_duplicate queue=%d transfers=%d" % [animation_layer._active_cards.size(), animation_layer._transfer_cards.size()])
+		return
+	# 落位通知在本帧空闲阶段执行；取走的必须是队列里那一张，而不是新建的替代牌面。
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if animation_layer._active_cards.size() != continuity_other_queue_size - 1 or animation_layer._transfer_cards.size() != 1 or not animation_layer._transfer_cards.has(continuity_other_instance_id):
+		_fail("other_takeover_reuse queue=%d transfers=%s" % [animation_layer._active_cards.size(), animation_layer._transfer_cards.keys()])
+		return
+	# 第二段飞行落点；必须停在获得者武将牌锚点上。
+	await get_tree().create_timer(animation_layer.card_flight_duration + 0.05).timeout
+	# 其他角色获得牌面的落点；它与该角色武将牌锚点取同一坐标。
+	var continuity_other_landed: Vector2 = continuity_other_card.global_position + continuity_other_card.get_card_size() * 0.5
+	# 六号位期望终点；与前面已验证的武将牌中心使用同一动画坐标空间。
+	var expected_other_target: Vector2 = main_instance.call("_get_player_indicator_position", 6) as Vector2
+	if not continuity_other_landed.is_equal_approx(expected_other_target):
+		_fail("other_takeover_landing:%s expected=%s" % [continuity_other_landed, expected_other_target])
+		return
+	# ===== 等待落位期间取消本次获得：牌留在中央队列，等待登记必须一并撤销 =====
+	# 展示事件；这张牌只用于验证取消路径。
+	var continuity_cancel_card_data: Dictionary = {"uid":90016, "definition_id":"sha", "suit":"heart", "rank":5, "zone":"processing", "owner_id":-1}
+	var continuity_cancel_presentation: Dictionary = {"presentation_id":44, "event_id":44, "event_name":"useCard", "card_data":continuity_cancel_card_data, "actor_id":5, "target_ids":[], "source_zone":"processing", "owns_discard_transfer":false}
+	main_instance.call("_on_card_presentation_requested", continuity_cancel_presentation)
+	# 等待落位；此时这张牌已经停在中央弃牌队列里。
+	await get_tree().create_timer(animation_layer.card_flight_duration + 0.05).timeout
+	# 取消前的队列成员；用于确认取消不会把牌从队列里拿走。
+	var continuity_cancel_queue_size: int = animation_layer._active_cards.size()
+	main_instance.call("_on_card_transfer_requested", continuity_cancel_card_data, -1, "discard_pile", 4, "hand")
+	# 等待落位期间取消本次获得表现；等待登记与门闸必须同时消失。
+	main_instance.call("_cancel_local_hand_gain_animation", 90016)
+	if (main_instance.get("_local_hand_gain_flight_gates") as Dictionary).has(90016) or animation_layer._pending_active_card_landings.has(90016):
+		_fail("takeover_cancel_registration gate=%s pending=%s" % [(main_instance.get("_local_hand_gain_flight_gates") as Dictionary).get(90016), animation_layer._pending_active_card_landings.keys()])
+		return
+	# 落位通知已被撤销：牌必须仍留在中央队列里按原有节奏收尾，绝不会被取走。
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if animation_layer._active_cards.size() != continuity_cancel_queue_size:
+		_fail("takeover_cancel_took_card queue=%d expected=%d" % [animation_layer._active_cards.size(), continuity_cancel_queue_size])
+		return
 	# 收尾；清空中央展示与飞牌并恢复测试用的极短时长。
 	animation_layer.clear_presentations()
+	animation_layer.card_flight_duration = 0.01
 	animation_layer.card_hold_duration = 0.01
 	animation_layer.queue_reflow_duration = 0.18
 	await get_tree().create_timer(0.05).timeout

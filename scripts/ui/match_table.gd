@@ -2445,6 +2445,9 @@ func _render_local_hand() -> void:
 		var gated_flight: Dictionary = _local_hand_gain_flight_gates.get(gated_uid_variant, {}) as Dictionary
 		if int(gated_flight.get("snapshot_generation", _local_hand_snapshot_generation)) >= _local_hand_snapshot_generation:
 			continue
+		# 该牌已经离开手牌区；等待中的中央落位通知必须与门闸同批撤销，
+		# 否则迟到的通知会取走一张已经无主的牌面，而没有任何回调会接手它。
+		_cancel_pending_local_hand_gain_flight(int(gated_uid_variant))
 		_local_hand_gain_flight_gates.erase(gated_uid_variant)
 	# 本轮对账后的 UID 到正式视图映射；只包含当前快照仍属于本人牌区的节点。
 	var next_card_views: Dictionary = {}
@@ -4889,6 +4892,17 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 	var animated_card: CardView = transfer_origin_result.get("card_view") as CardView
 	# 被接管的正式手牌节点立即退出手牌映射，之后它的生命周期完全由动画层负责。
 	_forget_taken_over_hand_card(card_uid, animated_card)
+	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
+	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
+	# 中央区展示牌被其他角色获得：与第一视角完全一致地拆成两段飞行。
+	# 先申请在该牌飞抵中央弃牌队列落位时收到通知；落位之前绝不新建第二张牌面，
+	# 既保证“这张牌先进入弃牌堆”，也保证画面上始终只有这一张牌（不会出现原牌留在中央、新牌飞向获得者）。
+	# 两个前置条件都不能省：已经有可接管的正式手牌节点时必须以真实槽位为起点；
+	# 本次转移应当显示牌背时不能接管公开展示中的正面牌面，否则会改变已经公开牌面的可见性语义。
+	if animated_card == null and not show_card_back:
+		var landing_result: Dictionary = card_use_animation_layer.request_active_card_landing(card_uid, _on_central_display_card_transfer_landed.bind(card_uid, target_position, draw_stack_key))
+		if bool(landing_result.get("accepted", false)):
+			return
 	if animated_card == null:
 		# 表现牌面；所有表现仍复用正式 CardView，不创建简化标签。
 		animated_card = CARD_VIEW_SCENE.instantiate() as CardView
@@ -4900,9 +4914,23 @@ func _on_card_transfer_requested(card_data: Dictionary, source_player_id: int, s
 			animated_card.configure(card_data, definition, false, false)
 		card_use_animation_layer.add_child(animated_card)
 		animated_card.position = start_position - animated_card.get_card_size() * 0.5
-	# 摸牌堆叠键；同一目标玩家连续从牌堆进入手牌的牌按数量依次堆叠，其他转移保持独立动画。
-	var draw_stack_key: String = "draw:%d" % target_player_id if source_zone == "draw_pile" and target_zone == "hand" and target_player_id >= 0 else ""
 	card_use_animation_layer.play_transfer(animated_card, start_position, target_position, draw_stack_key)
+
+
+## 其他角色获得中央展示牌时的第二段飞行入口；与“立即新建表现牌面”的路径互斥。
+##
+## 与第一视角的 _on_central_display_card_landed() 共用同一个落位通知接口与同一个取走接口，
+## 区别只在飞行终点：本机视角飞向该牌自己的手牌槽位，其他角色视角飞向获得者武将牌锚点。
+func _on_central_display_card_transfer_landed(card_uid: int, target_position: Vector2, draw_stack_key: String) -> void:
+	# 落位后的正式牌面；与中央展示队列中那张是同一实例，因此不会出现第二张同 UID 牌面。
+	var animated_card: CardView = card_use_animation_layer.take_over_active_card(card_uid)
+	if animated_card == null:
+		# 通知与取走之间牌面已经消失（例如被淡出流程释放）；宁可少播一段短动画，
+		# 也不在中央复制一张牌或留下一个停在屏幕上无人接手的孤立牌面。
+		return
+	# 第二段飞行起点；等于该牌在中央弃牌队列落位后的牌面中心，玩家看到的是“这张牌从弃牌堆飞向获得者”。
+	var flight_start_position: Vector2 = animated_card.position + animated_card.get_card_size() * 0.5
+	card_use_animation_layer.play_transfer(animated_card, flight_start_position, target_position, draw_stack_key)
 
 
 ## 接收实体进入新区域的内部所有权通知；只释放旧弃牌待消费与已消费状态，不创建牌面或修改权威区域。
@@ -5009,8 +5037,11 @@ func _sync_local_hand_gain_flight_appearance(card_uid: int, card_view: CardView)
 ## 直接由手牌容器的槽位整理过渡表达即可，不再从右侧滑入。
 ## 本方法只登记起点与门闸、不在此处起飞：飞行终点必须是该牌在手牌区的最终槽位，
 ## 而槽位要等包含该牌的权威快照完成布局，因此真正的起飞统一交给 _start_pending_local_hand_gain_flights()。
-## 若该牌此刻正显示在中央展示队列中（例如获得别人刚打出的【杀】），这里直接取走那张牌面本身继续飞行，
-## 而不是新建第二张牌面，避免出现“牌飞进手里、原牌还留在中央”的复制观感。
+##
+## 该牌此刻正显示在中央展示队列中时（例如获得别人刚打出的【杀】），本次获得被拆成两段连续飞行：
+## 第一段是该牌原有的出牌动画，它先把牌飞进中央弃牌展示队列并落位（规则上“已进入弃牌堆”）；
+## 第二段由 _on_central_display_card_landed() 在同一张牌面落位后取走它、继续飞向本机手牌槽位。
+## 因此这里不再当帧取牌：当帧取走会让牌永远到不了弃牌堆，玩家看到的顺序也会变成“打出后直接被抢走”。
 func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_player_id: int, source_zone: String) -> bool:
 	if source_player_id == match_controller.local_human_player_id:
 		return false
@@ -5018,7 +5049,17 @@ func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_p
 		# 缺少来源玩家的本机私有区域移动没有可解析的真实来源，放弃前置飞行而不是伪造中央起点。
 		# “processing”不属于私有区域：它对应中央处理区，公共锚点即其真实来源，因此必须保留飞行能力。
 		return false
-	# 中央展示队列里同 UID 的正式牌面；命中时它就是本次飞行的牌面，飞行从它当前所在位置开始。
+	# 中央展示牌面落位申请；这是“先进入弃牌堆、再飞向获得者”两段表现之间唯一的分界点。
+	# 申请命中时本次获得不在当帧取牌，而是先登记等待门闸，等这张牌真正飞抵中央弃牌队列之后再取走它继续飞行。
+	var landing_result: Dictionary = card_use_animation_layer.request_active_card_landing(card_uid, _on_central_display_card_landed.bind(card_uid))
+	if bool(landing_result.get("accepted", false)):
+		# 等待落位门闸；必须在申请成功之后立刻登记，落位通知到达时才能查到它。
+		# card=null 表示本次飞行的牌面尚未取到；origin 取该牌此刻的中央位置，
+		# 用于把正式手牌节点按在手牌滚动区之外被裁剪，避免它在中央区那张牌还在飞的时候就先出现在最终槽位。
+		# started=false 表示尚未起飞；awaiting_landing=true 表示正在等待中央牌面落位，两个标记必须同时成立。
+		_local_hand_gain_flight_gates[card_uid] = {"card":null, "origin":landing_result.get("position", Vector2.ZERO) as Vector2, "started":false, "batch":-1, "snapshot_generation":_local_hand_snapshot_generation, "awaiting_landing":true}
+		return true
+	# 中央展示队列里同 UID 的正式牌面；没有可等待的落位时，命中即直接取走，保持原有的即时接管行为。
 	var flight_card: CardView = card_use_animation_layer.take_over_active_card(card_uid)
 	# 前置飞行起点；命中展示牌面时等于它当前所在位置，其余来源取统一的来源解析结果。
 	var flight_start_position: Vector2 = Vector2.ZERO
@@ -5044,8 +5085,35 @@ func _play_local_hand_gain_flight(card_uid: int, card_data: Dictionary, source_p
 	# 手牌飞行门闸；必须在快照之前登记，保证正式手牌节点先被按在飞行起点，而不是提前出现在槽位。
 	# started=false 表示尚未起飞：起飞需要等快照布局算出该牌的最终槽位；batch=-1 表示这是一次单张获得飞行。
 	# snapshot_generation 记录登记时已生效的快照代次，供对账区分“快照还没包含这张牌”与“这张牌已经离开手牌”。
-	_local_hand_gain_flight_gates[card_uid] = {"card":flight_card, "origin":flight_start_position, "started":false, "batch":-1, "snapshot_generation":_local_hand_snapshot_generation}
+	# awaiting_landing=false 表示本次飞行的牌面已经取到，不需要再等待中央牌面落位。
+	_local_hand_gain_flight_gates[card_uid] = {"card":flight_card, "origin":flight_start_position, "started":false, "batch":-1, "snapshot_generation":_local_hand_snapshot_generation, "awaiting_landing":false}
 	return true
+
+
+## 中央展示牌面落位后的接管入口；由动画层的唯一落位通知触发，是“先进入弃牌堆、再飞向获得者”的第二段起点。
+##
+## 通知只报告“这张牌已经在中央弃牌队列落位”，取不取走由本入口决定：
+## 等待门闸已经不存在（本次获得表现被取消、该牌已经离开手牌区或重新开局清场）时直接返回，
+## 牌面留在中央队列继续按原有停留与淡出节奏收尾，绝不会出现一张无主牌面被取走后停在屏幕上。
+func _on_central_display_card_landed(card_uid: int) -> void:
+	# 当前门闸记录；缺失或已不处于等待落位状态说明本次获得不再需要第二段飞行。
+	var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid, {}) as Dictionary
+	if gate.is_empty() or not bool(gate.get("awaiting_landing", false)):
+		return
+	# 落位后的正式牌面；与队列中那张是同一实例，因此玩家看到的是同一张牌被拿走。
+	var flight_card: CardView = card_use_animation_layer.take_over_active_card(card_uid)
+	if flight_card == null:
+		# 通知与取走之间牌面已经消失（例如被淡出流程释放）：立即解闸让正式手牌节点落位，
+		# 绝不留下一个永远等不到落地回调的门闸，否则这张牌会永久停在手牌滚动区之外。
+		_release_local_hand_gain_flight_gates([card_uid])
+		return
+	gate["card"] = flight_card
+	# 第二段飞行起点；等于该牌在中央弃牌队列落位后的牌面中心，玩家看到的是“从弃牌堆里飞出来”。
+	gate["origin"] = flight_card.position + flight_card.get_card_size() * 0.5
+	gate["awaiting_landing"] = false
+	_local_hand_gain_flight_gates[card_uid] = gate
+	# 正式手牌节点已经在容器中时本调用当帧起飞；尚未进入快照时保持门闸，等下一次手牌对账再起飞。
+	_start_pending_local_hand_gain_flights()
 
 
 ## 解除一批本机获得牌的前置飞行门闸并让对应正式手牌节点落在各自槽位；由飞行落地回调触发。
@@ -5156,6 +5224,10 @@ func _start_pending_local_hand_gain_flights() -> void:
 		var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid_variant, {}) as Dictionary
 		if gate.is_empty() or bool(gate.get("started", false)) or int(gate.get("batch", -1)) >= 0:
 			continue
+		if bool(gate.get("awaiting_landing", false)):
+			# 正在等待中央展示牌面落位；此刻既没有可飞的牌面，也绝不能按“飞行牌面已失效”把它解闸，
+			# 否则正式手牌节点会提前落位，玩家会同时看到中央区那张牌和手牌区这张牌。
+			continue
 		# 当前正式手牌节点；还没有进入快照时保留门闸，等下一次对账再起飞。
 		var card_view: CardView = _card_views.get(card_uid) as CardView
 		if card_view == null or not is_instance_valid(card_view) or card_view.get_parent() != hand_container:
@@ -5208,8 +5280,10 @@ func _hold_gated_local_hand_entries() -> void:
 		if gate_flight_variant is CardView and not is_instance_valid(gate_flight_variant):
 			stale_gate_uids.append(card_uid)
 			continue
-		if not bool(gate.get("started", false)):
-			# 尚未起飞：位置仍由来源处与快照的自然顺序决定，本函数不写入任何偏移。
+		if not bool(gate.get("started", false)) and not bool(gate.get("awaiting_landing", false)):
+			# 尚未起飞且不等待中央落位：位置仍由来源处与快照的自然顺序决定，本函数不写入任何偏移。
+			# 等待中央落位的门闸必须走下面的保持分支：正式节点同样不能提前出现在最终槽位，
+			# 否则玩家会在中央区那张牌还在飞的时候就看到它已经躺进手牌区。
 			continue
 		# 当前正式手牌节点；只在它已经进入手牌容器后才需要保持在飞行起点。
 		var card_view: CardView = _card_views.get(card_uid) as CardView
@@ -5370,6 +5444,10 @@ func _cancel_pending_local_hand_gain_flight(card_uid: int) -> void:
 	var gate: Dictionary = _local_hand_gain_flight_gates.get(card_uid, {}) as Dictionary
 	if gate.is_empty():
 		return
+	if bool(gate.get("awaiting_landing", false)):
+		# 本次飞行还在等待中央展示牌面落位；必须同时撤销动画层的落位通知，
+		# 否则迟到的通知会取走一张已经无主的牌面并把它停在屏幕上（等待门闸已经不存在，没有任何回调会接手它）。
+		card_use_animation_layer.cancel_active_card_landing(card_uid)
 	if not bool(gate.get("started", false)):
 		var gate_flight_variant: Variant = gate.get("card", null)
 		if is_instance_valid(gate_flight_variant):
@@ -5416,10 +5494,16 @@ func _clear_local_hand_gain_animations() -> void:
 				(batch_view_variant as CardView).queue_free()
 	_pending_local_draw_batches.clear()
 	# 前置飞行门闸属于同一批表现生命周期；未起飞的飞行牌面与门闸一起清空，否则新局的获得牌会永远停在屏幕外。
-	for gate_variant: Variant in _local_hand_gain_flight_gates.values():
+	for gate_uid_variant: Variant in _local_hand_gain_flight_gates.keys():
 		# 当前门闸记录；已起飞的牌面由动画层清场统一释放，这里只处理从未播放的牌面。
-		var gate: Dictionary = gate_variant as Dictionary
-		if gate.is_empty() or bool(gate.get("started", false)):
+		var gate: Dictionary = _local_hand_gain_flight_gates.get(gate_uid_variant, {}) as Dictionary
+		if gate.is_empty():
+			continue
+		if bool(gate.get("awaiting_landing", false)):
+			# 仍在等待中央展示牌面落位的门闸必须连动画层的落位通知一起撤销；
+			# 旧局的回调绝不能在新桌面上取走任何牌面。
+			card_use_animation_layer.cancel_active_card_landing(int(gate_uid_variant))
+		if bool(gate.get("started", false)):
 			continue
 		var gate_card_variant: Variant = gate.get("card", null)
 		if is_instance_valid(gate_card_variant):
