@@ -48,8 +48,8 @@ MatchController 组装只读负载（角色 id / 两套牌名 / 动作模式）
 |---|---|---|---|
 | `AudioCatalog` | `scripts/audio/audio_catalog.gd` | **纯函数**：逻辑请求 → 候选资源路径链 → 命中路径 → `AudioStream`（带缓存）。不播放、不碰节点树 | 仅 `ResourceLoader` |
 | `AudioVoicePlayer` | `scripts/audio/audio_voice_player.gd` | 语音播放：播放器按需分配与回收、同键去重、池内随机且不连续重复（**不做并发限流** —— 需求钦定取消并发上限与最小重播间隔） | 受控于 `AudioService` |
-| `AudioBgmPlayer` | `scripts/audio/audio_bgm_player.gd` | BGM：循环、淡入淡出、同场景幂等 | 受控于 `AudioService` |
-| `GameAudioBridge` | `scripts/audio/game_audio_bridge.gd` | **翻译**：订阅核心表现信号与主菜单可见性 → 调 `AudioService`；零播放逻辑 | 只连接信号 |
+| `AudioBgmPlayer` | `scripts/audio/audio_bgm_player.gd` | BGM：循环、淡入淡出、同场景幂等、**场景所有权**（进入即接管并驱逐旧场景曲目；`release_scene()` 按场景作用域释放；离开场景树即硬停止） | 受控于 `AudioService` |
+| `GameAudioBridge` | `scripts/audio/game_audio_bridge.gd` | **翻译 + BGM场景归属**：订阅核心表现信号与主菜单可见性 → 调 `AudioService`；把可见性翻译为“先退出旧场景、再进入新场景”的显式迁移；零播放逻辑 | 只连接信号 |
 | `AudioService` | `scripts/autoload/audio_service.gd` | **门面 + 总线**：组装三组件、确保 `BGM`/`SFX` 总线、订阅设置变化、暴露稳定接口 | `GameSettings` |
 
 ---
@@ -205,9 +205,10 @@ func play_voice(actor_id: int = -1) -> void
 | 接口 | 签名 | 行为 |
 |---|---|---|
 | 语音请求（内部） | `play_voice_presentation(presentation_data: Dictionary) -> void` | 按 `kind` 分派到技能/卡牌解析；全不命中静默返回 |
-| BGM 请求 | `request_bgm(scene_id: String) -> void` | `menu` / `battle`；同场景幂等；跨场景淡入淡出 |
+| BGM 进入 | `request_bgm(scene_id: String) -> void` | `menu` / `battle`；同场景幂等；跨场景淡入淡出；**目标场景无素材时仍然接管场景并停止上一场景的曲目**（进入无素材场景等价于静音，绝不残留旧场景音乐） |
+| BGM 释放 | `release_bgm(scene_id: String) -> bool` | **按场景作用域停止**：只有当前在播的正是该场景时才停止并返回 `true`；退出 `menu` 不会误停 `battle`，反之亦然 |
 | BGM 状态 | `get_current_bgm_scene() -> String` / `get_bgm_playback_position() -> float` | 供测试与诊断 |
-| 停止 BGM | `stop_bgm() -> void` | 淡出停止 |
+| 停止 BGM | `stop_bgm() -> void` | 无条件淡出停止并清空场景归属；仅供整体停机、诊断与自动化测试 |
 | 音量设置 | `set_bgm_volume_linear(v)` / `set_sfx_volume_linear(v)` / `set_audio_muted(b)` | 转发给 `GameSettings`（唯一持久化入口），由设置信号回调驱动总线 |
 | 诊断 | `get_debug_state() -> Dictionary` | 当前 BGM 场景、活动语音数、总线音量 |
 
@@ -222,15 +223,17 @@ func play_voice(actor_id: int = -1) -> void
 ## 七、桥接组件契约（`GameAudioBridge`）
 
 - 挂载：`scenes/main.tscn` 根节点 `Main` 的子节点 `AudioBridge`（与 `MatchController` 平级）。
-- `@export`：`voice_signal_source_path: NodePath` → `../MatchController`；`main_menu_path: NodePath` → `../MainMenu`。
+- `@export`：`audio_service_path: NodePath` → `/root/AudioService`（提取为导出属性以便测试注入桩服务）；`voice_signal_source_path: NodePath` → `../MatchController`；`main_menu_path: NodePath` → `../MainMenu`。
 - 行为：
   1. 连接 `voice_presentation_requested` → `AudioService.play_voice_presentation(data)`。
-  2. 连接 `MainMenu.visibility_changed`：`visible == true` → `request_bgm("menu")`；`false` → `request_bgm("battle")`。
+  2. 持有一个 BGM 场景归属 `_current_scene_id`，连接 `MainMenu.visibility_changed` 后每次变化解析目标场景（`visible == true` → `menu`，`false` → `battle`），并执行一次**显式迁移**：目标与当前相同则直接返回（幂等）；否则先 `release_bgm(旧场景)` 再 `request_bgm(新场景)`。
   3. `_ready` 末尾按 `MainMenu.visible` 当前值同步一次 BGM。
-  4. `_exit_tree` 断开全部连接。
+  4. `_exit_tree` 先 `release_bgm(当前场景)` 再断开全部连接（顺序不可颠倒：音频服务是自动加载节点，只断连接会让上一局的战斗 BGM 泄漏到下一个场景）。
 - **不做**：不读控制器状态、不解析路径、不直接操作播放器。
+- **锚点缺失不兜底**：`main_menu_path` 解析失败时目标场景为空字符串，桥接节点保持“不持有任何场景”，刻意不按战斗处理——否则一处路径配置错误会表现为一局永不停止的战斗 BGM。
 
-> BGM 锚点理由：`MainMenu.visible` 覆盖全部开局路径（离线新开局、重开、过关斩将恢复、联机开局）与回菜单路径（`return_to_main_menu()`）；选将、战斗、结算面板显示期间 `MainMenu` 恒隐藏，天然满足「延续不中断」。
+> BGM 锚点理由：`MainMenu.visible` 覆盖全部开局路径（离线新开局、重开、过关斩将恢复、联机开局）与回菜单路径（`return_to_main_menu()`、`_on_lan_session_closed`、`restore_after_failed_restart`）；选将、战斗、结算面板显示期间 `MainMenu` 恒隐藏，天然满足「延续不中断」。
+> 场景隔离理由：`request_bgm()` 的“接管即驱逐”语义保证进入无素材场景不会残留旧场景音乐，`release_bgm()` 的场景作用域保证两个场景互不误伤，二者共同构成“主菜单与战斗BGM彻底隔离”。回归断言见 `tests/audio_system_test.gd` 的 `_verify_bgm_player()` 与 `_verify_bgm_scene_isolation()`。
 
 ---
 
@@ -304,5 +307,7 @@ func play_voice(actor_id: int = -1) -> void
 | 播放器按需分配 | 连续请求多条语音时全部播放（无并发上限），播放器被回收进空闲池复用 |
 | 设置持久化 | 三个新字段写入独立临时 cfg 并重新实例化读回，数值一致且被 clamp |
 | BGM 幂等 | 连续两次 `request_bgm("battle")` 不重头播放（`get_bgm_playback_position()` 单调递增） |
+| BGM 场景隔离（播放器） | 进入无素材场景（空池）后：上一场景曲目必须已停止、场景归属已转移、重复请求仍为幂等；`release_scene(其他场景)` 返回 `false` 且不影响在播曲目；`release_scene(当前场景)` 返回 `true` 并停止 |
+| BGM 场景隔离（桥接） | 桩服务记录调用顺序：初始只请求 `menu`；主菜单隐藏 → 先 `release(menu)` 再 `request(battle)`；重复同步幂等；主菜单恢复 → 先 `release(battle)` 再 `request(menu)`；桥接节点卸载 → `release(menu)`；锚点缺失 → 不发任何请求 |
 
 另需回归：`gameplay_regression_test`（用牌链路）、`smoke_test`（可开局）、`game_settings_persistence_test`、`main_menu_test`、`ui_layout_test`、`font_color_audit_test`。

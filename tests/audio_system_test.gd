@@ -5,6 +5,8 @@ extends Node
 ## 用于确认实际投放的音频素材已经就位并能被引擎加载。
 ## 路径解析使用虚构路径，绝不读写磁盘；只有核心层触发用例会真实开局，以覆盖“AI 自动出牌即发声”的完整链路。
 ## 武将阵亡语音同样用虚构路径校验回退链：项目尚未为每名武将投放阵亡语音，因此不要求真实素材存在。
+## BGM 场景隔离由两处断言守住：播放器用例证明“进入无素材场景会停止上一场景的曲目”，
+## 桥接用例用桩服务证明“主菜单与战斗的每次迁移都会先释放旧场景、再进入新场景，且节点卸载不遗留BGM”。
 
 ## 虚构技能 ID；与任何真实技能源码文件名都不重合，避免与正式素材产生歧义。
 const PROBE_SKILL_ID: String = "_audio_probe_skill"
@@ -113,6 +115,8 @@ func _run() -> void:
 	if not await _verify_voice_player():
 		return
 	if not await _verify_bgm_player():
+		return
+	if not _verify_bgm_scene_isolation():
 		return
 	if not _verify_audio_bus_and_volume():
 		return
@@ -512,7 +516,121 @@ func _verify_bgm_player() -> bool:
 	if not bgm_player.get_current_scene_id().is_empty():
 		_fail("bgm_stop_clears_scene")
 		return false
+	# 场景接管；重新进入战斗场景后确认曲目确实在播放。
+	if not bgm_player.play_stream(AudioCatalog.BGM_SCENE_BATTLE, wav_stream):
+		_fail("bgm_replay_battle")
+		return false
+	if not bgm_player.is_scene_playing():
+		_fail("bgm_battle_not_playing")
+		return false
+	# 进入无素材场景；模拟“主菜单还没有投放BGM”的真实状态，空池不得返回成功。
+	if bgm_player.play_pool(AudioCatalog.BGM_SCENE_MENU, [], null):
+		_fail("bgm_empty_pool_reports_playing")
+		return false
+	# 核心回归点；进入无素材场景后上一场景的战斗曲目必须已经停止，场景归属也必须已经转移。
+	# 旧实现遇到空池直接返回，战斗BGM会一直播到下一次进入有素材的场景，正是本用例拦截的缺陷。
+	if bgm_player.is_scene_playing():
+		_fail("bgm_stale_battle_still_playing")
+		return false
+	if bgm_player.get_current_scene_id() != AudioCatalog.BGM_SCENE_MENU:
+		_fail("bgm_empty_pool_scene=%s" % bgm_player.get_current_scene_id())
+		return false
+	# 同一无素材场景重复请求；幂等返回且不会误报成功。
+	if bgm_player.play_pool(AudioCatalog.BGM_SCENE_MENU, [], null):
+		_fail("bgm_empty_pool_idempotent")
+		return false
+	# 作用域释放反例；退出一个并未持有的场景不得影响任何播放状态。
+	if not bgm_player.play_stream(AudioCatalog.BGM_SCENE_BATTLE, wav_stream):
+		_fail("bgm_battle_after_empty_scene")
+		return false
+	if bgm_player.release_scene(AudioCatalog.BGM_SCENE_MENU):
+		_fail("bgm_release_foreign_scene_acted")
+		return false
+	if bgm_player.get_current_scene_id() != AudioCatalog.BGM_SCENE_BATTLE or not bgm_player.is_scene_playing():
+		_fail("bgm_release_foreign_scene_disturbed=%s" % bgm_player.get_current_scene_id())
+		return false
+	# 作用域释放正例；退出当前持有的场景必须真正停止曲目并清空归属。
+	if not bgm_player.release_scene(AudioCatalog.BGM_SCENE_BATTLE):
+		_fail("bgm_release_current_scene")
+		return false
+	if bgm_player.is_scene_playing() or not bgm_player.get_current_scene_id().is_empty():
+		_fail("bgm_release_current_scene_state=%s" % bgm_player.get_current_scene_id())
+		return false
 	bgm_player.queue_free()
+	return true
+
+
+## 校验桥接组件的BGM场景隔离。
+## 桥接节点是“当前该播哪一套BGM”的唯一权威，因此它必须把主菜单可见性变化翻译为
+## 一次显式的“先按作用域退出旧场景、再进入新场景”迁移，并在自身卸载时释放已持有的场景。
+## 本用例用桩服务取代自动加载的 AudioService，从而在不接触真实音频总线与素材的前提下断言调用顺序；
+## 语音来源指向不存在的节点，用于确认语音链路缺失不会影响BGM链路。
+func _verify_bgm_scene_isolation() -> bool:
+	# 测试容器；把桩服务、桩主菜单与桥接节点挂成同级，模拟主场景的节点布局。
+	var harness: Node = Node.new()
+	harness.name = "BgmIsolationHarness"
+	add_child(harness)
+	var sink: StubAudioSink = StubAudioSink.new()
+	sink.name = "StubAudioService"
+	harness.add_child(sink)
+	# 桩主菜单；只有 Control 才能提供 visibility_changed 信号。
+	var menu: Control = Control.new()
+	menu.name = "StubMainMenu"
+	menu.visible = true
+	harness.add_child(menu)
+	var bridge: GameAudioBridge = GameAudioBridge.new()
+	bridge.name = "StubAudioBridge"
+	bridge.voice_signal_source_path = NodePath("NoSuchVoiceSource")
+	bridge.audio_service_path = sink.get_path()
+	bridge.main_menu_path = menu.get_path()
+	harness.add_child(bridge)
+	# 就绪同步；主菜单可见时必须只请求主菜单场景，且不释放任何场景。
+	if sink.requested_scenes != [AudioCatalog.BGM_SCENE_MENU] or not sink.released_scenes.is_empty():
+		_fail("bgm_bridge_initial requested=%s released=%s" % [str(sink.requested_scenes), str(sink.released_scenes)])
+		return false
+	# 进入对局；主菜单隐藏必须请求战斗场景，并在请求之前先释放主菜单场景。
+	menu.visible = false
+	if sink.requested_scenes != [AudioCatalog.BGM_SCENE_MENU, AudioCatalog.BGM_SCENE_BATTLE]:
+		_fail("bgm_bridge_enter_battle requested=%s" % str(sink.requested_scenes))
+		return false
+	if sink.released_scenes != [AudioCatalog.BGM_SCENE_MENU]:
+		_fail("bgm_bridge_enter_battle_release released=%s" % str(sink.released_scenes))
+		return false
+	# 同一场景内的阶段推进；重复同步必须幂等，不得产生任何新的进入或释放请求。
+	bridge._sync_bgm_scene()
+	if sink.requested_scenes.size() != 2 or sink.released_scenes.size() != 1:
+		_fail("bgm_bridge_same_scene_idempotent requested=%s released=%s" % [str(sink.requested_scenes), str(sink.released_scenes)])
+		return false
+	# 退出对局回到主菜单；这是本次修复的核心路径——必须先释放战斗场景，
+	# 否则主菜单没有投放BGM素材时，战斗BGM会一直播下去。
+	menu.visible = true
+	if sink.released_scenes != [AudioCatalog.BGM_SCENE_MENU, AudioCatalog.BGM_SCENE_BATTLE]:
+		_fail("bgm_bridge_exit_battle_release released=%s" % str(sink.released_scenes))
+		return false
+	if sink.requested_scenes != [AudioCatalog.BGM_SCENE_MENU, AudioCatalog.BGM_SCENE_BATTLE, AudioCatalog.BGM_SCENE_MENU]:
+		_fail("bgm_bridge_back_to_menu requested=%s" % str(sink.requested_scenes))
+		return false
+	# 节点卸载；桥接节点离开场景树时必须释放自己持有的场景，防止BGM跨场景泄漏到下一个场景。
+	harness.remove_child(bridge)
+	if sink.released_scenes != [AudioCatalog.BGM_SCENE_MENU, AudioCatalog.BGM_SCENE_BATTLE, AudioCatalog.BGM_SCENE_MENU]:
+		_fail("bgm_bridge_teardown_release released=%s" % str(sink.released_scenes))
+		return false
+	bridge.free()
+	# 锚点缺失；不得把“无法判定场景”推断成战斗场景，必须保持不持有任何场景且不发任何请求。
+	var orphan_sink: StubAudioSink = StubAudioSink.new()
+	orphan_sink.name = "StubOrphanAudioService"
+	harness.add_child(orphan_sink)
+	var orphan_bridge: GameAudioBridge = GameAudioBridge.new()
+	orphan_bridge.name = "StubOrphanBridge"
+	orphan_bridge.voice_signal_source_path = NodePath("NoSuchVoiceSource")
+	orphan_bridge.audio_service_path = orphan_sink.get_path()
+	orphan_bridge.main_menu_path = NodePath("NoSuchMainMenu")
+	harness.add_child(orphan_bridge)
+	if not orphan_sink.requested_scenes.is_empty() or not orphan_sink.released_scenes.is_empty():
+		_fail("bgm_bridge_missing_anchor requested=%s released=%s" % [str(orphan_sink.requested_scenes), str(orphan_sink.released_scenes)])
+		return false
+	orphan_bridge.free()
+	harness.queue_free()
 	return true
 
 
@@ -777,7 +895,7 @@ func _verify_core_voice_channels() -> void:
 		await _release_controller(controller)
 		return
 	await _release_controller(controller)
-	print("AUDIO_SYSTEM_PASS skill_tiers=4 die_tiers=2 card_layers=2 effect_assets=%d real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d auto_effect=%d auto_die=%d" % [REQUIRED_EFFECT_IDS.size(), auto_skill_request_count, auto_effect_request_count, auto_die_request_count])
+	print("AUDIO_SYSTEM_PASS skill_tiers=4 die_tiers=2 card_layers=2 effect_assets=%d real_assets=ok asset_names=ok nature_slash=ok bgm_pool=ok bgm_isolation=ok extension_order=ok voices=ok bus=ok auto_trigger=ok auto_skill=%d auto_effect=%d auto_die=%d" % [REQUIRED_EFFECT_IDS.size(), auto_skill_request_count, auto_effect_request_count, auto_die_request_count])
 	get_tree().quit(0)
 
 
@@ -832,3 +950,22 @@ func _expect_pool(actual_pool: Array[String], expected_pool: Array[String], case
 func _fail(message: String) -> void:
 	printerr("AUDIO_SYSTEM_FAIL %s" % message)
 	get_tree().quit(1)
+
+
+## BGM 场景请求记录桩；替代自动加载的 AudioService，只按顺序记录桥接节点发出的进入与释放请求。
+## 用它可以在不触碰真实音频总线与磁盘素材的前提下断言“退出战斗时确实释放了战斗场景”，
+## 因此它是本次BGM场景隔离修复的守门断言载体。
+class StubAudioSink extends Node:
+	## 依次收到的进入场景请求；元素为场景标识。
+	var requested_scenes: Array[String] = []
+	## 依次收到的释放场景请求；元素为场景标识。
+	var released_scenes: Array[String] = []
+
+	## 记录一次“进入场景”请求；真实服务在此解析素材并接管播放，桩只记录调用顺序。
+	func request_bgm(scene_id: String) -> void:
+		requested_scenes.append(scene_id)
+
+	## 记录一次“按作用域释放场景”请求；恒返回true表示该场景确实由本桩持有。
+	func release_bgm(scene_id: String) -> bool:
+		released_scenes.append(scene_id)
+		return true
