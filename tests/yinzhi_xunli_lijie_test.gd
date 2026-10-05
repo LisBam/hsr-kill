@@ -182,17 +182,23 @@ func _test_face_down_lock() -> bool:
 	# 回合开始前的兜底：再次人为把武将牌置于正面，回合开始流程必须纠正为背面并跳过本回合。
 	game_state.players[0].face_down = false
 	_controller._start_turn(0)
-	# 银枝自己是当前回合角色，因此先出现巡礼的可选发动窗口；取消后进入背面跳过判定。
-	if not await _await_local_choice("xunli_activate"):
-		return false
-	if not _submit_control(false, ""):
-		return false
+	# 翻面跳过的是**整个回合**（回合开始到回合结束），因此被跳过的回合没有回合开始，也就不得出现【巡礼】窗口。
+	# 巡礼的询问在 phaseBefore 派发过程中同步创建，所以回合开始调用一返回就能判定该时机是否被派发过；
+	# 此时可能已经轮到下家的真实回合并合法打开窗口，因此按请求里的回合角色（turn_player_id）区分来源。
+	if not _local_choice_request.is_empty() and int((_local_choice_request.get("context", {}) as Dictionary).get("turn_player_id", -1)) == 0:
+		return _fail("face_down_turn_offered_choice=%s | %s" % [str(_local_choice_request.get("context", {})), _diagnostics()])
+	# 用户可见日志同样不得宣称“回合开始”；被跳过的回合只留跳过事实。
+	if _logs.has("%s的回合开始。" % _controller.format_player_state_log_name(game_state.players[0])):
+		return _fail("face_down_turn_logged_begin=%s" % str(_logs))
 	if not bool(game_state.players[0].face_down):
 		return _fail("turn_start_enforce")
 	# 回合被整体跳过：当前阶段角色已移交给下一名角色，且银枝的判定区永远不会结算。
-	await get_tree().process_frame
+	await _settle_frames(6)
 	if game_state.current_player_id == 0:
 		return _fail("face_down_turn_not_skipped")
+	# 清理：下家的真实回合开始可能已经为银枝打开本轮的巡礼窗口；取消它，避免未处理的请求污染后续用例。
+	if str((_local_choice_request.get("context", {}) as Dictionary).get("kind", "")) == "xunli_activate" and not _submit_control(false, ""):
+		return false
 	return true
 
 
