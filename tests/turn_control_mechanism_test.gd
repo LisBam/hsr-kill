@@ -47,11 +47,17 @@ func _run() -> void:
 	_log_progress("view_takeover")
 	if not await _test_offline_view_takeover_and_return():
 		return
+	_log_progress("dual_operator_view")
+	if not await _test_delegated_view_follows_pending_operator():
+		return
+	_log_progress("controller_responds_as_self")
+	if not await _test_controller_responds_as_self_during_delegation():
+		return
 	_log_progress("validation")
 	if not _test_game_database_validation_is_clean():
 		return
 	_restore_settings()
-	print("TURN_CONTROL_PASS begin_guard+idempotence+proxy_submit+input_lock+answerable+expiry+cleanup+snapshot+view_takeover")
+	print("TURN_CONTROL_PASS begin_guard+idempotence+proxy_submit+input_lock+answerable+expiry+cleanup+snapshot+view_takeover+dual_operator_view+controller_responds_as_self")
 	get_tree().quit(0)
 
 
@@ -276,6 +282,151 @@ func _test_offline_view_takeover_and_return() -> bool:
 		return _fail("view_not_returned local=%d expected=%d" % [_controller.local_human_player_id, controller_id])
 	if not _controller.ai_coordinator.is_ai_controlled(controlled_id):
 		return _fail("controlled_ai_not_restored")
+	return true
+
+
+## 验证“操控者同时操作本体与被操控者”：操控期间第一视角在两人之间跟随当前待办请求，而不是恒定锁死在被操控者身上。
+## 复现的缺陷是：属于操控者本人的待办请求（例如被操控者用【杀】指向操控者时产生的【闪】窗口）无法把视角交还给操控者，
+## 界面因此永远等不到该窗口，被操控者的回合会在响应窗口上悬停。
+func _test_delegated_view_follows_pending_operator() -> bool:
+	if not await _start_playable_match():
+		return false
+	var controller_id: int = _offline_human_player_id()
+	var controlled_id: int = _find_other_alive_player(controller_id)
+	if controlled_id < 0 or not _focus_turn_on_player(controlled_id):
+		return _fail("cannot_focus_controlled_turn")
+	# 关闭“控制所有角色”，证明本用例只验证回合操控接管链路本身。
+	GameSettings.set_control_all_characters_enabled(false)
+	if not _controller.begin_turn_input_delegation(controlled_id, controller_id):
+		return _fail("begin_for_pending_view")
+	_controller.call("_emit_state")
+	# AC1：无待办请求时第一视角默认落在被操控者。
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("view_not_taken_over local=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	# AC2：造出一条属于操控者本人的待办请求；等价于被操控者用【杀】指向操控者时产生的【闪】窗口。
+	# 候选为空且允许取消，因此该请求一定具备合法结果，不会因“无合法结果”被规则层安全拒绝。
+	var probe_choices: Array[int] = _controller.request_card_choice(controller_id, "验证视角", "请操控者本人作答。", [], 0, 0, true, {"kind":"turn_control_view_probe"})
+	if _controller._pending_card_choice.is_empty():
+		return _fail("probe_request_not_created returned=%s" % str(probe_choices))
+	if int(_controller._pending_card_choice.get("chooser_id", -1)) != controller_id:
+		return _fail("probe_chooser=%d expected=%d" % [int(_controller._pending_card_choice.get("chooser_id", -1)), controller_id])
+	if _controller.local_human_player_id != controller_id:
+		return _fail("view_did_not_follow_pending_operator local=%d expected=%d" % [_controller.local_human_player_id, controller_id])
+	# AC4：视角跳转不得把被操控者交还给基础AI，否则真人与AI会同时向同一actor提交。
+	if _controller.ai_coordinator.is_ai_controlled(controlled_id):
+		return _fail("controlled_handed_back_to_ai_on_view_switch")
+	# AC3：请求结算完毕后第一视角自动回到被操控者，无需等到操控结束。
+	if not _cancel_pending_choice():
+		return _fail("cancel_probe_choice")
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("probe_choice_still_pending")
+	_controller.call("_emit_state")
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("view_not_returned_to_controlled local=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	# AC7：打开“控制所有角色”后行为不得劣化——操控者的待办请求仍是合法的第一视角目标。
+	GameSettings.set_control_all_characters_enabled(true)
+	_controller.call("_emit_state")
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("control_all_view=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	_controller.request_card_choice(controller_id, "验证视角", "请操控者本人作答。", [], 0, 0, true, {"kind":"turn_control_view_probe"})
+	if _controller._pending_card_choice.is_empty():
+		return _fail("control_all_probe_not_created")
+	if _controller.local_human_player_id != controller_id:
+		return _fail("control_all_view_did_not_follow local=%d expected=%d" % [_controller.local_human_player_id, controller_id])
+	if not _cancel_pending_choice():
+		return _fail("control_all_probe_cancel")
+	_controller.call("_emit_state")
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("control_all_view_not_returned local=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	GameSettings.set_control_all_characters_enabled(false)
+	return true
+
+
+## 验证端到端复现用户举例：被操控者对操控者使用【杀】时第一视角跳回操控者，操控者以自己身份出【闪】后视角回到被操控者。
+## 该用例走完整规则链路（【杀】目标已确定 → 【闪】响应窗口 → 响应提交 → 回合续接），因此同时覆盖“视角跳转”与“回合不悬停”。
+func _test_controller_responds_as_self_during_delegation() -> bool:
+	if not await _start_playable_match():
+		return false
+	var controller_id: int = _offline_human_player_id()
+	var controlled_id: int = _find_other_alive_player(controller_id)
+	if controlled_id < 0:
+		return _fail("no_controlled_candidate")
+	GameSettings.set_control_all_characters_enabled(false)
+	# 本用例只验证视角与响应链路；先卸载全部武将技能，避免随机武将的自动询问插入额外请求。
+	_controller._uninstall_all_character_skills()
+	var controller_player: PlayerState = _controller.state.get_player(controller_id)
+	var controlled_player: PlayerState = _controller.state.get_player(controlled_id)
+	if controller_player == null or controlled_player == null:
+		return _fail("missing_player controller=%d controlled=%d" % [controller_id, controlled_id])
+	# 手牌只保留本用例需要的两张牌，排除其他响应牌插入额外请求。
+	controller_player.hand.clear()
+	controlled_player.hand.clear()
+	# 操控者手牌：一张【闪】，用于回应被操控者的【杀】。
+	var dodge_card: CardInstance = CardInstance.new("shan", "heart", 2)
+	dodge_card.zone = "hand"
+	dodge_card.owner_id = controller_id
+	controller_player.hand.append(dodge_card)
+	# 出牌窗口必须在手牌确定之后建立，使被操控者确实处于“本回合可出牌”的正式状态。
+	if not _focus_turn_on_player(controlled_id):
+		return _fail("cannot_focus_controlled_turn")
+	if not _controller.begin_turn_input_delegation(controlled_id, controller_id):
+		return _fail("begin_for_slash_response")
+	_controller.call("_emit_state")
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("view_not_taken_over local=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	# 被操控者（由本机真人代打）对操控者本人使用【杀】。
+	# 这里直接驱动【杀】牌族共享流程组件的“目标已确定”段，与 `tests/card_action_semantics_test.gd` 一致：
+	# 该入口同步创建标准 slash_response 请求，避免把本用例的视角断言耦合到事件调度器的异步推进时序上。
+	var slash_card: CardInstance = CardInstance.new("sha", "spade", 8)
+	slash_card.zone = "processing"
+	slash_card.owner_id = controlled_id
+	_controller.state.processing_area.append(slash_card)
+	var slash_effect: SlashCardEffect = SlashCardEffect.new(_controller.effect_resolver)
+	slash_effect.continue_after_weapon_targeted({
+		"slash_card_uid":slash_card.uid,
+		"parent_card_uid":slash_card.uid,
+		"actor_id":controlled_id,
+		"target_id":controller_id,
+		"nature":"normal",
+		"ignore_armor":false,
+	})
+	if _controller._pending_card_choice.is_empty():
+		return _fail("slash_response_not_created hp=%d negation=%d" % [controller_player.hp, _controller._pending_negation_choices.size()])
+	var response_chooser_id: int = int(_controller._pending_card_choice.get("chooser_id", -1))
+	if response_chooser_id != controller_id:
+		return _fail("slash_response_chooser=%d expected=%d" % [response_chooser_id, controller_id])
+	# 缺陷复现点：第一视角必须已经从被操控者跳回操控者，界面才会建立该响应窗口。
+	if _controller.local_human_player_id != controller_id:
+		return _fail("view_did_not_jump_to_controller local=%d expected=%d" % [_controller.local_human_player_id, controller_id])
+	if _controller.ai_coordinator.is_ai_controlled(controlled_id):
+		return _fail("controlled_handed_back_to_ai_on_response")
+	# 操控者以自己身份提交【闪】；响应类动作不受“必须是当前回合角色”的限制。
+	var response_action: PlayerAction = PlayerAction.new("choose_cards", controller_id)
+	response_action.payload = {
+		"request_id":int(_controller._pending_card_choice.get("request_id", -1)),
+		"selected_card_uids":[dodge_card.uid],
+	}
+	_controller._last_action_rejection_message = ""
+	if not _controller.submit_action(response_action):
+		return _fail("submit_dodge_rejected=%s" % str(_controller._last_action_rejection_message))
+	# 响应结算可能跨帧完成；按条件等待而不是固定帧数。
+	var settle_safety: int = 0
+	while not _controller._pending_card_choice.is_empty() and settle_safety < 24:
+		settle_safety += 1
+		await get_tree().process_frame
+	if not _controller._pending_card_choice.is_empty():
+		return _fail("slash_response_still_pending after_frames=%d" % settle_safety)
+	# 响应结算后的续接出口会重新发布快照；显式驱动一次同口径广播，避免断言依赖具体帧内时序。
+	_controller.call("_emit_state")
+	# 视角必须回到被操控者，且回合归属未被破坏。
+	if _controller.local_human_player_id != controlled_id:
+		return _fail("view_not_returned_to_controlled local=%d expected=%d" % [_controller.local_human_player_id, controlled_id])
+	if _controller.state.current_player_id != controlled_id:
+		return _fail("turn_drifted current=%d expected=%d" % [_controller.state.current_player_id, controlled_id])
+	if controller_player.find_hand_card(dodge_card.uid) != null:
+		return _fail("dodge_not_consumed")
+	if not _controller.state.discard_pile.has(dodge_card):
+		return _fail("dodge_not_discarded")
 	return true
 
 

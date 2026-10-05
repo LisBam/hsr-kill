@@ -134,6 +134,46 @@
 
 ---
 
+## 九、「谁在操作谁」的三层拆分与唯一解析入口
+
+一个角色身上同时存在三个**互相独立**的问题，任何实现都必须先把它们拆开，混用必然产生越权或界面错人：
+
+| 问题 | 权威载体 | 谁会写它 |
+|---|---|---|
+| **规则归属**：本回合轮到谁 | `GameState.current_player_id` | 阶段流程 |
+| **输入归属**：本回合的输入由谁提供 | `PlayerState.turn_input_delegate_id`（`-1` = 本人） | 操控登记 `begin/end_turn_input_delegation()` |
+| **视角归属**：本机界面当前在看谁 | `MatchController.local_human_player_id` | 离线 `_set_offline_manual_control_player()`；LAN 由快照顶层 `turn_input_delegated_viewer_id` 决定 |
+
+**铁律**：这三者**不得互相推导**。`current_player_id != local_human_player_id` 是**合法常态**（操控期间被操控者的回合由操控者在看），界面必须继续按 `local_human_player_id` 取快照，权威层必须继续按 `current_player_id` 结算。
+
+### 9.1 两个必须共用的解析入口
+
+| 入口 | 回答什么 | 禁止 |
+|---|---|---|
+| `_resolve_pending_operator_hint(explicit_player_id)` | 「**谁最需要输入**」：显式请求 → 机缘选择者（并行投票回退首名待投玩家）→ 普通待办选牌 → 并行无懈首个 → 当前回合角色 | 禁止内联复制这条排序；禁止在此做归属过滤 |
+| `_resolve_delegated_operator_id(controller_player_id, explicit_player_id)` | 「**归属过滤**」：提示命中操控者本人且可显示 → 操控者；命中被操控者且可显示 → 该被操控者；否则回落首个可显示的被操控者 | 禁止在离线与网络两条通道各写一份 |
+
+**为什么必须共用**：需求原文规定「操控者是**同时**操控自己原来的角色和被操控角色的（可参考设置中的「控制所有角色」）」，即操控期间的操作目标是一个**两人集合**而不是固定的一名角色。离线（`_prepare_offline_controlled_view()` → `_resolve_delegated_viewer_id()`）与 LAN（`_emit_state()` 的逐 peer 定向快照）都必须调用上表第二行，否则两条通道对「当前操作者是谁」的答案必然漂移。
+
+**集合外的第三人不得成为代理视角目标**：它的输入由自己的基础 AI 提供，把视角交给它会同时抢走被操控者的操作入口。
+
+### 9.2 视角在两人之间跳转时的 AI 归属不变量
+
+> **只要登记表明某角色由本机真人操控，它的基础 AI 就必须处于注销状态**——与该本地设置（`_control_all_characters_enabled`）无关。
+
+这条不变量有两个必须同时成立的落点，缺一即出现「真人与 AI 抢同一 `actor`」：
+
+1. `_sync_controlled_player_input_source()` 的「注销 AI」分支**不得**附加 `and not _control_all_characters_enabled`。
+2. `_set_offline_manual_control_player()` 在把旧的接管目标交还基础 AI 之前，必须先用 `_is_delegated_to_local_human()` 排除它。
+
+**识别「本机真人是谁」只能用从不被接管改写的影子值** `_offline_human_identity_id`；`local_human_player_id` 在接管期间就是被操控者，用它比较会让判定恒为假。
+
+### 9.3 LAN 侧的同源契约
+
+`_emit_state()` 的逐 peer 循环里，定向代理快照的**观察者**必须由 9.1 的归属过滤给出：当前操作者是被操控者 → 照常下发（逐字节等价于旧行为）；当前操作者是**操控者本人** → **不下发**（普通快照已表达同一视角，再发会把客户端 `local_human_player_id` 改写回被操控者，使 `chooser_id == 操控者` 的响应窗口被界面静默丢弃），但 `turn_input_controlled_actor_ids` **照常下发**——代提交授权**不随视角变化**。
+
+---
+
 ## 常见错误
 
 | 错误 | 后果 |
@@ -157,3 +197,8 @@
 | 新增一个**没有主公**的模式，但没有同步 `CharacterSelectionService.begin()` 的领袖推断 | `begin()` 由「有没有领袖身份」推断选将流程，`uses_leader_priority_selection()` 为真却拿不到 `leader_player_id`，直接返回「身份配置缺少领袖，无法开始选将。」并**拒绝开局**。无主公模式必须让 `get_first_seat_identity()` 返回空串、覆盖 `leader_player_id` 回落分支，并跳过主公技锁定候选（`_make_candidates()` 会把它**前置**为锁定项，场上无人有该身份时属纯劣势） |
 | 为「全员同一身份」的混战模式复用既有身份作为获胜 ID | 胜负判定若按身份比对，则**被淘汰的客户端也会显示“游戏胜利”**（人人身份相同）；必须返回一个独立的获胜 ID，并让界面改判「本地玩家是否为唯一存活者」 |
 | 把模式专属的开局数值修正写进对局中会重跑的函数 | `_refresh_pre_game_character_stats()` 是**全量重置**（`hp = max_hp`、`shield = 0`），车轮战换将、过关斩将换敌与复活都会重跑它；开局一次性修正必须在其中**重新推导**而不是依赖写入过的旧值，否则第二次调用即丢失 |
+| 把「操控期间的第一视角」恒定为被操控者 | 针对操控者的响应窗口（例如被操控者用【杀】指向操控者时的【闪】）永远无人可答：界面只在 `chooser_id == local_human_player_id` 时才建立询问，被操控者的回合因此**永久悬停**。必须按 §9.1 的归属过滤在 {操控者, 被操控者} 之间跟随当前待办请求 |
+| 在共享解析入口上加了参数，但函数体仍然忽略它 | 单测可能**仍然通过**（因为内部回落链恰好取到同一个值），缺陷只在不走回落链的路径上暴露。给共享入口加参数后必须显式使用它，并用「回滚修复后用例必须失败」验证覆盖 |
+| 在操控期间切换第一视角时无条件把切走的角色交还基础 AI | 视角在操控者与被操控者之间跳转是**常态**，交还 AI 会让真人与 AI 抢同一 `actor`（表现为被操控者的回合被 AI 抢走）。必须用 `_is_delegated_to_local_human()` 守卫（§9.2） |
+| 离线与 LAN 各写一份「谁最需要输入」的排序 | 两条通道必然漂移：离线跳到操控者而 LAN 停在被操控者（或反之）。必须共用 `_resolve_pending_operator_hint()` / `_resolve_delegated_operator_id()`（§9.1、§9.3） |
+| 给 LAN 定向代理快照的观察者写死为被操控者 | 客户端 `local_human_player_id` 每帧都被改写回被操控者，操控者本人的响应窗口在联机下同样被静默丢弃；观察者必须由归属过滤给出，且**授权列表不随视角变化**（§9.3） |

@@ -51,6 +51,8 @@ func _run() -> void:
 		return
 	if not _test_snapshot_authorization_scope():
 		return
+	if not _test_delegated_operator_view_target():
+		return
 	if not _test_disconnect_clears_delegation_and_authorization():
 		return
 	if not _test_reconnect_only_republishes_authorization():
@@ -58,7 +60,7 @@ func _run() -> void:
 	if not _test_lan_degradation_is_recorded():
 		return
 	_restore_settings()
-	print("LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+disconnect+reconnect+degradation")
+	print("LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+operator_view_target+disconnect+reconnect+degradation")
 	get_tree().quit(0)
 
 
@@ -146,6 +148,39 @@ func _test_snapshot_authorization_scope() -> bool:
 		return _fail("delegated_snapshot_missing_controlled_hand")
 	if _snapshot_hand_visible_for(outsider_snapshot, _controlled_id):
 		return _fail("outsider_snapshot_leaks_controlled_hand")
+	return true
+
+
+## 验证“操控者同时操作本体与被操控者”在局域网侧的代理视角目标解析。
+## 当前操作者是被操控者时定向代理快照照常下发；当前操作者回到操控者本人时不再下发会把客户端视角改写回被操控者的快照，
+## 但授权列表（以被操控者 actor 代提交的权限）不随视角变化。
+func _test_delegated_operator_view_target() -> bool:
+	if not _controller.is_turn_input_delegated(_controlled_id):
+		if not _focus_turn_on_player(_controlled_id) or not _controller.begin_turn_input_delegation(_controlled_id, _controller_id):
+			return _fail("rebegin_for_view_target")
+	# 基线：没有任何属于操控者的待办时，代理视角目标必须是本回合的被操控者，此时下发内容与改动前逐字节等价。
+	var baseline_target_id: int = int(_controller.call("_resolve_delegated_operator_id", _controller_id))
+	if baseline_target_id != _controlled_id:
+		return _fail("baseline_operator_target=%d expected=%d" % [baseline_target_id, _controlled_id])
+	# 基线情形下代理快照仍以被操控者为观察者，因此必须包含其私有手牌。
+	if not _snapshot_hand_visible_for(_controller.state.to_dict(_controlled_id, false), _controlled_id):
+		return _fail("baseline_delegated_snapshot_missing_controlled_hand")
+	# 造出一条属于操控者的待办请求；等价于被操控者用【杀】指向操控者时产生的【闪】窗口。
+	# 本用例只验证“操作者解析链的归属过滤”，因此直接安装一条只读的待办快照：
+	# 真实请求由谁代提交受局域网输入锁定约束，而该锁定与本用例要断言的解析链无关。
+	var stale_pending_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
+	_controller._pending_card_choice = {"request_id":-1, "chooser_id":_controller_id, "context":{"kind":"lan_turn_control_view_probe"}}
+	# 缺陷复现点：代理视角目标必须交还给操控者本人，客户端才会接受 chooser_id == 操控者 的响应窗口。
+	var pending_target_id: int = int(_controller.call("_resolve_delegated_operator_id", _controller_id))
+	# 授权列表不随视角变化：操控者始终保留以被操控者 actor 代提交的权限。
+	var authorized_actor_ids: Array[int] = _controller.call("_get_controlled_actor_ids_for_controller", _controller_id)
+	var expected_actor_ids: Array[int] = [_controlled_id]
+	# 还原真实待办状态，避免影响后续用例。
+	_controller._pending_card_choice = stale_pending_choice
+	if pending_target_id != _controller_id:
+		return _fail("pending_operator_target=%d expected=%d" % [pending_target_id, _controller_id])
+	if authorized_actor_ids != expected_actor_ids:
+		return _fail("authorization_followed_view=%s" % str(authorized_actor_ids))
 	return true
 
 
