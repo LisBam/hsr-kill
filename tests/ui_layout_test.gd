@@ -1468,6 +1468,10 @@ func _run() -> void:
 		if continuity_batch_view == null or continuity_batch_view.is_face_down:
 			_fail("batch_draw_face_down:%s" % [continuity_batch_view])
 			return
+		# 飞行牌面的绝对层级；子节点层级叠加在动画层层级之上，必须始终低于阿哈时刻过场，否则飞牌会盖在过场动画上面。
+		if animation_layer.z_index + continuity_batch_view.z_index >= AhhaMomentCutscene.CUTSCENE_Z_INDEX:
+			_fail("batch_draw_z_above_cutscene:%d+%d" % [animation_layer.z_index, continuity_batch_view.z_index])
+			return
 	# 落地帧；两张牌背必须分别停在两张正式节点各自的槽位中心，证明存在逐张落点而不是整组居中。
 	await get_tree().create_timer(0.2).timeout
 	var continuity_batch_first_slot: Vector2 = continuity_batch_card.global_position + continuity_batch_card.get_card_size() * 0.5
@@ -1889,6 +1893,14 @@ func _run() -> void:
 		await get_tree().process_frame
 	if match_controller.default_player_count != 4 or match_controller.state == null or match_controller.state.players.size() != 4:
 		_fail("second_restart_player_count:%d" % (match_controller.state.players.size() if match_controller.state != null else -1))
+		return
+	# 图层波段契约：动画层的全部表现牌都必须落在“动画层基准层级 + 最高分类偏移”以内的小波段里。
+	# 子节点层级会叠加在动画层自身层级之上，一旦它随队列长度或牌号无限增长，飞牌就会盖住选将遮罩、统一信息框与阿哈时刻过场。
+	var band_ceiling_z: int = mini(mini(information_box.z_index, AhhaMomentCutscene.CUTSCENE_Z_INDEX), (main_instance.get("character_selection_panel") as CharacterSelectionPanel).z_index)
+	# 表现牌可能到达的最高层级；批次摸牌偏移是三个分类中的最大值，整层不可能越出它。
+	var band_worst_z: int = animation_layer.z_index + CardUseAnimationLayer.DRAW_BATCH_Z_OFFSET
+	if band_worst_z >= band_ceiling_z:
+		_fail("layer_z_band worst=%d ceiling=%d" % [band_worst_z, band_ceiling_z])
 		return
 	# 菜单与重开交互完成后等待面板布局稳定，再释放正式场景实例。
 	await get_tree().process_frame

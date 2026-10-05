@@ -68,8 +68,9 @@ const SKILL_ACTIVATION_HOLD_SECONDS: float = 0.48
 ## 技能发动名称淡出的时长；默认0.32秒使提示自然收尾且不遮挡后续操作，运行时无需动态修改。
 const SKILL_ACTIVATION_FADE_SECONDS: float = 0.32
 
-## 技能发动名称的绘制层级；默认31，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
-const SKILL_ACTIVATION_Z_INDEX: int = 31
+## 技能发动名称的绘制层级；默认34，高于30层的飞牌与底部手牌，低于40层的选将遮罩和50层菜单。
+## 取值必须高于卡牌表现层的最高偏移（批次摸牌 +3，绝对33）：子节点层级会叠加在动画层之上，提示名要盖住全部飞牌就不能停在31层。
+const SKILL_ACTIVATION_Z_INDEX: int = 34
 
 ## 头顶聊天气泡的绘制层级；默认38高于技能发动提示与“记录”面板（35），低于选将遮罩（40）与聊天窗口（45）。
 const CHAT_BUBBLE_Z_INDEX: int = 38
