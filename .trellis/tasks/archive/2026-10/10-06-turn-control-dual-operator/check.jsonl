@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/project/verification.md", "reason": "验收判据：测试场景 PASS、validation_errors 为空、异步断言用条件等待"}
+{"file": ".trellis/spec/core/index.md", "reason": "核心层完成前自检清单与相关测试场景清单"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档一致性复核口径"}
