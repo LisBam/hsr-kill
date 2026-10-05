@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "复核视觉规格表与常见错误表是否已改写为「落位后取走」口径，且未保留旧口径"}
+{"file": ".trellis/spec/project/verification.md", "reason": "复核测试断言使用条件等待、失败信息带实际观测值、报告给出真实输出"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "逐行核对文档同步矩阵，确认界面/机制/内容指南/README 均已同步"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复核落位通知是唯一入口、没有出现第二套落位判定或第二套起点保持字段"}

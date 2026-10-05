@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/ui/index.md", "reason": "界面层职责边界与开工前检查清单：本次改动只消费快照、不改写规则状态"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "现有「中央展示牌被获得」「本机获得牌落位」「门闸保持」条目是本轮要改写的规范原文，必须先读清硬约束"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "禁止新增第二套飞行动画/第二套门闸字段，复用既有 take_over_active_card 与 play_transfer"}
+{"file": ".trellis/spec/project/verification.md", "reason": "测试运行方式与 PASS 判定；本轮必须跑 ui_layout_test 及其余基线回归"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "文档同步矩阵与临时反馈文档追加要求"}
+{"file": ".trellis/spec/guides/index.md", "reason": "修改前置规则：改任何值之前先搜索全项目引用"}
