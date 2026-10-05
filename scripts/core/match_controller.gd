@@ -9546,7 +9546,16 @@ func _create_players(player_count: int, automatic_match_seed: bool = false) -> v
 	# 重排只调整数组顺序，不改变任何玩家的稳定 player_id 与身份，因此牌面、网络与回放归属保持稳定。
 	if match_mode == IdentityRules.MODE_DOUDIZHU:
 		_reorder_doudizhu_players_by_seat_identity()
+	# 创建玩家后立即排成最终座次顺序：领袖优先模式（身份局）在此按首任身份旋转，使数组下标从选将第一帧起
+	# 就等于最终座次，而不是等到身份确认完成、起始手牌发放之后再旋转。
+	# 这与上一段斗地主的重排是同一意图：选将快照、牌桌座次标签、对局日志与开局后的最终座次必须同源，
+	# 否则选将期间会同时存在“创建顺序”与“最终座次”两套口径，玩家看到对手座位与实际座位不符，并在选将完成后跳变。
+	# 该调用对斗地主幂等（函数内部走同一重排）、对 2v2 / 过关斩将 / 车轮战因无首任身份而自然不旋转，
+	# 同时统一刷新座次显示名，使显示名编号、牌桌座次标签与选将标题三者使用同一座次序。
+	# 必须放在下方座次顺序快照之前，该快照才能对所有模式都记录真实的最终座次。
+	_reorder_players_from_leader()
 	# 座次顺序快照；斗地主重排后数组下标即最终座次，其他模式与创建顺序一致，供回放与诊断区分“稳定ID”与“座次”。
+	# 补充：身份局等领袖优先模式同样在创建后立即按首任身份旋转，因此此处下标已对所有模式都是最终座次。
 	var seat_player_ids: Array[int] = []
 	for seated_player: PlayerState in state.players:
 		seat_player_ids.append(seated_player.player_id)

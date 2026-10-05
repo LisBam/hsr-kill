@@ -11,6 +11,12 @@ const LOCAL_INITIAL_LEADER_TEST_PLAYER_COUNT: int = 5
 ## 专项集成测试使用的固定随机种子；保证身份、候选与牌堆顺序可重复复现。
 const TEST_RANDOM_SEED: int = 20260720
 
+## 等待本地真人首轮回合开始询问落定的最长帧数；需覆盖先于它出现的AI回合开始询问的作答延迟。
+## 首回合角色的武将由随机抽将决定，可能同时持有【要踏】等回合开始可选技能并先产生其自己的可选项，
+## 因此这里按条件等待本地真人的【铁壁】询问成为待处理项，而不是瞬时假定最后一条询问一定属于本地真人。
+## 用帧数而非累计墙钟时间设上限：帧预算在任何帧率与暂停状态下都必定终止。
+const ROUND_START_CHOICE_WAIT_FRAMES: int = 3000
+
 ## 测试使用的权威控制器；按正式场景的事件总线、AI协调器和网络网关结构装配。
 var _controller: MatchController
 
@@ -66,7 +72,7 @@ func _run() -> void:
 		return
 	if not _test_mulligan_ai_evaluation():
 		return
-	if not _test_authoritative_pre_game_flow():
+	if not await _test_authoritative_pre_game_flow():
 		return
 	_restore_original_settings()
 	# 专项控制器清理；成功出口显式释放权威对局与节点，避免测试进程退出时残留ObjectDB实例诊断。
@@ -1002,12 +1008,23 @@ func _test_authoritative_pre_game_flow() -> bool:
 	if not _controller.submit_action(finish_mulligan_action):
 		return _fail("finish_mulligan")
 	# 首轮选择请求；权威状态进入choice表示询问已建立，选择前保存的界面快照则必须已是roundStart。
+	# 首回合角色的武将由随机抽将决定，可能同时持有【要踏】等回合开始可选技能，其询问会先于本地真人的
+	# 【铁壁】询问出现并由控制器为AI自行作答；因此这里按条件等待本地真人的询问成为待处理项。
+	var round_start_wait: int = 0
+	while round_start_wait < ROUND_START_CHOICE_WAIT_FRAMES:
+		if _controller.has_pending_card_choice() and int(_controller._pending_card_choice.get("chooser_id", -1)) == _controller.local_human_player_id and int(_latest_card_choice_request.get("chooser_id", -1)) == _controller.local_human_player_id:
+			break
+		round_start_wait += 1
+		await get_tree().process_frame
 	var round_start_choice_request: Dictionary = _latest_card_choice_request
-	if _controller.state.current_phase != "choice" or not _controller.has_pending_card_choice() or int(round_start_choice_request.get("chooser_id", -1)) != 0:
-		return _fail("round_start_choice_after_mulligan phase=%s chooser=%d" % [_controller.state.current_phase, int(round_start_choice_request.get("chooser_id", -1))])
+	if _controller.state.current_phase != "choice" or not _controller.has_pending_card_choice() or int(round_start_choice_request.get("chooser_id", -1)) != _controller.local_human_player_id:
+		return _fail("round_start_choice_after_mulligan phase=%s chooser=%d pending=%s pchooser=%d pkind=%s" % [_controller.state.current_phase, int(round_start_choice_request.get("chooser_id", -1)), str(_controller.has_pending_card_choice()), int(_controller._pending_card_choice.get("chooser_id", -1)), str(_controller._pending_card_choice.get("context", {}).get("kind", ""))])
 	# 最近界面快照；手气卡私有字段必须随阶段结束清空，避免界面停留在等待其他玩家确认的提示。
-	if str(_latest_state_snapshot.get("current_phase", "")) != "round_start" or not (_latest_state_snapshot.get("starting_hand_mulligan", {}) as Dictionary).is_empty():
-		return _fail("round_start_snapshot_kept_mulligan")
+	# 快照阶段名允许为 roundStart 窗口或已进入询问的 choice：首回合角色随机持有【要踏】等回合开始
+	# 可选技能时会再产生一次合法询问，界面随之向前推进一帧；两者都必须在手气卡阶段之外。
+	var round_start_snapshot_phase: String = str(_latest_state_snapshot.get("current_phase", ""))
+	if round_start_snapshot_phase not in ["round_start", "choice"] or not (_latest_state_snapshot.get("starting_hand_mulligan", {}) as Dictionary).is_empty():
+		return _fail("round_start_snapshot_kept_mulligan phase=%s" % round_start_snapshot_phase)
 	# 放弃首轮可选技能；以标准选择动作验证暂停续列能离开roundStart并进入首回合。
 	var cancel_round_start_choice_action: PlayerAction = PlayerAction.new("choose_cards", 0)
 	cancel_round_start_choice_action.payload = {
