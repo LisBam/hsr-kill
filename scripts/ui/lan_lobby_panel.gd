@@ -3,8 +3,8 @@ extends Control
 
 ## 局域网连接入口组件。该组件只收集建房或加入参数并发出用户意图，不渲染已连接大厅，也不直接创建 ENet 或对局状态。
 
-## 创建房间请求；参数依次为本地名称、联机形象、房间密码、监听端口、初始总人数、是否开启自选身份与是否固定座位。
-signal host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool, fixed_seat_enabled: bool)
+## 创建房间请求；参数依次为本地名称、联机形象、房间密码、监听端口、初始总人数、是否开启自选身份、是否固定座位与是否开启座次补偿。
+signal host_requested(display_name: String, avatar_character_id: String, room_password: String, port: int, player_count: int, custom_identity_enabled: bool, fixed_seat_enabled: bool, seat_compensation_enabled: bool)
 
 ## 加入房间请求；参数依次为本地名称、联机形象、房间密码、房主 IPv4 地址与端口。
 signal join_requested(display_name: String, avatar_character_id: String, room_password: String, address: String, port: int)
@@ -53,6 +53,12 @@ const MAXIMUM_PLAYER_COUNT: int = 10
 
 ## 固定座位开关；仅创建房间时作为房间初始设置生效，关闭时身份仍按大厅位置绑定但物理座位每次开局随机打乱。
 @onready var _fixed_seat_checkbox: CheckBox = %LanFixedSeatCheckBox
+
+## 座次补偿开关；仅胜者为王模式显示，仅创建房间时作为房间初始设置生效。
+@onready var _seat_compensation_checkbox: CheckBox = %LanSeatCompensationCheckBox
+
+## 座次补偿设置行；非胜者为王模式隐藏，避免被误解为通用房间设置。
+@onready var _seat_compensation_row: Control = %SeatCompensationRow
 
 ## 创建房间按钮；点击后进入等待状态，直到协调器返回大厅快照或错误。
 @onready var _host_button: Button = %LanHostButton
@@ -187,6 +193,13 @@ func refresh_ui_style() -> void:
 	_fixed_seat_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_fixed_seat_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	_fixed_seat_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	(%SeatCompensationLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_seat_compensation_checkbox.set_pressed_no_signal(GameSettings.seat_compensation_enabled)
+	# 座次补偿只属于胜者为王；模式来自主菜单当前选择，其他模式必须隐藏该行。
+	_seat_compensation_row.visible = GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
 	_apply_line_edit_style(_address_input)
 	_apply_line_edit_style(_room_password_input)
 	_apply_spin_box_style(_port_input)
@@ -205,7 +218,7 @@ func _show_entry_state() -> void:
 func _request_host() -> void:
 	_set_connection_buttons_enabled(false)
 	show_status("正在创建局域网房间……", false)
-	host_requested.emit(GameSettings.online_player_name, GameSettings.online_avatar_character_id, _room_password_input.text, get_port(), _initial_player_count, _custom_identity_checkbox.button_pressed, _fixed_seat_checkbox.button_pressed)
+	host_requested.emit(GameSettings.online_player_name, GameSettings.online_avatar_character_id, _room_password_input.text, get_port(), _initial_player_count, _custom_identity_checkbox.button_pressed, _fixed_seat_checkbox.button_pressed, _seat_compensation_checkbox.button_pressed and _seat_compensation_row.visible)
 
 
 ## 提交加入房间请求；空地址由网关回退127.0.0.1，适合本机双实例测试。

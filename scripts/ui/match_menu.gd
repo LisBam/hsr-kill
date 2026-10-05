@@ -117,6 +117,12 @@ signal chat_toggle_requested
 ## AI 武将调整控件；仅离线玩家与房主可见，避免客户端产生无法生效的本地配置。
 @onready var _customize_ai_characters_row: Control = _customize_ai_characters_checkbox
 
+## 座次补偿开关；仅胜者为王模式且本机拥有权威规则权限时可见，只影响下一局开局数值。
+@onready var _seat_compensation_checkbox: CheckBox = %SeatCompensationCheckBox
+
+## 座次补偿控件行；局域网客户端不可修改房主权威开局规则，因此整项隐藏。
+@onready var _seat_compensation_row: Control = _seat_compensation_checkbox
+
 ## 手气卡数量整行容器；下一局规则由房主锁定，局域网客户端不显示该设置。
 @onready var _mulligan_limit_row: Control = _mulligan_limit_option.get_parent() as Control
 
@@ -199,6 +205,9 @@ func _ready() -> void:
 	_customize_ai_characters_checkbox.set_pressed_no_signal(GameSettings.customize_ai_characters_enabled)
 	_customize_ai_characters_checkbox.toggled.connect(GameSettings.set_customize_ai_characters_enabled)
 	GameSettings.customize_ai_characters_changed.connect(_customize_ai_characters_checkbox.set_pressed_no_signal)
+	_seat_compensation_checkbox.set_pressed_no_signal(GameSettings.seat_compensation_enabled)
+	_seat_compensation_checkbox.toggled.connect(GameSettings.set_seat_compensation_enabled)
+	GameSettings.seat_compensation_changed.connect(_seat_compensation_checkbox.set_pressed_no_signal)
 	_populate_mulligan_limit_options()
 	_mulligan_limit_option.item_selected.connect(_on_mulligan_limit_selected)
 	GameSettings.mulligan_limit_changed.connect(_refresh_mulligan_limit_selection)
@@ -335,7 +344,7 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_control_all_characters_checkbox.visible = controls_visible and _offline_controls_visible
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
-	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or focus_owner == _control_all_characters_checkbox or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
+	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or focus_owner == _control_all_characters_checkbox or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or focus_owner == _seat_compensation_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
 		_main_menu_button.grab_focus()
 
 
@@ -366,10 +375,14 @@ func _apply_mode_specific_settings_visibility() -> void:
 		return
 	var is_wheel_duel: bool = _active_match_mode == GameSettings.MATCH_MODE_WHEEL_DUEL
 	var is_conquest: bool = _active_match_mode == GameSettings.MATCH_MODE_CONQUEST
+	# 当前对局是否为胜者为王；座次补偿只在该模式显示。
+	var is_winner_takes_all: bool = _active_match_mode == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
 	var show_normal_selection_settings: bool = _authority_controls_visible and not is_wheel_duel and not is_conquest
 	_custom_character_assignment_row.visible = _authority_controls_visible and not is_wheel_duel
 	_custom_character_assignment_checkbox.text = "自选武将" if is_conquest else "自选全武将、座次与身份"
 	_customize_ai_characters_row.visible = show_normal_selection_settings
+	# 座次补偿属于胜者为王的权威开局规则；客户端不显示该行，避免产生无法生效的本地配置。
+	_seat_compensation_row.visible = _authority_controls_visible and is_winner_takes_all
 	_character_replacement_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_character_candidate_count_row.visible = _authority_controls_visible and not is_wheel_duel
 	_conquest_difficulty_row.visible = _authority_controls_visible and is_conquest
@@ -407,6 +420,7 @@ func refresh_ui_style() -> void:
 	_control_all_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_seat_compensation_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/CardNameRow/CardNameLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(_menu_panel.get_node("MenuVBox/UiStyleRow/UiStyleLabel") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))

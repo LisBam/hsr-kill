@@ -100,8 +100,9 @@ var _rng: RandomNumberGenerator
 
 ## 返回一号位绑定的首任身份 ID；斗地主为 landlord，标准身份局为 leader。
 ## 2v2 不绑定首任身份（蓝/红各两张且可互换座次色），返回空字符串。
+## 胜者为王全员同为内奸且没有主公，同样不绑定首任身份，返回空字符串。
 func get_first_seat_identity() -> String:
-	if is_team2v2_mode() or is_conquest_mode():
+	if is_team2v2_mode() or is_conquest_mode() or is_winner_takes_all_mode():
 		return ""
 	if is_doudizhu_mode():
 		return "landlord"
@@ -123,6 +124,12 @@ func is_team2v2_mode() -> bool:
 ## 判断当前是否为过关斩将模式；该模式固定全部玩家方先确认武将，再为敌方生成随机候选，不复用2v2的成队座次约束。
 func is_conquest_mode() -> bool:
 	return match_mode == "conquest"
+
+
+## 判断当前是否为胜者为王模式；该模式全员同为内奸、没有主公，因此不注入主公技候选，一号位也不绑定首任身份。
+## 由 begin() 的模式解析写入 match_mode，选将期间保持不变。
+func is_winner_takes_all_mode() -> bool:
+	return match_mode == "winner_takes_all"
 
 
 ## 返回过关斩将中按座次排列的红方玩家稳定ID；以创建时的首次身份为准，联机多人局包含全部偶数座位玩家。
@@ -403,10 +410,13 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 		match_mode = "team2v2"
 	elif requested_match_mode == "conquest":
 		match_mode = "conquest"
+	elif requested_match_mode == "winner_takes_all":
+		match_mode = "winner_takes_all"
 	else:
 		match_mode = "identity"
 	# 领袖技武将仅身份局领袖阶段使用；斗地主不注入领袖技固定候选。
-	if uses_leader_priority_selection():
+	# 胜者为王没有主公，主公技对任何玩家都无效，因此同样不注入，避免一号位额外背一组锁定候选。
+	if uses_leader_priority_selection() and not is_winner_takes_all_mode():
 		for character_id: String in leader_skill_character_ids:
 			if _character_ids.has(character_id) and not _leader_skill_character_ids.has(character_id):
 				_leader_skill_character_ids.append(character_id)
@@ -423,8 +433,8 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			leader_player_id = player.player_id
 		elif player.identity == "landlord" and leader_player_id < 0:
 			leader_player_id = player.player_id
-		elif (is_team2v2_mode() or is_conquest_mode()) and leader_player_id < 0 and player_index == 0:
-			# 2v2 兼容字段：记录一号位玩家 ID，不表示领袖优先选将。
+		elif (is_team2v2_mode() or is_conquest_mode() or is_winner_takes_all_mode()) and leader_player_id < 0 and player_index == 0:
+			# 2v2 与胜者为王兼容字段：记录一号位玩家 ID，不表示领袖优先选将。
 			leader_player_id = player.player_id
 	if uses_leader_priority_selection():
 		if leader_player_id < 0:
@@ -436,7 +446,8 @@ func begin(players: Array[PlayerState], character_ids: Array[String], requested_
 			var initial_seat_number: int = (player_index - initial_leader_index + _player_ids.size()) % _player_ids.size() + 1
 			_initial_seats_by_player[_player_ids[player_index]] = initial_seat_number
 		phase = PHASE_LEADER
-		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", true)
+		# 胜者为王没有主公，一号位只承担"先选"职责，不前置主公技锁定候选。
+		_candidates_by_player[leader_player_id] = _make_candidates(leader_player_id, "", not is_winner_takes_all_mode())
 		return ""
 	# 斗地主、2v2与过关斩将：座次与身份已在创建玩家时固定，不再旋转。
 	# 补充：身份局等领袖优先模式同样已在创建玩家后按首任身份旋转过数组，因此此处数组顺序即最终座次顺序。

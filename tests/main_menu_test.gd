@@ -130,6 +130,12 @@ func _run() -> void:
 	var conquest_mode_button: Button = main_instance.get_node("%ConquestModeButton") as Button
 	# 左侧过关斩将模式标题；新增入口必须与原版模式卡使用相同27像素标题字号。
 	var conquest_mode_name: Label = main_instance.get_node("%ConquestModeName") as Label
+	# 左侧胜者为王模式按钮；排列在过关斩将之后，并固定以同一模式卡片规格呈现。
+	var winner_takes_all_mode_button: Button = main_instance.get_node("%WinnerTakesAllModeButton") as Button
+	# 左侧胜者为王模式标题；新增入口必须与原版模式卡使用相同27像素标题字号。
+	var winner_takes_all_mode_name: Label = main_instance.get_node("%WinnerTakesAllModeName") as Label
+	# 主菜单座次补偿开关；仅胜者为王模式显示，其余模式必须隐藏该行。
+	var main_seat_compensation_checkbox: CheckBox = main_instance.get_node("%MainMenuSeatCompensationCheckBox") as CheckBox
 	# 左侧身份模式标题；必须独立于按钮文本呈现，以便标题可使用更大的主题字号。
 	var identity_mode_name: Label = main_instance.get_node("%IdentityModeName") as Label
 	# 左侧身份模式人数说明；仅展示可选人数范围，不重复标准身份局描述。
@@ -236,15 +242,17 @@ func _run() -> void:
 	var opportunity_brawl_selected_style: StyleBoxFlat = opportunity_brawl_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
 	# 过关斩将卡片的持续选中样式；第六张模式卡片必须沿用统一的主题选中底色。
 	var conquest_selected_style: StyleBoxFlat = conquest_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
-	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or wheel_duel_selected_style == null or opportunity_brawl_selected_style == null or conquest_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not wheel_duel_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not opportunity_brawl_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not conquest_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
+	# 胜者为王卡片的持续选中样式；第七张模式卡片必须沿用统一的主题选中底色。
+	var winner_takes_all_selected_style: StyleBoxFlat = winner_takes_all_mode_button.get_theme_stylebox("pressed") as StyleBoxFlat
+	if identity_selected_style == null or doudizhu_selected_style == null or team2v2_selected_style == null or wheel_duel_selected_style == null or opportunity_brawl_selected_style == null or conquest_selected_style == null or winner_takes_all_selected_style == null or not identity_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not doudizhu_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not team2v2_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not wheel_duel_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not opportunity_brawl_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not conquest_selected_style.bg_color.is_equal_approx(expected_selected_mode_background) or not winner_takes_all_selected_style.bg_color.is_equal_approx(expected_selected_mode_background):
 		_fail("mode_selected_background")
 		return
 	# 顶部按钮顺序；“联机设置”必须紧跟在“模式选择”右侧，左侧游戏模式列表仍只有身份模式一项。
-	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2、1v1车轮战、机缘大乱斗、过关斩将排列，六项均直接可选。
+	# 当前左侧游戏模式列表固定按身份模式、斗地主、2v2、1v1车轮战、机缘大乱斗、过关斩将、胜者为王排列，七项均直接可选。
 	var top_navigation_buttons: Array[Node] = top_navigation.find_children("*", "Button", true, false)
 	# 左侧模式按钮顺序；用于防止后续场景编辑意外改变稳定模式入口排列。
 	var mode_list_buttons: Array[Node] = mode_list.find_children("*", "Button", true, false)
-	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 4 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or top_navigation_buttons[2] != all_cards_button or top_navigation_buttons[3] != match_replay_button or mode_list_buttons.size() != 6 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button:
+	if not top_identity_mode_button.button_pressed or not identity_mode_button.button_pressed or top_navigation_buttons.size() != 4 or top_navigation_buttons[0] != top_identity_mode_button or top_navigation_buttons[1] != online_settings_button or top_navigation_buttons[2] != all_cards_button or top_navigation_buttons[3] != match_replay_button or mode_list_buttons.size() != 7 or mode_list_buttons[0] != identity_mode_button or mode_list_buttons[1] != doudizhu_mode_button or mode_list_buttons[2] != team2v2_mode_button or mode_list_buttons[3] != wheel_duel_mode_button or mode_list_buttons[4] != opportunity_brawl_mode_button or mode_list_buttons[5] != conquest_mode_button or mode_list_buttons[6] != winner_takes_all_mode_button:
 		_fail("top_navigation_entries top=%s modes=%s pressed=%s/%s" % [str(top_navigation_buttons), str(mode_list_buttons), top_identity_mode_button.button_pressed, identity_mode_button.button_pressed])
 		return
 	# 车轮战模式专属设置；局内、局外必须同时显示明置与暗置数量，并应用同一字体、文字色及全局配置值。
@@ -259,9 +267,9 @@ func _run() -> void:
 	if not main_wheel_face_up_input.get_parent().visible or not main_wheel_face_down_input.get_parent().visible or not match_wheel_face_up_input.get_parent().visible or not match_wheel_face_down_input.get_parent().visible or main_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or main_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_label.get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_down_label.get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not main_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_up_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or not match_wheel_face_down_label.get_theme_color("font_color").is_equal_approx(expected_menu_text_color) or main_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or match_wheel_face_up_input.get_line_edit().get_theme_font("font") != ThemeDB.fallback_font or not main_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or not match_wheel_face_up_input.get_line_edit().get_theme_color("font_color").is_equal_approx(expected_input_text_color) or int(main_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(match_wheel_face_up_input.value) != GameSettings.wheel_duel_face_up_candidate_count or int(main_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count or int(match_wheel_face_down_input.value) != GameSettings.wheel_duel_face_down_candidate_count:
 		_fail("wheel_duel_menu_settings_style_or_sync")
 		return
-	# 模式卡滚动范围；六张100像素卡片加五段12像素间距必须高于可视区，确保新增入口通过滚动浏览而非缩小。
+	# 模式卡滚动范围；七张100像素卡片加六段12像素间距必须高于可视区，确保新增入口通过滚动浏览而非缩小。
 	var mode_scroll_bar: VScrollBar = mode_scroll.get_v_scroll_bar() if mode_scroll != null else null
-	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
+	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(winner_takes_all_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
 		_fail("mode_scroll_layout title=%s cards=%s range=%s/%s" % [str(mode_list_title.custom_minimum_size if mode_list_title != null else Vector2.ZERO), str(mode_cards.get_theme_constant("separation") if mode_cards != null else -1), str(mode_scroll_bar.max_value if mode_scroll_bar != null else -1.0), str(mode_scroll_bar.page if mode_scroll_bar != null else -1.0)])
 		return
 	# 滑条轨道样式；上下内容边距为0才能让滑块在最小值和最大值处真正贴合轨道端点。
@@ -271,16 +279,16 @@ func _run() -> void:
 	if mode_scroll_track_style == null or mode_scroll_grabber_style == null or not is_zero_approx(mode_scroll_track_style.content_margin_top) or not is_zero_approx(mode_scroll_track_style.content_margin_bottom) or not is_zero_approx(mode_scroll_grabber_style.content_margin_top) or not is_zero_approx(mode_scroll_grabber_style.content_margin_bottom):
 		_fail("mode_scroll_endpoint_margins track=%s/%s grabber=%s/%s" % [str(mode_scroll_track_style.content_margin_top if mode_scroll_track_style != null else -1.0), str(mode_scroll_track_style.content_margin_bottom if mode_scroll_track_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_top if mode_scroll_grabber_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_bottom if mode_scroll_grabber_style != null else -1.0)])
 		return
-	# 滚动到底部后第六张模式卡必须完整进入视口；证明模式入口没有依赖裁切区域外的不可点击节点。
+	# 滚动到底部后第七张模式卡必须完整进入视口；证明模式入口没有依赖裁切区域外的不可点击节点。
 	mode_scroll.scroll_vertical = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	# 过关斩将模式卡全局矩形；滚动到底部后必须完整位于可视窗口内。
-	var conquest_mode_rect: Rect2 = conquest_mode_button.get_global_rect()
-	# 模式滚动窗口全局矩形；用于与第六张模式卡边界比较。
+	# 胜者为王模式卡全局矩形；滚动到底部后必须完整位于可视窗口内。
+	var winner_takes_all_mode_rect: Rect2 = winner_takes_all_mode_button.get_global_rect()
+	# 模式滚动窗口全局矩形；用于与第七张模式卡边界比较。
 	var mode_scroll_rect: Rect2 = mode_scroll.get_global_rect()
-	if conquest_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or conquest_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
-		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(conquest_mode_rect), str(mode_scroll_rect)])
+	if winner_takes_all_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or winner_takes_all_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
+		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(winner_takes_all_mode_rect), str(mode_scroll_rect)])
 		return
 	# 滚轮交互；向下滚动必须改变内容位置，并让纵向滑条同步到同一值。
 	main_menu.call("_set_mode_scroll_vertical", 0.0)
@@ -393,8 +401,27 @@ func _run() -> void:
 		_fail("opportunity_brawl_details_button_hidden")
 		return
 	main_menu.call("_select_identity_mode")
-	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or conquest_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
+	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or conquest_mode_name.get_theme_font_size("font_size") != 27 or winner_takes_all_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
+		return
+	# 胜者为王详情；正文必须完整记录座次补偿的分段数值，这是该开关唯一的长期说明入口。
+	main_menu.call("_select_winner_takes_all_mode")
+	if not mode_details_button.visible or not winner_takes_all_mode_button.button_pressed or not main_seat_compensation_checkbox.visible or GameSettings.next_match_mode != GameSettings.MATCH_MODE_WINNER_TAKES_ALL:
+		_fail("winner_takes_all_entry details=%s pressed=%s seat_row=%s mode=%s" % [str(mode_details_button.visible), str(winner_takes_all_mode_button.button_pressed), str(main_seat_compensation_checkbox.visible), str(GameSettings.next_match_mode)])
+		return
+	await _click_control(mode_details_button)
+	await get_tree().process_frame
+	if not mode_details_panel.visible or mode_details_title.text != "胜者为王模式详情" or not mode_details_description.text.contains("所有玩家的身份均为内奸") or not mode_details_description.text.contains("击杀其他角色后均摸3张牌") or not mode_details_description.text.contains("初始手牌：1号、2号、3号+0；4号、5号、6号+1；7号、8号、9号+2；10号+3。") or not mode_details_description.text.contains("体力上限：1号至4号+0；5号至8号+1；9号及以后+2。"):
+		_fail("winner_takes_all_details_content")
+		return
+	await _click_control(mode_details_close_button)
+	if mode_details_panel.visible:
+		_fail("winner_takes_all_details_close")
+		return
+	# 座次补偿只属于胜者为王；切回其他模式后该设置行必须立即隐藏，避免被误解为通用开关。
+	main_menu.call("_select_identity_mode")
+	if main_seat_compensation_checkbox.visible:
+		_fail("seat_compensation_row_visible_in_identity")
 		return
 	# 默认客户区矩形；打开联机设置前记录，用于断言资料页与模式预览使用同一客户区，而不是全屏弹层。
 	var mode_page_rect: Rect2 = main_frame.get_global_rect()

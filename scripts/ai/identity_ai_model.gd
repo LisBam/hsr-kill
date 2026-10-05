@@ -3,6 +3,9 @@ extends RefCounted
 
 ## 身份局 AI 关系模型。实现无名杀身份模式的局势强度、真实态度与隐藏身份暴露度组合逻辑。
 
+## 胜者为王模式下任意两名不同玩家之间的真实态度；全员互为死敌，取与内奸对主公同级的敌意量级。
+const WINNER_TAKES_ALL_HOSTILE_ATTITUDE: float = -8.0
+
 ## 身份完全公开时使用的暴露度；固定为1，表示态度无需再按猜测可信度衰减。
 const REVEALED_EXPOSURE: float = 1.0
 
@@ -337,6 +340,10 @@ func get_real_attitude(authoritative_snapshot: Dictionary, from_player_id: int, 
 		return 0.0
 	if from_player_id == to_player_id:
 		return 10.0
+	# 胜者为王：全员同为内奸且互为死敌，任意两名不同玩家之间都不存在合作目标。
+	# 该分支必须早于下面的身份阵营表：否则会落到"内奸对内奸返回0.0"的平衡分支，AI 将完全不进攻。
+	if str(authoritative_snapshot.get("match_mode", "")) == IdentityRules.MODE_WINNER_TAKES_ALL:
+		return WINNER_TAKES_ALL_HOSTILE_ATTITUDE
 	# 观察者身份；项目稳定名称映射无名杀 zhu、zhong、fan、nei。
 	var from_identity: String = str(from_player.get("identity", "renegade"))
 	# 目标身份；未知值按内奸处理，避免把异常配置误判为固定友方。

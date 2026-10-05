@@ -58,6 +58,9 @@ signal conquest_difficulty_changed(difficulty: int)
 ## 过关斩将机缘选择方式变化时发出；参数为稳定方式ID（vote/individual），仅影响之后创建的对局。
 signal conquest_opportunity_choice_mode_changed(mode_id: String)
 
+## 座次补偿开关变化时发出；仅影响之后创建的胜者为王对局，不修改正在进行的对局。
+signal seat_compensation_changed(enabled: bool)
+
 ## 离线下一局是否由本机控制全部角色的变化信号；联机模式不会读取该设置。
 signal control_all_characters_changed(enabled: bool)
 
@@ -277,6 +280,9 @@ const MATCH_MODE_OPPORTUNITY_BRAWL: String = "opportunity_brawl"
 ## 下一局过关斩将模式稳定ID；与IdentityRules.MODE_CONQUEST一致，固定由一名本地玩家对战AI。
 const MATCH_MODE_CONQUEST: String = "conquest"
 
+## 下一局胜者为王模式稳定ID；与IdentityRules.MODE_WINNER_TAKES_ALL一致，2至10人全员内奸互相厮杀。
+const MATCH_MODE_WINNER_TAKES_ALL: String = "winner_takes_all"
+
 ## 下一局默认模式；首次启动或无效存档时进入标准身份局。
 const DEFAULT_NEXT_MATCH_MODE: String = MATCH_MODE_IDENTITY
 
@@ -309,6 +315,12 @@ const DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT: int = DEFAULT_NEXT_MATCH_PLAYER_CO
 
 ## 过关斩将默认人数；该值表示“玩家数”，默认2（联机默认2名玩家），离线单人开局仍按历史语义固定创建2个规则角色。
 const DEFAULT_CONQUEST_PLAYER_COUNT: int = 2
+
+## 胜者为王默认人数；该模式支持2至10人，默认取8人以贴近身份模式的常见规模。
+const DEFAULT_WINNER_TAKES_ALL_PLAYER_COUNT: int = 8
+
+## 座次补偿开关的默认值；默认关闭，保持与其他模式一致的原始起手强度，需玩家显式开启。
+const DEFAULT_SEAT_COMPENSATION_ENABLED: bool = false
 
 ## 离线过关斩将的固定规则角色总数；单人游玩恒为1名本地玩家对1名敌人。
 ## 该常量是离线路径的唯一权威：菜单人数控件的玩家数语义只服务于局域网大厅，
@@ -359,6 +371,12 @@ var next_match_player_count_opportunity_brawl: int = DEFAULT_OPPORTUNITY_BRAWL_P
 
 ## 过关斩将独立保存的下一局人数；表示玩家数（2至4），离线单人不读取该值，仅局域网大厅作为初始玩家数。
 var next_match_player_count_conquest: int = DEFAULT_CONQUEST_PLAYER_COUNT
+
+## 胜者为王独立保存的下一局人数；范围2至10，切换模式时不覆盖身份模式人数。
+var next_match_player_count_winner_takes_all: int = DEFAULT_WINNER_TAKES_ALL_PLAYER_COUNT
+
+## 下一局胜者为王是否开启座次补偿；默认关闭，开启后按开局座次追加初始手牌与体力上限。
+var seat_compensation_enabled: bool = DEFAULT_SEAT_COMPENSATION_ENABLED
 
 ## 下一局1v1车轮战明置候选数量；默认6，运行时设置范围3至20。
 var wheel_duel_face_up_candidate_count: int = DEFAULT_WHEEL_DUEL_FACE_UP_CANDIDATE_COUNT
@@ -595,6 +613,8 @@ func normalize_match_mode(mode_id: String) -> String:
 		return MATCH_MODE_OPPORTUNITY_BRAWL
 	if mode_id == MATCH_MODE_CONQUEST:
 		return MATCH_MODE_CONQUEST
+	if mode_id == MATCH_MODE_WINNER_TAKES_ALL:
+		return MATCH_MODE_WINNER_TAKES_ALL
 	return MATCH_MODE_IDENTITY
 
 
@@ -630,6 +650,8 @@ func get_stored_player_count_for_mode(mode_id: String) -> int:
 		return next_match_player_count_opportunity_brawl
 	if mode == MATCH_MODE_CONQUEST:
 		return next_match_player_count_conquest
+	if mode == MATCH_MODE_WINNER_TAKES_ALL:
+		return next_match_player_count_winner_takes_all
 	return next_match_player_count_identity
 
 
@@ -647,6 +669,8 @@ func _store_player_count_for_mode(mode_id: String, player_count: int) -> void:
 		next_match_player_count_opportunity_brawl = normalized_count
 	elif mode == MATCH_MODE_CONQUEST:
 		next_match_player_count_conquest = normalized_count
+	elif mode == MATCH_MODE_WINNER_TAKES_ALL:
+		next_match_player_count_winner_takes_all = normalized_count
 	else:
 		next_match_player_count_identity = normalized_count
 
@@ -797,6 +821,15 @@ func set_conquest_opportunity_choice_mode(mode_id: String) -> void:
 	conquest_opportunity_choice_mode_changed.emit(conquest_opportunity_choice_mode)
 
 
+## 设置下一局胜者为王是否开启座次补偿；仅影响之后创建的对局，进行中的对局读取开局锁定的值。
+func set_seat_compensation_enabled(enabled: bool) -> void:
+	if seat_compensation_enabled == enabled:
+		return
+	seat_compensation_enabled = enabled
+	_queue_settings_save()
+	seat_compensation_changed.emit(seat_compensation_enabled)
+
+
 ## 返回指定模式应读取的随机选将牌数；只有过关斩将使用专属设置，其余模式保留普通候选配置。
 func get_character_candidate_count_for_mode(mode_id: String) -> int:
 	# 规范化后的模式ID；未知模式按身份局处理，避免外部调用读取到不稳定配置。
@@ -889,6 +922,8 @@ func _load_saved_settings() -> void:
 	var stored_opportunity_brawl_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_opportunity_brawl", -1))
 	# 过关斩将独立人数存档；固定2人，旧存档缺失时回退模式默认值。
 	var stored_conquest_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_conquest", -1))
+	# 胜者为王独立人数存档；范围2至10，旧存档缺失时回退模式默认8人。
+	var stored_winner_takes_all_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_winner_takes_all", -1))
 	var legacy_player_count: int = int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count", next_match_player_count))
 	if stored_identity_count < 0:
 		stored_identity_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_IDENTITY else DEFAULT_IDENTITY_PLAYER_COUNT
@@ -902,12 +937,15 @@ func _load_saved_settings() -> void:
 		stored_opportunity_brawl_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_OPPORTUNITY_BRAWL else DEFAULT_OPPORTUNITY_BRAWL_PLAYER_COUNT
 	if stored_conquest_count < 0:
 		stored_conquest_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_CONQUEST else DEFAULT_CONQUEST_PLAYER_COUNT
+	if stored_winner_takes_all_count < 0:
+		stored_winner_takes_all_count = legacy_player_count if normalize_match_mode(next_match_mode) == MATCH_MODE_WINNER_TAKES_ALL else DEFAULT_WINNER_TAKES_ALL_PLAYER_COUNT
 	next_match_player_count_identity = normalize_player_count_for_mode(MATCH_MODE_IDENTITY, stored_identity_count)
 	next_match_player_count_doudizhu = normalize_player_count_for_mode(MATCH_MODE_DOUDIZHU, stored_doudizhu_count)
 	next_match_player_count_team2v2 = normalize_player_count_for_mode(MATCH_MODE_TEAM2V2, stored_team2v2_count)
 	next_match_player_count_wheel_duel = normalize_player_count_for_mode(MATCH_MODE_WHEEL_DUEL, stored_wheel_duel_count)
 	next_match_player_count_opportunity_brawl = normalize_player_count_for_mode(MATCH_MODE_OPPORTUNITY_BRAWL, stored_opportunity_brawl_count)
 	next_match_player_count_conquest = normalize_player_count_for_mode(MATCH_MODE_CONQUEST, stored_conquest_count)
+	next_match_player_count_winner_takes_all = normalize_player_count_for_mode(MATCH_MODE_WINNER_TAKES_ALL, stored_winner_takes_all_count)
 	next_match_player_count = get_stored_player_count_for_mode(next_match_mode)
 
 	custom_character_assignment_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled))
@@ -929,6 +967,8 @@ func _load_saved_settings() -> void:
 	conquest_difficulty = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", DEFAULT_CONQUEST_DIFFICULTY)), MIN_CONQUEST_DIFFICULTY, MAX_CONQUEST_DIFFICULTY)
 	# 过关斩将机缘选择方式；旧存档缺失字段时回退默认投票选择，未知值同样收敛到稳定ID。
 	conquest_opportunity_choice_mode = normalize_conquest_opportunity_choice_mode(str(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "conquest_opportunity_choice_mode", DEFAULT_CONQUEST_OPPORTUNITY_CHOICE_MODE)))
+	# 胜者为王座次补偿开关；旧存档缺失字段时保持默认关闭，避免新增机制改变既有对局强度。
+	seat_compensation_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "seat_compensation_enabled", DEFAULT_SEAT_COMPENSATION_ENABLED))
 	control_all_characters_enabled = bool(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled))
 	wheel_duel_face_up_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
 	wheel_duel_face_down_candidate_count = clampi(int(settings_file.get_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)), MIN_WHEEL_DUEL_CANDIDATE_COUNT, MAX_WHEEL_DUEL_CANDIDATE_COUNT)
@@ -1006,6 +1046,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_wheel_duel", next_match_player_count_wheel_duel)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_opportunity_brawl", next_match_player_count_opportunity_brawl)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_conquest", next_match_player_count_conquest)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_player_count_winner_takes_all", next_match_player_count_winner_takes_all)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "next_match_mode", next_match_mode)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "custom_character_assignment_enabled", custom_character_assignment_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "customize_ai_characters_enabled", customize_ai_characters_enabled)
@@ -1017,6 +1058,7 @@ func _save_settings() -> void:
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_character_candidate_count", conquest_character_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_difficulty", conquest_difficulty)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "conquest_opportunity_choice_mode", conquest_opportunity_choice_mode)
+	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "seat_compensation_enabled", seat_compensation_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "control_all_characters_enabled", control_all_characters_enabled)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_up_candidate_count", wheel_duel_face_up_candidate_count)
 	settings_file.set_value(GAMEPLAY_SETTINGS_SECTION, "wheel_duel_face_down_candidate_count", wheel_duel_face_down_candidate_count)
