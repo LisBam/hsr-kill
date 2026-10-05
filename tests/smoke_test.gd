@@ -202,8 +202,10 @@ func _run() -> void:
 	# 【濯世】是三段弃置基本牌换取拆牌与雷电伤害的阶段技。
 	# 新增砂金的【筹码】【盲注】【风口】后为110个；【筹码】是开局按体力上限摸牌并提升手牌上限的锁定技，
 	# 【盲注】是用两种颜色叠护盾与摸牌的阶段技，【风口】是批量获得时机与主动夺牌并失去自身的主动技。
+	# 新增银枝的【巡礼】【礼节】后为112个；【巡礼】是插入三段额外阶段并改写距离的半锁定技，
+	# 【礼节】是批量获得后令他人摸牌、被他人回复后回赠体力的主动技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 110:
+	if skill_definition_count != 112:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -312,13 +314,14 @@ func _run() -> void:
 	# 新增青雀（仙舟联盟，3体力）后为49名；她引用【独弈】【弃和】【自摸】。
 	# 新增丹恒·饮月（仙舟联盟，4体力）后为50名；他与同势力的丹恒通过稳定ID区分，引用【伏辰】【濯世】。
 	# 新增砂金（星际和平公司，3体力）后为51名；他引用【筹码】【盲注】【风口】。
+	# 新增银枝（星间寰宇，4体力）后为52名；他引用【巡礼】【礼节】。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 51:
+	if character_definition_count != 52:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return
 	# 势力展示元数据数量；当前35名武将定义共同使用8个独立势力主题；新增欢愉势力后为9个。
-	# 新增星际和平公司后为10个；新势力使用铜色b87333与简称“司”。
+	# 新增星际和平公司与星间寰宇后为10个；两者分别使用铜色b87333与银色c7c9ce。
 	var faction_definition_count: int = GameDatabase.factions.size()
 	if faction_definition_count != 10:
 		printerr("SMOKE_FAIL faction_definitions=%d" % faction_definition_count)
@@ -1320,21 +1323,32 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	for four_player: PlayerState in _controller.state.players:
-		# 当前玩家实际安装的技能；数量必须等于武将技能列表剔除不满足身份的领袖技后的结果。
+		# 当前玩家实际安装的技能；必须完整覆盖武将文件声明的技能，并允许存在局内动态获得的技能。
 		var installed_skills: Dictionary = _controller.skill_instances_by_player.get(four_player.player_id, {}) as Dictionary
 		# 当前玩家武将定义；运行时安装器以该技能列表为唯一来源。
 		var installed_character: Dictionary = GameDatabase.get_character(four_player.character_id)
-		# 当前玩家期望技能数量；非领袖身份不会安装领袖技，但普通技能必须全部存在。
-		var expected_installed_skill_count: int = 0
-		for installed_skill_id_variant: Variant in installed_character.get("skills", []) as Array:
-			# 当前技能元数据；用于读取稳定的领袖技身份约束。
-			var installed_skill_definition: Dictionary = GameDatabase.get_skill(str(installed_skill_id_variant))
-			if not bool(installed_skill_definition.get("leader_skill", false)) or four_player.identity == "leader":
-				expected_installed_skill_count += 1
-		if installed_skills.size() != expected_installed_skill_count:
-			printerr("SMOKE_FAIL installed_skills player=%d count=%d" % [four_player.player_id, installed_skills.size()])
-			get_tree().quit(1)
-			return
+		# 武将文件声明的技能；非领袖身份不安装领袖技，其余必须逐个存在。
+		var declared_skill_ids: Array = installed_character.get("skills", []) as Array
+		for declared_skill_id_variant: Variant in declared_skill_ids:
+			# 当前声明技能ID与其元数据；领袖技按身份过滤后参与存在性校验。
+			var declared_skill_id: String = str(declared_skill_id_variant)
+			var installed_skill_definition: Dictionary = GameDatabase.get_skill(declared_skill_id)
+			if bool(installed_skill_definition.get("leader_skill", false)) and four_player.identity != "leader":
+				continue
+			if not installed_skills.has(declared_skill_id):
+				printerr("SMOKE_FAIL installed_skills_missing player=%d character=%s skill=%s installed=%s" % [four_player.player_id, four_player.character_id, declared_skill_id, str(installed_skills.keys())])
+				get_tree().quit(1)
+				return
+		# 超出武将声明的实例；必须是局内获得技能（例如【升变】以“军功”动态赋予的【奇袭】）并留有获得记录。
+		for installed_skill_id_variant: Variant in installed_skills.keys():
+			# 当前已安装技能ID；声明列表内的固有能力已经在上一步校验过。
+			var installed_skill_id: String = str(installed_skill_id_variant)
+			if declared_skill_ids.has(installed_skill_id):
+				continue
+			if not (four_player.acquired_skills as Dictionary).has(installed_skill_id):
+				printerr("SMOKE_FAIL installed_skills_unexpected player=%d character=%s skill=%s installed=%s acquired=%s" % [four_player.player_id, four_player.character_id, installed_skill_id, str(installed_skills.keys()), str(four_player.acquired_skills)])
+				get_tree().quit(1)
+				return
 	# 纯 AI 五人局；规则集规定从五人起领袖的体力上限才增加1点。
 	if not _controller.start_match(5, 20260715, "identity"):
 		printerr("SMOKE_FAIL five_player_start")
