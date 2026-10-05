@@ -155,6 +155,14 @@ func uses_simultaneous_selection() -> bool:
 	return is_doudizhu_mode() or is_team2v2_mode()
 
 
+## 返回当前阶段是否为「多名玩家同时选将」；这是**阶段**判据，与上面的**模式**判据正交，互不影响。
+## 该阶段的定义本身就是选择内容在全员完成前不公开，因此期间任何 AI 都不得抢先确认武将，
+## 否则真人稍后提交同一武将时会被「该武将已经被其他玩家选择」拒绝。
+## 只读实现：不修改任何状态，可在门禁、快照与测试中任意调用。
+func is_simultaneous_selection_phase() -> bool:
+	return phase == PHASE_OTHERS
+
+
 ## 返回是否启用领袖优先选将与公开领袖武将；斗地主、2v2与过关斩将均为 false。
 func uses_leader_priority_selection() -> bool:
 	return not uses_simultaneous_selection() and not is_conquest_mode()

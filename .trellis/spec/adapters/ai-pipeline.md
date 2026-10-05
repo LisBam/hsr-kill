@@ -88,6 +88,7 @@
 ## Quality Check
 
 - [ ] AI 改动未让 AI 直接修改状态或推进阶段。
+- [ ] 选将阶段的 AI 等待门禁只由**阶段性质**与**实时控制权**决定（`MatchController._should_defer_ai_character_selection()` + 只读阶段判据 `CharacterSelectionService.is_simultaneous_selection_phase()`）。不得改回由「全武将座次身份自选」开关决定——该开关关闭时身份模式同样处于同时选将阶段，AI 提前确认会把武将变成「已被其他玩家选择」而使真人提交被拒；也不得为此新增超时、轮询或配置项。
 - [ ] 未新增卡牌/技能 ID 白名单；评分只读元数据。
 - [ ] 判断敌我只用 `get_attitude(快照, 响应者, 来源) > 0.0`：AI 层**没有** host/MatchController，**禁止**调用 `are_teammates()` 或任何需要权威规则状态的友方判定；隐藏身份暴露度为 `0` 时态度同样为 `0`，因此“已确认友方”与“同阵营”是两个不同口径，不要混用。
 - [ ] 需要“某角色是否拥有某类技能”时走**通用元数据**累计（如 `get_snapshot_sell_blood_value()`；枚举口径为固有技能 + `mode_skill_ids` + `temporary_skills` + `acquired_skills` 去重），不要在评估器内枚举具体技能 ID 或写 ID 白名单——新增同类技能只需在自身文件声明元数据，评估器与调用方都不应改动。
