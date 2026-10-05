@@ -5,7 +5,9 @@ extends Node
 ## 职责划分：
 ## 一、总线管理：运行时确保 BGM 与 SFX 两条总线存在并挂到 Master，不依赖额外的总线布局资源；
 ## 二、设置联动：订阅 GameSettings 的音量与静音变化，把线性音量换算为总线分贝；
-## 三、请求分派：把语音表现负载翻译为候选路径解析与播放组件调用。
+## 三、请求分派：把语音表现负载翻译为候选路径解析与播放组件调用；
+## 四、BGM场景所有权：request_bgm() 表示“进入并接管某场景”，release_bgm() 表示“按场景作用域释放”，
+##     任何时刻最多只有一套场景BGM在播放，目标场景没有素材时也不会残留上一个场景的曲目。
 ## 本节点不读取 GameState、MatchController 或任何技能运行时对象；缺少音频文件时全程静默。
 
 
@@ -97,22 +99,33 @@ func play_effect(effect_id: String) -> void:
 		_voice_player.play_stream(stream)
 
 
-## 请求播放指定场景的背景音乐；同一场景重复请求为幂等操作，不会重头播放。
+## 请求进入指定场景的背景音乐并接管播放；同一场景重复请求为幂等操作，不会重头播放。
 ## 场景标识只区分主菜单与战斗两类；未知标识按战斗处理，保证任何对局阶段都有背景音乐。
+## 关键语义：进入一个场景同时意味着上一个场景结束。即使目标场景没有投放任何曲目，
+## 上一个场景的曲目也会在此处被淡出停止（不在空池时提前返回），
+## 因此“退出对局回到主菜单”绝不会残留战斗BGM。
 func request_bgm(scene_id: String) -> void:
 	if _catalog == null or _bgm_player == null:
 		return
 	# 规范化场景标识；主菜单之外的取值一律归入战斗场景。
 	var normalized_scene_id: String = AudioCatalog.BGM_SCENE_MENU if scene_id == AudioCatalog.BGM_SCENE_MENU else AudioCatalog.BGM_SCENE_BATTLE
-	# 候选曲目池；同一场景可投放多首曲目，进入时随机选择其中一首。
+	# 候选曲目池；同一场景可投放多首曲目，进入时随机选择其中一首；空池只记录诊断，仍继续接管场景。
 	var pool: Array[String] = _catalog.resolve_bgm_pool(normalized_scene_id)
 	if pool.is_empty():
 		_log_missing_audio("bgm", normalized_scene_id, "")
-		return
 	_bgm_player.play_pool(normalized_scene_id, pool, _catalog)
 
 
-## 停止背景音乐并清空场景标识；返回主菜单或退出对局时可显式调用。
+## 释放指定场景的背景音乐播放权；只有当前正在播放的正是该场景时才会停止，返回是否真的停止。
+## 场景作用域是本服务隔离两类BGM的核心保证：退出主菜单不会误停战斗BGM，退出战斗也不会误停主菜单BGM。
+func release_bgm(scene_id: String) -> bool:
+	if _bgm_player == null:
+		return false
+	return _bgm_player.release_scene(scene_id)
+
+
+## 无条件停止背景音乐并清空场景标识；供整体停机、诊断与自动化测试使用。
+## 与 release_bgm() 的区别：本入口不校验场景作用域，调用后一定没有任何BGM在播放。
 func stop_bgm() -> void:
 	if _bgm_player == null:
 		return
@@ -161,6 +174,8 @@ func set_audio_muted(muted: bool) -> void:
 func get_debug_state() -> Dictionary:
 	return {
 		"bgm_scene": get_current_bgm_scene(),
+		# 当前场景是否真的曲目在响；场景已接管但该场景未投放素材时为false。
+		"bgm_playing": _bgm_player.is_scene_playing() if _bgm_player != null else false,
 		"active_voice_count": _voice_player.get_active_voice_count() if _voice_player != null else 0,
 		"bgm_volume": _read_settings_value("bgm_volume", 0.0),
 		"sfx_volume": _read_settings_value("sfx_volume", 0.0),
