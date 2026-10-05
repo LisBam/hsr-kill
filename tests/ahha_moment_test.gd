@@ -522,6 +522,25 @@ func _active_pause_reasons() -> Array[String]:
 	return _controller.gameplay_pause_service.get_active_reasons()
 
 
+## 校验阿哈时刻过场盖在卡牌表现层全部飞牌之上；过场是暂停期间唯一的全屏画面，飞牌越过它就会遮住视频。
+func _assert_cutscene_above_card_layer(cutscene: AhhaMomentCutscene) -> bool:
+	# 卡牌表现层；它是飞牌与目标指示线的唯一绘制位置，缺失说明桌面装配被破坏。
+	var animation_layer: CardUseAnimationLayer = _main_instance.get_node_or_null("CardUseAnimationLayer") as CardUseAnimationLayer
+	if animation_layer == null:
+		return _fail("card_animation_layer_missing")
+	# 表现牌可能到达的最高绝对层级；动画层基准层级加上三个分类中最大的偏移。
+	var card_band_ceiling: int = animation_layer.z_index + CardUseAnimationLayer.DRAW_BATCH_Z_OFFSET
+	if card_band_ceiling >= cutscene.z_index:
+		return _fail("cutscene_below_card_layer %d/%d" % [card_band_ceiling, cutscene.z_index])
+	# 当前在场的每张表现牌；即使子节点自行改写过层级，也不允许越过过场动画。
+	for layer_child: Node in animation_layer.get_children():
+		# 当前动画层子节点；只有卡牌视图参与层级校验，指示线由动画层自身绘制、始终在牌面之下。
+		var layer_card: CardView = layer_child as CardView
+		if layer_card != null and animation_layer.z_index + layer_card.z_index >= cutscene.z_index:
+			return _fail("cutscene_covered_by_card %d/%d" % [animation_layer.z_index + layer_card.z_index, cutscene.z_index])
+	return true
+
+
 ## 停止过场并清空它可能持有的暂停令牌；每个用例的开始与结束都调用，保证用例之间互不影响。
 func _stop_cutscene_safely() -> void:
 	# 当前过场组件；缺失时无需清理。
@@ -646,6 +665,9 @@ func _test_offline_cutscene_pauses_and_releases() -> bool:
 		return _fail("cutscene_video_frozen_by_own_pause %.3f/%.3f" % [position_before, video.stream_position])
 	if not cutscene.is_cutscene_playing():
 		return _fail("cutscene_stopped_too_early")
+	# 图层次序：过场必须盖住卡牌表现层的全部飞牌，否则暂停期间仍留在屏幕上的牌会压在过场视频上面。
+	if not _assert_cutscene_above_card_layer(cutscene):
+		return false
 	# 自然播完（含淡出结束）后必须立即恢复：等待条件成立，超时上限只防御解码挂死。
 	var released: bool = await _wait_until(func() -> bool: return not cutscene.is_pause_held(), CUTSCENE_RELEASE_TIMEOUT_MILLISECONDS)
 	if not released:

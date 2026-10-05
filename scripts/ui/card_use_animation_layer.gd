@@ -2,6 +2,10 @@ class_name CardUseAnimationLayer
 extends Control
 
 ## 卡牌使用表现层。该组件接管正式 CardView 节点播放飞牌与目标指示线，不创建任何替代牌模型或修改权威状态。
+##
+## 绘制层级契约：本层只占基准层级（presentation_z_index，默认30）之上的固定三层（展示队列+1、区域转移+2、批次摸牌+3），
+## 子节点层级因此恒为常量、不随队列长度或牌号增长；同一层内的前后关系由兄弟顺序决定。
+## 这样飞牌始终位于选将遮罩（40）、统一信息框（100）、阿哈时刻过场（120）与局内菜单（500）之下，任何全屏遮罩都能盖住卡牌表现。
 
 ## 飞牌动画持续时间；默认0.42秒兼顾动作辨识与对局节奏，可在检查器中运行前调整。
 @export_range(0.1, 1.5, 0.01) var card_flight_duration: float = 0.42
@@ -44,6 +48,15 @@ extends Control
 
 ## 兼容未归入批次的区域转移时相邻牌面的堆叠偏移；默认向右18像素、向上3像素，避免同一锚点的多个临时牌面完全重合。
 @export var draw_stack_offset: Vector2 = Vector2(18.0, -3.0)
+
+## 展示队列牌面的相对层级偏移；动画层基准层级之上的第1层，只决定队列整体位于转移飞牌与批次摸牌之下。
+const ACTIVE_CARD_Z_OFFSET: int = 1
+
+## 区域转移牌面的相对层级偏移；必须高于展示队列，保证飞牌盖住中央队列。
+const TRANSFER_Z_OFFSET: int = 2
+
+## 批次摸牌牌面的相对层级偏移；必须高于区域转移，保证整批摸牌盖住其他飞牌。
+const DRAW_BATCH_Z_OFFSET: int = 3
 
 ## 同一次摸牌中相邻牌面中心的水平间距；默认42像素让整组可辨认且以目标锚点为中心，运行时可按主题调整。
 @export_range(20.0, 100.0, 1.0) var draw_batch_card_spacing: float = 42.0
@@ -289,7 +302,9 @@ func play_card(card_view: CardView, start_position: Vector2, discard_position: V
 	presented_card.set_selected_state(false)
 	# 清除选中状态可能恢复普通容器纵坐标，因此再次恢复接管前变换，保证飞牌起点连续。
 	presented_card.global_transform = original_global_transform
-	presented_card.z_index = _active_cards.size() + 1
+	# 表现牌层级只使用动画层基准层级之上的固定三层：展示队列、区域转移、批次摸牌。
+	# 同层内的前后关系由兄弟顺序承担，因此层级不随队列长度或牌号增长，飞牌永远盖不到选将遮罩、统一信息框与阿哈时刻过场之上。
+	presented_card.z_index = ACTIVE_CARD_Z_OFFSET
 	presented_card.rotation = 0.0
 	presented_card.modulate = Color(1.0, 1.0, 1.0, 0.9)
 	# 新实例在完成父级、坐标和外观初始化后才显示，避免场景树插入瞬间以默认原点闪现一帧。
@@ -356,7 +371,8 @@ func play_transfer(card_view: CardView, start_position: Vector2, target_position
 		stack_index = draw_stack.size()
 		draw_stack.append(transfer_card_instance_id)
 		_draw_transfer_stacks[draw_stack_key] = draw_stack
-	transfer_card.z_index = 80 + stack_index if not draw_stack_key.is_empty() else 80 + _transfer_cards.size()
+	# 转移牌面层级；固定使用区域转移层，同批或连续转移的前后关系由加入顺序决定。
+	transfer_card.z_index = TRANSFER_Z_OFFSET
 	# 最终堆叠位置；第一张落在玩家锚点，后续牌按固定向量依次压叠显示。
 	var stacked_target_position: Vector2 = target_position - transfer_card.get_card_size() * 0.5 + draw_stack_offset * float(stack_index)
 	# 移动补间；无论是否存在同组转移牌都立即开始，避免没有批次信号的摸牌退化为逐张等待。
@@ -436,7 +452,8 @@ func _play_draw_transfer_batch(batch_id: int, draw_cards: Array[CardView], batch
 		draw_card.rotation = 0.0
 		draw_card.scale = Vector2.ONE * 0.82
 		draw_card.modulate = Color.WHITE
-		draw_card.z_index = 90 + card_index
+		# 本批牌面层级；固定使用批次摸牌层，同批前后关系由加入顺序决定。
+		draw_card.z_index = DRAW_BATCH_Z_OFFSET
 		draw_card.visible = true
 		flight_tween.tween_property(draw_card, "position", card_target_position - draw_card_size * 0.5, draw_flight_duration)
 		flight_tween.tween_property(draw_card, "scale", Vector2.ONE * animated_card_scale, draw_flight_duration)
@@ -744,7 +761,8 @@ func _reflow_active_cards(duration: float, excluded_card: CardView = null) -> vo
 		var active_card: CardView = _active_cards[card_index]
 		if active_card == null or not is_instance_valid(active_card) or active_card == excluded_card:
 			continue
-		active_card.z_index = card_index + 1
+		# 队列层级重新铺开；同层内前后关系仍由兄弟顺序决定，补位不会改变队列的重叠顺序。
+		active_card.z_index = ACTIVE_CARD_Z_OFFSET
 		_start_card_motion(active_card, _queue_card_position(card_index), duration)
 
 
