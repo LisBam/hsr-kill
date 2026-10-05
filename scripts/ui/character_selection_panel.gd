@@ -357,6 +357,12 @@ func _ensure_leader_divider() -> void:
 func bind_snapshot(snapshot: Dictionary) -> void:
 	if not _required_nodes_ready:
 		return
+	# 自选座次身份关闭时，本次快照的座次与身份既不可选择也不可提交，任何上下文都不得保留本地缓存值。
+	# 该归零必须先于下方的上下文延续判断：否则延续分支会跳过复位，让上一局或上一阶段的座次身份
+	# 经“同一选将上下文”存活到本局，既写进标题也写进确认载荷。
+	if not bool(snapshot.get("allow_custom_assignment", false)):
+		_selected_seat_number = -1
+		_selected_identity = ""
 	# 当前滚动位置；同一选将上下文内换将或名额刷新后恢复，避免下方候选突然跳回列表顶部。
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
 	# 上一份快照的垂直滚动值；新阶段不恢复，同一阶段刷新时延迟写回。
