@@ -769,6 +769,11 @@ var _active_converted_play_phase_context: Dictionary = {}
 ## 当前由技能插入的独立额外弃牌阶段上下文；空字典表示没有等待阶段触发、弃牌选择或完成回调。
 var _active_extra_discard_phase: Dictionary = {}
 
+## 当前由技能插入的独立额外摸牌阶段上下文；空字典表示没有等待阶段开始、摸牌或完成回调。
+## 与额外弃牌阶段的区别：本阶段会把公开阶段与阶段角色切换为获得阶段者（摸牌窗口与阶段日志需要正确的阶段归属），
+## 因此额外保存原回合展示字段，完成时完整恢复。
+var _active_extra_draw_phase: Dictionary = {}
+
 ## 当前由技能插入、可属于非当前回合角色的独立额外出牌阶段；保存原回合展示与技能完成回调，空字典表示没有活动阶段。
 var _active_independent_play_phase: Dictionary = {}
 
@@ -1645,6 +1650,7 @@ func _teardown_previous_match_runtime() -> void:
 	_main_phase_play_conversions.clear()
 	_active_converted_play_phase_context.clear()
 	_active_extra_discard_phase.clear()
+	_active_extra_draw_phase.clear()
 	_active_independent_play_phase.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
@@ -2644,10 +2650,32 @@ func has_pending_play_interaction() -> bool:
 	if has_pending_card_choice():
 		return true
 	# 连续虚拟用牌等技能后续队列仍属于当前主动技能；队列排空前不得提前重建普通chooseToUse。
-	if not _deferred_skill_settlements.is_empty():
+	if _has_blocking_deferred_skill_settlement():
 		return true
 	# 仅技能多步选牌间隔阻塞出牌窗口恢复；response_prompt 与 phase_transition 有各自恢复路径，不得因残留计时器卡住 chooseToUse。
 	return game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()
+
+
+## 判断延后结算队列是否真的阻塞当前出牌阶段的交互恢复；纯查询，不修改任何队列。
+##
+## 存在活动独立额外出牌阶段、且栈顶父序列正在等待该子阶段时，**归属外层序列**的延后条目
+## （`registered_play_phase_id = -1`，或属于其他子阶段实例）在该子阶段内不可能被消费：
+## 统一结算管线被“父序列等待子阶段”的屏障挡住，这些条目只能等子阶段结束，
+## 而子阶段本身又要等出牌窗口与AI驱动恢复——两者互相等待就是零进展死锁，
+## 外部表现恰好与既有“阶段归属”缺陷同形：延后队列恒非空、`has_pending_play_interaction()` 恒为真、
+## `chooseToUse` 窗口与AI动作永不恢复（实测触发场景：开局时【风口】在 `gameStart` 登记的父序列条目
+## 与【巡礼】在首回合 `phaseBefore` 插入的三段额外阶段同时存在）。
+## 因此屏障生效期间只把「归属等于当前子阶段实例」的条目视为阻塞，其余条目继续由管线按原顺序处理。
+func _has_blocking_deferred_skill_settlement() -> bool:
+	if _deferred_skill_settlements.is_empty():
+		return false
+	if not _top_sequence_waits_for_child_phase():
+		return true
+	# 当前活动独立额外出牌阶段实例号；额外摸牌与额外弃牌阶段期间为空，此时不存在需要恢复的出牌窗口。
+	var active_phase_id: int = int(_active_independent_play_phase.get("phase_id", -1))
+	if active_phase_id < 0:
+		return true
+	return _has_phase_scoped_deferred_settlement(active_phase_id)
 
 
 ## 在多步技能或流程间隔结束后尝试恢复正式出牌窗口；已有选择、间隔任务或活动 chooseToUse 时安全忽略。
@@ -4705,6 +4733,8 @@ func _replace_native_character_skills(player: PlayerState, old_native_skill_ids:
 			retained_skill.bind(self, player.player_id)
 			retained_skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+	# 武将牌交换同样会装入新武将的固有技能，因此在映射更新后统一落实「武将牌始终背面向上」类锁定规则。
+	enforce_face_down_lock(player.player_id)
 
 
 ## 复原一名角色武将牌上的全部固有技能；限定、觉醒、轮回、每回合与每出牌阶段次数均回到未发动状态。
@@ -4904,6 +4934,16 @@ func turn_over_player(target_id: int, source_id: int = -1, reason: String = "") 
 	var timing_data: Dictionary = {"old_face_down":target.face_down, "face_down":not target.face_down, "reason":reason}
 	var before_event: RuleEvent = _emit_rule_timing("turnOverBefore", target_id, source_id, target_id, timing_data)
 	if before_event != null and (before_event.cancelled or before_event.neutralized):
+		return false
+	# 本次翻面的最终目标状态；事件处理器可改写 face_down，因此以事件数据而非入参为准。
+	var intended_face_down: bool = bool(before_event.data.get("face_down", not target.face_down)) if before_event != null else not target.face_down
+	# 「武将牌始终背面向上」锁定规则：本次要翻至正面时如实取消本次翻面。
+	# 不修改状态、不派发 turnOverEnd/turnOverAfter，使所有观察者看到“这次翻面没有发生”；
+	# 反向（正面→背面）不受锁定影响，锁定技角色仍可被正常翻至背面。
+	if not intended_face_down and is_face_down_locked(target_id):
+		if before_event != null:
+			before_event.cancel("face_down_lock")
+		add_log("%s的武将牌因锁定技无法翻至正面。" % format_player_state_log_name(target))
 		return false
 	target.face_down = not target.face_down
 	var result_data: Dictionary = {"old_face_down":not target.face_down, "face_down":target.face_down, "reason":reason}
@@ -8420,6 +8460,163 @@ func _complete_active_extra_discard_phase() -> void:
 	_resume_settlement_pipeline()
 
 
+## 执行一个由技能插入的额外摸牌阶段；阶段开始、数量窗口、摸牌与完成回调都经过统一时机协议。
+##
+## 与额外出牌阶段同构：本阶段会把公开阶段与阶段角色切换为获得阶段者，完成后再完整恢复原回合展示，
+## 因为 phaseDraw 的窗口、日志与动画都需要正确的阶段归属。
+## 与额外弃牌阶段的差异：本阶段使用实例范围生命周期，避免与该角色仍在等待的普通摸牌阶段互相覆盖。
+## 完成契约：**无论阶段正常结束还是被 Before 取消**，创建技能都会收到 continue_extra_phase 回调，
+## 并在上下文里读到 phase_interrupted 标记；“摸牌→出牌→弃牌”这类多段阶段链因此不会因为一次取消而永久停摆。
+func request_extra_draw_phase(player_id: int, source_id: int, reason: String, completion_context: Dictionary) -> bool:
+	if state == null or state.game_over or not _active_extra_draw_phase.is_empty():
+		return false
+	# 阶段角色；死亡或离场角色不能获得新的额外摸牌阶段。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 原回合角色；独立阶段完成后必须恢复其回合展示，而不是按阶段角色座次推进正常下家。
+	var original_player_id: int = state.current_player_id
+	# 原公开阶段；通常为回合开始的准备阶段，仍完整保存以支持其他可复用规则入口。
+	var original_phase: String = state.current_phase
+	# 原阶段索引；恢复后界面与阶段守卫继续使用原回合位置。
+	var original_phase_index: int = state.phase_index
+	_active_extra_draw_phase = {
+		"phase_id":_next_inserted_phase_id,
+		"player_id":player_id,
+		"source_id":source_id,
+		"reason":reason,
+		"parent_event_id":state.current_event_id,
+		"completion_context":completion_context.duplicate(true),
+		"original_player_id":original_player_id,
+		"original_phase":original_phase,
+		"original_phase_index":original_phase_index,
+		"original_ai_action_count":_ai_actions_this_turn,
+		"interrupted":false,
+		"status":"begin_before",
+	}
+	_next_inserted_phase_id += 1
+	# 额外阶段使用独立生命周期键，不覆盖相同角色尚在等待的普通摸牌阶段。
+	_active_extra_draw_phase["lifecycle_scope"] = ":extra:%d" % int(_active_extra_draw_phase.phase_id)
+	# 新阶段使用独立AI行动额度；递增驱动令牌会令旧角色尚未执行的异步动作安全失效（与额外出牌阶段一致）。
+	_ai_drive_token += 1
+	_ai_actions_this_turn = 0
+	state.current_player_id = player_id
+	_start_active_extra_draw_phase()
+	return true
+
+
+## 建立额外摸牌阶段的完整 phaseDraw 生命周期并复用标准摸牌数量窗口。
+func _start_active_extra_draw_phase(change_completed: bool = false) -> void:
+	if _active_extra_draw_phase.is_empty() or state == null or state.game_over:
+		return
+	# 阶段角色ID；活动上下文是唯一来源，不能从原回合角色推断。
+	var player_id: int = int(_active_extra_draw_phase.get("player_id", -1))
+	# 阶段角色状态；等待开始期间失效时直接结束本阶段并恢复原回合。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		_finish_active_extra_draw_phase()
+		return
+	# 阶段来源角色；用于phaseChange事件与阶段日志追溯技能效果来源。
+	var source_id: int = int(_active_extra_draw_phase.get("source_id", -1))
+	# 前一公开阶段；通常是原回合角色的回合开始阶段。
+	var previous_phase: String = state.current_phase
+	if not change_completed:
+		_change_phase_then("phaseChange", player_id, source_id, player_id, {"from_phase":previous_phase, "to_phase":"draw", "extra_phase":true, "independent_phase":true}, int(_active_extra_draw_phase.get("parent_event_id", -1)), Callable(self, "_start_active_extra_draw_phase").bind(true))
+		return
+	state.current_phase = "draw"
+	state.phase_index = 2
+	# 本阶段基础摸牌数；与标准摸牌阶段共用同一函数，因此机缘摸牌加成与2v2首回合口径完全一致。
+	var base_draw_count: int = _get_phase_draw_base_count(player_id)
+	_record_runtime_event("phaseDraw", "phase", {"player_id":player_id, "base_draw_count":base_draw_count, "extra_phase":true, "independent_phase":true}, {}, int(_active_extra_draw_phase.get("parent_event_id", -1)))
+	# 有意不读取 skipped_phases：本阶段是技能插入的独立阶段，与既有额外出牌/额外弃牌阶段的口径一致，
+	# “跳过摸牌阶段”类效果只作用于该角色自己回合内的普通摸牌阶段。
+	_active_extra_draw_phase["status"] = "body"
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	phase_service.begin("phaseDraw", player_id, {"draw_count":base_draw_count, "turn_number":state.turn_number, "extra_phase":true}, int(_active_extra_draw_phase.get("parent_event_id", -1)), Callable(self, "_begin_active_extra_draw_body"), Callable(self, "_cancel_active_extra_draw_phase"), str(_active_extra_draw_phase.get("lifecycle_scope", "")), source_id)
+
+
+## 额外摸牌阶段的 Before 与 Begin 全部完成（且未被取消）后执行唯一一次摸牌。
+func _begin_active_extra_draw_body() -> void:
+	if _active_extra_draw_phase.is_empty():
+		return
+	_continue_active_extra_draw_phase_body()
+
+
+## 在阶段主体内执行摸牌：数量窗口与摸牌共用同一服务，结束后进入统一收尾入口。
+func _continue_active_extra_draw_phase_body() -> void:
+	if _active_extra_draw_phase.is_empty():
+		return
+	# 阶段角色；等待触发期间死亡或离场时不再摸牌，但仍安全结束已经进入Begin的阶段。
+	var player_id: int = int(_active_extra_draw_phase.get("player_id", -1))
+	# 阶段角色状态；用于复核存活与在场。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		_finish_active_extra_draw_phase()
+		return
+	# 摸牌阶段数量窗口与主体共享同一服务；最终数量回读后只摸一次，获得牌时机也在其中派发。
+	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+	phase_service.draw_phase(player_id, Callable(self, "_finish_active_extra_draw_phase"), str(_active_extra_draw_phase.get("lifecycle_scope", "")))
+
+
+## Before 窗口取消额外摸牌阶段：本阶段没有摸到任何牌，但仍回调创建者结束它的阶段链。
+func _cancel_active_extra_draw_phase() -> void:
+	if _active_extra_draw_phase.is_empty():
+		return
+	_active_extra_draw_phase["interrupted"] = true
+	_complete_active_extra_draw_phase()
+
+
+## 收尾额外摸牌阶段；摸牌尚未开始（阶段角色在Begin之后失效）时补齐End与After，已经摸过牌时直接进入完成回调。
+func _finish_active_extra_draw_phase() -> void:
+	if _active_extra_draw_phase.is_empty():
+		return
+	# 阶段角色与实例范围；两者共同定位本阶段的唯一生命周期记录。
+	var player_id: int = int(_active_extra_draw_phase.get("player_id", -1))
+	# 实例范围；空串表示普通摸牌阶段，额外阶段固定为":extra:<阶段号>"。
+	var lifecycle_scope: String = str(_active_extra_draw_phase.get("lifecycle_scope", ""))
+	# 阶段生命周期记录；不存在表示摸牌与结束时机已经完整派发过，不能重复收尾。
+	var lifecycle_context: Dictionary = _started_phase_lifecycles.get("%d:phaseDraw%s" % [player_id, lifecycle_scope], {}) as Dictionary
+	if not lifecycle_context.is_empty() and not bool(lifecycle_context.get("body_started", false)):
+		_active_extra_draw_phase["status"] = "ending"
+		_active_extra_draw_phase["interrupted"] = true
+		var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
+		phase_service.complete("phaseDraw", player_id, {"turn_number":state.turn_number, "extra_phase":true, "reason":str(_active_extra_draw_phase.get("reason", ""))}, int(_active_extra_draw_phase.get("parent_event_id", -1)), Callable(self, "_complete_active_extra_draw_phase"), lifecycle_scope)
+		return
+	_complete_active_extra_draw_phase()
+
+
+## 完成额外摸牌阶段并把控制权交回创建它的技能实例；活动字典先清空以允许回调继续创建下一项阶段。
+func _complete_active_extra_draw_phase() -> void:
+	if _active_extra_draw_phase.is_empty():
+		return
+	# 已完成阶段快照；先清空活动字段，允许技能回调继续创建下一项独立阶段。
+	var completed_phase: Dictionary = _active_extra_draw_phase.duplicate(true)
+	_active_extra_draw_phase.clear()
+	# 原回合角色与公开阶段；恢复发生在技能回调之前，使后续额外阶段拥有正确父流程。
+	var original_player_id: int = int(completed_phase.get("original_player_id", -1))
+	state.current_player_id = original_player_id
+	state.current_phase = str(completed_phase.get("original_phase", "finish"))
+	state.phase_index = int(completed_phase.get("original_phase_index", 5))
+	_ai_actions_this_turn = int(completed_phase.get("original_ai_action_count", 0))
+	_ai_drive_token += 1
+	# 创建阶段的技能上下文；缺失技能表示纯系统调用，只需结束阶段而不执行额外效果。
+	var completion_context: Dictionary = completed_phase.get("completion_context", {}) as Dictionary
+	# 完成回调的技能持有者 ID；用于从权威运行时技能表定位唯一实例。
+	var skill_owner_id: int = int(completion_context.get("skill_owner_id", -1))
+	# 完成回调的稳定技能 ID；空值表示创建者不需要接收阶段完成通知。
+	var skill_id: String = str(completion_context.get("skill_id", ""))
+	# 接收额外阶段完成回调的运行时技能实例；实例失效或武将代次变化时安全跳过回调。
+	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
+	if skill != null and skill.matches_character_generation(int(completion_context.get("skill_character_generation", -1))) and skill.can_use_effect(bool(completion_context.get("locked_skill_segment", false))):
+		# 稳定完成上下文；技能可按业务需要读取中断标记，但不能改写核心阶段状态。
+		var stable_completion_context: Dictionary = completion_context.duplicate(true)
+		stable_completion_context["phase_interrupted"] = bool(completed_phase.get("interrupted", false))
+		skill.continue_extra_phase(stable_completion_context)
+	_emit_state()
+	# 技能回调可能登记“然后”步骤或下一项阶段；统一管线和回合尾部守卫会按顺序继续。
+	_resume_settlement_pipeline()
+
+
 ## 结束当前出牌阶段；武将技能通过该公开端口实现“跳过出牌阶段”，不直接调用控制器私有流程。
 func end_current_play_phase(player_id: int) -> bool:
 	if state == null or state.game_over or state.current_player_id != player_id or state.current_phase != "play":
@@ -9798,6 +9995,51 @@ func modify_skill_distance_to_target(player_id: int, target_id: int, current_dis
 	return modified_distance
 
 
+## 汇总指定角色是否被任一已安装技能声明为「武将牌始终背面向上」；无此声明的角色恒返回false。
+## 与距离改写等纯查询同构：只遍历该角色**此刻实际安装**的技能实例，不缓存、不记名单，
+## 因此换将、失去技能与再获得技能都会立即反映到判定结果。
+## 锁定后段不按「非锁定技失效」过滤：半锁定技被压制时，其锁定描述仍然成立。
+func is_face_down_locked(player_id: int) -> bool:
+	# 目标角色状态；不存在的角色没有可判定的技能容器。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return false
+	# 当前玩家技能实例表；固有、模式、临时与局内获得技能共用纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；翻面锁定查询不得修改任何状态。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.locks_face_down():
+			return true
+	return false
+
+
+## 把「武将牌始终背面向上」的锁定规则落实到权威状态：仅在角色正面且被锁定时纠正为背面。
+## 返回本次是否真的发生了纠正，幂等且可安全重复调用。
+##
+## 设计说明：这里直接写 face_down 而不是调用 turn_over_player，原因是本入口服务于
+## **换将、复活与技能重装**这类状态复位流程——它们必须得到确定的最终状态，
+## 不能因为某个技能取消了 turnOverBefore 窗口而停留在正面（那会与「始终」矛盾）；
+## 同时复位流程中的事件派发会与外围回合推进叠加，保持既有复位点的写法更安全。
+## 纠正方向固定为正面→背面，与「正面→背面不受锁定影响」的规则一致；
+## 公开状态快照由调用方在其流程收尾时统一广播，因此本入口不重复发送快照。
+func enforce_face_down_lock(player_id: int) -> bool:
+	# 目标角色状态；不存在的角色没有可纠正的武将牌状态。
+	# 有意不校验存活与离场：本规则约束的是「武将牌方向」本身，死亡与换将过程中的复位同样必须收敛到背面，
+	# 否则车轮战换将（先安装再复位）与过关斩将复活（先复位再安装）两条相反顺序会留下正面状态。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null:
+		return false
+	# 锁定判定必须在写入之前完成；本函数自身的写入不能反过来影响这一次判定。
+	if not is_face_down_locked(player_id):
+		return false
+	if player.face_down:
+		return false
+	player.face_down = true
+	add_log("%s的武将牌因锁定技保持背面向上。" % format_player_state_log_name(player))
+	return true
+
+
 ## 设置一名角色的公开标记；globally_unique用于“全场同ID仅一名角色拥有”的转移型标记。
 func set_player_mark(player_id: int, mark_id: String, mark_data: Dictionary, globally_unique: bool = false) -> bool:
 	if player_mark_service == null or not player_mark_service.set_mark(player_id, mark_id, mark_data, globally_unique):
@@ -10597,6 +10839,9 @@ func _install_all_character_skills(saved_installed_skill_ids_by_player: Dictiona
 			player_skills[skill_id] = skill
 			skill.install()
 		skill_instances_by_player[player.player_id] = player_skills
+		# 开局与读档的完整安装同样以本入口收尾，因此在这里统一落实「武将牌始终背面向上」类锁定规则。
+		# 放在映射赋值之后：锁定查询只读取该映射，安装循环内查不到刚落装的新实例。
+		enforce_face_down_lock(player.player_id)
 
 
 ## 卸载上一局或动态移除的全部技能；事件总线订阅必须在清空实例引用前释放。
@@ -10640,6 +10885,9 @@ func _reinstall_character_skills_for_player(player: PlayerState) -> void:
 		player_skills[skill_id] = skill
 		skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+	# 换将、失去技能后重装与复活都以本入口覆盖武将技能，因此同样在这里落实「武将牌始终背面向上」类锁定规则。
+	# 放在映射赋值之后：锁定查询只读取该映射，安装循环内查不到刚落装的新实例。
+	enforce_face_down_lock(player.player_id)
 
 
 ## 使指定角色失去一项技能：卸载其实例、释放时机订阅，并清掉“已获得/临时技能”记录。
@@ -12515,6 +12763,8 @@ func run_rule_sequence(steps: Array[Callable], context: Dictionary = {}) -> int:
 	sequence.enclosing_judgment_request_id = int(_pending_judgment_request.get("request_id", -1))
 	sequence.enclosing_play_phase_id = int(_active_independent_play_phase.get("phase_id", -1))
 	sequence.enclosing_discard_phase_id = int(_active_extra_discard_phase.get("phase_id", -1))
+	# 额外摸牌阶段与上两项同构：外层序列必须等待之后插入的摸牌子阶段，子阶段自己的序列则不等自己。
+	sequence.enclosing_extra_draw_phase_id = int(_active_extra_draw_phase.get("phase_id", -1))
 	_next_rule_sequence_id += 1
 	_rule_sequences[sequence.sequence_id] = sequence
 	_advance_rule_sequence(sequence.sequence_id)
@@ -12776,6 +13026,10 @@ func _run_settlement_pipeline_pass() -> void:
 				# 排空后 has_pending_play_interaction() 自然转假，此时必须按与正常出牌阶段完全相同的方式恢复出牌窗口；
 				# 这里复用既有的“空闲出牌窗口重建”入口，不新增任何独立阶段专用推进或专用结算队列。
 				resume_play_phase_choice()
+			# 子阶段自己的AI/窗口驱动必须由这里补齐：本分支是本帧唯一会到达的统一出口，而外层延后条目在屏障期间
+			# 已不再阻塞子阶段交互（见 `_has_blocking_deferred_skill_settlement`），若缺少这次补齐，
+			# 独立额外出牌阶段会停在“有活动出牌窗口、但没有安排AI动作、也没有阶段切换任务”的状态而永久挂起。
+			_ensure_ai_progress_after_resolution()
 			# 达到排空上限后仍然残留阶段归属条目，说明某个内容在同阶段内不断重新登记同一步骤；
 			# 记录一次可诊断的局部熔断，让这类异常不再表现为无法解释的随机卡死。
 			if phase_scoped_settlement_drains >= maxi(max_phase_scoped_settlement_drains_per_pass, 1) and _has_phase_scoped_deferred_settlement(int(_active_independent_play_phase.get("phase_id", -1))):
@@ -12874,10 +13128,11 @@ func _begin_phase_lifecycle(base_name: String, player_id: int, event_data: Dicti
 
 ## 派发一个标准阶段的 End 与 After；目录没有对应后缀时自动跳过，不为引擎未定义的时机造名。
 ## 完成回调只在两个窗口全部子内容结束后调用，替代各阶段重复保存的结束游标。
-func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int, on_completed: Callable = Callable()) -> void:
+## instance_scope：阶段实例范围，空串表示该角色唯一的普通同名阶段；技能插入的额外阶段必须传入自己的范围。
+func _finish_phase_lifecycle(base_name: String, player_id: int, event_data: Dictionary, parent_event_id: int, on_completed: Callable = Callable(), instance_scope: String = "") -> void:
 	# 阶段收尾服务；同名活动实例只允许一个ending序列。
 	var phase_service: RefCounted = PHASE_LIFECYCLE_SERVICE_SCRIPT.new(self)
-	phase_service.complete(base_name, player_id, event_data, parent_event_id, on_completed)
+	phase_service.complete(base_name, player_id, event_data, parent_event_id, on_completed, instance_scope)
 
 
 ## 返回指定阶段生命周期是否仍等待主体执行；End或After选择恢复时返回false，防止重复摸牌、弃牌或写入阶段日志。
@@ -15054,7 +15309,10 @@ func _revive_dead_conquest_players_for_new_level(new_level: int) -> void:
 		fallen_player.out_of_game = false
 		fallen_player.out_of_game_until_round = -1
 		fallen_player.chained = false
-		fallen_player.face_down = false
+		# 复活复位沿用既有正面状态；声明「武将牌始终背面向上」的武将保持背面。
+		# 本流程在复位之前已经重装武将技能（见上方 _reinstall_character_skills_for_player），因此这里能读到正确的锁定结论。
+		if not is_face_down_locked(fallen_player.player_id):
+			fallen_player.face_down = false
 		fallen_player.non_locked_skills_disabled = false
 		fallen_player.non_locked_skill_disable_sources.clear()
 		fallen_player.character_corner_text = ""
@@ -15323,7 +15581,7 @@ func _is_conquest_settlement_quiescent() -> bool:
 		return false
 	if not _queued_equipment_triggers.is_empty():
 		return false
-	if not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty():
+	if not _active_independent_play_phase.is_empty() or not _active_extra_discard_phase.is_empty() or not _active_extra_draw_phase.is_empty():
 		return false
 	return true
 
@@ -15742,6 +16000,8 @@ func _reinstall_saved_runtime_skills(player: PlayerState) -> void:
 		player_skills[skill_id] = skill
 		skill.install()
 	skill_instances_by_player[player.player_id] = player_skills
+	# 读档补装获得/临时技能同样可能带来「武将牌始终背面向上」类锁定规则，因此在映射赋值后统一落实。
+	enforce_face_down_lock(player.player_id)
 
 
 ## 从存档回填全部回合与阶段游标；额外回合链与额外出牌阶段的进度借此跨会话保留。
@@ -18104,7 +18364,7 @@ func _change_phase_then(timing_name: String, player_id: int, source_id: int, tar
 
 ## 子阶段按创建身份归属，不以当前公开phase或是否存在选牌猜测完成状态。
 func _sequence_waits_for_child_phase(sequence: RuleStepSequence) -> bool:
-	return (not _active_independent_play_phase.is_empty() and int(_active_independent_play_phase.get("phase_id", -1)) != sequence.enclosing_play_phase_id) or (not _active_extra_discard_phase.is_empty() and int(_active_extra_discard_phase.get("phase_id", -1)) != sequence.enclosing_discard_phase_id)
+	return (not _active_independent_play_phase.is_empty() and int(_active_independent_play_phase.get("phase_id", -1)) != sequence.enclosing_play_phase_id) or (not _active_extra_discard_phase.is_empty() and int(_active_extra_discard_phase.get("phase_id", -1)) != sequence.enclosing_discard_phase_id) or (not _active_extra_draw_phase.is_empty() and int(_active_extra_draw_phase.get("phase_id", -1)) != sequence.enclosing_extra_draw_phase_id)
 
 
 ## 只检查最内层父内容；子阶段中新建的规则序列已记录外层阶段身份，仍能正常推进。

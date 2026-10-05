@@ -148,15 +148,20 @@ func _emit(sequence: RuleStepSequence, suffix: String) -> void:
 
 
 ## 摸牌数量窗口继承Before和Begin最终数据；各窗口修改完成后才执行唯一一次摸牌。
-func draw_phase(player_id: int, on_completed: Callable) -> void:
+##
+## instance_scope：阶段实例范围，空串表示该角色此刻唯一的普通摸牌阶段。
+## 技能插入的**额外摸牌阶段**必须传入独立范围（形如 ":extra:7"），否则会与该角色仍在等待的普通摸牌阶段
+## 共用同一条生命周期记录，导致重复摸牌或结束窗口命中错误实例。
+func draw_phase(player_id: int, on_completed: Callable, instance_scope: String = "") -> void:
 	_on_completed = on_completed
 	# 当前阶段记录；旧恢复入口重复调用时不再启动第二条摸牌序列。
-	var lifecycle_context: Dictionary = _host._started_phase_lifecycles.get("%d:phaseDraw" % player_id, {}) as Dictionary
+	var lifecycle_context: Dictionary = _host._started_phase_lifecycles.get("%d:phaseDraw%s" % [player_id, instance_scope], {}) as Dictionary
 	if str(lifecycle_context.get("status", "")) != "body" or bool(lifecycle_context.get("body_started", false)):
 		return
 	lifecycle_context["body_started"] = true
 	# 摸牌内容步骤；前置取消表示本次摸牌数量为0，仍正常结束已进入的阶段。
-	var steps: Array[Callable] = [_emit_begin_window.bind("Begin1"), _emit_begin_window.bind("Begin2"), _commit_draw, _complete_draw]
+	# 结束步骤绑定同一个实例范围，使结束窗口与开始窗口命中同一条记录。
+	var steps: Array[Callable] = [_emit_begin_window.bind("Begin1"), _emit_begin_window.bind("Begin2"), _commit_draw, _complete_draw.bind(instance_scope)]
 	_host.run_rule_sequence(steps, _context("phaseDraw", player_id, lifecycle_context))
 
 
@@ -177,6 +182,7 @@ func _commit_draw(sequence: RuleStepSequence) -> void:
 
 
 ## 摸牌产生的获得牌技能完成后才关闭阶段；结束回调沿用显式后继。
-func _complete_draw(sequence: RuleStepSequence) -> void:
+## instance_scope 由注册步骤绑定传入，使结束窗口命中与开始窗口同一条阶段实例记录。
+func _complete_draw(sequence: RuleStepSequence, instance_scope: String = "") -> void:
 	if _owns_lifecycle(sequence):
-		_host._finish_phase_lifecycle("phaseDraw", int(sequence.context.player_id), sequence.context.event_data, int(sequence.context.parent_event_id), _on_completed)
+		_host._finish_phase_lifecycle("phaseDraw", int(sequence.context.player_id), sequence.context.event_data, int(sequence.context.parent_event_id), _on_completed, instance_scope)

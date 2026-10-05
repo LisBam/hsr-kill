@@ -90,6 +90,10 @@ func _emit_turn_window(sequence: RuleStepSequence, timing_name: String) -> void:
 func _check_face_down(sequence: RuleStepSequence) -> void:
 	if not _read_turn_window(sequence):
 		return
+	# 「武将牌始终背面向上」类锁定规则的权威兜底：换将、复活或技能重装若把该角色的状态留在正面，
+	# 在其自己的回合开始窗口先纠正回背面，再按既有统一规则跳过本回合。
+	# 纠正必须放在背面判定之前，锁定角色的回合处理才与普通背面角色完全一致。
+	_host.enforce_face_down_lock(int(sequence.context.player_id))
 	if not _host.state.get_player(int(sequence.context.player_id)).face_down:
 		return
 	sequence.context["cancel_reason"] = "face_down"
@@ -100,9 +104,14 @@ func _check_face_down(sequence: RuleStepSequence) -> void:
 
 
 ## 翻回正面并记录跳过事实；已有翻面规则负责实际角色状态变化。
+## 「武将牌始终背面向上」类锁定技会拒绝本次翻至正面，此时日志必须与事实一致，不能写成已经翻回正面。
 func _turn_face_up(sequence: RuleStepSequence) -> void:
-	_host.turn_over_player(int(sequence.context.player_id), int(sequence.context.player_id), "turn_start_skip")
-	_host.add_log("%s翻回正面并跳过本回合。" % _host.format_player_state_log_name(_host.state.get_player(int(sequence.context.player_id))))
+	# 本次翻面（正面→背面之外的“背面→正面”方向）是否真的发生；由统一翻面入口给出唯一结论。
+	var turned_face_up: bool = _host.turn_over_player(int(sequence.context.player_id), int(sequence.context.player_id), "turn_start_skip")
+	if turned_face_up:
+		_host.add_log("%s翻回正面并跳过本回合。" % _host.format_player_state_log_name(_host.state.get_player(int(sequence.context.player_id))))
+		return
+	_host.add_log("%s的武将牌保持背面向上并跳过本回合。" % _host.format_player_state_log_name(_host.state.get_player(int(sequence.context.player_id))))
 
 
 ## 取消通知拥有其完整子内容；不能和phaseOver在同一个同步调用中连续派发。

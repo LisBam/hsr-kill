@@ -262,7 +262,10 @@ func _mode_effect(sequence: RuleStepSequence) -> void:
 			victim.dying = false
 			victim.death_confirmed = false
 			victim.chained = false
-			victim.face_down = false
+			# 换将复位沿用既有正面状态；新上场武将声明「武将牌始终背面向上」时保持背面。
+			# 本分支的顺序是“先安装技能再复位”，因此必须在这一步读取锁定查询，否则复位会把上一步的纠正结果抹掉。
+			if not _host.is_face_down_locked(victim.player_id):
+				victim.face_down = false
 			victim.skipped_phases.clear()
 			victim.slash_count = 0
 			victim.wine_used = false

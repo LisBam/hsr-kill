@@ -787,6 +787,19 @@ func modify_distance_to_target(_target_id: int, current_distance: int) -> int:
 	return current_distance
 
 
+## 声明本技能是否令持有者的武将牌**始终背面向上**；默认为false，不改变任何既有翻面行为。
+##
+## 使用方式：原文出现「你的武将牌始终背面向上」这类锁定描述时，在技能文件内覆写本函数并返回true，
+## 由核心的统一规则查询（MatchController.is_face_down_locked）汇总后执行：
+## 拒绝一切把该角色翻至**正面**的写入（含回合开始窗口的自动翻回、换将与复活时的状态复位），
+## 而正面→背面的翻面方向不受影响。
+##
+## 约束：纯查询——不得移动牌、写日志、创建选择或修改任何状态；
+## 该声明属于锁定技片段，因此核心不按「非锁定技失效」过滤它（与被失效压制的【巡礼】三阶段部分相互独立）。
+func locks_face_down() -> bool:
+	return false
+
+
 ## 判断其他角色能否弃置持有者的指定牌；默认允许，保护技能只拒绝规则明确覆盖的区域与牌型。
 func can_other_player_discard_card(_source_player_id: int, _card: CardInstance, _zone: String, _slot: String) -> bool:
 	return true
