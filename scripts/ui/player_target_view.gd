@@ -119,6 +119,12 @@ const CORNER_VIEW_SOURCE_FIELDS: Dictionary = {
 ## 移出游戏时的武将牌调制色；默认保留18%不透明度表达角色暂时不存在，仅影响表现且运行时无需动态修改。
 @export var out_of_game_modulate: Color = Color(1.0, 1.0, 1.0, 0.18)
 
+## 翻面时牌背覆盖层的不透明度；默认0.5表示牌背以50%透明度叠加在武将插画之上，插画仍然可见。
+## 取值范围0.0至1.0：调小更接近原插画、调大更接近纯牌背；运行时通常无需动态修改。
+## 该值只在“确实有插画可显示”时生效；没有插画（选将暗置候选、武将未配置同名插画、武将尚未公开）时
+## 仍使用完全不透明牌背，避免半透明层后面露出“插画预留”占位文字。
+@export_range(0.0, 1.0, 0.05) var face_down_card_back_overlay_alpha: float = 0.85
+
 ## 其他角色公开标记与武将牌左边缘的水平间距；默认1像素使标记贴近牌面，运行时通常无需动态修改。
 @export_range(0.0, 16.0, 1.0) var public_marker_card_gap: float = 1.0
 
@@ -156,7 +162,7 @@ var is_current_operator: bool = false
 ## 当前武将牌是否允许交互；存活角色为 true，阵亡角色为 false，只影响输入与视觉状态。
 var is_interactable: bool = false
 
-## 当前武将牌是否显示牌背；快照的 face_down 为 true 时遮挡公开信息，不改变角色规则状态。
+## 当前武将牌是否显示牌背；快照的 face_down 为 true 时在插画之上叠加牌背覆盖层并遮挡公开信息，不改变角色规则状态。
 var is_face_down: bool = false
 
 ## 当前武将插画纹理；配置未填写或资源不存在时为 null。
@@ -295,7 +301,8 @@ var _scroll_gesture_enabled: bool = false
 ## 武将牌背景面板；承载边框和纸面样式，不承担 Button 语义或规则状态。
 @onready var _card_body: Panel = $CardBody
 
-## 牌背插画层；默认隐藏，显示时替代武将插画，但身份、体力、装备、判定区、标记、状态与输入UI继续保留。
+## 牌背插画层；默认隐藏，显示时以 face_down_card_back_overlay_alpha 指定的不透明度叠加在武将插画之上
+## （插画缺失时保持完全不透明），身份、体力、装备、判定区、标记、状态与输入UI继续保留。
 @onready var _card_back: Panel = get_node("牌背") as Panel
 
 ## 独立输入区域；覆盖整张武将牌并负责点击、详情与悬停协议。
@@ -840,7 +847,7 @@ func _refresh_visual_state() -> void:
 		player_style.shadow_offset = Vector2.ZERO
 	_card_body.add_theme_stylebox_override("panel", player_style)
 	_refresh_card_back_style()
-	_card_back.visible = is_face_down
+	_refresh_card_back_overlay()
 	# 快照存活状态；不能用输入权限替代，离场角色仍存活但应保持透明武将牌而非显示阵亡文字。
 	var snapshot_alive: bool = bool(_player_snapshot.get("alive", false))
 	# 快照离场状态；只影响状态覆盖层是否绘制死亡滤镜，透明度与输入仍由本视图统一处理。
@@ -1606,7 +1613,7 @@ func _exit_tree() -> void:
 	_dismiss_public_judgment_information()
 
 
-## 刷新武将牌统一牌背配色；翻面状态只替换插画层，不改变角色UI、交互权限或规则状态。
+## 刷新武将牌统一牌背配色；翻面状态只改变插画层的叠加观感，不改变角色UI、交互权限或规则状态。
 func _refresh_card_back_style() -> void:
 	if not is_node_ready() or _card_back == null:
 		return
@@ -1622,6 +1629,23 @@ func _refresh_card_back_style() -> void:
 	# 武将牌背副标题；使用次级色维持主次关系。
 	var card_back_subtitle: Label = _card_back.get_node("Subtitle") as Label
 	card_back_subtitle.add_theme_color_override("font_color", BattleUIStyle.get_color("card_back_subtitle"))
+
+
+## 刷新翻面牌背覆盖层的显示与不透明度；牌背始终位于武将插画之上、装备与状态UI之下，
+## 因此这里只决定“是否显示”和“以多少不透明度叠加”，不移动任何节点、不改写规则状态。
+##
+## 判定口径：只有插画层真实显示了武将插画（_artwork_rect.visible）时才使用半透明叠加，
+## 让玩家在翻面状态下仍能认出角色；没有插画可显示时保持完全不透明牌背——
+## 选将阶段暗置候选（服务端不下发真实武将ID）与未配置同名插画的武将都属于这种情况，
+## 它们下面只有“插画预留”占位文字，半透明叠加会把占位文字透出来，反而像界面出错。
+func _refresh_card_back_overlay() -> void:
+	if not is_node_ready() or _card_back == null:
+		return
+	_card_back.visible = is_face_down
+	# 插画层是否真实可见；它是本组件内判断“是否存在原插画”的唯一判据，不额外读取武将定义。
+	var has_artwork: bool = _artwork_rect != null and _artwork_rect.visible
+	# 牌背覆盖层不透明度；正面向上时该层隐藏，取值不影响画面，因此每次刷新都统一写入避免残留。
+	_card_back.modulate.a = face_down_card_back_overlay_alpha if has_artwork else 1.0
 
 
 ## 将花色 ID 转换为装备横条使用的符号；无花色牌使用空心菱形保持位置稳定。
