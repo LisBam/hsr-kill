@@ -650,3 +650,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: 修复技能发动过程中可再次点击技能按钮导致跳段/中止
+<!-- trellis-session: v=2 fp=573bc7a777e17591 -->
+
+**Date**: 2026-10-06
+**Task**: 修复技能发动过程中可再次点击技能按钮导致跳段/中止
+**Branch**: `master`
+
+### Summary
+
+技能自己创建的选牌/选目标/文字选项请求未结束时，该技能按钮改为失效并忽略点击（新增 _get_in_flight_skill_release_id()，判定与 allow_cancel 无关），按钮保留金色选中描边；删除界面自造的二次点击取消路径，取消统一由操作区取消按钮与既有 Esc/右键入口承担。改写 skill_target_ui_test 并新增【濯世】第二段费用询问不跳段用例，13 个回归场景通过；同步 5 份 docs 与 3 份 .trellis/spec。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6866164` | ﻿修复技能发动过程中可再次点击技能按钮导致中止发动或跳到下一段 |
+
+### Status
+
+[OK] **Completed**

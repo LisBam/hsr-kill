@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-10-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~652 | Active |
+| `journal-1.md` | ~674 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-10-06 | 修复技能发动过程中可再次点击技能按钮导致跳段/中止 | `6866164` | `master` |
 | 15 | 2026-10-06 | 修复获得中央展示牌时跳过弃牌堆直接飞向获得者 | `e80cd34` | `master` |
 | 14 | 2026-10-06 | 新增游戏模式「胜者为王」 | `6af35a0` | `master` |
 | 12 | 2026-10-04 | 优化卡牌交互动画连续性 | `61f2a2f` | `master` |
