@@ -134,6 +134,43 @@ func _run() -> void:
 	if player_card_back.get_index() >= player_input_area.get_index():
 		_fail("player_card_back_input_order")
 		return
+	# 翻面牌背覆盖层的默认不透明度；需求固定为50%，牌背以半透明叠加而不是完全替代插画。
+	if not is_equal_approx(player_target_view.face_down_card_back_overlay_alpha, 0.5):
+		_fail("player_card_back_overlay_default:%f" % player_target_view.face_down_card_back_overlay_alpha)
+		return
+	# 有插画的武将翻面：插画继续可见，牌背以该不透明度叠加在插画之上。
+	var artwork_character_id: String = "danheng_yinyue"
+	var artwork_definition: Dictionary = GameDatabase.get_character(artwork_character_id)
+	if str(artwork_definition.get("art_path", "")).is_empty():
+		_fail("player_card_back_artwork_missing:%s" % artwork_character_id)
+		return
+	player_snapshot["character_id"] = artwork_character_id
+	player_target_view.configure_snapshot(player_snapshot, artwork_definition)
+	# 插画层；必须真实显示插画，否则下面的半透明叠加断言失去意义。
+	var player_artwork: TextureRect = player_target_view.get_node("Artwork") as TextureRect
+	if player_artwork == null or not player_artwork.visible:
+		_fail("player_card_back_artwork_visibility:%s" % artwork_character_id)
+		return
+	if not is_equal_approx(player_card_back.modulate.a, player_target_view.face_down_card_back_overlay_alpha):
+		_fail("player_card_back_face_down_overlay_alpha:%f" % player_card_back.modulate.a)
+		return
+	# 翻回正面后牌背层必须隐藏，插画保持可见。
+	player_snapshot["face_down"] = false
+	player_target_view.configure_snapshot(player_snapshot, artwork_definition)
+	if player_card_back.visible or not player_artwork.visible:
+		_fail("player_card_back_face_up_restore:%s/%s" % [player_card_back.visible, player_artwork.visible])
+		return
+	# 没有插画可显示时保持完全不透明牌背；选将阶段暗置候选（服务端不下发真实武将ID）走这条分支，
+	# 因此它的既有表现不因本次半透明叠加而改变。
+	player_snapshot["character_id"] = ""
+	player_snapshot["face_down"] = true
+	player_target_view.configure_snapshot(player_snapshot, {})
+	if not player_card_back.visible or player_artwork.visible:
+		_fail("player_card_back_hidden_candidate_visibility:%s/%s" % [player_card_back.visible, player_artwork.visible])
+		return
+	if not is_equal_approx(player_card_back.modulate.a, 1.0):
+		_fail("player_card_back_hidden_candidate_alpha:%f" % player_card_back.modulate.a)
+		return
 
 	print("CARD_BACK_OVERLAY_PASS")
 	get_tree().quit(0)
