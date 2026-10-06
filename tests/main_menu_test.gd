@@ -761,7 +761,7 @@ func _run() -> void:
 	if match_menu_button.focus_mode == Control.FOCUS_NONE or log_toggle_button.focus_mode == Control.FOCUS_NONE:
 		_fail("match_focus_restore")
 		return
-	# 主菜单创建局的自动种子；局内按设置重新开局必须取得另一实际种子，不能复用入口创建时的随机序列。
+	# 主菜单创建局的自动种子；局内重新开局必须取得另一实际种子，不能复用入口创建时的随机序列。
 	var initial_automatic_match_seed: int = match_controller.state.random_seed
 	# 主菜单创建局的状态实例；成功重开必须替换整个权威状态，而非只刷新旧局表现。
 	var initial_automatic_match_state: GameState = match_controller.state

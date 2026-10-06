@@ -18,6 +18,10 @@ signal conquest_temporary_exit_toggle_requested
 ## 请求切换局内聊天窗口显隐时发出的信号；聊天窗口、历史与头顶气泡均由桌面统一管理，菜单只提供入口。
 signal chat_toggle_requested
 
+## 请求打开开发者菜单时发出的信号；开发者窗口的创建、显示与对局控制均由桌面统一负责，菜单只提供入口。
+## 该入口是离线调试特权表面，联机模式下始终隐藏，详见 docs/界面与交互.md。
+signal developer_settings_requested
+
 ## 标准身份局最少玩家人数；默认2，与 IdentityRules 支持范围一致，运行时无需动态修改。
 @export_range(2, 10, 1) var minimum_player_count: int = 2
 
@@ -102,6 +106,10 @@ signal chat_toggle_requested
 ## 返回主菜单按钮；退出当前对局后恢复启动入口，不保留正在进行的权威状态。
 @onready var _main_menu_button: Button = %MenuReturnToMainButton
 
+## 开发者设置按钮；仅离线对局显示，点击后由桌面打开开发者菜单窗口。
+## 使用 get_node_or_null 防御旧场景缓存缺失该节点；缺失时入口不可用但不影响其余菜单功能。
+@onready var _developer_settings_button: Button = get_node_or_null("%MenuDeveloperSettingsButton") as Button
+
 ## AI响应速度整行容器；仅离线玩家与权威房主可见，客户端本地修改不会影响房主结算。
 @onready var _ai_response_delay_row: Control = _ai_response_delay_slider.get_parent() as Control
 
@@ -170,6 +178,8 @@ func _ready() -> void:
 	_restart_button.pressed.connect(_request_restart)
 	_conquest_exit_button.pressed.connect(_request_conquest_exit_toggle)
 	_main_menu_button.pressed.connect(_request_main_menu)
+	if _developer_settings_button != null:
+		_developer_settings_button.pressed.connect(_request_developer_settings)
 	_apply_player_count_limits_for_mode(GameSettings.next_match_mode if GameSettings != null else "identity")
 	_apply_player_count_value(GameSettings.next_match_player_count if GameSettings != null else minimum_player_count)
 	# 人数输入在键入时立即同步 Range 数值，避免玩家直接输入后立刻点击重开时仍读取旧值。
@@ -342,6 +352,7 @@ func set_authority_controls_visible(controls_visible: bool) -> void:
 	_ai_uses_mulligan_row.visible = controls_visible
 	_restart_button.visible = controls_visible
 	_control_all_characters_checkbox.visible = controls_visible and _offline_controls_visible
+	_refresh_developer_entry_visibility()
 	# 当前焦点若位于刚隐藏的权威控件中，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
 	if not controls_visible and focus_owner != null and (focus_owner == _restart_button or focus_owner == _control_all_characters_checkbox or _ai_response_delay_row.is_ancestor_of(focus_owner) or _game_speed_row.is_ancestor_of(focus_owner) or _player_count_row.is_ancestor_of(focus_owner) or focus_owner == _custom_character_assignment_checkbox or focus_owner == _customize_ai_characters_checkbox or focus_owner == _seat_compensation_checkbox or _mulligan_limit_row.is_ancestor_of(focus_owner) or focus_owner == _ai_uses_mulligan_checkbox or _character_replacement_count_row.is_ancestor_of(focus_owner) or _character_candidate_count_row.is_ancestor_of(focus_owner)):
@@ -360,6 +371,28 @@ func set_offline_controls_visible(controls_visible: bool) -> void:
 	_control_all_characters_checkbox.visible = _authority_controls_visible and _offline_controls_visible
 	if not _control_all_characters_checkbox.visible and _control_all_characters_checkbox.has_focus():
 		_control_all_characters_checkbox.release_focus()
+	_refresh_developer_entry_visibility()
+
+
+## 刷新开发者设置入口的可见性；只有离线对局才显示这个调试特权表面。
+##
+## 与「控制全部角色」不同，开发者菜单会直接改写体力、手牌与武将等规则状态，
+## 因此即使联机房主拥有权威设置权限也必须隐藏，避免调试能力出现在多人对局中。
+func _refresh_developer_entry_visibility() -> void:
+	if _developer_settings_button == null:
+		return
+	# 入口可见性；离线且拥有权威设置权限时为真，联机（含房主）一律为假。
+	var entry_visible: bool = _offline_controls_visible and _authority_controls_visible
+	_developer_settings_button.visible = entry_visible
+	# 隐藏时若焦点仍停在入口上，转交给始终可用的返回主菜单按钮，保证键盘导航不会停在不可见节点。
+	if not entry_visible and _developer_settings_button.has_focus():
+		_developer_settings_button.release_focus()
+		_main_menu_button.grab_focus()
+
+
+## 请求桌面打开开发者菜单；菜单只转发意图，窗口创建与对局控制全部由桌面负责。
+func _request_developer_settings() -> void:
+	developer_settings_requested.emit()
 
 
 ## 设置局内菜单绑定的当前对局模式；人数限制与模式专属设置均以该值为准。
@@ -413,6 +446,9 @@ func refresh_ui_style() -> void:
 	BattleUIStyle.apply_interaction_button(_restart_button)
 	BattleUIStyle.apply_interaction_button(_conquest_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(_main_menu_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	# 开发者入口使用强调色边框；它是离线调试特权表面，需要与普通玩家设置形成可识别的视觉区分。
+	if _developer_settings_button != null:
+		BattleUIStyle.apply_interaction_button(_developer_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	(_menu_panel.get_node("MenuVBox/MenuTitle") as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_ai_response_delay_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_game_speed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))

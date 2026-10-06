@@ -24,6 +24,9 @@ const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/component
 ## 阿哈时刻过场动画场景；订阅控制器的阿哈时刻开始信号后播放绿幕过场视频，不参与任何规则结算。
 const AHHA_MOMENT_CUTSCENE_SCENE: PackedScene = preload("res://scenes/components/ahha_moment_cutscene.tscn")
 
+## 开发者菜单窗口场景；离线调试特权表面，仅由局内菜单的开发者入口打开，不参与任何规则结算。
+const DEVELOPER_CONSOLE_PANEL_SCENE: PackedScene = preload("res://scenes/components/developer_console_panel.tscn")
+
 ## 音频服务自动加载路径；终局胜负需要按本机视角发声，因此由表现层直接请求而不经过核心层广播。
 const AUDIO_SERVICE_PATH: String = "/root/AudioService"
 
@@ -263,6 +266,15 @@ var match_chat_panel: MatchChatPanel
 
 ## 阿哈时刻过场动画组件；只订阅控制器的阿哈时刻开始信号播放绿幕视频，规则流程不等待其播放结果。
 var ahha_moment_cutscene: AhhaMomentCutscene
+
+## 开发者菜单窗口组件；默认隐藏，仅离线对局由局内菜单入口打开。
+## 组件只发意图信号，所有效果仍由 MatchController 在统一结算管线的空闲边界权威执行。
+var developer_console_panel: DeveloperConsolePanel
+
+## 开发者窗口持有的对局暂停令牌；-1 表示当前未持有。
+## 令牌由 GameplayPauseService 从 1 起递增分配，因此 -1 可安全表示「未持有」。
+## 打开窗口时申请、窗口不可见时释放，保证任何关闭路径都不会把对局永久留在暂停态。
+var _developer_console_pause_token: int = -1
 
 ## 按发言者稳定玩家 ID 复用的头顶聊天气泡；键为玩家 ID，值为 ChatBubbleView，新消息复用同一气泡节点。
 var _chat_bubbles: Dictionary = {}
@@ -604,6 +616,7 @@ func _ready() -> void:
 	_create_game_settlement_panel()
 	_create_match_chat_panel()
 	_create_ahha_moment_cutscene()
+	_create_developer_console_panel()
 	_create_identity_mark_menu()
 	_create_match_clock_timer()
 	resized.connect(_queue_auto_managed_hand_overlay_layout)
@@ -637,6 +650,7 @@ func _ready() -> void:
 	match_menu.main_menu_requested.connect(_on_main_menu_requested)
 	match_menu.conquest_temporary_exit_toggle_requested.connect(_on_conquest_temporary_exit_toggle_requested)
 	match_menu.chat_toggle_requested.connect(_on_match_chat_toggle_requested)
+	match_menu.developer_settings_requested.connect(_on_developer_settings_requested)
 	match_controller.conquest_exit_save_ready.connect(_on_conquest_exit_save_ready)
 	match_controller.match_finished.connect(_on_match_finished_for_conquest_save)
 	android_back_adapter.unhandled_back_requested.connect(_on_unhandled_android_back_requested)
@@ -1302,6 +1316,140 @@ func _create_match_chat_panel() -> void:
 	match_chat_panel.close_requested.connect(_on_match_chat_close_requested)
 
 
+## 创建开发者菜单窗口；窗口默认隐藏，只由局内菜单的开发者入口打开。
+## 组件不读取规则状态：目标列表与摸牌堆牌面都由桌面从只读快照与只读端口投影后注入。
+func _create_developer_console_panel() -> void:
+	developer_console_panel = DEVELOPER_CONSOLE_PANEL_SCENE.instantiate() as DeveloperConsolePanel
+	developer_console_panel.name = "DeveloperConsolePanel"
+	add_child(developer_console_panel)
+	developer_console_panel.close_requested.connect(_on_developer_console_close_requested)
+	developer_console_panel.effect_requested.connect(_on_developer_console_effect_requested)
+	developer_console_panel.draw_pile_candidates_requested.connect(_sync_developer_console_draw_pile)
+	developer_console_panel.draw_pile_gain_requested.connect(_on_developer_console_draw_pile_gain_requested)
+	developer_console_panel.character_replace_requested.connect(_on_developer_console_character_replace_requested)
+	# 暂停跟随窗口可见性而不是只跟随关闭信号：返回主菜单、重新开局等路径直接调用 close_console()，
+	# 不一定经过 close_requested，绑定可见性可以让所有关闭路径都自动释放令牌。
+	developer_console_panel.visibility_changed.connect(_on_developer_console_visibility_changed)
+	# 执行结果由控制器广播；窗口据此显示「已生效 / 未生效 / 已作废」，无需轮询规则状态。
+	match_controller.developer_effect_resolved.connect(_on_developer_effect_resolved)
+
+
+## 窗口可见性变化时同步对局暂停；打开即暂停，关闭即恢复。
+func _on_developer_console_visibility_changed() -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	_sync_developer_console_pause(developer_console_panel.visible)
+
+
+## 申请或释放开发者窗口的暂停令牌；重复调用同一方向是安全的空操作。
+## 暂停期间场景树停止推进，但窗口自身以 PROCESS_MODE_ALWAYS 运行，因此仍可正常关闭。
+func _sync_developer_console_pause(should_pause: bool) -> void:
+	if should_pause:
+		# 已持有令牌时不重复申请；重复申请会让令牌数量无限增长并导致释放不干净。
+		if _developer_console_pause_token >= 0:
+			return
+		_developer_console_pause_token = match_controller.acquire_gameplay_pause("developer_console")
+	else:
+		if _developer_console_pause_token < 0:
+			return
+		match_controller.release_gameplay_pause(_developer_console_pause_token)
+		_developer_console_pause_token = -1
+
+
+## 打开开发者菜单；仅离线对局可达。入口按钮在联机时本就不可见，这里再做一次纵深防御。
+func _on_developer_settings_requested() -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	if match_controller.network_gateway == null or match_controller.network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return
+	# 先收起局内菜单面板，避免菜单与开发者窗口同时占据右上角并争抢焦点。
+	match_menu.set_menu_open(false)
+	_sync_developer_console_targets()
+	developer_console_panel.set_pending_count(match_controller.get_developer_effect_pending_count())
+	developer_console_panel.set_status_text("")
+	developer_console_panel.open_console()
+
+
+## 关闭开发者菜单；窗口自行复位到主视图并归还焦点。
+func _on_developer_console_close_requested() -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	developer_console_panel.close_console()
+
+
+## 转发一条数值效果请求；控制器统一排队，真正执行发生在统一结算管线的空闲边界。
+func _on_developer_console_effect_requested(effect_kind: String, target_player_id: int, amount: int) -> void:
+	_report_developer_console_submission(match_controller.request_developer_effect(effect_kind, target_player_id, amount))
+
+
+## 转发「从摸牌堆获得指定牌」请求；牌 UID 列表作为纯数据载荷随队列条目一起排队。
+func _on_developer_console_draw_pile_gain_requested(target_player_id: int, uids: Array[int]) -> void:
+	_report_developer_console_submission(match_controller.request_developer_effect(DeveloperEffectService.EFFECT_GAIN_DRAW_PILE_CARD, target_player_id, 0, {"uids":uids}))
+
+
+## 转发「更换武将」请求；武将 ID 作为纯数据载荷随队列条目一起排队。
+func _on_developer_console_character_replace_requested(target_player_id: int, character_id: String) -> void:
+	_report_developer_console_submission(match_controller.request_developer_effect(DeveloperEffectService.EFFECT_REPLACE_CHARACTER, target_player_id, 0, {"character_id":character_id}))
+
+
+## 统一回填提交反馈；区分「已受理并排队」与「未受理」，使开发者不会把拒绝误判成无响应。
+func _report_developer_console_submission(accepted: bool) -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	if not accepted:
+		developer_console_panel.set_status_text("请求未被受理：对局未开始、已结束、联机中或目标不可用。")
+		return
+	developer_console_panel.set_pending_count(match_controller.get_developer_effect_pending_count())
+	developer_console_panel.set_status_text("已受理，将在当前结算完毕后的空闲时间执行。")
+
+
+## 把控制器广播的执行结果转发给开发者窗口；窗口只显示文本，不解释规则含义。
+func _on_developer_effect_resolved(result_data: Dictionary) -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	developer_console_panel.set_pending_count(match_controller.get_developer_effect_pending_count())
+	developer_console_panel.set_status_text(str(result_data.get("text", "")))
+
+
+## 把只读快照投影成开发者窗口的目标列表；武将未公开时只显示玩家名，避免泄漏隐藏信息。
+func _sync_developer_console_targets() -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	# 目标候选；每项只含表现所需的座次、显示文字与本机标记。
+	var candidates: Array[Dictionary] = []
+	for player_variant: Variant in _snapshot.get("players", []) as Array:
+		# 当前玩家只读快照；与其余界面区域共享同一份，不做局部写入。
+		var player_snapshot: Dictionary = player_variant as Dictionary
+		# 玩家座次；负数表示快照异常，跳过以免出现无法提交的空目标。
+		var player_id: int = int(player_snapshot.get("player_id", -1))
+		if player_id < 0:
+			continue
+		# 玩家显示名；配置缺失时回退座次文字，保证目标行始终可读。
+		var display_name: String = str(player_snapshot.get("display_name", "")).strip_edges()
+		if display_name.is_empty():
+			display_name = "玩家%d" % (player_id + 1)
+		# 武将稳定 ID；空值表示尚未公开或尚未选将，此时只显示玩家名。
+		var character_id: String = str(player_snapshot.get("character_id", ""))
+		# 目标行文字；已公开武将时使用「武将名（玩家名）」形式。
+		var display_text: String = "%s（%s）" % [GameDatabase.resolve_character_name(character_id), display_name] if not character_id.is_empty() else display_name
+		candidates.append({
+			"player_id":player_id,
+			"display_text":display_text,
+			"is_local":player_id == match_controller.local_human_player_id,
+		})
+	developer_console_panel.set_target_candidates(candidates, match_controller.local_human_player_id)
+
+
+## 向开发者窗口注入摸牌堆全量牌面；经控制器只读端口取得，不改动牌堆也不触发重洗。
+func _sync_developer_console_draw_pile() -> void:
+	if developer_console_panel == null or not is_instance_valid(developer_console_panel):
+		return
+	# 牌堆张数；快照已包含该只读计数，无需为取得牌面而单独读取规则状态。
+	var draw_pile_count: int = int(_snapshot.get("draw_pile_count", 0))
+	# 全量牌面候选；请求张数等于牌堆大小时不会触发重洗，牌堆顺序保持不变。
+	developer_console_panel.set_draw_pile_candidates(match_controller.get_top_draw_card_candidates(match_controller.local_human_player_id, draw_pile_count))
+
+
 ## 创建阿哈时刻过场动画组件并订阅控制器的演出开始信号。
 ## 组件只做本地表现：牌桌不读取它的任何状态，播放失败也不会影响阿哈时刻的规则结算。
 func _create_ahha_moment_cutscene() -> void:
@@ -1728,6 +1876,10 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	# 临时退出预约状态同步；权威端在预约、取消或存档生效时都会广播快照，按钮文字始终跟随真实状态。
 	match_menu.set_conquest_exit_armed(match_controller.is_conquest_temporary_exit_requested())
 	_refresh_match_menu_authority_controls()
+	# 开发者窗口的目标列表与排队计数随快照刷新；窗口隐藏时也照常更新，保证打开瞬间即为最新状态。
+	_sync_developer_console_targets()
+	if developer_console_panel != null and is_instance_valid(developer_console_panel):
+		developer_console_panel.set_pending_count(match_controller.get_developer_effect_pending_count())
 	_player_snapshots_by_id.clear()
 	for player_variant: Variant in _snapshot.get("players", []) as Array:
 		# 当前玩家只读快照；同一广播周期内由全部界面区域共享，不允许局部写入。
@@ -3636,6 +3788,8 @@ func _apply_ui_style() -> void:
 	center_phase_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	match_menu.refresh_ui_style()
 	main_menu.refresh_ui_style()
+	if developer_console_panel != null and is_instance_valid(developer_console_panel):
+		developer_console_panel.refresh_ui_style()
 	BattleUIStyle.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	BattleUIStyle.apply_interaction_button(auto_manage_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
@@ -3797,7 +3951,7 @@ func _reset_presentation_for_new_match() -> void:
 	# 新对局必须在这里复位它，否则同一阶段名（如 PHASE_OTHERS）与同一目标玩家会让面板的
 	# 上下文延续判断成立，把上一局缓存的座次与身份继续显示并写进确认载荷，造成“开局显示的
 	# 座位与选将完成后所在座位不相符”。返回主菜单路径与主菜单可见性同步都会关闭该面板，
-	# 只有局内“按设置重新开局”不经过主菜单，因此复位必须放在本共用入口。
+	# 只有局内“重新开局”不经过主菜单，因此复位必须放在本共用入口。
 	if character_selection_panel != null and is_instance_valid(character_selection_panel):
 		character_selection_panel.close()
 	# 记录牌名只读窗口随旧局丢弃；它不属于任何选择请求，因此必须在此显式清空，
@@ -3889,6 +4043,9 @@ func _on_main_menu_requested() -> void:
 	_hide_game_settlement_panel_for_main_menu()
 	if match_chat_panel != null and is_instance_valid(match_chat_panel):
 		match_chat_panel.close_panel()
+	# 开发者窗口属于本局调试表面，返回主菜单时必须关闭，避免残留遮罩挡住启动界面。
+	if developer_console_panel != null and is_instance_valid(developer_console_panel):
+		developer_console_panel.close_console()
 	_dismiss_all_chat_bubbles()
 	# 未保存的回放录制随对局放弃一并丢弃；已保存的回放文件不受影响。
 	_match_replay_recorder.discard_recording()

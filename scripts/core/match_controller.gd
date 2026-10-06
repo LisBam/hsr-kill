@@ -47,6 +47,10 @@ signal voice_presentation_requested(presentation_data: Dictionary)
 ## 与其它表现信号同为纯通知：控制器不等待订阅者，也不把任何表现结果写回规则流程。
 signal ahha_moment_started(performance_count: int, source: String)
 
+## 开发者效果执行结果信号；离线调试表面专用，负载只含效果键、目标座次与可读结果文本。
+## 它让界面无需轮询或回读规则状态即可显示「已生效 / 未生效 / 已作废」，且不参与任何规则流程。
+signal developer_effect_resolved(result_data: Dictionary)
+
 ## 表现事件名：阿哈时刻演出开始。它是线上事件名字符串，同时是客户端表现事件白名单的匹配键。
 ## 契约：负载只含已公开的参演数量与来源常量，不含任何隐藏知识；一旦发布即属协议，
 ## 改名必须同步客户端白名单并走 PROTOCOL_VERSION 变更，不得只改一侧。
@@ -816,6 +820,10 @@ var _settlement_fault_count: int = 0
 
 ## 被嵌套选择中断的通用规则续接栈；响应、救援、重铸和父牌收尾只保存稳定类型与可序列化上下文。
 var _rule_continuations: RuleContinuationQueue = RuleContinuationQueue.new()
+
+## 开发者调试效果队列；与规则续接队列同生命周期，重新开局、终局与拆除运行时时统一重置。
+## 惰性创建以绑定本控制器为宿主：服务需要回调宿主公开端口，不能在成员初始化阶段引用尚未构造完成的自身。
+var _developer_effects: DeveloperEffectService = null
 
 ## 当前正在恢复的通用规则续接语义键；空字符串表示未处于续接回调内。
 var _active_rule_continuation_key: String = ""
@@ -1692,6 +1700,7 @@ func _teardown_previous_match_runtime() -> void:
 	_active_independent_play_phase.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_get_developer_effects().reset()
 	_reset_settlement_runtime_guard()
 	_clear_pending_judgment_request()
 	_cards_used_this_turn_by_player.clear()
@@ -1765,6 +1774,7 @@ func _reset_per_match_progress_state() -> void:
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_get_developer_effects().reset()
 	_pending_conquest_boundary_player_id = -1
 	_reset_settlement_runtime_guard()
 	_negation_round_sequence = 0
@@ -1852,6 +1862,7 @@ func _discard_failed_match_start() -> void:
 	_ai_choice_submit_failures.clear()
 	_is_driving_character_selection = false
 	_rule_continuations.reset()
+	_get_developer_effects().reset()
 	_reset_settlement_runtime_guard()
 	_clear_pending_judgment_request()
 	state = null
@@ -2725,6 +2736,51 @@ func resume_play_phase_choice() -> void:
 	_begin_play_choice(state.current_player_id)
 	_emit_state()
 	_ensure_ai_progress_after_resolution()
+
+
+## 返回开发者调试效果队列实例；首次访问时以本控制器为宿主创建，保证任何调用点都不会拿到空引用。
+func _get_developer_effects() -> DeveloperEffectService:
+	if _developer_effects == null:
+		_developer_effects = DeveloperEffectService.new(self)
+	return _developer_effects
+
+
+## 提交一条开发者调试效果请求；离线特权表面，联机模式下由调用方保证不可达。
+## 请求只入队，真正的执行发生在统一结算管线到达空闲边界时（见 `_run_settlement_pipeline_pass`）。
+## 返回 true 表示已受理（可能仍在排队），false 表示未受理（无对局 / 已终局 / 联机中 / 队列已满 / 目标不可用 / 数值非法）。
+func request_developer_effect(effect_kind: String, target_player_id: int, amount: int, payload: Dictionary = {}) -> bool:
+	if state == null or state.game_over:
+		return false
+	# 开发者菜单是离线特权表面；联机（含房主）一律拒绝，与 docs/内容制作指南.md 的离线多角色控制口径一致。
+	# 界面入口的显隐已做过一次判定，这里再做一次纵深防御，保证即使有调用方绕过界面也无法在联机中触发。
+	if network_gateway != null and network_gateway.mode != NetworkGateway.Mode.OFFLINE:
+		return false
+	if not _get_developer_effects().enqueue(effect_kind, target_player_id, amount, state.match_id, payload):
+		return false
+	# 与 defer_skill_settlement() 同构：已在管线内时当前 while 会自然取下一项；否则登记唯一延后唤醒。
+	# 这一句是「对局静止时点击也能生效」的唯一保证：管线空闲时没有任何人在跑，
+	# 若只入队不登记唤醒，条目会一直躺在队列里等到下一次无关的结算推进才被执行。
+	# 注意“已在管线内”并不保证当次循环一定能消费到本项——排空可能因为待选请求或独立子阶段提前返回，
+	# 且管线入口会作废旧唤醒，因此活跃性由 _resume_settlement_pipeline() 末尾的待办复查统一兜底
+	# （前提是挂钩 4 已把开发者队列纳入 _has_unresolved_settlement_work()）。
+	if not _settlement_pipeline_running and not has_pending_card_choice():
+		_schedule_settlement_pipeline_resume()
+	return true
+
+
+## 返回当前待执行的开发者效果数量；只读诊断，供界面显示「已排队 N 项」，不暴露队列本体。
+func get_developer_effect_pending_count() -> int:
+	return _get_developer_effects().pending_count()
+
+
+## 发布一条开发者效果执行结果；服务只提供纯数据结果，日志与信号统一由控制器发布。
+## 日志进入权威战斗记录供回溯，信号供离线调试界面即时显示状态行。
+func report_developer_effect_result(result_data: Dictionary) -> void:
+	# 可读结果文本；空文本不产生噪音日志。
+	var result_text: String = str(result_data.get("text", ""))
+	if not result_text.is_empty():
+		add_log(result_text)
+	developer_effect_resolved.emit(result_data)
 
 
 ## 供技能流程间隔到期后重新进入统一结算管线；已有选择、判定或终局时内部入口会安全忽略。
@@ -13028,13 +13084,17 @@ func _resume_settlement_pipeline() -> void:
 ##
 ## 待选请求与待判定各自拥有明确的“收到响应后重驱管线”入口，等待它们期间由响应路径负责恢复，
 ## 因此这两种阻塞存在时返回false，避免人类思考期间出现每帧空跑的唤醒。
-## 其余队列（技能“然后”步骤、规则续接、装备排队触发、触发管理器的延后派发）都只能靠唤醒推进。
+## 其余队列（技能“然后”步骤、规则续接、装备排队触发、触发管理器的延后派发、开发者调试效果）都只能靠唤醒推进。
 func _has_unresolved_settlement_work() -> bool:
 	if state == null or state.game_over:
 		return false
 	if has_pending_card_choice() or has_pending_judgment_request():
 		return false
 	if not _deferred_skill_settlements.is_empty() or _rule_continuations.has_pending() or not _queued_equipment_triggers.is_empty():
+		return true
+	# 开发者调试效果只能在管线空闲边界消费，自身不会登记唤醒；
+	# 若不计入待办，「入口作废旧唤醒 + 本轮零消费提前返回」就会让它永久滞留（同 :13012 记录的结构性风险）。
+	if _get_developer_effects().has_pending():
 		return true
 	return trigger_manager != null and trigger_manager.has_deferred_dispatches()
 
@@ -13140,9 +13200,16 @@ func _run_settlement_pipeline_pass() -> void:
 		if not _deferred_skill_settlements.is_empty():
 			_resume_deferred_skill_settlements()
 			continue
+		# 开发者调试效果排在整条优先级链的最后：只有当前结算完全空闲时才注入一项，
+		# 因此它不会插进任何正在进行的时机窗口，也不会改变既有内容的结算顺序。
+		# 一次只消费一条并 continue，使「弃牌」等会创建待办选择的效果能让管线在正确位置退出，
+		# 且下一条效果必然等到该选择完成后才执行。
+		if _get_developer_effects().has_pending():
+			_get_developer_effects().resume_next()
+			continue
 		break
 	# 达到单帧保护上限时仍有明确队列，下一帧只继续同一管线；未完成后续绝不交给阶段游标或父牌兼容入口。
-	if settlement_step_count >= max_settlement_steps_per_pass and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
+	if settlement_step_count >= max_settlement_steps_per_pass and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or _get_developer_effects().has_pending() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
 		_schedule_settlement_pipeline_resume()
 		return
 	if state != null and not state.game_over and not has_pending_card_choice() and not has_pending_judgment_request() and not _conquest_replacement_transition_active and (game_flow_pacer == null or not game_flow_pacer.has_pending_skill_interval()):
@@ -13150,7 +13217,7 @@ func _run_settlement_pipeline_pass() -> void:
 			return
 		_resume_interrupted_turn_flow()
 		# 阶段恢复可能刚刚完成额外弃牌阶段并暴露新的技能“然后”步骤；延后一帧再次排空，避免后续额外出牌阶段被嵌套询问吞掉。
-		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
+		if not has_pending_card_choice() and (not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or _get_developer_effects().has_pending() or (trigger_manager != null and trigger_manager.has_deferred_dispatches())):
 			_schedule_settlement_pipeline_resume()
 
 
@@ -16129,6 +16196,7 @@ func _check_game_over() -> void:
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_get_developer_effects().reset()
 	_rule_sequences.clear()
 	_clear_pending_judgment_request()
 	state.public_card_choice_display.clear()
@@ -16158,6 +16226,7 @@ func _end_match_as_draw(reason: String) -> void:
 	_pending_negation_choices.clear()
 	_deferred_skill_settlements.clear()
 	_rule_continuations.reset()
+	_get_developer_effects().reset()
 	_rule_sequences.clear()
 	_clear_pending_judgment_request()
 	state.public_card_choice_display.clear()
