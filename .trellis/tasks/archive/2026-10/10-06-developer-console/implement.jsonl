@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/core/index.md", "reason": "core layer rules for the new developer effect queue and settlement pipeline hook"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "pipeline priority chain and event runtime phases the new consumer must not disturb"}
+{"file": ".trellis/spec/ui/component-patterns.md", "reason": "UI component contracts: signals, stateless presentation, theme, fixed pixel specs"}
+{"file": ".trellis/spec/ui/index.md", "reason": "UI layer boundary rules and the documented z_index layer table"}
+{"file": ".trellis/spec/project/collaboration-rules.md", "reason": "comment style, architecture principles, documentation obligations"}
+{"file": ".trellis/spec/project/verification.md", "reason": "how to run tests sequentially and what counts as a pass"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "cross-layer checklist for the core to UI data flow"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse-first rules: no second settlement implementation, no duplicated constants"}
+{"file": ".trellis/tasks/10-06-developer-console/research/rule-ports.md", "reason": "verified controller ports for all nine effects, card gain and character replacement"}
+{"file": ".trellis/tasks/10-06-developer-console/research/idle-time-execution.md", "reason": "the idle-boundary mechanism decision and the exact pipeline insertion point"}
+{"file": ".trellis/tasks/10-06-developer-console/research/ui-menu-and-panels.md", "reason": "menu row pattern, modal precedents, theme helpers, slider and unbounded input idioms"}

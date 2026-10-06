@@ -1,0 +1,29 @@
+{
+  "id": "developer-console",
+  "name": "developer-console",
+  "title": "开发者设置与开发者菜单（单机局内调试控制台）",
+  "description": "单机模式局内菜单新增开发者设置入口，打开开发者菜单窗口，可指定场上目标并触发数值效果（摸牌、弃牌、回复体力、失去体力、受到伤害、增加体力上限、减少体力上限、获得护盾、失去护盾）、获得牌堆指定牌、更换目标武将。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-06",
+  "completedAt": "2026-10-06",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "status": "completed",
+    "completedAt": "2026-10-06"
+  }
+}

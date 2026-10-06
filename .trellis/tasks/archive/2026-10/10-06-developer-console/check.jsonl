@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/10-06-developer-console/design.md", "reason": "the design contract the review must verify against"}
+{"file": ".trellis/tasks/10-06-developer-console/prd.md", "reason": "acceptance criteria AC1 to AC18"}
+{"file": ".trellis/spec/project/documentation-sync.md", "reason": "sync matrix and quality check for doc updates"}
+{"file": ".trellis/spec/project/verification.md", "reason": "verification commands and pass criteria"}
+{"file": ".trellis/spec/ui/index.md", "reason": "layer table and visibility contract for the new console layer 520"}
+{"file": ".trellis/spec/core/event-runtime-phases.md", "reason": "confirm the new consumer sits at the end of the priority chain"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "pre-commit checklist: no duplicated logic or constants"}
