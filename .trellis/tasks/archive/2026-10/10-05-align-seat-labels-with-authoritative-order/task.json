@@ -1,0 +1,28 @@
+{
+  "id": "align-seat-labels-with-authoritative-order",
+  "name": "align-seat-labels-with-authoritative-order",
+  "title": "统一选将期间全部角色的座次显示取值序",
+  "description": "选将阶段内牌桌座次标签与选将标题必须取用同一权威座次序（身份局标签用创建序、标题用领袖旋转序），使全部角色从开局起显示一致且不事后跳变",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-05",
+  "completedAt": "2026-10-06",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-05-character-selection-timing-and-seat-refresh",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "status": "completed"
+  }
+}

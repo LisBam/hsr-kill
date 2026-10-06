@@ -1,0 +1,575 @@
+﻿
+=== actor_death_card_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ACTOR_DEATH_CARD_PASS response_window no_source alive_source declaration invalidation
+=== ahha_moment_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+[AhhaMomentCutscene] 本机仍有待办选择请求，为避免响应窗口被冻结成真死锁，本次只播放过场、不暂停对局。
+[AhhaMomentCutscene] allow_pause_on_network_client=false 且本机为局域网客户端，本次只播放过场、不暂停对局。
+[AhhaMomentCutscene] 过场暂停已超过 max_pause_seconds=1.0 秒（实际持有 918 毫秒），强制结束过场并释放暂停令牌。
+AHHA_MOMENT_PASS
+=== ai_policy_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+AI_POLICY_PASS cards=47
+=== android_adaptation_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ANDROID_ADAPTATION_TEST_OK
+=== audio_system_test exit=1 pass=False errlines=1
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+AUDIO_SYSTEM_FAIL card_voice_auto_respond_missing=57
+=== auto_management_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+AUTO_MANAGEMENT_PASS
+=== batch_gain_timing_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+BATCH_GAIN_PASS single=1 draw=1 order=1 no_gain=1 bulk=1 empty=1 cancel=1 nested=1
+=== battle_lifecycle_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+BATTLE_LIFECYCLE_PASS cancellation publication stale_response frame_budget
+=== card_action_semantics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CARD_ACTION_SEMANTICS_PASS use=useCard play=respond batch=0 through_processing=1 bagua=red recast=none
+=== card_back_overlay_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CARD_BACK_OVERLAY_PASS
+=== card_timing_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CARD_TIMING_SEQUENCE_PASS windows=15 lifecycle response subscription skill
+=== character_selection_timing_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CHARACTER_SELECTION_TIMING_PASS identity+doudizhu+team2v2+all_ai+custom_assignment
+=== conquest_coop_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+simultaneous_vote+vote_reveal+individual+all_enemies_level_clear+shared_enemy_awards+partial_death+next_level_revival+team_defeat
+=== conquest_mode_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_MODE_PASS rules+levels+difficulties+initial_opportunity+zaixian_kill_tail+replacement+skills+equipment+turn_handoff+revival+death
+=== conquest_save_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_SAVE_PASS store_roundtrip+immediate_play_idle_capture+deferred_exit_toggle+boundary_capture+corrupt_reject+resume_play_phase+resume_turn_start+resume_skills+resume_zones
+=== conquest_single_player_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_SINGLE_PLAYER_PASS menu_count+stale_text+offline_roles
+=== control_all_characters_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONTROL_ALL_CHARACTERS_PASS offline_views+lan_hidden+judgment_offset+bagua_preselect
+=== corner_badge_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CORNER_BADGE_PASS text_entry=1 button_entry=1
+=== daheita_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DAHEITA_MECHANICS_PASS records=1 recast_wuxie=1 redirect=1 expanding=1 self_target=1 single_name=1 cancel_safe=1 negate_self=1 wuxie_excluded=1 corner_button=1
+=== damage_point_flow_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DAMAGE_POINT_FLOW_PASS cancellation result tail_budget chain_budget
+=== damage_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DAMAGE_SEQUENCE_PASS windows=7 cancellation shield result nested choice generation judgment frame_budget
+=== danheng_yinyue_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DANHENG_YINYUE_PASS fuchen=4 zhuoshi=6
+=== death_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DEATH_SEQUENCE_PASS windows cancellation nested_damage
+=== doudizhu_mode_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters+gongku_ai+post_match+huogong_privacy
+=== draw_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DRAW_SEQUENCE_PASS draw_windows gain_windows cancellation batch
+=== duanjie_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DUANJIE_MECHANICS_PASS options=4 face_down=true restorable=true
+=== dying_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DYING_SEQUENCE_PASS final_data registered_windows completion damage_tail generation
+=== event_runtime_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+EVENT_RUNTIME_PASS order=["root0", "child0", "child1", "root1", "after0"] history=12
+=== exclusive_card_and_private_placement_test exit=0 pass=True errlines=1
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+EXCLUSIVE_CARD_STAGE card_field
+EXCLUSIVE_CARD_STAGE database_validation
+EXCLUSIVE_CARD_STAGE insert_pile
+EXCLUSIVE_CARD_STAGE private_fact
+EXCLUSIVE_CARD_STAGE broadcast_boundary
+EXCLUSIVE_CARD_STAGE position_protocol
+EXCLUSIVE_CARD_STAGE inline_usability
+EXCLUSIVE_CARD_PRIVATE_PLACEMENT_PASS card_field+validation+insert_pile+private_fact+broadcast_boundary+position_protocol+inline_usability
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 1 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+=== fengkou_draw_animation_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+FENGKOU_DRAW_PASS draw=2 flight=2 choice=pending
+=== font_color_audit_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+FONT_COLOR_AUDIT_PASS
+=== game_settings_persistence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+GAME_SETTINGS_PERSISTENCE_PASS
+=== gameplay_pause_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+GAMEPLAY_PAUSE_PASS before=2 after=3
+=== gameplay_regression_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+GAMEPLAY_REGRESSION_PASS wuxie=1 aoe=1 dying=1 taoyuan=2 zhuque=1 yinyue=1 zhangba=2 judge=2
+=== haiseyin_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+HAISEYIN_MECHANICS_PASS batch=1 sections=4 black_first=1 huitao_min=3
+=== harvest_choice_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+HARVEST_CHOICE_PASS request_count=1 phase=play
+=== health_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+HEALTH_MECHANICS_PASS damage=2 lose_hp=1 shield=3 ui=dot+numeric
+=== huanyu_yaoguang_xing_qiong_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+HUANYU_YAOGUANG_XING_QIONG_PASS xiongxing=116 hongyun yaota haohuo=120 dangshang=120
+=== huohua_joy_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+HUOHUA_JOY_PASS faction=huanyu hp=3 haoxi=144 lianxi_recast=9
+=== inline_hand_choice_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+INLINE_HAND_CHOICE_PASS
+=== kaesilanna_combat_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+skip_dead_target+ai_veto
+=== kafuka_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+KAFUKA_STAGE metadata
+KAFUKA_STAGE gameStart
+KAFUKA_STAGE delayedTrick
+KAFUKA_STAGE placement
+KAFUKA_STAGE gain
+KAFUKA_STAGE aiPressure
+KAFUKA_STAGE gameStartTiming
+KAFUKA_MECHANICS_PASS metadata+gameStart+delayedTrick+placement+privateFact+gain+aiPressure+gameStartTimingAfterMulligan
+=== lan_custom_identity_test exit=0 pass=True errlines=6
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] _emit_lobby_state (res://scripts/network/network_gateway.gd:1372)
+       [2] update_lan_lobby_settings (res://scripts/network/network_gateway.gd:455)
+       [3] _check_gateway_authority (res://tests/lan_custom_identity_test.gd:178)
+       [4] _run (res://tests/lan_custom_identity_test.gd:60)
+       [5] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] _emit_lobby_state (res://scripts/network/network_gateway.gd:1372)
+       [2] update_lan_lobby_settings (res://scripts/network/network_gateway.gd:455)
+       [3] _check_gateway_authority (res://tests/lan_custom_identity_test.gd:188)
+       [4] _run (res://tests/lan_custom_identity_test.gd:60)
+       [5] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] _emit_lobby_state (res://scripts/network/network_gateway.gd:1372)
+       [2] update_lan_lobby_settings (res://scripts/network/network_gateway.gd:455)
+       [3] _check_gateway_authority (res://tests/lan_custom_identity_test.gd:252)
+       [4] _run (res://tests/lan_custom_identity_test.gd:60)
+       [5] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] send_game_event_to_peer (res://scripts/network/network_gateway.gd:922)
+       [2] broadcast_game_event (res://scripts/network/network_gateway.gd:928)
+       [3] _replicate_log_event (res://scripts/core/match_controller.gd:17118)
+       [4] add_log (res://scripts/core/match_controller.gd:4227)
+       [5] start_match (res://scripts/core/match_controller.gd:1610)
+       [6] _on_restart_requested (res://scripts/ui/match_table.gd:3749)
+       [7] _check_match_identity_assignment (res://tests/lan_custom_identity_test.gd:323)
+       [8] _run (res://tests/lan_custom_identity_test.gd:62)
+       [9] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] begin_prepared_lan_match (res://scripts/network/network_gateway.gd:733)
+       [2] rebroadcast_prepared_lan_match (res://scripts/network/network_gateway.gd:744)
+       [3] start_match (res://scripts/core/match_controller.gd:1615)
+       [4] _on_restart_requested (res://scripts/ui/match_table.gd:3749)
+       [5] _check_match_identity_assignment (res://tests/lan_custom_identity_test.gd:323)
+       [6] _run (res://tests/lan_custom_identity_test.gd:62)
+       [7] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+ERROR: Attempt to call RPC with unknown peer ID: 99.
+   at: _send_rpc (modules/multiplayer/scene_rpc_interface.cpp:318)
+   GDScript backtrace (most recent call first):
+       [0] _send_packet_to_peer (res://scripts/network/network_gateway.gd:1259)
+       [1] send_snapshot_to_peer (res://scripts/network/network_gateway.gd:882)
+       [2] _emit_state (res://scripts/core/match_controller.gd:17953)
+       [3] start_match (res://scripts/core/match_controller.gd:1616)
+       [4] _on_restart_requested (res://scripts/ui/match_table.gd:3749)
+       [5] _check_match_identity_assignment (res://tests/lan_custom_identity_test.gd:323)
+       [6] _run (res://tests/lan_custom_identity_test.gd:62)
+       [7] _check_lobby_seat_rendering (res://tests/lan_custom_identity_test.gd:147)
+LAN_CUSTOM_IDENTITY_PASS
+=== lan_identity_mark_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_IDENTITY_MARK_PASS
+=== lan_kick_rejoin_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_KICK_REJOIN_HOST_PASS
+=== lan_lobby_ui_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_LOBBY_UI_PASS port=39912
+=== lan_match_flow_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_MATCH_FLOW_RESTART_SENT match_id=1791213774-1825589801
+LAN_MATCH_FLOW_PASS actor=1 hand_count=4 phase=starting_hand_mulligan restart_match_id=1791213774-1825589801
+=== lan_network_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_NETWORK_STATE role=host connected=true message=局域网房间已创建，等待其他玩家加入。
+LAN_NETWORK_LOBBY role=host count=1 active=false
+LAN_NETWORK_HOST_READY port=25448 spawn_client=true
+LAN_NETWORK_CLIENT_SPAWN pid=128536 executable=E:/Godot/Godot_v4.7.1-stable_mono_win64/Godot_v4.7.1-stable_mono_win64/Godot_v4.7.1-stable_mono_win64.exe project=E:/Godot/MyGame/hsr-kill/
+LAN_NETWORK_PEER_STATUS role=host status=2 unique_id=1
+LAN_NETWORK_STATE role=host connected=true message=检测到新玩家，正在登记大厅信息……
+LAN_NETWORK_STATE role=host connected=true message=客户端测试已加入房间。
+LAN_NETWORK_LOBBY role=host count=2 active=false
+LAN_NETWORK_LOBBY role=host count=2 active=false
+LAN_NETWORK_LOBBY role=host count=2 active=false
+LAN_NETWORK_LOBBY role=host count=2 active=true
+LAN_NETWORK_PASS host_actor=1 player_count=4
+LAN_NETWORK_STATE role=host connected=true message=客户端测试已离开房间。
+=== lan_reconnect_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_RECONNECT_HOST_PASS player=1
+=== lan_turn_control_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+disconnect+reconnect+degradation
+=== leader_skill_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+LEADER_SKILL_PASS ownership=leader_only zhenqi=paired linghang=linked_once
+=== main_menu_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+MAIN_MENU_PASS post_match_return=true
+=== match_chat_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+MATCH_CHAT_PASS 网关标准化、按钮切换、窗口历史与头顶气泡全部通过
+=== match_replay_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+MATCH_REPLAY_PASS 命名保存、重命名顶置、播放意图、驱动器派发与牌桌整局重演全部通过
+=== multi_recast_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+MULTI_RECAST_PASS batch=3 equal_draw=1 single=1 skip=1 dedup=1
+=== nakexia_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 nested_trigger_entry=1
+=== new_character_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+NEW_CHARACTER_MECHANICS_PASS
+=== omphalos_transform_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+OMPHALOS_TRANSFORM_PASS
+=== opportunity_system_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+OPPORTUNITY_SYSTEM_PASS cards=106 gray_excluded=true private=true reverse=true seat_swap=true character_swap=true limits=true hover=true
+=== overlay_blank_close_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+OVERLAY_BLANK_CLOSE_PASS
+=== performance_and_pacing_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+PERFORMANCE_AND_PACING_PASS
+=== phase_progression_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+PHASE_PROGRESSION_PASS
+=== phase_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+PHASE_SEQUENCE_PASS lifecycle_cancel draw_windows finish_windows phase_change
+=== pre_game_customization_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+WARNING: This control can't grab focus. Use set_focus_mode() and set_focus_behavior_recursive() to allow a control to get focus.
+   at: grab_focus (scene/gui/control.cpp:3006)
+   GDScript backtrace (most recent call first):
+       [0] set_menu_open (res://scripts/ui/match_menu.gd:304)
+       [1] _test_settings_controls (res://tests/pre_game_customization_test.gd:190)
+WARNING: This control can't grab focus. Use set_focus_mode() and set_focus_behavior_recursive() to allow a control to get focus.
+   at: grab_focus (scene/gui/control.cpp:3006)
+   GDScript backtrace (most recent call first):
+       [0] set_menu_open (res://scripts/ui/match_menu.gd:308)
+       [1] _test_settings_controls (res://tests/pre_game_customization_test.gd:195)
+PRE_GAME_CUSTOMIZATION_PASS
+=== pre_game_deal_gain_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+PRE_GAME_DEAL_PASS deal=no_batch mulligan=clean chouma=4 fengkou=triggered xunli=1 confirm=progress cancel=progress
+=== qingque_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+QINGQUE_MECHANICS_PASS
+=== recovery_sequence_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+RECOVERY_SEQUENCE_PASS windows cancellation generation peach_rescue peach_use
+=== reincarnation_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+REINCARNATION_MECHANICS_PASS
+=== requested_changes_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+REQUESTED_CHANGES_PASS
+=== response_choice_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+RESPONSE_CHOICE_PASS phase=play ai_token=4
+=== rule_timing_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+RULE_TIMING_PASS catalog=237 active=4 roles=4 generation_snapshot=1 damage=16 move=20 card=12
+=== seat_display_source_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SEAT_DISPLAY_SOURCE_PASS identity+doudizhu+team2v2
+=== shajin_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SHAJIN_PASS metadata=1 chouma=2 mangzhu=5 fengkou=6
+=== skill_choice_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SKILL_CHOICE_PASS target=[1] combined={ "card_ids": [101], "target_ids": [1] } multi={ "card_ids": [101, 102], "target_ids": [1] }
+=== skill_settlement_runtime_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SKILL_SETTLEMENT_RUNTIME_PASS faults=1
+=== skill_target_ui_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SKILL_TARGET_UI_PASS
+=== smoke_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+SMOKE_PASS game_over winner=rebels actions=147 frames=656
+=== stall_watchdog_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+STALL_WATCHDOG_PASS soft=2 hard=1 reminder=1 reports=3
+=== team2v2_mode_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+custom_ai_seat+seat_identity_bind+seat4_hand+seat1_draw+teammate_draw+winner
+=== tingyun_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+TINGYUN_MECHANICS_PASS
+=== tongpao_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+TONGPAO_MECHANICS_PASS sections=4 shield=1 self_damage=1
+=== turn_control_mechanism_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+TURN_CONTROL_STAGE begin_validation
+TURN_CONTROL_STAGE proxy_submission
+TURN_CONTROL_STAGE answerable
+TURN_CONTROL_STAGE expiry
+TURN_CONTROL_STAGE cleanup
+TURN_CONTROL_STAGE snapshot
+TURN_CONTROL_STAGE view_takeover
+TURN_CONTROL_STAGE validation
+TURN_CONTROL_PASS begin_guard+idempotence+proxy_submit+input_lock+answerable+expiry+cleanup+snapshot+view_takeover
+=== ui_layout_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+UI_LAYOUT_PASS viewport=(1152.0, 648.0)
+=== virtual_card_color_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+VIRTUAL_CARD_COLOR_PASS aggregate shanqing zhangba proxy
+=== virtual_hand_choice_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+VIRTUAL_HAND_CHOICE_PASS
+=== wheel_duel_mode_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+WHEEL_DUEL_MODE_PASS settings+draft122221+privacy+lineup+bootstrap+draw_penalty+replacement+winner
+=== yanqing_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+YANQING_MECHANICS_PASS yaoji=farthest_only lingshuang=discard2+exempt
+=== yinzhi_xunli_lijie_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+YINZHI_PASS meta=1 lock=1 flip=1 enforce=1 xunli=1 distance=1 quota=1 lijie_gain=1 lijie_recover=1 ai=1
+=== yuezhi_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+YUEZHI_MECHANICS_PASS limited=true resolve_times=3 guard=first_only ai_source_rule=1
+=== zhenzhu_mechanics_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ZHENZHU_MECHANICS_PASS faction=xingjihepinggongsi hp=3 buzhui=104 jianying=face_view_as end_phase_expiry=owner_next_turn face_down_skip=no_expiry
+=== zhuyan_zhili_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ZHUYAN_ZHILI_PASS
+=== zone_abolition_test exit=0 pass=True errlines=0
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+ZONE_ABOLITION_PASS
