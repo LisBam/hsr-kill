@@ -488,6 +488,20 @@ func _test_zhuoshi_ai_choice_scores() -> bool:
 	# 发动入口：存在敌方目标时必须为正分。
 	if zhuoshi.score_ai_action(snapshot, {}, evaluator) <= 0.0:
 		return _fail("zhuoshi_ai_action=%f" % zhuoshi.score_ai_action(snapshot, {}, evaluator))
+	# 正式AI评分使用的是策略自建的只读实例（宿主为 null，见 BasicAIPolicy._get_decision_skill_instance）；
+	# 这里按同样的绑定方式复核一遍，确保评分钩子只读权威快照、不访问规则宿主。
+	var ai_only_skill: SkillDefinition = GameDatabase.create_skill("zhuoshi")
+	if ai_only_skill == null:
+		return _fail("zhuoshi_ai_unbound_create")
+	ai_only_skill.bind(null, 0)
+	if ai_only_skill.score_ai_action(snapshot, {}, evaluator) <= 0.0:
+		return _fail("zhuoshi_ai_unbound_action=%f" % ai_only_skill.score_ai_action(snapshot, {}, evaluator))
+	# 清空敌方手牌后只剩友方候选：快照候选必须按公开 hand_count 过滤，评分回到0（不开入口）。
+	_controller.state.get_player(1).hand.clear()
+	var ally_only_snapshot: Dictionary = _controller.state.to_dict(0, true)
+	_controller._append_limited_skill_usage_to_snapshot(ally_only_snapshot)
+	if not is_zero_approx(ai_only_skill.score_ai_action(ally_only_snapshot, {}, evaluator)):
+		return _fail("zhuoshi_ai_unbound_ally_only=%f" % ai_only_skill.score_ai_action(ally_only_snapshot, {}, evaluator))
 	return true
 
 

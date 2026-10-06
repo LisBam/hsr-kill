@@ -370,14 +370,43 @@ func _get_basic_cost_candidates() -> Array[Dictionary]:
 
 
 ## 返回第一段的合法目标候选；必须是其他存活在场且至少有一张手牌的角色。
+## 该读取依赖规则宿主，只在运行时技能实例中可用；AI评分使用的临时实例没有宿主，
+## 评分路径必须改用 _get_snapshot_cost_target_ids()，不得直接调用本函数。
 func _get_cost_target_ids() -> Array[int]:
 	# 目标结果；沿用权威座次顺序，保证界面、AI与回放得到相同候选排列。
 	var result: Array[int] = []
+	# 无宿主的安全回退；正式对局中技能实例始终由控制器绑定宿主，只有AI只读评分实例会走到此分支。
+	# 这里返回空数组而不是让 host.call 崩溃，评分路径另由快照函数给出候选。
+	if host == null:
+		return result
 	for target_id: int in host.call("get_other_alive_player_ids", owner_player_id) as Array[int]:
 		# 第一段的效果是「你弃置其一张手牌」，因此没有手牌的角色不构成合法目标。
 		if (host.call("get_hand_candidates", owner_player_id, target_id) as Array[Dictionary]).is_empty():
 			continue
 		result.append(target_id)
+	return result
+
+
+## 从AI权威快照读取第一段的合法目标候选；该纯函数不访问运行时技能宿主，可安全用于策略临时实例。
+## 判定口径与 _get_cost_target_ids 完全一致：其他、存活、在场且至少有一张手牌；
+## 其他角色的手牌内容不可见，因此只能用公开的 hand_count 判断「至少有一张手牌」。
+func _get_snapshot_cost_target_ids(authoritative_snapshot: Dictionary) -> Array[int]:
+	# 目标结果；沿用快照中的座次顺序，保证同一局面下界面、AI与回放得到相同候选排列。
+	var result: Array[int] = []
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前候选角色快照；只读取公开字段，不猜测隐藏手牌的具体内容。
+		var player: Dictionary = player_variant as Dictionary
+		# 候选角色稳定ID；无效ID与持有者自己都不是「其他角色」。
+		var player_id: int = int(player.get("player_id", -1))
+		if player_id < 0 or player_id == owner_player_id:
+			continue
+		# 存活与在场状态；阵亡或已离场的角色不能成为目标。
+		if not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
+			continue
+		# 公开手牌数量；第一段的效果是「你弃置其一张手牌」，没有手牌的角色不构成合法目标。
+		if int(player.get("hand_count", 0)) <= 0:
+			continue
+		result.append(player_id)
 	return result
 
 
@@ -399,6 +428,7 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 
 ## 评估【濯世】的发动价值：以“拆其一张牌 + 造成1点雷电伤害”的目标侧收益为准，再扣减预期费用。
 ## 候选目标全部为友方时净收益为负，直接返回0让AI不开入口，避免把阶段额度浪费在自己人身上。
+## 本函数运行在策略创建的只读技能实例上（宿主为 null），因此目标候选只能从权威快照读取。
 func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, evaluator: Object) -> float:
 	if evaluator == null:
 		return 0.0
@@ -406,7 +436,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, _action: Dictionary, ev
 	var best_value: float = 0.0
 	# 是否存在任何合法目标；没有合法目标时AI不应发动。
 	var has_target: bool = false
-	for target_id: int in _get_cost_target_ids():
+	for target_id: int in _get_snapshot_cost_target_ids(authoritative_snapshot):
 		if target_id == owner_player_id:
 			continue
 		has_target = true
