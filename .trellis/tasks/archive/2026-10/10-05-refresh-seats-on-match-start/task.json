@@ -1,0 +1,28 @@
+{
+  "id": "refresh-seats-on-match-start",
+  "name": "refresh-seats-on-match-start",
+  "title": "修复重开后开局座位与选将后座位不一致",
+  "description": "每次开局都从权威侧刷新全部角色的座次，使开局显示座位、选将预览座位与选将后最终座位三者一致",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-05",
+  "completedAt": "2026-10-06",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "status": "completed"
+  }
+}
