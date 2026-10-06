@@ -594,12 +594,12 @@ min_value = 2.0
 max_value = 10.0
 value = 8.0
 
-[node name="MenuRestartButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1272565438]
+[node name="MenuDeveloperSettingsButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1876543210]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 34)
+visible = false
+custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
-theme_override_styles/normal = SubResource("StyleButtonPrimary")
-text = "按设置重新开局"
+text = "开发者设置"
 
 [node name="MenuConquestExitButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=2026072620]
 unique_name_in_owner = true
@@ -608,11 +608,24 @@ custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
 text = "临时退出"
 
-[node name="MenuReturnToMainButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1771219610]
+[node name="MenuBottomButtonRow" type="HBoxContainer" parent="MatchMenu/MenuPanel/MenuVBox" unique_id=1876543211]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="MenuReturnToMainButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox/MenuBottomButtonRow" unique_id=1771219610]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 32)
 layout_mode = 2
+size_flags_horizontal = 3
 text = "返回主菜单"
+
+[node name="MenuRestartButton" type="Button" parent="MatchMenu/MenuPanel/MenuVBox/MenuBottomButtonRow" unique_id=1272565438]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/normal = SubResource("StyleButtonPrimary")
+text = "重新开局"
 
 [node name="PlayerGrid" type="Control" parent="." unique_id=795623905]
 unique_name_in_owner = true

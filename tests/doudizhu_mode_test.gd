@@ -382,7 +382,7 @@ func _test_randomized_landlord_assignment() -> bool:
 	return true
 
 
-## 按玩家实际复现路径验证斗地主选将阶段菜单重开；每次点击“按设置重新开局”后，界面标题与权威状态都必须切换到新的本地身份座次组合。
+## 按玩家实际复现路径验证斗地主选将阶段菜单重开；每次点击“重新开局”后，界面标题与权威状态都必须切换到新的本地身份座次组合。
 func _test_selection_menu_restart_random_assignment(custom_enabled: bool) -> bool:
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_DOUDIZHU)
 	GameSettings.set_next_match_player_count(3)
@@ -402,7 +402,7 @@ func _test_selection_menu_restart_random_assignment(custom_enabled: bool) -> boo
 	var start_game_button: Button = main_instance.get_node("%StartGameButton") as Button
 	# 局内菜单入口；选将遮罩存在时仍必须位于其上方并接受点击。
 	var menu_button: Button = main_instance.get_node("%MenuButton") as Button
-	# 局内按设置重新开局按钮；发出的玩家人数由斗地主模式菜单固定为3或5。
+	# 局内重新开局按钮；发出的玩家人数由斗地主模式菜单固定为3或5。
 	var restart_button: Button = main_instance.get_node("%MenuRestartButton") as Button
 	# 局内菜单内容面板；每轮重开前确认入口确实展开，避免直接调用隐藏按钮产生失真测试。
 	var menu_panel: PanelContainer = main_instance.get_node("%MenuPanel") as PanelContainer
