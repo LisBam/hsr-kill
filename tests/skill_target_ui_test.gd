@@ -2,6 +2,8 @@ extends Node
 
 ## 技能目标选择界面回归。验证纯目标请求与牌目标组合请求复用牌桌临时选择，不打开独立卡牌窗口。
 ## 目标文字选项复合请求同样复用牌桌目标状态，并在目标未选满前禁用实际效果按钮。
+## 技能发动流程（选牌、选目标、文字选项）进行中时，该技能按钮必须失效且点击被忽略，
+## 取消只能由操作区“取消”按钮表达；多段技能不得因再次点击而跳到下一段。
 
 ## 正式主场景初始化等待帧数；保证武将视图和中央按钮已经完成绑定。
 const SETTLE_FRAME_COUNT: int = 4
@@ -236,7 +238,9 @@ func _run() -> void:
 	if confirm_button.disabled or cancel_button.disabled or not target_view.is_target_selected or not target_view.is_target_selection_active:
 		_fail("target_control_selected")
 		return
-	if not await _test_active_skill_second_click_cancels(main_instance, match_controller):
+	if not await _test_active_skill_reclick_is_ignored(main_instance, match_controller):
+		return
+	if not await _test_zhuoshi_reclick_does_not_skip_stage(main_instance, match_controller):
 		return
 	# 对局记录与局内菜单同时展开；未被控件消费的左键代表点击牌桌空白，应一次收起两个浮层。
 	var match_log_panel: MatchLogPanel = main_instance.get_node("LogPanel") as MatchLogPanel
@@ -254,21 +258,52 @@ func _run() -> void:
 	get_tree().quit(0)
 
 
-## 建立真实【药理】主动流程并再次点击同一技能按钮；取消后材料仍在原手牌且出牌请求重新开放。
-func _test_active_skill_second_click_cancels(main_instance: Control, match_controller: MatchController) -> bool:
-	# 启动菜单在专项对局期间隐藏；空白点击与技能栏均按正式局内输入层级工作。
-	var main_menu: MainMenu = main_instance.get_node("MainMenu") as MainMenu
-	main_menu.visible = false
+## 隔离上一次界面断言留下的控制器状态；技能专项对局必须从空闲出牌请求开始。
+## 界面断言只注入快照，不经过开局流程，因此这里必须手动清理可能残留的请求与否定询问。
+func _prepare_isolated_match(match_controller: MatchController) -> void:
 	match_controller.event_scheduler.reset()
 	match_controller._pending_card_choice.clear()
 	match_controller._pending_negation_choices.clear()
+	match_controller._deferred_skill_settlements.clear()
 	match_controller._play_choice_request_id = -1
 	match_controller._play_choice_event_id = -1
 	match_controller._play_choice_actor_id = -1
 	match_controller._play_choice_match_id = ""
+
+
+## 返回当前内联请求上下文；空字典表示此刻没有内联询问。
+func _inline_context(main_instance: Control) -> Dictionary:
+	# 当前内联请求快照；界面只读保存控制器刚下发的同一份数据。
+	var inline_choice: Dictionary = main_instance.get("_inline_card_choice") as Dictionary
+	return inline_choice.get("context", {}) as Dictionary
+
+
+## 返回当前内联请求的权威序号；-1表示没有内联询问。
+func _inline_request_id(main_instance: Control) -> int:
+	var inline_choice: Dictionary = main_instance.get("_inline_card_choice") as Dictionary
+	return int(inline_choice.get("request_id", -1))
+
+
+## 通过标准 choose_cards 动作提交当前请求；与桌面按钮走完全相同的权威校验入口。
+func _submit_choice(match_controller: MatchController, card_uids: Array[int], target_ids: Array[int], confirmed: bool) -> bool:
+	# 当前权威请求序号；与待处理请求不一致的提交会被规则层拒绝。
+	var request_id: int = int(match_controller._pending_card_choice.get("request_id", -1))
+	# 标准选择动作；负载字段与桌面端 _on_card_choice_submitted 完全一致。
+	var action: PlayerAction = PlayerAction.new("choose_cards", 0)
+	action.payload = {"request_id":request_id, "selected_card_uids":card_uids.duplicate(), "selected_target_ids":target_ids.duplicate(), "confirmed":confirmed}
+	return match_controller.submit_action(action)
+
+
+## 建立真实【药理】主动流程并再次点击同一技能按钮；按钮必须失效且点击被完全忽略。
+## 取消出口改由操作区“取消”按钮承担，取消后材料仍在原手牌且出牌请求重新开放。
+func _test_active_skill_reclick_is_ignored(main_instance: Control, match_controller: MatchController) -> bool:
+	# 启动菜单在专项对局期间隐藏；空白点击与技能栏均按正式局内输入层级工作。
+	var main_menu: MainMenu = main_instance.get_node("MainMenu") as MainMenu
+	main_menu.visible = false
+	_prepare_isolated_match(match_controller)
 	# 真实权威状态；娜塔莎持有一张红色手牌，满足【药理】主动发动和后续可取消组合选择条件。
 	var game_state: GameState = GameState.new()
-	game_state.match_id = "skill-second-click-cancel"
+	game_state.match_id = "skill-reclick-lock"
 	game_state.current_player_id = 0
 	game_state.current_phase = "play"
 	game_state.phase_index = 3
@@ -278,7 +313,7 @@ func _test_active_skill_second_click_cancels(main_instance: Control, match_contr
 	local_player.identity_revealed = true
 	local_player.max_hp = 3
 	local_player.hp = 3
-	# 【药理】红色材料；取消技能后该实体必须仍位于持有者手牌区。
+	# 【药理】红色材料；点击被忽略后该实体必须仍位于持有者手牌区。
 	var red_material_card: CardInstance = CardInstance.new("shan", "heart", 2)
 	red_material_card.zone = "hand"
 	red_material_card.owner_id = 0
@@ -305,7 +340,7 @@ func _test_active_skill_second_click_cancels(main_instance: Control, match_contr
 	match_controller.call("_begin_play_choice", 0)
 	match_controller.call("_emit_state")
 	await get_tree().process_frame
-	# 初次技能按钮；发动后应保持选中且仍可点击，以承担第二次点击取消语义。
+	# 初次技能按钮；未发动时应保持可用。
 	var skill_views: Dictionary = main_instance.get("_skill_views") as Dictionary
 	var yaoli_button: SkillButtonView = skill_views.get("yaoli") as SkillButtonView
 	if yaoli_button == null or yaoli_button.disabled:
@@ -314,12 +349,128 @@ func _test_active_skill_second_click_cancels(main_instance: Control, match_contr
 	await get_tree().process_frame
 	yaoli_button = (main_instance.get("_skill_views") as Dictionary).get("yaoli") as SkillButtonView
 	var inline_choice: Dictionary = main_instance.get("_inline_card_choice") as Dictionary
-	if yaoli_button == null or yaoli_button.disabled or not yaoli_button.is_skill_selected or str((inline_choice.get("context", {}) as Dictionary).get("skill_id", "")) != "yaoli":
-		return _fail_bool("yaoli_release_not_selected")
+	# 发动流程进行中：按钮必须禁用，但仍保留金色选中描边表示这条流程属于该技能。
+	if yaoli_button == null or not yaoli_button.disabled or not yaoli_button.is_skill_selected or str((inline_choice.get("context", {}) as Dictionary).get("skill_id", "")) != "yaoli":
+		return _fail_bool("yaoli_release_button_not_locked")
+	# 记录点击前的权威请求；再次点击后必须仍是同一个请求，且不产生任何新提交。
+	var request_id_before: int = _inline_request_id(main_instance)
 	main_instance.call("_on_skill_requested", "yaoli")
 	await get_tree().process_frame
+	if not match_controller.has_pending_card_choice() or _inline_request_id(main_instance) != request_id_before or str(_inline_context(main_instance).get("kind", "")) != "yaoli_gift" or local_player.find_hand_card(red_material_card.uid) == null:
+		return _fail_bool("yaoli_reclick_submitted")
+	# 取消出口仍然存在：操作区“取消”按钮提交与旧按钮二次点击完全相同的 confirmed=false。
+	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
+	if cancel_button == null or not cancel_button.visible or cancel_button.disabled:
+		return _fail_bool("yaoli_cancel_button_unavailable")
+	cancel_button.emit_signal("pressed")
+	await get_tree().process_frame
 	if match_controller.has_pending_card_choice() or local_player.find_hand_card(red_material_card.uid) == null or not bool(match_controller.call("_has_active_play_choice")) or not (main_instance.get("_inline_card_choice") as Dictionary).is_empty():
-		return _fail_bool("yaoli_second_click_cancel")
+		return _fail_bool("yaoli_cancel_button_failed")
+	return true
+
+
+## 多段主动技【濯世】的第二段费用询问期间点击技能按钮：必须停留在第二段，不得跳到第三段。
+## 该用例直接对应玩家报告的现象（“点一下按钮就直接进入下个阶段”）。
+func _test_zhuoshi_reclick_does_not_skip_stage(main_instance: Control, match_controller: MatchController) -> bool:
+	_prepare_isolated_match(match_controller)
+	# 真实权威状态；本地玩家使用丹恒·饮月，技能栏同时出现【伏辰】与【濯世】。
+	var game_state: GameState = GameState.new()
+	game_state.match_id = "skill-reclick-zhuoshi"
+	game_state.current_player_id = 0
+	game_state.current_phase = "play"
+	game_state.phase_index = 3
+	var local_player: PlayerState = PlayerState.new(0, "本地玩家")
+	local_player.character_id = "danheng_yinyue"
+	local_player.identity = "leader"
+	local_player.identity_revealed = true
+	local_player.max_hp = 4
+	local_player.hp = 4
+	# 三张基本牌费用；第一段与第二段各需要一张，第三段费用请求才具备候选。
+	var cost_first: CardInstance = CardInstance.new("sha", "spade", 7)
+	var cost_second: CardInstance = CardInstance.new("shan", "heart", 3)
+	var cost_third: CardInstance = CardInstance.new("sha", "club", 9)
+	for cost_card: CardInstance in [cost_first, cost_second, cost_third]:
+		cost_card.zone = "hand"
+		cost_card.owner_id = 0
+		local_player.hand.append(cost_card)
+	# 目标两张手牌；第二段“弃置其一张牌”需要目标侧仍有候选才会建立费用请求。
+	var target_player: PlayerState = PlayerState.new(1, "目标玩家")
+	target_player.character_id = "xier"
+	target_player.identity = "rebel"
+	target_player.identity_revealed = true
+	var victim_first: CardInstance = CardInstance.new("shan", "diamond", 11)
+	var victim_second: CardInstance = CardInstance.new("sha", "heart", 5)
+	for victim_card: CardInstance in [victim_first, victim_second]:
+		victim_card.zone = "hand"
+		victim_card.owner_id = 1
+		target_player.hand.append(victim_card)
+	game_state.players.append(local_player)
+	game_state.players.append(target_player)
+	match_controller.state = game_state
+	match_controller.card_rules = CardRuleService.new(game_state, match_controller)
+	match_controller.effect_resolver = CardEffectResolver.new(match_controller, game_state)
+	match_controller.card_movement = CardMovementService.new(game_state)
+	match_controller.trigger_manager = TriggerManager.new()
+	match_controller.timing_service = RuleTimingService.new(match_controller.event_bus, match_controller.trigger_manager, game_state)
+	# 【濯世】与【伏辰】独立运行时实例；与正式开局相同地绑定、安装并登记到玩家技能表。
+	# 两者都必须安装：快照的 installed_skill_ids 会裁掉未安装的技能按钮。
+	var zhuoshi: SkillDefinition = GameDatabase.create_skill("zhuoshi")
+	if zhuoshi == null:
+		return _fail_bool("zhuoshi_missing")
+	var fuchen: SkillDefinition = GameDatabase.create_skill("fuchen")
+	if fuchen == null:
+		return _fail_bool("fuchen_missing")
+	fuchen.bind(match_controller, 0)
+	fuchen.install()
+	zhuoshi.bind(match_controller, 0)
+	zhuoshi.install()
+	match_controller.skill_instances_by_player = {0:{"fuchen":fuchen, "zhuoshi":zhuoshi}}
+	match_controller.call("_begin_play_choice", 0)
+	match_controller.call("_emit_state")
+	await get_tree().process_frame
+	# 【伏辰】是 ui_enabled=false 的完整锁定技：按钮恒禁用，点击不产生任何动作。
+	var fuchen_button: SkillButtonView = (main_instance.get("_skill_views") as Dictionary).get("fuchen") as SkillButtonView
+	if fuchen_button == null or not fuchen_button.disabled:
+		return _fail_bool("fuchen_button_should_be_disabled")
+	# 第一段：点击【濯世】按钮进入“弃一张基本牌并选择一名其他角色”。
+	main_instance.call("_on_skill_requested", "zhuoshi")
+	await get_tree().process_frame
+	if str(_inline_context(main_instance).get("kind", "")) != "zhuoshi_cost_and_target":
+		return _fail_bool("zhuoshi_step1_missing")
+	if not _submit_choice(match_controller, [cost_first.uid], [1], true):
+		return _fail_bool("zhuoshi_step1_submit")
+	await get_tree().process_frame
+	# 第二段第一步：弃置目标一张手牌（必选，请求本身不可取消）。
+	if not _submit_choice(match_controller, [victim_first.uid], [], true):
+		return _fail_bool("zhuoshi_step2_hand_submit")
+	await get_tree().process_frame
+	# 第二段费用询问：可取消；此刻技能按钮必须禁用且仍为选中态。
+	var second_cost_request_id: int = _inline_request_id(main_instance)
+	if str(_inline_context(main_instance).get("kind", "")) != "zhuoshi_second_cost":
+		return _fail_bool("zhuoshi_second_cost_missing")
+	var zhuoshi_button: SkillButtonView = (main_instance.get("_skill_views") as Dictionary).get("zhuoshi") as SkillButtonView
+	if zhuoshi_button == null or not zhuoshi_button.disabled or not zhuoshi_button.is_skill_selected:
+		return _fail_bool("zhuoshi_release_button_not_locked")
+	# 再次点击技能按钮：必须仍停留在第二段费用询问，不得跳到第三段。
+	main_instance.call("_on_skill_requested", "zhuoshi")
+	await get_tree().process_frame
+	if str(_inline_context(main_instance).get("kind", "")) != "zhuoshi_second_cost" or _inline_request_id(main_instance) != second_cost_request_id or not match_controller.has_pending_card_choice():
+		return _fail_bool("zhuoshi_reclick_skipped_stage")
+	# 持有者仍持有第二、三张费用牌，目标仍只剩未指定的第二张牌：点击没有支付任何费用。
+	if local_player.hand.size() != 2 or local_player.find_hand_card(cost_second.uid) == null or local_player.find_hand_card(cost_third.uid) == null:
+		return _fail_bool("zhuoshi_reclick_consumed_cost")
+	if target_player.find_hand_card(victim_second.uid) == null:
+		return _fail_bool("zhuoshi_reclick_consumed_target_card")
+	# 取消出口仍可用：操作区“取消”按钮保持可见且可点。
+	var cancel_button: Button = main_instance.get_node("%CancelButton") as Button
+	if cancel_button == null or not cancel_button.visible or cancel_button.disabled:
+		return _fail_bool("zhuoshi_cancel_button_unavailable")
+	# 用标准取消响应放弃第二段；按原文应进入第三段费用询问，证明流程本身未被本次改动破坏。
+	if not _submit_choice(match_controller, [], [], false):
+		return _fail_bool("zhuoshi_second_cost_cancel_submit")
+	await get_tree().process_frame
+	if str(_inline_context(main_instance).get("kind", "")) != "zhuoshi_third_cost":
+		return _fail_bool("zhuoshi_third_cost_missing")
 	return true
 
 

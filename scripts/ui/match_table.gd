@@ -2189,10 +2189,17 @@ func _render_local_skills(local_player: Dictionary) -> void:
 			var skill_id: String = str(skill_id_variant)
 			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
 			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-			# 当前技能是否拥有正在进行的可取消释放流程；选中按钮允许再次点击放弃本次材料或目标选择。
-			var skill_selected: bool = _get_selected_skill_release_id() == skill_id
+			# 当前响应转化技能是否处于材料筛选模式；该模式开关仍允许再次点击退出，语义保持不变。
+			var skill_response_mode_active: bool = _active_response_skill_id == skill_id
+			# 当前技能是否正在发动中；它自己创建的统一选择请求仍未结束，按钮必须失效。
+			# 材料筛选模式优先：响应窗口上下文可能携带 skill_id，不能因此把转化技能按钮误判成发动中。
+			var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == skill_id
+			# 当前技能选中视觉；发动中与响应材料模式都使用金色选中描边，表示这条流程属于该技能。
+			var skill_selected: bool = skill_release_in_progress or skill_response_mode_active
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
-			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
+			# 发动中的技能按钮必须失效：玩家不能在技能自己的选牌、选目标或文字选项流程中再次点击它，
+			# 取消只能由操作区“取消”按钮（以及既有 Esc、右键路径）提交，避免误触导致整次发动中止或跳到下一段。
+			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()))
 			# 当前受限技能剩余次数；普通固有技能返回空文本，按钮保持原有两字显示。
 			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
@@ -2219,10 +2226,15 @@ func _render_local_skills(local_player: Dictionary) -> void:
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		if skill_definition.is_empty():
 			skill_definition = {"id":skill_id, "name":skill_id, "description":"技能元数据尚未登记。"}
-		# 当前技能是否拥有正在进行的可取消释放流程；初次创建按钮时同步选中描边。
-		var skill_selected: bool = _get_selected_skill_release_id() == skill_id
+		# 当前响应转化技能是否处于材料筛选模式；初次创建按钮时同样保留再次点击退出的能力。
+		var skill_response_mode_active: bool = _active_response_skill_id == skill_id
+		# 当前技能是否正在发动中；初次创建按钮时同步禁用状态与选中描边，与刷新分支保持同一判定。
+		var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == skill_id
+		# 当前技能选中视觉；发动中与响应材料模式都使用金色选中描边。
+		var skill_selected: bool = skill_release_in_progress or skill_response_mode_active
 		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
-		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and (match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()) or skill_selected)
+		# 发动中的技能按钮必须失效，与刷新分支保持完全一致，避免首次渲染与后续刷新出现行为差异。
+		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()))
 		# 当前受限技能剩余次数；快照中的获得技能记录是唯一数据来源，UI不自行扣减次数。
 		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
@@ -2422,6 +2434,7 @@ func _layout_auto_managed_hand_overlay() -> void:
 
 
 ## 响应技能按钮请求；不可发动技能静默忽略，可主动发动技能通过统一 PlayerAction 进入规则核心。
+## 技能自己发起的发动流程（选牌、选目标、文字选项）尚未结束时，该技能按钮保持禁用且点击被静默忽略。
 func _on_skill_requested(skill_id: String) -> void:
 	# 响应转化技能已处于选中状态时，第二次点击只退出材料转化模式，不取消整条响应请求。
 	if _active_response_skill_id == skill_id:
@@ -2433,9 +2446,10 @@ func _on_skill_requested(skill_id: String) -> void:
 		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
 		_refresh_selection_text()
 		return
-	# 主动技能已经创建可取消的内联选择时，第二次点击提交标准取消响应，不消费材料、目标或发动次数。
-	if _is_originating_inline_skill_release(skill_id):
-		_cancel_originating_inline_skill_release()
+	# 技能发动中再次点击同一按钮不提交任何响应：选牌、选目标与文字选项流程只能由操作区“取消”按钮结束，
+	# 否则第二次点击会被当成 confirmed=false 的取消响应，导致整次发动中止或直接跳到下一段。
+	# 材料筛选模式期间不拦截，保留“点击另一个转化技能即可切换材料模式”的既有能力。
+	if _active_response_skill_id.is_empty() and _get_in_flight_skill_release_id() == skill_id:
 		return
 	# 被请求的技能定义；用于展示名称、说明和接入状态。
 	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
@@ -2461,34 +2475,26 @@ func _on_skill_requested(skill_id: String) -> void:
 	match_controller.submit_action(action)
 
 
-## 返回当前界面正在选择材料或目标的主动技能 ID；空字符串表示没有可由技能按钮再次取消的释放流程。
-func _get_selected_skill_release_id() -> String:
-	if not _active_response_skill_id.is_empty():
-		return _active_response_skill_id
-	if _inline_card_choice.is_empty() or not bool(_inline_card_choice.get("allow_cancel", false)):
+## 返回当前**正在发动中**的技能 ID：该技能自己创建的统一选择请求仍未结束。
+## 空字符串表示没有技能处于发动流程中。
+##
+## 判定只依据「当前内联请求的上下文是否仍属于该技能」以及「该技能是否拥有技能按钮」，
+## **与 allow_cancel 无关**：只要请求还没有结束，技能按钮就必须失效，玩家不能在发动过程中再次点击。
+## 取消语义完全由操作区的「取消」按钮（`_on_cancel_pressed`）与既有 Esc / 右键路径承担，
+## 它们提交的 `confirmed=false` 是规则层唯一承认的放弃结果，界面不再提供第二条取消路径。
+##
+## 注意：响应转化技能的材料筛选模式（`_active_response_skill_id`）不是技能发动流程，
+## 由调用方单独判断，避免响应窗口上下文恰好携带 `skill_id` 时误判为发动中。
+func _get_in_flight_skill_release_id() -> String:
+	if _inline_card_choice.is_empty():
 		return ""
-	# 当前技能选择上下文；基类会为主动技能请求写入稳定技能 ID 与持有者 ID。
+	# 当前技能选择上下文；基类会为技能发起的请求写入稳定技能 ID 与持有者 ID。
 	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
-	# 当前技能 ID；只有拥有主动按钮的技能才使用再次点击取消语义，被动触发询问继续使用原取消按钮。
+	# 当前技能 ID；只有拥有技能按钮的技能才需要让按钮失效，无按钮的被动触发询问不参与判定。
 	var skill_id: String = str(context.get("skill_id", ""))
+	if skill_id.is_empty():
+		return ""
 	return skill_id if bool(GameDatabase.get_skill(skill_id).get("ui_enabled", false)) else ""
-
-
-## 判断指定技能是否正拥有当前可取消内联选择；用于把第二次按钮点击与其他技能的新发动请求区分开。
-func _is_originating_inline_skill_release(skill_id: String) -> bool:
-	return not skill_id.is_empty() and _get_selected_skill_release_id() == skill_id and _active_response_skill_id.is_empty()
-
-
-## 取消当前主动技能创建的内联选择；文字选项与牌/目标请求分别沿用既有标准 ChoiceResponse 提交入口。
-func _cancel_originating_inline_skill_release() -> void:
-	if _inline_card_choice.is_empty() or not bool(_inline_card_choice.get("allow_cancel", false)):
-		return
-	if _is_inline_control_choice(_inline_card_choice):
-		_submit_inline_control_choice("", false)
-	else:
-		# 空材料数组；confirmed=false 明确表达整次主动技能选择取消，不会被最少选择数量误判为确认。
-		var cancelled_card_uids: Array[int] = []
-		_submit_inline_card_choice(cancelled_card_uids, false)
 
 
 ## 返回本地技能按钮当前使用的主动入口上下文；响应请求之外保持空字典并沿用普通出牌阶段判断。
