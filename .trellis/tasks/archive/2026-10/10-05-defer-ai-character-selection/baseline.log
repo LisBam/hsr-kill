@@ -1,0 +1,42 @@
+﻿BASELINE START 2026-10-05 21:16:53
+=== control_all_characters exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONTROL_ALL_CHARACTERS_PASS offline_views+lan_hidden+judgment_offset+bagua_preselect
+=== doudizhu_mode exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+DOUDIZHU_MODE_PASS teammates+distribution+hp+skills+winner+public+preview+settings+round+lobby+characters+gongku_ai+post_match+huogong_privacy
+=== team2v2_mode exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+TEAM2V2_MODE_PASS distribution+teammates+settings+lobby+post_match+bootstrap+custom_ai_seat+seat_identity_bind+seat4_hand+seat1_draw+teammate_draw+winner
+=== pre_game_customization exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+WARNING: This control can't grab focus. Use set_focus_mode() and set_focus_behavior_recursive() to allow a control to get focus.
+   at: grab_focus (scene/gui/control.cpp:3006)
+   GDScript backtrace (most recent call first):
+       [0] set_menu_open (res://scripts/ui/match_menu.gd:304)
+       [1] _test_settings_controls (res://tests/pre_game_customization_test.gd:184)
+WARNING: This control can't grab focus. Use set_focus_mode() and set_focus_behavior_recursive() to allow a control to get focus.
+   at: grab_focus (scene/gui/control.cpp:3006)
+   GDScript backtrace (most recent call first):
+       [0] set_menu_open (res://scripts/ui/match_menu.gd:308)
+       [1] _test_settings_controls (res://tests/pre_game_customization_test.gd:189)
+PRE_GAME_CUSTOMIZATION_PASS
+=== conquest_mode exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_MODE_PASS rules+levels+difficulties+initial_opportunity+zaixian_kill_tail+replacement+skills+equipment+turn_handoff+revival+death
+=== conquest_coop exit=0 pass_marker=True err_line=
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[godot_ai game_helper] registered mcp capture (debugger active=false, logger=true)
+CONQUEST_COOP_PASS seats+lan_mapping+per_player_difficulty+simultaneous_vote+vote_reveal+individual+all_enemies_level_clear+shared_enemy_awards+partial_death+next_level_revival+team_defeat
+BASELINE_DONE 2026-10-05 21:18:07

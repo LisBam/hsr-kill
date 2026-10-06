@@ -1,0 +1,28 @@
+{
+  "id": "defer-ai-character-selection",
+  "name": "defer-ai-character-selection",
+  "title": "重构同时选将阶段的AI选将时机为真人确认后随机分配",
+  "description": "身份局同时选将、斗地主与2v2的同时选将阶段，AI必须等全部真人与网络玩家确认后才从各自私有候选池随机取张",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-05",
+  "completedAt": "2026-10-06",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "status": "completed"
+  }
+}
