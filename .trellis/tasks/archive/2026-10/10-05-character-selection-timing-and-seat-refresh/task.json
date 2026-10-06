@@ -1,0 +1,32 @@
+{
+  "id": "character-selection-timing-and-seat-refresh",
+  "name": "character-selection-timing-and-seat-refresh",
+  "title": "修复选将时机与重开座次（AI同时选将延迟分配·开局座位刷新）",
+  "description": "统一全部同时选将场景的AI选将时机（真人全部确认后再分配），并修复重开后开局座位与选将后座位不一致的缺陷",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-05",
+  "completedAt": "2026-10-06",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-05-defer-ai-character-selection",
+    "10-05-refresh-seats-on-match-start",
+    "10-05-align-seat-labels-with-authoritative-order"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "status": "completed"
+  }
+}
