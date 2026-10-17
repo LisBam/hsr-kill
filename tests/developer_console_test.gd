@@ -65,6 +65,8 @@ func _run() -> void:
 		return
 	if not _test_panel_draw_pile_filter():
 		return
+	if not _test_panel_draw_pile_ordering():
+		return
 	print("DEVELOPER_CONSOLE_PASS results=%d" % _results.size())
 	_controller.queue_free()
 	_panel.queue_free()
@@ -603,11 +605,12 @@ func _test_panel_draw_pile_filter() -> bool:
 	if _panel._draw_pile_category_tabs.current_tab != 0 or _panel._draw_pile_category_id != "all" or _panel._draw_pile_visible_count != 4:
 		return _fail("panel_category_default=%s/%d" % [_panel._draw_pile_category_id, _panel._draw_pile_visible_count])
 	# 类别筛选：基本牌与锦囊牌各自只剩一张，装备牌剩两张。
-	if not _select_category_tab(1) or _visible_draw_pile_uids() != [101]:
+	# 本用例只关心「谁被筛出来了」，因此按 UID 排序后比对集合；显示顺序由排序用例单独覆盖。
+	if not _select_category_tab(1) or _sorted_uids(_visible_draw_pile_uids()) != [101]:
 		return _fail("panel_category_basic=%s" % [_visible_draw_pile_uids()])
-	if not _select_category_tab(2) or _visible_draw_pile_uids() != [102]:
+	if not _select_category_tab(2) or _sorted_uids(_visible_draw_pile_uids()) != [102]:
 		return _fail("panel_category_trick=%s" % [_visible_draw_pile_uids()])
-	if not _select_category_tab(3) or _visible_draw_pile_uids() != [103, 104]:
+	if not _select_category_tab(3) or _sorted_uids(_visible_draw_pile_uids()) != [103, 104]:
 		return _fail("panel_category_equipment=%s" % [_visible_draw_pile_uids()])
 	# 牌名搜索：两种名称模式下都必须能按记忆中的牌名搜到同一张牌（丈八蛇矛 / 银河球棒）。
 	# 先确认生产装配把 text_changed 接进了筛选回调；随后由用例驱动回调，
@@ -629,7 +632,7 @@ func _test_panel_draw_pile_filter() -> bool:
 	# 清空搜索并回到「全部」：完整候选恢复。
 	_apply_draw_pile_search("")
 	_select_category_tab(0)
-	if _visible_draw_pile_uids() != [101, 102, 103, 104]:
+	if _sorted_uids(_visible_draw_pile_uids()) != [101, 102, 103, 104]:
 		return _fail("panel_filter_cleared=%s" % [_visible_draw_pile_uids()])
 	# 勾选保留：先勾选一张装备牌，再切到看不见它的类别，勾选记录与提示行都必须保持。
 	var equipment_button: Button = _find_draw_pile_button(103)
@@ -650,6 +653,104 @@ func _test_panel_draw_pile_filter() -> bool:
 	# 复原候选与勾选，避免影响后续用例。
 	_panel.set_draw_pile_candidates([])
 	return true
+
+
+## 验证摸牌堆候选按牌名字数排序：短牌名在前、长牌名在后，同名牌聚成相邻一组。
+## 注入一份刻意打乱的候选（最长的牌排在最前、两张同名【杀】被隔开），并分别在两种名称模式下断言，
+## 以证明排序依据是「当前模式下的牌名」而不是固定的某一套名称或注入顺序。
+func _test_panel_draw_pile_ordering() -> bool:
+	# 进入用例前的名称模式；用例结束必须复原，避免影响后续用例的牌名断言。
+	var original_mode: GameSettings.NameMode = GameSettings.card_name_mode
+	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
+	# 排序键必须是不含武器攻击范围的纯牌名：按钮文字会附加范围，排序若跟着用带范围的文字，
+	# 「侵晨 3」会被当成 4 个字，排到同样 2 字牌的「天谴」之后。先直接比对两个解析入口的口径差异。
+	if not _assert_sort_name_excludes_weapon_range():
+		return false
+	# 自定义名模式（默认）：杀1 ×2、药1、侵晨2、天谴2、运演否证4、银河球棒4、碎星斩舰刀5。
+	GameSettings.set_card_name_mode(GameSettings.NameMode.CUSTOM)
+	_panel.set_draw_pile_candidates(_make_draw_pile_ordering_candidates())
+	if not _assert_draw_pile_order("custom", ["杀", "杀", "药", "侵晨", "天谴", "运演否证", "银河球棒", "碎星斩舰刀"], [202, 205], [206, 207, 208, 203, 204, 201]):
+		return false
+	# 原始名模式：杀1 ×2、桃1、闪电2、贯石斧3、青釭剑3、丈八蛇矛4、无懈可击4。
+	# 同一份候选在两种模式下顺序不同，说明排序读的是当前显示用的牌名，而不是写死的某一套名称。
+	GameSettings.set_card_name_mode(GameSettings.NameMode.ORIGINAL)
+	_panel.set_draw_pile_candidates(_make_draw_pile_ordering_candidates())
+	if not _assert_draw_pile_order("original", ["杀", "杀", "桃", "闪电", "贯石斧", "青釭剑", "丈八蛇矛", "无懈可击"], [202, 205], [206, 208, 207, 201, 204, 203]):
+		return false
+	# 复原名称模式与候选，避免影响后续用例。
+	GameSettings.set_card_name_mode(original_mode)
+	_panel.set_draw_pile_candidates([])
+	return true
+
+
+## 断言排序键与按钮文字的口径差异：武器按钮文字带攻击范围后缀，排序键必须是去掉后缀的纯牌名。
+func _assert_sort_name_excludes_weapon_range() -> bool:
+	# 武器候选（丈八蛇矛/银河球棒，攻击范围 3）；同时是武器且牌名较短的典型样本。
+	var weapon_card_data: Dictionary = {"definition_id":"zhangba", "suit":"spade", "rank":12}
+	# 排序键；应等于纯牌名，长度不含「 3」两个字符。
+	var sort_name: String = _panel._resolve_card_candidate_sort_name(weapon_card_data)
+	# 按钮文字用的显示名；保留范围后缀，本用例不改动既有显示口径。
+	var display_name: String = _panel._resolve_card_candidate_display_name(weapon_card_data)
+	if sort_name.strip_edges().is_empty() or display_name.length() <= sort_name.length() or not display_name.begins_with(sort_name):
+		return _fail("panel_ordering_weapon_range=%s/%s" % [sort_name, display_name])
+	# 排序键不得以空格+数字结尾，否则说明范围仍被计入字数。
+	if sort_name != sort_name.strip_edges() or sort_name.contains(" "):
+		return _fail("panel_ordering_sort_name_padded=%s" % sort_name)
+	return true
+
+
+## 断言一次排序结果：先检查排序不变式（字数非递减、同字数内牌名非递减），再逐位比对牌名与 UID。
+## 同名组内部顺序不参与断言——比较器只保证同名相邻，组内先后由排序算法决定，不应被用例锁死。
+func _assert_draw_pile_order(label: String, expected_names: Array, expected_first_group: Array, expected_rest: Array) -> bool:
+	# 当前网格的显示顺序；牌名与 UID 必须来自同一次重建，因此各取一次。
+	var visible_names: Array = _visible_draw_pile_names()
+	var visible_uids: Array = _visible_draw_pile_uids()
+	if visible_uids.size() != expected_names.size():
+		return _fail("panel_ordering_%s_size=%s" % [label, visible_uids])
+	# 排序不变式：任何一处「字数变小」或「同字数内牌名变小」都说明排序键用错了。
+	var violation: String = _find_ordering_violation(visible_names)
+	if not violation.is_empty():
+		return _fail("panel_ordering_%s_invariant=%s names=%s" % [label, violation, visible_names])
+	if visible_names != expected_names:
+		return _fail("panel_ordering_%s_names=%s" % [label, visible_names])
+	# 同名前两位按集合比对，其余逐位比对，确认「同名牌聚在一起」且分组边界正确。
+	if _sorted_uids(visible_uids.slice(0, 2)) != expected_first_group or visible_uids.slice(2) != expected_rest:
+		return _fail("panel_ordering_%s_uids=%s" % [label, visible_uids])
+	return true
+
+
+## 校验一份牌名序列满足排序不变式；通过返回空串，否则返回首个违反位置的可读说明。
+func _find_ordering_violation(names: Array) -> String:
+	for index: int in range(1, names.size()):
+		# 相邻两项牌名；逐位比较即可判定整串是否有序。
+		var previous_name: String = str(names[index - 1])
+		var current_name: String = str(names[index])
+		if previous_name.length() > current_name.length():
+			return "len_drop@%d(%s>%s)" % [index, previous_name, current_name]
+		if previous_name.length() == current_name.length() and previous_name > current_name:
+			return "name_drop@%d(%s>%s)" % [index, previous_name, current_name]
+	return ""
+
+
+## 收集当前网格中可见候选的排序用牌名；顺序与网格一致，且复用面板的解析入口，保证与排序键同源。
+func _visible_draw_pile_names() -> Array:
+	# 实体牌 UID 到排序用牌名的映射；面板解析，用例不重复实现名称模式规则。
+	var names_by_uid: Dictionary = {}
+	for candidate: Dictionary in _panel._draw_pile_candidates:
+		names_by_uid[int(candidate.get("uid", -1))] = _panel._resolve_card_candidate_sort_name(candidate.get("card_data", {}) as Dictionary)
+	# 按网格顺序输出牌名；缺失映射时填空串占位，让断言直接暴露错位而不是静默通过。
+	var names: Array = []
+	for card_uid: int in _visible_draw_pile_uids():
+		names.append(str(names_by_uid.get(card_uid, "")))
+	return names
+
+
+## 返回一份升序排列的 UID 副本；用于只关心成员、不关心顺序的集合比对。
+func _sorted_uids(uids: Array) -> Array:
+	# 副本；避免排序就地改动调用方持有的数组。
+	var sorted_uids: Array = uids.duplicate()
+	sorted_uids.sort()
+	return sorted_uids
 
 
 ## 切换到指定标签页下标并返回该下标是否合法；越界时返回 false 供调用方直接判失败。
@@ -698,6 +799,25 @@ func _make_draw_pile_candidates() -> Array[Dictionary]:
 		{"uid":102, "card_data":{"definition_id":"wuxie", "suit":"heart", "rank":3}},
 		{"uid":103, "card_data":{"definition_id":"zhangba", "suit":"spade", "rank":12}},
 		{"uid":104, "card_data":{"definition_id":"qinggang", "suit":"club", "rank":6}},
+	]
+
+
+## 构造专供排序用例的摸牌堆候选：刻意打乱注入顺序（最长的牌名排在最前），
+## 并放入两张同名【杀】且用其他牌把它们隔开，用于验证「按字数排序 + 同名牌聚在一起」。
+## 牌名长度覆盖 1 字（杀/桃）、2 字（侵晨/天谴）、3 字（青釭剑/贯石斧）、
+## 4 字（运演否证/银河球棒/无懈可击/丈八蛇矛）、5 字（碎星斩舰刀）。
+## 其中 207（侵晨，武器）与 208（天谴，锦囊）都是 2 字牌名，但武器按钮文字会附加攻击范围；
+## 这一对专门用来区分「按纯牌名排序」与「按带范围后缀的文字排序」——后者会把 208 排到 207 前面。
+func _make_draw_pile_ordering_candidates() -> Array[Dictionary]:
+	return [
+		{"uid":201, "card_data":{"definition_id":"qinggang", "suit":"club", "rank":6}},
+		{"uid":202, "card_data":{"definition_id":"sha", "suit":"spade", "rank":7}},
+		{"uid":203, "card_data":{"definition_id":"wuxie", "suit":"heart", "rank":3}},
+		{"uid":204, "card_data":{"definition_id":"zhangba", "suit":"spade", "rank":12}},
+		{"uid":205, "card_data":{"definition_id":"sha", "suit":"heart", "rank":4}},
+		{"uid":206, "card_data":{"definition_id":"tao", "suit":"diamond", "rank":9}},
+		{"uid":207, "card_data":{"definition_id":"guanshi", "suit":"spade", "rank":5}},
+		{"uid":208, "card_data":{"definition_id":"shandian", "suit":"spade", "rank":1}},
 	]
 
 

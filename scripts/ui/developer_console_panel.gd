@@ -239,9 +239,11 @@ func set_target_candidates(candidates: Array[Dictionary], preferred_player_id: i
 
 
 ## 注入摸牌堆全量牌面候选；每次注入都会清空勾选，避免把上一局的牌 UID 带入新一次请求。
+## 注入后立即按牌名字数排序，使列表从短牌名排到长牌名、同名牌聚在一起；排序结果即网格显示顺序。
 func set_draw_pile_candidates(candidates: Array[Dictionary]) -> void:
 	_draw_pile_candidates = candidates.duplicate(true)
 	_draw_pile_selected_uids.clear()
+	_sort_draw_pile_candidates()
 	_rebuild_draw_pile_grid()
 
 
@@ -599,6 +601,8 @@ func _refresh_view_content() -> void:
 
 
 ## 重建摸牌堆候选网格；每张牌是一个可切换按钮，勾选状态以实体牌 UID 记录。
+## 按钮顺序即 _draw_pile_candidates 的顺序（注入时已按显示牌名字数排好），筛选只跳过不通过的候选，
+## 因此切换类别或搜索关键字不会打乱「短牌名在前、同名牌相邻」的排列。
 ## 类别与牌名筛选只决定哪些候选生成按钮：被筛掉的已勾选牌仍保留在 _draw_pile_selected_uids 中，
 ## 切回可见类别后按钮会按记录恢复为选中态，因此筛选变化不会丢失玩家的多选结果。
 func _rebuild_draw_pile_grid() -> void:
@@ -711,15 +715,55 @@ func _refresh_draw_pile_hint() -> void:
 
 ## 组装一张实体牌的按钮文字；走全局名称模式解析，避免稳定 ID 泄漏到界面。
 func _format_card_candidate_text(card_data: Dictionary) -> String:
+	# 牌面显示名；与图鉴、手牌共用同一解析入口。
+	var display_name: String = _resolve_card_candidate_display_name(card_data)
+	# 花色符号与点数；花色未知时原样回退，保证信息不丢失。
+	var suit_text: String = str(SUIT_SYMBOLS.get(str(card_data.get("suit", "")), str(card_data.get("suit", ""))))
+	return "%s %s%d" % [display_name, suit_text, int(card_data.get("rank", 0))]
+
+
+## 解析摸牌堆候选的显示牌名；供按钮文字使用，会按全局名称模式解析并保留武器攻击范围后缀。
+## 排序不使用本入口（范围后缀会污染字数），排序键见 _resolve_card_candidate_sort_name()。
+## 只读取静态定义与全局名称模式，不访问对局状态。
+func _resolve_card_candidate_display_name(card_data: Dictionary) -> String:
 	# 卡牌稳定 ID；用于读取静态定义与显示名。
 	var definition_id: String = str(card_data.get("definition_id", ""))
 	# 牌面显示名；与图鉴、手牌共用同一解析入口。
 	var display_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card(definition_id))
 	if display_name.strip_edges().is_empty():
 		display_name = definition_id if not definition_id.is_empty() else "未知牌"
-	# 花色符号与点数；花色未知时原样回退，保证信息不丢失。
-	var suit_text: String = str(SUIT_SYMBOLS.get(str(card_data.get("suit", "")), str(card_data.get("suit", ""))))
-	return "%s %s%d" % [display_name, suit_text, int(card_data.get("rank", 0))]
+	return display_name
+
+
+## 按牌名字数排序摸牌堆候选：短牌名在前、长牌名在后。
+## 字数相同再按牌名本身排序，使同名（同定义）的牌必然相邻成组，而不是散落在整份列表里。
+## 只排序一次、在注入时执行：筛选回调每次按键都会重建网格，若在重建里排序会随输入长度反复重排。
+func _sort_draw_pile_candidates() -> void:
+	_draw_pile_candidates.sort_custom(_compare_draw_pile_candidates)
+
+
+## 摸牌堆候选排序比较器；返回 true 表示 left 应排在 right 之前。
+## 主键为牌名字数（升序），次键为牌名本身（升序），因此同名牌稳定聚成一组。
+func _compare_draw_pile_candidates(left: Dictionary, right: Dictionary) -> bool:
+	# 两侧排序用牌名；解析失败时统一回退为占位名，使这类候选排在最前而不是抛错。
+	var left_name: String = _resolve_card_candidate_sort_name(left.get("card_data", {}) as Dictionary)
+	var right_name: String = _resolve_card_candidate_sort_name(right.get("card_data", {}) as Dictionary)
+	if left_name.length() != right_name.length():
+		return left_name.length() < right_name.length()
+	return left_name < right_name
+
+
+## 解析摸牌堆候选用于排序的「牌名」；取当前名称模式下的基础牌名，不含武器攻击范围后缀。
+## 与按钮文字的解析入口刻意分开：攻击范围是数值标注、不是牌名的一部分，
+## 若把它计入字数，「青釭剑 2」会被当成 5 个字而排到真正的长牌名之后，与玩家看到的牌名字数不符。
+func _resolve_card_candidate_sort_name(card_data: Dictionary) -> String:
+	# 卡牌稳定 ID；用于读取静态定义与牌名。
+	var definition_id: String = str(card_data.get("definition_id", ""))
+	# 基础牌名；与按钮文字共用同一名称模式入口，只是不附加武器攻击范围。
+	var sort_name: String = GameSettings.resolve_card_name(GameDatabase.get_card(definition_id))
+	if sort_name.strip_edges().is_empty():
+		sort_name = definition_id if not definition_id.is_empty() else "未知牌"
+	return sort_name
 
 
 ## 解析某效果行当前应提交的数值；输入框文本优先，非法或空则回退滑条值，只钳制下限。
