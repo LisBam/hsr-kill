@@ -42,6 +42,9 @@ var _hidden_hand_prompt_kinds: Array[String] = []
 ## 测试是否已经失败；失败后延迟选择回调不得继续提交旧请求。
 var _failed: bool = false
 
+## 【天坠】费用目标选择场景捕获到的权威请求；用于在选择层复用控制器自身的动作枚举。
+var _tianzhui_choice_request: Dictionary = {}
+
 
 ## 延迟一帧执行全部断言，保证自动加载数据库已经完成卡牌和技能扫描。
 func _ready() -> void:
@@ -92,6 +95,8 @@ func _run() -> void:
 	if not await _test_phase_use_begin_prompt():
 		return
 	if not await _test_phase_use_begin_skip():
+		return
+	if not _test_tianzhui_cost_consistency_ai():
 		return
 	print("REQUESTED_CHANGES_PASS")
 	get_tree().quit(0)
@@ -163,6 +168,7 @@ func _reset_state(player_count: int) -> void:
 	_same_timing_choice_kinds.clear()
 	_latest_state_snapshot.clear()
 	_captured_logs.clear()
+	_tianzhui_choice_request = {}
 
 
 ## 验证所有技能元数据都拥有 bool 类型 lock，且现有锁定技【星火】明确标记为 true。
@@ -821,6 +827,82 @@ func _equip_borrow_sword_weapon(player_id: int) -> CardInstance:
 	return weapon
 
 
+## 验证【天坠】的主动动作评分与费用目标选择评分同源，不会让姬子在同一出牌阶段反复“发动→取消”。
+## 场景复刻用户反馈：姬子使用牌指定敌方后由【星火】把该敌方横置，自身仍竖置；
+## 此时【天坠】只能靠弃置锦囊牌支付，若动作层低估费用就会反复进入技能再取消，外部表现为姬子卡死。
+func _test_tianzhui_cost_consistency_ai() -> bool:
+	_scenario = "tianzhui_cost_consistency"
+	_reset_state(2)
+	# 姬子武将；横置来源【星火】与费用技能【天坠】都必须是正式技能实例。
+	_controller.state.get_player(0).character_id = "himeko"
+	_install_skill_on_player(0, "xinghuo")
+	var tianzhui_skill: SkillDefinition = _install_skill_on_player(0, "tianzhui")
+	if tianzhui_skill == null:
+		return _fail("tianzhui_skill_missing")
+	# 姬子的锦囊费用牌；【无懈可击】不能主动使用，因此会一直留在手里充当【天坠】的费用。
+	var cost_card: CardInstance = _add_hand_card(0, "wuxie", "club", 1)
+	# 敌方横置来源；复刻【星火】横置被指定敌方后的局面，姬子本人保持竖置。
+	_controller.state.get_player(1).chained = true
+	# 基础AI策略；身份已公开，一号领袖明确敌视二号反贼。
+	var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+	# 真实合法动作集合；由技能枚举产生，必须包含【天坠】才能证明后续断言不是候选缺失造成的假通过。
+	var legal_actions: Array[Dictionary] = _controller.get_legal_actions(0)
+	if not _has_tianzhui_action(legal_actions):
+		return _fail("tianzhui_action_missing=%s" % [legal_actions])
+	# 最终动作；自身竖置时费用由牌值决定，收益不足以覆盖牌价时 AI 不得进入【天坠】。
+	var chosen_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), legal_actions)
+	if _is_tianzhui_action(chosen_action):
+		return _fail("tianzhui_loop_entry=%s" % [chosen_action])
+	# 姬子横置后可用竖置自身支付费用，同一局面必须明确愿意发动。
+	_controller.state.get_player(0).chained = true
+	var chained_action: Dictionary = policy.choose_action(_controller.state.to_dict(0, true), _controller.get_legal_actions(0))
+	if not _is_tianzhui_action(chained_action):
+		return _fail("tianzhui_chained_skip=%s" % [chained_action])
+	# 真实费用选择请求；由技能 activate 建立，用于验证选择层确实会确认而不是取消。
+	_tianzhui_choice_request = {}
+	tianzhui_skill.activate()
+	if _tianzhui_choice_request.is_empty():
+		return _fail("tianzhui_choice_request_missing")
+	# 请求级合法动作；复用控制器自身的枚举，保证与正式流程完全一致。
+	var choice_actions: Array[Dictionary] = _controller._build_card_choice_actions(_tianzhui_choice_request)
+	if choice_actions.is_empty():
+		return _fail("tianzhui_choice_actions_empty")
+	# 选择层结论；必须确认且优先使用零张牌（竖置自身）而不是取消。
+	var choice_result: Dictionary = policy.choose_card_choice(_controller.state.to_dict(0, true), _tianzhui_choice_request, choice_actions)
+	# 选择结论负载；取消动作的 confirmed 为 false，正是死循环的判定依据。
+	var choice_payload: Dictionary = choice_result.get("payload", {}) as Dictionary
+	if not bool(choice_payload.get("confirmed", false)):
+		return _fail("tianzhui_choice_cancelled=%s" % [choice_result])
+	if not (choice_payload.get("selected_card_uids", []) as Array).is_empty():
+		return _fail("tianzhui_choice_paid_card=%s" % [choice_result])
+	if not (choice_payload.get("selected_target_ids", []) as Array).has(1):
+		return _fail("tianzhui_choice_target=%s" % [choice_result])
+	# 费用牌必须仍在手牌中；零张牌费用不得意外弃置锦囊牌。
+	if not _controller.state.get_player(0).hand.has(cost_card):
+		return _fail("tianzhui_choice_cost_card_lost")
+	return true
+
+
+## 判断动作集合中是否存在【天坠】的主动技能动作；用于避免候选缺失造成的假通过。
+func _has_tianzhui_action(legal_actions: Array[Dictionary]) -> bool:
+	for action: Dictionary in legal_actions:
+		if _is_tianzhui_action(action):
+			return true
+	return false
+
+
+## 判断单个动作是否为【天坠】的主动技能动作；只读取稳定动作类型与技能 ID。
+func _is_tianzhui_action(action: Dictionary) -> bool:
+	if str(action.get("action_type", "")) != "use_skill":
+		return false
+	return str(action.get("skill_id", (_get_action_payload_skill_id(action)))) == "tianzhui"
+
+
+## 读取动作负载中的技能 ID；部分枚举路径只写入 payload。
+func _get_action_payload_skill_id(action: Dictionary) -> String:
+	return str((action.get("payload", {}) as Dictionary).get("skill_id", ""))
+
+
 ## 为指定玩家安装一个正式技能目录中的技能实例；返回null表示技能目录缺失。
 func _install_skill_on_player(player_id: int, skill_id: String) -> SkillDefinition:
 	# 技能运行时实例；测试不复制技能源码，保证与正式对局读取同一份实现。
@@ -1011,6 +1093,10 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 	elif _scenario == "wooden_ox_unusable_storage" and choice_kind == "wooden_ox_transfer":
 		# 木牛第二段转移询问；本场景只验证第一段存粮，第二段统一取消。
 		confirmed = false
+	elif _scenario == "tianzhui_cost_consistency" and choice_kind == "tianzhui_cost_target":
+		# 【天坠】费用目标询问；本场景只读取权威请求，选择结论由测试直接调用策略得出。
+		_tianzhui_choice_request = choice_data.duplicate(true)
+		return
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, choice_kind])
 		return
