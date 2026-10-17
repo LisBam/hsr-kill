@@ -51,7 +51,7 @@ const AMOUNT_INPUT_WIDTH: float = 72.0
 ## 行内标签固定宽度；与效果按钮同宽，使目标行与效果行左边界对齐。
 const ROW_LABEL_WIDTH: float = 168.0
 
-## 摸牌堆候选网格列数；按按钮固定宽度换算，约等于窗口内容宽度的均分结果。
+## 摸牌堆候选网格列数；按按钮固定宽度换算，约等于窗口内容宽度的均分结果；类别与牌名筛选只减少显示的候选数量，不改变该列数。
 const DRAW_PILE_GRID_COLUMNS: int = 3
 
 ## 换将候选网格列数；武将名较短，可比牌面多一列。
@@ -77,6 +77,16 @@ const SUIT_SYMBOLS: Dictionary = {
 	"diamond":"♦",
 	"none":"◇",
 }
+
+## 摸牌堆类别标签声明：id 为面板内部稳定标识，label 为标签文字，types 为匹配的卡牌静态 type 集合。
+## types 为空集合表示不按类别过滤（「全部」），未知类别 id 回退到该行为，避免筛选条件静默失效。
+## 新增类别只需追加一项声明：标签页数量、筛选判定与提示行都读取本表，不存在第二份分类口径。
+const CARD_CATEGORY_DECLARATIONS: Array[Dictionary] = [
+	{"id":"all", "label":"全部", "types":[]},
+	{"id":"basic", "label":"基本牌", "types":["basic"]},
+	{"id":"trick", "label":"锦囊牌", "types":["trick"]},
+	{"id":"equipment", "label":"装备牌", "types":["equipment"]},
+]
 
 ## 效果声明表：kind 为与 `DeveloperEffectService` 共享的稳定协议字符串，
 ## label 为按钮文字，uses_amount 决定是否渲染滑条与数值输入框。
@@ -162,6 +172,21 @@ var _draw_pile_grid: GridContainer
 
 ## 摸牌堆视图提示标签；显示已载入牌数与当前勾选数。
 var _draw_pile_hint: Label
+
+## 摸牌堆类别标签页；标签顺序与 CARD_CATEGORY_DECLARATIONS 一致，切换时只重建网格。
+var _draw_pile_category_tabs: TabBar
+
+## 摸牌堆牌名搜索框；空文本表示不按牌名过滤，输入时只重建网格。
+var _draw_pile_search: LineEdit
+
+## 当前选中的摸牌堆类别 id；默认取声明表首项（全部），未知值回退为不过滤类别。
+var _draw_pile_category_id: String = "all"
+
+## 当前生效的牌名搜索关键字（已去除首尾空格）；空字符串表示不按牌名过滤。
+var _draw_pile_filter_text: String = ""
+
+## 上一次重建时实际通过筛选的候选数量；用于提示行区分“当前显示”与“牌堆共”。
+var _draw_pile_visible_count: int = 0
 
 ## 换将候选网格。
 var _character_grid: GridContainer
@@ -278,6 +303,8 @@ func refresh_ui_style() -> void:
 		_apply_slider_style(row.get("slider") as HSlider)
 		_apply_line_edit_style(row.get("input") as LineEdit)
 	_apply_line_edit_style(_character_filter)
+	_apply_line_edit_style(_draw_pile_search)
+	_apply_tab_bar_style(_draw_pile_category_tabs)
 	_apply_action_button_styles()
 	# 第二层候选按钮是运行时创建的，必须一并重绘，否则主题切换后仍是旧配色。
 	for grid: GridContainer in [_draw_pile_grid, _character_grid]:
@@ -423,13 +450,29 @@ func _build_effect_row(declaration: Dictionary) -> HBoxContainer:
 	return row
 
 
-## 构建摸牌堆第二层视图：提示行、候选网格与「确定获得 / 返回」动作行。
+## 构建摸牌堆第二层视图：类别标签页、牌名搜索、提示行、候选网格与「确定获得 / 返回」动作行。
 func _build_draw_pile_view() -> VBoxContainer:
 	# 摸牌堆视图容器；与主视图共用同一滚动区，通过显隐切换。
 	var view: VBoxContainer = VBoxContainer.new()
 	view.name = "DrawPileView"
 	view.add_theme_constant_override("separation", 6)
 	view.add_child(_make_label("从摸牌堆获得指定牌（可多选，按确定后获得）", "DrawPileTitle"))
+	# 类别标签页；标签项完全由声明表驱动，选中项只影响显示范围而不清理已勾选状态。
+	_draw_pile_category_tabs = TabBar.new()
+	_draw_pile_category_tabs.name = "DrawPileCategoryTabs"
+	# 允许标签超出内容宽度时横向滚动，而不是把窗口撑宽；紧凑客户区下标签仍完整可用。
+	_draw_pile_category_tabs.clip_tabs = false
+	for category_declaration: Dictionary in CARD_CATEGORY_DECLARATIONS:
+		_draw_pile_category_tabs.add_tab(str(category_declaration.get("label", "")))
+	_draw_pile_category_tabs.current_tab = _resolve_category_tab_index(_draw_pile_category_id)
+	_draw_pile_category_tabs.tab_changed.connect(_on_draw_pile_category_changed)
+	view.add_child(_draw_pile_category_tabs)
+	# 牌名搜索框；与换将筛选共用同一套主题处理，输入即重建网格。
+	_draw_pile_search = LineEdit.new()
+	_draw_pile_search.name = "DrawPileSearch"
+	_draw_pile_search.placeholder_text = "输入牌名搜索"
+	_draw_pile_search.text_changed.connect(_on_draw_pile_search_changed)
+	view.add_child(_draw_pile_search)
 	_draw_pile_hint = _make_label("尚未载入牌堆。", "DrawPileHint")
 	view.add_child(_draw_pile_hint)
 	# 候选滚动区；固定高度使三个视图切换时窗口总高度稳定。
@@ -556,6 +599,8 @@ func _refresh_view_content() -> void:
 
 
 ## 重建摸牌堆候选网格；每张牌是一个可切换按钮，勾选状态以实体牌 UID 记录。
+## 类别与牌名筛选只决定哪些候选生成按钮：被筛掉的已勾选牌仍保留在 _draw_pile_selected_uids 中，
+## 切回可见类别后按钮会按记录恢复为选中态，因此筛选变化不会丢失玩家的多选结果。
 func _rebuild_draw_pile_grid() -> void:
 	if _draw_pile_grid == null:
 		return
@@ -563,6 +608,8 @@ func _rebuild_draw_pile_grid() -> void:
 	for child: Node in _draw_pile_grid.get_children():
 		_draw_pile_grid.remove_child(child)
 		child.queue_free()
+	# 本次实际显示的候选数量；每次重建都从零累计，避免沿用上一次筛选的数字。
+	_draw_pile_visible_count = 0
 	for candidate: Dictionary in _draw_pile_candidates:
 		# 实体牌 UID；负数表示快照异常，直接跳过而不是创建一个无法提交的按钮。
 		var card_uid: int = int(candidate.get("uid", -1))
@@ -570,15 +617,62 @@ func _rebuild_draw_pile_grid() -> void:
 			continue
 		# 牌面静态定义；只读取 GameDatabase 与 GameSettings，不触碰对局状态。
 		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+		# 类别与牌名筛选；未通过时该候选本次不显示，但它的勾选状态不受影响。
+		if not _matches_draw_pile_filter(card_data):
+			continue
 		# 实体牌按钮；切换态直接表达勾选，不使用 CheckBox 以避开自定义指示器的额外约束。
 		var card_button: Button = Button.new()
 		card_button.name = "DrawPileCard_%d" % card_uid
 		card_button.toggle_mode = true
 		card_button.text = _format_card_candidate_text(card_data)
 		card_button.custom_minimum_size = Vector2(CARD_BUTTON_WIDTH, 0.0)
+		# 先按已记录 UID 恢复选中态，再连接信号：顺序颠倒会让恢复动作被当成玩家点击而重复写入勾选集合。
+		card_button.button_pressed = _draw_pile_selected_uids.has(card_uid)
 		card_button.toggled.connect(_on_draw_pile_card_toggled.bind(card_uid))
 		_draw_pile_grid.add_child(card_button)
+		_draw_pile_visible_count += 1
 	_refresh_draw_pile_hint()
+
+
+## 判定一张牌堆候选是否通过当前的类别与牌名筛选。
+## 只读取静态定义（GameDatabase / GameSettings），不读取任何对局状态，符合 UI 层单向依赖约定。
+func _matches_draw_pile_filter(card_data: Dictionary) -> bool:
+	# 卡牌静态定义；缺失定义时各字段回退为空，候选只会出现在「全部」且无搜索词的情况下。
+	var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
+	# 当前类别声明的匹配类型集合；空集合表示「全部」，不按类别过滤。
+	var category_types: Array = _get_active_category_types()
+	if not category_types.is_empty() and not category_types.has(str(definition.get("type", ""))):
+		return false
+	if _draw_pile_filter_text.is_empty():
+		return true
+	# 牌名关键字匹配；同时比对原始名与自定义名，使两种名称模式下都能按记忆中的牌名搜到同一张牌。
+	for name_key: String in ["original_name", "custom_name"]:
+		if str(definition.get(name_key, "")).to_lower().contains(_draw_pile_filter_text.to_lower()):
+			return true
+	return false
+
+
+## 取当前类别标签对应的卡牌 type 集合；未知类别 id 回退为空集合（等价「全部」），避免筛选静默失效。
+func _get_active_category_types() -> Array:
+	for category_declaration: Dictionary in CARD_CATEGORY_DECLARATIONS:
+		if str(category_declaration.get("id", "")) == _draw_pile_category_id:
+			return category_declaration.get("types", []) as Array
+	return []
+
+
+## 把稳定类别 id 映射为标签页下标；未登记 id 回退到首项「全部」。
+func _resolve_category_tab_index(category_id: String) -> int:
+	for category_index: int in range(CARD_CATEGORY_DECLARATIONS.size()):
+		if str(CARD_CATEGORY_DECLARATIONS[category_index].get("id", "")) == category_id:
+			return category_index
+	return 0
+
+
+## 把标签页下标映射回稳定类别 id；越界时回退「全部」，避免筛选条件静默失效。
+func _resolve_category_id(tab_index: int) -> String:
+	if tab_index < 0 or tab_index >= CARD_CATEGORY_DECLARATIONS.size():
+		return "all"
+	return str(CARD_CATEGORY_DECLARATIONS[tab_index].get("id", "all"))
 
 
 ## 重建换将候选网格；按筛选文本过滤，未选中任何武将时确认按钮只提示。
@@ -608,11 +702,11 @@ func _rebuild_character_grid() -> void:
 		_character_grid.add_child(character_button)
 
 
-## 刷新摸牌堆视图提示行；同时反映已载入牌数与当前勾选数。
+## 刷新摸牌堆视图提示行；同时反映当前筛选下的显示数量、牌堆总数与当前勾选数。
 func _refresh_draw_pile_hint() -> void:
 	if _draw_pile_hint == null:
 		return
-	_draw_pile_hint.text = "牌堆共 %d 张，已选择 %d 张。" % [_draw_pile_candidates.size(), _draw_pile_selected_uids.size()]
+	_draw_pile_hint.text = "当前显示 %d / 共 %d 张，已选择 %d 张。" % [_draw_pile_visible_count, _draw_pile_candidates.size(), _draw_pile_selected_uids.size()]
 
 
 ## 组装一张实体牌的按钮文字；走全局名称模式解析，避免稳定 ID 泄漏到界面。
@@ -735,6 +829,24 @@ func _make_flat_inner_panel(background_color: Color, border_color: Color, border
 	return style
 
 
+## 为摸牌堆类别标签页应用主题样式；标签底色与描边全部取自 BattleUIStyle，不新增主题专属颜色常量。
+func _apply_tab_bar_style(tab_bar: TabBar) -> void:
+	if tab_bar == null:
+		return
+	# 未选中标签；与第二层视图其它控件保持同一底色与细描边。
+	tab_bar.add_theme_stylebox_override("tab_unselected", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 1, 5))
+	# 选中标签；强调色描边表达当前筛选类别，填充沿用操作按钮色以区别于未选中项。
+	tab_bar.add_theme_stylebox_override("tab_selected", _make_flat_inner_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 2, 5))
+	# 悬停标签；只把描边换成强调色，避免引入第三套配色。
+	tab_bar.add_theme_stylebox_override("tab_hovered", _make_flat_inner_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 5))
+	# 焦点样式置空：标签页由鼠标与左右方向键操作，额外的焦点框会与选中态描边重叠。
+	tab_bar.add_theme_stylebox_override("tab_focus", StyleBoxEmpty.new())
+	tab_bar.add_theme_font_override("font", ThemeDB.fallback_font)
+	tab_bar.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("text_primary"))
+	tab_bar.add_theme_color_override("font_unselected_color", BattleUIStyle.get_color("text_muted"))
+	tab_bar.add_theme_color_override("font_hovered_color", BattleUIStyle.get_color("text_primary"))
+
+
 ## 处理 Esc 与安卓返回；第二层视图优先返回上一层，主视图才请求关闭窗口。
 func _unhandled_input(event: InputEvent) -> void:
 	# 窗口隐藏时不参与输入，避免在不可见状态下吞掉牌桌的取消与返回操作。
@@ -809,6 +921,18 @@ func _on_draw_pile_confirm() -> void:
 	_draw_pile_selected_uids.clear()
 	_rebuild_draw_pile_grid()
 	_return_to_main_view()
+
+
+## 摸牌堆类别标签切换；只改变显示范围，不清理已勾选的实体牌 UID。
+func _on_draw_pile_category_changed(tab_index: int) -> void:
+	_draw_pile_category_id = _resolve_category_id(tab_index)
+	_rebuild_draw_pile_grid()
+
+
+## 摸牌堆牌名搜索文本变化；首尾空格不影响匹配，空文本等价于不按牌名过滤。
+func _on_draw_pile_search_changed(new_text: String) -> void:
+	_draw_pile_filter_text = new_text.strip_edges()
+	_rebuild_draw_pile_grid()
 
 
 ## 换将候选选中变化；单选语义，取消勾选等价于清空选择。

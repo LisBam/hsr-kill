@@ -5868,10 +5868,16 @@ func _consume_skill_converted_response(player_id: int, material_card: CardInstan
 		# 虚拟响应父事件；材料先进入处理区再进入弃牌堆，与实体响应牌保持相同公开移动语义。
 		var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "skill_id":skill.get_id(), "material_card_uids":[material_card.uid], "response_action":response_action}, {"responded":true, "virtual":true, "card_id":virtual_definition_id, "response_action":response_action})
 		_ensure_card_movement()
+		# 单张材料的展示牌面；技能转化响应同样按“材料牌面 + 逻辑牌标签”呈现，必须在材料移动前固化真实牌面。
+		var response_materials: Array[CardInstance] = [material_card]
+		var response_presentation_faces: Array[Dictionary] = ConvertedCardPresentation.build_faces(response_materials, virtual_definition_id)
 		if _move_card_with_timings(material_card, "processing", -1, response_action, respond_event_id) == null:
 			return null
 		if was_equipment_card:
 			_on_equipment_lost(player, material_card, true)
+		# 材料展示；与实体响应牌共用同一表现出口，材料自身的 processing -> discard_pile 增量不产生第二张牌面。
+		for response_presentation_face: Dictionary in response_presentation_faces:
+			_emit_card_presentation(response_presentation_face, player_id, [], "useCard", respond_event_id, false)
 		# 处理区收尾；此时实体来源已经是处理区，复用统一弃置入口不会产生弃置批次，收益是与主动使用牌完全一致的 cardsDiscard 收尾事件。
 		_move_to_discard(material_card, respond_event_id)
 		timing_data["respond_event_id"] = respond_event_id
@@ -6430,13 +6436,20 @@ func consume_virtual_equipment_response(player_id: int, equipment_uid: int, mate
 		material_cards.append(material_card)
 	# 材料聚合结果；同花色视为该花色，同色不同花色保留颜色但无花色，异色无色。
 	var material_aggregate: Dictionary = VirtualCard.resolve_material_aggregate(material_cards)
+	# 逐张材料展示牌面；装备转化响应同样按“材料牌面 + 逻辑牌标签”呈现，必须在材料移动前固化真实牌面。
+	var presentation_faces: Array[Dictionary] = ConvertedCardPresentation.build_faces(material_cards, virtual_card_definition_id)
 	_ensure_card_movement()
 	# 响应事件；全部材料共享同一稳定父事件，便于回放还原顺序。
 	var respond_event_id: int = _record_runtime_event("respond", "response", {"player_id":player_id, "response_pattern":response_pattern, "equipment_uid":equipment_uid, "material_card_uids":material_card_uids.duplicate(), "response_action":response_action}, {"responded":true, "virtual":true, "response_action":response_action})
-	for material_card_uid: int in material_card_uids:
+	for material_index: int in range(material_card_uids.size()):
 		# 当前材料；装备源码已验证来自普通手牌，移动前仍需重新查询防止旧选择。
-		var material_card: CardInstance = player.find_hand_card(material_card_uid)
+		var material_card: CardInstance = player.find_hand_card(material_card_uids[material_index])
+		if material_card == null:
+			continue
 		_move_card_with_timings(material_card, "processing", -1, response_action, respond_event_id)
+		# 材料展示；与实体响应牌共用同一表现出口，材料自身的 processing -> discard_pile 增量不产生第二张牌面。
+		if material_index < presentation_faces.size():
+			_emit_card_presentation(presentation_faces[material_index], player_id, [], "useCard", respond_event_id, false)
 		# 处理区收尾；全部材料共享同一父事件，复用统一弃置入口不会把它们计入弃置批次。
 		_move_to_discard(material_card, respond_event_id)
 	player.response_history.append({"event_id":respond_event_id, "response_pattern":response_pattern, "card_uid":-1, "material_card_uids":material_card_uids.duplicate(), "equipment_uid":equipment_uid, "response_action":response_action})
@@ -13727,17 +13740,24 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 		if virtual_suit == "none" and str(material_aggregate.get("color", "none")) != "none":
 			virtual_color_override = str(material_aggregate.get("color", "none"))
 	# 逻辑代理实体；只在本次CardUseEvent的处理区生命周期内存在。
+	# 它只承担规则语义（聚合花色、聚合颜色、点数与目标合法性），展示身份全部交给逐张材料载体，
+	# 因此不再在代理上写入 last_hand_view_as_* 展示字段——那会让“逻辑牌本身”变成额外的第二张牌面。
 	var virtual_card: CardInstance = CardInstance.new(virtual_card_definition_id, virtual_suit, virtual_rank)
 	virtual_card.color_override = virtual_color_override
-	if material_card_uids.size() == 1:
-		# 单材料转化的原牌面定义；表现层继续绘制材料实体，并以横条标明本次实际使用的逻辑牌名。
-		var presentation_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uids[0])
-		if presentation_material != null:
-			# 已处于手牌视为状态的材料必须回溯其实体原名，否则代理会把逻辑牌误画成自己的原牌面。
-			virtual_card.last_hand_view_as_original_definition_id = presentation_material.hand_view_as_original_definition_id if presentation_material.has_hand_view_as() else presentation_material.definition_id
-			virtual_card.last_hand_view_as_definition_id = virtual_card_definition_id
 	virtual_card.zone = "void"
 	virtual_card.owner_id = -1
+	# 本次被消耗的材料实体；必须在任何材料离开原区域之前收集：
+	# 材料一旦离开手牌区，其花色点数与“手牌视为”状态会被移牌服务复位，届时读不到真实牌面。
+	var presentation_materials: Array[CardInstance] = []
+	for material_card_uid: int in material_card_uids:
+		# 当前材料实体；缺失表示材料已不可用，直接拒绝本次使用，而不是按猜测牌面生成表现。
+		var presentation_material: CardInstance = _find_owned_virtual_material(actor_id, material_card_uid)
+		if presentation_material == null:
+			return false
+		presentation_materials.append(presentation_material)
+	# 逐张材料展示牌面；有实体材料的转化牌一律按“材料牌面 + 逻辑牌标签”呈现，不再额外绘制逻辑牌本身。
+	# 单材料与多材料共用同一构造路径，因此单材料转化的视觉结果与改动前逐字段一致。
+	var presentation_faces: Array[Dictionary] = ConvertedCardPresentation.build_faces(presentation_materials, virtual_card_definition_id)
 	# 虚拟牌规范目标；技能附加目标数后的多目标【杀】同样必须按使用者起算的顺时针顺序结算，不能保留点击顺序。
 	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, virtual_card, target_ids)
 	# 最终规则覆写；复制技能参数后用真实代理牌颜色覆盖同名字段，禁止调用方伪造材料颜色绕过来牌限制。
@@ -13751,7 +13771,7 @@ func execute_virtual_card_use(actor_id: int, virtual_card_definition_id: String,
 		return false
 	if not log_message.is_empty():
 		add_log(log_message)
-	_execute_card_use(actor_id, virtual_card, normalized_target_ids, material_card_uids, true, target_ids, virtual_storage)
+	_execute_card_use(actor_id, virtual_card, normalized_target_ids, material_card_uids, true, target_ids, virtual_storage, presentation_faces)
 	return true
 
 
@@ -13800,7 +13820,8 @@ func _find_owned_virtual_material(player_id: int, card_uid: int) -> CardInstance
 
 
 ## 执行已通过合法性校验的出牌动作。
-func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false, requested_target_ids: Array[int] = [], virtual_storage: Dictionary = {}) -> void:
+## presentation_faces 为“有实体材料的转化牌”逐张材料的展示牌面数据；空数组表示绘制逻辑牌本身（真实牌与无材料视为使用）。
+func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false, requested_target_ids: Array[int] = [], virtual_storage: Dictionary = {}, presentation_faces: Array[Dictionary] = []) -> void:
 	if state == null or state.game_over or card == null:
 		return
 	if card_use_event_service == null:
@@ -13834,6 +13855,7 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_storage":virtual_card.storage.duplicate(true),
 		"virtual_proxy":virtual_proxy,
+		"presentation_faces":presentation_faces.duplicate(true),
 	}
 	# CardUseEvent 的固定内容步骤；每一步只安排下一层子事件或推进一个明确规则边界。
 	var content_steps: Array[Callable] = [
@@ -13875,6 +13897,8 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_storage":virtual_card.storage.duplicate(true),
 		"virtual_proxy":virtual_proxy,
+		# 逐张材料展示牌面；非空时声明步骤按材料逐张发表现，空数组表示仍绘制逻辑牌本身。
+		"presentation_faces":presentation_faces.duplicate(true),
 		"destination":"pending",
 		"content_complete":false,
 		"runtime_managed":true,
@@ -13946,7 +13970,16 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	var requested_presentation_target_ids: Array[int] = _int_array(card_use_context.get("requested_target_ids", event.target_ids) as Array)
 	# 分阶段指示线；普通牌返回空数组并继续使用实际目标单段表现。
 	var presentation_indicator_stages: Array[Dictionary] = source_definition.get_presentation_indicator_stages(actor_id, requested_presentation_target_ids, event.target_ids) if source_definition != null else []
-	_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer, presentation_indicator_stages)
+	# 逐张材料展示牌面；有实体材料的转化牌按“材料牌面 + 逻辑牌标签”逐张呈现，不再额外绘制逻辑牌本身。
+	var presentation_faces: Array = card_use_context.get("presentation_faces", []) as Array
+	if presentation_faces.is_empty():
+		_request_card_presentation(card, actor_id, event.target_ids, "useCard", event.event_id, owns_discard_transfer, presentation_indicator_stages)
+	else:
+		for presentation_face_variant: Variant in presentation_faces:
+			# 单张材料的展示牌面；弃牌所有权一律为 false：
+			# 材料自身的 processing -> discard_pile 增量已被表现层判定为处理区收尾，
+			# 且展示载体 UID 与材料 UID 不同，无法也不应登记弃牌认领。
+			_emit_card_presentation(presentation_face_variant as Dictionary, actor_id, event.target_ids, "useCard", event.event_id, false, presentation_indicator_stages)
 	# 音频表现：声明使用后请求一次卡牌语音；与“打出”共用同一份音效，虚拟牌按实际结算定义取音。
 	request_card_voice(actor_id, card.definition_id, VOICE_PLAY_MODE_USE)
 	# 兼容扩展事件；现有独立技能仍可监听 card_used，新的源码级技能应优先监听真实 useCard 时机子事件。
@@ -17353,13 +17386,22 @@ func _current_rule_parent_event_id() -> int:
 func _request_card_presentation(card: CardInstance, actor_id: int, target_ids: Array[int], event_name: String, event_id: int, owns_discard_transfer: bool, indicator_stages: Array[Dictionary] = []) -> void:
 	if card == null:
 		return
+	_emit_card_presentation(card.to_dict(), actor_id, target_ids, event_name, event_id, owns_discard_transfer, indicator_stages)
+
+
+## 按已经序列化的牌面数据发送表现事件；有实体材料的转化牌用它逐张呈现材料牌面与逻辑牌标签。
+## 与 _request_card_presentation 共用同一序号与事件结构，因此客户端去重、回放顺序与网络重发语义完全一致。
+## 牌面数据必须与 CardInstance.to_dict() 同形（由 ConvertedCardPresentation 保证），否则界面读不到必要字段。
+func _emit_card_presentation(card_data: Dictionary, actor_id: int, target_ids: Array[int], event_name: String, event_id: int, owns_discard_transfer: bool, indicator_stages: Array[Dictionary] = []) -> void:
+	if card_data.is_empty():
+		return
 	_card_presentation_sequence += 1
 	# 表现事件；递增编号、规则父事件和弃牌所有权共同决定客户端去重与回放顺序。
 	var presentation: CardPresentationEvent = CardPresentationEvent.new(
 		_card_presentation_sequence,
 		event_id,
 		event_name,
-		card.to_dict(),
+		card_data,
 		actor_id,
 		target_ids,
 		owns_discard_transfer,
