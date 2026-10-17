@@ -807,10 +807,15 @@ func _test_zhangba_play_uses_two_materials() -> bool:
 		return _fail("zhangba_play_submit")
 	if not await _wait_until_no_card_choice():
 		return _fail("zhangba_play_timeout")
-	# 虚拟杀结果；目标受到1点伤害，两张材料进入弃牌堆，丈八本身和处理区代理均保持正确终点；回放数据必须同时保留无花色与聚合出的红色。
-	var virtual_card_data: Dictionary = _last_presentation.get("card_data", {}) as Dictionary
-	if _controller.state.get_player(1).hp != 3 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(0).equipment.get("weapon") != zhangba or not _controller.state.processing_area.is_empty() or str(virtual_card_data.get("definition_id", "")) != "sha" or str(virtual_card_data.get("suit", "")) != "none" or int(virtual_card_data.get("rank", -1)) != 0 or str(virtual_card_data.get("color", "")) != "red" or str(virtual_card_data.get("color_override", "")) != "red":
-		return _fail("zhangba_play_result=%d/%s/%s" % [_controller.state.get_player(1).hp, _controller.state.processing_area, virtual_card_data])
+	# 虚拟杀表现；有实体材料的转化牌一律逐张材料呈现——两张材料各自成为一张带【杀】标签的牌面，
+	# 逻辑代理牌本身不再产生第三张牌面，因此这里按标签筛出的就应当是且仅是两张材料牌面。
+	var material_faces: Array[Dictionary] = _collect_converted_faces("sha")
+	if not _converted_faces_match(material_faces, [["shan", "heart", 2], ["tao", "diamond", 3]]):
+		return _fail("zhangba_play_presentation=%s" % [material_faces])
+	# 虚拟杀结果；目标受到1点伤害，两张材料进入弃牌堆，丈八本身和处理区代理均保持正确终点。
+	# 聚合花色与颜色（红色无花色）由 tests/virtual_card_color_test.gd 直接断言处理区代理，避免在此重复第二套口径。
+	if _controller.state.get_player(1).hp != 3 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(0).equipment.get("weapon") != zhangba or not _controller.state.processing_area.is_empty():
+		return _fail("zhangba_play_result=%d/%s" % [_controller.state.get_player(1).hp, _controller.state.processing_area])
 	return true
 
 
@@ -834,8 +839,45 @@ func _test_zhangba_response_uses_two_materials() -> bool:
 	_controller._execute_card_use(0, nanman, [1])
 	if not await _wait_until_card_finalized(nanman.uid):
 		return _fail("zhangba_response_timeout")
+	# 响应表现；丈八打出同样按“材料牌面 + 逻辑牌标签”逐张呈现，两张材料必须各自带【杀】标签。
+	# 同一场景里南蛮入侵自身也会产生一次真实牌面表现，因此这里只按逻辑牌标签筛出转化牌面。
+	var response_faces: Array[Dictionary] = _collect_converted_faces("sha")
+	if not _converted_faces_match(response_faces, [["shan", "club", 4], ["tao", "heart", 5]]):
+		return _fail("zhangba_response_presentation=%s" % [response_faces])
 	if not _zhangba_response_has_equipment or _controller.state.get_player(1).hp != 4 or not _controller.state.discard_pile.has(first_material) or not _controller.state.discard_pile.has(second_material) or _controller.state.get_player(1).equipment.get("weapon") != zhangba:
 		return _fail("zhangba_response_result=%s/%d" % [_zhangba_response_has_equipment, _controller.state.get_player(1).hp])
+	return true
+
+
+## 收集本次场景中「有实体材料的转化牌」牌面表现；按逻辑牌标签筛选，忽略真实牌的自身牌面表现。
+## 判定口径与生产代码一致：携带视为标签（view_as_definition_id）的牌面才属于由实体材料转化出的虚拟牌。
+func _collect_converted_faces(logical_definition_id: String) -> Array[Dictionary]:
+	# 命中结果；保持表现发生顺序，便于调用方逐张比对材料。
+	var faces: Array[Dictionary] = []
+	for presentation: Dictionary in _presentation_history:
+		# 当前表现载荷；缺失视为标签的牌面属于真实牌，不属于转化牌。
+		var card_data: Dictionary = presentation.get("card_data", {}) as Dictionary
+		if str(card_data.get("view_as_definition_id", "")) != logical_definition_id:
+			continue
+		faces.append(card_data)
+	return faces
+
+
+## 比对转化牌面与期望材料列表；expected_materials 每项为 [材料定义ID, 花色, 点数]。
+## 断言口径：牌面定义必须是本次逻辑牌、展示原牌面必须是材料实体本身、角标必须是材料自身花色点数。
+func _converted_faces_match(faces: Array[Dictionary], expected_materials: Array) -> bool:
+	if faces.size() != expected_materials.size():
+		return false
+	for face_index: int in range(faces.size()):
+		# 当前牌面与对应期望材料；顺序由材料顺序决定，表现层也按该顺序铺开。
+		var face: Dictionary = faces[face_index]
+		var expected: Array = expected_materials[face_index]
+		if str(face.get("definition_id", "")) != str(face.get("view_as_definition_id", "")):
+			return false
+		if str(face.get("presentation_original_definition_id", "")) != str(expected[0]):
+			return false
+		if str(face.get("suit", "")) != str(expected[1]) or int(face.get("rank", -1)) != int(expected[2]):
+			return false
 	return true
 
 

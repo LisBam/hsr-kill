@@ -63,6 +63,8 @@ func _run() -> void:
 		return
 	if not _test_panel_sub_view_navigation_and_signals():
 		return
+	if not _test_panel_draw_pile_filter():
+		return
 	print("DEVELOPER_CONSOLE_PASS results=%d" % _results.size())
 	_controller.queue_free()
 	_panel.queue_free()
@@ -588,6 +590,115 @@ func _test_panel_sub_view_navigation_and_signals() -> bool:
 		return _fail("panel_effect_without_target=%s" % [effect_requests])
 	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
 	return true
+
+
+## 验证摸牌堆视图的类别标签页与牌名搜索：标签页驱动类别筛选，搜索同时匹配原始名与自定义名，
+## 二者取交集，且筛选变化不丢失已勾选状态（勾选以实体牌 UID 记录，与显示范围解耦）。
+func _test_panel_draw_pile_filter() -> bool:
+	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
+	_panel.set_draw_pile_candidates(_make_draw_pile_candidates())
+	# 标签页结构：数量与顺序完全由声明表驱动，默认选中首项「全部」，此时四张候选全部显示。
+	if _panel._draw_pile_category_tabs == null or _panel._draw_pile_category_tabs.tab_count != DeveloperConsolePanel.CARD_CATEGORY_DECLARATIONS.size():
+		return _fail("panel_category_tab_count")
+	if _panel._draw_pile_category_tabs.current_tab != 0 or _panel._draw_pile_category_id != "all" or _panel._draw_pile_visible_count != 4:
+		return _fail("panel_category_default=%s/%d" % [_panel._draw_pile_category_id, _panel._draw_pile_visible_count])
+	# 类别筛选：基本牌与锦囊牌各自只剩一张，装备牌剩两张。
+	if not _select_category_tab(1) or _visible_draw_pile_uids() != [101]:
+		return _fail("panel_category_basic=%s" % [_visible_draw_pile_uids()])
+	if not _select_category_tab(2) or _visible_draw_pile_uids() != [102]:
+		return _fail("panel_category_trick=%s" % [_visible_draw_pile_uids()])
+	if not _select_category_tab(3) or _visible_draw_pile_uids() != [103, 104]:
+		return _fail("panel_category_equipment=%s" % [_visible_draw_pile_uids()])
+	# 牌名搜索：两种名称模式下都必须能按记忆中的牌名搜到同一张牌（丈八蛇矛 / 银河球棒）。
+	# 先确认生产装配把 text_changed 接进了筛选回调；随后由用例驱动回调，
+	# 避免断言依赖 LineEdit 对程序化赋值是否发信号的实现细节。
+	if _panel._draw_pile_search == null or not _panel._draw_pile_search.text_changed.is_connected(_panel._on_draw_pile_search_changed):
+		return _fail("panel_search_signal_not_connected")
+	_select_category_tab(0)
+	_apply_draw_pile_search("丈八")
+	if _visible_draw_pile_uids() != [103]:
+		return _fail("panel_search_original_name=%s" % [_visible_draw_pile_uids()])
+	_apply_draw_pile_search("银河")
+	if _visible_draw_pile_uids() != [103]:
+		return _fail("panel_search_custom_name=%s" % [_visible_draw_pile_uids()])
+	# 交集筛选：装备牌 + “丈八”恰好一张；基本牌 + “丈八”为空集，说明两个条件同时生效。
+	if not _select_category_tab(3) or _visible_draw_pile_uids() != [103]:
+		return _fail("panel_filter_intersection=%s" % [_visible_draw_pile_uids()])
+	if not _select_category_tab(1) or not _visible_draw_pile_uids().is_empty():
+		return _fail("panel_filter_empty=%s" % [_visible_draw_pile_uids()])
+	# 清空搜索并回到「全部」：完整候选恢复。
+	_apply_draw_pile_search("")
+	_select_category_tab(0)
+	if _visible_draw_pile_uids() != [101, 102, 103, 104]:
+		return _fail("panel_filter_cleared=%s" % [_visible_draw_pile_uids()])
+	# 勾选保留：先勾选一张装备牌，再切到看不见它的类别，勾选记录与提示行都必须保持。
+	var equipment_button: Button = _find_draw_pile_button(103)
+	if equipment_button == null:
+		return _fail("panel_draw_pile_button_missing")
+	equipment_button.button_pressed = true
+	if not _panel._draw_pile_selected_uids.has(103) or not _panel._draw_pile_hint.text.contains("已选择 1 张"):
+		return _fail("panel_draw_pile_toggle=%s" % _panel._draw_pile_hint.text)
+	if not _select_category_tab(1) or not _panel._draw_pile_selected_uids.has(103):
+		return _fail("panel_selection_dropped_by_category")
+	if not _panel._draw_pile_hint.text.contains("当前显示 1 / 共 4 张，已选择 1 张"):
+		return _fail("panel_hint_filtered=%s" % _panel._draw_pile_hint.text)
+	# 切回可见类别：按钮必须按记录恢复为选中态，而不是显示成未勾选。
+	_select_category_tab(0)
+	var restored_button: Button = _find_draw_pile_button(103)
+	if restored_button == null or not restored_button.button_pressed:
+		return _fail("panel_selection_not_restored")
+	# 复原候选与勾选，避免影响后续用例。
+	_panel.set_draw_pile_candidates([])
+	return true
+
+
+## 切换到指定标签页下标并返回该下标是否合法；越界时返回 false 供调用方直接判失败。
+func _select_category_tab(tab_index: int) -> bool:
+	if _panel._draw_pile_category_tabs == null or tab_index < 0 or tab_index >= _panel._draw_pile_category_tabs.tab_count:
+		return false
+	# 直接写入 current_tab：与玩家点击标签走同一条 tab_changed 回调，避免测试绕过生产分支。
+	_panel._draw_pile_category_tabs.current_tab = tab_index
+	return true
+
+
+## 驱动搜索框文本变化；程序化写入 text 不保证触发 text_changed，
+## 因此写入后显式调用面板回调，让用例只验证筛选逻辑本身。
+func _apply_draw_pile_search(search_text: String) -> void:
+	_panel._draw_pile_search.text = search_text
+	_panel._on_draw_pile_search_changed(search_text)
+
+
+## 收集当前摸牌堆网格中实际显示的实体牌 UID；按钮名形如 DrawPileCard_<uid>，只解析后缀不读文字。
+func _visible_draw_pile_uids() -> Array:
+	# 可见 UID 列表；保持网格子节点顺序，便于与候选顺序直接比对。
+	var uids: Array = []
+	if _panel._draw_pile_grid == null:
+		return uids
+	for child: Node in _panel._draw_pile_grid.get_children():
+		# 当前候选按钮；非按钮子节点（理论上不存在）直接跳过。
+		var card_button: Button = child as Button
+		if card_button == null:
+			continue
+		uids.append(int(card_button.name.trim_prefix("DrawPileCard_")))
+	return uids
+
+
+## 按实体牌 UID 查找当前摸牌堆网格中的候选按钮；未显示时返回 null。
+func _find_draw_pile_button(card_uid: int) -> Button:
+	if _panel._draw_pile_grid == null:
+		return null
+	return _panel._draw_pile_grid.get_node_or_null("DrawPileCard_%d" % card_uid) as Button
+
+
+## 构造跨类别摸牌堆候选；覆盖基本牌、锦囊牌与两张装备牌，供筛选用例断言并集与交集。
+## 只提供桌面正式注入的字段（uid + card_data），类别与牌名由面板自行读取静态定义。
+func _make_draw_pile_candidates() -> Array[Dictionary]:
+	return [
+		{"uid":101, "card_data":{"definition_id":"sha", "suit":"spade", "rank":7}},
+		{"uid":102, "card_data":{"definition_id":"wuxie", "suit":"heart", "rank":3}},
+		{"uid":103, "card_data":{"definition_id":"zhangba", "suit":"spade", "rank":12}},
+		{"uid":104, "card_data":{"definition_id":"qinggang", "suit":"club", "rank":6}},
+	]
 
 
 ## 输出失败原因并以非 0 状态结束场景；返回 false 便于调用方立即终止后续断言。
