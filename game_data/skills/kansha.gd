@@ -14,6 +14,18 @@ const DAMAGE_SECTION_INDEX: int = 2
 ## ③轮回节对目标造成的固定普通伤害；数值1来自技能原文。
 const DAMAGE_AMOUNT: int = 1
 
+## ①②弃牌动作的基础评分；只要支付对应颜色牌即可推进轮回节，因此固定给正收益。
+const AI_DISCARD_SECTION_BASE_VALUE: float = 6.0
+
+## 弃置费用牌价值的扣减系数；牌越贵重，弃置成本越高，AI据此优先弃置低价值牌。
+const AI_DISCARD_CARD_VALUE_WEIGHT: float = 0.45
+
+## ③造成伤害时叠加的轮回推进收益；只在目标不是友方时叠加，避免推进分把“打队友”抬成正分。
+const AI_DAMAGE_SECTION_ADVANCE_VALUE: float = 2.0
+
+## 动作形状非法（例如③缺少唯一目标）时的评分；必须远低于任何可执行动作与结束出牌。
+const AI_INVALID_ACTION_SCORE: float = -100.0
+
 
 ## 写入三轮回节主动技能静态信息；技能描述逐字保持需求提供的原文。
 func _init() -> void:
@@ -152,23 +164,38 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 		for candidate: Dictionary in _get_color_candidates(required_color):
 			# 当前费用牌UID；动作只携带稳定ID，不持有牌对象。
 			var card_uid: int = int(candidate.get("uid", -1))
-			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "card_uid":card_uid, "payload":{"skill_id":get_id(), "card_uid":card_uid}})
+			result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "card_uid":card_uid, "payload":{"skill_id":get_id(), "card_uid":card_uid, "reincarnation_section":section_index}})
 		return
 	for target_id: int in _get_damage_target_ids():
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id]}})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":[target_id], "payload":{"skill_id":get_id(), "target_ids":[target_id], "reincarnation_section":section_index}})
 
 
-## AI在①②倾向弃置低价值牌以推进至伤害节，③按统一伤害资源收益选择目标。
+## AI在①②倾向弃置低价值牌以推进至伤害节，③按统一伤害资源收益选择目标并只对非友方叠加轮回推进分。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 当前轮回节；评分时动作来自同一帧合法枚举，不修改轮回状态。
-	var section_index: int = get_reincarnation_section_index()
+	# 动作负载；枚举入口在枚举当时已把真实轮回节写入 payload。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	# 本次动作归属的轮回节；AI评分实例由 bind(null, player_id) 建立（host == null），
+	# 运行时 get_reincarnation_section_index() 在只读实例上恒返回0（①节），会把③的动作按①定价，
+	# 因此必须优先读负载；负载缺失时按动作形状回退：携带目标为③，否则为①②。
+	var section_index: int = int(payload.get("reincarnation_section", -1))
+	if section_index < 0:
+		section_index = DAMAGE_SECTION_INDEX if not (action.get("target_ids", []) as Array).is_empty() else RED_DISCARD_SECTION_INDEX
 	if section_index in [RED_DISCARD_SECTION_INDEX, BLACK_DISCARD_SECTION_INDEX]:
 		# 费用牌价值；低价值牌成本更低，同时给予轮回推进固定收益以实现“不打伤害也可弃牌”。
-		var card_uid: int = int(action.get("card_uid", (action.get("payload", {}) as Dictionary).get("card_uid", -1)))
-		return 6.0 - evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, card_uid) * 0.45
-	# ③目标；敌方受1点伤害通常为正收益，友方为负收益。
+		var card_uid: int = int(action.get("card_uid", payload.get("card_uid", -1)))
+		return AI_DISCARD_SECTION_BASE_VALUE - evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, card_uid) * AI_DISCARD_CARD_VALUE_WEIGHT
+	# ③目标；敌方受1点伤害为正收益，友方为负收益。
 	var target_ids: Array = action.get("target_ids", []) as Array
-	return evaluator.score_resource_change(authoritative_snapshot, owner_player_id, int(target_ids[0]), 0, -DAMAGE_AMOUNT) + 2.0 if target_ids.size() == 1 else -100.0
+	if target_ids.size() != 1:
+		return AI_INVALID_ACTION_SCORE
+	# 当前伤害目标；伤害方向本身已经决定本次收益的符号。
+	var target_id: int = int(target_ids[0])
+	# ③目标的纯伤害收益；敌方为正、友方为负。
+	var damage_score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, target_id, 0, -DAMAGE_AMOUNT)
+	# 友方目标不叠加轮回推进分：推进收益不得让“对队友造成伤害”从负分变成正分而被AI选中。
+	if evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id) > 0.0:
+		return damage_score
+	return damage_score + AI_DAMAGE_SECTION_ADVANCE_VALUE
 
 
 ## 把弱类型数组收敛为整数数组；动作与网络输入共用该防御性转换。

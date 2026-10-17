@@ -95,6 +95,10 @@ func _ready() -> void:
 		return
 	if not _test_omphalos_leader_skill_ai():
 		return
+	if not _test_kansha_damage_section_target_selection():
+		return
+	if not _test_tianzhui_action_choice_consistency():
+		return
 	if not _test_active_skill_payload():
 		return
 	if not _test_peila_lingke_skill_ai():
@@ -1607,6 +1611,134 @@ func _test_omphalos_leader_skill_ai() -> bool:
 	var resource_score: float = strategy.score_lethal_damage_consequence(snapshot, 0, 2)
 	if resource_score >= 0.0:
 		return _fail("zhengfu_ai_resource=%.2f" % resource_score)
+	return true
+
+
+## 验证【堪杀】③的AI目标选择：评分必须读动作负载里的轮回节，且只对非友方叠加轮回推进分。
+func _test_kansha_damage_section_target_selection() -> bool:
+	# 全身份公开快照；0号领袖（刻律德菈）、1号反贼（敌方）与2号忠臣（友方）构成③目标的敌友对照。
+	var snapshot: Dictionary = _build_snapshot(true)
+	var players: Array = snapshot.get("players", []) as Array
+	(players[0] as Dictionary)["character_id"] = "kelvdela"
+	# ③伤害节零基索引；与 kansha.DAMAGE_SECTION_INDEX 保持一致。
+	var damage_section_index: int = 2
+	# 敌方目标动作；刻意排在友方之后，确保“同分取先枚举项”的旧缺陷会被本用例抓住。
+	var enemy_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"kansha", "target_ids":[1], "payload":{"skill_id":"kansha", "target_ids":[1], "reincarnation_section":damage_section_index}}
+	# 友方目标动作；与敌方动作携带完全相同的轮回节，唯一差别是目标阵营。
+	var ally_action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"kansha", "target_ids":[2], "payload":{"skill_id":"kansha", "target_ids":[2], "reincarnation_section":damage_section_index}}
+	# 敌友同时在场；AI必须选中敌方反贼，不能因为两个③动作同分而落在先枚举的友方身上。
+	var choice: Dictionary = _policy.choose_action(snapshot, [ally_action, enemy_action])
+	if str(choice.get("action_type", "")) != "use_skill" or (choice.get("target_ids", []) as Array) != [1]:
+		return _fail("kansha_damage_enemy_target=%s" % [choice])
+	# 只有友方目标可用；对队友造成伤害是严格负收益，AI必须结束出牌而不是伤害队友。
+	var ally_only_choice: Dictionary = _policy.choose_action(snapshot, [ally_action])
+	if str(ally_only_choice.get("action_type", "")) != "end_play":
+		return _fail("kansha_damage_ally_only=%s" % [ally_only_choice])
+	# 只有敌方目标可用；修复后③仍必须能正常发动，不能因为收紧友方分而失去全部正收益。
+	var enemy_only_choice: Dictionary = _policy.choose_action(snapshot, [enemy_action])
+	if str(enemy_only_choice.get("action_type", "")) != "use_skill" or (enemy_only_choice.get("target_ids", []) as Array) != [1]:
+		return _fail("kansha_damage_enemy_only=%s" % [enemy_only_choice])
+	# 只读评分实例；与 basic_ai_policy 完全一致地用 bind(null, player_id) 建立，host 为 null。
+	var scoring_skill: SkillDefinition = GameDatabase.create_skill("kansha")
+	if scoring_skill == null:
+		return _fail("kansha_create_skill")
+	scoring_skill.bind(null, 0)
+	# 评分器；与策略共用同一身份模型口径，保证分数比较与正式决策同源。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 只读实例上 get_reincarnation_section_index() 恒为0（①节），③必须靠负载里的节号定价。
+	var ally_score: float = scoring_skill.score_ai_action(snapshot, ally_action, evaluator)
+	var enemy_score: float = scoring_skill.score_ai_action(snapshot, enemy_action, evaluator)
+	if ally_score >= 0.0 or enemy_score <= 0.0 or enemy_score <= ally_score:
+		return _fail("kansha_damage_scores ally=%.3f enemy=%.3f" % [ally_score, enemy_score])
+	# 负载缺失时的形状回退；携带目标的动作必须仍按③定价，不能被当成①的弃牌动作拿到正分。
+	var ally_action_without_section: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"kansha", "target_ids":[2], "payload":{"skill_id":"kansha", "target_ids":[2]}}
+	# 无节号负载的友方③评分；必须仍为负，证明回退分支不会误走①②的固定正收益。
+	var fallback_ally_score: float = scoring_skill.score_ai_action(snapshot, ally_action_without_section, evaluator)
+	if fallback_ally_score >= 0.0:
+		return _fail("kansha_damage_fallback_ally=%.3f" % fallback_ally_score)
+	return true
+
+
+## 验证【天坠】主动动作评分与费用目标选择评分同源：动作层愿意发动时，选择层必然存在可确认的组合。
+## 该不变式正是“发动→取消”死循环的判据：两处口径一旦漂移，AI会在同一出牌阶段反复进入【天坠】再取消，
+## 外部表现就是姬子在自己回合内长时间停滞。
+func _test_tianzhui_action_choice_consistency() -> bool:
+	# 只读评分实例；与 basic_ai_policy 完全一致地用 bind(null, player_id) 建立，host 为 null。
+	var scoring_skill: SkillDefinition = GameDatabase.create_skill("tianzhui")
+	if scoring_skill == null:
+		return _fail("tianzhui_create_skill")
+	scoring_skill.bind(null, 0)
+	# 评分器；与策略共用同一身份模型口径，保证分数比较与正式决策同源。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	# 技能动作；与 append_play_phase_actions 的枚举结果保持同一字段口径。
+	var action: Dictionary = {"action_type":"use_skill", "actor_id":0, "skill_id":"tianzhui", "target_ids":[], "payload":{"skill_id":"tianzhui"}}
+	# 场景矩阵；覆盖自身横置状态、横置目标阵营与是否持有锦囊费用牌的全部关键组合。
+	var scenarios: Array[Dictionary] = [
+		{"label":"upright_enemy_with_trick", "owner_chained":false, "enemy_chained":true, "trick":true},
+		{"label":"upright_enemy_no_trick", "owner_chained":false, "enemy_chained":true, "trick":false},
+		{"label":"upright_ally_with_trick", "owner_chained":false, "enemy_chained":false, "trick":true},
+		{"label":"chained_enemy_with_trick", "owner_chained":true, "enemy_chained":true, "trick":true},
+		{"label":"chained_ally_only", "owner_chained":true, "enemy_chained":false, "trick":true},
+		{"label":"chained_self_only", "owner_chained":true, "enemy_chained":false, "trick":false},
+	]
+	for scenario: Dictionary in scenarios:
+		# 当前场景快照；0号姬子为技能持有者，1号反贼为敌方，2号忠臣为友方。
+		var snapshot: Dictionary = _build_snapshot(true)
+		var players: Array = snapshot.get("players", []) as Array
+		(players[0] as Dictionary)["character_id"] = "himeko"
+		(players[0] as Dictionary)["chained"] = bool(scenario.get("owner_chained", false))
+		(players[1] as Dictionary)["chained"] = bool(scenario.get("enemy_chained", false))
+		# 持有者手牌；【无懈可击】不能主动使用，只作为【天坠】的锦囊费用出现在手牌中。
+		var owner_hand: Array = []
+		if bool(scenario.get("trick", false)):
+			owner_hand.append(_card(901, "wuxie", 0))
+		(players[0] as Dictionary)["hand"] = owner_hand
+		(players[0] as Dictionary)["hand_count"] = owner_hand.size()
+		# 横置目标集合；与控制器 _get_linked_target_ids 的口径一致，即全部横置存活角色。
+		var target_ids: Array[int] = []
+		for player_variant: Variant in players:
+			# 当前玩家快照；只有存活且横置的角色可以成为【天坠】目标。
+			var player: Dictionary = player_variant as Dictionary
+			if bool(player.get("chained", false)) and bool(player.get("alive", false)):
+				target_ids.append(int(player.get("player_id", -1)))
+		# 选择请求；上下文必须与技能 activate 完全一致，否则技能侧评分不会被叠加。
+		var choice_request: Dictionary = {"min_card_select":0, "max_card_select":1, "candidates":[], "context":{"kind":"tianzhui_cost_target", "skill_id":"tianzhui", "ai_choice_skill_scored":true}}
+		if not owner_hand.is_empty():
+			(choice_request["candidates"] as Array).append(_candidate(901, "wuxie", 0))
+		# 控制器会枚举的全部确认动作；零张牌与费用牌分别组合每个横置目标。
+		var confirm_actions: Array[Dictionary] = []
+		for target_id: int in target_ids:
+			confirm_actions.append({"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[], "selected_target_ids":[target_id], "confirmed":true}})
+			if not owner_hand.is_empty():
+				confirm_actions.append({"action_type":"choose_cards", "actor_id":0, "payload":{"request_id":1, "selected_card_uids":[901], "selected_target_ids":[target_id], "confirmed":true}})
+		# 动作层评分；由技能钩子独立给出，代表“是否愿意进入本技能”。
+		var action_score: float = scoring_skill.score_ai_action(snapshot, action, evaluator)
+		# 选择层最高确认分；与 BasicAIPolicy._score_choice_action 一致地叠加通用层与技能层。
+		var best_choice_score: float = -INF
+		for confirm_action: Dictionary in confirm_actions:
+			var confirm_score: float = evaluator.score_choice_action(snapshot, choice_request, confirm_action, 0) + scoring_skill.score_ai_choice(snapshot, choice_request, confirm_action, evaluator)
+			best_choice_score = maxf(best_choice_score, confirm_score)
+		if action_score > 0.0 and best_choice_score <= 0.0:
+			return _fail("tianzhui_consistency_%s action=%.3f choice=%.3f" % [str(scenario.get("label", "")), action_score, best_choice_score])
+	# 只有姬子横置且存在横置敌方目标时，动作层必须明确愿意发动【天坠】。
+	var chained_enemy_snapshot: Dictionary = _build_snapshot(true)
+	var chained_players: Array = chained_enemy_snapshot.get("players", []) as Array
+	(chained_players[0] as Dictionary)["character_id"] = "himeko"
+	(chained_players[0] as Dictionary)["chained"] = true
+	(chained_players[1] as Dictionary)["chained"] = true
+	if scoring_skill.score_ai_action(chained_enemy_snapshot, action, evaluator) <= 0.0:
+		return _fail("tianzhui_chained_enemy_action=%.3f" % scoring_skill.score_ai_action(chained_enemy_snapshot, action, evaluator))
+	# 姬子未横置且只持有锦囊费用牌、敌方横置时，旧口径会因固定费用近似值而误判为可发动，
+	# 进而在选牌步骤被真实牌价扣成负分并取消；修复后动作层必须先扣掉真实牌价，直接给出非正分。
+	var upright_enemy_snapshot: Dictionary = _build_snapshot(true)
+	var upright_players: Array = upright_enemy_snapshot.get("players", []) as Array
+	(upright_players[0] as Dictionary)["character_id"] = "himeko"
+	(upright_players[0] as Dictionary)["chained"] = false
+	(upright_players[1] as Dictionary)["chained"] = true
+	(upright_players[0] as Dictionary)["hand"] = [_card(901, "wuxie", 0)]
+	(upright_players[0] as Dictionary)["hand_count"] = 1
+	if scoring_skill.score_ai_action(upright_enemy_snapshot, action, evaluator) > 0.0:
+		return _fail("tianzhui_upright_enemy_expensive=%.3f" % scoring_skill.score_ai_action(upright_enemy_snapshot, action, evaluator))
 	return true
 
 
