@@ -382,8 +382,9 @@ func _open_settings() -> void:
 	# 自选身份回填；开关状态来自权威快照，不支持位置身份的模式禁用该复选框。
 	_custom_identity_checkbox.set_pressed_no_signal(bool(_snapshot.get("custom_identity_enabled", false)))
 	_apply_custom_identity_availability_for_mode(game_mode_id)
-	# 固定座位回填；同样来自权威快照，只在自选身份开启时改变开局座位映射，关闭自选身份时保持可编辑但无效果。
+	# 固定座位回填；同样来自权威快照，关闭时物理座位每局随机重排，开启后固定按大厅位置落座。
 	_fixed_seat_checkbox.set_pressed_no_signal(bool(_snapshot.get("fixed_seat_enabled", false)))
+	_apply_fixed_seat_availability_for_mode(game_mode_id)
 	# 座次补偿回填；来自权威快照，并只在胜者为王模式下显示该行。
 	_seat_compensation_checkbox.set_pressed_no_signal(bool(_snapshot.get("seat_compensation_enabled", false)))
 	_apply_seat_compensation_availability_for_mode(game_mode_id)
@@ -567,6 +568,7 @@ func _on_game_mode_option_selected(_index: int) -> void:
 	var game_mode_id: String = str(_game_mode_option.get_item_metadata(_game_mode_option.selected)) if _game_mode_option.selected >= 0 else NetworkGateway.DEFAULT_LOBBY_GAME_MODE_ID
 	_apply_player_count_limits_for_mode(game_mode_id)
 	_apply_custom_identity_availability_for_mode(game_mode_id)
+	_apply_fixed_seat_availability_for_mode(game_mode_id)
 	_apply_seat_compensation_availability_for_mode(game_mode_id)
 	var normalized_count: int = _normalize_player_count_for_mode(game_mode_id, int(_player_count_input.value))
 	_apply_player_count_value(normalized_count)
@@ -575,6 +577,15 @@ func _on_game_mode_option_selected(_index: int) -> void:
 ## 按模式显示或隐藏座次补偿设置行；该开关只属于胜者为王，其他模式隐藏且不参与提交。
 func _apply_seat_compensation_availability_for_mode(game_mode_id: String) -> void:
 	_seat_compensation_row.visible = game_mode_id == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
+
+
+## 按模式启用或禁用固定座位复选框；2v2 的成队几何与过关斩将的红蓝轮替由模式强制固定座位，
+## 该开关在这些模式下不可能生效，因此禁用可交互性，避免房主以为勾选能改变开局座次。
+## 其余模式（包括不支持自选身份的胜者为王）关闭后物理座位每局随机重排。
+## 这里只禁用交互、不改写勾选值：强制固定座位的模式本来就“座位固定”，改写快照值反而会让大厅摘要与实际座位相反。
+func _apply_fixed_seat_availability_for_mode(game_mode_id: String) -> void:
+	# 当前模式是否允许随机座位；决定复选框可交互性。
+	_fixed_seat_checkbox.disabled = not _identity_rules.supports_random_lobby_seat(game_mode_id)
 
 
 ## 按模式启用或禁用自选身份复选框；过关斩将真人固定红方无位置身份，禁用时同步取消勾选。

@@ -175,7 +175,7 @@ var _lobby_seat_compensation_enabled: bool = false
 ## 权威控制器据此把大厅位置身份写入真正占用该座位的玩家，使身份跟人走而物理座位保持随机。
 var _seat_lobby_slot_indices: Array[int] = []
 
-## 大厅位置与规则座次随机绑定使用的随机源；只在自选身份且不固定座位时参与洗牌，不接触牌堆或规则随机。
+## 大厅位置与规则座次随机绑定使用的随机源；只在允许随机座位且未固定座位时参与洗牌，不接触牌堆或规则随机。
 var _lobby_seat_shuffle_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 ## 身份规则服务；网关只用其查询大厅位置身份布局、位置到规则座次映射与模式支持性，不接触对局状态。
@@ -298,7 +298,8 @@ func host_lan(display_name: String, port: int = -1, avatar_character_id: String 
 	_lobby_player_count = _normalize_lobby_player_count(player_count, _lobby_game_mode_id)
 	# 房间初始自选身份开关；不支持自选身份的模式（过关斩将）强制关闭，避免快照携带无效布局。
 	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
-	# 房间初始固定座位开关；只影响自选身份下的座位是否随开局随机，关闭后身份仍按大厅位置绑定。
+	# 房间初始固定座位开关；只影响物理座位是否随开局随机，与自选身份互不影响：
+	# 关闭时身份仍按大厅位置绑定，而胜者为王这类不支持自选身份的模式同样会重排座位。
 	_lobby_fixed_seat_enabled = fixed_seat_enabled
 	# 房间初始座次补偿开关；仅胜者为王读取，其余模式即使开启也不会产生任何数值影响。
 	_lobby_seat_compensation_enabled = seat_compensation_enabled
@@ -462,7 +463,8 @@ func update_lan_lobby_settings(game_mode_id: String, player_count: int, room_pas
 	_lobby_password_enabled = not _lobby_password.is_empty()
 	# 自选身份开关随设置一并更新；不支持自选身份的模式强制关闭，保证位置身份表始终可解析。
 	_lobby_custom_identity_enabled = custom_identity_enabled and _identity_rules.supports_lobby_custom_identity(_lobby_game_mode_id)
-	# 固定座位开关随设置一并更新；关闭时身份仍按位置绑定，物理座位在开局随机，2v2 由模式规则单独强制固定。
+	# 固定座位开关随设置一并更新；关闭时物理座位在开局随机（含不支持自选身份的胜者为王），
+	# 2v2 的成队几何与过关斩将的红蓝轮替由模式规则单独强制固定，该开关对它们无效。
 	_lobby_fixed_seat_enabled = fixed_seat_enabled
 	# 座次补偿开关随设置一并更新；仅胜者为王读取，其他模式的规则函数会忽略该值。
 	_lobby_seat_compensation_enabled = seat_compensation_enabled
@@ -588,9 +590,16 @@ func prepare_lan_match_assignments(player_count: int, for_match_restart: bool = 
 	var available_player_ids: Array[int] = build_match_seat_player_ids(_lobby_game_mode_id, player_count)
 	# 本次开局是否按自选身份绑定座次；开启时大厅位置决定身份，座位是否固定由固定座位开关与模式规则决定。
 	var custom_identity_active: bool = is_lan_custom_identity_enabled()
-	# 大厅位置到规则座次映射；仅自选身份使用，2v2 把“上蓝下红”布局换算回一/四与二/三成队座次。
+	# 本次开局是否按大厅位置决定规则座次（而不按成员先后顺序压缩成 0、1、2……）。
+	# 两种情形需要这张映射：自选身份（位置即身份）与「全员同一身份」的胜者为王（位置即物理座位）。
+	# 其余模式在自选身份关闭时保持既有压缩行为，不因本次修复而改变座次取值。
+	var seat_binding_active: bool = custom_identity_active or _identity_rules.has_uniform_seat_identity(_lobby_game_mode_id)
+	# 本次开局是否需要重排物理座位；与自选身份解耦——胜者为王全员同一身份、不支持自选身份，
+	# 但座位仍必须每局随机打乱，否则房主恒定一号位、先手顺序与座次补偿永远偏向同一名玩家。
+	var seat_shuffle_active: bool = seat_binding_active and _should_shuffle_lobby_seat_binding()
+	# 大厅位置到规则座次映射；仅需要映射时构造，2v2 把“上蓝下红”布局换算回一/四与二/三成队座次，其余模式为座次自然序。
 	var lobby_slot_match_seats: Array[int] = []
-	if custom_identity_active:
+	if seat_binding_active:
 		lobby_slot_match_seats = _identity_rules.get_lobby_slot_match_seats(_lobby_game_mode_id, player_count)
 	# 大厅成员顺序；快照先提供稳定成员副本，再按玩家主动选择的位置排序，不依赖哈希顺序。
 	var lobby_snapshot: Dictionary = get_lan_lobby_snapshot()
@@ -603,24 +612,25 @@ func prepare_lan_match_assignments(player_count: int, for_match_restart: bool = 
 		var second_member: Dictionary = second_member_variant as Dictionary
 		return int(first_member.get("seat_index", 0)) < int(second_member.get("seat_index", 0))
 	)
-	# 本次开局实际使用的位置到座次映射；自选身份且不固定座位时替换为随机双射，其余情况保持模式标准映射。
+	# 本次开局实际使用的位置到座次映射；允许随机座位且未固定时替换为随机双射，其余情况保持模式标准映射。
 	var lobby_slot_seat_binding: Array[int] = lobby_slot_match_seats
-	# 本次开局是否真的对整张位置到座次映射做了随机洗牌；决定身份表是否需要按完整逆映射重排。
+	# 本次开局是否真的对整张位置到座次映射做了随机洗牌；决定身份表是否必须按完整逆映射重排。
 	var lobby_seat_shuffled: bool = false
-	if custom_identity_active and _should_shuffle_lobby_seat_binding():
+	if seat_shuffle_active and lobby_slot_match_seats.size() == player_count:
 		lobby_slot_seat_binding = _build_shuffled_lobby_slot_binding(lobby_slot_match_seats)
 		lobby_seat_shuffled = true
 	if for_match_restart:
 		# 先把在线真人的会话令牌搬到本次新座位，再重建映射；令牌跟人走，不能停留在旧座次编号上。
 		_migrate_lan_session_bindings_to_new_seats(previous_seat_lobby_slots, lobby_slot_seat_binding)
-	# 座位占用者的大厅位置；仅供权威控制器把位置身份写入实际占用该座位的玩家，非自选身份开局保持空数组。
+	# 座位占用者的大厅位置；供权威控制器把位置身份写入实际占用该座位的玩家，也为重开时的令牌迁移提供依据。
+	# 只要本次开局存在座位映射（自选身份或随机座位）就必须填满；只有 2v2 与过关斩将这类强制固定座位的模式保持空数组。
 	_seat_lobby_slot_indices.clear()
-	if custom_identity_active:
+	if seat_binding_active:
 		_seat_lobby_slot_indices.resize(get_match_role_count_for_mode(_lobby_game_mode_id, player_count))
 		_seat_lobby_slot_indices.fill(-1)
 		if lobby_seat_shuffled:
 			# 整表洗牌后位置与座次不再一一对应，必须按完整逆映射填满每个座次：
-			# 未登记的座次（由 AI 补位）也要取到它在本排列中占用的大厅位置身份，否则会出现同一身份重复或缺失。
+			# 未登记的座次（由 AI 补位）也要取到它在本排列中占用的大厅位置，否则会出现同一身份重复或缺失。
 			for lobby_slot_index: int in range(lobby_slot_seat_binding.size()):
 				# 当前大厅位置在本次排列中占用的规则座次；越界值防御性跳过，保持映射为双射。
 				var shuffled_seat_index: int = int(lobby_slot_seat_binding[lobby_slot_index])
@@ -633,10 +643,10 @@ func prepare_lan_match_assignments(player_count: int, for_match_restart: bool = 
 		var peer_id: int = int(member.get("peer_id", 0))
 		# 当前成员稳定玩家 ID；按大厅位置从前到后映射到真人 ID，2人房的第三个视觉位置不会越过规则人数范围。
 		var player_id: int = available_player_ids[member_index]
-		# 当前成员的大厅位置；自选身份下位置即身份，必须按位置取座次而不能按先后顺序压缩。
+		# 当前成员的大厅位置；存在座位映射时必须按位置取座次而不能按先后顺序压缩，否则随机座位会被压实回原位。
 		var member_seat_index: int = int(member.get("seat_index", member_index))
-		if custom_identity_active:
-			# 自选身份下成员的实际大厅位置；位置即身份，必须直接绑定该位置对应的规则座次而不能按先后顺序压缩。
+		if seat_binding_active:
+			# 成员的实际大厅位置决定其规则座次：自选身份下位置即身份，随机座位下位置只决定物理座位。
 			if member_seat_index >= 0 and member_seat_index < lobby_slot_seat_binding.size():
 				player_id = lobby_slot_seat_binding[member_seat_index]
 			# 记录座位与大厅位置的反向映射；随机座位时只有它能让身份继续跟着大厅位置走。
@@ -651,19 +661,23 @@ func prepare_lan_match_assignments(player_count: int, for_match_restart: bool = 
 	return ""
 
 
-## 返回本次开局是否需要随机打乱“大厅位置 → 规则座次”的绑定。
-## 固定座位开关开启时保持标准映射；2v2 等需要成队几何的模式由身份规则强制固定，避免队友被随机成相邻座位。
+## 返回本次开局是否允许随机打乱“大厅位置 → 规则座次”的绑定。
+## 固定座位开关开启时保持标准映射；座位与身份强耦合的模式（2v2 成队几何、过关斩将红蓝轮替）由身份规则强制固定。
+## 注意本判据只回答“几何上能不能洗”，与「自选身份」无关：胜者为王不支持自选身份，却同样需要每局重排座位。
+## 调用方还必须确认本局确实按大厅位置决定座次（见 seat_binding_active），否则洗牌结果无处落地。
 func _should_shuffle_lobby_seat_binding() -> bool:
 	if _lobby_fixed_seat_enabled:
 		return false
-	return not _identity_rules.requires_fixed_lobby_seat(_lobby_game_mode_id)
+	return _identity_rules.supports_random_lobby_seat(_lobby_game_mode_id)
 
 
-## 为自选身份且不固定座位的开局构造随机双射，使身份继续跟随大厅位置而物理座位每次开局重新洗牌。
+## 为允许随机座位且未固定座位的开局构造随机双射，使物理座位每次开局重新洗牌。
 ## 洗牌对象是**整张“大厅位置 → 规则座次”映射**：真人座次与 AI 补位座次一起重排，因此每名玩家可能落到任意座位，
 ## 空位也会被其他人或 AI 占用，观感上才是真正的“重新排布座位”。只置换真人之间的座次时，2 名真人只有 2 种结果，
 ## 相对顺序几乎不变（看起来只是整体反转或干脆没变），这正是“随机座位老是不随机”的直接原因。
 ## 身份不参与洗牌：身份始终由大厅位置决定，重排只改变物理座次，因此同一大厅位置的玩家身份保持稳定。
+## 该函数同时服务两类开局：自选身份（身份跟随位置、座位随机）与胜者为王（全员同一身份、座位随机），
+## 因此调用方不得再用「是否自选身份」作为前置条件。
 func _build_shuffled_lobby_slot_binding(lobby_slot_match_seats: Array[int]) -> Array[int]:
 	# 结果映射；先复制模式标准映射，再对整张映射做等概率随机排列。
 	var binding: Array[int] = lobby_slot_match_seats.duplicate()
