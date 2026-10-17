@@ -177,6 +177,31 @@ func requires_fixed_lobby_seat(mode_id: String) -> bool:
 	return normalize_mode(mode_id) == MODE_TEAM2V2
 
 
+## 返回模式的座次身份是否完全不携带随机性：即所有座次拿到同一个身份（胜者为王全员内奸）。
+## 这类模式既没有身份洗牌、也不存在位置身份可选，物理座位重排是它**唯一**的开局随机性来源，
+## 因此调用方必须在“身份随机已由别处承担”的模式与这类模式之间区别对待。
+## 新增“全员同一身份”的模式时必须追加到本判据，否则该模式会退化成恒定座次（房主永远一号位先手）。
+func has_uniform_seat_identity(mode_id: String) -> bool:
+	# 规范化模式；避免调用方拼写差异导致判定漂移。
+	return normalize_mode(mode_id) == MODE_WINNER_TAKES_ALL
+
+
+## 返回模式是否允许在开局时随机打乱物理座位（大厅位置 ↔ 规则座次）。
+## 判据是「身份是否依赖座次」：身份与座次无关的模式可以任意重排座位而不改变任何人的身份，
+## 而 2v2 的成队几何与过关斩将的红蓝轮替都由座次决定，两者必须保持固定绑定。
+## 胜者为王全员同一身份、既不支持自选身份也不按位置绑定身份，但座位重排恰恰是该模式唯一的开局随机性，
+## 因此这里必须独立于「自选身份」返回 true，否则房主恒定一号位、先手与座次补偿永远偏向同一名玩家。
+func supports_random_lobby_seat(mode_id: String) -> bool:
+	# 规范化模式；避免调用方拼写差异导致判定漂移。
+	var mode: String = normalize_mode(mode_id)
+	if requires_fixed_lobby_seat(mode):
+		return false
+	# 过关斩将：身份由座次奇偶决定（偶数真人红方、奇数敌人蓝方），洗座位会把真人排进敌方座次并破坏交替结构。
+	if mode == MODE_CONQUEST:
+		return false
+	return true
+
+
 ## 返回联机大厅自选身份时每个大厅位置对应的身份 ID；索引即大厅0起始位置，人数不支持时返回空数组。
 ## 2v2 使用“上排两蓝、下排两红”的大厅专属布局，其余模式直接沿用固定座次身份表（身份局一号位领袖、斗地主一号位地主等）。
 func get_lobby_slot_identities(mode_id: String, player_count: int) -> Array[String]:

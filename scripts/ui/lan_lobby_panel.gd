@@ -51,7 +51,7 @@ const MAXIMUM_PLAYER_COUNT: int = 10
 ## 自选身份开关；仅创建房间时作为房间初始设置生效，开启后大厅每个位置显示固定身份并由玩家换位自选。
 @onready var _custom_identity_checkbox: CheckBox = %LanCustomIdentityCheckBox
 
-## 固定座位开关；仅创建房间时作为房间初始设置生效，关闭时身份仍按大厅位置绑定但物理座位每次开局随机打乱。
+## 固定座位开关；仅创建房间时作为房间初始设置生效，关闭时物理座位每次开局随机打乱（身份仍按大厅位置绑定）。
 @onready var _fixed_seat_checkbox: CheckBox = %LanFixedSeatCheckBox
 
 ## 座次补偿开关；仅胜者为王模式显示，仅创建房间时作为房间初始设置生效。
@@ -80,6 +80,9 @@ var _initial_player_count: int = MINIMUM_PLAYER_COUNT
 
 ## 当前状态是否为错误；主题刷新时据此恢复危险色，而不是覆盖为普通次级文字色。
 var _status_is_error: bool = false
+
+## 身份规则服务；只用于查询模式是否允许随机物理座位，不接触对局状态。
+var _identity_rules: IdentityRules = IdentityRules.new()
 
 
 ## 初始化全部局域网连接控件；面板默认隐藏，只有主菜单入口显式打开后才接收输入。
@@ -200,6 +203,9 @@ func refresh_ui_style() -> void:
 	_seat_compensation_checkbox.set_pressed_no_signal(GameSettings.seat_compensation_enabled)
 	# 座次补偿只属于胜者为王；模式来自主菜单当前选择，其他模式必须隐藏该行。
 	_seat_compensation_row.visible = GameSettings.normalize_match_mode(GameSettings.next_match_mode) == GameSettings.MATCH_MODE_WINNER_TAKES_ALL
+	# 固定座位开关的可交互性；2v2 与过关斩将由模式强制固定座位，开关在这些模式下不可能生效，禁用避免误导。
+	# 模式来自主菜单当前选择，建房后仍可在联机大厅的房主设置里按同一口径调整。
+	_fixed_seat_checkbox.disabled = not _identity_rules.supports_random_lobby_seat(GameSettings.next_match_mode)
 	_apply_line_edit_style(_address_input)
 	_apply_line_edit_style(_room_password_input)
 	_apply_spin_box_style(_port_input)

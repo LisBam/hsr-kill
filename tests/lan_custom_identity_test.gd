@@ -3,7 +3,8 @@ extends Node
 ## 联机大厅自选身份与1v1车轮战空位回归测试。
 ## 覆盖：车轮战大厅固定两个位置且拒绝越界换位；自选身份的位置身份表与徽记显示；
 ## 2v2“上蓝下红”大厅布局到一/四、二/三成队座次的映射；
-## 固定座位开关开启时按位置绑定座次、关闭时座位随机打乱，且身份始终跟随大厅位置而不跟随物理座次。
+## 固定座位开关开启时按位置绑定座次、关闭时座位随机打乱，且身份始终跟随大厅位置而不跟随物理座次；
+## 以及与自选身份解耦的座位随机口径——不支持自选身份的胜者为王同样每局重排座位，而 2v2 与过关斩将保持固定。
 
 ## 正式主场景资源；测试复用完整节点树，覆盖网关、联机大厅与权威控制器的真实链路。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
@@ -81,6 +82,12 @@ func _check_rule_mappings(identity_rules: IdentityRules) -> bool:
 		return _fail("team2v2_slot_match_seats=%s" % str(identity_rules.get_lobby_slot_match_seats("team2v2", 4)))
 	if identity_rules.get_lobby_slot_match_seats("identity", 8) != [0, 1, 2, 3, 4, 5, 6, 7]:
 		return _fail("identity_slot_match_seats")
+	# 随机座位支持口径：身份与座次无关的模式都允许开局重排物理座位，其中包含**不支持自选身份**的胜者为王；
+	# 2v2 的成队几何与过关斩将的偶红奇蓝轮替由座次决定，必须保持固定绑定。
+	if not identity_rules.supports_random_lobby_seat("identity") or not identity_rules.supports_random_lobby_seat("doudizhu") or not identity_rules.supports_random_lobby_seat("wheel_duel") or not identity_rules.supports_random_lobby_seat("opportunity_brawl") or not identity_rules.supports_random_lobby_seat("winner_takes_all"):
+		return _fail("random_seat_mode_support")
+	if identity_rules.supports_random_lobby_seat("team2v2") or identity_rules.supports_random_lobby_seat("conquest"):
+		return _fail("random_seat_forced_fixed_modes")
 	# 大厅视觉位置数静态规则；车轮战固定2位、自选身份等于规则人数、其余保持2至3人3位设计。
 	if NetworkGateway.get_lobby_display_slot_count_for("wheel_duel", 2, false) != 2 or NetworkGateway.get_lobby_display_slot_count_for("identity", 2, false) != 3 or NetworkGateway.get_lobby_display_slot_count_for("identity", 2, true) != 2 or NetworkGateway.get_lobby_display_slot_count_for("identity", 8, true) != 8 or NetworkGateway.get_lobby_display_slot_count_for("conquest", 2, true) != 3:
 		return _fail("display_slot_count_rule")
@@ -143,6 +150,21 @@ func _check_lobby_seat_rendering(online_lobby_panel: OnlineLobbyPanel) -> bool:
 	for slot_index: int in range(5):
 		if doudizhu_seats[slot_index].get_identity_id() != EXPECTED_DOUDIZHU_5P[slot_index]:
 			return _fail("doudizhu_badge slot=%d identity=%s" % [slot_index, doudizhu_seats[slot_index].get_identity_id()])
+	# 固定座位开关的可交互性：允许随机座位的模式（含不支持自选身份的胜者为王）可操作，强制固定座位的模式禁用。
+	# 这里直接驱动按模式刷新的入口，不打开房主设置模态，避免用例依赖弹窗焦点与背景遮罩状态。
+	var fixed_seat_checkbox: CheckBox = online_lobby_panel.get_node("%OnlineLobbyFixedSeatCheckBox") as CheckBox
+	online_lobby_panel.call("_apply_fixed_seat_availability_for_mode", "winner_takes_all")
+	if fixed_seat_checkbox.disabled:
+		return _fail("fixed_seat_checkbox_disabled_for_winner_takes_all")
+	online_lobby_panel.call("_apply_fixed_seat_availability_for_mode", "identity")
+	if fixed_seat_checkbox.disabled:
+		return _fail("fixed_seat_checkbox_disabled_for_identity")
+	online_lobby_panel.call("_apply_fixed_seat_availability_for_mode", "team2v2")
+	if not fixed_seat_checkbox.disabled:
+		return _fail("fixed_seat_checkbox_enabled_for_team2v2")
+	online_lobby_panel.call("_apply_fixed_seat_availability_for_mode", "conquest")
+	if not fixed_seat_checkbox.disabled:
+		return _fail("fixed_seat_checkbox_enabled_for_conquest")
 	online_lobby_panel.visible = false
 	return true
 
@@ -257,6 +279,61 @@ func _check_gateway_authority(gateway: NetworkGateway) -> bool:
 	if gateway.get_local_lan_player_id() != 0 or gateway.get_peer_id_for_player(1) != 99:
 		return _fail("team2v2_seat_binding local=%d" % gateway.get_local_lan_player_id())
 	gateway.cancel_prepared_lan_match()
+	# 胜者为王（各自为战）：不支持自选身份，但物理座位同样必须每局随机重排。
+	# 这是「联机各自为战没有随机座位」的直接回归点：全员同一身份时曾经因为「身份与座次无关」而整段跳过洗牌，
+	# 结果房主恒定一号位、先手顺序与座次补偿永远偏向同一名玩家。
+	if not gateway.update_lan_lobby_settings("winner_takes_all", 8, "", false, false).is_empty():
+		return _fail("winner_takes_all_seat_settings_error")
+	# 自选身份必须保持关闭；本模式没有可选身份，随机座位不得顺带把该开关打开。
+	if gateway.is_lan_custom_identity_enabled() or bool(gateway.get_lan_lobby_snapshot().get("custom_identity_enabled", true)):
+		return _fail("winner_takes_all_custom_identity_leaked")
+	gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+	# 采样次数；房主每次有7/8概率离开一号位，24次全部留在一号位的概率低于百万分之一，可稳定判定洗牌生效。
+	var wta_samples: int = 24
+	# 是否观察到房主离开一号位；任意一次即证明座位确实被随机重排而不是仍按大厅位置固定。
+	var wta_observed_random: bool = false
+	# 是否观察到房主占用补位座次；证明洗牌覆盖整张映射而不是只在真人之间置换（后者对2名真人只有2种结果）。
+	var wta_observed_full: bool = false
+	for _sample_index: int in range(wta_samples):
+		if not gateway.prepare_lan_match_assignments(8).is_empty():
+			return _fail("winner_takes_all_seat_prepare_error")
+		# 本样本中房主与远端占用的规则座次；两名真人必须各占一个合法座次且互不重合。
+		var wta_local_seat: int = gateway.get_local_lan_player_id()
+		var wta_remote_seat: int = int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1))
+		if wta_local_seat == wta_remote_seat or wta_local_seat < 0 or wta_local_seat >= 8 or wta_remote_seat < 0 or wta_remote_seat >= 8:
+			return _fail("winner_takes_all_seat_binding local=%d remote=%d" % [wta_local_seat, wta_remote_seat])
+		# 座次回指大厅位置的反向映射；同一房间重开时靠它把会话令牌跟人搬到新座次，必须与本次分配完全一致。
+		var wta_seat_lobby_slots: Array[int] = gateway.get_lan_seat_lobby_slots()
+		if wta_seat_lobby_slots.size() != 8 or int(wta_seat_lobby_slots[wta_local_seat]) != 0 or int(wta_seat_lobby_slots[wta_remote_seat]) != 7:
+			return _fail("winner_takes_all_seat_mapping=%s local=%d remote=%d" % [wta_seat_lobby_slots, wta_local_seat, wta_remote_seat])
+		if wta_local_seat != 0:
+			wta_observed_random = true
+		if wta_local_seat != 0 and wta_local_seat != 7:
+			wta_observed_full = true
+		gateway.cancel_prepared_lan_match()
+	if not wta_observed_random or not wta_observed_full:
+		return _fail("winner_takes_all_seat_never_shuffled random=%s full=%s" % [str(wta_observed_random), str(wta_observed_full)])
+	gateway.cancel_prepared_lan_match()
+	# 固定座位开启时胜者为王同样固定：房主回到一号位、远端保持自己的大厅位置，证明开关对该模式有效。
+	if not gateway.update_lan_lobby_settings("winner_takes_all", 8, "", false, true).is_empty() or not gateway.is_lan_fixed_seat_enabled():
+		return _fail("winner_takes_all_fixed_seat_settings_error")
+	if not gateway.prepare_lan_match_assignments(8).is_empty():
+		return _fail("winner_takes_all_fixed_seat_prepare_error")
+	if gateway.get_local_lan_player_id() != 0 or int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1)) != 7:
+		return _fail("winner_takes_all_fixed_seat_binding local=%d" % gateway.get_local_lan_player_id())
+	gateway.cancel_prepared_lan_match()
+	# 过关斩将：真人固定偶数座位、红蓝由座次奇偶决定，即使固定座位关闭也绝不能洗座位。
+	# 该模式同样不支持自选身份，因此这里必须由座位随机支持口径单独把关，而不能只靠「是否自选身份」拦截。
+	if not gateway.update_lan_lobby_settings("conquest", 2, "", false, false).is_empty():
+		return _fail("conquest_seat_settings_error")
+	gateway.set("_lobby_members", _with_fake_member(gateway, 1))
+	for _sample_index: int in range(8):
+		if not gateway.prepare_lan_match_assignments(2).is_empty():
+			return _fail("conquest_seat_prepare_error")
+		# 房主必须占偶数玩家座位0、远端必须占座位2；任何偏移都说明洗牌错误地作用到了该模式。
+		if gateway.get_local_lan_player_id() != 0 or int((gateway.get_remote_player_assignments() as Dictionary).get(99, -1)) != 2:
+			return _fail("conquest_seat_shuffled local=%d" % gateway.get_local_lan_player_id())
+		gateway.cancel_prepared_lan_match()
 	# 移除模拟远端成员；后续设置广播只面向真实连接，避免向不存在的 peer 发送 RPC 的报错噪声。
 	var host_only_members: Dictionary = (gateway.get("_lobby_members") as Dictionary).duplicate(true)
 	host_only_members.erase(99)
@@ -325,6 +402,42 @@ func _check_match_identity_assignment(gateway: NetworkGateway) -> bool:
 	if gateway.get_lan_seat_lobby_slots() == previous_seat_lobby_slots:
 		return _fail("restart_entry_seat_not_reshuffled")
 	gateway.set("_lan_match_active", false)
+	# 胜者为王真实开局：把「网关随机座位」与「权威控制器实际落座」串起来，防止只改网关映射却没人消费。
+	# 该模式全员同一身份且无首任身份，不做领袖旋转，因此房主的最终座次下标必须等于网关分配的稳定玩家ID。
+	if not gateway.update_lan_lobby_settings("winner_takes_all", 8, "", false, false).is_empty():
+		return _fail("wta_match_settings_error")
+	# 是否观察到房主出现在非一号位；单局随机不足以证明，因此按多局判定。
+	var wta_seen_off_first_seat: bool = false
+	# 真实开局采样局数；8人局房主每局有7/8概率离开一号位，12局全部留在一号位的概率约为0.0000002。
+	var wta_match_samples: int = 12
+	for sample_index: int in range(wta_match_samples):
+		gateway.set("_lobby_members", _with_fake_member(gateway, 7))
+		if not gateway.prepare_lan_match_assignments(8).is_empty():
+			return _fail("wta_match_prepare_error")
+		# 本局房主被随机到的稳定玩家ID；随机座位下它不再是固定的0。
+		var wta_host_player_id: int = gateway.get_local_lan_player_id()
+		if not match_controller.start_match(8, 20260731 + sample_index, "winner_takes_all"):
+			return _fail("wta_match_start_failed")
+		# 房主在最终座次数组中的下标；与稳定玩家ID一致才说明随机座位真的被对局采用。
+		var wta_host_seat_index: int = -1
+		for seat_index: int in range(match_controller.state.players.size()):
+			if (match_controller.state.players[seat_index] as PlayerState).player_id == wta_host_player_id:
+				wta_host_seat_index = seat_index
+				break
+		if wta_host_seat_index != wta_host_player_id:
+			return _fail("wta_match_seat_mismatch host=%d seat=%d" % [wta_host_player_id, wta_host_seat_index])
+		# 房主所在的稳定玩家ID必须由真人占用而不是被 AI 顶替；否则随机座位只是空转，玩家仍坐在别处。
+		if match_controller.ai_coordinator.is_ai_controlled(wta_host_player_id):
+			return _fail("wta_match_host_seat_is_ai host=%d" % wta_host_player_id)
+		# 全员身份必须同为内奸；该模式不存在任何位置身份，随机座位不得改变身份分配。
+		for player: PlayerState in match_controller.state.players:
+			if player.identity != IdentityRules.WINNER_TAKES_ALL_IDENTITY:
+				return _fail("wta_match_identity=%s" % player.identity)
+		if wta_host_seat_index != 0:
+			wta_seen_off_first_seat = true
+		gateway.cancel_prepared_lan_match()
+	if not wta_seen_off_first_seat:
+		return _fail("wta_match_host_always_first_seat")
 	return true
 
 
