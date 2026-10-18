@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-10-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~716 | Active |
+| `journal-1.md` | ~738 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-10-18 | 统一武将技能查看口径并修复右键详情不同步 | `f48d420` | `master` |
 | 17 | 2026-10-18 | 技能拥有查询统一入口与阮梅武将 | `30d1a69`, `aa03484` | `master` |
 | 16 | 2026-10-06 | 修复技能发动过程中可再次点击技能按钮导致跳段/中止 | `6866164` | `master` |
 | 15 | 2026-10-06 | 修复获得中央展示牌时跳过弃牌堆直接飞向获得者 | `e80cd34` | `master` |
