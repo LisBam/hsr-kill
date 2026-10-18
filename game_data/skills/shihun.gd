@@ -225,10 +225,12 @@ func _is_retaliation_target_set_legal(target_ids: Array[int]) -> bool:
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
 		return
-	if get_reincarnation_section_index() == RETALIATION_FIRE_SLASH_SECTION_INDEX:
+	# 当前轮回节；①枚举使用者组合，②枚举固定反击目标。
+	var section_index: int = get_reincarnation_section_index()
+	if section_index == RETALIATION_FIRE_SLASH_SECTION_INDEX:
 		# ②的AI动作恒为“上次目标中仍然合法的那一批”；全部失效时仍生成空目标动作，
 		# 由评分端的空目标否决决定是否放弃，与玩家侧的空节推进保持同一目标口径。
-		result.append(_make_skill_action(_get_retaliation_target_ids()))
+		result.append(_make_skill_action(_get_retaliation_target_ids(), section_index))
 		return
 	# ①合法使用者；全部非空组合允许AI在承受伤害风险与后续反击收益间选择人数。
 	var actor_ids: Array[int] = _get_incoming_slash_actor_ids()
@@ -236,7 +238,7 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	var combinations: Array = []
 	_append_actor_combinations(actor_ids, 0, [], combinations)
 	for combination_variant: Variant in combinations:
-		result.append(_make_skill_action(_int_array(combination_variant as Array)))
+		result.append(_make_skill_action(_int_array(combination_variant as Array), section_index))
 
 
 ## 递归生成①使用者的全部非空组合；只按座次递增选择以避免排列重复。
@@ -250,8 +252,9 @@ func _append_actor_combinations(source_ids: Array[int], start_index: int, curren
 
 
 ## 构造一条弑魂AI动作；顶层与payload同时保存目标，便于统一身份和资源评分读取。
-func _make_skill_action(target_ids: Array[int]) -> Dictionary:
-	return {"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "target_ids":target_ids.duplicate()}}
+## 同时把枚举当时的轮回节写入payload，供AI评分区分①承受火杀风险与②固定反击。
+func _make_skill_action(target_ids: Array[int], section_index: int) -> Dictionary:
+	return {"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "target_ids":target_ids.duplicate(), "reincarnation_section":section_index}}
 
 
 ## AI在①综合自身可能承受的火杀风险与下节反击价值，②按标准火杀逐目标收益评分。
@@ -260,9 +263,15 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var target_ids: Array = action.get("target_ids", (action.get("payload", {}) as Dictionary).get("target_ids", [])) as Array
 	if target_ids.is_empty():
 		return -100.0
+	# 本次动作归属的轮回节；AI评分实例由 bind(null, player_id) 建立（host == null），
+	# 运行时 get_reincarnation_section_index() 在只读实例上恒返回0（①节），会把②的反击动作按①的承受风险定价，
+	# 因此统一走基类的“负载优先、快照兜底”解析；两者都不可用时按①保守回退（与历史行为一致）。
+	var section_index: int = resolve_ai_reincarnation_section(authoritative_snapshot, action)
+	if section_index < 0:
+		section_index = INCOMING_FIRE_SLASH_SECTION_INDEX
 	# 评分结果；①每多一名使用者增加自身风险，但敌方会成为下轮反击目标。
 	var score: float = 0.0
-	if get_reincarnation_section_index() == INCOMING_FIRE_SLASH_SECTION_INDEX:
+	if section_index == INCOMING_FIRE_SLASH_SECTION_INDEX:
 		for target_id_variant: Variant in target_ids:
 			# 当前使用者；敌对目标的后续反击价值抵消部分当前风险，友方不会被无脑拉入伤害链。
 			var target_id: int = int(target_id_variant)

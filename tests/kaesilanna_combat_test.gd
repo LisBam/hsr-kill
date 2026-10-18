@@ -30,7 +30,11 @@ func _run() -> void:
 		return
 	if not _test_lethal_incoming_slash_ai_veto():
 		return
-	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+skip_dead_target+ai_veto")
+	if not _test_tiancai_section_aware_ai_scoring():
+		return
+	if not _test_shihun_section_aware_ai_scoring():
+		return
+	print("KAESILANNA_COMBAT_PASS roundtrip+empty_section+stale_target+retaliation_limits+skip_dead_target+ai_veto+section_aware")
 	get_tree().quit(0)
 
 
@@ -262,6 +266,15 @@ func _build_ai_snapshot(owner_hp: int) -> Dictionary:
 	]}
 
 
+## 构造带轮回公开状态与目标手牌的AI评分快照；供节次感知用例区分①②③的实际口径。
+## 只读评分实例无法读取运行时轮回进度，因此节次与轮回数只能来自快照的 reincarnation_skills。
+func _build_reincarnation_ai_snapshot(skill_id: String, section_index: int, round_count: int, owner_hp: int) -> Dictionary:
+	return {"players":[
+		{"player_id":0, "hp":owner_hp, "max_hp":5, "alive":true, "identity":"leader", "identity_revealed":true, "hand":[], "hand_count":0, "equipment":{}, "character_id":"kaesilanna", "mark_counts":{}, "judgment_area":[], "equipment_area_abolished":false, "judgment_area_abolished":false, "reincarnation_skills":{skill_id:{"round_count":round_count, "section_index":section_index, "section_count":3}}},
+		{"player_id":1, "hp":4, "max_hp":4, "alive":true, "identity":"rebel", "identity_revealed":true, "hand":[{"uid":1, "definition_id":"sha", "color":"spade", "owner_id":1, "zone":"hand"}], "hand_count":1, "equipment":{}, "character_id":"wandi", "mark_counts":{}, "judgment_area":[], "equipment_area_abolished":false, "judgment_area_abolished":false, "reincarnation_skills":{}},
+	]}
+
+
 ## 校验【天裁】①的自伤点数达到当前体力时，AI会给该动作否决级惩罚，避免以濒死返生为代价推进轮回。
 func _test_lethal_self_harm_ai_veto() -> bool:
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
@@ -289,6 +302,49 @@ func _test_lethal_incoming_slash_ai_veto() -> bool:
 	var safe_score: float = shihun.score_ai_action(_build_ai_snapshot(5), {"target_ids":[1]}, evaluator)
 	if lethal_score >= safe_score:
 		return _fail("lethal_incoming_slash_ai lethal=%.3f safe=%.3f" % [lethal_score, safe_score])
+	return true
+
+
+## 校验【天裁】AI按动作负载与快照中的真实轮回节/轮回数评分，不因只读评分实例把②③按①自伤定价。
+## 旧口径下只读实例的运行时节号恒为①，因此②③的火攻动作全部被当成“无来源自伤X点”而遭否决。
+func _test_tiancai_section_aware_ai_scoring() -> bool:
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	var tiancai: SkillDefinition = GameDatabase.create_skill("tiancai")
+	if tiancai == null:
+		return _fail("section_aware_missing_tiancai")
+	tiancai.bind(null, 0)
+	# ①自伤节的基准分；只读实例的运行时读值恰好停在这一节，因此它就是错误定价的参照值。
+	var self_harm_score: float = tiancai.score_ai_action(_build_reincarnation_ai_snapshot("tiancai", 0, 2, 5), {"payload":{"reincarnation_section":0}}, evaluator)
+	# ②对敌方的一张火攻；必须按火攻收益为正，而不是按①的2点自伤定价。
+	var multi_score: float = tiancai.score_ai_action(_build_reincarnation_ai_snapshot("tiancai", 1, 2, 5), {"target_ids":[1], "payload":{"reincarnation_section":1}}, evaluator)
+	if multi_score <= 0.0 or multi_score <= self_harm_score:
+		return _fail("tiancai_section_two_priced_as_self_harm=%.3f/%.3f" % [multi_score, self_harm_score])
+	# ③对同一目标的连续火攻按X-1张计价；轮回数必须取自快照（2→1张，3→2张）。
+	var repeated_two: float = tiancai.score_ai_action(_build_reincarnation_ai_snapshot("tiancai", 2, 2, 5), {"target_ids":[1], "payload":{"reincarnation_section":2}}, evaluator)
+	var repeated_three: float = tiancai.score_ai_action(_build_reincarnation_ai_snapshot("tiancai", 2, 3, 5), {"target_ids":[1], "payload":{"reincarnation_section":2}}, evaluator)
+	if repeated_two <= 0.0 or repeated_three <= repeated_two:
+		return _fail("tiancai_round_count_from_snapshot=%.3f/%.3f" % [repeated_two, repeated_three])
+	# 负载缺失时快照仍能定节：同一条②动作必须与带负载时同分。
+	var snapshot_only: float = tiancai.score_ai_action(_build_reincarnation_ai_snapshot("tiancai", 1, 2, 5), {"target_ids":[1]}, evaluator)
+	if not is_equal_approx(snapshot_only, multi_score):
+		return _fail("tiancai_snapshot_fallback=%.3f/%.3f" % [snapshot_only, multi_score])
+	return true
+
+
+## 校验【弑魂】AI按真实轮回节区分①承受火杀风险与②固定反击，不因只读实例把②按①定价并施加致命否决。
+func _test_shihun_section_aware_ai_scoring() -> bool:
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
+	var shihun: SkillDefinition = GameDatabase.create_skill("shihun")
+	if shihun == null:
+		return _fail("section_aware_missing_shihun")
+	shihun.bind(null, 0)
+	# 持有者1点体力：①按“使用者数达到当前体力”施加否决级惩罚，②是固定反击、不受该惩罚。
+	var incoming_score: float = shihun.score_ai_action(_build_reincarnation_ai_snapshot("shihun", 0, 1, 1), {"target_ids":[1], "payload":{"reincarnation_section":0}}, evaluator)
+	var retaliation_score: float = shihun.score_ai_action(_build_reincarnation_ai_snapshot("shihun", 1, 1, 1), {"target_ids":[1], "payload":{"reincarnation_section":1}}, evaluator)
+	if incoming_score >= 0.0:
+		return _fail("shihun_incoming_risk_not_vetoed=%.3f" % incoming_score)
+	if retaliation_score <= 0.0 or retaliation_score <= incoming_score:
+		return _fail("shihun_retaliation_priced_as_incoming=%.3f/%.3f" % [retaliation_score, incoming_score])
 	return true
 
 

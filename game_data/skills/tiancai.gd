@@ -195,19 +195,19 @@ func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	# 当前轮回数X；限制②的目标数与③的火攻张数。
 	var round_count: int = get_reincarnation_round_count()
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX or section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(round_count) == 0:
-		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id()}})
+		result.append({"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "payload":{"skill_id":get_id(), "reincarnation_section":section_index}})
 		return
 	# 当前合法目标；②组合上限为X，③逐一枚举唯一目标。
 	var legal_target_ids: Array[int] = _get_fire_attack_target_ids()
 	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX:
 		for target_id: int in legal_target_ids:
-			result.append(_make_skill_action([target_id]))
+			result.append(_make_skill_action([target_id], section_index))
 		return
 	# ②全部非空组合；最多10人桌面时组合总量有明确上界，不会造成不可控动作膨胀。
 	var combinations: Array[Array] = []
 	_append_target_combinations(legal_target_ids, 0, mini(round_count, legal_target_ids.size()), [], combinations)
 	for target_ids: Array in combinations:
-		result.append(_make_skill_action(_int_array(target_ids)))
+		result.append(_make_skill_action(_int_array(target_ids), section_index))
 
 
 ## 递归生成至多max_count名目标的全部非空组合；只按座次递增选择，因此不会产生排列重复。
@@ -223,19 +223,28 @@ func _append_target_combinations(source_ids: Array[int], start_index: int, max_c
 
 
 ## 构造一条带目标的天裁AI动作；顶层与payload同时保存目标以兼容评分入口。
-func _make_skill_action(target_ids: Array[int]) -> Dictionary:
-	return {"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "target_ids":target_ids.duplicate()}}
+## 同时把枚举当时的轮回节写入payload，供AI评分区分②多目标火攻与③同目标连续火攻。
+func _make_skill_action(target_ids: Array[int], section_index: int) -> Dictionary:
+	return {"action_type":"use_skill", "actor_id":owner_player_id, "skill_id":get_id(), "target_ids":target_ids.duplicate(), "payload":{"skill_id":get_id(), "target_ids":target_ids.duplicate(), "reincarnation_section":section_index}}
 
 
 ## AI按标准【火攻】价值评估②/③，并把①无来源自伤作为体力成本同时保留轮回推进小额收益。
 func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, evaluator: Object) -> float:
-	# 当前轮回节；评分只读取快照，不提交任何虚拟牌。
-	var section_index: int = get_reincarnation_section_index()
+	# 当前轮回节；AI评分实例由 bind(null, player_id) 建立（host == null），
+	# 运行时 get_reincarnation_section_index() 在只读实例上恒返回0（①自伤节），会把②③的火攻动作全部按①定价，
+	# 因此统一走基类的“负载优先、快照兜底”解析；两者都不可用时按动作形状回退：无目标为①，有目标为③。
+	var section_index: int = resolve_ai_reincarnation_section(authoritative_snapshot, action)
 	# 动作中的目标数组；优先读顶层字段，缺失时兼容payload中的权威副本。
 	var target_ids: Array = action.get("target_ids", (action.get("payload", {}) as Dictionary).get("target_ids", [])) as Array
+	if section_index < 0:
+		section_index = SELF_FIRE_DAMAGE_SECTION_INDEX if target_ids.is_empty() else REPEATED_FIRE_ATTACK_SECTION_INDEX
+	# 当前轮回数X；同样不能读运行时值（只读实例恒为1），缺失时按初始值1保守回退。
+	var round_count: int = resolve_ai_reincarnation_round_count(authoritative_snapshot)
+	if round_count < 1:
+		round_count = 1
 	if section_index == SELF_FIRE_DAMAGE_SECTION_INDEX:
 		# 本节自伤点数；等于当前轮回数X，且无伤害来源。
-		var self_damage: int = get_reincarnation_round_count()
+		var self_damage: int = round_count
 		# 基础资源评分；1点体力按通用资源权重折算，并保留推进轮回的小额收益。
 		var self_damage_score: float = evaluator.score_resource_change(authoritative_snapshot, owner_player_id, owner_player_id, 0, -self_damage) + 2.0
 		# 持有者当前体力；快照缺失或不为正时不施加致命惩罚，避免异常快照让AI完全放弃该技能。
@@ -243,7 +252,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 		if owner_hp > 0 and self_damage >= owner_hp:
 			self_damage_score -= AI_LETHAL_SELF_HARM_PENALTY
 		return self_damage_score
-	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(get_reincarnation_round_count()) == 0:
+	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX and _get_repeated_fire_attack_count(round_count) == 0:
 		return 1.0
 	# 标准火攻动作基础值；②各目标各算一张，③对同一目标乘以X-1次。
 	var score: float = 0.0
@@ -252,7 +261,7 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 		var fire_attack_action: Dictionary = {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":FIRE_ATTACK_DEFINITION_ID, "card_color":"none", "target_ids":[int(target_id_variant)]}
 		score += evaluator.score_action(authoritative_snapshot, fire_attack_action, owner_player_id)
 	if section_index == REPEATED_FIRE_ATTACK_SECTION_INDEX:
-		score *= float(_get_repeated_fire_attack_count(get_reincarnation_round_count()))
+		score *= float(_get_repeated_fire_attack_count(round_count))
 	return score + 1.0
 
 

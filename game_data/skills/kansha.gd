@@ -176,8 +176,8 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 	var payload: Dictionary = action.get("payload", {}) as Dictionary
 	# 本次动作归属的轮回节；AI评分实例由 bind(null, player_id) 建立（host == null），
 	# 运行时 get_reincarnation_section_index() 在只读实例上恒返回0（①节），会把③的动作按①定价，
-	# 因此必须优先读负载；负载缺失时按动作形状回退：携带目标为③，否则为①②。
-	var section_index: int = int(payload.get("reincarnation_section", -1))
+	# 因此统一走基类的“负载优先、快照兜底”解析；两者都不可用时按动作形状回退：携带目标为③，否则为①②。
+	var section_index: int = resolve_ai_reincarnation_section(authoritative_snapshot, action)
 	if section_index < 0:
 		section_index = DAMAGE_SECTION_INDEX if not (action.get("target_ids", []) as Array).is_empty() else RED_DISCARD_SECTION_INDEX
 	if section_index in [RED_DISCARD_SECTION_INDEX, BLACK_DISCARD_SECTION_INDEX]:
