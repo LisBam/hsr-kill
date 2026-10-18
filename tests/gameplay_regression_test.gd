@@ -56,6 +56,12 @@ var _zhuque_uid: int = -1
 ## 当前场景需要由玩家选择发动的银月枪实体 UID。
 var _silver_moon_uid: int = -1
 
+## 寒冰剑AI决策测试中基础策略实际提交的选牌负载；用于断言“1张牌取消、2张牌发动”。
+var _hanbing_ai_payload: Dictionary = {}
+
+## 寒冰剑AI决策测试是否已经收到过一次选牌请求；未收到时断言必须失败而不是误判为取消。
+var _hanbing_ai_request_seen: bool = false
+
 ## 桃园结义恢复测试收到的无懈询问次数；两名目标各自询问一次，完成后必须恢复同一出牌阶段。
 var _taoyuan_negation_request_count: int = 0
 
@@ -204,7 +210,9 @@ func _run() -> void:
 		return
 	if not await _test_delayed_judgment_presentation_sequence():
 		return
-	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d taoyuan=%d zhuque=%d yinyue=%d zhangba=2 judge=2" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _taoyuan_negation_request_count, _zhuque_request_count, _silver_moon_request_count])
+	if not await _test_hanbing_ai_requires_card_value_over_damage():
+		return
+	print("GAMEPLAY_REGRESSION_PASS wuxie=%d aoe=%d dying=%d taoyuan=%d zhuque=%d yinyue=%d zhangba=2 judge=2 hanbing=2" % [_wuxie_request_count, _aoe_request_count, _dying_request_count, _taoyuan_negation_request_count, _zhuque_request_count, _silver_moon_request_count])
 	get_tree().quit(0)
 
 
@@ -752,6 +760,44 @@ func _test_zhuque_requires_activation_choice() -> bool:
 	var target: PlayerState = _controller.state.get_player(1)
 	if _zhuque_request_count != 1 or target.hp != 2:
 		return _fail("zhuque_result=%d:%d" % [_zhuque_request_count, target.hp])
+	return true
+
+
+## 验证寒冰剑AI评分扣除“放弃【杀】伤害”的机会成本：目标只有1张牌时恰好打平而不再发动，2张牌时才发动。
+## 断言走的是生产链路 BasicAIPolicy.choose_card_choice()，而不是单独调用通用评估器：
+## 通用层只把弃牌本身算作收益（1张=2.0分），机会成本由寒冰剑自己的 score_ai_choice() 叠加，
+## 只调用通用层会得到“两张情况都发动”的假通过，无法覆盖本次修复。
+func _test_hanbing_ai_requires_card_value_over_damage() -> bool:
+	_scenario = "hanbing"
+	# 目标手牌数 → 期望AI是否发动；1张时弃牌收益2.0与1点伤害成本2.0打平，2张时4.0−2.0为正。
+	var expectations: Array[Dictionary] = [
+		{"card_count":1, "expect_activate":false},
+		{"card_count":2, "expect_activate":true},
+	]
+	for expectation: Dictionary in expectations:
+		_hanbing_ai_payload = {}
+		_hanbing_ai_request_seen = false
+		_reset_state(2)
+		# 攻击者装备的寒冰剑；只有装备同一张实体时才会创建替代伤害选择。
+		var hanbing: CardInstance = CardInstance.new("hanbing", "spade", 1)
+		hanbing.zone = "equipment"
+		hanbing.owner_id = 0
+		_controller.state.get_player(0).equipment["weapon"] = hanbing
+		# 目标手牌；数量由本项期望决定，全部为非响应牌以保证【杀】必然进入伤害步骤。
+		var target_card_count: int = int(expectation.get("card_count", 0))
+		for index: int in range(target_card_count):
+			_add_hand_card(1, "tao" if index == 0 else "wuzhong", "heart", index + 2)
+		# 攻击者使用的【杀】；目标无【闪】，伤害步骤必然到达寒冰剑时机。
+		var slash: CardInstance = _add_hand_card(0, "sha", "spade", 7)
+		_controller._execute_card_use(0, slash, [1])
+		if not await _wait_until_card_finalized(slash.uid):
+			return _fail("hanbing_timeout cards=%d" % target_card_count)
+		# 目标体力；发动时伤害被防止而保持4点，取消时正常受到1点伤害。
+		var target: PlayerState = _controller.state.get_player(1)
+		# 实际是否发动；以“目标手牌是否被弃置”为准，避免只依赖策略返回的负载字段。
+		var activated: bool = target.hand.size() < target_card_count
+		if not _hanbing_ai_request_seen or activated != bool(expectation.get("expect_activate", false)) or target.hp != (4 if activated else 3):
+			return _fail("hanbing_ai cards=%d payload=%s hp=%d activated=%s" % [target_card_count, _hanbing_ai_payload, target.hp, activated])
 	return true
 
 
@@ -1487,6 +1533,9 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		selected_uids = [_zhuque_uid]
 	elif _scenario == "zhuque" and kind == "slash_response":
 		selected_uids = []
+	elif _scenario == "hanbing" and kind == "slash_response":
+		# 目标放弃【闪】响应；只有伤害步骤真正开始，寒冰剑的替代伤害询问才会出现。
+		selected_uids = []
 	elif _scenario == "silver_moon" and kind == "equipment_trigger" and str(context.get("equipment_definition_id", "")) == "yinyue":
 		_silver_moon_request_count += 1
 		selected_uids = [_silver_moon_uid]
@@ -1536,6 +1585,24 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		selected_uids = [_qilin_mount_uid]
 	elif kind == "wooden_ox_transfer":
 		# 木牛流马第二段转移询问；两个新增场景自行同步提交确认或取消，避免延迟提交与断言竞争。
+		return
+	elif _scenario == "hanbing" and kind == "hanbing_cards":
+		# 寒冰剑选牌询问；交给生产链路的基础策略决策，并把结果负载保存给断言使用。
+		_hanbing_ai_request_seen = true
+		# 基础策略；与正式对局使用同一实现，AI评分钩子必须经过 BasicAIPolicy 才会叠加卡牌专属修正。
+		var policy: BasicAIPolicy = BasicAIPolicy.new(0)
+		# 当前请求的合法动作；由权威控制器枚举，包含取消与全部1至2张组合。
+		var legal_actions: Array[Dictionary] = _controller._build_card_choice_actions(choice_data)
+		# 策略决策结果；未确认时负载为标准的 confirmed=false 取消动作。
+		var decision: Dictionary = policy.choose_card_choice(_controller.state.to_dict(0, true), choice_data, legal_actions)
+		_hanbing_ai_payload = (decision.get("payload", {}) as Dictionary).duplicate(true)
+		# 策略选中的实体UID；延迟调用必须传强类型数组，无类型字面量会被参数类型检查拒绝。
+		var chosen_uids: Array[int] = []
+		chosen_uids.assign(_hanbing_ai_payload.get("selected_card_uids", []) as Array)
+		# 空材料数组；寒冰剑不需要装备材料，但延迟调用同样要求强类型。
+		var no_material_uids: Array[int] = []
+		# 提交策略实际选择的负载；规则层仍会复核请求归属、候选UID与数量。
+		call_deferred("_submit_choice", int(choice_data.get("request_id", -1)), int(choice_data.get("chooser_id", -1)), chosen_uids, _empty_target_ids(), no_material_uids, bool(_hanbing_ai_payload.get("confirmed", false)))
 		return
 	else:
 		_fail("unexpected_choice=%s:%s" % [_scenario, kind])
