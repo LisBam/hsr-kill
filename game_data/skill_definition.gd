@@ -296,18 +296,24 @@ func restore_limited_use() -> void:
 ## 字段不存在时不裁剪（旧回放与手动构造的测试快照保持完整技能列表）。
 ## 临时与局内获得技能不参与裁剪：它们的记录键存在即代表此刻拥有。
 ## 纯函数且不依赖任何运行时状态，因此技能规则段、AI 评分实例与内容测试可以共用同一套识别规则。
-static func collect_snapshot_skill_ids(player_snapshot: Dictionary) -> Array[String]:
-	# 技能ID结果；空快照返回空数组，调用方按“无技能”处理。
+##
+## `native_skill_ids` 为可选的固有技能来源覆盖：缺省（空数组）时按快照 `character_id` 查库，
+## 与改动前逐字节一致；调用方持有「被查看角色」的武将定义副本时可显式传入它。
+## 需要该参数的原因是**快照未必带 character_id**：选将候选、回放快照与手工构造的测试快照
+## 只带武将定义对象，查库会返回空技能表并让整份固有技能静默消失。
+## 该参数只替换「固有技能从哪来」，**不参与**裁剪判定——installed_skill_ids 规则仍只有本函数一处实现。
+static func collect_snapshot_skill_ids(player_snapshot: Dictionary, native_skill_ids: Array = []) -> Array[String]:
+	# 技能ID结果；既无快照又无显式固有技能表时返回空数组，调用方按“无技能”处理。
 	var skill_ids: Array[String] = []
-	if player_snapshot.is_empty():
+	if player_snapshot.is_empty() and native_skill_ids.is_empty():
 		return skill_ids
 	# 是否按实际安装集合裁剪；只有权威快照会下发该字段。
 	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
 	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
 	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
-	# 固有技能；由 CharacterDefinition 自动生成稳定技能ID数组。
-	var character: Dictionary = GameDatabase.get_character(str(player_snapshot.get("character_id", "")))
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
+	# 固有技能；调用方显式传入时以它为准，否则由 CharacterDefinition 自动生成的稳定技能ID数组提供。
+	var native_skills: Array = native_skill_ids if not native_skill_ids.is_empty() else (GameDatabase.get_character(str(player_snapshot.get("character_id", ""))).get("skills", []) as Array)
+	for skill_id_variant: Variant in native_skills:
 		# 当前固有技能ID；空值、已被失去与重复项都不会进入结果。
 		var native_skill_id: String = str(skill_id_variant)
 		if native_skill_id.is_empty() or skill_ids.has(native_skill_id):
@@ -339,17 +345,21 @@ static func collect_snapshot_skill_ids(player_snapshot: Dictionary) -> Array[Str
 ## 判断玩家权威快照是否拥有指定技能；语义等价于 collect_snapshot_skill_ids(...).has(skill_id)，
 ## 但直接做成员判定、不构造中间数组，供高频的“是否拥有技能”查询使用。
 ## 与 collect_snapshot_skill_ids 共用同一套来源清单与 installed_skill_ids 裁剪规则，两者永远不会给出不同答案。
+## `native_skill_ids` 与 collect_snapshot_skill_ids 的同名参数语义完全一致：两者必须传入同一个覆盖值，
+## 否则“列表”与“成员判定”会分别按武将定义与数据库武将定义求值而给出不同答案。
 ## 只读公开稳定ID，不读取隐藏信息，也不创建技能实例。
-static func snapshot_has_skill(player_snapshot: Dictionary, skill_id: String) -> bool:
-	if player_snapshot.is_empty() or skill_id.is_empty():
+static func snapshot_has_skill(player_snapshot: Dictionary, skill_id: String, native_skill_ids: Array = []) -> bool:
+	if skill_id.is_empty():
+		return false
+	if player_snapshot.is_empty() and native_skill_ids.is_empty():
 		return false
 	# 是否按实际安装集合裁剪；与 collect_snapshot_skill_ids 共用同一判定口径。
 	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
 	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
 	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
-	# 固有技能；命中且未被失去时直接返回。
-	var character: Dictionary = GameDatabase.get_character(str(player_snapshot.get("character_id", "")))
-	if (character.get("skills", []) as Array).has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
+	# 固有技能；调用方显式传入时以它为准，否则查库取该武将的稳定技能ID数组。
+	var native_skills: Array = native_skill_ids if not native_skill_ids.is_empty() else (GameDatabase.get_character(str(player_snapshot.get("character_id", ""))).get("skills", []) as Array)
+	if native_skills.has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
 		return true
 	# 模式技能；与固有技能同名时不会重复判定。
 	if (player_snapshot.get("mode_skill_ids", []) as Array).has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):

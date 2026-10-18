@@ -2303,70 +2303,31 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 	return {"description":"；".join(description_parts)}
 
 
-## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。
-## 判定依据是快照中的实际安装技能ID：失去技能（如【留白】）会卸载实例，该列表随之收缩，界面无需任何名单即可收敛。
+## 返回指定身份实际拥有并可显示的武将技能；技能栏据此创建按钮。
 ##
-## 本函数是**展示管线**，不是拥有权查询：拥有口径（哪些技能此刻算在这名角色身上）由统一入口
-## SkillDefinition.collect_snapshot_skill_ids / SkillDefinition.snapshot_has_skill 定义，两者共用同一条
-## installed_skill_ids 裁剪规则。本函数只在该规则之上追加展示专属语义——技能按钮的固有顺序、
-## 缺失定义的配置错误占位、模式技能缺失时的界面回退推算与领袖技可见性。
-## 技能规则代码与 AI 代码一律使用统一入口，不得复制本函数的展示规则。
+## 技能集合与展示顺序的唯一实现是 CharacterSkillDisplay（悬停武将资料与右键武将详情调用同一个函数），
+## 因此三个查看入口永远同步：失去技能（如【留白】）后三处同时收敛，重新获得后同时恢复。
+## 本函数只在其结果之上叠加技能栏专属的可见性语义，不再自行枚举技能：
+## ① 领袖技只对领袖身份可见；② 快照缺少模式技能时按对局模式与身份做界面回退推算。
+## 技能规则代码与 AI 代码一律使用统一入口 SkillDefinition.collect_snapshot_skill_ids /
+## SkillDefinition.snapshot_has_skill，不得复制本函数的展示规则。
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
-	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
+	# 本次查询使用的只读快照；默认直接复用调用方快照，只有需要回退推算时才复制一份。
+	var query_snapshot: Dictionary = player_snapshot
+	# 模式技能缺失时的界面回退推算；飞扬、跋扈、共苦等模式技能在快照缺字段时按身份与对局模式补出，
+	# 否则技能栏会少一个按钮。该回退只补齐展示来源，不参与拥有口径判定，也不改写调用方快照。
+	if (player_snapshot.get("mode_skill_ids", []) as Array).is_empty() and not identity.is_empty():
+		query_snapshot = player_snapshot.duplicate()
+		query_snapshot["mode_skill_ids"] = IdentityRules.new().get_mode_skill_ids(identity, str(_snapshot.get("match_mode", "identity")))
+	# 可见技能结果；顺序直接继承统一视图模型，保证按钮布局与悬停、右键详情逐项一致。
 	var result: Array[String] = []
-	# 当前实际安装的技能ID；这是“某个技能现在是否还在这名角色身上”的唯一依据。
-	# 界面若继续只读武将静态定义，已被卸载的技能会继续占位并出现在悬停与右键详情里。
-	# 快照缺少该字段时（旧回放、手动构造的预览快照）不做裁剪，保持与改动前逐字节一致。
-	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
-	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		# 当前技能 ID 与元数据；缺失定义仍保留占位按钮，便于发现普通技能配置错误。
-		var skill_id: String = str(skill_id_variant)
-		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-		# 缺失定义属于配置错误，必须继续显示以便被发现，因此不参与“已安装”裁剪。
-		if filter_by_installed and not skill_definition.is_empty() and not installed_skill_ids.has(skill_id):
-			continue
-		if bool(skill_definition.get("leader_skill", false)) and identity != "leader":
+	for skill_id: String in CharacterSkillDisplay.collect_visible_skill_ids(query_snapshot, character):
+		# 展示专属：领袖技只属于领袖身份，非领袖的技能栏不应留下一个点不动的按钮。
+		# 该裁剪覆盖全部技能来源（固有/模式/临时/局内获得），与文档口径「领袖技只有领袖身份创建按钮」一致；
+		# 当前没有任何模式技能、机缘卡或过关斩将奖励会授予领袖技，因此与只裁剪固有技能的旧实现结果相同。
+		if bool(GameDatabase.get_skill(skill_id).get("leader_skill", false)) and identity != "leader":
 			continue
 		result.append(skill_id)
-	# 模式技能；优先读玩家快照注入字段，缺省时按对局模式与身份推算。
-	var mode_skill_ids: Array = player_snapshot.get("mode_skill_ids", []) as Array
-	if mode_skill_ids.is_empty() and not identity.is_empty():
-		var match_mode: String = str(_snapshot.get("match_mode", "identity"))
-		mode_skill_ids = IdentityRules.new().get_mode_skill_ids(identity, match_mode)
-	for mode_skill_id_variant: Variant in mode_skill_ids:
-		var mode_skill_id: String = str(mode_skill_id_variant)
-		# 已失去的模式技能同样不显示；否则技能栏会留下一个点不动的空按钮。
-		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
-			continue
-		if not mode_skill_id.is_empty() and not result.has(mode_skill_id):
-			result.append(mode_skill_id)
-	# 局内临时技能；例如【铁壁】授予的【琥珀】，必须显示在主视角技能栏。
-	# 键顺序保持字典遍历顺序，稳定追加到固有与模式技能之后。
-	var temporary_skills: Dictionary = player_snapshot.get("temporary_skills", {}) as Dictionary
-	# 临时技能 ID 列表副本；排序保证同帧内不同来源快照不会打乱按钮相对位置。
-	var temporary_skill_ids: Array[String] = []
-	for temporary_skill_id_variant: Variant in temporary_skills.keys():
-		var temporary_skill_id: String = str(temporary_skill_id_variant)
-		if temporary_skill_id.is_empty() or result.has(temporary_skill_id):
-			continue
-		temporary_skill_ids.append(temporary_skill_id)
-	temporary_skill_ids.sort()
-	for temporary_skill_id: String in temporary_skill_ids:
-		result.append(temporary_skill_id)
-	# 局内永久获得技能；机缘授予技能在临时技能之后按稳定ID排序显示，死亡前不会因轮数自动移除。
-	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
-	# 已获得技能ID副本；排序避免字典序列化实现差异改变按钮位置。
-	var acquired_skill_ids: Array[String] = []
-	for acquired_skill_id_variant: Variant in acquired_skills.keys():
-		# 当前已获得技能ID；与固有、模式或临时技能重复时只显示一次。
-		var acquired_skill_id: String = str(acquired_skill_id_variant)
-		if acquired_skill_id.is_empty() or result.has(acquired_skill_id):
-			continue
-		acquired_skill_ids.append(acquired_skill_id)
-	acquired_skill_ids.sort()
-	for acquired_skill_id: String in acquired_skill_ids:
-		result.append(acquired_skill_id)
 	return result
 
 
