@@ -12,6 +12,10 @@ const REINCARNATION_TAG: String = "轮回技"
 ## “欢愉技”标签正文；只用于GameDatabase加载期校验正文类型声明与joy_skill标签是否一致，运行期判定一律读取标签。
 const JOY_SKILL_TAG: String = "欢愉技"
 
+## AI无法从动作负载与权威快照判定轮回进度时的返回值；调用方据此按动作形状或初始状态保守回退。
+## 该值必须是负数，才能与合法的零基轮回节索引0（①）区分开。
+const AI_REINCARNATION_UNKNOWN: int = -1
+
 ## 正文句末标点；类型声明属于正文开头的类型段，必定写在第一句结束之前。
 ## 该上界用于把“类型段里声明自己”与“效果描述里引用他人技能”彻底分开。
 const DESCRIPTION_SENTENCE_END_PUNCTUATION: String = "。"
@@ -389,6 +393,53 @@ func get_reincarnation_round_count() -> int:
 ## 返回轮回技当前轮回节零基索引；①对应0，普通技能回退0。
 func get_reincarnation_section_index() -> int:
 	return maxi(int(get_reincarnation_state().get("section_index", 0)), 0)
+
+
+## 返回权威快照中指定角色的本技能轮回公开状态；缺少玩家条目或未登记为轮回技时返回空字典。
+## 轮回节与轮回数都是公开信息（界面徽记与信息栏读取同一字段），因此只读评分实例可以安全读取。
+## player_id 缺省为技能持有者，调用方也可显式查询其他角色（例如被评估的受击目标）。
+func get_snapshot_reincarnation_state(authoritative_snapshot: Dictionary, player_id: int = -1) -> Dictionary:
+	# 查询角色；负数表示技能持有者。
+	var resolved_player_id: int = owner_player_id if player_id < 0 else player_id
+	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
+		# 当前玩家快照；只匹配查询角色，其余条目直接跳过。
+		var player: Dictionary = player_variant as Dictionary
+		if int(player.get("player_id", -1)) != resolved_player_id:
+			continue
+		return (player.get("reincarnation_skills", {}) as Dictionary).get(get_id(), {}) as Dictionary
+	return {}
+
+
+## 返回AI评分时该动作归属的轮回节零基索引；无法判定时返回 AI_REINCARNATION_UNKNOWN。
+##
+## 【为什么需要本函数】AI评分实例由 `bind(null, player_id)` 建立（host == null），运行时
+## get_reincarnation_section_index() 在这类实例上恒返回0（①节）、get_reincarnation_round_count() 恒返回1。
+## 任何AI钩子直接使用这两个运行时读值，都会把②③④的动作按①定价、把轮回数X固定按1计算，
+## 使AI对高阶轮回节给出系统性错误的评分。本函数按以下优先级取值，两处来源都是权威数据：
+##   ① 动作负载 payload.reincarnation_section —— 由 append_play_phase_actions 在枚举当时写入，最精确；
+##   ② 权威快照 reincarnation_skills[技能ID].section_index —— 轮回公开状态，作为负载缺失时的兜底，
+##      同时覆盖手工构造的测试动作与历史快照。
+## 两者都不可用时返回 AI_REINCARNATION_UNKNOWN，由调用方决定保守回退，而不是退回运行时读值的默认①。
+func resolve_ai_reincarnation_section(authoritative_snapshot: Dictionary, action: Dictionary = {}, player_id: int = -1) -> int:
+	# 动作负载中的节号；枚举入口写入，缺失或非法时为 AI_REINCARNATION_UNKNOWN。
+	var payload_section: int = int((action.get("payload", {}) as Dictionary).get("reincarnation_section", AI_REINCARNATION_UNKNOWN))
+	if payload_section >= 0:
+		return payload_section
+	# 快照中的节号；与负载同源但独立可查，缺失时保持 AI_REINCARNATION_UNKNOWN。
+	var state: Dictionary = get_snapshot_reincarnation_state(authoritative_snapshot, player_id)
+	if state.is_empty():
+		return AI_REINCARNATION_UNKNOWN
+	return maxi(int(state.get("section_index", AI_REINCARNATION_UNKNOWN)), AI_REINCARNATION_UNKNOWN)
+
+
+## 返回AI评分时该技能当前的轮回数X；无法判定时返回 AI_REINCARNATION_UNKNOWN。
+## 与 resolve_ai_reincarnation_section 同源、同理：运行时 get_reincarnation_round_count() 在只读评分实例上恒为1。
+func resolve_ai_reincarnation_round_count(authoritative_snapshot: Dictionary, player_id: int = -1) -> int:
+	# 快照中的轮回数；缺失时返回 AI_REINCARNATION_UNKNOWN，由调用方决定保守回退。
+	var state: Dictionary = get_snapshot_reincarnation_state(authoritative_snapshot, player_id)
+	if state.is_empty():
+		return AI_REINCARNATION_UNKNOWN
+	return maxi(int(state.get("round_count", AI_REINCARNATION_UNKNOWN)), AI_REINCARNATION_UNKNOWN)
 
 
 ## 检查并开始一次轮回技发动；通用永劫与每轮回节阶段限次均在服务中统一复核。

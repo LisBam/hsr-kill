@@ -53,15 +53,29 @@ func _on_owner_dying_begin(_event: RuleEvent) -> void:
 
 
 ## 修正AI对持有者预计致命来牌的估值；①可回复X点时按回复后的生存结果而非直接死亡评估。
+## AI钩子没有host，因此轮回节与轮回数都改从权威快照的轮回公开状态读取，不能调用运行时读值。
 func modify_ai_incoming_card_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, _definition: Dictionary, ai_profile: Dictionary, _target_result: float, expected_damage_amount: int, current_score: float, evaluator: Object) -> float:
-	if target_id != owner_player_id or not bool(ai_profile.get("damage", false)) or get_reincarnation_section_index() != RECOVER_SECTION_INDEX:
+	if target_id != owner_player_id or not bool(ai_profile.get("damage", false)):
 		return current_score
-	# 血仇持有者快照；只有预计伤害会令其进入濒死时才替换普通致死估值。
+	# 血仇持有者快照；同时提供轮回公开状态与体力信息。
 	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
-	if target.is_empty() or int(target.get("hp", 0)) + int(target.get("shield", 0)) > expected_damage_amount:
+	if target.is_empty():
+		return current_score
+	# 本技能的轮回公开状态；AI评分实例由 bind(null, player_id) 建立（host == null），
+	# 运行时 get_reincarnation_section_index() 恒为①、get_reincarnation_round_count() 恒为1，
+	# 直接使用它们会把②的“减少体力上限并摸X张牌”误按①的“回复X点体力”估值，因此必须读快照。
+	var reincarnation_state: Dictionary = get_snapshot_reincarnation_state(authoritative_snapshot, target_id)
+	# 当前轮回节零基索引；缺失时按①处理，与权威服务的初始状态一致。
+	var section_index: int = int(reincarnation_state.get("section_index", RECOVER_SECTION_INDEX))
+	if section_index != RECOVER_SECTION_INDEX:
+		return current_score
+	# 本次效果使用的轮回数X；缺失时按初始值1处理，与权威服务一致。
+	var round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
+	# 只有预计伤害会令其进入濒死时才替换普通致死估值。
+	if int(target.get("hp", 0)) + int(target.get("shield", 0)) > expected_damage_amount:
 		return current_score
 	# 回复后的预期体力；X至少为1，结果用于统一资源变化评分并保留双方阵营关系。
-	var recovered_hp: int = mini(maxi(int(target.get("hp", 0)) - expected_damage_amount + get_reincarnation_round_count(), 1), int(target.get("max_hp", 1)))
+	var recovered_hp: int = mini(maxi(int(target.get("hp", 0)) - expected_damage_amount + round_count, 1), int(target.get("max_hp", 1)))
 	# 相对受伤前体力变化；按实际伤害与随后回复的合并结果估值。
 	var net_hp_change: int = recovered_hp - int(target.get("hp", 0))
 	return evaluator.score_resource_change(authoritative_snapshot, actor_id, target_id, 0, net_hp_change)

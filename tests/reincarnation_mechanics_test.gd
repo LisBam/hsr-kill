@@ -31,6 +31,8 @@ func _run() -> void:
 		return
 	if not _test_xvechou_shishen_and_restore():
 		return
+	if not _test_xvechou_ai_incoming_effect_snapshot_state():
+		return
 	if not _test_play_limit_semantics():
 		return
 	if not _test_jvkou_huanri_and_ai():
@@ -448,6 +450,68 @@ func _test_xvechou_shishen_and_restore() -> bool:
 	_controller.event_bus.unsubscribe_owner(self)
 	if owner.hp != 1 or slash_target.hp != 3 or _shishen_damage_bonus_at_sha_before != 1 or targeted_index < 0 or dying_index <= targeted_index or sha_before_index <= dying_index:
 		return _fail("shishen_real_card=%d/%d/%d/%s" % [owner.hp, slash_target.hp, _shishen_damage_bonus_at_sha_before, _shishen_resolution_order])
+	return true
+
+
+## 校验【血仇】的AI来牌估值按权威快照中的真实轮回节与轮回数计算，而不是按只读评分实例的默认值。
+## AI评分实例由 bind(null, player_id) 建立（host == null），运行时 get_reincarnation_section_index() 恒为①、
+## get_reincarnation_round_count() 恒为1；旧口径因此在②节仍按①的“回复X点体力”估值、并把X固定按1计算。
+## 本用例必须用只读实例评分：绑定到控制器的实例能读到真实进度，会把缺陷完全掩盖掉。
+func _test_xvechou_ai_incoming_effect_snapshot_state() -> bool:
+	_reset_state(3)
+	# 血仇运行时实例；经正式 bind/install 路径登记轮回公开状态，保证快照里的进度由真实服务产生。
+	var runtime_skill: SkillDefinition = _install_skill(0, "xvechou")
+	if runtime_skill == null:
+		return _fail("xvechou_ai_install")
+	# 只读评分实例；与正式AI完全一致地用 bind(null, player_id) 建立，host 为 null。
+	var scoring_skill: SkillDefinition = GameDatabase.create_skill("xvechou")
+	if scoring_skill == null:
+		return _fail("xvechou_scoring_create")
+	scoring_skill.bind(null, 0)
+	# 血仇持有者；身份为公开领袖，二号反贼构成确定敌对关系。
+	var owner: PlayerState = _controller.state.get_player(0)
+	# 估值器；与正式AI策略共用同一身份模型口径。
+	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	# 预计致命来牌的【杀】定义；damage为true才会进入血仇的修正分支。
+	var slash_definition: Dictionary = GameDatabase.get_card("sha")
+	# 持有者体力压到1点；此时1点预计伤害必然令其进入濒死。
+	owner.hp = 1
+	# ②节的轮回公开状态；减少1点体力上限并摸X张牌，不回复体力。
+	owner.reincarnation_skills["xvechou"] = {"round_count":3, "section_index":1, "section_count":2}
+	# 只读实例的运行时读值必须退化为默认值①/1；这正是旧口径误判的成因，也证明本用例的评分实例形态正确。
+	if scoring_skill.get_reincarnation_section_index() != 0 or scoring_skill.get_reincarnation_round_count() != 1:
+		return _fail("xvechou_readonly_defaults=%d/%d" % [scoring_skill.get_reincarnation_section_index(), scoring_skill.get_reincarnation_round_count()])
+	# 权威完整快照；AI评分实例只能通过它读取轮回进度。
+	var section_two_snapshot: Dictionary = _controller.state.to_dict(-1, true)
+	# ②节必须原样返回通用层评分：不回复体力，因此不存在“伤害后仍存活”的替换估值。
+	var section_two_score: float = scoring_skill.modify_ai_incoming_card_effect(section_two_snapshot, 1, 0, slash_definition, {"damage":true}, -1.5, 1, 3.0, evaluator)
+	if not is_equal_approx(section_two_score, 3.0):
+		return _fail("xvechou_section_two_priced_as_recover=%.3f" % section_two_score)
+	# ①节且轮回数为3；3点回复足以让1点体力在承受1点伤害后回到3点，净体力变化为+2。
+	owner.reincarnation_skills["xvechou"] = {"round_count":3, "section_index":0, "section_count":2}
+	var section_one_snapshot: Dictionary = _controller.state.to_dict(-1, true)
+	# 期望值由统一资源函数给出；观察者（二号反贼）对持有者的负态度决定符号。
+	var expected_recover_score: float = evaluator.score_resource_change(section_one_snapshot, 1, 0, 0, 2)
+	var recover_score: float = scoring_skill.modify_ai_incoming_card_effect(section_one_snapshot, 1, 0, slash_definition, {"damage":true}, -1.5, 1, 3.0, evaluator)
+	if not is_equal_approx(recover_score, expected_recover_score):
+		return _fail("xvechou_section_one_recover=%.3f/%.3f" % [recover_score, expected_recover_score])
+	# 轮回数必须取自快照：X=1 时1点体力在承受1点伤害后只回到1点，净体力变化为0，与X=3的+2不同。
+	owner.reincarnation_skills["xvechou"] = {"round_count":1, "section_index":0, "section_count":2}
+	var round_one_snapshot: Dictionary = _controller.state.to_dict(-1, true)
+	var round_one_score: float = scoring_skill.modify_ai_incoming_card_effect(round_one_snapshot, 1, 0, slash_definition, {"damage":true}, -1.5, 1, 3.0, evaluator)
+	if not is_equal_approx(round_one_score, evaluator.score_resource_change(round_one_snapshot, 1, 0, 0, 0)):
+		return _fail("xvechou_round_count_from_snapshot=%.3f" % round_one_score)
+	if is_equal_approx(round_one_score, recover_score):
+		return _fail("xvechou_round_count_ignored=%.3f" % round_one_score)
+	# 非伤害来牌不进入修正分支；轮回进度不改变该边界。
+	if not is_equal_approx(scoring_skill.modify_ai_incoming_card_effect(section_one_snapshot, 1, 0, GameDatabase.get_card("guohe"), {"damage":false}, -1.5, 0, 3.0, evaluator), 3.0):
+		return _fail("xvechou_non_damage_modified")
+	# 快照缺少轮回公开状态时按初始①节与X=1回退，保证旧快照与手工构造的测试快照仍可评分。
+	var legacy_snapshot: Dictionary = _controller.state.to_dict(-1, true)
+	for player_variant: Variant in legacy_snapshot.get("players", []) as Array:
+		(player_variant as Dictionary).erase("reincarnation_skills")
+	if not is_equal_approx(scoring_skill.modify_ai_incoming_card_effect(legacy_snapshot, 1, 0, slash_definition, {"damage":true}, -1.5, 1, 3.0, evaluator), evaluator.score_resource_change(legacy_snapshot, 1, 0, 0, 0)):
+		return _fail("xvechou_legacy_snapshot_fallback")
 	return true
 
 
