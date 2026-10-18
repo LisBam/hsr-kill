@@ -259,13 +259,6 @@ func _snapshot_recovers_own_damage(player_snapshot: Dictionary) -> bool:
 
 
 ## 判断玩家公开快照是否持有指定固有、模式、临时或局内获得技能。
-## 与统一AI评估器的同名判定保持完全相同的读取口径，只使用公开稳定ID，不访问运行时技能对象。
+## 实现委托 SkillDefinition.snapshot_has_skill：拥有口径只有一份实现，卡牌文件不再自行枚举技能来源。
 func _snapshot_has_skill(player_snapshot: Dictionary, skill_id: String) -> bool:
-	if player_snapshot.is_empty() or skill_id.is_empty():
-		return false
-	# 固有技能；由武将定义自动生成稳定技能ID数组。
-	if (GameDatabase.get_character(str(player_snapshot.get("character_id", ""))).get("skills", []) as Array).has(skill_id):
-		return true
-	if (player_snapshot.get("mode_skill_ids", []) as Array).has(skill_id):
-		return true
-	return (player_snapshot.get("temporary_skills", {}) as Dictionary).has(skill_id) or (player_snapshot.get("acquired_skills", {}) as Dictionary).has(skill_id)
+	return SkillDefinition.snapshot_has_skill(player_snapshot, skill_id)

@@ -204,8 +204,10 @@ func _run() -> void:
 	# 【盲注】是用两种颜色叠护盾与摸牌的阶段技，【风口】是批量获得时机与主动夺牌并失去自身的主动技。
 	# 新增银枝的【巡礼】【礼节】后为112个；【巡礼】是插入三段额外阶段并改写距离的半锁定技，
 	# 【礼节】是批量获得后令他人摸牌、被他人回复后回赠体力的主动技。
+	# 新增阮梅的【梅绽】【灵赋】【阮弦】后为115个；【梅绽】是“所有拥有本技能的角色各摸一张牌”的锁定技，
+	# 【灵赋】是按牌类别全局限次并授予/升级“梅绽”的主动技，【阮弦】是按花色全局限次的结束阶段技。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 112:
+	if skill_definition_count != 115:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -315,8 +317,9 @@ func _run() -> void:
 	# 新增丹恒·饮月（仙舟联盟，4体力）后为50名；他与同势力的丹恒通过稳定ID区分，引用【伏辰】【濯世】。
 	# 新增砂金（星际和平公司，3体力）后为51名；他引用【筹码】【盲注】【风口】。
 	# 新增银枝（星间寰宇，4体力）后为52名；他引用【巡礼】【礼节】。
+	# 新增阮梅（银河学者，3体力）后为53名；她引用【梅绽】【灵赋】【阮弦】。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 52:
+	if character_definition_count != 53:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

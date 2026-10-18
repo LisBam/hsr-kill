@@ -10570,6 +10570,31 @@ func get_installed_skill_ids(player_id: int) -> Array[String]:
 	return result
 
 
+## 判断指定角色此刻是否拥有指定技能；这是全项目「某角色是否拥有技能 X」的唯一权威查询入口。
+##
+## 判定口径 = 已安装技能实例 ∪ 已获得技能记录 ∪ 临时技能记录。三个来源必须同时检查：
+## remove_skill() 的既有语义明确规定「实例为空但记录仍在时同样算拥有」，只读实例容器会漏判该状态。
+## 因此固有技能、模式技能、临时技能与局内获得技能（含【升变】军功授予的【奇袭】这类“视为拥有”）都返回 true。
+##
+## 纯只读：不创建技能实例、不安装时机、不广播状态、不写日志，因此内容脚本可以安全地在 can_activate、
+## 时机回调与 AI 评分中反复调用。不做存活过滤：死亡或离场角色的技能归属仍如实返回，
+## 调用方按自身语义决定是否过滤（例如“所有拥有技能 X 的角色各摸一张牌”需要自行跳过已离场者）。
+func has_skill(player_id: int, skill_id: String) -> bool:
+	# 查询参数；空技能ID或无效对局没有任何可查询的技能。
+	if skill_id.is_empty() or state == null:
+		return false
+	# 目标角色；未选将或ID越界时其技能表恒为空。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null:
+		return false
+	# 已安装技能实例表；固有、模式、临时与局内获得技能共用同一容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	if player_skills.has(skill_id):
+		return true
+	# 已获得/临时技能记录；实例为空但记录仍在时同样算“拥有”，与 remove_skill() 的清理口径保持一致。
+	return player.acquired_skills.has(skill_id) or player.temporary_skills.has(skill_id)
+
+
 ## 返回主动技能的只读交互预览；界面与 AI 可查询，但所有提交仍由技能 can_activate 与 activate 权威复核。
 func get_skill_activation_preview(player_id: int, skill_id: String, context: Dictionary = {}) -> Dictionary:
 	# 当前技能实例；未安装技能没有预览内容。

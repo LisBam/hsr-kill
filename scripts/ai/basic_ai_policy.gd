@@ -22,10 +22,6 @@ var evaluator: NonameAIEvaluator
 ## 缓存值只允许读取，运行时无需动态修改，任何动作评分都不得向定义内写入临时数据。
 var _card_definition_cache: Dictionary = {}
 
-## 已读取的武将静态定义缓存；同一策略服务固定玩家，缓存可避免每个合法动作重复深拷贝相同技能列表。
-## 武将定义只在数据库初始化时建立，运行时无需动态修改，调用方不得写入缓存内容。
-var _character_definition_cache: Dictionary = {}
-
 ## 当前一次出牌决策复用的武将技能 AI 修正器；数组只在合法动作评分期间存在，决策结束后立即清空。
 var _decision_card_modifier_skills: Array[SkillDefinition] = []
 
@@ -392,25 +388,8 @@ func _prepare_action_scoring_context(authoritative_snapshot: Dictionary) -> void
 	_action_scoring_context_prepared = true
 	# 使用者武将技能；锁定技和被动牌效联动可在各自技能文件中修正当前卡牌评分。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
-	# 使用者武将定义；技能 ID 数组由 CharacterDefinition 自动生成。
-	var character: Dictionary = _get_cached_character_definition(str(owner.get("character_id", "")))
-	# 本次全部技能ID；固有、模式、临时与局内永久获得技能都应参与卡牌联动估值。
-	var all_skill_ids: Array[String] = []
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		all_skill_ids.append(str(skill_id_variant))
-	for mode_skill_id_variant: Variant in owner.get("mode_skill_ids", []) as Array:
-		# 当前模式技能ID；与固有技能重复时只创建一个只读评分实例。
-		var mode_skill_id: String = str(mode_skill_id_variant)
-		if not mode_skill_id.is_empty() and not all_skill_ids.has(mode_skill_id):
-			all_skill_ids.append(mode_skill_id)
-	for runtime_skill_map_variant: Variant in [owner.get("temporary_skills", {}), owner.get("acquired_skills", {})]:
-		# 当前运行时技能映射；键为稳定技能ID，值只保存持续或次数状态。
-		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
-		for runtime_skill_id_variant: Variant in runtime_skill_map.keys():
-			# 当前运行时技能ID；按快照字典顺序追加且去重。
-			var runtime_skill_id: String = str(runtime_skill_id_variant)
-			if not runtime_skill_id.is_empty() and not all_skill_ids.has(runtime_skill_id):
-				all_skill_ids.append(runtime_skill_id)
+	# 本次全部技能ID；统一委托 SkillDefinition，与技能规则段、其他 AI 入口共用同一套来源清单与“实际安装”裁剪规则。
+	var all_skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(owner)
 	for skill_id: String in all_skill_ids:
 		# 当前技能 ID；用于让主动动作与卡牌修正复用同一纯评估实例。
 		var resolved_skill_id: String = skill_id
@@ -479,15 +458,6 @@ func _get_cached_card_definition(card_id: String) -> Dictionary:
 	if not _card_definition_cache.has(card_id):
 		_card_definition_cache[card_id] = GameDatabase.get_card(card_id)
 	return _card_definition_cache.get(card_id, {}) as Dictionary
-
-
-## 返回策略内部缓存的武将静态定义；同一武将只从数据库取得一次独立副本，调用方不得修改返回值。
-func _get_cached_character_definition(character_id: String) -> Dictionary:
-	if character_id.is_empty():
-		return {}
-	if not _character_definition_cache.has(character_id):
-		_character_definition_cache[character_id] = GameDatabase.get_character(character_id)
-	return _character_definition_cache.get(character_id, {}) as Dictionary
 
 
 ## 返回主动技能动作中的稳定技能 ID；顶层兼容字段只用于旧合法动作，最终动作统一写入 payload。

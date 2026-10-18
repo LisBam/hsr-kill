@@ -187,11 +187,13 @@ func _snapshot_player_index(authoritative_snapshot: Dictionary, player_id: int) 
 	return -1
 
 
-## 判断技能持有者的武将配置是否包含指定技能；AI不读取其他运行时技能实例私有状态。
+## 判断技能持有者此刻是否拥有指定技能；统一委托 SkillDefinition，与技能规则段、界面共用同一套来源清单。
+## 修复记录：原实现只读武将固有技能列表，会漏判模式技能、临时技能与局内获得技能（机缘授予、军功授予等），
+## 也会把已经被【留白】类效果失去的技能继续算成拥有；统一入口同时覆盖这两个方向。
 func _owner_has_skill(authoritative_snapshot: Dictionary, skill_id: String) -> bool:
-	# 技能持有者快照；武将静态技能列表用于确认联动存在。
+	# 技能持有者快照；拥有口径完全由统一快照入口决定，本文件不再自行枚举技能来源。
 	var owner: Dictionary = _snapshot_player(authoritative_snapshot, owner_player_id)
-	return (GameDatabase.get_character(str(owner.get("character_id", ""))).get("skills", []) as Array).has(skill_id)
+	return snapshot_has_skill(owner, skill_id)
 
 
 ## 估算目标额外出牌阶段收益；手牌资源与技能元数据中的阶段价值均通过通用字段累计。

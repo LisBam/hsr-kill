@@ -42,6 +42,8 @@
 - 限定技运行时对象仍由控制器持有；广播前只向快照补充公开的 `used_limited_skill_ids` 稳定 ID 数组——**UI 与 AI 不得取得技能对象或用历史猜测复原额度**。
 - 技能实例表同样只以**派生字段**进入快照：广播前补充 `installed_skill_ids`（当前实际安装的技能 ID），它是「某个技能现在是否还在这名角色身上」的唯一公开依据——**不要为“已失去的技能”另建名单或标记字段**。失去技能就是卸载实例，界面按该字段裁剪即可自动同时满足“失去后立即消失”和“新获得后立即显示”。
 - 失去技能的通用入口是 `remove_skill()` / `remove_all_skills()`：卸载实例、清理获得与临时记录、清理轮回公开状态，**不写任何持久名单**，因此装配路径不得按技能 ID 拦截。若需要“失去后的状态不被读档抹掉”，存档记录的是**当前实际持有集合**（`installed_skill_ids`），读档只装配集合内的技能；缺该字段的旧存档按武将完整装配。
+- **「某角色此刻是否拥有技能 X」只有两个入口，不得再自行枚举技能来源**：规则侧 `MatchController.has_skill(player_id, skill_id)`（口径 = 已安装技能实例 ∪ `acquired_skills` ∪ `temporary_skills`，纯只读、不创建实例、不广播、**不做存活过滤**）；快照侧 `SkillDefinition.collect_snapshot_skill_ids(player_snapshot)` / `SkillDefinition.snapshot_has_skill(player_snapshot, skill_id)`（参数是**玩家快照**而非整局快照；顺序为 固有 → 模式 → 临时 → 局内获得；带 `installed_skill_ids` 时裁剪固有与模式技能，缺失时不裁剪）。两条既有的错误写法：只读武将定义的 `skills` 会漏判模式/临时/局内获得技能；只遍历 `temporary_skills` / `acquired_skills` 而不裁剪会把已失去的技能算成仍然拥有。
+- 例外：`remove_acquired_skill()` 与 `_replace_native_character_skills()` 判断的是“除被移除的来源之外是否还有其他来源仍在提供该技能”，必须在卸载实例**之前**读来源清单，此时 `has_skill()` 会因为实例仍在容器中而恒为真——这两处继续各自枚举来源是正确实现。
 - 手牌临时牌名与 `hand_mark_tags` 只能由**统一移牌边界**清除，技能**不得直接改写牌区数组**。
 
 ### 濒死不变量

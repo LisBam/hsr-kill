@@ -2305,6 +2305,12 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 
 ## 返回指定身份实际拥有并可显示的武将技能；领袖技仅 leader 可见，模式技能与局内临时技能追加在固有技能之后。
 ## 判定依据是快照中的实际安装技能ID：失去技能（如【留白】）会卸载实例，该列表随之收缩，界面无需任何名单即可收敛。
+##
+## 本函数是**展示管线**，不是拥有权查询：拥有口径（哪些技能此刻算在这名角色身上）由统一入口
+## SkillDefinition.collect_snapshot_skill_ids / SkillDefinition.snapshot_has_skill 定义，两者共用同一条
+## installed_skill_ids 裁剪规则。本函数只在该规则之上追加展示专属语义——技能按钮的固有顺序、
+## 缺失定义的配置错误占位、模式技能缺失时的界面回退推算与领袖技可见性。
+## 技能规则代码与 AI 代码一律使用统一入口，不得复制本函数的展示规则。
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 可见技能结果；顺序直接继承武将源码，保证按钮布局与安装顺序一致。
 	var result: Array[String] = []

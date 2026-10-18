@@ -461,30 +461,11 @@ func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor
 
 ## 依次应用目标当前固有、模式、临时与局内获得技能的来牌估值钩子；相同技能ID只执行一次。
 func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, target: Dictionary, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int, current_score: float) -> float:
-	# 目标全部技能ID；先按武将声明顺序加入固有技能，再补充模式与运行时来源。
-	var skill_ids: Array[String] = []
+	# 目标全部技能ID；统一委托 SkillDefinition，与技能规则段、界面共用同一套来源清单与“实际安装”裁剪规则。
+	# 固有技能来自快照中的 character_id：未亮将或异常ID时该字段不可读，因此不会泄露隐藏信息。
+	var skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(target)
 	# 行动者对目标的当前态度；正值表示友方卖血可转化为收益，负值表示敌方卖血会降低攻击价值。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
-	# 目标武将定义；未亮将或异常ID返回空技能数组。
-	var character: Dictionary = GameDatabase.get_character(str(target.get("character_id", "")))
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		# 当前固有技能ID；空值与重复值不会进入估值链。
-		var native_skill_id: String = str(skill_id_variant)
-		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
-			skill_ids.append(native_skill_id)
-	for mode_skill_id_variant: Variant in target.get("mode_skill_ids", []) as Array:
-		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项估值钩子。
-		var mode_skill_id: String = str(mode_skill_id_variant)
-		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
-			skill_ids.append(mode_skill_id)
-	for runtime_skill_map_variant: Variant in [target.get("temporary_skills", {}), target.get("acquired_skills", {})]:
-		# 当前运行时技能映射；键为稳定技能ID，值不参与静态AI钩子。
-		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
-		for skill_id_variant: Variant in runtime_skill_map.keys():
-			# 当前运行时技能ID；已存在的固有同名技能不会重复执行。
-			var runtime_skill_id: String = str(skill_id_variant)
-			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
-				skill_ids.append(runtime_skill_id)
 	# 当前累计评分；每项技能只读取快照与上一项结果。
 	var result: float = current_score
 	for current_skill_id: String in skill_ids:
@@ -738,7 +719,7 @@ func _should_decline_duel_response_against_zhidong(authoritative_snapshot: Dicti
 	var opponent: Dictionary = get_player(authoritative_snapshot, opponent_id)
 	# 当前响应者快照；用于检查体力、护盾、手牌与已知【杀】数量。
 	var responder: Dictionary = get_player(authoritative_snapshot, responder_id)
-	if opponent.is_empty() or responder.is_empty() or not _snapshot_player_has_skill(opponent, "zhidong"):
+	if opponent.is_empty() or responder.is_empty() or not SkillDefinition.snapshot_has_skill(opponent, "zhidong"):
 		return false
 	# 当前原【决斗】已经收到的直接响应数；现在放弃时预期伤害为基础1点加已有响应数。
 	var current_direct_response_count: int = maxi(int(context.get("direct_response_count", 0)), 0)
@@ -767,7 +748,7 @@ func _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot: Di
 	var attacker_id: int = int(context.get("actor_id", context.get("source_id", -1)))
 	# 【杀】攻击者快照；用于读取技能、装备和可支付费用牌数。
 	var attacker: Dictionary = get_player(authoritative_snapshot, attacker_id)
-	if attacker.is_empty() or attacker_id == responder_id or get_attitude(authoritative_snapshot, responder_id, attacker_id) >= 0.0 or not _snapshot_player_has_skill(attacker, "zhidong"):
+	if attacker.is_empty() or attacker_id == responder_id or get_attitude(authoritative_snapshot, responder_id, attacker_id) >= 0.0 or not SkillDefinition.snapshot_has_skill(attacker, "zhidong"):
 		return false
 	# 攻击者公开装备区；用于取得武器并计算非武器装备费用。
 	var equipment: Dictionary = attacker.get("equipment", {}) as Dictionary
@@ -783,52 +764,13 @@ func _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot: Di
 	return available_cost_count >= GUANSHI_FORCE_HIT_COST_COUNT
 
 
-## 判断玩家快照是否持有指定固有、模式、临时或局内获得技能；仅使用公开稳定ID，不读取运行时技能对象。
-func _snapshot_player_has_skill(player: Dictionary, skill_id: String) -> bool:
-	if player.is_empty() or skill_id.is_empty():
-		return false
-	return _collect_snapshot_skill_ids(player).has(skill_id)
-
-
-## 收集玩家快照的全部技能ID并去重；技能枚举口径的唯一来源，供“是否持有技能”与“卖血价值累计”共用。
-## 枚举顺序固定为 固有 → 模式 → 临时 → 局内获得，与 _modify_incoming_card_effect_by_target_skills 的估值顺序保持一致，
-## 使同一个技能在两条链路上不会因顺序差异产生不同的去重结果。
-func _collect_snapshot_skill_ids(player: Dictionary) -> Array[String]:
-	# 技能ID结果；空快照返回空数组，调用方按“无技能”处理。
-	var skill_ids: Array[String] = []
-	if player.is_empty():
-		return skill_ids
-	# 当前武将固有技能；CharacterDefinition自动生成稳定技能ID数组。
-	var character: Dictionary = GameDatabase.get_character(str(player.get("character_id", "")))
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		# 当前固有技能ID；空值与重复值不会进入结果。
-		var native_skill_id: String = str(skill_id_variant)
-		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
-			skill_ids.append(native_skill_id)
-	for skill_id_variant: Variant in player.get("mode_skill_ids", []) as Array:
-		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项。
-		var mode_skill_id: String = str(skill_id_variant)
-		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
-			skill_ids.append(mode_skill_id)
-	# 运行时技能映射列表；键为稳定技能ID，值（来源、剩余次数等）与本查询无关。
-	for runtime_skill_map_variant: Variant in [player.get("temporary_skills", {}), player.get("acquired_skills", {})]:
-		# 当前运行时技能映射；键为稳定技能ID，值（来源、剩余次数等）与静态AI钩子无关。
-		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
-		for skill_id_variant: Variant in runtime_skill_map.keys():
-			# 当前运行时技能ID；已存在的同名技能不会重复加入。
-			var runtime_skill_id: String = str(skill_id_variant)
-			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
-				skill_ids.append(runtime_skill_id)
-	return skill_ids
-
-
 ## 返回玩家快照全部技能的累计卖血价值；只按公开稳定技能ID读取静态元数据，不读取运行时技能对象与隐藏信息。
 ## 这是“响应者本人是否值得主动吃下伤害”的唯一判据：任何按技能ID白名单的判断都违反内容可扩展性要求，
 ## 新增卖血技能只需在自身文件声明 sell_blood_value，无需改动本函数或调用方。
 func get_snapshot_sell_blood_value(player: Dictionary) -> float:
 	# 累计卖血价值；无技能或全部技能价值为0时返回0.0，调用方按“非卖血角色”处理。
 	var total_value: float = 0.0
-	for current_skill_id: String in _collect_snapshot_skill_ids(player):
+	for current_skill_id: String in SkillDefinition.collect_snapshot_skill_ids(player):
 		# 无运行时状态的技能实例；只读取静态元数据，不安装时机或修改对局。
 		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
 		if skill == null:

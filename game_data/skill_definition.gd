@@ -287,6 +287,77 @@ func restore_limited_use() -> void:
 	restore_intrinsic_use()
 
 
+## 收集玩家权威快照声明的全部技能ID并去重；全项目「某角色拥有哪些技能」的唯一快照口径。
+##
+## 枚举顺序固定为 固有 → 模式 → 临时 → 局内获得，与基础 AI 的技能链顺序一致，
+## 使同一个技能不会因来源顺序差异产生不同的去重结果。
+## 快照带 installed_skill_ids 字段时按其裁剪**固有与模式**技能：该字段是“此刻真实安装”的权威列表，
+## 失去技能（如【留白】）会卸载实例并让列表收缩，不裁剪会把已经失去的技能算成仍然拥有；
+## 字段不存在时不裁剪（旧回放与手动构造的测试快照保持完整技能列表）。
+## 临时与局内获得技能不参与裁剪：它们的记录键存在即代表此刻拥有。
+## 纯函数且不依赖任何运行时状态，因此技能规则段、AI 评分实例与内容测试可以共用同一套识别规则。
+static func collect_snapshot_skill_ids(player_snapshot: Dictionary) -> Array[String]:
+	# 技能ID结果；空快照返回空数组，调用方按“无技能”处理。
+	var skill_ids: Array[String] = []
+	if player_snapshot.is_empty():
+		return skill_ids
+	# 是否按实际安装集合裁剪；只有权威快照会下发该字段。
+	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
+	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
+	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
+	# 固有技能；由 CharacterDefinition 自动生成稳定技能ID数组。
+	var character: Dictionary = GameDatabase.get_character(str(player_snapshot.get("character_id", "")))
+	for skill_id_variant: Variant in character.get("skills", []) as Array:
+		# 当前固有技能ID；空值、已被失去与重复项都不会进入结果。
+		var native_skill_id: String = str(skill_id_variant)
+		if native_skill_id.is_empty() or skill_ids.has(native_skill_id):
+			continue
+		if filter_by_installed and not installed_skill_ids.has(native_skill_id):
+			continue
+		skill_ids.append(native_skill_id)
+	# 模式技能；飞扬、跋扈等由身份与对局模式决定的技能同样参与“是否拥有”的判定。
+	for skill_id_variant: Variant in player_snapshot.get("mode_skill_ids", []) as Array:
+		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项。
+		var mode_skill_id: String = str(skill_id_variant)
+		if mode_skill_id.is_empty() or skill_ids.has(mode_skill_id):
+			continue
+		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
+			continue
+		skill_ids.append(mode_skill_id)
+	# 运行时技能映射列表；键为稳定技能ID，值（来源、剩余次数等）与本查询无关。
+	for runtime_skill_map_variant: Variant in [player_snapshot.get("temporary_skills", {}), player_snapshot.get("acquired_skills", {})]:
+		# 当前运行时技能映射；键存在即代表此刻拥有，不再按 installed_skill_ids 裁剪。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for skill_id_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时技能ID；已存在的同名技能不会重复加入。
+			var runtime_skill_id: String = str(skill_id_variant)
+			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
+				skill_ids.append(runtime_skill_id)
+	return skill_ids
+
+
+## 判断玩家权威快照是否拥有指定技能；语义等价于 collect_snapshot_skill_ids(...).has(skill_id)，
+## 但直接做成员判定、不构造中间数组，供高频的“是否拥有技能”查询使用。
+## 与 collect_snapshot_skill_ids 共用同一套来源清单与 installed_skill_ids 裁剪规则，两者永远不会给出不同答案。
+## 只读公开稳定ID，不读取隐藏信息，也不创建技能实例。
+static func snapshot_has_skill(player_snapshot: Dictionary, skill_id: String) -> bool:
+	if player_snapshot.is_empty() or skill_id.is_empty():
+		return false
+	# 是否按实际安装集合裁剪；与 collect_snapshot_skill_ids 共用同一判定口径。
+	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
+	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
+	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
+	# 固有技能；命中且未被失去时直接返回。
+	var character: Dictionary = GameDatabase.get_character(str(player_snapshot.get("character_id", "")))
+	if (character.get("skills", []) as Array).has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
+		return true
+	# 模式技能；与固有技能同名时不会重复判定。
+	if (player_snapshot.get("mode_skill_ids", []) as Array).has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
+		return true
+	# 运行时技能；临时与局内获得技能都按“键存在即拥有”判定。
+	return (player_snapshot.get("temporary_skills", {}) as Dictionary).has(skill_id) or (player_snapshot.get("acquired_skills", {}) as Dictionary).has(skill_id)
+
+
 ## 判断一段技能正文是否以“声明”形式包含指定标签；被引号包裹的提及（如【奇袭】正文里的“轮回技”）不计入。
 ## 纯函数且不依赖任何运行时状态，因此技能源码、AI评分实例与内容测试可以共用同一套识别规则。
 static func description_declares_tag(description: String, tag: String) -> bool:
