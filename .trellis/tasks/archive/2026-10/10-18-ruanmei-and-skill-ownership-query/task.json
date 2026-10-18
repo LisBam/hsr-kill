@@ -1,0 +1,29 @@
+{
+  "id": "ruanmei-and-skill-ownership-query",
+  "name": "ruanmei-and-skill-ownership-query",
+  "title": "阮梅武将与技能拥有查询机制",
+  "description": "封装统一的技能拥有查询端口，并制作新武将阮梅（梅绽/灵赋/阮弦）及其配套 AI 与文档同步",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-18",
+  "completedAt": "2026-10-18",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-18-skill-ownership-query-port",
+    "10-18-ruanmei-character-skills"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
