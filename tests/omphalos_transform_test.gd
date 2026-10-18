@@ -621,19 +621,24 @@ func _test_reincarnation_title_round_count() -> bool:
 		skill_button.queue_free()
 		return _fail("normal_title=%s" % _captured_skill_title)
 	# 右键武将详情的技能标题；与悬停标题同构，必须使用相同的片段顺序。
+	# 这里走正式渲染入口并读取真实节点文本：标题拼装已收敛到统一视图模型，组件不再暴露私有拼装函数。
 	var information_box: InformationBoxLayer = InformationBoxLayer.new()
 	add_child(information_box)
+	information_box._character_definition = {"skills":["tiancai"]}
 	information_box._character_snapshot = {"reincarnation_skills":{"tiancai":{"round_count":3, "section_index":1}}, "acquired_skill_remaining_uses":{"tiancai":"每回合可发动2次"}}
+	information_box._render_character_skills()
 	# 轮回技详情标题；次数文案之前必须出现已轮回次数。
-	var detail_title: String = information_box._get_character_skill_information_title("tiancai", reincarnation_name)
+	var detail_title: String = _get_rendered_skill_title(information_box, 0)
 	if detail_title != "【%s】（轮回3；每回合可发动2次）" % reincarnation_name:
 		information_box.queue_free()
 		skill_button.queue_free()
 		return _fail("reincarnation_detail_title=%s" % detail_title)
 	# 普通技能详情标题；不得凭空出现轮回次数片段。
+	information_box._character_definition = {"skills":["yongyi"]}
 	information_box._character_snapshot = {"acquired_skill_remaining_uses":{"yongyi":"每回合可发动2次"}}
+	information_box._render_character_skills()
 	# 普通技能详情标题实际文本；用于失败时输出完整偏差。
-	var normal_detail_title: String = information_box._get_character_skill_information_title("yongyi", normal_name)
+	var normal_detail_title: String = _get_rendered_skill_title(information_box, 0)
 	if normal_detail_title != "【%s】（每回合可发动2次）" % normal_name:
 		information_box.queue_free()
 		skill_button.queue_free()
@@ -666,6 +671,21 @@ func _test_reincarnation_title_round_count() -> bool:
 	if snapshot_limited_ids.has("lunhui") or not snapshot_intrinsic_ids.has("lunhui"):
 		return _fail("used_intrinsic_use_snapshot=%s/%s" % [snapshot_limited_ids, snapshot_intrinsic_ids])
 	return true
+
+
+## 返回右键武将详情中第 index 个技能条目渲染出的技能名文本；条目由渲染入口动态创建，测试不复制标题格式。
+## 只有技能条目带 information_box_skill_entry 元数据，分隔线与无技能占位标签会被跳过。
+func _get_rendered_skill_title(information_box: InformationBoxLayer, index: int) -> String:
+	# 当前已渲染的技能条目；按列表顺序收集，索引即技能在详情中的显示次序。
+	var skill_entries: Array[Node] = []
+	for child: Node in information_box.get_character_skill_list().get_children():
+		if child.has_meta("information_box_skill_entry"):
+			skill_entries.append(child)
+	if index < 0 or index >= skill_entries.size():
+		return ""
+	# 技能条目的第一行固定是技能名标签；结构被改坏时返回空串，让断言直接输出偏差。
+	var skill_name_label: Label = (skill_entries[index] as Control).get_child(0) as Label
+	return skill_name_label.text if skill_name_label != null else ""
 
 
 ## 校验武将悬停资料与右键武将详情把已释放的限定技与觉醒技整块显示为变淡，被复原时保持原亮度。

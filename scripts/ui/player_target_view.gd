@@ -668,68 +668,29 @@ func _request_character_information() -> void:
 	var gender_text: String = str({"male":"男", "female":"女", "unknown":"未知"}.get(str(_character_definition.get("gender", "unknown")), "未知"))
 	# 当前武将静态体力上限；优先使用武将定义，避免领袖加成或运行时效果改变内容资料。
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
-	# 当前武将全部可见技能ID；固有技能 → 模式技能 → 运行时临时技能，均不重复。
-	# 判定依据是快照中**实际安装**的技能ID：失去技能（如【留白】）会卸载实例，列表随之收缩，
-	# 已失去的技能不再出现在悬停信息与右键详情中；之后新获得的技能会立刻出现在列表里，照常展示。
-	# 快照缺少该字段时（旧回放、手动构造的预览快照）不做裁剪。
-	#
-	# 本段是**展示管线**，不是拥有权查询：拥有口径由统一入口 SkillDefinition.collect_snapshot_skill_ids /
-	# SkillDefinition.snapshot_has_skill 定义，两者共用同一条 installed_skill_ids 裁剪规则；这里只额外保留
-	# “缺失定义的配置错误技能继续占位以便被发现”这一展示专属行为。技能规则与 AI 代码不得复制本段。
-	var filter_by_installed: bool = _player_snapshot.has("installed_skill_ids")
-	var installed_skill_ids: Array = _player_snapshot.get("installed_skill_ids", []) as Array
-	var visible_skill_ids: Array = []
-	for native_skill_id_variant: Variant in (_character_definition.get("skills", []) as Array):
-		var native_skill_id: String = str(native_skill_id_variant)
-		# 缺失定义的技能属于配置错误，保留显示以便被发现，因此不参与“已安装”裁剪。
-		if filter_by_installed and not GameDatabase.get_skill(native_skill_id).is_empty() and not installed_skill_ids.has(native_skill_id):
-			continue
-		visible_skill_ids.append(native_skill_id)
-	for mode_skill_id_variant: Variant in (_player_snapshot.get("mode_skill_ids", []) as Array):
-		var mode_skill_id: String = str(mode_skill_id_variant)
-		# 已失去的模式技能同样不再被装配，界面也不应继续列出。
-		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
-			continue
-		if not mode_skill_id.is_empty() and not visible_skill_ids.has(mode_skill_id):
-			visible_skill_ids.append(mode_skill_id)
-	for temporary_skill_id_variant: Variant in (_player_snapshot.get("temporary_skills", {}) as Dictionary).keys():
-		# 当前临时技能ID；已是固有技能时不重复显示。
-		var temporary_skill_id: String = str(temporary_skill_id_variant)
-		if not visible_skill_ids.has(temporary_skill_id):
-			visible_skill_ids.append(temporary_skill_id)
-	for acquired_skill_id_variant: Variant in (_player_snapshot.get("acquired_skills", {}) as Dictionary).keys():
-		# 当前局内永久获得技能ID；与固有、模式或临时技能同名时不重复显示。
-		var acquired_skill_id: String = str(acquired_skill_id_variant)
-		if not visible_skill_ids.has(acquired_skill_id):
-			visible_skill_ids.append(acquired_skill_id)
-	# 当前武将全部技能文本；严格保持固有技能顺序，临时技能按运行时授予顺序追加。
+	# 当前武将全部可见技能；拥有口径、展示顺序与全部文本由 CharacterSkillDisplay 统一给出。
+	# 悬停资料与右键武将详情调用同一个函数，因此两者永远显示同一份技能集合：
+	# 判定依据是快照中**实际安装**的技能ID，失去技能（如【留白】）会卸载实例，两处同时收敛；
+	# 之后新获得的技能会立刻出现在两处，照常展示。
+	# 快照缺少 installed_skill_ids 时（旧回放、选将候选、手动构造的预览快照）不做裁剪。
+	# 本组件不再自行枚举技能或拼装标题描述，技能规则与 AI 代码也不得复制视图模型的展示规则。
+	var skill_entries: Array[Dictionary] = CharacterSkillDisplay.build_skill_entries(_player_snapshot, _character_definition)
+	# 当前武将全部技能文本；严格保持视图模型给出的顺序。
 	var skill_information_lines: Array[String] = []
 	# 当前武将结构化技能分段；统一信息框据此把技能名绘制为与右键详情一致的金色，同时保持说明文字颜色不变。
 	var skill_description_sections: Array[Dictionary] = []
-	# 已经释放固有额度的限定技与觉醒技集合；分段据此标记该技能需要整块变淡，界面不自行推断释放状态。
-	# 该字段在 used_limited_skill_ids 基础上额外包含觉醒技，因此觉醒技释放后同样进入变淡表现。
-	var intrinsic_use_consumed_ids: Array = _player_snapshot.get("used_intrinsic_use_skill_ids", []) as Array
-	for skill_id_variant: Variant in visible_skill_ids:
-		# 当前技能稳定 ID；用于查询静态技能名称与说明，不读取运行时技能实例。
-		var skill_id: String = str(skill_id_variant)
-		# 当前技能静态定义；缺失时保留稳定 ID 与明确占位说明，避免整项静默消失。
-		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-		# 当前技能完整名称；信息框不截取技能按钮使用的前两个字。
-		var skill_name: String = str(skill_definition.get("name", skill_id))
-		# 当前技能资料标题；受限的局内获得技能在技能名后追加完整次数文案，技能描述原文不插入次数状态。
-		var skill_information_title: String = _get_skill_information_title(skill_id, skill_name)
-		# 当前技能完整描述；优先使用公开快照下发的动态描述（例如【断界】已被删除的选项带删除线），
-		# 快照没有覆盖时回退静态元数据原文；卡牌书名号按全局名称模式解析，其他原文保持不变。
-		var skill_description: String = GameDatabase.resolve_card_names_in_text(_resolve_skill_description(skill_id, skill_definition))
-		# 当前技能轮回状态；公开快照是局内轮回节高亮的唯一数据来源，静态牌面缺失时回退①。
-		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
+	for skill_entry: Dictionary in skill_entries:
+		# 当前技能标题；轮回数与次数文案已由视图模型拼装完毕。
+		var skill_information_title: String = str(skill_entry.get("title", ""))
+		# 当前技能完整描述；书名号已由视图模型按当前名称模式解析。
+		var skill_description: String = str(skill_entry.get("description", ""))
 		skill_information_lines.append("%s\n%s" % [skill_information_title, skill_description])
 		skill_description_sections.append({
 			"title":skill_information_title,
 			"description":skill_description,
-			"reincarnation":bool(skill_definition.get("reincarnation", false)),
-			"reincarnation_section_index":maxi(int(reincarnation_state.get("section_index", 0)), 0),
-			"intrinsic_use_consumed":intrinsic_use_consumed_ids.has(skill_id),
+			"reincarnation":bool(skill_entry.get("reincarnation", false)),
+			"reincarnation_section_index":int(skill_entry.get("reincarnation_section_index", 0)),
+			"intrinsic_use_consumed":bool(skill_entry.get("intrinsic_use_consumed", false)),
 		})
 	# 当前武将技能正文；无技能武将使用明确文本，避免空信息框无法判断数据状态。
 	var skills_text: String = "\n\n".join(skill_information_lines) if not skill_information_lines.is_empty() else "无技能"
@@ -743,40 +704,6 @@ func _request_character_information() -> void:
 		"description_sections":skill_description_sections,
 	}
 	information_requested.emit(information, get_global_rect())
-
-
-## 返回技能在当前对局中的显示描述；公开快照的 dynamic_skill_descriptions 是唯一动态来源。
-## 该字段只包含“当前进度与静态原文不同”的技能（例如【断界】已被删除的选项需要划掉），
-## 因此普通技能依旧逐字显示静态元数据描述；技能自身不得改写 GameDatabase 的静态原文。
-func _resolve_skill_description(skill_id: String, skill_definition: Dictionary) -> String:
-	# 快照下发的动态描述覆盖；缺失该可选字段时自然回退静态原文。
-	var dynamic_descriptions: Dictionary = _player_snapshot.get("dynamic_skill_descriptions", {}) as Dictionary
-	return str(dynamic_descriptions.get(skill_id, skill_definition.get("description", "技能元数据尚未登记。")))
-
-
-## 返回武将资料中的技能标题；轮回技先标注轮回数，局内获得的受限技能再显示完整次数文案，避免改写技能原文。
-func _get_skill_information_title(skill_id: String, skill_name: String) -> String:
-	# 默认技能资料标题；所有技能均使用统一书名号样式，保证悬停与右键详情视觉一致。
-	var skill_information_title: String = "【%s】" % skill_name
-	# 技能名后的补充说明片段；轮回技固定先标注已轮回次数，次数文案始终排在其后，与技能按钮悬停标题保持一致。
-	var title_suffix_parts: Array[String] = []
-	# 技能静态定义；只用于判断该技能是否为轮回技，不读取技能的运行时实例。
-	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-	if bool(skill_definition.get("reincarnation", false)):
-		# 当前技能轮回状态；与轮回节高亮共用同一公开快照字段，不新增数据来源。
-		var reincarnation_state: Dictionary = (_player_snapshot.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-		# 当前轮回数；下限1保证未登记的轮回技仍显示稳定文本。
-		var reincarnation_round_count: int = maxi(int(reincarnation_state.get("round_count", 1)), 1)
-		title_suffix_parts.append("轮回%d" % reincarnation_round_count)
-	# 当前快照内的受限技能次数映射；该字段由 MatchTable 从权威获得技能记录生成，视图不自行计算或扣减次数。
-	var remaining_uses_by_skill: Dictionary = _player_snapshot.get("acquired_skill_remaining_uses", {}) as Dictionary
-	# 当前技能完整次数文案；没有限制或不是局内获得技能时保持空字符串。
-	var remaining_uses_description: String = str(remaining_uses_by_skill.get(skill_id, ""))
-	if not remaining_uses_description.is_empty():
-		title_suffix_parts.append(remaining_uses_description)
-	if not title_suffix_parts.is_empty():
-		skill_information_title += "（%s）" % "；".join(title_suffix_parts)
-	return skill_information_title
 
 
 ## 根据鼠标局部坐标识别其他玩家牌面上的公开装备横条，并请求统一卡牌信息。

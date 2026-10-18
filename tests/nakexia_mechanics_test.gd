@@ -43,7 +43,7 @@ func _run() -> void:
 		return
 	if not _test_ai_hooks_positive():
 		return
-	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 nested_trigger_entry=1")
+	print("NAKEXIA_MECHANICS_PASS sections=2 phase_limit=2 jiezhi_per_game=2 jiezhi_self_reset=1 reset_keep_self=1 one_shot_loss=2 regrant_new_skill=1 regrant_lost_skill=1 ui_filter=3 detail_parity=2 nested_trigger_entry=1")
 	get_tree().quit(0)
 
 
@@ -628,7 +628,8 @@ func _submit_confirm(actor_id: int, confirmed: bool) -> bool:
 	return _submit_choice(actor_id, [], confirmed)
 
 
-## 校验界面的悬停资料与右键详情按实际安装集合裁剪：失去后不再出现，重新获得后立即恢复。
+## 校验界面的悬停资料与右键详情按实际安装集合裁剪，且两种查看方式逐项同步：
+## 失去技能后两处同时不再出现，重新获得后两处同时恢复，同一份快照下两处的技能标题完全相等。
 func _test_ui_filter_follows_installed_skills() -> bool:
 	var character: Dictionary = GameDatabase.get_character("nakexia")
 	# 技能栏过滤；只依赖脚本，不需要节点就绪状态。
@@ -651,32 +652,80 @@ func _test_ui_filter_follows_installed_skills() -> bool:
 		return _fail("ui_filter_regranted=%s" % str(regranted_ids))
 	if not (legacy_ids.has("zhuxv") and legacy_ids.has("jiezhi") and legacy_ids.has("liubai")):
 		return _fail("ui_filter_legacy=%s" % str(legacy_ids))
-	# 悬停武将资料与右键武将详情共用同一份技能分段；必须实例化正式场景，其子节点由 .tscn 提供。
+	# 悬停武将资料与右键武将详情共用同一个技能查看视图模型；必须实例化正式场景，其子节点由 .tscn 提供。
 	var target_view_scene: PackedScene = load("res://scenes/components/player_target_view.tscn") as PackedScene
 	var target_view: PlayerTargetView = target_view_scene.instantiate() as PlayerTargetView
 	add_child(target_view)
 	target_view.information_requested.connect(_on_character_information_requested)
+	# 右键武将详情组件；与悬停共用同一信息框，这里直接驱动它的渲染入口而不重建整个牌桌。
+	var information_box: InformationBoxLayer = InformationBoxLayer.new()
+	add_child(information_box)
+	information_box._character_definition = character
 	# 完整安装：三个技能的悬停分段都在。
-	target_view.configure_snapshot({"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv", "jiezhi", "liubai"]}, character)
+	var full_snapshot: Dictionary = {"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv", "jiezhi", "liubai"]}
+	target_view.configure_snapshot(full_snapshot, character)
 	target_view._request_character_information()
 	if not (_has_captured_skill_title("逐虚") and _has_captured_skill_title("揭质") and _has_captured_skill_title("留白")):
-		target_view.queue_free()
+		_free_ui_filter_views(target_view, information_box)
 		return _fail("info_filter_full=%s" % str(_captured_skill_section_titles))
+	# 两种查看方式逐项一致：同一份快照下，右键详情的技能标题必须与悬停分段完全相同（集合与顺序都锁定）。
+	information_box._character_snapshot = full_snapshot
+	information_box._render_character_skills()
+	if _collect_detail_skill_titles(information_box) != _captured_skill_section_titles:
+		var full_detail_titles: Array[String] = _collect_detail_skill_titles(information_box)
+		_free_ui_filter_views(target_view, information_box)
+		return _fail("detail_parity_full=%s/%s" % [str(full_detail_titles), str(_captured_skill_section_titles)])
 	# 失去全部技能后重新获得【逐虚】：悬停分段只剩逐虚，已失去的【揭质】【留白】不再出现。
-	target_view.configure_snapshot({"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv"]}, character)
+	var lost_snapshot: Dictionary = {"player_id":0, "character_id":"nakexia", "installed_skill_ids":["zhuxv"]}
+	target_view.configure_snapshot(lost_snapshot, character)
 	target_view._request_character_information()
-	target_view.queue_free()
 	if not _has_captured_skill_title("逐虚") or _has_captured_skill_title("揭质") or _has_captured_skill_title("留白"):
+		_free_ui_filter_views(target_view, information_box)
 		return _fail("info_filter_lost=%s" % str(_captured_skill_section_titles))
+	# 右键详情必须同步收敛：失去技能前该入口只读武将静态定义，仍会列出已失去的【揭质】【留白】。
+	information_box._character_snapshot = lost_snapshot
+	information_box._render_character_skills()
+	var lost_detail_titles: Array[String] = _collect_detail_skill_titles(information_box)
+	if _has_skill_title(lost_detail_titles, "揭质") or _has_skill_title(lost_detail_titles, "留白") or not _has_skill_title(lost_detail_titles, "逐虚"):
+		_free_ui_filter_views(target_view, information_box)
+		return _fail("detail_filter_lost=%s" % str(lost_detail_titles))
+	if lost_detail_titles != _captured_skill_section_titles:
+		_free_ui_filter_views(target_view, information_box)
+		return _fail("detail_parity_lost=%s/%s" % [str(lost_detail_titles), str(_captured_skill_section_titles)])
+	_free_ui_filter_views(target_view, information_box)
 	return true
+
+
+## 释放界面裁剪用例创建的临时节点；两个查看入口的组件都由本用例手动实例化。
+func _free_ui_filter_views(target_view: PlayerTargetView, information_box: InformationBoxLayer) -> void:
+	target_view.queue_free()
+	information_box.queue_free()
+
+
+## 收集右键武将详情渲染出的技能标题；只有技能条目带 information_box_skill_entry 元数据，分隔线与占位标签会被跳过。
+func _collect_detail_skill_titles(information_box: InformationBoxLayer) -> Array[String]:
+	# 技能标题结果；顺序与详情面板中的显示次序一致，便于与悬停分段逐项比较。
+	var detail_skill_titles: Array[String] = []
+	for child: Node in information_box.get_character_skill_list().get_children():
+		if not child.has_meta("information_box_skill_entry"):
+			continue
+		# 技能条目的第一行固定是技能名标签；结构被改坏时留空串让断言直接暴露偏差。
+		var skill_name_label: Label = (child as Control).get_child(0) as Label
+		detail_skill_titles.append(skill_name_label.text if skill_name_label != null else "")
+	return detail_skill_titles
+
+
+## 判断一组技能标题里是否存在含指定技能名的条目；标题可能带轮回数或次数后缀，因此按包含匹配。
+func _has_skill_title(skill_titles: Array[String], skill_name: String) -> bool:
+	for skill_title: String in skill_titles:
+		if skill_title.contains(skill_name):
+			return true
+	return false
 
 
 ## 判断最近一次悬停资料里是否存在含指定技能名的分段；标题可能带轮回数或次数后缀，因此按包含匹配。
 func _has_captured_skill_title(skill_name: String) -> bool:
-	for captured_title: String in _captured_skill_section_titles:
-		if captured_title.contains(skill_name):
-			return true
-	return false
+	return _has_skill_title(_captured_skill_section_titles, skill_name)
 
 
 ## 记录武将悬停资料中的技能名集合；锚点矩形与正文由其他用例覆盖。
