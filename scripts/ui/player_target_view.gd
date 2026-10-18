@@ -672,6 +672,10 @@ func _request_character_information() -> void:
 	# 判定依据是快照中**实际安装**的技能ID：失去技能（如【留白】）会卸载实例，列表随之收缩，
 	# 已失去的技能不再出现在悬停信息与右键详情中；之后新获得的技能会立刻出现在列表里，照常展示。
 	# 快照缺少该字段时（旧回放、手动构造的预览快照）不做裁剪。
+	#
+	# 本段是**展示管线**，不是拥有权查询：拥有口径由统一入口 SkillDefinition.collect_snapshot_skill_ids /
+	# SkillDefinition.snapshot_has_skill 定义，两者共用同一条 installed_skill_ids 裁剪规则；这里只额外保留
+	# “缺失定义的配置错误技能继续占位以便被发现”这一展示专属行为。技能规则与 AI 代码不得复制本段。
 	var filter_by_installed: bool = _player_snapshot.has("installed_skill_ids")
 	var installed_skill_ids: Array = _player_snapshot.get("installed_skill_ids", []) as Array
 	var visible_skill_ids: Array = []

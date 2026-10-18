@@ -259,28 +259,9 @@ func _modify_lethal_consequence_by_actor_skills(authoritative_snapshot: Dictiona
 	var actor: Dictionary = identity_model.get_player(authoritative_snapshot, actor_id)
 	if actor.is_empty():
 		return current_score
-	# 行动者全部技能ID；用于让不同来源的改写钩子共享同一顺序口径。
-	var skill_ids: Array[String] = []
-	# 行动者武将定义；未亮将时读不到固有技能，因此改写只在武将已公开时生效，不会泄露隐藏信息。
-	var character: Dictionary = GameDatabase.get_character(str(actor.get("character_id", "")))
-	for skill_id_variant: Variant in character.get("skills", []) as Array:
-		# 当前固有技能ID；空值与重复值不会进入改写链。
-		var native_skill_id: String = str(skill_id_variant)
-		if not native_skill_id.is_empty() and not skill_ids.has(native_skill_id):
-			skill_ids.append(native_skill_id)
-	for mode_skill_id_variant: Variant in actor.get("mode_skill_ids", []) as Array:
-		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项钩子。
-		var mode_skill_id: String = str(mode_skill_id_variant)
-		if not mode_skill_id.is_empty() and not skill_ids.has(mode_skill_id):
-			skill_ids.append(mode_skill_id)
-	for runtime_skill_map_variant: Variant in [actor.get("temporary_skills", {}), actor.get("acquired_skills", {})]:
-		# 当前运行时技能映射；键为稳定技能ID，值不参与静态AI钩子。
-		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
-		for runtime_skill_id_variant: Variant in runtime_skill_map.keys():
-			# 当前运行时技能ID；已存在的同名固有技能不会重复改写。
-			var runtime_skill_id: String = str(runtime_skill_id_variant)
-			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
-				skill_ids.append(runtime_skill_id)
+	# 行动者全部技能ID；统一委托 SkillDefinition，与基础AI其他技能链共用同一套来源清单与“实际安装”裁剪规则。
+	# 固有技能仍来自快照中的 character_id：未亮将时该字段不可读，因此改写只在武将已公开时生效，不会泄露隐藏信息。
+	var skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(actor)
 	# 当前累计评分；每项技能只读取快照与上一项结果。
 	var result: float = current_score
 	for current_skill_id: String in skill_ids:

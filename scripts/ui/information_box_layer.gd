@@ -959,6 +959,9 @@ func _render_character_skills() -> void:
 	# 该字段在 used_limited_skill_ids 基础上额外包含觉醒技，与技能按钮的已释放判断共用同一权威快照来源。
 	var intrinsic_use_consumed_ids: Array = _character_snapshot.get("used_intrinsic_use_skill_ids", []) as Array
 	# 武将可见技能ID数组；固有技能保持定义顺序，运行时临时技能随后追加且不重复。
+	# 本段是**武将资料展示**，不是拥有权查询：右键详情按武将牌本身的内容渲染，因此不按 installed_skill_ids 裁剪，
+	# 只把运行时新增技能追加在后面。拥有口径由统一入口 SkillDefinition.collect_snapshot_skill_ids /
+	# SkillDefinition.snapshot_has_skill 定义，技能规则与 AI 代码不得复制本段。
 	var skill_ids: Array = (_character_definition.get("skills", []) as Array).duplicate()
 	for temporary_skill_id_variant: Variant in (_character_snapshot.get("temporary_skills", {}) as Dictionary).keys():
 		# 当前临时技能ID；与固有技能同名时只显示一次。
