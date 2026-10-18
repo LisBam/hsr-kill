@@ -672,3 +672,45 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 技能拥有查询统一入口与阮梅武将
+<!-- trellis-session: v=2 fp=4353007caab3592e -->
+
+**Date**: 2026-10-18
+**Task**: 技能拥有查询统一入口与阮梅武将
+**Branch**: `master`
+
+### Summary
+
+封装全项目唯一的技能拥有查询双层入口并收敛 9 处重复实现，修掉 AI 枚举漏裁剪与【药理】联动漏判两个既有缺陷；新增武将阮梅与【梅绽】【灵赋】【阮弦】三个技能。
+
+### Main Changes
+
+- 新增 MatchController.has_skill 权威端口与 SkillDefinition.collect_snapshot_skill_ids/snapshot_has_skill 快照静态入口
+- 收敛 AI 评估器、基础 AI 策略、身份策略评估器、【升变】、【药理】、【火攻】与界面三处展示管线的技能枚举
+- 修复 AI 技能枚举未按 installed_skill_ids 裁剪与【药理】联动只读武将固有技能列表两个既有缺陷
+- 新增武将阮梅（银河学者/女/3体力）与【梅绽】【灵赋】【阮弦】
+- 全局限次存入 character_form_state，失去技能与复原武将牌后均不复活
+- 同步内容制作指南、游戏机制与玩法内容、AI模块、架构说明、README 与两层 Trellis 规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `30d1a69` | 1. 新增技能拥有查询的权威端口与快照静态入口 2. 新增快照技能来源清单的枚举与成员判定静态函数 3. 收敛 AI 评估器的技能枚举与成员判定到统一入口 4. 收敛基础 AI 策略的技能枚举到统一入口 5. 收敛身份策略评估器的技能枚举到统一入口 6. 收敛【升变】军功评分的技能枚举到统一入口 7. 修复【药理】联动只读武将固有技能列表导致漏判的缺陷 8. 收敛【火攻】快照技能判定到统一入口 9. 修复 AI 技能枚举未按实际安装集合裁剪的缺陷 10. 移除基础 AI 策略中因收敛而失效的武将定义缓存 11. 新增界面三处展示管线的拥有口径归属注释 12. 新增技能拥有查询专项回归用例 13. 新增整局快照构造辅助以区分两种快照形状 14. 新增【药理】联动调用点的统一入口回归用例 15. 新增武将阮梅与银河学者势力归属 16. 新增锁定技【梅绽】的全持有者受伤补牌 17. 新增【梅绽】按敌我持有者数动态估值的卖血钩子 18. 新增主动技【灵赋】的重铸授予与升级双分支 19. 新增【灵赋】按牌类别整局限一次的额度记录 20. 新增【灵赋】按无梅绽队友到有卖血队友到低体力队友的三级优先 |
+| `aa03484` | chore(task): archive 10-18-ruanmei-and-skill-ownership-query |
+
+### Testing
+
+- [OK] 串行运行 16 个回归场景全部 EXIT=0：smoke_test、skill_ownership_test、ruanmei_mechanics_test、gameplay_regression_test、ai_policy_test、new_character_mechanics_test 等
+- [OK] RUANMEI_MECHANICS_PASS metadata=1 verbatim=3 meizhan=3 lingfu=5 ruanxian=4 ai=2
+- [OK] SKILL_OWNERSHIP_PASS native=2 lost=1 temporary=1 acquired=1 trim=1 agree=1 yaoli=1
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 如需扩展：其他按花色/类别限次的技能可直接复用 character_form_state 的额度记录写法
