@@ -4,18 +4,17 @@ extends VBoxContainer
 ## 银狼【注入】的组合窗口内容视图。纯 UI 组件：只读取请求上下文里已经准备好的键列表与静态数据池，
 ## 不读取对局状态、不提交规则动作，也不认识「银狼」「注入」以外的任何技能。
 ##
-## 【布局】左栏选时机、右栏选效果，底部实时预览组合出来的技能正文，最下方是确定与取消。
-## 【候选来源】每栏默认只展示权威随机抽取的若干项，点击「展开全部」后展示该池的完整候选；
-## 展开只影响可见数量，不改变任何规则判定，也不重新抽取随机项。
+## 【布局】左栏是权威随机抽出的两个「时机」按钮，右栏是同一请求里随机抽出的两个「效果」按钮，
+## 两栏下方实时预览组合出来的技能正文，最下方是确定与取消。
+## 【候选来源】两栏各只展示两个由权威侧随机抽取的候选，界面**不提供**展开完整池的入口：
+## 候选数量本身就是平衡设计的一部分，界面若能展开就等于绕过了随机抽取；
+## 池子的完整内容属于设计资料，由《内容制作指南》维护，玩家只需要在两个候选里二选一。
 
 ## 玩家确认组合时发出完整控制项；由窗口层转成统一选择动作。
 signal submitted(control_id: String)
 
 ## 玩家放弃本次组合时发出；取消不产生任何技能，也不消耗任何资源。
 signal cancelled
-
-## 两栏候选列表的高度；固定值让「展开全部」只增加滚动内容而不撑高窗口。
-const OPTION_LIST_HEIGHT: int = 148
 
 ## 组合窗口控制项前缀；与控制器常量同源，保证界面拼出的控制项能被权威侧解析。
 const CONTROL_PREFIX: String = MatchController.YINLANG_COMPOSE_CONTROL_PREFIX
@@ -27,34 +26,39 @@ const CONTROL_SEPARATOR: String = MatchController.YINLANG_CONTROL_SEPARATOR
 const TIMING_COLUMN_TITLE: String = "时机"
 const EFFECT_COLUMN_TITLE: String = "效果"
 
-## 「展开全部」与「收起候选」的按钮文本。
-const EXPAND_TEXT: String = "展开全部候选"
-const COLLAPSE_TEXT: String = "收起为默认候选"
+## 候选按钮的最小高度；固定值让两个候选在视觉上等重，不因文本长短而参差不齐。
+const OPTION_BUTTON_HEIGHT: float = 48.0
 
 ## 确定与取消按钮文本。
 const CONFIRM_TEXT: String = "确定"
 const CANCEL_TEXT: String = "取消"
 
-## 请求上下文里「默认候选时机键」的键名；与注入技能写入的字段保持一致。
+## 请求上下文里「候选时机键」的键名；与注入技能写入的字段保持一致。
 const CONTEXT_KEY_TIMING_OFFERING: String = "timing_offering"
 
-## 请求上下文里「默认候选效果键」的键名。
+## 请求上下文里「候选效果键」的键名。
 const CONTEXT_KEY_EFFECT_OFFERING: String = "effect_offering"
 
 ## 请求上下文里「效果池类别」的键名。
 const CONTEXT_KEY_POOL_KIND: String = "pool_kind"
 
-## 时机栏候选列表；展示时机键对应的玩家可见文本。
-var _timing_list: ItemList
+## 时机栏候选按钮容器；每次配置请求时清空重建，按钮数量等于权威随机抽出的候选数。
+var _timing_options_box: VBoxContainer
 
-## 效果栏候选列表；展示效果键对应的玩家可见文本。
-var _effect_list: ItemList
+## 效果栏候选按钮容器；每次配置请求时清空重建，按钮数量等于权威随机抽出的候选数。
+var _effect_options_box: VBoxContainer
 
-## 时机栏展开按钮；在默认候选与完整池之间切换。
-var _timing_expand_button: Button
+## 时机栏候选按钮；与 `_timing_offering` 下标一一对应，用于按当前选中键刷新外观。
+var _timing_buttons: Array[Button] = []
 
-## 效果栏展开按钮；在默认候选与完整池之间切换。
-var _effect_expand_button: Button
+## 效果栏候选按钮；与 `_effect_offering` 下标一一对应，用于按当前选中键刷新外观。
+var _effect_buttons: Array[Button] = []
+
+## 时机栏按钮组；保证同一时刻只有一个候选处于选中态，玩家无法同时选中两个时机。
+var _timing_group: ButtonGroup
+
+## 效果栏按钮组；保证同一时刻只有一个候选处于选中态，玩家无法同时选中两个效果。
+var _effect_group: ButtonGroup
 
 ## 组合正文预览标签；实时显示「锁定技，<时机>，<效果>。每回合限一次。」。
 var _preview_label: Label
@@ -65,17 +69,11 @@ var _confirm_button: Button
 ## 取消按钮；始终可点击。
 var _cancel_button: Button
 
-## 默认候选时机键；来自请求上下文的权威随机结果。
+## 候选时机键；来自请求上下文的权威随机结果，顺序即左栏按钮从上到下的顺序。
 var _timing_offering: Array[String] = []
 
-## 默认候选效果键；来自请求上下文的权威随机结果。
+## 候选效果键；来自请求上下文的权威随机结果，顺序即右栏按钮从上到下的顺序。
 var _effect_offering: Array[String] = []
-
-## 当前是否已展开时机栏完整池。
-var _timing_expanded: bool = false
-
-## 当前是否已展开效果栏完整池。
-var _effect_expanded: bool = false
 
 ## 当前选中的时机键；空字符串表示尚未选择。
 var _selected_timing_key: String = ""
@@ -100,59 +98,51 @@ func configure(context: Dictionary) -> void:
 	_pool_kind = str(context.get(CONTEXT_KEY_POOL_KIND, ""))
 	_timing_offering = _to_string_array(context.get(CONTEXT_KEY_TIMING_OFFERING, []))
 	_effect_offering = _to_string_array(context.get(CONTEXT_KEY_EFFECT_OFFERING, []))
-	_timing_expanded = false
-	_effect_expanded = false
 	_selected_timing_key = ""
 	_selected_effect_key = ""
-	_rebuild_timing_list()
-	_rebuild_effect_list()
+	_rebuild_timing_options()
+	_rebuild_effect_options()
 	_refresh_preview()
 
 
 ## 按当前活动 UI 风格刷新全部控件配色；科技黑蓝语义只用于本窗口，不污染其他界面。
 func refresh_ui_style() -> void:
-	# 列表与预览的背景、描边与文字色；全部走 tech_* 语义键。
-	var list_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 6)
-	_timing_list.add_theme_stylebox_override("panel", list_style)
-	_effect_list.add_theme_stylebox_override("panel", list_style)
-	_timing_list.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_effect_list.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_timing_list.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("tech_accent"))
-	_effect_list.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("tech_accent"))
-	_timing_list.add_theme_stylebox_override("selected", BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 1, 4))
-	_effect_list.add_theme_stylebox_override("selected", BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 1, 4))
+	# 候选按钮的统一底色与描边；选中态在下方单独覆盖，因此这里只处理未选中时的常规外观。
+	for button: Button in _timing_buttons + _effect_buttons:
+		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
+	# 选中态样式；亮青描边 + 网格底，让「已选中的那一个」在四个按钮里一眼可辨。
+	var selected_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
+	for button: Button in _timing_buttons + _effect_buttons:
+		button.add_theme_stylebox_override("pressed", selected_style)
+		button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("tech_accent"))
 	_preview_label.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
-	for button: Button in [_timing_expand_button, _effect_expand_button, _confirm_button, _cancel_button]:
+	for button: Button in [_confirm_button, _cancel_button]:
 		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
 	_confirm_button.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
 
 
-## 建立左右两栏；每栏由标题、候选列表与展开按钮组成。
+## 建立左右两栏；每栏由标题与纵向排列的候选按钮组成。
 func _build_columns() -> void:
 	# 两栏横排容器；左右等宽，保证时机与效果在视觉上同等重要。
 	var columns: HBoxContainer = HBoxContainer.new()
 	columns.add_theme_constant_override("separation", 14)
 	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(columns)
-	# 时机栏；左侧，承载时机池候选。
+	# 时机栏；左侧，承载两个随机时机候选。
 	var timing_column: VBoxContainer = _build_column(TIMING_COLUMN_TITLE)
 	columns.add_child(timing_column)
-	_timing_list = _create_option_list()
-	_timing_list.item_selected.connect(_on_timing_selected)
-	timing_column.add_child(_timing_list)
-	_timing_expand_button = _create_expand_button(_on_timing_expand_pressed)
-	timing_column.add_child(_timing_expand_button)
-	# 效果栏；右侧，承载当前类别池候选。
+	_timing_options_box = VBoxContainer.new()
+	_timing_options_box.add_theme_constant_override("separation", 8)
+	timing_column.add_child(_timing_options_box)
+	# 效果栏；右侧，承载两个随机效果候选。
 	var effect_column: VBoxContainer = _build_column(EFFECT_COLUMN_TITLE)
 	columns.add_child(effect_column)
-	_effect_list = _create_option_list()
-	_effect_list.item_selected.connect(_on_effect_selected)
-	effect_column.add_child(_effect_list)
-	_effect_expand_button = _create_expand_button(_on_effect_expand_pressed)
-	effect_column.add_child(_effect_expand_button)
+	_effect_options_box = VBoxContainer.new()
+	_effect_options_box.add_theme_constant_override("separation", 8)
+	effect_column.add_child(_effect_options_box)
 
 
-## 建立一个栏容器；标题在上，候选列表占据剩余高度。
+## 建立一个栏容器；标题在上，候选按钮区占据剩余高度。
 func _build_column(title: String) -> VBoxContainer:
 	# 栏容器；横向扩展填满一半宽度。
 	var column: VBoxContainer = VBoxContainer.new()
@@ -165,27 +155,6 @@ func _build_column(title: String) -> VBoxContainer:
 	title_label.add_theme_font_size_override("font_size", 20)
 	column.add_child(title_label)
 	return column
-
-
-## 创建一个候选列表；固定高度并允许滚动，展开完整池时不会撑高窗口。
-func _create_option_list() -> ItemList:
-	# 候选列表；单选，选中后立即刷新预览。
-	var option_list: ItemList = ItemList.new()
-	option_list.custom_minimum_size = Vector2(0.0, float(OPTION_LIST_HEIGHT))
-	option_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	option_list.select_mode = ItemList.SELECT_SINGLE
-	option_list.allow_reselect = true
-	option_list.auto_height = false
-	return option_list
-
-
-## 创建展开按钮；点击后在默认候选与完整池之间切换。
-func _create_expand_button(callback: Callable) -> Button:
-	# 展开按钮；文本由刷新函数按当前状态写入。
-	var button: Button = Button.new()
-	button.text = EXPAND_TEXT
-	button.pressed.connect(callback)
-	return button
 
 
 ## 建立正文预览；组合结果实时可见，避免玩家在确认前无法预判技能正文。
@@ -215,51 +184,47 @@ func _build_actions() -> void:
 	actions.add_child(_cancel_button)
 
 
-## 重建时机栏候选；按当前展开状态选择默认候选或完整池。
-func _rebuild_timing_list() -> void:
-	# 候选键；展开时使用完整池，否则使用权威随机提供的默认候选。
-	var keys: Array[String] = _collect_pool_keys(ComposedSkillPools.get_timing_entries()) if _timing_expanded else _timing_offering
-	_fill_option_list(_timing_list, keys, ComposedSkillPools.get_timing_entries(), _selected_timing_key)
-	_timing_expand_button.text = COLLAPSE_TEXT if _timing_expanded else EXPAND_TEXT
+## 重建时机栏候选按钮；候选来自请求上下文里的权威随机结果，界面不再提供展开完整池的入口。
+func _rebuild_timing_options() -> void:
+	_timing_group = ButtonGroup.new()
+	_timing_buttons = _fill_option_buttons(_timing_options_box, _timing_group, _timing_offering, ZhuruComposePools.get_timing_entries(), _on_timing_option_toggled)
 
 
-## 重建效果栏候选；按当前展开状态选择默认候选或当前类别池。
-func _rebuild_effect_list() -> void:
-	# 候选键；展开时使用完整池，否则使用权威随机提供的默认候选。
-	var keys: Array[String] = _collect_pool_keys(ComposedSkillPools.get_effects(_pool_kind)) if _effect_expanded else _effect_offering
-	_fill_option_list(_effect_list, keys, ComposedSkillPools.get_effects(_pool_kind), _selected_effect_key)
-	_effect_expand_button.text = COLLAPSE_TEXT if _effect_expanded else EXPAND_TEXT
+## 重建效果栏候选按钮；候选来自请求上下文里的权威随机结果，界面不再提供展开完整池的入口。
+func _rebuild_effect_options() -> void:
+	_effect_group = ButtonGroup.new()
+	_effect_buttons = _fill_option_buttons(_effect_options_box, _effect_group, _effect_offering, ZhuruComposePools.get_effects(_pool_kind), _on_effect_option_toggled)
 
 
-## 从池条目数组收集全部键。
-func _collect_pool_keys(entries: Array) -> Array[String]:
-	# 结果键；保持数据池声明顺序，界面顺序因此与文档表格一致。
-	var result: Array[String] = []
-	for entry_variant: Variant in entries:
-		result.append(str((entry_variant as Dictionary).get(ComposedSkillPools.KEY_FIELD, "")))
-	return result
-
-
-## 用键列表填充候选列表；显示文本从对应池条目读取，缺失时回落到键本身。
-func _fill_option_list(option_list: ItemList, keys: Array[String], entries: Array, selected_key: String) -> void:
-	option_list.clear()
-	# 选中下标；-1 表示当前没有任何选中项。
-	var selected_index: int = -1
+## 用候选键填充一栏的按钮区；返回本次建立的按钮数组，下标与传入的键数组一一对应。
+## 每个按钮都是互斥开关按钮：同一栏内只能有一个处于选中态，重复点击已选中的按钮不会取消选择。
+func _fill_option_buttons(container: VBoxContainer, group: ButtonGroup, keys: Array[String], entries: Array, callback: Callable) -> Array[Button]:
+	for child: Node in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
+	# 本次建立的按钮；下标与 keys 一一对应，供刷新外观与回读选中键使用。
+	var buttons: Array[Button] = []
 	for key: String in keys:
-		option_list.add_item(_resolve_entry_text(entries, key))
-		if key == selected_key:
-			selected_index = option_list.item_count - 1
-	if selected_index >= 0:
-		option_list.select(selected_index)
+		# 当前候选按钮；文本取池内原文，缺失时回落到稳定键本身，保证按钮文本永不为空。
+		var button: Button = Button.new()
+		button.text = _resolve_entry_text(entries, key)
+		button.toggle_mode = true
+		button.button_group = group
+		button.custom_minimum_size = Vector2(0.0, OPTION_BUTTON_HEIGHT)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.toggled.connect(callback.bind(key))
+		container.add_child(button)
+		buttons.append(button)
+	return buttons
 
 
-## 从池条目里查一个键对应的显示文本；缺失时回落到键本身，保证列表项永不为空。
+## 从池条目里查一个键对应的显示文本；缺失时回落到键本身，保证按钮文本永不为空。
 func _resolve_entry_text(entries: Array, key: String) -> String:
 	for entry_variant: Variant in entries:
 		# 当前池条目；键匹配即返回文本。
 		var entry: Dictionary = entry_variant as Dictionary
-		if str(entry.get(ComposedSkillPools.KEY_FIELD, "")) == key:
-			return str(entry.get(ComposedSkillPools.TEXT_FIELD, key))
+		if str(entry.get(ZhuruComposePools.KEY_FIELD, "")) == key:
+			return str(entry.get(ZhuruComposePools.TEXT_FIELD, key))
 	return key
 
 
@@ -269,40 +234,24 @@ func _refresh_preview() -> void:
 		_preview_label.text = "请分别选择时机与效果。"
 		_confirm_button.disabled = true
 		return
-	_preview_label.text = ComposedSkillPools.compose_description(_resolve_entry_text(ComposedSkillPools.get_timing_entries(), _selected_timing_key), _resolve_entry_text(ComposedSkillPools.get_effects(_pool_kind), _selected_effect_key))
+	_preview_label.text = ZhuruComposePools.compose_description(_resolve_entry_text(ZhuruComposePools.get_timing_entries(), _selected_timing_key), _resolve_entry_text(ZhuruComposePools.get_effects(_pool_kind), _selected_effect_key))
 	_confirm_button.disabled = false
 
 
-## 记录时机栏选中项。
-func _on_timing_selected(index: int) -> void:
-	# 当前可见键列表；与列表项下标一一对应。
-	var keys: Array[String] = _collect_pool_keys(ComposedSkillPools.get_timing_entries()) if _timing_expanded else _timing_offering
-	if index < 0 or index >= keys.size():
+## 记录左栏选中项；互斥按钮组只会对「被选中的那一个」发出开启事件，因此关闭事件直接忽略。
+func _on_timing_option_toggled(toggled_on: bool, key: String) -> void:
+	if not toggled_on:
 		return
-	_selected_timing_key = keys[index]
+	_selected_timing_key = key
 	_refresh_preview()
 
 
-## 记录效果栏选中项。
-func _on_effect_selected(index: int) -> void:
-	# 当前可见键列表；与列表项下标一一对应。
-	var keys: Array[String] = _collect_pool_keys(ComposedSkillPools.get_effects(_pool_kind)) if _effect_expanded else _effect_offering
-	if index < 0 or index >= keys.size():
+## 记录右栏选中项；互斥按钮组只会对「被选中的那一个」发出开启事件，因此关闭事件直接忽略。
+func _on_effect_option_toggled(toggled_on: bool, key: String) -> void:
+	if not toggled_on:
 		return
-	_selected_effect_key = keys[index]
+	_selected_effect_key = key
 	_refresh_preview()
-
-
-## 切换时机栏展开状态；已选中的键在重建后保持选中。
-func _on_timing_expand_pressed() -> void:
-	_timing_expanded = not _timing_expanded
-	_rebuild_timing_list()
-
-
-## 切换效果栏展开状态；已选中的键在重建后保持选中。
-func _on_effect_expand_pressed() -> void:
-	_effect_expanded = not _effect_expanded
-	_rebuild_effect_list()
 
 
 ## 提交组合结果；控制项格式与权威侧解析规则严格一致。

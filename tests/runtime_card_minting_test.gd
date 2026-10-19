@@ -34,8 +34,9 @@ const SAMPLE_SUIT: String = "heart"
 ## 造牌使用的合法点数。
 const SAMPLE_RANK: int = 13
 
-## 造牌牌名长度上限；与 MatchController.MINT_CARD_NAME_MAX_LENGTH 必须一致。
-const NAME_MAX_LENGTH: int = 12
+## 造牌牌名长度上限；**直接取控制器常量**而不是再写一个数字：
+## 两处各写一份必然漂移（上限从 12 改到 6 时本用例曾因此误报），边界断言只应跟随权威口径。
+const NAME_MAX_LENGTH: int = MatchController.MINT_CARD_NAME_MAX_LENGTH
 
 
 ## 延迟一帧执行全部断言，确保 GameDatabase 已完成卡牌目录扫描。

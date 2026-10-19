@@ -2332,7 +2332,9 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 	# 当前全局轮编号；额外回合不会增加该编号，因此会继续共享本轮额度。
 	var current_round_number: int = int(_snapshot.get("round_number", -1))
 	# 每回合额度；0表示不限制，非0时显示剩余次数。
-	var per_turn_limit: int = maxi(int(usage.get("per_turn_limit", 0)), 0)
+	# 技能正文已经自带每回合额度声明时不再重复提示：组合技能的正文固定以「每回合限一次。」结尾，
+	# 界面若再补一句「每回合可发动1次」，玩家会以为是两个互相独立的限制。
+	var per_turn_limit: int = 0 if _declares_own_per_turn_limit(skill_id) else maxi(int(usage.get("per_turn_limit", 0)), 0)
 	# 每轮额度；0表示不限制，非0时显示剩余次数。
 	var per_round_limit: int = maxi(int(usage.get("per_round_limit", 0)), 0)
 	# 总共额度；0表示不限制，非0时显示本局累计剩余次数。
@@ -2360,6 +2362,14 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 		var round_remaining: int = maxi(per_round_limit - uses_this_round, 0)
 		description_parts.append("每轮可发动%d次" % round_remaining)
 	return {"description":"；".join(description_parts)}
+
+
+## 判断一个技能是否在正文里自带每回合额度声明；界面据此决定是否还要补「每回合可发动N次」提示。
+## 传入的可能是实例键：技能元数据只按技能ID登记，因此先还原成基础技能ID再查库。
+func _declares_own_per_turn_limit(skill_id: String) -> bool:
+	# 技能元数据；未登记的技能返回空字典，此时按「需要界面补提示」处理，保持原有外观。
+	var skill_definition: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_id))
+	return bool(skill_definition.get("declares_own_per_turn_limit", false))
 
 
 ## 返回指定身份实际拥有并可显示的武将技能；技能栏据此创建按钮。

@@ -88,7 +88,7 @@ func _on_game_start(_event: RuleEvent) -> void:
 	if owner == null or not owner.alive or owner.out_of_game:
 		return
 	_applied_game_start = true
-	_open_compose_window(ComposedSkillPools.KIND_JINCHENG, owner_player_id)
+	_open_compose_window(ZhuruComposePools.KIND_JINCHENG, owner_player_id)
 
 
 ## 准备阶段可选发动：先选一名角色，再按该角色是否为主演决定组合类别。
@@ -134,7 +134,7 @@ func _continue_target_step(response: ChoiceResponse) -> void:
 	# 已选目标角色；主演判定走权威端口，界面标记不参与规则。
 	var target_id: int = int(response.target_ids[0])
 	# 组合类别；目标为主演时给收益池（进程），否则给代价池（缺陷）。
-	var pool_kind: String = ComposedSkillPools.KIND_JINCHENG if bool(host.call("is_starring_role", target_id)) else ComposedSkillPools.KIND_QUEXIAN
+	var pool_kind: String = ZhuruComposePools.KIND_JINCHENG if bool(host.call("is_starring_role", target_id)) else ZhuruComposePools.KIND_QUEXIAN
 	_open_compose_window(pool_kind, target_id)
 
 
@@ -160,12 +160,12 @@ func _open_compose_window(pool_kind: String, grant_target_id: int) -> void:
 		return
 	# 时机池全部键；顺序即数据池声明顺序，界面展开全部时保持同一顺序。
 	var timing_keys: Array[String] = []
-	for entry: Dictionary in ComposedSkillPools.get_timing_entries():
-		timing_keys.append(str(entry.get(ComposedSkillPools.KEY_FIELD, "")))
+	for entry: Dictionary in ZhuruComposePools.get_timing_entries():
+		timing_keys.append(str(entry.get(ZhuruComposePools.KEY_FIELD, "")))
 	# 效果池全部键；类别由本次组合决定（进程 / 缺陷）。
 	var effect_keys: Array[String] = []
-	for entry: Dictionary in ComposedSkillPools.get_effects(pool_kind):
-		effect_keys.append(str(entry.get(ComposedSkillPools.KEY_FIELD, "")))
+	for entry: Dictionary in ZhuruComposePools.get_effects(pool_kind):
+		effect_keys.append(str(entry.get(ZhuruComposePools.KEY_FIELD, "")))
 	# 本次随机提供项；两次抽取各自记账，且池不同因此历史数据天然区分。
 	var timing_offering: Array[String] = host.call("pick_random_distinct_keys", timing_keys, OFFERING_SIZE, OFFERING_HISTORY_KIND, {"pool":"timing", "pool_kind":pool_kind}) as Array[String]
 	var effect_offering: Array[String] = host.call("pick_random_distinct_keys", effect_keys, OFFERING_SIZE, OFFERING_HISTORY_KIND, {"pool":"effect", "pool_kind":pool_kind}) as Array[String]
@@ -187,7 +187,7 @@ func _grant_composed_skill(grant_target_id: int, pool_kind: String, timing_key: 
 	if host == null or grant_target_id < 0 or pool_kind.is_empty():
 		return
 	# 双重复核；权威侧已校验过一次，这里再校验是因为本函数也可能被内部调用（例如测试直接构造组合结果）。
-	if not ComposedSkillPools.is_valid_timing_key(timing_key) or not ComposedSkillPools.is_valid_effect_key(pool_kind, effect_key):
+	if not ZhuruComposePools.is_valid_timing_key(timing_key) or not ZhuruComposePools.is_valid_effect_key(pool_kind, effect_key):
 		push_error("注入组合结果非法：pool=%s timing=%s effect=%s" % [pool_kind, timing_key, effect_key])
 		host.call("add_log", "【注入】的组合结果无效，本次未获得技能。")
 		return
@@ -202,24 +202,24 @@ func _grant_composed_skill(grant_target_id: int, pool_kind: String, timing_key: 
 		host.call("add_log", "【注入】未能授予组合技能。")
 		return
 	# 动态正文；严格等于「锁定技，<时机>，<效果>。每回合限一次。」，按实例键写入以便多份实例各自显示。
-	host.call("set_skill_display_description", grant_target_id, instance_key, ComposedSkillPools.compose_description(_timing_text(timing_key), _effect_text(pool_kind, effect_key)))
+	host.call("set_skill_display_description", grant_target_id, instance_key, ZhuruComposePools.compose_description(_timing_text(timing_key), _effect_text(pool_kind, effect_key)))
 	announce_activation({"grant_target_id":grant_target_id, "pool_kind":pool_kind, "timing_key":timing_key, "effect_key":effect_key, "instance_key":instance_key})
 
 
 ## 返回时机键对应的玩家可见文本；键非法时回落到键本身，保证正文永远可读而不是空字符串。
 func _timing_text(timing_key: String) -> String:
-	var entry: Dictionary = ComposedSkillPools.get_timing_entry(timing_key)
+	var entry: Dictionary = ZhuruComposePools.get_timing_entry(timing_key)
 	if entry.is_empty():
 		return timing_key
-	return str(entry.get(ComposedSkillPools.TEXT_FIELD, timing_key))
+	return str(entry.get(ZhuruComposePools.TEXT_FIELD, timing_key))
 
 
 ## 返回效果键对应的玩家可见文本；键非法时回落到键本身。
 func _effect_text(pool_kind: String, effect_key: String) -> String:
-	var entry: Dictionary = ComposedSkillPools.get_effect_entry(pool_kind, effect_key)
+	var entry: Dictionary = ZhuruComposePools.get_effect_entry(pool_kind, effect_key)
 	if entry.is_empty():
 		return effect_key
-	return str(entry.get(ComposedSkillPools.TEXT_FIELD, effect_key))
+	return str(entry.get(ZhuruComposePools.TEXT_FIELD, effect_key))
 
 
 ## 构造 AI 作答用的组合短名单；按「池基准价值 + 效果自身修正」排序后取前若干项。
@@ -247,10 +247,10 @@ func _build_ai_shortlist(pool_kind: String, timing_offering: Array[String], effe
 ## 为一种组合打分；只做方向性排序，不复刻完整收益模型。
 func _score_compose(pool_kind: String, _timing_key: String, effect_key: String) -> float:
 	# 基准分；进程为正、缺陷为负。
-	var score: float = AI_JINCHENG_BASE_VALUE if pool_kind == ComposedSkillPools.KIND_JINCHENG else AI_QUEXIAN_BASE_VALUE
-	if ComposedSkillPools.effect_loses_skill(pool_kind, effect_key):
+	var score: float = AI_JINCHENG_BASE_VALUE if pool_kind == ZhuruComposePools.KIND_JINCHENG else AI_QUEXIAN_BASE_VALUE
+	if ZhuruComposePools.effect_loses_skill(pool_kind, effect_key):
 		score += AI_LOSES_SKILL_PENALTY
-	if ComposedSkillPools.effect_needs_choice(pool_kind, effect_key):
+	if ZhuruComposePools.effect_needs_choice(pool_kind, effect_key):
 		score += AI_NEEDS_CHOICE_PENALTY
 	return score
 
@@ -299,7 +299,7 @@ func _score_control_id(control_id: String) -> float:
 	if segments.size() != COMPOSE_CONTROL_FIELD_COUNT:
 		return 0.0
 	# 类别无法从控制项本身还原，因此按两个池各算一次并取较高分：AI 只关心「这个组合值不值得选」。
-	return maxf(_score_compose(ComposedSkillPools.KIND_JINCHENG, segments[2], segments[3]), _score_compose(ComposedSkillPools.KIND_QUEXIAN, segments[2], segments[3]))
+	return maxf(_score_compose(ZhuruComposePools.KIND_JINCHENG, segments[2], segments[3]), _score_compose(ZhuruComposePools.KIND_QUEXIAN, segments[2], segments[3]))
 
 
 ## 从公开快照判断一名角色是否为主演；主演服务把条目写进公开状态的角落文字表。

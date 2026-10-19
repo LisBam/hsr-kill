@@ -23,4 +23,4 @@ func _init() -> void:
 
 ## 返回所属效果池类别；组合底座据此读取进程效果池并校验配置。
 func _pool_kind() -> String:
-	return ComposedSkillPools.KIND_JINCHENG
+	return ZhuruComposePools.KIND_JINCHENG

@@ -134,8 +134,10 @@ func _run() -> void:
 	if player_card_back.get_index() >= player_input_area.get_index():
 		_fail("player_card_back_input_order")
 		return
-	# 翻面牌背覆盖层的默认不透明度；需求固定为50%，牌背以半透明叠加而不是完全替代插画。
-	if not is_equal_approx(player_target_view.face_down_card_back_overlay_alpha, 0.5):
+	# 翻面牌背覆盖层的默认不透明度；实现口径为 85%（牌背占主导、插画仍透出少许），
+	# 牌背以半透明叠加而不是完全替代插画。这里写死数值是刻意的：改动不透明度属于表现决策，
+	# 必须同时改本断言与文档，写死才能让「顺手调一下数值」在回归里暴露出来。
+	if not is_equal_approx(player_target_view.face_down_card_back_overlay_alpha, 0.85):
 		_fail("player_card_back_overlay_default:%f" % player_target_view.face_down_card_back_overlay_alpha)
 		return
 	# 有插画的武将翻面：插画继续可见，牌背以该不透明度叠加在插画之上。

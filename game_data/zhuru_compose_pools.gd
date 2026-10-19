@@ -1,4 +1,4 @@
-class_name ComposedSkillPools
+class_name ZhuruComposePools
 extends RefCounted
 
 ## 组合技能池数据：把「注入」组合出的【进程】与【缺陷】所需要的「时机池」与「效果池」集中在一处。
