@@ -255,8 +255,9 @@ const MINT_CARD_REASON: String = "runtime_card_mint"
 const MINT_CARD_SHUFFLE_HISTORY_KIND: String = "shuffle_discard_card"
 
 ## 运行时造牌的牌名长度上限（按去首尾空白后的字符数计）；0 与超长都会被造牌端口拒绝。
-## 取 12 的原因：与项目既有卡牌牌名的最大长度同量级，牌面横条与按钮文字都不会因过长而溢出。
-const MINT_CARD_NAME_MAX_LENGTH: int = 12
+## 取 6 的原因：默认牌名「自定义名称1」正好是 6 个字，上限与默认名等长才能保证「什么都不填」一定合法；
+## 同时 6 个字也足以让玩家区分同名冲突，牌面横条与按钮文字不会因过长而溢出。
+const MINT_CARD_NAME_MAX_LENGTH: int = 6
 
 ## 运行时造牌的牌名禁止字符列表；这些字符会破坏日志分隔、信息框解析与存档文本字段的稳定性。
 ## `|` 是信息框副标题与多条文本字段的分隔符，换行会破坏日志的一行一条约定，因此两者都必须拒绝。
@@ -17502,11 +17503,11 @@ func _validate_yinlang_compose_control_id(control_id: String) -> String:
 	# 时机键与效果键；必须分别属于时机池与本次声明的类别池。
 	var timing_key: String = segments[2]
 	var effect_key: String = segments[3]
-	if not ComposedSkillPools.is_valid_timing_key(timing_key):
+	if not ZhuruComposePools.is_valid_timing_key(timing_key):
 		return "选择的时机无效。"
 	# 本次请求声明的类别池；由创建请求的技能写入，客户端无法改写。
 	var pool_kind: String = str((_pending_card_choice.get("context", {}) as Dictionary).get("pool_kind", ""))
-	if not ComposedSkillPools.is_valid_effect_key(pool_kind, effect_key):
+	if not ZhuruComposePools.is_valid_effect_key(pool_kind, effect_key):
 		return "选择的效果无效。"
 	return ""
 

@@ -23,4 +23,4 @@ func _init() -> void:
 
 ## 返回所属效果池类别；组合底座据此读取缺陷效果池并校验配置。
 func _pool_kind() -> String:
-	return ComposedSkillPools.KIND_QUEXIAN
+	return ZhuruComposePools.KIND_QUEXIAN

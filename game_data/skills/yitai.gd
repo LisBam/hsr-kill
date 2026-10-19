@@ -101,6 +101,8 @@ func activate(context: Dictionary = {}) -> String:
 	# 已提交的完整控制项；直接动作（AI 或网络重放）携带时立即落地。
 	var submitted_control_id: String = str(context.get("control_id", ""))
 	if not submitted_control_id.is_empty():
+		if not has_available_intrinsic_use():
+			return "【以太】是限定技，本局已经发动过。"
 		return "" if _execute_mint(submitted_control_id) else "【以太】造牌参数无效或牌名已被占用。"
 	# 牌名唯一性快照；界面据此即时提示重名，最终仍由造牌端口权威复核。
 	var existing_names: Array[String] = host.call("collect_taken_card_display_names") as Array[String]
@@ -118,6 +120,8 @@ func activate(context: Dictionary = {}) -> String:
 
 
 ## 恢复造牌选择；取消不消耗限定技额度，也不产生任何牌。
+## 已确认的响应无论造牌是否成功都要被消费掉：失败原因由 `_execute_mint` 写日志，
+## 但请求本身必须结束，否则窗口会永远挂在同一个请求上等玩家重复提交。
 func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if str(context.get("kind", "")) != CHOICE_KIND_MINT or response == null:
 		return false
@@ -157,7 +161,15 @@ func _on_phase_after(_event: RuleEvent) -> void:
 ##
 ## 【为什么失败不消耗额度】牌名冲突、参数非法都属于「玩家输入问题」，而不是「技能已经发动」；
 ## 若在这里消耗额度，玩家一次误输入就会永久失去限定技，这是不可接受的。
+##
+## 【为什么这里必须自己复核限定额度】`can_activate_skill` 只在**发动入口**拦一次，而造牌真正落地在
+## **提交路径**上。同一个出牌阶段里只要第二次收到已确认的造牌响应（窗口被重复提交、网络重放、
+## 回放重放、事件调度重跑同一步），提交路径就会再执行一次造牌；它不查额度，限定技就会在一个
+## 出牌阶段里造出第二张牌。因此「一局一次」必须同时由发动入口与效果落地处各自把关。
 func _execute_mint(control_id: String) -> bool:
+	if not has_available_intrinsic_use():
+		host.call("add_log", "【以太】是限定技，本局已经发动过，不能再创造卡牌。")
+		return false
 	if not control_id.begins_with(MINT_CONTROL_PREFIX):
 		return false
 	# 分段结果；前缀两段固定，随后是牌名、花色、点数与被复制牌定义ID。

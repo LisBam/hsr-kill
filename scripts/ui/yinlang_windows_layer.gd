@@ -16,9 +16,9 @@ signal choice_submitted(request_id: int, control_id: String, confirmed: bool)
 ## 窗口绘制层级；数值来自《界面与交互》文档的层级表，修改会破坏与其它弹窗的遮挡关系。
 const MODAL_Z_INDEX: int = 185
 
-## 组合窗口的标题与副标题；正文由请求上下文与静态数据池共同决定。
+## 组合窗口的标题；正文由请求上下文与静态数据池共同决定。
+## 本窗口没有副标题：两栏各只有两个候选，按钮本身已经说明了要做什么，再写一行说明只是重复信息。
 const COMPOSE_TITLE: String = "注入"
-const COMPOSE_SUBTITLE: String = "组合一项技能：左栏选择时机、右栏选择效果"
 
 ## 造牌窗口的标题与副标题。
 const MINT_TITLE: String = "以太"
@@ -144,7 +144,7 @@ func show_request(choice_data: Dictionary) -> void:
 	_clear_view()
 	if window_kind == MatchController.YINLANG_WINDOW_INJECT:
 		_title_label.text = COMPOSE_TITLE
-		_subtitle_label.text = COMPOSE_SUBTITLE
+		_subtitle_label.text = ""
 		_compose_view = YinlangComposeView.new()
 		_view_holder.add_child(_compose_view)
 		_compose_view.configure(context)

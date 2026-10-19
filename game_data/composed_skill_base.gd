@@ -5,7 +5,7 @@ extends SkillDefinition
 ##
 ## 设计意图：这两个技能在需求里被描述为「组合一项技能」，即**同一份技能脚本**在不同的时机与效果组合下
 ## 表现出完全不同的行为。因此不能为每一种组合写一个技能文件（23 × 24 + 23 × 18 种组合），
-## 而是把「时机」与「效果」拆成两张**纯数据池**（见 ComposedSkillPools），
+## 而是把「时机」与「效果」拆成两张**纯数据池**（见 ZhuruComposePools），
 ## 由本底座在 install() 时读取该实例的运行时配置，把数据翻译成时机订阅与效果分派。
 ##
 ## 与项目架构的接入方式：
@@ -17,7 +17,7 @@ extends SkillDefinition
 ##
 ## 子类职责：只覆写 _pool_kind() 与 _init() 的静态元数据，其余全部由本底座承担。
 
-## 运行时配置中「时机键」的字段名；值必须是 ComposedSkillPools.TIMING_ENTRIES 中的 key。
+## 运行时配置中「时机键」的字段名；值必须是 ZhuruComposePools.TIMING_ENTRIES 中的 key。
 const RUNTIME_KEY_TIMING: String = "timing_key"
 
 ## 运行时配置中「效果键」的字段名；值必须是所属类别效果池中的 key。
@@ -108,7 +108,7 @@ const RANDOM_DISCARD_COUNT: int = 1
 ## 说明：组合技能的全部随机行为都走 pick_random_candidate_index，禁止直接调用 randi()，否则回放与联机不同步。
 const RANDOM_DISCARD_HISTORY_KIND: String = "composed_random_discard"
 
-## 已实现的效果键清单；与 ComposedSkillPools 的两个效果池键一一对应。
+## 已实现的效果键清单；与 ZhuruComposePools 的两个效果池键一一对应。
 ## 用途：组合技能测试会核对「池中每个键都在本清单里」，避免新增池条目后忘记实现对应效果
 ## （漏实现的表现是「技能发动了但什么都没发生」，没有任何报错，靠人工比对极易漏掉）。
 const IMPLEMENTED_EFFECT_KEYS: Array[String] = [
@@ -174,10 +174,21 @@ var _windows: Dictionary = {}
 var _reserved_damage_event_id: int = -1
 
 
-## 返回本技能所属的效果池类别；子类必须覆写为 ComposedSkillPools.KIND_* 之一。
+## 返回本技能所属的效果池类别；子类必须覆写为 ZhuruComposePools.KIND_* 之一。
 ## 基类返回空字符串表示「没有效果池」，此时 install() 会按配置非法处理并拒绝订阅。
 func _pool_kind() -> String:
 	return ""
+
+
+## 组合技能一律自带每回合额度声明：组合出来的正文固定以「每回合限一次。」结尾。
+## 因此在这里统一声明 declares_own_per_turn_limit，界面不再追加「每回合可发动1次」——
+## 同一句限制在悬停说明里出现两次只会让玩家以为是两个不同的限制。
+## 【为什么在基类统一写入】任何新增的组合技能类别都自动继承该口径，不必逐个类别重复声明。
+func _init(metadata: Dictionary = {}) -> void:
+	# 生效元数据；先复制再补字段，避免修改调用方传入的字典（子类可能复用同一个常量字典）。
+	var effective_metadata: Dictionary = metadata.duplicate(true)
+	effective_metadata["declares_own_per_turn_limit"] = true
+	super(effective_metadata)
 
 
 ## 返回本技能的中文名；缺失元数据时回落到技能ID，保证日志与选择标题始终可读。
@@ -203,17 +214,17 @@ func install() -> void:
 	_timing_key = str(config.get(RUNTIME_KEY_TIMING, ""))
 	_effect_key = str(config.get(RUNTIME_KEY_EFFECT, ""))
 	# 配置校验；时机键与效果键都必须属于本类别的效果池。
-	if not ComposedSkillPools.is_valid_timing_key(_timing_key) or not ComposedSkillPools.is_valid_effect_key(_pool_kind(), _effect_key):
+	if not ZhuruComposePools.is_valid_timing_key(_timing_key) or not ZhuruComposePools.is_valid_effect_key(_pool_kind(), _effect_key):
 		push_error("组合技能配置非法：instance=%s kind=%s timing=%s effect=%s" % [get_instance_key(), _pool_kind(), _timing_key, _effect_key])
 		if host != null and host.has_method("add_log"):
 			host.call("add_log", "【%s】的组合配置无效，这一份技能不会生效。" % _skill_name())
 		return
 	# 当前时机条目；订阅角色由数据池声明，避免每个效果各自硬编码角色。
-	var entry: Dictionary = ComposedSkillPools.get_timing_entry(_timing_key)
+	var entry: Dictionary = ZhuruComposePools.get_timing_entry(_timing_key)
 	# 触发角色；global 表示任何角色的该时机都成立，其余按事件角色精确匹配。
-	var role: String = str(entry.get(ComposedSkillPools.ROLE_FIELD, ComposedSkillPools.ROLE_GLOBAL))
+	var role: String = str(entry.get(ZhuruComposePools.ROLE_FIELD, ZhuruComposePools.ROLE_GLOBAL))
 	# 主时机与附加时机；「体力上限发生变化后」需要同时订阅 gainMaxHpAfter 与 loseMaxHpAfter。
-	for timing_name: String in ComposedSkillPools.get_subscription_timings(_timing_key):
+	for timing_name: String in ZhuruComposePools.get_subscription_timings(_timing_key):
 		subscribe_timing(timing_name, _on_composed_timing, role)
 	# 回合域窗口统一过期；走窗口订阅而不是普通订阅，理由见 _subscribe_window_timing 的说明。
 	_subscribe_window_timing("phaseAfter", _on_phase_after)
@@ -286,18 +297,18 @@ func _on_composed_timing(event: RuleEvent) -> void:
 ## 复核时机条目的附加条件；不满足时本次时机不发动。
 func _passes_timing_condition(event: RuleEvent) -> bool:
 	# 当前时机条目；install() 已保证存在，此处仍按缺失处理以防御运行时被改写的数据。
-	var entry: Dictionary = ComposedSkillPools.get_timing_entry(_timing_key)
+	var entry: Dictionary = ZhuruComposePools.get_timing_entry(_timing_key)
 	if entry.is_empty():
 		return false
 	# 条件种类；数据池声明，避免每个效果各自硬编码判定。
-	var condition: String = str(entry.get(ComposedSkillPools.CONDITION_FIELD, ComposedSkillPools.CONDITION_NONE))
+	var condition: String = str(entry.get(ZhuruComposePools.CONDITION_FIELD, ZhuruComposePools.CONDITION_NONE))
 	match condition:
-		ComposedSkillPools.CONDITION_ELEMENTAL:
+		ZhuruComposePools.CONDITION_ELEMENTAL:
 			# 属性伤害只承认 fire 与 thunder；普通伤害不满足。
-			return ComposedSkillPools.is_elemental_nature(str(event.data.get("nature", "normal")))
-		ComposedSkillPools.CONDITION_SLASH:
+			return ZhuruComposePools.is_elemental_nature(str(event.data.get("nature", "normal")))
+		ZhuruComposePools.CONDITION_SLASH:
 			return _is_slash_event(event)
-		ComposedSkillPools.CONDITION_OUTSIDE_TURN:
+		ZhuruComposePools.CONDITION_OUTSIDE_TURN:
 			# 回合外：当前回合角色不是持有者本人。
 			return int(host.state.current_player_id) != owner_player_id
 		_:
@@ -513,7 +524,7 @@ func _gain_top_draw_card_by_filter(filter: Dictionary, reason: String) -> void:
 ## 【为什么必须按实例键移除】同一角色可以累积多份【进程】/【缺陷】，
 ## 用技能ID 移除会删掉**首实例**，让「失去本技能」的那一份活下来、没触发的那一份反而消失。
 func _finish_effect() -> void:
-	if not ComposedSkillPools.effect_loses_skill(_pool_kind(), _effect_key):
+	if not ZhuruComposePools.effect_loses_skill(_pool_kind(), _effect_key):
 		return
 	# 本实例的实例键；空值表示尚未安装，此时无技能可失去。
 	var instance_key: String = get_instance_key()
@@ -588,7 +599,7 @@ func _on_next_damage_begin_three(event: RuleEvent) -> void:
 	var is_elemental_variant: bool = _is_window_active(WINDOW_NEXT_ELEMENTAL_DAMAGE)
 	if not is_elemental_variant and not _is_window_active(WINDOW_NEXT_DAMAGE):
 		return
-	if is_elemental_variant and not ComposedSkillPools.is_elemental_nature(str(event.data.get("nature", "normal"))):
+	if is_elemental_variant and not ZhuruComposePools.is_elemental_nature(str(event.data.get("nature", "normal"))):
 		return
 	# 当前伤害事件ID；外层伤害一旦预留，嵌套产生的不同伤害必须等待外层实际结果后再判断。
 	var damage_event_id: int = int(event.data.get("damage_event_id", -1))

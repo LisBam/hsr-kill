@@ -44,6 +44,12 @@ const ABSENT_TIMING_KEY: String = "not_a_timing"
 const MINT_SOURCE_DEFINITION_ID: String = "sha"
 const MINT_CUSTOM_NAME: String = "以太造物"
 
+## 造牌窗口选择请求的上下文类型；与以太技能写入的 kind 字段一致，重放断言据此构造请求。
+const MINT_CHOICE_KIND: String = "yitai_mint"
+
+## 重复落地断言使用的牌名；必须与 MINT_CUSTOM_NAME 不同，才能证明第二张牌没有被造出来。
+const REPLAY_MINT_NAME: String = "重放牌"
+
 ## 造牌使用的花色与点数；与界面默认值无关，只用于验证数值原样落地。
 const MINT_SUIT: String = "heart"
 const MINT_RANK: int = 7
@@ -196,49 +202,57 @@ func _test_pool_integrity() -> bool:
 	# 随机提供项断言需要权威状态与随机历史，因此先建立最小状态。
 	_reset_state(2)
 	# 时机池条目；每条都必须有稳定键、玩家可见文本与非空订阅时机。
-	for entry_variant: Variant in ComposedSkillPools.get_timing_entries():
+	for entry_variant: Variant in ZhuruComposePools.get_timing_entries():
 		# 当前时机条目；缺少键或文本会让界面显示空白、技能订阅不到任何时机。
 		var entry: Dictionary = entry_variant as Dictionary
 		# 当前时机键；用于后续按键查询。
-		var timing_key: String = str(entry.get(ComposedSkillPools.KEY_FIELD, ""))
-		if timing_key.is_empty() or str(entry.get(ComposedSkillPools.TEXT_FIELD, "")).is_empty():
+		var timing_key: String = str(entry.get(ZhuruComposePools.KEY_FIELD, ""))
+		if timing_key.is_empty() or str(entry.get(ZhuruComposePools.TEXT_FIELD, "")).is_empty():
 			return _fail("timing_entry_incomplete=%s" % [entry])
-		if ComposedSkillPools.get_subscription_timings(timing_key).is_empty():
+		if ZhuruComposePools.get_subscription_timings(timing_key).is_empty():
 			return _fail("timing_no_subscription key=%s" % timing_key)
-		if not ComposedSkillPools.is_valid_timing_key(timing_key):
+		if not ZhuruComposePools.is_valid_timing_key(timing_key):
 			return _fail("timing_key_not_valid key=%s" % timing_key)
 	# 两个效果池；每条都必须有键、文本与所属类别。
-	for pool_kind: String in [ComposedSkillPools.KIND_JINCHENG, ComposedSkillPools.KIND_QUEXIAN]:
-		if ComposedSkillPools.get_effects(pool_kind).is_empty():
+	for pool_kind: String in [ZhuruComposePools.KIND_JINCHENG, ZhuruComposePools.KIND_QUEXIAN]:
+		if ZhuruComposePools.get_effects(pool_kind).is_empty():
 			return _fail("effect_pool_empty kind=%s" % pool_kind)
-		for entry_variant: Variant in ComposedSkillPools.get_effects(pool_kind):
+		for entry_variant: Variant in ZhuruComposePools.get_effects(pool_kind):
 			# 当前效果条目；键为空会让组合控制项无法解析。
 			var entry: Dictionary = entry_variant as Dictionary
 			# 当前效果键；用于按类别校验。
-			var effect_key: String = str(entry.get(ComposedSkillPools.KEY_FIELD, ""))
-			if effect_key.is_empty() or str(entry.get(ComposedSkillPools.TEXT_FIELD, "")).is_empty():
+			var effect_key: String = str(entry.get(ZhuruComposePools.KEY_FIELD, ""))
+			if effect_key.is_empty() or str(entry.get(ZhuruComposePools.TEXT_FIELD, "")).is_empty():
 				return _fail("effect_entry_incomplete kind=%s entry=%s" % [pool_kind, entry])
-			if not ComposedSkillPools.is_valid_effect_key(pool_kind, effect_key):
+			if not ZhuruComposePools.is_valid_effect_key(pool_kind, effect_key):
 				return _fail("effect_key_not_valid kind=%s key=%s" % [pool_kind, effect_key])
 			# 类别隔离：进程池的效果键不得在缺陷池里也被判为合法（除非两个池确实共用同名效果）。
-			if not ComposedSkillPools.is_valid_effect_key(ComposedSkillPools.KIND_JINCHENG, effect_key) and not ComposedSkillPools.is_valid_effect_key(ComposedSkillPools.KIND_QUEXIAN, effect_key):
+			if not ZhuruComposePools.is_valid_effect_key(ZhuruComposePools.KIND_JINCHENG, effect_key) and not ZhuruComposePools.is_valid_effect_key(ZhuruComposePools.KIND_QUEXIAN, effect_key):
 				return _fail("effect_key_in_no_pool key=%s" % effect_key)
 	# 组合正文格式：必须严格等于「锁定技，<时机>，<效果>。每回合限一次。」。
 	# 时机文本与效果文本；用于拼出期望正文。
-	var timing_text: String = str(ComposedSkillPools.get_timing_entry(SAMPLE_TIMING_KEY).get(ComposedSkillPools.TEXT_FIELD, ""))
-	var effect_text: String = str(ComposedSkillPools.get_effect_entry(ComposedSkillPools.KIND_JINCHENG, SAMPLE_EFFECT_KEY).get(ComposedSkillPools.TEXT_FIELD, ""))
+	var timing_text: String = str(ZhuruComposePools.get_timing_entry(SAMPLE_TIMING_KEY).get(ZhuruComposePools.TEXT_FIELD, ""))
+	var effect_text: String = str(ZhuruComposePools.get_effect_entry(ZhuruComposePools.KIND_JINCHENG, SAMPLE_EFFECT_KEY).get(ZhuruComposePools.TEXT_FIELD, ""))
 	if timing_text.is_empty() or effect_text.is_empty():
 		return _fail("sample_entries_missing timing=%s effect=%s" % [SAMPLE_TIMING_KEY, SAMPLE_EFFECT_KEY])
 	# 实际正文与期望正文；两者必须逐字一致。
 	var expected: String = "锁定技，%s，%s。每回合限一次。" % [timing_text, effect_text]
-	if ComposedSkillPools.compose_description(timing_text, effect_text) != expected:
-		return _fail("description_format=%s" % ComposedSkillPools.compose_description(timing_text, effect_text))
+	if ZhuruComposePools.compose_description(timing_text, effect_text) != expected:
+		return _fail("description_format=%s" % ZhuruComposePools.compose_description(timing_text, effect_text))
 	# 随机提供项：必须返回互不重复的键，且数量不超过候选总数。
 	var offered: Array[String] = _controller.pick_random_distinct_keys(["a", "b", "c", "d"], 2, "yinlang_test_offering", {})
 	if offered.size() != 2 or offered[0] == offered[1]:
 		return _fail("random_offering=%s" % [offered])
 	if _controller.pick_random_distinct_keys([], 2, "yinlang_test_offering", {}).size() != 0:
 		return _fail("random_offering_empty_pool")
+	# 组合技能必须声明「正文自带每回合额度」：界面据此不再追加「每回合可发动1次」，
+	# 否则同一句「每回合限一次」会在悬停说明里出现两次。这条断言覆盖元数据 → 数据库的完整链路。
+	for composed_skill_id: String in [JINCHENG_SKILL_ID, QUEXIAN_SKILL_ID]:
+		if not bool(GameDatabase.get_skill(composed_skill_id).get("declares_own_per_turn_limit", false)):
+			return _fail("composed_skill_missing_own_limit_declaration=%s" % composed_skill_id)
+	# 普通技能不得误带该声明，否则它们会失去应有的额度提示。
+	if bool(GameDatabase.get_skill("yitai").get("declares_own_per_turn_limit", false)):
+		return _fail("yitai_wrongly_declares_own_limit")
 	return true
 
 
@@ -294,7 +308,7 @@ func _test_inject_game_start() -> bool:
 	var context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 	if str(context.get(MatchController.YINLANG_WINDOW_CONTEXT_KEY, "")) != MatchController.YINLANG_WINDOW_INJECT:
 		return _fail("gamestart_window_kind=%s" % str(context.get(MatchController.YINLANG_WINDOW_CONTEXT_KEY, "")))
-	if str(context.get("pool_kind", "")) != ComposedSkillPools.KIND_JINCHENG:
+	if str(context.get("pool_kind", "")) != ZhuruComposePools.KIND_JINCHENG:
 		return _fail("gamestart_pool=%s" % str(context.get("pool_kind", "")))
 	if int(context.get("grant_target_id", -1)) != 0:
 		return _fail("gamestart_target=%d" % int(context.get("grant_target_id", -1)))
@@ -357,7 +371,7 @@ func _test_inject_prepare_phase_pools() -> bool:
 		return _fail("prepare_starring_window_missing")
 	# 主演组合窗口上下文；类别池必须是进程。
 	var starring_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
-	if str(starring_context.get("pool_kind", "")) != ComposedSkillPools.KIND_JINCHENG:
+	if str(starring_context.get("pool_kind", "")) != ZhuruComposePools.KIND_JINCHENG:
 		return _fail("prepare_starring_pool=%s" % str(starring_context.get("pool_kind", "")))
 	# 取消组合窗口：不得产生任何技能实例。
 	if not _submit_control("", false):
@@ -373,12 +387,12 @@ func _test_inject_prepare_phase_pools() -> bool:
 		return _fail("prepare_nonstarring_window_missing")
 	# 非主演组合窗口上下文；类别池必须是缺陷，获得者必须是目标角色。
 	var nonstarring_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
-	if str(nonstarring_context.get("pool_kind", "")) != ComposedSkillPools.KIND_QUEXIAN:
+	if str(nonstarring_context.get("pool_kind", "")) != ZhuruComposePools.KIND_QUEXIAN:
 		return _fail("prepare_nonstarring_pool=%s" % str(nonstarring_context.get("pool_kind", "")))
 	if int(nonstarring_context.get("grant_target_id", -1)) != 1:
 		return _fail("prepare_nonstarring_target=%d" % int(nonstarring_context.get("grant_target_id", -1)))
 	# 缺陷池的合法效果键与进程池不同，因此必须从本次请求声明的池里取键。
-	var quexian_effect_key: String = _first_effect_key(ComposedSkillPools.KIND_QUEXIAN)
+	var quexian_effect_key: String = _first_effect_key(ZhuruComposePools.KIND_QUEXIAN)
 	if quexian_effect_key.is_empty():
 		return _fail("quexian_pool_empty")
 	var control_id: String = "%s%s%s%s" % [MatchController.YINLANG_COMPOSE_CONTROL_PREFIX, SAMPLE_TIMING_KEY, MatchController.YINLANG_CONTROL_SEPARATOR, quexian_effect_key]
@@ -511,6 +525,21 @@ func _test_aether_mint_window() -> bool:
 	# 限定技额度必须已经消耗；再次发动必须失败。
 	if _controller.can_activate_skill(0, YITAI_SKILL_ID):
 		return _fail("yitai_quota_not_consumed")
+	# 同一出牌阶段内的重复落地：即使有人把第二条「已确认」的造牌响应再送进技能一次
+	# （窗口被重复提交、网络重放、回放重放、事件调度重跑同一步），也不得造出第二张牌。
+	# 这条断言覆盖的是**效果落地处自己的额度复核**——发动入口的拦截管不到提交路径。
+	var yitai_instance: SkillDefinition = _controller.get_skill_instance(0, YITAI_SKILL_ID)
+	if yitai_instance == null:
+		return _fail("yitai_instance_missing")
+	# 重放响应；请求号与事件号不影响本技能解析，只有 confirmed 与 control_id 参与判定。
+	var replay_response: ChoiceResponse = ChoiceResponse.new(1, -1, 0, true)
+	replay_response.control_id = _build_mint_control_id(REPLAY_MINT_NAME, MINT_SUIT, MINT_RANK, MINT_SOURCE_DEFINITION_ID)
+	yitai_instance.continue_selection({"kind":MINT_CHOICE_KIND}, replay_response)
+	if _controller.state.get_player(0).hand.size() != hand.size():
+		return _fail("yitai_duplicate_mint_hand=%d" % _controller.state.get_player(0).hand.size())
+	# 重放用的牌名必须仍然可用；若它已经被占用，说明第二张牌真的被造了出来。
+	if not _controller.is_card_name_available(REPLAY_MINT_NAME):
+		return _fail("yitai_duplicate_mint_created_card")
 	return true
 
 
@@ -598,18 +627,35 @@ func _test_card_name_helpers() -> bool:
 		"card_name_max_length":MatchController.MINT_CARD_NAME_MAX_LENGTH,
 		"copyable_cards":[{"id":MINT_SOURCE_DEFINITION_ID, "name":static_display_name, "type":"basic"}],
 	})
-	# 组标题占用下标 0 且不可选，因此取映射里的第一个可选项，而不是硬编码下标。
-	if mint_view._card_id_by_index.is_empty():
+	# 花色与点数必须全部铺开成按钮，而不是收在下拉框里：数量直接对应选项表长度。
+	if mint_view._suit_buttons.size() != YinlangMintView.SUIT_OPTIONS.size():
 		mint_view.queue_free()
-		return _fail("mint_view_card_list_empty")
-	mint_view._on_card_selected(int(mint_view._card_id_by_index.keys()[0]))
+		return _fail("mint_view_suit_buttons=%d" % mint_view._suit_buttons.size())
+	if mint_view._rank_buttons.size() != YinlangMintView.MAX_RANK - YinlangMintView.MIN_RANK + 1:
+		mint_view.queue_free()
+		return _fail("mint_view_rank_buttons=%d" % mint_view._rank_buttons.size())
+	# 被复制牌也必须铺开成按钮；一张候选对应一个按钮，跨类别共用一个互斥按钮组。
+	if mint_view._card_buttons.size() != 1:
+		mint_view.queue_free()
+		return _fail("mint_view_card_buttons=%d" % mint_view._card_buttons.size())
+	mint_view._on_card_toggled(true, MINT_SOURCE_DEFINITION_ID)
 	if mint_view._selected_definition_id != MINT_SOURCE_DEFINITION_ID:
 		mint_view.queue_free()
 		return _fail("mint_view_card_not_selected=%s" % mint_view._selected_definition_id)
-	# 空名：确定必须禁用。
-	if not mint_view._confirm_button.disabled:
+	# 默认牌名：输入框占位文本必须是默认名，且默认名长度不得超过上限（否则「什么都不填」必然超长）。
+	if mint_view._name_edit.placeholder_text != YinlangMintView.DEFAULT_NAME_TEXT:
 		mint_view.queue_free()
-		return _fail("mint_view_empty_name_confirm_enabled")
+		return _fail("mint_view_placeholder=%s" % mint_view._name_edit.placeholder_text)
+	if YinlangMintView.DEFAULT_NAME_TEXT.length() > MatchController.MINT_CARD_NAME_MAX_LENGTH:
+		mint_view.queue_free()
+		return _fail("mint_view_default_name_too_long=%d" % YinlangMintView.DEFAULT_NAME_TEXT.length())
+	# 空名：不再禁用「确定」，而是回落到默认牌名；默认名可用时确定必须可点。
+	if mint_view._effective_name() != YinlangMintView.DEFAULT_NAME_TEXT:
+		mint_view.queue_free()
+		return _fail("mint_view_effective_name=%s" % mint_view._effective_name())
+	if not mint_view._name_rejection_reason().is_empty() or mint_view._confirm_button.disabled:
+		mint_view.queue_free()
+		return _fail("mint_view_default_name_rejected=%s" % mint_view._name_rejection_reason())
 	# 可用名：确定必须启用。
 	mint_view._name_edit.text = MINT_CUSTOM_NAME
 	mint_view._refresh_name_hint()
@@ -627,6 +673,16 @@ func _test_card_name_helpers() -> bool:
 	if not mint_view._confirm_button.disabled:
 		mint_view.queue_free()
 		return _fail("mint_view_duplicate_name_confirm_enabled")
+	# 默认名已被占用：空输入同样必须被拦下，否则玩家不填名字会提交一个必然被权威拒绝的请求。
+	mint_view.configure({
+		"existing_card_names":[YinlangMintView.DEFAULT_NAME_TEXT],
+		"card_name_max_length":MatchController.MINT_CARD_NAME_MAX_LENGTH,
+		"copyable_cards":[{"id":MINT_SOURCE_DEFINITION_ID, "name":static_display_name, "type":"basic"}],
+	})
+	mint_view._on_card_toggled(true, MINT_SOURCE_DEFINITION_ID)
+	if mint_view._name_rejection_reason().is_empty() or not mint_view._confirm_button.disabled:
+		mint_view.queue_free()
+		return _fail("mint_view_taken_default_name_accepted")
 	# 超长：输入框本身按 max_length 截断，因此正常输入路径下判据不会触发；
 	# 但判据必须**独立于输入框**仍然成立（否则将来若有代码路径绕过 LineEdit 写入，超长牌名会漏过本地校验）。
 	# 这里把判据使用的长度上限调小、同时把输入框上限调大，单独验证判据本身。
@@ -656,19 +712,46 @@ func _test_window_layer() -> bool:
 	if layer.visible:
 		return _fail("window_visible_by_default")
 	# 组合窗口；必须显示并进入等待状态。
+	# 两栏各给两个候选：组合窗口的候选数就是权威随机抽出的个数，界面不再提供展开完整池的入口。
+	var timing_offering: Array[String] = [SAMPLE_TIMING_KEY, ABSENT_TIMING_KEY]
+	var effect_offering: Array[String] = [SAMPLE_EFFECT_KEY]
+	for entry_variant: Variant in ZhuruComposePools.get_effects(ZhuruComposePools.KIND_JINCHENG):
+		# 当前效果键；跳过已经放入的第一个候选，取池内下一个不同的键。
+		var effect_key: String = str((entry_variant as Dictionary).get(ZhuruComposePools.KEY_FIELD, ""))
+		if effect_key != SAMPLE_EFFECT_KEY:
+			effect_offering.append(effect_key)
+			break
 	var compose_request: Dictionary = {
 		"request_id":41,
 		"choice_type":MatchController.YINLANG_COMPOSE_CHOICE_TYPE,
 		"context":{
 			MatchController.YINLANG_WINDOW_CONTEXT_KEY:MatchController.YINLANG_WINDOW_INJECT,
-			"pool_kind":ComposedSkillPools.KIND_JINCHENG,
-			"timing_offering":[SAMPLE_TIMING_KEY],
-			"effect_offering":[SAMPLE_EFFECT_KEY],
+			"pool_kind":ZhuruComposePools.KIND_JINCHENG,
+			"timing_offering":timing_offering,
+			"effect_offering":effect_offering,
 		},
 	}
 	layer.show_request(compose_request)
 	if not layer.visible or not layer.is_showing_request(41):
 		return _fail("compose_window_not_shown")
+	# 组合窗口结构：两栏各两个按钮，而不是可滚动的候选列表；副标题必须为空。
+	if layer._compose_view == null:
+		return _fail("compose_view_missing")
+	if layer._compose_view._timing_buttons.size() != timing_offering.size() or layer._compose_view._effect_buttons.size() != effect_offering.size():
+		return _fail("compose_option_buttons=%d/%d" % [layer._compose_view._timing_buttons.size(), layer._compose_view._effect_buttons.size()])
+	if not layer._subtitle_label.text.is_empty():
+		return _fail("compose_subtitle_not_empty=%s" % layer._subtitle_label.text)
+	# 选中两栏各一项后，预览必须给出组合正文，且「确定」解禁。
+	layer._compose_view._on_timing_option_toggled(true, SAMPLE_TIMING_KEY)
+	layer._compose_view._on_effect_option_toggled(true, SAMPLE_EFFECT_KEY)
+	if layer._compose_view._confirm_button.disabled or layer._compose_view._preview_label.text.is_empty():
+		return _fail("compose_confirm_disabled_after_select")
+	# 未选择完整时「确定」必须保持禁用，避免提交一个必然被权威拒绝的组合。
+	layer._compose_view._on_timing_option_toggled(false, SAMPLE_TIMING_KEY)
+	layer._compose_view._selected_timing_key = ""
+	layer._compose_view._refresh_preview()
+	if not layer._compose_view._confirm_button.disabled:
+		return _fail("compose_confirm_enabled_without_timing")
 	# 造牌窗口；必须切换视图并进入等待状态。
 	var mint_request: Dictionary = {
 		"request_id":42,
@@ -776,8 +859,8 @@ func _compose_once(effect_key: String) -> bool:
 
 ## 取一个效果池里的首个效果键；池为空时返回空字符串。
 func _first_effect_key(pool_kind: String) -> String:
-	for entry_variant: Variant in ComposedSkillPools.get_effects(pool_kind):
-		return str((entry_variant as Dictionary).get(ComposedSkillPools.KEY_FIELD, ""))
+	for entry_variant: Variant in ZhuruComposePools.get_effects(pool_kind):
+		return str((entry_variant as Dictionary).get(ZhuruComposePools.KEY_FIELD, ""))
 	return ""
 
 

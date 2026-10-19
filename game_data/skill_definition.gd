@@ -504,6 +504,14 @@ func declares_description_tag(tag: String) -> bool:
 	return description_declares_tag(str(_metadata.get("description", "")), tag)
 
 
+## 返回本技能正文是否**已经自带每回合额度声明**（例如组合技能正文末尾的「每回合限一次。」）。
+## 为真时界面不再追加「每回合可发动N次」提示：同一句限制在悬停说明里出现两次只会让玩家困惑，
+## 而正文原文具有最高优先级，不允许为了界面提示去改写它。
+## 默认假：绝大多数获得型技能的正文只写效果，额度由界面补充说明。
+func declares_own_per_turn_limit() -> bool:
+	return bool(_metadata.get("declares_own_per_turn_limit", false))
+
+
 ## 判断技能正文是否在“类型段”把自己声明为轮回技，即正文第一句内出现的“轮回技”后面紧跟逗号。
 ## 本函数只服务GameDatabase加载期的一致性校验：运行期的轮回技判定一律读取reincarnation标签，不读正文。
 ## 之所以按“紧跟逗号且位于第一句内”而不是“全文包含”判定：引用他人轮回技的写法是“……轮回技进入下一个轮回时”
