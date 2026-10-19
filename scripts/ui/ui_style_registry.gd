@@ -29,6 +29,14 @@ const STYLE_DISPLAY_NAMES: Dictionary = {
 }
 
 ## 全部 UI 风格配色；键名表示长期稳定的视觉语义，组件只能按语义取色，不能依赖具体主题名称。
+##
+## 【高科技黑蓝配色键】`yinlang_windows`（银狼的组合窗口与造牌窗口）不使用主题的金属/玉石语义，
+## 而是读取下面四个专用键，从而在任何主题下都保持「黑底 + 蓝青发光」的科技感：
+## - `tech_panel`：窗口主面板底色；近黑的深蓝，承载列表与输入区。
+## - `tech_border`：窗口与分组描边色；中饱和蓝，用于框体与分隔线。
+## - `tech_accent`：选中、可确认与高亮色；亮青蓝，用于选中项、光标与确定按钮。
+## - `tech_grid`：窗口内衬网格与条纹色；低饱和深蓝，只做纹理不抢内容。
+## 三个主题各有一份取值以保持整体和谐，但都落在黑蓝色域内，因此窗口观感在切换主题时保持稳定。
 const STYLE_PALETTES: Dictionary = {
 	STYLE_SPACE_MONO: {
 		"table_inset": 34.0,
@@ -134,6 +142,10 @@ const STYLE_PALETTES: Dictionary = {
 		"end_play_border": Color("e06a61"),
 		"suppressed_button": Color("242321"),
 		"suppressed_border": Color("655f56"),
+		"tech_panel": Color("0b1420f2"),
+		"tech_border": Color("2f6fa8"),
+		"tech_accent": Color("4fc3f7"),
+		"tech_grid": Color("1b3550"),
 		"is_monochrome": false,
 		"uses_space_grid": false,
 		"uses_starfield": false,
@@ -243,6 +255,10 @@ const STYLE_PALETTES: Dictionary = {
 		"end_play_border": Color("e06a61"),
 		"suppressed_button": Color("292826"),
 		"suppressed_border": Color("5b5751"),
+		"tech_panel": Color("0d1a22ed"),
+		"tech_border": Color("3a7fa8"),
+		"tech_accent": Color("6fd0e8"),
+		"tech_grid": Color("1d3a44"),
 		"is_monochrome": false,
 		"uses_space_grid": false,
 		"uses_starfield": true,
@@ -352,6 +368,10 @@ const STYLE_PALETTES: Dictionary = {
 		"end_play_border": Color("d85a61"),
 		"suppressed_button": Color("1f1f24"),
 		"suppressed_border": Color("4d4030"),
+		"tech_panel": Color("0a1220f5"),
+		"tech_border": Color("2b6ba0"),
+		"tech_accent": Color("45b8f0"),
+		"tech_grid": Color("17304a"),
 		"is_monochrome": false,
 		"uses_space_grid": false,
 		"uses_starfield": false,

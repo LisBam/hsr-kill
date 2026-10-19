@@ -52,13 +52,15 @@ func _run() -> void:
 		return
 	if not _test_snapshot_entries_agree():
 		return
+	if not _test_dual_instance_entries():
+		return
 	if not _test_ai_sell_blood_respects_installed():
 		return
 	if not _test_yaoli_linkage_uses_unified_entry():
 		return
 	if not _test_empty_inputs_are_safe():
 		return
-	print("SKILL_OWNERSHIP_PASS native=2 lost=1 temporary=1 acquired=1 trim=1 agree=1 yaoli=1")
+	print("SKILL_OWNERSHIP_PASS native=2 lost=1 temporary=1 acquired=1 trim=1 agree=1 dual=1 yaoli=1")
 	get_tree().quit(0)
 
 
@@ -267,7 +269,64 @@ func _test_snapshot_entries_agree() -> bool:
 	return true
 
 
-## AI 侧卖血估值必须服从实际安装集合；这正是旧枚举漏裁剪造成的缺陷。
+## 同一技能的多份实例：技能粒度入口合并为一项，实例粒度入口保留每一项，两者仍然互相自洽。
+##
+## 【为什么需要本用例】同名技能可以各持一份实例，于是「拥有技能X」出现两种粒度：
+## 技能粒度回答“要不要点亮这个技能”，实例粒度回答“要画几个按钮 / 有几份额度”。
+## 两个入口必须由同一份来源清单推导，否则会出现“技能按钮亮了但只有一份实例”这类静默错配。
+func _test_dual_instance_entries() -> bool:
+	# 第二份实例键；格式为「技能ID#2」。
+	var second_key: String = "%s#2" % ACQUIRED_SKILL_ID
+	# 局内获得来源的两份同名实例；两份记录各自独立存在。
+	var dual_snapshot: Dictionary = _build_snapshot({"acquired_skills":{
+		ACQUIRED_SKILL_ID:{"source":"test"},
+		second_key:{"source":"test"},
+	}})
+	# 技能粒度：同名技能合并为一项，序号实例键不得泄漏进技能ID列表。
+	var deduped_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(dual_snapshot)
+	# 该技能在去重结果里出现的次数；必须恰好一次。
+	var deduped_hits: int = 0
+	for skill_id: String in deduped_ids:
+		if skill_id == ACQUIRED_SKILL_ID:
+			deduped_hits += 1
+		if skill_id == second_key:
+			return _fail("instance_key_leaked_into_ids key=%s ids=%s" % [second_key, deduped_ids])
+	if deduped_hits != 1:
+		return _fail("deduped_hits=%d ids=%s" % [deduped_hits, deduped_ids])
+	# 实例粒度：两份实例都必须保留。
+	var collected_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(dual_snapshot)
+	if not collected_keys.has(ACQUIRED_SKILL_ID) or not collected_keys.has(second_key):
+		return _fail("dual_instance_keys=%s" % [collected_keys])
+	# 成员判定与列表必须继续一致：两份实例都算“拥有该技能”。
+	if not SkillDefinition.snapshot_has_skill(dual_snapshot, ACQUIRED_SKILL_ID):
+		return _fail("dual_snapshot_has_skill_false")
+	# 固有技能的序号实例只出现在 installed_skill_ids 里（武将定义只声明纯技能ID），必须被补全。
+	var native_second_key: String = "%s#2" % NATIVE_SKILL_IDS[0]
+	var native_dual_snapshot: Dictionary = _build_snapshot({INSTALLED_FIELD:[NATIVE_SKILL_IDS[0], native_second_key, NATIVE_SKILL_IDS[1]]})
+	var native_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(native_dual_snapshot)
+	if not native_keys.has(NATIVE_SKILL_IDS[0]) or not native_keys.has(native_second_key):
+		return _fail("native_dual_keys=%s" % [native_keys])
+	# 技能粒度结果不受序号实例影响，仍然只给出一项。
+	var native_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(native_dual_snapshot)
+	# 该固有技能在去重结果里出现的次数。
+	var native_hits: int = 0
+	for skill_id: String in native_ids:
+		if skill_id == NATIVE_SKILL_IDS[0]:
+			native_hits += 1
+	if native_hits != 1:
+		return _fail("native_deduped_hits=%d ids=%s" % [native_hits, native_ids])
+	# 实例键列表成员判定：传技能ID命中任一实例，传实例键只命中自己。
+	if not SkillDefinition.instance_key_list_has_skill([second_key], ACQUIRED_SKILL_ID):
+		return _fail("instance_list_base_id_missed")
+	if SkillDefinition.instance_key_list_has_skill([second_key], "%s#3" % ACQUIRED_SKILL_ID):
+		return _fail("instance_list_absent_key_hit")
+	# 空技能ID与空列表必须安全返回假。
+	if SkillDefinition.instance_key_list_has_skill([], ACQUIRED_SKILL_ID) or SkillDefinition.instance_key_list_has_skill([second_key], ""):
+		return _fail("instance_list_empty_input_not_false")
+	return true
+
+
+
 func _test_ai_sell_blood_respects_installed() -> bool:
 	# 独立评估器实例；卖血估值是纯函数，不依赖控制器状态。
 	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new()

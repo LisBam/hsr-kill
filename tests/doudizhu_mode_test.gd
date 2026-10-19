@@ -240,8 +240,11 @@ func _test_three_player_match_bootstrap() -> bool:
 			break
 		var candidates: Array[String] = _controller.character_selection.get_candidates(player_id)
 		var picked: String = ""
+		# 避开会在开局或准备阶段打开选择窗口的武将；名单必须随新增武将同步维护，
+		# 否则斗地主开局会被这些武将的询问抢占，后续阶段断言全部错位。银狼（yinlang）的【注入】两个时机都会开窗。
+		var excluded_character_ids: Array[String] = ["march_7th", "bronya", "yinlang"]
 		for candidate_id: String in candidates:
-			if candidate_id not in ["march_7th", "bronya"]:
+			if candidate_id not in excluded_character_ids:
 				picked = candidate_id
 				break
 		if picked.is_empty() and not candidates.is_empty():

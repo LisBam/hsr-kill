@@ -272,6 +272,41 @@ func insert_new_card_into_draw_pile(card: CardInstance, position: int, reason: S
 	return move
 
 
+## 把一张**尚不属于任何区域**的新实体牌直接放入指定区域，并返回移牌记录；失败返回 null。
+##
+## 与 insert_new_card_into_draw_pile 的关系：两者都接受“还没有区域”的新牌（按定义刚创建的牌），
+## 因此都不能走 move_card 的“必须已存在于某个区域”前置校验。本入口把落位区域参数化，
+## 供运行时造牌把新牌直接放进手牌使用；牌堆位次那条通路继续由专用入口承担。
+##
+## 【参数】zone 必须是 _is_valid_zone 认可的标准区域；target_player_id 在 hand / wooden_ox 下表示持有者；
+## target_slot 为空时按区域默认规则追加到末尾。visible_to 用于把牌面同时标记为若干观察者已知。
+func insert_new_card_into_zone(card: CardInstance, zone: String, target_player_id: int = -1, reason: String = "insert", event_id: int = -1, target_slot: String = "", visible_to: Array[int] = []) -> CardMoveEvent:
+	if state == null or card == null or not _is_valid_zone(zone):
+		return null
+	# 新牌落位；此时牌还没有区域，因此没有“来源区域”可移除。
+	card.zone = zone
+	card.owner_id = target_player_id if zone in ["hand", "wooden_ox"] else -1
+	_add_to_zone(card, zone, target_player_id, target_slot)
+	_update_knowledge(card, zone, target_player_id, visible_to)
+	# 视为牌面展示残留必须清空：新牌从未经历过视为状态，保留旧记录会让牌面显示不存在的逻辑牌名。
+	card.clear_hand_view_as_presentation()
+	# 移牌事件；字段口径与 move_card / insert_new_card_into_draw_pile 完全一致，
+	# 保证表现层、回放与网络收到同一种增量，不需要为造牌单独识别事件形状。
+	var move: CardMoveEvent = CardMoveEvent.new([card.uid], "", zone, target_player_id, -1, reason)
+	move.move_id = _next_move_id
+	_next_move_id += 1
+	move.event_id = event_id
+	move.target_slot = target_slot
+	move.turn_number = state.turn_number
+	move.turn_player_id = state.current_player_id
+	move.phase = state.current_phase
+	var move_data: Dictionary = move.to_dict()
+	state.card_move_history.append(move_data)
+	_index_play_discard_move(move_data)
+	card_moved.emit(move_data, card.to_dict())
+	return move
+
+
 ## 更新实体牌的公开、私有和已知者信息；牌堆洗牌时清理弃牌区的临时知识由调用方控制。
 func _update_knowledge(card: CardInstance, zone: String, target_player_id: int, visible_to: Array[int]) -> void:
 	if not visible_to.is_empty():

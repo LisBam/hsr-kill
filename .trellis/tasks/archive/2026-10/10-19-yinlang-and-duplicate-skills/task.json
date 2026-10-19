@@ -1,0 +1,30 @@
+{
+  "id": "yinlang-and-duplicate-skills",
+  "name": "yinlang-and-duplicate-skills",
+  "title": "银狼武将、技能多实例与两个专用窗口",
+  "description": "允许一个角色拥有多个同名技能实例并分别计数（技能实例键底座），新增星核猎手武将银狼（注入/以太），实现运行时组合技能（进程/缺陷）、运行时造牌与洗入牌堆端口，以及高科技黑蓝风格窗口 yinlang_windows（注入组合窗口、以太造牌窗口）。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "LisBam",
+  "assignee": "LisBam",
+  "createdAt": "2026-10-19",
+  "completedAt": "2026-10-19",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-19-skill-instance-multiplicity",
+    "10-19-runtime-card-creation",
+    "10-19-yinlang-character-and-windows"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "三个子任务全部完成并通过全量回归：技能实例键底座、运行时造牌端口、银狼武将与两个专属窗口。tests/ 下 100 个用例中 99 项 PASS，唯一失败 card_back_overlay_test 为改动前既有失败（已记录在 docs/战斗框架回归说明.md）。",
+  "meta": {}
+}

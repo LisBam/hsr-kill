@@ -128,8 +128,9 @@ func _on_owner_phase_end(_event: RuleEvent) -> void:
 	var options: Array[Dictionary] = []
 	for skill_id: String in used_limited_skill_ids:
 		# 当前技能定义；缺失名称时回退稳定ID，仍允许权威状态中的合法实例被复原。
-		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
-		options.append({"id":skill_id, "label":"复原【%s】" % str(skill_definition.get("name", skill_id))})
+		# 候选项可能是实例键（同名技能的多份实例各占一项），因此必须先还原技能ID再查库，否则会显示成“技能ID#序号”。
+		var skill_definition: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_id))
+		options.append({"id":skill_id, "label":"复原【%s】" % str(skill_definition.get("name", SkillDefinition.base_skill_id_of(skill_id)))})
 	# AI偏好选项；自身目标固定优先光覆，其他角色按主动性与稳定顺序选择最值得复原的一项。
 	var preferred_skill_id: String = _select_preferred_limited_skill(recipient_id, used_limited_skill_ids)
 	request_control_selection("光覆", "请选择为目标复原的一项限定技", options, false, {"kind":"guangfu_restore_limited", "recipient_id":recipient_id, "limited_skill_ids":used_limited_skill_ids.duplicate(), "ai_prefer_control_id":preferred_skill_id})
@@ -205,11 +206,12 @@ func score_ai_choice(_authoritative_snapshot: Dictionary, choice_request: Dictio
 
 ## 选出AI在回合尾最希望复原的限定技；自身目标先找光覆，其他角色优先主动限定技且不依赖具体武将ID。
 func _select_preferred_limited_skill(recipient_id: int, used_limited_skill_ids: Array[String]) -> String:
-	if recipient_id == owner_player_id and used_limited_skill_ids.has(get_id()):
-		return get_id()
+	# 自身目标优先复原光覆；候选表里存的是实例键，因此必须用本实例的实例键比较，否则同名技能的第二份实例永远匹配不上。
+	if recipient_id == owner_player_id and used_limited_skill_ids.has(get_instance_key()):
+		return get_instance_key()
 	for skill_id: String in used_limited_skill_ids:
 		# 当前技能元数据；主动限定技通常能立即创造下一次策略选择，因此优先于纯触发限定技。
-		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+		var skill_definition: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_id))
 		if bool(skill_definition.get("ui_enabled", false)):
 			return skill_id
 	return used_limited_skill_ids[0] if not used_limited_skill_ids.is_empty() else ""

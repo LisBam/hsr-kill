@@ -139,13 +139,21 @@ var wooden_ox_storage: Array[CardInstance] = []
 ## 当前出牌阶段是否已发动木牛流马存粮；每个回合开始时重置为 false。
 var wooden_ox_used: bool = false
 
-## 当前临时技能与失效时机；键为技能 ID，值为 turn_end、phase_end 等稳定持续标识。
+## 当前临时技能与失效时机；键为技能实例键，值为 turn_end、phase_end 等稳定持续标识。
+## 键格式见 SkillDefinition.base_skill_id_of：首实例等于技能 ID，后续实例为“<技能ID>#<序号>”。
 var temporary_skills: Dictionary = {}
 
-## 当前通过机缘等局内永久来源获得的技能；键为技能 ID，值保存来源、每回合次数、总次数与已用次数，死亡前持续有效。
+## 当前通过机缘等局内永久来源获得的技能；键为技能实例键，值保存来源、每回合次数、总次数与已用次数，死亡前持续有效。
+## 每份实例各自持有一条记录，因此同名技能的多份实例的额度互不影响；记录内的 "skill_id" 字段保存还原后的技能 ID。
 var acquired_skills: Dictionary = {}
 
-## 当前所有轮回技的公开权威状态；键为技能ID，值保存轮回数、轮回节、永劫与通用限次，默认空字典由技能安装时建立。
+## 实例键 → 该实例的运行时配置；由内容层通过 MatchController.get/set_runtime_skill_data 读写。
+## 组合类技能用它保存实例级参数（例如所选时机与所选效果），因此必须进入公开快照与权威存档：
+## 读档后技能实例需要靠它复原出与存档前一致的行为，而技能脚本本身是静态共享的，无法承载实例数据。
+## 默认空字典表示该角色没有任何需要实例配置的技能。
+var runtime_skill_data: Dictionary = {}
+
+## 当前所有轮回技的公开权威状态；键为技能实例键，值保存轮回数、轮回节、永劫与通用限次，默认空字典由技能安装时建立。
 var reincarnation_skills: Dictionary = {}
 
 ## 角色通过【解构】记录的牌名稳定ID列表；按记录先后排列、自动去重、跨回合保留。
@@ -153,7 +161,7 @@ var reincarnation_skills: Dictionary = {}
 ## to_dict 的公开部分，而不是放进仅本人可见的 character_form_state；展示名由名称模式在读取时解析。
 var recorded_card_names: Array[String] = []
 
-## 各技能按自身语义记录的“已以此法使用过的牌名”公开容器；键为稳定技能ID，值为牌名稳定ID数组。
+## 各技能按自身语义记录的“已以此法使用过的牌名”公开容器；键为技能实例键，值为牌名稳定ID数组。
 ## 与 recorded_card_names 分开保存：【解构】【灵感】【看破】共用后者，语义不可混用。
 ## 该事实属于公开信息（技能展示文本、对手AI与局域网观察者都要读取），因此保存在公开字段并写入
 ## to_dict 的公开部分，而不是放进仅本人可见的 character_form_state。
@@ -194,6 +202,26 @@ var hand_limit_bonus: int = 0
 
 ## 当前模式授予的额外手牌上限；默认0，过关斩将等模式独立写入，避免与机缘和技能的永久加成相互覆盖。
 var mode_hand_limit_bonus: int = 0
+
+## 当前**回合域**额外手牌上限；默认0，只在「直到回合结束」类技能效果里写入，回合结束时由控制器清零。
+##
+## 【为什么不复用 hand_limit_bonus】后者的语义是**永久**累加（机缘等效果），控制器从不在回合末清零。
+## 若「手牌上限-1直到回合结束」也写进它，则技能被压制、被移除或角色换将之后，
+## 那笔 -1 会永久留在角色身上——这是一条真实存在的规则漏洞（负向残留比正向残留更致命，因为玩家无法自行恢复）。
+## 因此本字段单独分层：与模式加成并列，各自独立可清零，互不覆盖。
+## 取值范围：可为负（缺陷池的 -1），最终手牌上限由 get_hand_limit() 统一收敛到不低于0。
+var turn_hand_limit_bonus: int = 0
+
+## 回合域「不可响应」登记；空字典表示当前没有该状态。
+##
+## 【为什么不能复用 direct_hit_target_ids】后者是**单张牌结算内**的共享上下文，
+## 牌一结算完就随卡牌使用上下文一起销毁，因此只能表达「这张牌不能响应」，
+## 无法表达「直到回合结束都不能响应其他角色使用的牌」这条持续性规则。
+##
+## 键固定为 `turn_player_id`、`turn_number`、`source_id`：到期判定用「回合角色 + 回合号」双重匹配，
+## 因此无关角色的回合结束不会误清除别的登记（与回合操控登记同一口径）。
+## 只允许经 MatchController.set_response_blocked_until_turn_end() 写入，内容层与界面只读。
+var response_blocked_until_turn: Dictionary = {}
 
 ## 玩家回合历史；每个回合保存阶段跳过、使用牌、响应、伤害和发动技能摘要。
 var turn_history: Array[Dictionary] = []
@@ -367,6 +395,8 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 		player.wooden_ox_storage.append(CardInstance.from_dict(card_data_variant as Dictionary))
 	player.temporary_skills = (data.get("temporary_skills", {}) as Dictionary).duplicate(true)
 	player.acquired_skills = (data.get("acquired_skills", {}) as Dictionary).duplicate(true)
+	# 实例级技能运行时配置；旧存档缺少该键时按空字典处理，语义安全（视同该实例没有任何额外配置）。
+	player.runtime_skill_data = (data.get("runtime_skill_data", {}) as Dictionary).duplicate(true)
 	# 记录的牌名稳定ID列表；保持存档顺序，读档后【灵感】与【看破】的候选集合必须与存档前一致。
 	for recorded_card_name_variant: Variant in data.get("recorded_card_names", []) as Array:
 		player.recorded_card_names.append(str(recorded_card_name_variant))
@@ -377,6 +407,10 @@ static func from_authoritative_dict(data: Dictionary) -> PlayerState:
 		player.acquired_opportunity_ids.append(str(opportunity_id_variant))
 	player.hand_limit_bonus = int(data.get("hand_limit_bonus", 0))
 	player.mode_hand_limit_bonus = int(data.get("mode_hand_limit_bonus", 0))
+	# 回合域手牌上限加成；旧存档缺少该键时按0处理，语义安全（视同本回合没有该加成）。
+	player.turn_hand_limit_bonus = int(data.get("turn_hand_limit_bonus", 0))
+	# 回合域不可响应登记；旧存档缺少该键时按空字典处理，语义安全（视同本回合可以正常响应）。
+	player.response_blocked_until_turn = (data.get("response_blocked_until_turn", {}) as Dictionary).duplicate(true)
 	player.card_use_history = (data.get("card_use_history", {}) as Dictionary).duplicate(true)
 	player.play_phase_card_use_history = (data.get("play_phase_card_use_history", {}) as Dictionary).duplicate(true)
 	player.card_use_limit_exempt_history = (data.get("card_use_limit_exempt_history", {}) as Dictionary).duplicate(true)
@@ -409,9 +443,9 @@ func get_armor() -> CardInstance:
 	return equipment.get("armor") as CardInstance
 
 
-## 返回手牌上限。基础规则等于当前体力值，再叠加局内永久加成，最终最低为0。
+## 返回手牌上限。基础规则等于当前体力值，再叠加局内永久加成与回合域加成，最终最低为0。
 func get_hand_limit() -> int:
-	return maxi(hp + hand_limit_bonus + mode_hand_limit_bonus, 0)
+	return maxi(hp + hand_limit_bonus + mode_hand_limit_bonus + turn_hand_limit_bonus, 0)
 
 
 ## 按实体牌 UID 查找手牌；未找到时返回 null。
@@ -574,14 +608,20 @@ func to_dict(viewer_id: int = -1, reveal_private: bool = false) -> Dictionary:
 		"wooden_ox_storage": wooden_ox_data,
 		"temporary_skills": temporary_skills.duplicate(true),
 		"acquired_skills": acquired_skills.duplicate(true),
+		# 实例级技能运行时配置；组合类技能靠它复原实例参数，因此与技能归属同属公开信息一起下发。
+		"runtime_skill_data": runtime_skill_data.duplicate(true),
 		"reincarnation_skills": reincarnation_skills.duplicate(true),
 		# 记录牌名是公开信息；界面、对手AI与局域网观察者读取同一份稳定ID列表，展示名另由名称模式解析。
 		"recorded_card_names": recorded_card_names.duplicate(),
-		# 各技能“已以此法使用过的牌名”同样是公开信息；键为技能ID，值为稳定牌名ID数组。
+		# 各技能“已以此法使用过的牌名”同样是公开信息；键为技能实例键，值为稳定牌名ID数组。
 		"skill_used_card_names": skill_used_card_names.duplicate(true),
 		"acquired_opportunity_ids": get_acquired_opportunity_ids_snapshot(),
 		"hand_limit_bonus": hand_limit_bonus,
 		"mode_hand_limit_bonus": mode_hand_limit_bonus,
+		# 回合域手牌上限加成是公开信息；对手AI与局域网观察者据此算出手牌上限，展示口径与权威侧一致。
+		"turn_hand_limit_bonus": turn_hand_limit_bonus,
+		# 回合域不可响应登记同样是公开信息；界面据此禁用响应候选，对手AI与局域网观察者读同一份事实。
+		"response_blocked_until_turn": response_blocked_until_turn.duplicate(true),
 		"turn_history_count": turn_history.size(),
 		"card_use_history": card_use_history.duplicate(true),
 		"play_phase_card_use_history": play_phase_card_use_history.duplicate(true),

@@ -232,6 +232,38 @@ func _find_card_by_display_name(display_name: String) -> Dictionary:
 	return _card_definitions_by_display_name.get(display_name, {}) as Dictionary
 
 
+## 判断一个牌名是否已被静态卡牌定义占用；供运行时造牌的牌名唯一性校验使用。
+##
+## 【为什么必须走双名索引】牌名不只在牌面上出现：技能说明、卡牌说明与信息框标题都会把文本里的【牌名】
+## 再解析一次（`resolve_card_names_in_text`）。若造出的牌名与任一已登记定义的原版名或项目名相同，
+## 那么它出现在信息框标题里时会被**改写**成那张牌的名字，玩家看到的牌名与实际牌名不一致。
+## 因此唯一性必须按“原版名 ∪ 项目名”这一与解析器完全相同的口径判定，不能只比对其中一个。
+##
+## 【范围】本函数只回答“与静态定义重名”，不涉及本局已经造出的牌；后者由控制器的造牌端口另行比对
+## （那些牌不写进任何 GameDatabase 容器，因此这里查不到，这是刻意的：造牌不得污染图鉴与静态卡表）。
+func is_card_display_name_taken(display_name: String) -> bool:
+	# 去首尾空白后判定；调用方传入带空格的文本不应因为空白差异而绕过重名检查。
+	var normalized_name: String = display_name.strip_edges()
+	if normalized_name.is_empty():
+		return false
+	return _card_definitions_by_display_name.has(normalized_name)
+
+
+## 返回全部已被静态卡牌定义占用的牌名（原版名 ∪ 项目名），按字典序排列。
+##
+## 【用途】运行时造牌的界面需要**在玩家输入过程中**即时提示重名，而 `is_card_display_name_taken` 只能回答
+## 「某一个名字是否被占用」。界面若为每次按键遍历全部卡牌定义，会把静态内容层当成可变状态反复扫描；
+## 因此这里一次性给出只读快照，界面只做本地集合比对，最终唯一性仍由控制器在提交时权威复核。
+## 【口径】与 `is_card_display_name_taken` 完全同源（同一张索引表），不存在两套判定标准。
+func get_all_card_display_names() -> Array[String]:
+	# 结果牌名；排序后返回，保证同一份静态内容在任何机器上得到相同顺序。
+	var result: Array[String] = []
+	for display_name_variant: Variant in _card_definitions_by_display_name.keys():
+		result.append(str(display_name_variant))
+	result.sort()
+	return result
+
+
 ## 把卡牌的原版名与项目名写入只读名称索引；重复名称保持首个已登记定义，与原线性扫描命中顺序一致。
 func _index_card_display_names(card_definition: Dictionary) -> void:
 	# 当前卡牌原版名称；空名称不会参与技能说明中的完整书名号匹配。
@@ -428,6 +460,25 @@ func _load_characters() -> void:
 		for skill_script: Script in definition.get_skill_scripts():
 			if skill_script == null or not skill_script.resource_path.begins_with(SKILLS_DIRECTORY + "/"):
 				validation_errors.append("武将 %s 的技能必须直接引用 %s 内的脚本。" % [character_id, SKILLS_DIRECTORY])
+
+
+## 返回某一类别下的全部卡牌定义 ID，按卡牌 ID 字典序排列。
+##
+## 【用途】需要按类别列举卡牌的功能（例如运行时造牌的「选择一张要复制的牌」界面）不能自己去遍历
+## 卡牌目录或依赖加载顺序；由数据库统一给出排序后的只读结果，界面、AI 与回放才能得到同一份顺序。
+## 【参数】card_type 取卡牌定义中的 `type` 字段（basic / trick / equipment 等）；未知类别返回空数组。
+func get_card_ids_by_type(card_type: String) -> Array[String]:
+	# 结果定义ID；按字典序排序，与文件系统枚举顺序无关。
+	var result: Array[String] = []
+	if card_type.is_empty():
+		return result
+	for card_id_variant: Variant in cards.keys():
+		# 当前定义ID与元数据；类别不匹配的直接跳过。
+		var card_id: String = str(card_id_variant)
+		if str((cards.get(card_id, {}) as Dictionary).get("type", "")) == card_type:
+			result.append(card_id)
+	result.sort()
+	return result
 
 
 ## 根据武将源码文件基础名自动查找插画；只接受 image 目录中的同名小写 PNG 或 JPG 文件。

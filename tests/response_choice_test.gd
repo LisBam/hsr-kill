@@ -58,9 +58,12 @@ func _run() -> void:
 	# 领袖候选；固定种子保证本地0号玩家完成唯一的人类选将，其他角色由 AI 同步完成。
 	var leader_candidates: Array[String] = _controller.character_selection.get_candidates(0)
 	# 本专项选用的领袖武将；避开会在初始准备或出牌Begin创建主动询问的三月七与布洛妮娅，保持本用例只聚焦【闪】响应恢复。
+	# 名单必须随新增武将同步维护：任何在 `gameStart` 或 `phaseZhunbeiBegin` 打开选择窗口的武将
+	# 都会抢先占用待处理选择，使本用例的响应窗口不再按预期出现。银狼（yinlang）的【注入】两个时机都会开窗。
+	var excluded_leader_candidates: Array[String] = ["march_7th", "bronya", "yinlang"]
 	var selected_leader_character_id: String = ""
 	for candidate_id: String in leader_candidates:
-		if candidate_id not in ["march_7th", "bronya"]:
+		if candidate_id not in excluded_leader_candidates:
 			selected_leader_character_id = candidate_id
 			break
 	if selected_leader_character_id.is_empty() and not leader_candidates.is_empty():

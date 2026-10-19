@@ -211,7 +211,7 @@ func _run() -> void:
 		"menu":menu_button.text,
 		"round":round_label.text,
 		"draw_pile":draw_pile_label.text,
-		"duration":match_duration_label.text,
+		"duration":_stable_duration_text(match_duration_label),
 		"main_title":(main_instance.get_node("%MainMenuTitle") as Label).text,
 		"use":(main_instance.get_node("%UseButton") as Button).text,
 		"cancel":(main_instance.get_node("%CancelButton") as Button).text,
@@ -229,7 +229,7 @@ func _run() -> void:
 		"menu":menu_button.text,
 		"round":round_label.text,
 		"draw_pile":draw_pile_label.text,
-		"duration":match_duration_label.text,
+		"duration":_stable_duration_text(match_duration_label),
 		"main_title":(main_instance.get_node("%MainMenuTitle") as Label).text,
 		"use":(main_instance.get_node("%UseButton") as Button).text,
 		"cancel":(main_instance.get_node("%CancelButton") as Button).text,
@@ -2008,6 +2008,24 @@ func _run() -> void:
 	if band_worst_z >= band_ceiling_z:
 		_fail("layer_z_band worst=%d ceiling=%d" % [band_worst_z, band_ceiling_z])
 		return
+	# 银狼专属窗口层级契约：组合窗口与造牌窗口的候选无法预先枚举，因此它们是独立的一层。
+	# 它必须高于机缘选择弹窗（否则会被机缘弹窗盖住导致点不到「确定」），
+	# 又必须低于结算面板与局内菜单（否则玩家在窗口打开时无法用菜单退出对局）。
+	var yinlang_windows_layer: YinlangWindowsLayer = main_instance.get("yinlang_windows_layer") as YinlangWindowsLayer
+	if yinlang_windows_layer == null or yinlang_windows_layer.z_index != YinlangWindowsLayer.MODAL_Z_INDEX:
+		_fail("yinlang_windows_layer_missing z=%d" % (yinlang_windows_layer.z_index if yinlang_windows_layer != null else -1))
+		return
+	# 结算面板；与银狼窗口没有直接交互，只用它作为「银狼窗口不得越过的上界」。
+	var game_settlement_panel: GameSettlementPanel = main_instance.get("game_settlement_panel") as GameSettlementPanel
+	if game_settlement_panel == null:
+		_fail("game_settlement_panel_missing")
+		return
+	if yinlang_windows_layer.z_index <= opportunity_choice_panel.z_index or yinlang_windows_layer.z_index >= game_settlement_panel.z_index or yinlang_windows_layer.z_index >= match_menu.z_index:
+		_fail("yinlang_windows_layer_order yinlang=%d opportunity=%d settlement=%d menu=%d" % [yinlang_windows_layer.z_index, opportunity_choice_panel.z_index, game_settlement_panel.z_index, match_menu.z_index])
+		return
+	if yinlang_windows_layer.visible:
+		_fail("yinlang_windows_layer_visible_by_default")
+		return
 	# 菜单与重开交互完成后等待面板布局稳定，再释放正式场景实例。
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2195,3 +2213,21 @@ func _fail(reason: String) -> void:
 	_restore_original_settings()
 	printerr("UI_LAYOUT_FAIL %s" % reason)
 	get_tree().quit(1)
+
+
+## 返回不含具体秒数的对局时长文案，用于跨帧比对。
+##
+## 【为什么需要归一化】左上角时长标签由 `_refresh_match_duration_label` 按真实单调时钟每秒重写，
+## 而“主题切换不得改写牌桌信息”这一断言需要在切换主题前后各取一次文本快照；两次采样之间只要跨过整秒，
+## 秒数必然不同，测试就会随机失败——这与主题切换毫无关系，属于测试自身的采样竞态。
+## 因此这里把数字位统一替换为占位符：仍能验证“标签依旧是 对局时长：分:秒 形态”，但不受秒数跳动影响。
+func _stable_duration_text(label: Label) -> String:
+	# 时长标签固定前缀；与 _refresh_match_duration_label 写入的格式保持一致。
+	var prefix: String = "对局时长："
+	if label == null or not label.text.begins_with(prefix):
+		return "" if label == null else label.text
+	# 秒数掩码结果；逐位替换数字，使 “对局时长：01:23” 归一化为 “对局时长：··:··”。
+	var masked: String = label.text.substr(prefix.length())
+	for digit: String in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+		masked = masked.replace(digit, "·")
+	return prefix + masked

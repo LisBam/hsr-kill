@@ -459,20 +459,24 @@ func _score_teammate_zhuijian_priority(authoritative_snapshot: Dictionary, actor
 	return priority_bonus
 
 
-## 依次应用目标当前固有、模式、临时与局内获得技能的来牌估值钩子；相同技能ID只执行一次。
+## 依次应用目标当前固有、模式、临时与局内获得技能的来牌估值钩子；每个技能**实例**各执行一次。
+## 按实例键迭代：同名技能的第二份实例是一次真实存在的独立技能，其卖血价值与来牌修正必须各自计入，
+## 否则「多份同名技能分别计算」的规则会在 AI 估值里被悄悄合并成一份。
 func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, target: Dictionary, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int, current_score: float) -> float:
-	# 目标全部技能ID；统一委托 SkillDefinition，与技能规则段、界面共用同一套来源清单与“实际安装”裁剪规则。
+	# 目标全部技能实例键；统一委托 SkillDefinition，与技能规则段、界面共用同一套来源清单与“实际安装”裁剪规则。
 	# 固有技能来自快照中的 character_id：未亮将或异常ID时该字段不可读，因此不会泄露隐藏信息。
-	var skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(target)
+	var skill_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(target)
 	# 行动者对目标的当前态度；正值表示友方卖血可转化为收益，负值表示敌方卖血会降低攻击价值。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
 	# 当前累计评分；每项技能只读取快照与上一项结果。
 	var result: float = current_score
-	for current_skill_id: String in skill_ids:
+	for current_skill_key: String in skill_keys:
 		# 无运行时状态的技能实例；只调用纯AI钩子，不安装时机或修改对局。
-		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		# 按还原后的技能ID建实例，再挂上实例键，使钩子内部的按实例读取落在正确的那一份上。
+		var skill: SkillDefinition = GameDatabase.create_skill(SkillDefinition.base_skill_id_of(current_skill_key))
 		if skill == null:
 			continue
+		skill.set_instance_key(current_skill_key)
 		skill.bind(null, target_id)
 		# 当前技能卖血价值；1点严格按1张牌的基础资源单位换算，只有伤害牌会兑现该收益。
 		var sell_blood_value: float = skill.get_sell_blood_value()
@@ -767,12 +771,13 @@ func _should_decline_dodge_against_zhidong_forced_hit(authoritative_snapshot: Di
 ## 返回玩家快照全部技能的累计卖血价值；只按公开稳定技能ID读取静态元数据，不读取运行时技能对象与隐藏信息。
 ## 这是“响应者本人是否值得主动吃下伤害”的唯一判据：任何按技能ID白名单的判断都违反内容可扩展性要求，
 ## 新增卖血技能只需在自身文件声明 sell_blood_value，无需改动本函数或调用方。
+## 按实例键累加：同名技能的多份实例各自提供一份卖血价值，与“多份同名技能分别计算”的规则保持一致。
 func get_snapshot_sell_blood_value(player: Dictionary) -> float:
 	# 累计卖血价值；无技能或全部技能价值为0时返回0.0，调用方按“非卖血角色”处理。
 	var total_value: float = 0.0
-	for current_skill_id: String in SkillDefinition.collect_snapshot_skill_ids(player):
+	for current_skill_key: String in SkillDefinition.collect_snapshot_skill_keys(player):
 		# 无运行时状态的技能实例；只读取静态元数据，不安装时机或修改对局。
-		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		var skill: SkillDefinition = GameDatabase.create_skill(SkillDefinition.base_skill_id_of(current_skill_key))
 		if skill == null:
 			continue
 		total_value += skill.get_sell_blood_value()

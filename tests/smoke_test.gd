@@ -206,8 +206,11 @@ func _run() -> void:
 	# 【礼节】是批量获得后令他人摸牌、被他人回复后回赠体力的主动技。
 	# 新增阮梅的【梅绽】【灵赋】【阮弦】后为115个；【梅绽】是“所有拥有本技能的角色各摸一张牌”的锁定技，
 	# 【灵赋】是按牌类别全局限次并授予/升级“梅绽”的主动技，【阮弦】是按花色全局限次的结束阶段技。
+	# 新增银狼的【注入】【以太】【进程】【缺陷】后为119个；【注入】负责开局与每轮准备阶段的组合选择，
+	# 【以太】是造牌并把牌洗回牌堆的限定技，【进程】【缺陷】是运行时组合出来的组合技能骨架，
+	# 两者自身只声明所属效果池，全部时机订阅与效果分派由 ComposedSkillBase 承担。
 	var skill_definition_count: int = GameDatabase.skills.size()
-	if skill_definition_count != 115:
+	if skill_definition_count != 119:
 		printerr("SMOKE_FAIL skill_definitions=%d" % skill_definition_count)
 		get_tree().quit(1)
 		return
@@ -318,8 +321,9 @@ func _run() -> void:
 	# 新增砂金（星际和平公司，3体力）后为51名；他引用【筹码】【盲注】【风口】。
 	# 新增银枝（星间寰宇，4体力）后为52名；他引用【巡礼】【礼节】。
 	# 新增阮梅（银河学者，3体力）后为53名；她引用【梅绽】【灵赋】【阮弦】。
+	# 新增银狼（星核猎手，3体力）后为54名；她引用【注入】【以太】，是首个通过运行时组合获得技能的武将。
 	var character_definition_count: int = GameDatabase.characters.size()
-	if character_definition_count != 53:
+	if character_definition_count != 54:
 		printerr("SMOKE_FAIL character_definitions=%d" % character_definition_count)
 		get_tree().quit(1)
 		return

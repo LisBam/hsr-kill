@@ -69,6 +69,19 @@ var last_hand_view_as_suit: String = ""
 ## 最近一次离开手牌时的视为逻辑点数；0表示最近一次视为没有复制牌面。
 var last_hand_view_as_rank: int = 0
 
+## 当前实体牌的自定义显示牌名；空字符串表示完全按 definition_id 查库取牌名。
+## 取值由运行时造牌端口写入（例如【以太】创造一张玩家自由命名的牌），长度上限与牌名规则由造牌端口统一校验。
+## 默认空字符串的原因：绝大多数实体牌都是牌堆里的正式牌，牌名由卡牌定义唯一决定，只有造出来的牌才需要覆写。
+## 修改影响：所有牌名显示点必须经 game_settings.resolve_instance_display_name() 读取，直接查库会忽略本字段；
+## 本字段只影响**显示**，不影响 definition_id 驱动的牌效、花色点数判定、同名查重与存档里的定义引用。
+var custom_display_name: String = ""
+
+## 当前实体牌的铸造来源技能ID；空字符串表示这张牌来自正式牌堆或牌堆洗牌，不是运行时造出来的。
+## 取值是技能稳定ID（例如 "yitai"），用于在不依赖牌名的前提下回答“这张牌是不是某个技能造出来的”。
+## 默认空字符串的原因：造牌是少数效果，绝大多数实体牌的来源就是牌堆本身。
+## 修改影响：清空该字段会让“找出由某技能创造的牌”类效果失效；它不参与牌效结算，只参与来源识别与展示。
+var minted_skill_id: String = ""
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 ## existing_uid 仅供网络快照、回放与规则续接恢复既有实体；默认-1会生成全新递增编号，运行时通常不动态指定。
@@ -112,6 +125,10 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	# 视为逻辑牌面；手牌中与当前快照花色点数一致，离手后表示最近一次已结束的视为牌面。
 	card.last_hand_view_as_suit = str(data.get("view_as_suit", ""))
 	card.last_hand_view_as_rank = int(data.get("view_as_rank", 0))
+	# 运行时造牌字段；旧快照不含这两个键时保持空值，读档后表现为“这张牌来自牌堆”，与造牌功能引入前完全一致。
+	# 注意 from_dict 是逐键白名单读取：新增字段必须在此显式读取，否则 to_dict 写出的内容会在网络与存档往返中被丢弃。
+	card.custom_display_name = str(data.get("custom_display_name", ""))
+	card.minted_skill_id = str(data.get("minted_skill_id", ""))
 	return card
 
 
@@ -134,6 +151,8 @@ static func color_of_suit(card_suit: String) -> String:
 
 
 ## 将当前手牌临时视为指定逻辑牌；重复赋予时始终保留最初的实体定义，避免连续转移覆盖真实牌名。
+## 本函数刻意不改 custom_display_name：视为改的是“这张牌被当作什么用”，而自定义牌名是实体自己的名字，
+## 牌面因此显示“实体原名（造牌牌名）+ 视为横条”，与「视为不抹掉实体身份」的既有口径一致。
 func set_hand_view_as(view_as_definition_id: String, source_skill_id: String) -> bool:
 	if zone != "hand" or view_as_definition_id.is_empty() or definition_id == view_as_definition_id:
 		return false
@@ -145,6 +164,7 @@ func set_hand_view_as(view_as_definition_id: String, source_skill_id: String) ->
 
 
 ## 清除当前实体的手牌视为效果并恢复原始定义；返回清除前实际使用的逻辑牌ID。
+## 与 set_hand_view_as 对称：本函数同样不触碰 custom_display_name，清除视为后牌面继续显示实体自己的牌名。
 func clear_hand_view_as() -> String:
 	# 清除前逻辑牌ID；响应与虚拟使用流程可据此继续结算已经声明的牌效。
 	var previous_view_as_definition_id: String = definition_id
@@ -170,6 +190,7 @@ func clear_hand_view_as() -> String:
 ## 将当前手牌临时视为指定逻辑牌，并同时复制该牌的花色与点数；重复赋予时保留最初的实体牌名与实体牌面。
 ## 与 set_hand_view_as 的差别只在于花色点数是否跟随逻辑牌：普通转化技能只换牌名，本入口用于“连同花色点数一起视为”。
 ## 花色点数覆写后，所有既有规则读取点（颜色筛选、花色判定、拼点与材料聚合）都会读到逻辑牌面，无需改动读取方。
+## 本函数同样保留 custom_display_name：复制型视为复制的是牌名与花色点数，不是实体身份，造牌牌名必须留下。
 func set_hand_view_as_with_face(view_as_definition_id: String, view_as_suit: String, view_as_rank: int, source_skill_id: String) -> bool:
 	if zone != "hand" or view_as_definition_id.is_empty():
 		return false
@@ -292,4 +313,13 @@ func to_dict() -> Dictionary:
 		"presentation_original_rank": presentation_original_rank,
 		"view_as_suit": view_as_suit,
 		"view_as_rank": view_as_rank,
+		"custom_display_name": custom_display_name,
+		"minted_skill_id": minted_skill_id,
 	}
+
+
+## 返回本实体牌用于显示的牌名覆写值；空字符串表示调用方应回退到 definition_id 查库取牌名。
+## 单独提供只读入口而不是让调用方直接读字段，是为了让“牌名从哪来”这条规则只有一个实现点：
+## 显示层统一调用 game_settings.resolve_instance_display_name()，该方法内部只通过本入口取覆写值。
+func get_display_name_override() -> String:
+	return custom_display_name

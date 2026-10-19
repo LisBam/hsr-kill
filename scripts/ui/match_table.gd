@@ -21,6 +21,9 @@ const OPPORTUNITY_CHOICE_PANEL_SCENE: PackedScene = preload("res://scenes/compon
 ## 游戏终局结算场景；只读取终局快照中的累计统计，关闭后由终局操作区再次打开。
 const GAME_SETTLEMENT_PANEL_SCENE: PackedScene = preload("res://scenes/components/game_settlement_panel.tscn")
 
+## 银狼专属窗口层场景；承载【注入】的组合窗口与【以太】的造牌窗口，选项无法预先枚举因此不能复用通用选择面板。
+const YINLANG_WINDOWS_LAYER_SCENE: PackedScene = preload("res://scenes/components/yinlang_windows_layer.tscn")
+
 ## 阿哈时刻过场动画场景；订阅控制器的阿哈时刻开始信号后播放绿幕过场视频，不参与任何规则结算。
 const AHHA_MOMENT_CUTSCENE_SCENE: PackedScene = preload("res://scenes/components/ahha_moment_cutscene.tscn")
 
@@ -257,6 +260,12 @@ var information_box: InformationBoxLayer
 
 ## 机缘选择弹窗组件；规则暂停期间保持可输入，所有效果仍由MatchController权威结算。
 var opportunity_choice_panel: OpportunityChoicePanel
+
+## 银狼专属窗口组件；承载【注入】组合窗口与【以太】造牌窗口，只提交稳定控制项字符串。
+var yinlang_windows_layer: YinlangWindowsLayer
+
+## 当前由银狼窗口接管的请求；空字典表示没有请求，非空时通用选择面板必须让位。
+var _yinlang_window_request: Dictionary = {}
 
 ## 游戏结算弹窗组件；只展示权威快照已累计的战绩，不参与胜负判定或数值计算。
 var game_settlement_panel: GameSettlementPanel
@@ -613,6 +622,7 @@ func _ready() -> void:
 	_create_local_judgment_zone()
 	_create_local_player_markers()
 	_create_opportunity_choice_panel()
+	_create_yinlang_windows_layer()
 	_create_game_settlement_panel()
 	_create_match_chat_panel()
 	_create_ahha_moment_cutscene()
@@ -1298,6 +1308,14 @@ func _create_opportunity_choice_panel() -> void:
 	opportunity_choice_panel.information_dismissed.connect(_on_information_dismissed.bind(opportunity_choice_panel))
 
 
+## 创建银狼专属窗口层并绑定统一玩家动作入口；组件不直接读取或修改GameState。
+func _create_yinlang_windows_layer() -> void:
+	yinlang_windows_layer = YINLANG_WINDOWS_LAYER_SCENE.instantiate() as YinlangWindowsLayer
+	yinlang_windows_layer.name = "YinlangWindowsLayer"
+	add_child(yinlang_windows_layer)
+	yinlang_windows_layer.choice_submitted.connect(_on_yinlang_window_choice_submitted)
+
+
 ## 创建游戏终局结算面板并绑定关闭事件；组件只消费快照，牌桌保留自动展示与再次打开策略。
 func _create_game_settlement_panel() -> void:
 	game_settlement_panel = GAME_SETTLEMENT_PANEL_SCENE.instantiate() as GameSettlementPanel
@@ -1924,6 +1942,15 @@ func _on_state_changed(snapshot: Dictionary) -> void:
 	if _modal_choice_request_id >= 0 and not _is_local_request_still_pending(_modal_choice_request_id, runtime_request_id):
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
+	# 银狼窗口请求；权威端不再等待该请求时必须清空本地副本，否则窗口会停在无法提交的状态。
+	if not _yinlang_window_request.is_empty() and not _is_local_request_still_pending(int(_yinlang_window_request.get("request_id", -2)), runtime_request_id):
+		_yinlang_window_request.clear()
+	# 银狼窗口存续校正；必须放在上面的过期清理**之后**。
+	# 【为什么顺序不能反】窗口在提交瞬间只是收起外观、仍持有已装载的视图，因此
+	# `_refresh_yinlang_windows_layer()` 见到「请求记录还在但窗口不可见」就会重新显示。
+	# 若在清理之前调用，请求刚结束的那一帧会先把窗口重新显示出来，随后才清空记录，
+	# 而清空之后没有第二次校正——窗口会带着一条已经不存在的请求停在那里，玩家点击只会被权威拒绝。
+	_refresh_yinlang_windows_layer()
 	_current_operator_player_id = int(runtime_choice.get("actor_id", _snapshot.get("current_player_id", -1)))
 	_simultaneous_operator_player_ids.clear()
 	# 当前同时响应公共状态；只读取规则层公开的玩家 ID，不从本地候选或手牌亮度反推响应能力。
@@ -2175,38 +2202,42 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	var local_character_id: String = str(local_player.get("character_id", ""))
 	# 当前本地身份；本人快照始终可见真实身份，领袖技只在该值为 leader 时进入技能栏。
 	var local_identity: String = str(local_player.get("identity", ""))
-	# 本地武将定义；技能列表只保存稳定技能 ID。
+	# 本地武将定义；技能列表只保存技能实例键。
 	var character: Dictionary = _get_cached_character_definition(local_character_id)
-	# 当前完整可见技能 ID；包含武将固有技能、模式技能与局内获得的临时技能。
-	var skill_ids: Array[String] = _get_visible_skill_ids(character, local_identity, local_player)
-	# 当前已经发动的限定技ID；完全读取权威快照，不根据按钮禁用状态或本地历史自行推断。
+	# 当前完整可见技能**实例键**；包含武将固有技能、模式技能与局内获得的临时技能。
+	# 按实例键而非技能ID迭代：同名技能的多份实例必须各自拥有一个按钮，否则第二份实例永远点不到。
+	var skill_keys: Array[String] = _get_visible_skill_keys(character, local_identity, local_player)
+	# 当前已经发动的限定技实例键；完全读取权威快照，不根据按钮禁用状态或本地历史自行推断。
+	# 键为实例键：比较时走 instance_key_list_has_skill，同名技能的多份实例才能各自正确显示为已发动。
 	var used_limited_skill_ids: Array = local_player.get("used_limited_skill_ids", []) as Array
-	# 可见技能列表签名；临时技能增减时即使武将与身份不变也必须重建按钮。
-	var skill_list_signature: String = ",".join(skill_ids)
+	# 可见技能列表签名；实例增减（含同名技能的第二份实例）时即使武将与身份不变也必须重建按钮。
+	var skill_list_signature: String = ",".join(skill_keys)
 	if _rendered_skill_character_id == local_character_id and _rendered_skill_identity == local_identity and _rendered_skill_list_signature == skill_list_signature:
-		for skill_id_variant: Variant in _skill_views.keys():
-			# 当前已存在按钮的技能 ID；相同可见技能集合只刷新动态可发动状态，不重建节点。
-			var skill_id: String = str(skill_id_variant)
+		for skill_key_variant: Variant in _skill_views.keys():
+			# 当前已存在按钮的技能实例键；相同可见技能集合只刷新动态可发动状态，不重建节点。
+			var instance_key: String = str(skill_key_variant)
+			# 当前技能ID；元数据、领袖技与轮回判定都按技能ID求值，按钮名称与说明来自独立技能文件。
+			var skill_id: String = SkillDefinition.base_skill_id_of(instance_key)
 			# 当前技能定义；按钮名称和说明继续来自独立技能文件的元数据。
 			var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 			# 当前响应转化技能是否处于材料筛选模式；该模式开关仍允许再次点击退出，语义保持不变。
-			var skill_response_mode_active: bool = _active_response_skill_id == skill_id
+			var skill_response_mode_active: bool = _active_response_skill_id == instance_key
 			# 当前技能是否正在发动中；它自己创建的统一选择请求仍未结束，按钮必须失效。
 			# 材料筛选模式优先：响应窗口上下文可能携带 skill_id，不能因此把转化技能按钮误判成发动中。
-			var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == skill_id
+			var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == instance_key
 			# 当前技能选中视觉；发动中与响应材料模式都使用金色选中描边，表示这条流程属于该技能。
 			var skill_selected: bool = skill_release_in_progress or skill_response_mode_active
 			# 当前主动技能可用状态；被动技能和样例技能始终不显示为可点击发动。
 			# 发动中的技能按钮必须失效：玩家不能在技能自己的选牌、选目标或文字选项流程中再次点击它，
 			# 取消只能由操作区“取消”按钮（以及既有 Esc、右键路径）提交，避免误触导致整次发动中止或跳到下一段。
-			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()))
+			var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, instance_key, _get_local_skill_activation_context()))
 			# 当前受限技能剩余次数；普通固有技能返回空文本，按钮保持原有两字显示。
-			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
+			var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, instance_key)
 			# 当前已存在的技能按钮；动态状态刷新复用节点，避免手牌或体力快照变化导致技能栏重建。
-			var existing_skill_view: SkillButtonView = _skill_views[skill_id] as SkillButtonView
+			var existing_skill_view: SkillButtonView = _skill_views[instance_key] as SkillButtonView
 			# 当前轮回技公开状态；普通技能获得空字典并保持单色说明。
-			var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id), _resolve_skill_dynamic_description(local_player, skill_id))
+			var reincarnation_state: Dictionary = _resolve_skill_reincarnation_state(local_player, instance_key, skill_id)
+			existing_skill_view.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, SkillDefinition.instance_key_list_has_skill(used_limited_skill_ids, instance_key), _resolve_skill_dynamic_description(local_player, instance_key))
 			existing_skill_view.set_selected_state(skill_selected)
 		_layout_local_skill_area(_skill_views.size())
 		return
@@ -2216,56 +2247,84 @@ func _render_local_skills(local_player: Dictionary) -> void:
 	_clear_container(skill_button_container)
 	_skill_views.clear()
 	skill_status_label.text = ""
-	if skill_ids.is_empty():
+	if skill_keys.is_empty():
 		_layout_local_skill_area(0)
 		return
-	for skill_id_variant: Variant in skill_ids:
-		# 当前技能 ID；用于查询元数据与绑定稳定点击回调。
-		var skill_id: String = str(skill_id_variant)
+	for skill_key_variant: Variant in skill_keys:
+		# 当前技能实例键；用于查询元数据、绑定稳定点击回调与作为提交给权威端的技能标识。
+		var instance_key: String = str(skill_key_variant)
+		# 当前技能ID；查库与领袖技判定按技能ID求值。
+		var skill_id: String = SkillDefinition.base_skill_id_of(instance_key)
 		# 当前技能定义；不存在时构造可诊断占位信息，避免技能栏静默缺项。
 		var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
 		if skill_definition.is_empty():
 			skill_definition = {"id":skill_id, "name":skill_id, "description":"技能元数据尚未登记。"}
 		# 当前响应转化技能是否处于材料筛选模式；初次创建按钮时同样保留再次点击退出的能力。
-		var skill_response_mode_active: bool = _active_response_skill_id == skill_id
+		var skill_response_mode_active: bool = _active_response_skill_id == instance_key
 		# 当前技能是否正在发动中；初次创建按钮时同步禁用状态与选中描边，与刷新分支保持同一判定。
-		var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == skill_id
+		var skill_release_in_progress: bool = not skill_response_mode_active and _get_in_flight_skill_release_id() == instance_key
 		# 当前技能选中视觉；发动中与响应材料模式都使用金色选中描边。
 		var skill_selected: bool = skill_release_in_progress or skill_response_mode_active
 		# 技能是否当前可主动发动；技能文件负责阶段、次数、资源与其他动态条件。
 		# 发动中的技能按钮必须失效，与刷新分支保持完全一致，避免首次渲染与后续刷新出现行为差异。
-		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, skill_id, _get_local_skill_activation_context()))
+		var skill_available: bool = bool(skill_definition.get("ui_enabled", false)) and not skill_release_in_progress and (skill_response_mode_active or match_controller.can_activate_skill(match_controller.local_human_player_id, instance_key, _get_local_skill_activation_context()))
 		# 当前受限技能剩余次数；快照中的获得技能记录是唯一数据来源，UI不自行扣减次数。
-		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, skill_id)
+		var remaining_uses: Dictionary = _get_acquired_skill_remaining_uses(local_player, instance_key)
 		# 当前技能按钮；组件只展示元数据并发出请求信号。
 		var skill_button: SkillButtonView = SkillButtonView.new()
 		# 当前轮回技公开状态；技能按钮只转发给统一说明视图，不读取运行时技能对象。
-		var reincarnation_state: Dictionary = (local_player.get("reincarnation_skills", {}) as Dictionary).get(skill_id, {}) as Dictionary
-		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, used_limited_skill_ids.has(skill_id), _resolve_skill_dynamic_description(local_player, skill_id))
+		var reincarnation_state: Dictionary = _resolve_skill_reincarnation_state(local_player, instance_key, skill_id)
+		skill_button.configure(skill_definition, skill_available, str(remaining_uses.get("description", "")), reincarnation_state, SkillDefinition.instance_key_list_has_skill(used_limited_skill_ids, instance_key), _resolve_skill_dynamic_description(local_player, instance_key))
 		skill_button.set_selected_state(skill_selected)
 		skill_button.skill_requested.connect(_on_skill_requested)
 		skill_button.information_requested.connect(_on_information_requested.bind(skill_button))
 		skill_button.information_dismissed.connect(_on_information_dismissed.bind(skill_button))
 		skill_button_container.add_child(skill_button)
-		_skill_views[skill_id] = skill_button
-	_layout_local_skill_area(skill_ids.size())
+		_skill_views[instance_key] = skill_button
+	_layout_local_skill_area(skill_keys.size())
+
+
+## 从本地玩家快照取出某个技能实例的轮回状态；先按实例键精确命中，未命中时回落到该技能的首实例。
+## 快照的 reincarnation_skills 键为实例键，因此同名轮回技的多份实例各自显示自己的轮回数。
+func _resolve_skill_reincarnation_state(player_snapshot: Dictionary, instance_key: String, skill_id: String) -> Dictionary:
+	# 轮回状态映射；缺失该可选字段时返回空字典，按钮保持单色说明。
+	var reincarnation_map: Dictionary = player_snapshot.get("reincarnation_skills", {}) as Dictionary
+	if reincarnation_map.has(instance_key):
+		return reincarnation_map.get(instance_key, {}) as Dictionary
+	return reincarnation_map.get(skill_id, {}) as Dictionary
 
 
 ## 返回技能在指定玩家公开快照中的动态显示描述；快照的 dynamic_skill_descriptions 是唯一数据来源。
 ## 该字段只包含“当前进度与静态原文不同”的技能（例如【断界】已被删除的选项需要划掉），
 ## 因此普通技能返回空字符串，技能按钮据此回退 GameDatabase 的静态原文。
+## 传入的可能是实例键（同名技能的多份实例各自显示不同正文）：先按实例键精确命中，未命中时按技能ID找首实例的覆盖。
 func _resolve_skill_dynamic_description(player_snapshot: Dictionary, skill_id: String) -> String:
 	# 快照下发的动态描述覆盖；缺失该可选字段时返回空字符串表示“没有覆盖”。
 	var dynamic_descriptions: Dictionary = player_snapshot.get("dynamic_skill_descriptions", {}) as Dictionary
-	return str(dynamic_descriptions.get(skill_id, ""))
+	if dynamic_descriptions.has(skill_id):
+		return str(dynamic_descriptions.get(skill_id, ""))
+	# 技能ID回退：容器里可能只登记了首实例（键即技能ID）的覆盖，或调用方传的是序号实例键。
+	var base_skill_id: String = SkillDefinition.base_skill_id_of(skill_id)
+	for key_variant: Variant in dynamic_descriptions.keys():
+		if SkillDefinition.base_skill_id_of(str(key_variant)) == base_skill_id:
+			return str(dynamic_descriptions.get(key_variant, ""))
+	return ""
 
 
 ## 返回局内获得技能在当前快照中的剩余额度；总共、每回合与每轮限制均独立显示，0表示该维度无限制。
+## 传入的可能是实例键：先按实例键精确命中，未命中时按技能ID找首实例的额度记录，单实例时两者同形。
 func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: String) -> Dictionary:
 	# 局内获得技能记录；固有、模式与临时技能不存在该记录，直接返回空显示数据。
 	var acquired_skills: Dictionary = player_snapshot.get("acquired_skills", {}) as Dictionary
 	# 当前技能限制状态；缺失记录时保持普通技能按钮的原有外观。
 	var usage: Dictionary = acquired_skills.get(skill_id, {}) as Dictionary
+	if usage.is_empty():
+		# 技能ID回退：容器里可能只登记了首实例（键即技能ID）的额度，或调用方传的是序号实例键。
+		var base_skill_id: String = SkillDefinition.base_skill_id_of(skill_id)
+		for key_variant: Variant in acquired_skills.keys():
+			if SkillDefinition.base_skill_id_of(str(key_variant)) == base_skill_id:
+				usage = acquired_skills.get(key_variant, {}) as Dictionary
+				break
 	if usage.is_empty():
 		return {}
 	# 当前全局回合编号；只在记录属于当前回合时读取已用次数，跨回合自动视为0。
@@ -2312,6 +2371,20 @@ func _get_acquired_skill_remaining_uses(player_snapshot: Dictionary, skill_id: S
 ## 技能规则代码与 AI 代码一律使用统一入口 SkillDefinition.collect_snapshot_skill_ids /
 ## SkillDefinition.snapshot_has_skill，不得复制本函数的展示规则。
 func _get_visible_skill_ids(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
+	# 可见技能结果；顺序直接继承统一视图模型的技能粒度版本，与旧实现逐元素一致。
+	var result: Array[String] = []
+	for skill_key: String in _get_visible_skill_keys(character, identity, player_snapshot):
+		# 技能ID；同名技能的多份实例在技能粒度结果里合并为一项。
+		var skill_id: String = SkillDefinition.base_skill_id_of(skill_key)
+		if not skill_id.is_empty() and not result.has(skill_id):
+			result.append(skill_id)
+	return result
+
+
+## 返回本地技能栏应当渲染的技能**实例键**顺序；同名技能的多份实例各占一个按钮。
+## 与 _get_visible_skill_ids 的关系是「实例粒度」与「技能粒度」，展示专属语义完全一致：
+## ① 领袖技只对领袖身份可见；② 快照缺少模式技能时按对局模式与身份做界面回退推算。
+func _get_visible_skill_keys(character: Dictionary, identity: String, player_snapshot: Dictionary = {}) -> Array[String]:
 	# 本次查询使用的只读快照；默认直接复用调用方快照，只有需要回退推算时才复制一份。
 	var query_snapshot: Dictionary = player_snapshot
 	# 模式技能缺失时的界面回退推算；飞扬、跋扈、共苦等模式技能在快照缺字段时按身份与对局模式补出，
@@ -2319,15 +2392,15 @@ func _get_visible_skill_ids(character: Dictionary, identity: String, player_snap
 	if (player_snapshot.get("mode_skill_ids", []) as Array).is_empty() and not identity.is_empty():
 		query_snapshot = player_snapshot.duplicate()
 		query_snapshot["mode_skill_ids"] = IdentityRules.new().get_mode_skill_ids(identity, str(_snapshot.get("match_mode", "identity")))
-	# 可见技能结果；顺序直接继承统一视图模型，保证按钮布局与悬停、右键详情逐项一致。
+	# 可见实例键结果；顺序直接继承统一视图模型，保证按钮布局与悬停、右键详情逐项一致。
 	var result: Array[String] = []
-	for skill_id: String in CharacterSkillDisplay.collect_visible_skill_ids(query_snapshot, character):
+	for skill_key: String in CharacterSkillDisplay.collect_visible_skill_keys(query_snapshot, character):
 		# 展示专属：领袖技只属于领袖身份，非领袖的技能栏不应留下一个点不动的按钮。
 		# 该裁剪覆盖全部技能来源（固有/模式/临时/局内获得），与文档口径「领袖技只有领袖身份创建按钮」一致；
-		# 当前没有任何模式技能、机缘卡或过关斩将奖励会授予领袖技，因此与只裁剪固有技能的旧实现结果相同。
-		if bool(GameDatabase.get_skill(skill_id).get("leader_skill", false)) and identity != "leader":
+		# 按技能ID判定，因此同一领袖技的所有实例同进同出，不会出现“第一份可见、第二份不可见”。
+		if bool(GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_key)).get("leader_skill", false)) and identity != "leader":
 			continue
-		result.append(skill_id)
+		result.append(skill_key)
 	return result
 
 
@@ -2402,6 +2475,7 @@ func _layout_auto_managed_hand_overlay() -> void:
 
 ## 响应技能按钮请求；不可发动技能静默忽略，可主动发动技能通过统一 PlayerAction 进入规则核心。
 ## 技能自己发起的发动流程（选牌、选目标、文字选项）尚未结束时，该技能按钮保持禁用且点击被静默忽略。
+## 传入的 `skill_id` 是**技能实例键**：同名技能的多份实例各自对应一个按钮，提交负载据此定位具体那一份实例。
 func _on_skill_requested(skill_id: String) -> void:
 	# 响应转化技能已处于选中状态时，第二次点击只退出材料转化模式，不取消整条响应请求。
 	if _active_response_skill_id == skill_id:
@@ -2418,8 +2492,8 @@ func _on_skill_requested(skill_id: String) -> void:
 	# 材料筛选模式期间不拦截，保留“点击另一个转化技能即可切换材料模式”的既有能力。
 	if _active_response_skill_id.is_empty() and _get_in_flight_skill_release_id() == skill_id:
 		return
-	# 被请求的技能定义；用于展示名称、说明和接入状态。
-	var skill_definition: Dictionary = GameDatabase.get_skill(skill_id)
+	# 被请求的技能定义；用于展示名称、说明和接入状态。按还原后的技能ID查库，实例键不会让定义查空。
+	var skill_definition: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_id))
 	# 不可主动发动、条件不满足或锁定技按钮保持静默；说明只由工具提示承担，不写入错误提示区。
 	# 当前主动入口上下文；响应阶段包含所需牌型与可发动技能列表，出牌阶段为空字典。
 	var activation_context: Dictionary = _get_local_skill_activation_context()
@@ -2452,16 +2526,22 @@ func _on_skill_requested(skill_id: String) -> void:
 ##
 ## 注意：响应转化技能的材料筛选模式（`_active_response_skill_id`）不是技能发动流程，
 ## 由调用方单独判断，避免响应窗口上下文恰好携带 `skill_id` 时误判为发动中。
+##
+## 返回**实例键**：上下文优先给出 instance_key（同名技能的多份实例各自失效自己的按钮），
+## 旧请求或手工构造的测试上下文没有该字段时回落到 skill_id（此时键即首实例，语义不变）。
 func _get_in_flight_skill_release_id() -> String:
 	if _inline_card_choice.is_empty():
 		return ""
-	# 当前技能选择上下文；基类会为技能发起的请求写入稳定技能 ID 与持有者 ID。
+	# 当前技能选择上下文；基类会为技能发起的请求写入稳定技能 ID、实例键与持有者 ID。
 	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
-	# 当前技能 ID；只有拥有技能按钮的技能才需要让按钮失效，无按钮的被动触发询问不参与判定。
-	var skill_id: String = str(context.get("skill_id", ""))
-	if skill_id.is_empty():
+	# 当前技能实例键；缺失时回落技能 ID，保证旧请求与手工构造的上下文行为完全不变。
+	var release_key: String = str(context.get("instance_key", context.get("skill_id", "")))
+	if release_key.is_empty():
 		return ""
-	return skill_id if bool(GameDatabase.get_skill(skill_id).get("ui_enabled", false)) else ""
+	# 当前技能ID；只有拥有技能按钮的技能才需要让按钮失效，无按钮的被动触发询问不参与判定。
+	# 按还原后的技能ID查库：release_key 可能是实例键，直接查库会返回空并让按钮失去失效保护。
+	var skill_id: String = SkillDefinition.base_skill_id_of(release_key)
+	return release_key if bool(GameDatabase.get_skill(skill_id).get("ui_enabled", false)) else ""
 
 
 ## 返回本地技能按钮当前使用的主动入口上下文；响应请求之外保持空字典并沿用普通出牌阶段判断。
@@ -2473,7 +2553,8 @@ func _get_local_skill_activation_context() -> Dictionary:
 	return context
 
 
-## 判断指定技能是否是当前响应请求公开的显式材料转化入口。
+## 判断指定技能实例是否是当前响应请求公开的显式材料转化入口。
+## 传入的是实例键：请求上下文里的转化技能名单是技能ID，因此成员判定与候选比较都按还原后的技能ID进行。
 func _is_inline_response_skill_available(skill_id: String) -> bool:
 	if _inline_card_choice.is_empty() or str(_inline_card_choice.get("choice_type", "")) != "respond":
 		return false
@@ -2482,14 +2563,25 @@ func _is_inline_response_skill_available(skill_id: String) -> bool:
 	# 当前请求声明的转化技能集合；兼容旧请求缺失该字段时继续读取通用主动技能列表。
 	var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", []) as Array
 	var active_skill_ids: Array = context.get("active_skill_ids", []) as Array
-	if not response_conversion_skill_ids.has(skill_id) and not active_skill_ids.has(skill_id):
+	if not SkillDefinition.instance_key_list_has_skill(response_conversion_skill_ids, skill_id) and not SkillDefinition.instance_key_list_has_skill(active_skill_ids, skill_id):
 		return false
 	for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
 		# 当前响应候选；至少一张材料要求该技能时按钮才承担筛选入口。
 		var candidate: Dictionary = candidate_variant as Dictionary
-		if str(candidate.get("required_response_skill_id", "")) == skill_id:
+		if _skill_key_matches_required(str(candidate.get("required_response_skill_id", "")), skill_id):
 			return true
 	return false
+
+
+## 判断响应候选要求的技能是否由当前选中的技能实例承担。
+## `required_skill_id` 始终是技能ID（规则核心按技能ID声明响应转化入口），`active_skill_key` 可能是实例键，
+## 因此优先精确命中，未命中时按还原后的技能ID比较，使同名技能的任意一份实例都能承担同一响应入口。
+func _skill_key_matches_required(required_skill_id: String, active_skill_key: String) -> bool:
+	if required_skill_id.is_empty() or active_skill_key.is_empty():
+		return false
+	if required_skill_id == active_skill_key:
+		return true
+	return SkillDefinition.base_skill_id_of(required_skill_id) == SkillDefinition.base_skill_id_of(active_skill_key)
 
 
 ## 按实体 UID 对账本地玩家手牌，并根据当前名称模式刷新牌面；现有正式节点会持续复用，不因快照刷新整体重建。
@@ -3107,9 +3199,9 @@ func _equipment_slot_name(equipment: Dictionary, slot: String, abolished_slots: 
 		return "已废除"
 	if not equipment.has(slot):
 		return "无"
-	# 当前槽位装备快照；只读取定义 ID 解析显示名称。
+	# 当前槽位装备快照；走实例牌名入口，使造牌自定义名出现在装备槽位名里。
 	var card: Dictionary = equipment.get(slot, {}) as Dictionary
-	return GameSettings.resolve_card_display_name(_get_cached_card_definition(str(card.get("definition_id", ""))))
+	return GameSettings.resolve_instance_display_name(card, _get_cached_card_definition(str(card.get("definition_id", ""))))
 
 
 ## 将本地玩家公开判定区同步到手牌区上方的独立标记组件；牌名继续遵循全局名称模式。
@@ -3118,12 +3210,12 @@ func _render_local_judgment_zone(player: Dictionary) -> void:
 		return
 	# 当前判定区公开实体；快照顺序就是规则结算顺序，标记从左到右保持同一顺序。
 	var judgment_area: Array = player.get("judgment_area", []) as Array
-	# 当前判定牌显示名；只读取静态定义与全局名称模式，不把实体引用交给 UI 组件。
+	# 当前判定牌显示名；走实例牌名入口，不把实体引用交给 UI 组件。
 	var judgment_names: Array[String] = []
 	for judgment_variant: Variant in judgment_area:
 		# 当前判定牌快照；定义缺失时名称解析会返回稳定空回退，组件仍保持固定图标尺寸。
 		var judgment_card: Dictionary = judgment_variant as Dictionary
-		judgment_names.append(GameSettings.resolve_card_name(_get_cached_card_definition(str(judgment_card.get("definition_id", "")))))
+		judgment_names.append(GameSettings.resolve_instance_display_name(judgment_card, _get_cached_card_definition(str(judgment_card.get("definition_id", "")))))
 	local_judgment_zone.configure(judgment_names, bool(player.get("judgment_area_abolished", false)))
 	_queue_local_judgment_zone_layout()
 
@@ -3538,7 +3630,8 @@ func _submit_equipment_action() -> void:
 	# 当前装备定义；材料数量、动作类型和 card_uid 来源全部由卡牌元数据提供。
 	var definition: Dictionary = _get_active_equipment_definition()
 	# 当前装备显示名；用于生成通用材料不足提示。
-	var equipment_name: String = GameSettings.resolve_card_name(definition)
+	# 走实例牌名入口而不是只按定义解析：造出来的装备牌在材料不足提示里也必须报出自己的牌名。
+	var equipment_name: String = GameSettings.resolve_instance_display_name(_get_local_equipment_snapshot(_active_equipment_uid), definition)
 	# 当前所需材料数量；响应与出牌阶段可分别声明。
 	var required_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
 	if _equipment_action_material_uids.size() != required_material_count:
@@ -3778,6 +3871,8 @@ func _apply_ui_style() -> void:
 		game_settlement_panel.refresh_ui_style()
 	if opportunity_choice_panel != null and is_instance_valid(opportunity_choice_panel):
 		opportunity_choice_panel.refresh_ui_style()
+	if yinlang_windows_layer != null and is_instance_valid(yinlang_windows_layer):
+		yinlang_windows_layer.refresh_ui_style()
 	if match_chat_panel != null and is_instance_valid(match_chat_panel):
 		match_chat_panel.refresh_ui_style()
 	if _match_replay_overlay != null and is_instance_valid(_match_replay_overlay):
@@ -4098,6 +4193,25 @@ func _on_card_choice_requested(choice_data: Dictionary) -> void:
 		call_deferred("_submit_suppressed_group_trick_choice", choice_data.duplicate(true))
 		_refresh_selection_text()
 		return
+	# 银狼专属窗口；选项无法预先枚举，因此必须由专用窗口接管，通用选择面板一律让位。
+	if _is_yinlang_window_choice(choice_data):
+		_modal_choice_request_id = -1
+		_modal_card_choice_request.clear()
+		_inline_card_choice.clear()
+		_inline_selected_card_uids.clear()
+		_active_response_skill_id = ""
+		_selected_target_ids.clear()
+		_clear_equipment_action()
+		_selected_card_uid = -1
+		_auto_locked_target_id = -1
+		_yinlang_window_request = choice_data.duplicate(true)
+		_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+		_render_local_hand()
+		_render_local_skills(_get_player_snapshot(match_controller.local_human_player_id))
+		yinlang_windows_layer.show_request(choice_data)
+		_refresh_selection_text()
+		_refresh_card_selection_panel()
+		return
 	if _is_inline_hand_choice(choice_data) or _is_inline_control_choice(choice_data):
 		_modal_choice_request_id = -1
 		_modal_card_choice_request.clear()
@@ -4223,6 +4337,11 @@ func _on_control_choice_submitted(request_id: int, control_id: String) -> void:
 ## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
 func _refresh_card_selection_panel() -> void:
 	_refresh_hand_layer_for_public_display()
+	# 银狼专属窗口接管期间通用选择面板必须完全关闭：它的候选列表为空，
+	# 若同时显示会形成两个窗口争夺同一次提交，玩家点哪个都可能被权威端按另一条请求拒绝。
+	if not _yinlang_window_request.is_empty():
+		card_selection_panel.close()
+		return
 	if not _public_card_choice_display.is_empty():
 		# 本地存在与公共展示不同类型的内联询问时，公共窗口暂时让出手牌与按钮输入，询问结束后会从保留快照自动恢复。
 		if not _inline_card_choice.is_empty() and str((_inline_card_choice.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
@@ -4391,9 +4510,52 @@ func _is_inline_zhenqi_cost_choice(choice_data: Dictionary) -> bool:
 	return str(context.get("kind", "")) == "zhenqi_cost_option"
 
 
+## 判断请求是否由银狼专属窗口接管；分流依据是技能写入的窗口标记，而不是选择类型字符串。
+## 之所以不按 choice_type 判断：自由控制项是一个通用能力，未来其他技能也可能使用同一类型，
+## 而只有带窗口标记的请求才需要这套两栏/四行的专用界面。
+func _is_yinlang_window_choice(choice_data: Dictionary) -> bool:
+	# 请求上下文；窗口标记由银狼技能写入，界面不猜测规则语义。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	# 窗口种类；空值表示不是银狼窗口请求。
+	var window_kind: String = str(context.get(MatchController.YINLANG_WINDOW_CONTEXT_KEY, ""))
+	return window_kind == MatchController.YINLANG_WINDOW_INJECT or window_kind == MatchController.YINLANG_WINDOW_AETHER
+
+
+## 把银狼窗口提交的控制项封装为标准 choose_cards 动作并交由规则核心复核。
+##
+## 【为什么不在这里清空 `_yinlang_window_request`】提交只是「发出一个请求」，权威端仍可能拒绝
+## （牌名重名、组合键非法等），此时待处理选择依然存在。若在提交时就乐观清空，窗口会永久关闭而请求
+## 仍在等待，玩家既看不到窗口也无法重试——对局直接卡死在选择阶段。因此这里只关闭窗口外观，
+## 请求记录保留给权威快照刷新去判定：请求真的消失了才清空并关闭。
+func _on_yinlang_window_choice_submitted(request_id: int, control_id: String, confirmed: bool) -> void:
+	# 先收起窗口外观；提交期间不显示，避免玩家对同一条请求重复点击提交。
+	# 用 `hide_view()` 而不是 `close()`：视图与玩家输入都保留下来，权威端若拒绝本次提交可以直接重新显示。
+	if yinlang_windows_layer != null and is_instance_valid(yinlang_windows_layer):
+		yinlang_windows_layer.hide_view()
+	# 统一选择动作；payload 只含请求序号与稳定控制项字符串，可直接进入网络和回放。
+	var action: PlayerAction = PlayerAction.new("choose_cards", match_controller.local_human_player_id)
+	action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":control_id, "confirmed":confirmed}
+	match_controller.submit_action(action)
+	_refresh_selection_text()
+	_refresh_card_selection_panel()
+
+
+## 在权威快照刷新时校正银狼窗口的存续；请求已被结算或取消时立即关闭窗口，避免留下无法提交的空框。
+func _refresh_yinlang_windows_layer() -> void:
+	if yinlang_windows_layer == null or not is_instance_valid(yinlang_windows_layer):
+		return
+	if _yinlang_window_request.is_empty():
+		yinlang_windows_layer.close()
+		return
+	# 当前窗口请求序号；用于确认窗口仍在等待同一条请求。
+	var request_id: int = int(_yinlang_window_request.get("request_id", -1))
+	if not yinlang_windows_layer.is_showing_request(request_id):
+		yinlang_windows_layer.show_request(_yinlang_window_request)
+
+
+
 ## 判断文字互斥选项是否应复用手牌上方操作区；所有技能控制询问统一使用此入口，不再创建额外遮罩窗口。
-## 牌堆位次询问（card_position）也走本入口：它的手牌维度由内联手牌区承担，文字选项维度就是三个位次按钮，
-## 因此与【咬它】等组合询问保持完全相同的交互形态——手牌区选牌、操作区点询问按钮，不再弹出独立窗口。
+## 牌堆位次询问（card_position）也走本入口：它的手牌维度由内联手牌区承担，文字选项维度就是三个位次按钮，## 因此与【咬它】等组合询问保持完全相同的交互形态——手牌区选牌、操作区点询问按钮，不再弹出独立窗口。
 func _is_inline_control_choice(choice_data: Dictionary) -> bool:
 	# 当前选择类型；control 与 bool 都由稳定选项数组表达，其他选择仍按牌区或独立窗口规则处理。
 	var choice_type: String = str(choice_data.get("choice_type", "card"))
@@ -4415,7 +4577,7 @@ func _get_inline_candidate_uids() -> Array[int]:
 		var candidate_uid: int = int(candidate.get("uid", -1))
 		# 候选要求的响应技能；未点击该技能时保持暗置，普通实体响应牌始终开放。
 		var required_response_skill_id: String = str(candidate.get("required_response_skill_id", ""))
-		var response_skill_ready: bool = required_response_skill_id.is_empty() or required_response_skill_id == _active_response_skill_id
+		var response_skill_ready: bool = required_response_skill_id.is_empty() or _skill_key_matches_required(required_response_skill_id, _active_response_skill_id)
 		if candidate_uid >= 0 and response_skill_ready and not result.has(candidate_uid) and (_inline_selected_card_uids.has(candidate_uid) or _is_inline_candidate_compatible(candidate_uid)):
 			result.append(candidate_uid)
 	return result
@@ -4581,8 +4743,10 @@ func _submit_inline_card_choice(selected_card_uids: Array[int], confirmed: bool 
 		for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
 			# 当前已选候选；只有其明确要求当前技能时才提交转化技能ID，普通实体【杀】仍按自身响应。
 			var candidate: Dictionary = candidate_variant as Dictionary
-			if int(candidate.get("uid", -1)) == selected_card_uids[0] and str(candidate.get("required_response_skill_id", "")) == _active_response_skill_id:
-				action.payload["response_skill_id"] = _active_response_skill_id
+			if int(candidate.get("uid", -1)) == selected_card_uids[0] and _skill_key_matches_required(str(candidate.get("required_response_skill_id", "")), _active_response_skill_id):
+				# 提交给权威端的响应技能标识：候选声明的是技能ID，规则核心的响应转化管线（候选比对、
+				# 材料转化技能复核、响应历史）全部按技能ID求值，因此这里必须传还原后的技能ID而非实例键。
+				action.payload["response_skill_id"] = SkillDefinition.base_skill_id_of(_active_response_skill_id)
 				break
 	if not match_controller.submit_action(action):
 		return
@@ -5654,6 +5818,10 @@ func _on_action_rejected(message: String) -> void:
 	error_label.text = message
 	if main_menu != null and is_instance_valid(main_menu) and main_menu.visible:
 		main_menu.show_start_error(message)
+	# 银狼专属窗口的提交被权威端拒绝时（例如牌名重名、组合键非法），待处理选择依然存在，
+	# 而窗口在提交瞬间已收起外观；这里必须把它重新显示出来，否则玩家会卡在「请求还在、窗口没了」的死局。
+	# 判定条件由 `_refresh_yinlang_windows_layer()` 内部完成：只有请求记录仍在且窗口未显示该请求时才会重开。
+	_refresh_yinlang_windows_layer()
 
 
 ## 展示对局停滞自修复提醒横幅；报告级别决定提示文案，完整修复细节仍可在对局日志中查看。
@@ -5908,8 +6076,9 @@ func _refresh_equipment_action_text() -> void:
 	end_play_button.visible = _can_local_player_act() and _active_equipment_action != "equipment_response"
 	end_play_button.disabled = not end_play_button.visible
 	# 当前装备定义与显示名；界面不识别具体装备 ID。
+	# 显示名走实例牌名入口：造出来的装备牌在操作条文本里必须显示自己的牌名。
 	var definition: Dictionary = _get_active_equipment_definition()
-	var equipment_name: String = GameSettings.resolve_card_display_name(definition)
+	var equipment_name: String = GameSettings.resolve_instance_display_name(_get_local_equipment_snapshot(_active_equipment_uid), definition)
 	# 当前材料上限；响应和出牌阶段分别读取自身配置。
 	var required_material_count: int = int(definition.get("response_material_count", 0)) if _active_equipment_action == "equipment_response" else int(definition.get("play_phase_material_count", 0))
 	# 已选目标名称；装备主动流程最多保留一名目标。

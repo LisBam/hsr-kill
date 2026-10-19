@@ -87,6 +87,16 @@ var active_context: Dictionary = {}
 ## 本次请求排除的候选及原因；只影响当前事件，不写入玩家永久技能或静态数据。
 var excluded_candidates: Dictionary = {}
 
+## 是否允许自由控制项；默认 false，只有「选项无法预先枚举」的窗口请求才置为 true。
+##
+## 【为什么需要这个开关】`validate_response()` 会用 `control_ids.has(control_id)` 拒绝任何未预先登记的
+## `control_id`，这是防止客户端伪造效果键的通用防线。但组合技能窗口的合法答案是 23 × 24 种组合、
+## 造牌窗口的合法答案是任意牌名，两者都无法预先枚举——强行枚举会给每个请求塞进数百条无用选项。
+## 因此改为**显式请求级声明**：只有确实需要的请求放弃白名单，改为在 `_submit_card_choice` 中做结构校验
+## （键必须属于本次声明的池、牌名必须通过格式与唯一性校验），安全性不下降。
+## 【禁止】不得改成「按 choice_type 硬编码豁免列表」：那会让任何技能只要伪造类型名就绕过校验。
+var allow_free_control_id: bool = false
+
 ## 请求当前状态；新请求默认为 PENDING，终态请求不能再次接受响应。
 var status: Status = Status.PENDING
 
@@ -134,6 +144,7 @@ static func from_dict(data: Dictionary) -> ChoiceRequest:
 	request.base_context = (data.get("base_context", {}) as Dictionary).duplicate(true)
 	request.active_context = (data.get("active_context", request.base_context) as Dictionary).duplicate(true)
 	request.excluded_candidates = (data.get("excluded_candidates", {}) as Dictionary).duplicate(true)
+	request.allow_free_control_id = bool(data.get("allow_free_control_id", false))
 	request.revision = int(data.get("revision", 0))
 	return request
 
@@ -213,7 +224,12 @@ func validate_response(response: ChoiceResponse) -> String:
 	if not candidate_error.is_empty():
 		return candidate_error
 	if not response.control_id.is_empty() and not control_ids.has(response.control_id):
-		return "选择结果包含无效候选。"
+		# 自由控制项请求没有预先登记的白名单；此时只要求「已确认时控制项非空」，
+		# 具体合法性由控制器按请求声明的池做结构校验（键集合、牌名格式与唯一性）。
+		if not allow_free_control_id:
+			return "选择结果包含无效候选。"
+		if not response.confirmed:
+			return "自由控制项请求的取消必须使用取消提交，不能只提交一个控制项。"
 	# 可选的牌到目标映射；键使用实体 UID 字符串，值为该牌当前允许的目标 ID 数组。
 	var targets_by_card_id: Dictionary = active_context.get("target_ids_by_card_id", {}) as Dictionary
 	if targets_by_card_id.is_empty():
@@ -359,6 +375,7 @@ func to_dict() -> Dictionary:
 		"base_context": base_context.duplicate(true),
 		"active_context": active_context.duplicate(true),
 		"excluded_candidates": excluded_candidates.duplicate(true),
+		"allow_free_control_id": allow_free_control_id,
 		"status": Status.keys()[status].to_lower(),
 		"result": result.duplicate(true),
 		"revision": revision,
