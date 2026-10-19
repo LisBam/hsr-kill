@@ -505,7 +505,8 @@ func _get_visual_snapshot_data(snapshot: Dictionary) -> Array:
 		snapshot.get("character_corner_text", ""),
 		snapshot.get("character_corner_text_entries", {}),
 		snapshot.get("recorded_card_names", []),
-		# 当前实际安装的技能ID；它是技能栏与悬停信息裁剪的唯一依据，因此必须参与画面变更检测。
+		# 当前实际安装的技能**实例键**；它是技能栏与悬停信息裁剪的唯一依据，因此必须参与画面变更检测。
+		# 按实例键而非技能ID比较：同名技能从一份变成两份时列表内容随之变化，牌面必须重绘出新技能条目。
 		snapshot.get("installed_skill_ids", []),
 		snapshot.get("public_marks", {}),
 		snapshot.get("auto_managed", false),
@@ -670,8 +671,8 @@ func _request_character_information() -> void:
 	var maximum_health: int = maxi(int(_character_definition.get("max_hp", _player_snapshot.get("max_hp", 0))), 0)
 	# 当前武将全部可见技能；拥有口径、展示顺序与全部文本由 CharacterSkillDisplay 统一给出。
 	# 悬停资料与右键武将详情调用同一个函数，因此两者永远显示同一份技能集合：
-	# 判定依据是快照中**实际安装**的技能ID，失去技能（如【留白】）会卸载实例，两处同时收敛；
-	# 之后新获得的技能会立刻出现在两处，照常展示。
+	# 判定依据是快照中**实际安装**的技能实例键，失去技能（如【留白】）会卸载实例，两处同时收敛；
+	# 之后新获得的技能会立刻出现在两处，照常展示；同名技能的多份实例各占一条，不会被合并成一条。
 	# 快照缺少 installed_skill_ids 时（旧回放、选将候选、手动构造的预览快照）不做裁剪。
 	# 本组件不再自行枚举技能或拼装标题描述，技能规则与 AI 代码也不得复制视图模型的展示规则。
 	var skill_entries: Array[Dictionary] = CharacterSkillDisplay.build_skill_entries(_player_snapshot, _character_definition)
@@ -1137,9 +1138,10 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	# 判定牌显示名数组；快照顺序决定底边菱形从左到右的公开排列顺序。
 	var judgment_names: Array[String] = []
 	for judgment_variant: Variant in _player_snapshot.get("judgment_area", []):
-		# 当前判定牌快照；只读取定义 ID 解析牌名，不把实体引用传入表现组件。
+		# 当前判定牌快照；只读取实体字典解析牌名，不把实体引用传入表现组件。
+		# 走实例牌名入口：造出来的判定牌（自定义牌名）在判定区菱形上必须显示自己的牌名。
 		var judgment_card: Dictionary = judgment_variant as Dictionary
-		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
+		judgment_names.append(GameSettings.resolve_instance_display_name(judgment_card, GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
 	if judgment_count == 0:
 		judgment_names.clear()
 	# 木牛数量在装备条刷新时读取；显式访问保证公开数量字段缺失时仍使用0作为稳定回退。
@@ -1345,8 +1347,8 @@ func _refresh_equipment_rows() -> void:
 		var equipment_card: Dictionary = equipment.get(slot, {}) as Dictionary
 		# 当前装备定义；用于按全局名称模式解析牌名，配置缺失时回退到稳定定义 ID。
 		var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
-		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则。
-		var equipment_name: String = "已废除" if is_abolished else (GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备")))
+		# 当前装备显示名；所有角色牌与手牌共用同一名称切换规则，走实例牌名入口以支持造牌自定义名。
+		var equipment_name: String = "已废除" if is_abolished else (GameSettings.resolve_instance_display_name(equipment_card, card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备")))
 		if not is_abolished and bool(card_definition.get("shows_attachment_count", false)):
 			# 装备公开附属牌数；数量紧跟装备名显示，0张时也明确保留当前容量快照。
 			var wooden_ox_count: int = int(_player_snapshot.get("wooden_ox_storage_count", 0))
@@ -1456,7 +1458,8 @@ func _update_public_equipment_information(local_position: Vector2) -> void:
 	# 当前装备静态定义；名称和说明统一从数据库深拷贝读取。
 	var card_definition: Dictionary = GameDatabase.get_card(str(equipment_card.get("definition_id", "")))
 	# 当前装备显示名；跟随全局牌名模式，木牛流马额外显示全部观察者可见的“粮”数量。
-	var equipment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
+	# 走实例牌名入口：造出来的装备牌在悬停资料标题里必须显示自己的牌名。
+	var equipment_name: String = GameSettings.resolve_instance_display_name(equipment_card, card_definition) if not card_definition.is_empty() else str(equipment_card.get("definition_id", "未知装备"))
 	if bool(card_definition.get("shows_attachment_count", false)):
 		equipment_name += "（%d）" % int(_player_snapshot.get("wooden_ox_storage_count", 0))
 	# 当前装备花色点数；与牌面横条内容一致，用于信息框副标题。
@@ -1500,8 +1503,8 @@ func _update_public_judgment_information(local_position: Vector2) -> void:
 	var judgment_card: Dictionary = judgment_area[hovered_judgment_index] as Dictionary
 	# 当前延时锦囊静态定义；名称与说明从数据库统一解析，配置缺失时保留稳定ID回退。
 	var card_definition: Dictionary = GameDatabase.get_card(str(judgment_card.get("definition_id", "")))
-	# 当前延时锦囊显示名；与装备横条一致跟随全局牌名模式。
-	var judgment_name: String = GameSettings.resolve_card_display_name(card_definition) if not card_definition.is_empty() else str(judgment_card.get("definition_id", "未知延时锦囊"))
+	# 当前延时锦囊显示名；与装备横条一致跟随全局牌名模式，并走实例牌名入口支持造牌自定义名。
+	var judgment_name: String = GameSettings.resolve_instance_display_name(judgment_card, card_definition) if not card_definition.is_empty() else str(judgment_card.get("definition_id", "未知延时锦囊"))
 	# 当前延时锦囊花色点数；与公开实体快照保持一致。
 	var suit_rank_text: String = "%s%s" % [_suit_symbol(str(judgment_card.get("suit", "none"))), _rank_text(int(judgment_card.get("rank", 0)))]
 	# 当前标记局部矩形；用于计算与候选牌缩放兼容的全局信息框锚点。
@@ -1605,15 +1608,15 @@ func _format_snapshot_tooltip(snapshot: Dictionary, character_definition: Dictio
 	for slot: String in EQUIPMENT_SLOT_ORDER:
 		if not equipment.has(slot):
 			continue
-		# 当前公开装备快照；只读取定义 ID 解析显示名。
+		# 当前公开装备快照；走实例牌名入口解析显示名，使造牌自定义名出现在悬停摘要里。
 		var equipment_card: Dictionary = equipment.get(slot, {}) as Dictionary
-		equipment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(equipment_card.get("definition_id", "")))))
+		equipment_names.append(GameSettings.resolve_instance_display_name(equipment_card, GameDatabase.get_card(str(equipment_card.get("definition_id", "")))))
 	# 判定区牌名摘要；按快照顺序显示延时锦囊名称。
 	var judgment_names: Array[String] = []
 	for judgment_variant: Variant in snapshot.get("judgment_area", []):
-		# 当前公开判定牌快照；只读取定义 ID 解析显示名。
+		# 当前公开判定牌快照；同样走实例牌名入口。
 		var judgment_card: Dictionary = judgment_variant as Dictionary
-		judgment_names.append(GameSettings.resolve_card_name(GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
+		judgment_names.append(GameSettings.resolve_instance_display_name(judgment_card, GameDatabase.get_card(str(judgment_card.get("definition_id", "")))))
 	# 当前武将势力名称；悬停说明使用完整名称，牌面圆形徽记只显示简称。
 	var faction_name: String = str(_faction_definition.get("display_name", character_definition.get("faction", "未知势力")))
 	return "%s｜%s｜%s\n体力 %d/%d｜护盾 %d｜手牌 %d｜粮 %d\n装备：%s\n判定：%s" % [

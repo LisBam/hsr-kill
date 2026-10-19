@@ -248,6 +248,55 @@ const PRIVATE_PLACEMENT_KEY_TURN_PLAYER_ID: String = "turn_player_id"
 ## 私有置牌事实的键名：放置时的回合号；与回合角色共同构成跨回合安全匹配条件。
 const PRIVATE_PLACEMENT_KEY_TURN_NUMBER: String = "turn_number"
 
+## 运行时造牌的移牌与随机历史原因字符串；它同时用于日志之外的历史核对与回放检索。
+const MINT_CARD_REASON: String = "runtime_card_mint"
+
+## 运行时造牌的随机历史种类标识；洗回摸牌堆的位次也用它记账，保证回放能复原同一牌序。
+const MINT_CARD_SHUFFLE_HISTORY_KIND: String = "shuffle_discard_card"
+
+## 运行时造牌的牌名长度上限（按去首尾空白后的字符数计）；0 与超长都会被造牌端口拒绝。
+## 取 12 的原因：与项目既有卡牌牌名的最大长度同量级，牌面横条与按钮文字都不会因过长而溢出。
+const MINT_CARD_NAME_MAX_LENGTH: int = 12
+
+## 运行时造牌的牌名禁止字符列表；这些字符会破坏日志分隔、信息框解析与存档文本字段的稳定性。
+## `|` 是信息框副标题与多条文本字段的分隔符，换行会破坏日志的一行一条约定，因此两者都必须拒绝。
+const MINT_CARD_NAME_FORBIDDEN_CHARACTERS: Array[String] = ["|", "\n", "\r", "\t"]
+
+## 回合域不可响应登记的键名常量；与回合操控登记共用同一套「回合角色 + 回合号」双重匹配口径。
+const RESPONSE_BLOCK_TURN_PLAYER_ID: String = "turn_player_id"
+const RESPONSE_BLOCK_TURN_NUMBER: String = "turn_number"
+const RESPONSE_BLOCK_SOURCE_ID: String = "source_id"
+
+## 银狼注入窗口的选择类型；选项是 23 × 24 种组合，无法预先枚举，因此必须声明自由控制项。
+const YINLANG_COMPOSE_CHOICE_TYPE: String = "yinlang_compose"
+
+## 银狼以太窗口的选择类型；牌名是自由文本，同样无法预先枚举，因此必须声明自由控制项。
+const YINLANG_MINT_CHOICE_TYPE: String = "yinlang_mint"
+
+## 银狼窗口请求的上下文键名；界面据此把请求分流到 yinlang_windows，而不是通用选择面板。
+const YINLANG_WINDOW_CONTEXT_KEY: String = "yinlang_window"
+
+## 注入窗口的上下文标记值；与 YINLANG_WINDOW_CONTEXT_KEY 配对使用。
+const YINLANG_WINDOW_INJECT: String = "inject"
+
+## 以太窗口的上下文标记值；与 YINLANG_WINDOW_CONTEXT_KEY 配对使用。
+const YINLANG_WINDOW_AETHER: String = "aether"
+
+## 注入窗口控制项前缀；完整控制项形如 yinlang|compose|<时机键>|<效果键>。
+const YINLANG_COMPOSE_CONTROL_PREFIX: String = "yinlang|compose|"
+
+## 以太窗口控制项前缀；完整控制项形如 yinlang|mint|<牌名>|<花色>|<点数>|<被复制牌定义ID>。
+const YINLANG_MINT_CONTROL_PREFIX: String = "yinlang|mint|"
+
+## 以太窗口控制项的分隔符；与造牌牌名的禁止字符列表共用同一字符，因此牌名不会破坏分段解析。
+const YINLANG_CONTROL_SEPARATOR: String = "|"
+
+## 以太窗口控制项的分段数量：前缀两段（yinlang、mint）+ 牌名 + 花色 + 点数 + 被复制牌定义ID。
+const YINLANG_MINT_CONTROL_FIELD_COUNT: int = 6
+
+## AI 自由控制项候选短名单的长度上限；超过部分截断，避免单次请求向 AI 暴露过多动作。
+const YINLANG_AI_CANDIDATE_LIMIT: int = 8
+
 ## 阶段转换协调组件脚本；显式预加载保证新工程首次无头启动时不依赖编辑器的全局类缓存扫描顺序。
 ## 阶段生命周期服务；前置与结束窗口由规则步骤持有唯一恢复点。
 const PHASE_LIFECYCLE_SERVICE_SCRIPT: Script = preload("res://scripts/core/phase_lifecycle_service.gd")
@@ -2527,8 +2576,33 @@ func get_legal_actions(player_id: int) -> Array[Dictionary]:
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；样例或纯被动技能默认不会追加动作。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill != null and skill.can_use_effect():
-			skill.append_play_phase_actions(result)
+		if skill == null or not skill.can_use_effect():
+			continue
+		# 本实例追加动作的起始下标；只改写本实例刚追加的那一段，不触碰其他技能或卡牌的动作。
+		var appended_start_index: int = result.size()
+		skill.append_play_phase_actions(result)
+		# 统一把本实例追加的技能动作标识改写为**实例键**。
+		# 内容技能文件仍按 get_id()（技能ID）书写动作，无需逐个文件改动；首实例的实例键就是技能ID，
+		# 因此单实例场景下这里写入的值与技能ID完全相同，既有 AI 与测试断言不受影响。
+		# 同名技能的第二份实例由此获得可区分的标识：AI 能各自评分，_is_play_action_represented_by_choice
+		# 也能把它精确对应到请求下发的 button_ids 中的那一项。
+		var instance_key: String = skill.get_instance_key()
+		var base_skill_id: String = skill.get_id()
+		if instance_key == base_skill_id:
+			continue
+		for action_index: int in range(appended_start_index, result.size()):
+			# 当前追加动作；只有技能动作需要改写，卡牌动作不会出现在这一段里。
+			var appended_action: Dictionary = result[action_index]
+			if str(appended_action.get("action_type", "")) != "use_skill":
+				continue
+			# 当前动作负载副本；保留技能追加的其他可序列化参数，只替换技能标识。
+			var appended_payload: Dictionary = (appended_action.get("payload", {}) as Dictionary).duplicate(true)
+			# 只改写确实属于本技能的负载，技能追加的嵌套结构保持原样。
+			if str(appended_payload.get("skill_id", base_skill_id)) != base_skill_id:
+				continue
+			appended_payload["skill_id"] = instance_key
+			appended_action["payload"] = appended_payload
+			appended_action["skill_id"] = instance_key
 	return result
 
 
@@ -2932,9 +3006,11 @@ func _begin_play_choice(player_id: int) -> void:
 		var action_type: String = str(legal_action.get("action_type", ""))
 		if not action_type.is_empty() and not action_types.has(action_type):
 			action_types.append(action_type)
-	# 当前两个主动入口的合法技能；请求只公开 ID，实际发动仍由 can_activate_skill 与 activate_skill 复核。
-	var active_skill_ids: Array[String] = get_active_skill_ids(player_id, "phaseUse", timing_data)
-	for choose_to_use_skill_id: String in get_active_skill_ids(player_id, "chooseToUse", timing_data):
+	# 当前两个主动入口的合法技能；请求只公开实例键，实际发动仍由 can_activate_skill 与 activate_skill 复核。
+	# 这里使用实例键而非技能ID：同名技能的多份实例必须各自成为一个按钮，否则第二份实例永远点不到。
+	# 字段名沿用 active_skill_ids 保持不变，以免破坏局域网请求与界面既有的读取约定。
+	var active_skill_ids: Array[String] = get_active_skill_keys(player_id, "phaseUse", timing_data)
+	for choose_to_use_skill_id: String in get_active_skill_keys(player_id, "chooseToUse", timing_data):
 		if not active_skill_ids.has(choose_to_use_skill_id):
 			active_skill_ids.append(choose_to_use_skill_id)
 	request.base_context = {"phase":"play", "action_types":action_types, "active_entries":["phaseUse", "chooseToUse"], "active_skill_ids":active_skill_ids}
@@ -3189,6 +3265,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 		"min_target_select":maxi(minimum_target_count, 0),
 		"max_target_select":maxi(maximum_target_count, minimum_target_count),
 		"allow_cancel":allow_cancel,
+		# 自由控制项标记；只有选项无法预先枚举的窗口请求为真，提交阶段据此切换校验分支。
+		"allow_free_control_id":bool(context.get("allow_free_control_id", false)),
 		"resume_phase":resume_phase,
 		"context":context.duplicate(true),
 		"choice_event_name":choice_event_name,
@@ -3229,6 +3307,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	runtime_request.max_target_count = maxi(maximum_target_count, minimum_target_count)
 	runtime_request.forced = not allow_cancel
 	runtime_request.can_cancel = allow_cancel
+	# 自由控制项标记；必须随请求一起登记，才能让联机与回放恢复出同一套校验口径。
+	runtime_request.allow_free_control_id = bool(context.get("allow_free_control_id", false))
 	runtime_request.base_context = context.duplicate(true)
 	# 实际选择父事件ID；后续连续选择可显式复用这个仍在等待的规则事件，避免依赖短生命周期的选择事件栈顶。
 	runtime_request.base_context["choice_parent_event_id"] = choice_parent_event_id
@@ -3237,7 +3317,8 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var active_entry: String = "chooseToRespond" if choice_event_name == "chooseToRespond" else "chooseCard"
 	runtime_request.base_context["active_entry"] = active_entry
 	# 标准可发动技能；响应转换材料会在候选生成时额外声明对应技能，不能因其未实现普通主动入口而从本次响应按钮中遗漏。
-	var active_skill_ids: Array[String] = get_active_skill_ids(chooser_id, active_entry, context)
+	# 使用实例键：同名技能的多份实例各自成为一个按钮；响应转换声明仍是技能ID，两者在单实例时完全同形。
+	var active_skill_ids: Array[String] = get_active_skill_keys(chooser_id, active_entry, context)
 	for response_skill_id_variant: Variant in context.get("response_conversion_skill_ids", []) as Array:
 		# 候选已由权威转化查询生成；只补充非空且未重复的稳定技能ID。
 		var response_skill_id: String = str(response_skill_id_variant)
@@ -3310,6 +3391,57 @@ func request_control_choice(chooser_id: int, title: String, prompt: String, opti
 	control_context["max_target_select"] = 0
 	request_card_choice(chooser_id, title, prompt, [], 1, 1, allow_cancel, control_context)
 	return _resolved_control_choice_id
+
+
+## 创建「自由控制项」请求；用于合法答案无法预先枚举的窗口（组合枚举、自由文本牌名）。
+##
+## 【为什么不能复用 request_control_choice】该入口固定写入 choice_type="control" 并把 options 当作
+## 权威白名单（`ChoiceRequest.validate_response` 会用 `control_ids.has(control_id)` 拒绝未登记项）。
+## 组合技能有 23 × 24 种合法答案、造牌牌名是任意文本，逐项枚举既不现实也会让每个请求携带数百条无效选项。
+## 因此这里改用调用方指定的 choice_type，并把请求标记为 allow_free_control_id，由 `_submit_card_choice`
+## 按该类型的结构规则做等价强度的校验（键必须属于本次声明的池、牌名必须通过格式与唯一性校验）。
+## options 仅作为界面提示文本使用，**不**参与权威校验，也不写入 control_ids。
+func request_free_control_choice(chooser_id: int, title: String, prompt: String, choice_type: String, allow_cancel: bool = true, context: Dictionary = {}) -> String:
+	# 控制项上下文；稳定选择类型与自由控制项标记由本包装接口统一写入，调用方只维护业务 kind。
+	var control_context: Dictionary = context.duplicate(true)
+	control_context["choice_type_override"] = choice_type
+	control_context["allow_free_control_id"] = true
+	control_context["control_options"] = []
+	control_context["min_card_select"] = 0
+	control_context["max_card_select"] = 0
+	control_context["min_target_select"] = 0
+	control_context["max_target_select"] = 0
+	request_card_choice(chooser_id, title, prompt, [], 1, 1, allow_cancel, control_context)
+	return _resolved_control_choice_id
+
+
+## 从候选键中按权威随机源抽取不重复的若干项；供「默认只展示 2 个候选」这类随机提供项使用。
+##
+## 【为什么必须走这里】随机结果会改变后续可选内容，直接调用 randi() 会让回放与联机对局无法复现。
+## 每一次抽取都独立写入 random_history（kind 由调用方给出，data 里带抽取序号），
+## 因此读档重放时按同一顺序重放抽取即可得到同一批候选。
+func pick_random_distinct_keys(candidate_keys: Array, count: int, history_kind: String, history_data: Dictionary = {}) -> Array[String]:
+	# 抽取结果；不足时返回全部候选，绝不重复。
+	var result: Array[String] = []
+	if candidate_keys.is_empty() or count <= 0:
+		return result
+	# 剩余候选；每次抽中后从池中移除，保证结果互不重复。
+	var remaining: Array[String] = []
+	for key_variant: Variant in candidate_keys:
+		remaining.append(str(key_variant))
+	# 实际抽取次数；不会超过候选总数。
+	var draw_count: int = mini(count, remaining.size())
+	for draw_index: int in range(draw_count):
+		# 本次抽取的历史数据；带上抽取序号使同一窗口的多次抽取各自留下可重放记录。
+		var draw_history: Dictionary = history_data.duplicate(true)
+		draw_history["draw_index"] = draw_index
+		# 本次抽中的下标；候选数随抽取递减，因此历史里同时记录当时的候选数。
+		var selected_index: int = pick_random_candidate_index(remaining.size(), history_kind, draw_history)
+		if selected_index < 0 or selected_index >= remaining.size():
+			break
+		result.append(remaining[selected_index])
+		remaining.remove_at(selected_index)
+	return result
 
 
 ## 创建目标与文字选项同时提交的复合请求；目标和选项均由同一权威ChoiceResponse复核。
@@ -3656,6 +3788,26 @@ func _build_card_choice_actions(choice_request: Dictionary) -> Array[Dictionary]
 				position_action.payload = {"request_id":request_id, "selected_card_uids":[position_candidate_uid], "selected_target_ids":[], "selected_control_id":pile_slot_option_id, "confirmed":true}
 				result.append(position_action.to_dict())
 		return result
+	if choice_type in [YINLANG_COMPOSE_CHOICE_TYPE, YINLANG_MINT_CHOICE_TYPE]:
+		# 自由控制项类型；合法答案无法预先枚举，因此只按技能给出的短名单生成确认动作。
+		# 必须生成合法动作：请求创建时会用本函数自检“是否存在任何可提交动作”，
+		# 枚举为空会被直接拒绝，表现为界面点技能毫无反应、AI 的请求永久挂住。
+		# 短名单来自 context["ai_candidate_control_ids"]，由创建请求的技能按自身收益模型排序给出。
+		var free_control_context: Dictionary = choice_request.get("context", {}) as Dictionary
+		# 已生成的控制项；去重并限制长度，避免技能给出重复或超长名单时动作数失控。
+		var emitted_control_ids: Array[String] = []
+		for candidate_control_variant: Variant in free_control_context.get("ai_candidate_control_ids", []) as Array:
+			# 当前候选控制项；空值不生成无法通过权威校验的动作。
+			var candidate_control_id: String = str(candidate_control_variant)
+			if candidate_control_id.is_empty() or emitted_control_ids.has(candidate_control_id):
+				continue
+			if emitted_control_ids.size() >= YINLANG_AI_CANDIDATE_LIMIT:
+				break
+			emitted_control_ids.append(candidate_control_id)
+			var free_control_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
+			free_control_action.payload = {"request_id":request_id, "selected_card_uids":[], "selected_target_ids":[], "selected_control_id":candidate_control_id, "confirmed":true}
+			result.append(free_control_action.to_dict())
+		return result
 	if choice_type == "respond":
 		# 无材料响应技能作为独立确认动作进入同一AI候选集合；费用与牌型在提交阶段再次权威校验。
 		var response_context: Dictionary = choice_request.get("context", {}) as Dictionary
@@ -3914,7 +4066,9 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 	var candidate_control_ids: Array[String] = []
 	for option_variant: Variant in _pending_card_choice.get("control_options", []) as Array:
 		candidate_control_ids.append(str((option_variant as Dictionary).get("id", "")))
-	if not selected_control_id.is_empty() and (choice_type not in ["control", "bool", "target_control", "arrange", CARD_POSITION_CHOICE_TYPE] or not candidate_control_ids.has(selected_control_id)):
+	# 自由控制项标记；为真时跳过白名单比对，改由下方按选择类型做结构校验。
+	var allow_free_control_id: bool = bool(_pending_card_choice.get("allow_free_control_id", false))
+	if not selected_control_id.is_empty() and (choice_type not in ["control", "bool", "target_control", "arrange", CARD_POSITION_CHOICE_TYPE, YINLANG_COMPOSE_CHOICE_TYPE, YINLANG_MINT_CHOICE_TYPE] or (not allow_free_control_id and not candidate_control_ids.has(selected_control_id))):
 		return _reject("选择中包含无效文字选项。")
 	# 卡牌与目标的独立数量范围；普通选牌的兼容字段继续映射到卡牌维度。
 	var min_select: int = int(_pending_card_choice.get("min_card_select", _pending_card_choice.get("min_select", 0)))
@@ -3949,8 +4103,19 @@ func _submit_card_choice(action: PlayerAction) -> bool:
 			return _reject("牌堆位次放置必须选择恰好一张手牌。")
 		if selected_control_id != PILE_SLOT_OPTION_TOP and selected_control_id != PILE_SLOT_OPTION_SECOND:
 			return _reject("牌堆位次放置必须选择一个有效的牌堆位次。")
+	if confirmed and choice_type == YINLANG_COMPOSE_CHOICE_TYPE:
+		# 组合窗口的结构校验；时机键必须属于时机池，效果键必须属于本次声明的类别池。
+		# 不能只校验「前缀正确」：前缀相同的伪造效果键会让技能按未实现分支静默什么都不做。
+		var compose_error: String = _validate_yinlang_compose_control_id(selected_control_id)
+		if not compose_error.is_empty():
+			return _reject(compose_error)
+	if confirmed and choice_type == YINLANG_MINT_CHOICE_TYPE:
+		# 造牌窗口的结构校验；牌名格式与唯一性、花色点数合法性、被复制牌定义是否存在都必须在这里复核。
+		var mint_error: String = _validate_yinlang_mint_control_id(selected_control_id)
+		if not mint_error.is_empty():
+			return _reject(mint_error)
 	# 文字控制项的数量已在上方按 control_id 校验；不能再把其空实体牌数组误判为“选择的牌数不足”。
-	if confirmed and choice_type not in ["control", "bool", "target_control"] and selected_uids.size() < min_select:
+	if confirmed and choice_type not in ["control", "bool", "target_control", YINLANG_COMPOSE_CHOICE_TYPE, YINLANG_MINT_CHOICE_TYPE] and selected_uids.size() < min_select:
 		return _reject("选择的牌数不足。")
 	if selected_uids.size() > max_select:
 		return _reject("选择的牌数超过上限。")
@@ -4213,9 +4378,9 @@ func _continue_card_choice(context: Dictionary, selected_uids: Array[int], selec
 	# 技能自有选择恢复；技能 ID 与持有者 ID 由创建请求的技能源码写入上下文。
 	var skill_id: String = str(context.get("skill_id", ""))
 	if not skill_id.is_empty():
-		# 创建请求的技能实例；等待期间失去技能时旧选择安全失效。
+		# 创建请求的技能实例；优先按 instance_key 精确命中，等待期间失去技能时旧选择安全失效。
 		var skill_owner_id: int = int(context.get("skill_owner_id", -1))
-		var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
+		var skill: SkillDefinition = _resolve_skill_instance_from_context(context)
 		# 请求创建时的武将代次；缺失字段兼容旧回放，新请求必须与当前技能实例严格一致。
 		var skill_character_generation: int = int(context.get("skill_character_generation", -1))
 		if skill != null and skill.matches_character_generation(skill_character_generation) and skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
@@ -4370,7 +4535,9 @@ func format_card_log_name(card: CardInstance) -> String:
 	# 当前卡牌定义；用于解析当前名称模式。
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
 	# 牌名主体；统一包在中文方括号内，与历史日志阅读习惯一致。
-	var card_name_text: String = "【%s】" % GameSettings.resolve_card_name(definition)
+	# 走实例基础牌名入口：运行时造出的牌在日志里必须报出自己的牌名，而不是被复制牌的原名。
+	# 这里刻意不取武器攻击范围后缀——日志的既有格式只写牌名，本行改写后无自定义名的牌仍逐字节不变。
+	var card_name_text: String = "【%s】" % GameSettings.resolve_instance_card_name(card.to_dict(), definition)
 	# 点数字符串；11至13显示为J、Q、K，1显示为A；无点数的虚拟牌不追加点数。
 	var rank_text: String = "" if card.rank <= 0 else str({1:"A", 11:"J", 12:"Q", 13:"K"}.get(card.rank, str(card.rank)))
 	# 花色显示文本；仅四花色输出符号，none 或未知花色不追加前缀。
@@ -4381,9 +4548,10 @@ func format_card_log_name(card: CardInstance) -> String:
 
 
 ## 返回技能在公开日志中的中文名称；未知定义不泄露内部稳定ID，以“未知技能”明确表示内容登记异常。
+## 参数接受实例键或技能ID：实例键先还原成技能ID再查库，因此同名技能的多份实例在日志中显示同一个技能名。
 func format_skill_log_name(skill_id: String) -> String:
 	# 技能静态元数据；正式技能均由目录扫描注册并必须提供中文name字段。
-	var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+	var skill_metadata: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(skill_id))
 	# 技能中文名称；空名称与未知ID使用统一可读回退，不把英文配置键显示给玩家。
 	var skill_name: String = str(skill_metadata.get("name", "")).strip_edges()
 	return skill_name if not skill_name.is_empty() else "未知技能"
@@ -4394,7 +4562,8 @@ func format_log_reason(reason: String) -> String:
 	if reason.is_empty():
 		return "规则效果"
 	# 技能元数据；命中时优先按中文技能名称格式化，避免公开日志出现内部英文ID。
-	var skill_metadata: Dictionary = GameDatabase.get_skill(reason)
+	# 同样按技能ID查库：规则原因里可能出现实例键，直接查库会漏命中而把英文键暴露给玩家。
+	var skill_metadata: Dictionary = GameDatabase.get_skill(SkillDefinition.base_skill_id_of(reason))
 	if not skill_metadata.is_empty():
 		return "【%s】" % format_skill_log_name(reason)
 	# 卡牌元数据；以卡牌ID作为原因的通用端口同样转换为当前名称模式下的牌名。
@@ -4470,7 +4639,7 @@ func describe_card(card: CardInstance) -> String:
 	var rank_text: String = "" if card.rank <= 0 else str({1:"A", 11:"J", 12:"Q", 13:"K"}.get(card.rank, str(card.rank)))
 	# 花色显示文本；保持短文本便于日志阅读。
 	var suit_text: String = {"spade":"♠", "heart":"♥", "club":"♣", "diamond":"♦", "none":"虚拟"}.get(card.suit, card.suit)
-	return "%s%s %s" % [suit_text, rank_text, GameSettings.resolve_card_name(definition)]
+	return "%s%s %s" % [suit_text, rank_text, GameSettings.resolve_instance_card_name(card.to_dict(), definition)]
 
 
 ## 为指定玩家摸若干牌；摸牌与获得牌前置窗口全部完成后才移动实体。
@@ -4605,6 +4774,116 @@ func change_hand_limit_bonus(player_id: int, delta: int, reason: String = "", al
 	add_log("%s的手牌上限因%s%s%d点（额外上限%d）。" % [format_player_state_log_name(player), format_log_reason(reason), change_verb, absi(actual_delta), player.hand_limit_bonus])
 	_emit_state()
 	return actual_delta
+
+
+## 增减角色的**回合域**额外手牌上限；专供「手牌上限±N直到回合结束」类技能效果使用。
+##
+## 【与 change_hand_limit_bonus 的分工】后者改的是永久加成（机缘等），控制器从不清零；
+## 本端口改的是 turn_hand_limit_bonus，由回合结束与死亡清理统一清零。
+## 若把「直到回合结束」的负数写进永久字段，技能被压制或角色换将后那笔负数会永久留下，压低手牌上限且无法恢复。
+## 因此本端口**允许负值**（缺陷池的 -1 是正常输入），最终手牌上限由 PlayerState.get_hand_limit() 收敛到不低于0。
+## 离场角色不接受本端口写入：回合域状态只对仍在场上的角色有意义，且离场本身会触发清理。
+func add_turn_hand_limit_bonus(player_id: int, amount: int, source_id: int = -1, reason: String = "") -> int:
+	# 获得加成的角色；死亡、离场或零变化都不写入状态。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game or amount == 0:
+		return 0
+	player.turn_hand_limit_bonus += amount
+	# 公开日志的变化方向；数值始终显示正数，减少时用独立文字避免将负号混入本地化句式。
+	var change_verb: String = "增加" if amount > 0 else "减少"
+	add_log("%s的手牌上限因%s%s%d点直到回合结束（本回合额外上限%d）。" % [format_player_state_log_name(player), format_log_reason(reason), change_verb, absi(amount), player.turn_hand_limit_bonus])
+	_emit_state()
+	return amount
+
+
+## 清零指定角色的回合域手牌上限加成；回合结束与死亡/离场清理共用本入口。
+## 返回被清零前的加成值，便于调用方在需要时写日志；无变化时返回0且不派发状态。
+func clear_turn_hand_limit_bonus(player_id: int, reason: String = "") -> int:
+	# 待清理的角色；不存在的角色无状态可清。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or player.turn_hand_limit_bonus == 0:
+		return 0
+	# 清零前的加成值；用于日志与返回值。
+	var previous_bonus: int = player.turn_hand_limit_bonus
+	player.turn_hand_limit_bonus = 0
+	add_log("%s的回合域手牌上限加成已失效（原%d）。" % [format_player_state_log_name(player), previous_bonus])
+	_emit_state()
+	return previous_bonus
+
+
+## 登记或撤销「不可响应其他角色使用的牌直到回合结束」。
+##
+## 【登记内容】除开关本身外，还必须记录**登记时所在回合的角色与回合号**：
+## 到期判定用这两项双重匹配，因此其他角色的回合结束不会误清除本登记
+## （与回合操控登记同一口径，见 _clear_turn_input_delegation）。
+## 【撤销】blocked=false 时无条件清除，供技能被移除或显式撤销使用。
+## 返回登记状态是否发生变化；目标角色无效时返回 false 且零副作用。
+func set_response_blocked_until_turn_end(target_id: int, blocked: bool, source_id: int = -1, reason: String = "") -> bool:
+	# 登记对象；死亡或离场角色不写入回合域状态（离场本身会触发清理）。
+	var target: PlayerState = state.get_player(target_id) if state != null else null
+	if target == null or not target.alive or target.out_of_game:
+		return false
+	if not blocked:
+		if target.response_blocked_until_turn.is_empty():
+			return false
+		target.response_blocked_until_turn = {}
+		add_log("%s不再受%s的响应限制。" % [format_player_state_log_name(target), format_log_reason(reason)])
+		_emit_state()
+		return true
+	target.response_blocked_until_turn = {
+		RESPONSE_BLOCK_TURN_PLAYER_ID: state.current_player_id,
+		RESPONSE_BLOCK_TURN_NUMBER: state.turn_number,
+		RESPONSE_BLOCK_SOURCE_ID: source_id,
+	}
+	add_log("%s因%s本回合不能响应其他角色使用的牌。" % [format_player_state_log_name(target), format_log_reason(reason)])
+	_emit_state()
+	return true
+
+
+## 查询角色当前是否处于「不可响应」状态；界面候选构建与规则放行必须调用同一个入口。
+## 已死亡或离场角色的登记一律视为失效，避免残留登记在复活后意外生效。
+func is_response_blocked_until_turn_end(player_id: int) -> bool:
+	# 被查询角色；不存在的角色没有登记可读。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	return not player.response_blocked_until_turn.is_empty()
+
+
+## 清除**指定回合角色与回合号**上登记的不可响应状态；回合结束统一调用本入口。
+## 匹配条件为「登记时的回合角色 + 回合号」同时成立，因此无关角色的回合结束不会误清除别的登记。
+## 返回值：确实清除了至少一名角色的登记时为 true。
+func clear_response_blocked_for_turn(turn_player_id: int, turn_number: int) -> bool:
+	if state == null:
+		return false
+	# 是否发生了清除；用于返回值与是否派发状态。
+	var cleared_any: bool = false
+	for player: PlayerState in state.players:
+		if player == null or player.response_blocked_until_turn.is_empty():
+			continue
+		# 当前登记；空字典在上面已跳过，此处必然非空。
+		var entry: Dictionary = player.response_blocked_until_turn
+		if int(entry.get(RESPONSE_BLOCK_TURN_PLAYER_ID, -1)) != turn_player_id:
+			continue
+		if int(entry.get(RESPONSE_BLOCK_TURN_NUMBER, -1)) != turn_number:
+			continue
+		player.response_blocked_until_turn = {}
+		cleared_any = true
+	if cleared_any:
+		_emit_state()
+	return cleared_any
+
+
+## 清除某名角色身上**全部**回合域不可响应登记；死亡与离场清理使用。
+## 与 clear_response_blocked_for_turn 的分工：本入口不按回合匹配，因为它服务的是「承载者已经不在了」这种无条件失效场景。
+func clear_response_blocked_for_player(player_id: int) -> bool:
+	# 被清理角色；不存在的角色没有登记可清。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or player.response_blocked_until_turn.is_empty():
+		return false
+	player.response_blocked_until_turn = {}
+	_emit_state()
+	return true
 
 
 ## 交换两名角色在权威座次数组中的位置；玩家ID、身份、技能与牌区随角色整体移动，当前回合归属保持稳定ID不变。
@@ -4815,6 +5094,8 @@ func _replace_native_character_skills(player: PlayerState, old_native_skill_ids:
 		var new_skill: SkillDefinition = GameDatabase.create_skill(new_skill_id)
 		if new_skill == null or new_skill.leader_skill and player.identity != "leader":
 			continue
+		# 固有技能永远安装为首实例（实例键 == 技能ID），显式写入避免依赖“未设置即回落”的隐式约定。
+		new_skill.set_instance_key(new_skill_id)
 		new_skill.bind(self, player.player_id)
 		player_skills[new_skill_id] = new_skill
 		new_skill.install()
@@ -4857,6 +5138,8 @@ func restore_character_card_skills(player_id: int, reason: String = "") -> bool:
 			continue
 		if reincarnation_skill_service != null:
 			reincarnation_skill_service.reset_skill(player_id, native_skill_id, true, false)
+		# 固有技能永远安装为首实例（实例键 == 技能ID），显式写入避免依赖“未设置即回落”的隐式约定。
+		restored_skill.set_instance_key(native_skill_id)
 		restored_skill.bind(self, player_id)
 		player_skills[native_skill_id] = restored_skill
 		restored_skill.install()
@@ -4867,7 +5150,9 @@ func restore_character_card_skills(player_id: int, reason: String = "") -> bool:
 	return true
 
 
-## 返回一名角色已经消耗固有额度的限定技ID；默认排除觉醒技，供“已发动的限定技”选择与公开按钮状态共用。
+## 返回一名角色已经消耗固有额度的限定技**实例键**；默认排除觉醒技，供“已发动的限定技”选择与公开按钮状态共用。
+## 返回实例键而非技能ID：同名限定技的多份实例各自消耗自己的额度，必须逐份进入候选，否则第二份实例永远无法被复原。
+## 界面比较技能是否变淡、内容脚本查找“自己是否已发动”都应改用本实例的实例键（get_instance_key）比较。
 func get_used_limited_skill_ids(player_id: int, include_awakening_skills: bool = false) -> Array[String]:
 	# 已发动限定技结果；保持技能安装顺序，使文字选项、AI与回放具有稳定顺序。
 	var result: Array[String] = []
@@ -4885,6 +5170,7 @@ func get_used_limited_skill_ids(player_id: int, include_awakening_skills: bool =
 
 
 ## 复原一名角色指定限定技的一次固有发动额度；不重置其他技能、轮回进度或阶段次数，觉醒技不属于本入口候选。
+## 参数接受实例键或技能ID：传技能ID时复原该技能的首实例，因此“唯一限定技”的既有调用方行为不变。
 func restore_limited_skill_use(player_id: int, skill_id: String, reason: String = "") -> bool:
 	if state == null or state.game_over or skill_id.is_empty():
 		return false
@@ -5280,6 +5566,11 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	# 直击目标不创建空响应窗口；【掠袭】等效果写入父牌直击集合后，目标不能用任何响应牌或响应技能。
 	if is_response_blocked_by_direct_hit(player_id, context):
 		return null
+	# 回合域不可响应；【缺陷】的「你不可响应其他角色使用的牌直到回合结束」在此拦截。
+	# 必须与直击判定并列放在**候选构建之前**：若只在候选层过滤，装备入口与响应转化技能会绕过它，
+	# 表现为「界面没有候选但规则仍放行」的不一致。
+	if is_response_blocked_until_turn_end(player_id):
+		return null
 	# 去重后的合法响应模式；空数组不能创建没有明确规则语义的响应请求。
 	var allowed_patterns: Array[String] = []
 	for response_pattern: String in response_patterns:
@@ -5366,6 +5657,9 @@ func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_pa
 	var result: Dictionary = {}
 	if player == null or not player.alive or player.out_of_game:
 		return result
+	# 回合域不可响应；装备响应入口（如八卦阵）不走统一手牌候选，因此必须在此独立拦截。
+	if is_response_blocked_until_turn_end(player.player_id):
+		return result
 	for equipment_variant: Variant in player.equipment.values():
 		# 当前装备实体；同一响应时机已取消或判定失败的入口不能再次询问。
 		var equipment_card: CardInstance = equipment_variant as CardInstance
@@ -5379,7 +5673,7 @@ func _get_immediate_equipment_response_candidate(player: PlayerState, allowed_pa
 		if equipment_definition == null or not equipment_definition.can_offer_equipment_response(self, player.player_id, allowed_patterns) or not equipment_definition.uses_immediate_equipment_response_prompt():
 			continue
 		result = _serialize_choice_candidate(equipment_card, player.player_id, "equipment", true, str(GameDatabase.get_card(equipment_card.definition_id).get("slot", "")))
-		result["response_title"] = GameSettings.resolve_card_name(equipment_definition.get_metadata())
+		result["response_title"] = GameSettings.resolve_instance_card_name(equipment_card.to_dict(), equipment_definition.get_metadata())
 		result["response_prompt"] = equipment_definition.get_immediate_equipment_response_prompt()
 		return result
 	return result
@@ -5390,6 +5684,9 @@ func _build_response_choice_candidates(player: PlayerState, allowed_patterns: Ar
 	# 可序列化候选结果；只包含响应者本人可见的实体牌与公开装备入口。
 	var candidates: Array[Dictionary] = []
 	if player == null or not player.alive or player.out_of_game:
+		return candidates
+	# 回合域不可响应；候选层再拦一次，保证任何绕过 request_response_card_patterns 的调用方也拿到一致结论。
+	if is_response_blocked_until_turn_end(player.player_id):
 		return candidates
 	for card: CardInstance in player.get_playable_cards():
 		if excluded_card_uids.has(card.uid):
@@ -5548,7 +5845,8 @@ func _deserialize_optional_response_card(response_card_data: Dictionary) -> Card
 ## 在嵌套触发和装备事件完成后恢复技能响应；技能等待期间失去时安全跳过旧回调。
 func _continue_skill_response_after_barrier(continuation_context: Dictionary) -> void:
 	# 创建响应的技能实例；稳定持有者与技能 ID 防止同名技能或新对局错误接管旧结果。
-	var skill: SkillDefinition = get_skill_instance(int(continuation_context.get("skill_owner_id", -1)), str(continuation_context.get("skill_id", "")))
+	# 优先按 instance_key 精确命中：同名技能的多份实例各自持有独立响应上下文，按技能ID 只会命中首实例。
+	var skill: SkillDefinition = _resolve_skill_instance_from_context(continuation_context)
 	# 原响应规则上下文；牌效、响应者和父事件信息保持选择创建时的可序列化快照。
 	var rule_context: Dictionary = continuation_context.get("rule_context", {}) as Dictionary
 	if skill == null or not skill.matches_character_generation(int(rule_context.get("skill_character_generation", -1))) or not skill.can_use_effect(bool(rule_context.get("locked_skill_segment", false))):
@@ -5620,8 +5918,8 @@ func continue_async_equipment_judgment_response(context: Dictionary, response_ca
 	if not skill_id.is_empty():
 		# 技能持有者；跨角色选择仍由真实持有者实例处理。
 		var skill_owner_id: int = int(context.get("skill_owner_id", -1))
-		# 当前技能实例；等待期间失去技能时旧响应安全失效。
-		var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
+		# 当前技能实例；优先按 instance_key 精确命中，等待期间失去技能时旧响应安全失效。
+		var skill: SkillDefinition = _resolve_skill_instance_from_context(context)
 		if skill == null or not skill.matches_character_generation(int(context.get("skill_character_generation", -1))) or not skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 			return
 		if _has_nested_settlement_barrier():
@@ -6706,8 +7004,8 @@ func _dispatch_judgment_continuation(continuation: Dictionary, judgment_card: Ca
 	if receiver_type == "skill":
 		# 技能持有者与稳定技能 ID；换将或失去技能后旧判定结果安全失效。
 		var skill_owner_id: int = int(continuation.get("skill_owner_id", -1))
-		# 当前运行时技能实例；角色代次必须与请求建立时一致。
-		var skill: SkillDefinition = get_skill_instance(skill_owner_id, str(continuation.get("skill_id", "")))
+		# 当前运行时技能实例；优先按 instance_key 精确命中，角色代次必须与请求建立时一致。
+		var skill: SkillDefinition = _resolve_skill_instance_from_context(continuation)
 		if skill != null and skill.matches_character_generation(int(continuation.get("skill_character_generation", -1))) and skill.can_use_effect(bool(context.get("locked_skill_segment", false))):
 			skill.continue_judgment(context, judgment_card)
 		return
@@ -8043,7 +8341,17 @@ func get_joy_skill_ids(player_id: int) -> Array[String]:
 		var skill: SkillDefinition = skill_variant as SkillDefinition
 		if skill == null or not skill.is_joy_skill() or not skill.can_perform_joy_skill():
 			continue
-		entries.append({"skill_id":skill.get_id(), "performance_number":skill.get_performance_number()})
+		# 当前技能稳定ID；本入口对外承诺“稳定ID列表”，因此同名欢愉技的多份实例在这里合并为一项。
+		var joy_skill_id: String = skill.get_id()
+		# 去重判定；已登记过同一技能ID时跳过，避免多实例技能在列表里重复出现。
+		var already_recorded: bool = false
+		for recorded_entry: Dictionary in entries:
+			if str(recorded_entry.get("skill_id", "")) == joy_skill_id:
+				already_recorded = true
+				break
+		if already_recorded:
+			continue
+		entries.append({"skill_id":joy_skill_id, "performance_number":skill.get_performance_number()})
 	entries.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
 		# 主排序键；编号越小优先级越高。
 		var left_number: int = int(left.get("performance_number", 0))
@@ -9884,11 +10192,160 @@ func _get_opportunity_effect_total_from_ids(opportunity_ids: Array[String], effe
 	return total
 
 
-## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
-func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
-	# 玩家技能实例表；键为稳定技能 ID，值为仅属于该玩家的运行时对象。
+## 把「实例键或技能ID」统一解析为容器中真实存在的实例键；空字符串表示未命中。
+##
+## 解析顺序：先按实例键精确匹配——既有调用方一律传技能ID，而单实例的键恰好等于技能ID，因此直接命中，
+## 行为与「按技能ID取实例」完全一致；未命中且传入的是纯技能ID时，回退到该技能键序最小的实例。
+## 显式实例键（含“#”序号）未命中时**不**回退：调用方明确要那一份实例，静默换一份会改错对象。
+## 纯查询：不创建实例、不安装时机、不广播状态，因此可在 can_activate、AI 评分与时机回调中反复调用。
+func _resolve_skill_instance_key(player_id: int, key_or_id: String) -> String:
+	if key_or_id.is_empty():
+		return ""
+	# 当前技能实例表；未选将或技能尚未安装时为空字典。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	return player_skills.get(skill_id) as SkillDefinition
+	if player_skills.has(key_or_id):
+		return key_or_id
+	if key_or_id.contains("#"):
+		return ""
+	# 技能ID回退结果；遍历中保留键序最小的匹配项，从而稳定指向首实例。
+	var fallback_key: String = ""
+	for skill_key_variant: Variant in player_skills.keys():
+		# 当前实例键；只有还原后等于目标技能ID的实例才参与回退。
+		var skill_key: String = str(skill_key_variant)
+		if SkillDefinition.base_skill_id_of(skill_key) != key_or_id:
+			continue
+		if fallback_key.is_empty() or skill_key < fallback_key:
+			fallback_key = skill_key
+	return fallback_key
+
+
+## 为即将安装的技能实例分配实例键；首实例占用纯技能ID，后续实例占用最小的空闲序号。
+##
+## 键序规则为「技能ID本身最小，其后依次为 <技能ID>#2、<技能ID>#3……」，因此字符串比较即可得到
+## 「首实例优先」的稳定顺序；界面按钮顺序、AI 候选顺序与存档遍历顺序都依赖该性质。
+## 移除实例后空出的序号会被复用，避免长期对局中编号无限增长。
+func _allocate_skill_instance_key(player_skills: Dictionary, skill_id: String) -> String:
+	if not player_skills.has(skill_id):
+		return skill_id
+	# 候选序号；从2起递增，1被「首实例 == 技能ID」占用故不参与。
+	var index: int = 2
+	while player_skills.has("%s#%d" % [skill_id, index]):
+		index += 1
+	return "%s#%d" % [skill_id, index]
+
+
+## 返回指定玩家当前持有的技能实例；空结果表示玩家未选择武将、未配置该技能或对局尚未完成技能安装。
+## 参数接受实例键或技能ID：传技能ID时返回该技能的首实例，语义与「同名技能只有一份」时完全一致。
+func get_skill_instance(player_id: int, skill_id: String) -> SkillDefinition:
+	# 玩家技能实例表；键为实例键，值为仅属于该玩家的运行时对象。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	return player_skills.get(_resolve_skill_instance_key(player_id, skill_id)) as SkillDefinition
+
+
+## 从技能选择、响应或续接上下文里解析出**精确的那一份技能实例**。
+##
+## 【为什么必须优先 instance_key】同名技能可以拥有多份实例，每份实例各自创建独立的选择请求与续接上下文。
+## 若只按 `skill_id` 解析，`get_skill_instance` 会返回**首实例**，于是第二份实例的选择结果会被交回第一份实例处理——
+## 表现是「玩家在第二份【进程】的窗口里选完，效果却按第一份的配置结算」，属于最难排查的一类错配。
+## 上下文的 `instance_key` 由 `SkillDefinition._build_selection_context()` 在创建请求时写入，
+## 与 `skill_id` 并存而不是替换（`skill_id` 仍是日志、AI 与规则层沿用的技能身份）。
+##
+## 【回落语义】缺失 `instance_key` 时回落 `skill_id`：旧回放、旧存档与非组合技能请求都只有技能ID，
+## 它们的语义就是「该技能的首实例」，因此回落与改动前逐字节一致。
+## 返回 null 表示技能已不在场（等待期间被移除或换将），调用方必须安全跳过。
+func _resolve_skill_instance_from_context(context: Dictionary) -> SkillDefinition:
+	# 技能持有者；跨角色选择仍由真实持有者实例处理。
+	var skill_owner_id: int = int(context.get("skill_owner_id", -1))
+	if skill_owner_id < 0:
+		return null
+	# 解析用的键；实例键优先，缺失时回落技能ID。
+	var lookup_key: String = str(context.get("instance_key", ""))
+	if lookup_key.is_empty():
+		lookup_key = str(context.get("skill_id", ""))
+	if lookup_key.is_empty():
+		return null
+	return get_skill_instance(skill_owner_id, lookup_key)
+
+
+## 返回指定技能的全部已安装实例，按键序（首实例优先）排列；未安装时返回空数组。
+## 界面、AI 与「按实例分别结算」的技能用本入口取得同名技能的每一份实例。
+func get_skill_instances(player_id: int, skill_id: String) -> Array[SkillDefinition]:
+	# 强类型返回结果；调用方按顺序逐个处理，不得依赖运行时对象在两次调用之间保持同一。
+	var result: Array[SkillDefinition] = []
+	# 目标技能ID；允许调用方传入实例键，统一还原后再匹配。
+	var base_skill_id: String = SkillDefinition.base_skill_id_of(skill_id)
+	if base_skill_id.is_empty():
+		return result
+	# 当前技能实例表；未选将或技能尚未安装时为空字典。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_key: String in _sorted_skill_instance_keys(player_skills, base_skill_id):
+		# 当前实例对象；容器中可能存在空值，此处跳过以保证调用方无需判空。
+		var skill: SkillDefinition = player_skills.get(skill_key) as SkillDefinition
+		if skill != null:
+			result.append(skill)
+	return result
+
+
+## 返回指定技能在容器中的全部实例键，按键序（首实例优先）排列；纯查询，供界面与存档使用。
+func _sorted_skill_instance_keys(player_skills: Dictionary, base_skill_id: String) -> Array[String]:
+	# 匹配到的实例键；先收集再排序，保证结果与字典插入顺序无关。
+	var matched_keys: Array[String] = []
+	for skill_key_variant: Variant in player_skills.keys():
+		# 当前实例键；只有还原后等于目标技能ID的实例才属于本次查询。
+		var skill_key: String = str(skill_key_variant)
+		if SkillDefinition.base_skill_id_of(skill_key) == base_skill_id:
+			matched_keys.append(skill_key)
+	matched_keys.sort()
+	return matched_keys
+
+
+## 返回指定角色当前全部已安装技能实例键（含同名技能的每一份实例）；界面按此逐项渲染技能栏。
+## 与 get_installed_skill_ids 的分工：本入口保留实例粒度，后者按技能ID去重。
+func get_installed_skill_keys(player_id: int) -> Array[String]:
+	# 已安装技能表；固有、模式、临时与局内获得技能均由同一容器维护。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	# 实例键结果；沿用安装字典顺序，调用方不得据此依赖运行时对象。
+	var result: Array[String] = []
+	for skill_key_variant: Variant in player_skills.keys():
+		result.append(str(skill_key_variant))
+	return result
+
+
+## 返回指定角色某份技能实例的实例键；传入的实例不在该角色名下时返回空字符串。
+## 供内容层在保存实例级配置前取得稳定标识，避免自行拼接“技能ID#序号”而猜错实际序号。
+func get_skill_instance_key(player_id: int, skill: SkillDefinition) -> String:
+	if skill == null:
+		return ""
+	# 容器内真实键；技能对象可能已被卸载，此时按对象反查不到任何键。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_key_variant: Variant in player_skills.keys():
+		if player_skills.get(skill_key_variant) == skill:
+			return str(skill_key_variant)
+	return ""
+
+
+## 读取某项技能实例的运行时配置深拷贝；未配置时返回空字典，调用方按默认行为处理。
+## 键必须是实例键：同名技能的多份实例各有一份独立配置。
+func get_runtime_skill_data(player_id: int, instance_key: String) -> Dictionary:
+	# 目标角色；不存在时无配置可读。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or instance_key.is_empty():
+		return {}
+	return (player.runtime_skill_data.get(instance_key, {}) as Dictionary).duplicate(true)
+
+
+## 写入某项技能实例的运行时配置并广播状态；内容层在组合技能确定实例参数后调用。
+## 传入空字典等价于清除该实例的配置；该数据进入公开快照与权威存档，因此只允许放可序列化值。
+func set_runtime_skill_data(player_id: int, instance_key: String, data: Dictionary) -> void:
+	# 目标角色；不存在时无处写入。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or instance_key.is_empty():
+		return
+	if data.is_empty():
+		player.runtime_skill_data.erase(instance_key)
+	else:
+		player.runtime_skill_data[instance_key] = data.duplicate(true)
+	_emit_state()
 
 
 ## 为技能安装流程登记轮回技静态配置；非轮回技与无效玩家由服务拒绝且不创建状态。
@@ -10113,6 +10570,23 @@ func modify_skill_distance_to_target(player_id: int, target_id: int, current_dis
 	return modified_distance
 
 
+## 汇总指定角色全部技能对最终攻击范围的修正；技能按安装顺序串联，返回值最低为1。
+## 与 modify_skill_distance_to_target 完全同构：只遍历该角色**此刻实际安装**的技能实例，
+## 因此换将、失去技能与再获得技能都会立即反映到攻击范围判定结果，无需额外清理。
+## 传入的是武器结算后的基础范围（无武器为1），技能在此基础上加减。
+func modify_skill_attack_range(player_id: int, current_range: int) -> int:
+	# 串联后的攻击范围；每项技能读取上一项结果，允许通用加减与「固定为N」效果自然组合。
+	var modified_range: int = maxi(current_range, 1)
+	# 当前玩家技能实例表；固有、模式与临时技能共用同一纯查询容器。
+	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
+	for skill_variant: Variant in player_skills.values():
+		# 当前技能实例；攻击范围修正不得移动牌、记录发动或创建选择。
+		var skill: SkillDefinition = skill_variant as SkillDefinition
+		if skill != null and skill.can_use_effect():
+			modified_range = maxi(skill.modify_attack_range(modified_range), 1)
+	return modified_range
+
+
 ## 汇总指定角色是否被任一已安装技能声明为「武将牌始终背面向上」；无此声明的角色恒返回false。
 ## 与距离改写等纯查询同构：只遍历该角色**此刻实际安装**的技能实例，不缓存、不记名单，
 ## 因此换将、失去技能与再获得技能都会立即反映到判定结果。
@@ -10290,27 +10764,56 @@ func validate_incoming_skill_card_target_selection(target_id: int, actor_id: int
 	return ""
 
 
-## 永久授予一项数据库技能并立即安装；可配置每个全局回合次数与总发动次数，相同技能不会重复创建。
+## 永久授予一项数据库技能并立即安装；可配置每个全局回合次数与总发动次数，相同技能默认不会重复创建。
 ## 当前接口额外支持每轮次数，0表示对应维度不限制；新增参数置于末尾以兼容既有调用方。
-func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int = 0, total_limit: int = 0, source: String = "runtime", allow_out_of_game: bool = false, per_round_limit: int = 0) -> bool:
+## allow_duplicate 为 true 时允许同一角色持有同一技能的多个实例：新实例分配到独立的实例键与独立额度记录，
+## 因此每份实例的每回合/每轮/总次数分别计算（这是「同名技能分别计算」的唯一入口）。
+## allow_duplicate 为 false 时保持原有语义：只要该技能已有任一实例就直接拒绝并写日志。
+func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int = 0, total_limit: int = 0, source: String = "runtime", allow_out_of_game: bool = false, per_round_limit: int = 0, allow_duplicate: bool = false) -> bool:
+	return not _grant_acquired_skill_instance(player_id, skill_id, {}, per_turn_limit, total_limit, source, allow_out_of_game, per_round_limit, allow_duplicate).is_empty()
+
+
+## 授予一项带**初始运行时配置**的局内技能；成功返回新实例的实例键，失败返回空字符串。
+##
+## 【为什么必须有这个端口】`grant_acquired_skill` 在授予过程中会立即调用 `skill.install()`，
+## 而组合技能（【进程】/【缺陷】）的 `install()` 必须读到本实例的运行时配置才知道要订阅哪个时机。
+## 若先授予、再补写配置，第一份实例会以「配置缺失」安装一次（不订阅任何时机）；之后即使补写配置，
+## 订阅也不会重新建立，表现为「技能获得了、正文也对，但永远不触发」——而且没有任何报错。
+## 因此本端口把「分配实例键 → 写入运行时配置 → 安装」收在同一处，保证 install() 一定能读到配置。
+## 返回值是实例键（而不是布尔）：调用方需要它来写动态正文与后续查询，自行做差集既啰嗦又容易在
+## 「同名技能已有多个实例」时定位错实例。
+func grant_configured_skill(player_id: int, skill_id: String, runtime_data: Dictionary, per_turn_limit: int = 0, source: String = "runtime", allow_duplicate: bool = true) -> String:
+	return _grant_acquired_skill_instance(player_id, skill_id, runtime_data, per_turn_limit, 0, source, false, 0, allow_duplicate)
+
+
+## 授予并安装技能实例的内部实现；返回新实例键，未安装时返回空字符串。
+## 全部对外授予入口共用本函数，保证「实例键分配、额度记录、初始配置写入、安装顺序」只有一份实现。
+func _grant_acquired_skill_instance(player_id: int, skill_id: String, initial_runtime_data: Dictionary, per_turn_limit: int, total_limit: int, source: String, allow_out_of_game: bool, per_round_limit: int, allow_duplicate: bool) -> String:
 	# 技能获得者；死亡、离场或无效角色不能取得新技能。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not player.alive or (player.out_of_game and not allow_out_of_game) or skill_id.is_empty():
-		return false
+		return ""
 	# 当前技能实例表；固有、模式、临时与已获得技能共用同一运行时容器。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	if player_skills.has(skill_id):
+	# 该技能已有的任一实例键；按技能ID语义判定，因此“已有第二份实例”同样算已经拥有。
+	var existing_instance_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if not allow_duplicate and not existing_instance_key.is_empty():
 		add_log("%s已经拥有【%s】，本次获得未重复安装。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
-		return false
+		return ""
 	# 新技能运行时实例；领袖技不能通过普通局内效果绕过身份限制获得。
 	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
 	if skill == null or skill.leader_skill:
-		return false
+		return ""
+	# 本次实例键；首实例占用纯技能ID，重复获得时占用最小空闲序号。
+	var instance_key: String = _allocate_skill_instance_key(player_skills, skill_id)
+	skill.set_instance_key(instance_key)
 	skill.bind(self, player_id)
-	player_skills[skill_id] = skill
+	player_skills[instance_key] = skill
 	skill_instances_by_player[player_id] = player_skills
 	# 已获得技能限制记录；0表示不限制，对应普通“获得技能”卡牌。
-	player.acquired_skills[skill_id] = {
+	# 键为实例键，因此同名技能的每一份实例各自持有一条额度记录；skill_id 字段保留还原后的技能ID供按技能汇总查询。
+	player.acquired_skills[instance_key] = {
+		"skill_id":skill_id,
 		"source":source,
 		"per_turn_limit":maxi(per_turn_limit, 0),
 		"per_round_limit":maxi(per_round_limit, 0),
@@ -10321,22 +10824,30 @@ func grant_acquired_skill(player_id: int, skill_id: String, per_turn_limit: int 
 		"uses_this_round":0,
 		"total_uses":0,
 	}
+	# 初始运行时配置；必须在 install() 之前写入，否则技能安装时读不到自己的参数（组合技能会订阅不到时机）。
+	if not initial_runtime_data.is_empty():
+		player.runtime_skill_data[instance_key] = initial_runtime_data.duplicate(true)
 	skill.install()
 	add_log("%s获得了技能【%s】。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
 	_emit_state()
-	return true
+	return instance_key
 
 
 ## 判断一项已安装技能是否仍有局内获得来源配置的发动额度；非获得技能不受本接口限制。
+## 参数接受实例键或技能ID：传技能ID时命中该技能的首实例，因此单实例语义与改动前完全一致。
 func can_use_acquired_skill(player_id: int, skill_id: String) -> bool:
 	# 技能持有者；无效角色不能发动任何技能。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not player.alive:
 		return false
-	if not player.acquired_skills.has(skill_id):
+	# 额度记录键；优先取容器中真实存在的实例键，实例已卸载但记录仍在时回落到调用方传入的键。
+	var usage_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if usage_key.is_empty():
+		usage_key = skill_id
+	if not player.acquired_skills.has(usage_key):
 		return true
 	# 当前限制记录；回合号不同视为本回合尚未使用，不必提前写回重置状态。
-	var usage: Dictionary = player.acquired_skills.get(skill_id, {}) as Dictionary
+	var usage: Dictionary = player.acquired_skills.get(usage_key, {}) as Dictionary
 	# 当前回合已用次数；跨回合时按0读取。
 	var uses_this_turn: int = int(usage.get("uses_this_turn", 0)) if int(usage.get("tracked_turn_number", -1)) == state.turn_number else 0
 	# 当前轮已用次数；跨轮时按0读取，额外回合保持同一轮的累计限制。
@@ -10351,15 +10862,20 @@ func can_use_acquired_skill(player_id: int, skill_id: String) -> bool:
 
 
 ## 消耗一次已获得技能发动额度；普通固有技能返回true但不记录，达到总次数后立即失去该获得技能。
+## 额度按实例键记账：同名技能的多份实例各自消耗自己的记录，互不影响。
 func consume_acquired_skill_use(player_id: int, skill_id: String) -> bool:
 	# 技能持有者；无效状态或额度耗尽时拒绝重复记录。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not can_use_acquired_skill(player_id, skill_id):
 		return false
-	if not player.acquired_skills.has(skill_id):
+	# 额度记录键；与 can_use_acquired_skill 使用同一解析规则，保证「能否使用」与「消耗」落在同一条记录上。
+	var usage_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if usage_key.is_empty():
+		usage_key = skill_id
+	if not player.acquired_skills.has(usage_key):
 		return true
 	# 可写限制记录副本；跨回合先清零单回合计数再累加本次成功发动。
-	var usage: Dictionary = (player.acquired_skills.get(skill_id, {}) as Dictionary).duplicate(true)
+	var usage: Dictionary = (player.acquired_skills.get(usage_key, {}) as Dictionary).duplicate(true)
 	if int(usage.get("tracked_turn_number", -1)) != state.turn_number:
 		usage["tracked_turn_number"] = state.turn_number
 		usage["uses_this_turn"] = 0
@@ -10370,78 +10886,112 @@ func consume_acquired_skill_use(player_id: int, skill_id: String) -> bool:
 	usage["uses_this_turn"] = int(usage.get("uses_this_turn", 0)) + 1
 	usage["uses_this_round"] = int(usage.get("uses_this_round", 0)) + 1
 	usage["total_uses"] = int(usage.get("total_uses", 0)) + 1
-	player.acquired_skills[skill_id] = usage
+	player.acquired_skills[usage_key] = usage
 	# 总次数耗尽标记；先保存本次发动记录，再卸载技能，保证第五次【行军】完整生效后才失去。
+	# 这里必须传实例键：传技能ID会连带移除同名技能的其他实例。
 	var total_limit: int = maxi(int(usage.get("total_limit", 0)), 0)
 	if total_limit > 0 and int(usage.get("total_uses", 0)) >= total_limit:
-		remove_acquired_skill(player_id, skill_id)
+		remove_acquired_skill(player_id, usage_key)
 	return true
 
 
-## 移除一项确由局内获得来源安装的技能；固有、模式与临时技能不会被本接口误卸载。
+## 移除一项确由局内获得来源安装的技能实例；固有、模式与临时技能不会被本接口误卸载。
+## 参数接受实例键或技能ID：传技能ID时只移除该技能的首实例，其余同名实例保持安装。
 func remove_acquired_skill(player_id: int, skill_id: String) -> bool:
 	# 技能持有者；不存在获得记录时不改变运行时实例。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
-	if player == null or not player.acquired_skills.has(skill_id):
+	if player == null:
 		return false
-	player.acquired_skills.erase(skill_id)
+	# 待移除记录的实例键；实例已卸载但记录仍在时回落到调用方传入的键。
+	var instance_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if instance_key.is_empty():
+		instance_key = skill_id
+	if not player.acquired_skills.has(instance_key):
+		return false
+	player.acquired_skills.erase(instance_key)
+	# 该实例还原后的技能ID；日志与固有/模式来源判定都按技能ID进行。
+	var base_skill_id: String = SkillDefinition.base_skill_id_of(instance_key)
 	# 当前技能是否仍由交换后的武将牌、模式或临时来源提供；存在其他来源时只清除获得记录，不卸载共享实例。
+	# 只有首实例（键 == 技能ID）才可能与固有/模式技能共用同一实例，序号实例必然是独立的一份，必须卸载。
 	var native_skill_ids: Array = GameDatabase.get_character(player.character_id).get("skills", []) as Array
 	var mode_skill_ids: Array[String] = identity_rules.get_mode_skill_ids(player.identity, str(state.match_mode))
-	if native_skill_ids.has(skill_id) or mode_skill_ids.has(skill_id) or player.temporary_skills.has(skill_id):
+	# 共享实例判定；首实例与固有或模式技能同名时视为同一份实例，仍由武将牌提供。
+	var shared_with_character_source: bool = instance_key == base_skill_id and (native_skill_ids.has(base_skill_id) or mode_skill_ids.has(base_skill_id))
+	if shared_with_character_source or player.temporary_skills.has(instance_key):
 		_emit_state()
 		return true
 	# 当前技能实例；没有其他来源时卸载并移除。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
 	# 待卸载技能实例；卸载会释放全部时机订阅与修正器。
-	var skill: SkillDefinition = player_skills.get(skill_id) as SkillDefinition
+	var skill: SkillDefinition = player_skills.get(instance_key) as SkillDefinition
 	if skill != null:
 		skill.uninstall()
-	player_skills.erase(skill_id)
+	player_skills.erase(instance_key)
+	# 实例级运行时配置随实例一起清理，避免之后再次获得同名技能时读到上一份实例的残留参数。
+	player.runtime_skill_data.erase(instance_key)
 	skill_instances_by_player[player_id] = player_skills
-	add_log("%s失去了技能【%s】。" % [format_player_state_log_name(player), format_skill_log_name(skill_id)])
+	add_log("%s失去了技能【%s】。" % [format_player_state_log_name(player), format_skill_log_name(base_skill_id)])
 	_emit_state()
 	return true
 
 
-## 动态授予一项数据库技能并立即安装；相同技能不会重复创建，失效信息记录在玩家公开运行时状态中。
-func grant_temporary_skill(player_id: int, skill_id: String, expires_at_round: int) -> bool:
+## 动态授予一项数据库技能并立即安装；相同技能默认不会重复创建，失效信息记录在玩家公开运行时状态中。
+## allow_duplicate 为 true 时允许同一角色持有同一临时技能的多个实例，每份实例占用独立实例键与独立失效轮次。
+func grant_temporary_skill(player_id: int, skill_id: String, expires_at_round: int, allow_duplicate: bool = false) -> bool:
 	# 技能获得者；死亡、离场或无效角色不能取得临时技能。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or not player.alive or player.out_of_game or skill_id.is_empty():
 		return false
 	# 当前技能实例表；已经拥有同名固有或临时技能时只延长临时记录，不重复订阅事件。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	if not player_skills.has(skill_id):
+	# 该技能已有的任一实例键；allow_duplicate 为假时复用首实例，为真时新建独立实例。
+	var existing_instance_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	# 本次临时记录的实例键；未指定重复授予且已有实例时沿用既有实例键，否则分配新的空闲键。
+	var instance_key: String = existing_instance_key if (not allow_duplicate and not existing_instance_key.is_empty()) else _allocate_skill_instance_key(player_skills, skill_id)
+	if not player_skills.has(instance_key):
 		# 新技能运行时实例；数据库工厂保证每名角色拥有独立状态。
 		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
 		if skill == null or skill.leader_skill:
 			return false
+		skill.set_instance_key(instance_key)
 		skill.bind(self, player_id)
-		player_skills[skill_id] = skill
+		player_skills[instance_key] = skill
 		skill_instances_by_player[player_id] = player_skills
 		skill.install()
-	player.temporary_skills[skill_id] = {"expires_at_round":maxi(expires_at_round, state.round_number + 1)}
+	# 临时失效记录；skill_id 字段保留还原后的技能ID，便于按技能汇总查询。
+	player.temporary_skills[instance_key] = {"skill_id":skill_id, "expires_at_round":maxi(expires_at_round, state.round_number + 1)}
 	return true
 
 
-## 移除一项确由临时系统授予的技能；武将固有技能即使存在同名临时记录也始终保留。
+## 移除一项确由临时系统授予的技能实例；武将固有技能即使存在同名临时记录也始终保留。
+## 参数接受实例键或技能ID：传技能ID时只移除该技能的首实例，其余同名实例保持安装。
 func remove_temporary_skill(player_id: int, skill_id: String) -> bool:
 	# 技能获得者；不存在临时记录时不改变任何技能实例。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
-	if player == null or not player.temporary_skills.has(skill_id):
+	if player == null:
 		return false
-	player.temporary_skills.erase(skill_id)
+	# 待移除记录的实例键；记录已清理但实例仍在时回落到调用方传入的键。
+	var instance_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if instance_key.is_empty():
+		instance_key = skill_id
+	if not player.temporary_skills.has(instance_key):
+		return false
+	player.temporary_skills.erase(instance_key)
+	# 该实例还原后的技能ID；固有来源判定与日志都按技能ID进行。
+	var base_skill_id: String = SkillDefinition.base_skill_id_of(instance_key)
 	# 武将固有技能ID；同名固有技能不能因临时期限结束而卸载。
+	# 只有首实例（键 == 技能ID）才可能与固有技能共用同一实例，序号实例必然是独立的一份。
 	var native_skill_ids: Array = GameDatabase.get_character(player.character_id).get("skills", []) as Array
-	if native_skill_ids.has(skill_id):
+	if instance_key == base_skill_id and native_skill_ids.has(base_skill_id):
 		return true
 	# 当前技能实例；卸载会同步清理时机订阅与纯查询修正器。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	var skill: SkillDefinition = player_skills.get(skill_id) as SkillDefinition
+	var skill: SkillDefinition = player_skills.get(instance_key) as SkillDefinition
 	if skill != null:
 		skill.uninstall()
-	player_skills.erase(skill_id)
+	player_skills.erase(instance_key)
+	# 实例级运行时配置随实例一起清理，避免之后再次获得同名技能时读到上一份实例的残留参数。
+	player.runtime_skill_data.erase(instance_key)
 	skill_instances_by_player[player_id] = player_skills
 	return true
 
@@ -10494,12 +11044,13 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 		# 活动上下文；优先读取技能 backup 后上下文，缺失时回退基础上下文。
 		var active_context: Dictionary = remote_choice.get("active_context", remote_choice.get("base_context", {})) as Dictionary
 		# 当前请求允许直接发动的主动技能 ID；仅用于客户端按钮提示，房主仍执行完整校验。
+		# 列表按实例键下发，比较统一走 instance_key_list_has_skill，使同名技能的第二份实例按钮也能亮起。
 		var active_skill_ids: Array = active_context.get("active_skill_ids", []) as Array
-		if active_skill_ids.has(skill_id):
+		if SkillDefinition.instance_key_list_has_skill(active_skill_ids, skill_id):
 			return true
 		# 响应转换技能；请求上下文会明确列出已逐材料校验通过的稳定技能 ID。
 		var response_conversion_skill_ids: Array = context.get("response_conversion_skill_ids", active_context.get("response_conversion_skill_ids", [])) as Array
-		return response_conversion_skill_ids.has(skill_id)
+		return SkillDefinition.instance_key_list_has_skill(response_conversion_skill_ids, skill_id)
 	# 本地权威技能持有者；死亡或离场角色不能通过旧按钮、网络动作或未完整自检的技能脚本发动主动技能。
 	var owner: PlayerState = state.get_player(player_id) if state != null else null
 	if owner == null or not owner.alive or owner.out_of_game:
@@ -10532,9 +11083,10 @@ func can_activate_skill(player_id: int, skill_id: String, context: Dictionary = 
 	return skill.can_activate(context)
 
 
-## 返回指定玩家在当前主动入口可以发动的技能 ID；结果只包含已安装、入口匹配且 can_activate 通过的实例。
-func get_active_skill_ids(player_id: int, active_entry: String, context: Dictionary = {}) -> Array[String]:
-	# 可发动技能结果；按武将技能安装顺序遍历，界面和 AI 得到稳定按钮顺序。
+## 返回指定玩家在当前主动入口可以发动的技能实例键；结果只包含已安装、入口匹配且 can_activate 通过的实例。
+## 界面与 AI 必须使用本入口：同名技能的多份实例在这里各自成为一项，按实例键即可分别显示与分别评分。
+func get_active_skill_keys(player_id: int, active_entry: String, context: Dictionary = {}) -> Array[String]:
+	# 可发动技能结果；按技能安装顺序遍历，界面和 AI 得到稳定按钮顺序。
 	var result: Array[String] = []
 	if not RuleTimingCatalog.has_active_entry(active_entry):
 		return result
@@ -10547,7 +11099,7 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 	for skill_variant: Variant in player_skills.values():
 		# 当前技能实例；主动入口与自身规则条件必须同时满足。
 		var skill: SkillDefinition = skill_variant as SkillDefinition
-		if skill == null or not skill.can_use_effect() or not skill.has_available_intrinsic_use() or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_id()):
+		if skill == null or not skill.can_use_effect() or not skill.has_available_intrinsic_use() or not skill.supports_active_entry(active_entry) or not can_use_acquired_skill(player_id, skill.get_instance_key()):
 			continue
 		if skill.reincarnation and not skill.can_activate_reincarnation():
 			continue
@@ -10555,18 +11107,35 @@ func get_active_skill_ids(player_id: int, active_entry: String, context: Diction
 		var activation_context: Dictionary = context.duplicate(true)
 		activation_context["active_entry"] = active_entry
 		if skill.can_activate(activation_context):
-			result.append(skill.get_id())
+			result.append(skill.get_instance_key())
 	return result
 
 
-## 返回指定角色当前全部已安装技能稳定ID；结果只含字符串副本，技能可据此组合通用状态而不读取运行时实例。
+## 返回指定玩家在当前主动入口可以发动的技能ID（去重）；同名技能的多份实例在这里合并为一项。
+## 既有调用方依赖「技能ID」语义时继续使用本入口；需要逐份实例区分时使用 get_active_skill_keys。
+func get_active_skill_ids(player_id: int, active_entry: String, context: Dictionary = {}) -> Array[String]:
+	# 技能ID结果；由实例键还原并去重，单实例场景与改动前逐元素相同。
+	var result: Array[String] = []
+	for skill_key: String in get_active_skill_keys(player_id, active_entry, context):
+		# 当前实例键还原出的技能ID；已出现过的技能不会重复加入。
+		var base_skill_id: String = SkillDefinition.base_skill_id_of(skill_key)
+		if not base_skill_id.is_empty() and not result.has(base_skill_id):
+			result.append(base_skill_id)
+	return result
+
+
+## 返回指定角色当前全部已安装技能稳定ID（去重）；结果只含字符串副本，技能可据此组合通用状态而不读取运行时实例。
+## 同名技能的多份实例在这里合并为一项；需要逐份实例区分时使用 get_installed_skill_keys。
 func get_installed_skill_ids(player_id: int) -> Array[String]:
 	# 已安装技能表；固有、模式、临时与局内获得技能均由同一容器维护。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
 	# 稳定ID结果；沿用安装字典顺序，调用方不得据此依赖运行时对象。
 	var result: Array[String] = []
-	for skill_id_variant: Variant in player_skills.keys():
-		result.append(str(skill_id_variant))
+	for skill_key_variant: Variant in player_skills.keys():
+		# 当前实例键还原出的技能ID；同名技能的多份实例只保留首次出现的一项。
+		var base_skill_id: String = SkillDefinition.base_skill_id_of(str(skill_key_variant))
+		if not base_skill_id.is_empty() and not result.has(base_skill_id):
+			result.append(base_skill_id)
 	return result
 
 
@@ -10588,11 +11157,23 @@ func has_skill(player_id: int, skill_id: String) -> bool:
 	if player == null:
 		return false
 	# 已安装技能实例表；固有、模式、临时与局内获得技能共用同一容器。
+	# 键为实例键，必须还原成技能ID后比较：同名技能的第二份实例键为“<技能ID>#2”，直接 has() 会漏判。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	if player_skills.has(skill_id):
+	if _container_has_skill_id(player_skills, skill_id):
 		return true
 	# 已获得/临时技能记录；实例为空但记录仍在时同样算“拥有”，与 remove_skill() 的清理口径保持一致。
-	return player.acquired_skills.has(skill_id) or player.temporary_skills.has(skill_id)
+	return _container_has_skill_id(player.acquired_skills, skill_id) or _container_has_skill_id(player.temporary_skills, skill_id)
+
+
+## 判断以实例键为键的技能容器中是否存在指定技能ID的任一实例；纯查询，不创建实例也不广播状态。
+## 先用精确键命中（单实例与首实例场景的快速路径），未命中时逐键还原技能ID比较。
+func _container_has_skill_id(container: Dictionary, skill_id: String) -> bool:
+	if container.has(skill_id):
+		return true
+	for skill_key_variant: Variant in container.keys():
+		if SkillDefinition.base_skill_id_of(str(skill_key_variant)) == skill_id:
+			return true
+	return false
 
 
 ## 返回主动技能的只读交互预览；界面与 AI 可查询，但所有提交仍由技能 can_activate 与 activate 权威复核。
@@ -10851,22 +11432,28 @@ func show_skill_target_indicator(source_player_id: int, target_player_ids: Array
 
 
 ## 写入一条实际成立的技能发动记录，并通知对局日志与桌面表现；内容技能只能通过本公开端口调用，不能直接改写历史数组。
+## 参数接受实例键或技能ID：元数据、语音与日志名一律按技能ID求值，历史条目额外记录 instance_key 供按实例追溯。
 func record_skill_activation(player_id: int, skill_id: String, context: Dictionary = {}) -> void:
 	if state == null or state.game_over:
 		return
+	# 实例键与技能ID；实例键用于按实例追溯，技能ID用于查库取元数据、语音与显示名。
+	var instance_key: String = skill_id
+	var base_skill_id: String = SkillDefinition.base_skill_id_of(skill_id)
 	# 技能元数据；离场技允许存活但离场的持有者记录真实成立的触发，普通技能仍保持在场限制。
-	var skill_metadata: Dictionary = GameDatabase.get_skill(skill_id)
+	var skill_metadata: Dictionary = GameDatabase.get_skill(base_skill_id)
 	# 发动者状态；未知或死亡角色不能留下新记录，离场角色仅在技能明确声明离场技时例外。
 	var player: PlayerState = state.get_player(player_id)
 	if player == null or not player.alive or (player.out_of_game and not bool(skill_metadata.get("out_of_game_skill", false))):
 		return
 	# 音频表现：技能实际发动成立时默认请求一次技能语音，覆盖主动技、触发技与领袖技的全部发动路径。
-	_request_auto_skill_voice(player_id, skill_id, skill_metadata)
+	# 语音按技能ID查找：同一技能的多份实例共用同一段配音，不因实例序号重复登记音频资源。
+	_request_auto_skill_voice(player_id, base_skill_id, skill_metadata)
 	# 技能名称；缺失时回退稳定 ID，保证日志与动画仍能定位来源。
 	# 当前日志说明：稳定ID只保存在结构化历史中，玩家可见名称缺失时统一显示中文“未知技能”。
-	var skill_name: String = format_skill_log_name(skill_id)
+	var skill_name: String = format_skill_log_name(base_skill_id)
 	# 永久历史条目；保存技能、触发事件、回合与内容上下文，供回放和未来统计读取。
-	player.skill_history.append({"skill_id":skill_id, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
+	# skill_id 保持技能ID语义（既有读取方如【冰封】与机制测试都按技能ID比较），instance_key 供按实例追溯。
+	player.skill_history.append({"skill_id":base_skill_id, "instance_key":instance_key, "skill_name":skill_name, "event_id":state.current_event_id, "turn_number":state.turn_number, "context":context.duplicate(true)})
 	# 技能目标日志片段；有目标时追加“，目标为xx”。
 	var skill_target_text: String = format_target_log_names(context.get("target_ids", []) as Array)
 	if skill_target_text.is_empty():
@@ -10887,10 +11474,12 @@ func record_skill_activation(player_id: int, skill_id: String, context: Dictiona
 	var presentation_context: Dictionary = context.duplicate(true)
 	skill_activated.emit(player_id, skill_name, presentation_context)
 	# 实际发动时机；区别于主动按钮提交时的兼容skillAfter，触发技与选择恢复后的发动同样从本入口统一发布。
-	var skill_instance: SkillDefinition = get_skill_instance(player_id, skill_id)
+	var skill_instance: SkillDefinition = get_skill_instance(player_id, instance_key)
 	# 实际发动的纯数据时机负载；包含原上下文、重复标记与当次唯一令牌。
+	# skill_id 保持技能ID语义，instance_key 供按实例订阅方区分同名技能的多份实例。
 	var actual_timing_data: Dictionary = {
-		"skill_id":skill_id,
+		"skill_id":base_skill_id,
+		"instance_key":instance_key,
 		"context":context.duplicate(true),
 		"actual_activation":true,
 		"repeated_activation":bool(context.get("repeated_activation", false)),
@@ -10963,7 +11552,7 @@ func _install_all_character_skills(saved_installed_skill_ids_by_player: Dictiona
 		for mode_skill_id: String in identity_rules.get_mode_skill_ids(player.identity, str(state.match_mode)):
 			if not skill_ids_to_install.has(mode_skill_id):
 				skill_ids_to_install.append(mode_skill_id)
-		# 该玩家存档时实际安装的技能ID；没有条目表示这是新开局或旧存档，此时不做任何裁剪。
+		# 该玩家存档时实际安装的技能实例键；没有条目表示这是新开局或旧存档，此时不做任何裁剪。
 		var has_saved_installed_skill_ids: bool = saved_installed_skill_ids_by_player.has(player.player_id)
 		var saved_installed_skill_ids: Array = saved_installed_skill_ids_by_player.get(player.player_id, []) as Array
 		for skill_id: String in skill_ids_to_install:
@@ -10978,9 +11567,31 @@ func _install_all_character_skills(saved_installed_skill_ids_by_player: Dictiona
 			# 领袖技归属校验；非领袖不会安装实例、订阅时机或进入主动技能列表，等价于本局不拥有该技能。
 			if skill.leader_skill and player.identity != "leader":
 				continue
+			# 固有与模式技能永远安装为首实例，实例键即技能ID；显式写入可避免依赖“未设置即回落”的隐式约定。
+			skill.set_instance_key(skill_id)
 			skill.bind(self, player.player_id)
 			player_skills[skill_id] = skill
 			skill.install()
+		# 读档还原同名技能的额外实例：首实例已由上面的固有/模式循环安装，这里只补序号实例。
+		# 旧存档的列表里全是纯技能ID（不含“#”），因此本循环对旧存档完全不执行，行为与改动前逐字节一致。
+		if has_saved_installed_skill_ids:
+			for saved_key_variant: Variant in saved_installed_skill_ids:
+				# 当前存档实例键；首实例（不含“#”序号）已在上一步安装，重复项直接跳过。
+				var saved_key: String = str(saved_key_variant)
+				if saved_key.is_empty() or not saved_key.contains("#") or player_skills.has(saved_key):
+					continue
+				# 还原技能ID后按静态定义新建实例；技能定义缺失时明确报错，不再静默丢弃导致读档后技能数量悄悄变少。
+				var restored_base_skill_id: String = SkillDefinition.base_skill_id_of(saved_key)
+				var restored_skill: SkillDefinition = GameDatabase.create_skill(restored_base_skill_id)
+				if restored_skill == null:
+					push_error("无法为玩家%d还原技能实例：%s" % [player.player_id, saved_key])
+					continue
+				if restored_skill.leader_skill and player.identity != "leader":
+					continue
+				restored_skill.set_instance_key(saved_key)
+				restored_skill.bind(self, player.player_id)
+				player_skills[saved_key] = restored_skill
+				restored_skill.install()
 		skill_instances_by_player[player.player_id] = player_skills
 		# 开局与读档的完整安装同样以本入口收尾，因此在这里统一落实「武将牌始终背面向上」类锁定规则。
 		# 放在映射赋值之后：锁定查询只读取该映射，安装循环内查不到刚落装的新实例。
@@ -11037,6 +11648,9 @@ func _reinstall_character_skills_for_player(player: PlayerState) -> void:
 ## 这是「失去技能」效果的**唯一通用接口**，供后续任何“失去某个技能”“失去所有技能”的设计直接调用。
 ## 语义要点：只移除**此刻真实安装**的技能，不记录任何名单、不做后续拦截；因此之后通过机缘卡、军功、复原武将牌
 ## 或换将等来源再获得同一技能时照常安装与发动（“失去”是一次性事实，不是不可逆的状态）。
+## 参数接受实例键或技能ID，两者语义不同且都必须保留：
+##   传实例键（含“#”序号）→ 只移除那一份实例，同名技能的其他实例继续安装；
+##   传技能ID → 移除该技能的**全部**实例（“这个技能没有了”），这是既有调用方（换将、复原武将牌）依赖的语义。
 ## 返回值：确实移除了实例或记录时为true；技能本来就不属于该角色时返回false，不写日志也不广播。
 func remove_skill(player_id: int, skill_id: String, reason: String = "") -> bool:
 	# 目标角色；无效角色没有任何可移除的技能。
@@ -11045,26 +11659,38 @@ func remove_skill(player_id: int, skill_id: String, reason: String = "") -> bool
 		return false
 	# 当前技能实例表；固有、模式、临时与局内获得技能共用同一容器。
 	var player_skills: Dictionary = skill_instances_by_player.get(player_id, {}) as Dictionary
-	# 当前技能实例；为空表示该技能此刻没有安装（可能本来就不属于该角色，或已被移除过）。
-	var skill: SkillDefinition = player_skills.get(skill_id) as SkillDefinition
-	# 获得/临时技能记录；实例为空但记录仍在时同样算“拥有”，必须一并清除，避免界面与AI读到幽灵技能。
-	var had_acquired_record: bool = player.acquired_skills.has(skill_id)
-	var had_temporary_record: bool = player.temporary_skills.has(skill_id)
-	if skill == null and not had_acquired_record and not had_temporary_record:
+	# 待移除的实例键集合；三个来源容器的键都是实例键，因此统一按同一规则筛选，顺序稳定。
+	var target_keys: Array[String] = []
+	# 调用方是否显式指定了某一份实例；含“#”序号即视为显式实例键。
+	var explicit_instance_key: bool = skill_id.contains("#")
+	for container_variant: Variant in [player_skills, player.acquired_skills, player.temporary_skills]:
+		# 当前来源容器；实例为空但记录仍在时同样算“拥有”，必须一并清除，避免界面与AI读到幽灵技能。
+		var container: Dictionary = container_variant as Dictionary
+		for key_variant: Variant in container.keys():
+			# 当前实例键；显式实例键要求精确相等，技能ID要求还原后相等。
+			var key: String = str(key_variant)
+			var matched: bool = key == skill_id if explicit_instance_key else SkillDefinition.base_skill_id_of(key) == skill_id
+			if matched and not target_keys.has(key):
+				target_keys.append(key)
+	if target_keys.is_empty():
 		return false
-	# 卸载会同步清理该技能声明的持续标记、时机订阅与纯查询修正器；必须先卸载再摘除引用。
-	if skill != null:
-		skill.uninstall()
-	player_skills.erase(skill_id)
+	# 逐份实例卸载：卸载会同步清理该技能声明的持续标记、时机订阅与纯查询修正器；必须先卸载再摘除引用。
+	for key: String in target_keys:
+		var skill: SkillDefinition = player_skills.get(key) as SkillDefinition
+		if skill != null:
+			skill.uninstall()
+		player_skills.erase(key)
+		player.acquired_skills.erase(key)
+		player.temporary_skills.erase(key)
+		# 实例级运行时配置随实例一起清理，避免之后再次获得同名技能时读到上一份实例的残留参数。
+		player.runtime_skill_data.erase(key)
+		# 轮回技公开状态；失去轮回技后不再保留其轮回数、轮回节与永劫标记，否则界面与AI会读到已不存在的进度。
+		# 走轮回服务而非直接删键：该入口同时刷新永劫公开文本，使“技能被卸载”的清理责任只有一份实现。
+		if reincarnation_skill_service != null:
+			reincarnation_skill_service.clear_skill_state(player_id, key)
+		else:
+			player.reincarnation_skills.erase(key)
 	skill_instances_by_player[player_id] = player_skills
-	player.acquired_skills.erase(skill_id)
-	player.temporary_skills.erase(skill_id)
-	# 轮回技公开状态；失去轮回技后不再保留其轮回数、轮回节与永劫标记，否则界面与AI会读到已不存在的进度。
-	# 走轮回服务而非直接删键：该入口同时刷新永劫公开文本，使“技能被卸载”的清理责任只有一份实现。
-	if reincarnation_skill_service != null:
-		reincarnation_skill_service.clear_skill_state(player_id, skill_id)
-	else:
-		player.reincarnation_skills.erase(skill_id)
 	add_log("%s失去了技能【%s】%s。" % [format_player_state_log_name(player), format_skill_log_name(skill_id), "（%s）" % reason if not reason.is_empty() else ""])
 	_emit_state()
 	return true
@@ -11080,8 +11706,9 @@ func remove_all_skills(player_id: int, reason: String = "") -> bool:
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null:
 		return false
-	# 本次清算涉及的技能ID；必须在移除之前采集，否则“曾拥有的技能”这一信息会随实例一起消失。
-	var removed_skill_ids: Array[String] = get_installed_skill_ids(player_id)
+	# 本次清算涉及的技能实例键；必须在移除之前采集，否则“曾拥有的技能”这一信息会随实例一起消失。
+	# 这里必须用实例键而非技能ID：技能ID去重后会漏掉同名技能的第二份及以后的实例，导致它们残留。
+	var removed_skill_ids: Array[String] = get_installed_skill_keys(player_id)
 	for acquired_skill_id_variant: Variant in player.acquired_skills.keys():
 		var acquired_skill_id: String = str(acquired_skill_id_variant)
 		if not removed_skill_ids.has(acquired_skill_id):
@@ -11102,6 +11729,8 @@ func remove_all_skills(player_id: int, reason: String = "") -> bool:
 	player.recorded_card_names.clear()
 	# 技能已用牌名同理：技能已被移除，其私有历史不再有读者，保留会让复原后的同名技能误认为已经用过。
 	player.skill_used_card_names.clear()
+	# 实例级技能运行时配置同理：没有任何技能实例后这些配置已无读者，保留会让之后重新获得的同名技能读到残留参数。
+	player.runtime_skill_data.clear()
 	add_log("%s失去了全部技能%s。" % [format_player_state_log_name(player), "（%s）" % reason if not reason.is_empty() else ""])
 	_emit_state()
 	return true
@@ -11156,25 +11785,32 @@ func get_recorded_card_names(player_id: int) -> Array[String]:
 
 
 ## 为一个技能登记一条“已以此法使用过的牌名”；重复登记保持幂等并返回 false，供技能区分首次登记。
-## 与 record_card_name 分开保存：容器键为技能ID，因此不同技能可以各自维护互不干扰的牌名集合，
+## 与 record_card_name 分开保存：容器键为技能实例键，因此不同技能可以各自维护互不干扰的牌名集合，
 ## 【解构】【灵感】【看破】共用的 recorded_card_names 语义不会被污染。
 ## 该事实进入公开快照（技能展示、对手AI与局域网观察者读取同一份数据），登记成功后才广播状态。
+## 参数接受实例键或技能ID：内容脚本传技能ID时落在该技能的首实例上；
+## 需要「同名技能的多份实例各自记录已用牌名」的技能应改传 get_instance_key()，否则多份实例共享同一集合。
 func add_skill_used_card_name(player_id: int, skill_id: String, definition_id: String) -> bool:
 	# 目标角色；不存在时无处登记。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or skill_id.is_empty() or definition_id.is_empty():
 		return false
-	# 当前技能已用牌名数组；按技能ID懒建，未使用过的技能不占用快照空间。
-	var used_names: Array = _get_skill_used_card_names_array(player, skill_id)
+	# 记录键；优先取容器中真实存在的实例键，实例已卸载但记录仍在时回落到调用方传入的键。
+	var usage_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if usage_key.is_empty():
+		usage_key = skill_id
+	# 当前技能已用牌名数组；按实例键懒建，未使用过的技能不占用快照空间。
+	var used_names: Array = _get_skill_used_card_names_array(player, usage_key)
 	if used_names.has(definition_id):
 		return false
 	used_names.append(definition_id)
-	player.skill_used_card_names[skill_id] = used_names
+	player.skill_used_card_names[usage_key] = used_names
 	_emit_state()
 	return true
 
 
 ## 返回指定技能已经以此法使用过的牌名列表副本；未登记、角色或技能无效时返回空数组。
+## 参数接受实例键或技能ID，解析规则与 add_skill_used_card_name 完全一致，保证写入与读取落在同一条记录上。
 func get_skill_used_card_names(player_id: int, skill_id: String) -> Array[String]:
 	# 强类型返回结果；字典内部保存无类型数组以兼容存档往返，边界处统一转换为稳定类型。
 	var result: Array[String] = []
@@ -11182,7 +11818,11 @@ func get_skill_used_card_names(player_id: int, skill_id: String) -> Array[String
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or skill_id.is_empty():
 		return result
-	for name_variant: Variant in _get_skill_used_card_names_array(player, skill_id):
+	# 读取键；与写入使用同一解析规则，避免同名技能的多份实例互相读到对方的记录。
+	var usage_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if usage_key.is_empty():
+		usage_key = skill_id
+	for name_variant: Variant in _get_skill_used_card_names_array(player, usage_key):
 		result.append(str(name_variant))
 	return result
 
@@ -12320,8 +12960,8 @@ func continue_after_standalone_joy_performance(context: Dictionary) -> void:
 	var skill_id: String = str(context.get("skill_id", ""))
 	if state == null or state.game_over or skill_owner_id < 0 or skill_id.is_empty():
 		return
-	# 当前运行时技能实例；换将或技能重装后武将代次不一致时安全跳过，不再执行旧实例的后续。
-	var skill: SkillDefinition = get_skill_instance(skill_owner_id, skill_id)
+	# 当前运行时技能实例；优先按 instance_key 精确命中，换将或技能重装后武将代次不一致时安全跳过。
+	var skill: SkillDefinition = _resolve_skill_instance_from_context(context)
 	if skill == null or not skill.matches_character_generation(int(context.get("skill_character_generation", -1))):
 		return
 	# 完成上下文副本；技能只读取稳定值，不得通过本字典改写调用方的运行时对象。
@@ -13826,6 +14466,86 @@ func execute_cardless_virtual_card_use(actor_id: int, virtual_card_definition_id
 	return true
 
 
+## 把位于摸牌堆或弃牌堆的实体牌作为一次**真实用牌**结算。
+##
+## 【为什么必须新建】既有两条通路都不合格：
+## ① `_equip_conquest_enemy_from_piles` 是私有函数（技能不可调用）且直接 `equip_from_processing`，
+##    完全绕过 useCard 时机、次数上限与目标校验；
+## ② 两个虚拟牌入口只接受「虚拟牌定义」，无法使用牌堆里已经存在的**实体牌**。
+##
+## 【执行顺序】与普通出牌同源：权威定位 → 区域校验 → 目标归一化 → 合法性复核 → 统一移牌进处理区 → 完整用牌管线。
+## 因此 `useCard*` 时机、出牌阶段次数上限、距离与目标存活校验全部照常生效；
+## 牌进入处理区后由卡牌自身的 `resolve` 决定最终去向（装备牌会调用 `equip_from_processing`）。
+##
+## 【限制】只接受**牌堆两个区域**中的牌：本端口的用途是「使用牌堆里的牌」，
+## 手牌、装备区、判定区的牌各自有既有通路，混用会让「这张牌到底从哪来」变得不可追溯。
+## 返回 true 表示已经进入用牌管线；任何前置校验失败都返回 false 且**零副作用**。
+func execute_pile_card_use(actor_id: int, card_uid: int, target_ids: Array[int], rule_overrides: Dictionary = {}, virtual_storage: Dictionary = {}) -> bool:
+	if state == null or state.game_over:
+		return false
+	# 行动者状态；死亡或离场角色不能使用任何牌。
+	var actor: PlayerState = state.get_player(actor_id)
+	if actor == null or not actor.alive or actor.out_of_game:
+		return false
+	# 牌的权威位置；缺失表示该 UID 不在任何区域。
+	var location: Dictionary = _find_card_location_by_uid(card_uid)
+	if location.is_empty():
+		return false
+	# 被使用的实体牌；位置查询已保证存在，此处仍显式判空以防御异常历史数据。
+	var card: CardInstance = location.get("card") as CardInstance
+	if card == null:
+		return false
+	# 所在区域；只允许牌堆两个区域，其他区域走各自的既有通路。
+	var zone: String = str(location.get("zone", ""))
+	if zone != "draw_pile" and zone != "discard_pile":
+		return false
+	# 目标归一化；规则覆写必须一并传入，否则会与紧随其后的复核各用一套 target_mode 而互相否决。
+	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, card, target_ids, rule_overrides)
+	# 完整合法性复核（含次数上限、距离、目标存活）；非空字符串即拒绝原因。
+	if not card_rules.validate_use(actor_id, card, normalized_target_ids).is_empty():
+		return false
+	_ensure_card_movement()
+	# 统一移牌进处理区；被时机取消时返回 null，本次用牌整体不发生。
+	if _move_card_with_timings(card, "processing", -1, "pile_card_use", state.current_event_id) == null:
+		return false
+	_execute_card_use(actor_id, card, normalized_target_ids, [], false, target_ids, virtual_storage)
+	return true
+
+
+## 随机使用摸牌堆中的一张装备牌；没有装备牌时返回 false 且不消耗随机数。
+##
+## 【随机源】候选下标必须经 `pick_random_candidate_index` 取得并写入 `random_history`，
+## 否则回放与联机对局无法复现同一张被使用的牌（本项目禁止在规则层直接调用 `randi()`）。
+## 【目标】装备牌的目标模式固定为 `self`，因此目标数组恒为使用者本人。
+func use_random_equipment_card_from_draw_pile(player_id: int, reason: String = "use_random_pile_equipment") -> bool:
+	if state == null or state.game_over:
+		return false
+	# 行动者状态；死亡或离场角色不能使用任何牌。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 摸牌堆中的全部装备牌 UID；顺序固定为牌堆顺序，保证候选枚举可复现。
+	var candidate_uids: Array[int] = []
+	for card: CardInstance in state.draw_pile:
+		if str(GameDatabase.get_card(card.definition_id).get("type", "")) == "equipment":
+			candidate_uids.append(card.uid)
+	if candidate_uids.is_empty():
+		add_log("%s的%s未找到可使用的装备牌。" % [format_player_state_log_name(player), format_log_reason(reason)])
+		return false
+	# 权威随机下标；历史数据记录来源与候选数，便于回放核对。
+	var selected_index: int = pick_random_candidate_index(candidate_uids.size(), "use_random_pile_equipment", {"player_id":player_id, "reason":reason, "candidate_count":candidate_uids.size()})
+	if selected_index < 0 or selected_index >= candidate_uids.size():
+		return false
+	# 被选中的装备牌 UID；随后走与普通出牌同源的真实用牌管线。
+	var selected_uid: int = candidate_uids[selected_index]
+	# 装备牌的目标模式为 self，因此目标固定为使用者本人。
+	var equipment_target_ids: Array[int] = [player_id]
+	if not execute_pile_card_use(player_id, selected_uid, equipment_target_ids, {}, {"source_skill_id":reason}):
+		return false
+	add_log("%s因%s随机使用了摸牌堆中的一张装备牌。" % [format_player_state_log_name(player), format_log_reason(reason)])
+	return true
+
+
 ## 按 UID 查找玩家可作为转化材料的当前拥有牌；支持普通手牌、木牛“粮”与已装备牌。
 func _find_owned_virtual_material(player_id: int, card_uid: int) -> CardInstance:
 	# 材料持有者；不存在时不能从任何区域提供转化材料。
@@ -14632,7 +15352,8 @@ func _recast_hand_cards_common(player_id: int, card_uids: Array[int], single_car
 		# 同一张牌同样不算“使用”或“打出”，所以这里不派发 useCard/respond，也不进入处理区。
 		_move_to_discard(card, -2, false)
 		if single_card_log:
-			add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_card_name(definition)])
+			# 牌名走实例基础牌名入口：造出来的牌被重铸时，日志里报出的应是它自己的牌名。
+			add_log("%s重铸了%s。" % [format_player_state_log_name(player), GameSettings.resolve_instance_card_name(card.to_dict(), definition)])
 		recast_count += 1
 	if recast_count <= 0:
 		return 0
@@ -14880,6 +15601,14 @@ func _complete_finish_turn(player_id: int) -> void:
 	# 匹配条件为“登记时的回合角色 + 回合号”同时成立，因此无关角色的回合结束不会误清除别的登记；
 	# 翻面被跳过的回合不派发 phaseAfter，其登记改由下一个真实回合结束清除（跳过回合不存在回合结束语义）。
 	_clear_turn_input_delegation(player_id, player_id, state.turn_number)
+	# 回合域「不可响应」到期：登记时记下的是「登记时所在回合的角色 + 回合号」，
+	# 因此只有登记回合真正结束才清除，翻面被跳过的回合不经过本入口，其登记由下一个真实回合结束清除。
+	clear_response_blocked_for_turn(player_id, state.turn_number)
+	# 回合域手牌上限加成到期；「±N直到回合结束」的窗口随本回合结束关闭。
+	# 必须逐个角色清零：加成可能登记在**非当前回合角色**身上（例如在别人回合里触发的缺陷效果）。
+	for bonus_player: PlayerState in state.players:
+		if bonus_player != null and bonus_player.turn_hand_limit_bonus != 0:
+			clear_turn_hand_limit_bonus(bonus_player.player_id, "turn_end")
 	_record_runtime_event("phaseAfter", "phase", {"player_id":player_id})
 	_run_phase_notification("phaseAfter", player_id, {"turn_number":state.turn_number}, Callable(self, "_continue_after_phase_after").bind(player_id))
 
@@ -15841,10 +16570,11 @@ func _build_conquest_save_data(resume_kind: String, acting_player_id: int) -> Di
 	for player: PlayerState in state.players:
 		# 单名玩家的权威快照；网络快照缺少的每回合字段与完整历史在此补充，供恢复后技能查询保持一致。
 		var player_data: Dictionary = player.to_dict(player.player_id, true)
-		# 该玩家存档时**实际安装**的技能ID；读档据此只装配当时真正拥有的技能。
+		# 该玩家存档时**实际安装**的技能实例键；读档据此只装配当时真正拥有的技能。
 		# 失去技能是即时生效的一次性事实，若不在存档中记录实际技能集合，读档会把固有技能重新装配，
 		# 相当于用一次“存读档”撤销了【留白】的代价；这里记录的是“当前技能”，不是任何不可逆名单。
-		player_data["installed_skill_ids"] = get_installed_skill_ids(player.player_id)
+		# 记录实例键而非技能ID：同名技能的多份实例必须逐份往返，按技能ID去重会让第二份实例在存读档后消失。
+		player_data["installed_skill_ids"] = get_installed_skill_keys(player.player_id)
 		player_data["slash_count"] = player.slash_count
 		player_data["wooden_ox_used"] = player.wooden_ox_used
 		player_data["skipped_phases"] = player.skipped_phases.duplicate(true)
@@ -16165,22 +16895,31 @@ func _reinstall_saved_runtime_skills(player: PlayerState) -> void:
 		return
 	# 当前玩家技能实例表；固有与模式技能在统一安装入口已经写入。
 	var player_skills: Dictionary = skill_instances_by_player.get(player.player_id, {}) as Dictionary
-	# 待补装技能ID；获得技能与临时技能共用同一运行时容器，同名只安装一次。
+	# 待补装技能实例键；获得技能与临时技能共用同一运行时容器，同一实例键只安装一次。
+	# 键是实例键而非技能ID：同名技能的多份实例各有独立记录，必须逐份补装，否则读档后只剩首实例。
 	var runtime_skill_ids: Array[String] = []
 	for skill_id_variant: Variant in player.acquired_skills.keys():
 		runtime_skill_ids.append(str(skill_id_variant))
 	for skill_id_variant: Variant in player.temporary_skills.keys():
-		# 当前临时技能ID；已在获得技能列表中时不重复登记。
+		# 当前临时技能实例键；已在获得技能列表中时不重复登记。
 		var temporary_skill_id: String = str(skill_id_variant)
 		if not runtime_skill_ids.has(temporary_skill_id):
 			runtime_skill_ids.append(temporary_skill_id)
 	for skill_id: String in runtime_skill_ids:
 		if player_skills.has(skill_id):
 			continue
+		# 还原后的技能ID；记录里的 skill_id 字段是权威来源，旧存档缺失该字段时回落到实例键还原结果。
+		var restored_base_skill_id: String = str((player.acquired_skills.get(skill_id, {}) as Dictionary).get("skill_id", ""))
+		if restored_base_skill_id.is_empty():
+			restored_base_skill_id = str((player.temporary_skills.get(skill_id, {}) as Dictionary).get("skill_id", ""))
+		if restored_base_skill_id.is_empty():
+			restored_base_skill_id = SkillDefinition.base_skill_id_of(skill_id)
 		# 新技能运行时实例；目录缺失或领袖技一律跳过，对应存档记录保留但不产生实例。
-		var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+		var skill: SkillDefinition = GameDatabase.create_skill(restored_base_skill_id)
 		if skill == null or skill.leader_skill:
 			continue
+		# 按存档实例键安装：首实例键即技能ID，序号实例保持原有编号，读档后额度与配置仍能对上。
+		skill.set_instance_key(skill_id)
 		skill.bind(self, player.player_id)
 		player_skills[skill_id] = skill
 		skill.install()
@@ -16653,6 +17392,287 @@ func _reshuffle_discard_pile() -> void:
 		state.draw_pile.append(existing_card)
 	_record_runtime_event("washCard", "card_move", {"card_count":state.draw_pile.size()}, {"to_zone":"draw_pile"})
 	add_log("弃牌堆已重新洗入摸牌堆。")
+
+
+## 判断一个牌名能否用于运行时造牌；返回空字符串表示可用，否则返回玩家可读的拒绝原因。
+## 校验口径固定为「非空 → 去首尾空白后长度 1..MINT_CARD_NAME_MAX_LENGTH → 不含禁止字符 → 不与任何已有牌名重复」。
+## 本入口是**唯一**的牌名合法性判据：界面只做即时提示，最终仍由造牌端口复核，两者必须调用同一函数。
+func is_card_name_available(card_name: String) -> bool:
+	return get_card_name_rejection_reason(card_name).is_empty()
+
+
+## 返回牌名不可用的具体原因；可用时返回空字符串。界面直接显示该文本，因此措辞必须面向玩家。
+func get_card_name_rejection_reason(card_name: String) -> String:
+	# 去首尾空白后的牌名；存档与日志里不保留首尾空白，因此校验也必须按去空白后的结果进行。
+	var normalized_name: String = card_name.strip_edges()
+	if normalized_name.is_empty():
+		return "牌名不能为空。"
+	if normalized_name.length() > MINT_CARD_NAME_MAX_LENGTH:
+		return "牌名最多%d个字。" % MINT_CARD_NAME_MAX_LENGTH
+	for forbidden_character: String in MINT_CARD_NAME_FORBIDDEN_CHARACTERS:
+		if normalized_name.contains(forbidden_character):
+			return "牌名不能包含换行、制表符或“|”。"
+	# 静态定义重名；走数据库双名索引，与信息框的【牌名】解析口径完全一致。
+	if GameDatabase.is_card_display_name_taken(normalized_name):
+		return "已有同名卡牌。"
+	# 本局已造出的牌重名；这些牌刻意不写进任何数据库容器，因此必须在这里单独比对。
+	if collect_minted_card_names().has(normalized_name):
+		return "已有同名卡牌。"
+	return ""
+
+
+## 收集本局已经造出来的牌名；按固定遍历顺序扫描全部区域，保证结果可复现。
+## 遍历顺序固定为：摸牌堆 → 弃牌堆 → 处理区 → 按 player_id 升序的玩家（手牌 → 装备区 → 判定区 → 木牛流马）。
+## 只收集 custom_display_name 非空的实体；正式牌堆里的牌牌名由定义决定，不参与本列表。
+func collect_minted_card_names() -> Array[String]:
+	# 已造牌名结果；保持首次出现的顺序，调用方按成员判定使用。
+	var names: Array[String] = []
+	if state == null:
+		return names
+	for card: CardInstance in state.draw_pile:
+		_append_minted_card_name(names, card)
+	for card: CardInstance in state.discard_pile:
+		_append_minted_card_name(names, card)
+	# 处理区是全局唯一区域（不挂在玩家上）；它同样可能持有造出来的牌，因此必须一起扫描。
+	for card: CardInstance in state.processing_area:
+		_append_minted_card_name(names, card)
+	# 玩家顺序固定为 player_id 升序；state.players 的座次顺序可能与 ID 顺序不同，因此必须显式排序。
+	var sorted_player_ids: Array[int] = []
+	for player: PlayerState in state.players:
+		sorted_player_ids.append(player.player_id)
+	sorted_player_ids.sort()
+	for player_id: int in sorted_player_ids:
+		# 当前玩家；座次表在扫描过程中不变，此处只做只读遍历。
+		var player: PlayerState = state.get_player(player_id)
+		if player == null:
+			continue
+		for card: CardInstance in player.hand:
+			_append_minted_card_name(names, card)
+		for slot: String in PlayerState.EQUIPMENT_SLOT_ORDER:
+			_append_minted_card_name(names, player.equipment.get(slot) as CardInstance)
+		for card: CardInstance in player.judgment_area:
+			_append_minted_card_name(names, card)
+		for card: CardInstance in player.wooden_ox_storage:
+			_append_minted_card_name(names, card)
+	return names
+
+
+## 把一个实体的自定义牌名追加进结果；非造牌实体（自定义牌名为空）与重复项直接跳过。
+func _append_minted_card_name(names: Array[String], card: CardInstance) -> void:
+	if card == null:
+		return
+	# 当前实体自带的自定义牌名；空字符串表示这张牌不是造出来的。
+	var custom_display_name: String = card.get_display_name_override()
+	if custom_display_name.is_empty() or names.has(custom_display_name):
+		return
+	names.append(custom_display_name)
+
+
+## 返回本局造牌时**全部已被占用**的牌名（静态定义双名 ∪ 本局已造出的牌名），按字典序排列。
+##
+## 【用途】造牌界面需要在玩家输入过程中即时提示重名；它只能拿到只读快照，最终唯一性仍由造牌端口复核。
+## 【口径】静态部分走 `GameDatabase.get_all_card_display_names()`（与 `is_card_display_name_taken` 同源），
+## 本局部分走 `collect_minted_card_names()`（与 `get_card_name_rejection_reason` 同源），因此界面提示
+## 与权威拒绝**不可能出现两套标准**——界面认为可用而权威拒绝，或反之，都是不可接受的体验。
+func collect_taken_card_display_names() -> Array[String]:
+	# 结果牌名；静态名在前、本局造出的名在后，最后统一排序，保证顺序与调用时机无关。
+	var names: Array[String] = []
+	for static_name: String in GameDatabase.get_all_card_display_names():
+		names.append(static_name)
+	for minted_name: String in collect_minted_card_names():
+		if not names.has(minted_name):
+			names.append(minted_name)
+	names.sort()
+	return names
+
+
+## 校验注入窗口的控制项；返回空字符串表示通过，否则返回玩家可读的拒绝原因。
+##
+## 【格式】`yinlang|compose|<时机键>|<效果键>`，共 4 段。
+## 【为什么必须在这里再校验一次池归属】自由控制项请求跳过了 `control_ids` 白名单，
+## 如果只校验前缀，客户端就能提交任意字符串作为效果键；技能会走到「未实现」分支而静默什么都不做，
+## 表现为「点了确定但技能没生效」，且没有任何报错，属于最难排查的一类问题。
+func _validate_yinlang_compose_control_id(control_id: String) -> String:
+	if not control_id.begins_with(YINLANG_COMPOSE_CONTROL_PREFIX):
+		return "组合选择格式无效。"
+	# 分段结果；时机键与效果键各占一段，牌名分隔符已被禁止，因此不存在歧义。
+	var segments: PackedStringArray = control_id.split(YINLANG_CONTROL_SEPARATOR)
+	if segments.size() != 4:
+		return "组合选择格式无效。"
+	# 时机键与效果键；必须分别属于时机池与本次声明的类别池。
+	var timing_key: String = segments[2]
+	var effect_key: String = segments[3]
+	if not ComposedSkillPools.is_valid_timing_key(timing_key):
+		return "选择的时机无效。"
+	# 本次请求声明的类别池；由创建请求的技能写入，客户端无法改写。
+	var pool_kind: String = str((_pending_card_choice.get("context", {}) as Dictionary).get("pool_kind", ""))
+	if not ComposedSkillPools.is_valid_effect_key(pool_kind, effect_key):
+		return "选择的效果无效。"
+	return ""
+
+
+## 校验以太窗口的控制项；返回空字符串表示通过，否则返回玩家可读的拒绝原因。
+##
+## 【格式】`yinlang|mint|<牌名>|<花色>|<点数>|<被复制牌定义ID>`，共 6 段（前两段是固定前缀）。
+## 【点数】点数以十进制文本传输，界面与协议都使用 1..13；非法数字必须在这里拒绝，
+## 因为 `int()` 对 "abc" 会返回 0 而不报错，直接放行会造出一张点数为 0 的牌。
+func _validate_yinlang_mint_control_id(control_id: String) -> String:
+	if not control_id.begins_with(YINLANG_MINT_CONTROL_PREFIX):
+		return "造牌选择格式无效。"
+	# 分段结果；牌名禁止包含分隔符，因此分段数量恒等于字段数。
+	var segments: PackedStringArray = control_id.split(YINLANG_CONTROL_SEPARATOR)
+	if segments.size() != YINLANG_MINT_CONTROL_FIELD_COUNT:
+		return "造牌选择格式无效。"
+	# 牌名、花色、点数文本与被复制牌定义ID。
+	var custom_name: String = segments[2]
+	var suit: String = segments[3]
+	var rank_text: String = segments[4]
+	var definition_id: String = segments[5]
+	# 牌名走与造牌端口完全相同的判据；重名、空名、超长与禁止字符都在这里一次性拒绝。
+	var name_error: String = get_card_name_rejection_reason(custom_name)
+	if not name_error.is_empty():
+		return name_error
+	if not CardInstance.is_valid_suit(suit):
+		return "花色无效。"
+	if not rank_text.is_valid_int():
+		return "点数无效。"
+	# 点数数值；必须在 1..13 之内。
+	var rank: int = int(rank_text)
+	if not CardInstance.is_valid_rank(rank):
+		return "点数无效。"
+	# 被复制牌定义；不存在时不能造出一张没有牌效的牌。
+	if GameDatabase.get_card(definition_id).is_empty():
+		return "被复制的牌不存在。"
+	return ""
+
+
+## 运行时造牌：按一张已有卡牌的定义创建新实体牌，赋予自定义牌名与铸造来源，并直接放进目标玩家手牌。
+##
+## 【返回值】成功返回新牌的 UID（正整数）；任何一步校验失败返回 -1，且**状态零变化**。
+## 之所以把全部校验放在创建实体之前：造牌失败必须是可重试的空操作，否则会白白消耗 UID 并可能污染牌名集合。
+##
+## 【参数】player_id 是获得这张牌的角色；source_definition_id 是被复制的卡牌定义（新牌的牌效、类别、
+## 目标模式、响应模式、AI 画像全部继承它）；custom_name 是玩家指定的新牌名；suit / rank 由玩家指定，
+## **不继承**被复制牌；minted_skill_id 是创造这张牌的技能稳定 ID，供“找出由某技能创造的牌”类效果使用。
+##
+## 【牌名与规则身份分离】新牌在展示与牌名查询层面是 custom_name，在效果结算层面完全等同于被复制牌。
+## 因此复制【杀】得到的牌**仍然计入【杀】的使用次数与相关技能判定**；这是刻意的设计选择，
+## 详细取舍见 .trellis/tasks/10-19-runtime-card-creation/design.md 的 D1。
+func mint_card_for_player(player_id: int, source_definition_id: String, custom_name: String, suit: String, rank: int, minted_skill_id: String = "") -> int:
+	if state == null or state.game_over:
+		return -1
+	# 被复制的卡牌定义；缺失时无法确定牌效与类别，直接拒绝。
+	if GameDatabase.get_card(source_definition_id).is_empty():
+		return -1
+	# 目标玩家；造出的牌直接进入其手牌，因此该角色必须存在且仍在游戏中。
+	var player: PlayerState = state.get_player(player_id)
+	if player == null or not player.alive or player.out_of_game:
+		return -1
+	# 牌名合法性；与界面提示共用同一判据，权威侧再复核一次。
+	if not is_card_name_available(custom_name):
+		return -1
+	# 花色与点数；复用 CardInstance 的静态校验，保证与视为牌面复制使用同一套取值范围。
+	if not CardInstance.is_valid_suit(suit) or not CardInstance.is_valid_rank(rank):
+		return -1
+	# 去首尾空白后的牌名；写入实体的是规范化结果，避免同一牌名因空白差异绕过重名检查。
+	var normalized_name: String = custom_name.strip_edges()
+	# 新实体牌；definition_id 直接等于被复制牌，因此存档与回放不需要任何额外持久化。
+	var minted_card: CardInstance = CardInstance.new(source_definition_id, suit, rank)
+	minted_card.custom_display_name = normalized_name
+	minted_card.minted_skill_id = minted_skill_id
+	# 入区；走「新牌入区」统一通路，移牌事件与既有摸牌/置牌形状一致。
+	if card_movement.insert_new_card_into_zone(minted_card, "hand", player_id, MINT_CARD_REASON, state.current_event_id) == null:
+		return -1
+	_record_runtime_event("mintCard", "card_mint", {
+		"player_id":player_id,
+		"card_uid":minted_card.uid,
+		"definition_id":source_definition_id,
+		"custom_display_name":normalized_name,
+		"minted_skill_id":minted_skill_id,
+	}, {"to_zone":"hand"})
+	add_log("%s创造了名为【%s】的牌。" % [format_player_state_log_name(player), normalized_name])
+	_emit_state()
+	return minted_card.uid
+
+
+## 返回弃牌堆中全部由指定技能创造的牌 UID；从堆顶向下扫描，越晚进入弃牌堆的越靠前。
+## 用 minted_skill_id 而不是牌名识别：造出的牌牌名由玩家自由指定，牌名不是可靠标识，铸造来源才是。
+func get_discard_pile_card_uids_by_skill(skill_id: String) -> Array[int]:
+	return _collect_pile_card_uids_by_skill(state.discard_pile if state != null else [], skill_id)
+
+
+## 返回摸牌堆中全部由指定技能创造的牌 UID；扫描口径与弃牌堆版本完全一致。
+func get_draw_pile_card_uids_by_skill(skill_id: String) -> Array[int]:
+	return _collect_pile_card_uids_by_skill(state.draw_pile if state != null else [], skill_id)
+
+
+## 从指定牌堆中收集铸造来源等于 skill_id 的牌 UID；数组末尾为堆顶，因此倒序扫描即“从堆顶向下”。
+func _collect_pile_card_uids_by_skill(pile: Array, skill_id: String) -> Array[int]:
+	# 命中的实体 UID；保持从堆顶向下的顺序，调用方按该顺序取第一张。
+	var result: Array[int] = []
+	if skill_id.is_empty():
+		return result
+	for index: int in range(pile.size() - 1, -1, -1):
+		# 当前实体；异常空项安全跳过，不打断整轮扫描。
+		var card: CardInstance = pile[index] as CardInstance
+		if card == null or card.minted_skill_id != skill_id:
+			continue
+		result.append(card.uid)
+	return result
+
+
+## 令指定角色获得一张由指定技能创造的牌：先在摸牌堆里找，找不到再到弃牌堆里找；都没有则返回 false 且零副作用。
+## 之所以先摸牌堆：牌堆里的牌尚未被任何人看到，入手不会泄露“谁在什么时候弃过它”这类信息。
+func gain_top_minted_card_from_draw_or_discard(player_id: int, skill_id: String, reason: String = "mint_source_gain") -> bool:
+	# 目标角色；与造牌端口使用同一条存活口径。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	if player == null or not player.alive or player.out_of_game:
+		return false
+	# 候选 UID；先摸牌堆后弃牌堆，各自内部已按堆顶优先排序。
+	var candidate_uids: Array[int] = get_draw_pile_card_uids_by_skill(skill_id)
+	candidate_uids.append_array(get_discard_pile_card_uids_by_skill(skill_id))
+	if candidate_uids.is_empty():
+		return false
+	# 命中的实体；找不到（例如同帧内已被其他效果移走）时安全返回假。
+	var target_card: CardInstance = _find_card_location_by_uid(candidate_uids[0]).get("card") as CardInstance
+	if target_card == null:
+		return false
+	card_movement.move_card(target_card, "hand", player_id, reason, state.current_event_id, "", [player_id])
+	add_log("%s获得了%s。" % [format_player_state_log_name(player), format_card_log_name(target_card)])
+	_emit_state()
+	return true
+
+
+## 把弃牌堆中的一张牌洗回摸牌堆的随机位次；不在弃牌堆时返回 false 且零副作用。
+##
+## 【为什么位次要记账】整堆洗牌 `_reshuffle_discard_pile()` 的位次由 `_shuffle_array` 内部消耗权威随机源；
+## 本端口只移动一张牌，若不把位次写进随机历史，回放与联机对局无法复原同一牌序。
+func shuffle_discard_card_into_draw_pile(card_uid: int) -> bool:
+	if state == null or state.game_over:
+		return false
+	# 目标实体；必须确实位于弃牌堆，否则本端口无事可做。
+	var target_card: CardInstance = _find_card_location_by_uid(card_uid).get("card") as CardInstance
+	if target_card == null or target_card.zone != "discard_pile":
+		return false
+	# 目标位次；与 DRAW_PILE_POSITION_* 同为 1 基（1 表示牌堆顶），上限为当前张数加一即“落到最底”。
+	# 空牌堆时上下限同为 1，取值仍然合法，因此不需要为“洗回时牌堆为空”单独分支。
+	var position: int = _rng.randi_range(DRAW_PILE_POSITION_TOP, maxi(state.draw_pile.size(), DRAW_PILE_POSITION_TOP))
+	# 随机历史；位次与牌 UID 一起记录，回放据此复现同一牌序。
+	state.random_history.append({
+		"kind":MINT_CARD_SHUFFLE_HISTORY_KIND,
+		"card_uid":card_uid,
+		"position":position,
+	})
+	# 与整堆洗牌同口径的可见性清理：洗回牌堆的牌恢复为无人知晓。
+	target_card.known_to.clear()
+	target_card.shown = false
+	target_card.private_owner_id = -1
+	target_card.clear_hand_view_as_presentation()
+	card_movement.move_card(target_card, "draw_pile", -1, SECRET_PILE_PLACEMENT_REASON, state.current_event_id, "@%d" % position)
+	_record_runtime_event("washCard", "card_move", {"card_uid":card_uid, "position":position}, {"to_zone":"draw_pile"})
+	add_log("一张牌被洗入了摸牌堆。")
+	_emit_state()
+	return true
 
 
 ## 校验并追加一个使用牌候选动作。
@@ -17765,15 +18785,21 @@ func _restore_offline_view_after_delegation() -> void:
 ## description 传空字符串表示清除覆盖，界面回退静态元数据描述（技能复原时据此回到完整原文）。
 ## 描述文本可以使用成对的删除线标记（与 SkillDescriptionView 的解析标记同一对常量）把已经失效的原文片段划掉。
 ## 返回值：目标角色存在且技能ID非空时返回true；清除一个本就不存在的覆盖同样返回true（幂等）。
+## 参数接受实例键或技能ID：内容脚本传技能ID时写入该技能的首实例；
+## 需要「同名技能的多份实例各自显示不同正文」的技能（组合技能）应改传 get_instance_key()，界面按实例键精确读取。
 func set_skill_display_description(player_id: int, skill_id: String, description: String) -> bool:
 	# 目标角色；无效角色或空技能ID不能建立无法清理的公开状态。
 	var player: PlayerState = state.get_player(player_id) if state != null else null
 	if player == null or skill_id.is_empty():
 		return false
+	# 覆盖记录键；优先取容器中真实存在的实例键，实例尚未安装时回落到调用方传入的键，保证写入不会丢失。
+	var description_key: String = _resolve_skill_instance_key(player_id, skill_id)
+	if description_key.is_empty():
+		description_key = skill_id
 	if description.is_empty():
-		player.dynamic_skill_descriptions.erase(skill_id)
+		player.dynamic_skill_descriptions.erase(description_key)
 	else:
-		player.dynamic_skill_descriptions[skill_id] = description
+		player.dynamic_skill_descriptions[description_key] = description
 	refresh_public_state_snapshot()
 	return true
 
@@ -18072,13 +19098,15 @@ func _append_limited_skill_usage_to_snapshot(snapshot: Dictionary) -> void:
 		# 当前玩家ID；无效占位玩家获得空数组，不尝试读取运行时技能表。
 		var player_id: int = int(player_snapshot.get("player_id", -1))
 		player_snapshot["used_limited_skill_ids"] = get_used_limited_skill_ids(player_id) if player_id >= 0 else []
-		# 已消耗固有额度的全部技能ID；额外包含觉醒技，供技能按钮把觉醒技也显示为“已释放”变淡状态。
+		# 已消耗固有额度的全部技能**实例键**；额外包含觉醒技，供技能按钮把觉醒技也显示为“已释放”变淡状态。
 		# 与 used_limited_skill_ids 分开维护：【光覆】等复原入口只处理普通限定技，不能因界面需要而改变其候选集合。
 		player_snapshot["used_intrinsic_use_skill_ids"] = get_used_limited_skill_ids(player_id, true) if player_id >= 0 else []
-		# 当前实际安装的技能ID；界面据此判断“这个技能现在是否还在这名角色身上”。
+		# 当前实际安装的技能**实例键**；界面据此判断“这个技能现在是否还在这名角色身上”，并逐份渲染同名技能。
 		# 失去技能（如【留白】）会卸载实例，因此该列表随之收缩，悬停资料与右键详情不需要任何名单就能同步收敛；
 		# 反过来，之后新获得的技能会立刻出现在列表里，界面无需额外判定即可显示。
-		player_snapshot["installed_skill_ids"] = get_installed_skill_ids(player_id) if player_id >= 0 else []
+		# 输出实例键而非技能ID：首实例键即技能ID（旧读取方与旧回放不受影响），序号实例键额外保留同名技能的多份实例。
+		# 需要技能ID语义的读取方走 SkillDefinition.collect_snapshot_skill_ids / snapshot_has_skill，两者都会先还原再比较。
+		player_snapshot["installed_skill_ids"] = get_installed_skill_keys(player_id) if player_id >= 0 else []
 
 
 ## 发出面向本地玩家的状态快照，并让网络网关保留公共同步入口。

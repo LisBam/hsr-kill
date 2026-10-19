@@ -62,13 +62,18 @@ func get_attack_range(player_id: int) -> int:
 	var player: PlayerState = state.get_player(player_id)
 	if player == null:
 		return 1
-	# 当前武器实体牌；未装备时返回基础值。
+	# 武器结算后的基础攻击范围；无武器时为1，装备武器时读取卡牌配置的 attack_range。
+	var base_range: int = 1
+	# 当前武器实体牌；未装备时保持基础值1。
 	var weapon: CardInstance = player.get_weapon()
-	if weapon == null:
-		return 1
-	# 当前武器定义；缺失 attack_range 时按1处理以保持规则可运行。
-	var definition: Dictionary = GameDatabase.get_card(weapon.definition_id)
-	return maxi(int(definition.get("attack_range", 1)), 1)
+	if weapon != null:
+		# 当前武器定义；缺失 attack_range 时按1处理以保持规则可运行。
+		var definition: Dictionary = GameDatabase.get_card(weapon.definition_id)
+		base_range = maxi(int(definition.get("attack_range", 1)), 1)
+	# 技能最终攻击范围修正；与距离修正同构，在武器结算后覆盖或调整，查询过程不得消费资源或创建选择。
+	if skill_rule_provider != null and skill_rule_provider.has_method("modify_skill_attack_range"):
+		return maxi(int(skill_rule_provider.call("modify_skill_attack_range", player_id, base_range)), 1)
+	return base_range
 
 
 ## 返回实体牌在当前状态下允许选择的最大目标数；方天画戟对最后一张手牌【杀】的加成在此统一计算。

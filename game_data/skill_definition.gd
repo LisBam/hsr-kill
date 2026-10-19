@@ -40,6 +40,12 @@ var host: Object
 ## 当前技能实例绑定的武将入场代次；-1表示独立测试或未绑定权威角色，正式对局用于隔离换将前后的异步事件。
 var _bound_character_generation: int = -1
 
+## 本实例的实例键；空字符串表示尚未由控制器分配，此时 get_instance_key() 回落到技能 ID。
+## 取值格式为首实例等于技能 ID、后续实例为“<技能ID>#<序号>”（序号从2起取最小可用值），由 MatchController 在安装时分配。
+## 该键是额度记账、轮回登记、发动记录与阿哈时刻参演队列的唯一标识；
+## 默认空字符串保证单实例场景（含既有测试手工构造的实例）与改动前逐字节一致。
+var _instance_key: String = ""
+
 ## 当前技能是否为锁定技；true 表示效果满足条件时强制执行且不创建发动选择，默认 false 表示非锁定技。
 var lock: bool = false
 
@@ -148,6 +154,33 @@ func get_id() -> String:
 	return str(_metadata.get("id", ""))
 
 
+## 返回本实例的实例键；未由控制器分配时回落到技能 ID，因此单实例场景与技能 ID 完全等价。
+## 额度记账、发动记录、轮回登记、阿哈时刻参演队列与快照裁剪都必须使用本键，使用 get_id() 会让同一技能的多份实例互相顶替。
+## 仅用于「实例身份」；需要显示名称、语音或按技能归类时仍应使用 get_id()。
+func get_instance_key() -> String:
+	if _instance_key.is_empty():
+		return get_id()
+	return _instance_key
+
+
+## 设置本实例的实例键；只允许 MatchController 在安装运行时实例时调用，内容脚本不得自行改写。
+## 传入空字符串表示恢复「回落到技能 ID」的默认语义。
+func set_instance_key(instance_key: String) -> void:
+	_instance_key = instance_key
+
+
+## 从实例键还原技能稳定 ID；纯函数，可在快照、界面、AI 与测试中安全共用。
+## 实例键格式为首实例等于技能 ID、后续实例为“<技能ID>#<序号>”，因此取最后一个“#”之前的部分。
+## 用 rfind 而不是 find：即使将来技能 ID 中出现“#”也只会切掉最后一段序号，不会截断技能 ID 本身。
+## 不含“#”时原样返回，旧存档、旧回放与手工构造的纯技能 ID 键因此无需任何迁移。
+static func base_skill_id_of(instance_key: String) -> String:
+	# 最后一个分隔符位置；-1 表示这是纯技能 ID，直接原样返回。
+	var separator_index: int = instance_key.rfind("#")
+	if separator_index < 0:
+		return instance_key
+	return instance_key.substr(0, separator_index)
+
+
 ## 返回技能的非负卖血价值；基础AI按1点等价1张牌修正友方主动卖血与敌方攻击收益。
 func get_sell_blood_value() -> float:
 	return sell_blood_value
@@ -161,7 +194,8 @@ func bind(match_host: Object, player_id: int) -> void:
 	var owner: PlayerState = host.state.get_player(owner_player_id) if host != null and host.get("state") != null else null
 	_bound_character_generation = owner.character_generation if owner != null else -1
 	if reincarnation and host != null and host.has_method("register_reincarnation_skill"):
-		host.call("register_reincarnation_skill", owner_player_id, get_id(), _metadata)
+		# 轮回技按实例键登记：同一轮回技的多份实例各自保存轮回进度，互不覆盖。
+		host.call("register_reincarnation_skill", owner_player_id, get_instance_key(), _metadata)
 
 
 ## 返回技能实例绑定的武将入场代次；规则续接只保存该整数，不保存技能对象引用。
@@ -181,8 +215,10 @@ func matches_character_generation(expected_generation: int = -1) -> bool:
 
 
 ## 返回指定玩家的技能角色操作对象；护盾、失去体力和造成伤害语法均通过该对象进入权威控制器。
+## 记录键传实例键：日志原因与公开事件数据据此可区分同名技能的多份实例；
+## 显示层走 format_log_reason / format_skill_log_name，两者都会先把实例键还原成技能ID，玩家看不到“#序号”。
 func get_skill_player(player_id: int) -> SkillPlayer:
-	return SkillPlayer.new(host, player_id, get_id())
+	return SkillPlayer.new(host, player_id, get_instance_key())
 
 
 ## 返回技能持有者的角色操作对象；适合把持有者作为护盾来源、体力流失来源或伤害来源。
@@ -210,11 +246,12 @@ func announce_activation(context: Dictionary = {}) -> void:
 	_prepare_repeat_descriptor(activation_context)
 	if _repeat_activation_in_progress:
 		activation_context["repeated_activation"] = true
-	host.call("record_skill_activation", owner_player_id, get_id(), activation_context)
+	host.call("record_skill_activation", owner_player_id, get_instance_key(), activation_context)
 	consume_intrinsic_use()
 	# 局内获得技能次数；固有技能会由控制器直接返回true且不写入任何额外状态。
+	# 按实例键消耗：同一技能的多份实例各自持有独立额度，用技能 ID 会让第二份实例顶掉第一份的剩余次数。
 	if host.has_method("consume_acquired_skill_use"):
-		host.call("consume_acquired_skill_use", owner_player_id, get_id())
+		host.call("consume_acquired_skill_use", owner_player_id, get_instance_key())
 
 
 ## 请求目标指示器指向指定角色；供技能在效果实际指向某组目标时独立调用。
@@ -238,7 +275,7 @@ func announce_activation_for_player(activator_player_id: int, context: Dictionar
 	_prepare_repeat_descriptor(activation_context)
 	if _repeat_activation_in_progress:
 		activation_context["repeated_activation"] = true
-	host.call("record_skill_activation", activator_player_id, get_id(), activation_context)
+	host.call("record_skill_activation", activator_player_id, get_instance_key(), activation_context)
 	consume_intrinsic_use()
 
 
@@ -303,43 +340,104 @@ func restore_limited_use() -> void:
 ## 只带武将定义对象，查库会返回空技能表并让整份固有技能静默消失。
 ## 该参数只替换「固有技能从哪来」，**不参与**裁剪判定——installed_skill_ids 规则仍只有本函数一处实现。
 static func collect_snapshot_skill_ids(player_snapshot: Dictionary, native_skill_ids: Array = []) -> Array[String]:
-	# 技能ID结果；既无快照又无显式固有技能表时返回空数组，调用方按“无技能”处理。
+	# 技能ID结果；由实例键集合还原并去重，因此同名技能的多份实例在这里合并为一项。
+	# 单实例场景（键不含“#”）下 base_skill_id_of 是恒等映射，返回值与改动前逐元素相同。
 	var skill_ids: Array[String] = []
+	for skill_key: String in collect_snapshot_skill_keys(player_snapshot, native_skill_ids):
+		# 当前实例键还原出的技能ID；空值与已出现过的技能ID不会重复进入结果。
+		var skill_id: String = base_skill_id_of(skill_key)
+		if not skill_id.is_empty() and not skill_ids.has(skill_id):
+			skill_ids.append(skill_id)
+	return skill_ids
+
+
+## 收集玩家权威快照声明的全部技能实例键并去重；界面按此逐项展示同名技能的每一个实例。
+##
+## 与 collect_snapshot_skill_ids 共用同一套来源清单与 installed_skill_ids 裁剪规则，
+## 两者的关系是「实例粒度」与「技能粒度」：本函数保留“zhuru”与“zhuru#2”两项，
+## collect_snapshot_skill_ids 把两者合并为“zhuru”一项。
+## 枚举顺序固定为 固有 → 模式 → 临时 → 局内获得，与基础 AI 的技能链顺序一致。
+## 纯函数且不依赖任何运行时状态，因此技能规则段、AI 评分实例与内容测试可以共用同一套识别规则。
+static func collect_snapshot_skill_keys(player_snapshot: Dictionary, native_skill_ids: Array = []) -> Array[String]:
+	# 实例键结果；既无快照又无显式固有技能表时返回空数组，调用方按“无技能”处理。
+	var skill_keys: Array[String] = []
 	if player_snapshot.is_empty() and native_skill_ids.is_empty():
-		return skill_ids
+		return skill_keys
 	# 是否按实际安装集合裁剪；只有权威快照会下发该字段。
 	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
-	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
-	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
+	# 当前实际安装的实例键；不裁剪时该数组不会被读取。
+	var installed_skill_keys: Array = player_snapshot.get("installed_skill_ids", []) as Array
 	# 固有技能；调用方显式传入时以它为准，否则由 CharacterDefinition 自动生成的稳定技能ID数组提供。
 	var native_skills: Array = native_skill_ids if not native_skill_ids.is_empty() else (GameDatabase.get_character(str(player_snapshot.get("character_id", ""))).get("skills", []) as Array)
 	for skill_id_variant: Variant in native_skills:
 		# 当前固有技能ID；空值、已被失去与重复项都不会进入结果。
+		# 固有技能永远安装为首实例（键 == 技能ID），因此这里直接用技能ID充当实例键。
 		var native_skill_id: String = str(skill_id_variant)
-		if native_skill_id.is_empty() or skill_ids.has(native_skill_id):
+		if native_skill_id.is_empty() or skill_keys.has(native_skill_id):
 			continue
-		if filter_by_installed and not installed_skill_ids.has(native_skill_id):
+		if filter_by_installed and not _snapshot_installed_has_skill(installed_skill_keys, native_skill_id):
 			continue
-		skill_ids.append(native_skill_id)
+		skill_keys.append(native_skill_id)
 	# 模式技能；飞扬、跋扈等由身份与对局模式决定的技能同样参与“是否拥有”的判定。
 	for skill_id_variant: Variant in player_snapshot.get("mode_skill_ids", []) as Array:
 		# 当前模式技能ID；与固有技能同名时只保留首次出现的一项。
 		var mode_skill_id: String = str(skill_id_variant)
-		if mode_skill_id.is_empty() or skill_ids.has(mode_skill_id):
+		if mode_skill_id.is_empty() or skill_keys.has(mode_skill_id):
 			continue
-		if filter_by_installed and not installed_skill_ids.has(mode_skill_id):
+		if filter_by_installed and not _snapshot_installed_has_skill(installed_skill_keys, mode_skill_id):
 			continue
-		skill_ids.append(mode_skill_id)
-	# 运行时技能映射列表；键为稳定技能ID，值（来源、剩余次数等）与本查询无关。
+		skill_keys.append(mode_skill_id)
+	# 运行时技能映射列表；键为实例键，值（来源、剩余次数等）与本查询无关。
 	for runtime_skill_map_variant: Variant in [player_snapshot.get("temporary_skills", {}), player_snapshot.get("acquired_skills", {})]:
 		# 当前运行时技能映射；键存在即代表此刻拥有，不再按 installed_skill_ids 裁剪。
 		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
-		for skill_id_variant: Variant in runtime_skill_map.keys():
-			# 当前运行时技能ID；已存在的同名技能不会重复加入。
-			var runtime_skill_id: String = str(skill_id_variant)
-			if not runtime_skill_id.is_empty() and not skill_ids.has(runtime_skill_id):
-				skill_ids.append(runtime_skill_id)
-	return skill_ids
+		for skill_key_variant: Variant in runtime_skill_map.keys():
+			# 当前运行时实例键；同名技能的多份实例各自成为一项，因此按实例键（而非技能ID）去重。
+			var runtime_skill_key: String = str(skill_key_variant)
+			if not runtime_skill_key.is_empty() and not skill_keys.has(runtime_skill_key):
+				skill_keys.append(runtime_skill_key)
+	# 固有与模式技能的**序号实例**补全：这两类技能在快照里只声明了技能ID（首实例），
+	# 但同名技能可以经由局内效果获得第二份实例，而该实例键只出现在 installed_skill_ids 中。
+	# 不补全会让「实例粒度」的查询漏掉第二份及以后的实例（技能粒度结果因去重不受影响，因此两者仍然一致）。
+	if filter_by_installed:
+		# 固有与模式技能ID集合；只有这两类技能需要从 installed_skill_ids 补全序号实例。
+		var declared_skill_ids: Array[String] = []
+		for declared_id_variant: Variant in native_skills:
+			declared_skill_ids.append(str(declared_id_variant))
+		for declared_id_variant: Variant in player_snapshot.get("mode_skill_ids", []) as Array:
+			declared_skill_ids.append(str(declared_id_variant))
+		for installed_key_variant: Variant in installed_skill_keys:
+			# 当前已安装实例键；首实例（键 == 技能ID）已由上面的循环加入，这里只补序号实例。
+			var installed_skill_key: String = str(installed_key_variant)
+			if installed_skill_key.is_empty() or skill_keys.has(installed_skill_key):
+				continue
+			if declared_skill_ids.has(base_skill_id_of(installed_skill_key)):
+				skill_keys.append(installed_skill_key)
+	return skill_keys
+
+
+## 判断一个实例键列表（如快照的 installed_skill_ids / used_limited_skill_ids）是否包含指定技能。
+## 传技能ID时只要列表中任一实例键还原后等于该ID即命中（同名技能的多份实例同进同出）；
+## 传实例键时要求精确命中那一份实例。界面、AI与技能脚本共用本入口，避免各处自行拼“技能ID#序号”。
+static func instance_key_list_has_skill(instance_keys: Array, skill_id: String) -> bool:
+	if skill_id.is_empty():
+		return false
+	# 精确命中优先：调用方明确传入实例键时必须只认那一份实例。
+	if instance_keys.has(skill_id):
+		return true
+	# 技能ID语义回退：调用方传入的是纯技能ID（不含“#”），按还原结果匹配该技能的任一实例。
+	if skill_id.contains("#"):
+		return false
+	for instance_key_variant: Variant in instance_keys:
+		if base_skill_id_of(str(instance_key_variant)) == skill_id:
+			return true
+	return false
+
+
+## 判断快照下发的实际安装键集合中是否存在指定技能；按技能ID语义比较，实例键先还原。
+## 纯函数；单实例场景（键不含“#”）与直接字符串比较完全等价，因此不改变既有行为。
+static func _snapshot_installed_has_skill(installed_skill_keys: Array, skill_id: String) -> bool:
+	return instance_key_list_has_skill(installed_skill_keys, skill_id)
 
 
 ## 判断玩家权威快照是否拥有指定技能；语义等价于 collect_snapshot_skill_ids(...).has(skill_id)，
@@ -353,19 +451,26 @@ static func snapshot_has_skill(player_snapshot: Dictionary, skill_id: String, na
 		return false
 	if player_snapshot.is_empty() and native_skill_ids.is_empty():
 		return false
-	# 是否按实际安装集合裁剪；与 collect_snapshot_skill_ids 共用同一判定口径。
+	# 是否按实际安装集合裁剪；与 collect_snapshot_skill_keys 共用同一判定口径。
 	var filter_by_installed: bool = player_snapshot.has("installed_skill_ids")
-	# 当前实际安装的技能ID；不裁剪时该数组不会被读取。
-	var installed_skill_ids: Array = player_snapshot.get("installed_skill_ids", []) as Array
+	# 当前实际安装的实例键；不裁剪时该数组不会被读取。
+	var installed_skill_keys: Array = player_snapshot.get("installed_skill_ids", []) as Array
 	# 固有技能；调用方显式传入时以它为准，否则查库取该武将的稳定技能ID数组。
 	var native_skills: Array = native_skill_ids if not native_skill_ids.is_empty() else (GameDatabase.get_character(str(player_snapshot.get("character_id", ""))).get("skills", []) as Array)
-	if native_skills.has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
+	if native_skills.has(skill_id) and (not filter_by_installed or _snapshot_installed_has_skill(installed_skill_keys, skill_id)):
 		return true
 	# 模式技能；与固有技能同名时不会重复判定。
-	if (player_snapshot.get("mode_skill_ids", []) as Array).has(skill_id) and (not filter_by_installed or installed_skill_ids.has(skill_id)):
+	if (player_snapshot.get("mode_skill_ids", []) as Array).has(skill_id) and (not filter_by_installed or _snapshot_installed_has_skill(installed_skill_keys, skill_id)):
 		return true
-	# 运行时技能；临时与局内获得技能都按“键存在即拥有”判定。
-	return (player_snapshot.get("temporary_skills", {}) as Dictionary).has(skill_id) or (player_snapshot.get("acquired_skills", {}) as Dictionary).has(skill_id)
+	# 运行时技能；临时与局内获得技能的键为实例键，必须先还原成技能ID再比较，
+	# 否则“是否拥有技能X”会对第二份及以后的实例误判为false。
+	for runtime_skill_map_variant: Variant in [player_snapshot.get("temporary_skills", {}), player_snapshot.get("acquired_skills", {})]:
+		# 当前运行时技能映射；任一实例键还原后等于目标技能ID即视为拥有。
+		var runtime_skill_map: Dictionary = runtime_skill_map_variant as Dictionary
+		for runtime_key_variant: Variant in runtime_skill_map.keys():
+			if base_skill_id_of(str(runtime_key_variant)) == skill_id:
+				return true
+	return false
 
 
 ## 判断一段技能正文是否以“声明”形式包含指定标签；被引号包裹的提及（如【奇袭】正文里的“轮回技”）不计入。
@@ -460,10 +565,11 @@ func reset_play_phase_usage() -> bool:
 
 
 ## 返回当前轮回技公开状态；普通技能或未绑定状态返回空字典。
+## 按实例键读取：轮回进度属于这一份实例，同名轮回技的多份实例各自维护轮回数与轮回节。
 func get_reincarnation_state() -> Dictionary:
 	if not reincarnation or host == null or not host.has_method("get_reincarnation_skill_state"):
 		return {}
-	return host.call("get_reincarnation_skill_state", owner_player_id, get_id()) as Dictionary
+	return host.call("get_reincarnation_skill_state", owner_player_id, get_instance_key()) as Dictionary
 
 
 ## 返回轮回技当前轮回数X；普通技能安全回退为初始值1。
@@ -487,7 +593,11 @@ func get_snapshot_reincarnation_state(authoritative_snapshot: Dictionary, player
 		var player: Dictionary = player_variant as Dictionary
 		if int(player.get("player_id", -1)) != resolved_player_id:
 			continue
-		return (player.get("reincarnation_skills", {}) as Dictionary).get(get_id(), {}) as Dictionary
+		# 轮回状态映射；键为实例键，先按本实例精确命中，未命中时回落到技能ID对应的首实例。
+		var reincarnation_map: Dictionary = player.get("reincarnation_skills", {}) as Dictionary
+		if reincarnation_map.has(get_instance_key()):
+			return reincarnation_map.get(get_instance_key(), {}) as Dictionary
+		return reincarnation_map.get(get_id(), {}) as Dictionary
 	return {}
 
 
@@ -524,25 +634,26 @@ func resolve_ai_reincarnation_round_count(authoritative_snapshot: Dictionary, pl
 
 
 ## 检查并开始一次轮回技发动；通用永劫与每轮回节阶段限次均在服务中统一复核。
+## 全部轮回端口统一传实例键：轮回额度与进度按实例记账，用技能ID会让同名第二份实例读到首实例的额度。
 func begin_reincarnation_activation() -> bool:
-	return reincarnation and matches_character_generation() and host != null and host.has_method("begin_reincarnation_skill_activation") and bool(host.call("begin_reincarnation_skill_activation", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("begin_reincarnation_skill_activation") and bool(host.call("begin_reincarnation_skill_activation", owner_player_id, get_instance_key()))
 
 
 ## 完成轮回技当前轮回节并推进状态；效果未实际成立时不得调用本入口。
 func complete_reincarnation_activation() -> bool:
-	return reincarnation and matches_character_generation() and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("complete_reincarnation_skill_activation") and bool(host.call("complete_reincarnation_skill_activation", owner_player_id, get_instance_key()))
 
 
 ## 复位一次“已 begin 但效果未成立”的轮回技发动；不登记额度、不推进轮回节。
 ## 与 complete_reincarnation_activation 配对使用：费用支付或目标校验失败的分支必须先复位，
 ## 否则 begin 时捕获的“本次发动归属轮回节”会残留，并被下一次无关的 complete 误登记为已用额度。
 func cancel_reincarnation_activation() -> bool:
-	return reincarnation and matches_character_generation() and host != null and host.has_method("cancel_reincarnation_skill_activation") and bool(host.call("cancel_reincarnation_skill_activation", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("cancel_reincarnation_skill_activation") and bool(host.call("cancel_reincarnation_skill_activation", owner_player_id, get_instance_key()))
 
 
 ## 返回当前轮回技是否未触及通用限次；技能自身条件仍应在具体can_activate或触发回调中判断。
 func can_activate_reincarnation() -> bool:
-	return reincarnation and matches_character_generation() and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_id()))
+	return reincarnation and matches_character_generation() and host != null and host.has_method("can_activate_reincarnation_skill") and bool(host.call("can_activate_reincarnation_skill", owner_player_id, get_instance_key()))
 
 
 ## 返回技能声明的主动发动入口；旧的 ui_enabled 主动技能未配置 enable 时默认只允许 phaseUse。
@@ -614,7 +725,7 @@ func perform_joy_skill(_context: Dictionary) -> void:
 func finish_joy_skill_performance() -> void:
 	if host == null or not host.has_method("finish_joy_skill_performance"):
 		return
-	host.call("finish_joy_skill_performance", owner_player_id, get_id())
+	host.call("finish_joy_skill_performance", owner_player_id, get_instance_key())
 
 
 ## 以技能持有者身份注册标准时机；role 决定匹配 player、source、target 或 global，成功返回稳定注册 ID。
@@ -662,9 +773,11 @@ func _can_receive_timing_event(event: RuleEvent, custom_condition: Callable, sub
 	# 局内获得技能的每回合或总次数限制；额度耗尽后不再接收新的触发时机。
 	# 固有技能不持有获得技能额度，必须跳过本检查：控制器对死亡角色的获得技能额度一律返回0，
 	# 若对所有技能统一检查，已由 can_trigger_while_owner_inactive 放行的“死亡后清理持续效果”仍会永远收不到时机。
-	var owner_has_acquired_skill: bool = owner != null and owner.acquired_skills.has(get_id())
+	# 本处必须使用实例键：额度记录按实例键存放，用技能 ID 会让同一技能的第二份实例读到第一份的已用次数而永久沉默。
+	var instance_key: String = get_instance_key()
+	var owner_has_acquired_skill: bool = owner != null and owner.acquired_skills.has(instance_key)
 	if owner == null or owner_has_acquired_skill:
-		if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, get_id())):
+		if host != null and host.has_method("can_use_acquired_skill") and not bool(host.call("can_use_acquired_skill", owner_player_id, instance_key)):
 			return false
 	return not custom_condition.is_valid() or bool(custom_condition.call(event))
 
@@ -919,6 +1032,18 @@ func modify_distance_to_target(_target_id: int, current_distance: int) -> int:
 	return current_distance
 
 
+## 修正持有者的最终攻击范围；默认保持武器卡静态 attack_range（无武器时为1）。
+##
+## 与 modify_distance_to_target 的分工：距离是「两点之间有多远」，攻击范围是「能打到多远」，
+## 二者在【杀】的目标合法性判定里被同时使用（距离 <= 攻击范围），因此必须各自独立可修正。
+## 返回值由核心统一收敛为1以上整数：攻击范围为0会让持有者无法对任何其他角色使用【杀】，
+## 与本钩子的用途（把范围改大或改小）无关，属于非法返回值。
+## 约束：纯查询——不得移动牌、写日志、创建选择或修改任何状态；「直到回合结束」由技能自管标记，
+## 在 phaseAfter 复位，核心层不引入按回合的攻击范围状态。
+func modify_attack_range(current_range: int) -> int:
+	return current_range
+
+
 ## 声明本技能是否令持有者的武将牌**始终背面向上**；默认为false，不改变任何既有翻面行为。
 ##
 ## 使用方式：原文出现「你的武将牌始终背面向上」这类锁定描述时，在技能文件内覆写本函数并返回true，
@@ -1010,6 +1135,17 @@ func request_control_selection_for_player(chooser_id: int, title: String, prompt
 		skill_context["card_name_candidates"] = card_name_candidates
 	skill_context["choice_chooser_id"] = chooser_id
 	return str(host.call("request_control_choice", chooser_id, title, prompt, options, allow_cancel, skill_context))
+
+
+## 为技能持有者创建「自由控制项」请求；用于合法答案无法预先枚举的窗口（组合枚举、自由文本牌名）。
+## options 只用于界面呈现提示，不参与权威校验；选择类型由 choice_type 显式声明，权威侧按该类型的结构规则复核。
+func request_free_control_selection(title: String, prompt: String, choice_type: String, allow_cancel: bool, context: Dictionary = {}) -> String:
+	if host == null or not host.has_method("request_free_control_choice"):
+		return ""
+	# 技能恢复上下文；跨角色选择仍绑定真实技能持有者，防止响应被选择者的同名技能实例误消费。
+	var skill_context: Dictionary = _build_selection_context(context)
+	skill_context["choice_chooser_id"] = owner_player_id
+	return str(host.call("request_free_control_choice", owner_player_id, title, prompt, choice_type, allow_cancel, skill_context))
 
 
 ## 为技能持有者创建“目标与文字选项同时确认”的复合请求；适合先点选角色再按效果按钮的一步式交互。
@@ -1231,6 +1367,10 @@ func _build_selection_context(context: Dictionary) -> Dictionary:
 	# 可写上下文副本；仅保存可序列化值，不传递技能对象或 Callable。
 	var result: Dictionary = context.duplicate(true)
 	result["skill_id"] = get_id()
+	# 实例键；同名技能的多份实例各自拥有不同的请求归属。
+	# 与 skill_id 并存而不是替换：skill_id 是规则层与AI沿用至今的技能身份（查库、日志、评分都按它求值），
+	# instance_key 只供界面把「正在发动的是哪一份实例」精确对应到对应的技能按钮，缺失时读取方自动回落到 skill_id。
+	result["instance_key"] = get_instance_key()
 	result["skill_owner_id"] = owner_player_id
 	result["skill_character_generation"] = _bound_character_generation
 	# 离场技选择许可；控制器只在请求归属技能明确声明离场技时允许存活离场持有者继续完成目标或选牌。

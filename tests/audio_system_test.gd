@@ -78,7 +78,12 @@ const DEATH_SETTLE_MAX_FRAMES: int = 240
 const REPEAT_AVOIDANCE_SAMPLES: int = 30
 
 ## 开局固定随机种子；保证测试可复现且不依赖系统时间。
-const TEST_MATCH_SEED: int = 20260714
+##
+## 【维护义务】本用例的「自动触发」段落要求**一场随机对局自己打出过一张响应牌**（例如用【杀】逼出【闪】），
+## 而这取决于种子推导出的武将分配与 AI 决策。任何新增武将、技能或卡牌都会移动随机流，
+## 使旧种子推导出的对局可能整局都不出现「打出」。**症状很好认**：失败信息里 `use` 为正而 `respond` 为 0，
+## 且 `phase=game_over`。此时音频链路本身没有问题，只需要换一个能出现「打出」的种子。
+const TEST_MATCH_SEED: int = 20260715
 
 ## 测试对局人数；四人局足以覆盖出牌、响应与技能发动路径。
 const TEST_MATCH_PLAYER_COUNT: int = 4
@@ -848,8 +853,22 @@ func _verify_core_voice_channels() -> void:
 		await _release_controller(controller)
 		return
 	# 自动触发的打出请求；响应牌消耗出口必须同样发声，否则【闪】等响应牌会静默。
+	#
+	# 【诊断口径】本断言依赖随机对局自身出现一次「打出」。失败时把证据一并打出来，
+	# 让「种子漂移」与「音频链路损坏」一眼可分：
+	#   - `use` 为正、`respond` 为 0、`phase=game_over` → 对局整局没打出过响应牌，属于种子漂移，
+	#     换掉 TEST_MATCH_SEED 即可（见该常量的维护义务说明）；
+	#   - `use` 也为 0，或 `phase` 停在非终局阶段 → 才可能是统一出口或对局流程真的坏了。
 	if not _has_voice_play_mode(captured_requests, MatchController.VOICE_PLAY_MODE_RESPOND):
-		_fail("card_voice_auto_respond_missing=%d pending=%s pchooser=%d pkind=%s local=%d phase=%s" % [captured_requests.size(), str(controller.has_pending_card_choice()), int(controller._pending_card_choice.get("chooser_id", -1)), str(controller._pending_card_choice.get("context", {}).get("kind", "")), controller.local_human_player_id, str(controller.state.current_phase)])
+		# 按音频动作模式统计的请求分布；`<none>` 表示技能、效果、阵亡等不带动作模式的负载。
+		var mode_counts: Dictionary = {}
+		for mode_request: Dictionary in captured_requests:
+			# 当前负载的音频动作模式；缺字段时归入 `<none>`，不伪造默认值。
+			var mode_key: String = str(mode_request.get("play_mode", "<none>"))
+			mode_counts[mode_key] = int(mode_counts.get(mode_key, 0)) + 1
+		# 使用模式请求数；与打出模式数对比即可判断是「完全没打牌」还是「只缺打出」。
+		var use_mode_count: int = int(mode_counts.get(MatchController.VOICE_PLAY_MODE_USE, 0))
+		_fail("card_voice_auto_respond_missing=%d pending=%s pchooser=%d pkind=%s local=%d phase=%s turn=%d winner=%s use=%d modes=%s" % [captured_requests.size(), str(controller.has_pending_card_choice()), int(controller._pending_card_choice.get("chooser_id", -1)), str(controller._pending_card_choice.get("context", {}).get("kind", "")), controller.local_human_player_id, str(controller.state.current_phase), int(controller.state.turn_number), str(controller.state.winner), use_mode_count, str(mode_counts)])
 		await _release_controller(controller)
 		return
 	# 自动触发的技能请求数量；作为副证据记录，AI 未发动技能时不视为失败。

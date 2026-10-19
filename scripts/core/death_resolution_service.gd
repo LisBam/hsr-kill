@@ -303,6 +303,10 @@ func _cleanup(sequence: RuleStepSequence) -> void:
 	# 回合操控登记：死者既可能是被操控者（撤销其登记），也可能是操控者（撤销以他为操控者的全部登记）。
 	# 本步骤在全部对局模式下都会执行，因此阵亡、复活与换将都不会让死者继续持有操控权或继续被他人操控。
 	_host._clear_turn_input_delegation_for_player(victim.player_id)
+	# 回合域不可响应登记：死者身上的「直到回合结束」状态随承载者失效，否则复活后可能带着残留限制回到场上。
+	_host.clear_response_blocked_for_player(victim.player_id)
+	# 回合域手牌上限加成：同理，死亡即刻清零；不清会在复活后继续压低或抬高死者手牌上限。
+	_host.clear_turn_hand_limit_bonus(victim.player_id, "death")
 	match str(sequence.context.mode):
 		"normal":
 			if _host.state.current_player_id == victim.player_id:

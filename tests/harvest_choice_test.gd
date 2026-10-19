@@ -63,10 +63,14 @@ func _run() -> void:
 		return
 	# 领袖候选；固定种子下本地0号玩家为当前唯一待确认的人类角色。
 	var leader_candidates: Array[String] = _controller.character_selection.get_candidates(0)
-	# 本专项使用的领袖武将；避开会在准备阶段或出牌阶段Begin创建询问的三月七与布洛妮娅。
+	# 本专项使用的领袖武将；避开会在开局、准备阶段或出牌阶段Begin创建询问的武将。
+	# 名单必须随新增武将同步维护：任何在 `gameStart` 或 `phaseZhunbeiBegin` 打开选择窗口的武将
+	# 都会与「本用例自己发起的五谷请求」争夺同一条待处理选择，使本地五谷询问永远不出现。
+	# 银狼（yinlang）的【注入】在两个时机都会开窗，因此必须排除。
+	var excluded_leader_candidates: Array[String] = ["march_7th", "bronya", "yinlang"]
 	var selected_leader_character_id: String = ""
 	for candidate_id: String in leader_candidates:
-		if candidate_id not in ["march_7th", "bronya"]:
+		if candidate_id not in excluded_leader_candidates:
 			selected_leader_character_id = candidate_id
 			break
 	if selected_leader_character_id.is_empty() and not leader_candidates.is_empty():
@@ -74,6 +78,22 @@ func _run() -> void:
 	if leader_candidates.is_empty() or not _controller.select_character(0, selected_leader_character_id):
 		_fail("select_leader")
 		return
+	# 确保本用例真的能观察到「本地玩家的普通五谷询问」：移除对手身上会接管多目标牌的技能。
+	#
+	# 【为什么需要这一步】本用例验证的是「一次普通五谷结算里，本地玩家会收到选牌询问」。
+	# 但【岳峙】（丹恒·腾荒的限定技）会在任意多目标牌被使用时接管为**唯一目标**，
+	# 并把目标数组改写为「持有者重复 X 次」（X 为原目标数）；此时本地玩家在规则上根本不是目标，
+	# 询问永远不会到达本地——这是该技能的正确行为，不是缺陷，但会让本用例的前提失效。
+	# AI 随机选将是否选中丹恒·腾荒取决于随机流，任何新增武将都可能改变它；
+	# 因此这里不依赖种子运气，而是直接移除接管类技能，使断言前提在任何武将库下都成立。
+	# 名单必须随新增「改写多目标牌」的技能同步维护。
+	var multi_target_takeover_skill_ids: Array[String] = ["yuezhi"]
+	for player: PlayerState in _controller.state.players:
+		if player.player_id == _controller.local_human_player_id:
+			continue
+		for takeover_skill_id: String in multi_target_takeover_skill_ids:
+			if _controller.has_skill(player.player_id, takeover_skill_id):
+				_controller.remove_skill(player.player_id, takeover_skill_id, "harvest_test_deterministic_setup")
 	# 随机选中的武将（含 AI 对手）可能在开局创建自己的选择请求（例如某个「选择目标」询问）；
 	# AI 的作答由 ai_action_delay_seconds 的计时器在后续空闲帧派发，因此必须轮询到流程稳定为止，
 	# 不能只等一帧就断言阶段。轮询次数有上界，真正的流程卡死仍然会失败。

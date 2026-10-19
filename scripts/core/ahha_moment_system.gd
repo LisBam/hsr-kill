@@ -350,14 +350,16 @@ func build_performance_order(trigger_player_id: int) -> Array[Dictionary]:
 		var player: PlayerState = _state.players[seat_index]
 		if player == null or not player.alive or player.out_of_game:
 			continue
-		# 当前角色的技能实例表；键为稳定技能ID，值为该角色独立持有的技能实例。
+		# 当前角色的技能实例表；键为技能实例键（首实例即技能ID），值为该角色独立持有的技能实例。
 		var player_skills: Dictionary = _host.skill_instances_by_player.get(player.player_id, {}) as Dictionary
 		for skill_id_variant: Variant in player_skills.keys():
 			# 当前技能实例；数据库定义对象与已卸载技能不会出现在本索引中。
 			var skill: SkillDefinition = player_skills[skill_id_variant] as SkillDefinition
 			if skill == null or not skill.is_joy_skill() or not skill.can_perform_joy_skill():
 				continue
-			result.append({"player_id":player.player_id, "skill_id":skill.get_id(), "performance_number":skill.get_performance_number(), "seat_order":seat_offset})
+			# 参演项记录实例键而非技能ID：同名欢愉技的多份实例各自参演一次，
+			# 且结束回报必须能唯一命中自己那一份（SkillDefinition.finish_joy_skill_performance 传的就是实例键）。
+			result.append({"player_id":player.player_id, "skill_id":skill.get_instance_key(), "performance_number":skill.get_performance_number(), "seat_order":seat_offset})
 	result.sort_custom(Callable(self, "_compare_performance_entries"))
 	return result
 

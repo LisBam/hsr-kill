@@ -388,20 +388,24 @@ func _prepare_action_scoring_context(authoritative_snapshot: Dictionary) -> void
 	_action_scoring_context_prepared = true
 	# 使用者武将技能；锁定技和被动牌效联动可在各自技能文件中修正当前卡牌评分。
 	var owner: Dictionary = evaluator.get_player(authoritative_snapshot, player_id)
-	# 本次全部技能ID；统一委托 SkillDefinition，与技能规则段、其他 AI 入口共用同一套来源清单与“实际安装”裁剪规则。
-	var all_skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(owner)
-	for skill_id: String in all_skill_ids:
-		# 当前技能 ID；用于让主动动作与卡牌修正复用同一纯评估实例。
-		var resolved_skill_id: String = skill_id
+	# 本次全部技能**实例键**；统一委托 SkillDefinition，与技能规则段、其他 AI 入口共用同一套来源清单与“实际安装”裁剪规则。
+	# 按实例键而非技能ID迭代：同名技能的第二份实例必须拥有自己的评分实例，否则它的动作会被按第一份实例的状态定价。
+	var all_skill_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(owner)
+	for skill_key: String in all_skill_keys:
+		# 当前技能ID；查库与领袖技判定按技能ID求值。
+		var resolved_skill_id: String = SkillDefinition.base_skill_id_of(skill_key)
 		# 当前技能静态实例；占位技能保持基类空实现，不影响评分。
 		var skill: SkillDefinition = GameDatabase.create_skill(resolved_skill_id)
+		# 实例键；让评分实例与运行时实例一一对应，技能文件里按实例记账的读取（额度、运行时数据）才落在同一份实例上。
+		if skill != null:
+			skill.set_instance_key(skill_key)
 		# 领袖技只在使用者身份确为领袖时参与牌效联动估值；非领袖不会借用武将静态列表中的领袖能力。
 		# 非锁定技失效时只保留完整锁定技的通用牌效修正；半锁定技后段通过时机独立结算，不把非锁定前段误加入动作评分。
 		var skill_effect_available: bool = skill != null and (not bool(owner.get("non_locked_skills_disabled", false)) or skill.lock)
 		if skill_effect_available and (not skill.leader_skill or str(owner.get("identity", "")) == "leader"):
 			skill.bind(null, player_id)
 			_decision_card_modifier_skills.append(skill)
-			_decision_skill_instances[resolved_skill_id] = skill
+			_decision_skill_instances[skill_key] = skill
 
 
 ## 清理一次出牌决策的技能评分上下文；静态元数据缓存保留，运行时技能实例不跨决策复用。
@@ -412,6 +416,7 @@ func _clear_action_scoring_context() -> void:
 
 
 ## 返回当前决策中指定技能的共享 AI 实例；不属于武将修正器的主动技能在首次评分时按需创建。
+## 传入的可能是技能实例键：查库先还原技能ID，再让实例键落到评分实例上，同名技能的多份实例各自缓存一份。
 func _get_decision_skill_instance(skill_id: String) -> SkillDefinition:
 	if skill_id.is_empty():
 		return null
@@ -420,8 +425,9 @@ func _get_decision_skill_instance(skill_id: String) -> SkillDefinition:
 	if cached_skill != null:
 		return cached_skill
 	# 首次遇到的主动技能实例；只绑定固定 AI 玩家，不连接规则宿主。
-	var skill: SkillDefinition = GameDatabase.create_skill(skill_id)
+	var skill: SkillDefinition = GameDatabase.create_skill(SkillDefinition.base_skill_id_of(skill_id))
 	if skill != null:
+		skill.set_instance_key(skill_id)
 		skill.bind(null, player_id)
 		_decision_skill_instances[skill_id] = skill
 	return skill
@@ -438,8 +444,11 @@ func _prepare_choice_scoring_context(choice_request: Dictionary) -> void:
 	if skill_id.is_empty():
 		return
 	# 技能静态实例；AI 评分只读参数，不能调用 activate 或选择请求端口。
-	_decision_choice_skill = GameDatabase.create_skill(skill_id)
+	# 按还原后的技能ID建实例，再挂上请求归属的实例键：同名技能的多份实例各自拥有评分实例，
+	# 技能文件里按实例读取的额度与运行时数据才不会串到另一份实例上。
+	_decision_choice_skill = GameDatabase.create_skill(SkillDefinition.base_skill_id_of(skill_id))
 	if _decision_choice_skill != null:
+		_decision_choice_skill.set_instance_key(str(context.get("instance_key", skill_id)))
 		# 请求上下文保存真实技能持有者；通常等于当前 AI，显式读取便于代替他人选择的后续机制扩展。
 		var skill_owner_id: int = int(context.get("skill_owner_id", player_id))
 		_decision_choice_skill.bind(null, skill_owner_id)

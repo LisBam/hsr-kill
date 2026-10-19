@@ -1091,3 +1091,39 @@ func resolve_card_display_name(card_definition: Dictionary) -> String:
 	# 武器攻击范围；非正或缺失配置使用基础范围1，避免界面出现无意义的0。
 	var attack_range: int = maxi(int(card_definition.get("attack_range", 1)), 1)
 	return "%s %d" % [display_name, attack_range]
+
+
+## 返回一张**实体牌**的显示名称；优先使用该实体自带的自定义牌名，否则回退到按定义解析的名称。
+##
+## 【为什么需要这个入口】运行时造出的牌（例如【以太】创造的牌）牌名由玩家自由指定，同一张卡牌定义会同时存在
+## 多个不同牌名的实体。因此“这张牌叫什么”从此不能只由 definition_id 决定，必须由**实体**决定。
+## 所有显示点统一调用本函数，牌名规则就只有一个实现点；直接查库会忽略自定义牌名并显示成被复制的原牌名。
+##
+## 【参数】card_dict 是实体的序列化字典（`CardInstance.to_dict()` 的结果，网络与快照里也是这个形状）；
+## definition 是 definition_id 对应的卡牌定义字典，缺失时传空字典即可（此时只能给出牌名字符串或占位名）。
+## 【返回】非空牌名。武器仍然会附加攻击范围——自定义牌名复制的是被复制牌的**牌名**，不改变牌的类型与数值。
+## 【注意】本函数只影响显示；牌效、花色点数判定、同名查重与存档引用仍然完全由 definition_id 决定。
+func resolve_instance_display_name(card_dict: Dictionary, definition: Dictionary) -> String:
+	# 实体自带的自定义牌名；空字符串表示这张牌没有造牌覆写，回退到按定义解析。
+	var custom_display_name: String = str(card_dict.get("custom_display_name", ""))
+	if custom_display_name.is_empty():
+		return resolve_card_display_name(definition)
+	# 武器附加攻击范围的口径必须与按定义解析时完全一致，否则同一把武器在造牌前后会显示成两种格式。
+	if str(definition.get("type", "")) != "equipment" or str(definition.get("subtype", "")) != "weapon":
+		return custom_display_name
+	# 武器攻击范围；与 resolve_card_display_name 使用同一条默认值收敛规则。
+	var attack_range: int = maxi(int(definition.get("attack_range", 1)), 1)
+	return "%s %d" % [custom_display_name, attack_range]
+
+
+## 返回一张**实体牌**的**基础**牌名（不含武器攻击范围后缀）；优先实体自带的自定义牌名，否则按定义解析。
+##
+## 与 resolve_instance_display_name 的分工：本函数用于日志、摘要与排序等只关心“这张牌叫什么”的场合；
+## 后者用于牌面、装备栏与悬停资料等需要连数值标注一起显示的场合。
+## 两者必须分开：攻击范围是数值标注而不是牌名的一部分，把它计入牌名字数会让排序结果与玩家看到的牌名不符。
+func resolve_instance_card_name(card_dict: Dictionary, definition: Dictionary) -> String:
+	# 实体自带的自定义牌名；空字符串表示这张牌没有造牌覆写，回退到按定义解析。
+	var custom_display_name: String = str(card_dict.get("custom_display_name", ""))
+	if not custom_display_name.is_empty():
+		return custom_display_name
+	return resolve_card_name(definition)

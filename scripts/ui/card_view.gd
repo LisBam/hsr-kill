@@ -272,6 +272,9 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 			visual_definition = original_definition
 			# 视为逻辑定义；手牌中的旧快照缺失独立字段时回退当前 definition，兼容既有网络与回放数据。
 			var view_as_definition: Dictionary = GameDatabase.get_card(view_as_definition_id) if not view_as_definition_id.is_empty() else definition
+			# 视为横条文本；这里刻意保持按**定义**解析而不是走实例牌名入口：
+			# 横条回答的是“这张实体牌当前被当作哪张牌使用”，被当作的牌永远是一个正式定义，不存在造牌覆写；
+			# 实体自己的自定义牌名由下面的主名称显示，两者分工不同，因此本行不读 custom_display_name。
 			_view_as_display_name_text = GameSettings.resolve_card_display_name(view_as_definition)
 			_view_as_card_definition = view_as_definition.duplicate(true)
 			# 视为逻辑花色；只有“连同花色点数一起视为”的复制型视为才非空，普通换名视为保持空值。
@@ -290,8 +293,10 @@ func configure(card: Dictionary, definition: Dictionary, wooden_ox_card: bool, i
 	var suit_text: String = _suit_symbol(presentation_suit if not presentation_suit.is_empty() else str(card.get("suit", "")))
 	# 点数文本；A、J、Q、K使用标准牌面字符。
 	var rank_text: String = _rank_text(presentation_rank if not presentation_suit.is_empty() else int(card.get("rank", 0)))
-	# 卡牌显示名；统一通过全局名称模式解析，禁止组件自行维护双名称分支。
-	var display_name: String = GameSettings.resolve_card_display_name(visual_definition)
+	# 卡牌显示名；统一通过实例牌名入口解析，禁止组件自行维护双名称分支。
+	# 走实例入口而非定义入口：运行时造出的牌（例如【以太】创造的牌）牌名写在实体上，按定义解析会显示成被复制的原牌名。
+	# 实体没有自定义牌名时，实例入口内部回退到与改动前完全相同的定义解析路径，因此既有牌面逐字节不变。
+	var display_name: String = GameSettings.resolve_instance_display_name(card, visual_definition)
 	# 卡牌类别文本；装备牌继续按槽位子类型细分为武器、防具、坐骑和宝物。
 	# 专属锦囊牌额外带上「专属」前缀：它不属于任何牌堆，牌面必须能直接看出这一点。
 	var type_text: String = _type_text(str(visual_definition.get("type", "")), str(visual_definition.get("subtype", "")), bool(visual_definition.get("exclusive", false)))

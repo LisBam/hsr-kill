@@ -259,19 +259,22 @@ func _modify_lethal_consequence_by_actor_skills(authoritative_snapshot: Dictiona
 	var actor: Dictionary = identity_model.get_player(authoritative_snapshot, actor_id)
 	if actor.is_empty():
 		return current_score
-	# 行动者全部技能ID；统一委托 SkillDefinition，与基础AI其他技能链共用同一套来源清单与“实际安装”裁剪规则。
+	# 行动者全部技能**实例键**；统一委托 SkillDefinition，与基础AI其他技能链共用同一套来源清单与“实际安装”裁剪规则。
 	# 固有技能仍来自快照中的 character_id：未亮将时该字段不可读，因此改写只在武将已公开时生效，不会泄露隐藏信息。
-	var skill_ids: Array[String] = SkillDefinition.collect_snapshot_skill_ids(actor)
+	# 按实例键迭代：同名技能的多份实例各自执行一次致命伤害后果改写，符合“多份同名技能分别计算”的规则。
+	var skill_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(actor)
 	# 当前累计评分；每项技能只读取快照与上一项结果。
 	var result: float = current_score
-	for current_skill_id: String in skill_ids:
+	for current_skill_key: String in skill_keys:
 		# 无运行时状态的技能实例；只调用纯AI钩子，不安装时机、不创建选择也不修改对局。
-		var skill: SkillDefinition = GameDatabase.create_skill(current_skill_id)
+		# 按还原后的技能ID建实例，再挂上实例键，使钩子内部的按实例读取落在正确的那一份上。
+		var skill: SkillDefinition = GameDatabase.create_skill(SkillDefinition.base_skill_id_of(current_skill_key))
 		if skill == null:
 			continue
 		# 领袖技只在使用者身份确为领袖时参与估值；非领袖不会借用武将静态列表中的领袖能力。
 		if skill.leader_skill and str(actor.get("identity", "")) != "leader":
 			continue
+		skill.set_instance_key(current_skill_key)
 		skill.bind(null, actor_id)
 		result = skill.modify_ai_lethal_damage_consequence(authoritative_snapshot, actor_id, target_id, result, self)
 	return result

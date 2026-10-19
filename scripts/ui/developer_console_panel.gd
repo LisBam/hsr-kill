@@ -728,8 +728,8 @@ func _format_card_candidate_text(card_data: Dictionary) -> String:
 func _resolve_card_candidate_display_name(card_data: Dictionary) -> String:
 	# 卡牌稳定 ID；用于读取静态定义与显示名。
 	var definition_id: String = str(card_data.get("definition_id", ""))
-	# 牌面显示名；与图鉴、手牌共用同一解析入口。
-	var display_name: String = GameSettings.resolve_card_display_name(GameDatabase.get_card(definition_id))
+	# 牌面显示名；与图鉴、手牌共用同一实例牌名入口（造出来的牌显示自己的牌名）。
+	var display_name: String = GameSettings.resolve_instance_display_name(card_data, GameDatabase.get_card(definition_id))
 	if display_name.strip_edges().is_empty():
 		display_name = definition_id if not definition_id.is_empty() else "未知牌"
 	return display_name
@@ -759,8 +759,8 @@ func _compare_draw_pile_candidates(left: Dictionary, right: Dictionary) -> bool:
 func _resolve_card_candidate_sort_name(card_data: Dictionary) -> String:
 	# 卡牌稳定 ID；用于读取静态定义与牌名。
 	var definition_id: String = str(card_data.get("definition_id", ""))
-	# 基础牌名；与按钮文字共用同一名称模式入口，只是不附加武器攻击范围。
-	var sort_name: String = GameSettings.resolve_card_name(GameDatabase.get_card(definition_id))
+	# 基础牌名；与日志、摘要共用同一“基础牌名”入口（含造牌自定义名，不含武器攻击范围后缀）。
+	var sort_name: String = GameSettings.resolve_instance_card_name(card_data, GameDatabase.get_card(definition_id))
 	if sort_name.strip_edges().is_empty():
 		sort_name = definition_id if not definition_id.is_empty() else "未知牌"
 	return sort_name
