@@ -23,6 +23,8 @@ const DRAW_COUNT: int = 1
 ##
 ## 该值必须保持非0：【闪避决策】通过 get_snapshot_sell_blood_value(...) > 0 判断“是不是卖血角色”，
 ## 若改成 0.0 会让梅绽持有者完全不被视为卖血角色，与设计口径冲突。
+## 统一估值契约：静态值只用于能力声明；下方 score_ai_damage_benefit 包含本人和所有持有者收入，
+## 不再叠加旧静态/来牌补偿。是否让伤由实际掉血、非致命生存与净收益共同决定。
 const SELL_BLOOD_VALUE: float = 1.0
 
 
@@ -74,19 +76,20 @@ func _on_owner_damaged(event: RuleEvent) -> void:
 ##
 ## 前置条件：本钩子只会在**受伤者本人拥有【梅绽】**时被调用（调用方按受伤者的技能清单逐项回调），
 ## 因此不需要在此重复判定受伤者是否持有本技能。
-func modify_ai_incoming_card_effect(authoritative_snapshot: Dictionary, actor_id: int, target_id: int, _definition: Dictionary,
-		ai_profile: Dictionary, _target_result: float, _expected_damage_amount: int, current_score: float, evaluator: Object) -> float:
+## 现行统一入口：通用层已经验证非致命最终伤害，本钩子再核验实际掉血；静态值只作能力声明，包含受伤者在内的全部收入在此按观察者态度计价。
+func score_ai_damage_benefit(authoritative_snapshot: Dictionary, _source_id: int, _target_id: int, _damage_amount: int, hp_lost: int, observer_id: int, evaluator: Object) -> float:
 	# 只有确实造成伤害的来牌才会触发“受到伤害后”；非伤害牌（装备、增益等）原样返回。
-	if not bool(ai_profile.get("damage", false)):
-		return current_score
+	# 调用约束由 SellBloodAIEvaluator 保证，此处不再维护另一条来牌加分路径。
+	# 梅绽规则明确要求实际掉血；护盾全吸收的正数伤害不会触发摸牌。
+	if hp_lost <= 0:
+		return 0.0
 	# 其余持有者的净计数；正数表示本次伤害整体有利于出手方一侧，负数表示整体有害。
-	var net_holder_count: int = 0
+	var net_holder_count: float = 0.0
 	for player_variant: Variant in authoritative_snapshot.get("players", []) as Array:
 		# 当前角色快照；字段缺失时按无效条目跳过。
 		var player: Dictionary = player_variant as Dictionary
 		# 受伤者本人那一份已由静态 sell_blood_value 按态度符号计入，此处跳过以免重复计算。
-		if int(player.get("player_id", -1)) == target_id:
-			continue
+		# 收入统一从本钩子结算，静态路径不再加分，因此受伤者本人也必须计入。
 		# 死亡或离场者不会摸牌，因此不产生任何收益。
 		if not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)):
 			continue
@@ -94,9 +97,6 @@ func modify_ai_incoming_card_effect(authoritative_snapshot: Dictionary, actor_id
 		if not snapshot_has_skill(player, MEIZHAN_SKILL_ID):
 			continue
 		# 出手方对该持有者的公开态度；只用 get_attitude，不用 get_real_attitude，避免泄露隐藏身份。
-		var attitude: float = float(evaluator.get_attitude(authoritative_snapshot, actor_id, int(player.get("player_id", -1))))
-		if attitude > 0.0:
-			net_holder_count += 1
-		elif attitude < 0.0:
-			net_holder_count -= 1
-	return current_score + float(net_holder_count) * NonameAIEvaluator.CARD_RESOURCE_VALUE
+		var attitude: float = float(evaluator.get_attitude(authoritative_snapshot, observer_id, int(player.get("player_id", -1))))
+		net_holder_count += attitude / NonameAIEvaluator.ATTITUDE_SCALE
+	return net_holder_count * float(DRAW_COUNT) * NonameAIEvaluator.CARD_RESOURCE_VALUE

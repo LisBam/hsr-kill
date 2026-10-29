@@ -171,3 +171,25 @@ func score_ai_action(authoritative_snapshot: Dictionary, action: Dictionary, eva
 ## 构造百折实际生成的无材料【决斗】代理动作，供其他锁定技和通用牌效AI共同修正。
 func build_ai_virtual_card_action(_authoritative_snapshot: Dictionary, action: Dictionary, _evaluator: Object) -> Dictionary:
 	return {"action_type":"use_card", "actor_id":owner_player_id, "card_definition_id":DUEL_DEFINITION_ID, "target_ids":(action.get("target_ids", []) as Array).duplicate()}
+
+
+## 按最终伤害点数和本实例本回合剩余额度估值；斗志存量不等于本回合已获得量，不能据存量推断上限。
+## 发动历史由权威 announce_activation 写入，包含造成与受到伤害两种来源；主动决斗记录不占获得额度。
+## 逐点伤害包含被护盾吸收的点数，因此按 damage_amount 计算收入，不以 hp_lost 截断。
+func score_ai_damage_benefit(authoritative_snapshot: Dictionary, _source_id: int, target_id: int, damage_amount: int, _hp_lost: int, observer_id: int, evaluator: Object) -> float:
+	# 持有者快照；仅查询该实例公开的发动历史，不读取或修改运行时计数成员。
+	var target: Dictionary = evaluator.get_player(authoritative_snapshot, target_id)
+	# 当前全局回合号；旧回合发动历史必须忽略，防止下一回合仍误判额度耗尽。
+	var turn_number: int = int(authoritative_snapshot.get("turn_number", 0))
+	# 本实例本回合已经获得的斗志次数；同名多实例按 instance_key 分别统计。
+	var gains: int = 0
+	for entry_variant: Variant in target.get("skill_history", []) as Array:
+		# 单条公开发动记录；只有本回合、本实例的逐点获得记录占用额度。
+		var entry: Dictionary = entry_variant as Dictionary
+		if int(entry.get("turn_number", -1)) != turn_number or str(entry.get("instance_key", entry.get("skill_id", ""))) != get_instance_key():
+			continue
+		if str((entry.get("context", {}) as Dictionary).get("mark_id", "")) == DOUZHI_MARK_ID:
+			gains += 1
+	# 可以兑现的新增斗志；每点伤害最多一枚，每个全局回合最多三枚。
+	var gain_count: int = mini(damage_amount, maxi(GAIN_LIMIT_PER_TURN - gains, 0))
+	return float(gain_count) * AI_DOUZHI_VALUE * evaluator.score_resource_change(authoritative_snapshot, observer_id, target_id, 1, 0)

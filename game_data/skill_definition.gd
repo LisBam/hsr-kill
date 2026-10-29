@@ -186,6 +186,14 @@ func get_sell_blood_value() -> float:
 	return sell_blood_value
 
 
+## 返回一次非致命伤害带来的资源收益；默认静态价值按一次伤害事件计算，1.0等价于1张牌。
+## 通用层先排除零伤害和濒死，再按每份技能实例调用；逐点、限次或多人收益由内容文件覆盖。
+## observer_id 是收益观察者，source_id 是真实伤害来源；两者不能混用，响应者需要从自身视角评估。
+## damage_amount 为防具处理后的最终伤害，hp_lost 为护盾吸收后的实际掉血；两者必须分别对照技能触发规则。
+func score_ai_damage_benefit(authoritative_snapshot: Dictionary, _source_id: int, target_id: int, _damage_amount: int, _hp_lost: int, observer_id: int, evaluator: Object) -> float:
+	return get_sell_blood_value() * evaluator.score_resource_change(authoritative_snapshot, observer_id, target_id, 1, 0)
+
+
 ## 绑定技能所属玩家与对局端口；数据库定义对象不会调用本函数，只有每局独立运行时实例会绑定。
 func bind(match_host: Object, player_id: int) -> void:
 	host = match_host

@@ -5605,6 +5605,9 @@ func request_response_card_patterns(player_id: int, response_patterns: Array[Str
 	var response_parent_card_uid: int = int(response_context.get("parent_card_uid", -1))
 	if response_parent_card_uid >= 0:
 		response_context["direct_response_count"] = get_card_direct_response_count(response_parent_card_uid)
+		# 预期伤害来源；决斗以当前对手为准，排除来源本人的响应才能准确估算“其他角色响应”增伤。
+		var response_damage_source_id: int = int(response_context.get("opponent_id", response_context.get("actor_id", response_context.get("source_id", -1))))
+		response_context["direct_response_count_excluding_source"] = get_card_direct_response_count_excluding_player(response_parent_card_uid, response_damage_source_id)
 	# 独立装备入口 UID；恢复时取消也会把该入口加入排除集合并重新打开原普通响应窗口。
 	if not immediate_equipment_candidate.is_empty():
 		response_context["immediate_response_equipment_uid"] = int(immediate_equipment_candidate.get("uid", -1))
