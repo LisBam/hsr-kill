@@ -168,6 +168,7 @@ const RULE_CONTINUATION_TYPES: Array[String] = [
 	"conquest_enemy_replacement",
 	"opportunity_resolution",
 	"ahha_moment_resolution",
+	"pre_game_start_complete",
 ]
 
 ## 回合操控登记的空值哨兵；与 PlayerState.turn_input_delegate_id 的默认值同源，禁止在别处重复写字面量 -1。
@@ -9239,6 +9240,7 @@ func replace_card_use_targets(card_uid: int, target_ids: Array[int], reason: Str
 ## 为一名角色的一次用牌补记“不计入使用次数限制”的豁免历史；供技能在使用牌声明之后追加豁免。
 ## 与声明步骤（_card_use_step_declare）的写入口径完全一致：整局与出牌阶段两份豁免历史同时递增，
 ## 因此次数查询的净计数“使用 - 豁免”会减少，已经达到上限的牌族重新变为可用，无需改动任何校验分支。
+## 上述两份同时递增仅适用于该角色自己的出牌阶段；阶段外用牌没有阶段使用记录，也不得追加阶段豁免。
 ## 只改次数统计，不修改已经发生的使用事实，不移动牌、不创建选择，也不广播状态快照。
 ## 幂等性由调用方技能负责：同一次用牌重复调用会重复豁免，使该牌族的可使用次数被额外放宽。
 ## 返回值：目标角色不存在或牌定义为空时返回false。
@@ -9252,7 +9254,8 @@ func mark_card_use_limit_exempt(player_id: int, card_definition_id: String) -> b
 	# 整局使用次数豁免；与声明步骤写入同一字段，保证历史口径完全一致。
 	player.card_use_limit_exempt_history[card_definition_id] = int(player.card_use_limit_exempt_history.get(card_definition_id, 0)) + 1
 	# 出牌阶段使用次数豁免；两份历史必须同时递增，否则整局限次与阶段限次会出现不一致的净计数。
-	player.play_phase_card_use_limit_exempt_history[card_definition_id] = int(player.play_phase_card_use_limit_exempt_history.get(card_definition_id, 0)) + 1
+	if is_play_phase_of(player_id):
+		player.play_phase_card_use_limit_exempt_history[card_definition_id] = int(player.play_phase_card_use_limit_exempt_history.get(card_definition_id, 0)) + 1
 	return true
 
 
@@ -12240,6 +12243,17 @@ func _complete_pre_game_start() -> void:
 	state.current_phase = "game_start"
 	_record_runtime_event("gameStart", "mode", {"player_count":state.players.size()})
 	_emit_rule_timing("gameStart", -1, -1, -1, {"player_count":state.players.size()})
+	# 开局时机可能产生选择、嵌套规则续接或技能的延后步骤；全部结束前不能开始首回合。
+	if has_pending_card_choice() or has_pending_judgment_request() or not _queued_equipment_triggers.is_empty() or _rule_continuations.has_pending() or not _deferred_skill_settlements.is_empty() or (trigger_manager != null and trigger_manager.has_deferred_dispatches()) or (game_flow_pacer != null and game_flow_pacer.has_pending_skill_interval()):
+		defer_after_settlement("pre_game_start_complete", {})
+		return
+	_begin_first_turn_after_game_start()
+
+
+## 开局时机及其嵌套结算全部完成后，从模式对应的先手进入首回合。
+func _begin_first_turn_after_game_start() -> void:
+	if state == null or state.game_over:
+		return
 	# 手气卡阶段已经由最后一名玩家完成；先切换到首轮roundStart窗口，避免该时机的技能选择继续沿用开局确认界面。
 	state.current_phase = "round_start"
 	# 首回合稳定玩家ID；车轮战固定先手红方，其他模式继续读取普通选将服务的首任角色。
@@ -13725,6 +13739,8 @@ func _resume_next_rule_continuation() -> void:
 		"ahha_moment_resolution":
 			if ahha_moment_system != null:
 				ahha_moment_system.continue_after_barrier()
+		"pre_game_start_complete":
+			_begin_first_turn_after_game_start()
 		_:
 			_record_settlement_fault("unknown_rule_continuation_type", {"continuation_type":continuation_type})
 	_active_rule_continuation_key = ""
@@ -13866,7 +13882,8 @@ func _run_settlement_pipeline_pass() -> void:
 				if _try_resume_ready_rule_sequence():
 					continue
 				return
-			if str(next_rule_continuation.get("continuation_type", "")) in ["conquest_enemy_defeat", "conquest_enemy_replacement"]:
+			# 开局续接同样等待技能后续，避免首回合越过游戏开始时的延后效果。
+			if str(next_rule_continuation.get("continuation_type", "")) in ["conquest_enemy_defeat", "conquest_enemy_replacement", "pre_game_start_complete"]:
 				if not _deferred_skill_settlements.is_empty():
 					_resume_deferred_skill_settlements()
 					continue
@@ -14503,13 +14520,19 @@ func execute_pile_card_use(actor_id: int, card_uid: int, target_ids: Array[int],
 	# 目标归一化；规则覆写必须一并传入，否则会与紧随其后的复核各用一套 target_mode 而互相否决。
 	var normalized_target_ids: Array[int] = card_rules.normalize_targets(actor_id, card, target_ids, rule_overrides)
 	# 完整合法性复核（含次数上限、距离、目标存活）；非空字符串即拒绝原因。
-	if not card_rules.validate_use(actor_id, card, normalized_target_ids).is_empty():
+	# 牌堆实体不属于使用者手牌，不能使用要求持牌的 validate_use；复用不要求材料的同源目标和次数校验。
+	# 颜色取实际实体牌，并先执行使用禁令，避免牌堆路径绕过作用于非手牌的技能限制。
+	var pile_rule_overrides: Dictionary = rule_overrides.duplicate(true)
+	pile_rule_overrides["card_color"] = card.get_color()
+	if not validate_skill_card_action_permission(actor_id, card, CardDefinition.CARD_ACTION_USE).is_empty():
+		return false
+	if not card_rules.validate_virtual_use(actor_id, card.definition_id, normalized_target_ids, pile_rule_overrides).is_empty():
 		return false
 	_ensure_card_movement()
 	# 统一移牌进处理区；被时机取消时返回 null，本次用牌整体不发生。
 	if _move_card_with_timings(card, "processing", -1, "pile_card_use", state.current_event_id) == null:
 		return false
-	_execute_card_use(actor_id, card, normalized_target_ids, [], false, target_ids, virtual_storage)
+	_execute_card_use(actor_id, card, normalized_target_ids, [], false, target_ids, virtual_storage, [], true)
 	return true
 
 
@@ -14541,7 +14564,7 @@ func use_random_equipment_card_from_draw_pile(player_id: int, reason: String = "
 	var selected_uid: int = candidate_uids[selected_index]
 	# 装备牌的目标模式为 self，因此目标固定为使用者本人。
 	var equipment_target_ids: Array[int] = [player_id]
-	if not execute_pile_card_use(player_id, selected_uid, equipment_target_ids, {}, {"source_skill_id":reason}):
+	if not execute_pile_card_use(player_id, selected_uid, equipment_target_ids, {"ignore_phase_limit":true}, {"source_skill_id":reason}):
 		return false
 	add_log("%s因%s随机使用了摸牌堆中的一张装备牌。" % [format_player_state_log_name(player), format_log_reason(reason)])
 	return true
@@ -14567,7 +14590,7 @@ func _find_owned_virtual_material(player_id: int, card_uid: int) -> CardInstance
 
 ## 执行已通过合法性校验的出牌动作。
 ## presentation_faces 为“有实体材料的转化牌”逐张材料的展示牌面数据；空数组表示绘制逻辑牌本身（真实牌与无材料视为使用）。
-func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false, requested_target_ids: Array[int] = [], virtual_storage: Dictionary = {}, presentation_faces: Array[Dictionary] = []) -> void:
+func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int], material_card_uids: Array[int] = [], virtual_proxy: bool = false, requested_target_ids: Array[int] = [], virtual_storage: Dictionary = {}, presentation_faces: Array[Dictionary] = [], materials_already_moved: bool = false) -> void:
 	if state == null or state.game_over or card == null:
 		return
 	if card_use_event_service == null:
@@ -14643,6 +14666,8 @@ func _execute_card_use(actor_id: int, card: CardInstance, target_ids: Array[int]
 		"material_card_uids":virtual_card.material_card_uids.duplicate(),
 		"virtual_storage":virtual_card.storage.duplicate(true),
 		"virtual_proxy":virtual_proxy,
+		# 牌堆用牌在入口已通过权威移牌进入处理区；避免后续 lose 子事件错误要求材料仍在使用者手中。
+		"materials_moved":materials_already_moved,
 		# 逐张材料展示牌面；非空时声明步骤按材料逐张发表现，空数组表示仍绘制逻辑牌本身。
 		"presentation_faces":presentation_faces.duplicate(true),
 		"destination":"pending",
@@ -14695,10 +14720,13 @@ func _card_use_step_declare(event: GameEvent, scheduler: EventScheduler) -> void
 	actor.card_use_history[card.definition_id] = int(actor.card_use_history.get(card.definition_id, 0)) + 1
 	_record_card_used_this_turn(actor_id, card.definition_id)
 	# 当前出牌阶段使用历史；只服务 phase 作用域限次查询，不替代完整回合使用记录。
-	actor.play_phase_card_use_history[card.definition_id] = int(actor.play_phase_card_use_history.get(card.definition_id, 0)) + 1
+	# 阶段外使用不属于使用者自己的出牌阶段；选择窗口覆盖阶段名时由 is_play_phase_of 还原真实阶段。
+	if is_play_phase_of(actor_id):
+		actor.play_phase_card_use_history[card.definition_id] = int(actor.play_phase_card_use_history.get(card.definition_id, 0)) + 1
 	if does_not_count_toward_play_limit:
 		actor.card_use_limit_exempt_history[card.definition_id] = int(actor.card_use_limit_exempt_history.get(card.definition_id, 0)) + 1
-		actor.play_phase_card_use_limit_exempt_history[card.definition_id] = int(actor.play_phase_card_use_limit_exempt_history.get(card.definition_id, 0)) + 1
+		if is_play_phase_of(actor_id):
+			actor.play_phase_card_use_limit_exempt_history[card.definition_id] = int(actor.play_phase_card_use_limit_exempt_history.get(card.definition_id, 0)) + 1
 	# 当前卡牌源码；牌族兼容统计与声明时触发由对应文件维护。
 	var source_definition: CardDefinition = GameDatabase.get_card_definition(card.definition_id)
 	if source_definition != null:

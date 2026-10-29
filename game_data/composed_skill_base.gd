@@ -108,6 +108,12 @@ const RANDOM_DISCARD_COUNT: int = 1
 ## 说明：组合技能的全部随机行为都走 pick_random_candidate_index，禁止直接调用 randi()，否则回放与联机不同步。
 const RANDOM_DISCARD_HISTORY_KIND: String = "composed_random_discard"
 
+## 组合技能强制用牌的阶段覆写；仍保留距离、目标和次数等常规合法性约束。
+const COMPOSED_USE_RULE_OVERRIDES: Dictionary = {"ignore_phase_limit":true}
+
+## 随机获得【闪】时的权威随机历史类型；用于回放复现候选下标。
+const RANDOM_DODGE_HISTORY_KIND: String = "composed_random_gain_dodge"
+
 ## 已实现的效果键清单；与 ZhuruComposePools 的两个效果池键一一对应。
 ## 用途：组合技能测试会核对「池中每个键都在本清单里」，避免新增池条目后忘记实现对应效果
 ## （漏实现的表现是「技能发动了但什么都没发生」，没有任何报错，靠人工比对极易漏掉）。
@@ -358,7 +364,18 @@ func _has_executable_choice() -> bool:
 func _list_legal_virtual_targets(definition_id: String) -> Array[int]:
 	if host == null or host.get("card_rules") == null:
 		return []
-	return host.card_rules.list_legal_virtual_targets(owner_player_id, definition_id, {})
+	return host.card_rules.list_legal_virtual_targets(owner_player_id, definition_id, _virtual_use_rule_overrides(definition_id))
+
+
+## 返回本次虚拟用牌的规则覆写；阶段外不适用仅限出牌阶段的次数上限，其余限制仍保留。
+func _virtual_use_rule_overrides(definition_id: String) -> Dictionary:
+	# 本次规则覆写；复制常量以避免改变其他组合实例的规则。
+	var overrides: Dictionary = COMPOSED_USE_RULE_OVERRIDES.duplicate(true)
+	# 卡牌静态规则；只有次数范围明确为出牌阶段的牌才在阶段外放行次数限制。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	if str(definition.get("play_limit_scope", "turn")) == "phase" and not bool(host.call("is_play_phase_of", owner_player_id)):
+		overrides["ignore_play_count_limit"] = true
+	return overrides
 
 
 ## 返回全部「存活且未离场」的角色ID，包含持有者本人。
@@ -425,7 +442,7 @@ func _dispatch_effect() -> void:
 			# 「以太」牌按**铸造来源**识别，不按牌名：牌名由玩家自由输入，同名撞车是设计内允许的。
 			host.call("gain_top_minted_card_from_draw_or_discard", owner_player_id, YITAI_SKILL_ID, "composed_gain_yitai_card")
 		"gain_dodge":
-			_gain_top_draw_card_by_filter({"effect_id":"shan"}, "composed_gain_dodge")
+			_gain_random_dodge_from_draw_pile()
 		"gain_slash":
 			_gain_top_draw_card_by_filter({"effect_id":"slash"}, "composed_gain_slash")
 		"use_random_pile_equipment":
@@ -473,7 +490,7 @@ func _dispatch_effect() -> void:
 		"random_discard_one":
 			_random_discard_from_candidates(host.call("get_hand_equipment_candidates", owner_player_id, owner_player_id) as Array[Dictionary], "composed_random_discard_one")
 		"random_discard_equipment":
-			_random_discard_from_candidates(host.call("get_equipment_candidates", owner_player_id, owner_player_id, [] as Array[String]) as Array[Dictionary], "composed_random_discard_equipment")
+			_random_discard_from_candidates(_collect_own_candidates_by_type("equipment"), "composed_random_discard_equipment")
 		"random_discard_basic":
 			_random_discard_from_candidates(_collect_own_candidates_by_type("basic"), "composed_random_discard_basic")
 		"random_discard_trick":
@@ -517,6 +534,22 @@ func _dispatch_effect() -> void:
 ## 从摸牌堆顶检索一张满足过滤器的牌；过滤器字段由 MatchController._does_draw_card_match_filter 定义。
 func _gain_top_draw_card_by_filter(filter: Dictionary, reason: String) -> void:
 	host.call("gain_top_draw_card_matching", owner_player_id, filter, reason)
+
+
+## 从摸牌堆中随机获得一张【闪】；无候选时不消耗随机数，移动与私有信息由权威端口处理。
+func _gain_random_dodge_from_draw_pile() -> void:
+	# 符合【闪】牌效的实体 UID；按牌堆顺序收集，确保随机下标可复现。
+	var candidate_uids: Array[int] = []
+	for card: CardInstance in host.state.draw_pile:
+		if str(GameDatabase.get_card(card.definition_id).get("effect_id", "")) == "dodge":
+			candidate_uids.append(card.uid)
+	if candidate_uids.is_empty():
+		return
+	# 权威随机下标；随机历史记录来源与候选数以支持联机和回放。
+	var selected_index: int = int(host.call("pick_random_candidate_index", candidate_uids.size(), RANDOM_DODGE_HISTORY_KIND, {"player_id":owner_player_id, "candidate_count":candidate_uids.size()}))
+	if selected_index < 0 or selected_index >= candidate_uids.size():
+		return
+	host.call("gain_card_to_hand_by_uid", owner_player_id, candidate_uids[selected_index], "composed_gain_dodge")
 
 
 ## 效果收尾：按效果池声明决定是否失去本技能。
@@ -865,7 +898,7 @@ func _continue_give_card(context: Dictionary, response: ChoiceResponse) -> void:
 func _execute_virtual_use(definition_id: String, target_ids: Array[int]) -> void:
 	if target_ids.is_empty():
 		return
-	host.call("execute_cardless_virtual_card_use", owner_player_id, definition_id, target_ids, "", {}, {"source_skill_id":get_instance_key()})
+	host.call("execute_cardless_virtual_card_use", owner_player_id, definition_id, target_ids, "", _virtual_use_rule_overrides(definition_id), {"source_skill_id":get_instance_key()})
 
 
 ## 组合技能没有主动按钮，因此不提供任何主动动作评分。

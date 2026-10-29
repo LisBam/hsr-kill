@@ -18,7 +18,7 @@ const CHOICE_KIND_TARGET: String = "zhuru_target"
 const CHOICE_KIND_COMPOSE: String = "zhuru_compose"
 
 ## 组合窗口每栏默认展示的候选数量；与需求补全口径一致（两栏各默认 2 个候选，可展开完整池）。
-const OFFERING_SIZE: int = 2
+const OFFERING_SIZE: int = 8
 
 ## 组合窗口控制项前缀；与控制器常量同源，避免两侧各写一份字面量后失配。
 const COMPOSE_CONTROL_PREFIX: String = MatchController.YINLANG_COMPOSE_CONTROL_PREFIX

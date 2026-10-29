@@ -59,6 +59,23 @@ var _choice_kind_history: Array[String] = []
 var _xunli_barrier_seat: int = -1
 
 
+## 当前开局中阿哈时刻开始次数；选择未完成时必须为0，随后应恰好触发1次。
+var _ahha_start_count: int = 0
+
+
+## 用于验证开局顺序的欢愉技；演出立即完成，避免测试依赖具体角色技能效果。
+class StartOrderJoySkill:
+	extends SkillDefinition
+
+	## 构造独立测试技能，参演编号只用于进入正式演出队列。
+	func _init() -> void:
+		super({"id":"test_start_order_joy", "name":"顺序测试", "trigger":"passive", "joy_skill":true, "performance_number":1})
+
+	## 在正式演出入口立即回报完成，允许首回合继续。
+	func perform_joy_skill(_context: Dictionary) -> void:
+		finish_joy_skill_performance()
+
+
 ## 延迟一帧执行断言，确保 GameDatabase 完成目录扫描；同时安装看门狗兜底。
 func _ready() -> void:
 	call_deferred("_run")
@@ -99,6 +116,7 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 	_skills_installed_for_deal = false
 	_xunli_barrier_seat = -1
 	_choice_kind_history.clear()
+	_ahha_start_count = 0
 	_create_controller()
 	if not _controller.start_match(TEST_PLAYER_COUNT, TEST_RANDOM_SEED, IdentityRules.MODE_IDENTITY):
 		return _fail("start_match")
@@ -134,6 +152,19 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 		return _fail("mulligan_refresh_hand=%d" % _controller.state.get_player(0).hand.size())
 	if _controller.has_pending_card_choice():
 		return _fail("mulligan_refresh_created_choice")
+	# 固定第一轮触发概率并安装测试欢愉技，使开局询问与阿哈时刻必然在同一局发生。
+	# 测试欢愉技实例；固定挂在玩家0身上，使首轮具备可执行参演项。
+	var joy_skill: SkillDefinition = StartOrderJoySkill.new()
+	joy_skill.bind(_controller, 0)
+	# 玩家0当前技能索引；保留已有技能并追加测试实例。
+	var player_skills: Dictionary = _controller.skill_instances_by_player.get(0, {}) as Dictionary
+	player_skills[joy_skill.get_id()] = joy_skill
+	_controller.skill_instances_by_player[0] = player_skills
+	joy_skill.install()
+	_controller.ahha_moment_system._tracked_round_number = 1
+	_controller.ahha_moment_system._triggered_this_round = false
+	_controller.ahha_moment_system._round_trigger_probability = 1.0
+	_controller.ahha_moment_started.connect(func(_count: int, _source: String) -> void: _ahha_start_count += 1)
 	# 推进手气卡阶段：真人确认保留，AI 座位由正式驱动逻辑自行完成。
 	var mulligan_safety: int = 0
 	while _controller.state.current_phase == "starting_hand_mulligan" and mulligan_safety < 24:
@@ -159,6 +190,9 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 		return _fail("chouma_never_triggered_fengkou phase=%s pending=%s %s" % [str(_controller.state.current_phase), str(_controller.has_pending_card_choice()), _describe_choice_trace()])
 	if str(_controller._pending_card_choice.get("context", {}).get("kind", "")) != "fengkou_clause1":
 		return _fail("pending_kind=%s" % str(_controller._pending_card_choice.get("context", {}).get("kind", "")))
+	# 开局询问尚未完成时，首回合与阿哈时刻均不能提前开始。
+	if _controller.state.turn_number != 0 or _controller.state.round_number != 0 or _ahha_start_count != 0:
+		return _fail("game_start_order turn=%d round=%d ahha=%d" % [_controller.state.turn_number, _controller.state.round_number, _ahha_start_count])
 	# 复现真实时序：真人在询问面板上停留的时间必然长于阶段节奏间隔，因此这里必须等一次以上节奏间隔再作答。
 	# 若不等，询问会在阶段推进计时到期之前就被回答，缺陷就被掩盖了。
 	await get_tree().create_timer(maxf(_controller.game_flow_interval_seconds, 0.05) * 2.0).timeout
@@ -198,6 +232,8 @@ func _run_pre_game_scenario(confirmed: bool) -> bool:
 		await get_tree().process_frame
 	if _controller.has_pending_card_choice():
 		return _fail("pending_choice_left kind=%s chooser=%d" % [str(_controller._pending_card_choice.get("context", {}).get("kind", "")), int(_controller._pending_card_choice.get("chooser_id", -1))])
+	if _ahha_start_count != 1:
+		return _fail("first_round_ahha_count=%d" % _ahha_start_count)
 	# 首回合必须已经真正开始：阶段离开开局前与询问阶段，且已经确定当前行动角色。
 	# 首回合角色由身份/座次规则决定，不一定是本地真人所在座次，因此只校验「已经开始」而不写死玩家 ID。
 	if str(_controller.state.current_phase) in ["", "game_start", "starting_hand_mulligan", "character_selection", "choice", "round_start"]:
