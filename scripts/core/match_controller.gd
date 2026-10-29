@@ -3463,6 +3463,8 @@ func request_target_control_choice(chooser_id: int, title: String, prompt: Strin
 
 ## 发布一条兼容选择请求；响应牌窗口按游戏速度延时显示，其他选牌与目标请求保持立即可操作。
 func _publish_card_choice_request(choice_data: Dictionary, paced_response: bool) -> void:
+	if not _is_delegated_choice_current_operator(choice_data):
+		return
 	# 当前请求 ID；独立业务键允许同时无懈的多个请求并行等待且互不取消。
 	var request_id: int = int(choice_data.get("request_id", -1))
 	# 离线全角色控制把并行无懈转为同一玩家依次操作；后登记请求保留权威并行状态，但等前一名明确放弃后再显示。
@@ -3496,6 +3498,8 @@ func _emit_paced_card_choice_request(request_id: int) -> void:
 	if _pending_negation_choices.has(request_id):
 		# 当前同时无懈请求；每名响应者拥有独立私有候选，提示只发送对应请求的只读副本。
 		var negation_choice_data: Dictionary = _pending_negation_choices.get(request_id, {}) as Dictionary
+		if not _is_delegated_choice_current_operator(negation_choice_data):
+			return
 		if _prepare_offline_controlled_view(int(negation_choice_data.get("chooser_id", -1))):
 			_emit_state()
 		card_choice_requested.emit(negation_choice_data.duplicate(true))
@@ -6641,6 +6645,16 @@ func _get_pending_choice_request_ids(viewer_id: int) -> Array[int]:
 
 ## 离线全角色控制中发布下一名仍待操作角色的无懈请求；普通离线与联机仍保持原并行发布语义。
 func _publish_next_control_all_negation_choice() -> void:
+	# LAN 的不同连接仍并行作答；同一操控者负责的两个 actor 按当前视角依次发布。
+	if _is_lan_authority_session():
+		for choice_variant: Variant in _pending_negation_choices.values():
+			# 尚待作答的请求；只重发属于操控者双角色集合的当前窗口。
+			var delegated_choice: Dictionary = choice_variant as Dictionary
+			# 该请求真正的输入提供者；普通独立玩家不受代理窗口重发影响。
+			var submitter_id: int = _resolve_turn_input_submitter(int(delegated_choice.get("chooser_id", -1)))
+			if not _get_controlled_actor_ids_for_controller(submitter_id).is_empty() and _is_delegated_choice_current_operator(delegated_choice):
+				_publish_card_choice_request(delegated_choice, false)
+		return
 	if not _control_all_characters_enabled or _pending_negation_choices.is_empty():
 		return
 	for choice_variant: Variant in _pending_negation_choices.values():
@@ -18087,8 +18101,12 @@ func _replicate_choice_request_to_remote_player(choice_data: Dictionary) -> void
 	# 请求选择者稳定 ID；不存在或已掉线时不发送，断线托管由独立回调接管。
 	var chooser_id: int = int(choice_data.get("chooser_id", -1))
 	# 对应远端 peer；房主自身固定为1，AI与掉线玩家返回0。
-	var peer_id: int = network_gateway.get_peer_id_for_player(chooser_id)
+	# 请求的 actor 与候选仍归选择者所有；仅把投递连接解析为其当前合法输入提供者。
+	var peer_id: int = network_gateway.get_peer_id_for_player(_resolve_turn_input_submitter(chooser_id))
 	if peer_id > NetworkGateway.SERVER_PEER_ID:
+		# 代理请求可能要求从被操控者切回本体；先发送完整视角与授权，界面才会接受紧随其后的窗口。
+		if is_turn_input_delegated(chooser_id) or not _get_controlled_actor_ids_for_controller(chooser_id).is_empty():
+			_emit_state()
 		network_gateway.send_choice_request_to_peer(choice_data, peer_id)
 
 
@@ -18636,7 +18654,8 @@ func _bind_lan_bound_player_id(player_id: int) -> void:
 ## 方向性说明：代理提交授权、上行归属与可作答判定必须用本函数；界面呈现与动作构造用 local_human_player_id，
 ## 后者在局域网操控期间会被代理快照改写为被操控者，二者不可互换（互换即产生越权或界面错人）。
 func _bound_local_player_id() -> int:
-	if network_gateway != null and network_gateway.is_lan_client() and _lan_bound_player_id >= 0:
+	# 房主同样会因代打切换界面视角；LAN 两端都必须使用开局锁定的协议身份。
+	if network_gateway != null and network_gateway.mode == NetworkGateway.Mode.LAN and _lan_bound_player_id >= 0:
 		return _lan_bound_player_id
 	# 离线：优先使用“本机真人是谁”的影子值；未开局或手工装配的控制器没有影子值时回落到本地座次，
 	# 保证任何未经过正式 start_match 的调用方都不会得到一个无效身份（-1 会被误判成“非法提交者”）。
@@ -18711,6 +18730,8 @@ func _install_lan_proxy_authorization(controller_player_id: int) -> bool:
 		return false
 	# 操控者是房主本机时无需 peer 授权：其提交走本地路径，由 _is_lan_proxy_submission_authorized 的房主分支校验。
 	if controller_player_id == _bound_local_player_id() and network_gateway.is_lan_host():
+		# 顶替远端操控者时也要回收其旧授权，房主本机本身无需新增 peer 授权。
+		_rebuild_lan_proxy_authorizations()
 		return true
 	# 操控者对应的远端 peer；无效映射说明该操控者不在线，无法接收代理权。
 	var controller_peer_id: int = network_gateway.get_peer_id_for_player(controller_player_id)
@@ -18740,7 +18761,7 @@ func _is_lan_proxy_submission_authorized(action: PlayerAction) -> bool:
 	# 当前远端发送 peer；SERVER_PEER_ID 表示房主本机直接提交。
 	var incoming_peer_id: int = network_gateway.get_current_incoming_peer_id()
 	if incoming_peer_id <= NetworkGateway.SERVER_PEER_ID:
-		return action.actor_id == _bound_local_player_id()
+		return _resolve_turn_input_submitter(action.actor_id) == _bound_local_player_id()
 	# 发送者对应的在线稳定玩家 ID；无法反查说明该 peer 已被替换或断开，本次提交不再属于它。
 	var sender_player_id: int = int(network_gateway.get_remote_player_assignments().get(incoming_peer_id, -1))
 	if sender_player_id < 0:
@@ -18771,7 +18792,18 @@ func _sync_controlled_player_input_source(controlled_player_id: int, controller_
 	var controlled_player: PlayerState = state.get_player(controlled_player_id)
 	if controlled_player == null:
 		return
-	if controller_player_id == _bound_local_player_id():
+	# 输入来源跟随操控者而非原座位：远端真人代打 AI 座位时也必须停用原 AI，避免抢答。
+	# 反向由 AI 操控真人座位时则启用该 actor 的 AI，确保原真人被锁定后仍有输入提供者。
+	if controller_player_id >= 0 and _is_lan_authority_session():
+		# 操控者托管时其输入仍由 AI 提供；在线映射本身不代表真人正在作答。
+		var controller_player: PlayerState = state.get_player(controller_player_id)
+		if controller_player != null and not controller_player.auto_managed and (controller_player_id == _bound_local_player_id() or network_gateway.get_peer_id_for_player(controller_player_id) > NetworkGateway.SERVER_PEER_ID):
+			ai_coordinator.unregister_ai(controlled_player_id)
+			_set_player_auto_management(controlled_player_id, false, false)
+			return
+		_apply_degraded_ai_input_source(controlled_player_id)
+		return
+	if controller_player_id == _bound_local_player_id() or (controller_player_id == TURN_INPUT_DELEGATE_NONE and controlled_player_id == _bound_local_player_id()):
 		# 由本机真人代打：注销基础AI并解除托管，避免真人与AI同时向同一 actor 提交。
 		ai_coordinator.unregister_ai(controlled_player_id)
 		_set_player_auto_management(controlled_player_id, false, false)
@@ -18781,6 +18813,9 @@ func _sync_controlled_player_input_source(controlled_player_id: int, controller_
 		and network_gateway.is_lan_match_active() \
 		and network_gateway.get_peer_id_for_player(controlled_player_id) > NetworkGateway.SERVER_PEER_ID
 	if has_human_channel:
+		# 操控结束后，移除仅为代理期间补装的 AI；玩家自己的托管状态仍由托管服务负责。
+		if not controlled_player.auto_managed:
+			ai_coordinator.unregister_ai(controlled_player_id)
 		return
 	# 其余情形（操控者是AI、或座位当前无人认领）：该座位仍需基础AI提供输入，确保回合不会无人推进。
 	if not ai_coordinator.is_ai_controlled(controlled_player_id):
@@ -19172,6 +19207,8 @@ func _emit_state() -> void:
 			var viewer_id: int = int(network_gateway.get_remote_player_assignments().get(peer_id, -1))
 			if viewer_id < 0:
 				continue
+			# 当前实际操作的 actor；先决定视角，再发送唯一一份快照，避免中间视角清空活动窗口。
+			var delegated_view_target_id: int = _resolve_delegated_operator_id(viewer_id)
 			# 观察者裁剪快照；随机种子属于权威端私有信息，联网下不发送给任何客户端。
 			var remote_snapshot: Dictionary = state.to_dict(viewer_id, false)
 			_append_limited_skill_usage_to_snapshot(remote_snapshot)
@@ -19190,7 +19227,8 @@ func _emit_state() -> void:
 			# 缺少本字段时客户端会在随后的任一快照把仍在等待的无懈窗口误清并永久停在询问阶段。
 			# 操控者的清单包含其被授权 actor 的待办，否则代打期间被操控者的响应窗口不会出现在操控者界面上。
 			remote_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids_for_controller(viewer_id)
-			network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
+			if not controlled_actor_ids.has(delegated_view_target_id):
+				network_gateway.send_snapshot_to_peer(remote_snapshot, peer_id)
 			# 代操控权重快照：以被操控者为观察者裁剪后定向发给其操控者，使操控者能看到被操控者的完整手牌与技能栏。
 			# 只发给操控者本人，且列表为空时不生成任何额外封包（授权缺失即逐字节回退到改动前行为）。
 			# 代操控视角目标（操控者同时操作本体与被操控者）：目标由唯一解析入口给出，在 {操控者, 被操控者} 内跟随当前待办请求。
@@ -19198,7 +19236,6 @@ func _emit_state() -> void:
 			# 若仍下发以被操控者为观察者的快照，客户端 local_human_player_id 会被改写回被操控者，
 			# 使 chooser_id == 操控者 的响应窗口（例如被操控者用【杀】指向操控者时的【闪】）在界面上被静默丢弃。
 			# 授权列表 turn_input_controlled_actor_ids 已在上面照常下发，因此操控者以被操控者 actor 代提交的权限不受影响。
-			var delegated_view_target_id: int = _resolve_delegated_operator_id(viewer_id)
 			for controlled_actor_id: int in controlled_actor_ids:
 				if controlled_actor_id != delegated_view_target_id:
 					continue
@@ -19206,9 +19243,11 @@ func _emit_state() -> void:
 				_append_limited_skill_usage_to_snapshot(delegated_snapshot)
 				delegated_snapshot.erase("random_seed")
 				delegated_snapshot[SNAPSHOT_DELEGATED_VIEWER_ID_KEY] = controlled_actor_id
+				# 每份网络快照都携带连接的完整授权；客户端按包替换授权集合，不能依赖上一份包残留。
+				delegated_snapshot[SNAPSHOT_CONTROLLED_ACTOR_IDS_KEY] = controlled_actor_ids.duplicate()
 				# 被操控者视角下的合法动作与待办；操控者替他打牌与作答都依赖这两项。
 				delegated_snapshot["local_legal_actions"] = get_legal_actions(controlled_actor_id) if state.current_phase == "play" and state.current_player_id == controlled_actor_id else []
-				delegated_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids(controlled_actor_id)
+				delegated_snapshot["local_pending_choice_request_ids"] = _get_pending_choice_request_ids_for_controller(viewer_id)
 				network_gateway.send_snapshot_to_peer(delegated_snapshot, peer_id)
 
 
@@ -19254,6 +19293,9 @@ func _get_pending_choice_request_ids_for_controller(controller_player_id: int) -
 ## 补充（回合操控补全）：本函数同时是**回合操控接管**的唯一落点；两种接管模式共用同一个“谁最需要输入”的提示解析，
 ## 因此新增任何“需要某人作答”的请求类型时只需扩展 `_resolve_pending_operator_hint()` 一处，不会出现两条链路漂移。
 func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
+	# 房主本机沿用同一发布入口，但只切换视角，不复用离线全角色控制的 AI 注册副作用。
+	if network_gateway != null and network_gateway.is_lan_host():
+		return _prepare_lan_host_controlled_view(explicit_player_id)
 	if state == null or network_gateway == null or network_gateway.mode != NetworkGateway.Mode.OFFLINE:
 		return false
 	if state.current_phase in ["character_selection", "wheel_duel_selection", "starting_hand_mulligan", "ai_character_adjustment", "game_start"]:
@@ -19280,6 +19322,23 @@ func _prepare_offline_controlled_view(explicit_player_id: int = -1) -> bool:
 	if target_player == null or not target_player.alive or target_player.out_of_game:
 		return false
 	return _set_offline_manual_control_player(target_player_id)
+
+
+## 按同一操作者解析结果切换房主界面；协议身份保持开局绑定值，撤销登记后自动归位。
+## 返回是否改变视角，供选择发布入口在窗口出现前先发送正确的手牌与待办快照。
+func _prepare_lan_host_controlled_view(explicit_player_id: int = -1) -> bool:
+	if state == null or not _is_lan_authority_session():
+		return false
+	# 房主连接的稳定身份；不随当前展示的角色改变。
+	var host_player_id: int = _bound_local_player_id()
+	# 当前真正需要输入的角色；无操控登记时回到房主本人。
+	var target_player_id: int = _resolve_delegated_operator_id(host_player_id, explicit_player_id)
+	if target_player_id < 0:
+		target_player_id = host_player_id
+	if local_human_player_id == target_player_id:
+		return false
+	local_human_player_id = target_player_id
+	return true
 
 
 ## 返回当前“最需要玩家输入”的角色 player_id 提示；无任何待办时回落到当前回合角色。纯查询，不写状态。
@@ -19359,6 +19418,14 @@ func _resolve_delegated_operator_id(controller_player_id: int, explicit_player_i
 		return -1
 	# 当前最需要输入的角色提示；排序由唯一实现给出，本函数只做归属过滤。
 	var requested_operator_id: int = _resolve_pending_operator_hint(explicit_player_id)
+	# 并行无懈的首条全局待办可能属于第三人；在本连接的双角色集合内重新找首条，避免漏掉本体响应。
+	if explicit_player_id < 0 and _pending_card_choice.is_empty():
+		for choice_variant: Variant in _pending_negation_choices.values():
+			# 当前候选请求的选择者；只接受本操控者本人或其被授权 actor。
+			var chooser_id: int = int((choice_variant as Dictionary).get("chooser_id", -1))
+			if chooser_id == controller_player_id or controlled_actor_ids.has(chooser_id):
+				requested_operator_id = chooser_id
+				break
 	if requested_operator_id == controller_player_id and _is_viewable_actor(controller_player_id):
 		return controller_player_id
 	if controlled_actor_ids.has(requested_operator_id) and _is_viewable_actor(requested_operator_id):
@@ -19368,6 +19435,20 @@ func _resolve_delegated_operator_id(controller_player_id: int, explicit_player_i
 		if _is_viewable_actor(controlled_actor_id):
 			return controlled_actor_id
 	return -1
+
+
+## 同一 LAN 真人代打两个 actor 时仅显示当前操作者的无懈窗口；其余请求仍保留在权威并行表中。
+## AI 请求和普通独立连接保持原发布规则，前一窗口放弃后由统一重发入口显示下一条。
+func _is_delegated_choice_current_operator(choice_data: Dictionary) -> bool:
+	if not _is_lan_authority_session() or not _pending_negation_choices.has(int(choice_data.get("request_id", -1))):
+		return true
+	# 请求归属 actor；代理只改变输入提供者，不改变响应牌的使用者。
+	var chooser_id: int = int(choice_data.get("chooser_id", -1))
+	if ai_coordinator != null and ai_coordinator.is_ai_controlled(chooser_id):
+		return true
+	# 实际提交者；没有操控登记的真人继续独立并行作答。
+	var submitter_id: int = _resolve_turn_input_submitter(chooser_id)
+	return _get_controlled_actor_ids_for_controller(submitter_id).is_empty() or _resolve_delegated_operator_id(submitter_id) == chooser_id
 
 
 ## 返回离线对局中“因回合操控登记而必须接管”的角色 player_id；无需接管时返回 -1。纯查询，不写状态。

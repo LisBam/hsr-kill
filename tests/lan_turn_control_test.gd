@@ -1,5 +1,14 @@
 extends Node
 
+## 保留正式网关的封包构建与路由，只在传输边界记录收件人和负载，避免测试依赖真实连接。
+class RecordingGateway extends NetworkGateway:
+	## 按发送顺序保存的完整封包；每项含 peer_id 与 packet，清空后可独立断言一次广播。
+	var sent_packets: Array[Dictionary] = []
+
+	## 记录已经完成序列化的传输数据；不回环执行，客户端接收由用例显式驱动。
+	func _send_packet_to_peer(packet: Dictionary, peer_id: int) -> void:
+		sent_packets.append({"peer_id":peer_id, "packet":packet.duplicate(true)})
+
 ## 回合操控的局域网代理提交协议专项回归。
 ## 覆盖：房主授权表、代理上行放行、第三方 peer 越权拒绝、被操控者本人拒绝、
 ## 定向权重快照与未授权快照等价、掉线清除、重连只重发授权表、授权条件缺失时的显式降级。
@@ -53,14 +62,24 @@ func _run() -> void:
 		return
 	if not _test_delegated_operator_view_target():
 		return
+	if not _test_wire_snapshot_and_choice_routing():
+		return
+	if not _test_host_delegation_view_and_submission():
+		return
+	if not _test_delegated_ai_input_source():
+		return
 	if not _test_disconnect_clears_delegation_and_authorization():
 		return
 	if not _test_reconnect_only_republishes_authorization():
 		return
 	if not _test_lan_degradation_is_recorded():
 		return
+	if not await _test_yanling_delayed_judgment():
+		return
+	if not _test_delegated_parallel_negation():
+		return
 	_restore_settings()
-	print("LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+operator_view_target+disconnect+reconnect+degradation")
+	print("LAN_TURN_CONTROL_PASS proxy_submit+outsider_rejected+self_rejected+authorization_scope+operator_view_target+wire_snapshot+choice_routing+host_proxy+ai_input_source+disconnect+reconnect+degradation+yanling_judgment+parallel_negation")
 	get_tree().quit(0)
 
 
@@ -181,6 +200,203 @@ func _test_delegated_operator_view_target() -> bool:
 		return _fail("pending_operator_target=%d expected=%d" % [pending_target_id, _controller_id])
 	if authorized_actor_ids != expected_actor_ids:
 		return _fail("authorization_followed_view=%s" % str(authorized_actor_ids))
+	return true
+
+
+## 验证正式广播封包经过客户端接收后，视角、授权、待办和请求收件人始终一致。
+## 只检查服务端登记表无法覆盖“第二份快照清空授权”与“请求发给旧玩家”这两类停滞。
+func _test_wire_snapshot_and_choice_routing() -> bool:
+	# 传输边界记录器；由同一份正式 _emit_state() 生成真实封包。
+	var gateway: RecordingGateway = _controller.network_gateway as RecordingGateway
+	gateway.sent_packets.clear()
+	_controller.replicate_current_state()
+	# 操控者实际收到的快照；一次广播应只有一份完整视角，避免中间快照关闭选择窗口。
+	var snapshots: Array[Dictionary] = []
+	for delivery: Dictionary in gateway.sent_packets:
+		if int(delivery.get("peer_id", -1)) == int(_player_to_peer_id[_controller_id]) and str((delivery["packet"] as Dictionary).get("message_type", "")) == "snapshot":
+			snapshots.append((delivery["packet"] as Dictionary)["payload"] as Dictionary)
+	if snapshots.size() != 1:
+		return _fail("operator_snapshot_count=%d" % snapshots.size())
+	# 接收端控制器；不持有权威 GameState，按真实客户端路径更新视角并提交代理动作。
+	var client: MatchController = MatchController.new()
+	# 客户端传输记录器；上行封包必须保留被操控者的 actor_id。
+	var client_gateway: RecordingGateway = RecordingGateway.new()
+	client_gateway.mode = NetworkGateway.Mode.LAN
+	client_gateway.lan_role = NetworkGateway.LanRole.CLIENT
+	client_gateway.connected = true
+	client_gateway._lan_match_active = true
+	client.network_gateway = client_gateway
+	client.local_human_player_id = _controller_id
+	client.call("_bind_lan_bound_player_id", _controller_id)
+	client.call("_on_network_snapshot_received", snapshots[0])
+	# 客户端实际显示的询问；必须与当前第一视角属于同一 actor。
+	var received_choices: Array[Dictionary] = []
+	client.card_choice_requested.connect(func(request: Dictionary) -> void: received_choices.append(request))
+	if client.local_human_player_id != _controlled_id or not client._lan_proxy_actor_ids.has(_controlled_id):
+		client.free()
+		client_gateway.free()
+		return _fail("client_delegated_view_or_authorization_missing")
+	if not client.submit_action(PlayerAction.new("end_play", _controlled_id)) or client_gateway.sent_packets.is_empty():
+		client.free()
+		client_gateway.free()
+		return _fail("client_proxy_command_blocked")
+	# 被操控者的真实选牌请求；原选择者保持不变，只有投递连接改为操控者。
+	var choice_data: Dictionary = {"request_id":9876, "chooser_id":_controlled_id, "context":{"kind":"lan_turn_control_probe"}}
+	gateway.sent_packets.clear()
+	_controller.call("_replicate_choice_request_to_remote_player", choice_data)
+	for delivery: Dictionary in gateway.sent_packets:
+		if str((delivery["packet"] as Dictionary).get("message_type", "")) != "choice_request":
+			continue
+		if int(delivery.get("peer_id", -1)) != int(_player_to_peer_id[_controller_id]):
+			client.free()
+			client_gateway.free()
+			return _fail("delegated_choice_sent_to_original_player")
+		client.call("_on_network_choice_request_received", (delivery["packet"] as Dictionary)["payload"])
+	client.free()
+	client_gateway.free()
+	if received_choices.size() != 1 or int(received_choices[0].get("chooser_id", -1)) != _controlled_id:
+		return _fail("client_delegated_choice_missing")
+	return true
+
+
+## 验证房主作为操控者时也能接管第一视角、提交代理动作，并在撤销后归位。
+func _test_host_delegation_view_and_submission() -> bool:
+	_controller.end_turn_input_delegation(_controlled_id)
+	# 房主稳定协议身份；接管期间必须保持不变，不能随界面视角漂移。
+	var host_id: int = int(_controller.call("_bound_local_player_id"))
+	if not _controller.begin_turn_input_delegation(_controlled_id, host_id):
+		return _fail("host_begin_delegation")
+	if _controller.local_human_player_id != _controlled_id or int(_controller.call("_bound_local_player_id")) != host_id:
+		return _fail("host_delegated_view_or_identity_missing")
+	# 房主自身的响应请求应把视角切回本体，处理完后再次显示被操控者。
+	_controller._pending_card_choice = {"request_id":9877, "chooser_id":host_id, "context":{"kind":"lan_host_view_probe"}}
+	_controller.replicate_current_state()
+	if _controller.local_human_player_id != host_id:
+		return _fail("host_self_response_view_missing")
+	_controller._pending_card_choice.clear()
+	_controller.replicate_current_state()
+	if not _controller.submit_action(PlayerAction.new("end_play", _controlled_id)):
+		return _fail("host_proxy_submit_rejected=%s" % _controller._last_action_rejection_message)
+	_controller.end_turn_input_delegation(_controlled_id)
+	if _controller.local_human_player_id != host_id:
+		return _fail("host_view_not_restored")
+	# 后续用例继续验证远端操控者掉线；恢复其原始登记。
+	if not _focus_turn_on_player(_controlled_id) or not _controller.begin_turn_input_delegation(_controlled_id, _controller_id):
+		return _fail("restore_remote_delegation_after_host")
+	return true
+
+
+## 真人操控 AI 座位时停止原 AI，AI 操控真人座位时补上 AI，撤销后恢复原座位来源。
+func _test_delegated_ai_input_source() -> bool:
+	_controller.end_turn_input_delegation(_controlled_id)
+	# 被操控者原连接；临时移除映射，把同一座位构造成补位 AI。
+	var controlled_peer_id: int = int(_player_to_peer_id[_controlled_id])
+	_controller.network_gateway._player_to_peer_id.erase(_controlled_id)
+	_controller.ai_coordinator.register_basic_ai(_controlled_id)
+	if not _controller.begin_turn_input_delegation(_controlled_id, _controller_id) or _controller.ai_coordinator.is_ai_controlled(_controlled_id):
+		return _fail("remote_human_did_not_release_controlled_ai")
+	_controller.end_turn_input_delegation(_controlled_id)
+	if not _controller.ai_coordinator.is_ai_controlled(_controlled_id):
+		return _fail("controlled_ai_not_restored")
+	_controller.network_gateway._player_to_peer_id[_controlled_id] = controlled_peer_id
+	_controller.ai_coordinator.unregister_ai(_controlled_id)
+	# 操控者原连接；移除后该操控者由 AI 提供输入，被操控真人也必须有对应 AI。
+	var controller_peer_id: int = int(_player_to_peer_id[_controller_id])
+	_controller.network_gateway._player_to_peer_id.erase(_controller_id)
+	_controller.ai_coordinator.register_basic_ai(_controller_id)
+	if not _controller.begin_turn_input_delegation(_controlled_id, _controller_id) or not _controller.ai_coordinator.is_ai_controlled(_controlled_id):
+		return _fail("ai_delegate_did_not_drive_human_seat")
+	_controller.end_turn_input_delegation(_controlled_id)
+	if _controller.ai_coordinator.is_ai_controlled(_controlled_id):
+		return _fail("controlled_human_not_restored")
+	_controller.network_gateway._player_to_peer_id[_controller_id] = controller_peer_id
+	_controller.ai_coordinator.unregister_ai(_controller_id)
+	return _controller.begin_turn_input_delegation(_controlled_id, _controller_id)
+
+
+## 用真实【言灵】判定链验证梅花交权、非梅花无效、被无懈抵消，以及交权后仍能结束出牌。
+func _test_yanling_delayed_judgment() -> bool:
+	if not await _start_lan_host_match():
+		return false
+	_controller.call("_uninstall_all_character_skills")
+	_controller.end_turn_input_delegation(_controlled_id)
+	# 本组只验证判定与输入权，不让出牌后的手牌溢出引入另一条弃牌等待链。
+	var controlled_player: PlayerState = _controller.state.get_player(_controlled_id)
+	controlled_player.max_hp = controlled_player.hand.size() + 1
+	controlled_player.hp = controlled_player.max_hp
+	# 梅花与红桃分别覆盖成功和未命中，第三项固定梅花但声明已经被无懈抵消。
+	var cases: Array[Dictionary] = [{"suit":"club", "negated":false}, {"suit":"heart", "negated":false}, {"suit":"club", "negated":true}]
+	for test_case: Dictionary in cases:
+		_controller.end_turn_input_delegation(_controlled_id)
+		if not _focus_turn_on_player(_controlled_id) or not _controller.set_starring_role(_controller_id):
+			return _fail("yanling_judgment_setup")
+		# 固定牌堆顶判定牌；不依赖随机种子，也不读取任何私有信息来决定结果。
+		var judgment_card: CardInstance = CardInstance.new("sha", str(test_case["suit"]), 1)
+		judgment_card.zone = "draw_pile"
+		_controller.state.draw_pile.append(judgment_card)
+		# 已从判定区取出的原延时牌；按正式入口要求留在处理区，最终必须进入弃牌堆。
+		var delayed_card: CardInstance = CardInstance.new("yanling", "club", 13)
+		delayed_card.zone = "processing"
+		_controller.state.processing_area.append(delayed_card)
+		_controller.call("_resolve_delayed_judgment_card", _controlled_id, delayed_card, bool(test_case["negated"]))
+		# 交权条件；非梅花与无懈分支均不得建立登记。
+		var should_delegate: bool = str(test_case["suit"]) == "club" and not bool(test_case["negated"])
+		if _controller.is_turn_input_delegated(_controlled_id) != should_delegate or not _controller.state.discard_pile.has(delayed_card) or _controller.has_pending_judgment_request():
+			return _fail("yanling_judgment_result=%s delegated=%s discarded=%s paused=%s" % [str(test_case), _controller.is_turn_input_delegated(_controlled_id), _controller.state.discard_pile.has(delayed_card), _controller.has_pending_judgment_request()])
+		if should_delegate and not _dispatch_remote_action(_controller_id, _controlled_id, "end_play"):
+			return _fail("yanling_success_stalled_proxy_input")
+	return true
+
+
+## 验证一个连接的双角色无懈请求依次出现，其他连接仍独立并行；第三人的首条请求不抢占代理视角。
+func _test_delegated_parallel_negation() -> bool:
+	if not _focus_turn_on_player(_controlled_id) or not _controller.begin_turn_input_delegation(_controlled_id, _controller_id):
+		return _fail("parallel_negation_delegation_setup")
+	# 真实网关传输边界；后续按发送顺序消费快照与请求，验证窗口之前已切换到正确视角。
+	var gateway: RecordingGateway = _controller.network_gateway as RecordingGateway
+	gateway.sent_packets.clear()
+	for player_id: int in [_outsider_id, _controlled_id, _controller_id]:
+		# 每个响应者的一张无懈实体；使三个私有请求都由正式注册入口建立。
+		var counter_card: CardInstance = CardInstance.new("wuxie", "club", 1)
+		counter_card.zone = "hand"
+		counter_card.owner_id = player_id
+		_controller.state.get_player(player_id).hand.append(counter_card)
+		_controller.call("_register_simultaneous_negation_choice", player_id, {"source_id":_outsider_id, "target_id":_controlled_id, "trick_id":"lebusishu", "resume_phase":"play"})
+	# 操控者收到的私有窗口；应只有被操控者的首条请求，本体请求保留等待而不覆盖它。
+	var choices: Array[Dictionary] = []
+	for delivery: Dictionary in gateway.sent_packets:
+		if int(delivery["peer_id"]) == int(_player_to_peer_id[_controller_id]) and str((delivery["packet"] as Dictionary).get("message_type", "")) == "choice_request":
+			choices.append((delivery["packet"] as Dictionary)["payload"] as Dictionary)
+	if choices.size() != 1 or int(choices[0].get("chooser_id", -1)) != _controlled_id:
+		return _fail("parallel_first_window=%s" % str(choices))
+	# 明确放弃第一条请求；正式提交必须自动发布操控者本体的下一条请求。
+	var pass_action: PlayerAction = PlayerAction.new("choose_cards", _controlled_id)
+	pass_action.payload = {"request_id":int(choices[0]["request_id"]), "selected_card_uids":[]}
+	gateway.sent_packets.clear()
+	gateway._current_incoming_peer_id = int(_player_to_peer_id[_controller_id])
+	if not _controller.submit_action(pass_action, _controller_id):
+		return _fail("parallel_first_pass_rejected")
+	choices.clear()
+	# 最近一份定向快照的视角；任何请求必须在自己的视角之后到达。
+	var latest_viewer_id: int = -1
+	for delivery: Dictionary in gateway.sent_packets:
+		if int(delivery["peer_id"]) != int(_player_to_peer_id[_controller_id]):
+			continue
+		# 一次网络投递；快照与请求使用正式封包相同的 message_type/payload 字段。
+		var packet: Dictionary = delivery["packet"] as Dictionary
+		if str(packet.get("message_type", "")) == "snapshot":
+			latest_viewer_id = int((packet["payload"] as Dictionary).get(MatchController.SNAPSHOT_DELEGATED_VIEWER_ID_KEY, _controller_id))
+		elif str(packet.get("message_type", "")) == "choice_request":
+			choices.append(packet["payload"] as Dictionary)
+			if latest_viewer_id != int((packet["payload"] as Dictionary).get("chooser_id", -1)):
+				return _fail("parallel_prompt_before_correct_view")
+	if choices.size() != 1 or int(choices[0].get("chooser_id", -1)) != _controller_id:
+		return _fail("parallel_second_window_missing")
+	# 第一条请求完成时，第二个角色与第三方都必须仍在权威等待表中。
+	if (_controller.call("_get_pending_choice_request_ids", _outsider_id) as Array).is_empty() or (_controller.call("_get_pending_choice_request_ids", _controller_id) as Array).is_empty():
+		return _fail("parallel_other_requests_closed")
+	_controller.call("_close_remaining_simultaneous_negation_choices")
+	_controller.end_turn_input_delegation(_controlled_id)
 	return true
 
 
@@ -417,7 +633,7 @@ func _create_lan_host_controller() -> void:
 	var ai_coordinator: AICoordinator = AICoordinator.new()
 	ai_coordinator.name = "AICoordinator"
 	_controller.add_child(ai_coordinator)
-	var network_gateway: NetworkGateway = NetworkGateway.new()
+	var network_gateway: NetworkGateway = RecordingGateway.new()
 	network_gateway.name = "NetworkGateway"
 	network_gateway.mode = NetworkGateway.Mode.LAN
 	network_gateway.lan_role = NetworkGateway.LanRole.HOST
