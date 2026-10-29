@@ -84,6 +84,8 @@ func _run() -> void:
 		return
 	if not _test_composed_skill_subscribes_runtime_timing():
 		return
+	if not _test_composed_effect_execution():
+		return
 	if not _test_aether_mint_window():
 		return
 	if not _test_aether_returns_card_to_draw_pile():
@@ -461,6 +463,181 @@ func _test_composed_skill_subscribes_runtime_timing() -> bool:
 	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
 	if _controller.state.draw_pile.size() != draw_count_after_first:
 		return _fail("composed_quota_not_enforced")
+	return true
+
+
+## 真实触发组合效果：覆盖手牌装备、随机检索【闪】、非本人出牌阶段虚拟用牌及牌堆装备的完整用牌管线。
+func _test_composed_effect_execution() -> bool:
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	# 持有者；只放一张装备手牌，使随机弃置必须命中手牌而不是装备区。
+	var owner: PlayerState = _controller.state.get_player(0)
+	# 测试装备；实体定义属于装备类型，初始在手牌区。
+	var hand_equipment: CardInstance = CardInstance.new("zhuge", "spade", 1)
+	hand_equipment.zone = "hand"
+	hand_equipment.owner_id = 0
+	owner.hand.append(hand_equipment)
+	if not _grant_test_composed_effect(QUEXIAN_SKILL_ID, "random_discard_equipment"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if owner.hand.has(hand_equipment) or not _controller.state.discard_pile.has(hand_equipment):
+		return _fail("composed_discard_hand_equipment_failed")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	owner = _controller.state.get_player(0)
+	# 手牌里的装备候选；与已装备的候选共同参与同一次随机抽取。
+	var mixed_hand_equipment: CardInstance = CardInstance.new("zhuge", "spade", 1)
+	mixed_hand_equipment.zone = "hand"
+	mixed_hand_equipment.owner_id = 0
+	owner.hand.append(mixed_hand_equipment)
+	# 装备区里的装备候选；通过装备槽提供给权威候选查询。
+	var mixed_equipped: CardInstance = CardInstance.new("bagua", "club", 2)
+	mixed_equipped.zone = "equipment"
+	mixed_equipped.owner_id = 0
+	owner.equipment["armor"] = mixed_equipped
+	# 非装备手牌；类型过滤必须排除此牌，确保候选只含两张装备牌。
+	var unrelated_card: CardInstance = CardInstance.new("shan", "heart", 3)
+	unrelated_card.zone = "hand"
+	unrelated_card.owner_id = 0
+	owner.hand.append(unrelated_card)
+	if not _grant_test_composed_effect(QUEXIAN_SKILL_ID, "random_discard_equipment"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	# 弃置抽样历史；候选数量必须包含手牌和装备区中的装备，不含非装备手牌。
+	var discard_pick: Dictionary = _controller.state.random_history.back() as Dictionary
+	if int(discard_pick.get("candidate_count", 0)) != 2 or not owner.hand.has(unrelated_card):
+		return _fail("composed_equipment_filter_wrong history=%s" % [discard_pick])
+	if int(_controller.state.discard_pile.has(mixed_hand_equipment)) + int(_controller.state.discard_pile.has(mixed_equipped)) != 1:
+		return _fail("composed_equipment_discard_count_wrong")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	# 第一张【闪】；与第二张放在牌堆不同位置，用于核对随机候选规模与命中。
+	var first_dodge: CardInstance = CardInstance.new("shan", "heart", 2)
+	first_dodge.zone = "draw_pile"
+	_controller.state.draw_pile.insert(0, first_dodge)
+	# 第二张【闪】；保留独立 UID，以便按随机历史复核真实移动结果。
+	var second_dodge: CardInstance = CardInstance.new("shan", "club", 3)
+	second_dodge.zone = "draw_pile"
+	_controller.state.draw_pile.append(second_dodge)
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "gain_dodge"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	# 抽样历史；候选顺序为牌堆顺序，命中下标必须与实际获得的实体一致。
+	var pick: Dictionary = _controller.state.random_history.back() as Dictionary
+	if str(pick.get("kind", "")) != ComposedSkillBase.RANDOM_DODGE_HISTORY_KIND or int(pick.get("candidate_count", 0)) != 2:
+		return _fail("composed_dodge_random_history=%s" % [pick])
+	if int(pick.get("picked_index", -1)) not in [0, 1]:
+		return _fail("composed_dodge_random_index=%s" % [pick])
+	# 被选中的【闪】；随机下标仅能为0或1。
+	var picked_dodge: CardInstance = first_dodge if int(pick.get("picked_index", -1)) == 0 else second_dodge
+	if not _controller.state.get_player(0).hand.has(picked_dodge):
+		return _fail("composed_dodge_selected_card_not_gained")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "gain_dodge"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if not _controller.state.random_history.is_empty() or not _controller.state.get_player(0).hand.is_empty():
+		return _fail("composed_dodge_empty_pile_changed_state")
+
+	for effect_key: String in ["virtual_slash", "virtual_duel", "virtual_shunshou"]:
+		_reset_state(2, SAMPLE_CHARACTER_ID)
+		_controller._uninstall_all_character_skills()
+		_controller.state.current_player_id = 1
+		_controller.state.current_phase = "discard"
+		# 顺手牵羊需要目标区域中有牌；其他虚拟牌同样可安全使用这个目标。
+		var target_card: CardInstance = CardInstance.new("shan", "heart", 4)
+		target_card.zone = "hand"
+		target_card.owner_id = 1
+		_controller.state.get_player(1).hand.append(target_card)
+		if not _grant_test_composed_effect(JINCHENG_SKILL_ID, effect_key):
+			return false
+		_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+		if _controller._pending_card_choice.is_empty():
+			return _fail("composed_virtual_choice_missing effect=%s" % effect_key)
+		if not _submit_targets([1]):
+			return _fail("composed_virtual_submit_failed effect=%s" % effect_key)
+		# 使用历史由真实 CardUseEvent 声明写入，能区分“只打开了选择”与“真正使用了牌”。
+		var definition_id: String = "sha" if effect_key == "virtual_slash" else ("juedou" if effect_key == "virtual_duel" else "shunshou")
+		if int(_controller.state.get_player(0).card_use_history.get(definition_id, 0)) != 1:
+			return _fail("composed_virtual_not_used effect=%s" % effect_key)
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	_controller.state.current_player_id = 1
+	_controller.state.current_phase = "play"
+	owner = _controller.state.get_player(0)
+	# 持有者上一出牌阶段已经用过【杀】；其他角色的出牌阶段不能沿用这个上限或污染该阶段历史。
+	owner.play_phase_card_use_history["sha"] = 1
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "virtual_slash"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if _controller._pending_card_choice.is_empty() or not _submit_targets([1]):
+		return _fail("composed_virtual_slash_outside_phase_blocked")
+	if int(owner.card_use_history.get("sha", 0)) != 1 or int(owner.play_phase_card_use_history.get("sha", 0)) != 1:
+		return _fail("composed_virtual_slash_outside_phase_history")
+	if not _controller.mark_card_use_limit_exempt(0, "sha") or int(owner.play_phase_card_use_limit_exempt_history.get("sha", 0)) != 0:
+		return _fail("composed_virtual_slash_outside_phase_exemption")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "play"
+	owner = _controller.state.get_player(0)
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "virtual_slash"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if _controller._pending_card_choice.is_empty() or not _submit_targets([1]):
+		return _fail("composed_virtual_slash_in_phase_missing")
+	if int(owner.play_phase_card_use_history.get("sha", 0)) != 1:
+		return _fail("composed_virtual_slash_in_phase_history")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	_controller.state.current_player_id = 0
+	_controller.state.current_phase = "play"
+	owner = _controller.state.get_player(0)
+	owner.play_phase_card_use_history["sha"] = 1
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "virtual_slash"):
+		return false
+	# 选择界面临时覆盖公开阶段时，阶段规则仍须读取恢复阶段，不能误解除已用尽的出牌次数。
+	_controller._pending_card_choice = {"resume_phase":"play"}
+	_controller.state.current_phase = "choice"
+	# 已安装的组合实例；检查覆写是否正确识别选择窗口背后的出牌阶段。
+	var composed_skill: ComposedSkillBase = _controller.get_skill_instance(0, JINCHENG_SKILL_ID) as ComposedSkillBase
+	if composed_skill == null or bool(composed_skill._virtual_use_rule_overrides("sha").get("ignore_play_count_limit", false)):
+		return _fail("composed_virtual_slash_choice_phase_limit_bypassed")
+	_controller._pending_card_choice.clear()
+	_controller.state.current_phase = "play"
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if not _controller._pending_card_choice.is_empty() or int(owner.card_use_history.get("sha", 0)) != 0:
+		return _fail("composed_virtual_slash_in_phase_limit_bypassed")
+
+	_reset_state(2, SAMPLE_CHARACTER_ID)
+	_controller._uninstall_all_character_skills()
+	_controller.state.current_player_id = 1
+	_controller.state.current_phase = "discard"
+	# 牌堆装备实体；唯一候选让测试无需依赖随机种子。
+	var pile_equipment: CardInstance = CardInstance.new("zhuge", "club", 1)
+	pile_equipment.zone = "draw_pile"
+	_controller.state.draw_pile.append(pile_equipment)
+	if not _grant_test_composed_effect(JINCHENG_SKILL_ID, "use_random_pile_equipment"):
+		return false
+	_controller._emit_rule_timing("damageAfter", 1, 1, 0, {"amount":1, "card_id":""})
+	if _controller.state.get_player(0).get_weapon() != pile_equipment or int(_controller.state.get_player(0).card_use_history.get("zhuge", 0)) != 1:
+		return _fail("composed_pile_equipment_not_used zone=%s" % pile_equipment.zone)
+	return true
+
+
+## 为持有者直接授予指定组合；受击后时机用于从正式事件派发入口验证效果。
+func _grant_test_composed_effect(skill_id: String, effect_key: String) -> bool:
+	# 新实例键；空值表示配置不合法或技能未成功安装。
+	var instance_key: String = _controller.grant_configured_skill(0, skill_id, {"timing_key":"damage_after", "effect_key":effect_key}, 1, "test", true)
+	if instance_key.is_empty():
+		return _fail("composed_effect_grant_failed skill=%s effect=%s" % [skill_id, effect_key])
 	return true
 
 
