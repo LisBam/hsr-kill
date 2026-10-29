@@ -1059,6 +1059,7 @@ func _test_friendly_chain_damage_response() -> bool:
 
 ## 验证AI只在自己拥有卖血技能时才放弃对友方【杀】的【闪】；无卖血技能、敌方来源、身份未暴露与范围伤害均保持常规闪避。
 ## 本用例同时锁定“无致命保护”口径：即使本次伤害足以造成濒死，满足友方与卖血两条时仍然放弃【闪】。
+## 现行断言：仅有百折的1点收入不足以补偿掉血，仍应闪避；致命伤害必须防御。
 func _test_ally_slash_dodge_requires_sell_blood_skill() -> bool:
 	# 公开三人快照；领袖0对忠臣2使用普通【杀】，1号反贼为旁观者。
 	var snapshot: Dictionary = _build_snapshot(true)
@@ -1082,8 +1083,8 @@ func _test_ally_slash_dodge_requires_sell_blood_skill() -> bool:
 	# 授予【百折】；该技能声明 sell_blood_value 为1.0，使这次受伤转化为收益。使用真实快照字段而非私有注入。
 	(snapshot.get("players", []) as Array)[2]["mode_skill_ids"] = ["baizhe"]
 	var sell_blood_choice: Dictionary = loyalist_policy.choose_card_choice(snapshot, response_request, [pass_action, dodge_action])
-	if bool((sell_blood_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
-		return _fail("ally_slash_dodge_with_sell_blood=%s" % sell_blood_choice)
+	if not bool((sell_blood_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("ally_slash_dodge_insufficient_benefit=%s" % sell_blood_choice)
 	# 致命伤害同样不出【闪】；用户明确要求去掉致命保护，因此这里不得因为濒死而改回确认。
 	# 复制请求与快照；只降低忠臣体力并提高本次伤害，使其远低于承伤量。
 	var lethal_snapshot: Dictionary = snapshot.duplicate(true)
@@ -1091,8 +1092,8 @@ func _test_ally_slash_dodge_requires_sell_blood_skill() -> bool:
 	var lethal_request: Dictionary = response_request.duplicate(true)
 	(lethal_request.get("context", {}) as Dictionary)["damage_amount"] = 3
 	var lethal_choice: Dictionary = loyalist_policy.choose_card_choice(lethal_snapshot, lethal_request, [pass_action, dodge_action])
-	if bool((lethal_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
-		return _fail("ally_slash_dodge_lethal_still_passes=%s" % lethal_choice)
+	if not bool((lethal_choice.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("ally_slash_dodge_lethal_must_defend=%s" % lethal_choice)
 	# 敌方来源不套用友方信任策略；保留【百折】但把来源改为未暴露身份的反贼。
 	(snapshot.get("players", []) as Array)[2]["hp"] = 4
 	var enemy_request: Dictionary = response_request.duplicate(true)

@@ -106,6 +106,7 @@ const FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE: float = 8.0
 ## 使该分支稳定低于取消动作的0分，策略层必然选择不响应。运行时无需动态修改。
 ## 注意：本判定不设致命保护（用户明确要求）。即使本次【杀】致命，只要“来源为已确认友方”与“响应者本人有卖血技能”
 ## 同时成立，AI 仍会放弃【闪】——即 AI 可能主动放弃自救以触发卖血收益。修改该常量会同时改变这两个分支的相对顺序。
+## 统一估值契约：该常量保留兼容名称，现用于净收益足够时的取消响应分；致命伤害不进入该分支。
 const ALLY_SELL_BLOOD_SLASH_DODGE_DECLINE_SCORE: float = -RESPONSE_SURVIVAL_VALUE
 
 ## 目标已知拥有所需响应牌时的预期命中倍率；保留少量消耗响应资源的收益。
@@ -154,6 +155,9 @@ var identity_model: IdentityAIModel
 
 ## 当前评估器使用的身份战略层；负责领袖危险、威胁集火、内奸控场和濒死救援。
 var identity_strategy: IdentityStrategyEvaluator
+
+## 无状态受伤收益组件；主动攻击、传导伤害和响应共享同一收益来源，不跨决策保存快照。
+var sell_blood_evaluator: SellBloodAIEvaluator = SellBloodAIEvaluator.new()
 
 ## 已读取的卡牌静态定义缓存；每个评估器只保存数据库返回的独立副本，用于消除候选评分期间对同一定义的重复深拷贝。
 ## 缓存内容只允许读取，卡牌规则或技能 AI 不得向其中写入任何临时评分字段；运行时无需动态修改。
@@ -332,6 +336,8 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			return ARMOR_VOID_TARGET_PENALTY
 		if armor_definition.blocks_aoe(card_definition_id):
 			return ARMOR_VOID_TARGET_PENALTY
+	# 收入的兑现倍率；只随响应可能性和手牌状态变化，不跟随致命风险或额外伤害指数膨胀。
+	var benefit_probability: float = 1.0
 	# 目标状态倍率；复制无名杀 get.effect 对低体力、少手牌目标的威胁放大思想。
 	var status_multiplier: float = 1.0
 	if bool(ai_profile.get("recover", false)) and int(target.get("hp", 0)) >= int(target.get("max_hp", 0)):
@@ -341,10 +347,9 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		expected_damage_amount = maxi(expected_damage_amount, 1)
 		if armor_definition != null:
 			# 防具伤害上限；白银狮子等会把酒杀或其他高额伤害的实际收益压缩到规则上限。
-			var damage_cap: int = maxi(armor_definition.get_ai_incoming_damage_cap(str(definition.get("nature", "normal"))), 0)
-			if damage_cap > 0:
-				expected_damage_amount = mini(expected_damage_amount, damage_cap)
-			status_multiplier *= armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
+			expected_damage_amount = armor_definition.get_ai_incoming_damage_amount(str(definition.get("nature", "normal")), expected_damage_amount)
+			if expected_damage_amount <= 0:
+				return ARMOR_VOID_TARGET_PENALTY
 		# 目标体力；1点体力时伤害价值显著上升，2点体力时次级上升。
 		# 目标可承受值；体力与护盾共同决定酒杀是否会立即令其进入濒死。
 		var target_survival: int = int(target.get("hp", 0)) + int(target.get("shield", 0))
@@ -357,6 +362,8 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 		# 额外伤害倍率；酒杀不只更接近击杀，也会一次压缩更多体力与救援资源。
 		if expected_damage_amount > 1:
 			status_multiplier *= pow(WINE_SLASH_EXTRA_DAMAGE_EFFECT_MULTIPLIER, expected_damage_amount - 1)
+		# 进入响应评估前的风险倍率；后续倍率变化只表达命中与资源交换概率。
+		var damage_risk_multiplier: float = status_multiplier
 		# 目标手牌数；无牌更难响应【杀】或群体牌，三张以上则不应过度确信命中。
 		var hand_count: int = int(target.get("hand_count", 0))
 		if hand_count == 0:
@@ -369,16 +376,22 @@ func score_target_effect(authoritative_snapshot: Dictionary, actor_id: int, targ
 			status_multiplier *= 0.5
 		# 已知响应牌；无名杀服务端 AI 可查询目标是否持有【闪】或【杀】，有响应时降低预期命中收益。
 		var required_response_pattern: String = "shan" if bool(ai_profile.get("respond_shan", false)) else ("sha" if bool(ai_profile.get("respond_sha", false)) else "")
-		if not required_response_pattern.is_empty() and get_known_response_count(authoritative_snapshot, target_id, required_response_pattern) > 0:
+		if not required_response_pattern.is_empty() and not should_accept_sell_blood_damage(authoritative_snapshot, actor_id, target_id, expected_damage_amount, definition) and get_known_response_count(authoritative_snapshot, target_id, required_response_pattern) > 0:
 			status_multiplier *= KNOWN_RESPONSE_DAMAGE_MULTIPLIER
 		elif required_response_pattern == "shan" and _has_equipment(target, "bagua"):
 			# 八卦阵红色判定约有一半成功率，因此没有手牌【闪】时仍降低预期命中收益。
 			status_multiplier *= BAGUA_DAMAGE_MULTIPLIER
+		benefit_probability = status_multiplier / damage_risk_multiplier
 		# 濒危目标持有桃或自救酒时降低一次伤害直接完成击杀的预期，但仍保留压低资源的收益。
 		if target_survival <= expected_damage_amount and get_survival_card_count(authoritative_snapshot, target_id) > 0:
 			status_multiplier *= SURVIVAL_CARD_DAMAGE_MULTIPLIER
 	# 当前目标直接效用；牌效结果乘观察者态度后，敌方负面效果会转为正收益。
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
+	if bool(ai_profile.get("damage", false)):
+		# 卖血收入与卡牌目标结果共用量纲，护盾、致命伤害和技能额度已在组件中校验。
+		# 友方协作还须受击者自己愿意承伤；双方对其他角色的态度不同，不能只凭攻击者视角替队友决定。
+		if attitude <= 0.0 or should_accept_sell_blood_damage(authoritative_snapshot, actor_id, target_id, expected_damage_amount, definition):
+			result += sell_blood_evaluator.score_benefit(authoritative_snapshot, actor_id, target_id, expected_damage_amount, actor_id, self) * absf(target_result) / HP_RESOURCE_VALUE * benefit_probability
 	# 身份局战略附加分；领袖保护、反贼集火和内奸控场不改变实际牌效数值。
 	result += identity_strategy.score_target_strategy(authoritative_snapshot, actor_id, target_id, ai_profile)
 	if bool(ai_profile.get("damage", false)) and int(target.get("hp", 0)) + int(target.get("shield", 0)) <= expected_damage_amount:
@@ -467,7 +480,6 @@ func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dicti
 	# 固有技能来自快照中的 character_id：未亮将或异常ID时该字段不可读，因此不会泄露隐藏信息。
 	var skill_keys: Array[String] = SkillDefinition.collect_snapshot_skill_keys(target)
 	# 行动者对目标的当前态度；正值表示友方卖血可转化为收益，负值表示敌方卖血会降低攻击价值。
-	var attitude: float = get_attitude(authoritative_snapshot, actor_id, target_id)
 	# 当前累计评分；每项技能只读取快照与上一项结果。
 	var result: float = current_score
 	for current_skill_key: String in skill_keys:
@@ -479,10 +491,8 @@ func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dicti
 		skill.set_instance_key(current_skill_key)
 		skill.bind(null, target_id)
 		# 当前技能卖血价值；1点严格按1张牌的基础资源单位换算，只有伤害牌会兑现该收益。
-		var sell_blood_value: float = skill.get_sell_blood_value()
-		if bool(ai_profile.get("damage", false)) and sell_blood_value > 0.0 and not is_zero_approx(attitude):
-			# 卖血方向修正；友方主动造成伤害获得正收益，敌方攻击则扣除同值收益，中立目标保持不变。
-			result += sell_blood_value * CARD_RESOURCE_VALUE * (1.0 if attitude > 0.0 else -1.0)
+		# 卖血方向修正；友方主动造成伤害获得正收益，敌方攻击则扣除同值收益，中立目标保持不变。
+		# 收入现由统一承伤组件计入一次；静态值仅保留能力识别，不再在此按态度符号重复加分。
 		result = skill.modify_ai_incoming_card_effect(authoritative_snapshot, actor_id, target_id, definition, ai_profile, target_result, expected_damage_amount, result, self)
 	return result
 
@@ -492,7 +502,7 @@ func _modify_incoming_card_effect_by_target_skills(authoritative_snapshot: Dicti
 func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: int, chained_id: int, definition: Dictionary, ai_profile: Dictionary, target_result: float, expected_damage_amount: int = 1) -> float:
 	# 传导受击者快照；不存在或已离场的玩家不会参与当前属性伤害结算。
 	var chained_player: Dictionary = get_player(authoritative_snapshot, chained_id)
-	if chained_player.is_empty() or not bool(chained_player.get("alive", false)):
+	if chained_player.is_empty() or not bool(chained_player.get("alive", false)) or bool(chained_player.get("out_of_game", false)):
 		return 0.0
 	# 传导伤害状态倍率；低体力目标、防具与自身风险都在同一倍率上叠加。
 	var status_multiplier: float = 1.0
@@ -500,10 +510,9 @@ func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: 
 	var chained_armor_definition: CardDefinition = _get_effective_armor_definition(authoritative_snapshot, actor_id, chained_player, definition)
 	if chained_armor_definition != null:
 		# 传导目标伤害上限；0表示防具不封顶，正数时只降低该名角色的预期承伤。
-		var chained_damage_cap: int = maxi(chained_armor_definition.get_ai_incoming_damage_cap(str(definition.get("nature", "normal"))), 0)
-		if chained_damage_cap > 0:
-			expected_damage_amount = mini(expected_damage_amount, chained_damage_cap)
-		status_multiplier *= chained_armor_definition.get_ai_incoming_damage_multiplier(str(definition.get("nature", "normal")))
+		expected_damage_amount = chained_armor_definition.get_ai_incoming_damage_amount(str(definition.get("nature", "normal")), expected_damage_amount)
+		if expected_damage_amount <= 0:
+			return 0.0
 	# 行动者对传导受击者的态度；友方受伤为负收益，敌方受伤为正收益。
 	var attitude: float = get_attitude(authoritative_snapshot, actor_id, chained_id)
 	# 传导受击者可承受值；护盾与体力共同参与致命性判断。
@@ -517,6 +526,7 @@ func _score_chained_damage_effect(authoritative_snapshot: Dictionary, actor_id: 
 		status_multiplier *= CHAINED_SELF_DAMAGE_RISK_MULTIPLIER
 	# 当前传导伤害基础收益；仍沿用卡牌或技能声明的 target_result，避免为属性伤害另建硬编码评分表。
 	var result: float = target_result * attitude / ATTITUDE_SCALE * status_multiplier
+	result += sell_blood_evaluator.score_benefit(authoritative_snapshot, actor_id, chained_id, expected_damage_amount, actor_id, self) * absf(target_result) / HP_RESOURCE_VALUE
 	# 传导到濒危角色时的身份死亡后果；可同时处理友军误杀、击杀反贼摸牌与主公误杀忠臣的资源惩罚。
 	if chained_survival <= expected_damage_amount:
 		result += identity_strategy.score_lethal_damage_consequence(authoritative_snapshot, actor_id, chained_id)
@@ -700,7 +710,7 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 		if _should_decline_response_for_friendly_chain_damage(authoritative_snapshot, actor_id, context, response_patterns):
 			# 友方属性伤害会经本人传导到全部横置敌人；此时使用【闪】会阻断更高总收益，故把确认响应压到取消动作以下。
 			return response_survival_value - FRIENDLY_CHAIN_DAMAGE_RESPONSE_DECLINE_VALUE - selected_value * CARD_COST_WEIGHT
-		if _should_decline_dodge_against_ally_sell_blood_slash(authoritative_snapshot, actor_id, context, response_patterns):
+		if _should_accept_response_damage(authoritative_snapshot, actor_id, context, response_patterns):
 			# 自身卖血技能可以把这次友方伤害转化为收益，因此把确认响应压到取消动作以下。
 			return ALLY_SELL_BLOOD_SLASH_DODGE_DECLINE_SCORE - selected_value * CARD_COST_WEIGHT
 		return response_survival_value - selected_value * CARD_COST_WEIGHT
@@ -726,7 +736,7 @@ func _should_decline_duel_response_against_zhidong(authoritative_snapshot: Dicti
 	if opponent.is_empty() or responder.is_empty() or not SkillDefinition.snapshot_has_skill(opponent, "zhidong"):
 		return false
 	# 当前原【决斗】已经收到的直接响应数；现在放弃时预期伤害为基础1点加已有响应数。
-	var current_direct_response_count: int = maxi(int(context.get("direct_response_count", 0)), 0)
+	var current_direct_response_count: int = maxi(int(context.get("direct_response_count_excluding_source", context.get("direct_response_count", 0))), 0)
 	# 当前停止响应时的预计伤害；用于避免AI在致命伤害前错误放弃拼杀。
 	var expected_damage_if_declined: int = DUEL_BASE_DAMAGE_AMOUNT + current_direct_response_count
 	if int(responder.get("hp", 0)) + int(responder.get("shield", 0)) <= expected_damage_if_declined:
@@ -784,6 +794,65 @@ func get_snapshot_sell_blood_value(player: Dictionary) -> float:
 	return total_value
 
 
+## 返回应用防具后的预期伤害；来牌定义与真实来源决定无视防具，护盾由承伤组件另行扣除。
+func get_expected_damage_amount(snapshot: Dictionary, source_id: int, target_id: int, definition: Dictionary, amount: int) -> int:
+	# 当前目标快照；不存在的目标不能产生收益。
+	var target: Dictionary = get_player(snapshot, target_id)
+	# 本张牌实际生效的防具；无视防具武器与普通来牌估值共用同一入口。
+	var armor: CardDefinition = _get_effective_armor_definition(snapshot, source_id, target, definition)
+	return armor.get_ai_incoming_damage_amount(str(definition.get("nature", "normal")), amount) if armor != null else maxi(amount, 0)
+
+
+## 判断响应者是否真正值得承伤；与来源阵营无关，必须非致命、符合技能真实触发条件且净收益覆盖损失。
+func should_accept_sell_blood_damage(snapshot: Dictionary, source_id: int, target_id: int, damage_amount: int, definition: Dictionary = {}) -> bool:
+	# 目标状态；主动承伤不得进入濒死，护盾是否阻止技能收入由具体技能定义决定。
+	var target: Dictionary = get_player(snapshot, target_id)
+	if target.is_empty() or damage_amount <= 0 or damage_amount >= int(target.get("hp", 0)) + int(target.get("shield", 0)):
+		return false
+	if sell_blood_evaluator.score_benefit(snapshot, source_id, target_id, damage_amount, target_id, self) <= 0.0:
+		return false
+	# 自己承受伤害后的阵营净收益；属性连环还必须包含每名继发目标，避免为摸牌牺牲其他队友。
+	var trade: float = sell_blood_evaluator.score_trade(snapshot, source_id, target_id, damage_amount, target_id, self)
+	if str(definition.get("nature", "normal")) != "normal" and bool(target.get("chained", false)):
+		for player_variant: Variant in snapshot.get("players", []) as Array:
+			# 继发目标快照；死亡与离场者不传导，受击者自身不重复计算。
+			var player: Dictionary = player_variant as Dictionary
+			# 继发目标ID；态度与收益均保持响应者视角。
+			var chained_id: int = int(player.get("player_id", -1))
+			if chained_id == target_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)) or not bool(player.get("chained", false)):
+				continue
+			# 继发目标应用自己防具后的伤害；护盾与剩余体力决定是否构成友方致命风险。
+			var chained_amount: int = get_expected_damage_amount(snapshot, source_id, chained_id, definition, damage_amount)
+			if get_attitude(snapshot, target_id, chained_id) > 0.0 and chained_amount >= int(player.get("hp", 0)) + int(player.get("shield", 0)):
+				return false
+			trade += sell_blood_evaluator.score_trade(snapshot, source_id, chained_id, chained_amount, target_id, self)
+	return trade > SellBloodAIEvaluator.ACCEPT_DAMAGE_MARGIN
+
+
+## 将标准杀、范围牌与决斗响应转成同一承伤判断；决斗来源是当前对手，不能误用原始出牌者。
+func _should_accept_response_damage(snapshot: Dictionary, responder_id: int, context: Dictionary, response_patterns: Array) -> bool:
+	if not response_patterns.has("shan") and not response_patterns.has("sha"):
+		return false
+	# 响应窗口种类；装备额外响应没有完整伤害语义，仍沿用其自身策略。
+	var kind: String = str(context.get("kind", ""))
+	if kind not in ["slash_response", "aoe_response", "duel_response"]:
+		return false
+	# 本次真正的伤害来源；决斗中交替响应后可能与最初出牌者不同。
+	var source_id: int = int(context.get("opponent_id", -1)) if kind == "duel_response" else int(context.get("actor_id", context.get("source_id", -1)))
+	if source_id < 0:
+		return false
+	# 当前逻辑牌定义；缺失定义时按普通属性处理，不擅自读取来源酒状态重复加伤。
+	var definition: Dictionary = _get_cached_card_definition(str(context.get("slash_card_definition_id", context.get("card_definition_id", "")))).duplicate(true)
+	if context.has("nature"):
+		definition["nature"] = str(context["nature"])
+	# 响应上下文保存的承伤基数；决斗包含已经累计的直接响应加伤。
+	var amount: int = maxi(int(context.get("damage_amount", context.get("amount", 1))), 1)
+	# 普通决斗不会因响应次数增加伤害；只有真实来源具有制动时才增加其他角色直接响应数。
+	if kind == "duel_response" and SkillDefinition.snapshot_has_skill(get_player(snapshot, source_id), "zhidong"):
+		amount = maxi(amount, DUEL_BASE_DAMAGE_AMOUNT + int(context.get("direct_response_count_excluding_source", context.get("direct_response_count", 0))))
+	return should_accept_sell_blood_damage(snapshot, source_id, responder_id, get_expected_damage_amount(snapshot, source_id, responder_id, definition, amount), definition)
+
+
 ## 判断是否应放弃对友方【杀】的【闪】；只在响应者本人拥有卖血技能且来源为已确认友方时成立。
 ## 本判定不设致命保护（用户明确要求）：即使本次【杀】致命，满足上述两条时同样放弃【闪】，
 ## 因此实现中不得读取体力与护盾做保护性判断——AI 会主动放弃自救以触发卖血收益，这是有意为之的设计。
@@ -791,26 +860,14 @@ func get_snapshot_sell_blood_value(player: Dictionary) -> float:
 ## 不套用本策略；也不覆盖友方属性连环，那一路由 _should_decline_response_for_friendly_chain_damage 单独处理且优先级更高。
 func _should_decline_dodge_against_ally_sell_blood_slash(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary, response_patterns: Array) -> bool:
 	# 当前响应模式；只有【闪】能直接阻断即将命中的【杀】，其他响应不套用本策略。
-	if not response_patterns.has("shan"):
-		return false
 	# 请求种类；只覆盖普通【杀】的目标响应，范围伤害与装备响应有意排除。
-	if str(context.get("kind", "")) != "slash_response":
-		return false
 	# 伤害来源；与友方连环分支共用同一读法，【杀】使用actor_id，同类卡牌可能只提供source_id。
-	var source_id: int = int(context.get("actor_id", context.get("source_id", -1)))
 	# 来源合法性；无效来源或自己指向自己时不套用友方信任策略。
-	if source_id < 0 or source_id == responder_id:
-		return false
 	# 来源态度；只有正态度（已确认友方）才值得让这次伤害命中自己，未暴露身份的0态度保持常规闪避。
-	if get_attitude(authoritative_snapshot, responder_id, source_id) <= 0.0:
-		return false
 	# 当前响应者快照；用于读取其全部技能并累计卖血价值。
-	var responder: Dictionary = get_player(authoritative_snapshot, responder_id)
-	if responder.is_empty():
-		return false
 	# 响应者卖血价值；为0表示这次受伤无法转化成任何收益，此时仍按常规闪避保护自己。
-	return get_snapshot_sell_blood_value(responder) > 0.0
-
+	# 现行契约：兼容旧方法名，但由实际净收益与致命保护决定，不再按友方来源和静态能力强制承伤。
+	return _should_accept_response_damage(authoritative_snapshot, responder_id, context, response_patterns)
 
 ## 判断是否应让友方属性伤害命中自己以传导至全部横置敌人；只影响需要【闪】的可取消响应，不改变伤害或连环规则。
 func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: Dictionary, responder_id: int, context: Dictionary, response_patterns: Array) -> bool:
@@ -834,7 +891,11 @@ func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: 
 		return false
 	# 本次预期伤害；自身会先受到这段伤害，濒死或必死时不能为了传导盲目放弃响应。
 	var expected_damage: int = maxi(int(context.get("damage_amount", context.get("amount", 1))), 1)
-	if int(responder.get("hp", 0)) <= expected_damage:
+	# 防具与护盾也参与原有连环放弃响应策略，防止该入口绕过卖血模型的致命保护。
+	var damage_definition: Dictionary = _get_cached_card_definition(str(context.get("slash_card_definition_id", context.get("card_definition_id", "")))).duplicate(true)
+	damage_definition["nature"] = nature
+	expected_damage = get_expected_damage_amount(authoritative_snapshot, source_id, responder_id, damage_definition, expected_damage)
+	if int(responder.get("hp", 0)) + int(responder.get("shield", 0)) <= expected_damage:
 		return false
 	# 敌方横置状态；至少有一名敌人，且所有仍在场敌人都横置时，属性伤害必定同时传导给整组敌人。
 	var has_enemy: bool = false
@@ -843,6 +904,10 @@ func _should_decline_response_for_friendly_chain_damage(authoritative_snapshot: 
 		# 当前场上角色；死亡、离场、响应者自身与友方来源均不属于本次“其他敌人”集合。
 		var player: Dictionary = player_variant as Dictionary
 		var player_id: int = int(player.get("player_id", -1))
+		# 任何仍在场横置友方预计致命时优先防御，不用敌方同时受伤的收益覆盖队友死亡。
+		if player_id != responder_id and bool(player.get("alive", false)) and not bool(player.get("out_of_game", false)) and bool(player.get("chained", false)) and get_attitude(authoritative_snapshot, responder_id, player_id) > 0.0:
+			if get_expected_damage_amount(authoritative_snapshot, source_id, player_id, damage_definition, expected_damage) >= int(player.get("hp", 0)) + int(player.get("shield", 0)):
+				return false
 		if player_id == responder_id or not bool(player.get("alive", false)) or bool(player.get("out_of_game", false)) or get_attitude(authoritative_snapshot, responder_id, player_id) >= 0.0:
 			continue
 		has_enemy = true

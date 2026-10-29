@@ -298,6 +298,7 @@ func _test_meizhan_shield_absorbed_no_trigger() -> void:
 
 
 ## 校验【梅绽】的卖血价值：静态口径为1.0，动态修正只对伤害牌生效且符号随敌我分布翻转。
+## 收入现由统一钩子包含受伤者本人，并按态度强度加权；旧来牌钩子对任何牌都保持原分，避免重复收入。
 func _test_meizhan_dynamic_sell_blood() -> void:
 	_reset_state(4)
 	# 受伤者1号持有“梅绽”；2号是队友、3号是敌人，分别构成“净+1”与“净-1”两种分布。
@@ -314,7 +315,7 @@ func _test_meizhan_dynamic_sell_blood() -> void:
 	var meizhan: SkillDefinition = GameDatabase.create_skill(MEIZHAN_SKILL_ID)
 	meizhan.bind(null, 0)
 	# 只有受伤者一人持有：受伤者自己那一份已由静态项按态度符号计入，动态修正必须为0，不能重复计算。
-	if not is_zero_approx(meizhan.modify_ai_incoming_card_effect(snapshot, 0, 1, {}, {"damage":true}, 0.0, 1, 0.0, evaluator)):
+	if not is_equal_approx(meizhan.score_ai_damage_benefit(snapshot, 0, 1, 1, 1, 0, evaluator), evaluator.score_resource_change(snapshot, 0, 1, 1, 0)):
 		_fail("meizhan_solo_dynamic %f" % meizhan.modify_ai_incoming_card_effect(snapshot, 0, 1, {}, {"damage":true}, 0.0, 1, 0.0, evaluator))
 		return
 	# 非伤害牌不触发“受到伤害后”。
@@ -326,7 +327,7 @@ func _test_meizhan_dynamic_sell_blood() -> void:
 		_fail("meizhan_grant_ally")
 		return
 	snapshot = _build_snapshot(0)
-	if meizhan.modify_ai_incoming_card_effect(snapshot, 0, 1, {}, {"damage":true}, 0.0, 1, 0.0, evaluator) <= 0.0:
+	if meizhan.score_ai_damage_benefit(snapshot, 0, 1, 1, 1, 0, evaluator) <= evaluator.score_resource_change(snapshot, 0, 1, 1, 0):
 		_fail("meizhan_ally_holder_not_positive")
 		return
 	# 敌方持有者：本次伤害整体有害于出手方，修正为负。
@@ -335,7 +336,7 @@ func _test_meizhan_dynamic_sell_blood() -> void:
 		_fail("meizhan_grant_enemy")
 		return
 	snapshot = _build_snapshot(0)
-	if meizhan.modify_ai_incoming_card_effect(snapshot, 0, 1, {}, {"damage":true}, 0.0, 1, 0.0, evaluator) >= 0.0:
+	if meizhan.score_ai_damage_benefit(snapshot, 0, 1, 1, 1, 0, evaluator) >= evaluator.score_resource_change(snapshot, 0, 1, 1, 0):
 		_fail("meizhan_enemy_holder_not_negative")
 		return
 	# 【百折】的既有卖血估值不受本次改动影响；固有技能必须真实安装，否则快照会按“实际安装”裁剪掉它。

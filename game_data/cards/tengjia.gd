@@ -57,6 +57,11 @@ func get_ai_incoming_damage_multiplier(nature: String) -> float:
 	return 2.0 if nature == "fire" else 1.0
 
 
+## 火焰伤害固定加1；多点伤害不能沿用单点伤害的2倍近似，否则会错误判断卖血收益与致命性。
+func get_ai_incoming_damage_amount(nature: String, amount: int) -> int:
+	return amount + 1 if nature == "fire" else amount
+
+
 ## 藤甲使持有者受到的火焰伤害固定增加1点。
 func modify_incoming_damage(match_host: Object, owner: PlayerState, context: Dictionary, amount: int) -> int:
 	return amount + 1 if str(context.get("nature", "normal")) == "fire" else amount

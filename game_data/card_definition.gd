@@ -316,6 +316,16 @@ func get_ai_incoming_damage_cap(_nature: String) -> int:
 	return 0
 
 
+## 返回防具处理后的实际预期伤害点数；供卖血触发、濒死保护和连环估值共用，参数不包含护盾吸收。
+## 默认按倍率后封顶；固定加值防具应覆盖此方法，避免把多点火伤错误翻倍。
+func get_ai_incoming_damage_amount(nature: String, amount: int) -> int:
+	# 防具处理后的非负伤害；倍率为0时不会虚构掉血或技能收益。
+	var result: int = maxi(roundi(float(amount) * get_ai_incoming_damage_multiplier(nature)), 0)
+	# 防具单次上限；0表示不限制，正数只截断本次伤害。
+	var damage_cap: int = get_ai_incoming_damage_cap(nature)
+	return mini(result, damage_cap) if damage_cap > 0 else result
+
+
 ## 返回锦囊被【无懈可击】抵消时是否应记录本回合AI失败目标；默认不保存牌目标记忆。
 func records_failed_ai_target_when_negated() -> bool:
 	return false
