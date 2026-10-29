@@ -18,6 +18,8 @@ func _run() -> void:
 		return
 	if not _test_skill_behavior_replay_produces_mark():
 		return
+	if not _test_filtered_snapshot_observation():
+		return
 	if not _test_response_payload_excludes_hidden_context():
 		return
 	if not _test_replay_skips_local_observer():
@@ -119,7 +121,11 @@ func _test_skill_behavior_replay_produces_mark() -> bool:
 	# 切换到客户端角色；身份模型清空后仅凭广播内容重建推断。
 	_controller.ai_coordinator.reset_identity_observations()
 	_controller.local_human_player_id = 2
-	_controller._remote_snapshot = _controller.state.to_dict(-1, true)
+	_controller._remote_snapshot = _controller.state.to_dict(2, false)
+	# 非本人身份在真实定向快照中必须隐藏，不能用权威快照掩盖客户端缺陷。
+	var remote_players: Array = _controller._remote_snapshot.get("players", []) as Array
+	if str((remote_players[1] as Dictionary).get("identity", "")) != "hidden":
+		return _fail("client_snapshot_identity_not_hidden")
 	_enter_lan_client_role()
 	if not _controller.ai_coordinator.get_identity_mark(1).is_empty():
 		return _fail("client_pre_replay_mark=%s" % _controller.ai_coordinator.get_identity_mark(1))
@@ -133,6 +139,49 @@ func _test_skill_behavior_replay_produces_mark() -> bool:
 	_controller._on_network_game_event_received("identity_behavior", payload)
 	if _controller.ai_coordinator.get_identity_mark(1) != "rebel":
 		return _fail("client_stateless_replay_mark=%s" % _controller.ai_coordinator.get_identity_mark(1))
+	_reset_state()
+	return true
+
+
+## 使用真实裁剪快照验证公开线索推断、反向修正、本地玩家过滤及跨局清理。
+func _test_filtered_snapshot_observation() -> bool:
+	_controller.ai_coordinator.reset_identity_observations()
+	_controller.local_human_player_id = 2
+	_controller._remote_snapshot = _controller.state.to_dict(2, false)
+	_enter_lan_client_role()
+	# 指向公开领袖的负向行为；该线索只能推断为反贼，不读取行动者的真实身份。
+	var attack: Dictionary = _controller.build_identity_behavior_payload(1, {"target_result":-1.0}, [0] as Array[int])
+	_controller._on_network_game_event_received("identity_behavior", attack)
+	if _controller.ai_coordinator.get_identity_mark(1) != "rebel":
+		return _fail("filtered_attack_mark=%s" % _controller.ai_coordinator.get_identity_mark(1))
+	# 对同一领袖的正向行为抵消旧线索，继续累积后可改为忠；不能依据隐藏真身份永久定型。
+	var help: Dictionary = _controller.build_identity_behavior_payload(1, {"target_result":1.0}, [0] as Array[int])
+	_controller._on_network_game_event_received("identity_behavior", help)
+	if not _controller.ai_coordinator.get_identity_mark(1).is_empty():
+		return _fail("filtered_opposing_evidence_not_cleared")
+	_controller._on_network_game_event_received("identity_behavior", help)
+	if _controller.ai_coordinator.get_identity_mark(1) != "loyalist":
+		return _fail("filtered_help_mark=%s" % _controller.ai_coordinator.get_identity_mark(1))
+	# 已有公开忠反标记可作为其他角色的行为参照；原始身份仍保持 hidden。
+	_controller._on_network_game_event_received("identity_behavior", _controller.build_identity_behavior_payload(3, {"target_result":-1.0}, [1] as Array[int]))
+	if _controller.ai_coordinator.get_identity_mark(3) != "rebel":
+		return _fail("filtered_mark_as_evidence=%s" % _controller.ai_coordinator.get_identity_mark(3))
+	# 本机自己的行为不得产生自动标记，即使自身身份在定向快照中可见。
+	_controller._on_network_game_event_received("identity_behavior", _controller.build_identity_behavior_payload(2, {"target_result":-1.0}, [0] as Array[int]))
+	if not _controller.ai_coordinator.get_identity_mark(2).is_empty():
+		return _fail("filtered_observer_marked")
+	# 换局后旧证据不能沿用；下一次公开行为触发模型按 match_id 清理。
+	_controller._remote_snapshot["match_id"] = "lan-identity-mark-next"
+	_controller._on_network_game_event_received("identity_behavior", _controller.build_identity_behavior_payload(3, {"target_result":-1.0}, [0] as Array[int]))
+	if not _controller.ai_coordinator.get_identity_mark(1).is_empty() or _controller.ai_coordinator.get_identity_mark(3) != "rebel":
+		return _fail("filtered_match_scope_not_reset")
+	# 无懈响应也使用真实裁剪快照：先用公开行为建立目标的忠向线索。
+	_controller.ai_coordinator.reset_identity_observations()
+	_controller._on_network_game_event_received("identity_behavior", help)
+	# 领袖对该目标使用锦囊后，其他角色以无懈阻止其负面效果，形成忠向线索。
+	_controller._on_network_game_event_received("identity_response", _controller.build_identity_response_payload(3, "wuxie", "shunshou", {"source_id":0, "target_id":1, "negated":true}))
+	if _controller.ai_coordinator.get_identity_mark(3) != "loyalist":
+		return _fail("filtered_response_mark=%s" % _controller.ai_coordinator.get_identity_mark(3))
 	_reset_state()
 	return true
 
@@ -165,7 +214,7 @@ func _test_replay_skips_local_observer() -> bool:
 	# 当前客户端的本地座位；广播中该座位的公开行为不得形成自动标记。
 	_controller.local_human_player_id = 1
 	_controller.ai_coordinator.reset_identity_observations()
-	_controller._remote_snapshot = _controller.state.to_dict(-1, true)
+	_controller._remote_snapshot = _controller.state.to_dict(1, false)
 	_enter_lan_client_role()
 	_controller._on_network_game_event_received("identity_behavior", _controller.build_identity_behavior_payload(1, {"target_result":-1.0, "expose":0.4}, [0] as Array[int]))
 	if not _controller.ai_coordinator.get_identity_mark(1).is_empty():

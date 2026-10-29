@@ -36,6 +36,7 @@ const CAMP_SIGNAL_LIMIT: float = 1.0
 const IDENTITY_MARK_THRESHOLD: float = 0.2
 
 # 兼容保留：旧版累计阈值不再直接生成标记；0.2仍由目标证据下限与单目标基础步长分别声明。
+# 裁剪快照的公开行为推断使用该阈值，可随新证据清除或调整标记。
 
 ## 存在忠反标记时的最低可信权重；保证明确行为能实际影响战略目标。
 const IDENTITY_MARK_MINIMUM_CONFIDENCE: float = 0.5
@@ -246,8 +247,17 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 		actor_effect += current_target_result * actor_target_attitude * target_evidence_weight
 		if leader_id >= 0:
 			# 领袖阵营对当前目标的真实态度；正面帮助友方或负面打击敌方均产生正忠向信号。
-			var leader_target_attitude: float = get_real_attitude(authoritative_snapshot, leader_id, target_id)
+			# 裁剪快照中的未知身份只能使用已有公开行为标记作为阵营参照，不能把 hidden 当成真实身份。
+			var target_identity: String = str(get_player(authoritative_snapshot, target_id).get("identity", ""))
+			# 公开推测身份；仅当目标真实身份被裁剪时作为态度计算的临时参照。
+			var assumed_target_identity: String = get_identity_mark(target_id) if target_identity == "hidden" else ""
+			if target_identity == "hidden" and assumed_target_identity.is_empty():
+				continue
+			var leader_target_attitude: float = get_real_attitude(authoritative_snapshot, leader_id, target_id, assumed_target_identity)
 			leader_camp_effect += current_target_result * leader_target_attitude * target_evidence_weight
+	# 客户端无法读取行动者的隐藏身份；用可观察的领袖阵营行为强度累计证据，不推测其真实收益。
+	if actor_identity == "hidden":
+		actor_effect = absf(leader_camp_effect)
 	# 目标行为暴露量；只有该行为符合行动者自身收益时才增加，内奸反向伪装行为可减少。
 	var target_exposure: float = 0.0
 	if not self_target_only and not is_zero_approx(actor_effect):
@@ -265,7 +275,7 @@ func observe_card_use(authoritative_snapshot: Dictionary, actor_id: int, card_de
 	if observer_id >= 0 and actor_id != observer_id:
 		updated_exposure *= REMOTE_ACTOR_EXPOSURE_MULTIPLIER
 	_exposure_by_player[actor_id] = clampf(updated_exposure, MIN_EXPOSURE, MAX_EXPOSURE)
-	if not is_zero_approx(leader_camp_effect):
+	if not is_zero_approx(leader_camp_effect) and not (actor_identity == "hidden" and self_target_only):
 		# 忠反信号步长；单目标行为比群体行为更明确，并按实际牌效强弱限制到一次0.2。
 		var signal_step: float = SINGLE_TARGET_EXPOSURE_GAIN if target_ids.size() == 1 else MULTI_TARGET_EXPOSURE_GAIN
 		# 当前忠反信号；正值代表行为有利领忠，负值代表行为有利反贼。
@@ -629,6 +639,15 @@ func _update_identity_mark(authoritative_snapshot: Dictionary, player_id: int, l
 	var actor_identity: String = str(actor.get("identity", ""))
 	# 当前临时身份标记；内奸需要用它判断本次行为是否与既有伪装方向相反。
 	var current_identity_mark: String = str(_identity_mark_by_player.get(player_id, ""))
+	# 裁剪快照不包含真实身份，只能按公开行为的累计方向推断；证据反向时允许修正，不能凭猜测永久定型。
+	if actor_identity == "hidden":
+		if camp_signal >= IDENTITY_MARK_THRESHOLD:
+			_identity_mark_by_player[player_id] = "loyalist"
+		elif camp_signal <= -IDENTITY_MARK_THRESHOLD:
+			_identity_mark_by_player[player_id] = "rebel"
+		else:
+			_identity_mark_by_player[player_id] = ""
+		return
 	if actor_identity == "renegade":
 		if leader_camp_effect > 0.0:
 			if current_identity_mark == "rebel":
