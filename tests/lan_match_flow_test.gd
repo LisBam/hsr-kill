@@ -15,6 +15,9 @@ const TEST_RANDOM_SEED: int = 20260719
 ## 首次开局的客户端快照确认动作类型；房主据此进入“同房重开”验证步骤。
 const INITIAL_ACK_ACTION_TYPE: String = "lan_snapshot_ack"
 
+## 客户端确认真实网络行为已形成身份推断；房主收到后才能进入重开验证。
+const IDENTITY_ACK_ACTION_TYPE: String = "lan_identity_ack"
+
 ## 同房重开后的客户端快照确认动作类型；房主收到即证明重播的开局绑定已经到达客户端。
 const RESTART_ACK_ACTION_TYPE: String = "lan_restart_ack"
 
@@ -283,7 +286,7 @@ func _submit_snapshot_acknowledgement(acknowledgement: PlayerAction) -> void:
 func _on_gateway_command_received(command_data: Dictionary) -> void:
 	# 当前上行动作类型；首次开局确认与同房重开确认共用绑定与手牌校验，但推进不同步骤。
 	var action_type: String = str(command_data.get("action_type", ""))
-	if _is_client_process or (action_type != INITIAL_ACK_ACTION_TYPE and action_type != RESTART_ACK_ACTION_TYPE):
+	if _is_client_process or (action_type != INITIAL_ACK_ACTION_TYPE and action_type != IDENTITY_ACK_ACTION_TYPE and action_type != RESTART_ACK_ACTION_TYPE):
 		return
 	# 当前远端发送者与绑定玩家；网关在发出信号前已拒绝任何 actor 不匹配包。
 	var sender_peer_id: int = _gateway.get_current_incoming_peer_id()
@@ -292,14 +295,29 @@ func _on_gateway_command_received(command_data: Dictionary) -> void:
 	if int(_gateway.get_remote_player_assignments().get(sender_peer_id, -2)) != actor_id:
 		_fail("ack_actor_binding_mismatch")
 		return
-	# 权威客户端玩家状态；手牌数量必须与客户端裁剪快照确认值一致。
-	var authoritative_player: PlayerState = _controller.state.get_player(actor_id)
-	# 客户端从私有快照确认的手牌数量；仅用于测试核对，不参与正式规则结算。
-	var acknowledged_hand_count: int = int((command_data.get("payload", {}) as Dictionary).get("hand_count", -1))
-	if authoritative_player == null or authoritative_player.hand.size() != acknowledged_hand_count:
-		_fail("ack_hand_count_mismatch authoritative=%d client=%d" % [authoritative_player.hand.size() if authoritative_player != null else -1, acknowledged_hand_count])
-		return
 	if action_type == INITIAL_ACK_ACTION_TYPE:
+		# 权威客户端玩家状态；手牌数量必须与客户端裁剪快照确认值一致。
+		var initial_player: PlayerState = _controller.state.get_player(actor_id)
+		# 客户端从私有快照确认的手牌数量；仅用于测试核对，不参与正式规则结算。
+		var initial_hand_count: int = int((command_data.get("payload", {}) as Dictionary).get("hand_count", -1))
+		if initial_player == null or initial_player.hand.size() != initial_hand_count:
+			_fail("initial_ack_hand_count_mismatch")
+			return
+		# 公开领袖与另一名隐藏身份角色；行为经真实房主广播到客户端，禁止测试用完整快照代替裁剪快照。
+		var leader_id: int = -1
+		# 可观察行为角色；不能是客户端本人或身份已公开的角色。
+		var observed_id: int = -1
+		for player: PlayerState in _controller.state.players:
+			if player.alive and player.identity == "leader":
+				leader_id = player.player_id
+			elif player.alive and not player.identity_revealed and player.player_id != actor_id:
+				observed_id = player.player_id
+		if leader_id < 0 or observed_id < 0:
+			_fail("identity_probe_no_candidates")
+			return
+		_controller.observe_skill_identity_behavior(observed_id, [leader_id], {"target_result":-1.0, "lan_identity_probe":true})
+		return
+	if action_type == IDENTITY_ACK_ACTION_TYPE:
 		# 首次确认完成后触发同一 ENet 房间内的重开；重开必须重新广播开局绑定，使客户端重置表现幂等窗口。
 		if _host_restart_requested:
 			return
@@ -315,6 +333,13 @@ func _on_gateway_command_received(command_data: Dictionary) -> void:
 		_controller.replicate_current_state()
 		print("LAN_MATCH_FLOW_RESTART_SENT match_id=%s" % _host_restarted_match_id)
 		return
+	# 权威客户端玩家状态；手牌数量必须与客户端裁剪快照确认值一致。
+	var authoritative_player: PlayerState = _controller.state.get_player(actor_id)
+	# 客户端从私有快照确认的手牌数量；仅用于测试核对，不参与正式规则结算。
+	var acknowledged_hand_count: int = int((command_data.get("payload", {}) as Dictionary).get("hand_count", -1))
+	if authoritative_player == null or authoritative_player.hand.size() != acknowledged_hand_count:
+		_fail("ack_hand_count_mismatch authoritative=%d client=%d" % [authoritative_player.hand.size() if authoritative_player != null else -1, acknowledged_hand_count])
+		return
 	# 重开确认必须来自重开后的新对局；对局 ID 缺失说明房主并未真正重建权威对局。
 	if _host_restarted_match_id.is_empty() or str(_controller.state.match_id) != _host_restarted_match_id:
 		_fail("restart_ack_match_mismatch expected=%s actual=%s" % [_host_restarted_match_id, str(_controller.state.match_id)])
@@ -326,6 +351,16 @@ func _on_gateway_command_received(command_data: Dictionary) -> void:
 
 ## 客户端收到房主完成事件后核对自身 actor 与手牌数量，并正常关闭 ENet 会话。
 func _on_game_event_received(event_type: String, event_payload: Dictionary) -> void:
+	if _is_client_process and event_type == "identity_behavior" and bool((event_payload.get("ai_profile", {}) as Dictionary).get("lan_identity_probe", false)):
+		# 身份观察由控制器的网络监听器先处理；此处核验客户端真实接收后产生的本地推断。
+		var observed_id: int = int(event_payload.get("actor_id", -1))
+		if _controller.ai_coordinator.get_identity_mark(observed_id) != "rebel":
+			_fail("client_identity_mark_missing actor=%d mark=%s" % [observed_id, _controller.ai_coordinator.get_identity_mark(observed_id)])
+			return
+		# 客户端身份观察确认；只用于通知测试房主继续验证同房重开。
+		var acknowledgement: PlayerAction = PlayerAction.new(IDENTITY_ACK_ACTION_TYPE, _local_player_id)
+		_submit_snapshot_acknowledgement.call_deferred(acknowledgement)
+		return
 	if not _is_client_process or event_type != "lan_match_flow_complete":
 		return
 	if int(event_payload.get("actor_id", -1)) != _local_player_id or int(event_payload.get("hand_count", -1)) < 4:

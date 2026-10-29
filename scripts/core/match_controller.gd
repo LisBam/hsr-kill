@@ -18045,7 +18045,8 @@ func _apply_replayed_identity_behavior(actor_id: int, ai_profile: Dictionary, ta
 	if ai_coordinator == null or actor_id < 0 or ai_profile.is_empty():
 		return
 	# 重放所用快照；客户端以最近一次房主快照作为身份模型的背景数据，两者都没有时不重放。
-	var observation_snapshot: Dictionary = state.to_dict(-1, true) if state != null else _remote_snapshot
+	# 联机客户端只使用裁剪后的远端快照，不能读取可能遗留的旧本地对局。
+	var observation_snapshot: Dictionary = _remote_snapshot
 	if observation_snapshot.is_empty():
 		return
 	ai_coordinator.observe_public_behavior(observation_snapshot, actor_id, ai_profile, target_ids, local_human_player_id)
@@ -18056,7 +18057,8 @@ func _apply_replayed_identity_response(responder_id: int, card_definition_id: St
 	if ai_coordinator == null or responder_id < 0 or card_definition_id.is_empty():
 		return
 	# 重放所用快照；与目标行为重放共用同一来源，保证两侧证据基于同一份对局数据。
-	var observation_snapshot: Dictionary = state.to_dict(-1, true) if state != null else _remote_snapshot
+	# 联机客户端只使用裁剪后的远端快照，不读取旧本地对局。
+	var observation_snapshot: Dictionary = _remote_snapshot
 	if observation_snapshot.is_empty():
 		return
 	# 响应牌静态定义；客户端与房主使用同版本内容数据库，可直接解析响应模式与显式暴露值。
