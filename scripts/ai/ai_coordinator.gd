@@ -41,20 +41,22 @@ func request_action(player_id: int, authoritative_snapshot: Dictionary, legal_ac
 
 
 ## 把规则层选择请求交给对应 AI 策略；返回值仍是标准 PlayerAction 字典并需由控制器再次校验。
-func request_card_choice(player_id: int, authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
+func request_card_choice(player_id: int, authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary], hand_pressure: float = 0.0) -> Dictionary:
 	# 指定玩家策略；不存在策略表示该玩家应由本地或网络界面响应，不能替其作出选择。
 	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
 	if policy == null:
 		return {}
+	# 本次选牌的压力由权威角色效果提供，仅影响本次选择。
+	policy.set_hand_pressure(hand_pressure)
 	return policy.choose_card_choice(authoritative_snapshot, choice_request, legal_actions)
 
 
 ## 把通用 ChoiceRequest 交给 AI，并把策略的兼容动作结果转换为标准 ChoiceResponse。
-func request_choice(player_id: int, authoritative_snapshot: Dictionary, request: ChoiceRequest, presentation_request: Dictionary, legal_actions: Array[Dictionary]) -> ChoiceResponse:
+func request_choice(player_id: int, authoritative_snapshot: Dictionary, request: ChoiceRequest, presentation_request: Dictionary, legal_actions: Array[Dictionary], hand_pressure: float = 0.0) -> ChoiceResponse:
 	if request == null:
 		return null
 	# AI 返回的标准动作数据；空字典表示该玩家没有可用策略或合法确认结果。
-	var action_data: Dictionary = request_card_choice(player_id, authoritative_snapshot, presentation_request, legal_actions)
+	var action_data: Dictionary = request_card_choice(player_id, authoritative_snapshot, presentation_request, legal_actions, hand_pressure)
 	if action_data.is_empty():
 		return null
 	# 动作负载；选择的实体牌、目标和确认状态均从统一 payload 恢复。

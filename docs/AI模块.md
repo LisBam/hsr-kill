@@ -454,18 +454,9 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 内容层的规则见《游戏机制与玩法内容》的「卡芙卡与【言灵】【游丝】」；本节只记录 AI 侧入口、数值与通用性。
 
 - **【言灵】卡牌的唯一 AI 入口是 `modify_ai_action_score()`**，口径是硬门槛而不是权重：主演为**队友**时基础分 `AI_ALLY_STARRING_VALUE = 6.0`；主演为**敌人或不存在**时取 `AI_REFUSE_SCORE = -100.0`；目标不是「距离主演回合最近的敌人」时取 `AI_NON_NEAREST_TARGET_SCORE = -100.0`。判定 AI 上下文里「目标保住本回合操作权」的安全结果值 `AI_TARGET_SAFE_RESULT_VALUE = 4.0` 与【乐不思蜀】【兵粮寸断】同档，供通用改判定 AI 直接比较。本牌不新增任何 AI 状态。
-- **【游丝】第一段的评分入口是 `score_ai_choice()`**（按 `choice_request.context.kind == "yousi_placement"` 路由）：取消 `0.0`；救援分支要求本回合角色是自己的队友（态度严格大于 `AI_ALLY_ATTITUDE_LOWER_BOUND = 0.0`）**且**其判定区**第一张**延时锦囊是【乐不思蜀】（需红桃）或【兵粮寸断】（需梅花），只有花色正确**且**位次为牌堆顶第一张才得 `AI_MITIGATION_SCORE = 8.0`，其余组合 `-100.0`；常规分支为 `AI_ENEMY_TURN_BASE_SCORE / (1.0 + 手牌价值 × AI_PLACED_CARD_VALUE_DISCOUNT)`（基础 `3.0`、折扣 `1.0`），手牌越便宜分越高。非法组合（牌数不为 `1`、位次非法、牌不可见）一律 `AI_REFUSE_SCORE = -100.0`。
-  - **两个位次在常规分支同分**：需求配套 AI 原文是「随机放第一或第二张」，而 AI 评分必须确定（否则回放不可复现），因此实现把两个位次视为完全等价，把随机性交给既有合法动作枚举顺序，**不引入第二个随机源**。
-- **【游丝】第二段的评分入口是同一个 `score_ai_choice()`**（`kind == "yousi_gain"`）：无条件纯收益，所有合法选牌与确认同得 `AI_GAIN_SCORE = 20.0`，取消 `0.0`。
-- **通用出牌压力（被发动者的「其他AI」提示）**：需求要求被发动【游丝】的 AI 在主演不是队友时尽量把手牌用出去，避免被主演获得。实现**没有**让它去读牌堆顶前两张——那与「其他角色不可知」直接冲突。真正的做法是一条**与快照无关的标量压力**，通道为：
-  | 层 | 成员 | 说明 |
-  |---|---|---|
-  | 内容层 | `PlayerEffect.get_ai_hand_pressure() -> float`（基类默认 `0.0`） | 角色持续效果可声明“本回合更愿意消耗手牌”的倾向；`game_data/effects/yousi_pressure.gd` 返回 `AI_HAND_PRESSURE = 3.0` |
-  | 服务层 | `PlayerEffectService.get_ai_hand_pressure(player_id)` | 求和该玩家身上全部效果的压力值 |
-  | 权威层 | `MatchController.get_ai_hand_pressure(player_id)` | 供 `_request_ai_action()` 转发；它**不进入任何快照，也不写入存档** |
-  | AI 层 | `AICoordinator.request_action(..., hand_pressure)` → `BasicAIPolicy.set_hand_pressure()` → `_get_hand_pressure_bonus()` | 对**消耗自己手牌的动作**（`use_card`／`recast_card`，以及其他带 `card_uid` 的动作）加该分值；`end_play` 等不消耗手牌的动作不加分；一次决策结束后自动清零，避免倾向泄漏到下一名角色 |
-- **压力的公开信息门槛**：`NonameAIEvaluator.should_dump_hand_against_starring(snapshot, player_id)` 与 `NonameAIEvaluator.get_starring_player_id(snapshot)` 只读**公开快照**——主演的载体是武将牌左上角的公开提示条目（`StarringRoleService.CORNER_ENTRY_ID`），因此 AI 不需要任何隐藏通道。压力仅在「主演存在、不是行为者本人、且行为者对主演的态度低于明确队友门槛 `PROTECTIVE_NEGATION_ALLY_ATTITUDE_THRESHOLD`（与【无懈可击】保护性响应复用同一阈值）」时生效；主演是队友或场上没有主演时**完全不生效**。
-- **兼容性**：基类默认 `0.0`、协调器参数默认 `0.0`、策略初值 `0.0`，因此这条通道对既有内容与既有 AI 行为**逐字零影响**；它只改变决策权重，不改变手牌数、摸牌结果、判定结果或任何真实规则数值。
+- 【游丝】选牌时匹配队友判定花色为 9.0，自身判定区牌评分为 8.0，其他牌按 `3.0 / (1 + 保留价值)` 评分；位次各 3.0，获得牌 20.0。
+- 持续效果 `yousi_pressure` 提供 3.0 压力：主动用牌、重铸等可能进入弃牌堆的手牌动作扣 3.0，使用装备及延时锦囊不扣分。弃牌选择通过 `request_choice` 接收相同压力，每张选中的自身手牌扣 3.0；弃置装备或其他角色的牌不计入，强制弃牌仍按合法动作完成。选择语义可用 `ai_discard_cost=true` 明确声明，普通弃牌请求也按稳定阶段类型或“弃置”提示识别。牌的秘密 UID 不向其他角色的 AI 暴露。
+- 敌方对拥有【游丝】的角色使用延时锦囊的评分上限为 -100.0，实体和转化牌共用该规则。
 
 ## 青雀与【独弈】【弃和】【自摸】的 AI 口径（2026-10-04）
 

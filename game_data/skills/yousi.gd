@@ -1,5 +1,7 @@
 extends SkillDefinition
 
+## 当前规则：材料来自手牌、装备区或判定区，回合结束检查该实体是否仍在弃牌堆；以下旧说明中的手牌条件不再适用。
+
 ## 【游丝】技能源码。「卡芙卡」的技能之一。
 ## 第一段：其他角色的回合开始时，持有者可以把一张手牌置于牌堆顶的第一张或第二张（其他角色不可知）。
 ## 第二段：本回合结束时，若该角色的手牌中仍有那张牌，持有者观看其手牌并获得其一张牌。
@@ -17,6 +19,9 @@ const PLACEMENT_CHOICE_KIND: String = "yousi_placement"
 
 ## 第二段“观看并获得其一张牌”的选择上下文 kind。
 const GAIN_CHOICE_KIND: String = "yousi_gain"
+
+## 已选区域牌后选择位次的恢复步骤。
+const POSITION_CHOICE_KIND: String = "yousi_position"
 
 ## 位次选项的稳定 ID；取自控制器常量，保证界面、AI 与权威校验共用同一份取值。
 const PILE_SLOT_TOP: String = MatchController.PILE_SLOT_OPTION_TOP
@@ -108,7 +113,7 @@ func _init() -> void:
 		"trigger":"phaseBefore",
 		"lock":false,
 		"ui_enabled":false,
-		"description":"其他角色的回合开始时，你可以将一张手牌置于牌堆顶的第一张或第二张（其他角色不可知）。若如此做，本回合结束时，若其手牌中有此牌，你观看并获得其一张牌。",
+		"description":"其他角色的回合开始时，你可以将区域内的一张牌置于牌堆顶的第一张或第二张（其他角色不可知）。若如此做，本回合结束时，若弃牌堆中有此牌，你观看并获得其一张牌。",
 	})
 
 
@@ -129,12 +134,17 @@ func _on_turn_started(event: RuleEvent) -> void:
 		return
 	# 技能持有者权威状态；死亡或离场后不再提供第一段，也不放置任何牌。
 	var owner: PlayerState = _get_owner()
-	if owner == null or not owner.alive or owner.out_of_game or owner.hand.is_empty():
+	if owner == null or not owner.alive or owner.out_of_game or (owner.hand.is_empty() and owner.equipment.is_empty() and owner.judgment_area.is_empty()):
 		return
 	# 请求上下文；只保存可序列化字段，AI 与延迟提交都据此还原本回合身份。
 	var choice_context: Dictionary = {"kind":PLACEMENT_CHOICE_KIND, "turn_player_id":turn_player_id, "turn_number":_get_turn_number()}
 	# 组合请求：先选一张手牌，再选位次或取消；界面只显示“牌堆顶第一张/牌堆顶第二张/取消”三个按钮。
-	request_hand_card_pile_position("游丝", "你可以将一张手牌置于牌堆顶的第一张或第二张（其他角色不可知）。", true, choice_context)
+	# 通用区域候选可在选择窗口中显示判定区，不依赖判定标记支持点击。
+	choice_context["ai_choice_skill_scored"] = true
+	# 窗口标记要求统一选择面板承载所有区域候选。
+	choice_context["display_candidates"] = host.call("get_player_zone_candidates", owner_player_id, owner_player_id)
+	var candidates: Array[Dictionary] = host.call("get_player_zone_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
+	request_card_selection("游丝", "你可以选择区域内的一张牌。", candidates, 1, 1, true, choice_context)
 
 
 ## 恢复两段请求：第一段执行秘密置牌并登记私有事实，第二段观看并取走目标的一张牌。
@@ -144,6 +154,14 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 当前选择步骤；两段各自独立分支，互不推断。
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == PLACEMENT_CHOICE_KIND:
+		if not response.confirmed or response.card_ids.size() != 1:
+			return true
+		# 位次选择与选牌分步进行，双方都可取消且取消不移动牌。
+		var position_context: Dictionary = {"kind":POSITION_CHOICE_KIND, "card_uid":int(response.card_ids[0]), "turn_player_id":int(context.get("turn_player_id", -1)), "turn_number":int(context.get("turn_number", NO_TURN)), "ai_choice_skill_scored":true}
+		var options: Array[Dictionary] = [{"id":PILE_SLOT_TOP, "label":"牌堆顶第一张"}, {"id":PILE_SLOT_SECOND, "label":"牌堆顶第二张"}]
+		request_control_selection("游丝", "请选择置牌位置。", options, true, position_context)
+		return true
+	if choice_kind == POSITION_CHOICE_KIND:
 		return _continue_placement(context, response)
 	if choice_kind == GAIN_CHOICE_KIND:
 		return _continue_gain(context, response)
@@ -156,8 +174,8 @@ func _continue_placement(context: Dictionary, response: ChoiceResponse) -> bool:
 	if not response.confirmed:
 		return true
 	# 选中的手牌 UID 列表；位次请求的要求是恰好一张，数量不符说明提交被伪造或已被取消。
-	var selected_uids: Array = response.card_ids
-	if selected_uids.size() != REQUIRED_PLACEMENT_CARD_COUNT:
+	var selected_uids: Array = [int(context.get("card_uid", -1))]
+	if int(selected_uids[0]) < 0:
 		return true
 	# 目标牌堆位次；取消选项与未知选项都不放置。
 	var position: int = _resolve_pile_position(str(response.control_id))
@@ -169,10 +187,10 @@ func _continue_placement(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 所选实体牌；等待期间已经被使用或弃置时必须整体作废，避免凭空移动不存在的牌。
 	var card_uid: int = int(selected_uids[0])
-	if owner.find_hand_card(card_uid) == null:
+	if not (host.call("get_player_zone_candidates", owner_player_id, owner_player_id) as Array).any(func(candidate: Dictionary) -> bool: return int(candidate.get("uid", -1)) == card_uid):
 		return true
 	# 秘密置牌；走专用端口而不是通用移牌，因此不会触发揭示、公开记录与表现事件。
-	if not bool(host.call("place_hand_card_on_draw_pile_top", owner_player_id, card_uid, position)):
+	if not bool(host.call("place_player_zone_card_on_draw_pile_top", owner_player_id, card_uid, position)):
 		return true
 	# 私有事实；回合角色与回合号同时记录，使第二段能精确匹配“这一次放置所服务的那个回合”。
 	var turn_player_id: int = int(context.get("turn_player_id", -1))
@@ -231,7 +249,13 @@ func _on_turn_finished(event: RuleEvent) -> void:
 		return
 	# 那张牌是否仍在对方手牌中；已经打出、弃置或被移动时第二段整体不触发。
 	var placed_card_uid: int = int(placement.get(PRIVATE_KEY_CARD_UID, -1))
-	if placed_card_uid < 0 or turn_player.find_hand_card(placed_card_uid) == null:
+	# UID 必须仍在弃牌堆，进入后又离开的牌不满足条件。
+	var found_in_discard: bool = false
+	for discard_card: CardInstance in host.state.discard_pile:
+		if discard_card.uid == placed_card_uid:
+			found_in_discard = true
+			break
+	if not found_in_discard:
 		return
 	# 候选：完整手牌牌面 + 装备区，**不含判定区**。
 	# 需求的操作口径是“获得其一张牌”，而判定区的延时锦囊不属于该角色拥有的牌，把它列进候选会与描述不符。
@@ -240,7 +264,7 @@ func _on_turn_finished(event: RuleEvent) -> void:
 		return
 	# 第二段的选择上下文；保存目标与触发来源牌，供 AI 评分与延迟提交恢复。
 	var choice_context: Dictionary = {"kind":GAIN_CHOICE_KIND, "turn_player_id":event.player_id, "placed_card_uid":placed_card_uid}
-	request_card_selection("游丝", "本回合结束时，若其手牌中有此牌，你观看并获得其一张牌。", candidates, REQUIRED_GAIN_COUNT, REQUIRED_GAIN_COUNT, false, choice_context)
+	request_card_selection("游丝", "本回合结束时，若弃牌堆中有此牌，你观看并获得其一张牌。", candidates, REQUIRED_GAIN_COUNT, REQUIRED_GAIN_COUNT, false, choice_context)
 
 
 ## 把位次选项 ID 换算为权威位次值；取消与未知选项一律返回0，表示不放置。
@@ -265,7 +289,32 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	# 当前选择步骤；只处理本技能的两段请求。
 	var choice_kind: String = str(context.get("kind", ""))
 	if choice_kind == PLACEMENT_CHOICE_KIND:
-		return _score_placement_choice(authoritative_snapshot, context, payload, evaluator)
+		if not bool(payload.get("confirmed", false)):
+			return 0.0
+		var selected_cards: Array = payload.get("selected_card_uids", []) as Array
+		if selected_cards.size() != 1:
+			return AI_REFUSE_SCORE
+		var card_uid: int = int(selected_cards[0])
+		# 可救援队友判定时，优先选择匹配花色的区域牌。
+		var mitigation_suit: String = _resolve_mitigation_suit(authoritative_snapshot, int(context.get("turn_player_id", -1)), evaluator)
+		var card_data: Dictionary = evaluator.get_owned_card_by_uid(authoritative_snapshot, owner_player_id, card_uid)
+		var own: Dictionary = evaluator.get_player(authoritative_snapshot, owner_player_id)
+		for judgment_card: Variant in own.get("judgment_area", []) as Array:
+			if int((judgment_card as Dictionary).get("uid", -1)) == card_uid:
+				card_data = judgment_card as Dictionary
+		if not mitigation_suit.is_empty() and str(card_data.get("suit", "")) == mitigation_suit:
+			return AI_MITIGATION_SCORE + 1.0
+		for judgment_card: Variant in own.get("judgment_area", []) as Array:
+			if int((judgment_card as Dictionary).get("uid", -1)) == card_uid:
+				return AI_MITIGATION_SCORE
+		return AI_ENEMY_TURN_BASE_SCORE / (1.0 + evaluator.get_owned_card_value_by_uid(authoritative_snapshot, owner_player_id, card_uid) * AI_PLACED_CARD_VALUE_DISCOUNT)
+	if choice_kind == POSITION_CHOICE_KIND:
+		if not bool(payload.get("confirmed", false)):
+			return 0.0
+		# 队友需要改判时优先第一张；其他情况两种位次等价。
+		if not _resolve_mitigation_suit(authoritative_snapshot, int(context.get("turn_player_id", -1)), evaluator).is_empty() and str(payload.get("selected_control_id", "")) == PILE_SLOT_TOP:
+			return AI_MITIGATION_SCORE
+		return AI_ENEMY_TURN_BASE_SCORE
 	if choice_kind == GAIN_CHOICE_KIND:
 		return AI_GAIN_SCORE if bool(payload.get("confirmed", false)) else 0.0
 	return 0.0
