@@ -3367,7 +3367,7 @@ func request_card_choice(chooser_id: int, title: String, prompt: String, candida
 	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
 	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# 兼容策略选择结果；仍需经 submit_action 与 request_id、UID 和数量校验。
-	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
+	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions, get_ai_hand_pressure(chooser_id))
 	var action_data: Dictionary = {}
 	if ai_response != null:
 		var ai_action: PlayerAction = PlayerAction.new("choose_cards", chooser_id)
@@ -3606,7 +3606,7 @@ func _run_ai_card_choice_after_delay(request_id: int, chooser_id: int, token: in
 	var full_snapshot: Dictionary = state.to_dict(chooser_id, true)
 	_append_limited_skill_usage_to_snapshot(full_snapshot)
 	# AI 选择结果；空结果或异常结果随后使用同一候选集中的保守回退动作。
-	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions)
+	var ai_response: ChoiceResponse = ai_coordinator.request_choice(chooser_id, full_snapshot, runtime_request, _pending_card_choice, legal_actions, get_ai_hand_pressure(chooser_id))
 	var action_data: Dictionary = {}
 	if ai_response != null:
 		# AI 的标准选牌动作；事件 ID 与请求 ID 都由当前运行时请求提供，防止迟到响应进入新窗口。
@@ -6459,7 +6459,7 @@ func _run_simultaneous_negation_ai_after_delay(request_id: int, responder_id: in
 	# 当前 AI 完整快照；策略只读并按上下文中的收益倾向决定是否响应。
 	var full_snapshot: Dictionary = state.to_dict(responder_id, true)
 	# 当前 AI 响应；空返回使用明确放弃作为保守结果。
-	var ai_response: ChoiceResponse = ai_coordinator.request_choice(responder_id, full_snapshot, runtime_request, choice_data, legal_actions)
+	var ai_response: ChoiceResponse = ai_coordinator.request_choice(responder_id, full_snapshot, runtime_request, choice_data, legal_actions, get_ai_hand_pressure(responder_id))
 	# 当前标准动作；即使放弃也携带同一请求 ID 进入权威校验。
 	var action: PlayerAction = PlayerAction.new("choose_cards", responder_id)
 	action.payload = {"request_id":request_id, "event_id":int(choice_data.get("runtime_event_id", -1)), "selected_card_uids":ai_response.card_ids.duplicate() if ai_response != null else []}
@@ -9572,6 +9572,57 @@ func create_and_insert_card_into_draw_pile(definition_id: String, suit: String =
 	_emit_state()
 	return inserted_card.uid
 
+
+
+## 从游戏外创建一张具有定义牌面的实体牌并交给指定角色；成功返回实体 UID。
+## 该入口不经过牌堆，适合开局获得专属牌；无效定义或角色返回 -1。
+func create_card_in_player_hand(player_id: int, definition_id: String) -> int:
+	# 获得者；离场或死亡角色不能获得新牌。
+	var player: PlayerState = state.get_player(player_id) if state != null else null
+	# 静态牌面；缺少有效花色或点数时不创建实体。
+	var definition: Dictionary = GameDatabase.get_card(definition_id)
+	if state == null or state.game_over or player == null or not player.alive or player.out_of_game or definition.is_empty():
+		return -1
+	# 定义提供的花色与点数，避免产生未经记录的随机结果。
+	var suit: String = str(definition.get(CARD_METADATA_KEY_SUIT, ""))
+	var rank: int = int(definition.get(CARD_METADATA_KEY_RANK, 0))
+	if not CardInstance.is_valid_suit(suit) or not CardInstance.is_valid_rank(rank):
+		return -1
+	_ensure_card_movement()
+	if card_movement == null:
+		return -1
+	# 游戏外新实体；统一移动服务记录其进入手牌。
+	var card: CardInstance = CardInstance.new(definition_id, suit, rank)
+	if card_movement.insert_new_card_into_zone(card, "hand", player_id, "gain_outside_game", state.current_event_id) == null:
+		return -1
+	_emit_state()
+	return card.uid
+
+
+## 将角色手牌、装备区或判定区的一张牌秘密置于牌堆顶指定位置。
+## 不公开牌面与位次；移动服务负责维护原区域与装备状态。
+func place_player_zone_card_on_draw_pile_top(player_id: int, card_uid: int, position: int) -> bool:
+	if state == null or state.game_over or not _is_valid_draw_pile_position(position):
+		return false
+	# 有效持有者与区域内实体；不接受其他来源的牌。
+	var player: PlayerState = state.get_player(player_id)
+	var card: CardInstance = _find_player_zone_card(player_id, card_uid)
+	if player == null or not player.alive or player.out_of_game or card == null:
+		return false
+	_ensure_card_movement()
+	if card_movement == null:
+		return false
+	card.shown = false
+	card.known_to.clear()
+	card.private_owner_id = -1
+	if card.has_hand_view_as():
+		card.clear_hand_view_as()
+	card.clear_hand_view_as_presentation()
+	card.clear_hand_mark_tags()
+	if card_movement.move_card(card, "draw_pile", -1, SECRET_PILE_PLACEMENT_REASON, state.current_event_id, "@%d" % position) == null:
+		return false
+	_emit_state()
+	return true
 
 
 ## 写入一条「其他角色不可知」的置牌事实；成功返回 true。

@@ -123,7 +123,7 @@ func _continue_cost_option(context: Dictionary, response: ChoiceResponse) -> boo
 		var candidates: Array[Dictionary] = host.call("get_hand_candidates", turn_player_id, turn_player_id) as Array[Dictionary]
 		if candidates.is_empty():
 			return true
-		request_card_selection_for_player(turn_player_id, "振旗", "请选择一张手牌作为【振旗】费用", candidates, 1, 1, false, {"kind":"zhenqi_discard_card", "turn_player_id":turn_player_id})
+		request_card_selection_for_player(turn_player_id, "振旗", "请选择一张手牌作为【振旗】费用", candidates, 1, 1, false, {"kind":"zhenqi_discard_card", "turn_player_id":turn_player_id, "ai_discard_cost":true})
 		return true
 	if response.control_id == LOSE_HP_OPTION_ID:
 		_request_recipient(turn_player_id, LOSE_HP_OPTION_ID, -1)

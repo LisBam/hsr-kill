@@ -1,5 +1,7 @@
 extends SkillDefinition
 
+## 当前规则：随机入堆3张，并从游戏外获得1张；以下历史说明中的五张仅供旧机制背景参考。
+
 ## 【言灵】锁定技源码。「卡芙卡」的技能之一。
 ## 第一段：游戏开始时，由本技能把五张专属锦囊牌【言灵】随机洗入摸牌堆。
 ## 第二段：任意角色使用延时锦囊牌时，持有者摸一张牌并成为「主演」。
@@ -13,7 +15,7 @@ extends SkillDefinition
 const CARD_DEFINITION_ID: String = "yanling"
 
 ## 游戏开始时加入牌堆的张数；与原文「随机加入五张【言灵】」一致，改动会直接改变开局牌堆构成与可判定次数。
-const INSERT_COUNT: int = 5
+const INSERT_COUNT: int = 3
 
 ## 洗入时使用的位次取值；取控制器常量而不是字面量，保证「随机位次」的语义只有一处定义。
 ## 该值会让权威随机源在整副牌堆中均匀选位，并把结果写入随机历史，使存档恢复与回放重演得到同一落点。
@@ -52,7 +54,7 @@ func _init() -> void:
 		"trigger":"gameStart",
 		"lock":true,
 		"ui_enabled":false,
-		"description":"锁定技，游戏开始时，你往牌堆中随机加入五张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。",
+		"description":"锁定技，游戏开始时，你往牌堆中随机加入三张【言灵】，并从游戏外获得一张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。",
 	})
 
 
@@ -78,6 +80,9 @@ func _on_game_start(_event: RuleEvent) -> void:
 	for _index: int in range(INSERT_COUNT):
 		# 牌面留空：专属牌的牌面由卡牌文件自带（梅花K），端口会在调用方未给牌面时读取它，而不是随机花色点数。
 		host.call("create_and_insert_card_into_draw_pile", CARD_DEFINITION_ID, "", 0, INSERT_POSITION)
+	# 游戏外获得的实体直接进入手牌，不消耗牌堆。
+	if host.has_method("create_card_in_player_hand"):
+		host.call("create_card_in_player_hand", owner_player_id, CARD_DEFINITION_ID)
 
 
 ## 任意角色使用延时锦囊牌时，持有者摸一张牌并成为「主演」。

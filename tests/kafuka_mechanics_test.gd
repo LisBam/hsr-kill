@@ -24,13 +24,13 @@ const KAFUKA_CHARACTER_ID: String = "kafuka"
 const YANLING_CARD_DESCRIPTION: String = "判定结果为梅花时，若场上有“主演”，本回合由“主演”操控。"
 
 ## 【言灵】技能玩家可见描述原文；必须与需求提供文本逐字一致。
-const YANLING_SKILL_DESCRIPTION: String = "锁定技，游戏开始时，你往牌堆中随机加入五张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。"
+const YANLING_SKILL_DESCRIPTION: String = "锁定技，游戏开始时，你往牌堆中随机加入三张【言灵】，并从游戏外获得一张【言灵】。当一名角色使用延时锦囊牌时，你摸一张牌并成为“主演”。"
 
 ## 【游丝】技能玩家可见描述原文；必须与需求提供文本逐字一致。
-const YOUSI_SKILL_DESCRIPTION: String = "其他角色的回合开始时，你可以将一张手牌置于牌堆顶的第一张或第二张（其他角色不可知）。若如此做，本回合结束时，若其手牌中有此牌，你观看并获得其一张牌。"
+const YOUSI_SKILL_DESCRIPTION: String = "其他角色的回合开始时，你可以将区域内的一张牌置于牌堆顶的第一张或第二张（其他角色不可知）。若如此做，本回合结束时，若弃牌堆中有此牌，你观看并获得其一张牌。"
 
 ## 开局应洗入的【言灵】张数；与需求原文「随机加入五张【言灵】」一致。
-const EXPECTED_INSERT_COUNT: int = 5
+const EXPECTED_INSERT_COUNT: int = 3
 
 ## 专属牌自带牌面：梅花。花色取值域与 CardInstance.suit 一致。
 const EXPECTED_CARD_SUIT: String = "club"
@@ -129,6 +129,9 @@ func _run() -> void:
 		return
 	_log_progress("placement")
 	if not _test_yousi_placement_private_fact():
+		return
+	_log_progress("zonePlacement")
+	if not _test_yousi_zone_placement():
 		return
 	_log_progress("gain")
 	if not _test_yousi_gain_on_turn_end():
@@ -279,9 +282,11 @@ func _submit_pending_choice(actor_id: int, selected_card_uids: Array[int], selec
 	var request_id: int = int(_controller._pending_card_choice.get("request_id", -1))
 	# 标准选择动作；卡牌、目标与文字选项均显式填写，保持与真实界面提交协议一致。
 	var action: PlayerAction = PlayerAction.new("choose_cards", actor_id)
-	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "selected_control_id":selected_control_id, "confirmed":confirmed}
+	action.payload = {"request_id":request_id, "selected_card_uids":selected_card_uids.duplicate(), "selected_target_ids":selected_target_ids.duplicate(), "selected_control_id":"" if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) == "yousi_placement" else selected_control_id, "confirmed":confirmed}
 	if not _controller.submit_action(action):
 		return _fail("choice_rejected actor=%d request=%d kind=%s" % [actor_id, request_id, str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", ""))])
+	if confirmed and not selected_control_id.is_empty() and str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) == "yousi_position":
+		return _submit_pending_choice(actor_id, [], [], true, selected_control_id)
 	return true
 
 
@@ -386,6 +391,10 @@ func _test_yanling_game_start_insertion() -> bool:
 	var pile_size_before: int = _controller.state.draw_pile.size()
 	var history_before: int = _controller.state.random_history.size()
 	_controller._emit_rule_timing("gameStart", -1, -1, -1, {"player_count":3})
+	# 游戏外获得的牌应直接进入手牌，且牌面由定义提供。
+	var opening_hand: Array[CardInstance] = _controller.state.get_player(0).hand
+	if opening_hand.size() != 1 or opening_hand[0].definition_id != YANLING_CARD_ID or opening_hand[0].suit != "club" or opening_hand[0].rank != 13:
+		return _fail("yanling_outside_hand")
 	# 发动记录：技能历史恰好新增一条【言灵】，且携带本次入堆的张数口径，供复盘与界面提示读取。
 	var activation_history: Array = _controller.state.get_player(0).skill_history
 	if activation_history.size() != activation_history_before + 1:
@@ -607,15 +616,10 @@ func _test_yousi_placement_private_fact() -> bool:
 	if _controller._pending_card_choice.is_empty():
 		return _fail("yousi_request_missing")
 	var pending: Dictionary = _controller._pending_card_choice.duplicate(true)
-	if str(pending.get("choice_type", "")) != "card_position" or int(pending.get("chooser_id", -1)) != 0:
+	if str(pending.get("choice_type", "")) != "card" or int(pending.get("chooser_id", -1)) != 0:
 		return _fail("yousi_request_shape=%s" % str(pending.get("choice_type", "")))
-	var option_ids: Array[String] = []
-	for option_variant: Variant in pending.get("control_options", []) as Array:
-		option_ids.append(str((option_variant as Dictionary).get("id", "")))
-	if option_ids != [OPTION_TOP_ID, OPTION_SECOND_ID, "cancel"]:
-		return _fail("yousi_option_ids=%s" % str(option_ids))
 	# 取消不写任何私有事实、不移动任何牌。
-	if not _submit_pending_choice(0, [], [], false, "cancel"):
+	if not _submit_pending_choice(0, [], [], false):
 		return false
 	if not _controller.get_private_pile_placement(0).is_empty() or _controller.state.get_player(0).find_hand_card(placed.uid) == null:
 		return _fail("yousi_cancel_wrote_state")
@@ -665,6 +669,30 @@ func _test_yousi_placement_private_fact() -> bool:
 	# 移除后持久状态必须一并清除，否则读档会把上一回合的压力错误地复活。
 	if pressure_probe.has_persisted_state(_controller.state.get_player(2)):
 		return _fail("yousi_pressure_state_not_cleared")
+	return true
+
+
+## 验证装备区、判定区均可作为游丝材料，并按正确实体置入牌堆。
+func _test_yousi_zone_placement() -> bool:
+	for source_zone: String in ["equipment", "judgment"]:
+		_reset_state(3)
+		if _install_single_skill(0, YOUSI_SKILL_ID) == null:
+			return _fail("zone_skill_install")
+		# 每次只放一张区域牌，确认无手牌时仍能发动。
+		var card: CardInstance = CardInstance.new("bagua" if source_zone == "equipment" else "lebu", "spade", 2)
+		card.zone = source_zone
+		card.owner_id = 0
+		var owner: PlayerState = _controller.state.get_player(0)
+		if source_zone == "equipment":
+			owner.equipment["armor"] = card
+		else:
+			owner.judgment_area.append(card)
+		_add_draw_pile_card("tao", "heart", 9)
+		_controller._emit_rule_timing("phaseBefore", 1, 1, 1, {"turn_number":1})
+		if not _submit_pending_choice(0, [card.uid], [], true, OPTION_TOP_ID):
+			return false
+		if _controller.state.draw_pile.back().uid != card.uid or owner.judgment_area.has(card) or owner.equipment.values().has(card):
+			return _fail("zone_placement_failed=%s" % source_zone)
 	return true
 
 
@@ -719,6 +747,7 @@ func _test_yousi_gain_on_turn_end() -> bool:
 	_controller.draw(1, 1)
 	if target.find_hand_card(second_placed.uid) == null:
 		return _fail("yousi_draw_did_not_pick_placed_card")
+	_controller.discard_card_from_hand(1, second_placed.uid)
 	_controller._emit_rule_timing("phaseAfter", 1, 1, 1, {"turn_number":1})
 	if _controller._pending_card_choice.is_empty():
 		return _fail("yousi_gain_request_missing")
@@ -733,7 +762,7 @@ func _test_yousi_gain_on_turn_end() -> bool:
 		if int(candidate.get("owner_id", -1)) != 1 or not bool(candidate.get("visible", false)):
 			return _fail("yousi_gain_candidate=%s" % str(candidate))
 		candidate_uids.append(int(candidate.get("uid", -1)))
-	if candidate_uids.size() != 3 or not candidate_uids.has(target_hand.uid) or not candidate_uids.has(target_equipment.uid) or not candidate_uids.has(second_placed.uid):
+	if candidate_uids.size() != 2 or not candidate_uids.has(target_hand.uid) or not candidate_uids.has(target_equipment.uid) or candidate_uids.has(second_placed.uid):
 		return _fail("yousi_gain_candidates=%s" % str(candidate_uids))
 	if candidate_uids.has(target_judgment.uid):
 		return _fail("yousi_gain_includes_judgment")
@@ -751,62 +780,55 @@ func _test_yousi_gain_on_turn_end() -> bool:
 
 ## 【游丝】配套 AI：救援判定区、敌方回放低价值牌，以及被发动者的出牌压力。三个部分都只读公开信息或标量倾向。
 func _test_ai_pressure_mechanism() -> bool:
-	var evaluator: NonameAIEvaluator = NonameAIEvaluator.new(IdentityAIModel.new())
-	# 主演为敌方（反贼1）：领袖0应当有防备；主演为友方（忠臣2）时不需要防备。
-	var enemy_starring: Dictionary = _build_policy_snapshot(1)
-	var ally_starring: Dictionary = _build_policy_snapshot(2)
-	var no_starring: Dictionary = _build_policy_snapshot(-1)
-	if evaluator.get_starring_player_id(enemy_starring) != 1 or evaluator.get_starring_player_id(no_starring) != -1:
-		return _fail("starring_snapshot_read=%d/%d" % [evaluator.get_starring_player_id(enemy_starring), evaluator.get_starring_player_id(no_starring)])
-	if not evaluator.should_dump_hand_against_starring(enemy_starring, 0):
-		return _fail("starring_enemy_not_detected")
-	if evaluator.should_dump_hand_against_starring(ally_starring, 0) or evaluator.should_dump_hand_against_starring(no_starring, 0):
-		return _fail("starring_ally_or_absent_flagged")
-	# 策略层：压力只加在消耗自己手牌的动作上，并且只在主演不为队友时生效。
+	# 未知牌的保守评分不会暴露秘密 UID；装备使用进入装备区，应免除弃牌风险。
 	var policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
-	var use_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":101, "card_definition_id":"jiu", "target_ids":[0], "payload":{}}
-	var end_action: Dictionary = {"action_type":"end_play", "actor_id":0}
+	var snapshot: Dictionary = _build_policy_snapshot(-1)
+	var use_action: Dictionary = {"action_type":"use_card", "card_definition_id":"sha"}
+	var equipment_action: Dictionary = {"action_type":"use_card", "card_definition_id":"bagua"}
 	policy.set_hand_pressure(EXPECTED_HAND_PRESSURE)
-	if not is_equal_approx(float(policy.call("_get_hand_pressure_bonus", enemy_starring, use_action)), EXPECTED_HAND_PRESSURE):
-		return _fail("pressure_bonus_use_card=%f" % float(policy.call("_get_hand_pressure_bonus", enemy_starring, use_action)))
-	if not is_equal_approx(float(policy.call("_get_hand_pressure_bonus", enemy_starring, end_action)), 0.0):
-		return _fail("pressure_bonus_end_play")
-	if not is_equal_approx(float(policy.call("_get_hand_pressure_bonus", ally_starring, use_action)), 0.0):
-		return _fail("pressure_bonus_ally_starring")
-	# 端到端效果：复刻已验证的【酒】负分基线场景。
-	# 同一组合法动作（一张在当前阶段没有后续收益的【酒】与结束出牌），压力为0时必须结束出牌；
-	# 压力足够大时必须改为把这张手牌打出去：这条断言同时证明“压力进入了最终评分”和“压力让 AI 更愿意消耗手牌”。
-	var wine_snapshot: Dictionary = _build_policy_snapshot(1, true)
-	# 无后续收益的【酒】动作；目标是自己，与基线场景完全一致。
-	var wine_action: Dictionary = {"action_type":"use_card", "actor_id":0, "card_uid":102, "card_definition_id":"jiu", "target_ids":[0], "payload":{}}
-	var wine_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
-	var no_pressure_choice: Dictionary = wine_policy.choose_action(wine_snapshot, [wine_action, end_action])
-	if str(no_pressure_choice.get("action_type", "")) != "end_play":
-		return _fail("pressure_baseline_not_end_play=%s" % str(no_pressure_choice))
-	var pressured_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
-	pressured_policy.set_hand_pressure(TEST_GUARANTEED_PRESSURE)
-	var pressured_choice: Dictionary = pressured_policy.choose_action(wine_snapshot, [wine_action, end_action])
-	if str(pressured_choice.get("card_definition_id", "")) != "jiu":
-		return _fail("pressure_did_not_change_choice=%s" % str(pressured_choice))
-	# 一次决策结束后压力必须自动清零，避免倾向泄漏到下一名角色。
-	if not is_equal_approx(pressured_policy.hand_pressure, 0.0):
-		return _fail("pressure_not_consumed=%f" % pressured_policy.hand_pressure)
-	# 主演是队友时，同样的压力不得产生任何效果。
-	var ally_pressured_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
-	ally_pressured_policy.set_hand_pressure(TEST_GUARANTEED_PRESSURE)
-	var ally_choice: Dictionary = ally_pressured_policy.choose_action(_build_policy_snapshot(2, true), [wine_action, end_action])
-	if str(ally_choice.get("action_type", "")) != "end_play":
-		return _fail("pressure_applied_for_ally_starring=%s" % str(ally_choice))
-	# 协调器入口：传入的压力值必须写入策略并在决策后自动清零；默认0.0时既有行为逐字不变。
+	if not is_equal_approx(float(policy.call("_get_hand_pressure_bonus", snapshot, use_action)), -EXPECTED_HAND_PRESSURE):
+		return _fail("pressure_must_deter_discard")
+	if not is_equal_approx(float(policy.call("_get_hand_pressure_bonus", snapshot, equipment_action)), 0.0):
+		return _fail("pressure_must_allow_equipment %s %s" % [str(GameDatabase.get_card("baguazhen")), str(policy.call("_get_hand_pressure_bonus", snapshot, equipment_action))])
+	# 自愿弃手牌的收益需要扣除风险；装备和其他角色手牌不计入。
+	var discard_request: Dictionary = {"prompt":"你可以弃置一张牌", "allow_cancel":true, "min_card_select":0, "max_card_select":1, "context":{}, "candidates":[{"uid":101, "owner_id":0, "zone":"hand", "card_data":_policy_card(101, "sha", 0)}, {"uid":102, "owner_id":0, "zone":"equipment"}, {"uid":103, "owner_id":1, "zone":"hand"}]}
+	var discard_action: Dictionary = {"action_type":"choose_cards", "payload":{"confirmed":true, "selected_card_uids":[101]}}
+	var pass_action: Dictionary = {"action_type":"choose_cards", "payload":{"confirmed":false, "selected_card_uids":[]}}
+	if not is_equal_approx(float(policy.call("_get_discard_pressure_bonus", discard_request, discard_action)), -EXPECTED_HAND_PRESSURE):
+		return _fail("discard_pressure_missing")
+	var equipment_discard: Dictionary = {"payload":{"confirmed":true, "selected_card_uids":[102, 103]}}
+	if not is_equal_approx(float(policy.call("_get_discard_pressure_bonus", discard_request, equipment_discard)), 0.0):
+		return _fail("discard_pressure_wrong_zone_or_owner")
+	# 协调器把效果压力传入选牌策略；无压力时原本的微弱确认收益保留。
 	_controller.ai_coordinator.register_basic_ai(0)
-	_controller.ai_coordinator.request_action(0, wine_snapshot, [wine_action, end_action], TEST_GUARANTEED_PRESSURE)
-	var registered_policy: BasicAIPolicy = _controller.ai_coordinator._policies.get(0) as BasicAIPolicy
-	if registered_policy == null or not is_equal_approx(registered_policy.hand_pressure, 0.0):
-		return _fail("coordinator_pressure_not_reset=%s" % str(registered_policy.hand_pressure if registered_policy != null else -1.0))
-	var neutral_policy: BasicAIPolicy = BasicAIPolicy.new(0, IdentityAIModel.new())
-	var neutral_choice: Dictionary = neutral_policy.choose_action(wine_snapshot, [wine_action, end_action])
-	if str(neutral_choice.get("action_type", "")) != str(no_pressure_choice.get("action_type", "")):
-		return _fail("neutral_pressure_changed_choice=%s/%s" % [str(neutral_choice.get("action_type", "")), str(no_pressure_choice.get("action_type", ""))])
+	var neutral_choice: Dictionary = _controller.ai_coordinator.request_card_choice(0, snapshot, discard_request, [discard_action, pass_action])
+	var pressured_choice: Dictionary = _controller.ai_coordinator.request_card_choice(0, snapshot, discard_request, [discard_action, pass_action], EXPECTED_HAND_PRESSURE)
+	if not bool((neutral_choice.get("payload", {}) as Dictionary).get("confirmed", false)) or bool((pressured_choice.get("payload", {}) as Dictionary).get("confirmed", true)):
+		return _fail("discard_pressure_coordinator")
+	# 强制弃牌仍必须提交一张；可取消时原先微弱收益被风险抵消。
+	var optional_result: Dictionary = policy.choose_card_choice(snapshot, discard_request, [discard_action, pass_action])
+	if bool((optional_result.get("payload", {}) as Dictionary).get("confirmed", true)):
+		return _fail("discard_pressure_did_not_decline")
+	if not is_equal_approx(policy.hand_pressure, 0.0):
+		return _fail("discard_pressure_not_cleared")
+	policy.set_hand_pressure(EXPECTED_HAND_PRESSURE)
+	discard_request["allow_cancel"] = false
+	discard_request["context"] = {"kind":"discard_phase"}
+	var forced_result: Dictionary = policy.choose_card_choice(snapshot, discard_request, [discard_action])
+	if not bool((forced_result.get("payload", {}) as Dictionary).get("confirmed", false)):
+		return _fail("discard_pressure_blocked_forced_choice")
+	# 重铸阶段提示可能包含“弃牌阶段”，但它不属于弃置选择。
+	policy.set_hand_pressure(EXPECTED_HAND_PRESSURE)
+	discard_request["prompt"] = "你可以重铸一张手牌并跳过弃牌阶段"
+	discard_request["context"] = {"kind":"xianzou_recast"}
+	if not is_equal_approx(float(policy.call("_get_discard_pressure_bonus", discard_request, discard_action)), 0.0):
+		return _fail("discard_pressure_recast_misclassified")
+	# 面对敌方游丝持有者时，延时锦囊收益必须为负。
+	var target: Dictionary = (snapshot.get("players", []) as Array)[1] as Dictionary
+	target["character_id"] = "kafuka"
+	var delayed: Dictionary = {"action_type":"use_card", "card_definition_id":"lebu", "target_ids":[1]}
+	if float(policy.call("_apply_yousi_delayed_target_penalty", snapshot, delayed, 5.0)) >= 0.0:
+		return _fail("delayed_trick_against_yousi_not_negative")
 	return true
 
 

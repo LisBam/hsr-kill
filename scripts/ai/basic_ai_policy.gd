@@ -1,6 +1,8 @@
 class_name BasicAIPolicy
 extends RefCounted
 
+## 游丝压力当前用于降低可能进入弃牌堆的主动动作评分；装备和延时锦囊使用不受此扣分。
+
 ## 无名杀式基础 AI 策略。通用层只组合身份态度、牌效价值与内容文件提供的 AI 钩子，不执行任何规则效果。
 
 ## 无正收益时结束出牌阶段的阈值；固定为0，确保 AI 不为纯负收益动作消耗资源。
@@ -104,6 +106,7 @@ func choose_action(authoritative_snapshot: Dictionary, legal_actions: Array[Dict
 ## 响应统一选择请求；逐项评分合法动作，可取消请求只有在正收益时才主动确认。
 func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dictionary, legal_actions: Array[Dictionary]) -> Dictionary:
 	if legal_actions.is_empty():
+		hand_pressure = 0.0
 		identity_model.end_evaluation()
 		identity_model.synchronize(authoritative_snapshot)
 		return {}
@@ -141,6 +144,8 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 		result = _normalize_action(best_confirmed_action if not best_confirmed_action.is_empty() else legal_actions[0])
 	_clear_choice_scoring_context()
 	identity_model.end_evaluation()
+	# 压力只用于当前选择，避免污染之后的请求。
+	hand_pressure = 0.0
 	return result
 
 
@@ -186,16 +191,18 @@ func choose_low_value_card_uids(authoritative_snapshot: Dictionary, candidate_ui
 func _get_hand_pressure_bonus(authoritative_snapshot: Dictionary, action: Dictionary) -> float:
 	if hand_pressure <= 0.0:
 		return 0.0
-	if not evaluator.should_dump_hand_against_starring(authoritative_snapshot, player_id):
-		return 0.0
-	# 动作类型；标准用牌与重铸都会把手牌移出。
+	# 不能识别秘密置入的具体牌，因此对会进入弃牌堆的手牌动作施加保守惩罚。
+	# 装备使用后进入装备区，不应因为游丝受到惩罚。
 	var action_type: String = str(action.get("action_type", ""))
-	if action_type == "use_card" or action_type == "recast_card":
-		return hand_pressure
-	# 装备提供的自定义出牌动作（木牛流马、丈八蛇矛等）同样以手牌为材料，
-	# 它们没有固定的类型名，因此以“动作携带具体手牌 UID”作为统一判据。
+	if action_type == "use_card":
+		var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
+		if str(definition.get("type", "")) == "equip" or str(definition.get("type", "")) == "equipment" or bool(definition.get("delayed", false)):
+			return 0.0
+		return -hand_pressure
+	if action_type == "recast_card":
+		return -hand_pressure
 	if action_type != "use_skill" and int(action.get("card_uid", -1)) >= 0:
-		return hand_pressure
+		return -hand_pressure
 	return 0.0
 
 
@@ -249,6 +256,7 @@ func _score_action(authoritative_snapshot: Dictionary, action: Dictionary) -> fl
 	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
 	if card_definition != null:
 		score = card_definition.modify_ai_action_score(authoritative_snapshot, action, score, evaluator)
+	score = _apply_yousi_delayed_target_penalty(authoritative_snapshot, action, score)
 	# 使用者武将技能；锁定技和被动牌效联动可在各自技能文件中修正当前卡牌评分。
 	for skill: SkillDefinition in _decision_card_modifier_skills:
 		score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
@@ -276,6 +284,7 @@ func _score_ai_virtual_card_action(authoritative_snapshot: Dictionary, action: D
 	var card_definition: CardDefinition = GameDatabase.get_card_definition(str(action.get("card_definition_id", "")))
 	if card_definition != null:
 		score = card_definition.modify_ai_action_score(authoritative_snapshot, action, score, evaluator)
+	score = _apply_yousi_delayed_target_penalty(authoritative_snapshot, action, score)
 	# 使用者全部有效技能；转化牌实际使用后会触发的被动联动必须与实体牌使用保持一致。
 	for skill: SkillDefinition in _decision_card_modifier_skills:
 		score = skill.modify_ai_card_action_score(authoritative_snapshot, action, score, evaluator)
@@ -379,6 +388,54 @@ func _score_choice_action(authoritative_snapshot: Dictionary, choice_request: Di
 		var card_definition: CardDefinition = GameDatabase.get_card_definition(card_definition_id)
 		if card_definition != null:
 			score += card_definition.score_ai_choice(authoritative_snapshot, choice_request, action, evaluator)
+	# 弃置自己的手牌才存在游丝风险；额外费用与技能自身评分相加。
+	score += _get_discard_pressure_bonus(choice_request, action)
+	return score
+
+
+## 对弃置自身手牌的选择施加保守成本；不会查询游丝的秘密牌 UID。
+## 强制弃牌仍从合法动作中选最优解；自愿弃牌则须连同该风险取得正收益。
+func _get_discard_pressure_bonus(choice_request: Dictionary, action: Dictionary) -> float:
+	if hand_pressure <= 0.0:
+		return 0.0
+	# 请求描述与稳定语义；显式标记供提示文字未写“弃置”的费用使用。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	# 请求种类；普通与额外弃牌阶段使用稳定标识。
+	var kind: String = str(context.get("kind", ""))
+	# 玩家可见提示；辅助识别已有内容的弃置费用。
+	var prompt: String = str(choice_request.get("prompt", ""))
+	# 弃置标志；重铸提示不因提到弃牌阶段而被误认。
+	var is_discard: bool = bool(context.get("ai_discard_cost", false)) or str(choice_request.get("choice_type", "")) == "discard" or kind in ["discard_phase", "extra_discard_phase"] or (prompt.contains("弃置") and not prompt.contains("重铸"))
+	if not is_discard or str(context.get("ai_choice_card_semantics", "")) in ["discard_target", "steal_target", "harvest"]:
+		return 0.0
+	# 提交中的实体 UID；取消与没有选牌的确认均不产生弃牌成本。
+	var payload: Dictionary = action.get("payload", {}) as Dictionary
+	if not bool(payload.get("confirmed", false)):
+		return 0.0
+	# 此次选择的实体 UID；仅与请求候选交叉匹配。
+	var selected: Array = payload.get("selected_card_uids", []) as Array
+	# 只计入选择者自己的手牌，不把装备、判定牌或其他角色的牌当作游丝秘密牌。
+	var count: int = 0
+	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
+		# 当前候选区域和持有者；不读取任何隐藏的置牌事实。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		if int(candidate.get("owner_id", -1)) == player_id and str(candidate.get("zone", "")) == "hand" and selected.has(int(candidate.get("uid", -1))):
+			count += 1
+	return -hand_pressure * count
+
+
+## 敌方对持有游丝的角色使用延时锦囊会提供可移走的判定区牌，按负收益处理。
+## 只读取公开技能、目标与态度，实体牌和转化牌共用该评分。
+func _apply_yousi_delayed_target_penalty(snapshot: Dictionary, action: Dictionary, score: float) -> float:
+	# 非延时锦囊不受此规则影响。
+	var definition: Dictionary = GameDatabase.get_card(str(action.get("card_definition_id", "")))
+	if str(definition.get("type", "")) != "trick" or not bool(definition.get("delayed", false)):
+		return score
+	for target_id: Variant in action.get("target_ids", []) as Array:
+		# 目标的公开技能与身份态度决定是否存在敌方收益。
+		var target: Dictionary = evaluator.get_player(snapshot, int(target_id))
+		if SkillDefinition.snapshot_has_skill(target, "yousi") and evaluator.get_attitude(snapshot, player_id, int(target_id)) < 0.0:
+			return minf(score, -100.0)
 	return score
 
 
