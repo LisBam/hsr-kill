@@ -2788,13 +2788,18 @@ func _has_blocking_deferred_skill_settlement() -> bool:
 
 
 ## 在多步技能或流程间隔结束后尝试恢复正式出牌窗口；已有选择、间隔任务或活动 chooseToUse 时安全忽略。
+## 活动 chooseToUse 只忽略重复建窗；完整内容结束后仍复核AI驱动，保留原请求ID且不重复广播。
 func resume_play_phase_choice() -> void:
 	if state == null or state.game_over or state.current_phase != "play":
 		return
-	if has_pending_play_interaction() or _has_active_play_choice():
+	# 请求与AI驱动是两份独立的所有权；已有出牌窗口不能代表延后技能结算之后仍有有效AI任务。
+	# 同时检查完整内容边界，保证补驱动不会越过尚未结束的原生牌或本阶段规则子内容。
+	if has_pending_play_interaction() or _has_current_play_phase_content():
 		return
-	_begin_play_choice(state.current_player_id)
-	_emit_state()
+	if not _has_active_play_choice():
+		_begin_play_choice(state.current_player_id)
+		_emit_state()
+	# 无论窗口是保留的还是刚重建的，都在同一个空闲结算出口确认下一次AI行动已经安排。
 	_ensure_ai_progress_after_resolution()
 
 

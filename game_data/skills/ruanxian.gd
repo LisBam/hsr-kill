@@ -168,7 +168,8 @@ func _on_owner_phase_end(_event: RuleEvent) -> void:
 
 ## 创建重铸选牌请求；首次进入与屏障解除后的重建共用同一份请求构造。
 func _request_recast_selection() -> void:
-	request_card_selection("阮弦", "请选择一张锦囊牌重铸；确定后令所有其他拥有“梅绽”的角色各摸一张牌", _get_recast_candidates(), 1, 1, true, {"kind":CHOICE_KIND})
+	# 受益者净收益与重铸机会成本已由本技能评分，通用评分不得把同一材料再次按完整牌值扣除。
+	request_card_selection("阮弦", "请选择一张锦囊牌重铸；确定后令所有其他拥有“梅绽”的角色各摸一张牌", _get_recast_candidates(), 1, 1, true, {"kind":CHOICE_KIND, "ai_choice_skill_scored":true})
 
 
 ## 恢复重铸选牌：先复核材料，再重铸，最后登记摸牌结算。

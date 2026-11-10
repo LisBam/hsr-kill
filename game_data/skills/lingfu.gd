@@ -177,7 +177,8 @@ func can_activate(_context: Dictionary = {}) -> bool:
 
 ## 创建“选一张手牌 + 选一名角色”的一次性组合请求；确定后由 continue_selection 统一支付费用。
 func activate(_context: Dictionary = {}) -> String:
-	request_card_target_selection("灵赋", "请选择一张手牌与一名角色；确定后先重铸该牌，再结算后续效果", _get_recast_candidates(), _get_target_ids(), 1, 1, 1, 1, true, {"kind":CHOICE_KIND})
+	# 本技能已经完整计算重铸机会成本与目标收益，通用评分不得再按弃牌费用重复扣除材料牌值。
+	request_card_target_selection("灵赋", "请选择一张手牌与一名角色；确定后先重铸该牌，再结算后续效果", _get_recast_candidates(), _get_target_ids(), 1, 1, 1, 1, true, {"kind":CHOICE_KIND, "ai_choice_skill_scored":true})
 	return ""
 
 

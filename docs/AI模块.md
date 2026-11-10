@@ -520,3 +520,9 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 `CardInstance.get_physical_card_data()`为纯快照展开接口：复合持久牌恢复主材料原牌面并返回所有原实体，无材料逻辑牌返回空数组。`NonameAIEvaluator.get_acquired_card_value()`据此累加真正取得的实体牌质；通用steal_target/harvest语义和自定义ai_choice_card_semantics共用此入口。判定区取得还保留原解除延时控制的敌我收益。
 
 弃置或支付装备成本时取场面逻辑价值与原材料牌质总和的较大值，避免将二者重复相加；白银狮子离区回复按逻辑装备判断，而取得后再换装的潜在回复按实际恢复的原材料判断。无材料装备没有可取得的实体牌质，但失去其场面效果仍有价值。所有评估仅读快照，不分配UID、不修改绑定，不调整既有1点体力=2张牌的资源尺度或原牌质常量。
+
+## 技能后续完成与重铸选择的AI边界
+
+- 出牌窗口与AI计时任务分别持有生命周期。`resume_play_phase_choice()` 在本阶段完整规则内容、原生用牌、选择及技能间隔结束后，保留已有 `chooseToUse` 的请求ID，并统一通过 `_ensure_ai_progress_after_resolution()` 补齐驱动；只有缺少窗口时才建窗、广播。不能因为窗口已经存在而跳过驱动复核，否则【奇袭】等延后结算排空后可能留下无人提交的AI窗口。补调度复用原令牌防重，真人窗口继续等待真人。
+- 【灵赋】与【阮弦】的正式请求都声明 `context.ai_choice_skill_scored=true`。技能的 `score_ai_choice()` 已完整计算目标/受益者收益与材料保留价值×`0.35`，通用选择评分因此返回`0`，取消基准仍为`0`；不得再额外扣除一份完整牌值。验证必须经过 `BasicAIPolicy.choose_card_choice()` 与真实请求，单独比较技能钩子的局部分数无法发现重复计费。
+- 【灵赋】的三级目标池用于动作层预估；实际组合选择逐候选以目标毛收益减材料成本排序，可能选择与预估不同的目标。正收益一致性要求是“愿意发动时，最终策略存在可确认的正分动作”，不要求两层最终选中相同目标。
