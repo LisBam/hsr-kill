@@ -169,13 +169,13 @@ func _test_face_down_lock() -> bool:
 		return _fail("install_enforce")
 	# 背面→正面必须被拒绝，并且不产生翻面历史；这是「始终背面向上」的主路径。
 	var log_count_before: int = _logs.size()
-	if _controller.turn_over_player(0, 0, "yinzhi_face_down_test"):
+	if _controller.turn_over_player(0, 0, "yinzhi_face_down_test").success:
 		return _fail("flip_to_front_allowed")
 	if not bool(game_state.players[0].face_down) or _logs.size() <= log_count_before:
 		return _fail("flip_block_log=%s" % str(_logs))
 	# 正面→背面不受锁定影响；锁定技角色仍可被正常翻到背面（也保证锁定方向本身可被复核）。
 	game_state.players[0].face_down = false
-	if not _controller.turn_over_player(0, 0, "yinzhi_face_down_test"):
+	if not _controller.turn_over_player(0, 0, "yinzhi_face_down_test").success:
 		return _fail("flip_to_back_rejected")
 	if not bool(game_state.players[0].face_down):
 		return _fail("flip_back_state")

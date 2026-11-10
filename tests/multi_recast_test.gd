@@ -105,7 +105,7 @@ func _test_batch_recast_moves_and_draws_equal() -> bool:
 	var hand_count_before: int = _controller.state.get_player(0).hand.size()
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
 	var recast_uids: Array[int] = [first_card.uid, second_card.uid, third_card.uid]
-	if _controller.recast_hand_cards(0, recast_uids) != 3:
+	if _controller.recast_hand_cards(0, recast_uids).count != 3:
 		return _fail("batch_count")
 	var recast_cards: Array[CardInstance] = [first_card, second_card, third_card]
 	for card: CardInstance in recast_cards:
@@ -129,13 +129,13 @@ func _test_batch_recast_moves_and_draws_equal() -> bool:
 	return true
 
 
-## 校验单张重铸入口的既有语义零回归：布尔返回值、固定摸一张、单张日志文本。
+## 校验单张重铸入口的既有语义零回归：独立结果、固定摸一张、单张日志文本。
 func _test_single_card_path_unchanged() -> bool:
 	_reset_state(2)
 	# 可主动重铸的实体牌；【铁索连环】在自身卡牌定义中把 recast 标记为 true。
 	var recast_card: CardInstance = _give_hand_card(0, "tiesuo", "club", 12)
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
-	if not _controller.recast_hand_card(0, recast_card.uid):
+	if _controller.recast_hand_card(0, recast_card.uid).count != 1:
 		return _fail("single_rejected")
 	if not _controller.state.discard_pile.has(recast_card) or _controller.state.get_player(0).find_hand_card(recast_card.uid) != null:
 		return _fail("single_move")
@@ -158,7 +158,7 @@ func _test_empty_selection_is_noop() -> bool:
 	var kept_card: CardInstance = _give_hand_card(0, "sha", "spade", 7)
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
 	var empty_uids: Array[int] = []
-	if _controller.recast_hand_cards(0, empty_uids) != 0:
+	if _controller.recast_hand_cards(0, empty_uids).count != 0:
 		return _fail("empty_count")
 	if _controller.state.get_player(0).hand.size() != 1 or not _controller.state.get_player(0).hand.has(kept_card):
 		return _fail("empty_mutated_hand")
@@ -175,7 +175,7 @@ func _test_invalid_uids_are_skipped() -> bool:
 	var valid_card: CardInstance = _give_hand_card(0, "sha", "spade", 7)
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
 	var mixed_uids: Array[int] = [valid_card.uid, 999999]
-	if _controller.recast_hand_cards(0, mixed_uids) != 1:
+	if _controller.recast_hand_cards(0, mixed_uids).count != 1:
 		return _fail("invalid_uid_count")
 	if not _controller.state.discard_pile.has(valid_card):
 		return _fail("invalid_uid_move")
@@ -193,7 +193,7 @@ func _test_duplicate_uids_count_once() -> bool:
 	var card: CardInstance = _give_hand_card(0, "sha", "spade", 7)
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
 	var duplicated_uids: Array[int] = [card.uid, card.uid, card.uid]
-	if _controller.recast_hand_cards(0, duplicated_uids) != 1:
+	if _controller.recast_hand_cards(0, duplicated_uids).count != 1:
 		return _fail("duplicate_count")
 	if _controller.state.draw_pile.size() != draw_pile_count_before - 1:
 		return _fail("duplicate_draw=%d" % _controller.state.draw_pile.size())
@@ -212,31 +212,31 @@ func _test_non_hand_card_skipped() -> bool:
 	_controller.state.discard_pile.append(card)
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
 	var stale_uids: Array[int] = [card.uid]
-	if _controller.recast_hand_cards(0, stale_uids) != 0:
+	if _controller.recast_hand_cards(0, stale_uids).count != 0:
 		return _fail("non_hand_recast")
 	if _controller.state.draw_pile.size() != draw_pile_count_before:
 		return _fail("non_hand_drew_card")
 	return true
 
 
-## 校验死亡、离场、终局与无效玩家一律被拒绝，且单张入口继续保持布尔语义。
+## 校验死亡、离场、终局与无效玩家一律被拒绝，且单张入口回报明确的零成功结果。
 func _test_inactive_owner_and_game_over_rejected() -> bool:
 	_reset_state(2)
 	var card: CardInstance = _give_hand_card(0, "sha", "spade", 7)
 	var single_uids: Array[int] = [card.uid]
 	_controller.state.get_player(0).alive = false
-	if _controller.recast_hand_cards(0, single_uids) != 0 or _controller.recast_hand_card(0, card.uid):
+	if _controller.recast_hand_cards(0, single_uids).count != 0 or _controller.recast_hand_card(0, card.uid).count != 0:
 		return _fail("dead_recast")
 	_controller.state.get_player(0).alive = true
 	_controller.state.get_player(0).out_of_game = true
-	if _controller.recast_hand_cards(0, single_uids) != 0 or _controller.recast_hand_card(0, card.uid):
+	if _controller.recast_hand_cards(0, single_uids).count != 0 or _controller.recast_hand_card(0, card.uid).count != 0:
 		return _fail("out_of_game_recast")
 	_controller.state.get_player(0).out_of_game = false
 	_controller.state.game_over = true
-	if _controller.recast_hand_cards(0, single_uids) != 0 or _controller.recast_hand_card(0, card.uid):
+	if _controller.recast_hand_cards(0, single_uids).count != 0 or _controller.recast_hand_card(0, card.uid).count != 0:
 		return _fail("game_over_recast")
 	_controller.state.game_over = false
-	if _controller.recast_hand_cards(-1, single_uids) != 0 or _controller.recast_hand_card(-1, card.uid):
+	if _controller.recast_hand_cards(-1, single_uids).count != 0 or _controller.recast_hand_card(-1, card.uid).count != 0:
 		return _fail("invalid_player_recast")
 	# 全部非法路径之后手牌必须完好，证明拒绝发生在移牌之前。
 	if not _controller.state.get_player(0).hand.has(card):

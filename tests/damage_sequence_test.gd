@@ -33,6 +33,7 @@ func _run() -> void:
 	_test_cancelled_damage()
 	_test_shield_and_result_windows()
 	_test_nested_damage_order()
+	_test_same_target_nested_tail()
 	_test_sequence_choice_result()
 	_test_changed_target_generation()
 	_test_judgment_parent_wait()
@@ -241,3 +242,34 @@ func _test_sequence_frame_budget() -> void:
 		await get_tree().process_frame
 	_check(frames.size() == 12 and frames.front() != frames.back(), "sequence budget did not yield or finish")
 	_check_clean("sequence frame budget")
+
+
+## 同一目标嵌套受伤必须保留两份独立来源、事件身份与尾部，不能按target_id覆盖。
+func _test_same_target_nested_tail() -> void:
+	for timing_name: String in ["damageBegin4", "damage_after", "damageAfter"]:
+		_reset_controller()
+		# 最终来源与伤害量；内层先完成，外层仍保留原来的2点。
+		var results: Array[Array] = []
+		# 已提交逐点结果；两次伤害合计3点，每点只发送一次After。
+		var points: Array[int] = []
+		_controller.event_bus.subscribe("damageSource", self, func(event: RuleEvent) -> void: results.append([event.source_id, int(event.data.amount), int(event.data.damage_event_id)]))
+		_controller.event_bus.subscribe("damagePointAfter", self, func(event: RuleEvent) -> void: points.append(int(event.data.damage_event_id)))
+		_controller.trigger_manager.subscribe(timing_name, self, func(event: RuleEvent) -> void:
+			if str(event.data.get("card_id", "")) == "outer":
+				_controller.damage(2, 1, 1, "normal", "inner")
+		)
+		_controller.trigger_manager.subscribe("damageBegin1", self, func(event: RuleEvent) -> void:
+			if str(event.data.get("card_id", "")) == "inner":
+				_pause_window(event)
+		)
+		_controller.damage(0, 1, 2, "normal", "outer")
+		_check(_controller.has_pending_card_choice(), timing_name + " nested damage did not pause")
+		_submit_choice()
+		_check(_controller.state.get_player(1).hp == 17 and results.size() == 2 and points.size() == 3, timing_name + " lost/repeated nested damage")
+		if results.size() == 2:
+			# damageAfter位于外层damageSource之后；其余两个窗口的内层来源应先记录。
+			var outer_index: int = 0 if timing_name == "damageAfter" else 1
+			# 内层记录位置；顺序不同不改变各自来源、量与事件身份。
+			var inner_index: int = 1 - outer_index
+			_check(results[inner_index][0] == 2 and results[inner_index][1] == 1 and results[outer_index][0] == 0 and results[outer_index][1] == 2 and results[0][2] != results[1][2], timing_name + " overwrote damage context")
+		_check_clean(timing_name + " same target")

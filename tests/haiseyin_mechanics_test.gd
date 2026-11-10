@@ -25,6 +25,8 @@ func _run() -> void:
 		return
 	if not _test_fanyin_ai_black_target():
 		return
+	if not _test_cancelled_fanyin_cost():
+		return
 	if not _test_huitao_thresholds():
 		return
 	print("HAISEYIN_MECHANICS_PASS batch=1 sections=4 black_first=1 huitao_min=3")
@@ -212,8 +214,10 @@ func _test_fanyin_black_then_red() -> bool:
 	target_card.owner_id = 1
 	target_card.zone = "hand"
 	target.hand.append(target_card)
-	if int(_controller.discard_selected_hand_cards(0, [black_card.uid, red_card.uid])) != 2:
-		return _fail("fanyin_discard_count")
+	# 完整批次结果；黑色效果的子选择尚未结束时不能把int同步返回值当作最终数量。
+	var discard_resolution: RefCounted = _controller.begin_discard_cards(0, [black_card.uid, red_card.uid], ["hand"], 0, "fanyin_test")
+	if discard_resolution.completed or not _controller.state.discard_pile.has(black_card) or not _controller.state.discard_pile.has(red_card):
+		return _fail("fanyin_discard_waiting_or_materials")
 	# 黑色效果入口；批次整体判定后必须先创建目标请求。
 	var target_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
 	if str(target_context.get("kind", "")) != "fanyin_black_target":
@@ -230,8 +234,8 @@ func _test_fanyin_black_then_red() -> bool:
 	if not _submit_card_choice(1, [target_card.uid], true):
 		return false
 	# 结算结果；目标失去一张手牌，持有者随后因红色效果摸回一张。
-	if not target.hand.is_empty() or owner.hand.size() != 1:
-		return _fail("fanyin_effects target=%d owner=%d" % [target.hand.size(), owner.hand.size()])
+	if not target.hand.is_empty() or owner.hand.size() != 1 or not discard_resolution.completed or discard_resolution.count != 2:
+		return _fail("fanyin_effects target=%d owner=%d completed=%s count=%d" % [target.hand.size(), owner.hand.size(), discard_resolution.completed, discard_resolution.count])
 	return true
 
 
@@ -309,3 +313,21 @@ func _fail(reason: String) -> bool:
 	printerr("HAISEYIN_FAIL %s" % reason)
 	get_tree().quit(1)
 	return false
+
+
+## 弃牌前置取消后不推进轮回，也不能残留本次发动归属供无关后续消费。
+func _test_cancelled_fanyin_cost() -> bool:
+	_reset_state(2)
+	# 第一节黑桃费用；取消后必须仍在原手牌区。
+	var card: CardInstance = CardInstance.new("shan", "spade", 7)
+	card.zone = "hand"
+	card.owner_id = 0
+	_controller.state.get_player(0).hand.append(card)
+	# 正式泛音实例；复用真实费用和轮回服务。
+	var skill: SkillDefinition = _install_skill(0, "fanyin")
+	_controller.trigger_manager.subscribe("discardBegin", self, func(event: RuleEvent) -> void: event.cancel("test_cancel_cost"))
+	if skill == null or not skill.activate({"card_uid":card.uid}).is_empty():
+		return _fail("fanyin_cancel_activation")
+	if skill.get_reincarnation_section_index() != 0 or int(skill.get_reincarnation_state().get("pending_activation_section_index", -1)) != -1 or not _controller.state.get_player(0).hand.has(card):
+		return _fail("fanyin_cancel_left_pending=%s" % skill.get_reincarnation_state())
+	return true

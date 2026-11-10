@@ -182,7 +182,7 @@ func _test_mint_success_writes_fields() -> bool:
 	_reset_state(2)
 	# 目标玩家手牌张数基线；造牌后必须恰好增加一张。
 	var before_hand_size: int = _controller.state.get_player(0).hand.size()
-	var minted_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, FIRST_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var minted_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, FIRST_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
 	if minted_uid <= 0:
 		return _fail("mint_rejected uid=%d" % minted_uid)
 	# 造出的实体；必须落在目标玩家手牌区且字段齐全。
@@ -212,7 +212,7 @@ func _test_mint_success_writes_fields() -> bool:
 func _test_mint_rejections_are_side_effect_free() -> bool:
 	_reset_state(2)
 	# 先造一张成功牌，占住 FIRST_CUSTOM_NAME，供重名分支使用。
-	if _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, FIRST_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) <= 0:
+	if _mint_uid(0, SOURCE_DEFINITION_ID, FIRST_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) <= 0:
 		return _fail("setup_mint_rejected")
 	# 失败分支清单；每项包含玩家、定义、牌名、花色、点数与人类可读标签。
 	var cases: Array[Dictionary] = [
@@ -232,7 +232,7 @@ func _test_mint_rejections_are_side_effect_free() -> bool:
 	var move_count_before: int = _controller.state.card_move_history.size()
 	for case_data: Dictionary in cases:
 		# 当前分支的返回值；必须严格为 -1。
-		var result_uid: int = _controller.mint_card_for_player(int(case_data["player_id"]), str(case_data["definition_id"]), str(case_data["name"]), str(case_data["suit"]), int(case_data["rank"]), MINTED_SKILL_ID)
+		var result_uid: int = _mint_uid(int(case_data["player_id"]), str(case_data["definition_id"]), str(case_data["name"]), str(case_data["suit"]), int(case_data["rank"]), MINTED_SKILL_ID)
 		if result_uid != -1:
 			return _fail("%s_returned=%d" % [str(case_data["label"]), result_uid])
 		if _controller.state.get_player(0).hand.size() != hand_before or _controller.state.card_move_history.size() != move_count_before:
@@ -245,7 +245,7 @@ func _test_name_uniqueness_across_minted_cards() -> bool:
 	_reset_state(2)
 	if not _controller.is_card_name_available(SECOND_CUSTOM_NAME):
 		return _fail("fresh_name_rejected reason=%s" % _controller.get_card_name_rejection_reason(SECOND_CUSTOM_NAME))
-	if _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) <= 0:
+	if _mint_uid(0, SOURCE_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) <= 0:
 		return _fail("first_mint_rejected")
 	# 已造出的牌名必须进入可用性判据；否则同一局可以造出两张同名牌。
 	if _controller.is_card_name_available(SECOND_CUSTOM_NAME):
@@ -277,7 +277,7 @@ func _test_definition_name_collision_rejected() -> bool:
 				return _fail("controller_accepted_registered_name=%s" % registered_name)
 		else:
 			return _fail("database_missed_registered_name=%s" % registered_name)
-		if _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, registered_name, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) != -1:
+		if _mint_uid(0, SOURCE_DEFINITION_ID, registered_name, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID) != -1:
 			return _fail("mint_accepted_registered_name=%s" % registered_name)
 	# 未登记的名称不应被误判为重名。
 	if GameDatabase.is_card_display_name_taken("绝无此牌名甲乙丙"):
@@ -289,7 +289,7 @@ func _test_definition_name_collision_rejected() -> bool:
 func _test_minted_card_keeps_rule_identity() -> bool:
 	_reset_state(2)
 	# 复制延时锦囊造牌；验证类别、目标模式与响应模式随定义自动继承，不需要逐字段搬运。
-	var minted_uid: int = _controller.mint_card_for_player(0, SOURCE_TRICK_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var minted_uid: int = _mint_uid(0, SOURCE_TRICK_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
 	if minted_uid <= 0:
 		return _fail("trick_mint_rejected uid=%d" % minted_uid)
 	# 造出的实体；定义引用必须仍是被复制牌，牌名才与规则身份分离。
@@ -315,7 +315,7 @@ func _test_pile_lookup_by_minted_skill() -> bool:
 	for index: int in range(3):
 		# 当前造牌牌名；三次必须互不相同。
 		var current_name: String = "%s%d" % [SECOND_CUSTOM_NAME, index]
-		var current_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, current_name, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+		var current_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, current_name, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
 		if current_uid <= 0:
 			return _fail("lookup_setup_mint_%d uid=%d" % [index, current_uid])
 		minted_uids.append(current_uid)
@@ -345,22 +345,22 @@ func _test_pile_lookup_by_minted_skill() -> bool:
 	if not _controller.get_draw_pile_card_uids_by_skill("").is_empty():
 		return _fail("empty_skill_matched")
 	# 获得入口：先摸牌堆后弃牌堆，取第一张命中的牌入手。
-	if not _controller.gain_top_minted_card_from_draw_or_discard(1, MINTED_SKILL_ID):
+	if not _gain_minted_sync(1, MINTED_SKILL_ID):
 		return _fail("gain_from_draw_rejected")
 	if _controller.state.get_player(1).find_hand_card(minted_uids[1]) == null:
 		return _fail("gain_picked_wrong_card hand=%s" % [_controller.state.get_player(1).hand.map(func(card: CardInstance) -> int: return card.uid)])
 	# 摸牌堆只剩第一张，第二次获得应取到它。
-	if not _controller.gain_top_minted_card_from_draw_or_discard(1, MINTED_SKILL_ID):
+	if not _gain_minted_sync(1, MINTED_SKILL_ID):
 		return _fail("second_gain_rejected")
 	if _controller.state.get_player(1).find_hand_card(minted_uids[0]) == null:
 		return _fail("second_gain_wrong_card")
 	# 第三次获得回落到弃牌堆的第三张。
-	if not _controller.gain_top_minted_card_from_draw_or_discard(1, MINTED_SKILL_ID):
+	if not _gain_minted_sync(1, MINTED_SKILL_ID):
 		return _fail("third_gain_rejected")
 	if _controller.state.get_player(1).find_hand_card(minted_uids[2]) == null:
 		return _fail("third_gain_wrong_card")
 	# 全部取完后必须返回 false 且零副作用。
-	if _controller.gain_top_minted_card_from_draw_or_discard(1, MINTED_SKILL_ID):
+	if _gain_minted_sync(1, MINTED_SKILL_ID):
 		return _fail("gain_after_exhausted_succeeded")
 	return true
 
@@ -369,7 +369,7 @@ func _test_pile_lookup_by_minted_skill() -> bool:
 func _test_shuffle_discard_card_into_draw_pile() -> bool:
 	_reset_state(2)
 	# 造一张牌并放入弃牌堆；这是洗回端口的唯一合法输入。
-	var minted_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var minted_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, SECOND_CUSTOM_NAME, SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
 	if minted_uid <= 0:
 		return _fail("shuffle_setup_mint uid=%d" % minted_uid)
 	# 造出的实体；从手牌移入弃牌堆。
@@ -414,9 +414,9 @@ func _test_shuffle_discard_card_into_draw_pile() -> bool:
 func _test_authoritative_state_round_trip() -> bool:
 	_reset_state(2)
 	# 分别在摸牌堆、弃牌堆与手牌各留一张造牌，覆盖三条区域序列化路径。
-	var hand_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, "手牌造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
-	var draw_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, "牌堆造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
-	var discard_uid: int = _controller.mint_card_for_player(0, SOURCE_DEFINITION_ID, "弃牌造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var hand_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, "手牌造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var draw_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, "牌堆造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
+	var discard_uid: int = _mint_uid(0, SOURCE_DEFINITION_ID, "弃牌造牌", SAMPLE_SUIT, SAMPLE_RANK, MINTED_SKILL_ID)
 	if hand_uid <= 0 or draw_uid <= 0 or discard_uid <= 0:
 		return _fail("round_trip_setup uids=%s" % [[hand_uid, draw_uid, discard_uid]])
 	# 两张移出：一张进摸牌堆、一张进弃牌堆。
@@ -492,3 +492,19 @@ func _fail(message: String) -> bool:
 	printerr("RUNTIME_CARD_MINTING_FAIL %s" % message)
 	get_tree().quit(1)
 	return false
+
+
+## 无插入窗口的历史同步断言适配；正式API返回独立句柄，未完成不能被视为成功UID。
+func _mint_uid(player_id: int, source_definition_id: String, custom_name: String, suit: String, rank: int, skill_id: String) -> int:
+	# 已完整运行的造牌结果；本夹具没有异步处理器，completed必须为true。
+	var result: CardMoveResolutionService = _controller.mint_card_for_player(player_id, source_definition_id, custom_name, suit, rank, skill_id)
+	if not result.completed or not bool(result.result.get("success", false)):
+		return -1
+	return int(result.result.card_uid)
+
+
+## 无异步处理器时读取来源检索的明确结果；可暂停窗口另由专项场景验证。
+func _gain_minted_sync(player_id: int, skill_id: String) -> bool:
+	# 真正获得结果；对象非空不代表获得成功。
+	var result: CardMoveResolutionService = _controller.gain_top_minted_card_from_draw_or_discard(player_id, skill_id)
+	return result.completed and bool(result.result.get("success", false))

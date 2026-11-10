@@ -78,7 +78,7 @@ func _run() -> void:
 		return
 	if not await _test_deferred_phase_choice_resumption():
 		return
-	if not _test_gangfeng_response():
+	if not await _test_gangfeng_response():
 		return
 	if not _test_conversion_material_target_rules():
 		return
@@ -92,7 +92,7 @@ func _run() -> void:
 		return
 	if not _test_ai_choice_fallback_integrity():
 		return
-	if not _test_himeko_card_use_linghang_choice_resumption():
+	if not await _test_himeko_card_use_linghang_choice_resumption():
 		return
 	if not _test_yongyi_and_shield_semantics():
 		return
@@ -140,7 +140,7 @@ func _run() -> void:
 		return
 	if not await _test_kance_private_view_and_draw_pile_gain():
 		return
-	if not _test_qiusheng_dying_recovery():
+	if not await _test_qiusheng_dying_recovery():
 		return
 	print("NEW_CHARACTER_MECHANICS_PASS")
 	get_tree().quit(0)
@@ -221,7 +221,6 @@ func _reset_state(player_count: int) -> void:
 	_controller._started_phase_lifecycles.clear()
 	_controller._clear_pending_judgment_request()
 	_controller._judgment_flow_in_progress = false
-	_controller._judgment_resume_needs_result_pause = false
 	# 旧场景的AI策略与异步令牌；每个专项场景从无控制者、无待执行任务状态开始，避免前一断言的计时器进入新状态。
 	_controller.ai_coordinator._policies.clear()
 	_controller._ai_drive_token += 1
@@ -788,27 +787,31 @@ func _test_named_card_gain_and_hand_view_as() -> bool:
 	# 弃牌堆最顶层匹配牌；牌堆已无指定牌时应成为第二次获得结果。
 	var discard_top_wuzhong: CardInstance = _add_discard_pile_card("wuzhong", "club", 11)
 	# 第一次获得结果；来源必须是牌堆中的唯一匹配牌。
-	var first_gain: CardInstance = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
+	var first_gain: CardMoveResolutionService = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
 	# 第二次获得结果；牌堆无匹配牌后必须回退到弃牌堆最顶层匹配牌。
-	var second_gain: CardInstance = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
-	if first_gain != draw_wuzhong or second_gain != discard_top_wuzhong or not _controller.state.draw_pile.has(draw_top_other) or not _controller.state.discard_pile.has(discard_lower_wuzhong) or not _controller.state.discard_pile.has(discard_middle_other):
-		return _fail("named_gain_order first=%s second=%s" % [first_gain.uid if first_gain != null else -1, second_gain.uid if second_gain != null else -1])
+	var second_gain: CardMoveResolutionService = _controller.gain_top_named_card_from_draw_or_discard(0, "wuzhong", "test_named_gain")
+	if not first_gain.completed or not second_gain.completed or not bool(first_gain.result.get("success", false)) or not bool(second_gain.result.get("success", false)) or int(first_gain.result.get("card_uid", -1)) != draw_wuzhong.uid or int(second_gain.result.get("card_uid", -1)) != discard_top_wuzhong.uid or not _controller.state.draw_pile.has(draw_top_other) or not _controller.state.discard_pile.has(discard_lower_wuzhong) or not _controller.state.discard_pile.has(discard_middle_other):
+		return _fail("named_gain_order first=%s second=%s" % [first_gain.result, second_gain.result])
 	# 定向获得后的隐藏信息；弃牌堆公开知识也必须重置为仅获得者知晓，日志不得包含具体牌名。
-	if first_gain.shown or second_gain.shown or first_gain.known_to != [0] or second_gain.known_to != [0] or emitted_logs.any(func(log_line: String) -> bool: return log_line.contains("无中生有")):
-		return _fail("named_gain_visibility first=%s second=%s logs=%s" % [first_gain.to_dict(), second_gain.to_dict(), emitted_logs])
+	if draw_wuzhong.shown or discard_top_wuzhong.shown or draw_wuzhong.known_to != [0] or discard_top_wuzhong.known_to != [0] or emitted_logs.any(func(log_line: String) -> bool: return log_line.contains("无中生有")):
+		return _fail("named_gain_visibility first=%s second=%s logs=%s" % [draw_wuzhong.to_dict(), discard_top_wuzhong.to_dict(), emitted_logs])
 	# 交给其他角色的红色实体；进入目标手牌后临时视为【桃/药】。
 	var gifted_card: CardInstance = _add_hand_card(0, "sha", "heart", 5)
-	if not _controller.transfer_hand_card_as(0, 1, gifted_card.uid, "tao", "yaoli") or gifted_card.definition_id != "tao" or gifted_card.hand_view_as_original_definition_id != "sha" or _controller.state.get_player(1).find_hand_card(gifted_card.uid) == null:
+	# 跨角色交牌的最终结果；完整移动完成后才验证临时牌名。
+	var gifted_result: CardMoveResolutionService = _controller.transfer_hand_card_as(0, 1, gifted_card.uid, "tao", "yaoli")
+	if not gifted_result.completed or not bool(gifted_result.result.get("success", false)) or gifted_card.definition_id != "tao" or gifted_card.hand_view_as_original_definition_id != "sha" or _controller.state.get_player(1).find_hand_card(gifted_card.uid) == null:
 		return _fail("hand_view_as_gift=%s" % gifted_card.to_dict())
 	# 视为牌快照；表现层必须得到原牌定义 ID，才能在不改变逻辑牌结算的前提下保留实体牌面名称。
 	var gifted_snapshot: Dictionary = gifted_card.to_dict()
 	if str(gifted_snapshot.get("original_definition_id", "")) != "sha":
 		return _fail("hand_view_as_snapshot=%s" % gifted_snapshot)
-	if not _controller.discard_card_from_hand(1, gifted_card.uid) or gifted_card.definition_id != "sha" or gifted_card.has_hand_view_as() or not _controller.state.discard_pile.has(gifted_card):
+	if not bool(_controller.discard_card_from_hand(1, gifted_card.uid).result.get("success", false)) or gifted_card.definition_id != "sha" or gifted_card.has_hand_view_as() or not _controller.state.discard_pile.has(gifted_card):
 		return _fail("hand_view_as_leave_restore=%s" % gifted_card.to_dict())
 	# 交给自己的红色实体；同区域操作不产生无效移动，但仍建立相同临时牌名。
 	var self_gifted_card: CardInstance = _add_hand_card(0, "shan", "diamond", 6)
-	if not _controller.transfer_hand_card_as(0, 0, self_gifted_card.uid, "tao", "yaoli") or self_gifted_card.definition_id != "tao":
+	# 自己交给自己为原子牌名规则，不伪造同区域移动或获得批次。
+	var self_gifted_result: CardMoveResolutionService = _controller.transfer_hand_card_as(0, 0, self_gifted_card.uid, "tao", "yaoli")
+	if not self_gifted_result.completed or not bool(self_gifted_result.result.get("success", false)) or self_gifted_card.definition_id != "tao":
 		return _fail("hand_view_as_self=%s" % self_gifted_card.to_dict())
 	# 药的使用者受伤状态；使用视为【药】后应固定回复1点体力。
 	var medicine_user: PlayerState = _controller.state.get_player(0)
@@ -847,7 +850,7 @@ func _test_lushi_mingchen_deferred_settlement() -> bool:
 	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 12)
 	# 主动技能错误信息；空字符串表示两张费用已经成功弃置并进入嵌套选择。
 	var activation_error: String = lushi.activate({"card_uids":[first_cost.uid, second_cost.uid]})
-	if not activation_error.is_empty() or not _controller.has_pending_card_choice() or _controller._deferred_skill_settlements.size() != 1:
+	if not activation_error.is_empty() or not _controller.has_pending_card_choice() or _controller._rule_sequences.is_empty():
 		return _fail("lushi_nested_start error=%s pending=%s deferred=%s" % [activation_error, _controller.has_pending_card_choice(), _controller._deferred_skill_settlements])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -868,25 +871,25 @@ func _test_mingchen_turn_window_and_lockout() -> bool:
 	# 回合外最后手牌；当前行动者为另一名角色时不得建立冥谶目标选择。
 	_controller.state.current_player_id = 1
 	var out_of_turn_card: CardInstance = _add_hand_card(0, "shan", "spade", 2)
-	if mingchen == null or not _controller.discard_card_from_hand(0, out_of_turn_card.uid) or _controller.has_pending_card_choice():
+	if mingchen == null or not bool(_controller.discard_card_from_hand(0, out_of_turn_card.uid).result.get("success", false)) or _controller.has_pending_card_choice():
 		return _fail("mingchen_out_of_turn_trigger skill=%s pending=%s" % [mingchen, _controller._pending_card_choice])
 	# 回到寒鸦自己的回合；失去最后手牌后必须创建强制目标选择。
 	_controller.state.current_player_id = 0
 	var in_turn_card: CardInstance = _add_hand_card(0, "tao", "heart", 3)
 	_add_draw_pile_card("wuzhong", "diamond", 12)
-	if not _controller.discard_card_from_hand(0, in_turn_card.uid) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
+	if not bool(_controller.discard_card_from_hand(0, in_turn_card.uid).result.get("success", false)) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
 		return _fail("mingchen_in_turn_trigger pending=%s" % [_controller._pending_card_choice])
 	# 选择其他角色；该角色获得无中生有并对自身造成1点雷属性伤害，冥谶立即失效至回合结束。
 	if not _submit_pending_choice(0, [], [1], true) or _controller.state.get_player(1).hp != 3 or not bool(mingchen.get("_invalid_until_turn_end")):
 		return _fail("mingchen_other_target_lockout hp=%d invalid=%s" % [_controller.state.get_player(1).hp, mingchen.get("_invalid_until_turn_end")])
 	# 同一回合再次失去最后手牌；临时失效期间不能重复创建目标选择。
 	var locked_out_card: CardInstance = _add_hand_card(0, "shan", "club", 4)
-	if not _controller.discard_card_from_hand(0, locked_out_card.uid) or _controller.has_pending_card_choice():
+	if not bool(_controller.discard_card_from_hand(0, locked_out_card.uid).result.get("success", false)) or _controller.has_pending_card_choice():
 		return _fail("mingchen_lockout_retrigger pending=%s" % [_controller._pending_card_choice])
 	# 持有者回合完整结束后临时失效清除；再次失去最后手牌应重新建立同一锁定技选择。
 	_controller._emit_rule_timing("phaseAfter", 0, 0, 0, {"turn_number":_controller.state.turn_number})
 	var next_turn_card: CardInstance = _add_hand_card(0, "shan", "club", 5)
-	if bool(mingchen.get("_invalid_until_turn_end")) or not _controller.discard_card_from_hand(0, next_turn_card.uid) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
+	if bool(mingchen.get("_invalid_until_turn_end")) or not bool(_controller.discard_card_from_hand(0, next_turn_card.uid).result.get("success", false)) or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target":
 		return _fail("mingchen_lockout_reset invalid=%s pending=%s" % [mingchen.get("_invalid_until_turn_end"), _controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -921,7 +924,12 @@ func _test_mingchen_dying_peach_continuation() -> bool:
 		return false
 	# 桃实体已经消费，但回复必须等待冥谶完成；续接栈精确保留一次救援后半段。
 	var mingchen_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
-	if str((mingchen_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or dying_target.hp != 0 or not dying_target.dying or _controller._rule_continuations.size() != 1 or not _controller.state.discard_pile.has(peach):
+	# 响应消费已步骤化；loseAfter内的冥谶属于处理区移动子内容，桃尚未进入弃牌堆。
+	# 救援与响应各自持有父游标，不能把内部续接条数固定为旧实现的1条。
+	var waiting_kinds: Array[String] = []
+	for waiting_sequence: RuleStepSequence in _controller._rule_sequences.values():
+		waiting_kinds.append(str(waiting_sequence.context.get("sequence_kind", "")))
+	if str((mingchen_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or dying_target.hp != 0 or not dying_target.dying or not waiting_kinds.has("rescue") or not waiting_kinds.has("response") or not _controller.state.processing_area.has(peach) or not hanya.response_history.is_empty():
 		return _fail("mingchen_dying_interrupted hp=%d dying=%s continuations=%s" % [dying_target.hp, dying_target.dying, _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [2], true):
 		return false
@@ -959,7 +967,11 @@ func _test_mingchen_last_hand_response_continuation() -> bool:
 	var continuation_types: Array[String] = []
 	for continuation: Dictionary in _controller._rule_continuations.to_array():
 		continuation_types.append(str(continuation.get("continuation_type", "")))
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or hanya.hp != 4 or _controller._rule_continuations.size() != 2 or not continuation_types.has("card_response") or not continuation_types.has("rule_sequence"):
+	# 响应接收由response_choice步骤持有，不再登记旧card_response恢复项；失牌After仍在处理区内等待。
+	var waiting_response_kinds: Array[String] = []
+	for waiting_sequence: RuleStepSequence in _controller._rule_sequences.values():
+		waiting_response_kinds.append(str(waiting_sequence.context.get("sequence_kind", "")))
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or hanya.hp != 4 or not waiting_response_kinds.has("response_choice") or not waiting_response_kinds.has("response") or not _controller.state.processing_area.has(dodge_card):
 		return _fail("mingchen_response_interrupted hp=%d continuations=%s" % [hanya.hp, _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -1018,7 +1030,7 @@ func _test_mingchen_guanshi_cost_continuation() -> bool:
 	var guanshi_continuation_types: Array[String] = []
 	for continuation: Dictionary in _controller._rule_continuations.to_array():
 		guanshi_continuation_types.append(str(continuation.get("continuation_type", "")))
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or target.hp != 4 or _controller._rule_continuations.size() < 2 or not guanshi_continuation_types.has("rule_sequence") or not guanshi_continuation_types.has("slash_flow"):
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or target.hp != 4 or _controller._rule_continuations.size() < 2 or not guanshi_continuation_types.has("rule_sequence"):
 		return _fail("mingchen_guanshi_interrupted hp=%d continuations=%s" % [target.hp, _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
@@ -1042,14 +1054,16 @@ func _test_mingchen_recast_continuation() -> bool:
 	var recast_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 6)
 	# 冥谶优先取得的无中生有；当前位于牌堆最顶层。
 	var mingchen_gain_card: CardInstance = _add_draw_pile_card("wuzhong", "diamond", 9)
-	if mingchen == null or not _controller.recast_hand_card(0, recast_card.uid):
+	# 重铸内容句柄；冥谶选择期间不能视为整次重铸已经完成。
+	var recast_result: RefCounted = _controller.recast_hand_card(0, recast_card.uid)
+	if mingchen == null or recast_result.completed:
 		return _fail("mingchen_recast_start")
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or not hanya.hand.is_empty() or _controller._rule_continuations.size() != 1:
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or not hanya.hand.is_empty() or _controller._rule_sequences.is_empty():
 		return _fail("mingchen_recast_interrupted hand=%d continuations=%s" % [hanya.hand.size(), _controller._rule_continuations.to_array()])
 	if not _submit_pending_choice(0, [], [0], true):
 		return false
 	# 技能先取得牌堆顶无中生有，重铸续接随后摸到下一张闪；重铸实体保持在弃牌堆。
-	if not hanya.hand.has(mingchen_gain_card) or not hanya.hand.has(recast_draw_card) or not _controller.state.discard_pile.has(recast_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
+	if not recast_result.completed or recast_result.count != 1 or not hanya.hand.has(mingchen_gain_card) or not hanya.hand.has(recast_draw_card) or not _controller.state.discard_pile.has(recast_card) or _controller._rule_continuations.has_pending() or _controller.has_pending_card_choice():
 		return _fail("mingchen_recast_complete hand=%d continuations=%s" % [hanya.hand.size(), _controller._rule_continuations.to_array()])
 	return true
 
@@ -1122,7 +1136,7 @@ func _test_turn_start_nested_skill_continuation() -> bool:
 		return false
 	# 第二层请求上下文；只有【振旗】请求已经完整关闭后才能成为当前唯一选择。
 	var jiahu_choice_context: Dictionary = _controller._pending_card_choice.get("context", {}) as Dictionary
-	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or _controller._rule_continuations.size() != 2:
+	if str(jiahu_choice_context.get("kind", "")) != "jiahu_target" or not _controller._rule_sequences.has(int(jiahu_choice_context.get("rule_sequence_id", -1))) or not _controller._rule_continuations.has_pending():
 		_controller.log_added.disconnect(turn_log_callback)
 		return _fail("turn_start_jiahu_second context=%s continuations=%s" % [jiahu_choice_context, _controller._rule_continuations.to_array()])
 	# 选择第三名角色接受【加护】；技能结果完成后才允许准备阶段收尾并安排判定阶段。
@@ -1444,8 +1458,7 @@ func _test_jiahu_and_bingfeng() -> bool:
 		return _fail("jiahu_result chained=%s shield=%d" % [protected_target.chained, protected_target.shield])
 	protected_target.shield = 0
 	# 冰封运行时技能；一回合内每个目标使用独立额度。
-	var bingfeng: SkillDefinition = GameDatabase.create_skill("bingfeng")
-	bingfeng.bind(_controller, 0)
+	var bingfeng: SkillDefinition = _install_single_skill(0, "bingfeng")
 	_controller._card_use_contexts[9001] = {"target_ids":[1], "excluded_target_ids":[], "direct_hit_target_ids":[]}
 	# 冰封竖置分支响应；指定玩家可见选项的稳定ID。
 	var straighten_response: ChoiceResponse = ChoiceResponse.new(-1, -1, 0, true)
@@ -1628,7 +1641,12 @@ func _test_gangfeng_response() -> bool:
 	if implicit_response_card != null or _controller.state.get_player(0).find_hand_card(material.uid) == null:
 		return _fail("gangfeng_implicit_response")
 	# 转化后响应牌；定义ID必须为sha_thunder，但实体UID不替代真实材料记录。
-	var response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, material.uid, ["sha"], [], "gangfeng")
+	# 消费可能等待技能表现间隔；通过正式结果对象等待全部生命周期后再断言。
+	var response_resolution: RefCounted = _controller.begin_response_resolution(0, material.uid, ["sha"], [], "gangfeng")
+	if not await _wait_response_resolution(response_resolution):
+		return _fail("gangfeng_response_wait")
+	# 完整消费后的响应实体；不能把未完成句柄视为支付成功。
+	var response_card: CardInstance = response_resolution.result
 	if response_card == null or response_card.definition_id != "sha_thunder" or response_card.suit != "club" or response_card.rank != 12 or _controller.state.get_player(0).find_hand_card(material.uid) != null or not _controller.state.discard_pile.has(material):
 		return _fail("gangfeng_response card=%s discard=%s" % [response_card.to_dict() if response_card != null else {}, _controller.state.discard_pile.has(material)])
 	# 黑色装备材料；白银狮子离区应卸载装备运行时、回复1点体力并把材料送入弃牌堆。
@@ -1641,10 +1659,25 @@ func _test_gangfeng_response() -> bool:
 	response_owner.equipment["armor"] = armor_material
 	_controller._install_card_runtime(armor_material, 0)
 	# 装备材料转化后的响应牌；成功后装备槽、运行时索引与离区回复必须同时完成。
-	var equipment_response_card: CardInstance = _controller._consume_response_card_uid_patterns(0, armor_material.uid, ["sha"], [], "gangfeng")
+	# 装备离区回复也属于响应子内容，响应结果必须等其Before/After完整结束。
+	var equipment_resolution: RefCounted = _controller.begin_response_resolution(0, armor_material.uid, ["sha"], [], "gangfeng")
+	if not await _wait_response_resolution(equipment_resolution):
+		return _fail("gangfeng_equipment_response_wait")
+	# 装备响应完整消费结果；材料与后续窗口均已结束。
+	var equipment_response_card: CardInstance = equipment_resolution.result
 	if equipment_response_card == null or equipment_response_card.definition_id != "sha_thunder" or response_owner.equipment.has("armor") or _controller.card_runtime_instances.has(armor_material.uid) or response_owner.hp != 4 or not _controller.state.discard_pile.has(armor_material):
 		return _fail("gangfeng_equipment_response hp=%d equipment=%s runtime=%s discard=%s" % [response_owner.hp, response_owner.equipment, _controller.card_runtime_instances.has(armor_material.uid), _controller.state.discard_pile.has(armor_material)])
 	return true
+
+
+## 等待响应的真实步骤完成；不清空生产队列，不跳过节奏服务拥有的等待。
+func _wait_response_resolution(resolution: RefCounted) -> bool:
+	for attempt: int in range(120):
+		if resolution.completed:
+			return true
+		_controller._resume_settlement_pipeline()
+		await get_tree().create_timer(0.01).timeout
+	return resolution.completed
 
 
 ## 验证转化牌目标枚举按每张材料的真实颜色执行，【全垒】AI不会用黑色材料指定拥有【琥珀】的角色。
@@ -1890,6 +1923,11 @@ func _test_himeko_card_use_linghang_choice_resumption() -> bool:
 		return _fail("himeko_linghang_recast choice=%s contexts=%s" % [recast_choice, _controller._card_use_contexts])
 	if not _submit_pending_choice(0, [recast_card.uid], [], true):
 		return false
+	# 完整时机链可按预算跨真实帧；只观察自然恢复，不清理队列或手动补齐目标。
+	for settle_frame: int in range(180):
+		if _controller.has_pending_card_choice():
+			break
+		await get_tree().process_frame
 	# 重铸完成后原【杀】必须恢复到目标响应步骤；若仍停在领航选择或没有后续事件，出牌阶段将无法继续。
 	var slash_response_choice: Dictionary = _controller._pending_card_choice.duplicate(true)
 	var slash_response_context: Dictionary = slash_response_choice.get("context", {}) as Dictionary
@@ -1897,6 +1935,11 @@ func _test_himeko_card_use_linghang_choice_resumption() -> bool:
 		return _fail("himeko_linghang_missing_slash_response choice=%s contexts=%s" % [slash_response_choice, _controller._card_use_contexts])
 	if not _submit_pending_choice(1, [], [], false):
 		return false
+	# 完整响应与牌后置同样允许让帧；等待原父牌自然归档。
+	for settle_frame: int in range(180):
+		if not _controller._card_use_contexts.has(slash_card.uid):
+			break
+		await get_tree().process_frame
 	# 目标放弃响应后原【杀】必须完成处理区收尾并恢复下一次出牌选择；重铸牌与使用牌均进入弃牌堆，摸牌进入手牌。
 	if _controller.has_pending_card_choice() or _controller._card_use_contexts.has(slash_card.uid) or not _controller.call("_has_active_play_choice") or _controller.state.get_player(0).hand.has(recast_card) or not _controller.state.get_player(0).hand.has(draw_card) or not _controller.state.discard_pile.has(recast_card) or not _controller.state.discard_pile.has(slash_card):
 		return _fail("himeko_linghang_resume pending=%s contexts=%s active=%s hand=%s discard=%s" % [_controller.has_pending_card_choice(), _controller._card_use_contexts, _controller.call("_has_active_play_choice"), _controller.state.get_player(0).hand, _controller.state.discard_pile])
@@ -1963,7 +2006,7 @@ func _test_yongyi_and_shield_semantics() -> bool:
 	var hp_before: int = gepard.hp
 	# 失去护盾前的伤害历史条目数；用于证明该动作不会产生伤害事实。
 	var damage_history_count_before: int = gepard.damage_history.size()
-	if yongyi.get_owner_skill_player().loseShield(1, yongyi.get_owner_skill_player()) != 1 or gepard.hp != hp_before or gepard.damage_history.size() != damage_history_count_before:
+	if yongyi.get_owner_skill_player().loseShield(1, yongyi.get_owner_skill_player()).count != 1 or gepard.hp != hp_before or gepard.damage_history.size() != damage_history_count_before:
 		return _fail("lose_shield_semantics hp=%d shield=%d history=%d" % [gepard.hp, gepard.shield, gepard.damage_history.size()])
 	# 额外弃牌阶段完成上下文；无超限手牌时阶段会同步完成并回调永屹。
 	var completion_context: Dictionary = {"kind":"yongyi_extra_discard_complete", "skill_owner_id":0, "skill_id":"yongyi"}
@@ -2495,8 +2538,7 @@ func _test_misha_and_alan_skills() -> bool:
 	# 倾力测试前的正式规则服务；技能距离和次数查询应经过控制器钩子。
 	_controller.card_rules = CardRuleService.new(_controller.state, _controller)
 	# 倾力持有者；主动雷杀会失去一点体力并对无响应目标造成一点雷属性伤害。
-	var qingli: SkillDefinition = GameDatabase.create_skill("qingli")
-	qingli.bind(_controller, 0)
+	var qingli: SkillDefinition = _install_single_skill(0, "qingli")
 	var qingli_result: String = qingli.activate({"target_ids":[1]})
 	if _controller.has_pending_card_choice() and not _submit_pending_choice(1, [], [], false):
 		return false
@@ -2659,12 +2701,13 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	# 无懈可击触发智识后的补牌；响应成功后应恰好进入技能持有者手牌。
 	var zhishi_wuxie_draw_card: CardInstance = _add_draw_pile_card("shan", "heart", 9)
 	# 实际响应结果；必须由正式响应消费入口移动实体并派发respond时机。
-	var consumed_wuxie_card: CardInstance = _controller._consume_response_card_uid(0, zhishi_wuxie_card.uid, "wuxie")
-	if consumed_wuxie_card == null or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zhishi_confirm":
-		return _fail("zhishi_wuxie_trigger response=%s pending=%s" % [consumed_wuxie_card, _controller._pending_card_choice])
+	# 智识确认属于响应主体的子交互，确认结束前响应结果必须仍未完成。
+	var wuxie_resolution: RefCounted = _controller.begin_response_resolution(0, zhishi_wuxie_card.uid, ["wuxie"])
+	if wuxie_resolution.completed or not _controller.has_pending_card_choice() or str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "zhishi_confirm":
+		return _fail("zhishi_wuxie_trigger response=%s pending=%s" % [wuxie_resolution.result, _controller._pending_card_choice])
 	if not _submit_pending_choice(0, [], [], true):
 		return false
-	if not _controller.state.get_player(0).hand.has(zhishi_wuxie_draw_card) or _controller.state.get_player(0).find_hand_card(zhishi_wuxie_card.uid) != null or not _controller.state.discard_pile.has(zhishi_wuxie_card):
+	if not wuxie_resolution.completed or wuxie_resolution.result == null or not _controller.state.get_player(0).hand.has(zhishi_wuxie_draw_card) or _controller.state.get_player(0).find_hand_card(zhishi_wuxie_card.uid) != null or not _controller.state.discard_pile.has(zhishi_wuxie_card):
 		return _fail("zhishi_wuxie_draw hand=%s discard=%s" % [_controller.state.get_player(0).hand, _controller.state.discard_pile])
 	_reset_state(4)
 	# 机巧规则测试使用真实控制器提供者；距离和弃置保护均需遍历运行时技能表。
@@ -2687,7 +2730,7 @@ func _test_aisida_heita_xiluwa_skills() -> bool:
 	_controller.state.get_player(0).equipment["weapon"] = discardable_weapon_card
 	# 距离2的目标手牌；用于验证【顺手牵羊】因机巧解除距离限制仍可合法指定。
 	_add_hand_card(2, "shan", "heart", 11)
-	if jiqiao == null or _controller.can_discard_player_card(1, 0, armor_card, "equipment", "armor") or _controller.can_discard_player_card(1, 0, treasure_card, "equipment", "treasure") or _controller._discard_selected_player_card(0, armor_card.uid, 1):
+	if jiqiao == null or _controller.can_discard_player_card(1, 0, armor_card, "equipment", "armor") or _controller.can_discard_player_card(1, 0, treasure_card, "equipment", "treasure") or bool(_controller._discard_selected_player_card(0, armor_card.uid, 1).result.get("success", false)):
 		return _fail("jiqiao_protection")
 	if _controller.card_rules.validate_virtual_use(0, "shunshou", [2]) != "":
 		return _fail("jiqiao_distance")
@@ -3756,10 +3799,15 @@ func _test_qiusheng_dying_recovery() -> bool:
 	if qiusheng == null or mingchen == null:
 		return _fail("qiusheng_nested_skills")
 	_controller.damage(0, 1, 1, "normal", "sha")
-	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or lingke.hp != 0 or not lingke.alive or _controller._rule_sequences.is_empty() or _controller._deferred_skill_settlements.is_empty():
+	if str((_controller._pending_card_choice.get("context", {}) as Dictionary).get("kind", "")) != "mingchen_target" or lingke.hp != 0 or not lingke.alive or _controller._rule_sequences.is_empty():
 		return _fail("qiusheng_nested_pause hp=%d alive=%s dying_context=%s settlements=%s choice=%s" % [lingke.hp, lingke.alive, _controller._rule_sequences, _controller._deferred_skill_settlements, _controller._pending_card_choice])
 	if not _submit_pending_choice(1, [], [1], true):
 		return false
+	# 完整步骤链可能达到本帧执行预算；只观察正式帧推进，不手工排空或放宽最终断言。
+	for observation_frame: int in range(180):
+		if _controller._rule_sequences.is_empty() and not _controller._rule_continuations.has_pending():
+			break
+		await get_tree().process_frame
 	if lingke.hp != 1 or not lingke.alive or lingke.dying or not lingke.hand.has(nested_gain_card) or not _controller.state.discard_pile.has(nested_discard_card) or _controller.has_pending_card_choice() or not _controller._rule_sequences.is_empty() or _controller._rule_continuations.has_pending():
 		return _fail("qiusheng_nested_complete hp=%d alive=%s dying=%s hand=%s pending=%s" % [lingke.hp, lingke.alive, lingke.dying, lingke.hand.map(func(card: CardInstance) -> int: return card.uid), _controller._pending_card_choice])
 	return true

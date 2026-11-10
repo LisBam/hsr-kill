@@ -474,7 +474,7 @@ func _test_jianying_view_as_copies_face_and_restores() -> bool:
 	if str(snapshot.get("presentation_original_suit", "")) != JIANYING_MATERIAL_SUIT or int(snapshot.get("presentation_original_rank", 0)) != JIANYING_MATERIAL_RANK:
 		return _fail("jianying_snapshot_original %s" % [snapshot])
 	# 离开手牌区后必须恢复物理牌面，同时保留“本轮曾视为”的表现信息。
-	if not _controller.discard_card_from_hand(0, material_card.uid):
+	if not bool(_controller.discard_card_from_hand(0, material_card.uid).result.get("success", false)):
 		return _fail("jianying_discard_material")
 	if material_card.definition_id != JIANYING_MATERIAL_DEFINITION_ID or material_card.suit != JIANYING_MATERIAL_SUIT or material_card.rank != JIANYING_MATERIAL_RANK or material_card.has_hand_view_as():
 		return _fail("jianying_restore %s/%s/%d" % [material_card.definition_id, material_card.suit, material_card.rank])

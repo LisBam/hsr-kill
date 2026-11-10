@@ -1302,6 +1302,13 @@ func _run() -> void:
 	_controller.card_rules = CardRuleService.new(judgment_death_state)
 	_controller.effect_resolver = CardEffectResolver.new(_controller, judgment_death_state)
 	_controller._start_turn(1)
+	# 死亡交接在伤害、判定与阶段父内容结束后执行；允许正式预算让出帧。
+	for handoff_frame: int in range(120):
+		_controller.resume_settlement_pipeline()
+		_controller.event_scheduler.drain()
+		if judgment_death_state.current_player_id == 2 and judgment_death_state.current_phase == "play":
+			break
+		await get_tree().process_frame
 	if judgment_death_state.game_over or judgment_death_state.players[1].alive or judgment_death_state.current_player_id != 2 or judgment_death_state.current_phase != "play" or judgment_death_state.turn_number != 2:
 		printerr("SMOKE_FAIL judgment_turn_transfer game_over=%s alive=%s current=%d phase=%s turn=%d" % [judgment_death_state.game_over, judgment_death_state.players[1].alive, judgment_death_state.current_player_id, judgment_death_state.current_phase, judgment_death_state.turn_number])
 		get_tree().quit(1)

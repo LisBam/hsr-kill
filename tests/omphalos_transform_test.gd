@@ -41,7 +41,7 @@ func _run() -> void:
 		return
 	if not _test_tiancai_play_choice_broadcast():
 		return
-	if not _test_active_virtual_card_skills():
+	if not await _test_active_virtual_card_skills():
 		return
 	if not _test_xinji_first_damage_advance():
 		return
@@ -190,7 +190,7 @@ func _test_eternal_exit_and_zone_rules() -> bool:
 	delayed_card.zone = "judgment"
 	delayed_card.owner_id = 0
 	owner.judgment_area.append(delayed_card)
-	if not _controller.set_player_zones_abolished(0, true, true, "test") or not owner.equipment.is_empty() or not owner.judgment_area.is_empty() or _controller.state.discard_pile.size() != 2:
+	if not _controller.set_player_zones_abolished(0, true, true, "test").success or not owner.equipment.is_empty() or not owner.judgment_area.is_empty() or _controller.state.discard_pile.size() != 2:
 		return _fail("abolish_clear=%s/%s/%d" % [owner.equipment, owner.judgment_area, _controller.state.discard_pile.size()])
 	# 装备与延时锦囊使用前校验；废除状态应直接提供明确拒绝。
 	if _controller.card_rules.validate_virtual_use(0, "zhuge", [0]).is_empty():
@@ -208,7 +208,7 @@ func _test_eternal_exit_and_zone_rules() -> bool:
 	var restored_owner: PlayerState = PlayerState.from_authoritative_dict(authoritative_player_data)
 	if not restored_owner.equipment_area_abolished or not restored_owner.judgment_area_abolished or restored_owner.character_form_state.get("test_key", []) != [1] or not (public_player_data.get("character_form_state", {}) as Dictionary).is_empty():
 		return _fail("abolished_serialization")
-	if not _controller.set_player_zones_abolished(0, false, false, "test_restore") or owner.equipment_area_abolished or owner.judgment_area_abolished:
+	if not _controller.set_player_zones_abolished(0, false, false, "test_restore").success or owner.equipment_area_abolished or owner.judgment_area_abolished:
 		return _fail("zone_restore")
 	return true
 
@@ -866,19 +866,21 @@ func _test_active_virtual_card_skills() -> bool:
 	var second_shihun_actor: PlayerState = _controller.state.get_player(2)
 	# 弑魂运行时实例；两个轮回节连续调用用于验证原目标保持。
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
-	if shihun == null or shihun.activate({"target_ids":[1, 2]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[1, 2]}) != "":
 		return _fail("shihun_incoming_start")
 	# 一次统一结算管线调用必须排空两张依次使用的火【杀】，不能每张牌都依赖外部再次恢复。
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun_owner.hp != 3 or shihun.get_reincarnation_section_index() != 1 or _count_card_uses(1, "sha_fire") != 1 or _count_card_uses(2, "sha_fire") != 1:
 		return _fail("shihun_incoming=%d/%s/%d/%d" % [shihun_owner.hp, shihun.get_reincarnation_state(), _count_card_uses(1, "sha_fire"), _count_card_uses(2, "sha_fire")])
 	# 反击前两名原使用者的体力；②是一张固定多目标火【杀】，两名目标都应各承受1点伤害。
 	var first_shihun_actor_hp_before: int = first_shihun_actor.hp
 	# 第二名原使用者的反击前体力；与第一名共同验证①保存的完整目标集合。
 	var second_shihun_actor_hp_before: int = second_shihun_actor.hp
-	if shihun.activate({}) != "":
+	if _activate_skill(shihun, {}) != "":
 		return _fail("shihun_retaliation_start")
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if first_shihun_actor.hp != first_shihun_actor_hp_before - 1 or second_shihun_actor.hp != second_shihun_actor_hp_before - 1 or shihun.get_reincarnation_round_count() != 2 or shihun.get_reincarnation_section_index() != 0 or _count_card_uses(0, "sha_fire") != 1:
 		return _fail("shihun_retaliation=%d/%d/%s/%d" % [first_shihun_actor.hp, second_shihun_actor.hp, shihun.get_reincarnation_state(), _count_card_uses(0, "sha_fire")])
 
@@ -925,7 +927,7 @@ func _test_active_virtual_card_skills() -> bool:
 	var gained_non_damage_card: CardInstance = CardInstance.new("tao", "diamond", 9)
 	gained_non_damage_card.zone = "draw_pile"
 	_controller.state.draw_pile.append(gained_non_damage_card)
-	if _controller._move_card_with_timings(gained_non_damage_card, "hand", 0, "yongjie_gain_test") == null or gained_non_damage_card.definition_id != "sha_fire" or gained_non_damage_card.hand_view_as_original_definition_id != "tao" or not gained_non_damage_card.has_hand_mark_rule("ignore_distance_limit"):
+	if _controller.begin_card_move(gained_non_damage_card.uid, "hand", 0, "yongjie_gain_test").count != 1 or gained_non_damage_card.definition_id != "sha_fire" or gained_non_damage_card.hand_view_as_original_definition_id != "tao" or not gained_non_damage_card.has_hand_mark_rule("ignore_distance_limit"):
 		return _fail("yongjie_gain_view_as=%s" % gained_non_damage_card.to_dict())
 	return true
 
@@ -958,3 +960,33 @@ func _fail(message: String) -> bool:
 	printerr("OMPHALOS_TRANSFORM_FAIL %s" % message)
 	get_tree().quit(1)
 	return false
+
+
+## 直接调用技能的夹具必须等整张父牌及其收尾排空，再模拟下一次主动操作。
+func _settle_virtual_content() -> bool:
+	for attempt: int in range(120):
+		_controller.resume_settlement_pipeline()
+		_controller.event_scheduler.drain()
+		if _controller.has_pending_card_choice():
+			return _fail("unexpected virtual choice=%s" % _controller._pending_card_choice)
+		if _controller._rule_sequences.is_empty() and _controller._card_use_contexts.is_empty() and not _controller._rule_continuations.has_pending() and _controller._deferred_skill_settlements.is_empty():
+			return true
+		await get_tree().process_frame
+	# 原生父事件摘要；区分仍需选择与真正没有推进来源的内容。
+	var event_states: Array[Dictionary] = []
+	for context: Dictionary in _controller._card_use_contexts.values():
+		# 当前未完成用牌身份；保留状态和队列，不复制整份牌面上下文。
+		var snapshot: Dictionary = _controller.event_scheduler.get_event_snapshot(int(context.get("event_id", -1)))
+		event_states.append({"id":snapshot.get("event_id"), "step":snapshot.get("step"), "status":snapshot.get("status"), "next":snapshot.get("next_event_ids"), "after":snapshot.get("after_event_ids")})
+	return _fail("virtual content not settled use=%s current=%s pending=%s pauses=%s" % [event_states, _controller.event_scheduler.get_current_event().to_dict() if _controller.event_scheduler.get_current_event() != null else {}, _controller.event_scheduler.get_pending_choice_requests(), _controller.event_scheduler.pause_registry.get_active_tokens()])
+
+
+## 有常驻出牌请求时走正式动作入口，先解决chooseToUse再启动技能子内容。
+func _activate_skill(skill: SkillDefinition, context: Dictionary) -> String:
+	if not _controller._has_active_play_choice():
+		return skill.activate(context)
+	# 原技能上下文进入正式动作载荷；服务端继续校验技能归属与当前请求。
+	var action: PlayerAction = PlayerAction.new("use_skill", skill.owner_player_id)
+	action.payload = context.duplicate(true)
+	action.payload["skill_id"] = skill.get_id()
+	return "" if _controller.submit_action(action, skill.owner_player_id) else "正式技能动作提交失败"

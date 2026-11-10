@@ -86,12 +86,12 @@ func _test_equipment_slot_and_area_abolition() -> bool:
 	var offensive_mount: CardInstance = _equipment_card("dawan", "spade", 3, 0)
 	owner.equipment = {"weapon":weapon, "armor":armor, "offensive_mount":offensive_mount}
 	_controller.event_bus.subscribe("disableEquipBefore", self, _cancel_and_capture_timing)
-	if _controller.set_player_equipment_slots_abolished(0, ["weapon"], true, "cancel_probe", 1) or not owner.equipment.has("weapon") or owner.is_equipment_slot_abolished("weapon") or _captured_timings != ["disableEquipBefore"]:
+	if _controller.set_player_equipment_slots_abolished(0, ["weapon"], true, "cancel_probe", 1).success or not owner.equipment.has("weapon") or owner.is_equipment_slot_abolished("weapon") or _captured_timings != ["disableEquipBefore"]:
 		return _fail("disable_equip_cancel=%s/%s/%s" % [owner.equipment.keys(), owner.get_abolished_equipment_slot_ids(), _captured_timings])
 	_controller.event_bus.unsubscribe_owner(self)
 	_captured_timings.clear()
 	_subscribe_zone_timings()
-	if not _controller.set_player_equipment_slots_abolished(0, ["armor", "weapon", "weapon", "unknown"], true, "partial", 1):
+	if not _controller.set_player_equipment_slots_abolished(0, ["armor", "weapon", "weapon", "unknown"], true, "partial", 1).success:
 		return _fail("partial_disable_rejected")
 	if owner.equipment.has("weapon") or owner.equipment.has("armor") or not owner.equipment.has("offensive_mount") or owner.equipment_area_abolished or owner.get_abolished_equipment_slot_ids() != ["weapon", "armor"] or not _controller.is_player_equipment_slot_abolished(0, "weapon") or _controller.get_player_abolished_equipment_slot_ids(0) != ["weapon", "armor"] or not _controller.state.discard_pile.has(weapon) or not _controller.state.discard_pile.has(armor) or owner.hp != owner.max_hp:
 		return _fail("partial_disable_state=%s/%s/%s/hp=%d" % [owner.equipment.keys(), owner.get_abolished_equipment_slot_ids(), owner.equipment_area_abolished, owner.hp])
@@ -107,20 +107,20 @@ func _test_equipment_slot_and_area_abolition() -> bool:
 	var blocked_processing_weapon: CardInstance = CardInstance.new("qinggang", "club", 4)
 	blocked_processing_weapon.zone = "processing"
 	_controller.state.processing_area.append(blocked_processing_weapon)
-	if _controller._move_card_with_timings(blocked_processing_weapon, "equipment", 0, "abolished_boundary", _controller.state.current_event_id, "weapon") != null or not _controller.state.processing_area.has(blocked_processing_weapon):
+	if _controller.begin_card_move(blocked_processing_weapon.uid, "equipment", 0, "abolished_boundary", {"event_id":_controller.state.current_event_id, "target_slot":"weapon"}).count != 0 or not _controller.state.processing_area.has(blocked_processing_weapon):
 		return _fail("equipment_move_boundary")
-	if not _controller.set_player_equipment_slots_abolished(0, ["weapon"], false, "partial_restore", 1) or owner.is_equipment_slot_abolished("weapon") or not owner.is_equipment_slot_abolished("armor") or owner.equipment.has("weapon"):
+	if not _controller.set_player_equipment_slots_abolished(0, ["weapon"], false, "partial_restore", 1).success or owner.is_equipment_slot_abolished("weapon") or not owner.is_equipment_slot_abolished("armor") or owner.equipment.has("weapon"):
 		return _fail("partial_restore=%s" % owner.get_abolished_equipment_slot_ids())
 	# 未知装备栏位不属于五个基础栏；即使对应武器栏已经恢复，最终移动边界也不能创建异常字典键。
-	if _controller._move_card_with_timings(blocked_processing_weapon, "equipment", 0, "invalid_slot_boundary", _controller.state.current_event_id, "unknown") != null or not _controller.state.processing_area.has(blocked_processing_weapon):
+	if _controller.begin_card_move(blocked_processing_weapon.uid, "equipment", 0, "invalid_slot_boundary", {"event_id":_controller.state.current_event_id, "target_slot":"unknown"}).count != 0 or not _controller.state.processing_area.has(blocked_processing_weapon):
 		return _fail("equipment_invalid_slot_boundary")
-	if not _controller.set_player_zones_abolished(0, true, false, "full_disable", 1) or not owner.equipment_area_abolished or owner.get_abolished_equipment_slot_ids() != PlayerState.EQUIPMENT_SLOT_ORDER or owner.equipment.has("offensive_mount") or not _controller.state.discard_pile.has(offensive_mount):
+	if not _controller.set_player_zones_abolished(0, true, false, "full_disable", 1).success or not owner.equipment_area_abolished or owner.get_abolished_equipment_slot_ids() != PlayerState.EQUIPMENT_SLOT_ORDER or owner.equipment.has("offensive_mount") or not _controller.state.discard_pile.has(offensive_mount):
 		return _fail("full_disable=%s/%s" % [owner.equipment_area_abolished, owner.get_abolished_equipment_slot_ids()])
 	# 省略目标栏位的处理区宝物；底层兼容规则会解析为宝物栏，也必须受整区废除约束。
 	var blocked_default_slot_treasure: CardInstance = CardInstance.new("muniu", "diamond", 5)
 	blocked_default_slot_treasure.zone = "processing"
 	_controller.state.processing_area.append(blocked_default_slot_treasure)
-	if _controller._move_card_with_timings(blocked_default_slot_treasure, "equipment", 0, "abolished_default_slot", _controller.state.current_event_id) != null or not _controller.state.processing_area.has(blocked_default_slot_treasure):
+	if _controller.begin_card_move(blocked_default_slot_treasure.uid, "equipment", 0, "abolished_default_slot", {"event_id":_controller.state.current_event_id}).count != 0 or not _controller.state.processing_area.has(blocked_default_slot_treasure):
 		return _fail("equipment_default_slot_boundary")
 	# 整区废除公开快照；新字典和旧布尔值必须一致且能从权威数据恢复。
 	var public_snapshot: Dictionary = owner.to_dict(1, false)
@@ -142,7 +142,7 @@ func _test_equipment_slot_and_area_abolition() -> bool:
 	var legacy_runtime_snapshot: Dictionary = legacy_runtime_owner.to_dict(0, false)
 	if not bool(legacy_runtime_snapshot.get("equipment_area_abolished", false)) or (legacy_runtime_snapshot.get("abolished_equipment_slots", {}) as Dictionary).size() != 5:
 		return _fail("legacy_runtime_snapshot=%s" % legacy_runtime_snapshot.get("abolished_equipment_slots", {}))
-	if not _controller.set_player_zones_abolished(0, false, false, "full_restore", 1) or owner.equipment_area_abolished or not owner.get_abolished_equipment_slot_ids().is_empty() or not owner.equipment.is_empty():
+	if not _controller.set_player_zones_abolished(0, false, false, "full_restore", 1).success or owner.equipment_area_abolished or not owner.get_abolished_equipment_slot_ids().is_empty() or not owner.equipment.is_empty():
 		return _fail("full_restore=%s/%s" % [owner.equipment_area_abolished, owner.get_abolished_equipment_slot_ids()])
 	return true
 
@@ -156,7 +156,7 @@ func _test_judgment_area_abolition() -> bool:
 	delayed_card.zone = "judgment"
 	delayed_card.owner_id = 0
 	owner.judgment_area.append(delayed_card)
-	if not _controller.set_player_judgment_area_abolished(0, true, "judge_disable", 1) or not owner.judgment_area_abolished or not owner.judgment_area.is_empty() or not _controller.state.discard_pile.has(delayed_card):
+	if not _controller.set_player_judgment_area_abolished(0, true, "judge_disable", 1).success or not owner.judgment_area_abolished or not owner.judgment_area.is_empty() or not _controller.state.discard_pile.has(delayed_card):
 		return _fail("judgment_disable")
 	_controller.state.current_player_id = 1
 	# 向已废除判定区使用【乐不思蜀】的规则错误；非空表示预览已正确拒绝。
@@ -170,9 +170,9 @@ func _test_judgment_area_abolition() -> bool:
 	var blocked_delayed_card: CardInstance = CardInstance.new("bingliang", "spade", 7)
 	blocked_delayed_card.zone = "processing"
 	_controller.state.processing_area.append(blocked_delayed_card)
-	if _controller._move_card_with_timings(blocked_delayed_card, "judgment", 0, "abolished_boundary", _controller.state.current_event_id) != null or not _controller.state.processing_area.has(blocked_delayed_card):
+	if _controller.begin_card_move(blocked_delayed_card.uid, "judgment", 0, "abolished_boundary", {"event_id":_controller.state.current_event_id}).count != 0 or not _controller.state.processing_area.has(blocked_delayed_card):
 		return _fail("judgment_move_boundary")
-	if not _controller.set_player_judgment_area_abolished(0, false, "judge_restore", 1) or owner.judgment_area_abolished or not owner.judgment_area.is_empty():
+	if not _controller.set_player_judgment_area_abolished(0, false, "judge_restore", 1).success or owner.judgment_area_abolished or not owner.judgment_area.is_empty():
 		return _fail("judgment_restore")
 	# 全部区域专属时机顺序；弃牌移动的通用时机不在本捕获列表中。
 	var expected_timings: Array[String] = [

@@ -86,7 +86,7 @@ func _test_skill_health_syntax() -> bool:
 	# 目标权威状态；只用于断言，测试效果本身不能直接修改该对象。
 	var target_state: PlayerState = who.get_state()
 
-	if who.shield(3, source) != 3 or target_state.shield != 3 or _shield_after_events.size() != 1:
+	if who.shield(3, source).count != 3 or target_state.shield != 3 or _shield_after_events.size() != 1:
 		return _fail("shield_gain=%d events=%s" % [target_state.shield, _shield_after_events])
 	source.damage(2, who)
 	if target_state.hp != 4 or target_state.shield != 1 or _damage_after_events.size() != 1 or not _hp_reduced_events.is_empty():
@@ -96,7 +96,7 @@ func _test_skill_health_syntax() -> bool:
 	if int(absorbed_damage.get("amount", -1)) != 2 or int(absorbed_damage.get("shield_absorbed", -1)) != 2 or int(absorbed_damage.get("hp_lost", -1)) != 0:
 		return _fail("absorbed_damage=%s" % absorbed_damage)
 
-	if who.loseHp(1, source) != 1 or target_state.hp != 3 or target_state.shield != 1:
+	if who.loseHp(1, source).count != 1 or target_state.hp != 3 or target_state.shield != 1:
 		return _fail("lose_hp hp=%d shield=%d" % [target_state.hp, target_state.shield])
 	if _damage_after_events.size() != 1 or _lose_hp_after_events.size() != 1 or _hp_reduced_events.size() != 1 or str(_hp_reduced_events[0].get("reduction_type", "")) != "lose_hp":
 		return _fail("lose_hp_event_isolation damage=%s lose=%s reduced=%s" % [_damage_after_events, _lose_hp_after_events, _hp_reduced_events])

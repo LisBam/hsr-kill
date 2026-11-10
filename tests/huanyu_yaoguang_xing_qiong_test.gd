@@ -316,11 +316,11 @@ func _test_xiongxing_self_max_hp_guard() -> bool:
 	if int(owner.character_form_state.get("xiongxing_max_hp_guard", 0)) != 1:
 		return _fail("xiongxing_guard_state %s" % [owner.character_form_state])
 	# 体力上限减少被完全防止；上限、防止额度与减少返回值同时保持中性。
-	var applied: int = _controller.change_max_hp(0, -1, 1, "test")
+	var applied: int = _controller.change_max_hp(0, -1, 1, "test").amount
 	if applied != 0 or owner.max_hp != 4 or int(owner.character_form_state.get("xiongxing_max_hp_guard", 0)) != 0:
 		return _fail("xiongxing_guard_prevent applied=%d max_hp=%d state=%s" % [applied, owner.max_hp, owner.character_form_state])
 	# 保护已消耗；第二次上限减少正常生效。
-	var second_applied: int = _controller.change_max_hp(0, -1, 1, "test")
+	var second_applied: int = _controller.change_max_hp(0, -1, 1, "test").amount
 	if second_applied == 0 or owner.max_hp != 3:
 		return _fail("xiongxing_guard_consumed applied=%d max_hp=%d" % [second_applied, owner.max_hp])
 	return true

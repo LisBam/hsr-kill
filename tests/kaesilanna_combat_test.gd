@@ -14,17 +14,17 @@ func _ready() -> void:
 ## 顺序执行全部卡厄斯兰那实战断言；任一失败立即以非零状态退出。
 func _run() -> void:
 	_create_controller()
-	if not _test_transform_roundtrip_resets_reincarnation():
+	if not await _test_transform_roundtrip_resets_reincarnation():
 		return
 	if not _test_tiancai_empty_section_advances():
 		return
-	if not _test_shihun_stale_target_advances():
+	if not await _test_shihun_stale_target_advances():
 		return
-	if not _test_shihun_retaliation_after_slash_used():
+	if not await _test_shihun_retaliation_after_slash_used():
 		return
-	if not _test_shihun_retaliation_beyond_attack_range():
+	if not await _test_shihun_retaliation_beyond_attack_range():
 		return
-	if not _test_shihun_retaliation_ignores_dead_target():
+	if not await _test_shihun_retaliation_ignores_dead_target():
 		return
 	if not _test_lethal_self_harm_ai_veto():
 		return
@@ -106,10 +106,11 @@ func _test_transform_roundtrip_resets_reincarnation() -> bool:
 	if not _controller.replace_player_character_card(0, "kaesilanna", "kaesilanna_roundtrip_in", true):
 		return _fail("roundtrip_transform_in")
 	var shihun: SkillDefinition = _controller.get_skill_instance(0, "shihun")
-	if shihun == null or shihun.activate({"target_ids":[1]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[1]}) != "":
 		return _fail("roundtrip_section_one_activate")
 	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun.get_reincarnation_section_index() != 1:
 		return _fail("roundtrip_section_one=%s" % shihun.get_reincarnation_state())
 	# 体力归零触发【永劫】返生；换回白厄时旧形态的轮回登记必须一并清除。
@@ -158,15 +159,16 @@ func _test_shihun_stale_target_advances() -> bool:
 	owner.max_hp = 5
 	owner.hp = 5
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
-	if shihun == null or shihun.activate({"target_ids":[1]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[1]}) != "":
 		return _fail("shihun_stale_section_one_activate")
 	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun.get_reincarnation_section_index() != 1:
 		return _fail("shihun_stale_section_one=%s" % shihun.get_reincarnation_state())
 	# ①指定的角色死亡；②的固定目标不再合法。
 	_controller.state.get_player(1).alive = false
-	if not shihun.can_activate() or shihun.activate({}) != "" or shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
+	if not shihun.can_activate() or _activate_skill(shihun, {}) != "" or shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
 		return _fail("shihun_stale_section_two=%s" % shihun.get_reincarnation_state())
 	return true
 
@@ -183,17 +185,19 @@ func _test_shihun_retaliation_after_slash_used() -> bool:
 	# 本阶段已使用一张同组【杀】；与 _get_grouped_play_count 读取的阶段历史保持一致。
 	owner.play_phase_card_use_history["sha_fire"] = 1
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
-	if shihun == null or shihun.activate({"target_ids":[1]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[1]}) != "":
 		return _fail("shihun_slash_used_section_one_activate")
 	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun.get_reincarnation_section_index() != 1:
 		return _fail("shihun_slash_used_section_one=%s" % shihun.get_reincarnation_state())
 	# ②的固定目标；必须真实承受反击火【杀】的1点火焰伤害。
 	var target: PlayerState = _controller.state.get_player(1)
-	if not shihun.can_activate() or shihun.activate({}) != "":
+	if not shihun.can_activate() or _activate_skill(shihun, {}) != "":
 		return _fail("shihun_slash_used_section_two_activate")
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if target.hp != 4 or shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
 		return _fail("shihun_slash_used_section_two=%d/%s" % [target.hp, shihun.get_reincarnation_state()])
 	return true
@@ -210,16 +214,18 @@ func _test_shihun_retaliation_beyond_attack_range() -> bool:
 	owner.hp = 5
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
 	# 2号与0号之间隔一名角色，距离为2，超出默认攻击范围1。
-	if shihun == null or shihun.activate({"target_ids":[2]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[2]}) != "":
 		return _fail("shihun_far_target_section_one_activate")
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun.get_reincarnation_section_index() != 1:
 		return _fail("shihun_far_target_section_one=%s" % shihun.get_reincarnation_state())
 	# ②的固定目标；远距离目标同样必须承受1点火焰伤害。
 	var target: PlayerState = _controller.state.get_player(2)
-	if not shihun.can_activate() or shihun.activate({}) != "":
+	if not shihun.can_activate() or _activate_skill(shihun, {}) != "":
 		return _fail("shihun_far_target_section_two_activate")
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if target.hp != 4 or shihun.get_reincarnation_section_index() != 0:
 		return _fail("shihun_far_target_section_two=%d/%s" % [target.hp, shihun.get_reincarnation_state()])
 	return true
@@ -236,10 +242,11 @@ func _test_shihun_retaliation_ignores_dead_target() -> bool:
 	owner.hp = 5
 	var shihun: SkillDefinition = _install_skill(0, "shihun")
 	# ①指定两名使用者；②的记录因此为[1, 2]，本次仅其中一名会失效。
-	if shihun == null or shihun.activate({"target_ids":[1, 2]}) != "":
+	if shihun == null or _activate_skill(shihun, {"target_ids":[1, 2]}) != "":
 		return _fail("shihun_skip_dead_section_one_activate")
 	# ①建立的火【杀】属于连续结算队列；排空统一管线后轮回节才会推进。
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if shihun.get_reincarnation_section_index() != 1:
 		return _fail("shihun_skip_dead_section_one=%s" % shihun.get_reincarnation_state())
 	# ①指定的2号使用者阵亡；②必须忽略它并继续对仍存活的1号反击。
@@ -248,9 +255,10 @@ func _test_shihun_retaliation_ignores_dead_target() -> bool:
 	var live_target: PlayerState = _controller.state.get_player(1)
 	# 反击前体力；用于确认伤害确实来自②打出的火【杀】而不是其他结算。
 	var live_hp_before: int = live_target.hp
-	if not shihun.can_activate() or shihun.activate({}) != "":
+	if not shihun.can_activate() or _activate_skill(shihun, {}) != "":
 		return _fail("shihun_skip_dead_section_two_activate")
-	_controller.resume_settlement_pipeline()
+	if not await _settle_virtual_content():
+		return false
 	if live_target.hp != live_hp_before - 1:
 		return _fail("shihun_skip_dead_section_two=%d/%d" % [live_target.hp, live_hp_before])
 	if shihun.get_reincarnation_section_index() != 0 or shihun.get_reincarnation_round_count() != 2:
@@ -353,3 +361,33 @@ func _fail(message: String) -> bool:
 	printerr("KAESILANNA_COMBAT_FAIL %s" % message)
 	get_tree().quit(1)
 	return false
+
+
+## 直接调用技能的夹具必须等整张父牌及其收尾排空，再模拟下一次主动操作。
+func _settle_virtual_content() -> bool:
+	for attempt: int in range(120):
+		_controller.resume_settlement_pipeline()
+		_controller.event_scheduler.drain()
+		if _controller.has_pending_card_choice():
+			return _fail("unexpected virtual choice=%s" % _controller._pending_card_choice)
+		if _controller._rule_sequences.is_empty() and _controller._card_use_contexts.is_empty() and not _controller._rule_continuations.has_pending() and _controller._deferred_skill_settlements.is_empty():
+			return true
+		await get_tree().process_frame
+	# 原生父事件摘要；区分仍需选择与真正没有推进来源的内容。
+	var event_states: Array[Dictionary] = []
+	for context: Dictionary in _controller._card_use_contexts.values():
+		# 当前未完成用牌身份；保留状态和队列，不复制整份牌面上下文。
+		var snapshot: Dictionary = _controller.event_scheduler.get_event_snapshot(int(context.get("event_id", -1)))
+		event_states.append({"id":snapshot.get("event_id"), "step":snapshot.get("step"), "status":snapshot.get("status"), "next":snapshot.get("next_event_ids"), "after":snapshot.get("after_event_ids")})
+	return _fail("virtual content not settled use=%s current=%s pending=%s pauses=%s" % [event_states, _controller.event_scheduler.get_current_event().to_dict() if _controller.event_scheduler.get_current_event() != null else {}, _controller.event_scheduler.get_pending_choice_requests(), _controller.event_scheduler.pause_registry.get_active_tokens()])
+
+
+## 有常驻出牌请求时走正式动作入口，先解决chooseToUse再启动技能子内容。
+func _activate_skill(skill: SkillDefinition, context: Dictionary) -> String:
+	if not _controller._has_active_play_choice():
+		return skill.activate(context)
+	# 原技能上下文进入正式动作载荷；服务端继续校验技能归属与当前请求。
+	var action: PlayerAction = PlayerAction.new("use_skill", skill.owner_player_id)
+	action.payload = context.duplicate(true)
+	action.payload["skill_id"] = skill.get_id()
+	return "" if _controller.submit_action(action, skill.owner_player_id) else "正式技能动作提交失败"
