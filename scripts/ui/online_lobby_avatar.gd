@@ -1,6 +1,9 @@
 class_name OnlineLobbyAvatar
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
 ## 联机大厅单个玩家或空位置的表现组件。占用位置沿用空位同款武将框作为底框，联机形象插画内嵌框中，不复用局内武将牌场景或规则覆盖层。
 
 ## 本地玩家点击空位置时发出的换位请求；参数为大厅0起始位置索引。
@@ -183,15 +186,15 @@ func refresh_ui_style() -> void:
 	_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if _occupied else BattleUIStyle.get_color("text_muted"))
 	_name_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_empty_slot_button.add_theme_stylebox_override("normal", _make_slot_frame_style())
-	_empty_slot_button.add_theme_stylebox_override("hover", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.58), BattleUIStyle.get_color("accent"), 2, 6))
-	_empty_slot_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))
+	_empty_slot_button.add_theme_stylebox_override("hover", MENU_STYLE.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.58), BattleUIStyle.get_color("accent"), 2, 6))
+	_empty_slot_button.add_theme_stylebox_override("pressed", MENU_STYLE.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
 	_empty_slot_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	# 当前玩家形象武将框；直接沿用空位常态的同一底色、描边与阴影规格，插画节点绘制在框体之上并按内缩距离嵌入。
 	_avatar_frame.add_theme_stylebox_override("panel", _make_slot_frame_style())
 	# 当前踢出按钮背景；在主题危险色基础上加深，避免与普通错误提示和高亮操作混淆。
 	var kick_button_color: Color = BattleUIStyle.get_color("danger").darkened(kick_button_darken_amount)
-	BattleUIStyle.apply_interaction_button(_kick_button, kick_button_color, BattleUIStyle.get_color("danger"), true)
+	MENU_STYLE.apply_interaction_button(_kick_button, kick_button_color, BattleUIStyle.get_color("danger"), true)
 	_kick_button.add_theme_font_size_override("font_size", kick_button_font_size)
 	for state_name: StringName in [&"normal", &"hover", &"pressed", &"focus", &"disabled"]:
 		# 当前踢出按钮状态样式；压缩上下边距后，所有交互状态都保持同一31像素固定高度。
@@ -228,7 +231,7 @@ func _refresh_identity_badge() -> void:
 	var badge_background: Color = BattleUIStyle.get_color("metal_panel")
 	badge_background.a = 0.92
 	# 徽记样式；身份色细描边、紧凑零内边距与小圆角，避免遮挡插画主体。
-	var badge_style: StyleBoxFlat = BattleUIStyle.make_panel(badge_background, identity_color, 1, 4)
+	var badge_style: StyleBoxFlat = MENU_STYLE.make_panel(badge_background, identity_color, 1, 4)
 	badge_style.content_margin_left = 0.0
 	badge_style.content_margin_top = 0.0
 	badge_style.content_margin_right = 0.0
@@ -246,7 +249,7 @@ func get_avatar_rect() -> Rect2:
 
 ## 构造空位与玩家共用的武将框常态样式；占用位置的底框必须与空位按钮保持同一底色、描边与圆角规格。
 func _make_slot_frame_style() -> StyleBoxFlat:
-	return BattleUIStyle.make_panel(Color(BattleUIStyle.get_color("panel"), 0.36), Color(BattleUIStyle.get_color("border"), 0.55), 1, 6)
+	return MENU_STYLE.make_panel(Color(BattleUIStyle.get_color("panel"), 0.36), Color(BattleUIStyle.get_color("border"), 0.55), 1, 6)
 
 
 ## 空位置点击只发出稳定位置索引；房主权威网关决定该位置是否仍为空。

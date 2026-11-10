@@ -1,5 +1,7 @@
 [gd_scene format=3 uid="uid://26tti45wdkob"]
 
+[ext_resource type="PackedScene" path="res://scenes/components/menu_presentation.tscn" id="51_menu_presentation"]
+
 [ext_resource type="Script" uid="uid://bn6eps22hk7ru" path="res://scripts/ui/match_table.gd" id="1_ui"]
 [ext_resource type="Script" uid="uid://bxfclsavijmua" path="res://scripts/core/match_controller.gd" id="2_match"]
 [ext_resource type="Script" uid="uid://cyj0ye13ftsgu" path="res://scripts/core/rule_event_bus.gd" id="3_event"]
@@ -2202,3 +2204,5 @@ text = "返回"
 [node name="MatchReplayPanel" parent="MainMenu" unique_id=903412767 instance=ExtResource("32_match_replay")]
 
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]
+
+[node name="MenuPresentation" parent="MainMenu" instance=ExtResource("51_menu_presentation")]

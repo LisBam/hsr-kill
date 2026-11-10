@@ -1,6 +1,15 @@
 class_name OnlineLobbyPanel
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
+## 座位展示签名；默认0表示未构建，只包含布局与成员事实，聊天快照不触发牌框重建。
+var _seat_presentation_signature: int = 0
+
 ## 联机大厅界面组件。该组件只渲染公共房间快照并发出聊天、换位、踢人、设置、开始与离开意图。
 
 ## 本地玩家发送大厅聊天时发出的请求；正文已经过组件空值检查，网络层仍会统一裁剪长度。
@@ -187,7 +196,7 @@ func bind_lobby(lobby_snapshot: Dictionary, host_addresses: Array[String] = [], 
 
 ## 对局正式开始后隐藏大厅与设置模态；ENet 会话保持连接供正式牌桌继续使用。
 func confirm_match_started() -> void:
-	_close_settings()
+	_close_settings(false)
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	visible = false
 
@@ -212,10 +221,10 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_background.color = BattleUIStyle.get_color("outer_background")
-	_surface.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("table_surface"), BattleUIStyle.get_color("border"), 2, 8))
-	_chat_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color(BattleUIStyle.get_color("metal_panel"), 0.94), BattleUIStyle.get_color("border"), 1, 6))
-	_control_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(Color(BattleUIStyle.get_color("metal_panel"), 0.96), BattleUIStyle.get_color("border"), 1, 6))
-	_settings_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	_surface.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("table_surface"), BattleUIStyle.get_color("border"), 2, 8))
+	_chat_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(Color(BattleUIStyle.get_color("metal_panel"), 0.94), BattleUIStyle.get_color("border"), 1, 6))
+	_control_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(Color(BattleUIStyle.get_color("metal_panel"), 0.96), BattleUIStyle.get_color("border"), 1, 6))
+	_settings_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
 	_settings_backdrop.color = Color(BattleUIStyle.get_color("shade"), 0.90)
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_address_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -247,12 +256,12 @@ func refresh_ui_style() -> void:
 	_apply_line_edit_style(_password_input)
 	_apply_spin_box_style(_player_count_input)
 	_apply_option_button_style(_game_mode_option)
-	BattleUIStyle.apply_interaction_button(_chat_send_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_start_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_leave_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("danger"), false)
-	BattleUIStyle.apply_interaction_button(_settings_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_settings_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_chat_send_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_settings_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_start_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_leave_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("danger"), false)
+	MENU_STYLE.apply_interaction_button(_settings_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_settings_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_layout_host_address_label()
 	for seat_view: OnlineLobbyAvatar in _seat_views:
 		if seat_view != null and is_instance_valid(seat_view):
@@ -262,7 +271,12 @@ func refresh_ui_style() -> void:
 ## 根据当前总人数重建大厅位置；2至3人为单行3位，其余人数按上下两行对称分配。
 ## 1v1车轮战固定绘制两个位置，自选身份开启后位置数与规则人数一致且每个位置显示身份徽记。
 func _render_seats() -> void:
+	# 只对可见座位事实、权限和布局尺寸取签名；不把聊天历史或房间提示纳入缓存键。
+	var next_signature: int = hash([_snapshot.get("members", []), _snapshot.get("player_count", 2), _snapshot.get("game_mode_id", ""), _snapshot.get("custom_identity_enabled", false), _local_is_host, _local_peer_id, _seat_area.size, horizontal_slot_gap, vertical_slot_gap])
+	if next_signature == _seat_presentation_signature and not _seat_views.is_empty():
+		return
 	_clear_seats()
+	_seat_presentation_signature = next_signature
 	if _snapshot.is_empty():
 		return
 	# 当前设置总人数；限制到项目支持范围，并让2人局同样绘制3个视觉位置。
@@ -319,6 +333,7 @@ func _render_seats() -> void:
 		var row_start_x: float = maxf((_seat_area.size.x - row_width) * 0.5, 0.0)
 		seat_view.position = Vector2(row_start_x + float(row_index) * (card_width + horizontal_slot_gap), start_y + (component_height + vertical_slot_gap if is_bottom_row else 0.0))
 		_seat_views.append(seat_view)
+	MENU_MOTION.enter(_seat_area, "modal")
 
 
 ## 更新大厅标题与房间摘要；模式显示名来自稳定配置，密码只显示开启状态。
@@ -390,13 +405,16 @@ func _open_settings() -> void:
 	_apply_seat_compensation_availability_for_mode(game_mode_id)
 	_settings_backdrop.visible = true
 	_settings_panel.visible = true
+	MENU_MOTION.enter(_settings_panel, "modal")
 	_settings_panel.move_to_front()
 	_suspend_settings_background_focus()
 	_settings_save_button.grab_focus()
 
 
 ## 关闭房主设置模态并丢弃未提交编辑；下一次打开会重新读取权威快照。
-func _close_settings() -> void:
+func _close_settings(animate: bool = true) -> void:
+	if animate and MENU_MOTION.try_close(_settings_panel, _close_settings):
+		return
 	_settings_backdrop.visible = false
 	_settings_panel.visible = false
 	_restore_settings_background_focus()
@@ -672,8 +690,8 @@ func _resolve_game_mode_display_name(game_mode_id: String) -> String:
 
 ## 为大厅文本输入应用当前主题的常态与焦点边框。
 func _apply_line_edit_style(line_edit: LineEdit) -> void:
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
@@ -686,10 +704,10 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 
 ## 为游戏模式下拉框与弹出列表应用当前主题配色。
 func _apply_option_button_style(option_button: OptionButton) -> void:
-	BattleUIStyle.apply_interaction_button(option_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(option_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	var popup: PopupMenu = option_button.get_popup()
-	popup.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
-	popup.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
+	popup.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
+	popup.add_theme_stylebox_override("hover", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
 	popup.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	popup.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 

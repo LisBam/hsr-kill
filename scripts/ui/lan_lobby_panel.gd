@@ -1,6 +1,12 @@
 class_name LanLobbyPanel
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
 ## 局域网连接入口组件。该组件只收集建房或加入参数并发出用户意图，不渲染已连接大厅，也不直接创建 ENet 或对局状态。
 
 ## 创建房间请求；参数依次为本地名称、联机形象、房间密码、监听端口、初始总人数、是否开启自选身份、是否固定座位与是否开启座次补偿。
@@ -106,6 +112,7 @@ func _ready() -> void:
 ## 打开局域网入口并写入主菜单当前人数与网关默认端口；已有会话时保留大厅状态。
 func open_panel(default_player_count: int, default_port: int) -> void:
 	visible = true
+	MENU_MOTION.enter(self, "fade")
 	move_to_front()
 	if not _session_active:
 		# 按当前全局下一局模式规范化人数；斗地主仅保留 3/5，避免入口带入身份局人数。
@@ -176,10 +183,10 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_backdrop.color = BattleUIStyle.get_color("shade")
-	_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
-	BattleUIStyle.apply_interaction_button(_host_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_join_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_leave_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
+	MENU_STYLE.apply_interaction_button(_host_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_join_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_leave_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if _status_is_error else BattleUIStyle.get_color("text_secondary"))
 	_display_name_value.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -236,6 +243,7 @@ func _request_join() -> void:
 
 ## 提交离开请求；协调器负责区分未连接关闭、客户端断开与房主关闭整个房间。
 func _request_leave() -> void:
+	# 连接取消必须立即通知网关；不能等待视觉退场，否则连接成功快照可能抢先隐藏入口并吞掉取消意图。
 	leave_requested.emit()
 
 
@@ -270,8 +278,8 @@ func _focus_primary_control() -> void:
 
 ## 为大厅文本输入应用当前主题的常态与焦点边框；内容与光标仍由 Godot LineEdit 管理。
 func _apply_line_edit_style(line_edit: LineEdit) -> void:
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
