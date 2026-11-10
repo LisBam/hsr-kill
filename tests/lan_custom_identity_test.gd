@@ -1,5 +1,16 @@
 extends Node
 
+class IdentityTestGateway extends NetworkGateway:
+	## 发往夹具虚拟成员的真实协议封包；只替换不存在的peer 99的传输，不改变路由或权威映射。
+	var simulated_peer_packets: Array[Dictionary] = []
+
+	## 固定虚拟成员没有ENet连接，记录其封包；真实连接仍走正式可靠RPC。
+	func _send_packet_to_peer(packet: Dictionary, peer_id: int) -> void:
+		if peer_id == 99:
+			simulated_peer_packets.append(packet.duplicate(true))
+			return
+		super._send_packet_to_peer(packet, peer_id)
+
 ## 联机大厅自选身份与1v1车轮战空位回归测试。
 ## 覆盖：车轮战大厅固定两个位置且拒绝越界换位；自选身份的位置身份表与徽记显示；
 ## 2v2“上蓝下红”大厅布局到一/四、二/三成队座次的映射；
@@ -42,6 +53,16 @@ func _run() -> void:
 	if GameSettings != null:
 		GameSettings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
 	_main_instance = MAIN_SCENE.instantiate() as Control
+	# 权威控制器；进入树前替换网关，所有onready依赖仍按正式路径绑定同一节点。
+	var controller: MatchController = _main_instance.get_node("MatchController") as MatchController
+	# 原网关未进入树，不持有连接；完整释放后保持生产节点名称与路径。
+	var original_gateway: NetworkGateway = controller.get_node("NetworkGateway") as NetworkGateway
+	controller.remove_child(original_gateway)
+	original_gateway.free()
+	# 传输记录器；只隔离夹具构造的虚拟peer，房主和真实连接照常初始化。
+	var test_gateway: IdentityTestGateway = IdentityTestGateway.new()
+	test_gateway.name = "NetworkGateway"
+	controller.add_child(test_gateway)
 	# 阻止主场景自动创建规则对局；后续由测试显式调用 start_match。
 	(_main_instance.get_node("MatchController") as MatchController).default_player_count = 1
 	get_tree().root.add_child(_main_instance)
@@ -61,6 +82,9 @@ func _run() -> void:
 	if not _check_gateway_authority(gateway):
 		return
 	if not _check_match_identity_assignment(gateway):
+		return
+	if test_gateway.simulated_peer_packets.is_empty():
+		_fail("simulated_member_never_received_protocol_packet")
 		return
 	gateway.leave_lan("")
 	_main_instance.queue_free()

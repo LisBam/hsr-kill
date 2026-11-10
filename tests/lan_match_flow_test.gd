@@ -120,7 +120,7 @@ func _start_host() -> void:
 		project_path,
 		"--log-file",
 		client_log_path,
-		"res://tests/lan_match_flow_test.tscn",
+		scene_file_path,
 		"--",
 		"--lan-flow-client",
 		"--lan-flow-port=%d" % _port,
