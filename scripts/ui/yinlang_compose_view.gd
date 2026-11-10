@@ -1,6 +1,9 @@
 class_name YinlangComposeView
 extends VBoxContainer
 
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 银狼【注入】的组合窗口内容视图。纯 UI 组件：只读取请求上下文里已经准备好的键列表与静态数据池，
 ## 不读取对局状态、不提交规则动作，也不认识「银狼」「注入」以外的任何技能。
 ##
@@ -109,15 +112,15 @@ func configure(context: Dictionary) -> void:
 func refresh_ui_style() -> void:
 	# 候选按钮的统一底色与描边；选中态在下方单独覆盖，因此这里只处理未选中时的常规外观。
 	for button: Button in _timing_buttons + _effect_buttons:
-		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
+		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
 	# 选中态样式；亮青描边 + 网格底，让「已选中的那一个」在四个按钮里一眼可辨。
-	var selected_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
+	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
 	for button: Button in _timing_buttons + _effect_buttons:
 		button.add_theme_stylebox_override("pressed", selected_style)
 		button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("tech_accent"))
 	_preview_label.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
 	for button: Button in [_confirm_button, _cancel_button]:
-		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
+		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
 	_confirm_button.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
 
 

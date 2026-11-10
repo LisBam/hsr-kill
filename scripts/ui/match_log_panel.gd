@@ -1,6 +1,9 @@
 class_name MatchLogPanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
 ## 可折叠对局日志组件。组件只管理日志面板的展开状态和按钮文本，不读取对局状态或提交规则动作。
 
 ## 日志展开状态改变时发出的界面信号；牌桌协调器可据此实现离线暂停等外围行为，组件自身不读取通信模式。
@@ -43,6 +46,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_toggle_button.pressed.connect(_toggle_log)
 	_set_expanded(false)
+	SURFACE_MOTION.attach(_content_panel, "page")
 
 
 ## 切换日志正文显隐；隐藏期间新增日志仍由原文本节点保存，重新展开即可查看。

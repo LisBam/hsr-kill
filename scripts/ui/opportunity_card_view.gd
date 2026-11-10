@@ -1,6 +1,11 @@
 class_name OpportunityCardView
 extends PanelContainer
 
+## 品质边光组件；复用卡牌外围反馈，正文中央保持完全可读。
+const SELECTION_FEEDBACK: Script = preload("res://scripts/ui/selection_feedback.gd")
+## 品质外缘表现节点；独立于PanelContainer布局，不挤压正文。
+var _selection_feedback: Control
+
 ## 机缘卡牌面组件。牌面不使用插画，只显示规则正文，并用背景与边框颜色表达绿、蓝、紫、橙、红五种品质。
 
 ## 玩家点击可选机缘卡时发出稳定卡牌ID；组件不解释或执行任何效果。
@@ -99,6 +104,13 @@ func _ready() -> void:
 	_input_button.mouse_entered.connect(_on_mouse_entered)
 	_input_button.mouse_exited.connect(_on_mouse_exited)
 	_input_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	# 纯绘制层不参与PanelContainer对子控件的内缩排版。
+	var edge_layer: Node2D = Node2D.new()
+	edge_layer.name = "QualityEdgeLayer"
+	add_child(edge_layer)
+	_selection_feedback = SELECTION_FEEDBACK.new()
+	_selection_feedback.name = "SelectionFeedback"
+	edge_layer.add_child(_selection_feedback)
 	_refresh_interaction_state()
 
 
@@ -210,6 +222,8 @@ func _refresh_visual_state() -> void:
 	# 卡面样式；深色品质底面承托白色正文，亮色边框模拟武将牌的正式轮廓。
 	var panel_style: StyleBoxFlat = _hovered_panel_style if _is_hovered and _interactive else _normal_panel_style
 	add_theme_stylebox_override("panel", panel_style)
+	if _selection_feedback != null:
+		_selection_feedback.configure(card_size, false, _quality_color.lightened(0.35), _is_hovered and _interactive)
 
 
 ## 按当前品质与导出参数建立普通、悬停两份样式；只在配置变化时分配资源，悬停热路径仅切换引用。
@@ -235,8 +249,8 @@ func _create_panel_style(background_color: Color, border_width: int) -> StyleBox
 	panel_style.content_margin_right = CARD_CONTENT_MARGIN
 	panel_style.content_margin_bottom = CARD_CONTENT_MARGIN
 	panel_style.set_corner_radius_all(10)
-	panel_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
-	panel_style.shadow_size = 10
+	panel_style.shadow_color = Color(_quality_color.darkened(0.8), 0.50)
+	panel_style.shadow_size = 14
 	panel_style.shadow_offset = Vector2(0.0, 5.0)
 	return panel_style
 

@@ -1,6 +1,15 @@
 class_name PlayerTargetView
 extends Node2D
 
+## 无文字选择反馈组件；只绘制边缘，不改变武将牌尺寸和输入。
+const SELECTION_FEEDBACK: Script = preload("res://scripts/ui/selection_feedback.gd")
+## 候选归属条高度；默认26像素，只用于只读抓将归属，不影响对局公开区。
+const OWNERSHIP_RIBBON_HEIGHT: float = 26.0
+## 归属条字号；默认14像素，在候选牌缩放后仍可读，正文不再占满牌面。
+const OWNERSHIP_RIBBON_FONT_SIZE: int = 14
+## 归属条左右安全区；各26像素避开武将名、手牌角标与体力栏，运行时无需修改。
+const OWNERSHIP_RIBBON_SIDE_INSET: float = 26.0
+
 ## 可复用的角色状态与目标选择组件。组件渲染公开信息、反馈合法性并转发点击，不读取规则核心。
 
 ## 武将牌被点击时发出的信号；桌面据此更新目标选择，不直接提交规则动作。
@@ -320,6 +329,9 @@ var _scroll_gesture_enabled: bool = false
 ## 选目标期间的“选中”提示；常驻至取消选中，不读取规则状态，仅跟随 set_target_state。
 var _selected_marker_label: Label
 
+## 兼容旧标签接口后新增的外围反馈；旧SelectedTargetMarker保持空文本且隐藏，旧字号参数不再影响选中态。
+var _selection_feedback: Control
+
 ## 外部模式写入的中央状态提示；车轮战候选归属等只读表现复用该标签，不改变牌面交互与规则状态。
 var _center_status_marker_label: Label
 
@@ -394,14 +406,23 @@ func set_center_status_marker(marker_text: String, marker_color: Color) -> void:
 		_center_status_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_center_status_marker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_center_status_marker_label.z_index = 21
-		_center_status_marker_label.add_theme_font_size_override("font_size", 20)
+		_center_status_marker_label.add_theme_font_size_override("font_size", OWNERSHIP_RIBBON_FONT_SIZE)
 		_center_status_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
-		_center_status_marker_label.add_theme_constant_override("outline_size", 5)
+		_center_status_marker_label.add_theme_constant_override("outline_size", 2)
 		add_child(_center_status_marker_label)
-	_center_status_marker_label.position = Vector2.ZERO
-	_center_status_marker_label.size = card_size
+	# 归属信息保留原文与阵营色，仅移到下边缘的不透明窄条，避免遮住武将插画。
+	_center_status_marker_label.position = Vector2(OWNERSHIP_RIBBON_SIDE_INSET, card_size.y - OWNERSHIP_RIBBON_HEIGHT)
+	_center_status_marker_label.size = Vector2(maxf(1.0, card_size.x - OWNERSHIP_RIBBON_SIDE_INSET * 2.0), OWNERSHIP_RIBBON_HEIGHT)
+	# 归属条固定内边距；不能沿用按钮8像素上下边距，否则标签最小高度会超过26像素并越出牌框。
+	var ribbon_style: StyleBoxFlat = BattleUIStyle.make_button(marker_color.darkened(0.72), marker_color, 1, 4)
+	ribbon_style.content_margin_left = 4.0
+	ribbon_style.content_margin_right = 4.0
+	ribbon_style.content_margin_top = 2.0
+	ribbon_style.content_margin_bottom = 2.0
+	ribbon_style.shadow_size = 0
+	_center_status_marker_label.add_theme_stylebox_override("normal", ribbon_style)
 	_center_status_marker_label.text = marker_text
-	_center_status_marker_label.add_theme_color_override("font_color", marker_color)
+	_center_status_marker_label.add_theme_color_override("font_color", marker_color.lightened(0.65))
 	_center_status_marker_label.visible = not marker_text.is_empty()
 
 
@@ -918,7 +939,8 @@ func _ensure_selected_marker_label() -> void:
 	_selected_marker_label = Label.new()
 	_selected_marker_label.name = "SelectedTargetMarker"
 	_selected_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_selected_marker_label.text = "选中"
+	# 旧标签保留为场景兼容节点；选中状态统一交给不遮挡牌面的矢量组件。
+	_selected_marker_label.text = ""
 	_selected_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_selected_marker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_selected_marker_label.z_index = 20
@@ -928,6 +950,10 @@ func _ensure_selected_marker_label() -> void:
 	_selected_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	_selected_marker_label.add_theme_constant_override("outline_size", selected_marker_outline_size)
 	add_child(_selected_marker_label)
+	_selection_feedback = SELECTION_FEEDBACK.new()
+	_selection_feedback.name = "SelectionFeedback"
+	_selection_feedback.z_index = 20
+	add_child(_selection_feedback)
 	_layout_selected_marker()
 
 
@@ -947,7 +973,8 @@ func _refresh_selected_marker() -> void:
 	_selected_marker_label.add_theme_color_override("font_color", SELECTED_MARKER_COLOR)
 	_selected_marker_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	_selected_marker_label.add_theme_constant_override("outline_size", selected_marker_outline_size)
-	_selected_marker_label.visible = is_target_selected
+	_selected_marker_label.visible = false
+	_selection_feedback.configure(card_size, is_target_selected, BattleUIStyle.get_color("accent"))
 
 ## 根据场景中名称、体力和公开区节点的实际位置排列动态装备横条；静态牌面节点绝不由脚本重排。
 ## 当前横条几何改为直接读取静态插画槽，完整铺满武将插画宽度。

@@ -1,6 +1,12 @@
 class_name CardSelectionPanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 通用卡牌选择面板。响应、弃牌、目标区域选牌和展示牌选择都向该组件传入序列化请求。
 
 ## 用户确认选牌时发出请求序号与稳定实体牌 UID；组件不直接修改规则状态。
@@ -163,7 +169,7 @@ func _ready() -> void:
 	add_child(_shade)
 	_frame = PanelContainer.new()
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	add_child(_frame)
 	# 选择框主列；标题、提示、滚动分区和操作按钮从上到下排列。
 	var content: VBoxContainer = VBoxContainer.new()
@@ -201,16 +207,17 @@ func _ready() -> void:
 	_confirm_button = Button.new()
 	_confirm_button.text = "确定"
 	_confirm_button.custom_minimum_size = Vector2(132.0, 40.0)
-	BattleUIStyle.apply_interaction_button(_confirm_button)
+	BATTLE_STYLE.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_on_confirm_pressed)
 	_action_row.add_child(_confirm_button)
 	_cancel_button = Button.new()
 	_cancel_button.text = "不选择"
 	_cancel_button.custom_minimum_size = Vector2(96.0, 40.0)
-	BattleUIStyle.apply_interaction_button(_cancel_button)
+	BATTLE_STYLE.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_action_row.add_child(_cancel_button)
 	visible = false
+	SURFACE_MOTION.attach(_frame, "modal")
 
 
 ## 按当前活动 UI 风格重绘选择窗口；请求、候选、固定牌位和临时选中顺序保持不变。
@@ -220,11 +227,11 @@ func refresh_ui_style() -> void:
 	shade_color = BattleUIStyle.get_color("shade", shade_color)
 	taken_card_label_background_color = BattleUIStyle.get_color("taken_label_background", taken_card_label_background_color)
 	_shade.color = shade_color
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_prompt_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
-	BattleUIStyle.apply_interaction_button(_confirm_button)
-	BattleUIStyle.apply_interaction_button(_cancel_button)
+	BATTLE_STYLE.apply_interaction_button(_confirm_button)
+	BATTLE_STYLE.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	for section_label: Label in _section_labels:
 		if section_label != null and is_instance_valid(section_label):
 			section_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
@@ -233,7 +240,7 @@ func refresh_ui_style() -> void:
 			_apply_owner_label_style(owner_label)
 	for option_button: Button in _control_option_buttons:
 		if option_button != null and is_instance_valid(option_button):
-			BattleUIStyle.apply_interaction_button(option_button)
+			BATTLE_STYLE.apply_interaction_button(option_button)
 	for card_view_variant: Variant in _card_views.values():
 		# 当前候选牌面；只刷新主题色，不改变是否可选或复制虚影状态。
 		var card_view: CardView = card_view_variant as CardView
@@ -711,7 +718,7 @@ func _add_control_options(options: Array) -> void:
 		option_button.tooltip_text = option_label
 		option_button.custom_minimum_size = Vector2(280.0, 44.0)
 		option_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		BattleUIStyle.apply_interaction_button(option_button)
+		BATTLE_STYLE.apply_interaction_button(option_button)
 		option_button.pressed.connect(_on_control_option_pressed.bind(option_id))
 		option_column.add_child(option_button)
 		_control_option_buttons.append(option_button)
@@ -809,7 +816,7 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 func _apply_owner_label_style(owner_label: Label) -> void:
 	owner_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	# 标签背景样式；使用1像素主题强调描边把归属信息与牌面底部文字区分开。
-	var owner_style: StyleBoxFlat = BattleUIStyle.make_panel(taken_card_label_background_color, BattleUIStyle.get_color("accent"), 1, 3)
+	var owner_style: StyleBoxFlat = BATTLE_STYLE.make_panel(taken_card_label_background_color, BattleUIStyle.get_color("accent"), 1, 3)
 	owner_style.content_margin_left = 2.0
 	owner_style.content_margin_top = 0.0
 	owner_style.content_margin_right = 2.0

@@ -1,6 +1,12 @@
 class_name InformationBoxLayer
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 牌桌统一信息框组件。组件集中管理目标旁悬浮信息与居中武将详情，不读取或修改任何权威对局状态。
 
 ## 居中武将详情显示状态变化信号；牌桌据此在离线模式申请或释放独立暂停令牌。
@@ -194,6 +200,8 @@ func _ready() -> void:
 	_build_character_panel()
 	_build_notice_banner()
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_hover_panel, "fade", false)
+	SURFACE_MOTION.attach(_character_panel, "modal")
 
 
 ## 在目标附近延迟显示统一悬浮信息；来源 ID 用于防止旧节点的离开信号关闭新目标信息。
@@ -464,18 +472,18 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_character_shade.color = BattleUIStyle.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
-	_hover_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
-	_character_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_hover_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_character_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	if _notice_panel != null and is_instance_valid(_notice_panel):
-		_notice_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 2, 6))
+		_notice_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 2, 6))
 		_notice_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_refresh_hover_text_styles()
 	_character_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
-	_character_close_button.add_theme_stylebox_override("normal", BattleUIStyle.make_button(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
-	_character_close_button.add_theme_stylebox_override("hover", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
-	_character_close_button.add_theme_stylebox_override("pressed", BattleUIStyle.make_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("normal", BATTLE_STYLE.make_button(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("hover", BATTLE_STYLE.make_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("pressed", BATTLE_STYLE.make_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), 1, 4))
 	_apply_scroll_bar_style(_character_skill_scroll.get_v_scroll_bar())
 	_apply_character_skill_right_margin()
 	if _character_card_view != null and is_instance_valid(_character_card_view):
@@ -796,7 +804,10 @@ func _finalize_hover_panel_after_layout(anchor_rect: Rect2, source_id: int, layo
 	if source_id != _hover_source_id or layout_generation != _hover_layout_generation or not _hover_panel.visible:
 		return
 	_reposition_hover_panel(anchor_rect, source_id, layout_generation)
+	# 测量期间由布局代码拥有透明度；结束后才交给入场组件，避免旧Tween把新信息重新淡成透明。
+	_hover_panel.get_node("SurfaceMotion").cancel()
 	_hover_panel.modulate = Color.WHITE
+	_hover_panel.get_node("SurfaceMotion").reveal()
 
 
 ## 仅按当前稳定尺寸重新定位信息框；相同内容的高频刷新不得重新测量宽度，否则自动换行边界会在相邻帧振荡。
@@ -1222,10 +1233,10 @@ func _apply_scroll_bar_style(scroll_bar: VScrollBar) -> void:
 	if scroll_bar == null:
 		return
 	scroll_bar.custom_minimum_size.x = 12.0
-	scroll_bar.add_theme_stylebox_override("scroll", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_highlight", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_pressed", BattleUIStyle.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("scroll", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
 
 
 ## 点击武将详情遮罩空白区域时关闭详情；面板自身位于更高层级并会截断内部输入。

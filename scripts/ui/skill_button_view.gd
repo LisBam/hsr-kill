@@ -1,6 +1,12 @@
 class_name SkillButtonView
 extends Button
 
+## 技能选中边缘组件；只用光框和角线保留紧凑两字技能名的可读区域。
+const SELECTION_FEEDBACK: Script = preload("res://scripts/ui/selection_feedback.gd")
+
+## 技能外围反馈；只展示选中，不推断技能规则或发动次数。
+var _selection_feedback: Control
+
 ## 可复用的武将技能按钮。组件只展示技能元数据和可用状态，并通过信号请求桌面处理，不直接执行技能效果。
 
 ## 限定技尚未满足发动条件时相对可发动红色的加深比例；默认0.18只表达暂时不可用，不与已发动状态混淆。
@@ -72,6 +78,12 @@ func _ready() -> void:
 	pressed.connect(_on_pressed)
 	mouse_entered.connect(_on_information_mouse_entered)
 	mouse_exited.connect(_on_information_mouse_exited)
+	_selection_feedback = SELECTION_FEEDBACK.new()
+	_selection_feedback.name = "SelectionFeedback"
+	_selection_feedback.set("bracket_length", 8.0)
+	_selection_feedback.set("glow_size", 5)
+	add_child(_selection_feedback)
+	resized.connect(_refresh_selection_feedback)
 	_refresh_visual_state()
 
 
@@ -106,6 +118,8 @@ func configure(definition: Dictionary, available: bool = false, remaining_uses_d
 
 ## 更新技能选中状态；后续主动技能进入选牌或选目标流程时可复用该视觉。
 func set_selected_state(selected: bool) -> void:
+	if is_skill_selected == selected:
+		return
 	is_skill_selected = selected
 	_refresh_visual_state()
 
@@ -183,6 +197,13 @@ func _refresh_visual_state() -> void:
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.get_color("accent"), 3, 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("disabled", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
+	_refresh_selection_feedback()
+
+
+## 更新纯绘制选中态；技能进入材料选择后即使暂时disabled也保持明确的选择轮廓。
+func _refresh_selection_feedback() -> void:
+	if _selection_feedback != null:
+		_selection_feedback.configure(size, is_skill_selected, BattleUIStyle.get_color("accent"))
 
 
 ## 按当前活动 UI 风格重绘技能按钮；技能定义、可发动状态与选中状态保持不变。

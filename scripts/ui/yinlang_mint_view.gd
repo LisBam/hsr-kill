@@ -1,6 +1,9 @@
 class_name YinlangMintView
 extends VBoxContainer
 
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 银狼【以太】的造牌窗口内容视图。纯 UI 组件：只读取请求上下文里准备好的只读快照，
 ## 不读取对局状态、不调用规则层判据，最终唯一性与格式仍由造牌端口权威复核。
 ##
@@ -150,22 +153,22 @@ func configure(context: Dictionary) -> void:
 func refresh_ui_style() -> void:
 	# 候选按钮的统一底色与描边；选中态在下方单独覆盖，因此这里只处理未选中时的常规外观。
 	for button: Button in _suit_buttons + _rank_buttons + _card_buttons:
-		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
+		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
 	# 选中态样式；亮青描边 + 网格底，让「已选中的那一个」在一排按钮里一眼可辨。
-	var selected_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
+	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
 	for button: Button in _suit_buttons + _rank_buttons + _card_buttons:
 		button.add_theme_stylebox_override("pressed", selected_style)
 		button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("tech_accent"))
 	# 可复制牌区域背景；与候选按钮的底色一致，形成一块「牌名池」面板。
-	_card_scroll.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 6))
+	_card_scroll.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 6))
 	# 输入框样式；深蓝底与蓝青描边，聚焦时描边换成强调色。
-	_name_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 4))
-	_name_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_accent"), 2, 4))
+	_name_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 4))
+	_name_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_accent"), 2, 4))
 	_name_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
 	_name_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("tech_accent"))
 	_name_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
 	for button: Button in [_confirm_button, _cancel_button]:
-		BattleUIStyle.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
+		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
 	_confirm_button.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
 	_refresh_name_hint()
 

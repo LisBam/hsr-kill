@@ -1,6 +1,12 @@
 class_name OpportunityChoicePanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 全体机缘选择弹窗。组件只渲染观察者自己的三张私有候选、并行等待状态与收齐后的公开投票结果，并提交稳定机缘卡ID。
 
 ## 本地玩家点击机缘卡时发出稳定ID；牌桌负责转换为统一PlayerAction并交由权威端校验。
@@ -41,6 +47,7 @@ func _ready() -> void:
 	visible = false
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_frame, "modal")
 
 
 ## 按当前活动 UI 风格刷新机缘弹窗遮罩、主框与状态文字；私有候选、等待角色和已提交状态保持不变。
@@ -51,7 +58,7 @@ func refresh_ui_style() -> void:
 	_shade.color = BattleUIStyle.get_color("shade")
 	# 弹窗主框样式；复用内嵌面板工厂，使所有主题共享尺寸与边距但使用各自材质色。
 	# 弹窗样式；暖黑底与金属边框延续武将牌和现有选择框视觉语言。
-	var frame_style: StyleBoxFlat = BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 3, 10)
+	var frame_style: StyleBoxFlat = BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 3, 10)
 	frame_style.shadow_color = Color(0.0, 0.0, 0.0, 0.72)
 	frame_style.shadow_size = 14
 	frame_style.shadow_offset = Vector2(0.0, 6.0)

@@ -34,6 +34,8 @@
 [ext_resource type="PackedScene" path="res://scenes/components/match_replay_panel.tscn" id="32_match_replay"]
 [ext_resource type="Script" uid="uid://b7yqio4k0kp5b" path="res://scripts/audio/game_audio_bridge.gd" id="33_audio_bridge"]
 
+[ext_resource type="Script" path="res://scripts/ui/battle_presentation.gd" id="52_battle_presentation"]
+
 [sub_resource type="StyleBoxFlat" id="StyleMetalPanel"]
 content_margin_left = 9.0
 content_margin_top = 7.0
@@ -2206,3 +2208,6 @@ text = "返回"
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]
 
 [node name="MenuPresentation" parent="MainMenu" instance=ExtResource("51_menu_presentation")]
+
+[node name="BattlePresentation" type="Node" parent="."]
+script = ExtResource("52_battle_presentation")

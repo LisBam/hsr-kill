@@ -1,6 +1,12 @@
 class_name DeveloperConsolePanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 开发者菜单窗口（离线调试特权表面）。
 ##
 ## 职责边界：本组件只发意图信号并读取**静态定义**（`GameDatabase` / `GameSettings`），
@@ -203,6 +209,10 @@ func _ready() -> void:
 	_build_ui()
 	visible = false
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_frame, "modal")
+	SURFACE_MOTION.attach(_main_view, "page")
+	SURFACE_MOTION.attach(_draw_pile_view, "page")
+	SURFACE_MOTION.attach(_character_view, "page")
 
 
 ## 注入目标候选；保留当前选择，仅当原目标已不在新列表中时才回退到 preferred_player_id。
@@ -291,7 +301,7 @@ func refresh_ui_style() -> void:
 	if _shade != null:
 		_shade.color = BattleUIStyle.get_color("shade")
 	if _frame != null:
-		_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+		_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel())
 	if _scroll != null:
 		BattleUIStyle.apply_main_menu_scroll_bar_style(_scroll.get_v_scroll_bar())
 	# 标题与提示文字统一使用主题色；Label 必须显式覆盖 font_color，否则会回退场景默认白字。
@@ -301,7 +311,7 @@ func refresh_ui_style() -> void:
 	for row_variant: Variant in _effect_rows.values():
 		# 当前效果行的控件组；uses_amount 为 false 时后两项为 null。
 		var row: Dictionary = row_variant as Dictionary
-		BattleUIStyle.apply_interaction_button(row.get("button") as Button)
+		BATTLE_STYLE.apply_interaction_button(row.get("button") as Button)
 		_apply_slider_style(row.get("slider") as HSlider)
 		_apply_line_edit_style(row.get("input") as LineEdit)
 	_apply_line_edit_style(_character_filter)
@@ -313,7 +323,7 @@ func refresh_ui_style() -> void:
 		if grid == null:
 			continue
 		for child: Node in grid.get_children():
-			BattleUIStyle.apply_interaction_button(child as Button)
+			BATTLE_STYLE.apply_interaction_button(child as Button)
 
 
 ## 构建整棵界面树；全部节点在代码中创建，场景文件只声明根 Control 与可调参数。
@@ -827,11 +837,11 @@ func _find_nodes_by_prefix(root: Node, prefix: String) -> Array[Node]:
 ## 为第二层视图与关闭按钮上色；这些按钮在三个视图中分散存在，统一在此处理。
 func _apply_action_button_styles() -> void:
 	for node: Node in _find_nodes_by_prefix(self, "BackButton"):
-		BattleUIStyle.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		BATTLE_STYLE.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	for node: Node in _find_nodes_by_prefix(self, "ConfirmButton"):
-		BattleUIStyle.apply_interaction_button(node as Button)
+		BATTLE_STYLE.apply_interaction_button(node as Button)
 	for node: Node in _find_nodes_by_prefix(self, "CloseButton"):
-		BattleUIStyle.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		BATTLE_STYLE.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 
 
 ## 为滑条应用主题轨道与已选区域；数值范围由效果声明决定，不在此修改。
@@ -856,8 +866,8 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 	if line_edit == null:
 		return
 	line_edit.add_theme_font_override("font", ThemeDB.fallback_font)
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
@@ -867,7 +877,7 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 ## 创建没有重复阴影的内层面板；滑条轨道复用统一面板工厂后移除阴影。
 func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
 	# 内层样式；复用主题工厂保证配色跟随当前风格。
-	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	var style: StyleBoxFlat = BATTLE_STYLE.make_panel(background_color, border_color, border_width, corner_radius)
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
 	return style
