@@ -513,3 +513,10 @@ func choose_card_choice(authoritative_snapshot: Dictionary, choice_request: Dict
 
 - `tests/yinzhi_xunli_lijie_test.tscn` 的 `ai` 段断言【巡礼】的发动确认严格为正、取消为 `0`、持有者阵亡时确认落到 `-100.0`，以及延时锦囊来牌估值被改写为 `0.0`（非延时牌与其他目标保持通用估值）；同一用例还用真实回合序列覆盖每轮限额（第二次回合开始不再出现询问）。
 
+
+
+## 持久视为牌的通用评估
+
+`CardInstance.get_physical_card_data()`为纯快照展开接口：复合持久牌恢复主材料原牌面并返回所有原实体，无材料逻辑牌返回空数组。`NonameAIEvaluator.get_acquired_card_value()`据此累加真正取得的实体牌质；通用steal_target/harvest语义和自定义ai_choice_card_semantics共用此入口。判定区取得还保留原解除延时控制的敌我收益。
+
+弃置或支付装备成本时取场面逻辑价值与原材料牌质总和的较大值，避免将二者重复相加；白银狮子离区回复按逻辑装备判断，而取得后再换装的潜在回复按实际恢复的原材料判断。无材料装备没有可取得的实体牌质，但失去其场面效果仍有价值。所有评估仅读快照，不分配UID、不修改绑定，不调整既有1点体力=2张牌的资源尺度或原牌质常量。
