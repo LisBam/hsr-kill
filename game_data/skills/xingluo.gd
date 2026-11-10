@@ -150,20 +150,22 @@ func _continue_recast_card(context: Dictionary, card_uid: int) -> void:
 	if card == null:
 		return
 	var definition: Dictionary = GameDatabase.get_card(card.definition_id)
-	context["all_trick"] = bool(context.get("all_trick", true)) and str(definition.get("type", "")) == "trick"
-	context["all_red"] = bool(context.get("all_red", true)) and card.get_color() == "red"
-	context["recast_count"] = int(context.get("recast_count", 0)) + 1
-	context["player_index"] = int(context.get("player_index", 0)) + 1
-	# 下一名仍有手牌的重铸对象存在时，给相邻弹窗留出统一流程间隔；最后一次重铸直接结算奖励，不产生无意义等待。
-	context["wait_before_next_recast"] = _has_remaining_recast_candidate(context)
-	if not bool(host.call("recast_hand_card", target_id, card_uid)):
-		return
-	if host.has_pending_card_choice():
-		var deferred_context: Dictionary = context.duplicate(true)
-		deferred_context["kind"] = "xingluo_continue_sequence"
-		defer_settlement(deferred_context)
-	else:
-		_request_recast_at_index(context)
+	# 原费用分类；仅在实际重铸成功后合并进本次统计。
+	var is_trick: bool = str(definition.get("type", "")) == "trick"
+	# 原费用颜色；移牌清理临时视为不改变此次判定。
+	var is_red: bool = card.get_color() == "red"
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_card(target_id, card_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result != null and sequence.effect_result.count > 0:
+				sequence.context["all_trick"] = bool(sequence.context.get("all_trick", true)) and is_trick
+				sequence.context["all_red"] = bool(sequence.context.get("all_red", true)) and is_red
+				sequence.context["recast_count"] = int(sequence.context.get("recast_count", 0)) + 1
+			sequence.context["player_index"] = int(sequence.context.get("player_index", 0)) + 1
+			sequence.context["wait_before_next_recast"] = _has_remaining_recast_candidate(sequence.context)
+			_request_recast_at_index(sequence.context),
+	], context)
+
 
 
 ## 检查当前序列后方是否仍有有效重铸对象；离场、死亡或失去全部手牌的角色会被正常跳过且不产生空白延时。
@@ -178,15 +180,6 @@ func _has_remaining_recast_candidate(context: Dictionary) -> bool:
 		if player != null and player.alive and not player.out_of_game and not player.hand.is_empty():
 			return true
 	return false
-
-
-## 恢复某次重铸移动产生的嵌套选择，然后继续稳定玩家序列。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "xingluo_continue_sequence":
-		return false
-	context["kind"] = "xingluo_recast"
-	_request_recast_at_index(context)
-	return true
 
 
 ## 全部重铸完成后分别结算锦囊与红色奖励；两项同时满足时累计摸3张牌。

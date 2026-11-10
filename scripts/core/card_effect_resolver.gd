@@ -123,12 +123,12 @@ func should_skip_trick_target(card: CardInstance, actor_id: int, target_id: int)
 
 ## 返回卡牌同步入口的统一结束区域；存在选择时保留处理区等待恢复。
 func default_destination() -> String:
-	return "pending" if host.has_pending_card_choice() else "discard"
+	return "pending" if host.has_pending_card_choice() or host.has_pending_trick_negation() else "discard"
 
 
 ## 返回当前结算是否必须立即停止；等待选择或游戏结束时不得继续修改状态。
 func is_resolution_stopped() -> bool:
-	return state == null or state.game_over or host.has_pending_card_choice()
+	return state == null or state.game_over or host.has_pending_card_choice() or host.has_pending_trick_negation()
 
 
 ## 按稳定 UID 查找公共处理区父牌；异步恢复不使用易冲突的卡牌定义 ID。

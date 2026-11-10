@@ -259,17 +259,64 @@ func _on_owner_dying_begin(_event: RuleEvent) -> void:
 		if player.player_id != owner_player_id and player.alive and player.out_of_game and bool(host.call("is_friendly", owner_player_id, player.player_id)) and not returning_ally_ids.has(player.player_id):
 			returning_ally_ids.append(player.player_id)
 	announce_activation({"return_character_id":RETURN_CHARACTER_ID, "return_hp":RETURN_HP, "returning_ally_ids":returning_ally_ids.duplicate()})
-	if owner.hp < RETURN_HP:
+	# 返生会卸载永劫本身；稳定代次内容完整持有回复、恢复区域和返场后继。
+	var steps: Array[Callable] = [_recover_returning_owner, _restore_zones, _replace_return_form, _restore_returned_skills, _clear_returned_state]
+	for ally_id: int in returning_ally_ids:
+		steps.append(_restore_ally.bind(ally_id))
+	host.call("run_rule_sequence", steps, {"sequence_kind":"yongjie_return", "player_id":owner_player_id, "generation":owner.character_generation})
+
+
+## 返生只属于原角色；本技能自身换形态后更新代次，等待期间的其他换将会终止后续。
+func _returning_player(sequence: RuleStepSequence) -> PlayerState:
+	# 当前原角色；允许体力仍不大于0，救援外层会等待本返生内容结束。
+	var owner: PlayerState = host.state.get_player(int(sequence.context.player_id))
+	if owner == null or not owner.alive or owner.out_of_game or owner.character_generation != int(sequence.context.generation):
+		sequence.finish()
+		return null
+	return owner
+
+
+## 先回复至固定返生体力；回复Before/After产生的子内容必须先结束。
+func _recover_returning_owner(sequence: RuleStepSequence) -> void:
+	# 返生前原形态；统一回复端口仍按当前上限夹紧。
+	var owner: PlayerState = _returning_player(sequence)
+	if owner != null and owner.hp < RETURN_HP:
 		host.call("recover", owner_player_id, owner_player_id, RETURN_HP - owner.hp, get_id())
-	host.call("set_player_zones_abolished", owner_player_id, false, false, get_id())
-	if not bool(host.call("replace_player_character_card", owner_player_id, RETURN_CHARACTER_ID, get_id(), true)):
+
+
+## 恢复区域只开放标志，不返还轮回时丢弃的牌；区域After完整结束后才换回白厄。
+func _restore_zones(sequence: RuleStepSequence) -> void:
+	if _returning_player(sequence) != null:
+		sequence.effect_result = host.call("set_player_zones_abolished", owner_player_id, false, false, get_id())
+
+
+## 明确自身换回原武将后记录新代次，使原永劫卸载不丢失返场链。
+func _replace_return_form(sequence: RuleStepSequence) -> void:
+	if _returning_player(sequence) == null:
 		return
-	host.call("restore_character_card_skills", owner_player_id, get_id())
-	# 换回白厄后的同一角色状态；清除已消费的跨形态友方列表，避免下一次返生重复恢复旧角色。
-	var returned_owner: PlayerState = host.state.get_player(owner_player_id) as PlayerState
+	if not bool(host.call("replace_player_character_card", owner_player_id, RETURN_CHARACTER_ID, get_id(), true)):
+		sequence.finish()
+		return
+	sequence.context.generation = host.state.get_player(owner_player_id).character_generation
+
+
+## 换形态后的技能恢复仍由通用内容持有，产生的新窗口不能越过友方返场。
+func _restore_returned_skills(sequence: RuleStepSequence) -> void:
+	if _returning_player(sequence) != null:
+		host.call("restore_character_card_skills", owner_player_id, get_id())
+
+
+## 换回白厄后的同一角色状态；清除已消费的跨形态友方列表，避免下一次返生重复恢复旧角色。
+func _clear_returned_state(sequence: RuleStepSequence) -> void:
+	# 当前预期白厄；只清理本次返生的持久记录。
+	var returned_owner: PlayerState = _returning_player(sequence)
 	if returned_owner != null:
 		returned_owner.character_form_state.erase(REMOVED_ALLY_IDS_STATE_KEY)
-	for ally_id: int in returning_ally_ids:
+
+
+## 逐个恢复友方；每次返场的后置先结束，再处理下一名。
+func _restore_ally(sequence: RuleStepSequence, ally_id: int) -> void:
+	if _returning_player(sequence) != null:
 		host.call("restore_player_to_game", ally_id, get_id())
 
 

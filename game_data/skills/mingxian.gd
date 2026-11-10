@@ -96,26 +96,44 @@ func _execute_mingxian(target_ids: Array[int]) -> bool:
 	var gained_target_ids: Array[int] = []
 	# 成功获得并被标记的实体UID；公开技能日志可据此关联移牌与后续离手清理。
 	var gained_card_uids: Array[int] = []
+	# 各目标获得与标记内容；原生结果由相邻步骤读取，不依赖同步返回牌实体。
+	var steps: Array[Callable] = []
+	# 原行动顺序；目标ID和代次在首张移动前锁定。
 	for ordered_player: PlayerState in host.call("get_alive_players_in_action_order", owner_player_id) as Array[PlayerState]:
 		if not unique_target_ids.has(ordered_player.player_id):
 			continue
+		# 当前目标身份；回调不持有PlayerState实体。
+		var target_id: int = ordered_player.player_id
+		# 当前目标代次；等待期间换将则不向新角色应用原效果。
+		var target_generation: int = ordered_player.character_generation
 		# 目标获得的最顶端【杀】实体；每次移动后重新检索，确保不同目标不会取得同一张牌。
-		var gained_card: CardInstance = host.call("gain_top_draw_card_matching", ordered_player.player_id, {"effect_id":SLASH_EFFECT_ID}, get_id()) as CardInstance
-		if gained_card == null:
-			continue
-		# 手牌标签数据；rule_overrides由卡牌规则服务读取，UI只消费label、order与source_skill_id。
-		var tag_data: Dictionary = {
-			"label":HAND_MARK_TAG_LABEL,
-			"order":HAND_MARK_TAG_ORDER,
-			"source_skill_id":get_id(),
-			"rule_overrides":{"ignore_distance_limit":true},
-		}
-		if bool(host.call("set_hand_card_mark_tag", ordered_player.player_id, gained_card.uid, HAND_MARK_TAG_ID, tag_data)):
-			gained_target_ids.append(ordered_player.player_id)
-			gained_card_uids.append(gained_card.uid)
-	announce_activation({"target_ids":target_ids.duplicate(), "gained_target_ids":gained_target_ids, "gained_card_uids":gained_card_uids, "hand_mark_tag":HAND_MARK_TAG_LABEL})
-	observe_identity_behavior(gained_target_ids, {"target_result":AI_SLASH_GAIN_VALUE})
-	return true
+		steps.append(func(_sequence: RuleStepSequence) -> void:
+			_sequence.effect_result = null
+			# 当前原目标；死亡、离场或换将均跳过该条目。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if current_target != null and current_target.alive and not current_target.out_of_game and current_target.character_generation == target_generation:
+				_sequence.effect_result = host.gain_top_draw_card_matching(target_id, {"effect_id":SLASH_EFFECT_ID}, get_id())
+		)
+		steps.append(func(_sequence: RuleStepSequence) -> void:
+			if _sequence.effect_result == null or not _sequence.effect_result.completed or not bool(_sequence.effect_result.result.get("success", false)):
+				return
+			# 获得后的原目标；After换将不能给新角色写旧标记。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if current_target == null or current_target.character_generation != target_generation:
+				return
+			# 实际提交实体UID；不从失败候选或尚未完成请求中创建标记。
+			var gained_card_uid: int = int(_sequence.effect_result.result.get("card_uid", -1))
+			# 手牌标签数据；rule_overrides由卡牌规则服务读取，UI只消费label、order与source_skill_id。
+			var tag_data: Dictionary = {"label":HAND_MARK_TAG_LABEL, "order":HAND_MARK_TAG_ORDER, "source_skill_id":get_id(), "rule_overrides":{"ignore_distance_limit":true}}
+			if bool(host.call("set_hand_card_mark_tag", target_id, gained_card_uid, HAND_MARK_TAG_ID, tag_data)):
+				gained_target_ids.append(target_id)
+				gained_card_uids.append(gained_card_uid)
+		)
+	steps.append(func(_sequence: RuleStepSequence) -> void:
+		announce_activation({"target_ids":target_ids.duplicate(), "gained_target_ids":gained_target_ids, "gained_card_uids":gained_card_uids, "hand_mark_tag":HAND_MARK_TAG_LABEL})
+		observe_identity_behavior(gained_target_ids, {"target_result":AI_SLASH_GAIN_VALUE})
+	)
+	return run_steps(steps) >= 0
 
 
 ## 返回持有者当前距离1以内的全部存活在场角色；自身距离为0，符合“距离为1以内”。

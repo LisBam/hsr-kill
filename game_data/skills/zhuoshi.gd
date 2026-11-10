@@ -54,20 +54,10 @@ const CHOICE_SECOND_COST: String = "zhuoshi_second_cost"
 ## 第三段费用「再次弃置一张基本牌」的选择种类；取消表示放弃整段第三段。
 const CHOICE_THIRD_COST: String = "zhuoshi_third_cost"
 
-## 第一段费用弃置完成后的延迟结算种类；弃置自己费用牌可能触发「当你弃置牌时」类嵌套技能。
-const DEFER_AFTER_FIRST_COST: String = "zhuoshi_defer_after_first_cost"
 
-## 第二段第一步效果弃置完成后的延迟结算种类。
-const DEFER_AFTER_TARGET_HAND_DISCARD: String = "zhuoshi_defer_after_target_hand_discard"
 
-## 第二段费用弃置完成后的延迟结算种类；与上一步骤必须区分，否则恢复时会走错后续步骤。
-const DEFER_AFTER_SECOND_COST: String = "zhuoshi_defer_after_second_cost"
 
-## 第二段第二步效果弃置完成后的延迟结算种类。
-const DEFER_AFTER_TARGET_ANY_DISCARD: String = "zhuoshi_defer_after_target_any_discard"
 
-## 第三段费用弃置完成后的延迟结算种类。
-const DEFER_AFTER_THIRD_COST: String = "zhuoshi_defer_after_third_cost"
 
 ## 多步交互中「确认」动作的保底分；远高于任何单张牌面收益，
 ## 使「是否继续」只由真实收益的小数部分决定，不被通用手牌费用评分翻转。
@@ -165,14 +155,16 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			return true
 		# 第一段费用；权威端口只接受仍在持有者手牌区中的所选实体。
 		var cost_uids: Array[int] = [int(response.card_ids[0])]
-		if int(host.call("discard_selected_hand_cards", owner_player_id, cost_uids)) != COST_CARD_COUNT:
-			return true
-		# 阶段额度只在第一段费用真实进入弃牌堆后才消费；此前的任何取消都不占额度。
-		_used_this_play_phase += 1
-		announce_activation({"target_id":target_id, "card_uid":int(response.card_ids[0])})
-		# 雷电属性时机的身份行为上报口径与【追歼】一致：本技能确实造成了属性伤害。
-		observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "nature_damage":true})
-		_continue_after_first_cost(target_id)
+		host.call("discard_selected_hand_cards", owner_player_id, cost_uids, func(discarded_count: int) -> void:
+			if discarded_count != COST_CARD_COUNT:
+				return
+			# 阶段额度只在第一段费用真实进入弃牌堆后才消费；此前的任何取消都不占额度。
+			_used_this_play_phase += 1
+			announce_activation({"target_id":target_id, "card_uid":int(response.card_ids[0])})
+			# 雷电属性时机的身份行为上报口径与【追歼】一致：本技能确实造成了属性伤害。
+			observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "nature_damage":true})
+			_begin_target_hand_discard(target_id)
+		)
 		return true
 	if context_kind == CHOICE_DISCARD_TARGET_HAND:
 		# 该步骤创建时 min_select 为1且候选非空，正常路径不会取消；异常响应按“未完成该步骤”终止流程。
@@ -182,8 +174,9 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if not _is_valid_target(hand_target_id):
 			return true
 		var hand_uids: Array[int] = [int(response.card_ids[0])]
-		host.call("discard_selected_player_cards", hand_target_id, hand_uids, owner_player_id)
-		_continue_after_target_discard(DEFER_AFTER_TARGET_HAND_DISCARD, hand_target_id)
+		host.call("discard_selected_player_cards", hand_target_id, hand_uids, owner_player_id, func(_discarded_count: int) -> void:
+			_begin_second_cost(hand_target_id)
+		)
 		return true
 	if context_kind == CHOICE_SECOND_COST:
 		# 第二段费用取消：放弃整段第二段，直接进入第三段。
@@ -194,10 +187,12 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if not _is_valid_target(second_target_id):
 			return true
 		var second_cost_uids: Array[int] = [int(response.card_ids[0])]
-		if int(host.call("discard_selected_hand_cards", owner_player_id, second_cost_uids)) != SECOND_COST_CARD_COUNT:
-			_begin_third_cost(second_target_id)
-			return true
-		_continue_after_second_cost(second_target_id)
+		host.call("discard_selected_hand_cards", owner_player_id, second_cost_uids, func(discarded_count: int) -> void:
+			if discarded_count != SECOND_COST_CARD_COUNT:
+				_begin_third_cost(second_target_id)
+				return
+			_begin_second_cost_effect(second_target_id)
+		)
 		return true
 	if context_kind == CHOICE_DISCARD_TARGET_ANY:
 		# 费用已经支付，该步骤按必选处理；异常响应同样终止流程，不回退已弃置的费用。
@@ -207,8 +202,9 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if not _is_valid_target(any_target_id):
 			return true
 		var any_uids: Array[int] = [int(response.card_ids[0])]
-		host.call("discard_selected_player_cards", any_target_id, any_uids, owner_player_id)
-		_continue_after_target_discard(DEFER_AFTER_TARGET_ANY_DISCARD, any_target_id)
+		host.call("discard_selected_player_cards", any_target_id, any_uids, owner_player_id, func(_discarded_count: int) -> void:
+			_begin_third_cost(any_target_id)
+		)
 		return true
 	if context_kind == CHOICE_THIRD_COST:
 		# 第三段费用取消：只有第三段不发生，前面的拆牌效果全部保留。
@@ -218,74 +214,13 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if not _is_valid_target(third_target_id):
 			return true
 		var third_cost_uids: Array[int] = [int(response.card_ids[0])]
-		if int(host.call("discard_selected_hand_cards", owner_player_id, third_cost_uids)) != THIRD_COST_CARD_COUNT:
-			return true
-		_continue_after_third_cost(third_target_id)
+		host.call("discard_selected_hand_cards", owner_player_id, third_cost_uids, func(discarded_count: int) -> void:
+			if discarded_count != THIRD_COST_CARD_COUNT:
+				return
+			_resolve_thunder_damage(third_target_id)
+		)
 		return true
 	return false
-
-
-## 恢复延迟结算步骤；弃置与伤害都可能触发嵌套技能，必须等嵌套结算全部收尾后再创建下一个请求。
-func continue_settlement(context: Dictionary) -> bool:
-	var context_kind: String = str(context.get("kind", ""))
-	if context_kind == DEFER_AFTER_FIRST_COST:
-		_begin_target_hand_discard(int(context.get("target_id", -1)))
-		return true
-	if context_kind == DEFER_AFTER_TARGET_HAND_DISCARD:
-		_begin_second_cost(int(context.get("target_id", -1)))
-		return true
-	if context_kind == DEFER_AFTER_SECOND_COST:
-		_begin_second_cost_effect(int(context.get("target_id", -1)))
-		return true
-	if context_kind == DEFER_AFTER_TARGET_ANY_DISCARD:
-		_begin_third_cost(int(context.get("target_id", -1)))
-		return true
-	if context_kind == DEFER_AFTER_THIRD_COST:
-		_resolve_thunder_damage(int(context.get("target_id", -1)))
-		return true
-	return false
-
-
-## 第一段费用弃置完成后推进到“弃置其一张手牌”。
-## 弃置自己费用牌后可能触发嵌套技能结算（例如【泛音】等“当你弃置牌时”类效果）。
-## 统一请求槽被嵌套选择占用时立刻创建下一个请求会被控制器拒绝并静默中断整条流程，
-## 因此必须先登记延迟步骤，等嵌套结算全部收尾后再继续。
-func _continue_after_first_cost(target_id: int) -> void:
-	if _defer_if_barrier(DEFER_AFTER_FIRST_COST, target_id):
-		return
-	_begin_target_hand_discard(target_id)
-
-
-## 第二段费用弃置完成后推进到“弃置其一张牌”。
-func _continue_after_second_cost(target_id: int) -> void:
-	if _defer_if_barrier(DEFER_AFTER_SECOND_COST, target_id):
-		return
-	_begin_second_cost_effect(target_id)
-
-
-## 效果弃置完成后按传入的延迟种类决定后续步骤；两个效果弃置共用同一套屏障判断。
-func _continue_after_target_discard(defer_kind: String, target_id: int) -> void:
-	if _defer_if_barrier(defer_kind, target_id):
-		return
-	if defer_kind == DEFER_AFTER_TARGET_HAND_DISCARD:
-		_begin_second_cost(target_id)
-		return
-	_begin_third_cost(target_id)
-
-
-## 第三段费用弃置完成后结算雷电伤害。
-func _continue_after_third_cost(target_id: int) -> void:
-	if _defer_if_barrier(DEFER_AFTER_THIRD_COST, target_id):
-		return
-	_resolve_thunder_damage(target_id)
-
-
-## 存在嵌套结算屏障时登记延迟步骤并返回真；调用方据此提前返回，避免与嵌套选择争抢统一请求槽。
-func _defer_if_barrier(defer_kind: String, target_id: int) -> bool:
-	if not bool(host.call("has_nested_settlement_barrier")):
-		return false
-	defer_settlement({"kind":defer_kind, "target_id":target_id})
-	return true
 
 
 ## 建立“弃置其一张手牌”请求；候选为空时跳过该步骤继续推进，绝不创建没有候选的必选请求。

@@ -76,20 +76,18 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 弃牌目标ID；区域移动前由控制器再次校验实体归属与保护技能。
 	var target_id: int = int(context.get("target_id", -1))
-	# 弃置是否实际成立；失败时仍按当前有效目标继续强制标记，避免旧候选令整轮锁定技永久中断。
-	var discarded: bool = bool(host.call("discard_selected_player_card", owner_player_id, target_id, response.card_ids[0]))
-	if discarded and defer_settlement({"kind":"youfeng_apply_hunt", "target_id":target_id}):
-		return true
-	_apply_hunt_target(target_id)
+	# 原目标代次；弃牌的子效果可以换将，旧请求不应标记新武将。
+	var target_generation: int = host.state.get_player(target_id).character_generation
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void: host.discard_selected_player_card(owner_player_id, target_id, response.card_ids[0]),
+		func(_sequence: RuleStepSequence) -> void:
+			# 当前目标；移牌失败仍按技能强制流程处理，但只作用原武将。
+			var target: PlayerState = host.state.get_player(target_id)
+			if target != null and target.character_generation == target_generation:
+				_apply_hunt_target(target_id),
+	])
 	return true
 
-
-## 在弃牌移动产生的嵌套触发全部完成后继续标记与自身状态结算。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "youfeng_apply_hunt":
-		return false
-	_apply_hunt_target(int(context.get("target_id", -1)))
-	return true
 
 
 ## 写入全场唯一猎物标记，并按貊泽当前离场状态执行离场或失去1点体力。

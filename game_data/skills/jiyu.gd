@@ -75,8 +75,10 @@ func _continue_confirm(context: Dictionary, response: ChoiceResponse) -> bool:
 	if target == null or not target.alive or target.out_of_game:
 		return true
 	announce_activation({"target_id":target_id, "card_uid":int(context.get("card_uid", -1))})
-	host.call("set_player_linked", target_id, true, owner_player_id, get_id())
-	_request_target_option(context)
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void: host.call("set_player_linked", target_id, true, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void: _request_target_option(context),
+	])
 	return true
 
 

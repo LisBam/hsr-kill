@@ -71,13 +71,20 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if selected_target == null or not selected_target.alive or selected_target.out_of_game:
 			return true
 		announce_activation({"target_id":selected_target_id, "damage_target_id":int(context.get("damage_target_id", -1)), "name_length":int(context.get("name_length", 0))})
-		host.call("gain_top_draw_card_by_name_length", selected_target_id, int(context.get("name_length", 0)), get_id())
-		# 只有获牌角色仍是本次伤害目标时才进入装备弃置；没有装备时后续效果直接跳过。
-		if selected_target_id == int(context.get("damage_target_id", -1)):
-			# 伤害目标当前装备候选；只包含公开装备区实体。
-			var equipment_candidates: Array[Dictionary] = host.call("get_equipment_candidates", owner_player_id, selected_target_id) as Array[Dictionary]
-			if not equipment_candidates.is_empty():
-				request_card_selection("摄伏", "请选择弃置目标装备区内的一张牌", equipment_candidates, 1, 1, false, {"kind":"sefu_discard_equipment", "target_id":selected_target_id})
+		# 原伤害目标代次；获牌窗口发生换将后不询问新角色弃置装备。
+		var selected_generation: int = selected_target.character_generation
+		run_steps([
+			func(_sequence: RuleStepSequence) -> void: host.gain_top_draw_card_by_name_length(selected_target_id, int(context.get("name_length", 0)), get_id()),
+			func(_sequence: RuleStepSequence) -> void:
+				# 只有获牌角色仍是本次伤害目标时才进入装备弃置；没有装备时后续效果直接跳过。
+				var current_target: PlayerState = host.state.get_player(selected_target_id)
+				if selected_target_id != int(context.get("damage_target_id", -1)) or current_target == null or not current_target.alive or current_target.out_of_game or current_target.character_generation != selected_generation:
+					return
+				# 伤害目标当前装备候选；只包含公开装备区实体。
+				var equipment_candidates: Array[Dictionary] = host.get_equipment_candidates(owner_player_id, selected_target_id)
+				if not equipment_candidates.is_empty():
+					request_card_selection("摄伏", "请选择弃置目标装备区内的一张牌", equipment_candidates, 1, 1, false, {"kind":"sefu_discard_equipment", "target_id":selected_target_id}),
+		])
 		return true
 	if choice_kind == "sefu_discard_equipment":
 		if response.confirmed and response.card_ids.size() == 1:

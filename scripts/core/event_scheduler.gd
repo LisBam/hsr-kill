@@ -228,6 +228,17 @@ func drain() -> void:
 			operation_count += 1
 			continue
 		if pause_registry.has_active_for_stack(_event_stack):
+			# 内容等待只阻止父主体；已经声明的子事件仍可进入自己的内容。
+			var child_id: int = _runnable_child_during_pause(event)
+			if child_id >= 0:
+				event.next_event_ids.pop_front()
+				# 取消后的失效队列项也占一次预算，不在同帧无限清理。
+				var child: GameEvent = _events.get(child_id) as GameEvent
+				if child != null and not child.finalized:
+					event.status = GameEvent.Status.WAITING_CHILDREN
+					_event_stack.append(child_id)
+				operation_count += 1
+				continue
 			if not event.body_finished:
 				event.status = GameEvent.Status.PAUSED
 			break
@@ -353,14 +364,28 @@ func _reset_repeated_step_guard() -> void:
 
 ## 判断当前栈是否仍有无需等待即可推进的工作；暂停 token、终局停止和空闲长期根都返回false。
 func _has_immediately_executable_work() -> bool:
-	if _stop_requested or _event_stack.is_empty() or pause_registry.has_active_for_stack(_event_stack):
+	if _stop_requested or _event_stack.is_empty():
 		return false
 	# 当前栈顶事件；缺失对象仍需下一帧清理，因此视为可执行工作。
 	var event: GameEvent = _events.get(_event_stack.back()) as GameEvent
 	if event == null:
 		return true
+	if pause_registry.has_active_for_stack(_event_stack):
+		return _runnable_child_during_pause(event) >= 0
 	# 长期根没有子事件、after或剩余内容时处于稳定空闲，不需要持续空转。
 	return not (event.held_open and not event.body_finished and event.next_event_ids.is_empty() and event.after_event_ids.is_empty() and event.step >= event.content_steps.size())
+
+
+## 只放行不受选择、全局暂停或祖先子树暂停阻塞的首个next；不释放任何父令牌。
+func _runnable_child_during_pause(event: GameEvent) -> int:
+	if event == null or event.next_event_ids.is_empty():
+		return -1
+	# 候选子事件；只读检查扩展后的完整调用栈。
+	var child_id: int = event.next_event_ids[0]
+	# 子调用栈副本；父内容级令牌不作用于子栈，选择/全局令牌仍生效。
+	var child_stack: Array[int] = _event_stack.duplicate()
+	child_stack.append(child_id)
+	return -1 if pause_registry.has_active_for_stack(child_stack) else child_id
 
 
 ## 达到本轮预算后登记唯一空闲帧续跑；令牌确保显式排空、重置或终局能让旧回调自然失效。
@@ -711,6 +736,24 @@ func get_current_event_id() -> int:
 	return -1 if _event_stack.is_empty() else int(_event_stack.back())
 
 
+## 返回当前分支在长期根下的事件身份；模式交接等待整棵父内容归档，不把永久根作为完成依赖。
+func get_current_branch_event_id() -> int:
+	# 当前活跃内容；没有分支或只有长期根时不产生等待身份。
+	var event: GameEvent = _events.get(get_current_event_id()) as GameEvent
+	if event == null or event.event_id == root_event_id:
+		return -1
+	while event.parent_id >= 0 and event.parent_id != root_event_id:
+		# 当前内容的活跃父节点；已归档父节点不再扩展本次等待范围。
+		var parent: GameEvent = _events.get(event.parent_id) as GameEvent
+		if parent == null:
+			break
+		event = parent
+	# 常驻出牌输入不是已提交内容；模式可以关闭它，不能等待真人结束输入才处理已成立的死亡。
+	if event.name == "chooseToUse" and event.event_type == "choice":
+		return -1
+	return event.event_id
+
+
 ## 返回当前可变事件仅供调度器内部和调试器使用；普通规则模块应读取 get_event_snapshot。
 func get_current_event() -> GameEvent:
 	return _events.get(get_current_event_id()) as GameEvent
@@ -748,6 +791,11 @@ func get_event_snapshot(event_id: int) -> Dictionary:
 ## 返回仍持有完整GameEvent对象的数量；正式长局应只包含根事件与当前未完成事件树，供性能诊断与回归测试使用。
 func get_live_event_count() -> int:
 	return _events.size()
+
+
+## 查询原生内容是否尚未归档；父规则等待包含after的完整生命周期，不复制事件快照。
+func is_event_pending(event_id: int) -> bool:
+	return _events.has(event_id) and not (_events[event_id] as GameEvent).finalized
 
 
 ## 返回是否已经安排下一空闲帧继续排空；诊断层可据此区分“主动分帧”与真正没有推进来源的停滞。

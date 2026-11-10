@@ -226,53 +226,49 @@ func _execute(effect: Dictionary, target_player_id: int) -> void:
 				_report(_result(effect_kind, target_player_id, true, "%s回复%d点体力（已提交）。" % [target_text, amount]))
 		EFFECT_LOSE_HP:
 			# 失去体力返回实际扣减量；0 表示权威端拒绝了本次请求。
-			var lost_hp: int = _host.lose_hp(-1, target_player_id, amount, REASON)
-			if lost_hp > 0:
-				_report(_result(effect_kind, target_player_id, true, "%s失去%d点体力。" % [target_text, lost_hp]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s失去体力未生效。" % target_text))
+			_run_state_change(effect_kind, target_player_id, amount, target_text)
 		EFFECT_DAMAGE:
 			# damage() 依次派发多级时机窗口，扣血发生在窗口之后，因此只能确认「已提交」。
 			_host.damage(-1, target_player_id, amount, "normal", "", false, false, {})
 			_report(_result(effect_kind, target_player_id, true, "%s受到%d点无来源伤害（已提交）。" % [target_text, amount]))
 		EFFECT_GAIN_MAX_HP:
-			var gained_max_hp: int = _host.change_max_hp(target_player_id, amount, -1, REASON)
-			if gained_max_hp > 0:
-				_report(_result(effect_kind, target_player_id, true, "%s体力上限+%d。" % [target_text, gained_max_hp]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s体力上限未变化。" % target_text))
+			_run_state_change(effect_kind, target_player_id, amount, target_text)
 		EFFECT_LOSE_MAX_HP:
 			# 权威端把减少量钳制为「至少保留 1 点上限」，返回值已反映真实变化量。
-			var lost_max_hp: int = _host.change_max_hp(target_player_id, -amount, -1, REASON)
-			if lost_max_hp < 0:
-				_report(_result(effect_kind, target_player_id, true, "%s体力上限%d。" % [target_text, lost_max_hp]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s体力上限未变化。" % target_text))
+			_run_state_change(effect_kind, target_player_id, amount, target_text)
 		EFFECT_GAIN_SHIELD:
-			var gained_shield: int = _host.shield(target_player_id, amount, -1, REASON)
-			if gained_shield > 0:
-				_report(_result(effect_kind, target_player_id, true, "%s获得%d点护盾。" % [target_text, gained_shield]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s获得护盾未生效。" % target_text))
+			_run_state_change(effect_kind, target_player_id, amount, target_text)
 		EFFECT_LOSE_SHIELD:
 			# change_hujia() 的负向分支返回负数；取绝对值用于展示。
-			var shield_delta: int = _host.change_hujia(target_player_id, -amount, -1, REASON)
-			if shield_delta < 0:
-				_report(_result(effect_kind, target_player_id, true, "%s失去%d点护盾。" % [target_text, absi(shield_delta)]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s失去护盾未生效。" % target_text))
+			_run_state_change(effect_kind, target_player_id, amount, target_text)
 		EFFECT_GAIN_DRAW_PILE_CARD:
 			# 请求获得的实体牌 UID 列表；纯数据载荷，界面提交什么就尝试获得什么。
 			var requested_uids: Array = payload.get("uids", []) as Array
 			# 实际获得张数；逐张经权威移牌边界获得，返回空值表示该实体已不在摸牌堆中。
-			var gained_count: int = 0
+			# 共享单元素槽只在完整结果步骤累计，非空请求句柄不等于成功获得。
+			var gained_count: Array[int] = [0]
+			# 当前一张独立结果；下一次移动前覆盖，不与其他调试请求共享。
+			# 本次调试内容；所有移动完成后才报告实际数量。
+			var steps: Array[Callable] = []
+			# 请求实体身份；提交后不重新挑选替代牌。
 			for card_uid_variant: Variant in requested_uids:
-				if _host.gain_draw_pile_card_by_uid(target_player_id, int(card_uid_variant)) != null:
-					gained_count += 1
-			if gained_count > 0:
-				_report(_result(effect_kind, target_player_id, true, "%s从摸牌堆获得%d张牌。" % [target_text, gained_count]))
-			else:
-				_report(_result(effect_kind, target_player_id, false, "%s未获得任何牌。" % target_text))
+				# 稳定实体UID；闭包不持有牌对象或牌堆数组。
+				var card_uid: int = int(card_uid_variant)
+				steps.append(func(_sequence: RuleStepSequence) -> void:
+					_sequence.effect_result = null
+					_sequence.effect_result = _host.gain_draw_pile_card_by_uid(target_player_id, card_uid)
+				)
+				steps.append(func(_sequence: RuleStepSequence) -> void:
+					if _sequence.effect_result != null and _sequence.effect_result.completed and bool(_sequence.effect_result.result.get("success", false)):
+						gained_count[0] += 1
+				)
+			steps.append(func(_sequence: RuleStepSequence) -> void:
+				if gained_count[0] > 0:
+					_report(_result(effect_kind, target_player_id, true, "%s从摸牌堆获得%d张牌。" % [target_text, gained_count[0]]))
+				else:
+					_report(_result(effect_kind, target_player_id, false, "%s未获得任何牌。" % target_text))
+			)
+			_host.run_rule_sequence(steps, {"sequence_kind":"developer_gain_cards"})
 		EFFECT_REPLACE_CHARACTER:
 			var new_character_id: String = str(payload.get("character_id", ""))
 			var replaced: bool = _host.replace_player_character_card(target_player_id, new_character_id, REASON)
@@ -293,3 +289,45 @@ func _result(effect_kind: String, target_player_id: int, ok: bool, text: String)
 func _report(result_data: Dictionary) -> void:
 	if _host != null and _host.has_method("report_developer_effect_result"):
 		_host.report_developer_effect_result(result_data)
+
+
+## 数值调试也等待真实状态内容；报告只能使用完整提交结果，不能把句柄转成int。
+func _run_state_change(effect_kind: String, target_player_id: int, amount: int, target_text: String) -> void:
+	# 独立步骤配置；不将调试报告提前当作效果成功。
+	var steps: Array[Callable] = [_begin_state_change.bind(effect_kind, target_player_id, amount), _report_state_change.bind(effect_kind, target_player_id, target_text)]
+	_host.run_rule_sequence(steps)
+
+
+## 调试入口只选择权威状态操作，不重复任何数值公式。
+func _begin_state_change(sequence: RuleStepSequence, effect_kind: String, target_player_id: int, amount: int) -> void:
+	match effect_kind:
+		EFFECT_LOSE_HP:
+			sequence.effect_result = _host.lose_hp(-1, target_player_id, amount, REASON)
+		EFFECT_GAIN_MAX_HP:
+			sequence.effect_result = _host.change_max_hp(target_player_id, amount, -1, REASON)
+		EFFECT_LOSE_MAX_HP:
+			sequence.effect_result = _host.change_max_hp(target_player_id, -amount, -1, REASON)
+		EFFECT_GAIN_SHIELD:
+			sequence.effect_result = _host.shield(target_player_id, amount, -1, REASON)
+		EFFECT_LOSE_SHIELD:
+			sequence.effect_result = _host.change_hujia(target_player_id, -amount, -1, REASON)
+
+
+## 实际完整结果报告；减少护甲和上限保留带符号结果，展示失去护甲时再取绝对值。
+func _report_state_change(sequence: RuleStepSequence, effect_kind: String, target_player_id: int, target_text: String) -> void:
+	# 实际带符号结果；前置取消与零变化使用相同明确失败报告。
+	var actual_amount: int = sequence.effect_result.amount if sequence.effect_result != null else 0
+	# 本次调试结果文本；只依据已经提交的事实，不预报计划数量。
+	var message: String = ""
+	match effect_kind:
+		EFFECT_LOSE_HP:
+			message = "%s失去%d点体力。" % [target_text, actual_amount] if actual_amount > 0 else "%s失去体力未生效。" % target_text
+		EFFECT_GAIN_MAX_HP:
+			message = "%s体力上限+%d。" % [target_text, actual_amount] if actual_amount > 0 else "%s体力上限未变化。" % target_text
+		EFFECT_LOSE_MAX_HP:
+			message = "%s体力上限%d。" % [target_text, actual_amount] if actual_amount < 0 else "%s体力上限未变化。" % target_text
+		EFFECT_GAIN_SHIELD:
+			message = "%s获得%d点护盾。" % [target_text, actual_amount] if actual_amount > 0 else "%s获得护盾未生效。" % target_text
+		EFFECT_LOSE_SHIELD:
+			message = "%s失去%d点护盾。" % [target_text, absi(actual_amount)] if actual_amount < 0 else "%s失去护盾未生效。" % target_text
+	_report(_result(effect_kind, target_player_id, actual_amount != 0, message))

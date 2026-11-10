@@ -46,7 +46,7 @@ func can_activate(context: Dictionary = {}) -> bool:
 ## 发动倾力；响应入口只支付费用，控制器随后建立无材料虚拟响应，主动入口则选择雷【杀】目标。
 func activate(context: Dictionary = {}) -> String:
 	if str(context.get("active_entry", "")) == "chooseToRespond":
-		return "" if get_owner_skill_player().loseHp(HP_COST, get_owner_skill_player()) == HP_COST else "【倾力】未能失去体力。"
+		return ""
 	var target_ids: Array[int] = []
 	for target_variant: Variant in context.get("target_ids", []) as Array:
 		target_ids.append(int(target_variant))
@@ -72,11 +72,12 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 func _execute_use(target_ids: Array[int]) -> bool:
 	if host.card_rules.validate_virtual_use(owner_player_id, THUNDER_SLASH_DEFINITION_ID, target_ids) != "":
 		return false
-	if get_owner_skill_player().loseHp(HP_COST, get_owner_skill_player()) != HP_COST:
-		return false
-	if host.has_pending_card_choice():
-		return defer_settlement({"kind":"qingli_deferred_use", "target_ids":target_ids.duplicate()})
-	return _finish_use(target_ids)
+	return run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = get_owner_skill_player().loseHp(HP_COST, get_owner_skill_player()),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result != null and sequence.effect_result.count == HP_COST:
+				_finish_use(target_ids),
+	]) >= 0
 
 
 ## 在费用完整结算后建立雷【杀】CardUseEvent；持有者死亡或离场时统一入口会拒绝。
@@ -88,20 +89,19 @@ func _finish_use(target_ids: Array[int]) -> bool:
 	return true
 
 
-## 恢复因费用濒死或其他嵌套选择暂停的主动雷【杀】使用。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "qingli_deferred_use":
-		return false
-	var target_ids: Array[int] = []
-	for target_variant: Variant in context.get("target_ids", []) as Array:
-		target_ids.append(int(target_variant))
-	_finish_use(target_ids)
-	return true
-
-
 ## 返回无材料响应提供的雷【杀】定义；只有当前响应明确接受【杀】时生效。
 func get_cardless_response_definition_id(response_patterns: Array[String]) -> String:
 	return THUNDER_SLASH_DEFINITION_ID if response_patterns.has("sha") else ""
+
+
+## 原响应选择已关闭后支付体力，费用中的濒死、回复或选择均由响应父内容等待。
+func begin_cardless_response_cost(_response_patterns: Array[String], _context: Dictionary) -> RefCounted:
+	return get_owner_skill_player().loseHp(HP_COST, get_owner_skill_player())
+
+
+## 倾力要求完整失去固定1点体力；被前置防止或改成其他数量时不提供雷杀。
+func is_cardless_response_cost_satisfied(cost: RefCounted) -> bool:
+	return cost != null and cost.completed and cost.count == HP_COST
 
 
 ## 无材料雷【杀】已经实际响应成功后记录倾力发动；用于公开日志与机缘授予的每回合三次额度。

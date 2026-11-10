@@ -47,17 +47,68 @@ func _on_any_turn_after(event: RuleEvent) -> void:
 			removed_ally_ids.append(player.player_id)
 	announce_activation({"turn_player_id":event.player_id if event != null else -1, "removed_fire_seed_count":fire_seed_count, "removed_ally_ids":removed_ally_ids.duplicate(), "new_character_id":TRANSFORM_CHARACTER_ID})
 	host.call("change_player_mark_count", owner_player_id, FIRE_SEED_MARK_ID, -fire_seed_count)
-	host.call("set_player_zones_abolished", owner_player_id, true, true, get_id())
-	owner.character_form_state[REMOVED_ALLY_IDS_STATE_KEY] = removed_ally_ids.duplicate()
+	# 换形态会卸载本技能，因此后续由明确的原角色代次内容持有，不依赖旧技能仍安装。
+	var steps: Array[Callable] = [_abolish_zones, _store_removed_allies]
 	for ally_id: int in removed_ally_ids:
+		steps.append(_remove_ally.bind(ally_id))
+	steps.append(_replace_form)
+	steps.append(_recover_transformed_owner)
+	steps.append(_grant_extra_turn)
+	host.call("run_rule_sequence", steps, {"sequence_kind":"lunhui_transition", "player_id":owner_player_id, "generation":owner.character_generation, "removed_ally_ids":removed_ally_ids.duplicate()})
+
+
+## 每步按原角色代次查回状态；技能自身换形态后显式更新预期代次，其他换将则终止原请求。
+func _transition_player(sequence: RuleStepSequence) -> PlayerState:
+	# 真实角色；换形态会保留玩家ID，但角色代次与原请求必须吻合。
+	var owner: PlayerState = host.state.get_player(int(sequence.context.player_id))
+	if owner == null or not owner.alive or owner.out_of_game or owner.character_generation != int(sequence.context.generation):
+		sequence.finish()
+		return null
+	return owner
+
+
+## 整个区域废除与其卡牌子内容先完整结束，再移出友方和换形态。
+func _abolish_zones(sequence: RuleStepSequence) -> void:
+	if _transition_player(sequence) != null:
+		sequence.effect_result = host.call("set_player_zones_abolished", owner_player_id, true, true, get_id())
+
+
+## 友方列表归玩家私有状态持久保存，不因轮回技能卸载而丢失。
+func _store_removed_allies(sequence: RuleStepSequence) -> void:
+	# 等待后的原白厄；不读取已被其他技能替换的角色。
+	var owner: PlayerState = _transition_player(sequence)
+	if owner != null:
+		owner.character_form_state[REMOVED_ALLY_IDS_STATE_KEY] = (sequence.context.removed_ally_ids as Array).duplicate()
+
+
+## 逐名离场产生的阶段中断与子内容也先于下一名友方。
+func _remove_ally(sequence: RuleStepSequence, ally_id: int) -> void:
+	if _transition_player(sequence) != null:
 		host.call("remove_player_from_game", ally_id, get_id(), false)
-	if not bool(host.call("replace_player_character_card", owner_player_id, TRANSFORM_CHARACTER_ID, get_id(), true)):
+
+
+## 仅本次明确换形态能够更新预期代次，后续changeSkillsAfter子内容仍由父步骤等待。
+func _replace_form(sequence: RuleStepSequence) -> void:
+	if _transition_player(sequence) == null:
 		return
-	# 换形态后的同一角色状态；基础上限已经切换为卡厄斯兰那并保留局内独立修正。
-	var transformed_owner: PlayerState = host.state.get_player(owner_player_id) as PlayerState
+	if not bool(host.call("replace_player_character_card", owner_player_id, TRANSFORM_CHARACTER_ID, get_id(), true)):
+		sequence.finish()
+		return
+	sequence.context.generation = host.state.get_player(owner_player_id).character_generation
+
+
+## 换形态后的同一角色状态；基础上限已经切换为卡厄斯兰那并保留局内独立修正。
+func _recover_transformed_owner(sequence: RuleStepSequence) -> void:
+	# 当前预期形态；回复自己的标准子内容也允许插入选择或伤害。
+	var transformed_owner: PlayerState = _transition_player(sequence)
 	if transformed_owner != null and transformed_owner.hp < transformed_owner.max_hp:
 		host.call("recover", owner_player_id, owner_player_id, transformed_owner.max_hp - transformed_owner.hp, get_id())
-	host.call("add_phase", owner_player_id, get_id())
+
+
+## 回复及其After完整结束后才加入额外回合，不能在换形态子内容中提前开始行动。
+func _grant_extra_turn(sequence: RuleStepSequence) -> void:
+	if _transition_player(sequence) != null:
+		host.call("add_phase", owner_player_id, get_id())
 
 
 ## 返回当前“火种”数量；标记不存在时按0处理。

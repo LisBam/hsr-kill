@@ -411,12 +411,13 @@ func _continue_suit_selection(response: ChoiceResponse) -> void:
 	if suit_uids.is_empty():
 		return
 	# 本次发动计次与上限改写时机：弃置真正落地后才消耗次数并扩展上限，避免弃置被中断时白吃一次额度。
-	var discarded_count: int = int(host.call("discard_selected_hand_cards", owner_player_id, suit_uids))
-	if discarded_count <= 0:
-		return
-	_used_this_play_phase += 1
-	_extended_limit_turn_number = host.state.turn_number
-	announce_activation({"discarded_suit":suit, "discarded_count":discarded_count, "play_phase_limit":EXTENDED_PLAY_PHASE_LIMIT})
+	host.call("discard_selected_hand_cards", owner_player_id, suit_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			return
+		_used_this_play_phase += 1
+		_extended_limit_turn_number = host.state.turn_number
+		announce_activation({"discarded_suit":suit, "discarded_count":discarded_count, "play_phase_limit":EXTENDED_PLAY_PHASE_LIMIT})
+	)
 
 
 ## 把占位UID翻译成真实牌名；普通实体UID不属于本技能的虚拟候选，返回空字符串由调用方按失效处理。

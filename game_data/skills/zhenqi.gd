@@ -166,26 +166,40 @@ func _continue_recipient(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 已选费用分支；只有完整支付成功才执行与其位置对应的后续效果。
 	var cost_option_id: String = str(context.get("cost_option_id", ""))
-	var effect_id: String = ""
-	if cost_option_id == DISCARD_OPTION_ID:
-		if not bool(host.call("discard_card_from_hand", turn_player_id, int(context.get("cost_card_uid", -1)))):
-			return true
-		effect_id = DRAW_EFFECT_ID
-	elif cost_option_id == LOSE_HP_OPTION_ID:
-		if get_skill_player(turn_player_id).loseHp(HP_COST, get_skill_player(turn_player_id)) <= 0:
-			return true
-		effect_id = RECOVER_EFFECT_ID
-	else:
-		return true
-	if host.state.game_over:
-		return true
-	# 发动表现目标；保留原受益者字段供结算历史读取，同时写入通用target_id让桌面动态指示线稳定指向受益角色。
-	announce_activation_for_player(turn_player_id, {"cost_option_id":cost_option_id, "recipient_id":recipient_id, "target_id":recipient_id})
-	observe_identity_behavior([recipient_id], {"target_result":IDENTITY_TARGET_RESULT})
-	if effect_id == DRAW_EFFECT_ID:
-		host.call("draw", recipient_id, EFFECT_AMOUNT)
-	else:
-		host.call("recover", owner_player_id, recipient_id, EFFECT_AMOUNT, get_id())
+	# 原费用支付者代次；费用窗口不能跨入替换后的角色。
+	var turn_generation: int = turn_player.character_generation
+	# 原受益者代次；效果只属于已经选择的原角色。
+	var recipient_generation: int = recipient.character_generation
+	run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			sequence.context["cost_paid"] = false
+			if cost_option_id == DISCARD_OPTION_ID:
+				sequence.effect_result = host.discard_card_from_hand(turn_player_id, int(context.get("cost_card_uid", -1)))
+			elif cost_option_id == LOSE_HP_OPTION_ID:
+				sequence.effect_result = get_skill_player(turn_player_id).loseHp(HP_COST, get_skill_player(turn_player_id)),
+		func(sequence: RuleStepSequence) -> void:
+			# 费用之后双方原状态；不向死亡、离场或换将的角色套用旧请求。
+			var current_turn_player: PlayerState = host.state.get_player(turn_player_id)
+			# 当前原接收者；保存身份而非异步之前的实体引用。
+			var current_recipient: PlayerState = host.state.get_player(recipient_id)
+			if current_turn_player == null or current_recipient == null or current_turn_player.character_generation != turn_generation or current_recipient.character_generation != recipient_generation or not current_recipient.alive or current_recipient.out_of_game:
+				return
+			# 已选费用分支；只有完整支付成功才执行与其位置对应的后续效果。
+			var effect_id: String = ""
+			if cost_option_id == DISCARD_OPTION_ID and sequence.effect_result != null and sequence.effect_result.count > 0:
+				effect_id = DRAW_EFFECT_ID
+			elif cost_option_id == LOSE_HP_OPTION_ID and sequence.effect_result != null and sequence.effect_result.count > 0:
+				effect_id = RECOVER_EFFECT_ID
+			else:
+				return
+			# 发动表现目标；保留原受益者字段供结算历史读取，同时写入通用target_id让桌面动态指示线稳定指向受益角色。
+			announce_activation_for_player(turn_player_id, {"cost_option_id":cost_option_id, "recipient_id":recipient_id, "target_id":recipient_id})
+			observe_identity_behavior([recipient_id], {"target_result":IDENTITY_TARGET_RESULT})
+			if effect_id == DRAW_EFFECT_ID:
+				host.draw(recipient_id, EFFECT_AMOUNT)
+			else:
+				host.recover(owner_player_id, recipient_id, EFFECT_AMOUNT, get_id()),
+	])
 	return true
 
 

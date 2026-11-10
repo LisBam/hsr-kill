@@ -79,12 +79,16 @@ func _execute_gift(card_uid: int, target_id: int) -> bool:
 	var card: CardInstance = owner.find_hand_card(card_uid) if owner != null else null
 	if card == null or card.get_color() != "red":
 		return false
-	if not bool(host.call("transfer_hand_card_as", owner_player_id, target_id, card_uid, MEDICINE_DEFINITION_ID, get_id())):
-		return false
-	_used_this_play_phase = true
-	announce_activation({"card_uid":card_uid, "target_id":target_id})
-	observe_identity_behavior([target_id], {"target_result":1.0, "gain":true})
-	return true
+	# 本次结果仅运行期持有；后一步读取完整完成状态，不把请求受理当作交牌成功。
+	return run_steps([
+		func(_sequence: RuleStepSequence) -> void: _sequence.effect_result = host.transfer_hand_card_as(owner_player_id, target_id, card_uid, MEDICINE_DEFINITION_ID, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			if _sequence.effect_result == null or not _sequence.effect_result.completed or not bool(_sequence.effect_result.result.get("success", false)):
+				return
+			_used_this_play_phase = true
+			announce_activation({"card_uid":card_uid, "target_id":target_id})
+			observe_identity_behavior([target_id], {"target_result":1.0, "gain":true}),
+	]) >= 0
 
 
 ## 返回技能持有者当前全部红色普通手牌候选；候选顺序与手牌区一致。

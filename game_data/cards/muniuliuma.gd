@@ -62,9 +62,12 @@ func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Ar
 
 ## 木牛流马离开装备区时将其全部“粮”置入弃牌堆，并清空附属存储区。
 func on_leave_equipment(match_host: Object, owner: PlayerState, trigger_loss_effects: bool) -> void:
+	# 原附属牌UID；逐张完整移动，前置取消不得通过clear强行移除仍在源区的牌。
+	var card_uids: Array[int] = []
+	# 原粮实体；移动时由公共服务重新查回当前区域与角色代次。
 	for stored_card: CardInstance in owner.wooden_ox_storage:
-		match_host.discard_card_instance(stored_card)
-	owner.wooden_ox_storage.clear()
+		card_uids.append(stored_card.uid)
+	match_host.begin_discard_cards(owner.player_id, card_uids, ["wooden_ox"] as Array[String], owner.player_id, "equipment_attachment_loss")
 
 
 ## 新回合开始时重置持有者本回合的存粮发动次数。
@@ -142,19 +145,35 @@ func execute_play_phase_action(match_host: Object, action: PlayerAction) -> bool
 	var validation_error: String = validate_play_phase_action(match_host, action)
 	if not validation_error.is_empty():
 		return false
-	# 装备持有者；用于状态标记、附属牌集合与日志。
-	var owner: PlayerState = match_host.state.get_player(action.actor_id)
-	# 被扣置手牌；成功后进入 wooden_ox 附属区域。
-	var stored_card: CardInstance = match_host.move_hand_card_to_equipment_attachment(action.actor_id, action.card_uid, "wooden_ox")
-	if stored_card == null:
-		return false
-	owner.wooden_ox_used = true
-	match_host.add_log("%s将一张手牌扣置于【木牛流马】下。" % owner.display_name)
+	# 本次原木牛身份；前置窗口中被替换后不能存入无主粮。
+	var equipment_uid: int = match_host.get_equipment_card(action.actor_id, "treasure").uid
+	# 原持有者代次；子触发换将后不向新角色记发动次数。
+	var generation: int = match_host.state.get_player(action.actor_id).character_generation
+	match_host.run_rule_sequence([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = match_host.move_hand_card_to_equipment_attachment(action.actor_id, action.card_uid, "wooden_ox", equipment_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result.count <= 0:
+				return
+			# 原装备当前持有者；真实存入成立后才消费本阶段额度。
+			var owner: PlayerState = match_host.state.get_player(action.actor_id)
+			if owner != null and owner.character_generation == generation:
+				owner.wooden_ox_used = true
+				match_host.add_log("%s将一张手牌扣置于【木牛流马】下。" % owner.display_name),
+	] as Array[Callable], {"sequence_kind":"equipment_store"})
 	return true
+
 
 
 ## 第一段存入成功后声明第二段独立询问：是否把宝物与全部“粮”移动给其他角色。
 func get_play_phase_follow_up_request(match_host: Object, action: PlayerAction) -> Dictionary:
+	# 第一段真实存入后才询问；取消、被移走的粮或失去装备都不提供第二段。
+	var owner: PlayerState = match_host.state.get_player(action.actor_id)
+	# 原存入实体当前位置；只依据UID查回，不使用本次动作的旧数组引用。
+	var location: Dictionary = match_host.get_card_location_snapshot(action.card_uid)
+	# 当前木牛；转移选择必须继续归属同一实体。
+	var equipment: CardInstance = match_host.get_equipment_card(action.actor_id, "treasure")
+	if owner == null or not owner.alive or owner.out_of_game or not owner.wooden_ox_used or equipment == null or equipment.definition_id != get_id() or str(location.get("zone", "")) != "wooden_ox" or int(location.get("owner_id", -1)) != action.actor_id:
+		return {}
 	# 合法转移目标；与既有规则一致，只能是其他存活角色。
 	var target_ids: Array[int] = _get_transfer_target_ids(match_host, action.actor_id)
 	if target_ids.is_empty():
@@ -165,7 +184,7 @@ func get_play_phase_follow_up_request(match_host: Object, action: PlayerAction) 
 		"min_targets":1,
 		"max_targets":1,
 		"allow_cancel":true,
-		"context":{"kind":TRANSFER_SELECTION_KIND},
+		"context":{"kind":TRANSFER_SELECTION_KIND, "equipment_uid":equipment.uid, "owner_generation":owner.character_generation},
 	}
 
 
@@ -184,14 +203,11 @@ func continue_equipment_selection(match_host: Object, context: Dictionary, respo
 		return true
 	# 当前宝物实体；等待期间被移动或替换时不再转移。
 	var equipment_card: CardInstance = match_host.get_equipment_card(owner_id, "treasure")
-	if equipment_card == null or equipment_card.definition_id != get_id():
+	if equipment_card == null or equipment_card.definition_id != get_id() or equipment_card.uid != int(context.get("equipment_uid", equipment_card.uid)) or owner.character_generation != int(context.get("owner_generation", owner.character_generation)):
 		return true
 	# 转移前附属牌快照；包含本次新存入的手牌与原有全部“粮”。
 	var attachment_cards: Array[CardInstance] = owner.wooden_ox_storage.duplicate()
-	if not match_host.transfer_equipment_with_attachments(owner_id, target.player_id, "treasure", attachment_cards, "wooden_ox"):
-		return true
-	owner.wooden_ox_storage.clear()
-	match_host.add_log("%s将【木牛流马】及其下的“粮”转移给%s。" % [owner.display_name, target.display_name])
+	match_host.transfer_equipment_with_attachments(owner_id, target.player_id, "treasure", attachment_cards, "wooden_ox")
 	return true
 
 

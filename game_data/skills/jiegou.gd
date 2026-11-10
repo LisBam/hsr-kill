@@ -116,17 +116,21 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 记录用的稳定牌名；在重铸前固化，避免重铸后实体易主或进入弃牌堆导致读不到定义。
 	var recorded_definition_id: String = target_card.definition_id
-	# 权威重铸端口；只接受普通手牌区实体，失败时不产生任何后续效果。
-	if not bool(host.call("recast_hand_card", owner_player_id, response.card_ids[0])):
-		return true
-	# 记录范围比可重铸范围更窄：只有普通锦囊进入记录容器。
-	# 【无懈可击】在这里被有意跳过——它可以被重铸，但不能被【灵感】视为使用。
-	if _is_recordable_definition(recorded_definition_id):
-		host.call("record_card_name", owner_player_id, recorded_definition_id)
-		# 首次记录时在武将牌上声明查看按钮；条目常驻，是否渲染由表现层按“记录是否为空”决定，
-		# 因此清空记录的【看破】不需要知道【解构】的存在，两个技能保持互不引用。
-		_ensure_record_button_entry(owner)
-	announce_activation({"card_definition_id":recorded_definition_id, "recorded":_is_recordable_definition(recorded_definition_id)})
+	# 独立费用结果；补摸及其子触发完成后才记录本次牌名。
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_card(owner_player_id, response.card_ids[0]),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				return
+			# 记录范围比可重铸范围更窄：只有普通锦囊进入记录容器。
+			# 【无懈可击】在这里被有意跳过——它可以被重铸，但不能被【灵感】视为使用。
+			if _is_recordable_definition(recorded_definition_id):
+				host.call("record_card_name", owner_player_id, recorded_definition_id)
+				# 首次记录时在武将牌上声明查看按钮；条目常驻，是否渲染由表现层按“记录是否为空”决定，
+				# 因此清空记录的【看破】不需要知道【解构】的存在，两个技能保持互不引用。
+				_ensure_record_button_entry(get_owner_skill_player().get_state())
+			announce_activation({"card_definition_id":recorded_definition_id, "recorded":_is_recordable_definition(recorded_definition_id)})
+	])
 	return true
 
 

@@ -123,13 +123,15 @@ func _execute_recast_round(recast_count: int) -> bool:
 	if basic_card_uids.is_empty():
 		_begin_damage_target_selection(recast_count)
 		return false
-	# 实际重铸张数；由多张重铸入口回报，实际为0时不累计流程次数，避免空转。
-	var recast_card_count: int = int(host.call("recast_hand_cards", owner_player_id, basic_card_uids))
-	if recast_card_count <= 0:
-		_begin_damage_target_selection(recast_count)
-		return false
-	# 真实重铸完成后取消不再成立；这一点由下一轮窗口的 allow_cancel=false 保证，无需额外的额度标记。
-	_request_recast_choice(recast_count + 1, false)
+	# 本轮费用由独立结果持有；全部材料和补摸完成后才创建下一轮选择。
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_cards(owner_player_id, basic_card_uids),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				_begin_damage_target_selection(recast_count)
+				return
+			_request_recast_choice(recast_count + 1, false),
+	])
 	return true
 
 

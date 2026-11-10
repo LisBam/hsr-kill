@@ -238,11 +238,12 @@ func _apply_clause1_discard(selected_uids: Array[int]) -> void:
 	if selected_uids.is_empty() or host == null:
 		return
 	# 统一弃置端口的实际弃置张数；与提交张数不一致时视为部分失效，仍按「本批次已弃置」累加一次。
-	var discarded_count: int = int(host.call("discard_selected_hand_equipment", owner_player_id, selected_uids))
-	if discarded_count <= 0:
-		return
-	_increment_clause1_count()
-	announce_activation({ACTIVATION_TARGET_KEY:-1, ACTIVATION_GAINED_KEY:discarded_count, ACTIVATION_REPEAT_KEY:_current_repeat_total()})
+	host.call("discard_selected_hand_equipment", owner_player_id, selected_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			return
+		_increment_clause1_count()
+		announce_activation({ACTIVATION_TARGET_KEY:-1, ACTIVATION_GAINED_KEY:discarded_count, ACTIVATION_REPEAT_KEY:_current_repeat_total()})
+	)
 
 
 ## 收集本批次中当前仍在持有者手牌或装备区中的候选；保持批次自身的顺序。
@@ -284,31 +285,56 @@ func _execute_clause2(target_id: int) -> void:
 	# 本次计划重复次数；每次重复前都重新统计目标手牌，牌被取完后提前结束。
 	var repeat_total: int = _current_repeat_total()
 	# 实际获得张数；为0表示等待期间目标已经没有手牌，本次不产生效果也不失去技能。
-	var gained_count: int = 0
+	# 共享单元素数组的第0项保存累计值，便于不同步骤读取同一次内容的结果。
+	var gained_count: Array[int] = [0]
+	# 本次目标代次；重复操作不得跨到替换后的新角色。
+	var target_generation: int = host.state.get_player(target_id).character_generation
+	# 本次内容的停止标志；失败不重试同一张牌，也不重新随机补费用。
+	var stopped: Array[bool] = [false]
+	# 当前一张独立结果；后一条记录步骤读取后，下一次取牌才覆盖。
+	# 有限重复内容；一次取得包含其完整lose/gain/批次After。
+	var steps: Array[Callable] = []
 	# 已完成的重次数；只作为随机历史与循环控制使用，不参与规则判定。
-	var repeat_index: int = 0
-	while repeat_index < repeat_total:
-		# 目标当前手牌候选；他人手牌为不可见候选，但 UID 稳定，因此可以按索引随机取一张。
-		var hand_candidates: Array[Dictionary] = host.call("get_hand_candidates", owner_player_id, target_id) as Array[Dictionary]
-		if hand_candidates.is_empty():
-			break
-		# 随机索引；通过权威随机端口取值，保证本地、AI 与联机两端得到同一张牌。
-		var random_index: int = int(host.call("pick_random_candidate_index", hand_candidates.size(), RANDOM_HISTORY_KIND, {RANDOM_HISTORY_TARGET_KEY:target_id, RANDOM_HISTORY_INDEX_KEY:repeat_index, RANDOM_HISTORY_TURN_KEY:int(host.state.turn_number)}))
-		if random_index < 0 or random_index >= hand_candidates.size():
-			break
-		# 本次要获得的实体牌 UID；获取失败说明等待期间牌已离开目标区域。
-		var card_uid: int = int((hand_candidates[random_index] as Dictionary).get("uid", -1))
-		if card_uid < 0:
-			break
-		if not bool(host.call("take_selected_player_card", owner_player_id, target_id, card_uid)):
-			break
-		gained_count += 1
-		repeat_index += 1
-	if gained_count <= 0:
-		return
-	announce_activation({ACTIVATION_TARGET_KEY:target_id, ACTIVATION_GAINED_KEY:gained_count, ACTIVATION_REPEAT_KEY:repeat_total})
-	observe_identity_behavior([target_id], {"target_result":-1.0})
-	host.call("remove_skill", owner_player_id, get_id(), SKILL_LOST_REASON)
+	for repeat_index: int in range(repeat_total):
+		steps.append(func(_sequence: RuleStepSequence) -> void:
+			_sequence.effect_result = null
+			if stopped[0]:
+				return
+			# 原目标的当前状态；换将或离场后结束本次剩余重复。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if current_target == null or not current_target.alive or current_target.out_of_game or current_target.character_generation != target_generation:
+				stopped[0] = true
+				return
+			# 目标当前手牌候选；他人手牌为不可见候选，但 UID 稳定，因此可以按索引随机取一张。
+			var hand_candidates: Array[Dictionary] = host.get_hand_candidates(owner_player_id, target_id)
+			if hand_candidates.is_empty():
+				stopped[0] = true
+				return
+			# 随机索引；通过权威随机端口取值，保证本地、AI 与联机两端得到同一张牌。
+			var random_index: int = int(host.call("pick_random_candidate_index", hand_candidates.size(), RANDOM_HISTORY_KIND, {RANDOM_HISTORY_TARGET_KEY:target_id, RANDOM_HISTORY_INDEX_KEY:repeat_index, RANDOM_HISTORY_TURN_KEY:int(host.state.turn_number)}))
+			if random_index < 0 or random_index >= hand_candidates.size():
+				stopped[0] = true
+				return
+			# 本次要获得的实体牌 UID；获取失败说明等待期间牌已离开目标区域。
+			var card_uid: int = int((hand_candidates[random_index] as Dictionary).get("uid", -1))
+			_sequence.effect_result = host.take_selected_player_card(owner_player_id, target_id, card_uid)
+		)
+		steps.append(func(_sequence: RuleStepSequence) -> void:
+			if _sequence.effect_result == null:
+				return
+			if not _sequence.effect_result.completed or not bool(_sequence.effect_result.result.get("success", false)):
+				stopped[0] = true
+				return
+			gained_count[0] += 1
+		)
+	steps.append(func(_sequence: RuleStepSequence) -> void:
+		if gained_count[0] <= 0:
+			return
+		announce_activation({ACTIVATION_TARGET_KEY:target_id, ACTIVATION_GAINED_KEY:gained_count[0], ACTIVATION_REPEAT_KEY:repeat_total})
+		observe_identity_behavior([target_id], {"target_result":-1.0})
+		host.call("remove_skill", owner_player_id, get_id(), SKILL_LOST_REASON)
+	)
+	run_steps(steps)
 
 
 ## 读取第一段的发动次数；状态缺失或异常时按0处理。

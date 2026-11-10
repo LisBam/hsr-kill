@@ -94,9 +94,10 @@ func _apply_runtime_choice(match_host: Object, context: Dictionary, selected_uid
 	if equipment_card == null or equipment_card.uid != int(context.get("equipment_uid", -1)):
 		return
 	# 实际弃置数量；候选只允许目标进攻或防御坐骑。
-	var discarded_count: int = match_host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count == 1:
-		match_host.add_log("%s发动【麒麟弓】弃置目标一张坐骑。" % match_host.state.get_player(int(context.get("actor_id", -1))).display_name)
+	match_host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids, func(discarded_count: int) -> void:
+		if discarded_count > 0:
+			match_host.add_log("%s发动【麒麟弓】弃置目标一张坐骑。" % match_host.state.get_player(int(context.get("actor_id", -1))).display_name)
+	)
 
 
 ## 声明麒麟弓使用标准damage时机；共享【杀】流程不再重复调用伤害完成后兼容钩子。
@@ -156,9 +157,10 @@ func _apply_choice(slash_effect: Object, context: Dictionary, selected_uids: Arr
 	if equipment_card == null or equipment_card.uid != int(context.get("equipment_uid", -1)):
 		return
 	# 实际弃置数量；候选只允许目标进攻或防御坐骑。
-	var discarded_count: int = slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count == 1:
-		slash_effect.host.add_log("%s发动【麒麟弓】弃置目标一张坐骑。" % slash_effect.state.get_player(actor_id).display_name)
+	slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids, func(discarded_count: int) -> void:
+		if discarded_count > 0:
+			slash_effect.host.add_log("%s发动【麒麟弓】弃置目标一张坐骑。" % slash_effect.state.get_player(actor_id).display_name)
+	)
 
 
 ## 恢复麒麟弓坐骑选择；伤害已经结算完成，无需再次推进伤害流程。

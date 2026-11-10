@@ -75,8 +75,11 @@ func resolve_delayed_judgment(match_host: Object, player_id: int, card: CardInst
 	# 判定 AI 上下文；递归 not 条件允许通用改判定 AI 直接识别安全结果。
 	var judgment_ai_context: Dictionary = {"favorable_condition":{"not":harmful_condition.duplicate(true)}, "unfavorable_condition":harmful_condition, "favorable_result_player_values":{str(player_id):AI_SAFE_RESULT_VALUE}}
 	# 【闪电】判定牌；判定前存在选择时由 continue_judgment 恢复，不提前传递原延时牌。
-	var judgment_card: CardInstance = match_host.request_judgment(player_id, "【闪电】", continuation, judgment_ai_context)
-	if match_host.has_pending_judgment_request():
+	# 本次判定结果对象；外层判定仍活动时也只查询自己的完成状态。
+	var judgment_resolution: RefCounted = match_host.begin_judgment_resolution(player_id, "【闪电】", continuation, judgment_ai_context)
+	# 保留原判定牌变量；只有本次结果完成后才继续应用。
+	var judgment_card: CardInstance = judgment_resolution.result as CardInstance
+	if not judgment_resolution.completed:
 		return
 	_apply_delayed_result(match_host, player_id, card, judgment_card)
 
@@ -95,8 +98,12 @@ func continue_judgment(match_host: Object, context: Dictionary, judgment_card: C
 ## 应用【闪电】最终判定；黑桃2至9造成3点无来源雷电伤害，其他或空结果均执行传递。
 func _apply_delayed_result(match_host: Object, player_id: int, card: CardInstance, judgment_card: CardInstance) -> void:
 	if judgment_card != null and judgment_card.suit == "spade" and judgment_card.rank >= 2 and judgment_card.rank <= 9:
-		match_host.discard_delayed_card(card)
-		match_host.damage(-1, player_id, 3, "thunder", "shandian")
+		# 闪电回收与伤害严格分步；弃牌After插入的选择必须先完成。
+		var steps: Array[Callable] = [
+			func(_sequence: RuleStepSequence) -> void: match_host.discard_delayed_card(card),
+			func(_sequence: RuleStepSequence) -> void: match_host.damage(-1, player_id, 3, "thunder", "shandian"),
+		]
+		match_host.run_rule_sequence(steps)
 	else:
 		match_host.pass_delayed_card(player_id, card)
 

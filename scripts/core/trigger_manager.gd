@@ -6,6 +6,10 @@ extends RefCounted
 ## 触发派发局部熔断信号；数据只含稳定事件字段与计数，不对外泄漏回调或所有者引用。
 signal dispatch_faulted(fault_data: Dictionary)
 
+## 单个处理器进入/退出的内容边界；宿主据此识别选择恢复后新建子事件的窗口归属。
+signal handler_started(event: RuleEvent)
+signal handler_finished(event: RuleEvent)
+
 ## 高级触发器允许的角色关系；无效字符串会在注册阶段被拒绝，避免静默变成全局触发。
 const VALID_ROLES: Array[String] = ["player", "source", "target", "global"]
 
@@ -14,6 +18,9 @@ var max_handlers_per_slice: int = 64
 
 ## 同一调用栈允许的嵌套规则时机深度；默认32允许正常伤害与响应嵌套，超限时只取消新的内层事件。
 var max_nested_dispatch_depth: int = 32
+
+## 可选内容等待查询，接收原RuleEvent；只查询子内容是否结束，不创建或驱动玩法。
+var content_wait_condition: Callable
 
 ## 触发器注册序号；同优先级、同座次时按注册顺序稳定执行。
 var _next_registration_id: int = 1
@@ -180,6 +187,9 @@ func cancel_matching_dispatches(event_name: String, player_id: int = -1, reason:
 
 ## 从指定索引继续执行一组已排序触发器；某一触发器创建选择请求后保存后续项，避免后续技能被单一选择窗口静默吞掉。
 func _dispatch_arranged(event: RuleEvent, arranged: Array[Dictionary], start_index: int, pause_condition: Callable) -> bool:
+	if content_wait_condition.is_valid() and bool(content_wait_condition.call(event)):
+		_store_deferred_dispatch(event, arranged, start_index, _deferred_dispatches.size(), "content")
+		return true
 	# 本分片已检查处理器数；包含条件失效项，防止大量过期订阅同样长时间占用主线程。
 	var inspected_handler_count: int = 0
 	# 本分片的实际检查上限；外部误设为0或负数时仍至少处理1项以保证可达。
@@ -210,13 +220,17 @@ func _dispatch_arranged(event: RuleEvent, arranged: Array[Dictionary], start_ind
 		# 回调前已有续列数量；若回调内部创建了更深层暂停时机，当前外层续列必须插在这些内层记录下方。
 		var deferred_count_before_callback: int = _deferred_dispatches.size()
 		if callback.is_valid():
+			handler_started.emit(event)
 			callback.call(event)
+			handler_finished.emit(event)
 		# 当前回调是否创建了尚未完成的内层时机；即使它只是分片暂停而没有选择，外层也必须先保存后续。
 		var nested_dispatch_deferred: bool = _deferred_dispatches.size() > deferred_count_before_callback
 		# 当前回调是否创建了新选择；选择与内层续列都必须先完成，再询问外层下一个技能。
 		var choice_deferred: bool = not event.is_terminal() and pause_condition.is_valid() and bool(pause_condition.call())
-		if not event.is_terminal() and (choice_deferred or nested_dispatch_deferred):
-			_store_deferred_dispatch(event, arranged, entry_index + 1, deferred_count_before_callback, "choice" if choice_deferred else "nested")
+		# 原生子牌未结束时也必须保存剩余处理器，即使它还没有创建真人选择。
+		var content_deferred: bool = content_wait_condition.is_valid() and bool(content_wait_condition.call(event))
+		if not event.is_terminal() and (choice_deferred or nested_dispatch_deferred or content_deferred):
+			_store_deferred_dispatch(event, arranged, entry_index + 1, deferred_count_before_callback, "choice" if choice_deferred else ("content" if content_deferred else "nested"))
 			return true
 	return false
 
@@ -257,7 +271,7 @@ func resume_deferred(pause_condition: Callable = Callable()) -> bool:
 		# 下一项索引；已经完成的技能不会在恢复后重复询问。
 		var next_index: int = int(deferred_dispatch.get("next_index", 0))
 		# 已有新的选择等待时保持原续列顺序，不调用任何后续技能。
-		if pause_condition.is_valid() and bool(pause_condition.call()):
+		if (pause_condition.is_valid() and bool(pause_condition.call())) or (content_wait_condition.is_valid() and bool(content_wait_condition.call(event))):
 			_deferred_dispatches.append(deferred_dispatch)
 			return true
 		if _execute_arranged_slice(event, arranged, next_index, pause_condition):
@@ -280,7 +294,7 @@ func resume_next_deferred(pause_condition: Callable = Callable()) -> bool:
 	if event == null or event.is_terminal():
 		return false
 	# 已有新选择时不能执行任何处理器；把原续列放回栈顶等待下一次恢复。
-	if pause_condition.is_valid() and bool(pause_condition.call()):
+	if (pause_condition.is_valid() and bool(pause_condition.call())) or (content_wait_condition.is_valid() and bool(content_wait_condition.call(event))):
 		_deferred_dispatches.append(deferred_dispatch)
 		return true
 	# 初次派发时已经固定的处理器顺序；恢复时不得重新排列或引入新注册项。
@@ -300,6 +314,17 @@ func resume_next_deferred(pause_condition: Callable = Callable()) -> bool:
 ## 返回是否存在尚未完成的有序触发续列；流程诊断只读取布尔值，不取得事件或回调引用。
 func has_deferred_dispatches() -> bool:
 	return not _deferred_dispatches.is_empty()
+
+
+## 当前续列是否仍等待原生子内容；宿主据此把执行权交回原生调度器而不反复重试同一窗口。
+func has_pending_content() -> bool:
+	if not content_wait_condition.is_valid():
+		return false
+	# 当前延后记录；按原窗口的子内容身份查询，不推测全局空闲状态。
+	for entry: Dictionary in _deferred_dispatches:
+		if bool(content_wait_condition.call(entry.event as RuleEvent)):
+			return true
+	return false
 
 
 ## 返回尚未完成的触发续列数量；只读诊断不暴露事件或回调引用。

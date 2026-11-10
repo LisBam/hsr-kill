@@ -50,15 +50,29 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 当前费用UID；等待期间必须仍为普通手牌区中的【闪】。
 	var shan_uid: int = response.card_ids[0]
-	if not _is_hand_shan(shan_uid) or not bool(host.call("discard_card_from_hand", owner_player_id, shan_uid)):
+	if not _is_hand_shan(shan_uid):
 		return true
-	# 横置状态切换；竖置目标变为横置，已经横置的目标再次横置则恢复竖直。
-	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
+	# 原目标代次；费用中断后不向新武将授予原技能。
+	var target_generation: int = host.state.get_player(target_id).character_generation
 	# 到期轮数；下一次新轮roundStart触发前移除，完整覆盖当前轮剩余时间。
 	var expires_at_round: int = host.state.round_number + 1
-	if bool(host.call("grant_temporary_skill", target_id, GRANTED_SKILL_ID, expires_at_round)):
-		announce_activation({"card_uid":shan_uid, "target_id":target_id, "granted_skill_id":GRANTED_SKILL_ID, "expires_at_round":expires_at_round})
-		observe_identity_behavior([target_id], {"target_result":1.0})
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.discard_card_from_hand(owner_player_id, shan_uid),
+		func(sequence: RuleStepSequence) -> void:
+			# 原目标的当前角色；失效费用不执行横置。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if sequence.effect_result == null or sequence.effect_result.count <= 0 or current_target == null or not current_target.alive or current_target.out_of_game or current_target.character_generation != target_generation:
+				sequence.finish()
+				return
+			# 横置状态切换；竖置目标变为横置，已经横置的目标再次横置则恢复竖直。
+			host.toggle_player_linked(target_id, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			if host.state.round_number >= expires_at_round:
+				return
+			if bool(host.grant_temporary_skill(target_id, GRANTED_SKILL_ID, expires_at_round)):
+				announce_activation({"card_uid":shan_uid, "target_id":target_id, "granted_skill_id":GRANTED_SKILL_ID, "expires_at_round":expires_at_round})
+				observe_identity_behavior([target_id], {"target_result":1.0}),
+	])
 	return true
 
 

@@ -71,12 +71,20 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if target == null or not target.alive or target.out_of_game:
 			return true
 		announce_activation({"target_id":target_id})
-		host.call("gain_top_named_card_from_draw_or_discard", target_id, DRAW_TRICK_DEFINITION_ID, get_id())
-		if target_id != owner_player_id:
-			# 临时失效必须在伤害前写入，防止该属性伤害的嵌套失牌时机重新创建同回合冥谶选择。
-			_invalid_until_turn_end = true
-			get_skill_player(target_id).damage(SELF_THUNDER_DAMAGE_AMOUNT, get_skill_player(target_id), "thunder")
-			observe_identity_behavior([target_id], {"target_result":-0.5, "damage":true, "thunder_damage":true, "nature_damage":true})
+		# 原目标代次；获牌After中换将不能让后续自伤落在新武将上。
+		var target_generation: int = target.character_generation
+		run_steps([
+			func(_sequence: RuleStepSequence) -> void: host.gain_top_named_card_from_draw_or_discard(target_id, DRAW_TRICK_DEFINITION_ID, get_id()),
+			func(_sequence: RuleStepSequence) -> void:
+				# 获牌结束后的原目标；失去资格时不对替换角色补做后续伤害。
+				var current_target: PlayerState = host.state.get_player(target_id)
+				if target_id == owner_player_id or current_target == null or not current_target.alive or current_target.out_of_game or current_target.character_generation != target_generation:
+					return
+				# 临时失效必须在伤害前写入，防止该属性伤害的嵌套失牌时机重新创建同回合冥谶选择。
+				_invalid_until_turn_end = true
+				get_skill_player(target_id).damage(SELF_THUNDER_DAMAGE_AMOUNT, get_skill_player(target_id), "thunder")
+				observe_identity_behavior([target_id], {"target_result":-0.5, "damage":true, "thunder_damage":true, "nature_damage":true}),
+		])
 	return true
 
 

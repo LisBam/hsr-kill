@@ -34,11 +34,6 @@ func _init() -> void:
 	})
 
 
-## 安装连续虚拟牌结束监听；天裁没有额外被动时机。
-func install() -> void:
-	install_virtual_card_sequence_listener()
-
-
 ## 按当前轮回节检查阶段、通用轮回额度及火攻合法目标。
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场或非自身出牌阶段不能发动。
@@ -95,11 +90,6 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response.confirmed:
 		_execute_fire_attack_section(int(context.get("section_index", -1)), int(context.get("round_count", 1)), response.target_ids)
 	return true
-
-
-## 优先处理连续虚拟牌恢复；其他上下文不是天裁结算。
-func continue_settlement(context: Dictionary) -> bool:
-	return continue_virtual_card_sequence_settlement(context)
 
 
 ## ①受到X点无来源火焰伤害；source_id=-1确保不会触发“造成伤害”的来源技能。

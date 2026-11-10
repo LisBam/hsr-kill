@@ -72,16 +72,18 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if response.confirmed and response.target_ids.size() == 1:
 			var selected_uid: int = int(context.get("selected_card_uid", -1))
 			var recipient_id: int = response.target_ids[0]
-			var gained_card: CardInstance = host.call("gain_draw_pile_card_by_uid", recipient_id, selected_uid, get_id()) as CardInstance
-			if gained_card != null:
-				announce_activation({"target_id":recipient_id, "card_uid":selected_uid})
-				observe_identity_behavior([recipient_id], {"target_result":1.0, "gain":true})
-			var remaining_uids: Array[int] = _int_values(context.get("viewed_card_uids", []) as Array)
-			remaining_uids.erase(selected_uid)
-			if host.has_pending_card_choice():
-				defer_settlement({"kind":"xingqi_begin_arrangement", "remaining_card_uids":remaining_uids})
-			else:
-				_begin_arrangement(remaining_uids)
+			# 完成结果槽；取消获得时所选牌仍可参与剩余牌堆排列。
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: _sequence.effect_result = host.gain_draw_pile_card_by_uid(recipient_id, selected_uid, get_id()),
+				func(_sequence: RuleStepSequence) -> void:
+					# 原观看范围；实际获得成功才移除所选UID。
+					var remaining_uids: Array[int] = _int_values(context.get("viewed_card_uids", []) as Array)
+					if _sequence.effect_result != null and _sequence.effect_result.completed and bool(_sequence.effect_result.result.get("success", false)):
+						announce_activation({"target_id":recipient_id, "card_uid":selected_uid})
+						observe_identity_behavior([recipient_id], {"target_result":1.0, "gain":true})
+						remaining_uids.erase(selected_uid)
+					_begin_arrangement(remaining_uids),
+			])
 		return true
 	if choice_kind == "xingqi_arrangement":
 		var ordered_uids: Array[int] = response.card_ids.duplicate()
@@ -89,14 +91,6 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		host.call("arrange_draw_pile_cards", ordered_uids, top_count, get_id())
 		return true
 	return false
-
-
-## 恢复获得牌移动触发后的牌堆排序步骤。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "xingqi_begin_arrangement":
-		return false
-	_begin_arrangement(_int_values(context.get("remaining_card_uids", []) as Array))
-	return true
 
 
 ## 为仍位于牌堆中的剩余实体创建双行排序请求，并写入基础AI的判定与摸牌建议。

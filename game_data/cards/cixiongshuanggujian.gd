@@ -89,17 +89,22 @@ func _apply_trigger(slash_effect: Object, context: Dictionary, resume_after: boo
 	if slash_effect.host.has_pending_card_choice():
 		return true
 	_apply_discard(slash_effect, discard_context, selected_uids)
-	if resume_after:
-		slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", discard_context)
-	return false
+	return true
 
 
 ## 应用目标弃牌结果；弃置失败、取消或牌已移动时攻击者摸1张。
 func _apply_discard(slash_effect: Object, context: Dictionary, selected_uids: Array[int]) -> void:
 	# 实际弃置数量；只有成功弃置1张才算支付。
-	var discarded_count: int = slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count != 1:
-		slash_effect.host.draw(int(context.get("actor_id", -1)), 1)
+	slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids, func(discarded_count: int) -> void:
+		# 后续防具和响应属于独立下一步，摸牌窗口也必须完整结束。
+		var steps: Array[Callable] = [
+			func(_sequence: RuleStepSequence) -> void:
+				if discarded_count <= 0:
+					slash_effect.host.draw(int(context.get("actor_id", -1)), 1),
+			func(_sequence: RuleStepSequence) -> void: slash_effect.continue_after_weapon_targeted(context),
+		]
+		slash_effect.host.run_rule_sequence(steps)
+	)
 
 
 ## 恢复雌雄双股剑发动或目标弃牌选择，并回到通用【杀】流程。
@@ -114,7 +119,6 @@ func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_u
 		return true
 	if choice_kind == "cixiong_discard":
 		_apply_discard(slash_effect, context, selected_uids)
-		# 目标弃置最后手牌时先恢复其嵌套技能，再进入防具与【闪】步骤。
-		slash_effect.continue_or_defer_after_weapon("after_weapon_targeted", context)
+
 		return true
 	return false

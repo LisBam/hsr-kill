@@ -63,6 +63,7 @@ const CARD_MOVE_TIMINGS: Array[String] = [
 	# 与 cardsDiscardedBatchAfter 对称：单张获得同样派发一次（batch_size 为1），批次边界由核心层给出而不由内容层猜测。
 	"cardsGainedBatchAfter",
 	"drawBefore", "drawBegin", "drawEnd", "drawAfter", "drawCancelled",
+	"recastingLose", "recastingLost", "recast", "recastingGain", "recastingGained",
 	"equipBefore", "equipEnd", "equipAfter", "disableEquipBefore", "disableEquipAfter", "enableEquipAfter",
 	"addJudgeBefore", "addJudgeEnd", "addJudgeAfter", "disableJudgeBefore", "disableJudgeAfter", "enableJudgeAfter", "addToExpansionEnd", "addToExpansionAfter",
 ]

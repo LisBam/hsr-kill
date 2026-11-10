@@ -190,18 +190,23 @@ func _continue_placement(context: Dictionary, response: ChoiceResponse) -> bool:
 	if not (host.call("get_player_zone_candidates", owner_player_id, owner_player_id) as Array).any(func(candidate: Dictionary) -> bool: return int(candidate.get("uid", -1)) == card_uid):
 		return true
 	# 秘密置牌；走专用端口而不是通用移牌，因此不会触发揭示、公开记录与表现事件。
-	if not bool(host.call("place_player_zone_card_on_draw_pile_top", owner_player_id, card_uid, position)):
-		return true
-	# 私有事实；回合角色与回合号同时记录，使第二段能精确匹配“这一次放置所服务的那个回合”。
-	var turn_player_id: int = int(context.get("turn_player_id", -1))
-	var turn_number: int = int(context.get("turn_number", NO_TURN))
-	host.call("set_private_pile_placement", owner_player_id, card_uid, position, turn_player_id, turn_number)
-	# AI 出牌倾向效果；只挂在“本回合角色”身上，并在该回合结束时自行到期。
-	# 是否真正生效由 AI 层按“主演是不是本方队友”再判定一次，因此这里无条件安装不会造成无谓打空手牌。
-	if turn_player_id >= 0 and host.has_method("install_player_effect"):
-		host.call("install_player_effect", turn_player_id, PRESSURE_EFFECT_ID)
-	# 发动播报；不携带牌名与位次，公开记录里不会出现“放了哪张牌、放在第几张”。
-	announce_activation({})
+	run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			sequence.effect_result = host.call("place_player_zone_card_on_draw_pile_top", owner_player_id, card_uid, position),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or not bool(sequence.effect_result.result.get("success", false)):
+				return
+			# 私有事实；回合角色与回合号同时记录，使第二段能精确匹配“这一次放置所服务的那个回合”。
+			var turn_player_id: int = int(context.get("turn_player_id", -1))
+			var turn_number: int = int(context.get("turn_number", NO_TURN))
+			host.call("set_private_pile_placement", owner_player_id, card_uid, position, turn_player_id, turn_number)
+			# AI 出牌倾向效果；只挂在“本回合角色”身上，并在该回合结束时自行到期。
+			# 是否真正生效由 AI 层按“主演是不是本方队友”再判定一次，因此这里无条件安装不会造成无谓打空手牌。
+			if turn_player_id >= 0 and host.has_method("install_player_effect"):
+				host.call("install_player_effect", turn_player_id, PRESSURE_EFFECT_ID)
+			# 发动播报；不携带牌名与位次，公开记录里不会出现“放了哪张牌、放在第几张”。
+			announce_activation({})
+	])
 	return true
 
 

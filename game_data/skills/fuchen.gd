@@ -60,4 +60,5 @@ func _on_other_player_played_sha(event: RuleEvent) -> void:
 	# 获得该实体牌；核心已在派发 respond 之前把响应牌经处理区置入弃牌堆，
 	# 因此回调执行时该实体已在弃牌堆，权威获得端口可以按弃牌堆来源取回。
 	# 牌在等待期间被其它效果移走时端口返回 false，本技能静默跳过：不写日志、不创建任何选择。
+	# 返回值为独立完成句柄；移动失败记录在result.success，原respond窗口自动等待子移牌内容。
 	host.call("gain_card_to_hand_by_uid", owner_player_id, played_card_uid, get_id())

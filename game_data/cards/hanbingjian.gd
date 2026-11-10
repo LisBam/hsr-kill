@@ -76,7 +76,8 @@ func on_slash_before_damage(slash_effect: Object, context: Dictionary) -> bool:
 	var selected_uids: Array[int] = slash_effect.host.request_card_choice(actor_id, "寒冰剑", "是否发动【寒冰剑】并弃置目标至多两张牌？", candidates, 0, mini(2, candidates.size()), true, choice_context)
 	if slash_effect.host.has_pending_card_choice():
 		return true
-	return _apply_choice(slash_effect, choice_context, selected_uids)
+	_apply_choice(slash_effect, choice_context, selected_uids)
+	return true
 
 
 ## 应用寒冰剑选择；成功弃置至少1张时返回 true 表示伤害已被防止。
@@ -86,12 +87,15 @@ func _apply_choice(slash_effect: Object, context: Dictionary, selected_uids: Arr
 	# 当前武器实体；换装后旧选择自动失效并正常造成伤害。
 	var equipment_card: CardInstance = slash_effect.host.get_equipment_card(actor_id, "weapon")
 	if equipment_card == null or equipment_card.uid != int(context.get("equipment_uid", -1)):
+		slash_effect.continue_slash_damage(context)
 		return false
 	# 实际弃置数量；至少成功弃置1张才防止伤害。
-	var discarded_count: int = slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids)
-	if discarded_count <= 0:
-		return false
-	slash_effect.host.add_log("%s发动【寒冰剑】防止伤害并弃置目标至多两张牌。" % slash_effect.state.get_player(actor_id).display_name)
+	slash_effect.host.discard_selected_hand_equipment(int(context.get("target_id", -1)), selected_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			slash_effect.continue_slash_damage(context)
+			return
+		slash_effect.host.add_log("%s发动【寒冰剑】防止伤害并弃置目标至多两张牌。" % slash_effect.state.get_player(actor_id).display_name)
+	)
 	return true
 
 
@@ -99,8 +103,7 @@ func _apply_choice(slash_effect: Object, context: Dictionary, selected_uids: Arr
 func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
 	if str(context.get("kind", "")) != CHOICE_KIND:
 		return false
-	if not _apply_choice(slash_effect, context, selected_uids):
-		slash_effect.continue_slash_damage(context)
+	_apply_choice(slash_effect, context, selected_uids)
 	return true
 
 

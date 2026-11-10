@@ -15,6 +15,7 @@ func create_use_event(scheduler: EventScheduler, parent_id: int, event_context: 
 	if scheduler == null:
 		return null
 	# 使用牌父事件；父 ID 小于0时作为独立测试根事件创建，正式对局始终挂在长期 RootGameEvent 下。
+	# 内容内创建牌时parent_id为当前原生事件，长期根只作为无活动内容时的默认归属。
 	var use_event: GameEvent = scheduler.create_event("CardUseEvent", "card_use", content_steps, event_context, parent_id)
 	use_event.player_id = int(event_context.get("actor_id", -1))
 	use_event.source_id = use_event.player_id

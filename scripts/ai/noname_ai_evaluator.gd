@@ -256,6 +256,13 @@ func score_baiyin_equipment_loss_recovery(authoritative_snapshot: Dictionary, ob
 
 ## 计算获得一张【白银狮子】后替换自身同名防具的额外回复价值；只用于实际取得该牌的候选选择。
 func get_baiyin_acquisition_recovery_value(authoritative_snapshot: Dictionary, recipient_id: int, card_data: Dictionary) -> float:
+	if not (card_data.get("persistent_view_as", {}) as Dictionary).is_empty():
+		# 取得持久牌得到原材料；逻辑白银狮子本身并不一定成为接收者可再次装备的防具。
+		var material_recovery: float = 0.0
+		# 真正会进入接收者手牌的原实体；逻辑防具名不提供可再次装备的牌。
+		for material: Dictionary in CardInstance.get_physical_card_data(card_data):
+			material_recovery += get_baiyin_acquisition_recovery_value(authoritative_snapshot, recipient_id, material)
+		return material_recovery
 	# 当前取得的实体定义；不是白银狮子时不需要处理换装离区回复。
 	if str(card_data.get("definition_id", "")) != BAIYIN_LION_CARD_ID:
 		return 0.0
@@ -609,7 +616,7 @@ func score_choice_action(authoritative_snapshot: Dictionary, choice_request: Dic
 	# 选择语义上下文；所有专属恢复字段均由权威请求写入。
 	var context: Dictionary = choice_request.get("context", {}) as Dictionary
 	# 当前选择种类；弃牌阶段、响应、展示和普通选牌使用同一协议。
-	var choice_kind: String = str(context.get("kind", ""))
+	var choice_kind: String = str(context.get("ai_choice_card_semantics", context.get("kind", "")))
 	if not confirmed:
 		return 0.0
 	# 技能全权评分标志；由创建请求的技能在上下文中显式写入 true。
@@ -1114,14 +1121,34 @@ func get_choice_card_value(authoritative_snapshot: Dictionary, choice_request: D
 		var candidate_zone: String = str(candidate.get("zone", ""))
 		# 候选实际持有者；过河拆桥/顺手牵羊的区域归属与动作发起者 owner_id 不同。
 		var candidate_owner_id: int = int(candidate.get("owner_id", -1))
+		# 可见逻辑牌面与选择语义；获得持久牌按恢复后的原材料估值，拆除仍计算场面效果。
+		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
+		# 请求显式语义优先；自定义技能与普通顺手/过河共享同一估值入口。
+		var context: Dictionary = choice_request.get("context", {}) as Dictionary
+		# 是否真的取得原材料；展示、弃置和支付费用都不产生取得收益。
+		var acquiring: bool = str(context.get("ai_choice_card_semantics", context.get("kind", ""))) in ["steal_target", "harvest"]
+		# 持久区域逻辑牌；普通实体完全沿用原估值。
+		var persistent: bool = not (card_data.get("persistent_view_as", {}) as Dictionary).is_empty()
 		if candidate_zone == "judgment":
-			return _get_judgment_choice_card_value(authoritative_snapshot, owner_id, candidate_owner_id, candidate)
+			return _get_judgment_choice_card_value(authoritative_snapshot, owner_id, candidate_owner_id, candidate) + (get_acquired_card_value(authoritative_snapshot, owner_id, card_data) if acquiring and persistent else 0.0)
 		if not bool(candidate.get("visible", false)):
 			return 2.0
 		# 可见牌面；定义 ID 用于读取对应卡牌文件的 AI 价值。
-		var card_data: Dictionary = candidate.get("card_data", {}) as Dictionary
-		return get_card_value_by_id(str(card_data.get("definition_id", "")), authoritative_snapshot, owner_id)
+		var logical_value: float = get_card_value_by_id(str(card_data.get("definition_id", "")), authoritative_snapshot, owner_id)
+		if persistent:
+			return get_acquired_card_value(authoritative_snapshot, owner_id, card_data) if acquiring else maxf(logical_value, get_acquired_card_value(authoritative_snapshot, owner_id, card_data))
+		return logical_value
 	return 2.0
+
+
+## 实际取得区域牌的总牌质；无材料逻辑效果为0，多材料视为按恢复的每份原实体累加，不改资源换算常量。
+func get_acquired_card_value(authoritative_snapshot: Dictionary, recipient_id: int, card_data: Dictionary) -> float:
+	# 所有原实体的牌质总和；仅用于牌质比较，不和牌数资源尺度重复叠加。
+	var result: float = 0.0
+	# 每份实际原材料；单材料和普通实体都只累计一次。
+	for material: Dictionary in CardInstance.get_physical_card_data(card_data):
+		result += get_card_value_by_id(str(material.get("definition_id", "")), authoritative_snapshot, recipient_id)
+	return result
 
 
 ## 返回判定区候选对动作发起者的选择价值；敌方延时锦囊取负值，友方取正值，未知阵营按轻微负值保守处理。
@@ -1178,11 +1205,15 @@ func get_owned_card_value_by_uid(authoritative_snapshot: Dictionary, owner_id: i
 		var equipment_ai_profile: Dictionary = get_card_ai_profile(equipment_definition)
 		# 当前装备保留价值；数组 value 仅作异常回退，标准装备应填写单值 equip_value。
 		var configured_equipment_value: Variant = equipment_ai_profile.get("equip_value", equipment_ai_profile.get("value", 2.0))
+		# 场面装备价值；不将实体牌质与装备效果重复相加，材料机会成本仅取两者较大值。
+		var resolved_equipment_value: float = 2.0
 		if configured_equipment_value is Array:
 			# 装备异常数组价值；读取首项保持确定性，空数组回退未知牌2分。
 			var equipment_values: Array = configured_equipment_value as Array
-			return float(equipment_values[0]) if not equipment_values.is_empty() else 2.0
-		return float(configured_equipment_value)
+			resolved_equipment_value = float(equipment_values[0]) if not equipment_values.is_empty() else 2.0
+		else:
+			resolved_equipment_value = float(configured_equipment_value)
+		return maxf(resolved_equipment_value, get_acquired_card_value(authoritative_snapshot, owner_id, equipment_card)) if not (equipment_card.get("persistent_view_as", {}) as Dictionary).is_empty() else resolved_equipment_value
 	return 2.0
 
 

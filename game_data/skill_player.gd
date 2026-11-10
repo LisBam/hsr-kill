@@ -28,31 +28,31 @@ func get_state() -> PlayerState:
 
 
 ## 使当前角色获得指定点数护盾；source 表示护盾来源角色，成功时返回实际增加的非负护盾值。
-func shield(count: int, source: SkillPlayer) -> int:
+func shield(count: int, source: SkillPlayer) -> RefCounted:
 	if _host == null or not _host.has_method("shield"):
-		return 0
+		return preload("res://scripts/core/player_state_change_resolution_service.gd").new(_host)
 	# 护盾来源玩家 ID；没有有效来源对象时按无来源效果记录为-1。
 	var source_id: int = source.player_id if source != null else -1
-	return int(_host.call("shield", player_id, count, source_id, _reason))
+	return _host.call("shield", player_id, count, source_id, _reason) as RefCounted
 
 
 ## 使当前角色失去指定点数护盾；该操作只改变护盾，不触发失去体力、受到伤害或体力减少事件。
-func loseShield(count: int, source: SkillPlayer) -> int:
+func loseShield(count: int, source: SkillPlayer) -> RefCounted:
 	if _host == null or not _host.has_method("change_hujia") or count <= 0:
-		return 0
+		return preload("res://scripts/core/player_state_change_resolution_service.gd").new(_host)
 	# 护盾变化来源玩家 ID；没有有效来源对象时按无来源效果记录为-1。
 	var source_id: int = source.player_id if source != null else -1
 	# 控制器返回带符号变化量；技能语法对外返回实际失去的非负护盾点数。
-	return -int(_host.call("change_hujia", player_id, -count, source_id, _reason))
+	return _host.call("change_hujia", player_id, -count, source_id, _reason) as RefCounted
 
 
 ## 使当前角色失去指定点数体力；该操作绕过护盾且不触发造成伤害或受到伤害事件，离场技可显式允许离场持有者结算。
-func loseHp(count: int, source: SkillPlayer, allow_out_of_game: bool = false) -> int:
+func loseHp(count: int, source: SkillPlayer, allow_out_of_game: bool = false) -> RefCounted:
 	if _host == null or not _host.has_method("lose_hp"):
-		return 0
+		return preload("res://scripts/core/player_state_change_resolution_service.gd").new(_host)
 	# 失去体力来源玩家 ID；只用于独立事件、日志和回放，不作为伤害来源或死亡击杀者。
 	var source_id: int = source.player_id if source != null else -1
-	return int(_host.call("lose_hp", source_id, player_id, count, _reason, allow_out_of_game))
+	return _host.call("lose_hp", source_id, player_id, count, _reason, allow_out_of_game) as RefCounted
 
 
 ## 由当前角色对目标造成指定点数伤害；默认造成普通伤害，护盾、装备、连环与濒死均由权威控制器处理。

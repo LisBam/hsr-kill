@@ -109,15 +109,18 @@ func _execute_mingding(target_id: int) -> bool:
 	var target_ids: Array[int] = [target_id]
 	if str(host.card_rules.validate_virtual_use(owner_player_id, SLASH_DEFINITION_ID, target_ids, VIRTUAL_RULE_OVERRIDES)) != "":
 		return false
-	if not bool(host.call("turn_over_player", owner_player_id, owner_player_id, get_id())):
-		return false
-	_used = true
-	_apply_mark(target_id)
-	announce_activation({"target_id":target_id, "face_down":true, "virtual_card_id":SLASH_DEFINITION_ID})
-	observe_identity_behavior(target_ids, {"target_result":AI_SLASH_TARGET_RESULT, "damage":true, "respond_shan":true})
-	# 标记必须早于虚拟【杀】建立，使本次【杀】造成的每点伤害也能令来源回复。
-	host.call("execute_cardless_virtual_card_use", owner_player_id, SLASH_DEFINITION_ID, target_ids, "", VIRTUAL_RULE_OVERRIDES)
-	return true
+	return run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.call("turn_over_player", owner_player_id, owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or not sequence.effect_result.success:
+				return
+			_used = true
+			_apply_mark(target_id)
+			announce_activation({"target_id":target_id, "face_down":true, "virtual_card_id":SLASH_DEFINITION_ID})
+			observe_identity_behavior(target_ids, {"target_result":AI_SLASH_TARGET_RESULT, "damage":true, "respond_shan":true})
+			# 标记必须早于虚拟【杀】建立，使本次【杀】造成的每点伤害也能令来源回复。
+			host.call("execute_cardless_virtual_card_use", owner_player_id, SLASH_DEFINITION_ID, target_ids, "", VIRTUAL_RULE_OVERRIDES)
+	]) >= 0
 
 
 ## 目标每受到1点正数伤害后，令仍存活在场的伤害来源回复1点体力。

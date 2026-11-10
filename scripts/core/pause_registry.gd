@@ -11,7 +11,8 @@ var _tokens: Dictionary = {}
 
 
 ## 创建一个新的暂停 token 并返回稳定 ID；owner_event_id 为 -1 时表示阻塞整个事件栈。
-func acquire(channel: String, owner_event_id: int, reason: String) -> int:
+## blocks_descendants默认true，选择和网络等待阻塞整棵子树；仅内部内容等待可传false，让其已声明子事件继续。
+func acquire(channel: String, owner_event_id: int, reason: String, blocks_descendants: bool = true) -> int:
 	# 当前新 token 的稳定 ID；先保存后递增，确保第一条记录为 1。
 	var token_id: int = _next_token_id
 	_next_token_id += 1
@@ -20,6 +21,7 @@ func acquire(channel: String, owner_event_id: int, reason: String) -> int:
 		"channel": channel,
 		"owner_event_id": owner_event_id,
 		"reason": reason,
+		"blocks_descendants": blocks_descendants,
 		"resolved": false,
 		"resolution": "",
 	}
@@ -40,6 +42,7 @@ func resolve(token_id: int, resolution: String = "completed") -> bool:
 
 
 ## 返回指定事件栈是否受到未解决 token 阻塞；全局 token 或栈中任一事件拥有的 token 都会阻塞。
+## 内容级令牌只阻塞所有者栈顶；全局令牌和默认子树令牌仍阻塞整个当前调用链。
 func has_active_for_stack(event_stack: Array[int]) -> bool:
 	# 当前令牌记录；仅匹配指定事件所有者，其他通道保持原状态。
 	for token_variant: Variant in _tokens.values():
@@ -49,6 +52,8 @@ func has_active_for_stack(event_stack: Array[int]) -> bool:
 			continue
 		# token 所属事件；-1 表示全局，其他值只阻塞包含该事件的当前调用链。
 		var owner_event_id: int = int(token.get("owner_event_id", -1))
+		if owner_event_id >= 0 and not bool(token.get("blocks_descendants", true)) and not event_stack.is_empty() and event_stack.back() != owner_event_id:
+			continue
 		if owner_event_id < 0 or event_stack.has(owner_event_id):
 			return true
 	return false

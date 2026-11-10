@@ -1,6 +1,12 @@
 class_name RuleEvent
 extends RefCounted
 
+## 本窗口创建的原生子内容；运行期所有权，不进入data、快照或回放。
+var pending_native_event_ids: Array[int] = []
+
+## 本窗口创建的规则子序列；低预算让帧时也要等待，不进入data、快照或回放。
+var pending_rule_sequence_ids: Array[int] = []
+
 ## 可拦截的规则事件。技能、装备与模式规则通过事件订阅扩展结算，而无需反向依赖对局控制器。
 
 ## 同步规则事件的三态终止语义；与 GameEvent 保持一致，供现有总线和新调度器共享回放文本。

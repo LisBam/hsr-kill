@@ -169,13 +169,7 @@ func _request_option_target(option_id: String) -> bool:
 func _execute_option(option_id: String, target_id: int) -> bool:
 	if not can_activate() or not _get_remaining_options().has(option_id) or not _get_target_ids_for_option(option_id).has(target_id):
 		return false
-	# 效果执行结果；三种状态变更端口都以返回值表示是否受理。
-	var applied: bool = false
-	if option_id == OPTION_LINK_TARGET:
-		applied = bool(host.call("set_player_linked", target_id, true, owner_player_id, get_id()))
-	elif option_id == OPTION_UNLINK_TARGET:
-		applied = bool(host.call("set_player_linked", target_id, false, owner_player_id, get_id()))
-	else:
+	if option_id not in [OPTION_LINK_TARGET, OPTION_UNLINK_TARGET]:
 		# 翻面没有绝对设置端口，只有切换；因此必须在此复核目标当前朝向，避免等待期间状态被改动。
 		var target: PlayerState = get_skill_player(target_id).get_state()
 		if target == null:
@@ -184,14 +178,25 @@ func _execute_option(option_id: String, target_id: int) -> bool:
 		var expected_face_down: bool = option_id == OPTION_TURN_FACE_UP
 		if target.face_down != expected_face_down:
 			return false
-		applied = bool(host.call("turn_over_player", target_id, owner_player_id, get_id()))
-	if not applied:
-		return false
-	# 效果成立后才消耗额度并删除列表最后一项；第四项因此只在第一次发动时可用。
-	_used_current_play_phase = true
-	_delete_last_option()
-	announce_activation({"target_id":target_id, "target_ids":[target_id], "option_id":option_id})
-	return true
+	# 效果执行结果；三种状态变更端口都以返回值表示是否受理。
+	return run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			if option_id == OPTION_LINK_TARGET:
+				sequence.effect_result = host.call("set_player_linked", target_id, true, owner_player_id, get_id())
+			elif option_id == OPTION_UNLINK_TARGET:
+				sequence.effect_result = host.call("set_player_linked", target_id, false, owner_player_id, get_id())
+			else:
+				sequence.effect_result = host.call("turn_over_player", target_id, owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			# 效果执行结果；只读取已完成的真实变更。
+			var applied: bool = sequence.effect_result != null and sequence.effect_result.success
+			if not applied:
+				return
+			# 效果成立后才消耗额度并删除列表最后一项；第四项因此只在第一次发动时可用。
+			_used_current_play_phase = true
+			_delete_last_option()
+			announce_activation({"target_id":target_id, "target_ids":[target_id], "option_id":option_id})
+	]) >= 0
 
 
 ## 返回剩余的选项列表；键缺失即代表尚未删除过任何选项，此时返回完整初始列表。

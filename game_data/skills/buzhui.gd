@@ -109,24 +109,39 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 ## 结算补缀：向全部有效目标各发放1点护盾，并登记一条到期扣盾记录，最后回报演出结束。
 func _execute_buzhui(selected_target_ids: Array[int]) -> void:
 	# 本次演出实际获得护盾的角色；等待期间死亡、离场的目标由护盾端口拒绝，不写入到期记录。
-	var granted_target_ids: Array[int] = []
 	# 本次演出的去重结果；同一次演出内重复点名同一角色只应发放并登记一次。
 	_recorded_target_ids.clear()
+	# 逐目标规则步骤；不能在前一份护盾窗口未结束时支付下一份。
+	var steps: Array[Callable] = []
 	for target_id: int in selected_target_ids:
-		if _recorded_target_ids.has(target_id) or granted_target_ids.size() >= MAX_TARGET_COUNT:
+		if _recorded_target_ids.has(target_id):
 			continue
 		_recorded_target_ids.append(target_id)
-		# 实际增加护盾数；权威端口在目标无效时返回0，技能层不需要重复判断存活与离场。
-		if get_skill_player(target_id).shield(SHIELD_GRANT_AMOUNT, get_owner_skill_player()) > 0:
-			granted_target_ids.append(target_id)
-	if not granted_target_ids.is_empty():
-		_register_shield_expiry_record(granted_target_ids)
-	announce_activation({
-		"target_ids":selected_target_ids.duplicate(),
-		"shielded_target_ids":granted_target_ids.duplicate(),
-		"shield_amount":SHIELD_GRANT_AMOUNT,
-	})
-	finish_joy_skill_performance()
+		steps.append(_grant_target_shield.bind(target_id))
+		steps.append(_record_target_shield.bind(target_id))
+	steps.append(func(sequence: RuleStepSequence) -> void:
+		# 本次演出实际获得护盾的角色；只累计已完整完成的成功变化。
+		var granted_target_ids: Array[int] = []
+		granted_target_ids.assign(sequence.context.get("granted_target_ids", []) as Array)
+		if not granted_target_ids.is_empty():
+			_register_shield_expiry_record(granted_target_ids)
+		announce_activation({"target_ids":selected_target_ids.duplicate(), "shielded_target_ids":granted_target_ids.duplicate(), "shield_amount":SHIELD_GRANT_AMOUNT})
+		finish_joy_skill_performance()
+	)
+	run_steps(steps, {"granted_target_ids":[]})
+
+
+## 一次只发放一名目标，完整子时机后再记录，达到人数上限时跳过其余候选。
+func _grant_target_shield(sequence: RuleStepSequence, target_id: int) -> void:
+	sequence.effect_result = null
+	if (sequence.context.granted_target_ids as Array).size() < MAX_TARGET_COUNT:
+		sequence.effect_result = get_skill_player(target_id).shield(SHIELD_GRANT_AMOUNT, get_owner_skill_player())
+
+
+## 实际增加护盾数；权威端口在目标无效时返回0，技能层不需要重复判断存活与离场。
+func _record_target_shield(sequence: RuleStepSequence, target_id: int) -> void:
+	if sequence.effect_result != null and sequence.effect_result.count > 0:
+		(sequence.context.granted_target_ids as Array).append(target_id)
 
 
 ## 登记一条到期扣盾记录；回合序号取当前权威回合序号，代表本记录发生在该回合的结束阶段之前。
@@ -149,6 +164,8 @@ func _on_owner_end_phase(event: RuleEvent) -> void:
 		return
 	# 当前回合序号；事件数据优先，异常缺失时回退当前权威回合序号，保证清理不会因为载荷缺失而整条丢失。
 	var current_turn_number: int = int(event.data.get("turn_number", host.state.turn_number))
+	# 逐条到期效果；先移除到期记录防重放，再按原记录顺序完整等待每名目标。
+	var steps: Array[Callable] = []
 	# 尚未到期的记录；登记序号不小于当前回合序号的记录属于持有者尚未走完的回合，必须保留到那时再结算。
 	var remaining_records: Array = []
 	for record_variant: Variant in _shield_expiry_records:
@@ -159,8 +176,15 @@ func _on_owner_end_phase(event: RuleEvent) -> void:
 			continue
 		for target_variant: Variant in record.get("target_ids", []) as Array:
 			# 目标稳定玩家ID；护盾扣减端口负责拒绝已死亡、已离场或没有护盾的角色。
-			get_skill_player(int(target_variant)).loseShield(SHIELD_LOSS_AMOUNT, get_owner_skill_player())
+			steps.append(_lose_expired_shield.bind(int(target_variant)))
 	_shield_expiry_records = remaining_records
+	if not steps.is_empty():
+		run_steps(steps)
+
+
+## 每条到期记录独立扣减，不在上一名目标的修改窗口未结束时启动下一名。
+func _lose_expired_shield(_sequence: RuleStepSequence, target_id: int) -> void:
+	get_skill_player(target_id).loseShield(SHIELD_LOSS_AMOUNT, get_owner_skill_player())
 
 
 ## 返回当前全部可作为目标的角色ID；必须存活且未离场，“一名角色”包含技能持有者本人。

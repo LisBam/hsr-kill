@@ -42,14 +42,17 @@ func _on_owner_dying_begin(_event: RuleEvent) -> void:
 	var round_count: int = get_reincarnation_round_count()
 	# 本次效果所在轮回节；服务使用零基索引，分别对应正文①与②。
 	var section_index: int = get_reincarnation_section_index()
-	if section_index == RECOVER_SECTION_INDEX:
-		announce_activation({"round_count":round_count, "section_number":section_index + 1, "recover":round_count})
-		host.call("recover", owner_player_id, owner_player_id, round_count, get_id())
-	elif section_index == MAX_HP_DRAW_SECTION_INDEX:
-		announce_activation({"round_count":round_count, "section_number":section_index + 1, "max_hp_loss":MAX_HP_LOSS, "draw_count":round_count})
-		# 当前已经位于dyingBegin；关闭体力上限端口的重复濒死入口，让外层流程在本技能完成后继续统一求救。
-		host.call("change_max_hp", owner_player_id, -MAX_HP_LOSS, owner_player_id, get_id(), false, false)
-	complete_reincarnation_activation()
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void:
+			if section_index == RECOVER_SECTION_INDEX:
+				announce_activation({"round_count":round_count, "section_number":section_index + 1, "recover":round_count})
+				host.call("recover", owner_player_id, owner_player_id, round_count, get_id())
+			elif section_index == MAX_HP_DRAW_SECTION_INDEX:
+				announce_activation({"round_count":round_count, "section_number":section_index + 1, "max_hp_loss":MAX_HP_LOSS, "draw_count":round_count})
+				# 当前已经位于dyingBegin；关闭体力上限端口的重复濒死入口，让外层流程在本技能完成后继续统一求救。
+				host.call("change_max_hp", owner_player_id, -MAX_HP_LOSS, owner_player_id, get_id(), false, false),
+		func(_sequence: RuleStepSequence) -> void: complete_reincarnation_activation(),
+	])
 
 
 ## 修正AI对持有者预计致命来牌的估值；①可回复X点时按回复后的生存结果而非直接死亡评估。
